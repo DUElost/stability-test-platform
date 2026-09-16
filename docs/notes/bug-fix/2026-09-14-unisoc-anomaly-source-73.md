@@ -185,6 +185,11 @@ Revisit「载荷策略」项的现实证据 → **已立 [#2252](https://github.
   → 目录很大时（如 `NE.103000003` 有上百个 tar）值得收敛。**已立 #2252**（2026-09-16 实证：
   该目录 1.9GB/999 files，整目录 pull 恒 180s 超时 → 永久无信号 + 每拍占用提取预算，
   见上节「追加现场复核」）。
+- **反向对账（落成≠采到的可发现性）**：完整失效面（A3 大目录恒超时 / B4 窗口间落盘时延无界 /
+  C6 设备端 rotation 丢失 / C7 host 灰度盲区 / C8 platform 登记错误 / C9 去重键含日期根跨天
+  双计）已立 [#2394](https://github.com/DUElost/stability-test-platform/issues/2394)：unresolved
+  观测面 + 去重键去日期根 + reconciler 在位面包三层；本 note「类型覆盖矩阵」与 2026-09-16
+  追加节即其失效面输入。
 - **`normalboot` 之外的 `reboot_reason`** 取值枚举未知（本次只观测到 `normalboot`）→ 需补样本。
 - 本单正文的过时前提（"代码库 grep 展锐/UNISOC 0 hits"、`/data/unisoc_log` 假设）已在 issue 评论中更正；
   `AGENTS.md` 并无「AEE crash detection chain」章节，展锐说明暂落本 note。

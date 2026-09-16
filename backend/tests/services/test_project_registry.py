@@ -16,9 +16,12 @@ from sqlalchemy import select
 
 from backend.models.audit import AuditLog
 from backend.models.project import TestProject
+from backend.models.host import Device
+from backend.models.project_model import ProjectModel
 from backend.services.project_registry import (
     archive_project_entry,
     create_project_entry,
+    promote_seed_project_entry,
     rename_project_entry,
     unarchive_project_entry,
     update_project_facets,
@@ -170,3 +173,53 @@ class TestArchiveCycle:
         with pytest.raises(HTTPException) as exc:
             unarchive_project_entry(db_session, project_key="prj-active", **actor)
         assert exc.value.status_code == 409
+
+
+class TestPromoteSeed:
+    def test_promote_seed_to_user_with_audit(self, db_session, actor):
+        seed = _make_project(
+            db_session, "HONOR-ELA", source="SEED", customer="荣耀",
+            display_name="Honor ELA",
+        )
+        db_session.add(Device(serial="s-ela-1", model="MLD_LX2", platform="MTK"))
+        db_session.add(
+            ProjectModel(project_id=seed.id, match_value="MLD_LX2", is_active=True)
+        )
+        db_session.commit()
+
+        promoted = promote_seed_project_entry(
+            db_session, project_key="HONOR-ELA", **actor,
+        )
+        db_session.refresh(seed)
+        assert promoted.id == seed.id
+        assert seed.source == "USER"
+        assert seed.status == "ACTIVE"
+        assert _audit_actions(db_session, seed.id) == ["promote_seed_project"]
+
+    def test_promote_legacy_rejected(self, db_session, actor):
+        _make_project(db_session, "LEGACY", source="SEED")
+        with pytest.raises(HTTPException) as exc:
+            promote_seed_project_entry(db_session, project_key="LEGACY", **actor)
+        assert exc.value.status_code == 422
+
+    def test_promote_archived_rejected(self, db_session, actor):
+        _make_project(db_session, "HONOR-ELA", source="SEED", status="ARCHIVED")
+        with pytest.raises(HTTPException) as exc:
+            promote_seed_project_entry(
+                db_session, project_key="HONOR-ELA", **actor,
+            )
+        assert exc.value.status_code == 409
+
+    def test_promote_twice_404(self, db_session, actor):
+        _make_project(db_session, "HONOR-ELA", source="SEED")
+        promote_seed_project_entry(db_session, project_key="HONOR-ELA", **actor)
+        with pytest.raises(HTTPException) as exc:
+            promote_seed_project_entry(
+                db_session, project_key="HONOR-ELA", **actor,
+            )
+        assert exc.value.status_code == 404
+
+    def test_promote_unknown_404(self, db_session, actor):
+        with pytest.raises(HTTPException) as exc:
+            promote_seed_project_entry(db_session, project_key="NOPE", **actor)
+        assert exc.value.status_code == 404

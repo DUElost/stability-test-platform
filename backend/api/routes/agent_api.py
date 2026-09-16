@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 from backend.api.response import ApiResponse, ok
 from backend.api.error_helpers import raise_api_http_error
 from backend.core.agent_secret import AgentSecretNotConfiguredError, require_agent_secret
-from backend.core.audit import record_audit, record_audit_async
+from backend.core.audit import record_audit
 from backend.core.artifact_paths import (
     ArtifactPathError,
     resolve_device_event_remote_path,
@@ -31,23 +31,41 @@ from backend.core.artifact_paths import (
 from backend.core.database import get_async_db, get_db
 from backend.core.metrics import (
     claim_lease_failed_total,
-    post_completion_enqueue_failed_total,
     record_lease_extend_batch,
     record_log_signal_ingested,
     record_patrol_heartbeat,
-    record_reconciler_skip_unchanged,
-    record_watcher_capability,
 )
 from backend.models.device_log_event import DeviceLogEvent
 from backend.models.enums import EventState, HostStatus, JobStatus, LeaseStatus, LeaseType
 from backend.models.host import Device, Host
 from backend.models.device_lease import DeviceLease
-from backend.models.job import JobArtifact, JobInstance, JobLogSignal, StepTrace
+from backend.models.job import JobArtifact, JobInstance, JobLogSignal
 from backend.api.routes.auth import get_current_active_user
 from backend.models.plan_run import PlanRun
-from backend.services.plan_run_abort import abort_pending_job_ids
+from backend.services.agent_recovery import (
+    _RecoverySyncIn,
+    sync_agent_recovery,
+)
+# 既有测试 / 外部导入的 recovery 符号仍从本模块可达（re-export）。
+from backend.services.agent_recovery import (  # noqa: F401
+    _ActiveJobEntry,
+    _OutboxEntry,
+    _RecoveryAction,
+    _RecoverySyncOut,
+    _build_recovery_job_payload,
+    _rotate_recovery_lease_token,
+)
+from backend.services.agent_completion import (
+    _RUN_TO_JOB,
+    _RunCompleteIn,
+    _get_valid_runtime_lease,
+    complete_agent_job,
+)
+from backend.services.agent_completion import (  # noqa: F401
+    _apply_watcher_summary,
+    _bridge_reconciler_metrics,
+)
 from backend.realtime.socketio_server import broadcast_plan_run_status, broadcast_run_job_update
-from backend.services.aggregator import PlanAggregator
 from backend.services.device_log_event import (
     is_unassigned_remote_path,
     resolve_initial_upload_state,
@@ -66,7 +84,7 @@ from backend.services.host_upgrade_gate import (
     begin_host_upgrade,
     end_host_upgrade,
 )
-from backend.services.lease_manager import acquire_lease, extend_lease, release_lease
+from backend.services.lease_manager import acquire_lease, extend_lease
 from backend.services.plan_dispatcher_core import (
     apply_dispatch_host_watcher_admin_state_to_policy,
     extract_dispatch_host_watcher_admin_states,
@@ -176,78 +194,6 @@ async def _enrich_job_metadata(
     return serial_map, watcher_policy_map
 
 
-async def _build_recovery_job_payload(
-    db: AsyncSession,
-    job: JobInstance,
-    *,
-    device_serial: str,
-    fencing_token: str,
-) -> Dict[str, Any]:
-    """Build the minimal claim-shaped payload required for Agent resume execution.
-
-    NOTE: PlanRun is fetched individually here (not batched with other jobs).
-    Recovery is a single-job path in practice; if batch recovery is introduced later,
-    consider pre-loading PlanRun rows upstream and passing dispatch_host_watcher_admin_states
-    as a parameter to avoid N+1 queries.
-    """
-    watcher_policy = None
-    dispatch_host_watcher_admin_states: Dict[str, bool] = {}
-    if job.plan_run_id is not None:
-        plan_run = await db.get(PlanRun, job.plan_run_id)
-        if plan_run is not None:
-            snapshot_plan = (
-                (plan_run.plan_snapshot or {}).get("plan", {})
-                if isinstance(plan_run.plan_snapshot, dict)
-                else {}
-            )
-            watcher_policy = snapshot_plan.get("watcher_policy")
-            dispatch_host_watcher_admin_states = (
-                extract_dispatch_host_watcher_admin_states(plan_run.run_context)
-            )
-    watcher_policy = apply_dispatch_host_watcher_admin_state_to_policy(
-        watcher_policy,
-        host_id=job.host_id,
-        dispatch_host_watcher_admin_states=dispatch_host_watcher_admin_states,
-    )
-
-    plan_run_host_id = None
-    plan_run_host_total_job_count = None
-    if job.plan_run_id is not None and job.host_id:
-        from backend.models.plan_run import PlanRunHost as _PRH
-        prh = (
-            await db.execute(
-                select(_PRH).where(
-                    _PRH.plan_run_id == job.plan_run_id,
-                    _PRH.host_id == job.host_id,
-                )
-            )
-        ).scalar_one_or_none()
-        if prh is not None:
-            plan_run_host_id = prh.id
-            plan_run_host_total_job_count = int(
-                prh.total_job_count or prh.device_count or 0
-            )
-
-    return {
-        "id": job.id,
-        "plan_run_id": job.plan_run_id,
-        "plan_id": job.plan_id,
-        "device_id": job.device_id,
-        "device_serial": device_serial,
-        "host_id": job.host_id,
-        "status": job.status,
-        "pipeline_def": job.pipeline_def,
-        "watcher_policy": watcher_policy,
-        "fencing_token": fencing_token,
-        "started_at": _iso_or_none(job.started_at),
-        # ADR-0026 §3 (Step 5a): execution_state MUST ride in the frozen
-        # resume payload — without it a recovered PATROL_SLEEP job would be
-        # judged with the EXECUTING_STEP clock and vice versa.
-        "execution_state": job.execution_state,
-        # ADR-0026 barrier: recovered jobs still need PRH identity + peer count.
-        "plan_run_host_id": plan_run_host_id,
-        "plan_run_host_total_job_count": plan_run_host_total_job_count,
-    }
 
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
@@ -326,41 +272,6 @@ class HeartbeatResponse(BaseModel):
     heartbeat_interval_seconds: Optional[int] = None
 
 # ── ADR-0019 Phase 3a: Recovery Sync models ──────────────────────────────────
-
-
-class _ActiveJobEntry(BaseModel):
-    job_id: int
-    device_id: int
-    device_serial: Optional[str] = None
-    fencing_token: str = ""
-
-
-class _OutboxEntry(BaseModel):
-    job_id: int
-    event_type: str = "RUN_COMPLETED"
-
-
-class _RecoverySyncIn(BaseModel):
-    host_id: str
-    agent_instance_id: str = ""
-    boot_id: str = ""
-    active_jobs: List[_ActiveJobEntry] = []
-    pending_outbox: List[_OutboxEntry] = []
-
-
-class _RecoveryAction(BaseModel):
-    job_id: int
-    device_id: Optional[int] = None
-    action: str       # RESUME | CLEANUP | ABORT_LOCAL | UPLOAD_TERMINAL | NOOP
-    fencing_token: str = ""
-    device_serial: str = ""
-    job_payload: Optional[Dict[str, Any]] = None
-    event_type: str = ""
-    reason: str = ""
-
-
-class _RecoverySyncOut(BaseModel):
-    data: dict  # {"actions": [...], "outbox_actions": [...]}
 
 
 # ── Shared helpers ────────────────────────────────────────────────────────────
@@ -540,46 +451,6 @@ async def _claim_jobs_for_host(
 # ── ADR-0019 Phase 4b: Runtime Lease Validation ────────────────────────────────
 
 
-async def _get_valid_runtime_lease(
-    db: AsyncSession,
-    job: JobInstance,
-    fencing_token: str,
-    allowed_job_statuses: set[str] | None = None,
-) -> Optional[DeviceLease]:
-    """Validate runtime lease for token-gated operations (Phase 4b).
-
-    Returns the valid ACTIVE lease, or None if any check fails.
-    Checks (all must pass):
-      1. ACTIVE lease exists for (device_id, job_id, JOB)
-      2. fencing_token matches
-      3. expires_at > now (B: expired lease rejects all runtime ops)
-      4. job.status == RUNNING (C: whitelist, not blacklist)
-    """
-    now = datetime.now(timezone.utc)
-    lease = (await db.execute(
-        select(DeviceLease).where(
-            DeviceLease.device_id == job.device_id,
-            DeviceLease.job_id == job.id,
-            DeviceLease.lease_type == LeaseType.JOB.value,
-            DeviceLease.status == LeaseStatus.ACTIVE.value,
-        )
-    )).scalars().first()
-
-    if lease is None:
-        return None
-    if lease.fencing_token != fencing_token:
-        return None
-    # B: expired lease rejects all runtime operations
-    expires_at = _as_utc(lease.expires_at)
-    if expires_at is None or expires_at <= now:
-        return None
-    # C: only RUNNING jobs may perform runtime operations
-    allowed_statuses = allowed_job_statuses or {JobStatus.RUNNING.value}
-    if job.status not in allowed_statuses:
-        return None
-    return lease
-
-
 async def _require_valid_runtime_lease(
     db: AsyncSession,
     job: JobInstance,
@@ -589,69 +460,6 @@ async def _require_valid_runtime_lease(
     if valid_lease is None:
         raise HTTPException(status_code=409, detail="invalid or expired fencing_token")
     return valid_lease
-
-
-async def _resume_expired_lease_for_recovery(
-    db: AsyncSession,
-    lease: DeviceLease,
-    job: JobInstance,
-    agent_instance_id: str,
-    now: datetime,
-    grace_seconds: int = 300,
-) -> bool:
-    """Refresh an expired ACTIVE lease for UNKNOWN→RUNNING recovery (Phase 4b).
-
-    MUST be called under row lock on both lease and job rows.
-    Only succeeds when:
-      - lease.status == ACTIVE (row-locked, may have been released concurrently)
-      - job.status == UNKNOWN (row-locked, may have been finalized concurrently)
-      - job.ended_at is within grace period (now - ended_at < grace_seconds)
-
-    Does NOT use extend_lease() — this is the ONLY place that refreshes
-    an expired lease, and only under the validated recovery preconditions.
-    """
-
-    # Re-check under row lock
-    if lease.status != LeaseStatus.ACTIVE.value:
-        return False
-    if job.status != JobStatus.UNKNOWN.value:
-        return False
-    if job.ended_at is None:
-        return False
-    grace_deadline = now - timedelta(seconds=grace_seconds)
-    if job.ended_at <= grace_deadline:
-        return False
-
-    # Refresh lease TTL — Phase 6d: device_leases is sole source of truth,
-    # no projection writes to device.lock_run_id / lock_expires_at.
-    new_expires_at = now + timedelta(seconds=_DEVICE_LOCK_LEASE_SECONDS)
-    lease.renewed_at = now
-    lease.expires_at = new_expires_at
-    lease.agent_instance_id = agent_instance_id
-
-    return True
-
-
-async def _rotate_recovery_lease_token(
-    db: AsyncSession,
-    lease: DeviceLease,
-    *,
-    agent_instance_id: str,
-) -> str:
-    """Fence the previous local worker when a new Agent instance takes over."""
-    device = (await db.execute(
-        select(Device)
-        .where(Device.id == lease.device_id)
-        .with_for_update()
-    )).scalars().first()
-    if device is None:
-        raise HTTPException(status_code=409, detail="recovery device not found")
-    device.lease_generation = int(device.lease_generation or 0) + 1
-    lease.lease_generation = device.lease_generation
-    lease.fencing_token = f"{lease.device_id}:{device.lease_generation}"
-    lease.agent_instance_id = agent_instance_id
-    lease.renewed_at = datetime.now(timezone.utc)
-    return lease.fencing_token
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -904,30 +712,10 @@ async def agent_heartbeat(
 
 # ── RunStatus→JobStatus mapping for compat endpoints ─────────────────────────
 
-_RUN_TO_JOB: Dict[str, JobStatus] = {
-    "RUNNING":   JobStatus.RUNNING,
-    "FINISHED":  JobStatus.COMPLETED,
-    "COMPLETED": JobStatus.COMPLETED,
-    "FAILED":    JobStatus.FAILED,
-    "CANCELED":  JobStatus.ABORTED,
-    "CANCELLED": JobStatus.ABORTED,
-    "ABORTED":   JobStatus.ABORTED,
-}
-
 
 class _JobHeartbeatIn(BaseModel):
     status: str = "RUNNING"
     started_at: Optional[str] = None
-    fencing_token: str  # ADR-0019 Phase 2b: 必填
-
-
-class _RunCompleteIn(BaseModel):
-    update: Dict[str, Any]
-    artifact: Optional[Dict[str, Any]] = None
-    # Watcher 摘要回填（来自 Agent JobSession.summary.to_complete_payload）
-    # 字段形态参考 backend/agent/watcher/contracts.py WatcherSummaryPayload
-    # 可选：watcher_id / watcher_started_at / watcher_stopped_at / watcher_capability / log_signal_count / watcher_stats
-    watcher_summary: Optional[Dict[str, Any]] = None
     fencing_token: str  # ADR-0019 Phase 2b: 必填
 
 
@@ -994,325 +782,7 @@ async def complete_job(
     _=Depends(_verify_agent),
 ):
     """Transition job to a terminal status."""
-    job = (await db.execute(
-        select(JobInstance)
-        .where(JobInstance.id == job_id)
-        .with_for_update()
-    )).scalars().first()
-    if job is None:
-        raise HTTPException(status_code=404, detail="job not found")
-
-    raw = str(payload.update.get("status", "FAILED")).strip().upper()
-    # #779: 未知状态串不得经 .get(..., FAILED) 伪装成真实失败。
-    if raw not in _RUN_TO_JOB:
-        raise HTTPException(
-            status_code=400,
-            detail={"code": "INVALID_TERMINAL_STATUS", "requested_status": raw},
-        )
-    target = _RUN_TO_JOB[raw]
-    if target not in {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.ABORTED}:
-        raise HTTPException(
-            status_code=400,
-            detail={"code": "INVALID_TERMINAL_STATUS", "requested_status": raw},
-        )
-
-    completion_fact = {
-        "update": payload.update,
-        "artifact": payload.artifact,
-        "watcher_summary": payload.watcher_summary,
-    }
-    payload_digest = hashlib.sha256(
-        json.dumps(
-            completion_fact,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    ).hexdigest()
-
-    # Terminal replay is strictly read-only.  Validate against the historical
-    # lease token so a stale/cross-host Agent cannot rewrite completion facts.
-    already_terminal = job.status in _TERMINAL
-    if already_terminal:
-        historical_lease = (await db.execute(
-            select(DeviceLease)
-            .where(
-                DeviceLease.device_id == job.device_id,
-                DeviceLease.job_id == job.id,
-                DeviceLease.lease_type == LeaseType.JOB.value,
-            )
-            .order_by(DeviceLease.id.desc())
-        )).scalars().first()
-        if (
-            historical_lease is None
-            or historical_lease.fencing_token != payload.fencing_token
-        ):
-            current_status = job.status
-            await record_audit_async(
-                db,
-                action="stale_job_completion_rejected",
-                resource_type="job",
-                resource_id=job.id,
-                details={
-                    "plan_run_id": job.plan_run_id,
-                    "current_status": current_status,
-                    "reason": "historical_fencing_token_mismatch",
-                },
-                username="agent",
-            )
-            await db.commit()
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "code": "STALE_COMPLETION_TOKEN",
-                    "current_status": current_status,
-                },
-            )
-        expected_digest = job.terminal_payload_digest
-        if expected_digest is None:
-            historical_trace = (await db.execute(
-                select(StepTrace).where(
-                    StepTrace.job_id == job_id,
-                    StepTrace.step_id == "__job__",
-                    StepTrace.event_type == "RUN_COMPLETE",
-                )
-            )).scalars().first()
-            if historical_trace is not None and historical_trace.output:
-                try:
-                    historical_fact = json.loads(historical_trace.output)
-                    current_legacy_fact = {
-                        "update": payload.update,
-                        "artifact": payload.artifact,
-                    }
-                    expected_digest = hashlib.sha256(
-                        json.dumps(
-                            historical_fact,
-                            ensure_ascii=False,
-                            sort_keys=True,
-                            separators=(",", ":"),
-                        ).encode("utf-8")
-                    ).hexdigest()
-                    replay_digest = hashlib.sha256(
-                        json.dumps(
-                            current_legacy_fact,
-                            ensure_ascii=False,
-                            sort_keys=True,
-                            separators=(",", ":"),
-                        ).encode("utf-8")
-                    ).hexdigest()
-                except (TypeError, ValueError, json.JSONDecodeError):
-                    replay_digest = ""
-            else:
-                replay_digest = ""
-        else:
-            replay_digest = payload_digest
-        if not expected_digest or not secrets.compare_digest(
-            expected_digest, replay_digest,
-        ):
-            current_status = job.status
-            await record_audit_async(
-                db,
-                action="terminal_payload_conflict",
-                resource_type="job",
-                resource_id=job.id,
-                details={
-                    "plan_run_id": job.plan_run_id,
-                    "current_status": current_status,
-                    "expected_digest": expected_digest,
-                    "received_digest": replay_digest or payload_digest,
-                },
-                username="agent",
-            )
-            await db.commit()
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "code": "TERMINAL_PAYLOAD_CONFLICT",
-                    "current_status": current_status,
-                },
-            )
-        current_status = job.status
-        await db.rollback()
-        return ok({"job_id": job_id, "status": current_status, "idempotent": True})
-    else:
-        valid_lease = None
-        if job.status == JobStatus.UNKNOWN.value:
-            # Explicit late-terminal reconciliation: a matching grace-held
-            # token may atomically restore UNKNOWN→RUNNING before completion.
-            # This preserves the terminal outbox fact without adding the
-            # forbidden UNKNOWN→COMPLETED edge to the state machine.
-            candidate = (await db.execute(
-                select(DeviceLease)
-                .where(
-                    DeviceLease.device_id == job.device_id,
-                    DeviceLease.job_id == job.id,
-                    DeviceLease.lease_type == LeaseType.JOB.value,
-                    DeviceLease.status == LeaseStatus.ACTIVE.value,
-                )
-                .with_for_update()
-            )).scalars().first()
-            if (
-                candidate is not None
-                and secrets.compare_digest(
-                    candidate.fencing_token, payload.fencing_token,
-                )
-                and await _resume_expired_lease_for_recovery(
-                    db,
-                    candidate,
-                    job,
-                    candidate.agent_instance_id,
-                    datetime.now(timezone.utc),
-                )
-            ):
-                JobStateMachine.transition(
-                    job, JobStatus.RUNNING, "late_completion_recovery",
-                )
-                valid_lease = candidate
-        if valid_lease is None:
-            valid_lease = await _get_valid_runtime_lease(
-                db, job, payload.fencing_token,
-            )
-        if valid_lease is None:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "code": "INVALID_OR_EXPIRED_FENCING_TOKEN",
-                    "current_status": job.status,
-                },
-            )
-
-    transition_from_status = job.status
-    try:
-        JobStateMachine.transition(job, target, payload.update.get("error_message") or "")
-    except InvalidTransitionError as exc:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "INVALID_JOB_TRANSITION",
-                "message": str(exc),
-                "current_status": job.status,
-                "requested_status": target.value,
-            },
-        ) from exc
-
-    # 持久化一次性完成快照（log_summary + artifact），为新链路报告读取提供数据闭环。
-    snapshot = {
-        "update": payload.update,
-        "artifact": payload.artifact,
-    }
-    snapshot_output = json.dumps(snapshot, ensure_ascii=False)
-    now_ts = datetime.now(timezone.utc)
-    existing_snapshot = (
-        await db.execute(
-            select(StepTrace).where(
-                StepTrace.job_id == job_id,
-                StepTrace.step_id == "__job__",
-                StepTrace.event_type == "RUN_COMPLETE",
-            )
-        )
-    ).scalars().first()
-    if existing_snapshot is None:
-        db.add(
-            StepTrace(
-                job_id=job_id,
-                step_id="__job__",
-                stage="post_process",
-                status=target.value,
-                event_type="RUN_COMPLETE",
-                output=snapshot_output,
-                error_message=payload.update.get("error_message"),
-                trace_event_id=f"terminal:{job_id}:{payload_digest}",
-                original_ts=now_ts,
-                created_at=datetime.now(timezone.utc),
-            )
-        )
-
-    job.ended_at = datetime.now(timezone.utc)
-    job.terminal_payload_digest = payload_digest
-
-    # Watcher 摘要回填（来自 Agent JobSession.summary.to_complete_payload）
-    # 字段契约见 backend/agent/watcher/contracts.py WatcherSummaryPayload
-    if payload.watcher_summary:
-        _apply_watcher_summary(job, payload.watcher_summary)
-
-    if target == JobStatus.ABORTED:
-        plan_run = (await db.execute(
-            select(PlanRun)
-            .where(PlanRun.id == job.plan_run_id)
-            .with_for_update(key_share=True)
-        )).scalars().first()
-        if plan_run is not None and isinstance(plan_run.run_context, dict):
-            run_context = dict(plan_run.run_context)
-            abort_request = dict(run_context.get("abort_requested") or {})
-            acknowledged = list(
-                abort_request.get("acknowledged_job_ids") or []
-            )
-            if job.id not in acknowledged:
-                acknowledged.append(job.id)
-            abort_request["acknowledged_job_ids"] = acknowledged
-            run_context["abort_requested"] = abort_request
-            plan_run.run_context = run_context
-
-    if job.status in _TERMINAL:
-        # M0/Task2: 仅在首次终态桥接 reconciler 计数,避免 outbox 重试重复计数。
-        if payload.watcher_summary:
-            _bridge_reconciler_metrics(job.host_id, payload.watcher_summary)
-            # M4/T4-2: 终态时按 watcher_capability 自增一次(覆盖率监控盘);
-            # 与 reconciler 桥接同处 not-already_terminal 守卫内,每 Job 仅计一次。
-            record_watcher_capability(job.watcher_capability or "unknown")
-        # Release before aggregation.  Chain dispatch inherits the same devices
-        # and must observe them as free when the terminal transaction commits.
-        released = await release_lease(db, job.device_id, job_id, LeaseType.JOB)
-        if not released:
-            logger.warning("release_lease_miss device=%s job=%s", job.device_id, job_id)
-        await db.flush()
-        await record_audit_async(
-            db,
-            action="job_terminalized",
-            resource_type="job",
-            resource_id=job.id,
-            details={
-                "plan_run_id": job.plan_run_id,
-                "from_status": transition_from_status,
-                "to_status": target.value,
-                "payload_digest": payload_digest,
-                "lease_released": bool(released),
-            },
-            username="agent",
-        )
-        await PlanAggregator.on_job_terminal(job, db)
-
-    await db.commit()
-
-    if job.status in _TERMINAL:
-        # ── SocketIO push: job completed/failed → notify PlanRun subscribers ──
-        await broadcast_run_job_update(job.plan_run_id, job_id, job.status)
-        run = await db.get(PlanRun, job.plan_run_id)
-        if run is not None and run.status in {
-            "SUCCESS", "PARTIAL_SUCCESS", "FAILED",
-        }:
-            await broadcast_plan_run_status(run.id, run.status)
-
-        try:
-            from backend.tasks.saq_worker import get_queue
-            from saq import Job as SaqJob
-
-            await get_queue().enqueue(
-                SaqJob(
-                    function="post_completion_task",
-                    kwargs={"job_id": job_id},
-                    key=f"pc:{job_id}",
-                    timeout=120,
-                    retries=3,
-                    retry_delay=5.0,
-                    retry_backoff=True,
-                )
-            )
-        except Exception as e:
-            post_completion_enqueue_failed_total.inc()
-            logger.error("post_completion enqueue failed for job %d: %s", job_id, e)
-
-    return ok({"job_id": job_id, "status": job.status})
+    return ok(await complete_agent_job(db, job_id, payload))
 
 
 @router.post("/jobs/{job_id}/extend_lock", response_model=ApiResponse[dict])
@@ -2932,57 +2402,6 @@ async def ingest_artifact(
     return ok(ArtifactOut(artifact_id=existing_id, created=False))
 
 
-def _apply_watcher_summary(job: JobInstance, summary: Dict[str, Any]) -> None:
-    """把 Agent 回传的 watcher_summary 回填到 JobInstance 字段。
-
-    字段来源契约：backend/agent/watcher/contracts.py WatcherSummaryPayload
-    只在 summary 非空字段存在时覆写，保持旧字段。
-    """
-    started = summary.get("watcher_started_at")
-    if started:
-        try:
-            job.watcher_started_at = datetime.fromisoformat(started.replace("Z", "+00:00"))
-        except (ValueError, AttributeError):
-            logger.warning("watcher_summary.watcher_started_at invalid: %r", started)
-
-    stopped = summary.get("watcher_stopped_at")
-    if stopped:
-        try:
-            job.watcher_stopped_at = datetime.fromisoformat(stopped.replace("Z", "+00:00"))
-        except (ValueError, AttributeError):
-            logger.warning("watcher_summary.watcher_stopped_at invalid: %r", stopped)
-
-    capability = summary.get("watcher_capability")
-    if capability:
-        job.watcher_capability = str(capability)[:32]
-
-    # log_signal_count 由 /log-signals 端点累加，这里不覆写
-    # 但若 Agent 侧有权威计数（watcher_summary.log_signal_count），作为下限同步
-    count = summary.get("log_signal_count")
-    if isinstance(count, int) and count > (job.log_signal_count or 0):
-        job.log_signal_count = count
-
-
-def _bridge_reconciler_metrics(host_id: Optional[str], summary: Dict[str, Any]) -> None:
-    """M0/Task2: 把 Agent 进程内的 reconciler 计数桥接到中心 /metrics。
-
-    Agent 没有独立的 Prometheus /metrics 暴露面,reconciler 的
-    `reconciler_skip_unchanged_total` 只在 Agent 进程的本地 registry 自增、永不被抓取。
-    为让 M4 监控盘可见,Agent 通过 complete 通道带出整个 Job 生命周期累计的
-    `reconciler_stats.ticks_skipped_unchanged`,后端在 Job *首次*进入终态时一次性
-    按该累计值自增中心计数器(每个 Job 仅贡献一次 → 计数器单调正确)。
-
-    `reconciler_burst_mode_active` 是运行期实时 gauge(Job 结束时恒为 0),无法通过
-    终态快照有意义地带出 → 仍仅 Agent 进程内,详见 §2.3 文档说明。
-    """
-    stats = summary.get("reconciler_stats")
-    if not isinstance(stats, dict):
-        return
-    skipped = stats.get("ticks_skipped_unchanged")
-    if isinstance(skipped, int) and skipped > 0:
-        record_reconciler_skip_unchanged(str(host_id or "unknown"), amount=skipped)
-
-
 # ── ADR-0019 Phase 3a: Recovery Sync ────────────────────────────────────────
 
 
@@ -3007,296 +2426,7 @@ async def recovery_sync(
     退役机的 `pending_outbox` 照常推导（#2030）：终态证据必须被 ack/上传，
     否则 Agent 每轮重发且永不被 ack——回收类数据在 D5 下允许触达退役机。
     """
-    # Load host
-    host = await db.get(Host, payload.host_id)
-    if host is None:
-        raise HTTPException(status_code=404, detail="host not found")
-
-    # ── Outbox actions ──
-    # （#2030）必须在退役判据**之前**推导并与早返回分支共用：Agent 对空
-    # `outbox_actions` 不 ack 本地 outbox（backend/agent/main.py），退役早返回
-    # 若丢掉本块，终态证据会每轮重发且永不被 ack、退役前产生的 UPLOAD_TERMINAL
-    # 结果也不再投递。本块只读（不改身份、不锁 lease），不构成「承接工作」。
-    outbox_actions: list[_RecoveryAction] = []
-    for entry in payload.pending_outbox:
-        job = await db.get(JobInstance, entry.job_id)
-        if job is None:
-            outbox_actions.append(_RecoveryAction(
-                job_id=entry.job_id,
-                action="NOOP", reason="job_not_found",
-            ))
-        elif job.status in _TERMINAL:
-            outbox_actions.append(_RecoveryAction(
-                job_id=entry.job_id,
-                action="NOOP", reason="already_terminal",
-            ))
-        else:
-            outbox_actions.append(_RecoveryAction(
-                job_id=entry.job_id,
-                action="UPLOAD_TERMINAL", event_type=entry.event_type,
-                reason="not_terminal_on_backend",
-            ))
-
-    # ADR-0038 D5bis：退役主机不得经 recovery 复活在飞作业（见 docstring）。
-    # 放在身份更新**之前**：退役机即使上报新 boot_id/instance_id 也不该继续
-    # 承接工作，故不写身份、不进入后续 RESUME 判定，直接引导本地停止。
-    if host.retired_at is not None:
-        logger.info("recovery_sync_skipped_host_retired host=%s", payload.host_id)
-        return ok({
-            "actions": [
-                _RecoveryAction(
-                    job_id=entry.job_id,
-                    device_id=entry.device_id,
-                    action="ABORT_LOCAL",
-                    reason="host_retired",
-                ).model_dump()
-                for entry in payload.active_jobs
-            ],
-            "outbox_actions": [a.model_dump() for a in outbox_actions],
-        })
-
-    # D1: snapshot previous_boot_id before overwriting
-    previous_boot_id = host.boot_id
-
-    # Update host identity
-    if payload.boot_id:
-        host.boot_id = payload.boot_id
-    if payload.agent_instance_id:
-        host.last_agent_instance_id = payload.agent_instance_id
-
-    now = datetime.now(timezone.utc)
-
-    # ── Active job actions ──
-    _recovery_grace_seconds = 300  # UNKNOWN grace for recovery, matches watchdog
-    job_actions: list[_RecoveryAction] = []
-    for entry in payload.active_jobs:
-        # Lock the complete ownership tuple.  Shared AGENT_SECRET authenticates
-        # an Agent process, not a host/job relationship; the fencing token and
-        # relational checks below establish that relationship.
-        # #2015（I1 共享行加锁全序）：先锁 job 行、再锁 lease 行——与
-        # complete_job / extend_leases_batch / reconciler 的 Job → Lease 同序。
-        # 原先先锁 lease 再锁 job，与续租 tick（Job 锁内 CAS device_leases）在
-        # 同一 (job, lease) 对上反向：Agent 重启的 recovery 恰落在续租窗口内
-        # 即可成环（09-15 生产死锁 60 次的环，PG 服务端日志定位）。本路由只
-        # 交换两条 SELECT 的次序；下方全部校验（ownership/fencing/boot）与
-        # 动作判定不变——job 不存在时 ownership 检查的结论与原先一致。
-        job = (await db.execute(
-            select(JobInstance)
-            .where(JobInstance.id == entry.job_id)
-            .with_for_update()
-        )).scalars().first()
-        lease = (await db.execute(
-            select(DeviceLease).where(
-                DeviceLease.device_id == entry.device_id,
-                DeviceLease.job_id == entry.job_id,
-                DeviceLease.lease_type == LeaseType.JOB.value,
-                DeviceLease.status == LeaseStatus.ACTIVE.value,
-            ).with_for_update()  # Phase 4b: lock lease row against concurrent Reconciler
-        )).scalars().first()
-
-        if lease is None:
-            # Also check for RELEASED/EXPIRED lease
-            any_lease = (await db.execute(
-                select(DeviceLease).where(
-                    DeviceLease.device_id == entry.device_id,
-                    DeviceLease.job_id == entry.job_id,
-                    DeviceLease.lease_type == LeaseType.JOB.value,
-                )
-            )).scalars().first()
-            if any_lease is None:
-                job_actions.append(_RecoveryAction(
-                    job_id=entry.job_id, device_id=entry.device_id,
-                    action="ABORT_LOCAL", reason="no_active_lease",
-                ))
-            else:
-                job_actions.append(_RecoveryAction(
-                    job_id=entry.job_id, device_id=entry.device_id,
-                    action="ABORT_LOCAL", reason="lease_not_active",
-                ))
-            continue
-
-        device = (await db.execute(
-            select(Device)
-            .where(Device.id == entry.device_id)
-            .with_for_update()
-        )).scalars().first()
-        actual_serial = ((device.serial or "").strip() if device is not None else "")
-        reported_serial = (entry.device_serial or "").strip()
-        ownership_valid = (
-            job is not None
-            and device is not None
-            and job.device_id == entry.device_id
-            and job.host_id == payload.host_id
-            and lease.host_id == payload.host_id
-            and device.host_id == payload.host_id
-            and bool(entry.fencing_token)
-            and secrets.compare_digest(entry.fencing_token, lease.fencing_token)
-            and (not reported_serial or actual_serial == reported_serial)
-        )
-        if not ownership_valid:
-            logger.warning(
-                "recovery_sync_ownership_rejected host=%s job=%s device=%s",
-                payload.host_id, entry.job_id, entry.device_id,
-            )
-            job_actions.append(_RecoveryAction(
-                job_id=entry.job_id,
-                device_id=entry.device_id,
-                action="ABORT_LOCAL",
-                reason="recovery_ownership_mismatch",
-            ))
-            continue
-
-        lease_agent_id = lease.agent_instance_id or ""
-        boot_matches = (
-            previous_boot_id == payload.boot_id
-            if previous_boot_id and payload.boot_id
-            else lease_agent_id == payload.agent_instance_id
-        )
-
-        if not boot_matches:
-            # Host reboot invalidates the local process.  Finalize through the
-            # same terminal side effects expected from normal completion.
-            try:
-                JobStateMachine.transition(
-                    job, JobStatus.FAILED, "recovery_cleanup_boot_mismatch",
-                )
-                job.ended_at = now
-            except InvalidTransitionError:
-                pass
-            await release_lease(db, entry.device_id, entry.job_id, LeaseType.JOB)
-            await db.flush()
-            if job.status == JobStatus.FAILED.value:
-                await PlanAggregator.on_job_terminal(job, db)
-            job_actions.append(_RecoveryAction(
-                job_id=entry.job_id, device_id=entry.device_id,
-                action="CLEANUP", reason="boot_id_mismatch",
-            ))
-            continue
-
-        # #990 / R06-F05: durable abort intent forbids RESUME (and same-instance
-        # NOOP that would leave a live worker running). Steer Agent to local stop
-        # confirmation; keep the lease until /complete ABORTED ACK or abort reaper.
-        plan_run = await db.get(PlanRun, job.plan_run_id)
-        run_ctx = (
-            plan_run.run_context
-            if plan_run is not None and isinstance(plan_run.run_context, dict)
-            else {}
-        )
-        # #2270：主体感知——host 级 abort 只覆盖该 host 的 job；按「键存在」判定会
-        # 把同 run 旁主机的 job 也强推 ABORT_LOCAL（误杀从未被请求中止的主机）。
-        if job.id in abort_pending_job_ids(run_ctx, [(job.id, job.host_id)]):
-            if lease_agent_id != payload.agent_instance_id:
-                await _rotate_recovery_lease_token(
-                    db, lease, agent_instance_id=payload.agent_instance_id,
-                )
-            job_actions.append(_RecoveryAction(
-                job_id=entry.job_id,
-                device_id=entry.device_id,
-                action="ABORT_LOCAL",
-                fencing_token=lease.fencing_token,
-                device_serial=actual_serial,
-                reason="abort_requested",
-            ))
-            continue
-
-        if job.status == JobStatus.UNKNOWN.value:
-            # Phase 4b: UNKNOWN→RUNNING resurrection (within grace)
-            resumed = await _resume_expired_lease_for_recovery(
-                db, lease, job, payload.agent_instance_id, now, _recovery_grace_seconds,
-            )
-            if resumed:
-                if lease_agent_id != payload.agent_instance_id:
-                    await _rotate_recovery_lease_token(
-                        db, lease, agent_instance_id=payload.agent_instance_id,
-                    )
-                try:
-                    JobStateMachine.transition(job, JobStatus.RUNNING, "recovery_resume_unknown")
-                except InvalidTransitionError:
-                    pass
-                job_payload = await _build_recovery_job_payload(
-                    db,
-                    job,
-                    device_serial=actual_serial,
-                    fencing_token=lease.fencing_token,
-                )
-                job_actions.append(_RecoveryAction(
-                    job_id=entry.job_id, device_id=entry.device_id,
-                    action="RESUME", fencing_token=lease.fencing_token,
-                    device_serial=actual_serial,
-                    job_payload=job_payload,
-                    reason="recovery_resume_unknown",
-                ))
-            else:
-                # Grace expired or state changed under lock
-                await release_lease(db, entry.device_id, entry.job_id, LeaseType.JOB)
-                job_actions.append(_RecoveryAction(
-                    job_id=entry.job_id, device_id=entry.device_id,
-                    action="CLEANUP", reason="unknown_grace_expired",
-                ))
-            continue
-
-        if job.status in _TERMINAL:
-            # D5: terminal job with lingering ACTIVE lease → release, ABORT_LOCAL
-            await release_lease(db, entry.device_id, entry.job_id, LeaseType.JOB)
-            job_actions.append(_RecoveryAction(
-                job_id=entry.job_id, device_id=entry.device_id,
-                action="ABORT_LOCAL", reason="terminal_job_active_lease",
-            ))
-            continue
-
-        if job.status != JobStatus.RUNNING.value:
-            job_actions.append(_RecoveryAction(
-                job_id=entry.job_id, device_id=entry.device_id,
-                action="ABORT_LOCAL", reason=f"job_not_resumable:{job.status}",
-            ))
-            continue
-
-        # Repeated sync from the same live instance must not launch a second
-        # local worker.  A new instance on the same boot receives a rotated
-        # token so the old worker is fenced before RESUME is returned.
-        if lease_agent_id == payload.agent_instance_id:
-            job_actions.append(_RecoveryAction(
-                job_id=entry.job_id,
-                device_id=entry.device_id,
-                action="NOOP",
-                fencing_token=lease.fencing_token,
-                device_serial=actual_serial,
-                reason="same_instance_worker_already_owned",
-            ))
-            continue
-
-        await _rotate_recovery_lease_token(
-            db, lease, agent_instance_id=payload.agent_instance_id,
-        )
-        reason = "same_boot_instance_takeover"
-
-        job_payload = await _build_recovery_job_payload(
-            db,
-            job,
-            device_serial=actual_serial,
-            fencing_token=lease.fencing_token,
-        )
-        job_actions.append(_RecoveryAction(
-            job_id=entry.job_id, device_id=entry.device_id,
-            action="RESUME", fencing_token=lease.fencing_token,
-            device_serial=actual_serial,
-            job_payload=job_payload,
-            reason=reason,
-        ))
-
-    await db.commit()
-
-    logger.info(
-        "recovery_sync host=%s jobs=%d outbox=%d actions_job=%d actions_outbox=%d",
-        payload.host_id,
-        len(payload.active_jobs), len(payload.pending_outbox),
-        len(job_actions), len(outbox_actions),
-    )
-
-    return ok({
-        "actions": [a.model_dump() for a in job_actions],
-        "outbox_actions": [a.model_dump() for a in outbox_actions],
-    })
+    return ok(await sync_agent_recovery(db, payload))
 
 
 @router.get("/{host_id}/archive-status")

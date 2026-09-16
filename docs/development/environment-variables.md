@@ -169,7 +169,7 @@
 
 <!-- env-inventory:begin（generated：python tools/dev/env_inventory.py --write） -->
 
-共 **222** 个读取名（`backend/**`，不含 `backend/agent/scripts/**`；含 ADR-0042 Settings 字段）：**198** 个已在 `.env*.example` 登记，**24** 个声明为内部（理由见下节）。
+共 **223** 个读取名（`backend/**`，不含 `backend/agent/scripts/**`；含 ADR-0042 Settings 字段）：**198** 个已在 `.env*.example` 登记，**25** 个声明为内部（理由见下节）。
 示例文件是**运维模板**（承载需要运维/机型调整的子集）；本表是**代码侧完整清单**。
 门禁：每个读取名必须「登记进示例」或「内部声明」二选一，二者之外即红。
 
@@ -274,8 +274,8 @@
 | `STP_AEE_SSD_FALLBACK_ROOT` | `-` | ✅ | 运行时 | `backend/agent/aee/paths.py:108` |
 | `STP_AGENT_INSTALL_API_URL` | `` | ✅ | 运行时 | `backend/services/agent_installer.py:52` |
 | `STP_AGENT_MIN_VERSION` | `-` | ✅ | 运行时 | `backend/services/agent_version_gate.py:16` |
-| `STP_AGENT_PIP_INDEX_URL` | `` | ✅ | 运行时 | `backend/services/host_updater.py:583` |
-| `STP_AGENT_PRIV_CONF` | `-` | ✅ | 运行时 | `backend/agent/stp_agent_priv.py:349` |
+| `STP_AGENT_PIP_INDEX_URL` | `` | ✅ | 运行时 | `backend/services/host_updater.py:622` |
+| `STP_AGENT_PRIV_CONF` | `-` | ✅ | 运行时 | `backend/agent/stp_agent_priv.py:391` |
 | `STP_AGENT_RATE_LIMIT_REQUESTS` | `2000` | ✅ | 运行时 | `backend/core/limiter.py:46` |
 | `STP_AGENT_SID_REGISTRY` | `` | ✅ | 运行时 | `backend/realtime/agent_sid_registry.py:42` |
 | `STP_AGENT_SID_REGISTRY_TTL_SECONDS` | `-` | ✅ | 运行时 | `backend/realtime/agent_sid_registry.py:94` |
@@ -386,8 +386,9 @@
 | `STP_WATCHER_AEE_SUBDIR_LAYOUT` | `stp` | ✅ | 运行时 | `backend/agent/aee/paths.py:194` |
 | `STP_WATCHER_ENABLED` | `true` | ✅ | 运行时 | `backend/agent/main.py:102` |
 | `STP_WATCHER_PLAN_DEFAULT` | `true` | ✅ | 运行时 | `backend/agent/main.py:103` |
-| `SUDO_GID` | `` | — | 运行时 | `backend/agent/stp_agent_priv.py:185` |
-| `SUDO_UID` | `` | — | 运行时 | `backend/agent/stp_agent_priv.py:178` |
+| `SUDO_GID` | `` | — | 运行时 | `backend/agent/stp_agent_priv.py:227` |
+| `SUDO_UID` | `` | — | 运行时 | `backend/agent/stp_agent_priv.py:84` |
+| `SUDO_USER` | `-` | — | 运行时 | `backend/agent/stp_agent_priv.py:90` |
 | `TESTING` | `-` | ✅ | 运行时 | `backend/core/agent_secret.py:15` |
 | `TEST_DATABASE_URL` | `` | ✅ | 运行时 | `backend/scripts/check_schema_sync.py:137` |
 | `WATCHER_BATCH_INTERVAL_SECONDS` | `-` | ✅ | 运行时 | `backend/agent/watcher/policy.py:144` |
@@ -426,8 +427,10 @@
 | `STP_WATCHER_AEE_RECONCILE_HOSTS` | 目标机本地选择性对账清单（现场排障临时用，默认空=全量） |
 | `SUDO_GID` | sudo 调用时由系统注入（stp_agent_priv） |
 | `SUDO_UID` | sudo 调用时由系统注入（stp_agent_priv） |
+| `SUDO_USER` | sudo 调用时由系统注入（stp_agent_priv；SUDO_UID 缺失时的兜底） |
 
 <!-- env-inventory:end -->
+
 
 
 

@@ -166,6 +166,16 @@ Class: architecture
   探测 + 「`pg_locks` 存在未获授锁」的就绪判定）；既有
   `backend/tests/scheduler/test_retention_cleanup.py` **16 passed**（证明删除语义未变）。
 
+- **生产侧效果实证（2026-09-16 实测；跨 4 次重启，负载未停）**：后端日志里的 PostgreSQL
+  死锁栈自 **2026-09-15 17:16**（轮转日志可见的最早一条）持续出现，**09-16 11:59:37 之后再
+  无一条**——累计 **897 次**（`logs/backend_error.log` 579 + `backend_error.log.1` 318），
+  按小时 30–72 次（多在 40–60）。该归零窗口跨后端 **4 次重启**（12:09 / 18:10 / 20:18 /
+  20:46），且日志文件持续写入、非断档。**不是「没事所以无死锁」**：同期负载照跑——
+  当日 14:39 仍有 `abort_plan_run`，近 7 天 59 个 run 走到终态。停点紧邻 12:09 那次重启/
+  部署（未逐提交二分定位到具体修复），同期 `StabilityDbDeadlockDetected`
+  （`increase(stability_db_deadlock_total[15m]) > 0`）静默。
+  取证方式：**只读**（日志时间戳归并 + `plan_run`/`audit_logs` 只读 SELECT），未改任何状态。
+
 ## Revisit
 
 - **每轮增量核对**：任何**新增 / 修改**对 `job_instance` / `device_leases` / `plan_run` /
