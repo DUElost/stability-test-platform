@@ -121,6 +121,35 @@ uniview 根仅 `Reboot.103000002`（normalboot 被 #2083 拒收 → 基线干净
 持 `host_extraction_slot`（#740 与 MTK 路共享提取预算），挤占同 host 其它 pull。这正是下节
 Revisit「载荷策略」项的现实证据 → **已立 [#2252](https://github.com/DUElost/stability-test-platform/issues/2252)**。
 
+### 触发自检 SOP（可批产；两台独立复核通过，2026-09-16）
+
+**用途**：派发中的平台任务上确认「设备自造异常 → 平台监测到信号」持续成立。
+**适用面**：仅 Z2581 系（`MyOS16.0.1_Z2581_GEN_AF`）——Z2582/MyOS16.0.3 触发被 ROM 吞（上上节）；
+自检判据只用 crash 类（hang 会挂 system_server 致 watchdog 风暴需重启收尾；ANR 姿势两台均未
+复现，见上节）。
+
+**配方（按序）**：
+1. 选机：host `172-21-x-x`（当前 reconciler 在跑态）上 ONLINE 空闲 Z2581；先看设备端
+   `ls /data/ylog/uniview_exception/`——避免带超大 `NE.*` 的机（#2252 每拍白烧 180s，
+   拖长时延上限）；
+2. 基线：`job_log_signal(category='UNIVIEW', device_serial=…)` 行数（理想为 0，新增即可归因）；
+3. 驻留观察窗：`POST /api/v1/plans/51/run {"device_ids":[<id>]}`（Plan 51 = probe v1.0.1 四根，
+   patrol 45s——reconciler 随 job 启动，驻留保证接住落盘晚于触发的事件）；
+4. 进 patrol 后单发触发：`adb -s <serial> shell am crash com.android.settings`；
+5. 设备端差分（≤15s）：应现 `JE.103000004` 新目录 + dropbox `system_app_crash`；
+6. 平台端（≤2min）：`job_log_signal` 新 UNIVIEW 行（`subtype=Java Crash`、`package=com.android.settings`、
+   `source=reconciler`），DLE 终态 `REMOTE`；
+7. 释放：`POST /api/v1/plan-runs/<run>/abort`，回查租约空、设备回 ONLINE。
+
+**复核记录（同日双机，均一次通过）**：
+
+| 设备 | 触发（真实钟） | 设备端落盘 | 平台 emit | 备注 |
+|---|---|---|---|---|
+| `00004a4f` | 11:51:27 | ≤25s | 11:52:02（seq1，+35s） | 该机时钟恒慢 ~6.9 天（#785 形态）；seq2 为 #2010 签名变化重发样本 |
+| `0001cb4d` | 14:22:15 | ≤12s | 14:23:52（+97s） | 时钟准：`aee_ts=2026-09-16_14:22:13` 与真实钟秒级吻合——坐实「慢钟」系单机漂移而非链路问题；Run 411/Job 17941，abort 后设备回池 |
+
+两机基线均 0 → 触发后恰 1 条新鲜信号、1:1 对应；采集→emit→入库→上送（`REMOTE`）每次全链走通。
+
 ## Revisit
 
 - **`kick_datetime` 是设备本地时区裸串**（`2026-09-08_06:59:12.031`，无 tz）：`device_timestamp`
