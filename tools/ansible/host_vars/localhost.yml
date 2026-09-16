@@ -1,0 +1,7 @@
+---
+# localhost 是控制机本机：delegate_to: localhost 的任务不应、也不需要提权。
+# 背景（#2234）：group_vars/all.yml 提供 become 口令后，作用域含 localhost（all 组），
+# 委派任务会为它求值 become —— 即使任务自己写着 `become: false`（238 现场实测：
+# sudo: a password is required 让 Agent 安装的摘要任务直接失败）；host_vars 优先级
+# 高于 group_vars，这里显式关掉。
+ansible_become: false
