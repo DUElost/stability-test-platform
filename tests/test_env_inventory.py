@@ -90,6 +90,29 @@ def test_scan_skips_agent_scripts_catalog(tmp_path):
     assert "ZZ_SCRIPT_VAR" not in reads, "版本化脚本目录不应进入运行时清单"
 
 
+def test_scan_covers_backend_scripts_dir(tmp_path):
+    """#2026：``scripts`` 组件曾按 SCAN_ROOT（backend/）相对判定 → ``backend/scripts/**``
+
+    与 ``backend/agent/scripts/**`` 一起被跳过（21 个控制面脚本文件对门禁不可见，
+    ``STP_INITIAL_ADMIN_*`` 等读取名漏登记而 ``--check`` 仍报 OK）。判据须按
+    **agent 侧子树前缀**跳，不能按任意层级的 ``scripts`` 组件跳。
+    """
+    mod = _load_module()
+    backend = tmp_path / "backend"
+    (backend / "scripts").mkdir(parents=True)
+    (backend / "scripts" / "bootstrap_x.py").write_text(
+        'import os\nX = os.getenv("ZZ_CTRL_SCRIPT_VAR")\n', encoding="utf-8",
+    )
+    (backend / "agent" / "scripts" / "s1" / "v1.0.0").mkdir(parents=True)
+    (backend / "agent" / "scripts" / "s1" / "v1.0.0" / "main.py").write_text(
+        'import os\nY = os.getenv("ZZ_AGENT_SCRIPT_VAR")\n', encoding="utf-8",
+    )
+    mod.ROOT = tmp_path
+    reads = mod.scan_reads(backend)
+    assert "ZZ_CTRL_SCRIPT_VAR" in reads, "backend/scripts/** 是控制面脚本目录，必须进清单（#2026）"
+    assert "ZZ_AGENT_SCRIPT_VAR" not in reads, "agent 侧版本化脚本目录仍须排除"
+
+
 def test_audit_requires_declaration_or_registration(monkeypatch):
     """#737 收口：读取名必须「登记进示例 ∪ 内部声明」二选一。"""
     mod = _load_module()

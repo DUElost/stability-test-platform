@@ -174,8 +174,12 @@ def _on_jira_run_complete(run: "ConsoleRun") -> None:
         status_snapshot = run.to_status()
         issue_keys: list[str] = []
         try:
-            replay = RunConsole.instance().read_log(console_run_id, from_seq=0)
-            issue_keys = parse_issue_keys(replay.get("lines", []))
+            # #2070：走 iter_log_lines 而不是 read_log —— read_log 的
+            # `_replay_max_lines`（默认 2000）是给 HTTP 响应体设界的显示层约束，
+            # 复用到落库路径会让超长日志第 2000 行之后的 issue key 静默丢失。
+            issue_keys = parse_issue_keys(
+                RunConsole.instance().iter_log_lines(console_run_id)
+            )
         except Exception:
             logger.exception("jira_run_parse_issue_keys_failed run_id=%s", console_run_id)
 

@@ -316,4 +316,39 @@ describe('ADR-0038 退役显示与入口（#1807）', () => {
 
     expect(onUnretire).toHaveBeenCalledWith(expect.objectContaining({ id: retired.id }));
   });
+
+  it('digest 判据：revision 不等不得渲染成 drift（ADR-0040 v1.1 判据唯一性）', () => {
+    // 后端判据唯一 = code artifact digest：digest 相等即 `matched`，revision
+    // （`VERSION` = 仓库 HEAD）只作溯源文本。若前端改成按 revision 判等，
+    // 任何不动 backend/agent/** 的提交都会让全 fleet 出现**假 drift**
+    // ——这正是 #2057 的根因，#2155 把口径钉在前端。
+    render(
+      <ExpandableHostTable
+        hosts={[
+          {
+            ...host,
+            agent_code_revision: 'abc1234',      // 主机上报的（旧）
+            expected_code_revision: 'def5678',   // 期望（新 HEAD）
+            agent_code_sync_status: 'matched',   // digest 已对齐
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText('已对齐')).toBeInTheDocument();
+    expect(screen.queryByText('内容漂移')).not.toBeInTheDocument();
+  });
+
+  it('digest 缺失（未上报）渲染为 unknown，而不是 drift', () => {
+    // ADR-0040 v1.1：未上报 digest（#1907 前部署 / 新装未心跳）→ `unknown`，
+    // 运维动作是「等一次心跳 / 首次 --force 迁移」，**不得**渲染成需更新。
+    render(
+      <ExpandableHostTable
+        hosts={[{ ...host, agent_code_sync_status: 'unknown' }]}
+      />,
+    );
+
+    expect(screen.getByText('未知')).toBeInTheDocument();
+    expect(screen.queryByText('内容漂移')).not.toBeInTheDocument();
+  });
 });

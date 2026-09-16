@@ -212,15 +212,19 @@ def _ports_check(ops: Ops) -> Check:
 def _time_check(ops: Ops) -> Check:
     result = ops.run(["timedatectl", "show", "-p", "NTPSynchronized", "--value"])
     synchronized = "yes" in result.stdout.strip().lower()
+    # 时区一并回显：NTP 同步只说明「时钟准」，不说明「时区对」——声明与主机不一致要在
+    # S1 之前就看得见（#2265：238 现场声明 UTC / 主机 PDT / Agent CST，差 15 小时）。
+    timezone = ops.timezone() or "unknown"
     if not synchronized:
         return _fail(
             "preflight.time", "site", "$.site.timezone", "preflight_time",
-            f"Host clock is not NTP-synchronized (timedatectl: {result.stdout.strip() or 'no answer'}).",
+            f"Host clock is not NTP-synchronized (timedatectl: {result.stdout.strip() or 'no answer'}; "
+            f"timezone: {timezone}).",
         )
     return passed(
         "preflight.time", "site", "$.site.timezone", "time_synchronized",
-        "Host clock is NTP-synchronized.",
-        "Fix: systemctl enable --now systemd-timesyncd.",
+        f"Host clock is NTP-synchronized (timezone: {timezone}).",
+        "Fix: systemctl enable --now systemd-timesyncd; make the host timezone match site.timezone.",
     )
 
 
@@ -374,6 +378,8 @@ def preflight_facts(ops: Ops | None = None) -> dict[str, Any]:
         "version": release.get("VERSION_ID", ""),
         "machine": ops.machine(),
         "address": _primary_address(ops),
-        "timezone": Path("/etc/timezone").read_text(encoding="utf-8").strip()
-        if Path("/etc/timezone").is_file() else "UTC",
+        # 时区走 Ops 的两级取值（/etc/timezone → timedatectl）。**不再「读不到就当 UTC」**：
+        # 那个静默默认正是 238 现场「声明 UTC / 主机 PDT」的来源（#2265）——声明必须是
+        # 主机的真实时区，读不到就让调用方 fail-closed，绝不猜。
+        "timezone": ops.timezone(),
     }

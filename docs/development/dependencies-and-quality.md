@@ -45,7 +45,28 @@ Python 3.11 下重新生成对应 lock。日常重生成沿用已有 pin；只�
   与本地配置库的 `alembic_version`（`DATABASE_URL` 取自 ambient 环境 /
   `.env.backend` / `.env`）；未配置即跳过，未对齐即红——生产工作树 pull 到
   含新迁移的 main 后漏跑迁移会被这一项拦住；
+- **alembic revision 不可变**（`check:pr` 的 `alembic-immutability`，CI 在 lint job，
+  #2258 / #2046）：`backend/alembic/versions/*.py` 中**已合入 main** 的文件被改写/删除
+  即红——停在该 revision 之后的库不会再执行被插入的祖先，而上面的 `schema-at-head`
+  只做等值判定、判不出来。rechain 只应在**未发布**的 revision 上做；确需改写已合入的
+  revision 时，同一 PR 必须附**重放迁移**（新增 revision 的 `down_revision` 指向被改写者，
+  body 用「命中才写」的幂等自愈），门禁据此豁免。先例：#1717 为 `dd44ee55ff66` 补的
+  `f6a5b4c3d2e1`；
 - 验证顺序：Agent tests → TypeScript check → frontend build → 必要时 backend tests。
+- **本机解释器比 CI 新，语法子集不对称**：CI 各 job 统一 Python 3.11（`lint` /
+  `pr-compileall` / `pr-agent-tests` / `pr-typecheck` 同版，`ruff.toml` 亦
+  `target-version = "py311"`），而本机 venv 是 3.13。3.12+ 才允许的写法（PEP 701 的
+  同类型引号嵌套，如 `f"{item["k"]}"`）在 3.11 直接是 `SyntaxError`——本机
+  `check:quick` 的 `compileall` 全绿、推上去必红。提交前用 CI 同版自查：
+
+  ```bash
+  docker run --rm -v "$PWD":/w -w /w python:3.11-slim \
+    python -m compileall -q backend tools scripts
+  ```
+
+  反向不对称也存在（个别 f-string 组合在 3.13 报错而 3.11 通过，实测见
+  [2026-09-16 退役判据 note](../notes/process/2026-09-16-script-retirement-guard-and-executor.md)）；
+  结论一样：**别在 f-string 里内嵌引号字典键，先取局部变量**。
 
 ## 空行污染
 

@@ -239,3 +239,84 @@ def test_digest_helper_loads_the_implementation_from_the_bundle(tmp_path):
     original = (REPO_ROOT / "backend/agent/artifact_digest.py").read_text(encoding="utf-8")
     assert source == original
     assert sys.version_info >= (3, 11)
+
+
+# ── #2269：bundle 不得携带构建机本地状态（.env / 字节码 / 缓存）─────────────
+
+
+def test_bundle_excludes_backend_dotenv(tmp_path):
+    """构建机的 backend/.env 不得进入交付物（#2269 主症状）。"""
+    root = tree(tmp_path)
+    (root / "backend" / ".env").write_text("STP_FILE_SERVER_ADDRESS=build-host\n", encoding="utf-8")
+    out = tmp_path / "bundle"
+    build_bundle(root, out, revision=REVISION)
+    assert not (out / "backend" / ".env").exists(), "构建机 backend/.env 被打进 bundle"
+    assert not any(p.name == ".env" for p in out.rglob(".env")), "bundle 内仍存在 .env"
+
+
+def test_bundle_excludes_env_variants_but_keeps_example(tmp_path):
+    """`.env.local` 等变体排除；但**入库模板** `.env.example` 必须保留。
+
+    `deploy/postgres/.env.example` 是部署文档要求 `cp` 的模板
+    （`deploy/postgres/README.md`），宽泛的 `.env.*` 会破坏部署。
+    """
+    # 注意：built() 内部会自行调用 tree() 建树，故必须先建树再写文件、并直接
+    # 用 build_bundle 复用**同一个** tree（否则写到另一份树里，断言会假失败）。
+    root = tree(tmp_path)
+    (root / "backend" / ".env.local").write_text("A=1\n", encoding="utf-8")
+    # 覆盖仓库中**实际存在**的三种模板写法（不止 `.env.example`）——
+    # `.env.backend.example` / `.env.backend.internal.example` 曾因
+    # 只豁免 `.env.example` 而被误删（本仓实测 8 个入库模板全部以 `.example` 结尾）。
+    templates = (".env.example", ".env.backend.example", ".env.backend.internal.example")
+    for name in templates:
+        (root / "backend" / name).write_text("A=\n", encoding="utf-8")
+    out = tmp_path / "bundle"
+    build_bundle(root, out, revision=REVISION)
+    assert not (out / "backend" / ".env.local").exists(), ".env.local 未被排除"
+    for name in templates:
+        assert (out / "backend" / name).exists(), f"入库模板 {name} 被误删"
+
+
+def test_bundle_excludes_bytecode_and_caches(tmp_path):
+    """构建机字节码 / 缓存不得进入交付物。"""
+    root = tree(tmp_path)
+    cache = root / "backend" / "__pycache__"
+    cache.mkdir(parents=True)
+    (cache / "mod.cpython-313.pyc").write_bytes(b"\x00")
+    (root / "backend" / "stale.pyc").write_bytes(b"\x00")
+    out = tmp_path / "bundle"
+    build_bundle(root, out, revision=REVISION)
+    assert not (out / "backend" / "__pycache__").exists(), "__pycache__ 未被排除"
+    assert not (out / "backend" / "stale.pyc").exists(), "游离 .pyc 未被排除"
+
+
+def test_no_pycache_written_into_bundle_by_digesting(tmp_path):
+    """摘要阶段加载 artifact_digest 不得**在 bundle 内**写出 __pycache__。
+
+    修复前 `_load_agent_digest_module` 会 exec_module → 生成
+    `backend/agent/__pycache__`，即构建副产物被写进交付物。
+    """
+    out, _ = built(tmp_path)
+    assert not (out / "backend" / "agent" / "__pycache__").exists(), (
+        "摘要阶段在 bundle 内写出了 __pycache__（构建副产物混入交付物）"
+    )
+
+
+def test_forbidden_entries_checker_flags_and_exempts(tmp_path):
+    """`find_forbidden_bundle_entries` 的判据：拦 .env/字节码，放行 .env.example。"""
+    from tools.release.build_bundle import find_forbidden_bundle_entries
+
+    root = tmp_path / "b"
+    (root / "backend").mkdir(parents=True)
+    (root / "backend" / ".env").write_text("A=1\n", encoding="utf-8")
+    (root / "backend" / ".env.example").write_text("A=\n", encoding="utf-8")
+    (root / "backend" / "__pycache__").mkdir()
+    (root / "backend" / "__pycache__" / "m.pyc").write_bytes(b"\x00")
+    (root / "backend" / "ok.py").write_text("x = 1\n", encoding="utf-8")
+
+    found = find_forbidden_bundle_entries(root)
+    assert "backend/.env" in found
+    assert "backend/__pycache__" in found
+    assert any(p.endswith("m.pyc") for p in found)
+    assert not any(".env.example" in p for p in found), "入库模板被误判为违规"
+    assert not any(p.endswith("ok.py") for p in found), "正常源码被误判为违规"
