@@ -59,13 +59,14 @@ def test_plans_only_no_scan_gate_awaiting_rows(db_session, sample_host):
     db_session.add_all([uniview_local, mtk_aee_local, uniview_remote])
     db_session.commit()
 
-    changes = module.plan_changes(db_session)
+    changes, hit_limit = module.plan_changes(db_session)
 
     planned_ids = {row.id for row, _target in changes}
     assert planned_ids == {uniview_local.id}, "只应规划 UNIVIEW 的等待态行"
     assert mtk_aee_local.id not in planned_ids, "MTK AEE 的 LOCAL 语义（scan 引用后才传）不得被提升"
     assert uniview_remote.id not in planned_ids, "已在 REMOTE 的行不得被重复规划"
     assert [target for _row, target in changes] == ["UPLOAD_PENDING"]
+    assert hit_limit is False, "未设 --limit 时不应报「触到上界」"
 
 
 def test_plan_changes_honours_limit(db_session, sample_host):
@@ -74,5 +75,21 @@ def test_plan_changes_honours_limit(db_session, sample_host):
         db_session.add(_make_event(sample_host.id, serial=f"6200236{index}"))
     db_session.commit()
 
-    assert len(module.plan_changes(db_session, limit=2)) == 2
-    assert len(module.plan_changes(db_session, limit=0)) == 3
+    changes_two, hit_two = module.plan_changes(db_session, limit=2)
+    assert len(changes_two) == 2
+    assert hit_two is True, "--limit 下推到 SQL：扫满即报上界（#2285）"
+
+    changes_all, hit_all = module.plan_changes(db_session, limit=0)
+    assert len(changes_all) == 3
+    assert hit_all is False
+
+    _changes_wide, hit_wide = module.plan_changes(db_session, limit=10)
+    assert hit_wide is False
+
+
+def test_candidate_states_reuse_shared_judgement_source():
+    """#2285：等待态集合不复制字面量——真源仍是 device_log_event（新增第三态时自动跟上）。"""
+    from backend.services import device_log_event
+
+    module = _load_backfill_module()
+    assert set(module.CANDIDATE_STATES) == set(device_log_event._AWAITING_UPLOAD_STATES)

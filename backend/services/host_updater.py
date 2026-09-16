@@ -10,6 +10,7 @@ Uses paramiko (already a project dependency) to:
 from __future__ import annotations
 
 import base64
+import errno
 import fnmatch
 import io
 import json
@@ -605,6 +606,10 @@ def execute_hot_update(
             "phases": {"digest": 0},
         }
 
+    # #2285：失败归因按**阶段**分流（连接 / 上传 / 远端执行）——三者的 OSError 此前
+    # 一律报成 ssh_connect_failed，把「目标机 /tmp 满、传输中断」误指成「查可达性与
+    # SSH 端口」。stage 在 try 之前初始化，供外层 except 读取。
+    stage = "connect"
     try:
         # 1. Build payloads（#1903：批量入口传预构建载荷整批复用；P2-B 分层
         #    惰性构建——每层首次需要时才构建，UI/API 单台按需内建）
@@ -638,6 +643,7 @@ def execute_hot_update(
         resources_tar_path = _remote_tar_path(prefix="res") if resources_drift else ""
         try:
             # 3. Upload payloads（按层上传）
+            stage = "upload"
             t_upload = time.monotonic()
             if code_tarball is not None:
                 logger.info("hot_update_uploading_code host=%s:%d", host_ip, ssh_port)
@@ -669,6 +675,7 @@ def execute_hot_update(
 
             logger.info("hot_update_executing host=%s", host_ip)
             t_remote = time.monotonic()
+            stage = "exec"
             stdin, stdout, stderr = client.exec_command(script)
             exit_code = stdout.channel.recv_exit_status()
             out_text = stdout.read().decode("utf-8", errors="replace")
@@ -757,17 +764,47 @@ def execute_hot_update(
     except (OSError, IOError) as e:
         # code-scanning #80：异常原文只进日志，不外泄给 API 调用方（与下方
         # unexpected_error 兜底分支同一口径）——分类由稳定的 reason 承载，
-        # 根因由日志锚点 hot_update_connection_failed 承载。
-        msg = (
-            f"SSH connection to {host_ip}:{ssh_port} failed. Check host "
-            "reachability and the SSH port, then retry; the underlying error "
-            "is in the control-plane log (hot_update_connection_failed)."
-        )
-        logger.warning("hot_update_connection_failed host=%s:%d err=%s", host_ip, ssh_port, e)
+        # 根因由日志锚点承载。
+        # #2285：本 except 覆盖的 try 从建包起，HTTP/SFTP/exec 全在其中，paramiko
+        # 把上传与会话失败也抛成 OSError —— 只报 ssh_connect_failed 会把「目标机
+        # 盘满 / 传输中断」误指成「查可达性与 SSH 端口」。按 errno 优先、阶段其次分流。
+        if getattr(e, "errno", None) in (errno.ENOSPC, errno.EDQUOT):
+            reason, anchor = "remote_disk_full", "hot_update_remote_disk_full"
+            msg = (
+                f"The remote host {host_ip}:{ssh_port} reported no space (or exceeded "
+                "its quota) while applying the update. Free space on the target "
+                "filesystem (remote temp + install directory), then retry; the "
+                "underlying error is in the control-plane log "
+                "(hot_update_remote_disk_full)."
+            )
+        elif stage == "upload":
+            reason, anchor = "remote_upload_failed", "hot_update_upload_failed"
+            msg = (
+                f"Uploading the update payload to {host_ip}:{ssh_port} failed (the SSH "
+                "connection itself succeeded). Check the remote temp space and the "
+                "install user's write permission, then retry; the underlying error "
+                "is in the control-plane log (hot_update_upload_failed)."
+            )
+        elif stage == "exec":
+            reason, anchor = "remote_exec_failed", "hot_update_exec_failed"
+            msg = (
+                f"The remote update script on {host_ip}:{ssh_port} could not be run "
+                "(the SSH connection and the upload succeeded). Check the remote "
+                "install directory and service state; the underlying error is in "
+                "the control-plane log (hot_update_exec_failed)."
+            )
+        else:
+            reason, anchor = "ssh_connect_failed", "hot_update_connection_failed"
+            msg = (
+                f"SSH connection to {host_ip}:{ssh_port} failed. Check host "
+                "reachability and the SSH port, then retry; the underlying error "
+                "is in the control-plane log (hot_update_connection_failed)."
+            )
+        logger.warning("%s host=%s:%d err=%s", anchor, host_ip, ssh_port, e)
         return {
             "ok": False,
             "converged": False,
-            "reason": "ssh_connect_failed",
+            "reason": reason,
             "message": msg,
             "duration_ms": int((time.monotonic() - t0) * 1000),
             "deps_refreshed": False,
