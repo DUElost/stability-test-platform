@@ -68,20 +68,8 @@ def is_prometheus_available() -> bool:
 
 
 # ============================================================================
-# Task Dispatch Metrics
+# Hot Update Metrics
 # ============================================================================
-
-task_dispatch_total = Counter(
-    'stability_task_dispatch_total',
-    'Total number of task dispatch attempts',
-    ['status']  # success, failure, retry
-) if PROMETHEUS_AVAILABLE else _MockMetric()
-
-task_dispatch_errors = Counter(
-    'stability_task_dispatch_errors_total',
-    'Total number of task dispatch errors',
-    ['error_type']  # device_unavailable, host_capacity, lock_failed, etc.
-) if PROMETHEUS_AVAILABLE else _MockMetric()
 
 # ADR-0040 D6（#1907）：热更新收敛结果计数——outcome ∈ deployed / converged /
 # failed；entry 标注入口（ui_api / batch_direct / precheck_sync）。no-op 判定
@@ -103,11 +91,6 @@ device_lease_released = Counter(
     ['reason']  # completed, failed, timeout, canceled
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
-device_lease_conflicts = Counter(
-    'stability_device_lease_conflicts_total',
-    'Total number of device lease conflicts'
-) if PROMETHEUS_AVAILABLE else _MockMetric()
-
 claim_lease_failed_total = Counter(
     'stability_claim_lease_failed_total',
     'Total claim attempts where acquire_lease returned None (device already leased)',
@@ -123,22 +106,9 @@ rate_limiter_evicted_total = Counter(
     'Total rate-limiter buckets evicted at capacity (high source cardinality signal)',
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
-device_lease_duration = Histogram(
-    'stability_device_lease_duration_seconds',
-    'Duration of device leases in seconds',
-    buckets=[60, 120, 300, 600, 900, 1800, 3600, 7200]
-) if PROMETHEUS_AVAILABLE else _MockMetric()
-
 # ============================================================================
 # Task Run Metrics
 # ============================================================================
-
-task_run_duration = Histogram(
-    'stability_task_run_duration_seconds',
-    'Task run duration in seconds',
-    ['task_type'],  # MONKEY, MTBF, DDR, GPU, STANDBY, AIMONKEY
-    buckets=[60, 300, 600, 1800, 3600, 7200, 14400, 28800]
-) if PROMETHEUS_AVAILABLE else _MockMetric()
 
 task_run_total = Counter(
     'stability_task_run_total',
@@ -162,12 +132,6 @@ host_online = Gauge(
     ['status']  # online, offline, degraded
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
-host_heartbeat_latency = Histogram(
-    'stability_host_heartbeat_latency_seconds',
-    'Host heartbeat latency in seconds',
-    buckets=[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0]
-) if PROMETHEUS_AVAILABLE else _MockMetric()
-
 host_heartbeat_missed = Counter(
     'stability_host_heartbeat_missed_total',
     'Total number of missed host heartbeats',
@@ -182,11 +146,6 @@ device_online = Gauge(
     'stability_device_online',
     'Number of online devices',
     ['status']  # online, offline, busy
-) if PROMETHEUS_AVAILABLE else _MockMetric()
-
-device_monitoring_updates = Counter(
-    'stability_device_monitoring_updates_total',
-    'Total number of device monitoring updates'
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
 # ============================================================================
@@ -226,17 +185,12 @@ reconciler_actions = Counter(
     ['action', 'reason']  # action: to_unknown/to_failed/release_lease, reason: lease_expired/unknown_grace_timeout/terminal_job_active_lease
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
-expired_active_leases_gauge = Gauge(
-    'stability_expired_active_leases',
-    'Number of expired but still ACTIVE (grace-held) leases',
-    ['host_id']
-) if PROMETHEUS_AVAILABLE else _MockMetric()
-
-unknown_jobs_gauge = Gauge(
-    'stability_unknown_jobs',
-    'Number of UNKNOWN status jobs',
-    ['reason']  # reason: lease_expired / host_timeout
-) if PROMETHEUS_AVAILABLE else _MockMetric()
+# #2287：本组随 ADR-0019 Phase 4a/4b 引入的两个**状态 gauge**
+# （`stability_expired_active_leases{host_id}` = 宽限期持锁租约数、
+# `stability_unknown_jobs{reason}` = UNKNOWN 态 job 数）自引入起**从未接线**，
+# 零告警零看板消费者，定义已删除——状态转换由上面的 runs / actions 计数表达。
+# 要恢复须「定义与接线同 PR」：全指标面生产者判据
+# （tests/test_alert_metric_producers.py）会拦住只加定义不接线的改动。
 
 # ============================================================================
 # API Metrics
@@ -328,11 +282,6 @@ plan_run_terminal_total = Counter(
     'stability_plan_run_terminal_total',
     'Total PlanRuns reaching a terminal status',
     ['status']  # SUCCESS / PARTIAL_SUCCESS / FAILED
-) if PROMETHEUS_AVAILABLE else _MockMetric()
-
-plan_run_active = Gauge(
-    'stability_plan_run_active',
-    'Number of currently RUNNING PlanRuns',
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
 plan_run_pass_rate = Histogram(
