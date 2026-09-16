@@ -226,6 +226,7 @@ function _getDashSocket(): Socket {
   // Wire up event forwarding for all known event types
   const EVENTS = [
     SOCKET_EVENT_NAMES.deviceUpdate,
+    SOCKET_EVENT_NAMES.dashboardSummary,
     SOCKET_EVENT_NAMES.stepLog,
     SOCKET_EVENT_NAMES.stepUpdate,
     SOCKET_EVENT_NAMES.jobStatus,
@@ -330,6 +331,7 @@ export function parseSubscription(url: string): SubscriptionConfig {
       room: null,
       events: [
         SOCKET_EVENT_NAMES.deviceUpdate,
+        SOCKET_EVENT_NAMES.dashboardSummary,
         SOCKET_EVENT_NAMES.runUpdate,
         SOCKET_EVENT_NAMES.reportReady,
         SOCKET_EVENT_NAMES.planRunStatus,

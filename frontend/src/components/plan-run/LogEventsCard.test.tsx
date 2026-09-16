@@ -2,7 +2,7 @@
  * #529 — LogEventsCard：终态 PlanRun 的 DLE 事件视图（归档权威）。
  * 只读 device_log_event 端点；RUNNING 不触发；路径优先 remote_path。
  */
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import LogEventsCard from './LogEventsCard';
@@ -81,6 +81,44 @@ describe('LogEventsCard (#529)', () => {
     expect(screen.getByText('REMOTE')).toBeInTheDocument();
     expect(screen.getByText('UPLOAD_PENDING')).toBeInTheDocument();
     expect(screen.getByText('ARCHIVED')).toBeInTheDocument();
+  });
+
+  // #2288：筛选选项必须来自**服务端全集**，不是已加载窗口。
+  it('已加载行只有单平台、但 run 含多平台时仍渲染平台筛选（#2288）', async () => {
+    mocks.getLogEvents.mockResolvedValue({
+      plan_run_id: 103,
+      data_authority: 'device_log_event',
+      total: 600,
+      // 最新一页恰好全是 MTK（单平台主导 + detected_at DESC 的典型形态）
+      items: Array.from({ length: 3 }, (_, i) => event({ id: `ev-${i}` })),
+      platforms: ['MTK', 'UNISOC'],
+    });
+    renderCard(103, true);
+
+    const bar = await screen.findByTestId('log-events-platform-filter');
+    expect(within(bar).getByRole('button', { name: 'UNISOC' })).toBeInTheDocument();
+
+    fireEvent.click(within(bar).getByRole('button', { name: 'UNISOC' }));
+    await waitFor(() =>
+      expect(mocks.getLogEvents).toHaveBeenLastCalledWith(103, {
+        skip: 0,
+        limit: 200,
+        platform: 'UNISOC',
+      }),
+    );
+  });
+
+  it('run 只有一个平台时不显示筛选（全集判据，非窗口判据）', async () => {
+    mocks.getLogEvents.mockResolvedValue({
+      plan_run_id: 103,
+      data_authority: 'device_log_event',
+      total: 2,
+      items: [event({ id: 'ev-0' }), event({ id: 'ev-1' })],
+      platforms: ['MTK'],
+    });
+    renderCard(103, true);
+    await waitFor(() => expect(screen.getByTestId('log-events-count')).toBeInTheDocument());
+    expect(screen.queryByTestId('log-events-platform-filter')).not.toBeInTheDocument();
   });
 
   it('无 DLE 记录时显示空态', async () => {

@@ -15,9 +15,12 @@ from backend.models.host import Host, Device
 from backend.models.device_lease import DeviceLease
 from backend.models.enums import LeaseStatus
 from backend.core.metrics import (
+    device_update_suppressed_total,
     record_agent_outbox_pending,
     record_host_operation_concurrency,
 )
+from backend.services.dashboard_summary import device_update_is_material
+from backend.services.dashboard_summary_publisher import schedule_dashboard_summary_push
 from backend.api.schemas import HeartbeatIn
 from backend.api.routes.auth import verify_agent_secret
 from backend.services.script_catalog_version import compute_script_catalog_version
@@ -180,6 +183,7 @@ async def heartbeat(
         except Exception as exc:
             logger.warning(f"device_update_broadcast_failed: {exc}")
 
+    schedule_dashboard_summary_push()
     return response
 
 
@@ -392,6 +396,7 @@ def _process_heartbeat_with_db(
             seen_serials.add(serial)
 
             device = existing_devices.get(serial)
+            is_new_device = False
 
             if not device:
                 device = Device(
@@ -403,7 +408,14 @@ def _process_heartbeat_with_db(
                 db.add(device)
                 db.flush()
                 existing_devices[serial] = device
+                is_new_device = True
                 # ADR-0029 v2.5 D10：归属派生（JOIN project_model），无副本可写
+
+            prev_status = device.status
+            prev_adb_state = device.adb_state
+            prev_adb_connected = device.adb_connected
+            prev_battery_level = device.battery_level
+            prev_temperature = device.temperature
 
             lease_host = active_lease_host_by_device.get(device.id)
             if lease_host is not None and lease_host != host.id:
@@ -492,19 +504,33 @@ def _process_heartbeat_with_db(
                 device.status = "ONLINE"
                 logger.info(f"device_status_online: serial={serial}, adb_connected=true, no_active_lease")
 
-            ws_device_updates.append(
-                {
-                    "serial": device.serial,
-                    "status": device.status,
-                    "battery_level": device.battery_level,
-                    "temperature": device.temperature,
-                    "network_latency": device.network_latency,
-                    "adb_state": device.adb_state,
-                    "adb_connected": device.adb_connected,
-                    "host_id": device.host_id,
-                    "last_seen": device.last_seen.isoformat() if device.last_seen else None,
-                }
-            )
+            if is_new_device or device_update_is_material(
+                prev_status=prev_status,
+                new_status=device.status,
+                prev_adb_state=prev_adb_state,
+                new_adb_state=device.adb_state,
+                prev_adb_connected=prev_adb_connected,
+                new_adb_connected=device.adb_connected,
+                prev_battery_level=prev_battery_level,
+                new_battery_level=device.battery_level,
+                prev_temperature=prev_temperature,
+                new_temperature=device.temperature,
+            ):
+                ws_device_updates.append(
+                    {
+                        "serial": device.serial,
+                        "status": device.status,
+                        "battery_level": device.battery_level,
+                        "temperature": device.temperature,
+                        "network_latency": device.network_latency,
+                        "adb_state": device.adb_state,
+                        "adb_connected": device.adb_connected,
+                        "host_id": device.host_id,
+                        "last_seen": device.last_seen.isoformat() if device.last_seen else None,
+                    }
+                )
+            else:
+                device_update_suppressed_total.inc()
 
     # Mark missing devices as offline
     missing_devices = _mark_missing_devices_offline(db, host.id, seen_serials)

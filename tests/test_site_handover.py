@@ -222,6 +222,22 @@ class TestHandover:
         assert _status(report, "handover.MS-04") == "BLOCKED"
         assert _codes(report).count("FAIL") == 0
 
+    def test_blocked_verify_evidence_keeps_the_item_blocked(self, tmp_path):
+        """#2283：BLOCKED 证据是**正常验收结果**——不判 FAIL，也不因此不写文件。
+
+        此前凡非 PASS 即 failed → 整份 handover 判 FAIL 且不写文件，而 /site/ 导航页
+        有指向 handover.json 的固定链接 → 404。
+        """
+        report = run_handover(
+            _site_yaml(tmp_path), state_dir=_state_dir(tmp_path),
+            verify_report=_verify_report(tmp_path, status="BLOCKED"), system_root=tmp_path,
+        )
+
+        assert report["status"] == "PASS", _codes(report)
+        assert _status(report, "handover.MS-06") == "BLOCKED"
+        assert "evidence_blocked" in _codes(report)
+        assert report["saved_file"], "BLOCKED 不应阻断写文件"
+
     def test_missing_verify_report_leaves_verify_items_blocked(self, tmp_path):
         report = run_handover(
             _site_yaml(tmp_path), state_dir=_state_dir(tmp_path), system_root=tmp_path,

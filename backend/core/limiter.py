@@ -21,6 +21,10 @@
 已知限制:本限流器是**进程内**的。多 worker / 多副本下实际限额 = 配置值 ×
 副本数。当前生产是 systemd 单进程 uvicorn(无 --workers),所以是准确的;
 一旦加 worker 会静默放宽 N 倍且没有告警。要精确需挪到 Redis,见 #91。
+
+#2324：UI 与 Agent 分桶（``STP_UI_RATE_LIMIT_REQUESTS`` /
+``STP_AGENT_RATE_LIMIT_REQUESTS``）。``/api/v1/agent/`` 走 Agent 桶，其余走 UI
+桶；``/api/v1/heartbeat`` 仍豁免。响应头 ``X-RateLimit-Bucket`` 标明命中桶。
 """
 import ipaddress
 import logging
@@ -37,8 +41,10 @@ from backend.core.metrics import rate_limiter_evicted_total
 
 logger = logging.getLogger(__name__)
 
-# Rate limit configuration
-RATE_LIMIT_REQUESTS = 300  # requests
+# Rate limit configuration (#2324 UI vs Agent buckets)
+UI_RATE_LIMIT_REQUESTS = int(os.getenv("STP_UI_RATE_LIMIT_REQUESTS", "300"))
+AGENT_RATE_LIMIT_REQUESTS = int(os.getenv("STP_AGENT_RATE_LIMIT_REQUESTS", "2000"))
+RATE_LIMIT_REQUESTS = UI_RATE_LIMIT_REQUESTS  # backwards-compatible alias
 RATE_LIMIT_WINDOW = 60  # seconds
 
 # 同时跟踪的 IP 上限。超出后按 LRU 淘汰 —— 防止(伪造或真实的)海量来源把
@@ -222,8 +228,9 @@ class RateLimiter:
         return len(self._storage)
 
 
-# Global rate limiter instance
-rate_limiter = RateLimiter()
+# Global rate limiter instances (#2324)
+rate_limiter = RateLimiter(max_requests=UI_RATE_LIMIT_REQUESTS)
+agent_rate_limiter = RateLimiter(max_requests=AGENT_RATE_LIMIT_REQUESTS)
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -233,7 +240,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     _SKIP_PREFIXES = (
         "/api/v1/heartbeat",
         # /api/v1/agent/jobs/ 已移出豁免清单：依赖 _verify_agent + lifespan fail-fast
-        # 提供认证保护，限流作为第二道防线（300 req/min/IP）。
+        # 提供认证保护，限流作为第二道防线（Agent 桶，默认 2000 req/min/IP，#2324）。
         "/ws/",
         "/ws",
     )
@@ -246,8 +253,17 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         ip = get_client_ip(request)
 
+        if path.startswith("/api/v1/agent/"):
+            limiter = agent_rate_limiter
+            limit = AGENT_RATE_LIMIT_REQUESTS
+            bucket = "agent"
+        else:
+            limiter = rate_limiter
+            limit = UI_RATE_LIMIT_REQUESTS
+            bucket = "ui"
+
         # Check rate limit BEFORE processing the request
-        allowed, remaining, reset_time = rate_limiter.is_allowed(ip)
+        allowed, remaining, reset_time = limiter.is_allowed(ip)
 
         if not allowed:
             return JSONResponse(
@@ -255,16 +271,18 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 content={"detail": f"Rate limit exceeded. Try again in {reset_time} seconds."},
                 headers={
                     "Retry-After": str(reset_time),
-                    "X-RateLimit-Limit": str(RATE_LIMIT_REQUESTS),
+                    "X-RateLimit-Limit": str(limit),
                     "X-RateLimit-Remaining": "0",
                     "X-RateLimit-Reset": str(reset_time),
+                    "X-RateLimit-Bucket": bucket,
                 },
             )
 
         response = await call_next(request)
-        response.headers["X-RateLimit-Limit"] = str(RATE_LIMIT_REQUESTS)
+        response.headers["X-RateLimit-Limit"] = str(limit)
         response.headers["X-RateLimit-Remaining"] = str(remaining)
         response.headers["X-RateLimit-Reset"] = str(reset_time)
+        response.headers["X-RateLimit-Bucket"] = bucket
         return response
 
 

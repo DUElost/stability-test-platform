@@ -1,11 +1,14 @@
-"""Ansible 通道的 digest 簿记契约（#2112）。
+"""Ansible 通道的 digest 簿记契约（#2112 / #2275）。
 
 背景：`update_agent.yml` 用 `stdout | regex_search('CODE_DIGEST=(\\S+)', '\\1')` 提取
 digest——**多行 stdout 下返回 list**，`copy content` 因此把 marker 写成
 ``["sha256:…"]``；agent 正则 ``^sha256:[0-9a-f]{64}$`` 判非法 → 上报空 → 控制面
 「空值不覆盖」→ 列保留旧值、门禁可能误判收敛（详见 #2112 时序实验）。
 
-本文件守三件事（PR 路径执行，纯离线）：
+#2275：升级路径修了、**装机路径（install_agent.yml）没修**，且门禁只读升级路径——
+于是「同类硬化只做一半」。本文件因此对**两份 playbook** 都跑。
+
+守三件事（PR 路径执行，纯离线）：
 1. 提取表达式必须语义确定（`regex_findall` 取首元素），不得回退到 `regex_search`
    的替换形态；
 2. 两个写入任务之后必须有**回读 + 断言**（写完即验，fail-closed），且断言同时校验
@@ -18,10 +21,14 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-PLAYBOOK = REPO_ROOT / "tools/ansible/playbooks/update_agent.yml"
+PLAYBOOKS = (
+    REPO_ROOT / "tools/ansible/playbooks/update_agent.yml",
+    REPO_ROOT / "tools/ansible/playbooks/install_agent.yml",
+)
 
 DIGEST_FORMAT_RE = "^sha256:[0-9a-f]{64}$"
 
@@ -43,35 +50,37 @@ def _iter_tasks(node):
                 yield from _iter_tasks(node[key])
 
 
-def _tasks() -> list[dict]:
-    plays = yaml.safe_load(PLAYBOOK.read_text(encoding="utf-8"))
+def _tasks(playbook: Path) -> list[dict]:
+    plays = yaml.safe_load(playbook.read_text(encoding="utf-8"))
     collected: list[dict] = []
     for play in plays:
         collected.extend(_iter_tasks(play.get("tasks", [])))
     return collected
 
 
-def test_extract_uses_findall_not_replacing_regex_search():
-    tasks = [t for t in _tasks() if t["name"] == "Extract deployment digests"]
+@pytest.mark.parametrize("playbook", PLAYBOOKS, ids=lambda p: p.name)
+def test_extract_uses_findall_not_replacing_regex_search(playbook):
+    tasks = [t for t in _tasks(playbook) if t["name"] == "Extract deployment digests"]
     assert len(tasks) == 1, "Extract deployment digests 任务应唯一存在"
     facts = tasks[0]["ansible.builtin.set_fact"]
 
     for key in ("agent_code_artifact_digest", "agent_resources_artifact_digest"):
         expr = str(facts[key])
-        assert "regex_findall" in expr, f"{key} 必须用 regex_findall（#2112）: {expr}"
-        assert "regex_search" not in expr, f"{key} 不得回退到 regex_search 替换形态（#2112）: {expr}"
+        assert "regex_findall" in expr, f"{key} 必须用 regex_findall（#2112/#2275）: {expr}"
+        assert "regex_search" not in expr, f"{key} 不得回退到 regex_search 替换形态: {expr}"
         assert "| first" in expr, f"{key} 必须取首元素（regex_findall 返回列表）: {expr}"
         assert "or ['']" in expr, f"{key} 需空匹配兜底（避免 first 作用在空列表）: {expr}"
 
 
-def test_write_then_verify_pair_exists_after_writes():
-    names = [t["name"] for t in _tasks()]
+@pytest.mark.parametrize("playbook", PLAYBOOKS, ids=lambda p: p.name)
+def test_write_then_verify_pair_exists_after_writes(playbook):
+    names = [t["name"] for t in _tasks(playbook)]
     write_code = names.index("Write agent ARTIFACT_DIGEST (ADR-0040 D2)")
     write_res = names.index("Write agent ARTIFACT_DIGEST_RESOURCES (ADR-0040 P2)")
     readback = next(i for i, n in enumerate(names) if n.startswith("Read back deployed artifact digests"))
     assert readback > max(write_code, write_res), "回读任务必须在两个写入任务之后（#2112 ②）"
 
-    tasks = _tasks()
+    tasks = _tasks(playbook)
     slurp = tasks[readback]["ansible.builtin.slurp"]
     assert "{{ item.file }}" in str(slurp["src"]), slurp
     loop_files = [item["file"] for item in tasks[readback]["loop"]]
@@ -95,8 +104,10 @@ def test_assert_format_regex_matches_agent_validation():
         f"两侧正则不一致：agent={agent_re.group(1)!r} playbook={DIGEST_FORMAT_RE!r}"
     )
 
-    assert_task = next(
-        t for t in _tasks() if t["name"].startswith("Assert deployed digests are well-formed")
-    )
-    serialized = str(assert_task["ansible.builtin.assert"]["that"])
-    assert DIGEST_FORMAT_RE in serialized
+    for playbook in PLAYBOOKS:
+        assert_task = next(
+            t for t in _tasks(playbook)
+            if t["name"].startswith("Assert deployed digests are well-formed")
+        )
+        serialized = str(assert_task["ansible.builtin.assert"]["that"])
+        assert DIGEST_FORMAT_RE in serialized, playbook

@@ -693,6 +693,35 @@ def merge_stderr_indicates_failure(stderr: str) -> bool:
     return "traceback (most recent call last)" in text
 
 
+def multi_instance_merge_warning() -> Optional[str]:
+    """#2189（ADR-0027 v1.8 清单第 7 条）：多实例形态下 merge 的**实例绑定**启动告警。
+
+    ``None`` = 单实例（无告警）。判定口径与清单第 6 条一致：Redis adapter 开启即多实例形态
+    （``socketio_redis_adapter_enabled``）。
+
+    merge 的串行原语是**本机** ``flock``（``{工具目录}/merge_result/.stp_merge.lock``，见
+    ``_exclusive_merge_tool_lock``），工具目录取自 ``STP_BACKEND_DEDUP_SCAN_SCRIPT`` 的父目录——
+    **两者都只在同一实例内生效**。故多实例下同一 run 的「手动 API × SAQ ``merge_task``」两条路径
+    没有跨实例互斥（可各自在本机跑工具、各自向中心同一路径发布）。SAQ 作业本身不会双跑
+    （共享 Redis 队列由 SAQ 去重消费），故缺口只在**跨路径并发**。
+
+    解除路径见 ADR-0027 清单第 7 条：B2（复用 P3-4 的 ``run_key`` 全局互斥原语）或
+    B1（把 merge 迁到 worker/Agent，归 ADR-0033）。
+    """
+    try:
+        from backend.realtime.socketio_redis import socketio_redis_adapter_enabled
+    except Exception:  # pragma: no cover - 导入失败不应影响诊断路径
+        return None
+    if not socketio_redis_adapter_enabled():
+        return None
+    return (
+        "multi_instance_mode_enabled merge_instance_bound=true "
+        "affected=merge_result_lock,merge_tool_workdir "
+        "notes=cross_instance_mutex_absent_for_manual_api_x_saq "
+        "ref=#2189"
+    )
+
+
 @contextmanager
 def _exclusive_merge_tool_lock(script_parent: Path) -> Iterator[None]:
     """跨进程独占锁：覆盖共用 ``merge_result/`` 的调用到发布窗口（#1072）。"""

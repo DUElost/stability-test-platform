@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import HostOperationPanel from '@/components/host/HostOperationPanel';
 import type { HostOpItem } from '@/hooks/useHostOperations';
 
@@ -180,5 +180,31 @@ describe('HostOperationPanel', () => {
       />,
     );
     expect(screen.queryByTestId('host-op-cancel-h1')).toBeNull();
+  });
+
+  it('renders canceled ops as 已取消 with a neutral chip', () => {
+    render(
+      <HostOperationPanel
+        open
+        ops={[
+          {
+            hostId: 'h6',
+            label: '192.0.2.91',
+            kind: 'reinstall',
+            status: 'canceled',
+          },
+        ]}
+        onClose={vi.fn()}
+        onTerminalStatus={vi.fn()}
+      />,
+    );
+    const row = screen.getByTestId('host-op-row-h6');
+    expect(row).toHaveTextContent('已取消');
+    // 取消 ≠ 失败：行内 chip 用中性色，不落红色（destructive）
+    const chip = within(row).getByText('已取消');
+    expect(chip.className).toContain('bg-muted');
+    expect(chip.className).not.toContain('destructive');
+    // 汇总把取消单独计数，不计入失败
+    expect(screen.getByTestId('host-op-summary-canceled')).toHaveTextContent('已取消 1');
   });
 });

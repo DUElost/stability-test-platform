@@ -39,7 +39,7 @@ export default function Dashboard() {
   } = useQuery({
     queryKey: ['dashboard-summary'],
     queryFn: () => api.stats.dashboardSummary(),
-    refetchInterval: 10000,
+    refetchInterval: 60_000,
   });
 
   // WS 订阅仍需保留（实时事件驱动失效），但「更新于」不再取 WS 事件时间：
