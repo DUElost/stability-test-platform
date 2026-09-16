@@ -22,7 +22,14 @@ export interface ConsoleLogReplay {
   run_id: string;
   from_seq: number;
   lines: string[];
+  /** 交付游标：本次响应最后一行的行号（#2070/#2039 起不再等于日志总长） */
   seq: number;
+  /** 已知末端 = max(文件行数, owner 快照 seq)；大于 seq 即仍有内容未到手 */
+  total_seq: number;
+  /** 单次响应被 replay 上限截断 → 调用方应以 seq+1 续拉（#2070） */
+  truncated: boolean;
+  /** 跨实例日志根未共享/落后：尾部行不可补齐，须显式提示而非静默缺（#2039） */
+  replay_unavailable?: boolean;
   status: string;
 }
 
