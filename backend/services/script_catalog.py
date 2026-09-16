@@ -32,6 +32,12 @@ class ScriptScanResult:
     deactivated: int = 0
     conflicts: List[Dict[str, str]] = field(default_factory=list)
     rebaselined: List[Dict[str, str]] = field(default_factory=list)
+    # #2386：反激活的**明细**。只有计数是不够的——scan 的输入是
+    # ``STP_SCRIPT_ROOT`` 指向的那棵树（生产上就是共享主工作树的当前检出），
+    # 而「盘上缺失」是**单向**反激活（目录回来再扫也不复活，需显式重激活）。
+    # 于是「主工作树被切到不含某版本的提交 + 窗口内有人跑 scan」会把主线活跃版本
+    # 静默吃掉，事后从 `deactivated: 3` 这个数字看不出被吃的是哪三个。
+    deactivated_versions: List[Dict[str, str]] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -40,6 +46,7 @@ class ScriptScanResult:
             "deactivated": self.deactivated,
             "conflicts": self.conflicts,
             "rebaselined": self.rebaselined,
+            "deactivated_versions": self.deactivated_versions,
         }
 
 
@@ -179,6 +186,12 @@ def scan_script_root(
     present (admin endpoint / seed migration) is never resurrected —
     re-activation is an explicit operator action.
 
+    Because that direction is one-way, "missing from disk" is destructive when
+    ``root`` is a *working tree* rather than a release copy (生产上
+    ``STP_SCRIPT_ROOT`` 就是共享主工作树，分支切换窗口内跑一次 scan 即可反激活主线
+    版本）。因此反激活从 not 静默：明细落 ``deactivated_versions``（进响应与 scan
+    审计）并打一条 WARNING。见 #2386 与 runbook §1.4 的前置校验。
+
     ``force_rebaseline=True`` is the explicit operator escape hatch for the
     case where that contract has *already* been broken upstream (e.g. a
     repo-wide mechanical rewrite edited published version directories in
@@ -306,6 +319,22 @@ def scan_script_root(
         row.is_active = False
         row.updated_at = now
         result.deactivated += 1
+        result.deactivated_versions.append({
+            "name": row.name,
+            "version": row.version,
+            "nfs_path": row.nfs_path or "",
+        })
+
+    if result.deactivated_versions:
+        # 单向 + 静默 = 最难查的组合，所以这里必须显眼（WARNING）并把明细同时落到
+        # 响应与 scan 审计里（`record_audit(details=result.to_dict())`）。
+        logger.warning(
+            "script_scan_deactivated count=%d versions=%s "
+            "hint=反激活是单向的（目录回来再扫不复活）；先确认 scan 的输入树就是目标 "
+            "revision（./tools/dev/check-deploy-source.sh），恢复需显式重激活",
+            result.deactivated,
+            [f"{e['name']}@{e['version']}" for e in result.deactivated_versions[:20]],
+        )
 
     db.commit()
     try:
