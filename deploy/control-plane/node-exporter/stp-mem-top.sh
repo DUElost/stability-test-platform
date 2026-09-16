@@ -29,6 +29,21 @@ TOP_N="${STP_MEM_TOP_N:-10}"
 LOG_TOP_N="${STP_MEM_TOP_LOG_N:-20}"
 MAX_LOG_BYTES="${STP_MEM_TOP_MAX_LOG_BYTES:-20000000}"
 
+# 控制字符规范化（#2016）：`comm`/`unit`/`cmdline` 全部取自外部——进程可用
+# prctl(PR_SET_NAME) 自设 15 字节名字（含 \n 也合法），异常 cgroup 名同理。裸换行会
+# 同时污染两处 sink：Prometheus exposition（一行被截断 → textfile collector 判整个
+# stp_hostproc.prom 解析失败，**全部** stp_hostproc_* 序列消失）与本脚本的 TSV 日志
+# （一行变多行 + `read -r key anon` 在首个 TAB 处错切列）。在**取值处**统一压成空格，
+# 两处输出都不必各自再处理；Prometheus 侧的 `\` 与 `"` 转义保持原样（那是值内合法字符）。
+# 就地改写命名变量而非 `$(stp_sanitize ...)`：本函数每个 pid 调 4 次，热循环里不 fork。
+stp_sanitize() {
+    local __name=$1 __value=${!1}
+    __value=${__value//$'\n'/ }
+    __value=${__value//$'\r'/ }
+    __value=${__value//$'\t'/ }
+    printf -v "$__name" '%s' "$__value"
+}
+
 ts=$(date '+%F %T')
 declare -A group_anon=()
 declare -a procs=()
@@ -40,13 +55,17 @@ for d in /proc/[0-9]*; do
     case ${anon:-} in ''|*[!0-9]*) continue ;; esac
     [ "$anon" -gt 0 ] || continue
     comm=$(cat "$d/comm" 2>/dev/null) || continue
+    stp_sanitize comm
     [ -n "${comm:-}" ] || continue
     unit=$(awk -F: '/^0::/{n=split($3,a,"/"); print a[n]; exit}' "$d/cgroup" 2>/dev/null)
+    stp_sanitize unit
     [ -n "${unit:-}" ] || unit="-"
     cmdline=$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null | cut -c1-160)
+    stp_sanitize cmdline
     # 指标标签用 argv0 基名（node 进程的 comm 常被线程名占用显示为 MainThread），
     # 拿不到 argv0 时回退 comm；日志里两者都留（另附完整命令行）。
     name=$(awk '{n=split($1,a,"/"); print a[n]}' <<< "$cmdline")
+    stp_sanitize name
     [ -n "${name:-}" ] || name="$comm"
     key="${name}|${unit}"
     group_anon[$key]=$(( ${group_anon[$key]:-0} + anon ))

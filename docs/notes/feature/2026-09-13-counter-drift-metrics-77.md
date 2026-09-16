@@ -51,3 +51,10 @@ Class: feature
   （已在 issue #77 评论留痕）。
 - 若未来 `recount_plan_run_counters` 出现调度修复之外的第二调用方，打点应由
   调用方判定漂移语义，避免非漂移场景误计。
+
+## 复核（#2016，2026-09-16）
+
+本文为**决策时点记录**，不改写上文：`stability_plan_run_counter_drift_total` 的 label
+已在 #1927 收敛为 `{mode}`（`plan_run_id` 属无界基数，run 归属走日志/审计）。现行口径见
+[`adr-0026-admission-and-scale-gray-rollout.md`](../../operations/adr-0026-admission-and-scale-gray-rollout.md)
+的「指标」行与 `backend/core/metrics.py`；`tests/test_prometheus_alerts_contract.py` 守该契约。
