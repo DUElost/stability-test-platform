@@ -45,6 +45,7 @@ from backend.models.device_lease import DeviceLease
 from backend.models.job import JobArtifact, JobInstance, JobLogSignal, StepTrace
 from backend.api.routes.auth import get_current_active_user
 from backend.models.plan_run import PlanRun
+from backend.services.plan_run_abort import abort_pending_job_ids
 from backend.realtime.socketio_server import broadcast_plan_run_status, broadcast_run_job_update
 from backend.services.aggregator import PlanAggregator
 from backend.services.device_log_event import (
@@ -3181,7 +3182,9 @@ async def recovery_sync(
             if plan_run is not None and isinstance(plan_run.run_context, dict)
             else {}
         )
-        if run_ctx.get("abort_requested"):
+        # #2270：主体感知——host 级 abort 只覆盖该 host 的 job；按「键存在」判定会
+        # 把同 run 旁主机的 job 也强推 ABORT_LOCAL（误杀从未被请求中止的主机）。
+        if job.id in abort_pending_job_ids(run_ctx, [(job.id, job.host_id)]):
             if lease_agent_id != payload.agent_instance_id:
                 await _rotate_recovery_lease_token(
                     db, lease, agent_instance_id=payload.agent_instance_id,

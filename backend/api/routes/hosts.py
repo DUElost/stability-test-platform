@@ -21,6 +21,7 @@ from backend.core.ssh_security import (
 from backend.models.audit import AuditLog
 from backend.models.host import Device, Host
 from backend.models.job import JobInstance
+from backend.services.plan_run_abort import abort_pending_job_ids
 from backend.api.schemas import (
     HostActiveJob,
     HostCreate,
@@ -193,9 +194,10 @@ def _host_to_out(
 
         def _abort_pending(j: JobInstance) -> bool:
             pr = pr_map.get(j.plan_run_id)
-            if pr is None or pr.run_context is None:
+            if pr is None:
                 return False
-            return isinstance(pr.run_context, dict) and "abort_requested" in pr.run_context
+            # #2270：主体感知判据（同 jobs.py）
+            return j.id in abort_pending_job_ids(pr.run_context, [(j.id, j.host_id)])
 
         out.active_jobs = [
             HostActiveJob(

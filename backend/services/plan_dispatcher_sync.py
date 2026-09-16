@@ -22,6 +22,7 @@ from backend.models.host import Device, Host
 from backend.models.job import JobInstance
 from backend.models.plan import Plan, PlanStep
 from backend.models.plan_run import PlanRun
+from backend.services.plan_run_abort import run_abort_pending
 from backend.models.project import TestProject
 from backend.models.project_model import ProjectModel
 from backend.models.resource_pool import ResourceAllocation, ResourcePool
@@ -811,12 +812,15 @@ def complete_plan_run_dispatch(
     if pr is None:
         raise PlanDispatchError(f"PlanRun {plan_run_id} not found")
     run_ctx = dict(pr.run_context or {})
-    if pr.status != PlanRunStatus.RUNNING.value or run_ctx.get("abort_requested"):
+    # #2270：只看 **run 主体**的时钟——host 级 abort 不写 run 级时钟，按「键存在」判定
+    # 会让一台主机的 abort 停掉整个 run 的派发收尾。
+    run_abort = run_abort_pending(run_ctx)
+    if pr.status != PlanRunStatus.RUNNING.value or run_abort:
         logger.info(
             "complete_plan_run_dispatch_skip plan_run=%d status=%s abort=%s",
             plan_run_id,
             pr.status,
-            bool(run_ctx.get("abort_requested")),
+            run_abort,
         )
         return
 
