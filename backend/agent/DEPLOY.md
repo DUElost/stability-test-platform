@@ -52,7 +52,7 @@
 ## 前提条件
 
 - Linux 操作系统（Ubuntu 20.04+, CentOS 7+, 或其他主流发行版）
-- Python 3.8+
+- Python 3.10+（当前 Agent `requirements.txt` 含 `python-dotenv>=1.2.3`，该版本要求 Python >=3.10）
 - root 或 sudo 权限
 - ADB 工具（如需管理 Android 设备）
 
