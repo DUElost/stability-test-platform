@@ -601,6 +601,8 @@ class TestHappyPath:
                 "agent_local_aee_root": str(site().config.agents[0].local_aee_root),
                 # 站点标准：Agent 的 STP_AEE_NFS_ROOT = 站点 storage.mount_path
                 "agent_nfs_root": str(site().config.storage.mount_path),
+                # 时区同源（#2265）：Agent 侧不再硬编码，跟随站点声明
+                "agent_timezone": site().config.site.timezone,
             })
         ]
         assert _status(checks, "install.s5.heartbeat") == "PASS"

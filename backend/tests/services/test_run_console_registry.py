@@ -424,7 +424,9 @@ def test_cross_instance_read_log_from_shared_log_root(stub, tmp_path):
     out = b.read_log(run_id)
     assert out["lines"] == ["hello", "world"]
     assert out["status"] == "SUCCESS"          # 非 UNKNOWN：快照补全
-    assert out["seq"] == 2
+    assert out["seq"] == 2                     # 交付游标 = 已交付到的行号
+    assert out["total_seq"] == 2
+    assert out["truncated"] is False
     assert out.get("replay_unavailable") is None
 
 
@@ -442,7 +444,11 @@ def test_cross_instance_read_log_flags_missing_file(stub, tmp_path):
     assert out["lines"] == []
     assert out.get("replay_unavailable") is True
     assert out["status"] == "SUCCESS"           # 快照补全（不假装 UNKNOWN）
-    assert out["seq"] == 1                      # owner 报告的 seq（提示仍有内容）
+    # #2039：一行都没交付 → 游标原地不动；owner 报告的末端另放 total_seq。
+    # 旧语义返回 seq=1 会让前端把游标推到 1，从此丢弃 1..N 的全部实时行。
+    assert out["seq"] == 0
+    assert out["total_seq"] == 1
+    assert out["truncated"] is False
 
 
 def test_cross_instance_read_log_flags_file_behind(stub, tmp_path):
@@ -461,4 +467,47 @@ def test_cross_instance_read_log_flags_file_behind(stub, tmp_path):
     out = b.read_log(run_id)
     assert out["lines"] == ["stale"]
     assert out.get("replay_unavailable") is True
-    assert out["seq"] == 2                      # max(file=1, owner=2)
+    # #2039：seq 只到交付的第 1 行；已知末端（owner=2）在 total_seq，由前端
+    # 渲染「日志不完整」而不是静默推进游标。
+    assert out["seq"] == 1
+    assert out["total_seq"] == 2                # max(file=1, owner=2)
+    assert out["truncated"] is False            # 文件侧没有更多行可读
+
+
+def test_start_reader_thread_failure_releases_global_key_and_snapshot(stub, tmp_path, monkeypatch):
+    """#2045（注册表面）：reader 线程起不来时，全局 run_key 与 RUNNING 快照必须收口。
+
+    漏收口的后果是**永久**的：ticker 只按终态过滤 `_runs`，非终态僵尸会被无限续租，
+    该 run_key 在进程重启前谁都起不来；快照停在 RUNNING，其他实例读到假状态。
+    """
+    import threading
+
+    real_start = threading.Thread.start
+
+    def _fail_reader_start(self, *args, **kwargs):
+        # 只掐 reader 线程（run-console-<id>）；ticker 线程 run-console-registry 放行
+        if str(self.name).startswith("run-console-") and "registry" not in str(self.name):
+            raise RuntimeError("can not start new thread")
+        return real_start(self, *args, **kwargs)
+
+    monkeypatch.setattr(threading.Thread, "start", _fail_reader_start)
+    a = _new_console(tmp_path, "a")
+    with pytest.raises(RunConsoleError, match="reader thread start failed"):
+        a.start(run_key="jira:zombie", cmd=_SLOW_CMD, label="k")
+    monkeypatch.undo()
+
+    zombie = list(a._runs.values())[0]
+    assert zombie.status == "FAILED", "僵尸必须落终态，否则 ticker 永远续租"
+    assert zombie.error.startswith("reader_start_failed:")
+    assert stub.keys == {}, "全局 run_key 必须释放"
+    assert stub.snapshots == {}, "RUNNING 假快照必须删除（#1931 同一纪律）"
+    assert ("key", "jira:zombie") in stub.release_calls
+
+    # ticker 的续租集合只取非终态 run → 收口成终态的僵尸不参与
+    a._renew_registrations_once()
+    assert stub.refreshed == []
+    assert stub.keys == {}
+
+    # 同 key 立即可重起（用户可见症状的正面断言）
+    ok = a.start(run_key="jira:zombie", cmd=_FAST_CMD, label="k")
+    assert _wait_terminal(a, ok)["status"] == "SUCCESS"

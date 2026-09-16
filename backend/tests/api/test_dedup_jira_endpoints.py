@@ -614,3 +614,64 @@ class TestJiraRunPersistBeforeStart:
         assert len(rows) == 1
         assert rows[0].status == "FAILED"
         assert "already in progress" in (rows[0].error or "")
+
+
+class TestJiraRunCompleteIssueKeys:
+    """#2070：终态回调解析 issue_keys 必须覆盖**整个**日志。
+
+    旧实现用 `read_log(from_seq=0)` 取行——那是给 HTTP 响应体设界的**显示层**
+    读法（`STP_RUN_CONSOLE_REPLAY_MAX_LINES`，默认 2000），于是超长日志尾部的
+    issue key 静默丢失，且没有任何一条用例钉住过这条路径（本轮之前 `issue_keys`
+    的解析结果从未被断言）。
+    """
+
+    def test_keys_beyond_replay_cap_are_persisted(
+        self, monkeypatch, db_session, tmp_path,
+    ):
+        from types import SimpleNamespace
+
+        from backend.api.routes.dedup import _on_jira_run_complete
+        from backend.services.run_console import ConsoleRun, RunConsole
+
+        monkeypatch.setenv("STP_RUN_CONSOLE_REPLAY_MAX_LINES", "5")
+        RunConsole._reset_for_tests()
+        try:
+            log_root = tmp_path / "console"
+            log_root.mkdir()
+            rc = RunConsole.instance().configure(
+                log_root=str(log_root), encoding="utf-8",
+                cancel_grace_seconds=1.0, emit=lambda *a, **k: None,
+            )
+            run_id = "con-long-log"
+            body = "".join(f"noise {i}" + chr(10) for i in range(1, 12))
+            (log_root / f"{run_id}.log").write_text(
+                body + "PROJ-777 created" + chr(10), encoding="utf-8",
+            )
+            rc._runs[run_id] = ConsoleRun(
+                run_id=run_id, run_key="jira:transsion", label="t",
+            )
+            assert len(rc.read_log(run_id)["lines"]) == 5, "replay 仍应有界"
+
+            db_session.add(JiraRun(
+                console_run_id=run_id, vendor="transsion", stage="create",
+                dry_run=False, input_source="Result.xls", status="RUNNING",
+                issue_keys=[],
+            ))
+            db_session.commit()
+
+            _on_jira_run_complete(SimpleNamespace(
+                run_id=run_id,
+                to_status=lambda: {
+                    "status": "SUCCESS", "exit_code": 0,
+                    "ended_at": None, "error": None,
+                },
+            ))
+
+            db_session.expire_all()
+            row = db_session.query(JiraRun).filter_by(console_run_id=run_id).one()
+            assert row.status == "SUCCESS"
+            assert row.issue_keys == ["PROJ-777"], (
+                "第 13 行的 issue key 不得因 replay 上限被丢弃"
+            )
+        finally:
+            RunConsole._reset_for_tests()

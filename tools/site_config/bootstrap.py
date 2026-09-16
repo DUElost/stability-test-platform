@@ -26,7 +26,7 @@ import yaml
 
 from .ops import LocalOps, Ops
 from .preflight import preflight_facts
-from .validation import passed
+from .validation import failure, passed
 
 SITE_FILE_NAME = "site.yaml"
 DEFAULT_DEPLOY_ROOT_PREFIX = "/opt/stp-"
@@ -311,6 +311,26 @@ def init_site(
         interactive = bool(os.isatty(0)) and not answers
     # 探测一律走同一个 ops：本机与替身走同一条代码路径（否则替身只能测到一半）
     facts = preflight_facts(ops)
+    # 时区是**声明**：读不到就停在这里（在写任何东西之前），绝不落到某个默认值上——
+    # 238 现场就是被静默默认坑过（声明 UTC / 主机 PDT，差 15 小时，#2265）。
+    if not facts["timezone"]:
+        check = failure(
+            "host_timezone_unknown", location="$.site.timezone", role="site",
+            check_id="init.host_timezone",
+        )
+        return {
+            "stage": "init",
+            "status": "FAIL",
+            "summary": "Host timezone could not be probed; nothing was written.",
+            "checks": [check.__dict__],
+            "deferred_checks": [],
+            "output": str(output),
+            "bindings_dir": str(bindings_dir),
+            "actions": [
+                "set the host timezone first (e.g. `sudo timedatectl set-timezone Asia/Shanghai`) "
+                "and re-run init; the declared site timezone must be the host's real one",
+            ],
+        }
     provenance: dict[str, str] = {}
 
     def decide(prompt: str, default: str, key: str) -> str:
@@ -364,6 +384,7 @@ def init_site(
         ]
     actions.extend(storage_actions)
 
+    provenance["timezone"] = "host probe: /etc/timezone → timedatectl"
     config = {
         "schema_version": 1,
         "site": {"id": site_id, "display_name": display_name, "timezone": facts["timezone"]},
@@ -456,6 +477,8 @@ def init_site(
         "bindings_dir": str(bindings_dir),
         "actions": actions,
         "provenance": provenance,
+        # 回显探测结果：时区是「声明 = 控制面 = Agent」三面同源的第一面，创建时就让人看见
+        "timezone": facts["timezone"],
         "config": config,
         "admin_credentials": {
             "username": admin_username,

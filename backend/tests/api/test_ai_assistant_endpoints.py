@@ -1022,6 +1022,72 @@ class TestContinuationVisibility:
         assert placeholder.status == "failed"
         assert "入队失败" in (placeholder.meta or {}).get("error", "")
 
+    def test_inline_finalization_does_not_report_bogus_enqueue_failure(
+        self, auth_headers, db_session, monkeypatch
+    ):
+        """#2071：轮次**内联**终态不得被判成「入队失败」。
+
+        内联路径上本轮 job 仍持 `ai-turn:<session>` 的 key，SAQ 对同 key 必然去重
+        （返回 None）；#1216 的 required 语义把这种设计内去重当投递失败 → 占位标
+        failed → 该行脱离 pending/running 集合，本轮末尾的清理不再碰它 → 用户同时
+        看到正确答案和一条**永久**红色「入队失败」气泡（还顺带空耗自动执行链预算
+        与 1s 重试睡眠）。
+        """
+        _configure(db_session)
+        from backend.services.ai_assistant import orchestrator as orch
+        from backend.services.ai_assistant.llm_client import AssistantReply, ToolCallRequest
+
+        self._fake_llm(
+            monkeypatch, orch,
+            [
+                AssistantReply(
+                    content="",
+                    tool_calls=[ToolCallRequest(id="c1", name="run_agent_tests", arguments={})],
+                ),
+                AssistantReply(content="操作卡已结束，我把结果汇报给你。"),
+            ],
+        )
+        self._shared_session(monkeypatch, orch, db_session)
+
+        attempts: list = []
+        monkeypatch.setattr(
+            "backend.tasks.saq_worker.enqueue_sync",
+            lambda *a, **k: (attempts.append(k), False)[1],
+        )
+
+        def _fake_execute(action_id):
+            # 走真实的终态收口路径：_finalize_action 内部会尝试续轮投递
+            orch._finalize_action(action_id, "failed", "同 run_key 任务正在运行")
+
+        monkeypatch.setattr(orch, "execute_action", _fake_execute)
+
+        s = self._session_with_placeholder(db_session)
+        asyncio.run(orch.ai_assistant_turn_task({}, session_id=s.id))
+
+        assert attempts == [], "轮次内联终态不得尝试入队续轮（本轮自己会继续处理）"
+        bogus = (
+            db_session.query(AiChatMessage)
+            .filter(
+                AiChatMessage.session_id == s.id,
+                AiChatMessage.role == "assistant",
+                AiChatMessage.status == "failed",
+            )
+            .all()
+        )
+        assert bogus == [], "不得留下「入队失败」错误气泡"
+        assert self._pending_count(db_session, s.id) == 0, "本轮末尾仍须正常收口占位"
+        final = (
+            db_session.query(AiChatMessage)
+            .filter(
+                AiChatMessage.session_id == s.id,
+                AiChatMessage.role == "assistant",
+                AiChatMessage.status == "completed",
+            )
+            .order_by(AiChatMessage.id.desc())
+            .first()
+        )
+        assert final is not None and "汇报" in final.content
+
     def test_approve_creates_placeholder_for_report(
         self, client, admin_headers, auth_headers, db_session, monkeypatch
     ):
@@ -1614,3 +1680,93 @@ class TestR13P2AssistantFixes:
         )
         assert placeholder.status == "failed"
         assert "上限" in (placeholder.meta or {}).get("error", "")
+
+
+class TestTurnEnqueueAsyncFailure:
+    """#2073：首轮提问的投递失败必须**可达**用户（不能只靠 503 分支）。
+
+    路由用 `enqueue_sync` 默认（required=False）路径：返回值 True 只代表「协程排上
+    了事件循环」，Redis 故障发生在之后 → 503 分支对 Redis 故障不可达，占位永久
+    pending（前端每 2s 无限轮询，会话被 #1223 的守卫锁死）。收口 = 接 #1555 的
+    `on_async_failure` 回调把占位收敛为 failed。
+    """
+
+    def test_async_enqueue_failure_converges_placeholder(
+        self, client, admin_headers, db_session, monkeypatch
+    ):
+        _configure(db_session)
+        seen: dict = {}
+
+        def _fake_enqueue(task, **kw):
+            seen.update(kw)
+            cb = kw.get("on_async_failure")
+            assert cb is not None, (
+                "required=False 的 fire-and-forget 路径必须接 on_async_failure，"
+                "否则 True 只是「已排上事件循环」"
+            )
+            cb(RuntimeError("redis down"))  # 模拟稍后的真实入队失败
+            return True
+
+        monkeypatch.setattr("backend.tasks.saq_worker.enqueue_sync", _fake_enqueue)
+        submitted: list = []
+        # 回调跑在事件循环上：收敛必须交给后台池，而不是在循环里做同步 DB 写
+        monkeypatch.setattr(
+            "backend.core.thread_pool.submit",
+            lambda fn, *a, **k: submitted.append((fn, a, k)),
+        )
+
+        sid = client.post(
+            "/api/v1/ai-assistant/sessions", json={}, headers=admin_headers,
+        ).json()["data"]["id"]
+        resp = client.post(
+            f"/api/v1/ai-assistant/sessions/{sid}/messages",
+            json={"content": "第一问"},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        mid = resp.json()["data"]["id"]
+        assert seen.get("session_id") == sid
+
+        assert len(submitted) == 1, "占位收敛应交给线程池"
+        fn, args, kwargs = submitted[0]
+        fn(*args, **kwargs)
+
+        db_session.expire_all()
+        msg = db_session.get(AiChatMessage, mid)
+        assert msg.status == "failed", "占位不得永久 pending（否则前端无限轮询）"
+        assert "redis down" in (msg.meta or {}).get("error", "")
+        assert (
+            db_session.query(AiChatMessage)
+            .filter(
+                AiChatMessage.session_id == sid,
+                AiChatMessage.status.in_(["pending", "running"]),
+            )
+            .count()
+            == 0
+        ), "不得留下继续驱动轮询的悬挂占位"
+
+    def test_sync_enqueue_failure_still_returns_503(
+        self, client, admin_headers, db_session, monkeypatch
+    ):
+        """SAQ 根本没跑（同步返回 False）时，既有 503 + 占位 failed 不得回退。"""
+        _configure(db_session)
+        monkeypatch.setattr("backend.tasks.saq_worker.enqueue_sync", lambda *a, **k: False)
+        sid = client.post(
+            "/api/v1/ai-assistant/sessions", json={}, headers=admin_headers,
+        ).json()["data"]["id"]
+        resp = client.post(
+            f"/api/v1/ai-assistant/sessions/{sid}/messages",
+            json={"content": "第一问"},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 503
+        assert (
+            db_session.query(AiChatMessage)
+            .filter(
+                AiChatMessage.session_id == sid,
+                AiChatMessage.role == "assistant",
+                AiChatMessage.status == "failed",
+            )
+            .count()
+            == 1
+        )
