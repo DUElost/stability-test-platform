@@ -152,7 +152,10 @@ export default function RunReportPage() {
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">状态</span>
-              <StatusBadge kind="job" status={report.run.status} size="sm" />
+              {/* report.run.status 是后端映射后的**对外**词表（FINISHED/CANCELED/QUEUED），
+                  不是库内 JobStatus——用 kind="job" 会缺键落到「未知」（#2418）。
+                  fallbackToRaw：未识别值回显原文，别让运维只看到「未知」。 */}
+              <StatusBadge kind="job-result" status={report.run.status} size="sm" fallbackToRaw />
             </div>
           </div>
         </div>
