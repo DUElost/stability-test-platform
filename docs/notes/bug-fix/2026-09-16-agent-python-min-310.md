@@ -22,6 +22,11 @@ venv 仍是 3.9）会在 deps refresh 时直接炸，或装出不可用环境。
 
 不降级 dotenv：下限跟依赖真相对齐，而不是用旧包掩盖主机解释器债。
 
+CI 跟进（`pr-agent-tests`）：`tests/test_remote_script_privilege_paths.py` 沙箱原先只
+stub `venv/bin/pip`、没有 `venv/bin/python`，健康 wrapper 场景在新闸门处
+`No such file` → 被当成 <3.10 失败。fixture 改为 `symlink_to(sys.executable)`，
+与「健康主机 venv 已是 >=3.10」的场景对齐；闸门本身不削弱。
+
 ## Alternatives
 
 - **A. 降级 `python-dotenv` 到仍支持 3.8/3.9 的版本**——否。依赖抬升是既定方向；降级只
@@ -34,15 +39,17 @@ venv 仍是 3.9）会在 deps refresh 时直接炸，或装出不可用环境。
 ## Verification
 
 ```bash
-cd /tmp/stp-agent-py310
 TESTING=1 JWT_SECRET_KEY=test-secret \
-  /home/debian13/stability-test-platform/.venv/bin/python -m pytest \
-  backend/tests/services/test_host_updater.py -q --tb=short
-/home/debian13/stability-test-platform/.venv/bin/python scripts/run_gates.py check:quick
+  python -m pytest backend/tests/services/test_host_updater.py -q --tb=short
+TESTING=1 JWT_SECRET_KEY=test-secret \
+  python -m pytest tests/test_remote_script_privilege_paths.py -q --tb=short
+python scripts/run_gates.py check:quick
 ```
 
 期望：`test_build_remote_script_retries_pip_when_deps_marker_stale` 断言远程脚本含
-`sys.version_info >= (3, 10)` 且位于 pip 之前；`check:quick` 通过。
+`sys.version_info >= (3, 10)` 且位于 pip 之前；privilege-path 沙箱 fixture 为
+`venv/bin/python` 链到当前解释器，使健康 wrapper 场景能过 pip 前闸门；
+`check:quick` 通过。
 
 手工对照（可选）：在 3.9 解释器上跑 install 开头的 awk 闸门应 exit 1；把临时 venv 指到
 3.9 再触发热更新 deps 路径应看到 ERROR 且服务未 restart。
