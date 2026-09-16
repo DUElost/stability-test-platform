@@ -49,6 +49,37 @@ compose 构建把 API/WS 基址烤成 `localhost:18000`，而 `127.0.0.1` 与 `l
 - Compose 开发环境不得复用生产 `STP_NFS_ROOT`、AEE、本地日志或挂载点。
 - 若与生产同机并存，开发流量与生产流量必须使用不同端口和不同目录。
 
+### dev 库的 schema 与字典 seed（#2381）
+
+Compose 起的 PostgreSQL 由 `backend/scripts/init_dev_db.py` 初始化（`ENV=production`
+时该脚本直接拒绝执行）。它按库的现状选路，并在输出里打印实际走的那条：
+
+| 库现状 | 路径 | 输出 | 结果 |
+|---|---|---|---|
+| 空库 | `alembic upgrade head` | `dev_db_schema_ready path=alembic` | schema + **字典 seed** |
+| 已有 `alembic_version` | 同上（正常增量） | 同上 | 同上 |
+| 有表但无 `alembic_version` | `create_all` 兜底 | `path=create_all_legacy WARNING=...dictionary_seeds_not_applied` | 只有表，**没有 seed** |
+
+`specialty`（专项）、`script`（脚本注册）这类静态字典的**唯一事实源是 seed 迁移**，没有
+API 写端点。所以第三行那种库会「schema 看着成功、但新建 Plan 没有专项可选」——这就是
+#2381。收养一个老 dev 库需要显式决策（不该由 dev 脚本顺手做掉）：先确认库内 schema 与
+head 一致，再 stamp 后补链。
+
+```bash
+cd backend
+python -m alembic current          # 核对现状，确认库内 schema 与 head 一致
+python -m alembic stamp <revision>
+python -m alembic upgrade head
+```
+
+嫌麻烦就直接删掉那个 dev 库，让 compose 重新起一个空库。管理员账号由同一脚本按
+`STP_ADMIN_USER` / `STP_ADMIN_PASSWORD` upsert，缺任一则跳过并打印
+`dev_db_admin_skipped`。
+
+判据：`tests/test_dev_bootstrap_seed.py`（PR 路径，含「兜底必须自带标注」）与
+`tests/test_alembic_upgrade.py::test_dev_bootstrap_from_empty_database_produces_seeded_schema`
+（夜间容器，空库→seed 的地面真值）。
+
 ### 兼容入口：宿主机手动启动
 
 仅用于本地排障或历史兼容，不作为当前默认开发路径，也不作为生产部署方式。
