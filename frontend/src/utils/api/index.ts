@@ -2,6 +2,7 @@ export { default } from './client';
 export {
   ApiError,
   classifyApiError,
+  loadErrorCopy,
   toApiError,
   unwrapApiResponse,
   registerAuthFailureHandler,

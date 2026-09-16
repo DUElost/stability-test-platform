@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import {
@@ -1235,8 +1235,15 @@ export default function PlanExecutePage() {
             ) : allDevices.length === 0 ? (
               <EmptyState
                 title="暂无设备"
-                description="请先添加测试设备"
+                description="设备列表为空。添加并接入测试设备后，这里才能选机。"
                 icon={<Smartphone className="h-12 w-12" />}
+                // #2385：原文案指向的动作页是 /devices，但只是纯文本——新环境用户
+                // 得自己把「测试设备」翻译成路由。这里给同处的可点击出口。
+                action={
+                  <Button asChild variant="outline" size="sm">
+                    <Link to="/devices">添加测试设备</Link>
+                  </Button>
+                }
               />
             ) : (
               <DeviceWorkspace

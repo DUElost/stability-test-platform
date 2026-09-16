@@ -20,8 +20,8 @@ root 操作收敛为**固定子命令 + 路径/属主/内容校验**：
     deps-marker      写依赖刷新标记
     fix-ownership    安装目录属主回收（symlink 安全：chown -h）
     restart          重启 Agent systemd 服务
-    ensure-udev-rule 写固定 udev 规则（MTK ttyACM → 0660+dialout，无组才 0666）
-                    并 reload（#2133/D5；#2284）
+    ensure-udev-rule 写固定 udev 规则（MTK ttyACM → 0660+dialout；调用者非组成员
+                    才 0666）并 reload（#2133/D5；#2284；#2353）
     usb-authorized   切换 MTK 设备 sysfs authorized（port 正则 + vendor 校验）
 
 不变量：
@@ -59,12 +59,13 @@ UDEVADM_BIN = "/usr/bin/udevadm"
 MAX_SCHEMA_BYTES = 2 * 1024 * 1024
 MAX_ENV_PAYLOAD_BYTES = 64 * 1024
 
-# ── flash 链窄面（ADR-0037 D5 / #2133；#2284 最小权限）─────────────────────
-# udev 规则：固定路径 + **两个固定形态之一**（与 flash_preflight v1.0.3 的
+# ── flash 链窄面（ADR-0037 D5 / #2133；#2284 最小权限；#2353 判据改成员资格）──
+# udev 规则：固定路径 + **两个固定形态之一**（与 flash_preflight 最新版本的
 # `_UDEV_RULE_PATH` / `_UDEV_RULE_LINE`(_LEGACY) 同源；0e8d = MediaTek ttyACM）。
-# #2284：有 dialout 组 → 0660 + GROUP（Agent 用户属该组即可写，其它本地用户不可写）；
-# 无该组 → 0666（否则设备节点不可写、刷机不可用）。形态由**本机系统事实**决定，
-# 调用方仍无参数面（D5 的窄面约束不变）。
+# #2284：0660 + GROUP（Agent 用户属该组即可写，其它本地用户不可写）／0666 退化。
+# #2353：形态由**调用者（Agent 用户）是否已持久属于 dialout** 决定，而非「组是否
+# 存在」——组存在而调用者不是成员时，0660 对它等同于不可写（刷机 EACCES）。调用方
+# 仍无参数面（D5 的窄面约束不变）。
 UDEV_RULE_PATH = "/etc/udev/rules.d/98-ttyacm-mtk.rules"
 UDEV_RULE_LINE = (
     'KERNEL=="ttyACM*", ATTRS{idVendor}=="0e8d", GROUP="dialout", MODE="0660"\n'
@@ -74,13 +75,46 @@ UDEV_RULE_LINE_LEGACY = (
 )
 
 
-def _udev_rule_line() -> str:
-    """按本机是否具备 dialout 组选择规则形态（#2284）。"""
+def _invoking_user() -> "str | None":
+    """sudo 注入的调用者（SUDO_UID/SUDO_USER）；取不到返回 None。
+
+    wrapper 只由 Agent 进程经 `sudo -n` 调用，因此该用户就是真正要写 ttyACM 的
+    那个用户——0660 是否「可写」必须以它为准（#2353）。
+    """
+    uid = os.environ.get("SUDO_UID")
+    if uid:
+        try:
+            return pwd.getpwuid(int(uid)).pw_name
+        except (KeyError, ValueError):
+            return None
+    return os.environ.get("SUDO_USER") or None
+
+
+def _user_in_dialout(user: "str | None") -> bool:
+    """用户是否已**持久**属于 dialout（成员表或主组）。
+
+    user=None（如 root 直接调用，非 Agent 路径）→ 退回 #2284 的旧判据：只看组是
+    否存在。该路径下无法判定「谁会来写串口」，保持既有行为不扩大改动面。
+    """
     try:
-        grp.getgrnam("dialout")
+        entry = grp.getgrnam("dialout")
     except KeyError:
-        return UDEV_RULE_LINE_LEGACY
-    return UDEV_RULE_LINE
+        return False
+    if user is None:
+        return True
+    if user in entry.gr_mem:
+        return True
+    try:
+        return pwd.getpwnam(user).pw_gid == entry.gr_gid
+    except (KeyError, OSError):
+        return False
+
+
+def _udev_rule_line() -> str:
+    """按调用者（Agent 用户）是否属于 dialout 选择规则形态（#2284 / #2353）。"""
+    if _user_in_dialout(_invoking_user()):
+        return UDEV_RULE_LINE
+    return UDEV_RULE_LINE_LEGACY
 
 
 def _udev_rule_present(body, line: str) -> bool:
@@ -898,13 +932,13 @@ def cmd_restart(args, conf):
 
 
 def cmd_ensure_udev_rule(args, conf):
-    """写固定 udev 规则（MTK ttyACM）并 reload（#2133 / D5；#2284 最小权限）。
+    """写固定 udev 规则（MTK ttyACM）并 reload（#2133 / D5；#2284；#2353）。
 
-    面约束：路径是常量，内容是**两个固定形态之一**（由本机是否具备 dialout 组
-    决定，见 `_udev_rule_line`）——调用方仍无参数面；目录逐级 O_NOFOLLOW 打开、
-    写入走临时文件 + os.replace（不跟随目标位置的 symlink）；幂等——内容一致时
-    不重写，仅执行 reload。``udevadm control --reload`` 失败即拒绝；``trigger``
-    为尽力而为（与旧版 flash_preflight 修复分支同语义）。
+    面约束：路径是常量，内容是**两个固定形态之一**（由**调用者是否已持久属于
+    dialout** 决定，见 `_udev_rule_line`）——调用方仍无参数面；目录逐级
+    O_NOFOLLOW 打开、写入走临时文件 + os.replace（不跟随目标位置的 symlink）；
+    幂等——内容一致时不重写，仅执行 reload。``udevadm control --reload`` 失败即
+    拒绝；``trigger`` 为尽力而为（与旧版 flash_preflight 修复分支同语义）。
     """
     _require_root()
     if not os.path.isfile(UDEVADM_BIN):
