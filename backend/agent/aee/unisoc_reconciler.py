@@ -54,6 +54,25 @@ _EMIT_RESULT_FAILED = "failed"
 #: 阈值取同值以保持两平台一致）。
 MAX_DIR_ATTEMPTS = MAX_REPLAY_ATTEMPTS
 
+#: #2252：单个事件目录整目录拉取的**上限（KiB）**。超过它的目录不再整目录 pull，
+#: 降级为「只取 ``unievent_info``」——信号照常发射，载荷显式标记缺失。
+#:
+#: 真机实测（2026-09-16，Z2582 / NE.103000003）：``/data/ylog/uniview_exception``
+#: 下有 **1.9GB / 999 文件** 的目录，``adb pull`` 的 180s 超时内传不完 → 每拍重烧
+#: host 提取预算（#740 与 MTK 路共享），且按 #2079「失败不推进签名」该目录**永不
+#: 发射**、永久无信号。#2272 的放弃上限只把「每拍白烧」截断成「N 拍后永久沉默」。
+#:
+#: 阈值取 256 MiB：按 180s 超时与**保守**的 2 MiB/s adb 吞吐下界估算 ≈ 360 MiB，
+#: 留一倍余量取半。正常事件目录（KB 级）不可能触及，只有病态累积目录命中。
+#:
+#: 为什么是常量而非 env 键：它只决定「哪些目录降级为仅元数据」，不改变信号语义与
+#: 交付口径；真有调参需求时再按 #2086 的 Settings 通道升格（升格须同步
+#: ``backend/.env.example`` 与 ``docs/development/environment-variables.md``）。
+MAX_PULL_DIR_KIB = 256 * 1024
+
+#: ``extra`` 里标记「本信号的载荷未随包拉取」的取值（#2252）。
+PAYLOAD_STATE_OVERSIZED_SKIPPED = "oversized_skipped"
+
 
 def _unisoc_watcher_root(local_root: Path, run_date_stamp: Optional[str], serial: str) -> Path:
     stamp = run_date_stamp or "unknown"
@@ -124,6 +143,10 @@ class UnisocUniviewReconciler:
         #: #2079：本拍**未能确认**「本地内容 == 远端签名」的名字（拉取失败）——
         #: 发射循环必须跳过，否则会拿陈旧本地内容当新异常上报。每拍重置。
         self._unconfirmed_local: Set[str] = set()
+        #: #2252：本拍「只取元数据」的目录 → 远端占用 KiB。每拍重置；发射循环据此
+        #: 在 extra 里标 ``payload_state``，让「载荷缺失」在平台侧可分辨（而不是
+        #: 看起来像一条载荷完整的信号）。
+        self._payload_skipped: Dict[str, int] = {}
         #: #2272：``{name: 连续失败拍数}``。达 ``MAX_DIR_ATTEMPTS`` 即放弃该目录
         #: （计入 ``signals_dropped``），避免确定性失败项每拍重拉整目录。
         #: 成功一拍即清零（保留在 map 里的 0 值可被裁剪逻辑清理）。
@@ -309,7 +332,10 @@ class UnisocUniviewReconciler:
                 continue
             if not (event_dir / UNIVIEW_INFO_FILENAME).is_file():
                 continue
-            result = self._emit_event(event_dir, signature)
+            result = self._emit_event(
+                event_dir, signature,
+                payload_skipped_kib=self._payload_skipped.get(key),
+            )
             if result == _EMIT_RESULT_FAILED:
                 # 瞬时失败（其它 parse 异常 / emit 阶段）→ 不落签名，下一拍重试
                 continue
@@ -467,6 +493,8 @@ class UnisocUniviewReconciler:
         pulled = 0
         listed: Set[str] = set()
         unconfirmed: Set[str] = set()
+        #: #2252：本拍降级为「仅元数据」的目录 → 远端占用 KiB（发射侧据此打标记）。
+        payload_skipped: Dict[str, int] = {}
         listing_complete = True
         self._last_listed = None
         self._pending_signatures = {}
@@ -510,6 +538,18 @@ class UnisocUniviewReconciler:
                     unconfirmed.add(name)
                     self._note_dir_failure(name)
                     continue
+                # #2252：超限目录不整拉——180s 内传不完，整拉的结局是白烧 host 提取
+                # 预算（#740 与 MTK 路共享）并让该事件**永久无信号**（#2272 的放弃
+                # 上限只是把「每拍白烧」截断成「N 拍后永久沉默」）。降级为只取
+                # unievent_info：信号照常发射，载荷在 extra 里显式标记缺失。
+                kib = self._remote_dir_kib(remote_dir)
+                if kib is not None and kib > MAX_PULL_DIR_KIB:
+                    if self._pull_event_metadata_only(remote_dir, local_dir):
+                        payload_skipped[name] = kib
+                        pulled += 1
+                        self._clear_dir_failure(name)
+                        continue
+                    # 降级路径也失败 → 按原失败语义记账（不计入超限，下一拍再试）
                 if self._pull_event_dir(remote_dir, local_dir):
                     pulled += 1
                     # 本地内容已刷新为该签名 → pending 保持不动（发射循环据此判断）
@@ -523,10 +563,20 @@ class UnisocUniviewReconciler:
                 unconfirmed.add(name)
                 self._note_dir_failure(name)
         self._unconfirmed_local = unconfirmed
+        self._payload_skipped = payload_skipped
         if pulled:
             logger.info(
                 "unisoc_reconciler_pulled serial=%s job=%d count=%d",
                 self._serial, self._job_id, pulled,
+            )
+        if payload_skipped:
+            # #2252：降级态必须与「瞬时失败」分得开——瞬时失败不计入这里、
+            # 也不改 pending 语义；本日志是本拍唯一一次汇总留痕（每目录一条会把
+            # 病态目录刷屏，故合并成一行并给出远端占用）。
+            logger.warning(
+                "unisoc_reconciler_payload_skipped serial=%s job=%d dirs=%s",
+                self._serial, self._job_id,
+                ",".join(f"{n}:{kib}KiB" for n, kib in sorted(payload_skipped.items())),
             )
         self._last_listed = listed if listing_complete else None
         return pulled
@@ -558,11 +608,74 @@ class UnisocUniviewReconciler:
         with self._state_lock:
             self._dir_attempts.pop(name, None)
 
+    def _remote_dir_kib(self, remote_dir: str) -> Optional[int]:
+        """远端目录占用（KiB）；**探测不可得返回 ``None``**（#2252）。
+
+        ``None`` 的语义是「不知道」，调用方据此回落整目录拉取——探测失败不能当成
+        「不超限」，也不能当成「超限」（前者会白烧，后者会静默丢载荷，两个方向都
+        不能靠猜）。仅在确实要拉的目录上调用，故每拍至多多一次 shell 往返。
+        """
+        out = self._shell_fn(f"du -sk {remote_dir} 2>/dev/null", 15)
+        if not out:
+            return None
+        for raw in out.splitlines():
+            token = raw.strip().split()
+            if not token:
+                continue
+            try:
+                return int(token[0])
+            except ValueError:
+                continue
+        return None
+
     def _pull_event_dir(self, remote_dir: str, local_dir: Path) -> bool:
         """Pull remote event directory; flatten ``adb pull`` nested basename if needed."""
         # #740: share host extraction budget with MTK processor pulls
         with host_extraction_slot(purpose=f"unisoc:{self._serial}"):
             return self._pull_event_dir_unlocked(remote_dir, local_dir)
+
+    def _pull_event_metadata_only(self, remote_dir: str, local_dir: Path) -> bool:
+        """超限目录的降级拉取：**只取 ``unievent_info``**（#2252）。
+
+        与整目录拉取同口径：占 host 提取预算、按「本地内容必须对应当前签名」整体
+        替换本地目录（否则发射循环会拿陈旧载荷当新内容上报）。
+        """
+        with host_extraction_slot(purpose=f"unisoc:{self._serial}"):
+            return self._pull_event_metadata_only_unlocked(remote_dir, local_dir)
+
+    def _pull_event_metadata_only_unlocked(
+        self, remote_dir: str, local_dir: Path,
+    ) -> bool:
+        staging = local_dir.parent / f".pulling_{local_dir.name}"
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+        staging.mkdir(parents=True, exist_ok=True)
+        try:
+            remote_info = f"{remote_dir}/{UNIVIEW_INFO_FILENAME}"
+            if not self._pull_fn(remote_info, str(staging), 180):
+                return False
+            # adb pull 单文件 → staging/<name>；某些实现会保留一层目录，容忍两者。
+            source = staging / UNIVIEW_INFO_FILENAME
+            if not source.is_file():
+                hits = [
+                    p for p in staging.rglob(UNIVIEW_INFO_FILENAME) if p.is_file()
+                ]
+                if not hits:
+                    return False
+                source = hits[0]
+            if local_dir.exists():
+                shutil.rmtree(local_dir, ignore_errors=True)
+            local_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, local_dir / UNIVIEW_INFO_FILENAME)
+            return (local_dir / UNIVIEW_INFO_FILENAME).is_file()
+        except Exception:
+            logger.debug(
+                "unisoc_reconciler_metadata_pull_failed remote=%s",
+                remote_dir, exc_info=True,
+            )
+            return False
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
 
     def _pull_event_dir_unlocked(self, remote_dir: str, local_dir: Path) -> bool:
         local_dir.mkdir(parents=True, exist_ok=True)
@@ -596,7 +709,10 @@ class UnisocUniviewReconciler:
         finally:
             shutil.rmtree(staging, ignore_errors=True)
 
-    def _emit_event(self, event_dir: Path, signature: Optional[str]) -> str:
+    def _emit_event(
+        self, event_dir: Path, signature: Optional[str], *,
+        payload_skipped_kib: Optional[int] = None,
+    ) -> str:
         """发射一条事件；返回 ``_EMIT_RESULT_*`` 三态（#2083）。
 
         ``NOT_REPORTABLE`` = ``parse_metadata`` 抛 ``CollectorError``（normalboot-only /
@@ -633,6 +749,12 @@ class UnisocUniviewReconciler:
             "pull_source": "reconciler",
             "entry_origin": "runtime",
         }
+        if payload_skipped_kib is not None:
+            # #2252：本信号的载荷**未随包拉取**（远端目录超 ``MAX_PULL_DIR_KIB``）——
+            # 显式标记，避免下游把这条信号当载荷完整的异常；远端占用一并带上，
+            # 便于判断是「病态累积目录」还是阈值定小了。
+            extra["payload_state"] = PAYLOAD_STATE_OVERSIZED_SKIPPED
+            extra["payload_remote_kib"] = payload_skipped_kib
         dle_params: Dict[str, Any] = {
             "serial": self._serial,
             "platform": self._platform,
