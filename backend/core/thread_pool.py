@@ -97,7 +97,15 @@ def submit(fn, *args, **kwargs):
     """Submit *fn* to the shared background thread pool.
 
     #1122：队列有界 —— 满了抛 :class:`PoolQueueFullError`（绝不静默积压），
-    配额在任务结束后自动归还。
+    配额在任务**终结**时自动归还。
+
+    #2072：归还点挂在 future 的 done 回调上，而不是只挂在任务体的 ``finally``。
+    任务体有不执行的两条路径——``pool.submit`` 抛错（根本没排上队）、以及
+    ``shutdown(cancel_futures=True)`` 取消排队中的 future——旧实现这两条都不归还，
+    而 ``_queue_slots`` 是模块级、跨 pool 重建存活，于是容量单调下降直至所有后台
+    提交恒抛 ``PoolQueueFullError``（调用方记 warning 后丢弃 = 静默丢后台工作），
+    ``drain()`` 也再也等不到 ``queue_depth()`` 归零。
+    不变量：**离开本函数时，配额要么已交给 future，要么已归还**，两者恰有其一。
     """
     global _submitted_total, _depth, _pool
     if not _queue_slots.acquire(blocking=False):
@@ -110,32 +118,49 @@ def submit(fn, *args, **kwargs):
         _depth += 1
     _set_metrics_gauges()
 
-    def _run_and_release():
+    def _release() -> None:
         global _depth
-        try:
-            fn(*args, **kwargs)
-        finally:
-            _queue_slots.release()
-            with _slots_lock:
-                _depth -= 1
-            _set_metrics_gauges()
+        with _slots_lock:
+            _depth -= 1
+        _set_metrics_gauges()
+        _queue_slots.release()
+
+    def _runner() -> None:
+        fn(*args, **kwargs)
 
     with _pool_lock:
         if _pool is None:
             _pool = _new_pool()
         pool = _pool
 
+    handed_off = False
+    last_exc: RuntimeError | None = None
     try:
-        return pool.submit(_run_and_release)
-    except RuntimeError as exc:
-        # 测试环境中 TestClient 触发 shutdown 后，允许自动重建线程池
-        if "cannot schedule new futures after shutdown" not in str(exc):
-            raise
-        with _pool_lock:
-            if _pool is pool:
-                _pool = _new_pool()
-            pool = _pool
-        return pool.submit(_run_and_release)
+        # 至多两次尝试：第二次仅在 pool 已被 shutdown（测试环境 TestClient 常见）
+        # 时重建后重试；其它 RuntimeError 原样上抛。
+        for _ in range(2):
+            try:
+                fut = pool.submit(_runner)
+            except RuntimeError as exc:
+                if "cannot schedule new futures after shutdown" not in str(exc):
+                    raise
+                last_exc = exc
+                with _pool_lock:
+                    if _pool is pool:
+                        _pool = _new_pool()
+                    pool = _pool
+                continue
+            # 正常/异常/被取消都会触发 done 回调（3.9+ 语义，实测 3.13 成立）
+            fut.add_done_callback(lambda _f: _release())
+            handed_off = True
+            return fut
+        if last_exc is not None:  # 两次都被 shutdown 拒绝：原样抛出该错误
+            raise last_exc
+    finally:
+        if not handed_off:
+            # 未交给 future 的任何退出路径（抛错、两次被拒）在此归还；
+            # 此时 done 回调必然尚未挂载，不会二次归还。
+            _release()
 
 
 def _record_rejected_metric() -> None:
