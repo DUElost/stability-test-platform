@@ -83,6 +83,14 @@ const HOST: Record<string, StatusEntry> = {
   OFFLINE: { label: "离线", variant: "secondary", Icon: PowerOff },
 };
 
+/**
+ * Job 库内状态（``backend/models/enums.py`` 的 ``JobStatus`` 全集）。
+ *
+ * ⚠️ 只有**直接读库内字段**的消费方用它。API 出参里的 job/run status 大多已经过
+ * `_JOB_STATUS_TO_RUN_STATUS` 映射成对外词表（QUEUED/FINISHED/CANCELED），那种值要
+ * 用 `JOB_RESULT`——#2418 就是报告页拿对外词表喂这张表，成功与中止一律显示「未知」。
+ * 两张表的键集由 `tests/test_status_vocabulary_drift.py` 与后端词表对拍。
+ */
 const JOB: Record<string, StatusEntry> = {
   PENDING: { label: "等待", variant: "secondary", Icon: Clock },
   RUNNING: { label: "运行中", variant: "warning", Icon: Loader2 },
