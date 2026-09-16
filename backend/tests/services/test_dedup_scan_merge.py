@@ -18,6 +18,26 @@ def _reset_merge_probe_cache():
     ds.reset_merge_capability_cache_for_tests()
 
 
+def test_multi_instance_merge_warning_reflects_adapter_state(monkeypatch):
+    """#2189 / ADR-0027 v1.8 清单第 7 条：多实例形态下 merge 实例绑定必须可见。
+
+    单实例（adapter 关）→ 无告警，保证默认形态零噪音；多实例 → 告警含 ``merge_instance_bound``
+    与 ``ref=#2189``，使部署方能从启动日志就知道 merge 没有跨实例互斥。
+    """
+    monkeypatch.setattr(
+        "backend.realtime.socketio_redis.socketio_redis_adapter_enabled", lambda: False
+    )
+    assert ds.multi_instance_merge_warning() is None
+
+    monkeypatch.setattr(
+        "backend.realtime.socketio_redis.socketio_redis_adapter_enabled", lambda: True
+    )
+    warning = ds.multi_instance_merge_warning()
+    assert warning is not None
+    assert "merge_instance_bound=true" in warning
+    assert "ref=#2189" in warning
+
+
 def test_build_merge_argv_prefers_merge_files_list_when_supported(tmp_path):
     org = [str(tmp_path / "a_org.xls"), str(tmp_path / "b_org.xls")]
     tool = {"python": "python", "script": str(tmp_path / "start_log_scan.py")}

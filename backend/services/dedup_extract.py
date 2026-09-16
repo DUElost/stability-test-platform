@@ -220,12 +220,17 @@ def run_extract_sync(plan_run_id: int) -> int:
     db = SessionLocal()
     try:
         from backend.services.device_log_event import (
+            adopt_unassigned_event_dirs,
             associate_unassigned_events_to_plan_run,
             list_remote_paths_for_extract,
             mark_events_archived,
         )
 
         associate_unassigned_events_to_plan_run(db, plan_run_id)
+        # #2316（方案 C）：已归属且**已上送完**（extractable 态）的事件目录搬进本 run
+        # 作用域——此后由 run 级 purge 统一回收；必须早于下面的路径列举（列举读的就是
+        # remote_path）。方案 A 的回收路径保留，兜底未关联/搬移失败/历史残留。
+        adopt_unassigned_event_dirs(db, plan_run_id)
 
         merge_rows = db.execute(
             select(PlanRunArtifact).where(

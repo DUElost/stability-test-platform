@@ -19,6 +19,8 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from pydantic import Field
+
 from backend.core.settings.base import DomainSettings
 
 
@@ -65,7 +67,13 @@ class SchedulerSettings(DomainSettings):
     # （#1521/#1698「先文件后行」），窗口用 `stability_retention_txn_seconds` 观测
     # （#2104）。窗口过长的杠杆是调小它；**不要**改成把 purge 挪出事务——那会造成
     # 「文件已删、行仍在」的不可自愈不一致（详见共享行加锁表 Revisit）。
-    plan_run_retention_batch_size: int = 100
+    # #2278：下界 1。批大小可以为 1（窗口最短），但**不能为 0**——0 会让
+    # `_retention_candidate_ids` 的 `while len(selected_ids) < limit` 一次都不执行，
+    # 保留清理静默永久停摆，而 `stability_retention_candidate_runs` 如实显示 0，
+    # 监控上读起来像「无积压」。想「少删」请调大 `PLAN_RUN_RETENTION_DAYS`；
+    # 越界 env 在取值时即 ValidationError（作业显式失败并计入 apscheduler 错误
+    # 指标），不把「配错」伪装成「没事干」。
+    plan_run_retention_batch_size: int = Field(default=100, ge=1)
     schedule_dedup_window_seconds: float = 60
 
 

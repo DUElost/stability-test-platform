@@ -314,41 +314,59 @@ class _StepLogSink:
     handle is 71.8× faster over 20 000 lines, removing 40 000 syscalls).
 
     One sink per stream: stdout and stderr are drained by two threads into two
-    different files, so no handle is shared across threads and no lock is
-    needed. The owning reader closes it in its ``finally``; CPython flushes
-    buffered text there, so normal completion, abort and timeout all land the
-    same content on disk.
+    different files, so two readers never share a handle. The owning reader
+    closes it in its ``finally``; CPython flushes buffered text there, so normal
+    completion, abort and timeout all land the same content on disk.
+
+    ``close()`` can also come from **another** thread: when a reader is
+    abandoned (its join times out) the main thread reclaims its sink in
+    ``_close_sinks_for_abandoned`` (#2061). That makes the lazy
+    ``open()`` in :meth:`write` racy — an unlocked check-then-open could run
+    *after* that close and leave a freshly opened, never-closed handle (plus an
+    unflushed tail). ``_lock`` serializes ``write`` / ``close`` / ``_discard``
+    so a close always wins and no handle survives it (#2285).
     """
 
-    __slots__ = ("_path", "_fh", "_failed", "_closed")
+    __slots__ = ("_path", "_fh", "_failed", "_closed", "_lock")
 
     def __init__(self, path: str) -> None:
         self._path = path
         self._fh: Optional[Any] = None
         self._failed = False
         self._closed = False
+        self._lock = threading.Lock()
 
     def write(self, line: str) -> None:
         """Append one line, normalized to exactly one trailing newline (#805-3)."""
         if self._closed or self._failed:
             return
-        try:
-            if self._fh is None:
-                self._fh = open(self._path, "a", encoding="utf-8")
-            self._fh.write(line if line.endswith("\n") else line + "\n")
-        except OSError:
-            # 与旧实现同语义：写失败只记 debug，不打断上报路径；此后不再重试
-            # （否则每行一次失败的 open 会把 syscall 开销放大回去）。
-            self._failed = True
-            self._discard()
-            logger.debug("step_log_file_write_failed path=%s", self._path)
+        with self._lock:
+            # 复查：close() 可能在上面的无锁快检之后、取到锁之前发生（#2285）。
+            if self._closed or self._failed:
+                return
+            try:
+                if self._fh is None:
+                    self._fh = open(self._path, "a", encoding="utf-8")
+                self._fh.write(line if line.endswith("\n") else line + "\n")
+            except OSError:
+                # 与旧实现同语义：写失败只记 debug，不打断上报路径；此后不再重试
+                # （否则每行一次失败的 open 会把 syscall 开销放大回去）。
+                self._failed = True
+                self._discard()
+                logger.debug("step_log_file_write_failed path=%s", self._path)
 
     def close(self) -> None:
-        """Flush + close. Idempotent, never raises, and blocks later writes."""
-        self._closed = True
-        self._discard()
+        """Flush + close. Idempotent, never raises, and blocks later writes.
+
+        与在途 ``write`` 互斥：持锁前若 reader 正在写，本调用等它写完再关，
+        故返回后 ``_fh`` 必为 ``None``（不会留下「重开的」句柄）。
+        """
+        with self._lock:
+            self._closed = True
+            self._discard()
 
     def _discard(self) -> None:
+        """关闭当前句柄（调用方须持 ``_lock``）。"""
         handle, self._fh = self._fh, None
         if handle is None:
             return

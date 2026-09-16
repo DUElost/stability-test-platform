@@ -196,8 +196,21 @@ class HostRunCoordinator:
         `_MAX_PLAN_RUN_HOST_PROJECTIONS` 一并 re-apply，避免同域出现
         「部分旋钮 reload 生效、部分不生效」的隐性分层（超限裁剪本就是
         防御兜底语义，调小后在下一次 tick 生效）。
+
+        #2279：读取失败**不抛**——本方法紧跟 heartbeat 的同名方法在同一个
+        `reload_config` 处理器里调用（`main.py`），且该处理器**无外层兜底**：
+        这里抛会让 `reload_config` 整体失败、后续步骤（ScanRunner/UploadManager
+        重配、done 日志）全部不执行。失败时沿用既有值（= 上一份合法配置）。
         """
-        _hb = get_heartbeat_settings()
+        try:
+            _hb = get_heartbeat_settings()
+        except Exception:  # noqa: BLE001 — 配置非法不得中断 reload（#2279）
+            logger.exception(
+                "coordinator_pacing_reload_skipped: Settings 不可用，沿用既有值 "
+                "interval=%s max_plan_run_host_projections=%s（#2279）",
+                self._interval, self._MAX_PLAN_RUN_HOST_PROJECTIONS,
+            )
+            return
         self._interval = _hb.coordinator_heartbeat_interval
         self._MAX_PLAN_RUN_HOST_PROJECTIONS = _hb.coordinator_max_plan_run_hosts
         logger.info(
