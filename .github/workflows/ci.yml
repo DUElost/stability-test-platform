@@ -441,6 +441,15 @@ jobs:
         # 注意：不加 working-directory——python -m 把 cwd 放 sys.path[0]，
         # backend 包在仓库根。
         run: python -m backend.scripts.check_schema_sync
+      - name: Assert seeded script identity
+        # #2399：seed 迁移的守卫/写入版本 off-by-one，会让空库自举产出
+        # 「version=1.3.8、content_sha256·nfs_path 属于 1.3.9」的幽灵行，且 v1.3.9 无行。
+        # scan 以 content_sha256 判 conflict 并**只跳过不修**，新环境不会自愈。
+        # 本步用扫描自己的判据断言 conflict 集合为空（不起服务、不需鉴权），并核对
+        # seed 链该产出的行确实在场。同族三次：#751 / #1276 / #2399。
+        # 本地等价：tools/dev/check_pr_migrate.py 步骤 3（#825 的 gate-parity 口径）。
+        # 同样不加 working-directory——backend 包在仓库根，见上一步注释。
+        run: python -m backend.scripts.check_seed_identity
 
       # 并发回归（#1999 锁序全序 + #2138 锁等待观测）。
       #

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """check_pr_migrate.py —— CI `pr-migrate-empty-db` 的本地等价 gate（#825/#644）。
 
-复刻 ci.yml 同名 job 的两步：空 PostgreSQL 上 `alembic upgrade head` +
+复刻 ci.yml 同名 job 的三步：空 PostgreSQL 上 `alembic upgrade head` +
 `backend.scripts.check_schema_sync`（ORM schema 比对，#644 P0 复盘口径：
 diff ⊆ 基线白名单，防「迁移能跑但与模型漂移」）。
 
@@ -127,7 +127,16 @@ def run_check() -> int:
             print("[FAIL] pr-migrate：schema 与 ORM 模型不一致（check_schema_sync）",
                   file=sys.stderr)
             return 1
-        print("[OK] pr-migrate：空库迁移 + schema 比对通过（postgres:16 一次性容器）")
+        # 步骤 3：seed 身份与磁盘真值对拍（#2399）。放这里而不是只进 tests/：
+        # 它需要真实迁移产物，而本 gate 是 PR 路径上唯一真跑空库迁移的地方。
+        step3 = subprocess.run([PY, "-m", "backend.scripts.check_seed_identity"],
+                               cwd=ROOT, env=env)
+        if step3.returncode != 0:
+            print("[FAIL] pr-migrate：脚本身份与磁盘真值不一致（check_seed_identity，#2399）",
+                  file=sys.stderr)
+            return 1
+        print("[OK] pr-migrate：空库迁移 + schema 比对 + seed 身份对拍通过"
+              "（postgres:16 一次性容器）")
         return 0
     finally:
         _docker(["rm", "-f", container], timeout=60)
