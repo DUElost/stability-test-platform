@@ -129,3 +129,23 @@ def test_domain_settings_does_not_read_env_file():
     from backend.core.settings.base import DomainSettings
 
     assert DomainSettings.model_config.get("env_file") is None
+
+
+def test_retention_batch_size_has_lower_bound(monkeypatch):
+    """#2278：`PLAN_RUN_RETENTION_BATCH_SIZE=0` 必须是响亮的失败，而不是静默停摆。
+
+    0 曾经能通过校验：`_retention_candidate_ids` 的
+    `while len(selected_ids) < limit` 一次都不执行 → 保留清理永久什么都不删，而
+    `stability_retention_candidate_runs` 如实显示 0，监控上读起来像「无积压」。
+    下界 1 之后，越界配置在取值处即 `ValidationError`（调度作业显式失败并计入
+    apscheduler 错误指标）；要「少删」请调大 `PLAN_RUN_RETENTION_DAYS`。
+    """
+    monkeypatch.setenv("PLAN_RUN_RETENTION_BATCH_SIZE", "0")
+    reset_scheduler_settings_cache()
+    with pytest.raises(ValidationError):
+        SchedulerSettings()
+
+    monkeypatch.setenv("PLAN_RUN_RETENTION_BATCH_SIZE", "1")
+    reset_scheduler_settings_cache()
+    assert get_scheduler_settings().plan_run_retention_batch_size == 1
+    reset_scheduler_settings_cache()
