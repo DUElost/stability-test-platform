@@ -28,6 +28,7 @@ from backend.models.plan_run import PlanRun
 from backend.models.project import Specialty, TestProject
 from backend.models.suite import TestSuite
 from backend.services.script_progress_capability import script_supports_progress
+from backend.services.plan_dispatcher_core import apply_step_timing_fields
 from backend.services.plan_wifi import (
     require_active_wifi_pool,
     require_wifi_pool_matches_plan,
@@ -414,9 +415,14 @@ def _assemble_lifecycle_for_validation(
             "action": f"script:{s.script_name}",
             "version": s.script_version,
             "params": s.params or {},
-            "timeout_seconds": s.timeout_seconds,
             "retry": s.retry,
         }
+        # 与 dispatcher 同一判据：未配置的时间字段不写键（#2382）
+        apply_step_timing_fields(
+            step_def,
+            timeout_seconds=s.timeout_seconds,
+            stall_seconds=s.stall_seconds,
+        )
         if s.stage in ("init", "teardown"):
             lifecycle[s.stage].append(step_def)
         else:
@@ -432,18 +438,33 @@ def _assemble_lifecycle_for_validation(
         lifecycle["barrier_timeout_seconds"] = barrier_timeout_seconds
     if barrier_max_wait_seconds is not None:
         lifecycle["barrier_max_wait_seconds"] = barrier_max_wait_seconds
-    # 停滞钟是逐步骤的,不配就整键不写 —— 否则 NULL 会让 schema 拒掉
-    for step_def in lifecycle.get("init", []) + lifecycle.get("teardown", []):
-        s = next((x for x in steps if x.step_key == step_def["step_id"]), None)
-        if s is not None and s.stall_seconds is not None:
-            step_def["stall_seconds"] = s.stall_seconds
-    patrol = lifecycle.get("patrol")
-    if patrol:
-        for step_def in patrol.get("steps", []):
-            s = next((x for x in steps if x.step_key == step_def["step_id"]), None)
-            if s is not None and s.stall_seconds is not None:
-                step_def["stall_seconds"] = s.stall_seconds
     return lifecycle
+
+
+_STALL_GATE_ERROR_MARK = "'stall_seconds' is a required property"
+
+
+def _actionable_lifecycle_errors(errors: list[str]) -> list[str]:
+    """把 jsonschema 的结构性报错翻译成可行动的一句话（#2016/#2382 同族：文案不指向修法＝没说）。
+
+    只翻译这一条：schema 里 `stall_seconds` 唯一会被判「required」的场合，就是步骤
+    `timeout_seconds == 0`（不限墙钟）时触发的 `if/then` 门禁。原始文案只说
+    "is a required property"，客户端猜不到「0 需要停滞钟」这条规则从哪来、该怎么填。
+    翻译放在**入口呈现层**而不是 `pipeline_validator`：控制面与 Agent 各有一份字节相同的
+    validator（#738 已登记的重复实现），在这里加分支会让两份立刻分叉。
+    """
+    out: list[str] = []
+    for err in errors:
+        if _STALL_GATE_ERROR_MARK in err:
+            path = err.split(":", 1)[0] if ":" in err else "(root)"
+            out.append(
+                f"{path}: timeout_seconds=0 表示不限墙钟，必须同时配 stall_seconds >= 1；"
+                "停滞钟要求该步骤脚本已接入 PROGRESS 打戳（#115 阶段 2），"
+                "否则请改填明确的服务端墙钟（引擎默认 300s）"
+            )
+        else:
+            out.append(err)
+    return out
 
 
 def _validate_assembled_lifecycle(
@@ -477,7 +498,7 @@ def _validate_assembled_lifecycle(
     if not is_valid:
         raise HTTPException(
             status_code=422,
-            detail={"code": "INVALID_LIFECYCLE", "errors": errors},
+            detail={"code": "INVALID_LIFECYCLE", "errors": _actionable_lifecycle_errors(errors)},
         )
 
 
