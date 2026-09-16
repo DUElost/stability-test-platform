@@ -33,6 +33,14 @@ import requests
 from datetime import date, datetime, timezone
 from pathlib import Path
 
+# 以 `python tools/dev/retire_script_versions.py …` 直接运行时 sys.path[0] 是 tools/dev，
+# 仓库根不在 path 上 ⇒ `_plan()` 里的 `from backend…` 抛 ModuleNotFoundError（与 #1659
+# 的 queue_head_telemetry.py 同一形态；`docs/development/script-versioning.md` §判据与巡检
+# 给的正是这种直接调用形式）。用 __file__ 推导 REPO_ROOT 做 bootstrap，与 cwd 无关。
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 DEFAULT_BASE_URL = "http://127.0.0.1:8000/api/v1"
 DEFAULT_ENV_FILE = Path(__file__).resolve().parents[2] / ".env.backend"
 

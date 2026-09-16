@@ -1,10 +1,11 @@
 """ADR-0029 v2.3 D — DashboardNamespace.on_subscribe 收窄（room 校验）。
 
 覆盖三层：
-- 格式白名单（_ROOM_PATTERN）：job:/run:/plan_run:/console: 的合法形态与
-  非法形态（任意字符串、agent:、非数字 id、超长 id、错误 console 前缀）。
-- 实体存在性（_dashboard_room_exists）：job:/run: → job_instance 行、
-  plan_run: → plan_run 行（DB）；console: → RunConsole 进程内 run。
+- 格式白名单（_ROOM_PATTERN）：plan_run:/console:/fleet:devices 的合法形态与
+  非法形态（任意字符串、agent:、非数字 id、超长 id、错误 console 前缀，
+- 以及 #2400 起不再存在的 job:/run: 房间）。
+- 实体存在性（_dashboard_room_exists）：plan_run: → plan_run 行（DB）；
+  console: → RunConsole 进程内 run；fleet:devices → 静态房间。
 - on_subscribe 行为：格式非法 / 实体不存在 → 不 enter_room；合法 → enter_room。
 
 边界（G13 定性）：本层只校验「房间合法 + 实体存在」，不做归属过滤——REST 面
@@ -28,9 +29,6 @@ from backend.services.run_console import ConsoleRun, RunConsole
 # ── 格式白名单 ────────────────────────────────────────────────────────────────
 
 VALID_ROOMS = [
-    "job:1",
-    "job:123456789012345678",  # 18 位上限
-    "run:42",
     "plan_run:7",
     "console:con-abcdef012345",
     "console:con-0123456789abcdef0123456789abcdef",  # 32 hex 上限
@@ -40,6 +38,10 @@ VALID_ROOMS = [
 INVALID_ROOMS = [
     "",
     "garbage",
+    # #2400：job:/run: 两侧（emit 与订阅）一起删，房间不再合法——即便 id 形态正确
+    "job:1",
+    "run:42",
+    "job:123456789012345678",
     "job:",
     "job:abc",
     "job:1.5",
@@ -120,7 +122,7 @@ async def test_console_room_check_offloads_sync_redis_off_loop(monkeypatch):
     )
 
 
-# ── 实体存在性（DB 分支：job:/run: → job_instance，plan_run: → plan_run）──────
+# ── 实体存在性（DB 分支：plan_run: → plan_run）────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -132,16 +134,8 @@ async def test_db_room_exists(db_session):
     run = PlanRun(plan_id=plan.id, plan_snapshot={}, run_type="MANUAL")
     db_session.add(run)
     db_session.commit()
-    job = JobInstance(
-        plan_run_id=run.id, plan_id=plan.id, device_id=device.id, pipeline_def={},
-    )
-    db_session.add(job)
-    db_session.commit()
 
-    assert await _dashboard_room_exists("job", str(job.id))
-    assert await _dashboard_room_exists("run", str(job.id))  # run: 与 job: 同实体
     assert await _dashboard_room_exists("plan_run", str(run.id))
-    assert not await _dashboard_room_exists("job", "999999999")
     assert not await _dashboard_room_exists("plan_run", "999999999")
 
 
@@ -184,7 +178,6 @@ async def test_subscribe_rejects_non_string_room_without_raising():
 async def test_subscribe_rejects_missing_entity():
     ns = DashboardNamespace("/dashboard")
     ns.server = _FakeSioServer()
-    await ns.on_subscribe("sid-X", {"room": "job:999999999"})
     await ns.on_subscribe("sid-X", {"room": "plan_run:999999999"})
     assert ns.server.entered == []
 
@@ -214,10 +207,11 @@ async def test_subscribe_accepts_existing_entities(db_session):
 
     ns = DashboardNamespace("/dashboard")
     ns.server = _FakeSioServer()
+    await ns.on_subscribe("sid-Y", {"room": f"plan_run:{run.id}"})
+    # #2400：job:/run: 不再是合法房间（无 emit 端也无订阅端）——同一 id 现在被拒
     await ns.on_subscribe("sid-Y", {"room": f"job:{job.id}"})
     await ns.on_subscribe("sid-Y", {"room": f"run:{job.id}"})
-    await ns.on_subscribe("sid-Y", {"room": f"plan_run:{run.id}"})
-    assert ns.server.entered == [f"job:{job.id}", f"run:{job.id}", f"plan_run:{run.id}"]
+    assert ns.server.entered == [f"plan_run:{run.id}"]
 
 
 @pytest.mark.asyncio
