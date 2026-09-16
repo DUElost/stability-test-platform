@@ -166,6 +166,22 @@ def _export_client_specs(agents) -> tuple[list[str], int]:
     return specs, unmapped
 
 
+def _existing_export_clients(exports_file: Path) -> bool:
+    """既有导出文件是否**声明了客户端**（#2315）。
+
+    只看「文件在不在」不够——文件可能只写着我们生成的注释头。判据取「至少一行非空、
+    非注释」的导出行；读不到即 False（首装/不可读都按「没有既有导出」处理，保持原路径）。
+    """
+    try:
+        text = exports_file.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return any(
+        line.strip() and not line.lstrip().startswith("#")
+        for line in text.splitlines()
+    )
+
+
 def render_exports(config) -> str:
     """站点导出文件内容；尚无 Agent 时为空（首台接入后重跑即导出）。"""
     specs, unmapped = _export_client_specs(config.agents)
@@ -775,31 +791,45 @@ def stage_s2_release_env(ctx: InstallContext) -> list[Check]:
         if config.storage.export_to_agents:
             exports_dir = ctx.system_root / EXPORTS_DIR
             exports_dir.mkdir(parents=True, exist_ok=True)
-            _write_text(
-                exports_dir / f"stp-{config.site.id}.exports",
-                render_exports(config),
-                mode=0o644,
-            )
-            if ctx.ops.run(["exportfs", "-ra"]).returncode != 0:
-                return _safe(
-                    checks, "install_export", location="$.storage.export_to_agents",
-                    role="storage", check_id="install.s2.export",
-                )
-            if ctx.ops.run(["systemctl", "enable", "--now", NFS_SERVER_UNIT]).returncode != 0:
-                return _safe(
-                    checks, "install_export", location="$.storage.export_to_agents",
-                    role="storage", check_id="install.s2.export",
-                )
-            # 仍以导出文件是否真的写出客户端为准：首装无 Agent 时它是空文件。
-            published = bool(render_exports(config))
-            checks.append(_pass(
-                "install.s2.export", "storage", "$.storage.export_to_agents",
-                "export_published" if published else "export_deferred",
-                "The site exports its own storage subtree to the declared Agents over NFS."
-                if published else
-                "No Agent is declared yet; the export is deferred until the first one is onboarded.",
-                "Re-run the install after adding Agents so their networks are allowed.",
-            ))
+            exports_file = exports_dir / f"stp-{config.site.id}.exports"
+            rendered = render_exports(config)
+            # #2315：声明为空 **≠** 拆除导出。升级命令不带 `--agents-inventory` 时
+            # `render_exports` 返回 ""，此前会写空文件 + `exportfs -ra` → 既有 NFS 导出
+            # 被撤下（客户端挂载点还在但写不进，`mount_status.ok=false`），报告却是
+            # PASS `export_deferred`。声明只在本次运行可见（DB 的 Host 不参与），
+            # 「一次带清单、后续不带」的升级序列必然踩中。
+            if not rendered and _existing_export_clients(exports_file):
+                checks.append(_pass(
+                    "install.s2.export", "storage", "$.storage.export_to_agents",
+                    "export_kept",
+                    "No Agent is declared in this run; the existing NFS export was left "
+                    "untouched (defer ≠ teardown).",
+                    "Re-run with --agents-inventory <file> (or restore the agents block in the "
+                    "site input) to publish export changes; to withdraw the export entirely, "
+                    "remove the exports file and run `exportfs -ra`.",
+                ))
+            else:
+                _write_text(exports_file, rendered, mode=0o644)
+                if ctx.ops.run(["exportfs", "-ra"]).returncode != 0:
+                    return _safe(
+                        checks, "install_export", location="$.storage.export_to_agents",
+                        role="storage", check_id="install.s2.export",
+                    )
+                if ctx.ops.run(["systemctl", "enable", "--now", NFS_SERVER_UNIT]).returncode != 0:
+                    return _safe(
+                        checks, "install_export", location="$.storage.export_to_agents",
+                        role="storage", check_id="install.s2.export",
+                    )
+                # 仍以导出文件是否真的写出客户端为准：首装无 Agent 时它是空文件。
+                published = bool(rendered)
+                checks.append(_pass(
+                    "install.s2.export", "storage", "$.storage.export_to_agents",
+                    "export_published" if published else "export_deferred",
+                    "The site exports its own storage subtree to the declared Agents over NFS."
+                    if published else
+                    "No Agent is declared yet; the export is deferred until the first one is onboarded.",
+                    "Re-run the install after adding Agents so their networks are allowed.",
+                ))
     if config.monitoring.enabled:
         if ctx.dry_run:
             checks.append(_pass(
