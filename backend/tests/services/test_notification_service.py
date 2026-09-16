@@ -808,6 +808,10 @@ def test_dispatch_async_falls_back_to_pool_when_async_enqueue_fails(monkeypatch)
         ("/execution/plan-runs/3", "/execution/plan-runs/3"),
         ("//evil.example/x", None),      # 协议相对 URL：浏览器按 cross-origin 解析
         ("/\\evil.example/x", None),     # 同上（反斜杠变体）
+        # #2288：WHATWG 解析移除 TAB/LF/CR → 这三个形态移除后就是 `//evil...`
+        ("/\t/evil.example/x", None),
+        ("/\n/evil.example/x", None),
+        ("/\r/evil.example/x", None),
         ("https://evil.example/x", None),
         ("hosts", None),
     ],

@@ -18,6 +18,20 @@ describe('notificationTarget #625 context.link', () => {
     expect(notificationTarget(log({ context: { link: '/\\evil.example/x' } }))).toBeNull();
   });
 
+  // #2288：WHATWG URL 解析会**移除**输入里的 TAB/LF/CR，故 `/<TAB>/evil.com` 与
+  // `//evil.com` 等价（协议相对 → 跨源），而它第二个字符是 TAB，能通过只挡
+  // `/` 与 `\` 的 #2054 判据。
+  it('拒绝前导斜杠后紧跟 TAB/LF/CR 的形态（移除后即协议相对 URL）', () => {
+    expect(notificationTarget(log({ context: { link: '/\t/evil.example/x' } }))).toBeNull();
+    expect(notificationTarget(log({ context: { link: '/\n/evil.example/x' } }))).toBeNull();
+    expect(notificationTarget(log({ context: { link: '/\r/evil.example/x' } }))).toBeNull();
+    // 正常站内路径不受影响（收紧不得把合法目标一起挡掉）
+    expect(notificationTarget(log({ context: { link: '/hosts' } }))).toEqual({
+      to: '/hosts',
+      label: '查看详情',
+    });
+  });
+
   it('非 / 开头的 link 忽略（防外链）', () => {
     expect(notificationTarget(log({ context: { link: 'https://evil.example/x' } }))).toBeNull();
   });

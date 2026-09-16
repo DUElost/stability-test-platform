@@ -115,6 +115,7 @@ from backend.services.plan_run_export import (
 )
 from backend.services.device_log_event import (
     LATE_EVENT_GRACE,
+    list_plan_run_device_log_event_platforms,
     list_plan_run_device_log_events,
 )
 from backend.services.log_observation import (
@@ -2361,6 +2362,8 @@ def get_plan_run_log_events(
         plan_run_id=run_id,
         total=total,
         items=items,
+        # #2288：平台全集单独取——不受本次 `platform`/`limit` 影响，前端筛选选项据此渲染。
+        platforms=list_plan_run_device_log_event_platforms(db, run_id, state=state),
     ))
 
 
