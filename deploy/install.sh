@@ -95,6 +95,21 @@ fi
 
 # ── 1. 发布物（R2 未交付前的本地实现；发布渠道就绪后把 STP_BUNDLE 指向产物即可）──
 # 必须先于站点输入：init 会从清单读 expected_release，顺序颠倒会永久不匹配。
+#
+# #2276：站点已存在时，安装**实际**用的是 site.yaml 记录的 release.bundle——命令行/环境
+# 给的 STP_BUNDLE 此前从不与它比对，于是「按文档把 STP_BUNDLE 指过去」会打印
+# `reusing existing release bundle <新路径>`，却用旧路径完成一次「全绿」的旧版本安装。
+# 不一致即拒绝，交操作员显式改站点输入（或按记录路径重跑）。
+if [ -f "$STP_SITE_FILE" ]; then
+    recorded_bundle="$(deploy_site_identity | sed -n '3p')"
+    if [ -n "$recorded_bundle" ] && [ "$recorded_bundle" != "$STP_BUNDLE" ]; then
+        echo "install: site input records release.bundle=$recorded_bundle" >&2
+        echo "install: but this run was given STP_BUNDLE=$STP_BUNDLE — refuse to guess." >&2
+        echo "install: pass the recorded path (STP_BUNDLE=$recorded_bundle) or edit" >&2
+        echo "install: $STP_SITE_FILE explicitly, then re-run." >&2
+        exit 2
+    fi
+fi
 if [ ! -f "$STP_BUNDLE/release-manifest.json" ]; then
     if [ "$DRY_RUN" -eq 1 ]; then
         echo "install: would build the release bundle at $STP_BUNDLE"

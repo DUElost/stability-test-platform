@@ -80,6 +80,12 @@ def probe_data_disk(ops: Ops) -> tuple[str, int]:
             children.add(parent)
         if fields.get("TYPE") != "disk" or fields.get("RO") == "1":
             continue
+        # #2273：已挂载的整盘绝不能被提案——`MOUNTPOINT` 是唯一的判别信号，此前取回
+        # 却丢弃。「整盘文件系统（mkfs /dev/sdb，无分区表）」没有 PKNAME 子项、TYPE
+        # 仍是 disk、blkid 也返回类型，正是会被误提案的形态；init --yes 会二次挂载它
+        # 并把 AEE 写入压到另一个角色正在使用的文件系统上。
+        if fields.get("MOUNTPOINT"):
+            continue
         try:
             size = int(fields.get("SIZE", "0"))
         except ValueError:
@@ -259,19 +265,40 @@ def _mounted(target: str) -> bool:
     return False
 
 
+def _fstab_mountpoints(text: str) -> set[str]:
+    """fstab 文本里已声明的挂载点（第 2 字段；忽略注释与空行）。
+
+    #2273：此前用「整文件子串」判重——`/srv/hdd` 会命中注释、也会命中 `/srv/hdd2`
+    这类更长的路径；按字段判才问的是事实。
+    """
+    points: set[str] = set()
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        fields = stripped.split()
+        if len(fields) >= 2:
+            points.add(fields[1])
+    return points
+
+
 def _fstab_entries(ops: Ops, *, disk: str, host_mount: str, subtree: Path, mount_path: str) -> list[str]:
     fstab = FSTAB
     try:
         text = fstab.read_text(encoding="utf-8")
     except OSError:
         return [f"fstab not updated: {fstab} unreadable"]
-    if mount_path in text and host_mount in text:
+    mounted = _fstab_mountpoints(text)
+    if mount_path in mounted and host_mount in mounted:
         return [f"fstab already lists {host_mount} and {mount_path}"]
     uuid = ops.run(["blkid", "-s", "UUID", "-o", "value", disk]).stdout.strip()
+    # #2273：文件系统类型此前硬编码 ext4——XFS/Btrfs 盘会写出无法开机的 fstab 条目
+    # （nofail 只保不挂起开机，不会让错误的类型生效）。类型同样来自 blkid。
+    fstype = ops.run(["blkid", "-s", "TYPE", "-o", "value", disk]).stdout.strip()
     lines = []
-    if uuid and host_mount not in text:
-        lines.append(f"UUID={uuid} {host_mount} ext4 defaults,nofail 0 2")
-    if str(subtree) not in text:
+    if uuid and host_mount not in mounted:
+        lines.append(f"UUID={uuid} {host_mount} {fstype or 'auto'} defaults,nofail 0 2")
+    if mount_path not in mounted:
         lines.append(f"{subtree} {mount_path} none bind,nofail 0 0")
     if not lines:
         return []

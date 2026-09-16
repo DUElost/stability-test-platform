@@ -214,8 +214,12 @@
 
     - name: Extract deployment digests
       ansible.builtin.set_fact:
-        agent_code_artifact_digest: "{{ agent_deploy_digests.stdout | regex_search('CODE_DIGEST=(\\S+)', '\\1') | first }}"
-        agent_resources_artifact_digest: "{{ agent_deploy_digests.stdout | regex_search('RESOURCES_DIGEST=(\\S*)', '\\1') | first }}"
+        # #2275（承 #2112）：`regex_search(..., '\1')` 在多行 stdout 下返回 list，content
+        # 会渲染成 `["sha256:…"]` 写进 marker（agent 侧 ^sha256:[0-9a-f]{64}$ 拒绝、按
+        # 缺失处理）。改用语义确定的 regex_findall（捕获组列表）取首元素，空匹配兜底空串；
+        # 升级路径（update_agent.yml）已在 #2112 硬化，装机路径此前漏改。
+        agent_code_artifact_digest: "{{ (agent_deploy_digests.stdout | regex_findall('(?m)^CODE_DIGEST=(\\S+)$') or ['']) | first }}"
+        agent_resources_artifact_digest: "{{ (agent_deploy_digests.stdout | regex_findall('(?m)^RESOURCES_DIGEST=(\\S+)$') or ['']) | first }}"
 
     - name: Write agent ARTIFACT_DIGEST (ADR-0040 D2)
       become: true
@@ -236,6 +240,35 @@
         group: "{{ agent_group }}"
         mode: "0644"
       when: agent_resources_artifact_digest | length > 0
+
+    # #2275：装机路径此前只写不验——回读 marker 并断言「形态 + 取值」，与升级路径
+    # （#2112 ②）同一对；列表形态这类缺陷只有回读断言能当场拦住。
+    - name: Read back deployed artifact digests (#2275)
+      become: true
+      ansible.builtin.slurp:
+        src: "{{ agent_install_dir }}/agent/{{ item.file }}"
+      register: agent_digest_readback
+      loop:
+        - { file: "ARTIFACT_DIGEST", want: "{{ agent_code_artifact_digest }}" }
+        - { file: "ARTIFACT_DIGEST_RESOURCES", want: "{{ agent_resources_artifact_digest }}" }
+      loop_control:
+        label: "{{ item.file }}"
+      when: item.want | length > 0
+
+    - name: Assert deployed digests are well-formed and match computed values (#2112/#2275)
+      ansible.builtin.assert:
+        that:
+          - (item.content | b64decode | trim) is match('^sha256:[0-9a-f]{64}$')
+          - (item.content | b64decode | trim) == item.item.want
+        fail_msg: >-
+          marker 形态或取值不符（#2112/#2275）：{{ item.item.file }}
+          got={{ (item.content | b64decode | trim) | truncate(80) }}
+          want={{ item.item.want }}
+        quiet: true
+      loop: "{{ agent_digest_readback.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.file }}"
+      when: item.content is defined
 
     - name: Print install summary
       ansible.builtin.debug:

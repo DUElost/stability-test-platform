@@ -363,7 +363,10 @@ def _distro_default_conflict(ctx: InstallContext, destination: Path) -> bool:
         text = destination.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return False
-    return DISTRO_DEFAULT_MARKER in text and ctx.deploy_root.as_posix() not in text
+    return (
+        DISTRO_DEFAULT_MARKER in text
+        and not declares_deploy_root(text, ctx.deploy_root)
+    )
 
 
 def await_monitoring(port: int, timeout_seconds: int = 30, interval_seconds: float = 3.0) -> bool:
@@ -940,18 +943,39 @@ def _deploy_env(ctx: InstallContext, overrides: dict[str, str]) -> dict[str, str
     return env
 
 
+def declares_deploy_root(text: str, deploy_root: Path) -> bool:
+    """文本是否声明了**完整的**部署根路径（组件边界判据，#2274）。
+
+    unit / nginx / logrotate 三类共享资产的归属证据都是「引用本站部署根」。此前用
+    「整文件子串」（``deploy_root.as_posix() not in text``）判定，站点 id **前缀重叠**
+    时被绕过：站点 A 的 ``/opt/stp-a`` 是站点 B 的 ``/opt/stp-ab`` 的真前缀，B 会把
+    A 的 unit/nginx/logrotate 认作本站资产并覆盖，把 A 的服务改指 B 的部署根
+    （守卫注释里描述的后果正是这样发生的）。
+
+    判据：部署根之后不得紧跟路径组件字符（字母数字 / 点 / 连字符）——``/opt/stp-a/venv``
+    这类**子路径**仍然算本站（渲染的模板就是这么用的）。
+    """
+    root = deploy_root.as_posix().rstrip("/")
+    if not root:
+        return False
+    return re.search(re.escape(root) + r"(?![\w.-])", text) is not None
+
+
 def shared_path_is_foreign(ctx: InstallContext, destination: Path) -> bool:
     """共享系统路径上的既有文件是否属于本站（#2088，fail-closed）。
 
     unit / nginx / logrotate 三类产物都由 ``<deploy-root>`` 渲染，故「引用本站部署根」
     既是归属证据也是可重跑判据；读不到或不含本站部署根即不是本站资产。服务名与站点名
     全局固定，同机第二站点必然同名——无归属判据的覆盖会把别站服务改指本站部署根。
+
+    #2274：判据按**路径组件边界**（`declares_deploy_root`），不是整文件子串——否则
+    站点 id 前缀重叠（`/opt/stp-a` vs `/opt/stp-ab`）时第二个站点会覆盖第一个站点的资产。
     """
     try:
         text = destination.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return destination.exists()
-    return ctx.deploy_root.as_posix() not in text
+    return not declares_deploy_root(text, ctx.deploy_root)
 
 
 def install_shared_asset(ctx: InstallContext, source: Path, destination: Path) -> None:
