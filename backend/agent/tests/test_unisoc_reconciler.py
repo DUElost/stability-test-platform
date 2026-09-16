@@ -1123,3 +1123,69 @@ def test_degraded_pull_failure_counts_as_dir_failure(tmp_path):
 
     assert r.tick_once() == 0
     assert r._dir_attempts.get("NE.103000006") == 1, "降级失败须照常记失败次数"
+
+
+# ---------------------------------------------------------------------------
+# #2394-①：unresolved gauge / abandoned / oversized 计数
+# ---------------------------------------------------------------------------
+
+
+def test_pull_fail_escalates_to_one_time_warn_then_abandoned(tmp_path, caplog):
+    """恒失败目录：第 3 拍一次性 WARN，第 5 拍放弃——两态都进 reconciler_stats。"""
+    import logging
+
+    def shell_fn(cmd, _t):
+        if cmd.startswith("ls -l /data/ylog/uniview_exception"):
+            return _ls_l(["NE.103000003"])
+        return None
+
+    r = _make_reconciler(
+        tmp_path, emitter=_RecordingEmitter(), shell_fn=shell_fn,
+        pull_fn=lambda *_a, **_k: False,
+    )
+    with caplog.at_level(logging.WARNING):
+        for _tick in range(4):
+            assert r.tick_once() == 0
+        warns = [
+            rec for rec in caplog.records
+            if "unisoc_reconciler_unresolved_dir" in rec.getMessage()
+        ]
+        assert len(warns) == 1, "进入阈值只 WARN 一次，不逐拍刷屏"
+        assert r.stats.unresolved_dirs == 1
+        assert r.stats.dirs_abandoned == 0
+        assert r.tick_once() == 0  # 第 5 拍：达上限放弃
+    stats = r.stats.to_dict()
+    assert stats["dirs_abandoned"] == 1
+    assert stats["unresolved_dirs"] == 0, "放弃是终态，不再计入 unresolved"
+
+
+def test_no_pending_dirs_yields_zero_gauges(tmp_path):
+    """空 listing：三个观测计数全 0（负向对照，防 gauge 悬空假阳性）。"""
+    def shell_fn(cmd, _t):
+        if cmd.startswith("ls -l /data/ylog/uniview_exception"):
+            return _ls_l([])
+        return None
+
+    r = _make_reconciler(
+        tmp_path, emitter=_RecordingEmitter(), shell_fn=shell_fn,
+        pull_fn=lambda *_a, **_k: True,
+    )
+    assert r.tick_once() == 0
+    stats = r.stats.to_dict()
+    assert (stats["unresolved_dirs"], stats["dirs_abandoned"],
+            stats["dirs_oversized_skipped"]) == (0, 0, 0)
+
+
+def test_oversized_skip_counter_bridged_to_stats(tmp_path):
+    """#2252 降级路径的目录数经 reconciler_stats 桥出（此前只有日志/DLE extra）。"""
+    ev = _big_device_event_dir(tmp_path, "NE.103000003")
+    pulls: List[str] = []
+    r = _make_reconciler(
+        tmp_path, emitter=_RecordingEmitter(), device_log_client=_FakeDleClient(),
+        shell_fn=_oversized_shell_fn(1945600),
+        pull_fn=_recording_pull_fn(pulls, ev),
+    )
+    assert r.tick_once() == 1
+    stats = r.stats.to_dict()
+    assert stats["dirs_oversized_skipped"] == 1
+    assert stats["unresolved_dirs"] == 0, "降级发射完成即落账，不挂 unresolved"
