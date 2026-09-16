@@ -32,7 +32,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 DOC = ROOT / "docs" / "development" / "environment-variables.md"
 SCAN_ROOT = ROOT / "backend"
-SCAN_SKIP_PARTS = {"__pycache__", "scripts"}
+#: 相对 ``SCAN_ROOT`` 的**组件**跳过（整棵子树，任何层级命中即跳）：只有字节码缓存。
+#: 不要把 ``scripts`` 写进来——组件是相对 ``backend/`` 取的，会连
+#: ``backend/scripts/**`` 一起跳过（#2026 实测：控制面脚本目录 21 个文件从清单消失，
+#: ``STP_INITIAL_ADMIN_*`` 等读取名对门禁不可见而门禁仍报 OK，并反过来建议删除
+#: 只在该目录读取的声明）。要排除 agent 侧版本化脚本目录，用下面按路径前缀的
+#: ``SCAN_SKIP_TREES``。
+SCAN_SKIP_PARTS = {"__pycache__"}
+#: 相对 ``SCAN_ROOT`` 的**子树前缀**跳过：``backend/agent/scripts/**``——版本化脚本
+#: 目录的环境契约见 ADR-0020，不是控制面运行时读取面（#2026 前身语义）。
+SCAN_SKIP_TREES = (("agent", "scripts"),)
 SKIP_PARTS = {"__pycache__", ".git", ".wt", "node_modules", ".venv", "venv"}
 
 
@@ -136,12 +145,23 @@ _INTERNAL_ONLY: dict[str, str] = {
     "STP_AGENT_VERSION": "hot-update 写入的版本标记（派生值，不自设）",
     "STP_ALLOW_UNSAFE_TEST_DATABASE_URL": "测试守卫逃生门：仅本地测试库用，生产禁止设置",
     "STP_ARTIFACT_DIGEST_CACHE": "制品摘要缓存的紧急关闭开关（内部实现细节）",
+    # #2026：以下 8 条随「`backend/scripts/**` 不再被误跳」首次进入清单——均为一次性
+    # 诊断/引导脚本的 CLI 等价入参（各自有 `--backend` / `--host-id` / `--env-file`
+    # 或本机默认值），不属部署环境配置，故声明内部而非登记进运维模板。
+    "STP_AUDIT_BACKEND": "一次性诊断脚本（audit_stage_a_env / preflight_control_plane）的 `--backend` 等价项；刻意无内置默认地址（不硬编码生产地址）",
+    "STP_AUDIT_ENV_FILE": "同上脚本的 `--env-file` 等价项（被审计的 .env 路径），非部署环境配置",
+    "STP_BACKEND_URL": "一次性运维脚本（batch_hot_update）的控制面地址覆盖，默认本机 `127.0.0.1:8000`",
     "STP_DEDUP_LOG_ENCODING": "去重日志文件编码（locale 细节，跟随机型）",
     "STP_DEDUP_PLACE": "去重扫描写入的站点标签（元数据；由采集侧脚本语境决定）",
     "STP_DEVICE_SERIAL": "脚本运行时注入：Agent 为脚本进程注入设备序列号",
+    "STP_EXTRACT_BACKEND": "一次性提取脚本（jira_extract_run52）的 `--backend` 等价项，无内置默认地址",
+    "STP_INITIAL_ADMIN_PASSWORD": "站点安装链 S3 受控首管理员引导的一次性入参（tools/site_config 以子进程环境注入，密码只经环境）；刻意不进 .env 模板，避免凭据落盘",
+    "STP_INITIAL_ADMIN_USER": "同 STP_INITIAL_ADMIN_PASSWORD（受控首管理员引导的用户名入参）",
     "STP_NOTIFY_SAQ_RETRIES": "读取点仅存在于测试（断言 _int_env 行为）",
+    "STP_SMOKE_HOST_ID": "真机冒烟脚本（sprint4_real_device_verify）的 `--host-id` 等价项，无内置默认",
     "STP_SMOKE_ORIGIN": "测试用：smoke 夹具断言 origin",
     "STP_STEP_PARAMS": "脚本运行时注入：步骤参数 JSON（Agent→脚本协议）",
+    "STP_VERIFY_BACKEND": "冒烟/校验脚本（smoke_jira_api / sprint4_real_device_verify）的 `--backend` 等价项，无内置默认地址",
     "STP_WATCHER_AEE_RECONCILE_HOSTS": "目标机本地选择性对账清单（现场排障临时用，默认空=全量）",
     "SUDO_UID": "sudo 调用时由系统注入（stp_agent_priv）",
     "SUDO_GID": "sudo 调用时由系统注入（stp_agent_priv）",
@@ -163,8 +183,10 @@ def _normalize_default(raw: str | None) -> str:
 
 def _iter_py_files(scan_root: Path):
     for path in sorted(scan_root.rglob("*.py")):
-        parts = set(path.relative_to(scan_root).parts)
-        if parts & SCAN_SKIP_PARTS:
+        rel = path.relative_to(scan_root)
+        if set(rel.parts) & SCAN_SKIP_PARTS:
+            continue
+        if any(rel.parts[: len(tree)] == tree for tree in SCAN_SKIP_TREES):
             continue
         if any(part in SKIP_PARTS for part in _rel_parts(path)):
             continue
