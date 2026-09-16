@@ -47,7 +47,10 @@ from backend.api.routes.auth import get_current_active_user
 from backend.models.plan_run import PlanRun
 from backend.realtime.socketio_server import broadcast_plan_run_status, broadcast_run_job_update
 from backend.services.aggregator import PlanAggregator
-from backend.services.device_log_event import resolve_initial_upload_state
+from backend.services.device_log_event import (
+    is_unassigned_remote_path,
+    resolve_initial_upload_state,
+)
 from backend.services.host_maintenance import HostMaintenanceConflict, in_maintenance_window
 from backend.services.host_retirement import (
     retired_heartbeat_context,
@@ -2613,12 +2616,29 @@ async def ingest_device_log_events(
                     effective_plan_run = (
                         ev.plan_run_id if ev.plan_run_id is not None else row.plan_run_id
                     )
-                    row.remote_path = _validated_remote_path(
+                    incoming_path = _validated_remote_path(
                         ev.remote_path,
                         plan_run_id=effective_plan_run,
                         event_id=str(row.id),
                         unassigned_fallback=True,
                     )
+                    # #2316 决定 1：行已归属、且行内已有权威路径时，Agent 带来的
+                    # devices/unassigned/ 路径**不覆盖**它——Agent 不知道中心侧的搬移
+                    # （方案 C），此后每次补丁（REMOTE/PRUNED/PULL_FAILED）都会带那条
+                    # 陈旧路径。400 会把良性陈旧路径变成状态更新失败（Agent outbox
+                    # 重试/死信，#380/#764/#1550 同族），故只忽略 + 留痕。
+                    # 行内路径为空时仍接受（此时它是唯一信息）。
+                    if (
+                        row.plan_run_id is not None
+                        and row.remote_path
+                        and is_unassigned_remote_path(incoming_path)
+                    ):
+                        logger.info(
+                            "dle_unassigned_path_ignored id=%s plan_run=%s incoming=%s",
+                            row.id, row.plan_run_id, incoming_path,
+                        )
+                    else:
+                        row.remote_path = incoming_path
                     row.checksum = ev.checksum
                     row.size_bytes = ev.size_bytes
                     # #1052：plan_run_id 只在 payload 显式携带时更新——此前

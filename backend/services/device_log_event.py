@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timedelta, timezone
-from typing import Sequence
+from pathlib import Path
+from typing import Optional, Sequence
 
 from sqlalchemy import bindparam, func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -172,6 +174,8 @@ def associate_unassigned_events_to_plan_run(db: Session, plan_run_id: int) -> in
 
     Does not move NFS paths; ``remote_path`` may stay under
     ``devices/unassigned/{event_id}/`` — extract still copies via that path.
+    搬移由 :func:`adopt_unassigned_event_dirs` 在 extract 前单独完成（#2316 方案 C：
+    只搬已上送完的 extractable 态；在途态与历史残留仍由 #2262 方案 A 兜底）。
     """
     from backend.services.plan_run_scan_scope import load_plan_run_device_serials
 
@@ -224,6 +228,109 @@ def associate_unassigned_events_to_plan_run(db: Session, plan_run_id: int) -> in
             plan_run_id, n,
         )
     return n
+
+
+def is_unassigned_remote_path(raw: Optional[str]) -> bool:
+    """路径是否落在 ``devices/unassigned/`` 下（#2316 决定 1 的判据用）。
+
+    与 retention 侧的 ``remote_path LIKE '%/devices/unassigned/%'`` 同口径：先按
+    字符串判形态，再由各自的容器化校验把关（此处只用于「要不要忽略这条补丁」）。
+    """
+    return bool(raw) and "/devices/unassigned/" in str(raw)
+
+
+def adopt_unassigned_event_dirs(db: Session, plan_run_id: int) -> int:
+    """#2316（方案 C）：把本 run 已归属、且 ``remote_path`` 仍在
+    ``devices/unassigned/{event_id}/`` 的事件目录**搬进**
+    ``devices/{plan_run_id}/{event_id}/``，此后由 run 级 purge 统一回收。
+
+    **只搬 extractable 态**（``_REMOTE_STATES``：REMOTE / ARCHIVED / PRUNED）：这些
+    事件的副本已上送完成，Agent 不会再往源目录写；在途态搬移会与 Agent 的写入分叉
+    （它仍按自己算出的 unassigned 路径写），留给 #2262 方案 A（行删时清目录）兜底。
+
+    **每次 extract 前都跑**（而非只在关联那一刻）：行可能先关联、后才变 REMOTE
+    （Agent 末次补丁晚到），那一刻没有别人会再搬它。
+
+    幂等/可续——DB 提交与文件系统 rename 无法原子，故以**盘上实况**为准：
+    目标在、源不在 → 只补行更新（上次崩在 rename 与 commit 之间）；源在、目标不在
+    → rename 后更新行；两者都在 → 跳过并告警（不猜哪个权威）；都不在 → 跳过
+    （extract 侧会记 missing）。rename 失败一律**不动行**（保持 unassigned 路径，
+    extract 照常可读——fail-safe，绝不做跨设备拷贝式的半搬运）。
+
+    返回本次完成归属（含仅补行更新）的事件数。
+    """
+    from backend.core.storage_root import resolve_shared_storage_root
+
+    root = resolve_shared_storage_root()
+    if not root:
+        logger.warning("adopt_unassigned_skipped_root_unset plan_run=%d", plan_run_id)
+        return 0
+
+    rows = db.execute(
+        select(DeviceLogEvent.id, DeviceLogEvent.remote_path).where(
+            DeviceLogEvent.plan_run_id == plan_run_id,
+            DeviceLogEvent.state.in_(_REMOTE_STATES),
+            DeviceLogEvent.remote_path.like("%/devices/unassigned/%"),
+        )
+    ).all()
+    if not rows:
+        return 0
+
+    devices_root = (Path(root) / "devices").resolve()
+    unassigned_root = devices_root / "unassigned"
+    run_root = devices_root / str(int(plan_run_id))
+    adopted = 0
+    for event_id, raw_path in rows:
+        # 事件目录 = ``unassigned/{event_id}/``，而 remote_path 指向**它内部的一层**
+        # （``{event_id}/{basename}``，见 event_uploader 的 dst 拼装；生产实测即此形态）。
+        # 用行 id 定位事件目录是确定的，再用「remote_path 必须落在该目录内」把两者绑定。
+        src_event_dir = unassigned_root / str(event_id)
+        dst_event_dir = run_root / str(event_id)
+        try:
+            p = Path(str(raw_path)).resolve()
+        except OSError:
+            p = None
+        if p is None or not p.is_relative_to(src_event_dir):
+            # 形态不符（含借 '..' 越界）：不搬，等方案 A/人工处理。
+            logger.warning(
+                "adopt_unassigned_path_invalid plan_run=%d path=%s",
+                plan_run_id, raw_path,
+            )
+            continue
+        tail = p.relative_to(src_event_dir)
+        try:
+            if dst_event_dir.exists() and not src_event_dir.exists():
+                pass  # 上次崩在 rename 与 commit 之间：只补行更新
+            elif src_event_dir.exists() and not dst_event_dir.exists():
+                dst_event_dir.parent.mkdir(parents=True, exist_ok=True)
+                os.rename(src_event_dir, dst_event_dir)
+            elif src_event_dir.exists() and dst_event_dir.exists():
+                logger.warning(
+                    "adopt_unassigned_both_present plan_run=%d src=%s dst=%s — skipped",
+                    plan_run_id, src_event_dir, dst_event_dir,
+                )
+                continue
+            else:
+                continue  # 盘上都不在：extract 侧记 missing
+        except OSError:
+            logger.warning(
+                "adopt_unassigned_rename_failed plan_run=%d path=%s — 保持 unassigned 路径",
+                plan_run_id, raw_path, exc_info=True,
+            )
+            continue
+        db.execute(
+            update(DeviceLogEvent)
+            .where(DeviceLogEvent.id == event_id)
+            .values(
+                remote_path=str(dst_event_dir / tail),
+                updated_at=datetime.now(timezone.utc),
+            )
+        )
+        adopted += 1
+    if adopted:
+        db.commit()
+        logger.info("adopt_unassigned_done plan_run=%d events=%d", plan_run_id, adopted)
+    return adopted
 
 
 def mark_events_archived(

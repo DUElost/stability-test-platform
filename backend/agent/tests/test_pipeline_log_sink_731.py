@@ -200,3 +200,43 @@ class TestPumpWiresPersistentSink:
 
         assert outcome.reason is None
         assert outcome.stdout.strip() == "ok"
+
+
+def test_close_from_other_thread_wins_over_inflight_write(monkeypatch, tmp_path):
+    """#2285：#2061 的收口通路本身有窗口——close() 与惰性 open() 交错会留下重开的句柄。
+
+    构造：writer 已在 ``write()`` 里、尚未落地句柄时，主线程（模拟
+    ``_close_sinks_for_abandoned``）调 ``close()``。加锁前实现会在此后新建句柄且
+    再无人关闭它（fd + 尾部日志泄漏）；加锁后 close() 等 write 写完再关，
+    返回即 ``_fh is None``。
+    """
+    import threading
+
+    from backend.agent import pipeline_engine as pe
+
+    path = tmp_path / "race.log"
+    sink = pe._StepLogSink(str(path))
+    real_open = builtins.open
+    in_open = threading.Event()
+    release = threading.Event()
+
+    def slow_open(*args, **kwargs):
+        in_open.set()
+        assert release.wait(5), "测试自身未推进"
+        return real_open(*args, **kwargs)
+
+    monkeypatch.setattr(pe, "open", slow_open, raising=False)
+
+    writer = threading.Thread(target=sink.write, args=("late line\n",))
+    writer.start()
+    assert in_open.wait(5), "writer 未进入 open()"
+
+    closer = threading.Thread(target=sink.close)
+    closer.start()  # 此刻 writer 持锁；close() 必须等它写完
+    release.set()
+    writer.join(5)
+    closer.join(5)
+
+    assert not writer.is_alive() and not closer.is_alive(), "死锁：close/write 未收口"
+    assert sink._fh is None, "close() 之后不得残留（重开的）句柄——#2285 的泄漏形态"
+    assert path.read_text(encoding="utf-8") == "late line\n", "在途行不得丢"

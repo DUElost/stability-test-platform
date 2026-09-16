@@ -19,7 +19,8 @@ root 操作收敛为**固定子命令 + 路径/属主/内容校验**：
     deps-marker      写依赖刷新标记
     fix-ownership    安装目录属主回收（symlink 安全：chown -h）
     restart          重启 Agent systemd 服务
-    ensure-udev-rule 写固定 udev 规则（MTK ttyACM → 0666）并 reload（#2133/D5）
+    ensure-udev-rule 写固定 udev 规则（MTK ttyACM → 0660+dialout，无组才 0666）
+                    并 reload（#2133/D5；#2284）
     usb-authorized   切换 MTK 设备 sysfs authorized（port 正则 + vendor 校验）
 
 不变量：
@@ -57,11 +58,43 @@ UDEVADM_BIN = "/usr/bin/udevadm"
 MAX_SCHEMA_BYTES = 2 * 1024 * 1024
 MAX_ENV_PAYLOAD_BYTES = 64 * 1024
 
-# ── flash 链窄面（ADR-0037 D5 / #2133）──────────────────────────────────────
-# udev 规则：固定路径 + 固定内容（与已发布 flash_preflight v1.0.x 的
-# `_UDEV_RULE_PATH` / `_UDEV_RULE_LINE` 同源；0e8d = MediaTek ttyACM 0666）。
+# ── flash 链窄面（ADR-0037 D5 / #2133；#2284 最小权限）─────────────────────
+# udev 规则：固定路径 + **两个固定形态之一**（与 flash_preflight v1.0.3 的
+# `_UDEV_RULE_PATH` / `_UDEV_RULE_LINE`(_LEGACY) 同源；0e8d = MediaTek ttyACM）。
+# #2284：有 dialout 组 → 0660 + GROUP（Agent 用户属该组即可写，其它本地用户不可写）；
+# 无该组 → 0666（否则设备节点不可写、刷机不可用）。形态由**本机系统事实**决定，
+# 调用方仍无参数面（D5 的窄面约束不变）。
 UDEV_RULE_PATH = "/etc/udev/rules.d/98-ttyacm-mtk.rules"
-UDEV_RULE_LINE = 'KERNEL=="ttyACM*", ATTRS{idVendor}=="0e8d", MODE="0666"\n'
+UDEV_RULE_LINE = (
+    'KERNEL=="ttyACM*", ATTRS{idVendor}=="0e8d", GROUP="dialout", MODE="0660"\n'
+)
+UDEV_RULE_LINE_LEGACY = (
+    'KERNEL=="ttyACM*", ATTRS{idVendor}=="0e8d", MODE="0666"\n'
+)
+
+
+def _udev_rule_line() -> str:
+    """按本机是否具备 dialout 组选择规则形态（#2284）。"""
+    try:
+        grp.getgrnam("dialout")
+    except KeyError:
+        return UDEV_RULE_LINE_LEGACY
+    return UDEV_RULE_LINE
+
+
+def _udev_rule_present(body, line: str) -> bool:
+    """文件内容是否**已含**目标规则行（逐行比对，忽略注释/空行）。
+
+    #2284：安装链会在规则前写一行「为什么是这个形态」的说明（issue 建议 3：
+    能回答「本机为什么是 0666」）。若按整文件比对，wrapper 每次都会判「不一致」
+    重写一次，把理由擦掉且白记一次 changed；故只看目标行在不在。
+    """
+    if not body:
+        return False
+    wanted = line.strip()
+    return any(seg.strip() == wanted for seg in body.splitlines())
+
+
 # sysfs USB 设备根：authorized 门控的运行期写目标（flash_firmware 同源常量）。
 # 注意：`/sys/bus/usb/devices/<port>` 在内核 sysfs 里是**符号链接**，指向
 # `/sys/devices/.../<port>`；因此设备目录这一跳必须允许解析（校验解析结果），
@@ -844,10 +877,11 @@ def cmd_restart(args, conf):
 
 
 def cmd_ensure_udev_rule(args, conf):
-    """写固定 udev 规则（MTK ttyACM → MODE 0666）并 reload（#2133 / D5）。
+    """写固定 udev 规则（MTK ttyACM）并 reload（#2133 / D5；#2284 最小权限）。
 
-    面约束：路径与内容都是常量（无参数面）；目录逐级 O_NOFOLLOW 打开、写入
-    走临时文件 + os.replace（不跟随目标位置的 symlink）；幂等——内容一致时
+    面约束：路径是常量，内容是**两个固定形态之一**（由本机是否具备 dialout 组
+    决定，见 `_udev_rule_line`）——调用方仍无参数面；目录逐级 O_NOFOLLOW 打开、
+    写入走临时文件 + os.replace（不跟随目标位置的 symlink）；幂等——内容一致时
     不重写，仅执行 reload。``udevadm control --reload`` 失败即拒绝；``trigger``
     为尽力而为（与旧版 flash_preflight 修复分支同语义）。
     """
@@ -856,6 +890,7 @@ def cmd_ensure_udev_rule(args, conf):
         _fail("udevadm not found: %s" % UDEVADM_BIN)
     rules_dir = os.path.dirname(UDEV_RULE_PATH)
     name = os.path.basename(UDEV_RULE_PATH)
+    line = _udev_rule_line()
     changed = 0
     descriptor = _open_directory(rules_dir, create=True)
     try:
@@ -863,8 +898,8 @@ def cmd_ensure_udev_rule(args, conf):
             body, _ = _read_regular_at(descriptor, name, 4096)
         except (PrivError, OSError):
             body = None
-        if body != UDEV_RULE_LINE:
-            _atomic_write_at(descriptor, name, UDEV_RULE_LINE, 0o644)
+        if not _udev_rule_present(body, line):
+            _atomic_write_at(descriptor, name, line, 0o644)
             changed = 1
     finally:
         os.close(descriptor)

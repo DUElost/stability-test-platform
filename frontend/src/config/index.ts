@@ -12,6 +12,9 @@ const isLocalhost =
 const envApiUrl = import.meta.env.VITE_API_BASE_URL as string | undefined;
 
 // 空字符串或未设置 → 非 localhost 时用当前页面 origin（Nginx 反代 /api + /socket.io）
+// ⚠️ localhost 与 127.0.0.1 是两个站点（site 只看 host）：走下方 localhost:8000 回退时，
+// 页面必须也用 localhost 打开，否则 host-only SameSite=Lax 会话 cookie 跨站不存储，
+// 表现为接口 401 / Socket.IO「Authentication required」（#2330，compose dev 同理）。
 export const API_BASE_URL =
   envApiUrl !== undefined && envApiUrl !== ''
     ? envApiUrl

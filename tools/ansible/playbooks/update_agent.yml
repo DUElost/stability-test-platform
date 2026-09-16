@@ -828,7 +828,7 @@
     # ── 刷机前置归位（#2133 / ADR-0037 D5，opt-in）────────────────────────
     # 运行期不再装包/加组/写规则（wrapper 窄面只提供固定 udev 自愈）；本段由
     # 运维显式开启（-e agent_ensure_flash_prereqs=true）给刷机主机补齐：
-    #   dialout 成员 + MTK ttyACM 0666 固定规则 + Qt/X 运行库五件。
+    #   dialout 成员 + MTK ttyACM 规则（0660+dialout，无组才 0666）+ Qt/X 运行库五件。
     # 默认关闭：常规更新不触碰系统包面。刻意放在门禁释放之后——本段失败不得
     # 让升级门禁悬挂（#1249 教训）；缺失项由 flash_preflight 如实报出。
     - name: Check dialout group exists (#2133)
@@ -851,7 +851,24 @@
         - agent_ensure_flash_prereqs | default(false) | bool
         - agent_flash_dialout_group.rc | default(1) == 0
 
-    - name: Ensure MTK ttyACM 0666 udev rule (#2133)
+    # #2284：规则形态随本机是否有 dialout 组二选一（与 install_agent.sh /
+    # wrapper ensure-udev-rule 同源，两个固定形态）。0660 + GROUP=dialout 是
+    # 最小权限形态；无该组才退化为 0666（否则设备节点不可写、刷机不可用）。
+    - name: Ensure MTK ttyACM udev rule — 0660 + dialout (#2133/#2284)
+      become: true
+      ansible.builtin.copy:
+        dest: /etc/udev/rules.d/98-ttyacm-mtk.rules
+        content: "KERNEL==\"ttyACM*\", ATTRS{idVendor}==\"0e8d\", GROUP=\"dialout\", MODE=\"0660\"\n"
+        owner: root
+        group: root
+        mode: "0644"
+      register: agent_flash_udev_rule_0660
+      failed_when: false
+      when:
+        - agent_ensure_flash_prereqs | default(false) | bool
+        - agent_flash_dialout_group.rc | default(1) == 0
+
+    - name: Ensure MTK ttyACM udev rule — 0666 fallback, no dialout (#2133/#2284)
       become: true
       ansible.builtin.copy:
         dest: /etc/udev/rules.d/98-ttyacm-mtk.rules
@@ -859,9 +876,11 @@
         owner: root
         group: root
         mode: "0644"
-      register: agent_flash_udev_rule
+      register: agent_flash_udev_rule_0666
       failed_when: false
-      when: agent_ensure_flash_prereqs | default(false) | bool
+      when:
+        - agent_ensure_flash_prereqs | default(false) | bool
+        - agent_flash_dialout_group.rc | default(1) != 0
 
     - name: Reload udev rules after rule change (#2133)
       become: true
@@ -870,7 +889,9 @@
       failed_when: false
       when:
         - agent_ensure_flash_prereqs | default(false) | bool
-        - agent_flash_udev_rule.changed | default(false)
+        # 两个 copy 任务互补触发，故取并集（register 各自独立，避免被 skip 覆盖）
+        - (agent_flash_udev_rule_0660.changed | default(false))
+          or (agent_flash_udev_rule_0666.changed | default(false))
 
     - name: Ensure flash prerequisite packages (#2133)
       become: true

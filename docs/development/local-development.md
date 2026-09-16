@@ -37,6 +37,12 @@ docker compose up --build
 | PostgreSQL | `15432` |
 | Redis | `16379` |
 
+**浏览器入口必须用 `http://localhost:15173`，勿用 `127.0.0.1`**（#2330）：
+compose 构建把 API/WS 基址烤成 `localhost:18000`，而 `127.0.0.1` 与 `localhost` 是两个
+站点（site 只看 host），host-only `SameSite=Lax` 会话 cookie 跨站既不存储也不发送——
+用 `127.0.0.1` 打开会「假登录」（接口 200 但无会话）且 Socket.IO 恒「已断开」。
+生产前端经 `127.0.0.1` 直访同理会回退 `localhost:8000` 而失效（现实入口为 LAN IP/域名）。
+
 约束：
 
 - 建议在**独立 checkout** 中运行 Compose，不要在生产 checkout 内直接执行。
