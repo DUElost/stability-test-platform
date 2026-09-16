@@ -1087,6 +1087,25 @@ def test_monitoring_install_that_still_leaves_binaries_missing_fails_closed(tmp_
     assert "install_monitoring" in codes(report)
 
 
+def test_local_ops_timezone_falls_back_to_timedatectl(monkeypatch):
+    """没有 /etc/timezone 的主机（238 现场即如此）必须走 timedatectl，而不是返回空串。
+
+    空串会让 S1 的时区检查退化成 BLOCKED timezone_unknown——本该能判定的机器被判成「读不到」。
+    """
+    from tools.site_config.ops import CommandResult, LocalOps
+
+    def _no_timezone_file(self, *args, **kwargs):
+        raise FileNotFoundError("/etc/timezone")
+
+    monkeypatch.setattr(Path, "read_text", _no_timezone_file)
+    monkeypatch.setattr(
+        LocalOps, "run",
+        lambda self, argv, **kwargs: CommandResult(tuple(argv), 0, "Asia/Shanghai\n"),
+    )
+
+    assert LocalOps().timezone() == "Asia/Shanghai"
+
+
 def test_local_ops_reports_a_missing_command_instead_of_raising():
     """命令不存在是一种结果（127），不是异常：否则一个缺失的外部命令能崩掉整次安装。"""
     from tools.site_config.ops import LocalOps
