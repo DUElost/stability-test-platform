@@ -918,3 +918,100 @@ def test_run_extract_sync_legacy_flat_merge_collision_renames(
     assert (jira / "Result_MergeFiles_mtk.xls").read_bytes() == b"second"
     assert extracted == 3
     assert "dedup_extract_merge_xls_renamed_same_name" in caplog.text
+
+
+# ── #2316（方案 C）：关联后把 unassigned 事件目录搬进 run 作用域 ──────────────
+
+
+def _seed_unassigned_row(db, plan_run_id, host_id, device, event_id, nfs, *, state, basename):
+    """真实形态：remote_path = {nfs}/devices/unassigned/{event_id}/{basename}。"""
+    src = nfs / "devices" / "unassigned" / str(event_id) / basename
+    src.mkdir(parents=True, exist_ok=True)
+    (src / "main.dbg").write_text("ne", encoding="utf-8")
+    db.add(DeviceLogEvent(
+        id=event_id,
+        serial=device.serial,
+        platform="MTK",
+        event_type="NE",
+        detected_at=datetime.now(timezone.utc),
+        state=state,
+        local_path="/tmp/local",
+        remote_path=str(src),
+        plan_run_id=plan_run_id,
+        host_id=str(host_id),
+    ))
+    db.commit()
+    return src
+
+
+def test_adopt_unassigned_moves_event_dir_into_run_scope(
+    db_session, sample_plan_run, sample_host, sample_device, tmp_path, monkeypatch,
+):
+    """#2316：搬移后 remote_path 指向 devices/{run_id}/{event_id}/…，源目录消失。"""
+    from backend.services.device_log_event import adopt_unassigned_event_dirs
+
+    nfs = tmp_path / "nfs"
+    nfs.mkdir()
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(nfs))
+    event_id = uuid4()
+    src = _seed_unassigned_row(
+        db_session, sample_plan_run.id, sample_host.id, sample_device,
+        event_id, nfs, state=EventState.REMOTE.value, basename="2026_0812_spike_db.99.ANR",
+    )
+
+    n = adopt_unassigned_event_dirs(db_session, sample_plan_run.id)
+
+    assert n == 1
+    db_session.expire_all()
+    row = db_session.get(DeviceLogEvent, event_id)
+    dst = nfs / "devices" / str(sample_plan_run.id) / str(event_id) / "2026_0812_spike_db.99.ANR"
+    assert row.remote_path == str(dst)
+    assert not src.exists() and (dst / "main.dbg").read_text(encoding="utf-8") == "ne"
+
+
+def test_adopt_unassigned_is_resumable_after_crash(
+    db_session, sample_plan_run, sample_host, sample_device, tmp_path, monkeypatch,
+):
+    """崩溃窗（已 rename、未 commit）→ 下次只补行更新（以盘上实况为准）。"""
+    from backend.services.device_log_event import adopt_unassigned_event_dirs
+
+    nfs = tmp_path / "nfs"
+    nfs.mkdir()
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(nfs))
+    event_id = uuid4()
+    src = _seed_unassigned_row(
+        db_session, sample_plan_run.id, sample_host.id, sample_device,
+        event_id, nfs, state=EventState.REMOTE.value, basename="b",
+    )
+    # 模拟「rename 完成、commit 前崩溃」：**整个事件目录**已搬走，行还指着旧路径
+    src_event_dir = src.parent
+    dst = nfs / "devices" / str(sample_plan_run.id) / str(event_id) / "b"
+    dst.parent.mkdir(parents=True)
+    src_event_dir.rename(dst.parent)
+
+    n = adopt_unassigned_event_dirs(db_session, sample_plan_run.id)
+
+    assert n == 1
+    db_session.expire_all()
+    assert db_session.get(DeviceLogEvent, event_id).remote_path == str(dst)
+
+
+def test_adopt_unassigned_skips_inflight_states(
+    db_session, sample_plan_run, sample_host, sample_device, tmp_path, monkeypatch,
+):
+    """在途态（UPLOADING）不搬：Agent 仍按自己算出的 unassigned 路径写，搬了会分叉。"""
+    from backend.services.device_log_event import adopt_unassigned_event_dirs
+
+    nfs = tmp_path / "nfs"
+    nfs.mkdir()
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(nfs))
+    event_id = uuid4()
+    src = _seed_unassigned_row(
+        db_session, sample_plan_run.id, sample_host.id, sample_device,
+        event_id, nfs, state=EventState.UPLOADING.value, basename="b",
+    )
+
+    assert adopt_unassigned_event_dirs(db_session, sample_plan_run.id) == 0
+    db_session.expire_all()
+    assert db_session.get(DeviceLogEvent, event_id).remote_path == str(src)
+    assert src.exists()
