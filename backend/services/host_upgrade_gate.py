@@ -30,6 +30,7 @@ from backend.models.enums import JobStatus
 from backend.models.host import Host
 from backend.models.job import JobInstance
 from backend.models.plan_run import PlanRun
+from backend.services.plan_run_abort import abort_pending_job_ids
 from backend.services.host_maintenance import (
     HostMaintenanceConflict,
     acquire_maintenance_window,
@@ -137,7 +138,12 @@ def active_jobs_for_host(db: Session, host_id: str) -> list[JobInstance]:
 
 
 def _abort_pending_ids(db: Session, rows: list[JobInstance]) -> set[int]:
-    """返回 run_context 已带 ``abort_requested`` 的 Job id 集合。"""
+    """返回**在窗**的 abort 请求覆盖到的 Job id 集合（主体感知，#2270）。
+
+    旧判据是「run_context 里存在 ``abort_requested`` 键」——host 级 abort 不写 run 级
+    时钟（ADR-0043 D1），于是同 run 的**旁主机**也被算作待中止：热更新门禁对它们永久
+    409，而 reaper 按主体语义永远不会回收那些 job（不是变慢，是永不收敛）。
+    """
     pr_ids = {j.plan_run_id for j in rows if j.plan_run_id is not None}
     if not pr_ids:
         return set()
@@ -148,10 +154,9 @@ def _abort_pending_ids(db: Session, rows: list[JobInstance]) -> set[int]:
     pending: set[int] = set()
     for job in rows:
         pr = pr_map.get(job.plan_run_id)
-        if pr is None or not isinstance(pr.run_context, dict):
+        if pr is None:
             continue
-        if "abort_requested" in pr.run_context:
-            pending.add(job.id)
+        pending |= abort_pending_job_ids(pr.run_context, [(job.id, job.host_id)])
     return pending
 
 

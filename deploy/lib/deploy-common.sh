@@ -45,10 +45,13 @@ deploy_defaults() {
     STP_SITE_FILE="${STP_SITE_FILE:-/etc/stp/site.yaml}"
     STP_BINDINGS_DIR="${STP_BINDINGS_DIR:-/etc/stp/bindings}"
     STP_STATE_DIR="${STP_STATE_DIR:-/var/lib/stp}"
+    # #2276：显式给出与「落到默认值」要分开记——装机链在未显式给出时应优先用
+    # site.yaml 记录的 release.bundle，而不是拿默认值判存在。
+    STP_BUNDLE_EXPLICIT="${STP_BUNDLE:-}"
     STP_BUNDLE="${STP_BUNDLE:-/srv/stp-bundle}"
     STP_AGENTS_INVENTORY="${STP_AGENTS_INVENTORY:-${HOME:-/root}/hosts.ini}"
     STP_SITE_ID="${STP_SITE_ID:-city-b}"
-    export DEPLOY_REPO_ROOT STP_SITE_FILE STP_BINDINGS_DIR STP_STATE_DIR STP_BUNDLE
+    export DEPLOY_REPO_ROOT STP_SITE_FILE STP_BINDINGS_DIR STP_STATE_DIR STP_BUNDLE STP_BUNDLE_EXPLICIT
     export STP_AGENTS_INVENTORY STP_SITE_ID
 }
 
@@ -92,7 +95,9 @@ deploy_stp() {
     "$DEPLOY_PYTHON" -m tools.site_config "$@"
 }
 
-# 从 site.yaml 读站点标识与目标主机（仅两个标量；语义校验由 validate/install 负责）。
+# 从 site.yaml 读站点标识、目标主机与发布物路径（三个标量；语义校验由 validate/install 负责）。
+# 第三行（release.bundle）供「命令行给的 bundle 与站点记录不一致」的判据使用（#2276）；
+# 站点未记录时打印空行，调用方按「未记录」处理。
 deploy_site_identity() {
     cd "$DEPLOY_REPO_ROOT"
     "$DEPLOY_PYTHON" - "$STP_SITE_FILE" <<'PY'
@@ -104,6 +109,7 @@ with open(sys.argv[1], encoding="utf-8") as handle:
     data = yaml.safe_load(handle)
 print(data["site"]["id"])
 print(data["control_plane"]["target"])
+print((data.get("release") or {}).get("bundle", ""))
 PY
 }
 

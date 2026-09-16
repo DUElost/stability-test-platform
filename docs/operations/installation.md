@@ -229,6 +229,10 @@ sudo ./deploy/install.sh handover
 ## 7. 离线与切换发布物
 
 - 发布物目录由 `$STP_BUNDLE`（默认 `/srv/stp-bundle`）决定；已由发布渠道备好时把它指过去即可跳过第 1 步；
+- **站点已存在时，安装真正用的是 `site.yaml` 记录的 `release.bundle`**（#2276）：此时
+  `$STP_BUNDLE` 与记录**不一致**会被显式拒绝（`refuse to guess`，退出码 2）——先用记录
+  路径重跑，或显式编辑 `site.yaml` 的 `release.bundle` 后再跑。`deploy/agent/install.sh`
+  同理：未导出 `$STP_BUNDLE` 时以 `site.yaml` 记录为准，不再因默认值不存在而误判「不可装」；
 - 目标机无外网时，发布物需带 `wheelhouse/`（`build_bundle.py --wheelhouse`）并声明
   `network.dependency_mode: offline`；
 - 前端 `dist-prod` 缺失时构建会报 `bundle_frontend` 并提示

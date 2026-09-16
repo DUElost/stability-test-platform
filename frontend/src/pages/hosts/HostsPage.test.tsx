@@ -58,6 +58,14 @@ vi.mock('../../utils/api', async (importOriginal) => {
         console_status: 'SUCCESS',
         console_found: true,
       }),
+      cancel: vi.fn().mockResolvedValue({
+        ok: true,
+        host_id: 'h1',
+        console_run_id: 'con-test',
+        canceled: true,
+        status: 'canceling',
+        message: 'Cancel requested.',
+      }),
     },
     hotUpdate: {
       trigger: vi.fn().mockResolvedValue({}),
@@ -745,5 +753,48 @@ describe('ADR-0038 退役前端（#1807）', () => {
       ),
     );
     expect(api.agentInstall.trigger).not.toHaveBeenCalledWith(9);
+  });
+
+  // #2255：取消 ≠ 失败——现场验证抓到 UI 曾把显式取消报成红色「安装失败: CANCELED」
+  it('取消的安装走 info 提示，不报失败', async () => {
+    const { api } = await import('../../utils/api');
+    mockHostsList.mockResolvedValue({
+      items: [
+        {
+          id: 'h-cancel',
+          name: 'Worker-C',
+          ip: '192.0.2.77',
+          status: 'OFFLINE',
+          extra: {},
+          mount_status: {},
+          agent_installed: true,
+        },
+      ],
+      total: 1,
+    });
+    mocks.confirm.mockResolvedValue(true);
+    vi.mocked(api.agentInstall.status).mockResolvedValueOnce({
+      host_id: 'h-cancel',
+      log_path: '/var/log/stp/con-test.log',
+      status: 'canceled',
+      console_run_id: 'con-test',
+      console_status: 'CANCELED',
+      console_found: false,
+    });
+
+    const HostsPage = (await import('./HostsPage')).default;
+    render(<HostsPage />, { wrapper: createWrapper() });
+
+    fireEvent.click(await screen.findByTestId('select-all-hosts'));
+    fireEvent.click(await screen.findByRole('button', { name: /安装/ }));
+
+    await waitFor(() =>
+      expect(mocks.toast.info).toHaveBeenCalledWith(
+        expect.stringContaining('安装已取消'),
+      ),
+    );
+    expect(mocks.toast.error).not.toHaveBeenCalledWith(
+      expect.stringContaining('安装失败'),
+    );
   });
 });

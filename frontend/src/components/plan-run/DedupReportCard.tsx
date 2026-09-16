@@ -14,6 +14,7 @@ import type {
   DedupArtifact,
   DedupScanArchive,
   RunContextExtractSummary,
+  RunContextMergePlatforms,
   RunContextUploadSummary,
 } from '@/utils/api/types';
 
@@ -54,35 +55,29 @@ function formatReason(reason?: string): string {
 }
 
 /**
- * `run_context.extract` 的缺口清单两键（#2186）**尚未登记进 `types.ts`**——该目录正被在窗
- * Execution（`fix-2051-2054`）声明，本 PR 不越界改它。故此处**就地收窄**，并在相关
- * Agent Note 的 Revisit 里记了"声明释放后正式登记"的收尾项。
+ * #2288：`run_context.extract` 的缺口两键（#2186）已正式登记进 `types.ts`——此前
+ * 因目标目录被在窗 Execution 声明而**就地收窄**，那段"声明释放后正式登记"的收尾
+ * 项到此结清。下面的收窄**保留**：它挡的不是 TS 形状，而是 `run_context` 这个
+ * 无形状担保的 JSONB 里的**历史行**（缺键、旧键、类型漂移都可能真实存在）。
  */
-type ExtractSummaryWithMissing = RunContextExtractSummary & {
-  missing_items?: unknown;
-  missing_total?: unknown;
-};
-
-/** 只收字符串、只认数组——**不盲信** `run_context` 里的 JSON。 */
 function readMissingItems(extract?: RunContextExtractSummary | null): {
   items: string[];
   total: number | null;
 } {
-  const raw = (extract ?? undefined) as ExtractSummaryWithMissing | undefined;
-  const items = Array.isArray(raw?.missing_items)
-    ? raw.missing_items.filter((x): x is string => typeof x === 'string')
+  const items = Array.isArray(extract?.missing_items)
+    ? extract.missing_items.filter((x): x is string => typeof x === 'string')
     : [];
-  const total = typeof raw?.missing_total === 'number' ? raw.missing_total : null;
+  const total = typeof extract?.missing_total === 'number' ? extract.missing_total : null;
   return { items, total };
 }
 
 /**
  * `run_context.merge_platforms`（#2174 后端落盘：逐平台 merge 结果）。
  *
- * TS 侧**未登记**（与 `missing_items` 同因：`frontend/src/utils/api` 在窗被其他 Execution
- * 声明），故就地收窄 + 运行时校验；未知结果码**原样露出**，不静默吞掉后端新加的结果类型。
+ * #2288：键形状已登记进 `types.ts`（`RunContextMergePlatforms`），但本函数的入参是
+ * props 上抛的 `unknown`（`run_context` 整段都没有形状担保，见 #2032 的跟踪），故
+ * 保留运行时校验；未知结果码**原样露出**，不静默吞掉后端新加的结果类型。
  */
-type MergePlatformsPayload = { platforms?: Record<string, unknown> };
 
 /** 结果码 → 悬停解释。`no_input` 要明确写"不是失败"——它表示该平台本轮没有输入。 */
 const MERGE_PLATFORM_TITLE: Record<string, string> = {
@@ -92,7 +87,7 @@ const MERGE_PLATFORM_TITLE: Record<string, string> = {
 };
 
 function readMergePlatforms(raw: unknown): StagePart[] {
-  const platforms = (raw as MergePlatformsPayload | null | undefined)?.platforms;
+  const platforms = (raw as RunContextMergePlatforms | null | undefined)?.platforms;
   if (!platforms || typeof platforms !== 'object' || Array.isArray(platforms)) return [];
   return Object.entries(platforms)
     .filter((entry): entry is [string, string] => typeof entry[1] === 'string')
@@ -178,10 +173,19 @@ function buildStages(args: {
       parts: [{ text: '未开始（无本轮 host 计数）' }],
     });
   } else {
-    const triggered = archive.hosts_triggered ?? 0;
-    const done = archive.hosts_with_artifacts ?? 0;
+    // #2271：优先 (host, 平台) 对口径——host 级数字在「期望 2 平台只交付 1」时会
+    // 显示 ok（假绿）。老数据没有 unit 字段时回落 host 口径（hosts_expected 是
+    // triggered 的真子集口径，优先用它做分母，避免永远追不上）。
+    const unitsExpected = archive.units_expected ?? 0;
+    const byUnits = unitsExpected > 0;
+    const triggered = byUnits
+      ? unitsExpected
+      : (archive.hosts_expected ?? archive.hosts_triggered ?? 0);
+    const done = byUnits ? (archive.units_satisfied ?? 0) : (archive.hosts_with_artifacts ?? 0);
     const notAcked = archive.hosts_not_acked ?? 0;
-    const parts: StagePart[] = [{ text: `host 完成度 ${done}/${triggered}` }];
+    const parts: StagePart[] = [
+      { text: byUnits ? `平台完成度 ${done}/${triggered}` : `host 完成度 ${done}/${triggered}` },
+    ];
     if (notAcked > 0) parts.push({ text: `未回执 ${notAcked} 台` });
     if (scanFailed) parts.push({ text: '扫描未产生任何报表' });
     stages.push({

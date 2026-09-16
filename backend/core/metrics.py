@@ -106,6 +106,16 @@ rate_limiter_evicted_total = Counter(
     'Total rate-limiter buckets evicted at capacity (high source cardinality signal)',
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
+dashboard_summary_push_total = Counter(
+    'stability_dashboard_summary_push_total',
+    'Total coalesced dashboard_summary WS pushes (#2324)',
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+device_update_suppressed_total = Counter(
+    'stability_device_update_suppressed_total',
+    'DEVICE_UPDATE suppressed because update was immaterial (#2324)',
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
 # ============================================================================
 # Task Run Metrics
 # ============================================================================

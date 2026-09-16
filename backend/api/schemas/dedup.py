@@ -40,6 +40,11 @@ class DedupScanArchiveOut(BaseModel):
     scan_artifacts_registered: int = 0
     hosts_with_artifacts: int = 0
     hosts_not_acked: int = 0
+    # #2271：(host, 平台) 对口径——前端阶段判定以它为准（host 级数字在「期望 2 平台
+    # 只交 1」时会显示 ok）；``hosts_expected`` 是 hosts_triggered 的真子集口径。
+    units_satisfied: int = 0
+    units_expected: int = 0
+    hosts_expected: int = 0
 
 
 class DedupStatusOut(BaseModel):

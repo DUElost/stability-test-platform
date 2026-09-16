@@ -13,6 +13,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -235,3 +236,58 @@ def test_scripts_are_shipped_in_the_bundle_layout():
     from tools.release.build_bundle import TREE_LAYOUT
 
     assert "deploy" in TREE_LAYOUT
+
+
+# ── #2276：bundle 路径不静默忽略 / 不反向误拒 ─────────────────────────────
+
+
+def test_install_refuses_a_bundle_that_differs_from_the_site_input():
+    """站点已存在时，STP_BUNDLE 与 site.yaml 记录不一致必须显式拒绝（不得静默用旧路径）。"""
+    text = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    assert "recorded_bundle" in text
+    assert "refuse to guess" in text
+    assert "deploy_site_identity" in text, "记录值取自 site.yaml（identity helper 第三行）"
+
+
+def test_agent_install_prefers_the_recorded_bundle():
+    """装机链的 bundle 判据优先用 site.yaml 记录——否则健康站点会被默认值判成不可装。"""
+    text = (DEPLOY / "agent/install.sh").read_text(encoding="utf-8")
+    assert "deploy_site_identity" in text
+    assert "STP_BUNDLE_EXPLICIT" in text
+    assert "recorded_bundle" in text
+    assert "bundle_check" in text
+
+
+def test_common_lib_separates_explicit_from_default_bundle():
+    """显式给出与「落到默认值」必须分开记，否则装机链无从判断该不该用站点记录。"""
+    text = COMMON_LIB.read_text(encoding="utf-8")
+    assert 'STP_BUNDLE_EXPLICIT="${STP_BUNDLE:-}"' in text
+    assert "STP_BUNDLE_EXPLICIT" in text.split("export ", 1)[-1] or "STP_BUNDLE_EXPLICIT" in text
+
+
+def test_site_identity_helper_reports_the_recorded_bundle(tmp_path):
+    """identity helper 的第三行 = site.yaml 的 release.bundle（两个入口都靠它判定）。"""
+    site = tmp_path / "site.yaml"
+    site.write_text(
+        "site:\n  id: city-b\ndisplay_name: synthetic\n"
+        "control_plane:\n  target: control.example.invalid\n"
+        "release:\n  bundle: /srv/releases/r7\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["bash", "-c", f"source {COMMON_LIB}; deploy_defaults; deploy_site_identity"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            **os.environ,
+            "DEPLOY_REPO_ROOT": str(REPO_ROOT),
+            "DEPLOY_PYTHON": sys.executable,
+            "STP_SITE_FILE": str(site),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    lines = result.stdout.splitlines()
+    assert lines[:3] == ["city-b", "control.example.invalid", "/srv/releases/r7"]
