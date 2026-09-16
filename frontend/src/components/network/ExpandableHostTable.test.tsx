@@ -339,6 +339,24 @@ describe('ADR-0038 退役显示与入口（#1807）', () => {
     expect(screen.queryByText('内容漂移')).not.toBeInTheDocument();
   });
 
+  it('#2366: 汇总单独报出「待热更新」台数（全队落后一版不得只读成 0/N）', () => {
+    // 现场实测：观测时点的「Agent 已对齐 0/48」是**真实状态**（那批热更新之前），
+    // 不是判据 bug——只给「已对齐 N/M」时这类读数极易被读成口径坏了，故把落后台数
+    // 一并渲染。unknown（未上报）不计入「待热更新」：它的动作是「等一次心跳」。
+    render(
+      <ExpandableHostTable
+        hosts={[
+          { ...host, id: 1, agent_code_sync_status: 'matched' },
+          { ...host, id: 2, agent_code_sync_status: 'drift' },
+          { ...host, id: 3, agent_code_sync_status: 'unknown' },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText(/Agent 已对齐 1\/3/)).toBeInTheDocument();
+    expect(screen.getByText(/1 台待热更新/)).toBeInTheDocument();
+  });
+
   it('digest 缺失（未上报）渲染为 unknown，而不是 drift', () => {
     // ADR-0040 v1.1：未上报 digest（#1907 前部署 / 新装未心跳）→ `unknown`，
     // 运维动作是「等一次心跳 / 首次 --force 迁移」，**不得**渲染成需更新。
