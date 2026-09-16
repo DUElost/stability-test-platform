@@ -290,6 +290,31 @@ def abort_pending_job_ids(
     return pending
 
 
+def schedule_emit(*args, **kwargs):
+    """模块级 emit 缝（#2372）：**函数体内**惰性 import callback。
+
+    为什么是这个形状：本模块会被 agent collect 的 clean-env 路径 import
+    （#2270 的 `plan_dispatcher_sync → run_abort_pending`），import 期拉起
+    `socketio_server` 会把 `JWT_SECRET_KEY` 带进来、撞红 agent collect（#2350/#739）；
+    但把 import 挪进调用点函数体后，**模块属性**消失 → 控制面用例的
+    `patch("backend.services.plan_run_abort.schedule_emit")` 全部 AttributeError
+    （11 条确定性红）。两者兼顾的形态是：模块级函数在、副作用不在——patch 的是这个
+    函数对象，真正取 `socketio_server.schedule_emit` 发生在它被调用的那一刻。
+    """
+    from backend.realtime.socketio_server import schedule_emit as _emit
+
+    return _emit(*args, **kwargs)
+
+
+def schedule_agent_control_fanout(*args, **kwargs):
+    """同 `schedule_emit`（#703 的 host 扇出合并共用同一惰性策略）。"""
+    from backend.realtime.socketio_server import (
+        schedule_agent_control_fanout as _fanout,
+    )
+
+    return _fanout(*args, **kwargs)
+
+
 def abort_plan_run(
     plan_run_id: int,
     *,
@@ -786,13 +811,6 @@ def abort_plan_run(
     # schedulable while the old process is still running.
     # #703：host 扇出合并为单次 schedule_agent_control_fanout，避免上百次
     # run_coroutine_threadsafe 同步灌满主事件循环。
-    # Lazy import: keep abort predicates importable without JWT_SECRET_KEY
-    # (agent-tests clean collect / #739; #2270 pulled plan_run_abort into dispatcher).
-    from backend.realtime.socketio_server import (
-        schedule_agent_control_fanout,
-        schedule_emit,
-    )
-
     control_items: list[tuple[str, dict]] = []
     for emit_host_id in abort_hosts:
         host_job_ids = abort_jobs_by_host.get(emit_host_id, [])

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, toApiError } from '@/utils/api';
+import { api, classifyApiError, toApiError } from '@/utils/api';
 import type { ResourcePoolLoad } from '@/utils/api/types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -49,7 +49,7 @@ export default function WifiPage() {
     return Math.min(Math.max(parsed, 1), MAX_DEVICES_LIMIT);
   };
 
-  const { data: pools = [], isLoading, isError, refetch } = useQuery({
+  const { data: pools = [], isLoading, isError, error, refetch } = useQuery({
     queryKey: ['resource-pools', 'loads'],
     queryFn: () => api.resourcePools.listLoads(),
     refetchInterval: 15000,
@@ -260,7 +260,16 @@ export default function WifiPage() {
         <CardContent>
           {isError && (
             <div className="mb-4">
-              <InlineError message="WiFi 资源池加载失败，请检查后端服务连接。" onRetry={() => void refetch()} />
+              <InlineError
+                // #2359：403/401 是权限错误，不是连接问题——照着「检查后端服务连接」
+                // 排查会把人引到错误方向（同类先例 #955）。
+                message={
+                  classifyApiError(error) === 'permission'
+                    ? '无权限访问 WiFi 资源池（该功能需要管理员权限）。'
+                    : 'WiFi 资源池加载失败，请检查后端服务连接。'
+                }
+                onRetry={() => void refetch()}
+              />
             </div>
           )}
           {isLoading ? (
