@@ -14,6 +14,44 @@
 4. `STP_DEDUP_SCAN_TAG` 含 `factory` 时传 `-side factory`，否则传
    `-side shanghai`。
 
+### merge 产物表头契约（#2256）
+
+本仓库**按列名**消费工具产出的 merge 报告，不写死列序号——工具已实证会做列名归一
+（UNISOC 输入输出为 MTK 形态：`ExpType` 带尾随空格、`DeviceCount` → `DeviceId`，
+见 ADR-0032 §B3 spike 的抽样比对）。按名依赖共两处：
+
+| 消费点 | 依赖列 | 取不到时 |
+|---|---|---|
+| `dedup_scan._rewrite_merge_report_paths_to_center` | `Path` | 该 xls 不重写中心路径，记 WARNING `merge_report_path_column_missing`（带实际表头） |
+| `dedup_extract._event_dir_names_from_xls` | `Path`、`Detail`（可选） | 返回空集，记 WARNING `dedup_xls_path_column_missing`（带实际表头） |
+
+两处都容忍大小写、首尾空白与列位置移动。**改名、删列、以及 `str.strip()` 不剥的
+不可见字符（如 BOM `U+FEFF`）会命中 WARNING**——「表头漂移」与「本轮确实无数据」不得
+只能靠人工比对区分。工具升级或新增平台时，**输出表头比对**是验收项（ADR-0032 §Revisit）。
+
+已登记的两处**不阻断**面（知道就好，不要当成新故障）：
+
+- `_rewrite_merge_report_paths_to_center` 的整段失败（读/写 xls 异常）只记
+  `merge_report_rewrite_*_failed`，**不阻断发布**——中心副本的 Path 列仍是 Agent 本机
+  路径（链接不可达），发布与登记照常；
+- 列整体缺失时该 xls 被跳过（见上表），其余 xls 继续处理。
+
+### 本机中转清理的引用判据（#2281）
+
+控制面本机 `{工具目录}/merge_result/{ts}/` 是工具唯一可写位置：发布到中心并登记后
+立即删除（I-13 方案 A），失败残留由 `sweep_stale_local_merge_outputs` 兜底。
+兜底清理要求**三条同时成立**，缺一即保留：
+
+1. 中心已配置（`resolve_shared_storage_root()` 可解析）；
+2. **没有** `plan_run_artifact` 行指着该目录（`local_merge_artifact_refs`）——
+   中心配置**之前**登记的 run 其 artifact 指向本机目录（`_publish_merge_to_center`
+   返回 `None` 时的回退分支），对它们是「唯一副本」而非中转；
+3. 目录形态像工具产物（含 `Result_MergeFiles*.xls`）且 mtime 超过
+   `_MERGE_LOCAL_RETENTION_HOURS`（24h）。
+
+第 2 条的查询失败时**跳过本轮清理**（留残留优于毁交付物）；被保留与被删除的目录都在
+日志里留名（`merge_local_sweep_kept_referenced` / `merge_local_stale_swept`）。
+
 ## SAQ 链和完备性
 
 ```text
@@ -89,8 +127,13 @@ unlinked_fixable、not_yet_archived。链接故障只看
 |---|---|
 | JobArtifact | `{root}/jobs/{job_id}/` |
 | 事件目录 | `{root}/devices/{plan_run_id}/` 或 `{root}/devices/unassigned/{event_id}/` |
-| scan / merge | `{root}/dedup/{run_id}/`，merge 发布到 `merge/` 子目录 |
+| scan / merge | `{root}/dedup/{run_id}/`；merge 发布到 `merge/`，按平台执行时落 `merge/{platform}/` |
 | extract | `{root}/jira/{run_id}/` |
+
+`merge/{platform}/` 是**平台分区**形态：下游 `dedup_extract._merge_uri_is_platform_partitioned`
+按 `PlanRunArtifact.storage_uri` 的**路径形状**判定平台，并据此决定 jira bundle 的落点
+（#766）。发布路径与登记路径必须同形——登记落 flat 而产物在分区目录时，下游会静默
+合并到错误位置。
 
 中心存储根只配置 `STP_AEE_NFS_ROOT`。`STP_AEE_LOCAL_ROOT` 是按机 L1 路径，不由
 hot-update 覆盖。`job_id IS NULL` 的 orphan signal 不进入 PlanRun watcher-summary；

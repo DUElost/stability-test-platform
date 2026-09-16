@@ -855,3 +855,125 @@ def test_intent_removed_when_name_pruned(tmp_path):
 
     assert "JE.103000004" not in r._processed
     assert "JE.103000004" not in load_intents(store, key), "裁剪未回收意图记录"
+
+
+# ── #2272：签名不可得不得落空签名；确定性失败须有上限 ──────────────────────
+
+
+def test_signature_probe_failure_does_not_emit_or_record_empty_signature(tmp_path):
+    """#2272 主症状：远端**列到了**目录但 `unievent_info` 探测失败 → 不发射、
+    不落空签名。修复前：`prev` 未知时带 `None` 发射，并写 `_processed[key]=""`；
+    下一拍拿到真签名 S 时 `"" != S` → 整目录重拉 + 重新分配 seq_no/DLE id
+    → 平台侧同一条物理事件落成**第二条记录**。
+    """
+    emitter = _RecordingEmitter()
+    sig = "drwxrwxrwx 2 root root 3452 2026-09-08 06:59"
+
+    def shell_fn(cmd: str, _t: int):
+        if cmd.startswith("ls -l /data/ylog/uniview_exception"):
+            return f"{sig} JE.103000004\n__STP_RC__:0\n"
+        if "unievent_info" in cmd:
+            return None          # ← 探测失败：签名不可得
+        return None
+
+    r = _make_reconciler(tmp_path, emitter=emitter, shell_fn=shell_fn)
+    ev = tmp_path / "aee_local" / "uniview_watcher" / "0908" / "UNI-1" / "JE.103000004"
+    ev.mkdir(parents=True)
+    (ev / "unievent_info").write_text(
+        _real_unievent_info(event_id="103000004", event_name="Java Crash",
+                            proc="com.x", kick="2026-09-08_06:59:12.031",
+                            tag="system_app_crash"),
+        encoding="utf-8",
+    )
+
+    assert r.tick_once() == 0, "签名不可得时不应发射"
+    assert emitter.calls == [], emitter.calls
+    assert r._processed.get("JE.103000004", None) is None, (
+        "不得把「签名不可得」落成空签名（会触发下拍重拉 + 重复 DLE）"
+    )
+
+
+def test_signature_available_next_tick_emits_once(tmp_path):
+    """#2272 补充：探测恢复后应**正常发射一次**（修复不得把该目录永久静默）。"""
+    emitter = _RecordingEmitter()
+    sig = "drwxrwxrwx 2 root root 3452 2026-09-08 06:59"
+    state = {"probe": False}
+
+    def shell_fn(cmd: str, _t: int):
+        if cmd.startswith("ls -l /data/ylog/uniview_exception"):
+            return f"{sig} JE.103000005\n__STP_RC__:0\n"
+        if "unievent_info" in cmd:
+            return "unievent_info\n" if state["probe"] else None
+        return None
+
+    # pull 桩：probe 失败时不拉；恢复后真拷贝（否则一直 unconfirmed，测不到「恢复」）
+    device_ev = _device_event_dir(tmp_path, name="JE.103000005",
+                                  kick="2026-09-08_06:59:12.031")
+
+    def pull_fn(remote: str, local: str, _t: int) -> bool:
+        if not state["probe"]:
+            return False
+        dest = Path(local) / Path(remote).name
+        dest.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(device_ev, dest, dirs_exist_ok=True)
+        return True
+
+    r = _make_reconciler(tmp_path, emitter=emitter, shell_fn=shell_fn, pull_fn=pull_fn)
+
+    assert r.tick_once() == 0, "首拍探测失败 → 不发射"
+    state["probe"] = True
+    assert r.tick_once() == 1, "探测恢复后应发射一次"
+    assert len(emitter.calls) == 1
+
+
+def test_local_listing_failure_still_emits_preseeded_event(tmp_path):
+    """#2272 负向对照：远端**整体列举失败**（离线/预置）仍应发射。
+
+    与主症状的区别：该目录根本不在本拍列举里（`_last_listed is None`），
+    属既有的本地预置/离线补发通道，**不得**被收紧。
+    """
+    emitter = _RecordingEmitter()
+    r = _make_reconciler(tmp_path, emitter=emitter)   # shell_fn 默认 None → 列举失败
+    ev = tmp_path / "aee_local" / "uniview_watcher" / "0908" / "UNI-1" / "KE.103000006"
+    ev.mkdir(parents=True)
+    (ev / "unievent_info").write_text(
+        _real_unievent_info(event_id="103000006", event_name="KE",
+                            proc="sys", kick="2026-09-08_06:59:12.031",
+                            tag="system_app_crash"),
+        encoding="utf-8",
+    )
+    assert r.tick_once() == 1, "列举失败场景的本地预置发射被误伤"
+    assert r.tick_once() == 0, "第二拍应幂等（不重复发射）"
+
+
+def test_repeated_probe_failure_abandons_dir_after_limit(tmp_path):
+    """#2272 附带缺口：确定性失败须有上限，达限放弃并计入 signals_dropped。
+
+    修复前：每拍重拉整目录且不收敛，也不计入 `signals_dropped`（操作侧不可见）。
+    """
+    from backend.agent.aee.unisoc_reconciler import MAX_DIR_ATTEMPTS
+
+    emitter = _RecordingEmitter()
+    sig = "drwxrwxrwx 2 root root 3452 2026-09-08 06:59"
+
+    def shell_fn(cmd: str, _t: int):
+        if cmd.startswith("ls -l /data/ylog/uniview_exception"):
+            return f"{sig} JE.103000007\n__STP_RC__:0\n"
+        if "unievent_info" in cmd:
+            return None          # 确定性失败（永不出现）
+        return None
+
+    r = _make_reconciler(tmp_path, emitter=emitter, shell_fn=shell_fn)
+    ev = tmp_path / "aee_local" / "uniview_watcher" / "0908" / "UNI-1" / "JE.103000007"
+    ev.mkdir(parents=True)
+    (ev / "unievent_info").write_text(
+        _real_unievent_info(event_id="103000007", event_name="Java Crash",
+                            proc="com.x", kick="2026-09-08_06:59:12.031",
+                            tag="system_app_crash"),
+        encoding="utf-8",
+    )
+
+    for _ in range(MAX_DIR_ATTEMPTS):
+        r.tick_once()
+    assert "JE.103000007" in r._abandoned_dirs, "达上限后应放弃该目录"
+    assert r.stats.signals_dropped >= 1, "放弃须计入 signals_dropped（可见性）"

@@ -22,6 +22,11 @@ Class: bug-fix
   `ctx.config.site.timezone`；后端 `normalize_install_options` 新增**非路径类白名单**
   `_INSTALL_OPTION_PATTERNS`，按 IANA 名的正则校验——既有的键仍然只接受绝对路径）。
 - **preflight 尽早暴露**：NTP 检查的消息里带上主机时区（NTP 同步只说明「时钟准」，不说明「时区对」）。
+- **`init` 的声明来自主机真实时区并回显**（同批落地）：`preflight_facts` 原先「`/etc/timezone` 不存在
+  就当 `UTC`」——**那个静默默认正是 238 声明 UTC 而主机在 PDT 的来源**，改为走 `Ops.timezone()` 两级取值；
+  读不到时 `init` **在写任何东西之前 FAIL**（`host_timezone_unknown` + 给 `timedatectl set-timezone` 的
+  动作提示），报告与 CLI 摘要回显 `Site timezone: <zone>`，provenance 记「/etc/timezone → timedatectl」。
+  这样新建站点的声明天然等于主机时区，S1 的一致性检查随后继续兜住后续漂移。
 
 ## Alternatives
 
@@ -36,7 +41,8 @@ Class: bug-fix
 
 ## Verification
 
-- 工具侧 `tests/` **1096 passed**，新增/加固 4 条：
+- 工具侧 `tests/` **1098 passed**，新增/加固 6 条（含 `init` 的 2 条：声明取主机真实值 + 回显；
+  读不到则 FAIL 且不写任何东西、动作提示给 set-timezone）：
   - `test_timezone_mismatch_fails_closed_before_writes`：不一致 → FAIL `install_timezone`、
     message 同时含实际值与声明值、且**部署根未落地**（后续阶段没跑）；
   - `test_timezone_unknown_is_blocked_not_passed`：读不到 → BLOCKED `timezone_unknown`；
@@ -53,8 +59,8 @@ Class: bug-fix
 ## Revisit
 
 - **迁移期**：本次修复让「声明 vs 控制面」fail-closed。存量站点（如 238）在此前建站的声明可能是
-  `init` 当天从主机读到的任意值（238 是 `UTC`）——重跑安装前要先把声明与主机对齐（现场已做）。
-  若要更省事，可让 `init` 在生成时就以主机实际时区为准并在报告里回显（#2265 里列为可选项，未做）。
+  旧 `init` 的静默默认（`UTC`）——重跑安装前要先把声明与主机对齐（现场已做）。新站点已由上面的
+  `init` 改动覆盖（声明 = 主机真实时区）。
 - **多时区站点**：当前模型假设「站点一个时区」（`site.timezone` 单值，Agent 全部跟随）。若将来
   出现跨时区机队，需要按 host 声明时区（模型与下传通道都要扩）。
 - **Agent 长驻进程**：`set_timezone.yml` 改时区后需要重启 Agent 服务才生效，而重启默认关闭
