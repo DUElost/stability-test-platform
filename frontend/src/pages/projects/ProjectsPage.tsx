@@ -11,7 +11,6 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { PageSkeleton } from '@/components/ui/loading-skeleton';
 import { LAYOUT, STAT, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
-import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useAuthSession } from '@/hooks/useAuthSession';
 import { useToast } from '@/hooks/useToast';
 import { api, toApiError } from '@/utils/api';
@@ -52,7 +51,6 @@ function facetOptions(projects: ProjectSummary[], field: FacetField): string[] {
 }
 
 export default function ProjectsPage() {
-  useDocumentTitle('项目登记簿');
   const navigate = useNavigate();
   const toast = useToast();
   const queryClient = useQueryClient();

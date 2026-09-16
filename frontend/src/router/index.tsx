@@ -2,6 +2,7 @@ import { lazy } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, Outlet, useLocation } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import AppShell from '../layouts/AppShell';
+import { RouteTitle } from '@/hooks/useDocumentTitle';
 import { useAuthSession } from '@/hooks/useAuthSession';
 
 // Auth pages stay as static imports (always needed on first load)
@@ -89,6 +90,8 @@ function PublicRoute() {
 export default function AppRouter() {
   return (
     <BrowserRouter>
+      {/* #2363：路由级标题的**唯一**登记点——页面不需要（也不该）各自记得调 */}
+      <RouteTitle />
       <Routes>
         {/* 公开路由 */}
         <Route element={<PublicRoute />}>
