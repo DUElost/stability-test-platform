@@ -22,6 +22,10 @@ Class: feature
 - **控制面 API（admin）**：`GET /api/v1/hosts/{host_id}/log-signal-dead-letters`
   拉清单；`POST .../{row_id}/replay` 重放。Agent 离线 → 503，RPC 超时 → 502，
   行不存在/非死信 → 404。
+  （**2026-09-16 补，#2383**：本段初版把「主机不存在」也落在 503 里——端点当时不查
+  存在性，直接 `call_agent_rpc` 后由 `AgentNotConnectedError` 统一回答「agent not
+  connected」。现已改为进 RPC **之前**判存在性，不存在 → 404 `host not found`，
+  与 `GET /hosts/{host_id}` 同文案；503 只表示「这台主机确实存在但没连接」。）
 
 ## Alternatives
 

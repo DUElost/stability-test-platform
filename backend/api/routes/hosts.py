@@ -1272,22 +1272,39 @@ def host_install_cancel(
 # ── #302: Agent log_signal 死信清单 + 重放（SocketIO RPC）─────────────
 
 
+def _require_host(db: Session, host_id: str) -> None:
+    """主机存在性判别（#2383）：不存在 → 404 `host not found`。
+
+    503 的语义是「服务暂时不可用、可重试」，而「这台主机不存在」是永久错误——
+    UI/脚本按 503 做退避重试就是白等，排障方向也会被带去查 Agent 掉线而不是查 ID。
+    判别放在**发起 RPC 之前**：不存在的主机上没有任何 Agent 动作可发。
+    """
+    if db.get(Host, host_id) is None:
+        raise HTTPException(status_code=404, detail="host not found")
+
+
+
+
 @router.get("/{host_id}/log-signal-dead-letters")
 async def list_log_signal_dead_letters(
     host_id: str,
     limit: int = Query(100, ge=1, le=500),
+    db: Session = Depends(get_db),
     _current_user: User = Depends(require_admin),
 ):
     """拉取 Agent 本地 log_signal 死信清单（admin 只读）。
 
     经 call_agent_rpc 同步等待 Agent ack：Agent 离线 → 503；
-    RPC 超时/传输失败 → 502。
+    RPC 超时/传输失败 → 502。#2383：先判主机存在性——不存在 → 404（与
+    `GET /hosts/{host_id}` 同文案），不再把「ID 打错」压成 503「agent not connected」。
     """
     from backend.realtime.socketio_server import (
         AgentNotConnectedError,
         AgentRpcError,
         call_agent_rpc,
     )
+
+    _require_host(db, host_id)
 
     try:
         ack = await call_agent_rpc(
@@ -1330,6 +1347,10 @@ async def replay_log_signal_dead_letter(
         AgentRpcError,
         call_agent_rpc,
     )
+
+    # #2383：主机不存在 → 404，且**不发起 RPC、不落审计**（没有任何 Agent 动作被
+    # 尝试；把打错的 ID 记成一次重放尝试会污染 #907 建立的可归责面）。
+    _require_host(db, host_id)
 
     def _audit(details: dict) -> None:
         # R02-F07（#907）：重放动作可归责——成功/失败均落审计

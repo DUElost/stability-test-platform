@@ -915,7 +915,13 @@ export interface PipelineStep {
   action: string;
   version?: string;
   params?: Record<string, unknown>;
-  timeout_seconds: number;
+  /**
+   * 步骤墙钟。**缺省=未配置**，与 `0`（不限）和 `n>0` 是三种不同语义，展示分流见
+   * `components/pipeline/stepTiming.ts`。#2382：schema 里这个键是可省的
+   * （省略才表达「回落 STP_STEP_WALL_CLOCK_SECONDS / 300s」），写成必填会让
+   * 「按 OpenAPI 建出来的 lifecycle」与后端判据各说各话。
+   */
+  timeout_seconds?: number | null;
   /**
    * 停滞钟（#115）：多久无 PROGRESS 戳算卡死。编辑器不提供输入框，但**必须**
    * 带在这里——PlanEditPage 保存时整体替换 PlanStep 行，字段不透传就等于把
