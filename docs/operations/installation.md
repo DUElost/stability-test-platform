@@ -33,7 +33,9 @@ sudo ./deploy/install.sh handover   # 汇总 P1 验收证据
 - ≥2 核 / ≥4 GiB RAM / 根文件系统 ≥20 GiB 可用；
 - `python3`、`nginx`、`systemctl`；接 Agent 另需 `ansible-core` 与 `sshpass`；
 - 入口端口 80（HTTPS 另需 443）空闲；
-- 主机时钟已 NTP 同步（审计与租约时间要对得上）；
+- 主机时钟已 NTP 同步（审计与租约时间要对得上），**且主机时区与 `site.timezone` 一致**——
+  不一致时 S1 直接 FAIL（`install_timezone`），因为 Agent 侧按声明对齐时区，三者不同源会让
+  审计/心跳窗口整体错位（238 现场：声明 UTC / 控制面 PDT / Agent CST，差 15 小时）；
 - PostgreSQL 可达（`init` 可在本机建空库与角色，需 `sudo -u postgres` 可用）；
 - Redis 可达（每站点一个独立 db index）。
 
@@ -257,6 +259,7 @@ sudo ./deploy/install.sh handover
 | `inventory_shape` | 清单键名/键值形状不对 | 只用文档列出的键；值不含空格 |
 | `agent_install_root_mismatch` | 清单与站点声明的安装根不一致 | 统一 `install_root`（站点级单值） |
 | `install_storage` | 声明路径不是挂载点 | 先挂盘/bind，或 `--data-disk` 让 `init` 处理 |
+| `install_timezone` | 控制面主机时区 ≠ `site.timezone` | `timedatectl set-timezone <site.timezone>` 后重跑；Agent 侧按声明对齐，三者必须同源 |
 | `agent_install_canceled` | 安装被取消（不是脚本失败）：显式取消，或运行记录随控制面丢失（重启 / 终态保留期到期，ADR-0044） | 看 RunConsole 日志尾部确认卡在哪一步，复跑安装（主机页按钮或 `deploy/agent/install.sh`）；**长时间没动静**说明目标机在装大件（如 `nfs-common`），先预装再触发更省事 |
 | `install_export` | 装 NFS 服务端或 `exportfs -ra`/`nfs-server` 失败 | 看 `dpkg -l nfs-kernel-server`、`exportfs -s`、`systemctl status nfs-server` 输出 |
 | `shared_storage_not_mounted` | Agent 没挂上中心存储（或 verify 时路径不是挂载点） | Agent 侧 `findmnt <mount_path>`、`mount -t nfs <站点入口>:<mount_path> <mount_path>`；控制面侧 `exportfs -s`、`systemctl status nfs-server`。从没挂上的分享不会被写进 fstab |

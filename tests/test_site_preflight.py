@@ -55,6 +55,9 @@ class FakeOps:
     def machine(self) -> str:
         return self._machine
 
+    def timezone(self) -> str:
+        return "Asia/Shanghai"
+
     def command_exists(self, name: str) -> bool:
         return name in self._commands
 

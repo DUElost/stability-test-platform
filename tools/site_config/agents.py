@@ -899,6 +899,8 @@ def _install_options(ctx: InstallContext, agent: Any) -> dict[str, str]:
         # 站点标准是控制面/Agent 同一分享同一字符串（设计 §3.3）；不写会让
         # Agent 因缺 STP_AEE_NFS_ROOT 启动即崩，直到下一次热更新才补齐。
         "agent_nfs_root": ctx.config.storage.mount_path,
+        # 时区同源（#2265）：Agent 侧不再硬编码 Asia/Shanghai，跟随站点声明。
+        "agent_timezone": ctx.config.site.timezone,
     }
 
 

@@ -45,6 +45,8 @@ class Ops(Protocol):
 
     def machine(self) -> str: ...
 
+    def timezone(self) -> str: ...
+
     def user_exists(self, name: str) -> bool: ...
 
     def create_user(self, name: str, home: str) -> None: ...
@@ -128,6 +130,21 @@ class LocalOps:
 
     def machine(self) -> str:
         return os.uname().machine
+
+    def timezone(self) -> str:
+        """主机 IANA 时区名；读不到返回空串（调用方按「无法判定」处理）。
+
+        两个来源：`/etc/timezone`（Debian/Ubuntu 的规范位）→ `timedatectl` 的
+        `Timezone` 属性（systemd 主机）。两者都没有就返回空串——绝不猜。
+        """
+        try:
+            configured = Path("/etc/timezone").read_text(encoding="utf-8").strip()
+        except OSError:
+            configured = ""
+        if configured:
+            return configured
+        result = self.run(["timedatectl", "show", "-p", "Timezone", "--value"])
+        return result.stdout.strip() if result.returncode == 0 else ""
 
     def user_exists(self, name: str) -> bool:
         return self.run(["getent", "passwd", name]).returncode == 0
