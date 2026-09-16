@@ -1,3 +1,5 @@
+import pytest
+
 from backend.services.agent_version_info import (
     build_host_version_view,
     resolve_agent_code_sync_status,
@@ -178,3 +180,61 @@ def test_finalize_audit_carries_digest_and_phases(monkeypatch):
     assert details["converged"] is False
     assert details["artifact_digest"] == "sha256:" + "a" * 64
     assert details["phases"] == {"build": 1}
+
+
+# ── #2320：desired 的三态语义（None=自算 / ""=显式不可用 / 非空=比对）──────────
+
+
+def test_explicit_empty_desired_is_unavailable_not_recomputed(monkeypatch):
+    """显式传 `""` = 调用方说「算不出」→ unknown，且**不得**回头自算。
+
+    旧写法 `(desired or "").strip() or 自算` 把空串与「没传」混为一谈：列表页
+    (`hosts.py` 的降级路径) 递过来的 `""` 会被下游覆盖成真实比对结果，
+    于是「判据不可用」被显示成 `matched`/`drift` —— 比 500 更糟，它是**假判据**。
+    """
+    calls: list = []
+
+    def _spy(kind=None):
+        calls.append(kind)
+        return DIGEST_NEW
+
+    monkeypatch.setattr(
+        "backend.services.agent_version_info.compute_desired_artifact_digest", _spy,
+    )
+    view = build_host_version_view(
+        {}, agent_artifact_digest=DIGEST_OLD, desired_artifact_digest="",
+    )
+    assert view["agent_code_sync_status"] == "unknown"
+    assert calls == [], "显式不可用时不得自算"
+
+
+def test_self_compute_oserror_degrades_to_unknown(monkeypatch, caplog):
+    """未传 desired（详情路径）时自算；IO 失败 → unknown + 一条 warning，不抛。"""
+
+    def _boom(kind=None):
+        raise OSError("[Errno 2] No such file or directory: 'payload/...'")
+
+    monkeypatch.setattr(
+        "backend.services.agent_version_info.compute_desired_artifact_digest", _boom,
+    )
+    caplog.set_level("WARNING", logger="backend.services.agent_version_info")
+
+    view = build_host_version_view({}, agent_artifact_digest=DIGEST_OLD)
+
+    assert view["agent_code_sync_status"] == "unknown"
+    assert sum(
+        1 for r in caplog.records if "agent_code_desired_digest_failed" in r.getMessage()
+    ) == 1
+
+
+def test_programming_error_in_compute_still_propagates(monkeypatch):
+    """只吃 OSError：其它异常继续冒泡（不新增静默吞咽点，#739 同一纪律）。"""
+
+    def _bug(kind=None):
+        raise ValueError("not an IO failure")
+
+    monkeypatch.setattr(
+        "backend.services.agent_version_info.compute_desired_artifact_digest", _bug,
+    )
+    with pytest.raises(ValueError, match="not an IO failure"):
+        build_host_version_view({}, agent_artifact_digest=DIGEST_OLD)
