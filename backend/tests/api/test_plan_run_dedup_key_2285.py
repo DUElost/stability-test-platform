@@ -43,3 +43,32 @@ def test_uniview_key_strips_blank_identity_fields():
     """只有空白字符的身份字段按缺失处理（与消费侧 ``or "" .strip()`` 口径一致）。"""
     assert _uniview_dedup_key(_DIR, {"event_subtype": "   ", "aee_ts": ""}) == f"nfs:{_DIR}##"
     assert _uniview_dedup_key(_DIR, {"event_subtype": " ANR ", "aee_ts": ""}) == f"nfs:{_DIR}#ANR#"
+
+
+# --- #2394-②：stable identity（serial 进键、日期根出局）---
+
+_BASE = "/mnt/hdd/aee_events/uniview_watcher"
+
+
+def test_uniview_key_stable_across_date_roots():
+    """C9 闭合：同设备同事件跨日期根 → 同键（旧式全路径键会裂）。"""
+    ident = {"event_subtype": "Java Crash", "aee_ts": "2026-09-16_14:22:13.390"}
+    d16 = _uniview_dedup_key(f"{_BASE}/0916/SN-1/JE.103000004", ident, device_serial="SN-1")
+    d17 = _uniview_dedup_key(f"{_BASE}/0917/SN-1/JE.103000004", ident, device_serial="SN-1")
+    assert d16 == d17 == "uniview:SN-1#JE.103000004#Java Crash#2026-09-16_14:22:13.390"
+
+
+def test_uniview_key_serial_isolates_same_named_dirs():
+    """两台设备同名容器目录是两个身份（真实常态：每台都有 JE.103000004）。"""
+    ident = {"event_subtype": "Java Crash", "aee_ts": "T"}
+    a = _uniview_dedup_key(f"{_BASE}/0916/dev-A/JE.103000004", ident, device_serial="dev-A")
+    b = _uniview_dedup_key(f"{_BASE}/0916/dev-B/JE.103000004", ident, device_serial="dev-B")
+    assert a != b
+
+
+def test_uniview_key_still_never_collides_with_aee_when_serialized():
+    """四段新形态与 AEE 目录键依旧不同形（#2285 不变量随演进保持）。"""
+    uniview = _uniview_dedup_key(_DIR, {"event_subtype": "NE"}, device_serial="SN-1")
+    aee = _aee_event_dedup_key(1, "AEE", "", {"nfs_path": _DIR})
+    assert uniview.startswith("uniview:") and aee.startswith("nfs:")
+    assert uniview != _uniview_dedup_key(_DIR, {"event_subtype": "NE"})  # 回退式与主式不互撞
