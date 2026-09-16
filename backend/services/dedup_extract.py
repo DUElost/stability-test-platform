@@ -106,6 +106,13 @@ def parse_event_dir_names_from_xls(
             None,
         )
         if path_col is None:
+            # #2256：按名依赖（表头契约）取不到 Path 列时**不再静默返回空集**——调用方把
+            # 空集读作「本轮无事件」，表头漂移必须能从日志里分辨出来；带上实际读到的表头
+            # 便于定位漂移形态（如 BOM 这类 `strip()` 不剥的不可见字符）。
+            logger.warning(
+                "dedup_xls_path_column_missing path=%s headers=%s",
+                xls_path, headers[:32],
+            )
             return names
         if allowed_serials is None:
             serials: list[str] | None = None

@@ -72,7 +72,10 @@ Class: bug-fix
 
 - **反向方向的门禁**（代码读取 → 示例登记）：与 173 个未记录变量的文档化同批做，
   需先定「必录 vs 可选」判据，避免把内部开关强行公开；
-- API 请求中间件落地后：恢复仪表板面板、更新 `UNPRODUCED_METRICS`、复用
-  `record_api_request`；
+- ~~API 请求中间件落地后：恢复仪表板面板、更新 `UNPRODUCED_METRICS`、复用
+  `record_api_request`~~ **已由 `#2286` 结清**（中间件确已落地，本文表格「中间件未落地」是
+  当时成立（中间件由 #743 的 `2b89b7d4`，2026-09-14 才落地），不回改）：`UNPRODUCED_METRICS` 清空并改为判据派生，`record_api_request` 的
+  docstring 同步现状；面板按裁决**暂不恢复**，见
+  [`2026-09-16-grafana-unproduced-exemption-closure-2286.md`](../testing/2026-09-16-grafana-unproduced-exemption-closure-2286.md)；
 - **注释态键**（如 `# DEVICE_LOCK_LEASE_SECONDS=600`）当前不入门禁；若将来注释幽灵
   变多，再评估把注释键纳入「需有读取点」的第二阶段。

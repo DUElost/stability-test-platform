@@ -29,6 +29,14 @@ Class: feature
   `lost` 按取消收尾。
 - **文案**：`agent_install_canceled` 不再提「作业窗口」（窗口没了），改为「显式取消 / 运行记录
   随控制面丢失」两种成因；「目标机装大件慢」的正确提示移到 `install_timeout`。
+- **取消入口**（#2255，2026-09-16 补）：把 console 自带的 cancel 暴露给操作者——
+  `POST /hosts/{id}/install/cancel`（管理员）没有在跑的安装 → 409 `NO_INSTALL_IN_PROGRESS`
+  （仍落 `install_agent_cancel` 审计，可归责动作不留白），有则 `RunConsole.cancel(run_id)`，
+  如实返回 `canceling`/`not_canceled`（进程组 kill 未发起时不假装受理）。**终态不由此端点
+  推断**：由 `on_complete` 落 `install_agent` 审计（status=CANCELED），S5 报
+  `agent_install_canceled`。前端：安装操作面板行内「取消」（仅 `pending|running` 的
+  install/reinstall 行；热更新不适用），`cancelInstall` 把受理失败原因写回该行 error，
+  避免「点了没反应」。
 
 ## Alternatives
 
@@ -55,6 +63,12 @@ Class: feature
   ADR-0044 形状。
 - **前端**：`npx vitest run src/hooks/useHostOperations.test.ts src/pages/hosts/HostsPage.test.tsx`
   27 passed（`waitInstallTerminal` 按 `console_status` + 摘要收尾，`lost` 按取消）。
+- **取消入口**（#2255）：`backend/tests/api/test_hosts.py::TestHostInstallCancelEndpoint` 3 条
+  （受理 / 无在跑 409 + 审计 / 不可发起如实回报）；前端
+  `src/components/host/HostOperationPanel.test.tsx` 8 条（新增 2 条：仅在跑的
+  install/reinstall 行渲染并转发 hostId、无回调时不渲染）+
+  `src/hooks/useHostOperations.test.ts` 9 条（新增 3 条：受理返 null、未受理与 409 detail
+  如实回传）；`npx tsc --noEmit`、`eslint` 通过。
 - 全量 `tests/` + `ruff` + `check:quick`（含 tsc/eslint/knip）+ 内网地址门禁结果见 PR。
 - **现场复跑（待做）**：238 上再走一次 Agent 接入，确认慢安装不再被任何窗口打断、状态与实时
   日志一致；顺带复查 #2220 里那条「双 ansible 进程」的观察是否随等待者消失。

@@ -14,7 +14,7 @@ from uuid import uuid4
 from ..watcher.contracts import ContractViolation
 from .collector import CollectorError
 from .collectors.unisoc import UNIVIEW_INFO_FILENAME, UNIVIEW_ROOT
-from .emit_intent import load_intents, save_intents
+from .emit_intent import MAX_REPLAY_ATTEMPTS, load_intents, save_intents
 from .mobilelog import make_adb_pull_fn
 from .extraction_slot import host_extraction_slot
 from .paths import get_aee_local_root
@@ -46,6 +46,13 @@ _STP_RC_MARKER = "__STP_RC__:"
 _EMIT_RESULT_EMITTED = "emitted"
 _EMIT_RESULT_NOT_REPORTABLE = "not_reportable"
 _EMIT_RESULT_FAILED = "failed"
+
+#: #2272：单目录**连续失败上限**。确定性失败（远端目录已消失、内容截断到
+#: unievent_info 永不出现等）会让该目录每拍重拉整目录且不收敛——既耗 host 提取
+#: 信号量，也不计入 ``signals_dropped``，操作侧无从察觉。达上限后放弃该目录并
+#: 计入 ``signals_dropped``（与 MTK 侧 ``emit_intent.MAX_REPLAY_ATTEMPTS`` 同向；
+#: 阈值取同值以保持两平台一致）。
+MAX_DIR_ATTEMPTS = MAX_REPLAY_ATTEMPTS
 
 
 def _unisoc_watcher_root(local_root: Path, run_date_stamp: Optional[str], serial: str) -> Path:
@@ -117,6 +124,14 @@ class UnisocUniviewReconciler:
         #: #2079：本拍**未能确认**「本地内容 == 远端签名」的名字（拉取失败）——
         #: 发射循环必须跳过，否则会拿陈旧本地内容当新异常上报。每拍重置。
         self._unconfirmed_local: Set[str] = set()
+        #: #2272：``{name: 连续失败拍数}``。达 ``MAX_DIR_ATTEMPTS`` 即放弃该目录
+        #: （计入 ``signals_dropped``），避免确定性失败项每拍重拉整目录。
+        #: 成功一拍即清零（保留在 map 里的 0 值可被裁剪逻辑清理）。
+        self._dir_attempts: Dict[str, int] = {}
+        #: #2272：已放弃的目录名。**必须与 ``_processed`` 分开**——放弃语义是
+        #: 「不再尝试拉取」，而 ``_processed[name] = ""`` 这种写法会被拉取循环的
+        #: `prev == signature` 判据穿透（`"" != S` → 仍会重拉），等于没止损。
+        self._abandoned_dirs: Set[str] = set()
         # #767：_processed 只增不减 + 整集重写会让状态存储按设备历史事件总量
         # 线性膨胀。去重语义要求保留的名字只有两类——仍在设备列表上（会被
         # 重拉）、仍在当前 stamp 本地树（会被重扫）；两者皆非的名字不可能再
@@ -264,9 +279,33 @@ class UnisocUniviewReconciler:
                 # #2079：本拍拉取失败 → 本地内容不代表远端签名，本拍不发射
                 # （pending 已回退，下一拍重试；不发陈旧内容，也不吞掉新内容）。
                 continue
+            if signature is None:
+                # #2272：**本拍未能确认远端签名**的两种情况必须分开——
+                #
+                #   A) 远端**列到了**该目录，但 unievent_info 探测/拉取失败
+                #      （`_pending_signatures` 被 pop）→ 本地内容不代表远端当前
+                #      状态，本拍**不发射**。修复前只有 `prev` 已知时才跳过，
+                #      `prev` 未知（首次见到）时会带 `None` 发射，随后把
+                #      `signature or ""`（**空串**）写进 `_processed`：下一拍拿到
+                #      真签名 `S` 时 `"" != S` → 既整目录重拉，又因 emit 意图簿按
+                #      签名建键（`sig_key = signature or ""`）而**重新分配 seq_no
+                #      与 DLE id**，同一条物理事件在平台侧落成**第二条记录**——
+                #      即 #2040 想关掉的重复事实类在「签名不可得」这一拍仍敞开。
+                #
+                #   B) 本拍**远端列举整体失败**（`_last_listed is None`，如离线/
+                #      adb 抖动）→ 该目录根本不在 `_pending_signatures` 里，历来
+                #      会按「首次/本地预置」发射。**保持原行为**：这是本地预置与
+                #      离线补发的既有通道，收紧它会误伤（实测 6 例既有用例）。
+                #
+                # 判据用 `_last_listed is not None`（本拍列举成功）而非直接看
+                # `signature is None`——后者把 A、B 混为一谈。
+                if self._last_listed is not None and key in self._last_listed:
+                    continue
             if prev is not _SIGNATURE_UNKNOWN and (
                 signature is None or prev == signature
             ):
+                # `signature is None` 保留原语义（本拍签名仍不可得 → 不重复发）；
+                # `prev == signature` 覆盖同签名不重发（#2010）。
                 continue
             if not (event_dir / UNIVIEW_INFO_FILENAME).is_file():
                 continue
@@ -445,6 +484,11 @@ class UnisocUniviewReconciler:
                 local_ready = (local_dir / UNIVIEW_INFO_FILENAME).is_file()
                 with self._state_lock:
                     prev = self._processed.get(name, _SIGNATURE_UNKNOWN)
+                    abandoned = name in self._abandoned_dirs
+                if abandoned:
+                    # #2272：已达连续失败上限 → 不再尝试拉取（否则每拍白拉整目录
+                    # 且不收敛）。记账已在放弃时完成（signals_dropped + error 日志）。
+                    continue
                 # #2010：名字未变但签名变了（同目录被追加了新异常）→ 必须重拉
                 self._pending_signatures[name] = signature
                 if (
@@ -458,11 +502,18 @@ class UnisocUniviewReconciler:
                     f"ls {remote_dir}/{UNIVIEW_INFO_FILENAME} 2>/dev/null", 10,
                 )
                 if not info:
+                    # #2272：远端 unievent_info 探测失败 → 签名不可得。除回退 pending
+                    # 外**同时记入 unconfirmed**，使本路径与 #2079 的拉取失败路径
+                    # 在发射守卫处**同判**（此前只 pop 不记，靠发射循环的
+                    # `signature is None` 兜底；两处判据不对称是 #2272 的成因之一）。
                     self._pending_signatures.pop(name, None)
+                    unconfirmed.add(name)
+                    self._note_dir_failure(name)
                     continue
                 if self._pull_event_dir(remote_dir, local_dir):
                     pulled += 1
                     # 本地内容已刷新为该签名 → pending 保持不动（发射循环据此判断）
+                    self._clear_dir_failure(name)
                     continue
                 # #2079：拉取失败时本地目录仍是**旧签名**的内容，不得把 pending
                 # 推进到远端新签名——否则发射循环会拿陈旧 unievent_info 上报为
@@ -470,6 +521,7 @@ class UnisocUniviewReconciler:
                 # 也不再发射（该 key 的签名不再变化）。
                 self._pending_signatures.pop(name, None)
                 unconfirmed.add(name)
+                self._note_dir_failure(name)
         self._unconfirmed_local = unconfirmed
         if pulled:
             logger.info(
@@ -478,6 +530,33 @@ class UnisocUniviewReconciler:
             )
         self._last_listed = listed if listing_complete else None
         return pulled
+
+    def _note_dir_failure(self, name: str) -> bool:
+        """记录一次目录失败；达 ``MAX_DIR_ATTEMPTS`` → 放弃并返回 ``True``（#2272）。
+
+        放弃语义：把该名字加入 ``_processed`` 并记一个**空签名**，使其此后
+        同签名（含 `None`）不再触发重拉——即「确定性失败不要再无限重试」。
+        同时计入 ``signals_dropped``，让操作侧可从指标看见（修复前是静默不收敛）。
+        """
+        with self._state_lock:
+            attempts = self._dir_attempts.get(name, 0) + 1
+            self._dir_attempts[name] = attempts
+            if attempts < MAX_DIR_ATTEMPTS:
+                return False
+            # 达上限：放弃该目录（与其每拍白拉整目录，不如显式止损并可见）
+            self._dir_attempts.pop(name, None)
+            self._abandoned_dirs.add(name)
+        self.stats.signals_dropped += 1
+        logger.error(
+            "unisoc_reconciler_dir_abandoned serial=%s job=%d dir=%s attempts=%d",
+            self._serial, self._job_id, name, attempts,
+        )
+        return True
+
+    def _clear_dir_failure(self, name: str) -> None:
+        """成功一拍即清零连续失败计数（#2272）。"""
+        with self._state_lock:
+            self._dir_attempts.pop(name, None)
 
     def _pull_event_dir(self, remote_dir: str, local_dir: Path) -> bool:
         """Pull remote event directory; flatten ``adb pull`` nested basename if needed."""
