@@ -6,6 +6,7 @@ Exposes key metrics for monitoring and alerting.
 
 import functools
 import logging
+import os
 from typing import Callable, Dict, Optional
 
 logger = logging.getLogger(__name__)
@@ -922,7 +923,23 @@ def get_metrics_response():
 
 
 def init_build_info(version: str = "unknown", commit: str = "unknown"):
-    """Initialize build info metrics"""
+    """Initialize build info metrics（值由 #2341 的 ``resolve_build_info()`` 提供）。
+
+    ``version`` / ``commit`` 的默认值刻意是 ``unknown``：真值来自部署树的
+    ``release-manifest.json``，读不到就显式回落——**不回落任何具体版本号**，
+    否则又会造出「看起来有答案」的假信息（本单要消灭的正是那个形态）。
+
+    **多进程模式不导出**（prometheus_client 官方约束：「Info metrics do not work in
+    multiprocess mode」）：当前 systemd 单元是单进程 uvicorn，故 ``Info`` 可用；
+    若将来引入 ``--workers`` + ``PROMETHEUS_MULTIPROC_DIR``，本指标会**静默消失**，
+    必须换成带 label 的 ``Gauge('stability_build_info', ..., ['version', 'commit'])``。
+    这里做一条运行期自检，免得下一个人靠踩发现。
+    """
+    if PROMETHEUS_AVAILABLE and os.getenv("PROMETHEUS_MULTIPROC_DIR"):
+        logger.warning(
+            "build_info_multiprocess_mode_unsupported — Info 指标在多进程模式下不导出，"
+            "请改用带 label 的 Gauge（见 init_build_info docstring）",
+        )
     if PROMETHEUS_AVAILABLE:
         build_info.info({
             'version': version,

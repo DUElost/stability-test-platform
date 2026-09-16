@@ -42,6 +42,7 @@ class TestBroadcastEnvelope:
         assert "timestamp" in msg
         assert msg["payload"]["id"] == 1
         assert kwargs["namespace"] == "/dashboard"
+        assert kwargs["room"] == "fleet:devices"
 
     @pytest.mark.asyncio
     async def test_job_status_envelope(self):

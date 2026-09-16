@@ -169,7 +169,7 @@
 
 <!-- env-inventory:begin（generated：python tools/dev/env_inventory.py --write） -->
 
-共 **221** 个读取名（`backend/**`，不含 `backend/agent/scripts/**`；含 ADR-0042 Settings 字段）：**198** 个已在 `.env*.example` 登记，**23** 个声明为内部（理由见下节）。
+共 **222** 个读取名（`backend/**`，不含 `backend/agent/scripts/**`；含 ADR-0042 Settings 字段）：**198** 个已在 `.env*.example` 登记，**24** 个声明为内部（理由见下节）。
 示例文件是**运维模板**（承载需要运维/机型调整的子集）；本表是**代码侧完整清单**。
 门禁：每个读取名必须「登记进示例」或「内部声明」二选一，二者之外即红。
 
@@ -179,7 +179,7 @@
 | `ADMISSION_REQUEUE_BACKOFF_SECONDS` | `60` | ✅ | 运行时 | `backend/core/settings/scheduler.py:61` |
 | `AGENT_INSTALL_DIR` | `-` | ✅ | 运行时 | `backend/agent/config.py:21` |
 | `AGENT_LEASE_EXTEND_BATCH_CHUNK` | `100` | ✅ | 运行时 | `backend/agent/settings.py:170` |
-| `AGENT_LEASE_EXTEND_BATCH_MAX` | `200` | ✅ | 运行时 | `backend/api/routes/agent_api.py:1369` |
+| `AGENT_LEASE_EXTEND_BATCH_MAX` | `200` | ✅ | 运行时 | `backend/api/routes/agent_api.py:1373` |
 | `AGENT_LEASE_TTL` | `600` | ✅ | 运行时 | `backend/agent/settings.py:172` |
 | `AGENT_LOCK_RENEWAL_INTERVAL` | `60` | ✅ | 运行时 | `backend/agent/settings.py:168` |
 | `AGENT_POST_RETRIES` | `3` | ✅ | 运行时 | `backend/agent/api_client.py:39` |
@@ -202,14 +202,14 @@
 | `CHAIN_RECONCILER_INTERVAL_SECONDS` | `60` | ✅ | 运行时 | `backend/core/settings/scheduler.py:38` |
 | `CHAIN_RECONCILE_BATCH_SIZE` | `100` | ✅ | 运行时 | `backend/core/settings/scheduler.py:58` |
 | `COORDINATOR_HEARTBEAT_INTERVAL` | `30` | ✅ | 运行时 | `backend/agent/settings.py:203` |
-| `COORDINATOR_HEARTBEAT_TIMEOUT_SECONDS` | `300` | ✅ | 运行时 | `backend/api/routes/plan_runs.py:1766` |
+| `COORDINATOR_HEARTBEAT_TIMEOUT_SECONDS` | `300` | ✅ | 运行时 | `backend/api/routes/plan_runs.py:1767` |
 | `COORDINATOR_MAX_PLAN_RUN_HOSTS` | `200` | ✅ | 运行时 | `backend/agent/settings.py:204` |
 | `CORS_ALLOW_HEADERS` | `-` | ✅ | 运行时 | `backend/core/settings/security.py:57` |
 | `CORS_ALLOW_METHODS` | `-` | ✅ | 运行时 | `backend/core/settings/security.py:56` |
 | `CORS_ORIGINS` | `-` | ✅ | 运行时 | `backend/core/settings/security.py:55` |
 | `CRON_POLL_INTERVAL` | `30` | ✅ | 运行时 | `backend/core/settings/scheduler.py:34` |
 | `DATABASE_URL` | `` | ✅ | 运行时 | `backend/agent/tests/test_env_isolation.py:34` |
-| `DEVICE_LOCK_LEASE_SECONDS` | `600` | ✅ | 运行时 | `backend/api/routes/agent_api.py:77` |
+| `DEVICE_LOCK_LEASE_SECONDS` | `600` | ✅ | 运行时 | `backend/api/routes/agent_api.py:81` |
 | `DEVICE_OFFLINE_TIMEOUT` | `60` | ✅ | 运行时 | `backend/api/routes/heartbeat.py:126` |
 | `DEVICE_SNAPSHOT_INTERVAL` | `30` | ✅ | 运行时 | `backend/api/routes/heartbeat.py:32` |
 | `DISPATCH_SYNC_MAX_ATTEMPTS` | `1` | ✅ | 运行时 | `backend/services/precheck/__init__.py:12` |
@@ -217,8 +217,8 @@
 | `FAKE_TAR_SLEEP` | `0.15` | — | 测试 | `backend/agent/tests/test_script_progress_stamps.py:81` |
 | `HOST_ID` | `` | ✅ | 运行时 | `backend/agent/host_registry.py:28` |
 | `HOST_IP` | `-` | — | 测试 | `backend/agent/tests/test_agent.py:84` |
-| `HOT_UPDATE_ABORT_POLL_INTERVAL_SECONDS` | `1.0` | ✅ | 运行时 | `backend/services/host_upgrade_gate.py:55` |
-| `HOT_UPDATE_ABORT_POLL_TIMEOUT_SECONDS` | `45` | ✅ | 运行时 | `backend/services/host_upgrade_gate.py:52` |
+| `HOT_UPDATE_ABORT_POLL_INTERVAL_SECONDS` | `1.0` | ✅ | 运行时 | `backend/services/host_upgrade_gate.py:56` |
+| `HOT_UPDATE_ABORT_POLL_TIMEOUT_SECONDS` | `45` | ✅ | 运行时 | `backend/services/host_upgrade_gate.py:53` |
 | `JWT_SECRET_KEY` | `` | ✅ | 运行时 | `backend/core/security.py:18` |
 | `LOG_BASE_DIR` | `data/logs` | ✅ | 运行时 | `backend/realtime/log_writer.py:19` |
 | `LOG_LEVEL` | `INFO` | ✅ | 运行时 | `backend/agent/main.py:94` |
@@ -233,11 +233,12 @@
 | `POST_COMPLETION_MAX_DEFER_SECONDS` | `-` | ✅ | 运行时 | `backend/core/settings/scheduler.py:52` |
 | `PRECHECK_NOTIFY_DEBOUNCE_SECONDS` | `0.5` | — | 运行时 | `backend/services/precheck/notify.py:14` |
 | `PRECHECK_REAPER_INTERVAL_SECONDS` | `45` | ✅ | 运行时 | `backend/core/settings/scheduler.py:37` |
+| `PROMETHEUS_MULTIPROC_DIR` | `-` | — | 运行时 | `backend/core/metrics.py:938` |
 | `QUEUE_DEPTH_POLL_INTERVAL_SECONDS` | `15` | ✅ | 运行时 | `backend/core/settings/scheduler.py:36` |
 | `RECONCILER_INTERVAL_SECONDS` | `15` | ✅ | 运行时 | `backend/core/settings/scheduler.py:33` |
 | `RECYCLER_BATCH_SIZE` | `200` | ✅ | 运行时 | `backend/core/settings/scheduler.py:47` |
-| `REDIS_PING_TIMEOUT` | `3.0` | ✅ | 运行时 | `backend/main.py:122` |
-| `REDIS_URL` | `redis://localhost:6379/0` | ✅ | 运行时 | `backend/main.py:157` |
+| `REDIS_PING_TIMEOUT` | `3.0` | ✅ | 运行时 | `backend/main.py:123` |
+| `REDIS_URL` | `redis://localhost:6379/0` | ✅ | 运行时 | `backend/main.py:166` |
 | `RETENTION_CLEANUP_INTERVAL_SECONDS` | `3600` | ✅ | 运行时 | `backend/core/settings/scheduler.py:35` |
 | `REVOKED_TOKEN_CLEANUP_INTERVAL_SECONDS` | `-` | ✅ | 运行时 | `backend/core/settings/scheduler.py:40` |
 | `RUN_RECYCLE_INTERVAL_SECONDS` | `30` | ✅ | 运行时 | `backend/core/settings/scheduler.py:31` |
@@ -248,7 +249,7 @@
 | `RUN_REPORT_JIRA_TEMPLATE_JSON` | `` | ✅ | 运行时 | `backend/services/report_service.py:57` |
 | `SAQ_CONCURRENCY` | `10` | ✅ | 运行时 | `backend/tasks/saq_worker.py:52` |
 | `SAQ_ENQUEUE_WAIT_TIMEOUT` | `5.0` | ✅ | 运行时 | `backend/tasks/saq_worker.py:54` |
-| `SAQ_QUEUE_NAME` | `stp` | ✅ | 运行时 | `backend/main.py:222` |
+| `SAQ_QUEUE_NAME` | `stp` | ✅ | 运行时 | `backend/main.py:234` |
 | `SCHEDULE_DEDUP_WINDOW_SECONDS` | `60` | ✅ | 运行时 | `backend/core/settings/scheduler.py:77` |
 | `SESSION_WATCHDOG_INTERVAL_SECONDS` | `15` | ✅ | 运行时 | `backend/core/settings/scheduler.py:32` |
 | `SMTP_FROM` | `` | ✅ | 运行时 | `backend/services/notification_service.py:50` |
@@ -273,8 +274,8 @@
 | `STP_AEE_SSD_FALLBACK_ROOT` | `-` | ✅ | 运行时 | `backend/agent/aee/paths.py:108` |
 | `STP_AGENT_INSTALL_API_URL` | `` | ✅ | 运行时 | `backend/services/agent_installer.py:52` |
 | `STP_AGENT_MIN_VERSION` | `-` | ✅ | 运行时 | `backend/services/agent_version_gate.py:16` |
-| `STP_AGENT_PIP_INDEX_URL` | `` | ✅ | 运行时 | `backend/services/host_updater.py:582` |
-| `STP_AGENT_PRIV_CONF` | `-` | ✅ | 运行时 | `backend/agent/stp_agent_priv.py:316` |
+| `STP_AGENT_PIP_INDEX_URL` | `` | ✅ | 运行时 | `backend/services/host_updater.py:583` |
+| `STP_AGENT_PRIV_CONF` | `-` | ✅ | 运行时 | `backend/agent/stp_agent_priv.py:349` |
 | `STP_AGENT_RATE_LIMIT_REQUESTS` | `2000` | ✅ | 运行时 | `backend/core/limiter.py:46` |
 | `STP_AGENT_SID_REGISTRY` | `` | ✅ | 运行时 | `backend/realtime/agent_sid_registry.py:42` |
 | `STP_AGENT_SID_REGISTRY_TTL_SECONDS` | `-` | ✅ | 运行时 | `backend/realtime/agent_sid_registry.py:94` |
@@ -282,7 +283,7 @@
 | `STP_AGENT_VERSION` | `unknown` | — | 运行时 | `backend/agent/script_verifier.py:115` |
 | `STP_ALLOW_REGISTER` | `` | ✅ | 运行时 | `backend/core/settings/security.py:51` |
 | `STP_ALLOW_UNSAFE_TEST_DATABASE_URL` | `` | — | 运行时 | `backend/core/db_url_guard.py:30` |
-| `STP_API_DOCS_ENABLED` | `-` | ✅ | 运行时 | `backend/main.py:323` |
+| `STP_API_DOCS_ENABLED` | `-` | ✅ | 运行时 | `backend/main.py:335` |
 | `STP_ARTIFACT_DIGEST_CACHE` | `` | — | 运行时 | `backend/services/artifact_digest.py:49` |
 | `STP_AUDIT_BACKEND` | `` | — | 运行时 | `backend/scripts/audit_stage_a_env.py:10` |
 | `STP_AUDIT_ENV_FILE` | `-` | — | 运行时 | `backend/scripts/audit_stage_a_env.py:11` |
@@ -291,7 +292,7 @@
 | `STP_BACKEND_URL` | `http://127.0.0.1:8000` | — | 运行时 | `backend/scripts/batch_hot_update.py:305` |
 | `STP_BARRIER_MAX_WAIT_SECONDS` | `1800` | ✅ | 运行时 | `backend/agent/pipeline_engine.py:226` |
 | `STP_BARRIER_PROGRESS_STALE_SECONDS` | `-` | ✅ | 运行时 | `backend/agent/pipeline_engine.py:190` |
-| `STP_BARRIER_TIMEOUT_SECONDS` | `600` | ✅ | 运行时 | `backend/agent/pipeline_engine.py:1336` |
+| `STP_BARRIER_TIMEOUT_SECONDS` | `600` | ✅ | 运行时 | `backend/agent/pipeline_engine.py:1354` |
 | `STP_CONSOLE_CANCEL_TTL_SECONDS` | `-` | ✅ | 运行时 | `backend/realtime/console_registry.py:433` |
 | `STP_CONSOLE_CONTROL_TICK_SECONDS` | `-` | ✅ | 运行时 | `backend/services/run_console.py:980` |
 | `STP_CONSOLE_REGISTRY` | `` | ✅ | 运行时 | `backend/realtime/console_registry.py:72` |
@@ -302,7 +303,7 @@
 | `STP_COUNTER_RECONCILE_LOOKBACK_HOURS` | `48` | ✅ | 运行时 | `backend/core/settings/scheduler.py:55` |
 | `STP_CSRF_ENABLED` | `1` | ✅ | 运行时 | `backend/core/csrf.py:37` |
 | `STP_DASHBOARD_SUMMARY_PUSH_INTERVAL_SECONDS` | `-` | ✅ | 运行时 | `backend/services/dashboard_summary_publisher.py:29` |
-| `STP_DEDUP_LOG_ENCODING` | `utf-8` | — | 运行时 | `backend/main.py:185` |
+| `STP_DEDUP_LOG_ENCODING` | `utf-8` | — | 运行时 | `backend/main.py:197` |
 | `STP_DEDUP_PLACE` | `SH` | — | 运行时 | `backend/services/dedup_scan.py:62` |
 | `STP_DEDUP_SCAN_PYTHON` | `` | ✅ | 运行时 | `backend/agent/scan_runner.py:345` |
 | `STP_DEDUP_SCAN_SCRIPT` | `` | ✅ | 运行时 | `backend/agent/scan_runner.py:346` |
@@ -310,7 +311,7 @@
 | `STP_DEDUP_WORK_DIR` | `logs/dedup_uploads` | ✅ | 运行时 | `backend/api/routes/dedup.py:135` |
 | `STP_DEVICE_LOG_EVENT_ENABLED` | `-` | ✅ | 运行时 | `backend/agent/event_uploader.py:109` |
 | `STP_DEVICE_SERIAL` | `-` | — | 测试 | `backend/agent/tests/test_pipeline_engine_script_action.py:51` |
-| `STP_ENABLE_INPROCESS_SAQ` | `1` | ✅ | 运行时 | `backend/main.py:191` |
+| `STP_ENABLE_INPROCESS_SAQ` | `1` | ✅ | 运行时 | `backend/main.py:203` |
 | `STP_EVENT_UPLOADER_PRUNE_LOCAL` | `0` | ✅ | 运行时 | `backend/agent/event_uploader.py:566` |
 | `STP_EXTRACT_BACKEND` | `` | — | 运行时 | `backend/scripts/jira_extract_run52.py:10` |
 | `STP_FILE_SERVER_ADDRESS` | `` | ✅ | 运行时 | `backend/services/file_server_monitor.py:253` |
@@ -346,7 +347,7 @@
 | `STP_PROMETHEUS_URL` | `-` | ✅ | 运行时 | `backend/services/file_server_monitor.py:120` |
 | `STP_RECOVERY_SYNC_INTERVAL_SECONDS` | `60` | ✅ | 运行时 | `backend/agent/main.py:1381` |
 | `STP_RUN_CONSOLE_CANCEL_WAIT_SECONDS` | `-` | ✅ | 运行时 | `backend/services/run_console.py:283` |
-| `STP_RUN_CONSOLE_LOG_ROOT` | `logs/console` | ✅ | 运行时 | `backend/main.py:184` |
+| `STP_RUN_CONSOLE_LOG_ROOT` | `logs/console` | ✅ | 运行时 | `backend/main.py:196` |
 | `STP_RUN_CONSOLE_REPLAY_MAX_LINES` | `-` | ✅ | 运行时 | `backend/services/run_console.py:270` |
 | `STP_RUN_CONSOLE_TERMINAL_RETENTION_SECONDS` | `-` | ✅ | 运行时 | `backend/services/run_console.py:274` |
 | `STP_SCHEDULER_LEADER_ELECTION` | `1` | ✅ | 运行时 | `backend/core/leader_election.py:38` |
@@ -355,7 +356,7 @@
 | `STP_SCRIPT_RUNTIME_ROOT` | `-` | ✅ | 运行时 | `backend/api/routes/scripts.py:165` |
 | `STP_SIGNAL_LINK_RECONCILE_BATCH` | `200` | ✅ | 运行时 | `backend/core/settings/scheduler.py:57` |
 | `STP_SIGNAL_LINK_RECONCILE_INTERVAL_SECONDS` | `300` | ✅ | 运行时 | `backend/core/settings/scheduler.py:44` |
-| `STP_SKIP_INFRA_CHECK` | `0` | ✅ | 运行时 | `backend/main.py:193` |
+| `STP_SKIP_INFRA_CHECK` | `0` | ✅ | 运行时 | `backend/main.py:205` |
 | `STP_SMOKE_HOST_ID` | `` | — | 运行时 | `backend/scripts/sprint4_real_device_verify.py:48` |
 | `STP_SMOKE_ORIGIN` | `http://localhost:5173` | — | 运行时 | `backend/scripts/audit_stage_a_env.py:88` |
 | `STP_SMTP_TIMEOUT_SECONDS` | `15` | ✅ | 运行时 | `backend/services/notification_service.py:55` |
@@ -385,8 +386,8 @@
 | `STP_WATCHER_AEE_SUBDIR_LAYOUT` | `stp` | ✅ | 运行时 | `backend/agent/aee/paths.py:194` |
 | `STP_WATCHER_ENABLED` | `true` | ✅ | 运行时 | `backend/agent/main.py:102` |
 | `STP_WATCHER_PLAN_DEFAULT` | `true` | ✅ | 运行时 | `backend/agent/main.py:103` |
-| `SUDO_GID` | `` | — | 运行时 | `backend/agent/stp_agent_priv.py:152` |
-| `SUDO_UID` | `` | — | 运行时 | `backend/agent/stp_agent_priv.py:145` |
+| `SUDO_GID` | `` | — | 运行时 | `backend/agent/stp_agent_priv.py:185` |
+| `SUDO_UID` | `` | — | 运行时 | `backend/agent/stp_agent_priv.py:178` |
 | `TESTING` | `-` | ✅ | 运行时 | `backend/core/agent_secret.py:15` |
 | `TEST_DATABASE_URL` | `` | ✅ | 运行时 | `backend/scripts/check_schema_sync.py:137` |
 | `WATCHER_BATCH_INTERVAL_SECONDS` | `-` | ✅ | 运行时 | `backend/agent/watcher/policy.py:144` |
@@ -404,6 +405,7 @@
 | `FAKE_TAR_SLEEP` | 测试夹具（模拟 tar 耗时），无常驻配置语义 |
 | `HOST_IP` | 测试注入的 host 身份；生产由 Agent 自行解析 |
 | `PRECHECK_NOTIFY_DEBOUNCE_SECONDS` | precheck 通知去抖：实现细节（防重复推送），不属运维旋钮 |
+| `PROMETHEUS_MULTIPROC_DIR` | prometheus_client 多进程约定键（第三方；仅用于启动期自检，非本平台配置） |
 | `STP_AGENT_VERSION` | hot-update 写入的版本标记（派生值，不自设） |
 | `STP_ALLOW_UNSAFE_TEST_DATABASE_URL` | 测试守卫逃生门：仅本地测试库用，生产禁止设置 |
 | `STP_ARTIFACT_DIGEST_CACHE` | 制品摘要缓存的紧急关闭开关（内部实现细节） |
@@ -426,6 +428,7 @@
 | `SUDO_UID` | sudo 调用时由系统注入（stp_agent_priv） |
 
 <!-- env-inventory:end -->
+
 
 
 

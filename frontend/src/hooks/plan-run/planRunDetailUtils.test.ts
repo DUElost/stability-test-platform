@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   isJobStuck,
   normalizeDispatchStateForRun,
+  planRunJobStatusInvalidateKeys,
+  planRunPrecheckInvalidateKeys,
   planRunRefreshKeys,
   shouldShowDispatchGate,
 } from './planRunDetailUtils';
@@ -108,5 +110,24 @@ describe('normalizeDispatchStateForRun', () => {
     }
     expect(keys).toContainEqual(dedupKeys.status(7));
     expect(keys).toContainEqual(planRunKeys.testCaseResults(7));
+  });
+});
+
+describe('planRun socket coalesce invalidate keys (#2369)', () => {
+  it('JOB_STATUS keys cover devices + timeline + logs', () => {
+    expect([...planRunJobStatusInvalidateKeys(9)]).toEqual([
+      planRunKeys.devicesByRun(9),
+      planRunKeys.timeline(9),
+      planRunKeys.logsByRun(9),
+    ]);
+  });
+
+  it('PRECHECK keys include detail plus JOB_STATUS triad', () => {
+    expect([...planRunPrecheckInvalidateKeys(9)]).toEqual([
+      planRunKeys.detail(9),
+      planRunKeys.devicesByRun(9),
+      planRunKeys.timeline(9),
+      planRunKeys.logsByRun(9),
+    ]);
   });
 });

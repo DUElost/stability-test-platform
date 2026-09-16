@@ -194,6 +194,22 @@ def _resolve_ssh_creds(host_ip: str) -> dict | None:
     return None
 
 
+#: 远端热更新脚本会调用的 wrapper 子命令（#2319）。脚本头按它做**能力**前置判据：
+#: 缺任一项即 fail-closed（`update_agent.yml` 指引），而不是走到调用处才被 argparse
+#: 拒绝（那时代码已同步、服务已重启）。守卫测试钉「脚本里的 $PRIV 调用 ⊆ 本集合」。
+_REQUIRED_PRIV_SUBCOMMANDS = (
+    "apply-code",
+    "apply-resources",
+    "install-schema",
+    "write-version",
+    "write-digest",
+    "sync-env",
+    "fix-ownership",
+    "deps-marker",
+    "restart",
+)
+
+
 _REMOTE_SCRIPT = r"""#!/bin/bash
 set -e
 INSTALL_DIR="{install_dir}"
@@ -241,6 +257,24 @@ if ! sudo -n "$PRIV" selftest >/dev/null 2>&1; then
     echo "ERROR: stp-agent-priv selftest failed (missing/outdated wrapper?); run tools/ansible/playbooks/update_agent.yml on this host, then retry"
     exit 1
 fi
+# #2319：selftest 只证 wrapper **自洽**（属主/权限 + parser↔契约表一致），不证它具备
+# 本脚本要用的子命令——缺一个子命令但自洽的旧 wrapper 同样打 OK、exit 0，脚本会在
+# 第一次调用处被 argparse 拒绝，而此时 apply-code/restart 等写动作**已经执行**
+# （回到 #1942 修掉的半态）。故按能力集合再做一次前置判据，缺失即 fail-closed。
+# 能力清单逐行输出；归一成空格分隔再按词匹配（否则 case 的 " sub " 模式匹配不到行尾）。
+if ! STP_PRIV_CAPS=$(sudo -n "$PRIV" capabilities 2>/dev/null | tr '\n' ' '); then
+    echo "ERROR: stp-agent-priv capabilities unavailable (missing/outdated wrapper?); run tools/ansible/playbooks/update_agent.yml on this host, then retry"
+    exit 1
+fi
+for STP_PRIV_SUB in {required_priv_subcommands}; do
+    case " $STP_PRIV_CAPS " in
+        *" $STP_PRIV_SUB "*) ;;
+        *)
+            echo "ERROR: stp-agent-priv lacks '$STP_PRIV_SUB' (wrapper older than this update script); run tools/ansible/playbooks/update_agent.yml on this host, then retry"
+            exit 1
+            ;;
+    esac
+done
 echo "STP_PRIV_MODE=wrapper"
 
 if [ -n "$CODE_TARB_PATH" ]; then
@@ -407,6 +441,8 @@ def _build_remote_script(
         code_version=code_version,
         artifact_digest=artifact_digest,
         resources_digest=resources_digest,
+        # 能力集合注入（#2319）：与 _REQUIRED_PRIV_SUBCOMMANDS 同源
+        required_priv_subcommands=" ".join(_REQUIRED_PRIV_SUBCOMMANDS),
     )
 
 
