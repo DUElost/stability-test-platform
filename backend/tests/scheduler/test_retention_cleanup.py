@@ -172,7 +172,7 @@ def test_chain_larger_than_batch_makes_bounded_progress(cleanup_env, monkeypatch
     purged_batches = []
     monkeypatch.setattr(
         cron_scheduler, "purge_run_storage_dirs",
-        lambda run_ids: purged_batches.append(list(run_ids)) or set(),
+        lambda run_ids, jobs_by_run=None: purged_batches.append(list(run_ids)) or set(),
     )
 
     cron_scheduler.run_retention_cleanup()
@@ -207,7 +207,7 @@ def test_unreferenced_batch_is_capped_at_one_hundred(cleanup_env, monkeypatch):
     purged_batches = []
     monkeypatch.setattr(
         cron_scheduler, "purge_run_storage_dirs",
-        lambda run_ids: purged_batches.append(list(run_ids)) or set(),
+        lambda run_ids, jobs_by_run=None: purged_batches.append(list(run_ids)) or set(),
     )
     cron_scheduler.run_retention_cleanup()
     assert db.query(PlanRun).count() == 5
@@ -247,13 +247,19 @@ def test_failed_child_purge_preserves_ancestors_but_not_safe_siblings(cleanup_en
     db.flush()
     sibling = _mk_run(db, sibling_plan, parent=root, root=root)
     root_id, parent_id, failed_id, sibling_id = root.id, parent.id, failed.id, sibling.id
-    monkeypatch.setattr(cron_scheduler, "purge_run_storage_dirs", lambda run_ids: {failed_id})
+    monkeypatch.setattr(
+        cron_scheduler, "purge_run_storage_dirs",
+        lambda run_ids, jobs_by_run=None: {failed_id},
+    )
     cron_scheduler.run_retention_cleanup()
     remaining = {run_id for (run_id,) in db.query(PlanRun.id).all()}
     assert remaining == {root_id, parent_id, failed_id}
     assert sibling_id not in remaining
 
-    monkeypatch.setattr(cron_scheduler, "purge_run_storage_dirs", lambda run_ids: set())
+    monkeypatch.setattr(
+        cron_scheduler, "purge_run_storage_dirs",
+        lambda run_ids, jobs_by_run=None: set(),
+    )
     cron_scheduler.run_retention_cleanup()
     assert db.query(PlanRun).count() == 0
 
@@ -410,3 +416,101 @@ def test_purge_failure_defers_db_row_for_retry(cleanup_env, tmp_path, monkeypatc
     assert db.query(PlanRun).filter(PlanRun.id == run.id).first() is not None
     assert (tmp_path / "devices" / str(run.id)).exists()
     assert (tmp_path / "jira" / str(run.id)).exists()
+
+
+# ── #2031：同根下的 jobs/{job_id}/（按 job 分桶）+ 共享根容器化校验 ─────────
+
+
+def _mk_job(db, plan, run, device, host):
+    from backend.models.job import JobInstance
+
+    job = JobInstance(
+        plan_run_id=run.id, plan_id=plan.id,
+        device_id=device.id, host_id=host.id,
+        status="COMPLETED",
+        pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+    )
+    db.add(job)
+    db.commit()
+    return job
+
+
+def _make_nfs_job_dir(root, job_id):
+    d = root / "jobs" / str(job_id) / "fleet"
+    d.mkdir(parents=True)
+    (d / "artifact.bin").write_text("x")
+
+
+def test_nfs_job_dirs_purged_with_db_row(
+    cleanup_env, sample_host, sample_device, tmp_path, monkeypatch,
+):
+    """#2031：`jobs/{job_id}/` 与 run 目录同根，但按 **job** 分桶——同样必须在删行前清理。
+
+    反例（修复前）：该前缀不在清理集合里，而 StepTrace/JobArtifact 行随本批删除
+    （保留期 3 天 << artifact 清理器 30 天）→ 目录索引消失，成为永不可回溯的孤儿。
+    """
+    db, plan = cleanup_env
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
+    run = _mk_run(db, plan, status="SUCCESS", age_days=10)
+    job = _mk_job(db, plan, run, sample_device, sample_host)
+    active_run = _mk_run(db, plan, status="RUNNING", age_days=0)
+    active_job = _mk_job(db, plan, active_run, sample_device, sample_host)
+    _make_nfs_job_dir(tmp_path, job.id)
+    _make_nfs_job_dir(tmp_path, active_job.id)
+
+    cron_scheduler.run_retention_cleanup()
+
+    assert not (tmp_path / "jobs" / str(job.id)).exists()
+    assert (tmp_path / "jobs" / str(active_job.id)).exists(), "未到期 run 的 job 目录不得清理"
+    assert db.query(PlanRun).filter(PlanRun.id == run.id).first() is None
+
+
+def test_job_dir_purge_failure_defers_owning_run(
+    cleanup_env, sample_host, sample_device, tmp_path, monkeypatch,
+):
+    """job 目录删除失败按**所属 run** 归因：该 run 整批推迟（行与目录都留下轮重试）。"""
+    import shutil as _shutil
+
+    db, plan = cleanup_env
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
+    run = _mk_run(db, plan, status="SUCCESS", age_days=10)
+    job = _mk_job(db, plan, run, sample_device, sample_host)
+    _make_nfs_job_dir(tmp_path, job.id)
+
+    real_rmtree = _shutil.rmtree
+
+    def _boom(path, *args, **kwargs):
+        if "/jobs/" in str(path):
+            raise OSError("read-only filesystem")
+        return real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(_shutil, "rmtree", _boom)
+
+    cron_scheduler.run_retention_cleanup()
+
+    assert db.query(PlanRun).filter(PlanRun.id == run.id).first() is not None
+    assert (tmp_path / "jobs" / str(job.id)).exists()
+
+
+def test_purge_refuses_target_outside_shared_root(cleanup_env, tmp_path, monkeypatch):
+    """#2031：共享根下的符号链接目录指向根外时不得跟随删除（同 #1825 威胁模型）。
+
+    越界一律拒绝并计入 failed → 该 run 推迟（行保留），等人工纠正共享根布局。
+    """
+    db, plan = cleanup_env
+    nfs = tmp_path / "nfs"
+    outside = tmp_path / "outside"
+    nfs.mkdir()
+    outside.mkdir()
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(nfs))
+
+    run = _mk_run(db, plan, status="SUCCESS", age_days=10)
+    keep = outside / str(run.id) / "sub"
+    keep.mkdir(parents=True)
+    (keep / "keep.log").write_text("keep")
+    (nfs / "devices").symlink_to(outside)   # {根}/devices → 根外
+
+    cron_scheduler.run_retention_cleanup()
+
+    assert (keep / "keep.log").exists(), "越界目标被删除（容器化校验失效）"
+    assert db.query(PlanRun).filter(PlanRun.id == run.id).first() is not None
