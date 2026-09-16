@@ -119,6 +119,47 @@ export function classifyApiError(error: unknown): ApiErrorKind {
   return "server";
 }
 
+export interface LoadErrorCopy {
+  description: string;
+  /** 是否值得给「重试」：资源不存在重试没有意义（#2361）。 */
+  retryable: boolean;
+}
+
+/**
+ * 加载面错误 → 用户可见文案（#2361）。
+ *
+ * 与 `classifyApiError` 同一判据（只认 status，不猜文案），但把**「不存在」与
+ * 「连不上」分开**：404 一律用调用方给的资源不存在文案（服务端 detail 常是英文
+ * `... not found`，直接透出既不本地化也指向错误方向）；无 status（网络层/超时）
+ * 才提示连接；其余带 status 的用服务端 message，缺了再回落调用方兜底。
+ *
+ * 文案本身仍留在调用方——同一个 404 在「执行记录」与「用例结果」的措辞不同。
+ */
+export function loadErrorCopy(
+  error: unknown,
+  copy: { notFound: string; network?: string; fallback?: string },
+): LoadErrorCopy {
+  const kind = classifyApiError(error);
+  if (kind === 'not_found') {
+    return { description: copy.notFound, retryable: false };
+  }
+  if (kind === 'network') {
+    // #2364：超时与服务端繁忙同形（无 status），但排查方向不同——超时是「等一会
+    // 再试/后端忙」，网络层是「查连接」。两者分开措辞，别都写成「检查网络」。
+    const timedOut = toApiError(error).code === 'TIMEOUT';
+    return {
+      description: timedOut
+        ? '请求超时（服务端繁忙或网络慢），请稍后重试'
+        : copy.network ?? '请检查网络连接或稍后重试',
+      retryable: true,
+    };
+  }
+  return {
+    description: toApiError(error).message || copy.fallback || '请稍后重试',
+    retryable: true,
+  };
+}
+
 type AuthFailureHandler = () => void;
 let _authFailureHandler: AuthFailureHandler | null = null;
 

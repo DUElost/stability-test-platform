@@ -21,7 +21,7 @@ import { Card, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { InlineError } from '@/components/ui/error-state';
 import { useRealtimeDashboard } from '@/hooks/useRealtimeDashboard';
-import { api } from '@/utils/api';
+import { api, loadErrorCopy } from '@/utils/api';
 import { DASHBOARD_SUBSCRIPTION } from '@/config';
 import { ENTITY_STATUS_COLORS } from '@/design-system/colors';
 import { CHART_SECTION, LAYOUT, STAT, TEXT } from '@/design-system/tokens';
@@ -81,6 +81,10 @@ export default function Dashboard() {
     queryKey: ['results-summary', { projectKey: null, limit: 30 }],
     queryFn: () => api.results.summary(30),
     refetchInterval: 60000,
+  });
+  // #2364：风险卡的失败原因要能区分（超时/网络 vs 服务端），而不是只有「加载失败」
+  const riskErrorCopy = loadErrorCopy(riskError, {
+    notFound: '风险接口不存在（前端与后端版本不一致？）',
   });
 
   const hostStats = summary?.hosts ?? {
@@ -356,7 +360,7 @@ export default function Dashboard() {
               isLoading={planSuccessLoading}
             />
           )}
-          {riskError ? (
+          {riskError && !resultsSummary ? (
             <Card className="p-4">
               <CardHeader className="px-0 pt-0 pb-3">
                 <CardTitle className="flex items-center gap-2 text-sm font-medium">
@@ -364,13 +368,22 @@ export default function Dashboard() {
                   风险分布
                 </CardTitle>
               </CardHeader>
-              <InlineError message="风险分布加载失败" onRetry={() => void refetchRisk()} />
+              {/* #2364：分类文案——超时（后端繁忙）与网络层指向不同排查方向 */}
+              <InlineError message={`风险分布${riskErrorCopy.description}`} onRetry={() => void refetchRisk()} />
             </Card>
           ) : (
-            <RiskDistributionChart
-              data={resultsSummary?.risk_distribution ?? { high: 0, medium: 0, low: 0, unknown: 0 }}
-              isLoading={riskLoading}
-            />
+            <div className="space-y-2">
+              {riskError && (
+                // #2364：刷新失败但仍有上次数据——保留图表并标明数据时点，而不是整卡消失
+                <p className="text-[11px] text-muted-foreground">
+                  风险分布最近一次刷新失败：{riskErrorCopy.description}（下方为上次成功的数据）
+                </p>
+              )}
+              <RiskDistributionChart
+                data={resultsSummary?.risk_distribution ?? { high: 0, medium: 0, low: 0, unknown: 0 }}
+                isLoading={riskLoading}
+              />
+            </div>
           )}
         </div>
       </div>
