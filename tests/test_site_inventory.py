@@ -262,3 +262,34 @@ def test_inventory_derived_config_survives_a_round_trip(tmp_path):
     assert payload["agents"][0]["os"] == {"distribution": "debian", "version": "13"}
     reparsed = parse_site_config(yaml.safe_dump(payload))
     assert [agent.target for agent in reparsed.agents] == ["192.0.2.11", "192.0.2.12"]
+
+
+def test_ansible_port_survives_into_the_agent_entry(tmp_path):
+    """#2283：ansible_port 此前解析后被 pop 丢弃——Host 行恒以 22 建立。"""
+    text = INVENTORY.replace(
+        "192.0.2.11 ansible_host=192.0.2.11 ansible_user=ops",
+        "192.0.2.11 ansible_host=192.0.2.11 ansible_port=2222 ansible_user=ops",
+    )
+    entries, _credentials = parse_inventory(write_inventory(tmp_path, text))
+
+    by_target = {entry["target"]: entry for entry in entries}
+    assert by_target["192.0.2.11"]["ssh_port"] == 2222
+    assert by_target["192.0.2.12"]["ssh_port"] == 22, "未声明端口的主机取默认 22"
+
+
+def test_ansible_port_must_be_a_valid_port(tmp_path):
+    """越界端口在**解析期**拒绝，而不是建出一条连不上的 Host（#2283）。"""
+    text = INVENTORY.replace(
+        "192.0.2.11 ansible_host=192.0.2.11 ansible_user=ops",
+        "192.0.2.11 ansible_host=192.0.2.11 ansible_port=70000 ansible_user=ops",
+    )
+    with pytest.raises(InventoryError) as exc:
+        parse_inventory(write_inventory(tmp_path, text))
+    assert "ansible_port" in str(exc.value)
+
+    text = INVENTORY.replace(
+        "192.0.2.11 ansible_host=192.0.2.11 ansible_user=ops",
+        "192.0.2.11 ansible_host=192.0.2.11 ansible_port=abc ansible_user=ops",
+    )
+    with pytest.raises(InventoryError):
+        parse_inventory(write_inventory(tmp_path, text))

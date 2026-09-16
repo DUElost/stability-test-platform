@@ -354,9 +354,12 @@ def host_field(host: dict[str, Any], *names: str) -> str:
 
 
 def _create_payload(
-    *, name: str, ip: str, binding: dict[str, str],
+    *, name: str, ip: str, binding: dict[str, str], ssh_port: int = 22,
 ) -> dict[str, Any]:
-    payload: dict[str, Any] = {"name": name, "ip": ip, "ssh_port": 22, "ssh_user": binding["USERNAME"]}
+    # #2283：端口来自 site config（inventory 的 ansible_port），不再硬编码 22。
+    payload: dict[str, Any] = {
+        "name": name, "ip": ip, "ssh_port": ssh_port, "ssh_user": binding["USERNAME"],
+    }
     if "PASSWORD" in binding:
         payload["ssh_auth_type"] = "password"
         payload["ssh_password"] = binding["PASSWORD"]
@@ -386,6 +389,7 @@ def reconcile_host(
     name: str,
     ip: str,
     binding: dict[str, str],
+    ssh_port: int = 22,
     location: str = "$.agents",
 ) -> tuple[str | None, Check | None]:
     """Return an existing/created Host ID, or (None, failure).
@@ -399,7 +403,9 @@ def reconcile_host(
                            role="control_plane")
     if existing is not None:
         return _reuse_host(existing, name=name, location=location)
-    status, payload = api.create_host(_create_payload(name=name, ip=ip, binding=binding))
+    status, payload = api.create_host(
+        _create_payload(name=name, ip=ip, binding=binding, ssh_port=ssh_port),
+    )
     if status == 200 and isinstance(payload, dict) and host_field(payload, "id"):
         return host_field(payload, "id"), None
     if status == 409:
@@ -776,8 +782,10 @@ def stage_s5_agents(
     checks: list[Check] = []
     if not config.agents:
         # 先装控制面、Agent 随后接入：S5 显式跳过并给出后续命令。
+        # #2283：状态是 **BLOCKED 而非 PASS**——「零 Agent」不是通过证据（install
+        # 报告的状态聚合只看 FAIL，故 BLOCKED 不会把这条合法流程判失败）。
         return [Check(
-            "install.s5", "agent", "PASS", "$.agents", "agents_pending",
+            "install.s5", "agent", "BLOCKED", "$.agents", "agents_pending",
             "No Agent is declared yet; the control plane was installed without Agents.",
             "Add hosts to the inventory and run `deploy/agent/install.sh` "
             "(or `install --through-agents --agents-inventory <file>`).",
@@ -927,7 +935,8 @@ def _onboard_one(
 
     try:
         host_id, host_check = reconcile_host(
-            api, name=name, ip=agent.target, binding=binding, location=location,
+            api, name=name, ip=agent.target, binding=binding,
+            ssh_port=agent.ssh_port, location=location,
         )
     except ApiError as error:
         return [_fail("install.s5.host", error.code,
