@@ -61,6 +61,20 @@ export default function HostsPage() {
     refetchInterval: 10000,
   });
   const hosts = useMemo(() => coerceHostList(hostsData), [hostsData]);
+  // #2362：空态要区分「从未接入」与「全部退役」——主查询在 include_retired=false 时
+  // 只回**过滤后**的集合（`total` 也是过滤后的计数），空集无法自证属于哪一种。
+  // 故用一条「含退役、只取 1 条」的探针查**存在性**：仅在空态启用（不增加常态请求），
+  // 独立缓存键（不复用 retiredList，见 queryKeys 的说明）。未回来时保持既有文案。
+  const retiredPeekQ = useQuery({
+    queryKey: hostKeys.retiredPeek(),
+    queryFn: () => fetchHostList(0, 1, true),
+    enabled: !showRetired && !isLoading && hosts.length === 0,
+    refetchInterval: 10000,
+  });
+  const hasAnyHost =
+    retiredPeekQ.data === undefined
+      ? null
+      : coerceHostList(retiredPeekQ.data).length > 0;
   const liveHostIds = useMemo(
     () => new Set(hosts.map((host) => String(host.id))),
     [hosts],
@@ -719,6 +733,20 @@ export default function HostsPage() {
     );
   }
 
+  // #2362：空态文案按**空集的性质**分三种，而不是一律归因退役——「都已退役」在
+  // 全新环境（从未接入）会把排障方向引到退役记录上。`hasAnyHost === null`
+  // （探针未回/失败）保持既有文案：不确定时不改口径。
+  const emptyTitle = showRetired
+    ? '还没有主机'
+    : hasAnyHost === false
+      ? '暂无主机'
+      : '没有在用主机';
+  const emptyDescription = showRetired
+    ? '当前没有任何主机记录。'
+    : hasAnyHost === false
+      ? '尚未接入任何主机。等待 Agent 接入后，主机会出现在这里。'
+      : '所有主机都已退役。勾选「显示已退役」可查看并解除退役。';
+
   if (tableData.length === 0) {
     return (
       <PageContainer width="wide">
@@ -726,12 +754,8 @@ export default function HostsPage() {
         {/* #2051：空态也要给「显示已退役」开关，否则全退役后无法解除退役 */}
         <div className="flex items-center justify-end gap-2 py-2">{retiredToggle}</div>
         <EmptyState
-          title={showRetired ? '还没有主机' : '没有在用主机'}
-          description={
-            showRetired
-              ? '当前没有任何主机记录。'
-              : '所有主机都已退役。勾选「显示已退役」可查看并解除退役。'
-          }
+          title={emptyTitle}
+          description={emptyDescription}
           icon={<Server className="w-16 h-16" />}
           action={
             isAdmin ? (
