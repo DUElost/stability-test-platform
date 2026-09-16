@@ -5,6 +5,7 @@
 requests>=2.34.2,<3.0
 
 # .env loader (soft dep: agent main.py wraps in try/except)
+# Agent runtime requires Python >=3.10 (python-dotenv>=1.2.3 floor)
 python-dotenv>=1.2.3,<2.0
 
 # SocketIO sync client — connects /agent namespace for real-time
