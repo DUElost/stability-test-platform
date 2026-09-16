@@ -50,9 +50,15 @@ tags API 反查 = `pragent/pr-agent:0.42.0-github_action`（2026-08-08 构建）
   使该键变 `False`，同 section 的 `persistent_comment` 仍为 `True`（覆盖不误伤相邻键）；
 - 源码核对（v0.42.0）：`pr_reviewer.py:191` 读取并透传该键；
   `git_provider.publish_persistent_comment_full` 是唯一发状态行处；
-- `scripts/run_gates.py check:quick`（含 gov-surface S4 锚点）——结果见 PR；
-- **待实测（本 PR 合入后）**：在一个 PR 上连推两次，确认状态评论为 0、guide 仍原地
-  更新。未实测前不得当作已验收。
+- `scripts/run_gates.py check:quick`（含 gov-surface S4 锚点）→ `OK (10 gates)`；#2243 的
+  六个 required check（lint / CodeQL / pr-typecheck / pr-compileall / pr-agent-tests /
+  pr-migrate-empty-db）全绿；
+- **端到端实测（合入 main 后，2026-09-16 03:12 起）**：
+  - 运行日志（run 35051253658，03:18:40）显示 `pr_reviewer.final_update_message: false`
+    随 docker 步的 `-e` 透传进容器——该键确实生效，不是被静默忽略；
+  - 正例 #2245：guide 评论 03:11:34 创建、**03:20:10 原地更新**（同一次复评写入），
+    该 PR 至今 github-actions 评论数 = 1，无状态行；合入前对照 #2241 在 03:02:43 有状态行；
+  - 反例扫描：合入时刻（03:12:10）之后，最近 25 个 PR 的状态行数 = 0。
 
 ## Revisit
 
