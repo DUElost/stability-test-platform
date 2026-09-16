@@ -118,33 +118,29 @@ export const hotUpdate = {
     ).then(r => r.data),
 };
 
-export interface AgentInstallResult {
-  ok: boolean;
-  rc: number;
-  log_path?: string | null;
-  console_run_id?: string | null;
-  message: string;
-}
-
+// ADR-0044：安装由 RunConsole 自持——不再有 SAQ 作业面（saq_key/作业状态已移除）。
 export interface AgentInstallTriggerResult {
   ok: boolean;
   host_id: string;
-  saq_key: string;
   console_run_id: string;
   room: string;
   status: string;
+  log_path?: string | null;
   message: string;
 }
 
 export interface AgentInstallStatus {
   host_id: string;
-  saq_key: string;
-  status: string; // queued | active | complete | failed | aborted | unknown
+  /** console 派生摘要：idle | running | succeeded | failed | canceled | lost */
+  status: string;
   console_run_id?: string | null;
+  /** console 终态：RUNNING | SUCCESS | FAILED | CANCELED（lost/idle 时为 null） */
   console_status?: string | null;
+  /** false = 无活动运行；结果可能来自 DB 回放（见 last_install）或已丢失 */
+  console_found: boolean;
+  exit_code?: number | null;
   room?: string | null;
   log_path?: string | null;
-  result?: AgentInstallResult | null;
 }
 
 export const agentInstall = {

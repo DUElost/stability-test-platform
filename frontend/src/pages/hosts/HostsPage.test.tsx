@@ -44,7 +44,7 @@ vi.mock('../../utils/api', async (importOriginal) => {
       trigger: vi.fn().mockResolvedValue({
         ok: true,
         host_id: 'h1',
-        saq_key: 'install:h1',
+        log_path: '/var/log/stp/con-test.log',
         console_run_id: 'con-test',
         room: 'console:con-test',
         status: 'running',
@@ -52,11 +52,11 @@ vi.mock('../../utils/api', async (importOriginal) => {
       }),
       status: vi.fn().mockResolvedValue({
         host_id: 'h1',
-        saq_key: 'install:h1',
-        status: 'complete',
+        log_path: '/var/log/stp/con-test.log',
+        status: 'succeeded',
         console_run_id: 'con-test',
         console_status: 'SUCCESS',
-        result: { ok: true, rc: 0, message: 'ok' },
+        console_found: true,
       }),
     },
     hotUpdate: {

@@ -221,10 +221,21 @@ class FakeApi:
     def install_status(self, host_id: str) -> dict:
         self.status_calls += 1
         index = min(self.status_calls - 1, len(self._console_sequence) - 1)
+        console_status = self._console_sequence[index]
+        summary = {
+            "RUNNING": "running",
+            "SUCCESS": "succeeded",
+            "FAILED": "failed",
+            "CANCELED": "canceled",
+        }.get(console_status, "unknown")
         return {
             "host_id": host_id,
-            "status": "complete",
-            "console_status": self._console_sequence[index],
+            "status": summary,
+            "console_status": console_status,
+            "console_found": True,
+            "exit_code": 0 if console_status == "SUCCESS" else None,
+            "room": f"console:con-{host_id}",
+            "log_path": f"/opt/stp-control/logs/console/con-{host_id}.log",
         }
 
     def get_host(self, host_id: str) -> dict:
@@ -722,34 +733,43 @@ class TestFailClosed:
         assert "agent_install_failed" in _codes(checks)
 
     def test_canceled_install_is_reported_as_canceled_not_failed(self, site):
-        """被作业窗口取消 ≠ 脚本失败：分开报，并给出窗口与复跑线索（#2220）。
+        """取消 ≠ 脚本失败：分开报，并带判定依据与日志路径（#2225 / ADR-0044）。
 
-        现场实景：SAQ 安装作业 900s 到期取消，console 终态 CANCELED、SAQ 侧同时是
-        failed/aborted；合并报成 agent_install_failed 让操作者去目标机找不存在的错误。
+        现场实景：安装被取消（显式取消与控制面重启在 console 上是同一终态），
+        合并报成 agent_install_failed 让操作者去目标机找不存在的错误。
         """
-        class CanceledApi(FakeApi):
-            def install_status(self, host_id: str) -> dict:
-                return {
-                    "status": "aborted",  # 作业窗口到期时 SAQ 侧就是这个终态
-                    "console_status": "CANCELED",
-                    "log_path": "/opt/stp-control/logs/console/con-deadbeef.log",
-                }
-
-        checks = _run(site(), CanceledApi())
+        checks = _run(site(), FakeApi(install_console="CANCELED"))
         check = next(c for c in checks if c.check_id == "install.s5.install")
 
         assert check.code == "agent_install_canceled"
         assert "agent_install_failed" not in _codes(checks)
-        # message 要带上判定依据与日志路径，remediation 要解释窗口并给出复跑方式
-        assert "CANCELED" in check.message and "saq=aborted" in check.message
-        assert "con-deadbeef.log" in check.message
-        assert "900s" in check.remediation and "deploy/agent/install.sh" in check.remediation
+        assert "console=CANCELED" in check.message
+        assert check.message.rstrip().endswith(").")  # 带 log=... 的 detail
+        assert "deploy/agent/install.sh" in check.remediation
+
+    def test_lost_run_record_is_reported_as_canceled_not_failed(self, site):
+        """运行记录消失（控制面重启/记录过期）按取消报——那也是生命周期边界，不是脚本失败。"""
+        class LostApi(FakeApi):
+            def install_status(self, host_id: str) -> dict:
+                return {
+                    "status": "lost",
+                    "console_status": None,
+                    "console_found": False,
+                    "log_path": "/opt/stp-control/logs/console/con-gone.log",
+                }
+
+        checks = _run(site(), LostApi())
+        check = next(c for c in checks if c.check_id == "install.s5.install")
+
+        assert check.code == "agent_install_canceled"
+        assert "status=lost" in check.message and "con-gone.log" in check.message
+        assert "agent_install_failed" not in _codes(checks)
 
     def test_script_failure_still_reports_failed(self, site):
-        """回归守卫：真正的脚本失败（SAQ failed、console 无终态）仍报 failed，别被上面的分支吃掉。"""
+        """回归守卫：真正的脚本失败（console FAILED）仍报 failed，别被取消分支吃掉。"""
         class FailedJobApi(FakeApi):
             def install_status(self, host_id: str) -> dict:
-                return {"status": "failed", "console_status": None}
+                return {"status": "failed", "console_status": "FAILED", "console_found": True}
 
         checks = _run(site(), FailedJobApi())
 

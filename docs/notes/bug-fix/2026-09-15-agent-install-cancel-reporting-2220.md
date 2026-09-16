@@ -20,6 +20,14 @@ S5 把 RunConsole 的 `CANCELED` 与 `FAILED` 分开报，并给出可执行的�
 与作业窗口到期（进程组被信号终止 → rc -15/-9 → CANCELED，见 `run_console.py`）。命名成超时会
 把显式取消说成超时；文案里把两种可能都讲清楚，并优先给出「先看日志再复跑」的动作。
 
+## 后续（同日）
+
+本单只解决**读数**：把 CANCELED 与 FAILED 分开报。同日 owner 裁决根因（安装被 SAQ 作业窗口
+持有）并立 [ADR-0044](../../adr/ADR-0044-agent-install-execution-ownership.md)：Agent 安装改由
+RunConsole 自持、删除等待它的 SAQ 作业，本单的判据保留并加一条「记录已丢失（`lost`）按取消报」。
+故本文提到的「900s 窗口」在 ADR-0044 落地后不再存在——慢目标机的正确提示回到
+`install_timeout`（先预装大件）。
+
 ## Alternatives
 
 - **在 S5 里判「是不是 SAQ 作业窗口」**：`/install/status` 只暴露 saq status 与 console status，
