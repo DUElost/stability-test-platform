@@ -41,13 +41,19 @@ class TestCreateUser:
 
     def test_create_user_rejects_password_over_72_bytes(self, client, admin_headers):
         """#281 CR Major:bcrypt 只使用前 72 字节——多字节字符密码不得被
-        静默截断(19 个 4 字节 emoji = 76 字节 > 72,必须 422)。"""
+        静默截断(19 个 4 字节 emoji = 76 字节 > 72,必须 422)。
+
+        #2406：文案必须是**面向操作者**的中文可执行说明——它会原样出现在前端提示里
+        （原先那句英文技术串正是「填完表单只看到一句看不懂的话」的来源）。
+        """
         response = client.post(
             "/api/v1/users",
             json={"username": "bytepw", "password": "😀" * 19, "role": "user"},
             headers=admin_headers,
         )
         assert response.status_code == 422
+        assert "72 字节" in response.text, "边界数值要出现在提示里（用户据此改密码）"
+        assert "must not exceed 72 bytes" not in response.text, "不得回退成英文技术串"
 
     def test_create_user_duplicate(self, client, admin_headers):
         client.post("/api/v1/users", json={"username": "dup", "password": "pass12345", "role": "user"}, headers=admin_headers)
