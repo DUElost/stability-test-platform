@@ -155,6 +155,13 @@ class UnisocUniviewReconciler:
         #: 「不再尝试拉取」，而 ``_processed[name] = ""`` 这种写法会被拉取循环的
         #: `prev == signature` 判据穿透（`"" != S` → 仍会重拉），等于没止损。
         self._abandoned_dirs: Set[str] = set()
+        # #2394-①：unresolved gauge 的逐目录观察态（每目录 WARN 一次；
+        # 名字从 listing 消失或已入 processed 即复位，防状态无界增长）。
+        self._unresolved_ticks: Dict[str, int] = {}
+        self._unresolved_warned: Set[str] = set()
+        self._unresolved_warn_after = max(
+            1, _env_int("STP_WATCHER_UNISOC_UNRESOLVED_WARN_TICKS", 3),
+        )
         # #767：_processed 只增不减 + 整集重写会让状态存储按设备历史事件总量
         # 线性膨胀。去重语义要求保留的名字只有两类——仍在设备列表上（会被
         # 重拉）、仍在当前 stamp 本地树（会被重扫）；两者皆非的名字不可能再
@@ -350,6 +357,7 @@ class UnisocUniviewReconciler:
         if emitted:
             self.stats.ticks_with_new += 1
             self.stats.new_entries_total += emitted
+        self._update_unresolved_gauge()
         pruned = self._prune_processed(local_names)
         if recorded or pruned:
             if self._save_processed_state() and recorded_names:
@@ -357,6 +365,41 @@ class UnisocUniviewReconciler:
                 # 目录的下一次「新内容」误当重放复用，见 _drop_emit_intents）。
                 self._drop_emit_intents(recorded_names)
         return emitted
+
+    def _update_unresolved_gauge(self) -> None:
+        """#2394-①：本拍「设备远端列到、但平台未落账/未放弃」的目录集合。
+
+        事实源是**远端清单** ``_last_listed``（不是本地树）：pull 恒失败的目录
+        本地什么都没有，恰是「落成未采到」的形态本体。列举失败拍（设备离线/
+        adb 抖动，``_last_listed is None``）不改写 gauge——保持上次成功清单的
+        视角，与 #2079/#2272 的保守重试语义同向。
+
+        与 #2272 放弃时的一次性 ERROR 互补：gauge 还覆盖**在途**（瞬时失败重试中）
+        与 B4（窗口间落盘等待）形态——「落成≠采到」无论最终是否收敛都量化可见。
+        隐藏名（``.`` 前缀）不计。每目录只 WARN 一次（进入/退出 pending 时
+        复位），病态目录不刷屏。"""
+        listed = self._last_listed
+        if listed is None:
+            return
+        with self._state_lock:
+            pending = {
+                n for n in listed
+                if not n.startswith(".")
+                and n not in self._processed and n not in self._abandoned_dirs
+            }
+        self.stats.unresolved_dirs = len(pending)
+        for name in sorted(pending):
+            ticks = self._unresolved_ticks.get(name, 0) + 1
+            self._unresolved_ticks[name] = ticks
+            if ticks >= self._unresolved_warn_after and name not in self._unresolved_warned:
+                self._unresolved_warned.add(name)
+                logger.warning(
+                    "unisoc_reconciler_unresolved_dir serial=%s job=%d dir=%s ticks=%d",
+                    self._serial, self._job_id, name, ticks,
+                )
+        for name in [k for k in self._unresolved_ticks if k not in pending]:
+            self._unresolved_ticks.pop(name, None)
+            self._unresolved_warned.discard(name)
 
     def _prune_processed(self, local_names: Set[str]) -> int:
         """#767：裁剪不可能再触发处理的名字，返回本拍移除数。
@@ -564,6 +607,8 @@ class UnisocUniviewReconciler:
                 self._note_dir_failure(name)
         self._unconfirmed_local = unconfirmed
         self._payload_skipped = payload_skipped
+        # #2394-①：降级态同样是「采到但残缺」的可桥接事实
+        self.stats.dirs_oversized_skipped = len(payload_skipped)
         if pulled:
             logger.info(
                 "unisoc_reconciler_pulled serial=%s job=%d count=%d",
@@ -596,6 +641,8 @@ class UnisocUniviewReconciler:
             # 达上限：放弃该目录（与其每拍白拉整目录，不如显式止损并可见）
             self._dir_attempts.pop(name, None)
             self._abandoned_dirs.add(name)
+            # #2394-①：放弃是终态，计数桥进 reconciler_stats（日志只有一瞬）
+            self.stats.dirs_abandoned = len(self._abandoned_dirs)
         self.stats.signals_dropped += 1
         logger.error(
             "unisoc_reconciler_dir_abandoned serial=%s job=%d dir=%s attempts=%d",

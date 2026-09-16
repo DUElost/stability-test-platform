@@ -347,3 +347,42 @@ describe('LogEventsCard (#529)', () => {
     expect(screen.queryByText('无 device_log_event 记录')).not.toBeInTheDocument();
   });
 });
+
+describe('LogEventsCard 状态口径（#2150 裁决 B）', () => {
+  it('REMOTE 行的状态单元格带判据说明（无 merge 产物 ⇒ 不归档，不是卡住）', async () => {
+    mocks.getLogEvents.mockResolvedValue({
+      plan_run_id: 103,
+      data_authority: 'device_log_event',
+      total: 1,
+      items: [event({ id: 'ev-remote', state: 'REMOTE' })],
+      platforms: ['MTK'],
+    });
+    renderCard(103, true);
+
+    const cell = (await screen.findByText('REMOTE')).closest('td');
+    expect(cell).not.toBeNull();
+    const hint = cell?.getAttribute('title') ?? '';
+    expect(hint).toContain('无 merge 产物');
+    expect(hint).toContain('不是卡住');
+  });
+
+  it('ARCHIVED 行说明归档落点；其它状态不带 title（不硬塞口径）', async () => {
+    mocks.getLogEvents.mockResolvedValue({
+      plan_run_id: 103,
+      data_authority: 'device_log_event',
+      total: 2,
+      items: [
+        event({ id: 'ev-archived', state: 'ARCHIVED' }),
+        event({ id: 'ev-local', state: 'LOCAL' }),
+      ],
+      platforms: ['MTK'],
+    });
+    renderCard(103, true);
+
+    const archivedCell = (await screen.findByText('ARCHIVED')).closest('td');
+    expect(archivedCell?.getAttribute('title')).toContain('jira/{run_id}/');
+
+    const localCell = screen.getByText('LOCAL').closest('td');
+    expect(localCell?.getAttribute('title')).toBeNull();
+  });
+});

@@ -2486,7 +2486,10 @@ def _load_deduped_aee_events(
             artifact_uri=row.artifact_uri,
         )
         entry_origin = _normalize_entry_origin(extra.get("entry_origin"))
-        key = _aee_event_dedup_key(row.id, row.category, row.path_on_device, extra)
+        key = _aee_event_dedup_key(
+            row.id, row.category, row.path_on_device, extra,
+            device_serial=row.device_serial or "",
+        )
         candidate = {
             "key": key,
             "group": group,
@@ -2522,6 +2525,7 @@ def _aee_event_dedup_key(
     category: str,
     path_on_device: str,
     extra: dict[str, Any],
+    device_serial: str = "",
 ) -> str:
     nfs_path = str(extra.get("nfs_path") or "").strip()
     # #1956：UNIVIEW 与 AEE 同用 nfs_path 去重——同一物理事件被多次 run 拉取时只算一次。
@@ -2533,7 +2537,7 @@ def _aee_event_dedup_key(
     # 故 UNIVIEW 键补上事件身份；AEE / VENDOR_AEE 保持目录键不动（其 nfs_path 指向
     # 单事件产物，目录键本已唯一）。
     if category == "UNIVIEW" and nfs_path:
-        return _uniview_dedup_key(nfs_path, extra)
+        return _uniview_dedup_key(nfs_path, extra, device_serial=device_serial)
     if category in {"AEE", "VENDOR_AEE"} and nfs_path:
         return f"nfs:{nfs_path}"
     path = str(path_on_device or "").strip()
@@ -2542,8 +2546,20 @@ def _aee_event_dedup_key(
     return f"id:{signal_id}"
 
 
-def _uniview_dedup_key(nfs_path: str, extra: dict[str, Any]) -> str:
-    """UNIVIEW 去重键：目录 + **事件身份**（#2080），形态**恒定三段**（#2285）。
+def _uniview_dedup_key(
+    nfs_path: str, extra: dict[str, Any], *, device_serial: str = "",
+) -> str:
+    """UNIVIEW 去重键：**serial + 事件目录 + 事件身份**，形态恒定四段（#2080/#2285/#2394）。
+
+    #2394-②：身份段**不含日期根**。``nfs_path`` 的存储布局
+    ``…/uniview_watcher/{MMDD}/{serial}/{event_dir}`` 里的 ``{MMDD}`` 随 run 日期漂移——
+    同一条物理事件若跨天被重放（如 agent 状态丢失后重新拉取），旧键会因日期段不同而
+    裂成两行（C9 双计）。serial 取自行列（非路径反解），目录名取路径末段，日期根整体
+    不再参与键。读侧派生、非持久列 → 新旧行同函数同规则，一次性切换，无存量迁移。
+
+    前缀 ``uniview:`` 与 AEE 家族键（``nfs:…``）天然不同形，保住 #2285
+    「UNIVIEW 行与 AEE 行永不互并」的不变量；字段缺失时仍以空占位保形（宁多勿并）。
+    serial 或目录名不可得时**退回旧式全路径键**（防御异常数据，不抛错不并错）。
 
     事件身份取 ``event_subtype`` + ``aee_ts``——二者由 Agent 侧
     ``unisoc_reconciler._emit_event`` 一并写入 ``extra``（``aee_ts`` 为设备时钟原文，
@@ -2560,7 +2576,11 @@ def _uniview_dedup_key(nfs_path: str, extra: dict[str, Any]) -> str:
     """
     subtype = str(extra.get("event_subtype") or "").strip()
     aee_ts = str(extra.get("aee_ts") or "").strip()
-    return f"nfs:{nfs_path}#{subtype}#{aee_ts}"
+    serial = str(device_serial or "").strip()
+    event_dir = nfs_path.rstrip("/").rsplit("/", 1)[-1].strip()
+    if not serial or not event_dir:
+        return f"nfs:{nfs_path}#{subtype}#{aee_ts}"
+    return f"uniview:{serial}#{event_dir}#{subtype}#{aee_ts}"
 
 
 def _infer_dashboard_event_group_and_subtype(
