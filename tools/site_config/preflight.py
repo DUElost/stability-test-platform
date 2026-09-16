@@ -378,6 +378,8 @@ def preflight_facts(ops: Ops | None = None) -> dict[str, Any]:
         "version": release.get("VERSION_ID", ""),
         "machine": ops.machine(),
         "address": _primary_address(ops),
-        "timezone": Path("/etc/timezone").read_text(encoding="utf-8").strip()
-        if Path("/etc/timezone").is_file() else "UTC",
+        # 时区走 Ops 的两级取值（/etc/timezone → timedatectl）。**不再「读不到就当 UTC」**：
+        # 那个静默默认正是 238 现场「声明 UTC / 主机 PDT」的来源（#2265）——声明必须是
+        # 主机的真实时区，读不到就让调用方 fail-closed，绝不猜。
+        "timezone": ops.timezone(),
     }
