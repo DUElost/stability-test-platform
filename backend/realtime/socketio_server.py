@@ -294,7 +294,13 @@ class AgentNamespace(socketio.AsyncNamespace):
         await sio.emit("job_status", payload, namespace="/dashboard", room=f"plan_run:{run_id}")
 
     async def on_heartbeat(self, sid: str, data: dict):
-        """Agent relays heartbeat for instant dashboard refresh (no DB write)."""
+        """Renew Agent SID registry only — no per-device dashboard fan-out (#2324).
+
+        Authoritative device state lands via HTTP ``/api/v1/heartbeat``; the
+        former WS per-device ``device_update`` fan-out is deprecated because it
+        scaled with host×device and stormed the observation plane.
+        ``data`` is accepted for wire compatibility but ignored.
+        """
         async with self.session(sid) as session:
             host_id = session.get("host_id", "")
 
@@ -304,28 +310,6 @@ class AgentNamespace(socketio.AsyncNamespace):
             from backend.realtime.agent_sid_registry import renew_agent_owner
 
             await renew_agent_owner(str(host_id), sid)
-
-        stats = data.get("stats", {})
-        devices = stats.get("devices", [])
-        if not devices:
-            return
-
-        sio = get_sio()
-        for dev in devices:
-            await sio.emit("device_update", {
-                "type": "DEVICE_UPDATE",
-                "payload": {
-                    "serial": dev.get("serial"),
-                    "status": "ONLINE" if dev.get("adb_connected") else "OFFLINE",
-                    "battery_level": dev.get("battery_level"),
-                    "temperature": dev.get("temperature"),
-                    "network_latency": dev.get("network_latency"),
-                    "adb_state": dev.get("adb_state"),
-                    "adb_connected": dev.get("adb_connected"),
-                    "host_id": host_id,
-                },
-                "timestamp": _now_iso(),
-            }, namespace="/dashboard")
 
 
 # ---------------------------------------------------------------------------
@@ -576,6 +560,16 @@ async def broadcast_device_update(device_data: Dict[str, Any]) -> None:
     await sio.emit("device_update", {
         "type": "DEVICE_UPDATE",
         "payload": device_data,
+        "timestamp": _now_iso(),
+    }, namespace="/dashboard")
+
+
+async def broadcast_dashboard_summary(summary: Dict[str, Any]) -> None:
+    """Push a coalesced DASHBOARD_SUMMARY to all dashboard subscribers (#2324)."""
+    sio = get_sio()
+    await sio.emit("dashboard_summary", {
+        "type": "DASHBOARD_SUMMARY",
+        "payload": summary,
         "timestamp": _now_iso(),
     }, namespace="/dashboard")
 

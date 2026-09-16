@@ -322,4 +322,69 @@ describe('useHostOperations', () => {
 
     expect(ret).toBe('Host h1 has no Agent installation in progress.');
   });
+
+  // #2255：控制台终态回到 UI 时，取消必须是独立终态——现场验证抓到过「点了取消，UI 报失败」
+  it('marks the op canceled (not failed) when the run ends CANCELED', async () => {
+    vi.mocked(api.agentInstall.trigger).mockResolvedValueOnce({
+      ok: true,
+      host_id: 'c',
+      log_path: '/var/log/stp/con-c.log',
+      console_run_id: 'con-c',
+      room: 'console:con-c',
+      status: 'running',
+      message: 'ok',
+    });
+    vi.mocked(api.agentInstall.status).mockResolvedValueOnce({
+      host_id: 'c',
+      log_path: '/var/log/stp/con-c.log',
+      status: 'canceled',
+      console_status: 'CANCELED',
+      console_found: false,
+    });
+
+    const onTerminal = vi.fn();
+    const { result } = renderHook(() =>
+      useHostOperations({ concurrency: 1, pollMs: 10, onTerminal }),
+    );
+    await act(async () => {
+      await result.current.startInstallBatch([
+        { hostId: 'c', label: 'host-c', agentInstalled: true },
+      ]);
+    });
+
+    expect(result.current.ops[0].status).toBe('canceled');
+    expect(result.current.ops[0].error).toBeUndefined();
+    expect(onTerminal).toHaveBeenCalledWith(
+      expect.objectContaining({ hostId: 'c', ok: false, status: 'CANCELED' }),
+    );
+  });
+
+  it('marks lost runs canceled and keeps the lifecycle note', async () => {
+    vi.mocked(api.agentInstall.trigger).mockResolvedValueOnce({
+      ok: true,
+      host_id: 'd',
+      log_path: '/var/log/stp/con-d.log',
+      console_run_id: 'con-d',
+      room: 'console:con-d',
+      status: 'running',
+      message: 'ok',
+    });
+    vi.mocked(api.agentInstall.status).mockResolvedValueOnce({
+      host_id: 'd',
+      log_path: '/var/log/stp/con-d.log',
+      status: 'lost',
+      console_status: null,
+      console_found: false,
+    });
+
+    const { result } = renderHook(() => useHostOperations({ concurrency: 1, pollMs: 10 }));
+    await act(async () => {
+      await result.current.startInstallBatch([
+        { hostId: 'd', label: 'host-d', agentInstalled: true },
+      ]);
+    });
+
+    expect(result.current.ops[0].status).toBe('canceled');
+    expect(result.current.ops[0].error).toContain('运行记录已丢失');
+  });
 });

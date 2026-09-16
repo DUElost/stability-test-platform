@@ -83,6 +83,14 @@ export const planRunKeys = {
     ['plan-run-logs', id, stage, severity, page, search] as const,
   /** Partial key — invalidates all log queries for a PlanRun. */
   logsByRun: (id: number) => ['plan-run-logs', id] as const,
+  /**
+   * #2288：DLE 卡片按 run 的**前缀**键（与 `logsByRun` 同形）。
+   *
+   * `logEvents(id, opts)` 是含参数对象的精确键，React Query 的部分匹配只能命中仍在
+   * 默认值（`limit: 200, platform: null`）的那条缓存；#2184 把 `platform` 扩进键之后
+   * 命中面进一步缩小 → 选过平台 chip 或点过「加载更多」后，头部「刷新」不再覆盖该卡片。
+   */
+  logEventsByRun: (id: number) => ['plan-run-log-events', id] as const,
   /** ADR-0029：projectKey + 分页/筛选项（页面级）。前缀仍为 ['plan-runs-list']。 */
   list: (
     projectKey?: string | null,

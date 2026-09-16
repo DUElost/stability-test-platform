@@ -19,6 +19,7 @@ import yaml
 
 from tools.site_config.agents import ApiError, stage_s5_agents
 from tools.site_config.install import run_install
+from tools.site_config.ops import LocalOps
 from tools.site_config.stages import InstallContext
 from tools.site_config.validation import load_site_config
 
@@ -1336,7 +1337,7 @@ class TestVerifyS6:
 
     def test_authorized_probe_writes_reads_and_cleans_up(self, site, monkeypatch):
         """显式授权的探针：写→读回→只删自己那个文件，其余一概不动。"""
-        monkeypatch.setattr(os.path, "ismount", lambda path: True)
+        monkeypatch.setattr(LocalOps, "is_mount", lambda self, path: True)
         share = Path(site().config.storage.mount_path)
         share.mkdir(parents=True)
         (share / "keep-me.txt").write_text("existing\n", encoding="utf-8")
@@ -1369,7 +1370,7 @@ class TestVerifyS6:
 
     def test_probe_refuses_a_path_that_is_not_mounted(self, site, monkeypatch):
         """没挂上时绝不能写进本机同名目录——那正是"掩盖未挂载"的假通过。"""
-        monkeypatch.setattr(os.path, "ismount", lambda path: False)
+        monkeypatch.setattr(LocalOps, "is_mount", lambda self, path: False)
         share = Path(site().config.storage.mount_path)
         share.mkdir(parents=True)
 
@@ -1381,7 +1382,7 @@ class TestVerifyS6:
         assert not (share / "probe").exists()
 
     def test_probe_reports_an_unwritable_share(self, site, monkeypatch):
-        monkeypatch.setattr(os.path, "ismount", lambda path: True)
+        monkeypatch.setattr(LocalOps, "is_mount", lambda self, path: True)
         share = Path(site().config.storage.mount_path)
         share.mkdir(parents=True)
         (share / "probe").write_text("a file where the probe needs a directory\n", encoding="utf-8")
@@ -1450,3 +1451,32 @@ class TestVerifyS6:
 
         assert code == 0
         assert "verify.s6.auth" in capsys.readouterr().out
+
+
+def test_check_hosts_reports_no_agents_declared():
+    """#2283：零 Agent 不得产出「All 0 declared Agents are ONLINE」的 PASS。"""
+    from tools.site_config.verify import check_hosts
+
+    class _Config:
+        agents: tuple = ()
+
+    class _Api:
+        def list_hosts(self):
+            raise AssertionError("零 Agent 时不应调用 API")
+
+    checks = check_hosts(_Api(), _Config(), now=0.0)
+
+    assert len(checks) == 1
+    assert checks[0].status == "BLOCKED"
+    assert checks[0].code == "no_agents_declared"
+
+
+def test_host_payload_carries_the_configured_ssh_port():
+    """#2283：ssh_port 不再硬编码 22（inventory 的 ansible_port 曾解析后被丢弃）。"""
+    from tools.site_config.agents import _create_payload
+
+    binding = {"USERNAME": "ops", "PASSWORD": "secret"}
+    assert _create_payload(name="n", ip="10.0.0.1", binding=binding)["ssh_port"] == 22
+    assert _create_payload(
+        name="n", ip="10.0.0.1", binding=binding, ssh_port=2222,
+    )["ssh_port"] == 2222

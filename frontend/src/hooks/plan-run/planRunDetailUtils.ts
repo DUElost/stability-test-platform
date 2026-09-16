@@ -128,7 +128,9 @@ export function planRunRefreshKeys(id: number) {
     planRunKeys.timeline(id),
     planRunKeys.devicesByRun(id),
     planRunKeys.watcherByRun(id),
-    planRunKeys.logEvents(id),
+    // #2288：前缀键。原先用精确键 `logEvents(id)`（默认参数对象），选中平台 chip 或
+    // 点过「加载更多」后那条缓存不再被部分匹配命中 → 头部「刷新」漏掉 DLE 卡片。
+    planRunKeys.logEventsByRun(id),
     planRunKeys.chain(id),
     planRunKeys.logsByRun(id),
     dedupKeys.status(id),
