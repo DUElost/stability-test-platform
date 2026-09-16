@@ -10,6 +10,11 @@ const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   getRun: vi.fn(),
   getEvents: vi.fn(),
+  toast: { error: vi.fn(), success: vi.fn() },
+}));
+
+vi.mock('@/hooks/useToast', () => ({
+  useToast: () => mocks.toast,
 }));
 
 vi.mock('react-router-dom', async () => {
@@ -333,3 +338,88 @@ describe('PlanRunLogsPage — CSV 导出（#2028）', () => {
 // 已知缺口（本单不修，记入 Note 的 Revisit）：导出失败时 handleExportCsv 只有
 // try/finally、没有 catch —— 失败变成一次 unhandled rejection，界面上没有任何提示。
 // 补齐需要先定「前端如何报告动作失败」（本仓尚无统一 toast 约定），不混在 #2028 里做。
+
+
+describe('PlanRunLogsPage — #2087', () => {
+  it('分块导出失败：提示错误且不产出文件（不再 unhandled rejection 静默失败）', async () => {
+    mocks.getRun.mockResolvedValue({ id: 12, plan_id: 7, status: 'SUCCESS' });
+    // 页面自身的 limit=50 查询照常（否则事件流渲染成错误态、导出按钮不出现），
+    // 只让**导出分块**（limit=EXPORT_CHUNK）失败。
+    mocks.getEvents.mockImplementation(
+      async (_id: number, params: { limit?: number }) => {
+        if (params?.limit === EXPORT_CHUNK) throw new Error('500 Internal Server Error');
+        return eventsPayload();
+      },
+    );
+    const stub = stubBlobUrl();
+
+    renderPage();
+    const btn = await screen.findByTestId('event-export-csv');
+    await act(async () => {
+      fireEvent.click(btn);
+    });
+
+    expect(mocks.toast.error).toHaveBeenCalledTimes(1);
+    expect(mocks.toast.error.mock.calls[0][0]).toContain('导出失败');
+    expect(stub.captured).toHaveLength(0);
+    // 按钮必须恢复可用（finally 语义），否则一次失败就再也导不出
+    await waitFor(() => expect(btn).not.toBeDisabled());
+  });
+
+  it('导出用输入框可见值：防抖窗口内点导出不得用上一个关键词', async () => {
+    mocks.getRun.mockResolvedValue({ id: 12, plan_id: 7, status: 'SUCCESS' });
+    serveEvents(1);
+    stubBlobUrl();
+    renderPage();
+    const input = await screen.findByTestId('event-search-input');
+
+    // 输入新词后**不**等防抖生效（`search` 仍是空串）直接导出
+    fireEvent.change(input, { target: { value: 'crash' } });
+    const btn = screen.getByTestId('event-export-csv');
+    await act(async () => {
+      fireEvent.click(btn);
+    });
+
+    const exportCall = mocks.getEvents.mock.calls
+      .map((call) => call[1] as { limit?: number; search?: string })
+      .find((params) => params?.limit === EXPORT_CHUNK);
+    expect(exportCall?.search).toBe('crash');
+  });
+
+  it('搜索值未变化（改回原词）不得复位分页', async () => {
+    mocks.getRun.mockResolvedValue({ id: 12, plan_id: 7, status: 'SUCCESS' });
+    serveEvents(150);
+    renderPage();
+    const input = await screen.findByTestId('event-search-input');
+
+    // 1) 输入 foo 并等防抖生效
+    fireEvent.change(input, { target: { value: 'foo' } });
+    await waitFor(() =>
+      expect(mocks.getEvents).toHaveBeenCalledWith(
+        12,
+        expect.objectContaining({ search: 'foo', offset: 0 }),
+      ),
+    );
+
+    // 2) 翻到第 2 页
+    fireEvent.click(await screen.findByTestId('event-page-next'));
+    await waitFor(() =>
+      expect(mocks.getEvents).toHaveBeenCalledWith(
+        12,
+        expect.objectContaining({ offset: 50 }),
+      ),
+    );
+
+    // 3) 输入 foo␣ 再删回 foo：净变化为零，防抖触发时值未变 → 不得回退分页
+    fireEvent.change(input, { target: { value: 'foo ' } });
+    fireEvent.change(input, { target: { value: 'foo' } });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    });
+
+    const offsets = mocks.getEvents.mock.calls.map(
+      (call) => (call[1] as { offset?: number }).offset,
+    );
+    expect(offsets[offsets.length - 1]).toBe(50);
+  });
+});

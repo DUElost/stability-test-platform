@@ -222,10 +222,20 @@ export const planRuns = {
     ),
 };
 
+/**
+ * 值域里含 `all`（= 不筛选）的**枚举**参数键。
+ *
+ * #2085：`all` 只在枚举参数上等价于「不筛选」。自由文本（`search`）必须原样保留
+ * ——用户搜索词恰为 `all` 时被静默剥离，会返回未过滤数据，而 UI（输入框回显、
+ * 查询键）与 CSV 导出都按「已应用搜索」呈现。新增枚举旋钮时在此登记。
+ */
+const ALL_AS_NO_FILTER_KEYS = new Set(['stage', 'severity', 'status', 'link_status', 'host_id']);
+
 function cleanParams(p: object): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(p)) {
-    if (v === undefined || v === null || v === '' || v === 'all') continue;
+    if (v === undefined || v === null || v === '') continue;
+    if (v === 'all' && ALL_AS_NO_FILTER_KEYS.has(k)) continue;
     out[k] = v;
   }
   return out;
