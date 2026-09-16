@@ -17,7 +17,11 @@ import type { NotificationLog } from '@/utils/api/types';
  * 的 history 兜底会 `window.location.assign`，Ctrl/中键点击直接走 href），
  * 于是站内通知能把管理员带出应用。改为「单个前导斜杠且后面不是 `/` 或 `\`」。
  */
-const INTERNAL_LINK_RE = /^\/(?![/\\])/;
+// #2288：在 #2054 的「单个前导斜杠」之上再拒绝 TAB/LF/CR —— WHATWG URL 解析会**移除**
+// 输入里的这三个 ASCII 字符，于是 `/<TAB>/evil.com` 移除后等价于 `//evil.com`（协议相对
+// → 跨源），而它第二个字符是 TAB，恰好通过只挡 `/` 与 `\` 的负向断言。会被移除的只有这
+// 三个字符，且只有落在第二个位置才可能拼出 `//`，故拒绝集 = `/`、`\`、TAB、LF、CR。
+const INTERNAL_LINK_RE = /^\/(?![/\\\t\n\r])/;
 
 export function notificationTarget(log: NotificationLog): { to: string; label: string } | null {
   const ctx = log.context ?? {};

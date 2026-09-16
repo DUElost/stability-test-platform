@@ -328,3 +328,28 @@ def list_plan_run_device_log_events(
         .limit(max(1, min(limit, 500)))
     ).scalars().all()
     return list(rows), total
+
+
+def list_plan_run_device_log_event_platforms(
+    db: Session,
+    plan_run_id: int,
+    *,
+    state: str | None = None,
+) -> list[str]:
+    """该 run 的 DLE 里实际出现过的平台集合（#2288）——筛选选项的**事实源**。
+
+    与分页查询分开的理由：选项若派生自「已加载窗口」（旧做法），单平台主导 +
+    `MAX_LIMIT=500` 时其它平台永远翻不到，筛选恰在最需要时不可用。因此本函数
+    **不接受** ``platform`` 参数——全集不能被自己的筛选结果收窄；``state`` 保留，
+    因为它改变的是「哪些行算数」而不是「筛掉哪个平台」。
+    """
+    filters = [
+        DeviceLogEvent.plan_run_id == plan_run_id,
+        DeviceLogEvent.platform.isnot(None),
+    ]
+    if state:
+        filters.append(DeviceLogEvent.state == state)
+    rows = db.execute(
+        select(DeviceLogEvent.platform.distinct()).where(*filters).order_by(DeviceLogEvent.platform)
+    ).scalars().all()
+    return [str(p) for p in rows if p]
