@@ -1,0 +1,23 @@
+# ── 跨面共享变量（linux_hosts 部署面 + agent_config 配置面，#2218）────────────
+# 本文件对**所有** host 生效（Ansible `all` 组语义）；只放两个面都需要的项，
+# 面特有变量仍留各自 group_vars（如 linux_hosts.yml 的安装/更新参数）。
+# 背景：#2218 新建配置面组（agent_config，48 台）后，原仅定义在 linux_hosts.yml
+# 的共享项对新组不生效（group_vars 按组名匹配）——上移本文件做单一定义。
+
+# 提权（sudo/become）：布置与配置类变更均需 root。
+ansible_become: "{{ agent_require_become | default(true) }}"
+ansible_become_method: sudo
+ansible_become_password: "{{ ansible_password }}"
+
+# agent 安装目录：两面共享的路径锚（配置类 task 需要）。
+agent_install_dir: "/opt/stability-test-agent"
+
+# ── 进程日志轮转（#2205 / #2218）──────────────────────────────────────────
+# agent_error.log 无轮转曾累积全队 94.5GB（systemd append: 无大小控制）；
+# 由 roles/agent_deploy/tasks/logrotate.yml（共享 task）经两条通道下发：
+# update_agent.yml（linux_hosts，14 台）与 configure_agents.yml（agent_config，48 台）。
+# 放本文件（而非 role defaults）：`--tags logrotate` 局部执行会跳过 pre_tasks 的
+# include_vars 加载——2026-09-15 铺开实测 `undefined`；group_vars 恒加载不受
+# tags 影响（task 内另有 default 兜底）。
+agent_logrotate_size: "200M"
+agent_logrotate_rotate: 7
