@@ -1,0 +1,22 @@
+---
+# #2218：agent 配置面（`agent_config` = 全队 48 台）——**系统配置类变更的统一入口**。
+#
+# 与 update_agent.yml（`linux_hosts` = 14 台，agent 版本更新面）分离：
+# 本 playbook **只做配置类变更**（apt、/etc、systemd unit 等），**不含**
+# rsync/重启等更新类 task（契约测试锚定，见 tests/test_ansible_config_channel_2218.py）；
+# 34 台 legacy 的 agent 代码更新仍走热更新通道（本面不改变其更新方式）。
+#
+# 组规模：`agent_config` = linux_hosts（14）+ agent_legacy（34）——见 inventory.ini
+# （本地文件、凭据不入 git；组结构约定见同文件注释）。
+- name: Configure agent hosts (config plane, #2218)
+  hosts: agent_config
+  gather_facts: false
+  serial: "20%"
+  max_fail_percentage: 0
+  any_errors_fatal: true
+
+  tasks:
+    # ── 配置类 task（共享文件：与 update_agent.yml 单一维护点）──────────────
+    - name: Apply agent log rotation config (#2205)
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../roles/agent_deploy/tasks/logrotate.yml"
+      tags: ["logrotate"]
