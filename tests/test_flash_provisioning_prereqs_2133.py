@@ -66,14 +66,22 @@ def test_install_script_adds_agent_user_to_dialout():
 
 
 def test_install_script_writes_dual_form_udev_rule():
-    """#2284：install 链按本机 dialout 组二选一写规则（0660+dialout / 0666 退化）。"""
+    """#2284/#2353：install 链按「Agent 用户**是否属于** dialout」二选一写规则。"""
     pf = _load_preflight()
     text = _install_text()
     assert pf._UDEV_RULE_PATH in text
     assert "UDEV_MTK_LINE_0660='%s'" % pf._UDEV_RULE_LINE.strip() in text
     assert "UDEV_MTK_LINE_0666='%s'" % pf._UDEV_RULE_LINE_LEGACY.strip() in text
-    assert "getent group dialout" in text, "形态选择须看本机是否存在 dialout 组"
     assert "udevadm control --reload-rules" in text
+
+    # 形态判据 = **成员资格**（#2353）：组存在而用户不是成员时，0660 对该用户
+    # 等同于不可写（刷机中途 EACCES/STATUS_ERR）——故 §4c 不能再按「组是否存在」选。
+    rule_block = text[text.index("UDEV_MTK_RULE="):]
+    rule_block = rule_block[:rule_block.index("udevadm control --reload-rules")]
+    assert re.search(r'id -nG "\$USER"[^\n]*grep -qx dialout', rule_block), rule_block
+    assert "getent group dialout" not in rule_block, (
+        "§4c 的形态选择不得再看「组是否存在」（#2353）"
+    )
 
 
 def test_install_script_package_list_matches_preflight():
@@ -143,14 +151,28 @@ def test_update_playbook_covers_dialout_rule_packages():
         "playbook 必须写两种形态（0660+dialout / 0666）且与 flash_preflight 常量"
         f"逐字一致，实际 {contents}"
     )
-    # 两个任务互补门控：有 dialout 组走 0660，无组才 0666（#2284）
+    # 两个任务互补门控：**成员**走 0660，非成员才 0666（#2284/#2353）——
+    # 判据必须是成员资格，不能是「组是否存在」。
     whens = [str(t.get("when")) for t in rule_tasks]
+    assert all("agent_flash_dialout_member" in w for w in whens), whens
     assert any("== 0" in w for w in whens), whens
     assert any("!= 0" in w for w in whens), whens
+    assert all("agent_flash_dialout_group" not in w for w in whens), (
+        "规则形态不得再按「组是否存在」门控（#2353）"
+    )
+    member_tasks = [
+        t for t in tasks
+        if "dialout member" in t.get("name", "")
+        and "ansible.builtin.shell" in t
+    ]
+    assert member_tasks, "playbook 需要「Agent 用户是否属于 dialout」的显式检查任务"
+    assert "id -nG {{ agent_user }}" in str(
+        member_tasks[0]["ansible.builtin.shell"]
+    ), member_tasks[0]
 
 
-def test_wrapper_udev_constants_match_preflight():
-    """#2284：wrapper 窄面的两个形态常量与**最新** preflight 版本同源。"""
+def test_wrapper_udev_constants_match_preflight(monkeypatch):
+    """#2284/#2353：wrapper 窄面两个形态常量与**最新** preflight 同源，判据是成员资格。"""
     spec = importlib.util.spec_from_file_location(
         "stp_agent_priv_prereqs", REPO_ROOT / "backend/agent/stp_agent_priv.py",
     )
@@ -162,10 +184,12 @@ def test_wrapper_udev_constants_match_preflight():
     assert wrapper.UDEV_RULE_PATH == pf._UDEV_RULE_PATH
     assert wrapper.UDEV_RULE_LINE == pf._UDEV_RULE_LINE
     assert wrapper.UDEV_RULE_LINE_LEGACY == pf._UDEV_RULE_LINE_LEGACY
-    # 形态选择只依赖本机事实（有无 dialout 组），调用方无参数面
-    assert wrapper._udev_rule_line() in (
-        wrapper.UDEV_RULE_LINE, wrapper.UDEV_RULE_LINE_LEGACY,
-    )
+    # 形态选择只依赖**调用者（Agent 用户）的成员资格**（#2353），调用方无参数面
+    monkeypatch.setattr(wrapper, "_invoking_user", lambda: "android")
+    monkeypatch.setattr(wrapper, "_user_in_dialout", lambda user: False)
+    assert wrapper._udev_rule_line() == wrapper.UDEV_RULE_LINE_LEGACY
+    monkeypatch.setattr(wrapper, "_user_in_dialout", lambda user: True)
+    assert wrapper._udev_rule_line() == wrapper.UDEV_RULE_LINE
 
 
 def test_group_vars_package_list_matches_preflight():

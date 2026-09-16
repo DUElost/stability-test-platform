@@ -4,6 +4,7 @@
 - ``POST /api/v1/projects`` — admin 新建 USER 项目。
 - ``PUT /api/v1/projects/{key}`` — admin 改 facet（逐字段审计）。
 - ``POST /api/v1/projects/{key}/archive`` — admin 归档。
+- ``POST /api/v1/projects/seed/{key}/promote`` — SEED→USER 转正（服务层）。
 - ``GET /api/v1/projects/inventory/models`` — fleet 按 model 聚合；
   ``mapped_project_keys`` 只含 USER 项目。
 - ``POST /api/v1/projects/{key}/map/preview|apply`` — 把型号映射到 USER 项目。
@@ -34,14 +35,12 @@ from backend.api.schemas.project import (
     ProjectUpdateIn,
     RecentProjectRunOut,
 )
-from backend.core.audit import record_audit
 from backend.core.database import get_db
 from backend.models.host import Device
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
 from backend.models.project import Customer, TestProject
 from backend.models.project_model import ProjectModel
-from backend.realtime.socketio_server import emit_project_changed
 from backend.services.project_inventory import (
     aggregate_inventory,
     inventory_summary,
@@ -53,7 +52,6 @@ from backend.services.project_inventory import (
 )
 from backend.services.project_mapping import (
     apply_project_mapping,
-    blank_to_none,
     preview_project_mapping,
     remove_project_mapping_rule,
 )
@@ -62,6 +60,7 @@ from backend.services.project_registry import (
     archive_project_entry,
     create_project_entry,
     get_project_or_404,
+    promote_seed_project_entry,
     rename_project_entry,
     unarchive_project_entry,
     update_project_facets,
@@ -193,77 +192,15 @@ def promote_seed_project(
 ):
     """ADR-0029 P0：SEED 回填标签转正为人工项目（admin 动作，就地转换）。
 
-    把 P1 脚本灌入的标签（HONOR-ELA 等）变成有终点的待办队列：SEED 行
-    source SEED → USER、match_models 预填其持有设备的型号、设备归属不动
-    （project_id 不变，行身份即归属身份）。解决「设备行显示归属它、筛选
-    下拉里却没有它」的半隐身状态。
-
-    project_key 全局唯一（uq_test_project_key 不分 source），不能新建同 key
-    USER 行——就地转换是唯一不违反约束的路径。
-
-    LEGACY 是「无型号设备」兜底标签，不是待转正对象——拒绝。
-    幂等：source=SEED 且 ACTIVE 才能转正，重复调用 → 404（已非 SEED）。
+    业务规则见 ``promote_seed_project_entry``；本路由只做响应装配。
     """
-    seed = (
-        db.query(TestProject)
-        .filter(TestProject.project_key == project_key)
-        .first()
-    )
-    if seed is None or seed.source != _SEED_SOURCE:
-        raise HTTPException(status_code=404, detail="seed project not found")
-    if project_key == "LEGACY":
-        raise HTTPException(status_code=422, detail="LEGACY is the fallback bucket, not promotable")
-    if seed.status == "ARCHIVED":
-        raise HTTPException(status_code=409, detail="seed project archived, not promotable")
-
-    models = sorted(
-        {
-            blank_to_none(m)
-            for (m,) in (
-                db.query(Device.model)
-                .join(ProjectModel, Device.model == ProjectModel.match_value)
-                .filter(
-                    ProjectModel.project_id == seed.id,
-                    ProjectModel.is_active.is_(True),
-                    Device.model.is_not(None),
-                )
-                .all()
-            )
-            if blank_to_none(m)
-        }
-    )
-    seed.source = _USER_SOURCE
-    existing_members = {
-        m for (m,) in db.query(ProjectModel.match_value).filter(
-            ProjectModel.project_id == seed.id,
-            ProjectModel.is_active.is_(True),
-        ).all()
-    }
-    for model in models:
-        if model in existing_members:
-            continue   # 幂等：成员行已存在（如带外预建）不重复插入
-        db.add(ProjectModel(
-            project_id=seed.id,
-            match_value=model,
-            created_by=current_user.id,
-        ))
-    record_audit(
+    seed = promote_seed_project_entry(
         db,
-        action="promote_seed_project",
-        resource_type="test_project",
-        resource_id=seed.id,
-        details={
-            "project_key": project_key,
-            "match_models": models,
-        },
-        user_id=current_user.id,
-        username=current_user.username,
+        project_key=project_key,
+        actor_id=current_user.id,
+        actor_username=current_user.username,
         request=request,
     )
-    db.commit()
-
-    emit_project_changed(seed.id, "promoted")
-
     device_count, running_run_count = summary_rows(db).get(seed.id, (0, 0))
     out = ProjectSummaryOut.model_validate(seed)
     out.match_models = rule_values_for_project(db, seed.id)
