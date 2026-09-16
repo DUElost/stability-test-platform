@@ -135,12 +135,19 @@ FIXED_EXCLUDES = [
     ".deps_installed_sha",
 ]
 # 主机本地资源：不传输 + 不被 --delete-excluded 删除（#1248 语义）
+# 模式形态见下方 PROTECT_ONLY_PATHS 的说明：本项**同时**被 exclude，因此
+# 目录节点级 protect（`resources/mtbf/`）即可保住整棵子树——rsync 不会进入并
+# 清空一个受保护的目录（实测，见 tests/test_agent_priv_apply_code_protection.py）。
 HOST_LOCAL_PATHS = ["resources/mtbf/"]
 # ADR-0040 §4.3 P2 前置（#1950）：resources/ 仅加 protect（防 --delete 清掉
 # 229MB 大件），**不 exclude**——载荷仍携带 resources/ 期间分发照旧；P2 载荷
-# 收缩（agent-code 剔除 resources/）后分发自然停止、保护已在位。mtbf/ 的
-# protect 语义被 resources/ 传递覆盖，其 exclude 仍必需。
-PROTECT_ONLY_PATHS = ["resources/"]
+# 收缩（agent-code 剔除 resources/）后分发自然停止、保护已在位。
+#
+# #2019：必须写 `resources/***` 而**不是** `resources/`——rsync 里尾斜杠模式
+# 只匹配**目录节点本身**：源树一旦含任一 `resources/*`，`--delete` 仍会清掉
+# 接收端 `resources/**` 的其余内容（实测：b.bin / sub/c.bin / mtbf/apk.bin 全删）。
+# 加 `***` 才是「该目录及其全部内容」（也覆盖节点本身）。
+PROTECT_ONLY_PATHS = ["resources/***"]
 # 部署态元数据（#2091）：由部署流程单独受控写入（VERSION / write-digest 系），
 # 既不在载荷里、也不允许被 apply-code 的 --delete/--delete-excluded 清掉——
 # 否则 code-only 收敛会把 resources 记号删掉，而本轮资源层未运行（无人重写）

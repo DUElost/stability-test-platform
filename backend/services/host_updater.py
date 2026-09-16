@@ -291,6 +291,9 @@ APPLY_T0=$(date +%s%3N)
 # MTBF 资源清掉（2026-08-20 冒烟 #214/#216「APK 不存在」根因）。
 # ADR-0040 §4.3 P2 前置（#1950）：resources/ 整树加 protect（防源树删除
 # 传播到 host 清掉大件），不 exclude——分发照旧（wrapper 路径同语义）。
+# #2019：树的写法是 `resources/***`（尾斜杠只护目录节点，见 wrapper 里
+# PROTECT_ONLY_PATHS 的说明）；filter 参数由 wrapper 的 build_apply_code_filters()
+# 生成，本文件不再自持 rsync 面（#2180）。
 # wrapper：固定目标 + 固定 excludes（含 mtbf protect）+ --safe-links
 sudo "$PRIV" apply-code --staged "$CODE_TMP"
 
