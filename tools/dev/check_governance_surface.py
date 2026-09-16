@@ -639,6 +639,9 @@ CODE_SCAN_EXTS = (".py", ".ts", ".tsx", ".js", ".jsx", ".vue")
 CODE_SCAN_SKIP_DIRS = {"node_modules", "__pycache__", ".venv", "dist", "build"}
 #: 已发布脚本版本目录：内容冻结（ADR-0020 + 硬不变量），改它即触发 immutability
 #: 门禁——本规则若扫进去，一旦红灯便是「必须改、又不许改」的死结，故整枝排除。
+#: **永久豁免**（#2250 登记）：排除面现有 6 处 ADR 引用——`mtbf_setup`
+#: v1.0.0–v1.4.1 各一处 `ADR-0029 v2.2`（v2.2 补偿机制注记），随版本退役自然淘汰，
+#: 不追求覆盖；此处登记以免后人读本常量时误判为漏扫。
 CODE_SCAN_SKIP_PREFIXES = ("backend/agent/scripts/",)
 
 
