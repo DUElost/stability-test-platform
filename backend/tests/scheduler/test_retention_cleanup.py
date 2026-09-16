@@ -520,7 +520,12 @@ def test_purge_refuses_target_outside_shared_root(cleanup_env, tmp_path, monkeyp
 
 
 def _mk_unassigned_event(db, run, device, host, event_id, nfs_root, *, state="ARCHIVED"):
-    """建一条 remote_path 指向 {nfs_root}/devices/unassigned/{event_id}/ 的 DLE 行。"""
+    """建一条 remote_path 指向 ``{nfs}/devices/unassigned/{event_id}/{basename}/`` 的 DLE 行。
+
+    **必须用内层形态**：Agent 记录的 remote_path 是 dst（``{event_id}/{basename}``），
+    生产实测 7 段路径即此形态；测试若直接用事件目录本身（早期写法）会掩盖
+    「事件目录 = remote_path.parent」这一层判定。
+    """
     from datetime import datetime, timezone
     from pathlib import Path
 
@@ -535,7 +540,9 @@ def _mk_unassigned_event(db, run, device, host, event_id, nfs_root, *, state="AR
         detected_at=datetime.now(timezone.utc),
         state=state,
         local_path="/local/uniview/2262",
-        remote_path=str(Path(nfs_root) / "devices" / "unassigned" / str(event_id)),
+        remote_path=str(
+            Path(nfs_root) / "devices" / "unassigned" / str(event_id) / "2026_0812_spill_db.99.ANR"
+        ),
         host_id=str(host.id),
         job_id=None,
         plan_run_id=run.id,
@@ -610,9 +617,11 @@ def test_unassigned_dir_purge_failure_defers_run(
 def test_unassigned_purge_rejects_non_child_path(
     cleanup_env, sample_host, sample_device, tmp_path, monkeypatch,
 ):
-    """remote_path 形态不符（不是 devices/unassigned 的直接子目录）→ 一律不删。
+    """remote_path 形态不符（借 `unassigned/..` 指向别处）→ 不删该目标，**且不阻塞本批**。
 
-    fail-safe：宁可留孤儿，也不让被污染的 remote_path 把 rmtree 引到别处。
+    fail-safe：宁可留孤儿，也不让被污染的 remote_path 把 rmtree 引到别处；
+    但也不得把它算成「删除失败」——那会让整个 run 的 retention 每轮推迟（初版就是
+    把形态不符计入 failed，被真实形态证伪后改判为跳过 + 告警）。
     """
     from uuid import uuid4
 
@@ -647,3 +656,7 @@ def test_unassigned_purge_rejects_non_child_path(
     cron_scheduler.run_retention_cleanup()
 
     assert (outside / "keep.zip").exists(), "越界目标被删除"
+    # 形态不符是数据问题，不是删除失败：不得把 run 拖成每轮推迟
+    from backend.models.plan_run import PlanRun
+
+    assert db.query(PlanRun).filter(PlanRun.id == run.id).first() is None

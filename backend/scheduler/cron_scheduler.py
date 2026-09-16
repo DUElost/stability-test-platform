@@ -357,17 +357,35 @@ def purge_unassigned_event_dirs(paths_by_run: dict) -> set:
     failed: set = set()
     removed = 0
     for raw_path, run_id in paths_by_run.items():
+        # remote_path 指向**事件目录内的一层**（``unassigned/{event_id}/{basename}``，
+        # 见 event_uploader 的 dst 拼装，生产实测 7 段路径即此形态）；也容忍它直接
+        # 就是事件目录。取到事件目录才能整桶删除。
         try:
-            target = Path(str(raw_path)).resolve()
-            if target.parent != unassigned_root or not _within_shared_root(target, resolved_base):
-                raise ValueError(f"not a direct child of devices/unassigned: {raw_path}")
-            if target.is_dir():
-                shutil.rmtree(target)
+            p = Path(str(raw_path)).resolve()
+        except OSError:
+            p = None
+        if p is not None and p.parent.parent == unassigned_root:
+            event_dir: Path | None = p.parent
+        elif p is not None and p.parent == unassigned_root:
+            event_dir = p
+        else:
+            event_dir = None
+        if event_dir is None or not _within_shared_root(event_dir, resolved_base):
+            # 形态不符/越界：**跳过并告警，不计入 failed**——那是数据问题（行留下、
+            # 目录不删即可），而计入 failed 会让整个 run 的 retention 每轮推迟、
+            # 永久停摆（初版就是按「event 目录 = remote_path」判的，被真实形态证伪）。
+            logger.warning(
+                "nfs_retention_unassigned_path_invalid dir=%s", raw_path,
+            )
+            continue
+        try:
+            if event_dir.is_dir():
+                shutil.rmtree(event_dir)
                 removed += 1
         except Exception:
             failed.add(run_id)
             logger.warning(
-                "nfs_retention_unassigned_purge_failed dir=%s", raw_path, exc_info=True,
+                "nfs_retention_unassigned_purge_failed dir=%s", event_dir, exc_info=True,
             )
     if removed:
         logger.info(
