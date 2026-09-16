@@ -95,6 +95,29 @@ PRUNE 和 HDD spill force。
 （true/false 都写：#2271 之前只写 true，一次零产物轮次后即使补齐也永久显示
 「扫描未产生任何报表」），判据是**对口径**的「该交的 (host, 平台) 一个都没交」。
 
+### DLE 归档（`REMOTE → ARCHIVED`）的触发与判据（#2150 裁决 B）
+
+**唯一触发**：run 级 `extract_task`（`backend/services/dedup_extract.py` 的
+`run_extract_sync` → `mark_events_archived`）——归档写入点全仓只此一处。
+
+**前置条件**：extract 的第一步是查本轮 `merge_result_xls` 产物；**没有它直接
+`dedup_extract_skip_no_merge` 返回**（在归档调用之前）。因此：
+
+> **该 run 无 `merge_result_xls` ⇒ 它的 DLE 行停在 `REMOTE` 是事实终态，不是卡住。**
+
+对无 scan 产物的平台（UNIVIEW）这是常态：merge 无输入 → 无 merge 产物 → extract 空跑
+→ 永不归档。另一个自然边界是 **late-arriving**：事件在 extract 列举之后才变
+`REMOTE`（含历史回填），同样不会被补归档。
+
+**判据为什么不能写成「`REMOTE` 即终态」**（生产反例，2026-09-16 只读核对）：
+run 400（SUCCESS）**有** `merge_result_xls`、`jira/400/` 在，其 2 行 UNIVIEW 正常
+`ARCHIVED`；同批 run 401/410/411/412（均 FAILED）**无**产物的行停在 `REMOTE`。
+粗口径会把「有产物却没归档」这类真卡住一并掩盖。
+
+**排查口径**（运维 / 界面）：看到 `REMOTE` 先查该 run 有无 `merge_result_xls`
+（`plan_run_artifact.artifact_type='merge_result_xls'`，或中心存储 `jira/{run_id}/`
+是否存在）——有产物而未归档才算异常。
+
 ## Fleet env 与热刷新
 
 控制面 scan 工具只读 `STP_BACKEND_DEDUP_SCAN_*`。Agent 的
