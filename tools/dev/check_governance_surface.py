@@ -370,32 +370,86 @@ def _record_version_tokens(text: str) -> list[str]:
 
 
 def parse_adr_record_tip(text: str) -> str | None:
-    """S12 辅助：「版本记录」块的**最新**版本 token（块止于同级/更外层的 `- ` 项）。
+    """S12 辅助：该 ADR 的**最新**版本 token = 项目符块 ∪ `## 修订记录` 表格（锚列位）。
 
-    取块内**版本号最大**者，而不是「最后一个 token」：书写顺序在各形态下不一致
+    取**版本号最大**者，而不是「最后一个 token」：书写顺序在各形态下不一致
     ——线性形态最新在后（ADR-0034 续行）、缩进子项形态最新在前（ADR-0038/0042
     `  - vX.Y：…`）、ADR-0035 式缩进续行又是最新在后；按位置取末项会随书写形态
     摇摆（实测：对 ADR-0035 取末项得 v1.0、头部 v1.2，产生假红）。按版本号取最大
     与该规则本意（头部行 = 最新版本）一致，且对现有线性形态零行为变化。
+
+    #2304：表格形态此前不进本函数 → 该条比对对 6 篇表格 ADR **结构性无法触发**
+    （ADR-0027 例外：它另有单行 `- 版本记录：`）。
     """
-    tokens = _record_version_tokens(text)
+    tokens = _record_version_tokens(text) + _revision_table_version_tokens(text)
     return max(tokens, key=_ver_key) if tokens else None
 
 
 def parse_adr_record_versions(text: str) -> set[str]:
-    """S14 辅助（#2249）：该 ADR 已发布版本集合 = 项目符块 token ∪ 修订记录章节 token。
+    """S14 辅助（#2249/#2304）：该 ADR 已发布版本集合。
 
-    两种形态都要读，因为实际都在用：12 篇是 ``- 版本记录：…`` 项目符块（单行罗列 /
-    续行 / **缩进子项**三种写法），7 篇是 ``## 修订记录`` 表格（ADR-0026/0027/0029/
-    0030/0031/0032/0033）——表格的列布局还有三种（版本列在第 2/第 1 列、或没有版本列
-    而版本写在变更正文里），故按**章节整体**取 token 而不锚列位。
+    两种形态都要读：``- 版本记录：`` 项目符块（单行罗列 / 续行 / 缩进子项三种写法）
+    与 ``## 修订记录`` 表格（7 篇）。表格按**列位**取值（#2304）——整章取 token 会把
+    正文列里的跨 ADR 引用算成自己的版本（ADR-0030 的 v1.1 行写「对齐 ADR-0029
+    v2.3.1 教训」，整章扫描得 2.3 → 既假红 tip 又让伪造引用 `ADR-0030 v2.3` 通过）。
 
-    与 record_tip 同源的是项目符那一半（``_record_version_tokens``），逐 token 全取
-    而非只取末项。已知不覆盖：表格里 ``v0.1–v0.4.1`` 这类**区间**只取到两端字面
-    token（v0.2/v0.3/v0.4.1 不在集合内，引用它们仍会报）——留待 Revisit。
+    已知不覆盖：表格里 ``v0.1–v0.4.1`` 这类**区间**只取到两端字面 token
+    （v0.2/v0.3/v0.4.1 不在集合内，引用它们仍会报）——留待 Revisit。
     """
     tokens = set(_record_version_tokens(text))
-    tokens |= set(_ADR_VERSION_TOKEN.findall(_revision_section_text(text)))
+    tokens |= set(_revision_table_version_tokens(text))
+    return tokens
+
+
+#: 表格 cell 的**行首**版本 token（无「版本」列的表格退回此判定）
+_CELL_LEAD_VERSION = re.compile(r"\*{0,2}v(\d+\.\d+)")
+
+
+def _split_table_row(row: str) -> list[str]:
+    """markdown 表格行 → cell 列表（剥首尾 `|` 后逐 cell strip）。"""
+    return [c.strip() for c in row.strip().strip("|").split("|")]
+
+
+def _is_table_separator(cells: list[str]) -> bool:
+    """`|----|:---:|` 形态的对齐分隔行。"""
+    return bool(cells) and all(set(c) <= set("-: ") for c in cells)
+
+
+def _revision_table_version_tokens(text: str) -> list[str]:
+    """S12/S14 辅助（#2304）：``## 修订记录`` 表格内的版本 token，**锚列位**。
+
+    表格有三种列布局（`版本|日期|变更` / `日期|版本|内容` / 无版本列），故先按表头
+    定位「版本」列，只取该列的 token；无该列者（ADR-0026/0027）退回「cell 行首
+    token」——ADR-0027 每个变更 cell 以 `vX.Y（…）：` 开头，仍能取全（实测 1.1–1.7）。
+
+    为什么必须锚列位：整章取 token 会把**正文列**里的跨 ADR 引用当成自己的版本——
+    ADR-0030 的 v1.1 行里「（对齐 ADR-0029 v2.3.1 教训）」使整章扫描得到 2.3，
+    大于它自己的最新 v1.9，据此判定即假红（#2304 实测）。
+    """
+    rows = [
+        l for l in _revision_section_text(text).splitlines() if l.strip().startswith("|")
+    ]
+    version_idx: int | None = None
+    for i, row in enumerate(rows):
+        cells = _split_table_row(row)
+        idx = next((j for j, c in enumerate(cells) if c.strip("* ") == "版本"), None)
+        if idx is not None:
+            version_idx = idx
+            rows = rows[i + 1:]  # 表头之后才是数据行
+            break
+    tokens: list[str] = []
+    for row in rows:
+        cells = _split_table_row(row)
+        if _is_table_separator(cells):
+            continue
+        if version_idx is not None:
+            if version_idx < len(cells):
+                tokens.extend(_ADR_VERSION_TOKEN.findall(cells[version_idx]))
+        else:
+            for cell in cells:
+                m = _CELL_LEAD_VERSION.match(cell)
+                if m:
+                    tokens.append(m.group(1))
     return tokens
 
 
@@ -550,6 +604,39 @@ def check_adr_readme_status_present(
         f"S12 {fn}: adr/README 主表行状态 cell 不可解析（{raw_line.strip()[:90]!r}）"
         "——该行会静默退出状态一致性校验；状态词须为 "
         f"{'/'.join(sorted(_ADR_STATUSES))}（可带粗体标记）"
+    ]
+
+
+def check_adr_head_version_present(
+    num: str,
+    header_version: str | None,
+    row_version: str | None,
+    docmap_versions: list[str] | None,
+    m7_version: str | None,
+) -> list[str]:
+    """S12 **反向**检查（#2304）：派生索引面带规范位版本而头部没有 → 报。
+
+    S12 一直只查「头部有版本时索引面是否跟上」；反向不查，于是索引面的版本前缀
+    可以是**无权威可比**的孤值——ADR-0031 实测：头部无版本，adr/README 主表却写着
+    v1.5，而它自己的修订记录已达 v1.7，两个方向都无人拦。收口方式只有两种：补头部
+    规范位版本（并同步索引面），或去掉索引面的版本前缀。
+
+    头部无版本、索引面也无版本时不报（「不约束」的既有纪律不变）。
+    """
+    if header_version:
+        return []
+    sides: list[str] = []
+    if row_version:
+        sides.append(f"adr/README 主表 v{row_version}")
+    if docmap_versions:
+        sides.append(f"DOC-MAP v{docmap_versions[-1]}")
+    if m7_version:
+        sides.append(f"M7 看板 v{m7_version}")
+    if not sides:
+        return []
+    return [
+        f"S12 ADR-{num}: 头部无规范位版本，而索引面带 {' / '.join(sides)}"
+        "——索引面的版本无权威可比（补头部「规范位版本」或去掉索引前缀）"
     ]
 
 
@@ -1085,6 +1172,13 @@ def run_check() -> int:
                 issues += check_adr_readme_status_present(
                     fn, readme_rows[fn][0], readme_raw.get(fn, "")
                 )
+            issues += check_adr_head_version_present(
+                num,
+                header_version,
+                readme_rows.get(fn, (None, None))[1],
+                docmap_rows.get(fn),
+                m7_entries.get(num, (None, None))[1],
+            )
             issues += check_adr_surface_sync(
                 num,
                 header_status,
@@ -1387,6 +1481,41 @@ def run_self_test() -> int:
            lambda: parse_adr_record_tip(record_indent_cont) != "1.2", False)
     expect("S14 record_versions 缩进续行的块不越界",
            lambda: "9.9" in parse_adr_record_versions(record_indent_cont), False)
+    # #2304：表格按列位取值——正文列里的跨 ADR 引用不算自己的版本
+    record_table_prose = (
+        "# T\n\n## 修订记录\n\n"
+        "| 日期 | 版本 | 内容 |\n|------|------|------|\n"
+        "| 2026-08-19 | v1.1（评审修正） | 对齐 ADR-0029 v2.3.1 教训 |\n"
+        "| 2026-09-01 | v1.9（P2 实施记账） | 收口 |\n\n"
+        "## 决策\n"
+    )
+    expect("S12 record_tip 表格锚「版本」列（正文列跨 ADR 引用不参与）",
+           lambda: parse_adr_record_tip(record_table_prose) != "1.9", False)
+    expect("S14 record_versions 表格锚列位（不含正文列跨 ADR token）",
+           lambda: "2.3" in parse_adr_record_versions(record_table_prose), False)
+    # 无「版本」列的表格（ADR-0027 式）：退回 cell 行首 token
+    record_table_nocol = (
+        "# T\n\n## 修订记录\n\n"
+        "| 日期 | 变更 |\n|------|------|\n"
+        "| 2026-09-08 | v1.1（R01-F10）：leadership fail-closed |\n"
+        "| 2026-09-13 | v1.7（P3-4 P4）：replay 落地 |\n\n"
+        "## 决策\n"
+    )
+    expect("S12 record_tip 无版本列的表退回 cell 行首 token",
+           lambda: parse_adr_record_tip(record_table_nocol) != "1.7", False)
+    # 反向检查：#2304
+    expect("S12 索引面带版本而头部无版本即报（#2304）",
+           lambda: check_adr_head_version_present("0031", None, "1.5", None, None),
+           True)
+    expect("S12 头部有版本时不触发反向检查",
+           lambda: check_adr_head_version_present("0031", "1.7", "1.7", None, None),
+           False)
+    expect("S12 两面都无版本不报（不约束纪律不变）",
+           lambda: check_adr_head_version_present("0031", None, None, None, None),
+           False)
+    expect("S12 仅 DOC-MAP 带版本也报",
+           lambda: check_adr_head_version_present("0032", None, None, ["0.8", "0.9"], None),
+           True)
 
     expect("S12 docmap 行在缺版本 token 即拦（#1058）",
            lambda: not any("缺版本 token" in i for i in check_adr_surface_sync(
