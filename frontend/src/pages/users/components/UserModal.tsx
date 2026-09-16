@@ -13,6 +13,7 @@ import { FORM } from '@/design-system';
 import { cn } from '@/lib/utils';
 // #2406：密码规则（含 bcrypt 的 72 **字节**上限）与后端 PasswordStr 同判据。
 import { passwordRuleError } from './passwordRules';
+import { usernameRuleError } from './usernameRules';
 
 interface UserModalProps {
   isOpen: boolean;
@@ -61,13 +62,8 @@ export function UserModal({ isOpen, onClose, onSubmit, onUpdate, isSubmitting, e
   const validate = (): boolean => {
     const newErrors: Record<string, string> = {};
 
-    if (!formData.username.trim()) {
-      newErrors.username = '请输入用户名';
-    } else if (formData.username.length < 3) {
-      newErrors.username = '用户名至少 3 个字符';
-    } else if (!/^[a-zA-Z0-9_]+$/.test(formData.username)) {
-      newErrors.username = '用户名只能包含字母、数字和下划线';
-    }
+    const usernameError = usernameRuleError(formData.username);
+    if (usernameError) newErrors.username = usernameError;
 
     if (!isEditMode) {
       if (!formData.password) {

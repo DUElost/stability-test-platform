@@ -3,7 +3,6 @@
 Results summary API — aggregated test run statistics for the dashboard.
 """
 
-import json
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -15,11 +14,15 @@ from sqlalchemy.orm import Session
 
 from backend.api.routes.auth import get_current_active_user, User
 from backend.core.database import get_db
-from backend.models.job import JobInstance, StepTrace
+from backend.models.job import JobInstance
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
 from backend.models.project import TestProject
-from backend.services.log_observation import aggregate_risk_summary
+from backend.core.metrics import risk_jobs_by_level
+from backend.services.log_observation import (
+    aggregate_risk_levels_by_job,
+    aggregate_risk_summary,
+)
 
 router = APIRouter(prefix="/api/v1/results", tags=["results"])
 
@@ -117,36 +120,17 @@ def _normalize_job_status(job_status: Any) -> str:
     return _JOB_STATUS_TO_RUN_STATUS.get(raw, raw or "RUNNING")
 
 
-def _safe_json_loads(payload: Optional[str]) -> Dict[str, Any]:
-    if not payload:
-        return {}
-    try:
-        decoded = json.loads(payload)
-    except Exception:
-        return {}
-    return decoded if isinstance(decoded, dict) else {}
+# #2365：风险级别来自 log_observation 的活链判定（S/A/B），此处只做展示层映射。
+_RISK_LABEL_BY_LEVEL = {"S": "HIGH", "A": "MEDIUM", "B": "LOW"}
+_RISK_BUCKET_BY_LEVEL = {"S": "high", "A": "medium", "B": "low"}
 
 
-def _extract_log_summary_from_snapshot(snapshot_output: Optional[str]) -> Optional[str]:
-    payload = _safe_json_loads(snapshot_output)
-    update = payload.get("update")
-    if not isinstance(update, dict):
-        return None
-    log_summary = update.get("log_summary")
-    return log_summary if isinstance(log_summary, str) else None
+def _risk_level_label(level: Optional[str]) -> str:
+    """判定级别 → 展示标签；无判定依据（该 job 没有任何异常事件）→ UNKNOWN。
 
-
-def _parse_risk_level(log_summary: Optional[str]) -> str:
-    """Extract risk level from log_summary (format: risk=HIGH;...)."""
-    if not log_summary:
-        return "UNKNOWN"
-    for part in log_summary.split(";"):
-        part = part.strip()
-        if part.lower().startswith("risk="):
-            level = part.split("=", 1)[1].strip().upper()
-            if level in ("HIGH", "MEDIUM", "LOW"):
-                return level
-    return "UNKNOWN"
+    **不压成 LOW**：没有采到异常 ≠ 查过且没风险，这个区别正是覆盖率观测的对象。
+    """
+    return _RISK_LABEL_BY_LEVEL.get(level or "", "UNKNOWN")
 
 
 # ---------- Endpoint ----------
@@ -268,23 +252,15 @@ def get_results_summary(
         recent_query = _scope_by_project(recent_query)
         recent_rows = recent_query.limit(limit).all()
         recent_job_ids = [job.id for job, _plan_name, _project_key in recent_rows]
-        snapshot_rows = []
-        if recent_job_ids:
-            snapshot_rows = (
-                db.query(StepTrace.job_id, StepTrace.output)
-                .filter(
-                    StepTrace.job_id.in_(recent_job_ids),
-                    StepTrace.step_id == "__job__",
-                    StepTrace.event_type == "RUN_COMPLETE",
-                )
-                .all()
-            )
-        snapshot_map = {int(job_id): output for job_id, output in snapshot_rows}
+        # #2365：风险级别改由**活链**判定（log_observation：DLE 权威 + 未链接信号），
+        # 不再读 RUN_COMPLETE 快照里 log_summary 的 `risk=` —— 自 ADR-0025 起 Agent
+        # 侧 `log_summary` 恒为 None（`pipeline_runner` 硬编码），生产实测 15118 条
+        # 快照里 0 条带 `risk=`，所以这一列此前恒为 UNKNOWN。
+        recent_risk = aggregate_risk_levels_by_job(db, recent_job_ids)
 
         recent_runs: List[RecentRun] = []
         for job, plan_name, project_key in recent_rows:
-            log_summary = _extract_log_summary_from_snapshot(snapshot_map.get(job.id))
-            risk = _parse_risk_level(log_summary)
+            risk = _risk_level_label(recent_risk.get(job.id))
             duration = None
             if job.started_at and job.ended_at:
                 duration = (job.ended_at - job.started_at).total_seconds()
@@ -311,34 +287,18 @@ def get_results_summary(
         total_jobs = int(total_jobs_query.scalar() or 0)
         risk_counts = {"high": 0, "medium": 0, "low": 0, "unknown": 0}
         if total_jobs > 0:
-            snapshot_query = (
-                db.query(StepTrace.job_id, StepTrace.output)
-                .join(JobInstance, StepTrace.job_id == JobInstance.id)
-                .filter(
-                    StepTrace.step_id == "__job__",
-                    StepTrace.event_type == "RUN_COMPLETE",
-                )
-            )
+            scoped_job_query = db.query(JobInstance.id)
             if target_project_id is not None:
-                snapshot_query = snapshot_query.join(PlanRun, JobInstance.plan_run_id == PlanRun.id)
-            snapshot_query = _scope_by_project(snapshot_query)
-            all_snapshot_rows = snapshot_query.all()
-            seen_jobs = set()
-            for job_id, output in all_snapshot_rows:
-                if job_id in seen_jobs:
-                    continue
-                seen_jobs.add(job_id)
-                level = _parse_risk_level(_extract_log_summary_from_snapshot(output))
-                if level == "HIGH":
-                    risk_counts["high"] += 1
-                elif level == "MEDIUM":
-                    risk_counts["medium"] += 1
-                elif level == "LOW":
-                    risk_counts["low"] += 1
-                else:
-                    risk_counts["unknown"] += 1
-            missing_snapshot_jobs = max(total_jobs - len(seen_jobs), 0)
-            risk_counts["unknown"] += missing_snapshot_jobs
+                scoped_job_query = scoped_job_query.join(PlanRun, JobInstance.plan_run_id == PlanRun.id)
+            scoped_job_query = _scope_by_project(scoped_job_query)
+            scoped_job_ids = [int(job_id) for (job_id,) in scoped_job_query.all()]
+            levels = aggregate_risk_levels_by_job(db, scoped_job_ids)
+            for job_id in scoped_job_ids:
+                risk_counts[_RISK_BUCKET_BY_LEVEL.get(levels.get(job_id, ""), "unknown")] += 1
+            # #2365：覆盖率进观测面——「大多数 run 无判定依据」此前与「判据坏了」
+            # 在仪表盘上同形（都只有未知桶），现在可直接查询/告警。
+            for bucket, count in risk_counts.items():
+                risk_jobs_by_level.labels(level=bucket).set(count)
 
         runs_by_status = RunsByStatus(
             finished=int(runs_by_status.finished),

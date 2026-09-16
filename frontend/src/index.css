@@ -15,6 +15,8 @@
   --color-secondary-foreground: hsl(var(--secondary-foreground));
   --color-destructive: hsl(var(--destructive));
   --color-destructive-foreground: hsl(var(--destructive-foreground));
+  /* #2027：小字号错误文字/图标的 AA 变体（--destructive 白底仅 3.76:1） */
+  --color-destructive-text: hsl(var(--destructive-text));
   --color-warning: hsl(var(--warning));
   --color-warning-foreground: hsl(var(--warning-foreground));
   --color-success: hsl(var(--success));
@@ -69,6 +71,10 @@
     --accent-foreground: 222.2 47.4% 11.2%;
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 210 40% 98%;
+    /* #2027：错误语义**文字**用（--destructive 白底 3.76:1、再叠 /70 只有 2.62:1，
+       作正文均不达 AA）。只降亮度不改色相（与 --muted-foreground 同法）：
+       白底 6.42:1、bg-muted 上 5.86:1。填充类用途（按钮底/10% 底色）仍用 --destructive。 */
+    --destructive-text: 0 74% 42%;
     --warning: 38 92% 50%;
     --warning-foreground: 210 40% 98%;
     --success: 142 71% 45%;
@@ -109,6 +115,8 @@
     /* 文字可读性优先（/10 背景用法仍成立） */
     --destructive: 0 72% 58%;
     --destructive-foreground: 210 40% 98%;
+    /* #2027：深底上要提亮度（6.24:1，AA）——不能沿用亮色那个深红 */
+    --destructive-text: 0 84% 70%;
     --warning: 38 92% 55%;
     --warning-foreground: 222 47% 11%;
     --success: 142 65% 48%;

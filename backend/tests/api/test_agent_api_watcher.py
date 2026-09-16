@@ -457,7 +457,7 @@ async def test_complete_bridges_reconciler_skip_unchanged_metric():
     token = _setup_watcher_lease(seed)
     try:
         with patch(
-            "backend.api.routes.agent_api.record_reconciler_skip_unchanged"
+            "backend.services.agent_completion.record_reconciler_skip_unchanged"
         ) as mock_rec:
             async with AsyncSessionLocal() as async_db:
                 result = await complete_job(
@@ -494,7 +494,7 @@ async def test_complete_does_not_bridge_reconciler_metric_without_stats():
     token = _setup_watcher_lease(seed)
     try:
         with patch(
-            "backend.api.routes.agent_api.record_reconciler_skip_unchanged"
+            "backend.services.agent_completion.record_reconciler_skip_unchanged"
         ) as mock_rec:
             async with AsyncSessionLocal() as async_db:
                 result = await complete_job(
@@ -527,7 +527,7 @@ async def test_complete_records_watcher_capability_metric():
     token = _setup_watcher_lease(seed)
     try:
         with patch(
-            "backend.api.routes.agent_api.record_watcher_capability"
+            "backend.services.agent_completion.record_watcher_capability"
         ) as mock_cap:
             async with AsyncSessionLocal() as async_db:
                 result = await complete_job(

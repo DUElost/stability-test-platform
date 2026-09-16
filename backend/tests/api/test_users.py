@@ -55,6 +55,31 @@ class TestCreateUser:
         assert "72 字节" in response.text, "边界数值要出现在提示里（用户据此改密码）"
         assert "must not exceed 72 bytes" not in response.text, "不得回退成英文技术串"
 
+    def test_create_user_accepts_hyphenated_username(self, client, admin_headers):
+        """#2406：`stp-tester` 这类**带连字符**的用户名必须被接受。
+
+        现场（2026-09-16）：前端字符集只允许 `[a-zA-Z0-9_]`，把连字符挡在表单里，
+        提交根本没发出（nginx 访问日志零 `POST /api/v1/users`），用户只看到
+        「填完了建不出来」。后端本无该限制——现两端同判据（`^[A-Za-z0-9_.-]+$`）。
+        """
+        resp = client.post(
+            "/api/v1/users",
+            json={"username": "stp-tester", "password": "pass-12345", "role": "user"},
+            headers=admin_headers,
+        )
+        assert resp.status_code in (200, 201), resp.text
+        assert resp.json()["username"] == "stp-tester"
+
+    def test_create_user_rejects_username_outside_charset(self, client, admin_headers):
+        """字符集外的用户名（空格/中文）→ 422，与前端提示同一判据。"""
+        for bad in ("bad name", "测试账号"):
+            resp = client.post(
+                "/api/v1/users",
+                json={"username": bad, "password": "pass-12345", "role": "user"},
+                headers=admin_headers,
+            )
+            assert resp.status_code == 422, f"{bad!r} 应被拒: {resp.text}"
+
     def test_create_user_duplicate(self, client, admin_headers):
         client.post("/api/v1/users", json={"username": "dup", "password": "pass12345", "role": "user"}, headers=admin_headers)
         resp = client.post("/api/v1/users", json={"username": "dup", "password": "pass12345", "role": "user"}, headers=admin_headers)

@@ -81,6 +81,18 @@ Class: process
 
 `python scripts/run_gates.py check:quick` → 10 gates 全过（结果见 PR）。
 
+**补记（同日 20:4x，守卫首跑就暴露的两件事）**：
+
+- 守卫上线后对生产库首跑即 `--guard` 退出码 `1`（`active ∧ 零引用` 由 32 涨到 36——期间
+  其他批次注册了 3 个新版本，其中一个把同族旧版顶成「零引用 + 零执行 + 非最新」）。
+  判据本身工作正常：这正是要它自动产出的候选，不需要人再盘一遍。
+- **执行器 `plan` 子命令在文档给的调用形式下必炸**：`python tools/tools…` 直跑时
+  `sys.path[0]` 是 `tools/dev`，函数内 `from backend…` 抛 `ModuleNotFoundError`。
+  单测当时用 importlib + `PYTHONPATH=.` 加载模块，恰好绕过了这条路径形态——教训：
+  **CLI 工具的回归必须包含「按路径直跑」的子进程用例**（已补
+  `test_script_runs_when_invoked_by_path`，反证：去掉 bootstrap 该测试红）。
+  修法与 #1659 的 `queue_head_telemetry.py` 同款：`__file__` 推导 `REPO_ROOT` 插入 sys.path。
+
 ## Revisit
 
 - **谁在什么时候跑 `--guard`**：现在退出码有了，触发还没有。等 #2055/#2048 系列收窗后，
