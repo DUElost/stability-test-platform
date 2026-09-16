@@ -303,8 +303,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      # 部分 agent 测试模块 import 时会解析 DATABASE_URL，但不会真正连接；
-      # 与全量 backend-test 保持一致的环境可避免收集期 RuntimeError。
+      # 本 job 的 job 级 env 仍服务「Run repo-level tests」等其它 step。注意 agent 两个
+      # step 刻意用 `env -i` 不继承它们（#2428）——agent 套件的 env 边界在自己的 conftest 里。
       TESTING: "1"
       JWT_SECRET_KEY: "ci-test-secret-key"
       DATABASE_URL: "postgresql+psycopg://postgres:postgres@localhost:5432/stability_test"
@@ -366,8 +366,12 @@ jobs:
       # 不必等到运行；对应本地门禁 run_gates.py check:pr 的 agent-tests-collect。
       - name: Collect agent tests in clean env
         run: env -i PATH="$PATH" PYTHONPATH=. python -m pytest backend/agent/tests/ --collect-only -q
+      # #2428：真跑也用 `env -i` 剥离 job 级 env——与上一步收集同口径。此前只有收集是
+      # 自闭环的，运行期依赖由 job env 代供（JWT_SECRET_KEY），于是套件自己的 env 边界
+      # 有缺口时 CI 仍全绿、本地 `python -m pytest backend/agent/tests` 恒红 23 例。
+      # 边界归 backend/agent/tests/conftest.py（#1295 同形），这一步负责让它无法再被遮蔽。
       - name: Run agent tests
-        run: python -m pytest backend/agent/tests/ -q
+        run: env -i PATH="$PATH" PYTHONPATH=. python -m pytest backend/agent/tests/ -q
       # 根 tests/ 的**离线子集**前移到 PR 路径（#1569，取代此前的 lock 卫生 +
       # Prometheus 契约两个逐步挑选的 step）：
       #
