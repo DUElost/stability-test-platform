@@ -34,7 +34,9 @@ class FakeOps:
         users: set[str] | None = None,
         commands: set[str] | None = None,
         responses: dict[str, tuple[int, str]] | None = None,
+        timezone: str = "Asia/Shanghai",
     ):
+        self._timezone = timezone
         self.calls: list[tuple[str, ...]] = []
         self.envs: list[tuple[tuple[str, ...], dict | None]] = []
         self._hostname = hostname
@@ -77,6 +79,9 @@ class FakeOps:
 
     def machine(self) -> str:
         return "x86_64"
+
+    def timezone(self) -> str:
+        return self._timezone
 
     def user_exists(self, name: str) -> bool:
         return name in self._users
@@ -1149,3 +1154,47 @@ def test_another_sites_distro_default_blocks_fail_closed(tmp_path, monkeypatch):
     assert report["status"] == "FAIL"
     assert "install_conflict" in codes(report)
     assert path.read_text(encoding="utf-8") == foreign
+
+# ── #2265 时区一致性（声明 = 控制面 = Agent）──────────────────────────────
+
+
+def _tz_ops(tmp_path: Path, timezone: str) -> FakeOps:
+    return FakeOps(
+        hostname="control-i3.synthetic.invalid",
+        mounts={str(tmp_path / "mnt/share")},
+        timezone=timezone,
+    )
+
+
+def test_timezone_mismatch_fails_closed_before_writes(tmp_path, monkeypatch):
+    """控制面时区与 site.timezone 不一致 → FAIL install_timezone，且不往下走。"""
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    prepare(tmp_path)
+    report = invoke(tmp_path, ops=_tz_ops(tmp_path, "America/Los_Angeles"))
+
+    assert report["status"] == "FAIL"
+    assert "install_timezone" in codes(report)
+    check = next(c for c in report["checks"] if c["check_id"] == "install.s1.timezone")
+    # message 同时给出实际值与声明值，操作者不用再猜
+    assert "America/Los_Angeles" in check["message"] and "Asia/Shanghai" in check["message"]
+    # 后续阶段不执行（部署根未落地）
+    assert not (tmp_path / "opt/stp-control/backend").exists()
+
+
+def test_timezone_unknown_is_blocked_not_passed(tmp_path, monkeypatch):
+    """读不到主机时区 → BLOCKED（不猜、也不假装一致）。"""
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    prepare(tmp_path)
+    report = invoke(tmp_path, ops=_tz_ops(tmp_path, ""))
+
+    assert "timezone_unknown" in codes(report)
+    assert next(c for c in report["checks"] if c["check_id"] == "install.s1.timezone")["status"] == "BLOCKED"
+
+
+def test_timezone_aligned_passes(tmp_path, monkeypatch):
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    prepare(tmp_path)
+    report = invoke(tmp_path, ops=_tz_ops(tmp_path, "Asia/Shanghai"))
+
+    assert report["status"] == "PASS", report
+    assert "timezone_aligned" in codes(report)
