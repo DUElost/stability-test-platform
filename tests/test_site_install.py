@@ -1253,6 +1253,50 @@ def test_bundle_with_only_example_templates_is_not_hygiene_flagged(tmp_path, mon
     assert "install.s0.hygiene" not in {c["check_id"] for c in report["checks"]}, report["checks"]
 
 
+def test_prefix_overlapping_deploy_roots_do_not_steal_shared_assets(tmp_path, monkeypatch):
+    """#2274：站点 id 前缀重叠（…/stp-control 与 …/stp-controlB）时不得互相覆盖共享资产。
+
+    归属判据此前是「整文件子串」：B 写下的 unit 引用 `…/stp-controlB/...`，A 的根
+    `…/stp-control` 是它的真前缀 → A 把 B 的资产认作「本站」并覆盖（改指自己的部署根）。
+    """
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    prepare(tmp_path)
+
+    data = yaml.safe_load((tmp_path / "site.yaml").read_text(encoding="utf-8"))
+    data["control_plane"]["deploy_root"] = str(tmp_path / "opt/stp-controlB")
+    sibling = tmp_path / "site-sibling.yaml"
+    sibling.write_text(yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
+
+    # B（前缀更长的一方）先装，写下引用 …/stp-controlB 的 unit
+    first = invoke(tmp_path, config_path=sibling)
+    assert first["status"] == "PASS", first
+
+    # A（前缀）再跑：B 的资产不是它的，必须 fail-closed 而不是覆盖
+    second = invoke(tmp_path)
+
+    assert second["status"] == "FAIL"
+    assert "install_conflict" in codes(second), codes(second)
+
+
+def test_run_stage_reports_unexpected_errors_instead_of_traceback(tmp_path, monkeypatch):
+    """#2277：阶段里的未映射异常落成报告条目（stage_crashed），不穿成 traceback。"""
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+
+    def boom(_ctx):
+        raise RuntimeError("stage exploded")
+
+    # install.py 以 `from .stages import stage_s1_basics` 绑定，故要打在它自己的命名空间
+    from tools.site_config import install as install_module
+
+    monkeypatch.setattr(install_module, "stage_s1_basics", boom)
+    prepare(tmp_path)
+
+    report = invoke(tmp_path)
+
+    assert report["status"] == "FAIL"
+    assert "stage_crashed" in codes(report), codes(report)
+
+
 def test_export_preparation_failure_is_reported(tmp_path, monkeypatch):
     """#2283：export 准备的 chown/chmod 失败此前被丢弃 rc——S1 仍报 export_prepared。"""
     monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)

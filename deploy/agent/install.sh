@@ -65,11 +65,6 @@ if [ ! -f "$STP_SITE_FILE" ]; then
     echo "agent install:   sudo ./deploy/install.sh" >&2
     exit 1
 fi
-if [ ! -d "$STP_BUNDLE" ]; then
-    echo "agent install: release bundle $STP_BUNDLE is missing; re-run sudo ./deploy/install.sh" >&2
-    exit 1
-fi
-
 deploy_ensure_python
 deploy_ensure_state_dir
 deploy_ensure_bindings_dir
@@ -78,6 +73,20 @@ identity="$(deploy_site_identity)"
 mapfile -t identity_lines <<<"$identity"
 SITE_ID="${identity_lines[0]}"
 TARGET="${identity_lines[1]}"
+
+# #2276：bundle 判据优先用 site.yaml 记录的 release.bundle——操作员没导出 $STP_BUNDLE 时
+# 此前按默认值 /srv/stp-bundle 判存在，站点实际用别处（如 /srv/releases/r7）时会把健康
+# 站点误判成「不可装」。环境/命令行显式给了就以它为准（与站点记录不一致时给提示）。
+recorded_bundle="${identity_lines[2]:-}"
+bundle_check="${STP_BUNDLE_EXPLICIT:-${recorded_bundle:-$STP_BUNDLE}}"
+if [ -n "${STP_BUNDLE_EXPLICIT:-}" ] && [ -n "$recorded_bundle" ] && [ "$STP_BUNDLE_EXPLICIT" != "$recorded_bundle" ]; then
+    echo "agent install: site input records release.bundle=$recorded_bundle;" >&2
+    echo "agent install: checking the explicit STP_BUNDLE=$STP_BUNDLE_EXPLICIT instead." >&2
+fi
+if [ ! -d "$bundle_check" ]; then
+    echo "agent install: release bundle $bundle_check is missing; re-run sudo ./deploy/install.sh" >&2
+    exit 1
+fi
 
 install_flags=(--through-agents)
 if [ "$DRY_RUN" -eq 1 ]; then install_flags+=(--dry-run); fi

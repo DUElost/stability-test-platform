@@ -266,7 +266,10 @@ def test_prepare_storage_mounts_and_binds_with_fstab_entries(tmp_path, monkeypat
     monkeypatch.setattr(bootstrap, "HOST_MOUNT", str(host_mount))
     monkeypatch.setattr(bootstrap, "FSTAB", fstab)
     monkeypatch.setattr(bootstrap, "_mounted", lambda target: False)
-    ops = probe_ops(responses={"blkid -s UUID": (0, "1234-abcd\n")})
+    ops = probe_ops(responses={
+        "blkid -s UUID": (0, "1234-abcd\n"),
+        "blkid -s TYPE -o value /dev/sdb": (0, "ext4\n"),
+    })
     actions, mount_path = bootstrap.prepare_storage(
         ops, disk="/dev/sdb", mount_path=str(tmp_path / "srv/stp-aee"),
         subdir="city-b/aee_events", dry_run=False, fix=True,
@@ -509,6 +512,81 @@ def test_init_stops_when_the_host_timezone_is_unknown(tmp_path):
     assert "host_timezone_unknown" in {check["code"] for check in report["checks"]}
     assert not output.exists() and not bindings.exists()
     assert any("timedatectl set-timezone" in line for line in report["actions"])
+
+
+MOUNTED_WHOLE_DISK_LSBLK = (
+    'NAME="sda" TYPE="disk" SIZE="1000204886016" MOUNTPOINT="" PKNAME="" RO="0"\n'
+    'NAME="sda1" TYPE="part" SIZE="1000203091968" MOUNTPOINT="/" PKNAME="sda" RO="0"\n'
+    'NAME="sdb" TYPE="disk" SIZE="2000398934016" MOUNTPOINT="" PKNAME="" RO="0"\n'
+    # 整盘文件系统（无分区表、无子设备）但**已挂载在别处**——正是会被误提案的形态
+    'NAME="sdc" TYPE="disk" SIZE="4000398934016" MOUNTPOINT="/mnt/backup" PKNAME="" RO="0"\n'
+)
+
+
+def test_data_disk_probe_skips_a_mounted_whole_disk():
+    """#2273：已挂载的整盘绝不能被提案——init --yes 会二次挂载它并写进 fstab。
+
+    「整盘文件系统」没有 PKNAME 子项、TYPE 仍是 disk、blkid 也返回类型；MOUNTPOINT
+    非空是唯一可判别信号（此前取回却丢弃）。
+    """
+    ops = probe_ops(responses={
+        "lsblk": (0, MOUNTED_WHOLE_DISK_LSBLK),
+        "blkid -s TYPE -o value /dev/sdb": (0, "ext4\n"),
+    })
+
+    assert probe_data_disk(ops) == ("/dev/sdb", 1863)
+
+
+def test_fstab_entries_use_the_detected_filesystem_type(tmp_path, monkeypatch):
+    """#2273：类型取自 blkid（不再硬编码 ext4）；判重按挂载点字段，不按整文件子串。"""
+    from tools.site_config import bootstrap
+
+    fstab = tmp_path / "fstab"
+    fstab.write_text("# 2026-08 这里挂过 /srv/hdd（历史注释）\n", encoding="utf-8")
+    monkeypatch.setattr(bootstrap, "FSTAB", fstab)
+    ops = probe_ops(responses={
+        "blkid -s UUID -o value /dev/sdb": (0, "1111-2222\n"),
+        "blkid -s TYPE -o value /dev/sdb": (0, "xfs\n"),
+    })
+
+    actions = bootstrap._fstab_entries(
+        ops, disk="/dev/sdb", host_mount="/srv/hdd",
+        subtree=Path("/srv/hdd/aee"), mount_path="/srv/stp-aee",
+    )
+
+    text = fstab.read_text(encoding="utf-8")
+    assert "UUID=1111-2222 /srv/hdd xfs defaults,nofail 0 2" in text
+    assert "ext4" not in text, "类型不得硬编码"
+    assert "/srv/hdd/aee /srv/stp-aee none bind,nofail 0 0" in text
+    assert actions
+
+
+def test_fstab_entries_recognise_existing_entries_by_field(tmp_path, monkeypatch):
+    """已有条目（含注释掉的同路径）按第 2 字段判定：注释不算已挂、真条目才算。"""
+    from tools.site_config import bootstrap
+
+    fstab = tmp_path / "fstab"
+    fstab.write_text(
+        "# /srv/hdd /srv/stp-aee 注释里的同形行不算已声明\n", encoding="utf-8",
+    )
+    monkeypatch.setattr(bootstrap, "FSTAB", fstab)
+    ops = probe_ops(responses={
+        "blkid -s UUID -o value /dev/sdb": (0, "1111-2222\n"),
+        "blkid -s TYPE -o value /dev/sdb": (0, "ext4\n"),
+    })
+
+    bootstrap._fstab_entries(
+        ops, disk="/dev/sdb", host_mount="/srv/hdd",
+        subtree=Path("/srv/hdd/aee"), mount_path="/srv/stp-aee",
+    )
+    assert "UUID=1111-2222 /srv/hdd ext4" in fstab.read_text(encoding="utf-8")
+
+    # 真条目在场时不再重复追加
+    actions = bootstrap._fstab_entries(
+        ops, disk="/dev/sdb", host_mount="/srv/hdd",
+        subtree=Path("/srv/hdd/aee"), mount_path="/srv/stp-aee",
+    )
+    assert actions == ["fstab already lists /srv/hdd and /srv/stp-aee"]
 
 
 def test_ask_prompt_goes_to_stderr_not_stdout(capsys, monkeypatch):

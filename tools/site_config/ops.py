@@ -64,6 +64,10 @@ class Ops(Protocol):
     def command_exists(self, name: str) -> bool: ...
 
 
+#: 单条外部命令的上限（秒）。超时不是异常而是一种结果（124），见 ``LocalOps.run``。
+COMMAND_TIMEOUT_SECONDS = 1800
+
+
 class LocalOps:
     """Real implementation for a root/local install on the target host."""
 
@@ -83,7 +87,7 @@ class LocalOps:
                 cwd=str(cwd) if cwd is not None else None,
                 capture_output=True,
                 text=True,
-                timeout=1800,
+                timeout=COMMAND_TIMEOUT_SECONDS,
                 check=False,
             )
         except FileNotFoundError:
@@ -93,6 +97,15 @@ class LocalOps:
             return CommandResult(tuple(argv), 127, "", f"{argv[0]}: command not found")
         except PermissionError:
             return CommandResult(tuple(argv), 126, "", f"{argv[0]}: permission denied")
+        except subprocess.TimeoutExpired:
+            # #2277：挂住的子命令（NFS 导出/挂载、跨机 SSH）此前把 TimeoutExpired 抛穿
+            # stage → deploy/install.sh 打印 traceback 退出、JSON 报告不产出——操作员
+            # 既没有失败码也没有 Fix 指引。124 = shell `timeout` 的退出码，既有的
+            # 「外部命令失败」检查自然接住。
+            return CommandResult(
+                tuple(argv), 124, "",
+                f"{argv[0]}: timed out after {COMMAND_TIMEOUT_SECONDS}s",
+            )
         return CommandResult(tuple(argv), process.returncode, process.stdout, process.stderr)
 
     def hostname(self) -> str:
