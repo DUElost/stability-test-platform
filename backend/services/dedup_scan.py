@@ -144,15 +144,20 @@ def run_scan_sync(
 class ScanCompleteness:
     """本轮 scan 完备性快照。
 
-    ``hosts_with_artifacts`` 是 host 级口径（``run_context.archive`` 与前端的
-    「host 完成度」）；``units_*`` 是 (host, platform) 对口径，供轮询屏障判定。
-    两个口径回答不同问题，不能互相替代：host 级回答「几台 Agent 交了东西」，
-    对级回答「该交的 (host, 平台) 是否都交齐」。
+    ``units_*`` 是 (host, platform) 对口径——**轮询屏障与下游展示都以它为准**（#2271：
+    此前只有屏障用它，archive/前端仍用 host 级数字，于是「host 期望 2 平台、只交付 1
+    平台」在前端显示 ok）。``hosts_with_artifacts`` 仍保留为 host 级计数，但语义收窄为
+    「在**期望平台内**有产物的 host 数」——否则交了非期望平台产物的 host 也会算完成。
+
+    ``hosts_expected`` 是「有期望平台映射的 host 数」：``hosts_triggered`` 是它的
+    超集（无 dedup 平台映射的 host 不进 ``expected``，见
+    ``plan_run_scan_scope``），拿 triggered 当分母会永远追不上（#2271 的永久 warn）。
     """
 
     hosts_with_artifacts: int
     units_satisfied: int
     units_expected: int
+    hosts_expected: int = 0
 
     @property
     def complete(self) -> bool:
@@ -229,10 +234,13 @@ def scan_completeness(
     )
     return ScanCompleteness(
         hosts_with_artifacts=sum(
-            1 for host_id in expected if platforms_by_host.get(str(host_id))
+            1
+            for host_id, platforms in expected.items()
+            if set(platforms) & platforms_by_host.get(str(host_id), set())
         ),
         units_satisfied=units_satisfied,
         units_expected=units_expected,
+        hosts_expected=len(expected),
     )
 
 
@@ -243,6 +251,9 @@ def record_scan_archive_state(
     artifacts_registered: int,
     hosts_with_artifacts: int,
     hosts_not_acked: int = 0,
+    units_satisfied: int = 0,
+    units_expected: int = 0,
+    hosts_expected: int = 0,
 ) -> None:
     """记录本轮 scan 的产物计数到 ``PlanRun.run_context['archive']``。
 
@@ -277,6 +288,11 @@ def record_scan_archive_state(
                         "scan_artifacts_registered": artifacts_registered,
                         "hosts_with_artifacts": hosts_with_artifacts,
                         "hosts_not_acked": hosts_not_acked,
+                        # #2271：unit 计数一并落库——前端阶段判定以它为准（host 级
+                        # 数字在「期望 2 平台只交 1」时会显示 ok）。
+                        "units_satisfied": units_satisfied,
+                        "units_expected": units_expected,
+                        "hosts_expected": hosts_expected,
                     }
                 ),
             },
@@ -289,28 +305,33 @@ def record_scan_archive_state(
     finally:
         db.close()
 
-    # P1-3/P3-1：下发了 host 却零产物时，把「没有报表」显式挂到终态结果上，
+    # P1-3/P3-1：该交的 (host, 平台) 一个都没交时，把「没有报表」显式挂到终态结果上，
     # 供 PlanRun 详情/前端展示（终态 status 本身不变，避免状态机额外转换）。
-    if hosts_triggered > 0 and hosts_with_artifacts == 0:
+    #
+    # #2271 两处修正：① 判据用 **unit** 口径（与轮询屏障同一事实源；host 级判据在
+    # 「期望平台的产物一个都没有、只有非期望产物」时会漏报）；② **每轮显式重写**
+    # （true 与 false 都写）——此前只写 true，一次零产物轮次之后即使后续补齐，前端
+    # 仍永久显示「扫描未产生任何报表」。
+    scan_failed = units_expected > 0 and units_satisfied == 0
+    try:
+        db2 = SessionLocal()
         try:
-            db2 = SessionLocal()
-            try:
-                db2.execute(
-                    text(
-                        "UPDATE plan_run "
-                        "SET result_summary = jsonb_set("
-                        "  COALESCE(result_summary, '{}'::jsonb), "
-                        "  '{scan_failed}', 'true', true"
-                        ") "
-                        "WHERE id = :run_id"
-                    ),
-                    {"run_id": plan_run_id},
-                )
-                db2.commit()
-            finally:
-                db2.close()
-        except Exception:
-            logger.exception("scan_failed_flag_write_failed plan_run=%d", plan_run_id)
+            db2.execute(
+                text(
+                    "UPDATE plan_run "
+                    "SET result_summary = jsonb_set("
+                    "  COALESCE(result_summary, '{}'::jsonb), "
+                    "  '{scan_failed}', CAST(:flag AS jsonb), true"
+                    ") "
+                    "WHERE id = :run_id"
+                ),
+                {"run_id": plan_run_id, "flag": "true" if scan_failed else "false"},
+            )
+            db2.commit()
+        finally:
+            db2.close()
+    except Exception:
+        logger.exception("scan_failed_flag_write_failed plan_run=%d", plan_run_id)
 
 
 def run_merge_sync(

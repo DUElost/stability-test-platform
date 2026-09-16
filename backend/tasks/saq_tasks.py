@@ -537,6 +537,11 @@ async def scan_task(
             artifacts_registered=registered,
             hosts_with_artifacts=hosts_done,
             hosts_not_acked=len(not_acked),
+            # #2271：unit 计数一并落库（前端阶段判定以它为准），并带上「期望 host 数」
+            # ——hosts_triggered 是它的超集，拿 triggered 当分母会永远追不上。
+            units_satisfied=units_done,
+            units_expected=n_units,
+            hosts_expected=(completeness.hosts_expected if completeness else 0),
         )
 
     from backend.tasks.saq_worker import get_queue

@@ -1251,3 +1251,66 @@ def test_merge_stderr_detects_error_prefix_and_traceback():
     # 非失败形态不误报
     assert not ds.merge_stderr_indicates_failure("[INFO] merge done")
     assert not ds.merge_stderr_indicates_failure("wrote 3 rows")
+
+
+def test_scan_completeness_counts_only_expected_platform_hosts(db_session, sample_plan_run):
+    """#2271：host 级计数收窄到「期望平台内有产物」，并给出 hosts_expected。
+
+    旧口径只看「该 host 有没有产物」：交了**非期望**平台产物（或只交了两个期望平台
+    中的一个）的 host 也会算完成 → 前端据 hosts_with_artifacts/hosts_triggered 显示
+    ok，而实际缺一个平台的报告。
+    """
+    from datetime import datetime, timezone
+
+    run_id = sample_plan_run.id
+    expected = {"host-a": {"mtk", "unisoc"}, "host-b": {"mtk"}}
+    since = datetime(2026, 9, 15, 10, 0, tzinfo=timezone.utc)
+
+    db_session.add(_scan_artifact(
+        run_id, "host-a", "/nfs/dedup/1/mtk/host-a_Result_org.xls", at=since,
+    ))
+    # host-b 交的是**非期望**平台：旧口径算它完成，新口径不算
+    db_session.add(_scan_artifact(
+        run_id, "host-b", "/nfs/dedup/1/unisoc/host-b_Result_org.xls", at=since,
+    ))
+    db_session.commit()
+
+    got = ds.scan_completeness(run_id, expected, since=since)
+
+    assert (got.units_satisfied, got.units_expected) == (1, 3)
+    assert got.hosts_with_artifacts == 1, "非期望平台的产物不算该 host 完成"
+    assert got.hosts_expected == 2, "triggered 的超集口径：期望 host 数单独给出"
+    assert not got.complete
+
+
+def test_record_scan_archive_state_rewrites_scan_failed_every_round(
+    db_session, sample_plan_run,
+):
+    """#2271：scan_failed 每轮**显式重写**（true/false 都写），消除粘滞。
+
+    此前只写 true：一次零产物轮次之后，即使后续轮次补齐，前端仍永久显示
+    「扫描未产生任何报表」。
+    """
+    from backend.models.plan_run import PlanRun
+
+    run_id = sample_plan_run.id
+    ds.record_scan_archive_state(
+        run_id, hosts_triggered=2, artifacts_registered=0, hosts_with_artifacts=0,
+        units_satisfied=0, units_expected=2, hosts_expected=2,
+    )
+
+    db_session.expire_all()
+    pr = db_session.get(PlanRun, run_id)
+    assert pr.result_summary["scan_failed"] is True
+    assert pr.run_context["archive"]["units_expected"] == 2
+    assert pr.run_context["archive"]["hosts_expected"] == 2
+
+    ds.record_scan_archive_state(
+        run_id, hosts_triggered=2, artifacts_registered=2, hosts_with_artifacts=1,
+        units_satisfied=2, units_expected=2, hosts_expected=2,
+    )
+
+    db_session.expire_all()
+    pr = db_session.get(PlanRun, run_id)
+    assert pr.result_summary["scan_failed"] is False, "补齐后必须清除（此前粘滞为 true）"
+    assert pr.run_context["archive"]["units_satisfied"] == 2
