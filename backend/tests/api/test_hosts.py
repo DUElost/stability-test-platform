@@ -2,7 +2,7 @@
 Tests for hosts API routes
 """
 from cryptography.fernet import Fernet
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 from uuid import uuid4
 
@@ -850,7 +850,7 @@ class TestHostInstallEndpoint:
         started = {"ok": True, "console_run_id": "con-inst-1", "room": "console:con-inst-1"}
         start_mock = MagicMock(return_value=started)
         monkeypatch.setattr(hosts_route, "start_install_agent_runconsole", start_mock)
-        host = self._online_host(db_session, "inst-opts")
+        self._online_host(db_session, "inst-opts")
 
         resp = client.post(
             "/api/v1/hosts/inst-opts/install",
@@ -878,13 +878,11 @@ class TestHostInstallEndpoint:
         assert row.details["agent_api_url"] == "https://stp.example.com"
         assert row.details["install_options"]["agent_install_root"] == "/srv/stability-test-agent"
         assert row.details["console_run_id"] == "con-inst-1"
-        # ADR-0044：安装由 RunConsole 自持——响应不再有 saq_key，且 DB 上留下
-        # 「这台主机跑过一次安装」的持久证据（状态接口据此区分 lost 与 idle）。
+        # ADR-0044：安装由 RunConsole 自持——响应不再有 saq_key；持久证据是审计
+        # （host.extra 会被心跳按 allowlist 重建，不能承载控制面侧状态）。
         body = resp.json()
         assert "saq_key" not in body
         assert body["log_path"]
-        db_session.refresh(host)
-        assert (host.extra or {})["install_console_run_id"] == "con-inst-1"
 
     def test_install_without_body_still_works(
         self, client, db_session, admin_headers, monkeypatch,
@@ -925,9 +923,10 @@ class TestHostInstallEndpoint:
 
 
 class TestHostInstallStatusEndpoint:
-    """ADR-0044 D4：安装状态以 RunConsole 为唯一来源，且重启后仍可回放。
+    """ADR-0044 D3/D4：安装状态以 RunConsole + 审计为唯一来源，重启后仍可回放。
 
-    四级来源：活动运行 → DB 里最近一次结果 → 「跑过但从未落结果」（lost）→ idle。
+    持久证据用的是 audit_logs（append-only）而不是 host.extra——后者会被心跳按
+    allowlist 重建，控制面侧裸键会在 ~20 秒内被静默抹掉（238 现场实测）。
     """
 
     @staticmethod
@@ -938,6 +937,18 @@ class TestHostInstallStatusEndpoint:
         db_session.add(host)
         db_session.commit()
         return host
+
+    @staticmethod
+    def _audit(db_session, action: str, host_id: str, details: dict, *, at: datetime):
+        from backend.models.audit import AuditLog
+
+        row = AuditLog(
+            action=action, resource_type="host", resource_id=host_id,
+            details=details, timestamp=at,
+        )
+        db_session.add(row)
+        db_session.commit()
+        return row
 
     def test_live_run_is_reported_from_the_console(self, client, db_session, admin_headers, monkeypatch):
         import backend.api.routes.hosts as hosts_route
@@ -964,20 +975,19 @@ class TestHostInstallStatusEndpoint:
         assert body["console_found"] is True
         assert body["room"] == "console:con-live"
         assert body["log_path"] == "/var/log/stp/con-live.log"
-        # ADR-0044：不再有 SAQ 状态面
-        assert "saq_key" not in body
+        assert "saq_key" not in body  # ADR-0044：SAQ 状态面已移除
 
-    def test_finished_run_is_replayed_from_the_host_record(self, client, db_session, admin_headers, monkeypatch):
-        """安装结束后活动登记就清了——结果从 Host 记录回放，重启后同样可读。"""
+    def test_finished_run_is_replayed_from_the_audit_log(self, client, db_session, admin_headers, monkeypatch):
+        """安装结束后活动登记就清了——结果从审计回放（心跳不会改写审计）。"""
         import backend.api.routes.hosts as hosts_route
 
-        host = self._online_host(db_session, "st-done")
-        host.extra = {
-            "install_console_run_id": "con-done",
-            "last_install": {"console_run_id": "con-done", "status": "SUCCESS", "ok": True,
-                             "ended_at": "2026-09-15T08:00:00+00:00"},
-        }
-        db_session.commit()
+        self._online_host(db_session, "st-done")
+        now = datetime.now(timezone.utc)
+        self._audit(db_session, "install_agent_request", "st-done",
+                    {"console_run_id": "con-done"}, at=now - timedelta(minutes=10))
+        self._audit(db_session, "install_agent", "st-done",
+                    {"ok": True, "rc": 0, "console_status": "SUCCESS", "console_run_id": "con-done",
+                     "log_path": "/var/log/stp/con-done.log"}, at=now - timedelta(minutes=5))
         monkeypatch.setattr(hosts_route, "get_active_install_console_id", lambda host_id: None)
 
         resp = client.get("/api/v1/hosts/st-done/install/status", headers=admin_headers)
@@ -987,15 +997,20 @@ class TestHostInstallStatusEndpoint:
         assert body["console_status"] == "SUCCESS"
         assert body["console_found"] is False
         assert body["console_run_id"] == "con-done"
-        assert body["log_path"].endswith("con-done.log")
+        assert body["exit_code"] == 0
+        assert body["log_path"] == "/var/log/stp/con-done.log"
 
     def test_started_run_without_outcome_is_lost_not_idle(self, client, db_session, admin_headers, monkeypatch):
-        """跑过一次却从未落结果 = lost（控制面重启/记录过期），不能报成 idle 让人以为没装过。"""
+        """有请求、没有更新的结果 = lost（控制面重启/结果未及落库），不能报成 idle。"""
         import backend.api.routes.hosts as hosts_route
 
-        host = self._online_host(db_session, "st-lost")
-        host.extra = {"install_console_run_id": "con-lost"}
-        db_session.commit()
+        self._online_host(db_session, "st-lost")
+        now = datetime.now(timezone.utc)
+        self._audit(db_session, "install_agent", "st-lost",
+                    {"ok": True, "console_status": "SUCCESS", "console_run_id": "con-old"},
+                    at=now - timedelta(hours=2))
+        self._audit(db_session, "install_agent_request", "st-lost",
+                    {"console_run_id": "con-lost"}, at=now - timedelta(minutes=5))
         monkeypatch.setattr(hosts_route, "get_active_install_console_id", lambda host_id: None)
 
         resp = client.get("/api/v1/hosts/st-lost/install/status", headers=admin_headers)
@@ -1003,7 +1018,7 @@ class TestHostInstallStatusEndpoint:
         body = resp.json()
         assert body["status"] == "lost"
         assert body["console_status"] is None
-        assert body["console_found"] is False
+        assert body["console_run_id"] == "con-lost"
 
     def test_host_without_any_install_is_idle(self, client, db_session, admin_headers, monkeypatch):
         import backend.api.routes.hosts as hosts_route

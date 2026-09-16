@@ -18,6 +18,7 @@ from backend.core.ssh_security import (
     resolve_host_ssh_credentials,
     trust_host_key,
 )
+from backend.models.audit import AuditLog
 from backend.models.host import Device, Host
 from backend.models.job import JobInstance
 from backend.api.schemas import (
@@ -1022,11 +1023,8 @@ def host_install_agent(
     console_run_id = started["console_run_id"]
     room = started["room"]
 
-    # ADR-0044 D3（开始侧）：内存里的活动登记在结束/重启后会消失，DB 上的这一笔
-    # 才是「这台主机跑过一次安装」的持久证据（状态接口据此区分 lost 与 idle）。
-    extra = dict(host.extra or {})
-    extra["install_console_run_id"] = console_run_id
-    host.extra = extra
+    # ADR-0044 D3：持久证据是审计（append-only），**不是** host.extra——
+    # 心跳会按 allowlist 重建 extra，任何控制面侧裸键都会在 ~20s 内被静默抹掉（238 现场实测）。
     record_audit(
         db,
         action="install_agent_request",
@@ -1071,14 +1069,40 @@ _INSTALL_STATUS_BY_CONSOLE = {
 def _install_status_summary(console_status: str | None, found: bool, has_run: bool) -> str:
     """把 console 终态折成稳定摘要（ADR-0044 D4）。
 
-    三态要分清：`idle`（这台主机没有安装运行记录）、`lost`（有运行记录但快照已不在——
-    控制面重启或终态保留期到期，调用方按取消处理）、以及 console 自己的终态。
+    三态要分清：`idle`（这台主机没有安装运行记录）、`lost`（有运行记录但没落结果——
+    控制面重启或结果未及落库，调用方按取消处理）、以及 console 自己的终态。
     """
     if not has_run:
         return "idle"
     if not found:
         return "lost"
     return _INSTALL_STATUS_BY_CONSOLE.get(console_status, "unknown")
+
+
+def _latest_install_audits(db: Session, host_id: str) -> tuple[Any, Any]:
+    """最近一次安装请求 / 最近一次安装结果（ADR-0044 D3：审计是持久证据）。
+
+    按 (timestamp, id) 排序取最新——同一秒内产生的两条也要稳定可比（id 单调）。
+    """
+    def _latest(action: str) -> Any:
+        return (
+            db.query(AuditLog)
+            .filter(AuditLog.action == action, AuditLog.resource_id == host_id)
+            .order_by(AuditLog.timestamp.desc(), AuditLog.id.desc())
+            .first()
+        )
+
+    return _latest("install_agent_request"), _latest("install_agent")
+
+
+def _outcome_console_status(details: dict[str, Any]) -> str:
+    """结果审计 → console 口径的终态（旧记录没有 console_status 字段时按 ok/rc 还原）。"""
+    recorded = str(details.get("console_status") or "")
+    if recorded:
+        return recorded
+    if details.get("ok"):
+        return "SUCCESS"
+    return "CANCELED" if details.get("rc") in (-9, -15) else "FAILED"
 
 
 @router.get("/{host_id}/install/status")
@@ -1107,27 +1131,40 @@ def host_install_status(
             "log_path": snapshot.get("log_path"),
         }
 
-    # 没有活动运行：回放 DB 上的最近一次（ADR-0044 D4 二级/三级）。
-    host = db.get(Host, host_id)
-    extra = dict(getattr(host, "extra", None) or {})
-    last = extra.get("last_install") if isinstance(extra.get("last_install"), dict) else None
-    if last:
-        run_id = last.get("console_run_id")
-        console_status = str(last.get("status") or "") or None
+    # 没有活动运行：回放审计里的最近一次安装（ADR-0044 D4 二级/三级）。
+    request_row, outcome_row = _latest_install_audits(db, host_id)
+    if request_row is None:
+        return {
+            "host_id": host_id,
+            "status": _install_status_summary(None, False, False),
+            "console_run_id": None,
+            "console_status": None,
+            "console_found": False,
+            "exit_code": None,
+            "room": None,
+            "log_path": None,
+        }
+    request_details = dict(request_row.details or {})
+    started_run_id = request_details.get("console_run_id")
+    if outcome_row is not None and outcome_row.timestamp >= request_row.timestamp:
+        details = dict(outcome_row.details or {})
+        console_status = _outcome_console_status(details)
+        run_id = details.get("console_run_id") or started_run_id
         return {
             "host_id": host_id,
             "status": _install_status_summary(console_status, True, True),
             "console_run_id": run_id,
             "console_status": console_status,
             "console_found": False,
-            "exit_code": None,
+            "exit_code": details.get("rc"),
             "room": None,
-            "log_path": str(RunConsole.instance().log_file_path(run_id)) if run_id else None,
+            "log_path": details.get("log_path")
+            or (str(RunConsole.instance().log_file_path(run_id)) if run_id else None),
         }
-    started_run_id = extra.get("install_console_run_id")
+    # 有请求、没有更新的结果 → lost（控制面重启 / 结果未及落库）。
     return {
         "host_id": host_id,
-        "status": _install_status_summary(None, False, bool(started_run_id)),
+        "status": _install_status_summary(None, False, True),
         "console_run_id": started_run_id,
         "console_status": None,
         "console_found": False,

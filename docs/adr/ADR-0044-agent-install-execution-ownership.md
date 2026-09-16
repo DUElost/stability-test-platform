@@ -1,6 +1,6 @@
 # ADR-0044：Agent 安装的执行归属——RunConsole 自持，SAQ 不再持有安装
 
-- 状态：**Accepted** v1.0（2026-09-15，owner 裁决：按「本质问题」把安装从作业窗口里摘出来；由 [#2220](https://github.com/DUElost/stability-test-platform/issues/2220) 触发，现场证据见该单；D3/D4 在实施中发现「活动登记在结束时清空」会使状态读不到结果，故明确为 DB 三级来源）
+- 状态：**Accepted** v1.0（2026-09-15，owner 裁决：按「本质问题」把安装从作业窗口里摘出来；由 [#2220](https://github.com/DUElost/stability-test-platform/issues/2220) 触发，现场证据见该单；D3/D4 在实施中两次修正：先是发现「活动登记在结束时清空」会使状态读不到结果，改为 DB 来源；现场复跑又发现 `host.extra` 会被心跳重建覆盖，故最终定为「审计 = 持久证据」）
 - 优先级：P1
 - 目标里程碑：M7
 - 日期：2026-09-15
@@ -47,22 +47,21 @@ CANCELED 与 FAILED 分开报，解决了**读数**，没解决**归属**。
   `install_agent_request` 审计 → 返回 `{console_run_id, room, log_path, status}`。
   **不再入队 SAQ 作业**：删除 `install_agent_task` 与 `wait_install_agent_runconsole`
   的等待职责（连同 `saq_key`）。同主机并发仍由 console 的 `run_key` 拒绝（409 + 现有 id）。
-- **D3（状态落库，两处）**：
-  - **开始**：路由在触发时把 `host.extra.install_console_run_id` 写进 Host 行（与
-    `install_agent_request` 审计同一事务）——内存里的「活动运行」注册表在安装结束/进程重启后
-    就没了，DB 上的这一笔才是「这台主机跑过一次安装」的持久证据；
-  - **结束**：console 的 `on_complete(run)` 回调写 `install_agent` 审计、维护
-    `host.extra.agent_installed[_at]`，并落 `host.extra.last_install`（`console_run_id` /
-    `status` / `ok` / `ended_at`）；口径与今天一致（`status == "SUCCESS"` 才置 `agent_installed`）。
-    回调在 console 的终态快照之后执行（`run_console._finalize`），失败只记日志、不影响清理；
-  - 顺序保证：`on_complete` 里**先落库再清理活动登记**，所以「活动 id 已清、结果未落」的竞态
-    不存在——调用方在安装结束后查状态一定能读到结果。
-- **D4（状态接口）**：`/install/status` 取三级来源，全部是 console 语义：
+- **D3（状态落库 = 审计，不是 host.extra）**：
+  - **开始**：路由写 `install_agent_request` 审计（`details.console_run_id`）——内存里的
+    「活动运行」注册表在安装结束/进程重启后就没；审计是 append-only，才是持久证据；
+  - **结束**：console 的 `on_complete(run)` 回调写 `install_agent` 审计（`ok` / `rc` /
+    `console_status` / `log_path` / `console_run_id`），并维护 `host.extra.agent_installed[_at]`
+    （该键在心跳的 keep-list 里，能穿过 `extra` 重建；`status == "SUCCESS"` 才置位）。
+    回调在 console 的终态快照之后执行（`run_console._finalize`），失败只记日志、不影响清理。
+  - **为什么不用 host.extra 存运行态**：心跳会按 allowlist **重建** `extra`，控制面侧写进去的
+    裸键会在 ~20 秒内被静默抹掉（238 现场实测：`install_console_run_id` / `last_install` 落库后
+    随即消失）；这也与 ADR-0040 D2「禁 Host.extra 裸键、信号走显式列」一致。
+- **D4（状态接口）**：`/install/status` 取三级来源（权威顺序）：
   1. 有活动运行 → console 实时快照（`console_found=true`）；
-  2. 无活动运行但有 `host.extra.last_install` → 回放该次结果（重启后仍可读；
-     `log_path` 由 `console_run_id` 推导，日志文件一直在盘上）；
-  3. 有 `install_console_run_id` 但无 `last_install`（跑过一次却从未落结果）→ `lost`：
-     控制面重启或终态保留期到期，调用方按取消处理；
+  2. 无活动运行 → 读该 Host 的最近一次 `install_agent_request` 与 `install_agent` 审计：
+     结果审计不早于请求审计 → 回放该终态（`console_status` / `exit_code` / `log_path`）；
+  3. 请求存在但没有更新的结果 → `lost`：控制面重启或结果未及落库，调用方按取消处理；
   4. 两者都无 → `idle`（这台主机没跑过安装）。
   返回 `console_status` / `console_found` / `log_path` / `exit_code`；删除 `saq_key` 与
   SAQ 状态字段（`status` 改为 console 派生摘要：`idle|running|succeeded|failed|canceled|lost`）。
@@ -119,7 +118,9 @@ CANCELED 与 FAILED 分开报，解决了**读数**，没解决**归属**。
 - `on_complete` 落 `install_agent` 审计与 `agent_installed`（单测：SUCCESS 置位、FAILED/CANCELED
   不置位且审计如实）；
 - `/install/status`：返回 `console_found` 与可推导的 `log_path`（单测：记录在/不在两条路径）；
-- S5 `await_install`：CANCELED → `agent_install_canceled`；`console_found=false` → 同样按取消报
+- S5 `await_install`：CANCELED → `agent_install_canceled`；`lost` → 同样按取消报
   （单测，含「不得因记录消失而报失败」）；
+- **现场复跑（238）抓到的自伤**：首版把运行态写进 `host.extra`，心跳按 allowlist 重建
+  `extra` 会在 ~20 秒内抹掉它——状态接口改读 `audit_logs`；
 - runbook 与相关文档同步（`docs/linux-agent-ansible-runbook.md` 的调用链描述）；
 - 现场复跑：238 上重跑一次 Agent 接入，确认安装不再受窗口影响、报告与实时日志一致。
