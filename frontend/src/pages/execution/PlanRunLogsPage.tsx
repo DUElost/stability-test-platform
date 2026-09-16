@@ -251,6 +251,7 @@ export default function PlanRunLogsPage() {
         isExporting={isExporting}
         isLoading={eventsQ.isLoading}
         isError={eventsQ.isError}
+        error={eventsQ.error}
         page={page}
         pageSize={PAGE_SIZE}
         onPageChange={setPage}
