@@ -135,7 +135,8 @@ Revisit「载荷策略」项的现实证据 → **已立 [#2252](https://github.
 2. 基线：`job_log_signal(category='UNIVIEW', device_serial=…)` 行数（理想为 0，新增即可归因）；
 3. 驻留观察窗：`POST /api/v1/plans/51/run {"device_ids":[<id>]}`（Plan 51 = probe v1.0.1 四根，
    patrol 45s——reconciler 随 job 启动，驻留保证接住落盘晚于触发的事件）；
-4. 进 patrol 后单发触发：`adb -s <serial> shell am crash com.android.settings`；
+4. 进 patrol 后单发触发：`adb -s <serial> shell am crash com.android.settings`
+   （JE 类）或 `kill -11 <pid>`（NE 类，同日补测坐实，见下矩阵）；
 5. 设备端差分（≤15s）：应现 `JE.103000004` 新目录 + dropbox `system_app_crash`；
 6. 平台端（≤2min）：`job_log_signal` 新 UNIVIEW 行（`subtype=Java Crash`、`package=com.android.settings`、
    `source=reconciler`），DLE 终态 `REMOTE`；
@@ -147,6 +148,21 @@ Revisit「载荷策略」项的现实证据 → **已立 [#2252](https://github.
 |---|---|---|---|---|
 | `00004a4f` | 11:51:27 | ≤25s | 11:52:02（seq1，+35s） | 该机时钟恒慢 ~6.9 天（#785 形态）；seq2 为 #2010 签名变化重发样本 |
 | `0001cb4d` | 14:22:15 | ≤12s | 14:23:52（+97s） | 时钟准：`aee_ts=2026-09-16_14:22:13` 与真实钟秒级吻合——坐实「慢钟」系单机漂移而非链路问题；Run 411/Job 17941，abort 后设备回池 |
+| `0001cb4d`（NE 补测） | 14:36:29（`kill -11` settings） | ≤15s（**新容器 `NE.103000003`** + tombstone） | 14:38:33（+124s，`Native Crash`） | Run 412/Job 17942；`aee_ts` 再对秒；abort 后设备回池 |
+
+**类型覆盖矩阵（监测面 = uniview 守护落盘，解析面对类型无感）**：
+
+| 类别 | 平台解析 | 监测实证 | 状态 |
+|---|---|---|---|
+| Java Crash（JE） | `event_name` | 今日双机触发复现 ×3 | ✅ 触发级 |
+| watchdog（SWT） | `event_name` | 今日 `am hang` 触发复现 | ✅ 触发级 |
+| Native Crash（NE） | `event_name`/前缀 | 今日 `kill -11` 触发复现 | ✅ 触发级 |
+| ANR | 前缀 `ANR`（行常缺 `event_name`） | 62002360 历史自然事件入库 ×2（09-14/15） | ✅ 历史级（构造姿势未复现，勿作自检判据） |
+| 异常 Reboot（Boot Category） | `event_name` | 62002360 历史入库 ×2；normalboot-only **有意拒收**（#2083） | ✅ 历史级 |
+| uniview 之外（`/data/anr` 独立 trace、tombstones-only、ylog 系） | — 不在采集面 | — | ❌ 待边界裁决（#73 Revisit「附加源」） |
+
+**粒度限定**：容器目录内同类别多条发生经 `fold_unievent_info` 折叠，一次签名变化发**一条**
+（#2010/#2080 语义即为此设计）；逐条精确对应 = #2252 按 `{seq}-{ts}.tar.gz` 增量拉取的终态。
 
 两机基线均 0 → 触发后恰 1 条新鲜信号、1:1 对应；采集→emit→入库→上送（`REMOTE`）每次全链走通。
 
