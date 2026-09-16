@@ -1,5 +1,5 @@
 ---
-# #2095 — 统一 Agent 主机时区为与控制面一致（Asia/Shanghai）
+# #2095 — 统一 Agent 主机时区为与控制面一致；#2265 — 目标时区由站点声明驱动（不再硬编码）
 #
 # 背景：主机装机镜像默认 America/Los_Angeles(PDT, -0700)，而平台约定 Asia/Shanghai(+0800)，
 # 两者挂钟相差 15 小时。实测双方 UTC 仅差 1 秒（NTP 正常、RTC=UTC），因此这是**时区配置**
@@ -22,8 +22,13 @@
   gather_facts: false
 
   vars:
-    tz_target: "Asia/Shanghai"
-    tz_expected_offset: "+0800"
+    # #2265：目标时区由站点声明驱动（install --through-agents 传 agent_timezone），
+    # 缺省跟随控制面本机时区（`/etc/timezone` → `timedatectl`），最后才落到历史默认。
+    # 不再硬编码——声明/控制面/Agent 必须同源，否则审计与心跳窗口整体错位。
+    tz_controller: "{{ lookup('pipe', 'timedatectl show -p Timezone --value 2>/dev/null || cat /etc/timezone 2>/dev/null || true') | trim }}"
+    tz_target: "{{ agent_timezone | default(tz_controller, true) | default('Asia/Shanghai', true) }}"
+    # 目标偏移由目标时区现算（不再写死 +0800 与之耦合）
+    tz_expected_offset: "{{ lookup('pipe', 'TZ=' ~ tz_target ~ ' date +%z') | trim }}"
     tz_utc_skew_tolerance_seconds: 5
 
   tasks:

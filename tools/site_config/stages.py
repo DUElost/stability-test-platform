@@ -17,7 +17,7 @@ import shutil
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -25,7 +25,7 @@ from urllib.parse import urlsplit
 from .bindings import BindingError, load_binding, require_keys
 from .models import SiteConfig
 from .ops import Ops
-from .validation import Check, failure
+from .validation import Check, blocked, failure
 
 BASE_DEPENDENCIES = ("python3", "systemctl", "nginx")
 
@@ -409,6 +409,31 @@ def stage_s1_basics(ctx: InstallContext) -> list[Check]:
     version_matches = release.get("VERSION_ID", "").split(".")[0] == expected.version.split(".")[0]
     if not version_matches or machine != config.platform.cpu_arch:
         return _safe(checks, "install_platform", location="$.platform", role="site", check_id="install.s1.platform")
+
+    # 时区一致性（#2265）：声明、控制面、Agent 必须同源——三者不一致时审计时间、租约/心跳窗口
+    # 与 AEE 的 MMDD 戳会整体错位（238 现场：声明 UTC / 控制面 PDT / Agent CST，差 15 小时）。
+    host_timezone = ctx.ops.timezone()
+    if not host_timezone:
+        checks.append(blocked(
+            "install.s1.timezone", "site", "$.site.timezone", "timezone_unknown",
+            "The host timezone could not be read (/etc/timezone and timedatectl both unavailable).",
+            "Read the timezone manually and re-run; the installer never guesses it.",
+        ))
+    elif host_timezone != config.site.timezone:
+        checks.append(replace(
+            failure("install_timezone", location="$.site.timezone", role="site", check_id="install.s1.timezone"),
+            message=(
+                f"The control-plane host timezone is {host_timezone}, but the site declares "
+                f"{config.site.timezone}."
+            ),
+        ))
+        return checks
+    else:
+        checks.append(_pass(
+            "install.s1.timezone", "site", "$.site.timezone", "timezone_aligned",
+            f"The control-plane host timezone matches the declared {config.site.timezone}.",
+            "Agents are aligned to the declared timezone by the install chain; keep all three in sync.",
+        ))
 
     root = ctx.deploy_root
     marker = _read_marker(root)
