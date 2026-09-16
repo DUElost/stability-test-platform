@@ -34,6 +34,7 @@ from backend.api.schemas import (
 from backend.api.routes.auth import get_current_active_user, require_admin, User
 from backend.services.agent_installer import (
     get_active_install_console_id,
+    install_outcome_snapshot,
     install_request_problem,
     normalize_install_api_url,
     start_install_agent_runconsole,
@@ -59,7 +60,6 @@ from backend.services.agent_version_info import finalize_hot_update_outcome
 from backend.services.host_updater import execute_hot_update, _resolve_ssh_creds, get_agent_code_version
 from backend.services.agent_version_info import build_host_version_view
 from backend.services.run_console import RunConsole
-from backend.tasks.saq_worker import enqueue_sync, EnqueueSyncError, get_saq_job_state_sync
 
 logger = logging.getLogger(__name__)
 
@@ -1022,6 +1022,11 @@ def host_install_agent(
     console_run_id = started["console_run_id"]
     room = started["room"]
 
+    # ADR-0044 D3（开始侧）：内存里的活动登记在结束/重启后会消失，DB 上的这一笔
+    # 才是「这台主机跑过一次安装」的持久证据（状态接口据此区分 lost 与 idle）。
+    extra = dict(host.extra or {})
+    extra["install_console_run_id"] = console_run_id
+    host.extra = extra
     record_audit(
         db,
         action="install_agent_request",
@@ -1040,70 +1045,97 @@ def host_install_agent(
     )
     db.commit()
 
-    saq_key = f"install:{host_id}"
-    try:
-        enqueue_sync(
-            "install_agent_task",
-            key=saq_key,
-            timeout=900,
-            retries=0,
-            required=True,
-            host_id=host_id,
-            initiated_by=initiated_by,
-            console_run_id=console_run_id,
-        )
-    except EnqueueSyncError as exc:
-        RunConsole.instance().cancel(console_run_id)
-        raise HTTPException(status_code=503, detail=f"SAQ enqueue failed: {exc}") from exc
-
+    # ADR-0044 D2：安装由 RunConsole 自持（执行/串行/日志/取消/终态），不再入队等待它的
+    # SAQ 作业——作业窗口（900s）曾把慢而健康的安装判成失败（#2220）。终态由 console 的
+    # on_complete 落审计（D3），状态查询见 /install/status（D4）。
     return {
         "ok": True,
         "host_id": host_id,
-        "saq_key": saq_key,
         "console_run_id": console_run_id,
         "room": room,
+        "log_path": str(RunConsole.instance().log_file_path(console_run_id)),
         "status": "running",
         "message": "Agent 安装已启动，实时日志见 RunConsole",
     }
 
 
+_INSTALL_STATUS_BY_CONSOLE = {
+    None: "idle",
+    "RUNNING": "running",
+    "SUCCESS": "succeeded",
+    "FAILED": "failed",
+    "CANCELED": "canceled",
+}
+
+
+def _install_status_summary(console_status: str | None, found: bool, has_run: bool) -> str:
+    """把 console 终态折成稳定摘要（ADR-0044 D4）。
+
+    三态要分清：`idle`（这台主机没有安装运行记录）、`lost`（有运行记录但快照已不在——
+    控制面重启或终态保留期到期，调用方按取消处理）、以及 console 自己的终态。
+    """
+    if not has_run:
+        return "idle"
+    if not found:
+        return "lost"
+    return _INSTALL_STATUS_BY_CONSOLE.get(console_status, "unknown")
+
+
 @router.get("/{host_id}/install/status")
 def host_install_status(
     host_id: str,
-    _db: Session = Depends(get_db),
+    db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
-    """查询 Agent 首次安装状态：SAQ 任务 + RunConsole 实时态。"""
-    saq_key = f"install:{host_id}"
-    state = get_saq_job_state_sync(saq_key)
-    result = None
-    saq_status = "unknown"
-    if state is not None:
-        saq_status = state.get("status", "unknown")
-        if isinstance(state.get("result"), dict):
-            result = state["result"]
+    """查询 Agent 首次安装状态（ADR-0044 D4：以 RunConsole 为唯一状态来源）。
 
-    console_run_id = get_active_install_console_id(host_id)
-    if not console_run_id and isinstance(result, dict):
-        console_run_id = result.get("console_run_id")
+    `console_found=false` 表示运行记录已不在（控制面重启或终态保留期到期），
+    调用方应按「取消」而不是「失败」处理——那是进程生命周期边界，不是脚本失败。
+    """
+    active_run_id = get_active_install_console_id(host_id)
+    if active_run_id:
+        snapshot = install_outcome_snapshot(active_run_id)
+        console_status = snapshot.get("status")
+        return {
+            "host_id": host_id,
+            "status": _install_status_summary(console_status, bool(snapshot["found"]), True),
+            "console_run_id": active_run_id,
+            "console_status": console_status,
+            "console_found": bool(snapshot["found"]),
+            "exit_code": snapshot.get("exit_code"),
+            "room": f"console:{active_run_id}",
+            "log_path": snapshot.get("log_path"),
+        }
 
-    console_status = None
-    room = None
-    if console_run_id:
-        room = f"console:{console_run_id}"
-        st = RunConsole.instance().status(console_run_id)
-        if st is not None:
-            console_status = st.get("status")
-
+    # 没有活动运行：回放 DB 上的最近一次（ADR-0044 D4 二级/三级）。
+    host = db.get(Host, host_id)
+    extra = dict(getattr(host, "extra", None) or {})
+    last = extra.get("last_install") if isinstance(extra.get("last_install"), dict) else None
+    if last:
+        run_id = last.get("console_run_id")
+        console_status = str(last.get("status") or "") or None
+        return {
+            "host_id": host_id,
+            "status": _install_status_summary(console_status, True, True),
+            "console_run_id": run_id,
+            "console_status": console_status,
+            "console_found": False,
+            "exit_code": None,
+            "room": None,
+            "log_path": str(RunConsole.instance().log_file_path(run_id)) if run_id else None,
+        }
+    started_run_id = extra.get("install_console_run_id")
     return {
         "host_id": host_id,
-        "saq_key": saq_key,
-        "status": saq_status,
-        "console_run_id": console_run_id,
-        "console_status": console_status,
-        "room": room,
-        "log_path": (result or {}).get("log_path"),
-        "result": result,
+        "status": _install_status_summary(None, False, bool(started_run_id)),
+        "console_run_id": started_run_id,
+        "console_status": None,
+        "console_found": False,
+        "exit_code": None,
+        "room": None,
+        "log_path": (
+            str(RunConsole.instance().log_file_path(started_run_id)) if started_run_id else None
+        ),
     }
 
 

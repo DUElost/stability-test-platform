@@ -477,14 +477,14 @@ def await_install(
             return _fail("install.s5.install", error.code,
                          location="$.control_plane.public_url", role="control_plane")
         console = state.get("console_status")
-        saq = str(state.get("status") or "")
+        summary = str(state.get("status") or "")
         if console in {"SUCCESS"}:
             return None
-        # CANCELED 先于 saq 判定：SAQ 作业窗口到期（900s，现场实测）会同时把作业标成
-        # failed/aborted，而 console 的 CANCELED 才是「怎么结束的」那一条证据；两者合并
-        # 报成 agent_install_failed 会让操作者去目标机找一个不存在的错误。
-        if console in {"CANCELED"}:
-            detail = f"console=CANCELED, saq={saq or 'unknown'}"
+        # 取消 ≠ 失败（#2225 / ADR-0044 D5）：console 的 CANCELED 是显式取消或进程被信号终止；
+        # status=lost 是这台主机的运行记录已不在（控制面重启或终态保留期到期）——两者都是
+        # 生命周期边界，不是脚本失败。合并报成 agent_install_failed 会让人去目标机找不存在的错误。
+        if console in {"CANCELED"} or summary == "lost":
+            detail = f"console={console or 'missing'}, status={summary or 'unknown'}"
             log_path = state.get("log_path")
             if log_path:
                 detail += f", log={log_path}"
@@ -492,11 +492,11 @@ def await_install(
                 _fail("install.s5.install", "agent_install_canceled", location="$.agents"),
                 message=f"The Agent installation was canceled before it finished ({detail}).",
             )
-        if console in {"FAILED"} or saq in {"failed", "aborted"}:
+        if console in {"FAILED"}:
             return _fail("install.s5.install", "agent_install_failed", location="$.agents")
         if time.monotonic() >= deadline:
             return _fail("install.s5.install", "install_timeout", location="$.agents")
-        say(f"waiting for {host_id} install ({console or saq or 'pending'})")
+        say(f"waiting for {host_id} install ({console or summary or 'pending'})")
         sleep(interval)
 
 

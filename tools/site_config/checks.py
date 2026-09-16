@@ -122,13 +122,17 @@ MESSAGES = {
     "host_create_failed": "Host creation was rejected; inspect the API response and the audit trail.",
     "agent_install_failed": "The Agent installation run failed; inspect the RunConsole log, fix the cause, and re-run.",
     "agent_install_canceled": (
-        "The install run was canceled before it finished — that is not a script failure, and the same "
-        "terminal state covers an explicit cancel. The install job runs inside a bounded SAQ window (900s) "
-        "and a first-time install on a slow target (apt update/install) can exceed it. Re-run the install "
-        "(hosts page, or `deploy/agent/install.sh`); if it is canceled again, read the tail of the RunConsole "
-        "log to see where it stalled and pre-install the heavy packages on the target (e.g. `nfs-common`)."
+        "The install run was canceled before it finished — that is not a script failure. Two causes look the "
+        "same here: an explicit cancel, and the run being lost with the control plane (the run lives in this "
+        "process; its record also expires after the terminal retention window — ADR-0044). Re-run the install "
+        "(hosts page, or `deploy/agent/install.sh`) and read the tail of the RunConsole log to see where it "
+        "stopped."
     ),
-    "install_timeout": "The Agent installation did not reach a terminal state before the deadline; inspect the RunConsole log before retrying.",
+    "install_timeout": (
+        "The Agent installation did not reach a terminal state before the deadline. A first-time install on "
+        "a slow target (apt update/install) can take long: inspect the RunConsole log before retrying, and "
+        "consider pre-installing the heavy packages on the target (e.g. `nfs-common`)."
+    ),
     "install_trigger_failed": "The install request was rejected; inspect the RunConsole log and the audit trail.",
     "target_sudo_unavailable": (
         "The SSH user cannot use sudo on the target, so the installer cannot run become. Give it "

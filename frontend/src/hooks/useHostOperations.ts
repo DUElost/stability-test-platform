@@ -128,7 +128,16 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** 轮询至 RunConsole / SAQ 终态；槽位占用直到返回。 */
+/**
+ * console 摘要 → 调用方口径的终态（ADR-0044 D4：结果可能来自活动运行，也可能是 DB 回放）。
+ */
+const TERMINAL_BY_SUMMARY: Record<string, string> = {
+  succeeded: 'SUCCESS',
+  failed: 'FAILED',
+  canceled: 'CANCELED',
+};
+
+/** 轮询至 RunConsole 终态；槽位占用直到返回。 */
 export async function waitInstallTerminal(
   hostId: string,
   opts: { pollMs?: number; timeoutMs?: number } = {},
@@ -143,26 +152,21 @@ export async function waitInstallTerminal(
       const cs = st.console_status;
       if (cs === 'SUCCESS') return { ok: true, status: cs };
       if (cs === 'FAILED' || cs === 'CANCELED') {
+        return { ok: false, status: cs, message: cs };
+      }
+      // ADR-0044 D5：记录已丢失（控制面重启或终态保留期到期）按取消处理——
+      // 那是生命周期边界，不是脚本失败，别让操作者去目标机找不存在的错误。
+      if (st.status === 'lost') {
         return {
           ok: false,
-          status: cs,
-          message: st.result?.message ?? cs,
+          status: 'CANCELED',
+          message: '安装运行记录已丢失（控制面重启或记录过期）',
         };
       }
-      if (st.status === 'complete') {
-        const ok = Boolean(st.result?.ok);
-        return {
-          ok,
-          status: ok ? 'SUCCESS' : 'FAILED',
-          message: st.result?.message,
-        };
-      }
-      if (st.status === 'failed' || st.status === 'aborted') {
-        return {
-          ok: false,
-          status: st.status.toUpperCase(),
-          message: st.result?.message ?? st.status,
-        };
+      // 无活动运行但 DB 里有上一次结果：按 replay 收尾（重启后也能读到终态）。
+      const replay = TERMINAL_BY_SUMMARY[st.status];
+      if (replay) {
+        return { ok: replay === 'SUCCESS', status: replay, message: st.status };
       }
     } catch {
       /* 短暂失败继续轮询 */
