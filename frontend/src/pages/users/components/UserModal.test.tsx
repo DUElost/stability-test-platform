@@ -177,3 +177,48 @@ describe('UserModal 自动填充（#2453）', () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * #2497：字段必须是**非受控**——受控组件会把外部写入的值回写成 state（state 未同步时
+ * 即清空），密码管理器直写 `.value` 后就会陷入「写→清→再写」，占满主线程，
+ * 现场表现为浏览器「页面无响应」+ 数秒后重载，且服务端收不到任何请求。
+ */
+describe('UserModal 非受控字段（#2497）', () => {
+  function managerFill(el: HTMLElement, value: string) {
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLInputElement.prototype, 'value',
+    )!.set!;
+    setter.call(el, value);
+    el.dispatchEvent(new Event('input', { bubbles: false }));
+  }
+
+  const props = {
+    isOpen: true,
+    onClose: () => {},
+    onSubmit: () => {},
+    isSubmitting: false,
+  };
+
+  it('管理器填值后重渲染不被回写清空（受控实现会在这里清零）', () => {
+    const { rerender } = render(<UserModal {...props} />);
+    const password = screen.getByLabelText(/^密码/) as HTMLInputElement;
+    managerFill(password, 'tPe-KLu-3Uw-3Fb');
+    expect(password.value).toBe('tPe-KLu-3Uw-3Fb');
+
+    // 父组件重渲染（真实环境里由轮询/状态变化持续发生）
+    rerender(<UserModal {...props} />);
+
+    expect(password.value).toBe('tPe-KLu-3Uw-3Fb');
+  });
+
+  it('关闭再打开 → 字段归零（非受控靠卸载重挂载拿到新默认值）', () => {
+    const { rerender } = render(<UserModal {...props} />);
+    fireEvent.change(screen.getByLabelText(/用户名/), { target: { value: 'stp-tester' } });
+    expect(screen.getByLabelText(/用户名/)).toHaveValue('stp-tester');
+
+    rerender(<UserModal {...props} isOpen={false} />); // 关闭：子树卸载
+    rerender(<UserModal {...props} />);                // 重开：新默认值
+
+    expect(screen.getByLabelText(/用户名/)).toHaveValue('');
+  });
+});
