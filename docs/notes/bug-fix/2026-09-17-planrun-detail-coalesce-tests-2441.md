@@ -51,6 +51,10 @@ Class: bug-fix
 
 ## Revisit
 
+- **与 #2442 合流**：main 已合入 #2442（同文件 `socketCoalesceWait` + 仍串跑的长用例）。
+  #2450 解决冲突时保留本单的拆分 / `COALESCE_WAIT` / 双推合流断言，并把 #2442 里的
+  `PLAN_RUN_STATUS` 覆盖拆成独立用例、抽屉用例保留 `PLAN_RUN_SOCKET_COALESCE_MS + 8_000`
+  超时。
 - **我自己的归因失误（须记住）**：2026-09-16 我先把这两例判为「本机 Node 24 vs CI
   Node 22 的环境差、CI 是绿的」，并写进了记忆条目——错在拿 09-15 的 backstop 绿灯当
   本次基线，而回归发生在 09-16 合入之后。记忆已更正为「先看 main backstop 同一批用例

@@ -492,7 +492,8 @@ describe('PlanRunDetailPage', () => {
 
   // #2441：本组原为一个长用例（JOB_STATUS + WATCHER_SIGNAL + PRECHECK_UPDATE 串跑）。
   // #2369 给 JOB_STATUS / PRECHECK_UPDATE 加了 2s 合流后，串跑会在默认 5s 用例超时内
-  // 攒够三段等待而超时；拆成三条各自只等一个窗口——既避开超时，也让失败点自己说话。
+  // 攒够三段等待而超时；拆成各自只等一个窗口——既避开超时，也让失败点自己说话。
+  // #2442 合入 main 后保留 PLAN_RUN_STATUS 覆盖，作为独立用例。
   it('invalidates devices+timeline on a JOB_STATUS burst (coalesced), never watcher', async () => {
     renderPage();
     await waitFor(() => screen.getByTestId('device-overview'));
@@ -527,6 +528,7 @@ describe('PlanRunDetailPage', () => {
     mocks.getDevices.mockClear();
     mocks.getWatcherSummary.mockClear();
 
+    // Push a WATCHER_SIGNAL — watcher should refetch (coalesced), devices should not.
     mocks.socketCallback.current!({
       type: 'WATCHER_SIGNAL',
       payload: { job_id: 3002, category: 'AEE', inserted_count: 1 },
@@ -534,6 +536,23 @@ describe('PlanRunDetailPage', () => {
 
     await waitFor(() => expect(mocks.getWatcherSummary).toHaveBeenCalled(), COALESCE_WAIT);
     expect(mocks.getDevices).not.toHaveBeenCalled();
+  });
+
+  it('invalidates run+timeline+devices on PLAN_RUN_STATUS', async () => {
+    renderPage();
+    await waitFor(() => screen.getByTestId('device-overview'));
+
+    mocks.getRun.mockClear();
+    mocks.getTimeline.mockClear();
+    mocks.getDevices.mockClear();
+
+    mocks.socketCallback.current!({
+      type: 'PLAN_RUN_STATUS',
+      payload: { status: 'SUCCESS' },
+    });
+    await waitFor(() => expect(mocks.getRun).toHaveBeenCalled());
+    expect(mocks.getTimeline).toHaveBeenCalled();
+    expect(mocks.getDevices).toHaveBeenCalled();
   });
 
   it('invalidates run+timeline+devices on PRECHECK_UPDATE (coalesced)', async () => {
@@ -931,7 +950,7 @@ describe('PlanRunDetailPage', () => {
       () => expect(screen.getByTestId('device-drawer')).toHaveTextContent('after-refetch'),
       COALESCE_WAIT,
     );
-  });
+  }, PLAN_RUN_SOCKET_COALESCE_MS + 8_000);
 
   // #780：归档提示的真实触发形状——后端只产出 `archive.scan_status`
   // （`readiness` / `ready_for_extract` 全 git 史从不产出，原夹具属「盲区自洽」）。
