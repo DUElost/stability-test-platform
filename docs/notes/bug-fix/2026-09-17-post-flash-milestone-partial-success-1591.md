@@ -1,7 +1,7 @@
 # 越过刷机里程碑后的失败判 PARTIAL_SUCCESS（#1591-④ 裁决落地）
 
 Status: implemented
-Class: feature
+Class: bug-fix
 
 ## Decision
 
