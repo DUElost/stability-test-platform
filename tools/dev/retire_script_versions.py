@@ -211,8 +211,20 @@ class ControlPlane:
             timeout=30,
         )
         resp.raise_for_status()
-        token = resp.json()["access_token"]
-        me = self._session.get(f"{self.base_url}/auth/me", timeout=30)
+        body = resp.json()
+        if "access_token" not in body:
+            raise SystemExit(
+                f"{self.base_url}/auth/token 未返回 access_token（字段 {sorted(body)}）"
+                "——请确认该端点是发 bearer token 的 issue_token，而非只设 cookie 的 login")
+        token = body["access_token"]
+        # Bearer 头必须**在这一条请求上显式给出**：`_session.headers` 要到 _login() 返回后
+        # 才在 __init__ 里 update，用 session 直接取 /auth/me 等于发一个未认证请求
+        # （生产实跑 401；/auth/token 不设 auth cookie，也没有 cookie 可兜）。
+        me = self._session.get(
+            f"{self.base_url}/auth/me",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=30,
+        )
         me.raise_for_status()
         if me.json().get("role") != "admin":
             raise SystemExit("凭据对应身份非 admin，拒绝执行退役")

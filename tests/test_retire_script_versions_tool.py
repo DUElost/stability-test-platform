@@ -24,6 +24,10 @@ assert _spec and _spec.loader
 sys.modules["retire_script_versions"] = _mod
 _spec.loader.exec_module(_mod)
 
+# autouse 夹具会把 _mod.ControlPlane 换成 FakeClient，要测真实登录序列必须先留一个
+# 不被替换的引用——与文件里 _REAL_READ_ENV_KEY 同一手法。
+_REAL_CONTROL_PLANE = _mod.ControlPlane
+
 from backend.services.script_retirement import classify  # noqa: E402
 from backend.services.script_retirement import ScriptVersionFact  # noqa: E402
 
@@ -238,6 +242,81 @@ def test_loopback_guard_rejects_non_http_scheme():
     for bad in ("file:///etc/passwd", "127.0.0.1:8000/api/v1"):
         with pytest.raises(SystemExit, match="非 HTTP"):
             _mod.ensure_base_url_allowed(bad, allow_remote=False)
+
+
+class _FakeResp:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._payload
+
+
+class _RecordingSession:
+    """记录每条请求的 headers——`_login` 的缺陷正是"校验请求没带凭据"。"""
+
+    def __init__(self, recorder, *, token_body=None, me_body=None):
+        self._rec = recorder
+        self._token_body = token_body if token_body is not None else {"access_token": "TOK"}
+        self._me_body = me_body if me_body is not None else {"username": "u", "role": "admin"}
+        self.headers = {}
+
+    def post(self, url, **kw):
+        self._rec.append(("POST", url, dict(kw.get("headers") or {})))
+        return _FakeResp(self._token_body)
+
+    def get(self, url, **kw):
+        self._rec.append(("GET", url, dict(kw.get("headers") or {})))
+        return _FakeResp(self._me_body)
+
+
+def _env_file(tmp_path):
+    f = tmp_path / ".env.backend"
+    f.write_text("STP_ADMIN_USER=u\nSTP_ADMIN_PASSWORD=p\nAGENT_SECRET=s\n", encoding="utf-8")
+    return f
+
+
+def test_login_sends_bearer_on_the_admin_check_itself(monkeypatch, tmp_path):
+    """回归（生产实跑暴露）：`/auth/me` 校验必须**在这一条请求上**带 Bearer。
+
+    旧写法 `self._session.get("/auth/me")` 依赖 `__init__` 在 `_login()` **返回之后**才
+    update 到 session 的 Authorization 头 ⇒ 校验请求实际是未认证请求（`/auth/token`
+    不发 auth cookie，没有 cookie 可兜），生产上必 401，退役因此根本跑不动。此前
+    `ControlPlane` 在单测里被整体打桩，这条真实调用序列从没被执行过。
+    反证：把 `_login` 的 `headers={...}` 参数去掉，本测试即红。
+    """
+    rec = []
+    monkeypatch.setattr(_mod.requests, "Session", lambda: _RecordingSession(rec))
+    cp = _REAL_CONTROL_PLANE("http://127.0.0.1:8000/api/v1", _env_file(tmp_path))
+    assert [m for m, _, _ in rec] == ["POST", "GET"]
+    assert rec[1][0] == "GET" and rec[1][1].endswith("/auth/me")
+    assert rec[1][2].get("Authorization") == "Bearer TOK", (
+        f"校验请求未带 Bearer（实为未认证请求）：headers={rec[1][2]}")
+    # 校验通过后，后续请求同样必须带凭据
+    assert cp._session.headers.get("Authorization") == "Bearer TOK"
+
+
+def test_login_rejects_missing_access_token_field(monkeypatch, tmp_path):
+    """`/auth/token` 返回体不含 access_token 时必须显式报错，不能 KeyError 回溯。"""
+    rec = []
+    monkeypatch.setattr(
+        _mod.requests, "Session",
+        lambda: _RecordingSession(rec, token_body={"ok": True}))
+    with pytest.raises(SystemExit, match="access_token"):
+        _REAL_CONTROL_PLANE("http://127.0.0.1:8000/api/v1", _env_file(tmp_path))
+
+
+def test_login_refuses_non_admin_identity(monkeypatch, tmp_path):
+    """退役是写操作：身份不是 admin 就必须拒绝（护栏在 API 之前）。"""
+    rec = []
+    monkeypatch.setattr(
+        _mod.requests, "Session",
+        lambda: _RecordingSession(rec, me_body={"username": "u", "role": "operator"}))
+    with pytest.raises(SystemExit, match="非 admin"):
+        _REAL_CONTROL_PLANE("http://127.0.0.1:8000/api/v1", _env_file(tmp_path))
 
 
 def test_manifest_schema_rejects_legacy_bare_list(tmp_path):
