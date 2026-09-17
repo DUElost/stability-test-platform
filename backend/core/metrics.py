@@ -407,6 +407,15 @@ retention_batch_size = Gauge(
     'Configured retention cleanup batch size (plan_run_retention_batch_size)',
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
+# #2316：孤儿 DLE 清理的**跳过**计数（按原因分桶）。被跳过的行既不删行也不推进批头，
+# 而它们恒为最老 → 积压到批大小后 `purged` 恒为 0；此前只有 warning，积压不可观测。
+# 取值：root_unset / path_invalid / purge_failed（与 `dle_orphan_skipped_*` 日志锚点同名）。
+dle_orphan_skipped_total = Counter(
+    'stability_dle_orphan_skipped_total',
+    'Orphan DeviceLogEvent cleanup rows skipped, by reason (#2316)',
+    ['reason'],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
 # ADR-0021 dispatch gate
 dispatch_gate_runs_total = Counter(
     'stability_dispatch_gate_runs_total',
