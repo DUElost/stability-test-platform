@@ -9,7 +9,7 @@ import logging
 import os
 import secrets
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
@@ -20,9 +20,8 @@ from sqlalchemy.orm import Session
 from backend.api.response import ApiResponse, ok
 from backend.api.error_helpers import raise_api_http_error
 from backend.core.agent_secret import AgentSecretNotConfiguredError, require_agent_secret
-from backend.core.audit import record_audit
 from backend.core.database import get_async_db, get_db
-from backend.models.enums import HostStatus, JobStatus, LeaseType
+from backend.models.enums import JobStatus, LeaseType
 from backend.models.host import Device, Host
 from backend.models.device_lease import DeviceLease
 from backend.models.job import JobInstance
@@ -89,6 +88,26 @@ from backend.services.agent_artifacts import (
     ArtifactOut,
     ingest_agent_artifact,
 )
+from backend.services.agent_host_heartbeat import (
+    HeartbeatRequest,
+    HeartbeatResponse,
+    record_agent_host_heartbeat,
+)
+from backend.services.agent_upgrade_gate import (
+    UpgradeGateRequest,
+    UpgradeGateReleaseRequest,
+    acquire_agent_upgrade_gate,
+    release_agent_upgrade_gate,
+)
+from backend.services.agent_upgrade_gate import (  # noqa: F401
+    _raise_upgrade_gate_http,
+)
+from backend.services.agent_host_heartbeat import (  # noqa: F401
+    BackpressureInfo,
+    _get_backpressure,
+    _suggested_heartbeat_interval,
+    _suggested_log_rate_limit,
+)
 from backend.services.agent_artifacts import (  # noqa: F401
     _ARTIFACT_TYPE_WHITELIST,
 )
@@ -121,23 +140,8 @@ from backend.services.agent_completion import (  # noqa: F401
     _bridge_reconciler_metrics,
 )
 from backend.realtime.socketio_server import broadcast_plan_run_status, broadcast_run_job_update
-from backend.services.host_maintenance import HostMaintenanceConflict
-from backend.services.host_retirement import (
-    retired_heartbeat_context,
-    should_alert_retired_heartbeat,
-)
-from backend.services.host_upgrade_gate import (
-    HostAbortDrainTimeoutError,
-    HostAbortPendingError,
-    HostHasActiveJobsError,
-    HostNotFoundError,
-    HostRetiredError,
-    begin_host_upgrade,
-    end_host_upgrade,
-)
 from backend.services.lease_manager import extend_lease
 from backend.services.reconciler import reconcile_step_traces
-from backend.services.script_catalog_version import compute_script_catalog_version_async
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/agent", tags=["agent"])
@@ -190,28 +194,6 @@ class StepTraceIn(BaseModel):
     trace_event_id: Optional[str] = None
     fencing_token: str
 
-
-class HeartbeatRequest(BaseModel):
-    host_id: str
-    script_catalog_version: str = ""
-    load: Dict[str, Any] = {}
-    capacity: Optional[Dict[str, Any]] = None  # ADR-0019 Phase 1
-    agent_instance_id: str = ""   # ADR-0019 Phase 3a
-    boot_id: str = ""             # ADR-0019 Phase 3a
-
-
-class BackpressureInfo(BaseModel):
-    log_rate_limit: Optional[int] = None
-    # ADR-0026 P0: suggested Agent poll interval (seconds)
-    heartbeat_interval_seconds: Optional[int] = None
-
-
-class HeartbeatResponse(BaseModel):
-    script_catalog_outdated: bool = False
-    backpressure: BackpressureInfo
-    capacity: Optional[Dict[str, Any]] = None  # ADR-0019 Phase 1
-    agent_min_version: str = ""  # SemVer floor; Agent refuses to run if below
-    heartbeat_interval_seconds: Optional[int] = None
 
 # ── ADR-0019 Phase 3a: Recovery Sync models ──────────────────────────────────
 
@@ -352,79 +334,7 @@ async def agent_heartbeat(
     Update host last_heartbeat.
     Returns script_catalog_outdated flag + current backpressure setting.
     """
-    host = await db.get(Host, payload.host_id)
-    if host is None:
-        host = Host(
-            id=payload.host_id,
-            hostname=payload.host_id,
-            status=HostStatus.ONLINE.value,
-            created_at=datetime.now(timezone.utc),
-        )
-        db.add(host)
-
-    # Compare the Agent's cached catalog against **the control plane's current
-    # one**, not against whatever this Agent reported last time. The old
-    # self-comparison could only ever fire when the Agent changed, so publishing
-    # a new script version never reached a running Agent — the mistake showed up
-    # much later as ScriptVersionMismatch at job execution time.
-    scripts_outdated = bool(payload.script_catalog_version) and (
-        payload.script_catalog_version
-        != await compute_script_catalog_version_async(db)
-    )
-
-    host.last_heartbeat = datetime.now(timezone.utc)
-    if payload.script_catalog_version:
-        host.script_catalog_version = payload.script_catalog_version
-    # ADR-0038 §1.2 归属声明：轻量心跳与权威 `/api/v1/heartbeat` **共用**
-    # `should_alert_retired_heartbeat` 同一判据（“共用检测”选项，非双通道
-    # 收敛）——退役心跳的「如实记录 + 保持退役 + 单次告警」两条路径同源。
-    prev_status = host.status
-    host.status = HostStatus.ONLINE.value
-
-    if should_alert_retired_heartbeat(host, prev_status=prev_status):
-        from backend.services.notification_service import dispatch_notification_async
-
-        dispatch_notification_async(
-            "HOST_RETIRED_HEARTBEAT", retired_heartbeat_context(host),
-        )
-
-    # ADR-0019 Phase 1: count online healthy devices
-    online_rows = await db.execute(
-        select(Device.id).where(
-            Device.host_id == payload.host_id,
-            Device.adb_connected == True,
-            Device.adb_state.notin_(["offline", "unknown", ""]),
-        )
-    )
-    online_healthy = len(online_rows.scalars().all())
-
-    await db.commit()
-
-    backpressure = await _get_backpressure()
-    # Light agent heartbeat: scale interval with online healthy device count
-    # (same contract as /api/v1/heartbeat — ADR-0026 P0).
-    from backend.api.routes.heartbeat import (
-        _suggested_heartbeat_interval,
-        _suggested_log_rate_limit,
-    )
-    suggested_interval = _suggested_heartbeat_interval(online_healthy)
-    suggested_log_rate = (
-        backpressure if backpressure is not None
-        else _suggested_log_rate_limit(online_healthy)
-    )
-    from backend.services.agent_version_gate import resolve_agent_min_version
-    return ok(HeartbeatResponse(
-        script_catalog_outdated=scripts_outdated,
-        backpressure=BackpressureInfo(
-            log_rate_limit=suggested_log_rate,
-            heartbeat_interval_seconds=suggested_interval,
-        ),
-        capacity={
-            "online_healthy_devices": online_healthy,
-        },
-        agent_min_version=resolve_agent_min_version(),
-        heartbeat_interval_seconds=suggested_interval,
-    ))
+    return ok(await record_agent_host_heartbeat(db, payload))
 
 
 # ── RunStatus→JobStatus mapping for compat endpoints ─────────────────────────
@@ -713,16 +623,6 @@ async def list_device_log_events(
     ))
 
 
-async def _get_backpressure() -> Optional[int]:
-    """Return current backpressure setting.
-
-    Redis-based backpressure (stp:backpressure:*) removed in Phase 4.
-    SocketIO has built-in TCP backpressure; this returns None (no limit).
-    Can be extended later with SocketIO-based metrics if needed.
-    """
-    return None
-
-
 # ── Artifact ingestion（ADR-0018 5B2）────────────────────────────────────────
 
 
@@ -800,89 +700,6 @@ async def get_archive_status(
 
 
 # ── 升级门禁（#1249）：Ansible 等外部升级入口复用 ADR-0021 D7/D8 协议 ──────────
-# 鉴权沿用 agent secret（Ansible 侧已有 AGENT_SECRET）；窗口由调用方在升级完成后
-# release，异常路径靠 maintenance_until TTL 过期兜底（与 UI 热更新同一实现）。
-
-
-class UpgradeGateRequest(BaseModel):
-    holder: str = ""
-    abort_running_jobs: bool = False
-
-
-class UpgradeGateReleaseRequest(BaseModel):
-    holder: str = ""
-
-
-def _raise_upgrade_gate_http(host_id: str, exc: Exception) -> None:
-    if isinstance(exc, HostNotFoundError):
-        raise HTTPException(
-            status_code=404,
-            detail={"code": "HOST_NOT_FOUND", "message": str(exc)},
-        ) from None
-    if isinstance(exc, HostAbortPendingError):
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "HOST_ABORT_PENDING",
-                "message": (
-                    f"Abort is still draining for {len(exc.active_jobs)} job(s) "
-                    f"on host {host_id}. Retry in approximately "
-                    f"{exc.retry_after_seconds}s."
-                ),
-                "active_jobs": exc.active_jobs,
-                "retry_after_seconds": exc.retry_after_seconds,
-            },
-        ) from None
-    if isinstance(exc, HostHasActiveJobsError):
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "HOST_HAS_ACTIVE_JOBS",
-                "message": (
-                    f"Host {host_id} has {len(exc.active_jobs)} active job(s). "
-                    "Retry with abort_running_jobs=true to abort then upgrade."
-                ),
-                "active_jobs": exc.active_jobs,
-            },
-        ) from None
-    if isinstance(exc, HostRetiredError):
-        # ADR-0038 D5：退役主机拒绝执行/配置类动作（升级门禁同族）
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "HOST_RETIRED",
-                "message": (
-                    f"Host {host_id} is retired; unretire it before upgrade "
-                    "(ADR-0038 D5)."
-                ),
-            },
-        ) from None
-    if isinstance(exc, HostAbortDrainTimeoutError):
-        raise HTTPException(
-            status_code=504,
-            detail={
-                "code": "ABORT_DRAIN_TIMEOUT",
-                "message": (
-                    f"Aborted jobs but {len(exc.lingering_jobs)} job(s) on host "
-                    f"{host_id} did not reach a terminal state in time. "
-                    "Investigate the agent or retry."
-                ),
-                "lingering_jobs": exc.lingering_jobs,
-                "abort_summary": exc.abort_summary,
-            },
-        ) from None
-    if isinstance(exc, HostMaintenanceConflict):
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "HOST_IN_MAINTENANCE",
-                "message": (
-                    f"Host {host_id} is already in a maintenance window "
-                    "(another upgrade is in progress). Retry later."
-                ),
-            },
-        ) from None
-    raise exc
 
 
 @router.post("/hosts/{host_id}/upgrade-gate")
@@ -898,39 +715,7 @@ def acquire_upgrade_gate(
     调用方必须在升级完成后调用 ``.../upgrade-gate/release``；进程崩溃等
     异常路径由维护窗口 TTL 过期兜底。
     """
-    effective_holder = payload.holder.strip() or f"upgrade-gate:{secrets.token_hex(4)}"
-    try:
-        gate = begin_host_upgrade(
-            db,
-            host_id,
-            holder=effective_holder,
-            abort_running_jobs=payload.abort_running_jobs,
-            triggered_by="agent-api",
-        )
-    except (
-        HostNotFoundError,
-        HostAbortPendingError,
-        HostHasActiveJobsError,
-        HostAbortDrainTimeoutError,
-        HostMaintenanceConflict,
-    ) as exc:
-        _raise_upgrade_gate_http(host_id, exc)
-
-    record_audit(
-        db,
-        action="upgrade_gate_acquire",
-        resource_type="host",
-        resource_id=host_id,
-        details={
-            "holder": effective_holder,
-            "abort_running_jobs": payload.abort_running_jobs,
-            "active_before": len(gate["active_jobs"]),
-            "aborted_jobs": (gate["aborted_summary"] or {}).get("aborted_jobs", []),
-        },
-        username="agent-api",
-    )
-    db.commit()
-    return ok(gate)
+    return ok(acquire_agent_upgrade_gate(db, host_id, payload))
 
 
 @router.post("/hosts/{host_id}/upgrade-gate/release")
@@ -941,17 +726,4 @@ def release_upgrade_gate(
     _=Depends(_verify_agent),
 ):
     """释放维护窗口；holder 不匹配时不误清他人窗口（幂等，可重复调用）。"""
-    holder = payload.holder.strip()
-    if not holder:
-        raise_api_http_error(400, "HOLDER_REQUIRED", "holder must not be empty")
-    end_host_upgrade(db, host_id, holder)
-    record_audit(
-        db,
-        action="upgrade_gate_release",
-        resource_type="host",
-        resource_id=host_id,
-        details={"holder": holder},
-        username="agent-api",
-    )
-    db.commit()
-    return ok({"host_id": host_id, "holder": holder, "released": True})
+    return ok(release_agent_upgrade_gate(db, host_id, payload))

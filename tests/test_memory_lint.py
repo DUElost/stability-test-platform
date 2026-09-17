@@ -104,10 +104,19 @@ class TestIndexConsistency:
         r = _lint(mem, tmp_path)
         assert any("死链" in e for e in r.errors)
 
-    def test_unindexed_file_is_error(self, tmp_path):
+    def test_unindexed_file_is_warn_not_error(self, tmp_path):
+        """#2520：未索引文件降级为 WARN。
+
+        store 政策有三类去处（判据进索引 / 流水不进索引 / 台账进索引），工具不做类别
+        识别时一律 ERROR 会让闸恒红（实测孤儿里含按政策的晨间流水），并把真信号
+        （正文断链）淹掉。要硬门：`--strict` 仍把 WARN 计入退出码。
+        """
         mem = _build(tmp_path, index="- [user_role.md](user_role.md)\n")
         r = _lint(mem, tmp_path)
-        assert any("未索引文件 feedback_a.md" in e for e in r.errors)
+        assert any("未索引文件 feedback_a.md" in w for w in r.warnings)
+        assert not any("未索引文件" in e for e in r.errors)
+        # 政策依据要写在告警里，别让下一个人猜为什么允许
+        assert any("按政策" in w for w in r.warnings)
 
     def test_overlong_index_line_is_error(self, tmp_path):
         long_line = "- [user_role.md](user_role.md) — " + "x" * 200
@@ -477,3 +486,31 @@ class TestCompressIndexLine:
         assert out == ""
         assert why
 
+
+class TestBudgetExitCode:
+    """#2520：`--budget` 模式下退出码只看预算（错误不再单独致红）。"""
+
+    def test_budget_ok_exits_zero_even_with_errors(self, tmp_path, capsys):
+        # 造一个「有错误 + 预算内」的 store：未索引文件现在只是 WARN，另造一条死链
+        mem = _build(tmp_path, index="- [gone.md](gone.md)\n- [user_role.md](user_role.md)\n")
+        code = _mod.main([
+            "--path", str(mem), "--repo-root", str(tmp_path), "--budget",
+        ])
+        out = capsys.readouterr().out
+        assert "budget=ok" in out
+        assert code == 0, "预算内 + 有错误 → 仍应是 0（错误详情在输出里）"
+
+    def test_budget_over_soft_exits_nonzero(self, tmp_path, capsys):
+        mem = _build(tmp_path)
+        code = _mod.main([
+            "--path", str(mem), "--repo-root", str(tmp_path), "--budget",
+            # hard 必须远大于实际体积，否则先撞 hard 墙（level 是 hard 优先）
+            "--soft-kb", "0.001", "--hard-kb", "1000",
+        ])
+        out = capsys.readouterr().out
+        assert "budget=over-soft" in out and code == 1
+
+    def test_default_mode_still_gates_errors(self, tmp_path):
+        """不带 --budget 时错误照旧致红——分层不是放水。"""
+        mem = _build(tmp_path, index="- [gone.md](gone.md)\n- [user_role.md](user_role.md)\n")
+        assert _mod.main(["--path", str(mem), "--repo-root", str(tmp_path)]) == 1

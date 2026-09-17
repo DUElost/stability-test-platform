@@ -30,28 +30,16 @@ logger = logging.getLogger(__name__)
 
 # 心跳快照降采样间隔（秒）：减少硬件字段数据库写入压力
 SNAPSHOT_INTERVAL_SECONDS = int(os.getenv("DEVICE_SNAPSHOT_INTERVAL", "30"))
-# 建议 Agent 心跳周期（秒）；随在线设备数缓增，闭环 backpressure
-HEARTBEAT_INTERVAL_MIN = int(os.getenv("STP_HEARTBEAT_INTERVAL_MIN", "15"))
-HEARTBEAT_INTERVAL_MAX = int(os.getenv("STP_HEARTBEAT_INTERVAL_MAX", "60"))
-HEARTBEAT_INTERVAL_BASE = int(os.getenv("STP_HEARTBEAT_INTERVAL_BASE", "20"))
-# ADR-0026 P2-2: 建议每 host 日志行速率上限（lines/s）；随设备数收紧
-LOG_RATE_LIMIT_BASE = int(os.getenv("STP_LOG_RATE_LIMIT_BASE", "200"))
-LOG_RATE_LIMIT_MIN = int(os.getenv("STP_LOG_RATE_LIMIT_MIN", "20"))
-
-
-def _suggested_heartbeat_interval(online_healthy: int) -> int:
-    """Scale poll interval with fleet size (ADR-0026 P0 heartbeat 减负)."""
-    # ~+1s per 10 healthy devices, clamped.
-    scaled = HEARTBEAT_INTERVAL_BASE + max(0, online_healthy) // 10
-    return max(HEARTBEAT_INTERVAL_MIN, min(HEARTBEAT_INTERVAL_MAX, scaled))
-
-
-def _suggested_log_rate_limit(online_healthy: int) -> int:
-    """Tighten per-host step_log rate as fleet grows (ADR-0026 P2-2)."""
-    # -10 lines/s per 10 healthy devices, floor at LOG_RATE_LIMIT_MIN.
-    scaled = LOG_RATE_LIMIT_BASE - (max(0, online_healthy) // 10) * 10
-    return max(LOG_RATE_LIMIT_MIN, scaled)
-
+# 建议 Agent 心跳周期 / 日志速率：真源在 agent_host_heartbeat（#1520）。
+from backend.services.agent_host_heartbeat import (  # noqa: F401
+    HEARTBEAT_INTERVAL_BASE,
+    HEARTBEAT_INTERVAL_MAX,
+    HEARTBEAT_INTERVAL_MIN,
+    LOG_RATE_LIMIT_BASE,
+    LOG_RATE_LIMIT_MIN,
+    _suggested_heartbeat_interval,
+    _suggested_log_rate_limit,
+)
 
 def _should_write_hardware_snapshot(device: Device, now: datetime) -> bool:
     """True when hardware metrics may be persisted (downsampling gate)."""
