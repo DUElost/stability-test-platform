@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import case, func, select, update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
@@ -26,14 +26,10 @@ from backend.core.artifact_paths import (
     resolve_local_artifact_path,
 )
 from backend.core.database import get_async_db, get_db
-from backend.core.metrics import (
-    record_log_signal_ingested,
-    record_patrol_heartbeat,
-)
 from backend.models.enums import HostStatus, JobStatus, LeaseType
 from backend.models.host import Device, Host
 from backend.models.device_lease import DeviceLease
-from backend.models.job import JobArtifact, JobInstance, JobLogSignal
+from backend.models.job import JobArtifact, JobInstance
 from backend.api.routes.auth import get_current_active_user
 from backend.models.plan_run import PlanRun
 from backend.services.agent_recovery import (
@@ -80,6 +76,21 @@ from backend.services.agent_device_log_events import (  # noqa: F401
     _parse_iso_dt,
     _validated_remote_path,
 )
+from backend.services.agent_log_signals import (
+    LogSignalBatchIn,
+    ingest_agent_log_signals,
+)
+from backend.services.agent_patrol_heartbeat import (
+    PatrolHeartbeatIn,
+    PatrolHeartbeatOut,
+    record_agent_patrol_heartbeat,
+)
+from backend.services.agent_log_signals import (  # noqa: F401
+    LogSignalIn,
+    _TERMINAL,
+    _require_job_bound_upload_lease,
+    require_job_bound_upload_lease,
+)
 from backend.services.agent_lease_extend import (  # noqa: F401
     _ExtendBatchItemIn,
     _ExtendBatchItemOut,
@@ -119,11 +130,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/agent", tags=["agent"])
 
 _DEVICE_LOCK_LEASE_SECONDS = int(os.getenv("DEVICE_LOCK_LEASE_SECONDS", "600"))
-_TERMINAL = {
-    JobStatus.COMPLETED.value,
-    JobStatus.FAILED.value,
-    JobStatus.ABORTED.value,
-}
 # NOTE: UNKNOWN is intentionally excluded — it is a transient recovery state,
 # not a terminal one.  Valid transitions are UNKNOWN→RUNNING (grace recovery)
 # or UNKNOWN→FAILED (grace expiry).  ``complete_job()``'s runtime-lease gate
@@ -145,12 +151,6 @@ def _verify_agent(x_agent_secret: Optional[str] = Header(None, alias="X-Agent-Se
         raise HTTPException(status_code=401, detail="invalid agent secret")
 
 
-def _as_utc(dt: datetime | None) -> datetime | None:
-    if dt is None:
-        return None
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
 
 
 
@@ -770,50 +770,6 @@ async def update_job_step_status(
 # ── ADR-0022: Patrol Heartbeat ────────────────────────────────────────────────
 
 
-class PatrolHeartbeatIn(BaseModel):
-    """ADR-0022 D3: per-cycle patrol aggregation upload (no step_trace written).
-
-    Contract:
-      cycle_index: monotonic; server uses MAX(existing, payload) so out-of-order
-        heartbeats do not regress the cycle counter.
-      success_delta / failed_delta: positive integers added to the running totals
-        in the same UPDATE.  Either may be 0.  Agent should send delta=1 per
-        cycle in the normal path (success XOR failure).
-      current_step: best-effort; UI uses it for the device matrix.
-      current_failure_streak: Agent-computed value (server overwrites the column).
-      next_retry_at: ISO8601 string; null when not in backoff.
-      watcher_capability: optional watcher capability live snapshot.
-      manual_action_observed: optional echo-back: when Agent has consumed a
-        RETRY_NOW or EXIT_REQUESTED, it sends the value here so the server can
-        clear the column atomically.
-    """
-
-    fencing_token: str
-    cycle_index: int
-    success_delta: int = 0
-    failed_delta: int = 0
-    current_step: Optional[str] = None
-    current_failure_streak: int = 0
-    next_retry_at: Optional[str] = None
-    watcher_capability: Optional[str] = None
-    manual_action_observed: Optional[str] = None
-
-
-class PatrolHeartbeatOut(BaseModel):
-    """Mirror of the post-update job_instance patrol fields, plus pending
-    manual_action so the Agent can short-circuit its sleep loop without a
-    separate poll endpoint.
-    """
-
-    job_id: int
-    patrol_cycle_count: int
-    patrol_success_cycle_count: int
-    patrol_failed_cycle_count: int
-    current_failure_streak: int
-    next_retry_at: Optional[str] = None
-    manual_action: Optional[str] = None  # pending action for Agent to honor
-
-
 @router.post(
     "/jobs/{job_id}/patrol-heartbeat",
     response_model=ApiResponse[PatrolHeartbeatOut],
@@ -830,165 +786,12 @@ async def patrol_heartbeat(
     Does NOT write to step_trace.  Out-of-order safe: cycle_count is monotonic
     via GREATEST().  Empty deltas are accepted (pure heartbeat / mid-cycle ping).
     """
-    job = await db.get(JobInstance, job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="job not found")
-
-    # ADR-0022 D10: Job 已非 RUNNING(典型:recycler 已把 status 推到 UNKNOWN)→
-    # 直接 409 JOB_NOT_RUNNING,与 L1033 CAS 失配的契约统一。本 slice 仅落 backend
-    # ground truth;Agent 端如何消费此 code(理想:停 patrol 循环并触发 /recovery/sync)
-    # 留给下一 slice — 当前 patrol_heartbeat_uploader.py 收到 409 只 log + return None,
-    # lease-lost 收口由 LeaseRenewer (lease_renewer.py:152-167) 通过续租 409/404
-    # 触发 _on_lease_lost 兜底完成。
-    if job.status != JobStatus.RUNNING.value:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "JOB_NOT_RUNNING",
-                "message": (
-                    f"Job {job_id} status={job.status} (not RUNNING); "
-                    "trigger /agent/recovery/sync to re-establish lease before next patrol cycle"
-                ),
-            },
-        )
-
-    await _require_valid_runtime_lease(db, job, payload.fencing_token)
-
-    if payload.success_delta < 0 or payload.failed_delta < 0:
-        raise HTTPException(status_code=400, detail="delta must be non-negative")
-    if payload.cycle_index < 0:
-        raise HTTPException(status_code=400, detail="cycle_index must be non-negative")
-    if payload.current_failure_streak < 0:
-        raise HTTPException(status_code=400, detail="current_failure_streak must be non-negative")
-
-    next_retry_dt = None
-    if payload.next_retry_at:
-        try:
-            next_retry_dt = datetime.fromisoformat(payload.next_retry_at.replace("Z", "+00:00"))
-        except ValueError:
-            raise HTTPException(status_code=400, detail=f"invalid next_retry_at: {payload.next_retry_at}") from None
-
-    now = datetime.now(timezone.utc)
-
-    # Atomic UPDATE — out-of-order heartbeats use GREATEST() to avoid regression.
-    update_values: Dict[str, Any] = {
-        "patrol_cycle_count":         func.greatest(JobInstance.patrol_cycle_count, payload.cycle_index),
-        "patrol_success_cycle_count": JobInstance.patrol_success_cycle_count + payload.success_delta,
-        "patrol_failed_cycle_count":  JobInstance.patrol_failed_cycle_count + payload.failed_delta,
-        "current_failure_streak":     payload.current_failure_streak,
-        "next_retry_at":              next_retry_dt,
-        "last_patrol_heartbeat_at":   now,
-        "updated_at":                 now,
-    }
-    if payload.current_step is not None:
-        update_values["current_patrol_step"] = payload.current_step
-    capability = (payload.watcher_capability or "").strip()
-    if capability:
-        update_values["watcher_capability"] = capability[:32]
-
-    # If Agent reports it consumed/observed a manual_action, clear it —
-    # but ONLY when DB.manual_action still equals what Agent observed.
-    # Why: 否则用户在 Agent observed → heartbeat 抵达之间二次点击 / 切换 (RETRY_NOW↔EXIT_REQUESTED)
-    #      会被无条件清除静默吞掉,新意图永远不会被 Agent 看到。SQL CASE 让清除变成"DB 没改 → 清,
-    #      DB 已是新意图 → 原样保留",与 ADR-0022 D7 manual_action 单字段语义一致。
-    if payload.manual_action_observed:
-        update_values["manual_action"] = case(
-            (
-                JobInstance.manual_action == payload.manual_action_observed,
-                None,
-            ),
-            else_=JobInstance.manual_action,
-        )
-
-    # ADR-0022 D10: 写侧 CAS — status='RUNNING' guard 防御「预校验通过、CAS 阶段
-    # recycler patrol_stall pass 在 _require_valid_runtime_lease 通过后才 commit」
-    # 的 race。0 行返回 → 与改动 A 同 code 同语义,统一 JOB_NOT_RUNNING 出口。
-    result = await db.execute(
-        update(JobInstance)
-        .where(
-            JobInstance.id == job_id,
-            JobInstance.status == JobStatus.RUNNING.value,
-        )
-        .values(**update_values)
-        .returning(JobInstance.id)
-    )
-    if result.first() is None:
-        await db.rollback()
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "JOB_NOT_RUNNING",
-                "message": (
-                    f"Job {job_id} status flipped during patrol-heartbeat write; "
-                    "trigger /agent/recovery/sync to re-establish lease before next patrol cycle"
-                ),
-            },
-        )
-    await db.commit()
-
-    record_patrol_heartbeat(
-        failed_delta=payload.failed_delta,
-        current_failure_streak=payload.current_failure_streak,
-    )
-
-    # Re-fetch to return canonical values + any pending manual_action newly set.
-    # Use explicit column selection to avoid lazy-load / MissingGreenlet issues
-    # on async PostgreSQL when expire_on_commit fires.
-    result = await db.execute(
-        select(
-            JobInstance.patrol_cycle_count,
-            JobInstance.patrol_success_cycle_count,
-            JobInstance.patrol_failed_cycle_count,
-            JobInstance.current_failure_streak,
-            JobInstance.next_retry_at,
-            JobInstance.manual_action,
-        ).where(JobInstance.id == job_id)
-    )
-    row = result.one()
-    return ok(PatrolHeartbeatOut(
-        job_id=job_id,
-        patrol_cycle_count=row.patrol_cycle_count or 0,
-        patrol_success_cycle_count=row.patrol_success_cycle_count or 0,
-        patrol_failed_cycle_count=row.patrol_failed_cycle_count or 0,
-        current_failure_streak=row.current_failure_streak or 0,
-        next_retry_at=_iso_or_none(row.next_retry_at),
-        manual_action=row.manual_action,
-    ))
+    return ok(await record_agent_patrol_heartbeat(db, job_id, payload))
 
 
-def _iso_or_none(dt: Optional[datetime]) -> Optional[str]:
-    if dt is None:
-        return None
-    return _as_utc(dt).isoformat()
 
 
 # ── Log Signal ingestion ──────────────────────────────────────────────────────
-
-class LogSignalIn(BaseModel):
-    """单条 log_signal 信封。
-
-    字段契约见 backend/agent/watcher/contracts.py LogSignalEnvelope。
-    幂等键：(job_id, seq_no)
-    """
-    job_id:         int
-    fencing_token:  str
-    agent_instance_id: str
-    seq_no:         int
-    host_id:        str
-    device_serial:  str
-    category:       str
-    source:         str
-    path_on_device: str
-    detected_at:    str
-    artifact_uri:   Optional[str] = None
-    sha256:         Optional[str] = None
-    size_bytes:     Optional[int] = None
-    first_lines:    Optional[str] = None
-    extra:          Optional[Dict[str, Any]] = None
-
-
-class LogSignalBatchIn(BaseModel):
-    signals: List[LogSignalIn]
 
 
 @router.post("/log-signals", response_model=ApiResponse[dict])
@@ -1007,161 +810,7 @@ async def ingest_log_signals(
     报告，不再整批 404/400 连坐 —— 否则 50 条批次混入一条坏记录，其余正常信号
     会被 Agent 侧反复重试直至全部进死信。暂时性失败（DB 不可用等）仍整批失败。
     """
-    from sqlalchemy.dialects.postgresql import insert as pg_insert
-
-    from backend.agent.watcher.contracts import ContractViolation, validate_log_signal
-
-    if not payload.signals:
-        return ok({"inserted": 0, "total": 0})
-
-    def _rejected_item(s: LogSignalIn, reason: str) -> Dict[str, Any]:
-        return {
-            "job_id": s.job_id,
-            "seq_no": s.seq_no,
-            "reason": reason[:300],
-        }
-
-    rejected: List[Dict[str, Any]] = []
-    rows: List[Dict[str, Any]] = []
-    for s in payload.signals:
-        envelope = s.model_dump()
-        try:
-            validate_log_signal(envelope)
-        except ContractViolation as exc:
-            rejected.append(_rejected_item(s, f"log_signal contract violation: {exc}"))
-            continue
-        job = await db.get(JobInstance, s.job_id)
-        if job is None:
-            rejected.append(_rejected_item(s, f"job {s.job_id} not found"))
-            continue
-        try:
-            await _require_job_bound_upload_lease(
-                db,
-                job,
-                fencing_token=s.fencing_token,
-                agent_instance_id=s.agent_instance_id,
-                host_id=s.host_id,
-                device_serial=s.device_serial,
-            )
-        except HTTPException as exc:
-            detail = exc.detail
-            if isinstance(detail, dict):
-                detail = detail.get("code") or str(detail)
-            rejected.append(_rejected_item(
-                s, f"lease_check_failed({exc.status_code}): {detail}",
-            ))
-            continue
-
-        # detected_at: ISO string → datetime
-        try:
-            detected_dt = datetime.fromisoformat(s.detected_at.replace("Z", "+00:00"))
-        except ValueError:
-            rejected.append(_rejected_item(
-                s, f"log_signal.detected_at invalid ISO8601: {s.detected_at}",
-            ))
-            continue
-
-        rows.append({
-            "job_id":         s.job_id,
-            "host_id":        s.host_id,
-            "device_serial":  s.device_serial,
-            "seq_no":         s.seq_no,
-            "category":       s.category,
-            "source":         s.source,
-            "path_on_device": s.path_on_device,
-            "artifact_uri":   s.artifact_uri,
-            "sha256":         s.sha256,
-            "size_bytes":     s.size_bytes,
-            "first_lines":    s.first_lines,
-            "detected_at":    detected_dt,
-            "extra":          s.extra,
-        })
-
-    # #1048：整批被拒（无一条可入库）→ 直接返回逐条拒绝清单
-    if not rows:
-        return ok({
-            "inserted": 0,
-            "total": len(payload.signals),
-            "rejected": rejected,
-        })
-
-    # PostgreSQL 幂等 upsert：ON CONFLICT (job_id, seq_no) DO NOTHING
-    stmt = pg_insert(JobLogSignal).values(rows)
-    stmt = stmt.on_conflict_do_nothing(index_elements=["job_id", "seq_no"])
-    # RETURNING id + (job_id, seq_no, category) 以统计实际新增条数 + Prometheus 分类
-    stmt = stmt.returning(
-        JobLogSignal.id,
-        JobLogSignal.job_id,
-        JobLogSignal.seq_no,
-        JobLogSignal.category,
-    )
-    result = await db.execute(stmt)
-    inserted_rows = result.all()
-
-    # 按 job 分组累加 log_signal_count
-    inserted_count_by_job: Dict[int, int] = {}
-    for row in inserted_rows:
-        inserted_count_by_job[row.job_id] = inserted_count_by_job.get(row.job_id, 0) + 1
-
-    for jid, count in inserted_count_by_job.items():
-        await db.execute(
-            JobInstance.__table__.update()
-            .where(JobInstance.id == jid)
-            .values(log_signal_count=JobInstance.log_signal_count + count)
-        )
-
-    from backend.services.device_log_event import link_signals_to_device_log_events
-
-    await link_signals_to_device_log_events(db, [row["job_id"] for row in rows])
-
-    await db.commit()
-
-    # ── Prometheus 埋点:仅对实际入库的 signal 计数(冲突丢弃的不计) ──
-    for row in inserted_rows:
-        record_log_signal_ingested(row.category)
-
-    # ── ADR-0021 C5c: 推 watcher_signal 增量到 plan_run room ──
-    # 事件作为 invalidation hint 使用,前端收到后 refetch /watcher-summary。
-    # 失败不影响入库结果(socket 服务未起 / 未连前端时静默)。
-    if inserted_rows:
-        try:
-            from backend.realtime.socketio_server import broadcast_watcher_signal
-
-            job_ids = list({row.job_id for row in inserted_rows})
-            run_map_rows = (
-                (
-                    await db.execute(
-                        select(JobInstance.id, JobInstance.plan_run_id)
-                        .where(JobInstance.id.in_(job_ids))
-                    )
-                ).all()
-            )
-            run_id_by_job: Dict[int, int] = {
-                jid: rid for jid, rid in run_map_rows if rid is not None
-            }
-            # Build a lookup from the original payload for device_serial enrichment.
-            serial_by_seq: Dict[tuple, Optional[str]] = {
-                (s.job_id, s.seq_no): s.device_serial for s in payload.signals
-            }
-            for row in inserted_rows:
-                run_id = run_id_by_job.get(row.job_id)
-                if run_id is None:
-                    continue
-                await broadcast_watcher_signal(
-                    run_id,
-                    job_id=row.job_id,
-                    device_serial=serial_by_seq.get((row.job_id, row.seq_no)),
-                    category=row.category,
-                    inserted_count=1,
-                )
-        except Exception:
-            logger.debug("broadcast_watcher_signal_failed", exc_info=True)
-
-    return ok({
-        "inserted": len(inserted_rows),
-        "total": len(payload.signals),
-        "rejected": rejected,
-    })
+    return ok(await ingest_agent_log_signals(db, payload))
 
 
 @router.post("/device-log-events", response_model=ApiResponse[dict])
@@ -1235,46 +884,6 @@ class ArtifactIn(BaseModel):
 class ArtifactOut(BaseModel):
     artifact_id: int
     created:     bool   # True=首次插入；False=幂等命中（已存在同 storage_uri）
-
-
-async def _require_job_bound_upload_lease(
-    db: AsyncSession,
-    job: JobInstance,
-    *,
-    fencing_token: str,
-    agent_instance_id: str,
-    host_id: str,
-    device_serial: str,
-) -> DeviceLease:
-    """Authorize active and delayed terminal uploads by historical token."""
-    lease = (await db.execute(
-        select(DeviceLease)
-        .where(
-            DeviceLease.job_id == job.id,
-            DeviceLease.device_id == job.device_id,
-            DeviceLease.lease_type == LeaseType.JOB.value,
-            DeviceLease.fencing_token == fencing_token,
-        )
-        .order_by(DeviceLease.id.desc())
-    )).scalars().first()
-    device = await db.get(Device, job.device_id)
-    if (
-        lease is None
-        or device is None
-        or lease.host_id != host_id
-        or job.host_id != host_id
-        or (
-            job.status not in _TERMINAL
-            and device.host_id != host_id
-        )
-        or lease.agent_instance_id != agent_instance_id
-        or (device.serial or "").strip() != (device_serial or "").strip()
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail={"code": "UPLOAD_FENCING_MISMATCH"},
-        )
-    return lease
 
 
 @router.post("/jobs/{job_id}/artifacts", response_model=ApiResponse[ArtifactOut])
