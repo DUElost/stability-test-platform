@@ -9,7 +9,7 @@ requests>=2.34.2,<3.0
 python-dotenv>=1.2.3,<2.0
 
 # SocketIO sync client — connects /agent namespace for real-time
-# step_log / step_update / heartbeat broadcast.
+# step_log / heartbeat broadcast（step_update 已随 #2400 残余删除：服务端无 handler）。
 # [client] extra pulls in python-engineio + websocket-client.
 # Without this the agent silently degrades: HTTP works but no log stream.
 python-socketio[client]>=5.16.4,<6.0
