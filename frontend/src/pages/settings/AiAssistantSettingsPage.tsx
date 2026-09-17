@@ -7,6 +7,7 @@ import { aiAssistantKeys } from '@/utils/api/queryKeys';
 import { useToast } from '@/hooks/useToast';
 import { Button } from '@/components/ui/button';
 import { PageContainer, PageHeader } from '@/components/layout';
+import { readNamedValues } from '@/utils/forms';
 import { ErrorState } from '@/components/ui/error-state';
 import { PageSkeleton } from '@/components/ui/loading-skeleton';
 import {
@@ -111,9 +112,27 @@ export default function AiAssistantSettingsPage() {
     },
   });
 
+  /** DOM 字符串 → 数值；非数值回落原 state（输入框是 type=number，正常路径等价）。 */
+  const toNumber = (raw: string, fallback: number) => {
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  };
+
   const handleSave = () => {
     if (!form) return;
-    if (!form.base_url.trim() || !form.model.trim()) {
+    // #2456：标量字段以**DOM 实际值**为准（本页无 <form>，用 document 作读取根；字段名本页唯一）。
+    // 密码管理器直写 .value 时 React 的 onChange 收不到——若只认 state，已填好的 API Key
+    // 会被当成空，而「留空」的语义是**不变更**，等于静默丢弃用户刚填的 Key。
+    const values = readNamedValues(document, {
+      ai_base_url: form.base_url,
+      ai_api_key: form.api_key,
+      ai_model: form.model,
+      ai_temperature: String(form.temperature),
+      ai_max_turns: String(form.max_turns),
+      ai_max_auto_continuations: String(form.max_auto_continuations),
+      ai_request_timeout_seconds: String(form.request_timeout_seconds),
+    });
+    if (!values.ai_base_url.trim() || !values.ai_model.trim()) {
       toast.error('API URL 与模型为必填项');
       return;
     }
@@ -126,20 +145,24 @@ export default function AiAssistantSettingsPage() {
       return;
     }
     const payload: AiAssistantConfigUpdate = {
-      base_url: form.base_url.trim(),
-      model: form.model.trim(),
+      base_url: values.ai_base_url.trim(),
+      model: values.ai_model.trim(),
       enabled: form.enabled,
-      temperature: form.temperature,
-      max_turns: form.max_turns,
-      max_auto_continuations: form.max_auto_continuations,
-      request_timeout_seconds: form.request_timeout_seconds,
+      temperature: toNumber(values.ai_temperature, form.temperature),
+      max_turns: toNumber(values.ai_max_turns, form.max_turns),
+      max_auto_continuations: toNumber(
+        values.ai_max_auto_continuations, form.max_auto_continuations,
+      ),
+      request_timeout_seconds: toNumber(
+        values.ai_request_timeout_seconds, form.request_timeout_seconds,
+      ),
       t1_require_confirm: form.t1_require_confirm,
       auto_approve_tools: form.auto_approve_tools,
       t2b_auto_dispatch_allowlist: form.t2b_auto_dispatch_allowlist,
     };
     // api_key 留空 = 不变更（不上送字段）。
-    if (form.api_key.trim()) {
-      payload.api_key = form.api_key.trim();
+    if (values.ai_api_key.trim()) {
+      payload.api_key = values.ai_api_key.trim();
     }
     saveMutation.mutate(payload);
   };
@@ -238,6 +261,7 @@ export default function AiAssistantSettingsPage() {
               </label>
               <input
                 id="ai-base-url"
+                name="ai_base_url"
                 value={form.base_url}
                 onChange={(e) => update('base_url', e.target.value)}
                 placeholder="https://api.deepseek.com/v1"
@@ -252,6 +276,7 @@ export default function AiAssistantSettingsPage() {
               </label>
               <input
                 id="ai-api-key"
+                name="ai_api_key"
                 type="password"
                 value={form.api_key}
                 onChange={(e) => update('api_key', e.target.value)}
@@ -272,6 +297,7 @@ export default function AiAssistantSettingsPage() {
               </label>
               <input
                 id="ai-model"
+                name="ai_model"
                 value={form.model}
                 onChange={(e) => update('model', e.target.value)}
                 placeholder="例如 deepseek-chat / glm-4-plus"
@@ -403,6 +429,7 @@ export default function AiAssistantSettingsPage() {
                 </label>
                 <input
                   id="ai-temperature"
+                name="ai_temperature"
                   type="number"
                   step="0.1"
                   min="0"
@@ -418,6 +445,7 @@ export default function AiAssistantSettingsPage() {
                 </label>
                 <input
                   id="ai-max-turns"
+                name="ai_max_turns"
                   type="number"
                   min="1"
                   max="20"
@@ -432,6 +460,7 @@ export default function AiAssistantSettingsPage() {
                 </label>
                 <input
                   id="ai-max-auto-continuations"
+                name="ai_max_auto_continuations"
                   type="number"
                   min="1"
                   max="200"
@@ -446,6 +475,7 @@ export default function AiAssistantSettingsPage() {
                 </label>
                 <input
                   id="ai-timeout"
+                name="ai_request_timeout_seconds"
                   type="number"
                   min="10"
                   max="600"

@@ -26,6 +26,82 @@ _TERMINAL_PLAN_RUN_STATUSES = {
 
 _NOTIFY_AS_FAILED = {PlanRunStatus.FAILED}
 
+#: #1591-④ 裁决（2026-09-17）：越过这些脚本的 job，其**刷机目标**已经达成——这类 job
+#: 之后再失败的批次不该被整体抹成 FAILED（实证：31 台批次里 14 台的 flash 步 COMPLETED
+#: 却在 oobe/root 失败，run 一律 FAILED 掩盖了刷机成果）。
+#: 只对**里程碑之后**的失败放宽：任一 FAILED job 的里程碑步没 COMPLETED、或存在 abort，
+#: 都仍判 FAILED（保守）。脚本名耦合在本仓有先例（`LEGACY_AEE_SCRIPT_NAMES` /
+#: `_WIFI_CONSUMER_SCRIPT_NAMES`）；新增里程碑脚本需同样经过裁决。
+_MILESTONE_SCRIPT_NAMES = ("flash_firmware",)
+_MILESTONE_STEP_DONE = "COMPLETED"
+
+
+def _milestone_step_keys(run: Any) -> set[str]:
+    """run 的 plan 快照里属于里程碑脚本的 step_key（快照缺 steps → 空集）。"""
+    snapshot = getattr(run, "plan_snapshot", None)
+    steps = snapshot.get("steps") if isinstance(snapshot, dict) else None
+    if not isinstance(steps, list):
+        return set()
+    keys = {
+        str(step.get("step_key") or "")
+        for step in steps
+        if isinstance(step, dict)
+        and str(step.get("script_name") or "") in _MILESTONE_SCRIPT_NAMES
+    }
+    return {key for key in keys if key}
+
+
+def _failed_jobs_all_past_milestone(
+    db: Any, run: Any, *, failed_only: int, aborted: int,
+) -> bool:
+    """run 内**每个** FAILED job 都已越过里程碑（里程碑步 COMPLETED）时返回 True。
+
+    只在 ``failed_only > 0`` 且无 abort 时可能为真；任何一处读不到（无 db、无里程碑
+    步骤、计数与实际行不一致、查库异常）都返回 False —— **保守即维持今天的 FAILED**，
+    绝不因为判据读不到而放宽整批判定。
+    """
+    if db is None or failed_only <= 0 or aborted > 0:
+        return False
+    keys = _milestone_step_keys(run)
+    if not keys:
+        return False
+    try:
+        from sqlalchemy import select
+
+        from backend.models.job import JobInstance, StepTrace
+
+        failed_ids = [
+            int(job_id)
+            for (job_id,) in db.execute(
+                select(JobInstance.id).where(
+                    JobInstance.plan_run_id == run.id,
+                    JobInstance.status == JobStatus.FAILED.value,
+                )
+            ).all()
+        ]
+        if len(failed_ids) != failed_only:
+            # 计数与实际行不一致（并发终态/漂移）→ 保守
+            return False
+        done = {
+            int(job_id)
+            for (job_id,) in db.execute(
+                select(StepTrace.job_id)
+                .where(
+                    StepTrace.job_id.in_(failed_ids),
+                    StepTrace.step_id.in_(keys),
+                    StepTrace.status == _MILESTONE_STEP_DONE,
+                )
+                .distinct()
+            ).all()
+        }
+        return len(done) == len(set(failed_ids))
+    except Exception:
+        logger.warning(
+            "plan_run_milestone_probe_failed run=%s", getattr(run, "id", "?"),
+            exc_info=True,
+        )
+        return False
+
 
 def _resolve_plan_run_status(
     *,
@@ -34,6 +110,7 @@ def _resolve_plan_run_status(
     aborted: int,
     failure_threshold: float,
     abort_requested: bool,
+    post_milestone_failures: bool = False,
 ) -> PlanRunStatus:
     """Resolve the terminal PlanRun status.
 
@@ -48,6 +125,10 @@ def _resolve_plan_run_status(
         new_status = PlanRunStatus.SUCCESS
     elif aborted > 0:
         new_status = PlanRunStatus.FAILED
+    elif post_milestone_failures:
+        # #1591-④：失败全部发生在里程碑（刷机）之后 —— 刷机目标已达成，
+        # 不该因后续步骤（oobe/root/aee_prepare）把整批判成 FAILED。
+        new_status = PlanRunStatus.PARTIAL_SUCCESS
     elif failed_only / total <= failure_threshold:
         new_status = PlanRunStatus.PARTIAL_SUCCESS
     else:
@@ -218,10 +299,13 @@ def _finalize_plan_run(
     return True
 
 
-def apply_plan_run_aggregation_from_counters(run: Any) -> bool:
+def apply_plan_run_aggregation_from_counters(run: Any, *, db: Any = None) -> bool:
     """O(1) aggregation from plan_run counters (ADR-0026 §6).
 
     Requires ``total_job_count > 0`` and ``terminal_job_count >= total_job_count``.
+
+    ``db`` 仅在有失败 job 时用于一次里程碑探测（#1591-④）——无失败仍是严格 O(1）；
+    不传（测试/无会话调用方）时跳过里程碑判定，语义回到阈值规则。
     """
     if run.status in _TERMINAL_PLAN_RUN_STATUSES:
         return False
@@ -240,6 +324,9 @@ def apply_plan_run_aggregation_from_counters(run: Any) -> bool:
         aborted=aborted,
         failure_threshold=float(run.failure_threshold),
         abort_requested=abort_requested,
+        post_milestone_failures=_failed_jobs_all_past_milestone(
+            db, run, failed_only=failed_only, aborted=aborted,
+        ),
     )
     return _finalize_plan_run(
         run,
@@ -252,8 +339,11 @@ def apply_plan_run_aggregation_from_counters(run: Any) -> bool:
     )
 
 
-def apply_plan_run_aggregation(run: Any, jobs: Sequence[Any]) -> bool:
-    """Apply the shared PlanRun terminal aggregation rule (full job scan)."""
+def apply_plan_run_aggregation(run: Any, jobs: Sequence[Any], *, db: Any = None) -> bool:
+    """Apply the shared PlanRun terminal aggregation rule (full job scan).
+
+    ``db`` 用于失败时的里程碑探测（#1591-④）；与计数器路径同语义。
+    """
     # Why: aggregator(async/sync) + abort 三处都会落终态,无守卫时第二个写入会覆盖第一个
     #      (例如 abort 后 aggregator 又把 ABORTED 改回 SUCCESS),配合上游 SELECT ... FOR UPDATE
     #      保证 read-modify-write 串行化。
@@ -285,6 +375,9 @@ def apply_plan_run_aggregation(run: Any, jobs: Sequence[Any]) -> bool:
         aborted=aborted,
         failure_threshold=float(run.failure_threshold),
         abort_requested=abort_requested,
+        post_milestone_failures=_failed_jobs_all_past_milestone(
+            db, run, failed_only=failed_only, aborted=aborted,
+        ),
     )
     return _finalize_plan_run(
         run,

@@ -578,12 +578,12 @@ class TestPatrolHeartbeatStallContract:
         """改动 B — 罕见 race:改动 A 通过(快照看到 RUNNING),helper 在执行期间
         recycler 把行 flip 到 UNKNOWN,然后 CAS WHERE status='RUNNING' 失配 → 0 行 → 409。
 
-        通过 monkeypatch _require_valid_runtime_lease 让它在通过前用单独的同步 session
+        通过 monkeypatch 服务层 lease 校验让它在通过前用单独的同步 session
         把真实 DB 行的 status flip 到 UNKNOWN,精确模拟「预校验后、CAS 前」的 race 窗口。
         """
         from fastapi import HTTPException
         from sqlalchemy import update as sa_update
-        from backend.api.routes import agent_api as agent_api_mod
+        from backend.services import agent_patrol_heartbeat as patrol_mod
 
         seed = _seed_patrol_chain()
         try:
@@ -599,11 +599,12 @@ class TestPatrolHeartbeatStallContract:
                     sync.commit()
                 finally:
                     sync.close()
-                return None
+                # 非 None → 通过 lease 门禁，进入后续 CAS。
+                return object()
 
             monkeypatch.setattr(
-                agent_api_mod,
-                "_require_valid_runtime_lease",
+                patrol_mod,
+                "_get_valid_runtime_lease",
                 _race_flip_then_pass,
             )
 
