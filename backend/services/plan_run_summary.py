@@ -5,18 +5,17 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from backend.api.schemas.plan_run import PlanRunJobsSummaryOut
 from backend.models.job import JobInstance
 from backend.models.plan_run import PlanRun
 from backend.services.plan_run_read_common import iso
 
 
-def build_plan_run_summary(db: Session, run_id: int) -> dict[str, Any]:
+def build_plan_run_summary(db: Session, run_id: int) -> PlanRunJobsSummaryOut:
     pr = db.get(PlanRun, run_id)
     if pr is None:
         raise HTTPException(status_code=404, detail="plan run not found")
@@ -35,13 +34,13 @@ def build_plan_run_summary(db: Session, run_id: int) -> dict[str, Any]:
         status_counts.get("COMPLETED", 0) / total if total > 0 else 0.0
     )
 
-    return {
-        "plan_run_id": run_id,
-        "status": pr.status,
-        "total_jobs": total,
-        "status_counts": status_counts,
-        "pass_rate": round(pass_rate, 4),
-        "started_at": iso(pr.started_at),
-        "ended_at": iso(pr.ended_at),
-        "result_summary": pr.result_summary,
-    }
+    return PlanRunJobsSummaryOut(
+        plan_run_id=run_id,
+        status=pr.status,
+        total_jobs=total,
+        status_counts=status_counts,
+        pass_rate=round(pass_rate, 4),
+        started_at=iso(pr.started_at),
+        ended_at=iso(pr.ended_at),
+        result_summary=pr.result_summary,
+    )
