@@ -23,3 +23,16 @@
 
   下发它的 endpoint / SocketIO 命令契约见
   `docs/design/2026-scan-upload-merge-contract.md`。
+
+## import 边界（#739，静态门禁）
+
+`backend/agent/` 的生产代码（含 `scripts/` 下已发布脚本）**不得 import 控制面包**
+（`backend.api` / `services` / `tasks` / `realtime` / `scheduler` / `models` /
+`alembic` / `main`）：Agent 部署在没有控制面的主机上，越界 import 会让目标机直接
+`ImportError`。共享层 `backend.core.*` 只允许**显式登记**且经核实为纯模块的少数几个
+（当前：`legacy_aee` 常量表、`pipeline_validator` 校验器）；新增要在
+`tests/test_agent_import_boundary.py` 的 `_SHARED_ALLOWLIST` 里写理由。
+
+注意与测试面的区别：`backend/agent/tests/` 的 env 由 conftest 自供（#2428），
+测试里 import 控制面**不会**在干净环境炸掉——所以这条边界由**静态 AST 守卫**钉住，
+不依赖运行时表现。

@@ -46,7 +46,7 @@ class TestArchivePlanRunLogsEndpoint:
         db_session.commit()
 
         with patch(
-            "backend.realtime.socketio_server.emit_agent_control",
+            "backend.services.plan_run_archive.emit_agent_control",
             new=AsyncMock(),
         ) as mock_emit:
             resp = client.post(
@@ -79,7 +79,7 @@ class TestArchivePlanRunLogsEndpoint:
         db_session.commit()
 
         with patch(
-            "backend.realtime.socketio_server.emit_agent_control",
+            "backend.services.plan_run_archive.emit_agent_control",
             new=AsyncMock(),
         ) as mock_emit:
             resp = client.post(
@@ -120,7 +120,7 @@ class TestArchivePlanRunLogsEndpoint:
         db_session.commit()
 
         with patch(
-            "backend.realtime.socketio_server.emit_agent_control",
+            "backend.services.plan_run_archive.emit_agent_control",
             new=AsyncMock(),
         ) as mock_emit:
             resp = client.post(
@@ -165,7 +165,7 @@ class TestArchiveRetiredPolicy:
             db_session, sample_plan_run, sample_plan, sample_device, sample_host,
         )
         with patch(
-            "backend.realtime.socketio_server.emit_agent_control",
+            "backend.services.plan_run_archive.emit_agent_control",
             new=AsyncMock(),
         ):
             resp = client.post(
@@ -196,7 +196,7 @@ class TestArchiveRetiredPolicy:
             db_session, sample_plan_run, sample_plan, sample_device, sample_host,
         )
         with patch(
-            "backend.realtime.socketio_server.emit_agent_control",
+            "backend.services.plan_run_archive.emit_agent_control",
             new=AsyncMock(),
         ):
             resp = client.post(

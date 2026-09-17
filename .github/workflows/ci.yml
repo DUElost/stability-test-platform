@@ -225,7 +225,7 @@ jobs:
         #   pip install --require-hashes -r backend/requirements-dev.lock
         run: pip install "$(grep -oE '^ruff==[^ ]+' backend/requirements-dev.lock)"
       - name: Ruff
-        run: ruff check backend/ tools/ scripts/
+        run: ruff check backend/ tools/ scripts/ tests/
 
       # 前端死文件/死依赖（G23 收尾，issue #459 状态评论）：实测 0.9s；
       # 粒度收窄为 files+dependencies，取舍见

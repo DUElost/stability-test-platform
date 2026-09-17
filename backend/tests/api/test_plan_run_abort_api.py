@@ -208,10 +208,12 @@ class TestPlanRunAbort:
 
         await async_engine.dispose()
         with patch(
-            "backend.api.routes.agent_api.broadcast_run_job_update",
+            # #1520：broadcast 现在由 `agent_completion` 在服务内查取（路由切片后
+            # 该名字已不在 agent_api 上）——patch 必须打在**调用时解析**的模块上。
+            "backend.services.agent_completion.broadcast_run_job_update",
             new=AsyncMock(),
         ), patch(
-            "backend.api.routes.agent_api.broadcast_plan_run_status",
+            "backend.services.agent_completion.broadcast_plan_run_status",
             new=AsyncMock(),
         ), patch(
             "backend.tasks.saq_worker.get_queue",
