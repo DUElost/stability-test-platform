@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -38,6 +39,10 @@ class ScriptScanResult:
     # 于是「主工作树被切到不含某版本的提交 + 窗口内有人跑 scan」会把主线活跃版本
     # 静默吃掉，事后从 `deactivated: 3` 这个数字看不出被吃的是哪三个。
     deactivated_versions: List[Dict[str, str]] = field(default_factory=list)
+    #: #2386：**本会**被反激活、但因「被扫的树不是部署目标」而暂缓的版本。
+    #: 与 `deactivated_versions` 分开：两者语义相反（一个已退役、一个被守卫拦下），
+    #: 混在一起会让「本次到底退役了什么」不可读。
+    deactivation_skipped_versions: List[Dict[str, str]] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -47,7 +52,52 @@ class ScriptScanResult:
             "conflicts": self.conflicts,
             "rebaselined": self.rebaselined,
             "deactivated_versions": self.deactivated_versions,
+            "deactivation_skipped_versions": self.deactivation_skipped_versions,
         }
+
+
+def script_tree_matches_deploy_target(
+    root: str | Path,
+    *,
+    base: str = "origin/main",
+) -> Optional[bool]:
+    """被扫的脚本子树是否与**部署目标**（``origin/main``）逐字节一致（#2386）。
+
+    为什么需要：``STP_SCRIPT_ROOT`` 生产上就是**共享主工作树**，而「盘上缺失」是
+    **单向反激活**（目录回来再扫也不复活，需显式重激活）。于是「别的会话把工作树切到
+    不含某版本的提交 + 窗口内有人跑 scan」会把**主线活跃版本**静默吃掉（#2386 现场）。
+
+    返回 ``None`` = **无法判定**（不在 git 仓库内 / 无该 ref / git 不可用）。
+    调用方按 **fail-open** 处理：发布包是不可变发布物，不存在「切分支」这一场景，
+    不该因为判据不可用而挡住合法部署。
+
+    判据与 runbook 里执行者一直手工做的
+    ``git diff --quiet origin/main -- backend/agent/scripts`` 同源——这里把它工具化。
+    """
+    root_path = Path(root).resolve()
+    try:
+        top = subprocess.run(
+            ["git", "-C", str(root_path), "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=15, check=False,
+        )
+        if top.returncode != 0 or not top.stdout.strip():
+            return None
+        toplevel = Path(top.stdout.strip())
+        rel = root_path.relative_to(toplevel)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    try:
+        diff = subprocess.run(
+            ["git", "-C", str(toplevel), "diff", "--quiet", base, "--", str(rel)],
+            capture_output=True, timeout=30, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if diff.returncode == 0:
+        return True
+    if diff.returncode == 1:
+        return False
+    return None
 
 
 def detect_script_type(path: Path) -> Optional[str]:
@@ -173,6 +223,7 @@ def scan_script_root(
     runtime_root: str | None = None,
     *,
     force_rebaseline: bool = False,
+    allow_deactivate: bool = False,
 ) -> ScriptScanResult:
     """Scan ``root`` and reconcile the ``script`` table.
 
@@ -305,6 +356,20 @@ def scan_script_root(
         # those decisions. Re-activation is an explicit operator action.
         result.skipped += 1
 
+    # #2386：反激活的输入必须是**部署目标树**。被扫的子树与 `origin/main` 不一致
+    # （典型：共享主工作树被别的会话切到某个分支）时**拒绝反激活**——不做语义翻转
+    # （「盘上缺失就反激活」仍是缺省，ADR-0039 D1/D2 的退役轨道不变），只把闸门加在
+    # 「读了非权威树」这个真因上。要真的在非主线树上退役，显式传 `allow_deactivate`。
+    tree_matches = True if allow_deactivate else script_tree_matches_deploy_target(root)
+    guard_blocks = tree_matches is False
+    if guard_blocks:
+        logger.warning(
+            "script_scan_deactivation_guarded root=%s —— 被扫子树与 origin/main 不一致；"
+            "本轮只新增/刷新/报冲突，**不反激活**（列出的是本会反激活的版本）；"
+            "确要退役请切回 main 后重扫，或显式传 allow_deactivate=true",
+            root_path,
+        )
+
     for row in existing_rows:
         key = (row.name, row.version)
         if key in seen_keys:
@@ -315,6 +380,13 @@ def scan_script_root(
             if not _is_under_runtime_root(row.nfs_path, runtime_root):
                 continue
         elif not _is_under_root(row.nfs_path, root_path):
+            continue
+        if guard_blocks:
+            result.deactivation_skipped_versions.append({
+                "name": row.name,
+                "version": row.version,
+                "nfs_path": row.nfs_path or "",
+            })
             continue
         row.is_active = False
         row.updated_at = now
@@ -334,6 +406,14 @@ def scan_script_root(
             "revision（./tools/dev/check-deploy-source.sh），恢复需显式重激活",
             result.deactivated,
             [f"{e['name']}@{e['version']}" for e in result.deactivated_versions[:20]],
+        )
+
+    if result.deactivation_skipped_versions:
+        logger.warning(
+            "script_scan_deactivation_skipped count=%d versions=%s "
+            "reason=non_deploy_tree hint=切回 main 后重扫；确要退役再传 allow_deactivate=true",
+            len(result.deactivation_skipped_versions),
+            [f"{e['name']}@{e['version']}" for e in result.deactivation_skipped_versions[:20]],
         )
 
     db.commit()
