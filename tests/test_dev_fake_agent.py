@@ -58,7 +58,7 @@ def test_fixture_has_no_execution_surface(fa):
 def test_push_events_are_only_acked(fa):
     """服务端推来的执行类事件在夹具里没有实现——只有白名单回报事件可被 emit。"""
     assert "execute_job" in fa.PUSH_EVENTS and "run_job" in fa.PUSH_EVENTS
-    assert set(fa.AGENT_EMIT_EVENTS) == {"step_log", "step_update", "job_status", "heartbeat"}
+    assert set(fa.AGENT_EMIT_EVENTS) == {"step_log", "job_status", "heartbeat"}
 
 
 def test_verify_scripts_delegates_to_read_only_hasher(fa, monkeypatch):
