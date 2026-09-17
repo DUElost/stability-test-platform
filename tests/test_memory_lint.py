@@ -514,3 +514,31 @@ class TestBudgetExitCode:
         """不带 --budget 时错误照旧致红——分层不是放水。"""
         mem = _build(tmp_path, index="- [gone.md](gone.md)\n- [user_role.md](user_role.md)\n")
         assert _mod.main(["--path", str(mem), "--repo-root", str(tmp_path)]) == 1
+
+
+class TestFullwidthPunctuationFalsePositive:
+    """#2552：中文行内反引号里的示例片段不得被当成路径候选。"""
+
+    def test_fullwidth_punctuation_token_is_not_a_candidate(self):
+        # 描述 import 解析 bug 时写下的示例：路径后面跟着全角句号再接下一个词
+        assert not _mod._is_candidate_path("docs/DOC-MAP.md。Cursor")
+        assert not _mod._is_candidate_path("backend/api/routes/plan_runs.py，另见")
+
+    def test_real_paths_still_candidates(self):
+        assert _mod._is_candidate_path("backend/api/routes/plan_runs.py")
+        assert _mod._is_candidate_path("docs/DOC-MAP.md")
+
+    def test_fullwidth_example_no_longer_reports_dead_link(self, tmp_path):
+        """端到端：示例片段在正文里不再产生断链 ERROR。"""
+        mem = _build(tmp_path, extra_files={
+            # 与真实形态逐字一致：反引号里的 token **以仓库前缀开头**（`docs/`），
+            # 基线才会把它当候选并报断链；带 `@` 前缀的写法基线本就不认（无判别力）
+            "note.md": "---\nname: n\ntype: project\n---\n\n"
+                       "例如被切成了路径 `docs/DOC-MAP.md。Cursor`。\n",
+        })
+        (mem / "MEMORY.md").write_text(
+            "- [user_role.md](user_role.md)\n- [note.md](note.md)\n",
+            encoding="utf-8",
+        )
+        r = _lint(mem, tmp_path)
+        assert not any("DOC-MAP.md。Cursor" in e for e in r.errors)

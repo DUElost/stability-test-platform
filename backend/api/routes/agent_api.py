@@ -14,7 +14,6 @@ from sqlalchemy.orm import Session
 from backend.api.response import ApiResponse, ok
 from backend.core.agent_secret import AgentSecretNotConfiguredError, require_agent_secret
 from backend.core.database import get_async_db, get_db
-from backend.models.host import Host
 from backend.api.routes.auth import get_current_active_user
 from backend.services.agent_recovery import (
     _RecoverySyncIn,
@@ -116,6 +115,8 @@ from backend.services.agent_job_status import (
     JobStatusUpdate,
     update_agent_job_status,
 )
+from backend.services.agent_archive_status import get_agent_archive_status
+
 from backend.services.agent_host_heartbeat import (  # noqa: F401
     BackpressureInfo,
     _get_backpressure,
@@ -481,21 +482,7 @@ async def get_archive_status(
     系统指标（Host.extra['capacity'] / Host.extra['health']）。
     scan 状态占位（Sprint 4）。
     """
-    host = await db.get(Host, host_id)
-    if host is None:
-        raise HTTPException(status_code=404, detail="host not found")
-
-    extra = host.extra if isinstance(host.extra, dict) else {}
-
-    return ok({
-        "host_id": host_id,
-        "agent_metrics": extra.get("archive"),
-        "capacity": extra.get("capacity"),
-        "health": extra.get("health"),
-        "agent_version": extra.get("agent_version"),
-        "scan_status": None,
-        "scan_triggered_at": None,
-    })
+    return ok(await get_agent_archive_status(db, host_id))
 
 
 # ── 升级门禁（#1249）：Ansible 等外部升级入口复用 ADR-0021 D7/D8 协议 ──────────
