@@ -431,16 +431,18 @@ describe('PlanStepInspector', () => {
       expect(lastStep(onUpdateStep).timeout_seconds).toBe(1);
     });
 
-    it('清空超时不落库——0 与 null 都存不进后端，此前会静默写 0', () => {
+    it('清空超时 = 回到「未配置」并提交（#2513）', () => {
       const onUpdateStep = vi.fn();
-      render(<Harness onUpdateStep={onUpdateStep} />);
+      render(<Harness step={makeStep({ timeout_seconds: 45 })} onUpdateStep={onUpdateStep} />);
       const input = within(fieldOf('超时 (秒)')).getByRole('spinbutton');
 
       fireEvent.change(input, { target: { value: '' } });
 
-      expect(onUpdateStep).not.toHaveBeenCalled();
-      // 编辑期允许显示为空，不强行折算成默认值（否则接着输入会拼成 306）
-      expect(input).toHaveValue(null);
+      // #2382 之后「未配置」可落库（组装侧对 None 省略键 → Agent 回落
+      // STP_STEP_WALL_CLOCK_SECONDS → 300s），#2454 又让读回不再折成 30——
+      // 所以清空必须**提交** undefined，而不是只清本地草稿（旧行为失焦会弹回旧值）。
+      expect(onUpdateStep).toHaveBeenCalledTimes(1);
+      expect(lastStep(onUpdateStep).timeout_seconds).toBeUndefined();
     });
 
     it('清空后重新输入按新值提交', () => {
@@ -454,14 +456,17 @@ describe('PlanStepInspector', () => {
       expect(lastStep(onUpdateStep).timeout_seconds).toBe(600);
     });
 
-    it('留空失焦后回落到最后一次提交的值', () => {
-      render(<Harness step={makeStep({ timeout_seconds: 45 })} />);
+    it('清空后失焦保持空（placeholder 表示「默认」），不弹回旧值', () => {
+      const onUpdateStep = vi.fn();
+      render(<Harness step={makeStep({ timeout_seconds: 45 })} onUpdateStep={onUpdateStep} />);
       const input = within(fieldOf('超时 (秒)')).getByRole('spinbutton');
 
       fireEvent.change(input, { target: { value: '' } });
       fireEvent.blur(input);
 
-      expect(input).toHaveValue(45);
+      // 受控值来自 step.timeout_seconds（已提交为 undefined）→ 空 + placeholder
+      expect(input).toHaveValue(null);
+      expect(input).toHaveAttribute('placeholder', '默认');
     });
 
     it('超时填 0 夹到 1，不再静默落 30', () => {

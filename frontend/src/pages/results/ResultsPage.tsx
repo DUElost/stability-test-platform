@@ -162,7 +162,7 @@ export default function ResultsPage() {
                     <ClickableRow
                       key={run.run_id}
                       className="border-b transition-colors last:border-0 hover:bg-muted/50"
-                      onClick={() => navigate(`/runs/${run.run_id}/report`)}
+                      onClick={() => navigate(`/jobs/${run.run_id}/report`)}
                     >
                       <TableCell className="py-2 pr-4 font-mono text-xs">#{run.run_id}</TableCell>
                       <TableCell className="max-w-[180px] truncate py-2 pr-4">

@@ -163,8 +163,15 @@ def test_queue_defers_until_configured(monkeypatch):
     )
 
     # 未 configure 时入队：worker 应 requeue 并等待，不执行也不丢弃
+    real_sleep = time.sleep
+    monkeypatch.setattr(
+        "backend.agent.scan_runner.time.sleep",
+        lambda s: real_sleep(0.01 if float(s) >= 1 else float(s)),
+    )
     ScanRunner.enqueue_scan_now(71, "host-1", is_final=False)
-    time.sleep(2.5)  # worker defer 间隔 2s
+    deadline = time.time() + 2
+    while ScanRunner.pending_count() != 1 and time.time() < deadline:
+        time.sleep(0.01)
     assert ScanRunner.pending_count() == 1
     assert executed == []
 

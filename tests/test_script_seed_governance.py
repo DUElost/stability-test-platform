@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 import re
@@ -116,25 +117,86 @@ def test_batch_deactivate_aborts_listing_all_blocked(pg_engine):
 SEED_VERSIONS_DIR = Path(__file__).resolve().parents[1] / "backend" / "alembic" / "versions"
 
 
+def _docstring_nodes(tree: ast.AST) -> set[int]:
+    """模块 / 函数 / 类 docstring 的 ``Constant`` 节点 id（它们**不是** SQL）。"""
+    ids: set[int] = set()
+    holders = (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+    for node in ast.walk(tree):
+        if isinstance(node, holders):
+            body = getattr(node, "body", [])
+            if (
+                body
+                and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)
+            ):
+                ids.add(id(body[0].value))
+    return ids
+
+
+def _sql_literals(path: Path) -> list[str]:
+    """迁移里作为**代码**出现的 SQL 字面量（AST）。
+
+    注释与文档字符串一律不算——文本匹配会被它们骗过：``e5f6a7b8c9d0``（#2399 的自愈
+    迁移）两处 ``is_active = false`` 全在注释/docstring 里，它真正的 INSERT 用的是
+    VALUES 里的 ``false`` 字面量（同类教训见 #2448 的接线守卫判据 1）。f-string 取其中
+    的字面量片段拼接，避免 ``text(f"...")`` 形态整条漏掉。
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    docstrings = _docstring_nodes(tree)
+    out: list[str] = []
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and id(node) not in docstrings
+        ):
+            out.append(node.value)
+        elif isinstance(node, ast.JoinedStr):
+            out.append(
+                "".join(
+                    part.value
+                    for part in node.values
+                    if isinstance(part, ast.Constant) and isinstance(part.value, str)
+                )
+            )
+    return out
+
+
+def _has_deactivation(path: Path) -> bool:
+    """该迁移是否**执行**过「停用既有版本」（``UPDATE script … is_active = false``）。
+
+    同一条 SQL 字面量里同时出现 UPDATE 语义词与赋值才算停用：INSERT 一条 ``is_active``
+    为 false 的**新行**不算（没有既有版本被停用）；大小写与空白不敏感——旧判据按
+    ``"is_active = false" in text`` 精确匹配，``i9j0k1l2m3n4`` 写的 ``is_active=false``
+    因此整份文件都不在扫描面里（漏判），而只在注释里提到该串的迁移被误判为停用（误报）。
+    """
+    pattern = re.compile(r"UPDATE\s+script\b[\s\S]*?is_active\s*=\s*false", re.I)
+    return any(pattern.search(literal) for literal in _sql_literals(path))
+
+
 def _seed_files_with_deactivation() -> list[Path]:
-    """含 `is_active = false`（即停用既有版本）的迁移文件。"""
-    return sorted(
-        p for p in SEED_VERSIONS_DIR.glob("*.py")
-        if "is_active = false" in p.read_text(encoding="utf-8")
-    )
+    """含「停用既有版本」SQL 的迁移文件（判据见 :func:`_has_deactivation`）。"""
+    return sorted(p for p in SEED_VERSIONS_DIR.glob("*.py") if _has_deactivation(p))
 
 
 #: 存量豁免（#2055）：2026-09-12 及之前新增、且已在生产应用的 seed——#942 治理模板
 #: 自 2026-09-13 起才随新 seed 生效（对照：`a3b2c1d0e9f8` 起都带检查）。追溯改造这些
 #: 已应用迁移会改变「全新安装」的行为（引用存在时直接中止部署），故本轮只做**前向**守卫。
 #: 终态出口：随零引用版本退役（#735）自然收敛；新增文件一律不得进入本表。
+#:
+#: 判据收紧后的补登记：`i9j0k1l2m3n4`（2026-08-31）此前**因写法差异被漏判**——它写的是
+#: `is_active=false`（无空格），旧判据按字符串 `is_active = false` 精确匹配，整份文件都
+#: 不在扫描面里。收紧后的判据（大小写/空白不敏感）把它照了出来；日期与「已在链上」都
+#: 符合本表口径，故按存量补登记——**不是**为放行新文件。
 _LEGACY_SEEDS_WITHOUT_REF_CHECK = {
     "a7b8c9d0e1f2", "b7c8d9e0f1a2", "b8c9d0e1f2a3", "c0d1e2f3a4b5", "c9d0e1f2a3b4",
     "d3e4f5a6b7c8", "e1f2a3b4c5d6", "e7f8a9b0c1d2", "f0a1b2c3d4e5", "g1h2i3j4k5l6",
-    "g5a6b7c8d9e0", "h2i3j4k5l6m7", "h8i9j0k1l2m3", "i5j6k7l8m9n0", "j0k1l2m3n4o5",
-    "k1l2m3n4o5p6", "o9p8q7r6s5t4", "p8q7r6s5t4u3", "p9q8r7s6t5u4", "q3r4s5t6u7v8",
-    "q7r6s5t4u3v2", "r6s5t4u3v2w1", "s2t3u4v5w6x7", "s5t4u3v2w1x0", "t2u3v4w5x6y7",
-    "u3v4w5x6y7z8", "u6v5w4x3y2z1", "u7v8w9x0y1z2", "v5w4x3y2z1a0", "w4x3y2z1a0b9",
+    "g5a6b7c8d9e0", "h2i3j4k5l6m7", "h8i9j0k1l2m3", "i5j6k7l8m9n0", "i9j0k1l2m3n4",
+    "j0k1l2m3n4o5", "k1l2m3n4o5p6", "o9p8q7r6s5t4", "p8q7r6s5t4u3", "p9q8r7s6t5u4",
+    "q3r4s5t6u7v8", "q7r6s5t4u3v2", "r6s5t4u3v2w1", "s2t3u4v5w6x7", "s5t4u3v2w1x0",
+    "t2u3v4w5x6y7", "u3v4w5x6y7z8", "u6v5w4x3y2z1", "u7v8w9x0y1z2", "v5w4x3y2z1a0",
+    "w4x3y2z1a0b9",
 }
 
 
@@ -185,3 +247,53 @@ def test_seed_migrations_do_not_delete_script_rows_on_downgrade():
         if "DELETE FROM script " in p.read_text(encoding="utf-8")
     ]
     assert not offenders, f"以下迁移的 downgrade 用 DELETE 而非 is_active 翻转：{offenders}"
+
+
+# ── 判据自身的守卫（文本匹配的两类假信号都在这里钉住）────────────────────────
+
+
+def test_deactivation_detector_reads_sql_not_prose(tmp_path):
+    """停用判据只看 SQL 字面量：注释/文档字符串不算，INSERT 新行也不算。
+
+    旧判据是 ``"is_active = false" in text``（整文件文本匹配），两个方向都出错：
+    只在注释里提到该串的迁移被误判为停用；而 INSERT 一条 is_active=false 的新行
+    （如 #2399 的自愈迁移）根本没有停用任何既有版本。
+    """
+    prose_only = tmp_path / "a_prose_only.py"
+    prose_only.write_text(
+        '"""docstring: ``is_active = false`` 只是说明文字。"""\n'
+        "# 注释里的 is_active = false 也不算\n"
+        "def upgrade():\n"
+        "    pass\n",
+        encoding="utf-8",
+    )
+    insert_only = tmp_path / "b_insert_only.py"
+    insert_only.write_text(
+        "def upgrade():\n"
+        "    conn.execute(text(\n"
+        '        "INSERT INTO script (name, is_active) VALUES (:n, false)"\n'
+        "    ))\n",
+        encoding="utf-8",
+    )
+    real = tmp_path / "c_real.py"
+    real.write_text(
+        "def upgrade():\n"
+        "    conn.execute(text(\n"
+        '        "UPDATE script SET is_active=false, updated_at=:now "\n'
+        '        "WHERE name=\'gpu_setup\' AND version=\'1.0.2\'"\n'
+        "    ))\n",
+        encoding="utf-8",
+    )
+
+    assert not _has_deactivation(prose_only), "注释/docstring 里的提及不是停用"
+    assert not _has_deactivation(insert_only), "INSERT 新行不是停用既有版本"
+    assert _has_deactivation(real), "真停用（含无空格写法）必须被看见"
+
+
+def test_deactivation_detector_corpus_delta():
+    """对本仓全部迁移的判据落点：真停用必在，误报与漏报各自钉住一条实例。"""
+    names = {p.name for p in _seed_files_with_deactivation()}
+    # 真停用（`is_active=false` 无空格形态）——旧判据因精确匹配整份漏掉
+    assert "i9j0k1l2m3n4_seed_gpu_setup_v104_stable_install.py" in names
+    # 误报（两处提及全在注释/docstring 里，SQL 只 INSERT）——不得再被算作停用
+    assert "e5f6a7b8c9d0_repair_flash_firmware_seed_identity_2399.py" not in names

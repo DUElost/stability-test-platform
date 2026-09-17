@@ -81,11 +81,20 @@ def _alert_exprs() -> list[tuple[str, str]]:
     return exprs
 
 
+# PromQL **集合运算符**：`A or B` / `A and B` / `A unless B` 里的连接词既不是指标名，
+# 也不是函数（后面不跟 `(`），所以函数跳过规则盖不住它。#735 的守卫告警第一次用 `or`
+# 把三种失能形态合成一条（避免告警风暴），当时结构层把 `or` 当成了未知指标——盲区在
+# 解析器，不在表达式：合法 PromQL 不该为了让解析器满意而被拆开。
+# 同一盲区对 `_aggregation_clauses` 的内层指标定位也成立（那边只扫聚合后的第一个非函数
+# token）；本仓尚无「聚合 + 集合运算」混用的规则，真出现时按同样方式处理，别静默误判。
+_SET_OPERATORS = frozenset({"or", "and", "unless"})
+
+
 def _selectors(expr: str) -> list[tuple[str, list[str]]]:
     """从本仓库用到的 PromQL 形态中提取 (指标名, 标签名列表)。
 
-    跳过函数名（后随 ``(``）与聚合前缀（``sum by (mode)``），忽略标签块内部文本。
-    聚合前缀里的标签不在此处校验，由
+    跳过函数名（后随 ``(``）、集合运算符（``or``/``and``/``unless``）与聚合前缀
+    （``sum by (mode)``），忽略标签块内部文本。聚合前缀里的标签不在此处校验，由
     ``test_alert_aggregation_labels_match_metric_registry`` 单独负责（#2030）。
     """
     selectors: list[tuple[str, list[str]]] = []
@@ -97,6 +106,8 @@ def _selectors(expr: str) -> list[tuple[str, list[str]]]:
         if match.group("labels") is not None:
             covered_until = match.end()
         name = match.group("name")
+        if name in _SET_OPERATORS:
+            continue
         if stripped[match.end():].lstrip().startswith("("):
             continue
         labels = [m.group(1) for m in _LABEL_RE.finditer(match.group("labels") or "")]
@@ -133,6 +144,10 @@ def test_selector_parser_skips_functions_and_reads_labels():
     assert _selectors("histogram_quantile(0.95, rate(stability_b_bucket[10m]))") == [
         ("stability_b_bucket", []),
     ]
+    # 集合运算符不得被当成指标名（#735 守卫告警形态），且函数参数里的指标仍要被抓到
+    assert _selectors(
+        'a_total == 1 or b_total == 1 or absent(stp_guard_last_run)'
+    ) == [("a_total", []), ("b_total", []), ("stp_guard_last_run", [])]
 
 
 def test_aggregation_parser_reads_labels_and_inner_metric():

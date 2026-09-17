@@ -405,6 +405,15 @@ retention_batch_size = Gauge(
     'Configured retention cleanup batch size (plan_run_retention_batch_size)',
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
+# #2316：孤儿 DLE 清理的**跳过**计数（按原因分桶）。被跳过的行既不删行也不推进批头，
+# 而它们恒为最老 → 积压到批大小后 `purged` 恒为 0；此前只有 warning，积压不可观测。
+# 取值：root_unset / path_invalid / purge_failed（与 `dle_orphan_skipped_*` 日志锚点同名）。
+dle_orphan_skipped_total = Counter(
+    'stability_dle_orphan_skipped_total',
+    'Orphan DeviceLogEvent cleanup rows skipped, by reason (#2316)',
+    ['reason'],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
 # ADR-0021 dispatch gate
 dispatch_gate_runs_total = Counter(
     'stability_dispatch_gate_runs_total',
@@ -482,6 +491,34 @@ reconciler_burst_mode_active = Gauge(
     'stability_reconciler_burst_mode_active',
     'Whether the AEE db_history reconciler is currently in burst mode (1) or baseline (0)',
     ['host_id']
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+# #2394①③ UNISOC「落成未采到」可见面（job 终态桥接，host 维度——沿用 skip_unchanged
+# 的控基数约定，不打 serial/job）。abandoned/oversized 为单调累计；unresolved 是
+# 该 host 最近一个完成 UNISOC job 的末拍快照；present 由任意平台 reconciler 成功
+# 回报后置 1——UNISOC 设备所在 host 长期无 present 样本 = C7/C8 盲区信号。
+reconciler_dirs_abandoned_total = Counter(
+    'stability_reconciler_dirs_abandoned_total',
+    'UNISOC event dirs abandoned after MAX_DIR_ATTEMPTS consecutive pull failures (job-completion bridge)',
+    ['host_id']
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+reconciler_dirs_oversized_skipped_total = Counter(
+    'stability_reconciler_dirs_oversized_skipped_total',
+    'UNISOC event dirs degraded to metadata-only by the size guard (#2252), cumulative unique dirs',
+    ['host_id']
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+reconciler_unresolved_dirs = Gauge(
+    'stability_reconciler_unresolved_dirs',
+    'UNISOC dirs listed on device but unresolved at the last completed job (final-tick snapshot per host)',
+    ['host_id']
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+watcher_reconciler_present = Gauge(
+    'stability_watcher_reconciler_present',
+    'Last completed job on this host reported a running platform reconciler (1), labeled by platform',
+    ['host_id', 'platform']
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
 # Watcher capability 覆盖率（M4/T4-2 监控盘）：每个 Job 首次进入终态时按上报的
@@ -711,6 +748,51 @@ def record_reconciler_skip_unchanged(host_id: str, amount: int = 1):
     if n <= 0:
         return
     reconciler_skip_unchanged_total.labels(host_id=str(host_id or "unknown")).inc(n)
+
+
+def _pos_int_or_none(value) -> int | None:
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
+
+
+def record_reconciler_dirs_abandoned(host_id: str, amount: int):
+    """#2394: job 终态桥接——本 job 放弃目录数（单调累计，>0 才计）。"""
+    n = _pos_int_or_none(amount)
+    if n is None or not PROMETHEUS_AVAILABLE:
+        return
+    reconciler_dirs_abandoned_total.labels(host_id=str(host_id or "unknown")).inc(n)
+
+
+def record_reconciler_dirs_oversized_skipped(host_id: str, amount: int):
+    """#2394/#2252: job 终态桥接——降级仅取元数据的目录累计数（>0 才计）。"""
+    n = _pos_int_or_none(amount)
+    if n is None or not PROMETHEUS_AVAILABLE:
+        return
+    reconciler_dirs_oversized_skipped_total.labels(host_id=str(host_id or "unknown")).inc(n)
+
+
+def set_reconciler_unresolved_dirs(host_id: str, value: int):
+    """#2394: 末拍 unresolved 快照（0 也有意义=最近 job 全收敛，照写）。"""
+    if not PROMETHEUS_AVAILABLE:
+        return
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return
+    reconciler_unresolved_dirs.labels(host_id=str(host_id or "unknown")).set(max(0, n))
+
+
+def set_watcher_reconciler_present(host_id: str, platform: str):
+    """#2394③: reconciler 在位事实（platform 段做标签，控制基数）。"""
+    if not PROMETHEUS_AVAILABLE:
+        return
+    plat = str(platform or "").strip().upper() or "UNKNOWN"
+    watcher_reconciler_present.labels(
+        host_id=str(host_id or "unknown"), platform=plat,
+    ).set(1)
 
 
 def set_reconciler_burst_mode_active(host_id: str, active: bool):

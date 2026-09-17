@@ -266,7 +266,14 @@ def lint_memory_dir(memory_dir: Path, *, repo_root: Path) -> Report:
             report.error(f"{INDEX_NAME}: 死链 -> {target}")
     expected = {p.name for p in files if p.name != INDEX_NAME}
     for missing in sorted(expected - linked):
-        report.error(f"{INDEX_NAME}: 未索引文件 {missing}")
+        # #2520：**降级为 WARN**。store 政策有三类去处（判据进索引 / 流水不进索引 /
+        # 台账进索引原地改写），工具不做类别识别就无从判定哪些「该进」——一律 ERROR
+        # 会让闸恒红（实测 4 个孤儿里 2 个是按政策的晨间流水），同时把真信号淹掉
+        # （同批真正的硬伤是 36 处正文断链）。要恢复硬门：`--strict` 仍把 WARN 计入退出码。
+        report.warn(
+            f"{INDEX_NAME}: 未索引文件 {missing}"
+            "（按政策：流水/快照可不进索引；判据/台账请补索引）"
+        )
 
     # ── 断链：正文反引号路径 ─────────────────────────────────────────────
     for path in files:
@@ -491,7 +498,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--strict", action="store_true", help="有 WARN 也退出 1")
     parser.add_argument(
         "--budget", action="store_true",
-        help="索引预算判定（目标/软触发/硬墙；超软触发即 exit 1）",
+        help="索引预算判定（目标/软触发/硬墙；超软触发即 exit 1，"
+             "该模式下退出码只看预算，错误仍在输出里）",
     )
     parser.add_argument(
         "--target-kb", type=float, default=INDEX_BUDGET_TARGET_KB,
@@ -577,9 +585,14 @@ def main(argv: list[str] | None = None) -> int:
                     )
                     print(f"索引预算（压缩后）：{budget.describe()}")
 
+    if args.budget:
+        # #2520：`--budget` 模式下**以预算为退出码主判据**。此前错误门在前——
+        # 索引已在软触发以内却因「有断链/未索引」exit 1，闸恒红，且调用方无法从
+        # 退出码区分「越线」与「有错误」。错误/警告仍在输出里全量打印；要在错误上
+        # 也拦，用不带 --budget 的默认模式（或 --strict）。
+        print(f"budget={'ok' if budget.level == 'ok' else 'over-' + budget.level}")
+        return 0 if budget.level == "ok" else 1
     if report.errors:
-        return 1
-    if budget is not None and budget.level != "ok":
         return 1
     if args.strict and report.warnings:
         return 1

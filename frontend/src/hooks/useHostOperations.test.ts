@@ -281,7 +281,7 @@ describe('useHostOperations', () => {
     expect(ret).toBeNull();
   });
 
-  it('cancelInstall surfaces the reason when the cancel was not initiated', async () => {
+  it('cancelInstall gives a Chinese reason when the cancel was not initiated', async () => {
     vi.mocked(api.agentInstall.cancel).mockResolvedValueOnce({
       ok: false,
       host_id: 'h1',
@@ -297,10 +297,11 @@ describe('useHostOperations', () => {
       ret = await result.current.cancelInstall('h1');
     });
 
-    expect(ret).toBe('The run could not be canceled (already terminal).');
+    // #2255 残余：行内红字不得是后端英文 message
+    expect(ret).toBe('取消未生效：该运行可能已结束，终态会自动刷新');
   });
 
-  it('cancelInstall extracts backend detail from a 409 (nothing running)', async () => {
+  it('cancelInstall maps a 409 (nothing running) to a Chinese race note', async () => {
     vi.mocked(api.agentInstall.cancel).mockRejectedValueOnce({
       message: 'Request failed with status code 409',
       response: {
@@ -320,7 +321,7 @@ describe('useHostOperations', () => {
       ret = await result.current.cancelInstall('h1');
     });
 
-    expect(ret).toBe('Host h1 has no Agent installation in progress.');
+    expect(ret).toBe('该主机当前没有在跑的安装（可能刚结束，终态会自动刷新）');
   });
 
   // #2255：控制台终态回到 UI 时，取消必须是独立终态——现场验证抓到过「点了取消，UI 报失败」

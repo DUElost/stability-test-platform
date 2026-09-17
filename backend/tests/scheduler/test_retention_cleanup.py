@@ -365,6 +365,8 @@ def _make_nfs_dirs(root, run_id):
     (root / "dedup" / str(run_id) / "mtk" / "result.xls").write_text("y")
     (root / "jira" / str(run_id) / "extract").mkdir(parents=True)
     (root / "jira" / str(run_id) / "extract" / "bundle.zip").write_text("z")
+    (root / "_meta" / str(run_id)).mkdir(parents=True)
+    (root / "_meta" / str(run_id) / "172-21-1-1.json").write_text("{}")
 
 
 def test_nfs_run_dirs_purged_with_db_row(cleanup_env, tmp_path, monkeypatch):
@@ -379,6 +381,7 @@ def test_nfs_run_dirs_purged_with_db_row(cleanup_env, tmp_path, monkeypatch):
     assert not (tmp_path / "devices" / str(run.id)).exists()
     assert not (tmp_path / "dedup" / str(run.id)).exists()
     assert not (tmp_path / "jira" / str(run.id)).exists()
+    assert not (tmp_path / "_meta" / str(run.id)).exists()
     assert db.query(PlanRun).filter(PlanRun.id == run.id).first() is None
 
 
@@ -393,6 +396,7 @@ def test_active_run_nfs_dirs_kept(cleanup_env, tmp_path, monkeypatch):
 
     assert (tmp_path / "devices" / str(run.id)).exists()
     assert (tmp_path / "jira" / str(run.id)).exists()
+    assert (tmp_path / "_meta" / str(run.id)).exists()
     assert db.query(PlanRun).filter(PlanRun.id == run.id).first() is not None
 
 
@@ -691,6 +695,126 @@ def _mk_orphan_event(db, device, host, event_id, nfs, *, state="REMOTE", remote=
     ))
     db.commit()
     return event_dir
+
+
+def _mk_orphan_row(db, device, host, *, remote_path, updated_at):
+    """建一条「形态/路径可指定」的孤儿 DLE 行（#2316 用例：形态不符行、深层路径行）。"""
+    from backend.models.device_log_event import DeviceLogEvent
+
+    row = DeviceLogEvent(
+        serial=device.serial,
+        platform="MTK",
+        event_type="NE",
+        detected_at=updated_at,
+        state="REMOTE",
+        local_path="/local/orphan",
+        remote_path=remote_path,
+        host_id=str(host.id),
+        job_id=None,
+        plan_run_id=None,
+        updated_at=updated_at,
+    )
+    db.add(row)
+    db.commit()
+    return row.id
+
+
+def test_orphan_cleanup_progresses_past_invalid_rows(
+    cleanup_env, scheduler_env, sample_host, sample_device, tmp_path, monkeypatch,
+):
+    """#2316：≥批大小的「形态不符」行不得堵死批头。
+
+    旧实现每轮只取 ``ORDER BY updated_at LIMIT n`` 的**头一批**：形态不符行只
+    ``continue``、不删也不推进，而它们恒为最老 → 满批后 ``purged`` 恒为 0（静默空转）。
+    键集推进后，本轮可以越过它们清到后面的可清理行。
+    """
+    from datetime import datetime, timedelta, timezone
+    from pathlib import Path
+    from uuid import uuid4
+
+    from backend.models.device_log_event import DeviceLogEvent
+
+    db, _plan = cleanup_env
+    scheduler_env("ARTIFACT_RETENTION_DAYS", "0")
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
+
+    base = datetime.now(timezone.utc)
+    for i in range(120):
+        _mk_orphan_row(
+            db, sample_device, sample_host,
+            remote_path=str(Path(tmp_path) / "not-unassigned" / f"ev{i}"),
+            updated_at=base - timedelta(seconds=10_000 - i),
+        )
+
+    good_id = uuid4()
+    good_dir = _mk_orphan_event(db, sample_device, sample_host, good_id, tmp_path)
+
+    purged = cron_scheduler.purge_orphan_dle_events()
+
+    assert purged == 1, "批头被形态不符行占满后，仍须清到后面的可清理行"
+    assert not good_dir.exists()
+    assert db.query(DeviceLogEvent).filter(DeviceLogEvent.id == good_id).first() is None
+
+
+def test_orphan_cleanup_counts_skipped_by_reason(
+    cleanup_env, scheduler_env, sample_host, sample_device, tmp_path, monkeypatch,
+):
+    """#2316：跳过必须可观测（按 reason 计数），不再只有 warning。"""
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    from prometheus_client import REGISTRY
+
+    db, _plan = cleanup_env
+    scheduler_env("ARTIFACT_RETENTION_DAYS", "0")
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
+    _mk_orphan_row(
+        db, sample_device, sample_host,
+        remote_path=str(Path(tmp_path) / "not-unassigned" / "ev-metric"),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    def _skipped() -> float:
+        return REGISTRY.get_sample_value(
+            "stability_dle_orphan_skipped_total", {"reason": "path_invalid"},
+        ) or 0.0
+
+    before = _skipped()
+    cron_scheduler.purge_orphan_dle_events()
+    assert _skipped() == before + 1
+
+
+def test_orphan_cleanup_accepts_deep_paths_under_event_dir(
+    cleanup_env, scheduler_env, sample_host, sample_device, tmp_path, monkeypatch,
+):
+    """#2316：写入侧允许 ``unassigned/{id}/`` **之下任意层级**，清理侧必须同形。
+
+    此前清理侧只认固定层数（``p.parent.parent``），更深的合法路径被判形态不符 →
+    恒跳过（且恒为最老，占住批头）。
+    """
+    from datetime import datetime, timezone
+    from pathlib import Path
+    from uuid import uuid4
+
+    from backend.models.device_log_event import DeviceLogEvent
+
+    db, _plan = cleanup_env
+    scheduler_env("ARTIFACT_RETENTION_DAYS", "0")
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
+
+    event_id = uuid4()
+    event_dir = Path(tmp_path) / "devices" / "unassigned" / str(event_id)
+    deep_file = event_dir / "sub" / "dir" / "dump.log"
+    deep_file.parent.mkdir(parents=True, exist_ok=True)
+    deep_file.write_text("x", encoding="utf-8")
+    row_id = _mk_orphan_row(
+        db, sample_device, sample_host,
+        remote_path=str(deep_file), updated_at=datetime.now(timezone.utc),
+    )
+
+    assert cron_scheduler.purge_orphan_dle_events() == 1
+    assert not event_dir.exists()
+    assert db.query(DeviceLogEvent).filter(DeviceLogEvent.id == row_id).first() is None
 
 
 def test_orphan_unassigned_event_purged_after_artifact_retention(
