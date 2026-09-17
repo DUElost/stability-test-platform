@@ -236,20 +236,6 @@ export default function RunReportPage() {
         </div>
       </div>
 
-      {report.summary_metrics && Object.keys(report.summary_metrics).length > 0 && (
-        <div className={cn(PANEL.root, 'overflow-visible p-4 space-y-2')}>
-          <h3 className="text-sm font-medium text-muted-foreground">汇总指标</h3>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            {Object.entries(report.summary_metrics).map(([key, value]) => (
-              <div key={key} className="text-sm">
-                <span className="text-muted-foreground">{key}</span>
-                <p className="font-medium">{String(value)}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
       <div className="rounded-lg border p-4 space-y-3">
         <h3 className="text-sm font-medium text-muted-foreground">
           告警列表 ({report.alerts?.length ?? 0})

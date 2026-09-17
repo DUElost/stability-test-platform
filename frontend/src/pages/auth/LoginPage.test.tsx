@@ -92,6 +92,33 @@ describe('LoginPage', () => {
     expect(mocks.navigate).toHaveBeenCalledWith('/', { replace: true });
   });
 
+  it('#2456 密码管理器自动填充后仍能登录（提交取 DOM 值）', async () => {
+    mocks.login.mockResolvedValue({ ok: true });
+
+    render(
+      <ThemeProvider>
+        <LoginPage />
+      </ThemeProvider>,
+    );
+
+    // 模拟密码管理器：绕过 React 直写 .value + 派发**非冒泡** input 事件。
+    // 修复前 state 收不到、提交取 state → 空账号密码（本用例即会失败）。
+    const managerFill = (el: HTMLElement, value: string) => {
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype, 'value',
+      )!.set!;
+      setter.call(el, value);
+      el.dispatchEvent(new Event('input', { bubbles: false }));
+    };
+    managerFill(screen.getByLabelText('用户名'), 'stp-tester');
+    managerFill(screen.getByLabelText('密码'), 'tPe-KLu-3Uw-3Fb');
+    fireEvent.click(screen.getByRole('button', { name: '登录' }));
+
+    await waitFor(() => {
+      expect(mocks.login).toHaveBeenCalledWith('stp-tester', 'tPe-KLu-3Uw-3Fb');
+    });
+  });
+
   it('redirects back to the deep link carried in router state after login', async () => {
     mocks.login.mockResolvedValue({ ok: true });
     mocks.location.state = { from: '/execution/plan-runs/375/logs' };
