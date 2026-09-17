@@ -1,20 +1,23 @@
 """Agent API: job claim, status update, step trace upload, heartbeat.
 
-Authentication: X-Agent-Secret header (compared to AGENT_SECRET env var).
+Authentication: X-Agent-Secret via ``auth.verify_agent_secret``（本模块 re-export
+为 ``_verify_agent``，保既有测试导入）。
 """
 
 import logging
-import secrets
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from backend.api.response import ApiResponse, ok
-from backend.core.agent_secret import AgentSecretNotConfiguredError, require_agent_secret
 from backend.core.database import get_async_db, get_db
 from backend.api.routes.auth import get_current_active_user
+from backend.api.routes.auth import verify_agent_secret as _verify_agent
+from backend.services.agent_version_gate import (  # noqa: F401
+    agent_version_is_supported as _agent_version_is_supported,
+)
 from backend.services.agent_recovery import (
     _RecoverySyncIn,
     sync_agent_recovery,
@@ -158,60 +161,8 @@ from backend.services.agent_completion import (  # noqa: F401
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/agent", tags=["agent"])
 
-# NOTE: UNKNOWN is intentionally excluded — it is a transient recovery state,
-# not a terminal one.  Valid transitions are UNKNOWN→RUNNING (grace recovery)
-# or UNKNOWN→FAILED (grace expiry).  ``complete_job()``'s runtime-lease gate
-# (``_get_valid_runtime_lease``, default ``allowed_job_statuses={RUNNING}``)
-# rejects direct completion while UNKNOWN — the agent must re-sync via recovery
-# (UNKNOWN→RUNNING) before completing normally.  This also prevents premature
-# PlanRun aggregation while a job's true status is still unresolved.
-
-
-
-def _verify_agent(x_agent_secret: Optional[str] = Header(None, alias="X-Agent-Secret")):
-    # secrets.compare_digest 防时序攻击。
-    try:
-        expected = require_agent_secret()
-    except AgentSecretNotConfiguredError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    provided = x_agent_secret or ""
-    if not secrets.compare_digest(provided, expected):
-        raise HTTPException(status_code=401, detail="invalid agent secret")
-
-
-
-
-
-
-# ── Schemas ───────────────────────────────────────────────────────────────────
-
-# JobStatusUpdate / StepTraceIn / _StepStatusIn 见对应 service（本模块 re-export）
-
-
-# ── ADR-0019 Phase 3a: Recovery Sync models ──────────────────────────────────
-
-
-# ── Shared helpers ────────────────────────────────────────────────────────────
-
-
-def _version_tuple(value: str) -> tuple[int, ...]:
-    raw = (value or "").strip()
-    if "-" in raw:
-        raise ValueError("pre-release Agent versions are not supported")
-    core = raw.split("+", 1)[0]
-    parts = core.split(".")
-    if len(parts) != 3 or any(not part.isdigit() for part in parts):
-        raise ValueError(f"invalid semantic version: {value!r}")
-    return tuple(int(part) for part in parts)
-
-
-def _agent_version_is_supported(agent_version: str, minimum: str) -> bool:
-    from backend.services.agent_version_gate import agent_version_is_supported
-    return agent_version_is_supported(agent_version, minimum)
-
-
-
 # ── Endpoints ─────────────────────────────────────────────────────────────────
+
 
 @router.post("/jobs/claim", response_model=ApiResponse[List[JobOut]])
 async def claim_jobs(
@@ -244,7 +195,6 @@ async def upload_step_traces(
     traces: List[StepTraceIn],
     db: AsyncSession = Depends(get_async_db),
     _=Depends(_verify_agent),
-    x_agent_secret: Optional[str] = Header(None, alias="X-Agent-Secret"),
 ):
     """Batch idempotent StepTrace upsert (Agent replay on reconnect)."""
     return ok(await upload_agent_step_traces(db, traces))
@@ -261,9 +211,6 @@ async def agent_heartbeat(
     Returns script_catalog_outdated flag + current backpressure setting.
     """
     return ok(await record_agent_host_heartbeat(db, payload))
-
-
-# ── RunStatus→JobStatus mapping for compat endpoints ─────────────────────────
 
 
 @router.post("/jobs/{job_id}/heartbeat", response_model=ApiResponse[dict])
