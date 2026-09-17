@@ -26,7 +26,7 @@ Class: bug-fix
 
 - 服务直测：`test_plan_run_summary_artifacts`；
 - API：read_api_auth + aggregation 相关（47 passed）；
-- `ruff` + `check:quick`。
+- `ruff` + `check:quick`（11 gates；god-files plan_runs 989/2419）通过。
 
 ## Revisit
 
