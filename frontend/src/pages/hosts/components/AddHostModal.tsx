@@ -10,6 +10,7 @@ import {
 import { STATUS_TEXT_COLORS } from '@/design-system/colors';
 import { FORM } from '@/design-system';
 import { cn } from '@/lib/utils';
+import { readNamedValues } from '@/utils/forms';
 import type { Host } from '@/utils/api/types';
 
 interface AddHostModalProps {
@@ -62,15 +63,16 @@ export function AddHostModal({ isOpen, onClose, onSubmit, isSubmitting, editingH
     }
   }
 
-  const validate = (): boolean => {
+  const validate = (values: Record<string, string>): boolean => {
     const newErrors: Record<string, string> = {};
-    if (!formData.name.trim()) newErrors.name = '请输入主机名称';
-    if (!formData.ip.trim()) {
+    if (!values.name.trim()) newErrors.name = '请输入主机名称';
+    if (!values.ip.trim()) {
       newErrors.ip = '请输入 IP 地址';
-    } else if (!/^(\d{1,3}\.){3}\d{1,3}$/.test(formData.ip)) {
+    } else if (!/^(\d{1,3}\.){3}\d{1,3}$/.test(values.ip)) {
       newErrors.ip = 'IP 地址格式不正确';
     }
-    if (formData.ssh_port < 1 || formData.ssh_port > 65535) {
+    const port = Number(values.ssh_port);
+    if (!Number.isFinite(port) || port < 1 || port > 65535) {
       newErrors.ssh_port = '端口须在 1–65535 之间';
     }
     setErrors(newErrors);
@@ -79,9 +81,23 @@ export function AddHostModal({ isOpen, onClose, onSubmit, isSubmitting, editingH
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (validate()) {
+    // #2456：以**表单 DOM 值**为准（密码管理器直写 .value 时 React 收不到 change）
+    const values = readNamedValues(e.currentTarget as HTMLFormElement, {
+      name: formData.name,
+      ip: formData.ip,
+      ssh_port: String(formData.ssh_port),
+      ssh_user: formData.ssh_user,
+      ssh_password: formData.ssh_password,
+    });
+    if (validate(values)) {
       // 编辑模式且密码留空 → 不传 ssh_password（后端保持原密码）
-      const payload: typeof formData = { ...formData };
+      const payload = {
+        name: values.name,
+        ip: values.ip,
+        ssh_port: Number(values.ssh_port),
+        ssh_user: values.ssh_user,
+        ssh_password: values.ssh_password,
+      };
       if (isEdit && !payload.ssh_password) {
         const { ssh_password: _ssh_password, ...rest } = payload;
         onSubmit(rest);
@@ -118,6 +134,7 @@ export function AddHostModal({ isOpen, onClose, onSubmit, isSubmitting, editingH
             </label>
             <input
               id="host-name"
+              name="name"
               type="text"
               value={formData.name}
               onChange={(e) => setFormData({ ...formData, name: e.target.value })}
@@ -134,6 +151,7 @@ export function AddHostModal({ isOpen, onClose, onSubmit, isSubmitting, editingH
             </label>
             <input
               id="host-ip"
+              name="ip"
               type="text"
               value={formData.ip}
               onChange={(e) => setFormData({ ...formData, ip: e.target.value })}
@@ -150,6 +168,7 @@ export function AddHostModal({ isOpen, onClose, onSubmit, isSubmitting, editingH
             </label>
             <input
               id="host-port"
+              name="ssh_port"
               type="number"
               min={1}
               max={65535}
@@ -167,6 +186,7 @@ export function AddHostModal({ isOpen, onClose, onSubmit, isSubmitting, editingH
             </label>
             <input
               id="host-user"
+              name="ssh_user"
               type="text"
               value={formData.ssh_user}
               onChange={(e) => setFormData({ ...formData, ssh_user: e.target.value })}
@@ -182,6 +202,7 @@ export function AddHostModal({ isOpen, onClose, onSubmit, isSubmitting, editingH
             </label>
             <input
               id="host-password"
+              name="ssh_password"
               type="password"
               value={formData.ssh_password}
               onChange={(e) => setFormData({ ...formData, ssh_password: e.target.value })}

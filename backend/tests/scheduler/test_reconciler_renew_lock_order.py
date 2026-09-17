@@ -40,7 +40,6 @@ from sqlalchemy import select, text
 # / CI 的 PG service），无 PG 时在 conftest 阶段就报错——**刻意不写**「非 PG 就 skip」的分支：
 # 它在 conftest 覆盖 DATABASE_URL 之后不可达，只会把环境问题变成静默跳过。
 
-from backend.api.routes import agent_api as agent_api_mod
 from backend.api.routes.agent_api import (
     _ExtendBatchIn,
     _ExtendBatchItemIn,
@@ -297,9 +296,11 @@ async def test_reconciler_and_extend_batch_same_job_no_deadlock(caplog):
     seed = _seed(lease_seconds=2.5)
     try:
         await async_engine.dispose()
+        from backend.services import agent_lease_extend as lease_extend_mod
+
         go = asyncio.Event()
         cas_entered = asyncio.Event()
-        orig_cas = agent_api_mod._cas_renew_leases
+        orig_cas = lease_extend_mod._cas_renew_leases
 
         async def gated_cas(db, **kwargs):
             cas_entered.set()
@@ -323,7 +324,7 @@ async def test_reconciler_and_extend_batch_same_job_no_deadlock(caplog):
 
         from unittest.mock import patch
 
-        with patch.object(agent_api_mod, "_cas_renew_leases", gated_cas):
+        with patch.object(lease_extend_mod, "_cas_renew_leases", gated_cas):
             extend_task = asyncio.create_task(_extend())
             # 续租已锁 Job 行（prelim 通过 → 进入 renewable → 锁 Job → 到 CAS 门口）
             await asyncio.wait_for(cas_entered.wait(), timeout=15)
