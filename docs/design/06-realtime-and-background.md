@@ -70,7 +70,8 @@ PlanRun 但**不发** `plan_run_status` 广播（`device_lease_reconciler.py` `c
 **租约解锁的收口速率（#2531）**：`device_lease_reconciler` 的 Phase 2
 （UNKNOWN 过宽限 → 释放租约 + 判 FAILED）与 `stale_unknown` 分支**一轮最多排空
 `RECONCILER_DRAIN_BATCH` 台（默认 20）**，且保持「一候选一个事务边界」——
-收口 N 台需要 `ceil(N/批大小)` 个 `RECONCILER_INTERVAL_SECONDS` 周期，而不是 N 个
+收口 N 台需要 `ceil(N/批大小)` 个**排空轮**（#2554 之前每轮都要等一个
+`RECONCILER_INTERVAL_SECONDS`，现在是同一次持锁内的自续轮），而不是 N 个
 （修前这两条分支处理一台就 `break`，实测 12s/台 ≈ 4 台/分钟；按 `agent_api`
 的 60 host × ~17 device ≈ 1000 台容量口径外推，全量解锁要 ≈3.3 小时，期间设备
 一直 `DEVICE_BUSY`）。积压与「至少还要多久」由每轮一条
@@ -79,6 +80,23 @@ gauge 暴露（三桶：`grace_expired` 等待解锁 / `within_grace` 正常宽�
 `missing_ended_at` **不会自愈**的坏时钟行）；被上限截断时另打
 `reconciler_drain_truncated remaining=<n>`。调大批大小只改变单轮持锁窗口，
 不改变「先锁 Job 再锁 Lease」的顺序（见共享行加锁表 I1）。
+
+**排空未完即自续轮（#2554）**：批大小是**事务边界的保护，不是速率旋钮**——
+#2548 之后「一轮最多 20 台」仍然要等下一个 `RECONCILER_INTERVAL_SECONDS` 才解下一批。
+实测每台排空 ≈8–9ms 且线性 ⇒ 1000 台按默认 cap=20 需 50 tick × 15s ≈ **12.5 分钟，
+其中干活只有 ≈9 秒**（占空比 <1%）。现在 `device_lease_reconcile_once()` 在**同一次
+`_reconcile_lock` 持锁之内**重跑整组检查，直到三个出口之一：① 积压排空
+（`grace_expired == 0`）；② 墙钟预算 `RECONCILER_DRAIN_MAX_SECONDS`（默认 5s =
+周期的 1/3）用完，打 `reconciler_drain_budget_exhausted remaining=<n>`；
+③ **无进展**（本轮读数不比上轮小），立刻让位并打 `reconciler_drain_no_progress`——
+毒行不得把预算烧成空转。`0` 是显式的**关闭自续**开关（回到 #2548 形状）。
+每轮自续刷新一次积压 gauge 并打 `reconciler_drain_selfcontinued rounds/remaining/elapsed_ms`，
+所以「停在哪儿」始终有人能看见。同一处改动也给 `reconciler_unknown_backlog` 的
+`eta_min_seconds` 标上口径：`eta_basis=selfcontinue` 时它只是「纯等 tick」的悲观上界
+（真实进度看自续轮的 `remaining/elapsed_ms`），`eta_basis=tick_only` 才是原来的承诺——
+同一个数字在两种节奏下含义不同，不标注就是把「快好了」读成「还要 12.5 分钟」。
+互斥与背压语义不变：自续不是再起一个 job，
+`reconciler_skip_previous_still_running` 仍是上一轮没跑完时的唯一出口。
 
 **约束**：默认单进程后端。ADR-0027 P3-3：除 `saq_queue_depth_poll` 外，全部 singleton job 经 leader election（`admission_pump` / `counter_reconcile` 为函数内 leadership，其余经 `_instrumented(..., singleton=True)`）。
 
