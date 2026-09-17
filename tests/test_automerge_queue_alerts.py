@@ -7,7 +7,9 @@
 3. 指纹变化 → 编辑存量告警；
 4. 队首全绿 + behind → 关闭存量告警 + 正常 update-branch；
 5. 队列空 → 关闭存量告警；
-6. 告警创建失败 → reconcile 仍退出 0（可见性通道不阻断队列）。
+6. 告警创建失败 → reconcile 仍退出 0（可见性通道不阻断队列）；
+7. #2556：checks「从未创建」（rollup 缺条目 + 该 sha 上 `ci.yml` run 数 0）→
+   一次带冷却的自续重基；同一 `(PR, sha)` 第二次不再动手，只升级告警措辞。
 """
 from __future__ import annotations
 
@@ -55,6 +57,7 @@ def _write_fake_gh(bindir: Path, scenario: dict, call_log: Path) -> None:
     scenario_file = bindir / "scenario.json"
     scenario_file.write_text(json.dumps(scenario), encoding="utf-8")
     argv_log = call_log.with_name("argv.jsonl")
+    token_log = call_log.with_name("tokens.jsonl")
     gh = bindir / "gh"
     gh.write_text(
         f"""#!/usr/bin/env python3
@@ -63,6 +66,7 @@ import json, os, sys
 scenario = json.load(open({str(scenario_file)!r}, encoding="utf-8"))
 log_path = {str(call_log)!r}
 argv_log_path = {str(argv_log)!r}
+token_log_path = {str(token_log)!r}
 args = sys.argv[1:]
 with open(log_path, "a", encoding="utf-8") as fh:
     fh.write(" ".join(args) + "\\n")
@@ -70,6 +74,10 @@ with open(log_path, "a", encoding="utf-8") as fh:
 # 而「脚本实际写出的 issue body」正是此前测试从未检查过的东西。
 with open(argv_log_path, "a", encoding="utf-8") as fh:
     fh.write(json.dumps(args) + "\\n")
+# #2556：记录该次调用用的 GH_TOKEN —— 判据读取必须走有 Actions 读权限的那个令牌
+# （见 probe_gh）。只用于断言「用了哪个」，不涉及真实凭据。
+with open(token_log_path, "a", encoding="utf-8") as fh:
+    fh.write(json.dumps({{"args": args, "gh_token": os.environ.get("GH_TOKEN", "")}}) + "\\n")
 
 def out(text=""):
     if text:
@@ -102,6 +110,13 @@ if args[0] == "api":
         out(scenario.get("merge_method_out", ""))
     if "actions/runs?" in path:
         out('{{"workflow_runs": []}}')
+    # #2556：队首 head sha 上 ci.yml 的 run 数（脚本用 `--jq .total_count` 取值，
+    # 故这里直接回 jq 结果）。缺省 1＝「触发正常、跑了没上报」，保持既有用例不变；
+    # `ci_run_probe_rc` 注入探测失败。
+    if "actions/workflows/ci.yml/runs" in path:
+        if scenario.get("ci_run_probe_rc"):
+            fail(scenario["ci_run_probe_rc"])
+        out(str(scenario.get("ci_run_total", 1)))
     if "issues?labels=" in path:
         out(scenario.get("open_issue", ""))
     if "/compare/" in path:
@@ -122,7 +137,9 @@ out()
     gh.chmod(gh.stat().st_mode | stat.S_IEXEC)
 
 
-def _run_queue(tmp_path: Path, scenario: dict) -> tuple[subprocess.CompletedProcess, str]:
+def _run_queue(
+    tmp_path: Path, scenario: dict, *, alert_token: str | None = None
+) -> tuple[subprocess.CompletedProcess, str]:
     bindir = tmp_path / "bin"
     bindir.mkdir()
     call_log = tmp_path / "calls.log"
@@ -133,6 +150,8 @@ def _run_queue(tmp_path: Path, scenario: dict) -> tuple[subprocess.CompletedProc
     env["GITHUB_REPOSITORY"] = _REPO
     env["PATH"] = f"{bindir}:{env['PATH']}"
     env.pop("ALERT_TOKEN", None)
+    if alert_token is not None:
+        env["ALERT_TOKEN"] = alert_token
     result = subprocess.run(
         ["bash", str(_SCRIPT)], capture_output=True, text=True, env=env, check=False
     )
@@ -146,6 +165,14 @@ def _assert_called(calls: str, needle: str) -> None:
 def _read_argv(tmp_path: Path) -> list[list[str]]:
     """读出假 gh 记录的 argv（每行一个 JSON 数组，保留含换行的参数原样）。"""
     log = tmp_path / "argv.jsonl"
+    if not log.exists():
+        return []
+    return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line]
+
+
+def _tokens_of(tmp_path: Path) -> list[dict]:
+    """读出假 gh 记录的「每次调用用了哪个 GH_TOKEN」（#2556 判据令牌断言用）。"""
+    log = tmp_path / "tokens.jsonl"
     if not log.exists():
         return []
     return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line]
@@ -449,22 +476,30 @@ def test_completed_failure_still_opens_alert(tmp_path):
 
 
 def test_missing_check_entry_still_opens_alert(tmp_path):
-    """**超出启动窗口**仍缺条目才是真 missing，应告警（#1792 第三类）。"""
+    """**超出启动窗口**仍缺条目：该 sha 上 CI 跑过（`ci_run_total`>0）却始终没上报
+    此 check —— 属人工排查（#1792 第三类），不得自愈重基（#2556 判据的另一半）。"""
     checks = {k: ("COMPLETED", "SUCCESS") for k in _ALL_GREEN if k != "CodeQL"}
+    detail = _head_detail_with_status(checks, started_at="2020-01-01T00:00:00Z")
+    detail["headRefOid"] = _SELF_HEAL_SHA
     result, calls = _run_queue(
         tmp_path,
         {
             "pr_rows": [_HEAD_ROW],
             # 关键：给已注册 check 一个**久远**的 startedAt，表示早已超出启动窗口
-            "head_detail": _head_detail_with_status(checks, started_at="2020-01-01T00:00:00Z"),
+            "head_detail": detail,
             "open_issue": "",
+            "ci_run_total": 3,
         },
     )
 
     assert result.returncode == 0, result.stderr
     _assert_called(calls, "issue create")
-    # 真正的 missing 走 failed 分支（与「进行中」区分）——日志措辞为 "not reported"
+    _assert_not_called(calls, "pr update-branch")
+    # 真正的 missing 走告警分支（与「进行中」区分）——日志措辞为 "not reported"
     assert "CodeQL not reported (missing)" in result.stdout
+    body = _body_of(_read_argv(tmp_path), "create")
+    assert "CodeQL:missing" in body
+    assert "从未上报" in body
 
 
 # ── #1792 第三类：启动窗口内的「尚未注册」不得告警 ──────────────────────────
@@ -576,3 +611,158 @@ def test_codeql_failure_still_opens_alert(tmp_path):
     assert result.returncode == 0, result.stderr
     _assert_called(calls, "issue create")
     assert "CodeQL" in result.stdout and "FAILURE" in result.stdout
+
+
+# ── #2556：checks「从未创建」（GitHub 触发丢失）→ 一次带冷却的自续重基 ──────
+
+
+_SELF_HEAL_SHA = "a" * 40
+
+
+def _never_created_detail(*, sha: str = _SELF_HEAL_SHA) -> dict:
+    """#2529 实证形态：部分 required check 在 rollup 里**全缺**，且该 head sha 上
+    `ci.yml` 一个 run 都没有。startedAt 取久远值以越过启动窗口（真实事件里
+    Vercel/Cursor 的 check-suite 提供了这个时间戳）。
+
+    对照的另一半是 run 数 > 0：那时缺条目意味着「跑了没上报」，走人工（见
+    `test_missing_check_entry_still_opens_alert`）。
+    """
+    checks = {
+        k: ("COMPLETED", "SUCCESS") for k in _ALL_GREEN if k not in ("CodeQL", "pr-typecheck")
+    }
+    detail = _head_detail_with_status(checks, started_at="2020-01-01T00:00:00Z")
+    detail["headRefOid"] = sha
+    return detail
+
+
+def _self_heal_scenario(**overrides) -> dict:
+    """自愈形态的默认场景：从未创建 + 落后 main（base-change 可做）。"""
+    scenario = {
+        "pr_rows": [_HEAD_ROW],
+        "head_detail": _never_created_detail(),
+        "open_issue": "",
+        "ci_run_total": 0,
+        "behind_by": 1,
+    }
+    scenario.update(overrides)
+    return scenario
+
+
+def test_never_created_checks_self_heal_with_one_branch_update(tmp_path):
+    """#2556 正向：run 数为 0 → 执行一次 update-branch（唯一的自愈动作），
+    告警文案也如实改成「已自续重基」，不再说「不对红队首自动重基」。"""
+    result, calls = _run_queue(tmp_path, _self_heal_scenario())
+
+    assert result.returncode == 0, result.stderr
+    _assert_called(calls, "pr update-branch")
+    _assert_called(calls, "issue create")
+    body = _body_of(_read_argv(tmp_path), "create")
+    assert "已自续重基一次" in body, body
+    assert "不对红队首自动重基" not in body, "那是「判为红」的措辞，自愈形态必须换掉"
+    assert f"<!-- queue-selfheal: head=#101 sha={_SELF_HEAL_SHA} -->" in body, body
+
+
+def test_second_reconcile_on_same_sha_does_not_self_heal_again(tmp_path):
+    """#2556 冷却（防「missing ↔ 重基」死循环的正向钉子）：把上一轮**脚本自己
+    写出**的正文喂回，同一 `(PR, sha)` 第二次不得再 update-branch，只升级措辞。
+
+    去掉冷却（或把冷却键从 `(pr, sha)` 放宽成 `pr`）都会让本用例红。
+    """
+    first = tmp_path / "first"
+    first.mkdir()
+    result, _ = _run_queue(first, _self_heal_scenario())
+    assert result.returncode == 0, result.stderr
+    first_body = _body_of(_read_argv(first), "create")
+
+    second = tmp_path / "second"
+    second.mkdir()
+    result2, calls2 = _run_queue(
+        second, _self_heal_scenario(open_issue="999", issue_body=first_body)
+    )
+
+    assert result2.returncode == 0, result2.stderr
+    _assert_not_called(calls2, "pr update-branch")
+    _assert_called(calls2, "issue edit")
+    escalated = _body_of(_read_argv(second), "edit")
+    assert "已试过自续重基一次仍无 run" in escalated, escalated
+
+
+def test_exhausted_self_heal_alert_is_deduped(tmp_path):
+    """冷却用尽后的重复 reconcile 不刷屏：指纹（含 sha 与自愈状态）未变 → 零写入。"""
+    first = tmp_path / "first"
+    first.mkdir()
+    _run_queue(first, _self_heal_scenario())
+    first_body = _body_of(_read_argv(first), "create")
+
+    second = tmp_path / "second"
+    second.mkdir()
+    _run_queue(second, _self_heal_scenario(open_issue="999", issue_body=first_body))
+    escalated = _body_of(_read_argv(second), "edit")
+
+    third = tmp_path / "third"
+    third.mkdir()
+    result3, calls3 = _run_queue(
+        third, _self_heal_scenario(open_issue="999", issue_body=escalated)
+    )
+
+    assert result3.returncode == 0, result3.stderr
+    _assert_not_called(calls3, "pr update-branch")
+    _assert_not_called(calls3, "issue edit")
+    _assert_not_called(calls3, "issue create")
+    assert "unchanged" in result3.stdout, result3.stdout
+
+
+def test_self_heal_cooldown_is_keyed_by_head_sha(tmp_path):
+    """冷却键是 `(PR, head_sha)`：换了 head（如自愈后的新提交）就是全新判定，
+    旧 sha 的标记不得把它挡住。"""
+    stale_marker = f"<!-- queue-selfheal: head=#101 sha={'b' * 40} -->"
+    result, calls = _run_queue(
+        tmp_path, _self_heal_scenario(open_issue="999", issue_body=stale_marker)
+    )
+
+    assert result.returncode == 0, result.stderr
+    _assert_called(calls, "pr update-branch")
+
+
+def test_never_created_without_base_change_escalates_without_push(tmp_path):
+    """队首没落后 main 时没有 base-change 可做：不得调用 update-branch（那会硬失败
+    并染红 reconcile），直接在告警里交回人工。"""
+    result, calls = _run_queue(tmp_path, _self_heal_scenario(behind_by=0))
+
+    assert result.returncode == 0, result.stderr
+    _assert_not_called(calls, "pr update-branch")
+    _assert_called(calls, "issue create")
+    body = _body_of(_read_argv(tmp_path), "create")
+    assert "未落后 main" in body, body
+
+
+def test_ci_run_probe_failure_does_not_self_heal(tmp_path):
+    """探测失败（API 错误/无 head sha）时判据未知——不得当成「从未创建」去重基，
+    仍按人工告警，且不因告警失败染红 reconcile。"""
+    result, calls = _run_queue(tmp_path, _self_heal_scenario(ci_run_probe_rc=1))
+
+    assert result.returncode == 0, result.stderr
+    _assert_not_called(calls, "pr update-branch")
+    _assert_called(calls, "issue create")
+    body = _body_of(_read_argv(tmp_path), "create")
+    assert "探测失败" in body, body
+
+
+def test_ci_run_probe_uses_the_actions_capable_token(tmp_path):
+    """判据读取必须走 ALERT_TOKEN（workflow 注入的 GITHUB_TOKEN，job 授了
+    `actions: write`）：AUTO_MERGE_PAT 的 scope 集不受本仓控制（#1783 已证其缺
+    `workflow` scope）。若改回默认 GH_TOKEN，PAT 一旦没有 Actions 读权限，自愈就会
+    静默退化成「每轮交给人工」——本单的核心能力等于没上。"""
+    result, calls = _run_queue(
+        tmp_path, _self_heal_scenario(), alert_token="ghs_alerts_token"
+    )
+
+    assert result.returncode == 0, result.stderr
+    _assert_called(calls, "pr update-branch")
+    probe_calls = [
+        c
+        for c in _tokens_of(tmp_path)
+        if len(c["args"]) > 1 and "actions/workflows/ci.yml/runs" in c["args"][1]
+    ]
+    assert probe_calls, "判据读取（ci.yml runs）没有发生"
+    assert all(c["gh_token"] == "ghs_alerts_token" for c in probe_calls), probe_calls

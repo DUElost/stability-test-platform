@@ -40,7 +40,10 @@ from sqlalchemy.orm import Session
 
 from backend.core.audit import record_audit
 from backend.core.job_timeout_config import ABORT_ACK_GRACE_SECONDS
-from backend.core.metrics import record_plan_run_abort_lock_seconds
+from backend.core.metrics import (
+    record_plan_run_abort_fanout,
+    record_plan_run_abort_lock_seconds,
+)
 from backend.models.enums import JobStatus, PlanRunStatus
 from backend.models.job import JobInstance
 from backend.models.plan_run import PlanRun, PlanRunHost
@@ -877,11 +880,24 @@ def abort_plan_run(
 
     db.refresh(pr)
 
+    # #703 第 3 面 / #1880：把「一次 abort 到底牵动多少 job」变成可查序列。
+    # 那次「单台 host 热更新把整轮 run 终态化」在日志里只能逐条数、指标上零痕迹，
+    # 而作用域错位只有**换算成数量并按 scope 分开看**才看得见：`scope="host"` 的样本
+    # 落到 run 量级的桶里，就是同一种错位复发。
+    # 记两类之和——已终态化的（PENDING→ABORTED）与已下发控制信号、等回收器收口的
+    # （RUNNING）：对「这次扇出多大」而言两者都是这次 abort 造成的工作量。
+    record_plan_run_abort_fanout(
+        "host" if host_id is not None else "run",
+        len(aborted_jobs) + len(abort_requested_jobs),
+    )
+
     logger.info(
-        "plan_run_aborted plan_run=%d phase=%s aborted_jobs=%d",
+        "plan_run_aborted plan_run=%d phase=%s scope=%s aborted_jobs=%d abort_requested_jobs=%d",
         plan_run_id,
         "precheck" if in_precheck else "running",
+        "host" if host_id is not None else "run",
         len(aborted_jobs),
+        len(abort_requested_jobs),
     )
 
     return {
