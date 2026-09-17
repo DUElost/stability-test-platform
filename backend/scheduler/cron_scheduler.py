@@ -286,7 +286,9 @@ def purge_run_storage_dirs(run_ids: list, jobs_by_run: dict | None = None) -> se
 
     for run_id in run_ids:
         # jira/{run_id}/ holds extract bundles (#1698); omit → orphan after row delete.
-        for sub in ("devices", "dedup", "jira"):
+        # _meta/{run_id}/ (#2188 D-step manifest shards) shares the run lifecycle;
+        # omit → residue no retention pass can ever reach (E-2).
+        for sub in ("devices", "dedup", "jira", "_meta"):
             _purge(base / sub / str(int(run_id)), run_id)
         # #2031：jobs/{job_id}/ 的唯一索引是 StepTrace/JobArtifact 行，而它们在
         # 同一批里被删（保留期 3 天 << artifact 清理器 30 天）——不在这里清掉即

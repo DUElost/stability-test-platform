@@ -839,6 +839,57 @@ def test_monitoring_config_matches_the_backend_defaults(tmp_path, monkeypatch):
     assert "--config.file=/etc/stp/prometheus/prometheus.yml" in args
 
 
+def test_monitoring_installs_alert_rules_and_guard_units(tmp_path, monkeypatch):
+    """#2488：告警规则与守卫单元必须随监控栈一起落地。
+
+    此前 `deploy/prometheus/alerts-stability-platform.yml` 不在任何安装清单里，模板
+    `prometheus.yml` 连 `rule_files` 段都没有 ⇒ 站点上的 Prometheus **结构上不可能**产生
+    任何告警，而 installer 照样报 `monitoring_ready`（它只看服务起没起、`/-/ready` 通不通）。
+    净效果是「17 条规则一条也没上线」，与本机那份 7/10 手工拷贝停在 10 条是同一件事的两种表现。
+    """
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    prepare(tmp_path)
+    _distro_units(tmp_path)
+    ops = InstallingFakeOps(hostname="control-i3.synthetic.invalid", mounts={str(tmp_path / "mnt/share")})
+
+    report = invoke(tmp_path, config_path=_monitoring_site(tmp_path), ops=ops)
+
+    assert report["status"] == "PASS", report
+    rules = _system_file(tmp_path, "etc/stp/prometheus/rules/alerts-stability-platform.yml")
+    text = rules.read_text(encoding="utf-8")
+    assert "alert: Stability" in text, "规则文件没装上去"
+    assert "Rendered by the site installer for" in text, "缺归属标记：第二站点会静默覆盖本站规则"
+    assert "<deploy-root>" not in text, "占位符未替换"
+
+    # 只装文件不写 rule_files 等于没装：Prometheus 不知道该去哪找规则
+    conf = _system_file(tmp_path, "etc/stp/prometheus/prometheus.yml").read_text(encoding="utf-8")
+    assert "rule_files:" in conf and "rules/*.yml" in conf
+
+    joined = [" ".join(call) for call in ops.calls]
+    for unit in ("stp-script-guard.service", "stp-script-guard.timer"):
+        assert _system_file(tmp_path, f"etc/systemd/system/{unit}").is_file(), unit
+    # 守卫 timer 不 restart（那不是发行版包那套 $ARGS 问题），但必须 enable，否则又是
+    # 「指标有人产、没人跑」
+    assert "systemctl enable --now stp-script-guard.timer" in joined
+
+
+def test_alert_rules_file_and_installed_copy_stay_in_sync(tmp_path, monkeypatch):
+    """规则文件带占位符头 ⇒ 安装的是**渲染产物**；这里守住源文件本身仍是合法 YAML 规则。
+
+    结构层契约（tests/test_prometheus_alerts_contract.py）读的是仓库这份，promtool 读的
+    也是它；若安装路径改了内容语义（例如占位符替换吃掉注释块），两侧会静默分叉。
+    """
+    import yaml as _yaml
+
+    src = REPO_ROOT / "deploy" / "prometheus" / "alerts-stability-platform.yml"
+    data = _yaml.safe_load(src.read_text(encoding="utf-8"))
+    names = {r["alert"] for g in data["groups"] for r in g.get("rules", []) if "alert" in r}
+    assert "StabilityScriptGuardUntrusted" in names and len(names) >= 19
+    rendered = str(tmp_path / "x")
+    body = src.read_text(encoding="utf-8").replace("<deploy-root>", rendered)
+    assert _yaml.safe_load(body), "占位符替换后不再是合法 YAML"
+
+
 def test_custom_port_is_rendered(tmp_path, monkeypatch):
     monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
     prepare(tmp_path)
@@ -1083,6 +1134,42 @@ def test_upgrade_without_agents_keeps_the_existing_export(tmp_path, monkeypatch)
     assert not any(tuple(call[:2]) == ("exportfs", "-ra") for call in ops2.calls), (
         "保留路径不应重载导出表（重载本身无害，但没必要动它）"
     )
+    # #2315 残余（审计重开）：保留路径必须确保服务在跑——「文件还在」不等于「导出可用」
+    assert ("systemctl", "enable", "--now", stages.NFS_SERVER_UNIT) in ops2.calls, (
+        "保留路径没有确保 nfs-server 在跑"
+    )
+
+
+def test_kept_branch_fails_when_nfs_server_cannot_start(tmp_path, monkeypatch):
+    """#2315 残余：kept 分支拉不起 nfs-server 时如实 FAIL（不得以 PASS 掩盖服务未起）。"""
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    prepare(tmp_path)
+    with_agents = _exporting_site(
+        tmp_path, agents=_agent_config(tmp_path, target="198.51.100.7"), name="site-agents.yaml",
+    )
+    ops1 = FakeOps(
+        hostname="control-i3.synthetic.invalid",
+        mounts={str(tmp_path / "mnt/share")},
+        commands={"python3", "systemctl", "nginx", "exportfs"},
+    )
+    first = invoke(tmp_path, config_path=with_agents, ops=ops1)
+    assert first["status"] == "PASS", first
+    published = _exports_file(tmp_path).read_text(encoding="utf-8")
+
+    no_agents = _exporting_site(tmp_path, agents=[], name="site-no-agents.yaml")
+    ops2 = FakeOps(
+        hostname="control-i3.synthetic.invalid",
+        mounts={str(tmp_path / "mnt/share")},
+        commands={"python3", "systemctl", "nginx", "exportfs"},
+        responses={"enable --now nfs-server": (1, "Failed to start nfs-server.service")},
+    )
+    second = invoke(tmp_path, config_path=no_agents, ops=ops2)
+
+    assert second["status"] == "FAIL", second
+    assert "install_export" in codes(second)
+    assert "export_kept" not in codes(second), "服务没起来不得报保留成功"
+    # 失败路径同样不动既有导出文件
+    assert _exports_file(tmp_path).read_text(encoding="utf-8") == published
 
 
 def test_dry_run_plans_the_export_without_writing(tmp_path):

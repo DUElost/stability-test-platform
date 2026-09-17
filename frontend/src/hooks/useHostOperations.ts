@@ -496,12 +496,19 @@ export function useHostOperations(opts?: {
     try {
       const res = await api.agentInstall.cancel(hostId);
       if (res.canceled) return null;
+      // #2255 残余：未受理的两种成因（已终态 / owner 不可达）给中文口径——
+      // 后端 message 是英文，直接落进行内红字会被读成"操作失败"。
+      const message = '取消未生效：该运行可能已结束，终态会自动刷新';
       setOps((prev) =>
-        prev.map((op) => (op.hostId === hostId ? { ...op, error: res.message } : op)),
+        prev.map((op) => (op.hostId === hostId ? { ...op, error: message } : op)),
       );
-      return res.message;
+      return message;
     } catch (error) {
-      const message = extractErrorMessage(error);
+      // 409 = 当前没有在跑的安装（按钮只出现在 running 行，这是竞态：点下去时刚好结束）
+      const message =
+        extractHttpStatus(error) === 409
+          ? '该主机当前没有在跑的安装（可能刚结束，终态会自动刷新）'
+          : `取消请求失败：${extractErrorMessage(error)}`;
       setOps((prev) =>
         prev.map((op) => (op.hostId === hostId ? { ...op, error: message } : op)),
       );
