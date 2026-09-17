@@ -17,7 +17,7 @@ Class: bug-fix
 
 路由退化为 `ok(await extend_agent_leases_batch(...))`。
 
-`agent_api.py` **2616 → 2306**（本刀约 -310）。
+`agent_api.py` **2616 → 2309**（本刀约 -307）。
 
 ## Alternatives
 
@@ -33,7 +33,7 @@ Class: bug-fix
   不死锁 → **18 passed**；
 - 测试补丁点改到 `agent_lease_extend`（`_LEASE_EXTEND_BATCH_MAX` /
   `_cas_renew_leases`）；
-- `ruff` → All checks passed；`check:quick` → 见 PR。
+- `ruff` → All checks passed；`check:quick` → **10 gates OK**。
 
 ## Revisit
 
