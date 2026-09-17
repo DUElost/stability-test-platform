@@ -1,10 +1,18 @@
 import apiClient, { unwrapApiResponse } from './client';
 import type { JiraDraft, JiraDraftListItem, RunReport } from './types';
 
-/** Job-level run report (path param is Job ID, not PlanRun ID). */
+/**
+ * Job-level run report (path param is Job ID, not PlanRun ID).
+ *
+ * #2420：URL 里的这个 id 一直是 `JobInstance.id`，端点本身却不校验「这个 job 属于
+ * 哪个 run」。传 `planRunId` 即要求配对（从 PlanRun 详情进来时一定传），后端不匹配
+ * 就 404 `job_not_in_plan_run`；不传保持旧行为，脚本与历史深链不受影响。
+ */
 export const runs = {
-  getCachedReport: (jobId: number) =>
-    unwrapApiResponse<RunReport>(apiClient.get(`/runs/${jobId}/report/cached`)),
+  getCachedReport: (jobId: number, opts?: { planRunId?: number }) =>
+    unwrapApiResponse<RunReport>(apiClient.get(`/runs/${jobId}/report/cached`, {
+      params: opts?.planRunId != null ? { plan_run_id: opts.planRunId } : undefined,
+    })),
 
   getCachedJiraDraft: (jobId: number) =>
     unwrapApiResponse<JiraDraft>(apiClient.get(`/runs/${jobId}/jira-draft/cached`)),
