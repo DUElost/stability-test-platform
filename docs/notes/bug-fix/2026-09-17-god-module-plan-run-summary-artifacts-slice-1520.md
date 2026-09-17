@@ -32,3 +32,12 @@ Class: bug-fix
 
 - catalog / archive 合入后评估残余（export 已薄；`_plan_run_out` 若仍在路由则归 catalog）；
 - Issue #1520 保持 OPEN；`Refs #1520`。
+
+## Merge conflict vs main（#2565 landed）
+
+#2565 合入后本分支 `mergeable_state=dirty`。冲突仅
+`backend/api/routes/plan_runs.py` 模型 import 块：本刀仍带 list/detail 时代的
+`Device`/`Plan`/`StepTrace`/`PRECHECK_*`，main 带 artifacts 仍在路由时的
+`JobArtifact`/`JobInstance`。两边 ownership 下沉后路由均不再引用——删冲突块、
+去掉多余 `func`/`select`，保留 `plan_run_catalog` + `plan_run_summary` /
+`plan_run_job_artifacts` / `plan_run_result_views` 双切片接线。
