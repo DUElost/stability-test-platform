@@ -144,6 +144,14 @@ GATES = {
         ROOT,
         None,
     ),
+    # 上帝文件行数封顶棘轮（#736）：超限/条目过期 → 红；毫秒级纯读。
+    # 棘轮语义（只许下调、上调须写明理由）与基线见该脚本抬头。
+    "god-files": (
+        f"{PY} tools/dev/check_god_files_ceiling.py --self-test && "
+        f"{PY} tools/dev/check_god_files_ceiling.py",
+        ROOT,
+        None,
+    ),
     # Harness 摄取矩阵探针（ADR-0034 P2 验收/#855-b 落地）：黑盒双题探针 +
     # EXPECTED 偏离检测（行为漂移监测，含 #857 上游修复对照行）。真实 LLM
     # 会话分钟级 × 外部依赖——仅 check:gov 手跑，不进 quick/pr/full
@@ -268,14 +276,14 @@ PROFILES = {
     "check:quick": [
         "schema-at-head", "env-inventory",
         "ruff", "eslint", "tsc", "knip", "compileall", "orphan-models",
-        "gov-surface", "ai-work",
+        "gov-surface", "ai-work", "god-files",
     ],
     "check:pr": [
         "schema-at-head", "env-inventory",
         "ruff", "eslint", "tsc", "knip", "compileall", "layering", "orphan-models",
         "pollution", "immutability", "alembic-immutability", "invariant-diff",
         "gov-surface", "ip-leak", "prom-alerts", "agent-tests-collect", "agent-tests",
-        "pr-migrate",
+        "pr-migrate", "god-files",
     ],
     # 治理面专项：结构门禁 + skill 用量探针 + Harness 摄取矩阵（手跑，分钟级）
     "check:gov": ["gov-surface", "gov-skills", "harness-ingest"],

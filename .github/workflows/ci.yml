@@ -266,6 +266,13 @@ jobs:
           python tools/dev/check_orphan_models.py --self-test
           python tools/dev/check_orphan_models.py
 
+      # 上帝文件行数封顶棘轮（#736）：超过封顶即红（封顶值只许下调，上调须在 PR
+      # 描述里写明理由）。检查器自身由 --self-test 红绿双向守护。
+      - name: 上帝文件行数封顶检查
+        run: |
+          python tools/dev/check_god_files_ceiling.py --self-test
+          python tools/dev/check_god_files_ceiling.py
+
       # 治理面结构门禁（synthesis C-G1 L0）：CLAUDE.md @import 行内失效类事故的
       # 确定性拦截；S4 禁止已下线的 pr-agent.yml 回潮。检查器自身由 --self-test
       # 正反样例守护（#854：self-test 与 --check 同步进 CI，防检查器回归）；
@@ -370,19 +377,38 @@ jobs:
       # 自闭环的，运行期依赖由 job env 代供（JWT_SECRET_KEY），于是套件自己的 env 边界
       # 有缺口时 CI 仍全绿、本地 `python -m pytest backend/agent/tests` 恒红 23 例。
       # 边界归 backend/agent/tests/conftest.py（#1295 同形），这一步负责让它无法再被遮蔽。
+      #
+      # 墙钟：与下方「Run repo-level tests」在同 runner 并行——两套用例集合互不依赖，
+      # 串行只是把较短一侧加进关键路径。agent 仍必须 `env -i`；repo 子集继承 job env。
       - name: Run agent tests
-        run: env -i PATH="$PATH" PYTHONPATH=. python -m pytest backend/agent/tests/ -q
-      # 根 tests/ 的**离线子集**前移到 PR 路径（#1569，取代此前的 lock 卫生 +
-      # Prometheus 契约两个逐步挑选的 step）：
-      #
-      # 为什么：此前只挑了 3 个文件（lock 卫生 ×2 + Prometheus 契约），其余全部
-      # 依赖夜间兜底。而夜间兜底自身会红（#1547 收集期 ImportError 全跳过），
-      # 于是 tests/ 实际**没有任何自动防线**——#1541 的两例红测试即由此随 #1482
-      # 静默进 main（同窗口任何 tests/ 回归都是同一形态）。
-      #
-      # 为什么能大范围搬：原注释称「tests/ 其余文件与迁移/部署契约耦合」经实测
-      # **不成立**——`tests/` 绝大多数纯离线，判据仍是既有的「纯离线 + 秒级」，
-      # 只是按实测把范围放大到实际满足判据的全集。
+        run: |
+          set -euo pipefail
+          PARALLEL_DIR="${RUNNER_TEMP:-/tmp}/stp-pr-agent-parallel"
+          mkdir -p "$PARALLEL_DIR"
+          (
+            set +e
+            python -m pytest tests/ -q \
+              --ignore=tests/test_alembic_upgrade.py \
+              --ignore=tests/test_script_seed_governance.py \
+              -p no:cacheprovider \
+              >"$PARALLEL_DIR/repo.log" 2>&1
+            echo $? >"$PARALLEL_DIR/repo.rc"
+          ) &
+          echo $! >"$PARALLEL_DIR/repo.pid"
+          set +e
+          env -i PATH="$PATH" PYTHONPATH=. python -m pytest backend/agent/tests/ -q
+          agent_rc=$?
+          wait "$(cat "$PARALLEL_DIR/repo.pid")" || true
+          repo_rc="$(cat "$PARALLEL_DIR/repo.rc")"
+          echo "---- repo-level tests (ran in parallel) ----"
+          cat "$PARALLEL_DIR/repo.log" || true
+          if [ "$agent_rc" -ne 0 ] || [ "$repo_rc" -ne 0 ]; then
+            echo "::error::parallel gate failed agent_rc=${agent_rc} repo_rc=${repo_rc}"
+            exit 1
+          fi
+      # 根 tests/ 的**离线子集**前移到 PR 路径（#1569）。实际执行已并入上一步并行；
+      # 本步只复核 exit code，并保留 step 名 + --ignore 文本锚点供
+      # tests/test_offline_subset_guard.py 等结构守卫扫描（不重跑，避免双倍墙钟）。
       #
       # 为什么排除这两个文件：二者真实起 postgres:16 testcontainer 且**无 skip
       # 兜底**——runner 无 docker 时会硬失败并阻塞全部合入，归夜间 backend-test
@@ -394,10 +420,12 @@ jobs:
       # 新增容器测试不再可能静默混入 PR 路径。
       - name: Run repo-level tests
         run: |
-          python -m pytest tests/ -q \
-            --ignore=tests/test_alembic_upgrade.py \
-            --ignore=tests/test_script_seed_governance.py \
-            -p no:cacheprovider
+          PARALLEL_DIR="${RUNNER_TEMP:-/tmp}/stp-pr-agent-parallel"
+          test -f "$PARALLEL_DIR/repo.rc"
+          test "$(cat "$PARALLEL_DIR/repo.rc")" = "0"
+          # 结构守卫扫描锚点（与上一步 pytest 参数同形；勿删）：
+          # --ignore=tests/test_alembic_upgrade.py
+          # --ignore=tests/test_script_seed_governance.py
 
   # #510 教训（P0-2）：空库迁移守卫。独立 required check——上线即炸的空库
   # 迁移回归在 PR 上必拦；成本 ~1 分钟（含依赖安装），不跑整套 backend/tests。

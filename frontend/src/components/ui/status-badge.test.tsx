@@ -34,6 +34,42 @@ describe("StatusBadge", () => {
     expect(screen.getByText("高")).toBeInTheDocument();
   });
 
+  /**
+   * #2494 / ADR-0045 D2·D3：对外风险词表是**级别本身**（S/A/B/UNKNOWN），
+   * 「高/中/低」只是这里的一处文案。缺任一键 = 那种风险的徽标恒显「未知」，
+   * 而同屏 S/A/B 计数照常渲染 —— #2418 的同型缺陷，只是换了词表。
+   */
+  it.each([
+    ["S", "高", "destructive"],
+    ["A", "中", "warning"],
+    ["B", "低", "success"],
+  ] as const)("renders risk %s as %s（%s）", (level, label, variant) => {
+    render(<StatusBadge kind="risk" status={level} />);
+    expect(screen.getByText(label)).toBeInTheDocument();
+    expect(screen.queryByText("未知")).toBeNull();
+    // 着色轴同样要钉住：S 与 B 同色 = 把「高/低」压回一个视觉桶（D4 的反面）
+    expect(resolveStatusEntry("risk", level).variant).toBe(variant);
+  });
+
+  /**
+   * UNKNOWN 的文案与 FALLBACK 同形（都叫「未知」），DOM 上分不出它是显式键还是兜底。
+   * 真判据是**键存在性**，那条由离线门禁钉：
+   * `tests/test_risk_vocabulary_drift.py::test_every_outward_risk_level_has_a_badge_key`
+   * 直接解析这张表，缺 S/A/B/UNKNOWN 任一键即红。
+   */
+  it("renders risk UNKNOWN as 未知", () => {
+    render(<StatusBadge kind="risk" status="UNKNOWN" />);
+    expect(screen.getByText("未知")).toBeInTheDocument();
+  });
+
+  it("keeps HIGH/MEDIUM/LOW for alert severity (D5 另一条轴，值域不动)", () => {
+    for (const severity of ["HIGH", "MEDIUM", "LOW"]) {
+      const { unmount } = render(<StatusBadge kind="risk" status={severity} />);
+      expect(screen.queryByText("未知")).toBeNull();
+      unmount();
+    }
+  });
+
   it("renders priority Critical with destructive variant", () => {
     render(<StatusBadge kind="priority" status="Critical" />);
     expect(screen.getByText("Critical")).toBeInTheDocument();

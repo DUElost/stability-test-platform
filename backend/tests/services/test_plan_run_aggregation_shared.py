@@ -570,3 +570,160 @@ def test_maybe_notify_risk_high_emits_once_for_level_s():
     assert "risk_level=S" in context["risk_summary"]
     assert pr.run_context["risk_high_notified"]["risk_level"] == "S"
     db.commit.assert_called()
+
+
+# ── #1591-④：越过刷机里程碑后的失败 → PARTIAL_SUCCESS ─────────────────────────
+
+
+_SNAPSHOT_WITH_FLASH = {
+    "steps": [
+        {"step_key": "flash_preflight", "script_name": "flash_preflight"},
+        {"step_key": "flash", "script_name": "flash_firmware"},
+        {"step_key": "oobe", "script_name": "oobe_skip"},
+    ]
+}
+
+
+class _FakeResult:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def all(self):
+        return self._rows
+
+
+class _FakeDb:
+    """按 SQL 文本分派两条探测查询的最小假会话（job_instance / step_trace）。"""
+
+    def __init__(self, *, failed_ids, milestone_done_ids):
+        self.failed_ids = failed_ids
+        self.milestone_done_ids = milestone_done_ids
+
+    def execute(self, stmt):
+        if "step_trace" in str(stmt):
+            return _FakeResult([(i,) for i in self.milestone_done_ids])
+        return _FakeResult([(i,) for i in self.failed_ids])
+
+
+def _milestone_run(**over):
+    base = dict(
+        id=91,
+        status=PlanRunStatus.RUNNING.value,
+        failure_threshold=0.05,
+        ended_at=None,
+        result_summary=None,
+        plan_snapshot=_SNAPSHOT_WITH_FLASH,
+    )
+    base.update(over)
+    return SimpleNamespace(**base)
+
+
+def test_post_milestone_failures_yield_partial_success():
+    """#1591-④：刷机步 COMPLETED、失败全在后续步 → PARTIAL_SUCCESS（不再整体 FAILED）。"""
+    from backend.services.plan_run_aggregation import apply_plan_run_aggregation
+
+    run = _milestone_run()
+    jobs = [_job(JobStatus.COMPLETED), _job(JobStatus.FAILED), _job(JobStatus.FAILED)]
+    db = _FakeDb(failed_ids=[2, 3], milestone_done_ids=[2, 3])
+
+    applied = apply_plan_run_aggregation(run, jobs, db=db)
+
+    assert applied is True
+    assert run.status == PlanRunStatus.PARTIAL_SUCCESS.value
+
+
+def test_post_milestone_failures_yield_partial_success_counters_path():
+    """计数器路径与全量扫描同语义（#1591-④）。"""
+    from backend.services.plan_run_aggregation import (
+        apply_plan_run_aggregation_from_counters,
+    )
+
+    run = _milestone_run(
+        total_job_count=3, terminal_job_count=3, completed_job_count=1,
+        failed_job_count=2, aborted_job_count=0,
+    )
+    db = _FakeDb(failed_ids=[2, 3], milestone_done_ids=[2, 3])
+
+    assert apply_plan_run_aggregation_from_counters(run, db=db) is True
+    assert run.status == PlanRunStatus.PARTIAL_SUCCESS.value
+
+
+def test_milestone_missing_on_any_failed_job_keeps_failed():
+    """任一 FAILED job 没越过里程碑（刷机步没 COMPLETED）→ 保守维持 FAILED。"""
+    from backend.services.plan_run_aggregation import apply_plan_run_aggregation
+
+    run = _milestone_run()
+    jobs = [_job(JobStatus.COMPLETED), _job(JobStatus.FAILED), _job(JobStatus.FAILED)]
+    db = _FakeDb(failed_ids=[2, 3], milestone_done_ids=[2])  # 3 号没越过
+
+    apply_plan_run_aggregation(run, jobs, db=db)
+
+    assert run.status == PlanRunStatus.FAILED.value
+
+
+def test_no_db_is_conservative():
+    """无会话调用方（db=None）→ 不做里程碑判定，回到阈值规则。"""
+    from backend.services.plan_run_aggregation import apply_plan_run_aggregation
+
+    run = _milestone_run()
+    jobs = [_job(JobStatus.COMPLETED), _job(JobStatus.FAILED), _job(JobStatus.FAILED)]
+
+    apply_plan_run_aggregation(run, jobs)
+
+    assert run.status == PlanRunStatus.FAILED.value
+
+
+def test_snapshot_without_milestone_steps_is_conservative():
+    """plan 快照里没有里程碑脚本 → 规则不生效（与「读不到就放宽」相反）。"""
+    from backend.services.plan_run_aggregation import apply_plan_run_aggregation
+
+    run = _milestone_run(plan_snapshot={"steps": [
+        {"step_key": "oobe", "script_name": "oobe_skip"},
+    ]})
+    jobs = [_job(JobStatus.COMPLETED), _job(JobStatus.FAILED)]
+    db = _FakeDb(failed_ids=[2], milestone_done_ids=[2])
+
+    apply_plan_run_aggregation(run, jobs, db=db)
+
+    assert run.status == PlanRunStatus.FAILED.value
+
+
+def test_abort_still_forces_failed_even_past_milestone():
+    """#783 裁决不变：abort 一律 FAILED，里程碑只对「自然失败」放宽。"""
+    from backend.services.plan_run_aggregation import apply_plan_run_aggregation
+
+    run = _milestone_run()
+    jobs = [_job(JobStatus.COMPLETED), _job(JobStatus.FAILED), _job(JobStatus.ABORTED)]
+    db = _FakeDb(failed_ids=[2], milestone_done_ids=[2])
+
+    apply_plan_run_aggregation(run, jobs, db=db)
+
+    assert run.status == PlanRunStatus.FAILED.value
+
+
+def test_all_production_call_sites_pass_db():
+    """接线守卫（#1591-④）：聚合入口的生产调用点必须传 ``db=``。
+
+    漏传不会报错——里程碑规则静默不生效（保守回落 FAILED），正是这一类「行为悄悄
+    退回」最难发现。两条路径（计数器的 O(1) 与全量扫描）都要覆盖。
+    """
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[3]
+    callers = (
+        "backend/services/job_terminalization.py",
+        "backend/services/plan_run_abort.py",
+    )
+    for rel in callers:
+        src = (root / rel).read_text(encoding="utf-8")
+        # 只认真正的调用（`apply_plan_run_aggregation(...)`）——`from … import (…)`
+        # 的续行也含函数名，按子串匹配会把它当成调用点（实测假阳性）。
+        calls = [
+            line.strip()
+            for line in src.splitlines()
+            if re.search(r"apply_plan_run_aggregation(_from_counters)?\(", line)
+        ]
+        assert calls, f"{rel}: 未找到聚合调用点（改名？）"
+        for line in calls:
+            assert "db=db" in line, f"{rel} 调用点漏传 db：{line}"

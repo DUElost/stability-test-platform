@@ -45,9 +45,15 @@ class TestTypeStat(BaseModel):
 
 
 class RiskDistribution(BaseModel):
-    high: int = 0
-    medium: int = 0
-    low: int = 0
+    """对外风险分布桶（ADR-0045 D2：值域就是判定级别，不再翻成 HIGH/MEDIUM/LOW）。
+
+    `unknown` = 该窗口内没有任何异常事件的 job —— **不是**"低风险"，也不是"查过没风险"，
+    这个区别是 #2365 覆盖率观测的对象（D4：不许把 UNKNOWN 压进 B）。
+    """
+
+    s: int = 0
+    a: int = 0
+    b: int = 0
     unknown: int = 0
 
 
@@ -56,6 +62,7 @@ class RecentRun(BaseModel):
     task_name: str
     task_type: str
     status: str
+    # ADR-0045 D2：对外值域 = 判定级别本身（S/A/B/UNKNOWN），后端不做展示层翻译。
     risk_level: str = "UNKNOWN"
     # ADR-0029：归属项目（plan_run 快照，F2 口径）
     project_key: Optional[str] = None
@@ -72,16 +79,17 @@ class ResultsSummary(BaseModel):
 
 
 class RiskTrendBucket(BaseModel):
-    """单日 S/A/B/NONE 风险计数（项目维度，v2.5 D13）。
+    """单日 S/A/B/UNKNOWN 风险计数（项目维度，v2.5 D13）。
 
-    NONE = 零事件 run（与 B 分开——「B：其余非零」口径；零不是低风险）。
+    ADR-0045 D2：第四态由 `NONE` 并入 `UNKNOWN` —— 二者语义相同「没有可判定的事件」。
+    D4 同时守住方向：**不得**反过来把零事件算进 `B`（"B=有事件但非 S/A"，零不是低风险）。
     """
 
     date: str  # YYYY-MM-DD（run 起始日）
     S: int = 0
     A: int = 0
     B: int = 0
-    NONE: int = 0
+    UNKNOWN: int = 0
     runs: int = 0
 
 
@@ -120,17 +128,21 @@ def _normalize_job_status(job_status: Any) -> str:
     return _JOB_STATUS_TO_RUN_STATUS.get(raw, raw or "RUNNING")
 
 
-# #2365：风险级别来自 log_observation 的活链判定（S/A/B），此处只做展示层映射。
-_RISK_LABEL_BY_LEVEL = {"S": "HIGH", "A": "MEDIUM", "B": "LOW"}
-_RISK_BUCKET_BY_LEVEL = {"S": "high", "A": "medium", "B": "low"}
+# ADR-0045 D1/D2：**这里不再有任何映射表**。判定级别（S/A/B）由 log_observation 的活链
+# 单源产出，API 出的是**同一级别**；"高/中/低"是前端文案（D3），不是对外词表。
+# 曾经这里有 `_RISK_LABEL_BY_LEVEL = {"S": "HIGH", ...}` 与桶名 `high/medium/low`，
+# 于是同一个概念在四个面有四种形状（报告 DTO 出 S/A/B、列表出 HIGH、分布出 high、
+# 趋势又用 NONE），徽标查不到键就恒显"未知"——即 #2494/#2418 那一族。
+_RISK_LEVELS = ("S", "A", "B")
 
 
-def _risk_level_label(level: Optional[str]) -> str:
-    """判定级别 → 展示标签；无判定依据（该 job 没有任何异常事件）→ UNKNOWN。
+def _risk_level_or_unknown(level: Optional[str]) -> str:
+    """判定级别 → 对外值；无判定依据 → UNKNOWN。
 
-    **不压成 LOW**：没有采到异常 ≠ 查过且没风险，这个区别正是覆盖率观测的对象。
+    **不压成 B**：没有采到异常 ≠ 查过且没风险，这个区别正是 #2365 覆盖率观测的对象。
     """
-    return _RISK_LABEL_BY_LEVEL.get(level or "", "UNKNOWN")
+    value = (level or "").strip().upper()
+    return value if value in _RISK_LEVELS else "UNKNOWN"
 
 
 # ---------- Endpoint ----------
@@ -260,7 +272,7 @@ def get_results_summary(
 
         recent_runs: List[RecentRun] = []
         for job, plan_name, project_key in recent_rows:
-            risk = _risk_level_label(recent_risk.get(job.id))
+            risk = _risk_level_or_unknown(recent_risk.get(job.id))
             duration = None
             if job.started_at and job.ended_at:
                 duration = (job.ended_at - job.started_at).total_seconds()
@@ -285,7 +297,7 @@ def get_results_summary(
             total_jobs_query = total_jobs_query.join(PlanRun, JobInstance.plan_run_id == PlanRun.id)
         total_jobs_query = _scope_by_project(total_jobs_query)
         total_jobs = int(total_jobs_query.scalar() or 0)
-        risk_counts = {"high": 0, "medium": 0, "low": 0, "unknown": 0}
+        risk_counts = {"s": 0, "a": 0, "b": 0, "unknown": 0}
         if total_jobs > 0:
             scoped_job_query = db.query(JobInstance.id)
             if target_project_id is not None:
@@ -294,7 +306,9 @@ def get_results_summary(
             scoped_job_ids = [int(job_id) for (job_id,) in scoped_job_query.all()]
             levels = aggregate_risk_levels_by_job(db, scoped_job_ids)
             for job_id in scoped_job_ids:
-                risk_counts[_RISK_BUCKET_BY_LEVEL.get(levels.get(job_id, ""), "unknown")] += 1
+                # 桶名就是级别本身（小写只是 JSON 字段风格，不再换词）
+                level = _risk_level_or_unknown(levels.get(job_id, ""))
+                risk_counts[level.lower()] += 1
 
         # #2365 重开后的两处收口（覆盖率指标本身与活链接线保留，这里只补它的口径）：
         #
@@ -377,12 +391,12 @@ def get_risk_trend(
             .all()
         ]
         summary = aggregate_risk_summary(db, job_ids) or {}
-        # v2.5 D13：零事件（_build_risk_summary 返回 None）→ NONE 第四态，
-        # 不再落进 B（「B：其余非零」口径）
+        # v2.5 D13 + ADR-0045 D2/D4：零事件走第四态 UNKNOWN（原 NONE，二者语义相同），
+        # 并且**不**落进 B（「B：其余非零」口径；零不是低风险）
         level = (
             str(summary.get("risk_level"))
             if summary
-            else "NONE"
+            else "UNKNOWN"
         )
         total_runs += 1
         if run.status == "SUCCESS":
@@ -396,8 +410,8 @@ def get_risk_trend(
         if run.started_at is None:
             continue
         day = run.started_at.date().isoformat()
-        bucket = buckets.setdefault(day, {"S": 0, "A": 0, "B": 0, "NONE": 0, "runs": 0})
-        if level in ("S", "A", "B", "NONE"):
+        bucket = buckets.setdefault(day, {"S": 0, "A": 0, "B": 0, "UNKNOWN": 0, "runs": 0})
+        if level in ("S", "A", "B", "UNKNOWN"):
             bucket[level] += 1
         bucket["runs"] += 1
 

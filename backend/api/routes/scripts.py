@@ -307,6 +307,15 @@ def scan_scripts(
             "is in flight."
         ),
     ),
+    allow_deactivate: bool = Query(
+        False,
+        description=(
+            "#2386：缺省下，当被扫的脚本子树与部署目标（origin/main）不一致时，"
+            "本轮不反激活任何版本（只新增/刷新/报冲突），把「本会反激活」的清单放进 "
+            "deactivation_skipped_versions 并在审计里留痕。确要在非主线树上退役时显式传 "
+            "true —— 反激活是单向的（目录回来再扫不复活），故这个开关必须由人显式给。"
+        ),
+    ),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin),
     request: Request = None,
@@ -333,6 +342,7 @@ def scan_scripts(
             _script_root(),
             _script_runtime_root(),
             force_rebaseline=force_rebaseline,
+            allow_deactivate=allow_deactivate,
         )
     except FileNotFoundError:
         raise_api_http_error(
