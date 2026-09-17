@@ -214,6 +214,32 @@ def test_refuses_non_loopback_base_url(tmp_path):
     assert _mod._apply(args, deactivate=True) == 0
 
 
+def test_loopback_guard_rejects_userinfo_spoofed_host():
+    """审计 B（2026-09-17）：`127.0.0.1:8000` 写在 userinfo 里不是本机地址。
+
+    旧的正则判据在这里放行，等于把 token 与批量 DELETE 发到外部主机——本函数
+    所在路径正是 `execute --yes` / `reactivate` 的写入口。反证：把
+    `ensure_base_url_allowed` 换回 `re.match(r"^[a-z]+://([^/:]+)")` 即红。
+    """
+    with pytest.raises(SystemExit, match="非本机控制面"):
+        _mod.ensure_base_url_allowed(
+            "http://127.0.0.1:8000@evil.example/api/v1", allow_remote=False)
+
+
+def test_loopback_guard_accepts_ipv6_loopback():
+    """审计 B 的反向缺陷：`http://[::1]:8000` 是合法本机地址，旧正则截成 `[` 误拒。"""
+    _mod.ensure_base_url_allowed("http://[::1]:8000/api/v1", allow_remote=False)
+    _mod.ensure_base_url_allowed("http://127.0.0.1:8000/api/v1", allow_remote=False)
+    _mod.ensure_base_url_allowed("http://localhost:8000/api/v1", allow_remote=False)
+
+
+def test_loopback_guard_rejects_non_http_scheme():
+    """护栏不接受 file/无 scheme 之类——requests 的行为不可预期，直接拒。"""
+    for bad in ("file:///etc/passwd", "127.0.0.1:8000/api/v1"):
+        with pytest.raises(SystemExit, match="非 HTTP"):
+            _mod.ensure_base_url_allowed(bad, allow_remote=False)
+
+
 def test_manifest_schema_rejects_legacy_bare_list(tmp_path):
     """把旧的裸数组清单喂进来必须显式拒绝，不能 AttributeError 回溯。"""
     legacy = tmp_path / "legacy.json"

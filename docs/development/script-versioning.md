@@ -196,8 +196,13 @@ python -m backend.scripts.check_unreferenced_script_versions --guard [--json]
 必须可区分：`1` 是退役授权依据，若「工具坏了」与它同码，就会被读成「有版本该退役」，
 后果是反向的过度退役。`-m` 与 `python backend/scripts/check_unreferenced_script_versions.py`
 两种调用形态等价（工具侧有 `REPO_ROOT` bootstrap 与子进程回归用例兜住）。默认模式仍恒 `0`
-（诊断工具，非门禁）。CI 只锁判据函数与上述退出码（CI 不得连生产库），对生产数据的实际
-巡检由运维或定时任务跑 `--guard`。
+（诊断工具，非门禁）。CI 只锁判据函数与上述退出码（CI 不得连生产库）。
+
+**当前执行者是人工**：仓库内没有任何跑 `--guard` 的 workflow / timer（2026-09-17 审计指出本
+文档曾写「由运维或定时任务跑」而该定时任务并不存在，此处按现状更正）。对生产数据的实际巡检
+= 在控制面手工执行；接入自动化之前要先定「谁在哪个窗口连生产库跑」，判据见
+[2026-09-16 退役判据 note](../notes/process/2026-09-16-script-retirement-guard-and-executor.md)
+的 Revisit——不要为了有个执行者就往夜间 `backend-test` job 里塞连库步骤（CI 不得连生产库）。
 
 批量执行是两段式——先只读出 manifest，人工复核后再写：
 
