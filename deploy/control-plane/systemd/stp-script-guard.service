@@ -1,0 +1,26 @@
+# Rendered by the site installer for <deploy-root> — do not edit by hand.
+[Unit]
+Description=STP script-version retirement guard (read-only #735 --guard probe)
+
+[Service]
+Type=oneshot
+User=<deploy-user>
+WorkingDirectory=<deploy-root>
+EnvironmentFile=<deploy-root>/.env.backend
+# 只读巡检：subprocess 跑 check_unreferenced_script_versions --guard --json，把结论落成
+# node-exporter textfile 指标。**这里永远不写库**——实际退役必须人工复核 manifest 后跑
+# tools/dev/retire_script_versions.py execute --yes（契约见 script-versioning.md 判据与巡检）。
+ExecStart=<deploy-root>/venv/bin/python <deploy-root>/tools/dev/script_guard_probe.py
+# 退出码语义由 probe 自己决定：--guard 报 1（有到期项）/2（事实不可得）算任务成功，
+# 只有 3（工具自身异常）才让本任务 failed 进告警面。不要给上面的 ExecStart 加 - 前缀
+# ——那会把「守卫坏了」也吞成成功。
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=yes
+ReadWritePaths=/var/lib/prometheus/node-exporter
+
+[Install]
+WantedBy=multi-user.target

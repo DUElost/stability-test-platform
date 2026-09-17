@@ -126,3 +126,54 @@ describe('UserModal 用户名（#2406 现场：stp-tester 能提交）', () => {
     });
   });
 });
+
+/**
+ * #2453：密码管理器自动填充后必须仍能提交。
+ *
+ * 反例（修复前，现场）：管理器**直接写 `.value`**（常伴非冒泡 input 事件），React 的
+ * `onChange` 收不到 → `formData` 仍为空 → 校验报「请输入密码」→ **提交根本不发出**
+ * （nginx 访问日志：那几次零 `POST /api/v1/users`；手动键入那次才有请求且 200）。
+ */
+describe('UserModal 自动填充（#2453）', () => {
+  /** 模拟密码管理器：绕过 React 直写 DOM 值 + 派发**不冒泡**的 input 事件。 */
+  function autofill(el: HTMLElement, value: string) {
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLInputElement.prototype, 'value',
+    )!.set!;
+    setter.call(el, value);
+    el.dispatchEvent(new Event('input', { bubbles: false }));
+  }
+
+  it('自动填充用户名+密码+确认密码 → 提交发出且值取自 DOM', () => {
+    const onSubmit = vi.fn();
+    render(
+      <UserModal isOpen onClose={() => {}} onSubmit={onSubmit} isSubmitting={false} />,
+    );
+
+    autofill(screen.getByLabelText(/用户名/), 'stp-tester');
+    autofill(screen.getByLabelText(/^密码/), 'tPe-KLu-3Uw-3Fb');
+    autofill(screen.getByLabelText(/^确认密码/), 'tPe-KLu-3Uw-3Fb');
+    fireEvent.click(screen.getByRole('button', { name: /添加用户/ }));
+
+    expect(onSubmit).toHaveBeenCalledWith({
+      username: 'stp-tester',
+      password: 'tPe-KLu-3Uw-3Fb',
+      role: 'user',
+    });
+  });
+
+  it('自动填充的两次确认密码不一致 → 仍被拦（校验用的是同一份 DOM 值）', () => {
+    const onSubmit = vi.fn();
+    render(
+      <UserModal isOpen onClose={() => {}} onSubmit={onSubmit} isSubmitting={false} />,
+    );
+
+    autofill(screen.getByLabelText(/用户名/), 'stp-tester');
+    autofill(screen.getByLabelText(/^密码/), 'tPe-KLu-3Uw-3Fb');
+    autofill(screen.getByLabelText(/^确认密码/), 'tPe-KLu-3Uw-3Fa');
+    fireEvent.click(screen.getByRole('button', { name: /添加用户/ }));
+
+    expect(screen.getByText('两次输入的密码不一致')).toBeInTheDocument();
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+});
