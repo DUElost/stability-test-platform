@@ -25,6 +25,9 @@ Class: bug-fix
 ② `ast.Assign` 到 `.is_active` 且值为 `False`。**不是**子串扫描——
 同族教训在 `tests/test_alert_metric_producers.py` 头注（子串匹配被注释骗过 → 改 AST）。
 
+合入 main（#2526）时保留其加强项，不削弱本单判据：排除模块/函数/类 docstring 常量节点；
+f-string（`JoinedStr`）取字面量片段拼接；`_has_deactivation(path)` 作语料守卫薄封装。
+
 ### 2. 修好判据后浮出的存量：一条 legacy，按既定口径登记
 
 `i9j0k1l2m3n4_seed_gpu_setup_v104_stable_install.py`（2026-08-31，legacy 窗口内）写的是
