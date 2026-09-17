@@ -14,6 +14,8 @@
 # runbook §1.1 与 .claude/skills/control-plane-deploy §1 的同步/重启步骤前各插一行；
 # 已装 systemd unit 用 `ExecStartPre=-`（减号=失败也继续）做运行时兜底，只留日志不中断。
 #
+# 附带：#735 起还会比对一次监控/告警资产与仓库渲染结果（只 WARN，见文末）。
+#
 # 用法：./tools/dev/check-deploy-source.sh（可从仓库任意子目录运行）
 # 退出码：0=通过；1=未通过（部署动作应停止）。
 set -u
@@ -65,6 +67,17 @@ fi
 if ! "$PYTHON" "$REPO_ROOT/tools/dev/check_alembic_at_head.py" --allow-behind; then
     echo "check-deploy-source: FAIL —— alembic schema 超前于代码或修订未知（见上方输出）" >&2
     exit 1
+fi
+
+# 监控/告警资产漂移检测（#735 第三格）：**只 WARN，不改变本次结论**——站点副本落后
+# 不代表这次部署有问题；但「改了仓库、没人重跑安装」正是 #2488 查出「生产 10 条 vs 仓库
+# 17 条」的成因，而本脚本已经在每次部署前与 systemd ExecStartPre 上运行，是现成的执行者。
+# 退出码语义要守住：本脚本 exit 1 会被 runbook 读成「停止部署」，所以这里绝不向上抛。
+if drift_out="$("$PYTHON" "$REPO_ROOT/tools/dev/check-monitoring-assets.py" 2>&1)"; then
+    echo "check-deploy-source: OK —— 监控/告警资产与仓库渲染结果一致"
+else
+    echo "check-deploy-source: WARN —— 监控/告警资产与仓库不一致（不阻塞本次部署，按 runbook 重跑站点安装）：" >&2
+    printf '%s\n' "$drift_out" | grep -E '^[[:space:]]+\[(DRIFT|SKIP |ABSENT)' | sed 's/^/  /' >&2
 fi
 
 echo "check-deploy-source: OK —— 工作树在 main，tracked 工作区干净，schema 未超前 head"

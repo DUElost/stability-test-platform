@@ -7,6 +7,7 @@ config-gated：未配置 scan 工具 env 则跳过 + 503。
 from __future__ import annotations
 
 import fcntl
+import json
 import logging
 import os
 import re
@@ -67,40 +68,201 @@ def get_scan_env_defaults() -> Dict[str, str]:
 _HOST_PREFIX_RE = re.compile(r"^([A-Za-z0-9_-]+?)_")
 
 
+def _insert_artifact_row(
+    db: Session,
+    plan_run_id: int,
+    storage_uri: str,
+    *,
+    host_id: Optional[str],
+    size_bytes: int,
+    scan_round_id: str | None,
+) -> bool:
+    """幂等注册单点：(plan_run_id, storage_uri) 唯一键；已存在返回 False。
+
+    legacy glob 路径与清单路径（#2188 单3）共用——过渡期两路对同一产物产生
+    完全相同的 storage_uri，天然互斥重复。
+    """
+    existing = db.execute(
+        select(PlanRunArtifact).where(
+            PlanRunArtifact.plan_run_id == plan_run_id,
+            PlanRunArtifact.storage_uri == storage_uri,
+        )
+    ).scalar_one_or_none()
+    if existing:
+        return False
+    db.add(PlanRunArtifact(
+        plan_run_id=plan_run_id,
+        host_id=host_id,
+        storage_uri=storage_uri,
+        artifact_type=ARTIFACT_TYPE_SCAN,
+        size_bytes=size_bytes,
+        scan_round_id=scan_round_id,
+    ))
+    return True
+
+
 def _register_scan_artifacts_from_nfs(
-    db: Session, plan_run_id: int, dedup_dir: Path, *, scan_round_id: str | None = None,
+    db: Session,
+    plan_run_id: int,
+    dedup_dir: Path,
+    *,
+    scan_round_id: str | None = None,
+    host_filter: Collection[str] | None = None,
 ) -> int:
     """扫 dedup_dir 取 *_org.xls → 提取 host_id → 写 plan_run_artifact。
 
     文件名约定: {host_id}_Result_*_org.xls (由 UploadManager.fill 放置)。
-    返回注册数。
+    host_filter（#2188 单3 过渡降级）：只注册解析后 host 属于该集合的文件
+    （None = 不过滤，既有行为）。返回注册数。
     """
     count = 0
     for xls in sorted(set(list(dedup_dir.glob("*_org.xls")) + list(dedup_dir.glob("*_org_*.xls")))):
-        existing = db.execute(
-            select(PlanRunArtifact).where(
-                PlanRunArtifact.plan_run_id == plan_run_id,
-                PlanRunArtifact.storage_uri == str(xls),
-            )
-        ).scalar_one_or_none()
-        if existing:
-            continue
-
         m = _HOST_PREFIX_RE.match(xls.name)
         host_id = m.group(1) if m else None
+        if host_filter is not None and (host_id is None or host_id not in host_filter):
+            continue
         size = xls.stat().st_size if xls.exists() else 0
-        db.add(PlanRunArtifact(
-            plan_run_id=plan_run_id,
-            host_id=host_id,
-            storage_uri=str(xls),
-            artifact_type=ARTIFACT_TYPE_SCAN,
-            size_bytes=size,
-            scan_round_id=scan_round_id,
-        ))
-        count += 1
+        if _insert_artifact_row(
+            db, plan_run_id, str(xls),
+            host_id=host_id, size_bytes=size, scan_round_id=scan_round_id,
+        ):
+            count += 1
     if count:
         db.commit()
     return count
+
+
+def _read_manifest_shards(meta_dir: Path, plan_run_id: int) -> list[dict]:
+    """聚合 _meta/{plan_run_id}/*.json 分片为扁平条目（#2188 单3，设计稿 §3）。
+
+    host 来自**分片级字段**（条目不解析文件名，R-4 判据②）；坏 JSON / 版本不符 /
+    plan_run 不符的分片跳过并显式告警（不静默——孤儿分片是可见事件）。
+    """
+    if not meta_dir.is_dir():
+        return []
+    out: list[dict] = []
+    for shard in sorted(meta_dir.glob("*.json")):
+        try:
+            data = json.loads(shard.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            logger.warning("scan_manifest_shard_unreadable shard=%s", shard.name)
+            continue
+        if not isinstance(data, dict) or data.get("schema_version") != 1:
+            logger.warning(
+                "scan_manifest_shard_version_unsupported shard=%s", shard.name,
+            )
+            continue
+        try:
+            shard_run = int(data.get("plan_run_id", -1))
+        except (TypeError, ValueError):
+            shard_run = -1
+        if shard_run != int(plan_run_id):
+            continue
+        host_id = data.get("host_id")
+        if not host_id:
+            continue
+        for a in data.get("artifacts", []):
+            if not isinstance(a, dict) or "file_key" not in a:
+                continue
+            out.append({
+                "host_id": str(host_id),
+                "platform": str(a.get("platform", "")),
+                "file_key": str(a["file_key"]),
+                "size_bytes": a.get("size_bytes") or 0,
+                "registerable": bool(a.get("registerable", False)),
+            })
+    return out
+
+
+def _register_manifest_artifacts(
+    db: Session,
+    plan_run_id: int,
+    nfs_root: str,
+    entries: list[dict],
+    *,
+    scan_round_id: str | None,
+) -> int:
+    """清单注册主路径（#2188 R-4 判据）：零文件名解析、零产物树遍历。
+
+    读者不二次验证文件存在性（评审未决①(b)：分片在 = 交付完成；存储丢文件是
+    事故，走告警不走兜底）。storage_uri 由 file_key 拼装为与 legacy 同形字符串
+    （共享幂等键）；file_key 不含 family 名，A 步拆族只改本函数的拼装前缀。
+    """
+    count = 0
+    for e in entries:
+        if not e["registerable"]:
+            continue
+        storage_uri = str(Path(nfs_root) / "dedup" / str(plan_run_id) / e["file_key"])
+        if _insert_artifact_row(
+            db, plan_run_id, storage_uri,
+            host_id=e["host_id"], size_bytes=int(e["size_bytes"]),
+            scan_round_id=scan_round_id,
+        ):
+            count += 1
+    if count:
+        db.commit()
+    return count
+
+
+def _sync_scan_artifacts(
+    db: Session,
+    plan_run_id: int,
+    nfs_root: str,
+    *,
+    expected_hosts: Collection[str] | None = None,
+    scan_round_id: str | None = None,
+) -> str:
+    """清单优先注册 + per-host legacy 过渡降级（#2188 单3，设计稿 §3/§4）。
+
+    - 主路径：聚合 `_meta/{run}/` 分片注册（零产物树遍历）。
+    - 降级：`expected_hosts` 中无分片的 host 才走 legacy glob（且仅该 host 的文件），
+      计 `legacy_glob_register_total`；分片缺 + 无文件 = 「还没写」（轮询预算内继续等）。
+      `expected_hosts=None`（既有调用点）保持全目录 legacy 扫描。
+    - 终态出口（评审未决②）：legacy 计数连续 30 天为 0 → 单5 删 legacy 路径。
+    """
+    dedup_base = Path(nfs_root) / "dedup" / str(plan_run_id)
+    meta_dir = Path(nfs_root) / "_meta" / str(plan_run_id)
+
+    entries = _read_manifest_shards(meta_dir, plan_run_id)
+    n_manifest = _register_manifest_artifacts(
+        db, plan_run_id, nfs_root, entries, scan_round_id=scan_round_id,
+    )
+
+    hosts_with_shard = {e["host_id"] for e in entries}
+    if expected_hosts is None:
+        legacy_hosts: Collection[str] | None = None
+    else:
+        legacy_hosts = [h for h in expected_hosts if h not in hosts_with_shard]
+        if legacy_hosts:
+            logger.warning(
+                "scan_manifest_shard_missing plan_run=%d hosts=%s "
+                "(legacy_glob_fallback=旧Agent过渡降级; 出口=legacy_glob_register_total归零)",
+                plan_run_id, ",".join(sorted(legacy_hosts)),
+            )
+
+    n_legacy = 0
+    if legacy_hosts is None or legacy_hosts:
+        for dedup_dir in (dedup_base, dedup_base / "mtk", dedup_base / "unisoc"):
+            if not dedup_dir.is_dir():
+                continue
+            n_legacy += _register_scan_artifacts_from_nfs(
+                db, plan_run_id, dedup_dir,
+                scan_round_id=scan_round_id, host_filter=legacy_hosts,
+            )
+    if n_legacy:
+        logger.info(
+            "legacy_glob_register_total plan_run=%d count=%d hosts=%s",
+            plan_run_id, n_legacy,
+            ",".join(sorted(legacy_hosts)) if legacy_hosts is not None else "*",
+        )
+
+    n = n_manifest + n_legacy
+    if n:
+        logger.info(
+            "scan_artifacts_registered plan_run=%d count=%d manifest=%d legacy=%d",
+            plan_run_id, n, n_manifest, n_legacy,
+        )
+    return str(n) if n else ""
 
 
 def run_scan_sync(
@@ -108,12 +270,14 @@ def run_scan_sync(
     *,
     is_final: bool = False,
     scan_round_id: str | None = None,
+    expected_hosts: Collection[str] | None = None,
 ) -> str:
-    """扫描中心存储（CIFS）dedup/{plan_run_id}/ 目录，注册已上送的 *_org.xls 产物。
+    """注册已上送的 scan 产物：清单优先（_meta/{run}/ 分片），legacy glob 过渡降级。
 
-    Agent 已通过 scan_now → run_local_scan → UploadManager 上送文件到中心存储。
-    本函数仅做文件发现 + DB 注册，不再调 subprocess / RunConsole。
-    返回注册产物数（字符串化），空串表示无新产物。
+    Agent 已通过 scan_now → run_local_scan → UploadManager 上送文件到中心存储
+    并登记分片（#2188 单2）；本函数聚合分片注册（#2188 单3），对无分片的
+    expected host 降级走 legacy 文件名约定发现（旧 Agent 过渡期）。
+    返回新注册产物数（字符串化），空串表示无新产物。
     """
     from backend.core.database import SessionLocal
 
@@ -126,16 +290,10 @@ def run_scan_sync(
             logger.warning("scan_skip_nfs_root_not_set plan_run=%d", plan_run_id)
             return ""
 
-        dedup_base = Path(nfs_root) / "dedup" / str(plan_run_id)
-        n = 0
-        for dedup_dir in (dedup_base, dedup_base / "mtk", dedup_base / "unisoc"):
-            if not dedup_dir.is_dir():
-                continue
-            n += _register_scan_artifacts_from_nfs(
-                db, plan_run_id, dedup_dir, scan_round_id=scan_round_id,
-            )
-        logger.info("scan_artifacts_registered plan_run=%d count=%d", plan_run_id, n)
-        return str(n) if n else ""
+        return _sync_scan_artifacts(
+            db, plan_run_id, nfs_root,
+            expected_hosts=expected_hosts, scan_round_id=scan_round_id,
+        )
     finally:
         db.close()
 
@@ -958,27 +1116,75 @@ def _map_agent_path_to_center(path: str, plan_run_id: int, center_root: str) -> 
     return f"{center_root}/devices/{plan_run_id}/{event_dir}/"
 
 
+#: #2476：DLE 候选上限——事件目录可能被多个 run 上送过，候选爆炸时截断
+#: （按 run 倒序取最新，见 `_center_event_dir_from_dle`）。
+_CENTER_EVENT_PATH_DLE_CANDIDATES = 50
+
+
+def _escape_like(value: str) -> str:
+    """LIKE 模式里的元字符转义（事件目录名含 ``_``，不转义会当单字符通配）。"""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _center_event_dir_from_dle(center_root: str, event_dir: str) -> Optional[str]:
+    """在 DLE 台账里找该事件目录**最新的中心副本**（#2476 / #2188 D 步·单4）。
+
+    台账形态（生产实测）：``remote_path`` 就是事件目录的中心路径
+    ``<center>/devices/<run_id>/[<uuid>/]<event_dir>``（无尾斜杠）。旧实现是对中心盘
+    做 ``devices/*`` 跨 run 目录扫描；这里改为字符串判形态 + ``isdir`` 校验
+    （与 ``adopt_unassigned``/#2262 同口径），run 倒序 + LIMIT 有界。
+
+    只接受落在 ``center_root`` 之下的候选：台账里可能残留别的站点根的路径。
+    查库失败不致命——记日志并返回 None，调用方保留原映射（尽力而为）。
+    """
+    pattern = f"%/devices/%/{_escape_like(event_dir)}"
+    try:
+        from backend.core.database import SessionLocal
+        from backend.models.device_log_event import DeviceLogEvent
+
+        with SessionLocal() as db:
+            rows = (
+                db.query(DeviceLogEvent.remote_path)
+                .filter(DeviceLogEvent.remote_path.like(pattern, escape="\\"))
+                # NULLS LAST：plan_run_id 可空，PG 的 DESC 默认把 NULL 排在最前，
+                # 会把 LIMIT 名额吃光（真实候选全在它们后面）。
+                .order_by(
+                    DeviceLogEvent.plan_run_id.desc().nullslast(),
+                    DeviceLogEvent.id.desc(),
+                )
+                .limit(_CENTER_EVENT_PATH_DLE_CANDIDATES)
+                .all()
+            )
+    except Exception:
+        logger.exception("center_event_path_dle_lookup_failed event_dir=%s", event_dir)
+        return None
+
+    prefix = center_root.rstrip("/") + "/"
+    for (remote_path,) in rows:
+        path = str(remote_path or "").rstrip("/")
+        if not path.startswith(prefix):
+            continue
+        if os.path.isdir(path):
+            return path + "/"
+    return None
+
+
 def _resolve_center_event_path(
     center_root: str, plan_run_id: int, event_dir: str,
 ) -> str:
-    """映射后可达性兜底：本 run 未上送时搜历史 run 的上送位置。
+    """映射后可达性兜底：本 run 未上送时找历史 run 的上送位置。
 
     场景（2026-08-31 验收发现）：scan 对同内容事件去重合并显示代表目录
     （如注入 cp 的 02/04 同内容——报表只显示 02），而 upload 上送的是
-    实际引用的 04——``devices/{run_id}/02`` 不存在。此时搜
-    ``devices/*/{event_dir}``（历史 run 上送位置）映射到存在的副本；
-    搜不到保留原映射（尽力而为，中心不可达时由人工/提取路径兜底）。
+    实际引用的 04——``devices/{run_id}/02`` 不存在。此时查 DLE 台账找该事件
+    目录的其它 run 副本（#2476：不再对着中心盘做 ``devices/*`` 跨 run glob）；
+    找不到保留原映射（尽力而为，中心不可达时由人工/提取路径兜底）。
     """
     candidate = f"{center_root}/devices/{plan_run_id}/{event_dir}/"
     if os.path.isdir(candidate):
         return candidate
-    try:
-        hits = sorted(Path(center_root, "devices").glob(f"*/{event_dir}"))
-    except OSError:
-        return candidate
-    if hits:
-        return str(hits[0]) + "/"
-    return candidate
+    resolved = _center_event_dir_from_dle(center_root, event_dir)
+    return resolved if resolved is not None else candidate
 
 
 def _rewrite_merge_report_paths_to_center(

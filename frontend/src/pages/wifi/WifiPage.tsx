@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, classifyApiError, toApiError } from '@/utils/api';
 import type { ResourcePoolLoad } from '@/utils/api/types';
+import { readNamedValues } from '@/utils/forms';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/hooks/useToast';
@@ -42,9 +43,10 @@ export default function WifiPage() {
   const [form, setForm] = useState(FORM_INITIAL);
   const [maxDevicesInput, setMaxDevicesInput] = useState(String(DEFAULT_MAX_DEVICES));
 
-  /** 提交时解析；空串/非法输入回落默认值，其余夹到 [1, MAX_DEVICES_LIMIT]。 */
-  const maxDevicesValue = () => {
-    const parsed = Number.parseInt(maxDevicesInput, 10);
+  /** 提交时解析；空串/非法输入回落默认值，其余夹到 [1, MAX_DEVICES_LIMIT]。
+   *  #2456：入参是**提交那一刻从表单 DOM 读到的值**，不再闭包读 state。 */
+  const maxDevicesFrom = (raw: string) => {
+    const parsed = Number.parseInt(raw, 10);
     if (!Number.isFinite(parsed)) return DEFAULT_MAX_DEVICES;
     return Math.min(Math.max(parsed, 1), MAX_DEVICES_LIMIT);
   };
@@ -55,14 +57,21 @@ export default function WifiPage() {
     refetchInterval: 15000,
   });
 
+  /** #2456：提交载荷由**提交时读到的 DOM 值**构造（不再闭包读 state）。 */
+  const buildPayload = (values: Record<string, string>) => ({
+    name: values.name,
+    // resource_type 由后端按 WiFi 池默认，前端不再携带这个恒为 'wifi' 的残留字段（#499 E4）
+    config: {
+      ssid: values.config_ssid,
+      password: values.config_password,
+      router_ip: values.config_router_ip,
+    },
+    max_concurrent_devices: maxDevicesFrom(values.max_devices),
+    host_group: values.host_group || null,
+  });
+
   const createMutation = useMutation({
-    mutationFn: () => api.resourcePools.create({
-      name: form.name,
-      // resource_type 由后端按 WiFi 池默认，前端不再携带这个恒为 'wifi' 的残留字段（#499 E4）
-      config: { ssid: form.config_ssid, password: form.config_password, router_ip: form.config_router_ip },
-      max_concurrent_devices: maxDevicesValue(),
-      host_group: form.host_group || null,
-    }),
+    mutationFn: (values: Record<string, string>) => api.resourcePools.create(buildPayload(values)),
     onSuccess: () => {
       toast.success('WiFi 池创建成功');
       queryClient.invalidateQueries({ queryKey: ['resource-pools'] });
@@ -72,12 +81,8 @@ export default function WifiPage() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: (id: number) => api.resourcePools.update(id, {
-      name: form.name,
-      config: { ssid: form.config_ssid, password: form.config_password, router_ip: form.config_router_ip },
-      max_concurrent_devices: maxDevicesValue(),
-      host_group: form.host_group || null,
-    }),
+    mutationFn: ({ id, values }: { id: number; values: Record<string, string> }) =>
+      api.resourcePools.update(id, buildPayload(values)),
     onSuccess: () => {
       toast.success('WiFi 池更新成功');
       queryClient.invalidateQueries({ queryKey: ['resource-pools'] });
@@ -122,10 +127,15 @@ export default function WifiPage() {
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    // #2456：以**表单 DOM 值**为准（密码管理器直写 .value 时 React 收不到 change）
+    const values = readNamedValues(e.currentTarget as HTMLFormElement, {
+      ...form,
+      max_devices: maxDevicesInput,
+    });
     if (editingId) {
-      updateMutation.mutate(editingId);
+      updateMutation.mutate({ id: editingId, values });
     } else {
-      createMutation.mutate();
+      createMutation.mutate(values);
     }
   }
 
@@ -179,6 +189,7 @@ export default function WifiPage() {
                 <label htmlFor="wifi-name" className={FORM.label}>名称</label>
                 <input
                   id="wifi-name"
+                  name="name"
                   value={form.name}
                   onChange={(e) => setForm({ ...form, name: e.target.value })}
                   required
@@ -190,6 +201,7 @@ export default function WifiPage() {
                 <label htmlFor="wifi-ssid" className={FORM.label}>SSID</label>
                 <input
                   id="wifi-ssid"
+                  name="config_ssid"
                   value={form.config_ssid}
                   onChange={(e) => setForm({ ...form, config_ssid: e.target.value })}
                   required
@@ -201,6 +213,7 @@ export default function WifiPage() {
                 <label htmlFor="wifi-password" className={FORM.label}>密码</label>
                 <input
                   id="wifi-password"
+                  name="config_password"
                   type="password"
                   autoComplete="new-password"
                   value={form.config_password}
@@ -214,6 +227,7 @@ export default function WifiPage() {
                 <label htmlFor="wifi-router-ip" className={FORM.label}>路由器 IP（可选）</label>
                 <input
                   id="wifi-router-ip"
+                  name="config_router_ip"
                   value={form.config_router_ip}
                   onChange={(e) => setForm({ ...form, config_router_ip: e.target.value })}
                   placeholder="192.0.2.1"
@@ -224,6 +238,7 @@ export default function WifiPage() {
                 <label htmlFor="wifi-max-devices" className={FORM.label}>最大设备数</label>
                 <input
                   id="wifi-max-devices"
+                  name="max_devices"
                   type="number"
                   min={1}
                   max={MAX_DEVICES_LIMIT}
@@ -236,6 +251,7 @@ export default function WifiPage() {
                 <label htmlFor="wifi-host-group" className={FORM.label}>主机组（可选）</label>
                 <input
                   id="wifi-host-group"
+                  name="host_group"
                   value={form.host_group}
                   onChange={(e) => setForm({ ...form, host_group: e.target.value })}
                   placeholder="限制分配给指定主机"

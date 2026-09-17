@@ -17,10 +17,14 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, tuple_
 
 from backend.core.database import AsyncSessionLocal, SessionLocal
-from backend.core.metrics import record_retention_candidates, record_retention_txn
+from backend.core.metrics import (
+    dle_orphan_skipped_total,
+    record_retention_candidates,
+    record_retention_txn,
+)
 from backend.models.enums import EventState, PlanRunStatus
 from backend.models.schedule import TaskSchedule, schedule_timestamp
 
@@ -286,7 +290,9 @@ def purge_run_storage_dirs(run_ids: list, jobs_by_run: dict | None = None) -> se
 
     for run_id in run_ids:
         # jira/{run_id}/ holds extract bundles (#1698); omit → orphan after row delete.
-        for sub in ("devices", "dedup", "jira"):
+        # _meta/{run_id}/ (#2188 D-step manifest shards) shares the run lifecycle;
+        # omit → residue no retention pass can ever reach (E-2).
+        for sub in ("devices", "dedup", "jira", "_meta"):
             _purge(base / sub / str(int(run_id)), run_id)
         # #2031：jobs/{job_id}/ 的唯一索引是 StepTrace/JobArtifact 行，而它们在
         # 同一批里被删（保留期 3 天 << artifact 清理器 30 天）——不在这里清掉即
@@ -336,17 +342,20 @@ def _locate_unassigned_event_dir(raw_path, unassigned_root: Path) -> Path | None
 
     真实形态是 ``unassigned/{event_id}/{basename}``（见 ``event_uploader`` 的 dst 拼装，
     生产实测 7 段路径即此形态）：取父目录；也容忍 ``remote_path`` 直接就是事件目录本身。
-    形态不符返回 None（调用方一律「跳过 + 告警」，不当作失败——那是数据问题，
+
+    #2316：按**祖先**定位而不是固定层数——写入侧 ``validate_device_log_remote_path``
+    只要求路径落在 ``unassigned/{event_id}/`` **之下**（层级不限），清理侧此前只认一层，
+    更深的合法路径被判形态不符 → 恒跳过（且恒为最老，占住批头）。两侧判据必须同形。
+    形态不符返回 None（调用方一律「跳过 + 告警 + 计数」，不当作失败——那是数据问题，
     计入 failed 会让整批推迟）。
     """
     try:
         p = Path(str(raw_path)).resolve()
     except OSError:
         return None
-    if p.parent.parent == unassigned_root:
-        return p.parent
-    if p.parent == unassigned_root:
-        return p
+    for ancestor in (p, *p.parents):
+        if ancestor.parent == unassigned_root:
+            return ancestor
     return None
 
 
@@ -548,6 +557,9 @@ def _retention_safe_ids(db, run_ids: list[int]) -> tuple[list[int], set[int]]:
 _ORPHAN_DLE_STATES = (EventState.REMOTE.value, EventState.PRUNED.value)
 #: 每轮清理上限（沿用 retention 的批量思路：单轮可预期，不把作业拖长）。
 _ORPHAN_DLE_BATCH = 100
+# #2316：单轮最多翻几页。键集推进让「形态不符 / 删不掉」的行不再堵死批头，但翻页必须有界——
+# 整表都是跳过行时，无界翻页会把一次 cron tick 变成全表扫描。
+_ORPHAN_DLE_MAX_PAGES = 10
 
 
 def purge_orphan_dle_events(limit: int = _ORPHAN_DLE_BATCH, *, dry_run: bool = False) -> int:
@@ -562,59 +574,91 @@ def purge_orphan_dle_events(limit: int = _ORPHAN_DLE_BATCH, *, dry_run: bool = F
     **文件先于行**：目录清不掉（或形态不符）就本轮不删该行，下轮重试——本清理不关联任何
     run，故没有 deferred 语义，也不会阻塞别人的 retention。``dry_run=True`` 只盘点、不改动
     （首次上线前人工复核用）。返回清理（或盘点）的事件数。
+
+    **#2316：键集推进**。被跳过的行（共享根未配置 / 形态不符 / 目录删不掉）**恒为最老**，
+    而旧实现每轮只取 `ORDER BY updated_at LIMIT n` 的**头一批**——跳过行不删也不推进，
+    于是每轮占据批头；积压到批大小后 ``purged`` 恒为 0（静默空转，只有 warning）。
+    现在改为按 ``(updated_at, id)`` 键集翻页（上限 ``_ORPHAN_DLE_MAX_PAGES`` 页），
+    本轮的扫描可以越过跳过行继续找可清理的行；跳过量按 ``reason`` 计入
+    ``stability_dle_orphan_skipped_total``（此前不可观测）。
     """
     from backend.core.storage_root import resolve_shared_storage_root
     from backend.models.device_log_event import DeviceLogEvent
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=_sched().artifact_retention_days)
     with SessionLocal() as db:
-        rows = db.execute(
-            select(DeviceLogEvent.id, DeviceLogEvent.remote_path)
-            .where(
-                DeviceLogEvent.plan_run_id.is_(None),
-                DeviceLogEvent.job_id.is_(None),
-                DeviceLogEvent.state.in_(_ORPHAN_DLE_STATES),
-                DeviceLogEvent.updated_at < cutoff,
+        resolved_base = None
+        unassigned_root = None
+        if not dry_run:
+            root = resolve_shared_storage_root()
+            resolved_base = Path(root).resolve() if root else None
+            unassigned_root = (
+                (resolved_base / "devices" / "unassigned") if resolved_base else None
             )
-            .order_by(DeviceLogEvent.updated_at)
-            .limit(limit)
-        ).all()
-        if not rows:
-            return 0
-        if dry_run:
-            for event_id, remote_path in rows:
-                logger.info("dle_orphan_dry_run id=%s path=%s", event_id, remote_path)
-            logger.info("dle_orphan_dry_run_total events=%d", len(rows))
-            return len(rows)
 
-        root = resolve_shared_storage_root()
-        resolved_base = Path(root).resolve() if root else None
-        unassigned_root = (resolved_base / "devices" / "unassigned") if resolved_base else None
+        cursor: tuple | None = None
         purged = 0
-        for event_id, remote_path in rows:
-            if remote_path:
-                if resolved_base is None:
-                    logger.warning("dle_orphan_skipped_root_unset id=%s", event_id)
+        counted = 0
+        for _page in range(_ORPHAN_DLE_MAX_PAGES):
+            stmt = (
+                select(DeviceLogEvent.id, DeviceLogEvent.remote_path, DeviceLogEvent.updated_at)
+                .where(
+                    DeviceLogEvent.plan_run_id.is_(None),
+                    DeviceLogEvent.job_id.is_(None),
+                    DeviceLogEvent.state.in_(_ORPHAN_DLE_STATES),
+                    DeviceLogEvent.updated_at < cutoff,
+                )
+            )
+            if cursor is not None:
+                stmt = stmt.where(
+                    tuple_(DeviceLogEvent.updated_at, DeviceLogEvent.id) > cursor
+                )
+            rows = db.execute(
+                stmt.order_by(DeviceLogEvent.updated_at, DeviceLogEvent.id).limit(limit)
+            ).all()
+            if not rows:
+                break
+
+            for event_id, remote_path, _updated_at in rows:
+                if dry_run:
+                    logger.info("dle_orphan_dry_run id=%s path=%s", event_id, remote_path)
+                    counted += 1
                     continue
-                event_dir = _locate_unassigned_event_dir(remote_path, unassigned_root)
-                if event_dir is None or not _within_shared_root(event_dir, resolved_base):
-                    logger.warning(
-                        "dle_orphan_path_invalid id=%s path=%s", event_id, remote_path,
-                    )
-                    continue
-                try:
-                    if event_dir.is_dir():
-                        shutil.rmtree(event_dir)
-                except Exception:
-                    logger.warning(
-                        "dle_orphan_purge_failed id=%s dir=%s",
-                        event_id, event_dir, exc_info=True,
-                    )
-                    continue
-            db.query(DeviceLogEvent).filter(
-                DeviceLogEvent.id == event_id
-            ).delete(synchronize_session=False)
-            purged += 1
+                if remote_path:
+                    if resolved_base is None:
+                        logger.warning("dle_orphan_skipped_root_unset id=%s", event_id)
+                        dle_orphan_skipped_total.labels(reason="root_unset").inc()
+                        continue
+                    event_dir = _locate_unassigned_event_dir(remote_path, unassigned_root)
+                    if event_dir is None or not _within_shared_root(event_dir, resolved_base):
+                        logger.warning(
+                            "dle_orphan_path_invalid id=%s path=%s", event_id, remote_path,
+                        )
+                        dle_orphan_skipped_total.labels(reason="path_invalid").inc()
+                        continue
+                    try:
+                        if event_dir.is_dir():
+                            shutil.rmtree(event_dir)
+                    except Exception:
+                        logger.warning(
+                            "dle_orphan_purge_failed id=%s dir=%s",
+                            event_id, event_dir, exc_info=True,
+                        )
+                        dle_orphan_skipped_total.labels(reason="purge_failed").inc()
+                        continue
+                db.query(DeviceLogEvent).filter(
+                    DeviceLogEvent.id == event_id
+                ).delete(synchronize_session=False)
+                purged += 1
+
+            last = rows[-1]
+            cursor = (last.updated_at, last.id)
+            if len(rows) < limit:
+                break
+
+        if dry_run:
+            logger.info("dle_orphan_dry_run_total events=%d", counted)
+            return counted
         if purged:
             db.commit()
             logger.info("dle_orphan_purged events=%d", purged)

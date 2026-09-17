@@ -63,7 +63,9 @@ export const navGroups: NavGroup[] = [
     // 低频长尾：有但不必显眼
     label: '更多功能',
     items: [
-      { path: '/wifi', label: 'WiFi 资源池', icon: Wifi },
+      // #2360（裁决 A）：页面全部接口 admin-only，入口对非 admin 隐藏——
+      // 与 /storage 同形态（可见但必 403 是最差组合）。
+      { path: '/wifi', label: 'WiFi 资源池', icon: Wifi, adminOnly: true },
       { path: '/schedules', label: '定时调度', icon: CalendarClock },
     ],
   },

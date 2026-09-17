@@ -132,8 +132,26 @@ Agent 侧的挂载在这些站点由运维按分享约定自行完成，S5 对�
 - **S2**：渲染抓取配置 `/etc/stp/prometheus/prometheus.yml`（job `file-server` → `127.0.0.1:9100`）、
   监听参数 `/etc/default/prometheus`（`--web.listen-address=127.0.0.1:<prometheus_port>`，默认 9091）
   与 `/etc/default/prometheus-node-exporter`（回环 + `--collector.nfsd` + textfile 采集器）；
-- **S4**：落地宿主进程内存采样器（`/usr/local/sbin/stp-mem-top` + `stp-mem-top.timer`）、
-  `enable --now` 三个单元，并实测 `http://127.0.0.1:<端口>/-/ready` 才报 PASS。
+- **S2b**：渲染**告警规则** `/etc/stp/prometheus/rules/alerts-stability-platform.yml`
+  （仓库那份是唯一事实源；由 `prometheus.yml` 的 `rule_files` 段加载，两者缺一规则就只是文件）；
+- **S4**：落地宿主进程内存采样器（`/usr/local/sbin/stp-mem-top` + `stp-mem-top.timer`）与
+  **退役判据守卫**（`stp-script-guard.{service,timer}`，每日 09:30 跑 `--guard`、落 textfile
+  指标，见 [script-versioning](../development/script-versioning.md)），`enable --now` 相应单元，
+  并实测 `http://127.0.0.1:<端口>/-/ready` 才报 PASS。
+
+- **S4b（漂移检测）**：`tools/dev/check-monitoring-assets.py` 把 `monitoring_artifacts()`
+  的每一项与站点已装副本逐字节比对（期望内容 = 源文件按本机事实渲染）。退出码
+  `0` 无漂移 / `1` 有漂移 / `2` 无从判定；每项四态 `match|drift|absent|skipped`
+  （`skipped` = 源含不可由本机确定的占位符，如 `<site-id>`、`<prometheus-port>`）。
+  **执行者是 `check-deploy-source.sh`**（每次部署前与 backend unit 的 `ExecStartPre=-`）：
+  漂移只在"改了仓库、没重跑安装"时发生，与部署时点天然重合，因此不再新开 timer；
+  检测只打 WARN——本脚本 `exit 1` 会被 runbook 读成「停止部署」，两件事不能混。
+  本机这类 installer 之前的存量部署只有 `/etc/prometheus/`，脚本按
+  `LEGACY_FALLBACKS` 认得该落点，否则会退化成"全部 absent"。
+
+> **`monitoring_ready` 不证明告警在跑**（#2488）：此前规则文件不在任何安装清单里、模板也没有
+> `rule_files` 段，安装报告照样 PASS——它只证明服务起了。现在两者都进安装产物，
+> `tests/test_site_install.py` 双向守住（缺 `rule_files` 或规则未落地 ⇒ 红）。
 
 两个不变量：
 
@@ -284,6 +302,7 @@ sudo ./deploy/install.sh handover
 | `storage_unwritable` / `storage_probe_failed` | 分享拒绝写入 / 读回不一致 | 查导出选项（`all_squash` 映射身份与导出根属组）、空间与控制面到存储的链路 |
 | `storage_probe_subdir` | 探针子目录取值含斜杠或穿越 | 传单个目录名（字母/数字/点/下划线/短横线） |
 | `install_monitoring` | 监控栈没起来：包装不上 / 发行版 unit 不读 `$ARGS` / `/-/ready` 未就绪 | `dpkg -l prometheus prometheus-node-exporter`、`grep -n ARGS /usr/lib/systemd/system/prometheus.service`、`systemctl status prometheus prometheus-node-exporter stp-mem-top.timer`、`journalctl -u prometheus -n 50` |
+| `install_monitoring`（规则/守卫没生效） | 服务起来了但 `/api/v1/rules` 是空的 | `ls /etc/stp/prometheus/rules/`、`grep -n rule_files /etc/stp/prometheus/prometheus.yml`、`curl -s 127.0.0.1:<端口>/api/v1/rules | head`；改了规则要 `POST /-/reload`（`--web.enable-lifecycle`） |
 | `install_confirm` / `install_hostname` | 确认值或主机名对不上 | 确认在目标机上执行，`--confirm-site/--confirm-target` 取自 `site.yaml` |
 | `state_locked` | 同站点已有安装在进行 | 等它结束，或确认无残留进程后重跑 |
 
