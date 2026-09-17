@@ -12,7 +12,7 @@ Class: bug-fix
 3. `_agent_version_is_supported` → 直接 re-export `agent_version_is_supported`；
 4. 去掉 `/steps` 未使用的重复 `X-Agent-Secret` Header 形参与空注释块。
 
-`agent_api.py` **515 → 465**。
+`agent_api.py` **515 → 462**。
 
 ## Alternatives
 
