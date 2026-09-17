@@ -5,21 +5,16 @@ Authentication: X-Agent-Secret header (compared to AGENT_SECRET env var).
 
 import logging
 import secrets
-from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException
-from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from backend.api.response import ApiResponse, ok
-from backend.api.error_helpers import raise_api_http_error
 from backend.core.agent_secret import AgentSecretNotConfiguredError, require_agent_secret
 from backend.core.database import get_async_db, get_db
-from backend.models.enums import JobStatus
 from backend.models.host import Host
-from backend.models.job import JobInstance
 from backend.api.routes.auth import get_current_active_user
 from backend.services.agent_recovery import (
     _RecoverySyncIn,
@@ -110,13 +105,16 @@ from backend.services.agent_job_heartbeat import (  # noqa: F401
 from backend.services.agent_step_status import (
     StepTraceIn,
     _StepStatusIn,
-    _require_valid_runtime_lease,
     update_agent_job_step_status,
     upload_agent_step_traces,
 )
 from backend.services.agent_step_status import (  # noqa: F401
     StepStatusIn,
     require_valid_runtime_lease,
+)
+from backend.services.agent_job_status import (
+    JobStatusUpdate,
+    update_agent_job_status,
 )
 from backend.services.agent_host_heartbeat import (  # noqa: F401
     BackpressureInfo,
@@ -186,10 +184,7 @@ def _verify_agent(x_agent_secret: Optional[str] = Header(None, alias="X-Agent-Se
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
 
-class JobStatusUpdate(BaseModel):
-    status: str
-    reason: str = ""
-    fencing_token: str
+# JobStatusUpdate / StepTraceIn / _StepStatusIn 见对应 service（本模块 re-export）
 
 
 # ── ADR-0019 Phase 3a: Recovery Sync models ──────────────────────────────────
@@ -240,39 +235,7 @@ async def update_job_status(
     _=Depends(_verify_agent),
 ):
     """Transition job status via JobStateMachine."""
-    job = await db.get(JobInstance, job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="job not found")
-
-    await _require_valid_runtime_lease(db, job, payload.fencing_token)
-
-    try:
-        new_status = JobStatus(payload.status.upper())
-    except ValueError:
-        raise HTTPException(status_code=400, detail=f"unknown status: {payload.status}") from None
-
-    if new_status in {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.ABORTED}:
-        raise_api_http_error(
-            status_code=409,
-            code="TERMINAL_STATUS_REQUIRES_COMPLETE",
-            message="terminal status must be reported through /jobs/{job_id}/complete",
-        )
-    if new_status != JobStatus.RUNNING:
-        raise_api_http_error(
-            status_code=409,
-            code="INVALID_JOB_TRANSITION",
-            message="status endpoint only accepts RUNNING",
-        )
-
-    # Compatibility endpoint is now heartbeat-only.  Claim already performs
-    # PENDING→RUNNING atomically with lease acquisition, so repeated RUNNING is
-    # a no-op rather than a second state transition.
-    job.updated_at = datetime.now(timezone.utc)
-    if payload.reason:
-        job.status_reason = payload.reason
-
-    await db.commit()
-    return ok({"job_id": job_id, "status": job.status})
+    return ok(await update_agent_job_status(db, job_id, payload))
 
 
 @router.post("/steps", response_model=ApiResponse[dict])
