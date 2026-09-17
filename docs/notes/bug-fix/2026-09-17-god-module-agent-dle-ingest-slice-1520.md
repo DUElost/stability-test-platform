@@ -18,7 +18,7 @@ Class: bug-fix
 
 路由退化为 `ok(await …)`；常量与 schema 经路由 re-export 保既有测试。
 
-`agent_api.py` **1995 → ~1597**（本刀约 -400）。
+`agent_api.py` **1995 → 1587**（本刀约 -408）。
 
 ## Alternatives
 
@@ -28,9 +28,9 @@ Class: bug-fix
 
 ## Verification
 
-- 服务直测（parse_iso / PULL_FAILED 派生 / 空批）；
-- API：`test_agent_device_log_events`；
-- `ruff` + `check:quick`。
+- 服务直测 **4 passed**（parse_iso / PULL_FAILED 派生 / 空批）；
+- API：`test_agent_device_log_events` → **14 passed**；
+- `ruff` → All checks passed；`check:quick` → **10 gates OK**。
 
 ## Revisit
 
