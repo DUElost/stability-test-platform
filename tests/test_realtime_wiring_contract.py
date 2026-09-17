@@ -1,4 +1,4 @@
-"""#2400：实时通道「两端接线」的结构守卫（#2448 增判据 4、收紧判据 1）。
+"""#2400：实时通道「两端接线」的结构守卫（#2448 增判据 4、收紧判据 1；#2400 残余增判据 5）。
 
 背景：`/dashboard` 事件面反复出现**同一形态**的漂移——一端有、另一端没有，
 运行时两端都不报错，只有在真实数据下才看得出来（#2129 家族）：
@@ -18,15 +18,20 @@
    这一侧，没有任何一条以 `SOCKET_MESSAGE_TYPES`（前端 `switch` 判据的值域）为
    全集回头看生产者——`DEPLOY_UPDATE` 这种「前端有消费、后端零生产者」的分支
    因此无门禁（本判据即其补位；该类型已按两端同删收口）。
+5. **#2400 残余：agent 发的事件在服务端无 handler**：反向的最后一侧——agent
+   `_emit` 出的事件若在 `AgentNamespace` 没有 `on_*`，python-socketio **静默丢弃**
+   （无错误无日志）。`step_update` 就这样活了很久（agent 侧有方法与路由分支、
+   服务端零 handler），四条判据都不覆盖 agent → server 这一侧。
 
-四条判据都是**纯静态文本扫描**（`tests/` 准入判据：纯离线 + 秒级），分别对应
-上述四种漂移。每条都带**非空断言**防止扫描面塌成恒真（例如函数被改名后正则
+五条判据都是**纯静态文本扫描**（`tests/` 准入判据：纯离线 + 秒级），分别对应
+上述五种漂移。每条都带**非空断言**防止扫描面塌成恒真（例如函数被改名后正则
 匹配为空、白名单解析失败等），并对扫描面本身有钉子：
 
 - `broadcast_*` 定义数必须 ≥ 5（当前 5 个，且每个都有生产调用方）；
 - 订阅描述符导出数必须 ≥ 3（dashboard / fleet / plan_run / console）；
 - `_ROOM_PATTERN` 解析出的房间族必须 ≥ 2（plan_run / console / fleet）；
-- `SOCKET_MESSAGE_TYPES` 值域必须 ≥ 8（#2448）。
+- `SOCKET_MESSAGE_TYPES` 值域必须 ≥ 8（#2448）；
+- agent `_emit` 事件数与 `AgentNamespace` handler 数必须各 ≥ 2（#2400 残余）。
 
 判据 1 的「有人在用」按 **AST 标识符**判定（#2448）：文本计数会把注释/文档
 字符串里提到的函数名也算成调用方，据此判绿会掩盖真实死角。
@@ -271,3 +276,62 @@ def test_every_message_type_has_a_server_producer():
         if t not in types or _norm_event(t) in emitted
     )
     assert not stale, f"豁免表过期（类型已有生产者或已不存在），应移出：{stale}"
+
+
+# ── 判据 5：agent 发出的事件必须有服务端 handler（#2400 残余）────────────────
+
+
+AGENT_SOCKET_CLIENT = BACKEND / "agent" / "socketio_client.py"
+
+# 有意发而不处理的 agent 事件 → 保留理由。当前为空：两端已对齐。
+_ALLOWED_AGENT_EMITS_WITHOUT_HANDLER: dict[str, str] = {}
+
+
+def _agent_emitted_events() -> set[str]:
+    """agent 侧 `_emit("<name>", …)` 的字面量事件名。
+
+    只看字面量：`_emit(msg_type or "message", …)` 这类动态转发不属于「声明了某个
+    事件」；要新增通道就必须写出字面量，本判据才看得见。
+    """
+    return set(re.findall(r'_emit\(\s*"([a-z_]+)"', _read(AGENT_SOCKET_CLIENT)))
+
+
+def _agent_namespace_handlers() -> set[str]:
+    """`AgentNamespace` 的 `on_<name>` handler 集（socketio 的事件入口）。"""
+    src = _read(SERVER)
+    block = re.search(r"class AgentNamespace\(.*?(?=\nclass )", src, re.S)
+    assert block is not None, "AgentNamespace 未找到（改名？）"
+    return set(re.findall(r"async def on_(\w+)\(", block.group(0)))
+
+
+def test_agent_emit_scan_surface_is_not_empty():
+    events = _agent_emitted_events()
+    handlers = _agent_namespace_handlers()
+    assert len(events) >= 2, f"agent emit 扫描面塌了：{events}"
+    assert len(handlers) >= 2, f"AgentNamespace handler 扫描面塌了：{handlers}"
+
+
+def test_every_agent_emit_has_a_server_handler():
+    """#2400 残余：agent `_emit` 的事件必须在 `AgentNamespace` 有 handler。
+
+    服务端没有对应 `on_*` 时 python-socketio **静默丢弃**（无错误、无日志）——
+    这正是 `step_update` 长期存活的方式：agent 侧有方法、有 `send()` 路由分支，
+    服务端零 handler，于是「通道看起来是通的」。豁免需带理由登记。
+    """
+    handlers = _agent_namespace_handlers()
+    events = _agent_emitted_events()
+
+    missing = sorted(
+        e for e in events
+        if e not in handlers and e not in _ALLOWED_AGENT_EMITS_WITHOUT_HANDLER
+    )
+    assert not missing, (
+        "以下 agent 事件在 AgentNamespace 没有 handler（发出即被静默丢弃）——"
+        f"要么补 handler，要么连 agent 侧发射点一起删：{missing}"
+    )
+
+    stale = sorted(
+        e for e in _ALLOWED_AGENT_EMITS_WITHOUT_HANDLER
+        if e not in events or e in handlers
+    )
+    assert not stale, f"豁免表过期（事件已有 handler 或已不再发射），应移出：{stale}"
