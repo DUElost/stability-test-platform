@@ -6,8 +6,10 @@ import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import Sidebar from './Sidebar';
 
+const mocks = vi.hoisted(() => ({ role: 'admin' }));
+
 vi.mock('@/hooks/useAuthSession', () => ({
-  useAuthSession: () => ({ data: { id: 1, username: 'tester', role: 'admin' } }),
+  useAuthSession: () => ({ data: { id: 1, username: 'tester', role: mocks.role } }),
 }));
 
 function renderSidebar() {
@@ -35,5 +37,21 @@ describe('Sidebar 折叠分组焦点顺序（#1197）', () => {
 
     fireEvent.click(groupToggle!);
     expect(content).not.toHaveAttribute('inert');
+  });
+});
+
+describe('admin-only 入口按角色隐藏（#2360）', () => {
+  it('user 角色看不到 WiFi 资源池与文件服务器；admin 看得到', () => {
+    // 折叠分组的链接仍在 DOM（#1197 只退焦点顺序），所以直接按文案查即可
+    mocks.role = 'user';
+    const { unmount } = renderSidebar();
+    expect(screen.queryByText('WiFi 资源池')).not.toBeInTheDocument();
+    expect(screen.queryByText('文件服务器')).not.toBeInTheDocument();
+    unmount();
+
+    mocks.role = 'admin';
+    renderSidebar();
+    expect(screen.getByText('WiFi 资源池')).toBeInTheDocument();
+    expect(screen.getByText('文件服务器')).toBeInTheDocument();
   });
 });

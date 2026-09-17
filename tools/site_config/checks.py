@@ -136,6 +136,10 @@ MESSAGES = {
     "host_retired": "The Host is retired; unretire it explicitly before installing an Agent.",
     "host_not_found": "The Host row disappeared between reconciliation and install; re-run after checking concurrent changes.",
     "host_create_failed": "Host creation was rejected; inspect the API response and the audit trail.",
+    "host_ssh_port_mismatch": (
+        "The existing Host row's SSH port differs from the declared ansible_port, while the install uses "
+        "the Host row's port — align them (update the Host row's ssh_port, or fix the inventory) and re-run."
+    ),
     "agent_install_failed": "The Agent installation run failed; inspect the RunConsole log, fix the cause, and re-run.",
     "agent_install_canceled": (
         "The install run was canceled before it finished — that is not a script failure. Two causes look the "
