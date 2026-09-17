@@ -1,6 +1,6 @@
 # Main CI 墙钟同类问题盘点 + 覆盖完备性
 
-Status: observed
+Status: implemented
 Class: process
 
 ## Decision
