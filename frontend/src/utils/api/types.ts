@@ -331,6 +331,12 @@ export interface RiskDistribution {
 }
 
 export interface RecentRun {
+  /**
+   * #2420：字段名叫 run，装的其实是 **JobInstance.id**（`results.py` 里
+   * `RecentRun(run_id=job.id)`，报告端点 `/runs/{id}/report` 也是同一口径）。
+   * 刻意不改 JSON 字段名（对外契约变更需单独裁决），但 UI 一律按 job 语义使用它，
+   * 跳转走权威形状 `/jobs/:jobId/report`。
+   */
   run_id: number;
   task_name: string;
   task_type: string;

@@ -72,7 +72,7 @@ AGENT_NS = "/agent"
 #: 服务端会推给 Agent 的事件（夹具只回 ack，不做任何事；verify_scripts 例外：只读哈希）
 PUSH_EVENTS = ("control", "verify_scripts", "execute_job", "run_job", "dispatch", "job_command")
 #: Agent → 服务端的事件（`socketio_server.AgentNamespace` 的 on_* 集合）
-AGENT_EMIT_EVENTS = ("step_log", "step_update", "job_status", "heartbeat")
+AGENT_EMIT_EVENTS = ("step_log", "job_status", "heartbeat")
 
 
 class FixtureRefused(RuntimeError):

@@ -60,7 +60,7 @@ def test_push_events_are_only_acked(fa):
 
     （``control`` 的回执在 #2518 起不再是「只回 ack」：abort 要回报终态，见下方用例。）"""
     assert "execute_job" in fa.PUSH_EVENTS and "run_job" in fa.PUSH_EVENTS
-    assert set(fa.AGENT_EMIT_EVENTS) == {"step_log", "step_update", "job_status", "heartbeat"}
+    assert set(fa.AGENT_EMIT_EVENTS) == {"step_log", "job_status", "heartbeat"}
 
 
 def test_verify_scripts_delegates_to_read_only_hasher(fa, monkeypatch):

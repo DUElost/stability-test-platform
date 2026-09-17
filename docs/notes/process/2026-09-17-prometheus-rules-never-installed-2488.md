@@ -47,10 +47,56 @@ Class: process
 
 ## Revisit
 
-- **漂移检测本身还没有执行者**：installer 只在安装那一刻比对。若要常态可见，最小做法是给
-  `verify.py` 加一个"规则文件内容是否与仓库一致"的检查项（复用 `--dry-run` 的渲染结果比对），
-  而不是再开一个 timer——守卫那条链已经证明"有产出没人看"等于没有。
+- ~~**漂移检测本身还没有执行者**~~ **已接**（后续 PR）：`tools/dev/check-monitoring-assets.py`
+  逐资产比对，执行者复用 `check-deploy-source.sh`（每次部署前 + backend unit 的 `ExecStartPre=-`），
+  只 WARN 不阻塞部署。**没有按本条原设想走 `verify.py`**：S6 验收要 admin 凭据、要绑一台设备、
+  要跑 noop 链，当常态检查太重；而且它只在验收那一刻跑，恰恰错过「改了仓库没重跑安装」这个
+  真实窗口——部署守卫才是与漂移同时发生的那个点。
 - 本机与 installer 的路径分叉（`/etc/prometheus` vs `/etc/stp/prometheus`）终归要收敛，
   否则这台最重要的机器永远在机制外；收敛方案属站点接管话题（#2283 的接管判据已具备）。
 - `host-memory-draft.yml` 需要它的作者确认：纳管进仓库，还是删除。
 - 7d／48h 两个阈值是拍的，按真实噪声跑两周后复议。
+
+**补记（同日，漂移检测落地时抓到的本机实况与两处自伤）**：
+
+- 检测器第一次跑本机报 7 项「漂移」，其中 **6 项是假漂移**：`--deploy-root` 默认取了脚本所在
+  仓库根，而在 `.wt/<slug>` 里跑时那是 worktree，生产单元渲染的却是主检出路径。改成**探测运行中的
+  `stability-backend` 的 `WorkingDirectory=`**（「生产到底在哪棵树上」的事实），探测不到才回退，
+  并把依据打印出来。教训：任何把「仓库根」当生产事实的工具，都得先问一句是谁在说这话。
+- 第二处自伤在测试里：E2E 用 `REPO_ROOT/venv/bin/python` 起子进程，而 **worktree 里没有 `venv/`**
+  ⇒ 子进程 `FileNotFoundError`、检测根本没跑，断言却照样通过。改用 `sys.executable`，并加反向自证
+  （stderr 出现 `No such file` / `usage:` 即红）。这是本会话**第三次**撞「被测路径被替掉/空转」同一
+  形态（前两次：#2430 的 importlib 绕过路径形态、#2457 的 FakeClient 替掉真实登录序列）。
+- 真实漂移 4 项，就是检测器的价值所在：
+  - `/etc/default/prometheus-node-exporter` 装的是 **Debian 出厂默认**，本站的 `--collector.nfsd`
+    与 `--collector.textfile.directory` **从未生效**——#2197 为存储页要的那批 NFS 服务端指标是空的；
+  - `/usr/local/sbin/stp-mem-top` 是**旧版脚本**，缺 #2016 的控制字符规范化（一个异常 `comm` 含换行
+    就能让整份 `stp_hostproc.prom` 解析失败、全部 `stp_hostproc_*` 序列消失）；
+  - `stp-mem-top.{service,timer}` 只差 installer 的归属标记头（功能等价）。
+  没有擅自同步生产：改 node-exporter 的 ARGS 要 restart（打断抓取）、换采样器会动生产指标形状，
+  都属需运维批准的变更；检测器的职责是让它可见、可复查，并在下次部署前自动提醒。
+
+**补记二（同日 14:2x，经批准把真漂移同步进生产）**：
+
+- 落地 4 项：`/etc/default/prometheus-node-exporter`、`/usr/local/sbin/stp-mem-top`、
+  `stp-mem-top.{service,timer}`；备份统一后缀 `.bak-stpguard-202609171422`。检测器复跑
+  **7 match / 0 drift / 2 skipped，rc=0**。
+- 效果可量化（不只是"文件对齐了"）：`node_nfsd_connections_total=48`、
+  `node_nfsd_disk_bytes_read_total≈175MB`、`…_written_total≈860MB` 已进 Prometheus ⇒
+  #2197 的存储页 NFS 服务端数据源第一次真的有数。附带收掉一个暴露面：node_exporter 原本
+  监听 `*:9100`，按仓库 ARGS 收窄成 `127.0.0.1:9100`（查证过当时只有本机 Prometheus 在抓）。
+- 覆盖前逐条核过那条运维手改（排除 `home/android/sonic_agent`）：该挂载点当前不存在，且
+  仓库正则的 `var/lib/.+` 覆盖更广 ⇒ 用仓库版**无损**。若以后又挂 Android 设备，需要的是
+  仓库模板支持站点差异，而不是回到手改 `/etc`。
+- 一次**白重启**：脚本先按主检出路径找检测器（它还在 #2517 分支上）⇒ 安装计划为空却仍
+  执行了 restart，node_exporter 无配置变更被重启一次（约 15s 抓取空窗）。记在这里是因为
+  "先验证计划非空，再执行不可逆动作"本该是流程的一部分。
+- 又抓到一次**假漂移**：主检出工作树当时被别的 Execution 切在 `refactor/1520-*` 上，
+  `--repo-root` 指过去就把已装规则比对到了那棵树里的旧源文件。⇒ 检测器现在自己打印
+  `事实源 = <path> @ <branch> <sha>`，非 main 时附「可能假漂移」提示（不改退出码）。
+  也反过来印证了接线的选择：`check-deploy-source.sh` 先校验「树在 main」，走它的人不会吃到这个坑。
+- **`/etc/default/prometheus` 故意没同步**，保持 `skipped`：现装的启动参数是硬写进
+  `stability-backend`/prometheus unit 的 `ExecStart`（`--config.file=/etc/prometheus/prometheus.yml`、
+  `--storage.tsdb.path=/var/lib/prometheus/metrics2/`），而仓库版会改成 `/etc/stp/prometheus/…`
+  与不带 `metrics2/` 的路径——那是能让历史数据在面板上"消失"的变更，属路径收敛议题（#2283
+  接管话题），不该混在一次"补 nfsd 采集器"的同步里。
