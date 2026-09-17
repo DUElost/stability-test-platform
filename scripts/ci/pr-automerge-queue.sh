@@ -88,29 +88,87 @@ find_open_queue_blocked_issue() {
     --jq '[.[] | select(.pull_request == null)] | first | .number // empty' 2>/dev/null || true
 }
 
-# 队首停摆：开/更新去重 issue。指纹（队首+失败集）未变则零写入，避免每小时刷屏。
+# ── #2556：区分「checks 从未创建」与「跑了但红」──────────────────────────────
+# 判据读取走 ALERT_TOKEN（workflow 注入的 GITHUB_TOKEN，job 已授 actions: write）
+# 而非默认 GH_TOKEN：AUTO_MERGE_PAT 的 scope 集不受本仓控制（#1783 已证它缺
+# workflow scope），若它没有 Actions 读权限，判据会静默退化成「每轮交给人工」——
+# 自愈等于没做。同 #1246「告警不依赖 PAT 是否含 Issues 权限」的取舍。
+probe_gh() {
+  if [ -n "${ALERT_TOKEN:-}" ]; then
+    GH_TOKEN="$ALERT_TOKEN" gh "$@"
+  else
+    gh "$@"
+  fi
+}
+
+# `ci.yml` 在某个 head sha 上的 run 数：`total_count == 0` 才是「GitHub 侧触发
+# 丢失」（本仓无法预防、也没有可修的 check）；>0 则说明触发正常，缺条目是别的
+# 成因（workflow 被禁用/改名/卡审批）。探测失败返回非零——调用方按「未知」处理，
+# 不猜。
+ci_run_total_for_sha() {
+  local sha="$1" out
+  out="$(probe_gh api "repos/${REPO}/actions/workflows/ci.yml/runs?head_sha=${sha}&per_page=1" \
+    --jq '.total_count // 0' 2>/dev/null)" || return 1
+  # 只接受纯数字：探测输出畸形时同样按「未知」处理，别把脏值喂给数值比较。
+  case "$out" in '' | *[!0-9]*) return 1 ;; esac
+  printf '%s' "$out"
+}
+
+# 冷却：reconcile 是无状态 job，「同一 (队首, head_sha) 至多自愈一次」的事实只能
+# 落在跨轮持久的面上——复用 `ci/queue-blocked` 告警正文里的隐藏标记（与去重指纹
+# 同处，不新增状态存储）。带行尾终止符匹配，理由同 #2075 的指纹比较。
+self_heal_already_attempted() {
+  local head="$1" sha="$2" existing body
+  [ -n "$sha" ] || return 1
+  existing="$(find_open_queue_blocked_issue)"
+  [ -n "$existing" ] || return 1
+  body="$(issue_gh issue view "$existing" --repo "$REPO" --json body --jq .body 2>/dev/null || true)"
+  printf '%s' "$body" | grep -qF "queue-selfheal: head=#${head} sha=${sha} -->"
+}
+
+# 队首停摆：开/更新去重 issue。指纹（队首 + 失败集 + 自愈状态）未变则零写入，
+# 避免每小时刷屏。
+#
+# #2556：`impact` 由调用方给出——停摆成因不同，给人看的「为什么没更新分支」必须
+# 如实区分（判为红 / 已自续重基 / 冷却已用尽 / 无 base-change 可做）。缺省即原先
+# 那句「不对红队首自动重基」。`selfheal_state` 与 `head_sha` 非空时，正文追加隐藏
+# 标记，作为下次 reconcile 判定冷却的依据（见 self_heal_already_attempted）。
 alert_queue_blocked() {
-  local head="$1" ref="$2" failed="$3"
+  local head="$1" ref="$2" failed="$3" impact="${4:-}" selfheal_state="${5:-}" head_sha="${6:-}"
   local fingerprint existing existing_body body author pr_url
+  local -a lines=()
   fingerprint="head=#${head} failed=${failed}"
+  if [ -n "$selfheal_state" ]; then
+    # sha 进指纹：换了 head（自愈后的新 sha）必须刷新正文与标记，否则冷却记录
+    # 会停在旧 sha 上，新 sha 的第二次判定误判为「没试过」。
+    fingerprint="${fingerprint} selfheal=${selfheal_state}:${head_sha:0:12}"
+  fi
   pr_url="https://github.com/${REPO}/pull/${head}"
   author="$(gh pr view "$head" --repo "$REPO" --json author --jq .author.login 2>/dev/null || echo unknown)"
+  if [ -z "$impact" ]; then
+    impact="- 队列影响：其后所有 PR 无法合入；分支更新已跳过（不对红队首自动重基）"
+  fi
 
   # #1549：逐行用 `printf '%s\n'` 输出，变量在**参数**里由 shell 展开。
   # 此前的写法把整行（含 %s）当参数、只把 '%s\n' 当格式串，于是 %s 全部按
   # 字面量输出——正文变成 "...[#%s](%s)..."，连指纹行也成了字面
-  # `<!-- queue-blocked-fingerprint: %s -->`，使下面第 113 行的 grep 永不命中，
+  # `<!-- queue-blocked-fingerprint: %s -->`，使下面比较指纹的那条 grep 永不命中，
   # 「同指纹零写入」的反刷屏去重彻底失效（当时每次 reconcile 都重写一遍 issue）。
-  body="$(printf '%s\n' \
-    "## FIFO 队首停摆（ci/queue-blocked 自动告警）" \
-    "" \
-    "- 队首 PR：[#${head}](${pr_url})（\`${ref}\`，作者 @${author}）" \
-    "- 未通过 required check：${failed}" \
-    "- 队列影响：其后所有 PR 无法合入；分支更新已跳过（不对红队首自动重基）" \
-    "- 判读工具：\`python -m tools.dev.queue_head_telemetry\`" \
-    "- 处置（人工，择一）：修复该 check / 解冲突 / 让位（关闭或改 draft）；不要手动 Merge" \
-    "" \
-    "<!-- queue-blocked-fingerprint: ${fingerprint} -->")"
+  lines=(
+    "## FIFO 队首停摆（ci/queue-blocked 自动告警）"
+    ""
+    "- 队首 PR：[#${head}](${pr_url})（\`${ref}\`，作者 @${author}）"
+    "- 未通过 required check：${failed}"
+    "${impact}"
+    "- 判读工具：\`python -m tools.dev.queue_head_telemetry\`"
+    "- 处置（人工，择一）：修复该 check / 解冲突 / 让位（关闭或改 draft）；不要手动 Merge"
+    ""
+  )
+  if [ -n "$selfheal_state" ] && [ -n "$head_sha" ]; then
+    lines+=("<!-- queue-selfheal: head=#${head} sha=${head_sha} -->")
+  fi
+  lines+=("<!-- queue-blocked-fingerprint: ${fingerprint} -->")
+  body="$(printf '%s\n' "${lines[@]}")"
 
   if ! issue_gh label create "$QUEUE_BLOCKED_LABEL" --repo "$REPO" --color d73a4a \
       --description "FIFO 队首停摆自动告警（#1246）" >/dev/null 2>&1; then
@@ -269,7 +327,7 @@ fi
 
 head_json="$(
   gh pr view "$head_number" --repo "$REPO" \
-    --json autoMergeRequest,statusCheckRollup,headRefName
+    --json autoMergeRequest,statusCheckRollup,headRefName,headRefOid
 )"
 auto_method="$(jq -r '.autoMergeRequest.mergeMethod // ""' <<<"$head_json")"
 if [ -z "$auto_method" ]; then
@@ -295,7 +353,10 @@ fi
 #     即对方视 NEUTRAL 为满足态。若我们判它失败，就会出现「GitHub 认为可合入、
 #     我们的 FIFO 却拒绝 update-branch」的队首伪停摆。
 #   - status != COMPLETED          → pending：仅日志，不告警（机器在跑，人无需动作）
-#   - 注册表里根本没有该 check     → missing：**仅在启动窗口之外**才告警（见下）
+#   - 注册表里根本没有该 check     → missing：**仅在启动窗口之外**才处理（见下）；
+#     而「超出窗口的 missing」还要再分两类（#2556，判据在循环之后）：
+#       · ci.yml 在该 head sha 上 run 数 == 0 → **从未创建**：一次带冷却的自愈重基；
+#       · run 数 > 0                          → 跑了但此 check 没上报 → 人工。
 #   - status == COMPLETED 且 conclusion 为 FAILURE/CANCELLED/TIMED_OUT/… → failed：告警
 #
 # #1792（第三类）：`MISSING` 不能无条件告警。`CodeQL` 是**独立 workflow**，其 check 条目
@@ -313,6 +374,7 @@ MISSING_GRACE_SECONDS=600  # 10 分钟：远大于实测 20-38s 注册延迟，�
 failed_checks=""
 pending_checks=""
 missing_checks=""
+unreported_checks=""
 
 # 启动窗口基准：本 PR rollup 中最早的 startedAt（无则视为极早期）
 earliest_started="$(
@@ -352,15 +414,16 @@ for check in "${REQUIRED[@]}"; do
     continue
   fi
 
-  # 注册表里没有该 check（无条目）——区分「启动窗口内尚未注册」与「真 missing」：
-  # 前者是正常时序（不告警），后者需人工排查（告警）。
+  # 注册表里没有该 check（无条目）——区分「启动窗口内尚未注册」与「超出窗口」：
+  # 前者是正常时序（不告警），后者**先不下结论**（#2556）——「从未创建」与
+  # 「跑了没上报」处置相反，循环后用 ci.yml 的 run 数分辨。
   if [ "$status" = "MISSING" ]; then
     if [ "$in_startup_window" = "true" ]; then
       missing_checks="${missing_checks:+${missing_checks}, }${check}:not-yet-registered"
       echo "Queue head #${head_number}: ${check} not yet registered (startup window); skip head update."
     else
-      echo "Queue head #${head_number}: ${check} not reported (missing); skip head update."
-      failed_checks="${failed_checks:+${failed_checks}, }${check}:missing"
+      echo "Queue head #${head_number}: ${check} not reported (missing); classified after the loop."
+      unreported_checks="${unreported_checks:+${unreported_checks}, }${check}:missing"
     fi
     continue
   fi
@@ -387,7 +450,58 @@ if [ -n "$pending_checks" ] || [ -n "$missing_checks" ]; then
   # 也**不** resolve 存量告警——CI 还没跑完，此刻既不该新增噪音，也不该宣布
   # 「已恢复」（真实失败可能紧随其后）。下一轮 reconcile 会重新判定；一旦
   # pending 转 failed、或 missing 超出启动窗口，则走上面的告警分支。
+  # 有 check 在跑时也不做自愈重基（#2556）：那会打断在途 run，等它落定。
   echo "Queue head #${head_number}: awaiting pending/unregistered checks: ${pending_checks}${pending_checks:+ }${missing_checks}"
+  exit 0
+fi
+
+# ── #2556：required check「没上报」的两种相反成因 ──────────────────────────
+# 原先 `missing` 与 FAILURE 同归「红队首」→ 一律不重基。但「GitHub 压根没在该 sha
+# 上创建 run」（触发丢失，不可预防，也没有可修的 check）需要的动作与「跑了且红」
+# 相反：前者的唯一自愈动作是**一次 base-change push**——新 head sha 会重新触发
+# `pull_request`；后者重基只会反复烧队列。判据用 run 数（`ci.yml` 的
+# `?head_sha=`，本仓可查、不需新权限），不是 rollup 里有 FAILURE/CANCELLED/STALE。
+#
+# 自愈有界：同一 (队首 PR, head_sha) 至多一次（标记落在告警正文，见
+# self_heal_already_attempted）。同一 sha 第二次仍无 run 就如实交回人工——不做
+# 「missing ↔ 重基」循环。换个 head sha（自愈后的新提交）则是一次全新判定。
+if [ -n "$unreported_checks" ]; then
+  head_sha="$(jq -r '.headRefOid // ""' <<<"$head_json")"
+  ci_runs=""
+  if [ -n "$head_sha" ]; then
+    ci_runs="$(ci_run_total_for_sha "$head_sha" || true)"
+  fi
+  if [ -z "$head_sha" ] || [ -z "$ci_runs" ]; then
+    echo "Queue head #${head_number}: ci.yml run count unavailable (sha='${head_sha}'); no self-heal."
+    alert_queue_blocked "$head_number" "$head_ref" "$unreported_checks" \
+      "- 队列影响：其后所有 PR 无法合入；未能探明 ci.yml 是否创建过 run（探测失败/无 head sha），未自动重基 → 需人工核实"
+    exit 0
+  fi
+  if [ "$ci_runs" != "0" ]; then
+    echo "Queue head #${head_number}: ${ci_runs} ci.yml run(s) on ${head_sha} but a required check never reported; no self-heal."
+    alert_queue_blocked "$head_number" "$head_ref" "$unreported_checks" \
+      "- 队列影响：其后所有 PR 无法合入；该 sha 上 CI 已触发过，但此 check 从未上报（疑 workflow 被禁用/改名/卡审批）→ 需人工排查，不重基"
+    exit 0
+  fi
+  if self_heal_already_attempted "$head_number" "$head_sha"; then
+    echo "Queue head #${head_number}: ci.yml still has no run on ${head_sha} after one self-heal; escalating."
+    alert_queue_blocked "$head_number" "$head_ref" "$unreported_checks" \
+      "- 队列影响：其后所有 PR 无法合入；已试过自续重基一次仍无 run → 需人工（GitHub 侧触发未恢复，重基已无法自愈）" \
+      "exhausted" "$head_sha"
+    exit 0
+  fi
+  behind="$(gh api "repos/${REPO}/compare/main...${head_ref}" --jq '.behind_by // 0')"
+  if [ "$behind" -eq 0 ]; then
+    echo "Queue head #${head_number}: no ci.yml run on ${head_sha} but not behind main; no base-change to push."
+    alert_queue_blocked "$head_number" "$head_ref" "$unreported_checks" \
+      "- 队列影响：其后所有 PR 无法合入；队首未落后 main，无 base-change 可做 → 需人工（补空提交或关闭重开以重触发 CI）"
+    exit 0
+  fi
+  echo "Queue head #${head_number}: ci.yml has no run on ${head_sha}; self-healing with one update-branch."
+  update_branch_tolerant "$head_number"
+  alert_queue_blocked "$head_number" "$head_ref" "$unreported_checks" \
+    "- 队列影响：其后所有 PR 无法合入；已自续重基一次（base-change push 重新触发 CI），等待新 head 的 run" \
+    "attempted" "$head_sha"
   exit 0
 fi
 
