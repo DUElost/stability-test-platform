@@ -1134,6 +1134,42 @@ def test_upgrade_without_agents_keeps_the_existing_export(tmp_path, monkeypatch)
     assert not any(tuple(call[:2]) == ("exportfs", "-ra") for call in ops2.calls), (
         "保留路径不应重载导出表（重载本身无害，但没必要动它）"
     )
+    # #2315 残余（审计重开）：保留路径必须确保服务在跑——「文件还在」不等于「导出可用」
+    assert ("systemctl", "enable", "--now", stages.NFS_SERVER_UNIT) in ops2.calls, (
+        "保留路径没有确保 nfs-server 在跑"
+    )
+
+
+def test_kept_branch_fails_when_nfs_server_cannot_start(tmp_path, monkeypatch):
+    """#2315 残余：kept 分支拉不起 nfs-server 时如实 FAIL（不得以 PASS 掩盖服务未起）。"""
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    prepare(tmp_path)
+    with_agents = _exporting_site(
+        tmp_path, agents=_agent_config(tmp_path, target="198.51.100.7"), name="site-agents.yaml",
+    )
+    ops1 = FakeOps(
+        hostname="control-i3.synthetic.invalid",
+        mounts={str(tmp_path / "mnt/share")},
+        commands={"python3", "systemctl", "nginx", "exportfs"},
+    )
+    first = invoke(tmp_path, config_path=with_agents, ops=ops1)
+    assert first["status"] == "PASS", first
+    published = _exports_file(tmp_path).read_text(encoding="utf-8")
+
+    no_agents = _exporting_site(tmp_path, agents=[], name="site-no-agents.yaml")
+    ops2 = FakeOps(
+        hostname="control-i3.synthetic.invalid",
+        mounts={str(tmp_path / "mnt/share")},
+        commands={"python3", "systemctl", "nginx", "exportfs"},
+        responses={"enable --now nfs-server": (1, "Failed to start nfs-server.service")},
+    )
+    second = invoke(tmp_path, config_path=no_agents, ops=ops2)
+
+    assert second["status"] == "FAIL", second
+    assert "install_export" in codes(second)
+    assert "export_kept" not in codes(second), "服务没起来不得报保留成功"
+    # 失败路径同样不动既有导出文件
+    assert _exports_file(tmp_path).read_text(encoding="utf-8") == published
 
 
 def test_dry_run_plans_the_export_without_writing(tmp_path):
