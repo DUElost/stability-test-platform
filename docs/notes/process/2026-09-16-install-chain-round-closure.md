@@ -20,14 +20,15 @@ Class: process
 | #2410 | #2317 回归：`set_timezone.yml` 引用 rescue-only 变量 → 健康真机安装链必失败 | #2415（09-16 13:30） | 现场 S5 全绿（两真机 `ok=32 changed=6 failed=0`）；守卫测试 + 反向验证 |
 | —— | 城市 B 现场复验结论（文档） | #2443（09-17 02:00） | [`process/2026-09-16-city-b-field-reverification`](./2026-09-16-city-b-field-reverification.md)（S0–S5、`handover` 7/7） |
 
-### 重开（残余未修，各只剩 1 条；owner 2026-09-17 02:14 裁决）
+### 重开（残余各 1 条；修复 PR 在途，owner 2026-09-17 02:14 裁决）
 
-| 工单 | 残余（收窄后） | 验收判据（审计评论原文要点） |
-|---|---|---|
-| #2255 | 取消按钮的**渲染条件含 `pending`**（`HostOperationPanel.tsx:271-282`），而接口只作用于正在跑的 console run（`hosts.py:1206-1213`，无则 409）→ 并发闸门 2 之下批量安装时多数行停在 pending，点「取消」必得一条英文 `detail.message` 落到该行红字 | 渲染只看 `running`（或对 pending 明确禁用/给中文说明），且点取消不会在行内留下英文报错 |
-| #2315 | `export_kept` 分支（`stages.py:801-812`）只追加 PASS、**不做任何服务侧动作**；`systemctl enable --now nfs-server` 只在 `else` 分支（`:818`），且 `NFS_SERVER_UNIT` 全文唯一使用点就在这里 → 报「存储就绪」时不再确保 NFS 在服务 | `export_kept` 分支下若 `nfs-server` 未在跑：要么拉起、要么如实 FAIL/BLOCKED（不得以 PASS 掩盖服务未起） |
+| 工单 | 残余（收窄后） | 验收判据（审计评论原文要点） | 修复 |
+|---|---|---|---|
+| #2255 | 取消按钮的**渲染条件含 `pending`**（`HostOperationPanel.tsx:271-282`），而接口只作用于正在跑的 console run（`hosts.py:1206-1213`，无则 409）→ 并发闸门 2 之下批量安装时多数行停在 pending，点「取消」必得一条英文 `detail.message` 落到该行红字 | 渲染只看 `running`（或对 pending 明确禁用/给中文说明），且点取消不会在行内留下英文报错 | PR **#2486**（渲染收窄到 `running`；未受理/409 文案中文化。required checks 全绿，**待 FIFO 队列合入；合入即关单**） |
+| #2315 | `export_kept` 分支（`stages.py:801-812`）只追加 PASS、**不做任何服务侧动作**；`systemctl enable --now nfs-server` 只在 `else` 分支（`:818`），且 `NFS_SERVER_UNIT` 全文唯一使用点就在这里 → 报「存储就绪」时不再确保 NFS 在服务 | `export_kept` 分支下若 `nfs-server` 未在跑：要么拉起、要么如实 FAIL/BLOCKED（不得以 PASS 掩盖服务未起） | PR **#2489**（kept 分支同跑 `enable --now`，拉不起来即 FAIL `install_export`；文件与导出表仍不动。required checks 全绿，**待 FIFO 队列合入；合入即关单**） |
 
-两单的完整审计备注与重开说明见各自 issue 评论（marker `audit24h-0917b-*`）。
+两单的完整审计备注与重开说明见各自 issue 评论（marker `audit24h-0917b-*`）；两个修复 PR 的
+反向验证（退回实现 → 对应用例红）见 PR 描述与各自 issue 的后续评论。
 
 ### 无 PR 的操作项（生产数据/机队，留痕在评论与记忆）
 
@@ -60,8 +61,8 @@ Class: process
 
 ## Revisit
 
-- **#2255 / #2315 的残余修复后**：在本 note 对应的表格行标注「已收口 + PR 号」，并按 issue
-  的验收判据复核（渲染条件只看 `running`；`export_kept` 分支下服务在跑或如实非 PASS）。
-- **每轮 24h 只读审计后**：把新开的残余单回填本台账（口径：工单 → 残余 → 验收判据 → 归属），
+- **#2255 / #2315 的修复 PR（#2486 / #2489）合入并关单后**：把上表「修复」列的措辞改成
+  「已收口（PR #…，合入 <时间>）」；若 issue 被再次重开，按新残余重写该行。
+- **每轮 24h 只读审计后**：把新开的残余单回填本台账（口径：工单 → 残余 → 验收判据 → 修复归属），
   避免审计结论只留在评论里。
 - **下一批 #735 退役**：1.0.1/1.0.2 留存窗口到期（约 10-29 / 11-14）后执行退役并在此更新。
