@@ -222,11 +222,12 @@ class TestResultsSummary:
         assert type_stats[stress_type]["finished"] == 0
         assert type_stats[stress_type]["failed"] == 1
 
-        # #2365：判据 = 活链（S/A/B → high/medium/low），无信号 = unknown。
-        # jobs[0] 的 `risk=LOW` 诱饵（快照）不得覆盖 S 级信号。
-        assert data["risk_distribution"]["high"] == baseline["risk_distribution"]["high"] + 1
-        assert data["risk_distribution"]["medium"] == baseline["risk_distribution"]["medium"]
-        assert data["risk_distribution"]["low"] == baseline["risk_distribution"]["low"] + 1
+        # #2365：判据 = 活链；#2494/ADR-0045 D2：桶名就是级别本身（不再翻成
+        # high/medium/low），无信号 = unknown。jobs[0] 的 `risk=LOW` 诱饵（快照）
+        # 不得覆盖 S 级信号。
+        assert data["risk_distribution"]["s"] == baseline["risk_distribution"]["s"] + 1
+        assert data["risk_distribution"]["a"] == baseline["risk_distribution"]["a"]
+        assert data["risk_distribution"]["b"] == baseline["risk_distribution"]["b"] + 1
         assert data["risk_distribution"]["unknown"] == baseline["risk_distribution"]["unknown"] + 2
 
         assert len(data["recent_runs"]) == 3
@@ -235,17 +236,17 @@ class TestResultsSummary:
         assert smoke_type in data["recent_runs"][0]["task_name"]
         assert data["recent_runs"][1]["run_id"] == jobs[2].id
         assert data["recent_runs"][1]["status"] == "CANCELED"
-        # recent_runs 的风险列同样走活链：jobs[3] 无信号 → UNKNOWN、
-        # jobs[2] 只有快照诱饵 → 仍 UNKNOWN、jobs[1] 有 B 级信号 → LOW
+        # recent_runs 同样走活链，且**出的是级别本身**（ADR-0045 D2 后这里没有翻译）：
+        # jobs[3] 无信号 → UNKNOWN、jobs[2] 只有快照诱饵 → 仍 UNKNOWN、jobs[1] 有 B 级信号 → B
         assert data["recent_runs"][0]["risk_level"] == "UNKNOWN"
         assert data["recent_runs"][1]["risk_level"] == "UNKNOWN"
-        assert data["recent_runs"][2]["risk_level"] == "LOW"
+        assert data["recent_runs"][2]["risk_level"] == "B"
 
         # 指标面：四个桶都与响应一致（unknown 含无信号 job 与未完成 job）
         assert recorder.values == {
-            "high": baseline_counts["high"] + 1,
-            "medium": baseline_counts["medium"],
-            "low": baseline_counts["low"] + 1,
+            "s": baseline_counts["s"] + 1,
+            "a": baseline_counts["a"],
+            "b": baseline_counts["b"] + 1,
             "unknown": baseline_counts["unknown"] + 2,
         }
 
@@ -433,7 +434,7 @@ class TestResultsSummaryRiskGauge:
 
         client.get("/api/v1/results/summary", headers=auth_headers)
         first = dict(recorder.values)
-        assert set(first) == {"high", "medium", "low", "unknown"}
+        assert set(first) == {"s", "a", "b", "unknown"}
         assert first["unknown"] >= 1, "用例前提：先要有一次非零写入，否则「归零」无从谈起"
 
         db_session.query(JobInstance).delete(synchronize_session=False)
@@ -444,7 +445,7 @@ class TestResultsSummaryRiskGauge:
         assert response.status_code == 200
         # RiskDistribution 就是四桶本身（无 total 字段）
         assert sum(response.json()["risk_distribution"].values()) == 0
-        assert recorder.values == {"high": 0, "medium": 0, "low": 0, "unknown": 0}, (
+        assert recorder.values == {"s": 0, "a": 0, "b": 0, "unknown": 0}, (
             "无 job 时也必须写一次（全 0）——否则 gauge 停在上一轮非零值"
         )
 
@@ -482,4 +483,117 @@ class TestResultsSummaryRiskGauge:
         # 关键：作用域这一次调用**不写**全局 gauge（旧实现会把 1 覆盖掉 4）
         assert recorder.values == {}, (
             f"带 project_key 的请求改写了全局 gauge：{recorder.values}"
+        )
+
+
+class TestRiskVocabularyParity:
+    """#2494 判据 1 的行为面：同一 job 在**四个对外面必须是同一个级别**。
+
+    四面 = `/results/summary` 的 `recent_runs[].risk_level`、`risk_distribution` 桶、
+    `/results/risk-trend` 当日桶、报告 DTO 的 `risk_summary.risk_level`。
+    收敛前它们分别是 `HIGH` / `high` / `S` / `S`（趋势第四态还另起 `NONE`）——
+    徽标按另一套键查表就恒显「未知」，而同屏 S/A/B 计数正常（#2418 的同型缺陷）。
+    离线的词表门禁在 `tests/test_risk_vocabulary_drift.py`，这里钉的是"跑起来真一致"。
+    """
+
+    def test_same_level_across_summary_trend_and_report(
+        self, client, auth_headers, db_session, sample_device
+    ):
+        now = datetime.now(timezone.utc)
+        plan = Plan(name="parity-s", description="", failure_threshold=0.05)
+        db_session.add(plan)
+        db_session.flush()
+
+        def mk_run_job(tag: str) -> JobInstance:
+            """一个 run 配一个 job（趋势按 **run** 汇总，所以两个 job 必须分属两个 run，
+            否则"零事件那一档"会被同 run 的 S 级吃掉，测不到 D4）。"""
+            run = PlanRun(
+                plan_id=plan.id,
+                status="SUCCESS",
+                failure_threshold=0.05,
+                plan_snapshot={"name": plan.name, "plan_id": plan.id},
+                run_type="MANUAL",
+                triggered_by="pytest",
+                started_at=now - timedelta(minutes=30),
+                ended_at=now - timedelta(minutes=20),
+            )
+            db_session.add(run)
+            db_session.flush()
+            job = JobInstance(
+                plan_run_id=run.id,
+                plan_id=plan.id,
+                device_id=sample_device.id,
+                host_id=sample_device.host_id,
+                status="COMPLETED",
+                status_reason=None,
+                pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+                started_at=now - timedelta(minutes=25),
+                ended_at=now - timedelta(minutes=21),
+            )
+            db_session.add(job)
+            db_session.flush()
+            return job
+
+        s_job = mk_run_job("s")
+        bare_job = mk_run_job("bare")
+        # S 级：ANR + swt 子类型走活链（log_observation）判定，不读任何快照文本
+        db_session.add(JobLogSignal(
+            job_id=s_job.id,
+            host_id=str(sample_device.host_id),
+            device_serial=sample_device.serial,
+            seq_no=0,
+            category="ANR",
+            source="inotifyd",
+            path_on_device="/data/anr/parity-0.txt",
+            detected_at=now - timedelta(minutes=24),
+            received_at=now - timedelta(minutes=24),
+            extra={
+                "event_subtype": "swt",
+                "nfs_path": "/nfs/swt/parity-0",
+                "schema_version": 2,
+            },
+        ))
+        # bare_job 不放任何信号：它是 D4 的那一半——"没有采到异常"必须落在 UNKNOWN，
+        # 不许被压成 B/低（收敛前正是这种 job 在列表里显示 LOW）。
+        db_session.commit()
+
+        summary = client.get(
+            "/api/v1/results/summary", params={"limit": 20}, headers=auth_headers,
+        ).json()
+        rows = {r["run_id"]: r for r in summary["recent_runs"]}
+        assert rows[s_job.id]["risk_level"] == "S", (
+            f"列表侧对外值域必须是级别本身，不得再翻成 HIGH：{rows[s_job.id]['risk_level']}"
+        )
+        assert rows[bare_job.id]["risk_level"] == "UNKNOWN", (
+            f"零事件的 job 必须是 UNKNOWN，不得压成 B/LOW：{rows[bare_job.id]['risk_level']}"
+        )
+        # 判据 1 的字面要求：整张列表值域 ⊆ {S,A,B,UNKNOWN}。两个 job（有判据 / 无判据）
+        # 都在集合里，这条才有判别力——只有单条时它会被上面的逐行断言先吃掉。
+        assert {r["risk_level"] for r in summary["recent_runs"]} == {"S", "UNKNOWN"}, (
+            "列表侧值域超出对外词表："
+            f"{sorted({r['risk_level'] for r in summary['recent_runs']})}"
+        )
+        # 桶名 = 级别（D2），且 UNKNOWN 与 b 分开（D4：零事件不是低风险）
+        dist = summary["risk_distribution"]
+        assert set(dist) == {"s", "a", "b", "unknown"}
+        assert dist["s"] >= 1
+        assert dist["unknown"] >= 1, "无判定依据的 job 没进 unknown 桶（D4 的覆盖率观测对象）"
+        assert dist["b"] == 0, "零事件被算进了 b（D4 禁止：没采到异常 ≠ 低风险）"
+
+        # 注意：risk-trend 走的是**裸模型**（response_model=RiskTrendOut），而
+        # /results/summary 也是裸模型、/runs/{id}/report/cached 却是 ApiResponse 信封
+        # ——同一文件三种形状，正是 #2420 第 3 项记的那笔账（本单不改信封）。
+        trend = client.get(
+            "/api/v1/results/risk-trend", params={"days": 30}, headers=auth_headers,
+        ).json()
+        day = trend["buckets"][0]
+        assert "NONE" not in day, f"趋势第四态已并入 UNKNOWN，不得再长回 NONE：{day}"
+        assert day["S"] >= 1 and day["B"] == 0
+        assert day["UNKNOWN"] >= 1, "趋势里零事件没进 UNKNOWN（第四态并词的落点，D2/D4）"
+
+        report = client.get(
+            f"/api/v1/runs/{s_job.id}/report", headers=auth_headers,
+        ).json()
+        assert (report.get("risk_summary") or {}).get("risk_level") == rows[s_job.id]["risk_level"], (
+            "报告 DTO 与列表必须同词表：徽标与同屏计数不能各说一套（#2494）"
         )

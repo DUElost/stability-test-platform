@@ -388,7 +388,7 @@ export default function Dashboard() {
                 </p>
               )}
               <RiskDistributionChart
-                data={resultsSummary?.risk_distribution ?? { high: 0, medium: 0, low: 0, unknown: 0 }}
+                data={resultsSummary?.risk_distribution ?? { s: 0, a: 0, b: 0, unknown: 0 }}
                 isLoading={riskLoading}
               />
             </div>
