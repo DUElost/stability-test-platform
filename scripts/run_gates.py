@@ -42,8 +42,11 @@ BASE_REF = os.environ.get("STP_GATE_BASE_REF", "origin/main")
 
 # 顺序即执行顺序；check:full = 全部按此顺序。
 GATES = {
+    # 扫描集含 tests/（根目录契约测试）——此前只在 backend/tools/scripts 上跑，
+    # 根 tests/ 的 lint 债因此长期不可见（#2535 清了三处才补上这一步）。
+    # 与 ci.yml 的 Ruff step 保持逐字一致（gate-parity）。
     "ruff": (
-        f"{PY} -m ruff check backend/ tools/ scripts/",
+        f"{PY} -m ruff check backend/ tools/ scripts/ tests/",
         ROOT,
         None,
     ),
