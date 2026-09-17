@@ -1,0 +1,134 @@
+#!/usr/bin/env python3
+"""上帝文件行数封顶棘轮门禁（#736）。
+
+规则：`CEILINGS` 列出的文件，行数不得超过其封顶值。封顶值是**棘轮**——
+把领域逻辑下沉到 `services/` 的同一个 PR 里应把它调小；**上调必须写明理由**。
+本门禁只负责让「继续往胖控制器里堆业务逻辑」在 PR 路径上立刻变红，
+不负责判断某个具体改动是否合理（那是评审的事）。
+
+为什么用棘轮而不是统一上限：三个文件的行数差异很大（`origin/main` 实测
+957 / 1622 / 2303），一刀切的上限要么形同虚设（按最大的定）、要么逼出「先把
+文件改名再堆」的应付式改动（按最小的定）。棘轮把每个文件**当前状态**当基线，
+只允许向好的方向走。
+
+封顶值 = 实测行数 × 1.05（向上取整）；缓冲是为了不与正在瘦身的 #1520 切片
+互相打架（搬出一半时文件可能短暂变长）。
+
+退出码：超限或有**过期条目**（文件已不存在/被改名）→ 1 并逐条列出；
+`CEILINGS` 为空 → 2（「什么都没检查」不能长得像「全绿」）；否则 0。
+`--self-test` 离线红绿自证（与本文件同 step 运行，防分类规则回归）。
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+
+#: 封顶值 = 2026-09-17 `origin/main`（1f22c951）实测行数 × 1.05（向上取整）；
+#: 缓冲是为了不与正在瘦身的 #1520 切片互相打架（搬出一半时文件可能短暂变长）。
+#:
+#: 基线实测：plan_runs.py 2303 / agent_api.py 957 / agent/main.py 1622。
+#: 下调时机：把领域逻辑下沉到 services/ 的同一个 PR 里把对应值调小。
+#: 键为仓库相对路径。
+CEILINGS: dict[str, int] = {
+    "backend/api/routes/plan_runs.py": 2419,
+    "backend/api/routes/agent_api.py": 1005,
+    "backend/agent/main.py": 1704,
+}
+
+
+def count_lines(path: Path) -> int:
+    """文件行数（`splitlines`——末尾换行不算一行，与 `wc -l` 同口径）。"""
+    return len(path.read_text(encoding="utf-8").splitlines())
+
+
+def check_ceilings(ceilings: dict[str, int] | None = None, root: Path = ROOT) -> list[tuple[str, int, int]]:
+    """返回超限清单 ``[(相对路径, 实际行数, 封顶值), ...]``（升序按差值）。
+
+    文件不存在同样计入（实际行数记 0、封顶值保留），由调用方按「过期条目」报红：
+    文件被拆散/改名时应在本 PR 里同步移除条目，否则封顶表会慢慢变成摆设。
+    """
+    table = CEILINGS if ceilings is None else ceilings
+    offenders: list[tuple[str, int, int]] = []
+    for rel, limit in table.items():
+        path = root / rel
+        actual = count_lines(path) if path.exists() else 0
+        if actual > limit or not path.exists():
+            offenders.append((rel, actual, limit))
+    return offenders
+
+
+def _format(offenders: list[tuple[str, int, int]]) -> str:
+    lines = []
+    for rel, actual, limit in offenders:
+        if actual == 0:
+            lines.append(f"  {rel}: 文件不存在（条目过期——拆分/改名时请在本 PR 里移除条目）")
+        else:
+            lines.append(f"  {rel}: {actual} 行 > 封顶 {limit} 行（超出 {actual - limit}）")
+    return "\n".join(lines)
+
+
+def _self_test() -> int:
+    """离线红绿自证：三种形态各自可判、缺配置不算绿。"""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "small.py").write_text("x = 1\n" * 10, encoding="utf-8")
+        (root / "big.py").write_text("x = 1\n" * 20, encoding="utf-8")
+
+        # 绿：未超限
+        if check_ceilings({"small.py": 10, "big.py": 20}, root):
+            print("[self-test] 未超限的文件被判超限", file=sys.stderr)
+            return 1
+        # 红：超限
+        over = check_ceilings({"small.py": 10, "big.py": 19}, root)
+        if [rel for rel, _, _ in over] != ["big.py"]:
+            print(f"[self-test] 超限判定错误：{over}", file=sys.stderr)
+            return 1
+        # 红：条目过期（文件不存在）
+        stale = check_ceilings({"gone.py": 1}, root)
+        if [rel for rel, _, _ in stale] != ["gone.py"]:
+            print(f"[self-test] 过期条目判定错误：{stale}", file=sys.stderr)
+            return 1
+        # 行数口径：末尾换行不算一行（与 wc -l 同）
+        (root / "exact.py").write_text("a\nb\nc\n", encoding="utf-8")
+        if count_lines(root / "exact.py") != 3:
+            print("[self-test] 行数口径错误（末尾换行被多算）", file=sys.stderr)
+            return 1
+    print("[OK] check_god_files_ceiling self-test 通过（超限/过期/未超限三态可判）")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="上帝文件行数封顶棘轮门禁（#736）")
+    parser.add_argument("--self-test", action="store_true", help="离线红绿自证")
+    args = parser.parse_args(argv)
+
+    if args.self_test:
+        return _self_test()
+
+    if not CEILINGS:
+        print("[FAIL] CEILINGS 为空——门禁什么都没检查", file=sys.stderr)
+        return 2
+
+    offenders = check_ceilings()
+    if offenders:
+        print(
+            "[FAIL] 以下文件超过行数封顶（#736）：\n"
+            f"{_format(offenders)}\n"
+            "新业务逻辑请下沉到 backend/services/ 领域服务层；"
+            "确实需要上调封顶值的，在 PR 描述里写明理由。",
+            file=sys.stderr,
+        )
+        return 1
+    for rel, limit in sorted(CEILINGS.items()):
+        print(f"[OK] {rel}: {count_lines(ROOT / rel)} / {limit} 行")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

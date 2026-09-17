@@ -19,12 +19,12 @@ from pathlib import Path
 
 import pytest
 
-from backend.api.routes import plan_runs as plan_runs_module
 from backend.models.enums import JobStatus, PlanRunStatus
 from backend.models.host import Device, Host
 from backend.models.job import JobInstance, JobLogSignal
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
+from backend.services import plan_run_watcher_summary as watcher_slice_module
 
 
 def _now() -> datetime:
@@ -169,7 +169,9 @@ def test_dashboard_category_source_is_shared_with_risk_summary():
 
     assert "UNIVIEW" in ANOMALY_SIGNAL_CATEGORIES
 
-    src = Path(plan_runs_module.__file__).read_text(encoding="utf-8")
+    # #1520 切片后 watcher/AEE 聚合的真源在 services/plan_run_watcher_summary；
+    # 守卫跟着所有权走：仍要求单源引用 ANOMALY_SIGNAL_CATEGORIES、禁止硬编码三元组。
+    src = Path(watcher_slice_module.__file__).read_text(encoding="utf-8")
     assert "ANOMALY_SIGNAL_CATEGORIES" in src
     # 曾经漏掉 UNIVIEW 的那份硬编码三元组不得再出现
     assert 'category.in_(["AEE", "VENDOR_AEE", "ANR"])' not in src

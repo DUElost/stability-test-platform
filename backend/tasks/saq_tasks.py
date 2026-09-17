@@ -470,6 +470,7 @@ async def scan_task(
                 elapsed += poll_interval
                 n_new = await asyncio_to_thread(
                     run_scan_sync, plan_run_id, scan_round_id=scan_round_id,
+                    expected_hosts=triggered,
                 )
                 if n_new:
                     registered += int(n_new)
@@ -503,6 +504,7 @@ async def scan_task(
         if completeness is not None and not completeness.complete:
             n_final = await asyncio_to_thread(
                 run_scan_sync, plan_run_id, scan_round_id=scan_round_id,
+                expected_hosts=triggered,
             )
             if n_final:
                 registered += int(n_final)

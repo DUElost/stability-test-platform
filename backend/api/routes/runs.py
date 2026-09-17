@@ -8,26 +8,20 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import List, Optional
-from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from backend.api.schemas import JiraDraftListItemOut, JiraDraftOut, RunReportOut, RunStepOut
 from backend.api.routes.auth import get_current_active_user, User
 from backend.api.response import ApiResponse, ok
-from backend.core.artifact_paths import (
-    ArtifactPathError,
-    ArtifactPathNotFoundError,
-    resolve_local_artifact_path,
-)
 from backend.core.database import get_db
 from backend.services.report_service import compose_run_report, build_jira_draft, _model_to_dict
+from backend.services.job_artifact_download import build_artifact_download_response
 
 router = APIRouter(prefix="/api/v1", tags=["runs"])
 logger = logging.getLogger(__name__)
@@ -74,20 +68,6 @@ def _report_to_markdown(report: RunReportOut) -> str:
     return "\n".join(lines)
 
 
-def _artifact_download_target(storage_uri: str) -> dict[str, str]:
-    parsed = urlparse(storage_uri)
-    scheme = parsed.scheme.lower()
-    if scheme in {"http", "https"}:
-        return {"kind": "redirect", "url": storage_uri}
-    try:
-        local_path = resolve_local_artifact_path(storage_uri, must_exist=True)
-    except ArtifactPathNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ArtifactPathError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"kind": "local", "path": str(local_path)}
-
-
 # ── Report ────────────────────────────────────────────────────────────────────
 
 
@@ -122,7 +102,7 @@ def _require_job_in_plan_run(db: Session, job_id: int, plan_run_id: int | None) 
         )
 
 
-@router.get("/runs/{run_id}/report", response_model=RunReportOut)
+@router.get("/runs/{run_id}/report", response_model=ApiResponse[RunReportOut])
 def get_run_report(
     run_id: int,
     plan_run_id: Optional[int] = Query(
@@ -131,11 +111,19 @@ def get_run_report(
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
+    """实时口径报告（**脚本对外入口**）：每次现算，不走快照。
+
+    #2420 第 3 项：信封与 ``/report/cached`` 统一为 ``{data, error}``
+    （此前本端点返回裸对象、cached 返回信封，同一资源两套形状——照抄 UI
+    代码的脚本拿到的是解不开的裸对象）。**UI 用 cached**（快照 + ``cached_at``
+    标注，#1082 裁决；前端 ``runs.ts`` 只消费 ``*/cached``），
+    **脚本要最新口径用本端点**（现在与 cached 同信封，解包代码可共用）。
+    """
     _require_job_in_plan_run(db, run_id, plan_run_id)
     report = compose_run_report(db, run_id)
     if report is None:
         raise HTTPException(status_code=404, detail="run not found")
-    return report
+    return ok(report)
 
 
 @router.get("/runs/{run_id}/report/export")
@@ -422,16 +410,12 @@ def download_run_artifact(
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
-    from backend.models.job import JobArtifact
+    """产物下载（**脚本对外入口，job 域**）：路径参数是 JobInstance.id。
 
-    artifact = db.get(JobArtifact, artifact_id)
-    if not artifact or artifact.job_id != run_id:
-        raise HTTPException(status_code=404, detail="artifact not found")
-
-    target = _artifact_download_target(artifact.storage_uri)
-    if target["kind"] == "redirect":
-        return RedirectResponse(url=target["url"], status_code=307)
-
-    local_path = Path(target["path"])
-    media_type = "application/gzip" if local_path.suffixes[-2:] == [".tar", ".gz"] else None
-    return FileResponse(path=str(local_path), filename=local_path.name, media_type=media_type)
+    #2420 第 4 项：同一资源的两条路由收敛为一份实现
+    （``backend/services/job_artifact_download.py``），校验顺序与 ``run_log_bundle``
+    409 守卫两侧同形。UI 权威入口是带 run 配对的
+    ``GET /plan-runs/{run_id}/jobs/{job_id}/artifacts/{artifact_id}/download``；
+    本条留给只持有 job id 的调用方（``/results`` 与报告 DTO 里的 id 都是 job 域）。
+    """
+    return build_artifact_download_response(db, job_id=run_id, artifact_id=artifact_id)
