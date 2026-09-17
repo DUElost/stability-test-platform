@@ -150,7 +150,7 @@ Class: process
 **补记（同日，告警面接入——顺带暴露两处契约盲区）**：
 
 - 指标没有告警就等于「跑了一个没人看的定时器」，所以补两条规则：`due>0` 持续 7 天
-  （`StabilityScriptGuardRetirementDue`）；三种失能形态合成一条
+  （`StabilityScriptGuardRetirementDue`）；四种不可信形态合成一条
   （`StabilityScriptGuardUntrusted`：broken／unknown／`time()-last_run > 48h`／`absent`）。
 - **盲区 1（指标来源）**：告警结构层只认 `backend/core/metrics.py` 注册表，textfile 指标会被判
   「未知指标」。解法不是开豁免清单，而是让 `tests/metrics_registry.py` 从生产者源码 `ast`

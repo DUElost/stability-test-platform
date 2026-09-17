@@ -266,7 +266,7 @@ groups:
             tools/dev/retire_script_versions.py plan 出 manifest，复核后 execute --yes。
             巡检任务永不写库，due 也不得被当成自动退役的许可。
 
-      # 三条失能形态合成一条，避免告警风暴：工具崩了（broken）、执行事实拿不到（unknown）、
+      # 四种不可信形态合成一条（避免告警风暴）：工具崩了（broken）、执行事实拿不到（unknown）、
       # 以及「守卫其实没在跑」（last_run 陈旧或指标整个消失）。最后一条尤其要紧——停摆时
       # due=0 仍会被读到，看起来像「干净」，正是本仓反复出现的「绿而空」形态。
       # 阈值 172800s = 48h：probe 每日一次 + Persistent=true 补跑，两天无结果即真停摆。

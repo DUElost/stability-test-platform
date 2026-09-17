@@ -213,7 +213,7 @@ python -m backend.scripts.check_unreferenced_script_versions --guard [--json]
 - 告警面（`deploy/prometheus/alerts-stability-platform.yml`）两条规则：
   `StabilityScriptGuardRetirementDue`（`due > 0` 持续 7 天＝有版本压着没人授权）与
   `StabilityScriptGuardUntrusted`（`broken==1 or unknown==1 or time()-last_run > 48h or
-  absent(last_run)`——三种失能合成一条以免告警风暴）。这两个 textfile 指标的名字由
+  absent(last_run)`——四种不可信形态合成一条，以免告警风暴）。这两个 textfile 指标的名字由
   `tests/metrics_registry.py` 的 `textfile_metric_index()` 从生产者源码静态提取后并入注册表
   索引，**不是豁免口子**：生产者改名或删掉某个指标，引用它的告警立刻按「未知指标」红。
 - **不进 CI**：CI 不得连生产库，夜间 `backend-test` job 也不是这条巡检的执行者。

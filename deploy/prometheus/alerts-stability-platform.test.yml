@@ -312,7 +312,7 @@ tests:
                 tools/dev/retire_script_versions.py plan 出 manifest，复核后 execute --yes。
                 巡检任务永不写库，due 也不得被当成自动退役的许可。
 
-  # 工具崩了 + 事实不可得 + 指标陈旧，三种失能同一条告警：只喂 broken=1（其余健康）
+  # 工具崩了／事实不可得／指标陈旧／指标消失——四种不可信形态同属一条告警：本块只喂 broken=1
   - interval: 1m
     input_series:
       - series: 'stp_script_guard_due'
