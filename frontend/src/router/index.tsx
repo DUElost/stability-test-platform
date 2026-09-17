@@ -139,7 +139,6 @@ export default function AppRouter() {
 
             <Route path="hosts" element={<HostsPage />} />
             <Route path="devices" element={<DevicesPage />} />
-            <Route path="wifi" element={<WifiPage />} />
             <Route path="results" element={<ResultsPage />} />
             <Route path="account/password" element={<ChangePasswordPage />} />
             {/* #1196：通知记录是普通用户的日常读取（后端 logs 端点本就仅要求登录）；
@@ -157,6 +156,9 @@ export default function AppRouter() {
               <Route path="settings/ai-assistant" element={<AiAssistantSettingsPage />} />
               <Route path="audit" element={<AuditLogPage />} />
               <Route path="storage" element={<FileServerPage />} />
+              {/* #2360：WiFi 资源池的列表/详情/loads 全是 require_admin——
+                  入口隐藏之外，直连 URL 也按 admin 门控（对齐 storage）。 */}
+              <Route path="wifi" element={<WifiPage />} />
             </Route>
 
             {/* ADR-0020 Plan 路由 */}

@@ -22,9 +22,14 @@ export default function UsersPage() {
   const { data: currentUser } = useAuthSession();
 
   // Fetch users list
+  // #2369 残余：全局 `refetchOnWindowFocus: false`（QueryProvider），而切回前台只按域
+  // 失效 plans/projects（useCrossClientSync）——本页既无轮询、也不在该域，从后台切回
+  // 后不会回追（另一管理员刚建/停用用户时看到陈旧列表）。这里显式 opt-in：focus 与
+  // 可见性语义一致，且只重取**活跃**查询（本页挂载中），不会放大限流桶。
   const { data: users, isLoading, error, refetch } = useQuery({
     queryKey: ['users'],
     queryFn: () => api.users.list(0, 200).then(res => res.items),
+    refetchOnWindowFocus: true,
   });
 
   // Create user mutation

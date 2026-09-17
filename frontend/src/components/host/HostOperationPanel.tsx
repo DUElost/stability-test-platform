@@ -270,7 +270,10 @@ export default function HostOperationPanel({
                   </button>
                   {onCancelInstall &&
                     op.kind !== 'hot_update' &&
-                    (op.status === 'pending' || op.status === 'running') && (
+                    // #2255 残余：只在**真正在跑**的行渲染取消。pending 是排队态（并发闸门
+                    // 之下尚未 trigger，没有 console run），点取消必然 409——现场表现为
+                    // 行内落一条英文 detail.message，像是操作失败。排队行不提供取消。
+                    op.status === 'running' && (
                       <button
                         type="button"
                         data-testid={`host-op-cancel-${op.hostId}`}
