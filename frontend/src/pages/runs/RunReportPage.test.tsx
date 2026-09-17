@@ -81,3 +81,53 @@ describe('RunReportPage 状态徽标（#2418）', () => {
     expect(row.queryByText('未知')).toBeNull();
   });
 });
+
+/**
+ * #2420（第 1 项）：#1082 的 UI 半边——cached 报告是 Job 完成时刻的**快照**，
+ * 后端早已在响应体给 `cached_at` 并要求「UI 标注截至 xx 时刻」，但前端一直 0 消费，
+ * 于是「快照」与「最新重算」在界面上同形（dev 与生产实测都只显「生成时间」）。
+ */
+describe('RunReportPage 快照标注（#2420 / #1082）', () => {
+  function reportWith(partial: Partial<RunReport>): RunReport {
+    return {
+      generated_at: '2026-09-16T12:00:00Z',
+      run: { id: 3, status: 'FINISHED' },
+      task: { id: 1, name: 'mtbf-suite', type: 'PLAN' },
+      host: null,
+      device: null,
+      summary_metrics: {},
+      risk_summary: null,
+      alerts: [],
+      ...partial,
+    } as unknown as RunReport;
+  }
+
+  async function renderReport(report: RunReport) {
+    vi.mocked(api.runs.getCachedReport).mockResolvedValue(report);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/runs/3/report']}>
+          <Routes>
+            <Route path="/runs/:runId/report" element={<RunReportPage />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    return screen.findByText('生成时间');
+  }
+
+  it('响应带 cached_at 时标注「快照截至」并本地化，不再只显生成时间', async () => {
+    await renderReport(reportWith({ cached_at: '2026-09-16T11:49:18.577637+00:00' }));
+    const row = await screen.findByTestId('report-cached-at');
+    expect(row).toHaveTextContent('快照截至');
+    expect(row.textContent).toMatch(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}/);
+    expect(row.textContent).not.toContain('11:49:18.577637');
+  });
+
+  it('无 cached_at（实时重算）时整行不渲染，而不是给出一个空的「截至 —」', async () => {
+    await renderReport(reportWith({ cached_at: null }));
+    expect(screen.queryByTestId('report-cached-at')).toBeNull();
+    expect(screen.getByText('生成时间')).toBeInTheDocument();
+  });
+});
