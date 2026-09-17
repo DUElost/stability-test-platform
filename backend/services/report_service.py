@@ -555,12 +555,6 @@ def build_jira_draft(
         if report.run.artifacts
         else ["- N/A"]
     )
-    summary_lines = (
-        [f"- {k}: {v}" for k, v in report.summary_metrics.items()]
-        if report.summary_metrics
-        else ["- N/A"]
-    )
-
     description = "\n".join(
         [
             "h2. Run Context",
@@ -571,8 +565,6 @@ def build_jira_draft(
             f"- device: {report.device.serial if report.device else 'N/A'}",
             f"- host: {report.host.name if report.host else 'N/A'}",
             "",
-            "h2. Summary Metrics",
-            *summary_lines,
             "",
             "h2. Alerts",
             *alert_lines,
