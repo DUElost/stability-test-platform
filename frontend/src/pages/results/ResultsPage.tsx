@@ -119,7 +119,7 @@ export default function ResultsPage() {
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <RiskDistributionChart
-          data={data?.risk_distribution ?? { high: 0, medium: 0, low: 0, unknown: 0 }}
+          data={data?.risk_distribution ?? { s: 0, a: 0, b: 0, unknown: 0 }}
           isLoading={isLoading}
         />
         <TestTypePassFailChart
@@ -175,7 +175,10 @@ export default function ResultsPage() {
                         <StatusBadge kind="job-result" status={run.status} size="sm" fallbackToRaw />
                       </TableCell>
                       <TableCell className="py-2 pr-4">
-                        <StatusBadge kind="risk" status={run.risk_level} size="sm" />
+                        {/* ADR-0045 D2：risk_level 已是对外级别词表本身（S/A/B/UNKNOWN），
+                            后端不再翻成 HIGH/MEDIUM/LOW。fallbackToRaw 与上一行的 job-result
+                            同一判据（#2418）：真漂移时回显原文，不静默吞成「未知」。 */}
+                        <StatusBadge kind="risk" status={run.risk_level} size="sm" fallbackToRaw />
                       </TableCell>
                       <TableCell className="py-2 pr-4 text-xs text-muted-foreground">
                         {formatDurationSeconds(run.duration_seconds, 'precise', '-')}

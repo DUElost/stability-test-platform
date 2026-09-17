@@ -324,11 +324,16 @@ export interface TestTypeStat {
 }
 
 export interface RiskDistribution {
-  high: number;
-  medium: number;
-  low: number;
+  /** ADR-0045 D2：桶名 = 级别本身；「高/中/低」是前端文案，不是值域。 */
+  s: number;
+  a: number;
+  b: number;
+  /** 无判定依据（该 job 窗口内零异常事件）——不是"低风险"，D4 禁止压进 b。 */
   unknown: number;
 }
+
+/** ADR-0045 D2：对外风险词表就是判定级别本身（`S|A|B|UNKNOWN`），不再翻成 HIGH/MEDIUM/LOW。 */
+export type RiskLevel = 'S' | 'A' | 'B' | 'UNKNOWN';
 
 export interface RecentRun {
   /**
@@ -341,7 +346,8 @@ export interface RecentRun {
   task_name: string;
   task_type: string;
   status: string;
-  risk_level: string;
+  /** ADR-0045 D2：`S|A|B|UNKNOWN`（后端不再翻译）。 */
+  risk_level: RiskLevel | string;
   /** ADR-0029：归属项目 key（plan_run 快照） */
   project_key?: string | null;
   duration_seconds: number | null;
@@ -356,13 +362,13 @@ export interface ResultsSummary {
   recent_runs: RecentRun[];
 }
 
-/** ADR-0029 P2：项目级风险趋势单日桶（S/A/B/NONE 计数；NONE=零事件）。 */
+/** ADR-0029 P2 + ADR-0045 D2：项目级风险趋势单日桶（S/A/B/UNKNOWN；UNKNOWN=零事件，原 NONE）。 */
 export interface RiskTrendBucket {
   date: string; // YYYY-MM-DD
   S: number;
   A: number;
   B: number;
-  NONE: number;
+  UNKNOWN: number;
   runs: number;
 }
 

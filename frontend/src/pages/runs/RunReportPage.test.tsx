@@ -60,7 +60,10 @@ async function renderWithRunStatus(
       </MemoryRouter>
     </QueryClientProvider>,
   );
-  // 徽标行 = 「状态」标签所在的那一行；用它限定查询，避免把风险徽标的「未知」算进来
+  // 徽标行 = 「状态」标签所在的那一行，用它限定查询。
+  // 注意前提已经变了（ADR-0045 §6 明确要求删掉旧注释的说法）：以前"风险徽标恒显未知"
+  // 是缺陷（RISK 表没有 S/A/B 键），#2494 之后这里查不到未知才是正常的；本 fixture
+  // 之所以仍可能出现「未知」，是因为 risk_summary 为 null → 按 D2 合法渲染第四态 UNKNOWN。
   const label = await screen.findByText('状态');
   return within(label.closest('div') as HTMLElement);
 }
@@ -172,5 +175,59 @@ describe('RunReportPage 归属参数透传（#2420）', () => {
     await waitFor(() => expect(api.runs.getCachedReport).toHaveBeenCalledWith(3, {
       planRunId: undefined,
     }));
+  });
+});
+
+/**
+ * #2494 判据 2：报告页风险徽标必须用**级别词表**（S/A/B/UNKNOWN）。
+ *
+ * 收敛前的形态是同一张卡上徽标说「未知」（`RISK` 表没有 S 键 → 落 FALLBACK）、
+ * 旁边的「S/A/B 分布」说 S:1 —— 与 #2418 完全同型：数据没错，键没对齐。
+ */
+describe('RunReportPage 风险徽标词表（#2494）', () => {
+  async function renderWithRisk(riskSummary: Record<string, unknown>) {
+    vi.mocked(api.runs.getCachedReport).mockResolvedValue({
+      generated_at: '2026-09-16T12:00:00Z',
+      run: { id: 3, status: 'FINISHED' },
+      task: { id: 1, name: 'mtbf-suite', type: 'PLAN' },
+      host: null,
+      device: null,
+      summary_metrics: {},
+      risk_summary: riskSummary,
+      alerts: [],
+    } as unknown as RunReport);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    // 路径用 #2506 之后的权威形状（`/jobs/:jobId/report`），与本文件其余用例一致。
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/jobs/3/report']}>
+          <Routes>
+            <Route path="/jobs/:jobId/report" element={<RunReportPage />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    return screen.findByText('风险摘要');
+  }
+
+  it('risk_level=S 渲染「高」，不再与同屏 S/A/B 计数互相打脸', async () => {
+    await renderWithRisk({
+      risk_level: 'S',
+      counts: { events_total: 1, aee_entries: 1, by_severity: { S: 1, A: 0, B: 0 } },
+    });
+    expect(await screen.findByText('高')).toBeInTheDocument();
+    expect(screen.queryByText('未知')).toBeNull();
+    // 「1/0/0」被三个 span 与夹在中间的斜杠拆开，getByText 只看直接文本子节点
+    const distributionRow = (await screen.findByText('S/A/B 分布')).closest('div') as HTMLElement;
+    expect(distributionRow.textContent).toBe('S/A/B 分布1/0/0');
+  });
+
+  it('词表漂移时回显原文而不是吞成「未知」（fallbackToRaw，#2418 同一判据）', async () => {
+    await renderWithRisk({
+      risk_level: 'SSS',
+      counts: { events_total: 0, aee_entries: 0, by_severity: { S: 0, A: 0, B: 0 } },
+    });
+    expect(await screen.findByText('SSS')).toBeInTheDocument();
+    expect(screen.queryByText('未知')).toBeNull();
   });
 });

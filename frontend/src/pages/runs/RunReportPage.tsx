@@ -213,7 +213,8 @@ export default function RunReportPage() {
             </div>
           )}
           <div className="flex items-center gap-2 mb-2">
-            <StatusBadge kind="risk" status={riskLevel} size="sm" />
+            {/* ADR-0045 D3 + #2418 同一判据：词表漂移时**回显原文**，不静默吞成「未知」 */}
+            <StatusBadge kind="risk" status={riskLevel} size="sm" fallbackToRaw />
           </div>
           <div className="space-y-1 text-sm">
             <div className="flex justify-between">

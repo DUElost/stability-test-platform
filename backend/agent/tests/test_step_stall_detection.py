@@ -6,6 +6,10 @@
 最要紧的一条是「零行为变更」：全部 17 个脚本都用 ``capture_output=True``
 吞掉子进程输出，实测 14 个从头到尾零输出。所以「任意输出 = 活」这条判据在
 当前脚本集上等价于「全体判死」—— 停滞钟必须缺省关闭，逐个 PlanStep 打开。
+
+墙钟：生产 ``_POLL_INTERVAL_SECONDS=1.0`` 只定精度，不改停滞语义。本模块用
+autouse fixture 把轮询压到 50ms，并同比缩短用例内 sleep / stall / wall_clock，
+以便在**不削弱断言**的前提下压缩 CI 墙钟。
 """
 
 import logging
@@ -17,13 +21,21 @@ import time
 
 import pytest
 
+import backend.agent.pipeline_engine as pe
 from backend.agent.pipeline_engine import (
     _MAX_CAPTURED_CHARS,
-    _POLL_INTERVAL_SECONDS,
     _popen_isolation_kwargs,
     _pump_process,
     _resolve_step_stall_seconds,
 )
+
+# 测试侧快轮询：仍走真实 _pump_process 主循环，只缩短「空转一拍」的代价。
+_FAST_POLL_SECONDS = 0.05
+
+
+@pytest.fixture(autouse=True)
+def _fast_stall_poll(monkeypatch):
+    monkeypatch.setattr(pe, "_POLL_INTERVAL_SECONDS", _FAST_POLL_SECONDS)
 
 
 def _spawn(body: str) -> subprocess.Popen:
@@ -91,7 +103,7 @@ class TestPumpBehaviourUnchangedWhenStallDisabled:
         """
         proc = _spawn("""
             import time
-            time.sleep(3)
+            time.sleep(0.4)
             print('{"success": true}')
         """)
         outcome = _pump_process(proc, wall_clock=30, stall_seconds=None)
@@ -107,7 +119,7 @@ class TestPumpBehaviourUnchangedWhenStallDisabled:
 
     def test_wall_clock_still_kills(self):
         proc = _spawn("import time; time.sleep(60)")
-        outcome = _pump_process(proc, wall_clock=2, stall_seconds=None)
+        outcome = _pump_process(proc, wall_clock=0.25, stall_seconds=None)
         assert outcome.reason == "wall_clock"
         assert proc.poll() is not None
 
@@ -116,21 +128,21 @@ class TestStallDetection:
     def test_silent_script_is_killed_once_enabled(self):
         proc = _spawn("import time; time.sleep(60)")
         started = time.monotonic()
-        outcome = _pump_process(proc, wall_clock=None, stall_seconds=2)
+        outcome = _pump_process(proc, wall_clock=None, stall_seconds=0.25)
         assert outcome.reason == "stall"
         # 靠停滞钟死的，不是耗到总时长 —— wall_clock=None 本来就没有总时长
-        assert time.monotonic() - started < 10
+        assert time.monotonic() - started < 2
 
     def test_steady_progress_stamps_keep_it_alive_past_the_stall_window(self):
-        """每 0.5s 一戳 PROGRESS、共 3s，停滞钟 2s —— 不该死。"""
+        """PROGRESS 间隔 < stall 窗口 —— 不该死。"""
         proc = _spawn("""
             import sys, time
             for i in range(6):
                 sys.stderr.write('PROGRESS {"seq": %d}\n' % i); sys.stderr.flush()
-                time.sleep(0.5)
+                time.sleep(0.05)
             print('{"success": true}')
         """)
-        outcome = _pump_process(proc, wall_clock=30, stall_seconds=2)
+        outcome = _pump_process(proc, wall_clock=30, stall_seconds=0.25)
         assert outcome.reason is None, outcome.stderr
 
     def test_output_then_silence_is_killed(self):
@@ -140,7 +152,7 @@ class TestStallDetection:
             print("started", flush=True)
             time.sleep(60)
         """)
-        outcome = _pump_process(proc, wall_clock=None, stall_seconds=2)
+        outcome = _pump_process(proc, wall_clock=None, stall_seconds=0.25)
         assert outcome.reason == "stall"
         assert "started" in outcome.stdout
 
@@ -154,10 +166,10 @@ class TestStallDetection:
             import sys, time
             for _ in range(6):
                 sys.stderr.write("retrying...\\n"); sys.stderr.flush()
-                time.sleep(0.5)
+                time.sleep(0.05)
             sys.stderr.write("eventually done\\n")
         """)
-        outcome = _pump_process(proc, wall_clock=30, stall_seconds=2)
+        outcome = _pump_process(proc, wall_clock=30, stall_seconds=0.25)
         assert outcome.reason == "stall"
         assert "retrying" in outcome.stderr
 
@@ -168,12 +180,12 @@ class TestProgressStamps:
             import sys, time
             for i in range(6):
                 sys.stderr.write('PROGRESS {"seq": %d}\\n' % i); sys.stderr.flush()
-                time.sleep(0.5)
+                time.sleep(0.05)
             print('{"success": true}')
         """)
         seen = []
         outcome = _pump_process(
-            proc, wall_clock=30, stall_seconds=2, on_progress=lambda: seen.append(1),
+            proc, wall_clock=30, stall_seconds=0.25, on_progress=lambda: seen.append(1),
         )
         assert outcome.reason is None
         assert len(seen) == 6
@@ -184,9 +196,9 @@ class TestProgressStamps:
             import sys, time
             for _ in range(8):
                 sys.stderr.write('PROGRESS {"seq": 1}\\n'); sys.stderr.flush()
-                time.sleep(0.4)
+                time.sleep(0.04)
         """)
-        outcome = _pump_process(proc, wall_clock=30, stall_seconds=1.5)
+        outcome = _pump_process(proc, wall_clock=30, stall_seconds=0.2)
         assert outcome.reason == "stall"
 
     def test_regressing_seq_does_not_reset_stall_clock(self):
@@ -195,9 +207,9 @@ class TestProgressStamps:
             import sys, time
             for seq in (3, 2, 1, 3, 2, 1):
                 sys.stderr.write('PROGRESS {"seq": %d}\\n' % seq); sys.stderr.flush()
-                time.sleep(0.4)
+                time.sleep(0.04)
         """)
-        outcome = _pump_process(proc, wall_clock=30, stall_seconds=1.5)
+        outcome = _pump_process(proc, wall_clock=30, stall_seconds=0.2)
         assert outcome.reason == "stall"
 
     def test_legacy_stamp_without_seq_still_resets(self):
@@ -206,9 +218,9 @@ class TestProgressStamps:
             import sys, time
             for _ in range(6):
                 sys.stderr.write('PROGRESS step=fill\\n'); sys.stderr.flush()
-                time.sleep(0.4)
+                time.sleep(0.04)
         """)
-        outcome = _pump_process(proc, wall_clock=30, stall_seconds=1.5)
+        outcome = _pump_process(proc, wall_clock=30, stall_seconds=0.2)
         assert outcome.reason is None
 
     def test_progress_lines_never_enter_the_buffers(self):
@@ -244,9 +256,9 @@ class TestProgressLeadingWhitespace:
             for i in range(4):
                 sys.stderr.write('  PROGRESS {"seq": %d}\\n' % i)
                 sys.stderr.flush()
-                time.sleep(0.4)
+                time.sleep(0.04)
         """)
-        outcome = _pump_process(proc, wall_clock=30, stall_seconds=1.5)
+        outcome = _pump_process(proc, wall_clock=30, stall_seconds=0.2)
         assert outcome.reason is None
         assert "PROGRESS" not in outcome.stderr
 
@@ -302,8 +314,8 @@ class TestReaderThreadsDoNotLeak:
     def test_threads_are_joined_after_kill(self):
         before = {t.name for t in threading.enumerate()}
         proc = _spawn("import time; time.sleep(60)")
-        _pump_process(proc, wall_clock=1, stall_seconds=None)
-        time.sleep(_POLL_INTERVAL_SECONDS)
+        _pump_process(proc, wall_clock=0.15, stall_seconds=None)
+        time.sleep(_FAST_POLL_SECONDS)
         leaked = {t.name for t in threading.enumerate()} - before
         assert not {n for n in leaked if n.startswith("step-")}, leaked
 
@@ -322,14 +334,14 @@ class TestReaderThreadsDoNotLeak:
             pid = os.fork()
             if pid == 0:
                 os.setsid()       # 脱离进程组：killpg 扫不到
-                time.sleep(5)     # 期间一直持有 stdout/stderr 写端
+                time.sleep(1.5)   # 期间一直持有 stdout/stderr 写端
                 os._exit(0)
             print("done", flush=True)
             os._exit(0)
         """)
         outcome = _pump_process(proc, wall_clock=30, stall_seconds=None)
         assert outcome.stdout.strip() == "done"
-        time.sleep(0.5)
+        time.sleep(0.1)
         leaked = {t.name for t in threading.enumerate()} - before
         assert not {n for n in leaked if n.startswith("step-")}, leaked
 
@@ -359,9 +371,9 @@ class TestPollingReaderSemantics:
             import sys, time
             for i in range(4):
                 sys.stderr.write('PROGRESS {"seq": %d}\\r\\n' % i)
-                time.sleep(0.4)
+                time.sleep(0.04)
         """)
-        outcome = _pump_process(proc, wall_clock=30, stall_seconds=1.5)
+        outcome = _pump_process(proc, wall_clock=30, stall_seconds=0.2)
         assert outcome.reason is None
 
     def test_invalid_utf8_does_not_kill_the_reader(self):

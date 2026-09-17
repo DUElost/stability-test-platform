@@ -165,12 +165,14 @@ device_online = Gauge(
 
 # #2365：风险分级的**覆盖率**观测。此前「风险分布长期只有未知」无法与「判据坏了」
 # 区分——仪表盘卡片两种状态长得一样。这里按最近一次 `/results/summary` 计算的结果
-# 暴露各桶 job 数：`high+medium+low` = 有异常信号、可判定的 job；`unknown` = 该窗口内
-# 没有任何异常事件的 job（**不是**「低风险」，是「无判定依据」）。
+# 暴露各桶 job 数：`s+a+b` = 有异常信号、可判定的 job；`unknown` = 该窗口内没有任何
+# 异常事件的 job（**不是**「低风险」，是「无判定依据」）。
+# ADR-0045 D2：标签值随对外词表一起收敛成级别本身（原 `high/medium/low`）——
+# 指标标签与 API 字段两套词，正是 #2494 那张"四面四形状"表里的一格。
 risk_jobs_by_level = Gauge(
     'stability_risk_jobs_by_level',
     'Risk-classified job count by level (last /results/summary computation)',
-    ['level']  # high, medium, low, unknown
+    ['level']  # s, a, b, unknown（ADR-0045 D2；原 high/medium/low）
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
 # ============================================================================
@@ -403,6 +405,15 @@ retention_candidate_runs = Gauge(
 retention_batch_size = Gauge(
     'stability_retention_batch_size',
     'Configured retention cleanup batch size (plan_run_retention_batch_size)',
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+# #2316：孤儿 DLE 清理的**跳过**计数（按原因分桶）。被跳过的行既不删行也不推进批头，
+# 而它们恒为最老 → 积压到批大小后 `purged` 恒为 0；此前只有 warning，积压不可观测。
+# 取值：root_unset / path_invalid / purge_failed（与 `dle_orphan_skipped_*` 日志锚点同名）。
+dle_orphan_skipped_total = Counter(
+    'stability_dle_orphan_skipped_total',
+    'Orphan DeviceLogEvent cleanup rows skipped, by reason (#2316)',
+    ['reason'],
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
 # ADR-0021 dispatch gate
