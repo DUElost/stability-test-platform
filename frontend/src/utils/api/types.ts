@@ -208,6 +208,13 @@ export interface RunRiskAlert {
 
 export interface RunReport {
   generated_at: string;
+  /**
+   * #1082：`/report/cached` 报告是**Job 完成时刻的快照**（= `post_processed_at`），不是最新重算。
+   * 后端早已经响应体暴露该字段并要求「UI 据此标注截至 xx 时刻」，但前端 0 消费
+   * （#2420 实测 dev+生产均只显「生成时间」）——于是用户无法区分快照与重算，
+   * 而 #1082 当初关掉的前提正是「UI 已标注」。
+   */
+  cached_at?: string | null;
   run: TaskRun;
   task: Task;
   host: {

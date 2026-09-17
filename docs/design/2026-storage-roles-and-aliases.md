@@ -15,7 +15,7 @@
 | 1 | **设备** | Android 被测机 |
 | 2 | **Agent host** | 跑 Agent 的 Linux 机（约 20 台） |
 | 3 | **控制面** | FastAPI / Dashboard / SAQ，生产 **永远** `192.0.2.202` |
-| 4 | **中心存储（CIFS / NFS）** | 日志分享盘：`devices/` `dedup/` `jira/` `jobs/` `mtbf/` `tools/`（外部工具，ADR-0033） |
+| 4 | **中心存储（CIFS / NFS）** | 日志分享盘：`devices/` `dedup/` `jira/` `jobs/` `mtbf/` `tools/`（外部工具，ADR-0033）`_meta/`（#2188 D 步写侧登记分片） |
 | 5 | **PG** | 业务库（元数据，不是日志文件） |
 | 6 | **Redis** | 仅 SAQ broker（+ 可选 SocketIO adapter） |
 | 7 | **扫描工具** | `start_log_scan.py`（Agent scan + 控制面 merge） |
@@ -122,6 +122,9 @@ ADR-0025 / 方案 C 正文里大量「15.4」= **中心存储这个角色**，�
 | `STP_AGENT_NFS_ROOT` | **已停用**（不再映射） | 第三块盘 |
 
 子目录（角色 4 的内容，不是角色）：`devices/`、`dedup/`、`jira/{plan_run_id}/`、`jobs/{job_id}/`、
+`_meta/{plan_run_id}/{host_id}.json`（#2188 D 步写侧登记分片：Agent 写、控制面读，与 run 同生命周期，
+由 run 级 retention 一并清；设计见
+[2026-09-17-2188-dstep-manifest-design](../notes/architecture/2026-09-17-2188-dstep-manifest-design.md)）、
 `mtbf/{project}/`（MTBF 清单/全局参数 + `results/{run_dir}__job{job_id}__{serial}.json`（`mtbf_finish` v1.5.0+ 稳定身份，缺维度省略对应段）；
 控制面写配置、Agent 写 `results/`，见 [P0 设计 §4.4](../design/2026-08-mtbf-p0-runner-design.md)）、`tools/`（外部工具，ADR-0033）：
 **现态**为 `tools/{name}/` 下的版本化源码目录，由 Agent 经路径 env 配置调用（展锐三工具族，

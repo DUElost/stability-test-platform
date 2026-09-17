@@ -365,6 +365,8 @@ def _make_nfs_dirs(root, run_id):
     (root / "dedup" / str(run_id) / "mtk" / "result.xls").write_text("y")
     (root / "jira" / str(run_id) / "extract").mkdir(parents=True)
     (root / "jira" / str(run_id) / "extract" / "bundle.zip").write_text("z")
+    (root / "_meta" / str(run_id)).mkdir(parents=True)
+    (root / "_meta" / str(run_id) / "172-21-1-1.json").write_text("{}")
 
 
 def test_nfs_run_dirs_purged_with_db_row(cleanup_env, tmp_path, monkeypatch):
@@ -379,6 +381,7 @@ def test_nfs_run_dirs_purged_with_db_row(cleanup_env, tmp_path, monkeypatch):
     assert not (tmp_path / "devices" / str(run.id)).exists()
     assert not (tmp_path / "dedup" / str(run.id)).exists()
     assert not (tmp_path / "jira" / str(run.id)).exists()
+    assert not (tmp_path / "_meta" / str(run.id)).exists()
     assert db.query(PlanRun).filter(PlanRun.id == run.id).first() is None
 
 
@@ -393,6 +396,7 @@ def test_active_run_nfs_dirs_kept(cleanup_env, tmp_path, monkeypatch):
 
     assert (tmp_path / "devices" / str(run.id)).exists()
     assert (tmp_path / "jira" / str(run.id)).exists()
+    assert (tmp_path / "_meta" / str(run.id)).exists()
     assert db.query(PlanRun).filter(PlanRun.id == run.id).first() is not None
 
 
@@ -935,3 +939,109 @@ def test_early_failure_before_purge_does_not_raise_nameerror(cleanup_env, monkey
     assert not any(
         "retention_rollback_after_nfs_purge" in r.getMessage() for r in caplog.records
     ), "purge 尚未执行，不应报告「目录已删」窗口"
+
+
+# ── #2444：被推迟 run 的 job 维子行不得被同批删除 ──────────────────────────
+
+
+def test_deferred_run_keeps_its_job_child_rows(
+    cleanup_env, sample_host, sample_device, monkeypatch,
+):
+    """#2444：NFS purge 失败 → run 出批（推迟），其 **job 维子行必须一并保留**。
+
+    修复前：`stale_job_ids` 子查询在批次收缩**之前**构造，且 `in_(safe_run_ids)`
+    在构造时**复制**了列表（实测 SQLAlchemy 持有的对象与传入者不同一），故此后
+    重绑定 `safe_run_ids` **不影响**该子查询——被推迟 run 的子行仍被同批删除，
+    留下「run/job_instance 行在、子行全空」的壳。
+
+    **必须两 run 同批**：若批次只含被推迟的那一个，收缩后 `safe_run_ids` 为空，
+    整个 DB 删除段被 `if not safe_run_ids: return` 短路（探针实测），
+    缺陷反而不可见。
+    """
+    from backend.models.job import JobInstance, StepTrace
+
+    db, plan = cleanup_env
+    deferred = _mk_run(db, plan, status="SUCCESS", age_days=10)
+    normal = _mk_run(db, plan, status="SUCCESS", age_days=11)
+    deferred_id, normal_id = deferred.id, normal.id
+
+    def _mk_job(run):
+        j = JobInstance(
+            plan_run_id=run.id, plan_id=plan.id,
+            device_id=sample_device.id, host_id=sample_host.id,
+            status="COMPLETED",
+            pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+        )
+        db.add(j)
+        db.commit()
+        db.add(StepTrace(job_id=j.id, step_id=1, stage="init",
+                         status="COMPLETED", event_type="COMPLETED",
+                         original_ts=datetime.now(timezone.utc)))
+        db.commit()
+        return j.id
+
+    deferred_job = _mk_job(deferred)
+    normal_job = _mk_job(normal)
+
+    monkeypatch.setattr(
+        cron_scheduler, "purge_run_storage_dirs",
+        lambda run_ids, jobs_by_run=None: {deferred_id},
+    )
+    cron_scheduler.run_retention_cleanup()
+
+    # 未推迟者照常删除（含子行）
+    assert db.query(PlanRun).filter_by(id=normal_id).count() == 0
+    assert db.query(JobInstance).filter_by(id=normal_job).count() == 0
+    # 被推迟者：run 行与 job/子行**都必须**保留
+    assert db.query(PlanRun).filter_by(id=deferred_id).count() == 1
+    assert db.query(JobInstance).filter_by(id=deferred_job).count() == 1, (
+        "被推迟 run 的 job_instance 行被同批删除（#2444）"
+    )
+    assert db.query(StepTrace).filter_by(job_id=deferred_job).count() == 1, (
+        "被推迟 run 的 step_trace 行被同批删除（#2444）"
+    )
+
+
+def test_non_deferred_sibling_still_has_child_rows_deleted(
+    cleanup_env, sample_host, sample_device, monkeypatch,
+):
+    """#2444 负向对照：**未**被推迟的 run 其子行仍应照常删除（不得因修复而漏删）。"""
+    from backend.models.job import JobInstance, StepTrace
+
+    db, plan = cleanup_env
+    deferred = _mk_run(db, plan, status="SUCCESS", age_days=10)
+    normal = _mk_run(db, plan, status="SUCCESS", age_days=11)
+    deferred_id, normal_id = deferred.id, normal.id
+
+    def _mk_job(run):
+        j = JobInstance(
+            plan_run_id=run.id, plan_id=plan.id,
+            device_id=sample_device.id, host_id=sample_host.id,
+            status="COMPLETED",
+            pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+        )
+        db.add(j)
+        db.commit()
+        db.add(StepTrace(job_id=j.id, step_id=1, stage="init",
+                         status="COMPLETED", event_type="COMPLETED",
+                         original_ts=datetime.now(timezone.utc)))
+        db.commit()
+        return j.id
+
+    normal_job = _mk_job(normal)
+    _mk_job(deferred)
+
+    monkeypatch.setattr(
+        cron_scheduler, "purge_run_storage_dirs",
+        lambda run_ids, jobs_by_run=None: {deferred_id},
+    )
+    cron_scheduler.run_retention_cleanup()
+
+    # 用 count 而非 .one() is None——后者在行不存在时抛 NoResultFound
+    assert db.query(PlanRun).filter_by(id=normal_id).count() == 0, "未推迟的 run 应被删除"
+    assert db.query(JobInstance).filter_by(id=normal_job).count() == 0, (
+        "未推迟 run 的 job 子行应照常删除（修复不得漏删）"
+    )
+    # 推迟的 run 与其 job 子行都应保留
+    assert db.query(PlanRun).filter_by(id=deferred_id).count() == 1
+    assert db.query(JobInstance).filter_by(plan_run_id=deferred_id).count() == 1

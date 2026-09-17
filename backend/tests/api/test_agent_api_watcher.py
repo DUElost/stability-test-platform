@@ -480,6 +480,96 @@ async def test_complete_bridges_reconciler_skip_unchanged_metric():
 
 
 @pytest.mark.asyncio(loop_scope="module")
+async def test_complete_bridges_unisoc_visibility_counters():
+    """#2394①③：UNISOC job 终态把三计数 + 在位标记桥到中心 /metrics（host 维度）。"""
+    from unittest.mock import patch
+
+    seed = _seed_job_with_policy(job_status=JobStatus.RUNNING.value)
+    summary = {
+        "watcher_capability": "unavailable",
+        "log_signal_count": 1,
+        "platform_reconciler": "UNISOC:UnisocUniviewReconciler",
+        "reconciler_stats": {
+            "ticks_total": 2,
+            "signals_emitted": 1,
+            "dirs_abandoned": 2,
+            "dirs_oversized_skipped": 1,
+            "unresolved_dirs": 3,
+        },
+    }
+    token = _setup_watcher_lease(seed)
+    try:
+        with patch("backend.services.agent_completion.record_reconciler_dirs_abandoned") as m_ab, \
+             patch("backend.services.agent_completion.record_reconciler_dirs_oversized_skipped") as m_ov, \
+             patch("backend.services.agent_completion.set_reconciler_unresolved_dirs") as m_un, \
+             patch("backend.services.agent_completion.set_watcher_reconciler_present") as m_pr:
+            async with AsyncSessionLocal() as async_db:
+                result = await complete_job(
+                    job_id=seed["job_id"],
+                    payload=_RunCompleteIn(
+                        update={"status": "FINISHED", "exit_code": 0},
+                        watcher_summary=summary,
+                        fencing_token=token,
+                    ),
+                    db=async_db,
+                    _=None,
+                )
+            assert result.error is None
+            m_ab.assert_called_once()
+            assert m_ab.call_args.kwargs.get("amount") == 2
+            m_ov.assert_called_once()
+            assert m_ov.call_args.kwargs.get("amount") == 1
+            m_un.assert_called_once()
+            assert m_un.call_args.args[1] == 3
+            m_pr.assert_called_once()
+            assert m_pr.call_args.args[1] == "UNISOC"
+    finally:
+        _cleanup_seed(seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_complete_mtk_summary_does_not_bridge_unisoc_counters():
+    """#2394 负向：MTK job（presence=MTK:…，共享 stats 字段恒 0）不得触碰 UNISOC
+    可见面，也不得把 unresolved gauge 刷成 0（「MTK 全清」假信号）。"""
+    from unittest.mock import patch
+
+    seed = _seed_job_with_policy(job_status=JobStatus.RUNNING.value)
+    summary = {
+        "watcher_capability": "polling",
+        "log_signal_count": 0,
+        "platform_reconciler": "MTK:AeeDbHistoryReconciler",
+        "reconciler_stats": {"ticks_total": 1, "signals_emitted": 0,
+                             "dirs_abandoned": 0, "dirs_oversized_skipped": 0,
+                             "unresolved_dirs": 0},
+    }
+    token = _setup_watcher_lease(seed)
+    try:
+        with patch("backend.services.agent_completion.record_reconciler_dirs_abandoned") as m_ab, \
+             patch("backend.services.agent_completion.record_reconciler_dirs_oversized_skipped") as m_ov, \
+             patch("backend.services.agent_completion.set_reconciler_unresolved_dirs") as m_un, \
+             patch("backend.services.agent_completion.set_watcher_reconciler_present") as m_pr:
+            async with AsyncSessionLocal() as async_db:
+                result = await complete_job(
+                    job_id=seed["job_id"],
+                    payload=_RunCompleteIn(
+                        update={"status": "FINISHED", "exit_code": 0},
+                        watcher_summary=summary,
+                        fencing_token=token,
+                    ),
+                    db=async_db,
+                    _=None,
+                )
+            assert result.error is None
+            m_ab.assert_not_called()
+            m_ov.assert_not_called()
+            m_un.assert_not_called()
+            m_pr.assert_called_once()
+            assert m_pr.call_args.args[1] == "MTK"
+    finally:
+        _cleanup_seed(seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
 async def test_complete_does_not_bridge_reconciler_metric_without_stats():
     """reconciler_stats 缺省 / 无 skipped → 不调用桥接,避免噪声。"""
     from unittest.mock import patch
