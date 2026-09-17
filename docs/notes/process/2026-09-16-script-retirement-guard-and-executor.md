@@ -121,6 +121,27 @@ Class: process
 - 与「缺最后一跳」有关的方法论：审计给的是 `file:line` + 可复现输入，**修之前先自己跑一遍
   复现**——本轮两项都是照做后才确认成立（此前也遇到过审计判断不成立的情况）。
 
+**补记（同日正式授权后的退役执行，暴露第四例「最后一跳缺失」）**：
+
+- 授权后对生产库执行了首条判据退役：`flash_preflight@1.0.3 (id=181)` → `is_active=False`，
+  `audit_logs` 264933（`action=deactivate`、`username=stp-admin`、`details` 带 name/version）；
+  同族 `1.0.1 / 1.0.2 / 1.0.4` 仍 active（族未被清空）、`inactive ∧ referenced = 0`、
+  账 `active 74→73`、`active ∧ 零引用 37→36`，复跑 `--guard` → **rc=0（GUARD OK）**。
+- **`execute` 此前从未对真实 API 跑通过**：`ControlPlane._login()` 在 `__init__` 里先调
+  `_login()`、之后才把 `Authorization` 挂到 session ⇒ 那个「校验身份」的 `/auth/me` 实际是
+  **未认证请求**（`/auth/token` 不发 auth cookie，没有 cookie 可兜）⇒ 生产实跑 `401`。
+  单测把 `ControlPlane` 整体换成 `FakeClient`，这条真实调用序列一次都没被执行过——与 PR
+  #2430「用 importlib + PYTHONPATH 绕过路径形态」是同一个失效模式的两个实例：
+  **打桩把被测对象自己测的那条路径替掉了**。修法是 Bearer 头显式挂在 `/auth/me` 那一次请求上，
+  并补三条登录面回归（校验请求带凭据 / 缺 `access_token` 显式报错 / 非 admin 拒执行）。
+- 审计 A 的处置由「按现状更正文档」升级为「补上执行者」：新增
+  `tools/dev/script_guard_probe.py` + `stp-script-guard.{service,timer}`（每日 09:30、
+  `Persistent=true`，落 `due/unknown/broken/last_run` 四个 node-exporter 指标）。关键取舍：
+  **`due`（有到期项）与 `unknown` 都算任务成功**，只有 `broken` 让 systemd failed——否则 timer
+  会因「存在待授权项」天天红，真故障被告警疲劳淹掉；`last_run` 则用来区分「干净」与「静默停摆」。
+  probe 只用 stdlib、不 import `backend`（避免 import 期解析 `DATABASE_URL` 的老副作用）、
+  不读凭据、永不写库。
+
 ## Revisit
 
 - **谁在什么时候跑 `--guard`**：现在退出码有了，触发还没有。接的时候消费方要分开处理 `1`（有到期项→走退役流程）与 `3`（工具坏了→修工具，**不得据此退役任何东西**）。等 #2055/#2048 系列收窗后，
