@@ -958,27 +958,75 @@ def _map_agent_path_to_center(path: str, plan_run_id: int, center_root: str) -> 
     return f"{center_root}/devices/{plan_run_id}/{event_dir}/"
 
 
+#: #2476：DLE 候选上限——事件目录可能被多个 run 上送过，候选爆炸时截断
+#: （按 run 倒序取最新，见 `_center_event_dir_from_dle`）。
+_CENTER_EVENT_PATH_DLE_CANDIDATES = 50
+
+
+def _escape_like(value: str) -> str:
+    """LIKE 模式里的元字符转义（事件目录名含 ``_``，不转义会当单字符通配）。"""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _center_event_dir_from_dle(center_root: str, event_dir: str) -> Optional[str]:
+    """在 DLE 台账里找该事件目录**最新的中心副本**（#2476 / #2188 D 步·单4）。
+
+    台账形态（生产实测）：``remote_path`` 就是事件目录的中心路径
+    ``<center>/devices/<run_id>/[<uuid>/]<event_dir>``（无尾斜杠）。旧实现是对中心盘
+    做 ``devices/*`` 跨 run 目录扫描；这里改为字符串判形态 + ``isdir`` 校验
+    （与 ``adopt_unassigned``/#2262 同口径），run 倒序 + LIMIT 有界。
+
+    只接受落在 ``center_root`` 之下的候选：台账里可能残留别的站点根的路径。
+    查库失败不致命——记日志并返回 None，调用方保留原映射（尽力而为）。
+    """
+    pattern = f"%/devices/%/{_escape_like(event_dir)}"
+    try:
+        from backend.core.database import SessionLocal
+        from backend.models.device_log_event import DeviceLogEvent
+
+        with SessionLocal() as db:
+            rows = (
+                db.query(DeviceLogEvent.remote_path)
+                .filter(DeviceLogEvent.remote_path.like(pattern, escape="\\"))
+                # NULLS LAST：plan_run_id 可空，PG 的 DESC 默认把 NULL 排在最前，
+                # 会把 LIMIT 名额吃光（真实候选全在它们后面）。
+                .order_by(
+                    DeviceLogEvent.plan_run_id.desc().nullslast(),
+                    DeviceLogEvent.id.desc(),
+                )
+                .limit(_CENTER_EVENT_PATH_DLE_CANDIDATES)
+                .all()
+            )
+    except Exception:
+        logger.exception("center_event_path_dle_lookup_failed event_dir=%s", event_dir)
+        return None
+
+    prefix = center_root.rstrip("/") + "/"
+    for (remote_path,) in rows:
+        path = str(remote_path or "").rstrip("/")
+        if not path.startswith(prefix):
+            continue
+        if os.path.isdir(path):
+            return path + "/"
+    return None
+
+
 def _resolve_center_event_path(
     center_root: str, plan_run_id: int, event_dir: str,
 ) -> str:
-    """映射后可达性兜底：本 run 未上送时搜历史 run 的上送位置。
+    """映射后可达性兜底：本 run 未上送时找历史 run 的上送位置。
 
     场景（2026-08-31 验收发现）：scan 对同内容事件去重合并显示代表目录
     （如注入 cp 的 02/04 同内容——报表只显示 02），而 upload 上送的是
-    实际引用的 04——``devices/{run_id}/02`` 不存在。此时搜
-    ``devices/*/{event_dir}``（历史 run 上送位置）映射到存在的副本；
-    搜不到保留原映射（尽力而为，中心不可达时由人工/提取路径兜底）。
+    实际引用的 04——``devices/{run_id}/02`` 不存在。此时查 DLE 台账找该事件
+    目录的其它 run 副本（#2476：不再对着中心盘做 ``devices/*`` 跨 run glob）；
+    找不到保留原映射（尽力而为，中心不可达时由人工/提取路径兜底）。
     """
     candidate = f"{center_root}/devices/{plan_run_id}/{event_dir}/"
     if os.path.isdir(candidate):
         return candidate
-    try:
-        hits = sorted(Path(center_root, "devices").glob(f"*/{event_dir}"))
-    except OSError:
-        return candidate
-    if hits:
-        return str(hits[0]) + "/"
-    return candidate
+    resolved = _center_event_dir_from_dle(center_root, event_dir)
+    return resolved if resolved is not None else candidate
 
 
 def _rewrite_merge_report_paths_to_center(

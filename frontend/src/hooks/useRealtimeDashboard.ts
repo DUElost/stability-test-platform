@@ -73,10 +73,9 @@ export function useRealtimeDashboard(wsUrl: string) {
         queryClient.invalidateQueries({ queryKey: planRunKeys.list() });
         break;
       }
-      case SOCKET_MESSAGE_TYPES.DEPLOY_UPDATE: {
-        queryClient.invalidateQueries({ queryKey: ['deployments'] });
-        break;
-      }
+      // #2448：DEPLOY_UPDATE 分支随「服务端零生产者」一起删——后端没有任何 emit
+      // 会发出该 type（守卫判据 4 现在会报红），且它失效的 ['deployments'] 键在
+      // 前端也没有任何查询注册过（invalidate 本身是 no-op）。
       default:
         break;
     }

@@ -18,3 +18,18 @@ Element.prototype.hasPointerCapture = () => false;
 Element.prototype.setPointerCapture = () => {};
 Element.prototype.releasePointerCapture = () => {};
 Element.prototype.scrollIntoView = () => {};
+
+// jsdom 缺 matchMedia（ThemeContext、@xterm/xterm 在 terminal.open 时依赖）
+Object.defineProperty(window, 'matchMedia', {
+  writable: true,
+  value: vi.fn().mockImplementation((query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  })),
+});
