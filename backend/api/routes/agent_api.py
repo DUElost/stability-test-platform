@@ -9,7 +9,7 @@ import logging
 import os
 import secrets
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
@@ -22,7 +22,7 @@ from backend.api.error_helpers import raise_api_http_error
 from backend.core.agent_secret import AgentSecretNotConfiguredError, require_agent_secret
 from backend.core.audit import record_audit
 from backend.core.database import get_async_db, get_db
-from backend.models.enums import HostStatus, JobStatus, LeaseType
+from backend.models.enums import JobStatus, LeaseType
 from backend.models.host import Device, Host
 from backend.models.device_lease import DeviceLease
 from backend.models.job import JobInstance
@@ -89,6 +89,17 @@ from backend.services.agent_artifacts import (
     ArtifactOut,
     ingest_agent_artifact,
 )
+from backend.services.agent_host_heartbeat import (
+    HeartbeatRequest,
+    HeartbeatResponse,
+    record_agent_host_heartbeat,
+)
+from backend.services.agent_host_heartbeat import (  # noqa: F401
+    BackpressureInfo,
+    _get_backpressure,
+    _suggested_heartbeat_interval,
+    _suggested_log_rate_limit,
+)
 from backend.services.agent_artifacts import (  # noqa: F401
     _ARTIFACT_TYPE_WHITELIST,
 )
@@ -122,10 +133,6 @@ from backend.services.agent_completion import (  # noqa: F401
 )
 from backend.realtime.socketio_server import broadcast_plan_run_status, broadcast_run_job_update
 from backend.services.host_maintenance import HostMaintenanceConflict
-from backend.services.host_retirement import (
-    retired_heartbeat_context,
-    should_alert_retired_heartbeat,
-)
 from backend.services.host_upgrade_gate import (
     HostAbortDrainTimeoutError,
     HostAbortPendingError,
@@ -137,7 +144,6 @@ from backend.services.host_upgrade_gate import (
 )
 from backend.services.lease_manager import extend_lease
 from backend.services.reconciler import reconcile_step_traces
-from backend.services.script_catalog_version import compute_script_catalog_version_async
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/agent", tags=["agent"])
@@ -190,28 +196,6 @@ class StepTraceIn(BaseModel):
     trace_event_id: Optional[str] = None
     fencing_token: str
 
-
-class HeartbeatRequest(BaseModel):
-    host_id: str
-    script_catalog_version: str = ""
-    load: Dict[str, Any] = {}
-    capacity: Optional[Dict[str, Any]] = None  # ADR-0019 Phase 1
-    agent_instance_id: str = ""   # ADR-0019 Phase 3a
-    boot_id: str = ""             # ADR-0019 Phase 3a
-
-
-class BackpressureInfo(BaseModel):
-    log_rate_limit: Optional[int] = None
-    # ADR-0026 P0: suggested Agent poll interval (seconds)
-    heartbeat_interval_seconds: Optional[int] = None
-
-
-class HeartbeatResponse(BaseModel):
-    script_catalog_outdated: bool = False
-    backpressure: BackpressureInfo
-    capacity: Optional[Dict[str, Any]] = None  # ADR-0019 Phase 1
-    agent_min_version: str = ""  # SemVer floor; Agent refuses to run if below
-    heartbeat_interval_seconds: Optional[int] = None
 
 # ── ADR-0019 Phase 3a: Recovery Sync models ──────────────────────────────────
 
@@ -352,79 +336,7 @@ async def agent_heartbeat(
     Update host last_heartbeat.
     Returns script_catalog_outdated flag + current backpressure setting.
     """
-    host = await db.get(Host, payload.host_id)
-    if host is None:
-        host = Host(
-            id=payload.host_id,
-            hostname=payload.host_id,
-            status=HostStatus.ONLINE.value,
-            created_at=datetime.now(timezone.utc),
-        )
-        db.add(host)
-
-    # Compare the Agent's cached catalog against **the control plane's current
-    # one**, not against whatever this Agent reported last time. The old
-    # self-comparison could only ever fire when the Agent changed, so publishing
-    # a new script version never reached a running Agent — the mistake showed up
-    # much later as ScriptVersionMismatch at job execution time.
-    scripts_outdated = bool(payload.script_catalog_version) and (
-        payload.script_catalog_version
-        != await compute_script_catalog_version_async(db)
-    )
-
-    host.last_heartbeat = datetime.now(timezone.utc)
-    if payload.script_catalog_version:
-        host.script_catalog_version = payload.script_catalog_version
-    # ADR-0038 §1.2 归属声明：轻量心跳与权威 `/api/v1/heartbeat` **共用**
-    # `should_alert_retired_heartbeat` 同一判据（“共用检测”选项，非双通道
-    # 收敛）——退役心跳的「如实记录 + 保持退役 + 单次告警」两条路径同源。
-    prev_status = host.status
-    host.status = HostStatus.ONLINE.value
-
-    if should_alert_retired_heartbeat(host, prev_status=prev_status):
-        from backend.services.notification_service import dispatch_notification_async
-
-        dispatch_notification_async(
-            "HOST_RETIRED_HEARTBEAT", retired_heartbeat_context(host),
-        )
-
-    # ADR-0019 Phase 1: count online healthy devices
-    online_rows = await db.execute(
-        select(Device.id).where(
-            Device.host_id == payload.host_id,
-            Device.adb_connected == True,
-            Device.adb_state.notin_(["offline", "unknown", ""]),
-        )
-    )
-    online_healthy = len(online_rows.scalars().all())
-
-    await db.commit()
-
-    backpressure = await _get_backpressure()
-    # Light agent heartbeat: scale interval with online healthy device count
-    # (same contract as /api/v1/heartbeat — ADR-0026 P0).
-    from backend.api.routes.heartbeat import (
-        _suggested_heartbeat_interval,
-        _suggested_log_rate_limit,
-    )
-    suggested_interval = _suggested_heartbeat_interval(online_healthy)
-    suggested_log_rate = (
-        backpressure if backpressure is not None
-        else _suggested_log_rate_limit(online_healthy)
-    )
-    from backend.services.agent_version_gate import resolve_agent_min_version
-    return ok(HeartbeatResponse(
-        script_catalog_outdated=scripts_outdated,
-        backpressure=BackpressureInfo(
-            log_rate_limit=suggested_log_rate,
-            heartbeat_interval_seconds=suggested_interval,
-        ),
-        capacity={
-            "online_healthy_devices": online_healthy,
-        },
-        agent_min_version=resolve_agent_min_version(),
-        heartbeat_interval_seconds=suggested_interval,
-    ))
+    return ok(await record_agent_host_heartbeat(db, payload))
 
 
 # ── RunStatus→JobStatus mapping for compat endpoints ─────────────────────────
@@ -711,16 +623,6 @@ async def list_device_log_events(
     return ok(await list_agent_device_log_events(
         db, host_id=host_id, state=state, limit=limit,
     ))
-
-
-async def _get_backpressure() -> Optional[int]:
-    """Return current backpressure setting.
-
-    Redis-based backpressure (stp:backpressure:*) removed in Phase 4.
-    SocketIO has built-in TCP backpressure; this returns None (no limit).
-    Can be extended later with SocketIO-based metrics if needed.
-    """
-    return None
 
 
 # ── Artifact ingestion（ADR-0018 5B2）────────────────────────────────────────
