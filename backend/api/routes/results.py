@@ -295,8 +295,18 @@ def get_results_summary(
             levels = aggregate_risk_levels_by_job(db, scoped_job_ids)
             for job_id in scoped_job_ids:
                 risk_counts[_RISK_BUCKET_BY_LEVEL.get(levels.get(job_id, ""), "unknown")] += 1
-            # #2365：覆盖率进观测面——「大多数 run 无判定依据」此前与「判据坏了」
-            # 在仪表盘上同形（都只有未知桶），现在可直接查询/告警。
+
+        # #2365 重开后的两处收口（覆盖率指标本身与活链接线保留，这里只补它的口径）：
+        #
+        # 1. **写 gauge 必须在 `if total_jobs > 0` 之外**。原先四桶的 .set() 全在块内，
+        #    「job 被清空」时整段跳过 → gauge 停在上一轮的非零值，读起来像「还有风险
+        #    分布」。这与本单的目标（让「无判定依据」与「判据坏了」可区分）正好相反，
+        #    也违反仓库自定纪律（`cron_scheduler.py` 里「清空后 gauge 必须回到 0」）。
+        # 2. **只有全局口径写 gauge**。带 `project_key` 的请求算的是作用域分布，而该
+        #    gauge 只有 `level` 标签，一写就把全局值覆盖了——两个语义共用一个序列。
+        #    刻意**不加 `scope` 标签**：`project_key` 是用户数据，拿它当标签等于把基数
+        #    交给项目登记簿；而覆盖率要观测的本来就是全局分布。
+        if target_project_id is None:
             for bucket, count in risk_counts.items():
                 risk_jobs_by_level.labels(level=bucket).set(count)
 
