@@ -10,6 +10,10 @@ Two-phase lease expiry:
 Phase 2 (and the stale-UNKNOWN check) drains up to ``RECONCILER_DRAIN_BATCH``
 candidates per tick, one transaction each (#2531 — the shape was one candidate
 per tick, i.e. a hard 1 device / ``reconciler_interval_seconds`` ceiling).
+While expiry backlog remains, ``device_lease_reconcile_once`` re-runs the whole
+check set inside the same lock hold, bounded by
+``RECONCILER_DRAIN_MAX_SECONDS`` (#2554) — the batch cap guards the transaction
+boundary, it is not the throughput knob.
 
 Also handles:
   - Stale UNKNOWN jobs whose lease is already gone
@@ -23,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 
 import sqlalchemy.exc
@@ -782,18 +787,86 @@ async def _record_unknown_backlog() -> dict[str, int]:
         # 也不含链式派发/锁等待的抖动——运维口径是「至少还要这么久」，
         # 不是承诺值，日志里按 ``eta_min`` 明说。
         ticks = -(-expired // drain_batch) if expired else 0
+        # #2554：自续开着时「还要等多少拍」不再是余量的主导项——余量会在**同一次
+        # 持锁**里继续排空，只有撞到墙钟预算才回到「等下一拍」。所以这个数在
+        # ``eta_basis=selfcontinue`` 下只是「纯等 tick」的悲观上界，真实进度看
+        # ``reconciler_drain_selfcontinued remaining=/elapsed_ms=``；口径不标注就会
+        # 把「已经快好了」读成「还要 12.5 分钟」。
+        budget = get_scheduler_settings().reconciler_drain_max_seconds
         level = logger.warning if (expired or counts["missing_ended_at"]) else logger.info
         level(
             "reconciler_unknown_backlog grace_expired=%d within_grace=%d "
             "missing_ended_at=%d drain_batch=%d interval_seconds=%d "
-            "eta_min_seconds=%d",
+            "eta_min_seconds=%d eta_basis=%s drain_max_seconds=%s",
             expired, counts["within_grace"], counts["missing_ended_at"],
             drain_batch, interval, ticks * interval,
+            "selfcontinue" if budget > 0 else "tick_only", budget,
         )
     except Exception:
         # 读数是旁路：不得让一次统计查询的失败把对账 tick 变成 error。
         logger.debug("reconciler_unknown_backlog_failed", exc_info=True)
     return counts
+
+
+async def _drain_remaining_rounds(first_remaining: int) -> int:
+    """#2554：一次持锁内把工作做完——返回**自续**轮数（不含调用方刚跑的那轮）。
+
+    为什么需要它：`RECONCILER_DRAIN_BATCH`（#2548）是**事务边界的保护**，不是速率
+    目标；有了上限之后，「一轮最多解 20 台」仍然要**等下一个 IntervalTrigger** 才
+    解下一批。实测每台排空 ≈8–9ms 且线性 ⇒ 1000 台 = 50 tick × 15s ≈ 12.5 分钟，
+    而真正干活只有 ≈9 秒（占空比 <1%）。本函数把那 9 秒的活收进同一次持锁：
+    只要还有「已过宽限、正等着被解锁」的积压（`grace_expired`，与运维读数是同一个
+    事实），就立刻再来一轮。
+
+    三个出口，缺一不可：
+
+    1. **排空**（`grace_expired == 0`）；
+    2. **墙钟预算** `RECONCILER_DRAIN_MAX_SECONDS`（默认 5s = 周期的 1/3；**0 关闭自续**）
+       ——预算到即停，余量交回正常节奏的下一个 tick，不承诺一次清干净；
+    3. **无进展**（本轮 `grace_expired` 没比上轮小）——毒行/锁竞争型停滞必须**立刻**
+       退出，否则一条不可回收的行会把每 tick 的 5s 预算烧满（33% 占空比空转），
+       把「看不见进展」变成「看不见但很努力地不进展」。
+
+    与 `#1172`/`#2548` 的关系：自续只是在「一候选一事务边界」**之上**加循环，
+    每轮仍是完整的 `_reconcile_checks()`（四条检查各一个事务），不得退回尾部统一
+    终态化——`test_reconciler_phase2_commits_each_candidate_independently` 仍必须绿。
+    """
+    budget = get_scheduler_settings().reconciler_drain_max_seconds
+    if first_remaining <= 0 or budget <= 0:
+        return 0
+
+    started = time.monotonic()
+    rounds = 0
+    prev = first_remaining
+    while True:
+        elapsed = time.monotonic() - started
+        if elapsed >= budget:
+            logger.warning(
+                "reconciler_drain_budget_exhausted remaining=%d rounds=%d "
+                "budget_seconds=%s elapsed_ms=%d",
+                prev, rounds, budget, int(elapsed * 1000),
+            )
+            break
+        await _reconcile_checks()
+        rounds += 1
+        # 每轮都刷新 gauge：运维看到的必须是「现在的剩余」，不是本轮开始时的快照。
+        counts = await _record_unknown_backlog()
+        remaining = counts["grace_expired"]
+        logger.info(
+            "reconciler_drain_selfcontinued rounds=%d remaining=%d elapsed_ms=%d",
+            rounds, remaining, int((time.monotonic() - started) * 1000),
+        )
+        if remaining <= 0:
+            break
+        if remaining >= prev:
+            logger.warning(
+                "reconciler_drain_no_progress remaining=%d rounds=%d "
+                "——余量交回下一个 tick，不自续空转",
+                remaining, rounds,
+            )
+            break
+        prev = remaining
+    return rounds
 
 
 async def device_lease_reconcile_once() -> None:
@@ -803,7 +876,9 @@ async def device_lease_reconcile_once() -> None:
     failure.  One check failing does not block the next.
 
     Guarded by an asyncio.Lock to prevent concurrent execution when a prior
-    cycle runs longer than the APScheduler interval.
+    cycle runs longer than the APScheduler interval.  Expiry backlog is drained
+    in further rounds **inside the same lock hold**, bounded by
+    ``RECONCILER_DRAIN_MAX_SECONDS`` (#2554).
     """
     if _reconcile_lock.locked():
         logger.warning("reconciler_skip_previous_still_running")
@@ -813,7 +888,10 @@ async def device_lease_reconcile_once() -> None:
     async with _reconcile_lock:
         await _reconcile_checks()
         # 四条检查各自的事务都已收尾，此时的积压才是「下一轮要面对什么」。
-        await _record_unknown_backlog()
+        backlog = await _record_unknown_backlog()
+        # #2554: 自续发生在**同一次持锁之内**，不是再起一个 job——互斥语义与
+        # 「上一轮没跑完就跳过」的背压原样保留。
+        await _drain_remaining_rounds(backlog["grace_expired"])
 
 
 async def _reconcile_checks() -> None:

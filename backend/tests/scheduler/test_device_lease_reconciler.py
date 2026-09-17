@@ -35,6 +35,7 @@ from backend.services.plan_run_aggregation import (
 )
 from backend.scheduler.device_lease_reconciler import (
     _abort_at_expired,
+    _drain_remaining_rounds,
     _record_unknown_backlog,
     _reconcile_expired_leases,
     _reconcile_stale_unknown_jobs,
@@ -824,4 +825,225 @@ async def test_record_unknown_backlog_buckets_and_writes_gauge(monkeypatch):
         for seed in seeds:
             _cleanup(seed["host_id"], seed["device_id"])
         for seed in extra:
+            _cleanup(seed["host_id"], seed["device_id"])
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_backlog_eta_basis_follows_the_selfcontinue_switch(
+    caplog, scheduler_env,
+):
+    """#2554 改的是排空节奏，必须同时说清 ``eta_min_seconds`` 还剩什么含义。
+
+    自续开启时它退化为「纯等 tick」的悲观上界；关闭（``=0``）时才是原来的承诺。
+    同一个数字、两种口径——不标注就会把「快好了」读成「还要 12.5 分钟」。
+    """
+    scheduler_env("RECONCILER_DRAIN_MAX_SECONDS", "5")
+    caplog.set_level(logging.INFO, logger="backend.scheduler.device_lease_reconciler")
+    await _record_unknown_backlog()
+    lines = [r.getMessage() for r in caplog.records
+             if "reconciler_unknown_backlog " in r.getMessage()]
+    assert lines, "积压读数行必须存在"
+    assert lines[-1].endswith("eta_basis=selfcontinue drain_max_seconds=5.0"), lines[-1]
+
+    caplog.clear()
+    scheduler_env("RECONCILER_DRAIN_MAX_SECONDS", "0")
+    await _record_unknown_backlog()
+    lines = [r.getMessage() for r in caplog.records
+             if "reconciler_unknown_backlog " in r.getMessage()]
+    assert lines[-1].endswith("eta_basis=tick_only drain_max_seconds=0.0"), lines[-1]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# #2554: 排空未完即自续轮（一次持锁内把工作做完 + 三个出口）
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_drain_self_continues_until_backlog_empty(monkeypatch, scheduler_env):
+    """积压未清空就继续再来一轮——「等下一个 IntervalTrigger」不再是收口的第二半。"""
+    scheduler_env("RECONCILER_DRAIN_MAX_SECONDS", "30")
+    # 调用方已经量到 5（first_remaining），循环内每次自续再量一次
+    backlog = iter([3, 1, 0])
+    rounds = {"checks": 0}
+
+    async def _fake_checks():
+        rounds["checks"] += 1
+
+    async def _fake_backlog():
+        return {
+            "grace_expired": next(backlog),
+            "within_grace": 0,
+            "missing_ended_at": 0,
+        }
+
+    import backend.scheduler.device_lease_reconciler as rec_mod
+    monkeypatch.setattr(rec_mod, "_reconcile_checks", _fake_checks)
+    monkeypatch.setattr(rec_mod, "_record_unknown_backlog", _fake_backlog)
+
+    got = await _drain_remaining_rounds(5)
+    assert got == 3, f"应按 3→1→0 自续 3 轮，实得 {got}"
+    assert rounds["checks"] == 3
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_drain_stops_without_progress(monkeypatch, scheduler_env, caplog):
+    """无进展必须**立刻**退出：否则一条不可回收的行会把每 tick 的预算烧满空转。"""
+    scheduler_env("RECONCILER_DRAIN_MAX_SECONDS", "30")
+
+    async def _fake_checks():
+        return None
+
+    async def _stuck_backlog():
+        return {
+            "grace_expired": 5, "within_grace": 0, "missing_ended_at": 0,
+        }
+
+    import backend.scheduler.device_lease_reconciler as rec_mod
+    monkeypatch.setattr(rec_mod, "_reconcile_checks", _fake_checks)
+    monkeypatch.setattr(rec_mod, "_record_unknown_backlog", _stuck_backlog)
+    caplog.set_level(
+        logging.WARNING, logger="backend.scheduler.device_lease_reconciler",
+    )
+
+    got = await _drain_remaining_rounds(5)
+    assert got == 1, f"无进展时只应跑 1 轮就收手，实得 {got}"
+    assert [r for r in caplog.records if "reconciler_drain_no_progress" in r.getMessage()], (
+        "无进展退出必须留下读数，否则「停在哪儿」又变成一个没人看的数字"
+    )
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_drain_budget_is_a_hard_stop_and_zero_disables(monkeypatch, scheduler_env, caplog):
+    """预算是硬止损：超时即停并报剩余；``0`` 则完全不自续（回到 #2548 的形状）。"""
+    import backend.scheduler.device_lease_reconciler as rec_mod
+
+    calls = {"checks": 0}
+
+    # 每轮都有进展（9→8→7…），这样「停」只能是因为预算，而不是无进展出口抢先
+    progress = {"n": 9}
+
+    async def _always_progressing():
+        return {
+            "grace_expired": progress["n"], "within_grace": 0,
+            "missing_ended_at": 0,
+        }
+
+    async def _slow_checks_progressing():
+        calls["checks"] += 1
+        await asyncio.sleep(0.05)
+        progress["n"] -= 1
+
+    monkeypatch.setattr(rec_mod, "_reconcile_checks", _slow_checks_progressing)
+    monkeypatch.setattr(rec_mod, "_record_unknown_backlog", _always_progressing)
+
+    scheduler_env("RECONCILER_DRAIN_MAX_SECONDS", "0.01")
+    caplog.set_level(
+        logging.WARNING, logger="backend.scheduler.device_lease_reconciler",
+    )
+    got = await _drain_remaining_rounds(9)
+    assert got == 1, f"预算 0.01s 应在 1 轮后止损，实得 {got}"
+    assert [r for r in caplog.records
+            if "reconciler_drain_budget_exhausted" in r.getMessage()], (
+        "预算止损必须报出剩余量（余量交回下一个 tick）"
+    )
+
+    scheduler_env("RECONCILER_DRAIN_MAX_SECONDS", "0")
+    calls["checks"] = 0
+    mark = len(caplog.records)
+    assert await _drain_remaining_rounds(9) == 0, "0 = 关闭自续"
+    assert calls["checks"] == 0, "关闭自续时不得再跑一轮检查"
+    assert not any("budget_exhausted" in r.getMessage() for r in caplog.records[mark:]), (
+        "关闭自续是运维的选择，不得每 tick 报成「预算耗尽」——那会把一个开关伪装成告警"
+    )
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_drain_no_progress_exits_before_burning_budget(
+    monkeypatch, scheduler_env, caplog,
+):
+    """同一轮里「无进展」优先于「烧满预算」——毒行不得把预算当空转额度用掉。"""
+    import backend.scheduler.device_lease_reconciler as rec_mod
+
+    async def _noop():
+        return None
+
+    async def _stuck():
+        return {
+            "grace_expired": 7, "within_grace": 0, "missing_ended_at": 0,
+        }
+
+    monkeypatch.setattr(rec_mod, "_reconcile_checks", _noop)
+    monkeypatch.setattr(rec_mod, "_record_unknown_backlog", _stuck)
+    scheduler_env("RECONCILER_DRAIN_MAX_SECONDS", "30")
+    caplog.set_level(
+        logging.WARNING, logger="backend.scheduler.device_lease_reconciler",
+    )
+    assert await _drain_remaining_rounds(7) == 1
+    msgs = [r.getMessage() for r in caplog.records]
+    assert any("reconciler_drain_no_progress" in x for x in msgs), msgs
+    assert not any("budget_exhausted" in x for x in msgs), (
+        "无进展时应立即让位，不该把 30s 预算烧满"
+    )
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_reconcile_once_drains_past_cap_in_a_single_call(
+    caplog, scheduler_env, monkeypatch,
+):
+    """端到端（真 PG + 真聚合）：**一次** ``device_lease_reconcile_once()`` 收完 6 台。
+
+    为什么是 6 台而不是 3 台：一次 ``_reconcile_checks()`` 里 Phase 2 与 stale 两条
+    分支各自带 ``cap``，``cap=2`` 时**一个 pass 就能收 4 台**（stale 分支按 job 扫描、
+    会把 Phase 2 截断掉的那台的 ACTIVE 租约一并释放并判 FAILED——这是既有形状，
+    不是本单引入）。所以只有候选数超过 ``2×cap`` 才会真正留下余量，进而考验自续轮。
+    6 台 / cap=2：pass 1 收 4、pass 2（自续）收 2，**全程只等 0 个外部 tick**；
+    没有 #2554 时这需要 2 个外部 tick（15s × 2）。断言三件事：
+    ① 6 台全部 FAILED 且租约 RELEASED；② 真的发生了自续（读数）；
+    ③ 自续在**同一把锁内**（不是又起了一个 job——否则「上一轮没跑完就跳过」的背压就丢了）。
+    """
+    import backend.scheduler.device_lease_reconciler as rec_mod
+
+    scheduler_env("RECONCILER_DRAIN_BATCH", "2")
+    scheduler_env("RECONCILER_DRAIN_MAX_SECONDS", "30")
+    seeds = _seed_unknown_past_grace(6)
+
+    lock_held_in_round: list[bool] = []
+    real_backlog = rec_mod._record_unknown_backlog
+
+    async def _spy_backlog():
+        counts = await real_backlog()
+        if counts["grace_expired"] > 0:
+            lock_held_in_round.append(rec_mod._reconcile_lock.locked())
+        return counts
+
+    monkeypatch.setattr(rec_mod, "_record_unknown_backlog", _spy_backlog)
+    try:
+        await async_engine.dispose()
+        # 自续轮本身是 INFO（正常节奏的一部分），只有三个出口的止损才是 WARNING；
+        # 这里要证明「发生过自续」，所以捕到 INFO。
+        caplog.set_level(
+            logging.INFO,
+            logger="backend.scheduler.device_lease_reconciler",
+        )
+        await rec_mod.device_lease_reconcile_once()
+
+        assert [r for r in caplog.records
+                if "reconciler_drain_selfcontinued" in r.getMessage()], (
+            "cap 截断后应在同一次持锁内自续，而不是把余量押给下一个 tick"
+        )
+        assert lock_held_in_round and all(lock_held_in_round), (
+            f"自续期间必须一直持锁：{lock_held_in_round}"
+        )
+        async with AsyncSessionLocal() as db:
+            for seed in seeds:
+                job = await db.get(JobInstance, seed["job_id"])
+                assert job.status == JobStatus.FAILED.value, (
+                    f"#2554 一次调用未收完：job={seed['job_id']} {job.status}"
+                )
+                lease = (await db.execute(
+                    select(DeviceLease).where(DeviceLease.id == seed["lease_id"])
+                )).scalars().first()
+                assert lease.status == LeaseStatus.RELEASED.value
+    finally:
+        for seed in seeds:
             _cleanup(seed["host_id"], seed["device_id"])

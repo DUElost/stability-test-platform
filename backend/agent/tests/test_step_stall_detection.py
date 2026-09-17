@@ -20,6 +20,7 @@ import threading
 import time
 
 import pytest
+from pathlib import Path
 
 import backend.agent.pipeline_engine as pe
 from backend.agent.pipeline_engine import (
@@ -31,6 +32,47 @@ from backend.agent.pipeline_engine import (
 
 # 测试侧快轮询：仍走真实 _pump_process 主循环，只缩短「空转一拍」的代价。
 _FAST_POLL_SECONDS = 0.05
+
+
+class _ScriptedClock:
+    """可注入时钟（#2577）：停滞判定只由测试推进，不赌真实时间窗。
+
+    背景：本模块用 50ms 快轮询把用例压到秒级，但 `stall_seconds` 一旦与子进程的
+    输出时长同量级（如 0.2 vs 0.24s），判定就只剩「第 0.2s 那一拍恰好落在子进程
+    退出前」这一条路——CI 上这一拍被忙碌的 runner 吃掉即红，重跑同 SHA 又绿。
+    """
+
+    def __init__(self, start: float = 1_000.0) -> None:
+        self._t = start
+        self._lock = threading.Lock()
+
+    def __call__(self) -> float:
+        with self._lock:
+            return self._t
+
+    def advance(self, dt: float) -> None:
+        with self._lock:
+            self._t += dt
+
+
+def _advance_on_markers(clock: "_ScriptedClock", marker_dir: Path, step: float) -> None:
+    """守护线程：子进程每落一个「推进标记」，时钟前进 ``step``（#2577）。
+
+    用**标记文件**而不是 sleep 对齐：子进程每打一行 PROGRESS 就 touch 一个文件，
+    时钟只在真的收到那一行之后前进——于是「推进刷新停滞钟」与「回退不刷新」两种
+    语义跑在**同一时钟节奏**下，判据才有判别力。
+    """
+    def _run() -> None:
+        seen = 0
+        deadline = time.monotonic() + 30.0
+        while time.monotonic() < deadline:
+            marks = sorted(marker_dir.glob("mark-*"))
+            while seen < len(marks):
+                clock.advance(step)
+                seen += 1
+            time.sleep(0.005)
+
+    threading.Thread(target=_run, daemon=True, name="scripted-clock").start()
 
 
 @pytest.fixture(autouse=True)
@@ -133,17 +175,22 @@ class TestStallDetection:
         # 靠停滞钟死的，不是耗到总时长 —— wall_clock=None 本来就没有总时长
         assert time.monotonic() - started < 2
 
-    def test_steady_progress_stamps_keep_it_alive_past_the_stall_window(self):
-        """PROGRESS 间隔 < stall 窗口 —— 不该死。"""
-        proc = _spawn("""
-            import sys, time
+    def test_steady_progress_stamps_keep_it_alive_past_the_stall_window(self, tmp_path):
+        """PROGRESS 间隔 < stall 窗口 —— 不该死（#2577：时钟随推进前进，判定确定）。"""
+        proc = _spawn(f"""
+            import pathlib, sys, time
+            marks = pathlib.Path({str(tmp_path)!r})
             for i in range(6):
-                sys.stderr.write('PROGRESS {"seq": %d}\n' % i); sys.stderr.flush()
+                sys.stderr.write('PROGRESS {{"seq": %d}}\\n' % i); sys.stderr.flush()
+                marks.joinpath('mark-%03d' % i).touch()
                 time.sleep(0.05)
-            print('{"success": true}')
+            print('{{"success": true}}')
         """)
-        outcome = _pump_process(proc, wall_clock=30, stall_seconds=0.25)
+        clock = _ScriptedClock()
+        _advance_on_markers(clock, tmp_path, step=0.1)
+        outcome = _pump_process(proc, wall_clock=None, stall_seconds=0.25, now=clock)
         assert outcome.reason is None, outcome.stderr
+
 
     def test_output_then_silence_is_killed(self):
         """先有输出再卡死 —— 停滞钟从最后一行之后开始算。"""
@@ -161,67 +208,102 @@ class TestStallDetection:
 
         这正是停滞钟存在的意义：fastboot 无限重试、adb install 卡 90% 反复
         重连打印日志，都会持续输出。若普通输出也算活，停滞钟就形同虚设。
+        #2577：子进程保持存活、时钟由测试推进，判定不依赖真实时间窗。
         """
         proc = _spawn("""
             import sys, time
             for _ in range(6):
                 sys.stderr.write("retrying...\\n"); sys.stderr.flush()
                 time.sleep(0.05)
-            sys.stderr.write("eventually done\\n")
+            time.sleep(60)
         """)
-        outcome = _pump_process(proc, wall_clock=30, stall_seconds=0.25)
+        clock = _ScriptedClock()
+        threading.Thread(
+            target=lambda: (time.sleep(0.4), clock.advance(1.0)), daemon=True,
+        ).start()
+        outcome = _pump_process(proc, wall_clock=None, stall_seconds=0.25, now=clock)
         assert outcome.reason == "stall"
         assert "retrying" in outcome.stderr
 
 
 class TestProgressStamps:
-    def test_progress_lines_reset_the_stall_clock(self):
-        proc = _spawn("""
-            import sys, time
+    def test_progress_lines_reset_the_stall_clock(self, tmp_path):
+        proc = _spawn(f"""
+            import pathlib, sys, time
+            marks = pathlib.Path({str(tmp_path)!r})
             for i in range(6):
-                sys.stderr.write('PROGRESS {"seq": %d}\\n' % i); sys.stderr.flush()
+                sys.stderr.write('PROGRESS {{"seq": %d}}\\n' % i); sys.stderr.flush()
+                marks.joinpath('mark-%03d' % i).touch()
                 time.sleep(0.05)
-            print('{"success": true}')
+            print('{{"success": true}}')
         """)
         seen = []
+        clock = _ScriptedClock()
+        _advance_on_markers(clock, tmp_path, step=0.1)
         outcome = _pump_process(
-            proc, wall_clock=30, stall_seconds=0.25, on_progress=lambda: seen.append(1),
+            proc, wall_clock=None, stall_seconds=0.25, now=clock,
+            on_progress=lambda: seen.append(1),
         )
         assert outcome.reason is None
         assert len(seen) == 6
 
-    def test_repeated_seq_does_not_reset_stall_clock(self):
-        """#804：重复打同一 seq（进程活着但未推进）→ 判停滞。"""
-        proc = _spawn("""
-            import sys, time
-            for _ in range(8):
-                sys.stderr.write('PROGRESS {"seq": 1}\\n'); sys.stderr.flush()
+
+    def test_repeated_seq_does_not_reset_stall_clock(self, tmp_path):
+        """#804：重复打同一 seq（进程活着但未推进）→ 判停滞（#2577：注入时钟判定）。"""
+        proc = _spawn(f"""
+            import pathlib, sys, time
+            marks = pathlib.Path({str(tmp_path)!r})
+            for i in range(8):
+                sys.stderr.write('PROGRESS {{"seq": 1}}\\n'); sys.stderr.flush()
+                marks.joinpath('mark-%03d' % i).touch()
                 time.sleep(0.04)
+            # 停写后挂起：避免子进程先于 stall 窗口自然退出（CI 时序 flake）。
+            time.sleep(1.0)
         """)
-        outcome = _pump_process(proc, wall_clock=30, stall_seconds=0.2)
+        clock = _ScriptedClock()
+        _advance_on_markers(clock, tmp_path, step=0.1)
+        outcome = _pump_process(proc, wall_clock=None, stall_seconds=0.2, now=clock)
         assert outcome.reason == "stall"
 
-    def test_regressing_seq_does_not_reset_stall_clock(self):
-        """#804：seq 回退同样不算推进。"""
-        proc = _spawn("""
-            import sys, time
-            for seq in (3, 2, 1, 3, 2, 1):
-                sys.stderr.write('PROGRESS {"seq": %d}\\n' % seq); sys.stderr.flush()
+
+    def test_regressing_seq_does_not_reset_stall_clock(self, tmp_path):
+        """#804：seq 回退同样不算推进。
+
+        #2577：本用例原先靠「第 0.2s 那一拍恰好落在子进程退出前」（~40ms 窗口），
+        CI 上反复红；现在时钟由测试按推进标记驱动，判定确定。
+        """
+        proc = _spawn(f"""
+            import pathlib, sys, time
+            marks = pathlib.Path({str(tmp_path)!r})
+            for i, seq in enumerate((3, 2, 1, 3, 2, 1)):
+                sys.stderr.write('PROGRESS {{"seq": %d}}\\n' % seq); sys.stderr.flush()
+                marks.joinpath('mark-%03d' % i).touch()
                 time.sleep(0.04)
+            # 停写后挂起：避免子进程先于 stall 窗口自然退出（CI 时序 flake）。
+            time.sleep(1.0)
         """)
-        outcome = _pump_process(proc, wall_clock=30, stall_seconds=0.2)
+        clock = _ScriptedClock()
+        _advance_on_markers(clock, tmp_path, step=0.1)
+        outcome = _pump_process(proc, wall_clock=None, stall_seconds=0.2, now=clock)
         assert outcome.reason == "stall"
 
-    def test_legacy_stamp_without_seq_still_resets(self):
+
+    def test_legacy_stamp_without_seq_still_resets(self, tmp_path):
         """#804 兼容：无 seq 字段的旧戳按阶段 1 行为（仅刷新）——不被误杀。"""
-        proc = _spawn("""
-            import sys, time
-            for _ in range(6):
+        proc = _spawn(f"""
+            import pathlib, sys, time
+            marks = pathlib.Path({str(tmp_path)!r})
+            for i in range(6):
                 sys.stderr.write('PROGRESS step=fill\\n'); sys.stderr.flush()
+                marks.joinpath('mark-%03d' % i).touch()
                 time.sleep(0.04)
+            print('{{"success": true}}')
         """)
-        outcome = _pump_process(proc, wall_clock=30, stall_seconds=0.2)
-        assert outcome.reason is None
+        clock = _ScriptedClock()
+        _advance_on_markers(clock, tmp_path, step=0.1)
+        outcome = _pump_process(proc, wall_clock=None, stall_seconds=0.25, now=clock)
+        assert outcome.reason is None, outcome.stderr
+
 
     def test_progress_lines_never_enter_the_buffers(self):
         """12h 步骤每 5s 一戳 = 8640 行，会把真正的报错挤出 64KiB 截断窗口。"""
