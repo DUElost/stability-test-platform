@@ -61,10 +61,13 @@ readNamedValues(root: ParentNode | null, fallback: Record<string, string>): Reco
 
 ## Revisit
 
-- **WifiPage（出口）**：把 `createMutation`/`updateMutation` 的 `mutationFn` 改为接收
+> **[2026-09-17 收口]** 上列两个出口已落地（WifiPage 用 mutation 入参传值；设置页用 `document` 作读取根），
+> 见 [`2026-09-17-autofill-forms-residue-2456.md`](./2026-09-17-autofill-forms-residue-2456.md)。
+
+- ~~**WifiPage（出口）**~~ **[已收口 · 2026-09-17]**：把 `createMutation`/`updateMutation` 的 `mutationFn` 改为接收
   `values`（`mutate(readNamedValues(form, {...form, max_devices: maxDevicesInput}))`），
   字段补 `name`；`maxDevicesValue()` 的钳制逻辑随之改为对传入值做。
-- **AiAssistantSettingsPage（出口）**：无 `<form>`；若要一并支持自动填充，用容器 `ref` +
+- ~~**AiAssistantSettingsPage（出口）**~~ **[已收口 · 2026-09-17]**：无 `<form>`；若要一并支持自动填充，用容器 `ref` +
   `readNamedValues(ref.current, …)` 读平铺字段——但先确认它的字段**确实**会被密码管理器填充
   （API key 多为粘贴而非代填），避免为假想场景改造。
 - **新增表单的纪律**：字段一律加 `name`，提交处走 `readNamedValues`；

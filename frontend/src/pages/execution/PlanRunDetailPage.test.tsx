@@ -480,7 +480,11 @@ describe('PlanRunDetailPage', () => {
     // Click grid cell to open drawer (default grid view in DeviceOverview)
     fireEvent.click(await screen.findByTestId('minimap-cell-3001'));
     fireEvent.click(await screen.findByTestId('device-drawer-open-report'));
-    expect(mocks.navigate).toHaveBeenCalledWith('/runs/3001/report');
+    // #2420：权威形状改为 /jobs/:jobId/report，且带上当前的 run id 让报告端点做归属
+    // 校验（本文件把 useParams 桩成 { runId: '12' }，所以这里断言的是**带参数**那一支；
+    // 拿不到数字 run id 时不编 `planRun=undefined` 的行为由 PlanRunDetailPage 里的
+    // /^\d+$/ 守卫保证）。
+    expect(mocks.navigate).toHaveBeenCalledWith('/jobs/3001/report?planRun=12');
   });
 
   it('renders device overview and business-flow stepper in the details view', async () => {
