@@ -185,9 +185,11 @@ async def lifespan(app: FastAPI):
             from backend.services.dashboard_summary_publisher import bind_event_loop
 
             bind_event_loop(asyncio.get_running_loop())
-            # #2341：版本真值来自部署树里的 release-manifest.json（读不到即显式
-            # unknown）——不再写字面量。面板显示 2.0.0 而实际跑别的 revision 属于
-            # 「有面板、数据是假的」，是 #2276「绿色装旧版本」的唯一通用探测器失效。
+            # #2341：版本真值来自部署树里的 release-manifest.json；#2572：站点安装
+            # 形态由 s2 把清单落到部署树根，checkout 形态（本机生产即此形态）读
+            # git，两者都取不到才显式 unknown——不再写字面量。面板显示 2.0.0 而实际
+            # 跑别的 revision 属于「有面板、数据是假的」，是 #2276「绿色装旧版本」
+            # 的唯一通用探测器失效。
             init_build_info(*resolve_build_info())
 
             # ADR-0025 §9: RunConsole（控制面命令执行 + web 实时控制台）配置
