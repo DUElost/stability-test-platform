@@ -141,6 +141,11 @@ Class: process
   会因「存在待授权项」天天红，真故障被告警疲劳淹掉；`last_run` 则用来区分「干净」与「静默停摆」。
   probe 只用 stdlib、不 import `backend`（避免 import 期解析 `DATABASE_URL` 的老副作用）、
   不读凭据、永不写库。
+- 单元落地前查了本机实际文件系统：`/var/lib/prometheus/node-exporter` 里既有
+  `stp_hostproc.prom` 等**全是 root:root**，且 `stp-mem-top.service` 不写 `User=`。因此
+  新单元也**不能写 `User=<deploy-user>`**——非 root 写不进指标目录，probe 会按自己定的
+  契约（"指标写不出去就当场失败，不做静默停摆"）exit 1 ⇒ timer 天天 failed。单元里把这
+  条写成注释，防止日后有人"顺手补个 User="把它弄回坏状态。
 
 **补记（同日，告警面接入——顺带暴露两处契约盲区）**：
 
