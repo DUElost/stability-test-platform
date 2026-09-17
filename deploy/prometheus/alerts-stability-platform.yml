@@ -1,5 +1,11 @@
 # Prometheus AlertManager rules for stability-test-platform.
-# Mount alongside prometheus.yml; adjust labels/severity for your on-call routing.
+# Rendered by the site installer for <deploy-root> — do not edit by hand.
+#
+# 这份仓库文件是唯一事实源：站点侧 /etc/stp/prometheus/rules/*.yml 只是安装产物。
+# 由 tools/site_config/stages.py 的 MONITORING_RULES 安装，并由 prometheus.yml 的
+# rule_files 段加载。两者缺一，规则就只活在仓库里——#2488 之前正是那种状态：
+# 17 条告警一条也没上线，本机那份 7/10 的手工拷贝还停在 10 条。
+# 改 labels/severity 请改这里，并同步重跑 promtool test rules（场景文件必须跟着改）。
 
 groups:
   - name: stability-platform-main-chain
