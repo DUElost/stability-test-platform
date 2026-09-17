@@ -71,6 +71,10 @@ Class: bug-fix
 
 - #2420 第 3 项（`/runs/{id}/report` 裸对象 vs `/report/cached` 信封）与第 4 项（产物下载
   双路由）仍是对外契约问题，本单不动。
+  （**已落地**：见
+  [`2026-09-17-live-envelope-and-download-unify-2420.md`](./2026-09-17-live-envelope-and-download-unify-2420.md)
+  ——live 补 `ApiResponse` 信封；两条下载路由共用 `services/job_artifact_download`，
+  plan-runs 配对路由标 UI 权威、job 域路由标脚本对外入口。）
 - 若将来决定连 `RecentRun.run_id` 一起改名，落点是 `backend/api/schemas` + `types.ts` +
   `ResultsPage`；届时前端路由已是 job 形状，改名只剩 JSON 层。
 - 可选校验目前只有一个调用方（PlanRun 详情抽屉）。真正的收口是"所有拿 job 的地方都知道

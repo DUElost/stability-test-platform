@@ -5,7 +5,7 @@ Tests for run-oriented API routes after removing the legacy /tasks* compatibilit
 import json
 from datetime import datetime, timezone
 
-from backend.models.job import JobInstance, JobLogSignal, StepTrace
+from backend.models.job import JobArtifact, JobInstance, JobLogSignal, StepTrace
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
 
@@ -98,7 +98,11 @@ class TestRunReportFromJobChain:
 
         response = client.get(f"/api/v1/runs/{job_id}/report", headers=auth_headers)
         assert response.status_code == 200
-        data = response.json()
+        body = response.json()
+        # #2420 第 3 项：live 口径与 cached 同走 {data, error} 信封
+        assert set(body) == {"data", "error"}
+        assert body["error"] is None
+        data = body["data"]
         assert data["run"]["id"] == job_id
         assert data["task"]["id"] == plan_id
         assert data["task"]["type"] == "PLAN"
@@ -202,6 +206,7 @@ class TestReportPlanRunOwnership:
 
     @staticmethod
     def _seed(db_session, sample_device):
+        """seed 两个 run（A/B）与各自 job；返回 (run_a, run_b, job_a, job_b)。"""
         from datetime import datetime, timedelta, timezone
 
         from backend.models.host import Host
@@ -242,13 +247,15 @@ class TestReportPlanRunOwnership:
             runs.append(run)
             if tag == "A":
                 job_a = job
-        return runs[0], job_a
+            else:
+                job_b = job
+        return runs[0], runs[1], job_a, job_b
 
     def test_mismatched_plan_run_is_404_with_code(
         self, client, auth_headers, db_session, sample_device
     ):
         """错配必须 404，并且**不能**返回另一个 run 的 job 报告（旧行为）。"""
-        run_a, job_a = self._seed(db_session, sample_device)
+        run_a, _run_b, job_a, _job_b = self._seed(db_session, sample_device)
         other_run_id = run_a.id + 10_000  # 不存在的 run：更该拒
 
         resp = client.get(
@@ -263,30 +270,32 @@ class TestReportPlanRunOwnership:
     def test_matching_plan_run_passes(
         self, client, auth_headers, db_session, sample_device
     ):
-        run_a, job_a = self._seed(db_session, sample_device)
+        run_a, _run_b, job_a, _job_b = self._seed(db_session, sample_device)
         resp = client.get(
             f"/api/v1/runs/{job_a.id}/report",
             params={"plan_run_id": run_a.id},
             headers=auth_headers,
         )
         assert resp.status_code == 200, resp.text
-        assert resp.json()["run"]["id"] == job_a.id
+        assert resp.json()["data"]["run"]["id"] == job_a.id
 
     def test_without_param_keeps_legacy_behaviour(
         self, client, auth_headers, db_session, sample_device
     ):
         """不传参数保持原行为：老脚本与历史深链不被本单收紧打断。"""
-        _, job_a = self._seed(db_session, sample_device)
+        _, _run_b, job_a, _job_b = self._seed(db_session, sample_device)
         resp = client.get(
             f"/api/v1/runs/{job_a.id}/report", headers=auth_headers,
         )
         assert resp.status_code == 200, resp.text
+        # 信封化后仍 200 且形状与 cached 一致（#2420 第 3 项）
+        assert set(resp.json()) == {"data", "error"}
 
     def test_cached_endpoint_also_checks_ownership(
         self, client, auth_headers, db_session, sample_device
     ):
         """三个报告端点同源同校验——漏一个就等于"校验可选且看运气"。"""
-        run_a, job_a = self._seed(db_session, sample_device)
+        run_a, _run_b, job_a, _job_b = self._seed(db_session, sample_device)
         resp = client.get(
             f"/api/v1/runs/{job_a.id}/report/cached",
             params={"plan_run_id": run_a.id + 10_000},
@@ -294,3 +303,91 @@ class TestReportPlanRunOwnership:
         )
         assert resp.status_code == 404, resp.text
         assert resp.json()["detail"]["code"] == "job_not_in_plan_run"
+
+    def test_live_and_cached_share_envelope_and_field_keys(
+        self, client, auth_headers, db_session, sample_device
+    ):
+        """#2420 第 3 项：live 与 cached 的差异只在内容（快照 vs 现算），不在信封/字段键。
+
+        此前 live 返回裸对象、cached 返回 `{data, error}` 信封——同一资源两套形状，
+        照抄 UI 解包代码的脚本会直接解不开。两条现在都必须是信封，且内层键集合一致
+        （无快照时 cached 走现算回退，键集合应与 live 逐键相等）。
+        """
+        _run_a, _run_b, job_a, _job_b = self._seed(db_session, sample_device)
+        live = client.get(f"/api/v1/runs/{job_a.id}/report", headers=auth_headers)
+        cached = client.get(f"/api/v1/runs/{job_a.id}/report/cached", headers=auth_headers)
+        assert live.status_code == 200 and cached.status_code == 200
+        live_body, cached_body = live.json(), cached.json()
+        assert set(live_body) == set(cached_body) == {"data", "error"}
+        assert set(live_body["data"]) == set(cached_body["data"])
+
+
+class TestArtifactDownloadRoutesSameForm:
+    """#2420 第 4 项：两条下载路由共用一份实现，守卫判据两侧同形。
+
+    过去 plan-runs 配对路由有 run_log_bundle 409 守卫，job 域路由没有——
+    同一资源两种失败形态；收敛到 `services/job_artifact_download` 后逐一反证。
+    """
+
+    @staticmethod
+    def _seed_artifact(db_session, sample_device, *, storage_uri, artifact_type):
+        run_a, run_b, job_a, job_b = TestReportPlanRunOwnership._seed(db_session, sample_device)
+        art = JobArtifact(
+            job_id=job_a.id, storage_uri=storage_uri,
+            artifact_type=artifact_type, size_bytes=1,
+        )
+        db_session.add(art)
+        db_session.commit()
+        return run_a, run_b, job_a, job_b, art
+
+    def test_run_log_bundle_409_on_both_routes(
+        self, client, auth_headers, db_session, sample_device
+    ):
+        run_a, _run_b, job_a, _job_b, art = self._seed_artifact(
+            db_session, sample_device,
+            storage_uri="/home/android/sonic_tinno/archives/x/1/1.tar.gz",
+            artifact_type="run_log_bundle",
+        )
+        urls = [
+            f"/api/v1/plan-runs/{run_a.id}/jobs/{job_a.id}/artifacts/{art.id}/download",
+            f"/api/v1/runs/{job_a.id}/artifacts/{art.id}/download",
+        ]
+        for url in urls:
+            resp = client.get(url, headers=auth_headers)
+            assert resp.status_code == 409, url + " " + resp.text
+            assert "logs/query" in resp.text and "agent/logs" in resp.text, url
+
+    def test_foreign_artifact_404_on_both_routes(
+        self, client, auth_headers, db_session, sample_device
+    ):
+        _run_a, run_b, _job_a, job_b, art = self._seed_artifact(
+            db_session, sample_device,
+            storage_uri="http://example.invalid/whatever.bin",
+            artifact_type="generic",
+        )
+        # artifact 属于 job_a：挂在 job_b 域下两条路由都必须 404
+        urls = [
+            f"/api/v1/plan-runs/{run_b.id}/jobs/{job_b.id}/artifacts/{art.id}/download",
+            f"/api/v1/runs/{job_b.id}/artifacts/{art.id}/download",
+        ]
+        for url in urls:
+            resp = client.get(url, headers=auth_headers)
+            assert resp.status_code == 404, url + " " + resp.text
+            assert resp.json()["detail"] == "artifact not found for this job", url
+
+    def test_redirect_artifact_same_shape_on_both_routes(
+        self, client, auth_headers, db_session, sample_device
+    ):
+        run_a, _run_b, job_a, _job_b, art = self._seed_artifact(
+            db_session, sample_device,
+            storage_uri="https://example.invalid/file.bin",
+            artifact_type="generic",
+        )
+        urls = [
+            f"/api/v1/plan-runs/{run_a.id}/jobs/{job_a.id}/artifacts/{art.id}/download",
+            f"/api/v1/runs/{job_a.id}/artifacts/{art.id}/download",
+        ]
+        for url in urls:
+            resp = client.get(url, headers=auth_headers, follow_redirects=False)
+            assert resp.status_code == 307, url + " " + resp.text
+            assert resp.headers["location"] == "https://example.invalid/file.bin", url
