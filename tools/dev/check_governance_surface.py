@@ -986,6 +986,8 @@ GATE_TO_CI_ANCHOR = {
     "layering": ("ci.yml", "分层检查"),
     # 孤立 ORM 模型挂载门禁（#1890-B）——锚点即 lint job 该 step 的 name
     "orphan-models": ("ci.yml", "孤立 ORM 模型检查"),
+    # 上帝文件行数封顶棘轮（#736）——锚点即 lint job 该 step 的 name
+    "god-files": ("ci.yml", "上帝文件行数封顶检查"),
     # 环境变量清单漂移门禁（#737 文档切片）：run_gates 侧跑
     # `env_inventory.py --self-test && --check`；CI 侧由根测试套件承担——
     # tests/test_env_inventory.py::test_repo_doc_inventory_is_in_sync 直接执行
