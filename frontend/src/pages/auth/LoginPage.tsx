@@ -6,6 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { AlertCircle } from 'lucide-react';
 import { clearAppQueryCache } from '@/components/QueryProvider';
 import { api, toApiError } from '@/utils/api';
+import { readNamedValues } from '@/utils/forms';
 import { resolvePostLoginTarget } from '@/utils/authRedirect';
 import { ALERT_BOX, SURFACE, TEXT } from '@/design-system/tokens';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
@@ -22,11 +23,14 @@ export default function LoginPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    // #2456：以**表单 DOM 值**为准——密码管理器直写 .value 时 React 收不到 change，
+    // 只认 state 会把「已填好的登录表单」判成空（#2453 现场即此形态）。
+    const values = readNamedValues(e.currentTarget as HTMLFormElement, { username, password });
     setError('');
     setLoading(true);
 
     try {
-      await api.auth.login(username, password);
+      await api.auth.login(values.username, values.password);
       clearAppQueryCache();
       const target = resolvePostLoginTarget(location.state, searchParams.get('next'));
       navigate(target, { replace: true });
@@ -73,6 +77,7 @@ export default function LoginPage() {
               </label>
               <Input
                 id="username"
+                name="username"
                 type="text"
                 autoComplete="username"
                 placeholder="请输入用户名"
@@ -88,6 +93,7 @@ export default function LoginPage() {
               </label>
               <Input
                 id="password"
+                name="password"
                 type="password"
                 autoComplete="current-password"
                 placeholder="请输入密码"

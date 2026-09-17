@@ -32,6 +32,7 @@ import sys
 import requests
 from datetime import date, datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 # 以 `python tools/dev/retire_script_versions.py …` 直接运行时 sys.path[0] 是 tools/dev，
 # 仓库根不在 path 上 ⇒ `_plan()` 里的 `from backend…` 抛 ModuleNotFoundError（与 #1659
@@ -171,11 +172,23 @@ def ensure_base_url_allowed(base_url: str, *, allow_remote: bool) -> None:
 
     放在 `_apply`（CLI 路径）而不是客户端构造函数里：护栏要能被替换客户端的测试
     覆盖，也不该随未来换个 HTTP 封装就丢失。
+
+    判据必须走 `urlsplit().hostname`，**不能自己截正则**（2026-09-17 审计 B）：
+    `http://127.0.0.1:8000@evil.example/api/v1` 里 `127.0.0.1:8000` 是 **userinfo**
+    而不是 host，旧的 `^[a-z]+://([^/:]+)` 在 `:` 处截断后把这种 URL 判成本机放行，
+    于是 admin Bearer token 连同批量 `DELETE /scripts/{id}` 一起发往外部主机；同一
+    正则还把合法 IPv6 回环 `http://[::1]:8000` 截成 `[` 而**误拒**。hostname 由
+    stdlib 负责剥离 userinfo、去 IPv6 方括号并小写化。
     """
-    match = re.match(r"^[a-z]+://([^/:]+)", base_url)
-    host = match.group(1) if match else ""
+    parts = urlsplit(base_url)
+    if parts.scheme not in ("http", "https"):
+        raise SystemExit(f"拒绝非 HTTP(S) 的控制面地址：{base_url}")
+    host = (parts.hostname or "").lower()
     if not allow_remote and host not in _LOOPBACK_HOSTS:
-        raise SystemExit(f"拒绝向非本机控制面写：{base_url}（确认后用 --allow-remote）")
+        raise SystemExit(
+            f"拒绝向非本机控制面写：{base_url}（实际 host={host or '<空>'}；"
+            "确认后用 --allow-remote）"
+        )
 
 
 class ControlPlane:
@@ -198,8 +211,20 @@ class ControlPlane:
             timeout=30,
         )
         resp.raise_for_status()
-        token = resp.json()["access_token"]
-        me = self._session.get(f"{self.base_url}/auth/me", timeout=30)
+        body = resp.json()
+        if "access_token" not in body:
+            raise SystemExit(
+                f"{self.base_url}/auth/token 未返回 access_token（字段 {sorted(body)}）"
+                "——请确认该端点是发 bearer token 的 issue_token，而非只设 cookie 的 login")
+        token = body["access_token"]
+        # Bearer 头必须**在这一条请求上显式给出**：`_session.headers` 要到 _login() 返回后
+        # 才在 __init__ 里 update，用 session 直接取 /auth/me 等于发一个未认证请求
+        # （生产实跑 401；/auth/token 不设 auth cookie，也没有 cookie 可兜）。
+        me = self._session.get(
+            f"{self.base_url}/auth/me",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=30,
+        )
         me.raise_for_status()
         if me.json().get("role") != "admin":
             raise SystemExit("凭据对应身份非 admin，拒绝执行退役")
