@@ -3,7 +3,13 @@ import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import PlanRunDetailPage from './PlanRunDetailPage';
+import { PLAN_RUN_SOCKET_COALESCE_MS } from '@/hooks/plan-run/planRunDetailUtils';
 import { HeaderSlotProvider, useHeaderSlot } from '@/contexts/HeaderSlotContext';
+
+// #2369：JOB_STATUS / PRECHECK_UPDATE 的 REST 失效**合流 2s**（`PLAN_RUN_SOCKET_COALESCE_MS`）。
+// 断言必须等过合流窗口——等 1s（waitFor 默认）测的是「立即失效」这个已经不存在的行为，
+// main 全量 CI 2026-09-16 就是红在这里（#2441）。
+const COALESCE_WAIT = { timeout: PLAN_RUN_SOCKET_COALESCE_MS + 2_000 };
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
@@ -484,60 +490,66 @@ describe('PlanRunDetailPage', () => {
     expect(await screen.findByTestId('business-flow-stepper')).toBeInTheDocument();
   });
 
-  it('invalidates devices+timeline on JOB_STATUS push and watcher on WATCHER_SIGNAL', async () => {
+  // #2441：本组原为一个长用例（JOB_STATUS + WATCHER_SIGNAL + PRECHECK_UPDATE 串跑）。
+  // #2369 给 JOB_STATUS / PRECHECK_UPDATE 加了 2s 合流后，串跑会在默认 5s 用例超时内
+  // 攒够三段等待而超时；拆成三条各自只等一个窗口——既避开超时，也让失败点自己说话。
+  it('invalidates devices+timeline on a JOB_STATUS burst (coalesced), never watcher', async () => {
     renderPage();
     await waitFor(() => screen.getByTestId('device-overview'));
     expect(typeof mocks.socketCallback.current).toBe('function');
 
-    // Reset call counts to isolate post-mount invalidation behaviour.
     mocks.getDevices.mockClear();
     mocks.getTimeline.mockClear();
-    mocks.getEvents.mockClear();
     mocks.getWatcherSummary.mockClear();
-    mocks.getRun.mockClear();
 
-    // Push a JOB_STATUS event — devices/timeline should refetch, but
-    // watcher should not (only WATCHER_SIGNAL invalidates watcher).
+    // 连推两次：合流窗口内只应触发**一次** REST 失效（#2369 的合流语义本身也得有断言，
+    // 否则「去掉合流」不会让任何用例变红）。
     mocks.socketCallback.current!({
       type: 'JOB_STATUS',
       payload: { job_id: 3002, status: 'RUNNING' },
     });
-    await waitFor(() => expect(mocks.getDevices).toHaveBeenCalled());
+    mocks.socketCallback.current!({
+      type: 'JOB_STATUS',
+      payload: { job_id: 3002, status: 'RUNNING' },
+    });
+
+    await waitFor(() => expect(mocks.getDevices).toHaveBeenCalled(), COALESCE_WAIT);
+    expect(mocks.getDevices).toHaveBeenCalledTimes(1);
     expect(mocks.getTimeline).toHaveBeenCalled();
+    // watcher 只由 WATCHER_SIGNAL 失效
     expect(mocks.getWatcherSummary).not.toHaveBeenCalled();
+  });
+
+  it('invalidates watcher (debounced) on WATCHER_SIGNAL, devices untouched', async () => {
+    renderPage();
+    await waitFor(() => screen.getByTestId('device-overview'));
 
     mocks.getDevices.mockClear();
+    mocks.getWatcherSummary.mockClear();
 
-    // Push a WATCHER_SIGNAL — watcher should refetch (debounced 2s), devices should not.
     mocks.socketCallback.current!({
       type: 'WATCHER_SIGNAL',
       payload: { job_id: 3002, category: 'AEE', inserted_count: 1 },
     });
-    // WATCHER_SIGNAL invalidation is debounced 2s; wait for it to fire.
-    await waitFor(() => expect(mocks.getWatcherSummary).toHaveBeenCalled(), { timeout: 4000 });
+
+    await waitFor(() => expect(mocks.getWatcherSummary).toHaveBeenCalled(), COALESCE_WAIT);
     expect(mocks.getDevices).not.toHaveBeenCalled();
+  });
 
-    // Reset and push PLAN_RUN_STATUS — should refetch run + timeline + devices.
+  it('invalidates run+timeline+devices on PRECHECK_UPDATE (coalesced)', async () => {
+    renderPage();
+    await waitFor(() => screen.getByTestId('device-overview'));
+
     mocks.getRun.mockClear();
     mocks.getTimeline.mockClear();
     mocks.getDevices.mockClear();
-    mocks.socketCallback.current!({
-      type: 'PLAN_RUN_STATUS',
-      payload: { status: 'SUCCESS' },
-    });
-    await waitFor(() => expect(mocks.getRun).toHaveBeenCalled());
-    expect(mocks.getTimeline).toHaveBeenCalled();
-    expect(mocks.getDevices).toHaveBeenCalled();
 
-    // Reset and push PRECHECK_UPDATE — should refetch run + timeline + devices.
-    mocks.getRun.mockClear();
-    mocks.getTimeline.mockClear();
-    mocks.getDevices.mockClear();
     mocks.socketCallback.current!({
       type: 'PRECHECK_UPDATE',
       payload: { phase: 'syncing', dispatch_status: 'running' },
     });
-    await waitFor(() => expect(mocks.getRun).toHaveBeenCalled());
+
+    await waitFor(() => expect(mocks.getRun).toHaveBeenCalled(), COALESCE_WAIT);
     expect(mocks.getTimeline).toHaveBeenCalled();
     expect(mocks.getDevices).toHaveBeenCalled();
   });
@@ -915,8 +927,9 @@ describe('PlanRunDetailPage', () => {
       payload: { job_id: 3002, status: 'RUNNING' },
     });
 
-    await waitFor(() =>
-      expect(screen.getByTestId('device-drawer')).toHaveTextContent('after-refetch'),
+    await waitFor(
+      () => expect(screen.getByTestId('device-drawer')).toHaveTextContent('after-refetch'),
+      COALESCE_WAIT,
     );
   });
 
