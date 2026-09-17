@@ -147,6 +147,15 @@ GATES = {
         ROOT,
         None,
     ),
+    # 函数体局部 import 棘轮（#738）：函数体内 import 总数不得超过基线（只降不升）。
+    # 局部 import 常被用来绕开循环依赖——能把代码跑起来，但依赖关系藏进运行时，
+    # 分层/依赖图类门禁都看不见。毫秒级纯 AST 读；--self-test 四态自证。
+    "inner-imports": (
+        f"{PY} tools/dev/check_inner_imports.py --self-test && "
+        f"{PY} tools/dev/check_inner_imports.py",
+        ROOT,
+        None,
+    ),
     # 上帝文件行数封顶棘轮（#736）：超限/条目过期 → 红；毫秒级纯读。
     # 棘轮语义（只许下调、上调须写明理由）与基线见该脚本抬头。
     "god-files": (
@@ -286,14 +295,14 @@ PROFILES = {
     "check:quick": [
         "schema-at-head", "env-inventory",
         "ruff", "eslint", "tsc", "knip", "compileall", "orphan-models",
-        "gov-surface", "ai-work", "god-files",
+        "gov-surface", "ai-work", "god-files", "inner-imports",
     ],
     "check:pr": [
         "schema-at-head", "env-inventory",
         "ruff", "eslint", "tsc", "knip", "compileall", "layering", "orphan-models",
         "pollution", "immutability", "alembic-immutability", "invariant-diff",
         "gov-surface", "ip-leak", "prom-alerts", "agent-tests-collect", "agent-tests",
-        "pr-migrate", "god-files",
+        "pr-migrate", "god-files", "inner-imports",
     ],
     # 治理面专项：结构门禁 + skill 用量探针 + Harness 摄取矩阵（手跑，分钟级）
     "check:gov": ["gov-surface", "gov-skills", "harness-ingest"],
