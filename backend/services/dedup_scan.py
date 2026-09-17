@@ -7,6 +7,7 @@ config-gated：未配置 scan 工具 env 则跳过 + 503。
 from __future__ import annotations
 
 import fcntl
+import json
 import logging
 import os
 import re
@@ -103,17 +104,165 @@ def _register_scan_artifacts_from_nfs(
     return count
 
 
+# ── #2188 D 步 单3：读侧清单注册 ─────────────────────────────────────────────
+# 写侧（单2，`backend/agent/upload_manager.py::_record_shard_entry`）在每个 host 上送
+# 成功后，原子重写分片 `{nfs_root}/_meta/{plan_run_id}/{host_id}.json`。读侧据此注册
+# 产物：**不解析文件名**（host/platform 来自分片字段），故 `_HOST_PREFIX_RE` 退出主路径
+# （R-4 契约测试②）。`storage_uri` 由 `file_key` 拼装为与 legacy **完全同形**的字符串，
+# 使过渡期两路注册共享幂等键 `(plan_run_id, storage_uri)`、互不重复。
+_META_DIRNAME = "_meta"
+_META_SCHEMA_VERSION = 1
+
+
+def _meta_shard_dir(nfs_root: str, plan_run_id: int) -> Path:
+    return Path(nfs_root) / _META_DIRNAME / str(int(plan_run_id))
+
+
+def _load_meta_shards(nfs_root: str, plan_run_id: int) -> dict[str, dict]:
+    """读 `_meta/{run}/*.json` → ``{host_id: shard}``。
+
+    容忍坏分片（非 JSON / 结构不符 / schema 版本不符）——跳过而非抛：
+    读侧是**发现**路径，单个坏分片不应让整轮注册失败（写侧保证原子替换，
+    故坏分片只可能来自外部损坏）。
+    """
+    out: dict[str, dict] = {}
+    shard_dir = _meta_shard_dir(nfs_root, plan_run_id)
+    if not shard_dir.is_dir():
+        return out
+    for shard_file in sorted(shard_dir.glob("*.json")):
+        try:
+            payload = json.loads(shard_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            logger.warning(
+                "scan_meta_shard_unreadable plan_run=%d path=%s",
+                plan_run_id, shard_file,
+            )
+            continue
+        if not isinstance(payload, dict):
+            continue
+        if payload.get("schema_version") != _META_SCHEMA_VERSION:
+            continue
+        host_id = str(payload.get("host_id") or "").strip()
+        if not host_id:
+            continue
+        out[host_id] = payload
+    return out
+
+
+def _scan_storage_uri(nfs_root: str, plan_run_id: int, file_key: str) -> str:
+    """`file_key` → `storage_uri`，与 legacy `str(文件路径)` 同形。
+
+    `file_key`（写侧定义）= 相对 `dedup/{run}/` 的路径（含平台子目录，若有）。
+    """
+    return str(Path(nfs_root) / "dedup" / str(int(plan_run_id)) / file_key)
+
+
+def _register_scan_artifacts_from_meta(
+    db: Session,
+    plan_run_id: int,
+    nfs_root: str,
+    shards: dict[str, dict],
+    *,
+    scan_round_id: str | None = None,
+) -> int:
+    """按分片注册 `registerable` 条目（#2188 单3 主路径）。
+
+    host/platform 均取自**分片字段**；`registerable` 由写侧冻结求值
+    （与 legacy glob 谓词同源），故读侧**零文件名解析、零 glob**（R-4 ①）。
+    """
+    count = 0
+    for host_id, shard in shards.items():
+        for entry in shard.get("artifacts") or []:
+            if not isinstance(entry, dict) or not entry.get("registerable"):
+                continue
+            file_key = str(entry.get("file_key") or "").strip()
+            if not file_key:
+                continue
+            uri = _scan_storage_uri(nfs_root, plan_run_id, file_key)
+            existing = db.execute(
+                select(PlanRunArtifact).where(
+                    PlanRunArtifact.plan_run_id == plan_run_id,
+                    PlanRunArtifact.storage_uri == uri,
+                )
+            ).scalar_one_or_none()
+            if existing:
+                continue
+            db.add(PlanRunArtifact(
+                plan_run_id=plan_run_id,
+                host_id=str(entry.get("host_id") or host_id) or None,
+                storage_uri=uri,
+                artifact_type=ARTIFACT_TYPE_SCAN,
+                size_bytes=int(entry.get("size_bytes") or 0),
+                scan_round_id=scan_round_id,
+            ))
+            count += 1
+    if count:
+        db.commit()
+    return count
+
+
+def _register_legacy_for_host(
+    db: Session,
+    plan_run_id: int,
+    dedup_base: Path,
+    host_id: str,
+    *,
+    scan_round_id: str | None = None,
+) -> int:
+    """过渡降级：**仅该 host** 走 legacy glob 注册（#2188 §4）。
+
+    与全目录粗扫的区别：按 ``{host_id}_`` 前缀过滤，只注册该 host 的文件。
+    分片缺失即旧版 Agent（写侧未落分片）——「还没写」由调用方按 glob 是否命中判定。
+    """
+    prefix = f"{host_id}_"
+    count = 0
+    for dedup_dir in (dedup_base, dedup_base / "mtk", dedup_base / "unisoc"):
+        if not dedup_dir.is_dir():
+            continue
+        for xls in sorted(
+            set(list(dedup_dir.glob("*_org.xls")) + list(dedup_dir.glob("*_org_*.xls")))
+        ):
+            if not xls.name.startswith(prefix):
+                continue
+            existing = db.execute(
+                select(PlanRunArtifact).where(
+                    PlanRunArtifact.plan_run_id == plan_run_id,
+                    PlanRunArtifact.storage_uri == str(xls),
+                )
+            ).scalar_one_or_none()
+            if existing:
+                continue
+            db.add(PlanRunArtifact(
+                plan_run_id=plan_run_id,
+                host_id=host_id,
+                storage_uri=str(xls),
+                artifact_type=ARTIFACT_TYPE_SCAN,
+                size_bytes=xls.stat().st_size if xls.exists() else 0,
+                scan_round_id=scan_round_id,
+            ))
+            count += 1
+    if count:
+        db.commit()
+    return count
+
+
 def run_scan_sync(
     plan_run_id: int,
     *,
     is_final: bool = False,
     scan_round_id: str | None = None,
+    expected_hosts: Collection[str] | None = None,
 ) -> str:
     """扫描中心存储（CIFS）dedup/{plan_run_id}/ 目录，注册已上送的 *_org.xls 产物。
 
     Agent 已通过 scan_now → run_local_scan → UploadManager 上送文件到中心存储。
     本函数仅做文件发现 + DB 注册，不再调 subprocess / RunConsole。
     返回注册产物数（字符串化），空串表示无新产物。
+
+    #2188 D 步 单3：**优先走写侧清单**（`_meta/{run}/{host}.json`），host/platform
+    取自分片字段（不再解析文件名）；`expected_hosts` 给定时对**缺分片**的 host 做
+    per-host legacy glob 降级（旧版 Agent）。**缺省 `None` 时保持原全目录行为**，
+    向后兼容既有调用点。
     """
     from backend.core.database import SessionLocal
 
@@ -128,12 +277,45 @@ def run_scan_sync(
 
         dedup_base = Path(nfs_root) / "dedup" / str(plan_run_id)
         n = 0
-        for dedup_dir in (dedup_base, dedup_base / "mtk", dedup_base / "unisoc"):
-            if not dedup_dir.is_dir():
-                continue
-            n += _register_scan_artifacts_from_nfs(
-                db, plan_run_id, dedup_dir, scan_round_id=scan_round_id,
+
+        # #2188 单3 主路径：清单注册（零 glob / 零文件名解析）。
+        shards = _load_meta_shards(nfs_root, plan_run_id)
+        if shards:
+            n += _register_scan_artifacts_from_meta(
+                db, plan_run_id, nfs_root, shards, scan_round_id=scan_round_id,
             )
+
+        # #2188 §4 过渡降级：逐 expected host，**分片缺**者才走 legacy glob。
+        # `expected_hosts=None`（缺省）时保持纯清单注册，向后兼容既有调用点。
+        legacy_hosts: list[str] = []
+        if expected_hosts is not None:
+            for host_id in expected_hosts:
+                if str(host_id) in shards:
+                    continue
+                hit = _register_legacy_for_host(
+                    db, plan_run_id, dedup_base, str(host_id),
+                    scan_round_id=scan_round_id,
+                )
+                # 有文件 = 旧版 Agent（legacy 注册）；无文件 = 「还没写」，轮询预算内继续等
+                if hit:
+                    legacy_hosts.append(str(host_id))
+                    n += hit
+            if legacy_hosts:
+                logger.info(
+                    "legacy_glob_register_total plan_run=%d hosts=%d sample=%s",
+                    plan_run_id, len(legacy_hosts), legacy_hosts[:5],
+                )
+
+        # 无分片且未给 expected_hosts（既有调用点 / 单测）→ 保持原全目录行为，
+        # 避免「清单未落地」时读侧静默不注册（过渡期不得窄化既有覆盖面）。
+        if not shards and expected_hosts is None:
+            for dedup_dir in (dedup_base, dedup_base / "mtk", dedup_base / "unisoc"):
+                if not dedup_dir.is_dir():
+                    continue
+                n += _register_scan_artifacts_from_nfs(
+                    db, plan_run_id, dedup_dir, scan_round_id=scan_round_id,
+                )
+
         logger.info("scan_artifacts_registered plan_run=%d count=%d", plan_run_id, n)
         return str(n) if n else ""
     finally:
