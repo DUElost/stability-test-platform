@@ -402,7 +402,7 @@ def reconcile_host(
         return None, _fail("install.s5.host", error.code, location="$.control_plane.public_url",
                            role="control_plane")
     if existing is not None:
-        return _reuse_host(existing, name=name, location=location)
+        return _reuse_host(existing, name=name, ssh_port=ssh_port, location=location)
     status, payload = api.create_host(
         _create_payload(name=name, ip=ip, binding=binding, ssh_port=ssh_port),
     )
@@ -417,19 +417,42 @@ def reconcile_host(
                                role="control_plane")
         raced = _match_host(hosts, ip)
         if raced is not None:
-            return _reuse_host(raced, name=name, location=location)
+            return _reuse_host(raced, name=name, ssh_port=ssh_port, location=location)
         if _match_name(hosts, name) is not None:
             # 同名占用了另一个地址：站点命名冲突，不能改名绕过。
             return None, _fail("install.s5.host", "host_conflict", location=location)
     return None, _fail("install.s5.host", "host_create_failed", location=location)
 
 
-def _reuse_host(host: dict[str, Any], *, name: str, location: str) -> tuple[str | None, Check | None]:
+def _reuse_host(
+    host: dict[str, Any], *, name: str, ssh_port: int = 22, location: str,
+) -> tuple[str | None, Check | None]:
     if host_field(host, "retired_at"):
         return None, _fail("install.s5.host", "host_retired", location=location)
     if host_field(host, "name") != name:
         return None, _fail("install.s5.host", "host_conflict", location=location)
+    # #2283 残余：真实安装用的是 Host 行端口（backend/services/agent_installer.py:
+    # `port = host.ssh_port or 22`），声明端口（inventory 的 ansible_port）与它不一致时
+    # 此前静默复用 → 安装打到错误端口（症状与 #2283 原始问题同形）。这里显式判否。
+    # 不替操作员改行：端口可能与别的站点/角色约定绑定，改行需要人确认。
+    if _host_ssh_port(host) != int(ssh_port):
+        return None, _fail("install.s5.host", "host_ssh_port_mismatch", location=location)
     return host_field(host, "id"), None
+
+
+def _host_ssh_port(host: dict[str, Any]) -> int:
+    """Host 行的 ssh_port；缺失/非法按安装侧同义的 22 处理。
+
+    与 `agent_installer` 的 `host.ssh_port or 22` 保持同一语义（API 可能回
+    int 或数字字符串，两者都吃）。
+    """
+    raw = host.get("ssh_port")
+    if raw is None or raw == "":
+        return 22
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        return 22
 
 
 # ── install trigger + completion ─────────────────────────────────────────
