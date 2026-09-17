@@ -131,6 +131,39 @@ def test_domain_settings_does_not_read_env_file():
     assert DomainSettings.model_config.get("env_file") is None
 
 
+def test_drain_knobs_bounds(monkeypatch):
+    """#2548/#2554 两个旋钮的边界语义不一样，必须分开钉。
+
+    - `RECONCILER_DRAIN_BATCH` **不得为 0**：那会让解锁静默永久停摆，且读数看起来
+      像「无积压」（同 #2278 的口径）；
+    - `RECONCILER_DRAIN_MAX_SECONDS` **必须可以为 0**：0 是显式的「关闭自续」开关
+      （回到 #2548 的一 tick 一批形状），不是配错。
+    """
+    from backend.core.settings.scheduler import SchedulerSettings
+
+    monkeypatch.delenv("RECONCILER_DRAIN_BATCH", raising=False)
+    monkeypatch.delenv("RECONCILER_DRAIN_MAX_SECONDS", raising=False)
+    s = SchedulerSettings()
+    assert s.reconciler_drain_batch == 20
+    assert s.reconciler_drain_max_seconds == 5.0
+
+    monkeypatch.setenv("RECONCILER_DRAIN_BATCH", "0")
+    with pytest.raises(ValidationError):
+        SchedulerSettings()
+
+    monkeypatch.setenv("RECONCILER_DRAIN_BATCH", "2000")
+    with pytest.raises(ValidationError):
+        SchedulerSettings()
+
+    monkeypatch.delenv("RECONCILER_DRAIN_BATCH")
+    monkeypatch.setenv("RECONCILER_DRAIN_MAX_SECONDS", "-1")
+    with pytest.raises(ValidationError):
+        SchedulerSettings()
+
+    monkeypatch.setenv("RECONCILER_DRAIN_MAX_SECONDS", "0")
+    assert SchedulerSettings().reconciler_drain_max_seconds == 0.0
+
+
 def test_retention_batch_size_has_lower_bound(monkeypatch):
     """#2278：`PLAN_RUN_RETENTION_BATCH_SIZE=0` 必须是响亮的失败，而不是静默停摆。
 
