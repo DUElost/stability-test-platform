@@ -14,6 +14,9 @@ AI 门禁 workflow——所有 AI 会话行为的上游事实源。本脚本只�
   S4  pr-agent.yml 不得存在（advisory review 已下线；回潮须独立裁决）
   S5  required checks 文档↔workflow 互检：ci.yml 定义的 job id
       未在 AGENTS.md 记载，或反之缺 job
+  S5x 本地门禁 ↔ CI 对应物配对：每个 GATES key 必须登记锚点，且锚点必须是某 job 的
+      真实 step name（合入前门禁还要求所在 job 在 pull_request 事件可达）——#2445
+      前用的是 workflow 全文子串，夜间 job 的同名 step 会顶替被删掉的 PR 路径步骤
   S6  常驻入口行数/字节预算，防止按需细节重新膨胀进启动上下文
   S7  .claude/skills/*/SKILL.md frontmatter：name 与目录一致、description 非空
       （写坏 = skill 对 agent 静默不存在，与 S1/S3 同故障类）
@@ -854,8 +857,119 @@ def check_required_checks_doc(workflows: dict[str, str], agents_md: str) -> list
     return issues
 
 
+# ── S5x 的 CI 侧解析（#2445）───────────────────────────────────────────────
+#
+# 只做「job id → if → steps 的 - name」这一小段结构解析，**不引第三方 YAML**：
+# 本工具在 CI 的 lint job 里跑，而那个 job 的 python 侧只 `pip install ruff`
+# （见 ci.yml「Install ruff」）。给治理门禁挂上 PyYAML，等于把 required check
+# 押在一条安装命令上——那比 30 行扫描器更脆。
+#
+# 失真方向被刻意选成「只会少读、不会凭空多读」：少读一个 job/step 表现为锚点消失
+# （响红灯），不存在把不存在的检查判成存在的假绿路径。
+_S5X_JOB_RE = re.compile(r"^  ([A-Za-z0-9_.-]+):\s*(?:#.*)?$")
+_S5X_IF_RE = re.compile(r"^    if:\s*(.+?)\s*$")
+_S5X_STEPS_RE = re.compile(r"^    steps:\s*$")
+_S5X_STEP_NAME_RE = re.compile(r"^      - name:\s*(.+?)\s*$")
+_S5X_EVENT_NE_PR = re.compile(r"event_name\s*!=\s*pull_request\b")
+_S5X_EVENT_EQ_PR = re.compile(r"event_name\s*==\s*pull_request\b")
+
+# 合入前套件：只有跑在**合入前**的门禁，才要求 CI 对应物也必须在 PR 事件可达的 job 里
+_PRE_MERGE_SUITES = ("check:quick", "check:pr")
+
+
+def _s5x_scalar(value: str) -> str:
+    """取标量值：引号内原样；无引号时按 YAML 语义剥掉「空白 + #」之后的注释。
+
+    不剥注释会留一条假绿路径——`- name: Build  # Ruff` 的原文里含 `Ruff`，
+    于是锚点命中一个并不存在的检查（#2445）。
+    """
+    value = value.strip()
+    quote = value[:1]
+    if quote in ("'", '"'):
+        end = value.find(quote, 1)
+        return value[1:end] if end != -1 else value[1:]
+    return re.split(r"\s#", value, maxsplit=1)[0].strip()
+
+
+def _s5x_parse_jobs(text: str) -> dict[str, dict]:
+    """`jobs:` 块 → ``{job_id: {"if": str|None, "steps": [name, ...]}}``。"""
+    jobs: dict[str, dict] = {}
+    in_jobs = False
+    current: dict | None = None
+    in_steps = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue                            # 空行/注释不改变块归属
+        if not line[:1].isspace():              # 顶层键（第 0 列）
+            if line.strip() == "jobs:":
+                in_jobs, current, in_steps = True, None, False
+            else:
+                in_jobs = False                         # jobs 块到此结束
+            continue
+        if not in_jobs:
+            continue
+        if line.startswith("  ") and not line.startswith("    "):
+            m = _S5X_JOB_RE.match(line)
+            current = None
+            in_steps = False
+            if m:
+                current = {"if": None, "steps": []}
+                jobs[m.group(1)] = current
+            continue
+        if current is None:
+            continue
+        m = _S5X_STEP_NAME_RE.match(line)
+        if m and in_steps:
+            current["steps"].append(_s5x_scalar(m.group(1)))
+            continue
+        m = _S5X_IF_RE.match(line)
+        if m:
+            current["if"] = _s5x_scalar(m.group(1))
+            continue
+        if _S5X_STEPS_RE.match(line):
+            in_steps = True
+    return jobs
+
+
+def _s5x_pr_reachable(job_if: str | None) -> bool | None:
+    """该 job 在 ``pull_request`` 事件下是否可达：True / False / None（形态不可证明）。
+
+    只认 ``github.event_name`` 与字面量 ``pull_request`` 的 ==/!= 比较。复合表达式
+    （同时出现 == 与 !=）一律返回 None——判据宁可报红，也不猜一个方向变成假绿。
+    末尾的 ``\b`` 用来区分 ``pull_request`` 与 ``pull_request_target`` 等兄弟事件。
+    """
+    if job_if is None:
+        return True                        # 无 if：所有已配置事件都跑，含 pull_request
+    expr = job_if.replace('"', "").replace("'", "")
+    ne = bool(_S5X_EVENT_NE_PR.search(expr))
+    eq = bool(_S5X_EVENT_EQ_PR.search(expr))
+    if ne and not eq:
+        return False
+    if eq and not ne:
+        return True
+    return None
+
+
+def _s5x_anchor_spec(spec: tuple) -> tuple[str, str | None, str]:
+    """锚点登记形态：``(workflow, step)`` 或 ``(workflow, job, step)``。
+
+    带 job 的那条用于「step name 太通用、不 pin 就会同时命中别的 job」的情形
+    （#2445 实测：frontend-check 的那一步就叫 ``Build``）。
+    """
+    if len(spec) == 2:
+        wf, anchor = spec
+        return wf, None, anchor
+    wf, job, anchor = spec
+    return wf, job, anchor
+
+
 # S5x: 本地门禁(GATES key) → CI 锚点 的显式映射。刻意不做自动推断——两侧
 # 命名多对多，靠表强制「新增门禁必须回答 CI 对应物在哪」。None = 有意仅本地。
+#
+# 值形态：``(workflow, step_name)`` 或 ``(workflow, job, step_name)``。锚点匹配的是
+# **某 job 里真实的 step name**（子串允许，因为名字带后缀如 `(ADR-0020)`）；合入前
+# 门禁还要求所在 job 在 pull_request 事件可达（#2445）。
 GATE_TO_CI_ANCHOR = {
     "ruff": ("ci.yml", "Ruff"),
     "eslint": ("ci.yml", "ESLint"),
@@ -894,7 +1008,9 @@ GATE_TO_CI_ANCHOR = {
     "integration": ("ci.yml", "Run backend tests"),
     "repo-tests": ("ci.yml", "Run repo-level tests"),
     "vitest": ("ci.yml", "Run vitest"),
-    "frontend-build": ("ci.yml", "npm run build"),
+    # pin job + 用真实 step name：那一步的 name 就叫 "Build"，`npm run build` 只出现在
+    # run 命令体里——旧的全文子串判据把「命令体算不算锚点」糊了过去（#2445）。
+    "frontend-build": ("ci.yml", "frontend-check", "Build"),
     "docker-build": ("ci.yml", "Build backend image"),
     # 有意仅本地的例外——登记理由防止未来审计误判为缺口：
     "gov-skills": None,  # 数据源=本机 ~/.claude 转录，物理不在 runner 上
@@ -914,27 +1030,94 @@ GATE_TO_CI_ANCHOR = {
 }
 
 
+def _s5x_pre_merge_gates(gates_src: str, declared: set[str], issues: list[str]) -> set[str]:
+    """从 run_gates.py 文本里取「合入前套件」成员（check:quick / check:pr）。
+
+    这条集合本身也是判据的地基，所以取不到成员时必须**报红而不是返回空集**：
+    空集会让下面所有可达性判据静默失效，那正是本单要消灭的形态。名单里的名字
+    还必须真的是已声明门禁，否则说明抓取表达式读到了别的东西。
+    """
+    found: set[str] = set()
+    for suite in _PRE_MERGE_SUITES:
+        m = re.search(rf'"{suite}": \[(.*?)\]', gates_src, re.S)
+        if not m:
+            issues.append(
+                f"S5x 无法在 run_gates.py 解析 {suite!r} 的成员——合入前可达性判据"
+                "已失效，请修判据，不要让它静默变绿（#2445）"
+            )
+            continue
+        names = set(re.findall(r'"([\w-]+)"', m.group(1)))
+        if not names:
+            issues.append(f"S5x {suite!r} 解析到空的成员名单——可达性判据不可信（#2445）")
+        for ghost in sorted(names - declared):
+            issues.append(
+                f"S5x {suite!r} 里的 {ghost!r} 不是 run_gates 声明的门禁——"
+                "合入前名单解析或 GATES 结构已漂移（#2445）"
+            )
+        found |= names
+    return found
+
+
 def check_gate_ci_mapping(gates_src: str, workflows: dict[str, str]) -> list[str]:
-    """S5x: 双向断言 GATES 与 CI 步骤的配对关系（漂移当场红灯）。
+    """S5x: 本地门禁(GATES key) 与 CI **具体 job 的具体 step** 的配对断言（#2445）。
 
     ① 本地每个 gate 必须在映射表登记（防「只加本地不接 CI」）；
-    ② 已登记且非 None 的条目，锚点字符串必须在对应 workflow 出现
-       （防「CI 改名/删步骤」与「映射表过期」）。
+    ② 锚点必须命中某 job 的**真实 step name**（不再是 workflow 全文子串——注释、
+       ``run:`` 命令体、别的 workflow 里的同名词都不再算数）；
+    ③ **合入前**门禁（check:quick / check:pr 成员）的锚点，所在 job 必须可被
+       ``pull_request`` 事件触达。夜间 job 里的同名 step 不再能顶替 PR 路径的那一步。
     """
     issues: list[str] = []
-    for m in re.finditer(r'(?m)^\s{4}"([\w-]+)": \(', gates_src):
-        gate = m.group(1)
+    declared = {m.group(1) for m in re.finditer(r'(?m)^\s{4}"([\w-]+)": \(', gates_src)}
+    for gate in sorted(declared):
         if gate not in GATE_TO_CI_ANCHOR:
             issues.append(
                 f"S5x run_gates 门禁 {gate!r} 未在 GATE_TO_CI_ANCHOR 登记配对——"
                 f"新增门禁必须先声明其 CI 对应物（或显式 None 并附理由）"
             )
+
+    pre_merge = _s5x_pre_merge_gates(gates_src, declared, issues)
+
+    anchored_wfs = {_s5x_anchor_spec(spec)[0]
+                    for spec in GATE_TO_CI_ANCHOR.values() if spec is not None}
+    parsed: dict[str, dict[str, dict]] = {}
+    for wf, text in workflows.items():
+        jobs = _s5x_parse_jobs(text)
+        parsed[wf] = jobs
+        if not jobs and wf in anchored_wfs:
+            # 解析不出 job 时所有锚点判据都失去地基，必须响——静默跳过就是假绿。
+            issues.append(f"S5x {wf} 未解析出任何 job——CI 对应物无从判断（#2445）")
+
     for gate, spec in GATE_TO_CI_ANCHOR.items():
         if spec is None:
             continue
-        wf, anchor = spec
-        if anchor not in workflows.get(wf, ""):
-            issues.append(f"S5x {gate!r} 的 CI 锚点 {anchor!r} 在 {wf} 中消失")
+        wf, job_pin, anchor = _s5x_anchor_spec(spec)
+        jobs = parsed.get(wf)
+        if jobs is None:
+            issues.append(f"S5x {gate!r} 的 workflow {wf!r} 未被读入")
+            continue
+        scope = jobs.items() if job_pin is None else [
+            (jid, job) for jid, job in jobs.items() if jid == job_pin
+        ]
+        if job_pin is not None and not any(jid == job_pin for jid, _ in jobs.items()):
+            issues.append(f"S5x {gate!r} 登记的 CI job {job_pin!r} 在 {wf} 中不存在")
+            continue
+        hits = [(jid, job["if"]) for jid, job in scope
+                if any(anchor in name for name in job["steps"])]
+        if not hits:
+            where = f"{wf}:{job_pin}" if job_pin else wf
+            issues.append(
+                f"S5x {gate!r} 的 CI 锚点 {anchor!r} 在 {where} 的 step name 中消失"
+                "（step 被删/改名；注释或 run 命令体里的同名词不算锚点——#2445）"
+            )
+            continue
+        if gate in pre_merge and True not in [_s5x_pr_reachable(jif) for _, jif in hits]:
+            issues.append(
+                f"S5x {gate!r} 是合入前门禁（check:quick/check:pr 成员），但其 CI 锚点 "
+                f"{anchor!r} 只存在于 PR 不可达的 job："
+                + "；".join(f"{jid}(if={jif!r})" for jid, jif in hits)
+                + "。PR 路径的那一步被删掉后，旧的全文子串判据仍会绿——现在不会（#2445）"
+            )
     return issues
 
 
@@ -1551,28 +1734,179 @@ def run_self_test() -> int:
     expect("S7 description 空", lambda: check_skill_frontmatter("foo", bad_desc), True)
     expect("S7 缺 frontmatter", lambda: check_skill_frontmatter("foo", no_fm), True)
 
-    # S5x 夹具：映射表按全局常量走，workflows 必须含全部非 None 锚点才算「齐」
-    # 注意：`for x in it if cond` 是先解包后过滤，None 会在 filter 前炸——
-    # 必须用 filter() 预过滤再解包。
-    wf_full = " ".join(
-        f"- {anchor}\n"
-        for (wf, anchor) in filter(None, GATE_TO_CI_ANCHOR.values())
-    )
-    src_with_gate = '    "ruff": (\n'
-    src_mystery = '    "mystery-gate": (\n'
-    wf_have = {"ci.yml": wf_full}
-    wf_missing = {"ci.yml": wf_full.replace("- Ruff\n", "")}
-    expect("S5x 配对齐", lambda: check_gate_ci_mapping(src_with_gate, wf_have), False)
+    # ── S5x 夹具（#2445）──────────────────────────────────────────────────
+    # 判据已经改成「真实 job 的真实 step name + PR 事件可达性」，夹具因此必须
+    # 是一份工作流结构，而不是把锚点串成一行的字符串。合成器按登记表生成：
+    # 合入前门禁的锚点落在 `== 'pull_request'` 的 job，其余落在 `!=` 的夜间 job。
+    def s5x_fixture_wf(mutate=None) -> dict:
+        by_job: dict = {}
+        for gate, spec in GATE_TO_CI_ANCHOR.items():
+            if spec is None:
+                continue
+            wf, job_pin, anchor = _s5x_anchor_spec(spec)
+            job = job_pin or ("pr-side" if gate in _s5x_fixture_pre_merge else "nightly-side")
+            key = (wf, job)
+            need_pr = gate in _s5x_fixture_pre_merge
+            entry = by_job.setdefault(key, {"need_pr": need_pr, "steps": []})
+            entry["need_pr"] = entry["need_pr"] or need_pr
+            if anchor not in entry["steps"]:
+                entry["steps"].append(anchor)
+        out: dict = {}
+        for (wf, job), entry in sorted(by_job.items()):
+            event = "== 'pull_request'" if entry["need_pr"] else "!= 'pull_request'"
+            body = out.setdefault(wf, "jobs:\n")
+            body += f"  {job}:\n    if: github.event_name {event}\n    steps:\n"
+            for name in entry["steps"]:
+                body += f"      - name: {name}\n        run: true\n"
+            out[wf] = body
+        return mutate(out) if mutate else out
+
+    _s5x_fixture_pre_merge = {"ruff"}
+
+    def s5x_gates_src(extra: str = "") -> str:
+        return (
+            "GATES = {\n"
+            '    "ruff": (\n        "ruff check .",\n    ),\n'
+            f"{extra}"
+            "}\n"
+            "PROFILES = {\n"
+            '    "check:quick": ["ruff"],\n'
+            '    "check:pr": ["ruff"],\n'
+            "}\n"
+        )
+
+    src_with_gate = s5x_gates_src()
+    src_mystery = s5x_gates_src('    "mystery-gate": (\n        "x",\n    ),\n')
+    wf_have = s5x_fixture_wf()
+    expect("S5x 配对齐（合成 job+step）", lambda: check_gate_ci_mapping(src_with_gate, wf_have), False)
     expect(
-        "S5x CI 锚点消失",
-        lambda: check_gate_ci_mapping(src_with_gate, wf_missing),
+        "S5x CI 锚点 step 被删",
+        lambda: check_gate_ci_mapping(
+            src_with_gate, {"ci.yml": wf_have["ci.yml"].replace("      - name: Ruff\n", "")}
+        ),
         True,
+    )
+    # 锚点词还在文件里，只是从 step name 掉进注释/run 命令体——旧的全文子串判据
+    # 在这种情况下仍然绿，正是 #2445 要消灭的假绿。
+    expect(
+        "S5x 锚点只在注释/run 命令体",
+        lambda: check_gate_ci_mapping(
+            src_with_gate,
+            {"ci.yml": wf_have["ci.yml"].replace(
+                "      - name: Ruff\n        run: true\n",
+                "      # - name: Ruff\n      - name: 装 ruff\n        run: ruff check .  # Ruff\n",
+            )},
+        ),
+        True,
+    )
+    nightly_only = {
+        "ci.yml": wf_have["ci.yml"].replace(
+            "  pr-side:\n    if: github.event_name == 'pull_request'\n    steps:\n"
+            "      - name: Ruff\n",
+            "  pr-side:\n    if: github.event_name != 'pull_request'\n    steps:\n"
+            "      - name: Ruff\n",
+        )
+    }
+    expect("S5x 合入前锚点只在 PR 不可达 job",
+           lambda: check_gate_ci_mapping(src_with_gate, nightly_only), True)
+    expect(
+        "S5x 同锚点在 PR 可达 job 则绿",
+        lambda: check_gate_ci_mapping(
+            src_with_gate,
+            {"ci.yml": nightly_only["ci.yml"]
+             + "  also-pr:\n    if: github.event_name == 'pull_request'\n    steps:\n"
+               "      - name: Ruff\n        run: true\n"},
+        ),
+        False,
     )
     expect(
         "S5x 未登记新门禁",
         lambda: bool([i for i in check_gate_ci_mapping(src_mystery, wf_have) if "mystery" in i]),
         True,
     )
+    # 合入前套件名单本身解析不出来时，可达性判据必须报红而不是静默变绿。
+    expect(
+        "S5x 合入前套件解析失败必红",
+        lambda: check_gate_ci_mapping('    "ruff": (\n', wf_have),
+        True,
+    )
+    expect(
+        "S5x 合入前名单读到未知门禁必红",
+        lambda: check_gate_ci_mapping(
+            src_with_gate.replace('["ruff"]', '["ruff", "ghost-gate"]'), wf_have),
+        True,
+    )
+    expect(
+        "S5x 锚点工作流解析不出 job 必红",
+        lambda: check_gate_ci_mapping(src_with_gate, {"ci.yml": "name: empty\n"}),
+        True,
+    )
+    # 无引号标量里的「空白 + #」是 YAML 注释：锚点不得命中 step name 的行尾注释。
+    expect(
+        "S5x 锚点藏在 step name 行尾注释里",
+        lambda: check_gate_ci_mapping(
+            src_with_gate,
+            {"ci.yml": wf_have["ci.yml"].replace(
+                "      - name: Ruff\n", "      - name: 装依赖  # Ruff\n")},
+        ),
+        True,
+    )
+    expect(
+        "S5x 被注释掉的 step 不再是锚点",
+        lambda: check_gate_ci_mapping(
+            src_with_gate,
+            {"ci.yml": wf_have["ci.yml"].replace(
+                "      - name: Ruff\n", "      # - name: Ruff\n")},
+        ),
+        True,
+    )
+    # 未登记锚点的工作流不参与「必须解析出 job」断言，避免无关 workflow 被顺带打红。
+    expect(
+        "S5x 无锚点的工作流不误伤",
+        lambda: check_gate_ci_mapping(
+            src_with_gate, {**wf_have, "nightly-ops.yml": "name: x\n"}),
+        False,
+    )
+    # 解析器回归自证：#2445 首版正是栽在「空行被当成第 0 列顶层键」，jobs 块被
+    # 空行截断后只剩一个 job。空行、第 0 列注释、job 键尾注释都不许吞掉 job。
+    probe = (
+        "jobs:\n"
+        "\n"
+        "  # 第 0 列之外的注释不改变块归属\n"
+        "  nightly:\n"
+        "    if: github.event_name != 'pull_request'\n"
+        "    steps:\n"
+        "      - name: Ruff  # 行尾注释不属于名字\n"
+        "\n"
+        "  pr-side:   # 尾注释也不能吃掉 job\n"
+        "    steps:\n"
+        "      - name: TypeScript check\n"
+        "env:\n"
+        "  DATABASE_URL: sqlite://ignored\n"
+    )
+    parsed_probe = _s5x_parse_jobs(probe)
+    expect("S5x 解析器不丢 job（空行/注释）",
+           lambda: sorted(parsed_probe) != ["nightly", "pr-side"], False)
+    expect("S5x step name 剥掉行尾注释",
+           lambda: parsed_probe["nightly"]["steps"] != ["Ruff"], False)
+    expect("S5x 尾注释 job 仍带 steps",
+           lambda: parsed_probe["pr-side"]["steps"] != ["TypeScript check"], False)
+    expect("S5x jobs 块在第 0 列键处关闭",
+           lambda: "DATABASE_URL" in parsed_probe, False)
+    s5x_shapes = {
+        None: True,                                        # 无 if：PR 事件也跑
+        "github.event_name == 'pull_request'": True,
+        'github.event_name != "pull_request"': False,     # 夜间专用
+        "github.event_name == 'pull_request' || github.event_name == 'schedule'": True,
+        "github.event_name == 'pull_request_target'": None,  # 兄弟事件不算数
+        "github.event_name != 'workflow_dispatch'": None,    # 形态不可证明
+    }
+    for expr, want in s5x_shapes.items():
+        expect(
+            f"S5x 可达性判据形态 {expr!r}",
+            lambda expr=expr, want=want: _s5x_pr_reachable(expr) is not want,
+            False,
+        )
 
     # S12 夹具：解析器规范位/散文边界 + 五面一致性红绿
     expect(
