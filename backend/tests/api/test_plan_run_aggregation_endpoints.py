@@ -2209,7 +2209,7 @@ class TestWatcherSummaryEndpoint:
             called.append((host_id, command, payload))
 
         monkeypatch.setattr(
-            "backend.realtime.socketio_server.emit_agent_control",
+            "backend.services.plan_run_archive.emit_agent_control",
             _fake_emit,
         )
 

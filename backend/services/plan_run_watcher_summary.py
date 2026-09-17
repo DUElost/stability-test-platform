@@ -56,14 +56,7 @@ from backend.services.log_observation import (
     ANOMALY_SIGNAL_CATEGORIES,
     aggregate_signal_link_stats,
 )
-
-
-def _iso(v) -> str | None:
-    return v.isoformat() if v else None
-
-
-def _iso(v) -> str | None:
-    return v.isoformat() if v else None
+from backend.services.plan_run_read_common import iso as _iso
 
 
 _WATCHER_TIME_SCOPE_TO_MINUTES: dict[str, int] = {
