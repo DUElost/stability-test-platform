@@ -175,6 +175,21 @@ export default function RunReportPage() {
               <span className="text-muted-foreground">生成时间</span>
               <span>{format(new Date(report.generated_at), 'yyyy-MM-dd HH:mm')}</span>
             </div>
+            {/*
+              #1082 的 UI 半边（#2420 补齐）：cached 报告是 **Job 完成时刻的快照**，
+              不是最新重算。后端在响应体里给 `cached_at` 并要求「UI 标注截至时刻」，
+              但前端一直没消费——于是「快照」与「重算」在界面上同形，而 #1082 当初
+              关掉的前提正是「UI 已标注」。缺失时**整行不渲染**（不给出「—」，
+              那会被读成「截至时间为空」而不是「这是实时重算」）。
+            */}
+            {report.cached_at && (
+              <div className="flex justify-between" data-testid="report-cached-at">
+                <span className="text-muted-foreground">快照截至</span>
+                <span title={`缓存快照生成于该时刻（非最新重算）：${report.cached_at}`}>
+                  {format(new Date(report.cached_at), 'yyyy-MM-dd HH:mm')}
+                </span>
+              </div>
+            )}
           </div>
         </div>
 
@@ -220,20 +235,6 @@ export default function RunReportPage() {
           </div>
         </div>
       </div>
-
-      {report.summary_metrics && Object.keys(report.summary_metrics).length > 0 && (
-        <div className={cn(PANEL.root, 'overflow-visible p-4 space-y-2')}>
-          <h3 className="text-sm font-medium text-muted-foreground">汇总指标</h3>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            {Object.entries(report.summary_metrics).map(([key, value]) => (
-              <div key={key} className="text-sm">
-                <span className="text-muted-foreground">{key}</span>
-                <p className="font-medium">{String(value)}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
 
       <div className="rounded-lg border p-4 space-y-3">
         <h3 className="text-sm font-medium text-muted-foreground">
