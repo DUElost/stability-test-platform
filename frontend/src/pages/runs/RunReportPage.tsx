@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { api, type RunRiskSummary } from '@/utils/api';
 import { jobReportKeys } from '@/utils/api/queryKeys';
@@ -28,16 +28,28 @@ const severityIcons: Record<string, React.ReactNode> = {
 };
 
 export default function RunReportPage() {
-  const { runId } = useParams<{ runId: string }>();
+  // #2420：路径参数改名成它一直是的东西——job id（旧 /runs/:runId/report 走重定向）
+  const { jobId: jobIdParam } = useParams<{ jobId: string }>();
+  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const [showJira, setShowJira] = useState(false);
 
-  const jobId = runId ? parseInt(runId, 10) : NaN;
-  const enabled = !!runId && !Number.isNaN(jobId);
+  const jobId = jobIdParam ? parseInt(jobIdParam, 10) : NaN;
+  const enabled = !!jobIdParam && !Number.isNaN(jobId);
+
+  /**
+   * 从 PlanRun 详情进来时带上 `?planRun=`：报告端点过去不校验归属，错配 id 会返回
+   * **另一个 run 的 job 报告**且页面只写 `Job #N`（#2420）。归属也要进 queryKey，
+   * 否则同一 job 在两个 run 语境下会复用同一份缓存，校验形同虚设。
+   */
+  const planRunRaw = searchParams.get('planRun');
+  const planRunId = planRunRaw != null && Number.isInteger(Number(planRunRaw))
+    ? Number(planRunRaw)
+    : undefined;
 
   const reportQ = useQuery({
-    queryKey: jobReportKeys.report(jobId),
-    queryFn: () => api.runs.getCachedReport(jobId),
+    queryKey: [...jobReportKeys.report(jobId), planRunId ?? null],
+    queryFn: () => api.runs.getCachedReport(jobId, { planRunId }),
     enabled,
     retry: false,
   });
