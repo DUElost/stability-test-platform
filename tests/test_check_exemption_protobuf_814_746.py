@@ -154,7 +154,7 @@ class TestOfflineExemptionNoKeyError:
         self, sleep_v104, monkeypatch, tmp_path
     ):
         monkeypatch.setenv("STP_JOB_ID", "job-1693")
-        state_file = self._stub_sleep(
+        self._stub_sleep(
             monkeypatch, sleep_v104, tmp_path, online=False, alive=False
         )
         assert sleep_v104._run({})["success"] is True
@@ -205,7 +205,7 @@ class TestOfflineExemptionNoKeyError:
         self, gpu_v109, monkeypatch, tmp_path
     ):
         monkeypatch.setenv("STP_JOB_ID", "job-1693")
-        state_file = self._stub_gpu(
+        self._stub_gpu(
             monkeypatch, gpu_v109, tmp_path, online=False, alive=False
         )
         assert gpu_v109._run({})["success"] is True
