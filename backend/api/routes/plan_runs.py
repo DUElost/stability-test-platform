@@ -9,7 +9,6 @@ import logging
 import time
 from typing import Optional
 
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -39,7 +38,6 @@ from backend.core.metrics import (
     record_plan_run_devices_query_duration,
 )
 from backend.models.enums import PlanRunStatus
-from backend.models.plan_run import PlanRun
 from backend.services.plan_run_timeline import build_plan_run_timeline
 from backend.services.plan_run_event_feed import build_plan_run_events
 from backend.services.plan_run_chain import build_plan_run_chain
@@ -143,10 +141,8 @@ router = APIRouter(prefix="/api/v1", tags=["plan-runs"])
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
-def _iso(v) -> str | None:
-    if v is None:
-        return None
-    return v.isoformat()
+from backend.services.plan_run_read_common import iso as _iso
+from backend.services.plan_run_read_common import require_plan_run as _require_plan_run
 
 
 @router.get("/plan-runs", response_model=ApiResponse[PlanRunListPageOut])
@@ -365,74 +361,13 @@ def manual_exit_job(
 
 
 
-# ── ADR-0021/ADR-0022 C5a₂: PlanRunDetailPage 聚合端点 ──────────────────
-#
-# 5 个独立 GET 端点供前端分别拉取,所有返回值都是 PlanRun 范围内的聚合视图;
-# 注意:
-#   - 这些端点是 RUNNING / 终态都可调用的(终态后值定格,前端可缓存)
-#   - chain 端点会沿 parent_plan_run_id 链向 root 回溯;next 节点是 Plan.next_plan_id
-#     指向的 Plan,是否已触发由 PlanRun.next_plan_triggered 决定
-#   - timeline 端点的 step_trace 聚合仅返回 init / patrol / teardown 三阶段的
-#     succeeded/failed 计数;ADR-0022 后 patrol 成功步骤不再写 step_trace,
-#     真实 patrol 进度从 JobInstance.patrol_*_cycle_count 派生
-#   - events 端点融合 4 个数据源:
-#     1) step_trace(失败步骤,作为 init/patrol/teardown 阶段事件)
-#     2) job_log_signal(watcher 异常,作为 patrol 阶段事件)
-#     3) audit_logs(plan_run / job_instance / dispatch_gate,作为 system 事件)
-#     4) PlanRun 自身 trigger 事件 + patrol heartbeat 周期摘要
-#   - devices 端点的 ui_status 派生规则:
-#       COMPLETED                            → completed
-#       FAILED                              → failed
-#       ABORTED                             → aborted
-#       UNKNOWN                              → unknown (grace / recovery window)
-#       PENDING                              → pending
-#       RUNNING + manual_action=EXIT_REQ.    → backoff
-#       RUNNING + next_retry_at > now        → backoff
-#       RUNNING + log_signal_count > 0       → risk
-#       RUNNING (其他)                        → running
-#   - watcher-summary 默认 60min 窗口,与上一窗口对比得到 trend
-#
-# 性能保障:依赖 ADR-0022 patrol 心跳聚合 + ADR-0021 C5a₂ 新建的两个
-# step_trace 复合索引 (idx_step_trace_job_stage / idx_step_trace_job_status_ts)。
+# ── ADR-0021/ADR-0022 C5a₂ 聚合端点（chain/timeline/events/devices/watcher）──
+# 业务在对应 service；本文件只留 Query + `_require_plan_run` + `ok(build_*)`。
 
 # ── 公共常量 ─────────────────────────────────────────────────────────────
 
 _MAX_EVENTS_LIMIT             = 500
 _DEFAULT_EVENTS_LIMIT         = 100
-
-
-
-def _require_plan_run(db: Session, run_id: int) -> PlanRun:
-    pr = db.get(PlanRun, run_id)
-    if pr is None:
-        raise HTTPException(status_code=404, detail="plan run not found")
-    return pr
-
-
-def _duration_seconds(start, end) -> float | None:
-    if start is None:
-        return None
-    if end is None:
-        end = datetime.now(timezone.utc)
-    try:
-        return max(0.0, (_aware(end) - _aware(start)).total_seconds())
-    except TypeError:
-        return None
-
-
-def _aware(ts: datetime | None) -> datetime | None:
-    """Normalise naive datetimes to UTC.
-
-    SQLite (used in test mode) does not store tz info; PostgreSQL does.
-    Several aggregation paths compare DB-stored values against
-    ``datetime.now(timezone.utc)`` and would otherwise raise
-    ``TypeError: can't compare offset-naive and offset-aware datetimes``.
-    """
-    if ts is None:
-        return None
-    if ts.tzinfo is None:
-        return ts.replace(tzinfo=timezone.utc)
-    return ts
 
 
 # ── Endpoint 1: GET /plan-runs/{id}/chain ────────────────────────────────
@@ -636,9 +571,7 @@ def export_plan_run_report(
     _current_user: User = Depends(get_current_active_user),
 ):
     """Export PlanRun summary + devices + timeline (bounded to avoid OOM)."""
-    pr = db.get(PlanRun, run_id)
-    if pr is None:
-        raise HTTPException(status_code=404, detail="plan run not found")
+    pr = _require_plan_run(db, run_id)
 
     data = build_plan_run_export(db, pr)
     fmt = format.strip().lower()

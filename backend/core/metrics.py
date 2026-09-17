@@ -1114,9 +1114,11 @@ def get_metrics_response():
 def init_build_info(version: str = "unknown", commit: str = "unknown"):
     """Initialize build info metrics（值由 #2341 的 ``resolve_build_info()`` 提供）。
 
-    ``version`` / ``commit`` 的默认值刻意是 ``unknown``：真值来自部署树的
-    ``release-manifest.json``，读不到就显式回落——**不回落任何具体版本号**，
-    否则又会造出「看起来有答案」的假信息（本单要消灭的正是那个形态）。
+    ``version`` / ``commit`` 的默认值刻意是 ``unknown``：真值来自部署树根的
+    ``release-manifest.json``（站点安装形态），**没有清单的 checkout 形态**则由
+    ``resolve_build_info()`` 报 ``checkout``/``checkout-dirty`` + ``git rev-parse HEAD``
+    （#2572——本机生产控制面就是这种形态）；两者都取不到才显式回落 ``unknown``。
+    **任何一档都不回落具体版本号**，否则又会造出「看起来有答案」的假信息。
 
     **多进程模式不导出**（prometheus_client 官方约束：「Info metrics do not work in
     multiprocess mode」）：当前 systemd 单元是单进程 uvicorn，故 ``Info`` 可用；
