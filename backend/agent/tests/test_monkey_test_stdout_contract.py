@@ -56,6 +56,7 @@ def _prepare(monkeypatch, mod, tmp_path, *, with_resource_dir: bool):
         return True
 
     monkeypatch.setattr(mod, "_push_file", fake_push)
+    monkeypatch.setattr(mod.time, "sleep", lambda _: None)
     return aimonkey_dir, pushed
 
 

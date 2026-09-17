@@ -180,6 +180,23 @@ describe('Dashboard', () => {
     expect(screen.getByTestId('risk-distribution-chart')).toBeInTheDocument();
   });
 
+  // #2447：404 是「资源不存在」，重试没有意义——loadErrorCopy 给 retryable:false，
+  // 卡片不得再挂重试按钮（此前与 PlanRunDetailPage 口径不一致）。
+  it('offers no retry button for a 404 on the risk card', async () => {
+    const { api, ApiError } = await import('@/utils/api');
+    (api.results.summary as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new ApiError('HTTP_404', 'not found', { status: 404 }),
+    );
+
+    const Dashboard = (await import('./Dashboard')).default;
+    render(<Dashboard />, { wrapper: createWrapper() });
+
+    expect(
+      await screen.findByText(/风险分布加载失败：接口不存在（前端与后端版本不一致？）/),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /重试/ })).not.toBeInTheDocument();
+  });
+
   // #2364：连上次数据都没有时给分类文案——超时（服务端繁忙）与网络层排查方向不同。
   it('shows the classified reason when the risk card has no data at all', async () => {
     const { api, ApiError } = await import('@/utils/api');
@@ -190,7 +207,9 @@ describe('Dashboard', () => {
     const Dashboard = (await import('./Dashboard')).default;
     render(<Dashboard />, { wrapper: createWrapper() });
     expect(
-      await screen.findByText(/风险分布请求超时（服务端繁忙或网络慢），请稍后重试/),
+      await screen.findByText(/风险分布加载失败：请求超时（服务端繁忙或网络慢），请稍后重试/),
     ).toBeInTheDocument();
+    // 超时属可重试（与 404 相反），按钮必须在
+    expect(screen.getByRole('button', { name: /重试/ })).toBeInTheDocument();
   });
 });

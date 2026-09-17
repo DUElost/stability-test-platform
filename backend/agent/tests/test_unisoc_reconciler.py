@@ -1189,3 +1189,7 @@ def test_oversized_skip_counter_bridged_to_stats(tmp_path):
     stats = r.stats.to_dict()
     assert stats["dirs_oversized_skipped"] == 1
     assert stats["unresolved_dirs"] == 0, "降级发射完成即落账，不挂 unresolved"
+    # 累计语义：第 2 拍无新内容（skip 集为空）也必须保留历史事件量——
+    # 真机 run 17948 的收尾拍归零坑（快照语义）由本断言钉死。
+    assert r.tick_once() == 0
+    assert r.stats.dirs_oversized_skipped == 1, "oversized 必须是本 job 累计，不得随收尾拍归零"
