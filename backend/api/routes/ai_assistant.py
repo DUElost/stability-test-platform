@@ -8,6 +8,7 @@
 """
 
 import asyncio
+import functools
 import logging
 import time
 
@@ -69,13 +70,31 @@ _PREFLIGHT_TOOL = {
 _BG_TASKS: set = set()
 
 
-def _bg_task_done(task) -> None:
+def _bg_task_done(task, *, label: str = "ai_action_execute_failed") -> None:
     _BG_TASKS.discard(task)
     if task.cancelled():
         return
     exc = task.exception()
     if exc is not None:
-        logger.error("ai_action_execute_failed %s", exc, exc_info=exc)
+        logger.error("%s %s", label, exc, exc_info=exc)
+
+
+def _converge_placeholder_off_loop(session_id: int, error: str) -> None:
+    """#2446：后台池满时的占位收敛兜底——移出事件循环线程执行。
+
+    调用点在事件循环上（`saq_worker.enqueue_sync` 的 `on_async_failure` 契约），
+    此时既不能再向**已满**的 `thread_pool` 提交，也不能就地做同步 DB 写——
+    单进程控制面会在最忙的时刻整体停摆（HTTP/WebSocket 全部阻塞，并叠加
+    `QueuePool` 争用）。改用事件循环的**默认 executor**：与后台池相互独立、
+    不占循环线程；#2073 的「占位必有终态」语义不变。
+    """
+    task = asyncio.get_running_loop().create_task(
+        asyncio.to_thread(fail_pending_placeholders, session_id, error=error)
+    )
+    _BG_TASKS.add(task)  # 持引用防 GC（asyncio 文档要求）
+    task.add_done_callback(
+        functools.partial(_bg_task_done, label="ai_turn_placeholder_converge_failed")
+    )
 
 
 def _not_configured(detail: str = "AI 助手未配置或未启用") -> HTTPException:
@@ -442,6 +461,8 @@ def send_message(
         前端每 2s 无限轮询（`AssistantPage` 的 hasPending）、会话被 #1223 的
         「有进行中轮次」守卫锁死，用户只能刷新或新开会话。
         回调用线程池收敛占位：它跑在事件循环上，既不能抛，也不宜做同步 DB 写。
+        #2446：后台池**已满**时（恰是系统最忙的时刻）改交 `_converge_placeholder_off_loop`
+        ——同样不在循环线程上执行，不再就地同步写库。
         """
         logger.error("ai_turn_enqueue_async_failed session=%s err=%s", session_id, exc)
         error = f"任务入队失败（SAQ/Redis 异常：{exc}），请重新提问。"
@@ -451,7 +472,7 @@ def send_message(
             try:
                 submit(fail_pending_placeholders, session_id, error=error)
             except PoolQueueFullError:
-                fail_pending_placeholders(session_id, error=error)
+                _converge_placeholder_off_loop(session_id, error)
         except Exception:  # noqa: BLE001 - 回调必须自身不抛（saq_worker 已兜，双保险）
             logger.exception("ai_turn_placeholder_converge_failed session=%s", session_id)
 

@@ -286,3 +286,55 @@ def test_cli_json_carries_plan_and_guard_status_without_trailing_noise(monkeypat
     assert payload["guard"] == {"status": "FAIL", "violations": 1}
     assert [i["name"] + "@" + i["version"] for i in payload["retirement_plan"]] == ["s@1.0.0"]
     assert payload["hold"]["latest_active"][0]["version"] == "1.1.0"
+
+# --------------------------------------------------------------------------
+# 退出码不得被「工具自身坏了」污染
+# （2026-09-17 实测：按路径形态调用时 import 期 ModuleNotFoundError 也是 rc=1，
+#   与 `--guard` 的「存在应退役版本」同码——判红会被当成退役授权依据，方向危险）
+# --------------------------------------------------------------------------
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_unexpected_tool_error_is_not_guard_fail(monkeypatch, capsys):
+    """`--guard` 的 1 只能来自真判定：运行期异常必须走 GUARD_ERROR_EXIT。"""
+    from backend.scripts import check_unreferenced_script_versions as mod
+
+    rows = [{"name": "s", "version": "1.0.0", "is_active": True, "refs": 0}]
+    _patch_db(monkeypatch, mod, rows=rows)
+
+    def _boom(conn):
+        raise RuntimeError("simulated schema drift")
+
+    monkeypatch.setattr(mod, "compute_reference_counts", _boom)
+    assert mod.main(["--guard", "--today", TODAY.isoformat()]) == mod.GUARD_ERROR_EXIT
+    assert mod.GUARD_ERROR_EXIT not in (0, 1, 2)
+    err = capsys.readouterr().err
+    assert "GUARD ERROR" in err and "RuntimeError" in err
+
+
+def test_path_form_invocation_is_not_confused_with_guard_fail(tmp_path):
+    """回归：`python backend/scripts/check_unreferenced_script_versions.py --guard` 按路径
+    直跑时，既不得死于 `ModuleNotFoundError: No module named 'backend'`（缺 REPO_ROOT
+    bootstrap，与 PR #2430 同一形态），也不得把失败伪装成 `--guard` 判红（1）。
+
+    用 sqlite 内存库当靶：URL 可解析但无表 ⇒ 运行期 OperationalError ⇒ 退出码必须是 3。
+    不触任何真实数据库（本机可能就是生产库宿主）。
+    反证：删掉 bootstrap ⇒ 第一条断言红；删掉 main() 的异常 wrapper ⇒ 第二条断言红。
+    """
+    import os
+    import subprocess
+    import sys
+
+    script = REPO_ROOT / "backend" / "scripts" / "check_unreferenced_script_versions.py"
+    proc = subprocess.run(
+        [sys.executable, str(script), "--guard", "--today", TODAY.isoformat()],
+        cwd=str(tmp_path),
+        env={**os.environ, "DATABASE_URL": "sqlite:///:memory:", "PYTHONPATH": ""},
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    joined = proc.stdout + proc.stderr
+    assert "No module named 'backend'" not in joined, joined[-400:]
+    assert proc.returncode == 3, f"rc={proc.returncode}（1 = 崩溃伪装成判红）:\n{joined[-500:]}"
