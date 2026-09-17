@@ -68,6 +68,14 @@ Python 3.11 下重新生成对应 lock。日常重生成沿用已有 pin；只�
   [2026-09-16 退役判据 note](../notes/process/2026-09-16-script-retirement-guard-and-executor.md)）；
   结论一样：**别在 f-string 里内嵌引号字典键，先取局部变量**。
 
+- **门禁的「文件集」也是本地与 CI 的不对称面**（#2432）：`ip-leak` 一类基于
+  `git ls-files` 的门禁，默认扫描集原先**只含已跟踪文件**——新文件在 `git add`
+  之前对门禁完全失明，于是「本地 `check:quick` 全绿、推上去 CI `lint` 才红」在
+  新文件上是**必然**而不是偶然。现默认集已改为「已跟踪 ∪ 未跟踪（仍排除
+  `.gitignore` 命中项，避免读进 `.venv`/`node_modules`/`.wt` 并行 worktree）」。
+  同一条不对称也可能出现在别的 `ls-files` 型检查上：**新文件的红线要在 `git add`
+  之后本地复跑一次**，或直接把 CI 的调用姿势抄过来跑。
+
 ## 空行污染
 
 编辑器异常可能逐行插入空行。检查或清理：
