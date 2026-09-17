@@ -59,32 +59,52 @@ export function UserModal({ isOpen, onClose, onSubmit, onUpdate, isSubmitting, e
     }
   }
 
-  const validate = (): boolean => {
+  /** 提交时以**表单 DOM 实际值**为准（#2453）。
+   *
+   * 密码管理器/浏览器自动填充是**直接写 `.value`**（常伴非冒泡 input 事件），React 的
+   * `onChange` 收不到 → state 仍为空；只认 state 会把「明明填好了」的表单判成空、在
+   * 提交前拦下（服务端连请求都收不到）。故提交与校验都改用 FormData 读到的值，
+   * state 只作回落。 */
+  const readFormValues = (form: HTMLFormElement) => {
+    const data = new FormData(form);
+    const pick = (key: string, fallback: string) => {
+      const value = data.get(key);
+      return typeof value === 'string' ? value : fallback;
+    };
+    return {
+      username: pick('username', formData.username),
+      password: pick('password', formData.password),
+      confirmPassword: pick('confirmPassword', formData.confirmPassword),
+      role: pick('role', formData.role),
+    };
+  };
+
+  const validate = (values = formData): boolean => {
     const newErrors: Record<string, string> = {};
 
-    const usernameError = usernameRuleError(formData.username);
+    const usernameError = usernameRuleError(values.username);
     if (usernameError) newErrors.username = usernameError;
 
     if (!isEditMode) {
-      if (!formData.password) {
+      if (!values.password) {
         newErrors.password = '请输入密码';
       } else {
-        const passwordError = passwordRuleError(formData.password);
+        const passwordError = passwordRuleError(values.password);
         if (passwordError) newErrors.password = passwordError;
       }
-    } else if (formData.password) {
+    } else if (values.password) {
       // 编辑模式改了密码也要过同一约束(#281 CR 意见 / #2406 字节维度)
-      const passwordError = passwordRuleError(formData.password);
+      const passwordError = passwordRuleError(values.password);
       if (passwordError) newErrors.password = passwordError;
     }
 
-    if (formData.password || formData.confirmPassword) {
-      if (formData.password !== formData.confirmPassword) {
+    if (values.password || values.confirmPassword) {
+      if (values.password !== values.confirmPassword) {
         newErrors.confirmPassword = '两次输入的密码不一致';
       }
     }
 
-    if (formData.role !== 'user' && formData.role !== 'admin') {
+    if (values.role !== 'user' && values.role !== 'admin') {
       newErrors.role = '无效的角色';
     }
 
@@ -94,24 +114,25 @@ export function UserModal({ isOpen, onClose, onSubmit, onUpdate, isSubmitting, e
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (validate()) {
+    const values = readFormValues(e.currentTarget as HTMLFormElement);
+    if (validate(values)) {
       if (isEditMode && onUpdate) {
         const updateData: { username?: string; password?: string; role?: string } = {};
-        if (formData.username !== editUser.username) {
-          updateData.username = formData.username.trim();
+        if (values.username !== editUser.username) {
+          updateData.username = values.username.trim();
         }
-        if (formData.password) {
-          updateData.password = formData.password;
+        if (values.password) {
+          updateData.password = values.password;
         }
-        if (formData.role !== editUser.role) {
-          updateData.role = formData.role;
+        if (values.role !== editUser.role) {
+          updateData.role = values.role;
         }
         onUpdate(updateData);
       } else {
         onSubmit?.({
-          username: formData.username.trim(),
-          password: formData.password,
-          role: formData.role,
+          username: values.username.trim(),
+          password: values.password,
+          role: values.role,
         });
       }
     }
@@ -147,6 +168,7 @@ export function UserModal({ isOpen, onClose, onSubmit, onUpdate, isSubmitting, e
             </label>
             <input
               id="user-username"
+              name="username"
               type="text"
               value={formData.username}
               onChange={(e) => setFormData({ ...formData, username: e.target.value })}
@@ -164,6 +186,7 @@ export function UserModal({ isOpen, onClose, onSubmit, onUpdate, isSubmitting, e
             </label>
             <input
               id="user-password"
+              name="password"
               type="password"
               value={formData.password}
               onChange={(e) => setFormData({ ...formData, password: e.target.value })}
@@ -183,6 +206,7 @@ export function UserModal({ isOpen, onClose, onSubmit, onUpdate, isSubmitting, e
               </label>
               <input
                 id="user-confirm-password"
+                name="confirmPassword"
                 type="password"
                 value={formData.confirmPassword}
                 onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
@@ -201,6 +225,7 @@ export function UserModal({ isOpen, onClose, onSubmit, onUpdate, isSubmitting, e
             </label>
             <select
               id="user-role"
+              name="role"
               value={formData.role}
               onChange={(e) => setFormData({ ...formData, role: e.target.value })}
               className={cn(FORM.select, 'w-full', errors.role && FORM.inputInvalid)}

@@ -135,14 +135,31 @@ SCAN_SUFFIXES = {
 }
 
 
-def _tracked_files(root: Path) -> list[str]:
+def _git_ls_files(root: Path, *extra: str) -> list[str]:
     proc = subprocess.run(
-        ["git", "ls-files"], cwd=root, capture_output=True, text=True,
+        ["git", "ls-files", *extra], cwd=root, capture_output=True, text=True,
     )
     if proc.returncode != 0:
-        print(f"[ip-leak] git ls-files 失败: {proc.stderr.strip()}", file=sys.stderr)
+        print(
+            f"[ip-leak] git ls-files {' '.join(extra)} 失败: {proc.stderr.strip()}",
+            file=sys.stderr,
+        )
         raise SystemExit(2)
     return [ln for ln in proc.stdout.splitlines() if ln.strip()]
+
+
+def default_targets(root: Path) -> list[str]:
+    """默认扫描集 = **已跟踪 ∪ 未跟踪（不含 .gitignore 命中项）**（#2432）。
+
+    原先只取 `git ls-files`，于是新文件在 `git add` 之前**完全不在门禁眼里**：
+    #2402 现场是本地 `check:quick` 连绿两轮、push 上去 CI `lint` 才红（命中的正是那两条
+    PR 新加的 `tools/dev/fake_agent.py` 与解释该坑的 Note）。"提交前"恰是最该拦的时点，
+    而那个时点上默认集为空 → 门禁形同虚设。
+
+    仍未跟踪集**不**绕过 `.gitignore`（`--exclude-standard`）：否则会把 `.venv`、
+    `node_modules`、`.wt/`（并行 worktree，内含整仓副本）一起读进来——既慢又与仓库内容无关。
+    """
+    return sorted(set(_git_ls_files(root)) | set(_git_ls_files(root, "--others", "--exclude-standard")))
 
 
 def _is_allowlisted(rel: str) -> bool:
@@ -265,7 +282,8 @@ def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(
         description="阻塞式内网主机地址扫描（public 仓库，#538 收尾）",
     )
-    ap.add_argument("paths", nargs="*", help="限定扫描路径（默认 git ls-files 全仓）")
+    ap.add_argument("paths", nargs="*",
+                    help="限定扫描路径（默认 = 已跟踪 ∪ 未跟踪（排除 .gitignore），#2432）")
     ap.add_argument("--check", action="store_true",
                     help="CI 语义：只报告不改写（本脚本从不改写）")
     ap.add_argument("-q", "--quiet", action="store_true", help="无命中时保持静默")
@@ -293,7 +311,7 @@ def main(argv: list[str]) -> int:
             else:
                 targets.append(str(cand.relative_to(root)))
     else:
-        targets = _tracked_files(root)
+        targets = default_targets(root)
 
     total = 0
     files_hit = 0

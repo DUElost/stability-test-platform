@@ -749,8 +749,8 @@ async def test_extend_batch_empty_returns_empty():
 
 @pytest.mark.asyncio
 async def test_extend_batch_rejects_oversized_batch(monkeypatch):
-    import backend.api.routes.agent_api as agent_api
-    monkeypatch.setattr(agent_api, "_LEASE_EXTEND_BATCH_MAX", 2)
+    import backend.services.agent_lease_extend as lease_extend
+    monkeypatch.setattr(lease_extend, "_LEASE_EXTEND_BATCH_MAX", 2)
     await async_engine.dispose()
     async with AsyncSessionLocal() as async_db:
         with pytest.raises(HTTPException) as exc_info:
