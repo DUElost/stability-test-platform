@@ -31,6 +31,15 @@ class SchedulerSettings(DomainSettings):
     run_recycle_interval_seconds: int = 30
     session_watchdog_interval_seconds: int = 15
     reconciler_interval_seconds: int = 15
+    # #2531：租约回收器 Phase 2（UNKNOWN→释放租约+FAILED）与 stale 分支的**单轮排空上限**。
+    # 修前这两个分支「处理一个候选就 break」，速率被钉在 1 台 / `reconciler_interval_seconds`
+    # （dev 实测 12s/台 ⇒ 4 台/分钟；按 `agent_api` 的 60 host × ~17 device ≈ 1000 台容量口径
+    # 外推，全量解锁 ≈3.3 小时，期间设备一直 DEVICE_BUSY）。现在一轮最多排空这么多候选，
+    # 但**保持一候选一事务**（#1172 的「不跨候选混交父终态化」不变量不动）。
+    # 下界 1（同 #2278 口径）：0 会让解锁静默永久停摆，且没有任何读数表明「无事可做」——
+    # 想变慢请调小它但不得为 0。上界 1000：单轮 ∝ 批大小地拉长持锁与墙钟窗口（每候选
+    # 含一次终态化提交 + 链式派发），超过全 fleet 规模没有意义，只会掩盖上一轮没跑完。
+    reconciler_drain_batch: int = Field(default=20, ge=1, le=1000)
     cron_poll_interval: float = 30
     retention_cleanup_interval_seconds: int = 3600
     queue_depth_poll_interval_seconds: int = 15

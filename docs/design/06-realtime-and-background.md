@@ -67,6 +67,19 @@ PlanRun 但**不发** `plan_run_status` 广播（`device_lease_reconciler.py` `c
 页面靠前端既有 10s/30s 轮询兜底收敛（`planRunDetailUtils.ts`），属有意取舍而非遗漏；
 如需推送级实时性，应作为行为变更单独评审，勿顺手补发。
 
+**租约解锁的收口速率（#2531）**：`device_lease_reconciler` 的 Phase 2
+（UNKNOWN 过宽限 → 释放租约 + 判 FAILED）与 `stale_unknown` 分支**一轮最多排空
+`RECONCILER_DRAIN_BATCH` 台（默认 20）**，且保持「一候选一个事务边界」——
+收口 N 台需要 `ceil(N/批大小)` 个 `RECONCILER_INTERVAL_SECONDS` 周期，而不是 N 个
+（修前这两条分支处理一台就 `break`，实测 12s/台 ≈ 4 台/分钟；按 `agent_api`
+的 60 host × ~17 device ≈ 1000 台容量口径外推，全量解锁要 ≈3.3 小时，期间设备
+一直 `DEVICE_BUSY`）。积压与「至少还要多久」由每轮一条
+`reconciler_unknown_backlog` 日志与 `stability_reconciler_unknown_backlog{state}`
+gauge 暴露（三桶：`grace_expired` 等待解锁 / `within_grace` 正常宽限内 /
+`missing_ended_at` **不会自愈**的坏时钟行）；被上限截断时另打
+`reconciler_drain_truncated remaining=<n>`。调大批大小只改变单轮持锁窗口，
+不改变「先锁 Job 再锁 Lease」的顺序（见共享行加锁表 I1）。
+
 **约束**：默认单进程后端。ADR-0027 P3-3：除 `saq_queue_depth_poll` 外，全部 singleton job 经 leader election（`admission_pump` / `counter_reconcile` 为函数内 leadership，其余经 `_instrumented(..., singleton=True)`）。
 
 ### Cron 防重叠策略（#994 裁决：不允许排队）

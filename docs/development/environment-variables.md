@@ -169,7 +169,7 @@
 
 <!-- env-inventory:begin（generated：python tools/dev/env_inventory.py --write） -->
 
-共 **223** 个读取名（`backend/**`，不含 `backend/agent/scripts/**`；含 ADR-0042 Settings 字段）：**198** 个已在 `.env*.example` 登记，**25** 个声明为内部（理由见下节）。
+共 **224** 个读取名（`backend/**`，不含 `backend/agent/scripts/**`；含 ADR-0042 Settings 字段）：**199** 个已在 `.env*.example` 登记，**25** 个声明为内部（理由见下节）。
 示例文件是**运维模板**（承载需要运维/机型调整的子集）；本表是**代码侧完整清单**。
 门禁：每个读取名必须「登记进示例」或「内部声明」二选一，二者之外即红。
 
@@ -235,6 +235,7 @@
 | `PRECHECK_REAPER_INTERVAL_SECONDS` | `45` | ✅ | 运行时 | `backend/core/settings/scheduler.py:37` |
 | `PROMETHEUS_MULTIPROC_DIR` | `-` | — | 运行时 | `backend/core/metrics.py:938` |
 | `QUEUE_DEPTH_POLL_INTERVAL_SECONDS` | `15` | ✅ | 运行时 | `backend/core/settings/scheduler.py:36` |
+| `RECONCILER_DRAIN_BATCH` | `20` | ✅ | 运行时 | `backend/core/settings/scheduler.py:42` |
 | `RECONCILER_INTERVAL_SECONDS` | `15` | ✅ | 运行时 | `backend/core/settings/scheduler.py:33` |
 | `RECYCLER_BATCH_SIZE` | `200` | ✅ | 运行时 | `backend/core/settings/scheduler.py:47` |
 | `REDIS_PING_TIMEOUT` | `3.0` | ✅ | 运行时 | `backend/main.py:123` |

@@ -7,6 +7,12 @@ commit**（父终态先提交再触发链式派发）。调用方不得在嵌套
 ``InvalidRequestError``。调用方应在自身事务（如有）提交后调用，且调用后
 不再假定原事务仍开（reconciler/recycler 先例见 #1172）。
 
+批量调用方的正确形状（#2531）：**逐候选**「savepoint 落库 → 退出 savepoint →
+立刻为该候选调用本服务」，每条候选自成一个提交点。把多条候选的终态化攒到函数
+尾部统一执行（本服务出现自管理提交后 #1172 的原形状）会把前序候选的写入押在
+最后一条上——后序候选被行锁堵住时前序结果既读不到也不落库，且尾部一次提交会
+把多条候选的父聚合混进同一事务。
+
 Every path that first puts a Job into COMPLETED / FAILED / ABORTED must call
 ``on_job_terminal`` (async) or ``on_job_terminal_sync`` afterwards in the
 **same transaction** as the job terminal write (through aggregation). The

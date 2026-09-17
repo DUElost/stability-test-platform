@@ -212,6 +212,19 @@ reconciler_actions = Counter(
     ['action', 'reason']  # action: to_unknown/to_failed/release_lease, reason: lease_expired/unknown_grace_timeout/terminal_job_active_lease
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
+# #2531：UNKNOWN 积压读数（**定义与接线同 PR**——#2287 删掉的两只同族 gauge
+# `stability_expired_active_leases` / `stability_unknown_jobs` 就是死在「只有定义、
+# 没人写」上；生产者判据 tests/test_alert_metric_producers.py 会拦住只加定义的改动）。
+# producer: device_lease_reconciler._record_unknown_backlog（每个 reconcile tick 写一次）。
+# 为什么必须有：Phase 2 的收口速率是离散的（一轮最多 ``RECONCILER_DRAIN_BATCH`` 台），
+# 「还有多少台卡在 UNKNOWN、还要多久」在修前只能靠翻日志数事件；`reconciler_actions`
+# 是增量计数器，读不出积压。
+reconciler_unknown_backlog = Gauge(
+    'stability_reconciler_unknown_backlog',
+    'Jobs still in UNKNOWN at the end of a lease-reconcile tick, by grace state',
+    ['state']  # state: grace_expired/within_grace/missing_ended_at（基数恒定 3）
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
 # #2287：本组随 ADR-0019 Phase 4a/4b 引入的两个**状态 gauge**
 # （`stability_expired_active_leases{host_id}` = 宽限期持锁租约数、
 # `stability_unknown_jobs{reason}` = UNKNOWN 态 job 数）自引入起**从未接线**，
