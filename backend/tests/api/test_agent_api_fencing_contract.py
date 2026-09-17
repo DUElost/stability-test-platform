@@ -108,7 +108,7 @@ async def test_update_job_status_rejects_invalid_fencing_token_before_transition
     db.commit = AsyncMock()
 
     with patch(
-        "backend.api.routes.agent_api._get_valid_runtime_lease",
+        "backend.services.agent_step_status._get_valid_runtime_lease",
         new=AsyncMock(return_value=None),
     ) as mock_validate:
         with pytest.raises(HTTPException) as exc_info:
@@ -144,10 +144,10 @@ async def test_upload_step_traces_rejects_invalid_fencing_token_before_reconcile
     db.get = AsyncMock(return_value=job)
 
     with patch(
-        "backend.api.routes.agent_api._get_valid_runtime_lease",
+        "backend.services.agent_step_status._get_valid_runtime_lease",
         new=AsyncMock(return_value=None),
     ) as mock_validate, patch(
-        "backend.api.routes.agent_api.reconcile_step_traces",
+        "backend.services.agent_step_status.reconcile_step_traces",
         new=AsyncMock(return_value=1),
     ) as mock_reconcile:
         with pytest.raises(HTTPException) as exc_info:
@@ -192,10 +192,10 @@ async def test_update_job_step_status_rejects_invalid_fencing_token_before_recon
     db.get = AsyncMock(return_value=job)
 
     with patch(
-        "backend.api.routes.agent_api._get_valid_runtime_lease",
+        "backend.services.agent_step_status._get_valid_runtime_lease",
         new=AsyncMock(return_value=None),
     ) as mock_validate, patch(
-        "backend.services.reconciler.reconcile_step_traces",
+        "backend.services.agent_step_status.reconcile_step_traces",
         new=AsyncMock(return_value=1),
     ) as mock_reconcile:
         with pytest.raises(HTTPException) as exc_info:

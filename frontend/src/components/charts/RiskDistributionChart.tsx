@@ -1,53 +1,22 @@
 import { useMemo } from 'react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
 import { StableResponsiveContainer } from './StableResponsiveContainer';
+import { buildRiskSeries, type RiskSeriesPoint } from './riskBuckets';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ShieldAlert } from 'lucide-react';
-import { CHART_COLORS } from '@/design-system/colors';
-
-interface RiskData {
-  name: string;
-  value: number;
-  color: string;
-}
+import type { RiskDistribution } from '@/utils/api/types';
 
 interface RiskDistributionChartProps {
-  data: {
-    high: number;
-    medium: number;
-    low: number;
-    unknown: number;
-  };
+  data: RiskDistribution;
   isLoading?: boolean;
 }
 
-const COLORS = {
-  high: CHART_COLORS.error,
-  medium: CHART_COLORS.warning,
-  low: CHART_COLORS.success,
-  unknown: CHART_COLORS.muted,
-};
-
-const LABELS = {
-  high: '高',
-  medium: '中',
-  low: '低',
-  unknown: '未知',
-};
-
 export function RiskDistributionChart({ data, isLoading }: RiskDistributionChartProps) {
-  const chartData: RiskData[] = useMemo(() => {
-    return [
-      { name: LABELS.high, value: data.high, color: COLORS.high },
-      { name: LABELS.medium, value: data.medium, color: COLORS.medium },
-      { name: LABELS.low, value: data.low, color: COLORS.low },
-      { name: LABELS.unknown, value: data.unknown, color: COLORS.unknown },
-    ].filter(item => item.value > 0);
-  }, [data]);
+  const chartData = useMemo(() => buildRiskSeries(data), [data]);
 
   const total = useMemo(() =>
-    data.high + data.medium + data.low + data.unknown,
+    data.s + data.a + data.b + data.unknown,
     [data]
   );
 
@@ -108,7 +77,7 @@ export function RiskDistributionChart({ data, isLoading }: RiskDistributionChart
                 >
                 {chartData.map((entry, index) => (
                   <Cell
-                    key={`cell-${index}`}
+                    key={`cell-${entry.level}-${index}`}
                     fill={entry.color}
                     strokeWidth={0}
                     style={{
@@ -120,7 +89,7 @@ export function RiskDistributionChart({ data, isLoading }: RiskDistributionChart
               <Tooltip
                 content={({ active, payload }) => {
                   if (active && payload && payload.length) {
-                    const d = payload[0].payload as RiskData;
+                    const d = payload[0].payload as RiskSeriesPoint;
                     const pct = ((d.value / total) * 100).toFixed(1);
                     return (
                       <div className="bg-popover border border-border rounded-lg p-2 shadow-md">
