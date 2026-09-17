@@ -68,6 +68,8 @@ Class: process
 
 ## Revisit
 
+- **本批工单的收口状态**（含 2 单重开残余）见 [`process/2026-09-16-install-chain-round-closure`](./2026-09-16-install-chain-round-closure.md)。
+
 - **每轮站点升级后**：重跑 `verify` + `handover` 刷新证据（本 note 的矩阵按同样口径复评）；
   若某个 MS 项从 PASS 退回 BLOCKED，先查对应检查的输入是否变化（声明/发布物/目标机状态）。
 - **`scan/upload/merge` 专项落地后**：在站点上跑一次真实设备日志流程，把
