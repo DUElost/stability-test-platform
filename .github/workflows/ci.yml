@@ -367,10 +367,12 @@ jobs:
           cache-dependency-path: backend/requirements-dev.lock
       - name: Install dependencies
         run: pip install --require-hashes -r backend/requirements-dev.lock
-      # #739：agent 单测自闭环守卫——`env -i` 剥离 job 级 env（JWT_SECRET_KEY /
-      # DATABASE_URL）后只做收集（秒级）。agent 测试若重新 import 控制面
-      # （routes → auth → core.security 的模块级 JWT 硬检查），收集期即红，
-      # 不必等到运行；对应本地门禁 run_gates.py check:pr 的 agent-tests-collect。
+      # #739：agent 单测的环境自闭环守卫——`env -i` 剥离 job 级 env 后只做收集（秒级）。
+      # 能力边界（2026-09-17 实测）：**它拦不住「agent 测试 import 控制面」**——
+      # 套件 conftest 在收集期即 setdefault DATABASE_URL/JWT_SECRET_KEY（#2428），
+      # 越界 import 能正常完成收集（注入 backend.api.routes.agent_api 后仍全收集通过）。
+      # 它现在拦的是「与 env 无关的 import 期失败」；生产代码侧的 import 边界由
+      # tests/test_agent_import_boundary.py 静态守卫。对应本地门禁 agent-tests-collect。
       - name: Collect agent tests in clean env
         run: env -i PATH="$PATH" PYTHONPATH=. python -m pytest backend/agent/tests/ --collect-only -q
       # #2428：真跑也用 `env -i` 剥离 job 级 env——与上一步收集同口径。此前只有收集是
