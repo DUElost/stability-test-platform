@@ -20,8 +20,8 @@ Class: bug-fix
 ## Verification
 
 - 服务直测：`test_agent_archive_status`（404 / extra 字段 / 非 dict）；
-- API：`test_agent_api_artifacts::test_archive_status_unknown_host_404`；
-- `ruff` + `check:quick`。
+- API：`test_archive_status_unknown_host_404`（4 passed）；
+- `ruff` + `check:quick`（11 gates）通过。
 
 ## Revisit
 
