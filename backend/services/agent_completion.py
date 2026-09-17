@@ -26,8 +26,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.core.audit import record_audit_async
 from backend.core.metrics import (
     post_completion_enqueue_failed_total,
+    record_reconciler_dirs_abandoned,
+    record_reconciler_dirs_oversized_skipped,
     record_reconciler_skip_unchanged,
     record_watcher_capability,
+    set_reconciler_unresolved_dirs,
+    set_watcher_reconciler_present,
 )
 from backend.models.device_lease import DeviceLease
 from backend.models.enums import JobStatus, LeaseStatus, LeaseType
@@ -157,12 +161,32 @@ def bridge_reconciler_metrics(host_id: Optional[str], summary: Dict[str, Any]) -
     `reconciler_burst_mode_active` 是运行期实时 gauge(Job 结束时恒为 0),无法通过
     终态快照有意义地带出 → 仍仅 Agent 进程内,详见 §2.3 文档说明。
     """
+    # #2394③：在位标记与 stats 字典无关（MTK/UNISOC 通用），先于门禁处理。
+    presence = str(summary.get("platform_reconciler") or "").strip()
+    if presence:
+        set_watcher_reconciler_present(str(host_id or "unknown"), presence.split(":", 1)[0])
+
     stats = summary.get("reconciler_stats")
     if not isinstance(stats, dict):
         return
     skipped = stats.get("ticks_skipped_unchanged")
     if isinstance(skipped, int) and skipped > 0:
         record_reconciler_skip_unchanged(str(host_id or "unknown"), amount=skipped)
+
+    # #2394①：UNISOC 专属可见面。三个字段 MTK 路恒 0（共享 ReconcilerStats），
+    # 无门禁地桥接会把「MTK 完成」误刷成「UNISOC 全清」——以 presence 平台段把关。
+    if not presence.upper().startswith("UNISOC"):
+        return
+    host = str(host_id or "unknown")
+    abandoned = stats.get("dirs_abandoned")
+    if isinstance(abandoned, int) and abandoned > 0:
+        record_reconciler_dirs_abandoned(host, amount=abandoned)
+    oversized = stats.get("dirs_oversized_skipped")
+    if isinstance(oversized, int) and oversized > 0:
+        record_reconciler_dirs_oversized_skipped(host, amount=oversized)
+    unresolved = stats.get("unresolved_dirs")
+    if isinstance(unresolved, int) and unresolved >= 0:
+        set_reconciler_unresolved_dirs(host, unresolved)
 
 async def complete_agent_job(
     db: AsyncSession,
