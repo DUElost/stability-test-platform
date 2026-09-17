@@ -411,11 +411,8 @@ async def test_complete_and_extend_batch_same_job_no_deadlock():
     """
     from unittest.mock import patch
 
-    from backend.api.routes.agent_api import (
-        _ExtendBatchIn,
-        _ExtendBatchItemIn,
-        extend_leases_batch,
-    )
+    from backend.api.routes.agent_api import _ExtendBatchIn, extend_leases_batch
+    from backend.services.agent_lease_extend import _ExtendBatchItemIn
     from backend.services import lease_manager
 
     seed = _seed_plan_run_with_jobs(n_jobs=1)
