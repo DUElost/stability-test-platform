@@ -41,6 +41,12 @@ Python 3.11 下重新生成对应 lock。日常重生成沿用已有 pin；只�
 - Ruff 规则取向见 `ruff.toml`，实际 CI 参数见 workflow；
 - 前端脚本以 `frontend/package.json` 为准；
 - 本地门禁入口：`python scripts/run_gates.py check:quick|pr|full`；
+- **每个本地门禁都要回答「CI 对应物在哪」**（治理面 S5x，`GATE_TO_CI_ANCHOR`）：锚点登记
+  `("ci.yml", "<step name>")`，step name 太通用时 pin 到 job——`("ci.yml", "<job>", "<step name>")`；
+  有意仅本地（数据源只在本机）登记 `None` 并写理由。判据匹配的是**某 job 里真实的 step name**，
+  且 `check:quick`/`check:pr` 成员的锚点必须落在 `pull_request` 事件可达的 job 里——注释、
+  `run:` 命令体、夜间专用 job 的同名词都不算数（#2445：旧的 workflow 全文子串判据下，删掉
+  PR 路径那一步仍然全绿）；
 - `check:quick` / `check:pr` 首项是 `schema-at-head`（#1938）：比对代码 head
   与本地配置库的 `alembic_version`（`DATABASE_URL` 取自 ambient 环境 /
   `.env.backend` / `.env`）；未配置即跳过，未对齐即红——生产工作树 pull 到

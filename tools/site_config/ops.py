@@ -149,6 +149,14 @@ class LocalOps:
 
         两个来源：`/etc/timezone`（Debian/Ubuntu 的规范位）→ `timedatectl` 的
         `Timezone` 属性（systemd 主机）。两者都没有就返回空串——绝不猜。
+
+        #2448：**本顺序是两端共用的唯一定义**——`set_timezone.yml` 的
+        `tz_controller` 回退链（Agent 侧缺 `agent_timezone` 时读控制面本机时区）
+        必须与之同向，两侧由 `tests/test_ansible_timezone_2265.py` 对拍守卫。
+        选 `/etc/timezone` 优先的理由：它是 Debian/Ubuntu 的规范位（站点报告
+        provenance 也记这条）、无 system bus 的目标（容器/精简镜像）只会更新它；
+        反过来以 `timedatectl` 优先时，这类目标读不到时间接落到 `/etc/timezone`，
+        两端行为不可预测。
         """
         try:
             configured = Path("/etc/timezone").read_text(encoding="utf-8").strip()

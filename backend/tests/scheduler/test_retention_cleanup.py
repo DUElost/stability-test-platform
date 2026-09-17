@@ -365,6 +365,8 @@ def _make_nfs_dirs(root, run_id):
     (root / "dedup" / str(run_id) / "mtk" / "result.xls").write_text("y")
     (root / "jira" / str(run_id) / "extract").mkdir(parents=True)
     (root / "jira" / str(run_id) / "extract" / "bundle.zip").write_text("z")
+    (root / "_meta" / str(run_id)).mkdir(parents=True)
+    (root / "_meta" / str(run_id) / "172-21-1-1.json").write_text("{}")
 
 
 def test_nfs_run_dirs_purged_with_db_row(cleanup_env, tmp_path, monkeypatch):
@@ -379,6 +381,7 @@ def test_nfs_run_dirs_purged_with_db_row(cleanup_env, tmp_path, monkeypatch):
     assert not (tmp_path / "devices" / str(run.id)).exists()
     assert not (tmp_path / "dedup" / str(run.id)).exists()
     assert not (tmp_path / "jira" / str(run.id)).exists()
+    assert not (tmp_path / "_meta" / str(run.id)).exists()
     assert db.query(PlanRun).filter(PlanRun.id == run.id).first() is None
 
 
@@ -393,6 +396,7 @@ def test_active_run_nfs_dirs_kept(cleanup_env, tmp_path, monkeypatch):
 
     assert (tmp_path / "devices" / str(run.id)).exists()
     assert (tmp_path / "jira" / str(run.id)).exists()
+    assert (tmp_path / "_meta" / str(run.id)).exists()
     assert db.query(PlanRun).filter(PlanRun.id == run.id).first() is not None
 
 
