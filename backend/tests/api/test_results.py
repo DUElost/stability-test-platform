@@ -339,3 +339,147 @@ class TestRiskTrend:
             headers=auth_headers,
         )
         assert other.status_code == 404
+
+
+class TestResultsSummaryRiskGauge:
+    """#2365 重开后的两处收口：**无 job 必须把四桶写回 0**；**带 `project_key` 的请求
+    不得改写全局 gauge**。
+
+    沿用同文件 #2365 既有用例的做法——用记录器替掉 `risk_jobs_by_level`，钉的是
+    「这次调用到底写了什么」，而不是注册表终值（避免用例之间互相污染）。
+    """
+
+    @staticmethod
+    def _recorder(monkeypatch):
+        class _GaugeRecorder:
+            def __init__(self):
+                self.values: dict = {}
+                self._level = ""
+
+            def labels(self, *, level):
+                self._level = level
+                return self
+
+            def set(self, value):
+                self.values[self._level] = value
+
+        recorder = _GaugeRecorder()
+        monkeypatch.setattr(
+            "backend.api.routes.results.risk_jobs_by_level", recorder,
+        )
+        return recorder
+
+    @staticmethod
+    def _seed_jobs(db_session, sample_device, *, tag, count=2, project_id=None):
+        from uuid import uuid4
+
+        from backend.models.project import TestProject  # noqa: F401  可读性：明确依赖
+
+        suffix = uuid4().hex[:8]
+        plan = Plan(
+            name=f"gauge-{tag}-{suffix}", description="", failure_threshold=0.05,
+        )
+        db_session.add(plan)
+        db_session.flush()
+        plan_run = PlanRun(
+            plan_id=plan.id,
+            project_id=project_id,
+            status="SUCCESS",
+            failure_threshold=0.05,
+            plan_snapshot={"name": plan.name, "plan_id": plan.id},
+            run_type="MANUAL",
+            triggered_by="pytest",
+            started_at=datetime.now(timezone.utc) - timedelta(minutes=20),
+            ended_at=datetime.now(timezone.utc) - timedelta(minutes=10),
+        )
+        db_session.add(plan_run)
+        db_session.flush()
+        jobs = []
+        for index in range(count):
+            device = Device(
+                serial=f"GAUGE-{tag}-{suffix}-{index}",
+                host_id=sample_device.host_id,
+                status="ONLINE",
+            )
+            db_session.add(device)
+            db_session.flush()
+            job = JobInstance(
+                plan_run_id=plan_run.id,
+                plan_id=plan.id,
+                device_id=device.id,
+                host_id=device.host_id,
+                status="COMPLETED",
+                status_reason=None,
+                pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+                started_at=datetime.now(timezone.utc) - timedelta(minutes=15),
+                ended_at=datetime.now(timezone.utc) - timedelta(minutes=12),
+            )
+            db_session.add(job)
+            jobs.append(job)
+        db_session.commit()
+        return jobs
+
+    def test_gauge_returns_to_zero_when_all_jobs_are_gone(
+        self, client, auth_headers, db_session, sample_device, monkeypatch,
+    ):
+        """验收 ①：job 全清空后再调用，四桶必须全部回落 0。
+
+        旧实现把四个 `.set()` 全写在 `if total_jobs > 0:` 里 → 清空后整段跳过，
+        gauge 停在上一轮的非零值，读起来像「还有风险分布」——与本单「让无判定依据
+        与判据坏了可区分」的目标正好相反。
+        """
+        recorder = self._recorder(monkeypatch)
+        self._seed_jobs(db_session, sample_device, tag="zero")
+
+        client.get("/api/v1/results/summary", headers=auth_headers)
+        first = dict(recorder.values)
+        assert set(first) == {"high", "medium", "low", "unknown"}
+        assert first["unknown"] >= 1, "用例前提：先要有一次非零写入，否则「归零」无从谈起"
+
+        db_session.query(JobInstance).delete(synchronize_session=False)
+        db_session.commit()
+        recorder.values.clear()
+
+        response = client.get("/api/v1/results/summary", headers=auth_headers)
+        assert response.status_code == 200
+        # RiskDistribution 就是四桶本身（无 total 字段）
+        assert sum(response.json()["risk_distribution"].values()) == 0
+        assert recorder.values == {"high": 0, "medium": 0, "low": 0, "unknown": 0}, (
+            "无 job 时也必须写一次（全 0）——否则 gauge 停在上一轮非零值"
+        )
+
+    def test_project_scoped_call_does_not_rewrite_global_gauge(
+        self, client, auth_headers, db_session, sample_device, monkeypatch,
+    ):
+        """验收 ②：带 `project_key` 的调用不得改写全局 gauge（该指标只有 `level` 标签）。"""
+        from backend.models.project import TestProject
+
+        recorder = self._recorder(monkeypatch)
+        now = datetime.now(timezone.utc)
+        project = TestProject(
+            project_key=f"GAUGE{now.strftime('%H%M%S%f')}", display_name="gauge-scope",
+        )
+        db_session.add(project)
+        db_session.commit()
+
+        self._seed_jobs(db_session, sample_device, tag="global", count=3)
+        self._seed_jobs(
+            db_session, sample_device, tag="scoped", count=1, project_id=project.id,
+        )
+
+        client.get("/api/v1/results/summary", headers=auth_headers)
+        global_snapshot = dict(recorder.values)
+        assert global_snapshot["unknown"] == 4, f"全局应有 4 个 job：{global_snapshot}"
+
+        recorder.values.clear()
+        scoped = client.get(
+            "/api/v1/results/summary",
+            params={"project_key": project.project_key},
+            headers=auth_headers,
+        )
+        assert scoped.status_code == 200
+        assert sum(scoped.json()["risk_distribution"].values()) == 1, "作用域响应仍按作用域算"
+        # 关键：作用域这一次调用**不写**全局 gauge（旧实现会把 1 覆盖掉 4）
+        assert recorder.values == {}, (
+            f"带 project_key 的请求改写了全局 gauge：{recorder.values}"
+        )

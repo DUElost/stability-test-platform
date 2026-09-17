@@ -157,6 +157,13 @@ describe('HostOperationPanel', () => {
             kind: 'hot_update',
             status: 'running',
           },
+          {
+            // #2255 残余：pending 是排队态（还没有 console run）——不渲染取消
+            hostId: 'h7',
+            label: '192.0.2.92',
+            kind: 'install',
+            status: 'pending',
+          },
         ]}
         onClose={vi.fn()}
         onTerminalStatus={vi.fn()}
@@ -165,9 +172,10 @@ describe('HostOperationPanel', () => {
     );
     fireEvent.click(screen.getByTestId('host-op-cancel-h1'));
     expect(onCancel).toHaveBeenCalledWith('h1');
-    // 已终态（success）与热更新不渲染取消
+    // 已终态（success）、热更新与排队（pending）都不渲染取消
     expect(screen.queryByTestId('host-op-cancel-h2')).toBeNull();
     expect(screen.queryByTestId('host-op-cancel-h5')).toBeNull();
+    expect(screen.queryByTestId('host-op-cancel-h7')).toBeNull();
   });
 
   it('hides every cancel button when onCancelInstall is not provided', () => {

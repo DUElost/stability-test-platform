@@ -58,7 +58,11 @@ export function rebuildLifecycleFromPlan(plan: Plan): PipelineDef {
       version: s.script_version,
       // #508 步骤级 params：读回（null/缺省 → 空对象，保持 snapshot() 脏检查稳定）
       params: s.params ?? {},
-      timeout_seconds: s.timeout_seconds ?? 30,
+      // #2454：与下面 stall_seconds 同一条规则——**无值就不写键**。此前读回把 NULL
+      // 折成 30，而保存是整体替换 PlanStep 行，于是「打开 + 保存」一次就把「未配置」
+      // 钉死成 30，压掉后端 `STP_STEP_WALL_CLOCK_SECONDS` → 300s 的回落链
+      // （契约三态见 `components/pipeline/stepTiming.ts`）。
+      ...(s.timeout_seconds != null ? { timeout_seconds: s.timeout_seconds } : {}),
       retry: s.retry ?? 0,
       enabled: s.enabled !== false,
       // 编辑器没有停滞钟输入框，但保存是整体替换 PlanStep 行：这里不读回来、

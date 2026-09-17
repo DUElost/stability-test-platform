@@ -25,6 +25,20 @@ def upgrade() -> None:
     pass
 '''
 
+# 真重放的形态：upgrade() 里有实际语句（#1717 的先例是 `WHERE ... 命中才写` 的幂等自愈）
+_REPLAY_TEMPLATE = '''"""replay {rid}"""
+
+revision = "{rid}"
+down_revision = {down}
+
+
+def upgrade() -> None:
+    op.execute(
+        "INSERT INTO script (name, version) SELECT 'x', '1' "
+        "WHERE NOT EXISTS (SELECT 1 FROM script WHERE name = 'x')"
+    )
+'''
+
 
 def _git(repo: Path, *args: str) -> str:
     proc = subprocess.run(
@@ -82,14 +96,13 @@ def test_gate_blocks_rewriting_merged_revision(repo: Path):
     assert "bbb222_child.py" in result.stdout + result.stderr
 
 
-def test_gate_allows_rewrite_with_replay_migration(repo: Path):
-    """改写 + 同 PR 附重放迁移（down_revision 指向被改写者）→ 放行并留痕。"""
-    target = repo / REV_ROOT / "bbb222_child.py"
-    target.write_text(
+def test_gate_allows_rewrite_with_effective_replay(repo: Path):
+    """改写 + 同 PR 附**有实际语句**的重放迁移 → 放行并留痕（含语义未验证的自述）。"""
+    (repo / REV_ROOT / "bbb222_child.py").write_text(
         _REV_TEMPLATE.format(rid="bbb222", down='"zzz999"'), encoding="utf-8"
     )
     (repo / REV_ROOT / "ccc333_replay.py").write_text(
-        _REV_TEMPLATE.format(rid="ccc333", down='"bbb222"'), encoding="utf-8"
+        _REPLAY_TEMPLATE.format(rid="ccc333", down='"bbb222"'), encoding="utf-8"
     )
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "rechain + replay")
@@ -97,7 +110,33 @@ def test_gate_allows_rewrite_with_replay_migration(repo: Path):
     result = _run(repo, "--base", "main~1")
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "NOTICE" in result.stdout
+    out = result.stdout
+    assert "NOTICE" in out
+    # 留痕必须说清"只验形态、没验语义"，否则豁免读起来像已被证明正确（#2258）
+    assert "未验证" in out
+
+
+def test_gate_blocks_empty_body_fake_replay(repo: Path):
+    """#2258 重开的核心：改写 + 新增一个 `upgrade()` 只有 pass 的"重放"→ 必须红。
+
+    旧判据只看 `down_revision` 指向，于是"正常续链新增一版"与空 body 的假重放
+    都能给被改写的 revision 发豁免——豁免成了谁都能踩的侧门。
+    """
+    (repo / REV_ROOT / "bbb222_child.py").write_text(
+        _REV_TEMPLATE.format(rid="bbb222", down='"zzz999"'), encoding="utf-8"
+    )
+    (repo / REV_ROOT / "ccc333_fake.py").write_text(
+        _REV_TEMPLATE.format(rid="ccc333", down='"bbb222"'), encoding="utf-8"
+    )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "rechain + empty-body fake replay")
+
+    result = _run(repo, "--base", "main~1")
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    combined = result.stdout + result.stderr
+    assert "bbb222_child.py" in combined
+    assert "空 body 不是重放证据" in combined, combined
 
 
 def test_gate_blocks_deleting_merged_revision(repo: Path):

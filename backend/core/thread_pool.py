@@ -100,12 +100,21 @@ def submit(fn, *args, **kwargs):
     配额在任务**终结**时自动归还。
 
     #2072：归还点挂在 future 的 done 回调上，而不是只挂在任务体的 ``finally``。
-    任务体有不执行的两条路径——``pool.submit`` 抛错（根本没排上队）、以及
-    ``shutdown(cancel_futures=True)`` 取消排队中的 future——旧实现这两条都不归还，
-    而 ``_queue_slots`` 是模块级、跨 pool 重建存活，于是容量单调下降直至所有后台
-    提交恒抛 ``PoolQueueFullError``（调用方记 warning 后丢弃 = 静默丢后台工作），
-    ``drain()`` 也再也等不到 ``queue_depth()`` 归零。
-    不变量：**离开本函数时，配额要么已交给 future，要么已归还**，两者恰有其一。
+    任务体**不执行**的路径有这些（重开后又补一条，别只记前三条）：
+
+    1. ``pool.submit`` 抛「非 shutdown」错误 —— 根本没排上队；
+    2. ``shutdown(cancel_futures=True)`` 取消排队中的 future；
+    3. 被 shutdown 拒绝后重建，第二次仍被拒；
+    4. **``_new_pool()`` 自己抛**（``BACKGROUND_POOL_SIZE`` 配成非正数时
+       ``ThreadPoolExecutor.__init__`` 直接 ``ValueError``）—— 这条与本单原症状
+       同形，只是触发源从"提交失败"换成"建池失败"；原先取池/建池那段在守卫之外，
+       于是 ``:111`` 已 acquire 的槽位没有任何归还路径。
+
+    ``_queue_slots`` 是模块级、跨 pool 重建存活，任何一条不归还都会让容量单调下降，
+    直至所有后台提交恒抛 ``PoolQueueFullError``（调用方记 warning 后丢弃 = 静默丢
+    后台工作），而 ``drain()`` 再也等不到 ``queue_depth()`` 归零。
+    不变量：**离开本函数时，配额要么已交给 future，要么已归还**，两者恰有其一 ——
+    所以守卫必须罩住「取池/建池」本身，而不只罩提交。
     """
     global _submitted_total, _depth, _pool
     if not _queue_slots.acquire(blocking=False):
@@ -128,14 +137,15 @@ def submit(fn, *args, **kwargs):
     def _runner() -> None:
         fn(*args, **kwargs)
 
-    with _pool_lock:
-        if _pool is None:
-            _pool = _new_pool()
-        pool = _pool
-
     handed_off = False
     last_exc: RuntimeError | None = None
     try:
+        # 取池/建池也在守卫内（#2072 重开的那条残余）：`_new_pool()` 本身可能抛，
+        # 挪在下面就会漏归还已 acquire 的配额。
+        with _pool_lock:
+            if _pool is None:
+                _pool = _new_pool()
+            pool = _pool
         # 至多两次尝试：第二次仅在 pool 已被 shutdown（测试环境 TestClient 常见）
         # 时重建后重试；其它 RuntimeError 原样上抛。
         for _ in range(2):
@@ -158,8 +168,8 @@ def submit(fn, *args, **kwargs):
             raise last_exc
     finally:
         if not handed_off:
-            # 未交给 future 的任何退出路径（抛错、两次被拒）在此归还；
-            # 此时 done 回调必然尚未挂载，不会二次归还。
+            # 未交给 future 的**任何**退出路径（建池抛错、提交抛错、两次被拒）都在此
+            # 归还；此时 done 回调必然尚未挂载，不会二次归还。
             _release()
 
 
