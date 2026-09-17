@@ -38,3 +38,71 @@ def test_device_serial_content_scans_clean():
 
 def test_placeholder_token_is_safe_token():
     assert "0123456789ABCDEF" in _mod.SAFE_TOKENS
+
+
+# ── #2432：默认扫描集必须含未跟踪文件（提交前门禁的盲区）────────────────────
+
+def _git(root: Path, *args: str) -> None:
+    import subprocess
+
+    proc = subprocess.run(
+        ["git", *args], cwd=root, capture_output=True, text=True,
+    )
+    assert proc.returncode == 0, f"git {' '.join(args)} 失败：{proc.stderr}"
+
+
+def _repo_with_three_files(tmp_path: Path) -> Path:
+    """造一个 git 仓库：已跟踪 1 个、未跟踪 1 个、被 .gitignore 忽略 1 个。"""
+    root = tmp_path / "repo"
+    root.mkdir()
+    _git(root, "init", "-q")
+    (root / ".gitignore").write_text("ignored.md\n", encoding="utf-8")
+    (root / "tracked.md").write_text("正文\n", encoding="utf-8")
+    (root / "untracked.md").write_text("正文\n", encoding="utf-8")
+    (root / "ignored.md").write_text("172.21.15.66\n", encoding="utf-8")
+    _git(root, "add", ".gitignore", "tracked.md")
+    _git(root, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", "init")
+    return root
+
+
+def test_default_targets_include_untracked_files(tmp_path):
+    """新文件在被 `git add` 之前也必须受门禁覆盖——那正是最该拦的时点（#2432）。"""
+    root = _repo_with_three_files(tmp_path)
+    targets = _mod.default_targets(root)
+    assert "tracked.md" in targets
+    assert "untracked.md" in targets, (
+        "未跟踪文件缺席默认集 = 提交前门禁对新文件完全失明（#2402 现场：本地连绿、CI 才红）"
+    )
+
+
+def test_default_targets_still_respect_gitignore(tmp_path):
+    """但不能因此去读 .gitignore 命中的东西（.venv / node_modules / .wt 并行 worktree）。"""
+    root = _repo_with_three_files(tmp_path)
+    targets = _mod.default_targets(root)
+    assert "ignored.md" not in targets
+    assert "untracked.md" in targets
+
+
+def test_untracked_hit_is_reported_end_to_end(tmp_path, monkeypatch, capsys):
+    """整链自证：未跟踪文件里的真实内网地址必须被 `main()` 报出来并退出非 0。"""
+    root = _repo_with_three_files(tmp_path)
+    (root / "untracked.md").write_text("生产控制面 172.21.15.66 不可用。\n", encoding="utf-8")
+    monkeypatch.setattr(_mod, "ROOT", root)
+
+    code = _mod.main(["--check"])
+    captured = capsys.readouterr()
+    reported = captured.out + captured.err   # 明细走 stdout、处置提示走 stderr
+
+    assert code == 1, f"未跟踪文件的命中必须让门禁红，实际退出码 {code}\n{reported}"
+    assert "untracked.md" in reported and "172.21.15.66" in reported
+
+
+def test_ignored_hit_is_not_reported_end_to_end(tmp_path, monkeypatch, capsys):
+    """反向边界：同一内容放在被忽略的文件里不得报（否则本地会被 .venv 之类刷爆）。"""
+    root = _repo_with_three_files(tmp_path)
+    (root / "ignored.md").write_text("生产控制面 172.21.15.66 不可用。\n", encoding="utf-8")
+    monkeypatch.setattr(_mod, "ROOT", root)
+
+    code = _mod.main(["--check"])
+
+    assert code == 0, f"被忽略文件不应进扫描集：\n{capsys.readouterr()}"
