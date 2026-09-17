@@ -22,8 +22,12 @@ revision 附了重放迁移**（新增 revision 的 `down_revision` 指向它）
 契约：
 - **不可变面** = `backend/alembic/versions/*.py` 中**基线已存在**的文件；
   修改 / 删除 / 改名 / 类型变更一律违约；
-- **豁免**：本 diff 新增（A）的 revision 文件里，有 `down_revision`（字符串、元组均可）
-  指向被改写文件的 `revision` id → 该文件放行并打印留痕；没有豁免即红；
+- **豁免（#2258 重开后收紧，两条同时成立）**：本 diff 新增（A）的 revision 文件里，有
+  `down_revision`（字符串、元组均可）指向被改写文件的 `revision` id，**且**该新增文件的
+  `upgrade()` 有实际语句（不是只有 `pass` / docstring / `...`）→ 放行并打印留痕；否则即红。
+  只看 `down_revision` 不够：**「在 head 后正常续链新增一版」的 `down_revision` 也指向
+  被改写者**，空 body 的假重放同样放行 —— 豁免于是成了谁都能踩的侧门。
+  非空 body 仍只是**形态**证据（是否真是幂等自愈的「命中才写」要人看），故留痕里明说。
 - **新增 revision 文件本身永远安全**（新链上的库会正常执行它）。
 
 违约后的正确做法（不是找豁免）：
@@ -41,6 +45,7 @@ revision 附了重放迁移**（新增 revision 的 `down_revision` 指向它）
 from __future__ import annotations
 
 import argparse
+import ast
 import re
 import subprocess
 import sys
@@ -143,17 +148,63 @@ def _read_text(ref: str, path: str) -> str:
     return _git("show", f"{ref}:{path}")
 
 
-def _exempt_ids_from_additions(base: str, added: list[str]) -> dict[str, str]:
-    """新增 revision 的 `down_revision` 集合 → {父 id: 新增文件路径}。"""
+def _inert_statement(node: ast.stmt) -> bool:
+    """`pass` / 裸字符串（docstring）/ `...` —— 什么都不做的语句。"""
+    if isinstance(node, ast.Pass) or isinstance(node, ast.Ellipsis):
+        return True
+    return isinstance(node, ast.Expr) and isinstance(
+        node.value, ast.Constant | ast.Ellipsis
+    )
+
+
+def upgrade_body_is_effective(text: str) -> bool:
+    """`upgrade()` 是否含实际语句（解析失败按 False，即**不放行**——fail-closed）。"""
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return False
+    for node in tree.body:
+        if not isinstance(node, ast.FunctionDef) or node.name != "upgrade":
+            continue
+        return any(not _inert_statement(st) for st in node.body)
+    return False
+
+
+def replay_exemptions(
+    added_texts: list[tuple[str, str]],
+) -> tuple[dict[str, str], list[str]]:
+    """纯判据：新增文件 → (可豁免的 {父 id: 文件}, 因 body 为空被拒的文件)。
+
+    与 git 解耦，便于自证：`added_texts` 是 (路径, 源码) 列表。
+    """
     exempt: dict[str, str] = {}
+    rejected: list[str] = []
+    for path, text in added_texts:
+        parents = parse_down_revisions(text)
+        if not parents:
+            continue
+        if not upgrade_body_is_effective(text):
+            # 只看 down_revision 会把「在 head 后正常续链新增一版」也当成重放证据，
+            # 空 body 的假重放同样放行 —— 两者都不构成「补上了被改写 revision 漏跑的
+            # 效果」的证据。
+            rejected.append(path)
+            continue
+        for parent in parents:
+            exempt.setdefault(parent, path)
+    return exempt, rejected
+
+
+def _exempt_from_additions(
+    base: str, added: list[str]
+) -> tuple[dict[str, str], list[str]]:
+    """读 HEAD 侧源码后交给纯判据 `replay_exemptions`。"""
+    pairs: list[tuple[str, str]] = []
     for path in added:
         try:
-            text = _read_text("HEAD", path)
+            pairs.append((path, _read_text("HEAD", path)))
         except SystemExit:
             continue
-        for parent in parse_down_revisions(text):
-            exempt.setdefault(parent, path)
-    return exempt
+    return replay_exemptions(pairs)
 
 
 def run_check(base: str) -> int:
@@ -172,11 +223,23 @@ def run_check(base: str) -> int:
                 revision_id = None  # 基线侧缺失（改名/删除）→ 由 status 判定
         rows.append((status, path, revision_id))
 
-    exempt = _exempt_ids_from_additions(base, [p for s, p in changed if s == ADDED_STATUS])
+    exempt, rejected = _exempt_from_additions(
+        base, [p for s, p in changed if s == ADDED_STATUS],
+    )
     violations = collect_violations(rows, set(exempt))
 
     for parent_id, replay_path in sorted(exempt.items()):
-        print(f"[NOTICE] 豁免：{parent_id} 有同 PR 重放迁移 {replay_path}")
+        print(
+            f"[NOTICE] 豁免：{parent_id} 有同 PR 重放迁移 {replay_path}"
+            "（按形态豁免：down_revision 指向被改写者 + upgrade() 非空；"
+            "body 是否真是幂等自愈的「命中才写」**未验证**，仍需人看）"
+        )
+    for path in sorted(rejected):
+        print(
+            f"[NOTICE] 不据 {path} 发放豁免：它 down_revision 指向某个被改写 revision，"
+            "但 upgrade() 没有实际语句（只有 pass/docstring）——空 body 不是重放证据",
+            file=sys.stderr,
+        )
 
     if violations:
         print("")
@@ -242,10 +305,45 @@ def run_self_test() -> int:
         print(f"  [{'OK' if ok else 'FAIL'}] parse_down_revisions({text!r}) -> {sorted(got)}")
         failures += 0 if ok else 1
 
+    # 豁免判据（#2258 重开后的核心）：down_revision 指向 + upgrade() 非空，两条都要
+    empty_replay = (
+        'revision = "ccc333"\ndown_revision = "bbb222"\n\n'
+        'def upgrade() -> None:\n    """重放被改写 revision 的效果"""\n    pass\n'
+    )
+    real_replay = (
+        'revision = "ccc333"\ndown_revision = "bbb222"\n\n'
+        'def upgrade() -> None:\n'
+        '    op.execute("INSERT INTO script (name) SELECT \'x\' WHERE NOT EXISTS" )\n'
+    )
+    only_docstring = (
+        'revision = "ccc333"\ndown_revision = "bbb222"\n\n'
+        'def upgrade() -> None:\n    pass\n'
+    )
+    broken_src = 'revision = "ccc333"\ndef upgrade(:\n'
+
+    exempt, rejected = replay_exemptions([("v/ccc333.py", empty_replay)])
+    ok = exempt == {} and rejected == ["v/ccc333.py"]
+    print(f"  [{'OK' if ok else 'FAIL'}] 改写 + 只有 docstring/pass 的假重放 → 不豁免（必须红）")
+    failures += 0 if ok else 1
+
+    exempt, rejected = replay_exemptions([("v/ccc333.py", only_docstring)])
+    ok = exempt == {} and rejected == ["v/ccc333.py"]
+    print(f"  [{'OK' if ok else 'FAIL'}] 改写 + 空 body 的假重放 → 不豁免（必须红）")
+    failures += 0 if ok else 1
+
+    exempt, rejected = replay_exemptions([("v/ccc333.py", real_replay)])
+    ok = exempt == {"bbb222": "v/ccc333.py"} and rejected == []
+    print(f"  [{'OK' if ok else 'FAIL'}] 真重放（非空 body）→ 豁免并留痕（绿）")
+    failures += 0 if ok else 1
+
+    ok = not upgrade_body_is_effective(broken_src)
+    print(f"  [{'OK' if ok else 'FAIL'}] 源码解析失败 → fail-closed（不放行）")
+    failures += 0 if ok else 1
+
     if failures:
         print(f"\n[FAIL] self-test 失败 {failures} 项", file=sys.stderr)
         return 1
-    print("\n[OK] self-test 通过（分类规则与解析器红绿双向）")
+    print("\n[OK] self-test 通过（分类规则、解析器与豁免判据红绿双向）")
     return 0
 
 

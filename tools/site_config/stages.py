@@ -65,6 +65,9 @@ MONITORING_BINARIES = ("prometheus", "prometheus-node-exporter")
 PROMETHEUS_UNIT = "prometheus"
 NODE_EXPORTER_UNIT = "prometheus-node-exporter"
 SAMPLER_UNIT = "stp-mem-top.timer"
+# 退役判据守卫（#735）：与本仓自管的采样器同批安装、单独 enable。
+GUARD_SERVICE_UNIT = "stp-script-guard.service"
+GUARD_TIMER_UNIT = "stp-script-guard.timer"
 # nfs-kernel-server 提供的导出命令：S1 靠它判断 NFS 服务端是否可用。
 EXPORT_COMMAND = "exportfs"
 PROMETHEUS_RETENTION = "30d"
@@ -89,14 +92,33 @@ MONITORING_DISTRO_DEFAULTS = (
 #: 本站渲染的 Prometheus 配置（site-root 相对路径；与 prometheus.default 的
 #: `--config.file` 同源）。#2283：接管判断用它当「本站形态」的基准。
 SITE_PROMETHEUS_CONFIG = "etc/stp/prometheus/prometheus.yml"
+# 告警规则：仓库那份是唯一事实源，站点侧副本只是安装产物。#2488 之前它不在任何
+# 清单里，且 prometheus.yml 模板也没有 rule_files 段——两层缺口的净效果是
+# 「17 条规则一条没上线」，而 installer 照样报 monitoring_ready（它只看服务起没起）。
+# 现在与采样器同批安装：monitoring_site_assets() 把它纳入共享路径归属守卫，目标文件
+# 不带本站 <deploy-root> 标记时 fail-closed 报 install_conflict，不静默覆盖运维手改。
+MONITORING_RULES = (
+    (
+        "deploy/prometheus/alerts-stability-platform.yml",
+        "etc/stp/prometheus/rules/alerts-stability-platform.yml",
+        0o644,
+    ),
+)
 MONITORING_CONFIGS = (
     ("deploy/prometheus/prometheus.yml", SITE_PROMETHEUS_CONFIG, 0o644),
+    *MONITORING_RULES,
 )
 # 宿主进程内存采样器：与上面同一批安装（textfile collector 的写入端）。
 MONITORING_SAMPLER = (
     ("deploy/control-plane/node-exporter/stp-mem-top.sh", "usr/local/sbin/stp-mem-top", 0o755),
     ("deploy/control-plane/systemd/stp-mem-top.service", "etc/systemd/system/stp-mem-top.service", 0o644),
     ("deploy/control-plane/systemd/stp-mem-top.timer", "etc/systemd/system/stp-mem-top.timer", 0o644),
+    # #735：守卫的 probe 单元也在这里——否则规则与指标装了、timer 却只活在本机，
+    # 新站点依旧没有执行者（正是 24h 审计对本单提过的那个失效模式）。
+    ("deploy/control-plane/systemd/stp-script-guard.service",
+     "etc/systemd/system/stp-script-guard.service", 0o644),
+    ("deploy/control-plane/systemd/stp-script-guard.timer",
+     "etc/systemd/system/stp-script-guard.timer", 0o644),
 )
 
 NGINX_SITES = {
@@ -799,11 +821,20 @@ def stage_s2_release_env(ctx: InstallContext) -> list[Check]:
             # PASS `export_deferred`。声明只在本次运行可见（DB 的 Host 不参与），
             # 「一次带清单、后续不带」的升级序列必然踩中。
             if not rendered and _existing_export_clients(exports_file):
+                # #2315 残余（24h 审计重开）：**保留导出文件 ≠ 服务在跑**。此前该分支只追加
+                # 一条 PASS、不做任何服务侧动作，而 `enable --now nfs-server` 只在上面的
+                # else 分支——服务被停用/未拉起时，报告仍说「存储就绪」。这里补齐：拉不起来
+                # 即如实 FAIL（不以 PASS 掩盖服务未起）；文件与导出表仍保持不动。
+                if ctx.ops.run(["systemctl", "enable", "--now", NFS_SERVER_UNIT]).returncode != 0:
+                    return _safe(
+                        checks, "install_export", location="$.storage.export_to_agents",
+                        role="storage", check_id="install.s2.export",
+                    )
                 checks.append(_pass(
                     "install.s2.export", "storage", "$.storage.export_to_agents",
                     "export_kept",
                     "No Agent is declared in this run; the existing NFS export was left "
-                    "untouched (defer ≠ teardown).",
+                    "untouched (defer ≠ teardown) and the NFS server is running.",
                     "Re-run with --agents-inventory <file> (or restore the agents block in the "
                     "site input) to publish export changes; to withdraw the export entirely, "
                     "remove the exports file and run `exportfs -ra`.",
@@ -1203,6 +1234,15 @@ def stage_s4_entry(ctx: InstallContext) -> list[Check]:
                     checks, "install_monitoring", location="$.monitoring.enabled",
                     role="control_plane", check_id="install.s4.monitoring",
                 )
+        # 守卫 timer 单独 enable --now（#735）：它不参与上面"必须 restart 才吃到 $ARGS"
+        # 那段逻辑——那是发行版包在 apt 阶段自作主张拉起服务的历史包袱，本仓自管的
+        # oneshot 没有。不 enable 就等于"规则与指标都装了、没人跑"，与本单被 24h 审计
+        # 指出的失效模式同源，所以它属于安装判据本身，不是可选的收尾步骤。
+        if ctx.ops.run(["systemctl", "enable", "--now", GUARD_TIMER_UNIT]).returncode != 0:
+            return _safe(
+                checks, "install_monitoring", location="$.monitoring.enabled",
+                role="control_plane", check_id="install.s4.monitoring",
+            )
         if not await_monitoring(config.monitoring.prometheus_port):
             return _safe(
                 checks, "install_monitoring", location="$.monitoring.enabled",

@@ -16,6 +16,45 @@ os.environ.setdefault("DATABASE_URL", "sqlite:///./test-metrics-registry.db")
 ROOT = Path(__file__).resolve().parents[1]
 
 
+import ast
+import re
+
+# 本仓**自己生产**的 node-exporter textfile 指标生产者。这些指标不来自 backend
+# 注册表（独立进程），但也不能变成告警面的豁免口子——名字从生产者源码里静态
+# 提取：生产者删掉一个名字，用它的告警立刻退化为「未知指标」而红。
+_TEXTFILE_PRODUCERS = ("tools/dev/script_guard_probe.py",)
+_TEXTFILE_HELP_ATTR = "_METRIC_HELP"
+_METRIC_NAME_RE = re.compile(r"[a-zA-Z_:][a-zA-Z0-9_:]*")
+
+
+def textfile_metric_index(root: Path = ROOT) -> dict[str, set[str]]:
+    """提取 textfile 生产者声明的指标名（标签集恒为空：本仓产物无标签）。"""
+    index: dict[str, set[str]] = {}
+    for rel in _TEXTFILE_PRODUCERS:
+        path = root / rel
+        if not path.is_file():
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Assign):
+                continue
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == _TEXTFILE_HELP_ATTR:
+                    if not isinstance(node.value, ast.Dict):
+                        continue
+                    for key in node.value.keys:
+                        if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
+                            continue
+                        name = key.value
+                        if not _METRIC_NAME_RE.fullmatch(name):
+                            # 结构变了（HELP 文案被当成 key 之类）就明说，不把垃圾名
+                            # 塞进 index——那会把「未知指标」伪装成「已知」而假绿。
+                            raise AssertionError(
+                                f"{rel}: {name!r} 不是合法指标名——检查 {_TEXTFILE_HELP_ATTR} 的结构")
+                        index.setdefault(name, set())
+    return index
+
+
 def metric_registry_index() -> tuple[dict[str, set[str]], set[str]]:
     """(样本名→标签名集合, 不可查询的基础名集合)。
 
@@ -45,4 +84,10 @@ def metric_registry_index() -> tuple[dict[str, set[str]], set[str]]:
         and any(f"{base}{suffix}" in index for suffix in ("_bucket", "_sum", "_count"))
     }
     assert index, "指标注册表为空——backend.core.metrics 未注册任何指标"
+    external = textfile_metric_index()
+    assert external, (
+        "textfile 生产者清单非空却没解析出任何指标名——"
+        "生产者里 _METRIC_HELP 的结构变了，请更新 textfile_metric_index()")
+    for name, labels in external.items():
+        index.setdefault(name, set()).update(labels)
     return index, non_queryable
