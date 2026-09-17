@@ -40,13 +40,24 @@ Class: architecture
 | `complete_job` | Job → Lease | `agent_api.py`：Job `FOR UPDATE` → `release_lease` |
 | `extend_leases_batch` → `_cas_renew_leases` | Job → Lease | Job `ORDER BY id FOR UPDATE` → CAS `UPDATE device_leases` |
 | `extend_job_lock` | Job → Lease | `#1980` 修正为 Job `FOR UPDATE` → `extend_lease` |
-| `_reconcile_expired_leases` / `_reconcile_stale_unknown_jobs` | Job → Lease | `#1959` 修正 |
+| `_reconcile_expired_leases` / `_reconcile_stale_unknown_jobs` | Job → Lease | `#1959` 修正；`#2531` 起一轮多解，候选按 `job_id` 升序（与 `extend_leases_batch` 同一全序）|
 | `recycler` PENDING/RUNNING 超时 | Job → Lease | 逐 job savepoint → `release_lease` |
 | `recovery_sync`（`#2015` 修正） | Job → Lease → Device | 原为 `Lease → Job → Device`——09-15 生产死锁复现 60 次的环侧（Agent 重启落在续租 tick 内），见下 |
 | `acquire_lease` / `claim` | Job → Host → Lease | 不取 plan_run |
 | `run_retention_cleanup`（`#2022` 修正） | Job → Lease → plan_run | 原为 `plan_run → Lease/Job`，见下 |
 
 **`plan_run` × `job_instance`（I2）**
+
+> `#2531` 的增量核对（不改顺序，只改**事务边界**）：租约回收器原先「一候选一 tick」
+> （Phase 2 / stale 分支处理一条就 `break`），收口速率被钉在 1 台 / `RECONCILER_INTERVAL_SECONDS`
+> （≈4 台/分钟）。现在一轮最多排空 `RECONCILER_DRAIN_BATCH` 条，但**仍是「一候选一个事务边界」**：
+> 每条候选的 savepoint 释放后立刻为它 `on_job_terminal`（其内部先提交父终态再触发链式派发，#986），
+> 于是 I1/I2/I3 的持锁窗口从不跨候选叠加——锁在每条候选提交时即释放，等待方看到的是更短的窗口，
+> 而不是更长的。跨候选的顺序由 `job_id` 升序保证，与 `extend_leases_batch` 的
+> `WHERE id IN (...) ORDER BY id FOR UPDATE` 同序，因此批量不会新引入环路等待。
+> 回归钉子：`test_reconciler_phase2_commits_each_candidate_independently`（后序候选被行锁堵住时，
+> 前序候选必须已可读为终态）——它判的就是「有没有退化回尾部统一提交」这种直白放大。
+
 
 | 路径 | 顺序 | 位置 |
 |---|---|---|

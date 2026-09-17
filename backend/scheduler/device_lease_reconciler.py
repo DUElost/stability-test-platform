@@ -7,6 +7,10 @@ Two-phase lease expiry:
   Phase 1: RUNNING + expired-ACTIVE-lease → UNKNOWN (lease stays ACTIVE, device blocked)
   Phase 2: UNKNOWN + grace expired → release_lease + FAILED
 
+Phase 2 (and the stale-UNKNOWN check) drains up to ``RECONCILER_DRAIN_BATCH``
+candidates per tick, one transaction each (#2531 — the shape was one candidate
+per tick, i.e. a hard 1 device / ``reconciler_interval_seconds`` ceiling).
+
 Also handles:
   - Stale UNKNOWN jobs whose lease is already gone
   - Terminal jobs with lingering ACTIVE leases (D5)
@@ -22,14 +26,16 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 import sqlalchemy.exc
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.dialects.postgresql import TIMESTAMP
 
 from backend.core.database import AsyncSessionLocal
 from backend.core.metrics import (
     reconciler_runs,
     reconciler_actions,
+    reconciler_unknown_backlog,
 )
+from backend.core.settings.scheduler import get_scheduler_settings
 from backend.models.device_lease import DeviceLease
 from backend.models.enums import JobStatus, LeaseStatus, LeaseType
 from backend.models.job import JobInstance
@@ -61,6 +67,10 @@ _FINAL_STATUSES: set[str] = {
 async def _reconcile_expired_leases(db) -> tuple[int, int, int]:
     """Process all expired ACTIVE JOB leases.
 
+    Phase 2（UNKNOWN 过宽限 → 释放 + 终态化）单轮最多排空
+    ``RECONCILER_DRAIN_BATCH`` 条候选（#2531），一候选一事务边界；上限外的
+    余下候选留待下一 tick，并由 ``reconciler_drain_truncated`` 日志读数暴露。
+
     Returns (unknown_count, failed_count, terminal_released_count).
     """
     now = datetime.now(timezone.utc)
@@ -89,12 +99,25 @@ async def _reconcile_expired_leases(db) -> tuple[int, int, int]:
     unknown_count = 0
     failed_count = 0
     terminal_released_count = 0
-    # #1172: on_job_terminal 自管理提交（#986 契约：聚合后先提交父终态再
-    # 触发链式派发）——不能在 begin_nested 内调用。savepoint 提交后由
-    # 函数尾部统一终态化并返回；其余候选留待下轮 tick。
-    terminalize: JobInstance | None = None
+    # #2531: 单轮排空上限。计数只算「走到 Phase 2 终态化」的候选——Phase 1
+    # （RUNNING→UNKNOWN）与孤儿/D5 分支本来就不设预算，也不能被挤掉（今天
+    # 它们一轮就吃掉 25 台）。上限到达后余下候选留待下轮，并打
+    # ``reconciler_drain_truncated`` 读数。
+    drain_batch = get_scheduler_settings().reconciler_drain_batch
+    drained = 0
+    left_after_cap = 0
 
-    for candidate in ordered:
+    for index, candidate in enumerate(ordered):
+        if drained >= drain_batch:
+            left_after_cap = len(ordered) - index
+            break
+        # #1172/#986: on_job_terminal 自管理提交（聚合后先提交父终态再触发链式
+        # 派发）——**不得**在 begin_nested 内调用。#1172 当时的做法是「savepoint
+        # 释放后由函数尾部终态化一次，其余候选下轮 tick」，代价就是 #2531 的
+        # 4 台/分钟。现在的做法是**一候选一事务边界**：savepoint 一释放就立刻
+        # 为该候选终态化，于是每个候选的「Job 终态 + 计数 + 聚合」自成一个提交，
+        # 既不跨候选混交父终态化，也不必把整轮押在最后一条上。
+        terminalize: JobInstance | None = None
         try:
             async with db.begin_nested():
                 # 锁序：Job → Lease（见上方 #1959 说明）。candidate 来自预扫描，
@@ -201,11 +224,14 @@ async def _reconcile_expired_leases(db) -> tuple[int, int, int]:
                                 job, JobStatus.FAILED, "unknown_grace_timeout",
                             )
                             await db.flush()
-                            terminalize = job  # savepoint 提交后统一终态化
+                            terminalize = job  # 退出 savepoint 后立刻为该候选终态化
                         except InvalidTransitionError:
                             pass
                     # else: still within grace — do nothing
-                    break  # 事务交由函数尾部终态化（#1172）
+                    # #2531: 此处历史上是 ``break``——「已处理一条就收尾」才是
+                    # 12s/台的唯一成因。UNKNOWN 候选之间没有共享状态，收尾一条
+                    # 并没有换来任何不变量，只换来 O(N) 的收口时长。
+                    # 不 ``continue``：要走到 try/except 之后的终态化。
 
                 # Other statuses (PENDING, etc.) — skip
         except Exception:
@@ -213,13 +239,38 @@ async def _reconcile_expired_leases(db) -> tuple[int, int, int]:
                 "reconciler_expired_lease_failed lease=%s device=%s job=%s",
                 candidate.id, candidate.device_id, candidate.job_id,
             )
+            # 该候选的 savepoint 已回滚：不得拿 ``terminalize`` 去聚合一个
+            # 并不存在的终态写入，直接处理下一个候选。
+            continue
 
-    if terminalize is not None:
-        await PlanAggregator.on_job_terminal(terminalize, db)
+        if terminalize is None:
+            continue
+        try:
+            await PlanAggregator.on_job_terminal(terminalize, db)
+        except Exception:
+            # 终态化失败（父聚合/链式派发那一段）把外层事务打成 aborted——
+            # 继续往下只会让余下每个候选都撞一次 ``InFailedSqlTransaction``。
+            # 回滚并收尾：已提交的候选保持不动，未提交的（含本条）下轮重来。
+            logger.exception(
+                "reconciler_drain_terminalize_failed check=expired_leases job=%s",
+                terminalize.id,
+            )
+            await db.rollback()
+            left_after_cap = max(left_after_cap, len(ordered) - index - 1)
+            break
+        drained += 1
         failed_count += 1
         logger.warning(
-            "reconciler_unknown_grace_released device=%s job=%s ended_at=%s",
+            "reconciler_unknown_grace_released device=%s job=%s ended_at=%s drained=%d/%d",
             terminalize.device_id, terminalize.id, terminalize.ended_at,
+            drained, drain_batch,
+        )
+
+    if left_after_cap:
+        logger.warning(
+            "reconciler_drain_truncated check=expired_leases drained=%d "
+            "remaining=%d drain_batch=%d",
+            drained, left_after_cap, drain_batch,
         )
 
     return unknown_count, failed_count, terminal_released_count
@@ -233,23 +284,37 @@ async def _reconcile_stale_unknown_jobs(db) -> int:
     """Finalize UNKNOWN jobs past grace whose ACTIVE lease has already
     been released (e.g. by watchdog before it was disabled, or by a prior
     Reconciler pass that failed to transition the job).
+
+    与 ``_reconcile_expired_leases`` 的 Phase 2 同形：单轮最多排空
+    ``RECONCILER_DRAIN_BATCH`` 条（#2531），候选按 ``job_instance.id`` 升序取锁。
     """
     now = datetime.now(timezone.utc)
     grace_deadline = now - timedelta(seconds=_UNKNOWN_GRACE_SECONDS)
 
+    # #2531: 批量后排锁序——候选按 id 升序，与 ``extend_leases_batch``
+    # （``WHERE id IN (...) ORDER BY id FOR UPDATE``）同一全序；原先一候选一事务
+    # 时顺序无关紧要，一轮多解后它就决定会不会互等。
     stale = (await db.execute(
         select(JobInstance).where(
             JobInstance.status == JobStatus.UNKNOWN.value,
             JobInstance.ended_at.is_not(None),
             JobInstance.ended_at < grace_deadline,
         )
+        .order_by(JobInstance.id)
     )).scalars().all()
 
     failed = 0
-    # #1172: on_job_terminal 自管理提交（#986 契约）——不在 begin_nested 内
-    # 调用；savepoint 提交后由函数尾部统一终态化，其余候选下轮 tick 处理。
-    terminalize: JobInstance | None = None
-    for candidate in stale:
+    drain_batch = get_scheduler_settings().reconciler_drain_batch
+    drained = 0
+    left_after_cap = 0
+    for index, candidate in enumerate(stale):
+        if drained >= drain_batch:
+            left_after_cap = len(stale) - index
+            break
+        # #1172/#986: 不在 begin_nested 内调用 on_job_terminal。#2531 把「函数尾部
+        # 终态化一次 + break」改成「一候选一事务边界」：savepoint 一释放就为该候选
+        # 终态化，其余候选不再押在同一轮收尾上。
+        terminalize: JobInstance | None = None
         try:
             async with db.begin_nested():
                 job = (await db.execute(
@@ -286,19 +351,39 @@ async def _reconcile_stale_unknown_jobs(db) -> int:
                     terminalize = job
                 except InvalidTransitionError:
                     pass
-                break  # 事务交由函数尾部终态化（#1172）
+                # #2531: 原为 ``break``（同上，一候选一 tick）。
         except Exception:
             logger.exception(
                 "reconciler_stale_unknown_failed device=%s job=%s",
                 candidate.device_id, candidate.id,
             )
+            continue
 
-    if terminalize is not None:
-        await PlanAggregator.on_job_terminal(terminalize, db)
+        if terminalize is None:
+            continue
+        try:
+            await PlanAggregator.on_job_terminal(terminalize, db)
+        except Exception:
+            logger.exception(
+                "reconciler_drain_terminalize_failed check=stale_unknown job=%s",
+                terminalize.id,
+            )
+            await db.rollback()
+            left_after_cap = max(left_after_cap, len(stale) - index - 1)
+            break
+        drained += 1
         failed += 1
         logger.warning(
-            "reconciler_stale_unknown_finalized device=%s job=%s ended_at=%s",
+            "reconciler_stale_unknown_finalized device=%s job=%s ended_at=%s drained=%d/%d",
             terminalize.device_id, terminalize.id, terminalize.ended_at,
+            drained, drain_batch,
+        )
+
+    if left_after_cap:
+        logger.warning(
+            "reconciler_drain_truncated check=stale_unknown drained=%d "
+            "remaining=%d drain_batch=%d",
+            drained, left_after_cap, drain_batch,
         )
 
     return failed
@@ -649,6 +734,68 @@ async def _reconcile_aborted_running_jobs(db) -> tuple[int, list[dict]]:
 _reconcile_lock = asyncio.Lock()
 
 
+# #2531：UNKNOWN 积压的分桶口径（gauge 标签基数恒定 = 3）。
+_UNKNOWN_BACKLOG_STATES = ("grace_expired", "within_grace", "missing_ended_at")
+
+
+async def _record_unknown_backlog() -> dict[str, int]:
+    """写 UNKNOWN 积压读数（gauge + 日志），返回各桶计数。
+
+    为什么单独一条只读查询、而不是复用四条检查的返回值：收口速率改成离散的
+    「一轮最多 ``RECONCILER_DRAIN_BATCH`` 台」之后，「还剩多少台卡在 UNKNOWN」
+    不再能从增量计数器（`reconciler_actions`）推出来。分三桶是因为三桶的运维
+    含义不同：
+
+    - ``grace_expired``：已过宽限、**等着被解锁**的台数——除以上限就是还要几轮；
+    - ``within_grace``：还在宽限期内（正常待收口，不是积压）；
+    - ``missing_ended_at``：``ended_at`` 为空的 UNKNOWN——两条回收路径的判据都要
+      ``ended_at``（``_reconcile_expired_leases`` 的 grace 判据、
+      ``_reconcile_stale_unknown_jobs`` 的扫描条件），所以这一桶**永远不会自己
+      变好**。它必须与 ``grace_expired`` 一起出现：只报前者会把「写坏了时钟的
+      死行」计成「还在宽限期」，读数直接失真。
+    """
+    counts = dict.fromkeys(_UNKNOWN_BACKLOG_STATES, 0)
+    try:
+        now = datetime.now(timezone.utc)
+        grace_deadline = now - timedelta(seconds=_UNKNOWN_GRACE_SECONDS)
+        bucket = case(
+            (JobInstance.ended_at.is_(None), "missing_ended_at"),
+            (JobInstance.ended_at < grace_deadline, "grace_expired"),
+            else_="within_grace",
+        ).label("bucket")
+        async with AsyncSessionLocal() as db:
+            rows = (await db.execute(
+                select(bucket, func.count())
+                .where(JobInstance.status == JobStatus.UNKNOWN.value)
+                .group_by(bucket)
+            )).all()
+        for name, value in rows:
+            if name in counts:
+                counts[str(name)] = int(value)
+        for name in _UNKNOWN_BACKLOG_STATES:
+            reconciler_unknown_backlog.labels(state=name).set(counts[name])
+
+        interval = get_scheduler_settings().reconciler_interval_seconds
+        drain_batch = get_scheduler_settings().reconciler_drain_batch
+        expired = counts["grace_expired"]
+        # 上界估算：只算「现在开始排空」需要的轮数 × 周期，不含宽限期本身，
+        # 也不含链式派发/锁等待的抖动——运维口径是「至少还要这么久」，
+        # 不是承诺值，日志里按 ``eta_min`` 明说。
+        ticks = -(-expired // drain_batch) if expired else 0
+        level = logger.warning if (expired or counts["missing_ended_at"]) else logger.info
+        level(
+            "reconciler_unknown_backlog grace_expired=%d within_grace=%d "
+            "missing_ended_at=%d drain_batch=%d interval_seconds=%d "
+            "eta_min_seconds=%d",
+            expired, counts["within_grace"], counts["missing_ended_at"],
+            drain_batch, interval, ticks * interval,
+        )
+    except Exception:
+        # 读数是旁路：不得让一次统计查询的失败把对账 tick 变成 error。
+        logger.debug("reconciler_unknown_backlog_failed", exc_info=True)
+    return counts
+
+
 async def device_lease_reconcile_once() -> None:
     """Run all reconciler checks in a fixed order.
 
@@ -665,6 +812,8 @@ async def device_lease_reconcile_once() -> None:
 
     async with _reconcile_lock:
         await _reconcile_checks()
+        # 四条检查各自的事务都已收尾，此时的积压才是「下一轮要面对什么」。
+        await _record_unknown_backlog()
 
 
 async def _reconcile_checks() -> None:
