@@ -712,16 +712,27 @@ def run_retention_cleanup() -> None:
                 for job_id in job_ids
             }
 
-            stale_job_ids = select(JobInstance.id).where(
-                JobInstance.plan_run_id.in_(safe_run_ids)
-            )
+            # #2444：`stale_job_ids` **必须在使用点重建**，不能在批次收缩前构造一次。
+            #
+            # 下面有**两次**把 `safe_run_ids` 重绑定为新列表的收缩（unassigned 目录
+            # 清理失败、run 目录 purge 失败）。而 `in_(safe_run_ids)` 在**构造时**就把
+            # 列表**复制**进参数（实测：SQLAlchemy 持有的列表对象与传入者**不是同一个**），
+            # 故此后无论重绑定名字还是原地改列表，旧子查询**都不会反映收缩**——
+            # 被推迟（本轮不删）的 run，其 job 维子行仍会照删，留下
+            # 「run/job_instance 行在、子行全空」的壳（推迟原因若长期存在，壳亦长期存在）。
+            #
+            # 故改为**函数**：每个使用点现取当前 `safe_run_ids`。
+            def _stale_job_ids():
+                return select(JobInstance.id).where(
+                    JobInstance.plan_run_id.in_(list(safe_run_ids))
+                )
 
             # #2262：devices/unassigned/{event_id}/ 不随 run 分桶（关联只填 plan_run_id、
             # 不搬文件），run 级 purge 命中不到 → 与行删除同批清理，把增长限制在保留期内。
             # 单独一轮「先文件后行」：它的失败同样让所属 run 出批，且先于下面的 run/job
             # 目录回收——出批的 run 随后不会被清掉任何目录。
             unassigned_failed = purge_unassigned_event_dirs(
-                _collect_unassigned_dirs(db, safe_run_ids, stale_job_ids, job_run_of)
+                _collect_unassigned_dirs(db, safe_run_ids, _stale_job_ids(), job_run_of)
             )
             if unassigned_failed:
                 safe_run_ids, deferred_ancestors = _retention_safe_ids(
@@ -776,16 +787,16 @@ def run_retention_cleanup() -> None:
 
             # FK order: child tables first
             db.query(StepTrace).filter(
-                StepTrace.job_id.in_(stale_job_ids)
+                StepTrace.job_id.in_(_stale_job_ids())
             ).delete(synchronize_session=False)
             db.query(DeviceLease).filter(
-                DeviceLease.job_id.in_(stale_job_ids)
+                DeviceLease.job_id.in_(_stale_job_ids())
             ).delete(synchronize_session=False)
             db.query(ResourceAllocation).filter(
-                ResourceAllocation.job_instance_id.in_(stale_job_ids)
+                ResourceAllocation.job_instance_id.in_(_stale_job_ids())
             ).delete(synchronize_session=False)
             db.query(JobArtifact).filter(
-                JobArtifact.job_id.in_(stale_job_ids)
+                JobArtifact.job_id.in_(_stale_job_ids())
             ).delete(synchronize_session=False)
 
             # #781: job_log_signal.job_id / device_log_event.{job,plan_run}_id
@@ -794,12 +805,12 @@ def run_retention_cleanup() -> None:
             # 可见，且是 #729 幽灵 /complete 404 的跨保留窗口来源之一）。
             # 先 signal 再 event：signal.device_log_event_id 亦为 SET NULL。
             db.query(JobLogSignal).filter(
-                JobLogSignal.job_id.in_(stale_job_ids)
+                JobLogSignal.job_id.in_(_stale_job_ids())
             ).delete(synchronize_session=False)
             db.query(DeviceLogEvent).filter(
                 or_(
                     DeviceLogEvent.plan_run_id.in_(safe_run_ids),
-                    DeviceLogEvent.job_id.in_(stale_job_ids),
+                    DeviceLogEvent.job_id.in_(_stale_job_ids()),
                 )
             ).delete(synchronize_session=False)
 

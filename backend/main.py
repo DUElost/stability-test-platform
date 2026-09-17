@@ -292,6 +292,16 @@ async def _lifespan_cleanup(scheduler) -> None:
         shutdown_console_registry()
     except Exception:
         logger.exception("console_registry_close_failed")
+    # #2447：撤销待执行的 dashboard 摘要 flush——关闭窗口里再触发一次全量聚合 + 广播
+    # 没有收益，只会在引擎/DB 正在关闭时刷错误日志。
+    try:
+        from backend.services.dashboard_summary_publisher import (
+            shutdown_dashboard_summary_publisher,
+        )
+
+        shutdown_dashboard_summary_publisher()
+    except Exception:
+        logger.exception("dashboard_summary_publisher_shutdown_failed")
     # ADR-0026: pump 随进程退出 — 立即撤销就绪标记,防止 shutdown 窗口内
     # 新的 V2 QUEUED 产生却无人准入。
     from backend.core.admission_queue import mark_queue_pump_ready

@@ -83,8 +83,10 @@ export default function Dashboard() {
     refetchInterval: 60000,
   });
   // #2364：风险卡的失败原因要能区分（超时/网络 vs 服务端），而不是只有「加载失败」
+  // #2447：notFound 只给「接口不存在…」——此前写成完整句「风险接口不存在」，调用方
+  // 又拼前缀，渲染出「风险分布风险接口不存在」；网络/服务端分支同样被拼成病句。
   const riskErrorCopy = loadErrorCopy(riskError, {
-    notFound: '风险接口不存在（前端与后端版本不一致？）',
+    notFound: '接口不存在（前端与后端版本不一致？）',
   });
 
   const hostStats = summary?.hosts ?? {
@@ -368,8 +370,14 @@ export default function Dashboard() {
                   风险分布
                 </CardTitle>
               </CardHeader>
-              {/* #2364：分类文案——超时（后端繁忙）与网络层指向不同排查方向 */}
-              <InlineError message={`风险分布${riskErrorCopy.description}`} onRetry={() => void refetchRisk()} />
+              {/* #2364：分类文案——超时（后端繁忙）与网络层指向不同排查方向
+                  #2447：前缀统一为「风险分布加载失败：」，与各分支文案都成句；
+                  404 时 loadErrorCopy 给 retryable:false，重试没有意义 → 不给按钮
+                  （与 PlanRunDetailPage 同口径）。 */}
+              <InlineError
+                message={`风险分布加载失败：${riskErrorCopy.description}`}
+                onRetry={riskErrorCopy.retryable ? () => void refetchRisk() : undefined}
+              />
             </Card>
           ) : (
             <div className="space-y-2">

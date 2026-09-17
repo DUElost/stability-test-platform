@@ -291,3 +291,32 @@ describe('DeviceDetailDrawer — a11y / 键盘', () => {
     expect(screen.getByTestId('device-drawer-exit-btn')).toBeInTheDocument();
   });
 });
+
+/**
+ * #2420（第 5 项）：抽屉里的时间曾直接铺后端裸 ISO（`2026-05-08T12:00:00Z`），
+ * 而**同一页面页头**显示 `05/08 20:00` —— 一屏两套口径、差 8 小时（同族缺陷
+ * 见 #2265 / #2358）。判据：走页头同一个 formatDateTimeShort，且空值仍是「—」。
+ */
+describe('DeviceDetailDrawer 时间口径（#2420）', () => {
+  function valueOf(label: string): string {
+    const dt = screen.getByText(label);
+    return (dt.parentElement as HTMLElement).textContent ?? '';
+  }
+
+  it('开始时间/最近心跳不再是裸 ISO UTC 串', async () => {
+    render_(<DeviceDetailDrawer device={makeDevice()} {...handlers} />);
+    await screen.findByText('开始时间');
+    for (const label of ['开始时间', '最近心跳', '结束时间', '下次重试']) {
+      const text = valueOf(label);
+      expect(text).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+    }
+    expect(valueOf('开始时间')).toMatch(/\d{2}\/\d{2}\s+\d{2}:\d{2}/);
+  });
+
+  it('空时间仍显示占位「—」，不显示 1970 之类的误解析', async () => {
+    render_(<DeviceDetailDrawer device={makeDevice({ ended_at: null, next_retry_at: null })} {...handlers} />);
+    await screen.findByText('结束时间');
+    expect(valueOf('结束时间')).toContain('—');
+    expect(valueOf('下次重试')).toContain('—');
+  });
+});
