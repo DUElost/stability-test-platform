@@ -6,14 +6,12 @@ Authentication: X-Agent-Secret header (compared to AGENT_SECRET env var).
 import json
 import hashlib
 import logging
-import os
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
@@ -21,8 +19,8 @@ from backend.api.response import ApiResponse, ok
 from backend.api.error_helpers import raise_api_http_error
 from backend.core.agent_secret import AgentSecretNotConfiguredError, require_agent_secret
 from backend.core.database import get_async_db, get_db
-from backend.models.enums import JobStatus, LeaseType
-from backend.models.host import Device, Host
+from backend.models.enums import JobStatus
+from backend.models.host import Host
 from backend.models.device_lease import DeviceLease
 from backend.models.job import JobInstance
 from backend.api.routes.auth import get_current_active_user
@@ -102,6 +100,17 @@ from backend.services.agent_upgrade_gate import (
 from backend.services.agent_upgrade_gate import (  # noqa: F401
     _raise_upgrade_gate_http,
 )
+from backend.services.agent_job_heartbeat import (
+    _ExtendLockIn,
+    _JobHeartbeatIn,
+    extend_agent_job_lock,
+    record_agent_job_heartbeat,
+)
+from backend.services.agent_job_heartbeat import (  # noqa: F401
+    ExtendLockIn,
+    JobHeartbeatIn,
+    _DEVICE_LOCK_LEASE_SECONDS,
+)
 from backend.services.agent_host_heartbeat import (  # noqa: F401
     BackpressureInfo,
     _get_backpressure,
@@ -130,23 +139,21 @@ from backend.services.agent_lease_extend import (  # noqa: F401
     _parse_progress_ts,
 )
 from backend.services.agent_completion import (
-    _RUN_TO_JOB,
     _RunCompleteIn,
     _get_valid_runtime_lease,
     complete_agent_job,
 )
 from backend.services.agent_completion import (  # noqa: F401
+    _RUN_TO_JOB,
     _apply_watcher_summary,
     _bridge_reconciler_metrics,
 )
 from backend.realtime.socketio_server import broadcast_plan_run_status, broadcast_run_job_update
-from backend.services.lease_manager import extend_lease
 from backend.services.reconciler import reconcile_step_traces
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/agent", tags=["agent"])
 
-_DEVICE_LOCK_LEASE_SECONDS = int(os.getenv("DEVICE_LOCK_LEASE_SECONDS", "600"))
 # NOTE: UNKNOWN is intentionally excluded — it is a transient recovery state,
 # not a terminal one.  Valid transitions are UNKNOWN→RUNNING (grace recovery)
 # or UNKNOWN→FAILED (grace expiry).  ``complete_job()``'s runtime-lease gate
@@ -340,16 +347,6 @@ async def agent_heartbeat(
 # ── RunStatus→JobStatus mapping for compat endpoints ─────────────────────────
 
 
-class _JobHeartbeatIn(BaseModel):
-    status: str = "RUNNING"
-    started_at: Optional[str] = None
-    fencing_token: str  # ADR-0019 Phase 2b: 必填
-
-
-class _ExtendLockIn(BaseModel):
-    fencing_token: str  # ADR-0019 Phase 2b: 必填
-
-
 class _StepStatusIn(BaseModel):
     status: str
     started_at: Optional[str] = None
@@ -370,35 +367,7 @@ async def job_heartbeat(
     _=Depends(_verify_agent),
 ):
     """Keep an already claimed RUNNING job alive."""
-    job = await db.get(JobInstance, job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="job not found")
-
-    # ADR-0019 Phase 4b: validate fencing_token via _get_valid_runtime_lease
-    valid_lease = await _get_valid_runtime_lease(
-        db,
-        job,
-        payload.fencing_token,
-        allowed_job_statuses={JobStatus.RUNNING.value},
-    )
-    if valid_lease is None:
-        raise HTTPException(status_code=409, detail="invalid or expired fencing_token")
-
-    target = _RUN_TO_JOB.get(payload.status.upper(), JobStatus.RUNNING)
-    if target != JobStatus.RUNNING:
-        raise_api_http_error(
-            status_code=409,
-            code="TERMINAL_STATUS_REQUIRES_COMPLETE",
-            message="job heartbeat cannot finalize a job; use /complete",
-        )
-    now = datetime.now(timezone.utc)
-    if job.status == JobStatus.RUNNING.value:
-        if not job.started_at:
-            job.started_at = now
-        job.updated_at = now
-
-    await db.commit()
-    return ok({"job_id": job_id, "status": job.status})
+    return ok(await record_agent_job_heartbeat(db, job_id, payload))
 
 
 @router.post("/jobs/{job_id}/complete", response_model=ApiResponse[dict])
@@ -420,36 +389,7 @@ async def extend_job_lock(
     _=Depends(_verify_agent),
 ):
     """Extend device lock lease for a running job."""
-    # #1980：先锁 Job 行，再碰 Lease —— 与 complete_job / extend_leases_batch /
-    # _reconcile_expired_leases 保持同一全序（Job → Lease）。原先用 db.get 无锁读 Job，
-    # 随后 extend_lease 先 UPDATE device_leases、直到 job.updated_at 才 UPDATE
-    # job_instance，即 Lease → Job；与上述路径交错会形成环路等待。
-    job = (await db.execute(
-        select(JobInstance)
-        .where(JobInstance.id == job_id)
-        .with_for_update()
-    )).scalars().first()
-    if job is None:
-        raise HTTPException(status_code=404, detail="job not found")
-
-    device = await db.get(Device, job.device_id)
-    if device is None:
-        raise HTTPException(status_code=404, detail="device not found")
-
-    # ADR-0019 Phase 4b: validate fencing_token via _get_valid_runtime_lease
-    valid_lease = await _get_valid_runtime_lease(db, job, payload.fencing_token)
-    if valid_lease is None:
-        raise HTTPException(status_code=409, detail="invalid or expired fencing_token")
-
-    renewed = await extend_lease(db, job.device_id, job_id, LeaseType.JOB, _DEVICE_LOCK_LEASE_SECONDS)
-    if not renewed:
-        raise HTTPException(status_code=409, detail="device locked by another job")
-
-    now = datetime.now(timezone.utc)
-    job.updated_at = now
-    await db.commit()
-    expires_at = now + timedelta(seconds=_DEVICE_LOCK_LEASE_SECONDS)
-    return ok({"job_id": job_id, "expires_at": expires_at.isoformat()})
+    return ok(await extend_agent_job_lock(db, job_id, payload))
 # ── Batch lease renew (ADR-0019 / ADR-0026) ───────────────────────────────
 
 
