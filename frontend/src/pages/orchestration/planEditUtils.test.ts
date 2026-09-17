@@ -189,6 +189,34 @@ describe('planEditUtils', () => {
     });
   });
 
+  describe('墙钟未配置往返（#2454）', () => {
+    const planWithoutWallClock: Plan = {
+      ...basePlan,
+      steps: basePlan.steps!.map((s, i) => (i === 0 ? { ...s, timeout_seconds: null } : s)),
+    };
+
+    it('rebuildLifecycleFromPlan 不把 NULL 折成具体秒数', () => {
+      const lc = rebuildLifecycleFromPlan(planWithoutWallClock);
+      // 折成 30 会让「打开 + 保存」把「未配置」钉死成 30：脏检查/保存都是整行替换
+      expect(lc.lifecycle.init![0]).not.toHaveProperty('timeout_seconds');
+    });
+
+    it('保存路径仍发 null（后端按「未配置」落库，回到回落链）', () => {
+      const steps = buildStepsForApi(rebuildLifecycleFromPlan(planWithoutWallClock));
+      expect(steps.find((s) => s.step_key === 'step_init_1')?.timeout_seconds).toBeNull();
+    });
+
+    it('显式配置的秒数原样往返（0 = 不限，不得折成默认）', () => {
+      const planWithZero: Plan = {
+        ...basePlan,
+        steps: basePlan.steps!.map((s, i) => (i === 0 ? { ...s, timeout_seconds: 0 } : s)),
+      };
+      const lc = rebuildLifecycleFromPlan(planWithZero);
+      expect(lc.lifecycle.init![0].timeout_seconds).toBe(0);
+      expect(buildStepsForApi(lc)[0].timeout_seconds).toBe(0);
+    });
+  });
+
   describe('draftSnapshot / planDraftSnapshot（#966/#967）', () => {
     const draft = (over: Partial<PlanFormDraft> = {}): PlanFormDraft => ({
       name: 'Smoke',

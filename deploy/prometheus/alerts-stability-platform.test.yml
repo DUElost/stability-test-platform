@@ -279,3 +279,117 @@ tests:
         exp_annotations:
           summary: SAQ queue backlog exceeds 50
           description: Post-completion / notification tasks are piling up.  Check Redis connectivity and SAQ worker concurrency.
+
+  # ---- #735 退役守卫（textfile 指标，生产者 tools/dev/script_guard_probe.py）----
+  # 数值刻意选在「阈值上方一点、任何被抬高的阈值下方」：due=3 既能证明 `> 0` 有牙，
+  # 又会在逐条变异（阈值→1e12）时不再触发，让 test_promtool_gate_detects_per_rule_threshold_drift
+  # 能归因到本告警。`for: 7d` 用 interval 1h 覆盖（201 点 = 201h > 7d）。
+  - interval: 1m
+    input_series:
+      - series: 'stp_script_guard_due'
+        values: '3x12100'
+      - series: 'stp_script_guard_broken'
+        values: '0x12100'
+      - series: 'stp_script_guard_unknown'
+        values: '0x12100'
+      # 巨大的 last_run：让 time() - last_run 始终为负，Untrusted 不因本块误触发
+      - series: 'stp_script_guard_last_run'
+        values: '99999999999x12100'
+    alert_rule_test:
+      # 6 天还在 for: 7d 之外——不得提前告警（否则「时间窗被改坏」看不见）
+      - eval_time: 145h
+        alertname: StabilityScriptGuardRetirementDue
+        exp_alerts: []
+      - eval_time: 170h
+        alertname: StabilityScriptGuardRetirementDue
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: 脚本退役守卫发现待授权退役版本
+              description: >-
+                stp_script_guard_due 连续 7 天大于 0。退役是人工授权动作：先跑
+                tools/dev/retire_script_versions.py plan 出 manifest，复核后 execute --yes。
+                巡检任务永不写库，due 也不得被当成自动退役的许可。
+
+  # 工具崩了／事实不可得／指标陈旧／指标消失——四种不可信形态同属一条告警：本块只喂 broken=1
+  - interval: 1m
+    input_series:
+      - series: 'stp_script_guard_due'
+        values: '0x12100'
+      - series: 'stp_script_guard_broken'
+        values: '1x12100'
+      - series: 'stp_script_guard_unknown'
+        values: '0x12100'
+      - series: 'stp_script_guard_last_run'
+        values: '99999999999x12100'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: StabilityScriptGuardUntrusted
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: 脚本退役守卫不可信（崩溃／事实不可得／停摆）
+              description: >-
+                broken=1（工具自身异常）、unknown=1（执行事实维度不可得）或 last_run 超过 48
+                小时未更新／指标消失。此时 due 的读数没有意义，不得据此退役任何版本：先修
+                probe 或判据端，并确认 stp-script-guard.timer 仍在运行。
+
+  # 全健康：四项都不该报。这条堵的是「把阈值放宽就永远绿」的假覆盖。
+  - interval: 1m
+    input_series:
+      - series: 'stp_script_guard_due'
+        values: '0x12100'
+      - series: 'stp_script_guard_broken'
+        values: '0x12100'
+      - series: 'stp_script_guard_unknown'
+        values: '0x12100'
+      - series: 'stp_script_guard_last_run'
+        values: '99999999999x12100'
+    alert_rule_test:
+      - eval_time: 200h
+        alertname: StabilityScriptGuardUntrusted
+        exp_alerts: []
+      - eval_time: 200h
+        alertname: StabilityScriptGuardRetirementDue
+        exp_alerts: []
+
+  # #2394①/#2252 回归防线场景（覆盖两条新告警；host 标签形状取自
+  # backend/core/metrics.py 的注册表定义）。
+  - interval: 1m
+    input_series:
+      # unresolved 收尾快照恒为 3：12h 后触发积压告警
+      - series: 'stability_reconciler_unresolved_dirs{host_id="host-1"}'
+        values: '3x800'
+      # abandoned 计数器前 60 分钟为 0，之后 +1：increase[6h]>0 恒触发
+      - series: 'stability_reconciler_dirs_abandoned_total{host_id="host-1"}'
+        values: '0x60 1x600'
+    alert_rule_test:
+      - eval_time: 13h
+        alertname: StabilityUnisocUnresolvedBacklog
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              host_id: host-1
+            exp_annotations:
+              summary: UNISOC watcher left unresolved event dirs at last completed job
+              description: >-
+                该 host 最近完成的 UNISOC job 收尾时仍有「设备列到、平台未落账」的事件目录。
+                先排除 stale gauge（该 host 是否 12h 内本应有 job 终态）；再看 agent 日志
+                unisoc_reconciler_unresolved_dir / dir_abandoned 定位具体目录；正常形态下
+                #2252 降级与 #2079 重试会在数拍内收敛，持续积压提示新型不可收敛目录。
+                判据与失效面：docs/notes/bug-fix/2026-09-14-unisoc-anomaly-source-73.md
+                与 issue #2394。
+      - eval_time: 2h
+        alertname: StabilityUnisocDirAbandonedRegression
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              host_id: host-1
+            exp_annotations:
+              summary: UNISOC event dir abandoned reappeared after #2252
+              description: >-
+                #2252 后仍出现「连败达上限被放弃」的目录：检查该目录 unievent_info 是否
+                连元数据都拉不回（设备侧损坏/权限），或 du 探测失手回落整拉后仍恒超时。
+                agent 日志 grep unisoc_reconciler_dir_abandoned 取目录名与 attempts。
