@@ -11,12 +11,11 @@ from copy import deepcopy
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Optional
-from urllib.parse import urlparse
 
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from sqlalchemy import String, case, cast, func, or_, select, text
 from sqlalchemy.orm import Session, joinedload
 
@@ -59,7 +58,6 @@ from backend.api.schemas.plan_run import (
 )
 from backend.core.artifact_paths import (
     ArtifactPathError,
-    ArtifactPathNotFoundError,
     resolve_local_artifact_path,
 )
 from backend.core.aee_metadata import (
@@ -128,6 +126,7 @@ from backend.services.log_observation import (
     aggregate_signal_link_stats,
 )
 from backend.services.case_result_ingest import list_plan_run_test_case_results
+from backend.services.job_artifact_download import build_artifact_download_response
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["plan-runs"])
@@ -2251,20 +2250,6 @@ def list_job_artifacts(
     ])
 
 
-def _artifact_download_target(storage_uri: str) -> dict[str, str]:
-    parsed = urlparse(storage_uri)
-    scheme = parsed.scheme.lower()
-    if scheme in {"http", "https"}:
-        return {"kind": "redirect", "url": storage_uri}
-    try:
-        local_path = resolve_local_artifact_path(storage_uri, must_exist=True)
-    except ArtifactPathNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ArtifactPathError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"kind": "local", "path": str(local_path)}
-
-
 @router.get(
     "/plan-runs/{run_id}/jobs/{job_id}/artifacts/{artifact_id}/download",
 )
@@ -2275,29 +2260,12 @@ def download_job_artifact(
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
-    job = db.get(JobInstance, job_id)
-    if job is None or job.plan_run_id != run_id:
-        raise HTTPException(status_code=404, detail="job not found in this plan run")
+    """产物下载（**UI 权威入口**）：唯一带 run↔job 配对校验的一条。
 
-    artifact = db.get(JobArtifact, artifact_id)
-    if artifact is None or artifact.job_id != job_id:
-        raise HTTPException(status_code=404, detail="artifact not found for this job")
-
-    # 方案 C: run_log_bundle 运行日志不再上送中心存储。
-    # 已有历史注册数据仍返回 409（历史产物不再可代理下载）。
-    if artifact.artifact_type == "run_log_bundle":
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "run_log_bundle: run logs are no longer archived to NFS. "
-                "Use live console / GET /api/v1/logs/query during execution, "
-                "or POST /api/v1/agent/logs (SSH) for post-mortem files on the agent host."
-            ),
-        )
-
-    target = _artifact_download_target(artifact.storage_uri)
-    if target["kind"] == "redirect":
-        return RedirectResponse(url=target["url"], status_code=307)
-    local_path = Path(target["path"])
-    media_type = "application/gzip" if local_path.suffixes[-2:] == [".tar", ".gz"] else None
-    return FileResponse(path=str(local_path), filename=local_path.name, media_type=media_type)
+    #2420 第 4 项：实现与 job 域脚本入口
+    ``GET /runs/{job_id}/artifacts/{artifact_id}/download`` 共用
+    ``backend/services/job_artifact_download.py``，守卫与判据两侧同形。
+    """
+    return build_artifact_download_response(
+        db, job_id=job_id, artifact_id=artifact_id, plan_run_id=run_id,
+    )
