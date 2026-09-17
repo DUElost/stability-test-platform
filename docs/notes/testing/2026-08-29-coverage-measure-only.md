@@ -73,6 +73,9 @@ Class: testing
   补正**。要收口时按这两条定阈值：后端 `--cov-fail-under=70`（留 5 点余量），
   前端用 `coverage.thresholds.lines: 70`。注意前端阈值按 glob 生效、后端是
   全局口径，两边数字不可直接比较。
-- 若 `--cov` 让 nightly job 明显变慢到影响排队，改为只在其中一个 job 度量。
+- **2026-09-17**：`backend-test` 墙钟 ~19min（其中 cov 为只度量开销），按本条
+  「明显变慢」出口，**夜间关键路径撤下 `--cov` / vitest `--coverage`**；测试集合
+  不变。需要再量水位时本地或手动 `workflow_dispatch` 临时加回即可，勿默认挂回
+  日频关键路径。
 - 前端若要设阈值，用 vitest 的 `coverage.thresholds`；注意它按 glob 生效，
   与后端 `--cov-fail-under` 的全局口径不同，两边数字不可直接比较。
