@@ -13,14 +13,11 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
-from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from backend.api.response import ApiResponse, ok
 from backend.api.routes.auth import get_current_active_user, User
 from backend.api.schemas.case_result import (
-    TestCaseResultOut,
-    TestCaseResultSummary,
     TestCaseResultsPayload,
 )
 from backend.api.schemas.plan_run import (
@@ -31,7 +28,6 @@ from backend.api.schemas.plan_run import (
     PlanRunAbortIn,
     PlanRunDevicesOut,
     PlanRunEventsOut,
-    PlanRunLogEventOut,
     PlanRunLogEventsOut,
     PlanRunDetailOut,
     PlanRunListPageOut,
@@ -43,7 +39,6 @@ from backend.core.metrics import (
     record_plan_run_devices_query_duration,
 )
 from backend.models.enums import PlanRunStatus
-from backend.models.job import JobArtifact, JobInstance
 from backend.models.plan_run import PlanRun
 from backend.services.plan_run_timeline import build_plan_run_timeline
 from backend.services.plan_run_event_feed import build_plan_run_events
@@ -54,6 +49,12 @@ from backend.services.plan_run_chain import (  # noqa: F401
     chain_node_from_run,
 )
 from backend.services.plan_run_archive import archive_plan_run_logs
+from backend.services.plan_run_summary import build_plan_run_summary
+from backend.services.plan_run_job_artifacts import list_plan_run_job_artifacts
+from backend.services.plan_run_result_views import (
+    build_plan_run_log_events,
+    build_plan_run_test_case_results,
+)
 from backend.services.plan_run_devices import (
     build_plan_run_devices,
 )
@@ -88,11 +89,6 @@ from backend.services.plan_run_export import (
     build_plan_run_export,
     plan_run_export_to_markdown,
 )
-from backend.services.device_log_event import (
-    list_plan_run_device_log_event_platforms,
-    list_plan_run_device_log_events,
-)
-from backend.services.case_result_ingest import list_plan_run_test_case_results
 from backend.services.job_artifact_download import build_artifact_download_response
 from backend.services.plan_run_catalog import (
     build_plan_run_detail,
@@ -584,38 +580,8 @@ def get_plan_run_log_events(
     primary consumer.
     """
     _require_plan_run(db, run_id)
-    rows, total = list_plan_run_device_log_events(
-        db,
-        run_id,
-        skip=skip,
-        limit=limit,
-        state=state,
-        platform=platform,
-    )
-    items = [
-        PlanRunLogEventOut(
-            id=str(row.id),
-            serial=row.serial,
-            platform=row.platform,
-            event_type=row.event_type,
-            event_subtype=row.event_subtype,
-            state=row.state,
-            local_path=row.local_path,
-            remote_path=row.remote_path,
-            detected_at=_iso(row.detected_at) or "",
-            device_timestamp=_iso(row.device_timestamp),
-            job_id=row.job_id,
-            host_id=row.host_id,
-            signal_seq_no=row.signal_seq_no,
-        )
-        for row in rows
-    ]
-    return ok(PlanRunLogEventsOut(
-        plan_run_id=run_id,
-        total=total,
-        items=items,
-        # #2288：平台全集单独取——不受本次 `platform`/`limit` 影响，前端筛选选项据此渲染。
-        platforms=list_plan_run_device_log_event_platforms(db, run_id, state=state),
+    return ok(build_plan_run_log_events(
+        db, run_id, skip=skip, limit=limit, state=state, platform=platform,
     ))
 
 
@@ -633,38 +599,8 @@ def get_plan_run_test_case_results(
 ):
     """ADR-0030 P2: PlanRun 逐条用例结果（test_case_result 表）。"""
     _require_plan_run(db, run_id)
-    rows, total, summary_counts = list_plan_run_test_case_results(
-        db, run_id, status=status, skip=skip, limit=limit,
-    )
-    job_ids = {row.job_id for row in rows}
-    jobs_by_id: dict[int, JobInstance] = {}
-    if job_ids:
-        jobs_by_id = {
-            j.id: j
-            for j in db.query(JobInstance).filter(JobInstance.id.in_(job_ids)).all()
-        }
-    items = []
-    for row in rows:
-        job = jobs_by_id.get(row.job_id)
-        items.append(TestCaseResultOut(
-            id=row.id,
-            plan_run_id=row.plan_run_id,
-            job_id=row.job_id,
-            suite_id=row.suite_id,
-            case_id=row.case_id,
-            case_name=row.case_name,
-            status=row.status,
-            detail=row.detail,
-            artifact_uri=row.artifact_uri,
-            run_dir=row.run_dir,
-            created_at=row.created_at,
-            device_id=job.device_id if job else None,
-            host_id=str(job.host_id) if job and job.host_id is not None else None,
-        ))
-    return ok(TestCaseResultsPayload(
-        items=items,
-        total=total,
-        summary=TestCaseResultSummary(**summary_counts),
+    return ok(build_plan_run_test_case_results(
+        db, run_id, skip=skip, limit=limit, status=status,
     ))
 
 
@@ -734,34 +670,7 @@ def get_plan_run_summary(
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
-    pr = db.get(PlanRun, run_id)
-    if pr is None:
-        raise HTTPException(status_code=404, detail="plan run not found")
-
-    jobs_result = db.execute(
-        select(
-            JobInstance.status,
-            func.count(JobInstance.id),
-        )
-        .where(JobInstance.plan_run_id == run_id)
-        .group_by(JobInstance.status)
-    )
-    status_counts = {row[0]: row[1] for row in jobs_result.all()}
-    total = sum(status_counts.values())
-    pass_rate = (
-        status_counts.get("COMPLETED", 0) / total if total > 0 else 0.0
-    )
-
-    return ok({
-        "plan_run_id": run_id,
-        "status": pr.status,
-        "total_jobs": total,
-        "status_counts": status_counts,
-        "pass_rate": round(pass_rate, 4),
-        "started_at": _iso(pr.started_at),
-        "ended_at": _iso(pr.ended_at),
-        "result_summary": pr.result_summary,
-    })
+    return ok(build_plan_run_summary(db, run_id))
 
 
 # ── Artifacts ────────────────────────────────────────────────────────────
@@ -776,26 +685,7 @@ def list_job_artifacts(
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
-    job = db.get(JobInstance, job_id)
-    if job is None or job.plan_run_id != run_id:
-        raise HTTPException(status_code=404, detail="job not found in this plan run")
-
-    result = db.execute(
-        select(JobArtifact).where(JobArtifact.job_id == job_id)
-    )
-    artifacts = result.scalars().all()
-    return ok([
-        {
-            "id": a.id,
-            "job_id": a.job_id,
-            "filename": a.storage_uri.rsplit("/", 1)[-1] if a.storage_uri else None,
-            "artifact_type": a.artifact_type,
-            "size_bytes": a.size_bytes,
-            "checksum": a.checksum,
-            "created_at": _iso(a.created_at),
-        }
-        for a in artifacts
-    ])
+    return ok(list_plan_run_job_artifacts(db, run_id, job_id))
 
 
 @router.get(

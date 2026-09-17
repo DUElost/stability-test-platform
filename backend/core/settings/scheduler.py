@@ -40,6 +40,18 @@ class SchedulerSettings(DomainSettings):
     # 想变慢请调小它但不得为 0。上界 1000：单轮 ∝ 批大小地拉长持锁与墙钟窗口（每候选
     # 含一次终态化提交 + 链式派发），超过全 fleet 规模没有意义，只会掩盖上一轮没跑完。
     reconciler_drain_batch: int = Field(default=20, ge=1, le=1000)
+    # #2554：排空未完时**在同一次持锁内自续一轮**的墙钟预算（秒）。`reconciler_drain_batch`
+    # 是**事务边界的保护**（限制单轮持锁窗口），不是速率旋钮——把它当旋钮调大只会让单轮
+    # 持锁与 `_reconcile_lock` 被占用的时长一起变长。#2548 的容量探针实测每台排空 ≈8–9ms
+    # 且线性，于是 1000 台按默认 cap=20 需要 50 个 tick × 15s ≈ 12.5 分钟，**其中真正
+    # 干活的时间合计只有 ≈9 秒**：剩下全是躺在 IntervalTrigger 上等下一拍。本字段把那
+    # 9 秒的活摊进一次持锁里跑完，同时保留「等 tick」的兜底节奏。
+    # 默认 5s = 默认周期 15s 的 1/3 占空比：给同一进程里的其它 singleton job 留出余量，
+    # 且远小于周期，不会触发 `reconciler_skip_previous_still_running`。
+    # **0 = 关闭自续**（回到 #2548 的形状：一轮最多 cap 台，其余等下一拍）——这是
+    # 显式的止血开关，不是无意义取值，所以 `ge=0`（区别于 `reconciler_drain_batch`
+    # 不能为 0：那会让解锁彻底停摆）。
+    reconciler_drain_max_seconds: float = Field(default=5.0, ge=0.0)
     cron_poll_interval: float = 30
     retention_cleanup_interval_seconds: int = 3600
     queue_depth_poll_interval_seconds: int = 15

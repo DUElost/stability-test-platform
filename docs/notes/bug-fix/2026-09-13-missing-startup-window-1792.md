@@ -13,6 +13,11 @@ Class: bug-fix
 判据数据源用 **rollup 自身已有的 `startedAt`**——无需跨轮持久化（reconcile 是无状态
 job），也无需 check→workflow 映射的额外 API 调用。
 
+> 后续（#2556）：越过启动窗口的 `MISSING` 不再直接归入告警——先按该 head sha 上
+> `ci.yml` 的 run 数区分「从未创建」（一次带冷却的自续重基）与「跑了没上报」（人工），
+> 见 [`2026-09-17-queue-selfheal-never-created-2556.md`](2026-09-17-queue-selfheal-never-created-2556.md)。
+> 本单的启动窗口判据、宽限值与其「无 `startedAt` 视为极早期」的取舍**均未变**，仍然有效。
+
 ## 为什么 #1796 之后还需要这一单
 
 #1796 修的是 `COMPLETED/NEUTRAL` 被当失败；本单修的是 `MISSING` 被无条件当异常。
