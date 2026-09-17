@@ -27,13 +27,12 @@ from backend.core.artifact_paths import (
 )
 from backend.core.database import get_async_db, get_db
 from backend.core.metrics import (
-    record_log_signal_ingested,
     record_patrol_heartbeat,
 )
 from backend.models.enums import HostStatus, JobStatus, LeaseType
 from backend.models.host import Device, Host
 from backend.models.device_lease import DeviceLease
-from backend.models.job import JobArtifact, JobInstance, JobLogSignal
+from backend.models.job import JobArtifact, JobInstance
 from backend.api.routes.auth import get_current_active_user
 from backend.models.plan_run import PlanRun
 from backend.services.agent_recovery import (
@@ -80,6 +79,16 @@ from backend.services.agent_device_log_events import (  # noqa: F401
     _parse_iso_dt,
     _validated_remote_path,
 )
+from backend.services.agent_log_signals import (
+    LogSignalBatchIn,
+    ingest_agent_log_signals,
+)
+from backend.services.agent_log_signals import (  # noqa: F401
+    LogSignalIn,
+    _TERMINAL,
+    _require_job_bound_upload_lease,
+    require_job_bound_upload_lease,
+)
 from backend.services.agent_lease_extend import (  # noqa: F401
     _ExtendBatchItemIn,
     _ExtendBatchItemOut,
@@ -119,11 +128,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/agent", tags=["agent"])
 
 _DEVICE_LOCK_LEASE_SECONDS = int(os.getenv("DEVICE_LOCK_LEASE_SECONDS", "600"))
-_TERMINAL = {
-    JobStatus.COMPLETED.value,
-    JobStatus.FAILED.value,
-    JobStatus.ABORTED.value,
-}
 # NOTE: UNKNOWN is intentionally excluded — it is a transient recovery state,
 # not a terminal one.  Valid transitions are UNKNOWN→RUNNING (grace recovery)
 # or UNKNOWN→FAILED (grace expiry).  ``complete_job()``'s runtime-lease gate
@@ -964,32 +968,6 @@ def _iso_or_none(dt: Optional[datetime]) -> Optional[str]:
 
 # ── Log Signal ingestion ──────────────────────────────────────────────────────
 
-class LogSignalIn(BaseModel):
-    """单条 log_signal 信封。
-
-    字段契约见 backend/agent/watcher/contracts.py LogSignalEnvelope。
-    幂等键：(job_id, seq_no)
-    """
-    job_id:         int
-    fencing_token:  str
-    agent_instance_id: str
-    seq_no:         int
-    host_id:        str
-    device_serial:  str
-    category:       str
-    source:         str
-    path_on_device: str
-    detected_at:    str
-    artifact_uri:   Optional[str] = None
-    sha256:         Optional[str] = None
-    size_bytes:     Optional[int] = None
-    first_lines:    Optional[str] = None
-    extra:          Optional[Dict[str, Any]] = None
-
-
-class LogSignalBatchIn(BaseModel):
-    signals: List[LogSignalIn]
-
 
 @router.post("/log-signals", response_model=ApiResponse[dict])
 async def ingest_log_signals(
@@ -1007,161 +985,7 @@ async def ingest_log_signals(
     报告，不再整批 404/400 连坐 —— 否则 50 条批次混入一条坏记录，其余正常信号
     会被 Agent 侧反复重试直至全部进死信。暂时性失败（DB 不可用等）仍整批失败。
     """
-    from sqlalchemy.dialects.postgresql import insert as pg_insert
-
-    from backend.agent.watcher.contracts import ContractViolation, validate_log_signal
-
-    if not payload.signals:
-        return ok({"inserted": 0, "total": 0})
-
-    def _rejected_item(s: LogSignalIn, reason: str) -> Dict[str, Any]:
-        return {
-            "job_id": s.job_id,
-            "seq_no": s.seq_no,
-            "reason": reason[:300],
-        }
-
-    rejected: List[Dict[str, Any]] = []
-    rows: List[Dict[str, Any]] = []
-    for s in payload.signals:
-        envelope = s.model_dump()
-        try:
-            validate_log_signal(envelope)
-        except ContractViolation as exc:
-            rejected.append(_rejected_item(s, f"log_signal contract violation: {exc}"))
-            continue
-        job = await db.get(JobInstance, s.job_id)
-        if job is None:
-            rejected.append(_rejected_item(s, f"job {s.job_id} not found"))
-            continue
-        try:
-            await _require_job_bound_upload_lease(
-                db,
-                job,
-                fencing_token=s.fencing_token,
-                agent_instance_id=s.agent_instance_id,
-                host_id=s.host_id,
-                device_serial=s.device_serial,
-            )
-        except HTTPException as exc:
-            detail = exc.detail
-            if isinstance(detail, dict):
-                detail = detail.get("code") or str(detail)
-            rejected.append(_rejected_item(
-                s, f"lease_check_failed({exc.status_code}): {detail}",
-            ))
-            continue
-
-        # detected_at: ISO string → datetime
-        try:
-            detected_dt = datetime.fromisoformat(s.detected_at.replace("Z", "+00:00"))
-        except ValueError:
-            rejected.append(_rejected_item(
-                s, f"log_signal.detected_at invalid ISO8601: {s.detected_at}",
-            ))
-            continue
-
-        rows.append({
-            "job_id":         s.job_id,
-            "host_id":        s.host_id,
-            "device_serial":  s.device_serial,
-            "seq_no":         s.seq_no,
-            "category":       s.category,
-            "source":         s.source,
-            "path_on_device": s.path_on_device,
-            "artifact_uri":   s.artifact_uri,
-            "sha256":         s.sha256,
-            "size_bytes":     s.size_bytes,
-            "first_lines":    s.first_lines,
-            "detected_at":    detected_dt,
-            "extra":          s.extra,
-        })
-
-    # #1048：整批被拒（无一条可入库）→ 直接返回逐条拒绝清单
-    if not rows:
-        return ok({
-            "inserted": 0,
-            "total": len(payload.signals),
-            "rejected": rejected,
-        })
-
-    # PostgreSQL 幂等 upsert：ON CONFLICT (job_id, seq_no) DO NOTHING
-    stmt = pg_insert(JobLogSignal).values(rows)
-    stmt = stmt.on_conflict_do_nothing(index_elements=["job_id", "seq_no"])
-    # RETURNING id + (job_id, seq_no, category) 以统计实际新增条数 + Prometheus 分类
-    stmt = stmt.returning(
-        JobLogSignal.id,
-        JobLogSignal.job_id,
-        JobLogSignal.seq_no,
-        JobLogSignal.category,
-    )
-    result = await db.execute(stmt)
-    inserted_rows = result.all()
-
-    # 按 job 分组累加 log_signal_count
-    inserted_count_by_job: Dict[int, int] = {}
-    for row in inserted_rows:
-        inserted_count_by_job[row.job_id] = inserted_count_by_job.get(row.job_id, 0) + 1
-
-    for jid, count in inserted_count_by_job.items():
-        await db.execute(
-            JobInstance.__table__.update()
-            .where(JobInstance.id == jid)
-            .values(log_signal_count=JobInstance.log_signal_count + count)
-        )
-
-    from backend.services.device_log_event import link_signals_to_device_log_events
-
-    await link_signals_to_device_log_events(db, [row["job_id"] for row in rows])
-
-    await db.commit()
-
-    # ── Prometheus 埋点:仅对实际入库的 signal 计数(冲突丢弃的不计) ──
-    for row in inserted_rows:
-        record_log_signal_ingested(row.category)
-
-    # ── ADR-0021 C5c: 推 watcher_signal 增量到 plan_run room ──
-    # 事件作为 invalidation hint 使用,前端收到后 refetch /watcher-summary。
-    # 失败不影响入库结果(socket 服务未起 / 未连前端时静默)。
-    if inserted_rows:
-        try:
-            from backend.realtime.socketio_server import broadcast_watcher_signal
-
-            job_ids = list({row.job_id for row in inserted_rows})
-            run_map_rows = (
-                (
-                    await db.execute(
-                        select(JobInstance.id, JobInstance.plan_run_id)
-                        .where(JobInstance.id.in_(job_ids))
-                    )
-                ).all()
-            )
-            run_id_by_job: Dict[int, int] = {
-                jid: rid for jid, rid in run_map_rows if rid is not None
-            }
-            # Build a lookup from the original payload for device_serial enrichment.
-            serial_by_seq: Dict[tuple, Optional[str]] = {
-                (s.job_id, s.seq_no): s.device_serial for s in payload.signals
-            }
-            for row in inserted_rows:
-                run_id = run_id_by_job.get(row.job_id)
-                if run_id is None:
-                    continue
-                await broadcast_watcher_signal(
-                    run_id,
-                    job_id=row.job_id,
-                    device_serial=serial_by_seq.get((row.job_id, row.seq_no)),
-                    category=row.category,
-                    inserted_count=1,
-                )
-        except Exception:
-            logger.debug("broadcast_watcher_signal_failed", exc_info=True)
-
-    return ok({
-        "inserted": len(inserted_rows),
-        "total": len(payload.signals),
-        "rejected": rejected,
-    })
+    return ok(await ingest_agent_log_signals(db, payload))
 
 
 @router.post("/device-log-events", response_model=ApiResponse[dict])
@@ -1235,46 +1059,6 @@ class ArtifactIn(BaseModel):
 class ArtifactOut(BaseModel):
     artifact_id: int
     created:     bool   # True=首次插入；False=幂等命中（已存在同 storage_uri）
-
-
-async def _require_job_bound_upload_lease(
-    db: AsyncSession,
-    job: JobInstance,
-    *,
-    fencing_token: str,
-    agent_instance_id: str,
-    host_id: str,
-    device_serial: str,
-) -> DeviceLease:
-    """Authorize active and delayed terminal uploads by historical token."""
-    lease = (await db.execute(
-        select(DeviceLease)
-        .where(
-            DeviceLease.job_id == job.id,
-            DeviceLease.device_id == job.device_id,
-            DeviceLease.lease_type == LeaseType.JOB.value,
-            DeviceLease.fencing_token == fencing_token,
-        )
-        .order_by(DeviceLease.id.desc())
-    )).scalars().first()
-    device = await db.get(Device, job.device_id)
-    if (
-        lease is None
-        or device is None
-        or lease.host_id != host_id
-        or job.host_id != host_id
-        or (
-            job.status not in _TERMINAL
-            and device.host_id != host_id
-        )
-        or lease.agent_instance_id != agent_instance_id
-        or (device.serial or "").strip() != (device_serial or "").strip()
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail={"code": "UPLOAD_FENCING_MISMATCH"},
-        )
-    return lease
 
 
 @router.post("/jobs/{job_id}/artifacts", response_model=ApiResponse[ArtifactOut])
