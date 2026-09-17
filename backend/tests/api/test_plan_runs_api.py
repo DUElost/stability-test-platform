@@ -228,7 +228,7 @@ class TestPlanRunDetailOutCarriesRunContext:
 
     def test_plan_run_out_device_count_dedupes_job_device_ids(self):
         """#747: _plan_run_out fallback uses distinct device_id (not job rows)."""
-        from backend.api.routes.plan_runs import _plan_run_out
+        from backend.services.plan_run_catalog import _plan_run_out
         from backend.api.schemas.plan_run import JobInstanceOut
         from backend.models.enums import PlanRunStatus
 
