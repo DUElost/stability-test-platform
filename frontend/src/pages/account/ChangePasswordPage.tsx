@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { api } from '@/utils/api';
+import { readNamedValues } from '@/utils/forms';
 import { KeyRound } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -16,24 +17,30 @@ export default function ChangePasswordPage() {
 
   const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
+    // #2456：以**表单 DOM 值**为准（密码管理器直写 .value 时 React 收不到 change）
+    const values = readNamedValues(e.currentTarget as HTMLFormElement, {
+      oldPassword, newPassword, confirmPassword,
+    });
     setMessage(null);
 
-    if (newPassword !== confirmPassword) {
+    if (values.newPassword !== values.confirmPassword) {
       setMessage({ type: 'error', text: '两次输入的新密码不一致' });
       return;
     }
-    if (newPassword.length < 8) {
+    if (values.newPassword.length < 8) {
       setMessage({ type: 'error', text: '新密码长度不能少于8位' });
       return;
     }
-    if (newPassword.length > 128) {
+    if (values.newPassword.length > 128) {
       setMessage({ type: 'error', text: '新密码长度不能超过128位' });
       return;
     }
 
     setLoading(true);
     try {
-      await api.users.changePassword({ old_password: oldPassword, new_password: newPassword });
+      await api.users.changePassword({
+        old_password: values.oldPassword, new_password: values.newPassword,
+      });
       setMessage({ type: 'success', text: '密码修改成功' });
       setOldPassword('');
       setNewPassword('');
@@ -76,6 +83,7 @@ export default function ChangePasswordPage() {
               <label htmlFor="cp-old-password" className={FORM.label}>当前密码</label>
               <input
                 id="cp-old-password"
+                name="oldPassword"
                 type="password"
                 value={oldPassword}
                 onChange={(e) => setOldPassword(e.target.value)}
@@ -87,6 +95,7 @@ export default function ChangePasswordPage() {
               <label htmlFor="cp-new-password" className={FORM.label}>新密码</label>
               <input
                 id="cp-new-password"
+                name="newPassword"
                 type="password"
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
@@ -100,6 +109,7 @@ export default function ChangePasswordPage() {
               <label htmlFor="cp-confirm-password" className={FORM.label}>确认新密码</label>
               <input
                 id="cp-confirm-password"
+                name="confirmPassword"
                 type="password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}

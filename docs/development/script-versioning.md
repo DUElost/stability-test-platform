@@ -192,8 +192,25 @@ python -m backend.scripts.check_unreferenced_script_versions --guard [--json]
 ```
 
 退出码：`0` 无到期项 / `1` 存在应退役而未退役的版本 / `2` 执行事实维度不可得（**不降级**
-为「零使用」——那会让巡检偏向过度退役）。默认模式仍恒 `0`（诊断工具，非门禁）。CI 只锁
-判据函数与上述退出码（CI 不得连生产库），对生产数据的实际巡检由运维或定时任务跑 `--guard`。
+为「零使用」——那会让巡检偏向过度退役）/ `3` **工具自身异常**（不是判定结果）。`3` 与 `1`
+必须可区分：`1` 是退役授权依据，若「工具坏了」与它同码，就会被读成「有版本该退役」，
+后果是反向的过度退役。`-m` 与 `python backend/scripts/check_unreferenced_script_versions.py`
+两种调用形态等价（工具侧有 `REPO_ROOT` bootstrap 与子进程回归用例兜住）。默认模式仍恒 `0`
+（诊断工具，非门禁）。CI 只锁判据函数与上述退出码（CI 不得连生产库）。
+
+**执行者 = 控制面 systemd timer**（2026-09-17 补上；此前本文档写「运维或定时任务跑」而该任务
+并不存在，被 24h 审计当场指出——判据、退出码、工具三层齐备却零执行，等于没有守卫）：
+`deploy/control-plane/systemd/stp-script-guard.{service,timer}` 每天 09:30 跑
+`tools/dev/script_guard_probe.py`，它只 subprocess 调 `--guard --json`，把
+`due / unknown / broken / last_run` 四个值落成 node-exporter textfile 指标。
+
+- **巡检永不写库**：`due=N` 只表示「有 N 条待人工授权」；实际退役仍须 `plan` 出 manifest、
+  复核后跑 `retire_script_versions.py execute --yes`。
+- 任务退出码：`due`（1）与 `unknown`（2）算任务**成功**，只有 `broken`（3）让 timer failed 进
+  告警面——否则「有待退役项」会天天报失败，真故障反而被淹死在告警疲劳里。
+- `last_run` 指标专治「守卫静默停摆」：`due=0`（干净）与「从没跑过」必须可区分；指标写不出去
+  probe 当场失败，不做「跑成功了但没人知道」。
+- **不进 CI**：CI 不得连生产库，夜间 `backend-test` job 也不是这条巡检的执行者。
 
 批量执行是两段式——先只读出 manifest，人工复核后再写：
 
