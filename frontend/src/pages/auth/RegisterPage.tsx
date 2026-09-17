@@ -6,6 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { AlertCircle } from 'lucide-react';
 import { useToast } from '@/hooks/useToast';
 import { api, toApiError } from '@/utils/api';
+import { readNamedValues } from '@/utils/forms';
 import { SURFACE, TEXT } from '@/design-system/tokens';
 import { ALERT_BOX } from '@/design-system/tokens';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
@@ -22,9 +23,13 @@ export default function RegisterPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    // #2456：以**表单 DOM 值**为准（密码管理器直写 .value 时 React 收不到 change）
+    const values = readNamedValues(e.currentTarget as HTMLFormElement, {
+      username, password, confirmPassword,
+    });
     setError('');
 
-    if (password !== confirmPassword) {
+    if (values.password !== values.confirmPassword) {
       setError('两次输入的密码不一致');
       return;
     }
@@ -33,7 +38,9 @@ export default function RegisterPage() {
 
     try {
       // C8：统一走 api 客户端（withCredentials/token/错误规范化与 Login 一致）
-      await api.auth.register({ username, password, role: 'user' });
+      await api.auth.register({
+        username: values.username, password: values.password, role: 'user',
+      });
 
       // 注册成功，跳转到登录页
       toast.success('注册成功，请登录');
@@ -81,6 +88,7 @@ export default function RegisterPage() {
               </label>
               <Input
                 id="username"
+                name="username"
                 type="text"
                 placeholder="请输入用户名"
                 value={username}
@@ -95,6 +103,7 @@ export default function RegisterPage() {
               </label>
               <Input
                 id="password"
+                name="password"
                 type="password"
                 placeholder="请输入密码（至少 8 位）"
                 value={password}
@@ -110,6 +119,7 @@ export default function RegisterPage() {
               </label>
               <Input
                 id="confirmPassword"
+                name="confirmPassword"
                 type="password"
                 placeholder="请再次输入密码"
                 value={confirmPassword}

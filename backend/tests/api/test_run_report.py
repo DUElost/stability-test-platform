@@ -78,6 +78,11 @@ class TestRunReportHelpers(unittest.TestCase):
         self.assertIn("# Run Report - 101", text)
         self.assertIn("## Risk Summary", text)
         self.assertIn("## Alerts", text)
+        # #2419：数据源（RUN_COMPLETE 快照的 log_summary）没有生产者，生产导出恒为
+        # `- N/A` / `0`。小节与 restart_count 行已删，这里钉住别再回来——
+        # 真要恢复，先给它一个生产者（并补一条非空断言）。
+        self.assertNotIn("Summary Metrics", text)
+        self.assertNotIn("restart_count", text)
 
     def test_parse_run_log_summary(self):
         metrics = _parse_run_log_summary(
@@ -131,6 +136,8 @@ class TestRunReportHelpers(unittest.TestCase):
         self.assertEqual(draft.priority, "Critical")
         self.assertIn("AIMONKEY", draft.summary)
         self.assertIn("h2. Alerts", draft.description)
+        # #2419：JIRA 描述里的同名小节同样删除（无生产者的空面板不留在导出里）
+        self.assertNotIn("Summary Metrics", draft.description)
         self.assertEqual(draft.project_key, "STABILITY")
 
     def test_build_jira_draft_template_mapping(self):

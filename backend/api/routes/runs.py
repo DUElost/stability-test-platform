@@ -47,24 +47,16 @@ def _report_to_markdown(report: RunReportOut) -> str:
         f"- Device: {report.device.serial if report.device else 'N/A'}",
         f"- Host: {report.host.name if report.host else 'N/A'}",
         "",
-        "## Summary Metrics",
-    ]
-    if report.summary_metrics:
-        for key, value in report.summary_metrics.items():
-            lines.append(f"- {key}: {value}")
-    else:
-        lines.append("- N/A")
-
-    lines.extend([
-        "",
+        # #2419：「Summary Metrics」小节与下面的 restart_count 行已删——它们读的是
+        # RUN_COMPLETE 快照里的 `log_summary`，而该字段自 ADR-0025 起**没有任何生产者**
+        # （Agent 侧恒为 None），生产导出里永远是 `- N/A` / `0`：噪声且像数据。
         "## Risk Summary",
         f"- risk_level: {risk.get('risk_level', 'UNKNOWN') if isinstance(risk, dict) else 'UNKNOWN'}",
         f"- events_total: {counts.get('events_total', 0)}",
-        f"- restart_count: {counts.get('restart_count', 0)}",
         f"- aee_entries: {counts.get('aee_entries', 0)}",
         "",
         "## Alerts",
-    ])
+    ]
     if report.alerts:
         for item in report.alerts:
             lines.append(f"- [{item.severity}] {item.code}: {item.message}")
