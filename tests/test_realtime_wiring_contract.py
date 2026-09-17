@@ -1,4 +1,4 @@
-"""#2400：实时通道「两端接线」的结构守卫。
+"""#2400：实时通道「两端接线」的结构守卫（#2448 增判据 4、收紧判据 1）。
 
 背景：`/dashboard` 事件面反复出现**同一形态**的漂移——一端有、另一端没有，
 运行时两端都不报错，只有在真实数据下才看得出来（#2129 家族）：
@@ -14,26 +14,36 @@
 3. **白名单与 emit 面脱节**：`_ROOM_PATTERN` 自称「合法形态 = 后端 emit 端全集」，
    `job:` / `run:` 已无 emit 端却仍在白名单里，客户端可以订阅一个永远收不到
    消息的房间。
+4. **#2448：前端事件表与后端生产者脱节**：前三条都在「服务端 emit / 前端订阅」
+   这一侧，没有任何一条以 `SOCKET_MESSAGE_TYPES`（前端 `switch` 判据的值域）为
+   全集回头看生产者——`DEPLOY_UPDATE` 这种「前端有消费、后端零生产者」的分支
+   因此无门禁（本判据即其补位；该类型已按两端同删收口）。
 
-三条判据都是**纯静态文本扫描**（`tests/` 准入判据：纯离线 + 秒级），分别对应
-上述三种漂移。每条都带**非空断言**防止扫描面塌成恒真（例如函数被改名后正则
+四条判据都是**纯静态文本扫描**（`tests/` 准入判据：纯离线 + 秒级），分别对应
+上述四种漂移。每条都带**非空断言**防止扫描面塌成恒真（例如函数被改名后正则
 匹配为空、白名单解析失败等），并对扫描面本身有钉子：
 
 - `broadcast_*` 定义数必须 ≥ 5（当前 5 个，且每个都有生产调用方）；
 - 订阅描述符导出数必须 ≥ 3（dashboard / fleet / plan_run / console）；
-- `_ROOM_PATTERN` 解析出的房间族必须 ≥ 2（plan_run / console / fleet）。
+- `_ROOM_PATTERN` 解析出的房间族必须 ≥ 2（plan_run / console / fleet）；
+- `SOCKET_MESSAGE_TYPES` 值域必须 ≥ 8（#2448）。
+
+判据 1 的「有人在用」按 **AST 标识符**判定（#2448）：文本计数会把注释/文档
+字符串里提到的函数名也算成调用方，据此判绿会掩盖真实死角。
 
 要恢复被删的通道（例如将来真的要做步骤级实时日志），正确姿势是**两端一起接**：
-emit 位 + 订阅工厂 + 房间白名单，三处齐了本守卫自然放行。
+emit 位 + 订阅工厂 + 房间白名单（+ 前端事件表常量），齐了本守卫自然放行。
 """
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SERVER = REPO_ROOT / "backend" / "realtime" / "socketio_server.py"
 FRONTEND_CONFIG = REPO_ROOT / "frontend" / "src" / "config" / "index.ts"
+FRONTEND_SOCKET_EVENTS = REPO_ROOT / "frontend" / "src" / "utils" / "socketEvents.ts"
 BACKEND = REPO_ROOT / "backend"
 FRONTEND_SRC = REPO_ROOT / "frontend" / "src"
 
@@ -73,6 +83,23 @@ def _count_in(files: list[Path], needle: str, *, exclude: Path) -> int:
     return total
 
 
+def _python_identifiers(path: Path) -> set[str]:
+    """文件里被**引用**的标识符（AST）——注释与文档字符串不算（#2448）。
+
+    文本计数（`text.count(needle)`）会把注释/文档字符串里提到的函数名也算作
+    「有人在用」，据此判「有生产调用方」会假绿。
+    """
+    tree = ast.parse(_read(path))
+    names = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+    names |= {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
+    return names
+
+
+def _backend_identifier_index() -> dict[Path, set[str]]:
+    """生产面每个 Python 文件的标识符集合（一次解析，供判据复用）。"""
+    return {path: _python_identifiers(path) for path in _backend_production_files()}
+
+
 # ── 判据 1：broadcast_* 必须有生产调用方 ─────────────────────────────────────
 
 
@@ -88,13 +115,17 @@ def test_broadcast_scan_surface_is_not_empty():
 
 
 def test_every_broadcast_has_production_caller():
-    files = _backend_production_files()
+    identifiers = _backend_identifier_index()
     dead = []
     for name in _broadcast_definitions():
-        if _count_in(files, name, exclude=SERVER) == 0:
+        if not any(
+            name in names
+            for path, names in identifiers.items()
+            if path != SERVER
+        ):
             dead.append(name)
     assert dead == [], (
-        "以下 broadcast_* 没有生产调用方（只有测试直调不算接线）——"
+        "以下 broadcast_* 没有生产调用方（只有测试直调、注释提及不算接线）——"
         f"要么接上调用点，要么连同前端消费端一起删：{dead}"
     )
 
@@ -174,3 +205,69 @@ def test_every_whitelisted_room_has_an_emit_site():
     assert set(probes) == kinds, (
         f"探针表与白名单不一致：探针 {sorted(probes)} vs 白名单 {sorted(kinds)}"
     )
+
+
+# ── 判据 4：前端事件表（SOCKET_MESSAGE_TYPES）必须有服务端生产者（#2448）──────
+
+
+# 无服务端生产者的消息类型 → 保留理由。当前为空：两端已对齐。
+# 新增条目必须写明「为什么可以没有生产者」，否则判据失去意义。
+_ALLOWED_WITHOUT_PRODUCER: dict[str, str] = {}
+
+
+def _message_types() -> set[str]:
+    """`SOCKET_MESSAGE_TYPES` 的值域——前端 `switch (msg.type)` 的判据全集。"""
+    src = _read(FRONTEND_SOCKET_EVENTS)
+    block = re.search(r"SOCKET_MESSAGE_TYPES\s*=\s*\{(.*?)\}\s*as const", src, re.S)
+    assert block is not None, "SOCKET_MESSAGE_TYPES 未找到（改名/格式变化？）"
+    return set(
+        re.findall(r"^\s*[A-Z][A-Z0-9_]*:\s*'([A-Z][A-Z0-9_]*)'", block.group(1), re.M)
+    )
+
+
+def _emitted_event_names() -> set[str]:
+    """生产面 `sio.emit("…")` / `schedule_emit("…")` 的事件名字面量。"""
+    names: set[str] = set()
+    for path in _backend_production_files():
+        names |= set(
+            re.findall(r'(?:sio\.emit|schedule_emit)\(\s*"([^"]+)"', _read(path))
+        )
+    return names
+
+
+def _norm_event(name: str) -> str:
+    """`DEVICE_UPDATE` ↔ `device_update` 归一（type 与 wire 名的大小写/分隔差）。"""
+    return re.sub(r"[^a-z0-9]", "", name.lower())
+
+
+def test_message_type_scan_surface_is_not_empty():
+    types = _message_types()
+    assert len(types) >= 8, f"前端事件表扫描面塌了：{types}"
+    assert "DEVICE_UPDATE" in types
+
+
+def test_every_message_type_has_a_server_producer():
+    """#2448：前端消费的每个 message type 都要有服务端 emit 对应物。
+
+    前三判据都只看「服务端 emit / 前端订阅」这一侧，没有一条以事件表为全集回头看
+    生产者——`DEPLOY_UPDATE`（前端有 `switch` 分支、后端零 emit、且它失效的
+    `['deployments']` 键在前端也不存在）正是这样长期躺在库里。本判据补上该方向。
+    """
+    emitted = {_norm_event(name) for name in _emitted_event_names()}
+    assert emitted, "emit 名扫描面塌了（emit 调用形态变化？）"
+    types = _message_types()
+
+    missing = sorted(
+        t for t in types
+        if _norm_event(t) not in emitted and t not in _ALLOWED_WITHOUT_PRODUCER
+    )
+    assert not missing, (
+        "以下前端消息类型没有服务端生产者（分支永不执行）——"
+        f"要么接上 emit，要么连前端常量 + 消费分支一起删：{missing}"
+    )
+
+    stale = sorted(
+        t for t in _ALLOWED_WITHOUT_PRODUCER
+        if t not in types or _norm_event(t) in emitted
+    )
+    assert not stale, f"豁免表过期（类型已有生产者或已不存在），应移出：{stale}"
