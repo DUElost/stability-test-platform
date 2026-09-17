@@ -28,6 +28,11 @@ select = [
     "E9",     # 语法/IO 错误(E1/E2/E7 等格式族不开)
     "B",      # flake8-bugbear —— 可变默认参数、循环里的闭包变量等真实陷阱
     "T20",    # 生产代码里的 print
+    # E722(#739b)：裸 `except:` —— 它连 KeyboardInterrupt/SystemExit 一起吞掉，
+    # 且「出了错」与「本来就没有」在日志里不可区分。E7 的其余规则（缩进/语句格式）
+    # 仍不开，这里只取这一条**真实缺陷**判据。启用时全仓（除已排除的
+    # backend/agent/resources 与 alembic 历史）仅 1 处，已随同一改动收口。
+    "E722",
 ]
 
 # UP(pyupgrade)暂不开:全量 2239 处,其中 UP045 `Optional[X]`→`X | None` 882、
