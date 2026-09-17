@@ -76,3 +76,27 @@ Class: process
   没有擅自同步生产：改 node-exporter 的 ARGS 要 restart（打断抓取）、换采样器会动生产指标形状，
   都属需运维批准的变更；检测器的职责是让它可见、可复查，并在下次部署前自动提醒。
 
+**补记二（同日 14:2x，经批准把真漂移同步进生产）**：
+
+- 落地 4 项：`/etc/default/prometheus-node-exporter`、`/usr/local/sbin/stp-mem-top`、
+  `stp-mem-top.{service,timer}`；备份统一后缀 `.bak-stpguard-202609171422`。检测器复跑
+  **7 match / 0 drift / 2 skipped，rc=0**。
+- 效果可量化（不只是"文件对齐了"）：`node_nfsd_connections_total=48`、
+  `node_nfsd_disk_bytes_read_total≈175MB`、`…_written_total≈860MB` 已进 Prometheus ⇒
+  #2197 的存储页 NFS 服务端数据源第一次真的有数。附带收掉一个暴露面：node_exporter 原本
+  监听 `*:9100`，按仓库 ARGS 收窄成 `127.0.0.1:9100`（查证过当时只有本机 Prometheus 在抓）。
+- 覆盖前逐条核过那条运维手改（排除 `home/android/sonic_agent`）：该挂载点当前不存在，且
+  仓库正则的 `var/lib/.+` 覆盖更广 ⇒ 用仓库版**无损**。若以后又挂 Android 设备，需要的是
+  仓库模板支持站点差异，而不是回到手改 `/etc`。
+- 一次**白重启**：脚本先按主检出路径找检测器（它还在 #2517 分支上）⇒ 安装计划为空却仍
+  执行了 restart，node_exporter 无配置变更被重启一次（约 15s 抓取空窗）。记在这里是因为
+  "先验证计划非空，再执行不可逆动作"本该是流程的一部分。
+- 又抓到一次**假漂移**：主检出工作树当时被别的 Execution 切在 `refactor/1520-*` 上，
+  `--repo-root` 指过去就把已装规则比对到了那棵树里的旧源文件。⇒ 检测器现在自己打印
+  `事实源 = <path> @ <branch> <sha>`，非 main 时附「可能假漂移」提示（不改退出码）。
+  也反过来印证了接线的选择：`check-deploy-source.sh` 先校验「树在 main」，走它的人不会吃到这个坑。
+- **`/etc/default/prometheus` 故意没同步**，保持 `skipped`：现装的启动参数是硬写进
+  `stability-backend`/prometheus unit 的 `ExecStart`（`--config.file=/etc/prometheus/prometheus.yml`、
+  `--storage.tsdb.path=/var/lib/prometheus/metrics2/`），而仓库版会改成 `/etc/stp/prometheus/…`
+  与不带 `metrics2/` 的路径——那是能让历史数据在面板上"消失"的变更，属路径收敛议题（#2283
+  接管话题），不该混在一次"补 nfsd 采集器"的同步里。

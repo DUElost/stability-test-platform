@@ -84,6 +84,24 @@ def expected_text(source: Path, deploy_root: Path) -> str:
     return text.replace("<deploy-root>", str(deploy_root))
 
 
+def describe_source_repo(repo_root: Path) -> str:
+    """标注事实源是哪棵树、在哪个 revision 上。
+
+    实测骗过一次：`--repo-root` 指向主检出，而那棵工作树当时正被别的 Execution 切在
+    特性分支上 ⇒ 已装规则被比对该分支的**旧**源文件，判出一条假 DRIFT。`runbook` 路径上
+    `check-deploy-source.sh` 已先校验「树在 main」，但直接跑本工具的人没有这道前置，
+    所以至少要把它看见——提示不改退出码（保持 WARN 语义）。
+    """
+    probe = subprocess.run(["git", "-C", str(repo_root), "log", "-1", "--format=%h"],
+                           capture_output=True, text=True)
+    sha = probe.stdout.strip() if probe.returncode == 0 else "?"
+    branch = subprocess.run(["git", "-C", str(repo_root), "symbolic-ref", "--short", "HEAD"],
+                            capture_output=True, text=True)
+    name = branch.stdout.strip() if branch.returncode == 0 else "(detached)"
+    note = "" if name == "main" else "  ⚠ 事实源不在 main：比对的是那棵树的当前内容，可能假漂移"
+    return f"{repo_root} @ {name} {sha}{note}"
+
+
 def candidate_paths(destination: str) -> list[str]:
     paths = [destination]
     legacy = LEGACY_FALLBACKS.get(destination)
@@ -148,13 +166,15 @@ def main(argv: list[str] | None = None) -> int:
     exit_code, counts = summarize(results)
 
     if args.json:
-        print(json.dumps({"repo_root": args.repo_root, "counts": counts, "exit_code": exit_code,
+        print(json.dumps({"repo_root": args.repo_root,
+                          "repo_source": describe_source_repo(Path(args.repo_root)), "counts": counts, "exit_code": exit_code,
                           "deploy_root": str(deploy_root), "deploy_root_source": reason,
                           "assets": results}, ensure_ascii=False, indent=2))
         return exit_code
 
     print("# 监控/告警资产漂移检测（事实源：monitoring_artifacts()）")
     print(f"# <deploy-root> = {deploy_root}（依据：{reason}）")
+    print(f"# 事实源 = {describe_source_repo(Path(args.repo_root))}")
     for item in results:
         mark = {MATCH: "OK  ", DRIFT: "DRIFT", ABSENT: "ABSENT", SKIPPED: "SKIP "}[item["state"]]
         where = item["hit"] or item["destination"]

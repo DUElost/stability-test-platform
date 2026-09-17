@@ -241,3 +241,33 @@ def test_guard_still_passes_when_detector_reports_drift(tmp_path, fake_repo):
     assert "No such file" not in proc.stderr, "子进程没起来 ⇒ 断言假绿"
     assert "usage:" not in proc.stderr, "参数没被接受 ⇒ 断言假绿"
     assert "DRIFT" in proc.stderr  # 漂移行确实被透出来了，不是静默吞掉
+
+
+# ---------------------------------------------------------------- 事实源标注
+
+def test_source_repo_annotation_warns_off_main(monkeypatch, tmp_path):
+    """回归：`--repo-root` 指向一棵不在 main 上的工作树时，必须自己说出来。
+
+    实测骗过一次：主检出被别的 Execution 切在特性分支上，已装的 19 条规则被比对到那棵树里
+    的**旧**源文件，判出一条假 DRIFT。不改退出码（保持 WARN 语义），但要让人一眼看见。
+    """
+    def fake_run(cmd, *a, **k):
+        if "symbolic-ref" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout="fix/some-else\n", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="abc1234\n", stderr="")
+
+    monkeypatch.setattr(_mod.subprocess, "run", fake_run)
+    line = _mod.describe_source_repo(tmp_path)
+    assert "fix/some-else" in line and "abc1234" in line
+    assert "假漂移" in line
+
+
+def test_source_repo_annotation_silent_on_main(monkeypatch, tmp_path):
+    def fake_run(cmd, *a, **k):
+        if "symbolic-ref" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout="main\n", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="deadbee\n", stderr="")
+
+    monkeypatch.setattr(_mod.subprocess, "run", fake_run)
+    line = _mod.describe_source_repo(tmp_path)
+    assert "@ main deadbee" in line and "⚠" not in line
