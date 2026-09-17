@@ -1,8 +1,32 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { ComponentProps } from 'react';
 import DeviceOverview from './DeviceOverview';
 import type { PlanRunDevicesPayload } from '@/utils/api/types';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+
+// #2601：组件新增了 host 查询（hostKeys.retiredList），渲染必须带 QueryClientProvider。
+const HOSTS = [
+  { id: 'host-101', name: 'node-a', ip: '10.0.0.1' },
+  { id: 'host-202', name: null, ip: '10.0.0.2' },
+];
+
+vi.mock('@/utils/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/utils/api')>();
+  return { ...actual, fetchHostList: vi.fn(async () => HOSTS) };
+});
+
+function renderWithClient(ui: React.ReactElement) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  const wrap = (node: React.ReactElement) => (
+    <QueryClientProvider client={queryClient}>{node}</QueryClientProvider>
+  );
+  const result = render(wrap(ui));
+  // 受控用例里的 rerender 必须带同一 provider（RTL 的 rerender 会整棵树重渲）
+  return { ...result, rerender: (node: React.ReactElement) => result.rerender(wrap(node)) };
+}
 
 const fixture: PlanRunDevicesPayload = {
   plan_run_id: 12,
@@ -103,14 +127,34 @@ const fixture: PlanRunDevicesPayload = {
 function renderInTableView(
   props: Partial<ComponentProps<typeof DeviceOverview>> = {},
 ) {
-  const result = render(<DeviceOverview data={fixture} {...props} />);
+  const result = renderWithClient(<DeviceOverview data={fixture} {...props} />);
   fireEvent.click(screen.getByTestId('device-overview-table-btn'));
   return result;
 }
 
 describe('DeviceOverview', () => {
+  it('HOST 列与 HOST 筛选显示主机显示名而不是内部 host_id（#2601）', async () => {
+    // 现场形态：`by_host` 的键是内部 slug（host-101），此前被直接当展示值——同一条
+    // host 事实在报告页显示 IP、在这里显示 slug，被读成两台不同主机。
+    renderInTableView();
+    const withName = screen.getByTestId('device-row-3001');
+    await waitFor(() => expect(withName).toHaveTextContent('node-a'));
+    expect(withName).not.toHaveTextContent('host-101');
+
+    // 没有 name 的主机退回 ip（不是 slug）
+    const withoutName = screen.getByTestId('device-row-3003');
+    await waitFor(() => expect(withoutName).toHaveTextContent('10.0.0.2'));
+
+    const filter = screen.getByTestId('device-host-filter');
+    await waitFor(() =>
+      expect(within(filter).getByRole('option', { name: /node-a/ })).toBeInTheDocument(),
+    );
+    // 筛选的 value 仍是 host_id（回传父组件的语义不变）
+    expect(within(filter).getByRole('option', { name: /node-a/ })).toHaveValue('host-101');
+  });
+
   it('defaults to grid (minimap) view and switches to table on toggle', () => {
-    render(<DeviceOverview data={fixture} />);
+    renderWithClient(<DeviceOverview data={fixture} />);
     expect(screen.getByTestId('minimap-cell-3001')).toBeInTheDocument();
     expect(screen.queryByTestId('device-row-3001')).not.toBeInTheDocument();
 
@@ -137,7 +181,7 @@ describe('DeviceOverview', () => {
   it('forwards filter changes to parent', () => {
     const onStatus = vi.fn();
     const onHost = vi.fn();
-    render(
+    renderWithClient(
       <DeviceOverview
         data={fixture}
         onStatusFilterChange={onStatus}
@@ -162,7 +206,7 @@ describe('DeviceOverview', () => {
   });
 
   it('shows empty state when no devices', () => {
-    render(
+    renderWithClient(
       <DeviceOverview
         data={{
           plan_run_id: 12,
@@ -360,7 +404,7 @@ describe('DeviceOverview', () => {
 
   it('respects controlled viewMode and emits onViewModeChange', () => {
     const onViewModeChange = vi.fn();
-    const { rerender } = render(
+    const { rerender } = renderWithClient(
       <DeviceOverview
         data={fixture}
         viewMode="grid"
@@ -412,7 +456,7 @@ const disconnectedFixture: PlanRunDevicesPayload = {
 
 describe('DeviceOverview — 连接/执行 双维度', () => {
   it('tooltip 同时保留连接提示与 grace 倒计时，而非只显示连接提示', () => {
-    const { container } = render(
+    const { container } = renderWithClient(
       <DeviceOverview data={disconnectedFixture} viewMode="table" />,
     );
     const tooltips = Array.from(container.querySelectorAll('[title]'))
@@ -424,7 +468,7 @@ describe('DeviceOverview — 连接/执行 双维度', () => {
   });
 
   it('minimap 方块按执行维度着色，连接状态拼进 label', () => {
-    render(<DeviceOverview data={disconnectedFixture} />);
+    renderWithClient(<DeviceOverview data={disconnectedFixture} />);
     const label = screen.getByTestId('minimap-cell-4001').getAttribute('aria-label') ?? '';
     expect(label).toContain('DEV-OFF');
     expect(label).toContain('已断开');   // 执行维度 unknown
@@ -433,7 +477,7 @@ describe('DeviceOverview — 连接/执行 双维度', () => {
 
   it('渲染连接维度 chip 组并把选择回传父组件', () => {
     const onLink = vi.fn();
-    render(
+    renderWithClient(
       <DeviceOverview data={disconnectedFixture} onLinkFilterChange={onLink} />,
     );
     expect(screen.getByTestId('device-link-filter-offline')).toHaveTextContent('1');
@@ -442,7 +486,7 @@ describe('DeviceOverview — 连接/执行 双维度', () => {
   });
 
   it('后端未返回 by_link_status 时不渲染连接 chip 组', () => {
-    render(<DeviceOverview data={fixture} onLinkFilterChange={vi.fn()} />);
+    renderWithClient(<DeviceOverview data={fixture} onLinkFilterChange={vi.fn()} />);
     expect(screen.queryByTestId('device-link-filter-offline')).not.toBeInTheDocument();
     expect(screen.getByTestId('device-status-filter-running')).toBeInTheDocument();
   });

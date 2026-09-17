@@ -24,6 +24,7 @@ import {
   type DeviceTableSort,
 } from './planExecuteTableSort';
 import { isSchedulable } from './tileStatus';
+import { hostLabel } from '@/utils/hostDisplay';
 
 interface DeviceTablePanelProps {
   devices: ReadinessDevice[];
@@ -124,8 +125,7 @@ export function DeviceTablePanel({
               const occupancy = occupancyByDeviceId.get(device.id);
               const hostId = String(device.host_id ?? 'unassigned');
               const host = hostMap.get(hostId);
-              const hostLabel =
-                host?.ip || host?.name || (hostId === 'unassigned' ? '未分配节点' : hostId);
+              const label = hostLabel(host, hostId);
               const versionText = device.build_display_id || '—';
               return (
                 <TableRow
@@ -149,7 +149,7 @@ export function DeviceTablePanel({
                     />
                   </TableCell>
                   <TableCell className="px-3 py-2 font-mono text-xs">{device.serial}</TableCell>
-                  <TableCell className="px-3 py-2 font-mono text-xs">{hostLabel}</TableCell>
+                  <TableCell className="px-3 py-2 font-mono text-xs">{label}</TableCell>
                   <TableCell className="px-3 py-2">{device.model || '—'}</TableCell>
                   <TableCell className="max-w-[10rem] px-3 py-2">
                     <TooltipProvider delayDuration={200}>
