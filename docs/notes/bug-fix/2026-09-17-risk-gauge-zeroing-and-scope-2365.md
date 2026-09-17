@@ -45,7 +45,7 @@ gauge 会把「已经没有数据」也显示成「分布还在」。也违反�
   而**记录器保持空**（这次调用不得写全局 gauge）。旧实现会在这里把 4 覆盖成 1，正是可区分点。
 - 用记录器替身（`monkeypatch` 掉 `results.risk_jobs_by_level`）而不是读 `REGISTRY` 终值：
   沿用同文件 #2365 既有用例的做法，避免用例之间通过全局注册表互相污染。
-- 标签集合未变（仍是 `level`），故 `tests/test_prometheus_alert_metric_names.py` / 告警与
+- 标签集合未变（仍是 `level`），故 `tests/tests/test_prometheus_alerts_contract.py` / 告警与
   仪表板契约不受影响；实际跑的结果见 PR。
 - `check:quick`、`ruff`：见 PR。
 
