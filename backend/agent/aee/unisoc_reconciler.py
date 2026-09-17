@@ -158,6 +158,9 @@ class UnisocUniviewReconciler:
         # #2394-①：unresolved gauge 的逐目录观察态（每目录 WARN 一次；
         # 名字从 listing 消失或已入 processed 即复位，防状态无界增长）。
         self._unresolved_ticks: Dict[str, int] = {}
+        #: #2252 降级目录的本 job 累计集（按名去重）——快照语义在收尾拍会归零漏桥，
+        #: 真机首验（2026-09-17 run 17948）实证过该坑：skip 发生过一次，stop stats 却是 0。
+        self._oversized_seen: Set[str] = set()
         self._unresolved_warned: Set[str] = set()
         self._unresolved_warn_after = max(
             1, _env_int("STP_WATCHER_UNISOC_UNRESOLVED_WARN_TICKS", 3),
@@ -607,8 +610,10 @@ class UnisocUniviewReconciler:
                 self._note_dir_failure(name)
         self._unconfirmed_local = unconfirmed
         self._payload_skipped = payload_skipped
-        # #2394-①：降级态同样是「采到但残缺」的可桥接事实
-        self.stats.dirs_oversized_skipped = len(payload_skipped)
+        # #2394-①：降级态同样是「采到但残缺」的可桥接事实。**累计去重**语义
+        # （收尾拍无 skip 也保留历史事件量，桥接端按单调计数消费）。
+        self._oversized_seen.update(payload_skipped)
+        self.stats.dirs_oversized_skipped = len(self._oversized_seen)
         if pulled:
             logger.info(
                 "unisoc_reconciler_pulled serial=%s job=%d count=%d",

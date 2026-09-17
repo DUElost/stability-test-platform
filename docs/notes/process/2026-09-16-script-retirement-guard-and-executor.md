@@ -141,11 +141,46 @@ Class: process
   会因「存在待授权项」天天红，真故障被告警疲劳淹掉；`last_run` 则用来区分「干净」与「静默停摆」。
   probe 只用 stdlib、不 import `backend`（避免 import 期解析 `DATABASE_URL` 的老副作用）、
   不读凭据、永不写库。
+- 单元落地前查了本机实际文件系统：`/var/lib/prometheus/node-exporter` 里既有
+  `stp_hostproc.prom` 等**全是 root:root**，且 `stp-mem-top.service` 不写 `User=`。因此
+  新单元也**不能写 `User=<deploy-user>`**——非 root 写不进指标目录，probe 会按自己定的
+  契约（"指标写不出去就当场失败，不做静默停摆"）exit 1 ⇒ timer 天天 failed。单元里把这
+  条写成注释，防止日后有人"顺手补个 User="把它弄回坏状态。
+
+**补记（同日，告警面接入——顺带暴露两处契约盲区）**：
+
+- 指标没有告警就等于「跑了一个没人看的定时器」，所以补两条规则：`due>0` 持续 7 天
+  （`StabilityScriptGuardRetirementDue`）；四种不可信形态合成一条
+  （`StabilityScriptGuardUntrusted`：broken／unknown／`time()-last_run > 48h`／`absent`）。
+- **盲区 1（指标来源）**：告警结构层只认 `backend/core/metrics.py` 注册表，textfile 指标会被判
+  「未知指标」。解法不是开豁免清单，而是让 `tests/metrics_registry.py` 从生产者源码 `ast`
+  提取 `_METRIC_HELP` 的键并入索引——生产者改名/删除，告警立刻红。实现时先踩了 `ast.walk`
+  把 HELP **文案**也当指标名收进来（4 真 4 假），已改为只取 `ast.Dict` 的 keys 并校验指标名
+  字符集，非法名直接 `AssertionError`，不把垃圾名静默入表（那等于把「未知指标」伪装成已知）。
+- **盲区 2（解析器）**：`_selectors` 跳过函数名（后随 `(`），但 PromQL 的**集合运算符**
+  `or`/`and`/`unless` 既不是函数也不是指标 ⇒ 仓库 17 条规则从没用过 `or`，第一次用就被判成
+  「未知指标 or」。修的是解析器（`_SET_OPERATORS` + 解析器自证断言），不是把一条告警拆成三条
+  去迁就解析器——后者等于让实现缺陷反向约束表达力。
+- 场景层两个坑同样只有真跑 promtool 才暴露：`interval: 1h` 大于 5m staleness ⇒ 求值点上指标
+  无值 ⇒ 既凑不满 `for: 7d`（该报的不报）又让 `absent()` 误真（不该报的报）；必须 `interval: 1m`
+  且点数覆盖最长 eval_time（12100 点 ≈ 201h）。版本不对称也顺手消掉了：本机 promtool
+  2.53.3 与 CI pin 的 3.13.3（`docker run --rm --user $(id -u):$(id -g)
+  prom/prometheus:v3.13.3 --entrypoint sh … promtool test rules …`）**两版都实跑 SUCCESS**。
+- 工具教训（第三次同类）：`edit()` 用「old ⊂ new」的锚点重复执行会**叠加插入**（本次 doc 里
+  同一段被插了 3 次）。以后带锚点重放的补丁一律先查 marker 是否已存在，**且 marker 串必须逐字出现在新增文本里**——我紧接着写第二段补记时 marker 用了「另外踩了一条流程教训」而正文写的是「还有一条流程教训」，guard 当场失效、同一段被插了两遍（靠 `count()==2` 才检出）。
+
+- 还有一条流程教训：#2457 被 FIFO 队列合入**之后**我又往同一分支 push 了告警 commit，
+  它留在已合并分支上、不会进 main——`gh pr view` 只说 MERGED，真相要靠
+  `git merge-base --is-ancestor <sha> origin/main` 才看得出来。往 OPEN 分支追加内容前
+  必须先确认队列还没吃掉它；补救办法是从新 main 开分支 `cherry-pick` 重放，**不是**
+  force-push 已合并分支。
 
 ## Revisit
 
-- **谁在什么时候跑 `--guard`**：现在退出码有了，触发还没有。接的时候消费方要分开处理 `1`（有到期项→走退役流程）与 `3`（工具坏了→修工具，**不得据此退役任何东西**）。等 #2055/#2048 系列收窗后，
-  接一条定时巡检（cron 或部署后检查）即可；不要为此新增调度器 job。
+- **谁在什么时候跑 `--guard`**：**已于 2026-09-17 闭合**——控制面 `stp-script-guard.timer` 每日
+  跑 `tools/dev/script_guard_probe.py`，落四个 textfile 指标并接两条告警（`due>0` 持续 7d、
+  四种失能合成一条）。原判断「不要为此新增调度器 job」仍然成立：它是 systemd timer，
+  **没有**进后端调度器。剩待观察：`7d`/`48h` 两个阈值是拍的，真实噪声水平要跑两周后复议。
 - 冷却期 60 天是 #735 评审追加项的口径，不是实测最优——若 `PLAN_RUN_RETENTION_DAYS` 收紧，
   「窗口内零执行」的含义变化，常量与文档要一起重议（测试会挡住只改一侧）。
 - ADR-0039 的「退役 → 冷却 → 删除」第二步若启动，`plan` 产出的 manifest 形状可直接作为

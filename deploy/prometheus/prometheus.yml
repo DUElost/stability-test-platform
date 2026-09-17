@@ -11,6 +11,14 @@ global:
   external_labels:
     site: "<site-id>"
 
+# 告警规则目录（与 config.file 同级的 rules/）：installer 把仓库里的
+# deploy/prometheus/alerts-stability-platform.yml 渲到 etc/stp/prometheus/rules/。
+# **没有这一段，规则装了也不会被加载**——#2488 之前模板里根本没有 rule_files，
+# 于是按流程装出来的站点结构上不可能产生任何告警，而 installer 照样报 monitoring_ready
+# （它只看服务起没起、/-/ready 通不通）。
+rule_files:
+  - rules/*.yml
+
 scrape_configs:
   # 控制面与中心存储同机（方案 A 的 local_mount）：node-exporter 只听回环，
   # 不对外暴露指标端口。NFS 服务端指标（node_nfsd_*）也由这个 job 提供。
