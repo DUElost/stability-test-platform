@@ -799,11 +799,20 @@ def stage_s2_release_env(ctx: InstallContext) -> list[Check]:
             # PASS `export_deferred`。声明只在本次运行可见（DB 的 Host 不参与），
             # 「一次带清单、后续不带」的升级序列必然踩中。
             if not rendered and _existing_export_clients(exports_file):
+                # #2315 残余（24h 审计重开）：**保留导出文件 ≠ 服务在跑**。此前该分支只追加
+                # 一条 PASS、不做任何服务侧动作，而 `enable --now nfs-server` 只在上面的
+                # else 分支——服务被停用/未拉起时，报告仍说「存储就绪」。这里补齐：拉不起来
+                # 即如实 FAIL（不以 PASS 掩盖服务未起）；文件与导出表仍保持不动。
+                if ctx.ops.run(["systemctl", "enable", "--now", NFS_SERVER_UNIT]).returncode != 0:
+                    return _safe(
+                        checks, "install_export", location="$.storage.export_to_agents",
+                        role="storage", check_id="install.s2.export",
+                    )
                 checks.append(_pass(
                     "install.s2.export", "storage", "$.storage.export_to_agents",
                     "export_kept",
                     "No Agent is declared in this run; the existing NFS export was left "
-                    "untouched (defer ≠ teardown).",
+                    "untouched (defer ≠ teardown) and the NFS server is running.",
                     "Re-run with --agents-inventory <file> (or restore the agents block in the "
                     "site input) to publish export changes; to withdraw the export entirely, "
                     "remove the exports file and run `exportfs -ra`.",
