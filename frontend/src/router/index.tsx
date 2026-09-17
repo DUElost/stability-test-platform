@@ -1,5 +1,13 @@
 import { lazy } from 'react';
-import { BrowserRouter, Routes, Route, Navigate, Outlet, useLocation } from 'react-router-dom';
+import {
+  BrowserRouter,
+  Routes,
+  Route,
+  Navigate,
+  Outlet,
+  useLocation,
+  useParams,
+} from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import AppShell from '../layouts/AppShell';
 import { RouteTitle } from '@/hooks/useDocumentTitle';
@@ -81,6 +89,19 @@ function AdminRoute() {
 }
 
 // 公开路由组件（已登录用户重定向到首页）
+/**
+ * #2420：`/runs/:runId/report` 里的 id 一直是 **JobInstance.id**（端点与
+ * `RecentRun.run_id` 同口径），权威形状因此是 `/jobs/:jobId/report`。旧路径只作
+ * **重定向**保留（书签/历史深链不 404），刻意不做"两条都能渲染"的第二权威——那正是
+ * 本单第 4 项（产物下载双路由）批评的形态。查询串一并带过去（`?planRun=` 的归属校验
+ * 不能因为换路径而丢掉）。
+ */
+function LegacyJobReportRedirect() {
+  const { runId } = useParams<{ runId: string }>();
+  const { search } = useLocation();
+  return <Navigate to={`/jobs/${runId}/report${search}`} replace />;
+}
+
 function PublicRoute() {
   const sessionQ = useAuthSession();
   if (sessionQ.isLoading) return <AuthGateLoading />;
@@ -104,7 +125,9 @@ export default function AppRouter() {
           <Route path="/" element={<AppShell />}>
             <Route index element={<Dashboard />} />
 
-            <Route path="runs/:runId/report" element={<RunReportPage />} />
+            <Route path="jobs/:jobId/report" element={<RunReportPage />} />
+            {/* 旧形状只重定向，不再是一条独立入口（#2420） */}
+            <Route path="runs/:runId/report" element={<LegacyJobReportRedirect />} />
 
             <Route path="script-management" element={<ScriptManagementPage />} />
             <Route path="test-suites" element={<TestSuitesPage />} />
