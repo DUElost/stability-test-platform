@@ -139,6 +139,16 @@ Agent 侧的挂载在这些站点由运维按分享约定自行完成，S5 对�
   指标，见 [script-versioning](../development/script-versioning.md)），`enable --now` 相应单元，
   并实测 `http://127.0.0.1:<端口>/-/ready` 才报 PASS。
 
+- **S4b（漂移检测）**：`tools/dev/check-monitoring-assets.py` 把 `monitoring_artifacts()`
+  的每一项与站点已装副本逐字节比对（期望内容 = 源文件按本机事实渲染）。退出码
+  `0` 无漂移 / `1` 有漂移 / `2` 无从判定；每项四态 `match|drift|absent|skipped`
+  （`skipped` = 源含不可由本机确定的占位符，如 `<site-id>`、`<prometheus-port>`）。
+  **执行者是 `check-deploy-source.sh`**（每次部署前与 backend unit 的 `ExecStartPre=-`）：
+  漂移只在"改了仓库、没重跑安装"时发生，与部署时点天然重合，因此不再新开 timer；
+  检测只打 WARN——本脚本 `exit 1` 会被 runbook 读成「停止部署」，两件事不能混。
+  本机这类 installer 之前的存量部署只有 `/etc/prometheus/`，脚本按
+  `LEGACY_FALLBACKS` 认得该落点，否则会退化成"全部 absent"。
+
 > **`monitoring_ready` 不证明告警在跑**（#2488）：此前规则文件不在任何安装清单里、模板也没有
 > `rule_files` 段，安装报告照样 PASS——它只证明服务起了。现在两者都进安装产物，
 > `tests/test_site_install.py` 双向守住（缺 `rule_files` 或规则未落地 ⇒ 红）。
