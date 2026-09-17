@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -11,14 +11,9 @@ from backend.models.host import Device
 from backend.models.job import JobInstance, StepTrace
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
+from backend.services.plan_run_read_common import iso as _iso
 
 _EXPORT_MAX_JOBS = 500
-
-
-def _iso(dt) -> Optional[str]:
-    if dt is None:
-        return None
-    return dt.isoformat()
 
 
 def build_plan_run_export(db: Session, pr: PlanRun) -> dict[str, Any]:
