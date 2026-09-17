@@ -4,6 +4,10 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import PlanRunDetailPage from './PlanRunDetailPage';
 import { HeaderSlotProvider, useHeaderSlot } from '@/contexts/HeaderSlotContext';
+import { PLAN_RUN_SOCKET_COALESCE_MS } from '@/hooks/plan-run/planRunDetailUtils';
+
+/** Socket invalidation is coalesced (#2369); wait past debounce + React Query flush. */
+const socketCoalesceWait = { timeout: PLAN_RUN_SOCKET_COALESCE_MS + 2_000 };
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
@@ -485,6 +489,7 @@ describe('PlanRunDetailPage', () => {
   });
 
   it('invalidates devices+timeline on JOB_STATUS push and watcher on WATCHER_SIGNAL', async () => {
+    // Three coalesced socket paths (JOB_STATUS, WATCHER_SIGNAL, PRECHECK_UPDATE).
     renderPage();
     await waitFor(() => screen.getByTestId('device-overview'));
     expect(typeof mocks.socketCallback.current).toBe('function');
@@ -502,19 +507,18 @@ describe('PlanRunDetailPage', () => {
       type: 'JOB_STATUS',
       payload: { job_id: 3002, status: 'RUNNING' },
     });
-    await waitFor(() => expect(mocks.getDevices).toHaveBeenCalled());
+    await waitFor(() => expect(mocks.getDevices).toHaveBeenCalled(), socketCoalesceWait);
     expect(mocks.getTimeline).toHaveBeenCalled();
     expect(mocks.getWatcherSummary).not.toHaveBeenCalled();
 
     mocks.getDevices.mockClear();
 
-    // Push a WATCHER_SIGNAL — watcher should refetch (debounced 2s), devices should not.
+    // Push a WATCHER_SIGNAL — watcher should refetch (coalesced), devices should not.
     mocks.socketCallback.current!({
       type: 'WATCHER_SIGNAL',
       payload: { job_id: 3002, category: 'AEE', inserted_count: 1 },
     });
-    // WATCHER_SIGNAL invalidation is debounced 2s; wait for it to fire.
-    await waitFor(() => expect(mocks.getWatcherSummary).toHaveBeenCalled(), { timeout: 4000 });
+    await waitFor(() => expect(mocks.getWatcherSummary).toHaveBeenCalled(), socketCoalesceWait);
     expect(mocks.getDevices).not.toHaveBeenCalled();
 
     // Reset and push PLAN_RUN_STATUS — should refetch run + timeline + devices.
@@ -537,10 +541,10 @@ describe('PlanRunDetailPage', () => {
       type: 'PRECHECK_UPDATE',
       payload: { phase: 'syncing', dispatch_status: 'running' },
     });
-    await waitFor(() => expect(mocks.getRun).toHaveBeenCalled());
+    await waitFor(() => expect(mocks.getRun).toHaveBeenCalled(), socketCoalesceWait);
     expect(mocks.getTimeline).toHaveBeenCalled();
     expect(mocks.getDevices).toHaveBeenCalled();
-  });
+  }, PLAN_RUN_SOCKET_COALESCE_MS * 3 + 8_000);
 
   it('hides the dispatch gate card when precheck is absent', async () => {
     mocks.getRun.mockResolvedValueOnce({
@@ -915,10 +919,11 @@ describe('PlanRunDetailPage', () => {
       payload: { job_id: 3002, status: 'RUNNING' },
     });
 
-    await waitFor(() =>
-      expect(screen.getByTestId('device-drawer')).toHaveTextContent('after-refetch'),
+    await waitFor(
+      () => expect(screen.getByTestId('device-drawer')).toHaveTextContent('after-refetch'),
+      socketCoalesceWait,
     );
-  });
+  }, PLAN_RUN_SOCKET_COALESCE_MS + 8_000);
 
   // #780：归档提示的真实触发形状——后端只产出 `archive.scan_status`
   // （`readiness` / `ready_for_extract` 全 git 史从不产出，原夹具属「盲区自洽」）。
