@@ -23,8 +23,8 @@ API 测试 patch 点迁到 service 模块（`emit_agent_control`）。
 ## Verification
 
 - 服务直测：`test_plan_run_archive`；
-- API：`test_plan_run_archive_endpoint` + aggregation archive（14 passed）；
-- `ruff` + `check:quick`。
+- API：archive endpoint + aggregation archive（14 passed）；
+- `ruff` + `check:quick`（11 gates；god-files plan_runs 1097/2419）通过。
 
 ## Revisit
 
