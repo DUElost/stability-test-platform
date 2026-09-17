@@ -11,10 +11,12 @@
     python -m backend.scripts.check_unreferenced_script_versions --json
     python -m backend.scripts.check_unreferenced_script_versions --name flash_firmware
     python -m backend.scripts.check_unreferenced_script_versions --guard   # 巡检：超期零引用仍活跃 → exit 1
+    python backend/scripts/check_unreferenced_script_versions.py --guard   # 路径形态等价
 
 只读 SELECT；不写库、不改状态。退出码：默认恒 0（诊断工具，非门禁）；`--guard` 是显式
 门禁模式——0 = 无到期项、1 = 存在应退役而未退役的版本、2 = 使用事实不可得（无从判定，
-不降级为「零使用」）。
+不降级为「零使用」）、3 = 工具自身异常（**不是判定结果**）。3 与 1 必须可区分：判红会驱动
+运维去退役生产版本，把崩溃读成判红就是反向的过度退役。
 """
 from __future__ import annotations
 
@@ -22,6 +24,16 @@ import argparse
 import json
 import sys
 from datetime import date
+from pathlib import Path
+
+# 以 `python backend/scripts/check_unreferenced_script_versions.py` 这种**路径形态**调用时
+# sys.path[0] 是 backend/scripts，仓库根不在 path 上 ⇒ 下面的 `from backend…` 抛
+# ModuleNotFoundError，解释器退出码恰好与 `--guard` 的「存在应退役版本」同码为 1
+# （2026-09-17 实测踩到）。文档契约形态本是 `python -m`，但误用形态不得伪装成判红，
+# 故与 tools/dev/retire_script_versions.py（PR #2430）同款补 bootstrap，与 cwd 无关。
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from sqlalchemy import create_engine, text
 
@@ -35,6 +47,9 @@ from backend.services.script_retirement import (
     retirement_candidates,
     version_key,
 )
+
+# `--guard` 三个判定码之外的第四个退出码：工具自身异常，与 0/1/2 正交（不是判定结果）。
+GUARD_ERROR_EXIT = 3
 
 _QUERY = text(
     """
@@ -137,7 +152,7 @@ def _report(
     return plan, hold
 
 
-def main(argv: list[str] | None = None) -> int:
+def _evaluate(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json", action="store_true", help="输出 JSON")
     parser.add_argument("--name", help="只看指定脚本名（如 flash_firmware）")
@@ -245,6 +260,26 @@ def main(argv: list[str] | None = None) -> int:
                 print("GUARD OK: 无超期零引用活跃版本")
         return 1 if plan else 0
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    """把非预期异常折成 `GUARD_ERROR_EXIT`，保住「1 只来自真判定」这条契约。
+
+    bootstrap 堵掉最常见的一条（调用形态错导致的 import 期崩溃），这里兜其余同源风险：
+    连接失败、schema 漂移、依赖缺失。bootstrap 之前 import 期就炸，任何 wrapper 都抓不到
+    ⇒ 两者必须同时存在，退出码契约才成立。
+    """
+    try:
+        return _evaluate(argv)
+    except SystemExit:
+        raise  # argparse 的 --help / 参数错误自己处理，不改写
+    except Exception as exc:  # noqa: BLE001 — 就是要兜住一切非判定异常
+        print(
+            f"GUARD ERROR: 工具自身异常（退出码 {GUARD_ERROR_EXIT}，"
+            f"这**不是**「存在应退役版本」）：{type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        return GUARD_ERROR_EXIT
 
 
 if __name__ == "__main__":

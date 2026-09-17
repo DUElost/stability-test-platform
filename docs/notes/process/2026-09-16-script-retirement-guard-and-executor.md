@@ -86,16 +86,29 @@ Class: process
 - 守卫上线后对生产库首跑即 `--guard` 退出码 `1`（`active ∧ 零引用` 由 32 涨到 36——期间
   其他批次注册了 3 个新版本，其中一个把同族旧版顶成「零引用 + 零执行 + 非最新」）。
   判据本身工作正常：这正是要它自动产出的候选，不需要人再盘一遍。
-- **执行器 `plan` 子命令在文档给的调用形式下必炸**：`python tools/tools…` 直跑时
+- **执行器 `plan` 子命令在文档给的调用形式下必炸**：`python tools/dev/retire_script_versions.py plan` 直跑时
   `sys.path[0]` 是 `tools/dev`，函数内 `from backend…` 抛 `ModuleNotFoundError`。
   单测当时用 importlib + `PYTHONPATH=.` 加载模块，恰好绕过了这条路径形态——教训：
   **CLI 工具的回归必须包含「按路径直跑」的子进程用例**（已补
   `test_script_runs_when_invoked_by_path`，反证：去掉 bootstrap 该测试红）。
   修法与 #1659 的 `queue_head_telemetry.py` 同款：`__file__` 推导 `REPO_ROOT` 插入 sys.path。
 
+**补记（次日 2026-09-17，合入后首巡暴露的第二类假红）**：
+
+- 按路径形态调用 `backend/scripts/check_unreferenced_script_versions.py --guard` 时，import 期
+  `ModuleNotFoundError` 让解释器返回 **1**——与 `--guard` 的「存在应退役版本」同码。判红是退役
+  授权依据，这条混淆的方向比漏退役更危险（运维会去 `DELETE` 根本不该动的版本）。
+- 两道防线，缺一不可（各有回归用例）：① 与 `retire_script_versions.py` 同款的 `REPO_ROOT`
+  bootstrap，使 `-m` 与路径形态等价——import 期崩溃发生在任何 wrapper 之前，只加 wrapper 拦不住；
+  ② `main()` 包一层，把非预期异常折成 `GUARD_ERROR_EXIT = 3` 并显式打 `GUARD ERROR`，连接失败、
+  schema 漂移等也不再伪装成 1。
+- 教训比本工具更一般：**凡给自动化消费的退出码，必须为「工具自己坏了」留一个不属于任何判定
+  语义的码**。只定义 0/1/2 的契约，默认含义就是「崩溃算 1 号判定」。同理，反证要做两遍：删
+  bootstrap 第一条断言红、删 wrapper 第二条断言红。
+
 ## Revisit
 
-- **谁在什么时候跑 `--guard`**：现在退出码有了，触发还没有。等 #2055/#2048 系列收窗后，
+- **谁在什么时候跑 `--guard`**：现在退出码有了，触发还没有。接的时候消费方要分开处理 `1`（有到期项→走退役流程）与 `3`（工具坏了→修工具，**不得据此退役任何东西**）。等 #2055/#2048 系列收窗后，
   接一条定时巡检（cron 或部署后检查）即可；不要为此新增调度器 job。
 - 冷却期 60 天是 #735 评审追加项的口径，不是实测最优——若 `PLAN_RUN_RETENTION_DAYS` 收紧，
   「窗口内零执行」的含义变化，常量与文档要一起重议（测试会挡住只改一侧）。
