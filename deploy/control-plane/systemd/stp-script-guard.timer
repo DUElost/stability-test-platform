@@ -1,0 +1,14 @@
+# Rendered by the site installer for <deploy-root> — do not edit by hand.
+[Unit]
+Description=Daily STP script retirement guard probe (09:30)
+
+[Timer]
+# 工作时段内跑，第一声告警才有人当场处理；Persistent 让停机窗口后补跑一次，
+# 避免「某天没开机就整周没巡检」。
+OnCalendar=*-*-* 09:30:00
+RandomizedDelaySec=5m
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
