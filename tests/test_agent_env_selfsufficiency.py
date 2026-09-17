@@ -69,16 +69,33 @@ def test_conftest_does_not_clobber_caller_supplied_secret():
 def test_ci_runs_agent_tests_with_ambient_env_stripped():
     """CI 的 agent 真跑必须 `env -i`，否则它替套件把缺口遮掉。"""
     text = CI_YML.read_text(encoding="utf-8")
+    # 只锚 PR 路径的 pr-agent-tests（夜间 backend-test 另有同名 step，带 cov、不剥环境）
+    job_match = re.search(
+        r"(?ms)^  pr-agent-tests:.*?(?=^  [a-z0-9-]+:|\Z)",
+        text,
+    )
+    assert job_match, "未找到 ci.yml 的 pr-agent-tests job"
+    job_text = job_match.group(0)
     match = re.search(
-        r"- name: Run agent tests\n\s+run:\s*(.+)", text
+        r"- name: Run agent tests\n((?:[ \t]+.+\n)+)",
+        job_text,
     )
-    assert match, "未找到 ci.yml 的「Run agent tests」step（改了名字请同步本判据）"
-    command = match.group(1).strip()
-    assert command.startswith("env -i"), (
-        f"CI 的 agent 真跑没有剥环境（{command}）：job 级 JWT_SECRET_KEY 会再次遮蔽"
-        "套件自身的 env 缺口（#2428 的成因机制）"
+    assert match, "未找到 pr-agent-tests 的「Run agent tests」step（改了名字请同步本判据）"
+    body = match.group(1)
+    assert "env -i" in body and "backend/agent/tests" in body, (
+        "CI 的 agent 真跑没有剥环境：job 级 JWT_SECRET_KEY 会再次遮蔽"
+        "套件自身的 env 缺口（#2428 的成因机制）。"
+        f" step body 摘录：\n{body[:400]}"
     )
-    assert "backend/agent/tests" in command, "判据取错 step"
+    # env -i 必须落在实际调用 agent 套件的那一行（并行脚本里 repo 子集故意不剥）
+    agent_lines = [
+        ln for ln in body.splitlines()
+        if "backend/agent/tests" in ln and "pytest" in ln
+    ]
+    assert agent_lines, "step 内找不到 pytest backend/agent/tests 调用"
+    assert any("env -i" in ln for ln in agent_lines), (
+        f"agent pytest 行未带 env -i：{agent_lines}"
+    )
 
 
 def test_local_gate_matches_ci_agent_step():

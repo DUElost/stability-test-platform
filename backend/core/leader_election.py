@@ -15,7 +15,14 @@ Behaviour:
   会让所有副本同时自认 leader，双跑风险不对称地大于跳过成本。DB 恢复后
   tick 自动恢复。
 - Lock is held only for the duration of the ``leadership`` context and is
-  released on exit (or when the DB session closes).
+  released on exit (or when the holding connection closes). The context owns
+  one checked-out ``Connection`` for its whole life: the lock is
+  session/backend-scoped, so the connection must not go back to the pool
+  while we still hold it (#703).
+- **The acquire transaction never outlives the acquire** (#703): right after
+  the lock is taken the transaction is committed, so a singleton job body
+  (minutes long) does not park its connection in ``idle in transaction``.
+  A session-level advisory lock survives that ``commit()``.
 """
 
 from __future__ import annotations
@@ -59,7 +66,7 @@ def hold_scheduler_leadership(job_name: str) -> Iterator[bool]:
         yield True
         return
 
-    from backend.core.database import SessionLocal, is_sqlite_url, normalize_sync_database_url
+    from backend.core.database import is_sqlite_url, normalize_sync_database_url
     import backend.core.database as db_mod
 
     sync_url = normalize_sync_database_url(db_mod.DATABASE_URL)
@@ -71,13 +78,18 @@ def hold_scheduler_leadership(job_name: str) -> Iterator[bool]:
         return
 
     key = advisory_lock_key(job_name)
+    # #703：**这里刻意用 Connection 而不是 Session**。session 级 advisory lock 绑在
+    # 后端进程上，commit / rollback 都不释放它；而 ``Session.commit()`` 会把连接**归还
+    # 池**——锁就留在池里那条再没人认领的连接上（同 key 永不释放，别的副本从此当不了
+    # leader）。``Connection`` 在 ``close()`` 前独占这条连接，于是可以在「保住锁」的
+    # 同时结束事务（见下方取锁后的 commit）。
     try:
-        db_cm = SessionLocal()
+        conn = db_mod.engine.connect()
     except Exception:
         # R01-F10（#890）：真 Postgres 多实例形态下失败不再 fail-open——
         # 所有副本同时自认 leader 的双跑风险不对称地大于跳过一轮 tick。
         logger.warning(
-            "scheduler_leadership_fail_closed job=%s reason=session_factory "
+            "scheduler_leadership_fail_closed job=%s reason=connect "
             "(skipping tick)",
             job_name,
             exc_info=True,
@@ -85,55 +97,56 @@ def hold_scheduler_leadership(job_name: str) -> Iterator[bool]:
         yield False
         return
 
-    db = db_cm
+    acquired = False
     try:
-        # Probe dialect without assuming connect succeeded until execute.
-        bind = db.get_bind()
-        if getattr(bind.dialect, "name", "") != "postgresql":
-            yield True
-            return
-        acquired = bool(
-            db.execute(
-                text("SELECT pg_try_advisory_lock(:k)"),
-                {"k": key},
-            ).scalar()
-        )
-    except Exception:
-        logger.warning(
-            "scheduler_leadership_fail_closed job=%s reason=lock_acquire "
-            "(skipping tick)",
-            job_name,
-            exc_info=True,
-        )
         try:
-            db.close()
+            # Probe dialect without assuming connect succeeded until execute.
+            if conn.dialect.name != "postgresql":
+                yield True
+                return
+            acquired = bool(
+                conn.execute(
+                    text("SELECT pg_try_advisory_lock(:k)"),
+                    {"k": key},
+                ).scalar()
+            )
         except Exception:
-            pass
-        yield False
-        return
-
-    if not acquired:
-        logger.debug("scheduler_leadership_skipped job=%s", job_name)
-        try:
-            db.close()
-        except Exception:
-            pass
-        yield False
-        return
-
-    try:
-        yield True
-    finally:
-        try:
-            db.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": key})
-            db.commit()
-        except Exception:
-            logger.debug(
-                "scheduler_leadership_unlock_failed job=%s",
+            logger.warning(
+                "scheduler_leadership_fail_closed job=%s reason=lock_acquire "
+                "(skipping tick)",
                 job_name,
                 exc_info=True,
             )
+            yield False
+            return
+
+        if not acquired:
+            logger.debug("scheduler_leadership_skipped job=%s", job_name)
+            yield False
+            return
+
+        # #703：取锁事务**就地结束**。不 commit 的话，这个事务被 ``yield`` 挂在整个
+        # job 体上（singleton job 分钟级），连接一直停在 ``idle in transaction``——
+        # 2026-09-13 生产事故里那条根会话的形态正是
+        # ``state=idle in transaction`` + ``SELECT pg_try_advisory_lock($1)``，
+        # 其后排着 85 个等它的会话（当时 app 池之外还顶满了 PG max_connections）。
+        # 互斥性不受影响：session 级锁不随 commit 释放。
+        conn.commit()
+        yield True
+    finally:
+        if acquired:
+            try:
+                conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": key})
+                conn.commit()
+            except Exception:
+                logger.debug(
+                    "scheduler_leadership_unlock_failed job=%s",
+                    job_name,
+                    exc_info=True,
+                )
         try:
-            db.close()
+            # 唯一的关闭出口：取锁失败、未抢到、非 Postgres 方言提前放行，都走这里
+            # 归还连接（旧实现在方言分支上不关闭，只靠 GC 兜）。
+            conn.close()
         except Exception:
             pass

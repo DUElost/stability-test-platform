@@ -73,3 +73,11 @@ Class: bug-fix
   消费者，需 grep 部署脚本/runbook 后定。
 - `summary_metrics` 面板在生产的死活问题属 **#2419 第 4 项**（本单第 1 项的相关面：
   报告页里"永远为空"的东西），两边不要各修一半。
+
+---
+
+**后续走向（2026-09-17 追记，不改写上面的当时口径）**：第 2 项已由
+[`2026-09-17-job-report-route-ownership-2420.md`](./2026-09-17-job-report-route-ownership-2420.md)
+落地；第 3/4 项已由
+[`2026-09-17-live-envelope-and-download-unify-2420.md`](./2026-09-17-live-envelope-and-download-unify-2420.md)
+收口（live 补信封、双下载路由共用一份实现并标权威）。#2420 五件至此全部落地。
