@@ -7,21 +7,17 @@ from __future__ import annotations
 
 import logging
 import time
-from copy import deepcopy
 from typing import Optional
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
-from sqlalchemy import String, cast, func, or_, select
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
 
 from backend.api.response import ApiResponse, ok
 from backend.api.routes.auth import get_current_active_user, User
 from backend.api.schemas.case_result import (
-    TestCaseResultOut,
-    TestCaseResultSummary,
     TestCaseResultsPayload,
 )
 from backend.api.schemas.plan_run import (
@@ -32,13 +28,10 @@ from backend.api.schemas.plan_run import (
     PlanRunAbortIn,
     PlanRunDevicesOut,
     PlanRunEventsOut,
-    PlanRunLogEventOut,
     PlanRunLogEventsOut,
     PlanRunDetailOut,
     PlanRunListPageOut,
-    PlanRunListStatsOut,
     PlanRunTimelineOut,
-    StepTraceOut,
     WatcherSummaryOut,
 )
 from backend.core.database import get_db
@@ -46,15 +39,7 @@ from backend.core.metrics import (
     record_plan_run_devices_query_duration,
 )
 from backend.models.enums import PlanRunStatus
-from backend.models.host import Device
-from backend.core.job_timeout_config import (
-    PRECHECK_ACTIVE_STALE_SECONDS,
-    PRECHECK_QUEUE_STALE_SECONDS,
-)
-from backend.models.job import JobArtifact, JobInstance, StepTrace
-from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
-from backend.models.project import TestProject
 from backend.services.plan_run_timeline import build_plan_run_timeline
 from backend.services.plan_run_event_feed import build_plan_run_events
 from backend.services.plan_run_chain import build_plan_run_chain
@@ -64,6 +49,12 @@ from backend.services.plan_run_chain import (  # noqa: F401
     chain_node_from_run,
 )
 from backend.services.plan_run_archive import archive_plan_run_logs
+from backend.services.plan_run_summary import build_plan_run_summary
+from backend.services.plan_run_job_artifacts import list_plan_run_job_artifacts
+from backend.services.plan_run_result_views import (
+    build_plan_run_log_events,
+    build_plan_run_test_case_results,
+)
 from backend.services.plan_run_devices import (
     build_plan_run_devices,
 )
@@ -98,12 +89,21 @@ from backend.services.plan_run_export import (
     build_plan_run_export,
     plan_run_export_to_markdown,
 )
-from backend.services.device_log_event import (
-    list_plan_run_device_log_event_platforms,
-    list_plan_run_device_log_events,
-)
-from backend.services.case_result_ingest import list_plan_run_test_case_results
 from backend.services.job_artifact_download import build_artifact_download_response
+from backend.services.plan_run_catalog import (
+    build_plan_run_detail,
+    build_plan_run_jobs,
+    build_plan_run_list_page,
+)
+# 既有测试可能从路由导入这些装配符号（#747 device_count、列表过滤回归都碰它们）。
+from backend.services.plan_run_catalog import (  # noqa: F401
+    _apply_plan_run_list_filters,
+    _job_out,
+    _plan_run_capabilities,
+    _plan_run_out,
+    _project_run_context,
+    _step_out,
+)
 from backend.services.plan_run_watcher_summary import (
     build_plan_run_crash_details,
     build_plan_run_watcher_summary,
@@ -149,179 +149,6 @@ def _iso(v) -> str | None:
     return v.isoformat()
 
 
-def _project_run_context(pr: PlanRun) -> Optional[dict]:
-    if not isinstance(pr.run_context, dict):
-        return pr.run_context
-    context = deepcopy(pr.run_context)
-    state = context.get("dispatch_state")
-    if not isinstance(state, dict):
-        return context
-
-    status = str(state.get("status") or "")
-    anchor_raw = (
-        state.get("started_at")
-        if status == "running"
-        else state.get("enqueued_at")
-    )
-    timeout_seconds = (
-        PRECHECK_ACTIVE_STALE_SECONDS
-        if status == "running"
-        else PRECHECK_QUEUE_STALE_SECONDS
-    )
-    if status in {"queued", "running"} and anchor_raw:
-        try:
-            anchor = datetime.fromisoformat(
-                str(anchor_raw).replace("Z", "+00:00")
-            )
-            deadline = _aware(anchor) + timedelta(seconds=timeout_seconds)
-            state["deadline_at"] = deadline.isoformat()
-            state["stale"] = datetime.now(timezone.utc) >= deadline
-        except (TypeError, ValueError):
-            state["deadline_at"] = None
-            state["stale"] = False
-    else:
-        state["stale"] = False
-    summary = pr.result_summary if isinstance(pr.result_summary, dict) else {}
-    state["retryable"] = (
-        pr.status == PlanRunStatus.FAILED.value
-        and bool(summary.get("precheck_failed") or summary.get("dispatch_failed"))
-    )
-    return context
-
-
-def _plan_run_capabilities(pr: PlanRun) -> dict:
-    summary = pr.result_summary if isinstance(pr.result_summary, dict) else {}
-    terminal = pr.status in {
-        PlanRunStatus.SUCCESS.value,
-        PlanRunStatus.PARTIAL_SUCCESS.value,
-        PlanRunStatus.FAILED.value,
-    }
-    return {
-        "abort": pr.status in (
-            PlanRunStatus.RUNNING.value,
-            # ADR-0026: QUEUED/PRECHECK abort → straight FAILED (no jobs)
-            PlanRunStatus.QUEUED.value,
-            PlanRunStatus.PRECHECK.value,
-        ),
-        "retry_dispatch": (
-            pr.status == PlanRunStatus.FAILED.value
-            and bool(
-                summary.get("precheck_failed")
-                or summary.get("dispatch_failed")
-            )
-        ),
-        "final_archive": terminal,
-    }
-
-
-def _plan_run_out(
-    pr: PlanRun,
-    jobs: list[JobInstanceOut] | None = None,
-    plan_name: str | None = None,
-    device_count: int | None = None,
-) -> PlanRunDetailOut:
-    return PlanRunDetailOut(
-        id=pr.id,
-        plan_id=pr.plan_id,
-        status=pr.status,
-        failure_threshold=pr.failure_threshold,
-        run_type=pr.run_type,
-        triggered_by=pr.triggered_by,
-        started_at=_iso(pr.started_at) or "",
-        ended_at=_iso(pr.ended_at),
-        result_summary=pr.result_summary,
-        run_context=_project_run_context(pr),
-        plan_snapshot=pr.plan_snapshot,
-        parent_plan_run_id=pr.parent_plan_run_id,
-        root_plan_run_id=pr.root_plan_run_id,
-        chain_index=pr.chain_index or 0,
-        next_plan_triggered=bool(pr.next_plan_triggered),
-        plan_name=plan_name,
-        project_key=pr.project.project_key if pr.project else None,
-        capabilities=_plan_run_capabilities(pr),
-        jobs=jobs or [],
-        # Distinct devices, not JobInstance row count (#747). List and detail
-        # share this fallback so multi-job-per-device runs do not inflate.
-        device_count=(
-            device_count
-            if device_count is not None
-            else len({j.device_id for j in (jobs or [])})
-        ),
-        queue_reason=pr.queue_reason,
-        enqueued_at=_iso(pr.enqueued_at),
-        next_admission_at=_iso(pr.next_admission_at),
-        priority=pr.priority or 0,
-    )
-
-
-def _step_out(t: StepTrace) -> StepTraceOut:
-    return StepTraceOut(
-        id=t.id, job_id=t.job_id, step_id=t.step_id, stage=t.stage,
-        event_type=t.event_type, status=t.status, output=t.output,
-        error_message=t.error_message, exit_code=t.exit_code,
-        metadata=t.step_metadata,
-        original_ts=_iso(t.original_ts) or "",
-        created_at=_iso(t.created_at) or "",
-    )
-
-
-def _job_out(job: JobInstance, traces: list, device_serial: str | None = None) -> JobInstanceOut:
-    return JobInstanceOut(
-        id=job.id, plan_run_id=job.plan_run_id, plan_id=job.plan_id,
-        device_id=job.device_id, device_serial=device_serial,
-        host_id=job.host_id, status=job.status,
-        status_reason=job.status_reason,
-        execution_state=job.execution_state,
-        last_execution_heartbeat_at=_iso(job.last_execution_heartbeat_at),
-        last_progress_at=_iso(job.last_progress_at),
-        started_at=_iso(job.started_at),
-        ended_at=_iso(job.ended_at),
-        created_at=_iso(job.created_at),
-        step_traces=[_step_out(t) for t in traces],
-    )
-
-
-# ── Endpoints ────────────────────────────────────────────────────────────
-
-def _apply_plan_run_list_filters(
-    stmt,
-    *,
-    plan_id: Optional[int],
-    statuses: Optional[list[PlanRunStatus]],
-    project_key: Optional[str],
-    q: Optional[str],
-    db: Session,
-    join_plan_for_search: bool = False,
-):
-    """共享 list / count / stats 的过滤条件。project_key 未知 → 404。"""
-    if plan_id is not None:
-        stmt = stmt.where(PlanRun.plan_id == plan_id)
-    if statuses:
-        values = [s.value for s in statuses]
-        if len(values) == 1:
-            stmt = stmt.where(PlanRun.status == values[0])
-        else:
-            stmt = stmt.where(PlanRun.status.in_(values))
-    if project_key is not None:
-        if db.query(TestProject).filter(TestProject.project_key == project_key).first() is None:
-            raise HTTPException(status_code=404, detail="project not found")
-        stmt = stmt.join(TestProject, PlanRun.project_id == TestProject.id).where(
-            TestProject.project_key == project_key
-        )
-    needle = (q or "").strip()
-    if needle:
-        pattern = f"%{needle}%"
-        clauses = [
-            PlanRun.triggered_by.ilike(pattern),
-            cast(PlanRun.id, String).ilike(pattern),
-        ]
-        if join_plan_for_search:
-            stmt = stmt.join(Plan, PlanRun.plan_id == Plan.id)
-        clauses.append(Plan.name.ilike(pattern))
-        stmt = stmt.where(or_(*clauses))
-    return stmt
-
-
 @router.get("/plan-runs", response_model=ApiResponse[PlanRunListPageOut])
 def list_plan_runs(
     skip: int = Query(0, ge=0),
@@ -336,88 +163,16 @@ def list_plan_runs(
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
-    needle = (q or "").strip()
-    need_plan_join = bool(needle)
-
-    base = select(PlanRun).options(joinedload(PlanRun.project))
-    base = _apply_plan_run_list_filters(
-        base,
+    """#1520 薄壳：列表装配在 `services/plan_run_catalog.build_plan_run_list_page`。"""
+    return ok(build_plan_run_list_page(
+        db,
+        skip=skip,
+        limit=limit,
         plan_id=plan_id,
         statuses=status,
         project_key=project_key,
         q=q,
-        db=db,
-        join_plan_for_search=need_plan_join,
-    )
-    base = base.order_by(PlanRun.started_at.desc())
-
-    count_stmt = select(func.count()).select_from(PlanRun)
-    count_stmt = _apply_plan_run_list_filters(
-        count_stmt,
-        plan_id=plan_id,
-        statuses=status,
-        project_key=project_key,
-        q=q,
-        db=db,
-        join_plan_for_search=need_plan_join,
-    )
-    total = int(db.execute(count_stmt).scalar_one())
-
-    stats_stmt = select(PlanRun.status, func.count()).group_by(PlanRun.status)
-    stats_stmt = _apply_plan_run_list_filters(
-        stats_stmt,
-        plan_id=plan_id,
-        statuses=None,
-        project_key=project_key,
-        q=None,
-        db=db,
-        join_plan_for_search=False,
-    )
-    by_status = {row[0]: int(row[1]) for row in db.execute(stats_stmt).all()}
-    stats = PlanRunListStatsOut(
-        total=sum(by_status.values()),
-        running=by_status.get(PlanRunStatus.RUNNING.value, 0),
-        failed=by_status.get(PlanRunStatus.FAILED.value, 0),
-    )
-
-    runs = db.execute(base.offset(skip).limit(limit)).scalars().unique().all()
-    plan_ids = {r.plan_id for r in runs}
-    plan_names: dict[int, str] = {}
-    if plan_ids:
-        plan_rows = db.execute(
-            select(Plan.id, Plan.name).where(Plan.id.in_(plan_ids))
-        ).all()
-        plan_names = {row.id: row.name for row in plan_rows}
-    run_ids = [r.id for r in runs]
-    device_counts: dict[int, int] = {}
-    if run_ids:
-        # Align with watcher-summary / UI「设备」列: distinct device_id (#747).
-        count_rows = db.execute(
-            select(
-                JobInstance.plan_run_id,
-                func.count(func.distinct(JobInstance.device_id)),
-            )
-            .where(JobInstance.plan_run_id.in_(run_ids))
-            .group_by(JobInstance.plan_run_id)
-        ).all()
-        device_counts = {int(rid): int(cnt) for rid, cnt in count_rows}
-    items = [
-        _plan_run_out(
-            r,
-            plan_name=plan_names.get(r.plan_id),
-            device_count=device_counts.get(r.id, 0),
-        )
-        for r in runs
-    ]
-    return ok(
-        PlanRunListPageOut(
-            items=items,
-            total=total,
-            skip=skip,
-            limit=limit,
-            stats=stats,
-        )
-    )
+    ))
 
 
 @router.get("/plan-runs/{run_id}", response_model=ApiResponse[PlanRunDetailOut])
@@ -426,19 +181,8 @@ def get_plan_run(
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
-    pr = db.get(PlanRun, run_id)
-    if pr is None:
-        raise HTTPException(status_code=404, detail="plan run not found")
-    jobs = db.execute(
-        select(JobInstance).where(JobInstance.plan_run_id == run_id)
-    ).scalars().all()
-    plan_name: str | None = None
-    if pr.plan_id is not None:
-        plan_row = db.execute(
-            select(Plan.name).where(Plan.id == pr.plan_id)
-        ).scalar_one_or_none()
-        plan_name = plan_row
-    return ok(_plan_run_out(pr, jobs=[_job_out(j, []) for j in jobs], plan_name=plan_name))
+    """#1520 薄壳：详情装配在 `services/plan_run_catalog.build_plan_run_detail`。"""
+    return ok(build_plan_run_detail(db, run_id))
 
 
 @router.get("/plan-runs/{run_id}/jobs", response_model=ApiResponse[list[JobInstanceOut]])
@@ -447,34 +191,8 @@ def list_plan_run_jobs(
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
-    jobs = db.execute(
-        select(JobInstance).where(JobInstance.plan_run_id == run_id)
-    ).scalars().all()
-    if not jobs:
-        return ok([])
-
-    device_ids = list({j.device_id for j in jobs})
-    devices: dict[int, str] = {}
-    if device_ids:
-        rows = db.execute(
-            select(Device.id, Device.serial).where(Device.id.in_(device_ids))
-        ).all()
-        devices = {r.id: r.serial for r in rows}
-
-    job_ids = [j.id for j in jobs]
-    all_traces = db.execute(
-        select(StepTrace)
-        .where(StepTrace.job_id.in_(job_ids))
-        .order_by(StepTrace.original_ts)
-    ).scalars().all()
-    traces_by_job: dict[int, list] = {}
-    for t in all_traces:
-        traces_by_job.setdefault(t.job_id, []).append(t)
-
-    return ok([
-        _job_out(j, traces_by_job.get(j.id, []), devices.get(j.device_id))
-        for j in jobs
-    ])
+    """#1520 薄壳：jobs 装配在 `services/plan_run_catalog.build_plan_run_jobs`。"""
+    return ok(build_plan_run_jobs(db, run_id))
 
 
 # ── Abort ────────────────────────────────────────────────────────────────
@@ -862,38 +580,8 @@ def get_plan_run_log_events(
     primary consumer.
     """
     _require_plan_run(db, run_id)
-    rows, total = list_plan_run_device_log_events(
-        db,
-        run_id,
-        skip=skip,
-        limit=limit,
-        state=state,
-        platform=platform,
-    )
-    items = [
-        PlanRunLogEventOut(
-            id=str(row.id),
-            serial=row.serial,
-            platform=row.platform,
-            event_type=row.event_type,
-            event_subtype=row.event_subtype,
-            state=row.state,
-            local_path=row.local_path,
-            remote_path=row.remote_path,
-            detected_at=_iso(row.detected_at) or "",
-            device_timestamp=_iso(row.device_timestamp),
-            job_id=row.job_id,
-            host_id=row.host_id,
-            signal_seq_no=row.signal_seq_no,
-        )
-        for row in rows
-    ]
-    return ok(PlanRunLogEventsOut(
-        plan_run_id=run_id,
-        total=total,
-        items=items,
-        # #2288：平台全集单独取——不受本次 `platform`/`limit` 影响，前端筛选选项据此渲染。
-        platforms=list_plan_run_device_log_event_platforms(db, run_id, state=state),
+    return ok(build_plan_run_log_events(
+        db, run_id, skip=skip, limit=limit, state=state, platform=platform,
     ))
 
 
@@ -911,38 +599,8 @@ def get_plan_run_test_case_results(
 ):
     """ADR-0030 P2: PlanRun 逐条用例结果（test_case_result 表）。"""
     _require_plan_run(db, run_id)
-    rows, total, summary_counts = list_plan_run_test_case_results(
-        db, run_id, status=status, skip=skip, limit=limit,
-    )
-    job_ids = {row.job_id for row in rows}
-    jobs_by_id: dict[int, JobInstance] = {}
-    if job_ids:
-        jobs_by_id = {
-            j.id: j
-            for j in db.query(JobInstance).filter(JobInstance.id.in_(job_ids)).all()
-        }
-    items = []
-    for row in rows:
-        job = jobs_by_id.get(row.job_id)
-        items.append(TestCaseResultOut(
-            id=row.id,
-            plan_run_id=row.plan_run_id,
-            job_id=row.job_id,
-            suite_id=row.suite_id,
-            case_id=row.case_id,
-            case_name=row.case_name,
-            status=row.status,
-            detail=row.detail,
-            artifact_uri=row.artifact_uri,
-            run_dir=row.run_dir,
-            created_at=row.created_at,
-            device_id=job.device_id if job else None,
-            host_id=str(job.host_id) if job and job.host_id is not None else None,
-        ))
-    return ok(TestCaseResultsPayload(
-        items=items,
-        total=total,
-        summary=TestCaseResultSummary(**summary_counts),
+    return ok(build_plan_run_test_case_results(
+        db, run_id, skip=skip, limit=limit, status=status,
     ))
 
 
@@ -1012,34 +670,7 @@ def get_plan_run_summary(
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
-    pr = db.get(PlanRun, run_id)
-    if pr is None:
-        raise HTTPException(status_code=404, detail="plan run not found")
-
-    jobs_result = db.execute(
-        select(
-            JobInstance.status,
-            func.count(JobInstance.id),
-        )
-        .where(JobInstance.plan_run_id == run_id)
-        .group_by(JobInstance.status)
-    )
-    status_counts = {row[0]: row[1] for row in jobs_result.all()}
-    total = sum(status_counts.values())
-    pass_rate = (
-        status_counts.get("COMPLETED", 0) / total if total > 0 else 0.0
-    )
-
-    return ok({
-        "plan_run_id": run_id,
-        "status": pr.status,
-        "total_jobs": total,
-        "status_counts": status_counts,
-        "pass_rate": round(pass_rate, 4),
-        "started_at": _iso(pr.started_at),
-        "ended_at": _iso(pr.ended_at),
-        "result_summary": pr.result_summary,
-    })
+    return ok(build_plan_run_summary(db, run_id))
 
 
 # ── Artifacts ────────────────────────────────────────────────────────────
@@ -1054,26 +685,7 @@ def list_job_artifacts(
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
-    job = db.get(JobInstance, job_id)
-    if job is None or job.plan_run_id != run_id:
-        raise HTTPException(status_code=404, detail="job not found in this plan run")
-
-    result = db.execute(
-        select(JobArtifact).where(JobArtifact.job_id == job_id)
-    )
-    artifacts = result.scalars().all()
-    return ok([
-        {
-            "id": a.id,
-            "job_id": a.job_id,
-            "filename": a.storage_uri.rsplit("/", 1)[-1] if a.storage_uri else None,
-            "artifact_type": a.artifact_type,
-            "size_bytes": a.size_bytes,
-            "checksum": a.checksum,
-            "created_at": _iso(a.created_at),
-        }
-        for a in artifacts
-    ])
+    return ok(list_plan_run_job_artifacts(db, run_id, job_id))
 
 
 @router.get(

@@ -102,8 +102,19 @@ Auto-merge 的队列与分支更新以 workflow 和
    draft）；随后 reconcile（每小时 cron 或任意 PR 事件）自动推进并关闭告警；
 3. `main` 合入纪律不因停摆豁免——**不要手动 Merge**。
 
-> 红队首的「自动重基逃生」未启用（宽松谓词会每小时重刷红 head 的全量 CI）；
-> 如再现「陈旧红」（check 结果早于 main 推进、重基后可绿）实证，按收紧谓词另行立项。
+队首 required check「没上报」有两种相反成因，reconcile 会自行分辨（判据是该 head sha
+上 `ci.yml` 的 run 数，`scripts/ci/pr-automerge-queue.sh`）后分别处置（#2556）：
+
+- **从未创建**（run 数 0 ＝ GitHub 侧触发丢失，不可预防、也没有可修的 check）：执行
+  **一次** base-change push（复用队列自身的 update-branch 路径）以重新触发 CI；同一
+  `(队首 PR, head_sha)` 至多一次——冷却标记写在 `ci/queue-blocked` 告警正文里，同一
+  sha 第二次仍无 run 就停手并改为「需人工」。自愈后换了 head sha 即是一次全新判定；
+- **跑了没上报**（run 数 > 0）：说明触发正常而该 workflow 没上报，属人工排查
+  （workflow 被禁用/改名/卡审批）。
+
+> 红队首（`FAILURE`/`CANCELLED` 等**有结论**的失败）的「自动重基逃生」仍未启用——
+> 重基一个真红的队首只会反复烧队列；如再现「陈旧红」（check 结果早于 main 推进、
+> 重基后可绿）实证，按收紧谓词另行立项。
 
 ## 关单关键词与自动关单
 
