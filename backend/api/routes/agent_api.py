@@ -9,7 +9,7 @@ import logging
 import os
 import secrets
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
@@ -21,15 +21,11 @@ from backend.api.response import ApiResponse, ok
 from backend.api.error_helpers import raise_api_http_error
 from backend.core.agent_secret import AgentSecretNotConfiguredError, require_agent_secret
 from backend.core.audit import record_audit
-from backend.core.artifact_paths import (
-    ArtifactPathError,
-    resolve_local_artifact_path,
-)
 from backend.core.database import get_async_db, get_db
-from backend.models.enums import HostStatus, JobStatus, LeaseType
+from backend.models.enums import JobStatus, LeaseType
 from backend.models.host import Device, Host
 from backend.models.device_lease import DeviceLease
-from backend.models.job import JobArtifact, JobInstance
+from backend.models.job import JobInstance
 from backend.api.routes.auth import get_current_active_user
 from backend.models.plan_run import PlanRun
 from backend.services.agent_recovery import (
@@ -88,6 +84,25 @@ from backend.services.agent_coordinator_heartbeat import (
     _CoordinatorHeartbeatOut,
     record_agent_coordinator_heartbeat,
 )
+from backend.services.agent_artifacts import (
+    ArtifactIn,
+    ArtifactOut,
+    ingest_agent_artifact,
+)
+from backend.services.agent_host_heartbeat import (
+    HeartbeatRequest,
+    HeartbeatResponse,
+    record_agent_host_heartbeat,
+)
+from backend.services.agent_host_heartbeat import (  # noqa: F401
+    BackpressureInfo,
+    _get_backpressure,
+    _suggested_heartbeat_interval,
+    _suggested_log_rate_limit,
+)
+from backend.services.agent_artifacts import (  # noqa: F401
+    _ARTIFACT_TYPE_WHITELIST,
+)
 from backend.services.agent_coordinator_heartbeat import (  # noqa: F401
     _CoordinatorHeartbeatJob,
     _VALID_COORDINATOR_PHASES,
@@ -118,10 +133,6 @@ from backend.services.agent_completion import (  # noqa: F401
 )
 from backend.realtime.socketio_server import broadcast_plan_run_status, broadcast_run_job_update
 from backend.services.host_maintenance import HostMaintenanceConflict
-from backend.services.host_retirement import (
-    retired_heartbeat_context,
-    should_alert_retired_heartbeat,
-)
 from backend.services.host_upgrade_gate import (
     HostAbortDrainTimeoutError,
     HostAbortPendingError,
@@ -133,7 +144,6 @@ from backend.services.host_upgrade_gate import (
 )
 from backend.services.lease_manager import extend_lease
 from backend.services.reconciler import reconcile_step_traces
-from backend.services.script_catalog_version import compute_script_catalog_version_async
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/agent", tags=["agent"])
@@ -186,28 +196,6 @@ class StepTraceIn(BaseModel):
     trace_event_id: Optional[str] = None
     fencing_token: str
 
-
-class HeartbeatRequest(BaseModel):
-    host_id: str
-    script_catalog_version: str = ""
-    load: Dict[str, Any] = {}
-    capacity: Optional[Dict[str, Any]] = None  # ADR-0019 Phase 1
-    agent_instance_id: str = ""   # ADR-0019 Phase 3a
-    boot_id: str = ""             # ADR-0019 Phase 3a
-
-
-class BackpressureInfo(BaseModel):
-    log_rate_limit: Optional[int] = None
-    # ADR-0026 P0: suggested Agent poll interval (seconds)
-    heartbeat_interval_seconds: Optional[int] = None
-
-
-class HeartbeatResponse(BaseModel):
-    script_catalog_outdated: bool = False
-    backpressure: BackpressureInfo
-    capacity: Optional[Dict[str, Any]] = None  # ADR-0019 Phase 1
-    agent_min_version: str = ""  # SemVer floor; Agent refuses to run if below
-    heartbeat_interval_seconds: Optional[int] = None
 
 # ── ADR-0019 Phase 3a: Recovery Sync models ──────────────────────────────────
 
@@ -348,79 +336,7 @@ async def agent_heartbeat(
     Update host last_heartbeat.
     Returns script_catalog_outdated flag + current backpressure setting.
     """
-    host = await db.get(Host, payload.host_id)
-    if host is None:
-        host = Host(
-            id=payload.host_id,
-            hostname=payload.host_id,
-            status=HostStatus.ONLINE.value,
-            created_at=datetime.now(timezone.utc),
-        )
-        db.add(host)
-
-    # Compare the Agent's cached catalog against **the control plane's current
-    # one**, not against whatever this Agent reported last time. The old
-    # self-comparison could only ever fire when the Agent changed, so publishing
-    # a new script version never reached a running Agent — the mistake showed up
-    # much later as ScriptVersionMismatch at job execution time.
-    scripts_outdated = bool(payload.script_catalog_version) and (
-        payload.script_catalog_version
-        != await compute_script_catalog_version_async(db)
-    )
-
-    host.last_heartbeat = datetime.now(timezone.utc)
-    if payload.script_catalog_version:
-        host.script_catalog_version = payload.script_catalog_version
-    # ADR-0038 §1.2 归属声明：轻量心跳与权威 `/api/v1/heartbeat` **共用**
-    # `should_alert_retired_heartbeat` 同一判据（“共用检测”选项，非双通道
-    # 收敛）——退役心跳的「如实记录 + 保持退役 + 单次告警」两条路径同源。
-    prev_status = host.status
-    host.status = HostStatus.ONLINE.value
-
-    if should_alert_retired_heartbeat(host, prev_status=prev_status):
-        from backend.services.notification_service import dispatch_notification_async
-
-        dispatch_notification_async(
-            "HOST_RETIRED_HEARTBEAT", retired_heartbeat_context(host),
-        )
-
-    # ADR-0019 Phase 1: count online healthy devices
-    online_rows = await db.execute(
-        select(Device.id).where(
-            Device.host_id == payload.host_id,
-            Device.adb_connected == True,
-            Device.adb_state.notin_(["offline", "unknown", ""]),
-        )
-    )
-    online_healthy = len(online_rows.scalars().all())
-
-    await db.commit()
-
-    backpressure = await _get_backpressure()
-    # Light agent heartbeat: scale interval with online healthy device count
-    # (same contract as /api/v1/heartbeat — ADR-0026 P0).
-    from backend.api.routes.heartbeat import (
-        _suggested_heartbeat_interval,
-        _suggested_log_rate_limit,
-    )
-    suggested_interval = _suggested_heartbeat_interval(online_healthy)
-    suggested_log_rate = (
-        backpressure if backpressure is not None
-        else _suggested_log_rate_limit(online_healthy)
-    )
-    from backend.services.agent_version_gate import resolve_agent_min_version
-    return ok(HeartbeatResponse(
-        script_catalog_outdated=scripts_outdated,
-        backpressure=BackpressureInfo(
-            log_rate_limit=suggested_log_rate,
-            heartbeat_interval_seconds=suggested_interval,
-        ),
-        capacity={
-            "online_healthy_devices": online_healthy,
-        },
-        agent_min_version=resolve_agent_min_version(),
-        heartbeat_interval_seconds=suggested_interval,
-    ))
+    return ok(await record_agent_host_heartbeat(db, payload))
 
 
 # ── RunStatus→JobStatus mapping for compat endpoints ─────────────────────────
@@ -709,48 +625,7 @@ async def list_device_log_events(
     ))
 
 
-async def _get_backpressure() -> Optional[int]:
-    """Return current backpressure setting.
-
-    Redis-based backpressure (stp:backpressure:*) removed in Phase 4.
-    SocketIO has built-in TCP backpressure; this returns None (no limit).
-    Can be extended later with SocketIO-based metrics if needed.
-    """
-    return None
-
-
 # ── Artifact ingestion（ADR-0018 5B2）────────────────────────────────────────
-
-# 首期只接受 watcher LogPuller 产出的 crash 实文件 + 可选 bugreport。
-# 故意不放开 ANR / MOBILELOG：
-#   - ANR / MOBILELOG 在 JobLogSignal 里已经有 path_on_device / first_lines 元数据
-#   - 文件本身体量大、价值低，不值得入 JobArtifact 展示/下载通道
-_ARTIFACT_TYPE_WHITELIST: set[str] = {"aee_crash", "vendor_aee_crash", "bugreport"}
-
-
-class ArtifactIn(BaseModel):
-    """Agent watcher 上送的单个产物。
-
-    幂等键：(job_id, storage_uri)
-    首期边界：artifact_type 必须在 _ARTIFACT_TYPE_WHITELIST 内。
-    与 JobLogSignal 解耦：log_signal.artifact_uri 保留为权威指针；
-        本端点只负责展示/下载入口的后端持久化。
-    """
-    storage_uri:           str                       # NFS 路径（已由 Agent LogPuller 落盘）
-    artifact_type:         str                       # 白名单
-    fencing_token:         str
-    agent_instance_id:     str
-    host_id:               str
-    device_serial:         str
-    size_bytes:            Optional[int] = None
-    checksum:              Optional[str] = None      # sha256 hex，可选
-    source_category:       Optional[str] = None      # AEE | VENDOR_AEE | BUGREPORT（溯源）
-    source_path_on_device: Optional[str] = None      # 设备侧原路径（溯源）
-
-
-class ArtifactOut(BaseModel):
-    artifact_id: int
-    created:     bool   # True=首次插入；False=幂等命中（已存在同 storage_uri）
 
 
 @router.post("/jobs/{job_id}/artifacts", response_model=ApiResponse[ArtifactOut])
@@ -767,86 +642,7 @@ async def ingest_artifact(
     幂等：PostgreSQL `ON CONFLICT (job_id, storage_uri) DO NOTHING` —— 重复 POST
     不重复入库，返回已存在的 artifact_id + created=False。
     """
-    if not payload.storage_uri:
-        raise HTTPException(status_code=400, detail="storage_uri is required")
-    try:
-        resolve_local_artifact_path(payload.storage_uri, must_exist=False)
-    except ArtifactPathError as exc:
-        raise_api_http_error(
-            status_code=400,
-            code="INVALID_ARTIFACT_PATH",
-            message=(
-                "artifact path is invalid or outside the allowed root "
-                f"(STP_AEE_NFS_ROOT): {exc}"
-            ),
-        )
-
-    if payload.artifact_type not in _ARTIFACT_TYPE_WHITELIST:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"artifact_type must be one of {sorted(_ARTIFACT_TYPE_WHITELIST)}; "
-                f"got {payload.artifact_type!r}"
-            ),
-        )
-
-    if payload.size_bytes is not None and payload.size_bytes < 0:
-        raise HTTPException(status_code=400, detail="size_bytes must be >= 0")
-
-    job = await db.get(JobInstance, job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="job not found")
-    await _require_job_bound_upload_lease(
-        db,
-        job,
-        fencing_token=payload.fencing_token,
-        agent_instance_id=payload.agent_instance_id,
-        host_id=payload.host_id,
-        device_serial=payload.device_serial,
-    )
-
-    from sqlalchemy.dialects.postgresql import insert as pg_insert
-
-    stmt = (
-        pg_insert(JobArtifact)
-        .values(
-            job_id=job_id,
-            storage_uri=payload.storage_uri,
-            artifact_type=payload.artifact_type,
-            size_bytes=payload.size_bytes,
-            checksum=payload.checksum,
-            source_category=payload.source_category,
-            source_path_on_device=payload.source_path_on_device,
-        )
-        .on_conflict_do_nothing(index_elements=["job_id", "storage_uri"])
-        .returning(JobArtifact.id)
-    )
-    res = await db.execute(stmt)
-    row = res.first()
-
-    if row is not None:
-        # 首次插入
-        await db.commit()
-        return ok(ArtifactOut(artifact_id=row.id, created=True))
-
-    # 幂等命中 —— 查询已存在的 artifact_id
-    existing = await db.execute(
-        select(JobArtifact.id)
-        .where(
-            JobArtifact.job_id == job_id,
-            JobArtifact.storage_uri == payload.storage_uri,
-        )
-    )
-    existing_id = existing.scalar_one_or_none()
-    if existing_id is None:
-        # 极端并发：ON CONFLICT 未返回 id 且 SELECT 也查不到 → 让客户端重试
-        logger.warning(
-            "artifact_ingest_race job_id=%d storage_uri=%s",
-            job_id, payload.storage_uri,
-        )
-        raise HTTPException(status_code=409, detail="artifact ingest race, please retry")
-    await db.commit()
-    return ok(ArtifactOut(artifact_id=existing_id, created=False))
+    return ok(await ingest_agent_artifact(db, job_id, payload))
 
 
 # ── ADR-0019 Phase 3a: Recovery Sync ────────────────────────────────────────
