@@ -44,7 +44,6 @@ from backend.core.metrics import (
 )
 from backend.models.enums import PlanRunStatus
 from backend.models.job import JobArtifact, JobInstance
-from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
 from backend.services.plan_run_timeline import build_plan_run_timeline
 from backend.services.plan_run_event_feed import build_plan_run_events

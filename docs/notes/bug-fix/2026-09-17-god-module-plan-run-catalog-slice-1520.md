@@ -29,11 +29,19 @@ timeline、events、devices 已被占或已抽；**list/detail/jobs 与其符号
 （chain 用 `_chain_node_from_run` + `duration_seconds`，不碰装配层），是唯一不需要
 协调即可并行的整域。`--force` 领单 = 同一 issue 面并行切片的边界人工确认（契约 §3.4）。
 
-### `_iso`/`_aware` 副本 = **过渡**，出口写明
+### 时间格式化副本就地收编进 `plan_run_read_common`（rebase 时机的顺水推舟）
 
-服务内自带 `_iso`/`_aware` 小副本（先例 `plan_run_export`）。**这是有意的暂时形态**：
-终态是 cursor 在窗的 `plan_run_read_common` 统一收编——本 note 的 Revisit 即出口。
-不自建第二个 common 模块（§3.5：同一主题不并行造权威位）。
+本刀初版在 catalog 里自带 `_iso`/`_aware` 过渡副本（出口原写在 Revisit：等 chain 切片
+的 `plan_run_read_common` 落地后统一收编）。rebase 到新 main 时 **read_common 已随
+chain PR #2560 合入**——出口条件当场成立，于是把 catalog/watcher/export 三处服务内
+`_iso`（含 catalog 的 `_aware`）全部收编为 `plan_run_read_common.iso/aware` 单源。
+**不新建第二个 common**（§3.5：同一主题不并行造权威位），只是消费已合入的权威位。
+
+顺带修掉一个我 PR #2545 带进 main 的缺陷：`plan_run_watcher_summary.py` 里 `_iso`
+被**重复定义两次**（F811 自遮蔽，第二份覆盖第一份、语义恰好相同所以零行为影响——
+CI 默认规则集不含 F811，本地 quick 也照跑绿灯，属门禁盲区）。收编即消除。
+main 上 `plan_runs.py` 的 `_iso` 路由副本（log-events/summary/artifacts 还在用）
+**不在本刀动**：那是 chain 切片之后的路由公共区，归属其所有者排期。
 
 ### 顺带修复：main 上的红测试（与本刀无因果，如实归因）
 
@@ -63,7 +71,8 @@ timeline、events、devices 已被占或已抽；**list/detail/jobs 与其符号
 
 ## Revisit
 
-- **出口**：cursor `plan_run_read_common` 落 main 后，把 catalog/watcher/export 三处
-  `_iso`（及 catalog 的 `_aware`）收编为单源，独立小单执行；
-- 剩余厚块：summary 路由 + artifacts list 手搓 dict（#2187 正规化候选，可顺势进
-  `test_api_response_shape_contract` 的 opt-in 文件集）。
+- 路由模块残留在用的 `_iso`/`_aware`（plan_runs.py 本体）等 read_common 主题自然
+  扩到路由层时一并收编；剩余厚块：summary 路由 + artifacts list 手搓 dict
+  （#2187 正规化候选，可顺势进 `test_api_response_shape_contract` 的 opt-in 文件集）。
+- **CI 默认 ruff 规则集不含 F811**——服务内重复 defs 只有显式 `--select F811` 才见。
+  若同类自遮蔽再现（watcher 这次就是），考虑给 lint 门禁加 F811（独立小单判）。

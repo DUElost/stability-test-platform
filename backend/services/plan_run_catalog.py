@@ -5,8 +5,7 @@ Covers ``GET /plan-runs``、``GET /plan-runs/{id}``、``GET /plan-runs/{id}/jobs
 过滤器与分页聚合。routes 只留 Query 声明与 ``ok(build_*)`` 薄壳；
 ``plan_run_out`` 等私有名仍从路由模块 re-export（既有测试从路由导入）。
 
-``_iso``/``_aware`` 为过渡副本（先例：``plan_run_export``；在窗 chain 切片的
-``plan_run_read_common`` 落地后统一收编——出口登记在本单 note 的 Revisit）。
+时间格式化统一走 ``plan_run_read_common``（``iso``/``aware``），不再留局部副本。
 """
 
 from __future__ import annotations
@@ -36,18 +35,7 @@ from backend.models.job import JobInstance, StepTrace
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
 from backend.models.project import TestProject
-
-
-def _iso(v) -> str | None:
-    if v is None:
-        return None
-    return v.isoformat()
-
-
-def _aware(ts: datetime | None) -> datetime | None:
-    if ts is None:
-        return None
-    return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+from backend.services.plan_run_read_common import aware as _aware, iso as _iso
 
 
 def _project_run_context(pr: PlanRun) -> Optional[dict]:
