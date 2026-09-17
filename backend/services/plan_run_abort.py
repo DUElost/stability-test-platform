@@ -149,7 +149,7 @@ def _bulk_abort_pending_jobs(
     )
     total = int(pr.total_job_count or 0)
     if total > 0:
-        apply_plan_run_aggregation_from_counters(pr)
+        apply_plan_run_aggregation_from_counters(pr, db=db)
     return aborted_ids
 
 
@@ -731,7 +731,7 @@ def abort_plan_run(
         if has_active is None and pr.status not in _TERMINAL_PLAN_RUN_STATUSES:
             total = int(pr.total_job_count or 0)
             if total > 0:
-                apply_plan_run_aggregation_from_counters(pr)
+                apply_plan_run_aggregation_from_counters(pr, db=db)
             else:
                 # legacy total_job_count==0：才回退全量扫描。
                 all_jobs = (
@@ -740,7 +740,7 @@ def abort_plan_run(
                     .all()
                 )
                 if all_jobs:
-                    apply_plan_run_aggregation(pr, all_jobs)
+                    apply_plan_run_aggregation(pr, all_jobs, db=db)
                 elif host_id is None:
                     PlanRunStateMachine.transition(
                         pr, PlanRunStatus.FAILED, reason=reason,

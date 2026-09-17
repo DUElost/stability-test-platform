@@ -91,12 +91,47 @@ def _artifact_download_target(storage_uri: str) -> dict[str, str]:
 # ── Report ────────────────────────────────────────────────────────────────────
 
 
+def _require_job_in_plan_run(db: Session, job_id: int, plan_run_id: int | None) -> None:
+    """#2420 第 2 项：`plan_run_id` 一旦给出，就必须与 job 的实际归属配对。
+
+    `/runs/{run_id}/report*` 里的 `run_id` 一直是 **JobInstance.id**（`RecentRun.run_id`
+    同源、`compose_run_report` 也是 `db.get(JobInstance, run_id)`），但路径上从不校验
+    「这个 job 真属于你正在看的那个 run」：同类的
+    `/plan-runs/{run}/jobs/{job}/artifacts` 是校验配对的（dev 实测错配 → 404），
+    而报告端点对"这个 job 属于哪个 run"毫不把关 —— 于是从 PlanRun 详情点进一个已
+    被保留清理删除、或本就写错的 id 时，会返回**另一个 run 的 job 报告**，页面标题
+    又只写 `Job #N`，用户无从发现。
+
+    不传该参数时保持原行为（老脚本与既有深链不破坏）。
+    """
+    if plan_run_id is None:
+        return
+    from backend.models.job import JobInstance
+
+    job = db.get(JobInstance, job_id)
+    if job is None or job.plan_run_id != plan_run_id:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "job_not_in_plan_run",
+                "message": (
+                    f"job {job_id} 不属于 plan_run {plan_run_id}"
+                    "（可能已被保留清理删除，或链接本身写错）"
+                ),
+            },
+        )
+
+
 @router.get("/runs/{run_id}/report", response_model=RunReportOut)
 def get_run_report(
     run_id: int,
+    plan_run_id: Optional[int] = Query(
+        None, description="可选归属校验：给出则必须与 job 的 plan_run 配对（#2420）",
+    ),
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
+    _require_job_in_plan_run(db, run_id, plan_run_id)
     report = compose_run_report(db, run_id)
     if report is None:
         raise HTTPException(status_code=404, detail="run not found")
@@ -107,9 +142,13 @@ def get_run_report(
 def export_run_report(
     run_id: int,
     format: str = Query("markdown"),
+    plan_run_id: Optional[int] = Query(
+        None, description="可选归属校验：给出则必须与 job 的 plan_run 配对（#2420）",
+    ),
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
+    _require_job_in_plan_run(db, run_id, plan_run_id)
     report = compose_run_report(db, run_id)
     if report is None:
         raise HTTPException(status_code=404, detail="run not found")
@@ -128,6 +167,9 @@ def export_run_report(
 @router.get("/runs/{run_id}/report/cached")
 def get_cached_run_report(
     run_id: int,
+    plan_run_id: Optional[int] = Query(
+        None, description="可选归属校验：给出则必须与 job 的 plan_run 配对（#2420）",
+    ),
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
@@ -138,6 +180,7 @@ def get_cached_run_report(
     快照即最终结果。快照生成时刻经响应体 ``cached_at`` 暴露（= post_processed_at），
     UI 据此标注「截至 xx 时刻」；需要最新口径的调用方走 /runs/{id}/report。
     """
+    _require_job_in_plan_run(db, run_id, plan_run_id)
     from backend.models.job import JobInstance
     job = db.get(JobInstance, run_id)
     if job and job.post_processed_at and job.report_json:
