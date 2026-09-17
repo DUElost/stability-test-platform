@@ -56,7 +56,9 @@ def test_fixture_has_no_execution_surface(fa):
 
 
 def test_push_events_are_only_acked(fa):
-    """服务端推来的执行类事件在夹具里没有实现——只有白名单回报事件可被 emit。"""
+    """服务端推来的执行类事件在夹具里没有实现——只有白名单回报事件可被 emit。
+
+    （``control`` 的回执在 #2518 起不再是「只回 ack」：abort 要回报终态，见下方用例。）"""
     assert "execute_job" in fa.PUSH_EVENTS and "run_job" in fa.PUSH_EVENTS
     assert set(fa.AGENT_EMIT_EVENTS) == {"step_log", "step_update", "job_status", "heartbeat"}
 
@@ -262,8 +264,12 @@ def test_inbound_handlers_ack_and_never_execute(fa, monkeypatch):
     assert ack == {"host_id": "h1", "results": [{"ok": True}]}
     assert seen == [([{"name": "gpu_setup"}], "h1")]
 
-    for event in ("control", "execute_job", "run_job", "dispatch", "job_command"):
+    for event in ("execute_job", "run_job", "dispatch", "job_command"):
         assert client.handlers[(event, fa.AGENT_NS)]({"do": "anything"}) == {"ok": True}
+    # control 自 #2518 起带回报字段：无命令/非 abort 时仍是「什么都不做」的 ack
+    assert client.handlers[("control", fa.AGENT_NS)]({"do": "anything"}) == {
+        "ok": True, "command": "", "reported_aborted": [],
+    }
     # 载荷缺 expected 键也要走同一委派路径（生产侧总是带键，夹具不因此崩）
     assert fa.push_ack("verify_scripts", None, host_id="h2") == {
         "host_id": "h2", "results": [{"ok": True}]}
@@ -327,3 +333,83 @@ def test_cli_defaults_and_docstring_show_the_runnable_form(fa):
     assert fa.parse_cli(["--in-container", "heartbeat"]).base == fa.DEV_DEFAULT_BASE
     doc = TOOL.read_text(encoding="utf-8")
     assert "--in-container" in doc and "http://127.0.0.1:8000" in doc
+
+
+# ── #2518：control(abort) 回报终态（不再只回 ack）────────────────────────────
+
+def test_control_abort_reports_terminal_state_for_each_job(fa, monkeypatch):
+    """服务端扇出 abort 后，夹具必须像守约 Agent 一样回报 ABORTED。
+
+    否则 abort_reaper 判 abort_ack_timeout → UNKNOWN → 再等 300s 宽限，
+    dev 里测中止面必然 6 分钟起步（快路径永不进回归）。
+    """
+    monkeypatch.setenv("AGENT_SECRET", "unit-test-secret")
+    monkeypatch.setattr(fa, "fencing_token_for", lambda job: f"TOKEN-{job}")
+    sent: list = []
+    monkeypatch.setattr(
+        fa, "post_json",
+        lambda base, secret, path, body, **kw: sent.append((path, body)) or (200, {"ok": True}),
+    )
+
+    ack = fa.control_ack(
+        {"command": "abort", "payload": {"plan_run_id": 21, "job_ids": [14, 15], "reason": "op"}},
+        host_id="192-0-2-11", base="http://127.0.0.1:18000",
+    )
+
+    assert ack["reported_aborted"] == [14, 15]
+    assert [path for path, _ in sent] == [
+        "/api/v1/agent/jobs/14/complete",
+        "/api/v1/agent/jobs/15/complete",
+    ]
+    assert all(body["update"]["status"] == "ABORTED" for _, body in sent)
+
+
+def test_control_non_abort_command_is_bare_ack(fa, monkeypatch):
+    """其它 control 命令（如 reload_config）保持只回 ack——不越权做任何事。"""
+    posted: list = []
+    monkeypatch.setattr(fa, "post_json", lambda *a, **k: posted.append(a) or (200, {}))
+
+    ack = fa.control_ack(
+        {"command": "reload_config", "payload": {}},
+        host_id="192-0-2-11", base="http://127.0.0.1:18000",
+    )
+
+    assert ack == {"ok": True, "command": "reload_config", "reported_aborted": []}
+    assert posted == []
+
+
+def test_push_ack_routes_control_through_control_ack(fa, monkeypatch):
+    monkeypatch.setattr(
+        fa, "control_ack",
+        lambda payload, *, host_id, base: {"via": "control_ack", "base": base},
+    )
+    assert fa.push_ack("control", {"command": "abort"}, host_id="h1", base="http://dev") == {
+        "via": "control_ack", "base": "http://dev",
+    }
+
+
+def test_complete_accepts_aborted_status(fa):
+    """`complete --status ABORTED` 必须可用——中止链上唯一正确的终态值。"""
+    args = fa.parse_cli([
+        "--base", "http://127.0.0.1:18000", "complete", "--job", "17", "--status", "ABORTED",
+    ])
+    assert args.status == "ABORTED"
+
+
+def test_complete_reports_selected_status(fa, monkeypatch):
+    """CLI 的 --status 要真的发到 patch 体里（#2518 的 report_job_status 复用点）。"""
+    monkeypatch.setenv("AGENT_SECRET", "unit-test-secret")
+    monkeypatch.setattr(fa, "fencing_token_for", lambda job: None)
+    sent: list = []
+    monkeypatch.setattr(
+        fa, "post_json",
+        lambda base, secret, path, body, **kw: sent.append((path, body)) or (200, {"ok": True}),
+    )
+
+    args = fa.parse_cli([
+        "--base", "http://127.0.0.1:18000", "complete", "--job", "17",
+        "--status", "ABORTED", "--log-file", "",
+    ])
+    assert fa.cmd_complete(args) == 0
+    assert sent[0][0] == "/api/v1/agent/jobs/17/complete"
+    assert sent[0][1]["update"]["status"] == "ABORTED"

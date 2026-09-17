@@ -251,26 +251,78 @@ def fencing_token_for(job_id: int, session_factory: Callable[[], Any] | None = N
         db.close()
 
 
-def push_ack(event: str, payload: dict[str, Any] | None, *, host_id: str) -> dict[str, Any]:
-    """服务端推给 Agent 的事件 → ack。**只回 ack，绝不执行**（红线 1）。
+def push_ack(
+    event: str, payload: dict[str, Any] | None, *, host_id: str, base: str = "",
+) -> dict[str, Any]:
+    """服务端推给 Agent 的事件 → ack。**只注册与回报，绝不执行脚本**（红线 1）。
 
     派发门禁 `verify_one_host` 用 `call_agent_rpc()` 等 ack：夹具此前从不注册入站
     handler，`serve` 会话因此「看得见、答不出」，plan-run 停在队列里一行 job 都不
     产生，而日志里连一条 `verify_scripts` 痕迹都没有（#2470）。
+
+    ``control`` 不再只回 ack（#2518）：``abort`` 要**回报 job 终态**——回执语义见
+    :func:`control_ack`。
     """
     if event == "verify_scripts":
         expected = (payload or {}).get("expected") or []
         return verify_scripts_ack(expected, host_id=host_id)
+    if event == "control":
+        return control_ack(payload, host_id=host_id, base=base)
     return {"ok": True}
 
 
-def register_push_handlers(client: Any, *, host_id: str) -> tuple[str, ...]:
-    """给 ``PUSH_EVENTS`` 逐个挂 handler（``namespace=/agent``，与生产 Agent 同形）。"""
+def report_job_status(
+    job_id: int, status: str, *, base: str, secret: str, exit_code: int = 0,
+) -> tuple[int, dict[str, Any]]:
+    """回报 job 终态（``complete`` 子命令与 ``control(abort)`` 应答共用，#2518）。"""
+    token = fencing_token_for(job_id)
+    payload: dict[str, Any] = {"update": {"status": status, "exit_code": exit_code}}
+    if token:
+        payload["fencing_token"] = token
+    return post_json(base, secret, f"/api/v1/agent/jobs/{job_id}/complete", payload)
+
+
+def control_ack(payload: Any, *, host_id: str, base: str) -> dict[str, Any]:
+    """``control`` 事件的应答（#2518）：``abort`` 必须**回报终态**，不能只回 ack。
+
+    只回 ``{"ok": True}`` 时服务端永远等不到 job 终态 → ``abort_reaper`` 判
+    ``abort_ack_timeout`` → UNKNOWN → 再等 ``UNKNOWN_GRACE_SECONDS``(300s)：dev 上
+    测中止面必然 6 分钟起步，而产品侧的快路径（Agent 回报 ABORTED → 即时释放租约）
+    永远进不了回归。
+
+    契约形状取自服务端扇出（``plan_run_abort.py``）：
+    ``{"command": "abort", "payload": {"job_ids": [...], "reason": ...}}``。
+    **只回报，不执行**——红线 1 不变。
+    """
+    body = payload if isinstance(payload, dict) else {}
+    command = str(body.get("command") or "")
+    inner = body.get("payload") if isinstance(body.get("payload"), dict) else {}
+    reported: list[int] = []
+    if command == "abort":
+        secret = require_secret()
+        for raw in inner.get("job_ids") or []:
+            try:
+                job_id = int(raw)
+            except (TypeError, ValueError):
+                continue
+            code, _ = report_job_status(job_id, "ABORTED", base=base, secret=secret)
+            if code < 400:
+                reported.append(job_id)
+    return {"ok": True, "command": command, "reported_aborted": reported}
+
+
+def register_push_handlers(
+    client: Any, *, host_id: str, base: str = "",
+) -> tuple[str, ...]:
+    """给 ``PUSH_EVENTS`` 逐个挂 handler（``namespace=/agent``，与生产 Agent 同形）。
+
+    ``base`` 供 ``control(abort)`` 回报终态用（#2518）；不传则只回 ack。
+    """
     for event in PUSH_EVENTS:
         # 默认参数绑定当前 event：闭包直接引用循环变量会晚绑（ruff B023）
         client.on(
             event,
-            lambda data, _ev=event: push_ack(_ev, data, host_id=host_id),
+            lambda data, _ev=event: push_ack(_ev, data, host_id=host_id, base=base),
             namespace=AGENT_NS,
         )
     return PUSH_EVENTS
@@ -342,11 +394,9 @@ def cmd_step(args: argparse.Namespace) -> int:
 def cmd_complete(args: argparse.Namespace) -> int:
     secret = require_secret()
     base = target_from_args(args)
-    token = fencing_token_for(args.job)
-    payload: dict[str, Any] = {"update": {"status": args.status, "exit_code": args.exit_code}}
-    if token:
-        payload["fencing_token"] = token
-    status, body = post_json(base, secret, f"/api/v1/agent/jobs/{args.job}/complete", payload)
+    status, body = report_job_status(
+        args.job, args.status, base=base, secret=secret, exit_code=args.exit_code,
+    )
     log(f"complete job={args.job} HTTP={status} {json.dumps(body, ensure_ascii=False)[:200]}",
         args.log_file)
     return 0 if status < 400 else 1
@@ -408,7 +458,7 @@ def _with_connection(
             last_err = f"{type(exc).__name__}: {exc}"
             continue
         if with_push_handlers:
-            register_push_handlers(sio, host_id=args.host_id)
+            register_push_handlers(sio, host_id=args.host_id, base=target_from_args(args))
         if transport == "polling" and args.transport == "auto":
             log("用 polling transport（dev 镜像无 websocket-client；生产 Agent 是 "
                 "websocket-only #1121，多实例拓扑下本夹具与生产不等价）", args.log_file)
@@ -616,7 +666,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = _sub_parser("complete", help="回报 job 终态")
     p.add_argument("--job", type=int, required=True)
-    p.add_argument("--status", default="COMPLETED", choices=("COMPLETED", "FAILED"))
+    # #2518：ABORTED 是中止链上唯一正确的终态值（state_machine 允许 RUNNING→ABORTED），
+    # 缺它就连「手工模拟守约 Agent 回报中止」都做不到。
+    p.add_argument("--status", default="COMPLETED",
+                   choices=("COMPLETED", "FAILED", "ABORTED"))
     p.add_argument("--exit-code", type=int, default=0)
     p.set_defaults(func=cmd_complete)
 
