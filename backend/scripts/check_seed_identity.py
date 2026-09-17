@@ -23,7 +23,8 @@ content_sha256·nfs_path 属于 1.3.9」的幽灵行，并且 v1.3.9 根本没�
 用法：
     python -m backend.scripts.check_seed_identity
 
-DATABASE_URL 解析与 `check_schema_sync` 同（环境变量最优先，其次 .env.backend）。
+DATABASE_URL 解析与 `check_schema_sync` 同（环境变量最优先，其次 .env.backend）；
+拿到的是异步驱动串时本脚本自行归一化到同步 driver，因此 `postgresql+asyncpg://` 也能直接跑。
 CI 里挂在 `pr-migrate-empty-db`（空库 upgrade head 之后），本地由
 `tools/dev/check_pr_migrate.py` 同步复刻。
 """
@@ -35,6 +36,7 @@ from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
+from backend.core.database import normalize_sync_database_url
 from backend.core.env_source import resolve_database_url
 from backend.models.script import Script
 from backend.services.script_catalog import _iter_script_entries, sha256_file
@@ -59,7 +61,11 @@ def main() -> int:
     # 上，那里 DATABASE_URL 必在——缺了就是接线断了，静默 SKIP 会把守卫变成摆设。
     # 只打印 source 标签，绝不回显 DATABASE_URL 本身（可能含凭据）。
     url, source = resolve_database_url()
-    engine = create_engine(url, future=True)
+    # resolve_database_url 给的是异步驱动 URL（dev compose 与控制面 .env.backend 均为
+    # postgresql+asyncpg://），直接交给同步 create_engine 会在首次连接时炸
+    # MissingGreenlet（#735 §1.3 同族，先例见 check_unreferenced_script_versions.py）。
+    # 崩栈与判红同为 exit 1，人读到的「门禁发现问题」其实是根本没比（#2471）。
+    engine = create_engine(normalize_sync_database_url(url), future=True)
     truth = disk_identity()
     problems: list[str] = []
 
