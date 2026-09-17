@@ -368,6 +368,62 @@ _MODEL_PAIRS: tuple[tuple[str, str, str, str], ...] = (
         "frontend/src/utils/api/types.ts",
         "WatcherCategory",
     ),
+    # #1520 对拍批 1：opt-in plan_runs.py 时豁免的 9 个模型全部双向对拍通过并转正
+    # （唯一漂移 = PlanRun.jobs：wire 一直在、TS 漏声明，已在 types.ts 补可选字段）。
+    (
+        "backend/api/schemas/plan_run.py",
+        "PlanRunDetailOut",
+        "frontend/src/utils/api/types.ts",
+        "PlanRun",
+    ),
+    (
+        "backend/api/schemas/plan_run.py",
+        "JobInstanceOut",
+        "frontend/src/utils/api/types.ts",
+        "PlanJobInstance",
+    ),
+    (
+        "backend/api/schemas/plan_run.py",
+        "PlanChainOut",
+        "frontend/src/utils/api/types.ts",
+        "PlanChain",
+    ),
+    (
+        "backend/api/schemas/plan_run.py",
+        "PlanRunDevicesOut",
+        "frontend/src/utils/api/types.ts",
+        "PlanRunDevicesPayload",
+    ),
+    (
+        "backend/api/schemas/plan_run.py",
+        "PlanRunEventsOut",
+        "frontend/src/utils/api/types.ts",
+        "PlanRunEventsPayload",
+    ),
+    (
+        "backend/api/schemas/plan_run.py",
+        "PlanRunListPageOut",
+        "frontend/src/utils/api/types.ts",
+        "PlanRunListPage",
+    ),
+    (
+        "backend/api/schemas/plan_run.py",
+        "PlanRunTimelineOut",
+        "frontend/src/utils/api/types.ts",
+        "PlanRunTimeline",
+    ),
+    (
+        "backend/api/schemas/plan_run.py",
+        "JobManualActionOut",
+        "frontend/src/utils/api/types.ts",
+        "JobManualActionResult",
+    ),
+    (
+        "backend/api/schemas/case_result.py",
+        "TestCaseResultsPayload",
+        "frontend/src/utils/api/types.ts",
+        "TestCaseResultsPayload",
+    ),
     # #1520 正规化：summary / job artifacts 从 ApiResponse[dict]/[list] 提升为模型
     (
         "backend/api/schemas/plan_run.py",
@@ -490,17 +546,9 @@ _MODEL_UNREGISTERED: dict[str, str] = {
     # 基类 ``ORMBaseModel`` 在另一文件，``_pydantic_model_fields`` 按口径**显式报错**
     # 而不是静默少收字段。要登记得先扩展跨文件基类解析——独立议题，见台账 I-9。
     "JiraRunOut": "跨文件基类 ORMBaseModel，解析器不静默少收字段",
-    # #1520 opt-in plan_runs.py 时随之入账：这些具名模型**先豁免后逐模型对拍**
-    # （登记=纳入双向对拍；此处=继续盲区但有人认领）。豁免失效即红，防永久化。
-    "JobInstanceOut": "未逐字段对拍（I-9 逐模型推进，plan_runs.py 已 opt-in）",
-    "JobManualActionOut": "未逐字段对拍（I-9）",
-    "PlanChainOut": "未逐字段对拍（I-9）",
-    "PlanRunDetailOut": "未逐字段对拍（I-9）",
-    "PlanRunDevicesOut": "未逐字段对拍（I-9）",
-    "PlanRunEventsOut": "未逐字段对拍（I-9）",
-    "PlanRunListPageOut": "未逐字段对拍（I-9）",
-    "PlanRunTimelineOut": "未逐字段对拍（I-9）",
-    "TestCaseResultsPayload": "未逐字段对拍（I-9）",
+    # #1520 对拍批 1（2026-09-18）：opt-in plan_runs.py 时随之入账的 9 条豁免已
+    # 全部双向对拍通过并转正进 `_MODEL_PAIRS`，此清单当前只剩 JiraRunOut（解析器
+    # 跨文件基类限制）。新豁免须写具体失效条件，勿留泛化占位。
 }
 
 #: 允许 `extra="allow"` 的已登记模型（自由 JSONB 段——键集合由写入方决定）。
