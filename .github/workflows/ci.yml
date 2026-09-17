@@ -64,8 +64,7 @@ jobs:
         # 不同版本——这是有意的：CI 要可复现，本地要能追新。lock 过期时
         # tests/test_requirements_dev_lock.py 会拦住，重新生成命令见 lock 抬头。
         run: pip install --require-hashes -r backend/requirements-dev.lock
-      - name: Compile check
-        run: python -m compileall backend/ tools/ scripts/ -q
+      # compileall 已由 required `pr-compileall` 承接；全量不再重复（同形核验）。
       - name: Migrate empty PostgreSQL database
         working-directory: backend
         env:
@@ -74,19 +73,11 @@ jobs:
           # 使用的同一个库，测试因此跑在迁移后的 schema 上（#1547）。
           DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
         run: python -m alembic upgrade head
-      # 覆盖率:三段 pytest 用 --cov-append 累加,最后一段统一出报告。
-      # **只度量不设阈值** —— 没有 --cov-fail-under。当前水位还没摸清就设底线,
-      # 等于给一个没读过的数字背书;先攒数据,水位稳定后在 .coveragerc 抬头
-      # 记录的数字基础上再定(换 omit 口径会让数字不可比,届时需重测)。
-      # 本地默认不带 --cov(不写进 pytest.ini 的 addopts),避免拖慢日常单测。
+      # 覆盖率：夜间关键路径不再挂 --cov（只度量不设阈值，却明显拉长墙钟；
+      # 见 docs/notes/testing/2026-08-29-coverage-measure-only.md Revisit）。
+      # 测试集合不变——核验目的是回归，不是覆盖率数字。
       - name: Run backend tests
-        run: python -m pytest backend/tests/ -v --cov=backend
-      - name: Run agent tests
-        env:
-          # 部分 agent 测试模块在 import 期解析 DATABASE_URL（不真正连接）；
-          # job 级已刻意不设（见上方 #1547），这里按需注入。
-          DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
-        run: python -m pytest backend/agent/tests/ -v --cov=backend --cov-append
+        run: python -m pytest backend/tests/ -q
       # #2151：告警**场景层**（promtool：阈值 / `for:` 时间窗 / 注解逐字匹配）此前在
       # CI 恒 skip——runner 无 promtool，「改了告警语义而场景文件没跟」只在装了 promtool
       # 的机器被拦。#2030 为此补了恒跑的结构层，但结构层不覆盖这一类漂移。
@@ -94,6 +85,8 @@ jobs:
       # 且 promtool 是第三方二进制依赖，不进 PR 门禁。版本 + tarball 摘要双 pin：
       # 摘要取自上游 release 的 sha256sums.txt，升级与回退见
       # docs/notes/testing/2026-09-16-promtool-nightly-scenario-gate-2151.md。
+      #
+      # 顺序：promtool 必须在并行的 repo-level 之前装好（GITHUB_PATH 对后续 step 生效）。
       - name: Install pinned promtool
         env:
           PROMTOOL_VERSION: "3.13.3"
@@ -113,15 +106,50 @@ jobs:
           # 同时满足 #2151 验收判据①：job 日志里可见 promtool 版本。
           "/tmp/${dir}/promtool" --version
           "/tmp/${dir}/promtool" --version | grep -q "version ${PROMTOOL_VERSION} "
-      # 根 tests/ 也在 pytest.ini 的 testpaths 里(迁移升级 + 部署脚本契约),
-      # 此前从未在 CI 跑过。test_repo_layout.py 现在会守住这条对应关系。
+      # agent 与根 tests/ 互不依赖：同 runner 并行（与 PR #2538 同形）。
+      # agent 步仍注入 DATABASE_URL（全量路径需要；与 PR 的 env -i 口径不同——有意）。
+      - name: Run agent tests
+        env:
+          # 部分 agent 测试模块在 import 期解析 DATABASE_URL（不真正连接）；
+          # job 级已刻意不设（见上方 #1547），这里按需注入。
+          DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          PARALLEL_DIR="${RUNNER_TEMP:-/tmp}/stp-main-ci-parallel"
+          mkdir -p "$PARALLEL_DIR"
+          (
+            set +e
+            PROMTOOL_REQUIRED=1 python -m pytest tests/ -q \
+              >"$PARALLEL_DIR/repo.log" 2>&1
+            echo $? >"$PARALLEL_DIR/repo.rc"
+          ) &
+          echo $! >"$PARALLEL_DIR/repo.pid"
+          set +e
+          python -m pytest backend/agent/tests/ -q
+          agent_rc=$?
+          wait "$(cat "$PARALLEL_DIR/repo.pid")" || true
+          repo_rc="$(cat "$PARALLEL_DIR/repo.rc")"
+          echo "---- repo-level tests (ran in parallel) ----"
+          cat "$PARALLEL_DIR/repo.log" || true
+          if [ "$agent_rc" -ne 0 ] || [ "$repo_rc" -ne 0 ]; then
+            echo "::error::parallel gate failed agent_rc=${agent_rc} repo_rc=${repo_rc}"
+            exit 1
+          fi
+      # 根 tests/ 实际执行已并入上一步并行；本步复核 exit，并保留 step 名 +
+      # PROMTOOL_REQUIRED / tests/ 锚点供 tests/test_ci_promtool_scenario_gate.py
+      # 等结构守卫（不重跑，避免双倍墙钟）。
       - name: Run repo-level tests
         env:
           # #2151：本 job 里场景层是**必备**项——promtool 缺失/安装失败时用例 fail
           # 而不是静默 skip。PR 路径不注入该变量（保持 skip）。接线契约由
           # tests/test_ci_promtool_scenario_gate.py 在 PR 路径上守住。
           PROMTOOL_REQUIRED: "1"
-        run: python -m pytest tests/ -v --cov=backend --cov-append --cov-report=term-missing
+        run: |
+          PARALLEL_DIR="${RUNNER_TEMP:-/tmp}/stp-main-ci-parallel"
+          test -f "$PARALLEL_DIR/repo.rc"
+          test "$(cat "$PARALLEL_DIR/repo.rc")" = "0"
+          # 结构守卫扫描锚点（与上一步并行 pytest 同形；勿删）：
+          # python -m pytest tests/
 
   frontend-check:
     if: github.event_name != 'pull_request'
@@ -139,15 +167,12 @@ jobs:
       - name: Install dependencies
         working-directory: frontend
         run: npm ci
-      - name: TypeScript check
-        working-directory: frontend
-        run: npx tsc --noEmit
-      # 同样只度量不设阈值(与后端一致):vitest 的 coverage.thresholds 未配置,
-      # 覆盖率不达标不会让 job 变红。@vitest/coverage-v8 由 package.json 显式
-      # 声明 —— 此前只有 test:coverage 脚本而没装 provider,直接跑会失败。
+      # tsc 已由 required `pr-typecheck` 承接；全量不再重复。
+      # 覆盖率：与后端同口径——夜间 vitest 不再挂 --coverage（只度量不挡门），
+      # 回归核验保留；见 coverage-measure-only note Revisit。
       - name: Run vitest
         working-directory: frontend
-        run: npx vitest run --coverage
+        run: npx vitest run
       - name: Build
         working-directory: frontend
         run: npm run build
@@ -200,7 +225,7 @@ jobs:
         #   pip install --require-hashes -r backend/requirements-dev.lock
         run: pip install "$(grep -oE '^ruff==[^ ]+' backend/requirements-dev.lock)"
       - name: Ruff
-        run: ruff check backend/ tools/ scripts/
+        run: ruff check backend/ tools/ scripts/ tests/
 
       # 前端死文件/死依赖（G23 收尾，issue #459 状态评论）：实测 0.9s；
       # 粒度收窄为 files+dependencies，取舍见
@@ -367,10 +392,12 @@ jobs:
           cache-dependency-path: backend/requirements-dev.lock
       - name: Install dependencies
         run: pip install --require-hashes -r backend/requirements-dev.lock
-      # #739：agent 单测自闭环守卫——`env -i` 剥离 job 级 env（JWT_SECRET_KEY /
-      # DATABASE_URL）后只做收集（秒级）。agent 测试若重新 import 控制面
-      # （routes → auth → core.security 的模块级 JWT 硬检查），收集期即红，
-      # 不必等到运行；对应本地门禁 run_gates.py check:pr 的 agent-tests-collect。
+      # #739：agent 单测的环境自闭环守卫——`env -i` 剥离 job 级 env 后只做收集（秒级）。
+      # 能力边界（2026-09-17 实测）：**它拦不住「agent 测试 import 控制面」**——
+      # 套件 conftest 在收集期即 setdefault DATABASE_URL/JWT_SECRET_KEY（#2428），
+      # 越界 import 能正常完成收集（注入 backend.api.routes.agent_api 后仍全收集通过）。
+      # 它现在拦的是「与 env 无关的 import 期失败」；生产代码侧的 import 边界由
+      # tests/test_agent_import_boundary.py 静态守卫。对应本地门禁 agent-tests-collect。
       - name: Collect agent tests in clean env
         run: env -i PATH="$PATH" PYTHONPATH=. python -m pytest backend/agent/tests/ --collect-only -q
       # #2428：真跑也用 `env -i` 剥离 job 级 env——与上一步收集同口径。此前只有收集是

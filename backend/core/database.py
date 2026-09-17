@@ -1,9 +1,11 @@
 import importlib.util
 import logging
 import os
-from typing import Dict
+import time
+from typing import Dict, Optional
 
 from sqlalchemy import create_engine, event
+from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
@@ -12,10 +14,60 @@ from backend.core.env_source import resolve_database_url
 logger = logging.getLogger(__name__)
 
 
-def _attach_pool_metrics(engine, engine_label: str) -> None:
-    """#703：QueuePool checkout/checkin → Prometheus Gauge。
+def _record_pool_checkout(engine_label: str, elapsed: float, failure: Optional[str]) -> None:
+    """写「借一条连接」的观测值。观测**绝不得**影响借还（与 `_refresh` 同一纪律）。"""
+    try:
+        from backend.core.metrics import (
+            record_db_pool_checkout,
+            record_db_pool_checkout_failure,
+        )
 
-    SQLite / NullPool 无 ``checkedout``/``overflow`` 语义，直接跳过。
+        record_db_pool_checkout(engine_label, elapsed)
+        if failure:
+            record_db_pool_checkout_failure(engine_label, failure)
+    except Exception:  # noqa: BLE001 — 观测层故障不外溢到取连接路径
+        logger.debug("db_pool_checkout_metrics_failed label=%s", engine_label, exc_info=True)
+
+
+def _instrument_pool_connect(pool, engine_label: str) -> None:
+    """#703 第 3 面：给「借一条连接」补**等待/超时**观测。
+
+    为什么包 ``Pool.connect()`` 而不是用 pool 事件：``checkout`` 事件在**已经拿到**连接之后
+    才触发，排队等了多久、有没有超时它都不知道；``QueuePool`` 也没有公开的 waiters 计数
+    （``_cond`` 是私有实现，跟着版本走）。``Pool.connect()`` 是公开方法，且
+    ``Engine.connect()`` / Session / async 侧（``AsyncAdaptedQueuePool`` 继承同一入口）
+    的每条取连接路径都经过它——一处包住即全覆盖。
+
+    计时口径 = 排队等待 + 建连 + ``pool_pre_ping`` 往返，**不是纯排队时间**（指标 HELP 里
+    写明）。超时按 ``sqlalchemy.exc.TimeoutError`` 判类（QueuePool 触顶抛的就是它，且它
+    与内置 ``TimeoutError`` 无继承关系，不会误判），其余异常一律 ``error``。
+
+    包装只装一次：同一条连接被计时两遍会让 p99 与超时计数同时失真。
+    """
+    if getattr(pool, "_stp_checkout_instrumented", False):
+        return
+    real_connect = pool.connect
+
+    def _connect(*args, **kwargs):
+        started = time.perf_counter()
+        failure = None
+        try:
+            return real_connect(*args, **kwargs)
+        except Exception as exc:  # 只分类，不改语义：原样抛出
+            failure = "timeout" if isinstance(exc, SQLAlchemyTimeoutError) else "error"
+            raise
+        finally:
+            _record_pool_checkout(engine_label, time.perf_counter() - started, failure)
+
+    pool.connect = _connect
+    pool._stp_checkout_instrumented = True
+
+
+def _attach_pool_metrics(engine, engine_label: str) -> None:
+    """#703：QueuePool checkout/checkin → Prometheus Gauge；并包一层等待/超时观测。
+
+    SQLite / NullPool 无 ``checkedout``/``overflow`` 语义，直接跳过（那条路径下
+    「池耗尽」这个概念本身不成立，埋一个恒零的序列只会制造假绿）。
     """
     if is_sqlite_url(str(getattr(engine, "url", "") or "")):
         return
@@ -40,6 +92,8 @@ def _attach_pool_metrics(engine, engine_label: str) -> None:
     event.listen(pool, "checkin", lambda *a, **k: _refresh())
     event.listen(pool, "close", lambda *a, **k: _refresh())
     event.listen(pool, "invalidate", lambda *a, **k: _refresh())
+
+    _instrument_pool_connect(pool, engine_label)
 
 
 # SQLSTATE 40P01 = deadlock_detected。asyncpg 与 psycopg 都在异常对象上暴露
