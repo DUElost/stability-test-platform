@@ -147,3 +147,53 @@ def test_shutdown_cancelled_futures_release_slots(monkeypatch):
 
     assert thread_pool.drain(timeout=10), "被取消的排队任务也必须归还配额"
     assert thread_pool.queue_depth() == 0
+
+
+def test_new_pool_failure_returns_quota(monkeypatch):
+    """#2072 重开的那条残余：``_new_pool()`` 抛异常时已 acquire 的配额必须归还。
+
+    ``BACKGROUND_POOL_SIZE`` 配成非正数 → ``ThreadPoolExecutor.__init__`` 直接
+    ``ValueError``。原先「取池/建池」那段在守卫之外，于是症状与本单原缺陷**同形**
+    （容量单调下降至永久 ``PoolQueueFullError``），只是触发源从"提交失败"换成
+    "建池失败"——同一不变量的第二个漏洞，不是新语义。
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    real_new_pool = thread_pool._new_pool
+    monkeypatch.setattr(
+        thread_pool, "_new_pool",
+        lambda: (_ for _ in ()).throw(ValueError("max_workers must be greater than 0")),
+    )
+    monkeypatch.setattr(thread_pool, "_pool", None)  # 逼它走建池分支
+
+    depth_before = thread_pool.queue_depth()
+    for _ in range(thread_pool.MAX_QUEUE + 5):
+        with pytest.raises(ValueError, match="max_workers"):
+            thread_pool.submit(lambda: None)
+    assert thread_pool.queue_depth() == depth_before, "建池失败不得蚕食配额"
+
+    # 容量完好：换回真池仍能提交并跑完（旧实现此刻恒 PoolQueueFullError）
+    monkeypatch.setattr(thread_pool, "_new_pool", real_new_pool)
+    monkeypatch.setattr(thread_pool, "_pool", ThreadPoolExecutor(max_workers=1))
+    done = threading.Event()
+    thread_pool.submit(done.set)
+    assert done.wait(timeout=5)
+    assert thread_pool.drain(timeout=5)
+
+
+def test_rebuild_failure_after_shutdown_returns_quota(monkeypatch):
+    """第二个建池点（被 shutdown 拒绝后重建）同样要在守卫内。"""
+    from concurrent.futures import ThreadPoolExecutor
+
+    dead = ThreadPoolExecutor(max_workers=1)
+    dead.shutdown(wait=False)
+    monkeypatch.setattr(thread_pool, "_pool", dead)
+    monkeypatch.setattr(
+        thread_pool, "_new_pool",
+        lambda: (_ for _ in ()).throw(ValueError("cannot build pool")),
+    )
+
+    with pytest.raises(ValueError, match="cannot build pool"):
+        thread_pool.submit(lambda: None)
+
+    assert thread_pool.queue_depth() == 0, "重建失败后配额必须已归还"

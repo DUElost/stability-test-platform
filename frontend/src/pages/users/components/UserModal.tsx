@@ -25,6 +25,16 @@ interface UserModalProps {
   editUser?: User | null;
 }
 
+/**
+ * #2497：本表单的字段是**非受控**（`defaultValue` + 提交时读 DOM），不是受控。
+ *
+ * 为什么：受控组件会把外部写入的值**回写成 state**（state 未同步时即清空）——密码管理器
+ * 直写 `.value` 后，React 回写清空、管理器再写、React 再清……这条往返会占满主线程，
+ * 现场表现为浏览器「页面无响应」+ 数秒后重载，且服务端**收不到任何请求**。
+ * 非受控后 React 不再回写，管理器填什么就是什么；提交仍走 `readNamedValues`（#2453）。
+ * 弹窗关闭即整棵子树卸载（下方 `if (!isOpen) return null`），重开自然拿到新的
+ * `defaultValue`，无需受控重置。
+ */
 export function UserModal({ isOpen, onClose, onSubmit, onUpdate, isSubmitting, editUser }: UserModalProps) {
   const [formData, setFormData] = useState({
     username: '',
@@ -33,6 +43,10 @@ export function UserModal({ isOpen, onClose, onSubmit, onUpdate, isSubmitting, e
     role: 'user',
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
+  // #2497：字段改为非受控后，state 不再随键入更新；编辑态「密码非空才显示确认框」
+  // 这条可见性判据改由 onChange 维护（人工键入会触发；管理器直写不回写 state 时，
+  // 确认框维持原状——与「非受控不回写」的取舍一致）。
+  const [passwordPresent, setPasswordPresent] = useState(false);
 
   const isEditMode = !!editUser;
 
@@ -56,6 +70,7 @@ export function UserModal({ isOpen, onClose, onSubmit, onUpdate, isSubmitting, e
         setFormData({ username: '', password: '', confirmPassword: '', role: 'user' });
       }
       setErrors({});
+      setPasswordPresent(false);
     }
   }
 
@@ -170,8 +185,7 @@ export function UserModal({ isOpen, onClose, onSubmit, onUpdate, isSubmitting, e
               id="user-username"
               name="username"
               type="text"
-              value={formData.username}
-              onChange={(e) => setFormData({ ...formData, username: e.target.value })}
+              defaultValue={formData.username}
               placeholder="例如：zhang_san"
               className={fieldClass(!!errors.username)}
               disabled={isSubmitting}
@@ -188,8 +202,8 @@ export function UserModal({ isOpen, onClose, onSubmit, onUpdate, isSubmitting, e
               id="user-password"
               name="password"
               type="password"
-              value={formData.password}
-              onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+              defaultValue={formData.password}
+              onChange={(e) => setPasswordPresent(!!e.target.value)}
               placeholder={isEditMode ? '留空表示不修改' : '至少 8 位'}
               maxLength={128}
               className={fieldClass(!!errors.password)}
@@ -199,7 +213,7 @@ export function UserModal({ isOpen, onClose, onSubmit, onUpdate, isSubmitting, e
           </div>
 
           {/* Confirm Password */}
-          {(formData.password || !isEditMode) && (
+          {(passwordPresent || !isEditMode) && (
             <div>
               <label htmlFor="user-confirm-password" className={FORM.label}>
                 确认密码
@@ -208,8 +222,7 @@ export function UserModal({ isOpen, onClose, onSubmit, onUpdate, isSubmitting, e
                 id="user-confirm-password"
                 name="confirmPassword"
                 type="password"
-                value={formData.confirmPassword}
-                onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
+                defaultValue={formData.confirmPassword}
                 placeholder="再次输入密码"
                 className={fieldClass(!!errors.confirmPassword)}
                 disabled={isSubmitting}
@@ -226,8 +239,7 @@ export function UserModal({ isOpen, onClose, onSubmit, onUpdate, isSubmitting, e
             <select
               id="user-role"
               name="role"
-              value={formData.role}
-              onChange={(e) => setFormData({ ...formData, role: e.target.value })}
+              defaultValue={formData.role}
               className={cn(FORM.select, 'w-full', errors.role && FORM.inputInvalid)}
               disabled={isSubmitting}
             >

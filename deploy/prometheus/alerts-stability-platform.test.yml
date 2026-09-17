@@ -354,3 +354,42 @@ tests:
       - eval_time: 200h
         alertname: StabilityScriptGuardRetirementDue
         exp_alerts: []
+
+  # #2394①/#2252 回归防线场景（覆盖两条新告警；host 标签形状取自
+  # backend/core/metrics.py 的注册表定义）。
+  - interval: 1m
+    input_series:
+      # unresolved 收尾快照恒为 3：12h 后触发积压告警
+      - series: 'stability_reconciler_unresolved_dirs{host_id="host-1"}'
+        values: '3x800'
+      # abandoned 计数器前 60 分钟为 0，之后 +1：increase[6h]>0 恒触发
+      - series: 'stability_reconciler_dirs_abandoned_total{host_id="host-1"}'
+        values: '0x60 1x600'
+    alert_rule_test:
+      - eval_time: 13h
+        alertname: StabilityUnisocUnresolvedBacklog
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              host_id: host-1
+            exp_annotations:
+              summary: UNISOC watcher left unresolved event dirs at last completed job
+              description: >-
+                该 host 最近完成的 UNISOC job 收尾时仍有「设备列到、平台未落账」的事件目录。
+                先排除 stale gauge（该 host 是否 12h 内本应有 job 终态）；再看 agent 日志
+                unisoc_reconciler_unresolved_dir / dir_abandoned 定位具体目录；正常形态下
+                #2252 降级与 #2079 重试会在数拍内收敛，持续积压提示新型不可收敛目录。
+                判据与失效面：docs/notes/bug-fix/2026-09-14-unisoc-anomaly-source-73.md
+                与 issue #2394。
+      - eval_time: 2h
+        alertname: StabilityUnisocDirAbandonedRegression
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              host_id: host-1
+            exp_annotations:
+              summary: UNISOC event dir abandoned reappeared after #2252
+              description: >-
+                #2252 后仍出现「连败达上限被放弃」的目录：检查该目录 unievent_info 是否
+                连元数据都拉不回（设备侧损坏/权限），或 du 探测失手回落整拉后仍恒超时。
+                agent 日志 grep unisoc_reconciler_dir_abandoned 取目录名与 attempts。
