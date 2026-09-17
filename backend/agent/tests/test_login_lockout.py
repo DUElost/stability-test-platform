@@ -12,13 +12,28 @@ from backend.core import login_lockout
 from backend.core.login_lockout import AccountLocked, InvalidCredentials
 
 
+def _install_lockout_clock(monkeypatch, *, start: float = 1_000_000.0):
+    state = {"now": start}
+
+    def fake_time() -> float:
+        return state["now"]
+
+    def fake_sleep(seconds: float) -> None:
+        state["now"] += float(seconds)
+
+    monkeypatch.setattr(login_lockout.time, "time", fake_time)
+    monkeypatch.setattr(time, "sleep", fake_sleep)
+    return state
+
+
 def _make_lock() -> login_lockout.LoginLockout:
     return login_lockout.LoginLockout(
         max_failures=3, failure_window_seconds=60, lockout_seconds=5,
     )
 
 
-def test_lockout_triggers_on_threshold_and_expires():
+def test_lockout_triggers_on_threshold_and_expires(monkeypatch):
+    _install_lockout_clock(monkeypatch)
     lock = _make_lock()
     assert lock.record_failure("alice") == 0
     assert lock.record_failure("alice") == 0
@@ -37,7 +52,8 @@ def test_success_clears_failures():
     assert lock.record_failure("alice") == 0  # 从 1 重新计数,而非接续到阈值
 
 
-def test_failure_window_prunes_old_failures():
+def test_failure_window_prunes_old_failures(monkeypatch):
+    _install_lockout_clock(monkeypatch)
     lock = login_lockout.LoginLockout(
         max_failures=3, failure_window_seconds=1, lockout_seconds=300,
     )
@@ -93,8 +109,9 @@ def test_table_capacity_holds_when_all_accounts_locked():
     assert lock.locked_remaining("new_0") == 0    # 新账户未被跟踪
 
 
-def test_eviction_frees_slot_for_new_account_after_expiry():
+def test_eviction_frees_slot_for_new_account_after_expiry(monkeypatch):
     """锁定期满(prune 清理)后,新账户重新获得跟踪位。"""
+    _install_lockout_clock(monkeypatch)
     lock = login_lockout.LoginLockout(
         max_failures=2, failure_window_seconds=60, lockout_seconds=1,
         max_tracked_accounts=2,

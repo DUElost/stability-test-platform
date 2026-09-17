@@ -402,6 +402,13 @@ def _status(checks, check_id: str) -> str:
     return next(check.status for check in checks if check.check_id == check_id)
 
 
+def _set_agent_ssh_port(site, port: int) -> None:
+    """改掉合成站点声明的 Agent 端口（`context()` 每次从文件重载，写文件即生效）。"""
+    data = yaml.safe_load(site.config_path.read_text(encoding="utf-8"))
+    data["agents"][0]["ssh_port"] = port
+    site.config_path.write_text(yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
+
+
 def _run(ctx, api, **kwargs):
     kwargs.setdefault("progress", lambda _: None)
     kwargs.setdefault("now", NOW)
@@ -622,6 +629,40 @@ class TestHappyPath:
 
         assert api.created == []
         assert _status(checks, "install.s5.host") == "PASS"
+
+    def test_existing_host_with_matching_ssh_port_is_reused(self, site):
+        """#2283 残余：声明端口与 Host 行一致时照常复用（判据不得误报）。"""
+        _set_agent_ssh_port(site, 2222)
+        api = FakeApi(hosts=[{
+            "id": "agent-01.synthetic.invalid",
+            "name": "synthetic-i4-agent-01",
+            "ip": "agent-01.synthetic.invalid",
+            "ssh_port": 2222,
+        }])
+        checks = _run(site(), api)
+
+        assert api.created == []
+        assert _status(checks, "install.s5.host") == "PASS"
+
+    def test_existing_host_with_different_ssh_port_fails_closed(self, site):
+        """#2283 残余：复用路径必须比对声明端口——真实安装用的是 Host 行端口。
+
+        `agent_installer` 取 `host.ssh_port or 22`，而声明端口（inventory 的
+        `ansible_port`）此前在复用路径被静默丢弃 → 安装打到错误端口。本用例钉住
+        显式 FAIL（不得静默通过）。
+        """
+        _set_agent_ssh_port(site, 2222)
+        api = FakeApi(hosts=[{
+            "id": "agent-01.synthetic.invalid",
+            "name": "synthetic-i4-agent-01",
+            "ip": "agent-01.synthetic.invalid",
+            "ssh_port": 22,
+        }])
+        checks = _run(site(), api)
+
+        assert api.created == []
+        assert _status(checks, "install.s5.host") == "FAIL"
+        assert "host_ssh_port_mismatch" in _codes(checks)
 
     def test_install_already_running_is_joined_not_restarted(self, site):
         """响应丢失后重试：409 + console_run_id 接到现有 run，不启动第二个。"""

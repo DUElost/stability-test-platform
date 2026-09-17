@@ -19,6 +19,21 @@ _FIXTURES = Path(__file__).resolve().parent / "fixtures" / "powercycle"
 _SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 
 
+def _patch_advancing_clock(monkeypatch, mod, *, start: float = 1_000_000.0):
+    """Replace mod.time.sleep/time so sleep advances a fake clock (no wall wait)."""
+    state = {"now": start}
+
+    def fake_time() -> float:
+        return state["now"]
+
+    def fake_sleep(seconds: float) -> None:
+        state["now"] += float(seconds)
+
+    monkeypatch.setattr(mod.time, "time", fake_time)
+    monkeypatch.setattr(mod.time, "sleep", fake_sleep)
+    return state
+
+
 def _load(name: str, rel_path: str):
     path = _SCRIPTS / rel_path
     sys.path.insert(0, str(path.parent))
@@ -681,7 +696,7 @@ class TestWaitDeviceOnlineV102:
         monkeypatch.setattr(finish_mod_v102, "device_online", lambda: True)
         replies = {"getprop sys.boot_completed": ""}
         monkeypatch.setattr(finish_mod_v102, "adb_shell", lambda cmd, timeout=15: replies.get(cmd, ""))
-        monkeypatch.setattr(finish_mod_v102.time, "sleep", lambda _: None)
+        _patch_advancing_clock(monkeypatch, finish_mod_v102)
         # 永不就绪 → 超时 False
         assert finish_mod_v102._wait_device_online(10) is False
 
@@ -699,7 +714,7 @@ class TestWaitDeviceOnline:
 
     def test_offline_until_timeout(self, finish_mod_v101, monkeypatch):
         monkeypatch.setattr(finish_mod_v101, "device_online", lambda: False)
-        monkeypatch.setattr(finish_mod_v101.time, "sleep", lambda _: None)
+        _patch_advancing_clock(monkeypatch, finish_mod_v101)
         assert finish_mod_v101._wait_device_online(10) is False
 
     def test_comes_online_after_retries(self, finish_mod_v101, monkeypatch):
@@ -710,7 +725,7 @@ class TestWaitDeviceOnline:
             return calls["n"] >= 2
 
         monkeypatch.setattr(finish_mod_v101, "device_online", fake_online)
-        monkeypatch.setattr(finish_mod_v101.time, "sleep", lambda _: None)
+        _patch_advancing_clock(monkeypatch, finish_mod_v101)
         assert finish_mod_v101._wait_device_online(600) is True
 
     def test_run_waits_online_before_stop(self, finish_mod_v101, monkeypatch, tmp_path):
@@ -719,7 +734,7 @@ class TestWaitDeviceOnline:
         monkeypatch.setattr(finish_mod_v101, "device_serial", lambda: "PC-S3")
         monkeypatch.setattr(finish_mod_v101, "device_online", lambda: True)
         monkeypatch.setattr(finish_mod_v101, "stop_task", lambda force=True: order.append("stop"))
-        monkeypatch.setattr(finish_mod_v101.time, "sleep", lambda _: None)
+        _patch_advancing_clock(monkeypatch, finish_mod_v101)
         monkeypatch.setattr(finish_mod_v101, "adb_shell", lambda cmd, timeout=30: "")
 
         def fake_pull():
@@ -737,7 +752,7 @@ class TestWaitDeviceOnline:
         """等待超时仍离线 → 明确报错（不静默丢结果）。"""
         monkeypatch.setattr(finish_mod_v101, "device_serial", lambda: "PC-S4")
         monkeypatch.setattr(finish_mod_v101, "device_online", lambda: False)
-        monkeypatch.setattr(finish_mod_v101.time, "sleep", lambda _: None)
+        _patch_advancing_clock(monkeypatch, finish_mod_v101)
         with pytest.raises(RuntimeError) as ei:
             finish_mod_v101._run({"wait_device_online_seconds": 10})
         assert "未上线" in str(ei.value)
@@ -747,7 +762,7 @@ class TestFinish:
     def test_run_writes_detail_json(self, finish_mod, monkeypatch, tmp_path):
         monkeypatch.setattr(finish_mod, "device_serial", lambda: "PC-S1")
         monkeypatch.setattr(finish_mod, "stop_task", lambda force=True: None)
-        monkeypatch.setattr(finish_mod.time, "sleep", lambda _: None)
+        _patch_advancing_clock(monkeypatch, finish_mod)
         monkeypatch.setattr(finish_mod, "adb_shell", lambda cmd, timeout=30: "")
 
         def fake_pull():
@@ -776,7 +791,7 @@ class TestFinish:
         """无 finished 行 → final_status=INCOMPLETE（测试未收尾）。"""
         monkeypatch.setattr(finish_mod, "device_serial", lambda: "PC-S2")
         monkeypatch.setattr(finish_mod, "stop_task", lambda force=True: None)
-        monkeypatch.setattr(finish_mod.time, "sleep", lambda _: None)
+        _patch_advancing_clock(monkeypatch, finish_mod)
         monkeypatch.setattr(finish_mod, "adb_shell", lambda cmd, timeout=30: "")
 
         def fake_pull():
@@ -813,7 +828,7 @@ class TestCollectRetryV104:
         monkeypatch.setattr(mod, "device_serial", lambda: "PC-R1")
         monkeypatch.setattr(mod, "device_online", lambda: True)
         monkeypatch.setattr(mod, "stop_task", lambda force=True: None)
-        monkeypatch.setattr(mod.time, "sleep", lambda _: None)
+        _patch_advancing_clock(monkeypatch, mod)
 
         def fake_pull():
             calls["pull"] += 1

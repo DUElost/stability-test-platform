@@ -201,3 +201,129 @@ def test_inject_command_rejects_non_agent_events(fa):
         "--data", "{}", "--log-file", "",
     ])
     assert fa.cmd_inject(args) == 2, "事件白名单在连接建立之前就要挡下"
+
+# ── 入站接线（#2470）：只回 ack，但必须真的在听 ────────────────────────────
+
+
+class _FakeClient:
+    """`socketio.Client` 的最小替身：记录 on/emit/call，不起任何网络。"""
+
+    def __init__(self) -> None:
+        self.handlers: dict[tuple[str, str | None], object] = {}
+        self.outbound: list[str] = []
+        self.connected_to: str | None = None
+
+    def connect(self, base, **kwargs):
+        self.connected_to = base
+
+    def on(self, event, handler, namespace=None):
+        self.handlers[(event, namespace)] = handler
+
+    def emit(self, event, data=None, namespace=None):
+        self.outbound.append(event)
+
+    def call(self, event, data=None, namespace=None, timeout=None):
+        self.outbound.append(event)
+        return {"ok": True}
+
+    def disconnect(self):
+        pass
+
+
+def test_push_handlers_cover_every_push_event(fa):
+    """PUSH_EVENTS 不再只是常量：每个事件都必须在 /agent 上挂到可调用 handler。
+
+    #2470 的形态正是「常量齐全、无人消费」——`serve` 从不注册入站 handler，
+    派发门禁的 `verify_scripts` RPC 等不到 ack，plan-run 停在队列里一行 job 都不
+    产生，且日志里没有任何痕迹。
+    """
+    client = _FakeClient()
+    registered = fa.register_push_handlers(client, host_id="192-0-2-11")
+    assert set(registered) == set(fa.PUSH_EVENTS)
+    assert set(client.handlers) == {(ev, fa.AGENT_NS) for ev in fa.PUSH_EVENTS}
+    assert all(callable(h) for h in client.handlers.values())
+
+
+def test_inbound_handlers_ack_and_never_execute(fa, monkeypatch):
+    """verify_scripts 交给生产只读哈希器，其余只回 ok；且 handler 不得晚绑成同一事件。"""
+    seen: list = []
+
+    def _fake_ack(expected, *, host_id):
+        seen.append((expected, host_id))
+        return {"host_id": host_id, "results": [{"ok": True}]}
+
+    monkeypatch.setattr(fa, "verify_scripts_ack", _fake_ack)
+    client = _FakeClient()
+    fa.register_push_handlers(client, host_id="h1")
+
+    # PUSH_EVENTS 里 verify_scripts 不是最后一个：若闭包晚绑，这里拿到的会是
+    # 最后一个事件的 handler，返回 {"ok": True} 而不是下面的应答体。
+    ack = client.handlers[("verify_scripts", fa.AGENT_NS)]({"expected": [{"name": "gpu_setup"}]})
+    assert ack == {"host_id": "h1", "results": [{"ok": True}]}
+    assert seen == [([{"name": "gpu_setup"}], "h1")]
+
+    for event in ("control", "execute_job", "run_job", "dispatch", "job_command"):
+        assert client.handlers[(event, fa.AGENT_NS)]({"do": "anything"}) == {"ok": True}
+    # 载荷缺 expected 键也要走同一委派路径（生产侧总是带键，夹具不因此崩）
+    assert fa.push_ack("verify_scripts", None, host_id="h2") == {
+        "host_id": "h2", "results": [{"ok": True}]}
+    assert seen[-1] == ([], "h2")
+
+
+def test_serve_wires_inbound_handlers_but_short_commands_do_not(fa, monkeypatch):
+    """连接层按调用方决定挂不挂入站 handler：`serve` 必挂，短命令不挂。
+
+    这一条钉的是「接线位置」——handler 注册必须发生在真正长期在线的子命令上，
+    否则常量与注册各对一半，仍然是「看得见、答不出」。
+    """
+    clients: list[_FakeClient] = []
+    monkeypatch.setitem(
+        __import__("sys").modules, "socketio",
+        SimpleNamespace(Client=lambda *a, **kw: clients.append(_FakeClient()) or clients[-1]),
+    )
+    monkeypatch.setenv("AGENT_SECRET", "not-a-real-secret")
+    args = fa.parse_cli(["--log-file", "", "serve", "--lifetime", "0"])
+    assert fa.cmd_serve(args) == 0
+    assert clients, "serve 没建过连接"
+    assert {(ev, ns) for (ev, ns) in clients[-1].handlers} == {
+        (ev, fa.AGENT_NS) for ev in fa.PUSH_EVENTS}
+
+    rc = fa._with_connection(args, lambda emit: None)
+    assert rc == 0
+    assert clients[-1].handlers == {}, "短命令路径不该挂入站 handler"
+
+
+# ── 红线 2 的容器内寻址（#2470 第 3 项）───────────────────────────────────
+
+
+def test_in_container_admits_loopback_only_with_fingerprint(fa):
+    """容器内 loopback:8000 放行；宿主上同地址、无指纹、非 loopback 一律拒。"""
+    admit = dict(in_container=True, container_probe=lambda: True)
+    assert fa.guard_target("http://127.0.0.1:8000", **admit) == "http://127.0.0.1:8000"
+    with pytest.raises(fa.FixtureRefused):
+        fa.guard_target("http://127.0.0.1:8000", in_container=True,
+                        container_probe=lambda: False)
+    with pytest.raises(fa.FixtureRefused):
+        fa.guard_target("http://127.0.0.1:8000")
+    with pytest.raises(fa.FixtureRefused):
+        fa.guard_target("http://10.0.2.99:8000", **admit)
+    # 声明了容器内也不放宽 dev 端口那条路（18000 仍按常规判据通过）
+    assert fa.guard_target("http://127.0.0.1:18000", in_container=True,
+                           container_probe=lambda: False) == "http://127.0.0.1:18000"
+
+
+def test_in_container_is_not_the_red_line_escape(fa):
+    """两个开关语义不合并：--in-container 不放过非 dev 的第三方地址。"""
+    with pytest.raises(fa.FixtureRefused):
+        fa.guard_target("http://control.prod:8000", in_container=True,
+                        container_probe=lambda: True)
+    assert fa.guard_target("http://control.prod:8000", allow_non_dev=True)
+
+
+def test_cli_defaults_and_docstring_show_the_runnable_form(fa):
+    """默认不开容器模式；文档里必须给出容器内那条**实际可跑**的写法（#2470 的起因）。"""
+    assert fa.parse_cli(["heartbeat"]).in_container is False
+    assert fa.parse_cli(["--in-container", "heartbeat"]).in_container is True
+    assert fa.parse_cli(["--in-container", "heartbeat"]).base == fa.DEV_DEFAULT_BASE
+    doc = TOOL.read_text(encoding="utf-8")
+    assert "--in-container" in doc and "http://127.0.0.1:8000" in doc

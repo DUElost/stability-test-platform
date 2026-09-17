@@ -1,4 +1,4 @@
-import { render, waitFor } from '@testing-library/react';
+import { render, waitFor, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
@@ -57,5 +57,21 @@ describe('AuditLogPage', () => {
     // 外层兜底：AppShell main 为 overflow-hidden，页头+筛选行高于视口时只有这里能滚
     expect(page.className).toContain('overflow-auto');
     expect(tableArea.className).toContain('overflow-auto');
+  });
+
+  it('#2369：可见性恢复时重取审计日志（本页无轮询、不在跨端同步域内）', async () => {
+    renderPage();
+    await waitFor(() => expect(mocks.auditList).toHaveBeenCalledTimes(1));
+
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => 'visible',
+    });
+    await act(async () => {
+      // react-query 的 focusManager 监听 window 的 visibilitychange（query-core focusManager.ts）
+      window.dispatchEvent(new Event('visibilitychange'));
+    });
+
+    await waitFor(() => expect(mocks.auditList).toHaveBeenCalledTimes(2));
   });
 });
