@@ -3,8 +3,6 @@
 Authentication: X-Agent-Secret header (compared to AGENT_SECRET env var).
 """
 
-import json
-import hashlib
 import logging
 import secrets
 from datetime import datetime, timezone
@@ -21,10 +19,8 @@ from backend.core.agent_secret import AgentSecretNotConfiguredError, require_age
 from backend.core.database import get_async_db, get_db
 from backend.models.enums import JobStatus
 from backend.models.host import Host
-from backend.models.device_lease import DeviceLease
 from backend.models.job import JobInstance
 from backend.api.routes.auth import get_current_active_user
-from backend.models.plan_run import PlanRun
 from backend.services.agent_recovery import (
     _RecoverySyncIn,
     sync_agent_recovery,
@@ -111,6 +107,17 @@ from backend.services.agent_job_heartbeat import (  # noqa: F401
     JobHeartbeatIn,
     _DEVICE_LOCK_LEASE_SECONDS,
 )
+from backend.services.agent_step_status import (
+    StepTraceIn,
+    _StepStatusIn,
+    _require_valid_runtime_lease,
+    update_agent_job_step_status,
+    upload_agent_step_traces,
+)
+from backend.services.agent_step_status import (  # noqa: F401
+    StepStatusIn,
+    require_valid_runtime_lease,
+)
 from backend.services.agent_host_heartbeat import (  # noqa: F401
     BackpressureInfo,
     _get_backpressure,
@@ -140,16 +147,14 @@ from backend.services.agent_lease_extend import (  # noqa: F401
 )
 from backend.services.agent_completion import (
     _RunCompleteIn,
-    _get_valid_runtime_lease,
     complete_agent_job,
 )
 from backend.services.agent_completion import (  # noqa: F401
     _RUN_TO_JOB,
     _apply_watcher_summary,
     _bridge_reconciler_metrics,
+    _get_valid_runtime_lease,
 )
-from backend.realtime.socketio_server import broadcast_plan_run_status, broadcast_run_job_update
-from backend.services.reconciler import reconcile_step_traces
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/agent", tags=["agent"])
@@ -187,21 +192,6 @@ class JobStatusUpdate(BaseModel):
     fencing_token: str
 
 
-class StepTraceIn(BaseModel):
-    job_id: int
-    step_id: str
-    stage: str = "execute"
-    event_type: str
-    status: str = ""
-    output: Optional[str] = None
-    error_message: Optional[str] = None
-    exit_code: Optional[int] = None
-    metadata: Optional[dict] = None
-    original_ts: Optional[str] = None
-    trace_event_id: Optional[str] = None
-    fencing_token: str
-
-
 # ── ADR-0019 Phase 3a: Recovery Sync models ──────────────────────────────────
 
 
@@ -223,20 +213,6 @@ def _agent_version_is_supported(agent_version: str, minimum: str) -> bool:
     from backend.services.agent_version_gate import agent_version_is_supported
     return agent_version_is_supported(agent_version, minimum)
 
-
-
-# ── ADR-0019 Phase 4b: Runtime Lease Validation ────────────────────────────────
-
-
-async def _require_valid_runtime_lease(
-    db: AsyncSession,
-    job: JobInstance,
-    fencing_token: str,
-) -> DeviceLease:
-    valid_lease = await _get_valid_runtime_lease(db, job, fencing_token)
-    if valid_lease is None:
-        raise HTTPException(status_code=409, detail="invalid or expired fencing_token")
-    return valid_lease
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -307,28 +283,7 @@ async def upload_step_traces(
     x_agent_secret: Optional[str] = Header(None, alias="X-Agent-Secret"),
 ):
     """Batch idempotent StepTrace upsert (Agent replay on reconnect)."""
-    host_id = "unknown"
-    for trace in traces:
-        job = await db.get(JobInstance, trace.job_id)
-        if job is None:
-            raise HTTPException(status_code=404, detail="job not found")
-        await _require_valid_runtime_lease(db, job, trace.fencing_token)
-
-    raw = [t.model_dump() for t in traces]
-    result = await reconcile_step_traces(host_id, raw, db)
-
-    # Push job_status / plan_run_status for transitioned jobs (B5)
-    for tj_id in result["transitioned_jobs"]:
-        job = await db.get(JobInstance, tj_id)
-        if job is not None:
-            await broadcast_run_job_update(job.plan_run_id, tj_id, job.status)
-            pr = await db.get(PlanRun, job.plan_run_id)
-            if pr is not None and pr.status in {
-                "SUCCESS", "PARTIAL_SUCCESS", "FAILED",
-            }:
-                await broadcast_plan_run_status(pr.id, pr.status)
-
-    return ok({"inserted": result["inserted"], "total": len(traces)})
+    return ok(await upload_agent_step_traces(db, traces))
 
 
 @router.post("/heartbeat", response_model=ApiResponse[HeartbeatResponse])
@@ -345,18 +300,6 @@ async def agent_heartbeat(
 
 
 # ── RunStatus→JobStatus mapping for compat endpoints ─────────────────────────
-
-
-class _StepStatusIn(BaseModel):
-    status: str
-    started_at: Optional[str] = None
-    finished_at: Optional[str] = None
-    exit_code: Optional[int] = None
-    error_message: Optional[str] = None
-    metadata: Optional[dict] = None
-    trace_event_id: Optional[str] = None
-    fencing_token: str
-
 
 
 @router.post("/jobs/{job_id}/heartbeat", response_model=ApiResponse[dict])
@@ -438,54 +381,7 @@ async def update_job_step_status(
     _=Depends(_verify_agent),
 ):
     """Update a single step status — upserted as StepTrace."""
-    from backend.services.reconciler import reconcile_step_traces
-    trace_event_id = (payload.trace_event_id or "").strip()
-    if not trace_event_id:
-        # 单步 status 端点没有独立批次 id：用载荷内容派生稳定 id，
-        # 同一逻辑迁移（如 RUNNING→FAILED）各自幂等，重试不重复插入。
-        metadata_json = (
-            json.dumps(payload.metadata, sort_keys=True, default=str)
-            if payload.metadata else ""
-        )
-        digest = hashlib.sha256(
-            (
-                f"{job_id}\0{step_id}\0{payload.status}\0"
-                f"{payload.started_at or ''}\0{payload.exit_code or ''}\0"
-                f"{payload.error_message or ''}\0{metadata_json}"
-            ).encode("utf-8")
-        ).hexdigest()[:24]
-        trace_event_id = f"status:{digest}"
-    trace = {
-        "job_id": job_id,
-        "step_id": step_id,
-        "stage": "execute",
-        "event_type": "status_update",
-        "status": payload.status,
-        "exit_code": payload.exit_code,
-        "metadata": payload.metadata,
-        "error_message": payload.error_message,
-        "trace_event_id": trace_event_id,
-        "original_ts": payload.started_at or datetime.now(timezone.utc).isoformat(),
-    }
-    job = await db.get(JobInstance, job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="job not found")
-    await _require_valid_runtime_lease(db, job, payload.fencing_token)
-
-    result = await reconcile_step_traces("agent", [trace], db)
-
-    # Push job_status / plan_run_status if the job transitioned (B5)
-    for tj_id in result["transitioned_jobs"]:
-        job = await db.get(JobInstance, tj_id)
-        if job is not None:
-            await broadcast_run_job_update(job.plan_run_id, tj_id, job.status)
-            pr = await db.get(PlanRun, job.plan_run_id)
-            if pr is not None and pr.status in {
-                "SUCCESS", "PARTIAL_SUCCESS", "FAILED",
-            }:
-                await broadcast_plan_run_status(pr.id, pr.status)
-
-    return ok({"job_id": job_id, "step_id": step_id, "status": payload.status})
+    return ok(await update_agent_job_step_status(db, job_id, step_id, payload))
 
 
 # ── ADR-0022: Patrol Heartbeat ────────────────────────────────────────────────
