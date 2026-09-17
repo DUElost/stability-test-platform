@@ -109,7 +109,7 @@ class ReconcilerStats:
     tick_errors: int = 0
     # #2394-①「落成未采到」可发现化（UNISOC reconciler 回填；MTK 路恒 0）：
     dirs_abandoned: int = 0            # 达 #2272 上限被放弃的目录数（按目录名去重）
-    dirs_oversized_skipped: int = 0    # #2252 降级态（超限仅取元数据）目录数（本拍快照）
+    dirs_oversized_skipped: int = 0    # #2252 降级目录：本 job 累计（按名去重，单调）
     unresolved_dirs: int = 0           # 最近一拍「已列到但未落 processed 且未放弃」集合大小
 
     def to_dict(self) -> Dict[str, int]:

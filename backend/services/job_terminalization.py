@@ -170,7 +170,7 @@ async def on_job_terminal(
     total = int(run.total_job_count or 0)
     if total > 0:
         t0 = time.perf_counter()
-        applied = apply_plan_run_aggregation_from_counters(run)
+        applied = apply_plan_run_aggregation_from_counters(run, db=db)
         record_plan_run_aggregation_duration(
             time.perf_counter() - t0, "counters",
         )
@@ -179,7 +179,7 @@ async def on_job_terminal(
 
     jobs = await _load_jobs()
     t0 = time.perf_counter()
-    applied = apply_plan_run_aggregation(run, jobs)
+    applied = apply_plan_run_aggregation(run, jobs, db=db)
     record_plan_run_aggregation_duration(
         time.perf_counter() - t0, "full_scan",
     )
@@ -225,7 +225,7 @@ def on_job_terminal_sync(
     total = int(run.total_job_count or 0)
     if total > 0:
         t0 = time.perf_counter()
-        applied = apply_plan_run_aggregation_from_counters(run)
+        applied = apply_plan_run_aggregation_from_counters(run, db=db)
         record_plan_run_aggregation_duration(
             time.perf_counter() - t0, "counters",
         )
@@ -238,7 +238,7 @@ def on_job_terminal_sync(
         .all()
     )
     t0 = time.perf_counter()
-    applied = apply_plan_run_aggregation(run, jobs)
+    applied = apply_plan_run_aggregation(run, jobs, db=db)
     record_plan_run_aggregation_duration(
         time.perf_counter() - t0, "full_scan",
     )

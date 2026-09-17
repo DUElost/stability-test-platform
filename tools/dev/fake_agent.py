@@ -14,9 +14,12 @@ job / step 级实时面在隔离 dev 栈里**曾经不可测**：派发门禁要
 1. **只注册与回报，绝不执行脚本**：不 import ``subprocess``/``pty``、不碰 ADB、
    不跑任何脚本内容。``verify_scripts`` 只做「读文件 + sha256」，``execute_job`` /
    ``run_job`` / ``control`` 一律回 ``{"ok": True}`` 而不做任何事。
-2. **只打 dev 栈**：默认 base 是 compose 映射的 ``127.0.0.1:18000``。指向 ``:8000``
-   （本机生产控制面）**默认拒绝**，需 ``--allow-non-dev-target`` 显式越过。反过来，
-   也**绝不把真机 Agent 指向 dev** ``:18000`` —— 两边都会把对方的事实源污染掉。
+2. **只打 dev 栈**：默认 base 是 compose 在**宿主侧**映射的 ``127.0.0.1:18000``。指向
+   ``:8000``（宿主上即本机生产控制面）**默认拒绝**，需 ``--allow-non-dev-target`` 显式
+   越过。反过来，也**绝不把真机 Agent 指向 dev** ``:18000``——两边都会污染对方的事实源。
+   ``--in-container`` 不是它的别名：只在 dev server 容器内、且命中真实容器指纹时放行
+   loopback:8000（compose 里容器监听 8000），宿主上同地址照旧拒（#2470：让按文档操作
+   的人不再必须靠越线开关才能跑通，否则守卫失去区分能力）。
 3. **凭据不外泄**：``AGENT_SECRET`` 只从环境读、不打印；``fencing_token`` 由本文件
    唯一一处取用（``fencing_token_for``），**永不打印、永不落盘**。
 
@@ -33,8 +36,14 @@ job / step 级实时面在隔离 dev 栈里**曾经不可测**：派发门禁要
 用法
 ----
     export AGENT_SECRET=...                      # 与 dev 栈同值，见 .env.server
-    docker compose exec -T server python /app/tools/dev/fake_agent.py heartbeat --count 3
-    docker compose exec -T server python /app/tools/dev/fake_agent.py serve --lifetime 600
+
+    # 默认 base 是 compose 在**宿主侧**映射的 127.0.0.1:18000。在容器里跑要换寻址并
+    # 声明 --in-container（容器内 18000 没有监听，实测 Connection refused #2470）：
+    export FA="python /app/tools/dev/fake_agent.py --base http://127.0.0.1:8000 --in-container"
+    docker compose exec -T server $FA heartbeat --count 3
+    docker compose exec -T server $FA serve --lifetime 600
+
+    # 在宿主上跑则不需要这两个参数：python tools/dev/fake_agent.py heartbeat --count 3
     docker compose exec -T server python /app/tools/dev/fake_agent.py claim --capacity 4
     docker compose exec -T server python /app/tools/dev/fake_agent.py step --job 12 \\
         --step step_init_1 --status RUNNING
@@ -63,7 +72,7 @@ AGENT_NS = "/agent"
 #: 服务端会推给 Agent 的事件（夹具只回 ack，不做任何事；verify_scripts 例外：只读哈希）
 PUSH_EVENTS = ("control", "verify_scripts", "execute_job", "run_job", "dispatch", "job_command")
 #: Agent → 服务端的事件（`socketio_server.AgentNamespace` 的 on_* 集合）
-AGENT_EMIT_EVENTS = ("step_log", "step_update", "job_status", "heartbeat")
+AGENT_EMIT_EVENTS = ("step_log", "job_status", "heartbeat")
 
 
 class FixtureRefused(RuntimeError):
@@ -128,10 +137,47 @@ def require_secret() -> str:
     return secret
 
 
-def guard_target(base: str, *, allow_non_dev: bool = False) -> str:
-    """红线 2：默认拒指生产控制面（本机 ``:8000``）。"""
+#: 容器内可达的 dev 栈地址：compose 里 server 容器监听 8000，宿主才映射到 18000。
+#: 同一个 `127.0.0.1:8000` 在宿主上是**生产控制面**（红线 2 要防的那条），在 dev
+#: server 容器内才是本站——地址本身无法区分，只能靠「我在哪」显式声明（#2470）。
+CONTAINER_DEV_HOSTS = {"127.0.0.1:8000", "localhost:8000", "0.0.0.0:8000"}
+
+
+def _looks_like_container() -> bool:
+    """容器指纹：``--in-container`` 只有配上它才放行，否则等于把红线变成随手开关。"""
+    if os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv"):
+        return True
+    try:
+        with open("/proc/1/cgroup", encoding="utf-8") as fh:
+            probe = fh.read()
+    except OSError:
+        return False
+    return any(k in probe for k in ("docker", "kubepods", "containerd", "lxc"))
+
+
+def guard_target(
+    base: str,
+    *,
+    allow_non_dev: bool = False,
+    in_container: bool = False,
+    container_probe: Callable[[], bool] = _looks_like_container,
+) -> str:
+    """红线 2：默认拒指生产控制面（宿主上的 ``:8000``）。
+
+    `--in-container` 是**带指纹校验**的例外：只在容器内放行 loopback:8000，
+    宿主上给同样的地址仍然拒绝（`container_probe()` 为假即拒）。越过红线仍需
+    `--allow-non-dev-target`，两者语义不合并。
+    """
     host_port = base.rsplit("//", 1)[-1].rstrip("/")
     port = host_port.rsplit(":", 1)[-1] if ":" in host_port else ""
+    if in_container and not allow_non_dev and host_port in CONTAINER_DEV_HOSTS:
+        if not container_probe():
+            raise FixtureRefused(
+                f"--in-container 但本机没有容器指纹：拒绝把 {base!r} 当 dev 栈。"
+                "在宿主上 127.0.0.1:8000 就是生产控制面（红线 2）——容器内请用 "
+                "`docker compose exec -T server python /app/tools/dev/fake_agent.py …`。"
+            )
+        return base.rstrip("/")
     # 无端口（走 80/443）或明确非 dev 端口都算越界，需显式越过
     if not allow_non_dev and (port in NON_DEV_PORTS or port == "" or port not in {"18000"}):
         raise FixtureRefused(
@@ -140,6 +186,15 @@ def guard_target(base: str, *, allow_non_dev: bool = False) -> str:
             "--allow-non-dev-target。"
         )
     return base.rstrip("/")
+
+
+def target_from_args(args: argparse.Namespace) -> str:
+    """按 args 上的两个开关解析控制面地址（容器内 dev 与越线放行各管各的）。"""
+    return guard_target(
+        args.base,
+        allow_non_dev=args.allow_non_dev_target,
+        in_container=args.in_container,
+    )
 
 
 def post_json(
@@ -196,6 +251,83 @@ def fencing_token_for(job_id: int, session_factory: Callable[[], Any] | None = N
         db.close()
 
 
+def push_ack(
+    event: str, payload: dict[str, Any] | None, *, host_id: str, base: str = "",
+) -> dict[str, Any]:
+    """服务端推给 Agent 的事件 → ack。**只注册与回报，绝不执行脚本**（红线 1）。
+
+    派发门禁 `verify_one_host` 用 `call_agent_rpc()` 等 ack：夹具此前从不注册入站
+    handler，`serve` 会话因此「看得见、答不出」，plan-run 停在队列里一行 job 都不
+    产生，而日志里连一条 `verify_scripts` 痕迹都没有（#2470）。
+
+    ``control`` 不再只回 ack（#2518）：``abort`` 要**回报 job 终态**——回执语义见
+    :func:`control_ack`。
+    """
+    if event == "verify_scripts":
+        expected = (payload or {}).get("expected") or []
+        return verify_scripts_ack(expected, host_id=host_id)
+    if event == "control":
+        return control_ack(payload, host_id=host_id, base=base)
+    return {"ok": True}
+
+
+def report_job_status(
+    job_id: int, status: str, *, base: str, secret: str, exit_code: int = 0,
+) -> tuple[int, dict[str, Any]]:
+    """回报 job 终态（``complete`` 子命令与 ``control(abort)`` 应答共用，#2518）。"""
+    token = fencing_token_for(job_id)
+    payload: dict[str, Any] = {"update": {"status": status, "exit_code": exit_code}}
+    if token:
+        payload["fencing_token"] = token
+    return post_json(base, secret, f"/api/v1/agent/jobs/{job_id}/complete", payload)
+
+
+def control_ack(payload: Any, *, host_id: str, base: str) -> dict[str, Any]:
+    """``control`` 事件的应答（#2518）：``abort`` 必须**回报终态**，不能只回 ack。
+
+    只回 ``{"ok": True}`` 时服务端永远等不到 job 终态 → ``abort_reaper`` 判
+    ``abort_ack_timeout`` → UNKNOWN → 再等 ``UNKNOWN_GRACE_SECONDS``(300s)：dev 上
+    测中止面必然 6 分钟起步，而产品侧的快路径（Agent 回报 ABORTED → 即时释放租约）
+    永远进不了回归。
+
+    契约形状取自服务端扇出（``plan_run_abort.py``）：
+    ``{"command": "abort", "payload": {"job_ids": [...], "reason": ...}}``。
+    **只回报，不执行**——红线 1 不变。
+    """
+    body = payload if isinstance(payload, dict) else {}
+    command = str(body.get("command") or "")
+    inner = body.get("payload") if isinstance(body.get("payload"), dict) else {}
+    reported: list[int] = []
+    if command == "abort":
+        secret = require_secret()
+        for raw in inner.get("job_ids") or []:
+            try:
+                job_id = int(raw)
+            except (TypeError, ValueError):
+                continue
+            code, _ = report_job_status(job_id, "ABORTED", base=base, secret=secret)
+            if code < 400:
+                reported.append(job_id)
+    return {"ok": True, "command": command, "reported_aborted": reported}
+
+
+def register_push_handlers(
+    client: Any, *, host_id: str, base: str = "",
+) -> tuple[str, ...]:
+    """给 ``PUSH_EVENTS`` 逐个挂 handler（``namespace=/agent``，与生产 Agent 同形）。
+
+    ``base`` 供 ``control(abort)`` 回报终态用（#2518）；不传则只回 ack。
+    """
+    for event in PUSH_EVENTS:
+        # 默认参数绑定当前 event：闭包直接引用循环变量会晚绑（ruff B023）
+        client.on(
+            event,
+            lambda data, _ev=event: push_ack(_ev, data, host_id=host_id, base=base),
+            namespace=AGENT_NS,
+        )
+    return PUSH_EVENTS
+
+
 def verify_scripts_ack(expected: list[dict[str, Any]], *, host_id: str) -> dict[str, Any]:
     """派发门禁要的真应答：**只读文件算 sha256**，不执行任何东西。
 
@@ -211,7 +343,7 @@ def verify_scripts_ack(expected: list[dict[str, Any]], *, host_id: str) -> dict[
 
 def cmd_heartbeat(args: argparse.Namespace) -> int:
     secret = require_secret()
-    base = guard_target(args.base, allow_non_dev=args.allow_non_dev_target)
+    base = target_from_args(args)
     rc = 0
     for seq in range(1, max(1, args.count) + 1):
         status, body = post_json(
@@ -230,7 +362,7 @@ def cmd_heartbeat(args: argparse.Namespace) -> int:
 
 def cmd_claim(args: argparse.Namespace) -> int:
     secret = require_secret()
-    base = guard_target(args.base, allow_non_dev=args.allow_non_dev_target)
+    base = target_from_args(args)
     status, body = post_json(base, secret, "/api/v1/agent/jobs/claim", {
         "host_id": args.host_id, "agent_version": args.agent_version,
         "capacity": args.capacity, "device_ids": [],
@@ -244,7 +376,7 @@ def cmd_claim(args: argparse.Namespace) -> int:
 
 def cmd_step(args: argparse.Namespace) -> int:
     secret = require_secret()
-    base = guard_target(args.base, allow_non_dev=args.allow_non_dev_target)
+    base = target_from_args(args)
     token = fencing_token_for(args.job)
     if not token:
         log(f"step job={args.job} 无可用租约（可能已被回收为 FAILED），无法回报", args.log_file)
@@ -261,12 +393,10 @@ def cmd_step(args: argparse.Namespace) -> int:
 
 def cmd_complete(args: argparse.Namespace) -> int:
     secret = require_secret()
-    base = guard_target(args.base, allow_non_dev=args.allow_non_dev_target)
-    token = fencing_token_for(args.job)
-    payload: dict[str, Any] = {"update": {"status": args.status, "exit_code": args.exit_code}}
-    if token:
-        payload["fencing_token"] = token
-    status, body = post_json(base, secret, f"/api/v1/agent/jobs/{args.job}/complete", payload)
+    base = target_from_args(args)
+    status, body = report_job_status(
+        args.job, args.status, base=base, secret=secret, exit_code=args.exit_code,
+    )
     log(f"complete job={args.job} HTTP={status} {json.dumps(body, ensure_ascii=False)[:200]}",
         args.log_file)
     return 0 if status < 400 else 1
@@ -294,10 +424,19 @@ def _transport_order(requested: str) -> list[str]:
     return ["websocket", "polling"]
 
 
-def _with_connection(args: argparse.Namespace, work: Callable[[Callable[[str, dict], Any]], Any]) -> int:
-    """建一次 ``/agent`` 连接，把 ``emit`` 交给 work；处理 transport 回退与自愈。"""
+def _with_connection(
+    args: argparse.Namespace,
+    work: Callable[[Callable[[str, dict], Any]], Any],
+    *,
+    with_push_handlers: bool = False,
+) -> int:
+    """建一次 ``/agent`` 连接，把 ``emit`` 交给 work；处理 transport 回退与自愈。
+
+    ``with_push_handlers`` 只给常驻的 ``serve`` 用：短命令（heartbeat/claim/step）
+    发完即走，挂入站 handler 只会让进程收一堆没人消费的 ack。
+    """
     secret = require_secret()
-    guard_target(args.base, allow_non_dev=args.allow_non_dev_target)
+    target_from_args(args)
     try:
         import socketio
     except ImportError:
@@ -318,6 +457,8 @@ def _with_connection(args: argparse.Namespace, work: Callable[[Callable[[str, di
         except Exception as exc:  # noqa: BLE001 - 逐个 transport 试，失败原因要可读
             last_err = f"{type(exc).__name__}: {exc}"
             continue
+        if with_push_handlers:
+            register_push_handlers(sio, host_id=args.host_id, base=target_from_args(args))
         if transport == "polling" and args.transport == "auto":
             log("用 polling transport（dev 镜像无 websocket-client；生产 Agent 是 "
                 "websocket-only #1121，多实例拓扑下本夹具与生产不等价）", args.log_file)
@@ -370,7 +511,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
     attempts = 0
     while True:
         try:
-            return _with_connection(args, work)
+            return _with_connection(args, work, with_push_handlers=True)
         except Exception as exc:  # noqa: BLE001 - 掉线后重连，最多 retry 次
             attempts += 1
             if attempts > args.reconnect_limit:
@@ -384,7 +525,7 @@ def _http_beat(args: argparse.Namespace, seq: int) -> None:
     """WS 心跳之外还要 HTTP 心跳：主机/设备状态以 HTTP 为准（两套面不同源）。"""
     try:
         secret = require_secret()
-        base = guard_target(args.base, allow_non_dev=args.allow_non_dev_target)
+        base = target_from_args(args)
         status, _body = post_json(
             base, secret, "/api/v1/heartbeat",
             build_heartbeat_payload(seq, device_count=args.devices, host_ip=args.host_ip),
@@ -439,6 +580,7 @@ def _global_defaults() -> dict[str, Any]:
         "transport": "auto",
         "log_file": "/tmp/stp-fake-agent.log",
         "allow_non_dev_target": False,
+        "in_container": False,
     }
 
 
@@ -465,8 +607,12 @@ def _common_options() -> argparse.ArgumentParser:
         "--log-file", default=S,
         help="容器内 /app 只读，日志默认落 /tmp；置空串则只打 stdout",
     )
+    common.add_argument("--in-container", action="store_true", default=S,
+                        help="声明在 dev 栈容器内（compose exec）：放行 loopback:8000，"
+                             "需真实容器指纹；宿主上给同地址照旧拒绝")
     common.add_argument("--allow-non-dev-target", action="store_true", default=S,
-                        help="越过红线 2（指向非 dev 栈）——默认拒绝")
+                        help="越过红线 2（指向非 dev 栈）——默认拒绝。容器内跑不通不该"
+                             "用它兜底，那是 --in-container 的职责")
     return common
 
 
@@ -520,7 +666,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = _sub_parser("complete", help="回报 job 终态")
     p.add_argument("--job", type=int, required=True)
-    p.add_argument("--status", default="COMPLETED", choices=("COMPLETED", "FAILED"))
+    # #2518：ABORTED 是中止链上唯一正确的终态值（state_machine 允许 RUNNING→ABORTED），
+    # 缺它就连「手工模拟守约 Agent 回报中止」都做不到。
+    p.add_argument("--status", default="COMPLETED",
+                   choices=("COMPLETED", "FAILED", "ABORTED"))
     p.add_argument("--exit-code", type=int, default=0)
     p.set_defaults(func=cmd_complete)
 

@@ -73,6 +73,8 @@ from pathlib import Path
 
 import yaml
 
+from tests.metrics_registry import textfile_metric_index
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ALERTS = REPO_ROOT / "deploy" / "prometheus" / "alerts-stability-platform.yml"
 
@@ -308,16 +310,25 @@ def weak_reference_sites(files, defs: dict[str, dict]) -> dict[str, list[str]]:
     return sites
 
 
+# 本仓告警允许引用的两类自有指标：backend 进程指标，与本仓自己生产的 node-exporter
+# textfile 指标（#735 守卫）。前缀集必须成组维护——只认 `stability_` 时，引用
+# `stp_script_guard_*` 的告警会在这里被判"未解析出指标名"（CI pr-agent-tests 实测红）。
+# 那条断言是**解析退化保护**，正确的响应是扩前缀集，而不是删断言或改指标命名。
+_SELF_OWNED_METRIC_RE = re.compile(r"\b(?:stability_|stp_script_guard_)[a-zA-Z0-9_:]+\b")
+
+
 def alert_metric_names() -> list[str]:
-    """告警表达式里引用的全部 ``stability_*`` 名字（含直方图样本名）。"""
+    """告警表达式里引用的全部本仓自有指标名（含直方图样本名与 textfile 指标）。"""
     data = yaml.safe_load(ALERTS.read_text(encoding="utf-8"))
     names: list[str] = []
     for group in data.get("groups", []):
         for rule in group.get("rules", []):
             if "alert" not in rule:
                 continue
-            found = re.findall(r"\bstability_[a-zA-Z0-9_:]+\b", str(rule["expr"]))
-            assert found, f"{rule['alert']}: 未解析出 stability_* 指标名（表达式形态变化）"
+            found = _SELF_OWNED_METRIC_RE.findall(str(rule["expr"]))
+            assert found, (
+                f"{rule['alert']}: 未解析出本仓自有指标名"
+                "（表达式形态变化，或需要扩 _SELF_OWNED_METRIC_RE 前缀集）")
             names.extend(found)
     return sorted(set(names))
 
@@ -367,7 +378,13 @@ def unproduced_alert_metrics() -> dict[str, str]:
     defs = collect_definitions(files)
     unproduced = _unproduced_from(files, defs)
     problems: dict[str, str] = {}
+    # textfile 指标的证据链与进程指标不同：它不由 prometheus_client 定义，而是由生产者
+    # 脚本渲染成文件。证据 = `tests/metrics_registry.textfile_metric_index()` 从生产者源码
+    # ast 提取的名字（生产者改名/删除即失效），因此**不是豁免清单**。
+    textfile_names = textfile_metric_index()
     for metric in alert_metric_names():
+        if metric in textfile_names:
+            continue
         base = _resolve(metric, defs)
         if base is None:
             problems[metric] = "非测试代码里找不到该指标的 Counter/Gauge/... 定义"

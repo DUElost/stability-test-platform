@@ -115,6 +115,11 @@ export default function AuditLogPage() {
       return api.audit.list(page * pageSize, pageSize, params);
     },
     enabled: !invalidRange,
+    // #2369 残余：全局 `refetchOnWindowFocus: false`（QueryProvider），切回前台只按域失效
+    // plans/projects（useCrossClientSync）——审计日志既无轮询也不在该域，后台期间别处
+    // 产生的操作（另一管理员/定时任务）在切回后不会回追。显式 opt-in：focus 与可见性
+    // 语义一致，且只重取**活跃**查询（本页挂载中），不放大限流桶。
+    refetchOnWindowFocus: true,
   });
 
   const logs = (data?.items as unknown as AuditLogEntry[] | undefined) ?? [];

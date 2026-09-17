@@ -84,12 +84,17 @@ curl -sf http://127.0.0.1:8000/health | jq .
 # scan 前再核一次：它与 restart 之间有窗口，并发会话可能已把主工作树切走（#2386）
 ./tools/dev/check-deploy-source.sh
 curl -s -H "$AUTH" -X POST http://127.0.0.1:8000/api/v1/scripts/scan \
-  | jq '.data | {created, skipped, conflicts, deactivated, deactivated_versions}'
+  | jq '.data | {created, skipped, conflicts, deactivated, deactivated_versions,
+                 deactivation_skipped_versions}'
 # conflicts 非空 → 须新建脚本版本，禁止原地改已发布目录
 # deactivated>0 时必须逐条看 deactivated_versions：scan 读的是 STP_SCRIPT_ROOT 那棵
 # **工作树**（本机=共享主工作树的当前检出），而「盘上缺失」是**单向**反激活——目录
 # 回来再扫也不复活（要显式重激活）。被列出的若不是「本次真要退役的」，立即按 §1.1
 # 把树切回 main 并核对，不要继续往下走。
+# #2386 代码侧兜底：被扫子树与 origin/main 不一致时 scan **不反激活**，把「本会反激活」
+# 的清单放进 deactivation_skipped_versions。该键非空 = 本次 scan 读的不是部署目标树
+# → 先切回 main 重扫；确要在非主线树上退役才显式加 `?allow_deactivate=true`
+# （反激活单向，这个开关只应由人给，并会随 scan 审计留痕）。
 ```
 
 ### 1.5 前端（有 frontend 变更时）

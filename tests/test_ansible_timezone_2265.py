@@ -13,12 +13,14 @@ Agent CST」三面矛盾（差 15 小时，审计与心跳窗口整体错位）�
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PLAYBOOK = REPO_ROOT / "tools/ansible/playbooks/set_timezone.yml"
+OPS = REPO_ROOT / "tools/site_config/ops.py"
 
 
 def _vars() -> dict:
@@ -46,6 +48,77 @@ def test_controller_timezone_is_the_fallback_not_a_hardcode():
     assert "tz_controller" in expr
     controller = str(_vars()["tz_controller"])
     assert "/etc/timezone" in controller or "timedatectl" in controller
+
+
+def test_controller_source_order_matches_control_plane():
+    """#2448：读控制面时区的来源顺序两端必须一致（此前两端相反）。
+
+    控制面 `Ops.timezone()` 是参考实现：`/etc/timezone`（Debian/Ubuntu 规范位，
+    站点报告 provenance 也记这条）→ `timedatectl`（无 system bus 的目标只有前者
+    会被更新）。playbook 曾反过来（timedatectl 优先）且**注释与代码矛盾**——
+    两来源本身不一致时（例如只手工改了 `/etc/localtime`），Agent 会被对齐到与控制面
+    判定不同的时区，而两端各自的检查都能通过，症状延迟显现。
+    """
+    expr = str(_vars()["tz_controller"])
+    assert "cat /etc/timezone" in expr and "timedatectl" in expr, expr
+    assert expr.index("cat /etc/timezone") < expr.index("timedatectl"), (
+        "tz_controller 的来源顺序与控制面 Ops.timezone() 相反："
+        "两来源不一致时 Agent 会被对齐到另一个时区"
+    )
+    # 注释必须与代码同向——#2448 现场就是「注释写 /etc/timezone 优先、代码反过来」
+    assert "`/etc/timezone` → `timedatectl`" in PLAYBOOK.read_text(encoding="utf-8"), (
+        "playbook 注释未声明与控制面同向的来源顺序"
+    )
+
+
+def _ops_timezone_code() -> str:
+    """`LocalOps.timezone()` 的**代码**（剥掉 docstring，跳过 Protocol 里的 `...` 桩）。
+
+    直接取第一个 `def timezone` 会命中 `Ops(Protocol)` 的桩（body 就是 `...`），
+    所以这里按「有实体语句」筛，并要求唯一候选。
+    """
+    src = OPS.read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    candidates: list[list[ast.stmt]] = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.FunctionDef) and node.name == "timezone"):
+            continue
+        body = list(node.body)
+        if (
+            body
+            and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant)
+            and isinstance(body[0].value.value, str)
+        ):
+            body = body[1:]
+        stub = (
+            len(body) == 1
+            and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant)
+            and body[0].value.value is Ellipsis
+        )
+        if not body or stub:
+            continue
+        candidates.append(body)
+    assert len(candidates) == 1, f"timezone() 实体实现候选数异常：{len(candidates)}"
+    return "\n".join(
+        ast.get_source_segment(src, node) for node in candidates[0]
+    )
+
+
+def test_control_plane_timezone_source_order_is_the_reference():
+    """参考实现的顺序不变：`/etc/timezone` 优先，`timedatectl` 仅作兜底。
+
+    两端对拍的另一半：playbook 改成同序后，若有人把参考实现反过来「对齐 playbook」，
+    本用例报红——同源契约的锚点是控制面这一侧。
+    """
+    code = _ops_timezone_code()
+    assert 'Path("/etc/timezone")' in code, code
+    assert "timedatectl" in code, code
+    assert code.index('Path("/etc/timezone")') < code.index("timedatectl"), (
+        "Ops.timezone() 的来源顺序被反转——与站点报告 provenance 记录的"
+        "「/etc/timezone → timedatectl」不符"
+    )
 
 
 def _tasks() -> list:

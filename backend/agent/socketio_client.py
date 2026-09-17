@@ -50,7 +50,7 @@ class AgentSocketIOClient:
     """Synchronous SocketIO client for the agent process.
 
     Drop-in replacement for the legacy WebSocket client. The public API
-    (connect, disconnect, send_log, send_step_update, send_heartbeat,
+    (connect, disconnect, send_log, send_heartbeat,
     connected property) is unchanged so callers need no modifications.
 
     ADR-0026 P2-2: ``send_log`` batches lines (size/time flush) and applies
@@ -335,8 +335,6 @@ class AgentSocketIOClient:
         msg_type = message.get("type", "")
         if msg_type == "log":
             return self._emit("step_log", message)
-        elif msg_type == "step_update":
-            return self._emit("step_update", message)
         elif msg_type == "heartbeat":
             return self._emit("heartbeat", message)
         else:
@@ -432,22 +430,6 @@ class AgentSocketIOClient:
             }):
                 ok = False
         return ok
-
-    def send_step_update(self, run_id: int, step_id: int | str, status: str, **kwargs) -> bool:
-        """Send a step status update."""
-        data: dict = {
-            "run_id": run_id,
-            "job_id": run_id,
-            "step_id": step_id,
-            "status": status,
-        }
-        for key in ("started_at", "finished_at", "exit_code", "error_message", "progress"):
-            if key in kwargs and kwargs[key] is not None:
-                val = kwargs[key]
-                if isinstance(val, datetime):
-                    val = val.isoformat() + "Z"
-                data[key] = val
-        return self._emit("step_update", data)
 
     def send_heartbeat(self, stats: dict | None = None) -> bool:
         """Send a heartbeat message via SocketIO."""

@@ -40,7 +40,11 @@ function reportWithRunStatus(status: string): RunReport {
   } as unknown as RunReport;
 }
 
-async function renderWithRunStatus(status: string, overrides: Partial<RunReport> = {}) {
+async function renderWithRunStatus(
+  status: string,
+  overrides: Partial<RunReport> = {},
+  search = '',
+) {
   vi.mocked(api.runs.getCachedReport).mockResolvedValue({
     ...reportWithRunStatus(status),
     ...overrides,
@@ -48,9 +52,10 @@ async function renderWithRunStatus(status: string, overrides: Partial<RunReport>
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={['/runs/3/report']}>
+      {/* #2420：权威形状是 /jobs/:jobId/report（旧 /runs/:runId/report 只重定向） */}
+      <MemoryRouter initialEntries={[`/jobs/3/report${search}`]}>
         <Routes>
-          <Route path="/runs/:runId/report" element={<RunReportPage />} />
+          <Route path="/jobs/:jobId/report" element={<RunReportPage />} />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -121,9 +126,10 @@ describe('RunReportPage 快照标注（#2420 / #1082）', () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={['/runs/3/report']}>
+        {/* 同上：#2420 之后权威形状是 /jobs/:jobId/report */}
+        <MemoryRouter initialEntries={['/jobs/3/report']}>
           <Routes>
-            <Route path="/runs/:runId/report" element={<RunReportPage />} />
+            <Route path="/jobs/:jobId/report" element={<RunReportPage />} />
           </Routes>
         </MemoryRouter>
       </QueryClientProvider>,
@@ -143,5 +149,28 @@ describe('RunReportPage 快照标注（#2420 / #1082）', () => {
     await renderReport(reportWith({ cached_at: null }));
     expect(screen.queryByTestId('report-cached-at')).toBeNull();
     expect(screen.getByText('生成时间')).toBeInTheDocument();
+  });
+});
+
+
+/**
+ * #2420 第 2 项：从 PlanRun 详情进报告页时带 `?planRun=`，页面必须把它转成端点的
+ * 归属校验参数——过去报告端点对「这个 job 属于哪个 run」毫不把关，错配 id 会返回
+ * **另一个 run 的 job 报告**，而页面只写 `Job #N`，用户无从发现。
+ */
+describe('RunReportPage 归属参数透传（#2420）', () => {
+  it('带 planRun 时按 { planRunId } 调用 cached 报告', async () => {
+    await renderWithRunStatus('FINISHED', {}, '?planRun=7');
+    await waitFor(() =>
+      expect(api.runs.getCachedReport).toHaveBeenCalledWith(3, { planRunId: 7 }),
+    );
+  });
+
+  it('不带 planRun 时不硬造参数（老深链与脚本行为不变）', async () => {
+    vi.mocked(api.runs.getCachedReport).mockClear();
+    await renderWithRunStatus('FINISHED');
+    await waitFor(() => expect(api.runs.getCachedReport).toHaveBeenCalledWith(3, {
+      planRunId: undefined,
+    }));
   });
 });

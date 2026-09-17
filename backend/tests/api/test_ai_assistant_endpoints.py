@@ -1745,6 +1745,112 @@ class TestTurnEnqueueAsyncFailure:
             == 0
         ), "不得留下继续驱动轮询的悬挂占位"
 
+    def test_pool_full_fallback_offloads_instead_of_blocking_loop(
+        self, client, admin_headers, db_session, monkeypatch
+    ):
+        """#2446：后台池满时走 off-loop 兜底，而不是在事件循环上就地同步写库。
+
+        反例守卫：把兜底改回 `fail_pending_placeholders(...)` 直调（旧实现）时，
+        `_converge_placeholder_off_loop` 不会被调用，本用例报红。
+        """
+        from backend.api.routes import ai_assistant as route_mod
+        from backend.core.thread_pool import PoolQueueFullError
+
+        _configure(db_session)
+
+        def _fake_enqueue(task, **kw):
+            kw["on_async_failure"](RuntimeError("redis down"))
+            return True
+
+        monkeypatch.setattr("backend.tasks.saq_worker.enqueue_sync", _fake_enqueue)
+
+        def _pool_full(fn, *a, **k):
+            raise PoolQueueFullError("full")
+
+        # 池满：submit 恒拒（系统最忙的时刻）
+        monkeypatch.setattr("backend.core.thread_pool.submit", _pool_full)
+
+        offloaded: list = []
+        monkeypatch.setattr(
+            route_mod,
+            "_converge_placeholder_off_loop",
+            lambda sid, err: offloaded.append((sid, err)),
+        )
+
+        sid = client.post(
+            "/api/v1/ai-assistant/sessions", json={}, headers=admin_headers,
+        ).json()["data"]["id"]
+        resp = client.post(
+            f"/api/v1/ai-assistant/sessions/{sid}/messages",
+            json={"content": "第一问"},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        assert len(offloaded) == 1, "池满必须走 off-loop 兜底（不得就地同步收敛）"
+        got_sid, got_err = offloaded[0]
+        assert got_sid == sid
+        assert "redis down" in got_err
+
+    async def test_pool_full_fallback_converges_off_loop(
+        self, db_session, test_user, monkeypatch
+    ):
+        """#2446：兜底把收敛交给事件循环的默认 executor——线程上无运行中的循环。
+
+        同时钉住 #2073 的语义：即便池满，占位仍必须收敛出终态。
+        """
+        from backend.api.routes import ai_assistant as route_mod
+        from backend.services.ai_assistant import orchestrator as orch
+
+        s = AiChatSession(user_id=test_user.id)
+        db_session.add(s)
+        db_session.flush()
+        placeholder = AiChatMessage(
+            session_id=s.id, role="assistant", content="", status="pending"
+        )
+        db_session.add(placeholder)
+        db_session.commit()
+
+        class _Shared:
+            def __init__(self, sess):
+                self._s = sess
+
+            def __getattr__(self, name):
+                return getattr(self._s, name)
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(orch, "SessionLocal", lambda: _Shared(db_session))
+
+        loop_thread = threading.get_ident()
+        seen: dict = {}
+        real_converge = route_mod.fail_pending_placeholders
+
+        def _record(session_id, *, error):
+            seen["thread"] = threading.get_ident()
+            try:
+                asyncio.get_running_loop()
+                seen["on_loop"] = True
+            except RuntimeError:
+                seen["on_loop"] = False
+            real_converge(session_id, error=error)
+
+        monkeypatch.setattr(route_mod, "fail_pending_placeholders", _record)
+
+        before = set(route_mod._BG_TASKS)
+        route_mod._converge_placeholder_off_loop(s.id, "任务入队失败（Redis 异常）")
+        tasks = list(set(route_mod._BG_TASKS) - before)
+        assert tasks, "必须持引用登记后台任务（防 GC）"
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+        assert seen.get("thread") is not None, "兜底必须执行收敛（不得只记日志）"
+        assert seen["thread"] != loop_thread, "收敛不得在事件循环线程上执行"
+        assert seen["on_loop"] is False, "收敛线程上不应有运行中的事件循环"
+        db_session.expire_all()
+        msg = db_session.get(AiChatMessage, placeholder.id)
+        assert msg.status == "failed", "池满兜底仍必须让占位有终态（#2073）"
+        assert "Redis 异常" in (msg.meta or {}).get("error", "")
+
     def test_sync_enqueue_failure_still_returns_503(
         self, client, admin_headers, db_session, monkeypatch
     ):

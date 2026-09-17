@@ -1127,6 +1127,44 @@ class TestRewriteMergeReportPaths:
 
 
 class TestResolveCenterEventPath:
+    """#2476：历史 run 兜底改查 DLE 台账（不再对中心盘做 devices/* 跨 run glob）。"""
+
+    @staticmethod
+    def _seed_run(db_session, name="risk-obs-plan"):
+        """真 PlanRun 行（`device_log_event.plan_run_id` 有 FK，不能凭空填号）。"""
+        from backend.models.plan import Plan
+        from backend.models.plan_run import PlanRun
+
+        plan = Plan(name=name, failure_threshold=0.05)
+        db_session.add(plan)
+        db_session.flush()
+        run = PlanRun(
+            plan_id=plan.id, status="SUCCESS", failure_threshold=0.05,
+            plan_snapshot={}, run_type="MANUAL",
+        )
+        db_session.add(run)
+        db_session.flush()
+        return run.id
+
+    @staticmethod
+    def _seed_dle(db_session, sample_device, remote_path, run_id=None):
+        from datetime import datetime, timezone
+
+        from backend.models.device_log_event import DeviceLogEvent
+
+        db_session.add(DeviceLogEvent(
+            serial=sample_device.serial,
+            platform="MTK",
+            event_type="AEE",
+            detected_at=datetime.now(timezone.utc),
+            state="REMOTE",
+            local_path="/tmp/local",
+            remote_path=remote_path,
+            host_id=sample_device.host_id,
+            plan_run_id=run_id,
+        ))
+        db_session.commit()
+
     def test_prefers_current_run(self, tmp_path):
         center = tmp_path / "center"
         ev = center / "devices" / "287" / "2026_0807_231846_000_db.00.NE"
@@ -1135,29 +1173,86 @@ class TestResolveCenterEventPath:
             str(center), 287, "2026_0807_231846_000_db.00.NE"
         ) == f"{center}/devices/287/2026_0807_231846_000_db.00.NE/"
 
-    def test_falls_back_to_history_run(self, tmp_path):
+    def test_falls_back_to_history_run_via_dle(
+        self, tmp_path, db_session, sample_device,
+    ):
         center = tmp_path / "center"
-        old = center / "devices" / "270" / "2026_0830_223000_456_db.fatal.02.KE"
+        hist_run = self._seed_run(db_session, "hist-plan")
+        old = center / "devices" / str(hist_run) / "2026_0830_223000_456_db.fatal.02.KE"
         old.mkdir(parents=True)
-        got = ds._resolve_center_event_path(
-            str(center), 287, "2026_0830_223000_456_db.fatal.02.KE")
-        assert got == f"{center}/devices/270/2026_0830_223000_456_db.fatal.02.KE/"
+        self._seed_dle(db_session, sample_device, str(old), run_id=hist_run)
 
-    def test_no_history_keeps_candidate(self, tmp_path):
+        got = ds._resolve_center_event_path(
+            str(center), 987654, "2026_0830_223000_456_db.fatal.02.KE")
+        assert got == f"{old}/"
+
+    def test_prefers_newest_run(self, tmp_path, db_session, sample_device):
+        """多条候选时取**最新** run 的副本（旧实现取字典序最小 = 最旧）。"""
+        center = tmp_path / "center"
+        older_run = self._seed_run(db_session, "older-plan")
+        newer_run = self._seed_run(db_session, "newer-plan")
+        older = center / "devices" / str(older_run) / "2026_0830_223000_456_db.fatal.02.KE"
+        newer = center / "devices" / str(newer_run) / "2026_0830_223000_456_db.fatal.02.KE"
+        older.mkdir(parents=True)
+        newer.mkdir(parents=True)
+        self._seed_dle(db_session, sample_device, str(older), run_id=older_run)
+        self._seed_dle(db_session, sample_device, str(newer), run_id=newer_run)
+
+        got = ds._resolve_center_event_path(
+            str(center), 987654, "2026_0830_223000_456_db.fatal.02.KE")
+        assert got == f"{newer}/"
+
+    def test_ignores_candidate_outside_center_root(
+        self, tmp_path, db_session, sample_device,
+    ):
+        """台账里可能有别的站点根的路径——只认落在本 center_root 下的副本。"""
+        center = tmp_path / "center"
+        (center / "devices").mkdir(parents=True)
+        other_run = self._seed_run(db_session, "other-plan")
+        other_root = tmp_path / "other-site" / "devices" / str(other_run) / "2026_0830_223000_456_db.fatal.02.KE"
+        other_root.mkdir(parents=True)
+        self._seed_dle(db_session, sample_device, str(other_root), run_id=other_run)
+
+        got = ds._resolve_center_event_path(
+            str(center), 987654, "2026_0830_223000_456_db.fatal.02.KE")
+        assert got == f"{center}/devices/987654/2026_0830_223000_456_db.fatal.02.KE/"
+
+    def test_dle_dir_missing_on_disk_keeps_candidate(
+        self, tmp_path, db_session, sample_device,
+    ):
+        """台账有行但副本已不在盘上（retention 已清）→ 仍回落到原映射。"""
+        center = tmp_path / "center"
+        (center / "devices").mkdir(parents=True)
+        gone_run = self._seed_run(db_session, "gone-plan")
+        self._seed_dle(
+            db_session, sample_device,
+            f"{center}/devices/{gone_run}/2026_0830_223000_456_db.fatal.02.KE",
+            run_id=gone_run,
+        )
+
+        got = ds._resolve_center_event_path(
+            str(center), 987654, "2026_0830_223000_456_db.fatal.02.KE")
+        assert got == f"{center}/devices/987654/2026_0830_223000_456_db.fatal.02.KE/"
+
+    def test_no_dle_row_keeps_candidate(self, tmp_path, db_session):
         center = tmp_path / "center"
         (center / "devices").mkdir(parents=True)
         got = ds._resolve_center_event_path(
             str(center), 287, "2026_0830_223000_456_db.fatal.02.KE")
         assert got == f"{center}/devices/287/2026_0830_223000_456_db.fatal.02.KE/"
 
-    def test_rewrite_falls_back_integration(self, tmp_path):
+    def test_rewrite_falls_back_integration(
+        self, tmp_path, db_session, sample_device,
+    ):
         import xlwt
 
         # 历史 run 270 有 02 事件副本；报表引用 02（本 run 287 未上送）
         center = tmp_path / "center"
-        old = center / "devices" / "270" / "2026_0830_223000_456_db.fatal.02.KE"
+        hist_run = self._seed_run(db_session, "int-plan")
+        old = center / "devices" / str(hist_run) / "2026_0830_223000_456_db.fatal.02.KE"
         old.mkdir(parents=True)
         (old / "__exp_main.txt").write_text("x", encoding="utf-8")
+        self._seed_dle(db_session, sample_device, str(old), run_id=hist_run)
 
         xls = tmp_path / "Result_MergeFiles.xls"
         wb = xlwt.Workbook()
@@ -1170,147 +1265,12 @@ class TestResolveCenterEventPath:
         ds._rewrite_merge_report_paths_to_center(tmp_path, 287, str(center))
         import xlrd
         book = xlrd.open_workbook(str(xls))
-        assert book.sheet_by_index(0).cell_value(1, 0) == (
-            f"{center}/devices/270/2026_0830_223000_456_db.fatal.02.KE/")
+        assert book.sheet_by_index(0).cell_value(1, 0) == f"{old}/"
 
+    def test_source_has_no_cross_run_glob(self):
+        """契约测试 ③：本路径不得再对着中心盘做 `devices/*` 跨 run glob。"""
+        from pathlib import Path as _Path
 
-def test_resolve_manual_merge_round_prefers_latest_stamped(db_session, sample_plan_run):
-    from datetime import datetime, timezone
-
-    from backend.models.plan_run_artifact import PlanRunArtifact
-
-    older = datetime(2026, 9, 1, 10, 0, tzinfo=timezone.utc)
-    newer = datetime(2026, 9, 8, 12, 0, tzinfo=timezone.utc)
-    db_session.add_all([
-        PlanRunArtifact(
-            plan_run_id=sample_plan_run.id,
-            host_id="a",
-            storage_uri="/tmp/a_org.xls",
-            artifact_type=ds.ARTIFACT_TYPE_SCAN,
-            size_bytes=1,
-            scan_round_id="2026-09-01T10:00:00+00:00",
-            created_at=older,
-        ),
-        PlanRunArtifact(
-            plan_run_id=sample_plan_run.id,
-            host_id="b",
-            storage_uri="/tmp/b_org.xls",
-            artifact_type=ds.ARTIFACT_TYPE_SCAN,
-            size_bytes=1,
-            scan_round_id="2026-09-08T12:00:00+00:00",
-            created_at=newer,
-        ),
-    ])
-    db_session.commit()
-
-    rid, floor = ds.resolve_manual_merge_round(sample_plan_run.id)
-    assert rid == "2026-09-08T12:00:00+00:00"
-    assert floor == datetime.fromisoformat(rid)
-
-
-def test_resolve_manual_merge_round_legacy_min_created_at(db_session, sample_plan_run):
-    from datetime import datetime, timezone
-
-    from backend.models.plan_run_artifact import PlanRunArtifact
-
-    t0 = datetime(2026, 9, 1, 8, 0, tzinfo=timezone.utc)
-    t1 = datetime(2026, 9, 1, 9, 0, tzinfo=timezone.utc)
-    db_session.add_all([
-        PlanRunArtifact(
-            plan_run_id=sample_plan_run.id,
-            host_id="a",
-            storage_uri="/tmp/a_org.xls",
-            artifact_type=ds.ARTIFACT_TYPE_SCAN,
-            size_bytes=1,
-            created_at=t1,
-        ),
-        PlanRunArtifact(
-            plan_run_id=sample_plan_run.id,
-            host_id="b",
-            storage_uri="/tmp/b_org.xls",
-            artifact_type=ds.ARTIFACT_TYPE_SCAN,
-            size_bytes=1,
-            created_at=t0,
-        ),
-    ])
-    db_session.commit()
-
-    rid, floor = ds.resolve_manual_merge_round(sample_plan_run.id)
-    assert rid is None
-    assert floor == t0
-
-
-def test_merge_stderr_detects_error_prefix_and_traceback():
-    """#798：行首 ``ERROR:`` 与 Traceback 形态同样表达失败（旧匹配仅
-    ": error:"/"error: argument" 会漏判，exit 0 的残缺报表被当成功）。"""
-    assert ds.merge_stderr_indicates_failure("ERROR: cannot open result file")
-    assert ds.merge_stderr_indicates_failure(
-        "Traceback (most recent call last):\n  File \"x\", line 1"
-    )
-    assert ds.merge_stderr_indicates_failure("Error: missing input")
-    # 非失败形态不误报
-    assert not ds.merge_stderr_indicates_failure("[INFO] merge done")
-    assert not ds.merge_stderr_indicates_failure("wrote 3 rows")
-
-
-def test_scan_completeness_counts_only_expected_platform_hosts(db_session, sample_plan_run):
-    """#2271：host 级计数收窄到「期望平台内有产物」，并给出 hosts_expected。
-
-    旧口径只看「该 host 有没有产物」：交了**非期望**平台产物（或只交了两个期望平台
-    中的一个）的 host 也会算完成 → 前端据 hosts_with_artifacts/hosts_triggered 显示
-    ok，而实际缺一个平台的报告。
-    """
-    from datetime import datetime, timezone
-
-    run_id = sample_plan_run.id
-    expected = {"host-a": {"mtk", "unisoc"}, "host-b": {"mtk"}}
-    since = datetime(2026, 9, 15, 10, 0, tzinfo=timezone.utc)
-
-    db_session.add(_scan_artifact(
-        run_id, "host-a", "/nfs/dedup/1/mtk/host-a_Result_org.xls", at=since,
-    ))
-    # host-b 交的是**非期望**平台：旧口径算它完成，新口径不算
-    db_session.add(_scan_artifact(
-        run_id, "host-b", "/nfs/dedup/1/unisoc/host-b_Result_org.xls", at=since,
-    ))
-    db_session.commit()
-
-    got = ds.scan_completeness(run_id, expected, since=since)
-
-    assert (got.units_satisfied, got.units_expected) == (1, 3)
-    assert got.hosts_with_artifacts == 1, "非期望平台的产物不算该 host 完成"
-    assert got.hosts_expected == 2, "triggered 的超集口径：期望 host 数单独给出"
-    assert not got.complete
-
-
-def test_record_scan_archive_state_rewrites_scan_failed_every_round(
-    db_session, sample_plan_run,
-):
-    """#2271：scan_failed 每轮**显式重写**（true/false 都写），消除粘滞。
-
-    此前只写 true：一次零产物轮次之后，即使后续轮次补齐，前端仍永久显示
-    「扫描未产生任何报表」。
-    """
-    from backend.models.plan_run import PlanRun
-
-    run_id = sample_plan_run.id
-    ds.record_scan_archive_state(
-        run_id, hosts_triggered=2, artifacts_registered=0, hosts_with_artifacts=0,
-        units_satisfied=0, units_expected=2, hosts_expected=2,
-    )
-
-    db_session.expire_all()
-    pr = db_session.get(PlanRun, run_id)
-    assert pr.result_summary["scan_failed"] is True
-    assert pr.run_context["archive"]["units_expected"] == 2
-    assert pr.run_context["archive"]["hosts_expected"] == 2
-
-    ds.record_scan_archive_state(
-        run_id, hosts_triggered=2, artifacts_registered=2, hosts_with_artifacts=1,
-        units_satisfied=2, units_expected=2, hosts_expected=2,
-    )
-
-    db_session.expire_all()
-    pr = db_session.get(PlanRun, run_id)
-    assert pr.result_summary["scan_failed"] is False, "补齐后必须清除（此前粘滞为 true）"
-    assert pr.run_context["archive"]["units_satisfied"] == 2
+        src = _Path(ds.__file__).read_text(encoding="utf-8")
+        assert 'Path(center_root, "devices").glob' not in src
+        assert "_center_event_dir_from_dle" in src

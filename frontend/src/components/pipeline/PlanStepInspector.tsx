@@ -654,9 +654,18 @@ function TimeoutInput({
       onChange={e => {
         const raw = e.target.value;
         setDraft(raw);
-        if (raw === '') return;
+        if (raw === '') {
+          // #2513：清空 = 回到「未配置」并**提交**（不是只清本地草稿）。
+          // #2382 之后「未配置」是可落库的：组装侧对 None 省略键 → Agent 回落
+          // STP_STEP_WALL_CLOCK_SECONDS → 300s；#2454 已让读回不再把它折成 30。
+          // 旧行为（只 setDraft、失焦弹回旧值）使「未配置」在 UI 上不可达。
+          onUpdateStep({ ...step, timeout_seconds: undefined });
+          return;
+        }
         const n = parseInt(raw, 10);
         if (Number.isNaN(n)) return;
+        // 0（不限）仍不放开：契约要求与 stall_seconds ≥ 1 配对，而本 Inspector
+        // 没有停滞钟输入框——放开会造出必然 422 的组合。
         onUpdateStep({ ...step, timeout_seconds: Math.max(1, n) });
       }}
       onBlur={() => setDraft(null)}
