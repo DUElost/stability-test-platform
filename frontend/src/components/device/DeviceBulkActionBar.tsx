@@ -1,5 +1,6 @@
 import { CheckCheck, Copy, Download, FolderKanban, Tags, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { BULK_BAR_INNER_CLASS, BULK_BAR_OUTER_CLASS } from '@/components/ui/bulk-action-bar';
 
 interface DeviceBulkActionBarProps {
   selectedCount: number;
@@ -41,9 +42,9 @@ export default function DeviceBulkActionBar({
     <div
       data-testid="device-bulk-action-bar"
       aria-live="polite"
-      className="pointer-events-none fixed bottom-4 left-4 right-4 z-40 flex justify-center lg:left-60"
+      className={BULK_BAR_OUTER_CLASS}
     >
-      <div className="pointer-events-auto flex w-full max-w-5xl flex-wrap items-center gap-3 rounded-2xl border border-border bg-card/95 px-3 py-3 shadow-xl backdrop-blur supports-[backdrop-filter]:bg-card/90 sm:px-4">
+      <div className={BULK_BAR_INNER_CLASS}>
         <div className="flex min-w-0 items-center gap-3">
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
             <CheckCheck className="h-4 w-4" />
