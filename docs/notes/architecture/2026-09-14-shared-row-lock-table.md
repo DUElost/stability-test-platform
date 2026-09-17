@@ -148,7 +148,7 @@ Class: architecture
   前端类型跟随」纪律保持两侧一致。
 - ~~**为保留清理补一条 PostgreSQL 回归**：放弃，理由是「要构造存活数十天的非终态 job」。~~
   **已被 `#2022` 推翻**：不需要那种场景——把**同一 run 的 job/lease 行**用另一会话按住即可
-  构造稳定的阻塞点（`blob/...` 见 `backend/tests/scheduler/test_retention_lock_order_2010.py`）。
+  构造稳定的阻塞点（`blob/...` 见 `backend/tests/scheduler/test_retention_lock_order_2022.py`）。
 
 ## Verification
 
@@ -172,7 +172,7 @@ Class: architecture
   已按契约重排）；`pytest tests/ -q` → 532 passed。
 - **保留清理那一项的更正与修复（#2022）**：首版是**静态可达性分析**，且前提写错（保留期
   「数十天」）；更正后判定反转并已修。修复的验证为实跑：新回归
-  `backend/tests/scheduler/test_retention_lock_order_2010.py` 在修复版下 **2 passed（0.96s）**、
+  `backend/tests/scheduler/test_retention_lock_order_2022.py` 在修复版下 **2 passed（0.96s）**、
   换回 `origin/main` 实现后**两条都以预期消息失败**（判据是第三会话 `FOR UPDATE NOWAIT`
   探测 + 「`pg_locks` 存在未获授锁」的就绪判定）；既有
   `backend/tests/scheduler/test_retention_cleanup.py` **16 passed**（证明删除语义未变）。
