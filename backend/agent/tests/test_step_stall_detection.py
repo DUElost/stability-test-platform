@@ -197,6 +197,8 @@ class TestProgressStamps:
             for _ in range(8):
                 sys.stderr.write('PROGRESS {"seq": 1}\\n'); sys.stderr.flush()
                 time.sleep(0.04)
+            # 停写后挂起：避免子进程先于 stall 窗口自然退出（CI 时序 flake）。
+            time.sleep(1.0)
         """)
         outcome = _pump_process(proc, wall_clock=30, stall_seconds=0.2)
         assert outcome.reason == "stall"
@@ -208,6 +210,8 @@ class TestProgressStamps:
             for seq in (3, 2, 1, 3, 2, 1):
                 sys.stderr.write('PROGRESS {"seq": %d}\\n' % seq); sys.stderr.flush()
                 time.sleep(0.04)
+            # 停写后挂起：避免子进程先于 stall 窗口自然退出（CI 时序 flake）。
+            time.sleep(1.0)
         """)
         outcome = _pump_process(proc, wall_clock=30, stall_seconds=0.2)
         assert outcome.reason == "stall"
