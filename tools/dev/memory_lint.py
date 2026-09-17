@@ -95,6 +95,11 @@ _FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 # #2065：`{a,b}` brace glob（如 `backend/agent/{,aee/}CLAUDE.md`）同样无法判定。
 _PLACEHOLDER_MARKERS = ("...", "<", ">", "*", "…", "$", "{", "}")
 
+#: 全角标点（#2552）：仓库路径里不可能出现。中文笔记的「示例片段」常带全角句读
+#: （如描述 import 解析 bug 时写的 `docs/DOC-MAP.md。Cursor`），切成路径后会被判
+#: 断链——实测是本工具最主要的误报形态之一。与占位符跳过同一层处理。
+_FULLWIDTH_PUNCTUATION = "。，、：；？！（）【】「」『』·—…《》〈〉"
+
 #: 代码位置后缀（#2065）：`path:123` / `path:123-456` / `path#L12`，以及**多位置列表**
 #: `path:303,331` / `path:75/134/159` / `path:14,117,122-126`（变更审计类笔记里最常见）。
 #: 这些是 AGENTS.md 推荐的引用形式（`file_path:line_number`），判存在性前必须剥离——
@@ -204,6 +209,8 @@ def _is_candidate_path(token: str) -> bool:
     if not token or "/" not in token:
         return False
     if any(marker in token for marker in _PLACEHOLDER_MARKERS):
+        return False
+    if any(ch in token for ch in _FULLWIDTH_PUNCTUATION):
         return False
     if token.startswith(("http://", "https://")):
         return False
