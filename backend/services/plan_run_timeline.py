@@ -4,13 +4,12 @@
 current_stage 推导。路由退化为 ``_require_plan_run`` + ``ok(build_...)``。
 
 允许 import ``api.schemas``（#1519 门禁只禁止 services → api.routes）。
-共享的 ``_aware`` / ``_LIVE_PATROL_*`` 仍留在路由供 events 等端点使用；
-本模块内保留同口径副本，避免 timeline↔events 反向耦合。
+时间/终态辅助见 ``plan_run_read_common``（与 events 共用）。
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import func, select
@@ -21,42 +20,17 @@ from backend.api.schemas.plan_run import (
     StageOut,
     StageStepOut,
 )
-from backend.models.enums import JobStatus, PlanRunStatus
+from backend.models.enums import JobStatus
 from backend.models.job import JobInstance, StepTrace
 from backend.models.plan import Plan, PlanStep
 from backend.models.plan_run import PlanRun
-
-_LIVE_PATROL_HEARTBEAT_WINDOW = timedelta(seconds=180)
-_TERMINAL_PR_STATUSES = {
-    PlanRunStatus.SUCCESS.value,
-    PlanRunStatus.PARTIAL_SUCCESS.value,
-    PlanRunStatus.FAILED.value,
-}
-
-
-def _aware(ts: datetime | None) -> datetime | None:
-    if ts is None:
-        return None
-    if ts.tzinfo is None:
-        return ts.replace(tzinfo=timezone.utc)
-    return ts
-
-
-def _iso(v) -> str | None:
-    if v is None:
-        return None
-    return v.isoformat()
-
-
-def _duration_seconds(start, end) -> float | None:
-    if start is None:
-        return None
-    if end is None:
-        end = datetime.now(timezone.utc)
-    try:
-        return max(0.0, (_aware(end) - _aware(start)).total_seconds())
-    except TypeError:
-        return None
+from backend.services.plan_run_read_common import (
+    LIVE_PATROL_HEARTBEAT_WINDOW as _LIVE_PATROL_HEARTBEAT_WINDOW,
+    TERMINAL_PR_STATUSES as _TERMINAL_PR_STATUSES,
+    aware as _aware,
+    duration_seconds as _duration_seconds,
+    iso as _iso,
+)
 
 
 def _stage_status_from_steps(
