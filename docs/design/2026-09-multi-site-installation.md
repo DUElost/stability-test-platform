@@ -1,7 +1,13 @@
 # 多站点 P1：站点配置、部署预检与城市 B 安装闭环
 
-- **状态**：实现完成、现场验收待执行；I1 配置模型/离线 `validate`、I2 发布清单检查/脱敏 `plan`、I3 本地安装（S0–S4、受控管理员引导）、I4 站点侧 Agent 接入（S5、`verify` 的降级 S6）、I5 站点导航/交接证据（`/site/`、`handover`）与 I5.5 一站式部署（`deploy/*.sh`、`preflight`、`init`、inventory）均已实现；城市 B/C 现场验收（真机、存储、scan/upload/merge、签字）仍待执行，安装操作步骤见 [`installation.md`](../operations/installation.md)
-- **版本**：0.11
+- **状态**：实现完成；**城市 B（站点 238）现场复验已完成**（2026-09-16：S0–S5 全 PASS、`handover` 7/7、真机/中心存储/监控/时区/安装链/取消入口/提权能力均现场实测，结论与证据索引见 [`process/2026-09-16-city-b-field-reverification`](../notes/process/2026-09-16-city-b-field-reverification.md)）；**待办**：`scan/upload/merge` 与 watcher 专项（需真实设备日志/观察窗口）、非原作者复跑与签字、城市 C 验收（未开始），安装操作步骤见 [`installation.md`](../operations/installation.md)
+- **版本**：0.12
+- **v0.12 增量（2026-09-16）**：城市 B 现场复验收口——站点升级到含
+  `#2315`/`#2317`/`#2319`/`#2404`/`#2410` 的发布物后：无清单幂等升级 `export_kept`（导出不被拆除）、
+  无 system bus 容器重装 SUCCESS、wrapper `capabilities` + 热更新收敛、`handover` **7/7 PASS**
+  （MS-01 经 #2404 修复转正）；站点侧把 Agent 声明沉淀进 `site.yaml`（`agents:`，凭据只写引用），
+  使 `verify` 的 hosts 断言与 handover 证据有真实对象。结论、命令与反例见
+  [`process/2026-09-16-city-b-field-reverification`](../notes/process/2026-09-16-city-b-field-reverification.md)
 - **v0.11 增量（2026-09-15）**：#2197 站点本地监控栈——`monitoring.enabled`（默认装）+
   `monitoring.prometheus_port`（默认 9091，与后端默认 `STP_PROMETHEUS_URL` 对齐）；S1 装
   `prometheus`/`prometheus-node-exporter`，S2 渲染抓取配置（job `file-server` → 回环
