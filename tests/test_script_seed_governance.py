@@ -8,9 +8,8 @@
 from __future__ import annotations
 
 import ast
-from pathlib import Path
-
 import re
+from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine, text
@@ -117,6 +116,17 @@ def test_batch_deactivate_aborts_listing_all_blocked(pg_engine):
 SEED_VERSIONS_DIR = Path(__file__).resolve().parents[1] / "backend" / "alembic" / "versions"
 
 
+#: 「真正的停用」= `UPDATE … SET … is_active = false`（按序、有界窗口）。#2527：
+#: 只要 `is_active` 与 `false` 相邻就命中，会把 **INSERT 一行非活跃版本**与
+#: docstring/注释里的同串一并算上（假阳性），同时又**漏掉** ORM 写法（假阴性）。
+#: #2526 补强：排除模块/函数/类 docstring 的常量节点；f-string 取字面量片段拼接，
+#: 避免 ``text(f"...")`` 形态整条漏掉。
+_UPDATE_DEACTIVATE_RE = re.compile(
+    r"\bupdate\b[\s\S]{0,200}?\bset\b[\s\S]{0,200}?\bis_active\s*=\s*false\b",
+    re.IGNORECASE,
+)
+
+
 def _docstring_nodes(tree: ast.AST) -> set[int]:
     """模块 / 函数 / 类 docstring 的 ``Constant`` 节点 id（它们**不是** SQL）。"""
     ids: set[int] = set()
@@ -134,50 +144,62 @@ def _docstring_nodes(tree: ast.AST) -> set[int]:
     return ids
 
 
-def _sql_literals(path: Path) -> list[str]:
-    """迁移里作为**代码**出现的 SQL 字面量（AST）。
+def deactivation_sites(source: str, *, filename: str = "<migration>") -> list[str]:
+    """返回该迁移源码里**逐处**真实的「停用既有版本」位置（#2527 + #2526）。
 
-    注释与文档字符串一律不算——文本匹配会被它们骗过：``e5f6a7b8c9d0``（#2399 的自愈
-    迁移）两处 ``is_active = false`` 全在注释/docstring 里，它真正的 INSERT 用的是
-    VALUES 里的 ``false`` 字面量（同类教训见 #2448 的接线守卫判据 1）。f-string 取其中
-    的字面量片段拼接，避免 ``text(f"...")`` 形态整条漏掉。
+    只认两种形态：
+
+    1. SQL：``UPDATE … SET … is_active = false …``（字符串常量 / f-string 字面量片段，
+       按序且有界窗口；**排除**模块/函数/类 docstring）；
+    2. ORM：属性赋值 ``某对象.is_active = False``。
+
+    **不判**：docstring/注释提到该串、以及 ``INSERT … VALUES (…, false, …)``——
+    后者是「登记一个非活跃版本」，不是停用既有版本（#2399 的 ``e5f6a7b8c9d0`` 即此形态，
+    旧判据把它误判成违约）。
     """
-    tree = ast.parse(path.read_text(encoding="utf-8"))
+    tree = ast.parse(source)
     docstrings = _docstring_nodes(tree)
-    out: list[str] = []
+    sites: list[str] = []
     for node in ast.walk(tree):
         if (
+            isinstance(node, ast.Assign)
+            and isinstance(node.value, ast.Constant)
+            and node.value.value is False
+        ):
+            for target in node.targets:
+                if isinstance(target, ast.Attribute) and target.attr == "is_active":
+                    sites.append(f"{filename}:{node.lineno} ORM is_active=False")
+        elif (
             isinstance(node, ast.Constant)
             and isinstance(node.value, str)
             and id(node) not in docstrings
         ):
-            out.append(node.value)
+            if _UPDATE_DEACTIVATE_RE.search(node.value):
+                sites.append(f"{filename}:{node.lineno} SQL UPDATE … is_active=false")
         elif isinstance(node, ast.JoinedStr):
-            out.append(
-                "".join(
-                    part.value
-                    for part in node.values
-                    if isinstance(part, ast.Constant) and isinstance(part.value, str)
-                )
+            literal = "".join(
+                part.value
+                for part in node.values
+                if isinstance(part, ast.Constant) and isinstance(part.value, str)
             )
-    return out
+            if _UPDATE_DEACTIVATE_RE.search(literal):
+                sites.append(f"{filename}:{node.lineno} SQL UPDATE … is_active=false")
+    return sites
 
 
 def _has_deactivation(path: Path) -> bool:
-    """该迁移是否**执行**过「停用既有版本」（``UPDATE script … is_active = false``）。
-
-    同一条 SQL 字面量里同时出现 UPDATE 语义词与赋值才算停用：INSERT 一条 ``is_active``
-    为 false 的**新行**不算（没有既有版本被停用）；大小写与空白不敏感——旧判据按
-    ``"is_active = false" in text`` 精确匹配，``i9j0k1l2m3n4`` 写的 ``is_active=false``
-    因此整份文件都不在扫描面里（漏判），而只在注释里提到该串的迁移被误判为停用（误报）。
-    """
-    pattern = re.compile(r"UPDATE\s+script\b[\s\S]*?is_active\s*=\s*false", re.I)
-    return any(pattern.search(literal) for literal in _sql_literals(path))
+    """该迁移是否**执行**过「停用既有版本」（#2526 语料守卫入口；实现委托 #2527 AST）。"""
+    return bool(
+        deactivation_sites(path.read_text(encoding="utf-8"), filename=path.name)
+    )
 
 
 def _seed_files_with_deactivation() -> list[Path]:
-    """含「停用既有版本」SQL 的迁移文件（判据见 :func:`_has_deactivation`）。"""
-    return sorted(p for p in SEED_VERSIONS_DIR.glob("*.py") if _has_deactivation(p))
+    """真正停用既有版本的迁移文件（#2527：按 AST 判形态，不按整文件子串）。"""
+    return sorted(
+        p for p in SEED_VERSIONS_DIR.glob("*.py")
+        if deactivation_sites(p.read_text(encoding="utf-8"), filename=p.name)
+    )
 
 
 #: 存量豁免（#2055）：2026-09-12 及之前新增、且已在生产应用的 seed——#942 治理模板
@@ -185,10 +207,11 @@ def _seed_files_with_deactivation() -> list[Path]:
 #: 已应用迁移会改变「全新安装」的行为（引用存在时直接中止部署），故本轮只做**前向**守卫。
 #: 终态出口：随零引用版本退役（#735）自然收敛；新增文件一律不得进入本表。
 #:
-#: 判据收紧后的补登记：`i9j0k1l2m3n4`（2026-08-31）此前**因写法差异被漏判**——它写的是
-#: `is_active=false`（无空格），旧判据按字符串 `is_active = false` 精确匹配，整份文件都
-#: 不在扫描面里。收紧后的判据（大小写/空白不敏感）把它照了出来；日期与「已在链上」都
-#: 符合本表口径，故按存量补登记——**不是**为放行新文件。
+#: #2527/#2526：判据由「整文件子串 `is_active = false`」改为 AST 识别真实停用形态后，
+#: 本表**新增一条 `i9j0k1l2m3n4`（2026-08-31，legacy 窗口内）**——它写的是
+#: ``SET is_active=false``（等号两侧**无空格**），旧子串判据完全看不见它（0 命中）。
+#: 这是同一处判据的**假阴性**侧：修好之后浮出来的存量按既定 legacy 口径登记，
+#: 不做追溯改造（理由同上：会改变全新安装的行为）。
 _LEGACY_SEEDS_WITHOUT_REF_CHECK = {
     "a7b8c9d0e1f2", "b7c8d9e0f1a2", "b8c9d0e1f2a3", "c0d1e2f3a4b5", "c9d0e1f2a3b4",
     "d3e4f5a6b7c8", "e1f2a3b4c5d6", "e7f8a9b0c1d2", "f0a1b2c3d4e5", "g1h2i3j4k5l6",
@@ -207,6 +230,43 @@ def _revision_of(path: Path) -> str:
         re.M,
     )
     return m.group(1) if m else path.stem[:12]
+
+
+class TestDeactivationDetector:
+    """#2527：判据只认真实停用形态——旧判据（整文件子串）两头都错：
+
+    - 假阳性：``INSERT … VALUES (…, false, …)`` 与 docstring 提及被当成违约
+      （#2399 的 ``e5f6a7b8c9d0`` 因此常红）；
+    - 假阴性：``SET is_active=false``（无空格）与 ORM ``obj.is_active = False`` 完全看不见。
+    """
+
+    def test_insert_inactive_row_and_docstring_are_not_deactivation(self):
+        source = "\n".join([
+            '"""补行：新登记一个非活跃版本（is_active = false 见 docstring）。"""',
+            "def upgrade():",
+            "    op.get_bind().execute(text(",
+            '        "INSERT INTO script (name, version, is_active) "',
+            '        "VALUES (:name, :ver, false)"',
+            "    ))",
+        ])
+        assert deactivation_sites(source, filename="x.py") == []
+
+    def test_sql_update_with_spaces_is_deactivation(self):
+        source = 'def upgrade():\n    op.get_bind().execute(text("UPDATE script SET is_active = false WHERE name=:n"))\n'
+        assert deactivation_sites(source, filename="x.py"), "有空格写法必须可见"
+
+    def test_sql_update_without_spaces_is_deactivation(self):
+        # i9j0k1l2m3n4（2026-08-31）即此形态：旧子串判据 0 命中 → 假阴性
+        source = 'def upgrade():\n    op.get_bind().execute(text("UPDATE script SET is_active=false, updated_at=:now WHERE name=:n"))\n'
+        assert deactivation_sites(source, filename="x.py"), "无空格写法必须可见"
+
+    def test_orm_assignment_is_deactivation(self):
+        source = "def upgrade():\n    row.is_active = False\n"
+        assert deactivation_sites(source, filename="x.py"), "ORM 写法必须可见"
+
+    def test_orm_true_assignment_is_not_deactivation(self):
+        source = "def upgrade():\n    row.is_active = True\n"
+        assert deactivation_sites(source, filename="x.py") == []
 
 
 def test_new_seed_migrations_deactivating_versions_check_references():
@@ -249,7 +309,7 @@ def test_seed_migrations_do_not_delete_script_rows_on_downgrade():
     assert not offenders, f"以下迁移的 downgrade 用 DELETE 而非 is_active 翻转：{offenders}"
 
 
-# ── 判据自身的守卫（文本匹配的两类假信号都在这里钉住）────────────────────────
+# ── 判据自身的守卫（文本匹配的两类假信号都在这里钉住；#2526 语料入口）────────
 
 
 def test_deactivation_detector_reads_sql_not_prose(tmp_path):
