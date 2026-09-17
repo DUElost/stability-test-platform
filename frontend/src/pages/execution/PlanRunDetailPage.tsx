@@ -400,7 +400,16 @@ export default function PlanRunDetailPage() {
         onClose={() => setSelectedJobId(null)}
         onManualRetry={(jobId) => retryMut.mutate(jobId)}
         onManualExit={(jobId) => exitMut.mutate(jobId)}
-        onOpenReport={(jobId) => navigate(`/runs/${jobId}/report`)}
+        // #2420：这里两个 id 都在手上，带上 planRun 让报告端点做归属校验。
+        // 只有拿到数字型 run id 才加——拿不到时宁可不校验，也不能生成 `planRun=undefined`
+        // 那种"看起来带了参数、实际会把后端判成错配"的假校验。
+        onOpenReport={(jobId) =>
+          navigate(
+            /^\d+$/.test(String(id ?? ''))
+              ? `/jobs/${jobId}/report?planRun=${id}`
+              : `/jobs/${jobId}/report`,
+          )
+        }
         isRetryPending={retryMut.isPending}
         isExitPending={exitMut.isPending}
       />

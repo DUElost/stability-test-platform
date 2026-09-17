@@ -170,3 +170,69 @@ def test_recount_detects_drift():
     assert run.terminal_job_count == 2
     assert run.completed_job_count == 1
     assert run.failed_job_count == 1
+
+
+def test_post_flash_failure_yields_partial_success_through_terminalization(
+    db_session, sample_device,
+):
+    """#1591-④ 接线判据：终态化路径必须把会话传进聚合。
+
+    单元测试只能证明「传了 db 时规则生效」；漏传 db 会让里程碑规则**静默不生效**
+    （保守回落 FAILED，不报错）——这条用例走真实 db_session，专门盯这个漏。
+    """
+    from datetime import datetime, timezone
+
+    from backend.models.job import JobInstance, StepTrace
+    from backend.models.plan import Plan
+    from backend.models.plan_run import PlanRun
+    from backend.services.job_terminalization import on_job_terminal_sync
+
+    now = datetime.now(timezone.utc)
+    plan = Plan(name="flash-batch-plan", failure_threshold=0.05)
+    db_session.add(plan)
+    db_session.flush()
+    run = PlanRun(
+        plan_id=plan.id,
+        status=PlanRunStatus.RUNNING.value,
+        failure_threshold=0.05,
+        plan_snapshot={"name": plan.name, "steps": [
+            {"step_key": "flash", "script_name": "flash_firmware"},
+            {"step_key": "oobe", "script_name": "oobe_skip"},
+        ]},
+        run_type="MANUAL",
+    )
+    db_session.add(run)
+    db_session.flush()
+    job = JobInstance(
+        plan_run_id=run.id,
+        plan_id=plan.id,
+        device_id=sample_device.id,
+        host_id=sample_device.host_id,
+        status=JobStatus.FAILED.value,
+        status_reason="lifecycle init failed: step failed in init: oobe",
+        pipeline_def={"lifecycle": {}},
+        started_at=now,
+        ended_at=now,
+        created_at=now,
+        updated_at=now,
+    )
+    db_session.add(job)
+    db_session.flush()
+    db_session.add_all([
+        StepTrace(
+            job_id=job.id, step_id="flash", stage="init", status="COMPLETED",
+            event_type="STEP_COMPLETE", output=None, error_message=None,
+            original_ts=now, created_at=now,
+        ),
+        StepTrace(
+            job_id=job.id, step_id="oobe", stage="init", status="FAILED",
+            event_type="STEP_FAILED", output=None, error_message="OOBE skip failed",
+            original_ts=now, created_at=now,
+        ),
+    ])
+    db_session.commit()
+
+    applied, status = on_job_terminal_sync(job, db_session, run=run)
+
+    assert applied is True
+    assert status == PlanRunStatus.PARTIAL_SUCCESS.value

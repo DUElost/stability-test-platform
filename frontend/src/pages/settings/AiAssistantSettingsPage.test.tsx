@@ -97,6 +97,25 @@ describe('AiAssistantSettingsPage', () => {
     });
   });
 
+  it('#2456 密码管理器填充 API Key 后保存 → 随 payload 上送（不再被当成「留空=不变更」）', async () => {
+    renderPage();
+    const key = await screen.findByLabelText('API Key');
+
+    // 模拟密码管理器：绕过 React 直写 .value + 派发**非冒泡** input 事件
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLInputElement.prototype, 'value',
+    )!.set!;
+    setter.call(key, 'sk-from-manager');
+    key.dispatchEvent(new Event('input', { bubbles: false }));
+
+    fireEvent.click(screen.getByText('保存配置'));
+    await waitFor(() => {
+      expect(mocks.aiAssistant.updateConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ api_key: 'sk-from-manager' }),
+      );
+    });
+  });
+
   it('测试连接成功展示延迟结果', async () => {
     mocks.aiAssistant.testConnection.mockResolvedValue({
       ok: true,

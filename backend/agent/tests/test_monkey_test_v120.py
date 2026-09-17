@@ -62,6 +62,7 @@ def _run(monkeypatch, aimonkey_dir: Path, model: str) -> dict:
         lambda _serial, cmd, **k: (0, model if "ro.product.model" in cmd else "ok"),
     )
     monkeypatch.setattr(mt, "_push_file", lambda *a, **k: True)
+    monkeypatch.setattr(mt.time, "sleep", lambda _: None)
     mt.main()
     return captured
 

@@ -6,13 +6,18 @@ ADR-0025 Sprint 4 Task 2: Agent 侧 scan xls 上送管理器。
 
 路径约定：
     dedup/{plan_run_id}/        — scan reports (org.xls files)
+    _meta/{plan_run_id}/{host}.json — 写侧登记分片（#2188 D 步；与 run 同生命周期）
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import shutil
 import threading
+from datetime import datetime, timezone
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import Optional
 
@@ -22,6 +27,11 @@ except ImportError:  # Agent install layout (no ``backend.`` package)
     from agent.aee.paths import resolve_shared_storage_root
 
 logger = logging.getLogger(__name__)
+
+# legacy R1 的注册谓词（dedup_scan.py glob），在写侧冻结求值（#2188 设计稿 §2）：
+# dedup_org 产物名由外部工具决定，读侧零文件名解析，分片注册面 ≡ legacy 注册面。
+_META_SCHEMA_VERSION = 1
+_ORG_XLS_PATTERNS = ("*_org.xls", "*_org_*.xls")
 
 
 class UploadManager:
@@ -108,7 +118,66 @@ class UploadManager:
             "upload_scan_report_ok plan_run=%d host=%s dest=%s",
             plan_run_id, host_id, dest_path,
         )
+        # #2188 D 步（单2 #2474）：登记失败必须 raise，不得吞成 None——
+        # ScanRunner 不接返回值，吞掉 = 「文件已落、清单未写」的静默半交付；
+        # raise 后沿 scan_now 传播，下轮整段重试（copy 覆盖写、分片幂等重写）。
+        self._record_shard_entry(plan_run_id, host_id, dest_path, platform_subdir)
         return str(dest_path)
+
+    @staticmethod
+    def _shard_path(nfs_root: str, plan_run_id: int, host_id: str) -> Path:
+        return Path(nfs_root) / "_meta" / str(int(plan_run_id)) / f"{host_id}.json"
+
+    def _record_shard_entry(
+        self, plan_run_id: int, host_id: str, dest_path: Path, platform_subdir: str,
+    ) -> None:
+        """写侧登记（#2188 设计稿 §2）：分片写入是上送动作的完成标志。
+
+        每分片唯一写者 = 所属 host 的 Agent（无锁）；按 file_key 幂等合并、
+        原子替换（tmp + rename）。`registerable` 按现行 legacy glob 谓词在
+        写侧冻结求值，保证分片注册面 ≡ legacy 注册面（读侧零文件名解析）。
+        """
+        file_key = (
+            f"{platform_subdir}/{dest_path.name}" if platform_subdir else dest_path.name
+        )
+        entry = {
+            "file_key": file_key,
+            "platform": platform_subdir or "",
+            "size_bytes": dest_path.stat().st_size,
+            "registerable": any(
+                fnmatch(dest_path.name, pattern) for pattern in _ORG_XLS_PATTERNS
+            ),
+        }
+        shard = self._shard_path(self._nfs_root, plan_run_id, host_id)
+        shard.parent.mkdir(parents=True, exist_ok=True)
+
+        artifacts: dict = {}
+        if shard.is_file():
+            try:
+                existing = json.loads(shard.read_text(encoding="utf-8"))
+            except (ValueError, OSError):
+                existing = None
+            # 仅沿用同版本分片；版本不符 = 他版写侧产物，整片重建（schema_version 是演进锚点）
+            if isinstance(existing, dict) and existing.get("schema_version") == _META_SCHEMA_VERSION:
+                artifacts = {
+                    a["file_key"]: a
+                    for a in existing.get("artifacts", [])
+                    if isinstance(a, dict) and "file_key" in a
+                }
+        artifacts[entry["file_key"]] = entry
+
+        payload = {
+            "schema_version": _META_SCHEMA_VERSION,
+            "host_id": host_id,
+            "plan_run_id": int(plan_run_id),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "artifacts": sorted(artifacts.values(), key=lambda a: a["file_key"]),
+        }
+        tmp = shard.with_name(shard.name + ".tmp")
+        tmp.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8",
+        )
+        os.replace(tmp, shard)
 
     @staticmethod
     def _copytree_safe(src: str, dst: str) -> None:
