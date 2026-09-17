@@ -62,9 +62,13 @@ def test_ellipsis_is_treated_as_silent():
 
 
 def test_frozen_surfaces_are_excluded():
-    """已发布脚本版本与 alembic 历史 revision 不在治理面内（不可修改）。"""
+    """已发布脚本版本、alembic 历史 revision、第三方随包工具都不在治理面内。"""
     assert _mod._is_frozen("backend/agent/scripts/flash_firmware/v1.3.17/flash_firmware.py")
     assert _mod._is_frozen("backend/alembic/versions/e5f6a7b8c9d0_x.py")
+    # vendored 第三方（AIMonkey/flashtool）——不是我们的代码，判据同 ruff.toml
+    assert _mod._is_frozen(
+        "backend/agent/resources/aimonkey/AIMonkeyTest_20260317/MonkeyTest.py"
+    )
     assert not _mod._is_frozen("backend/agent/pipeline_engine.py")
     assert not _mod._is_frozen("backend/agent/scripts/loader.py")
 
