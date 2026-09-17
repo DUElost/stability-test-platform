@@ -24,6 +24,7 @@ import { ALERT_BOX, DRAWER, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 import { api } from '@/utils/api';
 import type { DeviceMatrixItem, DeviceUiStatus } from '@/utils/api/types';
+import { formatDateTimeShort } from '@/utils/format';
 import {
   DEVICE_LINK_STATUS,
   isDeviceLinkReachable,
@@ -227,12 +228,12 @@ export default function DeviceDetailDrawer({
               ['巡检周期', `#${device.patrol_cycle_count}`, false],
               ['周期成功 / 失败', `${device.patrol_success_cycle_count} / ${device.patrol_failed_cycle_count}`, false],
               ['连续失败连击', String(device.current_failure_streak), false],
-              ['下次重试', device.next_retry_at || '—', false],
+              ['下次重试', formatKvTime(device.next_retry_at), false],
               ['手动操作', device.manual_action || '—', false],
               ['Watcher 异常计数', String(device.log_signal_count), false],
-              ['最近心跳', device.last_heartbeat_at || '—', false],
-              ['开始时间', device.started_at || '—', false],
-              ['结束时间', device.ended_at || '—', false],
+              ['最近心跳', formatKvTime(device.last_heartbeat_at), false],
+              ['开始时间', formatKvTime(device.started_at), false],
+              ['结束时间', formatKvTime(device.ended_at), false],
             ]}
           />
 
@@ -352,6 +353,16 @@ export default function DeviceDetailDrawer({
 
 /** [label, value, mono, extraCls?, wrapFull?] — wrapFull disables ellipsis truncation */
 type KvRow = [string, string, boolean, string?, boolean?];
+
+/**
+ * 时间类 KV 的本地化口径（#2420）：抽屉里原先直接铺后端裸 ISO（
+ * `2026-09-16T11:49:18.577637+00:00`），而**同一页面页头**显示 `09/16 19:48`
+ * —— 一屏两套口径，差 8 小时。改走页头同一个 `formatDateTimeShort`，
+ * 于是"抽屉里的时间"和"页头的时间"是同一个规则（同族缺陷见 #2265/#2358）。
+ */
+function formatKvTime(value?: string | null): string {
+  return value ? formatDateTimeShort(value) : '—';
+}
 
 function KvList({ rows }: { rows: KvRow[] }) {
   return (
