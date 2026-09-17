@@ -125,11 +125,22 @@ const PLAN_RUN: Record<string, StatusEntry> = {
   FAILED: { label: "失败", variant: "destructive", Icon: XCircle },
 };
 
+/**
+ * 风险徽标表（ADR-0045 D3）：**级别 → 文案**的翻译只发生在这里一处。
+ *
+ * `S/A/B/UNKNOWN` 是对外词表（D2，报告页徽标与结果页列表都用它）；
+ * `HIGH/MEDIUM/LOW` 保留是给**单条告警的 severity**（D5 另一条轴，值域不动，
+ * 见 `backend/api/schemas/run.py` 的 `severity`）——两件事共用这张表，删任一组
+ * 都会让另一组恒显"未知"。#2418 的教训同款：数据没错，是键没对齐。
+ */
 const RISK: Record<string, StatusEntry> = {
+  S: { label: "高", variant: "destructive", Icon: AlertTriangle },
+  A: { label: "中", variant: "warning", Icon: AlertTriangle },
+  B: { label: "低", variant: "success", Icon: CheckCircle2 },
+  UNKNOWN: { label: "未知", variant: "secondary", Icon: HelpCircle },
   HIGH: { label: "高", variant: "destructive", Icon: AlertTriangle },
   MEDIUM: { label: "中", variant: "warning", Icon: AlertTriangle },
   LOW: { label: "低", variant: "success", Icon: CheckCircle2 },
-  UNKNOWN: { label: "未知", variant: "secondary", Icon: HelpCircle },
 };
 
 const PRIORITY: Record<string, StatusEntry> = {
