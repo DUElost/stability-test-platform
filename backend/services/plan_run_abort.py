@@ -363,10 +363,17 @@ def abort_plan_run(
         {
             "plan_run_id": int,
             "status": str,
-            "aborted_jobs": [int, ...],
+            "aborted_jobs": [int, ...],   # host 级 abort 时仅该主机的 job
             "abort_requested_jobs": [int, ...],   # host 级 abort 时仅该主机的 job
             "phase": "precheck" | "running" | "queued",
         }
+
+    五键**恒在**（QUEUED/PRECHECK 分支的 abort_requested_jobs 以空数组表达，
+    与写入 run_context 的 requested_job_ids=[] 同事实——#2089 判据）。响应侧的
+    权威声明是 ``schemas.plan_run.PlanRunAbortSummaryOut``（路由 response_model
+    校验/序列化）：**本模块不在顶层 import backend.api 包下模块**——它位于
+    host_retirement→host_upgrade_gate→本模块的深链，而 ``backend/api/__init__``
+    会拉起整个 routes 包并回射本模块的部分初始化态（agent-tests 采集期实测红）。
 
     Raises :class:`PlanRunAbortError` if the PlanRun is already in a
     terminal status.
@@ -482,6 +489,7 @@ def abort_plan_run(
                 "plan_run_id": plan_run_id,
                 "status": PlanRunStatus.FAILED.value,
                 "aborted_jobs": [],
+                "abort_requested_jobs": [],
                 "phase": phase,
             }
 

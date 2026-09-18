@@ -51,6 +51,7 @@ class TestRunAbortPlanRun:
                 "plan_run_id": run_id,
                 "status": "FAILED",
                 "aborted_jobs": [1],
+                "abort_requested_jobs": [],
                 "phase": "running",
             }
 
@@ -168,7 +169,7 @@ class TestRunRetryDispatchAudit:
 
         def _fake_retry(run_id, *, db, triggered_by, audit_user_id):
             captured.update({"run_id": run_id, "audit_user_id": audit_user_id})
-            return {"plan_run_id": run_id, "status": "QUEUED"}
+            return {"plan_run_id": run_id, "status": "QUEUED", "dispatch_state": {}}
 
         monkeypatch.setattr(
             "backend.services.ai_assistant.plan_run_ops.retry_plan_run_dispatch",

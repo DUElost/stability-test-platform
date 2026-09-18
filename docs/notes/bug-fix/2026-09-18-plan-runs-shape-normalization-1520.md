@@ -74,9 +74,39 @@ list items 恒序列化空数组），TS 侧漏声明。修法 = `PlanRun` 补
 `JiraRunOut`（解析器跨文件基类的真实限制，非拖延）。`check:quick` 的 knip/eslint
 对纯注释+可选字段零触发；`tsc` 通过。
 
+## 追加：写侧摘要刀（同日第三 commit）——plan_runs.py 的 `ApiResponse[dict]` 清零
+
+abort/archive/retry 三个写侧摘要升具名模型（`PlanRunAbortSummaryOut` /
+`PlanRunArchiveTriggerOut` / `PlanRunDispatchRetrySummaryOut`），路由
+`response_model` 完成校验/序列化。**但服务层刻意保持 dict 返回**——初版让
+`plan_run_abort` 顶层 import 模型，CI 的 agent-tests 采集当场红：
+`agent_host_heartbeat → host_retirement → host_upgrade_gate → plan_run_abort
+→ backend.api.__init__（拉起整个 routes 包）→ 回射部分初始化的
+plan_run_abort`，循环导入。`backend/api/__init__.py` 首行是
+`from backend.api import routes`，所以**任何位于深链的服务模块都不能顶层
+import `backend.api.*`**——形状声明的唯一权威位放在路由边界，服务留在
+core/models 层（这与 #738「局部 import 掩盖循环」的审计主题是同一条边，本刀
+用「边界校验」绕开而不是加局部 import）。`abort_plan_run` 的 docstring 与
+契约台账注释都把这个约束写成了显性判据；轴线 A 的 `abort_plan_run ↔
+PlanRunAbortResult` 配对因此**保留**（钉服务 dict 形状），轴线 C 的模型配对
+**同时登记**（钉响应形状）——两轴各守一层，不是冗余。
+
+**键存在性统一**：QUEUED/PRECHECK 分支历史上**缺** `abort_requested_jobs`
+键，现在服务直接返回 `[]`（与写入 `run_context.abort_requested.requested_job_ids=[]`
+同一事实），路由序列化后五键恒在。这是 #2089（`released_leases` 恒 0 却被承诺
+"已释放"）教训的**正向**应用：空由值表达，不留缺键分支让消费方感知两套形状。
+AI 助手 formatter 与 `abort_jobs_for_host` 聚合继续吃 dict，零改动。
+
+顺带抓到并修一处真实 TS 漂移：`PlanRunAbortResult.phase` union 只有
+`'precheck' | 'running'`，而服务 QUEUED 分支实际返回 `phase: "queued"`——
+C 轴只比字段名拦不住枚举漂移，按 SOP「枚举双端对齐」修正 TS（`dispatch_state`
+同步转恒在）。`archive` 端点前端零消费（grep 全 FE），模型按
+`_MODEL_UNREGISTERED` 具名认领并写明转登记条件，不硬造 TS 幽灵 interface。
+plan_runs.py 的 dict 盲区台账清空为 `set()`，opt-in 与 typed 记账保留。
+
 ## Revisit
 
-- abort/archive/retry 的 dict→模型（写侧摘要）：做时把 `#2089` 的逐分支判据写进
-  测试（只看并集拦不住多分支形态）——这是形状系列剩下的最后一块 plan_runs 面；
+- （已做）写侧三摘要已升模型，`#2089` 逐分支判据落在 `TestWriteSideSummaryBranches`
+  （QUEUED/RUNNING 分支各自断言键集合与值的真实性）；
 - cursor 在窗「删 re-export 测改 service 导入」与本刀在 `plan_runs.py` 导入区
   可能擦碰——本刀不消费路由 re-export（模型直接来自 schemas），冲突仅文本面。
