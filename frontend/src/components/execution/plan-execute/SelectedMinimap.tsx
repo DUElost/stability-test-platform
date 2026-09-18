@@ -16,6 +16,7 @@ import {
   measureMinimapColumns,
   MINIMAP_TILE_GAP,
 } from './minimapGrid';
+import { hostLabel } from '@/utils/hostDisplay';
 
 /** 超过此数量时启用虚拟行滚动（右栏大选集）。 */
 export const MINIMAP_VIRTUAL_THRESHOLD = 80;
@@ -133,13 +134,13 @@ function MinimapGridStatic({
     const row = readinessByDeviceId.get(device.id);
     const blocked = Boolean(row && !row.ready);
     const host = hostMap.get(String(device.host_id ?? 'unassigned'));
-    const hostLabel = host?.ip || host?.name || String(device.host_id ?? '节点未知');
+    const label = hostLabel(host, device.host_id, '节点未知');
     return (
       <MinimapTile
         key={device.id}
         device={device}
         blocked={blocked}
-        hostLabel={hostLabel}
+        hostLabel={label}
         flash={highlightId === device.id}
         row={row}
         onLocate={onLocate}
@@ -193,13 +194,13 @@ function MinimapGridVirtual({
     const row = readinessByDeviceId.get(device.id);
     const blocked = Boolean(row && !row.ready);
     const host = hostMap.get(String(device.host_id ?? 'unassigned'));
-    const hostLabel = host?.ip || host?.name || String(device.host_id ?? '节点未知');
+    const label = hostLabel(host, device.host_id, '节点未知');
     return (
       <MinimapTile
         key={device.id}
         device={device}
         blocked={blocked}
-        hostLabel={hostLabel}
+        hostLabel={label}
         flash={highlightId === device.id}
         row={row}
         onLocate={onLocate}

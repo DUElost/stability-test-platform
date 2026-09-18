@@ -128,7 +128,10 @@ class TestHeartbeatThread(unittest.TestCase):
         )
 
         ht.start()
-        time.sleep(0.35)
+        # #2602：等「已发出 ≥2 次心跳」这个可观测条件，不睡固定 0.35s
+        _deadline = time.monotonic() + 3.0
+        while mock_send_hb.call_count < 2 and time.monotonic() < _deadline:
+            time.sleep(0.01)
         ht.stop()
 
         # HTTP send_heartbeat should have been called (WS was disconnected)

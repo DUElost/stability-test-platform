@@ -90,6 +90,7 @@ import {
   type ExecutePhase,
   type PlanExecuteDraftV2,
 } from '@/components/execution/plan-execute/types';
+import { hostLabel } from '@/utils/hostDisplay';
 
 type DeviceSummary = ReadinessDevice;
 
@@ -234,6 +235,10 @@ export default function PlanExecutePage() {
     // retiredList 键（含退役）与主机页共享前缀失效。
     queryKey: hostKeys.retiredList(),
     queryFn: () => fetchHostList(0, 200, true),
+    // #2599：host 维度曾只在挂载时取一次——页面挂载后新注册/变更的主机在长驻的
+    // 选机工作台上看不到（标签退化成内部 slug、在线判定 fail-open、容量核算整体
+    // 忽略）。与同页 devices / activeJobs 同频（20s），也与设备页既有做法一致。
+    refetchInterval: 20_000,
   });
 
   const { data: wifiPoolList, isError: wifiPoolsError, refetch: refetchWifiPools } = useQuery({
@@ -390,7 +395,7 @@ export default function PlanExecutePage() {
   const hostOptions = useMemo(() => Array.from(new Map(allDevices.map((device: DeviceSummary) => {
     const id = String(device.host_id ?? 'unassigned');
     const host = hostMap.get(id);
-    return [id, host?.ip || host?.name || (id === 'unassigned' ? '未分配节点' : id)];
+    return [id, hostLabel(host, id)];
   })).entries()), [allDevices, hostMap]);
   const nodeSummaries = useMemo(() => hostOptions.map(([id, label]) => {
     const devices = allDevices.filter((device: DeviceSummary) => String(device.host_id ?? 'unassigned') === id);
@@ -403,7 +408,9 @@ export default function PlanExecutePage() {
       total: devices.length,
       selected,
       available,
-      online: !host || host.status === 'ONLINE',
+      // #2599：未知 ≠ 在线。host 记录缺失（缓存过旧/已删）时给 null，由展示层
+      // 走中性态；此前 `!host` 直接当真，等于让「不知道」冒充「在线健康」。
+      online: host ? host.status === 'ONLINE' : null,
       busy: host?.capacity?.active_jobs ?? 0,
       healthStatus: host?.health?.status ?? null,
       healthReasons: host?.health?.reasons ?? [],
@@ -433,6 +440,12 @@ export default function PlanExecutePage() {
   const capacityOverflowWarnings = useMemo(
     () => evaluateCapacityOverflow(selectedDevices, hostsList ?? []),
     [hostsList, selectedDevices],
+  );
+  // #2599：主机记录缺失的节点——`evaluateCapacityOverflow` 对它们静默跳过（既有取舍：
+  // 心跳未到时不误报），这里把「跳过」变成可见的一行，不再伪装成「容量充足」。
+  const unknownHostCount = useMemo(
+    () => nodeSummaries.filter(node => node.online === null).length,
+    [nodeSummaries],
   );
   const capacityPlanRows = useMemo(
     () => buildCapacityPlan(selectedDevices, hostsList ?? []),
@@ -1074,6 +1087,7 @@ export default function PlanExecutePage() {
           blockedCount: readinessResult.blockedCount,
           showDeviceMeta: phase !== 'plan',
           capacityOverflowCount: capacityOverflowWarnings.length,
+          unknownHostCount,
         }}
         primaryLabel={
           phase === 'plan'

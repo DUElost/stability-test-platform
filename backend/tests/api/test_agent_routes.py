@@ -10,7 +10,6 @@ from fastapi import HTTPException
 from backend.api.routes.agent_api import (
     _ExtendLockIn,
     _ExtendBatchIn,
-    _ExtendBatchItemIn,
     _JobHeartbeatIn,
     _RunCompleteIn,
     _StepStatusIn,
@@ -22,6 +21,7 @@ from backend.api.routes.agent_api import (
     update_job_status,
     update_job_step_status,
 )
+from backend.services.agent_lease_extend import _ExtendBatchItemIn
 from backend.core.database import AsyncSessionLocal, SessionLocal, async_engine
 from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType
 from backend.models.device_lease import DeviceLease
@@ -914,7 +914,7 @@ async def test_cas_rejects_rotated_token():
     """Race: prelim validated the OLD token, then the lease token rotated
     (recovery takeover). The old holder's CAS must hit zero rows — it must not
     renew the NEW owner's lease."""
-    from backend.api.routes.agent_api import _cas_renew_leases
+    from backend.services.agent_lease_extend import _cas_renew_leases
 
     seed = _seed_job(status=JobStatus.RUNNING.value)
     old_token = _setup_lease(seed)
@@ -961,7 +961,7 @@ async def test_cas_rejects_concurrently_terminal_job():
     """Race: prelim saw RUNNING, then the job reached a terminal state before
     the UPDATE. The CAS joins on Job.status==RUNNING and must hit zero rows —
     a finished job must not get a fresh lease TTL / keepalive."""
-    from backend.api.routes.agent_api import _cas_renew_leases
+    from backend.services.agent_lease_extend import _cas_renew_leases
 
     seed = _seed_job(status=JobStatus.RUNNING.value)
     token = _setup_lease(seed)
@@ -996,7 +996,7 @@ async def test_cas_rejects_concurrently_terminal_job():
 @pytest.mark.asyncio
 async def test_cas_rejects_wrong_host_and_instance_at_write_time():
     """The CAS enforces host/instance binding independently of prelim."""
-    from backend.api.routes.agent_api import _cas_renew_leases
+    from backend.services.agent_lease_extend import _cas_renew_leases
 
     seed = _seed_job(status=JobStatus.RUNNING.value)
     token = _setup_lease(seed)

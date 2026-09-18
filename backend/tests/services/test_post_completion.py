@@ -334,7 +334,7 @@ def test_cached_report_carries_cached_at(db_session, sample_device):
     db_session.add(job)
     db_session.commit()
 
-    r = get_cached_run_report(run_id=job.id, db=db_session, _current_user=None)
+    r = get_cached_run_report(run_id=job.id, plan_run_id=None, db=db_session, _current_user=None)
     assert r.data["risk_summary"]["risk_level"] == "A"
     assert r.data["cached_at"] == "2026-09-09T12:00:00+00:00"
 

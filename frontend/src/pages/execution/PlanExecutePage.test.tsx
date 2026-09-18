@@ -5,6 +5,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import PlanExecutePage from './PlanExecutePage';
 import { api, ApiError, fetchAllDevices, fetchHostList } from '@/utils/api';
+import { hostKeys } from '@/utils/api/queryKeys';
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
@@ -131,13 +132,16 @@ function renderPage({
     (api.resourcePools.available as any).mockRejectedValue(wifiPoolsFailure);
   }
 
-  return render(
-    <MemoryRouter initialEntries={[initialEntry]}>
-      <QueryClientProvider client={queryClient}>
-        <PlanExecutePage />
-      </QueryClientProvider>
-    </MemoryRouter>,
-  );
+  return {
+    ...render(
+      <MemoryRouter initialEntries={[initialEntry]}>
+        <QueryClientProvider client={queryClient}>
+          <PlanExecutePage />
+        </QueryClientProvider>
+      </MemoryRouter>,
+    ),
+    queryClient,
+  };
 }
 
 async function goToDeviceStep() {
@@ -151,6 +155,36 @@ function selectFirstNode() {
   const node = screen.getAllByRole('button').find(button => /auto-|h1/.test(button.textContent ?? ''));
   if (node) fireEvent.click(node);
 }
+
+describe('PlanExecutePage host 维度新鲜度（#2599）', () => {
+  it('host 记录缺失的节点判为「未知」而不是在线（fail-closed），且容量未知可见', async () => {
+    // 现场形态（#2599）：页面挂载后新注册的主机不在 hostMap 里，旧判据
+    // `!host || host.status === 'ONLINE'` 把「不知道」当真——新节点以健康绿点进入
+    // 选机决策，容量核算又静默跳过。这条用例把两侧都钉住。
+    renderPage({
+      devices: [{ id: 1, serial: 'DEV-NEW', host_id: 'h-new', status: 'ONLINE' }],
+      hosts: [],
+    });
+    await goToDeviceStep();
+
+    await waitFor(() =>
+      expect(screen.getByTitle('节点信息未知（主机记录缺失）')).toBeInTheDocument(),
+    );
+    expect(screen.queryByTitle('在线')).not.toBeInTheDocument();
+    expect(screen.getByText(/台节点容量未知/)).toBeInTheDocument();
+  });
+
+  it('host 查询登记了与同页 devices/占用同频的 20s 轮询', async () => {
+    // 现场形态：host 维度只在挂载时取一次——页面挂载后新注册/变更的主机在长驻的
+    // 选机工作台上看不到（标签退化成内部 slug、在线判定 fail-open、容量核算忽略）。
+    const { queryClient } = renderPage();
+    await waitFor(() => expect(fetchHostList).toHaveBeenCalledWith(0, 200, true));
+    const hostQuery = queryClient.getQueryCache().find({ queryKey: hostKeys.retiredList() });
+    // 缓存上的 options 类型面不含 refetchInterval（它在 observer 选项里），收窄后读
+    const options = hostQuery?.options as { refetchInterval?: number } | undefined;
+    expect(options?.refetchInterval).toBe(20_000);
+  });
+});
 
 describe('PlanExecutePage', () => {
   beforeEach(() => {

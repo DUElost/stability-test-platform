@@ -1,61 +1,39 @@
 """Agent API: job claim, status update, step trace upload, heartbeat.
 
-Authentication: X-Agent-Secret header (compared to AGENT_SECRET env var).
+Authentication: X-Agent-Secret via ``auth.verify_agent_secret``（本模块别名
+``_verify_agent``）。私有符号请从对应 ``backend.services.agent_*`` 导入，
+不再经本路由 re-export。
 """
 
 import logging
-import secrets
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from backend.api.response import ApiResponse, ok
-from backend.core.agent_secret import AgentSecretNotConfiguredError, require_agent_secret
 from backend.core.database import get_async_db, get_db
 from backend.api.routes.auth import get_current_active_user
+from backend.api.routes.auth import verify_agent_secret as _verify_agent
 from backend.services.agent_recovery import (
     _RecoverySyncIn,
     sync_agent_recovery,
-)
-# 既有测试 / 外部导入的 recovery 符号仍从本模块可达（re-export）。
-from backend.services.agent_recovery import (  # noqa: F401
-    _ActiveJobEntry,
-    _OutboxEntry,
-    _RecoveryAction,
-    _RecoverySyncOut,
-    _build_recovery_job_payload,
-    _rotate_recovery_lease_token,
 )
 from backend.services.agent_lease_extend import (
     _ExtendBatchIn,
     _ExtendBatchOut,
     extend_agent_leases_batch,
 )
-from backend.services.agent_claim import (  # noqa: F401
+from backend.services.agent_claim import (
     ClaimRequest,
     JobOut,
-    LockAcquireFailed as _LockAcquireFailed,
-    _claim_jobs_for_host,
-    _enrich_job_metadata,
     claim_agent_jobs,
-    claim_jobs_for_host,
-    enrich_job_metadata,
 )
 from backend.services.agent_device_log_events import (
     DeviceLogEventBatchIn,
     ingest_agent_device_log_events,
     list_agent_device_log_events,
-)
-from backend.services.agent_device_log_events import (  # noqa: F401
-    DeviceLogEventIn,
-    _ALLOWED_TRANSITIONS,
-    _EXTRACTABLE_STATES,
-    _TRANSITIONS_LITERAL,
-    _VALID_EVENT_STATES,
-    _parse_iso_dt,
-    _validated_remote_path,
 )
 from backend.services.agent_log_signals import (
     LogSignalBatchIn,
@@ -87,19 +65,11 @@ from backend.services.agent_upgrade_gate import (
     acquire_agent_upgrade_gate,
     release_agent_upgrade_gate,
 )
-from backend.services.agent_upgrade_gate import (  # noqa: F401
-    _raise_upgrade_gate_http,
-)
 from backend.services.agent_job_heartbeat import (
     _ExtendLockIn,
     _JobHeartbeatIn,
     extend_agent_job_lock,
     record_agent_job_heartbeat,
-)
-from backend.services.agent_job_heartbeat import (  # noqa: F401
-    ExtendLockIn,
-    JobHeartbeatIn,
-    _DEVICE_LOCK_LEASE_SECONDS,
 )
 from backend.services.agent_step_status import (
     StepTraceIn,
@@ -107,111 +77,21 @@ from backend.services.agent_step_status import (
     update_agent_job_step_status,
     upload_agent_step_traces,
 )
-from backend.services.agent_step_status import (  # noqa: F401
-    StepStatusIn,
-    require_valid_runtime_lease,
-)
 from backend.services.agent_job_status import (
     JobStatusUpdate,
     update_agent_job_status,
 )
 from backend.services.agent_archive_status import get_agent_archive_status
-
-from backend.services.agent_host_heartbeat import (  # noqa: F401
-    BackpressureInfo,
-    _get_backpressure,
-    _suggested_heartbeat_interval,
-    _suggested_log_rate_limit,
-)
-from backend.services.agent_artifacts import (  # noqa: F401
-    _ARTIFACT_TYPE_WHITELIST,
-)
-from backend.services.agent_coordinator_heartbeat import (  # noqa: F401
-    _CoordinatorHeartbeatJob,
-    _VALID_COORDINATOR_PHASES,
-)
-from backend.services.agent_log_signals import (  # noqa: F401
-    LogSignalIn,
-    _TERMINAL,
-    _require_job_bound_upload_lease,
-    require_job_bound_upload_lease,
-)
-from backend.services.agent_lease_extend import (  # noqa: F401
-    _ExtendBatchItemIn,
-    _ExtendBatchItemOut,
-    _LEASE_EXTEND_BATCH_MAX,
-    _VALID_EXECUTION_STATES,
-    _cas_renew_leases,
-    _parse_progress_ts,
-)
 from backend.services.agent_completion import (
     _RunCompleteIn,
     complete_agent_job,
-)
-from backend.services.agent_completion import (  # noqa: F401
-    _RUN_TO_JOB,
-    _apply_watcher_summary,
-    _bridge_reconciler_metrics,
-    _get_valid_runtime_lease,
 )
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/agent", tags=["agent"])
 
-# NOTE: UNKNOWN is intentionally excluded — it is a transient recovery state,
-# not a terminal one.  Valid transitions are UNKNOWN→RUNNING (grace recovery)
-# or UNKNOWN→FAILED (grace expiry).  ``complete_job()``'s runtime-lease gate
-# (``_get_valid_runtime_lease``, default ``allowed_job_statuses={RUNNING}``)
-# rejects direct completion while UNKNOWN — the agent must re-sync via recovery
-# (UNKNOWN→RUNNING) before completing normally.  This also prevents premature
-# PlanRun aggregation while a job's true status is still unresolved.
-
-
-
-def _verify_agent(x_agent_secret: Optional[str] = Header(None, alias="X-Agent-Secret")):
-    # secrets.compare_digest 防时序攻击。
-    try:
-        expected = require_agent_secret()
-    except AgentSecretNotConfiguredError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    provided = x_agent_secret or ""
-    if not secrets.compare_digest(provided, expected):
-        raise HTTPException(status_code=401, detail="invalid agent secret")
-
-
-
-
-
-
-# ── Schemas ───────────────────────────────────────────────────────────────────
-
-# JobStatusUpdate / StepTraceIn / _StepStatusIn 见对应 service（本模块 re-export）
-
-
-# ── ADR-0019 Phase 3a: Recovery Sync models ──────────────────────────────────
-
-
-# ── Shared helpers ────────────────────────────────────────────────────────────
-
-
-def _version_tuple(value: str) -> tuple[int, ...]:
-    raw = (value or "").strip()
-    if "-" in raw:
-        raise ValueError("pre-release Agent versions are not supported")
-    core = raw.split("+", 1)[0]
-    parts = core.split(".")
-    if len(parts) != 3 or any(not part.isdigit() for part in parts):
-        raise ValueError(f"invalid semantic version: {value!r}")
-    return tuple(int(part) for part in parts)
-
-
-def _agent_version_is_supported(agent_version: str, minimum: str) -> bool:
-    from backend.services.agent_version_gate import agent_version_is_supported
-    return agent_version_is_supported(agent_version, minimum)
-
-
-
 # ── Endpoints ─────────────────────────────────────────────────────────────────
+
 
 @router.post("/jobs/claim", response_model=ApiResponse[List[JobOut]])
 async def claim_jobs(
@@ -244,7 +124,6 @@ async def upload_step_traces(
     traces: List[StepTraceIn],
     db: AsyncSession = Depends(get_async_db),
     _=Depends(_verify_agent),
-    x_agent_secret: Optional[str] = Header(None, alias="X-Agent-Secret"),
 ):
     """Batch idempotent StepTrace upsert (Agent replay on reconnect)."""
     return ok(await upload_agent_step_traces(db, traces))
@@ -261,9 +140,6 @@ async def agent_heartbeat(
     Returns script_catalog_outdated flag + current backpressure setting.
     """
     return ok(await record_agent_host_heartbeat(db, payload))
-
-
-# ── RunStatus→JobStatus mapping for compat endpoints ─────────────────────────
 
 
 @router.post("/jobs/{job_id}/heartbeat", response_model=ApiResponse[dict])

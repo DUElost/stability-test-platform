@@ -96,6 +96,20 @@ def _wait_for(cond, timeout: float = 3.0, interval: float = 0.02) -> bool:
     return cond()
 
 
+def _wait_all_handled(u, timeout: float = 3.0) -> bool:
+    """等发布器把已提交条目处理干净（#2602：可观测条件，不睡固定毫秒）。
+
+    「**没有** POST」这类否定断言无法直接等待：先等队列处理完（
+    ``submits_total == promotes_ok + promote_failed + submits_dropped``），
+    再看它有没有发过东西，判据才成立。
+    """
+    return _wait_for(
+        lambda: u.stats.submits_total
+        == u.stats.promotes_ok + u.stats.promote_failed + u.stats.submits_dropped,
+        timeout=timeout,
+    )
+
+
 @pytest.fixture(autouse=True)
 def _reset_uploader():
     ArtifactUploader._reset_for_tests()
@@ -251,7 +265,7 @@ def test_directory_and_missing_are_dropped_not_posted(uploader_with_shared_root,
     _submit(u, job_id=402, storage_uri="/nonexistent/exp_main.txt")
 
     assert _wait_for(lambda: u.stats.promote_failed == 2)
-    time.sleep(0.2)
+    assert _wait_all_handled(u)
     assert sess.posts == []
     assert u.stats.promotes_ok == 0
 
@@ -271,7 +285,7 @@ def test_copy_failure_drops_without_post(uploader_with_shared_root, tmp_path, mo
     monkeypatch.setattr(au.shutil, "copy2", _boom)
     _submit(u, job_id=501, storage_uri=str(src))
     assert _wait_for(lambda: u.stats.promote_failed == 1)
-    time.sleep(0.2)
+    assert _wait_all_handled(u)
     assert sess.posts == []
     assert u.stats.promotes_ok == 0
 
@@ -363,7 +377,9 @@ def test_queue_full_drops_without_blocking():
     try:
         # 1 条被 worker 立刻拎走卡住；之后 2 条填满队列；第 4 条必须直接丢
         _submit(u, storage_uri="/a")
-        time.sleep(0.05)  # 让 worker 把首条拎走
+        # 场景搭建（非等待异步起来）：让 worker 先把首条拎走，队列才有位置放大批。
+        # 这里没有可等的计数器（"已被取走"不对外暴露），故保留固定时间（#2602 的判别）。
+        time.sleep(0.05)
         _submit(u, storage_uri="/b")
         _submit(u, storage_uri="/c")
         _submit(u, storage_uri="/d")  # full
@@ -395,8 +411,7 @@ def test_invalid_payload_is_dropped_locally(uploader_and_session, kwargs):
     merged.update(kwargs)
     u.submit(**merged)
     # 本地直接拒绝；worker 不接到这条 → 没有 POST
-    time.sleep(0.15)
-    assert u.stats.submits_dropped == 1
+    assert _wait_for(lambda: u.stats.submits_dropped == 1, timeout=2.0)
     assert len(sess.posts) == 0
 
 
@@ -445,6 +460,7 @@ def test_stop_without_drain_drops_residual():
     u.start()
     # 让首条卡住，随后多投若干填进队列
     _submit(u, storage_uri="/a")
+    # 同上：场景搭建（让首条离开队列，后续才会因队列满而丢），非"等异步起来"。
     time.sleep(0.05)
     for i in range(3):
         _submit(u, storage_uri=f"/q{i}")
