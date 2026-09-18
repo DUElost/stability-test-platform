@@ -43,11 +43,15 @@ ROOT = Path(__file__).resolve().parents[2]
 #: - 2026-09-18 三次下调（plan_runs 薄壳抛光）：596 → 482 → 封顶 **507**。
 #: - 2026-09-18 四次下调（#736：recovery/lease-lost 抽出 `recovery_executor.py`）：
 #:   main 1622 → 1177 → 封顶 **1236**。
+#: - 2026-09-18 五次下调（#736：disk/watcher 启动抽出 `bootstrap_subsystems.py`）：
+#:   main 1177 → 1087 → 封顶 **1142**。
+#: - 2026-09-18 六次下调（#736：身份/HOST_ID 抽出 `startup_identity.py`）：
+#:   main 1087 → 1015 → 封顶 **1066**。
 CEILINGS: dict[str, int] = {
     "backend/api/routes/plan_runs.py": 507,
     "backend/api/routes/agent_api.py": 411,
     "backend/api/routes/projects.py": 378,
-    "backend/agent/main.py": 1236,
+    "backend/agent/main.py": 1066,
 }
 
 

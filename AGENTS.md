@@ -69,6 +69,8 @@
 - 运行与改动范围匹配的测试，再运行 `python scripts/run_gates.py check:quick`；
 - 只报告实际运行过的命令与结果；未完成的检查标为 pending，命令成功不等于验证通过；
 - 检查 diff 不含凭据、无关格式化或本地 Harness 状态；
+- 改前端交互/布局时：jsdom 无布局引擎，几何/命中/autofill/下载类断言在此**测不了**，
+  走静态守卫或真实浏览器（见 [`testing.md`](docs/development/testing.md) §4 的 jsdom 边界）；
 - Agent Note 使用 Decision、Alternatives、Verification、Revisit 四节；
 - required checks 为 `lint`、`CodeQL`、`pr-typecheck`、`pr-compileall`、
   `pr-agent-tests`、`pr-migrate-empty-db`。
