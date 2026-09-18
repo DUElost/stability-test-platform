@@ -57,10 +57,10 @@ class SchedulerSettings(DomainSettings):
     queue_depth_poll_interval_seconds: int = 15
     precheck_reaper_interval_seconds: int = 45
     chain_reconciler_interval_seconds: int = 60
-    # #2755：链触发的最小稳定窗——父 run 终态后至少隔这么多秒才由**即时路径**触发
-    # 下一段（设备从 monkey 浸泡/teardown 收敛需要时间；r431 实测 2s 间隔 init
-    # 失败 40.6% vs 2.7h 间隔 4.6%）。即时路径跳过即交还 chain reconciler（60s
-    # tick）兜底，故实际触发时刻 ≈ settle + (0~60s)。0 = 关闭（回退旧行为）。
+    # #2755：链触发的最小稳定窗——父 run 终态后至少隔这么多秒才触发下一段
+    # （设备从 monkey 浸泡/teardown 收敛需要时间；r431 实测 2s 间隔 init
+    # 失败 40.6% vs 2.7h 间隔 4.6%）。窗锚定 ended_at，即时路径与 reconciler
+    # 补偿路径都过同一道窗，故实际触发时刻 ≈ settle + (0~60s)。0 = 关闭（回退旧行为）。
     chain_trigger_settle_seconds: int = 180
     # 一天扫一次 expired jti 即可（refresh 黑名单只随主动登出增长；见原注释）
     revoked_token_cleanup_interval_seconds: int = 24 * 3600
