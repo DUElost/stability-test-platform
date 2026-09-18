@@ -41,11 +41,13 @@ ROOT = Path(__file__).resolve().parents[2]
 #:   592 / 391 / 360 / 1622 → 622 / 411 / 378 / 1704；并新增 `projects.py`
 #:   （#1520 三主战场之一，此前未入册）；
 #: - 2026-09-18 三次下调（plan_runs 薄壳抛光）：596 → 482 → 封顶 **507**。
+#: - 2026-09-18 四次下调（#736：recovery/lease-lost 抽出 `recovery_executor.py`）：
+#:   main 1622 → 1177 → 封顶 **1236**。
 CEILINGS: dict[str, int] = {
     "backend/api/routes/plan_runs.py": 507,
     "backend/api/routes/agent_api.py": 411,
     "backend/api/routes/projects.py": 378,
-    "backend/agent/main.py": 1704,
+    "backend/agent/main.py": 1236,
 }
 
 

@@ -7,8 +7,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-import backend.agent.main as agent_main
-from backend.agent.main import (
+import backend.agent.recovery_executor as recovery_executor
+from backend.agent.recovery_executor import (
     execute_recovery_actions_impl,
     run_recovery_sync_if_needed,
     trigger_recovery_sync_on_device_reconnect,
@@ -23,9 +23,9 @@ class TestRecoveryExecutor:
         active_device_ids = {70}
         active_job_tokens = {7: "70:3"}
 
-        assert hasattr(agent_main, "_cleanup_after_lease_lost")
+        assert hasattr(recovery_executor, "_cleanup_after_lease_lost")
 
-        agent_main._cleanup_after_lease_lost(
+        recovery_executor._cleanup_after_lease_lost(
             job_id=7,
             device_id=70,
             active_jobs_lock=threading.Lock(),
@@ -49,7 +49,7 @@ class TestRecoveryExecutor:
         active_device_ids = set()
         active_job_tokens = {}
 
-        agent_main._cleanup_after_job_exit(
+        recovery_executor._cleanup_after_job_exit(
             job_id=26,
             fencing_token="63:6",
             active_jobs_lock=threading.Lock(),
@@ -72,7 +72,7 @@ class TestRecoveryExecutor:
         active_device_ids = {63}
         active_job_tokens = {26: "63:6"}
 
-        agent_main._cleanup_after_job_exit(
+        recovery_executor._cleanup_after_job_exit(
             job_id=26,
             fencing_token="63:6",
             active_jobs_lock=threading.Lock(),
@@ -98,7 +98,7 @@ class TestRecoveryExecutor:
         active_device_ids = {63}
         active_job_tokens = {26: "63:7"}
 
-        agent_main._cleanup_after_job_exit(
+        recovery_executor._cleanup_after_job_exit(
             job_id=26,
             fencing_token="63:6",
             active_jobs_lock=threading.Lock(),
@@ -124,7 +124,7 @@ class TestRecoveryExecutor:
         active_device_ids = {63}
         active_job_tokens = {26: "worker-new"}
 
-        agent_main._cleanup_after_job_exit(
+        recovery_executor._cleanup_after_job_exit(
             job_id=26,
             fencing_token="63:6",
             local_worker_token="worker-old",
@@ -620,7 +620,7 @@ class TestRecoverySyncStartup:
         local_db.get_pending_outbox.return_value = []
         execute_actions = MagicMock()
 
-        with patch("backend.agent.main.sync_recovery") as mock_sync:
+        with patch("backend.agent.recovery_executor.sync_recovery") as mock_sync:
             run_recovery_sync_if_needed(
                 local_db=local_db,
                 api_url="http://x",
@@ -642,7 +642,7 @@ class TestRecoverySyncStartup:
         local_db.get_pending_outbox.return_value = []
         execute_actions = MagicMock()
 
-        with patch("backend.agent.main.sync_recovery") as mock_sync:
+        with patch("backend.agent.recovery_executor.sync_recovery") as mock_sync:
             mock_sync.return_value = {
                 "actions": [{"job_id": 1, "device_id": 10, "action": "RESUME", "fencing_token": "tok-1"}],
                 "outbox_actions": [],
@@ -668,7 +668,7 @@ class TestRecoverySyncStartup:
         ]
         execute_actions = MagicMock()
 
-        with patch("backend.agent.main.sync_recovery") as mock_sync:
+        with patch("backend.agent.recovery_executor.sync_recovery") as mock_sync:
             mock_sync.return_value = {
                 "actions": [],
                 "outbox_actions": [{"job_id": 2, "action": "UPLOAD_TERMINAL", "reason": "not_terminal"}],
@@ -697,7 +697,7 @@ class TestRecoverySyncStartup:
         local_db.get_pending_outbox.return_value = []
         execute_actions = MagicMock()
 
-        with patch("backend.agent.main.sync_recovery") as mock_sync:
+        with patch("backend.agent.recovery_executor.sync_recovery") as mock_sync:
             mock_sync.side_effect = ConnectionError("network down")
             # Must not raise
             run_recovery_sync_if_needed(
@@ -722,7 +722,7 @@ class TestRecoverySyncStartup:
         local_db.get_pending_outbox.return_value = []
         execute_actions = MagicMock()
 
-        with patch("backend.agent.main.sync_recovery", return_value=None):
+        with patch("backend.agent.recovery_executor.sync_recovery", return_value=None):
             settled = run_recovery_sync_if_needed(
                 local_db=local_db,
                 api_url="http://x",
@@ -746,7 +746,7 @@ class TestRecoverySyncStartup:
         local_db.get_pending_outbox.return_value = []
         execute_actions = MagicMock(side_effect=OSError("nfs down"))
 
-        with patch("backend.agent.main.sync_recovery") as mock_sync:
+        with patch("backend.agent.recovery_executor.sync_recovery") as mock_sync:
             mock_sync.return_value = {"actions": [], "outbox_actions": []}
             settled = run_recovery_sync_if_needed(
                 local_db=local_db,
@@ -770,7 +770,7 @@ class TestReconnectRecoveryTrigger:
         ]
         execute_actions = MagicMock()
 
-        with patch("backend.agent.main.run_recovery_sync_if_needed",
+        with patch("backend.agent.recovery_executor.run_recovery_sync_if_needed",
                    return_value=True) as mock_run:
             triggered = trigger_recovery_sync_on_device_reconnect(
                 reconnected_serials=["ABC123"],
@@ -793,7 +793,7 @@ class TestReconnectRecoveryTrigger:
         local_db.get_active_jobs.return_value = []
         execute_actions = MagicMock()
 
-        with patch("backend.agent.main.run_recovery_sync_if_needed") as mock_run:
+        with patch("backend.agent.recovery_executor.run_recovery_sync_if_needed") as mock_run:
             triggered = trigger_recovery_sync_on_device_reconnect(
                 reconnected_serials=["ABC123"],
                 local_db=local_db,
@@ -815,7 +815,7 @@ class TestReconnectRecoveryTrigger:
         ]
         execute_actions = MagicMock()
 
-        with patch("backend.agent.main.run_recovery_sync_if_needed") as mock_run:
+        with patch("backend.agent.recovery_executor.run_recovery_sync_if_needed") as mock_run:
             triggered = trigger_recovery_sync_on_device_reconnect(
                 reconnected_serials=["NEW999"],
                 local_db=local_db,
@@ -838,7 +838,7 @@ class TestReconnectRecoveryTrigger:
         ]
         execute_actions = MagicMock()
 
-        with patch("backend.agent.main.run_recovery_sync_if_needed",
+        with patch("backend.agent.recovery_executor.run_recovery_sync_if_needed",
                    return_value=False) as mock_run:
             triggered = trigger_recovery_sync_on_device_reconnect(
                 reconnected_serials=["ABC123"],
@@ -861,7 +861,7 @@ class TestReconnectRecoveryTrigger:
         ]
         execute_actions = MagicMock()
 
-        with patch("backend.agent.main.run_recovery_sync_if_needed",
+        with patch("backend.agent.recovery_executor.run_recovery_sync_if_needed",
                    return_value=True) as mock_run:
             triggered = trigger_recovery_sync_on_device_reconnect(
                 reconnected_serials=["ABC123"],

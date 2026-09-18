@@ -33,7 +33,10 @@ def test_recovery_sync_periodic_loop_present():
     assert "recovery_sync_periodic_started" in src
     assert "STP_RECOVERY_SYNC_INTERVAL_SECONDS" in src
     assert "_recovery_sync_stop" in src
-    assert "_coerce_recovery_interval" in src
+    reco = (Path(__file__).resolve().parents[1] / "recovery_executor.py").read_text(
+        encoding="utf-8"
+    )
+    assert "_coerce_recovery_interval" in reco
 
 
 @pytest.mark.parametrize(
@@ -52,6 +55,6 @@ def test_recovery_sync_periodic_loop_present():
 )
 def test_coerce_recovery_interval_guards(raw, expected):
     """#1710：非法/nan/inf 回落默认；负/过小夹到 5。"""
-    from backend.agent.main import _coerce_recovery_interval
+    from backend.agent.recovery_executor import _coerce_recovery_interval
 
     assert _coerce_recovery_interval(raw) == expected
