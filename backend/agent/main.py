@@ -21,10 +21,7 @@ if __name__ == "__main__" and __package__ is None:
     # 直接运行时的导入路径处理
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from agent.adb_wrapper import AdbWrapper
-    from agent.api_client import fetch_pending_jobs
     from agent.recovery_executor import (
-        _make_local_worker_token,
-        _rollback_failed_claim,
         run_recovery_sync_if_needed,
         trigger_recovery_sync_on_device_reconnect,
     )
@@ -45,6 +42,7 @@ if __name__ == "__main__" and __package__ is None:
         build_resume_recovered_job,
         start_periodic_recovery_sync,
     )
+    from agent.claim_loop import process_claim_tick
     from agent import device_discovery
     from agent.aee.state_migration import migrate_legacy_aee_state_keys
     from agent.artifact_uploader import ArtifactUploader
@@ -65,10 +63,7 @@ if __name__ == "__main__" and __package__ is None:
     from agent.socketio_client import AgentSocketIOClient
 else:
     from .adb_wrapper import AdbWrapper
-    from .api_client import fetch_pending_jobs
     from .recovery_executor import (
-        _make_local_worker_token,
-        _rollback_failed_claim,
         run_recovery_sync_if_needed,
         trigger_recovery_sync_on_device_reconnect,
     )
@@ -89,6 +84,7 @@ else:
         build_resume_recovered_job,
         start_periodic_recovery_sync,
     )
+    from .claim_loop import process_claim_tick
     from . import device_discovery
     from .aee.state_migration import migrate_legacy_aee_state_keys
     from .artifact_uploader import ArtifactUploader
@@ -590,133 +586,27 @@ def main() -> None:
     try:
         while not _shutdown_event.is_set():
             try:
-                with _active_jobs_lock:
-                    active_count = len(_active_job_ids)
-
-                # ADR-0026 Step 5b: claim capacity = free healthy devices only.
-                # MAX_CONCURRENT_TASKS no longer restricts concurrent RUNNING
-                # jobs — the OperationScheduler independently limits script
-                # execution concurrency. All admitted devices can be RUNNING.
-                heartbeat_effective = heartbeat_thread.effective_slots
-                available_slots = heartbeat_effective
-
-                logger.info("main_loop_tick active=%d slots=%d", active_count, available_slots)
-
-                if available_slots > 0:
-                    jobs = fetch_pending_jobs(api_url, host_id, agent_instance_id,
-                                              capacity=available_slots)
-                    jobs = jobs[:available_slots]
-
-                    if jobs:
-                        logger.info(
-                            "pending_jobs_fetched host_id=%s count=%d slots=%d job_ids=%s",
-                            host_id, len(jobs), available_slots,
-                            [job.get("id") for job in jobs],
-                        )
-                    else:
-                        logger.debug(
-                            "no_pending_jobs host_id=%s active=%d slots=%d",
-                            host_id, active_count, available_slots,
-                        )
-
-                    for claimed_job in jobs:
-                        job = dict(claimed_job)
-                        device_id = job.get("device_id")
-
-                        with _active_jobs_lock:
-                            if device_id and device_id in _active_device_ids:
-                                logger.debug(
-                                    "skip_device_busy job=%d device=%d",
-                                    job["id"], device_id,
-                                )
-                                continue
-                            if device_id:
-                                _active_device_ids.add(device_id)
-                                _active_device_owner[device_id] = job["id"]
-
-                        local_worker_token = _make_local_worker_token(
-                            job["id"], job["fencing_token"],
-                        )
-                        job["local_worker_token"] = local_worker_token
-                        job["agent_instance_id"] = agent_instance_id
-
-                        # ADR-0019 Phase 2b + 3a: 注册 job + fencing_token + 持久化 active_job
-                        # R07-F13 (#1013): 本地（SQLite）登记失败必须补偿——否则设备忙占位
-                        # 残留且已认领未登记任务无显式归宿。回滚占位/令牌后跳批继续，让
-                        # server 下次 tick 或 recovery 重新对账该 claim。
-                        try:
-                            _register_active_job(
-                                job["id"],
-                                job["fencing_token"],
-                                device_id,
-                                job.get("device_serial", ""),
-                                local_worker_token,
-                            )
-                        except Exception:
-                            logger.exception(
-                                "register_active_job_failed job=%d device=%s — rolling back claim",
-                                job["id"], device_id,
-                            )
-                            _rollback_failed_claim(
-                                jid=job["id"],
-                                fencing_token=job.get("fencing_token", ""),
-                                local_worker_token=local_worker_token,
-                                device_id=device_id,
-                                active_jobs_lock=_active_jobs_lock,
-                                active_job_ids=_active_job_ids,
-                                active_device_ids=_active_device_ids,
-                                active_job_tokens=_active_job_tokens,
-                                active_device_owner=_active_device_owner,
-                                lease_renewer=lease_renewer,
-                                local_db=local_db,
-                            )
-                            continue
-
-                        # ADR-0026 Step 5b: register job + PlanRunHost with coordinator
-                        coordinator.register_job(job["id"])
-                        if device_id:
-                            coordinator.register_job_device(
-                                job["id"], device_id)
-                        prh_id = job.get("plan_run_host_id")
-                        plan_run_id = job.get("plan_run_id")
-                        if prh_id and plan_run_id:
-                            coordinator.register_plan_run_host(prh_id, plan_run_id)
-                        try:
-                            executor.submit(
-                                run_task_wrapper,
-                                job,
-                                adb,
-                                api_url,
-                                host_id,
-                                job_runner_state,
-                                mq_producer,
-                                script_registry,
-                                local_db,
-                                patrol_checkpoint_store,
-                                operation_scheduler=operation_scheduler,
-                                coordinator=coordinator,
-                                step_trace_uploader=step_trace_uploader,  # #483
-                            )
-                        except Exception:
-                            logger.exception("submit_failed job=%d device=%s", job["id"], device_id)
-                            # #801: submit 失败的作业不会进引擎——补记 barrier
-                            # 到达，避免同 wave peer 空等 barrier_timeout。
-                            from backend.agent.job_runner import (
-                                _arrive_patrol_barrier_preengine,
-                            )
-
-                            _arrive_patrol_barrier_preengine(
-                                job, coordinator, job["id"],
-                            )
-                            _deregister_active_job(
-                                job["id"],
-                                job.get("fencing_token", ""),
-                                local_worker_token,
-                            )
-                            with _active_jobs_lock:
-                                if device_id:
-                                    _active_device_ids.discard(device_id)
-
+                process_claim_tick(
+                    api_url=api_url,
+                    host_id=host_id,
+                    agent_instance_id=agent_instance_id,
+                    occupancy=occupancy,
+                    heartbeat_thread=heartbeat_thread,
+                    register_active_job=_register_active_job,
+                    deregister_active_job=_deregister_active_job,
+                    lease_renewer=lease_renewer,
+                    local_db=local_db,
+                    coordinator=coordinator,
+                    executor=executor,
+                    adb=adb,
+                    job_runner_state=job_runner_state,
+                    mq_producer=mq_producer,
+                    script_registry=script_registry,
+                    patrol_checkpoint_store=patrol_checkpoint_store,
+                    operation_scheduler=operation_scheduler,
+                    step_trace_uploader=step_trace_uploader,
+                    run_task_wrapper=run_task_wrapper,
+                )
             except Exception:
                 logger.exception("agent_loop_failed", extra={"host_id": host_id})
             # Use event wait instead of sleep so SIGTERM wakes us immediately
