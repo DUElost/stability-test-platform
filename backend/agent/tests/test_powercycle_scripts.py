@@ -1013,3 +1013,82 @@ class TestV108AtomicResume:
         state = json.loads((tmp_path / "state.json").read_text())
         assert state.get("paused_by_collect") is False
         assert state.get("resume_error") is None
+
+
+# ── v1.0.3 install_apk：push 输出保留 + 退避重试（#2756） ────────────────────
+
+
+class TestInstallApkV103:
+    """run 431 取证：链交接瞬时 adb 风暴下 push 失败只剩 rc=N（输出被丢弃）、
+    立即重试仍处在风暴内。v1.0.3 要求失败原因可见 + wait-for-device/退避。"""
+
+    @pytest.fixture()
+    def v103(self):
+        return _load("powercycle_lib_v120", "powercycle_setup/v1.2.0/_lib.py")
+
+    @staticmethod
+    def _patch_adb(monkeypatch, mod, calls, results):
+        """results: list of (rc, out, err)——按调用顺序消费，越界重复最后一个。"""
+
+        def fake_adb(*args, timeout=60):
+            calls.append(list(args))
+            return results[min(len(calls) - 1, len(results) - 1)]
+
+        monkeypatch.setattr(mod, "adb", fake_adb)
+        monkeypatch.setattr(mod, "adb_shell", lambda *a, timeout=60: "")
+
+    def test_push_failure_reason_is_preserved(self, v103, monkeypatch):
+        """两次 push 均失败 → 错误消息含 push 的 stderr 文本与 rc（#2756 核心）。"""
+        calls: list = []
+        self._patch_adb(
+            monkeypatch, v103, calls,
+            [(255, "", "adb: error: device offline")],
+        )
+        sleeps: list = []
+        monkeypatch.setattr(v103.time, "sleep", lambda s: sleeps.append(s))
+        monkeypatch.delenv("STP_ATT_INSTALL_RETRY_BACKOFF_SECONDS", raising=False)
+
+        with pytest.raises(RuntimeError) as exc:
+            v103.install_apk(Path("/res/AutoTestTool.apk"))
+
+        assert "push rc=255" in str(exc.value)
+        assert "device offline" in str(exc.value)
+        # 重试前有 wait-for-device + 退避
+        assert ["wait-for-device"] in calls
+        assert sleeps and sleeps[0] == 10.0
+
+    def test_transient_push_failure_recovers_on_retry(self, v103, monkeypatch):
+        """第一次 push 失败、第二次成功 → 正常返回（风暴吸收路径）。"""
+        calls: list = []
+        self._patch_adb(
+            monkeypatch, v103, calls,
+            [(1, "", "protocol fault"), (0, "", ""), (0, "Success", "")],
+        )
+        monkeypatch.setattr(v103.time, "sleep", lambda s: None)
+
+        v103.install_apk(Path("/res/AutoTestTool.apk"))  # 不抛即通过
+
+    def test_pm_install_failure_output_preserved(self, v103, monkeypatch):
+        """pm install 失败 → Failure[...] 文本进错误消息（不再只剩 rc）。"""
+        calls: list = []
+        self._patch_adb(
+            monkeypatch, v103, calls,
+            [(0, "", ""), (3, "Failure [INSTALL_FAILED_INSUFFICIENT_STORAGE]", "")],
+        )
+        monkeypatch.setattr(v103.time, "sleep", lambda s: None)
+
+        with pytest.raises(RuntimeError) as exc:
+            v103.install_apk(Path("/res/AutoTestTool.apk"))
+
+        assert "INSTALL_FAILED_INSUFFICIENT_STORAGE" in str(exc.value)
+
+    def test_backoff_env_override(self, v103, monkeypatch):
+        calls: list = []
+        self._patch_adb(monkeypatch, v103, calls, [(255, "", "offline")])
+        sleeps: list = []
+        monkeypatch.setattr(v103.time, "sleep", lambda s: sleeps.append(s))
+        monkeypatch.setenv("STP_ATT_INSTALL_RETRY_BACKOFF_SECONDS", "0")
+
+        with pytest.raises(RuntimeError):
+            v103.install_apk(Path("/res/AutoTestTool.apk"))
+        assert sleeps == [0.0]

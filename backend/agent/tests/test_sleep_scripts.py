@@ -515,3 +515,47 @@ class TestProgressStamp:
         captured = capsys.readouterr()
         assert captured.err.strip() == 'PROGRESS {"seq": 1, "step": "sleep_check"}'
         assert captured.out == ""
+
+
+# ── v1.0.3 install_apk：push 输出保留 + 退避重试（#2756） ────────────────────
+
+
+class TestInstallApkV103:
+    """run 428/431 取证：链交接瞬时 adb 风暴下 push 失败只剩 rc=N。v1.0.3 修复。"""
+
+    @pytest.fixture()
+    def v103(self):
+        return _load("sleep_lib_v103", "sleep_setup/v1.0.3/_lib.py")
+
+    @staticmethod
+    def _patch_adb(monkeypatch, mod, calls, results):
+        def fake_adb(*args, timeout=60):
+            calls.append(list(args))
+            return results[min(len(calls) - 1, len(results) - 1)]
+
+        monkeypatch.setattr(mod, "adb", fake_adb)
+        monkeypatch.setattr(mod, "adb_shell", lambda *a, timeout=60: "")
+
+    def test_push_failure_reason_preserved(self, v103, monkeypatch):
+        calls: list = []
+        self._patch_adb(monkeypatch, v103, calls, [(20, "", "adb: protocol fault")])
+        sleeps: list = []
+        monkeypatch.setattr(v103.time, "sleep", lambda s: sleeps.append(s))
+        monkeypatch.delenv("STP_ATT_INSTALL_RETRY_BACKOFF_SECONDS", raising=False)
+
+        with pytest.raises(RuntimeError) as exc:
+            v103.install_apk(Path("/res/AutoTestTool.apk"))
+
+        assert "push rc=20" in str(exc.value)
+        assert "protocol fault" in str(exc.value)
+        assert ["wait-for-device"] in calls
+        assert sleeps == [10.0]
+
+    def test_transient_failure_recovers(self, v103, monkeypatch):
+        calls: list = []
+        self._patch_adb(
+            monkeypatch, v103, calls,
+            [(255, "", "offline"), (0, "", ""), (0, "Success", "")],
+        )
+        monkeypatch.setattr(v103.time, "sleep", lambda s: None)
+        v103.install_apk(Path("/res/AutoTestTool.apk"))  # 不抛即通过
