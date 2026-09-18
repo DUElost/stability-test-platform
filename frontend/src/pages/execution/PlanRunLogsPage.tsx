@@ -86,9 +86,13 @@ export default function PlanRunLogsPage() {
     };
   }, [searchInput]);
 
+  // #2623：本页只读 `status`（终态判定）与 `plan_name`（标题）两个标量，
+  // 因此取聚合端点而不是 detail——detail 内嵌该 run 的**全部 job**
+  // （dev 实测 510 job 时 193,866 / 196,041 B ≈ 98.9% 无人消费），
+  // 而非终态期间本页每 30s 重拉一次，正落在大 run 运行、控制面最忙的窗口。
   const runQ = useQuery({
-    queryKey: planRunKeys.detail(id),
-    queryFn: () => api.planRuns.get(id),
+    queryKey: planRunKeys.summary(id),
+    queryFn: () => api.planRuns.getSummary(id),
     enabled: !!id,
     // #823：runQ 一次性读取会让 isTerminal 永不推进——run 已结束后 eventsQ 仍每 30s
     // 对终态 run 拉取。非终态慢轮询推进，终态即停（与 eventsQ 停更条件对齐）。
@@ -114,7 +118,8 @@ export default function PlanRunLogsPage() {
   });
 
   const refreshAll = useCallback(() => {
-    qc.invalidateQueries({ queryKey: planRunKeys.detail(id) });
+    // #2623：跟着 runQ 一起切键——留着 detail 键会让「刷新」按钮静默失效
+    qc.invalidateQueries({ queryKey: planRunKeys.summary(id) });
     qc.invalidateQueries({ queryKey: planRunKeys.logsByRun(id) });
   }, [qc, id]);
 

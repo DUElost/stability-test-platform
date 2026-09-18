@@ -1419,7 +1419,11 @@ export interface PlanJobInstance {
 
 export interface PlanRunSummary {
   plan_run_id: number;
-  status: string;
+  /** 值域与 detail 的 `PlanRun.status` 同一套（后端两侧都是 str，此处按既有口径建模）；
+   *  #2623 的终态判定靠它，两侧不同型会让 `TERMINAL.includes(...)` 在编译期失去保护。 */
+  status: PlanRunStatus;
+  /** #2623：与 detail 同源（现查 Plan.name）；plan_id 为空时为 null。 */
+  plan_name?: string | null;
   total_jobs: number;
   status_counts: Record<string, number>;
   pass_rate: number;
