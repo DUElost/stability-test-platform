@@ -325,8 +325,9 @@ class TestHandover:
     def test_ms04_passes_on_migration_applied_evidence(self, tmp_path):
         """带迁移的升级（238 city-b 现场）：S3 发 `install.s3.migrate`、不发 db 的 at_head 证据。
 
-        修前 MS-04 固定要求 `install.s3.db` ⇒ **每次真的带迁移的升级都会被打成假 BLOCKED**；
-        而「在 head 的幂等重跑」看不出问题——这正是 #2404 修 MS-01 时漏掉本处的原因。
+        #2404 同类第二处：修前 MS-04 固定要求 `install.s3.db` ⇒ **每次真的带迁移的升级
+        都会被打成假 BLOCKED**；而「在 head 的幂等重跑」看不出问题——这正是 #2404 修 MS-01
+        时漏掉本处的原因。
         """
         report = run_handover(
             _site_yaml(tmp_path),

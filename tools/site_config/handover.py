@@ -67,9 +67,10 @@ ACCEPTANCE_ITEMS: tuple[AcceptanceItem, ...] = (
     AcceptanceItem(
         key="MS-04",
         title="重跑不重置身份/密钥/数据；无效输入在破坏性步骤前失败",
-        # #2706：S3 的两条互斥路径发出的 ID 不同（已在 head → `install.s3.db`；本次应用了
-        # 迁移 → `install.s3.migrate`），与 MS-01 同口径取候选集。#2404 只改了 MS-01，
-        # 于是「真的带迁移」的升级每次都把 MS-04 打成假 BLOCKED（238 city-b 现场）。
+        # #2706（#2404 同类第二处）：S3 的两条互斥路径发出的 ID 不同（已在 head →
+        # `install.s3.db`；本次应用了迁移 → `install.s3.migrate`），与 MS-01 同口径取候选集。
+        # #2404 只改了 MS-01，于是「真的带迁移」的升级每次都把 MS-04 打成假 BLOCKED
+        # （2026-09-18 238 city-b 现场）。
         stage_checks=("install.s2.env", ("install.s3.db", "install.s3.migrate"), "install.s3.admin"),
         requires_runs=2,
         pending=(
