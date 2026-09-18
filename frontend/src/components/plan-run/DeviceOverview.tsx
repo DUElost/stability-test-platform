@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState, useEffect, useCallback } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { Grid3X3, List, Activity, AlertCircle } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
@@ -26,6 +27,13 @@ import { useQuery } from '@tanstack/react-query';
 import { fetchHostList } from '@/utils/api';
 import { hostKeys } from '@/utils/api/queryKeys';
 import { hostLabel } from '@/utils/hostDisplay';
+import {
+  DEVICE_TABLE_OVERSCAN,
+  DEVICE_TABLE_ROW_PX,
+  DEVICE_TABLE_VIEWPORT_MAX_PX,
+  deviceTableSpacers,
+  shouldVirtualizeDeviceTable,
+} from './deviceTableVirtual';
 
 interface Props {
   data: PlanRunDevicesPayload | undefined;
@@ -209,18 +217,49 @@ function DeviceTable({
   /** #2601：host_id → Host，仅用于显示名解析（查不到回落 host_id，与旧行为一致） */
   hostMap: Map<string, { ip?: string | null; name?: string | null }>;
 }) {
-  // eslint-disable-next-line react-hooks/purity -- 渲染期时间戳仅用于卡死高亮派生，无副作用（#260 待统一 tick 状态）
+  // 渲染期时间戳仅用于卡死高亮派生，无副作用（#260 待统一 tick 状态）。
+  // 注：原先这里挂着 `eslint-disable react-hooks/purity`；虚拟化接线落地后该规则
+  // 不再在此报告（eslint 判定为 unused directive），故摘掉指令本身——留着它反而
+  // 会让 `eslint --max-warnings 0` 变红。
   const now = Date.now();
   const rowRefs = useRef<Map<number, HTMLTableRowElement | null>>(new Map());
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  /**
+   * #83：表格视图行虚拟化。510 台实测 14,056 DOM 节点 / 511 个 `<tr>` 全量物化
+   * （minimap 态同一批数据只要 603 节点），外推 1000 台 ≈2.75 万节点。
+   * **只有表格走虚拟化**——minimap 每设备 1 节点，本来就不该分页（#83 的约束）。
+   */
+  const virtualize = shouldVirtualizeDeviceTable(devices.length);
+  const rowVirtualizer = useVirtualizer({
+    count: devices.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => DEVICE_TABLE_ROW_PX,
+    overscan: DEVICE_TABLE_OVERSCAN,
+    enabled: virtualize,
+  });
+  const visible = virtualize ? rowVirtualizer.getVirtualItems() : [];
+  const { padTopPx, padBottomPx } = virtualize
+    ? deviceTableSpacers(visible, rowVirtualizer.getTotalSize())
+    : { padTopPx: 0, padBottomPx: 0 }; // 静态路径不挂滚动容器，也就不需要垫片
+  const windowRows = virtualize
+    ? visible.map((row) => devices[row.index]).filter(Boolean)
+    : devices;
 
   useEffect(() => {
-    if (highlightJobId != null) {
-      const el = rowRefs.current.get(highlightJobId);
-      if (el && typeof el.scrollIntoView === 'function') {
-        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }
+    if (highlightJobId == null) return;
+    if (virtualize) {
+      // 虚拟化后目标行可能根本没挂载，scrollIntoView 无从下手——按索引滚动，
+      // 让虚拟窗口自己把它换进来（与 DeviceMatrix 的 highlight 处理同一手法）。
+      const index = devices.findIndex((d) => d.job_id === highlightJobId);
+      if (index >= 0) rowVirtualizer.scrollToIndex(index, { align: 'center' });
+      return;
     }
-  }, [highlightJobId]);
+    const el = rowRefs.current.get(highlightJobId);
+    if (el && typeof el.scrollIntoView === 'function') {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [highlightJobId, virtualize, devices, rowVirtualizer]);
 
   const setRowRef = useCallback(
     (jobId: number) => (el: HTMLTableRowElement | null) => {
@@ -229,9 +268,17 @@ function DeviceTable({
     [],
   );
 
-  return (
+  const table = (
     <Table className="text-[12px]">
-        <TableHeader className={cn('text-xs font-semibold uppercase tracking-wider', TEXT.subtitle)}>
+        <TableHeader
+          className={cn(
+            'text-xs font-semibold uppercase tracking-wider',
+            TEXT.subtitle,
+            // 虚拟化后表格在自己的高度里滚（#83）：表头必须跟着钉住，
+            // 否则滚两屏就认不出哪列是哪列——静态守卫锁这条 class。
+            virtualize && 'sticky top-0 z-10',
+          )}
+        >
           <TableRow className="bg-muted/50 hover:bg-muted/50">
             <TableHead className="h-auto px-3 py-2 text-left">Serial</TableHead>
             <TableHead className="h-auto px-2 py-2 text-left">Host</TableHead>
@@ -247,7 +294,9 @@ function DeviceTable({
           </TableRow>
         </TableHeader>
         <TableBody>
-          {devices.map((d) => {
+          {/* 未渲染的行用两段空白补回（滚动条长度与真实总高一致；夹到 ≥0，见 deviceTableVirtual） */}
+          {padTopPx > 0 ? <tr aria-hidden="true" style={{ height: `${padTopPx}px` }} /> : null}
+          {windowRows.map((d) => {
             const failureClass =
               d.current_failure_streak >= 3
                 ? 'text-destructive font-semibold'
@@ -347,8 +396,23 @@ function DeviceTable({
               </TableRow>
             );
           })}
+          {padBottomPx > 0 ? <tr aria-hidden="true" style={{ height: `${padBottomPx}px` }} /> : null}
         </TableBody>
       </Table>
+  );
+
+  if (!virtualize) return table;
+  return (
+    <div
+      ref={scrollRef}
+      data-testid="device-table-scroll"
+      data-virtual="true"
+      data-row-total={devices.length}
+      className="w-full overflow-y-auto"
+      style={{ maxHeight: `${DEVICE_TABLE_VIEWPORT_MAX_PX}px` }}
+    >
+      {table}
+    </div>
   );
 }
 
