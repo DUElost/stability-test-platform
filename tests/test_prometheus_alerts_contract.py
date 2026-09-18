@@ -421,6 +421,43 @@ def _raise_rule_threshold(alerts_text: str, alert: str) -> tuple[str, int]:
     return yaml.safe_dump(data, allow_unicode=True, width=10000), hits
 
 
+def _scenarios_for_alert(alert: str) -> str:
+    """逐条漂移用的场景切片：只保留含该 ``alertname`` 的 group/用例。
+
+    完整场景文件含 145h/200h 级 ``eval_time`` 组；逐条每次重跑全文件会把夜间
+    ``tests/`` 墙钟放大到数分钟×告警条数。切片仍包含该告警自己的
+    ``input_series`` + ``alert_rule_test``，#2236「失败必须点名该告警」语义不变；
+    整文件正/负向仍由 ``test_alert_scenarios_fire_with_promtool`` 与
+    ``test_promtool_gate_detects_threshold_drift`` 覆盖。
+    """
+    data = yaml.safe_load(SCENARIOS.read_text(encoding="utf-8"))
+    filtered_tests: list[dict] = []
+    for group in data.get("tests") or []:
+        cases = [
+            case
+            for case in (group.get("alert_rule_test") or [])
+            if case.get("alertname") == alert
+        ]
+        if not cases:
+            continue
+        sliced = dict(group)
+        sliced["alert_rule_test"] = cases
+        filtered_tests.append(sliced)
+    assert filtered_tests, (
+        f"{alert}: 场景文件没有该 alertname 的用例——与 "
+        "test_every_alert_rule_has_scenario_case 棘轮冲突"
+    )
+    return yaml.safe_dump(
+        {
+            "rule_files": data.get("rule_files"),
+            "evaluation_interval": data.get("evaluation_interval"),
+            "tests": filtered_tests,
+        },
+        allow_unicode=True,
+        width=10000,
+    )
+
+
 # 场景层只校验场景文件里出现过的告警：**promtool 对未列规则不校验**。
 # #2151 实测——把 StabilityPlanRunAggregationFailed 的 `> 0` 改成 `> 500`、
 # 场景文件不跟，`promtool test rules` 仍 SUCCESS。所以「装了 promtool」只把
@@ -535,6 +572,9 @@ def test_promtool_gate_detects_per_rule_threshold_drift(tmp_path, alert: str) ->
     一起抬到 1e12，任何一条失配都能让整批红——「某条用例其实断言了一个永不出现的
     形状」（假覆盖）在其中完全不可见。逐条变异并要求失败输出**点名该告警**，才证明
     每条场景用例各自有牙。
+
+    场景文件按告警切片（``_scenarios_for_alert``）：避免每条都重放 145h 级全文件
+    模拟；正/负向整文件覆盖仍由同模块的其它用例承担。
     """
     promtool = _promtool_path()
     original = ALERTS.read_text(encoding="utf-8")
@@ -545,7 +585,7 @@ def test_promtool_gate_detects_per_rule_threshold_drift(tmp_path, alert: str) ->
     )
     (tmp_path / ALERTS.name).write_text(mutated, encoding="utf-8")
     (tmp_path / SCENARIOS.name).write_text(
-        SCENARIOS.read_text(encoding="utf-8"), encoding="utf-8"
+        _scenarios_for_alert(alert), encoding="utf-8"
     )
     res = subprocess.run(
         [promtool, "test", "rules", SCENARIOS.name],
