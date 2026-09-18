@@ -320,6 +320,39 @@ class TestHandover:
         )
         assert "install.s3.db or install.s3.migrate" in message, message
 
+    # ── #2706：MS-04 与 MS-01 同源——S3 证据两条互斥路径互斥 ──────────────
+
+    def test_ms04_passes_on_migration_applied_evidence(self, tmp_path):
+        """带迁移的升级（238 city-b 现场）：S3 发 `install.s3.migrate`、不发 db 的 at_head 证据。
+
+        修前 MS-04 固定要求 `install.s3.db` ⇒ **每次真的带迁移的升级都会被打成假 BLOCKED**；
+        而「在 head 的幂等重跑」看不出问题——这正是 #2404 修 MS-01 时漏掉本处的原因。
+        """
+        report = run_handover(
+            _site_yaml(tmp_path),
+            state_dir=_state_dir(tmp_path, omit=("install.s3.db",)),
+            verify_report=_verify_report(tmp_path),
+            system_root=tmp_path,
+        )
+
+        assert _status(report, "handover.MS-04") == "PASS", report["checks"]
+
+    def test_ms04_missing_both_s3_evidences_is_blocked(self, tmp_path):
+        """两条 S3 证据都没有 → 如实 BLOCKED，且缺失文案给出 `A or B`。"""
+        report = run_handover(
+            _site_yaml(tmp_path),
+            state_dir=_state_dir(tmp_path, omit=("install.s3.db", "install.s3.migrate")),
+            verify_report=_verify_report(tmp_path),
+            system_root=tmp_path,
+        )
+
+        assert _status(report, "handover.MS-04") == "BLOCKED"
+        message = next(
+            str(check.get("message") or "")
+            for check in report["checks"] if check["check_id"] == "handover.MS-04"
+        )
+        assert "install.s3.db or install.s3.migrate" in message, message
+
     def test_failing_mapped_check_fails_the_item(self, tmp_path):
         report = run_handover(
             _site_yaml(tmp_path), state_dir=_state_dir(tmp_path),
