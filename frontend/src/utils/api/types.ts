@@ -2273,3 +2273,16 @@ export interface AiActionLogEntry {
   stream: 'stdout' | 'stderr';
   line: string;
 }
+
+/** #2629：一个真实写入过的筛选值 + 全表条数（GET /audit-logs/facets）。 */
+export interface AuditFacetValue {
+  value: string;
+  count: number;
+}
+
+/** 审计筛选候选。**值域来自实际写入的记录**，不是前端清单——
+ *  前端硬编码词表时曾出现 6 个「选中即 0 条」的死选项（#2629）。 */
+export interface AuditFacets {
+  resource_types: AuditFacetValue[];
+  actions: AuditFacetValue[];
+}

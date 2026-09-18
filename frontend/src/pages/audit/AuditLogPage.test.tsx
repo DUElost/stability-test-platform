@@ -4,12 +4,14 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 const mocks = vi.hoisted(() => ({
   auditList: vi.fn(),
+  auditFacets: vi.fn(),
 }));
 
 vi.mock('@/utils/api', () => ({
   api: {
     audit: {
       list: (...a: unknown[]) => mocks.auditList(...a),
+      facets: () => mocks.auditFacets(),
     },
   },
 }));
@@ -30,6 +32,7 @@ function renderPage() {
 describe('AuditLogPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.auditFacets.mockResolvedValue({ resource_types: [], actions: [] });
     mocks.auditList.mockResolvedValue({
       items: [{
         id: 1,
