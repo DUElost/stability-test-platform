@@ -31,16 +31,33 @@ wire 形状零改动，纯类型事实纠正。命名注释同时钉住它与
 - **把 `PlanRun` 的 9 个多出的键改成可选**：弃——那会连带放松 plan-runs
   面（detail 端点真返回它们）的类型，为一个端点污染另一个面的声明。
 
+## 追加：第 2 批 projects.py + TS 解析器补 `extends` 链
+
+`projects.py` 预照时 6 对里 2 对「漂移」全在带继承的界面上（`ProjectSummary
+extends Project`、`ProjectDetail extends ProjectSummary`）——先判定为**解析器
+假阳性而不是真漂移**（真去改 TS 就是迁就误报），给 `_ts_interface_fields` 补
+extends 链展开：同文件可解析则合并、解析不到**报错**、带环检测——与 Python 侧
+跨文件基类判据同形。补完全集 **6/6 MATCH、TS/后端零改动**登记：
+`ProjectSummaryOut/ProjectDetailOut/InventorySummaryOut/InventoryModelOut/
+ProjectModelCoverageOut/ProjectMapPreviewOut` ↔ 同名族 interface。
+盲区认领 `remove_project_rule`（ok 壳）；`GET /customers` 的 `list[dict]`
+内层无具名模型、现判据扫不到——挂 Revisit 不隐身。
+
+**判据顺序的注脚**：扩面工具本身错了两种（Python 跨文件基类=上批修的、
+TS extends=这批修的），两种都选择「报错优先于静默少收」——静默少收的
+门禁会制造假绿，比没有门禁更坏。
+
 ## Verification
 
-- 契约 15 passed（新配对双向对拍当场通过）；
+- 契约 15 passed（plans.py 两对当场通过；projects.py 6 对在第 2 批同样过）；
+- `test_project_routes.py` → **75 passed**；`check:quick` 12 门禁（第 2 批后）；
 - `test_plans_api.py + test_read_api_auth.py` → **145 passed**；
 - vitest `PlanExecutePage.test.tsx` → **58 passed**（唯一消费点行为回归）；
 - `check:quick` 12 门禁绿（局部 import 棘轮 610 未涨）。
 
 ## Revisit
 
-- 下一批候选：`projects.py`（15 typed 端点、1 dict）、`scripts.py`（9、2 dict）；
+- 下一批候选：`scripts.py`（9 typed 端点、2 dict）、`devices.py`；
   `agent_api.py`（16、10 dict）等 cursor 的 #1520 切片退场后再动，别撞在飞的
   搬迁面；
 - `/specialties` 返回 `ApiResponse[List[dict]]`：内层无具名模型、现判据扫不到——
