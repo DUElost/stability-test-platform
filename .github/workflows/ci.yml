@@ -86,7 +86,8 @@ jobs:
       # 摘要取自上游 release 的 sha256sums.txt，升级与回退见
       # docs/notes/testing/2026-09-16-promtool-nightly-scenario-gate-2151.md。
       #
-      # 顺序：promtool 必须在并行的 repo-level 之前装好（GITHUB_PATH 对后续 step 生效）。
+      # 顺序：promtool 必须在「Run repo-level tests」之前装好（GITHUB_PATH 对后续
+      # step 生效；tests/test_ci_promtool_scenario_gate.py 守此序）。
       - name: Install pinned promtool
         env:
           PROMTOOL_VERSION: "3.13.3"
@@ -106,50 +107,27 @@ jobs:
           # 同时满足 #2151 验收判据①：job 日志里可见 promtool 版本。
           "/tmp/${dir}/promtool" --version
           "/tmp/${dir}/promtool" --version | grep -q "version ${PROMTOOL_VERSION} "
-      # agent 与根 tests/ 互不依赖：同 runner 并行（与 PR #2538 同形）。
       # agent 步仍注入 DATABASE_URL（全量路径需要；与 PR 的 env -i 口径不同——有意）。
+      #
+      # **不与 tests/ 并行**：根 tests/ 在 PROMTOOL_REQUIRED=1 下以 promtool 场景/
+      # 逐条阈值漂移为主耗时（本地 ~4.5min、全量并行时争用飙到 ~8.5min），是长尾；
+      # 与 agent 同 runner 并行只会拉长 tests/、关键路径仍 ≈ tests/（实证
+      # run 35296277239：agent 76s∥tests/ 503s → 步墙钟 504s）。串行反而更短。
+      # PR 路径 agent∥离线子集仍然成立（离线子集无 promtool 长尾）。
       - name: Run agent tests
         env:
           # 部分 agent 测试模块在 import 期解析 DATABASE_URL（不真正连接）；
           # job 级已刻意不设（见上方 #1547），这里按需注入。
           DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
-        run: |
-          set -euo pipefail
-          PARALLEL_DIR="${RUNNER_TEMP:-/tmp}/stp-main-ci-parallel"
-          mkdir -p "$PARALLEL_DIR"
-          (
-            set +e
-            PROMTOOL_REQUIRED=1 python -m pytest tests/ -q \
-              >"$PARALLEL_DIR/repo.log" 2>&1
-            echo $? >"$PARALLEL_DIR/repo.rc"
-          ) &
-          echo $! >"$PARALLEL_DIR/repo.pid"
-          set +e
-          python -m pytest backend/agent/tests/ -q
-          agent_rc=$?
-          wait "$(cat "$PARALLEL_DIR/repo.pid")" || true
-          repo_rc="$(cat "$PARALLEL_DIR/repo.rc")"
-          echo "---- repo-level tests (ran in parallel) ----"
-          cat "$PARALLEL_DIR/repo.log" || true
-          if [ "$agent_rc" -ne 0 ] || [ "$repo_rc" -ne 0 ]; then
-            echo "::error::parallel gate failed agent_rc=${agent_rc} repo_rc=${repo_rc}"
-            exit 1
-          fi
-      # 根 tests/ 实际执行已并入上一步并行；本步复核 exit，并保留 step 名 +
-      # PROMTOOL_REQUIRED / tests/ 锚点供 tests/test_ci_promtool_scenario_gate.py
-      # 等结构守卫（不重跑，避免双倍墙钟）。
+        run: python -m pytest backend/agent/tests/ -q
+      # 根 tests/ 也在 pytest.ini 的 testpaths 里(迁移升级 + 部署脚本契约)。
       - name: Run repo-level tests
         env:
           # #2151：本 job 里场景层是**必备**项——promtool 缺失/安装失败时用例 fail
           # 而不是静默 skip。PR 路径不注入该变量（保持 skip）。接线契约由
           # tests/test_ci_promtool_scenario_gate.py 在 PR 路径上守住。
           PROMTOOL_REQUIRED: "1"
-        run: |
-          PARALLEL_DIR="${RUNNER_TEMP:-/tmp}/stp-main-ci-parallel"
-          test -f "$PARALLEL_DIR/repo.rc"
-          test "$(cat "$PARALLEL_DIR/repo.rc")" = "0"
-          # 结构守卫扫描锚点（与上一步并行 pytest 同形；勿删）：
-          # python -m pytest tests/
+        run: python -m pytest tests/ -q
 
   frontend-check:
     if: github.event_name != 'pull_request'
