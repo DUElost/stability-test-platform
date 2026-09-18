@@ -21,6 +21,10 @@ def test_summary_not_found_404():
 def test_summary_empty_jobs():
     pr = MagicMock()
     pr.status = "RUNNING"
+    # #2623：MagicMock 的 plan_id 默认是另一个 MagicMock（truthy），
+    # resolve_plan_name 会查库并把 MagicMock 塞进 plan_name → ValidationError。
+    # 空 job 场景不关心 plan 名；显式 None 走短路径。
+    pr.plan_id = None
     pr.started_at = None
     pr.ended_at = None
     pr.result_summary = {}
@@ -30,9 +34,10 @@ def test_summary_empty_jobs():
     result.all.return_value = []
     db.execute = MagicMock(return_value=result)
     out = build_plan_run_summary(db, 9)
-    assert out["plan_run_id"] == 9
-    assert out["total_jobs"] == 0
-    assert out["pass_rate"] == 0.0
+    assert out.plan_run_id == 9
+    assert out.total_jobs == 0
+    assert out.pass_rate == 0.0
+    assert out.plan_name is None
 
 
 def test_list_artifacts_job_mismatch_404():
@@ -62,5 +67,5 @@ def test_list_artifacts_maps_filename():
     db.get = MagicMock(return_value=job)
     db.execute = MagicMock(return_value=result)
     out = list_plan_run_job_artifacts(db, 1, 5)
-    assert out[0]["filename"] == "a.tar.gz"
-    assert out[0]["id"] == 3
+    assert out[0].filename == "a.tar.gz"
+    assert out[0].id == 3
