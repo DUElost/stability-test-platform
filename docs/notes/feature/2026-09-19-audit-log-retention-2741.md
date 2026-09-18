@@ -46,6 +46,9 @@ owner 2026-09-19 拍板（四问全采推荐项，裁决记录在 #2741 评论 +
   既有 retention/锁序/DLE 套件无回归）。
 - `./scripts/run_pytest.sh backend/tests/api/test_main_lifespan.py -q` →
   **4 passed**（app_scheduler 注册面无回归）。
+- `./scripts/run_pytest.sh backend/agent/tests/test_p3_3_multi_instance.py -q` →
+  **15 passed**（SINGLETON_SCHEDULE_IDS 精确集合断言随新作业同步——CI 首轮
+  pr-agent-tests 红灯即此处，本地复现修复后通过）。
 - `python tools/dev/env_inventory.py --check` → 一致（239 个读取名，5 个新旋钮全登记）。
 - `.venv/bin/python scripts/run_gates.py check:quick` → **12 gates 全绿**
   （含 ruff / eslint / gov-surface / inner-imports 棘轮 604 ≤ 604——app_scheduler
