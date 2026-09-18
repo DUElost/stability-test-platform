@@ -817,6 +817,83 @@ def test_orphan_cleanup_accepts_deep_paths_under_event_dir(
     assert db.query(DeviceLogEvent).filter(DeviceLogEvent.id == row_id).first() is None
 
 
+def test_orphan_cleanup_early_returns_when_root_unset(
+    cleanup_env, scheduler_env, sample_host, sample_device, tmp_path, monkeypatch, caplog,
+):
+    """#2636 ①：共享根未配置时**早退**——该形态下没有一行可清，不必白扫满页。
+
+    旧形态会进翻页循环、对每一行命中 `root_unset` 后 `continue`，每 tick 固定检视
+    `MAX_PAGES × BATCH` 行（默认 1000）却一行都清不掉。
+    """
+    import logging
+
+    from backend.models.device_log_event import DeviceLogEvent
+    from uuid import uuid4
+
+    db, _plan = cleanup_env
+    scheduler_env("ARTIFACT_RETENTION_DAYS", "0")
+    monkeypatch.delenv("STP_AEE_NFS_ROOT", raising=False)  # 唯一主键缺失 = 未配置
+
+    event_id = uuid4()
+    event_dir = tmp_path / "devices" / "unassigned" / str(event_id)
+    event_dir.mkdir(parents=True)
+    row_id = _mk_orphan_row(
+        db, sample_device, sample_host,
+        remote_path=str(event_dir / "x.log"), updated_at=datetime.now(timezone.utc),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        assert cron_scheduler.purge_orphan_dle_events() == 0
+
+    assert any(
+        "dle_orphan_skipped_root_unset_early_return" in rec.message for rec in caplog.records
+    ), "未配置共享根时必须留下可检索的早退告警"
+    assert db.query(DeviceLogEvent).filter(DeviceLogEvent.id == row_id).first() is not None
+
+
+def test_orphan_cleanup_alternates_scan_direction(
+    cleanup_env, scheduler_env, sample_host, sample_device, tmp_path, monkeypatch,
+):
+    """#2636 ②：扫描方向逐 tick 交替——满窗的恒跳过行不再造成永久空转。
+
+    把窗口压到 1 页（100 行）来构造悬崖：120 条形态不符行（较老）占满升序窗口，
+    可清理行在最新端。升序那轮清不到（`purged=0`），**下一轮从最新端起扫**即命中。
+    """
+    from datetime import datetime, timezone
+    from pathlib import Path
+    from uuid import uuid4
+
+    from backend.models.device_log_event import DeviceLogEvent
+
+    db, _plan = cleanup_env
+    scheduler_env("ARTIFACT_RETENTION_DAYS", "0")
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
+    monkeypatch.setattr(cron_scheduler, "_ORPHAN_DLE_MAX_PAGES", 1)
+    monkeypatch.setattr(cron_scheduler, "_orphan_scan_from_newest", False)
+
+    base = datetime.now(timezone.utc)
+    for i in range(120):
+        _mk_orphan_row(
+            db, sample_device, sample_host,
+            remote_path=str(Path(tmp_path) / "not-unassigned" / f"ev{i}"),
+            updated_at=base - timedelta(seconds=10_000 - i),
+        )
+    good_id = uuid4()
+    good_dir = _mk_orphan_event(db, sample_device, sample_host, good_id, tmp_path)
+
+    # 第 1 轮（升序）：窗口被恒跳过行占满 → 清到 0，可清理行不可达
+    assert cron_scheduler.purge_orphan_dle_events() == 0
+    assert good_dir.exists()
+
+    # 第 2 轮（降序 = 从最新端）：立刻命中最新端那条可清理行
+    assert cron_scheduler.purge_orphan_dle_events() == 1
+    assert not good_dir.exists()
+    assert db.query(DeviceLogEvent).filter(DeviceLogEvent.id == good_id).first() is None
+
+    # 方向再次翻转（第 3 轮回到升序）：不抛错即可
+    assert cron_scheduler.purge_orphan_dle_events() == 0
+
+
 def test_orphan_unassigned_event_purged_after_artifact_retention(
     cleanup_env, scheduler_env, sample_host, sample_device, tmp_path, monkeypatch,
 ):

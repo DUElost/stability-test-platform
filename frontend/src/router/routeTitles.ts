@@ -15,6 +15,10 @@ import { navGroups } from '@/layouts/navItems';
 
 /** 非导航路由：这些地方不在侧栏/管理员菜单的名字来源里，只能在此登记一份。 */
 const EXTRA_TITLES: ReadonlyArray<readonly [string, string]> = [
+  // #2660：报告页的权威形状是 `jobs/:jobId/report`（#2420：端点与 RecentRun.run_id
+  // 一直是 JobInstance.id 口径）；`runs/:runId/report` 如今只剩重定向，保留登记
+  // 只为旧书签在跳转过程中的标签页标题不至于是上一个页面。
+  ['/jobs/:jobId/report', 'Run 报告'],
   ['/runs/:runId/report', 'Run 报告'],
   ['/execution/plan-runs/:runId/logs', 'Run 日志'],
   ['/execution/plan-runs/:runId', 'Plan Run 详情'],
