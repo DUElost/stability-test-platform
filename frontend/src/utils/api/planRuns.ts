@@ -99,8 +99,18 @@ export const planRuns = {
     return page.items;
   },
 
-  get: (id: number) =>
-    unwrapApiResponse<PlanRun>(apiClient.get(`/plan-runs/${id}`)),
+  /**
+   * PlanRun 详情。
+   *
+   * #2623：`includeJobs: false` 时不取内嵌 jobs（实测占响应 98.9%，且仓内零消费方）；
+   * 省略该选项 = 保持既有契约（默认 True，仓外调用方不受影响）。
+   */
+  get: (id: number, opts?: { includeJobs?: boolean }) =>
+    unwrapApiResponse<PlanRun>(
+      apiClient.get(`/plan-runs/${id}`, {
+        params: opts?.includeJobs === false ? { include_jobs: false } : undefined,
+      }),
+    ),
 
   listJobs: (runId: number) =>
     unwrapApiResponse<PlanJobInstance[]>(apiClient.get(`/plan-runs/${runId}/jobs`)),

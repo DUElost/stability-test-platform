@@ -378,6 +378,13 @@ beforeEach(() => {
 });
 
 describe('PlanRunDetailPage', () => {
+  it('#2623：详情页显式 opt-out 内嵌 jobs（占 detail 响应 98.9%，本页不消费）', async () => {
+    renderPage();
+    await waitFor(() =>
+      expect(mocks.getRun).toHaveBeenCalledWith(12, { includeJobs: false }),
+    );
+  });
+
   it('renders Hero / Minimap / Stepper / DeviceTable / Watcher', async () => {
     renderPage();
     await waitFor(() =>

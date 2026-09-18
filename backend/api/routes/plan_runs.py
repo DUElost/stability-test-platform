@@ -136,11 +136,16 @@ def list_plan_runs(
 @router.get("/plan-runs/{run_id}", response_model=ApiResponse[PlanRunDetailOut])
 def get_plan_run(
     run_id: int,
+    include_jobs: bool = True,
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
-    """薄壳：``plan_run_catalog.build_plan_run_detail``。"""
-    return ok(build_plan_run_detail(db, run_id))
+    """薄壳：``plan_run_catalog.build_plan_run_detail``。
+
+    #2623：`include_jobs=false` 时不查也不序列化内嵌 jobs（实测占响应 98.9%）；
+    默认 True 保持既有契约不变（仓外调用方不受影响）。
+    """
+    return ok(build_plan_run_detail(db, run_id, include_jobs=include_jobs))
 
 
 @router.get("/plan-runs/{run_id}/jobs", response_model=ApiResponse[list[JobInstanceOut]])

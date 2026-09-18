@@ -343,7 +343,8 @@ export default function PlanExecutePage() {
       const nowMs = Date.now();
       const needIds = pickRunsNeedingDeviceFetch(recentPlanRuns, nowMs);
       const details = needIds.length > 0
-        ? await Promise.all(needIds.map((id) => api.planRuns.get(id)))
+        // #2623：此处只读 run_context.dispatch_device_ids——不拉内嵌 jobs
+        ? await Promise.all(needIds.map((id) => api.planRuns.get(id, { includeJobs: false })))
         : [];
       const byId = new Map(details.map((detail) => [detail.id, detail]));
       const candidates = recentPlanRuns.map((run) => {
