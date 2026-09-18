@@ -20,6 +20,86 @@ _ADB_FORK_SERVER_LINE_RE = re.compile(r"^\s*(\d+)\s+(\d+)\s+(.+)$")
 _ADB_FORK_SERVER_ARGS_RE = re.compile(r"\bfork-server\s+server\b")
 _ADB_PORT_RE = re.compile(r"(?:-L\s+tcp:(\d+)|-P\s+(\d+))")
 
+# #2757：df 容量 token 的单位后缀（toybox 人类可读形态；busybox 是裸 1K-blocks）
+_DF_SIZE_SUFFIXES = {
+    "T": 1024 ** 4,
+    "G": 1024 ** 3,
+    "M": 1024 ** 2,
+    "K": 1024,
+}
+
+
+def _parse_df_size(token: str) -> Optional[int]:
+    """df 输出里的单个容量 token → 字节数；非容量 token（`53%`、挂载点）→ None。"""
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)([TGMK]?)", token.strip())
+    if not match:
+        return None
+    unit = _DF_SIZE_SUFFIXES.get(match.group(2).upper(), 1)
+    return int(float(match.group(1)) * unit)
+
+
+def parse_df_data(output: str) -> Tuple[Optional[int], Optional[int]]:
+    """``df /data`` 输出 → ``(total_bytes, used_bytes)``；解析不出返回 ``(None, None)``。
+
+    兼容三种真实形态（判据保守，对不上就 None，不猜）：
+
+    - toybox 两行表：``<fs> <size> <used> <avail> <pct> <mount>``（size 带人类后缀）
+    - busybox 两行表：同列布局，但表头是 ``1K-blocks``——裸数字是 KiB，须 ×1024
+    - toybox 单行：``/data: <used> <avail> <pct> /data``（total = used + avail）
+    """
+    lines = output.splitlines()
+    one_k_blocks = any("1K-blocks" in line for line in lines)
+    rows = [line for line in lines if "/data" in line]
+    if not rows:
+        return (None, None)
+    tokens = rows[0].split()
+    if not tokens:
+        return (None, None)
+
+    def _size(token: str) -> Optional[int]:
+        parsed = _parse_df_size(token)
+        if parsed is None:
+            return None
+        return parsed * 1024 if one_k_blocks else parsed
+
+    sizes = [s for s in (_size(t) for t in tokens[1:]) if s is not None]
+    if tokens[0].endswith(":"):
+        # 单行形态：首 token 是 `/data:`，其后可解析的容量依次是 used / avail
+        if len(sizes) >= 2:
+            return (sizes[0] + sizes[1], sizes[0])
+        return (None, None)
+    # 两行表形态：跳过 fs 列后依次是 size / used / avail
+    if len(sizes) >= 2:
+        return (sizes[0], sizes[1])
+    return (None, None)
+
+
+def collect_device_disk(adb_path: str, serial: str) -> Dict[str, Optional[int]]:
+    """采集单台设备 ``/data`` 分区容量（#2757）。失败/解析不出 → None 字段。
+
+    静态设备（dev 夹具，``STP_STATIC_DEVICE_SERIALS``）无真实存储，直接返回
+    None——不伪造容量，覆盖率统计保持诚实。
+    """
+    empty = {"disk_total": None, "disk_used": None}
+    if serial in set(_static_device_serials()):
+        return dict(empty)
+    try:
+        result = subprocess.run(
+            [adb_path, "-s", serial, "shell", "df", "/data"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except Exception as e:
+        logger.debug("device_disk_df_failed serial=%s error=%s", serial, e)
+        return dict(empty)
+    total, used = parse_df_data(result.stdout or "")
+    if total is None:
+        logger.debug(
+            "device_disk_df_unparsed serial=%s out=%r", serial, (result.stdout or "")[:120],
+        )
+    return {"disk_total": total, "disk_used": used}
+
 
 def _static_device_serials() -> list[str]:
     """Optional dev/testing override: provide a static device list without ADB.
