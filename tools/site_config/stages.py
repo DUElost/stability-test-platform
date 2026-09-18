@@ -98,8 +98,12 @@ SITE_PROMETHEUS_CONFIG = "etc/stp/prometheus/prometheus.yml"
 # 现在与采样器同批安装：monitoring_site_assets() 把它纳入共享路径归属守卫，目标文件
 # 不带本站 <deploy-root> 标记时 fail-closed 报 install_conflict，不静默覆盖运维手改。
 MONITORING_RULES = (
+    # #2643 方向 1：站点只装**站点可见面**规则（site-alerts.yml 的 2 条 textfile 面）；
+    # 平台规则里其余 19 条引用的都是控制面进程指标，站点那个唯一的 node-exporter job
+    # 结构上抽不到 → 装了也恒不触发，却让「监控就绪」的假象成立。dest 保持原名与
+    # 原路径：升级时覆盖同名文件，不会在 rules/ 里留下旧副本。
     (
-        "deploy/prometheus/alerts-stability-platform.yml",
+        "deploy/prometheus/site-alerts.yml",
         "etc/stp/prometheus/rules/alerts-stability-platform.yml",
         0o644,
     ),

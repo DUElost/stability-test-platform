@@ -132,8 +132,11 @@ Agent 侧的挂载在这些站点由运维按分享约定自行完成，S5 对�
 - **S2**：渲染抓取配置 `/etc/stp/prometheus/prometheus.yml`（job `file-server` → `127.0.0.1:9100`）、
   监听参数 `/etc/default/prometheus`（`--web.listen-address=127.0.0.1:<prometheus_port>`，默认 9091）
   与 `/etc/default/prometheus-node-exporter`（回环 + `--collector.nfsd` + textfile 采集器）；
-- **S2b**：渲染**告警规则** `/etc/stp/prometheus/rules/alerts-stability-platform.yml`
-  （仓库那份是唯一事实源；由 `prometheus.yml` 的 `rule_files` 段加载，两者缺一规则就只是文件）；
+- **S2b**：渲染**站点可见面的告警规则** `/etc/stp/prometheus/rules/alerts-stability-platform.yml`
+  （源文件 `deploy/prometheus/site-alerts.yml`，#2643 方向 1：站点只装它那个唯一抓取面
+  能产生样本的规则；平台全量规则 `deploy/prometheus/alerts-stability-platform.yml` 留给
+  控制面自己的挂载路径，见 [README](./README.md) 的可观测性一节；由 `prometheus.yml` 的
+  `rule_files` 段加载，两者缺一规则就只是文件）；
 - **S4**：落地宿主进程内存采样器（`/usr/local/sbin/stp-mem-top` + `stp-mem-top.timer`）与
   **退役判据守卫**（`stp-script-guard.{service,timer}`，每日 09:30 跑 `--guard`、落 textfile
   指标，见 [script-versioning](../development/script-versioning.md)），`enable --now` 相应单元，
