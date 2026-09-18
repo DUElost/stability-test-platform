@@ -1,8 +1,7 @@
 # Agent Note — 周期回归收缩准入：不可用设备显式剔除并审计（#2651）
 
-- **Issue**: #2651
-- **Status**: Done
-- **Class**: feature
+Status: implemented
+Class: feature
 
 ## Decision
 
