@@ -1,6 +1,8 @@
 # 步骤停滞判据（#115）——阶段 1：引擎层能力
 
-> **状态**：阶段 1 已落地（2026-08-02，PR 待审）。零行为变更，183 台现有脚本不受影响。
+> **状态**：阶段 1 已落地（2026-08-02）；**阶段 2 大面积接入**、**阶段 3 Part 1 已落地**
+> （#872，2026-09-13）——逐阶段实况与判据变更见 §5（2026-09-18 回写，基线 `3aa0638e`）。
+> 阶段 1 零行为变更，现有脚本不受影响。
 > **关联**：#115（本提案）、#114（内层钟可配）、#117（progress-aware barrier 治本）。
 > **配套**：`backend/agent/pipeline_engine.py` 的 `_resolve_step_stall_seconds` / `_pump_process`。
 
@@ -35,7 +37,9 @@
   - reader B（stderr）：识别 `PROGRESS ` 前缀 → **丢弃**并刷 `last_progress`；普通输出只进缓冲、不刷钟
   - 主线程：`poll()` 轮询（间隔 1s），判总时长钟与停滞钟；触发后 `_terminate_process_tree` → `wait` → `join` 两个 reader
 - `_run_script_action` 接入：超时文案区分钟 —— `script timeout after Ns`（总时长）vs `script stalled after Ns of no progress`（停滞）
-- 每收到 `PROGRESS` 行刷新 `last_progress_at`（经 `_update_execution_state`），供阶段 3 的 progress-aware barrier 使用
+- 每收到 `PROGRESS` 行刷新 `last_progress_at`（经 `_update_execution_state`），供阶段 3 的
+  progress-aware barrier 使用 —— **该用途已被 #872 修订**：barrier 不再以戳新鲜度为判据，
+  `last_progress_at` 降级为诊断信号（超时日志里的 peer 快照），详见 §5 阶段 3 行
 
 ### 实现细节（都是规模上才会暴露的坑）
 
@@ -91,14 +95,24 @@ PROGRESS {"seq": N, "step": "fill", "written_kb": 12345, ...}
 （stall 联动门，`pipeline_engine.py` docstring 为准），即「0 只对已接打戳 +
 显式开停滞钟的步骤表达」——与上文开门条件一致，不再是「待开」。
 
-## 5. 后续阶段（未实施）
+## 5. 阶段进度（2026-09-18 回写 · 基线 `3aa0638e`）
 
-- **阶段 2**：脚本按 ADR-0020 新建版本接入 `PROGRESS` 打戳（`flash_firmware`
-  打阶段序号，阶段推进时 `seq+1`；`monkey_setup` fill/push 用 `dd status=progress`
-  或轮询 `stat -c %s`）；随后逐个 PlanStep 打开 `stall_seconds`
-- **阶段 3**（#117 治本）：progress-aware barrier —— 等待方看 peer 的
-  `last_progress_at` 是否在推进，推进则续期，全体停滞才启动超时钟。数据已就绪
-  （coordinator `job_entries` 有 `execution_state` + `last_progress_at`）。
-  前置：#117 需补 job→PRH 映射
-- **阶段 4**：脚本内层钟（`_adb.py` 等）定位收窄为「防 adb 客户端挂死 +
-  细粒度诊断」，缺省值校验 ≥ 外层配置
+> **为什么要回写**：本节原题为「后续阶段（**未实施**）」，而阶段 3 的 Part 1 已于 2026-09-13
+> 落地（`15a6bb45`，#872），阶段 2 也已大面积接入。更糟的是原文对阶段 3 判据的描述与 tip
+> 代码**相反**——「文档说未实施 + 代码已改判据」同时成立时，按文档行事的人会去修一个已经
+> 不存在的缺陷。逐条状态如下，每条附 `file:line`；计数一律给出**可重算的口径**，不抄手。
+
+| 阶段 | 状态 | 现状与落点 | 重算口径 |
+|---|---|---|---|
+| **1** 引擎层能力（双 reader + 停滞钟解析） | ✅ 已实施 | `_resolve_step_stall_seconds` / `_pump_process`（本文 §2） | — |
+| **2** 脚本接入 `PROGRESS` 打戳 → 逐步骤开 `stall_seconds` | 🟡 **打戳侧 24/34 族已接入**；`stall_seconds` 仍默认关闭 | 发射器在各族的 `_adb.py` / `_lib.py` 里：`sys.stderr.write(f"PROGRESS {json.dumps(payload, ...)}")`（如 `clean_env/v1.1.0/_adb.py:75`、`gpu_check/v1.0.9/_lib.py:131`、`sleep_setup/v1.0.2/_lib.py:102`；`flash_firmware/v1.3.16/flash_firmware.py:691` 用 `_PROGRESS_PREFIX` 常量形态） | 族数：`grep -rl 'PROGRESS ' backend/agent/scripts --include=*.py \| sed -E 's\|backend/agent/scripts/([^/]+)/.*\|\1\|' \| sort -u \| wc -l` → 24；分母：`ls -d backend/agent/scripts/*/ \| wc -l` → 34。**判据必须写明**：换成更窄的 needle（只认 `_PROGRESS_PREFIX =`）会得出 4——那是假阴性，同一族可有两种发射器写法 |
+| **3** progress-aware barrier（#117 治本） | 🟡 **Part 1 已落地**（#872），且**判据与原设想不同** | `pipeline_engine.py:1382-1412` `_peers_are_progressing`：`WAITING_EXECUTION_SLOT` 与 **`EXECUTING_STEP` 执行态本身**都算活性证据；原文的「看 peer 的 `last_progress_at` 是否在推进，推进则续期」**已作废**——戳新鲜度降级为超时日志里的诊断快照。理由写在 docstring 里：脚本打戳覆盖率不齐（长步骤如装包/刷机未必刷新戳），旧判据会把合法长步骤当停滞、**误杀早完成者（run 338 实证）**。信任执行态必须有兜底：`_DEFAULT_BARRIER_MAX_WAIT_SECONDS`（`:1445-1456` 应用、`:226`/`:235` 定义），旋钮 `STP_BARRIER_MAX_WAIT_SECONDS=1800`（`:226`），Plan 显式配置优先，0/负值 = 不设上限（保留 #174 调试语义） | 判据变更史：`git show 15a6bb45 --stat`；旋钮登记：`docs/development/environment-variables.md:326` |
+| **4** 脚本内层钟（`_adb.py` 等）定位收窄 | ⬜ 未实施 | 仍是「防 adb 客户端挂死 + 细粒度诊断」之外的原语义；缺省值 ≥ 外层配置的校验未做 | — |
+
+**阶段 3 未做完的部分**（保持本单可继续跟踪，不宣称收口）：
+
+- 「全体停滞才启动超时钟」这一原始设想，在 #872 之后**语义已变**——现判据是「只要有一个
+  peer 处于执行态/排队态就续期，硬顶到点终止」。是否还需要按原设想收紧，属 #117 的裁决，
+  不由本设计稿单方面宣布；
+- `stall_seconds` 的逐步骤开启（阶段 2 的后半）仍未推进：`PlanStep.stall_seconds`
+  （`backend/models/plan.py:109`）可空、缺省关闭，缺省值链见 `environment-variables.md:402`。

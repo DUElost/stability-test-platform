@@ -520,6 +520,7 @@ FAILED   → QUEUED             # 人工重试改走准入队列（评审收口�
 | 执行心跳超时 | `900` / patrol `300` | `job_timeout_config.py` 既有 | 与三信号并列灰度 |
 | 业务进度超时 | **v1 不独立判杀** | `last_progress_at` 仅观测，避免与 execution hb 双杀 | 是否引入 stall 钟 |
 | barrier 超时 | `STP_BARRIER_TIMEOUT_SECONDS=600` | ≥ coordinator timeout | INIT 慢机 |
+| barrier **续期硬顶** | `STP_BARRIER_MAX_WAIT_SECONDS=1800` | **#872 Part 1 已落地**：判据改为信任 `EXECUTING_STEP` 执行态后，必须有绝对上限兜底（`pipeline_engine.py:226`/`:235`，应用 `:1445-1456`）；Plan 显式配置优先，0/负=不设上限（保留 #174 调试语义） | 真卡死的 peer 被无限续期 |
 | counter reconcile | `300s` | §6 低频自愈 | 漂移率升高时可降至 120s |
 | barrier 形态 | **计数器 + Event（已接线）** | #62；非独立 PRH 状态机 | 是否升级状态机 |
 | `PlanRunHost.status` | 现枚举沿用 | — | 枚举收敛另开 |
@@ -551,4 +552,5 @@ FAILED   → QUEUED             # 人工重试改走准入队列（评审收口�
 | 2026-07-30 | **host-scale 门槛拆分为 B1 / B2**（见「门槛拆分」章节）。动机：单条门槛把可用合成设备验证的 host 调度维度与只能用真机的 device 执行维度捆在一起，库存周期内 host 维度零施压，§缺口③ 的控制面单进程载荷瓶颈无法提前暴露。**拆分不降低任何一档指标要求**，且显式规定「B1 通过不构成 host-scale 整体验收」。B1 依赖仓库已有的 `STP_STATIC_DEVICE_SERIALS`（`device_discovery.py:13-25`，原为无 adb 环境的 smoke 钩子），配合 `AGENT_INSTALL_DIR` 做单机多实例状态隔离——两者均为**代码层复核结论，尚无实机数据**；B1 第一步是单机 5 实例冒烟。已知边界：`AGENT_DIR` 不随 `AGENT_INSTALL_DIR` 变，多实例共享代码时禁止热更新。 |
 | 2026-08-25 | **#288 / #291 文档同步（#420）**：全文去掉「`updated_at` 现行存活判据 / 单点 `extend_lock` 回退保留」表述；缺口④遗留、§5 已知缺口、交互矩阵 recycler/LeaseRenewer、风险回滚列改为现行事实（仅 batch；缺信号锚定下发时刻；`updated_at` 不作判据）。 |
 | 2026-09-16 | **#2324 Dashboard 观测面**：缺口③ / P2 增补 observation-plane 决策——`dashboard_summary` WS ≤1Hz；`DEVICE_UPDATE` 变更门控；废弃 Agent WS 逐设备 fan-out 与「事件即全量 REST refetch」；UI/Agent 限流分桶；REST `dashboard-summary` = 冷启动 + 慢兜底。 |
+| 2026-09-18 | **旋钮表事实回填（不改决策）**：#872 Part 1（`15a6bb45`，2026-09-13）已把 barrier 续期判据改为**信任 `EXECUTING_STEP` 执行态**并配绝对硬顶 `STP_BARRIER_MAX_WAIT_SECONDS=1800`，本 ADR 的 barrier 旋钮行此前只登记了 `STP_BARRIER_TIMEOUT_SECONDS`。仅补记既成事实与其兜底约束；判据语义与设计理由见 `docs/design/2026-08-step-stall-detection.md` §5（阶段 3 行）。|
 | 2026-09-16 | **#2369 观测面续**：PlanRun 详情 `JOB_STATUS`/`PRECHECK_UPDATE` 2s 合流节流；`visibilitychange` 按域失效（禁无参全仓 invalidate）；`DEVICE_UPDATE` 收窄到 `fleet:devices` room，dashboard 全局不再订阅。 |

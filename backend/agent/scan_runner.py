@@ -33,6 +33,11 @@ except ImportError:
             return Path(raw)
         return Path("/mnt/hdd/aee_events")
 
+try:
+    from backend.agent.upload_manager import ShardRegistrationError
+except ImportError:  # Agent install layout (no ``backend.`` package)
+    from agent.upload_manager import ShardRegistrationError
+
 logger = logging.getLogger(__name__)
 
 _SCAN_SUBPROCESS_TIMEOUT = 600
@@ -90,6 +95,12 @@ class ScanRunner:
     _worker_lock = threading.Lock()
     _pending: OrderedDict[int, _ScanJob] = OrderedDict()
     _worker_started = False
+    # #739 面② / #2188 D 步：分片登记失败计数（进程级累计，重启清零）——
+    # 「文件已落 dedup/、清单未写 _meta」的半交付此前只混在 scan_queue_job_failed
+    # 日志里；经心跳上报（main.get_outbox_counts → scan_shard_register_failure_total）
+    # 后可按 host 告警。下轮 scan_now 幂等重写自愈，无需 worker 自动重试。
+    _shard_register_failures = 0
+    _shard_failure_lock = threading.Lock()
 
     def __init__(self) -> None:
         self._scan_tool_python: str = ""
@@ -113,7 +124,20 @@ class ScanRunner:
             cls._pending.clear()
         with cls._worker_lock:
             cls._worker_started = False
+        with cls._shard_failure_lock:
+            cls._shard_register_failures = 0
         cls._host_scan_semaphore = threading.Semaphore(1)
+
+    @classmethod
+    def shard_register_failure_total(cls) -> int:
+        """进程级分片登记失败累计（心跳上报口径，重启清零）。"""
+        with cls._shard_failure_lock:
+            return cls._shard_register_failures
+
+    @classmethod
+    def _record_shard_failure(cls) -> None:
+        with cls._shard_failure_lock:
+            cls._shard_register_failures += 1
 
     @classmethod
     def enqueue_scan_now(
@@ -219,6 +243,16 @@ class ScanRunner:
                     continue
                 try:
                     cls._execute_job(job)
+                except ShardRegistrationError:
+                    # #739 面② / #2188 D 步（#2474 残余）：文件已落 dedup/、清单
+                    # 未写 _meta＝半交付——专用标记 + 计数器（经心跳上报），不再与
+                    # 普通 scan 失败混同一日志；worker 存活语义与下方分支一致。
+                    cls._record_shard_failure()
+                    logger.exception(
+                        "scan_shard_register_failed plan_run=%d host=%s "
+                        "(file copied, manifest missing; next scan_now rewrites)",
+                        job.plan_run_id, job.host_id,
+                    )
                 except Exception:
                     logger.exception(
                         "scan_queue_job_failed plan_run=%d host=%s",

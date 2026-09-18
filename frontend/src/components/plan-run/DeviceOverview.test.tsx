@@ -491,3 +491,113 @@ describe('DeviceOverview — 连接/执行 双维度', () => {
     expect(screen.getByTestId('device-status-filter-running')).toBeInTheDocument();
   });
 });
+
+// ── #83：表格视图行虚拟化（minimap 保留全量）────────────────────────────────
+//
+// jsdom 没有布局引擎（`docs/development/testing.md` §4），所以这里**不声称**证明了
+// 「滚动窗口在真机上落在哪」。被测的是**结构与语义**：过阈值才进虚拟层、进层后
+// 表格体只渲染窗口内的行、facets 与 minimap 的全集语义不受影响。几何常量锁在
+// `deviceTableVirtual.ts`，由 `tests/test_frontend_device_table_virtual_guard_83.py` 静态守卫。
+vi.mock('@tanstack/react-virtual', () => {
+  const ROW = 43;
+  const VIEWPORT_ROWS = 12;
+  return {
+    useVirtualizer: ({ count, enabled }: { count: number; enabled?: boolean }) => {
+      const n = enabled === false ? count : Math.min(count, VIEWPORT_ROWS);
+      const items = Array.from({ length: n }, (_, i) => ({
+        key: i,
+        index: i,
+        start: i * ROW,
+        end: (i + 1) * ROW,
+        size: ROW,
+        lane: 0,
+      }));
+      return {
+        getVirtualItems: () => items,
+        getTotalSize: () => count * ROW,
+        scrollToIndex: vi.fn(),
+      };
+    },
+  };
+});
+
+function manyDevices(total: number): PlanRunDevicesPayload {
+  const base = fixture.devices[0];
+  return {
+    plan_run_id: 12,
+    total,
+    by_status: { all: total, running: total },
+    by_host: { 'host-101': total },
+    devices: Array.from({ length: total }, (_, i) => ({
+      ...base,
+      device_id: i + 1,
+      device_serial: `DEV-${String(i + 1).padStart(4, '0')}`,
+      job_id: 9000 + i,
+    })),
+  };
+}
+
+describe('DeviceOverview 表格虚拟化（#83）', () => {
+  function renderTableWithMany(total: number) {
+    const big = manyDevices(total);
+    const result = renderWithClient(<DeviceOverview data={big} />);
+    fireEvent.click(screen.getByTestId('device-overview-table-btn'));
+    return result;
+  }
+
+  function renderedRowCount(container: HTMLElement): number {
+    return container.querySelectorAll('[data-testid^="device-row-"]').length;
+  }
+
+  it('超过阈值才进虚拟层：4 行仍走静态表格、不挂滚动容器', () => {
+    const { container } = renderWithClient(<DeviceOverview data={fixture} />);
+    fireEvent.click(screen.getByTestId('device-overview-table-btn'));
+    expect(screen.queryByTestId('device-table-scroll')).not.toBeInTheDocument();
+    expect(renderedRowCount(container)).toBe(4); // 静态路径逐行渲染，行为与改造前一致
+  });
+
+  it('500 行走虚拟层：只渲染窗口内的行，未渲染部分用两段空白垫片补回总高', () => {
+    const { container } = renderTableWithMany(500);
+    const scroller = screen.getByTestId('device-table-scroll');
+    expect(scroller).toBeInTheDocument();
+    expect(scroller.getAttribute('data-virtual')).toBe('true');
+    expect(scroller.getAttribute('data-row-total')).toBe('500');
+    expect(scroller.className).toMatch(/overflow-y-auto/);
+
+    const rows = renderedRowCount(container);
+    expect(rows).toBeGreaterThan(0);
+    expect(rows).toBeLessThan(60); // 关键判据：DOM 行数与总数解耦（改造前 = 500）
+
+    const spacers = Array.from(
+      container.querySelectorAll<HTMLTableRowElement>('tbody > tr[aria-hidden="true"]'),
+    );
+    expect(spacers.length).toBeGreaterThan(0);
+    // 底部垫片必须覆盖「未渲染的绝大部分行」——否则滚动条长度失真、滚到一半就到底
+    const bottomPad = Math.max(
+      ...spacers.map((el) => parseInt(el.style.height || '0', 10) || 0),
+    );
+    expect(bottomPad).toBeGreaterThan(400 * 43);
+    expect(bottomPad).toBeLessThanOrEqual(500 * 43);
+  });
+
+  it('虚拟层不改 facets 口径：chip 仍显示全集总数（后端全集语义，前端不得二次统计）', () => {
+    renderTableWithMany(500);
+    expect(screen.getByTestId('device-status-filter-all')).toHaveTextContent('500');
+    expect(screen.getByTestId('device-status-filter-running')).toHaveTextContent('500');
+  });
+
+  it('minimap 保留全量：方块阵每设备 1 节点，不跟着虚拟化（#83 的约束）', () => {
+    const { container } = renderWithClient(<DeviceOverview data={manyDevices(500)} />);
+    fireEvent.click(screen.getByTestId('device-overview-grid-btn'));
+    expect(container.querySelectorAll('[data-testid^="minimap-cell-"]').length).toBe(500);
+  });
+
+  it('虚拟层里点行仍把设备回传给父组件（窗口内的行可点击）', () => {
+    const onSelect = vi.fn();
+    const big = manyDevices(500);
+    renderWithClient(<DeviceOverview data={big} onSelectDevice={onSelect} />);
+    fireEvent.click(screen.getByTestId('device-overview-table-btn'));
+    fireEvent.click(screen.getByTestId('device-row-9000'));
+    expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ job_id: 9000 }));
+  });
+});

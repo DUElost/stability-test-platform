@@ -28,6 +28,10 @@ from backend.core.metrics import (
 from backend.models.enums import EventState, PlanRunStatus
 from backend.models.schedule import TaskSchedule, schedule_timestamp
 
+# 中心存储族清单的单一来源（#2188）：purge 桶与只读测量必须同源，否则新增一族
+# 会「被清但不被测量」（E-2 看不见）或反之。模块顶层导入——函数体内 import 受
+# tools/dev/check_inner_imports.py 棘轮约束（基线只许下调）。
+from backend.storage_families import JOBS_FAMILY, RUN_FAMILIES
 from backend.core.settings.scheduler import get_scheduler_settings
 
 
@@ -255,7 +259,8 @@ def purge_run_storage_dirs(run_ids: list, jobs_by_run: dict | None = None) -> se
 
     覆盖两类桶（同根、不同分桶维度）：
 
-    - ``devices|dedup|jira/{run_id}/`` —— 按 **run** 分桶，由 ``run_ids`` 展开；
+    - ``RUN_FAMILIES``（当前 ``devices|dedup|jira|_meta``）``/{run_id}/`` —— 按 **run**
+      分桶，由 ``run_ids`` 展开；清单是 ``backend/storage_families.py`` 的单一来源；
     - ``jobs/{job_id}/``（#2031）—— 按 **job** 分桶（``backend/agent/aee/paths.py``
       的 artifact promote 与 Watcher LogPuller 落点），由 ``jobs_by_run``
       （``{run_id: [job_id, ...]}``）展开。job 目录失败按**所属 run** 归因，
@@ -289,16 +294,17 @@ def purge_run_storage_dirs(run_ids: list, jobs_by_run: dict | None = None) -> se
             )
 
     for run_id in run_ids:
-        # jira/{run_id}/ holds extract bundles (#1698); omit → orphan after row delete.
-        # _meta/{run_id}/ (#2188 D-step manifest shards) shares the run lifecycle;
-        # omit → residue no retention pass can ever reach (E-2).
-        for sub in ("devices", "dedup", "jira", "_meta"):
+        # Every run-keyed family must be purged: jira/{run}/ holds extract bundles
+        # (#1698) and _meta/{run}/ holds upload-manifest shards (#2188 D-step) — a
+        # family missing here is residue no retention pass can ever reach (E-2).
+        # The list is single-sourced (see backend/storage_families.py).
+        for sub in RUN_FAMILIES:
             _purge(base / sub / str(int(run_id)), run_id)
         # #2031：jobs/{job_id}/ 的唯一索引是 StepTrace/JobArtifact 行，而它们在
         # 同一批里被删（保留期 3 天 << artifact 清理器 30 天）——不在这里清掉即
         # 永不可回溯的孤儿目录，随 job 数线性累积。
         for job_id in jobs_by_run.get(run_id, ()):
-            _purge(base / "jobs" / str(int(job_id)), run_id)
+            _purge(base / JOBS_FAMILY / str(int(job_id)), run_id)
     if removed:
         logger.info("nfs_retention_purged dirs=%d failed_runs=%d", removed, len(failed))
     return failed

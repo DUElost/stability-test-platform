@@ -159,6 +159,8 @@ lifecycle:
 
 ### D8 · 退避中设备计入 failure_threshold (BO5)
 
+> **已被取代（2026-09-18）**：`failure_threshold` 判定轴整体由 ADR-0048 移除，本决策失去作用对象；job 级失败退避机制（D1–D7）不受影响。
+
 `PlanAggregator.on_job_terminal` 计算 PlanRun.failure_threshold 时,退避中的 job 视同已失败:
 
 - 退避中 job 状态仍是 `RUNNING`,但 `current_failure_streak >= 3` 视为"已观察到稳定失败"

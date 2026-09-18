@@ -5,9 +5,11 @@ node-exporter 一个抓取 job，而安装清单把**整份**仓库规则文件�
 规则在站点上恒无样本——既不触发也不报错，而 installer 只看「服务起来 + `/-/ready`
 通」就报 `monitoring_ready`。**「监控就绪」与「规则结构性不可触发」同时成立。**
 
-**本文件只落 #2643 的建议 3（机械对拍 + 登记存量），不替 owner 裁决方向**：
-方向有两个（站点只装「站点可见面」规则 = 建议 1 / 站点补控制面 `/metrics` 抓取 = 建议 2），
-两个终态都会让下面的债务清单**清零**——清零前它不许扩大，也不许原地蒸发。
+**终态（#2643 方向 1 已落地，owner 裁决 2026-09-18）**：站点只装「站点可见面」规则
+（`deploy/prometheus/site-alerts.yml`，2 条 textfile 面），平台文件里其余 19 条引用的都是
+控制面进程指标——站点那个唯一的 node-exporter job 结构上抽不到，装了也恒不触发。
+债务清单因此**已清零**，且判据保留两个方向的可判性：往站点文件里加控制面域规则 → 红；
+站点子集与平台文件定义分叉 → 红（新增的对拍）。
 
 真值全部**派生**，不用 grep 计数：
 
@@ -39,6 +41,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 STAGES_REL = "tools/site_config/stages.py"
 SITE_PROMETHEUS_REL = "deploy/prometheus/prometheus.yml"
 RULES_REL = "deploy/prometheus/alerts-stability-platform.yml"
+#: 站点实际安装的规则文件（#2643 方向 1：站点只装站点可见面）。
+SITE_RULES_REL = "deploy/prometheus/site-alerts.yml"
 
 #: Prometheus 内置序列——站点那个唯一 job 也能给出的东西。**不列 `node_*` 命名空间**：
 #: 结构层（`test_prometheus_alerts_contract.py`）只认「注册表 ∪ textfile 产物」，`node_*`
@@ -49,32 +53,10 @@ EXPECTED_SITE_JOBS = {"file-server": {"127.0.0.1:9100"}}
 
 _METRIC_TOKEN = re.compile(r"[a-zA-Z_:][a-zA-Z0-9_:]*")
 
-#: 存量清单（只能缩短）：装到站点、但引用的指标只有控制面才有生产者的规则。
-#: 终态出口 = #2643：建议 1（站点只装站点可见面规则）或建议 2（站点补控制面 `/metrics`
-#: 抓取 job）任一落地后，本清单必须清空；新增一条控制面域规则进站点而不处理 = 红。
-_SITE_INERT_RULES = frozenset(
-    {
-        "StabilityAgentTerminalOutboxBacklog",
-        "StabilityClaimLeaseFailedSpike",
-        "StabilityCsrfMissingOriginReferer",
-        "StabilityCsrfOriginRejected",
-        "StabilityDbDeadlockDetected",
-        "StabilityDbLockWaitSustained",
-        "StabilityDispatchGateFailed",
-        "StabilityDispatchGateSlow",
-        "StabilityGhostJobCompleteEndpoint",
-        "StabilityHostHeartbeatTimeout",
-        "StabilityMergeSkipToolNotConfigured",
-        "StabilityPatrolStall",
-        "StabilityPlanRunAggregationFailed",
-        "StabilityPlanRunCounterDrift",
-        "StabilityPostCompletionEnqueueFailed",
-        "StabilitySaqQueueDepth",
-        "StabilityUnlinkedFixable",
-        "StabilityUnisocDirAbandonedRegression",
-        "StabilityUnisocUnresolvedBacklog",
-    }
-)
+#: 存量清单（**已清零**）：#2643 方向 1（站点只装站点可见面）落地后，站点侧不再有
+#: 「装了但结构性无生产者」的规则。判据保留「新增即红」的方向——往站点文件里加一条
+#: 控制面域规则会在这里被抓住；清单重新变成非空即说明分层被破坏。
+_SITE_INERT_RULES: frozenset[str] = frozenset()
 
 
 def site_installed_rule_files() -> list[str]:
@@ -168,11 +150,12 @@ def test_site_scrape_surface_premise_is_single_node_exporter_job() -> None:
     )
 
 
-def test_site_installed_files_are_the_known_rule_file() -> None:
+def test_site_installed_files_are_the_site_subset() -> None:
+    """#2643 方向 1：站点装的是**站点可见面子集**（site-alerts.yml），不是整份平台规则。"""
     installed = site_installed_rule_files()
-    assert installed == [RULES_REL], (
-        f"站点装的规则文件是 {installed}，与本判据绑定的 {RULES_REL} 不再一致——"
-        "分层（建议 1）落地了就请同步本文件"
+    assert installed == [SITE_RULES_REL], (
+        f"站点装的规则文件是 {installed}，与方向 1 的终态（仅 {SITE_RULES_REL}）不一致——"
+        "若改回整份平台文件或补抓取（方向 2），请连同下面的判据与债务清单一起裁决"
     )
 
 
@@ -203,7 +186,10 @@ def test_debt_register_is_not_hollow() -> None:
     assert len(control_plane) >= 100, "控制面注册表指标数异常偏少——全集解析退化了"
     assert set(textfile_metric_index()), "textfile 生产者索引为空——站点可见面的判据基础没了"
     inert, _detail = inert_rules_at_site()
-    assert len(inert) >= 10, f"只派生出 {len(inert)} 条站点不可触发规则，与结构性事实不符（分类退化）"
+    assert inert == set(), (
+        f"站点装入的规则里仍有结构性不可触发的：{sorted(inert)}——"
+        "方向 1 的终态是**零条**；往站点文件里加控制面域规则会在这里红"
+    )
 
 
 def test_folding_multiline_expr_is_still_read() -> None:
@@ -229,3 +215,35 @@ def test_grep_shape_undercounts_the_real_value() -> None:
     assert "stability_patrol" not in expr_line
     parsed = dict(rule_expressions(REPO_ROOT / RULES_REL))
     assert "stability_patrol_failure_streak_observed_count" in parsed["StabilityPatrolStall"]
+
+
+def _rules_by_name(path: Path) -> dict[str, dict]:
+    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    return {
+        str(item["alert"]): item
+        for group in doc.get("groups") or []
+        for item in group.get("rules") or []
+        if isinstance(item, dict) and "alert" in item
+    }
+
+
+def test_site_subset_is_verbatim_from_the_platform_file() -> None:
+    """#2643 方向 1 的漂移守卫：站点子集必须是平台文件里的**同一份定义**。
+
+    分层把「装什么」拆成两份文件的代价是「改一处忘一处」——这条对拍把代价关掉：
+    站点文件里每条规则（除 `alert` 外）的全部字段必须与平台文件同名规则逐字段相等；
+    也不得出现平台文件里没有的规则（那等于绕开权威定义面单独增删）。
+    """
+    site_rules = _rules_by_name(REPO_ROOT / SITE_RULES_REL)
+    platform_rules = _rules_by_name(REPO_ROOT / RULES_REL)
+
+    unknown = sorted(set(site_rules) - set(platform_rules))
+    assert not unknown, (
+        f"站点子集里有平台文件不存在的规则：{unknown}——新增规则请先落平台文件"
+        "（权威定义面），再决定是否进站点可见面"
+    )
+    drift = sorted(name for name, rule in site_rules.items() if rule != platform_rules[name])
+    assert not drift, (
+        f"以下规则在站点子集与平台文件里定义不一致：{drift}——"
+        "改规则时改平台文件、再同步子集，别让两份定义分叉"
+    )

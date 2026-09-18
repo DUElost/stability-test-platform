@@ -1,0 +1,13 @@
+# Rendered by the site installer for <deploy-root> — do not edit by hand.
+[Unit]
+Description=Periodic STP PostgreSQL schema-guessing fingerprint probe (every 5 min)
+
+[Timer]
+# 5 分钟一次：告警窗口是 1 小时，这个粒度既够快（聚集出现时 5 分钟内可观测），
+# 又不至于把日志扫描变成常驻负载（脚本只读尾部 8MB）。
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

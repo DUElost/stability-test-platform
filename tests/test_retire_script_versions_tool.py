@@ -404,3 +404,44 @@ def test_credentials_never_appear_in_output(tmp_path, monkeypatch, capsys):
                            "is_active": True, "refs_guard": False}
     assert _mod._apply(_args(tmp_path, manifest), deactivate=True) == 0
     assert "SECRET-VALUE" not in capsys.readouterr().out
+
+
+# --------------------------------------------------------------- --limit 契约
+
+def test_limit_zero_and_negative_rejected_at_parse_time(tmp_path):
+    """审计（2026-09-18）：`--limit 0` 在旧真值判定 `if args.limit:` 下等于**不截断**，
+    配合 `--yes` 即一次退全量；负数则切成「去掉尾部 N 条」。判据上移到 argparse：
+    非正整数在 parse 期直接拒绝，execute/reactivate 两个写入口共用。
+    反证：把 `type=_positive_int` 退回 `type=int` 即红。
+    """
+    manifest = _manifest(tmp_path, [{"script_id": 11, "name": "a", "version": "1.0.0"}])
+    for bad in ("0", "-3"):
+        with pytest.raises(SystemExit):
+            _mod.main(["execute", "--manifest", str(manifest), "--yes", "--limit", bad])
+        with pytest.raises(SystemExit):
+            _mod.main(["reactivate", "--manifest", str(manifest), "--yes", "--limit", bad])
+    assert FakeClient.instances == []  # 不得有任何写路径被触达
+
+
+def test_apply_limit_zero_processes_nothing_even_bypassing_parse(tmp_path):
+    """纵深防御：`_apply` 可被 import 直调，截断判据本身必须是 `is not None`——
+    即使绕过 argparse，`limit=0` 也只许等于「处理 0 条」而不是全量。
+    反证：把 `_apply` 里判据退回 `if args.limit:` 即红。
+    """
+    manifest = _manifest(tmp_path, [{"script_id": 11, "name": "a", "version": "1.0.0"}])
+    assert _mod._apply(_args(tmp_path, manifest, limit=0), deactivate=True) == 0
+    assert FakeClient.instances == []
+
+
+def test_positive_limit_truncates_batch(tmp_path):
+    """`--limit N` 的正路语义不变：只处理前 N 条（分批推进用）。"""
+    manifest = _manifest(tmp_path, [
+        {"script_id": 11, "name": "a", "version": "1.0.0"},
+        {"script_id": 12, "name": "a", "version": "1.0.1"},
+    ])
+    for sid, ver in ((11, "1.0.0"), (12, "1.0.1")):
+        FakeClient.rows[sid] = {"id": sid, "name": "a", "version": ver,
+                                "is_active": True, "refs_guard": False}
+    assert _mod._apply(_args(tmp_path, manifest, limit=1), deactivate=True) == 0
+    assert FakeClient.instances[0].calls == ["delete:11"]
+    assert FakeClient.rows[12]["is_active"] is True

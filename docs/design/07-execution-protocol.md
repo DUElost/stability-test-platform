@@ -40,17 +40,20 @@
 |------|-----|
 | QUEUED | PRECHECK · FAILED（abort / 不可重试错误） |
 | PRECHECK | QUEUED（竞争回队 / reaper stale recovery）· RUNNING · FAILED |
-| RUNNING | SUCCESS · PARTIAL_SUCCESS · FAILED |
+| RUNNING | SUCCESS · FAILED（PARTIAL_SUCCESS 仅存量吸收态，见下，ADR-0048） |
 | FAILED | QUEUED（仅 `retry_plan_run_dispatch` / precheck 重试，回准入队列） |
 | SUCCESS / PARTIAL_SUCCESS | ∅ |
 
-聚合（`plan_run_aggregation.py`）：
+聚合（`plan_run_aggregation.py`，语义 v2 = **ADR-0048**，2026-09-18）：
 
 - 存在 UNKNOWN Job **不得**落终态。
-- 全部 Job 进入 COMPLETED/FAILED/ABORTED 后计算；`abort_requested` 会把自然 SUCCESS/PARTIAL 覆盖为 FAILED。
+- 全部 Job 落终态后：`aborted > 0` 或 `abort_requested` → FAILED（#783 保留）；
+  **其余一律 SUCCESS——设备失败台数不改变 run 状态**（`failed_job_count` 是事实计数）。
+- `PARTIAL_SUCCESS` 不再产出（枚举与全部消费面保留以渲染存量行；行随 retention
+  自然消失）。#1591-④ 里程碑豁免随 `failure_threshold` 判定轴一并移除。
 
-**成败语义（#815）**：SUCCESS / PARTIAL_SUCCESS / FAILED 描述**执行链**结果，不是**测试
-结论**：
+**成败语义（#815 + ADR-0048）**：SUCCESS / FAILED 描述**执行链**结果（是否完整跑完、
+是否被人工中止），不是**测试结论**；「通过率/failure_threshold」不属于执行链轴：
 
 - Job 终态由 lifecycle `termination_reason` 决定（`completed` / `timeout` → COMPLETED；
   `abort` / `manual_exit` → ABORTED；其余 → FAILED，见 `pipeline_engine`），teardown

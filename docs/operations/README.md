@@ -45,7 +45,8 @@ deploy/
 ├── postgres/docker-compose.yml
 ├── nginx/frontend-docker.conf
 └── prometheus/
-    ├── alerts-stability-platform.yml
+    ├── site-alerts.yml               # 站点安装的子集（#2643 方向 1）
+    ├── alerts-stability-platform.yml # 平台全量（控制面挂载路径，ADR-0011 待挂载）
     └── alertmanager.yml
 ```
 
@@ -75,7 +76,11 @@ deploy/
 
 - 指标：`GET /metrics`（生产建议保持 `STP_METRICS_AUTH_REQUIRED=1`，必要时叠加 Nginx IP 白名单）  
 - Grafana：`docs/grafana/stability-platform-dashboard.json`  
-- 告警草案：`deploy/prometheus/alerts-stability-platform.yml`（ADR-0011 待挂载）。
+- 告警规则：平台全量 `deploy/prometheus/alerts-stability-platform.yml`（ADR-0011 待挂载）；
+  **站点安装的是其子集** `deploy/prometheus/site-alerts.yml`（#2643 方向 1：站点 Prometheus
+  只抓本机 node-exporter，平台那批控制面指标在站点结构性无样本——装了也恒不触发，
+  却让「监控就绪」看起来更完整）。两者的定义一致性由
+  `tests/test_site_alert_scrape_surface.py` 的对拍守住。
   规则选择器与 `backend/core/metrics.py` 注册表的一致性由
   `tests/test_prometheus_alerts_contract.py` 守四层：**结构层**（指标/标签一致性，
   恒跑）、**场景层**（阈值 / `for:` 时间窗 / 注解逐字匹配，场景文件同目录
