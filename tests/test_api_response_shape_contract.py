@@ -146,39 +146,58 @@ _TS_MEMBER_RE = re.compile(r"([A-Za-z_$][\w$]*)\s*\??\s*:")
 
 
 def _ts_interface_fields(ts_path: Path, interface: str) -> set[str]:
-    """``export interface X { … }`` 的**顶层**成员名（按缩进排除嵌套对象成员）。"""
+    """``export interface X { … }`` 的顶层成员名（按缩进排除嵌套对象成员），
+    含 ``extends`` 链（#2187：`ProjectSummary extends Project` 一族的继承键
+    必须计入——不解析就会把「配对选错基面」误报成漂移）。链上解析不到的
+    interface 名**报错**而不是静默少收，与 Python 侧基类判据同形。"""
     source = ts_path.read_text(encoding="utf-8")
-    match = re.search(rf"export interface {re.escape(interface)}\b[^{{]*\{{", source)
-    assert match is not None, f"{ts_path.name} 里找不到 interface {interface}（登记表过期？）"
 
-    depth = 0
-    body_start = match.end() - 1
-    for index in range(body_start, len(source)):
-        if source[index] == "{":
-            depth += 1
-        elif source[index] == "}":
-            depth -= 1
-            if depth == 0:
-                body = source[body_start + 1 : index]
-                break
-    else:  # pragma: no cover - 花括号不配对
-        raise AssertionError(f"interface {interface} 花括号不配对")
+    def _members(name: str, match: re.Match) -> set[str]:
+        depth = 0
+        body_start = match.end() - 1
+        for index in range(body_start, len(source)):
+            if source[index] == "{":
+                depth += 1
+            elif source[index] == "}":
+                depth -= 1
+                if depth == 0:
+                    body = source[body_start + 1 : index]
+                    break
+        else:  # pragma: no cover - 花括号不配对
+            raise AssertionError(f"interface {name} 花括号不配对")
+        lines = [line for line in body.splitlines() if line.strip()]
+        assert lines, f"interface {name} 是空的"
+        member_indent = len(lines[0]) - len(lines[0].lstrip())
+        fields: set[str] = set()
+        for raw in lines:
+            indent = len(raw) - len(raw.lstrip())
+            if indent != member_indent:
+                continue  # 嵌套对象/联合类型的成员不属顶层声明面
+            text = raw.split("//")[0].strip()
+            found = _TS_MEMBER_RE.match(text)
+            if found:
+                fields.add(found.group(1))
+        assert fields, f"interface {name} 没解析出任何顶层字段"
+        return fields
 
-    lines = [line for line in body.splitlines() if line.strip()]
-    assert lines, f"interface {interface} 是空的"
-    member_indent = len(lines[0]) - len(lines[0].lstrip())
+    def _one(name: str, stack: tuple[str, ...]) -> set[str]:
+        if name in stack:
+            raise AssertionError(f"interface {name} extends 环：{stack}")
+        match = re.search(rf"export interface {re.escape(name)}\b([^{{]*)\{{", source)
+        assert match is not None, f"{ts_path.name} 里找不到 interface {name}（登记表过期？）"
+        fields = _members(name, match)
+        for base in re.findall(r"\w+", match.group(1) or ""):
+            if base == "extends":
+                continue
+            if re.search(rf"export interface {re.escape(base)}\b", source) is None:
+                raise AssertionError(
+                    f"interface {name} 的 extends 基面 {base} 不在本文件——"
+                    "无法解析其成员；登记该配对前需先扩展本解析器"
+                )
+            fields |= _one(base, stack + (name,))
+        return fields
 
-    fields: set[str] = set()
-    for raw in lines:
-        indent = len(raw) - len(raw.lstrip())
-        if indent != member_indent:
-            continue  # 嵌套对象/联合类型的成员不属顶层声明面
-        text = raw.split("//")[0].strip()
-        found = _TS_MEMBER_RE.match(text)
-        if found:
-            fields.add(found.group(1))
-    assert fields, f"interface {interface} 没解析出任何顶层字段"
-    return fields
+    return _one(interface, ())
 
 
 @dataclass(frozen=True)
@@ -447,6 +466,44 @@ _MODEL_PAIRS: tuple[tuple[str, str, str, str], ...] = (
         "frontend/src/utils/api/types.ts",
         "JobArtifactEntry",
     ),
+    # #2187 opt-in projects.py：6 对全部 MATCH——此前「漂移」实为 TS extends 链
+    # 未解析的假阳性，解析器补展开后零改动登记（判据修正优先于迁就误报）。
+    (
+        "backend/api/schemas/project.py",
+        "ProjectSummaryOut",
+        "frontend/src/utils/api/types.ts",
+        "ProjectSummary",
+    ),
+    (
+        "backend/api/schemas/project.py",
+        "ProjectDetailOut",
+        "frontend/src/utils/api/types.ts",
+        "ProjectDetail",
+    ),
+    (
+        "backend/api/schemas/project.py",
+        "InventorySummaryOut",
+        "frontend/src/utils/api/types.ts",
+        "InventorySummary",
+    ),
+    (
+        "backend/api/schemas/project.py",
+        "InventoryModelOut",
+        "frontend/src/utils/api/types.ts",
+        "InventoryModel",
+    ),
+    (
+        "backend/api/schemas/project.py",
+        "ProjectModelCoverageOut",
+        "frontend/src/utils/api/types.ts",
+        "ProjectModelCoverage",
+    ),
+    (
+        "backend/api/schemas/project.py",
+        "ProjectMapPreviewOut",
+        "frontend/src/utils/api/types.ts",
+        "ProjectMapPreview",
+    ),
     # #2187 opt-in plans.py：触发端点从「误标 PlanRun 的幽灵声明」收紧为真实形状。
     # 对拍当场钉出：plans.run() 旧返回类型多出 9 键（capabilities/jobs/device_count…），
     # 触发端点从不返回——唯一调用点只读 .id 才未出事（types.ts::PlanRunTriggerResult）。
@@ -568,12 +625,17 @@ _MODEL_PAIRS: tuple[tuple[str, str, str, str], ...] = (
 #: 可建模的固定形状。台账内的文件必须**实际 == 登记**：条目失效（已正规化或已删除）即红，
 #: 防僵尸豁免——同 ``_DOC_UNCHECKABLE`` 的口径。
 _MODEL_BLINDSPOT: dict[str, set[str]] = {
-    # #2187 扩面：plans.py。两个 typed 模型已登记对拍；以下两处仍返回运行期
+    # #2187 扩面第 1 批：plans.py。两个 typed 模型已登记对拍；以下两处仍返回运行期
     # 拼装 dict（delete 的 ok 壳 / run preview 的预览聚合）——按台账认领，
     # 正规化为各自端点的小批（preview 的 PlanRunPreview TS 侧已有类型，可对照）。
     "backend/api/routes/plans.py": {
         "delete_plan",
         "preview_plan_run",
+    },
+    # #2187 扩面第 2 批：projects.py 的字典删除端点 ok 壳；`list[dict]` 内层
+    # 无具名模型、判据扫不到（GET /customers 的字典行），暂挂 note Revisit 不隐身。
+    "backend/api/routes/projects.py": {
+        "remove_project_rule",
     },
     # #1520 形状正规化批第一步：summary/artifacts 已升模型进 `_MODEL_PAIRS`；
     # 剩余具名模型逐个对拍前按台账显式豁免（下方 `_MODEL_UNREGISTERED`），
