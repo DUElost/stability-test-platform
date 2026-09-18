@@ -105,6 +105,10 @@ class HeartbeatThread:
         # 初始化为 -cooldown：fresh 进程的 time.monotonic() 可能小于冷却值
         # （新启动的 runner/host 前几分钟），否则首次自动修复会被错误抑制。
         self._last_adb_repair_at: float = -self._adb_repair_cooldown
+        # #2754 自愈半边：批量 offline 的 reconnect offline 自动巡检状态
+        self._reconnect_cooldown: float = _hb.stp_adb_reconnect_cooldown_seconds
+        self._last_reconnect_offline_at: float = -self._reconnect_cooldown
+        self._mass_offline_ticks = 0
         self._devices_lock = threading.Lock()
         self._effective_slots: int = 0
         self._capacity_lock = threading.Lock()
@@ -133,10 +137,12 @@ class HeartbeatThread:
         self._min_poll_interval = _hb.stp_heartbeat_interval_min
         self._max_poll_interval = _hb.stp_heartbeat_interval_max
         self._adb_repair_cooldown = _hb.stp_adb_repair_cooldown_seconds
+        self._reconnect_cooldown = _hb.stp_adb_reconnect_cooldown_seconds
         logger.info(
-            "heartbeat_pacing_reloaded min=%s max=%s adb_repair_cooldown=%s",
+            "heartbeat_pacing_reloaded min=%s max=%s adb_repair_cooldown=%s "
+            "reconnect_cooldown=%s",
             self._min_poll_interval, self._max_poll_interval,
-            self._adb_repair_cooldown,
+            self._adb_repair_cooldown, self._reconnect_cooldown,
         )
 
     @property
@@ -286,6 +292,67 @@ class HeartbeatThread:
                     )
         logger.info(
             "device_disk_sampled devices=%d interval=%ss", len(probe_targets), interval,
+        )
+
+    def _maybe_auto_reconnect_offline(
+        self, devices_list: List[Dict[str, Any]], settings: Optional[Any],
+    ) -> None:
+        """#2754 自愈半边：批量 offline（adbd 会话陈旧）时 ``adb reconnect offline``。
+
+        门控全部从严，**默认关**（``STP_ADB_RECONNECT_AUTO=1`` 显式启用，同 #160
+        的 ``STP_ADB_AUTO_REPAIR`` opt-in 形态）：
+
+        - 触发条件 = offline ≥ 2 且 ≥ 已发现设备的一半（.81 实证形态 15/16）——
+          单台 offline 留给逐单诊断；`reconnect offline` 本身只作用于 offline 设备；
+        - **连续 2 拍**满足才触发（躲瞬时抖动），恢复健康即清零；
+        - 冷却 ``STP_ADB_RECONNECT_COOLDOWN_SECONDS``（默认 600s，与 #160 同款
+          节奏钳制——0/负值钳到下限 + WARNING）。
+
+        与 #160 的关键差别：**不要求 active_count == 0**——offline 设备本就不在
+        服务 job，reconnect 不重启 server、不打扰其它设备的在途会话；而链段交接
+        的批量掉线恰恰发生在任务流动期，等空闲窗口会永远等不到。
+        """
+        if settings is None or not settings.adb_reconnect_auto_enabled:
+            return
+        offline_count = sum(
+            1 for d in devices_list if d.get("adb_state") == "offline"
+        )
+        total = len(devices_list)
+        mass_offline = total > 0 and offline_count >= 2 and offline_count * 2 >= total
+        if not mass_offline:
+            self._mass_offline_ticks = 0
+            return
+        self._mass_offline_ticks += 1
+        if self._mass_offline_ticks < 2:
+            logger.info(
+                "adb_mass_offline_detected offline=%d total=%d "
+                "(tick 1/2 — 等下一拍确认非瞬时抖动)",
+                offline_count, total,
+            )
+            return
+        now = time.monotonic()
+        if now - self._last_reconnect_offline_at < self._reconnect_cooldown:
+            logger.info(
+                "adb_reconnect_offline_suppressed_cooldown offline=%d "
+                "next_in=%.0fs",
+                offline_count,
+                self._reconnect_cooldown - (now - self._last_reconnect_offline_at),
+            )
+            return
+        self._last_reconnect_offline_at = now
+        self._mass_offline_ticks = 0
+        # reconnect offline 对多设备可达数十秒——放后台线程，不拖慢心跳主循环；
+        # 结果（恢复与否）由下一拍 device_discovery 自然反映，无需在此回读。
+        threading.Thread(
+            target=device_discovery.adb_reconnect_offline,
+            args=(self._adb_path,),
+            name="adb-reconnect-offline",
+            daemon=True,
+        ).start()
+        logger.warning(
+            "adb_reconnect_offline_triggered offline=%d total=%d "
+            "(#2754 自愈半边；恢复情况看下一拍 adb_state)",
+            offline_count, total,
         )
 
     def _read_heartbeat_settings_safe(self):
@@ -458,6 +525,10 @@ class HeartbeatThread:
                     )
                 except Exception as exc:
                     logger.warning("adb_auto_repair_failed: %s", exc)
+
+        # #2754 自愈半边：批量 offline 的 reconnect offline 巡检（独立于上面的
+        # server 级修复——reconnect offline 只作用于 offline 设备，不重启 server）。
+        self._maybe_auto_reconnect_offline(devices_list, heartbeat_settings)
 
         online_healthy = sum(
             1 for d in devices_list

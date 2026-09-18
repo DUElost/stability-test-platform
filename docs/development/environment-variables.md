@@ -302,6 +302,8 @@
 | `STP_DEVICE_DISK_SAMPLE_INTERVAL_SECONDS` | `300` | ✅ | 运行时 | `backend/agent/settings.py:214` |
 | `STP_ADMIN_PASSWORD` | `` | ✅ | 运行时 | `backend/scripts/audit_stage_a_env.py:90` |
 | `STP_ADMIN_USER` | `admin` | ✅ | 运行时 | `backend/scripts/audit_stage_a_env.py:95` |
+| `STP_ADB_RECONNECT_AUTO` | `0` | ✅ | 运行时 | `backend/agent/settings.py:216` |
+| `STP_ADB_RECONNECT_COOLDOWN_SECONDS` | `600` | ✅ | 运行时 | `backend/agent/settings.py:217` |
 | `STP_ADMISSION_AGING_MAX_BOOST` | `5` | ✅ | 运行时 | `backend/services/admission_pump.py:70` |
 | `STP_ADMISSION_AGING_STEP_SECONDS` | `1800` | ✅ | 运行时 | `backend/services/admission_pump.py:69` |
 | `STP_ADMISSION_PUMP_BATCH` | `5` | ✅ | 运行时 | `backend/services/admission_pump.py:65` |
