@@ -102,6 +102,18 @@ class SchedulerSettings(DomainSettings):
     plan_run_retention_batch_size: int = Field(default=100, ge=1)
     schedule_dedup_window_seconds: float = 60
 
+    # ── audit_log_cleanup：分层保留期（#2741 / ADR-0049，owner 裁决 2026-09-19）──
+    # security 180d（安全事件链，对齐 ADR-0020 六个月先例）/ business 90d（默认桶，
+    # 含 terminal_payload_conflict 爆发行——裁决明示不例外）/ session 30d（例行
+    # 会话心跳）。`*_DAYS=0` 与 PlanRun 家族同义（cutoff=now，该层全量到期）。
+    audit_log_session_retention_days: int = Field(default=30, ge=0)
+    audit_log_business_retention_days: int = Field(default=90, ge=0)
+    audit_log_security_retention_days: int = Field(default=180, ge=0)
+    # 单 tick 每层处理上限（工作量可预期的杠杆；无行锁窗口顾虑，见模块 docstring）。
+    audit_log_retention_batch_size: int = Field(default=5000, ge=1)
+    # sweep 周期；0 = 显式停用（app_scheduler 不注册该作业——事故取证期冻结裁剪）。
+    audit_log_retention_interval_seconds: int = Field(default=3600, ge=0)
+
 
 @lru_cache(maxsize=1)
 def get_scheduler_settings() -> SchedulerSettings:
