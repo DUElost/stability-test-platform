@@ -6,6 +6,12 @@
 # rule_files 段加载。两者缺一，规则就只活在仓库里——#2488 之前正是那种状态：
 # 仓库里的告警一条也没上线，本机那份手工拷贝停在旧条数（当时的具体数字见 #2488 的 Note）。
 # 改 labels/severity 请改这里，并同步重跑 promtool test rules（场景文件必须跟着改）。
+#
+# 去向提醒（#2643）：本文件**整份**被安装到站点，而站点的抓取面只有本机 node-exporter
+# （`deploy/prometheus/prometheus.yml` 单 job）。因此引用控制面 `stability_*` 指标的规则在站点
+# **恒无样本**——不触发也不报错。这类规则由 `tests/test_site_alert_scrape_surface.py` 逐条登记，
+# 只准缩短不准扩大；「站点只装站点可见面规则」还是「站点补控制面 /metrics 抓取」属方向裁决，
+# 由 #2643 的 owner 定。新增规则时请先想清楚它属于哪一面。
 
 groups:
   - name: stability-platform-main-chain
