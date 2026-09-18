@@ -104,9 +104,26 @@ C 轴只比字段名拦不住枚举漂移，按 SOP「枚举双端对齐」修�
 `_MODEL_UNREGISTERED` 具名认领并写明转登记条件，不硬造 TS 幽灵 interface。
 plan_runs.py 的 dict 盲区台账清空为 `set()`，opt-in 与 typed 记账保留。
 
+## 追加：CI 解阻（#2672，main 合入 #2671 后）
+
+两处回归：
+
+1. **循环导入**：写侧摘要顶栏 `from backend.api.schemas.plan_run import
+   PlanRunAbortSummaryOut` 会先执行 `backend.api` 包级 `__init__`；旧 `__init__`
+   急切 `import routes`，经 heartbeat → host_upgrade_gate 再回取本模块的
+   `abort_pending_job_ids`，撞上 agent collect（admission_pump →
+   plan_dispatcher_sync → `run_abort_pending`）半初始化。修复：`backend/api/__init__.py`
+   **不再急切 import routes**（路由仍由 `backend.main` / 显式
+   `from backend.api.routes import …` 挂载）——断环且不增加函数体内 import 棘轮。
+2. **锁序/直调测试仍按下标读摘要**：`abort_plan_run` 已返回具名模型，
+   `test_abort_lock_order_1985` 等改为属性访问（`.aborted_jobs` 等）。
+
+并 merge `main`（含 #2671）消除 BEHIND。
+
 ## Revisit
 
 - （已做）写侧三摘要已升模型，`#2089` 逐分支判据落在 `TestWriteSideSummaryBranches`
   （QUEUED/RUNNING 分支各自断言键集合与值的真实性）；
+- （已做）`backend.api` 包级不再急切拉 routes + 遗漏直调测试属性访问；
 - cursor 在窗「删 re-export 测改 service 导入」与本刀在 `plan_runs.py` 导入区
   可能擦碰——本刀不消费路由 re-export（模型直接来自 schemas），冲突仅文本面。
