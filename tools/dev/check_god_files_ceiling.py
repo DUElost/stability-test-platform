@@ -39,9 +39,10 @@ ROOT = Path(__file__).resolve().parents[2]
 #:   709 / 515 / 1622 → 745 / 541 / 1704（-69% / -46% / 持平）；
 #: - 2026-09-18 二次下调（#1520 catalog / auth / re-export / shape 合入后）：
 #:   592 / 391 / 360 / 1622 → 622 / 411 / 378 / 1704；并新增 `projects.py`
-#:   （#1520 三主战场之一，此前未入册）。
+#:   （#1520 三主战场之一，此前未入册）；
+#: - 2026-09-18 三次下调（plan_runs 薄壳抛光）：596 → 482 → 封顶 **507**。
 CEILINGS: dict[str, int] = {
-    "backend/api/routes/plan_runs.py": 622,
+    "backend/api/routes/plan_runs.py": 507,
     "backend/api/routes/agent_api.py": 411,
     "backend/api/routes/projects.py": 378,
     "backend/agent/main.py": 1704,
