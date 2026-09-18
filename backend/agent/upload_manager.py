@@ -34,6 +34,16 @@ _META_SCHEMA_VERSION = 1
 _ORG_XLS_PATTERNS = ("*_org.xls", "*_org_*.xls")
 
 
+class ShardRegistrationError(RuntimeError):
+    """分片登记失败（#2188 D 步写侧契约 / #739 面②）。
+
+    文件已复制进 ``dedup/`` 但 ``_meta/{run}/{host}.json`` 未写入——即
+    「文件已落、清单未写」的半交付。typed 异常让 ScanRunner worker 能把
+    这类失败与普通 scan 失败区分开（可观测、可归因），而不是混进同一个
+    ``scan_queue_job_failed`` 日志里被静默吞掉。
+    """
+
+
 class UploadManager:
     """进程级单例；Agent 启动时 configure，按需调用 upload_scan_report。"""
 
@@ -119,9 +129,18 @@ class UploadManager:
             plan_run_id, host_id, dest_path,
         )
         # #2188 D 步（单2 #2474）：登记失败必须 raise，不得吞成 None——
-        # ScanRunner 不接返回值，吞掉 = 「文件已落、清单未写」的静默半交付；
-        # raise 后沿 scan_now 传播，下轮整段重试（copy 覆盖写、分片幂等重写）。
-        self._record_shard_entry(plan_run_id, host_id, dest_path, platform_subdir)
+        # ScanRunner 不接返回值，吞掉 = 「文件已落、清单未写」的静默半交付。
+        # #739 面②：scan_now 是入队即返回（ack≠完成），worker 线程无人接异常，
+        # raise 无法「沿 scan_now 传播」——故以 ShardRegistrationError typed 上抛，
+        # 由 worker 落可观测失败（专用日志标记 + 心跳计数器）；下轮 scan_now
+        # 整段幂等重试（copy 覆盖写、分片幂等重写）。
+        try:
+            self._record_shard_entry(plan_run_id, host_id, dest_path, platform_subdir)
+        except Exception as exc:
+            raise ShardRegistrationError(
+                f"shard register failed plan_run={plan_run_id} host={host_id} "
+                f"dest={dest_path}"
+            ) from exc
         return str(dest_path)
 
     @staticmethod
@@ -198,4 +217,4 @@ class UploadManager:
                 shutil.copyfile(str(entry), str(target))
 
 
-__all__ = ["UploadManager"]
+__all__ = ["ShardRegistrationError", "UploadManager"]
