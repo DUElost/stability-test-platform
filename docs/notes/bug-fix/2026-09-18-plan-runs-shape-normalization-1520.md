@@ -54,13 +54,29 @@ SOP 的步骤 5/6 以「核对无漂移、零改动」结案——漏同步才�
   迁移唯一新引入的失败形态，用实弹钉住）、`filename` 尾段派生、归属 404；
 - 受影响回归批（plan_runs_api / read_api_auth / aggregation / export / runs /
   archive + 契约）→ **188 passed**；
-- `run_gates.py check:quick` → 见 PR。
+- `run_gates.py check:quick` → 见 PR；
+- （对拍批 1）契约 15 passed；`tsc --noEmit` 通过。
+
+## 追加：对拍批 1（同日第二 commit）——9 条豁免全部转正
+
+预照契约测试自己的解析器跑了一遍 9 豁免模型 ↔ types.ts 候选 interface 的字段
+对账：**8 个零漂移**（`PlanChainOut↔PlanChain`、`PlanRunDevicesOut↔
+PlanRunDevicesPayload`、`PlanRunEventsOut↔PlanRunEventsPayload`、
+`PlanRunListPageOut↔PlanRunListPage`、`PlanRunTimelineOut↔PlanRunTimeline`、
+`JobInstanceOut↔PlanJobInstance`、`JobManualActionOut↔JobManualActionResult`、
+`TestCaseResultsPayload↔TestCaseResultsPayload`）；**1 个真缺口**：
+`PlanRunDetailOut↔PlanRun` 的 `jobs`——wire 上一直存在（detail 端点带 Job 明细、
+list items 恒序列化空数组），TS 侧漏声明。修法 = `PlanRun` 补
+`jobs?: PlanJobInstance[]`（可选：plans.py 的 run 摘要行不返回该键，消费页也
+从不读它——只钉 wire 事实，不造新依赖）。
+
+9 条 `_MODEL_UNREGISTERED` 全部移除、11 对 `_MODEL_PAIRS` 在册；豁免清单只剩
+`JiraRunOut`（解析器跨文件基类的真实限制，非拖延）。`check:quick` 的 knip/eslint
+对纯注释+可选字段零触发；`tsc` 通过。
 
 ## Revisit
 
-- 9 个豁免模型的逐字段对拍批：从 `PlanRunDetailOut`（消费最重）起，每模型一
-  小刀，发现漂移即修即登记；
-- abort/archive/retry 的 dict→模型：做时把 `#2089` 的逐分支判据写进测试
-  （只看并集拦不住多分支形态）；
+- abort/archive/retry 的 dict→模型（写侧摘要）：做时把 `#2089` 的逐分支判据写进
+  测试（只看并集拦不住多分支形态）——这是形状系列剩下的最后一块 plan_runs 面；
 - cursor 在窗「删 re-export 测改 service 导入」与本刀在 `plan_runs.py` 导入区
   可能擦碰——本刀不消费路由 re-export（模型直接来自 schemas），冲突仅文本面。
