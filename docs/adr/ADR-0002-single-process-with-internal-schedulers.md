@@ -19,7 +19,7 @@
 
 ### 异步任务（asyncio task）
 
-- `session_watchdog`（默认启用）：Host 心跳超时检测、设备锁过期释放、UNKNOWN 宽限期管理。与 legacy `heartbeat_monitor` 互斥，由 `USE_SESSION_WATCHDOG` 环境变量控制。
+- `session_watchdog`（默认启用）：Host 心跳超时检测、设备锁过期释放、UNKNOWN 宽限期管理。与 legacy `heartbeat_monitor` 互斥，由 ~~`USE_SESSION_WATCHDOG` 环境变量控制~~——〔#2661 标注〕该键**已移除**（#737），watchdog 现**常驻无开关**；见 [环境变量文档 §6](../development/environment-variables.md#6-已移除的键)。
 - `consume_status_stream`：消费 Redis Streams 状态事件。
 - `consume_log_stream`：消费 Redis Streams 日志事件。
 - `monitor_backpressure`：监控 Redis Streams 积压。

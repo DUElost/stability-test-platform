@@ -31,6 +31,10 @@ storage:
   share: null
   credential_ref: null
   mount_path: /mnt/stp/aee_events
+  # 仅 provisioning=local_mount 可开：把本机子树以 NFS 导出给本站 Agent
+  # （Agent 侧 STP_AEE_NFS_ROOT 才有意义）。远端分享/受管存储由对方导出，
+  # 站点再导出会形成两套来源（`storage_export_conflict`）。
+  export_to_agents: false
 agents:
   - key: agent-b-01
     target: agent-b-01.example.invalid
@@ -41,6 +45,9 @@ agents:
     ssh_credential_ref: agent_b_01_ssh
     install_root: /opt/stability-test-agent
     local_aee_root: null
+    # 逐主机 SSH 端口，范围 1..65535，默认 22；落到 inventory 的 `ansible_port`
+    # 并进入 Host 创建/复用校验（#2283：此前该值被解析后丢弃，Host 行恒以 22 建立）。
+    ssh_port: 22
 dependencies:
   database_ref: site_database
   redis_ref: site_redis
@@ -57,3 +64,9 @@ release:
 navigation:
   contact: null
   documentation_url: null
+# 站点本地监控栈（#2197）：/storage 页的数据源。缺省不装——整段省略即
+# `enabled: false` + `prometheus_port: 9091`，与后端默认 STP_PROMETHEUS_URL
+# （http://127.0.0.1:9091）对齐；Prometheus 只听本机回环。
+monitoring:
+  enabled: false
+  prometheus_port: 9091

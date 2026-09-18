@@ -60,7 +60,7 @@ Legacy TaskRun 状态转换（保留兼容）：
 2. **设备锁过期**（租约到期）→ 释放锁，RUNNING job → UNKNOWN
 3. **UNKNOWN 宽限期**（默认 300s）→ UNKNOWN job → FAILED
 
-通过 `USE_SESSION_WATCHDOG` 环境变量控制（默认 `true`）。启用时：
+通过 ~~`USE_SESSION_WATCHDOG` 环境变量控制（默认 `true`）~~ 决定。〔#2661 标注〕该键**已移除**（#737）：watchdog 现常驻无开关，不存在「启用时/不启用时」分支（见 [环境变量文档 §6](../development/environment-variables.md#6-已移除的键)）。启用时：
 - `session_watchdog` 运行，`heartbeat_monitor` 不启动（互斥）
 - recycler 跳过 host 心跳超时和设备锁过期检查（避免冲突）
 

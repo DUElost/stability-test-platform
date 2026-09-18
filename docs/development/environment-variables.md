@@ -157,6 +157,28 @@
 
 ---
 
+## 6. 已移除的键
+
+> **本节是「配置键已不存在读取点」的唯一登记面**（#2661 补：此前删除只留在 commit 里，
+> 读者既查不到某个键什么时候没的，也无从判断「文档里还写着它」是正当引用还是陈旧失真）。
+> 机器判据由 `tests/test_removed_env_keys.py` 承担：解析下表第一列的 code span 得到键名，
+> 再扫全仓（`docs/**` 除 `docs/archive/**`、`docs/notes/**`；`backend/**`；
+> `deploy/**`；`tools/**`；`scripts/**`；`.github/workflows/*.yml`），要求每一处命中
+> **同一行内**带 `已移除` / `已删除` / `无读取点` / `removed` 之一——裸引用即红。
+> `docs/archive/**`（openspec 留档）与 `docs/notes/**`（一次性 Note，追加式历史）按「历史
+> 陈述不追改」的既有实践排除，与 ADR 正文里 `~~划线 + 已移除`` 的勘误形态同源。
+>
+> 新增一行即可让「删掉的键」继续被机器看着；删掉一行则守卫红（表内键是判据的下界）。
+
+| 键 | 状态 | 真实读取点 | 现状 / 落点 |
+|---|---|---|---|
+| `USE_SESSION_WATCHDOG` | 已移除（#737，`5dc2d030`；三份后端 `.env*.example` 同步清除） | 无 | `session_watchdog_once()` 由 APScheduler 常驻调度，**无开关**；互斥对象 legacy `heartbeat_monitor` 已不在 `backend/tasks/`。旧叙述保留在 ADR-0002/0003/0004 并加行内标注 |
+| `BACKPRESSURE_LAG_THRESHOLD` | 已移除（Redis 背压于 Phase 4 移除；#737 `5dc2d030` 清示例） | 无 | 无替代旋钮：`backend/services/agent_host_heartbeat.py::get_backpressure()` 恒返回 `None`（SocketIO 自带 TCP 背压） |
+| `BACKPRESSURE_RELEASE_THRESHOLD` | 已移除（同 `BACKPRESSURE_LAG_THRESHOLD`） | 无 | 同上——迟滞释放对（lag/release）随 Redis 背压一起消失，不再存在「恢复阈值」 |
+| `BACKPRESSURE_LOG_RATE_LIMIT` | 已移除（同上） | 无 | 日志速率上限不再取静态 env：`suggested_log_rate_limit()` 按在线 host 数派生，真实旋钮是 `STP_LOG_RATE_LIMIT_BASE` / `STP_LOG_RATE_LIMIT_MIN` |
+
+---
+
 ## 附录：运行时读取清单（自动生成，勿手改）
 
 > 生成：`python tools/dev/env_inventory.py --write`；
