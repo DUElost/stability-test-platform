@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ExpandableDeviceTable } from './ExpandableDeviceTable';
+import { BULK_BAR_SPACER_CLASS } from '@/components/ui/bulk-action-bar';
 
 const devices = [
   {
@@ -163,4 +164,65 @@ describe('ExpandableDeviceTable', () => {
       expect(latest).toEqual([]);
     });
   });
+
+  // #2614：/devices 全选后底部悬浮批量条压住分页行——坐标级点击被吞或误触「取消选择」。
+  // jsdom 没有布局引擎，测不了命中测试；这里钉的是**几何补偿的存在与位置**：
+  // 占位必须渲染在分页行**之后**、且在带边框的表格卡片**之外**，才会把最后一行顶出覆盖带。
+  it('reserves bottom clearance below the pagination row once devices are selected', () => {
+    const many = Array.from({ length: 51 }, (_, i) => ({
+      ...devices[0],
+      id: i + 1,
+      serial: `SERIAL-${i + 1}`,
+    }));
+    const { rerender } = render(
+      <ExpandableDeviceTable
+        devices={many}
+        selectedIds={new Set<number>()}
+        onSelectionChange={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('device-table-selection-spacer')).not.toBeInTheDocument();
+
+    rerender(
+      <ExpandableDeviceTable
+        devices={many}
+        selectedIds={new Set([1])}
+        onSelectionChange={vi.fn()}
+      />,
+    );
+    const spacer = screen.getByTestId('device-table-selection-spacer');
+    expect(spacer).toHaveClass(...BULK_BAR_SPACER_CLASS.split(' '));
+    expect(spacer).toHaveAttribute('aria-hidden');
+
+    const nextPage = screen.getByRole('button', { name: '下一页' });
+    // 占位在分页行之后——否则滚到底时被打扰的仍是分页按钮
+    expect(nextPage.compareDocumentPosition(spacer) & Node.DOCUMENT_POSITION_FOLLOWING)
+      .toBeTruthy();
+    // 占位在卡片之外——放在卡片内会在边框里留出一块空白
+    const card = nextPage.closest('.rounded-xl');
+    expect(card).not.toBeNull();
+    expect(card?.contains(spacer)).toBe(false);
+
+    rerender(
+      <ExpandableDeviceTable
+        devices={many}
+        selectedIds={new Set<number>()}
+        onSelectionChange={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('device-table-selection-spacer')).not.toBeInTheDocument();
+  });
+
+  it('does not reserve clearance when the table is not selectable', () => {
+    const many = Array.from({ length: 51 }, (_, i) => ({
+      ...devices[0],
+      id: i + 1,
+      serial: `SERIAL-${i + 1}`,
+    }));
+    render(<ExpandableDeviceTable devices={many} selectedIds={new Set([1, 2])} />);
+
+    // 没有 onSelectionChange => 页面不会渲染批量条 => 不该有无故留白
+    expect(screen.queryByTestId('device-table-selection-spacer')).not.toBeInTheDocument();
+  });
+
 });
