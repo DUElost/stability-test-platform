@@ -23,6 +23,12 @@ from backend.models.audit import AuditLog
 
 router = APIRouter(prefix="/api/v1/audit-logs", tags=["audit"])
 
+#: #2694：facets 每维最多返回的候选数（按条数倒序取 top-N）。
+#: 定 50 的依据：`action` 实测 86+ 种且持续增长（无界），而**筛选下拉的可用性**在
+#: 几十项之后就饱和——长尾用 datalist 精确输入即可（#628 同范式）。取 50 而非更小值，
+#: 是为了在同一个下拉里仍能容纳「全部业务类动作」而不被高频噪声项挤掉。
+_FACET_LIMIT = 50
+
 
 def _is_missing_audit_table(exc: ProgrammingError) -> bool:
     """环境尚未创建 `audit_logs`（老库/未跑迁移）时的判定。
@@ -137,12 +143,23 @@ async def get_audit_filter_facets(
     两个维度都按条数倒序（高频合规关注点排在前面）；`action` 有 86 种字面量，前端因此
     用 datalist + 精确匹配（与 #628 的用户名/IP 同范式），而不是假装能列全。
     """
-    async def _facet_values(column) -> List[AuditFacetValue]:
+    async def _facet_values(column, limit: int) -> List[AuditFacetValue]:
+        """取该维度的 top-N distinct 值（按条数倒序）。
+
+        #2694：加 `limit` 后结果为**有界**——原先无界返回全部 distinct 值。生产实测该表
+        已 **266,882 行**、`action` 86+ 种，每次开 `/audit` 都把整个聚合结果搬给前端
+        datalist；有界后传输与前端渲染有界，下拉也不再被单一高频项（实测
+        `job_terminalized` 占近 30 天 76%）挤出可视范围。
+
+        取 **top-N** 而非「全量交给前端截断」：审计筛选的候选集本就是「管理员大概率要找的
+        那几个」，长尾用 datalist 精确输入（#628 同范式，与本文档既有说明一致）。
+        """
         stmt = (
             select(column, func.count())
             .where(column.is_not(None))
             .group_by(column)
             .order_by(func.count().desc(), column.asc())
+            .limit(limit)
         )
         rows = (await db.execute(stmt)).all()
         return [AuditFacetValue(value=str(value), count=int(count or 0))
@@ -150,8 +167,8 @@ async def get_audit_filter_facets(
 
     try:
         return AuditFacetsOut(
-            resource_types=await _facet_values(AuditLog.resource_type),
-            actions=await _facet_values(AuditLog.action),
+            resource_types=await _facet_values(AuditLog.resource_type, _FACET_LIMIT),
+            actions=await _facet_values(AuditLog.action, _FACET_LIMIT),
         )
     except ProgrammingError as exc:
         if not _is_missing_audit_table(exc):
