@@ -1,8 +1,7 @@
 # Agent Note — 链触发按父段 job 终态选设备（#2648）
 
-- **Issue**: #2648
-- **Status**: Done
-- **Class**: bug-fix
+Status: implemented
+Class: bug-fix
 
 ## Decision
 
