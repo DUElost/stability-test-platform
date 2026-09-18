@@ -162,6 +162,43 @@ npx vitest run src/pages/execution/PlanRunDetailPage.test.tsx
 162 个）：改 19 处、留 11 处（各带定性依据）。负向形态与逐条分类见
 `docs/notes/bug-fix/2026-09-17-*bounded-waits*.md` 与 `2026-09-17-*wait*` 系列 Note。
 
+### 源扫描型守卫：先证锚点在，再判形态（#2639）
+
+「读被测模块源码文本 + 断言某字面量在/不在其中」的守卫，其有效性完全依赖锚点与被扫对象
+仍然重合，而这件事默认没人检查。三种失败形态里**只有前两种会响**：
+
+1. 被扫逻辑搬走 → `import` 失败 → collection error（响亮）；
+2. 正向断言的字面量搬走 → 恒红（响亮）；
+3. **否定断言恒真** → 守卫还在跑、还是绿的，但它守的是一份已经没有那些代码的文件
+   （实例：DLE 落库点随 #1520 从 `agent_api` 搬到 `agent_device_log_events` 后，
+   `assert "row.state = ev.state" not in src` 恒真了一个完整窗口）。
+
+写法则用 `tools/dev.source_anchor.SourceGuard`，把「取源码」与「证明锚点在场」绑成一个
+不可拆开的动作，三类红在**消息第一行**即可区分：
+
+```python
+guard = (
+    SourceGuard.of_module(agent_device_log_events)          # 或 of_repo_path("…/x.py")
+    .anchored("resolve_initial_upload_state(ev.event_type, ev.state)")  # 不在 ⇒ 用例已过期
+)
+guard.assert_count("state=resolve_initial_upload_state(ev.event_type, ev.state)", 2)
+guard.assert_absent("row.state = ev.state", why="#2025 裸赋值不得回潮")   # 出现 ⇒ 防线回归
+```
+
+- `anchored()` 只证明「逻辑还在这个文件里」，**不是**被测行为；被测行为仍由 `assert_*` 表达；
+- `assert_*` 必须先有锚点，否则 `GuardMisuse`（把恒真断言的入口封死）；`assert_absent` 的
+  `why` 必填——写不清防的是谁，就说明这条断言不该存在；
+- 计数也是锚点的一部分：只判「≥1」会放过「被复制/部分搬走」，需要时用 `anchored(…, expect=n)`。
+
+存量不要求一次改完：`tests/test_source_scan_anchor_ratchet.py` 按 AST 认「读源码 + 否定断言」
+的用例（注释里的同形文本不算，承接 #2641/#2642），新写的必须走助手，基线只能缩短。
+该棘轮放在根 `tests/`（required check 路径）而不是 `backend/tests/`（只在夜间全量跑）——
+否则它自己就成了「红只有夜间可见」的那一类。
+
+顺带一条同源教训：#2639 用 `git grep … -- 'tests/**/*.py'` 数这族用例时，git pathspec **不认**
+未加 `:(glob)` 的 `**`，`tests/` 整棵树静默零命中（81 个文件没进统计）。任何「扫不到就算通过」
+的判据都要自带非空断言——本节的棘轮因此显式断言「一个 offender 都扫不到即红」。
+
 ## 8. 已知限制
 
 - 真机 ADB/NFS 不在默认 CI  
