@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.agent.upload_manager import UploadManager
+from backend.agent.upload_manager import ShardRegistrationError, UploadManager
 
 
 @pytest.fixture(autouse=True)
@@ -171,7 +171,11 @@ def test_shard_merges_idempotent_and_platform_subdir(tmp_path):
 
 
 def test_shard_write_failure_raises_not_silent(tmp_path):
-    """#2474: 登记失败必须 raise（ScanRunner 不接返回值，吞 None = 静默半交付）。"""
+    """#2474: 登记失败必须 raise（ScanRunner 不接返回值，吞 None = 静默半交付）。
+
+    #739 面②：raise 必须是 typed ShardRegistrationError——worker 据此与普通
+    scan 失败区分（专用日志标记 + 心跳计数器），而不是混进 scan_queue_job_failed。
+    """
     nfs = tmp_path / "nfs"
     nfs.mkdir()
     m = _make_manager(str(nfs))
@@ -185,9 +189,12 @@ def test_shard_write_failure_raises_not_silent(tmp_path):
     tmp_blocker.parent.mkdir(parents=True)
     tmp_blocker.mkdir()
 
-    with pytest.raises(OSError):
+    with pytest.raises(ShardRegistrationError) as excinfo:
         m.upload_scan_report(42, "host-1", str(org_xls))
-    # copy 本身已成功（半交付形态存在）——raise 让它沿 scan_now 暴露为步失败
+    # 原始 OSError 必须挂在 __cause__ 上（归因不丢）
+    assert isinstance(excinfo.value.__cause__, OSError)
+    assert "plan_run=42" in str(excinfo.value)
+    # copy 本身已成功（半交付形态存在）——typed raise 让 worker 可观测暴露
     assert (nfs / "dedup" / "42" / "host-1_Result_shanghai_org.xls").exists()
 
 
