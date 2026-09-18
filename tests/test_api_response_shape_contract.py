@@ -504,6 +504,20 @@ _MODEL_PAIRS: tuple[tuple[str, str, str, str], ...] = (
         "frontend/src/utils/api/types.ts",
         "ProjectMapPreview",
     ),
+    # #2187 opt-in scripts.py：目录行与使用统计双双 MATCH（TS 命名不同源
+    # ——ScriptEntry/ScriptUsage 是消费侧原名，键集与后端模型逐名一致）。
+    (
+        "backend/api/routes/scripts.py",
+        "ScriptOut",
+        "frontend/src/utils/api/types.ts",
+        "ScriptEntry",
+    ),
+    (
+        "backend/api/routes/scripts.py",
+        "ScriptUsageOut",
+        "frontend/src/utils/api/types.ts",
+        "ScriptUsage",
+    ),
     # #2187 opt-in plans.py：触发端点从「误标 PlanRun 的幽灵声明」收紧为真实形状。
     # 对拍当场钉出：plans.run() 旧返回类型多出 9 键（capabilities/jobs/device_count…），
     # 触发端点从不返回——唯一调用点只读 .id 才未出事（types.ts::PlanRunTriggerResult）。
@@ -636,6 +650,13 @@ _MODEL_BLINDSPOT: dict[str, set[str]] = {
     # 无具名模型、判据扫不到（GET /customers 的字典行），暂挂 note Revisit 不隐身。
     "backend/api/routes/projects.py": {
         "remove_project_rule",
+    },
+    # #2187 扩面第 3 批：scripts.py。scan 的 catalog 聚合与 delete 的 ok 壳仍为
+    # 运行期 dict（scan 结果含 conflicts 数组，正规化要连 #2386 的守卫字段一起
+    # 设计，独立小批做）——按台账认领。
+    "backend/api/routes/scripts.py": {
+        "scan_scripts",
+        "deactivate_script",
     },
     # #1520 形状正规化批第一步：summary/artifacts 已升模型进 `_MODEL_PAIRS`；
     # 剩余具名模型逐个对拍前按台账显式豁免（下方 `_MODEL_UNREGISTERED`），
@@ -788,12 +809,15 @@ def _route_functions_with_dict_response(py_path: Path) -> set[str]:
 def _route_response_model_names(py_path: Path) -> set[str]:
     """routes 文件里 ``response_model=ApiResponse[...]`` 引用的**具名**模型（``dict`` 除外）。
 
-    ``list[X]`` / ``ApiResponse[X]`` 的下标里逐个取 ``Name``——容器与 ``ApiResponse``
-    本身不是模型名，故排除。
+    ``list[X]`` / ``ApiResponse[X]`` 的下标里逐个取 ``Name``——容器、``ApiResponse``
+    与标量类型（``str``/``int``/``float``/``bool``）不是模型名，故排除：
+    ``ApiResponse[List[str]]``（如 /scripts/categories 的字典行）内层是标量、
+    不是可登记的 Pydantic 模型（#2187 opt-in scripts.py 时暴露——此前误当具名模型，
+    会把「标量端点」逼成登记一个不存在的模型或伪豁免）。
     """
     tree = ast.parse(py_path.read_text(encoding="utf-8"))
     names: set[str] = set()
-    skip = {"ApiResponse", "dict", "list", "List", "Optional"}
+    skip = {"ApiResponse", "dict", "list", "List", "Optional", "str", "int", "float", "bool"}
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
