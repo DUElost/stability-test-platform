@@ -51,6 +51,8 @@ _REGISTERED: dict[str, str] = {
         "AssistantApprovalsPage（/assistant/approvals）在 AdminRoute 下"
     ),
     "audit.py:/": "AuditLogPage（/audit）在 AdminRoute 下",
+    # #2629 新增的筛选候选端点，与列表同页同门控（普通用户走不到 /audit）
+    "audit.py:/facets": "AuditLogPage（/audit）在 AdminRoute 下",
     "hosts.py:/{host_id}/log-signal-dead-letters": (
         "前端零调用方（主机页诊断端点，仅管理侧/脚本使用）"
     ),

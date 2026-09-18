@@ -4,7 +4,7 @@ Audit Log API — admin-only read access to audit trail.
 """
 
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
@@ -12,11 +12,30 @@ from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.routes.auth import require_admin, User
-from backend.api.schemas import AuditLogOut, PaginatedResponse
+from backend.api.schemas import (
+    AuditFacetValue,
+    AuditFacetsOut,
+    AuditLogOut,
+    PaginatedResponse,
+)
 from backend.core.database import get_async_db
 from backend.models.audit import AuditLog
 
 router = APIRouter(prefix="/api/v1/audit-logs", tags=["audit"])
+
+
+def _is_missing_audit_table(exc: ProgrammingError) -> bool:
+    """环境尚未创建 `audit_logs`（老库/未跑迁移）时的判定。
+
+    调用方据此返回空结果而不是 500——列表与 facets 共用同一条兜底口径，
+    否则「表没建」时一边能用一边 500，比统一报错更难解释。
+    """
+    message = str(exc)
+    return "audit_logs" in message and (
+        "does not exist" in message.lower()
+        or "undefinedtable" in message.lower()
+        or "不存在" in message
+    )
 
 
 def _apply_audit_filters(
@@ -95,15 +114,47 @@ async def list_audit_logs(
         ).scalars().all()
     except ProgrammingError as exc:
         # 兼容尚未创建 audit_logs 的环境：返回空结果而不是 500
-        message = str(exc)
-        if "audit_logs" not in message or (
-            "does not exist" not in message.lower()
-            and "undefinedtable" not in message.lower()
-            and "不存在" not in message
-        ):
+        if not _is_missing_audit_table(exc):
             raise
         await db.rollback()
         return PaginatedResponse(items=[], total=0, skip=skip, limit=limit)
 
     items = [AuditLogOut.model_validate(r) for r in rows]
     return PaginatedResponse(items=items, total=total, skip=skip, limit=limit)
+
+
+@router.get("/facets", response_model=AuditFacetsOut)
+async def get_audit_filter_facets(
+    db: AsyncSession = Depends(get_async_db),
+    _current_user: User = Depends(require_admin),
+):
+    """审计筛选候选（#2629）：值域 = 表里**真实写入过**的 distinct 值。
+
+    「筛选选项」与「写入词表」原先各写各的（后端裸 `str` + 精确等值，前端 9 资源/6 操作
+    硬编码），于是 6 个死选项给出**自信的假阴性**、98.5% 的记录没有入口，而且写入侧改名
+    不会有任何测试报警。本端点把这两侧收成一个来源：**能选出来的一定筛得出东西**。
+
+    两个维度都按条数倒序（高频合规关注点排在前面）；`action` 有 86 种字面量，前端因此
+    用 datalist + 精确匹配（与 #628 的用户名/IP 同范式），而不是假装能列全。
+    """
+    async def _facet_values(column) -> List[AuditFacetValue]:
+        stmt = (
+            select(column, func.count())
+            .where(column.is_not(None))
+            .group_by(column)
+            .order_by(func.count().desc(), column.asc())
+        )
+        rows = (await db.execute(stmt)).all()
+        return [AuditFacetValue(value=str(value), count=int(count or 0))
+                for value, count in rows]
+
+    try:
+        return AuditFacetsOut(
+            resource_types=await _facet_values(AuditLog.resource_type),
+            actions=await _facet_values(AuditLog.action),
+        )
+    except ProgrammingError as exc:
+        if not _is_missing_audit_table(exc):
+            raise
+        await db.rollback()
+        return AuditFacetsOut()
