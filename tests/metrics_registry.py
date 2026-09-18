@@ -22,7 +22,11 @@ import re
 # 本仓**自己生产**的 node-exporter textfile 指标生产者。这些指标不来自 backend
 # 注册表（独立进程），但也不能变成告警面的豁免口子——名字从生产者源码里静态
 # 提取：生产者删掉一个名字，用它的告警立刻退化为「未知指标」而红。
-_TEXTFILE_PRODUCERS = ("tools/dev/script_guard_probe.py",)
+_TEXTFILE_PRODUCERS = (
+    "tools/dev/script_guard_probe.py",
+    # #2632：PG 日志「猜 schema」指纹采集（控制面宿主 timer 跑，写 textfile 指标）
+    "tools/dev/pg_error_guard.py",
+)
 _TEXTFILE_HELP_ATTR = "_METRIC_HELP"
 _METRIC_NAME_RE = re.compile(r"[a-zA-Z_:][a-zA-Z0-9_:]*")
 

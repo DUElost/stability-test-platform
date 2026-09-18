@@ -16,12 +16,17 @@ description: 生产 / 本机业务库只读诊断 SOP（凭据来源、直连姿
 
 ## 标准作业流程（SOP）
 
-1. 只读观测优先：`SELECT` + `LIMIT`；写操作与 DDL 一律不走本路径
-2. `venv/bin/python` + psycopg 3 直连：连接串经环境变量传入脚本，勿写入命令行参数或
+1. **先求证 schema，再写查询**（#2632）：表名 / 列名 / 枚举值一律先查
+   `information_schema.tables` / `information_schema.columns` / `pg_enum`，**不凭记忆或
+   推测写 schema**——2026-09-16 的现场正是猜 schema 产生的约 30 条 ERROR（表名两个方向
+   都猜错：`job` vs `job_instance`、`device_lease` vs `device_leases`；枚举用了大写而库内
+   是小写；引用了当时尚未落地的列）
+2. 只读观测优先：`SELECT` + `LIMIT`；写操作与 DDL 一律不走本路径
+3. `venv/bin/python` + psycopg 3 直连：连接串经环境变量传入脚本，勿写入命令行参数或
    临时文件
-3. 需要管理 API 时：`/api/v1/auth/token` 取 token（`AGENT_SECRET` 用 `.env.backend`
+4. 需要管理 API 时：`/api/v1/auth/token` 取 token（`AGENT_SECRET` 用 `.env.backend`
    的生产值），带着同一环境源
-4. 结论只回填「事实 + 建议」；修复动作走代码 / 迁移 / PR 流程
+5. 结论只回填「事实 + 建议」；修复动作走代码 / 迁移 / PR 流程
 
 ## 后置验证
 
@@ -34,5 +39,9 @@ description: 生产 / 本机业务库只读诊断 SOP（凭据来源、直连姿
   `AGENT_SECRET` 是陈旧值——诊断 auth 问题一律以 `.env.backend` 为准；
 - 本机 PostgreSQL 可能就是生产 `stp`：**禁止**用生产库代替测试库、**禁止**在生产库
   试跑迁移（`alembic upgrade` 等）；
+- **禁止猜 schema**（#2632）：`关系 "X" 不存在` / `字段 "X" 不存在` / `枚举 … 输入值
+  无效` 这类错误会被 `StabilityPgSchemaGuessing` 告警捕获（生产者
+  `tools/dev/pg_error_guard.py`）。它们不是「查询没成功」的小事——它意味着你在没有
+  事实依据地写 SQL；猜对的那次会是一次不留审计痕迹的生产读写；
 - `.env.backend` / `backend/.env` / Agent `.env` 职责不同，不得互相代用；
 - 凭据不得进入代码、文档、日志与 PR diff。

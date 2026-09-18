@@ -1,0 +1,24 @@
+# Rendered by the site installer for <deploy-root> — do not edit by hand.
+[Unit]
+Description=STP PostgreSQL schema-guessing fingerprint probe (#2632, read-only)
+
+[Service]
+Type=oneshot
+# 刻意**不写 User=**（与邻居 stp-mem-top / stp-script-guard 一致）：指标目录
+# /var/lib/prometheus/node-exporter 属 root:root，非 root 身份写不进去。
+WorkingDirectory=<deploy-root>
+EnvironmentFile=<deploy-root>/.env.backend
+# 只读巡检：扫 PG 服务日志（默认 /var/log/postgresql/postgresql-*-main.log*）最近一小时的
+# 三类指纹（猜表名 / 猜列 / 枚举值大小写），落成 node-exporter textfile 指标供
+# StabilityPgSchemaGuessing 使用。**不连数据库、不写任何东西到 PG**。
+ExecStart=<deploy-root>/venv/bin/python <deploy-root>/tools/dev/pg_error_guard.py
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=yes
+ReadWritePaths=/var/lib/prometheus/node-exporter
+
+[Install]
+WantedBy=multi-user.target
