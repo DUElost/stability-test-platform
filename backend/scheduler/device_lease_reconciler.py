@@ -263,6 +263,19 @@ async def _reconcile_expired_leases(db) -> tuple[int, int, int]:
             await db.rollback()
             left_after_cap = max(left_after_cap, len(ordered) - index - 1)
             break
+        # #2635：**一候选一事务边界**——在此显式提交，使 plan_run 行锁在进入下一候选
+        # （取 job 锁）**之前**释放，锁序回到 I2 基准 `job → plan_run`。
+        #
+        # 修复前：提交只发生在 `on_job_terminal` → `_post_aggregation_side_effects_async`
+        # 的 `applied=True` 分支（即 `terminal_job_count >= total_job_count`，仅**末位**
+        # 候选成立）。故从第 2 条候选起，同一事务在**已持 plan_run 行锁**的情况下再去
+        # 锁 job 行 ⇒ 实际锁序 `plan_run → job`，与 `complete_agent_job`（`job → plan_run`）
+        # 相反 ⇒ 可成环（本仓 09-14 起对该族做过四轮修复）。
+        #
+        # 契约：`on_job_terminal` 在 `applied=True` 时**已自行 commit**，此处的空提交无害
+        # （无变更的 commit 是 no-op）；但其返回后调用方**不得再依赖会话内未提交状态**
+        # ——下面的计数/日志只用已在 Python 侧取出的值。
+        await db.commit()
         drained += 1
         failed_count += 1
         logger.warning(
