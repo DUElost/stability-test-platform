@@ -9,7 +9,8 @@
 - 日期：2026-09-17
 - 决策者：平台研发组（owner 裁决 2026-09-17）
 - 标签：风险分级, 词表契约, 展示层翻译, #2365, #2419, #2494
-- 关联：[ADR-0025](./ADR-0025-run-console-and-command-execution.md)（v2.5 D13 风险趋势桶首次引入 S/A/B/NONE）、
+- 关联：判定链真源见正文 §1（`log_observation` 活链；**非** ADR-0025——旧关联曾误指不存在的
+  `ADR-0025-run-console-and-command-execution.md`，#2546 / e82515）；
   [#2418](https://github.com/DUElost/stability-test-platform/issues/2418)（同族词表漂移缺陷，
   判据与测试风格沿用 `tests/test_status_vocabulary_drift.py`）
 

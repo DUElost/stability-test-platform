@@ -126,10 +126,10 @@
 | 会话 / 安全 | 0024 | 已填 |
 | 主机身份 / 提权 / 退役 / 安装 | 0035, 0037, 0038, 0040, 0044 | 已填关键行 |
 | 可观测 / 通知 | 0011, 0036 | 已填关键行 |
-| 项目 / 套件 / AI | 0029, 0030, 0031 | **TBD 占位**（触碰即填） |
-| 配置 / 词表 / 站点 | 0042, 0045, 0041 | 已填或 TBD |
+| 项目 / 套件 / AI | 0029, 0030, 0031 | 已填 |
+| 配置 / 词表 / 站点 | 0042, 0045, 0041 | 已填 |
 | 多 Harness 执行 | 0034；细则 `execution-contract` | 已填 |
-| Schema / 审计 / 前端扩展 | 0008, 0015, 0013 | **TBD 占位** |
+| Schema / 审计 / 前端扩展 | 0008, 0015, 0013 | 0008/0015 已填；0013 见 TBD 触发 |
 
 > **不是**全量名词 Inventory：只登记「会影响架构决策或已出现双标风险」的概念/关系。其余 Accepted ADR 以矩阵 **TBD** 占位，增补纪律见 §7。
 
@@ -163,13 +163,14 @@
 | `execution-registry` | concept | 多 Harness Execution Registry / 三维状态 | `docs/adr/ADR-0034-multi-harness-execution-contract.md :: ### 2.3 状态模型：lifecycle × liveness × integration 三维正交 — 细则见契约 §3`；细则 `docs/development/ai/execution-contract.md :: ## 3. 状态模型（三维）与 transition table` | 改 Registry 为调度器 |
 | `settings-bare-read` | concept | 配置读取收敛与裸读边界 | `docs/adr/ADR-0042-settings-convergence-and-bare-read-boundary.md :: ## 决策` | 新域绕过分域 settings |
 | `risk-level-vocab` | concept | 风险对外词表 S/A/B | `docs/adr/ADR-0045-risk-level-vocabulary.md :: ## 2. 决策` | 多词表回流 |
-| `project-taxonomy` | concept | TestProject / specialty 分类 | TBD → `docs/adr/ADR-0029-project-taxonomy-and-param-layering.md` | 触碰 0029 时补锚 |
-| `multi-case-suite` | concept | test_suite / test_case 多用例 | TBD → `docs/adr/ADR-0030-multi-case-suite-management.md` | 触碰 0030 时补锚 |
-| `platform-ai-assistant` | concept | 平台 AI 助手边界 | TBD → `docs/adr/ADR-0031-platform-ai-assistant.md` | 触碰 0031 时补锚 |
-| `agent-host-identity` | concept | Agent 主机身份与凭据 | TBD → `docs/adr/ADR-0035-agent-host-identity.md`（现行接受边界 §3） | 升级触发 §6 |
-| `schema-alembic-only` | concept | Schema 迁移唯一路径 | TBD → `docs/adr/ADR-0008-schema-migration-governance-alembic-only.md` | 旁路迁移 |
-| `audit-log` | concept | 审计日志语义 | TBD → `docs/adr/ADR-0015-audit-log-system.md` | 与 Y2 词表冲突时优先填 |
-| `site-delivery` | concept | 独立站点交付边界 | TBD → `docs/adr/ADR-0041-independent-site-delivery-and-management.md` | 多站复制倒逼工具入仓 |
+| `project-taxonomy` | concept | TestProject / specialty 分类 | `docs/adr/ADR-0029-project-taxonomy-and-param-layering.md :: ### D2：项目实体 \`test_project\` — 单层身份 + 正交 facet` | 改 facet / 派生归属 |
+| `multi-case-suite` | concept | test_suite / test_case 多用例 | `docs/adr/ADR-0030-multi-case-suite-management.md :: ### D1：用例集/用例建模为配置层实体，不进调度模型` | 用例进调度模型 |
+| `platform-ai-assistant` | concept | 平台 AI 助手自治边界 | `docs/adr/ADR-0031-platform-ai-assistant.md :: ### D1：自治边界 = 运维风险四级（T0–T3）` | 越级自动执行 |
+| `agent-host-identity` | concept | Agent 主机身份与凭据（现行接受边界） | `docs/adr/ADR-0035-agent-host-identity.md :: ## 3. 当前状态决策（立即生效）` | §6 升级触发 |
+| `schema-alembic-only` | concept | Schema 迁移唯一路径 | `docs/adr/ADR-0008-schema-migration-governance-alembic-only.md :: ## 决策` | 旁路迁移 |
+| `audit-log` | concept | 审计日志数据模型 | `docs/adr/ADR-0015-audit-log-system.md :: ### 数据模型` | 与 Y2 词表冲突时复核 |
+| `site-delivery` | concept | 独立站点交付与隔离边界 | `docs/adr/ADR-0041-independent-site-delivery-and-management.md :: ### D1. 以独立站点作为运行与故障隔离边界` | 多站倒逼工具入仓 |
+| `frontend-feature-expansion` | concept | 前端功能模块扩展（任务实例/问题/环境） | TBD → `docs/adr/ADR-0013-frontend-feature-expansion.md`（触碰前端 IA/模块边界时补锚；本轮不扩前端 Inventory） | 触碰 0013 或前端 IA 大改 |
 
 ---
 
@@ -197,13 +198,14 @@
 
 | 项 | 理由 |
 |---|---|
-| 本 PR 实现 S15 代码 | **已在 follow-up PR 落地**（本表同仓） |
-| `LINK_TREES += docs/adr`（e82515） | 有价值的引用面门禁，正交于 ownership 表；另开治理单 |
-| 首批强行纳入 Y1/Y2 全行（c42fb9） | #2546 非目标已写明；`audit-log` 已 TBD，触碰 #2629/#2631 时填 |
-| 方案 B / 全量抽名词 | 评审一致 Needs-revision；本修订是「Accepted ADR 覆盖框架 + 关键行」，不是 Inventory |
-| 本 PR 改 ADR-0033 D1 正文加 flash | **已在 follow-up：ADR-0033 v1.3** |
+| 本 PR 实现 S15 代码 | **已落地**（#2764） |
+| `LINK_TREES += docs/adr`（e82515） | **已落地**（本轮）：修 ADR-0044/0045 幽灵链后纳入 |
+| 首批强行纳入 Y1/Y2 全行（c42fb9） | #2546 非目标；`audit-log` 已有实锚，Y2 冲突时复核 |
+| 方案 B / 全量抽名词 | 评审一致 Needs-revision |
+| 本 PR 改 ADR-0033 D1 正文加 flash | **已落地**（#2764 / v1.3） |
 | 合并/重编号 ADR | N5 / issue 纪律 |
 | 一次补齐全部 ADR 头部 `归属域` | 字段驱动；假阳性面过大 |
+| 前端 ADR-0013 实锚 | 本轮仍 TBD（不扩前端 Inventory） |
 
 ### 6.3 用户相对初评的增量（本修订强制采纳）
 
@@ -252,3 +254,4 @@
 | 2026-09-18 | **用户三点修正**：B/C 深嵌为主；Accepted ADR 全覆盖框架 + 扩表/TBD；评审采纳对照 §6 |
 | 2026-09-18 | **外置措辞澄清**：主判据=不入项目代码树；右列改名「外置/不入仓」；Adapter=薄调用接缝非第二目标 |
 | 2026-09-18 | follow-up：S15 门禁落地；ADR-0033 v1.3 D1 flash 补登记；`flash-tool` 锚改指 0033 |
+| 2026-09-18 | TBD 七行升实锚；保留 `frontend-feature-expansion` TBD；`LINK_TREES += docs/adr` + 修 0044/0045 幽灵链 |
