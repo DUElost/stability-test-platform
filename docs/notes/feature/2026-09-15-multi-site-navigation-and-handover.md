@@ -57,7 +57,7 @@ Class: feature
 
 ## Revisit
 
-- **handover 只读最近一次安装记录**：部分重跑（例如不带 `--through-agents`）会覆盖 `install-state.json` 并使 S5 相关证据消失（本次实验室即出现：MS-01 因缺 `install.s5` 转 BLOCKED）。现场应按「完整安装（含 `--through-agents`）→ `verify` → `handover`」顺序执行；若需要历史留档，应把每次安装报告按运行时间落盘（后续切片）。
+- **handover 只读最近一次安装记录**（**#2718 已收口**：现读按发布物累积的 `evidence[<release>]`，同发布物的历史证据不再被 plain 重跑抹掉；本条其余事实仍有效）：部分重跑（例如不带 `--through-agents`）会覆盖 `install-state.json` 并使 S5 相关证据消失（本次实验室即出现：MS-01 因缺 `install.s5` 转 BLOCKED）。现场应按「完整安装（含 `--through-agents`）→ `verify` → `handover`」顺序执行；若需要历史留档，应把每次安装报告按运行时间落盘（后续切片）。
 - **`/site/` 无认证**：设计允许「导航无凭据」，当前两 profile 都启用；若现场安全要求收窄（例如只对内网开放），按站点输入加开关。
 - **部署根穿越位**：现在 S4 明确把部署根/前端目录设为 0755（文件权限不变，`.env.backend` 仍 0600）。若未来把控制面改由专用 web 账号运行，应收窄回 0750 并让 nginx 以该账号运行。
 - **`install.s4.frontend` 探测的是公开入口**：CP 无法解析自身公开 URL 的站点会 FAIL——这是有意的（入口不可达本身就不算装好），但现场 DNS 未就绪时需先修 DNS 再重跑。
