@@ -242,3 +242,57 @@ class TestAuditFilterFacets:
         assert not _is_missing_audit_table(boom('relation "users" does not exist'))
         assert not _is_missing_audit_table(boom("permission denied for table audit_logs"))
         assert not _is_missing_audit_table(boom("syntax error at audit_logs"))
+
+
+    def test_facets_are_bounded_per_dimension(self, client, admin_headers, db_session):
+        """#2694：facets 每维**有界**（top-N），不再把全部 distinct 值倒给前端。
+
+        生产实测 `audit_logs` 已 266,882 行、`action` 86+ 种且无界增长；无界返回会让
+        每次开 `/audit` 把整个聚合结果搬给前端 datalist。本用例造 > N 个 distinct
+        action，断言返回条数被 `_FACET_LIMIT` 截断。
+        """
+        from backend.api.routes.audit import _FACET_LIMIT
+        from backend.models.audit import AuditLog
+
+        for i in range(_FACET_LIMIT + 5):
+            db_session.add(AuditLog(
+                username="audit2694", action=f"bounded_action_{i:03d}",
+                resource_type="rt2694", resource_id=str(i),
+                ip_address="10.69.4.1", details={},
+            ))
+        db_session.commit()
+
+        facets = client.get("/api/v1/audit-logs/facets", headers=admin_headers).json()
+        assert len(facets["actions"]) <= _FACET_LIMIT, (
+            f"actions 未被截断：{len(facets['actions'])} > {_FACET_LIMIT}（#2694）"
+        )
+        # 有界不等于空：仍须给出候选
+        assert len(facets["actions"]) == _FACET_LIMIT, (
+            f"应恰好返回 {_FACET_LIMIT} 条（种子 > N），实际 {len(facets['actions'])}"
+        )
+
+    def test_facets_bounded_still_returns_top_by_count(self, client, admin_headers, db_session):
+        """#2694：截断须保留**按条数倒序**的语义——高频项优先，不被长尾挤掉。
+
+        这是有界化的价值所在：下拉里出现的应是管理员大概率要找的那几个。
+        """
+        from backend.models.audit import AuditLog
+
+        # 造一个明显高频项 + 若干低频项
+        for _ in range(5):
+            db_session.add(AuditLog(
+                username="audit2694b", action="hot_action",
+                resource_type="rt2694b", resource_id="h",
+                ip_address="10.69.4.2", details={},
+            ))
+        for i in range(3):
+            db_session.add(AuditLog(
+                username="audit2694b", action=f"cold_action_{i}",
+                resource_type="rt2694b", resource_id=str(i),
+                ip_address="10.69.4.2", details={},
+            ))
+        db_session.commit()
+
+        facets = client.get("/api/v1/audit-logs/facets", headers=admin_headers).json()
+        values = [e["value"] for e in facets["actions"]]
+        assert values[0] == "hot_action", f"应按条数倒序（高频优先），实际首位 {values[0]}"
