@@ -15,6 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
+from backend.core.device_serial import is_placeholder_serial
 from backend.core.pipeline_validator import validate_pipeline_def
 from backend.models.device_lease import DeviceLease
 from backend.models.enums import DeviceStatus, HostStatus, JobStatus, LeaseStatus, PlanRunStatus
@@ -99,6 +100,8 @@ def _classify_dispatch_devices_sync(
             Host.maintenance_until.label("host_maintenance_until"),
             # ADR-0038 D1：退役事实（NULL = 在用）
             Host.retired_at.label("host_retired_at"),
+            # #2649：serial 占位值判定（跨 host 可重复 → 归属漂移）
+            Device.serial,
         )
         .select_from(Device)
         .outerjoin(Host, Device.host_id == Host.id)
@@ -153,6 +156,18 @@ def _classify_dispatch_devices_sync(
             unavailable.append({
                 "id": did, "reason": "host_retired",
                 "host_id": snap.host_id, "host_status": snap.host_status,
+            })
+            continue
+        # #2649：占位/重复 serial——多台 host 的 agent 会按同一 serial upsert 同一
+        # device 行（生产实证 device 280：`0123456789ABCDEF` 在两台 host 间翻转，
+        # run 423 整窗 device_host_drift fatal）。这类设备**按设备拒绝**（标 Fail
+        # 标注原因），不升级为整 run 拒绝/排队——由 prepare 侧剔除并在准入时
+        # 物化 FAILED job。判定置于 host_retired（永久事实）之后、暂态之前。
+        if is_placeholder_serial(snap.serial):
+            unavailable.append({
+                "id": did, "reason": "serial_conflict",
+                "serial": snap.serial,
+                "host_id": snap.host_id,
             })
             continue
         if snap.device_status == DeviceStatus.OFFLINE.value:
@@ -536,8 +551,29 @@ def prepare_plan_run(
             f"Dispatch rejected: {len(fatal)} device(s) unavailable",
             unavailable_devices=fatal,
         )
+    # #2649：serial 冲突设备按设备拒绝（owner 2026-09-18 裁决）——手动/定时
+    # 同一流程：从目标集合剔除并记录拒因，准入时物化为 FAILED job（显示 Fail
+    # + 原因），其余设备照常执行；不进入 queue_blockers（不可重试，等无意义）。
+    serial_conflicts = [e for e in unavailable if e["reason"] == "serial_conflict"]
+    if serial_conflicts:
+        conflict_ids = {int(e["id"]) for e in serial_conflicts}
+        device_ids = [d for d in device_ids if d not in conflict_ids]
+        if not device_ids:
+            raise PlanDispatchError(
+                "Dispatch rejected: all target devices have serial conflicts",
+                unavailable_devices=serial_conflicts,
+            )
+        logger.warning(
+            "dispatch_serial_conflict_rejected count=%d devices=%s",
+            len(serial_conflicts),
+            [(e["id"], e["serial"]) for e in serial_conflicts][:10],
+        )
+        run_context = dict(run_context or {})
+        run_context["dispatch_rejected_devices"] = serial_conflicts
     queue_blockers = [
-        e for e in unavailable if e["reason"] not in _FATAL_DISPATCH_REASONS
+        e for e in unavailable
+        if e["reason"] not in _FATAL_DISPATCH_REASONS
+        and e["reason"] != "serial_conflict"
     ]
 
     steps = db.execute(
@@ -642,6 +678,44 @@ def _infer_frozen_project_id(
         ).scalars().all()
         mixed_keys = sorted(keys)
     return frozen, True, mixed_keys
+
+
+def materialize_serial_rejected_jobs(db: Session, pr: PlanRun) -> int:
+    """#2649：prepare 剔除的 serial 冲突设备在准入时物化为 FAILED job。
+
+    剔除设备不进目标集合（不做 host 投影、不参与漂移终检），但按 owner
+    2026-09-18 裁决必须「显示为 Fail、标注原因」——在 run 的设备结果列表里
+    以 FAILED JobInstance 呈现。计数按 job_terminalization 的增量语义同步
+    bump（total/terminal/failed），run 终态化与汇总自然包含它们。
+    返回物化数量。
+    """
+    rejected = (pr.run_context or {}).get("dispatch_rejected_devices") or []
+    if not rejected:
+        return 0
+    now = datetime.now(timezone.utc)
+    reason = "序列号冲突：serial 为占位/重复值（跨 host 争抢同一序列号），设备被拒绝执行"
+    # pipeline_def NOT NULL——与正常 job 同源于 run 快照（该 job 永不被 claim，
+    # 仅作为结果列表里的 Fail 呈现载体）。
+    lifecycle = _build_lifecycle_from_snapshot(pr.plan_snapshot)
+    pipeline_def = {"lifecycle": lifecycle}
+    for e in rejected:
+        db.add(JobInstance(
+            plan_run_id=pr.id,
+            plan_id=pr.plan_id,
+            device_id=int(e["id"]),
+            host_id=e.get("host_id"),
+            status=JobStatus.FAILED.value,
+            status_reason=reason,
+            pipeline_def=pipeline_def,
+            created_at=now,
+            updated_at=now,
+            started_at=now,
+            ended_at=now,
+        ))
+    pr.total_job_count = int(pr.total_job_count or 0) + len(rejected)
+    pr.terminal_job_count = int(pr.terminal_job_count or 0) + len(rejected)
+    pr.failed_job_count = int(pr.failed_job_count or 0) + len(rejected)
+    return len(rejected)
 
 
 def _prepare_queued_plan_run(

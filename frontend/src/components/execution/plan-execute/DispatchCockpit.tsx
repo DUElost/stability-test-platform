@@ -20,6 +20,7 @@ import { STAT, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { formatDurationSeconds } from '@/utils/format';
 import { DuplicateLaunchBanner } from './DuplicateLaunchBanner';
+import { SerialConflictBanner } from './SerialConflictBanner';
 import type { DuplicateMatch } from './planExecuteDuplicate';
 import { RecentPlanRunsInline } from './RecentPlanRunsInline';
 import type { WallClockEstimate } from './planExecuteWallClock';
@@ -107,6 +108,12 @@ export function DispatchCockpit({
   return (
     <TooltipProvider>
       <div className="space-y-4" data-testid="dispatch-cockpit">
+        <SerialConflictBanner
+          serials={devices
+            .filter((device) => device.serial_suspect)
+            .map((device) => device.serial)}
+        />
+
         {duplicateMatch ? (
           <DuplicateLaunchBanner match={duplicateMatch} onOpenRun={onOpenRun} />
         ) : null}

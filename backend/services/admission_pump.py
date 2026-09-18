@@ -56,6 +56,7 @@ from backend.services.plan_dispatcher_sync import (
     _FATAL_DISPATCH_REASONS,
     _classify_dispatch_devices_sync,
     materialize_jobs_and_allocations,
+    materialize_serial_rejected_jobs,
 )
 from backend.services.state_machine import PlanRunStateMachine
 
@@ -805,6 +806,9 @@ def admission_transaction(db: Session, run_id: int, attempt_id: str) -> bool:
     for did in device_ids:
         per_host[device_host_map[did]] = per_host.get(device_host_map[did], 0) + 1
     pr.total_job_count = len(device_ids)
+    # #2649：prepare 剔除的 serial 冲突设备物化为 FAILED job（显示 Fail +
+    # 原因；total/terminal/failed 计数随增）——须在 total_job_count 定值之后。
+    materialize_serial_rejected_jobs(db, pr)
     for h in host_rows:
         h.status = "ADMITTED"
         h.admitted_at = now
