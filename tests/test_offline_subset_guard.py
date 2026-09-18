@@ -25,10 +25,15 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from tests import ci_workflow_probe as probe
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TESTS_DIR = REPO_ROOT / "tests"
 CI_YML = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 RUN_GATES = REPO_ROOT / "scripts" / "run_gates.py"
+#: PR 路径「真跑根 tests/」的命令指纹——#2641：判据必须落在**代码行**上，
+#: 不能靠 step 名或注释里的同形文本（旧形态正是被 `# --ignore=…` 注释满足的）。
+_RUNNER_NEEDLE = "python -m pytest tests/"
 
 # 真实起容器的构造器（模块级/函数级皆算）
 _CONTAINER_CTOR = re.compile(r"\bPostgresContainer\s*\(")
@@ -53,10 +58,27 @@ def _files_using_testcontainers() -> set[str]:
     return found
 
 
-def _ignored_in(path: Path) -> set[str]:
-    """从给定文件里提取 `--ignore=<tests/...>` 名单。"""
-    text = path.read_text(encoding="utf-8")
+def _ignore_args(text: str) -> set[str]:
+    """从一段文本里提取 `--ignore=<tests/...>` 名单。"""
     return set(re.findall(r"--ignore=(tests/[\w./-]+\.py)", text))
+
+
+def _ci_runner_steps() -> list[tuple[str, int, dict]]:
+    """PR 路径上**真的执行根 tests/** 的步骤（run 的代码行含 pytest tests/）。"""
+    return probe.steps_running(_RUNNER_NEEDLE, only_pr=True)
+
+
+def _ci_ignored() -> set[str]:
+    """ci.yml 里**真实执行者**的 `--ignore` 名单（只取代码行，注释不算）。"""
+    found: set[str] = set()
+    for _job, _index, step in _ci_runner_steps():
+        found |= _ignore_args(probe.code_text(step))
+    return found
+
+
+def _run_gates_ignored() -> set[str]:
+    """本地 repo-tests 门禁（run_gates.py）的 `--ignore` 名单。"""
+    return _ignore_args(RUN_GATES.read_text(encoding="utf-8"))
 
 
 class TestOfflineSubsetGuard:
@@ -69,7 +91,7 @@ class TestOfflineSubsetGuard:
     def test_no_container_file_misses_ci_ignore_list(self):
         """容器测试必须全部在 ci.yml 的 --ignore 名单里（#1707 主断言）。"""
         found = _files_using_testcontainers()
-        ignored = _ignored_in(CI_YML)
+        ignored = _ci_ignored()
         missing = sorted(found - ignored)
         assert not missing, (
             f"以下测试真实起 testcontainer 但不在 ci.yml 的 --ignore 名单：{missing}。"
@@ -79,8 +101,8 @@ class TestOfflineSubsetGuard:
 
     def test_run_gates_matches_ci_ignore_list(self):
         """本地 repo-tests 门禁与 CI 同口径（#1569 的既有约定）。"""
-        ci = _ignored_in(CI_YML)
-        local = _ignored_in(RUN_GATES)
+        ci = _ci_ignored()
+        local = _run_gates_ignored()
         assert ci == local, (
             f"ci.yml 与 run_gates.py 的 --ignore 名单不一致："
             f"仅 CI={sorted(ci - local)}，仅本地={sorted(local - ci)}"
@@ -88,11 +110,57 @@ class TestOfflineSubsetGuard:
 
     def test_ignore_lists_are_not_vacuous(self):
         """名单不得为空（防解析失效把断言变成永真）。"""
-        assert _ignored_in(CI_YML), "ci.yml 的 --ignore 解析为空，解析器已失效"
-        assert _ignored_in(RUN_GATES), "run_gates.py 的 --ignore 解析为空"
+        assert _ci_runner_steps(), (
+            f"PR 路径找不到真的执行 {_RUNNER_NEEDLE!r} 的步骤——判据失去落点"
+        )
+        assert _ci_ignored(), "ci.yml 的 --ignore 解析为空（真实执行者里没有参数）"
+        assert _run_gates_ignored(), "run_gates.py 的 --ignore 解析为空"
 
     def test_mentioned_but_unused_files_are_not_flagged(self):
         """判据是「实际使用」而非「提及」——仅提到 testcontainers 的文件不应被计入。"""
         found = _files_using_testcontainers()
         assert "tests/test_ci_test_db_guard_wiring.py" not in found
         assert "tests/test_requirements_lock.py" not in found
+
+
+class TestStructuralCriterion:
+    """#2641：判据必须落在**会执行的代码行**上——注释里的同形文本不算。"""
+
+    def test_comments_do_not_satisfy_the_criterion(self):
+        synthetic = {
+            "pr-echo": {
+                "if": "github.event_name == 'pull_request'",
+                "steps": [
+                    {
+                        "name": "Run repo-level tests",
+                        "run": (
+                            "test -f /tmp/repo.rc\n"
+                            "# --ignore=tests/test_alembic_upgrade.py\n"
+                            "# python -m pytest tests/ -q\n"
+                        ),
+                    }
+                ],
+            }
+        }
+        assert probe.steps_running(
+            _RUNNER_NEEDLE, only_pr=True, jobs=synthetic
+        ) == [], "注释里的同形文本不得算作真实执行者"
+
+    def test_real_invocation_is_found(self):
+        synthetic = {
+            "pr-real": {
+                "if": "github.event_name == 'pull_request'",
+                "steps": [
+                    {
+                        "name": "Run agent tests",
+                        "run": (
+                            "python -m pytest tests/ -q \\\n"
+                            "  --ignore=tests/test_alembic_upgrade.py\n"
+                        ),
+                    }
+                ],
+            }
+        }
+        hits = probe.steps_running(_RUNNER_NEEDLE, only_pr=True, jobs=synthetic)
+        assert [job for job, _i, _s in hits] == ["pr-real"]
+        assert _ignore_args(probe.code_text(hits[0][2])) == {"tests/test_alembic_upgrade.py"}

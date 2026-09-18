@@ -43,9 +43,11 @@ export function UserModal({ isOpen, onClose, onSubmit, onUpdate, isSubmitting, e
     role: 'user',
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
-  // #2497：字段改为非受控后，state 不再随键入更新；编辑态「密码非空才显示确认框」
-  // 这条可见性判据改由 onChange 维护（人工键入会触发；管理器直写不回写 state 时，
-  // 确认框维持原状——与「非受控不回写」的取舍一致）。
+  // #2497 起字段是非受控的，键入只更新 DOM；编辑态「密码非空才显示确认框」这条可见性
+  // 判据由本状态维护。#2637：它只由 onChange 维护——密码管理器**直写 `.value`**（不冒泡、
+  // React 收不到）⇒ 恒为 false ⇒ 确认框不渲染，提交时读不到 confirmPassword 判「不一致」，
+  // 而错误文案正写在那个不渲染的块里 = 静默失败。现在由**渲染条件**兜底：错误非空即强制
+  // 渲染确认框（见下），管理器直写那条至少让用户看得见原因。
   const [passwordPresent, setPasswordPresent] = useState(false);
 
   const isEditMode = !!editUser;
@@ -115,7 +117,11 @@ export function UserModal({ isOpen, onClose, onSubmit, onUpdate, isSubmitting, e
 
     if (values.password || values.confirmPassword) {
       if (values.password !== values.confirmPassword) {
-        newErrors.confirmPassword = '两次输入的密码不一致';
+        // #2637：只填了密码（确认框此前因状态 stale 未渲染）时，说「不一致」会让人找
+        // 不到北——分开给文案，且下方渲染条件保证这条错误一定可见。
+        newErrors.confirmPassword = values.password && !values.confirmPassword
+          ? '请再次输入密码以确认修改'
+          : '两次输入的密码不一致';
       }
     }
 
@@ -213,7 +219,7 @@ export function UserModal({ isOpen, onClose, onSubmit, onUpdate, isSubmitting, e
           </div>
 
           {/* Confirm Password */}
-          {(passwordPresent || !isEditMode) && (
+          {(passwordPresent || !isEditMode || !!errors.confirmPassword) && (
             <div>
               <label htmlFor="user-confirm-password" className={FORM.label}>
                 确认密码

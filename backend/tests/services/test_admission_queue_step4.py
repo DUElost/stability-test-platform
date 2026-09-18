@@ -1166,3 +1166,64 @@ class TestAdmissionRetirePrecheck1805:
             AuditLog.resource_type == "plan_run",
             AuditLog.resource_id == str(pr.id),
         ).count() >= 1
+
+
+class TestAdmissionRetireInterleaving1805:
+    """#1805 验收场景表「prepare 与准入竞态」的确定性交错钉死（TOCTOU）。
+
+    A0b 预检通过后、Phase B 终检之前——用**独立 DB 会话**把退役提交进这个窗口
+    （交错点 = 被替换的 `_verify_scripts_phase`，不靠线程时序，判定确定）。
+    场景表要求的性质是「retire 与其后的新授权**不能同时提交**」：本例断言
+    Phase B 活读必然捕获 → HOST_RETIRED 收敛、**零物化**、快照/PlanRunHost 保留。
+    与 `TestAdmissionRetirePrecheck1805`（窗口前界）合起来，把 A0b→B 整个窗口
+    的两端都钉住。
+    """
+
+    def test_retire_between_a0b_and_phase_b_blocks_materialization(
+        self, db_session, step4_fixture,
+    ):
+        import asyncio
+
+        import backend.services.admission_pump as pump
+
+        f = step4_fixture
+        pr = _queued_run(db_session, f, [f["d1"].id])
+        claimed = pump.claim_queued_plan_runs(db_session)
+        attempt = claimed[0][1]
+        db_session.expire_all()
+
+        real_verify = pump._verify_scripts_phase
+
+        async def verify_with_retire_race(run_id: int, host_ids):
+            # 模拟运维在 admission 通过 A0b 之后、进入慢路径期间提交退役。
+            from backend.core.database import SessionLocal
+
+            with SessionLocal() as race_db:
+                race_db.query(Host).filter(Host.id == "aq4-h1").update(
+                    {"retired_at": datetime.now(timezone.utc)}
+                )
+                race_db.commit()
+
+            async def fake_gather(hosts, expected):
+                return {hid: (True, [{"ok": True}], None) for hid in hosts}
+
+            with patch("backend.services.precheck.verify.gather_verify", new=fake_gather):
+                return await real_verify(run_id, host_ids)
+
+        with patch.object(pump, "_verify_scripts_phase", verify_with_retire_race):
+            asyncio.run(
+                pump.plan_admission_task({}, plan_run_id=pr.id, attempt_id=attempt)
+            )
+
+        db_session.expire_all()
+        run = db_session.get(PlanRun, pr.id)
+        assert run.status == "FAILED"
+        assert run.result_summary["reason"] == "HOST_RETIRED"
+        # 关键反证：不存在「退役成功 + 新授权物化」的组合——Job 零条。
+        assert db_session.query(JobInstance).filter(
+            JobInstance.plan_run_id == pr.id
+        ).count() == 0
+        # D5bis：证据面保留（快照与 PlanRunHost 不删、不静默缩目标集合）。
+        assert db_session.query(PlanRunHost).filter(
+            PlanRunHost.plan_run_id == pr.id
+        ).count() == 1

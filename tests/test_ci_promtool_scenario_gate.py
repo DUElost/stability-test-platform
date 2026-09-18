@@ -32,6 +32,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from tests import ci_workflow_probe as probe
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CI_YML = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 
@@ -129,8 +131,10 @@ class TestNightlyWiring:
 
     def test_consumer_step_runs_root_tests(self):
         _, step = _step(_job(NIGHTLY_JOB), CONSUMER_STEP)
-        assert "tests/" in str(step.get("run", "")), (
-            f"{CONSUMER_STEP} 不再收集 tests/，PROMTOOL_REQUIRED 就成了空断言"
+        # #2641：判据落在**代码行**上——注释/别处的同形文本不算（旧形态可被注释满足）。
+        assert "python -m pytest tests/" in probe.code_text(step), (
+            f"{CONSUMER_STEP} 的代码里不再有 `python -m pytest tests/`，"
+            "PROMTOOL_REQUIRED 就成了空断言"
         )
 
 

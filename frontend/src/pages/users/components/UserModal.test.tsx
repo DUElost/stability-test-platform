@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { PASSWORD_MAX_BYTES, passwordByteLength, passwordRuleError } from './passwordRules';
+import type { User } from '@/utils/api';
 import { UserModal } from './UserModal';
 import { usernameRuleError } from './usernameRules';
 
@@ -220,5 +221,86 @@ describe('UserModal 非受控字段（#2497）', () => {
     rerender(<UserModal {...props} />);                // 重开：新默认值
 
     expect(screen.getByLabelText(/用户名/)).toHaveValue('');
+  });
+});
+
+/**
+ * #2637：编辑态的「密码已填但确认框根本不在 DOM 里」= 提交静默失败。
+ *
+ * 失败链：管理器直写 `#user-password` 的 `.value`（React 收不到）→ `passwordPresent`
+ * 仍为 false ⇒ 确认框不渲染 ⇒ 提交读到 `confirmPassword = ''` 判「不一致」⇒ 提前
+ * 返回，而错误文案写在**未渲染**的块里 ⇒ 用户点了保存，界面毫无反应（请求也不发）。
+ */
+describe('UserModal 编辑态自动填充（#2637）', () => {
+  /** 同 #2453：绕过 React 直写 DOM 值 + 派发**不冒泡**的 input 事件。 */
+  function managerFill(el: HTMLElement, value: string) {
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLInputElement.prototype, 'value',
+    )!.set!;
+    setter.call(el, value);
+    el.dispatchEvent(new Event('input', { bubbles: false }));
+  }
+
+  const editUser: User = {
+    id: 7,
+    username: 'stp-tester',
+    role: 'user',
+    is_active: 'true',
+    created_at: '2026-09-01T00:00:00Z',
+    last_login: null,
+  };
+
+  /** 真实用法：弹窗先以关闭态挂载，再打开——编辑态的表单重置发生在这次转场里。 */
+  function openInEditMode(onUpdate: (data: unknown) => void) {
+    const { rerender } = render(
+      <UserModal isOpen={false} onClose={() => {}} onUpdate={onUpdate} editUser={editUser} isSubmitting={false} />,
+    );
+    rerender(
+      <UserModal isOpen onClose={() => {}} onUpdate={onUpdate} editUser={editUser} isSubmitting={false} />,
+    );
+  }
+
+  it('直写新密码 → 首次保存给出可读错误 + 确认框就地出现 → 补填后提交发出', () => {
+    const onUpdate = vi.fn();
+    openInEditMode(onUpdate);
+
+    // 管理器只会填「已存在」的字段；编辑态确认框此前不渲染 ⇒ 它只会落到新密码上
+    managerFill(screen.getByLabelText(/新密码/), 'tPe-KLU-3Uw-3Fb');
+    fireEvent.click(screen.getByRole('button', { name: /保存/ }));
+
+    // 第一步：不发请求（没确认不能改密），但错误可见、确认框已出现——旧实现两步都静默
+    expect(onUpdate).not.toHaveBeenCalled();
+    expect(screen.getByText('请再次输入密码以确认修改')).toBeInTheDocument();
+    const confirm = screen.getByLabelText(/确认密码/);
+
+    // 第二步：按提示补填（真实键入会冒泡，状态与渲染同步）→ 提交发出
+    fireEvent.change(confirm, { target: { value: 'tPe-KLU-3Uw-3Fb' } });
+    fireEvent.click(screen.getByRole('button', { name: /保存/ }));
+    expect(onUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ password: 'tPe-KLU-3Uw-3Fb' }),
+    );
+  });
+
+  it('人工键入新密码 → 确认框立刻出现（不等到提交）', () => {
+    const onUpdate = vi.fn();
+    openInEditMode(onUpdate);
+
+    expect(screen.queryByLabelText(/确认密码/)).not.toBeInTheDocument();
+    // 浏览器键入每敲一键都会派发**冒泡**的 input 事件（管理器直写那条不冒泡，见上）
+    fireEvent.input(screen.getByLabelText(/新密码/), { target: { value: 'tPe-KLU-3Uw-3Fb' } });
+    expect(screen.getByLabelText(/确认密码/)).toBeInTheDocument();
+  });
+
+  it('只直写新密码 → 不静默：给出可读错误且确认框就地渲染', () => {
+    const onUpdate = vi.fn();
+    openInEditMode(onUpdate);
+
+    managerFill(screen.getByLabelText(/新密码/), 'tPe-KLU-3Uw-3Fb');
+    fireEvent.click(screen.getByRole('button', { name: /保存/ }));
+
+    // 不发出请求（没确认就不能改密）——但**必须看得见原因**，且确认框就地出现
+    expect(onUpdate).not.toHaveBeenCalled();
+    expect(screen.getByText('请再次输入密码以确认修改')).toBeInTheDocument();
+    expect(screen.getByLabelText(/确认密码/)).toBeInTheDocument();
   });
 });
