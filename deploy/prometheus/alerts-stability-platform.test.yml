@@ -1,7 +1,8 @@
 # promtool 场景测试（#1257 / R14-F11）：规则必须在真实标签形状的样本上可触发。
 # 覆盖面：#2151 建立时只覆盖「修过的规则」，#2236 把存量缺口补齐 → 现在
-# **17 条告警规则 17 条断言全覆盖**（promtool 对未列规则不校验 = 零覆盖，所以
+# **每条规则都有场景断言**（promtool 对未列规则不校验 = 零覆盖，所以
 # 「全覆盖」本身就是判据，由 test_every_alert_rule_has_scenario_case 恒跑守住）。
+# 条数不写死在这里（#2663）：写死的计数会随规则增长变成谎话，真值只能派生。
 # 每条断言是否真有牙由 test_promtool_gate_detects_per_rule_threshold_drift 逐条自证。
 # 运行：
 #   promtool test rules deploy/prometheus/alerts-stability-platform.test.yml
