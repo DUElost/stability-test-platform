@@ -1,5 +1,6 @@
 import { CheckCheck, Copy, Download, FolderKanban, Tags, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { BULK_BAR_INNER_CLASS, BULK_BAR_OUTER_CLASS } from '@/components/ui/bulk-action-bar';
 
 interface DeviceBulkActionBarProps {
   selectedCount: number;
@@ -41,16 +42,25 @@ export default function DeviceBulkActionBar({
     <div
       data-testid="device-bulk-action-bar"
       aria-live="polite"
-      className="pointer-events-none fixed bottom-4 left-4 right-4 z-40 flex justify-center lg:left-60"
+      className={BULK_BAR_OUTER_CLASS}
     >
-      <div className="pointer-events-auto flex w-full max-w-5xl flex-wrap items-center gap-3 rounded-2xl border border-border bg-card/95 px-3 py-3 shadow-xl backdrop-blur supports-[backdrop-filter]:bg-card/90 sm:px-4">
+      <div className={BULK_BAR_INNER_CLASS}>
         <div className="flex min-w-0 items-center gap-3">
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
             <CheckCheck className="h-4 w-4" />
           </div>
           <div className="min-w-0">
             <div className="text-sm font-medium text-foreground">
-              已选择 <span className="font-mono text-primary">{selectedCount}</span> 台设备
+              {/* #2600：只报「已选择 N 台」时，页选（50）与全量（546）读数同形——
+                  分母写出来，规模差才可见；右侧「选择全部筛选结果 (M)」是补齐入口。 */}
+              已选择 <span className="font-mono text-primary">{selectedCount}</span>
+              {filteredCount > 0 ? (
+                <>
+                  <span className="text-muted-foreground"> / </span>
+                  <span className="font-mono text-muted-foreground">{filteredCount}</span>
+                </>
+              ) : null}{' '}
+              台设备
             </div>
             <div className="truncate text-[11px] text-muted-foreground">
               {statusSummary || `当前筛选共 ${filteredCount} 台`}

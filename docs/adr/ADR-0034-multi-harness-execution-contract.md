@@ -143,7 +143,7 @@ AGENTS.md / CLAUDE.md / .cursor/rules / .codex    ← 各入口只保留最小�
 
 ## 6. Revisit
 
-- **G5**（`.agents/` 单家目录 / skills 多消费方）：新增受版本控制的 harness 适配时，按 [`harness-adapters.md`](../development/ai/harness-adapters.md) 修改顺序重估；
+- **G5**（`.agents/` 单家目录 / skills 多消费方）：2026-09-18 已落地 **symlink 薄适配**（`.agents/skills` → `.claude/skills`，见 [`2026-09-18-agents-skills-symlink-adapter.md`](../notes/process/2026-09-18-agents-skills-symlink-adapter.md)）；真身迁出 Claude 目录的全量方案仍按 [`harness-adapters.md`](../development/ai/harness-adapters.md) 修改顺序重估；
 - **auto mode 成为默认工作态**：重访行为验证挂载强度（2026-08-26 synthesis 重议条件，现状见 #855）；
 - **审计吞吐实测恶化**（集成冲突/返工率、合入后核销与 reconcile 负载、登记交互成本上升）：重议 §2.6 并发姿态与收尾自动化（如 post-merge 自动 reconcile）——触发器是实测数据，非会话数；
 - **AGENTS.md 逼近 80 行/8KB ceiling**：预算扩容须独立裁决，不随功能顺手放宽；
