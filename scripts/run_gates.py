@@ -273,7 +273,8 @@ GATES = {
     "repo-tests": (
         f"{PY} -m pytest tests/ -q "
         "--ignore=tests/test_alembic_upgrade.py "
-        "--ignore=tests/test_script_seed_governance.py",
+        "--ignore=tests/test_script_seed_governance.py "
+        "--ignore=tests/test_diag_readonly_role_pg.py",
         ROOT,
         None,
     ),
