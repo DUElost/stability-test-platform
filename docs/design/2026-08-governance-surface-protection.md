@@ -26,7 +26,7 @@ CLAUDE.md `@import` 写在中文行内静默失效（人肉 `/context` 才发现
 
 | 层 | 形态 | 挂载 | 依据类型 |
 |----|------|------|----------|
-| **L0 结构门禁** | 确定性文本检查 S1–S13 | 阻塞：ci.yml lint job + run_gates `check:quick/pr` | 〔证〕真实事故/实测断链/常驻上下文回膨胀 |
+| **L0 结构门禁** | 确定性文本检查 S1–S14 | 阻塞：ci.yml lint job + run_gates `check:quick/pr` | 〔证〕真实事故/实测断链/常驻上下文回膨胀 |
 | 本地护栏 | git pre-commit 已发布脚本 M/D 拦截 + Claude settings 凭据写保护 | 提交现场/会话现场秒级反馈 | 〔证〕ef8808e 事故 |
 | backstop 机械摘要 | 失败 issue 附红灯 job+step / 日志链接 / compare 区间 | 事件驱动 | 〔证〕现有 body 无定位要素 |
 | **L1 行为 evals** | **已移除（2026-09-06）**：不变量保全由 L0 新增 S11 承接；语义传导/标准化分诊/多 Harness 摄取验证残余缺口见 #855；恢复锚点与决策见移除 note | — | 〔证〕能力分解评估（08-27 曾 12/12 全绿当瘦身安全网；09-05 后唯一环境 CLI 故障不可用） |
@@ -60,11 +60,19 @@ L1 重议触发条件：治理面写者 >1 人，或 auto mode 成为默认工�
 
 - `scripts/run_gates.py`：`gov-surface` 入 `check:quick` / `check:pr`；
   专项 `check:gov`（现组成 `[gov-surface, gov-skills, harness-ingest]`；原 `gov-evals`
-  于 2026-09-06 移除，`harness-ingest` 于 2026-09-07 并入，`:214` `FULL_EXCLUDE` 除外）。
-- `ci.yml` lint job：脚本不可变检查之后追加「差异面不变量检查」（invariant-diff，BLOCK）、
-  「分层检查」（`check_layering.py`，含 `--self-test`）、「孤立 ORM 模型检查」
-  （`check_orphan_models.py`，含 `--self-test`）、「治理面结构检查(C-G1 L0)」（含
-  `--self-test`）与「Execution Registry 自测」五步（步骤以 `ci.yml` 为准）。
+  于 2026-09-06 移除，`harness-ingest` 于 2026-09-07 并入，`FULL_EXCLUDE` 除外）。
+  `#2659` 更正：此前写作「`:214` `FULL_EXCLUDE`」——**行号不是稳定标识**（该文件随
+  gate 增删频繁移动，实测已由 214 → 322）。改引**符号名** `FULL_EXCLUDE`
+  （定义于 `scripts/run_gates.py`，`check:full` = `GATES − FULL_EXCLUDE`）。
+- `ci.yml` lint job：脚本不可变检查之后追加的治理/门禁类步骤包括「差异面不变量检查」
+  （invariant-diff，BLOCK）、「分层检查」（`check_layering.py`，含 `--self-test`）、
+  「孤立 ORM 模型检查」（`check_orphan_models.py`，含 `--self-test`）、「上帝文件行数封顶检查」
+  （`check_god_files_ceiling.py`）、「局部 import 棘轮检查」、「治理面结构检查(C-G1 L0)」（含
+  `--self-test`）与「Execution Registry 自测」。
+  **步骤数以 `ci.yml` 为准**——本段只列举**治理/门禁类**步骤，不声称穷尽（该 job 另含
+  依赖安装、ESLint/Ruff、knip、空行注入污染、alembic revision 不可变、内网主机地址检查等）。
+  `#2659` 更正：此前写「**五步**」且漏列窗口内新增的多项，**计数与清单双失准**；
+  改为**不写总数、按类别列举 + 指向 `ci.yml`**，避免每新增一个步骤就产生漂移。
 
 ## 5. 本地护栏
 
