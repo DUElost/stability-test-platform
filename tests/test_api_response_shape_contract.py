@@ -447,6 +447,21 @@ _MODEL_PAIRS: tuple[tuple[str, str, str, str], ...] = (
         "frontend/src/utils/api/types.ts",
         "JobArtifactEntry",
     ),
+    # #2187 opt-in plans.py：触发端点从「误标 PlanRun 的幽灵声明」收紧为真实形状。
+    # 对拍当场钉出：plans.run() 旧返回类型多出 9 键（capabilities/jobs/device_count…），
+    # 触发端点从不返回——唯一调用点只读 .id 才未出事（types.ts::PlanRunTriggerResult）。
+    (
+        "backend/api/routes/plans.py",
+        "PlanOut",
+        "frontend/src/utils/api/types.ts",
+        "Plan",
+    ),
+    (
+        "backend/api/routes/plans.py",
+        "PlanRunSummaryOut",
+        "frontend/src/utils/api/types.ts",
+        "PlanRunTriggerResult",
+    ),
     # #1520 收官：解析器支持同仓库跨文件基类后，ORMBaseModel 系模型转正
     (
         "backend/api/schemas/jira_run.py",
@@ -553,6 +568,13 @@ _MODEL_PAIRS: tuple[tuple[str, str, str, str], ...] = (
 #: 可建模的固定形状。台账内的文件必须**实际 == 登记**：条目失效（已正规化或已删除）即红，
 #: 防僵尸豁免——同 ``_DOC_UNCHECKABLE`` 的口径。
 _MODEL_BLINDSPOT: dict[str, set[str]] = {
+    # #2187 扩面：plans.py。两个 typed 模型已登记对拍；以下两处仍返回运行期
+    # 拼装 dict（delete 的 ok 壳 / run preview 的预览聚合）——按台账认领，
+    # 正规化为各自端点的小批（preview 的 PlanRunPreview TS 侧已有类型，可对照）。
+    "backend/api/routes/plans.py": {
+        "delete_plan",
+        "preview_plan_run",
+    },
     # #1520 形状正规化批第一步：summary/artifacts 已升模型进 `_MODEL_PAIRS`；
     # 剩余具名模型逐个对拍前按台账显式豁免（下方 `_MODEL_UNREGISTERED`），
     # 三个仍 `ApiResponse[dict]` 的写侧摘要在此认领盲区。
