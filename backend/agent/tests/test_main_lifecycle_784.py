@@ -1,4 +1,8 @@
-"""#784: main.py shutdown stop 作用域与启动组对齐（静态契约）。"""
+"""#784: Agent shutdown stop 作用域与启动组对齐（静态契约）。
+
+#736 后停机序列在 ``graceful_shutdown.py``；本文件保留 #784 顺序契约，
+并断言顺序不因搬家而回潮。
+"""
 
 from __future__ import annotations
 
@@ -7,20 +11,15 @@ from pathlib import Path
 import pytest
 
 
-def _main_source() -> str:
-    return (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
-
-
 def test_shutdown_stops_archiver_monitor_uploader_outside_watcher_branch():
-    src = _main_source()
-    # 定位 finally 关停段：EventUploader.stop 必须出现在 log_signal_drainer 分支外
-    finally_idx = src.rfind("finally:")
-    assert finally_idx > 0
-    shutdown = src[finally_idx:]
-    eu = shutdown.find("EventUploader.instance().stop")
-    arch = shutdown.find("LogArchiver.instance().stop")
-    disk = shutdown.find("LocalDiskMonitor.instance().stop")
-    drain_branch = shutdown.find("if log_signal_drainer is not None:")
+    src = (
+        Path(__file__).resolve().parents[1] / "graceful_shutdown.py"
+    ).read_text(encoding="utf-8")
+    body = src[src.find("def shutdown_agent_runtime") :]
+    eu = body.find("EventUploader.instance().stop")
+    arch = body.find("LogArchiver.instance().stop")
+    disk = body.find("LocalDiskMonitor.instance().stop")
+    drain_branch = body.find("if log_signal_drainer is not None:")
     assert eu > 0 and arch > 0 and disk > 0 and drain_branch > 0
     # 三者均在 watcher/drainer 分支之前
     assert eu < drain_branch

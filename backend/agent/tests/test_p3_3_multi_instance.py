@@ -26,6 +26,8 @@ def test_singleton_schedule_ids_cover_p3_3_jobs():
         "plan_chain_reconciler",
         "revoked_token_cleanup",
         "auto_archive_sweep",
+        # #2741 / ADR-0049：audit_logs 分层保留期裁剪（多实例下单例防重复删）。
+        "audit_log_cleanup",
     }
     assert SINGLETON_SCHEDULE_IDS == expected
     # Internal leadership — must NOT double-wrap.

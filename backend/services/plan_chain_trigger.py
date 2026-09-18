@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from backend.core.job_timeout_config import HOST_HEARTBEAT_TIMEOUT_SECONDS
+from backend.core.settings.scheduler import get_scheduler_settings
 from backend.models.host import Device
 from backend.models.job import JobInstance
 from backend.models.plan import Plan
@@ -50,6 +51,19 @@ def _aware_utc(value: datetime | None) -> datetime | None:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+
+def _settle_wait_left(parent: PlanRun, now: datetime) -> float:
+    """#2755：即时链触发路径的最小稳定窗剩余秒数（<=0 表示可即时触发）。
+
+    父 run `ended_at` 缺失按 0（无法度量等待，不阻断——历史行为）。**仅供即时
+    路径**；reconciler 补偿路径不走本窗（它的 60s tick 本身就是延迟兜底）。
+    """
+    settle = get_scheduler_settings().chain_trigger_settle_seconds
+    if settle <= 0 or parent.ended_at is None:
+        return 0.0
+    return settle - (now - _aware_utc(parent.ended_at)).total_seconds()
 
 
 def _select_chain_devices(
@@ -242,8 +256,15 @@ def _rollback_chain_trigger_sync(
 async def trigger_next_plan(
     plan_run: PlanRun,
     db: AsyncSession,
+    *,
+    respect_settle: bool = False,
+    now: datetime | None = None,
 ) -> PlanRun | None:
-    """Create child Run + parent flag atomically; enqueue its gate post-commit."""
+    """Create child Run + parent flag atomically; enqueue its gate post-commit.
+
+    #2755：`respect_settle=True` 只从即时路径传入；跳过即由 reconciler 补偿
+    （见 trigger_next_plan_sync 的同名参数文档）。
+    """
     parent = (await db.execute(
         select(PlanRun)
         .where(PlanRun.id == plan_run.id)
@@ -270,6 +291,16 @@ async def trigger_next_plan(
         return existing
     if parent.next_plan_triggered:
         return None
+
+    if respect_settle:
+        left = _settle_wait_left(parent, now or datetime.now(timezone.utc))
+        if left > 0:
+            logger.info(
+                "plan_chain_trigger_settling parent=%d left_seconds=%d "
+                "(chain reconciler will fire next tick)",
+                parent.id, int(left),
+            )
+            return None
 
     # #2648：以父段 job 终态为主判据（COMPLETED 无条件入列），瞬时 device.status
     # 仅对非 COMPLETED job 兜底——teardown 后 BUSY→ONLINE 回写滞后不再踢出健康设备。
@@ -329,8 +360,16 @@ async def trigger_next_plan(
 def trigger_next_plan_sync(
     plan_run: PlanRun,
     db: Session,
+    *,
+    respect_settle: bool = False,
+    now: datetime | None = None,
 ) -> PlanRun | None:
-    """Synchronous atomic child creation + post-commit gate enqueue."""
+    """Synchronous atomic child creation + post-commit gate enqueue.
+
+    #2755：`respect_settle=True` 仅由即时路径（job 终态副作用）传入——父 run 刚
+    终态 < settle 窗时**跳过本轮**（不设 flag、不建 child），交 chain reconciler
+    下一 tick 以 `respect_settle=False` 补偿触发。补偿/repair 调用保持默认 False。
+    """
     parent = db.execute(
         select(PlanRun)
         .where(PlanRun.id == plan_run.id)
@@ -357,6 +396,16 @@ def trigger_next_plan_sync(
         return existing
     if parent.next_plan_triggered:
         return None
+
+    if respect_settle:
+        left = _settle_wait_left(parent, now or datetime.now(timezone.utc))
+        if left > 0:
+            logger.info(
+                "plan_chain_trigger_settling parent=%d left_seconds=%d "
+                "(chain reconciler will fire next tick)",
+                parent.id, int(left),
+            )
+            return None
 
     # #2648：同 async 路径——父段 job 终态为主判据
     rows = db.execute(

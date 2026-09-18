@@ -29,6 +29,10 @@ from backend.core.settings.scheduler import (
     SchedulerSettings,
     get_scheduler_settings,
 )
+# 顶层导入（不走 register_schedules 的函数级惰性导入惯例）：audit_log_cleanup
+# 只依赖 core 层（audit/database/metrics/settings/models），无回边到 scheduler
+# 域——保持函数级反而会推高 inner-imports 棘轮（#738 基线只许下调）。
+from backend.scheduler.audit_log_cleanup import audit_log_cleanup_job
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +60,7 @@ SINGLETON_SCHEDULE_IDS: frozenset[str] = frozenset({
     "plan_chain_reconciler",
     "revoked_token_cleanup",
     "auto_archive_sweep",
+    "audit_log_cleanup",
 })
 
 
@@ -278,6 +283,21 @@ async def register_schedules(scheduler: AsyncScheduler) -> None:
         "schedule_registered id=revoked_token_cleanup interval=%ds",
         _sched().revoked_token_cleanup_interval_seconds,
     )
+
+    # #2741 / ADR-0049：audit_logs 分层保留期裁剪（security 180d / business
+    # 90d / session 30d）。interval<=0 = 显式停用（不注册作业——事故取证期
+    # 冻结裁剪的逃生阀），此时也不打 schedule_registered 日志，监控面读作
+    # 「该作业不存在」而非「注册了但从不跑」。
+    if (audit_interval := _sched().audit_log_retention_interval_seconds) > 0:
+        await _add(
+            _instrumented("audit_log_cleanup", audit_log_cleanup_job, singleton=True),
+            IntervalTrigger(seconds=audit_interval),
+            id="audit_log_cleanup",
+            misfire_grace_time=timedelta(minutes=30),
+        )
+        logger.info(
+            "schedule_registered id=audit_log_cleanup interval=%ds", audit_interval
+        )
 
     from backend.scheduler.cron_scheduler import auto_archive_sweep
 
