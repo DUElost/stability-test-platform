@@ -180,9 +180,13 @@ class TestRunJiraDraftProjectKey:
             db_session, sample_device,
             plan_run_project_id=1, project_jira_key="V552AA-VFFB",
         )
-        resp = client.post(f"/api/v1/runs/{job_id}/jira-draft", headers=auth_headers)
+        # #290：POST 按需重建端点已删；项目键解析走 cached 端点的实时回落
+        # （未 post_process 的 job 无缓存 → build_jira_draft 同款路径）。
+        resp = client.get(
+            f"/api/v1/runs/{job_id}/jira-draft/cached", headers=auth_headers,
+        )
         assert resp.status_code == 200, resp.text
-        draft = resp.json()
+        draft = resp.json()["data"]
         assert draft["project_key"] == "V552AA-VFFB"
         assert draft["extra"]["project_key_source"] == "plan_run_project"
 
@@ -190,9 +194,11 @@ class TestRunJiraDraftProjectKey:
         self, client, auth_headers, db_session, sample_device,
     ):
         job_id = self._seed_job(db_session, sample_device)
-        resp = client.post(f"/api/v1/runs/{job_id}/jira-draft", headers=auth_headers)
+        resp = client.get(
+            f"/api/v1/runs/{job_id}/jira-draft/cached", headers=auth_headers,
+        )
         assert resp.status_code == 200, resp.text
-        draft = resp.json()
+        draft = resp.json()["data"]
         assert draft["project_key"] == "STABILITY"
         assert draft["extra"]["project_key_source"] == "global_default"
         assert draft["extra"]["project_key_global_default"] == "STABILITY"
