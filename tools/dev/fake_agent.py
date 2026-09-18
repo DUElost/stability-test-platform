@@ -23,7 +23,7 @@ job / step 级实时面在隔离 dev 栈里**曾经不可测**：派发门禁要
 3. **凭据不外泄**：``AGENT_SECRET`` 只从环境读、不打印；``fencing_token`` 由本文件
    唯一一处取用（``fencing_token_for``），**永不打印、永不落盘**。
 
-自踩过的 4 个坑（都已在实现里处理）
+自踩过的 5 个坑（都已在实现里处理）
 ------------------------------------
 - 后端镜像**没有** ``websocket-client`` → 生产 Agent 按 #1121 走 websocket-only，
   夹具连不上，只能退回 polling；polling 会话约 5 分钟掉一次 → 内置自愈重连。
@@ -32,6 +32,11 @@ job / step 级实时面在隔离 dev 栈里**曾经不可测**：派发门禁要
 - ``docker compose exec -d`` 起的进程会随会话回收 → 文档给 ``setsid nohup … </dev/null &``。
 - ``fencing_token`` 不在 API 响应里 → 统一由本文件的 ``fencing_token_for`` 从
   ``device_leases`` 现取现用，避免每人写一份并顺手打印。
+- **两台夹具默认会抢同一批设备**（#2570）：``device.serial`` 是全局唯一列、心跳按
+  serial 认设备，早期版本的假 serial 写死成 ``DEVFIX###``（不带 host 维度）——于是
+  ``DEVFIX001`` 在两台 host 之间来回改绑，第二台 host **一台自己的设备都拿不到**，
+  ``claim`` 恒返回 ``[]``，测试者会把它误判成产品缺陷。现在 serial 缺省就带 host
+  尾段（``192.0.2.12`` → ``DEVFIX012-001``），要固定前缀用 ``--serial-prefix``。
 
 用法
 ----
@@ -50,12 +55,18 @@ job / step 级实时面在隔离 dev 栈里**曾经不可测**：派发门禁要
     docker compose exec -T server python /app/tools/dev/fake_agent.py complete --job 12
     docker compose exec -T server python /app/tools/dev/fake_agent.py inject \\
         --event step_log --data '{"job_id":12,"line":"hello"}'
+
+    # 多 host 形状（host 级 abort 扇出 / 跨 host 双驱动 / device_host_drift 整批阻断）：
+    # 起两台、各带自己的 IP，serial 前缀自动分开，不需要额外参数（#2570/#2569）
+    python tools/dev/fake_agent.py --host-ip 192.0.2.11 --host-id 192-0-2-11 --devices 30 serve
+    python tools/dev/fake_agent.py --host-ip 192.0.2.12 --host-id 192-0-2-12 --devices 3 serve
 """
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -79,6 +90,32 @@ class FixtureRefused(RuntimeError):
     """夹具主动拒绝执行（红线触发），而不是崩在半路。"""
 
 
+#: 假设备 serial 前缀的缺省基准（#2570）。真正的 serial 是 ``<前缀>-<序号>``。
+SERIAL_PREFIX_BASE = "DEVFIX"
+
+
+def default_serial_prefix(host_ip: str | None) -> str:
+    """按 host 生成假设备 serial 前缀（#2570）——**host 维度是缺省行为，不是可选项**。
+
+    ``device.serial`` 全局唯一且心跳按 serial 认设备：前缀不带 host 时，两台夹具
+    必然争用同一批行（后果见模块 docstring 的坑 5）。取 IP 尾段做前缀，是因为
+    dev 栈里 host 身份就是按 IP 认的（``host_id: "0"`` 自动注册哨兵）。
+
+    ``192.0.2.12`` → ``DEVFIX012``；尾段非数字（传成主机名）→ 取其字母数字尾巴
+    ``DEVFIX-<slug>``；连尾段都没有 → 退回裸 ``DEVFIX``（老形状）。**只取尾段**是
+    已知边界：跨 /24 同尾段的两台假 host 仍会同前缀，那种拓扑用 ``--serial-prefix``
+    显式区分——退化到老行为（争用同一批行），不会退化成崩。
+    """
+    if not host_ip:
+        return SERIAL_PREFIX_BASE
+    tail = str(host_ip).replace(":", ".").split(".")[-1].strip()
+    digits = "".join(ch for ch in tail if ch.isdigit())
+    if digits:
+        return f"{SERIAL_PREFIX_BASE}{digits[-3:].zfill(3)}"
+    slug = re.sub(r"[^0-9A-Za-z]", "", tail)[:6]
+    return f"{SERIAL_PREFIX_BASE}-{slug}" if slug else SERIAL_PREFIX_BASE
+
+
 def log(msg: str, log_file: str | None = None) -> None:
     line = f"{time.strftime('%H:%M:%S')} {msg}"
     print(line, flush=True)
@@ -95,18 +132,24 @@ def log(msg: str, log_file: str | None = None) -> None:
 def build_heartbeat_payload(
     seq: int, *, device_count: int = 3, host_ip: str = "192.0.2.11",
     host_name: str = "dev-fake-host", agent_version: str = "9.9.9-devfixture",
+    serial_prefix: str | None = None,
 ) -> dict[str, Any]:
     """造一份能让 dev 栈「有主机 + 有设备」的心跳体（纯函数，可单测）。
 
     ``host_id: "0"`` 是老 Agent 的自动注册哨兵：后端按 IP 建/找主机，所以夹具
     不需要先在 UI 里点「添加主机」。设备平台交替 mtk / qualcomm，便于验证平台维度
     的筛选与染色；奇数轮把第 3 台设备置为 offline，制造一次可观察的状态翻转。
+
+    ``serial_prefix`` 缺省由 ``host_ip`` 派生（#2570）：**不同 host 的假设备 serial
+    必须互不相同**，否则两台夹具只是在互相抢行。显式传值（含 ``--serial-prefix``）
+    优先，便于把某台夹具固定成可预测的一批 serial。
     """
+    prefix = serial_prefix if serial_prefix is not None else default_serial_prefix(host_ip)
     devices: list[dict[str, Any]] = []
     for i in range(1, max(0, device_count) + 1):
         offline = bool(seq % 2) and i == 3
         devices.append({
-            "serial": f"DEVFIX{i:03d}",
+            "serial": f"{prefix}-{i:03d}",
             "model": f"DevFix-Model-{i}",
             "platform": "qualcomm" if i % 2 else "mtk",
             "adb_state": "offline" if offline else "device",
@@ -348,7 +391,10 @@ def cmd_heartbeat(args: argparse.Namespace) -> int:
     for seq in range(1, max(1, args.count) + 1):
         status, body = post_json(
             base, secret, "/api/v1/heartbeat",
-            build_heartbeat_payload(seq, device_count=args.devices, host_ip=args.host_ip),
+            build_heartbeat_payload(
+                seq, device_count=args.devices, host_ip=args.host_ip,
+                serial_prefix=args.serial_prefix,
+            ),
             timeout=20.0,
         )
         log(f"heartbeat seq={seq} HTTP={status} body={json.dumps(body, ensure_ascii=False)[:200]}",
@@ -528,7 +574,10 @@ def _http_beat(args: argparse.Namespace, seq: int) -> None:
         base = target_from_args(args)
         status, _body = post_json(
             base, secret, "/api/v1/heartbeat",
-            build_heartbeat_payload(seq, device_count=args.devices, host_ip=args.host_ip),
+            build_heartbeat_payload(
+                seq, device_count=args.devices, host_ip=args.host_ip,
+                serial_prefix=args.serial_prefix,
+            ),
             timeout=15.0,
         )
         if status >= 400:
@@ -577,6 +626,8 @@ def _global_defaults() -> dict[str, Any]:
         "host_ip": os.environ.get("STP_DEV_HOST_IP", "192.0.2.11"),
         "agent_version": "9.9.9-devfixture",
         "devices": 3,
+        # 空串/未设 = 按 host_ip 自动派生（#2570）；显式值优先
+        "serial_prefix": (os.environ.get("STP_DEV_SERIAL_PREFIX") or "").strip() or None,
         "transport": "auto",
         "log_file": "/tmp/stp-fake-agent.log",
         "allow_non_dev_target": False,
@@ -599,6 +650,11 @@ def _common_options() -> argparse.ArgumentParser:
     common.add_argument("--host-ip", default=S)
     common.add_argument("--agent-version", default=S)
     common.add_argument("--devices", type=int, default=S, help="心跳里的假设备数")
+    common.add_argument(
+        "--serial-prefix", default=S,
+        help="假设备 serial 前缀；缺省按 --host-ip 尾段自动带 host 维度"
+             "（192.0.2.12 -> DEVFIX012，#2570）。两台夹具抢设备时先查这里",
+    )
     common.add_argument(
         "--transport", choices=("auto", "polling", "websocket"), default=S,
         help="auto=先 websocket 后 polling；dev 镜像无 websocket-client 时会退 polling",
