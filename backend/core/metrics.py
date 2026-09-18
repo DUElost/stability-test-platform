@@ -555,7 +555,8 @@ reconciler_dirs_abandoned_total = Counter(
 
 reconciler_dirs_oversized_skipped_total = Counter(
     'stability_reconciler_dirs_oversized_skipped_total',
-    'UNISOC event dirs degraded to metadata-only by the size guard (#2252), cumulative unique dirs',
+    'UNISOC event dirs degraded to metadata-only by the size guard (#2252); '
+    'per-job unique dirs, summed once per completed job (NOT distinct dirs across jobs)',
     ['host_id']
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
@@ -817,7 +818,13 @@ def record_reconciler_dirs_abandoned(host_id: str, amount: int):
 
 
 def record_reconciler_dirs_oversized_skipped(host_id: str, amount: int):
-    """#2394/#2252: job 终态桥接——降级仅取元数据的目录累计数（>0 才计）。"""
+    """#2394/#2252: job 终态桥接——本 job 内按名去重后的降级目录数（>0 才计）。
+
+    口径（#2640）：`amount` 来自 `UnisocReconciler._oversized_seen`，那个集合**随
+    reconciler 实例（每 job 一份）新建**，所以唯一性只在 job 内成立。同一目录在 N 个
+    job 里被降级就会累加 N 次——因此本指标不能当「某 host 有多少个被降级目录」读
+    （那会高估），要看目录数需按 job 取末拍快照。
+    """
     n = _pos_int_or_none(amount)
     if n is None or not PROMETHEUS_AVAILABLE:
         return
