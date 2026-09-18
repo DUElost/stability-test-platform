@@ -188,7 +188,7 @@ local_aee_root=/var/stp-aee
 
 - 每台一行：`ansible_host`（默认取行首主机）、`ansible_user`，以及
   `ansible_password` **或** `ansible_ssh_private_key_file`；
-- 可选逐台覆盖：`ansible_port`、`agent_key`、`install_root`、`local_aee_root`、`ssh_credential_ref`；
+- 可选逐台覆盖：`ansible_port`、`agent_key`、`install_root`、`local_aee_root`、`ssh_credential_ref`；其中 `ansible_port` 在 `site.yaml` 侧的来源是 `agents[].ssh_port`（1..65535，默认 22；#2283 起真正生效并进入 Host 创建/复用校验，契约行见 `docs/design/2026-09-multi-site-installation.md` §3）；
 - **一套共享凭据**：所有主机默认用同一个绑定 `agent_ssh`，脚本把清单里的凭据写进
   `$STP_BINDINGS_DIR`（0700/0600）。需要**另一种**凭据（另一个用户、另一种类型、
   另一个秘密）的主机必须自带 `ssh_credential_ref`——同 ref 不同秘密会被拒绝，

@@ -6,11 +6,13 @@ import os
 import subprocess
 import sys
 import textwrap
+import types
+import typing
 from dataclasses import asdict
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 import yaml
 
 from tools.site_config.__main__ import main
@@ -657,3 +659,108 @@ def test_local_mount_may_export_to_agents(site_data):
     # 默认不开导出（向后兼容既有站点输入）
     del data["storage"]["export_to_agents"]
     assert SiteConfig.model_validate(data).storage.export_to_agents is False
+
+
+# ---------- 样例字段完整性（#2662）：把文档承诺变成可证伪的判据 ----------
+
+_UNION_ORIGINS = {typing.Union, getattr(types, "UnionType", None)}
+
+
+def _non_none_structures(annotation) -> list:
+    """注解里可能出现的所有非 None 类型（去 `Annotated` / `Optional` / Union）。"""
+    if typing.get_origin(annotation) is typing.Annotated:
+        return _non_none_structures(typing.get_args(annotation)[0])
+    if typing.get_origin(annotation) in _UNION_ORIGINS:
+        out: list = []
+        for arg in typing.get_args(annotation):
+            if arg is not type(None):
+                out.extend(_non_none_structures(arg))
+        return out
+    return [annotation]
+
+
+def _model_field_paths(annotation, prefix: str) -> set[str]:
+    """把字段注解展开成「样例里应出现的键路径」；列表元素写作 `[]`。"""
+    paths: set[str] = set()
+    for kind in _non_none_structures(annotation):
+        if isinstance(kind, type) and issubclass(kind, BaseModel):
+            paths |= _model_paths_of(kind, prefix)
+        elif typing.get_origin(kind) in (list, tuple, set):
+            for elem in typing.get_args(kind):
+                paths |= _model_field_paths(elem, f"{prefix}[]")
+    return paths
+
+
+def _model_paths_of(model: type[BaseModel], prefix: str = "$") -> set[str]:
+    paths: set[str] = set()
+    for name, field in model.model_fields.items():
+        child = f"{prefix}.{name}"
+        paths.add(child)
+        paths |= _model_field_paths(field.annotation, child)
+    return paths
+
+
+def _example_key_paths(node, prefix: str = "$") -> set[str]:
+    paths: set[str] = set()
+    if isinstance(node, dict):
+        for key, value in node.items():
+            child = f"{prefix}.{key}"
+            paths.add(child)
+            paths |= _example_key_paths(value, child)
+    elif isinstance(node, list):
+        for item in node:
+            paths |= _example_key_paths(item, f"{prefix}[]")
+    return paths
+
+
+def _example_null_paths(node, prefix: str = "$") -> set[str]:
+    """样例里**显式**写成 `null` 的键（只收集这些，父键存在不算）。
+
+    判据口径：只有「父键被写成 `null`」才豁免其子键。早前的写法把每个键都塞进集合，
+    于是 `storage:` 存在即豁免 `storage.*` 的任意缺键——豁免面扩大到能吞掉本单要修的
+    那类漂移（#2662 复核时发现）。
+    """
+    paths: set[str] = set()
+    if isinstance(node, dict):
+        for key, value in node.items():
+            child = f"{prefix}.{key}"
+            if value is None:
+                paths.add(child)
+            else:
+                paths |= _example_null_paths(value, child)
+    elif isinstance(node, list):
+        for item in node:
+            paths |= _example_null_paths(item, f"{prefix}[]")
+    return paths
+
+
+def test_site_example_documents_every_model_field():
+    """`docs/design/2026-09-multi-site-installation.md:83` 写「完整字段见唯一样例」——
+    那就得有人检查它（#2662）。
+
+    发现过程本身说明判据的必要性：issue 只登记了 `agents[].ssh_port` 一处，加上本判据
+    后同一棵模型树里又暴露 3 处（`storage.export_to_agents`、`monitoring` 整段 2 个键）。
+    样例的语义是「**键必须在、值可待填**」（`.invalid` 目标与 `null` 都是刻意的），
+    所以缺键与缺值不是一回事：前者让读者根本不知道字段存在。
+
+    反向不重复钉：模型 `extra="forbid"`，样例里写了不存在的键会在 `validate` 直接失败。
+    """
+    example = yaml.safe_load(
+        (REPO_ROOT / "deploy/sites/site.example.yaml").read_text(encoding="utf-8")
+    )
+    required = _model_paths_of(SiteConfig)
+    present = _example_key_paths(example)
+    # 父键显式为 null 时不要求其子键：`storage.os` 在 `provisioning=local_mount` 下
+    # **必须**为空（否则 `local_mount_fields_conflict`），强行展开成 mapping 会让样例说谎。
+    nulls = _example_null_paths(example)
+    uncovered = sorted(
+        path for path in required - present
+        if not any(path != parent and path.startswith(f"{parent}.") for parent in nulls)
+    )
+    assert not uncovered, (
+        "站点模型有这些字段，但「唯一权威样例」里没有——文档却称完整字段见该样例"
+        f"（#2662）：{uncovered}"
+    )
+    # 本单的直接对象：正向钉一次，防止判据靠豁免通过（豁免清单扩大也会让它变虚）
+    assert "$.agents[].ssh_port" in present
+    assert "$.monitoring.prometheus_port" in present

@@ -1,7 +1,8 @@
 # ADR-0042：配置读取收敛——分域 pydantic-settings 与裸读取边界
 
-- 状态：**Accepted**（v1.1：P1 试点完成并回填。2026-09-14 裁决：引入 pydantic-settings；按 D2 判据分域迁移，不满足判据者保持裸读）
+- 状态：**Accepted**（v1.2：P2 已落地四片并回填（进度回填，非 P2 收口）。2026-09-14 裁决：引入 pydantic-settings；按 D2 判据分域迁移，不满足判据者保持裸读）
 - 版本记录：
+  - v1.2（2026-09-18）：**P2 状态回填**（#2661 纠漂移——本 ADR 停在 v1.1 的「P2 待启动」，而 P2 已落地四片，索引面与 §P2 范围三处失真）。四个落地片（均已确认在主线内）：① 控制面 scheduler 四 reconciler 批处理旋钮（`759526d7`）；② 安全与会话域 `core/security` + `cors` → `backend/core/settings/security.py::AuthSessionSettings`（`90377dbe`）；③ agent 侧磁盘与日志归档域 `DiskArchiveSettings`（`b8ebf843`）；④ agent 心跳/协调/注册域 `HeartbeatSettings` + `RegistrationSettings`（`d58093dd`）。**口径**：回填的是「已落地四片」，不是「P2 完成」——余域仍按 D2 逐个评估，P3 收口未启动。
   - v1.1（2026-09-14）：**P1 试点完成并回填**——依赖（#1970）+ D6 门禁（#1971）+ 控制面调度域（#1977，21 旋钮）+ agent 租约域（#1984，5 旋钮 + hot-update reload 钩子）。结论：D1–D4/D6 按裁决落地、等价性测试全绿；新增两条实作约束（见 §P1 试点结论）。P2 待启动。
   - v1.0（2026-09-14）：用户委托本会话裁决——**引入**；载体取 D1 分域 Settings（否决方案 A 薄封装、方案 C 维持现状）；**附加硬约束**：Settings 仅读 `os.environ`（`env_file=None`），不得引入第二个 dotenv 加载器（`env_source.py` 仍是来源与优先级的唯一契约）；D6 门禁扩展为 P1 试点的**前置条件**。**转 Accepted**。
   - v0.1（2026-09-14 初版，由 #737 收口后的 deferred 项触发；现状盘点与分域判据见正文）
@@ -141,9 +142,16 @@ pydantic-settings 自带的 dotenv 加载）——`.env` 来源与优先级仍�
 
 ### P2 范围（按 D2 判据执行，不扩不缩）
 
-- 控制面：`counter/signal_link/plan_chain/precheck` 四个 reconciler 的 7 个批处理旋钮；
-- agent：其余域（watcher/磁盘/注册等）逐个按 D2 判据评估——满足才迁，不满足保持裸读
-  （仍受 env_inventory 门禁约束）。
+**清单不是执行序**：下面是 v1.0 起草时的粗粒度枚举，实际推进以 D2 判据逐域评估为准。
+v1.2（#2661）把已落地域写回本清单——按 v1.1 的原文读，会误判「安全与会话域不在 P2 内」。
+
+- 控制面：`counter/signal_link/plan_chain/precheck` 四个 reconciler 的 7 个批处理旋钮 —— **已落地**
+  （`759526d7`）；
+- 控制面安全与会话域（`core/security` + `cors` → `AuthSessionSettings`）—— **已落地**（`90377dbe`，
+  D2 候选清单第一优先项）；agent 侧磁盘与日志归档域（`DiskArchiveSettings`）—— **已落地**
+  （`b8ebf843`，D2 候选清单第二优先项）；
+- agent：心跳/协调/注册域（`HeartbeatSettings` + `RegistrationSettings`）—— **已落地**（`d58093dd`）；
+  其余域（watcher 等）逐个按 D2 判据评估——满足才迁，不满足保持裸读（仍受 env_inventory 门禁约束）。
 
 ## 落地与后续动作
 

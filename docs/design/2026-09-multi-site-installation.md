@@ -80,7 +80,7 @@ I2 已定义**消费端**清单契约：`release.manifest` 声明本地清单路
 
 ### 3.2 示例与平台建模
 
-完整字段见唯一的[站点配置样例](../../deploy/sites/site.example.yaml)。样例**故意不完整，连离线 `validate` 都不能通过**：`.invalid` 是虚构目标，`null` 表示尚未确认；不能复制后直接安装。
+完整字段见唯一的[站点配置样例](../../deploy/sites/site.example.yaml)——**字段清单以它为准**，这一点由 `tests/test_site_config.py::test_site_example_documents_every_model_field` 检查（模型里有的字段，样例必须有这一行）。样例**故意不完整，连离线 `validate` 都不能通过**指的是**取值**：`.invalid` 是虚构目标，`null` 表示尚未确认；不能复制后直接安装。「值待填」与「字段没登记」是两回事——后者会让读者根本不知道该项存在，且 `ssh_port` 一类带默认值的字段漏登记时，非默认站点只能靠口头知识发现它（#2662）。
 角色的发行版分配和路径仅用于说明布局，不代表城市 B 已接受这些值。真实数据由站点管理员在本地填写，不需要在聊天或仓库提交。
 
 Linux 家族、统一 CPU 架构和 systemd 放在站点级 `platform`；发行版与版本则逐角色声明，允许同一站点混用 Debian/Ubuntu。核心形状如下，不能作为完整配置使用：
@@ -122,6 +122,7 @@ agents:
 | `agents[].key/target` | key 仅是引导时的逻辑名；同站点避免重复名称/目标；Host ID 必须来自本站 API。I4：Host 名取 `<site.id>-<key>`，按 `target`（IP/主机名）查/建并对名称核对，占用同 IP/同名即 fail-closed（不换名、不抢占） | Host 创建参数、Ansible 目标及安装器 `agent_host_id`，Device 由 Agent 发现 |
 | `agents`（列表本身） | I5.5 起**允许为空**：先把控制面装好、Agent 随后按 inventory 接入（S5 显式跳过并给出后续命令）。非空时所有 `install_root` 必须一致——`STP_SCRIPT_RUNTIME_ROOT` 是站点级单值，异构根会静默取错路径（`agent_install_root_mismatch`） | 站点级 env 渲染；S5 逐台接入 |
 | `agents[].install_root/local_aee_root` | 区分安装/SSD 日志与本地 AEE 第一落点；本地 AEE 根不能误指共享挂载 | `AGENT_INSTALL_DIR` 及安装器派生路径、受保护的 `STP_AEE_LOCAL_ROOT`；I4 经 `install_options` 下传给既有安装链，空值不覆盖目标 `.env` 既有值 |
+| `agents[].ssh_port` | 逐主机 SSH 端口，范围 **1..65535**，默认 **22**。#2283 之前 `ansible_port` 被解析后丢弃、Host 行恒以 22 建立，因此非 22 的站点必须逐台声明（漏声明会连到错误服务，通常安装中途失败） | 落进 inventory 的 `ansible_port`（见 `docs/operations/installation.md` 的 Agent 清单），并进入 Host 创建/复用校验 |
 | 秘密绑定 | 按站点生成/提供，格式与权限验证，不复制 A 的值，不用占位值启动 | `DATABASE_URL`、`REDIS_URL`、`JWT_SECRET_KEY`、`AGENT_SECRET`、`SSH_CREDENTIALS_FERNET_KEY` 等既有键 |
 | `navigation` | 只发布获准信息；URL 只允许受控站点/文档目标，不带凭据。I5：`contact`/`documentation_url` 由 S2 渲染进站点导航页（HTML 转义，显示名与负责人是自由文本） | `/var/www/stability-site/index.html`（0644，nginx `/site/` 只读提供）+ `handover.json`；不引入统一登录、不污染前端发布物 |
 | `monitoring` | 站点本地监控栈（#2197）：`enabled`（默认装）+ `prometheus_port`（默认 9091）。用发行版 `prometheus` / `prometheus-node-exporter` 包与其 unit，只通过 `/etc/default` 的 `$ARGS` 收窄监听面；抓取配置渲染到 `/etc/stp/prometheus/prometheus.yml`（job `file-server` → 回环 node-exporter），宿主进程内存采样器（`stp-mem-top.timer`）随栈落地 | `/storage` 页的数据源：后端默认查 `127.0.0.1:9091`（`STP_PROMETHEUS_URL` 未设时）；端口与 job 名改动必须同步后端环境，否则页面静默空掉；整栈只听回环 |
