@@ -535,9 +535,12 @@ def cmd_serve(args: argparse.Namespace) -> int:
     """常驻：注册 ``/agent`` + 周期 HTTP 心跳 + 消费注入文件（mtime 去重）。"""
     # 可变盒子：注入文件的已消费 mtime 要跨重连保留（重连不该把同一批指令再发一遍）
     state = {"seen": None}
+    # #2743：--lifetime 是 serve 启动即定的**绝对期限**，必须与 state 同级。
+    # 原先放在 work() 里＝每次自愈重连重新计时，而 polling 会话约 5 分钟掉一次
+    # （坑 2）⇒ 期限形同虚设，不存在的 host 长期 ONLINE 污染共享 dev 栈。
+    stop = time.time() + args.lifetime
 
     def work(emit: Callable[[str, dict], Any]) -> None:
-        stop = time.time() + args.lifetime
         seq = 0
         while time.time() < stop:
             seq += 1
@@ -551,6 +554,8 @@ def cmd_serve(args: argparse.Namespace) -> int:
             )
             _http_beat(args, seq)
             time.sleep(args.tick)
+        # 自退必须在日志里可见（#2743：此前无法归因退出时机，因为没有任何一行说它退了）
+        log(f"serve 到达 lifetime={args.lifetime:g}s，主动退出", args.log_file)
         return None
 
     # 自愈重连：polling 会话约 5 分钟掉一次（坑 2），掉线即重连而不退出
@@ -735,7 +740,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_inject)
 
     p = sub.add_parser("serve", help="常驻：注册 /agent + 周期心跳 + 消费注入文件")
-    p.add_argument("--lifetime", type=float, default=600.0)
+    p.add_argument("--lifetime", type=float, default=600.0,
+                   help="serve 的绝对期限（秒）——启动即定，自愈重连不重置（#2743）")
     p.add_argument("--tick", type=float, default=5.0)
     p.add_argument("--inject-file", default=None)
     p.add_argument("--reconnect-limit", type=int, default=5)

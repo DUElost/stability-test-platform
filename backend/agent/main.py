@@ -43,13 +43,11 @@ if __name__ == "__main__" and __package__ is None:
         start_periodic_recovery_sync,
     )
     from agent.claim_loop import process_claim_tick
+    from agent.graceful_shutdown import shutdown_agent_runtime
     from agent import device_discovery
     from agent.aee.state_migration import migrate_legacy_aee_state_keys
-    from agent.artifact_uploader import ArtifactUploader
     from agent.config import BASE_DIR, ensure_dirs
-    from agent.log_archiver import LogArchiver, collect_archive_heartbeat_metrics
-    from agent.event_uploader import EventUploader
-    from agent.local_disk_monitor import LocalDiskMonitor
+    from agent.log_archiver import collect_archive_heartbeat_metrics
     from agent.heartbeat_thread import HeartbeatThread
     from agent.job_runner import JobRunnerState, run_task_wrapper
     from agent.lease_renewer import LeaseRenewer
@@ -85,13 +83,11 @@ else:
         start_periodic_recovery_sync,
     )
     from .claim_loop import process_claim_tick
+    from .graceful_shutdown import shutdown_agent_runtime
     from . import device_discovery
     from .aee.state_migration import migrate_legacy_aee_state_keys
-    from .artifact_uploader import ArtifactUploader
     from .config import BASE_DIR, ensure_dirs
-    from .log_archiver import LogArchiver, collect_archive_heartbeat_metrics
-    from .event_uploader import EventUploader
-    from .local_disk_monitor import LocalDiskMonitor
+    from .log_archiver import collect_archive_heartbeat_metrics
     from .heartbeat_thread import HeartbeatThread
     from .job_runner import JobRunnerState, run_task_wrapper
     from .lease_renewer import LeaseRenewer
@@ -612,74 +608,22 @@ def main() -> None:
             # Use event wait instead of sleep so SIGTERM wakes us immediately
             _shutdown_event.wait(poll_interval)
     finally:
-        logger.info("agent_shutting_down, waiting for active tasks to finish...")
-        coordinator.stop()
-        operation_scheduler.shutdown()
-        # R07-F12 (#1012): scheduler.shutdown() only wakes permit waiters; also
-        # cancel already-running cruises so the executor drain below is bounded
-        # and SIGTERM actually ends a patrol loop instead of retrying it.
-        if job_runner_state is not None:
-            try:
-                for _jid in list(job_runner_state.active_runners):
-                    job_runner_state.request_abort(_jid)
-            except Exception:
-                logger.exception("shutdown_cancel_runners_failed")
-        executor.shutdown(wait=True, cancel_futures=False)
-        # Flush step traces via HTTP before shutdown
-        try:
-            flushed = step_trace_uploader.drain_sync()
-            if flushed:
-                logger.info("shutdown_step_trace_flushed count=%d", flushed)
-        except Exception:
-            logger.exception("shutdown_step_trace_flush_failed")
-        step_trace_uploader.stop()
-        # Final outbox drain: flush any un-acked terminal states
-        try:
-            flushed = outbox_drain.drain_sync()
-            if flushed:
-                logger.info("shutdown_outbox_flushed count=%d", flushed)
-        except Exception:
-            logger.exception("shutdown_outbox_flush_failed")
-        outbox_drain.stop()
-        # #784: LogArchiver / LocalDiskMonitor / EventUploader 在 watcher 门控
-        # 之外启动——停机必须同作用域，不能包进 log_signal_drainer 分支，否则
-        # watcher 禁用时 local_db.close() 后 daemon 仍 tick → LocalDB is closed。
-        try:
-            LocalDiskMonitor.instance().stop(timeout=5.0)
-        except Exception:
-            logger.exception("shutdown_local_disk_monitor_stop_failed")
-        try:
-            LogArchiver.instance().stop(timeout=5.0)
-        except Exception:
-            logger.exception("shutdown_log_archiver_stop_failed")
-        try:
-            EventUploader.instance().stop(timeout=5.0)
-        except Exception:
-            logger.exception("shutdown_event_uploader_stop_failed")
-        # log_signal_outbox drainer + ArtifactUploader（仅 watcher 子系统启用时）
-        if log_signal_drainer is not None:
-            try:
-                flushed = log_signal_drainer.tick_once()
-                if flushed:
-                    logger.info("shutdown_log_signal_flushed count=%d", flushed)
-            except Exception:
-                logger.exception("shutdown_log_signal_flush_failed")
-            log_signal_drainer.stop(timeout=5.0)
-            try:
-                ArtifactUploader.instance().stop(drain=True, timeout=5.0)
-            except Exception:
-                logger.exception("shutdown_artifact_uploader_stop_failed")
-        _recovery_sync_stop.set()
-        try:
-            _recovery_sync_thread.join(timeout=5.0)
-        except Exception:
-            logger.exception("shutdown_recovery_sync_join_failed")
-        heartbeat_thread.stop()
-        lease_renewer.stop()
-        mq_producer.close()
-        local_db.close()
-        sio_client.disconnect()
-        logger.info("agent_shutdown_complete")
+        shutdown_agent_runtime(
+            coordinator=coordinator,
+            operation_scheduler=operation_scheduler,
+            job_runner_state=job_runner_state,
+            executor=executor,
+            step_trace_uploader=step_trace_uploader,
+            outbox_drain=outbox_drain,
+            log_signal_drainer=log_signal_drainer,
+            recovery_sync_stop=_recovery_sync_stop,
+            recovery_sync_thread=_recovery_sync_thread,
+            heartbeat_thread=heartbeat_thread,
+            lease_renewer=lease_renewer,
+            mq_producer=mq_producer,
+            local_db=local_db,
+            sio_client=sio_client,
+        )
 
 
 if __name__ == "__main__":

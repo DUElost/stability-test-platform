@@ -211,6 +211,10 @@ class HeartbeatSettings(BaseSettings):
     stp_adb_auto_repair: str = "0"
     stp_adb_repair_cooldown_seconds: float = 300
 
+    # ── heartbeat_thread：设备 /data 容量低频采样（#2757）──
+    # 0/负 = 关闭（刻意不进 _v_positive_pacing 钳制——「关」是合法档位而非非法值）
+    stp_device_disk_sample_interval_seconds: float = 300
+
     @field_validator(
         "coordinator_heartbeat_interval",
         "stp_heartbeat_interval_min",
