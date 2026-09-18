@@ -1344,6 +1344,9 @@ export interface PlanRun {
   project_key?: string | null;
   /** 列表页：JobInstance 数 ≈ 参与设备量 */
   device_count?: number;
+  /** `PlanRunDetailOut.jobs`：detail 端点带 Job 明细（trace 空装），list items 恒为 []
+   *  ——wire 上一直有这个键，此前 TS 未声明（#1520 对拍批暴露的缺口，非新增字段）。 */
+  jobs?: PlanJobInstance[];
   capabilities?: PlanRunCapabilities | null;
   /** ADR-0026 admission queue — null/absent for legacy runs. */
   queue_reason?: 'DEVICE_BUSY' | 'RESOURCE_BUSY' | 'PRIORITY_WAIT' | 'PRECHECK_STALE' | string | null;
