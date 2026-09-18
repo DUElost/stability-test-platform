@@ -241,7 +241,7 @@ jobs:
       # (见 .gitattributes 与 README「EOL 与污染防御」)。非 .py 只检测不改写。
       - name: 空行注入污染检查
         run: |
-          find backend tools scripts frontend/src -type f \
+          find backend tools scripts frontend/src tests -type f \
             \( -name '*.py' -o -name '*.ts' -o -name '*.tsx' \
                -o -name '*.js' -o -name '*.jsx' \) \
             -not -path '*/resources/*' -not -path '*/__pycache__/*' \
@@ -579,7 +579,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Compile check
-        run: python -m compileall -q backend/ tools/ scripts/
+        run: python -m compileall -q backend/ tools/ scripts/ tests/
 
   docker-build:
     if: github.event_name != 'pull_request'
