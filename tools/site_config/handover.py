@@ -67,7 +67,10 @@ ACCEPTANCE_ITEMS: tuple[AcceptanceItem, ...] = (
     AcceptanceItem(
         key="MS-04",
         title="重跑不重置身份/密钥/数据；无效输入在破坏性步骤前失败",
-        stage_checks=("install.s2.env", "install.s3.db", "install.s3.admin"),
+        # #2404 同类的第二处：S3 的两条互斥路径（已在 head → `install.s3.db`；本次应用迁移
+        # → `install.s3.migrate`）都算证据——升级一次就换一条路径，固定其一必然假 BLOCKED
+        # （2026-09-18 238 现场：升级应用了迁移，MS-04 因此转 BLOCKED，而 MS-01 已修）。
+        stage_checks=("install.s2.env", ("install.s3.db", "install.s3.migrate"), "install.s3.admin"),
         requires_runs=2,
         pending=(
             "幂等重跑现场记录（安装记录含 runs 计数，重跑后本项自动转 PASS）",
