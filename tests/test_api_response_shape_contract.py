@@ -96,20 +96,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 # (后端文件, 函数名, TS 文件, 接口名)
-_PAIRS: tuple[tuple[str, str, str, str], ...] = (
-    # #787/#2089 漂移对。#1520 写侧刀后其响应**权威声明面**在轴线 C
-    # （``PlanRunAbortSummaryOut ↔ PlanRunAbortResult``，路由 response_model 校验）；
-    # 本 A 轴配对保留 = 服务层 docstring 键块与 dict 字面量返回的同步仍被钉
-    # （服务保持 dict 返回是刻意的：plan_run_abort 位于 host_retirement→
-    # host_upgrade_gate 深链，顶层 import backend.api.* 会经 ``api/__init__``
-    # 拉起 routes 包回射部分初始化——agent-tests 采集期实测红）。
-    (
-        "backend/services/plan_run_abort.py",
-        "abort_plan_run",
-        "frontend/src/utils/api/types.ts",
-        "PlanRunAbortResult",
-    ),
-)
+# 轴线 A 当前 0 对：唯一的 A 轴配对 ``abort_plan_run ↔ PlanRunAbortResult``（#787/#2089
+# 两次漂移的发生地）已随 #1520 写侧摘要刀升为具名模型，**改由轴线 C 登记对拍**
+# （PlanRunAbortSummaryOut ↔ PlanRunAbortResult）——不是退出契约，是声明面升级。
+_PAIRS: tuple[tuple[str, str, str, str], ...] = ()
 
 # docstring 里形如 `"key": 类型,` 的行（文档化的返回形状）。
 _DOC_KEY_RE = re.compile(r'^\s*"([a-z_][a-z0-9_]*)"\s*:', re.M)
@@ -299,13 +289,14 @@ class TestDocstringKeyContract:
         )
 
     def test_known_canary_is_still_discovered(self):
-        """canary：``abort_plan_run`` 是 ``#2089`` 漂移对的声明面。
+        """canary：``abort_jobs_for_host`` 是 ``#2089`` 家族的 docstring 键块函数。
 
-        它不再被发现（docstring 块被删、或解析器失效）时，本检查会**静默**失去最有价值的
-        那一例——所以这里显式锚一下，让「静默」变「红」。
+        （前任 canary ``abort_plan_run`` 已升具名模型、改由轴线 C 对拍——轴 B 上它
+        不该再被发现，这里换锚到同族仍是手搓 dict 的那一个。）检测器若失效，本用例
+        先红，而不是让「docstring↔实现」这条轴静默变空。
         """
         names = {f.name for f in _discover_docstring_key_funcs()}
-        assert "abort_plan_run" in names, f"canary 丢失（当前发现：{sorted(names)}）"
+        assert "abort_jobs_for_host" in names, f"canary 丢失（当前发现：{sorted(names)}）"
 
     def test_docstring_keys_match_return_dict_keys(self):
         problems: list[str] = []
