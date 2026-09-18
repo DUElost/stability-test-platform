@@ -1,6 +1,6 @@
 # 文档地图（Documentation Map）
 
-> **最后更新**：2026-09-06  
+> **最后更新**：2026-09-18  
 > **文档中心**：[`README.md`](./README.md)  
 > **待删/归档清单**：[`DOC-RETIREMENT.md`](./DOC-RETIREMENT.md)
 
@@ -8,6 +8,7 @@
 逐文件的描述型索引（设计 / 开发运维 / PRD·验收）已迁往 [hub README](./README.md)，按需查阅。
 冲突时以**代码与测试**为准。  
 根目录 [`../README.md`](../README.md) 保持精简；环境变量、测试禁区、执行协议细则在子文档。
+概念/关系「归谁定义」见 [`design/2026-semantic-ownership.md`](./design/2026-semantic-ownership.md)（Ownership Authority **only**，非内容宪法）。
 
 ---
 
@@ -107,6 +108,7 @@ operations/README.md → production-minimum-deployment-checklist.md
 | **架构 ADR** | [`adr/ADR-0047-db-pool-and-connection-capacity.md`](./adr/ADR-0047-db-pool-and-connection-capacity.md) | 控制面 DB 连接池与 PostgreSQL `max_connections` 的容量取向（#703 第 ② 面）：单进程两份池（sync+async 各 30+60）峰值 180 vs 部署配置 100、`pool_timeout` 生产未设=SQLAlchemy 默认 30s。**Proposed v1.0**（2026-09-18 起草，待 owner 裁决 D1–D6；D1 总量不变量是否进门禁是主判据，D4 决定是否引入 pgbouncer 及其对 `stability_db_pool_*` 指标语义的连带改写；裁决前需先采 #2571 三条序列的分布基线） | 
 | **执行契约** | [`development/ai/execution-contract.md`](./development/ai/execution-contract.md)（+[规范附录](./development/ai/execution-contract-annex.md)） | AI Execution Contract 唯一权威源（Registry 协议/三维状态与 transition table/scope 谓词与 overlap 判据/test_impact/字段封闭性/实现与契约先后纪律；**Living v1.13**：§3.4 增「空 issue 集必须显性」（declare 输出独立 [WARN]，撤掉被忽略的行尾 hint；#2729）（v1.13）/ 契约分层——细则迁附录、正文预算收紧（v1.12）/ §2.1 命令清单以 `--help` 为准 + §3.3 `update --all`（v1.11）/ integration 缓存失效 `landed` + 僵尸候选两类对齐 + derived 归属前提（v1.10）/ 僵尸候选 `closed-unmerged`（v1.9）/ 决策实体唯一性 + 决策类必须 `--issue`（v1.8）/ 并发上限反转（v1.7）；附录承载写入协议细则、drift 豁免清单、已满足的启动判据与过渡条款、v1.1–v1.8 明细，与正文同版本演进、冲突以正文为准；ADR-0034 P0a 交付） |
 | **设计** | [`design/2026-09-external-tools-integration-and-package-architecture.md`](./design/2026-09-external-tools-integration-and-package-architecture.md) | 外部工具统一接入架构与包管理实施计划（ADR-0033 配套：协议定义与 §2.5 双轨衔接/§3.3 注册流与门禁分工/NFS 布局/Agent 缓存/去重+专项适配器/三阶段排期） |
+| **设计** | [`design/2026-semantic-ownership.md`](./design/2026-semantic-ownership.md) | 跨域语义归属索引（Ownership Authority only：X1/X2/X3 单行口径 + Tool/Script/Adapter + 四类工具嵌入/外置 + flash 补登记 + S15 表内判据；**Draft**，#2546） |
 | **Sprint 快照** | [`archive/sprints/`](./archive/sprints/) | 已归档一次性任务单 |
 | **跟踪** | GitHub Issues | 进行中、审查结论 |
 
@@ -115,6 +117,7 @@ operations/README.md → production-minimum-deployment-checklist.md
 ## 权威 vs 归档
 
 - **权威**：本树 `design/` · `development/` · `operations/` · `adr/` · `prd/` · `acceptance/`，及根 `AGENTS.md` / `CLAUDE.md` 摘要  
+- **概念/关系 owner 索引**：[`design/2026-semantic-ownership.md`](./design/2026-semantic-ownership.md)（目录粒度仍由本页承担；**不**因该索引获得「以索引为准」的内容裁决权）
 - **全面审查指引**：`reviews/PROJECT_REVIEW_PLAN.md`（分区导航与覆盖清单；不是审查结果）
 - **Living 审查**：`reviews/` 其余文档（缺陷/DoD/落地顺序与轮次报告；不替代 `design/`）
 - **归档**：`archive/`（不新增规范）  
