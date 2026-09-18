@@ -29,6 +29,8 @@ from backend.api.schemas.plan_run import (
     PlanRunEventsOut,
     PlanRunLogEventsOut,
     PlanRunDetailOut,
+    PlanRunJobArtifactOut,
+    PlanRunJobsSummaryOut,
     PlanRunListPageOut,
     PlanRunTimelineOut,
     WatcherSummaryOut,
@@ -542,7 +544,10 @@ def export_plan_run_report(
     )
 
 
-@router.get("/plan-runs/{run_id}/summary", response_model=ApiResponse[dict])
+@router.get(
+    "/plan-runs/{run_id}/summary",
+    response_model=ApiResponse[PlanRunJobsSummaryOut],
+)
 def get_plan_run_summary(
     run_id: int,
     db: Session = Depends(get_db),
@@ -555,7 +560,7 @@ def get_plan_run_summary(
 
 @router.get(
     "/plan-runs/{run_id}/jobs/{job_id}/artifacts",
-    response_model=ApiResponse[list],
+    response_model=ApiResponse[list[PlanRunJobArtifactOut]],
 )
 def list_job_artifacts(
     run_id: int,

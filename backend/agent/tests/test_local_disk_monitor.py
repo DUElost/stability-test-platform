@@ -381,11 +381,16 @@ def test_run_loop_survives_settings_validation_error(tmp_path, disk_env):
     mon = _configure_monitor(tmp_path)
     mon._interval = 0.02           # configure 会钳到 ≥30s；测试直接收短
     mon._catchup_needed = True
-    with patch.object(mon, "check_once", return_value=0):
+    with patch.object(mon, "check_once", return_value=0) as check_spy:
         disk_env.set("STP_LOG_ARCHIVE_GRACE_SECONDS", "soon")
         thread = threading.Thread(target=mon._run, daemon=True)
         thread.start()
-        time.sleep(0.2)
+        # #2602：等「确实跑过一轮检查」这个可观测条件（check_once 已被 patch，可数）——
+        # 原来睡 0.2s：线程若还没被调度起来，is_alive() 会随机为假
+        _deadline = time.monotonic() + 2.0
+        while check_spy.call_count < 1 and time.monotonic() < _deadline:
+            time.sleep(0.005)
+        assert check_spy.call_count >= 1, "守护线程未跑起来"
         assert thread.is_alive(), "Settings 校验异常不得杀死溢出守护线程"
         mon._stop_evt.set()
         thread.join(timeout=2.0)

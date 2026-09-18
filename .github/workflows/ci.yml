@@ -298,6 +298,12 @@ jobs:
           python tools/dev/check_god_files_ceiling.py --self-test
           python tools/dev/check_god_files_ceiling.py
 
+      # 函数体局部 import 棘轮（#738）：总数不得超过基线（只降不升）。
+      - name: 局部 import 棘轮检查
+        run: |
+          python tools/dev/check_inner_imports.py --self-test
+          python tools/dev/check_inner_imports.py
+
       # 治理面结构门禁（synthesis C-G1 L0）：CLAUDE.md @import 行内失效类事故的
       # 确定性拦截；S4 禁止已下线的 pr-agent.yml 回潮。检查器自身由 --self-test
       # 正反样例守护（#854：self-test 与 --check 同步进 CI，防检查器回归）；

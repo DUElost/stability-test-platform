@@ -32,15 +32,11 @@ pytestmark = pytest.mark.skipif(
 )
 
 from backend.api.routes.agent_api import (
-    _ActiveJobEntry,
     _ExtendLockIn,
     _JobHeartbeatIn,
-    _OutboxEntry,
     _RecoverySyncIn,
     _RunCompleteIn,
     _StepStatusIn,
-    _agent_version_is_supported,
-    _claim_jobs_for_host,
     ClaimRequest,
     JobStatusUpdate,
     StepTraceIn,
@@ -53,6 +49,14 @@ from backend.api.routes.agent_api import (
     update_job_step_status,
     upload_step_traces,
 )
+from backend.services.agent_recovery import (
+    _ActiveJobEntry,
+    _OutboxEntry,
+)
+from backend.services.agent_version_gate import (
+    agent_version_is_supported as _agent_version_is_supported,
+)
+from backend.services.agent_claim import _claim_jobs_for_host
 from backend.core.database import AsyncSessionLocal, SessionLocal
 from backend.models.audit import AuditLog
 from backend.models.device_lease import DeviceLease

@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { ExpandableHostTable, type HostTableData } from './ExpandableHostTable';
+import { BULK_BAR_SPACER_CLASS } from '@/components/ui/bulk-action-bar';
 
 const host: HostTableData = {
   id: 1,
@@ -137,7 +138,8 @@ describe('ExpandableHostTable', () => {
         onSelectionChange={vi.fn()}
       />,
     );
-    expect(screen.getByTestId('host-table-selection-spacer')).toHaveClass('h-40');
+    expect(screen.getByTestId('host-table-selection-spacer'))
+      .toHaveClass(...BULK_BAR_SPACER_CLASS.split(' '));
 
     rerender(
       <ExpandableHostTable
