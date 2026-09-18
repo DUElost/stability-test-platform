@@ -34,13 +34,13 @@ pytestmark = pytest.mark.skipif(
 from backend.api.routes.agent_api import (
     ClaimRequest,
     LogSignalBatchIn,
-    LogSignalIn,
     _RunCompleteIn,
-    _build_recovery_job_payload,
     claim_jobs,
     complete_job,
     ingest_log_signals,
 )
+from backend.services.agent_log_signals import LogSignalIn
+from backend.services.agent_recovery import _build_recovery_job_payload
 from backend.core.database import AsyncSessionLocal, SessionLocal
 from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType
 from backend.models.device_lease import DeviceLease

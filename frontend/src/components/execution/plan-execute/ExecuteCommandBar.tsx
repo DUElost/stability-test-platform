@@ -15,6 +15,8 @@ export interface ExecuteCommandBarSummary {
   showDeviceMeta: boolean;
   /** 超节点槽位将排队的选中量（增强 B4） */
   capacityOverflowCount?: number;
+  /** #2599：主机记录缺失（未知≠在线）的节点数——容量核算会整体跳过它们，必须可见 */
+  unknownHostCount?: number;
 }
 
 interface ExecuteCommandBarProps {
@@ -159,6 +161,14 @@ export function ExecuteCommandBar({
                 {(summary.capacityOverflowCount ?? 0) > 0 ? (
                   <span className="rounded-md bg-warning/15 px-2 py-0.5 text-xs font-medium text-warning">
                     {summary.capacityOverflowCount} 个节点超选
+                  </span>
+                ) : null}
+                {(summary.unknownHostCount ?? 0) > 0 ? (
+                  <span
+                    className="rounded-md bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground"
+                    title="主机记录还没到（缓存过旧或该主机已删除），这些节点不参与容量核算"
+                  >
+                    {summary.unknownHostCount} 台节点容量未知
                   </span>
                 ) : null}
               </>

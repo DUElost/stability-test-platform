@@ -1,4 +1,5 @@
 import { compareNodeEntries, type ReadinessDevice } from '@/utils/planExecuteReadiness';
+import { hostLabel } from '@/utils/hostDisplay';
 
 export interface HostLabelLookup {
   get(hostId: string): { ip?: string | null; name?: string | null } | undefined;
@@ -9,8 +10,8 @@ export function compareDevicesStable(a: ReadinessDevice, b: ReadinessDevice, hos
   const bHostId = String(b.host_id ?? 'unassigned');
   const aHost = hostMap.get(aHostId);
   const bHost = hostMap.get(bHostId);
-  const aLabel = aHost?.ip || aHost?.name || (aHostId === 'unassigned' ? '未分配节点' : aHostId);
-  const bLabel = bHost?.ip || bHost?.name || (bHostId === 'unassigned' ? '未分配节点' : bHostId);
+  const aLabel = hostLabel(aHost, aHostId);
+  const bLabel = hostLabel(bHost, bHostId);
   const hostCmp = compareNodeEntries({ id: aHostId, label: aLabel }, { id: bHostId, label: bLabel });
   if (hostCmp !== 0) return hostCmp;
   const serialCmp = a.serial.localeCompare(b.serial, undefined, { sensitivity: 'base' });

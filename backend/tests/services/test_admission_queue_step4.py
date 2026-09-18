@@ -1004,3 +1004,63 @@ class TestReaperCompetition:
             assert persisted.queue_reason == "PRECHECK_STALE"
         else:
             pytest.fail(f"illegal end state after race: {persisted.status} jobs={jobs}")
+
+
+class TestAdmissionRetirePrecheck1805:
+    """ADR-0038 ④（#1805）：Phase A0b 退役预检——已 prepare 后才退役的 Run，
+    准入链路在**任何** RPC/SSH 之前以 HOST_RETIRED 显式收敛（182d4e-F7
+    「prepare 与准入竞态」行的最小可观察断言）。"""
+
+    def test_retired_after_claim_skips_verify_and_fails_host_retired(
+        self, db_session, step4_fixture,
+    ):
+        import asyncio
+        from backend.services.admission_pump import plan_admission_task
+
+        f = step4_fixture
+        pr = _queued_run(db_session, f, [f["d1"].id])
+        claimed = claim_queued_plan_runs(db_session)
+        attempt = claimed[0][1]
+        db_session.expire_all()
+
+        # 已 PRECHECK（attempt 已领取）之后，主机才进入退役。
+        db_session.query(Host).filter(Host.id == "aq4-h1").update(
+            {"retired_at": datetime.now(timezone.utc)}
+        )
+        db_session.commit()
+
+        calls = {"verify": 0, "push": 0}
+
+        async def never_verify(host_ids, expected):
+            calls["verify"] += 1
+            return {hid: (True, [{"ok": True}], None) for hid in host_ids}
+
+        def never_push(*a, **k):
+            calls["push"] += 1
+            return (True, None)
+
+        with patch(
+            "backend.services.precheck.verify.gather_verify", new=never_verify,
+        ), patch(
+            "backend.services.precheck.sync.push_mismatched_scripts", new=never_push,
+        ):
+            asyncio.run(plan_admission_task({}, plan_run_id=pr.id, attempt_id=attempt))
+
+        db_session.expire_all()
+        pr = db_session.get(PlanRun, pr.id)
+        assert pr.status == "FAILED"
+        assert pr.result_summary["reason"] == "HOST_RETIRED"
+        # 核心断言：慢路径一次都没被触碰（不是"verify 里再挑 retired"）。
+        assert calls == {"verify": 0, "push": 0}
+        # D5bis：快照与 PlanRunHost 不删、不静默缩目标集合。
+        assert db_session.query(PlanRunHost).filter(
+            PlanRunHost.plan_run_id == pr.id).count() == 1
+        assert db_session.query(JobInstance).filter(
+            JobInstance.plan_run_id == pr.id).count() == 0
+        # 审计留痕（fail_plan_run_admission 写，与 Phase B 同链路）。
+        from backend.models.audit import AuditLog
+
+        assert db_session.query(AuditLog).filter(
+            AuditLog.resource_type == "plan_run",
+            AuditLog.resource_id == str(pr.id),
+        ).count() >= 1
