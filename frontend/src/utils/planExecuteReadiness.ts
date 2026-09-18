@@ -1,3 +1,4 @@
+import { hostLabel } from '@/utils/hostDisplay';
 export interface ReadinessDevice {
   id: number;
   serial: string;
@@ -110,13 +111,13 @@ export function evaluateCapacityOverflow(
     const slots = host?.capacity?.effective_slots;
     if (typeof slots !== 'number' || !Number.isFinite(slots)) continue;
     if (selected <= slots) continue;
-    const hostLabel = host?.ip || host?.name || hostId;
+    const label = hostLabel(host, hostId);
     warnings.push({
       hostId,
-      hostLabel,
+      hostLabel: label,
       selected,
       effectiveSlots: slots,
-      message: `节点 ${hostLabel} 本次选中 ${selected} 台，超出剩余可派发槽位 ${slots} 个，将排队执行`,
+      message: `节点 ${label} 本次选中 ${selected} 台，超出剩余可派发槽位 ${slots} 个，将排队执行`,
     });
   }
   return warnings;
@@ -139,10 +140,10 @@ export function buildCapacityPlan(
     const effectiveSlots = typeof rawSlots === 'number' && Number.isFinite(rawSlots)
       ? Math.max(0, Math.floor(rawSlots))
       : null;
-    const hostLabel = host?.ip || host?.name || (hostId === 'unassigned' ? '未分配节点' : hostId);
+    const label = hostLabel(host, hostId);
     return {
       hostId,
-      hostLabel,
+      hostLabel: label,
       selected,
       effectiveSlots,
       immediate: effectiveSlots == null ? null : Math.min(selected, effectiveSlots),
@@ -191,7 +192,7 @@ export function summarizeDeviceReadiness(
   const byHost = new Map<string, { label: string; total: number; ready: number }>();
   rows.forEach(row => {
     const key = String(row.device.host_id ?? 'unassigned');
-    const current = byHost.get(key) ?? { label: row.host?.name || row.host?.ip || (key === 'unassigned' ? '未分配节点' : key), total: 0, ready: 0 };
+    const current = byHost.get(key) ?? { label: hostLabel(row.host, key), total: 0, ready: 0 };
     current.total += 1;
     if (row.ready) current.ready += 1;
     byHost.set(key, current);

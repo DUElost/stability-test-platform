@@ -96,13 +96,17 @@ GATES = {
         ROOT,
         None,
     ),
+    # 扫描集含根 tests/（#2535 之后的同批收口）：此前只在 backend/tools/scripts 上跑，
+    # 根 tests/ 的语法错误在 check:quick 里看不见（实测：注入语法错误后旧命令仍绿）。
     "compileall": (
-        f"{PY} -m compileall -q backend/ tools/ scripts/",
+        f"{PY} -m compileall -q backend/ tools/ scripts/ tests/",
         ROOT,
         None,
     ),
+    # 同上：`tests` 已加入 find 列表（此前只在 backend/tools/scripts/frontend/src 上跑，
+    # 实测把一个空行率 49% 的文件放进 tests/ 时旧命令零命中）。
     "pollution": (
-        "find backend tools scripts frontend/src -type f "
+        "find backend tools scripts frontend/src tests -type f "
         "\\( -name '*.py' -o -name '*.ts' -o -name '*.tsx' -o -name '*.js' -o -name '*.jsx' \\) "
         "-not -path '*/resources/*' -not -path '*/__pycache__/*' -not -path '*/node_modules/*' "
         f"| xargs {PY} tools/dev/collapse-blank-pollution.py --check -q",
@@ -144,6 +148,15 @@ GATES = {
     # 离线红绿双向（scope/overlap/真值表/codec/原子写）；不触网、不写真实 registry。
     "ai-work": (
         f"{PY} tools/dev/ai_work.py --self-test",
+        ROOT,
+        None,
+    ),
+    # 函数体局部 import 棘轮（#738）：函数体内 import 总数不得超过基线（只降不升）。
+    # 局部 import 常被用来绕开循环依赖——能把代码跑起来，但依赖关系藏进运行时，
+    # 分层/依赖图类门禁都看不见。毫秒级纯 AST 读；--self-test 四态自证。
+    "inner-imports": (
+        f"{PY} tools/dev/check_inner_imports.py --self-test && "
+        f"{PY} tools/dev/check_inner_imports.py",
         ROOT,
         None,
     ),
@@ -286,14 +299,14 @@ PROFILES = {
     "check:quick": [
         "schema-at-head", "env-inventory",
         "ruff", "eslint", "tsc", "knip", "compileall", "orphan-models",
-        "gov-surface", "ai-work", "god-files",
+        "gov-surface", "ai-work", "god-files", "inner-imports",
     ],
     "check:pr": [
         "schema-at-head", "env-inventory",
         "ruff", "eslint", "tsc", "knip", "compileall", "layering", "orphan-models",
         "pollution", "immutability", "alembic-immutability", "invariant-diff",
         "gov-surface", "ip-leak", "prom-alerts", "agent-tests-collect", "agent-tests",
-        "pr-migrate", "god-files",
+        "pr-migrate", "god-files", "inner-imports",
     ],
     # 治理面专项：结构门禁 + skill 用量探针 + Harness 摄取矩阵（手跑，分钟级）
     "check:gov": ["gov-surface", "gov-skills", "harness-ingest"],

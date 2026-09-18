@@ -22,6 +22,10 @@ import type {
 } from '@/utils/api/types';
 import { DEVICE_UI_STATUS } from './deviceUiStatus';
 import { DEVICE_LINK_STATUS } from './deviceLinkStatus';
+import { useQuery } from '@tanstack/react-query';
+import { fetchHostList } from '@/utils/api';
+import { hostKeys } from '@/utils/api/queryKeys';
+import { hostLabel } from '@/utils/hostDisplay';
 
 interface Props {
   data: PlanRunDevicesPayload | undefined;
@@ -197,10 +201,13 @@ function DeviceTable({
   devices,
   onSelect,
   highlightJobId,
+  hostMap,
 }: {
   devices: DeviceMatrixItem[];
   onSelect?: (d: DeviceMatrixItem) => void;
   highlightJobId?: number | null;
+  /** #2601：host_id → Host，仅用于显示名解析（查不到回落 host_id，与旧行为一致） */
+  hostMap: Map<string, { ip?: string | null; name?: string | null }>;
 }) {
   // eslint-disable-next-line react-hooks/purity -- 渲染期时间戳仅用于卡死高亮派生，无副作用（#260 待统一 tick 状态）
   const now = Date.now();
@@ -280,7 +287,7 @@ function DeviceTable({
                   {d.device_serial || `Device #${d.device_id}`}
                 </TableCell>
                 <TableCell className={cn('px-2 py-2 font-mono text-xs', TEXT.subtitle)}>
-                  {d.host_id || '—'}
+                  {hostLabel(hostMap.get(String(d.host_id ?? '')), d.host_id, '—')}
                 </TableCell>
                 <TableCell className="px-2 py-2">
                   <span title={statusTooltip(d, now)}>
@@ -376,6 +383,17 @@ export default function DeviceOverview({
   const byStatus = data?.by_status ?? { all: 0 };
   const byLinkStatus = data?.by_link_status;
   const byHost = useMemo(() => data?.by_host ?? {}, [data?.by_host]);
+  // #2601：`by_host` 的键是内部 host_id，本组件此前直接把它当展示值（同一条 host
+  // 事实在报告页显示 IP、在这里显示 slug）。复用与选机工作台同键的 host 查询，
+  // 显示名一律走 hostLabel()；查不到（权限不足/缓存未到）时回落 host_id，与旧行为一致。
+  const { data: hostList } = useQuery({
+    queryKey: hostKeys.retiredList(),
+    queryFn: () => fetchHostList(0, 200, true),
+  });
+  const hostMap = useMemo(
+    () => new Map((hostList ?? []).map(host => [String(host.id), host])),
+    [hostList],
+  );
 
   const hosts = useMemo(
     () => Object.keys(byHost).sort((a, b) => a.localeCompare(b)),
@@ -437,6 +455,7 @@ export default function DeviceOverview({
           onStatusFilterChange={onStatusFilterChange ?? (() => {})}
           onLinkFilterChange={onLinkFilterChange}
           onHostFilterChange={onHostFilterChange ?? (() => {})}
+          hostLabelFor={(hostId) => hostLabel(hostMap.get(hostId), hostId)}
         />
 
         {/* Body */}
@@ -463,6 +482,7 @@ export default function DeviceOverview({
           <DeviceTable
             devices={devices}
             onSelect={onSelectDevice}
+            hostMap={hostMap}
           />
         )}
       </div>

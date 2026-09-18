@@ -16,12 +16,14 @@ pytestmark = pytest.mark.skipif(
 )
 
 from backend.api.routes.agent_api import (
-    _ALLOWED_TRANSITIONS,
-    _EXTRACTABLE_STATES,
     DeviceLogEventBatchIn,
-    DeviceLogEventIn,
     ingest_device_log_events,
     list_device_log_events,
+)
+from backend.services.agent_device_log_events import (
+    _ALLOWED_TRANSITIONS,
+    _EXTRACTABLE_STATES,
+    DeviceLogEventIn,
 )
 from backend.core.database import AsyncSessionLocal, SessionLocal
 from backend.models.device_log_event import DeviceLogEvent
