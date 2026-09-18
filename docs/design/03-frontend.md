@@ -36,16 +36,16 @@ frontend/src/
 | `/execution/plan-runs` | PlanRun 列表 | 登录 |
 | `/execution/plan-runs/:runId` | **PlanRun 详情**（主战场） | 登录 |
 | `/execution/plan-runs/:runId/logs` | PlanRun 日志 | 登录 |
-| `/runs/:runId/report` | 单 Job 报告 | 登录 |
+| `/jobs/:jobId/report` | 单 Job 报告（**权威形状**；`/runs/:runId/report` 仅重定向，#2420） | 登录 |
 | `/results` | 结果汇总 | 登录 |
 | `/script-management` | 脚本目录 | 登录 |
 | `/hosts`, `/devices` | 主机/设备 | 登录 |
-| `/schedules`, `/resources`, `/wifi`, `/issue-tracker` | 调度/资源 | 登录 |
+| `/schedules`, `/resources`, `/issue-tracker` | 调度/资源 | 登录 |
 | `/account/password` | 修改密码 | 登录 |
 | `/assistant` | AI 助手 | 登录 |
 | `/assistant/approvals` | AI 助手待审批队列 | **admin** |
 | `/notifications` | 通知记录 | 登录可见；页面内**配置页签（渠道/规则）仅 admin**（#1196） |
-| `/users`, `/audit`, `/settings`, `/storage` | 管理 | **admin** |
+| `/users`, `/audit`, `/settings`, `/storage`, `/wifi` | 管理（`/wifi` 自 #2360 起 admin-only） | **admin** |
 
 **守卫**：`ProtectedRoute`（登录）、`AdminRoute`（`role === 'admin'`）。  
 **代码分割**：除 auth 外页面均 `React.lazy()`。
@@ -59,6 +59,7 @@ frontend/src/
 | 模块 | 用途 |
 |------|------|
 | `client.ts` | axios 实例、Cookie、CSRF、401 处理 |
+| `timeouts.ts` | 请求超时上界（#1199）：默认 `API_TIMEOUT_MS=30s`、刷新 `AUTH_REFRESH_TIMEOUT_MS=10s`、会话探测 `SESSION_PROBE_TIMEOUT_MS=8s`；LLM/上传/导出走 `NO_TIMEOUT` 豁免 |
 | `types.ts` | **与后端 Pydantic 对齐的类型权威源** |
 | `queryKeys.ts` | React Query key 工厂 |
 | `plans.ts` / `planRuns.ts` | Plan / PlanRun |
@@ -120,7 +121,7 @@ frontend/src/
 | PlanRun room | `job_status`、`plan_run_status`、`watcher_signal`、`precheck_update` |
 | 全局 | `notification:new`（铃铛未读刷新） |
 
-策略：SocketIO 事件作 **invalidation hint**，权威态以 REST refetch 为准。
+策略：SocketIO 事件作 **invalidation hint**，权威态以 REST refetch 为准——**唯一例外**是 `DASHBOARD_SUMMARY`（直接 `setQueryData` 写缓存）；后台恢复可见只按域失效、禁无参全仓 `invalidateQueries()`（#2369）。实时语义的**唯一事实源**是 `06-realtime-and-background.md`，本节只留指针。
 
 ---
 

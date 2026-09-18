@@ -154,11 +154,15 @@ python -m backend.scripts.check_unreferenced_script_versions [--json] [--name fl
 
 - **`usage` 的执行事实窗口被 `PLAN_RUN_RETENTION_DAYS` 截断**：库内 run 只覆盖保留期，
   `versions_used` 为空 = 「留存窗口内零执行」，不等于「从未执行」；更早的使用无库内证据。
-- **退役不被扫描复活**：`scan_script_root` 对 `is_active` 只做单向管理（目录缺失即停用），
-  目录仍在的已停用行永不复活——再激活是显式运维动作。反过来的坑是**种子迁移**：
-  已应用的 seed 迁移在 `upgrade()` 分支里显式 `is_active = true`，因此空库重建/灾备会
-  复活退役状态。退役是生产数据事实，不经迁移链表达（迁移丢操作者身份与 `audit_logs`）；
-  漂移收口归 #2055 与 #735 长效机制。
+- **scan 只报告，退役是显式动作**（#2386 起）：`scan_script_root` 对 `is_active` 的单向
+  管理是**有条件的**——仅当被扫子树 == 部署目标（`origin/main`）时才反激活；否则跳过，并把
+  跳过的版本显式列进响应 `deactivation_skipped_versions` 且写审计。目录仍在的已停用行永不
+  复活；需要无条件反激活时走显式出口 `POST /api/v1/scripts/scan?allow_deactivate=true`
+  （传了即跳过 git 判定）。「盘上缺失」是否等于「已退役」的取向由 **ADR-0046 D2** 裁决，
+  当前方向 = scan 只报告、退役走显式运维动作。
+- 反过来的坑是**种子迁移**：已应用的 seed 迁移在 `upgrade()` 分支里显式 `is_active = true`，
+  因此空库重建/灾备会复活退役状态。退役是生产数据事实，不经迁移链表达（迁移丢操作者身份与
+  `audit_logs`）；漂移收口归 #2055 与 #735 长效机制。
 - **核验退役结果不能用 `GET /api/v1/scripts?name=<脚本>`**：该端点没有 `name` 过滤参数
   （传入被静默忽略），按版本字符串筛选会命中其他脚本族的同名版本而误判「未生效」。
   正确姿势：取 `GET /api/v1/scripts?is_active=true` 后按 `(name, version)` 二元组对拍。
