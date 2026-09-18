@@ -60,10 +60,22 @@ conflicts 数组，正规化需连 #2386 的守卫字段一起设计，独立小
 补标量类型（str/int/float/bool），语义与既有的 `dict`/容器豁免同源。三处修正
 共同口径：**判据缺陷修判据，不拿被登记者迁就判据**。
 
+## 追加：第 4 批 devices.py（Union 判据 + 批 1 积累直接回本）
+
+`devices.py` 无 `ApiResponse[dict]` 端点（盲区登记为空集，typed 记账照常生效）。
+`DeviceOut ↔ Device` MATCH 登记——它是 `ORMBaseModel` 系，**正是第 1 批解析器
+扩展的适用面**（跨文件基类若没修，这里又要挂一条豁免）。`Union[List[DeviceOut],
+PaginatedResponse]` 暴露判据第四处：typing 联合被当具名模型——`Union` 入 skip
+（成员各自入账、联合本身不是模型）；`PaginatedResponse` 是通用分页壳
+（items: List[Any]），按 `_MODEL_UNREGISTERED` 具名认领「内层形状由成员配对
+承担」——不为壳建 TS 幽灵配对。devices 多数端点仍是裸 `DeviceOut`/无信封
+（#2129 前遗产），信封化是另一条面，不在台账内顺手扩张。
+
 ## Verification
 
 - 契约 15 passed（plans 2 对、projects 6 对、scripts 2 对全部当场通过）；
 - `test_scripts.py + test_scripts_default_params.py` → **37 passed**（第 3 批后）；
+- 第 4 批：契约 15、devices 路由组见 PR（`-k device`）；
 - `test_project_routes.py` → **75 passed**；`check:quick` 12 门禁（第 2 批后）；
 - `test_plans_api.py + test_read_api_auth.py` → **145 passed**；
 - vitest `PlanExecutePage.test.tsx` → **58 passed**（唯一消费点行为回归）；
