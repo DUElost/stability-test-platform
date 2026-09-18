@@ -1040,3 +1040,123 @@ class TestHostRetiredDispatchGate:
 
     def test_host_retired_is_registered_fatal(self):
         assert "host_retired" in _FATAL_DISPATCH_REASONS
+
+
+# ── #2649：serial 冲突按设备拒绝 ──────────────────────────────────────
+
+
+class TestSerialConflictDispatch:
+    """占位/重复 serial 设备（如 0123456789ABCDEF 被多 host 争抢）在派发时
+    按设备拒绝（FAILED + 原因），不升级为整 run 拒绝/排队（owner 2026-09-18
+    裁决：手动与定时同一流程）。"""
+
+    @pytest.fixture(autouse=True)
+    def _pump_ready(self, monkeypatch):
+        import backend.core.admission_queue as admission_queue
+
+        monkeypatch.setenv("STP_PLAN_ADMISSION_QUEUE_ENABLED", "1")
+        admission_queue.mark_queue_pump_ready(True)
+        yield
+        admission_queue.mark_queue_pump_ready(False)
+
+    def _placeholder_device(self, db_session, f, serial="0123456789ABCDEF"):
+        dev = Device(
+            serial=serial, host_id=f["host"].id,
+            status=DeviceStatus.ONLINE.value,
+        )
+        db_session.add(dev)
+        db_session.commit()
+        return dev
+
+    def test_classify_marks_placeholder_serial(self, db_session, dispatch_fixture):
+        f = dispatch_fixture
+        dev = self._placeholder_device(db_session, f)
+        unavailable, _ = _classify_dispatch_devices_sync(db_session, [dev.id])
+        assert unavailable == [{
+            "id": dev.id, "reason": "serial_conflict",
+            "serial": "0123456789ABCDEF", "host_id": "h-disp-v",
+        }]
+
+    def test_classify_serial_conflict_wins_over_transient_states(
+        self, db_session, dispatch_fixture,
+    ):
+        """离线/ERROR 的占位 serial 设备仍报 serial_conflict（持久原因优先）。"""
+        f = dispatch_fixture
+        dev = self._placeholder_device(db_session, f)
+        dev.status = DeviceStatus.OFFLINE.value
+        db_session.commit()
+        unavailable, _ = _classify_dispatch_devices_sync(db_session, [dev.id])
+        assert unavailable[0]["reason"] == "serial_conflict"
+
+    def test_host_retired_wins_over_serial_conflict(self, db_session, dispatch_fixture):
+        f = dispatch_fixture
+        dev = self._placeholder_device(db_session, f)
+        f["host"].retired_at = datetime.now(timezone.utc)
+        db_session.commit()
+        unavailable, _ = _classify_dispatch_devices_sync(db_session, [dev.id])
+        assert unavailable[0]["reason"] == "host_retired"
+
+    def test_prepare_excludes_serial_conflict_devices(
+        self, db_session, dispatch_fixture,
+    ):
+        from backend.models.plan_run import PlanRunTargetDevice
+
+        f = dispatch_fixture
+        bad = self._placeholder_device(db_session, f)
+        pr = prepare_plan_run(
+            plan_id=f["plan"].id, device_ids=[f["device"].id, bad.id],
+            triggered_by="pytest", db=db_session, run_type="MANUAL",
+        )
+        targets = {
+            t.device_id for t in db_session.query(PlanRunTargetDevice).filter(
+                PlanRunTargetDevice.plan_run_id == pr.id).all()
+        }
+        assert targets == {f["device"].id}
+        rejected = pr.run_context.get("dispatch_rejected_devices")
+        assert rejected and rejected[0]["id"] == bad.id
+        assert rejected[0]["reason"] == "serial_conflict"
+        # 好设备不受连坐：不排队、无 queue_reason
+        assert pr.status == "QUEUED"
+        assert pr.queue_reason is None
+
+    def test_prepare_all_serial_conflict_raises(self, db_session, dispatch_fixture):
+        f = dispatch_fixture
+        self._placeholder_device(db_session, f)
+        bad2 = self._placeholder_device(db_session, f, serial="ffffffffffffffff")
+        with pytest.raises(PlanDispatchError):
+            prepare_plan_run(
+                plan_id=f["plan"].id, device_ids=[bad2.id],
+                triggered_by="pytest", db=db_session, run_type="MANUAL",
+            )
+
+    def test_admission_materializes_failed_jobs_for_rejected(
+        self, db_session, dispatch_fixture,
+    ):
+        """被剔除设备在准入时物化为 FAILED job（显示 Fail + 原因），计数随增。"""
+        f = dispatch_fixture
+        bad = self._placeholder_device(db_session, f)
+        pr = prepare_plan_run(
+            plan_id=f["plan"].id, device_ids=[f["device"].id, bad.id],
+            triggered_by="pytest", db=db_session, run_type="SCHEDULE",
+        )
+        claimed = claim_queued_plan_runs(db_session)
+        assert claimed and claimed[0][0] == pr.id
+        attempt = claimed[0][1]
+
+        assert admission_transaction(db_session, pr.id, attempt) is True
+
+        db_session.expire_all()
+        from backend.models.plan_run import PlanRun
+        pr = db_session.get(PlanRun, pr.id)
+        assert pr.status == "RUNNING"
+        assert pr.total_job_count == 2
+        assert pr.failed_job_count == 1
+        assert pr.terminal_job_count == 1
+        from backend.models.job import JobInstance
+        bad_jobs = db_session.query(JobInstance).filter(
+            JobInstance.plan_run_id == pr.id,
+            JobInstance.device_id == bad.id).all()
+        assert len(bad_jobs) == 1
+        assert bad_jobs[0].status == JobStatus.FAILED.value
+        assert "序列号冲突" in bad_jobs[0].status_reason
+        assert bad_jobs[0].ended_at is not None

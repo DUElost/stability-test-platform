@@ -2,6 +2,8 @@ import { hostLabel } from '@/utils/hostDisplay';
 export interface ReadinessDevice {
   id: number;
   serial: string;
+  /** #2649：serial 为占位/重复值（后端读时派生）——选机侧提示用 */
+  serial_suspect?: boolean;
   model?: string | null;
   host_id?: string | number | null;
   status: string;
