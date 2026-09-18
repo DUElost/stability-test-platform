@@ -420,3 +420,42 @@ tests:
             30 条聚集：表名两个方向都猜错、枚举用大写、引用当时未落地的列）。真正的问题是无留痕：若哪次猜对了，就是一次不留审计痕迹的生产读写。先按 docs/operations/production-diagnostics.md
             的只读口径复核（SOP 首步已改为先查 information_schema 求证表名/列名/枚举），再用 pg_stat_activity 的 application_name 归因来源；后半段条件（last_run
             超 1 小时 / 指标消失）表示采集器停摆——那时计数恒 0，看起来像「没人在猜」。
+
+  # ---- #2754 StabilityHostAdbOfflineConcentration ----
+  # 构造三台 host：事故态（15/16 offline）、健康态（2/26）、噪声态（4/4 小 host 全掉线）。
+  # host_id 用 RFC5737 TEST-NET-1 的合成值（192-0-2.x）——public 仓库不得写真实资产地址
+  # （tools/dev/check-internal-ip-leak.py 的 host-id-dash 判据），形状与在册 host 一致即可。
+  # 第三条是**故意的 not-fire 断言**——绝对下限 5 就是为它设的（当前 fleet 里 min=3），
+  # 没有这条，把下限从 5 改成 1 也照样绿，阈值失去判别力。
+  - interval: 1m
+    input_series:
+    - series: 'stability_host_device_adb_state{host_id="192-0-2-81", state="offline"}'
+      values: '15x30'
+    - series: 'stability_host_device_adb_state{host_id="192-0-2-81", state="device"}'
+      values: '1x30'
+    - series: 'stability_host_device_adb_state{host_id="192-0-2-60", state="offline"}'
+      values: '2x30'
+    - series: 'stability_host_device_adb_state{host_id="192-0-2-60", state="device"}'
+      values: '24x30'
+    - series: 'stability_host_device_adb_state{host_id="192-0-2-77", state="offline"}'
+      values: '4x30'
+    alert_rule_test:
+    - eval_time: 10m
+      alertname: StabilityHostAdbOfflineConcentration
+      exp_alerts: []
+    - eval_time: 25m
+      alertname: StabilityHostAdbOfflineConcentration
+      exp_alerts:
+      - exp_labels:
+          host_id: 192-0-2-81
+          severity: warning
+        exp_annotations:
+          summary: Devices on one host are bulk adb-offline
+          description: >-
+            该 host 上 adb_state=offline 的设备已成多数（≥5 台且占比 ≥50%，持续 15m）。
+            先按 docs/operations/production-diagnostics.md 的只读口径分清是哪一层：
+            lsusb 设备在位 + adb server 存活 + `adb reconnect offline` 立即恢复 ⇒ adbd
+            会话陈旧（#2754 的事故形态，非硬件）；lsusb 查无设备 ⇒ USB 枚举层，
+            对照 docs/operations/incident-2026-07-29-host-8-87-xhci-death-and-adb-outage.md
+            判据树。注意本告警**只观测**：平台侧自动 reconnect 未实现（会打断在跑的 job，
+            需裁决，见 #2754 / #722）。
