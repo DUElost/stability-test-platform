@@ -408,3 +408,57 @@ class TestFinish:
         with pytest.raises(RuntimeError) as ei:
             finish_mod._pull_result_log()
         assert "test_log.txt" in str(ei.value)
+
+
+# ── v1.2.1 _install_apk_stable：push 输出保留 + 退避重试（#2756） ─────────────
+
+
+class TestInstallApkStableV121:
+    """run 431 同族取证：push 失败输出被丢弃 + 立即重试仍在风暴内。v1.2.1 修复。"""
+
+    @pytest.fixture()
+    def v121(self, monkeypatch):
+        mod = _load("gpu_lib_v121", "gpu_setup/v1.2.1/_lib.py")
+        import contextlib
+
+        @contextlib.contextmanager
+        def _no_heartbeat(phase, *, interval=None):
+            yield
+
+        monkeypatch.setattr(mod, "progress_heartbeat", _no_heartbeat)
+        return mod
+
+    @staticmethod
+    def _patch_adb(monkeypatch, mod, calls, results):
+        def fake_adb(*args, timeout=60):
+            calls.append(list(args))
+            return results[min(len(calls) - 1, len(results) - 1)]
+
+        monkeypatch.setattr(mod, "adb", fake_adb)
+        monkeypatch.setattr(mod, "adb_shell", lambda *a, timeout=60: "")
+
+    def test_push_failure_reason_preserved(self, v121, monkeypatch):
+        calls: list = []
+        self._patch_adb(monkeypatch, v121, calls, [(255, "", "device offline")])
+        sleeps: list = []
+        monkeypatch.setattr(v121.time, "sleep", lambda s: sleeps.append(s))
+        monkeypatch.delenv("STP_GPU_INSTALL_RETRY_BACKOFF_SECONDS", raising=False)
+
+        rc, out = v121._install_apk_stable(Path("/res/GpuLite.apk"))
+
+        assert rc == 255
+        assert "push failed (rc=255)" in out
+        assert "device offline" in out
+        assert ["wait-for-device"] in calls
+        assert sleeps == [10.0]
+
+    def test_transient_failure_recovers(self, v121, monkeypatch):
+        calls: list = []
+        self._patch_adb(
+            monkeypatch, v121, calls,
+            [(1, "", "error"), (0, "", ""), (0, "Success", "")],
+        )
+        monkeypatch.setattr(v121.time, "sleep", lambda s: None)
+
+        rc, out = v121._install_apk_stable(Path("/res/GpuLite.apk"))
+        assert rc == 0 and "Success" in out
