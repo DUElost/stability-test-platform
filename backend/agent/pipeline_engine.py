@@ -2608,11 +2608,18 @@ class _MQStepLogger:
         self._run_id = run_id
         self._step_id = step_id_str
         self._log_file = log_file
+        #: #739b：本地落盘是否已判定不可用。**一次判定、此后不再重试**——失败原因是
+        #: 持久性的（坏盘 / 权限 / 路径被占），逐行重试既刷不出日志、又按行放大 syscall。
+        self._file_failed = False
         if log_file:
             try:
                 os.makedirs(os.path.dirname(log_file), exist_ok=True)
-            except Exception:
-                pass
+            except OSError as exc:
+                self._file_failed = True
+                logger.warning(
+                    "step_log_file_unavailable path=%s err=%s（本步日志只走 MQ，本地无副本）",
+                    log_file, exc,
+                )
 
     def _write(self, message: str, level: str) -> None:
         if self._mq and self._mq.connected:
@@ -2624,13 +2631,20 @@ class _MQStepLogger:
                 message=message,
             )
 
-        if self._log_file:
+        if self._log_file and not self._file_failed:
             try:
                 ts = datetime.now(timezone.utc).isoformat() + "Z"
                 with open(self._log_file, "a", encoding="utf-8") as f:
                     f.write(f"{ts} [{level}] {message}\n")
-            except Exception:
-                pass
+            except OSError as exc:
+                # #739b：写失败**报一次**再 latch。此前是 `except Exception: pass`——
+                # 事故时（日志最要紧的时候）本地副本静默消失，且与「这一步本来没输出」
+                # 不可区分；逐行 warning 又会刷屏，故只报首次。
+                self._file_failed = True
+                logger.warning(
+                    "step_log_file_write_failed path=%s err=%s（此后本步不再尝试本地落盘）",
+                    self._log_file, exc,
+                )
 
     def info(self, message: str) -> None:
         self._write(message, "INFO")

@@ -271,7 +271,7 @@ def load_manifest(path: Path) -> dict:
 def _apply(args, *, deactivate: bool) -> int:
     manifest = load_manifest(Path(args.manifest))
     items = manifest["items"]
-    if args.limit:
+    if args.limit is not None:  # 真 0 在此也只许等于「处理 0 条」——parse 期已拒非正数
         items = items[: args.limit]
     action = "退役" if deactivate else "重新激活"
     verb = "deactivate" if deactivate else "reactivate"
@@ -345,6 +345,16 @@ def _apply(args, *, deactivate: bool) -> int:
     return 1 if any(k in counts for k in bad) else 0
 
 
+def _positive_int(raw: str) -> int:
+    value = int(raw)
+    if value <= 0:
+        raise argparse.ArgumentTypeError(
+            f"--limit 须为正整数，得到 {raw!r}"
+            "（0/负数显式拒绝：旧真值判定下 0 等于「不截断」，配合 --yes 会一次退全量）"
+        )
+    return value
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="零引用脚本版本退役（plan 只读 / execute 走控制面 API）"
@@ -365,7 +375,8 @@ def main(argv: list[str] | None = None) -> int:
         p = sub.add_parser(name, help=help_text)
         p.add_argument("--manifest", required=True)
         p.add_argument("--yes", action="store_true", help="实际写库；缺省只 dry-run")
-        p.add_argument("--limit", type=int, help="只处理前 N 条（分批推进用）")
+        p.add_argument("--limit", type=_positive_int,
+                       help="只处理前 N 条（分批推进用）")
         p.add_argument("--base-url", default=DEFAULT_BASE_URL)
         p.add_argument("--env-file", default=str(DEFAULT_ENV_FILE))
         p.add_argument("--allow-remote", action="store_true")

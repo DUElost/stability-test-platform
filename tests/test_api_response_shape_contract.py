@@ -773,6 +773,24 @@ _MODEL_BLINDSPOT: dict[str, set[str]] = {
     "backend/api/routes/stats.py": set(),
     "backend/api/routes/results.py": set(),
     "backend/api/routes/hosts.py": set(),
+    # #2187 第 7 批：agent_api.py——**Agent 协议面，types.ts 零镜像**（预照证实：
+    # 6 具名模型无 TS 对应、10 端点为运行期 dict）。这里的 opt-in 不是找漂移，
+    # 是把这条盲区整段认领：消费方是 backend/agent（Python 客户端），形状由
+    # fake-agent 契约测试钉；任何一端改了协议字段而另一没跟上时，台账保证「有
+    # 人认领」而不是 parser 放宽。`/jobs/{job_id}/artifacts` 的 ArtifactOut 与
+    # 前端消费的 PlanRunJobArtifactOut 是**两个端点两种载荷**，勿混。
+    "backend/api/routes/agent_api.py": {
+        "complete_job",
+        "extend_job_lock",
+        "ingest_device_log_events",
+        "ingest_log_signals",
+        "job_heartbeat",
+        "list_device_log_events",
+        "recovery_sync",
+        "update_job_status",
+        "update_job_step_status",
+        "upload_step_traces",
+    },
     # #1520 形状正规化批第一步：summary/artifacts 已升模型进 `_MODEL_PAIRS`；
     # 剩余具名模型逐个对拍前按台账显式豁免（下方 `_MODEL_UNREGISTERED`），
     # 三个仍 `ApiResponse[dict]` 的写侧摘要在此认领盲区。
@@ -800,6 +818,17 @@ _MODEL_UNREGISTERED: dict[str, str] = {
     "接入前端时在 types.ts 建 interface 并转登记 _MODEL_PAIRS",
     "PaginatedResponse": "通用分页壳（items: List[Any]，schemas/base.py）——"
     "声明面无业务字段，内层形状由其成员模型对拍承担，不为壳本身建 TS 配对",
+    # 第 7 批：agent_api 的 6 个协议模型。消费方全在 backend/agent（Python），
+    # 无 TS 声明面可对拍；协议契约的守门人是 backend/agent/tests 的 fake-agent
+    # 用例与 `tests/test_agent_env_selfsufficiency.py` 一族。若未来前端直连这些
+    # 端点，先建 types.ts 镜像再转登记 _MODEL_PAIRS。
+    "ArtifactOut": "Agent 协议载荷（services/agent_artifacts.py），无 TS 消费面",
+    "HeartbeatResponse": "Agent 协议载荷（services/agent_host_heartbeat.py），无 TS 消费面",
+    "JobOut": "Agent claim 协议载荷（services/agent_claim.py），无 TS 消费面——"
+    "前端 Job 形状是 PlanJobInstance，走 plan-runs 面",
+    "PatrolHeartbeatOut": "Agent 协议载荷（services/agent_patrol_heartbeat.py），无 TS 消费面",
+    "_CoordinatorHeartbeatOut": "Agent 协议载荷（services/agent_coordinator_heartbeat.py），无 TS 消费面",
+    "_ExtendBatchOut": "Agent 协议载荷（services/agent_lease_extend.py），无 TS 消费面",
 }
 
 #: 允许 `extra="allow"` 的已登记模型（自由 JSONB 段——键集合由写入方决定）。
