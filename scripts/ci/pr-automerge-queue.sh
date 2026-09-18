@@ -226,6 +226,12 @@ alert_queue_blocked() {
       lines+=("  - **注意**：在队首拿到 auto-merge 之前，本脚本会跳过 head update ⇒ "
               "**队列不会自愈**，必须人工介入（#2646）")
     fi
+    if [ "$reason_code" = "conflicting" ] || [[ "$reason_code" == conflicting-* ]]; then
+      lines+=("  - 队首 required checks **全绿**，但与 \`main\` **冲突**（\`mergeable=CONFLICTING\`）"
+              "⇒ 无法合入，其后所有 PR 停摆")
+      lines+=("  - **人工动作**：把 \`main\` 合入该 PR 分支并解冲突（或让该 PR 让位：关闭/改 draft）")
+      lines+=("  - **注意**：冲突队首**不走自动重基**（重基必失败）⇒ **队列不会自愈**（#2624）")
+    fi
   fi
   if [ -n "$selfheal_state" ] && [ -n "$head_sha" ]; then
     lines+=("<!-- queue-selfheal: head=#${head} sha=${head_sha} -->")
@@ -416,7 +422,7 @@ fi
 
 head_json="$(
   gh pr view "$head_number" --repo "$REPO" \
-    --json autoMergeRequest,statusCheckRollup,headRefName,headRefOid
+    --json autoMergeRequest,statusCheckRollup,headRefName,headRefOid,mergeable,mergeStateStatus
 )"
 auto_method="$(jq -r '.autoMergeRequest.mergeMethod // ""' <<<"$head_json")"
 if [ -z "$auto_method" ]; then
@@ -594,7 +600,37 @@ if [ -n "$unreported_checks" ]; then
   exit 0
 fi
 
-# 队首通过全部 required checks：恢复关闭存量告警
+# ── #2624：**绿但冲突**的队首是告警盲区 ────────────────────────────────────
+#
+# 上面六个 `alert_queue_blocked` 调用点全部以 `$failed_checks` / `$unreported_checks`
+# 为条件 ⇒ **checks 一条不红**的队首从不告警。而 CONFLICTING 的队首正是这种形态：
+# 它不红、也**不会**走自愈（`pr-update-branch` 的纪律是「不对红队首自动重基」，
+# 而它不红；冲突本身也让重基失败）⇒ 队列整条停摆却**零告警**，只能靠人恰好去看队列
+# （实测 #2584 卡住 43 个提交，`ci/queue-blocked` 为空）。
+#
+# 判据直接取 **GitHub 事实**（`mergeable`/`mergeStateStatus`），与 checks 判定同源同层；
+# **刻意不消费 `queue_head_telemetry` 的 `reason_code`**——该工具的设计约束明写
+# 「reason_code 是 advisory telemetry：本工具与任何 workflow 都不得据其分支
+# （出现 `if reason_code == ...` 即意味着它已悄悄变成控制面契约）」
+# （`tools/dev/queue_head_telemetry.py:14-15`）。此处按同一事实各自判读，
+# 与那边「一份判读、两个消费面」的意图一致，且不把 advisory 面升格为契约。
+#
+# 指纹用 `conflicting=<head_sha:0:12>` 与既有 `failed=...` **显式区分**：二者处置不同
+# （冲突要人解冲突，红 check 要修 check），共用一个指纹会互相覆盖正文。
+mergeable_state="$(jq -r '.mergeable // ""' <<<"$head_json")"
+merge_state_status="$(jq -r '.mergeStateStatus // ""' <<<"$head_json")"
+if [ "$mergeable_state" = "CONFLICTING" ] || [ "$merge_state_status" = "DIRTY" ]; then
+  conflict_sha="$(jq -r '.headRefOid // ""' <<<"$head_json")"
+  echo "Queue head #${head_number} is CONFLICTING with main; queue blocked (all checks green)."
+  alert_queue_blocked "$head_number" "$head_ref" "" \
+    "- 队列影响：队首 required checks **全绿**、但因**与 main 冲突**无法合入 ⇒ 其后所有 PR 停摆；且冲突队首不走自动重基（重基必失败）⇒ **不会自愈**，须人工解冲突" \
+    "" "" "conflicting-${conflict_sha:0:12}"
+  exit 0
+fi
+
+# 队首**确实**通过全部 required checks 且无冲突：恢复关闭存量告警。
+# 注意次序：必须放在冲突判定**之后**——否则冲突队首会被「先关闭、再重开」，
+# 每轮 reconcile 抖动一次告警（既刷通知，也让去重指纹失去意义）。
 resolve_queue_blocked
 
 behind="$(

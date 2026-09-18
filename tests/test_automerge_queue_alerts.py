@@ -34,11 +34,16 @@ _HEAD_ROW = {
 }
 
 
-def _head_detail(checks: dict[str, str]) -> dict:
+def _head_detail(checks: dict[str, str], *, mergeable: str = "MERGEABLE",
+                 merge_state: str = "CLEAN") -> dict:
+    # #2624：`mergeable`/`mergeStateStatus` 是脚本新读的字段。**默认取真机的正常形态**
+    # （MERGEABLE/CLEAN）——否则既有无关用例会因缺字段被误判为冲突而集体变红。
     return {
         "autoMergeRequest": {"mergeMethod": "MERGE"},
         "headRefName": _HEAD_ROW["headRefName"],
         "statusCheckRollup": [{"name": k, "conclusion": v} for k, v in checks.items()],
+        "mergeable": mergeable,
+        "mergeStateStatus": merge_state,
     }
 
 
@@ -864,4 +869,76 @@ def test_enable_automerge_unrelated_failure_still_fails_loudly(tmp_path):
 
     assert result.returncode != 0, (
         f"非 workflow-scope 的 enable 失败必须上抛，实际 rc={result.returncode}"
+    )
+
+
+# ── #2624：绿但 CONFLICTING 的队首是告警盲区 ────────────────────────────────
+
+
+def test_conflicting_head_opens_alert_despite_all_checks_green(tmp_path):
+    """#2624 主判据：队首 required checks **全绿**但与 main 冲突 → 必须告警。
+
+    修复前六个告警点全部以 `failed_checks`/`unreported_checks` 为条件 ⇒ 本形态
+    **一条都不红**（`blocking_checks: []`）⇒ 从不告警；而冲突队首也不走自动重基
+    （重基必失败）⇒ 队列整条停摆却零通知（实测 #2584 卡住 43 个提交）。
+    """
+    result, calls = _run_queue(
+        tmp_path,
+        {
+            "pr_rows": [_HEAD_ROW],
+            "head_detail": _head_detail(_ALL_GREEN, mergeable="CONFLICTING",
+                                        merge_state="DIRTY"),
+            "open_issue": "",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    body = _body_of(_read_argv(tmp_path), "create")
+    # 指纹须与 `failed=...` 显式区分（二者处置不同：冲突要人解、红 check 要修 check）
+    assert "conflicting-" in body, body
+    assert "冲突" in body, body
+    # 必须写明「不会自愈」，否则运维会以为等下一轮就好
+    assert "不会自愈" in body, body
+    # 不得宣称「未通过 required check」——本形态 checks 是全绿的
+    assert "required check：\n" not in body or "无——见下方原因码" in body, body
+
+
+def test_clean_head_does_not_open_conflict_alert(tmp_path):
+    """#2624 负向对照：**不冲突**的绿队首不得因此开告警（避免误报）。"""
+    result, _calls = _run_queue(
+        tmp_path,
+        {
+            "pr_rows": [_HEAD_ROW],
+            "head_detail": _head_detail(_ALL_GREEN),   # 默认 MERGEABLE/CLEAN
+            "open_issue": "",
+            "behind_by": 0,
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    argv = _read_argv(tmp_path)
+    creates = [a for a in argv if len(a) >= 2 and a[0] == "issue" and a[1] == "create"]
+    assert not creates, f"不冲突的绿队首不应开告警，实际 {creates}"
+
+
+def test_conflict_alert_not_closed_then_reopened_each_run(tmp_path):
+    """#2624 次序判据：冲突判定须**先于** `resolve_queue_blocked`。
+
+    否则每轮 reconcile 会「先关闭既有告警、再重新开一条」——既刷通知，
+    也让「同指纹零写入」的去重彻底失效。
+    """
+    scenario = {
+        "pr_rows": [_HEAD_ROW],
+        "head_detail": _head_detail(_ALL_GREEN, mergeable="CONFLICTING",
+                                    merge_state="DIRTY"),
+        "open_issue": "999",          # 已有存量告警
+        "issue_body": "<!-- queue-blocked-fingerprint: head=#101 failed= -->",
+    }
+    result, _calls = _run_queue(tmp_path, scenario)
+
+    assert result.returncode == 0, result.stderr
+    argv = _read_argv(tmp_path)
+    closes = [a for a in argv if len(a) >= 2 and a[0] == "issue" and a[1] == "close"]
+    assert not closes, (
+        f"冲突队首不应先关闭既有告警（会与随后的重开形成每轮抖动），实际 {closes}"
     )
