@@ -236,3 +236,34 @@ class TestFanoutLabelDiscipline:
         assert REGISTRY.get_sample_value(
             "stability_plan_run_abort_fanout_jobs_count", {"scope": "run"}
         ) == before
+
+
+class TestObservabilityCannotBreakAbort:
+    """#703 残留②：观测回写炸了，**已提交的** abort 也不得跟着变 500。
+
+    abort 族的 5 个调用点（``record_plan_run_abort_lock_seconds``×4 +
+    ``record_plan_run_abort_fanout``×1）全部位于 ``db.commit()`` 之后的返回路径；
+    判据直接向 Histogram 对象注入异常（模拟 prometheus_client 内部失败），要求
+    record 函数吞下。**反向验证**：去掉 ``metrics._safe_emit`` 包裹，本类两条
+    用例当场红。
+    """
+
+    class _Boom:
+        def labels(self, **_kw):
+            raise RuntimeError("prometheus internals exploded")
+
+    def test_broken_fanout_histogram_does_not_raise(self, monkeypatch):
+        from backend.core import metrics
+
+        if not metrics.PROMETHEUS_AVAILABLE:
+            pytest.skip("prometheus_client 不可用")
+        monkeypatch.setattr(metrics, "plan_run_abort_fanout_jobs", self._Boom())
+        record_plan_run_abort_fanout("run", 2)  # 不得抛
+
+    def test_broken_lock_seconds_histogram_does_not_raise(self, monkeypatch):
+        from backend.core import metrics
+
+        if not metrics.PROMETHEUS_AVAILABLE:
+            pytest.skip("prometheus_client 不可用")
+        monkeypatch.setattr(metrics, "plan_run_abort_lock_seconds", self._Boom())
+        metrics.record_plan_run_abort_lock_seconds(0.5, "finalize")  # 不得抛
