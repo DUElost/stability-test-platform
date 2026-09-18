@@ -55,6 +55,39 @@ _METRIC_HELP = {
 }
 
 
+def _git(repo_root: Path, *args: str) -> tuple[int, str]:
+    rc = subprocess.run(["git", "-C", str(repo_root), *args],
+                        capture_output=True, text=True)
+    return rc.returncode, (rc.stdout or "").strip()
+
+
+def describe_guard_source(repo_root: Path = REPO_ROOT) -> tuple[str, bool]:
+    """(判据来源描述, 是否等于 origin/main 的内容)——只用于日志归因。
+
+    为什么需要：unit 的 `WorkingDirectory` 与 `run_guard` 的 `cwd=REPO_ROOT` 都指向**主检出**，
+    所以每日巡检用的判据代码是那棵工作树的当前内容，而不是 main。别家会话把检出切到自己分支
+    并改动 `script_retirement.py` 之后，巡检会静默采用它、给出一个看起来正常的 due 数——这正是
+    ADR-0046 说的「部署源 vs 开发工作区」冲突蔓延到只读巡检上。
+
+    这里只解决**事后能归因**（journal 留一行），不改判定码、不加指标、不加告警：实时防护仍靠
+    `due/unknown/broken/last_run` 四值与「生产按 runbook 保持在 main」。与
+    `tools/dev/check-monitoring-assets.py::describe_source_repo` 是同一逻辑的第二处使用——
+    第三处出现时抽公共 helper（已在 note 的 Revisit 记名），不在这里提前抽象。
+    """
+    rc, sha_short = _git(repo_root, "log", "-1", "--format=%h")
+    if rc != 0:
+        return f"{repo_root} @ (非 git 树)", False
+    _, sha = _git(repo_root, "rev-parse", "HEAD")
+    rc_branch, name = _git(repo_root, "symbolic-ref", "--short", "HEAD")
+    label = name if (rc_branch == 0 and name) else "(detached)"
+    rc_main, main_sha = _git(repo_root, "rev-parse", "origin/main")
+    if rc_main != 0 or not main_sha:
+        return f"{repo_root} @ {label} {sha_short}（无 origin/main 引用可比）", False
+    if sha and sha == main_sha:
+        return f"{repo_root} @ {label} {sha_short} == origin/main", True
+    return (f"{repo_root} @ {label} {sha_short} ≠ origin/main {main_sha[:7]}", False)
+
+
 def run_guard(python_exe: str, today: str | None) -> tuple[int, dict]:
     """跑 `--guard --json`，返回 (退出码, payload)；payload 解析失败按 broken 处理。"""
     argv = [python_exe, "-m", MODULE, "--guard", "--json"]
@@ -151,6 +184,10 @@ def main(argv: list[str] | None = None) -> int:
               "需人工复核后 execute --yes（本任务不自动写）")
     else:
         print("GUARD OK: 无到期项")
+    source, on_main = describe_guard_source()
+    print(f"guard source: {source}"
+          + ("" if on_main else "  ⚠ 判据取自主检出的当前版本，不是 origin/main"
+             "：结论只适用于那棵树"))
     print(f"metrics -> {args.metrics_path}")
     return exit_code
 

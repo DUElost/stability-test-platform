@@ -33,6 +33,9 @@ describe('resolveRouteTitle (#2363)', () => {
     expect(resolveRouteTitle('/execution/plan-runs/409/logs')).toBe('Run 日志');
     expect(resolveRouteTitle('/execution/plan-runs/409')).toBe('Plan Run 详情');
     expect(resolveRouteTitle('/projects/STP')).toBe('项目详情');
+    // #2660：权威形状是 jobs/:jobId/report（旧 runs/:runId/report 只剩重定向，
+    // 仍登记一份给跳转过程用）
+    expect(resolveRouteTitle('/jobs/abc/report')).toBe('Run 报告');
     expect(resolveRouteTitle('/runs/abc/report')).toBe('Run 报告');
     expect(resolveRouteTitle('/totally-unknown/deep/x')).toBeNull();
   });

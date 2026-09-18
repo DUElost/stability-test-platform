@@ -60,6 +60,49 @@ update_branch_tolerant() {
   return "$rc"
 }
 
+# 启用队首 auto-merge 的**容错**版本（#2646）。
+#
+# `gh pr merge --auto` 在队首 PR 改过 `.github/workflows/*` 时会被 GitHub 以
+# 「refusing to allow a Personal Access Token to create or update workflow … without
+# `workflow` scope」拒绝。这与 #1783 在 `updatePullRequestBranch` 上修的是**同一根因、
+# 不同调用点**——而 enable 这条路径当时没有同样的容错，于是同一缺陷复发。
+#
+# 危害**远大于**「自己红一步」：`set -e` 让整 job 失败 → 队首始终拿不到 auto-merge →
+# 下游 `if [ -z "$auto_method" ]; then … skip head update` 因「队首没有 auto-merge」
+# 而**跳过分支更新** ⇒ enable 失败把「停摆」固定下来，队列**自持停摆且不自愈**
+# （实测 2026-09-17T19:23:25Z → 2026-09-18T01:44:04Z 整队列零合入 6h20m，23 个 open PR）。
+#
+# 处置与 #1783 同构：识别该类拒绝后**绿退**并给人工动作指引。根因（补 `workflow` scope =
+# 允许该凭据改 CI 定义）属**安全面扩张**，由 owner 单列决策；本函数只做无害化。
+enable_auto_tolerant() {
+  local num="$1" url="$2" out rc=0 method
+  out="$(gh pr merge "$url" --auto --merge 2>&1)" || rc=$?
+  printf '%s\n' "$out"
+  if [ "$rc" -eq 0 ]; then
+    echo "Enabled auto-merge on #${num}"
+    return 0
+  fi
+  if printf '%s' "$out" | grep -qiE "without .?workflow.? scope"; then
+    echo "PR #${num} touches .github/workflows/* and the queue token lacks 'workflow' scope;"
+    echo "  GitHub refused to enable auto-merge. Enable it manually with a workflow-scoped"
+    echo "  credential (or ask an owner to do so) to unblock the queue."
+    echo "  NOTE: queue head update is skipped while the head has no auto-merge (#2646);"
+    echo "  until it is enabled, this queue cannot self-heal."
+    # 退出码 2 = 「绿退但队列被凭据卡住」——调用方据此发**可区分**的停摆告警
+    # （既有 `failed=` 指纹表达不了「绿队首被凭据卡住」）。
+    return 2
+  fi
+  # 「已被并发启用」不是故障：另一轮 reconcile / 人工刚挂上，报错形态不稳定，
+  # 故按**结果**判定（复读 autoMergeRequest）而非再堆一条文案匹配——与
+  # update_branch_tolerant 末尾「按 PR 状态判定而非匹配报错文案」同一取向。
+  method="$(head_merge_method "$num" || true)"
+  if [ -n "$method" ]; then
+    echo "Auto-merge already enabled on #${num} (concurrent enable); nothing to do."
+    return 0
+  fi
+  return "$rc"
+}
+
 # PR 含 .github/workflows/ 变更时，pull_request 触发的 run 会停在 action_required；
 # reconcile 与 pull_request_target workflow 代为批准（见 approve-pending-workflow-runs.sh）。
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -135,9 +178,16 @@ self_heal_already_attempted() {
 # 标记，作为下次 reconcile 判定冷却的依据（见 self_heal_already_attempted）。
 alert_queue_blocked() {
   local head="$1" ref="$2" failed="$3" impact="${4:-}" selfheal_state="${5:-}" head_sha="${6:-}"
+  local reason_code="${7:-}"
   local fingerprint existing existing_body body author pr_url
   local -a lines=()
   fingerprint="head=#${head} failed=${failed}"
+  # #2646：`reason_code` 进指纹——否则「绿队首被凭据卡住」（failed 为空）与
+  # 「无失败项的普通停摆」会共用同一指纹，正文与去重标记互相覆盖，
+  # 运维无法稳定区分两种处置（前者需补 workflow scope，后者需排查 CI）。
+  if [ -n "$reason_code" ]; then
+    fingerprint="${fingerprint} reason=${reason_code}"
+  fi
   if [ -n "$selfheal_state" ]; then
     # sha 进指纹：换了 head（自愈后的新 sha）必须刷新正文与标记，否则冷却记录
     # 会停在旧 sha 上，新 sha 的第二次判定误判为「没试过」。
@@ -158,12 +208,25 @@ alert_queue_blocked() {
     "## FIFO 队首停摆（ci/queue-blocked 自动告警）"
     ""
     "- 队首 PR：[#${head}](${pr_url})（\`${ref}\`，作者 @${author}）"
-    "- 未通过 required check：${failed}"
+    "- 未通过 required check：${failed:-（无——见下方原因码）}"
     "${impact}"
     "- 判读工具：\`python -m tools.dev.queue_head_telemetry\`"
     "- 处置（人工，择一）：修复该 check / 解冲突 / 让位（关闭或改 draft）；不要手动 Merge"
     ""
   )
+  if [ -n "$reason_code" ]; then
+    # #2646：原因码单列并给出**可执行**动作——「未通过 required check」为空时，
+    # 读者必须能立即知道该做什么，而不是去猜「没失败项为何不合入」。
+    lines+=("- **原因码**：\`${reason_code}\`")
+    if [ "$reason_code" = "credential-scope" ]; then
+      lines+=("  - 队首 required checks **全绿**，但队列凭据缺 \`workflow\` scope，"
+              "GitHub 拒绝启用 auto-merge（该 PR 改过 \`.github/workflows/*\`）")
+      lines+=("  - **人工动作**：用具备 \`workflow\` scope 的凭据为该 PR 启用 auto-merge，"
+              "或让该 PR 让位（关闭/改 draft）")
+      lines+=("  - **注意**：在队首拿到 auto-merge 之前，本脚本会跳过 head update ⇒ "
+              "**队列不会自愈**，必须人工介入（#2646）")
+    fi
+  fi
   if [ -n "$selfheal_state" ] && [ -n "$head_sha" ]; then
     lines+=("<!-- queue-selfheal: head=#${head} sha=${head_sha} -->")
   fi
@@ -290,6 +353,10 @@ head_merge_method() {
   return 1
 }
 
+# #2646：队首因「凭据缺 workflow scope」而挂不上 auto-merge 时置位——循环后据此告警。
+# 该状态**无法用既有 `failed=` 指纹表达**（队首 required checks 全绿、无失败项），
+# 若不单列，运维只会看到「一切正常却没合入」。
+head_enable_blocked=""
 for row in "${filtered[@]}"; do
   num="$(jq -r '.number' <<<"$row")"
   url="$(jq -r '.url' <<<"$row")"
@@ -300,14 +367,36 @@ for row in "${filtered[@]}"; do
     if [ "$method" = "MERGE" ]; then
       echo "Auto-merge already enabled on #${num}"
     else
-      gh pr merge "$url" --auto --merge
-      echo "Enabled auto-merge on #${num}"
+      # 区分三态：0=已启用/无碍；2=凭据受阻（绿退但队列被卡，需可区分告警）；
+      # 其它=真故障，必须上抛。**不能**写 `|| head_enable_blocked=...`——那会把
+      # 非 2 的失败一并吞掉（`||` 右侧赋值成功即整行成功），使真故障伪装成绿。
+      enable_rc=0
+      enable_auto_tolerant "$num" "$url" || enable_rc=$?
+      if [ "$enable_rc" -eq 2 ]; then
+        head_enable_blocked="$num"
+      elif [ "$enable_rc" -ne 0 ]; then
+        exit "$enable_rc"
+      fi
     fi
   elif [ "$has_auto" = "yes" ]; then
     gh pr merge "$url" --disable-auto || true
     echo "Disabled auto-merge on #${num} (waiting in queue)"
   fi
 done
+
+# #2646：队首挂不上 auto-merge 且原因是**凭据缺 workflow scope** → 发可区分的停摆告警。
+#
+# 为何必须单列：既有指纹是 `head=#N failed=<失败项>`，而本状态的队首 required checks
+# **全绿**、`failed` 为空 ⇒ 告警面表达不出「绿队首被凭据卡住」。实测该状态曾让整个
+# FIFO 队列**零合入 6h20m**（23 个 open PR），且因下游「队首无 auto-merge 就跳过 head
+# update」而**不自愈**——没有可区分告警，运维只能靠肉眼发现「一切正常却没合入」。
+if [ -n "$head_enable_blocked" ]; then
+  alert_queue_blocked "$head_enable_blocked" "$head_ref" "" \
+    "- 队列影响：队首 required checks **全绿**但**无 auto-merge**，故本轮不会合入；且脚本在「队首无 auto-merge」时跳过 head update → **队列不自愈**（#2646）" \
+    "" "" \
+    "credential-scope"
+  exit 0
+fi
 
 # 队首换档后常无新 CI → workflow_run 不会触发 pr-update-branch；reconcile 后
 # 主动检查队首：已挂 auto-merge + required 全 SUCCESS + behind_by>0 → update。
