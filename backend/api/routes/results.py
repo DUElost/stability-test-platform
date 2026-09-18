@@ -17,7 +17,7 @@ from backend.core.database import get_db
 from backend.models.job import JobInstance
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
-from backend.models.project import TestProject
+from backend.models.project import Specialty, TestProject
 from backend.core.metrics import risk_jobs_by_level
 from backend.services.log_observation import (
     aggregate_risk_levels_by_job,
@@ -37,7 +37,22 @@ class RunsByStatus(BaseModel):
     total: int = 0
 
 
+#: #2631：`specialty`（专项）未设置时的**显式**桶名。
+#: 旧实现在这里回落到 `Plan.name`——那正是「一个概念两套口径」的成因：
+#: 图上写「按测试类型统计」，轴上却是用户自由输入、只增不减的 Plan 代号。
+UNSPECIFIED_SPECIALTY_LABEL = "未设专项"
+
+#: 未设专项恒排最后（字典表 sort_order 是整数，取一个不可能胜出的哨兵值）
+_UNSPECIFIED_SPECIALTY_SORT = 10 ** 9
+
+
 class TestTypeStat(BaseModel):
+    """「测试类型」统计行。
+
+    `type` = `specialty.display_name`（ADR-0029 D6：专项＝测试类型维度标签，有界字典），
+    不是 Plan 名；Plan 未设专项时归入 `UNSPECIFIED_SPECIALTY_LABEL`（#2631）。
+    """
+
     type: str
     finished: int = 0
     failed: int = 0
@@ -227,29 +242,60 @@ def get_results_summary(
                 # QUEUED/RUNNING/UNKNOWN 都视作运行态
                 runs_by_status.running += cnt
 
-        # --- test_type_stats (按 Plan.name 聚合) ---
+        # --- test_type_stats (按 specialty/专项 聚合 = 「测试类型」的权威定义) ---
+        # ADR-0029 D6 与 new-specialty-onboarding-runbook.md 都把「测试类型」指派给
+        # specialty（有界字典）；旧实现按 Plan.name 聚合并自证于注释与变量名
+        # (`template_name`)，于是同一专项被拆成 N 条、每新增一个 Plan 图表就恶化一次（#2631）。
         type_query = db.query(
-            Plan.name,
+            Specialty.id,
+            Specialty.display_name,
+            Specialty.sort_order,
             JobInstance.status,
             func.count(JobInstance.id),
         ).join(Plan, JobInstance.plan_id == Plan.id)
-        # 按 Plan.name 分组需保留 Plan join；project 过滤额外 join PlanRun（快照语义）
+        # 未设专项的 Plan 也必须出现在图上（LEFT JOIN + 显式桶），不得回落到 Plan 名
+        type_query = type_query.outerjoin(Specialty, Plan.specialty_id == Specialty.id)
+        # 按专项分组需保留 Plan join；project 过滤额外 join PlanRun（快照语义）
         if target_project_id is not None:
             type_query = type_query.join(PlanRun, JobInstance.plan_run_id == PlanRun.id)
         type_query = _scope_by_project(type_query)
-        type_rows = type_query.group_by(Plan.name, JobInstance.status).all()
-        type_agg: Dict[str, Dict[str, int]] = {}
-        for template_name, raw_status, cnt in type_rows:
-            stat_type = str(template_name or "UNKNOWN")
-            bucket = type_agg.setdefault(stat_type, {"finished": 0, "failed": 0, "total": 0})
+        type_rows = type_query.group_by(
+            Specialty.id,
+            Specialty.display_name,
+            Specialty.sort_order,
+            JobInstance.status,
+        ).all()
+        # 键取**标签**（轴的 identity 就是图上那格文字）：`display_name` 无唯一约束，
+        # 两个 key 撞同名时按 id 聚合会画出两条一模一样的图例，按标签聚合才是对的读数。
+        type_agg: Dict[str, Dict[str, Any]] = {}
+        for spec_id, display_name, sort_order, raw_status, cnt in type_rows:
+            label = (str(display_name) if display_name
+                     else UNSPECIFIED_SPECIALTY_LABEL)
+            slot = type_agg.setdefault(label, {
+                "sort": (_UNSPECIFIED_SPECIALTY_SORT if spec_id is None
+                         else int(sort_order or 0)),
+                "finished": 0,
+                "failed": 0,
+                "total": 0,
+            })
             count_i = int(cnt or 0)
-            bucket["total"] += count_i
+            slot["total"] += count_i
             normalized = _normalize_job_status(raw_status)
             if normalized == "FINISHED":
-                bucket["finished"] += count_i
+                slot["finished"] += count_i
             elif normalized == "FAILED":
-                bucket["failed"] += count_i
-        test_type_stats = [TestTypeStat(type=t, **counts) for t, counts in sorted(type_agg.items())]
+                slot["failed"] += count_i
+        # 出图顺序 = 字典表 sort_order（与 /orchestration/plans 那排专项 chip 同序）
+        test_type_stats = [
+            TestTypeStat(
+                type=label,
+                finished=slot["finished"],
+                failed=slot["failed"],
+                total=slot["total"],
+            )
+            for label, slot in sorted(type_agg.items(),
+                                      key=lambda kv: (kv[1]["sort"], kv[0]))
+        ]
 
         # --- recent_runs (ADR-0020: Plan-based) ---
         # Plan join 供 name 展示；outerjoin PlanRun+TestProject 取归属 key

@@ -7,6 +7,8 @@ from backend.models.host import Device
 from backend.models.job import JobInstance, JobLogSignal, StepTrace
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
+from backend.models.project import Specialty
+from backend.api.routes.results import UNSPECIFIED_SPECIALTY_LABEL
 
 
 class TestResultsSummary:
@@ -52,17 +54,28 @@ class TestResultsSummary:
         suffix = now.strftime("%Y%m%d%H%M%S%f")
         smoke_type = f"Smoke-{suffix}"
         stress_type = f"Stress-{suffix}"
+        # #2631：轴的权威口径是 specialty（专项），**刻意**让它与 Plan 名不同——
+        # 旧用例直接断言 `type_stats[smoke_type]`，等于把「Plan 名 == 测试类型」钉成契约，
+        # 这就是双标能长期存活的原因：防线自己站在错的一边。
+        smoke_label = f"专项甲-{suffix}"
+        stress_label = f"专项乙-{suffix}"
+        spec_smoke = Specialty(key=f"rs-{suffix}", display_name=smoke_label, sort_order=1)
+        spec_stress = Specialty(key=f"rs2-{suffix}", display_name=stress_label, sort_order=2)
+        db_session.add_all([spec_smoke, spec_stress])
+        db_session.flush()
 
         plan_smoke = Plan(
             name=smoke_type,
             description="",
             failure_threshold=0.05,
-                    )
+            specialty_id=spec_smoke.id,
+        )
         plan_stress = Plan(
             name=stress_type,
             description="",
             failure_threshold=0.05,
-                    )
+            specialty_id=spec_stress.id,
+        )
         db_session.add_all([plan_smoke, plan_stress])
         db_session.flush()
 
@@ -215,12 +228,15 @@ class TestResultsSummary:
         assert data["runs_by_status"]["total"] == baseline["runs_by_status"]["total"] + 4
 
         type_stats = {row["type"]: row for row in data["test_type_stats"]}
-        assert type_stats[smoke_type]["total"] == 2
-        assert type_stats[smoke_type]["finished"] == 1
-        assert type_stats[smoke_type]["failed"] == 0
-        assert type_stats[stress_type]["total"] == 2
-        assert type_stats[stress_type]["finished"] == 0
-        assert type_stats[stress_type]["failed"] == 1
+        assert type_stats[smoke_label]["total"] == 2
+        assert type_stats[smoke_label]["finished"] == 1
+        assert type_stats[smoke_label]["failed"] == 0
+        assert type_stats[stress_label]["total"] == 2
+        assert type_stats[stress_label]["finished"] == 0
+        assert type_stats[stress_label]["failed"] == 1
+        # 轴上不得再出现 Plan 代号（两个方向都钉：出现即口径回退）
+        assert smoke_type not in type_stats, "test_type_stats 又按 Plan.name 聚合了（#2631）"
+        assert stress_type not in type_stats, "test_type_stats 又按 Plan.name 聚合了（#2631）"
 
         # #2365：判据 = 活链；#2494/ADR-0045 D2：桶名就是级别本身（不再翻成
         # high/medium/low），无信号 = unknown。jobs[0] 的 `risk=LOW` 诱饵（快照）
@@ -250,6 +266,225 @@ class TestResultsSummary:
             "unknown": baseline_counts["unknown"] + 2,
         }
 
+
+class TestTestTypeStatsAxis:
+    """#2631：「按测试类型统计」的轴必须是 `specialty`（专项），不是 `Plan.name`。
+
+    专项是 ADR-0029 D6 的**有界字典**（`new-specialty-onboarding-runbook.md` 把
+    「测试类型维度标签」明确指派给它），Plan 名是用户自由输入且只增不减。
+    旧实现用后者却以前者命名 ⇒ 同一专项被拆成 N 条、每加一个 Plan 图就退化一分。
+    """
+
+    @staticmethod
+    def _seed_chain(db_session, sample_device, *, plan_name, specialty_id=None,
+                    project_id=None, statuses=("COMPLETED",)):
+        """建 Plan(挂专项) → PlanRun → 每个 status 一条 JobInstance。"""
+        now = datetime.now(timezone.utc)
+        plan = Plan(name=plan_name, description="", failure_threshold=0.05,
+                    specialty_id=specialty_id)
+        db_session.add(plan)
+        db_session.flush()
+        run = PlanRun(
+            plan_id=plan.id,
+            project_id=project_id,
+            status="RUNNING",
+            failure_threshold=0.05,
+            plan_snapshot={"name": plan.name, "plan_id": plan.id},
+            run_type="MANUAL",
+            triggered_by="pytest",
+        )
+        db_session.add(run)
+        db_session.flush()
+        for index, status in enumerate(statuses):
+            # `uq_job_instance_plan_run_device`：同一 run 内一台设备只能有一条 job
+            device = Device(
+                serial=f"{plan_name}-{index}",
+                host_id=sample_device.host_id,
+                status="ONLINE",
+            )
+            db_session.add(device)
+            db_session.flush()
+            db_session.add(JobInstance(
+                plan_run_id=run.id,
+                plan_id=plan.id,
+                device_id=device.id,
+                host_id=sample_device.host_id,
+                status=status,
+                pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+                started_at=now,
+                ended_at=now,
+                created_at=now,
+                updated_at=now,
+            ))
+        db_session.flush()
+        return plan, run
+
+    @staticmethod
+    def _rows(client, auth_headers, params=None):
+        resp = client.get("/api/v1/results/summary", params=params or {},
+                          headers=auth_headers)
+        assert resp.status_code == 200
+        return {row["type"]: row for row in resp.json()["test_type_stats"]}
+
+    def test_same_specialty_merges_across_plans(
+        self, client, auth_headers, db_session, sample_device,
+    ):
+        suffix = datetime.now(timezone.utc).strftime("%H%M%S%f")
+        spec = Specialty(key=f"mg-{suffix}", display_name=f"合并专项-{suffix}",
+                         sort_order=5)
+        db_session.add(spec)
+        db_session.flush()
+        plan_a, _ = self._seed_chain(db_session, sample_device,
+                                     plan_name=f"plan-a-{suffix}", specialty_id=spec.id,
+                                     statuses=("COMPLETED",))
+        plan_b, _ = self._seed_chain(db_session, sample_device,
+                                     plan_name=f"plan-b-{suffix}", specialty_id=spec.id,
+                                     statuses=("COMPLETED", "FAILED"))
+        db_session.commit()
+
+        rows = self._rows(client, auth_headers)
+
+        # 一个专项 = 一条，不受 Plan 个数影响（这正是「基数有界」的含义）
+        assert list(rows) == [spec.display_name], (
+            f"同一专项被拆成多条或轴回退成 Plan 名：{list(rows)}"
+        )
+        assert rows[spec.display_name]["total"] == 3
+        assert rows[spec.display_name]["finished"] == 2
+        assert rows[spec.display_name]["failed"] == 1
+        assert plan_a.name not in rows and plan_b.name not in rows
+
+    def test_missing_specialty_is_an_explicit_bucket(
+        self, client, auth_headers, db_session, sample_device,
+    ):
+        """未设专项 → 固定桶；**不得**回落到 Plan 名（静默回落就是本单的成因）。"""
+        suffix = datetime.now(timezone.utc).strftime("%H%M%S%f")
+        plan_name = f"无专项计划-{suffix}"
+        self._seed_chain(db_session, sample_device, plan_name=plan_name,
+                         statuses=("COMPLETED", "ABORTED"))
+        db_session.commit()
+
+        rows = self._rows(client, auth_headers)
+
+        assert UNSPECIFIED_SPECIALTY_LABEL in rows
+        assert rows[UNSPECIFIED_SPECIALTY_LABEL]["total"] == 2
+        # ABORTED 既非 FINISHED 也非 FAILED：total 计入、成败不计
+        assert rows[UNSPECIFIED_SPECIALTY_LABEL]["finished"] == 1
+        assert rows[UNSPECIFIED_SPECIALTY_LABEL]["failed"] == 0
+        assert plan_name not in rows
+
+    def test_axis_values_are_resolvable_in_the_specialty_dict(
+        self, client, auth_headers, db_session, sample_device,
+    ):
+        """反漂移钉子：轴上每个值都必须在 specialty 字典里（或是那个固定桶）。
+
+        这条与上面两条判据不同——它不看具体数字，只看**值域来源**，
+        所以将来任何人把聚合键改回 Plan 名（或改成别的自由文本字段）都会红。
+        """
+        suffix = datetime.now(timezone.utc).strftime("%H%M%S%f")
+        spec = Specialty(key=f"vr-{suffix}", display_name=f"值域专项-{suffix}",
+                         sort_order=6)
+        db_session.add(spec)
+        db_session.flush()
+        plan = Plan(name=f"漂移探针-{suffix}", description="", failure_threshold=0.05,
+                    specialty_id=None)
+        db_session.add(plan)
+        db_session.flush()
+        # 用例自身可判别：Plan 名确实不在字典里，否则这条判据就是恒真的
+        assert plan.name not in {s.display_name for s in db_session.query(Specialty).all()}
+
+        self._seed_chain(db_session, sample_device, plan_name=f"named-{suffix}",
+                         specialty_id=spec.id)
+        db_session.commit()
+
+        rows = self._rows(client, auth_headers)
+        labels = {s.display_name for s in db_session.query(Specialty).all()}
+        allowed = labels | {UNSPECIFIED_SPECIALTY_LABEL}
+        assert set(rows) <= allowed, (
+            f"轴上出现了 specialty 字典之外的值（口径又漂移了）："
+            f"{sorted(set(rows) - allowed)}"
+        )
+
+    def test_axis_order_follows_specialty_sort_order(
+        self, client, auth_headers, db_session, sample_device,
+    ):
+        """出图顺序 = 字典表 `sort_order`（与 plans 页那排专项 chip 同序），未设专项恒最后。"""
+        suffix = datetime.now(timezone.utc).strftime("%H%M%S%f")
+        late = Specialty(key=f"sl-{suffix}", display_name=f"靠后专项-{suffix}",
+                         sort_order=90)
+        early = Specialty(key=f"se-{suffix}", display_name=f"靠前专项-{suffix}",
+                          sort_order=1)
+        db_session.add_all([late, early])
+        db_session.flush()
+        self._seed_chain(db_session, sample_device, plan_name=f"p-late-{suffix}",
+                         specialty_id=late.id)
+        self._seed_chain(db_session, sample_device, plan_name=f"p-early-{suffix}",
+                         specialty_id=early.id)
+        self._seed_chain(db_session, sample_device, plan_name=f"p-none-{suffix}")
+        db_session.commit()
+
+        resp = client.get("/api/v1/results/summary", headers=auth_headers)
+        axis = [row["type"] for row in resp.json()["test_type_stats"]]
+
+        assert axis == [early.display_name, late.display_name,
+                        UNSPECIFIED_SPECIALTY_LABEL], f"轴顺序不对：{axis}"
+
+    def test_same_display_name_merges_into_one_axis_label(
+        self, client, auth_headers, db_session, sample_device,
+    ):
+        """轴的 identity 是**标签**：两个 key 撞同一个 display_name 也只画一条（合计正确）。
+
+        按 `Specialty.id` 聚合会画出两条一模一样的图例——看着像两个专项各 1 条，
+        读图人无从分辨，所以这条钉的是聚合键的选择，不是字典数据的洁癖。
+        """
+        suffix = datetime.now(timezone.utc).strftime("%H%M%S%f")
+        shared = f"同名专项-{suffix}"
+        a = Specialty(key=f"sa-{suffix}", display_name=shared, sort_order=11)
+        b = Specialty(key=f"sb-{suffix}", display_name=shared, sort_order=12)
+        db_session.add_all([a, b])
+        db_session.flush()
+        self._seed_chain(db_session, sample_device, plan_name=f"pa-{suffix}",
+                         specialty_id=a.id, statuses=("COMPLETED", "FAILED"))
+        self._seed_chain(db_session, sample_device, plan_name=f"pb-{suffix}",
+                         specialty_id=b.id)
+        db_session.commit()
+
+        resp = client.get("/api/v1/results/summary", headers=auth_headers)
+        axis = [(row["type"], row["total"], row["finished"], row["failed"])
+                for row in resp.json()["test_type_stats"]]
+        assert axis == [(shared, 3, 2, 1)], f"同名专项没合并成一条读数：{axis}"
+
+    def test_project_filter_still_scopes_the_axis(
+        self, client, auth_headers, db_session, sample_device,
+    ):
+        """改聚合键时最容易丢的是 project 过滤的 `PlanRun` join——单独钉住。"""
+        from backend.models.project import TestProject
+
+        suffix = datetime.now(timezone.utc).strftime("%H%M%S%f")
+        project = TestProject(project_key=f"AX-{suffix}", display_name="axis",
+                              source="USER")
+        other = TestProject(project_key=f"AXO-{suffix}", display_name="other",
+                            source="USER")
+        db_session.add_all([project, other])
+        db_session.flush()
+        spec = Specialty(key=f"pf-{suffix}", display_name=f"项目专项-{suffix}",
+                         sort_order=3)
+        db_session.add(spec)
+        db_session.flush()
+
+        plan_in, run_in = self._seed_chain(db_session, sample_device,
+                                           plan_name=f"in-{suffix}", specialty_id=spec.id)
+        plan_out, run_out = self._seed_chain(db_session, sample_device,
+                                             plan_name=f"out-{suffix}",
+                                             specialty_id=spec.id)
+        run_in.project_id = project.id
+        run_out.project_id = other.id
+        db_session.commit()
+
+        rows = self._rows(client, auth_headers, {"project_key": f"AX-{suffix}"})
+        assert spec.display_name in rows
+        assert rows[spec.display_name]["total"] == 1, (
+            "project 过滤没有作用到 test_type_stats（PlanRun join 丢了）"
+        )
 
 class TestRiskTrend:
     """ADR-0029 P2：项目级风险趋势（按天 S/A/B，run 级 DLE 权威聚合）。"""

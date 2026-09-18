@@ -317,6 +317,8 @@ export interface RunsByStatus {
 }
 
 export interface TestTypeStat {
+  /** #2631：`type` = specialty（专项）的 display_name（ADR-0029 D6「测试类型」的权威口径），
+   *  未设专项 = 固定桶「未设专项」。**不是** Plan 名——旧口径基数无界，图会随 Plan 数退化。 */
   type: string;
   finished: number;
   failed: number;
