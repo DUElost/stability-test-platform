@@ -114,10 +114,12 @@ B(终检才认退役)：
 
 ## Revisit
 
-- **barrier 并发用例未建**：场景表「两个 DB session 用 barrier 固定 retire 与
-  admission/claim 交错」当前由 **A0b+B 双活读**结构性满足，但无专门的交错测试。
-  补一条 `threading.Barrier` 级用例需要可控的 PRECHECK 领取时序，成本高、
-  收益是钉死而非证明——留待 ⑤/⑥ 联调批一并做；
+- **（已建，2026-09-18 追做）交错用例**：`TestAdmissionRetireInterleaving1805`
+  把「retire 落在 A0b→Phase B 窗口」钉成**确定性**交错——交错点=被替换的
+  `_verify_scripts_phase`，独立 DB 会话在其中提交退役，无需 `threading.Barrier`
+  （不靠线程时序，判定确定，符合 #2679 的「等异步状态」判据方向）。断言
+  「退役成功与新授权物化不能同时提交」：FAILED+HOST_RETIRED、Job 零条、
+  快照/PlanRunHost 保留。与 A0b 用例（窗口前界）合钉窗口两端。
 - 面 5/6/9/10/14（统计/批量工具/AI 助手读写/设备面/前端）不在 ④；批量
   `--direct` 已共享 `begin_host_upgrade`（M10 红即证其闸在），但若 batch 工具
   将来绕过服务层直连 SSH，须重跑本矩阵；
