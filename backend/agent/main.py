@@ -34,8 +34,8 @@ if __name__ == "__main__" and __package__ is None:
         run_recovery_sync_if_needed,
         trigger_recovery_sync_on_device_reconnect,
     )
+    from agent.bootstrap_subsystems import start_disk_and_watcher_subsystems
     from agent import device_discovery
-    from agent.aee.paths import get_aee_local_root, resolve_shared_storage_root
     from agent.aee.state_migration import migrate_legacy_aee_state_keys
     from agent.artifact_uploader import ArtifactUploader
     from agent.config import BASE_DIR, ensure_dirs
@@ -48,7 +48,6 @@ if __name__ == "__main__" and __package__ is None:
     from agent.heartbeat_thread import HeartbeatThread
     from agent.host_registry import auto_register_host, get_host_info, load_required_host_id
     from agent.settings import (
-        get_disk_archive_settings,
         get_registration_settings,
         reset_agent_settings_caches,
     )
@@ -60,8 +59,6 @@ if __name__ == "__main__" and __package__ is None:
     from agent.registry.patrol_checkpoint_store import PatrolCycleCheckpointStore
     from agent.registry.script_registry import ScriptRegistry
     from agent.step_trace_uploader import StepTraceUploader
-    from agent.watcher import LogWatcherManager, OutboxDrainer
-    from agent.watcher.enable import watcher_subsystem_enabled
     from agent.socketio_client import AgentSocketIOClient
 else:
     from .adb_wrapper import AdbWrapper
@@ -76,8 +73,8 @@ else:
         run_recovery_sync_if_needed,
         trigger_recovery_sync_on_device_reconnect,
     )
+    from .bootstrap_subsystems import start_disk_and_watcher_subsystems
     from . import device_discovery
-    from .aee.paths import get_aee_local_root, resolve_shared_storage_root
     from .aee.state_migration import migrate_legacy_aee_state_keys
     from .artifact_uploader import ArtifactUploader
     from .config import BASE_DIR, ensure_dirs
@@ -90,7 +87,6 @@ else:
     from .heartbeat_thread import HeartbeatThread
     from .host_registry import auto_register_host, get_host_info, load_required_host_id
     from .settings import (
-        get_disk_archive_settings,
         get_registration_settings,
         reset_agent_settings_caches,
     )
@@ -104,8 +100,6 @@ else:
     from .registry.patrol_checkpoint_store import PatrolCycleCheckpointStore
     from .registry.script_registry import ScriptRegistry
     from .step_trace_uploader import StepTraceUploader
-    from .watcher import LogWatcherManager, OutboxDrainer
-    from .watcher.enable import watcher_subsystem_enabled
     from .socketio_client import AgentSocketIOClient
 
 logging.basicConfig(
@@ -398,100 +392,16 @@ def main() -> None:
     script_registry = ScriptRegistry(local_db, api_url, agent_secret)
     script_registry.initialize()
 
-    # P2-3：scan/upload/归档/spill 不绑定 watcher 开关——各自按自身 env 门控
-    #（EventUploader.start / LocalDiskMonitor 内部都有 enabled 判断）。
-    hdd_root = str(get_aee_local_root())
-    cifs_root = resolve_shared_storage_root()
-    _disk_settings = get_disk_archive_settings()
-    LogArchiver.instance().configure(
+    log_signal_drainer = start_disk_and_watcher_subsystems(
         local_db=local_db,
-        run_log_dir=str(BASE_DIR / "logs" / "runs"),
-        interval_seconds=_disk_settings.stp_log_archive_interval_seconds,
-        grace_seconds=_disk_settings.stp_log_archive_grace_seconds,
-    ).start()
-    logger.info("log_archiver=started")
-    ScanRunner.instance().configure()
-    UnisocScanRunner.instance().configure()
-    UploadManager.instance().configure()
-    EventUploader.instance().configure(
         api_url=api_url,
         agent_secret=agent_secret,
         host_id=str(host_id),
+        agent_instance_id=agent_instance_id,
+        adb=adb,
+        adb_path=adb_path,
+        sio_client=sio_client,
     )
-    EventUploader.instance().start()
-    if cifs_root:
-        LocalDiskMonitor.instance().configure(
-            hdd_root=hdd_root,
-            cifs_root=cifs_root,
-            interval_seconds=_disk_settings.stp_local_disk_monitor_interval_seconds,
-            spill_threshold_pct=_disk_settings.stp_local_disk_spill_threshold,
-            target_pct=_disk_settings.stp_local_disk_spill_target,
-            api_url=api_url,
-            agent_secret=agent_secret,
-            host_id=str(host_id),
-        ).start()
-        logger.info("hdd_spill_monitor=started hdd=%s cifs=%s", hdd_root, cifs_root)
-    else:
-        logger.info("hdd_spill_monitor_skipped cifs_root_empty")
-
-    # Device Log Watcher 子系统（全局或 Plan 默认开启时 configure）
-    log_signal_drainer: Optional[OutboxDrainer] = None
-    if watcher_subsystem_enabled():
-        # 5B1 + D1：LogPuller 中心存储根（空串 = 禁用 puller，仅记元数据）
-        nfs_base_dir = resolve_shared_storage_root()
-        LogWatcherManager.instance().configure(
-            adb=adb,
-            adb_path=adb_path,          # InotifydSource.Popen 需要 adb 二进制路径
-            local_db=local_db,
-            sio_client=sio_client,
-            api_url=api_url,
-            agent_secret=agent_secret,
-            agent_instance_id=agent_instance_id,
-            nfs_base_dir=nfs_base_dir,
-        )
-        # log_signal_outbox 后台批量上送线程（watcher 写入 → drainer 推送到后端）
-        log_signal_drainer = OutboxDrainer.instance().configure(
-            local_db=local_db,
-            api_url=api_url,
-            agent_secret=agent_secret,
-            interval_seconds=5.0,
-            batch_size=50,
-        )
-        log_signal_drainer.start()
-        # 5B2：artifact 上传单例（fire-and-forget；失败不影响 log_signal 主链路）
-        ArtifactUploader.instance().configure(
-            api_url=api_url,
-            agent_secret=agent_secret,
-            host_id=str(host_id),
-            agent_instance_id=agent_instance_id,
-            # #97: 登记前 promote 到共享根（控制面只认共享路径）。
-            # 仅 STP_AEE_NFS_ROOT（及弃用别名）才启用；未配置则 LOCAL 直发。
-            aee_shared_root=resolve_shared_storage_root(),
-        )
-        ArtifactUploader.instance().start()
-        logger.info("watcher_subsystem_enabled log_signal_drainer=started artifact_uploader=started")
-        # M4/T4-4: 清理上次进程残留的 active watcher_state(崩溃/重启脏记录)。
-        # 必须在 configure(注入 local_db)之后调用。
-        try:
-            stale_cleaned = LogWatcherManager.instance().reconcile_on_startup()
-            if stale_cleaned:
-                logger.info("watcher_reconcile_on_startup cleaned_stale=%d", stale_cleaned)
-        except Exception:
-            logger.exception("watcher_reconcile_on_startup failed")
-        # D2: AeeDbHistoryReconciler 启动期参数(读 env;是否真正启动按 capability + host 白名单门控)
-        logger.info(
-            "aee_reconciler_env enabled=%s interval_seconds=%s burst_interval_seconds=%s "
-            "burst_rounds=%s hosts=%s",
-            os.getenv("STP_WATCHER_AEE_RECONCILE_ENABLED", "true"),
-            os.getenv("STP_WATCHER_AEE_RECONCILE_INTERVAL_SECONDS", "180"),
-            os.getenv("STP_WATCHER_AEE_RECONCILE_BURST_INTERVAL_SECONDS", "60"),
-            os.getenv("STP_WATCHER_AEE_RECONCILE_BURST_ROUNDS", "5"),
-            os.getenv("STP_WATCHER_AEE_RECONCILE_HOSTS", "") or "(unset → 全 host 放行)",
-        )
-    else:
-        logger.info(
-            "watcher_subsystem_disabled (STP_WATCHER_ENABLED=false STP_WATCHER_PLAN_DEFAULT=false)"
-        )
 
     # Step trace local writer (Redis XADD removed in Phase 4; HTTP upload via StepTraceUploader)
     mq_producer = StepTraceWriter("", host_id, local_db=local_db)

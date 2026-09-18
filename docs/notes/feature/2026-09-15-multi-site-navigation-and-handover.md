@@ -27,6 +27,12 @@ Class: feature
   不再只报一半）；新增守卫测试——映射里的每个 ID 必须是 `tools/site_config/*.py`
   （**排除 handover.py 自身**，否则自指）中真实出现的字面量，将来改 ID 不会再次悄悄脱节。
 
+**#2706（#2404 同类第二处，2026-09-18 现场）**：MS-04 的 S3 证据同样固定要求 `install.s3.db`——
+升级一旦**真的应用了迁移**（发 `install.s3.migrate`），该项即假 BLOCKED。修法同 #2404：S3 槽位改
+候选集 `("install.s3.db", "install.s3.migrate")`，新增 `test_ms04_passes_on_migration_applied_evidence`；
+**教训**：#2404 只修了报障项（MS-01），未普查同类槽位——同批映射修复应把所有引用同一路径的条目一起改，
+而不是逐单打补丁（本 note 的 Revisit 已提示按「#2404 同类」复评）。
+
 ## Alternatives
 
 - **把站点导航做成平台 UI 页面**：站点差异会进共享发布物（与「同一发布物换输入」冲突）；改为站点侧渲染 + nginx 附加只读段。

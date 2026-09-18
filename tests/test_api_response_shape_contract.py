@@ -504,6 +504,28 @@ _MODEL_PAIRS: tuple[tuple[str, str, str, str], ...] = (
         "frontend/src/utils/api/types.ts",
         "ProjectMapPreview",
     ),
+    # #2187 opt-in devices.py：设备目录行 MATCH 登记（该文件多数端点仍走
+    # 裸 DeviceOut/无信封的 #2129 前遗产，信封化属独立面，不在本台账内扩张）。
+    (
+        "backend/api/schemas/device.py",
+        "DeviceOut",
+        "frontend/src/utils/api/types.ts",
+        "Device",
+    ),
+    # #2187 opt-in scripts.py：目录行与使用统计双双 MATCH（TS 命名不同源
+    # ——ScriptEntry/ScriptUsage 是消费侧原名，键集与后端模型逐名一致）。
+    (
+        "backend/api/routes/scripts.py",
+        "ScriptOut",
+        "frontend/src/utils/api/types.ts",
+        "ScriptEntry",
+    ),
+    (
+        "backend/api/routes/scripts.py",
+        "ScriptUsageOut",
+        "frontend/src/utils/api/types.ts",
+        "ScriptUsage",
+    ),
     # #2187 opt-in plans.py：触发端点从「误标 PlanRun 的幽灵声明」收紧为真实形状。
     # 对拍当场钉出：plans.run() 旧返回类型多出 9 键（capabilities/jobs/device_count…），
     # 触发端点从不返回——唯一调用点只读 .id 才未出事（types.ts::PlanRunTriggerResult）。
@@ -637,6 +659,17 @@ _MODEL_BLINDSPOT: dict[str, set[str]] = {
     "backend/api/routes/projects.py": {
         "remove_project_rule",
     },
+    # #2187 扩面第 3 批：scripts.py。scan 的 catalog 聚合与 delete 的 ok 壳仍为
+    # 运行期 dict（scan 结果含 conflicts 数组，正规化要连 #2386 的守卫字段一起
+    # 设计，独立小批做）——按台账认领。
+    "backend/api/routes/scripts.py": {
+        "scan_scripts",
+        "deactivate_script",
+    },
+    # #2187 扩面第 4 批：devices.py 无 ApiResponse[dict] 端点（盲区空集），
+    # 但 typed 记账要求 `PaginatedResponse`（schemas/base 的通用分页壳，
+    # items: List[Any]——内层形状跟随其成员配对，不是独立声明面）具名认领。
+    "backend/api/routes/devices.py": set(),
     # #1520 形状正规化批第一步：summary/artifacts 已升模型进 `_MODEL_PAIRS`；
     # 剩余具名模型逐个对拍前按台账显式豁免（下方 `_MODEL_UNREGISTERED`），
     # 三个仍 `ApiResponse[dict]` 的写侧摘要在此认领盲区。
@@ -662,6 +695,8 @@ _MODEL_UNREGISTERED: dict[str, str] = {
     # 跨文件基类限制）。新豁免须写具体失效条件，勿留泛化占位。
     "PlanRunArchiveTriggerOut": "前端无消费者（admin/运维触发面）；形状由后端测试钉，"
     "接入前端时在 types.ts 建 interface 并转登记 _MODEL_PAIRS",
+    "PaginatedResponse": "通用分页壳（items: List[Any]，schemas/base.py）——"
+    "声明面无业务字段，内层形状由其成员模型对拍承担，不为壳本身建 TS 配对",
 }
 
 #: 允许 `extra="allow"` 的已登记模型（自由 JSONB 段——键集合由写入方决定）。
@@ -788,12 +823,17 @@ def _route_functions_with_dict_response(py_path: Path) -> set[str]:
 def _route_response_model_names(py_path: Path) -> set[str]:
     """routes 文件里 ``response_model=ApiResponse[...]`` 引用的**具名**模型（``dict`` 除外）。
 
-    ``list[X]`` / ``ApiResponse[X]`` 的下标里逐个取 ``Name``——容器与 ``ApiResponse``
-    本身不是模型名，故排除。
+    ``list[X]`` / ``ApiResponse[X]`` 的下标里逐个取 ``Name``——容器、``ApiResponse``
+    与标量类型（``str``/``int``/``float``/``bool``）、typing 联合（``Union``，
+    其成员各自入账、联合本身不是模型）不是模型名，故排除：
+    ``ApiResponse[List[str]]``（如 /scripts/categories 的字典行）内层是标量、
+    不是可登记的 Pydantic 模型（#2187 opt-in scripts.py 时暴露——此前误当具名模型，
+    会把「标量端点」逼成登记一个不存在的模型或伪豁免）。
     """
     tree = ast.parse(py_path.read_text(encoding="utf-8"))
     names: set[str] = set()
-    skip = {"ApiResponse", "dict", "list", "List", "Optional"}
+    skip = {"ApiResponse", "dict", "list", "List", "Optional", "Union",
+           "str", "int", "float", "bool"}
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
