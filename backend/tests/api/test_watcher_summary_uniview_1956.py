@@ -15,7 +15,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 import pytest
 
@@ -25,6 +24,7 @@ from backend.models.job import JobInstance, JobLogSignal
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
 from backend.services import plan_run_watcher_summary as watcher_slice_module
+from tools.dev.source_anchor import SourceGuard
 
 
 def _now() -> datetime:
@@ -171,7 +171,9 @@ def test_dashboard_category_source_is_shared_with_risk_summary():
 
     # #1520 切片后 watcher/AEE 聚合的真源在 services/plan_run_watcher_summary；
     # 守卫跟着所有权走：仍要求单源引用 ANOMALY_SIGNAL_CATEGORIES、禁止硬编码三元组。
-    src = Path(watcher_slice_module.__file__).read_text(encoding="utf-8")
-    assert "ANOMALY_SIGNAL_CATEGORIES" in src
-    # 曾经漏掉 UNIVIEW 的那份硬编码三元组不得再出现
-    assert 'category.in_(["AEE", "VENDOR_AEE", "ANR"])' not in src
+    # #2639：先证锚点在（模块再搬家时这条会红并说明「用例已过期」），再判否定形态。
+    guard = SourceGuard.of_module(watcher_slice_module).anchored("ANOMALY_SIGNAL_CATEGORIES")
+    guard.assert_absent(
+        'category.in_(["AEE", "VENDOR_AEE", "ANR"])',
+        why="#1956 曾漏掉 UNIVIEW 的硬编码三元组不得再出现",
+    )

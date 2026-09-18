@@ -13,10 +13,9 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from backend.services import agent_device_log_events
 from backend.services.device_log_event import resolve_initial_upload_state
+from tools.dev.source_anchor import SourceGuard
 
 
 def test_uniview_local_is_promoted_to_upload_pending():
@@ -39,13 +38,20 @@ def test_all_ingest_sites_use_the_helper():
     #2025 的反例：更新分支原先写裸 `row.state = ev.state`，而此前那条
     `"state=ev.state" not in src` 因多了 `row.` 前缀与空格**抓不到它**——
     字面断言必须覆盖赋值形态本身，否则守的是「措辞」不是「行为」。
+
+    #2639 的反例（本用例自己就是第 3 例）：落库点随 #1520 从 `agent_api` 搬到本模块后，
+    守卫仍读旧文件，于是**两条否定断言恒真**了一个完整窗口——红的是正向断言，
+    否定断言静默失效。现在锚点不在场会被判「用例已过期」，与「防线回归」可区分。
     """
-    src = Path(agent_device_log_events.__file__).read_text(encoding="utf-8")
+    guard = (
+        SourceGuard.of_module(agent_device_log_events)
+        .anchored("resolve_initial_upload_state(ev.event_type, ev.state)")
+    )
     # 创建两处：直接以归一值构造模型
-    assert src.count("state=resolve_initial_upload_state(ev.event_type, ev.state)") == 2
+    guard.assert_count("state=resolve_initial_upload_state(ev.event_type, ev.state)", 2)
     # 更新一处：先归一为 target_state，再做迁移校验与赋值（#2025）
-    assert "target_state = resolve_initial_upload_state(ev.event_type, ev.state)" in src
-    assert "row.state = target_state" in src
+    guard.assert_present("target_state = resolve_initial_upload_state(ev.event_type, ev.state)")
+    guard.assert_present("row.state = target_state")
     # 任何形态的裸赋值都不得回潮
-    assert "state=ev.state" not in src
-    assert "row.state = ev.state" not in src
+    guard.assert_absent("state=ev.state", why="#2025 绕开归一的裸赋值不得回潮")
+    guard.assert_absent("row.state = ev.state", why="#2025 更新分支不得直接写事件原状态")
