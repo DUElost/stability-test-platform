@@ -1,13 +1,14 @@
 # ADR-0033：外部工具统一接入契约规范与包管理解耦模型（Tool-Kit Ecosystem Integration）
 
-- 状态：**Accepted（v1.2）**
+- 状态：**Accepted（v1.3）**
 - 落地状态：**未落地**（Phase 2/3 零启动，2026-09-10 核验；D0/D3 权威已生效——见 §5）
 - 优先级：P1
 - 目标里程碑：M7
 - 日期：2026-09-03
 - 决策者：平台研发组
-- 标签：toolkit, adapter, anti-corruption, package-store, scripts, dedup, jira, #745, #735, #738, #1237
-- 关联 Issue：[#745](https://github.com/DUElost/stability-test-platform/issues/745)（追踪 Epic）、[#735](https://github.com/DUElost/stability-test-platform/issues/735)（脚本膨胀治理）、[#738](https://github.com/DUElost/stability-test-platform/issues/738)（架构解耦与防腐）、[#1237](https://github.com/DUElost/stability-test-platform/issues/1237)（v1.2 收窄）
+- 标签：toolkit, adapter, anti-corruption, package-store, scripts, dedup, jira, flash, #745, #735, #738, #1237, #2546
+- 归属域：semantic-ownership flash-tool
+- 关联 Issue：[#745](https://github.com/DUElost/stability-test-platform/issues/745)（追踪 Epic）、[#735](https://github.com/DUElost/stability-test-platform/issues/735)（脚本膨胀治理）、[#738](https://github.com/DUElost/stability-test-platform/issues/738)（架构解耦与防腐）、[#1237](https://github.com/DUElost/stability-test-platform/issues/1237)（v1.2 收窄）、[#2546](https://github.com/DUElost/stability-test-platform/issues/2546)（语义归属 / flash 补登记）
 - 背景分析：[`TOOLKIT_INTEGRATION_FEASIBILITY_2026-08-26.md`](../reviews/TOOLKIT_INTEGRATION_FEASIBILITY_2026-08-26.md)；设计方案：[`2026-09-external-tools-integration-and-package-architecture.md`](../design/2026-09-external-tools-integration-and-package-architecture.md)
 
 ## 修订记录
@@ -17,6 +18,7 @@
 | v1.0 | 2026-09-03 | 初版：D0 阻断全量入仓、D1 三层宿主、D2 Tool Contract、D3 Manifest + 包存储、D4 防腐适配器（#840） |
 | v1.1 | 2026-09-04 | 三项合入前必答裁定：与 ADR-0032 权威分家（§1.1）、契约翻译在 Agent 边缘 + 退出码命名空间分层（设计 §2.5）、DB script catalog 唯一运行时权威（D3）（#846） |
 | v1.2 | 2026-09-10 | **收窄与登记**：D0/D3 权威即刻生效；D2 降为「新工具族准入、按族采用」；包存储改为条件落地（三条触发条件）；legacy 例外（展锐三工具族 + 私有路径键）显式登记；未落地状态与 §4 排期作废显式化（§5，#1237） |
+| v1.3 | 2026-09-18 | **D1 刷机补登记**：Tier 3 典型工具增列 `flash_firmware` / `flash_preflight`；原厂 flashtool 不入仓；提权面仍归 ADR-0037 D5（#2546 F-5） |
 
 ---
 
@@ -90,7 +92,9 @@ flowchart TD
 |---|---|---|---|
 | **Tier 1: Platform Tool**（控制面） | MTK/展锐 Merge 汇总去重、Jira 提单工具 | 跑在控制面容器/主机；由 SAQ Task 异步拉起；无状态批处理任务。 | 受 SAQ 任务超时限制；只读共享存储（NFS/CIFS），产物写入统一归档目录。 |
 | **Tier 2: Host Tool**（主机端） | 展锐日志扫描（`scan_log_gt`）、AEE 扫描 | 跑在测试机 Host（Linux/WSL）；作为独立进程/守护进程执行。 | 依赖 Host Python/二进制；受 Host 磁盘背压（LocalDiskMonitor）与文件生命周期管控。 |
-| **Tier 3: Device Tool**（设备端） | 开关机、休眠唤醒、GPU 压测、Monkey | 针对特定连接设备；作为 Plan 中的标准 `script:<name>` 步骤执行。 | 必须受单设备排他租约（Device Lease）制约；扩展 `models/script.py` 的 `support_files_manifest` 列语义支持外部 APK/资源包统一下发。 |
+| **Tier 3: Device Tool**（设备端） | 开关机、休眠唤醒、GPU 压测、Monkey、**刷机（`flash_firmware` / `flash_preflight`）** | 针对特定连接设备；作为 Plan 中的标准 `script:<name>` 步骤执行。 | 必须受单设备排他租约（Device Lease）制约；扩展 `models/script.py` 的 `support_files_manifest` 列语义支持外部 APK/资源包统一下发。 |
+
+- **刷机补登记（v1.3 / #2546）**：`flash_*` 归 Tier 3（PlanStep 编排）；原厂 SP_Flash_Tool 等二进制**不入仓**；主机提权边界见 ADR-0037 D5。v1.2 及以前 D1 表未列 flash，属分类学空洞（F-5）。
 
 ### D2：制定统一工具契约规范（STP Standard Tool Contract）
 任何进入平台的外部工具，无论底层实现语言（Python / Shell / 二进制），必须通过极薄的适配器实现统一四要素契约：

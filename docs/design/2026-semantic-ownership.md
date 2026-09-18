@@ -81,7 +81,7 @@
 
 ## 4. S15 可机读判据（表内；Accept-with-nits）
 
-> S15 号位在 `check_governance_surface.py` 空闲。本草案钉判据形状；**门禁实现 follow-up**。
+> S15 号位在 `check_governance_surface.py`：**已落地**（`check_ownership_table` / `check_ownership_domain_fields`，`--self-test` 含红绿样例）。文件缺失时跳过（便于叠合入）。
 
 ### 4.1 作用域（N3）
 
@@ -154,7 +154,7 @@
 | `R-merge-locus` | relation | `Merge ─executed_at→ 控制面实例` | `docs/adr/ADR-0027-control-plane-horizontal-scaling.md :: 7. **merge（\`run_merge_sync\`）为实例绑定操作**` | B1/B2/多实例互斥 |
 | `R-merge-consumes-log` | relation | `Merge ─consumes→ scan/日志产物` | `docs/design/2026-scan-upload-merge-contract.md :: ## 控制面 merge` | 改输入集 |
 | `R-tool-hosted-by-tier` | relation | `工具实现 ─hosted_by→ Tier` | `docs/adr/ADR-0033-tool-kit-ecosystem-integration.md :: ### D1：确立严格的三层工具宿主分类与生命周期隔离` | 新宿主层 |
-| `flash-tool` | concept | 刷机工具族（补 0033 空洞） | 本表登记；提权 `docs/adr/ADR-0037-agent-host-privilege-boundary.md :: D5 flash 链运行时提权收敛`；编排 ADR-0020 | 0033 D1 正式写入 |
+| `flash-tool` | concept | 刷机工具族（0033 D1 已补登记） | `docs/adr/ADR-0033-tool-kit-ecosystem-integration.md :: 刷机补登记（v1.3 / #2546）`；提权 `docs/adr/ADR-0037-agent-host-privilege-boundary.md :: D5 flash 链运行时提权收敛` | 新刷机二进制入仓；再改 Tier |
 | `jira-post-completion` | concept | 后处理/Jira **平台核心闭环**（深嵌） | `docs/adr/ADR-0012-post-completion-pipeline-jira-automation.md :: 第 1 层（✅ 已实现）` | 第 2–3 层；客户方言回渗主干 |
 | `session-cookie-csrf` | concept | Web 会话 / CSRF / refresh 吊销 | `docs/adr/ADR-0024-browser-session-security-hardening.md :: ## 决策` | 改 Secure/SameSite 边界 |
 | `host-privilege-wrapper` | concept | Agent 主机单一提权入口 | `docs/adr/ADR-0037-agent-host-privilege-boundary.md :: ## 2. 决策` | 宽 sudoers 回流 |
@@ -197,11 +197,11 @@
 
 | 项 | 理由 |
 |---|---|
-| 本 PR 实现 S15 代码 | 表形状与 B/C 口径刚修订；先合入索引再开门禁，避免假绿锁死 |
+| 本 PR 实现 S15 代码 | **已在 follow-up PR 落地**（本表同仓） |
 | `LINK_TREES += docs/adr`（e82515） | 有价值的引用面门禁，正交于 ownership 表；另开治理单 |
 | 首批强行纳入 Y1/Y2 全行（c42fb9） | #2546 非目标已写明；`audit-log` 已 TBD，触碰 #2629/#2631 时填 |
 | 方案 B / 全量抽名词 | 评审一致 Needs-revision；本修订是「Accepted ADR 覆盖框架 + 关键行」，不是 Inventory |
-| 本 PR 改 ADR-0033 D1 正文加 flash | 本表已补登记；正文表留给 0033 Accepted 修订 |
+| 本 PR 改 ADR-0033 D1 正文加 flash | **已在 follow-up：ADR-0033 v1.3** |
 | 合并/重编号 ADR | N5 / issue 纪律 |
 | 一次补齐全部 ADR 头部 `归属域` | 字段驱动；假阳性面过大 |
 
@@ -233,7 +233,7 @@
 | 位置 | 动作 |
 |---|---|
 | `ADR-0021` 关联区 `script_meta` 括注 | 已降级为冻结副本 / 非独立权威（本 PR） |
-| ADR-0033 D1 无 flash | 本表 `flash-tool` 补登记；正文表后续修订 |
+| ADR-0033 D1 无 flash | 本表 `flash-tool` 已指向 v1.3「刷机补登记」句；D1 Tier3 表已列 `flash_*` |
 
 ---
 
@@ -251,3 +251,4 @@
 | 2026-09-18 | 初稿：方案 A + Ownership only + X1/X2/X3 + 四类嵌入 + flash + S15 + 12 行 |
 | 2026-09-18 | **用户三点修正**：B/C 深嵌为主；Accepted ADR 全覆盖框架 + 扩表/TBD；评审采纳对照 §6 |
 | 2026-09-18 | **外置措辞澄清**：主判据=不入项目代码树；右列改名「外置/不入仓」；Adapter=薄调用接缝非第二目标 |
+| 2026-09-18 | follow-up：S15 门禁落地；ADR-0033 v1.3 D1 flash 补登记；`flash-tool` 锚改指 0033 |
