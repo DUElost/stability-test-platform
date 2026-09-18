@@ -504,6 +504,99 @@ _MODEL_PAIRS: tuple[tuple[str, str, str, str], ...] = (
         "frontend/src/utils/api/types.ts",
         "ProjectMapPreview",
     ),
+    # #2187 第 5 批（纯记账面）：logs/notifications/audit/stats/results 预照
+    # 14/14 MATCH——零漂移、零判据修改，这批的产出就是把既有 TS 声明正式入账。
+    (
+        "backend/api/schemas/agent.py",
+        "AgentLogOut",
+        "frontend/src/utils/api/types.ts",
+        "AgentLogOut",
+    ),
+    (
+        "backend/api/schemas/agent.py",
+        "OrphanLogSignalListOut",
+        "frontend/src/utils/api/types.ts",
+        "OrphanLogSignalList",
+    ),
+    (
+        "backend/api/schemas/notification.py",
+        "AlertRuleOut",
+        "frontend/src/utils/api/types.ts",
+        "AlertRule",
+    ),
+    (
+        "backend/api/schemas/notification.py",
+        "NotificationChannelOut",
+        "frontend/src/utils/api/types.ts",
+        "NotificationChannel",
+    ),
+    (
+        "backend/api/schemas/audit.py",
+        "AuditFacetsOut",
+        "frontend/src/utils/api/types.ts",
+        "AuditFacets",
+    ),
+    (
+        "backend/api/routes/stats.py",
+        "ActivityResponse",
+        "frontend/src/utils/api/types.ts",
+        "ActivityResponse",
+    ),
+    (
+        "backend/api/routes/stats.py",
+        "CompletionTrendResponse",
+        "frontend/src/utils/api/types.ts",
+        "CompletionTrendResponse",
+    ),
+    (
+        "backend/api/routes/stats.py",
+        "DashboardSummaryResponse",
+        "frontend/src/utils/api/types.ts",
+        "DashboardSummary",
+    ),
+    (
+        "backend/api/schemas/file_server.py",
+        "FileServerOverview",
+        "frontend/src/utils/api/types.ts",
+        "FileServerOverview",
+    ),
+    (
+        "backend/api/routes/stats.py",
+        "HostFailureRateResponse",
+        "frontend/src/utils/api/types.ts",
+        "HostFailureRateResponse",
+    ),
+    (
+        "backend/api/routes/stats.py",
+        "PlanRunPassRateTrendResponse",
+        "frontend/src/utils/api/types.ts",
+        "PlanRunPassRateTrendResponse",
+    ),
+    (
+        "backend/api/routes/stats.py",
+        "PlanSuccessRateResponse",
+        "frontend/src/utils/api/types.ts",
+        "PlanSuccessRateResponse",
+    ),
+    (
+        "backend/api/routes/results.py",
+        "ResultsSummary",
+        "frontend/src/utils/api/types.ts",
+        "ResultsSummary",
+    ),
+    (
+        "backend/api/routes/results.py",
+        "RiskTrendOut",
+        "frontend/src/utils/api/types.ts",
+        "RiskTrend",
+    ),
+    # 第 6 批：hosts.py——32↔32 MATCH（Union 判据批 4 已修，这里直接受益）。
+    (
+        "backend/api/schemas/host.py",
+        "HostOut",
+        "frontend/src/utils/api/types.ts",
+        "Host",
+    ),
     # #2187 opt-in devices.py：设备目录行 MATCH 登记（该文件多数端点仍走
     # 裸 DeviceOut/无信封的 #2129 前遗产，信封化属独立面，不在本台账内扩张）。
     (
@@ -670,6 +763,16 @@ _MODEL_BLINDSPOT: dict[str, set[str]] = {
     # 但 typed 记账要求 `PaginatedResponse`（schemas/base 的通用分页壳，
     # items: List[Any]——内层形状跟随其成员配对，不是独立声明面）具名认领。
     "backend/api/routes/devices.py": set(),
+    # #2187 第 5/6 批（纯记账面）：以下 routes 无 ApiResponse[dict] 端点，
+    # 空集 opt-in 把 typed 记账立起来——新端点若走 dict 会被台账当场逼出。
+    # 内层标量/typing 构造（Any/Union/str）不属模型，见 skip 集注释。
+    "backend/api/routes/heartbeat.py": set(),
+    "backend/api/routes/logs.py": set(),
+    "backend/api/routes/notifications.py": set(),
+    "backend/api/routes/audit.py": set(),
+    "backend/api/routes/stats.py": set(),
+    "backend/api/routes/results.py": set(),
+    "backend/api/routes/hosts.py": set(),
     # #1520 形状正规化批第一步：summary/artifacts 已升模型进 `_MODEL_PAIRS`；
     # 剩余具名模型逐个对拍前按台账显式豁免（下方 `_MODEL_UNREGISTERED`），
     # 三个仍 `ApiResponse[dict]` 的写侧摘要在此认领盲区。
@@ -825,14 +928,15 @@ def _route_response_model_names(py_path: Path) -> set[str]:
 
     ``list[X]`` / ``ApiResponse[X]`` 的下标里逐个取 ``Name``——容器、``ApiResponse``
     与标量类型（``str``/``int``/``float``/``bool``）、typing 联合（``Union``，
-    其成员各自入账、联合本身不是模型）不是模型名，故排除：
+    其成员各自入账、联合本身不是模型）、``Any``（FastAPI 的
+    ``response_model=Any`` 即「放弃声明」，本就无可入账的模型）不是模型名，故排除：
     ``ApiResponse[List[str]]``（如 /scripts/categories 的字典行）内层是标量、
     不是可登记的 Pydantic 模型（#2187 opt-in scripts.py 时暴露——此前误当具名模型，
     会把「标量端点」逼成登记一个不存在的模型或伪豁免）。
     """
     tree = ast.parse(py_path.read_text(encoding="utf-8"))
     names: set[str] = set()
-    skip = {"ApiResponse", "dict", "list", "List", "Optional", "Union",
+    skip = {"ApiResponse", "dict", "list", "List", "Optional", "Union", "Any",
            "str", "int", "float", "bool"}
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
