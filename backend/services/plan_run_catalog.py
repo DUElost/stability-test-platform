@@ -35,7 +35,11 @@ from backend.models.job import JobInstance, StepTrace
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
 from backend.models.project import TestProject
-from backend.services.plan_run_read_common import aware as _aware, iso as _iso
+from backend.services.plan_run_read_common import (
+    aware as _aware,
+    iso as _iso,
+    resolve_plan_name,
+)
 
 
 def _project_run_context(pr: PlanRun) -> Optional[dict]:
@@ -312,13 +316,9 @@ def build_plan_run_detail(db: Session, run_id: int) -> PlanRunDetailOut:
     jobs = db.execute(
         select(JobInstance).where(JobInstance.plan_run_id == run_id)
     ).scalars().all()
-    plan_name: str | None = None
-    if pr.plan_id is not None:
-        plan_row = db.execute(
-            select(Plan.name).where(Plan.id == pr.plan_id)
-        ).scalar_one_or_none()
-        plan_name = plan_row
-    return (_plan_run_out(pr, jobs=[_job_out(j, []) for j in jobs], plan_name=plan_name))
+    # #2623：plan_name 的解析提进 `resolve_plan_name`，与 summary 共用同一口径
+    return (_plan_run_out(pr, jobs=[_job_out(j, []) for j in jobs],
+                          plan_name=resolve_plan_name(db, pr)))
 
 
 

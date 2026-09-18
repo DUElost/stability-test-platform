@@ -118,6 +118,9 @@ class PlanRunJobsSummaryOut(BaseModel):
 
     plan_run_id: int
     status: str
+    # #2623：日志页需要它做标题（此前只能拉整份 detail 才拿到 → 510 job 时 98.9% 字节无人读）。
+    # 口径与 detail 同源：`services/plan_run_read_common.resolve_plan_name`（现查 Plan.name）。
+    plan_name: Optional[str] = None
     total_jobs: int
     status_counts: dict[str, int]
     pass_rate: float
