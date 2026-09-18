@@ -368,6 +368,41 @@ db_pool_overflow = Gauge(
     ['engine'],
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
+# ── #703 第 3 面：把「池饱和」从**事后翻日志**变成**事前可见** ─────────────────────
+# 上面两个 gauge 只有**状态**（当下借出多少），看不见**等待**：#703 的现场形态是
+# `QueuePool limit of size 30 overflow 60 ...` 把 app 池与 PG max_connections 同时顶满，
+# 而这两条 gauge 在超时那一刻只是「已经满了」，与「忙但正常」同形。
+# 补两条**事件侧**序列（同一位置埋：`Pool.connect()` 是全仓借连接的唯一入口）：
+#   * `_seconds`：拿到一条连接要多久（= 排队等待 + 建连 + pre-ping，HELP 里写明含后两者，
+#     别把它读成纯排队时间）；池将满时它的尾部会先顶到 pool_timeout。
+#   * `_failures_total{kind}`：借不到连接。`timeout` = 池耗尽（正是 #703 的那一下），
+#     `error` = DBAPI/驱动失败（与 #1958 的死锁计数不重叠：那条在 checkout 之后）。
+# 容量取向（pool_size/overflow/pool_timeout 该是多少）**不在本指标里回答**——那是 #703
+# 第 2 面，方向级取舍需 ADR；这里只保证「触顶这件事在指标上留得下痕」。
+db_pool_checkout_seconds = Histogram(
+    'stability_db_pool_checkout_seconds',
+    'Time to acquire a pooled connection: queue wait + connect + pre-ping '
+    '(installed on Pool.connect by backend/core/database.py)',
+    ['engine'],  # sync | async
+    buckets=[0.005, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+db_pool_checkout_failures_total = Counter(
+    'stability_db_pool_checkout_failures_total',
+    'Pool checkout failures by class (timeout=pool exhausted, error=DBAPI/driver)',
+    ['engine', 'kind'],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+# #703 / #1880：一次 abort 的**扇出规模**。#1880 的形态是「单台 host 热更新」实际终态化了
+# 整轮 run——作用域错位只有换算出「多少 job」才看得见，而当时既无日志聚合也无指标。
+# 按 `scope`（run | host）分开看是判据本身：host 侧出现 run 量级的扇出，就是那次错位复发。
+plan_run_abort_fanout_jobs = Histogram(
+    'stability_plan_run_abort_fanout_jobs',
+    'Jobs touched by one abort_plan_run call (terminalized + control-signalled), by scope',
+    ['scope'],  # run | host
+    buckets=[0, 1, 2, 5, 10, 25, 50, 100, 250, 500, 1000],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
 # #1958：数据库侧检测到的死锁（SQLSTATE 40P01）。
 # 动机：Job/Lease 锁序死锁曾持续复发约四周而平台侧**零指标零告警**——它只在
 # PostgreSQL 服务端日志里可见，且受害事务可能被上层的通用 `except Exception`
@@ -909,6 +944,49 @@ def record_plan_run_abort_lock_seconds(seconds: float, phase: str):
     plan_run_abort_lock_seconds.labels(phase=(phase or "unknown")[:32]).observe(value)
 
 
+# 值域白名单（#1927 的基数纪律）：label 值必须是有界集合，否则 Python client 的
+# 子序列永不回收——观测面自己变成泄漏面。
+_DB_POOL_CHECKOUT_FAILURE_KINDS = ("timeout", "error")
+_ABORT_FANOUT_SCOPES = ("run", "host")
+
+
+def record_db_pool_checkout(engine_label: str, seconds: float):
+    """#703：借到一条池连接用了多久（排队 + 建连 + pre-ping）。"""
+    if not PROMETHEUS_AVAILABLE:
+        return
+    try:
+        value = float(seconds)
+    except (TypeError, ValueError):
+        return
+    if value < 0:
+        return
+    db_pool_checkout_seconds.labels(engine=(engine_label or "unknown")[:32]).observe(value)
+
+
+def record_db_pool_checkout_failure(engine_label: str, kind: str):
+    """#703：借不到连接。`timeout`=池耗尽，其余 DBAPI/驱动失败记 `error`。"""
+    if not PROMETHEUS_AVAILABLE:
+        return
+    normalized = kind if kind in _DB_POOL_CHECKOUT_FAILURE_KINDS else "error"
+    db_pool_checkout_failures_total.labels(
+        engine=(engine_label or "unknown")[:32], kind=normalized
+    ).inc()
+
+
+def record_plan_run_abort_fanout(scope: str, jobs: int):
+    """#703/#1880：一次 abort 调用实际牵动的 job 数（按 run / host 作用域）。"""
+    if not PROMETHEUS_AVAILABLE:
+        return
+    try:
+        value = int(jobs)
+    except (TypeError, ValueError):
+        return
+    if value < 0:
+        return
+    normalized = scope if scope in _ABORT_FANOUT_SCOPES else "unknown"
+    plan_run_abort_fanout_jobs.labels(scope=normalized).observe(value)
+
+
 # 漂移列白名单（ADR-0026 §6 五计数器；未知列名不得进入 label 值域）
 _PLAN_RUN_COUNTER_MODES = ("total", "terminal", "completed", "failed", "aborted")
 
@@ -1036,9 +1114,11 @@ def get_metrics_response():
 def init_build_info(version: str = "unknown", commit: str = "unknown"):
     """Initialize build info metrics（值由 #2341 的 ``resolve_build_info()`` 提供）。
 
-    ``version`` / ``commit`` 的默认值刻意是 ``unknown``：真值来自部署树的
-    ``release-manifest.json``，读不到就显式回落——**不回落任何具体版本号**，
-    否则又会造出「看起来有答案」的假信息（本单要消灭的正是那个形态）。
+    ``version`` / ``commit`` 的默认值刻意是 ``unknown``：真值来自部署树根的
+    ``release-manifest.json``（站点安装形态），**没有清单的 checkout 形态**则由
+    ``resolve_build_info()`` 报 ``checkout``/``checkout-dirty`` + ``git rev-parse HEAD``
+    （#2572——本机生产控制面就是这种形态）；两者都取不到才显式回落 ``unknown``。
+    **任何一档都不回落具体版本号**，否则又会造出「看起来有答案」的假信息。
 
     **多进程模式不导出**（prometheus_client 官方约束：「Info metrics do not work in
     multiprocess mode」）：当前 systemd 单元是单进程 uvicorn，故 ``Info`` 可用；

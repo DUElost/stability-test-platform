@@ -665,6 +665,12 @@ def stage_s2_release_env(ctx: InstallContext) -> list[Check]:
             target = root / subdir
             target.parent.mkdir(parents=True, exist_ok=True)
             _land_tree(bundle / subdir, target)
+        # #2572：清单**自己**也要落在部署树根。上面那轮只校验了它在 bundle 里
+        # 存在（:659），从未落到 root——于是 `/health` 的 stability_build_info
+        # 在生产恒 unknown（运行时读的正是 <deploy_root>/release-manifest.json，
+        # 见 backend/core/release_manifest.py）。重跑直接覆盖：清单是**发布物**
+        # 的一部分，不做「已存在则保留」的秘密式处理。
+        shutil.copyfile(bundle / "release-manifest.json", root / "release-manifest.json")
     checks.append(_pass(
         "install.s2.release", "control_plane", "$.release.bundle", "release_landed",
         "Release tree landed under the deploy root with the documented layout.",

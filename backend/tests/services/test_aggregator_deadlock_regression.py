@@ -433,7 +433,7 @@ async def test_complete_and_extend_batch_same_job_no_deadlock():
         async def _complete() -> object:
             async with AsyncSessionLocal() as db:
                 with patch(
-                    "backend.api.routes.agent_api.release_lease",
+                    "backend.services.agent_completion.release_lease",
                     release_synced,
                 ):
                     return await complete_job(

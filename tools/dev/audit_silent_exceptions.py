@@ -19,12 +19,13 @@
 
 - 测试（``tests/`` 目录、``test_*.py``）；
 - **已发布脚本版本**（``backend/agent/scripts/<name>/v<version>/``，ADR-0020 不可修改）；
-- **alembic 历史 revision**（``backend/alembic/versions/``，#2258 不可改写）。
+- **alembic 历史 revision**（``backend/alembic/versions/``，#2258 不可改写）；
+- **第三方随包工具**（``backend/agent/resources/``：AIMonkey / flashtool，vendored）。
 
-这三类若计入，会让「治理面」的规模被冻结 artifact 淹没（本口径实测：全量 922 处、
-排除后 **253** 处）——治理对象只能是**还能改的代码**。注意 issue #739 里的「431 处」
-是 2026-09-02 的另一次粗测（口径与扫描面未固化），与本工具的数字**不可直接比较**；
-本工具的 `--json` 输出可复现本节全部数字。
+这些面若计入，会让「治理面」的规模被冻结 artifact 与第三方代码淹没（本口径实测：
+全量 923 处、排除后 **254** 处）。注意 issue #739 里的「431 处」是 2026-09-02 的
+另一次粗测（口径与扫描面未固化），与本工具的数字**不可直接比较**；本工具的
+`--json` 输出可复现本节全部数字。
 
 输出：默认按文件汇总的文本；``--json`` 输出机器可读明细；``--top N`` 只看前 N 个
 文件。``--self-test`` 离线红绿自证（三类判定 + 排除面）。
@@ -47,6 +48,11 @@ SCAN_DIRS = (ROOT / "backend", ROOT / "tools", ROOT / "scripts")
 _FROZEN_SCRIPT_RE = re.compile(r"^backend/agent/scripts/[^/]+/v[0-9][^/]*/")
 #: alembic 历史 revision（#2258 不可改写）——排除。
 _FROZEN_ALEMBIC_PREFIX = "backend/alembic/versions/"
+#: 第三方随包工具（AIMonkey / flashtool）——**不是我们的代码**，排除。
+#: 判据同 ruff.toml 的 extend-exclude（`backend/agent/resources`）：实测不排除时
+#: 16 处 `except: pass` 里 15 处落在 AIMonkey 的 vendored 文件里，会把「治理面」
+#: 的规模与形态都带偏。
+_VENDORED_PREFIXES = ("backend/agent/resources/",)
 
 REASONS = ("pass", "continue", "return_none")
 
@@ -111,7 +117,11 @@ def _exception_label(handler: ast.ExceptHandler) -> str:
 
 
 def _is_frozen(rel: str) -> bool:
-    return bool(_FROZEN_SCRIPT_RE.match(rel)) or rel.startswith(_FROZEN_ALEMBIC_PREFIX)
+    return (
+        bool(_FROZEN_SCRIPT_RE.match(rel))
+        or rel.startswith(_FROZEN_ALEMBIC_PREFIX)
+        or rel.startswith(_VENDORED_PREFIXES)
+    )
 
 
 def _iter_scan_files() -> list[Path]:

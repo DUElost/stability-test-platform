@@ -150,11 +150,11 @@ def get_network_connections() -> Dict[str, int]:
     try:
         # 简单统计 TCP 连接数
         connections = 0
-        try:
-            with open('/proc/net/tcp', 'r') as f:
-                connections = len(f.readlines()) - 1  # 减去标题行
-        except:
-            pass
+        # 不在这里兜异常：#739b —— 裸 `except:` 会连 KeyboardInterrupt/SystemExit
+        # 一起吞掉，且读失败时**静默**报 0（与「本来就没有连接」不可区分）。
+        # 外层已有 `logger.warning(...) + 返回 0` 的收口，交给它。
+        with open('/proc/net/tcp', 'r') as f:
+            connections = len(f.readlines()) - 1  # 减去标题行
 
         return {
             "tcp_connections": connections,
