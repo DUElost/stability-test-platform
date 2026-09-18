@@ -8,11 +8,12 @@ ADR-0025 S2：向涉及 host 下发 ``archive_now`` / ``scan_now``；ADR-0038 D5
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Optional
 
 from fastapi import HTTPException, Request
 from sqlalchemy.orm import Session
 
+from backend.api.schemas.plan_run import PlanRunArchiveTriggerOut
 from backend.core.audit import record_audit
 from backend.models.job import JobInstance
 from backend.models.plan_run import PlanRun
@@ -32,7 +33,7 @@ async def archive_plan_run_logs(
     user_id: Optional[int],
     username: Optional[str],
     request: Optional[Request] = None,
-) -> dict[str, Any]:
+) -> PlanRunArchiveTriggerOut:
     """手动触发该 PlanRun 涉及 host 的运行日志立即归档 + scan。
 
     经 SocketIO control 向各 ONLINE host 的 Agent 下发:
@@ -91,10 +92,10 @@ async def archive_plan_run_logs(
     )
     db.commit()
 
-    return {
-        "plan_run_id": run_id,
-        "archived_now": True,
-        "triggered_hosts": triggered,
-        "skipped_offline": skipped_offline,
-        "skipped_retired": skipped_retired,
-    }
+    return PlanRunArchiveTriggerOut(
+        plan_run_id=run_id,
+        archived_now=True,
+        triggered_hosts=triggered,
+        skipped_offline=skipped_offline,
+        skipped_retired=skipped_retired,
+    )

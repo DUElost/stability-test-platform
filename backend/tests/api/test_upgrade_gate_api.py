@@ -6,6 +6,8 @@ UI 路由的同类断言在重构共享服务后必须保持——它们锁的�
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from backend.services.host_maintenance import in_maintenance_window
 
 
@@ -70,6 +72,27 @@ def test_agent_gate_unknown_host_returns_404(client):
 
     assert resp.status_code == 404
     assert resp.json()["detail"]["code"] == "HOST_NOT_FOUND"
+
+
+def test_agent_gate_rejects_retired_host_with_409(client, db_session, sample_host):
+    """#2638：退役主机申请升级窗口要 409 `HOST_RETIRED`，不是框架层 500。
+
+    409 分支在 `raise_upgrade_gate_http` 里早就写好了（ADR-0038 D5），但调用方的
+    `except` 元组漏了 `HostRetiredError` ⇒ 分支**从唯一入参路径不可达**，异常原样上抛。
+    这条走真实端点（不 mock 映射函数），所以「分支再次变成不可达」会直接红在这里，
+    而不是红在一个只测映射函数的用例上。
+    """
+    # ADR-0038 D1：退役不改写 status，只置 retired_at——门禁必须活读它
+    sample_host.retired_at = datetime.now(timezone.utc)
+    db_session.commit()
+
+    resp = _acquire(client, sample_host.id, holder="ansible:retired")
+
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"]["code"] == "HOST_RETIRED"
+    # 拒绝在拿窗口之前抛出：拒绝路径不得占用维护窗口（与活跃 Job 拒绝同一约定）
+    db_session.expire_all()
+    assert not in_maintenance_window(sample_host.maintenance_until)
 
 
 def test_agent_gate_rejects_wrong_secret(client, sample_host, monkeypatch):

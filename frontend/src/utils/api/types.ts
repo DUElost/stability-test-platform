@@ -2089,18 +2089,21 @@ export interface JobManualActionResult {
 }
 
 export interface PlanRunAbortResult {
-  // 后端权威键（plan_run_abort.py：QUEUED/PRECHECK 分支与 running 分支并集）
+  // #1520 写侧正规化：后端模型五键**恒在**（QUEUED/PRECHECK 分支的
+  // abort_requested_jobs 由缺键统一为空数组——「空」用值表达，#2089 判据）；
+  // phase 实际值域含 'queued'（此前 TS union 漏配，枚举双端对齐修正）。
   plan_run_id: number;
   status: string;
-  phase?: 'precheck' | 'running';
-  aborted_jobs?: number[];
-  abort_requested_jobs?: number[];
+  phase: 'precheck' | 'running' | 'queued';
+  aborted_jobs: number[];
+  abort_requested_jobs: number[];
 }
 
 export interface PlanRunDispatchRetryResult {
   plan_run_id: number;
   status: string;
-  dispatch_state?: PlanDispatchState;
+  /** #1520 写侧正规化：唯一返回路径恒带 dispatch_state。 */
+  dispatch_state: PlanDispatchState;
 }
 
 // ─── ResourcePool ────────────────────────────────────────────────────────────────

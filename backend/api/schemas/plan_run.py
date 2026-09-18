@@ -25,6 +25,8 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from backend.api.schemas.dedup import DedupSkippedHostOut
+
 
 class StepTraceOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -127,6 +129,48 @@ class PlanRunJobsSummaryOut(BaseModel):
     started_at: Optional[str] = None
     ended_at: Optional[str] = None
     result_summary: Optional[dict] = None
+
+
+# ── 写侧摘要（#1520 形状系列：abort / retry-dispatch / archive 的 dict→模型）────
+
+
+class PlanRunAbortSummaryOut(BaseModel):
+    """``abort_plan_run`` 的分支摘要（响应键集合**恒在**）。
+
+    历史上 QUEUED/PRECHECK 终态分支不返回 ``abort_requested_jobs`` 键——
+    正规化后统一为 presence + 真实值（该分支恒 ``[]``：无 job 可请求，与写入
+    ``run_context.abort_requested.requested_job_ids=[]`` 同事实）。这是对
+    #2089（``released_leases`` 恒 0 却被承诺）教训的**正向**应用：不是把幻影
+    字段留缺口感知，而是让「空」由值表达。
+    TS 对拍 = ``types.ts::PlanRunAbortResult``。
+    """
+
+    plan_run_id: int
+    status: str
+    phase: str
+    aborted_jobs: list[int] = Field(default_factory=list)
+    abort_requested_jobs: list[int] = Field(default_factory=list)
+
+
+class PlanRunDispatchRetrySummaryOut(BaseModel):
+    """``retry_plan_run_dispatch`` 摘要。TS 对拍 = ``types.ts::PlanRunDispatchRetryResult``。"""
+
+    plan_run_id: int
+    status: str
+    dispatch_state: dict
+
+
+class PlanRunArchiveTriggerOut(BaseModel):
+    """``POST /plan-runs/{id}/archive`` 触发摘要（admin/ops 面，前端暂无消费者）。
+
+    跳过位复用 dedup 的 ``DedupSkippedHostOut``（与 scan-now 同族形态，单一来源）。
+    """
+
+    plan_run_id: int
+    archived_now: bool
+    triggered_hosts: list[str]
+    skipped_offline: list[DedupSkippedHostOut] = Field(default_factory=list)
+    skipped_retired: list[DedupSkippedHostOut] = Field(default_factory=list)
 
 
 class PlanRunJobArtifactOut(BaseModel):

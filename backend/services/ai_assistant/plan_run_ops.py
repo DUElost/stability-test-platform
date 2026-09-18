@@ -185,8 +185,8 @@ def run_abort_plan_run(
     except PlanRunAbortError as exc:
         raise RuntimeError(str(exc)) from exc
     return (
-        f"PlanRun #{summary['plan_run_id']} 已中止（status={summary['status']}，"
-        f"phase={summary.get('phase', '—')}，aborted_jobs={len(summary.get('aborted_jobs') or [])}）"
+        f"PlanRun #{summary.plan_run_id} 已中止（status={summary.status}，"
+        f"phase={summary.phase}，aborted_jobs={len(summary.aborted_jobs)}）"
     )
 
 
@@ -207,7 +207,7 @@ def run_retry_plan_run_dispatch(
     except PlanRunDispatchRetryError as exc:
         raise RuntimeError(str(exc)) from exc
     return (
-        f"PlanRun #{summary['plan_run_id']} 已重入队（status={summary['status']}）"
+        f"PlanRun #{summary.plan_run_id} 已重入队（status={summary.status}）"
     )
 
 
