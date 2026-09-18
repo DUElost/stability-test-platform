@@ -20,9 +20,9 @@ Harness 适配层不得复制易变化的项目事实。根入口也不得重新
 
 | Harness | 受版本控制的入口 | 当前职责 |
 |---|---|---|
-| Cursor | [`.cursor/rules/*.mdc`](../../../.cursor/rules/) | 常驻入口和按路径引导；格式见 [`cursor-rules.md`](../cursor-rules.md) |
-| Claude Code | 根及目录内 `CLAUDE.md`、`.claude/settings.json`、`.claude/skills/` | 架构入口、领域上下文、权限和显式技能（`.claude/skills/*/SKILL.md` 仅本 harness 自动加载；其他 harness 需要时直读该目录，清单以目录为准） |
-| Codex | `AGENTS.md`、`.codex/hooks.json` | 共享约定入口和确定性检查钩子 |
+| Cursor | [`.cursor/rules/*.mdc`](../../../.cursor/rules/)；skills 兼容读 [`.agents/skills/`](../../../.agents/skills)（symlink）与 [`.claude/skills/`](../../../.claude/skills/) | 常驻入口和按路径引导；格式见 [`cursor-rules.md`](../cursor-rules.md)；项目 SOP skills 经 `.agents/skills` → `.claude/skills` 发现 |
+| Claude Code | 根及目录内 `CLAUDE.md`、`.claude/settings.json`、`.claude/skills/` | 架构入口、领域上下文、权限和显式技能；**skills 真身**在 `.claude/skills/*/SKILL.md`（仅本 harness 自动加载该目录） |
+| Codex | `AGENTS.md`、`.codex/hooks.json`、[`.agents/skills/`](../../../.agents/skills)（symlink → `.claude/skills/`） | 共享约定入口、确定性检查钩子；官方扫 `.agents/skills`，本仓以 symlink 指向 Claude 真身（非第二份拷贝） |
 | OpenCode | `AGENTS.md`；本地 `opencode.json` 不入库 | 共享约定入口；provider、模型和凭据属于本机配置 |
 | Antigravity CLI | 无（实测不自动发现仓库规则文件） | **不承接 Requirement/Execution**（2026-09-07 定性：带规则的高级顾问——问答/分析/评审）；规则经 `tools/dev/agy_with_rules.sh` 前置 |
 | Zcode（3.11.2，GUI） | `AGENTS.md`（仓库根注入=本会话实证；子目录**只装载 workspace 的 AGENTS.md**，根不注入——2026-09-07 人工探针） | 共享约定入口；Registry CLI 与 P2 动作表全程可用（三单 dogfood 即 Zcode 会话） |
