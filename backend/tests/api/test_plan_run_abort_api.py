@@ -201,7 +201,7 @@ class TestPlanRunAbort:
                 triggered_by="testuser",
             )
 
-        assert summary["abort_requested_jobs"] == [running_job.id]
+        assert summary.abort_requested_jobs == [running_job.id]
         db_session.expire_all()
         assert db_session.get(JobInstance, running_job.id).status == JobStatus.RUNNING.value
         assert db_session.get(DeviceLease, lease.id).status == LeaseStatus.ACTIVE.value

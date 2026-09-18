@@ -152,7 +152,7 @@ class TestRetryAdmissionQueue:
         result = retry_plan_run_dispatch(
             failed_dispatch_run.id, db_session, triggered_by="pytest",
         )
-        assert result["status"] == "QUEUED"
+        assert result.status == "QUEUED"
         db_session.refresh(failed_dispatch_run)
         assert failed_dispatch_run.status == "QUEUED"
         assert failed_dispatch_run.enqueued_at is not None
@@ -204,9 +204,9 @@ class TestAdmissionAbort:
         result = abort_plan_run(
             pr.id, db=db_session, reason="aborted_by_user", triggered_by="pytest",
         )
-        assert result["status"] == "FAILED"
-        assert result["phase"] == phase
-        assert result["aborted_jobs"] == []
+        assert result.status == "FAILED"
+        assert result.phase == phase
+        assert result.aborted_jobs == []
         db_session.refresh(pr)
         assert pr.status == "FAILED"
         assert pr.result_summary["aborted"] is True
