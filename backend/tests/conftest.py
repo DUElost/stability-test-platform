@@ -86,8 +86,16 @@ def _resolve_test_database_url() -> str:
         guard_mod = importlib.util.module_from_spec(spec)
         assert spec and spec.loader
         spec.loader.exec_module(guard_mod)
+        # #2632 缺口③：「本机是控制面」的标记 = 仓库根带生产 env 源文件。本机
+        # ambient 没有 DATABASE_URL（它只在 .env.backend 里），同库比对那道闸恒空，
+        # 只剩库名约定——而事故里的 `.../stp_test@127.0.0.1` 两道闸全过，因为
+        # 127.0.0.1:5432 在本机就是生产实例。
         return guard_mod.guard_test_database_url(
-            normalized, runtime_database_url=os.getenv("DATABASE_URL"),
+            normalized,
+            runtime_database_url=os.getenv("DATABASE_URL"),
+            on_control_plane_host=guard_mod.control_plane_env_file_present(
+                Path(__file__).resolve().parents[2]
+            ),
         )
 
     _TEST_DB_CONTAINER = PostgresContainer("postgres:16")

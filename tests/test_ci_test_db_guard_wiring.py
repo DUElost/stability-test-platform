@@ -78,6 +78,27 @@ class TestGuardSemantics:
         with pytest.raises(_guard.UnsafeTestDatabaseUrl, match="must be a PostgreSQL URL"):
             _guard.guard_test_database_url("mysql://u:p@h/db_test", runtime_database_url=None)
 
+    def test_control_plane_loopback_is_rejected(self):
+        """#2632 缺口③：本机是控制面时，loopback 的显式测试库就是生产实例。
+
+        事故形态：`postgres@127.0.0.1:5432/stp_test`——库名含 test（过第 1 闸）、
+        与运行时不同库（过第 2 闸），而本机 127.0.0.1:5432 就是生产 PG。
+        """
+        incident = "postgresql+psycopg://postgres:postgres@127.0.0.1:5432/stp_test"
+        with pytest.raises(_guard.UnsafeTestDatabaseUrl, match="loopback"):
+            _guard.guard_test_database_url(
+                incident, runtime_database_url=None, on_control_plane_host=True
+            )
+
+    def test_loopback_allowed_when_not_control_plane(self):
+        """CI/普通开发机（无 .env.backend）必须原样放行——否则 runner 全红。"""
+        assert (
+            _guard.guard_test_database_url(
+                _SAME_DB, runtime_database_url=None, on_control_plane_host=False
+            )
+            == _SAME_DB
+        )
+
 
 def _backend_test_job_env_keys() -> set[str]:
     """取出 ci.yml 中 `backend-test` job 的**job 级** env 键名。
@@ -168,6 +189,28 @@ def _backend_test_step_env_keys(step_name: str) -> set[str]:
             if m:
                 keys.add(m.group(1))
     return keys
+
+
+CONFTEST = REPO_ROOT / "backend" / "tests" / "conftest.py"
+
+
+class TestControlPlaneWiring:
+    """#2632 缺口③：conftest 必须真的把控制面信号传进守卫。
+
+    语义测试测不出「接没接线」——conftest 漏传参数时守卫默认 False，第 3 道闸
+    静默失效且所有用例照样绿（与 #1716 同一类口子），故按源码断言接线的存在。
+    """
+
+    def test_conftest_passes_control_plane_signal(self):
+        src = CONFTEST.read_text(encoding="utf-8")
+        assert "control_plane_env_file_present(" in src, (
+            "backend/tests/conftest.py 未调用 control_plane_env_file_present——"
+            "循环依赖/参数被删会让「控制面 loopback 拒载」静默失效（#2632 缺口③）"
+        )
+        assert "on_control_plane_host=" in src, (
+            "backend/tests/conftest.py 未把 on_control_plane_host 传给 "
+            "guard_test_database_url，第 3 道闸不会生效"
+        )
 
 
 class TestCiWiring:

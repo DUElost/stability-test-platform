@@ -15,6 +15,16 @@
 - 不得用生产数据库代替测试数据库；
 - 不得在生产数据库上试跑迁移；
 - `.env.backend`、`backend/.env` 和 Agent `.env` 的职责不同，不得互相代用。
+- **手工查询不得用 `postgres` 超级用户或应用共享凭据 `stp`**：前者的误操作半径最大，
+  后者与业务进程共用同一身份、事件无法归属（#2632 缺口②）。临时诊断用专用只读角色，
+  连接带 `application_name`（见 §凭据来源）。
+- **写查询前先求证名字**：表名、列名与枚举取值先在 `information_schema` 里核对，不要在
+  库上试错——2026-09-16/17 那约 30 条「猜 schema」的错误查询就是这么产生的
+  （真名是 `job_instance`/`device_leases`，枚举是小写）。这类错误应聚合成告警或日报，
+  而不是等人事后读 PG 日志（#2632 缺口①）。
+- **本机 `127.0.0.1:5432` 就是生产实例**：显式 `TEST_DATABASE_URL` 在生产机指向
+  loopback/本机 socket 会被 conftest 拒载（#2632 缺口③，语义见
+  [`../development/testing.md`](../development/testing.md) §3）。
 - **`backend/.env` 里的 `AGENT_SECRET` 是陈旧值**：控制面与全部 Agent 实际使用的
   都是 `.env.backend` 的生产值，`backend/.env` 的旧值签发的 token 一律不被认——
   诊断 auth 问题时以 `.env.backend` 为准，不要被 `backend/.env` 的残留值误导。
