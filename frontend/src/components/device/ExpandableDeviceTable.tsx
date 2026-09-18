@@ -389,7 +389,8 @@ export function ExpandableDeviceTable({
                     type="checkbox"
                     checked={allPageSelected}
                     onChange={togglePageSelection}
-                    aria-label="选择当前页设备"
+                    aria-label={`选择当前页设备（本页 ${pageDeviceIds.length} 台）`}
+                    title={`全选当前页 ${pageDeviceIds.length} 台；其他页保持原选择`}
                     className="h-4 w-4 rounded border-border accent-primary"
                   />
                 </TableHead>
