@@ -169,7 +169,9 @@ def check_links(text: str, basedir: str, label: str) -> list[str]:
 
 # #2042：docs/reviews 与 docs/notes 是事故/决策的按需留档面，此前不在 S2 覆盖内
 # （固定白名单只列常驻索引与契约文档），窗口内 6 处失效相对链接全部落在两树下。
-LINK_TREES = ("docs/reviews", "docs/notes")
+# #2546 / e82515：docs/adr 纳入同一引用面——ADR 关联行幽灵文件名此前无人拦（实测
+# ADR-0044/0045 指向不存在的 ADR-0025-run-console-and-command-execution.md）。
+LINK_TREES = ("docs/reviews", "docs/notes", "docs/adr")
 
 
 def check_mdc_frontmatter(filename: str, text: str) -> list[str]:
