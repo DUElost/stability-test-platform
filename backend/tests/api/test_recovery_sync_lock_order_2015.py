@@ -29,10 +29,10 @@ import sqlalchemy.exc
 from sqlalchemy import select, text
 
 from backend.api.routes.agent_api import (
-    _ActiveJobEntry,
     _RecoverySyncIn,
     recovery_sync,
 )
+from backend.services.agent_recovery import _ActiveJobEntry
 from backend.core.database import AsyncSessionLocal, SessionLocal, async_engine
 from backend.models.device_lease import DeviceLease
 from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType, PlanRunStatus
