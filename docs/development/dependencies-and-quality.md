@@ -58,6 +58,19 @@ Python 3.11 下重新生成对应 lock。日常重生成沿用已有 pin；只�
   revision 时，同一 PR 必须附**重放迁移**（新增 revision 的 `down_revision` 指向被改写者，
   body 用「命中才写」的幂等自愈），门禁据此豁免。先例：#1717 为 `dd44ee55ff66` 补的
   `f6a5b4c3d2e1`；
+- **另有五个门禁已进 `check:quick` / `check:pr` 成员表**（`#2659` 补齐——此前本节对它们
+  0 命中，读者无法从本节得知其存在）：
+  - **`layering`**（`check:pr`，#1519）：`backend/services/` 不得 import
+    `backend.api.routes`——分层边界，防「服务层反向依赖路由层私有符号」；
+  - **`orphan-models`**（`check:quick` + `check:pr`，#1890-B/#734）：`backend/models/` 下
+    继承 `Base` 的模型类若在非 models/tests/alembic 范围**零引用**即红（幽灵模型）；
+  - **`god-files`**（`check:quick` + `check:pr`，#736）：`CEILINGS` 所列文件的行数封顶，
+    且是**棘轮**——下沉逻辑的同一 PR 应调小，**上调必须写明理由**；
+  - **`prom-alerts`**（`check:pr`）：`tests/test_prometheus_alerts_contract.py`——
+    告警规则契约（阈值/时间窗语义与文档一致）；
+  - **`agent-tests-collect`**（`check:pr`）：以 `env -i` 裸环境**仅收集** Agent 测试
+    （`--collect-only`），捕获「只在被污染的 ambient 环境里能 import」的收集期回归
+    （#739 §1.1 的干净环境自闭环）；
 - 验证顺序：Agent tests → TypeScript check → frontend build → 必要时 backend tests。
 - **本机解释器比 CI 新，语法子集不对称**：CI 各 job 统一 Python 3.11（`lint` /
   `pr-compileall` / `pr-agent-tests` / `pr-typecheck` 同版，`ruff.toml` 亦

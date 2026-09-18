@@ -75,7 +75,10 @@ class TestNotifyDebounce:
         ):
             emit_dispatch_gate_invalidation(7, phase="syncing")
             emit_dispatch_gate_invalidation(7, phase="syncing")
-            time.sleep(0.08)
+            # 去抖后的首次 emit 是异步投递：等它出现（有界），不睡固定 0.08s
+            deadline = time.monotonic() + 2.0
+            while not captured and time.monotonic() < deadline:
+                time.sleep(0.005)
 
         assert len(captured) == 1
         assert captured[0][1]["payload"]["phase"] == "syncing"

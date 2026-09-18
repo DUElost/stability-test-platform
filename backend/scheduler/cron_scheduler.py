@@ -560,6 +560,20 @@ _ORPHAN_DLE_BATCH = 100
 # #2316：单轮最多翻几页。键集推进让「形态不符 / 删不掉」的行不再堵死批头，但翻页必须有界——
 # 整表都是跳过行时，无界翻页会把一次 cron tick 变成全表扫描。
 _ORPHAN_DLE_MAX_PAGES = 10
+#: #2636：扫描方向逐 tick 交替（True = 从**最新**端往回扫）。
+#: 跳过行（形态不符 / 目录删不掉）既不删也不更新，恒为最老；而游标是函数局部的——
+#: 若每 tick 都从最老端起扫，累计 ≥ MAX_PAGES×BATCH 条恒跳过行就会让清理**永久空转**
+#: （每 tick 检视同一批、`purged` 恒 0）。交替方向让「另一端」的候选每两 tick 至少被
+#: 检视一次；不跨 tick 持久化（Redis 只承载队列与瞬时通信，加状态表要迁移）。
+_orphan_scan_from_newest = False
+
+
+def _next_orphan_scan_descending() -> bool:
+    """返回本轮扫描方向并翻转（首轮升序 = 历史行为）。仅主循环调用，dry_run 恒升序。"""
+    global _orphan_scan_from_newest
+    current = _orphan_scan_from_newest
+    _orphan_scan_from_newest = not current
+    return current
 
 
 def purge_orphan_dle_events(limit: int = _ORPHAN_DLE_BATCH, *, dry_run: bool = False) -> int:
@@ -581,6 +595,10 @@ def purge_orphan_dle_events(limit: int = _ORPHAN_DLE_BATCH, *, dry_run: bool = F
     现在改为按 ``(updated_at, id)`` 键集翻页（上限 ``_ORPHAN_DLE_MAX_PAGES`` 页），
     本轮的扫描可以越过跳过行继续找可清理的行；跳过量按 ``reason`` 计入
     ``stability_dle_orphan_skipped_total``（此前不可观测）。
+
+    **#2636**：两处收口——① 共享根未配置时**早退**（该形态下没有任何行可清，进循环
+    只会白扫 1000 行）；② 扫描方向**逐 tick 交替**：恒跳过行占满最老端时，从最新端
+    起扫的那一轮仍能清到可清理的行，任意数量的恒跳过行都不再造成永久空转。
     """
     from backend.core.storage_root import resolve_shared_storage_root
     from backend.models.device_log_event import DeviceLogEvent
@@ -596,6 +614,13 @@ def purge_orphan_dle_events(limit: int = _ORPHAN_DLE_BATCH, *, dry_run: bool = F
                 (resolved_base / "devices" / "unassigned") if resolved_base else None
             )
 
+        if not dry_run and resolved_base is None:
+            # #2636：共享根没配置 → 下面 root_unset 必然命中每一行，本轮**无行可清**。
+            # 早退而不是白扫 MAX_PAGES 页（旧形态每 tick 固定浪费 1000 行检视）。
+            logger.warning("dle_orphan_skipped_root_unset_early_return")
+            return 0
+
+        descending = (not dry_run) and _next_orphan_scan_descending()
         cursor: tuple | None = None
         purged = 0
         counted = 0
@@ -610,12 +635,19 @@ def purge_orphan_dle_events(limit: int = _ORPHAN_DLE_BATCH, *, dry_run: bool = F
                 )
             )
             if cursor is not None:
-                stmt = stmt.where(
-                    tuple_(DeviceLogEvent.updated_at, DeviceLogEvent.id) > cursor
+                # #2636：方向决定键集比较符（`> cursor` 升序 / `< cursor` 降序）。
+                comparison = (
+                    tuple_(DeviceLogEvent.updated_at, DeviceLogEvent.id) < cursor
+                    if descending
+                    else tuple_(DeviceLogEvent.updated_at, DeviceLogEvent.id) > cursor
                 )
-            rows = db.execute(
-                stmt.order_by(DeviceLogEvent.updated_at, DeviceLogEvent.id).limit(limit)
-            ).all()
+                stmt = stmt.where(comparison)
+            order = (
+                (DeviceLogEvent.updated_at.desc(), DeviceLogEvent.id.desc())
+                if descending
+                else (DeviceLogEvent.updated_at, DeviceLogEvent.id)
+            )
+            rows = db.execute(stmt.order_by(*order).limit(limit)).all()
             if not rows:
                 break
 
