@@ -255,6 +255,36 @@ def _start_adb_server(adb_path: str, port: int) -> bool:
         return False
 
 
+def adb_reconnect_offline(adb_path: str = "adb", timeout: int = 30) -> bool:
+    """``adb reconnect offline``：重建 offline 态连接（#2754 自愈半边）。
+
+    针对性轻动作：只作用于 offline 设备、不重启 adb server、不打扰其它设备
+    的在途会话——与 [#160 的 server 级收敛](ensure_single_adb_server)（要求
+    无活动 Job）不同。典型适应证是 adbd 会话陈旧（host .81 实测 15/16 offline、
+    ``lsusb`` 枚举层完好、一条 reconnect 全部恢复）。
+
+    失败只记日志返回 False：自愈动作自身不得产生新的告警噪声。
+    """
+    try:
+        result = subprocess.run(
+            [adb_path, "reconnect", "offline"],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except Exception as e:
+        logger.warning("adb_reconnect_offline_failed error=%s", e)
+        return False
+    if result.returncode != 0:
+        logger.warning(
+            "adb_reconnect_offline_rc rc=%s err=%s",
+            result.returncode, (result.stderr or "")[:160],
+        )
+        return False
+    logger.info("adb_reconnect_offline_ok")
+    return True
+
+
 def ensure_single_adb_server(
     adb_path: str = "adb",
     port: Optional[int] = None,

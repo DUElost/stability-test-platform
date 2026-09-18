@@ -21,6 +21,7 @@ from backend.core.database import get_db
 from backend.core.metrics import (
     device_online,
     get_metrics_response,
+    host_device_adb_state,
     host_online,
     is_prometheus_available,
     record_db_lock_waiters,
@@ -60,6 +61,68 @@ def _refresh_fleet_gauges(db: Session) -> None:
     except SQLAlchemyError:
         # 观测面不因 DB 抖动整体 500：保留其余指标输出，仅跳过舰队计数。
         logger.warning("metrics_fleet_gauge_refresh_failed", exc_info=True)
+
+
+#: #2754：adb_state 的**封闭分桶词表**（series 基数 = 在册 host 数 × 4，
+#: 不随 adb 原始状态串漂移；顺序即落值顺序，测试与告警选择器都按它对齐）。
+_ADB_STATE_BUCKETS = ("device", "offline", "unauthorized", "other")
+
+
+def _adb_state_bucket(raw: Optional[str]) -> str:
+    """把 adb 的自由字符串归进封闭词表。
+
+    不归桶有两个后果：`no permissions` / 空串 / 各版本 adb 的自造状态会各自成为一条
+    series 标签值（基数交给运气），且告警选择器必须逐值列举——**漏一个值就静默不告**，
+    正是本仓反复踩的「绿而空」形态（#1958 死锁四周零指标、#1257 不存在的标签选择器）。
+    """
+    value = (raw or "").strip()
+    return value if value in _ADB_STATE_BUCKETS else "other"
+
+
+def _refresh_host_device_adb_gauges(db: Session) -> None:
+    """#2754：per-host × adb_state 计数，拉取期现算（与 `_refresh_fleet_gauges` 同口径）。
+
+    存在理由：fleet 级 `stability_device_online{status=...}` 只有总数——2026-09-18 host
+    `.81` 的 15/16 台 adb offline 在平台上**零告警**（host ONLINE、心跳新鲜、mount ok），
+    总量视角下那只是 fleet 里少了几台。按 host 分桶后，「单台 host 的设备批量不可达」
+    才是可表达的事实。
+
+    三条口径是刻意的：
+
+    - **退役 host 不进指标**（ADR-0038 D5：退役 = 不再是容量）——否则退役机上残留的设备行
+      会让告警永远盯着一台已不存在的机器，且没人会去处理它；
+    - 设备行经 `join Host` 过滤：`host_id` 为空或指向不存在 host 的设备**不计**——
+      它们没有 host 归属，硬造一个 `(none)` 标签值会让 fleet 级异常混进 per-host 视角；
+    - 每台在册 host 的四个桶**全部落值（含 0）**：缺 series 时 `max_over_time` 窗口里没有
+      基线，「从来没设备」与「刚掉光」就无法区分（后者正是要告的形态）。
+    """
+    if not is_prometheus_available():
+        return
+    try:
+        rows = (
+            db.query(Device.host_id, Device.adb_state, func.count())
+            .join(Host, Host.id == Device.host_id)
+            .filter(Host.retired_at.is_(None))
+            .group_by(Device.host_id, Device.adb_state)
+            .all()
+        )
+        counted: dict[str, dict[str, int]] = {}
+        for host_id, adb_state, count in rows:
+            buckets = counted.setdefault(host_id, {b: 0 for b in _ADB_STATE_BUCKETS})
+            buckets[_adb_state_bucket(adb_state)] += int(count)
+        live_hosts = [
+            host_id
+            for (host_id,) in db.query(Host.id).filter(Host.retired_at.is_(None)).all()
+        ]
+        for host_id in live_hosts:
+            buckets = counted.get(host_id, {b: 0 for b in _ADB_STATE_BUCKETS})
+            for bucket in _ADB_STATE_BUCKETS:
+                host_device_adb_state.labels(host_id=host_id, state=bucket).set(
+                    buckets.get(bucket, 0)
+                )
+    except SQLAlchemyError:
+        # 与舰队 gauge 同一失败姿势：DB 抖动时跳过本组，不拖垮整次抓取。
+        logger.warning("metrics_host_adb_gauge_refresh_failed", exc_info=True)
 
 
 _LOCK_WAIT_SQL = text(
@@ -160,6 +223,7 @@ async def metrics(
     Returns metrics in Prometheus exposition format.
     """
     _refresh_fleet_gauges(db)
+    _refresh_host_device_adb_gauges(db)
     _refresh_lock_wait_gauges(db)
     data, content_type = get_metrics_response()
     return Response(content=data, media_type=content_type)

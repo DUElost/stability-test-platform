@@ -211,6 +211,11 @@ class HeartbeatSettings(BaseSettings):
     stp_adb_auto_repair: str = "0"
     stp_adb_repair_cooldown_seconds: float = 300
 
+    # ── heartbeat_thread：批量 adb offline 自愈重连（#2754 自愈半边）──
+    # 仅精确 "1" 启用（同 stp_adb_auto_repair 的显式 opt-in 语义）
+    stp_adb_reconnect_auto: str = "0"
+    stp_adb_reconnect_cooldown_seconds: float = 600
+
     # ── heartbeat_thread：设备 /data 容量低频采样（#2757）──
     # 0/负 = 关闭（刻意不进 _v_positive_pacing 钳制——「关」是合法档位而非非法值）
     stp_device_disk_sample_interval_seconds: float = 300
@@ -220,12 +225,18 @@ class HeartbeatSettings(BaseSettings):
         "stp_heartbeat_interval_min",
         "stp_heartbeat_interval_max",
         "stp_adb_repair_cooldown_seconds",
+        "stp_adb_reconnect_cooldown_seconds",
         mode="before",
     )
     @classmethod
     def _v_positive_pacing(cls, value: object, info) -> object:
         """#2086：节奏旋钮正数下界（0/负值 → 下限 + WARNING）。"""
         return _clamp_positive_seconds(value, info.field_name.upper())
+
+    @property
+    def adb_reconnect_auto_enabled(self) -> bool:
+        """#2754 自愈半边：仅精确 `"1"` 视为启用（同 `adb_auto_repair_enabled`）。"""
+        return self.stp_adb_reconnect_auto == "1"
 
     @property
     def adb_auto_repair_enabled(self) -> bool:
