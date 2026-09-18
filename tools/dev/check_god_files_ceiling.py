@@ -27,15 +27,19 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 
-#: 封顶值 = 2026-09-17 `origin/main`（1f22c951）实测行数 × 1.05（向上取整）；
-#: 缓冲是为了不与正在瘦身的 #1520 切片互相打架（搬出一半时文件可能短暂变长）。
+#: 封顶值 = 设定时的 `origin/main` 实测行数 × 1.05（向上取整）；缓冲是为了不与正在
+#: 瘦身的 #1520 切片互相打架（搬出一半时文件可能短暂变长）。
 #:
-#: 基线实测：plan_runs.py 2303 / agent_api.py 957 / agent/main.py 1622。
-#: 下调时机：把领域逻辑下沉到 services/ 的同一个 PR 里把对应值调小。
+#: 下调时机：把领域逻辑下沉到 services/ 的**同一批**改动落地后即下调（棘轮的方向）。
 #: 键为仓库相对路径。
+#:
+#: 历史（棘轮记录，只增不改）：
+#: - 2026-09-17 初版（`1f22c951`）：2303 / 957 / 1622 → 2419 / 1005 / 1704；
+#: - 2026-09-17 首次下调（`2524278d`，#1520 切片把两个路由文件搬空）：
+#:   709 / 515 / 1622 → 745 / 541 / 1704（-69% / -46% / 持平）。
 CEILINGS: dict[str, int] = {
-    "backend/api/routes/plan_runs.py": 2419,
-    "backend/api/routes/agent_api.py": 1005,
+    "backend/api/routes/plan_runs.py": 745,
+    "backend/api/routes/agent_api.py": 541,
     "backend/agent/main.py": 1704,
 }
 
