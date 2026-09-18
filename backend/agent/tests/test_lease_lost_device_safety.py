@@ -121,9 +121,13 @@ def test_lease_lost_without_active_job_releases_slot_immediately():
 
 
 def test_main_wires_lease_lost_to_shared_helper():
-    """接线回归：main._on_lease_lost 必须走共享 helper（含 keep 占位语义）。"""
+    """接线回归：main 经 active_job_bindings 走共享 helper（含 keep 占位语义）。"""
+    import backend.agent.active_job_bindings as bindings
+
     main_text = Path(agent_main.__file__).read_text(encoding="utf-8")
+    bindings_text = Path(bindings.__file__).read_text(encoding="utf-8")
     helper_text = Path(recovery_executor.__file__).read_text(encoding="utf-8")
 
-    assert "handle_lease_lost(" in main_text
+    assert "build_on_lease_lost(" in main_text
+    assert "handle_lease_lost(" in bindings_text
     assert "keep_device_slot=abort_dispatched" in helper_text
