@@ -33,7 +33,15 @@ interface AuditLogEntry {
   timestamp: string;
 }
 
-/** 与筛选下拉的中文文案一致，避免表格里裸英文 action */
+/**
+ * 中文展示名。#2629 之后它们**只是展示名**——可筛值来自 `GET /audit-logs/facets`
+ * 的 distinct 结果，不再是这里的键集合。
+ *
+ * 这个区分就是本单的落点：原先 `ACTION_LABELS` 的键**同时充当**下拉选项，于是
+ * 「一组硬编码中文标签」直连「一个精确等值的自由词表」，标签里的 `dispatch/start/cancel`
+ * 与资源侧的 `tool/tool_category/template` 在写入侧根本不存在 ⇒ 选中即「共 0 条」。
+ * 没有映射的值按原字面量展示（宁可看到 `job_instance`，也不要一个筛不出东西的中文死选项）。
+ */
 const ACTION_LABELS: Record<string, string> = {
   create: '创建',
   update: '更新',
@@ -41,6 +49,23 @@ const ACTION_LABELS: Record<string, string> = {
   dispatch: '分发',
   start: '启动',
   cancel: '取消',
+};
+
+/** 资源维度的展示名（同上：展示用，不充当选项来源）。 */
+const RESOURCE_LABELS: Record<string, string> = {
+  plan: 'Plan',
+  plan_run: '计划运行',
+  host: '主机',
+  device: '设备',
+  user: '用户',
+  session: '会话/登录',
+  job_instance: '作业实例',
+  script: '脚本',
+  script_catalog: '脚本目录',
+  notification_channel: '通知渠道',
+  notification_rule: '告警规则',
+  schedule: '定时任务',
+  task: '任务',
 };
 
 export default function AuditLogPage() {
@@ -61,7 +86,9 @@ export default function AuditLogPage() {
   // 哨兵同时避免了空字符串 value 的歧义，API 侧不带该参数即全量
   const [filters, setFilters] = useState({
     resource_type: 'all',
-    action: 'all',
+    // #2629：操作有 86 种字面量，下拉列不全也不该猜——改成与 username/IP/resource_id
+    // 同一范式的「精确匹配 + datalist 补全」（候选仍来自真实写入值）。
+    action: '',
     // #628：文本类筛选（用户名 / IP / 资源 ID）
     username: '',
     ip_address: '',
@@ -75,10 +102,11 @@ export default function AuditLogPage() {
     username: '',
     ip_address: '',
     resource_id: '',
+    action: '',
   });
 
   const commitTextFilter = (
-    key: 'username' | 'ip_address' | 'resource_id',
+    key: 'username' | 'ip_address' | 'resource_id' | 'action',
     value: string,
   ) => {
     const next = value.trim();
@@ -86,6 +114,17 @@ export default function AuditLogPage() {
     setFilters((prev) => (prev[key] === next ? prev : { ...prev, [key]: next }));
     setPage(0);
   };
+
+  // #2629：两个筛选维度的候选值都来自**实际写入过的记录**（distinct + 条数），
+  // 前端不再持有词表——所以「选中即 0 条」在结构上不再可能。请求失败时静默降级为
+  // 「只剩全部资源 + 自由输入操作」，与用户名下拉同一取舍。
+  const facetsQ = useQuery({
+    queryKey: ['audit-facets', 'audit-filter-options'],
+    queryFn: () => api.audit.facets(),
+    staleTime: 60_000,
+  });
+  const resourceFacets = facetsQ.data?.resource_types ?? [];
+  const actionFacets = facetsQ.data?.actions ?? [];
 
   // 用户名下拉候选（admin 页面；失败静默降级为自由输入）
   const usersQ = useQuery({
@@ -106,7 +145,7 @@ export default function AuditLogPage() {
     queryFn: () => {
       const params: Record<string, string> = {};
       if (filters.resource_type !== 'all') params.resource_type = filters.resource_type;
-      if (filters.action !== 'all') params.action = filters.action;
+      if (filters.action) params.action = filters.action;
       if (filters.username) params.username = filters.username;
       if (filters.ip_address) params.ip_address = filters.ip_address;
       if (filters.resource_id) params.resource_id = filters.resource_id;
@@ -145,30 +184,35 @@ export default function AuditLogPage() {
           data-testid="audit-resource-filter"
         >
             <option value="all">全部资源</option>
-            <option value="plan">Plan</option>
-            <option value="tool">工具</option>
-            <option value="tool_category">工具分类</option>
-            <option value="notification_channel">通知渠道</option>
-            <option value="notification_rule">告警规则</option>
-            <option value="schedule">定时任务</option>
-            <option value="template">任务模板</option>
-            <option value="host">主机</option>
-            <option value="task">任务</option>
+            {resourceFacets.map((facet) => (
+              <option key={facet.value} value={facet.value}>
+                {`${RESOURCE_LABELS[facet.value] ?? facet.value}（${facet.count}）`}
+              </option>
+            ))}
         </select>
-        <select
-          value={filters.action}
-          onChange={(e) => { setFilters({ ...filters, action: e.target.value }); setPage(0); }}
-          className={FORM.select}
-          data-testid="audit-action-filter"
-        >
-            <option value="all">全部操作</option>
-            <option value="create">创建</option>
-            <option value="update">更新</option>
-            <option value="delete">删除</option>
-            <option value="dispatch">分发</option>
-            <option value="start">启动</option>
-            <option value="cancel">取消</option>
-        </select>
+        {/* #2629：操作维度改成「精确匹配 + datalist」（86 种字面量列不全，硬列就是假阴性来源） */}
+        <label className="flex items-center gap-2">
+          <span className={cn('whitespace-nowrap text-sm', TEXT.subtitle)}>操作</span>
+          <Input
+            list="audit-action-options"
+            className="w-56"
+            placeholder="精确匹配"
+            value={textDraft.action}
+            onChange={(e) => setTextDraft((d) => ({ ...d, action: e.target.value }))}
+            onBlur={(e) => commitTextFilter('action', e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') commitTextFilter('action', e.currentTarget.value);
+            }}
+            data-testid="audit-action-filter"
+          />
+          <datalist id="audit-action-options">
+            {actionFacets.map((facet) => (
+              <option key={facet.value} value={facet.value}>
+                {`${ACTION_LABELS[facet.value] ?? facet.value} · ${facet.count}`}
+              </option>
+            ))}
+          </datalist>
+        </label>
         <label className="flex items-center gap-2">
           <span className={cn('whitespace-nowrap text-sm', TEXT.subtitle)}>开始时间</span>
           <Input
