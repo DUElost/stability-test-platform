@@ -187,3 +187,25 @@ Class: process
   其输入清单载体（届时需要新增 `--include-retired-days` 之类的过滤，而不是再写一个工具）。
 - `KEEP_LATEST_ACTIVE` 豁免的脚本族若长期零引用（如 `noop`、`monkey_test`），说明该族已死；
   本判据不处理「整族退役」，那需要产品侧确认脚本不再提供。
+
+**补记（2026-09-18，守卫每日化两天后：给它加「判据来源归因」）**
+
+- 触发是一起**没有造成损害但无法自证**的事：今早 `09:33:44` 那次自动巡检时，主检出被别家
+  Execution 切在 `refactor/1520-plan-runs-reexport-trim`（tip `22bffbce`）上，10:08 才切回 main。
+  单位 `WorkingDirectory` 与 `run_guard(cwd=REPO_ROOT)` 都指向主检出 ⇒ 那次**实际用的判据代码
+  是那棵树的当前内容**，不是 main。事后查该分支引入的改动不含 `script_retirement.py` /
+  `check_unreferenced_script_versions.py` / `models/script.py`，所以 `GUARD OK` 结论内容上没被污染——
+  但这是**我靠 reflog 反推**才知道的：journal 里只有两行 `GUARD OK` / `metrics -> …`，
+  probe 自己没留下任何"我用的是哪版判据"的痕迹。
+- 于是补 `describe_guard_source()`：每次巡检在日志里打一行
+  `guard source: <树> @ <分支|detached> <短sha> == origin/main`（不一致时附「⚠ 结论只适用于那棵树」）。
+  判据是**内容**等于 `origin/main`，不是分支名（按名字判会把「刚开未提交的特性分支」误报、
+  把「在 main 上但没 fetch」放过）。
+- **刻意不加指标、不加告警、不改判定码**：这层的价值是事后可归因；实时防护仍靠
+  `due/unknown/broken/last_run` 四值与「生产按 runbook 保持在 main」。真要它进告警面，
+  得先有 ADR-0046 的裁决（部署源必须钉在 revision 上），否则只是把别家会话的正常切树
+  行为变成天天红——那正是本单反复反对的告警疲劳。
+- 这是与 `tools/dev/check-monitoring-assets.py::describe_source_repo` 同逻辑的**第二处**使用；
+  出现第三处时抽 `tools/dev/_repo_source.py`（同 PR #2430/#2591 那条 bootstrap 纪律：
+  重复两次先记下出口，不提前抽象）。
+
