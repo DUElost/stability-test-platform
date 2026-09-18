@@ -90,13 +90,18 @@ def test_on_lease_lost_uses_late_bound_job_runner_state():
 
 
 def test_main_wires_active_job_bindings():
-    from pathlib import Path
-
     import backend.agent.main as agent_main
+    from tools.dev.source_anchor import SourceGuard
 
-    text = Path(agent_main.__file__).read_text(encoding="utf-8")
-    assert "build_register_active_job(" in text
-    assert "build_deregister_active_job(" in text
-    assert "build_on_lease_lost(" in text
-    assert "job_runner_slot.value = job_runner_state" in text
-    assert "def _register_active_job(" not in text
+    # 正锚点：占位工厂仍在 main 接线；否定：不得回潮内联 register 闭包
+    guard = (
+        SourceGuard.of_module(agent_main)
+        .anchored("build_register_active_job(")
+        .anchored("build_deregister_active_job(")
+        .anchored("build_on_lease_lost(")
+        .anchored("job_runner_slot.value = job_runner_state")
+    )
+    guard.assert_absent(
+        "def _register_active_job(",
+        why="#736 active_job_bindings 已抽出，main 不得回潮内联 register 闭包",
+    )
