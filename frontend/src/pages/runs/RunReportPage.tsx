@@ -121,7 +121,7 @@ export default function RunReportPage() {
     <PageContainer width="content" className={LAYOUT.pageGap}>
       <PageHeader
         title={`Job 运行报告 #${report.run.id}`}
-        subtitle={`任务: ${report.task.name} (${report.task.type})`}
+        subtitle={`计划: ${report.task.name} (${report.task.type})`}
         breadcrumbs={[{ label: '测试结果', path: '/results' }, { label: `Job #${report.run.id}` }]}
         action={
           <div className="flex items-center gap-2">
@@ -152,11 +152,21 @@ export default function RunReportPage() {
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className={cn(PANEL.root, 'overflow-visible p-4 space-y-2')}>
-          <h3 className="text-sm font-medium text-muted-foreground">任务信息</h3>
+          {/* #2707：本卡展示的是 **Plan**（`report.task` 是遗留命名，`type` 字面量至今
+              为 "PLAN"），而页面标题/面包屑/状态是 **Job**——同一张卡混用两个实体时，
+              用户会把「任务ID」当作被引用对象的标识（JIRA 建单场景直接抄错）。
+              这里只做命名澄清：标题改「计划信息」、行名改 Plan ID，并显式补一行 Job ID
+              （与标题同源 `report.run.id`，不新增请求）。「任务」一词的全局口径属
+              #2546 的语义所有权裁决范围，本单不动。 */}
+          <h3 className="text-sm font-medium text-muted-foreground">计划信息</h3>
           <div className="space-y-1 text-sm">
             <div className="flex justify-between">
-              <span className="text-muted-foreground">任务ID</span>
+              <span className="text-muted-foreground">Plan ID</span>
               <span>{report.task.id}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Job ID</span>
+              <span>{report.run.id}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">类型</span>
