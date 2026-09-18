@@ -128,7 +128,6 @@ teardown、patrol 留空即可。
 ```bash
 curl -s -X POST '<base>/api/v1/plans' ... -d '{
   "name": "Z2581 稳定性冒烟 v1",
-  "failure_threshold": 0.05,             // 失败率熔断线
   "patrol_interval_seconds": 1800,
   "barrier_timeout_seconds": 1800,       // init 长前置必须抬高预算(见字段注释)
   "project_key": "Z2581",

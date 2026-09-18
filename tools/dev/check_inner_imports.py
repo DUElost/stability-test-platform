@@ -33,11 +33,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SCAN_DIRS = (ROOT / "backend", ROOT / "tools", ROOT / "scripts")
 
-#: 棘轮基线：2026-09-18 #736 startup_identity 搬家后实测 **607**（原 610；
-#: `main()` 内身份相关局部 import 随模块迁出）。**只许下调**。
-#: 下调时机：解耦掉若干处局部 import 的同一个 PR 里。
+#: 棘轮基线：2026-09-18 #736 claim_loop 搬家后实测 **606**（原 607；
+#: `main()` claim 路径内 `_arrive_patrol_barrier_preengine` 局部 import 随迁出）。
+#: **只许下调**。
 #: （issue #738 记录的是 2026-09-03 的 634 处；口径与扫描面当时未固化。）
-_BASELINE = 607
+_BASELINE = 606
 
 _FROZEN_SCRIPT_RE = re.compile(r"^backend/agent/scripts/[^/]+/v[0-9][^/]*/")
 _FROZEN_ALEMBIC_PREFIX = "backend/alembic/versions/"

@@ -20,8 +20,9 @@
   连接带 `application_name`（见 §凭据来源）。
 - **写查询前先求证名字**：表名、列名与枚举取值先在 `information_schema` 里核对，不要在
   库上试错——2026-09-16/17 那约 30 条「猜 schema」的错误查询就是这么产生的
-  （真名是 `job_instance`/`device_leases`，枚举是小写）。这类错误应聚合成告警或日报，
-  而不是等人事后读 PG 日志（#2632 缺口①）。
+  （真名是 `job_instance`/`device_leases`，枚举是小写）。这类错误现今已聚合成告警
+  **`StabilityPgSchemaGuessing`**（生产者 `tools/dev/pg_error_guard.py`，只读 PG 日志的
+  textfile 指标；1 小时窗口 ≥5 条即报）——正常路径不应产生任何一条（#2632 缺口①）。
 - **本机 `127.0.0.1:5432` 就是生产实例**：显式 `TEST_DATABASE_URL` 在生产机指向
   loopback/本机 socket 会被 conftest 拒载（#2632 缺口③，语义见
   [`../development/testing.md`](../development/testing.md) §3）。

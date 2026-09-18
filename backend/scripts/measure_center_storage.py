@@ -11,10 +11,16 @@
 - **E-1b merge 报表双份**：`dedup/{run}/merge/**` 与 `jira/{run}/merge/**`；
 - **E-3 控制面本地 `merge_result/`**：子目录数、字节、最新 mtime（体积与增速代理）。
 
+顶层族清单不是本脚本自带的一份，而是与 retention purge 桶**同源**（#2188）：见
+``backend/storage_families.py``。其中 ``devices`` / ``dedup`` / ``jira`` / ``_meta``
+按 **run** 主键分解，``jobs`` 按 **job** 主键分桶——它只进总量与 ``job_dir_count``，
+不进 ``run_counts`` / ``top_runs_by_bytes``（把 ``jobs/{job_id}`` 报成 run，会让 E-2 的
+「与 DB 里应已清理 run 清单对账」产出既非漏删也非干净的第三种读数）。
+
 **不覆盖**（脚本内不猜，需另行采集）：
 
 - E-2 retention 后残留：需要「应当已被清理的 run 清单」（来自控制面 DB）。本脚本只报告
-  各 run 在四族中的目录分布，由运维与 DB 对账；
+  各 run 在全部族中的目录分布，由运维与 DB 对账；
 - E-4 merge 端到端耗时：需要日志时间差；
 - E-5 历史 JIRA 外链有效率：需要 JIRA 侧采样。
 
@@ -43,11 +49,16 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable, Optional
 
-#: 中心存储的四族顶层目录（路径契约见 design/2026-scan-upload-merge-contract.md）。
-CENTER_FAMILIES: tuple[str, ...] = ("devices", "dedup", "jira", "jobs")
-
-#: `devices/` 下与 plan_run_id 同级、但不是 run 的保留目录名。
-DEVICES_NON_RUN_ENTRIES: frozenset[str] = frozenset({"unassigned"})
+# 族清单 = 单一来源（#2188）：与 retention purge 桶同源，路径契约见
+# design/2026-scan-upload-merge-contract.md「中心存储路径」节。正本刻意不放 backend.core
+# ——那里 eager 建 engine，会破坏本脚本「不查库、缺省 env 也能跑」的职责边界。
+from backend.storage_families import (
+    ALL_FAMILIES,
+    JOBS_FAMILY,
+    MERGE_REPORT_FAMILIES,
+    NON_KEY_ENTRIES,
+    RUN_FAMILIES,
+)
 
 #: 拒绝扫描的根（防手滑把整盘/整机当中心存储）。
 FORBIDDEN_ROOTS: frozenset[str] = frozenset({"/", "/home", "/tmp", "/var", "/usr"})
@@ -139,22 +150,29 @@ def _run_dirs(family_root: Path, *, skip: Iterable[str] = ()) -> dict[str, Path]
 
 
 def collect_family_usage(center_root: Path) -> dict[str, Usage]:
-    """四族各自的顶层用量（不递归到 run 内部分解）。"""
+    """全部顶层族各自的顶层用量（不递归到 run/job 内部分解）。
+
+    族清单用 :data:`~backend.core.storage_families.ALL_FAMILIES`：run 族与 job 族都要有
+    总量，否则新家族（如 ``_meta``）在报告里结构性不可见——那正是 #2188 记的漏桶形态。
+    """
     return {
         family: walk_usage(center_root / family)
-        for family in CENTER_FAMILIES
+        for family in ALL_FAMILIES
         if (center_root / family).is_dir()
     }
 
 
 def collect_run_usage(center_root: Path) -> dict[str, dict[str, Usage]]:
-    """``{family: {run_id: Usage}}``；``devices/unassigned`` 单独成键。"""
+    """``{family: {run_id: Usage}}``，**只含 run 主键族**；``devices/unassigned`` 单独成键。
+
+    ``jobs`` 不在此列（它按 job 主键分桶）——见 :func:`collect_job_usage`。
+    """
     by_family: dict[str, dict[str, Usage]] = {}
-    for family in CENTER_FAMILIES:
+    for family in RUN_FAMILIES:
         root = center_root / family
         if not root.is_dir():
             continue
-        skip = DEVICES_NON_RUN_ENTRIES if family == "devices" else ()
+        skip = NON_KEY_ENTRIES.get(family, frozenset())
         by_family[family] = {
             run_id: walk_usage(path)
             for run_id, path in _run_dirs(root, skip=skip).items()
@@ -163,6 +181,21 @@ def collect_run_usage(center_root: Path) -> dict[str, dict[str, Usage]]:
     if unassigned.is_dir():
         by_family.setdefault("devices", {})["unassigned"] = walk_usage(unassigned)
     return by_family
+
+
+def collect_job_usage(center_root: Path) -> dict[str, Usage]:
+    """``jobs/`` 族按 **job** 主键的分解（``{job_id: Usage}``）。
+
+    与 run 分解分开的理由只有一个：主键不同。混在一起时 ``run_counts`` 与
+    ``top_runs_by_bytes`` 会把 job 目录报成 run（#2188 复核发现）。
+    """
+    root = center_root / JOBS_FAMILY
+    if not root.is_dir():
+        return {}
+    return {
+        job_id: walk_usage(path)
+        for job_id, path in _run_dirs(root, skip=NON_KEY_ENTRIES.get(JOBS_FAMILY, frozenset())).items()
+    }
 
 
 def _merge_subdir_usage(run_path: Path) -> Usage:
@@ -184,7 +217,7 @@ def collect_duplication(
 
     devices_bytes = sum(u.bytes for k, u in devices.items() if k != "unassigned")
     jira_bytes = sum(u.bytes for u in jira.values())
-    overlap = sorted(set(devices) & set(jira) - DEVICES_NON_RUN_ENTRIES)
+    overlap = sorted(set(devices) & set(jira) - NON_KEY_ENTRIES["devices"])
     return {
         "event_dirs": {
             "devices_bytes": devices_bytes,
@@ -205,7 +238,7 @@ def collect_duplication(
 def collect_merge_subdir_usage(center_root: Path) -> dict[str, dict[str, int]]:
     """E-1b：``dedup/{run}/merge/**`` 与 ``jira/{run}/merge/**`` 的字节对比。"""
     out: dict[str, dict[str, int]] = {}
-    for family in ("dedup", "jira"):
+    for family in MERGE_REPORT_FAMILIES:
         root = center_root / family
         if not root.is_dir():
             continue
@@ -273,12 +306,16 @@ def collect_baseline(
         for run_id, usage in runs.items():
             ranked.append((f"{family}/{run_id}", usage.bytes))
     ranked.sort(key=lambda item: item[1], reverse=True)
+    job_dirs = collect_job_usage(center_root)
     return {
         "center_root": str(center_root),
         "families": {
             name: asdict(usage) for name, usage in collect_family_usage(center_root).items()
         },
         "run_counts": {family: len(runs) for family, runs in by_family.items()},
+        # jobs/{job_id} 不是 run：单列一条轴，避免与 run_counts 混读（#2188）。
+        "job_dir_count": len(job_dirs),
+        "job_dir_bytes": sum(u.bytes for u in job_dirs.values()),
         "duplication": collect_duplication(by_family),
         "merge_subdir_usage": collect_merge_subdir_usage(center_root),
         "local_merge_result": collect_local_merge_result(merge_result_root),
@@ -337,6 +374,12 @@ def format_report(report: dict) -> str:
         lines.append(f"-- top {len(report['top_runs_by_bytes'])} runs by bytes --")
         for row in report["top_runs_by_bytes"]:
             lines.append(f"  {_human_bytes(row['bytes']):>10}  {row['name']}")
+    if report.get("job_dir_count"):
+        lines.append(
+            f"-- {JOBS_FAMILY}/ (job-keyed, not runs) --  "
+            f"dirs={report['job_dir_count']} "
+            f"bytes={_human_bytes(int(report['job_dir_bytes']))}"
+        )
     lines.append("-- not covered by this script --")
     for item in report["not_covered"]:
         lines.append(f"  - {item}")
