@@ -106,6 +106,29 @@ def _filter_new_keys(keys: list[str], baseline: set[str]) -> list[str]:
     return new_keys
 
 
+def _stale_baseline_keys(keys: list[str], baseline: set[str]) -> list[str]:
+    """基线里**本次未命中**的项——噪音可能已被上游（alembic/SQLAlchemy/模型）修掉。
+
+    为什么需要这个提示：`--rebaseline` 是**覆盖**语义，缩小的基线只能靠有人跑一次它才拿到；
+    而 `pr-migrate-empty-db` 在 diff ⊆ 基线 时一直绿——于是「噪音已消失」这件事没有任何信号，
+    基线会停在旧尺寸，把**已经不可能出现**的形态继续当豁免面。
+
+    为什么**不判红**：要排除的是单边形态——`add_/remove_` 对偶只剩一边出现在 diff 里，
+    那是 #944 的拦截面（`_filter_new_keys` 已经把它算进 new_keys），不是收敛。
+    把它报成"可以缩基线了"会诱导人在错误的时刻跑覆盖式 rebaseline，恰好把该拦的形态洗进新基线。
+    """
+    observed = set(keys)
+    stale: list[str] = []
+    for b in sorted(baseline):
+        if b in observed:
+            continue
+        counterpart = _counterpart_key(b)
+        if counterpart and counterpart in observed:
+            continue  # 单边形态归 new_keys 拦，不在此处冒充收敛
+        stale.append(b)
+    return stale
+
+
 def _run_upgrade(db_url: str) -> None:
     backend_dir = Path(__file__).resolve().parents[1]  # backend/
     cfg = Config(str(backend_dir / "alembic.ini"))
@@ -168,10 +191,17 @@ def main() -> int:
         print(f"rebaseline: {len(merged)} keys 已写回 {_BASELINE_FILE}")
         return 0
 
-    print(f"compare_metadata diff: {len(diffs)} 项（基线 {len(baseline)}，新增 {len(new_keys)}）")
+    stale = _stale_baseline_keys(keys, baseline)
+    print(f"compare_metadata diff: {len(diffs)} 项（基线 {len(baseline)}，新增 {len(new_keys)}，基线未命中 {len(stale)}）")
     for k in keys:
         mark = "!! NEW" if k in new_keys else " "
         print(f"  [{mark}] {k}")
+    if stale:
+        print("HINT: 基线中这些项本次未命中——多半已被上游修掉，噪音面已收敛；"
+              "人工确认后 `--rebaseline` 收紧基线（覆盖语义会随之缩它）。")
+        print("      不判红：单边形态属「新增」拦截面，这里出现的是「整项消失」。")
+        for k in stale:
+            print(f"  [stale] {k}")
     if new_keys:
         print("ERROR: 迁移结果与 ORM 模型出现基线外漂移（成对基线项要求 diff 成对共现）。")
         print("      修迁移/模型使其一致；确系预期则人工确认后 --rebaseline。")

@@ -856,6 +856,47 @@ async def plan_admission_task(ctx: dict, *, plan_run_id: int, attempt_id: str) -
 
         await asyncio.to_thread(_suite_gate)
 
+        # Phase A0b — 退役预检（ADR-0038 D5/D5bis ④，#1805）。
+        # 验收判据「prepare 与准入竞态」（182d4e-F7 场景表）：已 prepare 后才退役的
+        # Run **不做 verify/SSH/物化**。退役事实一次只读 DB 查询即可判定——放在慢路径
+        # （脚本 verify RPC + 漂移 push 回退）**之前**：命中即显式 HOST_RETIRED fatal
+        # 收敛（快照/PlanRunHost 不删、不静默缩目标集合）。Phase B 分类器终检原样
+        # 保留：A0b→B 窗口内才发生的退役（TOCTOU）仍由终检活读兜住——两点是同一
+        # 判据的不同时刻，不是互替。sync.py 的守卫是「即便有旁路也不 SSH」的
+        # 命名共享收口点（D5），与本预检分层存在。
+        def _retire_gate() -> None:
+            with SessionLocal() as db:
+                pr = db.get(PlanRun, plan_run_id)
+                if (
+                    pr is None
+                    or pr.status != PlanRunStatus.PRECHECK.value
+                    or pr.admission_attempt_id != attempt_id
+                ):
+                    return  # lost ownership between claim and here — skip
+                retired = [
+                    row[0] for row in db.execute(
+                        select(Host.id)
+                        .join(PlanRunHost, PlanRunHost.host_id == Host.id)
+                        .where(
+                            PlanRunHost.plan_run_id == plan_run_id,
+                            Host.retired_at.is_not(None),
+                        )
+                        .order_by(Host.id)
+                    ).all()
+                ]
+            if retired:
+                raise _FatalAdmission(
+                    "HOST_RETIRED",
+                    {
+                        "hosts": [
+                            {"host_id": hid, "reason": "host_retired"}
+                            for hid in retired
+                        ]
+                    },
+                )
+
+        await asyncio.to_thread(_retire_gate)
+
         # Phase A — slow ops, zero DB locks held.
         await _verify_scripts_phase(plan_run_id, host_ids)
 
