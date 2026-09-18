@@ -215,7 +215,7 @@ def test_abort_locks_pending_job_before_plan_run():
             f"锁序仍是 plan_run→job（#1985 回归）：{plan_run_lock_error}"
         )
         assert "error" not in outcome, f"abort 不应报错：{outcome.get('error')!r}"
-        assert outcome["result"]["aborted_jobs"] == [seed["job_id"]]
+        assert outcome["result"].aborted_jobs == [seed["job_id"]]
 
         check = SessionLocal()
         try:
@@ -341,7 +341,7 @@ def test_abort_relocks_pending_jobs_after_commit_before_plan_run():
             "phase 2（commit 之后）仍是 plan_run→job 反序（#2012 回归）"
         )
         assert "error" not in outcome, f"abort 不应报错：{outcome.get('error')!r}"
-        assert outcome["result"]["aborted_jobs"] == [seed["job_id"]]
+        assert outcome["result"].aborted_jobs == [seed["job_id"]]
 
         check = SessionLocal()
         try:

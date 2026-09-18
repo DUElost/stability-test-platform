@@ -60,14 +60,13 @@ docstring ↔ 实现（#2141）：同样双向，**逐函数**比对 docstring �
 - 基类字段只在**同一文件内**递归解析；遇到文件外、且不是 ``BaseModel`` 的基类会**直接报错**
   而不是静默少收字段（少收会让"幽灵字段"判据假绿）。
 
-当前覆盖：轴线 A 1 对（``abort_plan_run`` ↔ ``PlanRunAbortResult``，``#787`` 与 ``#2089``
-两次漂移都在这一对）；轴线 B 4 个 docstring 键块函数中的 2 个可比对者；轴线 C 8 对——
-watcher-summary 3（``WatcherSummaryOut`` / ``WatcherPlatformBucketOut`` / ``WatcherCategoryOut``）、
-log-events 2（``PlanRunLogEventOut`` / ``PlanRunLogEventsOut``）、scan/merge 状态 3
-（``DedupStatusOut`` / ``DedupArtifactOut`` / ``DedupScanArchiveOut``），以及 #2187 逐条
-正规化进来的 dedup 触发类 7 对——6 个端点（``DedupScanTriggerOut`` /
-``DedupMergeTriggerOut`` / ``DedupExtractOut`` / ``DedupAgentConfigReloadOut`` /
-``JiraRunStartOut`` / ``JiraRunCancelOut``）+ 1 个嵌套项（``DedupSkippedHostOut``）——共 15 对。
+当前覆盖（#1520 形状系列三刀后，2026-09-18）：轴线 A 0 对（唯一配对 ``abort_plan_run``
+升为具名模型改由轴 C 对拍）；轴线 B 自动发现 3 个 docstring 键块函数（1 个可比对
+``abort_jobs_for_host`` + 2 个显式豁免）；轴线 C **28 对**——dedup 族 15（#2187）、
+summary/artifacts 2（读侧收口）、plan_runs 读侧对拍批 9（含 ``PlanRunDetailOut
+↔ PlanRun``）、写侧摘要 2（``PlanRunAbortSummaryOut ↔ PlanRunAbortResult``、
+``PlanRunDispatchRetrySummaryOut ↔ PlanRunDispatchRetryResult``）；另有 2 条具名模型
+按原因豁免（``JiraRunOut`` 解析器限制、``PlanRunArchiveTriggerOut`` 前端无消费者）。
 
 轴线 C 的第 3 组来自一次**正规化**：``GET /plan-runs/{id}/dedup/status`` 原为
 ``response_model=ApiResponse[dict]`` + ``ok({...})`` 手搓 dict（轴线 A 的 AST 判据识别不到
@@ -97,14 +96,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 # (后端文件, 函数名, TS 文件, 接口名)
-_PAIRS: tuple[tuple[str, str, str, str], ...] = (
-    (
-        "backend/services/plan_run_abort.py",
-        "abort_plan_run",
-        "frontend/src/utils/api/types.ts",
-        "PlanRunAbortResult",
-    ),
-)
+# 轴线 A 当前 0 对：唯一的 A 轴配对 ``abort_plan_run ↔ PlanRunAbortResult``（#787/#2089
+# 两次漂移的发生地）已随 #1520 写侧摘要刀升为具名模型，**改由轴线 C 登记对拍**
+# （PlanRunAbortSummaryOut ↔ PlanRunAbortResult）——不是退出契约，是声明面升级。
+_PAIRS: tuple[tuple[str, str, str, str], ...] = ()
 
 # docstring 里形如 `"key": 类型,` 的行（文档化的返回形状）。
 _DOC_KEY_RE = re.compile(r'^\s*"([a-z_][a-z0-9_]*)"\s*:', re.M)
@@ -294,13 +289,14 @@ class TestDocstringKeyContract:
         )
 
     def test_known_canary_is_still_discovered(self):
-        """canary：``abort_plan_run`` 是 ``#2089`` 漂移对的声明面。
+        """canary：``abort_jobs_for_host`` 是 ``#2089`` 家族的 docstring 键块函数。
 
-        它不再被发现（docstring 块被删、或解析器失效）时，本检查会**静默**失去最有价值的
-        那一例——所以这里显式锚一下，让「静默」变「红」。
+        （前任 canary ``abort_plan_run`` 已升具名模型、改由轴线 C 对拍——轴 B 上它
+        不该再被发现，这里换锚到同族仍是手搓 dict 的那一个。）检测器若失效，本用例
+        先红，而不是让「docstring↔实现」这条轴静默变空。
         """
         names = {f.name for f in _discover_docstring_key_funcs()}
-        assert "abort_plan_run" in names, f"canary 丢失（当前发现：{sorted(names)}）"
+        assert "abort_jobs_for_host" in names, f"canary 丢失（当前发现：{sorted(names)}）"
 
     def test_docstring_keys_match_return_dict_keys(self):
         problems: list[str] = []
@@ -424,6 +420,20 @@ _MODEL_PAIRS: tuple[tuple[str, str, str, str], ...] = (
         "frontend/src/utils/api/types.ts",
         "TestCaseResultsPayload",
     ),
+    # #1520 写侧摘要正规化：abort / retry-dispatch 的 ApiResponse[dict] → 具名模型，
+    # 与既有 TS（#2089 时代手写的可选形状）转正为双向对拍；presence 统一见模型 docstring。
+    (
+        "backend/api/schemas/plan_run.py",
+        "PlanRunAbortSummaryOut",
+        "frontend/src/utils/api/types.ts",
+        "PlanRunAbortResult",
+    ),
+    (
+        "backend/api/schemas/plan_run.py",
+        "PlanRunDispatchRetrySummaryOut",
+        "frontend/src/utils/api/types.ts",
+        "PlanRunDispatchRetryResult",
+    ),
     # #1520 正规化：summary / job artifacts 从 ApiResponse[dict]/[list] 提升为模型
     (
         "backend/api/schemas/plan_run.py",
@@ -524,13 +534,9 @@ _MODEL_BLINDSPOT: dict[str, set[str]] = {
     # #1520 形状正规化批第一步：summary/artifacts 已升模型进 `_MODEL_PAIRS`；
     # 剩余具名模型逐个对拍前按台账显式豁免（下方 `_MODEL_UNREGISTERED`），
     # 三个仍 `ApiResponse[dict]` 的写侧摘要在此认领盲区。
-    "backend/api/routes/plan_runs.py": {
-        # abort/archive/retry 的 summary 都是服务层运行期拼装的分支 dict
-        # （#2089 的 released_leases 教训）——正规化为模型是后续批，先按台账钉住。
-        "abort_plan_run_endpoint",
-        "archive_plan_run_logs_endpoint",
-        "retry_plan_run_dispatch_endpoint",
-    },
+    "backend/api/routes/plan_runs.py": set(),
+    # ^ #1520 写侧摘要刀（2026-09-18）：三个 ApiResponse[dict] 全部升具名模型，
+    # 本文件的 dict 盲区清零；typed 端点台账见 _MODEL_PAIRS / _MODEL_UNREGISTERED。
     "backend/api/routes/dedup.py": {
         # `ok(st)`：status 由 RunConsole 运行期组装
         "get_jira_run_status",
@@ -549,6 +555,8 @@ _MODEL_UNREGISTERED: dict[str, str] = {
     # #1520 对拍批 1（2026-09-18）：opt-in plan_runs.py 时随之入账的 9 条豁免已
     # 全部双向对拍通过并转正进 `_MODEL_PAIRS`，此清单当前只剩 JiraRunOut（解析器
     # 跨文件基类限制）。新豁免须写具体失效条件，勿留泛化占位。
+    "PlanRunArchiveTriggerOut": "前端无消费者（admin/运维触发面）；形状由后端测试钉，"
+    "接入前端时在 types.ts 建 interface 并转登记 _MODEL_PAIRS",
 }
 
 #: 允许 `extra="allow"` 的已登记模型（自由 JSONB 段——键集合由写入方决定）。
