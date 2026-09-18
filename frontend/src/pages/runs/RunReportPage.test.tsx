@@ -231,3 +231,25 @@ describe('RunReportPage 风险徽标词表（#2494）', () => {
     expect(screen.queryByText('未知')).toBeNull();
   });
 });
+
+// #2707：同一张卡里混用 Plan 与 Job 两个实体——`report.task` 是遗留命名（`type`
+// 字面量至今是 "PLAN"），而页面标题 / 面包屑 / 状态都是 Job。用户会把「任务ID」当作
+// 被引用对象的标识（JIRA 建单场景直接抄错）。本组钉住：卡片标题与行名不再用「任务」，
+// 且两个 id 各自绑对实体——fixture 里 run.id=3 / task.id=1 本就不同，混绑会立刻红。
+describe('RunReportPage 实体归属（#2707）', () => {
+  it('「计划信息」块分别显示 Plan ID 与 Job ID，且各自绑对实体', async () => {
+    await renderWithRunStatus('FINISHED');
+
+    const card = (await screen.findByText('计划信息')).closest('div') as HTMLElement;
+
+    const planRow = within(card).getByText('Plan ID').closest('div') as HTMLElement;
+    expect(planRow).toHaveTextContent('1'); // task.id（Plan）
+
+    const jobRow = within(card).getByText('Job ID').closest('div') as HTMLElement;
+    expect(jobRow).toHaveTextContent('3'); // run.id（JobInstance）
+
+    // 旧文案不得回潮：混用两个实体正是本单要消掉的形态
+    expect(screen.queryByText('任务信息')).toBeNull();
+    expect(screen.queryByText('任务ID')).toBeNull();
+  });
+});
