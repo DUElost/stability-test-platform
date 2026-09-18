@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from backend.api.schemas import JiraDraftListItemOut, JiraDraftOut, RunReportOut, RunStepOut
+from backend.api.schemas import JiraDraftListItemOut, RunReportOut, RunStepOut
 from backend.api.routes.auth import get_current_active_user, User
 from backend.api.response import ApiResponse, ok
 from backend.core.database import get_db
@@ -183,6 +183,8 @@ def get_cached_run_report(
 
 
 # ── JIRA Draft ────────────────────────────────────────────────────────────────
+# #290 出口分层（ADR-0012）：draft 是 per-Job 预览（本节只读端点）；唯一交付
+# 路径是 extract 材料包 + /api/v1/jira JiraRun，不存在 draft→工单自动桥。
 
 
 def _resolve_draft_project_key(db: Session, run_id: int) -> Optional[str]:
@@ -199,20 +201,6 @@ def _resolve_draft_project_key(db: Session, run_id: int) -> Optional[str]:
     if job is None or job.plan_run_id is None:
         return None
     return resolve_jira_project_key(db, job.plan_run_id)
-
-
-@router.post("/runs/{run_id}/jira-draft", response_model=JiraDraftOut)
-def create_run_jira_draft(
-    run_id: int,
-    db: Session = Depends(get_db),
-    _current_user: User = Depends(get_current_active_user),
-):
-    report = compose_run_report(db, run_id)
-    if report is None:
-        raise HTTPException(status_code=404, detail="run not found")
-    return build_jira_draft(
-        report, project_key_override=_resolve_draft_project_key(db, run_id),
-    )
 
 
 @router.get("/runs/{run_id}/jira-draft/cached")
