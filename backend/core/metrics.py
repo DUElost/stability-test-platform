@@ -159,6 +159,18 @@ device_online = Gauge(
     ['status']  # online, offline, busy
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
+# #2754：fleet 级 device_online{status} 只有总数，**看不见「单台 host 的设备批量掉线」**——
+# 2026-09-18 host .81 的实测形态正是这样：host 状态 ONLINE、心跳新鲜、mount ok，
+# 而它 16 台里 15 台 adb offline，平台上零告警。这里按 host 暴露 adb_state 分桶计数，
+# 让「谁掉线了」与「是不是波次（相对自身近 45m 的峰值）」都能被 PromQL 表达。
+# 分桶是**封闭词表**（见 api/routes/metrics.py 的 _ADB_STATE_BUCKETS）：adb 的原始状态是
+# 自由字符串（`no permissions`、空串、版本差异词都可能），不归桶就会把 series 基数交给运气。
+host_device_adb_state = Gauge(
+    'stability_host_device_adb_state',
+    'Devices per host by adb_state bucket (control-plane DB view)',
+    ['host_id', 'state'],  # state: device | offline | unauthorized | other
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
 # ============================================================================
 # Risk Classification Metrics
 # ============================================================================
