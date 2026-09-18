@@ -10,8 +10,9 @@ Class: process
 
 - `tools/dev/check_inner_imports.py`：统计生产面（`backend/ tools/ scripts/`）里处于
   **函数/方法体内**的 `import` / `from … import` 总数，超过 `_BASELINE` 即红。
-- **基线实测 596**（2026-09-18，`origin/main` `6f135a43`；issue 里的 634 是 2026-09-03
-  且口径未固化）。解耦后在**同一个 PR**里把基线调小。
+- **基线实测 610**（本 PR 合并 `main` 后树实测；原稿 596 对应 `origin/main`
+  `6f135a43`，其后 main 新增 +14 处函数体内 import，属台账同步而非放宽门禁；
+  issue 里的 634 是 2026-09-03 且口径未固化）。解耦后在**同一个 PR**里把基线调小。
 - 排除面与 `audit_silent_exceptions.py` 同口径：测试、已发布脚本版本（ADR-0020）、
   alembic 历史 revision（#2258）、vendored 第三方（`backend/agent/resources/`）。
 - **模块顶层的条件导入不算**（`try: import ujson / except ImportError`）——那是平台
