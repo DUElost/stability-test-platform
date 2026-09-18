@@ -24,7 +24,13 @@ Class: bug-fix
 - `pytest` `test_startup_identity_736` + `test_agent_settings_heartbeat` →
   **53 passed**
 - `check:quick`（除本机 `schema-at-head`）：pending
+- CI `pr-agent-tests` 曾红于 repo 套件：`test_startup_identity_736` 的
+  `assert "…" not in text` 未走 `SourceGuard`，触发
+  `test_source_scan_anchor_ratchet` 棘轮增长；已改为
+  `SourceGuard.of_module(main).anchored("bootstrap_process_identity(").assert_absent(...)`
+  （与同 PR 族 `test_bootstrap_subsystems_736` 同形）
 
 ## Revisit
 
 - 下一刀：`_handle_control`（依赖注入 / deps 袋）或薄壳 `AgentApplication`。
+- 新源扫描否定断言一律先 `SourceGuard`，勿再扩 `BASELINE`。
