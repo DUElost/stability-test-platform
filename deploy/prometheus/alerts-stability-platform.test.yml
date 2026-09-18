@@ -455,7 +455,7 @@ tests:
             该 host 上 adb_state=offline 的设备已成多数（≥5 台且占比 ≥50%，持续 15m）。
             先按 docs/operations/production-diagnostics.md 的只读口径分清是哪一层：
             lsusb 设备在位 + adb server 存活 + `adb reconnect offline` 立即恢复 ⇒ adbd
-            会话陈旧（#2754 的 .81 形态，非硬件）；lsusb 查无设备 ⇒ USB 枚举层，
+            会话陈旧（#2754 的事故形态，非硬件）；lsusb 查无设备 ⇒ USB 枚举层，
             对照 docs/operations/incident-2026-07-29-host-8-87-xhci-death-and-adb-outage.md
             判据树。注意本告警**只观测**：平台侧自动 reconnect 未实现（会打断在跑的 job，
             需裁决，见 #2754 / #722）。

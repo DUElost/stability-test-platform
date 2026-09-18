@@ -349,7 +349,7 @@ groups:
             超 1 小时 / 指标消失）表示采集器停摆——那时计数恒 0，看起来像「没人在猜」。
 
   # ---- #2754：单台 host 的 adb 通道批量失活（fleet 视角看不见的那一层）----
-  # 起因：2026-09-18 host `172-21-15.81` 的 16 台里 15 台 adb offline，而平台上
+  # 起因：2026-09-18 host `192-0-2-81` 的 16 台里 15 台 adb offline，而平台上
   # **零告警**——host 状态 ONLINE、心跳新鲜、共享盘挂载正常，fleet 级
   # `stability_device_online{status=...}` 只是总数，看不见「聚集在哪一台」。
   # 这次是人读日志发现的（与 #2632 的「无留痕」同形：事实可观测，但没人被通知）。
@@ -387,7 +387,7 @@ groups:
             该 host 上 adb_state=offline 的设备已成多数（≥5 台且占比 ≥50%，持续 15m）。
             先按 docs/operations/production-diagnostics.md 的只读口径分清是哪一层：
             lsusb 设备在位 + adb server 存活 + `adb reconnect offline` 立即恢复 ⇒ adbd
-            会话陈旧（#2754 的 .81 形态，非硬件）；lsusb 查无设备 ⇒ USB 枚举层，
+            会话陈旧（#2754 的事故形态，非硬件）；lsusb 查无设备 ⇒ USB 枚举层，
             对照 docs/operations/incident-2026-07-29-host-8-87-xhci-death-and-adb-outage.md
             判据树。注意本告警**只观测**：平台侧自动 reconnect 未实现（会打断在跑的 job，
             需裁决，见 #2754 / #722）。
