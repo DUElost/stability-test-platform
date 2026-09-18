@@ -1,0 +1,45 @@
+# 站点本地 Prometheus 的告警规则（installer 渲到 etc/stp/prometheus/rules/）。
+# Rendered by the site installer for <deploy-root> — do not edit by hand.
+#
+# #2643 方向 1（owner 裁决 2026-09-18）：**站点只装「站点可见面」规则**。
+# 平台其余规则引用的都是控制面进程指标（https://…/metrics 上的 stability_*），
+# 而站点 Prometheus 只有一个 node-exporter job——那 19 条在站点上**结构性无样本**：
+# 既不触发也不报错，只让 installer 报出「监控就绪」的假象，同时把「装了 21 条」
+# 写进运维印象。它们仍留在 `alerts-stability-platform.yml`（控制面挂载路径见
+# docs/operations/README.md 的 ADR-0011 待挂载项）。
+#
+# 规则内容与平台文件**逐字段一致**（tests/test_site_alert_scrape_surface.py 对拍）——
+# 改规则时改平台文件、再同步本文件，别让两份定义漂移。
+groups:
+- name: stability-site-local
+  rules:
+  - alert: StabilityScriptGuardRetirementDue
+    expr: stp_script_guard_due > 0
+    for: 7d
+    labels:
+      severity: warning
+    annotations:
+      summary: 脚本退役守卫发现待授权退役版本
+      description: stp_script_guard_due 连续 7 天大于 0。退役是人工授权动作：先跑 tools/dev/retire_script_versions.py plan
+        出 manifest，复核后 execute --yes。 巡检任务永不写库，due 也不得被当成自动退役的许可。
+  - alert: StabilityScriptGuardUntrusted
+    expr: stp_script_guard_broken == 1 or stp_script_guard_unknown == 1 or time() - stp_script_guard_last_run
+      > 172800 or absent(stp_script_guard_last_run)
+    for: 10m
+    labels:
+      severity: warning
+    annotations:
+      summary: 脚本退役守卫不可信（崩溃／事实不可得／停摆）
+      description: broken=1（工具自身异常）、unknown=1（执行事实维度不可得）或 last_run 超过 48 小时未更新／指标消失。此时 due 的读数没有意义，不得据此退役任何版本：先修
+        probe 或判据端，并确认 stp-script-guard.timer 仍在运行。
+  - alert: StabilityPgSchemaGuessing
+    expr: stp_pg_schema_error_events >= 5 or time() - stp_pg_guard_last_run > 3600 or absent(stp_pg_guard_last_run)
+    for: 10m
+    labels:
+      severity: warning
+    annotations:
+      summary: 有人在对生产库跑「猜出来的 schema」（或采集器停摆）
+      description: PG 日志最近一小时内出现 ≥5 条 schema 猜测指纹（猜表名 / 猜列 / 枚举值大小写）——这类错误**正常路径不应产生**（2026-09-16 的现场是约
+        30 条聚集：表名两个方向都猜错、枚举用大写、引用当时未落地的列）。真正的问题是无留痕：若哪次猜对了，就是一次不留审计痕迹的生产读写。先按 docs/operations/production-diagnostics.md
+        的只读口径复核（SOP 首步已改为先查 information_schema 求证表名/列名/枚举），再用 pg_stat_activity 的 application_name 归因来源；后半段条件（last_run
+        超 1 小时 / 指标消失）表示采集器停摆——那时计数恒 0，看起来像「没人在猜」。

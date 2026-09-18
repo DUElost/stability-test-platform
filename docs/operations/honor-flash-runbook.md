@@ -95,7 +95,6 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/plans -H "$AUTH" \
   -H "Content-Type: application/json" -d '{
   "name": "MLD-刷机-8.0.1.100",
   "description": "Honor MLD 全量刷机（指纹路由 + 同版本跳过 + 刷后核验）",
-  "failure_threshold": 0.0,
   "barrier_timeout_seconds": 7200,
   "barrier_max_wait_seconds": 14400,
   "steps": [

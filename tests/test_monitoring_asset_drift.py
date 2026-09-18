@@ -129,10 +129,14 @@ def test_truly_unknown_placeholder_is_skipped_with_reason(tmp_path, fake_repo):
 
 
 def test_legacy_distro_path_is_accepted(tmp_path, fake_repo):
-    """本机这类 installer 之前的存量部署只有 /etc/prometheus：必须认得，否则全判 absent。"""
+    """本机这类 installer 之前的存量部署只有 /etc/prometheus：必须认得，否则全判 absent。
+
+    #2643 方向 1 后站点装的是子集文件（`site-alerts.yml`），但**目标路径不变**——
+    存量机升级时按同名覆盖，本判据正是钉这一点：老路径仍要被认出。
+    """
     system_root = tmp_path / "sys"
     from tools.site_config.stages import monitoring_artifacts
-    rel = "deploy/prometheus/alerts-stability-platform.yml"
+    rel = "deploy/prometheus/site-alerts.yml"
     dest_rel = next(d for s, d, _ in monitoring_artifacts() if s == rel)
     legacy = _mod.LEGACY_FALLBACKS[dest_rel]
     target = system_root / legacy
