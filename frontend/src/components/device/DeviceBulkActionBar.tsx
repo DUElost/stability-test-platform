@@ -50,7 +50,16 @@ export default function DeviceBulkActionBar({
           </div>
           <div className="min-w-0">
             <div className="text-sm font-medium text-foreground">
-              已选择 <span className="font-mono text-primary">{selectedCount}</span> 台设备
+              {/* #2600：只报「已选择 N 台」时，页选（50）与全量（546）读数同形——
+                  分母写出来，规模差才可见；右侧「选择全部筛选结果 (M)」是补齐入口。 */}
+              已选择 <span className="font-mono text-primary">{selectedCount}</span>
+              {filteredCount > 0 ? (
+                <>
+                  <span className="text-muted-foreground"> / </span>
+                  <span className="font-mono text-muted-foreground">{filteredCount}</span>
+                </>
+              ) : null}{' '}
+              台设备
             </div>
             <div className="truncate text-[11px] text-muted-foreground">
               {statusSummary || `当前筛选共 ${filteredCount} 台`}

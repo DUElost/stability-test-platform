@@ -46,7 +46,10 @@ describe('ExpandableDeviceTable', () => {
       />,
     );
 
-    const selectPage = screen.getByRole('checkbox', { name: '选择当前页设备' }) as HTMLInputElement;
+    // #2600：可访问名必须写明作用域与页大小——「全选」在不同页面语义不同
+    const selectPage = screen.getByRole('checkbox', {
+      name: /选择当前页设备（本页 \d+ 台）/,
+    }) as HTMLInputElement;
     expect(selectPage.indeterminate).toBe(true);
     expect(screen.getByRole('checkbox', { name: '选择设备 SERIAL-1' }).closest('tr')).toHaveAttribute(
       'data-state',

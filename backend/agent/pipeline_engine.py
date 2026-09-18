@@ -493,8 +493,13 @@ def _pump_process(
     on_progress: Optional[Callable[[], None]] = None,
     log_paths: Optional[Tuple[str, str]] = None,
     terminate_grace_seconds: float = 2.0,
+    now: Callable[[], float] = time.monotonic,
 ) -> _PumpOutcome:
     """Drain both pipes on reader threads while the main thread watches two clocks.
+
+    ``now`` 是**时钟接缝**（#2577）：默认墙钟（生产路径不变）；测试注入脚本化时钟，
+    让「推进/停滞」的判定只由测试推进，不再依赖「某一拍恰好落在子进程退出前」这种
+    真实时间窗（那正是 #2577 里 40ms 竞争窗口的成因）。
 
     Why threads and not ``communicate()``: ``communicate`` only returns when the
     child exits, so nothing can observe liveness while it runs. Why not
@@ -525,7 +530,7 @@ def _pump_process(
     # Written by reader threads, read by the main thread while the child runs.
     # Safe because it is a *single* attribute store (atomic under CPython) —
     # keep it that way, a read-modify-write here would need a lock.
-    state = {"last_progress": time.monotonic()}
+    state = {"last_progress": now()}
     stop = threading.Event()
 
     def _handle_line(
@@ -558,7 +563,7 @@ def _pump_process(
             if seq is None or last_seq is None or seq > last_seq:
                 if seq is not None:
                     state["last_progress_seq"] = seq
-                state["last_progress"] = time.monotonic()
+                state["last_progress"] = now()
             if on_progress is not None:
                 try:
                     on_progress()
@@ -638,14 +643,14 @@ def _pump_process(
     for th in threads:
         th.start()
 
-    started = time.monotonic()
+    started = now()
     reason: Optional[str] = None
     while proc.poll() is None:
-        now = time.monotonic()
-        if wall_clock is not None and (now - started) >= wall_clock:
+        tick = now()
+        if wall_clock is not None and (tick - started) >= wall_clock:
             reason = "wall_clock"
             break
-        if stall_seconds is not None and (now - state["last_progress"]) >= stall_seconds:
+        if stall_seconds is not None and (tick - state["last_progress"]) >= stall_seconds:
             reason = "stall"
             break
         time.sleep(_POLL_INTERVAL_SECONDS)
@@ -681,7 +686,7 @@ def _pump_process(
                 pass
 
     return _PumpOutcome(
-        "".join(stdout_lines), "".join(stderr_lines), reason, time.monotonic() - started,
+        "".join(stdout_lines), "".join(stderr_lines), reason, now() - started,
     )
 
 
