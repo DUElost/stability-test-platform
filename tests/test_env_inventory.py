@@ -58,6 +58,35 @@ def test_scan_reads_covers_all_forms_and_classifies_test_only(tmp_path):
     assert reads["ZZ_SVC_VAR"]["test_only"] is False
 
 
+def test_scan_reads_catches_multiline_helper_args(tmp_path):
+    """#2655：helper 实参跨行也必须被扫到（`_int_env(` 的键名常写在下一行）。
+
+    现场形态：`backend/core/job_timeout_config.py` 的 `HOST_HEARTBEAT_TIMEOUT_SECONDS`
+    写在 `_int_env(` 的下一行——逐行正则在**结构上**看不见它，清单漏记与漂移门禁沉默
+    是同一个根因。这条用例去掉整文件通道即红。
+    """
+    mod = _load_module()
+    backend = tmp_path / "backend"
+    backend.mkdir(parents=True)
+    (backend / "cfg.py").write_text(
+        "def _int_env(name, *, production_default):\n"
+        "    return production_default\n"
+        "\n"
+        "HOST_HEARTBEAT_TIMEOUT_SECONDS = _int_env(\n"
+        '    "ZZ_MULTILINE_HELPER",\n'
+        "    production_default=300,\n"
+        ")\n",
+        encoding="utf-8",
+    )
+    mod.ROOT = tmp_path
+    reads = mod.scan_reads(backend)
+
+    assert "ZZ_MULTILINE_HELPER" in reads, "跨行 helper 实参没被扫到——门禁对这类形态是瞎的"
+    assert reads["ZZ_MULTILINE_HELPER"]["default"] == "300", reads["ZZ_MULTILINE_HELPER"]
+    # 行号指向调用点（第 4 行），不是文件尾
+    assert reads["ZZ_MULTILINE_HELPER"]["locations"] == [("backend/cfg.py", 4)]
+
+
 def test_scan_reads_covers_aliased_and_bare_forms(tmp_path):
     """别名 `import os as X` / `from os import getenv` 也必须被清单捕获（防绕过）。"""
     mod = _load_module()
