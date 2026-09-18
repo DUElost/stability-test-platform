@@ -36,10 +36,14 @@ ROOT = Path(__file__).resolve().parents[2]
 #: 历史（棘轮记录，只增不改）：
 #: - 2026-09-17 初版（`1f22c951`）：2303 / 957 / 1622 → 2419 / 1005 / 1704；
 #: - 2026-09-17 首次下调（`2524278d`，#1520 切片把两个路由文件搬空）：
-#:   709 / 515 / 1622 → 745 / 541 / 1704（-69% / -46% / 持平）。
+#:   709 / 515 / 1622 → 745 / 541 / 1704（-69% / -46% / 持平）；
+#: - 2026-09-18 二次下调（#1520 catalog / auth / re-export / shape 合入后）：
+#:   592 / 391 / 360 / 1622 → 622 / 411 / 378 / 1704；并新增 `projects.py`
+#:   （#1520 三主战场之一，此前未入册）。
 CEILINGS: dict[str, int] = {
-    "backend/api/routes/plan_runs.py": 745,
-    "backend/api/routes/agent_api.py": 541,
+    "backend/api/routes/plan_runs.py": 622,
+    "backend/api/routes/agent_api.py": 411,
+    "backend/api/routes/projects.py": 378,
     "backend/agent/main.py": 1704,
 }
 
