@@ -938,6 +938,21 @@ def record_plan_run_aggregation_duration(seconds: float, path: str):
     ).observe(value)
 
 
+def _safe_emit(emit) -> None:
+    """#703 残留②：**观测回写不得把异常递给业务调用栈**。
+
+    abort 族的观测点全部落在 ``db.commit()`` **之后**的返回路径上——那一刻业务
+    结果已定，prometheus_client 内部任何异常（注册竞态、label 处理、multiprocess
+    模式 IO）若照常传播，调用方看到的就是「一次成功 abort 返回 500」。
+    借还侧早已用同款包裹（``database._record_pool_checkout``，「观测绝不得影响
+    借还」）；此处给缺保护的 abort 族在**函数内**补上，保护不再依赖各调用点自觉。
+    """
+    try:
+        emit()
+    except Exception:  # noqa: BLE001 — 观测层故障降级为 debug 记录
+        logger.debug("metrics_emit_failed", exc_info=True)
+
+
 def record_plan_run_abort_lock_seconds(seconds: float, phase: str):
     """#703：abort 持 PlanRun 行锁的墙钟时间（按阶段）。"""
     if not PROMETHEUS_AVAILABLE:
@@ -948,7 +963,11 @@ def record_plan_run_abort_lock_seconds(seconds: float, phase: str):
         return
     if value < 0:
         return
-    plan_run_abort_lock_seconds.labels(phase=(phase or "unknown")[:32]).observe(value)
+    _safe_emit(
+        lambda: plan_run_abort_lock_seconds.labels(
+            phase=(phase or "unknown")[:32]
+        ).observe(value)
+    )
 
 
 # 值域白名单（#1927 的基数纪律）：label 值必须是有界集合，否则 Python client 的
@@ -991,7 +1010,9 @@ def record_plan_run_abort_fanout(scope: str, jobs: int):
     if value < 0:
         return
     normalized = scope if scope in _ABORT_FANOUT_SCOPES else "unknown"
-    plan_run_abort_fanout_jobs.labels(scope=normalized).observe(value)
+    _safe_emit(
+        lambda: plan_run_abort_fanout_jobs.labels(scope=normalized).observe(value)
+    )
 
 
 # 漂移列白名单（ADR-0026 §6 五计数器；未知列名不得进入 label 值域）
