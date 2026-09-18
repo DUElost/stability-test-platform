@@ -354,10 +354,10 @@ def _scalar_result(value):
     return result
 
 
-def _device_result(*device_ids, status="ONLINE", last_seen=None):
-    """#1686/#1822：JOIN 返回 (id, status, last_seen) 元组。"""
+def _device_result(*device_ids, status="ONLINE", last_seen=None, job_status="COMPLETED"):
+    """#2648/#1686/#1822：JOIN 返回 (id, job_status, status, last_seen) 元组。"""
     result = MagicMock()
-    result.all.return_value = [(d, status, last_seen) for d in device_ids]
+    result.all.return_value = [(d, job_status, status, last_seen) for d in device_ids]
     result.scalars.return_value.unique.return_value = list(device_ids)
     return result
 
@@ -508,19 +508,19 @@ class TestPlanChainLegacySnapshotFallback:
 
 
 def test_select_chain_devices_includes_fresh_offline_excludes_stale_and_busy():
-    """#1822：心跳窗口内 OFFLINE 入列；过期 OFFLINE / BUSY 排除。"""
+    """#1822：非 COMPLETED job 沿用状态规则——心跳窗口内 OFFLINE 入列；过期 OFFLINE / BUSY / ERROR 排除。"""
     from backend.services.plan_chain_trigger import _select_chain_devices
 
     now = datetime(2026, 9, 13, 12, 0, 0, tzinfo=timezone.utc)
     fresh = now - timedelta(seconds=60)
     stale = now - timedelta(seconds=900)
     rows = [
-        (1, "ONLINE", None),
-        (2, "OFFLINE", fresh),
-        (3, "OFFLINE", stale),
-        (4, "BUSY", fresh),
-        (5, "OFFLINE", None),
-        (6, "ERROR", fresh),
+        (1, "FAILED", "ONLINE", None),
+        (2, "FAILED", "OFFLINE", fresh),
+        (3, "FAILED", "OFFLINE", stale),
+        (4, "FAILED", "BUSY", fresh),
+        (5, "FAILED", "OFFLINE", None),
+        (6, "FAILED", "ERROR", fresh),
     ]
     device_ids, excluded = _select_chain_devices(
         rows, now=now, grace_seconds=300,
@@ -534,6 +534,32 @@ def test_select_chain_devices_includes_fresh_offline_excludes_stale_and_busy():
     assert by_id[4]["status"] == "BUSY"
 
 
+def test_select_chain_devices_completed_job_overrides_busy_and_offline():
+    """#2648：父段 job COMPLETED → 无条件入列。
+
+    生产实证（run 421→422）：链触发在父 run 终态化 3 秒后执行，21 台 job
+    COMPLETED 但 device.status 仍 BUSY（teardown 收尾），被永久踢出链且
+    不可回补。修复后 COMPLETED 优先于任何瞬时 status（含 BUSY/过期 OFFLINE），
+    可用性交给准入层终检。
+    """
+    from backend.services.plan_chain_trigger import _select_chain_devices
+
+    now = datetime(2026, 9, 18, 12, 0, 0, tzinfo=timezone.utc)
+    stale = now - timedelta(seconds=900)
+    rows = [
+        (11, "COMPLETED", "BUSY", stale),
+        (12, "COMPLETED", "OFFLINE", stale),
+        (13, "COMPLETED", "ONLINE", None),
+        (14, "ABORTED", "BUSY", stale),
+    ]
+    device_ids, excluded = _select_chain_devices(
+        rows, now=now, grace_seconds=300,
+    )
+    assert device_ids == [11, 12, 13]
+    assert [e["device_id"] for e in excluded] == [14]
+    assert excluded[0]["job_status"] == "ABORTED"
+
+
 def test_select_chain_devices_naive_last_seen_treated_as_utc():
     """无 tzinfo 的 last_seen 按 UTC 解释，不误判为过期。"""
     from backend.services.plan_chain_trigger import _select_chain_devices
@@ -541,7 +567,7 @@ def test_select_chain_devices_naive_last_seen_treated_as_utc():
     now = datetime(2026, 9, 13, 12, 0, 0, tzinfo=timezone.utc)
     naive_fresh = datetime(2026, 9, 13, 11, 59, 0)  # 60s ago if UTC
     ids, excluded = _select_chain_devices(
-        [(9, "OFFLINE", naive_fresh)], now=now, grace_seconds=300,
+        [(9, "FAILED", "OFFLINE", naive_fresh)], now=now, grace_seconds=300,
     )
     assert ids == [9]
     assert excluded == []

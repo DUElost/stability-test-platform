@@ -51,20 +51,26 @@ def _aware_utc(value: datetime | None) -> datetime | None:
 
 
 def _select_chain_devices(
-    rows: Sequence[tuple[Any, Any, Any]],
+    rows: Sequence[tuple[Any, Any, Any, Any]],
     *,
     now: datetime | None = None,
     grace_seconds: int | None = None,
 ) -> tuple[list[int], list[dict[str, Any]]]:
-    """#1822 / #1686：链下一段设备筛选。
+    """#2648 / #1822 / #1686：链下一段设备筛选。
 
-    - ``ONLINE``：入列
-    - ``OFFLINE`` 且 ``last_seen`` 在主机心跳超时窗口内：视为瞬时离线，**仍入列**
-      （避免父段结束瞬间重启/探活抖动导致整段链静默缺席且不可回补）
-    - ``BUSY`` / ``ERROR`` / 过期 ``OFFLINE``：排除并记入 ``chain_excluded_devices``
+    判定主依据是**父段 JobInstance 终态**，而非触发瞬间的 device.status：
+
+    - 父段 job ``COMPLETED`` → **无条件入列**。#2648 根因：链触发在父 run
+      终态化后数秒即执行，teardown 后 device BUSY→ONLINE 的状态回写滞后于
+      job 终态，按瞬时 status 排除 BUSY 会把健康设备永久踢出链且不可回补。
+      设备可用性由准入层终检负责（DEVICE_BUSY 重试/收缩），不在这里预判。
+    - 父段 job 非 ``COMPLETED``（FAILED/ABORTED 等）→ 沿用 #1822 状态规则：
+      ``ONLINE`` / 心跳窗口内瞬时 ``OFFLINE`` 入列；``BUSY`` / ``ERROR`` /
+      过期 ``OFFLINE`` 排除并记入 ``chain_excluded_devices``。
 
     ``#1686`` 根因是准入泵对真离线设备长时间阻塞；宽限只覆盖心跳窗口内的
-    瞬时 OFFLINE，不把 BUSY/ERROR 放回以免再阻塞整链。
+    瞬时 OFFLINE。#2648 后 BUSY 不再是排除理由（job 已 COMPLETED 的设备
+    BUSY 只是 teardown 收尾的过渡态），仅 FAILED job 且 BUSY 的设备仍排除。
     """
     grace = (
         HOST_HEARTBEAT_TIMEOUT_SECONDS
@@ -74,7 +80,10 @@ def _select_chain_devices(
     cutoff = (now or datetime.now(timezone.utc)) - timedelta(seconds=grace)
     device_ids: list[int] = []
     excluded: list[dict[str, Any]] = []
-    for device_id, status, last_seen in rows:
+    for device_id, job_status, status, last_seen in rows:
+        if str(job_status or "") == "COMPLETED":
+            device_ids.append(int(device_id))
+            continue
         st = str(status or "")
         if st == "ONLINE":
             device_ids.append(int(device_id))
@@ -83,7 +92,11 @@ def _select_chain_devices(
         if st == "OFFLINE" and seen is not None and seen >= cutoff:
             device_ids.append(int(device_id))
             continue
-        entry: dict[str, Any] = {"device_id": int(device_id), "status": st}
+        entry: dict[str, Any] = {
+            "device_id": int(device_id),
+            "status": st,
+            "job_status": str(job_status or ""),
+        }
         if seen is not None:
             entry["last_seen"] = seen.isoformat()
         if st == "OFFLINE":
@@ -256,10 +269,10 @@ async def trigger_next_plan(
     if parent.next_plan_triggered:
         return None
 
-    # #1686/#1822：链下一段带 ONLINE + 心跳窗口内瞬时 OFFLINE；BUSY/ERROR/过期
-    # OFFLINE 排除。#1686 原只认 ONLINE，父段结束瞬间抖动会永久静默缺席。
+    # #2648：以父段 job 终态为主判据（COMPLETED 无条件入列），瞬时 device.status
+    # 仅对非 COMPLETED job 兜底——teardown 后 BUSY→ONLINE 回写滞后不再踢出健康设备。
     rows = (await db.execute(
-        select(JobInstance.device_id, Device.status, Device.last_seen)
+        select(JobInstance.device_id, JobInstance.status, Device.status, Device.last_seen)
         .join(Device, Device.id == JobInstance.device_id)
         .where(JobInstance.plan_run_id == parent.id)
     )).all()
@@ -343,9 +356,9 @@ def trigger_next_plan_sync(
     if parent.next_plan_triggered:
         return None
 
-    # #1686/#1822：同 async 路径——ONLINE + 心跳窗口内瞬时 OFFLINE
+    # #2648：同 async 路径——父段 job 终态为主判据
     rows = db.execute(
-        select(JobInstance.device_id, Device.status, Device.last_seen)
+        select(JobInstance.device_id, JobInstance.status, Device.status, Device.last_seen)
         .join(Device, Device.id == JobInstance.device_id)
         .where(JobInstance.plan_run_id == parent.id)
     ).all()
