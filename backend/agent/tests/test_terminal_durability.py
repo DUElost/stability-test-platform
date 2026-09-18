@@ -86,7 +86,7 @@ def test_no_local_db_http_fail_still_raises():
 
 
 def _cleanup_args(**overrides):
-    from backend.agent.main import _cleanup_after_job_exit
+    from backend.agent.recovery_executor import _cleanup_after_job_exit
 
     args = dict(
         job_id=10,

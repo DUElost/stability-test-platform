@@ -16,6 +16,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import backend.agent.main as agent_main
+import backend.agent.recovery_executor as recovery_executor
 from backend.agent.job_runner import JobRunnerState
 
 
@@ -68,7 +69,7 @@ def _make_state():
 
 
 def _handle(state, job_id: int, device_id, coordinator):
-    return agent_main.handle_lease_lost(
+    return recovery_executor.handle_lease_lost(
         job_id=job_id,
         device_id=device_id,
         job_runner_state=state,
@@ -121,7 +122,8 @@ def test_lease_lost_without_active_job_releases_slot_immediately():
 
 def test_main_wires_lease_lost_to_shared_helper():
     """接线回归：main._on_lease_lost 必须走共享 helper（含 keep 占位语义）。"""
-    text = Path(agent_main.__file__).read_text(encoding="utf-8")
+    main_text = Path(agent_main.__file__).read_text(encoding="utf-8")
+    helper_text = Path(recovery_executor.__file__).read_text(encoding="utf-8")
 
-    assert "handle_lease_lost(" in text
-    assert "keep_device_slot=abort_dispatched" in text
+    assert "handle_lease_lost(" in main_text
+    assert "keep_device_slot=abort_dispatched" in helper_text
