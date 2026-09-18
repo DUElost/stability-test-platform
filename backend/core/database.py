@@ -206,12 +206,27 @@ def _pool_capacity_kwargs() -> Dict[str, object]:
     }
 
 
+def db_application_name() -> str:
+    """PG 连接的 ``application_name``（#2632）。
+
+    事故复盘时 PG 日志只有 ``user@db``，无法回答「哪条链路/哪个用途连的」——2026-09-16
+    起约 30 条「猜出来的 schema」的一次性 SQL 错误就因此无处归属（含超级用户）。带上这个
+    名字后，`postgresql-*.log` 里每条连接与慢查询都能对上是控制面进程还是测试进程。
+
+    用既有的 ``TESTING`` 区分（本仓既有约定），**不新增 env 键**；判据是"谁在用"，不是
+    "连到哪个库"——库名护栏（``db_url_guard``）管后者，两者互补。
+    """
+    return "stability-tests" if os.getenv("TESTING") == "1" else "stability-backend"
+
+
 def get_async_engine_kwargs(database_url: str) -> Dict[str, object]:
     if is_sqlite_url(database_url):
         return {}
     return {
         "pool_pre_ping": True,
         **_pool_capacity_kwargs(),
+        # asyncpg 的 application_name 走 server_settings（不是顶层参数）
+        "connect_args": {"server_settings": {"application_name": db_application_name()}},
     }
 
 
@@ -229,6 +244,8 @@ def get_sync_engine_kwargs(database_url: str) -> Dict[str, object]:
     if not is_sqlite_url(database_url):
         kwargs["pool_pre_ping"] = True
         kwargs.update(_pool_capacity_kwargs())
+        # psycopg / psycopg2 都直接吃 libpq 的 application_name（#2632）
+        kwargs["connect_args"] = {"application_name": db_application_name()}
     return kwargs
 
 

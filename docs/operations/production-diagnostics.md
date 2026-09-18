@@ -31,6 +31,12 @@
 `/api/v1/auth/token` 获取 token，并使用同一生产 env 源中的 `AGENT_SECRET`；
 不要把解析出的值打印或持久化。
 
+**临时 psycopg 连接请带 `application_name`**（如
+`psycopg.connect(dsn, application_name="diag-<用途>")`，只写用途不写主机/凭据）：
+PG 日志只记 `user@db` 时，事后无法回答「这条 SQL 是哪条链路发的」——2026-09 那次
+「约 30 条猜 schema 的一次性 SQL 错误找不到来源」即此（#2632）。控制面与测试进程
+由代码自动带上（`db_application_name()：stability-backend / stability-tests`）。
+
 ## 文件边界
 
 以下文件或目录是本机状态，不进入 Git：
