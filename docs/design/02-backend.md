@@ -41,9 +41,17 @@ backend/
 
 **健康探针分工**（R01-F05/#885）：`/health` 为 readiness（DB/Redis/SAQ 不可
 用即 503，Docker HEALTHCHECK 指向它）；`/health/live` 为纯 liveness。
+**schema 语义**（#1882/#1930）：生产类环境下 DB schema 落后于代码 head →
+`503 {"error": {"code": "SCHEMA_NOT_AT_HEAD"}}`；探测本身异常 →
+`503 {"error": {"code": "SCHEMA_PROBE_FAILED"}}`；探测成功时 payload 另带
+`alembic_revision` / `alembic_head`（`backend/main.py:455`/`:508`/`:524`/`:583`）。
+非 production-like 环境与 `TESTING=1` 跳过探测 ⇒ 「DB/Redis/SAQ 都活着但 schema 落后」
+同样是 503，排障先认这两个 code。
 
 **ASGI**：`app = socketio.ASGIApp(sio_server, fastapi_app)`  
-**中间件**（外→内）：CORS → RateLimit → CSRF
+**中间件**（外→内）：ApiRequestMetrics → CORS → RateLimit → CSRF。请求指标中间件在
+**最后**注册（= 请求链最外层），因此 CORS 预检 / CSRF 403 / 限流 429 / 路由 404 也计入
+`stability_api_requests_total`（`backend/main.py:401`）
 
 ---
 

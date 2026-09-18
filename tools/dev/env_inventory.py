@@ -74,8 +74,11 @@ _OS_GETENV_ALIAS_RE = re.compile(r"from\s+os\s+import\s+getenv\s+as\s+([A-Za-z_]
 _OS_ENVIRON_ALIAS_RE = re.compile(r"from\s+os\s+import\s+environ\s+as\s+([A-Za-z_][A-Za-z0-9_]*)")
 _OS_BARE_GETENV_RE = re.compile(r"from\s+os\s+import\s+getenv\b(?!\s+as\b)")
 _OS_BARE_ENVIRON_RE = re.compile(r"from\s+os\s+import\s+environ\b(?!\s+as\b)")
+#: 项目 helper 形态（`_int_env("X", production_default=300)`）。
+#: **实参允许跨行**（#2655）：`job_timeout_config.py:86` 就把键名写在 `_int_env(` 的
+#: 下一行——逐行匹配永远看不见它。本表达式由 `scan_reads` 的**整文件**通道使用。
 _HELPER_ENV_RE = re.compile(
-    r"""\b_[a-z][a-z0-9_]*_env\(\s*["']([A-Z][A-Z0-9_]+)["']([^)\n]*)""",
+    r"""\b_[a-z][a-z0-9_]*_env\(\s*["']([A-Z][A-Z0-9_]+)["']([^)]*)""",
 )
 
 
@@ -123,7 +126,7 @@ def _file_patterns(text: str) -> list[re.Pattern[str]]:
     for alias in _OS_ENVIRON_ALIAS_RE.findall(text):
         patterns.append(_environ_get_pattern(alias))
         patterns.append(_environ_item_pattern(alias))
-    patterns.append(_HELPER_ENV_RE)
+    # helper 形态走 scan_reads 的整文件通道（实参可跨行，见 _HELPER_ENV_RE 注释）
     return patterns
 
 _LITERAL_RE = re.compile(r"""^\s*(?:["']([^"']*)["']|(-?\d+(?:\.\d+)?))\s*$""")
@@ -323,6 +326,20 @@ def scan_reads(scan_root: Path = SCAN_ROOT) -> dict[str, dict]:
             entry["locations"].append((str(relpath), lineno))
             if entry["default"] == "-" and default != "-":
                 entry["default"] = default
+        # 整文件通道（#2655）：helper 实参可跨行，逐行匹配看不见。行号由偏移换算，
+        # 与逐行通道共用同一套记录结构（locations 去重，故两通道不会重复计数）。
+        for match in _HELPER_ENV_RE.finditer(text):
+            name = match.group(1)
+            default = _normalize_default(match.group(2))
+            entry = reads.setdefault(
+                name, {"default": "-", "locations": [], "test_only": True},
+            )
+            entry["locations"].append(
+                (str(relpath), text.count("\n", 0, match.start()) + 1),
+            )
+            if entry["default"] == "-" and default != "-":
+                entry["default"] = default
+
         patterns = _file_patterns(text)
         for lineno, line in enumerate(text.splitlines(), 1):
             for pattern in patterns:

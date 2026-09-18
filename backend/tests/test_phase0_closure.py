@@ -207,14 +207,19 @@ class TestSigtermGracefulShutdown:
         shutdown_event = threading.Event()
         woke_at = []
 
+        entered = threading.Event()
+
         def simulated_main_loop():
             start = time.monotonic()
+            entered.set()
             shutdown_event.wait(10.0)
             woke_at.append(time.monotonic() - start)
 
         t = threading.Thread(target=simulated_main_loop)
         t.start()
-        time.sleep(0.1)
+        # #2602 同族：等「线程已进入 wait」再 set —— 原先睡 0.1s 时，线程若尚未起来，
+        # set 会先发生、woke_at 恒 ~0，用例看似通过却根本没测到唤醒路径
+        assert entered.wait(timeout=2.0), "模拟主循环线程未起来"
         shutdown_event.set()
         t.join(timeout=2)
 
@@ -236,8 +241,8 @@ class TestSigtermGracefulShutdown:
         old = signal.signal(signal.SIGTERM, handler)
         try:
             os.kill(os.getpid(), signal.SIGTERM)
-            time.sleep(0.1)
-            assert shutdown_event.is_set()
+            # 信号投递是异步的：等事件本身（有界），不睡固定 0.1s
+            assert shutdown_event.wait(timeout=1.0)
         finally:
             signal.signal(signal.SIGTERM, old)
 
