@@ -29,10 +29,20 @@ def test_shutdown_stops_archiver_monitor_uploader_outside_watcher_branch():
 
 
 def test_recovery_sync_periodic_loop_present():
-    src = _main_source()
-    assert "recovery_sync_periodic_started" in src
-    assert "STP_RECOVERY_SYNC_INTERVAL_SECONDS" in src
-    assert "_recovery_sync_stop" in src
+    import backend.agent.main as agent_main
+    from tools.dev.source_anchor import SourceGuard
+
+    # 正锚点：main 仍启动周期 recovery；否定字面量已迁到 recovery_runtime
+    guard = SourceGuard.of_module(agent_main).anchored("start_periodic_recovery_sync(")
+    guard.assert_absent(
+        "def _recovery_sync_loop()",
+        why="#736 recovery_runtime 已抽出，main 不得回潮内联周期 loop",
+    )
+    runtime = (
+        Path(__file__).resolve().parents[1] / "recovery_runtime.py"
+    ).read_text(encoding="utf-8")
+    assert "recovery_sync_periodic_started" in runtime
+    assert "STP_RECOVERY_SYNC_INTERVAL_SECONDS" in runtime
     reco = (Path(__file__).resolve().parents[1] / "recovery_executor.py").read_text(
         encoding="utf-8"
     )

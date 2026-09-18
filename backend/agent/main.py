@@ -23,10 +23,8 @@ if __name__ == "__main__" and __package__ is None:
     from agent.adb_wrapper import AdbWrapper
     from agent.api_client import fetch_pending_jobs
     from agent.recovery_executor import (
-        _coerce_recovery_interval,
         _make_local_worker_token,
         _rollback_failed_claim,
-        execute_recovery_actions_impl,
         run_recovery_sync_if_needed,
         trigger_recovery_sync_on_device_reconnect,
     )
@@ -39,6 +37,13 @@ if __name__ == "__main__" and __package__ is None:
         build_deregister_active_job,
         build_on_lease_lost,
         build_register_active_job,
+    )
+    from agent.recovery_runtime import (
+        ResumeJobSlot,
+        build_cancel_recovery_job,
+        build_execute_recovery_actions,
+        build_resume_recovered_job,
+        start_periodic_recovery_sync,
     )
     from agent import device_discovery
     from agent.aee.state_migration import migrate_legacy_aee_state_keys
@@ -61,10 +66,8 @@ else:
     from .adb_wrapper import AdbWrapper
     from .api_client import fetch_pending_jobs
     from .recovery_executor import (
-        _coerce_recovery_interval,
         _make_local_worker_token,
         _rollback_failed_claim,
-        execute_recovery_actions_impl,
         run_recovery_sync_if_needed,
         trigger_recovery_sync_on_device_reconnect,
     )
@@ -77,6 +80,13 @@ else:
         build_deregister_active_job,
         build_on_lease_lost,
         build_register_active_job,
+    )
+    from .recovery_runtime import (
+        ResumeJobSlot,
+        build_cancel_recovery_job,
+        build_execute_recovery_actions,
+        build_resume_recovered_job,
+        start_periodic_recovery_sync,
     )
     from . import device_discovery
     from .aee.state_migration import migrate_legacy_aee_state_keys
@@ -468,28 +478,17 @@ def main() -> None:
     outbox_drain = OutboxDrainThread(api_url, local_db, interval=15.0)
     outbox_drain.start()
 
-    _resume_recovered_job = None
-
     # ── ADR-0019 Phase 3a: Recovery Sync ──
-    def _cancel_recovery_job(jid: int) -> None:
-        if job_runner_state is not None:
-            job_runner_state.request_abort(jid)
-
-    def _execute_recovery_actions_impl_closure(
-        resp: dict,
-        active_jobs_by_id: dict,
-    ) -> None:
-        """Execute recovery actions returned by Backend (closure capturing dependencies)."""
-        execute_recovery_actions_impl(
-            resp=resp,
-            active_jobs_by_id=active_jobs_by_id,
-            lease_renewer=lease_renewer,
-            local_db=local_db,
-            outbox_drain=outbox_drain,
-            register_active_job=_register_active_job,
-            resume_job=_resume_recovered_job,
-            abort_local_job=_cancel_recovery_job,
-        )
+    resume_slot = ResumeJobSlot()
+    _cancel_recovery_job = build_cancel_recovery_job(job_runner_slot)
+    _execute_recovery_actions_impl_closure = build_execute_recovery_actions(
+        lease_renewer=lease_renewer,
+        local_db=local_db,
+        outbox_drain=outbox_drain,
+        register_active_job=_register_active_job,
+        resume_slot=resume_slot,
+        cancel_recovery_job=_cancel_recovery_job,
+    )
     _execute_recovery_actions = _execute_recovery_actions_impl_closure
 
     from .patrol_recovery import build_patrol_job_not_running_handler
@@ -537,37 +536,24 @@ def main() -> None:
     control_deps.job_runner_state = job_runner_state
     job_runner_slot.value = job_runner_state
 
-    def _resume_recovered_job_impl(job_payload: dict) -> None:
-        job_payload.setdefault("agent_instance_id", agent_instance_id)
-        # ADR-0026 Step 5b: recovered jobs go through scheduler/coordinator.
-        jid = job_payload.get("id")
-        did = job_payload.get("device_id")
-        if jid and did:
-            coordinator.register_job(jid)
-            coordinator.register_job_device(jid, did)
-        prh_id = job_payload.get("plan_run_host_id")
-        plan_run_id = job_payload.get("plan_run_id")
-        if prh_id and plan_run_id:
-            coordinator.register_plan_run_host(prh_id, plan_run_id)
-        executor.submit(
-            run_task_wrapper,
-            job_payload,
-            adb,
-            api_url,
-            host_id,
-            job_runner_state,
-            mq_producer,
-            script_registry,
-            local_db,
-            patrol_checkpoint_store,
-            operation_scheduler=operation_scheduler,
-            coordinator=coordinator,
-            step_trace_uploader=step_trace_uploader,  # #483
-        )
+    resume_slot.value = build_resume_recovered_job(
+        agent_instance_id=agent_instance_id,
+        coordinator=coordinator,
+        executor=executor,
+        adb=adb,
+        api_url=api_url,
+        host_id=host_id,
+        job_runner_state=job_runner_state,
+        mq_producer=mq_producer,
+        script_registry=script_registry,
+        local_db=local_db,
+        patrol_checkpoint_store=patrol_checkpoint_store,
+        operation_scheduler=operation_scheduler,
+        step_trace_uploader=step_trace_uploader,
+        run_task_wrapper=run_task_wrapper,
+    )
 
-    _resume_recovered_job = _resume_recovered_job_impl
-
-    # Recovery sync execution
+    # Recovery sync execution（启动一次 + #784 周期兜底）
     run_recovery_sync_if_needed(
         local_db=local_db,
         api_url=api_url,
@@ -576,34 +562,15 @@ def main() -> None:
         boot_id=boot_id,
         execute_actions=_execute_recovery_actions_impl_closure,
     )
-    # #784: recovery sync 周期兜底——启动一次 + 设备重连不够；控制面短暂
-    # 不可达时 active_job_registry 悬空行需周期性再 reconcile（对齐终态
-    # outbox 15s 兜底）。
-    _recovery_sync_stop = threading.Event()
-    _recovery_sync_interval = _coerce_recovery_interval(
-        os.getenv("STP_RECOVERY_SYNC_INTERVAL_SECONDS", "60")
-    )
-
-    def _recovery_sync_loop() -> None:
-        while not _recovery_sync_stop.wait(_recovery_sync_interval):
-            try:
-                run_recovery_sync_if_needed(
-                    local_db=local_db,
-                    api_url=api_url,
-                    host_id=host_id,
-                    agent_instance_id=agent_instance_id,
-                    boot_id=boot_id,
-                    execute_actions=_execute_recovery_actions_impl_closure,
-                )
-            except Exception:
-                logger.exception("recovery_sync_periodic_failed")
-
-    _recovery_sync_thread = threading.Thread(
-        target=_recovery_sync_loop, name="recovery-sync", daemon=True,
-    )
-    _recovery_sync_thread.start()
-    logger.info(
-        "recovery_sync_periodic_started interval=%.1fs", _recovery_sync_interval,
+    _recovery_sync_stop, _recovery_sync_thread, _recovery_sync_interval = (
+        start_periodic_recovery_sync(
+            local_db=local_db,
+            api_url=api_url,
+            host_id=host_id,
+            agent_instance_id=agent_instance_id,
+            boot_id=boot_id,
+            execute_actions=_execute_recovery_actions_impl_closure,
+        )
     )
     # SIGTERM / SIGINT graceful shutdown
     _shutdown_event = threading.Event()

@@ -51,11 +51,13 @@ ROOT = Path(__file__).resolve().parents[2]
 #:   main 1015 → 846 → 封顶 **889**。
 #: - 2026-09-18 八次下调（#736：占位绑定抽出 `active_job_bindings.py`）：
 #:   main 846 → 825 → 封顶 **867**。
+#: - 2026-09-18 九次下调（#736：recovery 接线抽出 `recovery_runtime.py`）：
+#:   main 825 → 792 → 封顶 **832**。
 CEILINGS: dict[str, int] = {
     "backend/api/routes/plan_runs.py": 507,
     "backend/api/routes/agent_api.py": 411,
     "backend/api/routes/projects.py": 378,
-    "backend/agent/main.py": 867,
+    "backend/agent/main.py": 832,
 }
 
 
