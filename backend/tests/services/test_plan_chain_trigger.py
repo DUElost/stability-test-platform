@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy import update
 
 from backend.models.enums import JobStatus
 from backend.models.job import JobInstance
@@ -122,9 +123,18 @@ class TestPlanChainTriggerRollback:
         # child 未创建 → 允许下次 aggregator 重试
         assert refreshed.result_summary["chain_dispatch_failed"]["child_already_created"] is False
 
+    def _settle_off(self, monkeypatch):
+        from types import SimpleNamespace
+        monkeypatch.setattr(
+            "backend.services.plan_chain_trigger.get_scheduler_settings",
+            lambda: SimpleNamespace(chain_trigger_settle_seconds=0),
+        )
+
     def test_uncommitted_parent_terminalization_survives_chain_prepare_failure(
-        self, db_session, sample_device, sample_host,
+        self, db_session, sample_device, sample_host, monkeypatch,
     ):
+        # #2755：本例断言 prepare 失败路径——把 settle 窗关掉直达 prepare。
+        self._settle_off(monkeypatch)
         """#986: complete→aggregate 尚未提交时，子 prepare 失败不得回滚父终态。
 
         真实调用链：Job 在同会话标为 COMPLETED 后直接 ``on_job_terminal_sync``
@@ -269,7 +279,9 @@ class TestPlanChainInterruptedFlagReconciliation:
         db_session.commit()
         sentinel_child = SimpleNamespace(id=9876)
 
-        def _redispatch(refreshed_parent, db):
+        def _redispatch(refreshed_parent, db, **_kw):
+            # #2755 后补偿 helper 会带 respect_settle=True 调用——本例只断言
+            # 「flag 先清再重派」的顺序，窗语义由 TestChainTriggerSettleWindow 覆盖。
             assert refreshed_parent.next_plan_triggered is False
             assert db.get(PlanRun, parent.id).next_plan_triggered is False
             return sentinel_child
@@ -565,3 +577,186 @@ def test_select_chain_devices_naive_last_seen_treated_as_utc():
     )
     assert ids == [9]
     assert excluded == []
+
+
+class TestChainTriggerSettleWindow:
+    """#2755：即时链触发路径的最小稳定窗（r431 后 2s 触发→40.6% init 失败）。
+
+    判据：窗口内**跳过**（不设 flag、不建 child、日志可观测），由 reconciler 下一
+    tick 以默认 `respect_settle=False` 补偿；补偿路径与幂等回放不受窗约束。
+    """
+
+    @staticmethod
+    def _seed_parent(db_session, sample_device, sample_host, sample_script, *,
+                     ended_at, child_plan_steps=True):
+        child_plan = Plan(name="settle-child")
+        parent_plan = Plan(name="settle-parent", next_plan_id=None)
+        db_session.add_all([parent_plan, child_plan])
+        db_session.flush()
+        parent_plan.next_plan_id = child_plan.id
+        pr = PlanRun(
+            plan_id=parent_plan.id, status="SUCCESS",
+            plan_snapshot={"plan": {"id": parent_plan.id, "next_plan_id": child_plan.id}, "steps": []},
+            run_type="MANUAL", triggered_by="test",
+            started_at=(ended_at or datetime.now(timezone.utc)),
+            # ended_at 为 None 时 started_at 兜底当前（列 NOT NULL）——本族用例只
+            # 关心 ended_at 缺失是否阻断触发，started_at 只是占位。
+            ended_at=ended_at,
+        )
+        db_session.add(pr)
+        db_session.flush()
+        db_session.add(JobInstance(
+            plan_run_id=pr.id, plan_id=parent_plan.id,
+            device_id=sample_device.id, host_id=sample_host.id,
+            status=JobStatus.COMPLETED.value,
+            pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+        ))
+        if child_plan_steps:
+            from backend.models.plan import PlanStep
+            db_session.add(PlanStep(
+                plan_id=child_plan.id, stage="init", sort_order=0,
+                step_key="s-init", script_name=sample_script[0].name,
+                script_version=sample_script[0].version,
+                timeout_seconds=60, enabled=True,
+            ))
+        db_session.commit()
+        db_session.refresh(pr)
+        return pr
+
+    def _settle180(self, monkeypatch):
+        from types import SimpleNamespace
+        monkeypatch.setattr(
+            "backend.services.plan_chain_trigger.get_scheduler_settings",
+            lambda: SimpleNamespace(chain_trigger_settle_seconds=180),
+        )
+
+    def test_within_window_skips_without_side_effects(
+        self, db_session, sample_device, sample_host, sample_script, monkeypatch, caplog,
+    ):
+        import logging
+        from datetime import datetime, timezone
+        self._settle180(monkeypatch)
+        parent = self._seed_parent(db_session, sample_device, sample_host, sample_script,
+                                   ended_at=datetime.now(timezone.utc))
+        with caplog.at_level(logging.INFO):
+            out = trigger_next_plan_sync(parent, db_session, respect_settle=True)
+        assert out is None
+        db_session.expire_all()
+        stored = db_session.get(PlanRun, parent.id)
+        assert stored.next_plan_triggered is False
+        assert db_session.query(PlanRun).filter(
+            PlanRun.parent_plan_run_id == parent.id).count() == 0
+        assert "plan_chain_trigger_settling" in caplog.text
+
+    def test_past_window_triggers_normally(
+        self, db_session, sample_device, sample_host, sample_script, monkeypatch,
+    ):
+        from datetime import datetime, timedelta, timezone
+        self._settle180(monkeypatch)
+        parent = self._seed_parent(
+            db_session, sample_device, sample_host, sample_script,
+            ended_at=datetime.now(timezone.utc) - timedelta(seconds=600),
+        )
+        child = trigger_next_plan_sync(parent, db_session, respect_settle=True)
+        assert child is not None
+        assert child.status == "QUEUED"
+
+    def test_function_default_respects_no_window(
+        self, db_session, sample_device, sample_host, sample_script, monkeypatch,
+    ):
+        """函数默认 `respect_settle=False`：直接调用的旧调用方行为不变；
+        窗语义由调用点声明（即时路径/补偿 helper 传 True）。"""
+        from datetime import datetime, timezone
+        self._settle180(monkeypatch)
+        parent = self._seed_parent(db_session, sample_device, sample_host, sample_script,
+                                   ended_at=datetime.now(timezone.utc))
+        child = trigger_next_plan_sync(parent, db_session)
+        assert child is not None
+
+    def test_reconcile_helper_waits_within_window(
+        self, db_session, sample_device, sample_host, sample_script, monkeypatch, caplog,
+    ):
+        """#2755 评审修正：补偿 helper 也吃窗——否则 reconciler 的 60s tick 会在
+        窗内把即时路径刚跳过的 parent 立刻发出，settle 只剩一个 tick 的宽度
+        （有效窗 ≈60s 而非配置值）。反证：把 `reconcile_chain_trigger_sync` 末尾
+        的 `respect_settle=True` 退回默认，本测试即红。"""
+        import logging
+        from datetime import datetime, timezone
+        self._settle180(monkeypatch)
+        parent = self._seed_parent(db_session, sample_device, sample_host, sample_script,
+                                   ended_at=datetime.now(timezone.utc))
+        with caplog.at_level(logging.INFO):
+            child = reconcile_chain_trigger_sync(parent.id, db_session)
+        assert child is None
+        db_session.expire_all()
+        stored = db_session.get(PlanRun, parent.id)
+        assert stored.next_plan_triggered is False
+        assert db_session.query(PlanRun).filter(
+            PlanRun.parent_plan_run_id == parent.id).count() == 0
+        assert "plan_chain_trigger_settling" in caplog.text
+
+    def test_reconcile_helper_dispatches_past_window(
+        self, db_session, sample_device, sample_host, sample_script, monkeypatch,
+    ):
+        """过窗的老 parent 经补偿 helper 照常补发——「中断触发修复」语义零损失。"""
+        from datetime import datetime, timedelta, timezone
+        self._settle180(monkeypatch)
+        parent = self._seed_parent(
+            db_session, sample_device, sample_host, sample_script,
+            ended_at=datetime.now(timezone.utc) - timedelta(seconds=600),
+        )
+        child = reconcile_chain_trigger_sync(parent.id, db_session)
+        assert child is not None
+        assert child.status == "QUEUED"
+
+    def test_reconcile_helper_repairs_orphaned_flag_within_window_without_child(
+        self, db_session, sample_device, sample_host, sample_script, monkeypatch,
+    ):
+        """修复形态（flag=true 但无 child）在窗内：重置 flag 但**不立即补发**，
+        留给下一 tick 窗过后再发——不得借修复路径绕过窗。"""
+        from datetime import datetime, timezone
+        self._settle180(monkeypatch)
+        parent = self._seed_parent(db_session, sample_device, sample_host, sample_script,
+                                   ended_at=datetime.now(timezone.utc))
+        db_session.execute(
+            update(PlanRun).where(PlanRun.id == parent.id)
+            .values(next_plan_triggered=True)
+        )
+        db_session.commit()
+        child = reconcile_chain_trigger_sync(parent.id, db_session)
+        assert child is None
+        db_session.expire_all()
+        stored = db_session.get(PlanRun, parent.id)
+        assert stored.next_plan_triggered is False  # flag 已修复
+        assert db_session.query(PlanRun).filter(
+            PlanRun.parent_plan_run_id == parent.id).count() == 0  # 但未补发
+
+    def test_missing_ended_at_does_not_block(
+        self, db_session, sample_device, sample_host, sample_script, monkeypatch,
+    ):
+        self._settle180(monkeypatch)
+        parent = self._seed_parent(db_session, sample_device, sample_host, sample_script,
+                                   ended_at=None)
+        child = trigger_next_plan_sync(parent, db_session, respect_settle=True)
+        assert child is not None
+
+    def test_existing_child_returns_despite_window(
+        self, db_session, sample_device, sample_host, sample_script, monkeypatch,
+    ):
+        """幂等回放不吃窗：child 已存在时直接返回既有（settle 不得挡住回放）。"""
+        from datetime import datetime, timezone
+        self._settle180(monkeypatch)
+        parent = self._seed_parent(db_session, sample_device, sample_host, sample_script,
+                                   ended_at=datetime.now(timezone.utc))
+        child_plan = db_session.get(Plan, parent.plan_snapshot["plan"]["next_plan_id"])
+        existing = PlanRun(
+            plan_id=child_plan.id, status="QUEUED",
+            plan_snapshot=parent.plan_snapshot, run_type="CHAIN",
+            triggered_by="test", parent_plan_run_id=parent.id,
+            chain_index=(parent.chain_index or 0) + 1,
+        )
+        db_session.add(existing)
+        db_session.commit()
+        db_session.refresh(parent)
+        out = trigger_next_plan_sync(parent, db_session, respect_settle=True)
+        assert out is not None and out.id == existing.id

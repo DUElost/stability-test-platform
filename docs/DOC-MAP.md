@@ -1,6 +1,6 @@
 # 文档地图（Documentation Map）
 
-> **最后更新**：2026-09-06  
+> **最后更新**：2026-09-18  
 > **文档中心**：[`README.md`](./README.md)  
 > **待删/归档清单**：[`DOC-RETIREMENT.md`](./DOC-RETIREMENT.md)
 
@@ -8,6 +8,7 @@
 逐文件的描述型索引（设计 / 开发运维 / PRD·验收）已迁往 [hub README](./README.md)，按需查阅。
 冲突时以**代码与测试**为准。  
 根目录 [`../README.md`](../README.md) 保持精简；环境变量、测试禁区、执行协议细则在子文档。
+概念/关系「归谁定义」见 [`design/2026-semantic-ownership.md`](./design/2026-semantic-ownership.md)（Ownership Authority **only**，非内容宪法）。
 
 ---
 
@@ -96,7 +97,7 @@ operations/README.md → production-minimum-deployment-checklist.md
 | **Living 审查** | [`reviews/PLATFORM_LEDGER_AUDIT_2026-09-15.md`](./reviews/PLATFORM_LEDGER_AUDIT_2026-09-15.md) | **台账审计报告**（只读，基线 2026-09-15）：复核 8 份 `📌 [总表]` 台账 + #910/#1737/#1035 共 162 个 issue 引用；**核心结论**——逐项挂 issue 号的台账 **8 份零假闭环**（逐项状态核验 8/8 + 源码级抽验 3 份），而**仅给汇总计数的风险表出现 2 处登记过期**（#1515 R-01/R-02「已修未回写」，已由 PR #2102/#2117 更正为 2/1/6）；含 #1515 清单 11/11 复核、R10/R07 源码级抽验、#1737 五项验收复核（审计日工作已完成未关闭；**2026-09-16 已关闭**）、#1035 自杀条款「批次未定义」疑问、**方法论 6 条**与 3 次审计自查更正；**增量**：#1522 一条 issue 建议被正确拒绝（判据应验「现象是否消除」而非「建议是否被采纳」） |
 | **实现规格** | [`reviews/IMPLEMENTATION_SPEC_PROMPT.md`](./reviews/IMPLEMENTATION_SPEC_PROMPT.md) | 阶段 3 重构实现规格——Agent 工作提示词（产出 device-log-event implementation spec） |
 | **设计** | [`design/2026-08-27-platform-ai-assistant.md`](./design/2026-08-27-platform-ai-assistant.md) | 平台 AI 助手设计（组件职责/轮次时序/动作状态机/权限隔离矩阵/安全边界/部署观测；ADR-0031 配套） |
-| **架构 ADR** | [`adr/ADR-0033-tool-kit-ecosystem-integration.md`](./adr/ADR-0033-tool-kit-ecosystem-integration.md) | 外部工具统一接入契约规范与包管理解耦模型（三层宿主/Tool Contract 退出码分层/Manifest 发布格式×DB catalog 唯一权威/防腐适配器/与 ADR-0032 权威分家；D0·D3 权威即刻生效、D2 按族准入、包存储条件落地、legacy 例外登记；**落地状态：未落地**；Accepted v1.2；#745） |
+| **架构 ADR** | [`adr/ADR-0033-tool-kit-ecosystem-integration.md`](./adr/ADR-0033-tool-kit-ecosystem-integration.md) | 外部工具统一接入契约规范与包管理解耦模型（三层宿主/Tool Contract 退出码分层/Manifest 发布格式×DB catalog 唯一权威/防腐适配器/与 ADR-0032 权威分家；D0·D3 权威即刻生效、D2 按族准入、包存储条件落地、legacy 例外登记；**落地状态：未落地**；Accepted v1.3（D1 flash 补登记）；#745/#2546） |
 | **架构 ADR** | [`adr/ADR-0034-multi-harness-execution-contract.md`](./adr/ADR-0034-multi-harness-execution-contract.md) | 多 Harness 并行执行契约与执行登记（选择权原则/三维状态模型/Registry 非调度器/overlap 真值表/drift gate 非 merge queue/G2 真身+薄壳/Role=元数据+扩展点（v1.7 收敛，v1.8 缺省归一化+再开启条件）/并发上限反转——移除 ≈2-3、守对象重锚在窗 Execution 规模与 reconcile 负载（v1.9）/附录 A 增补 dsh web 实测——根级基线✅+scoped 触碰动态✅、静态 patch disabled 与运行时矛盾（v1.10）/dsh web 转正回填——Registry CLI 全周期 dogfood 通过 #1256→PR #1291、0.1.5 复测一致（v1.11）/CodeBuddy CLI/IDE 分立——附录 A 原单行实为 CLI 结论、2026-09-11 人工补测 IDE 得 Q1=否/Q2=是/Q3=一次（Zcode 同形态，与 CLI 相反）、照 Cursor 先例拆两行并校正 CLI 版本 2.149.0、补 IDE 版本 4.11.3（v1.12）；**Accepted v1.12**；两轮八源评审综合见 `reviews/REVIEW_ADR0034_MULTI_HARNESS_2026-09-06_synthesis.md`） |
 | **架构 ADR** | [`adr/ADR-0035-agent-host-identity.md`](./adr/ADR-0035-agent-host-identity.md) | Agent 主机身份与凭据体系（决策四段化：§3 当前状态=接受共享 AGENT_SECRET+威胁模型与冒充面收窄 / §4 目标形态=A 每主机凭据 / §5 迁移路径=C 注册质询+实施骨架 / §6 升级触发条件+§6.1 检测来源（信号来源/检出方/命中后第一步）；四方案对比；ADR Accepted ≠ 实施已启动；两份竞争提案合并为单一权威；R02-R01/#906；**Accepted v1.2**） |
 | **架构 ADR** | [`adr/ADR-0036-notification-delivery-semantics.md`](./adr/ADR-0036-notification-delivery-semantics.md) | 通知投递语义契约（How delivery behaves：`ACCEPTED`=渠道接受请求≠DELIVERED/三态失败/强制 deadline/SAQ 唯一重试 owner+投递级幂等成对/at-least-once+每通道去重键/投递事实落 DB/同步仅限连通性测试；协议码与 retry 参数不入正文；挂起送达回执与入站契约；**Accepted v1.0（2026-09-11 定稿）**；与 ADR-0011 分工 What vs How；R11 #1117/#1120/#1122） |
@@ -107,6 +108,7 @@ operations/README.md → production-minimum-deployment-checklist.md
 | **架构 ADR** | [`adr/ADR-0047-db-pool-and-connection-capacity.md`](./adr/ADR-0047-db-pool-and-connection-capacity.md) | 控制面 DB 连接池与 PostgreSQL `max_connections` 的容量取向（#703 第 ② 面）：单进程两份池（sync+async 各 30+60）峰值 180 vs 部署配置 100、`pool_timeout` 生产未设=SQLAlchemy 默认 30s。**Proposed v1.0**（2026-09-18 起草，待 owner 裁决 D1–D6；D1 总量不变量是否进门禁是主判据，D4 决定是否引入 pgbouncer 及其对 `stability_db_pool_*` 指标语义的连带改写；裁决前需先采 #2571 三条序列的分布基线） | 
 | **执行契约** | [`development/ai/execution-contract.md`](./development/ai/execution-contract.md)（+[规范附录](./development/ai/execution-contract-annex.md)） | AI Execution Contract 唯一权威源（Registry 协议/三维状态与 transition table/scope 谓词与 overlap 判据/test_impact/字段封闭性/实现与契约先后纪律；**Living v1.13**：§3.4 增「空 issue 集必须显性」（declare 输出独立 [WARN]，撤掉被忽略的行尾 hint；#2729）（v1.13）/ 契约分层——细则迁附录、正文预算收紧（v1.12）/ §2.1 命令清单以 `--help` 为准 + §3.3 `update --all`（v1.11）/ integration 缓存失效 `landed` + 僵尸候选两类对齐 + derived 归属前提（v1.10）/ 僵尸候选 `closed-unmerged`（v1.9）/ 决策实体唯一性 + 决策类必须 `--issue`（v1.8）/ 并发上限反转（v1.7）；附录承载写入协议细则、drift 豁免清单、已满足的启动判据与过渡条款、v1.1–v1.8 明细，与正文同版本演进、冲突以正文为准；ADR-0034 P0a 交付） |
 | **设计** | [`design/2026-09-external-tools-integration-and-package-architecture.md`](./design/2026-09-external-tools-integration-and-package-architecture.md) | 外部工具统一接入架构与包管理实施计划（ADR-0033 配套：协议定义与 §2.5 双轨衔接/§3.3 注册流与门禁分工/NFS 布局/Agent 缓存/去重+专项适配器/三阶段排期） |
+| **设计** | [`design/2026-semantic-ownership.md`](./design/2026-semantic-ownership.md) | 跨域语义归属索引（Ownership Authority only；Accepted ADR 覆盖框架；B/C 核心能力深嵌 + A/D 编排外置；X1/X2/X3 + S15 表内判据；**Draft**，#2546 / PR #2751） |
 | **Sprint 快照** | [`archive/sprints/`](./archive/sprints/) | 已归档一次性任务单 |
 | **跟踪** | GitHub Issues | 进行中、审查结论 |
 
@@ -115,6 +117,7 @@ operations/README.md → production-minimum-deployment-checklist.md
 ## 权威 vs 归档
 
 - **权威**：本树 `design/` · `development/` · `operations/` · `adr/` · `prd/` · `acceptance/`，及根 `AGENTS.md` / `CLAUDE.md` 摘要  
+- **概念/关系 owner 索引**：[`design/2026-semantic-ownership.md`](./design/2026-semantic-ownership.md)（目录粒度仍由本页承担；**不**因该索引获得「以索引为准」的内容裁决权）
 - **全面审查指引**：`reviews/PROJECT_REVIEW_PLAN.md`（分区导航与覆盖清单；不是审查结果）
 - **Living 审查**：`reviews/` 其余文档（缺陷/DoD/落地顺序与轮次报告；不替代 `design/`）
 - **归档**：`archive/`（不新增规范）  

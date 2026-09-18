@@ -84,7 +84,7 @@ async def _post_aggregation_side_effects_async(
     )
 
     await db.commit()
-    await trigger_next_plan(run, db)
+    await trigger_next_plan(run, db, respect_settle=True)
     if should_trigger_dedup(run.status):
         await enqueue_dedup_terminal_async(run.id)
 
@@ -104,7 +104,7 @@ def _post_aggregation_side_effects_sync(
     )
 
     db.commit()
-    trigger_next_plan_sync(run, db)
+    trigger_next_plan_sync(run, db, respect_settle=True)
     if should_trigger_dedup(run.status):
         enqueue_dedup_terminal_sync(run.id)
 

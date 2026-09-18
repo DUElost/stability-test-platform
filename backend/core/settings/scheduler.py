@@ -57,6 +57,11 @@ class SchedulerSettings(DomainSettings):
     queue_depth_poll_interval_seconds: int = 15
     precheck_reaper_interval_seconds: int = 45
     chain_reconciler_interval_seconds: int = 60
+    # #2755：链触发的最小稳定窗——父 run 终态后至少隔这么多秒才触发下一段
+    # （设备从 monkey 浸泡/teardown 收敛需要时间；r431 实测 2s 间隔 init
+    # 失败 40.6% vs 2.7h 间隔 4.6%）。窗锚定 ended_at，即时路径与 reconciler
+    # 补偿路径都过同一道窗，故实际触发时刻 ≈ settle + (0~60s)。0 = 关闭（回退旧行为）。
+    chain_trigger_settle_seconds: int = 180
     # 一天扫一次 expired jti 即可（refresh 黑名单只随主动登出增长；见原注释）
     revoked_token_cleanup_interval_seconds: int = 24 * 3600
     auto_archive_poll_interval_seconds: int = 120
@@ -96,6 +101,18 @@ class SchedulerSettings(DomainSettings):
     # 指标），不把「配错」伪装成「没事干」。
     plan_run_retention_batch_size: int = Field(default=100, ge=1)
     schedule_dedup_window_seconds: float = 60
+
+    # ── audit_log_cleanup：分层保留期（#2741 / ADR-0049，owner 裁决 2026-09-19）──
+    # security 180d（安全事件链，对齐 ADR-0020 六个月先例）/ business 90d（默认桶，
+    # 含 terminal_payload_conflict 爆发行——裁决明示不例外）/ session 30d（例行
+    # 会话心跳）。`*_DAYS=0` 与 PlanRun 家族同义（cutoff=now，该层全量到期）。
+    audit_log_session_retention_days: int = Field(default=30, ge=0)
+    audit_log_business_retention_days: int = Field(default=90, ge=0)
+    audit_log_security_retention_days: int = Field(default=180, ge=0)
+    # 单 tick 每层处理上限（工作量可预期的杠杆；无行锁窗口顾虑，见模块 docstring）。
+    audit_log_retention_batch_size: int = Field(default=5000, ge=1)
+    # sweep 周期；0 = 显式停用（app_scheduler 不注册该作业——事故取证期冻结裁剪）。
+    audit_log_retention_interval_seconds: int = Field(default=3600, ge=0)
 
 
 @lru_cache(maxsize=1)

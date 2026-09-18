@@ -461,6 +461,16 @@ retention_batch_size = Gauge(
     'Configured retention cleanup batch size (plan_run_retention_batch_size)',
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
+# #2741 / ADR-0049：audit_logs 分层保留期裁剪计数（按层分桶：session/business/
+# security）。与上面的 stability_retention_* 家族（PlanRun）平行——两族判据不同
+# （行锁窗口 vs 纯时间分层），不共用指标。裁剪的治理事实另落一条汇总审计
+# （audit_retention_pruned，见 backend/scheduler/audit_log_cleanup.py）。
+audit_retention_pruned_total = Counter(
+    'stability_audit_retention_pruned_total',
+    'audit_logs rows pruned by layered retention, by layer (#2741)',
+    ['layer'],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
 # #2316：孤儿 DLE 清理的**跳过**计数（按原因分桶）。被跳过的行既不删行也不推进批头，
 # 而它们恒为最老 → 积压到批大小后 `purged` 恒为 0；此前只有 warning，积压不可观测。
 # 取值：root_unset / path_invalid / purge_failed（与 `dle_orphan_skipped_*` 日志锚点同名）。

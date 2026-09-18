@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from backend.core.job_timeout_config import HOST_HEARTBEAT_TIMEOUT_SECONDS
+from backend.core.settings.scheduler import get_scheduler_settings
 from backend.models.host import Device
 from backend.models.job import JobInstance
 from backend.models.plan import Plan
@@ -50,6 +51,22 @@ def _aware_utc(value: datetime | None) -> datetime | None:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+
+def _settle_wait_left(parent: PlanRun, now: datetime) -> float:
+    """#2755：链触发的最小稳定窗剩余秒数（<=0 表示可触发）。
+
+    父 run `ended_at` 缺失按 0（无法度量等待，不阻断——历史行为）。窗锚定在
+    ``parent.ended_at`` 上，因此**与调用路径无关**：即时路径与补偿路径（reconciler /
+    post-completion / recycler）都过同一道窗——补偿路径若不吃窗，60s tick 会把窗内
+    的 parent 立刻发出，窗就只剩一个 tick 的宽度（#2755 评审发现）。过了窗的
+    老 parent 窗口已自然耗尽，补偿语义零损失。
+    """
+    settle = get_scheduler_settings().chain_trigger_settle_seconds
+    if settle <= 0 or parent.ended_at is None:
+        return 0.0
+    return settle - (now - _aware_utc(parent.ended_at)).total_seconds()
 
 
 def _select_chain_devices(
@@ -242,8 +259,16 @@ def _rollback_chain_trigger_sync(
 async def trigger_next_plan(
     plan_run: PlanRun,
     db: AsyncSession,
+    *,
+    respect_settle: bool = False,
+    now: datetime | None = None,
 ) -> PlanRun | None:
-    """Create child Run + parent flag atomically; enqueue its gate post-commit."""
+    """Create child Run + parent flag atomically; enqueue its gate post-commit.
+
+    #2755：`respect_settle=True` 由即时路径（job 终态副作用）与补偿路径
+    （`reconcile_chain_trigger_sync`）传入——窗锚定 `parent.ended_at`，两条路径
+    过同一道窗；窗内跳过后由 reconciler 下一 tick 重试，窗过即自然放行。
+    """
     parent = (await db.execute(
         select(PlanRun)
         .where(PlanRun.id == plan_run.id)
@@ -270,6 +295,16 @@ async def trigger_next_plan(
         return existing
     if parent.next_plan_triggered:
         return None
+
+    if respect_settle:
+        left = _settle_wait_left(parent, now or datetime.now(timezone.utc))
+        if left > 0:
+            logger.info(
+                "plan_chain_trigger_settling parent=%d left_seconds=%d "
+                "(chain reconciler will fire next tick)",
+                parent.id, int(left),
+            )
+            return None
 
     # #2648：以父段 job 终态为主判据（COMPLETED 无条件入列），瞬时 device.status
     # 仅对非 COMPLETED job 兜底——teardown 后 BUSY→ONLINE 回写滞后不再踢出健康设备。
@@ -329,8 +364,17 @@ async def trigger_next_plan(
 def trigger_next_plan_sync(
     plan_run: PlanRun,
     db: Session,
+    *,
+    respect_settle: bool = False,
+    now: datetime | None = None,
 ) -> PlanRun | None:
-    """Synchronous atomic child creation + post-commit gate enqueue."""
+    """Synchronous atomic child creation + post-commit gate enqueue.
+
+    #2755：`respect_settle=True` 由即时路径（job 终态副作用）与补偿路径
+    （`reconcile_chain_trigger_sync`）传入——父 run 终态不足 settle 窗时**跳过
+    本轮**（不设 flag、不建 child），reconciler 下一 tick 重试；窗锚定
+    `parent.ended_at`，过窗后两条路径都自然放行。
+    """
     parent = db.execute(
         select(PlanRun)
         .where(PlanRun.id == plan_run.id)
@@ -357,6 +401,16 @@ def trigger_next_plan_sync(
         return existing
     if parent.next_plan_triggered:
         return None
+
+    if respect_settle:
+        left = _settle_wait_left(parent, now or datetime.now(timezone.utc))
+        if left > 0:
+            logger.info(
+                "plan_chain_trigger_settling parent=%d left_seconds=%d "
+                "(chain reconciler will fire next tick)",
+                parent.id, int(left),
+            )
+            return None
 
     # #2648：同 async 路径——父段 job 终态为主判据
     rows = db.execute(
@@ -423,6 +477,10 @@ def reconcile_chain_trigger_sync(
     A crash after the CAS commit but before child creation leaves
     ``next_plan_triggered=true`` with no child.  Post-completion and recycler
     retries call this helper to reset that orphaned flag and dispatch again.
+
+    #2755：补发同样吃 settle 窗（``respect_settle=True``）。窗锚定 ``ended_at``，
+    过窗的老 parent 不受影响——但若不吃窗，60s tick 会在窗内把即时路径刚跳过的
+    parent 立刻发出，settle 只剩一个 tick 的宽度。窗内的补发由下一 tick 自然重试。
     """
     parent = db.execute(
         select(PlanRun)
@@ -449,4 +507,4 @@ def reconcile_chain_trigger_sync(
         db.commit()
         db.refresh(parent)
 
-    return trigger_next_plan_sync(parent, db)
+    return trigger_next_plan_sync(parent, db, respect_settle=True)

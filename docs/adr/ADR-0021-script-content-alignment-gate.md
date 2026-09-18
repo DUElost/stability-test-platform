@@ -294,7 +294,7 @@ abort 不只是为热更新服务——它是产品独立价值的运维功能�
 
 - ADR-0018 — Watcher 子系统主线（Job 终态聚合复用）
 - ADR-0019 — Device Lease v2（abort 协议依赖 lease 释放）
-- ADR-0020 — Plan-Step 一次性切换（plan_snapshot.script_meta 作为权威）
+- ADR-0020 — Plan-Step 一次性切换（`plan_snapshot.script_meta` 为派发时刻自 D4 冻结的副本，用于追溯与幂等；快照隔离见 ADR-0020，**非独立权威源**；#2546 X1）
 - `backend/services/host_updater.py` — hot-update 既有实现
 - `backend/realtime/socketio_server.py` — SocketIO 服务端，本 ADR 在此扩展 RPC 能力
 - `backend/agent/ws_client.py` — Agent SocketIO 客户端，本 ADR 在此注册 verify_scripts handler
