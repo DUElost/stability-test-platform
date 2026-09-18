@@ -394,3 +394,29 @@ tests:
                 #2252 后仍出现「连败达上限被放弃」的目录：检查该目录 unievent_info 是否
                 连元数据都拉不回（设备侧损坏/权限），或 du 探测失手回落整拉后仍恒超时。
                 agent 日志 grep unisoc_reconciler_dir_abandoned 取目录名与 attempts。
+
+  # ---- #2632 PG「猜 schema」指纹（textfile 指标，生产者 tools/dev/pg_error_guard.py）----
+  # 与 #735 场景同款构造：`stp_pg_guard_last_run` 喂巨大值，让 `time() - last_run > 3600`
+  # 与 `absent()` 两条分支**恒不成立**——场景判别的就只剩「计数 ≥ 5」这一条，逐条阈值
+  # 变异（5 → 1e12）才能把本告警打红（test_promtool_gate_detects_per_rule_threshold_drift）。
+  - interval: 1m
+    input_series:
+    - series: stp_pg_schema_error_events
+      values: 6x40
+    - series: stp_pg_guard_last_run
+      values: 99999999999x40
+    alert_rule_test:
+    - eval_time: 5m
+      alertname: StabilityPgSchemaGuessing
+      exp_alerts: []
+    - eval_time: 15m
+      alertname: StabilityPgSchemaGuessing
+      exp_alerts:
+      - exp_labels:
+          severity: warning
+        exp_annotations:
+          summary: 有人在对生产库跑「猜出来的 schema」（或采集器停摆）
+          description: PG 日志最近一小时内出现 ≥5 条 schema 猜测指纹（猜表名 / 猜列 / 枚举值大小写）——这类错误**正常路径不应产生**（2026-09-16 的现场是约
+            30 条聚集：表名两个方向都猜错、枚举用大写、引用当时未落地的列）。真正的问题是无留痕：若哪次猜对了，就是一次不留审计痕迹的生产读写。先按 docs/operations/production-diagnostics.md
+            的只读口径复核（SOP 首步已改为先查 information_schema 求证表名/列名/枚举），再用 pg_stat_activity 的 application_name 归因来源；后半段条件（last_run
+            超 1 小时 / 指标消失）表示采集器停摆——那时计数恒 0，看起来像「没人在猜」。
