@@ -1,7 +1,7 @@
 # ADR-0033：外部工具统一接入契约规范与包管理解耦模型（Tool-Kit Ecosystem Integration）
 
-- 状态：**Accepted（v1.3）**
-- 落地状态：**未落地**（Phase 2/3 零启动，2026-09-10 核验；D0/D3 权威已生效——见 §5）
+- 状态：**Accepted（v1.4）**
+- 落地状态：**未落地**（Phase 2/3 零代码；2026-09-18 核验 Phase 2 控制面样板**阻塞**——见 §4 Phase 2 注与 [`2026-09-18-adr0033-phase2-unisoc-merge-blocker.md`](../notes/architecture/2026-09-18-adr0033-phase2-unisoc-merge-blocker.md)；D0/D3 权威已生效——见 §5）
 - 优先级：P1
 - 目标里程碑：M7
 - 日期：2026-09-03
@@ -19,6 +19,7 @@
 | v1.1 | 2026-09-04 | 三项合入前必答裁定：与 ADR-0032 权威分家（§1.1）、契约翻译在 Agent 边缘 + 退出码命名空间分层（设计 §2.5）、DB script catalog 唯一运行时权威（D3）（#846） |
 | v1.2 | 2026-09-10 | **收窄与登记**：D0/D3 权威即刻生效；D2 降为「新工具族准入、按族采用」；包存储改为条件落地（三条触发条件）；legacy 例外（展锐三工具族 + 私有路径键）显式登记；未落地状态与 §4 排期作废显式化（§5，#1237） |
 | v1.3 | 2026-09-18 | **D1 刷机补登记**：Tier 3 典型工具增列 `flash_firmware` / `flash_preflight`；原厂 flashtool 不入仓；提权面仍归 ADR-0037 D5（#2546 F-5） |
+| v1.4 | 2026-09-18 | **Phase 2 阻塞登记**（非决策变更）：控制面 unisoc/`Scan-Result-GT` `DedupMergeEngine` 样板与 ADR-0032 D3「同一 merge 工具」+ GT 仅 `-d` CLI 冲突；停做适配器，待 A/B/C 出口（#745） |
 
 ---
 
@@ -145,6 +146,7 @@ flowchart TD
 - **Phase 1（近期·止血与标准）**：固化本文档与详细实施设计；阻断主仓新脚本源码拷入；执行 Issue #735（含先修复退役诊断工具自身崩溃）退役 47 个历史零引用活跃版本；
 - **Phase 2（中期·标杆样板打样）**：
   - 控制面样板：在 ADR-0032 已建的 per-platform merge 循环内，为 unisoc 分区接入第一个 `DedupMergeEngine` 实现（展锐 `Scan-Result-GT`，#463 P2）；
+  - **2026-09-18 阻塞（未拍板前零适配器代码）**：`Scan-Result-GT` 公开 CLI 仅 `scan_result.py -d`（Agent 主机汇总，已由 `UnisocScanRunner` 使用）；控制面 merge 对两平台仍走同一 `start_log_scan -merge_files_list`（ADR-0032 D3 / B3）。将 GT 直接挂进 merge 循环与 D3 及工具契约均冲突——出口 A/B/C 与证据见 [`2026-09-18-adr0033-phase2-unisoc-merge-blocker.md`](../notes/architecture/2026-09-18-adr0033-phase2-unisoc-merge-blocker.md)；
   - 设备端样板：GPU / 开关机 / 休眠唤醒（#462）按照统一 Tool Contract 模板化接入（依赖工具包缓存机制就绪，排期见设计文档 §5）；
   - 实现工具包本地校验解压缓存机制；
 - **Phase 3（远期·存量归一）**：存量 MTK 扫描与 Jira 提单迁移至适配器体系（重构而非行为变更，验收 = 与 ADR-0032 行为等价）；在 Web 管理面暴露外部工具管理面板。
@@ -191,7 +193,7 @@ ADR-0033 自 2026-09-03 Accepted 起至 2026-09-10 **无任何落地提交**（�
 
 ### 5.5 裁定四：未落地状态显式化（决策效力与实现进度分离）
 
-- **落地状态：未落地**（Phase 2/3 零启动）；D0/D3 权威已生效，D2 按族准入；
+- **落地状态：未落地**（Phase 2/3 零代码；Phase 2 控制面样板 2026-09-18 起登记为**阻塞**，见 §4 Phase 2 注）；D0/D3 权威已生效，D2 按族准入；
 - §4 的时间点作废为参考序，排期以 issue 为准；
 - **不因超期自动降级本 ADR 的决策效力**，反之也**不得因"纸面 Accepted"当作已落地基线**——索引面（`docs/adr/README.md`、`docs/DOC-MAP.md`、M7 看板）与本文头部"落地状态"行须同步体现这一区分。
 
