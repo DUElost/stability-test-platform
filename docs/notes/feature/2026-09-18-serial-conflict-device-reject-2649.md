@@ -1,8 +1,7 @@
 # Agent Note — serial 冲突设备按设备拒绝：prepare 剔除 + 准入物化 FAILED（#2649）
 
-- **Issue**: #2649
-- **Status**: Done
-- **Class**: feature
+Status: implemented
+Class: feature
 
 ## Decision
 
