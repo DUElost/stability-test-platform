@@ -293,6 +293,7 @@
 | `SSH_CREDENTIALS_FERNET_KEY` | `` | ✅ | 运行时 | `backend/core/ssh_security.py:374` |
 | `STP_ADB_AUTO_REPAIR` | `0` | ✅ | 运行时 | `backend/agent/settings.py:211` |
 | `STP_ADB_REPAIR_COOLDOWN_SECONDS` | `300` | ✅ | 运行时 | `backend/agent/settings.py:212` |
+| `STP_DEVICE_DISK_SAMPLE_INTERVAL_SECONDS` | `300` | ✅ | 运行时 | `backend/agent/settings.py:214` |
 | `STP_ADMIN_PASSWORD` | `` | ✅ | 运行时 | `backend/scripts/audit_stage_a_env.py:90` |
 | `STP_ADMIN_USER` | `admin` | ✅ | 运行时 | `backend/scripts/audit_stage_a_env.py:95` |
 | `STP_ADMISSION_AGING_MAX_BOOST` | `5` | ✅ | 运行时 | `backend/services/admission_pump.py:70` |

@@ -97,6 +97,9 @@ class HeartbeatThread:
         self._thread: Optional[threading.Thread] = None
         self._latest_devices: List[Dict[str, Any]] = []
         self._last_adb_connected_by_serial: Dict[str, bool] = {}
+        # #2757：设备 /data 容量按 serial 缓存（最近一次采样值），每拍心跳都带
+        self._disk_by_serial: Dict[str, Dict[str, Optional[int]]] = {}
+        self._next_disk_sample_monotonic: float = 0.0
         self._pending_reconnected_serials: List[str] = []
         self._adb_repair_cooldown: float = _hb.stp_adb_repair_cooldown_seconds
         # 初始化为 -cooldown：fresh 进程的 time.monotonic() 可能小于冷却值
@@ -236,6 +239,55 @@ class HeartbeatThread:
                     infos.append({"adb_state": "error", "adb_connected": False})
             return infos
 
+    def _maybe_sample_disk(
+        self, discovered: List[Dict[str, Any]], settings: Optional[Any],
+    ) -> None:
+        """#2757：设备 ``/data`` 容量低频采样（时间门控 + 按 serial 缓存）。
+
+        采集频率与心跳频率解耦——``STP_DEVICE_DISK_SAMPLE_INTERVAL_SECONDS``
+        （默认 300s，0/负=关闭）节流；缓存值每拍随 payload 上送（控制面
+        ``_update_if_not_none`` 幂等更新）。589 台 fleet 规模下 per-device
+        ``df`` 必须低频，且只探测 ``adb_state=device`` 的设备。settings 读取
+        失败（#2279 降级为 None）＝ 本拍不采样，心跳照常。
+        """
+        if settings is None:
+            return
+        interval = getattr(
+            settings, "stp_device_disk_sample_interval_seconds", 0,
+        ) or 0
+        if interval <= 0:
+            return
+        now = time.monotonic()
+        if now < self._next_disk_sample_monotonic:
+            return
+        self._next_disk_sample_monotonic = now + interval
+        probe_targets = [
+            dev["serial"] for dev in discovered
+            if dev.get("adb_state") == "device"
+        ]
+        if not probe_targets:
+            return
+        with ThreadPoolExecutor(
+            max_workers=min(len(probe_targets), _DEVICE_PROBE_MAX_WORKERS),
+            thread_name_prefix="hb-disk",
+        ) as pool:
+            futures = {
+                serial: pool.submit(
+                    device_discovery.collect_device_disk, self._adb_path, serial,
+                )
+                for serial in probe_targets
+            }
+            for serial, future in futures.items():
+                try:
+                    self._disk_by_serial[serial] = future.result()
+                except Exception:
+                    logger.debug(
+                        "device_disk_sample_failed serial=%s", serial, exc_info=True,
+                    )
+        logger.info(
+            "device_disk_sampled devices=%d interval=%ss", len(probe_targets), interval,
+        )
+
     def _read_heartbeat_settings_safe(self):
         """读 `HeartbeatSettings`；失败返回 `None` 并记 ERROR 栈（**不抛**）——#2279。
 
@@ -277,9 +329,11 @@ class HeartbeatThread:
         try:
             discovered = device_discovery.discover_devices(self._adb_path)
             infos = self._collect_device_infos(discovered)
+            self._maybe_sample_disk(discovered, heartbeat_settings)
             for idx, dev in enumerate(discovered):
                 info = infos[idx]
                 discovered_serials.add(dev["serial"])
+                disk = self._disk_by_serial.get(dev["serial"]) or {}
                 device_data = {
                     "serial": dev["serial"],
                     "model": dev.get("model"),
@@ -291,6 +345,9 @@ class HeartbeatThread:
                     "network_latency": info.get("network_latency"),
                     "build_display_id": info.get("build_display_id"),
                     "platform": info.get("platform"),
+                    # #2757：最近一次采样的 /data 容量（低频采样 + 缓存，每拍带上）
+                    "disk_total": disk.get("disk_total"),
+                    "disk_used": disk.get("disk_used"),
                 }
                 devices_list.append(device_data)
                 previous_connected = self._last_adb_connected_by_serial.get(dev["serial"])
