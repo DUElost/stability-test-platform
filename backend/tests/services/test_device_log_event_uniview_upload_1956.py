@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from backend.api.routes import agent_api
+from backend.services import agent_device_log_events
 from backend.services.device_log_event import resolve_initial_upload_state
 
 
@@ -34,13 +34,13 @@ def test_mtk_semantics_unchanged():
 
 
 def test_all_ingest_sites_use_the_helper():
-    """防线：三处 DLE 落库点都必须接入归一（创建 / 预分配 id 重试 / 更新分支）。
+    """防线：三处 DLE 落库点（``agent_device_log_events``）都必须接入归一（创建 / 预分配 id 重试 / 更新分支）。
 
     #2025 的反例：更新分支原先写裸 `row.state = ev.state`，而此前那条
     `"state=ev.state" not in src` 因多了 `row.` 前缀与空格**抓不到它**——
     字面断言必须覆盖赋值形态本身，否则守的是「措辞」不是「行为」。
     """
-    src = Path(agent_api.__file__).read_text(encoding="utf-8")
+    src = Path(agent_device_log_events.__file__).read_text(encoding="utf-8")
     # 创建两处：直接以归一值构造模型
     assert src.count("state=resolve_initial_upload_state(ev.event_type, ev.state)") == 2
     # 更新一处：先归一为 target_state，再做迁移校验与赋值（#2025）

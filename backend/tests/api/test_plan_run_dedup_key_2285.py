@@ -7,7 +7,10 @@
 
 from __future__ import annotations
 
-from backend.api.routes.plan_runs import _aee_event_dedup_key, _uniview_dedup_key
+from backend.services.plan_run_watcher_summary import (
+    _aee_event_dedup_key,
+    _uniview_dedup_key,
+)
 
 _DIR = "/srv/aee/NE.103000003"
 

@@ -53,8 +53,35 @@ def _wait_terminal(run_id: str, timeout: float = 10.0) -> dict:
     return RunConsole.instance().status(run_id) or {}
 
 
+def _wait_running(rc, run_id: str, timeout: float = 5.0) -> None:
+    """等 run **真的进入 RUNNING**（有界轮询）。
+
+    原先这些位置写的是「睡 0.3s 等它确实跑起来」：把「进程起来了」交给固定
+    0.3s —— 机器忙时（夜间 backend-test 尤其）不够就变成随机红。同族判据与 #2577 一致：
+    用**可观测条件 + 上界**代替真实时间窗；超时即 fail 并带上当前状态，便于下次定位。
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        st = rc.status(run_id)
+        if st and st.get("status") == "RUNNING":
+            return
+        time.sleep(0.02)
+    pytest.fail(f"run {run_id} 未在 {timeout}s 内进入 RUNNING：{rc.status(run_id)!r}")
+
+
 def _py(code: str) -> list:
     return [sys.executable, "-c", code]
+
+
+def test_wait_running_fails_loudly_when_never_running(tmp_path):
+    """自证（#2577 同族）：有界轮询的**上界**必须真的会响。
+
+    否则「把 sleep(0.3) 换成 _wait_running」就只是换了个名字的空转——条件永远不满足
+    时测试会一路往下跑，竞争照旧。这里用一个不存在的 run id 触发超时路径。
+    """
+    rc = _configure(tmp_path, lambda *a, **k: None)
+    with pytest.raises(pytest.fail.Exception):
+        _wait_running(rc, "con-does-not-exist", timeout=0.2)
 
 
 def test_streams_and_completes_success(tmp_path, emit_capture):
@@ -161,8 +188,7 @@ def test_cancel_running(tmp_path, emit_capture):
         run_key="k3",
         cmd=_py("import time\nfor i in range(100):\n  print(i)\n  time.sleep(0.1)"),
     )
-    # 等它确实跑起来产出几行
-    time.sleep(0.3)
+    _wait_running(rc, run_id)
     assert rc.cancel(run_id) is True
     st = _wait_terminal(run_id)
     assert st["status"] == "CANCELED"
@@ -205,7 +231,7 @@ def test_cancel_kills_descendants_ignoring_sigterm(tmp_path, emit_capture):
         run_key="kg",
         cmd=_spawn_parent_exits_first_cmd(grandchild_code),
     )
-    time.sleep(0.3)  # 等 run 起来（parent 还活着，pgid 已留存）
+    _wait_running(rc, run_id)  # parent 仍活着且 pgid 已留存
     assert rc.cancel(run_id) is True
     st = _wait_terminal(run_id, timeout=15.0)
     assert st["status"] == "CANCELED"
@@ -224,7 +250,7 @@ def test_start_captures_pgid_for_late_cancel(tmp_path, emit_capture):
         run_key="kpg",
         cmd=_py("import time\nfor i in range(100):\n  print(i)\n  time.sleep(0.1)"),
     )
-    time.sleep(0.3)
+    _wait_running(rc, run_id)
     run = rc._runs.get(run_id)
     assert run is not None and run._pgid is not None
     if hasattr(os, "killpg"):
@@ -259,7 +285,7 @@ def test_shutdown_cancels_inflight(tmp_path, emit_capture):
         run_key="k-shutdown",
         cmd=_py("import time\nfor i in range(100):\n  print(i)\n  time.sleep(0.1)"),
     )
-    time.sleep(0.3)  # 确实跑起来
+    _wait_running(rc, run_id)
     rc.shutdown()
     st = _wait_terminal(run_id)
     assert st["status"] == "CANCELED"
@@ -285,7 +311,7 @@ def test_shutdown_idempotent(tmp_path, emit_capture):
         run_key="k-idem",
         cmd=_py("import time\nfor i in range(100):\n  print(i)\n  time.sleep(0.1)"),
     )
-    time.sleep(0.3)
+    _wait_running(rc, run_id)
     rc.shutdown()
     rc.shutdown()  # 二次 shutdown 应安全
     st = _wait_terminal(run_id)

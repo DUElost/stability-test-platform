@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
-from backend.api.routes.plan_runs import (
+from backend.services.plan_run_devices import (
     _COORDINATOR_HEARTBEAT_TIMEOUT_SECONDS,
     _running_heartbeat_deadline,
 )
