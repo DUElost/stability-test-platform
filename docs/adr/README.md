@@ -28,10 +28,11 @@
 # ADR-xxxx: 标题
 - 状态：Proposed | Accepted | Superseded | Deprecated
 - 优先级：P0 | P1 | P2（Proposed 建议必填）
-- 目标里程碑：M1 | M2 | M3（Proposed 建议必填）
+- 目标里程碑：M1 | M2 | M3 | M4 | M5 | M6 | M7（Proposed 建议必填）
 - 日期：YYYY-MM-DD
 - 决策者：架构组/研发组
 - 标签：调度, 数据库, 安全
+- 归属域：semantic-ownership <key>（可选；触碰/新建时补；key 见 docs/design/2026-semantic-ownership.md）
 
 ## 背景
 
@@ -45,6 +46,9 @@
 
 ## 关联实现/文档
 ```
+
+> `归属域` 字段**触碰即补**，不做一次性全库补齐。该字段指向的是
+> [语义归属索引](../design/2026-semantic-ownership.md) 的表行 key，**不是**把内容裁决权交给索引。
 
 ## 当前 ADR 清单
 
