@@ -60,6 +60,7 @@ if __name__ == "__main__" and __package__ is None:
     from agent.registry.local_db import LocalDB
     from agent.registry.patrol_checkpoint_store import PatrolCycleCheckpointStore
     from agent.registry.script_registry import ScriptRegistry
+    from agent.scan_runner import ScanRunner
     from agent.step_trace_uploader import StepTraceUploader
     from agent.socketio_client import AgentSocketIOClient
 else:
@@ -105,6 +106,7 @@ else:
     from .registry.local_db import LocalDB
     from .registry.patrol_checkpoint_store import PatrolCycleCheckpointStore
     from .registry.script_registry import ScriptRegistry
+    from .scan_runner import ScanRunner
     from .step_trace_uploader import StepTraceUploader
     from .socketio_client import AgentSocketIOClient
 
@@ -380,6 +382,8 @@ def main() -> None:
             # #762/#742: 终态 outbox 死信行数（distinct 卡死行口径；事件计数见 drainer
             # snapshot 的 conflicts_retained_total，勿当积压 gauge）。
             "terminal_outbox_dead_letter_total": local_db.count_terminal_dead_letters(),
+            # #739 面②/#2188 D 步：分片登记失败（半交付）进程级累计，重启清零。
+            "scan_shard_register_failure_total": ScanRunner.shard_register_failure_total(),
         },
         # ADR-0025 Sprint 2: 上报归档指标到 extra['archive']（归档禁用时回调返回 None）
         get_archive_metrics=collect_archive_heartbeat_metrics,
