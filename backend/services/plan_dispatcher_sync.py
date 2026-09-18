@@ -696,10 +696,7 @@ def materialize_serial_rejected_jobs(db: Session, pr: PlanRun) -> int:
     reason = "序列号冲突：serial 为占位/重复值（跨 host 争抢同一序列号），设备被拒绝执行"
     # pipeline_def NOT NULL——与正常 job 同源于 run 快照（该 job 永不被 claim，
     # 仅作为结果列表里的 Fail 呈现载体）。
-    from backend.services.plan_dispatcher_core import (
-        build_lifecycle_from_snapshot,
-    )
-    lifecycle = build_lifecycle_from_snapshot(pr.plan_snapshot)
+    lifecycle = _build_lifecycle_from_snapshot(pr.plan_snapshot)
     pipeline_def = {"lifecycle": lifecycle}
     for e in rejected:
         db.add(JobInstance(
