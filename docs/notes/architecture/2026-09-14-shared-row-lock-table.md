@@ -57,6 +57,21 @@ Class: architecture
 > `WHERE id IN (...) ORDER BY id FOR UPDATE` 同序，因此批量不会新引入环路等待。
 > 回归钉子：`test_reconciler_phase2_commits_each_candidate_independently`（后序候选被行锁堵住时，
 > 前序候选必须已可读为终态）——它判的就是「有没有退化回尾部统一提交」这种直白放大。
+>
+> **⚠️ `#2635` 更正（2026-09-18）：上述「锁在每条候选提交时即释放」在 #2531 当时并不成立。**
+> `on_job_terminal` 的 `commit()` 只存在于 `_post_aggregation_side_effects_async` 的
+> `applied=True` 分支，而 `plan_run_aggregation` 要求 `terminal_job_count >= total_job_count`
+> 才 `applied` ⇒ **仅末位候选提交**。故从第 2 条候选起，同一事务在已持 `plan_run` 行锁的
+> 情况下再锁 job 行，实际锁序 `plan_run → job`，与本表 I2 基准**相反**（生产是一个 PlanRun
+> 挂多 job：60 host × ~17 device，故非末位候选是**常态**）。修复：在 `on_job_terminal`
+> 返回后**显式 `await db.commit()`**（见 `device_lease_reconciler.py` 该处注释），使
+> 「一候选一事务边界」真正成立，同时保住 #2531 的排空速率。
+>
+> **同一处的测试教训**：上述既有回归钉子因 seed 是「一 job 一 PlanRun」（`total=1`）而
+> **恒绿** —— 它走不到「非末位候选不 applied」的路径。新增
+> `test_reconciler_drain_lock_order_2635.py` 用生产形状（一 run 多 job、`total_job_count = len(jobs)`）
+> 且判**提交时机/锁释放**（而非最终状态，后者修复前后相同、无区分度）。
+> 本条自述此前与代码相反，即「**文档自述不能当作不变量成立的证据**」的又一实例。
 
 
 | 路径 | 顺序 | 位置 |

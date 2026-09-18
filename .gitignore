@@ -56,6 +56,10 @@ venv-wsl/
 .claude/*
 !.claude/settings.json
 !.claude/skills/
+# Codex / Cursor 等认 `.agents/skills`；真身仍在 `.claude/skills/`，此处只放行
+# symlink 薄适配（禁止再提交实体拷贝）。
+.agents/*
+!.agents/skills
 # One-off nested Claude plans are local session artifacts, not project rules.
 **/.claude/plan/
 # UI 原型归档（HTML/PNG 设计稿，非规范；本地保留，移出 git 跟踪）
