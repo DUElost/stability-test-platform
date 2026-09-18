@@ -62,6 +62,9 @@ class _FakeConn:
     def close(self):
         self.calls.append(("close", ""))
 
+    def invalidate(self):
+        self.calls.append(("invalidate", ""))
+
     # 便于断言的可读视图
     @property
     def stages(self) -> list[str]:
@@ -119,14 +122,22 @@ class TestElectionHappyPaths:
         # 没抢到锁就不该有 unlock，也不该有多余的 commit
         assert conn.stages == ["lock", "close"], conn.stages
 
-    def test_unlock_failure_still_closes(self, monkeypatch):
-        """释锁失败只记 debug——但连接必须归还，否则每轮 tick 漏一条连接。"""
+    def test_unlock_failure_invalidates_before_close(self, monkeypatch):
+        """#703 残留①：释锁失败必须**作废**连接再关，而不是原样回池。
+
+        原判据只钉 `stages[-1] == "close"`——它恰好把泄漏形态固化成了期望：
+        unlock 抛错时这条连接仍可能持锁，直接 close = 锁随连接被池吞走，此后
+        所有副本的同一 singleton job 永无 leader，且零告警。现在钉完整顺序：
+        unlock 失败（抛错，无第二次 commit）→ invalidate → 唯一的 close 出口。
+        """
         _pg_env(monkeypatch)
         conn = _FakeConn(fail_on="pg_advisory_unlock")
         monkeypatch.setattr(db_mod, "engine", _fake_engine(conn))
         with hold_scheduler_leadership("admission_pump") as leader:
             assert leader is True
-        assert conn.stages[-1] == "close", conn.stages
+        assert conn.stages == [
+            "lock", "commit", "unlock", "invalidate", "close",
+        ], conn.stages
 
 
 class TestTransactionDoesNotOutliveTheAcquire:

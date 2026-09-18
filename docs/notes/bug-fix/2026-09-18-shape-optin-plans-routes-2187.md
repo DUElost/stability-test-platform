@@ -71,11 +71,32 @@ PaginatedResponse]` 暴露判据第四处：typing 联合被当具名模型—�
 承担」——不为壳建 TS 幽灵配对。devices 多数端点仍是裸 `DeviceOut`/无信封
 （#2129 前遗产），信封化是另一条面，不在台账内顺手扩张。
 
+## 追加：第 5+6 批「纯记账面」——七个 routes 文件一次入账，15 对零漂移
+
+`heartbeat/logs/notifications/audit/stats/results/hosts` 预照结果：**15/15 MATCH，
+无一处需要改 TS 或后端**——这批的产出就是把既有的双端声明正式纳入对拍：以后这些
+文件新增 `ApiResponse[dict]` 端点会被空集台账当场逼出，新增具名模型必须登记或
+具名豁免。`response_model=Any`（logs/query 的 FastAPI「放弃声明」写法）与
+`Union` 同族入 skip——typing 构造不是模型，判据第五处、也是最后一处小修。
+
+`HostOut ↔ Host`（32↔32）能直接入账，吃的是批 4 的 Union 修正 + 批 1 的
+跨文件基类（`HostOut` 亦 `ORMBaseModel` 系）——**前面批次的判据修复在这里连本
+带利回收**：若那些没修，这 15 对里至少 3 对要挂伪豁免。
+
+累计：opt-in 文件 12 个（plan_runs/dedup/plans/projects/scripts/devices/
+heartbeat/logs/notifications/audit/stats/results/hosts + schema 面配对），
+在册对拍 27 对，判据修正 5 处（Python 跨文件基类 / TS extends / 标量内层 /
+typing 联合 / `Any`），未决豁免 2 条（archive 前端无消费者、分页壳——均写明
+失效条件）。
+
 ## Verification
 
 - 契约 15 passed（plans 2 对、projects 6 对、scripts 2 对全部当场通过）；
 - `test_scripts.py + test_scripts_default_params.py` → **37 passed**（第 3 批后）；
-- 第 4 批：契约 15、devices 路由组见 PR（`-k device`）；
+- 第 4 批：契约 15、devices 路由组 106 passed；
+- 第 5+6 批：契约 15（15 对在册全解析通过）、七文件路由回归（`-k "result or
+  stats or notification or audit or agent_log or heartbeat or hosts"`）与
+  `check:quick` 12 门禁 → 见 PR；
 - `test_project_routes.py` → **75 passed**；`check:quick` 12 门禁（第 2 批后）；
 - `test_plans_api.py + test_read_api_auth.py` → **145 passed**；
 - vitest `PlanExecutePage.test.tsx` → **58 passed**（唯一消费点行为回归）；
@@ -83,7 +104,7 @@ PaginatedResponse]` 暴露判据第四处：typing 联合被当具名模型—�
 
 ## Revisit
 
-- 下一批候选：`devices.py`、`results.py` 外的其余 typed 面；
+- `agent_api.py`（10 dict 端点、#1520 切片在飞）是 opt-in 余量最大的一块，等切片退场后单独批做；
   `agent_api.py`（16、10 dict）等 cursor 的 #1520 切片退场后再动，别撞在飞的
   搬迁面；
 - `/specialties` 返回 `ApiResponse[List[dict]]`：内层无具名模型、现判据扫不到——

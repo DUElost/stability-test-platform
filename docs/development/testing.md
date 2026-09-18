@@ -111,6 +111,37 @@ npx vitest run src/pages/execution/PlanRunDetailPage.test.tsx
 - PlanRun capabilities（如 `final_archive`）由后端权威控制；测试须显式 mock，勿依赖「缺省为 true」。  
 - Watcher 信号防抖 2s：断言 refetch 用 `waitFor({ timeout: 4000 })`。
 
+### jsdom 的边界（#2700）：几何/命中/浏览器语义在此**结构上不可测**
+
+vitest 跑在 jsdom 上（`frontend/vitest.config.ts`），而 jsdom **没有布局引擎**：
+`getBoundingClientRect()` 恒全 0、`elementFromPoint()` 无意义、滚动位置与
+`position: fixed` 的覆盖关系不存在，autofill/下载/`document.title` 也不在其中（实测
+`src/**/*.test.tsx` 里 0 个文件引用 `getBoundingClientRect`/`elementFromPoint`/
+`offsetParent` 三者）。因此——
+
+- **「我加了 jsdom 用例」不等于守住了遮挡/命中类回归**：这类结论依赖「屏幕上谁压住谁」，
+  在此维度上写多少用例都是 0 覆盖；
+- 此类回归由**静态守卫**（首选，秒级、离线）或**真实浏览器**承担；
+- 静态守卫的范式已有先例：`tests/test_frontend_bulk_selection_guard_2614.py`（导入图配对
+  断言「有悬浮批量条的页面，其可选中表格必须渲染共享占位」+ 几何字面量锁在单一来源），
+  与 `tests/test_admin_only_read_surface_register.py` 同形。**几何约定大多可静态化**：
+  谁必须渲染占位、某类容器不得同时出现两个 fixed 覆盖层、z-index 分层表；
+- 静态守卫的**天花板**要知道：它能证明「占位存在且在卡片外」，证不了「`h-40`(160px) 在
+  任何视口都够」——余量是实测取的（#2614 按条体 ≈63px 单行 / ≈110px 两行），换视口后
+  仍可能不够。
+
+**已发生的 5 例（浏览器层若建，锚点用例直接取此表，不要为覆盖率另造）**：
+
+| 单 | 缺陷 | jsdom 为何测不到 |
+|---|---|---|
+| #2614 | 全选后固定底部批量条压住分页控件，坐标点击被吞 | 纯覆盖层几何；实现方的用例注释自陈「jsdom 没有布局引擎，测不了命中测试」 |
+| #2453 | 密码管理器 autofill 后建不出用户 | autofill 不派发 React 的 change 事件，是浏览器行为 |
+| #2363 | 部分路由 `document.title` 不更新 | 标题是浏览器表面 |
+| #2028 | PlanRun 日志页 CSV 导出（blob 下载）零测试 | 下载与 blob 语义 |
+| #1708 | 项目编辑「改字段+改 key」并发双请求，字段静默丢失 | 需要真实网络时序与浏览器并发语义 |
+
+层与 #169（夜间真实设备 E2E）**不同**：那条覆盖 ADB/文件系统/硬件，不含浏览器 UI 层。
+
 ---
 
 ## 5. CI（`.github/workflows/ci.yml`）

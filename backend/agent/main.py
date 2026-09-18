@@ -4,7 +4,6 @@ import queue
 import signal
 import sys
 import threading
-import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
@@ -35,6 +34,7 @@ if __name__ == "__main__" and __package__ is None:
         trigger_recovery_sync_on_device_reconnect,
     )
     from agent.bootstrap_subsystems import start_disk_and_watcher_subsystems
+    from agent.startup_identity import bootstrap_process_identity
     from agent import device_discovery
     from agent.aee.state_migration import migrate_legacy_aee_state_keys
     from agent.artifact_uploader import ArtifactUploader
@@ -46,11 +46,7 @@ if __name__ == "__main__" and __package__ is None:
     from agent.upload_manager import UploadManager
     from agent.local_disk_monitor import LocalDiskMonitor
     from agent.heartbeat_thread import HeartbeatThread
-    from agent.host_registry import auto_register_host, get_host_info, load_required_host_id
-    from agent.settings import (
-        get_registration_settings,
-        reset_agent_settings_caches,
-    )
+    from agent.settings import reset_agent_settings_caches
     from agent.job_runner import JobRunnerState, run_task_wrapper
     from agent.lease_renewer import LeaseRenewer
     from agent.mq.producer import StepTraceWriter
@@ -74,6 +70,7 @@ else:
         trigger_recovery_sync_on_device_reconnect,
     )
     from .bootstrap_subsystems import start_disk_and_watcher_subsystems
+    from .startup_identity import bootstrap_process_identity
     from . import device_discovery
     from .aee.state_migration import migrate_legacy_aee_state_keys
     from .artifact_uploader import ArtifactUploader
@@ -85,11 +82,7 @@ else:
     from .upload_manager import UploadManager
     from .local_disk_monitor import LocalDiskMonitor
     from .heartbeat_thread import HeartbeatThread
-    from .host_registry import auto_register_host, get_host_info, load_required_host_id
-    from .settings import (
-        get_registration_settings,
-        reset_agent_settings_caches,
-    )
+    from .settings import reset_agent_settings_caches
     from .job_runner import JobRunnerState, run_task_wrapper
     from .lease_renewer import LeaseRenewer
     from .operation_scheduler import OperationScheduler
@@ -282,86 +275,21 @@ def main() -> None:
     # 确保运行时目录存在
     ensure_dirs()
 
-    # 获取本机信息（需要在验证 HOST_ID 之前）
-    host_info = get_host_info()
-
-    # ADR-0019 Phase 3a: generate agent identity
-    from .identity import generate_agent_instance_id, read_boot_id
-
-    agent_instance_id = generate_agent_instance_id()
-    boot_id = read_boot_id()
-    # ADR-0020: agent version for preflight consistency check
-    from . import __version__ as _agent_pkg_version
-    from .version_info import read_agent_code_revision, read_artifact_digest
-
-    _agent_code_revision = read_agent_code_revision()
-    # ADR-0040 D2：此处启动读取仅用于身份日志；心跳上报值由 HeartbeatThread
-    # 逐拍重读（#1943——write-digest 在重启探活后落盘，启动单读永远落后
-    # 一轮，no-op 稳态无法建立）。
-    _agent_artifact_digest = read_artifact_digest()
-    logger.info(
-        "agent_identity instance=%s boot=%s version=%s code_revision=%s artifact_digest=%s",
-        agent_instance_id,
-        boot_id,
-        _agent_pkg_version,
-        _agent_code_revision or "(none)",
-        _agent_artifact_digest or "(none)",
-    )
-
-    # 加载 HOST_ID，支持自动注册（ADR-0042 P2 #3：旋钮由 Settings 承载；
-    # 取值点保持迁移前的惰性时机——HOST_ID 正常时不解析注册旋钮）
-    try:
-        host_id = load_required_host_id()
-    except ValueError as exc:
-        # 检查是否启用自动注册
-        if get_registration_settings().auto_register_enabled:
-            host_id = None  # will be resolved in the retry loop below
-        else:
-            logger.error(
-                "invalid_host_id_config",
-                extra={
-                    "host_id_raw": os.getenv("HOST_ID"),
-                    "error": str(exc),
-                },
-            )
-            logger.error(
-                "Set HOST_ID to an IP-derived id (e.g. 198-51-100-6), or set AUTO_REGISTER_HOST=true to auto-register"
-            )
-            raise SystemExit(2) from exc
-
-    # 如果 host_id 为 None（自动注册模式），带重试地注册
-    if host_id is None:
-        _reg_settings = get_registration_settings()
-        max_retries = _reg_settings.auto_register_max_retries  # 0 = infinite
-        retry_delay = _reg_settings.auto_register_retry_delay
-        attempt = 0
-        while True:
-            attempt += 1
-            try:
-                host_id = auto_register_host(api_url, host_info)
-                break
-            except Exception as exc:
-                if max_retries and attempt >= max_retries:
-                    logger.error("auto_register_failed after %d attempts: %s", attempt, exc)
-                    raise SystemExit(2) from exc
-                logger.warning(
-                    "auto_register_retry attempt=%d delay=%.0fs error=%s",
-                    attempt, retry_delay, exc,
-                )
-                time.sleep(retry_delay)
-    poll_interval = float(os.getenv("POLL_INTERVAL", "5"))
-    mount_points = [p for p in os.getenv("MOUNT_POINTS", "").split(",") if p]
-    adb_path = os.getenv("ADB_PATH", "adb")
-
-    logger.info(
-        "agent_started",
-        extra={"host_id": host_id, "api_url": api_url, "ip": host_info["ip"]},
-    )
+    identity = bootstrap_process_identity(api_url)
+    host_info = identity.host_info
+    agent_instance_id = identity.agent_instance_id
+    boot_id = identity.boot_id
+    host_id = identity.host_id
+    _agent_pkg_version = identity.agent_version
+    _agent_code_revision = identity.agent_code_revision
+    poll_interval = identity.poll_interval
+    mount_points = identity.mount_points
+    adb_path = identity.adb_path
+    agent_secret = identity.agent_secret
 
     adb = AdbWrapper(adb_path=adb_path)
     _ensure_adb_server_on_startup(adb_path)
     # 启动 WebSocket 客户端（best-effort，失败时降级到 HTTP）
-    agent_secret = os.getenv("AGENT_SECRET", "")
     sio_client = AgentSocketIOClient(api_url, host_id, agent_secret)
     # P2-2a：先注册转发 handler 再 connect——启动窗口内到达的 control 命令
     # 入队暂存，真实 handler 就绪后统一回放，不再静默丢弃。
