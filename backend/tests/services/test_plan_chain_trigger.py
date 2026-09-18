@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy import update
 
 from backend.models.enums import JobStatus
 from backend.models.job import JobInstance
@@ -278,7 +279,9 @@ class TestPlanChainInterruptedFlagReconciliation:
         db_session.commit()
         sentinel_child = SimpleNamespace(id=9876)
 
-        def _redispatch(refreshed_parent, db):
+        def _redispatch(refreshed_parent, db, **_kw):
+            # #2755 后补偿 helper 会带 respect_settle=True 调用——本例只断言
+            # 「flag 先清再重派」的顺序，窗语义由 TestChainTriggerSettleWindow 覆盖。
             assert refreshed_parent.next_plan_triggered is False
             assert db.get(PlanRun, parent.id).next_plan_triggered is False
             return sentinel_child
@@ -658,16 +661,75 @@ class TestChainTriggerSettleWindow:
         assert child is not None
         assert child.status == "QUEUED"
 
-    def test_reconcile_path_unaffected_within_window(
+    def test_function_default_respects_no_window(
         self, db_session, sample_device, sample_host, sample_script, monkeypatch,
     ):
-        """补偿路径（默认 respect_settle=False）在窗内照发——settle 只削即时尖峰。"""
+        """函数默认 `respect_settle=False`：直接调用的旧调用方行为不变；
+        窗语义由调用点声明（即时路径/补偿 helper 传 True）。"""
         from datetime import datetime, timezone
         self._settle180(monkeypatch)
         parent = self._seed_parent(db_session, sample_device, sample_host, sample_script,
                                    ended_at=datetime.now(timezone.utc))
         child = trigger_next_plan_sync(parent, db_session)
         assert child is not None
+
+    def test_reconcile_helper_waits_within_window(
+        self, db_session, sample_device, sample_host, sample_script, monkeypatch, caplog,
+    ):
+        """#2755 评审修正：补偿 helper 也吃窗——否则 reconciler 的 60s tick 会在
+        窗内把即时路径刚跳过的 parent 立刻发出，settle 只剩一个 tick 的宽度
+        （有效窗 ≈60s 而非配置值）。反证：把 `reconcile_chain_trigger_sync` 末尾
+        的 `respect_settle=True` 退回默认，本测试即红。"""
+        import logging
+        from datetime import datetime, timezone
+        self._settle180(monkeypatch)
+        parent = self._seed_parent(db_session, sample_device, sample_host, sample_script,
+                                   ended_at=datetime.now(timezone.utc))
+        with caplog.at_level(logging.INFO):
+            child = reconcile_chain_trigger_sync(parent.id, db_session)
+        assert child is None
+        db_session.expire_all()
+        stored = db_session.get(PlanRun, parent.id)
+        assert stored.next_plan_triggered is False
+        assert db_session.query(PlanRun).filter(
+            PlanRun.parent_plan_run_id == parent.id).count() == 0
+        assert "plan_chain_trigger_settling" in caplog.text
+
+    def test_reconcile_helper_dispatches_past_window(
+        self, db_session, sample_device, sample_host, sample_script, monkeypatch,
+    ):
+        """过窗的老 parent 经补偿 helper 照常补发——「中断触发修复」语义零损失。"""
+        from datetime import datetime, timedelta, timezone
+        self._settle180(monkeypatch)
+        parent = self._seed_parent(
+            db_session, sample_device, sample_host, sample_script,
+            ended_at=datetime.now(timezone.utc) - timedelta(seconds=600),
+        )
+        child = reconcile_chain_trigger_sync(parent.id, db_session)
+        assert child is not None
+        assert child.status == "QUEUED"
+
+    def test_reconcile_helper_repairs_orphaned_flag_within_window_without_child(
+        self, db_session, sample_device, sample_host, sample_script, monkeypatch,
+    ):
+        """修复形态（flag=true 但无 child）在窗内：重置 flag 但**不立即补发**，
+        留给下一 tick 窗过后再发——不得借修复路径绕过窗。"""
+        from datetime import datetime, timezone
+        self._settle180(monkeypatch)
+        parent = self._seed_parent(db_session, sample_device, sample_host, sample_script,
+                                   ended_at=datetime.now(timezone.utc))
+        db_session.execute(
+            update(PlanRun).where(PlanRun.id == parent.id)
+            .values(next_plan_triggered=True)
+        )
+        db_session.commit()
+        child = reconcile_chain_trigger_sync(parent.id, db_session)
+        assert child is None
+        db_session.expire_all()
+        stored = db_session.get(PlanRun, parent.id)
+        assert stored.next_plan_triggered is False  # flag 已修复
+        assert db_session.query(PlanRun).filter(
+            PlanRun.parent_plan_run_id == parent.id).count() == 0  # 但未补发
 
     def test_missing_ended_at_does_not_block(
         self, db_session, sample_device, sample_host, sample_script, monkeypatch,

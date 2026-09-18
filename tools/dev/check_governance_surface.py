@@ -45,6 +45,10 @@ AI 门禁 workflow——所有 AI 会话行为的上游事实源。本脚本只�
       头部不带版本者不约束（同 S12）；只绑「紧跟 ADR 号的第一个 vX.Y」（沿革叙述
       里的 vX.Y 不误绑）。已发布脚本版本目录（backend/agent/scripts/）内容冻结
       （ADR-0020），扫进去会产出「红灯但不可修」的死结，故排除。
+  S15 语义归属表（#2546）：`docs/design/2026-semantic-ownership.md` 表内
+      ① key 唯一；② 非 TBD 行的 `path :: 定位` 锚可解析且命中恰 1（自带解析器，
+      **不**复用 S2）；③ ADR 头部已写 `归属域：semantic-ownership <key>` 时 key
+      必须落在表内（字段驱动；未写不报错）。文件缺失则跳过（叠合入 #2751 前）。
 
 用法:
     python tools/dev/check_governance_surface.py --check     # 门禁模式
@@ -165,7 +169,9 @@ def check_links(text: str, basedir: str, label: str) -> list[str]:
 
 # #2042：docs/reviews 与 docs/notes 是事故/决策的按需留档面，此前不在 S2 覆盖内
 # （固定白名单只列常驻索引与契约文档），窗口内 6 处失效相对链接全部落在两树下。
-LINK_TREES = ("docs/reviews", "docs/notes")
+# #2546 / e82515：docs/adr 纳入同一引用面——ADR 关联行幽灵文件名此前无人拦（实测
+# ADR-0044/0045 指向不存在的 ADR-0025-run-console-and-command-execution.md）。
+LINK_TREES = ("docs/reviews", "docs/notes", "docs/adr")
 
 
 def check_mdc_frontmatter(filename: str, text: str) -> list[str]:
@@ -790,6 +796,107 @@ def check_adr_code_refs(
     return issues
 
 
+# ── S15: 语义归属表（#2546）──────────────────────────────────────────────
+
+OWNERSHIP_DOC = os.path.join("docs", "design", "2026-semantic-ownership.md")
+_OWNERSHIP_KEY_CELL = re.compile(r"^`([a-zA-Z0-9][a-zA-Z0-9._-]*)`$")
+_OWNERSHIP_ANCHOR = re.compile(
+    r"(docs/[A-Za-z0-9_./-]+\.md)\s*::\s*(.+?)(?=\s*(?:；|;|$))"
+)
+_OWNERSHIP_DOMAIN = re.compile(
+    r"^-\s*归属域：\s*semantic-ownership\s+(`?)([a-zA-Z0-9][a-zA-Z0-9._-]*)\1\s*$"
+)
+
+
+def parse_ownership_table(text: str) -> list[tuple[str, str]]:
+    """解析 ownership 表 → [(key, owner_anchor_cell)]。"""
+    rows: list[tuple[str, str]] = []
+    in_table = False
+    for line in text.splitlines():
+        if line.startswith("| key |") or line.startswith("|key|"):
+            in_table = True
+            continue
+        if not in_table:
+            continue
+        if not line.startswith("|"):
+            if rows:
+                break
+            continue
+        if re.match(r"^\|\s*---", line):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) < 4:
+            continue
+        km = _OWNERSHIP_KEY_CELL.match(cells[0])
+        if not km:
+            continue
+        rows.append((km.group(1), cells[3]))
+    return rows
+
+
+def _ownership_anchor_is_tbd(anchor_cell: str) -> bool:
+    s = anchor_cell.strip()
+    return s.startswith("TBD") or "TBD →" in s or "TBD->" in s
+
+
+def check_ownership_table(text: str, resolve_path) -> list[str]:
+    """S15①②：表内 key 唯一；非 TBD 行的 path :: 定位命中恰 1。"""
+    issues: list[str] = []
+    rows = parse_ownership_table(text)
+    if not rows:
+        return ["S15 语义归属表: 未解析到任何 ownership 数据行"]
+
+    seen: dict[str, int] = {}
+    for key, _ in rows:
+        seen[key] = seen.get(key, 0) + 1
+    for key, n in sorted(seen.items()):
+        if n > 1:
+            issues.append(f"S15 语义归属表: key `{key}` 出现 {n} 次（须恰好 1）")
+
+    for key, anchor_cell in rows:
+        if _ownership_anchor_is_tbd(anchor_cell):
+            continue
+        anchors = list(_OWNERSHIP_ANCHOR.finditer(anchor_cell))
+        if not anchors:
+            issues.append(
+                f"S15 `{key}`: 非 TBD 行缺少 `path :: 定位` 锚（见设计 §4.3）"
+            )
+            continue
+        for m in anchors:
+            rel, locator = m.group(1), m.group(2).strip()
+            # 表内常把整段 `path :: 定位` 包在反引号里；定位尾巴会吃到闭合 `
+            locator = locator.replace("\\`", "`").rstrip("`").strip()
+            abs_path = resolve_path(rel)
+            if not os.path.isfile(abs_path):
+                issues.append(f"S15 `{key}`: 锚目标不存在 {rel}")
+                continue
+            body = open(abs_path, encoding="utf-8").read()
+            hits = body.count(locator)
+            if hits != 1:
+                issues.append(
+                    f"S15 `{key}`: 锚 `{rel} :: {locator}` 命中 {hits} 处（须恰 1）"
+                )
+    return issues
+
+
+def check_ownership_domain_fields(
+    adr_texts: dict[str, str], owned_keys: set[str]
+) -> list[str]:
+    """S15③：已写 `归属域：semantic-ownership <key>` 的 ADR → key 须在表内。"""
+    issues: list[str] = []
+    for fn, text in sorted(adr_texts.items()):
+        for line in text.splitlines():
+            m = _OWNERSHIP_DOMAIN.match(line.strip())
+            if not m:
+                continue
+            key = m.group(2)
+            if key not in owned_keys:
+                issues.append(
+                    f"S15 {fn}: 归属域 key `{key}` 不在语义归属表（字段驱动）"
+                )
+    return issues
+
+
 NOTE_CLASSES = {"feature", "bug-fix", "simplification", "architecture", "process", "testing"}
 NOTE_HEADER_CUTOFF = "2026-09-05"
 #: 四节契约（AGENTS.md）：cutoff 起新增 Note 必须齐备（#1299）
@@ -1390,12 +1497,30 @@ def run_check() -> int:
         # S14: 代码注释里的 ADR 版本引用（#2154 收口）——S12 的注释面对偶
         issues += check_adr_code_refs(collect_adr_code_refs(), adr_versions)
 
+    # S15: 语义归属表（#2546）——文件未合入前跳过，避免叠 PR 假红
+    ownership_path = os.path.join(ROOT, OWNERSHIP_DOC)
+    if os.path.isfile(ownership_path):
+        ownership_text = open(ownership_path, encoding="utf-8").read()
+        issues += check_ownership_table(
+            ownership_text, lambda rel: os.path.join(ROOT, rel)
+        )
+        owned_keys = {k for k, _ in parse_ownership_table(ownership_text)}
+        adr_dir = os.path.join(ROOT, "docs", "adr")
+        adr_texts: dict[str, str] = {}
+        if os.path.isdir(adr_dir):
+            for fn in sorted(os.listdir(adr_dir)):
+                if fn.startswith("ADR-") and fn.endswith(".md"):
+                    adr_texts[fn] = open(
+                        os.path.join(adr_dir, fn), encoding="utf-8"
+                    ).read()
+        issues += check_ownership_domain_fields(adr_texts, owned_keys)
+
     for issue in issues:
         print(f"[BLOCK] {issue}")
     if issues:
         print(f"\n治理面结构检查失败：{len(issues)} 项", file=sys.stderr)
         return 1
-    print("[OK] 治理面结构检查通过（阻塞项全绿：S1–S14、S5x）")
+    print("[OK] 治理面结构检查通过（阻塞项全绿：S1–S15、S5x）")
     return 0
 
 
@@ -2077,12 +2202,80 @@ def run_self_test() -> int:
            is not None,
            False)
 
+    # S15（#2546）：表内 key 唯一 + path :: 定位命中恰 1；归属域字段驱动。
+    _s15_good = (
+        "| key | kind | 一句话 | owner_anchor | 复议触发器 |\n"
+        "|---|---|---|---|---|\n"
+        "| `alpha` | concept | a | `docs/design/2026-semantic-ownership.md :: ## 0. 权责边界（Ownership Authority only）` | x |\n"
+        "| `beta` | concept | b | TBD → `docs/adr/ADR-0001-control-plane-and-agent-architecture.md` | y |\n"
+    )
+    expect(
+        "S15 好样例（唯一 key + 可解析锚 + TBD 跳过）",
+        lambda: check_ownership_table(
+            _s15_good, lambda rel: os.path.join(ROOT, rel)
+        ),
+        False,
+    )
+    _s15_dup = (
+        "| key | kind | 一句话 | owner_anchor | 复议触发器 |\n"
+        "|---|---|---|---|---|\n"
+        "| `alpha` | concept | a | `docs/design/2026-semantic-ownership.md :: ## 0. 权责边界（Ownership Authority only）` | x |\n"
+        "| `alpha` | concept | a2 | `docs/design/2026-semantic-ownership.md :: ## 0. 权责边界（Ownership Authority only）` | x |\n"
+    )
+    expect(
+        "S15 重复 key 判红",
+        lambda: check_ownership_table(
+            _s15_dup, lambda rel: os.path.join(ROOT, rel)
+        ),
+        True,
+    )
+    _s15_miss = (
+        "| key | kind | 一句话 | owner_anchor | 复议触发器 |\n"
+        "|---|---|---|---|---|\n"
+        "| `alpha` | concept | a | `docs/design/no-such-file.md :: ### ghost` | x |\n"
+    )
+    expect(
+        "S15 锚文件不存在判红",
+        lambda: check_ownership_table(
+            _s15_miss, lambda rel: os.path.join(ROOT, rel)
+        ),
+        True,
+    )
+    _s15_zero_hit = (
+        "| key | kind | 一句话 | owner_anchor | 复议触发器 |\n"
+        "|---|---|---|---|---|\n"
+        "| `alpha` | concept | a | `docs/design/2026-semantic-ownership.md :: ### 绝不存在的锚点XYZ` | x |\n"
+    )
+    expect(
+        "S15 锚命中 0 判红",
+        lambda: check_ownership_table(
+            _s15_zero_hit, lambda rel: os.path.join(ROOT, rel)
+        ),
+        True,
+    )
+    expect(
+        "S15 归属域 key 在表内为绿",
+        lambda: check_ownership_domain_fields(
+            {"ADR-0033-x.md": "- 归属域：semantic-ownership alpha\n"},
+            {"alpha", "beta"},
+        ),
+        False,
+    )
+    expect(
+        "S15 归属域 key 不在表内判红",
+        lambda: check_ownership_domain_fields(
+            {"ADR-0033-x.md": "- 归属域：semantic-ownership missing-key\n"},
+            {"alpha"},
+        ),
+        True,
+    )
+
     if failures:
         for f in failures:
             print(f"[SELFTEST-FAIL] {f}", file=sys.stderr)
         print(f"\n自测失败 {len(failures)} 项——检查器自身不可信，禁止用于拦截", file=sys.stderr)
         return 1
-    print("[OK] self-test 通过：15 条规则各含红/绿样例双向验证")
+    print("[OK] self-test 通过：规则各含红/绿样例双向验证（含 S15）")
     return 0
 
 
