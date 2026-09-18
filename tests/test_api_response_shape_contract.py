@@ -81,8 +81,8 @@ TS 接口"才是幽灵，**被本用例双向对拍的** TS 接口不是——�
 
 同一目录还堵了反向的洞：**正规化成** ``ApiResponse[具体模型]`` **却不登记**——diff 读起来
 像已收口，实际把该模型留在了对拍之外。已收口的路由文件里，每个具体响应模型要么在
-``_MODEL_PAIRS``，要么在 ``_MODEL_UNREGISTERED`` 写明原因（当前一例：``JiraRunOut``，其
-跨文件基类 ``ORMBaseModel`` 需先扩展解析器）。两个方向都失效即红。
+``_MODEL_PAIRS``，要么在 ``_MODEL_UNREGISTERED`` 写明原因（``JiraRunOut`` 曾长期挂账，
+其解析器限制已由 #1520 的跨文件基类扩展解除——同仓库基类经导入语句定位并递归展开字段，无法定位的基类仍然报错，判据不放宽）。两个方向都失效即红。
 """
 
 from __future__ import annotations
@@ -447,6 +447,13 @@ _MODEL_PAIRS: tuple[tuple[str, str, str, str], ...] = (
         "frontend/src/utils/api/types.ts",
         "JobArtifactEntry",
     ),
+    # #1520 收官：解析器支持同仓库跨文件基类后，ORMBaseModel 系模型转正
+    (
+        "backend/api/schemas/jira_run.py",
+        "JiraRunOut",
+        "frontend/src/utils/api/types.ts",
+        "JiraRunRecord",
+    ),
     # 日志链（#529 归档权威）：GET /plan-runs/{id}/log-events
     (
         "backend/api/schemas/plan_run.py",
@@ -549,9 +556,8 @@ _MODEL_BLINDSPOT: dict[str, set[str]] = {
 #: 与盲区台账同一个作用域（只对已收口的路由文件生效），且必须不失效：
 #: 模型不再被引用即红，防止"当初的理由"沉淀成永久豁免。
 _MODEL_UNREGISTERED: dict[str, str] = {
-    # 基类 ``ORMBaseModel`` 在另一文件，``_pydantic_model_fields`` 按口径**显式报错**
-    # 而不是静默少收字段。要登记得先扩展跨文件基类解析——独立议题，见台账 I-9。
-    "JiraRunOut": "跨文件基类 ORMBaseModel，解析器不静默少收字段",
+    # JiraRunOut 已随解析器的跨文件基类扩展转正进 `_MODEL_PAIRS`（#1520）；
+    # 此清单现存唯一条目见下（archive：前端无消费者的具名认领）。
     # #1520 对拍批 1（2026-09-18）：opt-in plan_runs.py 时随之入账的 9 条豁免已
     # 全部双向对拍通过并转正进 `_MODEL_PAIRS`，此清单当前只剩 JiraRunOut（解析器
     # 跨文件基类限制）。新豁免须写具体失效条件，勿留泛化占位。
@@ -567,26 +573,47 @@ _EXTRA_ALLOW_ALLOWED: set[str] = {"DedupScanArchiveOut"}
 _PYDANTIC_BASE_ALLOWED = frozenset({"BaseModel"})
 
 
-def _pydantic_model_fields(py_path: Path, model: str) -> set[str]:
-    """``class X(BaseModel):`` 的**注解字段名**，含同文件内基类的字段。
+def _resolve_repo_base_path(current: Path, base_name: str, tree: ast.Module) -> Path | None:
+    """同仓库跨文件基类：``from backend.x.y import Base`` → 解析 y.py 的路径。
 
-    文件外基类（除 ``_PYDANTIC_BASE_ALLOWED``）会让本函数**报错**而不是静默少收字段——
-    少收会让「TS 声明了模型不返回的键」这条判据假绿，那正是本门禁要拦的漂移。
+    只认 ``backend.`` 前缀的显式导入——第三方/无法定位的基类返回 None，调用方
+    维持「**报错而非静默少收字段**」的原判据（少收会让 TS-only 幽灵字段假绿）。
     """
-    tree = ast.parse(py_path.read_text(encoding="utf-8"))
-    classes = {
-        node.name: node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)
-    }
-    assert model in classes, f"{py_path.name} 里找不到模型 {model}（登记表过期？）"
+    module = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and any(a.name == base_name for a in node.names):
+            module = node.module
+            break
+    if not module or not module.startswith("backend."):
+        return None
+    rel = module.replace(".", "/")
+    for cand in (ROOT / f"{rel}.py", ROOT / rel / "__init__.py"):
+        if cand.is_file():
+            return cand
+    return None
 
+
+def _pydantic_model_fields(py_path: Path, model: str) -> set[str]:
+    """``class X(BaseModel):`` 的**注解字段名**，含同仓库可解析基类的字段。
+
+    跨文件基类经 ``_resolve_repo_base_path`` 递归展开（#1520 形状系列收官：
+    此前 ``ORMBaseModel`` 一类跨文件基类只能按台账豁免 ``JiraRunOut``，
+    现在解析器补上、豁免清单随之清空）。无法在仓库内定位、又非
+    ``_PYDANTIC_BASE_ALLOWED`` 的基类仍然**报错**——判据不放宽。
+    """
     fields: set[str] = set()
-    pending = [model]
-    seen: set[str] = set()
+    pending: list[tuple[Path, str]] = [(py_path, model)]
+    seen: set[tuple[Path, str]] = set()
     while pending:
-        name = pending.pop()
-        if name in seen:
+        path, name = pending.pop()
+        if (path, name) in seen:
             continue
-        seen.add(name)
+        seen.add((path, name))
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        classes = {
+            node.name: node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)
+        }
+        assert name in classes, f"{path.name} 里找不到模型 {name}（登记表过期？）"
         node = classes[name]
         for stmt in node.body:
             if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
@@ -595,11 +622,15 @@ def _pydantic_model_fields(py_path: Path, model: str) -> set[str]:
             if not isinstance(base, ast.Name):
                 continue  # 泛型/下标基类：本解析器不展开，登记时需确认无业务字段
             if base.id in classes:
-                pending.append(base.id)
+                pending.append((path, base.id))
+                continue
+            resolved = _resolve_repo_base_path(path, base.id, tree)
+            if resolved is not None:
+                pending.append((resolved, base.id))
             elif base.id not in _PYDANTIC_BASE_ALLOWED:
                 raise AssertionError(
-                    f"{name} 的基类 {base.id} 不在本文件内且非 BaseModel——"
-                    "无法解析其字段；登记该模型前需先扩展本解析器"
+                    f"{name} 的基类 {base.id} 无法在仓库内解析且非 BaseModel——"
+                    "登记该模型前需先扩展本解析器"
                 )
     assert fields, f"{model} 没解析出任何注解字段"
     return fields
