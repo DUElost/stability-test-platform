@@ -1889,9 +1889,7 @@ export interface WatcherSummary {
   total: number;
   affected_device_count: number;
   total_devices: number;
-  abnormal_rate: number;                 // affected / total_devices
-  threshold: number;
-  exceeded: boolean;
+  abnormal_rate: number;                 // affected / total_devices（ADR-0048：不再与阈值比较）
   supports_origin_split?: boolean;
   current_run?: AeeDashboardSection;
   preexisting?: AeeDashboardSection;

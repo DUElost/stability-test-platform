@@ -37,7 +37,7 @@ SCAN_DIRS = (ROOT / "backend", ROOT / "tools", ROOT / "scripts")
 #: `main()` claim 路径内 `_arrive_patrol_barrier_preengine` 局部 import 随迁出）。
 #: **只许下调**。
 #: （issue #738 记录的是 2026-09-03 的 634 处；口径与扫描面当时未固化。）
-_BASELINE = 606
+_BASELINE = 604
 
 _FROZEN_SCRIPT_RE = re.compile(r"^backend/agent/scripts/[^/]+/v[0-9][^/]*/")
 _FROZEN_ALEMBIC_PREFIX = "backend/alembic/versions/"

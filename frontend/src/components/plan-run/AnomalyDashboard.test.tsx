@@ -73,8 +73,6 @@ const makeData = (overrides: Record<string, unknown> = {}): WatcherSummary =>
     affected_device_count: 0,
     total_devices: 10,
     abnormal_rate: 0,
-    threshold: 0.3,
-    exceeded: false,
     supports_origin_split: true,
     current_run: makeSection(),
     preexisting: makeSection({

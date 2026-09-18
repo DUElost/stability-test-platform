@@ -328,8 +328,6 @@ beforeEach(() => {
     affected_device_count: 1,
     total_devices: 2,
     abnormal_rate: 0.5,
-    threshold: 0.05,
-    exceeded: true,
     supports_origin_split: true,
     current_run: {
       total_events: 2,
@@ -972,8 +970,6 @@ describe('PlanRunDetailPage', () => {
     affected_device_count: 0,
     total_devices: 0,
     abnormal_rate: 0,
-    threshold: 0.05,
-    exceeded: false,
     archive: {
       ops_metrics: {
         pruned_total: 0,
