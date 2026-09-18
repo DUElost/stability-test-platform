@@ -1324,6 +1324,32 @@ export interface PlanRunCapabilities {
   final_archive?: boolean;
 }
 
+/**
+ * `POST /plans/{id}/run` / `append-chain-tail` 的触发响应（后端 `PlanRunSummaryOut`）。
+ *
+ * 这不是 `PlanRun`（那是 plan-runs 列表/详情投影，多 9 个键）——此前 plans.run()
+ * 误标 `PlanRun`，唯一调用点只读 .id 才没出事；#2187 opt-in plans.py 的对拍把
+ * 这个幽灵声明钉了出来（触发端点从不返回 capabilities/jobs/…）。
+ * 勿与 `GET /plan-runs/{id}/summary` 的聚合（`PlanRunSummary`）混淆——名字近、形状远。
+ */
+export interface PlanRunTriggerResult {
+  id: number;
+  plan_id: number;
+  status: string;
+  failure_threshold: number;
+  run_type: string;
+  triggered_by?: string | null;
+  started_at: string;
+  ended_at?: string | null;
+  result_summary?: PlanRunResultSummary | null;
+  run_context?: PlanRunContext | null;
+  plan_snapshot?: PlanSnapshot | null;
+  parent_plan_run_id?: number | null;
+  root_plan_run_id?: number | null;
+  chain_index?: number;
+  next_plan_triggered?: boolean;
+}
+
 export interface PlanRun {
   id: number;
   plan_id: number;
