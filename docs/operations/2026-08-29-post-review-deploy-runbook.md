@@ -229,9 +229,9 @@ cd "$CONTROL_DIR/backend"
 
 | 脚本 | 说明 |
 |------|------|
-| `flash_firmware` | 最新 active 版本已注册（2026-09-15 复核 = **v1.3.16**）；Honor「per-model」指固件 `latest.json` 映射，见 honor-flash-runbook |
+| `flash_firmware` | 最新 active 版本已注册（**版本号不抄进本表**——#2663：抄来的必然落后，本行此前就停在上一版；真值取 `GET /api/v1/scripts?name=flash_firmware` 或 `backend/agent/scripts/flash_firmware/` 下最大版本目录）；Honor「per-model」指固件 `latest.json` 映射，见 honor-flash-runbook |
 | `sleep_test` / `gpu_test` / `powercycle_test` | G15 #462 三件套（toolkit 对齐后新版本） |
-| `monkey_test` | 最新 active 版本（2026-09-15 复核 = v1.2.2）；若 Plan 引用 |
+| `monkey_test` | 最新 active 版本（同上：版本号不抄进本表，真值取 `GET /api/v1/scripts?name=monkey_test`）；若 Plan 引用 |
 | `mtbf_*` | 维持已绑定 Plan 的 pin 版本，勿原地改目录 |
 
 ### 7.3 前端重建（P2 套件页 + OpenRouter UI）
