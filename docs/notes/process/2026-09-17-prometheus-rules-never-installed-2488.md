@@ -95,6 +95,17 @@ Class: process
   `--repo-root` 指过去就把已装规则比对到了那棵树里的旧源文件。⇒ 检测器现在自己打印
   `事实源 = <path> @ <branch> <sha>`，非 main 时附「可能假漂移」提示（不改退出码）。
   也反过来印证了接线的选择：`check-deploy-source.sh` 先校验「树在 main」，走它的人不会吃到这个坑。
+
+**补记三（同日，事实源判据从"分支名"改成"内容"）**：
+
+- 第一版 `describe_source_repo()` 按分支名警告，随即自己被打脸：为了做出**正确**判定，我用
+  `git worktree add --detach origin/main` 建临时事实源树，它内容完全等于 main，却被标成
+  「⚠ 不在 main」。按名字警告会让真警告变成噪声。
+- 改成 **`HEAD == origin/main` 即可信**，两种误判一起消掉：刚开、还没提交的特性分支不再被误警告；
+  而「在 main 上但没 fetch（落后 origin/main）」这种**内容已不可信**的形态反而被抓出来——按名字判
+  对它是漏的。无 `origin/main` 引用（浅克隆/离线）单列一条「无法确认」，不假装可信。
+- 参数化 6 例 + 非 git 树 1 例。**反证**：把判据退回按分支名，`main-stale-warn`、`no-origin-warn`
+  等 3 例即红。真实树自检三种形态（别人的特性分支 / 非 git 目录 / SHA 恰等于 main 的自建分支）全部判对。
 - **`/etc/default/prometheus` 故意没同步**，保持 `skipped`：现装的启动参数是硬写进
   `stability-backend`/prometheus unit 的 `ExecStart`（`--config.file=/etc/prometheus/prometheus.yml`、
   `--storage.tsdb.path=/var/lib/prometheus/metrics2/`），而仓库版会改成 `/etc/stp/prometheus/…`

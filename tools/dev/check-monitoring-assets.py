@@ -84,22 +84,42 @@ def expected_text(source: Path, deploy_root: Path) -> str:
     return text.replace("<deploy-root>", str(deploy_root))
 
 
-def describe_source_repo(repo_root: Path) -> str:
-    """标注事实源是哪棵树、在哪个 revision 上。
+def _git(repo_root: Path, *args: str) -> tuple[int, str]:
+    rc = subprocess.run(["git", "-C", str(repo_root), *args],
+                        capture_output=True, text=True)
+    return rc.returncode, (rc.stdout or "").strip()
 
-    实测骗过一次：`--repo-root` 指向主检出，而那棵工作树当时正被别的 Execution 切在
-    特性分支上 ⇒ 已装规则被比对该分支的**旧**源文件，判出一条假 DRIFT。`runbook` 路径上
+
+def describe_source_repo(repo_root: Path) -> str:
+    """标注事实源是哪棵树、在哪个 revision 上——决定本次比对可不可信。
+
+    实测骗过一次：`--repo-root` 指向主检出，而那棵工作树当时被别的 Execution 切在特性分支
+    上 ⇒ 已装规则被比对该分支的**旧**源文件，判出一条假 DRIFT。runbook 路径上
     `check-deploy-source.sh` 已先校验「树在 main」，但直接跑本工具的人没有这道前置，
     所以至少要把它看见——提示不改退出码（保持 WARN 语义）。
+
+    判据是「HEAD 内容是否等于 origin/main」，**不是分支名**——按名字判会同时犯两种错：
+    `git worktree add --detach origin/main`（本次做出正确判定用的就是它）与刚开、还没提交的
+    特性分支，内容都等于 main 却被警告；反过来「在 main 上但没 fetch」内容已经落后 main，
+    按名字判却一片祥和。所以：`HEAD == origin/main` ⇒ 可信，否则提示（不改退出码）。
     """
-    probe = subprocess.run(["git", "-C", str(repo_root), "log", "-1", "--format=%h"],
-                           capture_output=True, text=True)
-    sha = probe.stdout.strip() if probe.returncode == 0 else "?"
-    branch = subprocess.run(["git", "-C", str(repo_root), "symbolic-ref", "--short", "HEAD"],
-                            capture_output=True, text=True)
-    name = branch.stdout.strip() if branch.returncode == 0 else "(detached)"
-    note = "" if name == "main" else "  ⚠ 事实源不在 main：比对的是那棵树的当前内容，可能假漂移"
-    return f"{repo_root} @ {name} {sha}{note}"
+    rc, sha_short = _git(repo_root, "log", "-1", "--format=%h")
+    if rc != 0:
+        return (f"{repo_root} @ (非 git 树)  ⚠ 无法确认事实源 revision："
+                "本次比对可能不可信")
+    _, sha = _git(repo_root, "rev-parse", "HEAD")
+    rc_branch, name = _git(repo_root, "symbolic-ref", "--short", "HEAD")
+    label = name if (rc_branch == 0 and name) else "(detached)"
+    rc_main, main_sha = _git(repo_root, "rev-parse", "origin/main")
+    if rc_main != 0 or not main_sha:
+        # 没有 origin/main 引用可比（浅克隆、离线、无 remote）：不假装可信
+        return (f"{repo_root} @ {label} {sha_short}"
+                "  ⚠ 无 origin/main 引用可比：无法确认事实源就是 main")
+    if sha and sha == main_sha:
+        return f"{repo_root} @ {label} {sha_short}（内容 == origin/main）"
+    ahead = f"{sha_short}≠{main_sha[:7]}"
+    return (f"{repo_root} @ {label} {ahead}"
+            "  ⚠ 事实源不是 origin/main 的内容：比对的是这棵树的当前版本，可能假漂移")
 
 
 def candidate_paths(destination: str) -> list[str]:

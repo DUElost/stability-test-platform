@@ -193,6 +193,33 @@ def scope_overlap(a: str, b: str) -> bool:
     return pa == pb[: len(pa)] or pb == pa[: len(pb)]
 
 
+def normalize_worktree(path: str, *, cwd: str | None = None) -> str:
+    """校验并归一化 `--worktree`；非法即 ``ValueError``。
+
+    **只接受绝对路径**（与 §5.3 对 scope「拒绝绝对路径」同款纪律，方向相反）：
+    `worktree` 的消费方是 §5.2 的归属判定与 `branch` 推导，二者都以该路径为
+    git 工作目录。相对路径会被 `os.path.abspath` 按**当前 cwd** 解析——
+    在 worktree X 内传相对路径即得 ``X/相对路径``（不存在的拼接值），
+    使 §5.2 档 1 不可用、`branch` 推导返回空，**静默降级到档 3**（declared 单独生效）。
+
+    故此处的纪律是：**拒绝**而非自动转绝对——自动转换会掩盖调用方的意图错误
+    （调用方以为指向 A、实际指向 B 时无从察觉），也无法给出可执行的修正提示。
+    """
+    raw = (path or "").strip()
+    if not raw:
+        raise ValueError("--worktree 不能为空")
+    if not os.path.isabs(raw):
+        resolved = os.path.abspath(os.path.join(cwd or os.getcwd(), raw))
+        raise ValueError(
+            f"--worktree 必须是**绝对路径**（收到相对路径 {path!r}）。"
+            f"相对路径按当前目录解析会得到 {resolved!r}——若你正在 worktree 内，"
+            f"该值会是 '<本 worktree>/{raw}' 这类不存在的拼接路径，"
+            f"导致 §5.2 档 1 归属不可用、branch 推导为空（静默降级到档 3）。"
+            f"请改用绝对路径。"
+        )
+    return os.path.abspath(raw)
+
+
 def declaration_drift(declared: set[str], derived: set[str]) -> tuple[list[str], list[str]]:
     """§5.4 组件边界语义的 declaration-drift 对（#928）。
 
@@ -699,6 +726,16 @@ def cmd_declare(args) -> int:
         except ValueError as exc:
             print(f"[REFUSED] {exc}", file=sys.stderr)
             return 2
+    try:
+        worktree = normalize_worktree(args.worktree)
+    except ValueError as exc:
+        print(f"[REFUSED] {exc}", file=sys.stderr)
+        return 2
+    if not os.path.isdir(worktree):
+        # WARN 但不拒：finish 后 worktree 常被删除，而重新 declare 同一 worktree
+        # 名是合法场景（§5.2 档 2/档 3 本就覆盖 worktree 不在场）。
+        print(f"[WARN] --worktree 目录不存在（{worktree}）——"
+              f"§5.2 档 1 归属不可用，将退回 branch/declared 档", file=sys.stderr)
     rec_id = args.requirement
     ctx = load_locked(path, lock)
     try:
@@ -714,7 +751,7 @@ def cmd_declare(args) -> int:
         if args.issue and any(n < 1 or n > 999999 for n in args.issue):
             print(f"[REFUSED] --issue 必须为 1-6 位正整数: {sorted(args.issue)}", file=sys.stderr)
             return 2
-        branch = (_git(["rev-parse", "--abbrev-ref", "HEAD"], args.worktree) or [None])[0]
+        branch = (_git(["rev-parse", "--abbrev-ref", "HEAD"], worktree) or [None])[0]
         new_issues = set(args.issue or []) | extract_issue_numbers(args.requirement, branch or "")
         # §3.5 v1.10 决策类纪律机械化（#1232）：产物落到具体 ADR 文件时必须显式 --issue，
         # 否则 §3.4 工作项查重没有输入，同主题两个 Execution 完全互不感知（#906 事故形态）。
@@ -746,7 +783,7 @@ def cmd_declare(args) -> int:
             "requirement": args.requirement,
             "harness": args.harness,
             "role": role_value,
-            "worktree": os.path.abspath(args.worktree),
+            "worktree": worktree,
             "branch": branch or "",
             "scope": scopes,
             "issues": sorted((str(n) for n in new_issues), key=int),
@@ -1105,6 +1142,32 @@ def cmd_update(args) -> int:
             except ValueError as exc:
                 print(f"[REFUSED] {exc}", file=sys.stderr)
                 return 2
+        if args.worktree:
+            # 修正通道：早期 `declare` 的 `os.path.abspath` 在 worktree 内传相对路径时
+            # 会写入 `<worktree>/<相对路径>` 这类不存在的拼接值，而该字段此前无任何
+            # 修正入口（`update` 只有 --scope/--pr）。契约 §5.1「update 可覆写 declared
+            # ——声明过期由执行侧显式清理」确立的原则同样适用于此。
+            try:
+                new_wt = normalize_worktree(args.worktree)
+            except ValueError as exc:
+                print(f"[REFUSED] {exc}", file=sys.stderr)
+                return 2
+            old_wt = rec.get("worktree") or ""
+            if new_wt != old_wt:
+                if not os.path.isdir(new_wt):
+                    print(f"[WARN] --worktree 目录不存在（{new_wt}）——"
+                          f"§5.2 档 1 归属不可用", file=sys.stderr)
+                rec["worktree"] = new_wt
+                # branch 由 worktree 推导（§5.2 档 2 的数据源）——路径修正后必须一并
+                # 重推导，否则残留旧路径推出的空/错值，档 2 仍不可用。
+                derived = (_git(["rev-parse", "--abbrev-ref", "HEAD"], new_wt) or [None])[0]
+                if derived and derived != "HEAD":
+                    rec["branch"] = derived
+                    print(f"[OK] worktree 已修正 {old_wt!r} → {new_wt!r}；branch={derived!r}",
+                          file=sys.stderr)
+                else:
+                    print(f"[OK] worktree 已修正 {old_wt!r} → {new_wt!r}；"
+                          f"branch 未能推导（保留 {rec.get('branch')!r}）", file=sys.stderr)
         if args.pr:
             rec["pr_number"] = str(args.pr)
             rec["integration_cache"] = seed_registered_pr(rec.get("integration_cache"))
@@ -1226,6 +1289,23 @@ def run_self_test() -> int:
     assert scope_overlap("backend", "backend_new/x.py") is False  # 组件边界（§5.4）
     assert scope_overlap("a.py", "a.py") is True
     assert scope_overlap("a.py", "a.py.bak") is False
+
+    # worktree 路径校验（§5.2 归属前提）：**只接受绝对路径**。
+    # 相对路径会被 os.path.abspath 按 cwd 解析成 `<cwd>/<相对>`——在 worktree X 内
+    # 即得 `X/<相对>` 这类不存在的拼接值（registry 实锤 4 条），使 §5.2 档 1 不可用、
+    # branch 推导返回空而静默降级到档 3。故拒绝而非自动转换。
+    expect("worktree 绝对路径接受",
+           lambda: normalize_worktree("/home/x/stp-1"), False)
+    assert normalize_worktree("/home/x/stp-1/") == "/home/x/stp-1"
+    expect("worktree 相对路径拒绝", lambda: normalize_worktree("stp-1"), True)
+    expect("worktree 点斜杠拒绝", lambda: normalize_worktree("./stp-1"), True)
+    expect("worktree 空串拒绝", lambda: normalize_worktree(""), True)
+    # 拒绝信息须给出「按 cwd 会解析成什么」——否则调用方无从修正
+    try:
+        normalize_worktree("stp-1", cwd="/home/x")
+        raise AssertionError("相对路径应抛 ValueError")
+    except ValueError as exc:
+        assert "/home/x/stp-1" in str(exc), f"拒绝信息未给出解析结果: {exc}"
 
     # 真值表（§3.2）：开放 PR 恒在窗口（R23 的 ABANDONED×PR_OPEN 必须在窗）
     assert in_risk("CODING", "NO_PR") and in_risk("FINISHED", "NO_PR")
@@ -1640,6 +1720,10 @@ def main() -> int:
                         "不刷任何 last_seen，#1234）")
     p.add_argument("--scope", action="append")
     p.add_argument("--pr", type=int)
+    p.add_argument("--worktree",
+                   help="修正记录的 worktree 路径（绝对路径；顺带按新路径重推导 branch）"
+                        "——§5.1「update 可覆写 declared」原则；用于修复早期相对路径"
+                        "被 os.path.abspath 拼成 <worktree>/<相对路径> 的错误值")
     p.set_defaults(fn=cmd_update)
 
     p = sub.add_parser("drift", help="P3 drift gate（advisory；--strict 转 required 接口）")

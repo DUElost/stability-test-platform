@@ -13,6 +13,7 @@ import type { ReadinessDevice } from '@/utils/planExecuteReadiness';
 import { rangeSelectIds, sortDevicesStable } from './planExecuteSelection';
 import { isSchedulable, resolveDeviceTileStatus } from './tileStatus';
 import type { DeviceTileStatus } from './types';
+import { hostLabel } from '@/utils/hostDisplay';
 
 /** 瓦片斜纹（阻塞）：与 blocked 底色同走 destructive——红底琥珀纹在暗色主题下
  *  易被读成两种状态；经 CSS 变量走语义色，暗色主题自动适配（#356/#362） */
@@ -66,7 +67,7 @@ export function buildMatrixVirtualRows(
   for (const device of ordered) {
     const hostId = String(device.host_id ?? 'unassigned');
     const host = hostMap.get(hostId);
-    const label = host?.ip || host?.name || (hostId === 'unassigned' ? '未分配节点' : hostId);
+    const label = hostLabel(host, hostId);
     const band = bands.get(hostId) ?? { hostId, label, items: [] };
     band.items.push(device);
     bands.set(hostId, band);
@@ -195,7 +196,7 @@ export function DeviceMatrix({
                         const selected = selectedIds.has(device.id);
                         const canSelect = isSchedulable(device);
                         const host = hostMap.get(String(device.host_id ?? 'unassigned'));
-                        const hostLabel = host?.ip || host?.name || device.host_id || '节点未知';
+                        const label = hostLabel(host, device.host_id, '节点未知');
                         const flash = highlightId === device.id;
                         return (
                           <Tooltip key={device.id}>
@@ -238,7 +239,7 @@ export function DeviceMatrix({
                             </TooltipTrigger>
                             <TooltipContent side="top" className="max-w-xs space-y-0.5 bg-popover text-popover-foreground">
                               <div className="font-mono text-xs font-medium">{device.serial}</div>
-                              <div className="text-[11px]">节点：{hostLabel}</div>
+                              <div className="text-[11px]">节点：{label}</div>
                               <div className="text-[11px]">型号：{device.model || '—'}</div>
                               <div className="text-[11px]">版本：{device.build_display_id || '—'}</div>
                               <div className="text-[11px]">状态：{status}</div>

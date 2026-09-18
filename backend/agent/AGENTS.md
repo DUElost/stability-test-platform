@@ -32,6 +32,7 @@ realtime/scheduler/models/alembic/main）——Agent 部署在无控制面的主
 `legacy_aee`、`pipeline_validator`），理由写在
 `tests/test_agent_import_boundary.py::_SHARED_ALLOWLIST`。
 
-**测试侧不受此门禁保护（待裁决）**：`backend/agent/tests/` 的 env 由 conftest
-自供（#2428），越界 import 不会在干净环境炸掉——实测 14 个文件仍在 import 控制面
-模块，`agent-tests-collect` 抓不到。
+注意与测试面的区别：`backend/agent/tests/` 的 env 由 conftest 自供（#2428），
+测试里 import 控制面**不会**在干净环境炸掉——所以这条边界由**静态 AST 守卫**钉住。
+测试侧另有**只减不增**的清单棘轮（`tests/test_agent_test_import_ratchet.py`，
+当前 14 个文件）；收敛方式（迁移到 `backend/tests/` / 就地解耦）待裁决。
