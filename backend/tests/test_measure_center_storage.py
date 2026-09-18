@@ -7,6 +7,7 @@ import os
 
 import pytest
 
+from backend.storage_families import RUN_FAMILIES
 from backend.scripts import measure_center_storage as mcs
 
 
@@ -56,7 +57,11 @@ def test_resolve_center_root_rejects_non_directory(tmp_path):
 
 
 def _seed_center(root) -> None:
-    """造一个最小中心存储树：run 7 在 devices/jira 各一份，run 8 只在 devices。"""
+    """造一个最小中心存储树：run 7 在 devices/jira 各一份，run 8 只在 devices。
+
+    ``_meta/7/`` 与 ``jobs/99/`` 各自的用途：前者证明 run 主键族**全部**进测量族清单
+    （#2188：``_meta`` 曾被 retention 清、却不在测量族里 → E-2 结构性看不见），
+    后者证明 job 主键族不冒充 run（``jobs/{job_id}`` 不是 run）。"""
     _write(root / "devices" / "7" / "ev-a" / "f.bin", 100)
     _write(root / "devices" / "8" / "ev-b" / "f.bin", 50)
     _write(root / "devices" / "unassigned" / "ev-c" / "f.bin", 20)
@@ -65,6 +70,7 @@ def _seed_center(root) -> None:
     _write(root / "dedup" / "7" / "merge" / "mtk" / "Result_MergeFiles.xls", 40)
     _write(root / "jira" / "7" / "merge" / "mtk" / "Result_MergeFiles.xls", 40)
     _write(root / "jobs" / "99" / "artifact.txt", 11)
+    _write(root / "_meta" / "7" / "172-21-1-1.json", 7)
 
 
 def test_collect_baseline_reports_event_dir_duplication(tmp_path):
@@ -105,7 +111,10 @@ def test_collect_baseline_reports_run_counts_and_top(tmp_path):
 
     assert report["run_counts"]["devices"] == 3  # 7 / 8 / unassigned
     assert report["run_counts"]["jira"] == 1
-    assert report["run_counts"]["jobs"] == 1
+    # jobs/{job_id} 按 job 主键分桶，不得混进 run_counts（#2188）
+    assert "jobs" not in report["run_counts"]
+    assert report["job_dir_count"] == 1
+    assert report["job_dir_bytes"] == 11
     # jira/7 = 事件 100 + merge xls 40 = 140；devices/7 = 100；devices/8 = 50
     assert [row["name"] for row in report["top_runs_by_bytes"]] == [
         "jira/7",
@@ -113,6 +122,38 @@ def test_collect_baseline_reports_run_counts_and_top(tmp_path):
     ]
     assert report["top_runs_by_bytes"][0]["bytes"] == 140
     assert "E-2" in report["not_covered"][0]
+
+
+@pytest.mark.parametrize("family", sorted(RUN_FAMILIES))
+def test_every_run_family_is_visible_in_the_report(tmp_path, family):
+    """每一个 run 主键族都必须在报告里可见——**清单由单一来源参数化**。
+
+    这条是 #2188 的直接教训：``_meta/{run_id}/`` 有 retention 清理、却没有测量族条目，
+    于是该族的残留对 E-2 对账完全不可见，「漏桶=E-2 必挂」这句自述判据不成立。
+    断言写成对 ``RUN_FAMILIES`` 参数化，新增一族即自动获得覆盖（不再靠有人记得补）。
+    """
+    _write(tmp_path / family / "7" / "blob.bin", 9)
+
+    report = mcs.collect_baseline(tmp_path)
+
+    assert report["families"][family]["bytes"] == 9
+    assert report["run_counts"][family] == 1
+    assert any(row["name"].startswith(f"{family}/") for row in report["top_runs_by_bytes"])
+
+
+def test_jobs_family_measured_as_job_keyed_dirs(tmp_path):
+    """``jobs`` 有总量（进 ``families``），但分解口径是 job 目录数而非 run 数。"""
+    _write(tmp_path / "jobs" / "99" / "artifact.txt", 11)
+    _write(tmp_path / "jobs" / "100" / "artifact.txt", 5)
+
+    report = mcs.collect_baseline(tmp_path)
+
+    assert report["families"]["jobs"]["bytes"] == 16
+    assert report["job_dir_count"] == 2
+    assert report["job_dir_bytes"] == 16
+    assert not any(
+        row["name"].startswith("jobs/") for row in report["top_runs_by_bytes"]
+    )
 
 
 def test_collect_handles_empty_center_root(tmp_path):
