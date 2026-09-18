@@ -1,6 +1,6 @@
 # AI Execution Contract（执行契约）
 
-- **状态**：Living v1.12（本文是 Execution Contract 的**唯一权威源**；方向裁决与理由见 [`ADR-0034`](../../adr/ADR-0034-multi-harness-execution-contract.md)（Accepted），两者冲突时以本文为准并回溯修订 ADR。v1.12 变更：**契约分层**——实现级细则与历史留档迁入[规范附录](execution-contract-annex.md)（A.1 写入协议 / A.2 drift 豁免 / A.3 已满足的启动判据与过渡条款 / A.4 v1.1–v1.8 明细），正文只留语义面；S6 预算随之下调（#1238，2026-09-10 用户裁决）。v1.11 变更：§2.1 命令清单改以 `--help` 为准；§3.3 增 `update --all`（只刷终态、不刷 `last_seen`）（#1234）。v1.10 变更：§3.2/§3.3 **integration 缓存失效**（`risk = 真值表 ∧ ¬landed`，fail-safe、不写字段）+ 僵尸候选两类对齐；§5.2 增 derived 归属前提；§3.5/§3.6 决策类判据机械化、模式词汇表与字段封闭性（#1232；2026-09-10 用户裁决）。v1.9 变更：§3.2 增僵尸候选第二类 `closed-unmerged`——PR CLOSED 未合且未放弃、失联、diff 为空的记录显式提示（仍在风险窗口并占 issue 槽位，唯一出口 `finish --abandon` 只能人工触发，来源 #1147 记录静默占位；2026-09-09 用户裁决）；（v1.1–v1.8 变更明细见[附录 A.4](execution-contract-annex.md#a4-变更历史v11v18自正文头部迁出)））
+- **状态**：Living v1.13（v1.13 变更：§3.4 增「空 issue 集必须显性」（advisory `[WARN]`，替代实测被忽略的行尾 hint；#2729，2026-09-18）。v1.12（本文是 Execution Contract 的**唯一权威源**；方向裁决与理由见 [`ADR-0034`](../../adr/ADR-0034-multi-harness-execution-contract.md)（Accepted），两者冲突时以本文为准并回溯修订 ADR。v1.12 变更：**契约分层**——实现级细则与历史留档迁入[规范附录](execution-contract-annex.md)（A.1 写入协议 / A.2 drift 豁免 / A.3 已满足的启动判据与过渡条款 / A.4 v1.1–v1.8 明细），正文只留语义面；S6 预算随之下调（#1238，2026-09-10 用户裁决）。v1.11 变更：§2.1 命令清单改以 `--help` 为准；§3.3 增 `update --all`（只刷终态、不刷 `last_seen`）（#1234）。v1.10 变更：§3.2/§3.3 **integration 缓存失效**（`risk = 真值表 ∧ ¬landed`，fail-safe、不写字段）+ 僵尸候选两类对齐；§5.2 增 derived 归属前提；§3.5/§3.6 决策类判据机械化、模式词汇表与字段封闭性（#1232；2026-09-10 用户裁决）。v1.9 变更：§3.2 增僵尸候选第二类 `closed-unmerged`——PR CLOSED 未合且未放弃、失联、diff 为空的记录显式提示（仍在风险窗口并占 issue 槽位，唯一出口 `finish --abandon` 只能人工触发，来源 #1147 记录静默占位；2026-09-09 用户裁决）；（v1.1–v1.8 变更明细见[附录 A.4](execution-contract-annex.md#a4-变更历史v11v18自正文头部迁出)））
 - **日期**：2026-09-10
 - **适用**：所有在本仓库参与 Execution Registry 的 AI Coding Harness 会话；**用哪个 Harness 承接哪个 Requirement 始终由开发者决定**（选择权原则，ADR §2.1）——本文只约束已被选择的 Execution 如何登记与协同可见，不定义任何路由或自动下发
 - **上游评审**：两轮八源审查综合 [`REVIEW_ADR0034_MULTI_HARNESS_2026-09-06_synthesis.md`](../../reviews/REVIEW_ADR0034_MULTI_HARNESS_2026-09-06_synthesis.md)（R1–R30 权威映射）
@@ -102,6 +102,7 @@ risk = integration ∈ {PR_OPEN, READY}                                ← 开�
 - **issue 集** = 显式 `--issue N`（可重复）∪ requirement/branch slug 启发式提取（标记 `issue|fix` + 分隔符 + 1-6 位数字；日期串与无标记数字不误报）；
 - **拒绝条件**：新 declare 的 issue 集与任何**在窗记录**（§3.2 risk 真值表；MERGED 已出窗不拦）的 issue 集相交 → exit 2，列出冲突记录与 issue 号；
 - **`--force`**：仅供人工确认转手/并行边界后显式覆盖，覆盖时输出 `[WARN]` 留痕；同名录拒绝（先 `finish --abandon`）不因 `--force` 放行；
+- **空 issue 集必须显性（v1.13 增，#2729）**：issue 集为空时 declare 输出独立一行 `[WARN]`（写明查重对它不生效 + 两种补齐写法），**advisory、不阻断**；行尾 hint 撤除（同一事实只留一处）。实录与取舍见[附录 A.5](execution-contract-annex.md#a5-空-issue-集边界与-2706-撞车实录2729)。
 - **定位**：查重是**工作项去重，不是文件上锁**（§2.3 边界不变）——scope overlap（§5.4）管「同一处代码」，issue 查重管「同一件事」，两者互补且都尊重选择权原则（§适用）：冲突由人裁决，工具只保证可见与默认拒绝。
 
 ### 3.5 竞争提案可见性与决策实体唯一性（v1.8 增，#906）

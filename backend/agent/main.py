@@ -23,18 +23,28 @@ if __name__ == "__main__" and __package__ is None:
     from agent.adb_wrapper import AdbWrapper
     from agent.api_client import fetch_pending_jobs
     from agent.recovery_executor import (
-        _cleanup_after_job_exit,
-        _coerce_recovery_interval,
         _make_local_worker_token,
         _rollback_failed_claim,
-        execute_recovery_actions_impl,
-        handle_lease_lost,
         run_recovery_sync_if_needed,
         trigger_recovery_sync_on_device_reconnect,
     )
     from agent.bootstrap_subsystems import start_disk_and_watcher_subsystems
     from agent.startup_identity import bootstrap_process_identity
     from agent.control_handler import ControlHandlerDeps, build_control_handler
+    from agent.active_job_bindings import (
+        ActiveJobOccupancy,
+        JobRunnerStateSlot,
+        build_deregister_active_job,
+        build_on_lease_lost,
+        build_register_active_job,
+    )
+    from agent.recovery_runtime import (
+        ResumeJobSlot,
+        build_cancel_recovery_job,
+        build_execute_recovery_actions,
+        build_resume_recovered_job,
+        start_periodic_recovery_sync,
+    )
     from agent import device_discovery
     from agent.aee.state_migration import migrate_legacy_aee_state_keys
     from agent.artifact_uploader import ArtifactUploader
@@ -57,18 +67,28 @@ else:
     from .adb_wrapper import AdbWrapper
     from .api_client import fetch_pending_jobs
     from .recovery_executor import (
-        _cleanup_after_job_exit,
-        _coerce_recovery_interval,
         _make_local_worker_token,
         _rollback_failed_claim,
-        execute_recovery_actions_impl,
-        handle_lease_lost,
         run_recovery_sync_if_needed,
         trigger_recovery_sync_on_device_reconnect,
     )
     from .bootstrap_subsystems import start_disk_and_watcher_subsystems
     from .startup_identity import bootstrap_process_identity
     from .control_handler import ControlHandlerDeps, build_control_handler
+    from .active_job_bindings import (
+        ActiveJobOccupancy,
+        JobRunnerStateSlot,
+        build_deregister_active_job,
+        build_on_lease_lost,
+        build_register_active_job,
+    )
+    from .recovery_runtime import (
+        ResumeJobSlot,
+        build_cancel_recovery_job,
+        build_execute_recovery_actions,
+        build_resume_recovered_job,
+        start_periodic_recovery_sync,
+    )
     from . import device_discovery
     from .aee.state_migration import migrate_legacy_aee_state_keys
     from .artifact_uploader import ArtifactUploader
@@ -404,22 +424,21 @@ def main() -> None:
     control_deps.heartbeat_thread = heartbeat_thread
 
 
+    occupancy = ActiveJobOccupancy(
+        lock=_active_jobs_lock,
+        job_ids=_active_job_ids,
+        device_ids=_active_device_ids,
+        job_tokens=_active_job_tokens,
+        device_owner=_active_device_owner,
+    )
+    job_runner_slot = JobRunnerStateSlot()
     # ADR-0019 Phase 3b: lease 丢失回调（409 时 LeaseRenewer 内部已清理，此处处理外部状态）
-    def _on_lease_lost(jid: int, device_id: Optional[int]) -> None:
-        # #799: 顺序与占位语义见 handle_lease_lost——先杀在跑脚本（换 hosting
-        # 前必须有「本机已停手」的硬保证），设备占位保留到 worker 真正退出。
-        handle_lease_lost(
-            job_id=jid,
-            device_id=device_id,
-            job_runner_state=job_runner_state,
-            coordinator=coordinator,
-            active_jobs_lock=_active_jobs_lock,
-            active_job_ids=_active_job_ids,
-            active_device_ids=_active_device_ids,
-            active_job_tokens=_active_job_tokens,
-            active_device_owner=_active_device_owner,
-            local_db=local_db,
-        )
+    _on_lease_lost = build_on_lease_lost(
+        occupancy=occupancy,
+        job_runner_slot=job_runner_slot,
+        coordinator=coordinator,
+        local_db=local_db,
+    )
 
     # 启动 lease 续租器
     lease_renewer = LeaseRenewer(
@@ -434,50 +453,19 @@ def main() -> None:
     )
     lease_renewer.start()
 
-    # ADR-0019 Phase 2b + Phase 3a/3b: 活跃 job 注册/注销闭包（捕获 lease_renewer + local_db）
-    def _register_active_job(
-        jid: int,
-        fencing_token: str = "",
-        device_id: Optional[int] = None,
-        device_serial: str = "",
-        local_worker_token: str = "",
-    ) -> None:
-        effective_worker_token = local_worker_token or fencing_token
-        with _active_jobs_lock:
-            _active_job_ids.add(jid)
-            _active_job_tokens[jid] = effective_worker_token
-            if device_id is not None:
-                _active_device_ids.add(device_id)  # Phase 3b: 注册时同步占位 device
-                _active_device_owner[device_id] = jid
-        if fencing_token:
-            lease_renewer.set_fencing_token(
-                jid,
-                fencing_token,
-                device_id,
-                effective_worker_token,
-            )
-        if device_id is not None:
-            local_db.save_active_job(jid, device_id, fencing_token, device_serial)
+    # ADR-0019 Phase 2b + Phase 3a/3b: 活跃 job 注册/注销（捕获 lease_renewer + local_db）
+    _register_active_job = build_register_active_job(
+        occupancy=occupancy,
+        lease_renewer=lease_renewer,
+        local_db=local_db,
+    )
+    _deregister_active_job = build_deregister_active_job(
+        occupancy=occupancy,
+        lease_renewer=lease_renewer,
+        local_db=local_db,
+    )
 
-    def _deregister_active_job(
-        jid: int,
-        fencing_token: str = "",
-        local_worker_token: str = "",
-    ) -> None:
-        _cleanup_after_job_exit(
-            job_id=jid,
-            fencing_token=fencing_token,
-            local_worker_token=local_worker_token,
-            active_jobs_lock=_active_jobs_lock,
-            active_job_ids=_active_job_ids,
-            active_device_ids=_active_device_ids,
-            active_job_tokens=_active_job_tokens,
-            active_device_owner=_active_device_owner,
-            lease_renewer=lease_renewer,
-            local_db=local_db,
-        )
-
-    # 必须在闭包定义之后注册，避免 _handle_control 中 _deregister_active_job 引用未绑定
+    # 真实 control handler 在 deps 就绪后注册；回放启动窗口暂存命令（P2-2a）
     sio_client.set_control_handler(_handle_control)
     # 回放启动窗口内暂存的命令（P2-2a）
     while True:
@@ -494,28 +482,17 @@ def main() -> None:
     outbox_drain = OutboxDrainThread(api_url, local_db, interval=15.0)
     outbox_drain.start()
 
-    _resume_recovered_job = None
-
     # ── ADR-0019 Phase 3a: Recovery Sync ──
-    def _cancel_recovery_job(jid: int) -> None:
-        if job_runner_state is not None:
-            job_runner_state.request_abort(jid)
-
-    def _execute_recovery_actions_impl_closure(
-        resp: dict,
-        active_jobs_by_id: dict,
-    ) -> None:
-        """Execute recovery actions returned by Backend (closure capturing dependencies)."""
-        execute_recovery_actions_impl(
-            resp=resp,
-            active_jobs_by_id=active_jobs_by_id,
-            lease_renewer=lease_renewer,
-            local_db=local_db,
-            outbox_drain=outbox_drain,
-            register_active_job=_register_active_job,
-            resume_job=_resume_recovered_job,
-            abort_local_job=_cancel_recovery_job,
-        )
+    resume_slot = ResumeJobSlot()
+    _cancel_recovery_job = build_cancel_recovery_job(job_runner_slot)
+    _execute_recovery_actions_impl_closure = build_execute_recovery_actions(
+        lease_renewer=lease_renewer,
+        local_db=local_db,
+        outbox_drain=outbox_drain,
+        register_active_job=_register_active_job,
+        resume_slot=resume_slot,
+        cancel_recovery_job=_cancel_recovery_job,
+    )
     _execute_recovery_actions = _execute_recovery_actions_impl_closure
 
     from .patrol_recovery import build_patrol_job_not_running_handler
@@ -561,38 +538,26 @@ def main() -> None:
         on_job_not_running_recovery=patrol_job_not_running_recovery,
     )
     control_deps.job_runner_state = job_runner_state
+    job_runner_slot.value = job_runner_state
 
-    def _resume_recovered_job_impl(job_payload: dict) -> None:
-        job_payload.setdefault("agent_instance_id", agent_instance_id)
-        # ADR-0026 Step 5b: recovered jobs go through scheduler/coordinator.
-        jid = job_payload.get("id")
-        did = job_payload.get("device_id")
-        if jid and did:
-            coordinator.register_job(jid)
-            coordinator.register_job_device(jid, did)
-        prh_id = job_payload.get("plan_run_host_id")
-        plan_run_id = job_payload.get("plan_run_id")
-        if prh_id and plan_run_id:
-            coordinator.register_plan_run_host(prh_id, plan_run_id)
-        executor.submit(
-            run_task_wrapper,
-            job_payload,
-            adb,
-            api_url,
-            host_id,
-            job_runner_state,
-            mq_producer,
-            script_registry,
-            local_db,
-            patrol_checkpoint_store,
-            operation_scheduler=operation_scheduler,
-            coordinator=coordinator,
-            step_trace_uploader=step_trace_uploader,  # #483
-        )
+    resume_slot.value = build_resume_recovered_job(
+        agent_instance_id=agent_instance_id,
+        coordinator=coordinator,
+        executor=executor,
+        adb=adb,
+        api_url=api_url,
+        host_id=host_id,
+        job_runner_state=job_runner_state,
+        mq_producer=mq_producer,
+        script_registry=script_registry,
+        local_db=local_db,
+        patrol_checkpoint_store=patrol_checkpoint_store,
+        operation_scheduler=operation_scheduler,
+        step_trace_uploader=step_trace_uploader,
+        run_task_wrapper=run_task_wrapper,
+    )
 
-    _resume_recovered_job = _resume_recovered_job_impl
-
-    # Recovery sync execution
+    # Recovery sync execution（启动一次 + #784 周期兜底）
     run_recovery_sync_if_needed(
         local_db=local_db,
         api_url=api_url,
@@ -601,34 +566,15 @@ def main() -> None:
         boot_id=boot_id,
         execute_actions=_execute_recovery_actions_impl_closure,
     )
-    # #784: recovery sync 周期兜底——启动一次 + 设备重连不够；控制面短暂
-    # 不可达时 active_job_registry 悬空行需周期性再 reconcile（对齐终态
-    # outbox 15s 兜底）。
-    _recovery_sync_stop = threading.Event()
-    _recovery_sync_interval = _coerce_recovery_interval(
-        os.getenv("STP_RECOVERY_SYNC_INTERVAL_SECONDS", "60")
-    )
-
-    def _recovery_sync_loop() -> None:
-        while not _recovery_sync_stop.wait(_recovery_sync_interval):
-            try:
-                run_recovery_sync_if_needed(
-                    local_db=local_db,
-                    api_url=api_url,
-                    host_id=host_id,
-                    agent_instance_id=agent_instance_id,
-                    boot_id=boot_id,
-                    execute_actions=_execute_recovery_actions_impl_closure,
-                )
-            except Exception:
-                logger.exception("recovery_sync_periodic_failed")
-
-    _recovery_sync_thread = threading.Thread(
-        target=_recovery_sync_loop, name="recovery-sync", daemon=True,
-    )
-    _recovery_sync_thread.start()
-    logger.info(
-        "recovery_sync_periodic_started interval=%.1fs", _recovery_sync_interval,
+    _recovery_sync_stop, _recovery_sync_thread, _recovery_sync_interval = (
+        start_periodic_recovery_sync(
+            local_db=local_db,
+            api_url=api_url,
+            host_id=host_id,
+            agent_instance_id=agent_instance_id,
+            boot_id=boot_id,
+            execute_actions=_execute_recovery_actions_impl_closure,
+        )
     )
     # SIGTERM / SIGINT graceful shutdown
     _shutdown_event = threading.Event()

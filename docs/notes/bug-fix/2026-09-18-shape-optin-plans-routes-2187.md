@@ -89,14 +89,29 @@ heartbeat/logs/notifications/audit/stats/results/hosts + schema 面配对），
 typing 联合 / `Any`），未决豁免 2 条（archive 前端无消费者、分页壳——均写明
 失效条件）。
 
+## 追加：第 7 批 agent_api.py——把「Agent 协议面」整段认领（types.ts 零镜像）
+
+预照证实：该文件 6 个具名模型（`JobOut`/`HeartbeatResponse`/`ArtifactOut`/
+`PatrolHeartbeatOut`/`_CoordinatorHeartbeatOut`/`_ExtendBatchOut`，全在 #1520
+切片后的 services 里）**无一有 TS 镜像**，10 个端点是运行期 dict——这里没有
+可修的漂移，opt-in 的产出就是把这条盲区**整段认领进台账**（契约 docstring 的
+原设计：「列台账而非放宽 parser，让盲区有人认领」）。协议字段的守门人是
+backend/agent 的 fake-agent 契约测试族，不是轴线 C；台账注释同时钉住
+`ArtifactOut`（agent 上报回执）与 `PlanRunJobArtifactOut`（前端产物列表）是
+两个端点两种载荷，防后来者混同。
+
+**七批终账**：opt-in 文件 14、在册对拍 27、具名豁免 8（2 壳 + 6 Agent 协议，
+均带失效/转正条件）、判据修正 5 处、真实缺陷修复 4 处（幽灵返回类型/枚举缺值/
+jobs 漏声明/stale 并集）。`ApiResponse[dict]` 在全仓 typed routes 文件里的存量
+盲区已全部有主。
+
 ## Verification
 
 - 契约 15 passed（plans 2 对、projects 6 对、scripts 2 对全部当场通过）；
 - `test_scripts.py + test_scripts_default_params.py` → **37 passed**（第 3 批后）；
 - 第 4 批：契约 15、devices 路由组 106 passed；
-- 第 5+6 批：契约 15（15 对在册全解析通过）、七文件路由回归（`-k "result or
-  stats or notification or audit or agent_log or heartbeat or hosts"`）与
-  `check:quick` 12 门禁 → 见 PR；
+- 第 5+6 批：契约 15、七文件路由回归 277 passed、check:quick 12 门禁；
+- 第 7 批：契约 15 passed（agent_api 台账解析/失效判据全过），`check:quick` 见 PR；
 - `test_project_routes.py` → **75 passed**；`check:quick` 12 门禁（第 2 批后）；
 - `test_plans_api.py + test_read_api_auth.py` → **145 passed**；
 - vitest `PlanExecutePage.test.tsx` → **58 passed**（唯一消费点行为回归）；

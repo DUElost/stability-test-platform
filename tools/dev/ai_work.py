@@ -674,6 +674,25 @@ def record_issue_numbers(rec: dict) -> set:
     return nums
 
 
+def issue_binding_notice(issues: set[int], *, decision_class: bool = False) -> str | None:
+    """issue 集为空时的 advisory 提示（#2729）；非空（或决策类，另有专门文案）返回 None。
+
+    「空 issue 集」是个**静默盲区**：记录 declare 得成功，但它对 §3.4 的工作项查重**完全
+    隐形**——工具不会、也无法从名字里推断出没写出来的号。2026-09-18 实录：对方记录名
+    `fix-ms04 MS-04 的 S3 证据补候选集（#2404 同类：…）` 的可提取集为空（`ms04` 非数字、
+    `#2404` 是母题号），9 分钟后第二条记录 declare 时无交集、静默通过，同一 issue 出现两份 PR。
+
+    合法场景存在（纯重构、探索），故只提示不阻断——与 §3.4「工具只保证可见与默认拒绝，
+    冲突由人裁决」同一取向。
+    """
+    if issues or decision_class:
+        return None
+    return (
+        "[WARN] 本记录未绑定任何 issue：§3.4 的 issue 查重对它不生效——若本单有 issue 号，"
+        "请在 requirement 名里带 `fix-<N>` / `issue-<N>`，或用 --issue N 显式声明"
+    )
+
+
 def issue_conflicts(new_issues: set, records: dict, skip_id: str,
                     landed: set | None = None) -> list:
     """在窗 issue 撞车检测（纯函数）：返回 [(record_id, 命中 issue 号列表)]。
@@ -764,6 +783,9 @@ def cmd_declare(args) -> int:
             return 2
         if claims and not new_issues:
             print(f"[WARN] --force：决策类 Execution {claims} 未声明 --issue——§3.4 查重无输入（§3.5）")
+        notice = issue_binding_notice(new_issues, decision_class=bool(claims))
+        if notice:  # #2729：空集静默盲区显性化（advisory，不阻断）
+            print(notice)
         landed = landed_ids(ctx.records, repo_root)
         conflicts = issue_conflicts(new_issues, ctx.records, rec_id, landed)
         if conflicts and not args.force:
@@ -798,11 +820,11 @@ def cmd_declare(args) -> int:
     finally:
         ctx.close()
     issue_note = f" issues={sorted((str(n) for n in new_issues), key=int)}" if new_issues else ""
-    hint = "" if new_issues else \
-        "（hint：requirement/branch 未含 issue 号且未带 --issue——在窗查重无输入，建议 --issue N）"
+    # #2729：空集提示已上移为独立 [WARN]（issue_binding_notice，风险措辞）——原「[OK] 行尾
+    # 括号 hint」在同一事实上有两处说法，且实测撞车发生在 hint 在场时（#2706），故只留一处。
     print(f"[OK] declare {rec_id} role={role_value} scope={scopes} "
           f"test_impact={args.test_impact or 'indirect(缺省)'}"
-          f"{issue_note}{hint}")
+          f"{issue_note}")
     return 0
 
 
@@ -1536,6 +1558,12 @@ def run_self_test() -> int:
     assert extract_issue_numbers("docs/947-observation-table-sync") == set()
     assert extract_issue_numbers("myfix-123") == set()  # 标记词边界
     assert extract_issue_numbers("fix-1234567") == set()  # ≥7 位非 issue 号
+
+    # #2729 空 issue 集的 advisory 提示：红绿双向（空集提示、非空不提示、决策类另有文案）
+    assert issue_binding_notice(set()) is not None
+    assert "§3.4" in issue_binding_notice(set())
+    assert issue_binding_notice({2706}) is None
+    assert issue_binding_notice(set(), decision_class=True) is None
 
     # #978 在窗查重纯函数：issues 字段权威、slug 兜底、MERGED 出窗、skip 自身
     recs = {
