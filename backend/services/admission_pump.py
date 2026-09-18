@@ -67,6 +67,11 @@ ADMISSION_RETRY_BACKOFF_SECONDS = int(os.getenv("STP_ADMISSION_RETRY_BACKOFF_SEC
 # effective priority point, capped at AGING_MAX_BOOST (0 disables).
 ADMISSION_AGING_STEP_SECONDS = int(os.getenv("STP_ADMISSION_AGING_STEP_SECONDS", "1800"))
 ADMISSION_AGING_MAX_BOOST = int(os.getenv("STP_ADMISSION_AGING_MAX_BOOST", "5"))
+# #2651：收缩准入适用的 run 类型。SCHEDULE（定时任务触发）与 CHAIN（链后继）
+# 是周期性批量执行，设备瞬时离线/忙碌是常态而非配置发散——准入终检把可重试
+# 不可用设备显式剔除并审计后带余集继续；MANUAL（人工精确圈机）保持
+# all-or-nothing 语义不变（ADR-0038 D5/D5bis 的防静默缩集合语境）。
+_ADMISSION_SHRINK_RUN_TYPES = ("SCHEDULE", "CHAIN")
 
 
 def _utc_now() -> datetime:
@@ -713,9 +718,49 @@ def admission_transaction(db: Session, run_id: int, attempt_id: str) -> bool:
         raise _FatalAdmission(
             "devices_unavailable_at_admission", {"unavailable_devices": fatal},
         )
+    shrink_excluded: list | None = None
     if unavailable:
-        db.rollback()
-        raise _RetryableAdmission("DEVICE_BUSY", unavailable)
+        if pr.run_type in _ADMISSION_SHRINK_RUN_TYPES:
+            # #2651：周期/链式 run 的收缩准入——可重试不可用设备（瞬时离线/
+            # 忙碌/维护窗）显式剔除并审计，带余集继续执行，替代 all-or-nothing
+            # 无限退避（全量静态快照下任一成员瞬时不可用即整链停摆/丢窗）。
+            # 边界：fatal 拒因（not_found/no_host/host_retired）与 host 漂移仍按
+            # 原语义显式失败；剔除后为空 = 整体暂态（如上一链未收尾），维持
+            # 可重试排队而非 fatal——设备恢复后下轮准入照常收缩。
+            excluded_ids = {int(e["id"]) for e in unavailable}
+            kept_targets = [t for t in targets if t.device_id not in excluded_ids]
+            if not kept_targets:
+                db.rollback()
+                raise _RetryableAdmission("DEVICE_BUSY", unavailable)
+            for t in targets:
+                if t.device_id in excluded_ids:
+                    db.delete(t)
+            targets = kept_targets
+            device_ids = [t.device_id for t in targets]
+            device_host_map = {
+                did: hid for did, hid in device_host_map.items()
+                if did not in excluded_ids
+            }
+            record_audit(
+                db,
+                action="admission_shrink",
+                resource_type="plan_run",
+                resource_id=run_id,
+                details={
+                    "run_type": pr.run_type,
+                    "excluded_devices": unavailable,
+                    "kept_device_count": len(device_ids),
+                },
+            )
+            logger.info(
+                "admission_shrunk plan_run=%d excluded=%d kept=%d reasons=%s",
+                run_id, len(excluded_ids), len(device_ids),
+                sorted({e["reason"] for e in unavailable}),
+            )
+            shrink_excluded = unavailable
+        else:
+            db.rollback()
+            raise _RetryableAdmission("DEVICE_BUSY", unavailable)
 
     # Immutable-snapshot integrity (reviewer, Step 4.1): the run was verified
     # and grouped against host_id_snapshot at prepare; a device that migrated
@@ -782,6 +827,10 @@ def admission_transaction(db: Session, run_id: int, attempt_id: str) -> bool:
     dispatch_state["completed_at"] = now.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
     dispatch_state["last_error"] = None
     run_ctx["dispatch_state"] = dispatch_state
+    if shrink_excluded is not None:
+        # #2651：收缩准入的 run 级可见性——被剔除设备与拒因随 run 存档，
+        # 供结果页/审计回溯「这个窗口为什么少了设备」。
+        run_ctx["admission_excluded_devices"] = shrink_excluded
     pr.run_context = run_ctx
     flag_modified(pr, "run_context")
     if pr.enqueued_at is not None:

@@ -84,10 +84,10 @@ def step4_fixture(db_session):
     return {"plan": plan, "h1": h1, "h2": h2, "d1": d1, "d2": d2, "d3": d3}
 
 
-def _queued_run(db, f, device_ids) -> PlanRun:
+def _queued_run(db, f, device_ids, run_type: str = "MANUAL") -> PlanRun:
     return prepare_plan_run(
         plan_id=f["plan"].id, device_ids=device_ids,
-        triggered_by="pytest", db=db, run_type="MANUAL",
+        triggered_by="pytest", db=db, run_type=run_type,
     )
 
 
@@ -232,6 +232,8 @@ class TestAdmissionTransaction:
             PlanRunHost.plan_run_id == pr.id).all()
         assert all(h.status == "PENDING_ADMISSION" for h in hosts)
         assert all(h.admitted_at is None for h in hosts)
+
+
 
     def test_wifi_pool_full_requeues_resource_busy(self, db_session, step4_fixture):
         f = step4_fixture
@@ -421,6 +423,106 @@ class TestAdmissionTransaction:
 
 
 # ── Pump tick end-to-end (enqueue mocked) ─────────────────────────────────────
+
+
+class TestAdmissionShrink:
+    """#2651：SCHEDULE/CHAIN run 的收缩准入——可重试不可用设备显式剔除并审计。
+
+    生产背景（2026-09-18 run 427）：568 台静态快照 23-28 台 monkey teardown 后
+    adb 重连扰动离线，all-or-nothing 准入整链无限退避；MANUAL 语义不变。
+    """
+
+    def _claim(self, db, pr) -> str:
+        claimed = claim_queued_plan_runs(db)
+        assert claimed and claimed[0][0] == pr.id
+        return claimed[0][1]
+
+    @pytest.mark.parametrize("run_type", ["SCHEDULE", "CHAIN"])
+    def test_shrinks_unavailable_devices_and_admits(
+        self, db_session, step4_fixture, run_type,
+    ):
+        f = step4_fixture
+        pr = _queued_run(db_session, f, [f["d1"].id, f["d2"].id, f["d3"].id],
+                         run_type=run_type)
+        attempt = self._claim(db_session, pr)
+        _attach_lease(db_session, f["d3"].id, "aq4-h2")
+
+        assert admission_transaction(db_session, pr.id, attempt) is True
+
+        db_session.expire_all()
+        pr = db_session.get(PlanRun, pr.id)
+        assert pr.status == "RUNNING"
+        assert pr.total_job_count == 2
+        jobs = db_session.query(JobInstance).filter(
+            JobInstance.plan_run_id == pr.id).all()
+        assert {j.device_id for j in jobs} == {f["d1"].id, f["d2"].id}
+        # 被剔除设备：target 行删除 + run_context 记录拒因 + 审计行
+        from backend.models.plan_run import PlanRunTargetDevice
+        target_ids = {t.device_id for t in db_session.query(
+            PlanRunTargetDevice).filter(
+            PlanRunTargetDevice.plan_run_id == pr.id).all()}
+        assert target_ids == {f["d1"].id, f["d2"].id}
+        excluded = pr.run_context.get("admission_excluded_devices")
+        assert excluded and excluded[0]["id"] == f["d3"].id
+        assert excluded[0]["reason"] == "active_lease"
+        from backend.models.audit import AuditLog
+        audit_rows = db_session.query(AuditLog).filter(
+            AuditLog.action == "admission_shrink",
+            AuditLog.resource_type == "plan_run",
+            AuditLog.resource_id == str(pr.id),
+        ).all()
+        assert len(audit_rows) == 1
+        assert audit_rows[0].details["kept_device_count"] == 2
+        # h2 失去唯一设备后 host 投影仍完整、计数归零（不删快照）
+        hosts = db_session.query(PlanRunHost).filter(
+            PlanRunHost.plan_run_id == pr.id).order_by(PlanRunHost.host_id).all()
+        assert [(h.status, h.total_job_count) for h in hosts] == [
+            ("ADMITTED", 2), ("ADMITTED", 0),
+        ]
+
+    def test_offline_device_is_shrunk_not_blocking(
+        self, db_session, step4_fixture,
+    ):
+        f = step4_fixture
+        pr = _queued_run(db_session, f, [f["d1"].id, f["d2"].id, f["d3"].id],
+                         run_type="SCHEDULE")
+        attempt = self._claim(db_session, pr)
+        f["d3"].status = DeviceStatus.OFFLINE.value
+        db_session.commit()
+
+        assert admission_transaction(db_session, pr.id, attempt) is True
+
+        db_session.expire_all()
+        pr = db_session.get(PlanRun, pr.id)
+        assert pr.status == "RUNNING"
+        assert pr.total_job_count == 2
+        excluded = pr.run_context.get("admission_excluded_devices")
+        assert excluded and excluded[0]["reason"] == "device_offline"
+
+    def test_all_unavailable_keeps_retryable(self, db_session, step4_fixture):
+        """剔除后为空 = 整体暂态（如上一链未收尾）——维持可重试排队，不 fatal。"""
+        f = step4_fixture
+        pr = _queued_run(db_session, f, [f["d1"].id], run_type="SCHEDULE")
+        attempt = self._claim(db_session, pr)
+        _attach_lease(db_session, f["d1"].id, "aq4-h1")
+
+        with pytest.raises(_RetryableAdmission) as exc:
+            admission_transaction(db_session, pr.id, attempt)
+        assert exc.value.queue_reason == "DEVICE_BUSY"
+
+    def test_fatal_reason_never_shrunk(self, db_session, step4_fixture):
+        """host_retired 等 fatal 拒因不进收缩——显式失败语义不变（ADR-0038 D-1）。"""
+        f = step4_fixture
+        pr = _queued_run(db_session, f, [f["d1"].id, f["d3"].id], run_type="SCHEDULE")
+        attempt = self._claim(db_session, pr)
+        f["h2"].retired_at = datetime.now(timezone.utc)
+        db_session.commit()
+
+        from backend.services.admission_pump import _FatalAdmission
+        with pytest.raises(_FatalAdmission) as exc:
+            admission_transaction(db_session, pr.id, attempt)
+        assert "host_retired" in str(exc.value.detail)
+
 
 
 @pytest.fixture
