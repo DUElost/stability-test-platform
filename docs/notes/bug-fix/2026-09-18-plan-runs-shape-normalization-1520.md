@@ -98,6 +98,19 @@ interface，按 `_MODEL_UNREGISTERED` 具名认领（失效条件写明：接入
 不在本刀票面）。plan_runs.py 的 dict 盲区台账清空为 `set()`，opt-in 保留——
 typed 端点记账继续生效。
 
+## 追加：解析器跨文件基类扩展（第四 commit）——`JiraRunOut` 摘掉最后一条真实限制
+
+轴 C 解析器此前遇**同仓库跨文件基类**（`ORMBaseModel` 在 `schemas/base.py`）直接
+报错，`JiraRunOut` 只能按台账无限期豁免。本 commit 把「报错」升级为「先尝试
+仓库内定位再报错」：沿 `from backend.x.y import Base` 导入语句解出模块文件、
+递归展开基类注解字段；**定位不到或第三方基类仍然报错**——「少收字段会让
+TS-only 幽灵判据假绿」的原判据一字不放宽。`JiraRunOut ↔ JiraRunRecord`
+（18↔18 字段逐名一致）随之转正登记，`_MODEL_UNREGISTERED` 里 plan 面豁免清零，
+只剩 `PlanRunArchiveTriggerOut`（前端无消费者的具名认领，属"合理挂账"而非
+解析器限制）。
+
+根 `tests/` 全套 1493 passed（解析器改动的全局自证面——所有登记对都重新解析一遍）。
+
 ## Revisit
 
 - （已做）写侧三摘要已升模型，`#2089` 逐分支判据落在 `TestWriteSideSummaryBranches`

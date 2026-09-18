@@ -3,6 +3,7 @@ import type {
   User, NotificationChannel, AlertRule, TaskSchedule, TaskScheduleCreatePayload,
   TaskScheduleUpdatePayload, ScheduleRunNowResult, PaginatedResponse,
   NotificationLogsResponse, UnreadCountResponse,
+  AuditFacets,
 } from './types';
 
 export const users = {
@@ -83,4 +84,6 @@ export const audit = {
     }
     return apiClient.get<PaginatedResponse<Record<string, unknown>>>('/audit-logs', { params }).then(r => r.data);
   },
+  /** #2629：筛选候选由实际写入的 distinct 值给出（词表单源，杜绝死选项假阴性）。 */
+  facets: () => apiClient.get<AuditFacets>('/audit-logs/facets').then(r => r.data),
 };

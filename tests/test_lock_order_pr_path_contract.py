@@ -39,6 +39,8 @@ from pathlib import Path
 
 import yaml
 
+from tests import ci_workflow_probe as probe
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CI_YML = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 BACKEND_TESTS = REPO_ROOT / "backend" / "tests"
@@ -153,7 +155,7 @@ class TestPrPathWiring:
         runs = [
             (name, _run_text(step))
             for name, _job, step in _pr_stage_steps()
-            if "pytest" in _run_text(step)
+            if "pytest" in probe.code_text(step)  # #2641：只看代码行，注释不算
         ]
         assert runs, "PR 路径里没有任何 pytest 步骤，解析器已失效"
 

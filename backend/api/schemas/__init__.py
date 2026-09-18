@@ -29,7 +29,11 @@ from backend.api.schemas.notification import (
     AlertRuleCreate, AlertRuleUpdate, AlertRuleOut,
 )
 from backend.api.schemas.schedule import TaskScheduleCreate, TaskScheduleUpdate, TaskScheduleOut
-from backend.api.schemas.audit import AuditLogOut
+from backend.api.schemas.audit import (
+    AuditFacetValue,
+    AuditFacetsOut,
+    AuditLogOut,
+)
 from backend.api.schemas.jira_run import JiraRunOut
 from backend.api.schemas.settings import SettingsOut
 from backend.api.schemas.ai_assistant import (
@@ -156,6 +160,8 @@ __all__ = [
     "TaskScheduleUpdate",
     "TaskScheduleOut",
     "AuditLogOut",
+    "AuditFacetValue",
+    "AuditFacetsOut",
     "JiraRunOut",
     "PrecheckPhase",
     "PrecheckHostStatus",
