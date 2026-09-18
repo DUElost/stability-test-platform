@@ -451,13 +451,76 @@ def _state_runs(state_dir: Path) -> int:
         return 0
 
 
+#: `evidence` 里保留的发布物个数（#2718）——handover 只读当前发布物，旧桶纯备查，
+#: 留一个有限窗口即可，避免文件随升级次数无限增长。
+EVIDENCE_RELEASES_KEPT = 5
+
+
+def _stage_status_map(stages: list[dict]) -> dict[str, str]:
+    """把一次运行的 stages 摊平成 `check_id → stage.status`（同一 check 只出现在一个 stage 里）。"""
+    out: dict[str, str] = {}
+    for entry in stages:
+        if not isinstance(entry, dict):
+            continue
+        status = str(entry.get("status") or "")
+        for check_id in entry.get("checks", []) or []:
+            out[str(check_id)] = status
+    return out
+
+
+def _accumulated_evidence(state_dir: Path, release: str, stages: list[dict]) -> dict:
+    """按**发布物**累积 `check_id → status`（#2718）。
+
+    为什么：`stages` 只记最近一次运行，而不同运行形态发出的证据 ID 不同——plain
+    `install.sh --yes`（S0–S4，文档化的升级路径）不产出 `install.s5.*`，于是它会把上一次
+    `--through-agents` 留下的 S5 证据抹掉，handover 的 MS-01 随即假 BLOCKED（238 现场）。
+
+    合并规则（与 handover 的读取侧同源）：
+    - **同 ID 以最新状态覆盖**（本次运行的 stages 覆盖历史——历史不得掩盖刚发生的失败）；
+    - **本次没发的 ID 保留**（这正是要补的那一半：S5 证据活过 plain 重跑）；
+    - 只按**当前发布物**分桶，跨发布物不继承（旧发布物的证据不得满足本次验收）。
+
+    旧格式（只有 `stages`、没有 `evidence`）在写侧折入：升级本工具的那一次运行不会丢历史。
+    """
+    previous: dict = {}
+    try:
+        previous = json.loads((state_dir / STATE_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        previous = {}
+    if not isinstance(previous, dict):
+        previous = {}
+
+    evidence = {
+        str(key): dict(value)
+        for key, value in (previous.get("evidence") or {}).items()
+        if isinstance(value, dict)
+    } if isinstance(previous.get("evidence"), dict) else {}
+
+    # 旧格式折入：上一份状态只有 stages 时，把它记到它自己的发布物下
+    previous_release = str(previous.get("release") or "")
+    if previous_release and "evidence" not in previous:
+        seeded = evidence.setdefault(previous_release, {})
+        for check_id, status in _stage_status_map(previous.get("stages") or []).items():
+            seeded.setdefault(check_id, status)
+
+    bucket = evidence.setdefault(release, {})
+    bucket.update(_stage_status_map(stages))
+
+    while len(evidence) > EVIDENCE_RELEASES_KEPT:
+        del evidence[next(iter(evidence))]  # 丢最早插入的那个发布物
+    return evidence
+
+
 def _state_payload(ctx: InstallContext, stages: list[dict]) -> dict:
+    release = ctx.config.release.expected_release
     return {
         "site_id": ctx.config.site.id,
         "runs": _state_runs(ctx.state_dir) + 1,
         "target": ctx.config.control_plane.target,
-        "release": ctx.config.release.expected_release,
+        "release": release,
         "config_digest": _config_digest(ctx.config_path),
         "dry_run": ctx.dry_run,
         "stages": stages,
+        # #2718：按发布物累积的证据视图（handover 的 MS 项读它，不再只看最近一次运行）
+        "evidence": _accumulated_evidence(ctx.state_dir, release, stages),
     }

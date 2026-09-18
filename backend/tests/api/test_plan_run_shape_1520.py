@@ -72,6 +72,30 @@ def test_summary_plan_name_matches_detail_source_2623(client, auth_headers, db_s
     )
 
 
+def test_detail_include_jobs_false_drops_embedded_jobs_2623(
+    client, auth_headers, db_session, sample_device,
+):
+    """#2623（opt-out 先行）：`?include_jobs=false` 不返回内嵌 jobs。
+
+    实测 510 job 的 run 里内嵌 jobs 占响应 **98.9%**，而仓内前端类型未声明该字段、
+    工具侧明确「Job 明细走专用端点」——即零消费方。默认仍填充（仓外未知调用方不
+    受影响）；「默认不填充」属对外契约变更，另由 ADR 裁决。
+    """
+    run, job = _Seed.one(db_session, sample_device)
+
+    default = client.get(f"/api/v1/plan-runs/{run.id}", headers=auth_headers).json()["data"]
+    assert [j["id"] for j in default["jobs"]] == [job.id], "默认行为不得变：仍返回内嵌 jobs"
+
+    light = client.get(
+        f"/api/v1/plan-runs/{run.id}?include_jobs=false", headers=auth_headers,
+    ).json()["data"]
+    assert light["jobs"] == [], "opt-out 后不得再返回内嵌 jobs"
+    # 瘦身只动 jobs：其余键逐一不变（防「顺手」改了别的口径）
+    assert {k: v for k, v in light.items() if k != "jobs"} == {
+        k: v for k, v in default.items() if k != "jobs"
+    }
+
+
 def test_summary_plan_name_follows_live_plan_not_snapshot(client, auth_headers, db_session, sample_device):
     """口径判据：**改名之后**两个端点都得跟着现值走，而不是各读一份历史。
 

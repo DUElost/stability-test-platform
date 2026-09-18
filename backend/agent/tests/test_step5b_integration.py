@@ -75,7 +75,7 @@ class TestStartupOrder:
         assert s.held == 0
 
     def test_runtime_env_reload_overrides_hot_settings(self, tmp_path, monkeypatch):
-        from backend.agent.main import _reload_runtime_env
+        from backend.agent.control_handler import reload_runtime_env as _reload_runtime_env
 
         env_file = tmp_path / ".env"
         env_file.write_text("STP_MAX_CONCURRENT_OPERATIONS=9\n", encoding="ascii")

@@ -53,7 +53,8 @@ export function usePlanRunDetailData(id: number, filters: Filters) {
 
   const runQ = useQuery({
     queryKey: planRunKeys.detail(id),
-    queryFn: () => api.planRuns.get(id),
+    // #2623：本页不消费内嵌 jobs（占响应 98.9%）——opt-out 拿轻量响应
+    queryFn: () => api.planRuns.get(id, { includeJobs: false }),
     enabled: !!id,
     refetchInterval: (query) =>
       planRunRefetchInterval(

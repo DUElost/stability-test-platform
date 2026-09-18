@@ -290,7 +290,9 @@ def test_coordinator_pacing_reload_takes_effect(heartbeat_env):
 
 def test_main_reload_config_reapplies_pacing():
     """静态契约：#2086 的实例级 re-apply 必须留在 reload_config 分支内（防回退）。"""
-    src = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
+    src = (Path(__file__).resolve().parents[1] / "control_handler.py").read_text(
+        encoding="utf-8"
+    )
     branch = src.split('elif command == "reload_config":', 1)[1]
     branch = branch.split("elif command ==", 1)[0]  # 截到下一个分支为止
     assert "reset_agent_settings_caches()" in branch, "重读 .env 后必须清缓存（否则 re-apply 读旧值）"

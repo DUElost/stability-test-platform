@@ -22,7 +22,7 @@ python -B -m tools.site_config handover \
 ```
 
 - **先完整安装、再 verify、最后 handover**：安装记录只保留最近一次运行，部分重跑（例如不带 `--through-agents`）会覆盖它并使 S5 相关证据消失。
-- 读安装记录 `install-state.json`（**含 `runs` 运行次数**）与可选的 `verify --json` 报告，把 PRD 的 P1 验收条目映射到具体 `check_id`：
+- 读安装记录 `install-state.json`（**含 `runs` 运行次数**与按发布物累积的证据视图 `evidence[<release>]`，#2718）与可选的 `verify --json` 报告，把 PRD 的 P1 验收条目映射到具体 `check_id`：
   - `MS-01` 空白站点装完并按指南接入（S0–S4 + S5 + verify Host）
   - `MS-02` 同一发布物换输入复用、无跨站点泄入（摘要/站点级秘密/绑定）
   - `MS-04` 重跑不重置不轮换（要求 `runs ≥ 2`）、破坏性步骤前失败

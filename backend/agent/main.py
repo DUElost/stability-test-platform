@@ -5,8 +5,7 @@ import signal
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, Optional, Set
 
 # 自动加载 .env 文件（支持手动运行时读取配置）
 # 优先加载当前工作目录的 .env，不覆盖已有环境变量
@@ -35,18 +34,15 @@ if __name__ == "__main__" and __package__ is None:
     )
     from agent.bootstrap_subsystems import start_disk_and_watcher_subsystems
     from agent.startup_identity import bootstrap_process_identity
+    from agent.control_handler import ControlHandlerDeps, build_control_handler
     from agent import device_discovery
     from agent.aee.state_migration import migrate_legacy_aee_state_keys
     from agent.artifact_uploader import ArtifactUploader
     from agent.config import BASE_DIR, ensure_dirs
     from agent.log_archiver import LogArchiver, collect_archive_heartbeat_metrics
-    from agent.scan_runner import ScanRunner
-    from agent.unisoc_scan_runner import UnisocScanRunner
     from agent.event_uploader import EventUploader
-    from agent.upload_manager import UploadManager
     from agent.local_disk_monitor import LocalDiskMonitor
     from agent.heartbeat_thread import HeartbeatThread
-    from agent.settings import reset_agent_settings_caches
     from agent.job_runner import JobRunnerState, run_task_wrapper
     from agent.lease_renewer import LeaseRenewer
     from agent.mq.producer import StepTraceWriter
@@ -71,18 +67,15 @@ else:
     )
     from .bootstrap_subsystems import start_disk_and_watcher_subsystems
     from .startup_identity import bootstrap_process_identity
+    from .control_handler import ControlHandlerDeps, build_control_handler
     from . import device_discovery
     from .aee.state_migration import migrate_legacy_aee_state_keys
     from .artifact_uploader import ArtifactUploader
     from .config import BASE_DIR, ensure_dirs
     from .log_archiver import LogArchiver, collect_archive_heartbeat_metrics
-    from .scan_runner import ScanRunner
-    from .unisoc_scan_runner import UnisocScanRunner
     from .event_uploader import EventUploader
-    from .upload_manager import UploadManager
     from .local_disk_monitor import LocalDiskMonitor
     from .heartbeat_thread import HeartbeatThread
-    from .settings import reset_agent_settings_caches
     from .job_runner import JobRunnerState, run_task_wrapper
     from .lease_renewer import LeaseRenewer
     from .operation_scheduler import OperationScheduler
@@ -120,27 +113,6 @@ _active_job_tokens: Dict[int, str] = {}
 _active_jobs_lock = threading.Lock()
 _lock_renewal_stop_event = threading.Event()
 
-
-def _parse_abort_job_ids(payload: Dict[str, Any]) -> List[int]:
-    """Parse abort command payload into job ids (#805-2).
-
-    A malformed id must not abort the whole control handler — otherwise other
-    jobs in the same batch never get their abort signal. Skip invalid entries
-    and keep the valid ones.
-    """
-    raw_job_ids = payload.get("job_ids")
-    candidates: List[Any] = []
-    if isinstance(raw_job_ids, list):
-        candidates = list(raw_job_ids)
-    elif payload.get("job_id") is not None:
-        candidates = [payload["job_id"]]
-    job_ids: List[int] = []
-    for raw in candidates:
-        try:
-            job_ids.append(int(raw))
-        except (TypeError, ValueError):
-            logger.warning("control_abort_invalid_job_id raw=%r", raw)
-    return job_ids
 
 
 def _migrate_legacy_aee_state_on_startup(db_path: str) -> Dict[str, Any]:
@@ -228,22 +200,6 @@ def _version_lt(a: str, b: str) -> bool:
 
 
 
-
-def _reload_runtime_env(env_file: Path | None = None) -> bool:
-    """Reload the Agent EnvironmentFile for runtime-reconfigurable settings."""
-    try:
-        from dotenv import load_dotenv
-    except ImportError:
-        logger.warning("control_reload_config_dotenv_unavailable")
-        return False
-
-    path = env_file or (BASE_DIR / ".env")
-    if not path.is_file():
-        logger.warning("control_reload_config_env_missing path=%s", path)
-        return False
-    loaded = bool(load_dotenv(path, override=True))
-    logger.info("control_reload_config_env_loaded path=%s loaded=%s", path, loaded)
-    return loaded
 
 
 def _ensure_adb_server_on_startup(adb_path: str) -> bool:
@@ -339,150 +295,20 @@ def main() -> None:
     # Assigned after the executor is created; the control closure also handles
     # commands received during the small startup window.
     job_runner_state: Optional[JobRunnerState] = None
+    control_deps = ControlHandlerDeps()
+    _handle_control = build_control_handler(
+        deps=control_deps,
+        mq_producer=mq_producer,
+        host_id=str(host_id),
+        api_url=api_url,
+        agent_secret=agent_secret,
+        adb_path=adb_path,
+        local_db=local_db,
+        active_jobs_lock=_active_jobs_lock,
+        active_job_ids=_active_job_ids,
+        ensure_adb_server=_ensure_adb_server_on_startup,
+    )
 
-    # Control commands via SocketIO (replaces Redis ControlListener)
-    def _handle_control(data):
-        command = data.get("command", "")
-        payload = data.get("payload", {})
-        if command == "backpressure":
-            limit_str = payload.get("log_rate_limit")
-            limit = None
-            if limit_str and str(limit_str) not in ("None", "null", ""):
-                try:
-                    limit = int(limit_str)
-                except ValueError:
-                    pass
-            mq_producer.set_log_rate_limit(limit)
-        elif command == "abort":
-            # #805-2：坏 id 不得中断整个 handler（否则同批其它 job 的 abort 丢失）。
-            job_ids = _parse_abort_job_ids(payload)
-            for job_id in job_ids:
-                # ADR-0026 Step 5b: signal abort FIRST so _is_aborted()
-                # returns True, THEN cancel the permit waiter. If cancel
-                # fires first, the waiter sees PermitDenied before the
-                # abort flag is set, retries, and re-acquires the permit.
-                if job_runner_state is not None:
-                    requested = job_runner_state.request_abort(job_id)
-                else:
-                    requested = False
-                coordinator.cancel_waiting_job(job_id)
-                logger.info(
-                    "control_abort job_id=%s requested=%s", job_id, requested,
-                )
-        elif command == "archive_now":
-            arch = LogArchiver.instance()
-            if arch.is_configured():
-                threading.Thread(
-                    target=lambda: arch.scan_once(grace_seconds=0.0),
-                    name="archive-now", daemon=True,
-                ).start()
-                logger.info(
-                    "control_archive_now triggered by backend — scan_once(grace=0) "
-                    "clamped to min grace floor",
-                )
-            else:
-                logger.warning("control_archive_now_skipped: archiver not configured")
-        elif command == "scan_now":
-            plan_run_id = payload.get("plan_run_id")
-            is_final = bool(payload.get("is_final", False))
-            if not plan_run_id:
-                logger.warning("control_scan_now_missing_plan_run_id")
-                return {"ok": False, "error": "missing plan_run_id"}
-
-            ScanRunner.enqueue_scan_now(
-                int(plan_run_id),
-                host_id,
-                is_final=is_final,
-                device_serials=payload.get("device_serials") or [],
-                run_date_stamps=payload.get("run_date_stamps") or [],
-            )
-            logger.info(
-                "control_scan_now_triggered plan_run=%d final=%s serials=%s stamps=%s",
-                plan_run_id, is_final,
-                payload.get("device_serials") or [],
-                payload.get("run_date_stamps") or [],
-            )
-        elif command == "reload_config":
-            env_reloaded = _reload_runtime_env()
-            # ADR-0042 P1：`.env` 重读后必须清 Settings 缓存，否则新值被旧缓存吞掉。
-            reset_agent_settings_caches()
-            with _active_jobs_lock:
-                active_count = len(_active_job_ids)
-            if active_count == 0:
-                adb_reconciled = _ensure_adb_server_on_startup(adb_path)
-            else:
-                # 对齐心跳自动修复语义（heartbeat_thread.py 要求 active_count==0）：
-                # 收敛 ADB 会重启目标端口 server、全量重注册 USB，运行中 job 的
-                # adb 会话会被打断。活跃期间跳过，留待无 job 窗口或 Agent 重启生效。
-                adb_reconciled = False
-                logger.warning(
-                    "control_reload_config_skip_adb_reconcile active=%d "
-                    "— 活跃作业期间跳过 ADB 收敛",
-                    active_count,
-                )
-            ScanRunner.instance().configure(force=True)
-            UnisocScanRunner.instance().configure(force=True)
-            UploadManager.instance().configure(force=True)
-            reloaded_api_url = (os.getenv("API_URL") or api_url).rstrip("/")
-            reloaded_agent_secret = os.getenv("AGENT_SECRET") or agent_secret
-            EventUploader.instance().configure(
-                api_url=reloaded_api_url,
-                agent_secret=reloaded_agent_secret,
-                host_id=str(host_id),
-                force=True,
-            )
-            EventUploader.instance().start()
-            operation_cap = operation_scheduler.reload_from_env()
-            # #2086：心跳/协调域的节奏旋钮原先只在构造时取值——reload 打印 done
-            # 但运行中的值不变。实例级 re-apply 补上（缓存已在上面清过）。
-            heartbeat_thread.reload_from_settings()
-            coordinator.reload_from_settings()
-            runner_ok = ScanRunner.instance().is_configured()
-            uploader_ok = UploadManager.instance().is_configured()
-            logger.info(
-                "control_reload_config_done env_reloaded=%s adb_reconciled=%s "
-                "scan_runner=%s upload_manager=%s "
-                "max_concurrent_operations=%d",
-                env_reloaded, adb_reconciled, runner_ok, uploader_ok, operation_cap,
-            )
-        elif command == "list_log_signal_dead_letters":
-            # #302: RPC 回传最近死信清单（经 SocketIO ack）。
-            try:
-                limit = int(payload.get("limit") or 100)
-            except (TypeError, ValueError):
-                limit = 100
-            return {
-                "dead_letters": local_db.get_log_signal_dead_letters(limit=limit),
-            }
-        elif command == "replay_log_signal_dead_letter":
-            # #302: 重置死信行重新入队（next drain tick 拉取重发）。
-            row_id = payload.get("row_id")
-            if not isinstance(row_id, int) or row_id <= 0:
-                return {"ok": False, "error": "invalid row_id"}
-            replayed = local_db.replay_log_signal_dead_letter(row_id)
-            logger.info(
-                "control_replay_log_signal_dead_letter row_id=%d replayed=%s",
-                row_id, replayed,
-            )
-            return {"ok": replayed, "row_id": row_id}
-        elif command == "replay_dle_register_dead_letter":
-            # #1204: DLE create 意图死信回放——重置 dead_letter/attempts，
-            # 下一 drain tick 重新补建（中心升级/漂移窗口过后恢复）。
-            event_id = payload.get("event_id")
-            if not isinstance(event_id, str) or not event_id:
-                return {"ok": False, "error": "invalid event_id"}
-            replayed = local_db.replay_dle_register_dead_letter(event_id)
-            logger.info(
-                "control_replay_dle_register_dead_letter event_id=%s replayed=%s",
-                event_id, replayed,
-            )
-            return {"ok": replayed, "event_id": event_id}
-        else:
-            logger.warning("unknown_control_command: %s", command)
-            return {"ok": False, "error": f"unknown command: {command}"}
-        # P2-4 / #298: 单向 control（scan_now 等）须回 {"ok": true}，
-        # call_agent_control 据此判定已送达；RPC 分支已在上方显式 return。
-        return {"ok": True}
 
     # ADR-0019 Phase 1: capacity helper — thread-safe active job count
     def _get_active_job_count() -> int:
@@ -569,6 +395,10 @@ def main() -> None:
     # Start the per-host coordinator heartbeat (reports coordinator
     # heartbeats + per-job execution_state to control plane).
     coordinator.start()
+    control_deps.coordinator = coordinator
+    control_deps.operation_scheduler = operation_scheduler
+    control_deps.heartbeat_thread = heartbeat_thread
+
 
     # ADR-0019 Phase 3b: lease 丢失回调（409 时 LeaseRenewer 内部已清理，此处处理外部状态）
     def _on_lease_lost(jid: int, device_id: Optional[int]) -> None:
@@ -726,6 +556,7 @@ def main() -> None:
         active_device_owner=_active_device_owner,
         on_job_not_running_recovery=patrol_job_not_running_recovery,
     )
+    control_deps.job_runner_state = job_runner_state
 
     def _resume_recovered_job_impl(job_payload: dict) -> None:
         job_payload.setdefault("agent_instance_id", agent_instance_id)
