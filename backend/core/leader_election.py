@@ -19,6 +19,12 @@ Behaviour:
   one checked-out ``Connection`` for its whole life: the lock is
   session/backend-scoped, so the connection must not go back to the pool
   while we still hold it (#703).
+- **Unlock failure ⇒ the holding connection is discarded** (#703 残留①): a
+  failed ``pg_advisory_unlock`` leaves this very backend possibly still
+  holding the lock, so plain ``close()`` would return the lock to the pool —
+  the singleton job then elects no leader anywhere, forever, with only a
+  debug line as evidence. The failure path calls ``conn.invalidate()`` first
+  so ``close()`` drops the backend connection and the lock dies with it.
 - **The acquire transaction never outlives the acquire** (#703): right after
   the lock is taken the transaction is committed, so a singleton job body
   (minutes long) does not park its connection in ``idle in transaction``.
@@ -139,11 +145,21 @@ def hold_scheduler_leadership(job_name: str) -> Iterator[bool]:
                 conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": key})
                 conn.commit()
             except Exception:
-                logger.debug(
-                    "scheduler_leadership_unlock_failed job=%s",
+                # #703 残留①：session 级锁绑在后端进程上——unlock 抛错时这条连接
+                # **可能仍持锁**。照常 close 会把锁随连接静默带回池里：此后同 key
+                # 在所有副本上永不可取，且只留一行 debug，无法告警。
+                # invalidate 标记连接作废 ⇒ 随后的 close 丢弃后端连接，锁随其后端
+                # 进程消失；日志升级为 warning，让这条路径至少可观测。
+                logger.warning(
+                    "scheduler_leadership_unlock_failed job=%s (invalidating connection)",
                     job_name,
                     exc_info=True,
                 )
+                try:
+                    conn.invalidate()
+                except Exception:
+                    # invalidate 自身失败也不能吞掉关闭出口：仍走下面的 close。
+                    pass
         try:
             # 唯一的关闭出口：取锁失败、未抢到、非 Postgres 方言提前放行，都走这里
             # 归还连接（旧实现在方言分支上不关闭，只靠 GC 兜）。

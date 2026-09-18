@@ -232,7 +232,7 @@ sudo ./deploy/install.sh handover
 - **绑定文件只写一次**：`init` 重跑保留既有 `site_admin` / `site_ssh_encryption` / DSN（输出里
   标 `kept existing bindings (not rotated)`）——站点 `.env.backend` 里已是首次生成的值；
 - 站点级秘密（JWT/Agent secret/WS token/Fernet）只在首次生成；重跑 `env_reused`；
-- `install-state.json`（0700 目录、0600 文件、flock 互斥）记录阶段与 `runs` 计数；
+- `install-state.json`（0700 目录、0600 文件、flock 互斥）记录阶段、`runs` 计数，以及**按发布物累积的证据视图** `evidence[<release>]`（#2718：`stages` 只记最近一次运行，而 plain `install.sh --yes` 不产出 `install.s5.*`——累积视图让同发布物早先的 S5 证据活过这类重跑，`handover` 的 MS 项读它；跨发布物不继承）；
 - 同站点并发安装被拒绝（`state_locked`）；`--dry-run` 只验证与规划；
 - 部分完成后重跑从缺的阶段继续；不要为了「干净重装」删除部署根——先 `mv` 到一边。
 - **升级已装站点时 `--dry-run` 会报 `install.s3.schema` FAIL**：dry-run 不落新树，而该检查
