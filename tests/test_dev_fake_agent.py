@@ -173,6 +173,83 @@ def test_heartbeat_payload_shape(fa):
     assert even["adb_state"] == "device"
 
 
+def test_fixture_serials_are_host_scoped_by_default(fa):
+    """#2570 判据 3：**不连服务**也要钉住「两台夹具不抢同一批设备」。
+
+    ``device.serial`` 全局唯一、心跳按 serial 认设备——前缀不带 host 维度时，
+    第二台夹具只会反复抢第一台的行（``claim`` 恒 ``[]``，且被抢的那台每拍打一条
+    ``device_host_reassignment_blocked``）。这个形状今天看起来像产品缺陷，
+    其实是夹具缺参数化（#2569 的 dev 实测就是这么来的）。
+    """
+    a = fa.build_heartbeat_payload(1, device_count=3, host_ip="192.0.2.11")
+    b = fa.build_heartbeat_payload(1, device_count=3, host_ip="192.0.2.12")
+    sa = {d["serial"] for d in a["devices"]}
+    sb = {d["serial"] for d in b["devices"]}
+    assert sa and sb and not (sa & sb), f"两台 host 的假 serial 必须互不相交：{sa} / {sb}"
+    # 同一台 host 的前缀稳定：否则每拍都在造新设备行
+    again = fa.build_heartbeat_payload(7, device_count=3, host_ip="192.0.2.12")
+    assert {d["serial"] for d in again["devices"]} == sb, (
+        "serial 不能随 seq 漂移——夹具每拍都要认得自己上一拍造的设备"
+    )
+    assert all(s.startswith("DEVFIX") for s in sa | sb), (
+        "前缀仍要一眼看出是夹具，别让假设备混进真机命名空间"
+    )
+
+
+def test_cli_knobs_actually_reach_the_heartbeat_body(fa, monkeypatch):
+    """CLI → payload 的**接线**要被钉住，而不是只测纯函数。
+
+    这文件的参数默认值走 `SUPPRESS` + `_global_defaults()`（`_common_options` 的
+    docstring 记着丢参数的旧坑）。少写一处 `serial_prefix=args.serial_prefix`
+    不会让任何纯函数用例变红，却会让多 host 形状重新塌回互相抢行。
+    """
+    monkeypatch.setenv("AGENT_SECRET", "unit-test-secret")
+    sent: list = []
+    monkeypatch.setattr(
+        fa, "post_json",
+        lambda base, secret, path, body, **kw: sent.append(body) or (200, {"ok": True}),
+    )
+    base_args = ["--base", "http://127.0.0.1:18000", "--host-ip", "192.0.2.13",
+                 "heartbeat", "--count", "1", "--devices", "2", "--log-file", ""]
+    monkeypatch.delenv("STP_DEV_SERIAL_PREFIX", raising=False)
+    assert fa.cmd_heartbeat(fa.parse_cli(base_args)) == 0
+    assert [d["serial"] for d in sent[0]["devices"]] == ["DEVFIX013-001", "DEVFIX013-002"]
+
+    sent.clear()
+    assert fa.cmd_heartbeat(fa.parse_cli(
+        ["--base", "http://127.0.0.1:18000", "--host-ip", "192.0.2.13",
+         "--serial-prefix", "FIXB", "heartbeat", "--count", "1", "--devices", "2",
+         "--log-file", ""])) == 0
+    assert [d["serial"] for d in sent[0]["devices"]] == ["FIXB-001", "FIXB-002"]
+
+    sent.clear()
+    monkeypatch.setenv("STP_DEV_SERIAL_PREFIX", "FIXENV")
+    assert fa.cmd_heartbeat(fa.parse_cli(base_args)) == 0
+    assert [d["serial"] for d in sent[0]["devices"]] == ["FIXENV-001", "FIXENV-002"], (
+        "env 与 CLI 同源（dev 栈里按 host 起多个容器时只有 env 可用）"
+    )
+
+
+def test_explicit_serial_prefix_wins_over_host_derivation(fa):
+    """``--serial-prefix`` 是显式覆盖口（把某台夹具固定成可预测的一批 serial）。"""
+    got = fa.build_heartbeat_payload(
+        1, device_count=2, host_ip="192.0.2.12", serial_prefix="FIXA",
+    )
+    assert [d["serial"] for d in got["devices"]] == ["FIXA-001", "FIXA-002"]
+
+
+@pytest.mark.parametrize("host_ip,expected", [
+    ("192.0.2.12", "DEVFIX012"),
+    ("192.0.2.9", "DEVFIX009"),      # 尾段补零，避免 9 与 09 撞名
+    ("10.20.30.254", "DEVFIX254"),
+    ("dev-fake-host-b", "DEVFIX-devfak"),  # 非 IP：取尾段的字母数字（截 6 位）
+    (None, "DEVFIX"),
+])
+def test_default_serial_prefix_edges(fa, host_ip, expected):
+    """派生规则本身可单测——它决定夹具在 dev 里是不是「一人一份设备」。"""
+    assert fa.default_serial_prefix(host_ip) == expected
+
+
 def test_transport_preference_matches_dev_reality(fa):
     """auto 先试生产契约的 websocket（#1121），镜像缺 websocket-client 才退 polling。"""
     assert fa._transport_order("auto") == ["websocket", "polling"]

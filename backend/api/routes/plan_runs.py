@@ -9,18 +9,14 @@ import logging
 import time
 from typing import Optional
 
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
-from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from backend.api.response import ApiResponse, ok
 from backend.api.routes.auth import get_current_active_user, User
 from backend.api.schemas.case_result import (
-    TestCaseResultOut,
-    TestCaseResultSummary,
     TestCaseResultsPayload,
 )
 from backend.api.schemas.plan_run import (
@@ -31,7 +27,6 @@ from backend.api.schemas.plan_run import (
     PlanRunAbortIn,
     PlanRunDevicesOut,
     PlanRunEventsOut,
-    PlanRunLogEventOut,
     PlanRunLogEventsOut,
     PlanRunDetailOut,
     PlanRunListPageOut,
@@ -43,8 +38,6 @@ from backend.core.metrics import (
     record_plan_run_devices_query_duration,
 )
 from backend.models.enums import PlanRunStatus
-from backend.models.job import JobArtifact, JobInstance
-from backend.models.plan_run import PlanRun
 from backend.services.plan_run_timeline import build_plan_run_timeline
 from backend.services.plan_run_event_feed import build_plan_run_events
 from backend.services.plan_run_chain import build_plan_run_chain
@@ -54,6 +47,12 @@ from backend.services.plan_run_chain import (  # noqa: F401
     chain_node_from_run,
 )
 from backend.services.plan_run_archive import archive_plan_run_logs
+from backend.services.plan_run_summary import build_plan_run_summary
+from backend.services.plan_run_job_artifacts import list_plan_run_job_artifacts
+from backend.services.plan_run_result_views import (
+    build_plan_run_log_events,
+    build_plan_run_test_case_results,
+)
 from backend.services.plan_run_devices import (
     build_plan_run_devices,
 )
@@ -88,11 +87,6 @@ from backend.services.plan_run_export import (
     build_plan_run_export,
     plan_run_export_to_markdown,
 )
-from backend.services.device_log_event import (
-    list_plan_run_device_log_event_platforms,
-    list_plan_run_device_log_events,
-)
-from backend.services.case_result_ingest import list_plan_run_test_case_results
 from backend.services.job_artifact_download import build_artifact_download_response
 from backend.services.plan_run_catalog import (
     build_plan_run_detail,
@@ -147,10 +141,8 @@ router = APIRouter(prefix="/api/v1", tags=["plan-runs"])
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
-def _iso(v) -> str | None:
-    if v is None:
-        return None
-    return v.isoformat()
+from backend.services.plan_run_read_common import iso as _iso
+from backend.services.plan_run_read_common import require_plan_run as _require_plan_run
 
 
 @router.get("/plan-runs", response_model=ApiResponse[PlanRunListPageOut])
@@ -369,74 +361,13 @@ def manual_exit_job(
 
 
 
-# ── ADR-0021/ADR-0022 C5a₂: PlanRunDetailPage 聚合端点 ──────────────────
-#
-# 5 个独立 GET 端点供前端分别拉取,所有返回值都是 PlanRun 范围内的聚合视图;
-# 注意:
-#   - 这些端点是 RUNNING / 终态都可调用的(终态后值定格,前端可缓存)
-#   - chain 端点会沿 parent_plan_run_id 链向 root 回溯;next 节点是 Plan.next_plan_id
-#     指向的 Plan,是否已触发由 PlanRun.next_plan_triggered 决定
-#   - timeline 端点的 step_trace 聚合仅返回 init / patrol / teardown 三阶段的
-#     succeeded/failed 计数;ADR-0022 后 patrol 成功步骤不再写 step_trace,
-#     真实 patrol 进度从 JobInstance.patrol_*_cycle_count 派生
-#   - events 端点融合 4 个数据源:
-#     1) step_trace(失败步骤,作为 init/patrol/teardown 阶段事件)
-#     2) job_log_signal(watcher 异常,作为 patrol 阶段事件)
-#     3) audit_logs(plan_run / job_instance / dispatch_gate,作为 system 事件)
-#     4) PlanRun 自身 trigger 事件 + patrol heartbeat 周期摘要
-#   - devices 端点的 ui_status 派生规则:
-#       COMPLETED                            → completed
-#       FAILED                              → failed
-#       ABORTED                             → aborted
-#       UNKNOWN                              → unknown (grace / recovery window)
-#       PENDING                              → pending
-#       RUNNING + manual_action=EXIT_REQ.    → backoff
-#       RUNNING + next_retry_at > now        → backoff
-#       RUNNING + log_signal_count > 0       → risk
-#       RUNNING (其他)                        → running
-#   - watcher-summary 默认 60min 窗口,与上一窗口对比得到 trend
-#
-# 性能保障:依赖 ADR-0022 patrol 心跳聚合 + ADR-0021 C5a₂ 新建的两个
-# step_trace 复合索引 (idx_step_trace_job_stage / idx_step_trace_job_status_ts)。
+# ── ADR-0021/ADR-0022 C5a₂ 聚合端点（chain/timeline/events/devices/watcher）──
+# 业务在对应 service；本文件只留 Query + `_require_plan_run` + `ok(build_*)`。
 
 # ── 公共常量 ─────────────────────────────────────────────────────────────
 
 _MAX_EVENTS_LIMIT             = 500
 _DEFAULT_EVENTS_LIMIT         = 100
-
-
-
-def _require_plan_run(db: Session, run_id: int) -> PlanRun:
-    pr = db.get(PlanRun, run_id)
-    if pr is None:
-        raise HTTPException(status_code=404, detail="plan run not found")
-    return pr
-
-
-def _duration_seconds(start, end) -> float | None:
-    if start is None:
-        return None
-    if end is None:
-        end = datetime.now(timezone.utc)
-    try:
-        return max(0.0, (_aware(end) - _aware(start)).total_seconds())
-    except TypeError:
-        return None
-
-
-def _aware(ts: datetime | None) -> datetime | None:
-    """Normalise naive datetimes to UTC.
-
-    SQLite (used in test mode) does not store tz info; PostgreSQL does.
-    Several aggregation paths compare DB-stored values against
-    ``datetime.now(timezone.utc)`` and would otherwise raise
-    ``TypeError: can't compare offset-naive and offset-aware datetimes``.
-    """
-    if ts is None:
-        return None
-    if ts.tzinfo is None:
-        return ts.replace(tzinfo=timezone.utc)
-    return ts
 
 
 # ── Endpoint 1: GET /plan-runs/{id}/chain ────────────────────────────────
@@ -584,38 +515,8 @@ def get_plan_run_log_events(
     primary consumer.
     """
     _require_plan_run(db, run_id)
-    rows, total = list_plan_run_device_log_events(
-        db,
-        run_id,
-        skip=skip,
-        limit=limit,
-        state=state,
-        platform=platform,
-    )
-    items = [
-        PlanRunLogEventOut(
-            id=str(row.id),
-            serial=row.serial,
-            platform=row.platform,
-            event_type=row.event_type,
-            event_subtype=row.event_subtype,
-            state=row.state,
-            local_path=row.local_path,
-            remote_path=row.remote_path,
-            detected_at=_iso(row.detected_at) or "",
-            device_timestamp=_iso(row.device_timestamp),
-            job_id=row.job_id,
-            host_id=row.host_id,
-            signal_seq_no=row.signal_seq_no,
-        )
-        for row in rows
-    ]
-    return ok(PlanRunLogEventsOut(
-        plan_run_id=run_id,
-        total=total,
-        items=items,
-        # #2288：平台全集单独取——不受本次 `platform`/`limit` 影响，前端筛选选项据此渲染。
-        platforms=list_plan_run_device_log_event_platforms(db, run_id, state=state),
+    return ok(build_plan_run_log_events(
+        db, run_id, skip=skip, limit=limit, state=state, platform=platform,
     ))
 
 
@@ -633,38 +534,8 @@ def get_plan_run_test_case_results(
 ):
     """ADR-0030 P2: PlanRun 逐条用例结果（test_case_result 表）。"""
     _require_plan_run(db, run_id)
-    rows, total, summary_counts = list_plan_run_test_case_results(
-        db, run_id, status=status, skip=skip, limit=limit,
-    )
-    job_ids = {row.job_id for row in rows}
-    jobs_by_id: dict[int, JobInstance] = {}
-    if job_ids:
-        jobs_by_id = {
-            j.id: j
-            for j in db.query(JobInstance).filter(JobInstance.id.in_(job_ids)).all()
-        }
-    items = []
-    for row in rows:
-        job = jobs_by_id.get(row.job_id)
-        items.append(TestCaseResultOut(
-            id=row.id,
-            plan_run_id=row.plan_run_id,
-            job_id=row.job_id,
-            suite_id=row.suite_id,
-            case_id=row.case_id,
-            case_name=row.case_name,
-            status=row.status,
-            detail=row.detail,
-            artifact_uri=row.artifact_uri,
-            run_dir=row.run_dir,
-            created_at=row.created_at,
-            device_id=job.device_id if job else None,
-            host_id=str(job.host_id) if job and job.host_id is not None else None,
-        ))
-    return ok(TestCaseResultsPayload(
-        items=items,
-        total=total,
-        summary=TestCaseResultSummary(**summary_counts),
+    return ok(build_plan_run_test_case_results(
+        db, run_id, skip=skip, limit=limit, status=status,
     ))
 
 
@@ -700,9 +571,7 @@ def export_plan_run_report(
     _current_user: User = Depends(get_current_active_user),
 ):
     """Export PlanRun summary + devices + timeline (bounded to avoid OOM)."""
-    pr = db.get(PlanRun, run_id)
-    if pr is None:
-        raise HTTPException(status_code=404, detail="plan run not found")
+    pr = _require_plan_run(db, run_id)
 
     data = build_plan_run_export(db, pr)
     fmt = format.strip().lower()
@@ -734,34 +603,7 @@ def get_plan_run_summary(
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
-    pr = db.get(PlanRun, run_id)
-    if pr is None:
-        raise HTTPException(status_code=404, detail="plan run not found")
-
-    jobs_result = db.execute(
-        select(
-            JobInstance.status,
-            func.count(JobInstance.id),
-        )
-        .where(JobInstance.plan_run_id == run_id)
-        .group_by(JobInstance.status)
-    )
-    status_counts = {row[0]: row[1] for row in jobs_result.all()}
-    total = sum(status_counts.values())
-    pass_rate = (
-        status_counts.get("COMPLETED", 0) / total if total > 0 else 0.0
-    )
-
-    return ok({
-        "plan_run_id": run_id,
-        "status": pr.status,
-        "total_jobs": total,
-        "status_counts": status_counts,
-        "pass_rate": round(pass_rate, 4),
-        "started_at": _iso(pr.started_at),
-        "ended_at": _iso(pr.ended_at),
-        "result_summary": pr.result_summary,
-    })
+    return ok(build_plan_run_summary(db, run_id))
 
 
 # ── Artifacts ────────────────────────────────────────────────────────────
@@ -776,26 +618,7 @@ def list_job_artifacts(
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
-    job = db.get(JobInstance, job_id)
-    if job is None or job.plan_run_id != run_id:
-        raise HTTPException(status_code=404, detail="job not found in this plan run")
-
-    result = db.execute(
-        select(JobArtifact).where(JobArtifact.job_id == job_id)
-    )
-    artifacts = result.scalars().all()
-    return ok([
-        {
-            "id": a.id,
-            "job_id": a.job_id,
-            "filename": a.storage_uri.rsplit("/", 1)[-1] if a.storage_uri else None,
-            "artifact_type": a.artifact_type,
-            "size_bytes": a.size_bytes,
-            "checksum": a.checksum,
-            "created_at": _iso(a.created_at),
-        }
-        for a in artifacts
-    ])
+    return ok(list_plan_run_job_artifacts(db, run_id, job_id))
 
 
 @router.get(

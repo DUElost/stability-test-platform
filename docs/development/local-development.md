@@ -179,13 +179,29 @@ docker compose exec -T server python /app/tools/dev/fake_agent.py inject \
 1 个 step 的 Plan → 在**不刷新** `/execution/plan-runs/<id>` 的前提下断言页面反映了
 RUNNING→终态。只测 REST/UI 面的「冒烟」覆盖不到这条链。
 
-两个已知差异，不要当 bug 查：
+三个已知差异，不要当 bug 查：
 
 - **transport**：生产 Agent 按 #1121 走 websocket-only；dev 镜像里没有
   `websocket-client`，所以夹具在 `--transport auto` 下会退回 **polling** 并自带
   自愈重连（polling 会话约 5 分钟掉一次）。多实例拓扑下这**不等价**于生产，
   涉及会话亲和的改动仍须按 #1121 的口径验。
 - **容器内 `/app` 只读**：夹具日志默认落 `/tmp/stp-fake-agent.log`。
+- **假设备 serial 带 host 维度**（#2570）：缺省前缀由 `--host-ip` 尾段派生
+  （`192.0.2.12` → `DEVFIX012-001`），因为 `device.serial` 全局唯一、心跳按 serial 认设备。
+  早期版本写死 `DEVFIX###`，两台夹具一起跑必然互相抢行——第二台 `claim` 恒 `[]`，
+  看起来像产品缺陷。要固定一批可预测的 serial 用 `--serial-prefix`（或 env
+  `STP_DEV_SERIAL_PREFIX`）；跨 `/24` 同尾段的两台假 host 仍需显式区分。
+
+多 host 形状（host 级 abort 扇出 #1880/#2050、跨 host 双驱动窗口 #799、
+`device_host_drift` 整批阻断）现在**不需要额外参数**就能造：
+
+```bash
+# 同一台 dev 栈里起两台夹具，各带自己的 IP；设备与租约互不干扰
+docker compose exec -d server sh -c \
+  'setsid nohup python /app/tools/dev/fake_agent.py --host-ip 192.0.2.11 --host-id 192-0-2-11 --devices 30 serve --lifetime 900 </dev/null >/tmp/fa1.log 2>&1 &'
+docker compose exec -d server sh -c \
+  'setsid nohup python /app/tools/dev/fake_agent.py --host-ip 192.0.2.12 --host-id 192-0-2-12 --devices 3 serve --lifetime 900 </dev/null >/tmp/fa2.log 2>&1 &'
+```
 
 ### 生产式安装
 
