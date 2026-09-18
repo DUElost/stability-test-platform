@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 
 import backend.scripts.check_schema_sync as css
 
@@ -79,3 +80,100 @@ def test_baseline_no_longer_whitelists_action_template_ghost():
     baseline = set(json.loads(css._BASELINE_FILE.read_text(encoding="utf-8")))
     assert "remove_table|action_template" not in baseline
     assert "remove_index|action_template|ix_action_template_active" not in baseline
+
+
+# ── #708：基线缩水的信号（噪音被上游修掉时，只有人跑一次 --rebaseline 才拿得到）──────
+_REAL_BASELINE = {
+    "add_index|plan_run|idx_plan_run_admission_queue",
+    "modify_type|alert_rules|event_type",
+    "modify_type|jira_run|issue_keys",
+    "modify_type|notification_channels|type",
+    "remove_index|plan_run|idx_plan_run_admission_queue",
+}
+
+
+def test_current_diff_against_real_baseline_has_no_stale_entries():
+    """今天（SQLAlchemy 2.0.52 / alembic 1.19.1）空库实测就是这 5 项 → 不得冒出 stale 提示。
+
+    这条同时是 #708 的复核结论：**触发条件未达成**，5 项 alembic 比较噪音一项未缩。
+    """
+    assert css._stale_baseline_keys(sorted(_REAL_BASELINE), set(_REAL_BASELINE)) == []
+
+
+def test_converged_noise_item_is_reported_stale():
+    """某项整条消失（上游修好）→ 必须点出来，否则基线会停在旧尺寸继续豁免它。"""
+    keys = [k for k in sorted(_REAL_BASELINE) if k != "modify_type|jira_run|issue_keys"]
+    assert css._stale_baseline_keys(keys, set(_REAL_BASELINE)) == [
+        "modify_type|jira_run|issue_keys"
+    ]
+
+
+def test_one_sided_pair_is_not_reported_as_converged():
+    """判别力所在：对偶只剩一边出现在 diff 里，是 #944 的**拦截**形态，不是收敛。
+
+    若把它算成 stale，输出就会在同一次运行里既喊「新增漂移」又喊「可以缩基线」，
+    诱导人在错误的时刻跑覆盖式 --rebaseline——那正好把该拦的单边形态洗进新基线。
+    """
+    keys = [
+        "add_index|plan_run|idx_plan_run_admission_queue",  # 对偶 remove_ 缺席
+        "modify_type|alert_rules|event_type",
+        "modify_type|jira_run|issue_keys",
+        "modify_type|notification_channels|type",
+    ]
+    assert css._stale_baseline_keys(keys, set(_REAL_BASELINE)) == [], (
+        "单边形态不得冒充收敛提示"
+    )
+    assert css._filter_new_keys(keys, set(_REAL_BASELINE)) == [
+        "add_index|plan_run|idx_plan_run_admission_queue"
+    ]
+
+
+def _diff_for(key: str):
+    """造一条能让真实 `_diff_key()` 还原成该 key 的 diff 项（不 stub 掉 key 规范化）。"""
+    kind, table, name = key.split("|")
+    if kind in ("add_index", "remove_index"):
+
+        class _Idx:
+            def __init__(self, tname, iname):
+                self.table = type("T", (), {"name": tname})()
+                self.name = iname
+
+        return (kind, _Idx(table, name))
+    return (kind, None, table, name)  # modify_type 走 f"{kind}|{d[2]}|{d[3]}"
+
+
+def test_main_prints_hint_but_keeps_exit_zero(tmp_path, monkeypatch, capsys):
+    """信号到位但**不判红**：exit 仍 0，HINT 列出未命中项。"""
+    baseline_file = tmp_path / "schema_sync_baseline.json"
+    baseline_file.write_text(json.dumps(sorted(_REAL_BASELINE)), encoding="utf-8")
+    remaining = [k for k in sorted(_REAL_BASELINE) if k != "modify_type|jira_run|issue_keys"]
+
+    monkeypatch.setattr(css, "_BASELINE_FILE", baseline_file)
+    monkeypatch.setattr(css, "_resolve_url", lambda: "postgresql+psycopg://x@127.0.0.1:1/none")
+    monkeypatch.setattr(css, "_run_upgrade", lambda db_url: None)
+    monkeypatch.setattr(css, "_collect_diffs", lambda db_url: [_diff_for(k) for k in remaining])
+    monkeypatch.setattr(sys, "argv", ["check_schema_sync"])
+
+    assert css.main() == 0, "基线缩水不是失败——判红会把无关 PR 一起拦下"
+    out = capsys.readouterr().out
+    assert "基线未命中 1" in out, out
+    assert "[stale] modify_type|jira_run|issue_keys" in out, out
+    assert "rebaseline" in out  # 提示要说清下一步是谁、动作是什么
+
+
+def test_main_does_not_hint_when_baseline_fully_exercised(tmp_path, monkeypatch, capsys):
+    """反向对照：5 项全命中时不得冒出 HINT（否则提示沦为常驻噪声，很快被忽略）。"""
+    baseline_file = tmp_path / "schema_sync_baseline.json"
+    baseline_file.write_text(json.dumps(sorted(_REAL_BASELINE)), encoding="utf-8")
+
+    monkeypatch.setattr(css, "_BASELINE_FILE", baseline_file)
+    monkeypatch.setattr(css, "_resolve_url", lambda: "postgresql+psycopg://x@127.0.0.1:1/none")
+    monkeypatch.setattr(css, "_run_upgrade", lambda db_url: None)
+    monkeypatch.setattr(css, "_collect_diffs",
+                        lambda db_url: [_diff_for(k) for k in sorted(_REAL_BASELINE)])
+    monkeypatch.setattr(sys, "argv", ["check_schema_sync"])
+
+    assert css.main() == 0
+    out = capsys.readouterr().out
+    assert "基线未命中 0" in out
+    assert "HINT" not in out and "[stale]" not in out

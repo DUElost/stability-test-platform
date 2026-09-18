@@ -76,9 +76,8 @@ def signal_fixture(db_session):
 
 class TestBatchRenewalSignalIngestion:
     async def _renew(self, fixture, *, execution_state=None, progress_marker=None):
-        from backend.api.routes.agent_api import (
-            _ExtendBatchIn, _ExtendBatchItemIn, extend_leases_batch,
-        )
+        from backend.api.routes.agent_api import _ExtendBatchIn, extend_leases_batch
+        from backend.services.agent_lease_extend import _ExtendBatchItemIn
         from backend.core.database import AsyncSessionLocal, async_engine
 
         await async_engine.dispose()
@@ -372,7 +371,7 @@ class TestRecyclerSubStateClocks:
 
 @pytest.mark.asyncio
 async def test_recovery_payload_includes_execution_state(db_session, signal_fixture):
-    from backend.api.routes.agent_api import _build_recovery_job_payload
+    from backend.services.agent_recovery import _build_recovery_job_payload
     from backend.core.database import AsyncSessionLocal, async_engine
 
     f = signal_fixture
