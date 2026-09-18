@@ -53,14 +53,13 @@ def manual_chain(db_session):
         adb_connected=True,
         adb_state="device",
     )
-    plan = Plan(name="manual-plan", failure_threshold=0.05)
+    plan = Plan(name="manual-plan")
     db_session.add_all([host, dev, plan])
     db_session.commit()
 
     pr = PlanRun(
         plan_id=plan.id,
         status="RUNNING",
-        failure_threshold=0.05,
         plan_snapshot={"plan": {"id": plan.id}, "steps": []},
         run_type="MANUAL",
         triggered_by="testuser",

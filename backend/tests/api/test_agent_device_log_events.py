@@ -53,7 +53,6 @@ def _seed_host_job() -> dict:
         plan = Plan(
             name=f"plan-dle-{suffix}",
             description="device-log-event-test",
-            failure_threshold=0.05,
             created_by="pytest",
         )
         db.add_all([host, device, plan])
@@ -69,7 +68,6 @@ def _seed_host_job() -> dict:
         run = PlanRun(
             plan_id=plan.id,
             status="RUNNING",
-            failure_threshold=0.05,
             plan_snapshot={"plan": {"id": plan.id, "name": plan.name}, "steps": []},
             run_type="MANUAL",
             triggered_by="pytest",

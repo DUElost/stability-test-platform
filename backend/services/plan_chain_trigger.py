@@ -39,6 +39,8 @@ from backend.services.plan_dispatcher_sync import (
 
 logger = logging.getLogger(__name__)
 
+#: ADR-0048：聚合器不再产出 PARTIAL_SUCCESS（新链恒由 SUCCESS 续跑）；
+#: 保留该值仅为存量兼容——历史 PARTIAL 终态 run 的续链判定（reconciler 同口径）。
 TRIGGERABLE_TERMINAL_STATUSES = {"SUCCESS", "PARTIAL_SUCCESS"}
 
 

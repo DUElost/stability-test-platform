@@ -82,7 +82,6 @@ def _seed_running_job(
         plan = Plan(
             name=f"wf-{suffix}",
             description="pytest workflow",
-            failure_threshold=0.1,
             created_by="pytest",
         )
         db.add(plan)
@@ -102,7 +101,6 @@ def _seed_running_job(
         run = PlanRun(
             plan_id=plan.id,
             status="RUNNING",
-            failure_threshold=0.1,
             plan_snapshot={"name": plan.name, "plan_id": plan.id},
             triggered_by="pytest",
             started_at=started_at,
@@ -241,8 +239,7 @@ def _seed_pending_job(created_at: datetime) -> dict:
         db.flush()
 
         plan = Plan(
-            name=f"wf-{suffix}", description="pytest", failure_threshold=0.1,
-            created_by="pytest",
+            name=f"wf-{suffix}", description="pytest", created_by="pytest",
         )
         db.add(plan)
         db.flush()
@@ -260,7 +257,7 @@ def _seed_pending_job(created_at: datetime) -> dict:
 
         run = PlanRun(
             plan_id=plan.id, status="RUNNING",
-            failure_threshold=0.1, triggered_by="pytest", started_at=now,
+            triggered_by="pytest", started_at=now,
             plan_snapshot={"name": plan.name, "plan_id": plan.id},
             run_type="MANUAL",
         )

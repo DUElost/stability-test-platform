@@ -117,7 +117,6 @@ def _plan_run_out(
         id=pr.id,
         plan_id=pr.plan_id,
         status=pr.status,
-        failure_threshold=pr.failure_threshold,
         run_type=pr.run_type,
         triggered_by=pr.triggered_by,
         started_at=_iso(pr.started_at) or "",

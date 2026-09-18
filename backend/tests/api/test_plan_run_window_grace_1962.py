@@ -46,14 +46,13 @@ def late_event_setup(db_session):
         adb_connected=True, adb_state="device", platform="UNISOC",
     )
     db_session.add(dev)
-    plan = Plan(name="#1962 窗口宽限", failure_threshold=0.05)
+    plan = Plan(name="#1962 窗口宽限")
     db_session.add(plan)
     db_session.commit()
 
     ended = _now() - timedelta(minutes=50)
     run = PlanRun(
         plan_id=plan.id, status=PlanRunStatus.SUCCESS.value,
-        failure_threshold=0.05,
         plan_snapshot={"plan": {"id": plan.id, "name": plan.name}, "steps": []},
         run_type="MANUAL", triggered_by="tester",
         started_at=ended - timedelta(seconds=20),   # 短 run：20 秒
@@ -142,12 +141,11 @@ def test_running_run_window_not_extended(client, auth_headers, db_session):
         ssh_user="root", ssh_port=22, extra={}, last_heartbeat=_now(),
     )
     db_session.add(host)
-    plan = Plan(name="#1962 RUNNING", failure_threshold=0.05)
+    plan = Plan(name="#1962 RUNNING")
     db_session.add(plan)
     db_session.commit()
     run = PlanRun(
         plan_id=plan.id, status=PlanRunStatus.RUNNING.value,
-        failure_threshold=0.05,
         plan_snapshot={"plan": {"id": plan.id, "name": plan.name}, "steps": []},
         run_type="MANUAL", triggered_by="tester",
         started_at=_now() - timedelta(minutes=5),

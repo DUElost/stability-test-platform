@@ -15,7 +15,6 @@ def test_export_plan_run_markdown(client, auth_headers, db_session, gate_chain):
     pr = PlanRun(
         plan_id=gate_chain["plan"].id,
         status="SUCCESS",
-        failure_threshold=0.1,
         plan_snapshot={"plan_id": gate_chain["plan"].id, "name": gate_chain["plan"].name},
         run_type="MANUAL",
         triggered_by="test",
@@ -52,7 +51,6 @@ def test_export_plan_run_json(client, auth_headers, db_session, gate_chain):
     pr = PlanRun(
         plan_id=gate_chain["plan"].id,
         status="FAILED",
-        failure_threshold=0.1,
         plan_snapshot={"plan_id": gate_chain["plan"].id},
         run_type="MANUAL",
         triggered_by="test",

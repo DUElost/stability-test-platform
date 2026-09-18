@@ -91,7 +91,6 @@ export function rebuildLifecycleFromPlan(plan: Plan): PipelineDef {
 export interface PlanFormDraft {
   name: string;
   description: string;
-  failureThreshold: number;
   nextPlanId: number | null;
   projectKey: string;
   specialtyKey: string;
@@ -107,7 +106,6 @@ export function draftSnapshot(draft: PlanFormDraft): string {
   return snapshot({
     name: draft.name,
     description: draft.description,
-    failureThreshold: draft.failureThreshold,
     nextPlanId: draft.nextPlanId,
     projectKey: draft.projectKey,
     specialtyKey: draft.specialtyKey,
@@ -121,7 +119,6 @@ export function planDraftSnapshot(plan: Plan): string {
   return draftSnapshot({
     name: plan.name,
     description: plan.description || '',
-    failureThreshold: plan.failure_threshold,
     nextPlanId: plan.next_plan_id ?? null,
     projectKey: plan.project_key || '',
     specialtyKey: plan.specialty_key || '',

@@ -19,7 +19,6 @@ class TestRunReportFromJobChain:
         plan = Plan(
             name="job-report-workflow",
             description="report from job chain",
-            failure_threshold=0.05,
                     )
         db_session.add(plan)
         db_session.flush()
@@ -27,7 +26,6 @@ class TestRunReportFromJobChain:
         plan_run = PlanRun(
             plan_id=plan.id,
             status="SUCCESS",
-            failure_threshold=0.05,
             plan_snapshot={"name": plan.name, "plan_id": plan.id},
             run_type="MANUAL",
             triggered_by="pytest",
@@ -135,7 +133,7 @@ class TestRunJiraDraftProjectKey:
             )
             db_session.add(project)
             db_session.flush()
-        plan = Plan(name="draft-workflow", failure_threshold=0.05)
+        plan = Plan(name="draft-workflow")
         db_session.add(plan)
         db_session.flush()
         plan_run = PlanRun(
@@ -144,7 +142,6 @@ class TestRunJiraDraftProjectKey:
             # 撞上 GENERIC 哨兵占位 id）
             project_id=(project.id if project else plan_run_project_id),
             status="SUCCESS",
-            failure_threshold=0.05,
             plan_snapshot={"name": plan.name, "plan_id": plan.id},
             run_type="MANUAL",
             triggered_by="pytest",
@@ -224,12 +221,11 @@ class TestReportPlanRunOwnership:
             db_session.commit()
         plans, runs = [], []
         for tag in ("A", "B"):
-            plan = Plan(name=f"own-{tag}", description="", failure_threshold=0.05)
+            plan = Plan(name=f"own-{tag}", description="")
             db_session.add(plan)
             db_session.flush()
             run = PlanRun(
-                plan_id=plan.id, status="SUCCESS", failure_threshold=0.05,
-                plan_snapshot={"name": plan.name, "plan_id": plan.id}, run_type="MANUAL",
+                plan_id=plan.id, status="SUCCESS", plan_snapshot={"name": plan.name, "plan_id": plan.id}, run_type="MANUAL",
                 triggered_by="pytest",
                 started_at=now - timedelta(minutes=30), ended_at=now - timedelta(minutes=20),
             )

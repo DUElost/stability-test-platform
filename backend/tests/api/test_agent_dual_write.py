@@ -91,7 +91,7 @@ def _seed_job(*, status: str = JobStatus.PENDING.value) -> dict:
         )
         plan = Plan(
             name=f"plan-{suffix}", description="dual-write route test",
-            failure_threshold=0.1,             created_by="pytest",
+            created_by="pytest",
         )
         db.add_all([host, device, plan])
         db.flush()
@@ -99,7 +99,7 @@ def _seed_job(*, status: str = JobStatus.PENDING.value) -> dict:
         plan_run = PlanRun(
             plan_id=plan.id,
             status="RUNNING",
-            failure_threshold=0.1, plan_snapshot={"name": plan.name, "plan_id": plan.id},
+            plan_snapshot={"name": plan.name, "plan_id": plan.id},
             run_type="MANUAL", triggered_by="pytest",
         )
         db.add(plan_run)
@@ -1552,8 +1552,7 @@ async def test_active_lease_excludes_device(lease_type):
         dev_a = Device(serial=f"DWA-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
         dev_b = Device(serial=f"DWB-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
         plan = Plan(
-            name=f"plan-{suffix}", description="", failure_threshold=0.1,
-                        created_by="pytest",
+            name=f"plan-{suffix}", description="", created_by="pytest",
         )
         db.add_all([host, dev_a, dev_b, plan])
         db.flush()
@@ -1562,7 +1561,7 @@ async def test_active_lease_excludes_device(lease_type):
         run = PlanRun(
             plan_id=plan.id,
             status="RUNNING",
-            failure_threshold=0.1, plan_snapshot={"name": plan.name, "plan_id": plan.id},
+            plan_snapshot={"name": plan.name, "plan_id": plan.id},
             run_type="MANUAL", triggered_by="pytest",
         )
         db.add(run)
@@ -1640,8 +1639,7 @@ async def test_capacity_directly_limits_claim():
         dev_b = Device(serial=f"CB-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
         dev_c = Device(serial=f"CC-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
         plan = Plan(
-            name=f"plan-{suffix}", description="", failure_threshold=0.1,
-                        created_by="pytest",
+            name=f"plan-{suffix}", description="", created_by="pytest",
         )
         db.add_all([host, dev_a, dev_b, dev_c, plan])
         db.flush()
@@ -1650,7 +1648,7 @@ async def test_capacity_directly_limits_claim():
         run = PlanRun(
             plan_id=plan.id,
             status="RUNNING",
-            failure_threshold=0.1, plan_snapshot={"name": plan.name, "plan_id": plan.id},
+            plan_snapshot={"name": plan.name, "plan_id": plan.id},
             run_type="MANUAL", triggered_by="pytest",
         )
         db.add(run)
@@ -1728,8 +1726,7 @@ async def test_zero_capacity_returns_empty_no_state_change():
         dev_a = Device(serial=f"ZA-{suffix}", host_id=host_id, status="BUSY", tags=[], created_at=now, adb_connected=True, adb_state="device")
         dev_b = Device(serial=f"ZB-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
         plan = Plan(
-            name=f"plan-{suffix}", description="", failure_threshold=0.1,
-                        created_by="pytest",
+            name=f"plan-{suffix}", description="", created_by="pytest",
         )
         db.add_all([host, dev_a, dev_b, plan])
         db.flush()
@@ -1738,7 +1735,7 @@ async def test_zero_capacity_returns_empty_no_state_change():
         run = PlanRun(
             plan_id=plan.id,
             status="RUNNING",
-            failure_threshold=0.1, plan_snapshot={"name": plan.name, "plan_id": plan.id},
+            plan_snapshot={"name": plan.name, "plan_id": plan.id},
             run_type="MANUAL", triggered_by="pytest",
         )
         db.add(run)
@@ -1857,8 +1854,7 @@ async def test_per_device_first_does_not_waste_capacity():
         dev_b = Device(serial=f"PB-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
         dev_c = Device(serial=f"PC-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
         plan = Plan(
-            name=f"plan-{suffix}", description="", failure_threshold=0.1,
-                        created_by="pytest",
+            name=f"plan-{suffix}", description="", created_by="pytest",
         )
         db.add_all([host, dev_a, dev_b, dev_c, plan])
         db.flush()
@@ -1867,7 +1863,7 @@ async def test_per_device_first_does_not_waste_capacity():
         run = PlanRun(
             plan_id=plan.id,
             status="RUNNING",
-            failure_threshold=0.1, plan_snapshot={"name": plan.name, "plan_id": plan.id},
+            plan_snapshot={"name": plan.name, "plan_id": plan.id},
             run_type="MANUAL", triggered_by="pytest",
         )
         db.add(run)
@@ -1944,8 +1940,7 @@ async def test_concurrent_claim_capacity_does_not_exceed():
         dev_a = Device(serial=f"CC1-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
         dev_b = Device(serial=f"CC2-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
         plan = Plan(
-            name=f"plan-{suffix}", description="", failure_threshold=0.1,
-                        created_by="pytest",
+            name=f"plan-{suffix}", description="", created_by="pytest",
         )
         db.add_all([host, dev_a, dev_b, plan])
         db.flush()
@@ -1954,7 +1949,7 @@ async def test_concurrent_claim_capacity_does_not_exceed():
         run = PlanRun(
             plan_id=plan.id,
             status="RUNNING",
-            failure_threshold=0.1, plan_snapshot={"name": plan.name, "plan_id": plan.id},
+            plan_snapshot={"name": plan.name, "plan_id": plan.id},
             run_type="MANUAL", triggered_by="pytest",
         )
         db.add(run)
@@ -2042,8 +2037,7 @@ async def test_overclaim_clamped_to_free_device_count():
             status=HostStatus.ONLINE.value, created_at=now,
         )
         plan = Plan(
-            name=f"oc-plan-{suffix}", description="", failure_threshold=0.1,
-            created_by="pytest",
+            name=f"oc-plan-{suffix}", description="", created_by="pytest",
         )
         db.add_all([host, plan])
         db.flush()
@@ -2051,7 +2045,6 @@ async def test_overclaim_clamped_to_free_device_count():
         run = PlanRun(
             plan_id=plan.id,
             status="RUNNING",
-            failure_threshold=0.1,
             plan_snapshot={"name": plan.name, "plan_id": plan.id},
             run_type="MANUAL", triggered_by="pytest",
         )

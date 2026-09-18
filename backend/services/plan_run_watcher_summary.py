@@ -933,8 +933,8 @@ def build_plan_run_watcher_summary(
     """ADR-0018 / ADR-0021 C5a₂: 最近 N 分钟内 watcher log_signal 按 category
     聚合,带 trend(对比上一相同长度窗口的差值)。
 
-    abnormal_rate = 当前窗口受影响设备数 / PlanRun 总设备数;
-    与 PlanRun.failure_threshold 比较给出 exceeded 标志。
+    abnormal_rate = 当前窗口受影响设备数 / PlanRun 总设备数（事实指标；
+    ADR-0048 后不再与阈值比较——exceeded/threshold 字段已移除）。
     """
 
     run_id = pr.id
@@ -964,7 +964,6 @@ def build_plan_run_watcher_summary(
             window_end_at=_iso(window_end) or "",
             categories=[], total=0, affected_device_count=0,
             total_devices=0, abnormal_rate=0.0,
-            threshold=pr.failure_threshold, exceeded=False,
             supports_origin_split=False,
             current_run=_empty_dashboard_section(),
             preexisting=_empty_dashboard_section(),
@@ -1078,8 +1077,6 @@ def build_plan_run_watcher_summary(
         affected_device_count=affected_total,
         total_devices=total_dev,
         abnormal_rate=round(abnormal_rate, 4),
-        threshold=pr.failure_threshold,
-        exceeded=abnormal_rate > pr.failure_threshold,
         supports_origin_split=supports_origin_split,
         current_run=current_run,
         preexisting=preexisting,

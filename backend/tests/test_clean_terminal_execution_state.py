@@ -21,12 +21,11 @@ def _seed(db) -> tuple[JobInstance, JobInstance]:
     dev_b = Device(serial=f"clean-db-{suffix}", host_id=host.id, status="ONLINE")
     db.add_all([dev_a, dev_b])
     db.flush()
-    plan = Plan(name=f"clean-{suffix}", failure_threshold=0.05, created_by="pytest")
+    plan = Plan(name=f"clean-{suffix}", created_by="pytest")
     db.add(plan)
     db.flush()
     pr = PlanRun(
-        plan_id=plan.id, status="RUNNING", failure_threshold=0.05,
-        plan_snapshot={}, run_type="MANUAL",
+        plan_id=plan.id, status="RUNNING", plan_snapshot={}, run_type="MANUAL",
     )
     db.add(pr)
     db.flush()

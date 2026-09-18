@@ -441,14 +441,13 @@ class TestJiraProjectKeyWiring:
         )
         db_session.add(project)
         db_session.flush()
-        plan = Plan(name="g17-plan", failure_threshold=0.1, created_by="t", project_id=project.id)
+        plan = Plan(name="g17-plan", created_by="t", project_id=project.id)
         db_session.add(plan)
         db_session.flush()
         run = PlanRun(
             plan_id=plan.id,
             project_id=project.id,
             status="RUNNING",
-            failure_threshold=plan.failure_threshold,
             plan_snapshot={"name": plan.name},
             run_type="MANUAL",
             triggered_by="test",

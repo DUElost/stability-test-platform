@@ -23,13 +23,12 @@ def test_chain_node_from_run_maps_fields():
     pr.chain_index = 1
     pr.started_at = None
     pr.ended_at = None
-    pr.failure_threshold = 0.1
-    pr.result_summary = {"pass_rate": 0.9}
+    pr.failed_job_count = 2
 
     node = chain_node_from_run(pr, "plan-a", is_current=True)
     assert node.plan_id == 3
     assert node.plan_name == "plan-a"
     assert node.plan_run_id == 10
     assert node.is_current is True
-    assert node.pass_rate == 0.9
+    assert node.failed_jobs == 2  # ADR-0048
     assert node.chain_index == 1

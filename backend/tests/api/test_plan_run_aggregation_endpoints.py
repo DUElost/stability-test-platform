@@ -81,20 +81,19 @@ def chain_setup(db_session):
     db_session.add_all([dev1, dev2, dev3])
 
     # Plans: parent (#41) → current (#42) → next (#43) → last (#44)（3 级链）
-    plan_last = Plan(name="链尾汇总", failure_threshold=0.05)
+    plan_last = Plan(name="链尾汇总")
     db_session.add(plan_last)
     db_session.commit()
-    plan_next = Plan(name="结果汇总", failure_threshold=0.05, next_plan_id=plan_last.id)
+    plan_next = Plan(name="结果汇总", next_plan_id=plan_last.id)
     db_session.add(plan_next)
     db_session.commit()
 
     plan_cur = Plan(
         name="多机型 Monkey 主链",
-        failure_threshold=0.05,
         patrol_interval_seconds=60,
         next_plan_id=plan_next.id,
     )
-    plan_parent = Plan(name="健康预检", failure_threshold=0.05)
+    plan_parent = Plan(name="健康预检")
     db_session.add_all([plan_cur, plan_parent])
     db_session.commit()
 
@@ -119,13 +118,12 @@ def chain_setup(db_session):
     # PlanRun: parent (SUCCESS) + current (RUNNING)
     parent_run = PlanRun(
         plan_id=plan_parent.id, status=PlanRunStatus.SUCCESS.value,
-        failure_threshold=0.05,
         plan_snapshot={"plan": {"id": plan_parent.id, "name": plan_parent.name}, "steps": []},
         run_type="MANUAL", triggered_by="dai.lv",
         chain_index=0,
         started_at=_now() - timedelta(minutes=12),
         ended_at=_now() - timedelta(minutes=4),
-        result_summary={"total": 3, "completed": 3, "failed": 0, "pass_rate": 1.0},
+        result_summary={"total": 3, "completed": 3, "failed": 0},
     )
     db_session.add(parent_run)
     db_session.commit()
@@ -145,7 +143,6 @@ def chain_setup(db_session):
     }
     cur_run = PlanRun(
         plan_id=plan_cur.id, status=PlanRunStatus.RUNNING.value,
-        failure_threshold=0.05,
         plan_snapshot=snapshot,
         run_type="CHAIN", triggered_by="chain",
         parent_plan_run_id=parent_run.id,
@@ -299,7 +296,7 @@ class TestChainEndpoint:
         # Order: parent (chain_index=0) → current (1) → next pending (2) → last pending (3)
         assert nodes[0]["plan_id"] == chain_setup["plan_parent"].id
         assert nodes[0]["status"] == PlanRunStatus.SUCCESS.value
-        assert nodes[0]["pass_rate"] == 1.0
+        assert nodes[0]["failed_jobs"] == 0  # ADR-0048：失败台数取代 pass_rate
         assert nodes[0]["is_current"] is False
 
         assert nodes[1]["plan_id"] == chain_setup["plan_current"].id
@@ -330,8 +327,8 @@ class TestChainEndpoint:
         """#753: A↔B cycle via direct ORM must not hang GET /chain."""
         from backend.models.plan import Plan
 
-        plan_a = Plan(name="cycle-a", failure_threshold=0.1)
-        plan_b = Plan(name="cycle-b", failure_threshold=0.1)
+        plan_a = Plan(name="cycle-a")
+        plan_b = Plan(name="cycle-b")
         db_session.add_all([plan_a, plan_b])
         db_session.flush()
         # Bypass API DAG validation (simulates SQL / migration leftover).
@@ -640,7 +637,6 @@ class TestEventsEndpoint:
         run = PlanRun(
             plan_id=plan_cur.id,
             status=PlanRunStatus.FAILED.value,
-            failure_threshold=0.05,
             plan_snapshot={
                 "plan": {"id": plan_cur.id, "name": plan_cur.name},
                 "steps": [
@@ -706,7 +702,6 @@ class TestEventsEndpoint:
         run = PlanRun(
             plan_id=plan_cur.id,
             status=PlanRunStatus.FAILED.value,
-            failure_threshold=0.05,
             plan_snapshot={
                 "plan": {"id": plan_cur.id, "name": plan_cur.name},
                 "steps": [
@@ -1315,9 +1310,8 @@ class TestWatcherSummaryEndpoint:
         assert cats["ANR"]["trend_change"] == 1
         # Affected total: device dev-aa-02 only (both signals from same device)
         assert data["affected_device_count"] == 1
-        # abnormal_rate = 1/3 ≈ 0.333 > 0.05 → exceeded
-        assert data["exceeded"] is True
-        assert data["threshold"] == 0.05
+        # ADR-0048：watcher 摘要只剩 abnormal_rate 事实（exceeded/threshold 已删）
+        assert data["abnormal_rate"] == pytest.approx(1 / 3, abs=1e-3)
 
     def test_watcher_summary_platform_bucket_includes_running_unisoc_without_signals(
         self, client, auth_headers, chain_setup, db_session,

@@ -291,7 +291,6 @@ class TestValidateDispatchDevicesSync:
         other_run = PlanRun(
             plan_id=dispatch_fixture["plan"].id,
             status="RUNNING",
-            failure_threshold=0.1,
             plan_snapshot={"plan_id": dispatch_fixture["plan"].id},
             run_type="MANUAL",
             triggered_by="pytest",
@@ -323,7 +322,6 @@ class TestValidateDispatchDevicesSync:
         other_run = PlanRun(
             plan_id=dispatch_fixture["plan"].id,
             status="RUNNING",
-            failure_threshold=0.1,
             plan_snapshot={"plan_id": dispatch_fixture["plan"].id},
             run_type="MANUAL",
             triggered_by="pytest",
@@ -353,7 +351,6 @@ class TestValidateDispatchDevicesSync:
         other_run = PlanRun(
             plan_id=dispatch_fixture["plan"].id,
             status="SUCCESS",
-            failure_threshold=0.1,
             plan_snapshot={"plan_id": dispatch_fixture["plan"].id},
             run_type="MANUAL",
             triggered_by="pytest",
@@ -825,7 +822,6 @@ class TestPrepareAndCompleteIntegration:
             run = PlanRun(
                 plan_id=dispatch_fixture["plan"].id,
                 status="RUNNING",
-                failure_threshold=0.1,
                 plan_snapshot={"plan_id": dispatch_fixture["plan"].id},
                 run_type="MANUAL",
                 triggered_by="pytest",

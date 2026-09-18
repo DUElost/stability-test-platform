@@ -52,8 +52,7 @@ async def _create_seed(db, suffix, host_id=None, serial=None):
     db.add_all([host, device])
     await db.flush()
 
-    plan = Plan(name=f"lmf-{suffix}", failure_threshold=0.1,
-                                created_by="test")
+    plan = Plan(name=f"lmf-{suffix}", created_by="test")
     db.add(plan)
     await db.flush()
     step = PlanStep(
@@ -63,8 +62,7 @@ async def _create_seed(db, suffix, host_id=None, serial=None):
     )
     db.add(step)
     await db.flush()
-    pr = PlanRun(plan_id=plan.id, status="RUNNING", failure_threshold=0.1,
-                 triggered_by="test",
+    pr = PlanRun(plan_id=plan.id, status="RUNNING", triggered_by="test",
                  plan_snapshot={"name": plan.name, "plan_id": plan.id},
                  run_type="MANUAL")
     db.add(pr)
@@ -108,7 +106,6 @@ class TestAcquireLeaseMain:
             pr = PlanRun(
                 plan_id=plan.id,
                 status="RUNNING",
-                failure_threshold=0.1,
                 triggered_by="test",
                 plan_snapshot={"name": plan.name, "plan_id": plan.id},
                 run_type="MANUAL",
@@ -269,7 +266,7 @@ def test_release_lease_sync_marks_active_to_released():
 
         plan = Plan(
             name=f"wf-{suffix}", description="sync test",
-            failure_threshold=0.1, created_by="pytest",
+            created_by="pytest",
                     )
         db.add(plan)
         db.flush()
@@ -284,8 +281,7 @@ def test_release_lease_sync_marks_active_to_released():
 
         run = PlanRun(
             plan_id=plan.id,
-            status="RUNNING", failure_threshold=0.1,
-            triggered_by="pytest", started_at=now,
+            status="RUNNING", triggered_by="pytest", started_at=now,
             plan_snapshot={"name": plan.name, "plan_id": plan.id},
             run_type="MANUAL",
         )

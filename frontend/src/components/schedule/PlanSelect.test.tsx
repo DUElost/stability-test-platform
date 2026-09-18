@@ -8,7 +8,6 @@ function makePlan(id: number, name: string): Plan {
     id,
     name,
     description: null,
-    failure_threshold: 1,
     patrol_interval_seconds: null,
     timeout_seconds: null,
   } as Plan;

@@ -6,5 +6,5 @@ export { TestTypePassFailChart } from './TestTypePassFailChart';
 export { CompletionTrendChart } from './CompletionTrendChart';
 
 export { HostFailureRateChart } from './HostFailureRateChart';
-export { PlanSuccessRateChart } from './PlanSuccessRateChart';
-export { PlanRunPassRateTrendChart } from './PlanRunPassRateTrendChart';
+export { PlanFailedDevicesChart } from './PlanFailedDevicesChart';
+export { PlanRunFailedDeviceTrendChart } from './PlanRunFailedDeviceTrendChart';

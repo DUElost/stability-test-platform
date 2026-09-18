@@ -47,7 +47,6 @@ def test_expected_scripts_intersects_snapshot_with_active_scripts(db_session):
     pr = PlanRun(
         plan_id=plan.id,
         status="RUNNING",
-        failure_threshold=1,
         plan_snapshot={
             "plan_id": plan.id,
             "steps": [
@@ -87,7 +86,6 @@ def test_expected_scripts_empty_when_snapshot_has_no_steps(db_session):
     pr = PlanRun(
         plan_id=plan.id,
         status="RUNNING",
-        failure_threshold=1,
         plan_snapshot={"plan_id": plan.id, "steps": []},
         run_type="MANUAL",
         triggered_by="test",

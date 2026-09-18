@@ -14,7 +14,6 @@ class TestPlanModel:
         db_session.add(plan)
         db_session.commit()
         assert plan.id is not None
-        assert plan.failure_threshold == 0.05
         assert plan.next_plan_id is None
         assert plan.patrol_interval_seconds is None
         assert plan.timeout_seconds is None

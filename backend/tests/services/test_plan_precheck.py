@@ -352,7 +352,6 @@ class TestDispatchGate:
         other_run = PlanRun(
             plan_id=gate_chain["plan"].id,
             status="RUNNING",
-            failure_threshold=0.1,
             plan_snapshot={"steps": []},
             run_type="MANUAL",
             run_context={},

@@ -278,10 +278,8 @@ class TestDispatchPlan:
         assert pr.plan_id == plan.id
         assert pr.status == "QUEUED"
         assert pr.run_type == "MANUAL"
-        assert pr.failure_threshold == plan.failure_threshold
         assert pr.plan_snapshot["plan"]["id"] == plan.id
         assert pr.plan_snapshot["plan"]["name"] == plan.name
-        assert pr.plan_snapshot["plan"]["failure_threshold"] == plan.failure_threshold
         assert [s["step_key"] for s in pr.plan_snapshot["steps"]] == [
             "init_check",
             "td_clean",

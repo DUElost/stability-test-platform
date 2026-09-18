@@ -45,8 +45,8 @@ vi.mock('@/utils/api', async (importOriginal) => {
         activity: vi.fn().mockResolvedValue({ points: [], hours: 24 }),
         completionTrend: vi.fn().mockResolvedValue({ points: [], days: 7 }),
         hostFailureRate: vi.fn().mockResolvedValue({ items: [] }),
-        planSuccessRate: vi.fn().mockResolvedValue({ items: [] }),
-        planRunPassRateTrend: vi.fn().mockResolvedValue({ points: [] }),
+        planFailedDevices: vi.fn().mockResolvedValue({ items: [] }),
+        planRunFailedDeviceTrend: vi.fn().mockResolvedValue({ points: [] }),
       },
       results: {
         summary: vi.fn().mockResolvedValue({
@@ -77,8 +77,8 @@ vi.mock('@/components/charts', () => ({
   ActivityChart: () => <div data-testid="activity-chart" />,
   CompletionTrendChart: () => <div data-testid="completion-trend-chart" />,
   HostFailureRateChart: () => <div data-testid="host-failure-rate-chart" />,
-  PlanSuccessRateChart: () => <div data-testid="plan-success-rate-chart" />,
-  PlanRunPassRateTrendChart: () => <div data-testid="plan-run-pass-rate-trend-chart" />,
+  PlanFailedDevicesChart: () => <div data-testid="plan-failed-devices-chart" />,
+  PlanRunFailedDeviceTrendChart: () => <div data-testid="plan-run-failed-device-trend-chart" />,
   RiskDistributionChart: () => <div data-testid="risk-distribution-chart" />,
 }));
 

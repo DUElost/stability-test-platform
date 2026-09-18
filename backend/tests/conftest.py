@@ -565,7 +565,6 @@ def sample_plan(db_session):
     plan = Plan(
         name="test-plan",
         description="Test plan for unit tests",
-        failure_threshold=0.1,
                 created_by="test",
     )
     db_session.add(plan)
@@ -590,7 +589,6 @@ def sample_plan_run(db_session, sample_plan):
     run = PlanRun(
         plan_id=sample_plan.id,
         status="RUNNING",
-        failure_threshold=sample_plan.failure_threshold,
         plan_snapshot={"name": sample_plan.name, "plan_id": sample_plan.id},
         run_type="MANUAL",
         triggered_by="test",

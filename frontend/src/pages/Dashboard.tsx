@@ -5,16 +5,15 @@ import {
   AlertCircle,
   AlertTriangle,
   BarChart3,
-  CheckCircle,
+  ShieldAlert,
   Clock,
   Server,
-  ShieldAlert,
   Smartphone,
   Zap,
   Activity,
   TrendingUp,
 } from 'lucide-react';
-import { DeviceStatusChart, HostResourceChart, ActivityChart, CompletionTrendChart, HostFailureRateChart, PlanSuccessRateChart, PlanRunPassRateTrendChart, RiskDistributionChart } from '@/components/charts';
+import { DeviceStatusChart, HostResourceChart, ActivityChart, CompletionTrendChart, HostFailureRateChart, PlanFailedDevicesChart, PlanRunFailedDeviceTrendChart, RiskDistributionChart } from '@/components/charts';
 import { DashboardStatCard } from '@/components/dashboard/DashboardStatCard';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { Card, CardHeader, CardTitle } from '@/components/ui/card';
@@ -64,15 +63,15 @@ export default function Dashboard() {
     refetchInterval: 60000,
   });
 
-  const { data: planSuccessData, isLoading: planSuccessLoading, error: planSuccessError, refetch: refetchPlanSuccess } = useQuery({
-    queryKey: ['stats-plan-success-rate'],
-    queryFn: () => api.stats.planSuccessRate(30, 10),
+  const { data: planFailedData, isLoading: planFailedLoading, error: planFailedError, refetch: refetchPlanFailed } = useQuery({
+    queryKey: ['stats-plan-failed-devices'],
+    queryFn: () => api.stats.planFailedDevices(30, 10),
     refetchInterval: 60000,
   });
 
-  const { data: passRateTrendData, isLoading: passRateTrendLoading, error: passRateTrendError, refetch: refetchPassRateTrend } = useQuery({
-    queryKey: ['stats-plan-run-pass-rate-trend'],
-    queryFn: () => api.stats.planRunPassRateTrend(30),
+  const { data: failedTrendData, isLoading: failedTrendLoading, error: failedTrendError, refetch: refetchFailedTrend } = useQuery({
+    queryKey: ['stats-plan-run-failed-device-trend'],
+    queryFn: () => api.stats.planRunFailedDeviceTrend(30),
     refetchInterval: 60000,
   });
 
@@ -277,20 +276,20 @@ export default function Dashboard() {
             )}
           </Card>
           <div>
-            {passRateTrendError ? (
+            {failedTrendError ? (
               <Card className="p-4">
                 <CardHeader className="px-0 pt-0 pb-3">
                   <CardTitle className="flex items-center gap-2 text-sm font-medium">
                     <TrendingUp size={14} className={CHART_SECTION.icon} />
-                    运行通过率趋势 (30d)
+                    失败设备数趋势 (30d)
                   </CardTitle>
                 </CardHeader>
-                <InlineError message="通过率趋势加载失败" onRetry={() => void refetchPassRateTrend()} />
+                <InlineError message="失败设备数趋势加载失败" onRetry={() => void refetchFailedTrend()} />
               </Card>
             ) : (
-              <PlanRunPassRateTrendChart
-                data={passRateTrendData?.points ?? []}
-                isLoading={passRateTrendLoading}
+              <PlanRunFailedDeviceTrendChart
+                data={failedTrendData?.points ?? []}
+                isLoading={failedTrendLoading}
               />
             )}
           </div>
@@ -346,20 +345,20 @@ export default function Dashboard() {
               isLoading={hostFailureLoading}
             />
           )}
-          {planSuccessError ? (
+          {planFailedError ? (
             <Card className="p-4">
               <CardHeader className="px-0 pt-0 pb-3">
                 <CardTitle className="flex items-center gap-2 text-sm font-medium">
-                  <CheckCircle size={14} className={CHART_SECTION.icon} />
-                  方案成功率排行 (30d)
+                  <ShieldAlert size={14} className={CHART_SECTION.icon} />
+                  方案失败设备数排行 (30d)
                 </CardTitle>
               </CardHeader>
-              <InlineError message="Plan 成功率加载失败" onRetry={() => void refetchPlanSuccess()} />
+              <InlineError message="失败设备数排行加载失败" onRetry={() => void refetchPlanFailed()} />
             </Card>
           ) : (
-            <PlanSuccessRateChart
-              data={planSuccessData?.items ?? []}
-              isLoading={planSuccessLoading}
+            <PlanFailedDevicesChart
+              data={planFailedData?.items ?? []}
+              isLoading={planFailedLoading}
             />
           )}
           {riskError && !resultsSummary ? (

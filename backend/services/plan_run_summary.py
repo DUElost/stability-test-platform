@@ -30,9 +30,6 @@ def build_plan_run_summary(db: Session, run_id: int) -> PlanRunJobsSummaryOut:
     )
     status_counts = {row[0]: row[1] for row in jobs_result.all()}
     total = sum(status_counts.values())
-    pass_rate = (
-        status_counts.get("COMPLETED", 0) / total if total > 0 else 0.0
-    )
 
     return PlanRunJobsSummaryOut(
         plan_run_id=run_id,
@@ -41,7 +38,6 @@ def build_plan_run_summary(db: Session, run_id: int) -> PlanRunJobsSummaryOut:
         plan_name=resolve_plan_name(db, pr),
         total_jobs=total,
         status_counts=status_counts,
-        pass_rate=round(pass_rate, 4),
         started_at=iso(pr.started_at),
         ended_at=iso(pr.ended_at),
         result_summary=pr.result_summary,

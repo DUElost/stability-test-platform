@@ -74,7 +74,6 @@ interface HarnessProps {
   onLifecycleChange?: (next: PipelineDef) => void;
   onSelectStep?: (key: string | null) => void;
   onPatrolIntervalChange?: (next: number | null) => void;
-  onFailureThresholdChange?: (next: number) => void;
   onTimeoutChange?: (next: number | null) => void;
 }
 
@@ -89,14 +88,12 @@ function Harness({
   onLifecycleChange,
   onSelectStep,
   onPatrolIntervalChange,
-  onFailureThresholdChange,
   onTimeoutChange,
 }: HarnessProps) {
   const [lifecycle, setLifecycle] = useState(initialLifecycle);
   const [selected, setSelected] = useState<string | null>(initialSelected);
   const [planName, setPlanName] = useState('冒烟计划');
   const [description, setDescription] = useState('');
-  const [threshold, setThreshold] = useState(0.2);
   const [patrolInterval, setPatrolInterval] = useState<number | null>(120);
   const [timeout, setTimeoutSeconds] = useState<number | null>(3600);
 
@@ -106,11 +103,6 @@ function Harness({
       onPlanNameChange={setPlanName}
       description={description}
       onDescriptionChange={setDescription}
-      failureThreshold={threshold}
-      onFailureThresholdChange={(n) => {
-        onFailureThresholdChange?.(n);
-        setThreshold(n);
-      }}
       patrolIntervalSeconds={patrolInterval}
       onPatrolIntervalChange={(n) => {
         onPatrolIntervalChange?.(n);
@@ -163,8 +155,6 @@ describe('PlanCanvas', () => {
           onPlanNameChange={() => {}}
           description=""
           onDescriptionChange={() => {}}
-          failureThreshold={0.05}
-          onFailureThresholdChange={() => {}}
           patrolIntervalSeconds={null}
           onPatrolIntervalChange={() => {}}
           timeoutSeconds={null}
@@ -592,36 +582,7 @@ describe('PlanCanvas', () => {
       expect(onPatrolIntervalChange).toHaveBeenCalledWith(60);
     });
 
-    it('失败阈值夹在 0..1 之间并同步百分比', () => {
-      const onFailureThresholdChange = vi.fn();
-      render(<Harness onFailureThresholdChange={onFailureThresholdChange} />);
-      const input = screen.getByDisplayValue('0.2');
 
-      fireEvent.change(input, { target: { value: '1.5' } });
-      fireEvent.blur(input);
-      expect(onFailureThresholdChange).toHaveBeenLastCalledWith(1);
-      expect(screen.getByText('100%')).toBeInTheDocument();
-
-      fireEvent.change(screen.getByDisplayValue('1'), { target: { value: '-0.3' } });
-      fireEvent.blur(input);
-      expect(onFailureThresholdChange).toHaveBeenLastCalledWith(0);
-      expect(screen.getByText('0%')).toBeInTheDocument();
-    });
-
-    it('失败阈值键入小数时不吞小数点（#817）', () => {
-      const onFailureThresholdChange = vi.fn();
-      render(<Harness onFailureThresholdChange={onFailureThresholdChange} />);
-      const input = screen.getByDisplayValue('0.2');
-
-      fireEvent.change(input, { target: { value: '0.' } });
-      expect(onFailureThresholdChange).not.toHaveBeenCalled();
-      expect(input).toHaveValue('0.');
-
-      fireEvent.change(input, { target: { value: '0.15' } });
-      fireEvent.blur(input);
-      expect(onFailureThresholdChange).toHaveBeenCalledWith(0.15);
-      expect(screen.getByText('15%')).toBeInTheDocument();
-    });
 
     it('全局超时留空视为不限、负数夹到 0', () => {
       const onTimeoutChange = vi.fn();
@@ -654,7 +615,6 @@ describe('PlanCanvas', () => {
       expect(screen.getByDisplayValue('冒烟计划')).toHaveAttribute('readonly');
       expect(screen.getByPlaceholderText('Plan 描述（可选）')).toHaveAttribute('readonly');
       expect(screen.getByPlaceholderText('不开启')).toBeDisabled();
-      expect(screen.getByDisplayValue('0.2')).toBeDisabled();
       expect(screen.getByPlaceholderText('不限')).toBeDisabled();
     });
 

@@ -55,13 +55,12 @@ def _seed_multi_job_run(host_id: str, n_jobs: int) -> dict:
         host = Host(id=host_id, hostname=f"h-{host_id}",
                     status=HostStatus.ONLINE.value, created_at=now)
         plan = Plan(name=f"wf-{host_id}", description="lock order (#2635)",
-                    failure_threshold=0.1, created_by="pytest")
+                    created_by="pytest")
         db.add_all([host, plan])
         db.flush()
         db.add(PlanStep(plan_id=plan.id, step_key="default", script_name="dummy",
                         script_version="v1.0.0", stage="init", sort_order=0))
-        run = PlanRun(plan_id=plan.id, status="RUNNING", failure_threshold=0.1,
-                      triggered_by="pytest",
+        run = PlanRun(plan_id=plan.id, status="RUNNING", triggered_by="pytest",
                       plan_snapshot={"name": plan.name, "plan_id": plan.id},
                       run_type="MANUAL", started_at=now,
                       total_job_count=n_jobs)          # ← 生产形状的关键字段

@@ -22,14 +22,13 @@ from backend.services.log_observation import aggregate_signal_link_stats
 def _seed_unlinked_signal(db_session, sample_device):
     """PlanRun + job + a DLE whose signal landed without a link."""
     now = datetime.now(timezone.utc)
-    plan = Plan(name="signal-link-plan", failure_threshold=0.05)
+    plan = Plan(name="signal-link-plan")
     db_session.add(plan)
     db_session.flush()
 
     pr = PlanRun(
         plan_id=plan.id,
         status="SUCCESS",
-        failure_threshold=0.05,
         plan_snapshot={},
         run_type="MANUAL",
         started_at=now,

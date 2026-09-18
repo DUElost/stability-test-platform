@@ -68,7 +68,7 @@ def _seed() -> dict:
         )
         plan = Plan(
             name=f"ret-{suffix}", description="retention lock order regression",
-            failure_threshold=0.0, created_by="pytest",
+            created_by="pytest",
         )
         db.add_all([host, plan])
         db.flush()
@@ -81,8 +81,7 @@ def _seed() -> dict:
         db.flush()
 
         run = PlanRun(
-            plan_id=plan.id, status="SUCCESS", failure_threshold=0.0,
-            plan_snapshot={"name": plan.name, "plan_id": plan.id},
+            plan_id=plan.id, status="SUCCESS", plan_snapshot={"name": plan.name, "plan_id": plan.id},
             run_type="MANUAL", triggered_by="pytest",
             started_at=now - timedelta(days=10),
         )

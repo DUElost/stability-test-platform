@@ -98,7 +98,6 @@ def _create_minimal_plan(db_session) -> Plan:
     plan = Plan(
         name=f"plan_run_ctx_{datetime.now(timezone.utc).timestamp()}",
         description=None,
-        failure_threshold=0.05,
         patrol_interval_seconds=60,
         timeout_seconds=300,
         watcher_policy=None,
@@ -147,7 +146,6 @@ class TestPlanRunDetailOutCarriesRunContext:
         pr = PlanRun(
             plan_id=plan.id,
             status="RUNNING",
-            failure_threshold=0.05,
             plan_snapshot=plan_snapshot,
             run_type="MANUAL",
             run_context=run_ctx,
@@ -188,7 +186,6 @@ class TestPlanRunDetailOutCarriesRunContext:
         pr = PlanRun(
             plan_id=plan.id,
             status="RUNNING",
-            failure_threshold=0.05,
             plan_snapshot={"plan_id": plan.id, "steps": []},
             run_type="MANUAL",
             run_context={
@@ -236,7 +233,6 @@ class TestPlanRunDetailOutCarriesRunContext:
             id=42,
             plan_id=7,
             status=PlanRunStatus.RUNNING.value,
-            failure_threshold=0.05,
             plan_snapshot={"plan_id": 7, "steps": []},
             run_type="MANUAL",
             triggered_by="test",
@@ -314,7 +310,6 @@ class TestPlanRunDetailOutCarriesRunContext:
         pr = PlanRun(
             plan_id=plan.id,
             status="SUCCESS",
-            failure_threshold=0.05,
             plan_snapshot={"plan_id": plan.id, "steps": []},
             run_type="SCHEDULE",
             run_context=None,
@@ -339,7 +334,6 @@ class TestPlanRunDetailOutCarriesRunContext:
         pr = PlanRun(
             plan_id=plan.id,
             status="RUNNING",
-            failure_threshold=0.05,
             plan_snapshot={"plan_id": plan.id, "steps": []},
             run_type="MANUAL",
             run_context=None,

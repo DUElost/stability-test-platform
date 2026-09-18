@@ -31,7 +31,6 @@ def _create_referenced_script(db_session, prefix: str) -> tuple[Script, Plan]:
     plan = Plan(
         name=_uniq("legacy_plan"),
         description="references legacy script",
-        failure_threshold=0.1,
         created_by="test",
     )
     db_session.add(plan)

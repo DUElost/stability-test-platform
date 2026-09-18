@@ -36,7 +36,6 @@ interface DispatchCockpitProps {
   selectedHostActiveJobs: number;
   patrolIntervalSeconds?: number | null;
   timeoutSeconds?: number | null;
-  failureThreshold?: number | null;
   note: string;
   preview: PlanRunPreview | null;
   wallClock: WallClockEstimate;
@@ -52,11 +51,6 @@ interface DispatchCockpitProps {
   onEditPlan: () => void;
   onOpenRun: (runId: number) => void;
   onRemoveBlocked: () => void;
-}
-
-function formatFailureThreshold(threshold: number | null | undefined): string {
-  if (threshold == null) return '未设置（按默认 5% 生效）';
-  return `${Math.round(threshold * 100)}%`;
 }
 
 function ParameterInfo({ label, tip }: { label: string; tip: string }) {
@@ -86,7 +80,6 @@ export function DispatchCockpit({
   selectedHostActiveJobs,
   patrolIntervalSeconds,
   timeoutSeconds,
-  failureThreshold,
   note,
   preview,
   wallClock,
@@ -234,10 +227,6 @@ export function DispatchCockpit({
                 <div className="flex items-center justify-between gap-3">
                   <ParameterInfo label="超时" tip="整个 PlanRun 超时后中止；已完成步骤的结果会保留。" />
                   <strong>{formatDurationSeconds(timeoutSeconds, 'precise', '未设置')}</strong>
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <ParameterInfo label="失败阈值" tip="失败 Job 占比超过阈值时标记 PlanRun 失败；未设置时按默认 5% 生效。" />
-                  <strong>{formatFailureThreshold(failureThreshold)}</strong>
                 </div>
                 <div className="border-t pt-3">
                   <div className="font-medium">{planName}</div>

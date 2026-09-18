@@ -85,7 +85,6 @@ class PlanCreate(BaseModel):
 
     name: str
     description: Optional[str] = None
-    failure_threshold: float = Field(default=0.05, ge=0.0, le=1.0)
     patrol_interval_seconds: Optional[int] = Field(default=None, ge=1)
     timeout_seconds: Optional[int] = Field(default=None, ge=1)
     # INIT→PATROL barrier 预算。None = 沿用 STP_BARRIER_TIMEOUT_SECONDS / 600s。
@@ -112,7 +111,6 @@ class PlanUpdate(BaseModel):
 
     name: Optional[str] = None
     description: Optional[str] = None
-    failure_threshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     patrol_interval_seconds: Optional[int] = Field(default=None, ge=1)
     timeout_seconds: Optional[int] = Field(default=None, ge=1)
     # INIT→PATROL barrier 预算。None = 沿用 STP_BARRIER_TIMEOUT_SECONDS / 600s。
@@ -181,7 +179,6 @@ class PlanOut(BaseModel):
     id: int
     name: str
     description: Optional[str] = None
-    failure_threshold: float
     patrol_interval_seconds: Optional[int] = None
     timeout_seconds: Optional[int] = None
     barrier_timeout_seconds: Optional[int] = None
@@ -236,7 +233,6 @@ class PlanRunSummaryOut(BaseModel):
     id: int
     plan_id: int
     status: str
-    failure_threshold: float
     run_type: str
     triggered_by: Optional[str] = None
     started_at: datetime
@@ -549,7 +545,6 @@ def _plan_out(plan: Plan, steps: list) -> PlanOut:
         id=plan.id,
         name=plan.name,
         description=plan.description,
-        failure_threshold=plan.failure_threshold,
         patrol_interval_seconds=plan.patrol_interval_seconds,
         timeout_seconds=plan.timeout_seconds,
         barrier_timeout_seconds=plan.barrier_timeout_seconds,
@@ -650,7 +645,6 @@ def create_plan(
     plan = Plan(
         name=payload.name,
         description=payload.description,
-        failure_threshold=payload.failure_threshold,
         patrol_interval_seconds=payload.patrol_interval_seconds,
         timeout_seconds=payload.timeout_seconds,
         barrier_timeout_seconds=payload.barrier_timeout_seconds,
@@ -809,7 +803,6 @@ def append_chain_tail(
     new_plan = Plan(
         name=payload.name,
         description=payload.description,
-        failure_threshold=0.05,
         patrol_interval_seconds=None,
         timeout_seconds=None,
         barrier_timeout_seconds=None,
@@ -972,8 +965,6 @@ def update_plan(
         plan.name = payload.name
     if payload.description is not None:
         plan.description = payload.description
-    if payload.failure_threshold is not None:
-        plan.failure_threshold = payload.failure_threshold
     fields_set = getattr(payload, "model_fields_set", set())
     if "patrol_interval_seconds" in fields_set:
         plan.patrol_interval_seconds = payload.patrol_interval_seconds
@@ -1272,7 +1263,7 @@ def run_plan(
     )
     return ok(PlanRunSummaryOut(
         id=pr.id, plan_id=pr.plan_id, status=pr.status,
-        failure_threshold=pr.failure_threshold, run_type=pr.run_type,
+        run_type=pr.run_type,
         triggered_by=pr.triggered_by, started_at=pr.started_at,
         ended_at=pr.ended_at, result_summary=pr.result_summary,
         run_context=pr.run_context, plan_snapshot=pr.plan_snapshot,

@@ -7,7 +7,6 @@ function run(overrides: Partial<PlanRun>): PlanRun {
     id: 1,
     plan_id: 7,
     status: 'SUCCESS',
-    failure_threshold: 0.05,
     run_type: 'MANUAL',
     started_at: '2026-07-20T00:00:00Z',
     ended_at: '2026-07-20T02:00:00Z',

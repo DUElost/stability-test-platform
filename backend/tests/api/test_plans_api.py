@@ -355,7 +355,6 @@ class TestPlanCRUD:
         db_session.add(PlanRun(
             plan_id=plan_id,
             status="FAILED",
-            failure_threshold=0.05,
             plan_snapshot={"name": name, "plan_id": plan_id},
             run_type="MANUAL",
         ))
@@ -1091,9 +1090,11 @@ class TestPlanDispatch:
         assert resp.status_code == 400
 
     def test_run_rejects_failure_threshold_override(self, client, auth_headers):
+        """ADR-0048：trigger 与 Plan 契约都不接受 failure_threshold——
+        extra=forbid 必须 422，防旧客户端静默带字段。"""
         resp = client.post("/api/v1/plans/1/run", json={
             "device_ids": [1],
-            "failure_threshold": 0.9,
+            "failure_threshold": 0.5,
         }, headers=auth_headers)
         assert resp.status_code == 422
 
@@ -1170,7 +1171,6 @@ class TestPlanDispatchFailFast:
         plan = Plan(
             name=_uniq("legacy_plan"),
             description="legacy aee plan",
-            failure_threshold=0.05,
             created_by="testuser",
         )
         db_session.add(plan)

@@ -1,5 +1,5 @@
 import apiClient from './client';
-import type { ResultsSummary, ActivityResponse, CompletionTrendResponse, DashboardSummary, FileServerOverview, HostFailureRateResponse, PlanSuccessRateResponse, PlanRunPassRateTrendResponse, RiskTrend } from './types';
+import type { ResultsSummary, ActivityResponse, CompletionTrendResponse, DashboardSummary, FileServerOverview, HostFailureRateResponse, PlanFailedDevicesResponse, PlanRunFailedDeviceTrendResponse, RiskTrend } from './types';
 
 export const results = {
   summary: (limit?: number, projectKey?: string) =>
@@ -30,8 +30,8 @@ export const stats = {
     apiClient.get<FileServerOverview>('/stats/file-server', { params: { hours } }).then(r => r.data),
   hostFailureRate: (days: number = 30, limit: number = 10) =>
     apiClient.get<HostFailureRateResponse>('/stats/host-failure-rate', { params: { days, limit } }).then(r => r.data),
-  planSuccessRate: (days: number = 30, limit: number = 10) =>
-    apiClient.get<PlanSuccessRateResponse>('/stats/plan-success-rate', { params: { days, limit } }).then(r => r.data),
-  planRunPassRateTrend: (days: number = 30) =>
-    apiClient.get<PlanRunPassRateTrendResponse>('/stats/plan-run-pass-rate-trend', { params: { days } }).then(r => r.data),
+  planFailedDevices: (days: number = 30, limit: number = 10) =>
+    apiClient.get<PlanFailedDevicesResponse>('/stats/plan-failed-devices', { params: { days, limit } }).then(r => r.data),
+  planRunFailedDeviceTrend: (days: number = 30) =>
+    apiClient.get<PlanRunFailedDeviceTrendResponse>('/stats/plan-run-failed-device-trend', { params: { days } }).then(r => r.data),
 };

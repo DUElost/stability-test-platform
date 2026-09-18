@@ -138,8 +138,8 @@ export default function PlanEditPage() {
           onPlanNameChange={form.setName}
           description={form.description}
           onDescriptionChange={form.setDescription}
-          failureThreshold={form.failureThreshold}
-          onFailureThresholdChange={form.setFailureThreshold}
+
+
           patrolIntervalSeconds={form.lifecycle.lifecycle.patrol?.interval_seconds ?? null}
           onPatrolIntervalChange={form.handlePatrolIntervalChange}
           timeoutSeconds={form.lifecycle.lifecycle.timeout_seconds ?? null}

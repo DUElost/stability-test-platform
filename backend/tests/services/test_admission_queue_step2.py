@@ -129,8 +129,7 @@ def failed_dispatch_run(db_session):
     db_session.add(dev)
     db_session.flush()
     pr = PlanRun(
-        plan_id=plan.id, status="FAILED", failure_threshold=0.05,
-        plan_snapshot={}, run_type="MANUAL",
+        plan_id=plan.id, status="FAILED", plan_snapshot={}, run_type="MANUAL",
         run_context={"dispatch_device_ids": [dev.id]},
         result_summary={"dispatch_failed": True, "reason": "wifi_allocation_failed"},
         ended_at=datetime.now(timezone.utc),
@@ -290,7 +289,7 @@ class TestAdmissionReaper:
         for _ in range(2):
             pr = PlanRun(
                 plan_id=failed_dispatch_run.plan_id, status="PRECHECK",
-                failure_threshold=0.05, plan_snapshot={}, run_type="MANUAL",
+                plan_snapshot={}, run_type="MANUAL",
                 run_context={"dispatch_device_ids": [1]},
                 precheck_started_at=datetime.now(timezone.utc) - timedelta(seconds=10_000),
                 enqueued_at=datetime.now(timezone.utc) - timedelta(seconds=10_060),

@@ -47,7 +47,7 @@ class TestRunDispatchPlanRun:
     def test_records_audit_and_returns_summary(self, db_session, monkeypatch, test_user):
         from backend.models.plan import Plan
 
-        plan = Plan(name="gpu-test", failure_threshold=0.05)
+        plan = Plan(name="gpu-test")
         db_session.add(plan)
         db_session.commit()
 
@@ -83,7 +83,7 @@ class TestDescribeDispatchPreview:
         from backend.models.host import Device, Host
         from backend.models.plan import Plan
 
-        plan = Plan(name="p1", failure_threshold=0.1)
+        plan = Plan(name="p1")
         db_session.add(plan)
         db_session.flush()
         host = Host(id="h1", hostname="host1", status="ONLINE")

@@ -83,14 +83,14 @@ def _insert_sentinel_orphan(url: str) -> None:
                 "VALUES ('ops', '运维', 10) ON CONFLICT (key) DO NOTHING"
             )
             cur.execute(
-                "INSERT INTO plan (name, failure_threshold, specialty_id) "
-                "VALUES ('orphan-plan', 0.05, "
+                "INSERT INTO plan (name, specialty_id) "
+                "VALUES ('orphan-plan', "
                 "(SELECT id FROM specialty WHERE key = 'ops'))"
             )
             cur.execute(
-                "INSERT INTO plan_run (plan_id, status, failure_threshold, "
+                "INSERT INTO plan_run (plan_id, status, "
                 "plan_snapshot, run_type, project_id) "
-                "SELECT id, 'SUCCESS', 0.05, '{}', 'MANUAL', 99999901 FROM plan "
+                "SELECT id, 'SUCCESS', '{}', 'MANUAL', 99999901 FROM plan "
                 "ORDER BY id LIMIT 1"
             )
         conn.commit()

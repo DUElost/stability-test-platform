@@ -45,8 +45,7 @@ def _seed_job_with_host(
         db.flush()
 
         plan = Plan(
-            name=f"wf-{suffix}", description="t", failure_threshold=0.1,
-                        created_by="test",
+            name=f"wf-{suffix}", description="t", created_by="test",
         )
         db.add(plan)
         db.flush()
@@ -61,7 +60,7 @@ def _seed_job_with_host(
 
         run = PlanRun(
             plan_id=plan.id, status="RUNNING",
-            failure_threshold=0.1, triggered_by="test", started_at=now,
+            triggered_by="test", started_at=now,
             plan_snapshot={"name": plan.name, "plan_id": plan.id},
             run_type="MANUAL",
         )

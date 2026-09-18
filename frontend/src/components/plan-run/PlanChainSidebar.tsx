@@ -117,9 +117,9 @@ function ChainNodeRow({
           {node.plan_name ?? `Plan #${node.plan_id}`}
         </div>
 
-        {!isPending && node.pass_rate != null && (
+        {!isPending && node.failed_jobs != null && node.failed_jobs > 0 && (
           <div className={cn('mt-0.5 text-[11px] font-medium', TEXT.subtitle)}>
-            通过率 {Math.round(node.pass_rate * 100)}%
+            失败设备 {node.failed_jobs} 台
           </div>
         )}
       </div>

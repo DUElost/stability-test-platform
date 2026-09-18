@@ -14,7 +14,6 @@ const basePlan: Plan = {
   id: 1,
   name: 'Smoke',
   description: 'desc',
-  failure_threshold: 0.1,
   patrol_interval_seconds: 120,
   timeout_seconds: 3600,
   next_plan_id: null,
@@ -221,7 +220,6 @@ describe('planEditUtils', () => {
     const draft = (over: Partial<PlanFormDraft> = {}): PlanFormDraft => ({
       name: 'Smoke',
       description: 'desc',
-      failureThreshold: 0.1,
       nextPlanId: null,
       projectKey: 'P1',
       specialtyKey: 'S1',
@@ -243,7 +241,6 @@ describe('planEditUtils', () => {
         draftSnapshot({
           name: basePlan.name,
           description: basePlan.description || '',
-          failureThreshold: basePlan.failure_threshold,
           nextPlanId: basePlan.next_plan_id ?? null,
           projectKey: basePlan.project_key || '',
           specialtyKey: basePlan.specialty_key || '',

@@ -102,7 +102,6 @@ def _seed_scale(
             .values(
                 name=f"scale-{suffix}",
                 description="abort scale regression",
-                failure_threshold=0.0,
                 created_by="pytest",
             )
             .returning(Plan.id)
@@ -112,7 +111,6 @@ def _seed_scale(
             .values(
                 plan_id=plan_id,
                 status=PlanRunStatus.RUNNING.value,
-                failure_threshold=0.0,
                 plan_snapshot={"name": f"scale-{suffix}", "plan_id": plan_id},
                 run_type="MANUAL",
                 triggered_by="pytest",

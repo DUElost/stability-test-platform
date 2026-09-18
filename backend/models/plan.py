@@ -16,7 +16,6 @@ from sqlalchemy import (
     CheckConstraint,
     Column,
     DateTime,
-    Float,
     ForeignKey,
     Index,
     Integer,
@@ -36,7 +35,6 @@ class Plan(Base):
     id                = Column(Integer, primary_key=True)
     name              = Column(String(256), nullable=False)
     description       = Column(Text)
-    failure_threshold = Column(Float, nullable=False, default=0.05)
     patrol_interval_seconds = Column(Integer, nullable=True)
     timeout_seconds   = Column(Integer, nullable=True)
     # INIT→PATROL barrier 预算。NULL = 沿用 STP_BARRIER_TIMEOUT_SECONDS / 600s。
@@ -78,10 +76,6 @@ class Plan(Base):
     suite     = relationship("TestSuite", foreign_keys=[suite_id])
 
     __table_args__ = (
-        CheckConstraint(
-            "failure_threshold >= 0.0 AND failure_threshold <= 1.0",
-            name="ck_plan_failure_threshold",
-        ),
         CheckConstraint(
             "next_plan_id IS NULL OR next_plan_id <> id",
             name="ck_plan_no_self_chain",

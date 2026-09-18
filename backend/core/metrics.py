@@ -7,7 +7,7 @@ Exposes key metrics for monitoring and alerting.
 import functools
 import logging
 import os
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict
 
 logger = logging.getLogger(__name__)
 
@@ -324,12 +324,6 @@ plan_run_terminal_total = Counter(
     ['status']  # SUCCESS / PARTIAL_SUCCESS / FAILED
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
-plan_run_pass_rate = Histogram(
-    'stability_plan_run_pass_rate',
-    'Distribution of pass_rate at PlanRun terminal aggregation',
-    ['status'],
-    buckets=[0.0, 0.5, 0.8, 0.9, 0.95, 0.98, 0.99, 1.0]
-) if PROMETHEUS_AVAILABLE else _MockMetric()
 
 plan_run_aggregation_failed_total = Counter(
     'stability_plan_run_aggregation_failed_total',
@@ -737,13 +731,15 @@ def record_api_request(method: str, endpoint: str, status_code: int, duration: f
     ).observe(duration)
 
 
-def record_plan_run_terminal(status: str, pass_rate: Optional[float] = None):
-    """Record a PlanRun reaching a terminal status (ADR-0020 aggregation)."""
+def record_plan_run_terminal(status: str):
+    """Record a PlanRun reaching a terminal status (ADR-0020 aggregation).
+
+    ADR-0048：`stability_plan_run_pass_rate` histogram 已退役——通过率不再是
+    run 语义的一部分；设备失败台数由 job/run 计数器与结果层承载。
+    """
     if not PROMETHEUS_AVAILABLE:
         return
     plan_run_terminal_total.labels(status=status).inc()
-    if pass_rate is not None:
-        plan_run_pass_rate.labels(status=status).observe(max(0.0, min(1.0, pass_rate)))
 
 
 def record_plan_run_aggregation_failed():

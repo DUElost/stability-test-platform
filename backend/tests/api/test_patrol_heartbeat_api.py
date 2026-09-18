@@ -70,7 +70,6 @@ def _seed_patrol_chain(*, job_status: str = JobStatus.RUNNING.value) -> dict:
         )
         plan = Plan(
             name=f"patrol-plan-{suffix}",
-            failure_threshold=0.05,
             created_by="pytest",
         )
         db.add_all([host, device, plan])
@@ -79,7 +78,6 @@ def _seed_patrol_chain(*, job_status: str = JobStatus.RUNNING.value) -> dict:
         pr = PlanRun(
             plan_id=plan.id,
             status="RUNNING",
-            failure_threshold=0.05,
             plan_snapshot={"plan": {"id": plan.id}, "steps": []},
             run_type="MANUAL",
             triggered_by="pytest",

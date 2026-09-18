@@ -33,7 +33,6 @@ def seed(db_session):
     plan = Plan(
         name=f"lease-plan-{suffix}",
         description="DeviceLease test plan",
-        failure_threshold=0.1,
         created_by="test",
     )
     db_session.add_all([host, device, plan])
@@ -41,7 +40,6 @@ def seed(db_session):
     plan_run = PlanRun(
         plan_id=plan.id,
         status="RUNNING",
-        failure_threshold=0.1,
         plan_snapshot={"name": plan.name, "plan_id": plan.id},
         run_type="MANUAL",
         triggered_by="test",

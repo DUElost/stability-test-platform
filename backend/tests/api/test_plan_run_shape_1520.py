@@ -18,12 +18,11 @@ class _Seed:
     @staticmethod
     def one(db_session, sample_device):
         now = datetime.now(timezone.utc)
-        plan = Plan(name="shape-1520", description="", failure_threshold=0.05)
+        plan = Plan(name="shape-1520", description="")
         db_session.add(plan)
         db_session.flush()
         run = PlanRun(
-            plan_id=plan.id, status="SUCCESS", failure_threshold=0.05,
-            plan_snapshot={"name": plan.name, "plan_id": plan.id}, run_type="MANUAL",
+            plan_id=plan.id, status="SUCCESS", plan_snapshot={"name": plan.name, "plan_id": plan.id}, run_type="MANUAL",
             triggered_by="pytest", started_at=now, ended_at=now,
         )
         db_session.add(run)
@@ -49,13 +48,13 @@ def test_summary_envelope_and_exact_keys(client, auth_headers, db_session, sampl
     # 键集合逐键相等——response_model 若漏声明字段，这里立刻红（静默裁剪正是
     # 手写 dict → 模型迁移唯一会**新引入**的失败形态）。
     assert set(data) == {
-        "plan_run_id", "status", "plan_name", "total_jobs", "status_counts", "pass_rate",
+        "plan_run_id", "status", "plan_name", "total_jobs", "status_counts",
         "started_at", "ended_at", "result_summary",
     }
     assert data["plan_run_id"] == run.id
     assert data["total_jobs"] == 1
     assert data["status_counts"] == {"COMPLETED": 1}
-    assert data["pass_rate"] == 1.0
+    # ADR-0048：pass_rate 不再是响应字段；失败台数经 result_summary/计数器承载
 
 
 def test_summary_plan_name_matches_detail_source_2623(client, auth_headers, db_session, sample_device):

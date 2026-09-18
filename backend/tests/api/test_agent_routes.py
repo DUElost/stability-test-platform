@@ -77,7 +77,6 @@ def _seed_job(status: str = JobStatus.PENDING.value) -> dict:
         plan = Plan(
             name=f"plan-{suffix}",
             description="pytest plan",
-            failure_threshold=0.1,
                         created_by="pytest",
         )
         db.add_all([host, device, plan])
@@ -86,7 +85,6 @@ def _seed_job(status: str = JobStatus.PENDING.value) -> dict:
         plan_run = PlanRun(
             plan_id=plan.id,
             status="RUNNING",
-            failure_threshold=0.1,
             plan_snapshot={"name": plan.name, "plan_id": plan.id},
             run_type="MANUAL",
             triggered_by="pytest",

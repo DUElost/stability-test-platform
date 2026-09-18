@@ -27,7 +27,6 @@ def test_pending_timeout_emits_job_status_and_releases_lease(
     pr = PlanRun(
         plan_id=gate_chain["plan"].id,
         status="RUNNING",
-        failure_threshold=0.1,
         plan_snapshot={"plan_id": gate_chain["plan"].id},
         run_type="MANUAL",
         triggered_by="integration-test",
