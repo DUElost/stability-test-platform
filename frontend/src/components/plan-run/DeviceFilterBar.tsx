@@ -18,6 +18,11 @@ interface Props {
   statusTestIdPrefix?: string;
   linkTestIdPrefix?: string;
   hostTestIdPrefix?: string;
+  /**
+   * #2601：host_id → 显示名。缺省为恒等（沿用旧行为）；调用方传统一入口
+   * `hostLabel()`，避免这里直接渲染内部 slug。
+   */
+  hostLabelFor?: (hostId: string) => string;
   /** Whether to show the "执行" label before the status chips. Default true. */
   showStatusLabel?: boolean;
 }
@@ -55,6 +60,7 @@ export default function DeviceFilterBar({
   statusTestIdPrefix = 'device-status-filter',
   linkTestIdPrefix = 'device-link-filter',
   hostTestIdPrefix = 'device-host-filter',
+  hostLabelFor,
   showStatusLabel = true,
 }: Props) {
   const hosts = Object.keys(byHost).sort((a, b) => a.localeCompare(b));
@@ -127,7 +133,7 @@ export default function DeviceFilterBar({
             <option value="all">全部 ({total})</option>
             {hosts.map((h) => (
               <option key={h} value={h}>
-                {h} ({byHost[h] ?? 0})
+                {hostLabelFor ? hostLabelFor(h) : h} ({byHost[h] ?? 0})
               </option>
             ))}
           </select>

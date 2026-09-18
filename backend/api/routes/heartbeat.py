@@ -416,13 +416,26 @@ def _process_heartbeat_with_db(
 
             # #1356：占位 serial 设备的归属不可靠（同一 serial 被多 host
             # adb 同时识别）——漂移时告警（不阻断：归属仍按最新心跳，派发侧
-            # device_host_drift 保护兜底）
-            if device.host_id != host.id and is_placeholder_serial(device.serial):
-                logger.warning(
-                    "placeholder_serial_host_drift serial=%s device=%s %s->%s "
-                    "(serial 为占位值——归属不可靠，建议刷机/换线让设备上报真实 serial)",
-                    device.serial, device.id, device.host_id, host.id,
-                )
+            # device_host_drift 保护兜底）。
+            # #2569：**非占位** serial 同样会被两台 host 抢（克隆序列号、两台 agent
+            # 配同一台设备、换线后 ADB 串到另一台主机），此前那条路径**一条日志都没有**：
+            # 下游只剩 admission 侧 `device_host_drift` 整批 fatal 的「果」（2026-09-11
+            # run 360/362：1 台设备阻断 368 台压测），查不到「谁在争、从哪漂到哪、漂了几次」。
+            # 两条分支都**只加日志、不改语义**——归属仍按最新心跳，阻断只由租约决定。
+            if device.host_id != host.id:
+                if is_placeholder_serial(device.serial):
+                    logger.warning(
+                        "placeholder_serial_host_drift serial=%s device=%s %s->%s "
+                        "(serial 为占位值——归属不可靠，建议刷机/换线让设备上报真实 serial)",
+                        device.serial, device.id, device.host_id, host.id,
+                    )
+                else:
+                    logger.warning(
+                        "device_host_reassigned serial=%s device=%s %s->%s "
+                        "(非占位 serial 被跨 host 改绑——同一 serial 只能真机接一台，"
+                        "派发侧 device_host_drift 会整批 fatal)",
+                        device.serial, device.id, device.host_id, host.id,
+                    )
             device.host_id = host.id
             if dev_data.get("model") is not None:
                 device.model = dev_data.get("model")
