@@ -335,6 +335,61 @@ class TestHandover:
         )
         assert "install.s3.db or install.s3.migrate" in message, message
 
+    # ── #2718：证据按**发布物**累积（plain 重跑不得抹掉 S5 证据）──────────────
+
+    def _with_evidence(self, state_dir: Path, bucket: dict, *, release: str = "i5-lab-2026.09.15",
+                       extra_stages: list | None = None) -> None:
+        """给状态文件注入累积证据（可追加 stage 条目——**不替换**既有 stages，否则其它
+        槽位也一并缺失，用例就量不到「同 ID 谁赢」这条规则）。"""
+        path = state_dir / "install-state.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["evidence"] = {release: bucket}
+        if extra_stages:
+            payload["stages"] = list(payload.get("stages") or []) + list(extra_stages)
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+    def test_ms01_passes_on_accumulated_evidence_after_plain_run(self, tmp_path):
+        """238 现场形态：先跑全量 `--through-agents`（发 `install.s5`），随后走文档化
+        升级路径 `install.sh --yes`（S0–S4，不发 S5，并**重写** stages）⇒ 修前 MS-01
+        假 BLOCKED。累积视图让同发布物的 S5 证据活过 plain 重跑。
+        """
+        state_dir = _state_dir(tmp_path, omit=("install.s5",))
+        self._with_evidence(state_dir, {"install.s5": "PASS"})
+
+        report = run_handover(
+            _site_yaml(tmp_path), state_dir=state_dir,
+            verify_report=_verify_report(tmp_path), system_root=tmp_path,
+        )
+
+        assert _status(report, "handover.MS-01") == "PASS", report["checks"]
+
+    def test_other_release_evidence_does_not_satisfy_current_release(self, tmp_path):
+        """跨发布物**不继承**：旧发布物的 S5 证据不得满足本次验收。"""
+        state_dir = _state_dir(tmp_path, omit=("install.s5",))
+        self._with_evidence(state_dir, {"install.s5": "PASS"}, release="previous-release")
+
+        report = run_handover(
+            _site_yaml(tmp_path), state_dir=state_dir,
+            verify_report=_verify_report(tmp_path), system_root=tmp_path,
+        )
+
+        assert _status(report, "handover.MS-01") == "BLOCKED", report["checks"]
+
+    def test_latest_run_status_overrides_accumulated_evidence(self, tmp_path):
+        """历史不得掩盖刚发生的失败：累积里是 PASS，最近一次运行记 FAIL ⇒ 以最新为准。"""
+        state_dir = _state_dir(tmp_path, omit=("install.s5",))
+        self._with_evidence(
+            state_dir, {"install.s5": "PASS"},
+            extra_stages=[{"stage": "S5", "status": "FAIL", "checks": ["install.s5"]}],
+        )
+
+        report = run_handover(
+            _site_yaml(tmp_path), state_dir=state_dir,
+            verify_report=_verify_report(tmp_path), system_root=tmp_path,
+        )
+
+        assert _status(report, "handover.MS-01") != "PASS", report["checks"]
+
     def test_failing_mapped_check_fails_the_item(self, tmp_path):
         report = run_handover(
             _site_yaml(tmp_path), state_dir=_state_dir(tmp_path),

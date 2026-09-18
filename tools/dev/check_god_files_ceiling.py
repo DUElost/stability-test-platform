@@ -45,11 +45,15 @@ ROOT = Path(__file__).resolve().parents[2]
 #:   main 1622 → 1177 → 封顶 **1236**。
 #: - 2026-09-18 五次下调（#736：disk/watcher 启动抽出 `bootstrap_subsystems.py`）：
 #:   main 1177 → 1087 → 封顶 **1142**。
+#: - 2026-09-18 六次下调（#736：身份/HOST_ID 抽出 `startup_identity.py`）：
+#:   main 1087 → 1015 → 封顶 **1066**。
+#: - 2026-09-18 七次下调（#736：SocketIO control 抽出 `control_handler.py`）：
+#:   main 1015 → 846 → 封顶 **889**。
 CEILINGS: dict[str, int] = {
     "backend/api/routes/plan_runs.py": 507,
     "backend/api/routes/agent_api.py": 411,
     "backend/api/routes/projects.py": 378,
-    "backend/agent/main.py": 1142,
+    "backend/agent/main.py": 889,
 }
 
 

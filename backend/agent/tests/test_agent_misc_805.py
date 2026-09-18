@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from backend.agent.main import _parse_abort_job_ids
+from backend.agent.control_handler import _parse_abort_job_ids
 from backend.agent.pipeline_engine import _append_log_line
 
 

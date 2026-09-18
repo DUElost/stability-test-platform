@@ -70,7 +70,7 @@ sudo ./deploy/agent/install.sh      # 读仓库外 ~/hosts.ini → S5（Host 仍
 
 ## Revisit
 
-- **`install-state.json` 只保留最近一次运行**：`agent/install.sh` 走的是 `install --through-agents` 全量重跑（幂等重核），会把 S1–S4 一起重验。若未来要「只跑 S5」，需要新增只做 S5 的入口（当前有意不做：先重核站点再接入更安全）。
+- **`install-state.json` 只保留最近一次运行的 `stages`**（该限制已由 #2718 缓解：`evidence[<release>]` 按发布物累积、handover 读累积视图；本条其余事实仍有效）：`agent/install.sh` 走的是 `install --through-agents` 全量重跑（幂等重核），会把 S1–S4 一起重验。若未来要「只跑 S5」，需要新增只做 S5 的入口（当前有意不做：先重核站点再接入更安全）。
 - **异构 Agent 安装根**：现以「同站点必须一致」fail-closed（`STP_SCRIPT_RUNTIME_ROOT` 单值）。真要异构需先把该键改成按 Host 渲染（后续切片）。
 - **`probe_data_disk` 仍不格式化**：只建议「已带文件系统的裸盘」；已有分区的盘必须显式 `--data-disk <分区>`。若要支持自动分区/格式化，必须另做授权流程（当前明确不做）。
 - **`preflight` 的端口检查只读 `/proc/net/tcp`**：容器网络下可能与宿主视角不同（238 实验为 nspawn 容器 + 桥）；现场若在容器里跑 preflight，应改看宿主视图。

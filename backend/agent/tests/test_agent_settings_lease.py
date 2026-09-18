@@ -5,7 +5,7 @@
 2. **env 覆盖 + 缓存语义**：写入生效需伴随 `reset_agent_settings_caches()`；
 3. **非法值** → `ValidationError`；
 4. **来源契约**：只写 `.env` 文件不生效（`env_file=None`）；
-5. **热更新闭环**：`main._reload_runtime_env()` 重读 `.env` → 缓存被清 → 新值可见
+5. **热更新闭环**：`control_handler.reload_runtime_env()` 重读 `.env` → 缓存被清 → 新值可见
    （对应 hot-update 的 `reload_config` 路径）。
 """
 
@@ -98,12 +98,12 @@ def test_dotenv_file_alone_must_not_take_effect(tmp_path, monkeypatch):
 
 
 def test_reload_runtime_env_clears_settings_cache(tmp_path):
-    """热更新闭环：main._reload_runtime_env() 之后新值对 Settings 可见。
+    """热更新闭环：control_handler.reload_runtime_env() 之后新值对 Settings 可见。
 
     `load_dotenv(override=True)` 直接写 os.environ（绕过 monkeypatch），
     故本用例自行快照/恢复环境变量。
     """
-    from backend.agent.main import _reload_runtime_env
+    from backend.agent.control_handler import reload_runtime_env as _reload_runtime_env
 
     env_file = tmp_path / "agent.env"
     env_file.write_text("AGENT_LEASE_TTL=777\nAGENT_LEASE_EXTEND_BATCH_CHUNK=5\n", encoding="utf-8")
@@ -127,12 +127,12 @@ def test_reload_runtime_env_clears_settings_cache(tmp_path):
 
 
 def test_reset_helper_is_wired_into_reload_config_path():
-    """静态契约：main.py 的 reload_config 分支必须调用 reset（防回退）。"""
+    """静态契约：reload_config 分支必须调用 reset（防回退）。"""
     from pathlib import Path
 
-    main_src = Path("backend/agent/main.py").read_text(encoding="utf-8")
-    assert "reset_agent_settings_caches()" in main_src
-    reload_idx = main_src.index('elif command == "reload_config":')
-    window = main_src[reload_idx : reload_idx + 400]
-    assert "_reload_runtime_env()" in window, "reload_config 分支应重读 .env"
+    src = Path("backend/agent/control_handler.py").read_text(encoding="utf-8")
+    assert "reset_agent_settings_caches()" in src
+    reload_idx = src.index('elif command == "reload_config":')
+    window = src[reload_idx : reload_idx + 500]
+    assert "reload_runtime_env()" in window, "reload_config 分支应重读 .env"
     assert "reset_agent_settings_caches()" in window, "重读后必须清 Settings 缓存"

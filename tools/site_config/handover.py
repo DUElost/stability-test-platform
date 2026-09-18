@@ -140,8 +140,22 @@ def _read_json(path: Path) -> tuple[dict[str, Any] | None, str | None]:
 
 
 def _stage_index(state: dict[str, Any]) -> dict[str, str]:
-    """Map every recorded check id to the status of the stage that reported it."""
+    """Map every recorded check id to the status of the stage that reported it.
+
+    #2718：先用**按发布物累积**的证据视图打底（`evidence[<release>]`），再用最近一次运行的
+    `stages` 覆盖同 ID —— 于是「本次没发的证据」（plain `install.sh --yes` 不产出
+    `install.s5.*`）由同发布物的历史补上，而「本次发了但失败」的 ID 仍以最新状态为准
+    （历史不得掩盖刚发生的失败）。跨发布物不继承：只读 `state["release"]` 对应的桶。
+
+    旧格式状态（只有 `stages`，无 `evidence`）行为不变。
+    """
     index: dict[str, str] = {}
+    release = str(state.get("release") or "")
+    evidence = state.get("evidence")
+    if release and isinstance(evidence, dict):
+        bucket = evidence.get(release)
+        if isinstance(bucket, dict):
+            index.update({str(k): str(v) for k, v in bucket.items()})
     for entry in state.get("stages", []):
         if not isinstance(entry, dict):
             continue

@@ -1556,3 +1556,57 @@ def test_s5_reports_blocked_when_no_agent_is_declared(tmp_path):
 
     assert len(checks) == 1
     assert (checks[0].status, checks[0].code) == ("BLOCKED", "agents_pending")
+
+
+# ── #2718：安装证据按发布物累积（handover 的 MS 项读它）────────────────────────
+
+
+def test_accumulated_evidence_folds_old_format_and_overrides_with_latest(tmp_path):
+    """旧格式折入 + 同 ID 以最新状态覆盖（历史不得掩盖刚发生的失败）。"""
+    from tools.site_config import install as install_module
+
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    (state_dir / "install-state.json").write_text(json.dumps({
+        "release": "rel-A",
+        "runs": 1,
+        "stages": [{"stage": "S5", "status": "PASS", "checks": ["install.s5"]}],
+    }), encoding="utf-8")
+
+    merged = install_module._accumulated_evidence(
+        state_dir, "rel-A", [{"stage": "S0", "status": "PASS", "checks": ["install.s0"]}],
+    )
+    assert merged["rel-A"] == {"install.s5": "PASS", "install.s0": "PASS"}
+    # 写回（安装链就是这么落盘的）——下一步验证它对**读回来的** evidence 继续合并
+    (state_dir / "install-state.json").write_text(
+        json.dumps({"release": "rel-A", "evidence": merged, "stages": []}), encoding="utf-8",
+    )
+
+    # 同发布物重跑：本次没发的 ID 保留，发了的以本次为准
+    merged = install_module._accumulated_evidence(
+        state_dir, "rel-A", [{"stage": "S5", "status": "FAIL", "checks": ["install.s5"]}],
+    )
+    assert merged["rel-A"]["install.s5"] == "FAIL"
+    assert merged["rel-A"]["install.s0"] == "PASS"
+
+
+def test_accumulated_evidence_is_per_release_and_bounded(tmp_path):
+    """跨发布物分桶（不继承），且保留窗口有界（文件不随升级次数无限增长）。"""
+    from tools.site_config import install as install_module
+
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    path = state_dir / "install-state.json"
+    for index in range(install_module.EVIDENCE_RELEASES_KEPT + 2):
+        release = f"rel-{index}"
+        merged = install_module._accumulated_evidence(
+            state_dir, release,
+            [{"stage": "S0", "status": "PASS", "checks": ["install.s0"]}],
+        )
+        path.write_text(json.dumps({"release": release, "runs": index + 1,
+                                    "evidence": merged, "stages": []}), encoding="utf-8")
+
+    final = json.loads(path.read_text(encoding="utf-8"))["evidence"]
+    assert len(final) == install_module.EVIDENCE_RELEASES_KEPT, sorted(final)
+    assert "rel-0" not in final and "rel-1" not in final, "最早的发布物桶应被丢弃"
+    assert f"rel-{install_module.EVIDENCE_RELEASES_KEPT + 1}" in final
