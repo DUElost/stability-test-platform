@@ -42,6 +42,19 @@ def _head_detail(checks: dict[str, str]) -> dict:
     }
 
 
+
+def _head_detail_no_auto(checks: dict[str, str]) -> dict:
+    """队首**未挂** auto-merge 的 detail——enable 分支的真实前提。
+
+    `_head_detail()` 预置 `autoMergeRequest.mergeMethod=MERGE`，那是「已挂」形态；
+    脚本只有在 `method != MERGE` 时才走 enable，故 #2646 的用例必须用本 helper，
+    否则 fixture 自相矛盾（既说已挂、又走 enable），且会让「兜底是否误吞真故障」
+    的断言失去意义。
+    """
+    detail = _head_detail(checks)
+    detail["autoMergeRequest"] = None
+    return detail
+
 _ALL_GREEN = {
     "lint": "SUCCESS",
     "CodeQL": "SUCCESS",
@@ -96,6 +109,12 @@ if args[:2] == ["pr", "view"]:
         out(scenario.get("pr_author", "tester"))
     out(json.dumps(scenario.get("head_detail", {{}})))
 if args[:2] == ["pr", "merge"]:
+    # #2646：可注入 enable 失败（如 PAT 缺 workflow scope 的 GraphQL 拒绝）以验容错分支。
+    # 只对 `--auto`（启用路径）注入——`--disable-auto` 本身走 `|| true`，无需覆盖。
+    merge_err = scenario.get("merge_error")
+    if merge_err and "--auto" in args:
+        print(merge_err, file=sys.stderr)
+        sys.exit(1)
     out()
 if args[:2] == ["pr", "update-branch"]:
     # #1783：可注入失败（如 PAT 缺 workflow scope 的 GraphQL 拒绝）以验容错分支
@@ -766,3 +785,83 @@ def test_ci_run_probe_uses_the_actions_capable_token(tmp_path):
     ]
     assert probe_calls, "判据读取（ci.yml runs）没有发生"
     assert all(c["gh_token"] == "ghs_alerts_token" for c in probe_calls), probe_calls
+
+
+# ── #2646：enable auto-merge 的 workflow-scope 拒绝（#1783 同根因的未覆盖调用点）──
+
+_WORKFLOW_SCOPE_ERR = (
+    "GraphQL: Pull request refusing to allow a Personal Access Token to create or "
+    "update workflow `.github/workflows/ci.yml` without `workflow` scope "
+    "(enablePullRequestAutoMerge)"
+)
+
+
+def test_enable_automerge_workflow_scope_rejection_keeps_reconcile_green(tmp_path):
+    """#2646 主判据①：队首改过 .github/workflows/* 时，enable 被 workflow-scope 拒绝
+    **不得让整 job 红**（否则队列自持停摆，实测 6h20m）。
+
+    #1783 修的是同一根因在 `update-branch` 路径上的表现；enable 这条路径当时没有
+    同样的容错，故本用例钉住它。
+    """
+    result, calls = _run_queue(
+        tmp_path,
+        {
+            "pr_rows": [_HEAD_ROW],
+            "head_detail": _head_detail_no_auto(_ALL_GREEN),
+            "open_issue": "999",
+            "merge_error": _WORKFLOW_SCOPE_ERR,
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    _assert_called(calls, "pr merge")
+    assert "workflow" in result.stdout and "scope" in result.stdout, result.stdout
+    # 指引必须可执行：提示用有 scope 的凭据启用 auto-merge
+    assert "auto-merge" in result.stdout, result.stdout
+
+
+def test_enable_automerge_scope_rejection_opens_distinguishable_alert(tmp_path):
+    """#2646 主判据②：该状态须发**可区分**告警。
+
+    既有指纹是 `head=#N failed=<失败项>`，而本状态的队首 required checks **全绿**、
+    failed 为空 ⇒ 若不单列，运维只看到「一切正常却没合入」。故断言：
+    ① 开了告警；② 指纹含 `reason=credential-scope`（与普通空-failed 停摆可区分）；
+    ③ 正文含人工动作。
+    """
+    result, calls = _run_queue(
+        tmp_path,
+        {
+            "pr_rows": [_HEAD_ROW],
+            "head_detail": _head_detail_no_auto(_ALL_GREEN),
+            "open_issue": "",
+            "merge_error": _WORKFLOW_SCOPE_ERR,
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    body = _body_of(_read_argv(tmp_path), "create")
+    assert "reason=credential-scope" in body, body
+    assert "credential-scope" in body, body
+    # 必须写明「不自愈」——否则运维会以为等下一轮就好
+    assert "不自愈" in body or "not self-heal" in body, body
+
+
+def test_enable_automerge_unrelated_failure_still_fails_loudly(tmp_path):
+    """#2646 负向对照：**非** workflow-scope 的 enable 失败**不得**被吞——
+
+    容错只能收「凭据配置」这一可处置状态；真故障（网络/权限/未知）必须继续上抛，
+    否则会把真实故障伪装成绿。
+    """
+    result, _calls = _run_queue(
+        tmp_path,
+        {
+            "pr_rows": [_HEAD_ROW],
+            "head_detail": _head_detail_no_auto(_ALL_GREEN),
+            "open_issue": "",
+            "merge_error": "HTTP 500: internal server error",
+        },
+    )
+
+    assert result.returncode != 0, (
+        f"非 workflow-scope 的 enable 失败必须上抛，实际 rc={result.returncode}"
+    )
