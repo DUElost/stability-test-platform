@@ -526,14 +526,12 @@ def build_plan_snapshot(
     plan: Plan,
     steps: list[PlanStep],
     script_metadata: dict[tuple[str, str], dict[str, dict]],
-    failure_threshold: float,
 ) -> dict:
     return {
         "plan": {
             "id": plan.id,
             "name": plan.name,
             "description": plan.description,
-            "failure_threshold": failure_threshold,
             "patrol_interval_seconds": plan.patrol_interval_seconds,
             "timeout_seconds": plan.timeout_seconds,
             "barrier_timeout_seconds": plan.barrier_timeout_seconds,

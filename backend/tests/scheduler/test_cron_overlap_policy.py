@@ -32,7 +32,7 @@ TERMINAL = (
 def plan_row(db_session):
     plan = Plan(
         name="cron-overlap-plan", description="cron overlap policy test",
-        failure_threshold=0.1, created_by="test",
+        created_by="test",
     )
     db_session.add(plan)
     db_session.flush()

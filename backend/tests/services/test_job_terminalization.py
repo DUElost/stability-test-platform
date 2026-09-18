@@ -15,7 +15,6 @@ from backend.services.plan_run_aggregation import (
 def _run(**kwargs):
     defaults = dict(
         status=PlanRunStatus.RUNNING.value,
-        failure_threshold=0.05,
         run_context=None,
         total_job_count=0,
         terminal_job_count=0,
@@ -172,13 +171,14 @@ def test_recount_detects_drift():
     assert run.failed_job_count == 1
 
 
-def test_post_flash_failure_yields_partial_success_through_terminalization(
+def test_post_flash_failure_yields_success_through_terminalization(
     db_session, sample_device,
 ):
-    """#1591-④ 接线判据：终态化路径必须把会话传进聚合。
+    """ADR-0048 端到端判据：刷机后步骤失败的批次经真实终态化路径落 SUCCESS。
 
-    单元测试只能证明「传了 db 时规则生效」；漏传 db 会让里程碑规则**静默不生效**
-    （保守回落 FAILED，不报错）——这条用例走真实 db_session，专门盯这个漏。
+    #1591-④ 里程碑豁免已随通过率轴移除——新语义下设备失败本就不改 run 状态，
+    这条保留走真实 db_session 的终态化全链回归（原用例盯「漏传 db 静默不生效」，
+    现在盯「任何回潮的阈值/豁免逻辑不得重新进入终态化路径」）。
     """
     from datetime import datetime, timezone
 
@@ -188,13 +188,12 @@ def test_post_flash_failure_yields_partial_success_through_terminalization(
     from backend.services.job_terminalization import on_job_terminal_sync
 
     now = datetime.now(timezone.utc)
-    plan = Plan(name="flash-batch-plan", failure_threshold=0.05)
+    plan = Plan(name="flash-batch-plan")
     db_session.add(plan)
     db_session.flush()
     run = PlanRun(
         plan_id=plan.id,
         status=PlanRunStatus.RUNNING.value,
-        failure_threshold=0.05,
         plan_snapshot={"name": plan.name, "steps": [
             {"step_key": "flash", "script_name": "flash_firmware"},
             {"step_key": "oobe", "script_name": "oobe_skip"},
@@ -235,4 +234,5 @@ def test_post_flash_failure_yields_partial_success_through_terminalization(
     applied, status = on_job_terminal_sync(job, db_session, run=run)
 
     assert applied is True
-    assert status == PlanRunStatus.PARTIAL_SUCCESS.value
+    # ADR-0048：完成即绿——设备失败（含刷机后步骤失败）不产生 PARTIAL/FAILED
+    assert status == PlanRunStatus.SUCCESS.value

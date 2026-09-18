@@ -6,7 +6,6 @@ Run BEFORE `alembic upgrade head` when applying revision
 Checks:
   - duplicate (plan_run_id, device_id) in job_instance
   - duplicate active jobs per device (PENDING/RUNNING/UNKNOWN)
-  - failure_threshold outside [0, 1] on plan / plan_run
 
 Usage:
     python -m backend.scripts.migration.preflight_execution_protocol [--json]
@@ -68,35 +67,18 @@ _ACTIVE_DEVICE_DUP_SQL = text(
     """
 )
 
-_PLAN_THRESHOLD_SQL = text(
-    """
-    SELECT 'plan' AS table_name, id, failure_threshold
-      FROM plan
-     WHERE failure_threshold < 0.0 OR failure_threshold > 1.0
-    UNION ALL
-    SELECT 'plan_run' AS table_name, id, failure_threshold
-      FROM plan_run
-     WHERE failure_threshold < 0.0 OR failure_threshold > 1.0
-     ORDER BY table_name, id
-    """
-)
-
-
 def run_preflight() -> Dict[str, Any]:
     session = _build_session()
     try:
         dup_rows = session.execute(_DUPLICATE_JOB_SQL).mappings().all()
         active_rows = session.execute(_ACTIVE_DEVICE_DUP_SQL).mappings().all()
-        threshold_rows = session.execute(_PLAN_THRESHOLD_SQL).mappings().all()
 
         duplicates = [dict(r) for r in dup_rows]
         active_device_duplicates = [dict(r) for r in active_rows]
-        invalid_thresholds = [dict(r) for r in threshold_rows]
 
         blocking = (
             len(duplicates) > 0
             or len(active_device_duplicates) > 0
-            or len(invalid_thresholds) > 0
         )
         return {
             "ok": not blocking,
@@ -104,14 +86,11 @@ def run_preflight() -> Dict[str, Any]:
             "duplicates": duplicates,
             "active_device_duplicate_groups": len(active_device_duplicates),
             "active_device_duplicates": active_device_duplicates,
-            "invalid_failure_threshold_rows": len(invalid_thresholds),
-            "invalid_failure_thresholds": invalid_thresholds,
             "remediation": (
                 "Resolve all listed issues before upgrade. "
                 "Duplicates: keep canonical job rows per group. "
                 "Active-device duplicates: leave at most one "
-                "PENDING/RUNNING/UNKNOWN job per device. "
-                "Thresholds: set failure_threshold to a value in [0, 1]."
+                "PENDING/RUNNING/UNKNOWN job per device."
             ),
         }
     finally:
@@ -143,7 +122,7 @@ def main(argv: List[str] | None = None) -> int:
     else:
         if report["ok"]:
             print(
-                "PREFLIGHT OK: no blocking duplicates or invalid failure_threshold"
+                "PREFLIGHT OK: no blocking duplicates"
             )
         else:
             if report["duplicate_plan_run_device_groups"]:
@@ -168,18 +147,6 @@ def main(argv: List[str] | None = None) -> int:
                     print(
                         f"  device_id={item['device_id']} count={item['duplicates']} "
                         f"job_ids={item['job_ids']}",
-                        file=sys.stderr,
-                    )
-            if report["invalid_failure_threshold_rows"]:
-                print(
-                    f"PREFLIGHT BLOCKED: {report['invalid_failure_threshold_rows']} "
-                    "failure_threshold row(s) outside [0, 1]",
-                    file=sys.stderr,
-                )
-                for item in report["invalid_failure_thresholds"]:
-                    print(
-                        f"  {item['table_name']} id={item['id']} "
-                        f"failure_threshold={item['failure_threshold']}",
                         file=sys.stderr,
                     )
             print(f"\nRemediation: {report['remediation']}", file=sys.stderr)

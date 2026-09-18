@@ -222,7 +222,6 @@ export default function PlanListPage() {
                       <TableHead className="h-9 px-3">Plan</TableHead>
                       <TableHead className="h-9 px-3">专项</TableHead>
                       <TableHead className="h-9 px-3">步骤</TableHead>
-                      <TableHead className="h-9 px-3">失败阈值</TableHead>
                       <TableHead className="h-9 px-3">更新</TableHead>
                       <TableHead className="h-9 px-3 text-right">操作</TableHead>
                     </TableRow>
@@ -275,9 +274,6 @@ export default function PlanListPage() {
                         </TableCell>
                         <TableCell className={cn('px-3 py-2.5 text-xs', TEXT.caption)}>
                           {plan.steps?.length ?? 0}
-                        </TableCell>
-                        <TableCell className={cn('px-3 py-2.5 text-xs', TEXT.caption)}>
-                          {Math.round((plan.failure_threshold ?? 0.05) * 100)}%
                         </TableCell>
                         <TableCell className={cn('px-3 py-2.5 text-xs whitespace-nowrap', TEXT.caption)}>
                           {formatLocalDate(plan.updated_at)}

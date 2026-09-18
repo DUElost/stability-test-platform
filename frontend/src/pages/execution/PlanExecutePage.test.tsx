@@ -74,7 +74,6 @@ function renderPage({
       name: 'Smoke Plan',
       description: null,
       steps: [{ step_key: 'check_device' }],
-      failure_threshold: 0.05,
       patrol_interval_seconds: 3600,
       timeout_seconds: 7200,
     },
@@ -329,7 +328,6 @@ describe('PlanExecutePage', () => {
         name: 'Empty Plan',
         description: null,
         steps: [],
-        failure_threshold: 0.05,
       }],
       devices: [{ id: 1, serial: 'DEV-1', host_id: 'h1', status: 'ONLINE' }],
     });
@@ -548,22 +546,20 @@ describe('PlanExecutePage', () => {
     expect(screen.getByRole('checkbox', { name: /B-1/ })).toBeChecked();
   });
 
-  it('formats duration and shows unset failure threshold without masking as 5%', async () => {
+  it('formats duration on the plan step (ADR-0048: threshold display removed)', async () => {
     renderPage({
       plans: [{
         id: 7,
         name: 'Smoke Plan',
         description: null,
         steps: [{ step_key: 'check_device' }],
-        failure_threshold: null,
         patrol_interval_seconds: 3600,
         timeout_seconds: 125,
       }],
       devices: [{ id: 1, serial: 'DEV-1', host_id: 'h1', status: 'ONLINE' }],
     });
 
-    expect(await screen.findByText('未设置（按默认 5% 生效）')).toBeInTheDocument();
-    expect(screen.getByText(/巡检周期：1h 0m/)).toBeInTheDocument();
+    expect(await screen.findByText(/巡检周期：1h 0m/)).toBeInTheDocument();
     expect(screen.getByText(/超时：2m 5s/)).toBeInTheDocument();
 
     await goToDeviceStep();
@@ -571,12 +567,10 @@ describe('PlanExecutePage', () => {
     fireEvent.click(screen.getByRole('button', { name: /预览发起/ }));
 
     expect(await screen.findByRole('button', { name: '编辑 Plan' })).toBeInTheDocument();
-    expect(screen.getAllByText('未设置（按默认 5% 生效）').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('1h 0m')).toBeInTheDocument();
     expect(screen.getByText('2m 5s')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '巡检周期说明' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '超时说明' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '失败阈值说明' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '编辑 Plan' }));
     expect(mocks.navigate).toHaveBeenCalledWith('/orchestration/plans/7');
@@ -1140,7 +1134,6 @@ describe('PlanExecutePage', () => {
               enabled: true,
             },
           ],
-          failure_threshold: 0.05,
         },
       ],
       initialEntry: '/execution/plan-execute?plan=7',
@@ -1159,7 +1152,6 @@ describe('PlanExecutePage', () => {
         id: 8841,
         plan_id: 7,
         status: 'RUNNING',
-        failure_threshold: 0.05,
         run_type: 'MANUAL',
         started_at: startedAt,
         run_context: { dispatch_device_ids: [1, 2, 3] },
@@ -1168,7 +1160,6 @@ describe('PlanExecutePage', () => {
         id: 8810,
         plan_id: 7,
         status: 'SUCCESS',
-        failure_threshold: 0.05,
         run_type: 'MANUAL',
         started_at: startedAt,
         result_summary: { total: 30 },
@@ -1191,7 +1182,6 @@ describe('PlanExecutePage', () => {
         id: 9001,
         plan_id: 7,
         status: 'RUNNING',
-        failure_threshold: 0.05,
         run_type: 'MANUAL',
         started_at: startedAt,
         run_context: { dispatch_device_ids: [1, 2, 3, 9] },
@@ -1229,7 +1219,6 @@ describe('PlanExecutePage', () => {
         id: 9100,
         plan_id: 7,
         status: 'RUNNING',
-        failure_threshold: 0.05,
         run_type: 'MANUAL',
         started_at: startedAt,
         result_summary: { total: 4 },
@@ -1239,7 +1228,6 @@ describe('PlanExecutePage', () => {
       id: 9100,
       plan_id: 7,
       status: 'RUNNING',
-      failure_threshold: 0.05,
       run_type: 'MANUAL',
       started_at: startedAt,
       result_summary: { total: 4 },
@@ -1278,7 +1266,6 @@ describe('PlanExecutePage', () => {
           { id: 2, step_key: 'b', script_name: 'patrol_b', script_version: '1.0.0', stage: 'patrol', enabled: true, sort_order: 1 },
           { id: 3, step_key: 'c', script_name: 'tear_c', script_version: '1.0.0', stage: 'teardown', enabled: true, sort_order: 1 },
         ],
-        failure_threshold: 0.05,
       }],
       initialEntry: '/execution/plan-execute?plan=7',
     });
@@ -1430,7 +1417,6 @@ describe('PlanExecutePage', () => {
           name: 'Smoke Plan',
           description: null,
           steps: [{ step_key: 'check_device' }],
-          failure_threshold: 0.05,
           updated_at: '2026-07-01T00:00:00Z',
         },
         {
@@ -1438,7 +1424,6 @@ describe('PlanExecutePage', () => {
           name: 'Nightly Plan',
           description: null,
           steps: [{ step_key: 'patrol' }],
-          failure_threshold: 0.05,
           updated_at: '2026-06-01T00:00:00Z',
         },
       ],

@@ -15,7 +15,6 @@ from sqlalchemy import (
     Column,
     DateTime,
     Enum as SAEnum,
-    Float,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
@@ -43,7 +42,6 @@ class PlanRun(Base):
     id                = Column(Integer, primary_key=True)
     plan_id           = Column(Integer, ForeignKey("plan.id"), nullable=False)
     status            = Column(PLAN_RUN_STATUS_DB_ENUM, nullable=False, default=PlanRunStatus.RUNNING.value)
-    failure_threshold = Column(Float, nullable=False, default=0.05)
     plan_snapshot     = Column(JSONB, nullable=False)
     run_type          = Column(String(16), nullable=False)
     run_context       = Column(JSONB, nullable=True)
@@ -98,10 +96,6 @@ class PlanRun(Base):
                         back_populates="plan_run", lazy="dynamic")
 
     __table_args__ = (
-        CheckConstraint(
-            "failure_threshold >= 0.0 AND failure_threshold <= 1.0",
-            name="ck_plan_run_failure_threshold",
-        ),
         CheckConstraint(
             "run_type IN ('MANUAL','SCHEDULE','CHAIN')",
             name="ck_plan_run_type",

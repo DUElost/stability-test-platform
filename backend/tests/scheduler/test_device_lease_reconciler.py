@@ -64,7 +64,6 @@ def _seed(host_id: str, device_id: int, job_id: int, status: str) -> None:
                         status="ONLINE", tags=[], created_at=now,
                         adb_connected=True, adb_state="device")
         plan = Plan(name=f"wf-{device_id}", description="reconciler test",
-                    failure_threshold=0.1,
                     created_by="pytest")
         db.add_all([host, device, plan])
         db.flush()
@@ -76,7 +75,7 @@ def _seed(host_id: str, device_id: int, job_id: int, status: str) -> None:
         db.flush()
 
         run = PlanRun(plan_id=plan.id, status="RUNNING",
-                      failure_threshold=0.1, triggered_by="pytest",
+                      triggered_by="pytest",
                       plan_snapshot={"name": plan.name, "plan_id": plan.id},
                       run_type="MANUAL", started_at=now)
         db.add(run)

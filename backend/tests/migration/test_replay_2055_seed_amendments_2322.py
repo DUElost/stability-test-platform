@@ -107,8 +107,8 @@ def _set_active(cur, name: str, ver: str, value: bool) -> None:
 
 def _add_plan_step_referencing(cur, name: str, ver: str) -> None:
     cur.execute(
-        "INSERT INTO plan (name, failure_threshold, created_at, updated_at) "
-        "VALUES ('2322-probe', 0.05, now(), now()) RETURNING id"
+        "INSERT INTO plan (name, created_at, updated_at) "
+        "VALUES ('2322-probe', now(), now()) RETURNING id"
     )
     plan_id = cur.fetchone()[0]
     cur.execute(

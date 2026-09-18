@@ -14,7 +14,7 @@ class TestSanitizeAllowlist:
     def test_drops_invalid_and_missing_plan(self, db_session):
         from backend.models.plan import Plan
 
-        plan = Plan(name="active", failure_threshold=0.1)
+        plan = Plan(name="active")
         db_session.add(plan)
         db_session.commit()
 
@@ -36,7 +36,7 @@ class TestDispatchMatchesAllowlist:
     def test_matches_when_within_device_cap(self, db_session):
         from backend.models.plan import Plan
 
-        plan = Plan(name="gpu", failure_threshold=0.1)
+        plan = Plan(name="gpu")
         db_session.add(plan)
         db_session.commit()
         cfg = SimpleNamespace(
@@ -60,7 +60,7 @@ class TestDecideExecutionMode:
     def test_dispatch_auto_when_allowlisted(self, db_session, test_user):
         from backend.models.plan import Plan
 
-        plan = Plan(name="gpu", failure_threshold=0.1)
+        plan = Plan(name="gpu")
         db_session.add(plan)
         db_session.commit()
         cfg = SimpleNamespace(
@@ -83,7 +83,7 @@ class TestDecideExecutionMode:
     def test_dispatch_stays_proposed_without_allowlist(self, db_session, test_user):
         from backend.models.plan import Plan
 
-        plan = Plan(name="gpu", failure_threshold=0.1)
+        plan = Plan(name="gpu")
         db_session.add(plan)
         db_session.commit()
         cfg = SimpleNamespace(

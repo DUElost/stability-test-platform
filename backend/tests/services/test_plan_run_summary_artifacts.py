@@ -36,7 +36,7 @@ def test_summary_empty_jobs():
     out = build_plan_run_summary(db, 9)
     assert out.plan_run_id == 9
     assert out.total_jobs == 0
-    assert out.pass_rate == 0.0
+    assert out.status_counts == {}  # ADR-0048：pass_rate 字段已删
     assert out.plan_name is None
 
 

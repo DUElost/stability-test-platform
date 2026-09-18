@@ -566,17 +566,18 @@ _MODEL_PAIRS: tuple[tuple[str, str, str, str], ...] = (
         "frontend/src/utils/api/types.ts",
         "HostFailureRateResponse",
     ),
+    # ADR-0048 / #2734：run 级通过率展示退役，stats 两图改失败设备数口径。
     (
         "backend/api/routes/stats.py",
-        "PlanRunPassRateTrendResponse",
+        "PlanFailedDevicesResponse",
         "frontend/src/utils/api/types.ts",
-        "PlanRunPassRateTrendResponse",
+        "PlanFailedDevicesResponse",
     ),
     (
         "backend/api/routes/stats.py",
-        "PlanSuccessRateResponse",
+        "PlanRunFailedDeviceTrendResponse",
         "frontend/src/utils/api/types.ts",
-        "PlanSuccessRateResponse",
+        "PlanRunFailedDeviceTrendResponse",
     ),
     (
         "backend/api/routes/results.py",

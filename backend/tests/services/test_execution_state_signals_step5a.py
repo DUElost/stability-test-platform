@@ -45,8 +45,7 @@ def signal_fixture(db_session):
     db_session.add(dev)
     db_session.flush()
     pr = PlanRun(
-        plan_id=plan.id, status="RUNNING", failure_threshold=0.05,
-        plan_snapshot={}, run_type="MANUAL",
+        plan_id=plan.id, status="RUNNING", plan_snapshot={}, run_type="MANUAL",
     )
     db_session.add(pr)
     db_session.flush()

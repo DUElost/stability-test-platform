@@ -33,7 +33,6 @@ def build_plan_run_export(db: Session, pr: PlanRun) -> dict[str, Any]:
         str(status): int(cnt) for status, cnt in status_rows
     }
     total = sum(status_counts.values())
-    pass_rate = status_counts.get("COMPLETED", 0) / total if total else 0.0
 
     jobs = (
         db.query(JobInstance)
@@ -106,12 +105,10 @@ def build_plan_run_export(db: Session, pr: PlanRun) -> dict[str, Any]:
         "run_type": pr.run_type,
         "started_at": _iso(pr.started_at),
         "ended_at": _iso(pr.ended_at),
-        "failure_threshold": pr.failure_threshold,
         "result_summary": pr.result_summary,
         "summary": {
             "total_jobs": total,
             "status_counts": status_counts,
-            "pass_rate": round(pass_rate, 4),
             "truncated": truncated,
             "max_jobs": _EXPORT_MAX_JOBS,
         },
@@ -136,7 +133,7 @@ def plan_run_export_to_markdown(data: dict[str, Any]) -> str:
     ]
     summary = data.get("summary") or {}
     lines.append(f"- Total jobs: {summary.get('total_jobs', 0)}")
-    lines.append(f"- Pass rate: {summary.get('pass_rate', 0):.2%}")
+    lines.append(f"- Failed devices: {summary.get('failed', 0)}")
     for status, cnt in sorted((summary.get("status_counts") or {}).items()):
         lines.append(f"- {status}: {cnt}")
     if summary.get("truncated"):

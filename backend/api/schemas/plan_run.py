@@ -72,7 +72,6 @@ class PlanRunDetailOut(BaseModel):
     id: int
     plan_id: int
     status: str
-    failure_threshold: float
     run_type: str
     triggered_by: Optional[str] = None
     started_at: str
@@ -125,7 +124,6 @@ class PlanRunJobsSummaryOut(BaseModel):
     plan_name: Optional[str] = None
     total_jobs: int
     status_counts: dict[str, int]
-    pass_rate: float
     started_at: Optional[str] = None
     ended_at: Optional[str] = None
     result_summary: Optional[dict] = None
@@ -225,8 +223,7 @@ class ChainNodeOut(BaseModel):
     started_at: Optional[str] = None
     ended_at: Optional[str] = None
     duration_seconds: Optional[float] = None
-    failure_threshold: float
-    pass_rate: Optional[float] = None  # 来自 PlanRun.result_summary
+    failed_jobs: Optional[int] = None  # ADR-0048：失败设备台数事实（取代 pass_rate）
     is_current: bool = False
     is_blocked: bool = False
     block_reason: Optional[str] = None
@@ -462,8 +459,6 @@ class WatcherSummaryOut(BaseModel):
     affected_device_count: int
     total_devices: int
     abnormal_rate: float               # affected_device_count / total_devices
-    threshold: float
-    exceeded: bool
     supports_origin_split: bool = False
     current_run: AeeDashboardSectionOut = AeeDashboardSectionOut()
     preexisting: AeeDashboardSectionOut = AeeDashboardSectionOut()

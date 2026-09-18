@@ -77,7 +77,7 @@ def _seed(lease_seconds: float) -> dict:
         )
         plan = Plan(
             name=f"lck-{suffix}", description="lock order regression",
-            failure_threshold=0.0, created_by="pytest",
+            created_by="pytest",
         )
         db.add_all([host, plan])
         db.flush()
@@ -90,8 +90,7 @@ def _seed(lease_seconds: float) -> dict:
         db.flush()
 
         run = PlanRun(
-            plan_id=plan.id, status="RUNNING", failure_threshold=0.0,
-            plan_snapshot={"name": plan.name, "plan_id": plan.id},
+            plan_id=plan.id, status="RUNNING", plan_snapshot={"name": plan.name, "plan_id": plan.id},
             run_type="MANUAL", triggered_by="pytest", started_at=now,
         )
         db.add(run)

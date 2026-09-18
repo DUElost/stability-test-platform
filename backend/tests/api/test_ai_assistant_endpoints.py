@@ -90,7 +90,7 @@ class TestConfigEndpoints:
     def test_t2b_allowlist_sanitized_on_save(self, client, admin_headers, db_session):
         from backend.models.plan import Plan
 
-        plan = Plan(name="gpu-auto", failure_threshold=0.1)
+        plan = Plan(name="gpu-auto")
         db_session.add(plan)
         db_session.commit()
         _configure(db_session)

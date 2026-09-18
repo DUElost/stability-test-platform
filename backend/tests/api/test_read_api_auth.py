@@ -223,7 +223,6 @@ class TestReadApiAuthWithSeededData:
         pr = PlanRun(
             plan_id=sample_plan.id,
             status="RUNNING",
-            failure_threshold=sample_plan.failure_threshold,
             plan_snapshot={"plan_id": sample_plan.id, "name": sample_plan.name},
             run_type="MANUAL",
             triggered_by="testuser",

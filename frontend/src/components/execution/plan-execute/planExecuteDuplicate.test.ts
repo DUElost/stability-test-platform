@@ -16,7 +16,6 @@ function run(partial: Partial<PlanRun> & { id: number; started_at: string }): Pl
   return {
     plan_id: 1,
     status: 'RUNNING',
-    failure_threshold: 0.05,
     run_type: 'MANUAL',
     ...partial,
   };

@@ -127,7 +127,7 @@ def _format_plan_summary(plan: Plan, steps: list) -> str:
     proj = plan.project.project_key if getattr(plan, "project", None) else None
     return (
         f"#{plan.id} name={plan.name!r} project={proj} specialty={spec} "
-        f"steps={len(steps)} failure_threshold={plan.failure_threshold}"
+        f"steps={len(steps)}"
     )
 
 
@@ -343,7 +343,7 @@ def _q_plan_run_watcher_summary(db: Session, args: dict) -> str:
         .all()
     )
     lines = [
-        f"PlanRun #{run_id} status={pr.status} failure_threshold={pr.failure_threshold}",
+        f"PlanRun #{run_id} status={pr.status}",
         f"job 状态分布={jobs_status}",
         (
             f"signal 链接 linked={link.get('linked', 0)} "

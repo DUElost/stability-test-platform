@@ -171,7 +171,6 @@ def _make_plan_run(db_session, plan_id: str | int, *, status: str = "SUCCESS") -
     plan_run = PlanRun(
         plan_id=plan_id,
         status=status,
-        failure_threshold=0.05,
         plan_snapshot={"plan_id": plan_id},
         run_type="MANUAL",
         triggered_by="pytest",
@@ -199,7 +198,7 @@ class TestHostFailureRate:
         self, client, auth_headers, db_session, sample_host, sample_device,
     ):
         now = datetime.now(timezone.utc)
-        plan = Plan(name="host-failure-plan", description="", failure_threshold=0.05)
+        plan = Plan(name="host-failure-plan", description="")
         db_session.add(plan)
         db_session.flush()
         plan_run = _make_plan_run(db_session, plan.id)
@@ -236,7 +235,7 @@ class TestHostFailureRate:
 
     def test_respects_limit_param(self, client, auth_headers, db_session, sample_device):
         now = datetime.now(timezone.utc)
-        plan = Plan(name="host-failure-limit-plan", description="", failure_threshold=0.05)
+        plan = Plan(name="host-failure-limit-plan", description="")
         db_session.add(plan)
         db_session.flush()
         plan_run = _make_plan_run(db_session, plan.id)
@@ -274,18 +273,20 @@ class TestHostFailureRate:
         assert len(response.json()["items"]) == 2
 
 
-class TestPlanSuccessRate:
+class TestPlanFailedDevices:
+    """ADR-0048：排行按失败设备台数（事实计数），不再是成功率。"""
+
     def test_empty(self, client, auth_headers):
-        response = client.get("/api/v1/stats/plan-success-rate", headers=auth_headers)
+        response = client.get("/api/v1/stats/plan-failed-devices", headers=auth_headers)
         assert response.status_code == 200
         assert response.json() == {"items": [], "days": 30}
 
-    def test_ranks_by_pass_rate_desc(
+    def test_ranks_by_failed_devices_desc(
         self, client, auth_headers, db_session, sample_host, sample_device,
     ):
         now = datetime.now(timezone.utc)
-        good_plan = Plan(name="good-plan", description="", failure_threshold=0.05)
-        bad_plan = Plan(name="bad-plan", description="", failure_threshold=0.05)
+        good_plan = Plan(name="good-plan", description="")
+        bad_plan = Plan(name="bad-plan", description="")
         db_session.add_all([good_plan, bad_plan])
         db_session.flush()
         good_run = _make_plan_run(db_session, good_plan.id)
@@ -295,7 +296,7 @@ class TestPlanSuccessRate:
         )
         devices = [sample_device, second_device]
 
-        # good_plan: 2/2 passed; bad_plan: 0/2 passed
+        # good_plan: 0 台失败; bad_plan: 2 台失败
         for status, device in zip(("COMPLETED", "COMPLETED"), devices, strict=True):
             db_session.add(JobInstance(
                 plan_run_id=good_run.id, plan_id=good_plan.id,
@@ -312,19 +313,21 @@ class TestPlanSuccessRate:
             ))
         db_session.commit()
 
-        response = client.get("/api/v1/stats/plan-success-rate", headers=auth_headers)
+        response = client.get("/api/v1/stats/plan-failed-devices", headers=auth_headers)
         assert response.status_code == 200
         items = response.json()["items"]
         assert len(items) == 2
-        assert items[0]["plan_name"] == "good-plan"
-        assert items[0]["pass_rate"] == 1.0
-        assert items[1]["plan_name"] == "bad-plan"
-        assert items[1]["pass_rate"] == 0.0
+        assert items[0]["plan_name"] == "bad-plan"
+        assert items[0]["failed"] == 2
+        assert items[1]["plan_name"] == "good-plan"
+        assert items[1]["failed"] == 0
 
 
-class TestPlanRunPassRateTrend:
+class TestPlanRunFailedDeviceTrend:
+    """ADR-0048：日趋势统计失败设备台数事实，不再是平均通过率。"""
+
     def test_empty(self, client, auth_headers):
-        response = client.get("/api/v1/stats/plan-run-pass-rate-trend", headers=auth_headers)
+        response = client.get("/api/v1/stats/plan-run-failed-device-trend", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
         assert "points" in data
@@ -335,7 +338,7 @@ class TestPlanRunPassRateTrend:
 
     def test_custom_days_param(self, client, auth_headers):
         response = client.get(
-            "/api/v1/stats/plan-run-pass-rate-trend", params={"days": 7}, headers=auth_headers,
+            "/api/v1/stats/plan-run-failed-device-trend", params={"days": 7}, headers=auth_headers,
         )
         assert response.status_code == 200
         assert response.json()["days"] == 7
@@ -344,14 +347,13 @@ class TestPlanRunPassRateTrend:
         self, client, auth_headers, db_session, sample_host, sample_device,
     ):
         now = datetime.now(timezone.utc)
-        plan = Plan(name="trend-plan", description="", failure_threshold=0.05)
+        plan = Plan(name="trend-plan", description="")
         db_session.add(plan)
         db_session.flush()
 
         plan_run = PlanRun(
             plan_id=plan.id,
             status="SUCCESS",
-            failure_threshold=0.05,
             plan_snapshot={"plan_id": plan.id},
             run_type="MANUAL",
             triggered_by="pytest",
@@ -376,12 +378,13 @@ class TestPlanRunPassRateTrend:
             ))
         db_session.commit()
 
-        response = client.get("/api/v1/stats/plan-run-pass-rate-trend", headers=auth_headers)
+        response = client.get("/api/v1/stats/plan-run-failed-device-trend", headers=auth_headers)
         assert response.status_code == 200
         points = response.json()["points"]
         today_point = next(p for p in points if p["date"] == now.date().isoformat())
         assert today_point["run_count"] == 1
-        assert today_point["avg_pass_rate"] == 0.5
+        # 2 台里 1 台 FAILED → 当日失败设备数 = 1（事实计数，不再折算比率）
+        assert today_point["failed_devices"] == 1
 
 
 class TestFileServerOverview:

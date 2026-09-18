@@ -164,7 +164,6 @@ describe('SchedulesPage', () => {
       Array.from({ length: 100 }, (_, i) => ({
         id: i + 1,
         name: `夜跑计划 ${i + 1}`,
-        failure_threshold: 1,
         patrol_interval_seconds: null,
         timeout_seconds: null,
       })),

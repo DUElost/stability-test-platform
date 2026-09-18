@@ -629,28 +629,27 @@ export interface HostFailureRateResponse {
   days: number;
 }
 
-export interface PlanSuccessRateItem {
+/** ADR-0048：失败设备数排行（job 级 FAILED/ABORTED 事实），取代「方案成功率」。 */
+export interface PlanFailedDevicesItem {
   plan_id: number;
   plan_name: string;
   total_jobs: number;
-  passed: number;
   failed: number;
-  pass_rate: number;
 }
 
-export interface PlanSuccessRateResponse {
-  items: PlanSuccessRateItem[];
+export interface PlanFailedDevicesResponse {
+  items: PlanFailedDevicesItem[];
   days: number;
 }
 
-export interface PlanRunPassRatePoint {
+export interface PlanRunFailedDevicePoint {
   date: string;
-  avg_pass_rate: number;
+  failed_devices: number;
   run_count: number;
 }
 
-export interface PlanRunPassRateTrendResponse {
-  points: PlanRunPassRatePoint[];
+export interface PlanRunFailedDeviceTrendResponse {
+  points: PlanRunFailedDevicePoint[];
   days: number;
 }
 
@@ -1063,7 +1062,6 @@ export interface Plan {
   id: number;
   name: string;
   description?: string | null;
-  failure_threshold: number;
   patrol_interval_seconds?: number | null;
   timeout_seconds?: number | null;
   /**
@@ -1097,7 +1095,6 @@ export interface Plan {
 export interface PlanCreate {
   name: string;
   description?: string;
-  failure_threshold?: number;
   patrol_interval_seconds?: number | null;
   timeout_seconds?: number | null;
   /**
@@ -1123,7 +1120,6 @@ export interface PlanCreate {
 export interface PlanUpdate {
   name?: string;
   description?: string;
-  failure_threshold?: number;
   patrol_interval_seconds?: number | null;
   timeout_seconds?: number | null;
   /**
@@ -1302,8 +1298,7 @@ export interface PlanSnapshot {
     id: number;
     name: string;
     description?: string | null;
-    failure_threshold: number;
-    patrol_interval_seconds?: number | null;
+      patrol_interval_seconds?: number | null;
     timeout_seconds?: number | null;
     barrier_timeout_seconds?: number | null;
     barrier_max_wait_seconds?: number | null;
@@ -1336,7 +1331,6 @@ export interface PlanRunTriggerResult {
   id: number;
   plan_id: number;
   status: string;
-  failure_threshold: number;
   run_type: string;
   triggered_by?: string | null;
   started_at: string;
@@ -1354,7 +1348,6 @@ export interface PlanRun {
   id: number;
   plan_id: number;
   status: PlanRunStatus;
-  failure_threshold: number;
   run_type: PlanRunType;
   triggered_by?: string | null;
   started_at: string;
@@ -1454,7 +1447,6 @@ export interface PlanRunSummary {
   plan_name?: string | null;
   total_jobs: number;
   status_counts: Record<string, number>;
-  pass_rate: number;
   started_at?: string | null;
   ended_at?: string | null;
   result_summary?: Record<string, unknown> | null;
@@ -1597,13 +1589,14 @@ export interface PlanRunResultSummary {
   total?: number;
   completed?: number;
   failed?: number;
-  pass_rate?: number;
   chain_dispatch_failed?: ChainDispatchFailed;
   [key: string]: unknown;
 }
 
 export interface ChainNode {
   plan_id: number;
+  /** ADR-0048：失败设备台数事实（取代 pass_rate/failure_threshold）。 */
+  failed_jobs?: number | null;
   plan_name?: string | null;
   plan_run_id?: number | null;          // null when status === 'pending' (next not yet triggered)
   status: string;                        // PlanRun.status or 'pending'
@@ -1611,8 +1604,6 @@ export interface ChainNode {
   started_at?: string | null;
   ended_at?: string | null;
   duration_seconds?: number | null;
-  failure_threshold: number;
-  pass_rate?: number | null;
   is_current: boolean;
   is_blocked: boolean;
   block_reason?: string | null;
@@ -1898,9 +1889,7 @@ export interface WatcherSummary {
   total: number;
   affected_device_count: number;
   total_devices: number;
-  abnormal_rate: number;                 // affected / total_devices
-  threshold: number;
-  exceeded: boolean;
+  abnormal_rate: number;                 // affected / total_devices（ADR-0048：不再与阈值比较）
   supports_origin_split?: boolean;
   current_run?: AeeDashboardSection;
   preexisting?: AeeDashboardSection;

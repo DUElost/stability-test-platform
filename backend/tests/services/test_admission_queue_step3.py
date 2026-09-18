@@ -200,8 +200,7 @@ class TestQueuedPrepare:
         """A PENDING job from another PlanRun queues the new run (was a 400)."""
         f = step3_fixture
         other = PlanRun(
-            plan_id=f["plan"].id, status="RUNNING", failure_threshold=0.05,
-            plan_snapshot={}, run_type="MANUAL",
+            plan_id=f["plan"].id, status="RUNNING", plan_snapshot={}, run_type="MANUAL",
         )
         db_session.add(other)
         db_session.flush()
@@ -318,8 +317,7 @@ class TestLegacyGateBypass:
             timeout_seconds=30, retry=0,
         ))
         parent = PlanRun(
-            plan_id=f["plan"].id, status="SUCCESS", failure_threshold=0.05,
-            plan_snapshot={"plan": {"next_plan_id": next_plan.id}},
+            plan_id=f["plan"].id, status="SUCCESS", plan_snapshot={"plan": {"next_plan_id": next_plan.id}},
             run_type="MANUAL",
             ended_at=datetime.now(timezone.utc),
         )

@@ -35,7 +35,6 @@ def failed_precheck_run(db_session, sample_plan):
     pr = PlanRun(
         plan_id=sample_plan.id,
         status="FAILED",
-        failure_threshold=sample_plan.failure_threshold,
         plan_snapshot={"plan_id": sample_plan.id, "steps": []},
         run_type="MANUAL",
         run_context=run_ctx,

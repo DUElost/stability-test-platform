@@ -621,8 +621,7 @@ def prepare_plan_run(
             f"Plan {plan_id} generated invalid lifecycle: {'; '.join(errors)}"
         )
 
-    effective_threshold = plan.failure_threshold
-    plan_snapshot = _build_plan_snapshot(plan, steps, metadata, effective_threshold)
+    plan_snapshot = _build_plan_snapshot(plan, steps, metadata)
 
     return _prepare_queued_plan_run(
         db=db,
@@ -631,7 +630,6 @@ def prepare_plan_run(
         device_host_map=device_host_map,
         queue_blockers=queue_blockers,
         plan_snapshot=plan_snapshot,
-        effective_threshold=effective_threshold,
         triggered_by=triggered_by,
         run_type=run_type,
         run_context=run_context,
@@ -726,7 +724,6 @@ def _prepare_queued_plan_run(
     device_host_map: dict[int, str],
     queue_blockers: list[dict],
     plan_snapshot: dict,
-    effective_threshold: float,
     triggered_by: str,
     run_type: str,
     run_context: dict | None,
@@ -813,7 +810,6 @@ def _prepare_queued_plan_run(
         project_id=frozen_project_id,
         build_version=frozen_build_version,
         status=PlanRunStatus.QUEUED.value,
-        failure_threshold=effective_threshold,
         plan_snapshot=plan_snapshot,
         run_type=run_type,
         run_context=merged_run_ctx,

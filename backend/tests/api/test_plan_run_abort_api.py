@@ -67,7 +67,6 @@ def _make_plan_run(
     pr = PlanRun(
         plan_id=plan_id,
         status=status,
-        failure_threshold=0.05,
         plan_snapshot={"plan": {"id": plan_id}, "steps": []},
         run_type="MANUAL",
         run_context=run_context,

@@ -26,23 +26,23 @@ describe('stats analytics client', () => {
     expect(getMock).toHaveBeenCalledWith('/stats/host-failure-rate', { params: { days: 30, limit: 10 } });
   });
 
-  it('planSuccessRate requests /stats/plan-success-rate with days/limit params', async () => {
+  it('planFailedDevices requests /stats/plan-failed-devices with days/limit params', async () => {
     getMock.mockResolvedValueOnce({ data: { items: [], days: 7 } });
     const { stats } = await import('./analytics');
 
-    const result = await stats.planSuccessRate(7, 3);
+    const result = await stats.planFailedDevices(7, 3);
 
-    expect(getMock).toHaveBeenCalledWith('/stats/plan-success-rate', { params: { days: 7, limit: 3 } });
+    expect(getMock).toHaveBeenCalledWith('/stats/plan-failed-devices', { params: { days: 7, limit: 3 } });
     expect(result).toEqual({ items: [], days: 7 });
   });
 
-  it('planRunPassRateTrend requests /stats/plan-run-pass-rate-trend with days param', async () => {
+  it('planRunFailedDeviceTrend requests /stats/plan-run-failed-device-trend with days param', async () => {
     getMock.mockResolvedValueOnce({ data: { points: [], days: 30 } });
     const { stats } = await import('./analytics');
 
-    const result = await stats.planRunPassRateTrend(30);
+    const result = await stats.planRunFailedDeviceTrend(30);
 
-    expect(getMock).toHaveBeenCalledWith('/stats/plan-run-pass-rate-trend', { params: { days: 30 } });
+    expect(getMock).toHaveBeenCalledWith('/stats/plan-run-failed-device-trend', { params: { days: 30 } });
     expect(result).toEqual({ points: [], days: 30 });
   });
 });

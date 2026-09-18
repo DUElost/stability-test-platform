@@ -5,26 +5,25 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { TrendingUp } from 'lucide-react';
 import { CHART_COLORS } from '@/design-system/colors';
-import type { PlanRunPassRatePoint } from '@/utils/api/types';
+import type { PlanRunFailedDevicePoint } from '@/utils/api/types';
 
-/** @deprecated use `PlanRunPassRatePoint` from `@/utils/api/types` */
-export type PlanRunPassRateTrendPoint = PlanRunPassRatePoint;
+export type PlanRunFailedDeviceTrendPoint = PlanRunFailedDevicePoint;
 
-interface PlanRunPassRateTrendChartProps {
-  data?: PlanRunPassRateTrendPoint[];
+interface PlanRunFailedDeviceTrendChartProps {
+  data?: PlanRunFailedDeviceTrendPoint[];
   isLoading?: boolean;
 }
 
-export function PlanRunPassRateTrendChart({
+export function PlanRunFailedDeviceTrendChart({
   data,
   isLoading,
-}: PlanRunPassRateTrendChartProps) {
+}: PlanRunFailedDeviceTrendChartProps) {
   const chartData = useMemo(() => {
     if (!data || data.length === 0) return [];
     return data.map((p) => ({
       ...p,
       label: p.date.slice(5),
-      ratePct: parseFloat((p.avg_pass_rate * 100).toFixed(1)),
+      failed: p.failed_devices,
     }));
   }, [data]);
 
@@ -47,7 +46,7 @@ export function PlanRunPassRateTrendChart({
         <CardHeader className="pb-2">
           <CardTitle className="text-sm font-medium flex items-center gap-2">
             <TrendingUp size={16} className="text-muted-foreground" />
-            运行通过率趋势 (30d)
+            失败设备数趋势 (30d)
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -64,7 +63,7 @@ export function PlanRunPassRateTrendChart({
       <CardHeader className="pb-2">
         <CardTitle className="text-sm font-medium flex items-center gap-2">
           <TrendingUp size={16} className="text-muted-foreground" />
-          运行通过率趋势 (30d)
+          失败设备数趋势 (30d)
         </CardTitle>
       </CardHeader>
       <CardContent>
@@ -78,8 +77,7 @@ export function PlanRunPassRateTrendChart({
                 tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
               />
               <YAxis
-                domain={[0, 100]}
-                tickFormatter={(v: number) => `${v}%`}
+                allowDecimals={false}
                 axisLine={false}
                 tickLine={false}
                 tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
@@ -87,7 +85,7 @@ export function PlanRunPassRateTrendChart({
               <Tooltip
                 content={({ active, payload }) => {
                   if (active && payload && payload.length) {
-                    const item = payload[0]?.payload as PlanRunPassRateTrendPoint & { label: string; ratePct: number };
+                    const item = payload[0]?.payload as PlanRunFailedDeviceTrendPoint & { label: string; failed: number };
                     return (
                       <div className="bg-popover border border-border rounded-lg p-2 shadow-md text-xs">
                         <div className="text-muted-foreground mb-1">{item.date}</div>
@@ -96,11 +94,11 @@ export function PlanRunPassRateTrendChart({
                             className="w-2 h-2 rounded-full"
                             style={{ backgroundColor: CHART_COLORS.primary }}
                           />
-                          <span className="text-muted-foreground">平均通过率:</span>
-                          <span className="font-medium">{item.ratePct}%</span>
+                          <span className="text-muted-foreground">失败设备数:</span>
+                          <span className="font-medium">{item.failed}</span>
                         </div>
                         <div className="flex items-center gap-2">
-                          <span className="text-muted-foreground">完成运行数:</span>
+                          <span className="text-muted-foreground">终态运行数:</span>
                           <span className="font-medium">{item.run_count}</span>
                         </div>
                       </div>
@@ -111,7 +109,7 @@ export function PlanRunPassRateTrendChart({
               />
               <Line
                 type="monotone"
-                dataKey="ratePct"
+                dataKey="failed"
                 stroke={CHART_COLORS.primary}
                 strokeWidth={2}
                 dot={{ r: 3, fill: CHART_COLORS.primary }}

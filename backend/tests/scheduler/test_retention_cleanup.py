@@ -40,7 +40,6 @@ def _mk_run(db, plan, *, status="SUCCESS", age_days=10, parent=None, root=None):
     run = PlanRun(
         plan_id=plan.id,
         status=status,
-        failure_threshold=0.05,
         plan_snapshot={},
         run_type="MANUAL",
         started_at=datetime.now(timezone.utc) - timedelta(days=age_days),

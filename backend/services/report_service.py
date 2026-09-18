@@ -667,16 +667,13 @@ def compose_plan_run_summary(db: Session, run_id: int) -> Optional[Dict[str, Any
         })
 
     total = len(jobs)
-    completed = status_counts.get("COMPLETED", 0)
     failed = status_counts.get("FAILED", 0) + status_counts.get("ABORTED", 0)
-    pass_rate = (completed / total * 100) if total > 0 else 0.0
 
     return {
         "plan_run_id": run.id,
         "plan_id": run.plan_id,
         "plan_name": definition.name if definition else None,
         "status": run.status,
-        "failure_threshold": run.failure_threshold,
         "triggered_by": run.triggered_by,
         "started_at": run.started_at.isoformat() if run.started_at else None,
         "ended_at": run.ended_at.isoformat() if run.ended_at else None,
@@ -684,7 +681,6 @@ def compose_plan_run_summary(db: Session, run_id: int) -> Optional[Dict[str, Any
         "statistics": {
             "total_jobs": total,
             "status_distribution": status_counts,
-            "pass_rate": round(pass_rate, 2),
             "failed_count": failed,
             "avg_duration_seconds": round(total_duration_seconds / total, 1) if total > 0 else 0,
         },

@@ -1,6 +1,5 @@
 import type { PipelineDef, PipelinePhase, PipelineStep, ScriptEntry, ProjectSummary, Specialty, TestSuiteSummary } from '@/utils/api/types';
 import { ArrowDown, ArrowUp, Copy, Trash2 } from 'lucide-react';
-import { useState } from 'react';
 import {
   PIPELINE_EDITOR,
   PIPELINE_PHASE_HEAD,
@@ -21,8 +20,6 @@ interface PlanCanvasProps {
   onPlanNameChange: (next: string) => void;
   description: string;
   onDescriptionChange: (next: string) => void;
-  failureThreshold: number;
-  onFailureThresholdChange: (next: number) => void;
   patrolIntervalSeconds: number | null;
   onPatrolIntervalChange: (next: number | null) => void;
   timeoutSeconds: number | null;
@@ -90,8 +87,6 @@ export default function PlanCanvas({
   onPlanNameChange,
   description,
   onDescriptionChange,
-  failureThreshold,
-  onFailureThresholdChange,
   patrolIntervalSeconds,
   onPatrolIntervalChange,
   timeoutSeconds,
@@ -183,8 +178,6 @@ export default function PlanCanvas({
           onPlanNameChange={onPlanNameChange}
           description={description}
           onDescriptionChange={onDescriptionChange}
-          failureThreshold={failureThreshold}
-          onFailureThresholdChange={onFailureThresholdChange}
           patrolIntervalSeconds={patrolIntervalSeconds}
           onPatrolIntervalChange={onPatrolIntervalChange}
           timeoutSeconds={timeoutSeconds}
@@ -232,8 +225,6 @@ interface PlanHeaderProps {
   onPlanNameChange: (next: string) => void;
   description: string;
   onDescriptionChange: (next: string) => void;
-  failureThreshold: number;
-  onFailureThresholdChange: (next: number) => void;
   patrolIntervalSeconds: number | null;
   onPatrolIntervalChange: (next: number | null) => void;
   timeoutSeconds: number | null;
@@ -258,8 +249,6 @@ function PlanHeader({
   onPlanNameChange,
   description,
   onDescriptionChange,
-  failureThreshold,
-  onFailureThresholdChange,
   patrolIntervalSeconds,
   onPatrolIntervalChange,
   timeoutSeconds,
@@ -400,15 +389,6 @@ function PlanHeader({
           <span className="text-[11px]">秒</span>
         </MetaItem>
 
-        <MetaItem label="失败阈值">
-          <FailureThresholdInput
-            value={failureThreshold}
-            disabled={readOnly}
-            onChange={onFailureThresholdChange}
-            className={cn('w-20', metaInputCls)}
-          />
-          <span className={cn('text-[11px] font-semibold', TEXT.body)}>{Math.round(failureThreshold * 100)}%</span>
-        </MetaItem>
 
         <MetaItem label="全局超时">
           <input
@@ -451,58 +431,6 @@ function MetaItem({ label, children }: { label: string; children: React.ReactNod
   );
 }
 
-/** Local draft while typing — commit on blur so ``0.`` is not swallowed (#817). */
-function FailureThresholdInput({
-  value,
-  disabled,
-  onChange,
-  className,
-}: {
-  value: number;
-  disabled?: boolean;
-  onChange: (next: number) => void;
-  className?: string;
-}) {
-  const [draft, setDraft] = useState<string | null>(null);
-  const shown = draft ?? String(value);
-
-  const commit = (raw: string) => {
-    const trimmed = raw.trim();
-    if (trimmed === '' || trimmed === '.') {
-      setDraft(null);
-      return;
-    }
-    const parsed = parseFloat(trimmed);
-    if (Number.isNaN(parsed)) {
-      setDraft(null);
-      return;
-    }
-    const clamped = Math.min(1, Math.max(0, parsed));
-    onChange(clamped);
-    setDraft(null);
-  };
-
-  return (
-    <input
-      type="text"
-      inputMode="decimal"
-      value={shown}
-      disabled={disabled}
-      onFocus={() => {
-        if (draft === null) setDraft(String(value));
-      }}
-      onChange={(e) => setDraft(e.target.value)}
-      onBlur={(e) => commit(e.target.value)}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') {
-          commit((e.target as HTMLInputElement).value);
-          (e.target as HTMLInputElement).blur();
-        }
-      }}
-      className={className}
-    />
-  );
-}
 
 interface PhaseSectionProps {
   phase: PipelinePhase;

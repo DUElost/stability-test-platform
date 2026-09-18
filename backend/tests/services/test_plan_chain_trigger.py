@@ -22,8 +22,8 @@ from backend.scheduler.plan_chain_reconciler import reconcile_plan_chains
 
 
 def _seed_successful_parent_run(db_session, sample_device, sample_host):
-    child_plan = Plan(name="chain-child", failure_threshold=0.1)
-    parent_plan = Plan(name="chain-parent", failure_threshold=0.1, next_plan_id=None)
+    child_plan = Plan(name="chain-child")
+    parent_plan = Plan(name="chain-parent", next_plan_id=None)
     db_session.add_all([parent_plan, child_plan])
     db_session.flush()
     parent_plan.next_plan_id = child_plan.id
@@ -31,7 +31,6 @@ def _seed_successful_parent_run(db_session, sample_device, sample_host):
     pr = PlanRun(
         plan_id=parent_plan.id,
         status="SUCCESS",
-        failure_threshold=0.1,
         plan_snapshot={
             "plan": {
                 "id": parent_plan.id,
@@ -134,8 +133,8 @@ class TestPlanChainTriggerRollback:
         """
         from backend.services.job_terminalization import on_job_terminal_sync
 
-        child_plan = Plan(name="chain-child-986", failure_threshold=0.1)
-        parent_plan = Plan(name="chain-parent-986", failure_threshold=0.1)
+        child_plan = Plan(name="chain-child-986")
+        parent_plan = Plan(name="chain-parent-986")
         db_session.add_all([parent_plan, child_plan])
         db_session.flush()
         parent_plan.next_plan_id = child_plan.id
@@ -143,7 +142,6 @@ class TestPlanChainTriggerRollback:
         pr = PlanRun(
             plan_id=parent_plan.id,
             status="RUNNING",
-            failure_threshold=0.1,
             plan_snapshot={
                 "plan": {
                     "id": parent_plan.id,
@@ -238,7 +236,6 @@ class TestPlanChainTriggerRollback:
         existing_child = PlanRun(
             plan_id=next_plan_id,
             status="FAILED",
-            failure_threshold=0.1,
             plan_snapshot={"plan_id": next_plan_id},
             run_type="CHAIN",
             triggered_by="test",
@@ -295,7 +292,6 @@ class TestPlanChainInterruptedFlagReconciliation:
         child = PlanRun(
             plan_id=parent_plan.next_plan_id,
             status="RUNNING",
-            failure_threshold=0.1,
             plan_snapshot={"plan_id": parent_plan.next_plan_id},
             run_type="CHAIN",
             triggered_by="test",
@@ -328,7 +324,6 @@ class TestPlanChainInterruptedFlagReconciliation:
         child = PlanRun(
             plan_id=next_plan_id,
             status="RUNNING",
-            failure_threshold=0.1,
             plan_snapshot={"plan": {"id": next_plan_id}},
             run_type="CHAIN",
             parent_plan_run_id=parent.id,
@@ -454,8 +449,8 @@ class TestPlanChainLegacySnapshotFallback:
     def test_trigger_sync_falls_back_to_live_plan_next_plan_id(
         self, db_session, sample_device, sample_host, sample_script,
     ):
-        child_plan = Plan(name="chain-child-fallback", failure_threshold=0.1)
-        parent_plan = Plan(name="chain-parent-fallback", failure_threshold=0.1)
+        child_plan = Plan(name="chain-child-fallback")
+        parent_plan = Plan(name="chain-parent-fallback")
         db_session.add_all([parent_plan, child_plan])
         db_session.flush()
         parent_plan.next_plan_id = child_plan.id
@@ -463,7 +458,6 @@ class TestPlanChainLegacySnapshotFallback:
         pr = PlanRun(
             plan_id=parent_plan.id,
             status="SUCCESS",
-            failure_threshold=0.1,
             plan_snapshot={
                 "plan": {"id": parent_plan.id},
                 "steps": [],

@@ -28,7 +28,6 @@ export type ConfirmLeaveState = null | { type: 'switch' | 'execute'; targetPlanI
 const EMPTY_DRAFT_SNAPSHOT = draftSnapshot({
   name: '',
   description: '',
-  failureThreshold: 0.05,
   nextPlanId: null,
   projectKey: '',
   specialtyKey: '',
@@ -44,7 +43,6 @@ export function usePlanEditForm(planId: number | null) {
 
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
-  const [failureThreshold, setFailureThreshold] = useState(0.05);
   const [nextPlanId, setNextPlanId] = useState<number | null>(null);
   // ADR-0029（#405）：归属项目/专项；orig* 用于「仅变更字段进 update payload」
   const [projectKey, setProjectKey] = useState('');
@@ -126,15 +124,14 @@ export function usePlanEditForm(planId: number | null) {
 
   // #966：脏状态覆盖全部可编辑业务字段（含归属项目/专项/套件）。
   const currentSnapshot = useMemo(
-    () => draftSnapshot({ name, description, failureThreshold, nextPlanId, projectKey, specialtyKey, suiteName, lifecycle }),
-    [name, description, failureThreshold, nextPlanId, projectKey, specialtyKey, suiteName, lifecycle],
+    () => draftSnapshot({ name, description, nextPlanId, projectKey, specialtyKey, suiteName, lifecycle }),
+    [name, description, nextPlanId, projectKey, specialtyKey, suiteName, lifecycle],
   );
   const isDirty = currentSnapshot !== origSnapshot;
 
   const applyPlanToForm = (next: Plan) => {
     setName(next.name);
     setDescription(next.description || '');
-    setFailureThreshold(next.failure_threshold);
     setNextPlanId(next.next_plan_id ?? null);
     setProjectKey(next.project_key || '');
     setSpecialtyKey(next.specialty_key || '');
@@ -275,7 +272,6 @@ export function usePlanEditForm(planId: number | null) {
     try {
       const payload: PlanUpdate = {
         name: name.trim(),
-        failure_threshold: failureThreshold,
         patrol_interval_seconds: lifecycle.lifecycle.patrol?.interval_seconds ?? null,
         timeout_seconds: lifecycle.lifecycle.timeout_seconds ?? null,
         next_plan_id: nextPlanId,
@@ -476,8 +472,6 @@ export function usePlanEditForm(planId: number | null) {
     setName,
     description,
     setDescription,
-    failureThreshold,
-    setFailureThreshold,
     projectKey,
     setProjectKey,
     specialtyKey,

@@ -75,28 +75,30 @@ class HostFailureRateResponse(BaseModel):
     days: int
 
 
-class PlanSuccessRateItem(BaseModel):
+class PlanFailedDevicesItem(BaseModel):
+    """ADR-0048：失败设备数排行（job 级 FAILED/ABORTED 事实），取代「方案成功率排行」。"""
+
     plan_id: int
     plan_name: str
     total_jobs: int = 0
-    passed: int = 0
     failed: int = 0
-    pass_rate: float = 0.0
 
 
-class PlanSuccessRateResponse(BaseModel):
-    items: List[PlanSuccessRateItem]
+class PlanFailedDevicesResponse(BaseModel):
+    items: List[PlanFailedDevicesItem]
     days: int
 
 
-class PlanRunPassRatePoint(BaseModel):
+class PlanRunFailedDevicePoint(BaseModel):
+    """ADR-0048：每日失败设备（job）台数，取代「通过率趋势」。"""
+
     date: str
-    avg_pass_rate: float = 0.0
+    failed_devices: int = 0
     run_count: int = 0
 
 
-class PlanRunPassRateTrendResponse(BaseModel):
-    points: List[PlanRunPassRatePoint]
+class PlanRunFailedDeviceTrendResponse(BaseModel):
+    points: List[PlanRunFailedDevicePoint]
     days: int
 
 
@@ -372,8 +374,8 @@ def get_host_failure_rate(
     return HostFailureRateResponse(items=items[:limit], days=days)
 
 
-@router.get("/plan-success-rate", response_model=PlanSuccessRateResponse)
-def get_plan_success_rate(
+@router.get("/plan-failed-devices", response_model=PlanFailedDevicesResponse)
+def get_plan_failed_devices(
     days: int = Query(30, ge=1, le=90),
     limit: int = Query(10, ge=1, le=50),
     db: Session = Depends(get_db),
@@ -385,7 +387,6 @@ def get_plan_success_rate(
     stmt = text("""
         SELECT p.id, p.name,
                COUNT(*) AS total_jobs,
-               SUM(CASE WHEN j.status = 'COMPLETED' THEN 1 ELSE 0 END) AS passed,
                SUM(CASE WHEN j.status IN ('FAILED', 'ABORTED') THEN 1 ELSE 0 END) AS failed
         FROM job_instance j
         JOIN plan p ON j.plan_id = p.id
@@ -394,27 +395,23 @@ def get_plan_success_rate(
             """
         GROUP BY p.id, p.name
         HAVING COUNT(*) > 0
-        ORDER BY SUM(CASE WHEN j.status = 'COMPLETED' THEN 1 ELSE 0 END) * 1.0 / COUNT(*) DESC, total_jobs DESC
+        ORDER BY failed DESC, total_jobs DESC
     """)
     rows = db.execute(stmt, params).fetchall()
 
-    items: list[PlanSuccessRateItem] = []
+    items: list[PlanFailedDevicesItem] = []
     for row in rows:
-        total = row[2]
-        passed = row[3]
-        items.append(PlanSuccessRateItem(
+        items.append(PlanFailedDevicesItem(
             plan_id=row[0],
             plan_name=row[1],
-            total_jobs=total,
-            passed=passed,
-            failed=row[4],
-            pass_rate=round(passed / total, 4) if total > 0 else 0.0,
+            total_jobs=row[2],
+            failed=row[3],
         ))
-    return PlanSuccessRateResponse(items=items[:limit], days=days)
+    return PlanFailedDevicesResponse(items=items[:limit], days=days)
 
 
-@router.get("/plan-run-pass-rate-trend", response_model=PlanRunPassRateTrendResponse)
-def get_plan_run_pass_rate_trend(
+@router.get("/plan-run-failed-device-trend", response_model=PlanRunFailedDeviceTrendResponse)
+def get_plan_run_failed_device_trend(
     days: int = Query(30, ge=1, le=90),
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
@@ -426,12 +423,12 @@ def get_plan_run_pass_rate_trend(
         stmt = text("""
             SELECT
                 to_char(date_trunc('day', pr.ended_at), 'YYYY-MM-DD') AS day,
-                AVG(CASE WHEN rs.total > 0 THEN rs.completed::float / rs.total ELSE NULL END) AS avg_pass_rate,
+                COALESCE(SUM(rs.failed), 0) AS failed_devices,
                 COUNT(*) AS run_count
             FROM (
                 SELECT plan_run_id,
                        COUNT(*) AS total,
-                       SUM(CASE WHEN status = 'COMPLETED' THEN 1 ELSE 0 END) AS completed
+                       SUM(CASE WHEN status IN ('FAILED', 'ABORTED') THEN 1 ELSE 0 END) AS failed
                 FROM job_instance
                 WHERE plan_run_id IN (
                     SELECT id FROM plan_run WHERE ended_at >= :since AND ended_at IS NOT NULL
@@ -447,12 +444,12 @@ def get_plan_run_pass_rate_trend(
         stmt = text("""
             SELECT
                 date(pr.ended_at) AS day,
-                AVG(CASE WHEN rs.total > 0 THEN CAST(rs.completed AS REAL) / rs.total ELSE NULL END) AS avg_pass_rate,
+                COALESCE(SUM(rs.failed), 0) AS failed_devices,
                 COUNT(*) AS run_count
             FROM (
                 SELECT plan_run_id,
                        COUNT(*) AS total,
-                       SUM(CASE WHEN status = 'COMPLETED' THEN 1 ELSE 0 END) AS completed
+                       SUM(CASE WHEN status IN ('FAILED', 'ABORTED') THEN 1 ELSE 0 END) AS failed
                 FROM job_instance
                 WHERE plan_run_id IN (
                     SELECT id FROM plan_run WHERE ended_at >= :since AND ended_at IS NOT NULL
@@ -470,11 +467,11 @@ def get_plan_run_pass_rate_trend(
     buckets: dict[str, dict] = {}
     for row in rows:
         day_str = row[0]
-        avg_pr = row[1]
+        failed_devices = row[1]
         rc = row[2]
         if day_str:
             buckets[day_str] = {
-                "avg_pass_rate": round(float(avg_pr), 4) if avg_pr is not None else 0.0,
+                "failed_devices": int(failed_devices or 0),
                 "run_count": int(rc),
             }
 
@@ -484,11 +481,11 @@ def get_plan_run_pass_rate_trend(
     while cursor <= end:
         key = cursor.isoformat()
         b = buckets.get(key, {})
-        points.append(PlanRunPassRatePoint(
+        points.append(PlanRunFailedDevicePoint(
             date=key,
-            avg_pass_rate=b.get("avg_pass_rate", 0.0),
+            failed_devices=b.get("failed_devices", 0),
             run_count=b.get("run_count", 0),
         ))
         cursor += timedelta(days=1)
 
-    return PlanRunPassRateTrendResponse(points=points, days=days)
+    return PlanRunFailedDeviceTrendResponse(points=points, days=days)

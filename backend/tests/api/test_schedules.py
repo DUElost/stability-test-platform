@@ -45,7 +45,6 @@ class TestToggleSchedule:
         plan = Plan(
             name="toggle-plan",
             description="for toggle test",
-            failure_threshold=0.05,
                     )
         db_session.add(plan)
         db_session.commit()
@@ -73,7 +72,6 @@ class TestPlanSchedule:
         plan = Plan(
             name="legacy-sched-plan",
             description="legacy aee schedule plan",
-            failure_threshold=0.05,
         )
         db_session.add(plan)
         db_session.flush()
@@ -122,7 +120,6 @@ class TestPlanSchedule:
         plan = Plan(
             name="sched-plan",
             description="for schedule",
-            failure_threshold=0.05,
                     )
         db_session.add(plan)
         db_session.commit()
@@ -182,7 +179,6 @@ class TestPlanSchedule:
         visible_plan = Plan(
             name="visible-sched-plan",
             description="visible schedule plan",
-            failure_threshold=0.05,
         )
         db_session.add(visible_plan)
         db_session.flush()
@@ -283,7 +279,6 @@ class TestPlanSchedule:
         plan = Plan(
             name="sched-run-now",
             description="run now plan",
-            failure_threshold=0.05,
                     )
         db_session.add(plan)
         db_session.commit()
@@ -320,7 +315,6 @@ class TestPlanSchedule:
         plan = Plan(
             name="sched-run-now-failfast",
             description="run now plan with missing script",
-            failure_threshold=0.05,
         )
         db_session.add(plan)
         db_session.commit()

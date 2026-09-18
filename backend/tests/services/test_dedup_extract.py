@@ -494,7 +494,6 @@ def test_associate_skips_unassigned_with_foreign_job_id(
     other_run = PlanRun(
         plan_id=sample_plan.id,
         status="RUNNING",
-        failure_threshold=sample_plan.failure_threshold,
         plan_snapshot={"name": sample_plan.name, "plan_id": sample_plan.id},
         run_type="MANUAL",
         triggered_by="test-other",

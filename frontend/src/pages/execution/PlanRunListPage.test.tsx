@@ -50,7 +50,6 @@ const sampleRuns = [
     plan_id: 1,
     plan_name: 'MTBF overnight',
     status: 'RUNNING',
-    failure_threshold: 0,
     run_type: 'MANUAL',
     triggered_by: 'alice',
     started_at: '2026-09-01T01:00:00Z',
@@ -64,28 +63,26 @@ const sampleRuns = [
     plan_id: 2,
     plan_name: 'Smoke suite',
     status: 'FAILED',
-    failure_threshold: 0,
     run_type: 'SCHEDULE',
     triggered_by: 'scheduler',
     started_at: '2026-08-31T12:00:00Z',
     ended_at: '2026-08-31T13:00:00Z',
     project_key: 'proj-a',
     device_count: 4,
-    result_summary: { pass_rate: 0.25, total: 4, failed: 3 },
+    result_summary: { total: 4, failed: 3 },
   },
   {
     id: 103,
     plan_id: 3,
     plan_name: 'Idle check',
     status: 'SUCCESS',
-    failure_threshold: 0,
     run_type: 'MANUAL',
     triggered_by: 'bob',
     started_at: '2026-08-30T08:00:00Z',
     ended_at: '2026-08-30T08:10:00Z',
     project_key: null,
     device_count: 1,
-    result_summary: { pass_rate: 1, total: 1, completed: 1 },
+    result_summary: { total: 1, completed: 1 },
   },
 ];
 
@@ -113,7 +110,8 @@ describe('PlanRunListPage', () => {
     expect(screen.getByRole('columnheader', { name: '设备' })).toBeInTheDocument();
     expect(screen.getByText('#101')).toBeInTheDocument();
     expect(screen.getByText('12')).toBeInTheDocument();
-    expect(screen.getByText('25%')).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: '失败设备' })).toBeInTheDocument();
+    expect(screen.getAllByText('3').length).toBeGreaterThan(0);  // ADR-0048：失败台数
   });
 
   it('filters by status tab via API', async () => {

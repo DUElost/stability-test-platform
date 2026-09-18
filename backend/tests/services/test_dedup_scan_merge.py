@@ -1135,12 +1135,11 @@ class TestResolveCenterEventPath:
         from backend.models.plan import Plan
         from backend.models.plan_run import PlanRun
 
-        plan = Plan(name=name, failure_threshold=0.05)
+        plan = Plan(name=name)
         db_session.add(plan)
         db_session.flush()
         run = PlanRun(
-            plan_id=plan.id, status="SUCCESS", failure_threshold=0.05,
-            plan_snapshot={}, run_type="MANUAL",
+            plan_id=plan.id, status="SUCCESS", plan_snapshot={}, run_type="MANUAL",
         )
         db_session.add(run)
         db_session.flush()

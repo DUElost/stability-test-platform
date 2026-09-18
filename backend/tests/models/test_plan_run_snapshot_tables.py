@@ -31,10 +31,8 @@ def snapshot_fixture(db_session):
     db_session.add_all([d1, d2])
     db_session.flush()
 
-    r1 = PlanRun(plan_id=plan.id, status="RUNNING", failure_threshold=0.05,
-                 plan_snapshot={}, run_type="MANUAL")
-    r2 = PlanRun(plan_id=plan.id, status="RUNNING", failure_threshold=0.05,
-                 plan_snapshot={}, run_type="MANUAL")
+    r1 = PlanRun(plan_id=plan.id, status="RUNNING", plan_snapshot={}, run_type="MANUAL")
+    r2 = PlanRun(plan_id=plan.id, status="RUNNING", plan_snapshot={}, run_type="MANUAL")
     db_session.add_all([r1, r2])
     db_session.flush()
 

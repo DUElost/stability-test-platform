@@ -19,13 +19,12 @@ from backend.services.log_observation import (
 
 def _seed_job(db_session, sample_device, status="RUNNING"):
     now = datetime.now(timezone.utc)
-    plan = Plan(name="risk-obs-plan", failure_threshold=0.05)
+    plan = Plan(name="risk-obs-plan")
     db_session.add(plan)
     db_session.flush()
     pr = PlanRun(
         plan_id=plan.id,
         status="RUNNING",
-        failure_threshold=0.05,
         plan_snapshot={},
         run_type="MANUAL",
     )

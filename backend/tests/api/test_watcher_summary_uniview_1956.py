@@ -53,13 +53,12 @@ def uniview_setup(db_session):
     db_session.add_all([dev_uni, dev_mtk])
     db_session.commit()
 
-    plan = Plan(name="#1956 展锐仪表盘", failure_threshold=0.05)
+    plan = Plan(name="#1956 展锐仪表盘")
     db_session.add(plan)
     db_session.commit()
 
     run = PlanRun(
         plan_id=plan.id, status=PlanRunStatus.RUNNING.value,
-        failure_threshold=0.05,
         plan_snapshot={"plan": {"id": plan.id, "name": plan.name}, "steps": []},
         run_type="MANUAL", triggered_by="tester",
         started_at=_now() - timedelta(minutes=10),

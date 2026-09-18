@@ -385,7 +385,7 @@ def test_finalize_plan_run_triggers_schedule(monkeypatch):
 
     run = NS(
         id=55, status=PlanRunStatus.RUNNING.value,
-        failure_threshold=0.5, ended_at=None, result_summary=None,
+        ended_at=None, result_summary=None,
         run_context=None,
     )
     applied = plan_run_aggregation.apply_plan_run_aggregation(

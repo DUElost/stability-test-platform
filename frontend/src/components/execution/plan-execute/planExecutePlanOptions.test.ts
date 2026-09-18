@@ -6,7 +6,6 @@ function plan(partial: Partial<Plan> & { id: number; name: string }): Plan {
   return {
     description: null,
     steps: [],
-    failure_threshold: 0.05,
     patrol_interval_seconds: null,
     timeout_seconds: null,
     created_at: '2026-01-01T00:00:00Z',

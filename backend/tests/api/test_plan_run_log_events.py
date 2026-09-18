@@ -14,13 +14,12 @@ from backend.scheduler.signal_link_reconciler import reconcile_signal_links_once
 
 def _seed_plan_run(db_session, sample_device):
     now = datetime.now(timezone.utc)
-    plan = Plan(name="log-events-plan", failure_threshold=0.05)
+    plan = Plan(name="log-events-plan")
     db_session.add(plan)
     db_session.flush()
     pr = PlanRun(
         plan_id=plan.id,
         status="SUCCESS",
-        failure_threshold=0.05,
         plan_snapshot={},
         run_type="MANUAL",
         started_at=now,

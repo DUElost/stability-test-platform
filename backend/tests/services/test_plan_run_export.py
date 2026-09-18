@@ -49,7 +49,7 @@ def test_export_summary_uses_all_jobs_when_devices_truncated(
     assert summary["total_jobs"] == 501
     assert summary["status_counts"]["COMPLETED"] == 500
     assert summary["status_counts"]["FAILED"] == 1
-    assert summary["pass_rate"] == round(500 / 501, 4)
+    assert summary["status_counts"]["FAILED"] == 1  # ADR-0048：失败台数即事实（pass_rate 已删）
 
     assert len(data["devices"]) == 500
     assert all(d["status"] == JobStatus.COMPLETED.value for d in data["devices"])

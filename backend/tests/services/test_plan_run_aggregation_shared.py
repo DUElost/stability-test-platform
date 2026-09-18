@@ -13,12 +13,12 @@ def _job(status: JobStatus) -> SimpleNamespace:
 
 
 def test_apply_plan_run_aggregation_uses_single_status_rule():
+    """ADR-0048：设备 FAILED 是事实、不改 run 状态——完成即 SUCCESS。"""
     from backend.services.plan_run_aggregation import apply_plan_run_aggregation
 
     run = SimpleNamespace(
         id=1,
         status=PlanRunStatus.RUNNING.value,
-        failure_threshold=0.5,
         ended_at=None,
         result_summary=None,
     )
@@ -31,7 +31,7 @@ def test_apply_plan_run_aggregation_uses_single_status_rule():
     applied = apply_plan_run_aggregation(run, jobs)
 
     assert applied is True
-    assert run.status == PlanRunStatus.PARTIAL_SUCCESS.value
+    assert run.status == PlanRunStatus.SUCCESS.value
     assert run.ended_at is not None
     assert run.result_summary == {
         "total": 3,
@@ -40,7 +40,6 @@ def test_apply_plan_run_aggregation_uses_single_status_rule():
         "failed_only": 1,
         "aborted": 0,
         "unknown": 0,
-        "pass_rate": 0.6667,
         "abort_requested": False,
     }
 
@@ -76,16 +75,16 @@ def test_sync_plan_aggregator_delegates_to_terminalization():
     mock_term.assert_called_once_with(terminal_job, db)
 
 
-# ── v3 §P4: abort → FAILED override ─────────────────────────────────────────
+# ── abort → FAILED override（#783 裁决，ADR-0048 后唯一非绿来源）────────────
 
 
-def test_aggregation_aborted_overrides_partial_success():
-    """v3 §P4: any ABORTED → FAILED, even if failed_only/total ≤ threshold."""
+def test_aggregation_aborted_forces_failed():
+    """v3 §P4 保留：任一 ABORTED → FAILED——人工中止=未覆盖计划。"""
     from backend.services.plan_run_aggregation import apply_plan_run_aggregation
 
     run = SimpleNamespace(
         id=1, status=PlanRunStatus.RUNNING.value,
-        failure_threshold=0.5, ended_at=None, result_summary=None,
+        ended_at=None, result_summary=None,
     )
     jobs = [
         _job(JobStatus.COMPLETED), _job(JobStatus.COMPLETED),
@@ -100,24 +99,26 @@ def test_aggregation_aborted_overrides_partial_success():
     assert run.result_summary["failed"] == 1
 
 
-def test_aggregation_pure_failed_below_threshold_still_partial():
-    """failed_only 内 threshold 仍可落 PARTIAL_SUCCESS."""
+def test_failed_devices_never_yield_partial():
+    """ADR-0048：设备失败（无论占比）落 SUCCESS——PARTIAL_SUCCESS 不再产出。"""
     from backend.services.plan_run_aggregation import apply_plan_run_aggregation
 
-    run = SimpleNamespace(
-        id=2, status=PlanRunStatus.RUNNING.value,
-        failure_threshold=0.5, ended_at=None, result_summary=None,
-    )
-    jobs = [
-        _job(JobStatus.COMPLETED), _job(JobStatus.COMPLETED),
-        _job(JobStatus.FAILED),
-    ]
-    apply_plan_run_aggregation(run, jobs)
+    for failed_count, completed_count in [(1, 2), (2, 1), (1, 0), (5, 5)]:
+        run = SimpleNamespace(
+            id=2, status=PlanRunStatus.RUNNING.value,
+            ended_at=None, result_summary=None,
+        )
+        jobs = (
+            [_job(JobStatus.COMPLETED)] * completed_count
+            + [_job(JobStatus.FAILED)] * failed_count
+        )
+        apply_plan_run_aggregation(run, jobs)
 
-    assert run.status == PlanRunStatus.PARTIAL_SUCCESS.value
-    assert run.result_summary["aborted"] == 0
-    assert run.result_summary["failed_only"] == 1
-    assert run.result_summary["failed"] == 1
+        assert run.status == PlanRunStatus.SUCCESS.value, (
+            f"failed={failed_count}/{len(jobs)} 不应改 run 状态"
+        )
+        assert run.result_summary["failed_only"] == failed_count
+        assert run.result_summary["failed"] == failed_count
 
 
 def test_aggregation_unknown_overrides_aborted():
@@ -127,7 +128,7 @@ def test_aggregation_unknown_overrides_aborted():
 
     run = SimpleNamespace(
         id=3, status=PlanRunStatus.RUNNING.value,
-        failure_threshold=0.5, ended_at=None, result_summary=None,
+        ended_at=None, result_summary=None,
     )
     jobs = [
         _job(JobStatus.COMPLETED), _job(JobStatus.ABORTED),
@@ -145,7 +146,7 @@ def test_aggregation_only_aborted_no_failed():
 
     run = SimpleNamespace(
         id=4, status=PlanRunStatus.RUNNING.value,
-        failure_threshold=0.5, ended_at=None, result_summary=None,
+        ended_at=None, result_summary=None,
     )
     jobs = [
         _job(JobStatus.COMPLETED), _job(JobStatus.COMPLETED),
@@ -164,7 +165,7 @@ def test_aggregation_only_aborted_no_failed():
 
 @pytest.mark.parametrize("terminal_status", [
     PlanRunStatus.SUCCESS.value,
-    PlanRunStatus.PARTIAL_SUCCESS.value,
+    PlanRunStatus.PARTIAL_SUCCESS.value,  # 存量行仍受守卫保护（ADR-0048：不再产出）
     PlanRunStatus.FAILED.value,
 ])
 def test_aggregation_skipped_when_run_already_terminal(terminal_status):
@@ -181,7 +182,6 @@ def test_aggregation_skipped_when_run_already_terminal(terminal_status):
     run = SimpleNamespace(
         id=99,
         status=terminal_status,
-        failure_threshold=0.5,
         ended_at=sentinel_ended_at,
         result_summary=sentinel_summary,
     )
@@ -207,7 +207,6 @@ def test_aggregation_terminal_guard_precedes_unterminated_job_check():
     run = SimpleNamespace(
         id=100,
         status=PlanRunStatus.SUCCESS.value,
-        failure_threshold=0.5,
         ended_at="x",
         result_summary={"locked": True},
     )
@@ -236,15 +235,14 @@ def _abort_requested_ctx(reason: str = "aborted_by_user") -> dict:
 def test_aggregation_abort_requested_overrides_natural_success():
     """abort_requested + 所有 job 自然 COMPLETED:必须 override 成 FAILED。
 
-    Why: 用户主动 abort 但所有 job 在 lease 释放前已自然完成 → natural mix
-         算出 SUCCESS,abort 意图静默丢失。override 让 abort 始终留痕。
+    Why: 用户主动 abort 但所有 job 在 lease 释放前已自然完成 → 聚合算出
+         SUCCESS，abort 意图静默丢失。override 让 abort 始终留痕。
     """
     from backend.services.plan_run_aggregation import apply_plan_run_aggregation
 
     run = SimpleNamespace(
         id=201,
         status=PlanRunStatus.RUNNING.value,
-        failure_threshold=0.5,
         ended_at=None,
         result_summary=None,
         run_context=_abort_requested_ctx(),
@@ -260,19 +258,17 @@ def test_aggregation_abort_requested_overrides_natural_success():
     assert run.result_summary["failed_only"] == 0
 
 
-def test_aggregation_abort_requested_overrides_partial_success():
-    """abort_requested + 自然 PARTIAL_SUCCESS:必须 override 成 FAILED。"""
+def test_aggregation_abort_requested_overrides_failed_devices():
+    """abort_requested + 设备失败批次：FAILED 且 failed 计数不被吞。"""
     from backend.services.plan_run_aggregation import apply_plan_run_aggregation
 
     run = SimpleNamespace(
         id=202,
         status=PlanRunStatus.RUNNING.value,
-        failure_threshold=0.5,
         ended_at=None,
         result_summary=None,
         run_context=_abort_requested_ctx(),
     )
-    # 1/3 failed, threshold 0.5 → 自然算 PARTIAL_SUCCESS
     jobs = [
         _job(JobStatus.COMPLETED),
         _job(JobStatus.COMPLETED),
@@ -287,7 +283,7 @@ def test_aggregation_abort_requested_overrides_partial_success():
     assert run.result_summary["failed_only"] == 1
 
 
-def test_aggregation_abort_requested_yields_to_degraded():
+def test_aggregation_abort_requested_waits_for_unknown():
     """UNKNOWN no longer terminal → aggregation waits for reconciler to resolve
     UNKNOWN→FAILED before evaluating abort_requested override.  PlanRun stays
     RUNNING until all jobs reach true terminal state."""
@@ -296,7 +292,6 @@ def test_aggregation_abort_requested_yields_to_degraded():
     run = SimpleNamespace(
         id=203,
         status=PlanRunStatus.RUNNING.value,
-        failure_threshold=0.5,
         ended_at=None,
         result_summary=None,
         run_context=_abort_requested_ctx(),
@@ -320,7 +315,6 @@ def test_aggregation_abort_requested_marker_with_aborted_jobs():
     run = SimpleNamespace(
         id=204,
         status=PlanRunStatus.RUNNING.value,
-        failure_threshold=0.5,
         ended_at=None,
         result_summary=None,
         run_context=_abort_requested_ctx(),
@@ -342,7 +336,6 @@ def test_aggregation_no_run_context_attribute_safe():
     run = SimpleNamespace(
         id=205,
         status=PlanRunStatus.RUNNING.value,
-        failure_threshold=0.5,
         ended_at=None,
         result_summary=None,
         # 故意不设 run_context
@@ -364,7 +357,6 @@ def test_aggregation_run_context_none_treated_as_no_abort():
         run = SimpleNamespace(
             id=206,
             status=PlanRunStatus.RUNNING.value,
-            failure_threshold=0.5,
             ended_at=None,
             result_summary=None,
             run_context=ctx,
@@ -387,7 +379,6 @@ def test_finalize_notifies_run_completed_on_success():
         id=301,
         plan_id=9,
         status=PlanRunStatus.RUNNING.value,
-        failure_threshold=0.5,
         ended_at=None,
         result_summary=None,
     )
@@ -407,14 +398,14 @@ def test_finalize_notifies_run_completed_on_success():
     assert "2/2 completed" in context["error_message"]
 
 
-def test_finalize_notifies_run_failed_on_threshold_breach():
+def test_finalize_notifies_run_completed_despite_failed_devices():
+    """ADR-0048：设备失败不再触发 RUN_FAILED——告警信噪比回归执行链语义。"""
     from backend.services.plan_run_aggregation import apply_plan_run_aggregation
 
     run = SimpleNamespace(
         id=302,
         plan_id=9,
         status=PlanRunStatus.RUNNING.value,
-        failure_threshold=0.0,
         ended_at=None,
         result_summary=None,
     )
@@ -426,27 +417,23 @@ def test_finalize_notifies_run_failed_on_threshold_breach():
         assert apply_plan_run_aggregation(run, jobs) is True
 
     event_type, context = notify.call_args[0]
-    assert event_type == "RUN_FAILED"
-    assert run.status == PlanRunStatus.FAILED.value
+    assert event_type == "RUN_COMPLETED"
+    assert run.status == PlanRunStatus.SUCCESS.value
     assert context["run_id"] == 302
+    assert "1 failed" in context["error_message"]  # 失败台数在通知里可见
 
 
-def test_finalize_notifies_run_completed_on_partial_success():
+def test_finalize_notifies_run_failed_on_aborted_devices():
     from backend.services.plan_run_aggregation import apply_plan_run_aggregation
 
     run = SimpleNamespace(
         id=303,
         plan_id=9,
         status=PlanRunStatus.RUNNING.value,
-        failure_threshold=0.5,
         ended_at=None,
         result_summary=None,
     )
-    jobs = [
-        _job(JobStatus.COMPLETED),
-        _job(JobStatus.FAILED),
-        _job(JobStatus.COMPLETED),
-    ]
+    jobs = [_job(JobStatus.COMPLETED), _job(JobStatus.ABORTED)]
 
     with patch(
         "backend.services.notification_service.dispatch_notification_async",
@@ -454,8 +441,8 @@ def test_finalize_notifies_run_completed_on_partial_success():
         assert apply_plan_run_aggregation(run, jobs) is True
 
     event_type, context = notify.call_args[0]
-    assert event_type == "RUN_COMPLETED"
-    assert run.status == PlanRunStatus.PARTIAL_SUCCESS.value
+    assert event_type == "RUN_FAILED"
+    assert run.status == PlanRunStatus.FAILED.value
     assert context["run_id"] == 303
 
 
@@ -466,7 +453,6 @@ def test_empty_job_set_notifies_run_failed():
         id=304,
         plan_id=9,
         status=PlanRunStatus.RUNNING.value,
-        failure_threshold=0.5,
         ended_at=None,
         result_summary=None,
     )
@@ -489,7 +475,6 @@ def test_terminal_notification_failure_does_not_block_aggregation():
         id=305,
         plan_id=9,
         status=PlanRunStatus.RUNNING.value,
-        failure_threshold=0.5,
         ended_at=None,
         result_summary=None,
     )
@@ -572,158 +557,31 @@ def test_maybe_notify_risk_high_emits_once_for_level_s():
     db.commit.assert_called()
 
 
-# ── #1591-④：越过刷机里程碑后的失败 → PARTIAL_SUCCESS ─────────────────────────
+# ── ADR-0048 结构断言：判定轴只剩 abort ──────────────────────────────────────
 
 
-_SNAPSHOT_WITH_FLASH = {
-    "steps": [
-        {"step_key": "flash_preflight", "script_name": "flash_preflight"},
-        {"step_key": "flash", "script_name": "flash_firmware"},
-        {"step_key": "oobe", "script_name": "oobe_skip"},
-    ]
-}
+def test_resolve_plan_run_status_signature_has_no_threshold_axes():
+    """结构钉：判定入口不再有 failure_threshold/里程碑参数（防回潮）。"""
+    import inspect
+
+    from backend.services.plan_run_aggregation import _resolve_plan_run_status
+
+    params = inspect.signature(_resolve_plan_run_status).parameters
+    assert set(params) == {"aborted", "abort_requested"}
+    # AST 检查 return 表达式：判定函数只能返回 SUCCESS/FAILED（docstring 允许提及废止词）
+    import ast
+    tree = ast.parse(inspect.getsource(_resolve_plan_run_status).lstrip())
+    returns = {
+        ast.unparse(n.value)
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Return) and n.value is not None
+    }
+    assert returns == {"PlanRunStatus.FAILED", "PlanRunStatus.SUCCESS"}, returns
 
 
-class _FakeResult:
-    def __init__(self, rows):
-        self._rows = rows
+def test_milestone_probe_is_gone():
+    """#1591-④ 里程碑豁免随阈值轴删除（防死代码回潮）。"""
+    import backend.services.plan_run_aggregation as mod
 
-    def all(self):
-        return self._rows
-
-
-class _FakeDb:
-    """按 SQL 文本分派两条探测查询的最小假会话（job_instance / step_trace）。"""
-
-    def __init__(self, *, failed_ids, milestone_done_ids):
-        self.failed_ids = failed_ids
-        self.milestone_done_ids = milestone_done_ids
-
-    def execute(self, stmt):
-        if "step_trace" in str(stmt):
-            return _FakeResult([(i,) for i in self.milestone_done_ids])
-        return _FakeResult([(i,) for i in self.failed_ids])
-
-
-def _milestone_run(**over):
-    base = dict(
-        id=91,
-        status=PlanRunStatus.RUNNING.value,
-        failure_threshold=0.05,
-        ended_at=None,
-        result_summary=None,
-        plan_snapshot=_SNAPSHOT_WITH_FLASH,
-    )
-    base.update(over)
-    return SimpleNamespace(**base)
-
-
-def test_post_milestone_failures_yield_partial_success():
-    """#1591-④：刷机步 COMPLETED、失败全在后续步 → PARTIAL_SUCCESS（不再整体 FAILED）。"""
-    from backend.services.plan_run_aggregation import apply_plan_run_aggregation
-
-    run = _milestone_run()
-    jobs = [_job(JobStatus.COMPLETED), _job(JobStatus.FAILED), _job(JobStatus.FAILED)]
-    db = _FakeDb(failed_ids=[2, 3], milestone_done_ids=[2, 3])
-
-    applied = apply_plan_run_aggregation(run, jobs, db=db)
-
-    assert applied is True
-    assert run.status == PlanRunStatus.PARTIAL_SUCCESS.value
-
-
-def test_post_milestone_failures_yield_partial_success_counters_path():
-    """计数器路径与全量扫描同语义（#1591-④）。"""
-    from backend.services.plan_run_aggregation import (
-        apply_plan_run_aggregation_from_counters,
-    )
-
-    run = _milestone_run(
-        total_job_count=3, terminal_job_count=3, completed_job_count=1,
-        failed_job_count=2, aborted_job_count=0,
-    )
-    db = _FakeDb(failed_ids=[2, 3], milestone_done_ids=[2, 3])
-
-    assert apply_plan_run_aggregation_from_counters(run, db=db) is True
-    assert run.status == PlanRunStatus.PARTIAL_SUCCESS.value
-
-
-def test_milestone_missing_on_any_failed_job_keeps_failed():
-    """任一 FAILED job 没越过里程碑（刷机步没 COMPLETED）→ 保守维持 FAILED。"""
-    from backend.services.plan_run_aggregation import apply_plan_run_aggregation
-
-    run = _milestone_run()
-    jobs = [_job(JobStatus.COMPLETED), _job(JobStatus.FAILED), _job(JobStatus.FAILED)]
-    db = _FakeDb(failed_ids=[2, 3], milestone_done_ids=[2])  # 3 号没越过
-
-    apply_plan_run_aggregation(run, jobs, db=db)
-
-    assert run.status == PlanRunStatus.FAILED.value
-
-
-def test_no_db_is_conservative():
-    """无会话调用方（db=None）→ 不做里程碑判定，回到阈值规则。"""
-    from backend.services.plan_run_aggregation import apply_plan_run_aggregation
-
-    run = _milestone_run()
-    jobs = [_job(JobStatus.COMPLETED), _job(JobStatus.FAILED), _job(JobStatus.FAILED)]
-
-    apply_plan_run_aggregation(run, jobs)
-
-    assert run.status == PlanRunStatus.FAILED.value
-
-
-def test_snapshot_without_milestone_steps_is_conservative():
-    """plan 快照里没有里程碑脚本 → 规则不生效（与「读不到就放宽」相反）。"""
-    from backend.services.plan_run_aggregation import apply_plan_run_aggregation
-
-    run = _milestone_run(plan_snapshot={"steps": [
-        {"step_key": "oobe", "script_name": "oobe_skip"},
-    ]})
-    jobs = [_job(JobStatus.COMPLETED), _job(JobStatus.FAILED)]
-    db = _FakeDb(failed_ids=[2], milestone_done_ids=[2])
-
-    apply_plan_run_aggregation(run, jobs, db=db)
-
-    assert run.status == PlanRunStatus.FAILED.value
-
-
-def test_abort_still_forces_failed_even_past_milestone():
-    """#783 裁决不变：abort 一律 FAILED，里程碑只对「自然失败」放宽。"""
-    from backend.services.plan_run_aggregation import apply_plan_run_aggregation
-
-    run = _milestone_run()
-    jobs = [_job(JobStatus.COMPLETED), _job(JobStatus.FAILED), _job(JobStatus.ABORTED)]
-    db = _FakeDb(failed_ids=[2], milestone_done_ids=[2])
-
-    apply_plan_run_aggregation(run, jobs, db=db)
-
-    assert run.status == PlanRunStatus.FAILED.value
-
-
-def test_all_production_call_sites_pass_db():
-    """接线守卫（#1591-④）：聚合入口的生产调用点必须传 ``db=``。
-
-    漏传不会报错——里程碑规则静默不生效（保守回落 FAILED），正是这一类「行为悄悄
-    退回」最难发现。两条路径（计数器的 O(1) 与全量扫描）都要覆盖。
-    """
-    import re
-    from pathlib import Path
-
-    root = Path(__file__).resolve().parents[3]
-    callers = (
-        "backend/services/job_terminalization.py",
-        "backend/services/plan_run_abort.py",
-    )
-    for rel in callers:
-        src = (root / rel).read_text(encoding="utf-8")
-        # 只认真正的调用（`apply_plan_run_aggregation(...)`）——`from … import (…)`
-        # 的续行也含函数名，按子串匹配会把它当成调用点（实测假阳性）。
-        calls = [
-            line.strip()
-            for line in src.splitlines()
-            if re.search(r"apply_plan_run_aggregation(_from_counters)?\(", line)
-        ]
-        assert calls, f"{rel}: 未找到聚合调用点（改名？）"
-        for line in calls:
-            assert "db=db" in line, f"{rel} 调用点漏传 db：{line}"
+    assert not hasattr(mod, "_MILESTONE_SCRIPT_NAMES")
+    assert not hasattr(mod, "_failed_jobs_all_past_milestone")

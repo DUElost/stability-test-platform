@@ -26,7 +26,6 @@ def _seed_plan_one(db_session):
                 id=1,
                 name="reaper-test-plan",
                 description="stub plan for reaper tests",
-                failure_threshold=0.05,
                 created_by="test",
             )
         )
@@ -83,7 +82,6 @@ def test_reaper_marks_swept_precheck_failed(db_session):
     pr = PlanRun(
         plan_id=1,
         status="RUNNING",
-        failure_threshold=0.05,
         plan_snapshot={},
         run_type="MANUAL",
         run_context=run_ctx,
@@ -123,7 +121,6 @@ def test_reaper_reenqueues_missing_precheck_once(db_session):
     pr = PlanRun(
         plan_id=1,
         status="RUNNING",
-        failure_threshold=0.05,
         plan_snapshot={},
         run_type="MANUAL",
         run_context=run_ctx,
@@ -175,7 +172,6 @@ def test_reaper_enqueue_failure_does_not_bump_requeue_attempts(db_session):
     pr = PlanRun(
         plan_id=1,
         status="RUNNING",
-        failure_threshold=0.05,
         plan_snapshot={},
         run_type="MANUAL",
         run_context=run_ctx,
@@ -240,7 +236,6 @@ def test_reaper_skips_planrun_with_jobs(db_session):
     pr = PlanRun(
         plan_id=1,
         status="RUNNING",
-        failure_threshold=0.05,
         plan_snapshot={},
         run_type="MANUAL",
         run_context=run_ctx,
@@ -274,7 +269,6 @@ def test_reaper_skips_run_without_dispatch_state(db_session):
     pr = PlanRun(
         plan_id=1,
         status="RUNNING",
-        failure_threshold=0.05,
         plan_snapshot={},
         run_type="MANUAL",
         run_context={},
@@ -305,7 +299,6 @@ def test_reaper_does_not_re_enqueue_beyond_cap(db_session, scheduler_env):
     pr = PlanRun(
         plan_id=1,
         status="RUNNING",
-        failure_threshold=0.05,
         plan_snapshot={},
         run_type="MANUAL",
         run_context=run_ctx,

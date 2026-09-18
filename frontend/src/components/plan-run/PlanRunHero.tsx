@@ -350,12 +350,6 @@ export default function PlanRunHero({
         <span className={cn('font-mono', TEXT.heading)}>
           {formatDateTimeShort(run?.started_at)}
         </span>
-        <span>失败阈值</span>
-        <span className={cn('font-medium', TEXT.heading)}>
-          {run?.failure_threshold != null
-            ? `${Math.round(run.failure_threshold * 100)}%`
-            : '—'}
-        </span>
         {typeof run?.run_context?.note === 'string' && run.run_context.note.trim() ? (
           <>
             <span>执行备注</span>

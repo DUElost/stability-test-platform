@@ -69,7 +69,6 @@ def _seed(
         plan = Plan(
             name=f"ar-plan-{device_id}",
             description="abort reaper test",
-            failure_threshold=0.1,
             created_by="pytest",
         )
         db.add_all([host, *devices, plan])
@@ -85,7 +84,7 @@ def _seed(
 
         run = PlanRun(
             plan_id=plan.id, status="RUNNING",
-            failure_threshold=0.1, triggered_by="pytest",
+            triggered_by="pytest",
             plan_snapshot={"name": plan.name, "plan_id": plan.id},
             run_type="MANUAL", started_at=now,
             run_context={"abort_requested": {"at": abort_at.isoformat(), "reason": "test"}},
@@ -409,7 +408,6 @@ def _seed_two_hosts(
         plan = Plan(
             name=f"ar2-plan-{uuid4().hex[:8]}",
             description="abort reaper multi-host test",
-            failure_threshold=0.1,
             created_by="pytest",
         )
         db.add(plan)
@@ -441,7 +439,7 @@ def _seed_two_hosts(
 
         run = PlanRun(
             plan_id=plan.id, status="RUNNING",
-            failure_threshold=0.1, triggered_by="pytest",
+            triggered_by="pytest",
             plan_snapshot={"name": plan.name, "plan_id": plan.id},
             run_type="MANUAL", started_at=now,
             run_context=run_context,

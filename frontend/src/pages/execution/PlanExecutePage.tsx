@@ -94,11 +94,6 @@ import { hostLabel } from '@/utils/hostDisplay';
 
 type DeviceSummary = ReadinessDevice;
 
-function formatFailureThreshold(threshold: number | null | undefined): string {
-  if (threshold == null) return '未设置（按默认 5% 生效）';
-  return `${Math.round(threshold * 100)}%`;
-}
-
 export default function PlanExecutePage() {
   const navigate = useNavigate();
   const toast = useToast();
@@ -1228,7 +1223,6 @@ export default function PlanExecutePage() {
             recentPlanRuns={recentPlanRuns}
             recentPlanRunsLoading={recentPlanRunsLoading}
             onOpenRun={(runId) => navigate(`/execution/plan-runs/${runId}`)}
-            formatFailureThreshold={formatFailureThreshold}
           />
         )}
 
@@ -1416,7 +1410,6 @@ export default function PlanExecutePage() {
             selectedHostActiveJobs={selectedHostActiveJobs}
             patrolIntervalSeconds={selectedPlan?.patrol_interval_seconds}
             timeoutSeconds={selectedPlan?.timeout_seconds}
-            failureThreshold={selectedPlan?.failure_threshold}
             note={runNote}
             preview={preview}
             wallClock={wallClockEstimate}

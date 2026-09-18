@@ -29,8 +29,6 @@ def chain_node_from_run(
     plan_name: Optional[str],
     is_current: bool,
 ) -> ChainNodeOut:
-    summary = pr.result_summary or {}
-    pass_rate = summary.get("pass_rate") if isinstance(summary, dict) else None
     return ChainNodeOut(
         plan_id=pr.plan_id,
         plan_name=plan_name,
@@ -40,8 +38,8 @@ def chain_node_from_run(
         started_at=iso(pr.started_at),
         ended_at=iso(pr.ended_at),
         duration_seconds=duration_seconds(pr.started_at, pr.ended_at),
-        failure_threshold=pr.failure_threshold,
-        pass_rate=pass_rate,
+        # ADR-0048：链节点展示失败设备台数事实（取代 pass_rate/failure_threshold）。
+        failed_jobs=int(getattr(pr, "failed_job_count", 0) or 0),
         is_current=is_current,
     )
 
@@ -112,20 +110,9 @@ def build_plan_run_chain(db: Session, pr: PlanRun) -> PlanChainOut:
                     PlanRunStatus.PARTIAL_SUCCESS.value,
                 ):
                     blocked = True
-                    pr_summary_failed = (
-                        summary.get("failed", 0) if isinstance(summary, dict) else 0
-                    )
-                    pr_summary_total = (
-                        summary.get("total", 0) if isinstance(summary, dict) else 0
-                    )
-                    if pr_summary_total:
-                        rate = pr_summary_failed / pr_summary_total
-                        reason = (
-                            f"failure_rate {rate:.1%} > threshold "
-                            f"{tail.failure_threshold:.1%}; chain 终止"
-                        )
-                    else:
-                        reason = f"parent status={tail.status}; chain 不触发"
+                    # ADR-0048：FAILED 现只意味着执行链故障（abort/派发失败），
+                    # 不再按失败率文案归因——直接父终态即链终止原因。
+                    reason = f"parent status={tail.status}; chain 不触发"
                 elif tail.status in (
                     PlanRunStatus.SUCCESS.value,
                     PlanRunStatus.PARTIAL_SUCCESS.value,
@@ -152,7 +139,6 @@ def build_plan_run_chain(db: Session, pr: PlanRun) -> PlanChainOut:
                         plan_run_id=None,
                         status="pending",
                         chain_index=idx,
-                        failure_threshold=cursor.failure_threshold,
                         is_blocked=blocked if cursor.id == first_next.id else False,
                         block_reason=(
                             reason if cursor.id == first_next.id else "等待前序 Plan 触发"

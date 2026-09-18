@@ -101,7 +101,6 @@ def _seed_job_with_policy(
         plan = Plan(
             name=f"plan-{suffix}",
             description="watcher-contract",
-            failure_threshold=0.1,
                         created_by="pytest",
             watcher_policy=watcher_policy,
         )
@@ -111,7 +110,6 @@ def _seed_job_with_policy(
         plan_run = PlanRun(
             plan_id=plan.id,
             status="RUNNING",
-            failure_threshold=0.1,
             plan_snapshot={
                 "plan": {
                     "id": plan.id,

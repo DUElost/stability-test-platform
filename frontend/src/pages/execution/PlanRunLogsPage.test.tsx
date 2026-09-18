@@ -68,7 +68,6 @@ function summaryPayload(overrides: Record<string, unknown> = {}) {
     plan_name: 'scale-8280dd0c',
     total_jobs: 3,
     status_counts: { RUNNING: 1, COMPLETED: 2 },
-    pass_rate: 0.6667,
     started_at: null,
     ended_at: null,
     result_summary: null,

@@ -285,8 +285,7 @@ class TestDeferredPostCompletion:
                 status="ONLINE", tags=[], created_at=now,
             )
             plan = Plan(
-                name=f"wf-{suffix}", failure_threshold=0.5,
-                                created_by="pytest",
+                name=f"wf-{suffix}", created_by="pytest",
             )
             db.add_all([host, device, plan])
             db.flush()
@@ -302,7 +301,7 @@ class TestDeferredPostCompletion:
             run = PlanRun(
                 plan_id=plan.id,
                 status="FAILED",
-                failure_threshold=0.5, triggered_by="pytest",
+                triggered_by="pytest",
                 started_at=now, ended_at=now,
                 plan_snapshot={"name": plan.name, "plan_id": plan.id},
                 run_type="MANUAL",
@@ -399,8 +398,7 @@ class TestDeferredPostCompletion:
                 status="ONLINE", tags=[], created_at=now,
             )
             plan = Plan(
-                name=f"wf-cut-{suffix}", failure_threshold=0.5,
-                created_by="pytest",
+                name=f"wf-cut-{suffix}", created_by="pytest",
             )
             db.add_all([host, device, plan])
             db.flush()
@@ -414,7 +412,7 @@ class TestDeferredPostCompletion:
             run = PlanRun(
                 plan_id=plan.id,
                 status="FAILED",
-                failure_threshold=0.5, triggered_by="pytest",
+                triggered_by="pytest",
                 started_at=now, ended_at=now,
                 plan_snapshot={"name": plan.name, "plan_id": plan.id},
                 run_type="MANUAL",

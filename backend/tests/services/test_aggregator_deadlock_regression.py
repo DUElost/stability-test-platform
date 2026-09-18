@@ -62,7 +62,7 @@ def _seed_plan_run_with_jobs(n_jobs: int = 2) -> dict:
         )
         plan = Plan(
             name=f"plan-{suffix}", description="deadlock regression",
-            failure_threshold=0.0, created_by="pytest",
+            created_by="pytest",
         )
         db.add_all([host, plan])
         db.flush()
@@ -70,7 +70,6 @@ def _seed_plan_run_with_jobs(n_jobs: int = 2) -> dict:
         run = PlanRun(
             plan_id=plan.id,
             status=PlanRunStatus.RUNNING.value,
-            failure_threshold=0.0,
             plan_snapshot={"name": plan.name, "plan_id": plan.id},
             run_type="MANUAL", triggered_by="pytest",
             started_at=now,

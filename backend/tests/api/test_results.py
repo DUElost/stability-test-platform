@@ -67,13 +67,11 @@ class TestResultsSummary:
         plan_smoke = Plan(
             name=smoke_type,
             description="",
-            failure_threshold=0.05,
             specialty_id=spec_smoke.id,
         )
         plan_stress = Plan(
             name=stress_type,
             description="",
-            failure_threshold=0.05,
             specialty_id=spec_stress.id,
         )
         db_session.add_all([plan_smoke, plan_stress])
@@ -82,7 +80,6 @@ class TestResultsSummary:
         plan_run = PlanRun(
             plan_id=plan_smoke.id,
             status="RUNNING",
-            failure_threshold=0.05,
             plan_snapshot={"name": plan_smoke.name, "plan_id": plan_smoke.id},
             run_type="MANUAL",
             triggered_by="pytest",
@@ -280,15 +277,13 @@ class TestTestTypeStatsAxis:
                     project_id=None, statuses=("COMPLETED",)):
         """建 Plan(挂专项) → PlanRun → 每个 status 一条 JobInstance。"""
         now = datetime.now(timezone.utc)
-        plan = Plan(name=plan_name, description="", failure_threshold=0.05,
-                    specialty_id=specialty_id)
+        plan = Plan(name=plan_name, description="", specialty_id=specialty_id)
         db_session.add(plan)
         db_session.flush()
         run = PlanRun(
             plan_id=plan.id,
             project_id=project_id,
             status="RUNNING",
-            failure_threshold=0.05,
             plan_snapshot={"name": plan.name, "plan_id": plan.id},
             run_type="MANUAL",
             triggered_by="pytest",
@@ -385,8 +380,7 @@ class TestTestTypeStatsAxis:
                          sort_order=6)
         db_session.add(spec)
         db_session.flush()
-        plan = Plan(name=f"漂移探针-{suffix}", description="", failure_threshold=0.05,
-                    specialty_id=None)
+        plan = Plan(name=f"漂移探针-{suffix}", description="", specialty_id=None)
         db_session.add(plan)
         db_session.flush()
         # 用例自身可判别：Plan 名确实不在字典里，否则这条判据就是恒真的
@@ -507,14 +501,13 @@ class TestRiskTrend:
                               source="USER")
         db_session.add(project)
         db_session.flush()
-        plan = Plan(name="trend-plan", failure_threshold=0.05, project_id=project.id)
+        plan = Plan(name="trend-plan", project_id=project.id)
         db_session.add(plan)
         db_session.flush()
         run = PlanRun(
             plan_id=plan.id,
             project_id=project.id,
             status="SUCCESS",
-            failure_threshold=0.05,
             plan_snapshot={"name": plan.name, "plan_id": plan.id},
             run_type="MANUAL",
             triggered_by="pytest",
@@ -613,15 +606,13 @@ class TestResultsSummaryRiskGauge:
 
         suffix = uuid4().hex[:8]
         plan = Plan(
-            name=f"gauge-{tag}-{suffix}", description="", failure_threshold=0.05,
-        )
+            name=f"gauge-{tag}-{suffix}", description="", )
         db_session.add(plan)
         db_session.flush()
         plan_run = PlanRun(
             plan_id=plan.id,
             project_id=project_id,
             status="SUCCESS",
-            failure_threshold=0.05,
             plan_snapshot={"name": plan.name, "plan_id": plan.id},
             run_type="MANUAL",
             triggered_by="pytest",
@@ -735,7 +726,7 @@ class TestRiskVocabularyParity:
         self, client, auth_headers, db_session, sample_device
     ):
         now = datetime.now(timezone.utc)
-        plan = Plan(name="parity-s", description="", failure_threshold=0.05)
+        plan = Plan(name="parity-s", description="")
         db_session.add(plan)
         db_session.flush()
 
@@ -745,7 +736,6 @@ class TestRiskVocabularyParity:
             run = PlanRun(
                 plan_id=plan.id,
                 status="SUCCESS",
-                failure_threshold=0.05,
                 plan_snapshot={"name": plan.name, "plan_id": plan.id},
                 run_type="MANUAL",
                 triggered_by="pytest",

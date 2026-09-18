@@ -29,7 +29,6 @@ interface PlanSelectPhaseProps {
   recentPlanRuns: PlanRun[];
   recentPlanRunsLoading: boolean;
   onOpenRun: (runId: number) => void;
-  formatFailureThreshold: (threshold: number | null | undefined) => string;
 }
 
 function PlanListButton({
@@ -83,7 +82,6 @@ export function PlanSelectPhase({
   recentPlanRuns,
   recentPlanRunsLoading,
   onOpenRun,
-  formatFailureThreshold,
 }: PlanSelectPhaseProps) {
   const { recent, all } = useMemo(
     () => groupPlansForSelect(plans, recentExecutedRuns, planSearch, 5),
@@ -180,12 +178,6 @@ export function PlanSelectPhase({
                 <p className={cn('text-sm', TEXT.subtitle)}>{selectedPlan.description}</p>
               )}
               <div className="grid grid-cols-2 gap-2">
-                <div className="rounded-lg bg-muted/50 p-3">
-                  <div className={cn('text-xs', TEXT.subtitle)}>失败阈值</div>
-                  <div className="mt-1 font-semibold">
-                    {formatFailureThreshold(selectedPlan.failure_threshold)}
-                  </div>
-                </div>
                 <div className="rounded-lg bg-muted/50 p-3">
                   <div className={cn('text-xs', TEXT.subtitle)}>启用步骤</div>
                   <div className="mt-1 font-semibold">

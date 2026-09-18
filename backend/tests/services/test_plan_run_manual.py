@@ -16,7 +16,7 @@ from backend.services.plan_run_manual import manual_retry_job_sync
 
 def _seed(db, *, job_status=JobStatus.RUNNING.value):
     host = Host(id="pm-h1", hostname="pm-h1", status="ONLINE")
-    plan = Plan(name="pm-plan", failure_threshold=0.1, created_by="pytest")
+    plan = Plan(name="pm-plan", created_by="pytest")
     db.add_all([host, plan])
     db.flush()
     device = Device(
@@ -26,8 +26,7 @@ def _seed(db, *, job_status=JobStatus.RUNNING.value):
     db.add(device)
     db.flush()
     run = PlanRun(
-        plan_id=plan.id, status="RUNNING", failure_threshold=0.1,
-        plan_snapshot={"name": plan.name, "plan_id": plan.id},
+        plan_id=plan.id, status="RUNNING", plan_snapshot={"name": plan.name, "plan_id": plan.id},
         run_type="MANUAL", triggered_by="pytest",
     )
     db.add(run)

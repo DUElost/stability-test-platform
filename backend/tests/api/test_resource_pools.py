@@ -95,8 +95,7 @@ def test_delete_pool_with_allocations_is_409(
 
     pool_id = _create_pool_with_secret(client, admin_headers, name="del-pool")
     run = PlanRun(
-        plan_id=gate_chain["plan"].id, status="RUNNING", failure_threshold=0.1,
-        plan_snapshot={"name": "x", "plan_id": gate_chain["plan"].id},
+        plan_id=gate_chain["plan"].id, status="RUNNING", plan_snapshot={"name": "x", "plan_id": gate_chain["plan"].id},
         run_type="MANUAL", started_at=datetime.now(timezone.utc),
     )
     db_session.add(run)

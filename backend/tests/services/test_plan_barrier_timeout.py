@@ -22,8 +22,7 @@ from backend.services.plan_dispatcher_core import (
 
 def _plan(**kw):
     defaults = dict(
-        id=1, name="p", description=None, failure_threshold=0.05,
-        patrol_interval_seconds=None, timeout_seconds=None,
+        id=1, name="p", description=None, patrol_interval_seconds=None, timeout_seconds=None,
         barrier_timeout_seconds=None, auto_archive_interval_seconds=None,
         next_plan_id=None, watcher_policy=None,
     )
