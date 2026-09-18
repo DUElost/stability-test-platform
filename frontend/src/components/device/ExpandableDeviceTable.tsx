@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, useRef, Fragment } from 'react';
 import { cn } from '@/lib/utils';
+import { BulkBarSpacer } from '@/components/ui/bulk-action-bar';
 import {
   Table,
   TableBody,
@@ -389,7 +390,8 @@ export function ExpandableDeviceTable({
                     type="checkbox"
                     checked={allPageSelected}
                     onChange={togglePageSelection}
-                    aria-label="选择当前页设备"
+                    aria-label={`选择当前页设备（本页 ${pageDeviceIds.length} 台）`}
+                    title={`全选当前页 ${pageDeviceIds.length} 台；其他页保持原选择`}
                     className="h-4 w-4 rounded border-border accent-primary"
                   />
                 </TableHead>
@@ -722,6 +724,12 @@ export function ExpandableDeviceTable({
         )}
 
       </div>
+
+      {/* 全选后底部悬浮批量条会压住分页行：用真实占位把最后一行顶出覆盖带（#2614，
+          与主机页同一规格；不这样「下一页」的坐标点击会被条体吞掉或误触「取消选择」） */}
+      {selectable && (selectedIds?.size ?? 0) > 0 && (
+        <BulkBarSpacer testId="device-table-selection-spacer" />
+      )}
     </div>
   );
 }

@@ -540,9 +540,11 @@ def test_stop_drain_true_waits_for_queue(tmp_path):
 def test_stop_drain_false_degrades_pending(tmp_path):
     """stop(drain=False) 应立即回调降级剩余事件为空 enrichment。"""
     block = threading.Event()
+    entered = threading.Event()
 
     class _Blocking:
         def pull(self, serial, remote, local):
+            entered.set()
             block.wait(timeout=3.0)
             Path(local).parent.mkdir(parents=True, exist_ok=True)
             Path(local).write_bytes(b"x")
@@ -556,9 +558,9 @@ def test_stop_drain_false_degrades_pending(tmp_path):
         max_workers=1,
     )
     p.start()
-    # 先 submit 1 条被 worker 拿走并阻塞
+    # 先 submit 1 条被 worker 拿走并阻塞 —— 等「已进入 pull」这个可观测条件（#2602）
     p.submit(_evt(filename="blocker.log"))
-    time.sleep(0.1)
+    assert entered.wait(timeout=2.0), "worker 未取到首条"
     # 再 submit 2 条入队列
     p.submit(_evt(filename="pending1.log"))
     p.submit(_evt(filename="pending2.log"))
@@ -595,7 +597,11 @@ def test_on_done_exception_does_not_crash_worker(tmp_path):
     p.start()
     try:
         p.submit(_evt(filename="crash.log"))
-        time.sleep(0.2)
+        # #2602：等「崩溃那条已被处理」这个可观测条件（下方本来就在轮询同一计数器）
+        deadline_first = time.time() + 2.0
+        while call_count["n"] < 1 and time.time() < deadline_first:
+            time.sleep(0.005)
+        assert call_count["n"] >= 1, "首条未被处理"
         p.submit(_evt(filename="ok.log"))
         deadline = time.time() + 1.5
         while time.time() < deadline and call_count["n"] < 2:

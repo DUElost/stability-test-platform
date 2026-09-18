@@ -29,6 +29,8 @@ from backend.api.schemas.plan_run import (
     PlanRunEventsOut,
     PlanRunLogEventsOut,
     PlanRunDetailOut,
+    PlanRunJobArtifactOut,
+    PlanRunJobsSummaryOut,
     PlanRunListPageOut,
     PlanRunTimelineOut,
     WatcherSummaryOut,
@@ -41,11 +43,6 @@ from backend.models.enums import PlanRunStatus
 from backend.services.plan_run_timeline import build_plan_run_timeline
 from backend.services.plan_run_event_feed import build_plan_run_events
 from backend.services.plan_run_chain import build_plan_run_chain
-from backend.services.plan_run_chain import (  # noqa: F401
-    MAX_CHAIN_DEPTH,
-    _chain_node_from_run,
-    chain_node_from_run,
-)
 from backend.services.plan_run_archive import archive_plan_run_logs
 from backend.services.plan_run_summary import build_plan_run_summary
 from backend.services.plan_run_job_artifacts import list_plan_run_job_artifacts
@@ -55,21 +52,6 @@ from backend.services.plan_run_result_views import (
 )
 from backend.services.plan_run_devices import (
     build_plan_run_devices,
-)
-# 既有测试可能从路由导入 UI 状态派生符号。
-from backend.services.plan_run_devices import (  # noqa: F401
-    _COORDINATOR_HEARTBEAT_TIMEOUT_SECONDS,
-    _WAITING_EXECUTION_STATES,
-    _adb_state_excluded,
-    _current_stage_for_job,
-    _derive_busy_reason,
-    _grace_remaining_seconds,
-    _job_exec_status_for_job,
-    _not_reported_liveness_anchor,
-    _pending_claim_deadline,
-    _pending_claim_remaining_seconds,
-    _running_heartbeat_deadline,
-    _ui_status_for_job,
 )
 from backend.services.plan_run_manual import (
     manual_exit_job_sync,
@@ -93,45 +75,10 @@ from backend.services.plan_run_catalog import (
     build_plan_run_jobs,
     build_plan_run_list_page,
 )
-# 既有测试可能从路由导入这些装配符号（#747 device_count、列表过滤回归都碰它们）。
-from backend.services.plan_run_catalog import (  # noqa: F401
-    _apply_plan_run_list_filters,
-    _job_out,
-    _plan_run_capabilities,
-    _plan_run_out,
-    _project_run_context,
-    _step_out,
-)
 from backend.services.plan_run_watcher_summary import (
+    _MAX_WATCHER_WINDOW_MIN,
     build_plan_run_crash_details,
     build_plan_run_watcher_summary,
-)
-# 既有测试与调用方可能从路由导入这些 watcher/AEE 聚合符号（#2285 去重键契约等）。
-from backend.services.plan_run_watcher_summary import (  # noqa: F401
-    _CAPABILITY_SEVERITY,
-    _DEFAULT_WATCHER_WINDOW_MIN,
-    _MAX_WATCHER_WINDOW_MIN,
-    _SUBTYPE_FIXED_ORDER,
-    _WATCHER_TIME_SCOPE_TO_MINUTES,
-    _aee_event_dedup_key,
-    _aggregate_aee_breakdown,
-    _aggregate_aee_dashboard_sections,
-    _aggregate_run_log_archive,
-    _aggregate_watcher_capability,
-    _aggregate_watcher_platform_buckets,
-    _build_dashboard_section,
-    _empty_dashboard_section,
-    _infer_dashboard_event_group_and_subtype,
-    _infer_dashboard_package_name,
-    _load_deduped_aee_events,
-    _normalize_dashboard_subtype,
-    _normalize_entry_origin,
-    _prefer_deduped_event,
-    _resolve_dashboard_local_aee_dir,
-    _resolve_watcher_summary_window,
-    _subtype_order_index,
-    _uniview_dedup_key,
-    _window_minutes_to_scope_label,
 )
 
 logger = logging.getLogger(__name__)
@@ -597,7 +544,10 @@ def export_plan_run_report(
     )
 
 
-@router.get("/plan-runs/{run_id}/summary", response_model=ApiResponse[dict])
+@router.get(
+    "/plan-runs/{run_id}/summary",
+    response_model=ApiResponse[PlanRunJobsSummaryOut],
+)
 def get_plan_run_summary(
     run_id: int,
     db: Session = Depends(get_db),
@@ -610,7 +560,7 @@ def get_plan_run_summary(
 
 @router.get(
     "/plan-runs/{run_id}/jobs/{job_id}/artifacts",
-    response_model=ApiResponse[list],
+    response_model=ApiResponse[list[PlanRunJobArtifactOut]],
 )
 def list_job_artifacts(
     run_id: int,
