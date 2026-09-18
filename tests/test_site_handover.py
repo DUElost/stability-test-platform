@@ -304,6 +304,21 @@ class TestHandover:
 
         assert _status(report, "handover.MS-01") == "PASS", report["checks"]
 
+    def test_ms04_passes_on_migration_applied_evidence(self, tmp_path):
+        """#2404 同类第二处：本次应用迁移（发 `install.s3.migrate`）时 MS-04 也要取到证据。
+
+        2026-09-18 238 现场升级应用了迁移 → 状态里是 `install.s3.migrate`，而 MS-04 固定要求
+        `install.s3.db` → 假 BLOCKED（MS-01 已在 #2404 修，MS-04 漏了）。
+        """
+        report = run_handover(
+            _site_yaml(tmp_path),
+            state_dir=_state_dir(tmp_path, omit=("install.s3.db",)),
+            verify_report=_verify_report(tmp_path),
+            system_root=tmp_path,
+        )
+
+        assert _status(report, "handover.MS-04") == "PASS", report["checks"]
+
     def test_ms01_missing_both_migration_evidences_is_blocked(self, tmp_path):
         """两条都没有 → 如实 BLOCKED，且缺失文案给出 `A or B`（不只报一半）。"""
         report = run_handover(
