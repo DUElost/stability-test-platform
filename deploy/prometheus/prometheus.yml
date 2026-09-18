@@ -12,7 +12,10 @@ global:
     site: "<site-id>"
 
 # 告警规则目录（与 config.file 同级的 rules/）：installer 把仓库里的
-# deploy/prometheus/alerts-stability-platform.yml 渲到 etc/stp/prometheus/rules/。
+# deploy/prometheus/site-alerts.yml（**站点可见面子集**，#2643 方向 1）渲到
+# etc/stp/prometheus/rules/。平台全量规则（alerts-stability-platform.yml）由控制面
+# 自己的挂载路径承接（ADR-0011 待挂载），站点不装——它引用的控制面指标在这里
+# 结构上无样本，装了只会让「监控就绪」看起来更完整。
 # **没有这一段，规则装了也不会被加载**——#2488 之前模板里根本没有 rule_files，
 # 于是按流程装出来的站点结构上不可能产生任何告警，而 installer 照样报 monitoring_ready
 # （它只看服务起没起、/-/ready 通不通）。
