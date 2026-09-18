@@ -3,7 +3,7 @@
 - 优先级：P2
 - 目标里程碑：M3（完整闭环）
 - 日期：2026-02-18
-- 更新日期：2026-02-25
+- 更新日期：2026-09-19
 - 决策者：平台研发组
 - 标签：后处理, 报告, JIRA, 自动化闭环
 
@@ -38,6 +38,22 @@
 
 - 正向影响：更接近项目北极星闭环，减少人工操作。第 1 层已实现自动报告生成与 JIRA 草稿缓存，前端可通过 IssueTrackerPage 查看。
 - 代价：需要处理鉴权、速率限制、幂等、去重与回写一致性（第 2-3 层）。
+
+## 交付出口分层裁定（2026-09-19，#290 收口）
+
+「崩溃 → 工单材料」的两条链路**不在同一层、不构成双出口竞争**，书面裁定如下：
+
+- **`JobInstance.jira_draft_json`（per-Job 草稿）= 结构化预览层。**
+  post_completion 在 Job 终态与报告同事务生成，仅服务人工复核
+  （RunReportPage 预览面板、IssueTrackerPage 草稿列表）。全库不存在
+  「draft → 工单」自动桥；第 2/3 层策略引擎（若落地）是在 draft 之上叠加
+  提单决策，不构成新交付出口。
+- **extract 材料包 + `/api/v1/jira` JiraRun = 唯一交付/建单路径。**
+  merge Result xls（PlanRunArtifact）→ `jira/{plan_run_id}/`（事件目录 +
+  报表，ADR-0025 方案 C）→ stability_Jira-Automation 厂商工具建单。
+- **配套清理**：删除无前端调用方的 `POST /runs/{run_id}/jira-draft`
+  （按需重建端点）——post_completion 已在终态持久化草稿，`GET .../cached`
+  保留同款实时回落计算，项目键解析行为（ADR-0029 P0）不变。
 
 ## 落地与后续动作
 
