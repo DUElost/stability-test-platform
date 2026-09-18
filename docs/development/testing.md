@@ -139,6 +139,29 @@ npx vitest run src/pages/execution/PlanRunDetailPage.test.tsx
 - 新 UI → Vitest；主机表见 `ExpandableHostTable.test.tsx`  
 - 主链 → `integration/` + 更新 `07-execution-protocol` / `01-execution-pipeline` 若契约变化  
 
+### 等异步状态：只用「可观测条件 + 上界」，不用固定 `time.sleep`（#2595 / #2602）
+
+固定等待只有两种合法形态，其余都是缺陷——判据是**意图**：
+
+- **(a) 等某个状态出现** → 写成有界轮询：
+  `while not <可观测条件> and time.monotonic() < deadline: time.sleep(0.005)`，
+  超时即 `pytest.fail` / `assert` 并带上「在等什么」。可观测条件可以是计数器
+  （`u.stats.submits_dropped`）、公开状态（`s.waiting_devices`、`run.status`）、
+  事件对象（`entered.wait(timeout=…)`）。
+- **(b) 场景搭建**——睡眠本身是被测语义的一部分（制造"慢段"让周期心跳发生、占住 permit
+  让后来者排队、放大交错窗口让无锁实现必交叉），必须在注释里写明**为什么没有可等的量**。
+- **否定断言**（"之后再没有 X"）单独注意：非事件没有正向可等的量 → 先等前提成立
+  （"已处理完"、"线程已退出"）再断言，否则按 (b) 保留并说明。
+
+为什么值得守：这个套件里裸等待造成的随机红**只在特定 job（夜间 / PR 路径）暴露**，
+平均晚一天被发现（#2551）；而等量算错还会造成更隐蔽的**"静默没测到"**——断言依赖的状态
+未被等待时，用例看似通过却没测到要测的东西（实例：`sleep(0.1)` 后断言唤醒延迟，线程若
+还没起来延迟恒 ≈0）。
+
+2026-09-17 按该判据扫过两个套件（`backend/tests/` 259 个用例文件、`backend/agent/tests/`
+162 个）：改 19 处、留 11 处（各带定性依据）。负向形态与逐条分类见
+`docs/notes/bug-fix/2026-09-17-*bounded-waits*.md` 与 `2026-09-17-*wait*` 系列 Note。
+
 ## 8. 已知限制
 
 - 真机 ADB/NFS 不在默认 CI  
