@@ -103,7 +103,7 @@
 |---|------|------|------|:------:|
 | **H-01**<br>[#1518](https://github.com/DUElost/stability-test-platform/issues/1518) | 心跳超时默认值**多处重复定义**（首轮记三处、复核为四处、合入前再验为**三处**） | 报告基线 `ca0665c4` 命中四处：`session_watchdog.py:34` `_HOST_HEARTBEAT_TIMEOUT`=**120** vs `devices.py:29`=**300** vs `hosts.py:53`=**300** vs `reachability.py:40`=**300`。**合入前复检（`dfbeb2ef`）：`session_watchdog.py` 已整体移除，120 那处随之消失；余三处默认值均为 300，但其为三份独立字面量仍属重复定义**（`settings.py` 从 `hosts.py` 转引） | watchdog 120s 判死 job，诊断接口 300s 内仍显示"心跳新鲜"——**排障结论与实际行为自相矛盾**，且 reachability 注释已成误导性文档 | 小 |
 | **H-02**<br>[#1519](https://github.com/DUElost/stability-test-platform/issues/1519) | 分层反向依赖 | `services/ai_assistant/plan_run_ops.py:109,214,290`、`dispatch.py:89` 直接 import `api.routes.plans._require_active_wifi_pool`、`plan_runs._load_job_in_run` 等**私有函数** | services 依赖 HTTP 层内部实现；最坏造成导入环、单测无法脱离 FastAPI 装配、路由重构即破坏服务层 | 中 |
-| **H-03**<br>[#1520](https://github.com/DUElost/stability-test-platform/issues/1520) | 业务逻辑沉淀在 God-module 路由 | `api/routes/` 17,746 行含 **534 处直接 DB 操作**；`plan_runs.py` **3,328 行**/68 次 DB/仅引 7 个 service；`agent_api.py` 3,239 行/91 次；`projects.py` 997 行/**0 个 service** | API 层同时承担 HTTP+事务+业务规则+聚合；H-02 的根因；git churn 热点 | 大 |
+| **H-03**<br>[#1520](https://github.com/DUElost/stability-test-platform/issues/1520) ⚠️**2026-09-18 回写：已闭环**（证据见 §十一） | 业务逻辑沉淀在 God-module 路由 | `api/routes/` 17,746 行含 **534 处直接 DB 操作**；`plan_runs.py` **3,328 行**/68 次 DB/仅引 7 个 service；`agent_api.py` 3,239 行/91 次；`projects.py` 997 行/**0 个 service** | API 层同时承担 HTTP+事务+业务规则+聚合；H-02 的根因；git churn 热点 | 大 |
 | **H-04**<br>[#1521](https://github.com/DUElost/stability-test-platform/issues/1521) | NFS 原始日志零 TTL（R-01）⚠️**合入前复检：部分缓解** | 报告基线 `ca0665c4`：`cron_scheduler.py:215-240 run_retention_cleanup` **只删 DB 行**；全仓无 `devices/`、`dedup/` 文件清理。**合入前复检（`dfbeb2ef`）：`cron_scheduler.py:344-352` 已新增 `purge_job_log_files(stale_job_id_list)`（控制台日志落盘文件清理）——DB 之外的清理**首次**出现；但 `devices/`（原始设备日志）、`dedup/`（扫描产物）**仍无 TTL**，主体责任面未变** | 台账 R-01 成立。机制精确定位：**DB 行有 TTL、NFS 原始日志无 TTL，两者由不同进程/生命周期管理**。916GB 盘打满路径确定 | 中 |
 | **H-05**<br>[#1522](https://github.com/DUElost/stability-test-platform/issues/1522) | HddSpill 腾退速率不足 | `agent/local_disk_monitor.py:30` `_MAX_SPILL_PER_CYCLE=20`；`:35` `_interval=300.0`；`:154` 每轮开头清空 `_spill_enqueued_ids` | 事件产生速率 > 每 300s 腾退 20 目录时，磁盘水位无法回落；与 R-01 是**同一失效链两端**（R-01 不清理 / 本项清理不足） | 中 |
 | **H-06**<br>[#1527](https://github.com/DUElost/stability-test-platform/issues/1527) | `merge_task` 全失败不产生终态 | `saq_tasks.py:761-766` — merge 全失败返回 `""` 时**直接 return**，不 enqueue extract，且**不写任何终态字段**，仅 `logger.info` | SAQ 视 job 为成功，PlanRun 停在 RUNNING，无 extract 产物。**违反"失败必须收敛到 failed"契约** | 小 |
@@ -270,3 +270,30 @@
 - **H-09**：issue [#1526](https://github.com/DUElost/stability-test-platform/issues/1526) 建议**关闭**（原因注明“上游 `56234cb3` 已修复”）。
 - **H-01 / H-04 / C-02**：issue 已追加复检评论说明状态变化，**不关闭**（主体责任面仍在）。
 - **C-01 / H-02 / H-03 / H-05 / H-06 / H-07 / H-07b / H-08 / R-05 / R-09**：无需改动，逐条复验通过。
+
+---
+
+## 十一、后续回写（2026-09-18 · 基线 `3aa0638e`）
+
+> **本节是增量，不改写 §四/§十 的任何原始结论**——与本文件对 R-01 行的处理方式同一范式：
+> 「报告基线当时说了什么」必须保持可追溯，状态变化只在**行内加 ⚠️ 指针 + 本节登记**。
+> 本节只登记 **H-03（#1520）一条**已完成闭环回写的条目；其余 12 条**未在本节重验**，
+> §四/§十 的结论仍是 `ca0665c4` / `dfbeb2ef` 时点快照。
+
+| 编号 | 主题 | 回写结论 | 证据（tip `3aa0638e` 实测） |
+|:----:|------|:--------:|------|
+| **H-03** | God-module 路由（`plan_runs.py` / `agent_api.py` / `projects.py`） | ❌ **本条已闭环**（开单范围内） | 三文件行数 **487 / 391 / 360**（开单 3328 / 3239 / 997，`wc -l` 实测）；`projects.py` 的「0 个 service」已由 registry/mapping/inventory/catalog 补齐；防回流由 `tools/dev/check_god_files_ceiling.py` 的 `CEILINGS` 棘轮承担（同三文件 + `backend/agent/main.py`）。完结举证：`docs/notes/bug-fix/2026-09-18-god-module-closure-1520.md`；issue **#1520 已 CLOSED** |
+
+### 与本条相邻的两件事（登记，不并案）
+
+- **#1515 总表**：批次清单里 #1520 一行曾长期挂 `[ ]`（issue 正文侧，非本文件）。已在 2026-09-18
+  按上表证据勾结，同时保留「本表为 09-11 时点结论」的限定语。
+- **`backend/agent/main.py` 不属 H-03 开单范围**：它是 #736（上帝文件瘦身）的在制面，
+  本次回写时仍在切片（`CEILINGS` 已含该文件，封顶随每次抽取下调）。H-03 的闭环不为它背书。
+
+### 回写机制本身（本报告 §五「台账无状态回写机制」的增量发现 4）
+
+§五 记的「台账停留在快照、无回写机制」**这条仍然成立**——本次是**人工补的一次回写**，
+不是机制。可机判的收口需要一条「报告条目 ↔ issue 状态」对拍门禁（issue 状态是网络事实，
+仓库内 CI 不可达），因此本报告/总表这一族只能靠**触碰即回写**的纪律 + 时点限定语支撑。
+如实记在此处，避免下一个读者把本节误读成「回写已经自动化」。
