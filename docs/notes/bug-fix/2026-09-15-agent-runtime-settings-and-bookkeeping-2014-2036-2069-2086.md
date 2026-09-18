@@ -92,6 +92,12 @@ override 的**值**原先只判「是不是字符串」，值内换行会在 Age
 实际运行的命令（worktree `.wt/stp-2014-2036-2069-2086`，解释器
 `/home/debian13/stability-test-platform/.venv/bin/python`）：
 
+> ⚠️ 现场记录，不是配方：下面的 `127.0.0.1:5432/stp_test` / `localhost` 形态在
+> **控制面机**上已被 conftest 拒载（#2632 缺口③——本机 `127.0.0.1:5432` 就是生产
+> 实例，与 2026-09-17 那次 `postgres@stp_test` 连库尝试同形）。在控制面上请 unset
+> `TEST_DATABASE_URL` 走 testcontainers；见
+> [`2026-09-18-test-db-loopback-guard-2632.md`](2026-09-18-test-db-loopback-guard-2632.md)。
+
 ```bash
 python -m pytest backend/agent/tests/test_local_disk_monitor.py \
   backend/agent/tests/test_agent_settings_heartbeat.py \

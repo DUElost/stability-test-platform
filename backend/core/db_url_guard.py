@@ -1,13 +1,19 @@
 # -*- coding: utf-8 -*-
-"""显式 TEST_DATABASE_URL 的机器护栏（#1300，R15-R01）。
+"""显式 TEST_DATABASE_URL 的机器护栏（#1300，R15-R01；#2632 缺口③）。
 
 testcontainers 兜底路径天然隔离；显式 ``TEST_DATABASE_URL`` 一旦误指生产库，
 conftest ``db_session`` 的全表 ``TRUNCATE ... CASCADE`` 就是生产事故。本模块在
-conftest 解析显式地址时做两道闸：
+conftest 解析显式地址时做三道闸：
 
 1. **隔离命名**：PostgreSQL 库名必须含 ``test``（不区分大小写，如 ``stp_test``）；
 2. **运行时配置比对**：与 ``DATABASE_URL``（应用运行时/生产配置）完全相同 →
-   拒绝——把运行时配置复制进 TEST_DATABASE_URL 是最可能的误用姿势。
+   拒绝——把运行时配置复制进 TEST_DATABASE_URL 是最可能的误用姿势；
+3. **控制面 loopback 拒绝**（#2632 缺口③）：本机是控制面（仓库根带生产 env 源
+   ``.env.backend``）时，显式地址指向 ``localhost``/``127.0.0.1``/``::1``/unix
+   socket 即指向**本机生产实例**——库名不同也拦。为什么需要这一闸：第 2 道闸在
+   本机**恒空**（ambient 没有 ``DATABASE_URL``，它只在 ``.env.backend`` 里，而
+   测试不得读取该文件），于是只剩库名约定，而 2026-09-17 那次 ``postgres@stp_test``
+   连库尝试两道闸全过、没出事纯属该库不存在的运气。
 
 确需指向非常规命名的库（如共享的临时验证库），设
 ``STP_ALLOW_UNSAFE_TEST_DATABASE_URL=1`` 显式豁免（记 loud warning）。
@@ -20,6 +26,13 @@ import os
 from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
+
+#: 「本机是控制面」的标记物：仓库根的生产 env 源文件。**只判存在，不读内容**
+#: （测试不得读取/复用 ``.env.backend`` 的连接串，见 testing.md §2）。
+CONTROL_PLANE_ENV_FILE = ".env.backend"
+
+#: loopback 主机名；host 为空 = libpq 走本机 unix socket，同样是本机实例。
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 
 class UnsafeTestDatabaseUrl(ValueError):
@@ -41,15 +54,65 @@ def _database_name(url: str) -> str:
     return parsed.path.lstrip("/").split("?")[0].split("/")[0]
 
 
+def _main_checkout_root(repo_root: str) -> str | None:
+    """链接工作树（worktree）→ 主检出根；非 worktree 返回 None。
+
+    worktree 的 ``.git`` 是个文件，内容为 ``gitdir: <主检出>/.git/worktrees/<名>``。
+    """
+    entry = os.path.join(repo_root, ".git")
+    if not os.path.isfile(entry):
+        return None
+    try:
+        with open(entry, encoding="utf-8") as handle:
+            line = handle.read().strip()
+    except OSError:
+        return None
+    if not line.startswith("gitdir:"):
+        return None
+    gitdir = line.split(":", 1)[1].strip()
+    return os.path.abspath(os.path.join(gitdir, os.pardir, os.pardir, os.pardir))
+
+
+def control_plane_env_file_present(repo_root: str | os.PathLike[str]) -> bool:
+    """仓库根是否带生产 env 源文件——「本机是控制面」的标记（#2632 缺口③）。
+
+    只判存在、不读内容：控制面与 Agent 的运行单元都在宿主上，而该文件是生产唯一
+    env 源（见 ``production-diagnostics.md`` §凭据来源）。
+
+    **worktree 里必须回溯主检出再判**：该文件是未跟踪的本地状态，链接工作树里
+    没有它——只看当前 worktree 根会让这道闸恰好漏掉所有并行 worktree（2026-09-18
+    实测：首版如此写，红/绿用例发现守卫没拦，测试真的去连了本机生产实例）。
+    """
+    root = os.fspath(repo_root)
+    if os.path.isfile(os.path.join(root, CONTROL_PLANE_ENV_FILE)):
+        return True
+    main_root = _main_checkout_root(root)
+    return bool(
+        main_root and os.path.isfile(os.path.join(main_root, CONTROL_PLANE_ENV_FILE))
+    )
+
+
+def _is_loopback(url: str) -> bool:
+    """显式地址是否指向本机（loopback 主机名，或空 host = 本机 unix socket）。"""
+    try:
+        host = urlsplit(url).hostname
+    except ValueError:
+        return False
+    return host is None or host == "" or host in _LOOPBACK_HOSTS
+
+
 def guard_test_database_url(
     url: str,
     *,
     runtime_database_url: str | None = None,
+    on_control_plane_host: bool = False,
 ) -> str:
     """校验显式 TEST_DATABASE_URL；通过则原样返回，触发护栏抛
     :class:`UnsafeTestDatabaseUrl`。
 
     testcontainers 兜底路径**不经此函数**（容器 URL 由本模块生成，天然隔离）。
+    ``on_control_plane_host`` 由调用方从 :func:`control_plane_env_file_present`
+    求得（conftest 传仓库根）；其他开发机与 CI 上传 False，第 3 道闸不参与判定。
     """
     if _allow_unsafe():
         logger.warning(
@@ -80,5 +143,15 @@ def guard_test_database_url(
         raise UnsafeTestDatabaseUrl(
             "TEST_DATABASE_URL is identical to DATABASE_URL (runtime config) — "
             "refusing to TRUNCATE the application database"
+        )
+
+    if on_control_plane_host and _is_loopback(url):
+        raise UnsafeTestDatabaseUrl(
+            "TEST_DATABASE_URL points at a loopback address while this checkout carries "
+            f"the production env source ({CONTROL_PLANE_ENV_FILE}): on this host "
+            "127.0.0.1/localhost is the production PostgreSQL instance. A different "
+            "database name on the same instance is not isolation (#2632). Unset "
+            "TEST_DATABASE_URL to use the testcontainers default, or set "
+            "STP_ALLOW_UNSAFE_TEST_DATABASE_URL=1 to override"
         )
     return url
