@@ -408,6 +408,33 @@ def test_s0_state_record_matches_emitted_checks(tmp_path, monkeypatch):
     assert "install.s0" in s0["checks"], s0["checks"]
 
 
+def test_release_manifest_lands_at_deploy_root(tmp_path, monkeypatch):
+    """#2572：清单必须落在**部署树根**，而不只是「在 bundle 里被校验存在」。
+
+    运行时读的就是 `<deploy_root>/release-manifest.json`
+    （`backend/core/release_manifest.py`）；此前的落地循环只搬 4 个子目录，清单从未
+    到过部署树 ⇒ `/health` 的 `stability_build_info` 在站点上恒 `unknown`。
+    重跑同样要保证它在（安装是幂等的，第二次调用不得把它漏掉）。
+    """
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    prepare(tmp_path)
+    bundle_manifest = tmp_path / "bundle/release-manifest.json"
+    landed = tmp_path / "opt/stp-control/release-manifest.json"
+
+    report = invoke(tmp_path)
+    assert report["status"] == "PASS", report["checks"]
+    assert landed.is_file(), "清单没落到部署树根——运行时读不到版本"
+    # 落地是**原样搬运**：二次加工会让读数与发布物（及其摘要基准）脱钩
+    assert landed.read_bytes() == bundle_manifest.read_bytes()
+    assert json.loads(landed.read_text(encoding="utf-8"))["product"]["version"] == (
+        "synthetic-2026.09.0"
+    )
+
+    second = invoke(tmp_path, ops=ops_for(tmp_path), probe=lambda dsn: ("managed", CODE_HEAD))
+    assert second["status"] == "PASS", second["checks"]
+    assert landed.is_file(), "重跑把清单弄丢了——幂等性破了"
+
+
 def test_landed_tree_keeps_symlinks(tmp_path, monkeypatch):
     """S2 落地必须原样保留符号链接（copytree 默认解引用会改变内容摘要）。"""
     monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)

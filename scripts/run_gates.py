@@ -96,13 +96,17 @@ GATES = {
         ROOT,
         None,
     ),
+    # 扫描集含根 tests/（#2535 之后的同批收口）：此前只在 backend/tools/scripts 上跑，
+    # 根 tests/ 的语法错误在 check:quick 里看不见（实测：注入语法错误后旧命令仍绿）。
     "compileall": (
-        f"{PY} -m compileall -q backend/ tools/ scripts/",
+        f"{PY} -m compileall -q backend/ tools/ scripts/ tests/",
         ROOT,
         None,
     ),
+    # 同上：`tests` 已加入 find 列表（此前只在 backend/tools/scripts/frontend/src 上跑，
+    # 实测把一个空行率 49% 的文件放进 tests/ 时旧命令零命中）。
     "pollution": (
-        "find backend tools scripts frontend/src -type f "
+        "find backend tools scripts frontend/src tests -type f "
         "\\( -name '*.py' -o -name '*.ts' -o -name '*.tsx' -o -name '*.js' -o -name '*.jsx' \\) "
         "-not -path '*/resources/*' -not -path '*/__pycache__/*' -not -path '*/node_modules/*' "
         f"| xargs {PY} tools/dev/collapse-blank-pollution.py --check -q",
@@ -207,10 +211,17 @@ GATES = {
         ROOT,
         None,
     ),
-    # #739：agent 测试必须自闭环（约定见 backend/agent/AGENTS.md：无 DB/Redis、
-    # 不 import 控制面）。剥离全部环境变量（含 JWT_SECRET_KEY / DATABASE_URL）
-    # 后只做 --collect-only——控制面 import 链（backend/api/routes → auth →
-    # core.security 的模块级 JWT 硬检查）一旦被 agent 测试重新引入，这里秒级变红。
+    # #739：agent 测试的环境自闭环——剥离全部环境变量（含 JWT_SECRET_KEY /
+    # DATABASE_URL）后只做 --collect-only，秒级。
+    #
+    # 能力边界（#739 残余复核，2026-09-17 实测）：**本 gate 已拦不住「agent 测试
+    # import 控制面」**——conftest 在收集期就 setdefault 了 DATABASE_URL /
+    # JWT_SECRET_KEY（#2428，有意为之），越界 import 因此能正常完成收集
+    # （实测：注入 `import backend.api.routes.agent_api` 后仍 2130 全收集通过）。
+    # 它现在拦的是「与 env 无关的 import 期失败」（缺依赖、语法/导入链断裂）。
+    # agent **生产代码**的 import 边界由静态守卫
+    # tests/test_agent_import_boundary.py 钉住（不依赖运行时表现）；
+    # agent **测试**侧的越界面仍是待裁决存量（14 个文件），见 backend/agent/AGENTS.md。
     # CI 对应物=ci.yml pr-agent-tests job「Collect agent tests in clean env」step。
     "agent-tests-collect": (
         f'env -i PATH="$PATH" PYTHONPATH=. {PY} -m pytest '
