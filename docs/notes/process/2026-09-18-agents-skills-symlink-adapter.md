@@ -1,8 +1,8 @@
 # Agent Note：`.agents/skills` symlink 薄适配（G5 收窄）
 
-- Status: implemented
-- Class: process
-- Date: 2026-09-18
+Status: implemented
+Class: process
+Date: 2026-09-18
 
 ## Decision
 
