@@ -9,10 +9,15 @@ from fastapi import HTTPException
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
+# #2598：`_artifact_download_target` 随 #2420 的「产物下载双路由收敛为一份实现」
+# 下沉到 `backend/services/job_artifact_download.py`，路由侧只剩
+# `build_artifact_download_response` 的转调。用例测的是**这条判据本身**
+# （`file://` 解析 / 缺失产物 / 越权路径），所以直接跟到 service 层。
+# 双写法保留：`sys.path` 里插了 `backend/`，老的裸包名形态仍要能导入。
 try:
-    from backend.api.routes.runs import _artifact_download_target
+    from backend.services.job_artifact_download import _artifact_download_target
 except ModuleNotFoundError:
-    from api.routes.runs import _artifact_download_target
+    from services.job_artifact_download import _artifact_download_target
 
 
 class TestArtifactDownloadTarget(unittest.TestCase):

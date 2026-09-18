@@ -10,6 +10,9 @@
 - ``POST /api/v1/projects/{key}/map/preview|apply`` — 把型号映射到 USER 项目。
 
 静态路径 ``/inventory/*`` 必须注册在 ``/{project_key}`` 之前。
+
+#1520：读侧 list/detail/models/customers/summary 装配在
+``services/project_catalog``；本文件只留 Depends + ``ok(...)``。
 """
 
 from __future__ import annotations
@@ -17,7 +20,6 @@ from __future__ import annotations
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from backend.api.response import ApiResponse, ok
@@ -33,22 +35,19 @@ from backend.api.schemas.project import (
     ProjectRenameIn,
     ProjectSummaryOut,
     ProjectUpdateIn,
-    RecentProjectRunOut,
 )
 from backend.core.database import get_db
-from backend.models.host import Device
-from backend.models.plan import Plan
-from backend.models.plan_run import PlanRun
-from backend.models.project import Customer, TestProject
-from backend.models.project_model import ProjectModel
+from backend.services.project_catalog import (
+    build_project_detail,
+    fill_project_summary,
+    fill_promoted_summary,
+    list_customer_entries,
+    list_project_model_coverage,
+    list_project_summaries,
+)
 from backend.services.project_inventory import (
-    aggregate_inventory,
     inventory_summary,
     load_inventory,
-    platforms_map,
-    rule_values_for_project,
-    summary_rows,
-    summary_rows_for,
 )
 from backend.services.project_mapping import (
     apply_project_mapping,
@@ -59,7 +58,6 @@ from backend.services.project_registry import (
     UPDATABLE_FIELDS,
     archive_project_entry,
     create_project_entry,
-    get_project_or_404,
     promote_seed_project_entry,
     rename_project_entry,
     unarchive_project_entry,
@@ -67,22 +65,6 @@ from backend.services.project_registry import (
 )
 
 router = APIRouter(prefix="/api/v1/projects", tags=["projects"])
-
-_ACTIVE_RUN_STATUSES = ("RUNNING", "QUEUED", "PRECHECK")
-_USER_SOURCE = "USER"
-_SEED_SOURCE = "SEED"
-
-
-def _fill_summary(db: Session, project: TestProject) -> ProjectSummaryOut:
-    device_count, running_run_count = summary_rows_for(
-        db, [project.id]
-    ).get(project.id, (0, 0))
-    out = ProjectSummaryOut.model_validate(project)
-    out.match_models = rule_values_for_project(db, project.id)
-    out.platforms = platforms_map(db, [project.id]).get(project.id, [])
-    out.device_count = device_count
-    out.running_run_count = running_run_count
-    return out
 
 
 @router.get("", response_model=ApiResponse[list[ProjectSummaryOut]])
@@ -93,32 +75,8 @@ def list_projects(
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
-    query = db.query(TestProject).order_by(TestProject.id)
-    if source == "user":
-        query = query.filter(TestProject.source == _USER_SOURCE)
-        # 注意：不按 SEED_PROJECT_KEYS 剔除 key——promote 转正的行 key 不变、
-        # 但 source=USER，必须显示；未转正的 SEED 行已被 source 过滤挡住
-    elif source == "seed":
-        query = query.filter(TestProject.source == _SEED_SOURCE)
-        # 待转正队列默认只列 ACTIVE——归档 = 显式放弃（#644 P2-7 退场路径），
-        # 放弃的标签不再占队列名额；显式 ?status=ARCHIVED 仍可列出复查
-        if status is None:
-            query = query.filter(TestProject.status == "ACTIVE")
-    if status:
-        query = query.filter(TestProject.status == status)
-    projects = query.all()
-    aggregates = summary_rows(db)
-    platforms_by_project = platforms_map(db, [p.id for p in projects])
-    items = []
-    for project in projects:
-        device_count, running_run_count = aggregates.get(project.id, (0, 0))
-        out = ProjectSummaryOut.model_validate(project)
-        out.match_models = rule_values_for_project(db, project.id)
-        out.platforms = platforms_by_project.get(project.id, [])
-        out.device_count = device_count
-        out.running_run_count = running_run_count
-        items.append(out)
-    return ok(items)
+    """#1520 薄壳：列表装配在 ``project_catalog.list_project_summaries``。"""
+    return ok(list_project_summaries(db, source=source, status=status))
 
 
 @router.get("/customers", response_model=ApiResponse[list[dict]])
@@ -132,9 +90,7 @@ def list_customers(
     变更走迁移（同 list_specialties 口径）。customer 列不动（自由文本保留），
     字典表只承担输入建议。
     """
-    rows = db.query(Customer).order_by(Customer.sort_order, Customer.id).all()
-    return ok([{"key": r.key, "display_name": r.display_name,
-                "sort_order": r.sort_order} for r in rows])
+    return ok(list_customer_entries(db))
 
 
 @router.post("", response_model=ApiResponse[ProjectSummaryOut], status_code=201)
@@ -155,7 +111,7 @@ def create_project(
         actor_username=current_user.username,
         request=request,
     )
-    return ok(_fill_summary(db, project))
+    return ok(fill_project_summary(db, project))
 
 
 @router.get(
@@ -201,12 +157,7 @@ def promote_seed_project(
         actor_username=current_user.username,
         request=request,
     )
-    device_count, running_run_count = summary_rows(db).get(seed.id, (0, 0))
-    out = ProjectSummaryOut.model_validate(seed)
-    out.match_models = rule_values_for_project(db, seed.id)
-    out.device_count = device_count
-    out.running_run_count = running_run_count
-    return ok(out)
+    return ok(fill_promoted_summary(db, seed))
 
 
 @router.put("/{project_key}", response_model=ApiResponse[ProjectSummaryOut])
@@ -234,7 +185,7 @@ def update_project(
         actor_username=current_user.username,
         request=request,
     )
-    return ok(_fill_summary(db, project))
+    return ok(fill_project_summary(db, project))
 
 
 @router.post(
@@ -255,7 +206,7 @@ def archive_project(
         actor_username=current_user.username,
         request=request,
     )
-    return ok(_fill_summary(db, project))
+    return ok(fill_project_summary(db, project))
 
 
 @router.post(
@@ -281,7 +232,7 @@ def unarchive_project(
         actor_username=current_user.username,
         request=request,
     )
-    return ok(_fill_summary(db, project))
+    return ok(fill_project_summary(db, project))
 
 
 @router.put(
@@ -309,7 +260,7 @@ def rename_project(
         actor_username=current_user.username,
         request=request,
     )
-    return ok(_fill_summary(db, project))
+    return ok(fill_project_summary(db, project))
 
 
 @router.post(
@@ -386,7 +337,6 @@ def remove_project_rule(
     return ok(removed)
 
 
-
 @router.get(
     "/{project_key}/models",
     response_model=ApiResponse[list[ProjectModelCoverageOut]],
@@ -396,28 +346,8 @@ def list_project_models(
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
-    project = get_project_or_404(db, project_key)
-    # v2.5：详情页型号覆盖 = 该型号成员行下的设备（派生口径）——直接按
-    # 成员行 + 设备型号过滤，不读 device.project_id 列
-    rows = (
-        db.query(Device.model, Device.platform)
-        .join(ProjectModel, Device.model == ProjectModel.match_value)
-        .filter(
-            ProjectModel.project_id == project.id,
-            ProjectModel.is_active.is_(True),
-        )
-        .all()
-    )
-    return ok(
-        [
-            ProjectModelCoverageOut(
-                model=item.model,
-                device_count=item.device_count,
-                platforms=item.platforms,
-            )
-            for item in aggregate_inventory(list(rows), model_to_projects={})
-        ]
-    )
+    """#1520 薄壳：型号覆盖在 ``project_catalog.list_project_model_coverage``。"""
+    return ok(list_project_model_coverage(db, project_key))
 
 
 @router.get("/{project_key}", response_model=ApiResponse[ProjectDetailOut])
@@ -426,30 +356,5 @@ def get_project(
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
-    project = get_project_or_404(db, project_key)
-    device_count, running_run_count = summary_rows(db).get(project.id, (0, 0))
-    detail = ProjectDetailOut.model_validate(project)
-    detail.match_models = rule_values_for_project(db, project.id)
-    # #957: 派生 platforms 与列表 _fill_summary 同一构造——详情不再落回 []。
-    detail.platforms = platforms_map(db, [project.id]).get(project.id, [])
-    detail.device_count = device_count
-    detail.running_run_count = running_run_count
-    detail.plan_count = (
-        db.query(func.count(Plan.id))
-        .filter(Plan.project_id == project.id)
-        .scalar() or 0
-    )
-    detail.total_run_count = (
-        db.query(func.count(PlanRun.id))
-        .filter(PlanRun.project_id == project.id)
-        .scalar() or 0
-    )
-    recent = (
-        db.query(PlanRun)
-        .filter(PlanRun.project_id == project.id)
-        .order_by(PlanRun.started_at.desc())
-        .limit(5)
-        .all()
-    )
-    detail.recent_runs = [RecentProjectRunOut.model_validate(r) for r in recent]
-    return ok(detail)
+    """#1520 薄壳：详情装配在 ``project_catalog.build_project_detail``。"""
+    return ok(build_project_detail(db, project_key))

@@ -580,9 +580,11 @@ class TestRiskVocabularyParity:
         assert dist["unknown"] >= 1, "无判定依据的 job 没进 unknown 桶（D4 的覆盖率观测对象）"
         assert dist["b"] == 0, "零事件被算进了 b（D4 禁止：没采到异常 ≠ 低风险）"
 
-        # 注意：risk-trend 走的是**裸模型**（response_model=RiskTrendOut），而
-        # /results/summary 也是裸模型、/runs/{id}/report/cached 却是 ApiResponse 信封
-        # ——同一文件三种形状，正是 #2420 第 3 项记的那笔账（本单不改信封）。
+        # 注意：同一文件里三种形状并存——risk-trend 与 /results/summary 走**裸模型**
+        # （`response_model=RiskTrendOut` 等），`/runs/{id}/report` 与 `/report/cached`
+        # 走 `{data, error}` **信封**（#2420 第 3 项：live 口径于 #2543 补上信封，与
+        # cached 对齐；前端 `utils/api/runs.ts` 两条同为 `unwrapApiResponse`）。
+        # 对拍跨形状取值时必须**先按各自形状解到位**，否则比较的是 `None == 'S'`。
         trend = client.get(
             "/api/v1/results/risk-trend", params={"days": 30}, headers=auth_headers,
         ).json()
@@ -591,9 +593,21 @@ class TestRiskVocabularyParity:
         assert day["S"] >= 1 and day["B"] == 0
         assert day["UNKNOWN"] >= 1, "趋势里零事件没进 UNKNOWN（第四态并词的落点，D2/D4）"
 
-        report = client.get(
+        report_body = client.get(
             f"/api/v1/runs/{s_job.id}/report", headers=auth_headers,
         ).json()
-        assert (report.get("risk_summary") or {}).get("risk_level") == rows[s_job.id]["risk_level"], (
+        # 先钉形状再解包：信封一旦改名，`report_body["data"]` 要当场炸，而不是
+        # 被 `or {}` 这类容错读法吞成 `None == None` 的**永真**（#2568 的口径：
+        # 「绿但没测到东西」比红更糟）。
+        assert set(report_body) == {"data", "error"}, (
+            f"报告 live 口径必须是 {{data, error}} 信封（#2420/#2543）：{sorted(report_body)}"
+        )
+        assert report_body["error"] is None
+        report_data = report_body["data"]
+        # 两侧各自钉死再比相等：只写 `==` 时，两侧同时读空也是「通过」。
+        assert report_data["risk_summary"]["risk_level"] == "S", (
+            "报告侧没真读到 S——多半是解包路径不对（本行的 KeyError 就是判别力）"
+        )
+        assert report_data["risk_summary"]["risk_level"] == rows[s_job.id]["risk_level"], (
             "报告 DTO 与列表必须同词表：徽标与同屏计数不能各说一套（#2494）"
         )
