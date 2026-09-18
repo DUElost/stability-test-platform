@@ -1421,7 +1421,11 @@ export interface PlanJobInstance {
 
 export interface PlanRunSummary {
   plan_run_id: number;
-  status: string;
+  /** 值域与 detail 的 `PlanRun.status` 同一套（后端两侧都是 str，此处按既有口径建模）；
+   *  #2623 的终态判定靠它，两侧不同型会让 `TERMINAL.includes(...)` 在编译期失去保护。 */
+  status: PlanRunStatus;
+  /** #2623：与 detail 同源（现查 Plan.name）；plan_id 为空时为 null。 */
+  plan_name?: string | null;
   total_jobs: number;
   status_counts: Record<string, number>;
   pass_rate: number;
@@ -2087,18 +2091,21 @@ export interface JobManualActionResult {
 }
 
 export interface PlanRunAbortResult {
-  // 后端权威键（plan_run_abort.py：QUEUED/PRECHECK 分支与 running 分支并集）
+  // #1520 写侧正规化：后端模型五键**恒在**（QUEUED/PRECHECK 分支的
+  // abort_requested_jobs 由缺键统一为空数组——「空」用值表达，#2089 判据）；
+  // phase 实际值域含 'queued'（此前 TS union 漏配，枚举双端对齐修正）。
   plan_run_id: number;
   status: string;
-  phase?: 'precheck' | 'running';
-  aborted_jobs?: number[];
-  abort_requested_jobs?: number[];
+  phase: 'precheck' | 'running' | 'queued';
+  aborted_jobs: number[];
+  abort_requested_jobs: number[];
 }
 
 export interface PlanRunDispatchRetryResult {
   plan_run_id: number;
   status: string;
-  dispatch_state?: PlanDispatchState;
+  /** #1520 写侧正规化：唯一返回路径恒带 dispatch_state。 */
+  dispatch_state: PlanDispatchState;
 }
 
 // ─── ResourcePool ────────────────────────────────────────────────────────────────

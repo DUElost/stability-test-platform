@@ -28,7 +28,10 @@ from backend.api.schemas.plan_run import (
     PlanRunDevicesOut,
     PlanRunEventsOut,
     PlanRunLogEventsOut,
+    PlanRunAbortSummaryOut,
+    PlanRunArchiveTriggerOut,
     PlanRunDetailOut,
+    PlanRunDispatchRetrySummaryOut,
     PlanRunJobArtifactOut,
     PlanRunJobsSummaryOut,
     PlanRunListPageOut,
@@ -142,7 +145,8 @@ def list_plan_run_jobs(
 
 
 @router.post(
-    "/plan-runs/{run_id}/abort", response_model=ApiResponse[dict]
+    "/plan-runs/{run_id}/abort",
+    response_model=ApiResponse[PlanRunAbortSummaryOut],
 )
 def abort_plan_run_endpoint(
     run_id: int,
@@ -178,7 +182,7 @@ def abort_plan_run_endpoint(
 
 @router.post(
     "/plan-runs/{run_id}/archive",
-    response_model=ApiResponse[dict],
+    response_model=ApiResponse[PlanRunArchiveTriggerOut],
 )
 async def archive_plan_run_logs_endpoint(
     run_id: int,
@@ -210,7 +214,7 @@ async def archive_plan_run_logs_endpoint(
 
 @router.post(
     "/plan-runs/{run_id}/retry-dispatch",
-    response_model=ApiResponse[dict],
+    response_model=ApiResponse[PlanRunDispatchRetrySummaryOut],
 )
 def retry_plan_run_dispatch_endpoint(
     run_id: int,

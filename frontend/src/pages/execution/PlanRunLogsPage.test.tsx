@@ -9,6 +9,7 @@ import { planRunKeys } from '@/utils/api/queryKeys';
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   getRun: vi.fn(),
+  getSummary: vi.fn(),
   getEvents: vi.fn(),
   toast: { error: vi.fn(), success: vi.fn() },
 }));
@@ -30,6 +31,7 @@ vi.mock('@/utils/api', () => ({
   api: {
     planRuns: {
       get: mocks.getRun,
+      getSummary: mocks.getSummary,
       getEvents: mocks.getEvents,
     },
   },
@@ -56,6 +58,22 @@ function renderPage() {
   );
   // #823：返回 client 供断言查询配置
   return queryClient;
+}
+
+/** #2623：页面只读 summary 的两个标量（status / plan_name），载荷形状在此唯一维护。 */
+function summaryPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    plan_run_id: 12,
+    status: 'RUNNING',
+    plan_name: 'scale-8280dd0c',
+    total_jobs: 3,
+    status_counts: { RUNNING: 1, COMPLETED: 2 },
+    pass_rate: 0.6667,
+    started_at: null,
+    ended_at: null,
+    result_summary: null,
+    ...overrides,
+  };
 }
 
 function eventsPayload(overrides: Record<string, unknown> = {}) {
@@ -85,6 +103,8 @@ function eventsPayload(overrides: Record<string, unknown> = {}) {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.getRun.mockResolvedValue({ id: 12, plan_id: 7, status: 'RUNNING' });
+  // #2623：本页改读聚合端点（不含 jobs）——终态判定与标题都来自这里
+  mocks.getSummary.mockResolvedValue(summaryPayload());
   mocks.getEvents.mockResolvedValue(eventsPayload());
 });
 
@@ -126,9 +146,9 @@ describe('PlanRunLogsPage', () => {
 
   it('#823：runQ 非终态慢轮询推进、终态即停（eventsQ 随之停更）', async () => {
     const qc = renderPage();
-    await waitFor(() => expect(mocks.getRun).toHaveBeenCalled());
+    await waitFor(() => expect(mocks.getSummary).toHaveBeenCalled());
 
-    const opts = qc.getQueryCache().find({ queryKey: planRunKeys.detail(12) })?.options as {
+    const opts = qc.getQueryCache().find({ queryKey: planRunKeys.summary(12) })?.options as {
       refetchInterval?: unknown;
     };
     const fn = opts.refetchInterval as (q: { state: { data?: { status?: string } } }) => unknown;
@@ -249,7 +269,7 @@ afterEach(async () => {
 
 describe('PlanRunLogsPage — CSV 导出（#2028）', () => {
   it('终态 run 全量读完：恰好 1 表头 + N 数据行，且没有任何"如实报告"尾注', async () => {
-    mocks.getRun.mockResolvedValue({ id: 12, plan_id: 7, status: 'SUCCESS' });
+    mocks.getSummary.mockResolvedValue(summaryPayload({ status: 'SUCCESS' }));
     serveEvents(1_234);
     const lines = await renderAndExport();
     // 分块：500 + 500 + 234，第三块不足一块即停
@@ -270,7 +290,7 @@ describe('PlanRunLogsPage — CSV 导出（#2028）', () => {
   });
 
   it('命中 20 000 行上限：不再继续翻页，且 CSV 里明确写了被截断', async () => {
-    mocks.getRun.mockResolvedValue({ id: 12, plan_id: 7, status: 'SUCCESS' });
+    mocks.getSummary.mockResolvedValue(summaryPayload({ status: 'SUCCESS' }));
     serveEvents(EXPORT_MAX_ROWS + 5_000); // 后端还有 5 000 行没给
     const lines = await renderAndExport();
     expect(exportOffsets()).toHaveLength(EXPORT_MAX_ROWS / EXPORT_CHUNK);
@@ -342,7 +362,7 @@ describe('PlanRunLogsPage — CSV 导出（#2028）', () => {
 
 describe('PlanRunLogsPage — #2087', () => {
   it('分块导出失败：提示错误且不产出文件（不再 unhandled rejection 静默失败）', async () => {
-    mocks.getRun.mockResolvedValue({ id: 12, plan_id: 7, status: 'SUCCESS' });
+    mocks.getSummary.mockResolvedValue(summaryPayload({ status: 'SUCCESS' }));
     // 页面自身的 limit=50 查询照常（否则事件流渲染成错误态、导出按钮不出现），
     // 只让**导出分块**（limit=EXPORT_CHUNK）失败。
     mocks.getEvents.mockImplementation(
@@ -367,7 +387,7 @@ describe('PlanRunLogsPage — #2087', () => {
   });
 
   it('导出用输入框可见值：防抖窗口内点导出不得用上一个关键词', async () => {
-    mocks.getRun.mockResolvedValue({ id: 12, plan_id: 7, status: 'SUCCESS' });
+    mocks.getSummary.mockResolvedValue(summaryPayload({ status: 'SUCCESS' }));
     serveEvents(1);
     stubBlobUrl();
     renderPage();
@@ -387,7 +407,7 @@ describe('PlanRunLogsPage — #2087', () => {
   });
 
   it('搜索值未变化（改回原词）不得复位分页', async () => {
-    mocks.getRun.mockResolvedValue({ id: 12, plan_id: 7, status: 'SUCCESS' });
+    mocks.getSummary.mockResolvedValue(summaryPayload({ status: 'SUCCESS' }));
     serveEvents(150);
     renderPage();
     const input = await screen.findByTestId('event-search-input');
@@ -421,5 +441,35 @@ describe('PlanRunLogsPage — #2087', () => {
       (call) => (call[1] as { offset?: number }).offset,
     );
     expect(offsets[offsets.length - 1]).toBe(50);
+  });
+});
+
+/**
+ * #2623：日志页只读两个标量（`status` 决定停不停轮、`plan_name` 决定标题），
+ * 却一直在拉内嵌**全量 jobs** 的 detail——dev 实测 510 job 时 193,866/196,041 B
+ * ≈ 98.9% 无人消费，而非终态期间每 30s 付一次这笔钱，正落在大 run 运行、
+ * 控制面最忙的窗口（与 #703 同一条失效路径的放大器）。
+ * 判据落在页面上而不是端点上：换成 detail 会立刻红，光看后端测不出"谁在用"。
+ */
+describe('PlanRunLogsPage 载荷来源（#2623）', () => {
+  it('只打 summary，不再打 detail', async () => {
+    renderPage();
+    await waitFor(() => expect(mocks.getSummary).toHaveBeenCalledWith(12));
+    expect(mocks.getRun).not.toHaveBeenCalled();
+  });
+
+  it('标题来自 summary 的 plan_name（缺它才会退化成 #id）', async () => {
+    renderPage();
+    await waitFor(() =>
+      expect(document.title).toContain('scale-8280dd0c · 日志'),
+    );
+  });
+
+  it('刷新按钮失效的是 summary 键——留着 detail 键会让刷新静默失效', async () => {
+    renderPage();
+    await waitFor(() => expect(mocks.getSummary).toHaveBeenCalledTimes(1));
+    fireEvent.click(await screen.findByTestId('plan-run-refresh-btn'));
+    await waitFor(() => expect(mocks.getSummary).toHaveBeenCalledTimes(2));
+    expect(mocks.getRun).not.toHaveBeenCalled();
   });
 });

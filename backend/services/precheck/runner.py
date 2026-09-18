@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from backend.core.audit import record_audit
+from backend.api.schemas.plan_run import PlanRunDispatchRetrySummaryOut
 from backend.core.database import SessionLocal
 from backend.core.metrics import record_dispatch_gate
 from backend.models.enums import PlanRunStatus
@@ -374,7 +375,7 @@ def retry_plan_run_dispatch(
     *,
     triggered_by: str,
     audit_user_id: int | None = None,
-) -> dict:
+) -> PlanRunDispatchRetrySummaryOut:
     """Reset a failed dispatch and return it to the admission queue."""
     from backend.models.job import JobInstance
 
@@ -486,11 +487,11 @@ def retry_plan_run_dispatch(
         "plan_run_dispatch_retry_queued plan_run=%d triggered_by=%s",
         run_id, triggered_by,
     )
-    return {
-        "plan_run_id": run_id,
-        "status": PlanRunStatus.QUEUED.value,
-        "dispatch_state": run_ctx["dispatch_state"],
-    }
+    return PlanRunDispatchRetrySummaryOut(
+        plan_run_id=run_id,
+        status=PlanRunStatus.QUEUED.value,
+        dispatch_state=run_ctx["dispatch_state"],
+    )
 
 
 async def precheck_and_dispatch_task(ctx: dict, *, plan_run_id: int) -> None:

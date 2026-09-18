@@ -310,7 +310,7 @@ def test_scale_abort_terminalizes_pending_and_leaves_running_for_reaper():
         out = _abort_scale(seed)
         result = out["result"]
         assert (
-            len(result["aborted_jobs"]) + len(result["abort_requested_jobs"])
+            len(result.aborted_jobs) + len(result.abort_requested_jobs)
             == seed["total_jobs"]
         ), f"一次 abort 必须覆盖整轮 {seed['total_jobs']} 个 job：{result}"
 

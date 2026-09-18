@@ -2,6 +2,11 @@
 
 import pytest
 
+from backend.api.schemas.plan_run import (
+    PlanRunAbortSummaryOut,
+    PlanRunDispatchRetrySummaryOut,
+)
+
 from backend.services.ai_assistant.plan_run_ops import (
     describe_abort_preview,
     normalize_abort_params,
@@ -47,12 +52,11 @@ class TestRunAbortPlanRun:
                 "audit_action": audit_action,
                 "user_id": audit_user_id,
             })
-            return {
-                "plan_run_id": run_id,
-                "status": "FAILED",
-                "aborted_jobs": [1],
-                "phase": "running",
-            }
+            # mock 跟随真契约：#1520 写侧摘要刀后 service 返回模型
+            return PlanRunAbortSummaryOut(
+                plan_run_id=run_id, status="FAILED",
+                aborted_jobs=[1], phase="running",
+            )
 
         monkeypatch.setattr(
             "backend.services.ai_assistant.plan_run_ops.abort_plan_run",
@@ -168,7 +172,9 @@ class TestRunRetryDispatchAudit:
 
         def _fake_retry(run_id, *, db, triggered_by, audit_user_id):
             captured.update({"run_id": run_id, "audit_user_id": audit_user_id})
-            return {"plan_run_id": run_id, "status": "QUEUED"}
+            return PlanRunDispatchRetrySummaryOut(
+                plan_run_id=run_id, status="QUEUED", dispatch_state={},
+            )
 
         monkeypatch.setattr(
             "backend.services.ai_assistant.plan_run_ops.retry_plan_run_dispatch",
