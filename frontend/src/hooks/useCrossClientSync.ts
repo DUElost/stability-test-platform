@@ -25,6 +25,10 @@ export function invalidateProjectSyncQueries(qc: QueryClient) {
 export function invalidateCrossClientSyncQueries(qc: QueryClient) {
   invalidatePlanSyncQueries(qc);
   invalidateProjectSyncQueries(qc);
+  // #2599：hosts 此前不在任何跨端失效路径上——主机在别处新增/改状态后，长驻页面
+  // （选机工作台）只能靠手动刷新。后端没有 host_changed 事件（属 #496 范围），故
+  // 至少在「断线重连 + 后台恢复可见」这两条既有校准路径上把 host 缓存拉新。
+  qc.invalidateQueries({ queryKey: ['hosts'] });
 }
 
 /**

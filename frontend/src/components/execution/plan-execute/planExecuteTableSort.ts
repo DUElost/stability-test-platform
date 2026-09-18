@@ -1,6 +1,7 @@
 import type { ReadinessDevice } from '@/utils/planExecuteReadiness';
 import type { HostLabelLookup } from './planExecuteSelection';
 import { compareDevicesStable } from './planExecuteSelection';
+import { hostLabel } from '@/utils/hostDisplay';
 
 export type DeviceSortKey = 'serial' | 'host' | 'model' | 'version';
 export type SortDir = 'asc' | 'desc';
@@ -26,10 +27,10 @@ export function formatTableSortParam(sort: DeviceTableSort | null | undefined): 
   return `${sort.key}:${sort.dir}`;
 }
 
-function hostLabel(device: ReadinessDevice, hostMap: HostLabelLookup): string {
+function deviceHostLabel(device: ReadinessDevice, hostMap: HostLabelLookup): string {
   const hostId = String(device.host_id ?? 'unassigned');
   const host = hostMap.get(hostId);
-  return host?.ip || host?.name || (hostId === 'unassigned' ? '未分配节点' : hostId);
+  return hostLabel(host, hostId);
 }
 
 function compareByKey(
@@ -42,7 +43,7 @@ function compareByKey(
     case 'serial':
       return a.serial.localeCompare(b.serial, undefined, { sensitivity: 'base' });
     case 'host':
-      return hostLabel(a, hostMap).localeCompare(hostLabel(b, hostMap), undefined, {
+      return deviceHostLabel(a, hostMap).localeCompare(deviceHostLabel(b, hostMap), undefined, {
         sensitivity: 'base',
         numeric: true,
       });

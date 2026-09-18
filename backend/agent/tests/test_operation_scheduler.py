@@ -11,6 +11,31 @@ from backend.agent.operation_scheduler import (
 )
 
 
+
+def test_wait_until_fails_loudly_on_timeout():
+    """自证（#2595 同族）：有界轮询的**上界**必须真的会响。
+
+    否则「把 sleep 换成 _wait_until」只是换个名字的空转——条件永不满足时测试会一路
+    往下跑，竞争照旧（等到真正需要它的那一天才发现）。
+    """
+    with pytest.raises(pytest.fail.Exception):
+        _wait_until(lambda: False, timeout=0.1, what="永假条件")
+
+
+def _wait_until(pred, *, timeout: float = 2.0, what: str) -> None:
+    """有界轮询（#2595 同族）：等**可观测条件**，不睡固定毫秒。
+
+    本文件本来就有这个惯例（`while s.waiter_count == 0 and time.time() < deadline`），
+    只是多数位置还写着 `time.sleep(0.1) # ensure ...` —— 机器忙时那 0.1s 不够就随机红，
+    而这个套件在 **PR 路径**上（flake 直接卡合入）。超时即 fail 并说明等的是什么。
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if pred():
+            return
+        time.sleep(0.005)
+    pytest.fail(f"等待超时（{timeout}s）：{what}")
+
 class TestOperationScheduler:
     def test_snapshot_retains_short_lived_contention_high_water_marks(self):
         s = OperationScheduler(max_concurrent=1)
@@ -64,7 +89,7 @@ class TestOperationScheduler:
 
         t = threading.Thread(target=waiter)
         t.start()
-        time.sleep(0.1)
+        _wait_until(lambda: s.waiter_count == 1, what="等待者进入排队")
         assert result == []  # still waiting
         p1.release()
         t.join(timeout=2)
@@ -98,7 +123,7 @@ class TestOperationScheduler:
         t = threading.Thread(target=waiter)
         t.start()
         assert started.wait(timeout=2)
-        time.sleep(0.1)  # ensure device 2 is queued
+        _wait_until(lambda: 2 in s.waiting_devices, what="设备 2 进入排队")
         with pytest.raises(PermitDenied, match="already waiting"):
             s.acquire(2)
         s.cancel_device(2)
@@ -119,7 +144,7 @@ class TestOperationScheduler:
 
         t = threading.Thread(target=waiter)
         t.start()
-        time.sleep(0.1)
+        _wait_until(lambda: 2 in s.waiting_devices, what="设备 2 进入排队（取消前）")
         s.cancel_device(2)
         t.join(timeout=2)
         assert result == ["denied"]
@@ -156,8 +181,7 @@ class TestOperationScheduler:
 
         t = threading.Thread(target=waiter)
         t.start()
-        time.sleep(0.15)
-        assert 40 in s.waiting_devices
+        _wait_until(lambda: 40 in s.waiting_devices, what="设备 40 进入排队")
 
         holder.release()  # promotes 40 into _pending_handoff
         assert in_post_wake.wait(timeout=2)
@@ -201,7 +225,7 @@ class TestOperationScheduler:
         threads = [threading.Thread(target=waiter, args=(i + 2,)) for i in range(2)]
         for t in threads:
             t.start()
-        time.sleep(0.15)
+        _wait_until(lambda: s.waiter_count == 2, what="两个等待者都已排队")
         s.shutdown()
         for t in threads:
             t.join(timeout=3)
@@ -231,7 +255,7 @@ class TestOperationScheduler:
 
         t = threading.Thread(target=waiter)
         t.start()
-        time.sleep(0.1)
+        _wait_until(lambda: s.waiter_count == 1, what="等待者进入排队（提额前）")
         s.set_max_concurrent(2)
         t.join(timeout=2)
         assert result == ["got"]

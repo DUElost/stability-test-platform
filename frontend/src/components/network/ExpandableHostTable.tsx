@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, Fragment } from 'react';
 import { cn } from '@/lib/utils';
+import { BulkBarSpacer } from '@/components/ui/bulk-action-bar';
 import { Progress } from '@/components/ui/progress';
 import {
   Table,
@@ -976,11 +977,7 @@ export function ExpandableHostTable({
 
         {/* 全选后底部悬浮操作条会挡住最后一行；用真实占位撑开滚动，避免与 PageContainer lg:p-8 抢 padding */}
         {selectable && selectedIds && selectedIds.size > 0 && (
-          <div
-            data-testid="host-table-selection-spacer"
-            aria-hidden
-            className="h-40 shrink-0"
-          />
+          <BulkBarSpacer testId="host-table-selection-spacer" />
         )}
       </div>
     </TooltipProvider>

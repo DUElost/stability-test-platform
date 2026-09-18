@@ -9,7 +9,8 @@ export interface DeviceNodeSummary {
   total: number;
   selected: number;
   available: number;
-  online: boolean;
+  /** true=ONLINE / false=已知非在线 / **null=主机记录缺失**（缓存过旧或已删，未知≠在线，#2599） */
+  online: boolean | null;
   busy: number;
   healthStatus: string | null;
   healthReasons: string[];
@@ -77,16 +78,22 @@ export function DeviceNodeRail({
           {nodes.map((node) => {
             const unschedulable = node.healthStatus === 'UNSCHEDULABLE';
             const degraded = node.healthStatus === 'DEGRADED';
-            const dotCls = !node.online || unschedulable
-              ? 'bg-destructive'
-              : degraded
-                ? 'bg-warning'
-                : 'bg-success';
-            const dotTitle = node.healthReasons.length
-              ? `${node.healthStatus}：${node.healthReasons.join('、')}`
-              : node.online
-                ? '在线'
-                : '离线';
+            // #2599：未知主机不再走「在线」——中性灰点 + 如实 tooltip，不冒充健康也不冒充离线
+            const onlineUnknown = node.online === null;
+            const dotCls = onlineUnknown
+              ? 'bg-muted-foreground/40'
+              : !node.online || unschedulable
+                ? 'bg-destructive'
+                : degraded
+                  ? 'bg-warning'
+                  : 'bg-success';
+            const dotTitle = onlineUnknown
+              ? '节点信息未知（主机记录缺失）'
+              : node.healthReasons.length
+                ? `${node.healthStatus}：${node.healthReasons.join('、')}`
+                : node.online
+                  ? '在线'
+                  : '离线';
             return (
               <button
                 key={node.id}

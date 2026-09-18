@@ -31,6 +31,20 @@ from backend.agent.operation_scheduler import (
 # ── 1. Startup static order ───────────────────────────────────────────────────
 
 
+
+def _wait_queued(scheduler, device_id: int, timeout: float = 2.0) -> None:
+    """等设备**真的进入排队**（#2602：可观测条件 + 上界，不睡固定毫秒）。
+
+    本文件上方已有同一形态（`while i not in s.waiting_devices and time.time() < deadline`）；
+    裸 `time.sleep(0.15)` 在忙机器上不够就随机红，而本套件在 PR 路径上。
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if device_id in scheduler.waiting_devices:
+            return
+        time.sleep(0.005)
+    raise AssertionError(f"设备 {device_id} 未在 {timeout}s 内进入排队")
+
 class TestStartupOrder:
     def test_coordinator_constructed_before_start(self):
         """Verify in main() source that coordinator = HostRunCoordinator(...)
@@ -478,7 +492,7 @@ class TestAbortPermitSemantics:
 
     def test_cancel_while_waiting_denies_permit(self):
         """cancel_device fires on a still-queued waiter → PermitDenied."""
-        import threading, time
+        import threading
 
         s = OperationScheduler(max_concurrent=1)
         s.acquire(99)  # hold the only slot
@@ -492,7 +506,8 @@ class TestAbortPermitSemantics:
 
         t = threading.Thread(target=waiter)
         t.start()
-        time.sleep(0.15)  # waiter is queued
+        # #2602：等「已排队」这个可观测条件，不睡固定毫秒（同文件上方已有的形态）
+        _wait_queued(s, 42)
         s.cancel_device(42)  # cancel while still waiting
         t.join(timeout=3)
         assert denied == [1]
@@ -542,7 +557,7 @@ class TestAbortPermitSemantics:
 
     def test_cancel_after_promote_via_coordinator_releases_slot(self):
         """WAITING_EXECUTION_SLOT + promoted handoff → cancel releases cap."""
-        import threading, time
+        import threading
 
         in_post_wake = threading.Event()
         allow_finish = threading.Event()
@@ -575,7 +590,7 @@ class TestAbortPermitSemantics:
 
         t = threading.Thread(target=waiter)
         t.start()
-        time.sleep(0.15)
+        _wait_queued(s, 40)
         holder.release()
         assert in_post_wake.wait(timeout=2)
         assert s.held == 1
@@ -619,7 +634,8 @@ class TestAbortPermitSemantics:
 
         t = threading.Thread(target=waiter)
         t.start()
-        time.sleep(0.15)
+        # 等的是**设备 55**（waiter 用 s.acquire(55) 排队）；400 是 job id，不在 waiting_devices 里
+        _wait_queued(s, 55)
 
         # Correct lease-lost order: cleanup first, then cancel
         active_job_ids.discard(400)
