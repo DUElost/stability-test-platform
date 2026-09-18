@@ -46,7 +46,7 @@ class TestPatrolJobNotRunningRecovery:
             execute_actions=execute_actions,
         )
 
-        with patch("backend.agent.main.run_recovery_sync_if_needed") as mock_sync:
+        with patch("backend.agent.recovery_executor.run_recovery_sync_if_needed") as mock_sync:
             handler(42)
             handler(42)
             handler(99)
@@ -123,7 +123,7 @@ class TestPatrolJobNotRunningRecovery:
 
         captured = MagicMock()
         root = _install_agent_source(tmp_path)
-        (root / "agent" / "main.py").write_text(
+        (root / "agent" / "recovery_executor.py").write_text(
             "def run_recovery_sync_if_needed(**kwargs):\n"
             "    return None\n",
             encoding="utf-8",
@@ -133,7 +133,7 @@ class TestPatrolJobNotRunningRecovery:
             try:
                 _purge_toplevel_agent()
                 mod = importlib.import_module("agent.patrol_recovery")
-                main_mod = importlib.import_module("agent.main")
+                reco_mod = importlib.import_module("agent.recovery_executor")
                 handler = mod.build_patrol_job_not_running_handler(
                     api_url="http://prod",
                     host_id="h",
@@ -142,7 +142,7 @@ class TestPatrolJobNotRunningRecovery:
                     local_db=MagicMock(),
                     execute_actions=MagicMock(),
                 )
-                with patch.object(main_mod, "run_recovery_sync_if_needed", captured):
+                with patch.object(reco_mod, "run_recovery_sync_if_needed", captured):
                     handler(7)
             finally:
                 _purge_toplevel_agent()

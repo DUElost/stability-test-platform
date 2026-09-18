@@ -353,7 +353,7 @@ class TestRollbackFailedClaim(unittest.TestCase):
     leave a busy device placeholder / fencing residue behind."""
 
     def test_rollback_frees_device_and_active_state(self):
-        from backend.agent.main import _rollback_failed_claim
+        from backend.agent.recovery_executor import _rollback_failed_claim
 
         lock = MagicMock()
         active_job_ids = {101}
@@ -385,7 +385,7 @@ class TestRollbackFailedClaim(unittest.TestCase):
         local_db.delete_active_job.assert_called_once_with(101)
 
     def test_rollback_survives_no_explicit_device(self):
-        from backend.agent.main import _rollback_failed_claim
+        from backend.agent.recovery_executor import _rollback_failed_claim
 
         lease_renewer = MagicMock()
         lease_renewer.clear_fencing_token_if_current.return_value = None

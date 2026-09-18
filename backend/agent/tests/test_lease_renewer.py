@@ -210,7 +210,7 @@ def test_structured_logging_includes_agent_instance_id(caplog):
 
 def test_recovery_executor_accepts_lease_renewer_param():
     """execute_recovery_actions_impl uses lease_renewer= kwarg (not lock_manager)."""
-    from backend.agent.main import execute_recovery_actions_impl
+    from backend.agent.recovery_executor import execute_recovery_actions_impl
 
     lease_renewer = MagicMock()
     local_db = MagicMock()
