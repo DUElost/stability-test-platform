@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
+from backend.storage_families import RUN_FAMILIES
 from backend.scheduler import cron_scheduler
 
 
@@ -359,18 +360,19 @@ def test_job_log_signal_and_dle_deleted_with_run(
 
 
 def _make_nfs_dirs(root, run_id):
-    (root / "devices" / str(run_id) / "172-21-1-1").mkdir(parents=True)
-    (root / "devices" / str(run_id) / "172-21-1-1" / "evt.log").write_text("x")
-    (root / "dedup" / str(run_id) / "mtk").mkdir(parents=True)
-    (root / "dedup" / str(run_id) / "mtk" / "result.xls").write_text("y")
-    (root / "jira" / str(run_id) / "extract").mkdir(parents=True)
-    (root / "jira" / str(run_id) / "extract" / "bundle.zip").write_text("z")
-    (root / "_meta" / str(run_id)).mkdir(parents=True)
-    (root / "_meta" / str(run_id) / "172-21-1-1.json").write_text("{}")
+    """为**每一个** run 主键族建一个可辨识的目录树（清单来自单一来源，#2188）。
+
+    刻意不写死族名：新增一族时本夹具自动覆盖它，purge 漏桶会立刻在下面两条用例里变红，
+    而不是像 ``_meta`` 那样等一次只读审计才发现「有清理、无观测」。
+    """
+    for family in RUN_FAMILIES:
+        leaf = root / family / str(run_id) / "payload.bin"
+        leaf.parent.mkdir(parents=True, exist_ok=True)
+        leaf.write_text(f"{family}")
 
 
 def test_nfs_run_dirs_purged_with_db_row(cleanup_env, tmp_path, monkeypatch):
-    """#1521/#1698: DB 行删除前清理 devices/dedup/jira/{id}/（NFS 轨 TTL）。"""
+    """#1521/#1698/#2188: DB 行删除前清理**每一个** run 主键族的 ``{id}/``（NFS 轨 TTL）。"""
     db, plan = cleanup_env
     monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
     run = _mk_run(db, plan, status="SUCCESS", age_days=10)
@@ -378,10 +380,8 @@ def test_nfs_run_dirs_purged_with_db_row(cleanup_env, tmp_path, monkeypatch):
 
     cron_scheduler.run_retention_cleanup()
 
-    assert not (tmp_path / "devices" / str(run.id)).exists()
-    assert not (tmp_path / "dedup" / str(run.id)).exists()
-    assert not (tmp_path / "jira" / str(run.id)).exists()
-    assert not (tmp_path / "_meta" / str(run.id)).exists()
+    for family in RUN_FAMILIES:
+        assert not (tmp_path / family / str(run.id)).exists(), family
     assert db.query(PlanRun).filter(PlanRun.id == run.id).first() is None
 
 
@@ -394,9 +394,8 @@ def test_active_run_nfs_dirs_kept(cleanup_env, tmp_path, monkeypatch):
 
     cron_scheduler.run_retention_cleanup()
 
-    assert (tmp_path / "devices" / str(run.id)).exists()
-    assert (tmp_path / "jira" / str(run.id)).exists()
-    assert (tmp_path / "_meta" / str(run.id)).exists()
+    for family in RUN_FAMILIES:
+        assert (tmp_path / family / str(run.id)).exists(), family
     assert db.query(PlanRun).filter(PlanRun.id == run.id).first() is not None
 
 
