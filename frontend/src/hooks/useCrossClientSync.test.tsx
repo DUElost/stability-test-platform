@@ -77,6 +77,9 @@ describe('invalidateCrossClientSyncQueries', () => {
 
     invalidateCrossClientSyncQueries(qc);
 
-    expect(spy).toHaveBeenCalledTimes(8);
+    // 9 = plans/plan/projects/project/devices/project-devices/projects-for-plan-editor/
+    // project-models + **hosts**（#2599：host 此前不在任何跨端失效路径上）
+    expect(spy).toHaveBeenCalledTimes(9);
+    expect(spy.mock.calls.map((call) => call[0]?.queryKey?.[0])).toContain('hosts');
   });
 });

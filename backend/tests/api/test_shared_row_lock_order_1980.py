@@ -33,11 +33,11 @@ from sqlalchemy import select, text
 
 from backend.api.routes.agent_api import (
     _CoordinatorHeartbeatIn,
-    _CoordinatorHeartbeatJob,
     _ExtendLockIn,
     coordinator_heartbeat,
     extend_job_lock,
 )
+from backend.services.agent_coordinator_heartbeat import _CoordinatorHeartbeatJob
 from backend.core.database import AsyncSessionLocal, SessionLocal, async_engine
 from backend.models.device_lease import DeviceLease
 from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType

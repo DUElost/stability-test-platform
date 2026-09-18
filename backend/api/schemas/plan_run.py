@@ -105,6 +105,42 @@ class PlanRunListStatsOut(BaseModel):
     failed: int
 
 
+# ── GET /plan-runs/{id}/summary · .../jobs/{id}/artifacts（#1520 正规化）──────
+
+
+class PlanRunJobsSummaryOut(BaseModel):
+    """``GET /plan-runs/{id}/summary`` 的 Job 状态聚合。
+
+    命名与 ``routes/plans.py`` 的 ``PlanRunSummaryOut``（**Plan 视角的 run 摘要行**）
+    刻意区分——#82 的教训：同名模型会把 OpenAPI component key 逼回模块路径消歧。
+    形状由 ``services/plan_run_summary`` 产出；TS 对拍 = ``types.ts::PlanRunSummary``。
+    """
+
+    plan_run_id: int
+    status: str
+    total_jobs: int
+    status_counts: dict[str, int]
+    pass_rate: float
+    started_at: Optional[str] = None
+    ended_at: Optional[str] = None
+    result_summary: Optional[dict] = None
+
+
+class PlanRunJobArtifactOut(BaseModel):
+    """``GET /plan-runs/{run}/jobs/{job}/artifacts`` 单条产物登记。
+
+    TS 对拍 = ``types.ts::JobArtifactEntry``（``filename`` 由 storage_uri 尾段派生）。
+    """
+
+    id: int
+    job_id: int
+    filename: Optional[str] = None
+    artifact_type: str
+    size_bytes: Optional[int] = None
+    checksum: Optional[str] = None
+    created_at: Optional[str] = None
+
+
 class PlanRunListPageOut(BaseModel):
     """GET /plan-runs 分页壳；items 为当前页，total 为筛后总数。"""
 

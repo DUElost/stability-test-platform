@@ -63,6 +63,28 @@
   （c）本身就在注释里承认窗口：「§1.1 后并发会话可能又动了工作树」。**校验与动作之间永远隔着
   一个可被别家会话切走的窗口**——这是结构问题，不是纪律问题。
 
+- **2026-09-17（#735）**：**已合入 main 的告警规则在生产上静默失效**，两起，都不是"有人改坏了"，
+  而是没有任何东西比对过「仓库声称的事实」与「盘上／运行中的事实」：
+
+  ① #2394 的两条规则 `StabilityUnisocUnresolvedBacklog` / `StabilityUnisocDirAbandonedRegression`
+  表达式引用的 `stability_reconciler_unresolved_dirs`、`stability_reconciler_dirs_abandoned_total`
+  在生产 `GET /metrics-internal` 上**根本不存在**（实测 `grep -c` = 0；Prometheus
+  `count(...)` = NO DATA）——**因为运行中的后端不是 main**（主检出当时被别家 Execution 切在特性分支）。
+  而当时的所有信号都是绿的：`promtool check rules` 21 rules SUCCESS、`/api/v1/rules` 加载 24 条、
+  unhealthy 为空。⇒ 规则形同虚设，且没有任何一层能发现「规则引用的指标没人生产」。
+
+  ② `/etc/default/prometheus-node-exporter` 装的是发行版出厂默认，`--collector.nfsd` **从未生效**
+  ⇒ #2197 为 `/storage` 页要的 `node_nfsd_*` 一直为空，而站点安装报告照样给 `monitoring_ready`
+  PASS（它只证明服务起了、`/-/ready` 通）。补齐后实测 `node_nfsd_*` 90 行、
+  `node_nfsd_connections_total=48`。
+
+  本单为此补了三样东西：规则文件与守卫单元进 `site_config` 安装清单（#2488）、只读比对器
+  `tools/dev/check-monitoring-assets.py` 接进 `check-deploy-source.sh` 做 WARN（#2517）、
+  以及退役判据守卫 `stp-script-guard.timer`。但**它们仍然受本节末条限制**：比对器读的是
+  `--repo-root` 那棵工作树，检出可被别家会话随时切走——第一次上线它就因此报出一条**假漂移**
+  （生产规则 19 条 vs 那棵树里的旧源文件），需人工判断事实源是否可信。这正是"结构问题而非
+  纪律问题"的又一例：**工具能比对，但它没有权限保证被比对的就是部署源**。
+
 ## 4. 需要裁决的点（本稿只给判据与取向，不替 owner 决定）
 
 - **D1 部署源是否必须与开发工作区物理分离？**

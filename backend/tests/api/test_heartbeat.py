@@ -1,7 +1,10 @@
 """
 Tests for heartbeat API routes
 """
+import logging
 from datetime import datetime, timedelta, timezone
+
+HEARTBEAT_LOGGER = "backend.api.routes.heartbeat"
 
 from backend.models.enums import DeviceStatus, HostStatus
 from backend.models.host import Device
@@ -625,3 +628,117 @@ class TestHeartbeatDevicePlatform:
         assert response.status_code == 200
         device = db_session.query(Device).filter(Device.serial == "PLATFORM_ABSENT").first()
         assert device.platform is None
+
+
+class TestHeartbeatHostReassignment:
+    """#2569：设备被另一台 host 抢走时，日志里必须看得见**成因**。
+
+    保护链原本只在两处：有 ACTIVE 租约时 `device_host_reassignment_blocked`（阻断），
+    以及派发侧 `device_host_drift` 整批 fatal（后果）。中间那段「无租约窗口里的改绑」
+    只有**占位 serial** 才留日志——非占位 serial 跨 host 漂移是彻底静默的，事后
+    只能看见 fatal 的果，查不到是谁在争。本单**只补日志、不改语义**：归属仍按
+    最新心跳走（这与 #1356 对占位值的态度一致）。
+    """
+
+    @staticmethod
+    def _beat(client, ip, serial):
+        return client.post(
+            "/api/v1/heartbeat",
+            json={
+                "host_id": 0,  # 自动注册哨兵：按 IP 建/找 host（与夹具同一条路径）
+                "status": "ONLINE",
+                "host": {"ip": ip},
+                "devices": [{"serial": serial, "adb_state": "device",
+                             "adb_connected": True}],
+            },
+        )
+
+    def test_non_placeholder_reassignment_is_logged(
+        self, client, db_session, caplog,
+    ):
+        serial = "RealSerial-2569-A"
+        caplog.set_level(logging.WARNING, logger=HEARTBEAT_LOGGER)
+        assert self._beat(client, "198.18.0.61", serial).status_code == 200
+        first = db_session.query(Device).filter(Device.serial == serial).one()
+        owner = first.host_id
+        # 同一台 host 再报一次：不该出现改绑日志（否则这条日志就成了每拍噪声）
+        caplog.clear()
+        self._beat(client, "198.18.0.61", serial)
+        assert not [r for r in caplog.records if "device_host_reassigned" in r.getMessage()]
+
+        caplog.clear()
+        assert self._beat(client, "198.18.0.62", serial).status_code == 200
+        db_session.expire_all()
+        moved = db_session.query(Device).filter(Device.serial == serial).one()
+        assert moved.host_id != owner, (
+            "语义前提不成立：无租约时归属本应按最新心跳改绑"
+        )
+        hits = [r.getMessage() for r in caplog.records
+                if "device_host_reassigned" in r.getMessage()]
+        assert len(hits) == 1, (
+            f"非占位 serial 被跨 host 改绑必须留一条成因日志：{hits}"
+        )
+        msg = hits[0]
+        assert serial in msg and f"{owner}->" in msg.replace(f"{owner} ->", f"{owner}->"), (
+            f"日志要能回答「哪台设备、从哪漂到哪」：{msg}"
+        )
+        assert "placeholder_serial_host_drift" not in msg, (
+            "非占位值不该被报成占位值——那会把运维引向刷机而不是查两台 agent"
+        )
+
+    def test_placeholder_reassignment_keeps_its_own_event(
+        self, client, db_session, caplog,
+    ):
+        """占位值走的是**另一个**事件名（#1356 的处置），不能被本单合并掉。
+
+        两条路径的运维动作不同：占位值建议刷机/换线让设备上报真实 serial；非占位值
+        说明两台 agent 在抢同一台真机。合并成一个事件就只剩一个模糊的告警。
+        """
+        serial = "0123456789ABCDEF"  # 已知占位值
+        caplog.set_level(logging.WARNING, logger=HEARTBEAT_LOGGER)
+        self._beat(client, "198.18.0.63", serial)
+        caplog.clear()
+        self._beat(client, "198.18.0.64", serial)
+        msgs = [r.getMessage() for r in caplog.records
+                if "placeholder_serial_host_drift" in r.getMessage()]
+        assert len(msgs) == 1, msgs
+        assert not [r for r in caplog.records
+                    if "device_host_reassigned" in r.getMessage()], (
+            "占位值不该被当成「两台 agent 抢真机」"
+        )
+
+    def test_leased_device_is_blocked_before_it_is_reassigned(
+        self, client, db_session, caplog, sample_host, sample_device,
+    ):
+        """租约保护仍是第一道：被 block 的行不得再打改绑日志（它没被改绑）。"""
+        from backend.models.device_lease import DeviceLease
+        from backend.models.enums import LeaseStatus, LeaseType
+
+        now = datetime.now(timezone.utc)
+        lease = DeviceLease(
+            device_id=sample_device.id,
+            job_id=None,
+            host_id=sample_device.host_id,
+            lease_type=LeaseType.JOB.value,
+            status=LeaseStatus.ACTIVE.value,
+            fencing_token=f"{sample_device.id}:1",
+            lease_generation=1,
+            agent_instance_id=sample_device.host_id,
+            acquired_at=now,
+            renewed_at=now,
+            expires_at=now + timedelta(minutes=10),
+        )
+        db_session.add(lease)
+        db_session.commit()
+        caplog.set_level(logging.WARNING, logger=HEARTBEAT_LOGGER)
+        self._beat(client, "198.18.0.65", sample_device.serial)
+        msgs = [r.getMessage() for r in caplog.records]
+        assert any("device_host_reassignment_blocked" in m for m in msgs), msgs
+        assert not any("device_host_reassigned" in m for m in msgs), (
+            "阻断路径已经 return/continue，不该再落一条「改绑成功」的日志"
+        )
+        db_session.expire_all()
+        kept = db_session.query(Device).filter(
+            Device.serial == sample_device.serial
+        ).one()
+        assert kept.host_id == sample_device.host_id

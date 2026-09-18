@@ -368,6 +368,75 @@ _MODEL_PAIRS: tuple[tuple[str, str, str, str], ...] = (
         "frontend/src/utils/api/types.ts",
         "WatcherCategory",
     ),
+    # #1520 对拍批 1：opt-in plan_runs.py 时豁免的 9 个模型全部双向对拍通过并转正
+    # （唯一漂移 = PlanRun.jobs：wire 一直在、TS 漏声明，已在 types.ts 补可选字段）。
+    (
+        "backend/api/schemas/plan_run.py",
+        "PlanRunDetailOut",
+        "frontend/src/utils/api/types.ts",
+        "PlanRun",
+    ),
+    (
+        "backend/api/schemas/plan_run.py",
+        "JobInstanceOut",
+        "frontend/src/utils/api/types.ts",
+        "PlanJobInstance",
+    ),
+    (
+        "backend/api/schemas/plan_run.py",
+        "PlanChainOut",
+        "frontend/src/utils/api/types.ts",
+        "PlanChain",
+    ),
+    (
+        "backend/api/schemas/plan_run.py",
+        "PlanRunDevicesOut",
+        "frontend/src/utils/api/types.ts",
+        "PlanRunDevicesPayload",
+    ),
+    (
+        "backend/api/schemas/plan_run.py",
+        "PlanRunEventsOut",
+        "frontend/src/utils/api/types.ts",
+        "PlanRunEventsPayload",
+    ),
+    (
+        "backend/api/schemas/plan_run.py",
+        "PlanRunListPageOut",
+        "frontend/src/utils/api/types.ts",
+        "PlanRunListPage",
+    ),
+    (
+        "backend/api/schemas/plan_run.py",
+        "PlanRunTimelineOut",
+        "frontend/src/utils/api/types.ts",
+        "PlanRunTimeline",
+    ),
+    (
+        "backend/api/schemas/plan_run.py",
+        "JobManualActionOut",
+        "frontend/src/utils/api/types.ts",
+        "JobManualActionResult",
+    ),
+    (
+        "backend/api/schemas/case_result.py",
+        "TestCaseResultsPayload",
+        "frontend/src/utils/api/types.ts",
+        "TestCaseResultsPayload",
+    ),
+    # #1520 正规化：summary / job artifacts 从 ApiResponse[dict]/[list] 提升为模型
+    (
+        "backend/api/schemas/plan_run.py",
+        "PlanRunJobsSummaryOut",
+        "frontend/src/utils/api/types.ts",
+        "PlanRunSummary",
+    ),
+    (
+        "backend/api/schemas/plan_run.py",
+        "PlanRunJobArtifactOut",
+        "frontend/src/utils/api/types.ts",
+        "JobArtifactEntry",
+    ),
     # 日志链（#529 归档权威）：GET /plan-runs/{id}/log-events
     (
         "backend/api/schemas/plan_run.py",
@@ -452,6 +521,16 @@ _MODEL_PAIRS: tuple[tuple[str, str, str, str], ...] = (
 #: 可建模的固定形状。台账内的文件必须**实际 == 登记**：条目失效（已正规化或已删除）即红，
 #: 防僵尸豁免——同 ``_DOC_UNCHECKABLE`` 的口径。
 _MODEL_BLINDSPOT: dict[str, set[str]] = {
+    # #1520 形状正规化批第一步：summary/artifacts 已升模型进 `_MODEL_PAIRS`；
+    # 剩余具名模型逐个对拍前按台账显式豁免（下方 `_MODEL_UNREGISTERED`），
+    # 三个仍 `ApiResponse[dict]` 的写侧摘要在此认领盲区。
+    "backend/api/routes/plan_runs.py": {
+        # abort/archive/retry 的 summary 都是服务层运行期拼装的分支 dict
+        # （#2089 的 released_leases 教训）——正规化为模型是后续批，先按台账钉住。
+        "abort_plan_run_endpoint",
+        "archive_plan_run_logs_endpoint",
+        "retry_plan_run_dispatch_endpoint",
+    },
     "backend/api/routes/dedup.py": {
         # `ok(st)`：status 由 RunConsole 运行期组装
         "get_jira_run_status",
@@ -467,6 +546,9 @@ _MODEL_UNREGISTERED: dict[str, str] = {
     # 基类 ``ORMBaseModel`` 在另一文件，``_pydantic_model_fields`` 按口径**显式报错**
     # 而不是静默少收字段。要登记得先扩展跨文件基类解析——独立议题，见台账 I-9。
     "JiraRunOut": "跨文件基类 ORMBaseModel，解析器不静默少收字段",
+    # #1520 对拍批 1（2026-09-18）：opt-in plan_runs.py 时随之入账的 9 条豁免已
+    # 全部双向对拍通过并转正进 `_MODEL_PAIRS`，此清单当前只剩 JiraRunOut（解析器
+    # 跨文件基类限制）。新豁免须写具体失效条件，勿留泛化占位。
 }
 
 #: 允许 `extra="allow"` 的已登记模型（自由 JSONB 段——键集合由写入方决定）。
@@ -650,18 +732,23 @@ def test_typed_endpoints_are_registered_or_reasoned():
     不受本用例约束（理由见 ``test_dict_response_blindspot_is_listed_and_not_stale``）。
     """
     registered = {model for _py, model, _ts, _interface in _MODEL_PAIRS}
+    used_union: set[str] = set()
     for rel in _MODEL_BLINDSPOT:
         used = _route_response_model_names(ROOT / rel)
+        used_union |= used
         unaccounted = used - registered - set(_MODEL_UNREGISTERED)
         assert not unaccounted, (
             f"{rel} 的响应模型 {sorted(unaccounted)} 既未登记 `_MODEL_PAIRS`、"
             "也未在 `_MODEL_UNREGISTERED` 写明原因（登记=纳入双向对拍；不登记=继续盲区）"
         )
-        stale = {m for m in _MODEL_UNREGISTERED if m not in used}
-        assert not stale, (
-            f"{rel} 的 `_MODEL_UNREGISTERED` 项 {sorted(stale)} 已不被任何端点引用——"
-            "豁免理由失效，请登记或删除该条"
-        )
+    # 失效判定必须对**并集**：豁免是全局清单，逐文件判"本文件没用到即失效"会在
+    # opt-in 第二个文件的瞬间误杀第一个文件的合法豁免（单文件时代不可见，#1520
+    # 扩面时暴露）。全局并集仍保证：没有任何已收口端点引用的豁免 = 红。
+    stale = {m for m in _MODEL_UNREGISTERED if m not in used_union}
+    assert not stale, (
+        f"`_MODEL_UNREGISTERED` 项 {sorted(stale)} 已不被任何 opt-in 文件的端点引用——"
+        "豁免理由失效，请登记或删除该条"
+    )
 
 
 def test_registered_models_do_not_open_extra_allow():

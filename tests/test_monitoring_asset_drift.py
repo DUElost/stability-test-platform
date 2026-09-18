@@ -245,29 +245,74 @@ def test_guard_still_passes_when_detector_reports_drift(tmp_path, fake_repo):
 
 # ---------------------------------------------------------------- 事实源标注
 
-def test_source_repo_annotation_warns_off_main(monkeypatch, tmp_path):
-    """回归：`--repo-root` 指向一棵不在 main 上的工作树时，必须自己说出来。
+MAIN_SHA = "f" * 40
 
-    实测骗过一次：主检出被别的 Execution 切在特性分支上，已装的 19 条规则被比对到那棵树里
-    的**旧**源文件，判出一条假 DRIFT。不改退出码（保持 WARN 语义），但要让人一眼看见。
+
+def _fake_git(head_sha=MAIN_SHA, branch=None, has_origin=True):
+    """按子命令分派的假 git——覆盖 describe_source_repo 用到的四条查询。"""
+    def run(cmd, *a, **k):
+        args = list(cmd)
+        sub = " ".join(args[args.index("git") + 3:]) if "git" in args else " ".join(args)
+        if "-f%h" in sub or "--format=%h" in sub:
+            return subprocess.CompletedProcess(cmd, 0, stdout=head_sha[:7], stderr="")
+        if "rev-parse HEAD" in sub:
+            return subprocess.CompletedProcess(cmd, 0, stdout=head_sha, stderr="")
+        if "symbolic-ref" in sub:
+            if branch is None:
+                return subprocess.CompletedProcess(cmd, 1, stdout="",
+                                                   stderr="fatal: ref HEAD is not a symbolic ref")
+            return subprocess.CompletedProcess(cmd, 0, stdout=branch, stderr="")
+        if "rev-parse origin/main" in sub:
+            if not has_origin:
+                return subprocess.CompletedProcess(cmd, 128, stdout="",
+                                                   stderr="fatal: unknown revision")
+            return subprocess.CompletedProcess(cmd, 0, stdout=MAIN_SHA, stderr="")
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="unexpected: " + sub)
+
+    return run
+
+
+@pytest.mark.parametrize(
+    "head_sha,branch,has_origin,expect_warn,expect_in",
+    [
+        # 在 main 且与 origin/main 同内容 ⇒ 可信
+        (MAIN_SHA, "main", True, False, "内容 == origin/main"),
+        # 特性分支但 HEAD 就是 origin/main（刚开分支未提交）⇒ 也不该警告：按名字判是错的
+        (MAIN_SHA, "fix/some-branch", True, False, "内容 == origin/main"),
+        # detached 指向 origin/main（本次做出正确判定的用法）⇒ 可信
+        (MAIN_SHA, None, True, False, "内容 == origin/main"),
+        # 在 main 但落后/未 fetch ⇒ 内容不是 main，必须提示（按分支名判会漏掉这种）
+        ("a" * 40, "main", True, True, "可能假漂移"),
+        # 特性分支且内容不同 ⇒ 提示，并给出两个 SHA 便于定位
+        ("b" * 40, "fix/other", True, True, "可能假漂移"),
+        # 无 origin/main 引用（浅克隆/离线）⇒ 不假装可信
+        (MAIN_SHA, "main", False, True, "无法确认事实源"),
+    ],
+    ids=["main-ok", "branch-same-sha-ok", "detached-ok", "main-stale-warn",
+         "branch-warn", "no-origin-warn"],
+)
+def test_source_repo_trust_is_decided_by_content_not_branch_name(
+        monkeypatch, tmp_path, head_sha, branch, has_origin, expect_warn, expect_in):
+    """回归：判据必须是「HEAD 是否等于 origin/main」，不是分支名。
+
+    按名字判会同时犯两种错：`worktree add --detach origin/main`（本次正确判定用的就是它）
+    与刚开的特性分支被误警告；而「在 main 上但没 fetch」内容已落后 main，却一片祥和。
     """
-    def fake_run(cmd, *a, **k):
-        if "symbolic-ref" in cmd:
-            return subprocess.CompletedProcess(cmd, 0, stdout="fix/some-else\n", stderr="")
-        return subprocess.CompletedProcess(cmd, 0, stdout="abc1234\n", stderr="")
-
-    monkeypatch.setattr(_mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(_mod.subprocess, "run", _fake_git(head_sha, branch, has_origin))
     line = _mod.describe_source_repo(tmp_path)
-    assert "fix/some-else" in line and "abc1234" in line
-    assert "假漂移" in line
+    assert ("⚠" in line) is expect_warn, line
+    assert expect_in in line, line
+    if not expect_warn:
+        assert head_sha[:7] in line, line
 
 
-def test_source_repo_annotation_silent_on_main(monkeypatch, tmp_path):
-    def fake_run(cmd, *a, **k):
-        if "symbolic-ref" in cmd:
-            return subprocess.CompletedProcess(cmd, 0, stdout="main\n", stderr="")
-        return subprocess.CompletedProcess(cmd, 0, stdout="deadbee\n", stderr="")
+def test_source_repo_handles_non_git_root(monkeypatch, tmp_path):
+    """非 git 树（误传路径）必须明说，不能返回一个看起来正常的字符串。"""
+    def nope(cmd, *a, **k):
+        return subprocess.CompletedProcess(cmd, 128, stdout="", stderr="not a git repo")
 
-    monkeypatch.setattr(_mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(_mod.subprocess, "run", nope)
     line = _mod.describe_source_repo(tmp_path)
-    assert "@ main deadbee" in line and "⚠" not in line
+    assert "非 git 树" in line and "⚠" in line
+
+
