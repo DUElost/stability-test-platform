@@ -105,9 +105,21 @@ PRUNE 和 HDD spill force。
 
 > **该 run 无 `merge_result_xls` ⇒ 它的 DLE 行停在 `REMOTE` 是事实终态，不是卡住。**
 
-对无 scan 产物的平台（UNIVIEW）这是常态：merge 无输入 → 无 merge 产物 → extract 空跑
-→ 永不归档。另一个自然边界是 **late-arriving**：事件在 extract 列举之后才变
-`REMOTE`（含历史回填），同样不会被补归档。
+对无 scan 产物的 run 这是常态：merge 无输入 → 无 merge 产物 → extract 空跑 → 永不
+归档（2026-09-19 更正：原文「对 UNIVIEW 平台这是常态、永不归档」已过期——展锐 GT
+工具链配置后，UNISOC run 会产出 `merge_result_xls` 并走**同一**归档链，见下节与
+[ADR-0032 §D10](../adr/ADR-0032-unisoc-mtk-parallel-dedup-pipelines.md)）。另一个
+自然边界是 **late-arriving**：事件在 extract 列举之后才变 `REMOTE`（含历史回填），
+同样不会被补归档。
+
+**平台语义一致性（ADR-0032 §D10，#463 裁决，2026-09-19）**：DLE 终态判定对 MTK /
+UNISOC **同义同判**——`ARCHIVED` 统一为「事件目录已复制进 `jira/{plan_run_id}/`」，
+extract 归档链**无平台分支**。实现层残余差异（不构成状态机差异）：scan 输入来源
+（MTK 厂商外挂脚本 `STP_DEDUP_SCAN_*` vs 展锐 Agent 内建 GT 工具链 `STP_UNISOC_*`）、
+上送触发源（MTK 由 `upload_task` 读 scan xls Path 列标记精选子集 vs 展锐入库即提升
+`UPLOAD_PENDING`，#1957）、merge 输入表头两列命名差异由工具归一（见
+「merge 产物表头契约」）。`REMOTE` 停留语义两平台同规：run 无 `merge_result_xls`
+即事实终态，不算卡住。
 
 **判据为什么不能写成「`REMOTE` 即终态」**（生产反例，2026-09-16 只读核对）：
 run 400（SUCCESS）**有** `merge_result_xls`、`jira/400/` 在，其 2 行 UNIVIEW 正常
