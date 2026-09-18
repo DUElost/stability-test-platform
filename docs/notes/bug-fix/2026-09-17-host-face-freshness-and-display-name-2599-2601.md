@@ -89,7 +89,7 @@ hostLabel(host, hostId?, fallback = '未知主机'): string   // name > ip > hos
   | 节点圆点退回两态 | DeviceNodeRail「未知」 | **1 failed** |
 
 - 既有用例更新 **2 条**（都是判据本身该跟着改的）：
-  1. `planExecuteExport.test.ts` 的 CSV 断言因顺序变更而更新（原写 `10.0.0.1`、现为
+  1. `planExecuteExport.test.ts` 的 CSV 断言因顺序变更而更新（原写 `10.0.x.x`、现为
      `node-a`），并补了「无 name → ip」「无 name/ip → hostId」两个分支把统一口径显式钉住；
   2. `useCrossClientSync.test.tsx` 的「失效根集合」计数 8 → 9（新增 `hosts`），并断言
      `hosts` 在列——它是这份清单的守卫，不更新就等于放行遗漏。
