@@ -62,10 +62,10 @@ docstring ↔ 实现（#2141）：同样双向，**逐函数**比对 docstring �
 
 当前覆盖（#1520 形状系列三刀后，2026-09-18）：轴线 A 0 对（唯一配对 ``abort_plan_run``
 升为具名模型改由轴 C 对拍）；轴线 B 自动发现 3 个 docstring 键块函数（1 个可比对
-``abort_jobs_for_host`` + 2 个显式豁免）；轴线 C **28 对**——dedup 族 15（#2187）、
+``abort_jobs_for_host`` + 2 个显式豁免）；轴线 C **30 对**——dedup 族 15（#2187）、
 summary/artifacts 2（读侧收口）、plan_runs 读侧对拍批 9（含 ``PlanRunDetailOut
 ↔ PlanRun``）、写侧摘要 2（``PlanRunAbortSummaryOut ↔ PlanRunAbortResult``、
-``PlanRunDispatchRetrySummaryOut ↔ PlanRunDispatchRetryResult``）；另有 2 条具名模型
+``PlanRunDispatchRetrySummaryOut ↔ PlanRunDispatchRetryResult``）、审计 facets 2（#2629）；另有 2 条具名模型
 按原因豁免（``JiraRunOut`` 解析器限制、``PlanRunArchiveTriggerOut`` 前端无消费者）。
 
 轴线 C 的第 3 组来自一次**正规化**：``GET /plan-runs/{id}/dedup/status`` 原为
@@ -522,6 +522,21 @@ _MODEL_PAIRS: tuple[tuple[str, str, str, str], ...] = (
         "DedupAgentConfigReloadOut",
         "frontend/src/utils/api/types.ts",
         "AgentConfigReloadPayload",
+    ),
+    # #2629：审计筛选候选（含嵌套的条数条目）。新增一对「后端 Pydantic + 前端 interface」
+    # 就是新增一处双声明——不登记等于亲手造出本文件要防的形状，且这次的消费方正是
+    # 那个曾经漂移出 6 个死选项的筛选面。
+    (
+        "backend/api/schemas/audit.py",
+        "AuditFacetsOut",
+        "frontend/src/utils/api/types.ts",
+        "AuditFacets",
+    ),
+    (
+        "backend/api/schemas/audit.py",
+        "AuditFacetValue",
+        "frontend/src/utils/api/types.ts",
+        "AuditFacetValue",
     ),
 )
 
