@@ -490,3 +490,68 @@ def test_complete_reports_selected_status(fa, monkeypatch):
     assert fa.cmd_complete(args) == 0
     assert sent[0][0] == "/api/v1/agent/jobs/17/complete"
     assert sent[0][1]["update"]["status"] == "ABORTED"
+
+
+class _FakeServeClock:
+    """#2743 用：可控时钟——sleep 即推进；strftime 委托真实 time（log() 要用）。"""
+
+    def __init__(self) -> None:
+        self.now = 1_000_000.0
+
+    def time(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+    @staticmethod
+    def strftime(fmt: str) -> str:
+        import time as _real_time
+        return _real_time.strftime(fmt)
+
+
+def test_serve_lifetime_is_absolute_across_reconnects(fa, monkeypatch, capsys):
+    """#2743：``--lifetime`` 是 serve 启动即定的绝对期限，自愈重连不得重新计时。
+
+    缺陷形态：``stop`` 原在 ``work()`` 闭包内，每次重连重新起算，而 polling 会话
+    约 5 分钟掉一次（坑 2）⇒ 期限形同虚设（实测超期 2.7 倍仍存活、host 长期
+    ONLINE）。本例用可控时钟钉死「首连接消耗 2 个 tick 后掉线 → 重连」：若 stop
+    仍在 work() 内，重连后还能再跑满一个 lifetime；修复后总时长必须收敛在
+    lifetime + 单次 tick 内，且自退有一行日志（此前退出时机无法归因）。
+    """
+    clock = _FakeServeClock()
+    monkeypatch.setattr(fa, "time", clock)
+    monkeypatch.setattr(fa, "_http_beat", lambda args, seq: None)
+    connections = {"n": 0}
+    beats = {"n": 0}
+
+    def drop_after_two_beats(event, payload=None):
+        beats["n"] += 1
+        if beats["n"] > 2:
+            raise RuntimeError("polling session dropped")
+        return None
+
+    def fake_with_connection(args, work, with_push_handlers=False):
+        connections["n"] += 1
+        if connections["n"] == 1:
+            work(drop_after_two_beats)  # 掉线异常 → cmd_serve 走自愈重连
+            raise AssertionError("首连接应在掉线前抛出，不应耗尽 lifetime")
+        work(lambda event, payload=None: None)
+        return 0
+
+    monkeypatch.setattr(fa, "_with_connection", fake_with_connection)
+
+    args = fa.parse_cli([
+        "--base", "http://127.0.0.1:18000", "--log-file", "",
+        "serve", "--lifetime", "300", "--tick", "5",
+        "--reconnect-backoff", "0", "--reconnect-limit", "3",
+    ])
+    start = clock.now
+    assert fa.cmd_serve(args) == 0
+
+    assert connections["n"] == 2, "必须真实走过一次自愈重连（缺陷的放大器）"
+    elapsed = clock.now - start
+    assert elapsed <= 300 + 5 + 1, (
+        f"lifetime 是绝对期限，重连不得重新计时（实测 elapsed={elapsed}）"
+    )
+    assert "serve 到达 lifetime=300s，主动退出" in capsys.readouterr().out
