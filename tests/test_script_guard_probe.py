@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 import sys
 from pathlib import Path
 
@@ -137,3 +138,89 @@ def test_probe_uses_only_stdlib_and_no_credentials():
     assert "from backend" not in src and "import backend" not in src
     assert "STP_ADMIN" not in src and "AGENT_SECRET" not in src
     assert "--guard" in src  # 判定确实来自契约端点，不是自己另写一套口径
+
+# ---------------------------------------------------------------- 判据来源归因
+
+MAIN_SHA = "c" * 40
+
+
+def _fake_git(sha=MAIN_SHA, branch=None, has_origin=True, not_git=False):
+    def run(cmd, *a, **k):
+        if not_git:
+            return subprocess.CompletedProcess(cmd, 128, stdout="", stderr="not a git repo")
+        joined = " ".join(cmd)
+        if "--format=%h" in joined:
+            return subprocess.CompletedProcess(cmd, 0, stdout=sha[:7], stderr="")
+        if "rev-parse HEAD" in joined:
+            return subprocess.CompletedProcess(cmd, 0, stdout=sha, stderr="")
+        if "symbolic-ref" in joined:
+            if branch is None:
+                return subprocess.CompletedProcess(cmd, 1, stdout="",
+                                                   stderr="not a symbolic ref")
+            return subprocess.CompletedProcess(cmd, 0, stdout=branch, stderr="")
+        if "rev-parse origin/main" in joined:
+            if not has_origin:
+                return subprocess.CompletedProcess(cmd, 128, stdout="",
+                                                   stderr="unknown revision")
+            return subprocess.CompletedProcess(cmd, 0, stdout=MAIN_SHA, stderr="")
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="unexpected " + joined)
+
+    return run
+
+
+@pytest.mark.parametrize(
+    "sha,branch,has_origin,expect_trust,expect_in",
+    [
+        (MAIN_SHA, "main", True, True, "== origin/main"),
+        # 特性分支但内容与 main 一致 ⇒ 可信（按分支名判会误报）
+        (MAIN_SHA, "fix/some", True, True, "== origin/main"),
+        (MAIN_SHA, None, True, True, "== origin/main"),
+        # 内容不是 main ⇒ 不可信，并把两个短码都打出来便于归因
+        ("a" * 40, "fix/other", True, False, "≠ origin/main"),
+        (MAIN_SHA, "main", False, False, "无 origin/main 引用"),
+    ],
+    ids=["main", "branch-same-sha", "detached-same-sha", "differs", "no-origin"],
+)
+def test_guard_source_trust_is_decided_by_content(monkeypatch, tmp_path, sha, branch,
+                                                  has_origin, expect_trust, expect_in):
+    """巡检用的判据代码取自**主检出的当前内容**，所以必须能自证它是不是 origin/main。
+
+    别家会话把检出切走并改动 `script_retirement.py` 后，每日巡检会静默采用它并给出一个
+    看起来正常的 due 数（ADR-0046 的「部署源 vs 开发工作区」蔓延到只读巡检）。
+    """
+    monkeypatch.setattr(_mod.subprocess, "run", _fake_git(sha, branch, has_origin))
+    desc, trust = _mod.describe_guard_source(tmp_path)
+    assert trust is expect_trust, desc
+    assert expect_in in desc, desc
+
+
+def test_guard_source_non_git_root_is_reported(monkeypatch, tmp_path):
+    monkeypatch.setattr(_mod.subprocess, "run", _fake_git(not_git=True))
+    desc, trust = _mod.describe_guard_source(tmp_path)
+    assert trust is False and "非 git 树" in desc
+
+
+def test_main_logs_guard_source_without_changing_verdict(monkeypatch, tmp_path, capsys):
+    """归因只加一行日志：判定码与指标必须与之前完全一致（不制造新的告警面）。"""
+    monkeypatch.setattr(_mod, "run_guard",
+                        lambda exe, today: (0, _guard_payload("OK", 0)))
+    monkeypatch.setattr(_mod.subprocess, "run",
+                        _fake_git(MAIN_SHA, "main", True))
+    metrics = tmp_path / "guard.prom"
+    assert _mod.main(["--metrics-path", str(metrics), "--today", "2026-09-18"]) == 0
+    out = capsys.readouterr().out
+    assert "guard source:" in out and "== origin/main" in out
+    text = metrics.read_text(encoding="utf-8")
+    assert "stp_script_guard_due 0" in text and "guard source" not in text
+
+
+def test_main_flags_off_main_source(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(_mod, "run_guard",
+                        lambda exe, today: (0, _guard_payload("OK", 0)))
+    monkeypatch.setattr(_mod.subprocess, "run",
+                        _fake_git("b" * 40, "fix/elsewhere", True))
+    rc = _mod.main(["--metrics-path", str(tmp_path / "g.prom")])
+    err_out = capsys.readouterr()
+    assert rc == 0, "判据来源不可信不改变判定码——它是归因，不是故障"
+    assert "⚠" in err_out.out and "不是 origin/main" in err_out.out
+

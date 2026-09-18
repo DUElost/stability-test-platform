@@ -38,6 +38,7 @@ from typing import Iterable, Optional
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from backend.api.schemas.plan_run import PlanRunAbortSummaryOut
 from backend.core.audit import record_audit
 from backend.core.job_timeout_config import ABORT_ACK_GRACE_SECONDS
 from backend.core.metrics import (
@@ -328,7 +329,7 @@ def abort_plan_run(
     audit_username: Optional[str] = None,
     audit_action: str = "abort_plan_run",
     host_id: Optional[str] = None,
-) -> dict:
+) -> PlanRunAbortSummaryOut:
     """Abort a PlanRun, or only the active jobs on one host.
 
     When ``host_id`` is ``None`` (default), aborts the entire PlanRun: all
@@ -358,15 +359,9 @@ def abort_plan_run(
     覆盖（D3）；``abort_requested_hosts`` 缺失（历史 run_context）退化为 run 级
     时钟（D4）。
 
-    Returns a summary dict::
-
-        {
-            "plan_run_id": int,
-            "status": str,
-            "aborted_jobs": [int, ...],
-            "abort_requested_jobs": [int, ...],   # host 级 abort 时仅该主机的 job
-            "phase": "precheck" | "running" | "queued",
-        }
+    Returns :class:`PlanRunAbortSummaryOut`（字段：plan_run_id / status / phase
+    （precheck·running·queued）/ aborted_jobs / abort_requested_jobs——五键恒在，
+    分支无值时以空数组表达；host 级 abort 的两个列表仅含该主机的 job）。
 
     Raises :class:`PlanRunAbortError` if the PlanRun is already in a
     terminal status.
@@ -478,12 +473,12 @@ def abort_plan_run(
                 new_status=PlanRunStatus.FAILED,
                 error_message=f"aborted ({reason}): phase={phase}",
             )
-            return {
-                "plan_run_id": plan_run_id,
-                "status": PlanRunStatus.FAILED.value,
-                "aborted_jobs": [],
-                "phase": phase,
-            }
+            return PlanRunAbortSummaryOut(
+                plan_run_id=plan_run_id,
+                status=PlanRunStatus.FAILED.value,
+                aborted_jobs=[],
+                phase=phase,
+            )
 
     precheck = run_ctx.get("precheck") or None
 
@@ -519,13 +514,13 @@ def abort_plan_run(
                 record_plan_run_abort_lock_seconds(
                     time.perf_counter() - lock_t0, "noop",
                 )
-                return {
-                    "plan_run_id": plan_run_id,
-                    "status": pr.status,
-                    "phase": "running",
-                    "aborted_jobs": [],
-                    "abort_requested_jobs": [],
-                }
+                return PlanRunAbortSummaryOut(
+                    plan_run_id=plan_run_id,
+                    status=pr.status,
+                    phase="running",
+                    aborted_jobs=[],
+                    abort_requested_jobs=[],
+                )
             active_rows = scoped_rows
 
         existing_abort = run_ctx.get("abort_requested") or {}
@@ -900,13 +895,13 @@ def abort_plan_run(
         len(abort_requested_jobs),
     )
 
-    return {
-        "plan_run_id": plan_run_id,
-        "status": pr.status,
-        "phase": "precheck" if in_precheck else "running",
-        "aborted_jobs": aborted_jobs,
-        "abort_requested_jobs": abort_requested_jobs,
-    }
+    return PlanRunAbortSummaryOut(
+        plan_run_id=plan_run_id,
+        status=pr.status,
+        phase="precheck" if in_precheck else "running",
+        aborted_jobs=aborted_jobs,
+        abort_requested_jobs=abort_requested_jobs,
+    )
 
 
 def abort_jobs_for_host(
@@ -973,7 +968,7 @@ def abort_jobs_for_host(
                 prid, host_id, exc,
             )
             continue
-        aggregate_aborted.extend(summary["aborted_jobs"])
+        aggregate_aborted.extend(summary.aborted_jobs)
 
     return {
         "host_id": host_id,

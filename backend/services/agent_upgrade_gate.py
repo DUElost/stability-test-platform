@@ -133,8 +133,12 @@ def acquire_agent_upgrade_gate(
             abort_running_jobs=payload.abort_running_jobs,
             triggered_by="agent-api",
         )
+    # 元组必须覆盖 `raise_upgrade_gate_http` 映射的每一个领域异常：少一个，那条
+    # HTTP 分支就**从唯一入参路径不可达**，异常原样上抛成 500（#2638：退役主机申请
+    # 升级窗口时 `HostRetiredError` 就是这样漏掉的——409 `HOST_RETIRED` 早就写好了）。
     except (
         HostNotFoundError,
+        HostRetiredError,
         HostAbortPendingError,
         HostHasActiveJobsError,
         HostAbortDrainTimeoutError,

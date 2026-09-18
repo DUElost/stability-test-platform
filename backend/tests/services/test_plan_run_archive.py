@@ -59,9 +59,9 @@ async def test_triggers_hosts_and_audits():
             db, 42, allow_retired=True, user_id=7, username="admin",
         )
 
-    assert out["plan_run_id"] == 42
-    assert out["triggered_hosts"] == ["host-a"]
-    assert out["archived_now"] is True
+    assert out.plan_run_id == 42
+    assert out.triggered_hosts == ["host-a"]
+    assert out.archived_now is True
     assert emit.await_count == 2
     audit.assert_called_once()
     db.commit.assert_called_once()

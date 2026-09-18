@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from backend.api.schemas.plan_run import PlanRunJobsSummaryOut
 from backend.models.job import JobInstance
 from backend.models.plan_run import PlanRun
-from backend.services.plan_run_read_common import iso
+from backend.services.plan_run_read_common import iso, resolve_plan_name
 
 
 def build_plan_run_summary(db: Session, run_id: int) -> PlanRunJobsSummaryOut:
@@ -37,6 +37,8 @@ def build_plan_run_summary(db: Session, run_id: int) -> PlanRunJobsSummaryOut:
     return PlanRunJobsSummaryOut(
         plan_run_id=run_id,
         status=pr.status,
+        # #2623：让「只读两个标量」的调用方不必再拉整份 detail（含全量 jobs）
+        plan_name=resolve_plan_name(db, pr),
         total_jobs=total,
         status_counts=status_counts,
         pass_rate=round(pass_rate, 4),

@@ -291,7 +291,7 @@ def test_abort_batch_pending_updates_counters_and_audit_once(
     assert aborted == 15
     assert run.aborted_job_count == 15
     assert run.terminal_job_count == 15
-    assert len(result.get("aborted_jobs") or []) == 15
+    assert len(result.aborted_jobs) == 15
 
 
 def test_abort_bulk_emits_collapsed_job_status(
@@ -448,8 +448,8 @@ def test_abort_pending_count_uses_returning_after_concurrent_claim(
         result = abort_plan_run(run.id, db=db_session, reason="race_claim")
 
     assert claim_injected["done"] is True
-    assert result["aborted_jobs"] == [kept_pending_id]
-    assert result["abort_requested_jobs"] == [claimed_id]
+    assert result.aborted_jobs == [kept_pending_id]
+    assert result.abort_requested_jobs == [claimed_id]
 
     db_session.expire_all()
     run = db_session.get(PlanRun, run.id)
@@ -668,8 +668,8 @@ def test_abort_running_heavy_does_not_load_full_job_orm_rows(
         result = abort_plan_run(run.id, db=db_session, reason="narrow_select")
 
     assert loaded_full["count"] == 0, "RUNNING 路径不得全量 JobInstance.all()"
-    assert len(result.get("abort_requested_jobs") or []) == 15
-    assert result.get("aborted_jobs") == []
+    assert len(result.abort_requested_jobs) == 15
+    assert result.aborted_jobs == []
     assert fanout.call_count == 1
     items = fanout.call_args.args[0]
     assert len(items) == 1
@@ -735,7 +735,7 @@ def test_abort_pending_commits_abort_requested_before_batch(
 
     assert "early" in commits, f"expected early commit releasing lock, got {commits}"
     assert "final" in commits
-    assert len(result.get("aborted_jobs") or []) == 8
+    assert len(result.aborted_jobs) == 8
 
 
 def test_abort_multi_host_control_uses_single_fanout(
