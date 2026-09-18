@@ -1,3 +1,4 @@
+import { hostLabel } from '@/utils/hostDisplay';
 export interface ExportDeviceRow {
   serial: string;
   host_id?: string | number | null;
@@ -12,7 +13,7 @@ export interface HostLabelLookup {
 function hostLabelFor(device: ExportDeviceRow, hostMap: HostLabelLookup): string {
   const hostId = String(device.host_id ?? 'unassigned');
   const host = hostMap.get(hostId);
-  return host?.ip || host?.name || (hostId === 'unassigned' ? '未分配节点' : hostId);
+  return hostLabel(host, hostId);
 }
 
 function csvEscape(value: string): string {

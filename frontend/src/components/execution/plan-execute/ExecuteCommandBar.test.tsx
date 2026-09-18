@@ -55,3 +55,15 @@ describe('ExecuteCommandBar 版本槽（#2385）', () => {
     expect(screen.getByText('2 版本 · 冲突')).toBeInTheDocument();
   });
 });
+
+describe('ExecuteCommandBar 容量未知 chip（#2599）', () => {
+  it('主机记录缺失的节点数可见——静默跳过不再伪装成「容量充足」', () => {
+    renderBar({ unknownHostCount: 3 });
+    expect(screen.getByText('3 台节点容量未知')).toBeInTheDocument();
+  });
+
+  it('无未知节点时不渲染（不给正常态加噪音）', () => {
+    renderBar({ unknownHostCount: 0 });
+    expect(screen.queryByText(/台节点容量未知/)).not.toBeInTheDocument();
+  });
+});
