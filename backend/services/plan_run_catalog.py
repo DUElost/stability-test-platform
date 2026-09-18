@@ -309,16 +309,41 @@ def build_plan_run_list_page(
 
 
 
-def build_plan_run_detail(db: Session, run_id: int) -> PlanRunDetailOut:
+def build_plan_run_detail(
+    db: Session, run_id: int, *, include_jobs: bool = True
+) -> PlanRunDetailOut:
+    """PlanRun 详情。
+
+    #2623（opt-out 先行）：`include_jobs=False` 时**不查也不序列化**内嵌 jobs——
+    实测 510 job 的 run 里 jobs 占响应 98.9%（193,866 B / 196,041 B），而仓内前端
+    与工具侧**零消费方**（`PlanRun` 类型未声明该字段；`tools/site_config/agents.py`
+    已写明「Job 明细必须走专用端点」）。默认仍填充：仓外未知调用方不受影响——
+    「默认不填充」属对外契约变更，另由 ADR 裁决。
+    """
     pr = db.get(PlanRun, run_id)
     if pr is None:
         raise HTTPException(status_code=404, detail="plan run not found")
-    jobs = db.execute(
-        select(JobInstance).where(JobInstance.plan_run_id == run_id)
-    ).scalars().all()
+    jobs = []
+    device_count = None
+    if include_jobs:
+        jobs = db.execute(
+            select(JobInstance).where(JobInstance.plan_run_id == run_id)
+        ).scalars().all()
+    else:
+        # #2623：jobs 不取，但 `device_count` 是 detail 的既有字段、原本由 jobs 派生
+        # （`_plan_run_out` 的 distinct devices 语义，见其注释）——这里用一条**聚合**
+        # 查询保住它，否则 opt-out 会让该字段静默变 0（测试里「其余字段逐一不变」
+        # 的断言正是抓这个）。取 distinct device_id 而不是 count(distinct)：后者不
+        # 计 NULL，而集合语义把 NULL 也算一个值。
+        device_count = len(db.execute(
+            select(JobInstance.device_id)
+            .where(JobInstance.plan_run_id == run_id)
+            .distinct()
+        ).all())
     # #2623：plan_name 的解析提进 `resolve_plan_name`，与 summary 共用同一口径
     return (_plan_run_out(pr, jobs=[_job_out(j, []) for j in jobs],
-                          plan_name=resolve_plan_name(db, pr)))
+                          plan_name=resolve_plan_name(db, pr),
+                          device_count=device_count))
 
 
 

@@ -1260,7 +1260,11 @@ describe('PlanExecutePage', () => {
     fireEvent.click(screen.getByRole('button', { name: /预览发起/ }));
 
     expect(await screen.findByTestId('duplicate-launch-banner')).toHaveTextContent('设备数接近');
-    await waitFor(() => expect(api.planRuns.get).toHaveBeenCalledWith(9100));
+    // #2623：重复检测只读 run_context.dispatch_device_ids——必须显式 opt-out
+    // 内嵌 jobs（占 detail 响应 98.9%）；退回不传参本断言即红。
+    await waitFor(() =>
+      expect(api.planRuns.get).toHaveBeenCalledWith(9100, { includeJobs: false }),
+    );
   });
 
   it('groups plan steps by stage with colored badges', async () => {
