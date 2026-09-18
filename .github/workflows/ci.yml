@@ -401,6 +401,7 @@ jobs:
             python -m pytest tests/ -q \
               --ignore=tests/test_alembic_upgrade.py \
               --ignore=tests/test_script_seed_governance.py \
+              --ignore=tests/test_diag_readonly_role_pg.py \
               -p no:cacheprovider \
               >"$PARALLEL_DIR/repo.log" 2>&1
             echo $? >"$PARALLEL_DIR/repo.rc"

@@ -16,8 +16,15 @@
 - 不得在生产数据库上试跑迁移；
 - `.env.backend`、`backend/.env` 和 Agent `.env` 的职责不同，不得互相代用。
 - **手工查询不得用 `postgres` 超级用户或应用共享凭据 `stp`**：前者的误操作半径最大，
-  后者与业务进程共用同一身份、事件无法归属（#2632 缺口②）。临时诊断用专用只读角色，
-  连接带 `application_name`（见 §凭据来源）。
+  后者与业务进程共用同一身份、事件无法归属（#2632 缺口②）。临时诊断一律用专用只读角色
+  **`stp_ro`**，连接带 `application_name`（见 §凭据来源）。
+  创建/重申授权：`sudo -u postgres psql --set ON_ERROR_STOP=1 -d stp -f
+  deploy/postgres/diag-readonly.sql`，随后 `\password stp_ro` 设口令（**口令不入库不入仓**）。
+  该角色带三件事：`default_transaction_read_only=on`（误写被会话拒）、
+  `log_statement='all'`（本角色每条语句都留服务端日志——「无留痕」就是这条）、
+  以及 `ALTER DEFAULT PRIVILEGES FOR ROLE stp ... GRANT SELECT`（**下一次迁移建出来的表
+  自动可读**；漏了这条，人会退回用 `stp` 手查，缺口原地复活）。
+  **角色不存在时停下来报缺，不要退回 `stp`/`postgres`**——那正是本条要消灭的形态。
 - **写查询前先求证名字**：表名、列名与枚举取值先在 `information_schema` 里核对，不要在
   库上试错——2026-09-16/17 那约 30 条「猜 schema」的错误查询就是这么产生的
   （真名是 `job_instance`/`device_leases`，枚举是小写）。这类错误现今已聚合成告警
@@ -36,6 +43,7 @@
 |---|---|---|
 | Agent fleet SSH | `/home/debian13/hosts.ini` 的 `[android]` 与 `[android:vars]` | 清单是本地敏感文件；规模以当前内容为准 |
 | Backend 数据库 | 仓库根 `.env.backend` 的 `DATABASE_URL` | 本机 PostgreSQL 可能就是生产 `stp`；只读 SELECT 优先 |
+| 临时手工诊断 | 只读角色 `stp_ro`（`deploy/postgres/diag-readonly.sql` 创建，口令只在库侧） | 不得复用 `.env.backend` 的 `stp` 口令，也不得用 `postgres`；角色缺失即停（#2632 缺口②） |
 | 控制面管理员 | 仓库根 `.env.backend` 的 `STP_ADMIN_USER`、`STP_ADMIN_PASSWORD`、`AGENT_SECRET` | `backend/.env` 不是生产凭据源 |
 
 控制面本机使用仓库 `venv/bin/python` 和 psycopg 3。需要调用管理 API 时，先从
