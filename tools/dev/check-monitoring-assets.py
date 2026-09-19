@@ -12,12 +12,14 @@
 `monitoring_artifacts()`：**同一事实不留两套清单**。
 
 判定与退出码（沿用 `--guard` 的分档思路：判定码与「无从判定」分开）：
-    0 = 无漂移   1 = 有漂移   2 = 无从判定（清单为空 / 仓库源文件读不到）
-每个资产的四态：
+    0 = 无漂移   1 = 有漂移   2 = 无从判定（清单为空 / **仓库源文件读不到** / 全部非判定）
+每个资产的五态：
     match     逐字节一致（`<deploy-root>` 按本机仓库根替换后比对）
     drift     内容不一致
     absent    候选落点都不存在 ⇒ 本站可能未装监控栈，**单独报但不算漂移**
     skipped   源文件含无法由本机事实确定的占位符（`<site-id>`、`<prometheus-port>`…）
+    source-missing  清单指向的仓库源文件不存在（清单与仓库脱节）⇒ **无从比对，计入 EXIT_UNKNOWN**
+                    （#2800：此前记为 SKIPPED、全 SKIP 仍 exit 0，与本文件自己的退出码契约矛盾）
 """
 from __future__ import annotations
 
@@ -54,7 +56,7 @@ _RESOLVABLE = {
 _UNKNOWN_PLACEHOLDER = re.compile(
     r"<(?!deploy-root>)[a-z][a-z0-9-]*>", re.IGNORECASE)
 
-MATCH, DRIFT, ABSENT, SKIPPED = "match", "drift", "absent", "skipped"
+MATCH, DRIFT, ABSENT, SKIPPED, SOURCE_MISSING = "match", "drift", "absent", "skipped", "source-missing"
 EXIT_OK, EXIT_DRIFT, EXIT_UNKNOWN = 0, 1, 2
 
 
@@ -138,7 +140,11 @@ def inspect(system_root: Path, deploy_root: Path, repo_root: Path = REPO_ROOT) -
                        "state": ABSENT, "detail": ""}
         src = repo_root / source_rel
         if not src.is_file():
-            entry.update(state=SKIPPED, detail="仓库源文件不存在（清单与仓库已脱节）")
+            # #2800：源缺失是「无从比对」，不是「跳过」——漂移检测最该响的形态之一
+            # （改了仓库/移动了文件、清单没跟上），静默 exit 0 会让 check-deploy-source
+            # 照常打「一致」。
+            entry.update(state=SOURCE_MISSING,
+                         detail="仓库源文件不存在（清单与仓库已脱节，无从比对）")
             results.append(entry)
             continue
         want = expected_text(src, deploy_root)
@@ -162,12 +168,23 @@ def inspect(system_root: Path, deploy_root: Path, repo_root: Path = REPO_ROOT) -
 
 
 def summarize(results: list[dict]) -> tuple[int, dict[str, int]]:
-    counts = {s: 0 for s in (MATCH, DRIFT, ABSENT, SKIPPED)}
+    """判定码：0=无漂移；1=有漂移；2=无从判定（清单为空 / 源缺失 / 全部非判定）。
+
+    #2800：源缺失（``SOURCE_MISSING``）必须让整体落 2——它意味着「本工具看不见仓库
+    事实源」，与「比对后一致」不是一回事；全部条目都是非判定（source-missing/skipped）
+    时同理。全 ``absent``（本站未装监控栈）**保持 0**：那是本站的确定事实，不是判不出。
+    """
+    counts = {s: 0 for s in (MATCH, DRIFT, ABSENT, SKIPPED, SOURCE_MISSING)}
     for item in results:
         counts[item["state"]] += 1
     if not results:
         return EXIT_UNKNOWN, counts
-    return (EXIT_DRIFT if counts[DRIFT] else EXIT_OK), counts
+    if counts[DRIFT]:
+        return EXIT_DRIFT, counts
+    undecided = counts[SOURCE_MISSING] + counts[SKIPPED]
+    if counts[SOURCE_MISSING] or undecided == len(results):
+        return EXIT_UNKNOWN, counts
+    return EXIT_OK, counts
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -196,15 +213,19 @@ def main(argv: list[str] | None = None) -> int:
     print(f"# <deploy-root> = {deploy_root}（依据：{reason}）")
     print(f"# 事实源 = {describe_source_repo(Path(args.repo_root))}")
     for item in results:
-        mark = {MATCH: "OK  ", DRIFT: "DRIFT", ABSENT: "ABSENT", SKIPPED: "SKIP "}[item["state"]]
+        mark = {MATCH: "OK  ", DRIFT: "DRIFT", ABSENT: "ABSENT", SKIPPED: "SKIP ",
+                SOURCE_MISSING: "MISS "}[item["state"]]
         where = item["hit"] or item["destination"]
         print(f"  [{mark:5s}] {where}" + (f"  ← {item['detail']}" if item["detail"] else ""))
         if item["state"] == DRIFT:
             print(f"          源文件：{item['source']}（改仓库 + 重跑安装，不要手改站点副本）")
     print(f"  统计：match {counts[MATCH]} · drift {counts[DRIFT]} · absent {counts[ABSENT]} "
-          f"· skipped {counts[SKIPPED]}")
+          f"· skipped {counts[SKIPPED]} · source-missing {counts[SOURCE_MISSING]}")
     if counts[DRIFT]:
         print("  ⇒ 站点副本落后于/偏离仓库：跑站点安装（installer S2b/S4）或按 runbook 重新渲染。")
+    elif counts[SOURCE_MISSING]:
+        print("  ⇒ 无从判定：清单指向的仓库源文件缺失（清单与仓库脱节）——"
+              "修清单或恢复源文件后重跑（本次不给出「一致」结论）。")
     elif counts[ABSENT]:
         print("  ⇒ 无漂移；ABSENT 项说明本站未装对应资产（可能本来就不启用监控栈）。")
     else:

@@ -966,7 +966,8 @@ def check_required_checks_doc(workflows: dict[str, str], agents_md: str) -> list
 
 # ── S5x 的 CI 侧解析（#2445）───────────────────────────────────────────────
 #
-# 只做「job id → if → steps 的 - name」这一小段结构解析，**不引第三方 YAML**：
+# 只做「job id → if → steps 的 - name」这一小段结构解析、外加 workflow 级
+# `on:` 触发块是否含 `pull_request`（#2801），**不引第三方 YAML**：
 # 本工具在 CI 的 lint job 里跑，而那个 job 的 python 侧只 `pip install ruff`
 # （见 ci.yml「Install ruff」）。给治理门禁挂上 PyYAML，等于把 required check
 # 押在一条安装命令上——那比 30 行扫描器更脆。
@@ -979,6 +980,9 @@ _S5X_STEPS_RE = re.compile(r"^    steps:\s*$")
 _S5X_STEP_NAME_RE = re.compile(r"^      - name:\s*(.+?)\s*$")
 _S5X_EVENT_NE_PR = re.compile(r"event_name\s*!=\s*pull_request\b")
 _S5X_EVENT_EQ_PR = re.compile(r"event_name\s*==\s*pull_request\b")
+# #2801：`on:` 触发块（workflow 级）——无 pull_request 触发时任何 job 都判不可证明可达。
+_S5X_ON_KEY_RE = re.compile(r"^(?:on|\"on\"|'on'):(.*)$")
+_S5X_ON_EVENT_MAPPING_RE = re.compile(r"^  ([A-Za-z0-9_*]+)\s*:(?:.*)$")
 
 # 合入前套件：只有跑在**合入前**的门禁，才要求 CI 对应物也必须在 PR 事件可达的 job 里
 _PRE_MERGE_SUITES = ("check:quick", "check:pr")
@@ -1039,13 +1043,55 @@ def _s5x_parse_jobs(text: str) -> dict[str, dict]:
     return jobs
 
 
-def _s5x_pr_reachable(job_if: str | None) -> bool | None:
+def _s5x_parse_pr_trigger(text: str) -> bool | None:
+    """workflow 的 ``on:`` 触发块是否含 ``pull_request``：True / False / None（不可解析）。
+
+    覆盖三种写法：标量（``on: pull_request``）、flow 列表（``on: [push, pull_request]``）、
+    映射块（``on:\\n  pull_request:\\n``）。**不可解析返回 None**——调用方按
+    「不可证明可达」处理（红），与 ``_s5x_pr_reachable`` 的 fail-safe 同向。
+
+    #2801：此前只看 job 的 ``if``，无 ``if`` 的锚点恒判 PR 可达；一旦 workflow 丢了
+    ``pull_request`` 触发（或新登记锚点指向无 PR 触发的 workflow），门禁配对就假绿。
+    """
+    lines = text.splitlines()
+    for idx, line in enumerate(lines):
+        if not line.strip() or line[:1].isspace():
+            continue                            # 只看第 0 列的顶层键
+        m = _S5X_ON_KEY_RE.match(line)
+        if not m:
+            continue
+        rest = m.group(1).strip()
+        if rest.startswith("#"):
+            rest = ""
+        if rest:
+            # 标量 / flow 列表形态
+            tokens = re.split(r"[\[\],\s]+", _s5x_scalar(rest))
+            return "pull_request" in tokens
+        # 映射块形态：向下扫缩进 2 的事件名，直到下一个顶层键（第 0 列）
+        for follow in lines[idx + 1:]:
+            if not follow.strip() or follow.lstrip().startswith("#"):
+                continue
+            if not follow[:1].isspace():
+                break
+            ev = _S5X_ON_EVENT_MAPPING_RE.match(follow)
+            if ev and ev.group(1).strip("\"'") == "pull_request":
+                return True
+        return False
+    return None                                 # 没有 on: 块（或整体不可解析）
+
+
+def _s5x_pr_reachable(job_if: str | None, *, pr_trigger: bool | None) -> bool | None:
     """该 job 在 ``pull_request`` 事件下是否可达：True / False / None（形态不可证明）。
 
-    只认 ``github.event_name`` 与字面量 ``pull_request`` 的 ==/!= 比较。复合表达式
-    （同时出现 == 与 !=）一律返回 None——判据宁可报红，也不猜一个方向变成假绿。
-    末尾的 ``\b`` 用来区分 ``pull_request`` 与 ``pull_request_target`` 等兄弟事件。
+    先判 **workflow 级** ``on:`` 触发（#2801）：``pr_trigger`` 非 True（含 None=不可解析）
+    时任何 job 都不可证明 PR 可达，直接 None。
+
+    再判 job 级 ``if``：只认 ``github.event_name`` 与字面量 ``pull_request`` 的 ==/!= 比较。
+    复合表达式（同时出现 == 与 !=）一律返回 None——判据宁可报红，也不猜一个方向变成假绿。
+    末尾的 ``\\b`` 用来区分 ``pull_request`` 与 ``pull_request_target`` 等兄弟事件。
     """
+    if pr_trigger is not True:
+        return None
     if job_if is None:
         return True                        # 无 if：所有已配置事件都跑，含 pull_request
     expr = job_if.replace('"', "").replace("'", "")
@@ -1192,9 +1238,11 @@ def check_gate_ci_mapping(gates_src: str, workflows: dict[str, str]) -> list[str
     anchored_wfs = {_s5x_anchor_spec(spec)[0]
                     for spec in GATE_TO_CI_ANCHOR.values() if spec is not None}
     parsed: dict[str, dict[str, dict]] = {}
+    pr_trigger: dict[str, bool | None] = {}
     for wf, text in workflows.items():
         jobs = _s5x_parse_jobs(text)
         parsed[wf] = jobs
+        pr_trigger[wf] = _s5x_parse_pr_trigger(text)      # #2801：workflow 级触发
         if not jobs and wf in anchored_wfs:
             # 解析不出 job 时所有锚点判据都失去地基，必须响——静默跳过就是假绿。
             issues.append(f"S5x {wf} 未解析出任何 job——CI 对应物无从判断（#2445）")
@@ -1222,11 +1270,16 @@ def check_gate_ci_mapping(gates_src: str, workflows: dict[str, str]) -> list[str
                 "（step 被删/改名；注释或 run 命令体里的同名词不算锚点——#2445）"
             )
             continue
-        if gate in pre_merge and True not in [_s5x_pr_reachable(jif) for _, jif in hits]:
+        if gate in pre_merge and True not in [
+            _s5x_pr_reachable(jif, pr_trigger=pr_trigger.get(wf)) for _, jif in hits
+        ]:
+            trigger_state = ("含 pull_request" if pr_trigger.get(wf) is True
+                             else "不含 pull_request 或不可解析")
             issues.append(
                 f"S5x {gate!r} 是合入前门禁（check:quick/check:pr 成员），但其 CI 锚点 "
                 f"{anchor!r} 只存在于 PR 不可达的 job："
                 + "；".join(f"{jid}(if={jif!r})" for jid, jif in hits)
+                + f"；{wf} 的 on: 触发块{trigger_state}（#2801）"
                 + "。PR 路径的那一步被删掉后，旧的全文子串判据仍会绿——现在不会（#2445）"
             )
     return issues
@@ -1883,7 +1936,11 @@ def run_self_test() -> int:
         out: dict = {}
         for (wf, job), entry in sorted(by_job.items()):
             event = "== 'pull_request'" if entry["need_pr"] else "!= 'pull_request'"
-            body = out.setdefault(wf, "jobs:\n")
+            # #2801：夹具必须带 workflow 级 on: 块（含 pull_request）——否则新判据把
+            # 「无 PR 触发」判红，夹具自己就先红了。
+            body = out.setdefault(
+                wf, "on:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n",
+            )
             body += f"  {job}:\n    if: github.event_name {event}\n    steps:\n"
             for name in entry["steps"]:
                 body += f"      - name: {name}\n        run: true\n"
@@ -1938,6 +1995,46 @@ def run_self_test() -> int:
     }
     expect("S5x 合入前锚点只在 PR 不可达 job",
            lambda: check_gate_ci_mapping(src_with_gate, nightly_only), True)
+    # #2801：workflow 级 on: 触发块必须含 pull_request——无 if 的锚点不再恒判可达。
+    expect(
+        "S5x workflow 无 pull_request 触发必红",
+        lambda: check_gate_ci_mapping(
+            src_with_gate,
+            {"ci.yml": wf_have["ci.yml"].replace(
+                "on:\n  pull_request:\n  push:\n", "on:\n  push:\n")},
+        ),
+        True,
+    )
+    expect(
+        "S5x 无 if 锚点 + workflow 无 PR 触发必红（#2801 原形态）",
+        lambda: check_gate_ci_mapping(
+            src_with_gate,
+            {"ci.yml": wf_have["ci.yml"]
+             .replace("on:\n  pull_request:\n  push:\n", "on:\n  push:\n")
+             .replace("  pr-side:\n    if: github.event_name == 'pull_request'\n",
+                      "  pr-side:\n")},
+        ),
+        True,
+    )
+    expect(
+        "S5x on 块整体缺失必红",
+        lambda: check_gate_ci_mapping(
+            src_with_gate,
+            {"ci.yml": wf_have["ci.yml"].replace(
+                "on:\n  pull_request:\n  push:\n    branches: [main]\n", "")},
+        ),
+        True,
+    )
+    expect(
+        "S5x flow 形态 on: [push, pull_request] 绿",
+        lambda: check_gate_ci_mapping(
+            src_with_gate,
+            {"ci.yml": wf_have["ci.yml"].replace(
+                "on:\n  pull_request:\n  push:\n    branches: [main]\n",
+                "on: [push, pull_request]\n")},
+        ),
+        False,
+    )
     expect(
         "S5x 同锚点在 PR 可达 job 则绿",
         lambda: check_gate_ci_mapping(
@@ -2033,7 +2130,17 @@ def run_self_test() -> int:
     for expr, want in s5x_shapes.items():
         expect(
             f"S5x 可达性判据形态 {expr!r}",
-            lambda expr=expr, want=want: _s5x_pr_reachable(expr) is not want,
+            lambda expr=expr, want=want: _s5x_pr_reachable(
+                expr, pr_trigger=True) is not want,
+            False,
+        )
+    # #2801：workflow 级触发是前置门——on: 不含 pull_request（或不可解析）时，
+    # 无论 job 是否有 if，都只能判「不可证明可达」。
+    for trigger in (False, None):
+        expect(
+            f"S5x workflow 触发 {trigger!r} 时任何 job 都不可证明可达",
+            lambda trigger=trigger: _s5x_pr_reachable(
+                None, pr_trigger=trigger) is not None,
             False,
         )
 
