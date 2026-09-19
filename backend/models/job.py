@@ -184,8 +184,10 @@ class JobLogSignal(Base):
     )
     device_serial  = Column(String(128), nullable=False)
     seq_no         = Column(BigInteger, nullable=False)
-    category       = Column(String(32), nullable=False)   # ANR | AEE | VENDOR_AEE | MOBILELOG
-    source         = Column(String(16), nullable=False)   # inotifyd | polling | logcat
+    category       = Column(String(32), nullable=False)   # ANR | AEE | VENDOR_AEE | MOBILELOG | UNIVIEW
+    # #2792: 16 → 32。白名单（watcher contracts，#806）含 reconciler_rollback（19 字符），
+    # 16 宽会让该 source 的整批 INSERT 在 PG 报 value too long 连坐全批（#1048 形态）。
+    source         = Column(String(32), nullable=False)   # inotifyd | polling | logcat | reconciler | reconciler_rollback
     path_on_device = Column(String(512), nullable=False)
     artifact_uri   = Column(String(512))
     sha256         = Column(String(64))

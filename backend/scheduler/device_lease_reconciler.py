@@ -304,7 +304,8 @@ async def _reconcile_stale_unknown_jobs(db) -> int:
     Reconciler pass that failed to transition the job).
 
     与 ``_reconcile_expired_leases`` 的 Phase 2 同形：单轮最多排空
-    ``RECONCILER_DRAIN_BATCH`` 条（#2531），候选按 ``job_instance.id`` 升序取锁。
+    ``RECONCILER_DRAIN_BATCH`` 条（#2531），候选按 ``job_instance.id`` 升序取锁，
+    并在每个已终态化的候选项后显式提交（#2787：一候选一事务边界，锁序回 I2 基准）。
     """
     now = datetime.now(timezone.utc)
     grace_deadline = now - timedelta(seconds=_UNKNOWN_GRACE_SECONDS)
@@ -330,8 +331,10 @@ async def _reconcile_stale_unknown_jobs(db) -> int:
             left_after_cap = len(stale) - index
             break
         # #1172/#986: 不在 begin_nested 内调用 on_job_terminal。#2531 把「函数尾部
-        # 终态化一次 + break」改成「一候选一事务边界」：savepoint 一释放就为该候选
-        # 终态化，其余候选不再押在同一轮收尾上。
+        # 终态化一次 + break」改成「savepoint 一释放就为该候选终态化」，其余候选不再
+        # 押在同一轮收尾上；但事务边界当时并未随之下沉（#2787：自述与实现相反，
+        # 提交只在末位候选的 `on_job_terminal` 内成立）——边界现由本循环尾部的显式
+        # commit 保证，与 check 1 的 #2635 修复同形。
         terminalize: JobInstance | None = None
         try:
             async with db.begin_nested():
@@ -389,6 +392,18 @@ async def _reconcile_stale_unknown_jobs(db) -> int:
             await db.rollback()
             left_after_cap = max(left_after_cap, len(stale) - index - 1)
             break
+        # #2787：**一候选一事务边界**——在此显式提交，使 plan_run 行锁在进入下一候选
+        # （取 job 锁）**之前**释放，锁序回到 I2 基准 `job → plan_run`，与 check 1 的
+        # #2635 修复同形。
+        #
+        # 修复前该边界只在末位候选成立（`on_job_terminal` 仅在 `applied=True`，即
+        # `terminal_job_count >= total_job_count` 时自行 commit）：从第 2 条候选起，
+        # 同一事务在**已持 plan_run 行锁**的情况下再取 job 行锁 ⇒ 实际锁序
+        # `plan_run → job`，与 `complete_agent_job` 的 `job → plan_run` 相反 ⇒ 可成环。
+        #
+        # 契约同 check 1：`on_job_terminal` 在 `applied=True` 时**已自行 commit**，此处
+        # 的空提交无害；但其返回后调用方**不得再依赖会话内未提交状态**。
+        await db.commit()
         drained += 1
         failed += 1
         logger.warning(

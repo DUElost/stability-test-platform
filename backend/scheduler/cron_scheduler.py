@@ -582,6 +582,20 @@ def _next_orphan_scan_descending() -> bool:
     return current
 
 
+def _orphan_dle_scan_predicates(model, cutoff: datetime) -> tuple:
+    """孤儿 DLE 的资格谓词（#2316）：两处共用——常规键集翻页与 #2793 的根未配置清理。
+
+    ``model`` 由调用方传入（该调用点已做函数体内的模型 import）——本 helper 不再 import，
+    避免为共用谓词多加一处函数体 import（棘轮基线不留增量）。
+    """
+    return (
+        model.plan_run_id.is_(None),
+        model.job_id.is_(None),
+        model.state.in_(_ORPHAN_DLE_STATES),
+        model.updated_at < cutoff,
+    )
+
+
 def purge_orphan_dle_events(limit: int = _ORPHAN_DLE_BATCH, *, dry_run: bool = False) -> int:
     """清理「未关联事件」：无 run 也无 job、已终态、静默超过 ``artifact_retention_days``
     的 DLE 行及其 ``devices/unassigned/{event_id}/`` 目录（#2316 D1）。
@@ -605,6 +619,10 @@ def purge_orphan_dle_events(limit: int = _ORPHAN_DLE_BATCH, *, dry_run: bool = F
     **#2636**：两处收口——① 共享根未配置时**早退**（该形态下没有任何行可清，进循环
     只会白扫 1000 行）；② 扫描方向**逐 tick 交替**：恒跳过行占满最老端时，从最新端
     起扫的那一轮仍能清到可清理的行，任意数量的恒跳过行都不再造成永久空转。
+
+    **#2793**：① 的早退范围收窄——`remote_path` 为空/NULL 的合格行**不需要共享根**
+    即可删除（#2636 之前的语义），早退前先按同一批资格谓词清掉这一类；带 path 的待清行
+    仍按「本 tick 检视上限」计数（reason=root_unset 不再归零，但不做全表 COUNT）。
     """
     from backend.core.storage_root import resolve_shared_storage_root
     from backend.models.device_log_event import DeviceLogEvent
@@ -621,10 +639,46 @@ def purge_orphan_dle_events(limit: int = _ORPHAN_DLE_BATCH, *, dry_run: bool = F
             )
 
         if not dry_run and resolved_base is None:
-            # #2636：共享根没配置 → 下面 root_unset 必然命中每一行，本轮**无行可清**。
+            # #2636 ①：共享根没配置 ⇒ **带 path 的行**必然命中 root_unset，本轮无可清，
             # 早退而不是白扫 MAX_PAGES 页（旧形态每 tick 固定浪费 1000 行检视）。
-            logger.warning("dle_orphan_skipped_root_unset_early_return")
-            return 0
+            #
+            # #2793：但 `remote_path` 为空/NULL 的合格行**不需要共享根**即可删除（#2636
+            # 之前的语义）——早退把它们一并跳过是语义回退，这些行会滞留到根被配置为止。
+            # 故先清这一类（仍需 ≥1 次 DB 往返，但只取哪些行、不翻页）。
+            predicates = _orphan_dle_scan_predicates(DeviceLogEvent, cutoff)
+            empty_path_ids = db.execute(
+                select(DeviceLogEvent.id)
+                .where(*predicates,
+                       or_(DeviceLogEvent.remote_path.is_(None),
+                           DeviceLogEvent.remote_path == ""))
+                .order_by(DeviceLogEvent.updated_at, DeviceLogEvent.id)
+                .limit(limit)
+            ).scalars().all()
+            if empty_path_ids:
+                db.query(DeviceLogEvent).filter(
+                    DeviceLogEvent.id.in_(empty_path_ids)
+                ).delete(synchronize_session=False)
+                db.commit()
+                logger.warning(
+                    "dle_orphan_root_unset_purged_empty_path rows=%d", len(empty_path_ids),
+                )
+            # 可观测性不随早退消失：待清的带 path 行按「本 tick 检视上限」计数（封顶即止，
+            # 不做全表 COUNT）——此前 reason=root_unset 分支不可达、计数归零（#2793 次要项）。
+            waiting = db.execute(
+                select(DeviceLogEvent.id)
+                .where(*predicates,
+                       DeviceLogEvent.remote_path.isnot(None),
+                       DeviceLogEvent.remote_path != "")
+                .limit(limit)
+            ).scalars().all()
+            if waiting:
+                dle_orphan_skipped_total.labels(reason="root_unset").inc(len(waiting))
+            logger.warning(
+                "dle_orphan_skipped_root_unset_early_return"
+                " empty_path_purged=%d waiting_capped=%d",
+                len(empty_path_ids), len(waiting),
+            )
+            return len(empty_path_ids)
 
         descending = (not dry_run) and _next_orphan_scan_descending()
         cursor: tuple | None = None
@@ -633,12 +687,7 @@ def purge_orphan_dle_events(limit: int = _ORPHAN_DLE_BATCH, *, dry_run: bool = F
         for _page in range(_ORPHAN_DLE_MAX_PAGES):
             stmt = (
                 select(DeviceLogEvent.id, DeviceLogEvent.remote_path, DeviceLogEvent.updated_at)
-                .where(
-                    DeviceLogEvent.plan_run_id.is_(None),
-                    DeviceLogEvent.job_id.is_(None),
-                    DeviceLogEvent.state.in_(_ORPHAN_DLE_STATES),
-                    DeviceLogEvent.updated_at < cutoff,
-                )
+                .where(*_orphan_dle_scan_predicates(DeviceLogEvent, cutoff))
             )
             if cursor is not None:
                 # #2636：方向决定键集比较符（`> cursor` 升序 / `< cursor` 降序）。

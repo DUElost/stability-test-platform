@@ -849,6 +849,31 @@ def test_orphan_cleanup_early_returns_when_root_unset(
     assert db.query(DeviceLogEvent).filter(DeviceLogEvent.id == row_id).first() is not None
 
 
+def test_orphan_cleanup_root_unset_still_purges_empty_path_rows(
+    cleanup_env, scheduler_env, sample_host, sample_device, tmp_path, monkeypatch,
+):
+    """#2793：根未配置时，`remote_path` 为空/NULL 的合格行**仍需删除**（旧语义）。
+
+    #2636 的早退对「带 path」的行成立（它们必然命中 root_unset），但把空 path 行一起
+    永久跳过不是语义等价变换——那些行不需要共享根即可删，滞留到根被配置为止。
+    """
+    from backend.models.device_log_event import DeviceLogEvent
+
+    db, _plan = cleanup_env
+    scheduler_env("ARTIFACT_RETENTION_DAYS", "0")
+    monkeypatch.delenv("STP_AEE_NFS_ROOT", raising=False)  # 唯一主键缺失 = 未配置
+
+    row_id = _mk_orphan_row(
+        db, sample_device, sample_host,
+        remote_path=None, updated_at=datetime.now(timezone.utc),
+    )
+
+    assert cron_scheduler.purge_orphan_dle_events() == 1
+    assert db.query(DeviceLogEvent).filter(DeviceLogEvent.id == row_id).first() is None, (
+        "空 path 的合格孤儿行被早退跳过了（#2793：语义回退，清理停滞）"
+    )
+
+
 def test_orphan_cleanup_alternates_scan_direction(
     cleanup_env, scheduler_env, sample_host, sample_device, tmp_path, monkeypatch,
 ):

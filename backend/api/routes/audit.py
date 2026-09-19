@@ -18,6 +18,7 @@ from backend.api.schemas import (
     AuditLogOut,
     PaginatedResponse,
 )
+from backend.core.audit import canonical_resource_type, expand_resource_type_filter
 from backend.core.database import get_async_db
 from backend.models.audit import AuditLog
 
@@ -57,7 +58,11 @@ def _apply_audit_filters(
     end_time: Optional[datetime],
 ):
     if resource_type:
-        stmt = stmt.where(AuditLog.resource_type == resource_type)
+        # #2778：筛选按**规范值 + 其历史别名**展开——审计行不改写（ADR-0015），
+        # 但「资源=job_instance」必须同时命中历史 job 行，否则静默丢一半。
+        stmt = stmt.where(
+            AuditLog.resource_type.in_(expand_resource_type_filter(resource_type))
+        )
     if action:
         stmt = stmt.where(AuditLog.action == action)
     if user_id is not None:
@@ -75,6 +80,23 @@ def _apply_audit_filters(
     if end_time:
         stmt = stmt.where(AuditLog.timestamp <= end_time)
     return stmt
+
+
+def _merge_alias_facets(
+    entries: List[AuditFacetValue], limit: int
+) -> List[AuditFacetValue]:
+    """#2778：把历史别名并入规范值（计数求和）后按计数重排。
+
+    审计行不可追溯改写，历史字面量（如 `job`）会长期在库里；归并只发生在读取侧，
+    使下拉里同一实体只出现一项——否则管理员按收尾路径不同会看到两个"半真选项"，
+    筛一个就静默丢掉另一个的存量。
+    """
+    merged: dict = {}
+    for entry in entries:
+        canonical = canonical_resource_type(entry.value)
+        merged[canonical] = merged.get(canonical, 0) + entry.count
+    ordered = sorted(merged.items(), key=lambda kv: (-kv[1], kv[0]))
+    return [AuditFacetValue(value=value, count=count) for value, count in ordered[:limit]]
 
 
 @router.get("", response_model=PaginatedResponse)
@@ -142,6 +164,9 @@ async def get_audit_filter_facets(
 
     两个维度都按条数倒序（高频合规关注点排在前面）；`action` 有 86 种字面量，前端因此
     用 datalist + 精确匹配（与 #628 的用户名/IP 同范式），而不是假装能列全。
+
+    #2778：资源维在 distinct 之上再按**规范值**归并历史别名（写侧已统一，见
+    `backend/core/audit.py` 的词表），使下拉与列表过滤口径一致；`action` 维不归并。
     """
     async def _facet_values(column, limit: int) -> List[AuditFacetValue]:
         """取该维度的 top-N distinct 值（按条数倒序）。
@@ -167,7 +192,12 @@ async def get_audit_filter_facets(
 
     try:
         return AuditFacetsOut(
-            resource_types=await _facet_values(AuditLog.resource_type, _FACET_LIMIT),
+            # #2778：资源维按规范值归并（job→job_instance、script_catalog→script），
+            # 保证下拉与列表过滤同一口径；action 维无别名概念，原样透传。
+            resource_types=_merge_alias_facets(
+                await _facet_values(AuditLog.resource_type, _FACET_LIMIT),
+                _FACET_LIMIT,
+            ),
             actions=await _facet_values(AuditLog.action, _FACET_LIMIT),
         )
     except ProgrammingError as exc:
