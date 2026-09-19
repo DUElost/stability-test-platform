@@ -282,7 +282,7 @@ class TestStartupAeeStateMigration(unittest.TestCase):
         return conn
 
     def test_startup_migrates_legacy_aee_state_keys_before_jobs_run(self):
-        from backend.agent.main import _migrate_legacy_aee_state_on_startup
+        from backend.agent.startup_guards import migrate_legacy_aee_state_on_startup
 
         db_path = Path(self._testMethodName).with_suffix(".db")
         if db_path.exists():
@@ -301,7 +301,7 @@ class TestStartupAeeStateMigration(unittest.TestCase):
         finally:
             conn.close()
 
-        summary = _migrate_legacy_aee_state_on_startup(str(db_path))
+        summary = migrate_legacy_aee_state_on_startup(str(db_path))
 
         self.assertEqual(summary["processed_entries_migrated"], 1)
         self.assertEqual(summary["pending_pull_migrated"], 1)
