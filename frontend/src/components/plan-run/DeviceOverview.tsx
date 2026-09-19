@@ -269,7 +269,14 @@ function DeviceTable({
   );
 
   const table = (
-    <Table className="text-[12px]">
+    <Table
+      className="text-[12px]"
+      // #83：虚拟层里滚动视口是外层 device-table-scroll，Table 原语自带的
+      // overflow-auto 包裹层会变成「不滚动的第二 scrollport」——sticky 的最近
+      // 滚动祖先落在它身上，表头钉不住。虚拟化时把内层降为 overflow-visible，
+      // 让 sticky 绑到真正滚动的外层（tailwind-merge 同组去重，后者胜出）。
+      containerClassName={cn(virtualize && 'overflow-visible')}
+    >
         <TableHeader
           className={cn(
             'text-xs font-semibold uppercase tracking-wider',
