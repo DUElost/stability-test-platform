@@ -86,64 +86,64 @@
 
 ### 2.D 完整流程图（Mermaid）
 
-与 §2.A / §2.B 编号表同信息；拆成**总览 + 层 A + 层 B** 三张直链图，避免交叉连线。高亮 = Phase 2 易混接缝（B2 GT vs B5 merge）。
-
-#### 总览（骨架）
-
-```mermaid
-flowchart LR
-  D[设备] --> A[层 A Watcher]
-  A --> H[(Agent HDD)]
-  H --> B[层 B 归档]
-  B --> J[jira 束]
-```
-
-层 A 在 RUNNING 跑完即止（信号 + DLE，不上中心报表）；层 B 另起，再扫 HDD。
-
-#### 图 1 · 层 A（Watcher）
+单张图：按**操作所在层级**分泳道（自上而下）。与 §2.A / §2.B 编号表同信息。高亮 = Phase 2 易混接缝（**B2 @ hosts** vs **B5 @ 控制平面**）。
 
 ```mermaid
 flowchart TB
-  D["设备异常日志<br/>MTK: aee_exp · UNISOC: uniview/ylog"]
-  A1["A1 探测/拉取 · Agent"]
-  H[(Agent HDD 事件目录)]
-  A2["A2 上报 · job_log_signal"]
-  A3["A3 DLE DETECTED→LOCAL<br/>【层 A 止于此】"]
+  subgraph DEV["① devices · 设备"]
+    D["异常日志源<br/>MTK: aee_exp · UNISOC: uniview/ylog"]
+  end
 
-  D --> A1 --> H --> A2 --> A3
-```
+  subgraph HOST["② hosts / Agent · 主机"]
+    direction TB
+    A1["A1 探测/拉取"]
+    HDD[("Agent HDD 第一落点")]
+    A2["A2 上报信号（发送侧）"]
+    B1["B1 采集<br/>MTK: ScanRunner + start_log_scan -m 0<br/>UNISOC: UnisocScanRunner + scan_log_gt"]
+    B2["B2 主机汇总去重 · 单 host<br/>MTK: start_log_scan -dedup_org<br/>UNISOC: Scan-Result-GT · scan_result.py -d"]
+    B3["B3 上送 xls · UploadManager"]
+    B4["B4 上送事件 · EventUploader"]
+  end
 
-#### 图 2 · 层 B（归档）
+  subgraph CP["③ 控制平面 · control plane"]
+    direction TB
+    A23["A2 收信号 → A3 建 DLE<br/>job_log_signal · DETECTED→LOCAL<br/>【层 A 止于此 · 不上中心报表】"]
+    TR["触发 / SAQ 编排<br/>scan → upload → merge → extract"]
+    B5["B5 多 host merge<br/>start_log_scan -merge_files_list<br/>两平台同一工具"]
+    B6["B6 extract · mark ARCHIVED"]
+  end
 
-主链单列；平台差写在节点内，**不**做扇出/汇合边。
+  subgraph ST["④ 中心存储 · central storage"]
+    direction TB
+    P1["dedup/{run}/{mtk|unisoc}/{host}_*"]
+    P2["devices/{run}/"]
+    P3["dedup/{run}/merge/{platform}/"]
+    P4["jira/{run}/"]
+  end
 
-```mermaid
-flowchart TB
-  H[(Agent HDD)]
-  T["触发: 终态 / 手动 / auto_archive<br/>SAQ: scan → upload → merge → extract"]
-
-  B1["B1 采集 · Agent<br/>MTK: ScanRunner + start_log_scan -m 0<br/>UNISOC: UnisocScanRunner + scan_log_gt -m sprd"]
-
-  B2["B2 主机汇总去重 · Agent · 单 host<br/>MTK: start_log_scan -dedup_org<br/>UNISOC: Scan-Result-GT · scan_result.py -d"]
-
-  B3["B3 上送 xls · UploadManager<br/>→ dedup/{run}/{mtk|unisoc}/{host}_*"]
-  B4["B4 上送事件 · EventUploader<br/>→ devices/{run}/ · DLE → REMOTE"]
-
-  B5["B5 多 host merge · 控制面<br/>start_log_scan -merge_files_list<br/>两平台同一工具<br/>→ dedup/{run}/merge/{platform}/"]
-
-  B6["B6 extract · 控制面<br/>→ jira/{run}/ · DLE → ARCHIVED"]
-
-  H --> T --> B1 --> B2 --> B3 --> B4 --> B5 --> B6
+  D --> A1 --> HDD
+  HDD --> A2 --> A23
+  HDD --> TR --> B1 --> B2 --> B3 --> B4
+  B3 --> P1
+  B4 --> P2
+  P1 --> B5 --> P3 --> B6 --> P4
 
   classDef confuse fill:#fff3cd,stroke:#856404,stroke-width:2px
   class B2,B5 confuse
 ```
 
-**读图要点**
+**读图要点（看哪一层在干什么）**
 
-- 连线只有垂直主链：无虚线回流、无 `B2m & B2u --> B3` 扇出。
-- **B2（含 Scan-Result-GT）≠ B5（`-merge_files_list`）**——同色高亮 = 易混对，不是同一阶段。
-- MTK / UNISOC 分叉见节点内两行；细则表见 §2.B / §3。
+| 泳道 | 谁在干活 | 本图节点 |
+|------|----------|----------|
+| **① devices** | 手机上的异常目录 | 仅日志源；不跑平台工具 |
+| **② hosts** | Agent：拉日志、本机 scan/汇总、执行 copy | A1–A2 发、B1–B4；含 **B2 Scan-Result-GT** |
+| **③ 控制平面** | 收信号 / DLE、SAQ 编排、跑 merge/extract CLI | A2 收+A3、触发、**B5 `-merge_files_list`**、B6 |
+| **④ 中心存储** | 只存产物与路径（无计算） | `dedup/` → `devices/` → `merge/` → `jira/` |
+
+- 主链自上而下：设备 → 主机 →（层 A 进控制面台账 | 层 B 再经主机上送）→ 中心路径 → 控制面 merge/extract → jira。
+- 平台差写在 **B1/B2 节点内文**，无 MTK/UNISOC 扇出边。
+- **B2 ≠ B5**：同色高亮只标易混对；一个在 hosts，一个在控制平面（读中心 `*_org.xls`、写 `merge/`）。
 
 ---
 
