@@ -96,6 +96,12 @@ deploy/
   健康页 `/storage` 的「进程内存 Top 10」面板经后端代理读取
   （`backend/services/file_server_monitor.py`）。采样器落地背景见
   [`notes/feature/2026-09-14-hostproc-memory-metrics.md`](../notes/feature/2026-09-14-hostproc-memory-metrics.md)
+- skill 用量探针（HOLLOW 检测，#2785）：`deploy/control-plane/systemd/stp-skill-usage.{service,timer}`——
+  每周一 09:30 跑 `tools/dev/skill_usage_report.py --strict`（强信号=Claude Skill
+  工具调用、弱信号=Codex SKILL.md 读取，观察窗按 SKILL.md frontmatter `type`
+  分型：persistent 14 天 / event 60 天）。退出码契约：0=无洞或缺转录源（新站点
+  恒绿不扰人），1=有洞 → unit failed，由 `systemctl --failed` / journal 承接
+  人审；深挖跑 `python scripts/run_gates.py check:gov`
 
 ---
 

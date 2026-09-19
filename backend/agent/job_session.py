@@ -29,6 +29,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -155,6 +156,7 @@ class JobSession:
             self._dev_reg(self._device_id)
 
         # 2. 启动 Watcher（契约：默认关联，不可绕过）
+        self._maybe_apply_unisoc_inotifyd_paths()
         plan_run_id_raw = self._payload.get("plan_run_id")
         plan_run_id: Optional[int] = None
         if plan_run_id_raw is not None:
@@ -294,6 +296,68 @@ class JobSession:
     # 私有
     # ------------------------------------------------------------------
 
+    def _maybe_apply_unisoc_inotifyd_paths(self) -> None:
+        """#1998 P2 实时性：展锐 watcher 唤醒层的探测/订阅面（ADR-0032 D8 增补）。
+
+        opt-in 默认关（``STP_WATCHER_UNISOC_INOTIFYD=true``）。开启且平台判定为
+        UNISOC 时：把 uniview 根目录（collector 单一真源）作为 ``UNIVIEW`` 分类
+        注入 policy，``required_categories`` 同步换成 ``["UNIVIEW"]``——否则缺省的
+        MTK AEE 类在展锐上必败，watcher 恒 unavailable 连 DeviceLogWatcher 都
+        不创建（48h 生产实测 2639 job 100% unavailable 的根因）。
+
+        只改探测/订阅面，**不改信号语义**：UNIVIEW inotifyd 事件由
+        DeviceLogWatcher._route_unisoc_wake 消费为 reconciler.wake()，信号/DLE
+        仍由 reconciler 独占产出（无双写）。平台判定按 serial 缓存（心跳已付
+        adb 往返）；判定/注入失败走既有 MTK 默认行为（探测必败 → DEGRADED），
+        与本开关关闭时完全一致。
+        """
+        if os.getenv("STP_WATCHER_UNISOC_INOTIFYD", "false").lower() != "true":
+            return
+        try:
+            from .aee.collectors.unisoc import UNIVIEW_ROOT
+            from .device_platform import PLATFORM_UNISOC, detect_device_platform
+
+            adb_path = self._manager.get_dep("adb_path") or "adb"
+            platform = detect_device_platform(adb_path, self._serial)
+            if platform != PLATFORM_UNISOC:
+                return
+            self._policy.paths = {
+                **self._policy.paths,
+                "UNIVIEW": [str(UNIVIEW_ROOT)],
+            }
+            self._policy.required_categories = ["UNIVIEW"]
+            logger.info(
+                "unisoc_inotifyd_paths_applied job_id=%d serial=%s root=%s",
+                self._job_id, self._serial, UNIVIEW_ROOT,
+            )
+        except Exception:
+            logger.exception(
+                "unisoc_inotifyd_paths_apply_failed job_id=%d serial=%s",
+                self._job_id, self._serial,
+            )
+
+    def _wire_unisoc_wake(self) -> None:
+        """#1998：展锐 reconciler 启动成功后，把唤醒回调注入 DeviceLogWatcher。
+
+        watcher 侧 UNIVIEW 事件随即转成 ``reconciler.wake()``；回滚/自关闭经
+        ``_clear_unisoc_wake()`` 清除，防止回调引用已停 reconciler。
+        """
+        try:
+            impl = getattr(self._handle, "impl", None) if self._handle else None
+            if impl is not None and self._reconciler is not None:
+                impl.set_unisoc_wake(self._reconciler.wake)
+        except Exception:
+            logger.exception("unisoc_wake_wire_failed job_id=%d", self._job_id)
+
+    def _clear_unisoc_wake(self) -> None:
+        """#1998：唤醒回调清除（reconciler 停摆/回滚后不得再唤醒）。"""
+        try:
+            impl = getattr(self._handle, "impl", None) if self._handle else None
+            if impl is not None:
+                impl.set_unisoc_wake(None)
+        except Exception:
+            logger.debug("unisoc_wake_clear_failed job_id=%d", self._job_id)
+
     def _resolve_reconciler_class(self, platform: str):
         """ADR-0032 D6: route reconciler by device.platform."""
         try:
@@ -408,6 +472,9 @@ class JobSession:
             if not self._reconciler.start():
                 self._reconciler = None
                 raise RuntimeError("platform_reconciler_preflight_failed")
+            if platform == PLATFORM_UNISOC:
+                # #1998 P2 实时性：唤醒回调接线（watcher UNIVIEW 事件 → reconciler.wake）
+                self._wire_unisoc_wake()
             logger.info(
                 "platform_reconciler_active job_id=%d serial=%s platform=%s",
                 self._job_id, self._serial, platform,
@@ -420,6 +487,7 @@ class JobSession:
             try:
                 if self._handle is not None and self._handle.impl is not None:
                     self._handle.impl.set_aee_reconciler_active(False)
+                    self._clear_unisoc_wake()
             except Exception:
                 pass
 
@@ -434,6 +502,7 @@ class JobSession:
             try:
                 if self._handle is not None and self._handle.impl is not None:
                     self._handle.impl.set_aee_reconciler_active(False)
+                    self._clear_unisoc_wake()
             except Exception:
                 logger.exception(
                     "aee_reconciler_watcher_reset_failed job_id=%d", self._job_id,

@@ -1,6 +1,6 @@
 # ADR-0032：展锐与 MTK 并列日志链路（Watcher 实时 + 归档 dedup）（#463 / #73）
 
-- 状态：**Accepted**（v1.0：DLE 终态语义两平台同构裁决入 §D10，#463，2026-09-19；v0.9：平台路由收口 R1–R4 已裁决并实施 2026-09-15，R3 条件裁决由 v0.8 的 B3 通过**达成**；v0.8：B3 spike 已执行，D3 转已验证；P1 编码已合入 main 2026-08-31）
+- 状态：**Accepted**（v1.1：D8 增补展锐 inotifyd 实时唤醒层（opt-in 默认关），#1998，2026-09-19；v1.0：DLE 终态语义两平台同构裁决入 §D10，#463，2026-09-19；v0.9：平台路由收口 R1–R4 已裁决并实施 2026-09-15，R3 条件裁决由 v0.8 的 B3 通过**达成**；v0.8：B3 spike 已执行，D3 转已验证；P1 编码已合入 main 2026-08-31）
 - 优先级：P1
 - 目标里程碑：M7（方案 C 下补齐展锐 **实时信号 + 终态 dedup** 双覆盖面）
 - 日期：2026-08-31
@@ -19,6 +19,7 @@
 | v0.8 | 2026-09-15 | **B3 spike 已执行**（§B3）：五项验收实测通过，D3「UNISOC 复用 MTK merge 工具」由断言转为**已验证**；第 1 项精确化为「列数同构、两列命名有差异且被工具归一」；未覆盖平台侧发布路径记入 Revisit |
 | v0.9 | 2026-09-15 | **平台路由收口**（§D9 / #2192）：R1 完备性单位由 host 改为 **(host, platform) 期望集**，B1 旧函数名同步为 `scan_completeness`；R2 逐平台 merge 结果落 `run_context.merge_platforms`；R3「同一 merge 工具」的条件裁决由 **v0.8（B3 通过）达成**——D3 维持；R4 未支持态与死接口收口（**a1** 删 `PlatformCollector.detect()` / **b1** 控制面派生 `has_collection_impl` / **b3** Agent 留痕）。**注**：v0.8 已被 B3 占用，平台路由修订故取 v0.9，不挤占已发布版本 |
 | v1.0 | 2026-09-19 | **DLE 终态语义两平台同构裁决**（§D10 / #463）：`ARCHIVED` 判定对 MTK/UNISOC **同义同判**（同一 extract 归档链，无平台分支）；否决「上送即归档」（语义分叉）；实现层残余差异（输入来源 / 上送触发源 / 表头归一）登记于契约文档，不构成状态机差异 |
+| v1.1 | 2026-09-19 | **D8 增补：展锐 inotifyd 实时唤醒层**（§D8 / #1998 P2 实时性，opt-in **默认关**）：开启且平台=UNISOC 时 watcher 以 UNIVIEW 分类订阅 uniview 根（`required_categories` 随之换 `["UNIVIEW"]`，否则 MTK AEE 类必败 → watcher 恒不创建）；inotifyd 事件**只作 `reconciler.wake()` 唤醒**（绕过 batch 5s 聚合），信号/DLE 仍由 reconciler 独占产出（无双写）；唤醒带最小间隔地板（默认 2s，未真机校准）。**采纳前置 = 真机探测清单**（inotifyd 在位 / 目录可读性 / mask / 写盘时序，见 #1998），探测通过前不启用 |
 
 ## 背景
 
@@ -126,6 +127,8 @@ scan_now（控制面）→ Agent 按 platform 路由
 | 路由 | **`device.platform` 分支**（D6） |
 | env | **内置**，不暴露独立 Watcher 外置脚本键（D3） |
 | 与归档目录 | **串行、分树**：Watcher 运行期落盘至 **Watcher 事件目录**（参照 MTK `STP_AEE_LOCAL_ROOT` 角色）；`scan_now` 归档链 **另起** `scan_log_gt` 工作区，**禁止**两路径并发写同一目录。归档可读 Watcher 已落盘材料，但须在 Reconciler 轮次与 `scan_now` 之间 **串行化**（Job RUNNING 仅 Watcher；终态 scan 仅归档 runner）。 |
+
+**v1.1 增补（2026-09-19，#1998 P2 实时性）**：w1 轮询之上叠加 **opt-in 唤醒层**（默认关）——`STP_WATCHER_UNISOC_INOTIFYD=true` 且平台=UNISOC 时，watcher 以 UNIVIEW 分类订阅 uniview 根（`required_categories` 同步换 `["UNIVIEW"]`，否则缺省 MTK AEE 类必败 → watcher 恒不创建，48h 生产实测 2639 job 100% `unavailable` 的根因）。**形态取「事件源分离、写入方唯一」**：inotifyd 命中只调 `UnisocUniviewReconciler.wake()` 把下一拍从 baseline 提前（带最小间隔地板防风暴），信号/DLE 仍由 reconciler tick 独占产出；否决「inotifyd 直接 emit」（与 reconciler 双写）与「仅照搬 MTK 抑制语义」（无秒级收益）。唤醒等待与 stop 双路即时返回；`wake_ticks` 入 `ReconcilerStats` 供观测。**采纳前置 = #1998 真机探测清单**，探测通过前不启用。
 
 ### D9：平台未支持态与死接口收口（**已裁定：a1 + b1 + b3**，2026-09-15 实施）
 

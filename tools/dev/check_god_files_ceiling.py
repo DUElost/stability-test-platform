@@ -57,11 +57,13 @@ ROOT = Path(__file__).resolve().parents[2]
 #:   main 792 → 682 → 封顶 **717**。
 #: - 2026-09-19 十一次下调（#736：停机序列抽出 `graceful_shutdown.py`）：
 #:   main 682 → 630 → 封顶 **662**。
+#: - 2026-09-19 十二次下调（#736：启动门禁抽出 `startup_guards.py`）：
+#:   main 630 → 536 → 封顶 **563**。
 CEILINGS: dict[str, int] = {
     "backend/api/routes/plan_runs.py": 507,
     "backend/api/routes/agent_api.py": 411,
     "backend/api/routes/projects.py": 378,
-    "backend/agent/main.py": 662,
+    "backend/agent/main.py": 563,
 }
 
 
