@@ -160,10 +160,63 @@ async def test_flush_is_serialized_no_overlapping_task(monkeypatch):
         assert len(calls) == 1, "上一次 flush 未完成时不应叠加新任务"
 
         release.set()
-        await asyncio.sleep(0.1)
-        assert broadcast.await_count == 1
+        # #2799：在飞期间到达的变更必须**最终落地**——收尾回调补武装后第二次推送发出。
+        # 本用例此前断言 `await_count == 1`，实际把「丢唤醒」固化成了期望行为。
+        for _ in range(40):
+            if broadcast.await_count >= 2:
+                break
+            await asyncio.sleep(0.05)
+        assert broadcast.await_count == 2, (
+            "在飞期间到达的变更没有被补推 —— 丢唤醒（#2799）：收尾回调未重武装"
+        )
 
     pub._reset_for_tests()
+
+
+@pytest.mark.asyncio
+async def test_compute_hang_times_out_and_retries(monkeypatch):
+    """#2799：compute 挂起必须有超时出口——否则串行化判据让推送永久冻结。
+
+    反向自证：无超时实现下 `_flush_task` 永不收尾，后续每次武装都被跳过，本用例的
+    `_failure_streak >= 1`（超时走失败重试）不会成立。
+    """
+    import threading
+
+    monkeypatch.setenv("STP_DASHBOARD_SUMMARY_PUSH_INTERVAL_SECONDS", "0.01")
+    pub._reset_for_tests()
+    monkeypatch.setattr(pub, "_COMPUTE_TIMEOUT_SECONDS", 0.05)
+    pub.bind_event_loop(asyncio.get_running_loop())
+
+    release = threading.Event()
+
+    def _hang(_db):
+        release.wait(timeout=1.0)   # 线程无法取消：给个上界，别拖住测试进程退出
+        return {}
+
+    broadcast = AsyncMock()
+    try:
+        with patch(
+            "backend.services.dashboard_summary_publisher.compute_dashboard_summary",
+            _hang,
+        ), patch(
+            "backend.services.dashboard_summary_publisher.SessionLocal",
+        ) as session_local, patch(
+            "backend.realtime.socketio_server.broadcast_dashboard_summary",
+            broadcast,
+        ), patch(
+            "backend.services.dashboard_summary_publisher.dashboard_summary_push_total",
+        ):
+            session_local.return_value.close = lambda: None
+
+            pub.schedule_dashboard_summary_push()
+            await asyncio.sleep(0.3)
+
+            assert pub._failure_streak >= 1, "超时必须走失败路径（退避重试），不是静默丢弃"
+            assert broadcast.await_count == 0, "挂起的 compute 不该产生推送"
+            assert pub._flush_task is None, "超时的 flush 必须收尾，否则后续武装全被跳过"
+    finally:
+        release.set()
+        pub._reset_for_tests()
 
 
 @pytest.mark.asyncio

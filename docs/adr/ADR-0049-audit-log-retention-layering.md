@@ -9,6 +9,9 @@
 - 关联：[#2694](https://github.com/DUElost/stability-test-platform/issues/2694)
   （原始报告——已由 PR #2699 落地索引 + facets 有界两项后关闭，无界增长前提未变）/
   [#2741](https://github.com/DUElost/stability-test-platform/issues/2741)（裁决与实现载体）/
+  [#2789](https://github.com/DUElost/stability-test-platform/issues/2789) /
+  [ADR-0050](./ADR-0050-install-evidence-retention-alignment.md)（`install_agent*` 落 business 90d 与 ADR-0044 D3
+  「持久证据」的视界对齐——Proposed 待裁决）/
   #777 R-08（风险总表对应行）/
   [ADR-0020](./ADR-0020-plan-step-one-shot-migration.md)（`plan_migration_audit`「保留 ≥6 个月后转归档」先例）
 

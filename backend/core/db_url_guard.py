@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 import os
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 CONTROL_PLANE_ENV_FILE = ".env.backend"
 
 #: loopback 主机名；host 为空 = libpq 走本机 unix socket，同样是本机实例。
+#: #2794：127.0.0.0/8 整段与 unix socket 路径在 :func:`_host_is_loopback` 里另判。
 _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 
@@ -92,13 +93,83 @@ def control_plane_env_file_present(repo_root: str | os.PathLike[str]) -> bool:
     )
 
 
-def _is_loopback(url: str) -> bool:
-    """显式地址是否指向本机（loopback 主机名，或空 host = 本机 unix socket）。"""
+def _authority_host(authority: str) -> str | None:
+    """``[host][:port]`` → host；形态不可解析返回 None（调用方 fail closed）。"""
+    if not authority:
+        return ""
+    if authority.startswith("["):                 # IPv6 字面量
+        end = authority.find("]")
+        return authority[1:end] if end != -1 else None
+    if ":" in authority:
+        host, _, port = authority.rpartition(":")
+        if not port.isdigit():
+            return None                           # 非端口形态：不猜
+        return host
+    return authority
+
+
+def _host_candidates(url: str) -> list[str] | None:
+    """枚举 DSN 在 libpq 语义下**可能连接**的全部 host；不可解析返回 None（fail closed）。
+
+    #2794：``urlsplit(...).hostname`` 只读 authority 段，漏掉三类绕过形态——
+    - **query 覆盖**：``?host=127.0.0.1`` / ``?hostaddr=127.0.0.1``（libpq 以 query 为准，
+      覆盖 authority 里的主机）；
+    - **multihost**：``h1:5432,127.0.0.1:5432``（逗号分隔，libpq 逐个尝试）；
+    - **unix socket 路径**：``?host=/var/run/postgresql``（本机实例的另一种写法）。
+
+    返回空列表 = 没有可用 host 信息（由调用方按「本机」处理）。
+    """
     try:
-        host = urlsplit(url).hostname
+        parsed = urlsplit(url)
     except ValueError:
+        return None
+    if parsed.scheme and not parsed.scheme.startswith("postgresql"):
+        return []                                 # 非 PG 由 scheme 闸负责，不做 loopback 判定
+    hosts: list[str] = []
+    netloc = parsed.netloc.rsplit("@", 1)[-1]     # 去 userinfo（不影响 host 判定）
+    if netloc:
+        for part in netloc.split(","):            # multihost：逐个枚举，任一命中即算本机
+            host = _authority_host(part.strip())
+            if host is None:
+                return None
+            hosts.append(host)
+    else:
+        hosts.append("")                          # 空 host = libpq 走本机 socket/默认
+    try:
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True):
+            if key.lower() in ("host", "hostaddr"):
+                hosts.extend(part.strip() for part in str(value).split(","))
+    except ValueError:
+        return None
+    return hosts
+
+
+def _host_is_loopback(host: str) -> bool:
+    """单个 host 是否落在本机：空串（socket/默认）、unix socket 路径、loopback 名/段。"""
+    value = (host or "").strip().strip("[]")
+    if value == "" or value.startswith("/"):
+        return True                               # 空 = 本机默认；``/…`` = unix socket 路径
+    lowered = value.lower()
+    if lowered == "localhost" or lowered in _LOOPBACK_HOSTS:
+        return True
+    if value.startswith("127.") or value.startswith("::ffff:127."):
+        return True                               # 127.0.0.0/8 与 v4-mapped 形态
+    return lowered in ("0.0.0.0", "::")
+
+
+def _is_loopback(url: str) -> bool:
+    """显式地址是否指向本机（#2794 加固：枚举全部 host，任一命中即拒）。
+
+    解析不出 host 形态时**按本机处理**（fail closed）——该函数只在控制面闸里被调用，
+    宁可多拒一个非常规 DSN（有 ``STP_ALLOW_UNSAFE_TEST_DATABASE_URL`` 出口），
+    也不放一个能绕过判定、把 TRUNCATE 打到生产实例的写法进来。
+    """
+    hosts = _host_candidates(url)
+    if hosts is None:
+        return True
+    if not hosts:
         return False
-    return host is None or host == "" or host in _LOOPBACK_HOSTS
+    return any(_host_is_loopback(host) for host in hosts)
 
 
 def guard_test_database_url(

@@ -14,6 +14,10 @@
 | 2 | 使用事实不可得 | exit 0（巡检成功执行，结论未知要显式暴露） | unknown=1 |
 | 3 | 工具自身异常 | **exit 1**（systemd failed ⇒ 进既有告警面） | broken=1 |
 
+⚠ 码 1 有第二种来源（#2797）：判据在 **import 期**就炸（module 级 `resolve_database_url()`
+/ `create_engine`，发生在 `main()` 的 try 之前）时，解释器的默认退出码恰好也是 1。故
+`summarize` 以「payload 是否带 `guard` 块」区分真判定与进程早死：不带 ⇒ broken（见其实现）。
+
 1/2 不 fail 的理由：让 timer 因「存在待授权退役项」天天 failed，会把真正的工具故障淹死在
 告警疲劳里；到期数量与「未知」是**数据**，交给指标与人消费，而不是任务状态。
 `due=0` 必须能与「从没跑过」区分 ⇒ 另出 `last_run` 指标；指标写不出去就当场失败，不做
@@ -113,12 +117,19 @@ def summarize(rc: int, payload: dict) -> tuple[dict[str, float], int]:
 
     以 `--guard` 的**退出码**为准（那才是契约），payload 只用于取数量；两者矛盾时按
     更坏的读法处理——码说 broken 就是 broken，绝不粉饰。
+
+    #2797：`GUARD_DUE=1` 与「判据 import 期就炸」的**解释器默认退出码同码**（module 级
+    `resolve_database_url()` / `create_engine` 都发生在 `main()` 的 try 之前）。判据 = payload
+    是否带本工具约定的 `guard` 块：带 ⇒ 真判定（1=有活要干，任务成功）；不带 ⇒ 进程没走到
+    输出那一步，折成 broken——否则守卫的死讯会被读成「有活要干」，broken 永不置位。
     """
     guard = payload.get("guard") if isinstance(payload, dict) else None
     violations = float((guard or {}).get("violations", 0) or 0)
     if rc == GUARD_OK:
         return {"due": violations, "unknown": 0.0, "broken": 0.0}, 0
     if rc == GUARD_DUE:
+        if guard is None:
+            return {"due": 0.0, "unknown": 0.0, "broken": 1.0}, 1
         # 码说「有到期项」而 payload 给不出数量：显示 1 而不是 0——把脏读成干净更糟。
         return {"due": max(violations, 1.0), "unknown": 0.0, "broken": 0.0}, 0
     if rc == GUARD_UNKNOWN:

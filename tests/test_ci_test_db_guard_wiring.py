@@ -213,6 +213,36 @@ class TestControlPlaneWiring:
         )
 
 
+class TestReaderSurface:
+    """#2794：`TEST_DATABASE_URL` 的读取面必须**显式**——新增即红。
+
+    旧缺口：守卫只在 `backend/tests/conftest.py` 接线，而「谁还会读到这个变量」没有
+    判据；将来新增一个会写库的入口（脚本/夹具）不会被任何检查看见。这里把「非测试
+    模块的读取方」钉进登记表：新读取方要么接守卫，要么在表里写清只读理由。
+    测试模块（`backend/tests/` 下）读取它只用于连通性判断，不直接建会话，故豁免。
+    """
+
+    #: 非测试模块的 `TEST_DATABASE_URL` 读取方 → 处置理由。
+    _READERS_OUTSIDE_TESTS = {
+        "backend/scripts/check_schema_sync.py": "只读诊断（schema 比对），不 TRUNCATE",
+    }
+
+    def test_readers_outside_tests_are_registered(self):
+        pattern = re.compile(r'os\.(?:environ\.get|getenv)\(\s*["\']TEST_DATABASE_URL["\']')
+        found: set[str] = set()
+        for path in REPO_ROOT.rglob("*.py"):
+            rel = path.relative_to(REPO_ROOT).as_posix()
+            if rel.startswith(("backend/tests/", "tests/")) or "/.git/" in rel:
+                continue
+            if pattern.search(path.read_text(encoding="utf-8", errors="ignore")):
+                found.add(rel)
+        assert found == set(self._READERS_OUTSIDE_TESTS), (
+            "非测试模块读取 TEST_DATABASE_URL 的清单漂移——若新读取方会写库，"
+            "必须接 guard_test_database_url；只读的在此登记理由。差异："
+            f"{sorted(found ^ set(self._READERS_OUTSIDE_TESTS))}"
+        )
+
+
 class TestCiWiring:
     """ci.yml 接线契约——#1547 的防复发主守卫。"""
 
