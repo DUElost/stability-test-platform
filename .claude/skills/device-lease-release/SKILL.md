@@ -1,6 +1,7 @@
 ---
 name: device-lease-release
 description: 设备租约紧急释放——设备卡在 ACTIVE 无法重新租用、或平台设备页长期被占用需要立即让出时执行。触发时机：设备租约异常/紧急释放、PlanRun 卡住需强制让出设备、设备复用前清理租约。
+type: event  # 低频事件场景（#2785 分型：HOLLOW 观察窗 60 天）
 ---
 
 # 设备租约紧急释放

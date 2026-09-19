@@ -1,6 +1,7 @@
 ---
 name: agent-host-onboard
 description: 新 Linux Agent 主机接入 SOP。触发时机：扩容新 host、替换故障机、批量上线新机、storage 页新机「中心存储未挂载」或「设备日志盘未上报」。
+type: event  # 低频事件场景（#2785 分型：HOLLOW 观察窗 60 天）
 ---
 
 # 新 Agent Host 接入 SOP（v0 骨架）

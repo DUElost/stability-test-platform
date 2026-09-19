@@ -211,11 +211,15 @@ GATES = {
         ROOT,
         None,
     ),
-    # skill 用量探针（防建而不用）：--strict 下 ≥14 天零调用 = 门禁红。
-    # 空洞处置二选一：删 skill 或改写触发词使其真实可命中。
+    # skill 用量探针（防建而不用，#2785 多源化+分型）：强信号=Claude Skill
+    # 工具调用（判洞唯一依据），弱信号=Codex 读取会话（仅作删留裁决上下文）；
+    # HOLLOW 观察窗按 frontmatter type 分型：persistent 14 天 / event 60 天。
+    # 空洞处置二选一：删 skill 或改写触发词使其真实可命中；--self-test 先行
+    # 红绿自证扫描与判洞逻辑本身。
     # （gov-evals 行为 eval 已于 2026-09-06 移除——S11 锚点承接不变量保全，
     #   残余缺口见 #855 与 docs/notes/simplification/2026-09-06-gov-eval-l1-removal.md）
     "gov-skills": (
+        f"{PY} tools/dev/skill_usage_report.py --self-test && "
         f"{PY} tools/dev/skill_usage_report.py --strict",
         ROOT,
         None,
@@ -313,7 +317,8 @@ PROFILES = {
     "check:gov": ["gov-surface", "gov-skills", "harness-ingest"],
     # check:full = main 全量 CI 的本地可跑部分 + 本机专属 gate，但排除
     # 数据源物理仅在本机的 gate（#825：他机跑 check:full 不得确定性红灯）
-    # 与须手跑外部依赖的 gate（#1046）。gov-skills 依赖 ~/.claude 会话转录；
+    # 与须手跑外部依赖的 gate（#1046）。gov-skills 依赖本机会话转录
+    # （~/.claude + ~/.codex，缺源自动跳过但判洞失义）；
     # harness-ingest 每形态一次真实非交互 LLM 会话（分钟级 × 外部依赖），
     # 仅 check:gov 手跑；ai-drift 在无 registry 数据的机器上 no-op 绿，故保留。
     "check:full": None,  # = 全部 GATES - FULL_EXCLUDE，按 GATES 顺序
