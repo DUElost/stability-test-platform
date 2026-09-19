@@ -37,6 +37,8 @@
          ▲ 层 A 止于此
 ```
 
+编号表见 [§2.A](#2a-watcher-实时编号流水线) / [§2.B](#2b-归档终态编号流水线)；**完整流程图**见 [§2.D](#2d-完整流程图mermaid)。
+
 **串行（UNISOC，D8）**：RUNNING 只跑层 A；归档只跑层 B——禁止两路径并发写同一目录。细节见 §3。
 
 ### 2.A Watcher 实时（编号流水线）
@@ -80,12 +82,70 @@
 | **B** | 改 **B5** 让 unisoc 换独立 merge 工具（须先有多文件契约；GT 现态仍无） |
 | **C** | 包 **B2** 的 GT 调用为 Agent Adapter；**不**改 B5 |
 
-平台对照（B1/B2 两列）与 DLE/路径细则见 §3–§4。
+平台对照（B1/B2 两列）与 DLE/路径细则见 §3–§4。全路径见下方 [§2.D 完整流程图](#2d-完整流程图mermaid)。
+
+### 2.D 完整流程图（Mermaid）
+
+下图与 §2.A / §2.B 编号表**同信息**；GitHub 可渲染。粗框 = Phase 2 易混接缝（B2 vs B5）。
+
+```mermaid
+flowchart TB
+  device["设备异常日志<br/>MTK: aee_exp · UNISOC: uniview/ylog"]
+
+  subgraph layerA["层 A · Watcher 实时 · Job RUNNING"]
+    direction TB
+    A1["A1 探测/拉取 · Agent<br/>→ HDD 事件目录"]
+    A2["A2 上报信号 · Agent→控制面<br/>→ job_log_signal"]
+    A3["A3 建 DLE 台账<br/>DETECTED → LOCAL"]
+    A1 --> A2 --> A3
+  end
+
+  hdd[("Agent HDD<br/>第一落点")]
+
+  subgraph layerB["层 B · 归档终态 · scan_now / SAQ"]
+    direction TB
+    Btrig["触发: 终态 / 手动 / auto_archive<br/>SAQ: scan→upload→merge→extract"]
+
+    subgraph B1fork["B1 采集 · Agent"]
+      direction LR
+      B1m["MTK<br/>ScanRunner<br/>start_log_scan -m 0"]
+      B1u["UNISOC<br/>UnisocScanRunner<br/>scan_log_gt -m sprd"]
+    end
+
+    subgraph B2fork["B2 主机汇总去重 · Agent · 单 host"]
+      direction LR
+      B2m["MTK<br/>start_log_scan -dedup_org"]
+      B2u["UNISOC · Scan-Result-GT<br/>scan_result.py -d"]
+    end
+
+    B3["B3 上送 xls · UploadManager<br/>→ dedup/run/mtk|unisoc/host_*"]
+    B4["B4 上送事件 · EventUploader<br/>→ devices/run/ · DLE → REMOTE"]
+    B5["B5 多 host merge · 控制面<br/>start_log_scan -merge_files_list<br/>两平台同一工具<br/>→ dedup/run/merge/platform/"]
+    B6["B6 extract · 控制面<br/>→ jira/run/ · DLE → ARCHIVED"]
+
+    Btrig --> B1m & B1u
+    B1m --> B2m
+    B1u --> B2u
+    B2m & B2u --> B3 --> B4 --> B5 --> B6
+  end
+
+  device --> A1
+  A1 --> hdd
+  hdd -.->|"层 A 止于此"| A3
+  hdd -->|"层 B 再扫 HDD"| Btrig
+
+  classDef confuse fill:#fff3cd,stroke:#856404,stroke-width:2px
+  class B2u,B5 confuse
+```
+
+**读图要点**
+
+- 层 A 与层 B **串行、分树**（UNISOC D8）：RUNNING 不跑 B；归档不与 Watcher 同写一目录。
+- **B2u（Scan-Result-GT）≠ B5（`-merge_files_list`）**——高亮同色仅表示「易混对」，不是同一阶段。
+- 简化骨架：`设备 → HDD → (A 止) / (B: 采集→汇总→上送→merge→extract → jira)`。
 
 ---
 
-
-## 3. 分阶段：谁执行、工具、I/O、事实权威
 
 ### 3.1 Watcher 实时（跑测中）
 
