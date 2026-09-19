@@ -95,7 +95,7 @@ with signal_seq_no / linked signals: 6
 | #217 | `STP_EVENT_UPLOADER_PRUNE_LOCAL` / HddSpill — 见 [`../operations/adr-0028-prune-local-and-spill-gray.md`](../operations/adr-0028-prune-local-and-spill-gray.md)；**勿** fleet 开 prune |
 
 | #220 / #73 | 阶段 4：UNISOC/QCOM 仅入口；非 MTK 跳过扫描 |
-| inotifyd 独占写 DLE | Reconciler 在岗时 inotifyd 路径被抑制；「关 Reconciler 只走 inotifyd」自动化覆盖见 #310（`test_device_watcher_dle.py`：pull 成功 → DLE create + EventUploader enqueue；pull 失败 → pull_failed 记录；reconciler 激活 → 抑制注册）；真机 E2E 待实验室执行 |
+| inotifyd 独占写 DLE | Reconciler 在岗时 inotifyd 路径被抑制；「关 Reconciler 只走 inotifyd」自动化覆盖见 #310（`test_device_watcher_dle.py`：pull 成功 → DLE create + EventUploader enqueue；pull 失败 → pull_failed 记录；reconciler 激活 → 抑制注册）。**真机 E2E 已完成（2026-09-19，#310）**：单机翻转 `STP_WATCHER_AEE_RECONCILE_ENABLED=false` + reload_config，骑周期回归链两轮采证——创建半程（inotifyd 触发 → pull → DLE LOCAL + signal 关联）在合成与真实条目重放（17MB ANR）上均验，含 puller 严格校验重拉与 inotifyd 源 31 次断连退避自愈实录。**上送半程未走通（明确限制）**：合成不可解析内容停在 LOCAL 属过滤模型设计行为；真实条目重放亦未达标记——根因 puller 落地 `<epoch_ms>_` 前缀与 `event_dir_basename_from_path` 年首时间戳正则不兼容（#2822 修复跟踪，Reconciler 主路无感、灰度回退场景静默断链）。执行程序 [`../operations/2026-09-19-inotifyd-only-e2e-procedure.md`](../operations/2026-09-19-inotifyd-only-e2e-procedure.md)；证据与 Agent Note [`../notes/testing/2026-09-19-inotifyd-only-e2e-310.md`](../notes/testing/2026-09-19-inotifyd-only-e2e-310.md) | |
 
 ---
 
