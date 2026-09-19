@@ -215,7 +215,12 @@ class DedupMergeEngine(ABC):
         """执行单次 vendor 去重合并（不负责 round/水位线/发布编排）"""
         pass
 ```
-现态事实：`backend/tasks/saq_tasks.py` 的 `merge_task` 调用 service 层 `run_merge_all_platforms_sync`（同一扫描工具按 mtk/unisoc 分区跑两遍），厂商专用参数（`build_merge_argv`、`-side`、merge 产物目录探测）在 **service 层** `dedup_scan.py`。迁移路径：unisoc 分区先行接入第一个引擎实现（展锐 `Scan-Result-GT`，#463 P2，插在 ADR-0032 已建的 per-platform 循环内），mtk 分支随后以行为等价验收迁入。
+
+> **Phase 2 选项 A（2026-09-19）落地收窄**：首个实现 `StartLogScanMergeEngine` 只收口
+> `supports_merge_files_list` / `build_merge_argv`（与现态 `#291` 门面等价）；子进程执行、
+> flock、发布与登记仍在 `dedup_scan.run_merge_sync`。上表 `run_merge` → `MergeResult` 为
+> 终态接口示意，不要求本轮一次抽完。
+现态事实：`backend/tasks/saq_tasks.py` 的 `merge_task` 调用 service 层 `run_merge_all_platforms_sync`（同一扫描工具按 mtk/unisoc 分区跑两遍），厂商专用参数（`build_merge_argv`、`-side`、merge 产物目录探测）经 **B5** `DedupMergeEngine`（`backend/services/dedup/StartLogScanMergeEngine`）收口后再由 `dedup_scan.py` 编排。**Phase 2 选项 A（ADR-0033 v1.5）**：样板包现态 `start_log_scan -merge_files_list`，**不是** Scan-Result-GT（GT 仍只做 Agent B2）；两平台同一引擎（D3）。后续 Phase 3 可将更多 vendor 特化继续收进 adapters，验收 = 行为等价。
 
 ### 4.2 设备端专项测试：标准 PlanStep 适配器
 针对 GPU（Antutu）、开关机、休眠唤醒专项，统一采用标准化 Python 适配器模板：
@@ -277,7 +282,7 @@ gantt
     阻断新工具源码全量拷贝入仓             :active, 2026-09-03, 3d
     推进 Issue #735 退役 47 个历史空脚本   :2026-09-04, 3d
     section Phase 2 标杆打样接入
-    展锐去重工具 DedupMergeEngine 适配    :2026-09-07, 5d
+    B5 DedupMergeEngine 包 start_log_scan（选项 A）  :2026-09-19, 2d
     Agent 工具包拉取、解压与校验缓存机制  :2026-09-12, 5d
     GPU/开关机/休眠唤醒三专项标准模板打样  :2026-09-17, 7d
     section Phase 3 存量收敛

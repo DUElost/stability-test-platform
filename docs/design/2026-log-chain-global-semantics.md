@@ -1,7 +1,7 @@
 # 终端设备日志链 · 全局语义
 
 - **状态**：Living（语义汇总；不新增决策）
-- **读者**：拍板 ADR-0033 Phase 2 A/B/C 前需要「整条链是什么」的人；不要求读完全部 ADR
+- **读者**：需要整条设备日志链语义（含已选定的 ADR-0033 Phase 2 选项 A）的人；不要求读完全部 ADR
 - **权威关系**：行为细节以代码与测试为准；Accepted ADR 与 [`2026-scan-upload-merge-contract.md`](./2026-scan-upload-merge-contract.md) 为内容权威；本文是**可引用汇总**（填 ownership X2「缺可引用汇总」），不新增决策
 - **关联**：ADR-0025 / 0027 / 0028 / 0032 / 0033；[`2026-semantic-ownership.md`](./2026-semantic-ownership.md) X2；[`2026-09-18-adr0033-phase2-unisoc-merge-blocker.md`](../notes/architecture/2026-09-18-adr0033-phase2-unisoc-merge-blocker.md)；#745 / #2546 / #463
 - **日期**：2026-09-19
@@ -19,7 +19,7 @@
 | 不是「一个叫 scan 的黑盒」 | 采集、主机汇总去重、多 host merge、extract 归档是**不同阶段、不同宿主、不同工具 argv** |
 | 不是厂商工具本体 | 平台自研的是 DLE / log_signal / 分区完备性 / merge 编排 / 状态机；`start_log_scan` / `scan_log_gt` / `scan_result` 是**外置 CLI** |
 | 不是运行日志链路 | Agent SSD 上的 `logs/runs/{job_id}/` **永不**上中心（ADR-0025） |
-| 不是已落地的 Tool Contract / DedupMergeEngine | ADR-0033 Phase 2/3 **零适配器代码**；现态仍是私有 env + 直接 argv |
+| 不是未拍板的 Tool Contract 全量 | ADR-0033 Phase 2 **选项 A** 已落地 B5 薄 `DedupMergeEngine`（包现态 `-merge_files_list`）；包存储 / Phase 3 / D2 全量契约仍未落地；GT 仍只在 B2 |
 
 ---
 
@@ -73,12 +73,12 @@
           scan_result -d              -merge_files_list
   MTK:    start_log_scan -dedup_org   （同一二进制，不同 argv）
 
-  ⚠️ 二者不是同一阶段。Phase 2 阻塞正是把 B2 的 GT 误写成「插进 B5」。
+  ⚠️ 二者不是同一阶段。v1.4 阻塞正是把 B2 的 GT 误写成「插进 B5」；v1.5 选项 A 已把样板挂回 B5。
 ```
 
 | 若选… | 接缝挂在哪一格 |
 |-------|----------------|
-| **A** | 包 **B5** 现态 merge CLI；GT 留在 **B2** |
+| **A（已选）** | 包 **B5** 现态 merge CLI；GT 留在 **B2** |
 | **B** | 改 **B5** 让 unisoc 换独立 merge 工具（须先有多文件契约；GT 现态仍无） |
 | **C** | 包 **B2** 的 GT 调用为 Agent Adapter；**不**改 B5 |
 
@@ -273,19 +273,19 @@ ownership 索引（`2026-semantic-ownership.md`）**X2**：日志域四层权威
 | **工具宿主分层** | Tier1/2/3 | ADR-0033 D1 → `R-tool-hosted-by-tier` | 采集=Tier2；merge=Tier1 |
 | **跨进程契约** | SAQ / 完备性 / 路径 | `2026-scan-upload-merge-contract.md` | §3.7 |
 
-**产品类 B（终端日志链）**：平台深嵌自研核心（DLE、编排、状态机）；厂商 CLI **不入仓**；Adapter 仅为薄接缝（尚未落地）。
+**产品类 B（终端日志链）**：平台深嵌自研核心（DLE、编排、状态机）；厂商 CLI **不入仓**；Adapter 为薄接缝（Phase 2 选项 A：B5 `StartLogScanMergeEngine` 已落地）。
 
 ---
 
-## 6. Phase 2 A/B/C：语义前提（不拍板）
+## 6. Phase 2 A/B/C：语义前提（**已选定 A**）
 
-背景：阻塞笔记结论——停做控制面 unisoc/`Scan-Result-GT` 的 `DedupMergeEngine`，待选出口。
+背景：v1.4 阻塞——不得把 Scan-Result-GT（B2）写成控制面 `DedupMergeEngine`。**2026-09-19 Owner 选定 A**（ADR-0033 v1.5；Agent Note `2026-09-19-adr0033-phase2-option-a`）。
 
-| 选项 | 语义上意味什么 | 与现态权威的关系 |
-|------|----------------|------------------|
-| **A** | 包 **§2 B5** 现态控制面 merge CLI（`start_log_scan -merge_files_list`）；GT **继续只做** **§2 B2** Agent host 汇总 | **行为不变**；需改 ADR-0033 措辞（样板=ACL 接缝，工具仍 D3）。与 ADR-0032 B3/D3 **一致** |
-| **B** | 改 **§2 B5**：unisoc 控制面改用**独立** merge 工具（可能扩展 GT 或多文件契约） | **修订 ADR-0032 D3**；现态 GT **仍无** `-merge_files_list`，须先有上游契约再动控制面；可能引入 `STP_BACKEND_UNISOC_MERGE_*`（曾作条件分支，ADR-0032 B3 通过后未启用） |
-| **C** | 包 **§2 B2** Agent 侧 GT Adapter（`UnisocScanRunner`→`scan_result -d`） | 兑现「GT 适配器」字面；**不**兑现「插在 per-platform merge 循环内」；**B5** 不动 |
+| 选项 | 语义上意味什么 | 与现态权威的关系 | 状态 |
+|------|----------------|------------------|------|
+| **A** | 包 **§2 B5** 现态控制面 merge CLI（`start_log_scan -merge_files_list`）；GT **继续只做** **§2 B2** Agent host 汇总 | **行为不变**；样板=ACL 接缝，工具仍 D3 | **已选** |
+| **B** | 改 **§2 B5**：unisoc 控制面改用**独立** merge 工具 | **修订 ADR-0032 D3**；GT 现态仍无多文件 merge | 未选 |
+| **C** | 包 **§2 B2** Agent 侧 GT Adapter | 兑现「GT 适配器」字面；**不**改 B5 | 未选（可另开） |
 
 ```text
   §2 B2  Agent 主机汇总              §2 B5  控制面多 host merge
@@ -293,21 +293,20 @@ ownership 索引（`2026-semantic-ownership.md`）**X2**：日志域四层权威
   │ MTK: -dedup_org     │           │ 两平台: -merge_files_list │
   │ UNISOC: GT -d       │ ────────► │ （D3 同一工具）            │
   └─────────────────────┘           └──────────────────────────┘
-       ▲ C 挂这里                         ▲ A 挂这里
+       ▲ C 可另挂                         ▲ A 已挂这里
                                           B = 拆掉「同一工具」、unisoc 另挂
 ```
-
-**选之前只需确认**：防腐接缝挂 **B5**（控制面 merge）、**B2**（Agent GT），还是愿意改 D3 让 unisoc 的 B5 换工具。详见 §2.C。
 
 ---
 
 ## 7. 非目标与已知过渡例外
 
-**本文 / 当前拍板前明确不做**
+**选项 A 本轮明确不做**
 
-- 不实现 Adapter / `DedupMergeEngine` / 包存储
-- 不改 `run_merge_sync` 行为
-- 不替用户选 A/B/C
+- 不做包存储 / Phase 3 / 修订 D3（B）/ 以 GT Adapter 当 Phase 2 主样板（C）
+- 不改 `run_merge_sync` 的编排位置与 merge 产物语义（仅 argv 经 B5 薄引擎）
+
+**已落地（v1.5）**：`backend/services/dedup/` 薄 `DedupMergeEngine`（`StartLogScanMergeEngine`）
 
 **已知过渡例外（ADR-0033 §5.4）**
 
@@ -331,7 +330,7 @@ ownership 索引（`2026-semantic-ownership.md`）**X2**：日志域四层权威
 | 并列双轨 + D3 同一 merge | [ADR-0032](../adr/ADR-0032-unisoc-mtk-parallel-dedup-pipelines.md) |
 | 过滤上送 + DLE | [ADR-0025](../adr/ADR-0025-phase4-architecture-alignment.md)、[ADR-0028](../adr/ADR-0028-device-log-event-and-continuous-upload.md) |
 | merge 实例绑定 | [ADR-0027](../adr/ADR-0027-control-plane-horizontal-scaling.md) 清单第 7 |
-| 工具结构 / Phase 2 阻塞 | [ADR-0033](../adr/ADR-0033-tool-kit-ecosystem-integration.md) v1.4；[阻塞笔记](../notes/architecture/2026-09-18-adr0033-phase2-unisoc-merge-blocker.md) |
+| 工具结构 / Phase 2 选项 A | [ADR-0033](../adr/ADR-0033-tool-kit-ecosystem-integration.md) v1.5；[选项 A Note](../notes/architecture/2026-09-19-adr0033-phase2-option-a.md)；[阻塞笔记·resolved](../notes/architecture/2026-09-18-adr0033-phase2-unisoc-merge-blocker.md) |
 | 跨进程契约 | [`2026-scan-upload-merge-contract.md`](./2026-scan-upload-merge-contract.md) |
 | 上送时序图 | [`2026-adr-0025-log-flow-sequence.md`](./2026-adr-0025-log-flow-sequence.md) |
 | ownership X2 | [`2026-semantic-ownership.md`](./2026-semantic-ownership.md) §1 |
