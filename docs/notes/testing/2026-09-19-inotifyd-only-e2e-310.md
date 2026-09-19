@@ -8,7 +8,7 @@ Issue: #310（ADR-0028 Phase 3 signoff §4 残余验收；执行程序
 
 ## Decision
 
-在生产 MTK host（172-21-x-x / 设备 A2WENX6814000151）上完成「Reconciler
+在生产 MTK host（172-21-x-x / 设备 A2WENX68****0151）上完成「Reconciler
 关闭/抑制时，inotifyd 兜底路径独立完成 DLE 创建与上送」的真机受控验收。
 方法：单机 env 翻转 `STP_WATCHER_AEE_RECONCILE_ENABLED=false` + 控制面
 reload_config（免重启，只影响 reload 之后开场的 per-Job 会话），骑周期回归
@@ -29,7 +29,7 @@ reload_config（免重启，只影响 reload 之后开场的 per-Job 会话）�
    `local_path`** ✅ 两轮均验：
    - 会话日志无 `platform_reconciler_active`（对照：翻转前的 26582 会话有
      该行）；`device_log_watcher_started capability=inotifyd_root puller=on`。
-   - `device_log_watcher_emit_fallback serial=A2WENX6814000151 job=27117
+   - `device_log_watcher_emit_fallback serial=A2WENX68****0151 job=27117
      cat=AEE file=310e2e_db.00.NE`（18:11:04）；
      `... job=28197 ... file=2026_0827_221918_553_db.01.ANR`（22:02:40）。
    - DLE 行：`b41499aa…`（LOCAL，20B，job 27117 / run 443）、
