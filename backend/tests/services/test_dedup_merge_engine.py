@@ -74,13 +74,21 @@ def test_engine_build_merge_argv_matches_facade(tmp_path: Path):
 def test_engine_does_not_wire_scan_result_gt_cli():
     """选项 A：样板不得把 Scan-Result-GT CLI / 私有 env 挂进 B5 argv 路径。"""
     import backend.services.dedup.start_log_scan_merge as mod
-    import inspect
 
-    source = inspect.getsource(mod.StartLogScanMergeEngine)
-    assert "scan_result.py" not in source
-    assert "STP_UNISOC_SCAN_RESULT" not in source
-    # 实现体只构造 -merge_files_list
-    assert "-merge_files_list" in source
+    from tools.dev.source_anchor import SourceGuard
+
+    guard = SourceGuard.of_module(mod).anchored(
+        '"-merge_files_list"',
+        expect=1,
+    )
+    guard.assert_absent(
+        "scan_result.py",
+        why="选项 A：B5 引擎不得挂 GT CLI",
+    )
+    guard.assert_absent(
+        "STP_UNISOC_SCAN_RESULT",
+        why="选项 A：不得引入 GT 私有 env 键",
+    )
 
 
 def test_build_merge_argv_platform_kwarg_does_not_change_tool(tmp_path: Path):
