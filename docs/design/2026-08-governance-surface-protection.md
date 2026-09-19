@@ -175,7 +175,7 @@ advisory 观察期被**全库枚举**替代——差异面 gate 在 main 上 dif
 | pr-agent findings 修复闭环 | **已关闭（2026-09-16）**：观察期无真拦截、唯一 security issue 为误报；workflow 下线，S4 改为禁止回潮 |
 | 回滚演练 | 下次真实回滚时补记录（runbook §5 新增表格）；连续两次不顺才升级排期 |
 | DORA 近似采集 | 暂不建；需要数据时按 synthesis 查询口径现查 |
-| skills 防空洞机制（2026-08-27 补充裁决） | L0 增 **S7**：SKILL.md frontmatter name==目录名 + description 非空（写坏=对 agent 静默不存在）；新增 `tools/dev/skill_usage_report.py` 扫本机会话转录统计真实调用——判洞只看「是否为零」（零值可靠，正数为启发式上界）；**HOLLOW 判据=存在 ≥14 天零调用**，`check:gov` 以 `--strict` 把洞变红灯 | pilot（test-env-self-check）上线次日实测已非空（25 次）|
+| skills 防空洞机制（2026-08-27 补充裁决；2026-09-19 多源化+分型修订，#2785） | L0 增 **S7**：SKILL.md frontmatter name==目录名 + description 非空（写坏=对 agent 静默不存在）；新增 `tools/dev/skill_usage_report.py` 扫本机会话转录统计真实调用——判洞只看「是否为零」（零值可靠，正数为启发式上界）；**HOLLOW 判据=存在 ≥观察窗 天强信号零调用，观察窗按 frontmatter `type` 分型：persistent 14 天 / event 60 天**（低频事件场景低频是属性不是废弃证据），`check:gov` 以 `--strict` 把洞变红灯；Codex 读取会话列为弱信号（读取≠触发，审计噪声未甄别）仅供删留裁决，不参与判洞；消费方=周级 `stp-skill-usage.timer`（探针只在 check:gov 手跑曾被实测为「防建而不用的探针自己建而不用」） | pilot（test-env-self-check）上线次日实测已非空（25 次）|
 
 ## 9. 修订记录
 
@@ -192,3 +192,4 @@ advisory 观察期被**全库枚举**替代——差异面 gate 在 main 上 dif
 | 2026-09-12 | S12 增「头部状态行须在场且可解析」（#1524）：键位粗体 `- **状态**：`（执行契约文档形态，归 S13）与表格 `Status` 行都会让取行失败 → 该 ADR 静默退出**全部**索引一致性校验、无任何信号（ADR-0035 / ADR-0022 实测）；同批归一这两篇状态行格式（ADR-0035 键位去粗体、ADR-0022 表格 Status 行改为标准状态行） |
 | 2026-09-16 | S12 表格形态收口（#2304）：① 表格 token **锚「版本」列**（三种列布局；无版本列退回 cell 行首 token，ADR-0027 实测 1.1–1.7）——此前 6 篇表格 ADR 的「头部 ↔ 最新版本」比对**结构性休眠**（ADR-0027 例外：它另有单行 `- 版本记录：`）；② 新增**反向检查**「索引面带版本而头部无版本」；③ 同批收口 ADR-0031（头部补 v1.7 + README 主表 v1.5→v1.7 并补 v1.6/v1.7 摘要）。激活后**全库零漂移**（18 篇有版本记录的 ADR 头部与 tip 全部一致，其中最末三行倒序的 ADR-0031 也正确）；S14 集合同步改锚列位（排除 ADR-0030 正文列里的跨 ADR 引用 `2.3`——它既让 tip 假红，又让伪造引用 `ADR-0030 v2.3` 通过） |
 | 2026-09-16 | S4 改语义：`pr-agent.yml` 不得存在（advisory review 下线）；§8「findings 修复闭环」观察项关闭 |
+| 2026-09-19 | skill 用量探针多源化+分型+接消费方（#2785）：①数据源加 Codex 会话（SKILL.md 被读取命令加载=弱信号，读取≠触发——09-19 逐会话核验读取会话全是认领轮/审查类审计，故仅供删留裁决、不参与判洞）；②HOLLOW 观察窗按 frontmatter `type` 分型（persistent 14d / event 60d），device-lease-release 与 agent-host-onboard 转 event 型保留（09-19 裁决：全 harness 零作业触发证据成立，但低频是场景属性）；③缺数据源自动 skip 退出 0（他机/新站点不得确定性红灯，#825 同源）；④消费方=周级 `stp-skill-usage.{service,timer}`（Mon 09:30，installer 同批安装+enable——探针此前只在 check:gov 手跑，HOLLOW 挂 7 天无人处置=「防建而不用的探针自己建而不用」实测）；gate 命令加 `--self-test` 先行红绿自证 |

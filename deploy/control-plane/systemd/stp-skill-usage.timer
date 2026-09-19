@@ -1,0 +1,14 @@
+# Rendered by the site installer for <deploy-root> — do not edit by hand.
+[Unit]
+Description=Weekly STP skill usage probe (Mon 09:30, #2785)
+
+[Timer]
+# HOLLOW 观察窗最小 14 天，周级节奏足够；工作时段内跑，亮红灯当场有人看。
+# Persistent 让停机窗口后补跑一次，避免「停机一周就整月没巡检」。
+OnCalendar=Mon *-*-* 09:30:00
+RandomizedDelaySec=5m
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

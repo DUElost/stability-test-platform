@@ -1,0 +1,25 @@
+# Rendered by the site installer for <deploy-root> — do not edit by hand.
+[Unit]
+Description=STP skill usage probe (hollow detection, #2785)
+
+[Service]
+Type=oneshot
+# 刻意**不写 User=**（与邻居 stp-script-guard.service 一致）：转录源在操作者
+# 家目录（~/.claude、~/.codex），ProtectHome=read-only 恰好放行只读访问。
+# 探针只读不写，无需 ReadWritePaths。
+WorkingDirectory=<deploy-root>
+# 退出码契约见 tools/dev/skill_usage_report.py 模块头：0=无洞/无数据源
+# （新站点缺转录源恒绿不扰人）；1=有 HOLLOW（--strict）→ unit failed，
+# 由 systemctl --failed / journal 承接人审；工具异常=非零（不给 ExecStart
+# 加 - 前缀，那会把「探针坏了」吞成成功）。--self-test 由 check:gov 的
+# gov-skills gate 承载，不在此重复。
+ExecStart=<deploy-root>/venv/bin/python <deploy-root>/tools/dev/skill_usage_report.py --strict
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
