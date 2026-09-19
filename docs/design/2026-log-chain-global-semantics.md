@@ -25,34 +25,65 @@
 
 ## 2. 端到端阶段图
 
-两条**互补**层（ADR-0032 D2）：**Watcher 实时**（跑测中）与 **归档终态**（scan→upload→merge→extract）。共享路由键 `device.platform`，**不共享工具**。
+两条**互补**层（ADR-0032 D2），共享路由键 `device.platform`，**不共享工具**：
+
+| 层 | 何时跑 | 一句话 |
+|----|--------|--------|
+| **A. Watcher 实时** | PlanRun / Job **RUNNING** | 设备异常 → Agent HDD + 信号/DLE；**不出**汇总 xls、**不做** merge |
+| **B. 归档终态** | 终态 / 手动 / `auto_archive` → `scan_now` | 扫 HDD → **host 汇总** → 上送 → **控制面 merge** → extract |
 
 ```text
-┌─ 设备 ─────────────────────────────────────────────────────────────┐
-│  MTK: /data/aee_exp (+ vendor)     UNISOC: /data/ylog/uniview_*   │
-└───────────────┬───────────────────────────────────┬───────────────┘
-                │ Watcher 拉取                       │ （归档时再扫 HDD）
-                ▼                                   │
-┌─ Agent HDD（第一落点 / 预处理） ──────────────────┤
-│  事件目录 + 本机 scan 工作区                        │
-│  Watcher → job_log_signal + DLE(LOCAL…)            │
-│  归档: MTK ScanRunner / UNISOC UnisocScanRunner    │
-│        → host 级 *_org.xls → UploadManager         │
-└───────────────┬───────────────────────────────────┘
-                │ 中心：xls → dedup/{run}/{mtk|unisoc}/
-                │       事件 → devices/{run}/（EventUploader）
-                ▼
-┌─ 控制面 + 中心存储 ───────────────────────────────────────────────┐
-│  SAQ: scan_task → upload_task → merge_task → extract_task         │
-│  merge: start_log_scan -merge_files_list（两平台同一工具）         │
-│        → dedup/{run}/merge/{mtk|unisoc}/                          │
-│  extract → jira/{run}/  +  DLE REMOTE→ARCHIVED                    │
-└───────────────────────────────────────────────────────────────────┘
+设备 ──► Agent HDD ──►（仅层 B）中心 dedup/ + devices/ ──► 控制面 merge/extract ──► jira/
+         ▲ 层 A 止于此
 ```
 
-**串行约束（UNISOC，ADR-0032 D8）**：Job RUNNING 只跑 Watcher；终态/`scan_now` 只跑归档 runner——**禁止**两路径并发写同一目录。
+**串行（UNISOC，D8）**：RUNNING 只跑层 A；归档只跑层 B——禁止两路径并发写同一目录。细节见 §3。
+
+### 2.A Watcher 实时（编号流水线）
+
+| # | 阶段 | 宿主 | 模块 / CLI | 输入 → 输出 | 事实落点 |
+|---|------|------|------------|-------------|----------|
+| A1 | 探测 / 拉取 | **Agent** | MTK：`AeeDbHistoryReconciler`（+inotifyd）；UNISOC：`UnisocUniviewReconciler` | 设备目录 → HDD 事件目录 | 文件：Agent HDD |
+| A2 | 上报信号 | **Agent→控制面** | `SignalEmitter` → `POST /agent/log-signals` | 元数据 → `job_log_signal` | DB：`job_log_signal`（权威流） |
+| A3 | 建事件台账 | **Agent→控制面** | DLE 客户端 / API | 事件 → `DETECTED→LOCAL` | DB：`device_log_event`（台账） |
+
+层 A **到此结束**。不调用 Scan-Result-GT，不调用 `-merge_files_list`。
+
+### 2.B 归档终态（编号流水线）
+
+编排：`scan_task → upload_task → merge_task → extract_task`（SAQ）。Agent 侧由 `scan_now` 触发 runner。
+
+| # | 阶段 | 宿主 | 模块 / CLI | 输入 → 输出 | 事实落点 |
+|---|------|------|------------|-------------|----------|
+| B1 | **采集**（扫 HDD / 问题包） | **Agent** | MTK：`ScanRunner` + `start_log_scan -m 0`；UNISOC：`UnisocScanRunner` + `scan_log_gt -m sprd` | HDD / 设备材料 → 本机扫描产物或问题包目录 | 仍在 Agent 本机 |
+| B2 | **主机汇总去重**（单 host） | **Agent** | MTK：`start_log_scan -dedup_org`；UNISOC：**`scan_result.py -d`（Scan-Result-GT）** ⚠️ | 本机扫描根 / `_org` → host 级 `*_org.xls` | 仍在 Agent 本机 |
+| B3 | **上送 xls** | **Agent** | `UploadManager` | `*_org.xls` → 中心 | 路径：`dedup/{run}/{mtk\|unisoc}/{host_id}_*`；产物登记：`plan_run_artifact` |
+| B4 | **上送事件目录** | **Agent** | `EventUploader`（唯一拷贝者）；控制面 `upload_task` 只标状态 | 精选 / 待传事件 → 中心 | 路径：`devices/{run}/`；DLE：`UPLOAD_PENDING→REMOTE` |
+| B5 | **多 host merge** | **控制面** | `dedup_scan` + **`start_log_scan -merge_files_list`**（两平台同一工具）⚠️ | 中心各 host `*_org.xls` → 分区总表 | 路径：`dedup/{run}/merge/{platform}/`；类型：`merge_result_xls` |
+| B6 | **extract / 终态归档** | **控制面** | `dedup_extract` → `mark_events_archived` | merge 引用 → jira 束 | 路径：`jira/{run}/`；DLE：`REMOTE→ARCHIVED`（唯一写入点） |
+
+### 2.C 易混点在流水线上的位置（拍 A/B/C 必看）
+
+```text
+  B2  Agent 主机汇总          B5  控制面多 host merge
+  ─────────────────          ─────────────────────────
+  UNISOC: Scan-Result-GT     两平台: start_log_scan
+          scan_result -d              -merge_files_list
+  MTK:    start_log_scan -dedup_org   （同一二进制，不同 argv）
+
+  ⚠️ 二者不是同一阶段。Phase 2 阻塞正是把 B2 的 GT 误写成「插进 B5」。
+```
+
+| 若选… | 接缝挂在哪一格 |
+|-------|----------------|
+| **A** | 包 **B5** 现态 merge CLI；GT 留在 **B2** |
+| **B** | 改 **B5** 让 unisoc 换独立 merge 工具（须先有多文件契约；GT 现态仍无） |
+| **C** | 包 **B2** 的 GT 调用为 Agent Adapter；**不**改 B5 |
+
+平台对照（B1/B2 两列）与 DLE/路径细则见 §3–§4。
 
 ---
+
 
 ## 3. 分阶段：谁执行、工具、I/O、事实权威
 
@@ -148,7 +179,7 @@ scan_task → upload_task → merge_task → extract_task
 | **extract / ARCHIVED** | 控制面 | 按 merge 引用抽事件进 jira 束并标 ARCHIVED | 「上送即归档」已否决（D10） |
 | **log_signal vs DLE** | 控制面 DB | signal = 异常事件**流**；DLE = 事件生命周期**台账** | 风险计数以 DLE 为主、未链接 signal 为补充 |
 
-**Phase 2 混淆的一句话**：ADR-0033 文案曾把「unisoc 分区的 `DedupMergeEngine`」写成挂 **Scan-Result-GT**——但现态 GT 只做 **Agent 主机汇总**，控制面 merge 已由 **同一 `start_log_scan -merge_files_list`** 承担（D3）。二者叠成一个接缝即冲突。
+**Phase 2 混淆的一句话**：ADR-0033 文案曾把「unisoc 分区的 `DedupMergeEngine`」写成挂 **Scan-Result-GT**——但现态 GT 只做 **Agent 主机汇总（§2 B2）**，控制面 merge 已由 **同一 `start_log_scan -merge_files_list`（§2 B5）** 承担（D3）。二者叠成一个接缝即冲突。
 
 ---
 
@@ -177,21 +208,21 @@ ownership 索引（`2026-semantic-ownership.md`）**X2**：日志域四层权威
 
 | 选项 | 语义上意味什么 | 与现态权威的关系 |
 |------|----------------|------------------|
-| **A** | Phase 2「第一个 DedupMergeEngine」= 包一层**现态控制面 merge CLI**（`start_log_scan -merge_files_list`）；GT **继续只做** Agent host 汇总 | **行为不变**；需改 ADR-0033 措辞（样板=ACL 接缝，工具仍 D3）。与 B3/D3 **一致** |
-| **B** | unisoc 控制面改用**独立** merge 工具（可能扩展 GT 或多文件契约） | **修订 ADR-0032 D3**；现态 GT **仍无** `-merge_files_list`，须先有上游契约再动控制面；可能引入 `STP_BACKEND_UNISOC_MERGE_*`（曾作条件分支，B3 通过后未启用） |
-| **C** | Phase 2 样板改挂 **Agent 侧** GT Adapter（包 `UnisocScanRunner`→`scan_result -d`） | 兑现「GT 适配器」字面；**不**兑现「插在 per-platform merge 循环内」；控制面 merge 路径不动 |
+| **A** | 包 **§2 B5** 现态控制面 merge CLI（`start_log_scan -merge_files_list`）；GT **继续只做** **§2 B2** Agent host 汇总 | **行为不变**；需改 ADR-0033 措辞（样板=ACL 接缝，工具仍 D3）。与 ADR-0032 B3/D3 **一致** |
+| **B** | 改 **§2 B5**：unisoc 控制面改用**独立** merge 工具（可能扩展 GT 或多文件契约） | **修订 ADR-0032 D3**；现态 GT **仍无** `-merge_files_list`，须先有上游契约再动控制面；可能引入 `STP_BACKEND_UNISOC_MERGE_*`（曾作条件分支，ADR-0032 B3 通过后未启用） |
+| **C** | 包 **§2 B2** Agent 侧 GT Adapter（`UnisocScanRunner`→`scan_result -d`） | 兑现「GT 适配器」字面；**不**兑现「插在 per-platform merge 循环内」；**B5** 不动 |
 
 ```text
-         Agent host 汇总              控制面多 host merge
-    ┌─────────────────────┐      ┌──────────────────────────┐
-    │ MTK: -dedup_org     │      │ 两平台: -merge_files_list │
-    │ UNISOC: GT -d       │ ───► │ （D3 同一工具）            │
-    └─────────────────────┘      └──────────────────────────┘
-         ▲ C 挂这里                    ▲ A 挂这里
-                                         B = 拆掉「同一工具」、unisoc 另挂
+  §2 B2  Agent 主机汇总              §2 B5  控制面多 host merge
+  ┌─────────────────────┐           ┌──────────────────────────┐
+  │ MTK: -dedup_org     │           │ 两平台: -merge_files_list │
+  │ UNISOC: GT -d       │ ────────► │ （D3 同一工具）            │
+  └─────────────────────┘           └──────────────────────────┘
+       ▲ C 挂这里                         ▲ A 挂这里
+                                          B = 拆掉「同一工具」、unisoc 另挂
 ```
 
-**选之前只需确认**：你要防腐的接缝是「控制面 merge」还是「Agent 上的 GT」，还是愿意改 D3 让 unisoc merge 换工具。
+**选之前只需确认**：防腐接缝挂 **B5**（控制面 merge）、**B2**（Agent GT），还是愿意改 D3 让 unisoc 的 B5 换工具。详见 §2.C。
 
 ---
 
