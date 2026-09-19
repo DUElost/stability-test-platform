@@ -600,4 +600,28 @@ describe('DeviceOverview 表格虚拟化（#83）', () => {
     fireEvent.click(screen.getByTestId('device-row-9000'));
     expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ job_id: 9000 }));
   });
+
+  // #83 sticky 修复：虚拟层必须只有一个 scrollport。Table 原语自带的 overflow-auto
+  // 包裹层若仍是滚动容器，sticky 的最近滚动祖先落在它身上（高度=内容高，永不滚动），
+  // 表头钉不住——见真浏览器几何验证（tests 守卫锁的是这里的 class 语义）。
+  it('虚拟层把 Table 内层包裹降为 overflow-visible（sticky 绑到外层滚动视口）', () => {
+    const { container } = renderTableWithMany(500);
+    const wrapper = container.querySelector<HTMLElement>(
+      '[data-slot="table-scroll-container"]',
+    );
+    expect(wrapper).not.toBeNull();
+    expect(wrapper!.className).toMatch(/overflow-visible/);
+    expect(wrapper!.className).not.toMatch(/overflow-auto/);
+  });
+
+  it('静态路径保持内层 overflow-auto（原生滚动行为不变）', () => {
+    const { container } = renderWithClient(<DeviceOverview data={fixture} />);
+    fireEvent.click(screen.getByTestId('device-overview-table-btn'));
+    const wrapper = container.querySelector<HTMLElement>(
+      '[data-slot="table-scroll-container"]',
+    );
+    expect(wrapper).not.toBeNull();
+    expect(wrapper!.className).toMatch(/overflow-auto/);
+    expect(wrapper!.className).not.toMatch(/overflow-visible/);
+  });
 });

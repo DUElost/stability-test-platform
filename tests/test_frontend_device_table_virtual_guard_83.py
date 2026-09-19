@@ -9,7 +9,11 @@
 2. 只有**表格视图**进虚拟层，**minimap 仍渲染全量**——#83 的约束写得很明确：minimap
    每设备 1 节点（510 台实测才 603 节点），本来就不该分页；一起虚拟化了方块阵会画残；
 3. 虚拟层的两条不可拆项同时在场：滚动容器（`overflow-y-auto`）与**钉住的表头**
-   （`sticky top-0`）。只加前者 = 滚两屏认不出列，属于「修一个成本、造一个缺陷」。
+   （`sticky top-0`）。只加前者 = 滚两屏认不出列，属于「修一个成本、造一个缺陷」；
+4. 虚拟层里**只有一个 scrollport**：Table 原语自带的 `overflow-auto` 包裹层在虚拟化
+   时必须降为 `overflow-visible`（`containerClassName`），否则 sticky 的最近滚动
+   祖先落在内层「永不滚动」的包裹层上，表头钉不住（jsdom 测不了几何，vitest 锁
+   class 语义、本文件锁接线）。
 
 范式沿用 `tests/test_frontend_bulk_selection_guard_2614.py`（导入图配对 + 几何字面量锁
 单一来源）；源扫描部分按 #2639 用 `SourceGuard` 锚点先行。
@@ -135,3 +139,25 @@ def test_spacer_math_is_used_rather_than_reimplemented() -> None:
     guard.assert_absent(
         "padBottomPx: Math.max(", why="夹 0 的逻辑不得在组件里再写一遍（正本已夹）"
     )
+
+
+UI_TABLE_TSX = "frontend/src/components/ui/table.tsx"
+
+
+def test_virtual_scrollport_is_single_and_sticky_binds_to_it() -> None:
+    """#83 sticky 修复：虚拟层里 Table 原语自带的 overflow-auto 包裹层必须被降为
+    overflow-visible——否则它是「高度=内容高、永不滚动」的第二 scrollport，sticky
+    的最近滚动祖先落在它身上，表头钉不住。jsdom 无布局引擎，几何验证走真浏览器
+    （本单 rig）；这里锁接线，vitest 锁 class 语义。"""
+    table_text = _text(TABLE_TSX)
+    assert "containerClassName={cn(virtualize && 'overflow-visible')}" in table_text, (
+        "虚拟层未把 Table 内层包裹降为 overflow-visible——sticky 绑错 scrollport（#83）"
+    )
+    ui_text = _text(UI_TABLE_TSX)
+    assert "containerClassName" in ui_text, (
+        "Table 原语不再接受 containerClassName——内层 scrollport 无法降级（#83）"
+    )
+    assert re.search(
+        r'cn\("table-scrollbar relative w-full overflow-auto",\s*containerClassName\)',
+        ui_text,
+    ), "containerClassName 未并入包裹层 className——降级不生效（#83）"
