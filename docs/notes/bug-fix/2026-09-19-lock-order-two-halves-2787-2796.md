@@ -51,6 +51,10 @@ Class: bug-fix
 - 相关回归批 43 passed：`test_reconciler_drain_lock_order_2635.py`、
   `test_device_lease_reconciler.py`、`test_shared_row_lock_order_1980.py`、
   `test_agent_coordinator_heartbeat.py` + 上述两个新文件（testcontainers PG）。
+- 两文件按 `lock_order` 命名判据自动进入
+  `tests/test_lock_order_pr_path_contract.py` 覆盖要求；已挂进
+  `pr-migrate-empty-db` 的「Run concurrency regressions」pytest 列表（有 PG service
+  的 PR required check），避免只活在夜间 `backend-test`。
 - `python scripts/run_gates.py check:quick` → 见 PR。
 
 ## Revisit
