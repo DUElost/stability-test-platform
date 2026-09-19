@@ -18,6 +18,7 @@
 | 查 PR、CI、Agent Note 与并行 worktree | [`development/repository-workflow.md`](./development/repository-workflow.md) |
 | 理解系统架构 | [`design/00-system-overview.md`](./design/00-system-overview.md) |
 | 查存储角色 / CIFS / NFS / 文件服务器页别称 | [`design/2026-storage-roles-and-aliases.md`](./design/2026-storage-roles-and-aliases.md) |
+| 查终端设备日志链全局语义（阶段 / 易混概念 / Phase2 前提） | [`design/2026-log-chain-global-semantics.md`](./design/2026-log-chain-global-semantics.md) |
 | 查设备日志上送时序（ADR-0025） | [`design/2026-adr-0025-log-flow-sequence.md`](./design/2026-adr-0025-log-flow-sequence.md) |
 | 理解 Plan 执行主链路 | [`design/01-execution-pipeline.md`](./design/01-execution-pipeline.md) |
 | 查执行协议硬契约 | [`design/07-execution-protocol.md`](./design/07-execution-protocol.md) |
@@ -99,6 +100,7 @@ docs/
 | [`05-data-model.md`](./design/05-data-model.md) | ORM 与表关系 |
 | [`06-realtime-and-background.md`](./design/06-realtime-and-background.md) | SocketIO、APScheduler、SAQ |
 | [`2026-plan-c-storage-and-access.md`](./design/2026-plan-c-storage-and-access.md) | 方案 C 存储与访问 |
+| [`2026-log-chain-global-semantics.md`](./design/2026-log-chain-global-semantics.md) | 终端设备日志链全局语义（阶段图 / 易混概念 / X2 映射 / Phase 2 A/B/C 语义前提；不新增决策） |
 | [`2026-adr-0025-log-flow-sequence.md`](./design/2026-adr-0025-log-flow-sequence.md) | 设备日志流转时序（上送规则=ADR-0025；含给人读 / 给其他 Agent 的两版图） |
 | [`2026-scan-upload-merge-contract.md`](./design/2026-scan-upload-merge-contract.md) | 控制面与 Agent 的 scan/upload/merge 跨进程契约 |
 | [`2026-08-step-stall-detection.md`](./design/2026-08-step-stall-detection.md) | Pipeline 总超时、停滞钟与 PROGRESS 打戳契约 |
