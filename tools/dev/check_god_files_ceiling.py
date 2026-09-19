@@ -59,11 +59,13 @@ ROOT = Path(__file__).resolve().parents[2]
 #:   main 682 → 630 → 封顶 **662**。
 #: - 2026-09-19 十二次下调（#736：启动门禁抽出 `startup_guards.py`）：
 #:   main 630 → 536 → 封顶 **563**。
+#: - 2026-09-19 十三次下调（#736：SIO/LocalDB 抽出 `local_runtime.py`）：
+#:   main 536 → 503 → 封顶 **529**。
 CEILINGS: dict[str, int] = {
     "backend/api/routes/plan_runs.py": 507,
     "backend/api/routes/agent_api.py": 411,
     "backend/api/routes/projects.py": 378,
-    "backend/agent/main.py": 563,
+    "backend/agent/main.py": 529,
 }
 
 

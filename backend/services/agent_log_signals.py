@@ -32,6 +32,26 @@ TERMINAL_JOB_STATUSES = {
     JobStatus.ABORTED.value,
 }
 
+# #2792：列宽从模型列定义派生（String 才有 length，Text/JSONB/数值列无长度不收），
+# 守卫与 schema 不会漂移。agent 侧契约（watcher contracts）只校验取值域不校验长度，
+# 单条超宽会让整条多行 INSERT 被 PG abort（value too long）——#1048 的批毒化形态，
+# 故入库前逐条折入 rejected。
+def _log_signal_column_widths() -> Dict[str, int]:
+    return {
+        c.key: int(c.type.length)
+        for c in JobLogSignal.__table__.columns
+        if getattr(c.type, "length", None)
+    }
+
+
+def log_signal_column_overflow(row: Dict[str, Any]) -> List[str]:
+    """返回该行超出列宽的字段名清单（空 = 无溢出）。"""
+    widths = _log_signal_column_widths()
+    return sorted(
+        key for key, width in widths.items()
+        if row.get(key) is not None and len(str(row[key])) > width
+    )
+
 
 class LogSignalIn(BaseModel):
     """单条 log_signal 信封。
@@ -183,6 +203,21 @@ async def ingest_agent_log_signals(
             "detected_at":    detected_dt,
             "extra":          s.extra,
         })
+
+    # #2792：超宽行逐条拒绝——单条超宽会让 PG abort 整条多行 INSERT，
+    # 同批其余信号一起进死信（#1048 批毒化）。列宽从模型派生（见模块头）。
+    kept: List[Dict[str, Any]] = []
+    for row in rows:
+        over = log_signal_column_overflow(row)
+        if over:
+            rejected.append({
+                "job_id": row["job_id"],
+                "seq_no": row["seq_no"],
+                "reason": f"log_signal field exceeds column width: {over}"[:300],
+            })
+        else:
+            kept.append(row)
+    rows = kept
 
     # #1048：整批被拒（无一条可入库）→ 直接返回逐条拒绝清单
     if not rows:
