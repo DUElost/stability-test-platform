@@ -251,7 +251,7 @@ async def complete_agent_job(
             await record_audit_async(
                 db,
                 action="stale_job_completion_rejected",
-                resource_type="job",
+                resource_type="job_instance",
                 resource_id=job.id,
                 details={
                     "plan_run_id": job.plan_run_id,
@@ -313,7 +313,7 @@ async def complete_agent_job(
             await record_audit_async(
                 db,
                 action="terminal_payload_conflict",
-                resource_type="job",
+                resource_type="job_instance",
                 resource_id=job.id,
                 details={
                     "plan_run_id": job.plan_run_id,
@@ -469,7 +469,7 @@ async def complete_agent_job(
         await record_audit_async(
             db,
             action="job_terminalized",
-            resource_type="job",
+            resource_type="job_instance",
             resource_id=job.id,
             details={
                 "plan_run_id": job.plan_run_id,
