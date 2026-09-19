@@ -1,6 +1,5 @@
 import logging
 import os
-import queue
 import signal
 import sys
 import threading
@@ -47,21 +46,21 @@ if __name__ == "__main__" and __package__ is None:
     from agent.startup_guards import (
         check_agent_version,
         ensure_adb_server_on_startup,
-        migrate_legacy_aee_state_on_startup,
     )
-    from agent.config import BASE_DIR, ensure_dirs
+    from agent.local_runtime import (
+        connect_socketio_with_early_control,
+        initialize_local_stores,
+        replay_early_control_commands,
+    )
+    from agent.config import ensure_dirs
     from agent.log_archiver import collect_archive_heartbeat_metrics
     from agent.heartbeat_thread import HeartbeatThread
     from agent.job_runner import JobRunnerState, run_task_wrapper
     from agent.lease_renewer import LeaseRenewer
     from agent.mq.producer import StepTraceWriter
     from agent.outbox_drainer import OutboxDrainThread
-    from agent.registry.local_db import LocalDB
-    from agent.registry.patrol_checkpoint_store import PatrolCycleCheckpointStore
-    from agent.registry.script_registry import ScriptRegistry
     from agent.scan_runner import ScanRunner
     from agent.step_trace_uploader import StepTraceUploader
-    from agent.socketio_client import AgentSocketIOClient
 else:
     from .adb_wrapper import AdbWrapper
     from .recovery_executor import (
@@ -90,9 +89,13 @@ else:
     from .startup_guards import (
         check_agent_version,
         ensure_adb_server_on_startup,
-        migrate_legacy_aee_state_on_startup,
     )
-    from .config import BASE_DIR, ensure_dirs
+    from .local_runtime import (
+        connect_socketio_with_early_control,
+        initialize_local_stores,
+        replay_early_control_commands,
+    )
+    from .config import ensure_dirs
     from .log_archiver import collect_archive_heartbeat_metrics
     from .heartbeat_thread import HeartbeatThread
     from .job_runner import JobRunnerState, run_task_wrapper
@@ -101,12 +104,8 @@ else:
     from .coordinator import HostRunCoordinator
     from .mq.producer import StepTraceWriter
     from .outbox_drainer import OutboxDrainThread
-    from .registry.local_db import LocalDB
-    from .registry.patrol_checkpoint_store import PatrolCycleCheckpointStore
-    from .registry.script_registry import ScriptRegistry
     from .scan_runner import ScanRunner
     from .step_trace_uploader import StepTraceUploader
-    from .socketio_client import AgentSocketIOClient
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
@@ -165,36 +164,13 @@ def main() -> None:
 
     adb = AdbWrapper(adb_path=adb_path)
     ensure_adb_server_on_startup(adb_path)
-    # 启动 WebSocket 客户端（best-effort，失败时降级到 HTTP）
-    sio_client = AgentSocketIOClient(api_url, host_id, agent_secret)
-    # P2-2a：先注册转发 handler 再 connect——启动窗口内到达的 control 命令
-    # 入队暂存，真实 handler 就绪后统一回放，不再静默丢弃。
-    _early_control_queue: "queue.Queue[dict]" = queue.Queue()
-
-    def _early_control_handler(data: dict) -> None:
-        _early_control_queue.put(data)
-
-    sio_client.set_control_handler(_early_control_handler)
-    sio_client.connect()
-    # Start background reconnect loop for auto-recovery on disconnect
-    sio_client.start_reconnect_loop()
-
-    # 初始化本地 SQLite WAL 缓存
-    local_db = LocalDB()
-    db_path = str(BASE_DIR / "agent_state.db")
-    local_db.initialize(db_path)
-    try:
-        from .aee.device_log_event_client import bind_local_db as _bind_dle_db
-    except ImportError:
-        from agent.aee.device_log_event_client import bind_local_db as _bind_dle_db
-    _bind_dle_db(local_db)
-    migrate_legacy_aee_state_on_startup(db_path)
-
-    patrol_checkpoint_store = PatrolCycleCheckpointStore(BASE_DIR / "patrol_checkpoint.db")
-    patrol_checkpoint_store.initialize()
-
-    script_registry = ScriptRegistry(local_db, api_url, agent_secret)
-    script_registry.initialize()
+    sio_client, early_control_queue = connect_socketio_with_early_control(
+        api_url, host_id, agent_secret
+    )
+    stores = initialize_local_stores(api_url=api_url, agent_secret=agent_secret)
+    local_db = stores.local_db
+    patrol_checkpoint_store = stores.patrol_checkpoint_store
+    script_registry = stores.script_registry
 
     log_signal_drainer = start_disk_and_watcher_subsystems(
         local_db=local_db,
@@ -365,16 +341,7 @@ def main() -> None:
 
     # 真实 control handler 在 deps 就绪后注册；回放启动窗口暂存命令（P2-2a）
     sio_client.set_control_handler(_handle_control)
-    # 回放启动窗口内暂存的命令（P2-2a）
-    while True:
-        try:
-            early_data = _early_control_queue.get_nowait()
-        except queue.Empty:
-            break
-        try:
-            _handle_control(early_data)
-        except Exception:
-            logger.exception("early_control_replay_failed command=%s", early_data.get("command"))
+    replay_early_control_commands(early_control_queue, _handle_control)
 
     # 启动终态 Outbox Drain 线程
     outbox_drain = OutboxDrainThread(api_url, local_db, interval=15.0)
