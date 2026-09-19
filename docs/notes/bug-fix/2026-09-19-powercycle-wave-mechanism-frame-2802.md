@@ -25,7 +25,7 @@ Class: bug-fix
 
 **修法方向（按「先补证据、再定修法」排序）：**
 
-1. **D0 诊断版本（本单先做，低风险）**：新增 `check_device` 新版本，失败时在 `error_message` 里保留有界长度的 stdout/stderr/exit code 与 `adb get-state` 结果（先例：`powercycle_setup` v1.2.0 为吸收 #2755 的 install 风暴专门保留了 push/pm 输出）。上线后每个窗自动产出证据，替代人工窗内抓取。
+1. **D0 诊断版本（本 PR 已落地：`check_device` v1.0.1）**：失败时在 `error_message` 里保留有界长度（单字段 ≤200 字符）的 stdout/stderr/exit code 与 `adb get-state` 摘要，字段顺序固定 `rc/stdout/stderr/adb_state` 便于 grep 聚合；判定语义不变（先例：`powercycle_setup` v1.2.0 为吸收 install 风暴保留了 push/pm 输出）。上线后每个窗自动产出可归类证据，替代人工窗内抓取。`ensure_root` 分支报文不动（保持范围最小）。
 2. **D1 吸收（若证据属瞬时类）**：init 步骤（`check_device`/`ensure_root`）对 adb 瞬时失败做 wait-for-device + 有界重试/退避（先例同上），并把重试次数写进 metrics——**必须有界**，否则把真设备故障掩盖成恢复。
 3. **D2 host 侧治理（若证据指向 host-local USB/adb）**：对脏 host 做定向排查（USB 控制器/集线器、内核日志、adb server 版本与并发），必要时下调该 host 的并发操作上限；不做全 fleet 全局并发闸。
 4. **D3 计划侧（暂不采用）**：原单建议的「powercycle_setup 全局并发闸 / 开关机链分波派发」**不予采纳**——前提（T+5~10min 风暴）已被推翻，且 host 慢性特征与「全 fleet 无节流并发」不符；仅当 D0 证据重新显示 install 风暴耦合时才回到此选项。
@@ -47,7 +47,8 @@ Class: bug-fix
 - **桶值复算**：`width_bucket(extract(epoch FROM (created_at - run.started_at))/60, 0, 40, 8)` ⇒ 仅 `bucket=1` 有 173 条（真实 [0,5)min），脚本标签为 `~5-10min`；
 - **host 对照**：`r431/r433/r437/r441` 四窗按 host 聚合 init 失败台数（表见 Decision 结论二）；
 - **自伤检查**：98 台失败设备与 437 台通过设备分别左连「最近一次 powercycle COMPLETED（不含本窗）」，失败组 0 台 <15min；
-- **未做**：窗内原始字节抓取（需真机窗，今晚 21:22）；host 侧 USB/内核取证（需登录 host，未授权范围）。
+- **D0 落地验证**：`backend/agent/tests/test_check_device_scripts.py` 8 例全绿（成功路径语义不变 / unexpected output 带 rc+stdout+stderr+adb_state / 乱码可读 / 超时带部分输出 / 长输出有界且含省略号 / `get-state` 自身异常不破坏判定 / expect_root 两分支不变）；**变异检查**：移除报文中 `rc=` 字段 → 诊断用例立刻红（1 failed, 7 passed），恢复后全绿；`tools/dev/check-script-version-immutability.py --base origin/main` → OK（v1.0.0 未被原地改动）；
+- **未做**：窗内原始字节抓取（需真机窗，今晚 21:22）；host 侧 USB/内核取证（需登录 host，未授权范围）；v1.0.1 上机分发与 plan_step 重指（按脚本版本上线五步另起单执行）。
 
 ## Revisit
 
