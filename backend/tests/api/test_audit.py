@@ -210,6 +210,62 @@ class TestAuditFilterFacets:
         assert "dispatch" not in action_counts
         assert "cancel" not in action_counts
 
+    @staticmethod
+    def _seed_2778(db_session):
+        """历史别名 + 规范值并存（写侧已统一，存量行按 append-only 保留）。"""
+        from backend.models.audit import AuditLog
+
+        db_session.add_all([
+            AuditLog(username="audit2778", action="job_terminalized", resource_type="job",
+                     resource_id="1", details={}),
+            AuditLog(username="audit2778", action="job_terminalized", resource_type="job_instance",
+                     resource_id="2", details={}),
+            AuditLog(username="audit2778", action="scan", resource_type="script_catalog",
+                     resource_id=None, details={}),
+            AuditLog(username="audit2778", action="create", resource_type="script",
+                     resource_id="3", details={}),
+        ])
+        db_session.commit()
+
+    def test_facets_merge_historical_aliases_into_canonical(
+        self, client, admin_headers, db_session,
+    ):
+        """#2778：资源维按规范值归并历史别名（计数求和）——下拉里不得并列两个半真选项。
+
+        同一 job 实体曾按收尾路径分裂为 job / job_instance；合并后只出现
+        `job_instance` 一项且计数为两侧之和，管理员不再需要知道"这个 job 是谁收尾的"
+        才能筛到它。
+        """
+        self._seed_2778(db_session)
+        facets = client.get("/api/v1/audit-logs/facets", headers=admin_headers).json()
+        resource_counts = {e["value"]: e["count"] for e in facets["resource_types"]}
+
+        assert resource_counts["job_instance"] == 2, resource_counts
+        assert resource_counts["script"] == 2, resource_counts
+        # 别名不得再作为独立可选项出现
+        assert "job" not in resource_counts
+        assert "script_catalog" not in resource_counts
+
+    def test_resource_type_filter_expands_historical_aliases(
+        self, client, admin_headers, db_session,
+    ):
+        """#2778：按规范值筛选必须同时命中历史别名的存量行（反向输入别名亦然）。"""
+        self._seed_2778(db_session)
+
+        def total(params: dict) -> int:
+            resp = client.get(
+                "/api/v1/audit-logs", params=params, headers=admin_headers,
+            )
+            assert resp.status_code == 200, resp.text
+            return resp.json()["total"]
+
+        # 规范值 → 展开命中历史 job 行；历史别名输入 → 归一到规范值后同样展开
+        assert total({"resource_type": "job_instance"}) == 2
+        assert total({"resource_type": "job"}) == 2
+        assert total({"resource_type": "script"}) == 2
+        # 未登记的规范值不展开、不误伤
+        assert total({"resource_type": "plan_run"}) == 0
+
     def test_facets_are_ordered_by_frequency(
         self, client, admin_headers, db_session,
     ):

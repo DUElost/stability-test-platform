@@ -87,20 +87,20 @@ class TestBuildLifecycle:
 class TestSnapshotRoundTrip:
     def test_snapshot_carries_the_field(self):
         snap = build_plan_snapshot(
-            _plan(barrier_timeout_seconds=7200), [_step()], _META, 0.05,
+            _plan(barrier_timeout_seconds=7200), [_step()], _META,
         )
         assert snap["plan"]["barrier_timeout_seconds"] == 7200
 
     def test_replay_from_snapshot_preserves_it(self):
         """重放旧 PlanRun 不能悄悄退回 600s。"""
         snap = build_plan_snapshot(
-            _plan(barrier_timeout_seconds=7200), [_step()], _META, 0.05,
+            _plan(barrier_timeout_seconds=7200), [_step()], _META,
         )
         lc = build_lifecycle_from_snapshot(snap)
         assert lc["barrier_timeout_seconds"] == 7200
 
     def test_replay_omits_it_when_unset(self):
-        snap = build_plan_snapshot(_plan(), [_step()], _META, 0.05)
+        snap = build_plan_snapshot(_plan(), [_step()], _META)
         assert build_lifecycle_from_snapshot(snap).get("barrier_timeout_seconds") is None
 
     def test_step_params_frozen_into_snapshot_and_replayed(self):
@@ -111,7 +111,7 @@ class TestSnapshotRoundTrip:
             "default_params": {"apk_path": "/default/a.apk", "timeout": 30},
             "nfs_path": "/s/x.py", "param_schema": {},
         }}
-        snap = build_plan_snapshot(_plan(), [step], meta, 0.05)
+        snap = build_plan_snapshot(_plan(), [step], meta)
         assert snap["steps"][0]["params"] == {"apk_path": "/mnt/x/a.apk"}
         lc = build_lifecycle_from_snapshot(snap)
         params = lc["init"][0]["params"]
@@ -120,7 +120,7 @@ class TestSnapshotRoundTrip:
 
     def test_snapshot_without_step_params_replays_pure_defaults(self):
         """#508：旧快照/未配 params 的步骤——重放只带 default_params（行为不变）。"""
-        snap = build_plan_snapshot(_plan(), [_step()], _META, 0.05)
+        snap = build_plan_snapshot(_plan(), [_step()], _META)
         lc = build_lifecycle_from_snapshot(snap)
         assert lc["init"][0]["params"] == {}
 
@@ -204,7 +204,7 @@ class TestGeneratedLifecyclePassesSchema:
 
     def test_snapshot_replayed_lifecycle_passes_validation(self):
         snap = build_plan_snapshot(
-            _plan(barrier_timeout_seconds=7200), [_step()], _META, 0.05,
+            _plan(barrier_timeout_seconds=7200), [_step()], _META,
         )
         ok, errors = validate_pipeline_def(
             {"lifecycle": build_lifecycle_from_snapshot(snap)}
@@ -264,7 +264,7 @@ class TestStallSecondsPipeline:
 
     def test_snapshot_round_trip_preserves_stall_seconds(self):
         snap = build_plan_snapshot(
-            _plan(), [_step_with_stall(600)], _META, 0.05,
+            _plan(), [_step_with_stall(600)], _META,
         )
         assert snap["steps"][0]["stall_seconds"] == 600
         lc = build_lifecycle_from_snapshot(snap)
@@ -273,7 +273,7 @@ class TestStallSecondsPipeline:
         assert ok, errors
 
     def test_snapshot_without_stall_seconds_stays_absent(self):
-        snap = build_plan_snapshot(_plan(), [_step()], _META, 0.05)
+        snap = build_plan_snapshot(_plan(), [_step()], _META)
         assert snap["steps"][0].get("stall_seconds") is None
         lc = build_lifecycle_from_snapshot(snap)
         assert "stall_seconds" not in lc["init"][0]
@@ -296,7 +296,7 @@ class TestStallSecondsPipeline:
         ok, errors = validate_pipeline_def({"lifecycle": lc})
         assert ok, errors
 
-        snap = build_plan_snapshot(plan, [_step()], _META, 0.05)
+        snap = build_plan_snapshot(plan, [_step()], _META)
         assert snap["plan"]["barrier_max_wait_seconds"] == 900
         lc2 = build_lifecycle_from_snapshot(snap)
         assert lc2["barrier_max_wait_seconds"] == 900
@@ -331,7 +331,6 @@ class TestStallSecondsPipeline:
                 _step_with_stall(300, stage="patrol", step_key="patrol_check"),
             ],
             _META,
-            0.05,
         )
         patrol_snap = next(s for s in snap["steps"] if s["stage"] == "patrol")
         assert patrol_snap["stall_seconds"] == 300

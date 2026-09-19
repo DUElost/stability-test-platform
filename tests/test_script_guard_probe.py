@@ -36,8 +36,11 @@ def _guard_payload(status: str, violations: int) -> dict:
         (0, _guard_payload("OK", 0), {"due": 0.0, "unknown": 0.0, "broken": 0.0}, 0),
         # 有到期项：**任务成功**（否则 timer 天天 failed，真故障被淹掉），数量进指标
         (1, _guard_payload("FAIL", 3), {"due": 3.0, "unknown": 0.0, "broken": 0.0}, 0),
-        # 码说判红但 payload 给不出数量：按 1 报，绝不显示"干净"
-        (1, {}, {"due": 1.0, "unknown": 0.0, "broken": 0.0}, 0),
+        # #2797：rc=1 但不带 `guard` 块 ⇒ 判据 import 期就炸（解释器默认码同为 1），
+        # 折成 broken 而不是「有活要干」——否则守卫的死讯被读成 DUE、broken 永不置位
+        (1, {}, {"due": 0.0, "unknown": 0.0, "broken": 1.0}, 1),
+        (1, {"_stderr_tail": "RuntimeError: DATABASE_URL 未配置"},
+         {"due": 0.0, "unknown": 0.0, "broken": 1.0}, 1),
         # 使用事实不可得：显式 unknown，不降级成 due=0
         (2, _guard_payload("UNKNOWN", 0), {"due": 0.0, "unknown": 1.0, "broken": 0.0}, 0),
         # 工具自身异常：唯一要让 systemd 标 failed 的一档
@@ -57,6 +60,34 @@ def test_due_and_broken_are_distinguishable_in_metrics():
     broken, _ = _mod.summarize(3, {})
     assert ok["broken"] == 0.0 and broken["broken"] == 1.0
     assert broken["due"] == 0.0  # 坏了的时候不得报"有 N 条待退役"
+
+
+def test_import_time_death_is_broken_not_due():
+    """#2797：rc=1 的两种来源必须可区分——真判定（带 `guard` 块）vs 进程早死（没有）。
+
+    来源：`backend/scripts/check_unreferenced_script_versions.py` 的 module 级
+    `resolve_database_url()` / `create_engine` 位于 `main()` 的 try **之前**；环境缺
+    DATABASE_URL 时进程在打印 payload 之前退出，解释器默认退出码 1 与 `--guard` 的
+    DUE 同码——只看退出码会把守卫的死讯读成「有活要干」。
+    """
+    died, died_exit = _mod.summarize(1, {"_stderr_tail": "RuntimeError: DATABASE_URL"})
+    real_due, due_exit = _mod.summarize(1, _guard_payload("FAIL", 2))
+    assert died == {"due": 0.0, "unknown": 0.0, "broken": 1.0} and died_exit == 1
+    assert real_due == {"due": 2.0, "unknown": 0.0, "broken": 0.0} and due_exit == 0
+
+
+def test_main_reports_import_time_death_as_broken(monkeypatch, tmp_path, capsys):
+    """端到端：判据早死时指标写 broken=1、任务 exit 1、stderr 带判据侧线索。"""
+    monkeypatch.setattr(
+        _mod, "run_guard",
+        lambda exe, today: (1, {"_stderr_tail": "RuntimeError: DATABASE_URL 未配置"}),
+    )
+    metrics = tmp_path / "guard.prom"
+    assert _mod.main(["--metrics-path", str(metrics)]) == 1
+    text = metrics.read_text(encoding="utf-8")
+    assert "stp_script_guard_broken 1" in text
+    assert "stp_script_guard_due 0" in text
+    assert "GUARD BROKEN" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------- 指标渲染/落盘

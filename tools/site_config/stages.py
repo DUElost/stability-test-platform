@@ -68,6 +68,8 @@ SAMPLER_UNIT = "stp-mem-top.timer"
 # 退役判据守卫（#735）：与本仓自管的采样器同批安装、单独 enable。
 GUARD_SERVICE_UNIT = "stp-script-guard.service"
 GUARD_TIMER_UNIT = "stp-script-guard.timer"
+# skill 用量探针（#2785）：同批安装、单独 enable，与守卫同一失效模式防线。
+SKILL_USAGE_TIMER_UNIT = "stp-skill-usage.timer"
 # nfs-kernel-server 提供的导出命令：S1 靠它判断 NFS 服务端是否可用。
 EXPORT_COMMAND = "exportfs"
 PROMETHEUS_RETENTION = "30d"
@@ -123,6 +125,13 @@ MONITORING_SAMPLER = (
      "etc/systemd/system/stp-script-guard.service", 0o644),
     ("deploy/control-plane/systemd/stp-script-guard.timer",
      "etc/systemd/system/stp-script-guard.timer", 0o644),
+    # #2785：skill 用量探针（HOLLOW 检测）timer 同批——探针只在 check:gov 手跑
+    # 等于「防建而不用的探针自己建而不用」（HOLLOW 挂 7 天无人处置的实测）。
+    # 缺转录源的站点 probe 自动 skip 退出 0，timer 恒绿不扰人。
+    ("deploy/control-plane/systemd/stp-skill-usage.service",
+     "etc/systemd/system/stp-skill-usage.service", 0o644),
+    ("deploy/control-plane/systemd/stp-skill-usage.timer",
+     "etc/systemd/system/stp-skill-usage.timer", 0o644),
 )
 
 NGINX_SITES = {
@@ -1249,6 +1258,13 @@ def stage_s4_entry(ctx: InstallContext) -> list[Check]:
         # oneshot 没有。不 enable 就等于"规则与指标都装了、没人跑"，与本单被 24h 审计
         # 指出的失效模式同源，所以它属于安装判据本身，不是可选的收尾步骤。
         if ctx.ops.run(["systemctl", "enable", "--now", GUARD_TIMER_UNIT]).returncode != 0:
+            return _safe(
+                checks, "install_monitoring", location="$.monitoring.enabled",
+                role="control_plane", check_id="install.s4.monitoring",
+            )
+        # skill 用量探针 timer 同守卫（#2785）：不 enable 就等于探针装了没人跑，
+        # HOLLOW 检测退化为手跑仪式——缺转录源时 probe 自行退出 0，恒绿不扰。
+        if ctx.ops.run(["systemctl", "enable", "--now", SKILL_USAGE_TIMER_UNIT]).returncode != 0:
             return _safe(
                 checks, "install_monitoring", location="$.monitoring.enabled",
                 role="control_plane", check_id="install.s4.monitoring",

@@ -6,7 +6,7 @@
 - 日期：2026-09-15
 - 决策者：平台研发组（owner 裁决，2026-09-15）
 - 标签：Agent 安装, RunConsole, SAQ, 作业超时, 状态语义, #2220
-- 关联：[设计：RunConsole 多实例归属](../design/2026-09-13-run-console-multi-instance-ownership.md)（console 能力面）、[ADR-0027](./ADR-0027-control-plane-horizontal-scaling.md)（多实例；console 仍为实例本地）、[ADR-0021](./ADR-0021-script-content-alignment-gate.md)（维护窗口/升级门禁）、[#2225](https://github.com/DUElost/stability-test-platform/pull/2225)（最小修复：CANCELED ≠ FAILED，本 ADR 保留其判据）
+- 关联：[设计：RunConsole 多实例归属](../design/2026-09-13-run-console-multi-instance-ownership.md)（console 能力面）、[ADR-0027](./ADR-0027-control-plane-horizontal-scaling.md)（多实例；console 仍为实例本地）、[ADR-0021](./ADR-0021-script-content-alignment-gate.md)（维护窗口/升级门禁）、[#2225](https://github.com/DUElost/stability-test-platform/pull/2225)（最小修复：CANCELED ≠ FAILED，本 ADR 保留其判据）、[ADR-0050](./ADR-0050-install-evidence-retention-alignment.md)（D3「持久证据」的保留视界定义——Proposed 待裁决，[#2789](https://github.com/DUElost/stability-test-platform/issues/2789)）
 
 ## 1. 背景
 

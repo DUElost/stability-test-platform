@@ -40,6 +40,8 @@ ADR-0033 §1.1 / §4 Phase 2 文案把「展锐 `Scan-Result-GT`」写成「per-
 
 **本 Execution 不选 A/B/C**——硬做任一都会要么撒谎贴标签、要么改 Accepted 行为权威、要么偏离用户给定的控制面样板范围。
 
+拍板前可读全局语义汇总：[`2026-log-chain-global-semantics.md`](../../design/2026-log-chain-global-semantics.md)（尤其 §4 易混概念与 §6 A/B/C 语义前提）。
+
 ### 明确不做（本轮）
 
 - 不新增 `backend/services/dedup/` 适配器代码  

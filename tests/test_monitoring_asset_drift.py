@@ -85,6 +85,37 @@ def test_missing_asset_is_absent_not_drift(tmp_path, fake_repo):
     assert _mod.summarize(results)[0] == _mod.EXIT_OK
 
 
+def test_missing_repo_source_is_unknown_not_silent_ok(tmp_path, fake_repo):
+    """#2800：清单指向的仓库源文件缺失 ⇒ 单列 MISS 且整体 2，不得静默 exit 0。
+
+    这是漂移检测**最该响**的形态之一（改了仓库、清单没跟上：源文件被移动/删除），
+    此前记为 SKIPPED、全 SKIP 仍 exit 0，与本文件自己的「读不到→2」契约矛盾。
+    """
+    rel = "deploy/prometheus/prometheus.yml"
+    system_root = tmp_path / "sys"
+    _install(fake_repo, system_root)          # 先按完整清单铺装
+    (fake_repo / rel).unlink()                # 再制造「清单与仓库脱节」
+    results = _mod.inspect(system_root, fake_repo, repo_root=fake_repo)
+    entry = next(r for r in results if r["source"] == rel)
+    assert entry["state"] == _mod.SOURCE_MISSING, entry
+    assert "脱节" in entry["detail"]
+    assert _mod.summarize(results)[0] == _mod.EXIT_UNKNOWN
+
+
+def test_all_non_verdict_is_unknown(tmp_path, fake_repo):
+    """全部条目都无从判定（源缺失/占位符不可确定）⇒ 2，不能长得像「全绿」。"""
+    results = [
+        {"state": _mod.SOURCE_MISSING}, {"state": _mod.SKIPPED},
+    ]
+    assert _mod.summarize(results)[0] == _mod.EXIT_UNKNOWN
+
+
+def test_all_absent_stays_ok(tmp_path, fake_repo):
+    """反例：本站未装监控栈（全部 ABSENT）是**确定事实**，仍应是 0——否则每站常红。"""
+    results = [{"state": _mod.ABSENT}, {"state": _mod.ABSENT}]
+    assert _mod.summarize(results)[0] == _mod.EXIT_OK
+
+
 def test_coverage_follows_the_manifest_not_a_hardcoded_list(tmp_path, fake_repo):
     """检测范围必须等于 `monitoring_artifacts()`——同一事实不留两套清单。
 
@@ -235,7 +266,7 @@ def test_guard_still_passes_when_detector_reports_drift(tmp_path, fake_repo):
         + ' --deploy-root ' + str(fake_repo) + ' 2>&1)"; then\n'
         '  echo "OK line"\nelse\n'
         '  echo "check-deploy-source: WARN —— drift" >&2\n'
-        '  printf \'%s\\n\' "$drift_out" | grep -E \'^[[:space:]]+\\[(DRIFT|SKIP |ABSENT)\' >&2\n'
+        '  printf \'%s\\n\' "$drift_out" | grep -E \'^[[:space:]]+\\[(DRIFT|SKIP |ABSENT|MISS )\' >&2\n'
         'fi\nexit 0\n', encoding="utf-8")
     proc = subprocess.run(["bash", str(wrapper)], capture_output=True, text=True,
                           env={**os.environ, "PYTHONPATH": str(REPO_ROOT)})

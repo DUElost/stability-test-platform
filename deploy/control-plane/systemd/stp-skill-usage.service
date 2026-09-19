@@ -1,0 +1,29 @@
+# Rendered by the site installer for <deploy-root> — do not edit by hand.
+[Unit]
+Description=STP skill usage probe (hollow detection, #2785)
+
+[Service]
+Type=oneshot
+# 必须降权到 deploy user（与 stability-backend 同源 <deploy-user>）：探针只读，
+# 转录源在部署用户家目录（~/.claude、~/.codex）；root 跑时 HOME=/root 找不到源，
+# 探针会按「无数据源」契约 skip 退出 0——timer 恒绿但永远观测不到任何东西，
+# 恰是「装了没有执行者」的静默形态（#2804 部署核装时发现）。邻居
+# stp-script-guard 不写 User= 是因为它要写 root:root 的 textfile 目录，本单元
+# 只读不写，无此约束；ProtectHome=read-only 对属主用户读自家目录无影响。
+User=<deploy-user>
+WorkingDirectory=<deploy-root>
+# 退出码契约见 tools/dev/skill_usage_report.py 模块头：0=无洞/无数据源
+# （新站点缺转录源恒绿不扰人）；1=有 HOLLOW（--strict）→ unit failed，
+# 由 systemctl --failed / journal 承接人审；工具异常=非零（不给 ExecStart
+# 加 - 前缀，那会把「探针坏了」吞成成功）。--self-test 由 check:gov 的
+# gov-skills gate 承载，不在此重复。
+ExecStart=<deploy-root>/venv/bin/python <deploy-root>/tools/dev/skill_usage_report.py --strict
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

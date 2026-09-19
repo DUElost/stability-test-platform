@@ -31,31 +31,43 @@ _TEXTFILE_HELP_ATTR = "_METRIC_HELP"
 _METRIC_NAME_RE = re.compile(r"[a-zA-Z_:][a-zA-Z0-9_:]*")
 
 
+def textfile_metrics_for(rel: str, root: Path = ROOT) -> set[str]:
+    """**单个** textfile 生产者源码里声明的指标名（#2788：供「站点装得到吗」按单元过滤）。
+
+    与 ``textfile_metric_index`` 同一套结构校验（HELP dict 的 key 必须是合法指标名），
+    只是把范围收敛到一个文件——按安装清单过滤时必须知道「哪个名字来自哪个生产者」。
+    """
+    path = root / rel
+    if not path.is_file():
+        return set()
+    names: set[str] = set()
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name) and target.id == _TEXTFILE_HELP_ATTR:
+                if not isinstance(node.value, ast.Dict):
+                    continue
+                for key in node.value.keys:
+                    if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
+                        continue
+                    name = key.value
+                    if not _METRIC_NAME_RE.fullmatch(name):
+                        # 结构变了（HELP 文案被当成 key 之类）就明说，不把垃圾名
+                        # 塞进 index——那会把「未知指标」伪装成「已知」而假绿。
+                        raise AssertionError(
+                            f"{rel}: {name!r} 不是合法指标名——检查 {_TEXTFILE_HELP_ATTR} 的结构")
+                    names.add(name)
+    return names
+
+
 def textfile_metric_index(root: Path = ROOT) -> dict[str, set[str]]:
     """提取 textfile 生产者声明的指标名（标签集恒为空：本仓产物无标签）。"""
     index: dict[str, set[str]] = {}
     for rel in _TEXTFILE_PRODUCERS:
-        path = root / rel
-        if not path.is_file():
-            continue
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Assign):
-                continue
-            for target in node.targets:
-                if isinstance(target, ast.Name) and target.id == _TEXTFILE_HELP_ATTR:
-                    if not isinstance(node.value, ast.Dict):
-                        continue
-                    for key in node.value.keys:
-                        if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
-                            continue
-                        name = key.value
-                        if not _METRIC_NAME_RE.fullmatch(name):
-                            # 结构变了（HELP 文案被当成 key 之类）就明说，不把垃圾名
-                            # 塞进 index——那会把「未知指标」伪装成「已知」而假绿。
-                            raise AssertionError(
-                                f"{rel}: {name!r} 不是合法指标名——检查 {_TEXTFILE_HELP_ATTR} 的结构")
-                        index.setdefault(name, set())
+        for name in textfile_metrics_for(rel, root):
+            index.setdefault(name, set())
     return index
 
 

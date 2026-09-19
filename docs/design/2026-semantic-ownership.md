@@ -34,7 +34,7 @@
 | ID | 主题 | 选定口径 | 说明 |
 |---|---|---|---|
 | **X1** | 脚本「唯一权威」三处字面 | **内容** = ADR-0021 `### D4`；**运行时** = ADR-0033 `### D3`；`plan_snapshot.script_meta` = 派发时刻自 D4 冻结的**副本**，**不是**第三权威源 | 采纳多数评审；0021 关联区括注已措辞降级（见 §8） |
-| **X2** | 日志域四层权威 | **四层都对**；表内分四行登记。**不是冲突**，是缺可引用汇总 | S15 **不得**把四层并存判成 ≥2 owner |
+| **X2** | 日志域四层权威 | **四层都对**；表内分四行登记 + 路由行 `log-chain-map`。**不是冲突**，是缺可引用汇总 → [`2026-log-chain-global-semantics.md`](./2026-log-chain-global-semantics.md)。全链**地图/路由**见 [`2026-device-log-chain-contract.md`](./2026-device-log-chain-contract.md)（Living Contract，Ownership Authority only，**非**第五内容权威） | S15 **不得**把四层并存判成 ≥2 owner；`log-chain-map` **不得**当第五内容 owner |
 | **X3** | merge 执行位置归属 | **现状登记** = ADR-0027 清单**第 7 条**；**产物与中心布局** = ADR-0025；**B1 迁 worker 触发后**结构面才归 ADR-0033 | 与 B0 相容；边行 `R-merge-locus` |
 
 ---
@@ -121,7 +121,7 @@
 | 控制面 / 执行分层 | 0001, 0006, 0014, 0016, 0017, 0018 | 已填关键行；其余见 TBD |
 | 状态机 / 租约 / 调度 | 0003, 0019, 0022, 0026, 0027, 0048 | 已填关键行 |
 | Plan / 脚本 / 工具接入 | 0020, 0021, 0023, 0033, 0039→Proposed 不强制 | 已填 X1 相关 + flash |
-| 日志 / 存储 / merge | 0025, 0028, 0032 + design 契约 | 已填 X2/X3 |
+| 日志 / 存储 / merge | 0025, 0028, 0032 + design 契约；全链地图 [`2026-device-log-chain-contract.md`](./2026-device-log-chain-contract.md) | 已填 X2/X3；Contract = 路由入口 |
 | 后处理 / Jira | 0012 | 已填（深嵌口径见 §3） |
 | 会话 / 安全 | 0024 | 已填 |
 | 主机身份 / 提权 / 退役 / 安装 | 0035, 0037, 0038, 0040, 0044 | 已填关键行 |
@@ -151,6 +151,7 @@
 | `log-signal-stream` | concept | 异常事件权威流 | `docs/adr/ADR-0018-infrastructure-layer-framework-adoption.md :: \`log_signal\` 是异常事件权威流` | 旁路上报 |
 | `dedup-pipeline-behavior` | concept | 并列 dedup/merge 行为与分区 | `docs/adr/ADR-0032-unisoc-mtk-parallel-dedup-pipelines.md :: ### D1：两条并列流水线，禁止交叉混用` | 混流水线 |
 | `center-storage-model` | concept | 中心存储 / 归档布局 | `docs/adr/ADR-0025-phase4-architecture-alignment.md :: ### D4: 日志归档——三阶段（搬运 + 汇总去重 + 分类提取）` | I-12 确认后修 0025 |
+| `log-chain-map` | concept | 日志域全链**地图/路由入口**（Ownership Authority only；**非**第五内容权威） | `docs/design/2026-device-log-chain-contract.md :: ## 3. 阶段 owner 表（四层 + 后半段）` | 把 Contract 升格为内容宪法；与四层 ADR 抢定义权 |
 | `R-merge-locus` | relation | `Merge ─executed_at→ 控制面实例` | `docs/adr/ADR-0027-control-plane-horizontal-scaling.md :: 7. **merge（\`run_merge_sync\`）为实例绑定操作**` | B1/B2/多实例互斥 |
 | `R-merge-consumes-log` | relation | `Merge ─consumes→ scan/日志产物` | `docs/design/2026-scan-upload-merge-contract.md :: ## 控制面 merge` | 改输入集 |
 | `R-tool-hosted-by-tier` | relation | `工具实现 ─hosted_by→ Tier` | `docs/adr/ADR-0033-tool-kit-ecosystem-integration.md :: ### D1：确立严格的三层工具宿主分类与生命周期隔离` | 新宿主层 |
@@ -255,3 +256,4 @@
 | 2026-09-18 | **外置措辞澄清**：主判据=不入项目代码树；右列改名「外置/不入仓」；Adapter=薄调用接缝非第二目标 |
 | 2026-09-18 | follow-up：S15 门禁落地；ADR-0033 v1.3 D1 flash 补登记；`flash-tool` 锚改指 0033 |
 | 2026-09-18 | TBD 七行升实锚；保留 `frontend-feature-expansion` TBD；`LINK_TREES += docs/adr` + 修 0044/0045 幽灵链 |
+| 2026-09-19 | 增 `log-chain-map`：Device Log Chain Contract = 全链地图/路由入口（非第五内容权威）；X2 口径同步 |
