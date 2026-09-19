@@ -8,7 +8,7 @@ Issue: #310（ADR-0028 Phase 3 signoff §4 残余验收；执行程序
 
 ## Decision
 
-在生产 MTK host（172-21-15-92 / 设备 A2WENX6814000151）上完成「Reconciler
+在生产 MTK host（172-21-x-x / 设备 A2WENX6814000151）上完成「Reconciler
 关闭/抑制时，inotifyd 兜底路径独立完成 DLE 创建与上送」的真机受控验收。
 方法：单机 env 翻转 `STP_WATCHER_AEE_RECONCILE_ENABLED=false` + 控制面
 reload_config（免重启，只影响 reload 之后开场的 per-Job 会话），骑周期回归
