@@ -27,6 +27,12 @@ _DEFAULT_INTERVAL = 1.0
 _MAX_RETRY_DELAY_SECONDS = 30.0
 _MAX_RETRY_STREAK = 5
 
+# #2799：单次 compute 的墙钟上界。compute 是同步 DB 聚合（to_thread）——挂起时既没有
+# 超时也没有取消路径，flush 任务永不收尾 ⇒ 串行化判据（`_flush_task` 未完成）让后续
+# 每次武装都被跳过，推送**永久冻结且无自愈**。超时走失败路径（退避重试），并让会话
+# 由线程自身收尾（见 `_flush_dashboard_summary` 的 `_compute_and_close`）。
+_COMPUTE_TIMEOUT_SECONDS = 30.0
+
 _loop: Optional[asyncio.AbstractEventLoop] = None
 _dirty: bool = False
 _flush_handle: Optional[asyncio.TimerHandle] = None
@@ -68,6 +74,12 @@ def _clear_flush_task(task: asyncio.Task) -> None:
     global _flush_task
     if _flush_task is task:
         _flush_task = None
+    # #2799：**丢唤醒收口**。在飞期间到达的变更置了 `_dirty` 并武装 timer，而 timer 到点
+    # 撞上「任务未完成」会被跳过且不重武装（#2447 的注释自陈「等它自己收尾后由失败/变更
+    # 路径再武装」——但成功路径不武装）。收尾处统一补一次：`_arm_flush` 自身幂等
+    # （已有 handle/在飞则不叠加），故这里是安全网而不是第二条触发路径。
+    if _dirty and _flush_handle is None:
+        _arm_flush(delay=0.0)
 
 
 def shutdown_dashboard_summary_publisher() -> None:
@@ -76,13 +88,15 @@ def shutdown_dashboard_summary_publisher() -> None:
     此前模块自带的 ``_reset_for_tests()`` 从未接入 lifespan 清理：关闭窗口里若恰好
     有一次 flush 已武装，它会在引擎/DB 正在关闭时触发，日志噪声之外没有任何收益。
     """
-    global _flush_handle, _flush_task
+    global _flush_handle, _flush_task, _dirty
     if _flush_handle is not None:
         _flush_handle.cancel()
         _flush_handle = None
     if _flush_task is not None and not _flush_task.done():
         _flush_task.cancel()
     _flush_task = None
+    # #2799：关闭即终止推送——清脏标记，避免被取消的任务在收尾回调里又补一次武装。
+    _dirty = False
 
 
 def schedule_dashboard_summary_push() -> None:
@@ -165,15 +179,33 @@ async def _flush_dashboard_summary() -> None:
         return
     _dirty = False
 
-    db = SessionLocal()
+    def _compute_and_close() -> dict:
+        # #2799：会话由**线程自己**收尾——超时后 `wait_for` 会先返回而线程仍在跑，
+        # 若由外层 finally 关会话，正在执行的查询会撞上已关闭的连接。
+        db = SessionLocal()
+        try:
+            return compute_dashboard_summary(db)
+        finally:
+            db.close()
+
     try:
-        summary = await asyncio.to_thread(compute_dashboard_summary, db)
+        summary = await asyncio.wait_for(
+            asyncio.to_thread(_compute_and_close),
+            timeout=_COMPUTE_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        # #2799：compute 挂起必须有出口——否则 flush 任务永不收尾，串行化判据把后续
+        # 每次武装都跳过，推送永久冻结（线程无法取消，交给它自己收尾）。
+        logger.error(
+            "dashboard_summary_compute_timeout timeout=%.1fs — 走失败重试",
+            _COMPUTE_TIMEOUT_SECONDS,
+        )
+        _schedule_retry()
+        return
     except Exception:
         logger.exception("dashboard_summary_compute_failed")
         _schedule_retry()
         return
-    finally:
-        db.close()
 
     try:
         from backend.realtime.socketio_server import broadcast_dashboard_summary
