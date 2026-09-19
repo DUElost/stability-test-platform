@@ -1,6 +1,6 @@
 # 文档地图（Documentation Map）
 
-> **最后更新**：2026-09-18  
+> **最后更新**：2026-09-19  
 > **文档中心**：[`README.md`](./README.md)  
 > **待删/归档清单**：[`DOC-RETIREMENT.md`](./DOC-RETIREMENT.md)
 
@@ -109,6 +109,7 @@ operations/README.md → production-minimum-deployment-checklist.md
 | **执行契约** | [`development/ai/execution-contract.md`](./development/ai/execution-contract.md)（+[规范附录](./development/ai/execution-contract-annex.md)） | AI Execution Contract 唯一权威源（Registry 协议/三维状态与 transition table/scope 谓词与 overlap 判据/test_impact/字段封闭性/实现与契约先后纪律；**Living v1.13**：§3.4 增「空 issue 集必须显性」（declare 输出独立 [WARN]，撤掉被忽略的行尾 hint；#2729）（v1.13）/ 契约分层——细则迁附录、正文预算收紧（v1.12）/ §2.1 命令清单以 `--help` 为准 + §3.3 `update --all`（v1.11）/ integration 缓存失效 `landed` + 僵尸候选两类对齐 + derived 归属前提（v1.10）/ 僵尸候选 `closed-unmerged`（v1.9）/ 决策实体唯一性 + 决策类必须 `--issue`（v1.8）/ 并发上限反转（v1.7）；附录承载写入协议细则、drift 豁免清单、已满足的启动判据与过渡条款、v1.1–v1.8 明细，与正文同版本演进、冲突以正文为准；ADR-0034 P0a 交付） |
 | **设计** | [`design/2026-09-external-tools-integration-and-package-architecture.md`](./design/2026-09-external-tools-integration-and-package-architecture.md) | 外部工具统一接入架构与包管理实施计划（ADR-0033 配套：协议定义与 §2.5 双轨衔接/§3.3 注册流与门禁分工/NFS 布局/Agent 缓存/去重+专项适配器/三阶段排期） |
 | **设计** | [`design/2026-semantic-ownership.md`](./design/2026-semantic-ownership.md) | 跨域语义归属索引（Ownership Authority only；Accepted ADR 覆盖框架；B/C 核心能力深嵌 + A/D 编排外置；X1/X2/X3 + S15 表内判据；**Draft**，#2546 / PR #2751） |
+| **设计** | [`design/2026-log-chain-global-semantics.md`](./design/2026-log-chain-global-semantics.md) | 终端设备日志链全局语义汇总（阶段 / 易混概念 / X2 四层挂接 / Phase 2 A/B/C 语义前提；填 X2「缺可引用汇总」；**不新增决策**） |
 | **Sprint 快照** | [`archive/sprints/`](./archive/sprints/) | 已归档一次性任务单 |
 | **跟踪** | GitHub Issues | 进行中、审查结论 |
 

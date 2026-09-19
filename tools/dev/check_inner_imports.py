@@ -37,7 +37,16 @@ SCAN_DIRS = (ROOT / "backend", ROOT / "tools", ROOT / "scripts")
 #: `main()` claim 路径内 `_arrive_patrol_barrier_preengine` 局部 import 随迁出）。
 #: **只许下调**。
 #: （issue #738 记录的是 2026-09-03 的 634 处；口径与扫描面当时未固化。）
-_BASELINE = 604
+#: 2026-09-19 **上调 604 → 606**（#1998 P2 实时性 +2）：`job_session` 新增
+#: `_maybe_apply_unisoc_inotifyd_paths` 的 2 处函数体内 import
+#: （`aee.collectors.unisoc.UNIVIEW_ROOT` / `device_platform`），与本文件既有
+#: `_resolve_reconciler_class` / `_maybe_start_aee_reconciler` 的平台分支惯例
+#: 同型——aee/watcher 两侧模块级互引会成环，PR 描述留痕。
+#: 2026-09-19 #736 `startup_guards`：`check_agent_version` 内 2 处局部 import
+#: 升为模块顶层 → **606 → 604**。
+#: 2026-09-19 #736 `local_runtime`：DLE `bind_local_db` 双形态 import 升顶层
+#: → **604 → 602**。
+_BASELINE = 602
 
 _FROZEN_SCRIPT_RE = re.compile(r"^backend/agent/scripts/[^/]+/v[0-9][^/]*/")
 _FROZEN_ALEMBIC_PREFIX = "backend/alembic/versions/"
