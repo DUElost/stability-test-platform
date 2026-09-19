@@ -42,7 +42,9 @@ SCAN_DIRS = (ROOT / "backend", ROOT / "tools", ROOT / "scripts")
 #: （`aee.collectors.unisoc.UNIVIEW_ROOT` / `device_platform`），与本文件既有
 #: `_resolve_reconciler_class` / `_maybe_start_aee_reconciler` 的平台分支惯例
 #: 同型——aee/watcher 两侧模块级互引会成环，PR 描述留痕。
-_BASELINE = 606
+#: 2026-09-19 #736 `startup_guards`：`check_agent_version` 内 2 处局部 import
+#: 升为模块顶层 → **606 → 604**。
+_BASELINE = 604
 
 _FROZEN_SCRIPT_RE = re.compile(r"^backend/agent/scripts/[^/]+/v[0-9][^/]*/")
 _FROZEN_ALEMBIC_PREFIX = "backend/alembic/versions/"

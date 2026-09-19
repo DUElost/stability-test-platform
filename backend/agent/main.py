@@ -5,7 +5,7 @@ import signal
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict, Optional, Set
+from typing import Dict, Optional, Set
 
 # 自动加载 .env 文件（支持手动运行时读取配置）
 # 优先加载当前工作目录的 .env，不覆盖已有环境变量
@@ -44,8 +44,11 @@ if __name__ == "__main__" and __package__ is None:
     )
     from agent.claim_loop import process_claim_tick
     from agent.graceful_shutdown import shutdown_agent_runtime
-    from agent import device_discovery
-    from agent.aee.state_migration import migrate_legacy_aee_state_keys
+    from agent.startup_guards import (
+        check_agent_version,
+        ensure_adb_server_on_startup,
+        migrate_legacy_aee_state_on_startup,
+    )
     from agent.config import BASE_DIR, ensure_dirs
     from agent.log_archiver import collect_archive_heartbeat_metrics
     from agent.heartbeat_thread import HeartbeatThread
@@ -84,8 +87,11 @@ else:
     )
     from .claim_loop import process_claim_tick
     from .graceful_shutdown import shutdown_agent_runtime
-    from . import device_discovery
-    from .aee.state_migration import migrate_legacy_aee_state_keys
+    from .startup_guards import (
+        check_agent_version,
+        ensure_adb_server_on_startup,
+        migrate_legacy_aee_state_on_startup,
+    )
     from .config import BASE_DIR, ensure_dirs
     from .log_archiver import collect_archive_heartbeat_metrics
     from .heartbeat_thread import HeartbeatThread
@@ -128,28 +134,6 @@ _active_jobs_lock = threading.Lock()
 _lock_renewal_stop_event = threading.Event()
 
 
-
-def _migrate_legacy_aee_state_on_startup(db_path: str) -> Dict[str, Any]:
-    """Promote legacy scan_aee state into watcher:aee namespace during agent startup."""
-    summary = migrate_legacy_aee_state_keys(db_path)
-    if (
-        int(summary["processed_entries_migrated"]) > 0
-        or int(summary["pending_pull_migrated"]) > 0
-    ):
-        logger.info(
-            "startup_aee_state_namespace_migrated db_path=%s summary=%s",
-            db_path,
-            summary,
-        )
-    if summary.get("errors"):
-        logger.warning(
-            "startup_aee_state_namespace_migration_errors db_path=%s errors=%s",
-            db_path,
-            summary["errors"],
-        )
-    return summary
-
-
 # 全局活跃 Job 追踪辅助函数（仅 per-device guard）
 def _register_active_device(did: int) -> None:
     with _active_jobs_lock:
@@ -159,84 +143,6 @@ def _register_active_device(did: int) -> None:
 def _deregister_active_device(did: int) -> None:
     with _active_jobs_lock:
         _active_device_ids.discard(did)
-
-
-def _check_agent_version(api_url: str, host_id: str, mount_points, host_info) -> None:
-    """Send a single heartbeat and verify agent version meets backend's minimum.
-
-    Exits the process if the agent is too old.
-    """
-    from . import __version__ as agent_version
-    from .heartbeat import send_heartbeat
-
-    try:
-        resp = send_heartbeat(
-            api_url,
-            host_id,
-            mount_points,
-            host_info=host_info,
-            agent_version=agent_version,
-        )
-    except Exception:
-        logger.warning("version_check_heartbeat_failed — skipping version guard")
-        return
-
-    if resp is None:
-        logger.warning("version_check_no_response — skipping version guard")
-        return
-
-    min_version = (resp.get("agent_min_version") or "").strip()
-    if not min_version:
-        return  # Backend doesn't enforce a minimum version yet
-
-    if _version_lt(agent_version, min_version):
-        logger.critical(
-            "agent_version_too_old agent=%s required=%s — refusing to start",
-            agent_version, min_version,
-        )
-        sys.exit(1)
-
-    logger.info("version_check_ok agent=%s min=%s", agent_version, min_version)
-
-
-def _version_lt(a: str, b: str) -> bool:
-    """Compare two SemVer strings (no pre-release tags). Returns True if a < b."""
-    try:
-        parts_a = [int(x) for x in a.split(".")]
-        parts_b = [int(x) for x in b.split(".")]
-    except (ValueError, TypeError):
-        return False  # Malformed versions → don't block
-    # Pad shorter list with zeros
-    max_len = max(len(parts_a), len(parts_b))
-    parts_a += [0] * (max_len - len(parts_a))
-    parts_b += [0] * (max_len - len(parts_b))
-    return parts_a < parts_b
-
-
-
-
-
-def _ensure_adb_server_on_startup(adb_path: str) -> bool:
-    """Reconcile ADB fork-servers to the Agent's configured port.
-
-    启动与 reload_config 共用：清理非目标端口的游离 daemon 并重启目标端口
-    server，让全部 USB 设备重新注册。失败不阻塞启动/热更新，由心跳健康检查
-    （adb_multiple_servers / device 数）兜底告警。
-    """
-    try:
-        result = device_discovery.ensure_single_adb_server(adb_path)
-        logger.info(
-            "adb_server_reconciled port=%s killed_ports=%s started=%s skipped=%s",
-            result.get("port"),
-            [server.get("port") for server in result.get("killed", [])],
-            result.get("started"),
-            result.get("skipped"),
-        )
-        return True
-    except Exception as exc:
-        logger.error("adb_server_reconcile_failed: %s", exc)
-        return False
-
 
 
 def main() -> None:
@@ -258,7 +164,7 @@ def main() -> None:
     agent_secret = identity.agent_secret
 
     adb = AdbWrapper(adb_path=adb_path)
-    _ensure_adb_server_on_startup(adb_path)
+    ensure_adb_server_on_startup(adb_path)
     # 启动 WebSocket 客户端（best-effort，失败时降级到 HTTP）
     sio_client = AgentSocketIOClient(api_url, host_id, agent_secret)
     # P2-2a：先注册转发 handler 再 connect——启动窗口内到达的 control 命令
@@ -282,7 +188,7 @@ def main() -> None:
     except ImportError:
         from agent.aee.device_log_event_client import bind_local_db as _bind_dle_db
     _bind_dle_db(local_db)
-    _migrate_legacy_aee_state_on_startup(db_path)
+    migrate_legacy_aee_state_on_startup(db_path)
 
     patrol_checkpoint_store = PatrolCycleCheckpointStore(BASE_DIR / "patrol_checkpoint.db")
     patrol_checkpoint_store.initialize()
@@ -320,7 +226,7 @@ def main() -> None:
         local_db=local_db,
         active_jobs_lock=_active_jobs_lock,
         active_job_ids=_active_job_ids,
-        ensure_adb_server=_ensure_adb_server_on_startup,
+        ensure_adb_server=ensure_adb_server_on_startup,
     )
 
 
@@ -338,7 +244,7 @@ def main() -> None:
 
     # One-shot protocol gate: do not start workers/background threads when this
     # Agent build is below the backend's minimum supported version.
-    _check_agent_version(api_url, host_id, mount_points, host_info)
+    check_agent_version(api_url, host_id, mount_points, host_info)
 
     # 启动心跳守护线程（独立于任务执行循环）
     try:
