@@ -81,8 +81,12 @@ def test_aee_dispatched_immediately():
 
 
 def test_default_immediate_set_matches_contract():
-    """文档承诺 AEE/VENDOR_AEE 默认即时直通。"""
-    assert DEFAULT_IMMEDIATE_CATEGORIES == {"AEE", "VENDOR_AEE"}
+    """文档承诺 AEE/VENDOR_AEE/UNIVIEW 默认即时直通。
+
+    UNIVIEW（#1998 P2 实时性）只作 reconciler 唤醒（DeviceLogWatcher._route_unisoc_wake
+    拦截），进 immediate 集是为了绕过 batch 默认 5s 的聚合延迟——语义仍非 emit。
+    """
+    assert DEFAULT_IMMEDIATE_CATEGORIES == {"AEE", "VENDOR_AEE", "UNIVIEW"}
 
 
 # ----------------------------------------------------------------------

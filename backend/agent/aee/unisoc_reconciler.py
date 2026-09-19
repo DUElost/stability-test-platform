@@ -6,6 +6,7 @@ import json
 import logging
 import shutil
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set
@@ -185,12 +186,56 @@ class UnisocUniviewReconciler:
             "STP_WATCHER_UNISOC_RECONCILE_MAX_TICK_ERRORS", 5,
         )
         self._consecutive_tick_errors = 0
+        # ── #1998 P2 实时性：inotifyd 唤醒层（ADR-0032 D8 增补；opt-in，见
+        # job_session._maybe_apply_unisoc_inotifyd_paths）────────────────────
+        # watcher 侧把 UNIVIEW inotifyd 事件转成 wake()；本拍循环把下次休眠截断到
+        # 「最小间隔地板」，让新事件秒级可见而不引入双写（信号/DLE 仍由 tick 独占
+        # 产出）。地板防 inotifyd 事件风暴把拍频推到无界；默认值未经真机校准，
+        # Z2582 探测（#1998 清单）后可再调。
+        self._wake_evt = threading.Event()
+        self._wake_min_interval = _env_float(
+            "STP_WATCHER_UNISOC_WAKE_MIN_INTERVAL_SECONDS", 2.0,
+        )
+        self._last_tick_monotonic = time.monotonic()
+
+    def wake(self) -> None:
+        """#1998：watcher 侧 UNIVIEW 事件到达时调用——把下一拍从 baseline 提前。
+
+        幂等且线程安全（Event.set）；唤醒只缩短休眠，不并发执行 tick（循环单线程）。
+        """
+        self._wake_evt.set()
+
+    def _wait_until_next_tick(self) -> str:
+        """休眠到下一拍；返回 ``"stop"`` / ``"wake"`` / ``"baseline"``。
+
+        baseline 等待可被 ``wake()`` 截断，但受 ``_wake_min_interval`` 地板约束
+        （自上一拍起算）。置位是**闩锁一次即清**：清位后再等满剩余时长，新唤醒
+        在 ``wait`` 返回 True 时重新闩锁重算——不会出现「事件已置位 → wait 秒回」
+        的热循环。``stop()`` 会同时置位唤醒事件，保证两路都即时返回。
+        """
+        woke = False
+        while not self._stop_evt.is_set():
+            now = time.monotonic()
+            if self._wake_evt.is_set():
+                woke = True
+                self._wake_evt.clear()
+            baseline_deadline = self._last_tick_monotonic + self._baseline
+            floor = self._last_tick_monotonic + self._wake_min_interval
+            target = baseline_deadline
+            if woke:
+                target = min(baseline_deadline, max(floor, now))
+            delay = target - now
+            if delay <= 0:
+                return "wake" if woke else "baseline"
+            self._wake_evt.wait(delay)
+        return "stop"
 
     def start(self) -> bool:
         if self._started:
             return True
         self._load_processed_state()
         self._stop_evt.clear()
+        self._wake_evt.clear()
         self._thread = threading.Thread(
             target=self._run,
             name=f"unisoc-reconciler-{self._serial}-{self._job_id}",
@@ -208,6 +253,8 @@ class UnisocUniviewReconciler:
         if not self._started:
             return self.stats
         self._stop_evt.set()
+        # 同时置位唤醒事件：休眠中的 _wait_until_next_tick 两路都即时返回
+        self._wake_evt.set()
         if self._thread is not None and self._thread.is_alive():
             self._thread.join(timeout=timeout)
         self._started = False
@@ -270,7 +317,16 @@ class UnisocUniviewReconciler:
                     # #806：自关闭同样要复位 watcher 抑制位（与 MTK 路径一致）。
                     self._notify_self_shutdown()
                     break
-            if self._stop_evt.wait(self._baseline):
+            self._last_tick_monotonic = time.monotonic()
+            reason = self._wait_until_next_tick()
+            if reason == "wake":
+                # #1998：inotifyd 唤醒提前进入下一拍（baseline 休眠被截断）。
+                self.stats.wake_ticks += 1
+                logger.debug(
+                    "unisoc_reconciler_wake_tick serial=%s job=%d baseline=%.1fs",
+                    self._serial, self._job_id, self._baseline,
+                )
+            elif reason == "stop":
                 break
 
     def _notify_self_shutdown(self) -> None:

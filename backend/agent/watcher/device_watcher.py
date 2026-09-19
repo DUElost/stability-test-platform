@@ -33,7 +33,7 @@ import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from .batcher  import DEFAULT_IMMEDIATE_CATEGORIES, BatcherStats, EventBatcher
 from .contracts import ContractViolation
@@ -137,6 +137,10 @@ class DeviceLogWatcher:
         # AEE/VENDOR_AEE 的 emit(reconciler 通过 db_history 唯一 emit);
         # 仍保留 LogPuller pull + ArtifactUploader,ANR/MOBILELOG 不受影响。
         self._aee_reconciler_active = bool(aee_reconciler_active)
+        # #1998 P2 实时性：UNIVIEW inotifyd 事件 → reconciler.wake() 的回调，
+        # 由 JobSession 在 UnisocUniviewReconciler 启动成功后注入（见
+        # set_unisoc_wake）。None = 未接线，UNIVIEW 事件仍被消费（不 emit）。
+        self._unisoc_wake: Optional[Callable[[], None]] = None
         self._fencing_token = str(fencing_token)
         self._agent_instance_id = str(agent_instance_id)
         self._plan_run_id = plan_run_id
@@ -220,6 +224,40 @@ class DeviceLogWatcher:
         reconciler 又没跑,崩溃信号会静默丢失。bool 赋值在 CPython 下原子,无需加锁。
         """
         self._aee_reconciler_active = bool(active)
+
+    def set_unisoc_wake(self, callback: Optional[Callable[[], None]]) -> None:
+        """#1998 P2 实时性：注入/清除 UNIVIEW → reconciler.wake() 回调。
+
+        JobSession 在 UnisocUniviewReconciler 启动成功后注入；回滚/自关闭时传
+        None 清除（与 set_aee_reconciler_active(False) 同位对称）。回调抛异常
+        不允许打断事件消费（_route_unisoc_wake 内已兜底）。
+        """
+        self._unisoc_wake = callback
+
+    def _route_unisoc_wake(self, event: WatcherEvent) -> bool:
+        """UNIVIEW 事件只作 reconciler 唤醒，恒不 emit/pull（#1998）。
+
+        展锐信号/DLE 的唯一写入方是 UnisocUniviewReconciler（状态机与幂等键都在
+        其 tick 内）；inotifyd 提前知道「uniview 根有动静」的唯一正确动作是把
+        reconciler 的下一拍提前。返回 True = 事件已被本路由消费。
+        """
+        if event.category != "UNIVIEW":
+            return False
+        wake = self._unisoc_wake
+        if wake is not None:
+            try:
+                wake()
+            except Exception:
+                logger.exception(
+                    "unisoc_wake_callback_failed serial=%s job=%d",
+                    self._serial, self._job_id,
+                )
+        else:
+            logger.debug(
+                "unisoc_wake_no_reconciler serial=%s job=%d path=%s",
+                self._serial, self._job_id, getattr(event, "path", None),
+            )
+        return True
 
     def _should_emit_inotifyd(self, event: WatcherEvent) -> bool:
         """M0/PR #2: AEE/VENDOR_AEE 在 reconciler 接管期间不由 inotifyd 路径 emit。"""
@@ -454,7 +492,13 @@ class DeviceLogWatcher:
 
         M0/PR #2:开启 reconciler 后,AEE/VENDOR_AEE 由 reconciler 独占 emit;
         本路径仅保留 puller 拉文件 + ArtifactUploader,不再直接 emit。
+
+        #1998:UNIVIEW 在进入 puller/emit 之前先被唤醒路由消费——UNIVIEW 已进
+        immediate 集（batch 默认 5s 会吃掉秒级收益），但不允许触发 pull
+        （reconciler 独占拉取，双拉会烧 host 提取预算 #740）。
         """
+        if self._route_unisoc_wake(event):
+            return
         if self._puller is not None:
             self._puller.submit(event)
         elif self._should_emit_inotifyd(event):
@@ -467,6 +511,8 @@ class DeviceLogWatcher:
         ANR 事件量大、文件短、bugreport 通常独立覆盖，没必要逐条拉。
         """
         for ev in events:
+            if self._route_unisoc_wake(ev):
+                continue
             self._safe_emit(ev)
 
     def _on_pull_done(self, event: WatcherEvent, enrichment: Dict[str, Any]) -> None:
