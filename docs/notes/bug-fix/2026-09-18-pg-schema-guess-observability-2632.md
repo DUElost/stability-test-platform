@@ -19,9 +19,14 @@ loopback 测试库拒载）已合入；**缺口①「无拦截、无留痕、无
    `stp_pg_guard_last_run`。
 2. **部署**：`deploy/control-plane/systemd/stp-pg-guard.{service,timer}`（每 5 分钟；
    与 `stp-mem-top`/`stp-script-guard` 同款沙箱与「不写 `User=`」理由——指标目录属 root）。
-3. **告警** `StabilityPgSchemaGuessing`（平台文件 + 站点子集，逐字段一致）：
+3. ~~**告警** `StabilityPgSchemaGuessing`（平台文件 + 站点子集，逐字段一致）~~：
+   **只留平台文件**——`2026-09-19-guard-credibility` 批次的 #2788 纠正：`stp-pg-guard` 是
+   控制面宿主单元，站点安装清单（`MONITORING_SAMPLER`）里没有它，规则进站点子集会让
+   `absent(stp_pg_guard_last_run)` 恒真、**每站点永久 firing**（见
+   [`2026-09-19-alert-lifecycle-2788-2791.md`](2026-09-19-alert-lifecycle-2788-2791.md)）。
+   规则本体与 `for: 10m` 不变：
    `stp_pg_schema_error_events >= 5 or time() - stp_pg_guard_last_run > 3600
-   or absent(stp_pg_guard_last_run)`，`for: 10m`。
+   or absent(stp_pg_guard_last_run)`。
 4. **接进既有判据面**：`tests/metrics_registry.py` 的 `_TEXTFILE_PRODUCERS` 增列本脚本
    （5 个名字从源码静态提取）；promtool 场景补齐；`_SELF_OWNED_METRIC_RE` 前缀集扩
    `stp_pg_`。

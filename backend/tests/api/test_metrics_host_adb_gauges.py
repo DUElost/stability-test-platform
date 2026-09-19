@@ -93,3 +93,31 @@ def test_retired_host_and_ownerless_devices_are_excluded(client, db_session, mon
 
     assert 'host_id="adb-retired"' not in body, "退役 host 仍在指标里（会永远盯着不存在的机器）"
     assert 'stability_host_device_adb_state{host_id="adb-h4",state="device"} 1.0' in body
+
+
+def test_series_removed_after_host_is_retired(client, db_session, monkeypatch):
+    """#2791：**先 live、后退役**必须移除 series——只停刷新会把故障值冻结在 registry。
+
+    反向自证：`test_retired_host_and_ownerless_devices_are_excluded` 造的是「从未 live
+    过的退役 host」（label child 从未创建 ⇒ 恒过），覆盖不到本序列。告警表达式
+    `offline >= 5 and offline/total >= 0.5 and total >= 5` 无 liveness 门 ⇒ 退役前的
+    故障值会被 StabilityHostAdbOfflineConcentration 永久 firing。
+    """
+    monkeypatch.setenv("STP_METRICS_AUTH_REQUIRED", "0")
+    _host(db_session, "adb-live")
+    for i in range(6):
+        _device(db_session, f"adb-live-{i}", "adb-live", "offline")
+    db_session.commit()
+
+    first = client.get("/metrics").text
+    assert 'stability_host_device_adb_state{host_id="adb-live",state="offline"} 6.0' in first
+
+    host = db_session.get(Host, "adb-live")
+    host.retired_at = _now()
+    db_session.commit()
+
+    second = client.get("/metrics").text
+    assert 'host_id="adb-live"' not in second, (
+        "退役后该 host 的 series 仍在 /metrics 里（prometheus_client label child 常驻"
+        " registry，停刷新 = 冻结故障值）——#2791"
+    )
