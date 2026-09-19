@@ -111,6 +111,8 @@ class ReconcilerStats:
     dirs_abandoned: int = 0            # 达 #2272 上限被放弃的目录数（按目录名去重）
     dirs_oversized_skipped: int = 0    # #2252 降级目录：本 job 累计（按名去重，单调）
     unresolved_dirs: int = 0           # 最近一拍「已列到但未落 processed 且未放弃」集合大小
+    # #1998 P2 实时性（UNISOC 唤醒层回填；MTK 路恒 0）：被 inotifyd 提前唤醒的拍数
+    wake_ticks: int = 0
 
     def to_dict(self) -> Dict[str, int]:
         return {
@@ -126,6 +128,7 @@ class ReconcilerStats:
             "dirs_abandoned":          self.dirs_abandoned,
             "dirs_oversized_skipped":  self.dirs_oversized_skipped,
             "unresolved_dirs":         self.unresolved_dirs,
+            "wake_ticks":              self.wake_ticks,
         }
 
 
