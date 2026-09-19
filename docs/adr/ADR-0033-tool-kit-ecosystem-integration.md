@@ -1,7 +1,7 @@
 # ADR-0033：外部工具统一接入契约规范与包管理解耦模型（Tool-Kit Ecosystem Integration）
 
-- 状态：**Accepted（v1.4）**
-- 落地状态：**未落地**（Phase 2/3 零代码；2026-09-18 核验 Phase 2 控制面样板**阻塞**——见 §4 Phase 2 注与 [`2026-09-18-adr0033-phase2-unisoc-merge-blocker.md`](../notes/architecture/2026-09-18-adr0033-phase2-unisoc-merge-blocker.md)；D0/D3 权威已生效——见 §5）
+- 状态：**Accepted（v1.5）**
+- 落地状态：**部分落地**（Phase 2 控制面 B5 样板·选项 A：薄 `DedupMergeEngine` 包现态 `start_log_scan -merge_files_list`；Scan-Result-GT 仍仅 Agent B2；**不做**包存储 / Phase 3；D0/D3 权威已生效——见 §5）
 - 优先级：P1
 - 目标里程碑：M7
 - 日期：2026-09-03
@@ -20,6 +20,7 @@
 | v1.2 | 2026-09-10 | **收窄与登记**：D0/D3 权威即刻生效；D2 降为「新工具族准入、按族采用」；包存储改为条件落地（三条触发条件）；legacy 例外（展锐三工具族 + 私有路径键）显式登记；未落地状态与 §4 排期作废显式化（§5，#1237） |
 | v1.3 | 2026-09-18 | **D1 刷机补登记**：Tier 3 典型工具增列 `flash_firmware` / `flash_preflight`；原厂 flashtool 不入仓；提权面仍归 ADR-0037 D5（#2546 F-5） |
 | v1.4 | 2026-09-18 | **Phase 2 阻塞登记**（非决策变更）：控制面 unisoc/`Scan-Result-GT` `DedupMergeEngine` 样板与 ADR-0032 D3「同一 merge 工具」+ GT 仅 `-d` CLI 冲突；停做适配器，待 A/B/C 出口（#745） |
+| v1.5 | 2026-09-19 | **Phase 2 选项 A 拍板落地**：样板 = 包 **B5** 现态 `start_log_scan -merge_files_list`（两平台同一工具）；Scan-Result-GT **继续只做 B2** Agent 主机汇总，不插 merge 循环；纠正 v1.0–v1.4「unisoc GT = DedupMergeEngine」措辞；薄适配器 `backend/services/dedup/`；不做包存储 / Phase 3 / 不修订 D3（#745 / #2546） |
 
 ---
 
@@ -47,8 +48,9 @@ ADR-0032 已经终裁并落地了展锐与 MTK 并列日志链路（Watcher 实�
 | 权威域 | **行为**：platform 路由、`dedup/{run}/{mtk,unisoc}/` 分区、按分区双 merge 循环、归档语义 | **结构**：工具如何打包分发、如何被调用、胶水收在哪 |
 | 变更性质 | 已落地（v0.6），迁移期间持续有效 | Phase 3 存量归一是**重构而非行为变更**，验收 = watermark 语义、merge 产物发布中心路径、产物注册行为等价 |
 
-- 现态事实：`run_merge_all_platforms_sync`（`backend/services/dedup_scan.py`）是**同一扫描工具按 mtk/unisoc 分区跑两遍**；展锐自有去重引擎（Scan-Result-GT，#463 P2）尚未接入——Phase 2 样板即「在 ADR-0032 已建的 per-platform merge 循环内，为 unisoc 分区加装第一个 `DedupMergeEngine` 实现」；
-- 可行性评审（2026-08-26）要求「P1 采集 Agent 化必开 ADR 重议 #220」，该 ADR 即 ADR-0032；本 ADR 只覆盖其 P2 汇总去重形态；
+- 现态事实：`run_merge_all_platforms_sync`（`backend/services/dedup_scan.py`）是**同一扫描工具按 mtk/unisoc 分区跑两遍**；
+- **Phase 2 样板（v1.5 / 选项 A）**：在 ADR-0032 已建的 per-platform merge 循环上，为控制面 **B5** 加装第一个 `DedupMergeEngine`——实现体是现态 `start_log_scan -merge_files_list`（薄 ACL / argv 接缝），**不是** Scan-Result-GT。GT 继续只做 Agent **B2** 主机汇总（`scan_result.py -d`，已由 `UnisocScanRunner` 使用）。行为权威仍属 ADR-0032 D3；本 ADR 只收结构接缝；
+- 可行性评审（2026-08-26）要求「P1 采集 Agent 化必开 ADR 重议 #220」，该 ADR 即 ADR-0032；本 ADR 只覆盖其 P2 汇总去重形态中的**控制面 merge 防腐层**（B5），不把 B2 主机汇总工具误写成 merge 引擎；
 - 落地本 ADR 时同步修订 `backend/agent/aee/CLAUDE.md` 的 #220 旧口径（「生产只扫 MTK」已失效）。
 
 ---
@@ -145,10 +147,11 @@ flowchart TD
 
 - **Phase 1（近期·止血与标准）**：固化本文档与详细实施设计；阻断主仓新脚本源码拷入；执行 Issue #735（含先修复退役诊断工具自身崩溃）退役 47 个历史零引用活跃版本；
 - **Phase 2（中期·标杆样板打样）**：
-  - 控制面样板：在 ADR-0032 已建的 per-platform merge 循环内，为 unisoc 分区接入第一个 `DedupMergeEngine` 实现（展锐 `Scan-Result-GT`，#463 P2）；
-  - **2026-09-18 阻塞（未拍板前零适配器代码）**：`Scan-Result-GT` 公开 CLI 仅 `scan_result.py -d`（Agent 主机汇总，已由 `UnisocScanRunner` 使用）；控制面 merge 对两平台仍走同一 `start_log_scan -merge_files_list`（ADR-0032 D3 / B3）。将 GT 直接挂进 merge 循环与 D3 及工具契约均冲突——出口 A/B/C 与证据见 [`2026-09-18-adr0033-phase2-unisoc-merge-blocker.md`](../notes/architecture/2026-09-18-adr0033-phase2-unisoc-merge-blocker.md)；
+  - **控制面样板（v1.5 选项 A，已拍板）**：在 ADR-0032 per-platform merge 循环上接入第一个 `DedupMergeEngine`——**包 B5 现态** `start_log_scan -merge_files_list`（`backend/services/dedup/StartLogScanMergeEngine`）；mtk/unisoc **同一引擎**（D3）；编排（round / flock / 发布）仍在 `dedup_scan.run_merge_sync`；
+  - **Scan-Result-GT 边界**：GT 公开 CLI 仅 `scan_result.py -d`（Agent **B2** 主机汇总）；**不**插进控制面 merge 循环；v1.0–v1.4「unisoc GT = DedupMergeEngine」措辞作废，阻塞笔记出口见 [`2026-09-18-adr0033-phase2-unisoc-merge-blocker.md`](../notes/architecture/2026-09-18-adr0033-phase2-unisoc-merge-blocker.md)，选定 A 的 Agent Note 见 [`2026-09-19-adr0033-phase2-option-a.md`](../notes/architecture/2026-09-19-adr0033-phase2-option-a.md)；
+  - **明确不做（本阶段）**：包存储 tar.gz、Phase 3 存量归一、修订 ADR-0032 D3 换独立 unisoc merge 工具（选项 B）、Agent 侧 GT Adapter 作为 Phase 2 主样板（选项 C）；
   - 设备端样板：GPU / 开关机 / 休眠唤醒（#462）按照统一 Tool Contract 模板化接入（依赖工具包缓存机制就绪，排期见设计文档 §5）；
-  - 实现工具包本地校验解压缓存机制；
+  - 实现工具包本地校验解压缓存机制（仍受 §5.4 条件落地约束，本轮不排期）；
 - **Phase 3（远期·存量归一）**：存量 MTK 扫描与 Jira 提单迁移至适配器体系（重构而非行为变更，验收 = 与 ADR-0032 行为等价）；在 Web 管理面暴露外部工具管理面板。
 
 ---
@@ -159,7 +162,7 @@ flowchart TD
 
 ADR-0033 自 2026-09-03 Accepted 起至 2026-09-10 **无任何落地提交**（同期 567 次提交中 127 fix / 89 docs / 12 feat），而账目继续增长（基线 `fdf0247c` → `a009eeee`）：
 
-- **契约要素全代码零命中**：`tool_manifest.yaml`、`adapters/`、`tools_cache/`、`--context`、`summary.json` 消费分支、`tools/dev/verify_tool_contract.py`、manifest 门禁（`grep -rln "tool_manifest\|tools_cache\|DedupMergeEngine" backend/ frontend/src tools/ scripts/` → 0 文件）；
+- **契约要素（v1.5 前）曾全代码零命中**：`tool_manifest.yaml`、`tools_cache/`、`--context`、`summary.json` 消费分支、`tools/dev/verify_tool_contract.py`、manifest 门禁；v1.5 起控制面 B5 薄接缝落地为 `backend/services/dedup/`（`DedupMergeEngine` / `StartLogScanMergeEngine`），**仍无**包存储与 Tool Contract 全要素；
 - **脚本膨胀未减速**：`backend/agent/scripts/` 版本目录 **100 → 110**（新增 10 个**全部落在既有族**）、`.py` 文件 **180 → 199**、行数 **59,406 → 67,288**（+7,882 / 7 天）、工具族 **32 → 32**；env 读键 **191 → 199**；
 - **现实已跑出第三条路**：中心存储 `/mnt/stp-aee/tools/` 下为**未打包源码目录**（`Start-Log-Scan` / `Monkey-Log-Scan-GT-SPRD` / `Scan-Result-GT`），Agent 经 4 个私有 env 配置路径（2026-08-31 ADR-0032 落地时引入）。
 
@@ -193,7 +196,7 @@ ADR-0033 自 2026-09-03 Accepted 起至 2026-09-10 **无任何落地提交**（�
 
 ### 5.5 裁定四：未落地状态显式化（决策效力与实现进度分离）
 
-- **落地状态：未落地**（Phase 2/3 零代码；Phase 2 控制面样板 2026-09-18 起登记为**阻塞**，见 §4 Phase 2 注）；D0/D3 权威已生效，D2 按族准入；
+- **落地状态：部分落地**（Phase 2 控制面 B5 样板·选项 A 已落地薄 `DedupMergeEngine`；包存储 / Phase 3 / 设备端样板仍未排期；2026-09-18 阻塞由 v1.5 选定 A 解除，见 §4）；D0/D3 权威已生效，D2 按族准入；
 - §4 的时间点作废为参考序，排期以 issue 为准；
 - **不因超期自动降级本 ADR 的决策效力**，反之也**不得因"纸面 Accepted"当作已落地基线**——索引面（`docs/adr/README.md`、`docs/DOC-MAP.md`、M7 看板）与本文头部"落地状态"行须同步体现这一区分。
 

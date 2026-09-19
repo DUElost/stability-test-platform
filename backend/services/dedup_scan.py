@@ -13,7 +13,6 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -27,13 +26,15 @@ from sqlalchemy.orm import Session
 from backend.core import metrics
 from backend.core.dedup_platform import DEDUP_PLATFORMS, artifact_uri_matches_platform
 from backend.models.plan_run_artifact import PlanRunArtifact
+from backend.services.dedup import (
+    get_control_plane_merge_engine,
+    reset_merge_capability_cache_for_tests as _reset_engine_merge_cache,
+)
 
 logger = logging.getLogger(__name__)
 
 ARTIFACT_TYPE_SCAN = "scan_result_xls"
 ARTIFACT_TYPE_MERGE = "merge_result_xls"
-
-_merge_files_list_supported: Optional[bool] = None
 
 
 def _read_backend_scan_tool_env() -> Tuple[str, str]:
@@ -579,13 +580,16 @@ def run_merge_sync(
 
         listfile: Path | None = None
         try:
-            argv, listfile = build_merge_argv(tool, org_files, side_argv)
+            argv, listfile = build_merge_argv(
+                tool, org_files, side_argv, platform=platform
+            )
             logger.info(
-                "merge_started plan_run=%d files=%d cwd=%s mode=%s",
+                "merge_started plan_run=%d files=%d cwd=%s mode=%s platform=%s",
                 plan_run_id,
                 len(org_files),
                 cwd,
                 argv[2] if len(argv) > 2 else "?",
+                platform or "all",
             )
             proc = subprocess.run(
                 argv,
@@ -797,46 +801,29 @@ def _load_org_files_for_merge(
 
 
 def scan_tool_supports_merge_files_list(tool: Dict[str, str]) -> bool:
-    """探测 start_log_scan 是否支持 -merge_files_list（结果进程内缓存）。"""
-    global _merge_files_list_supported
-    if _merge_files_list_supported is not None:
-        return _merge_files_list_supported
+    """探测 start_log_scan 是否支持 -merge_files_list（结果进程内缓存）。
 
-    script = Path(tool["script"])
-    if not script.is_file():
-        _merge_files_list_supported = False
-        return False
-
-    try:
-        proc = subprocess.run(
-            [tool["python"], str(script), "-h"],
-            cwd=str(script.parent),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=30,
-        )
-        help_text = (proc.stdout or "") + (proc.stderr or "")
-        _merge_files_list_supported = "merge_files_list" in help_text
-    except Exception:
-        logger.warning("merge_files_list_probe_failed script=%s", script, exc_info=True)
-        _merge_files_list_supported = False
-
-    logger.info("merge_files_list_supported=%s script=%s", _merge_files_list_supported, script)
-    return _merge_files_list_supported
+    委托 B5 ``StartLogScanMergeEngine``（ADR-0033 Phase 2 选项 A）。
+    """
+    return get_control_plane_merge_engine().supports_merge_files_list(tool)
 
 
 def build_merge_argv(
     tool: Dict[str, str],
     org_files: List[str],
     side_argv: List[str],
+    *,
+    platform: str | None = None,
 ) -> Tuple[List[str], Optional[Path]]:
     """构建 merge 子进程 argv。
 
     #291：只走 ``-merge_files_list``。工具不支持（过旧 / 脚本缺失 / 探测
     失败）视为配置错误直接抛错，不再静默回落展开全部 xls 的
     ``-merge_files``——那条路有 argv 长度上限，host 规模上来必撞墙。
+
+    Phase 2 选项 A：经 ``DedupMergeEngine`` 包现态 B5 CLI；``platform`` 不改变
+    工具选择（ADR-0032 D3 同一 ``start_log_scan``）。能力门禁留在本门面，
+    以便既有测试 patch ``scan_tool_supports_merge_files_list``。
     """
     if not scan_tool_supports_merge_files_list(tool):
         raise RuntimeError(
@@ -844,18 +831,10 @@ def build_merge_argv(
             f"(script={tool.get('script')!r}); upgrade the scan tool — "
             "the legacy -merge_files fallback was removed (#291)"
         )
-    with tempfile.NamedTemporaryFile(
-        "w",
-        suffix=".txt",
-        prefix="merge_list_",
-        dir=str(Path(tempfile.gettempdir())),
-        delete=False,
-        encoding="utf-8",
-    ) as f:
-        f.write("\n".join(org_files))
-        listfile = Path(f.name)
-    argv = [tool["python"], tool["script"], "-merge_files_list", str(listfile)] + side_argv
-    return argv, listfile
+    result = get_control_plane_merge_engine(platform).build_merge_argv(
+        tool, org_files, side_argv
+    )
+    return result.argv, result.listfile
 
 
 def merge_stderr_indicates_failure(stderr: str) -> bool:
@@ -1091,8 +1070,7 @@ def find_fresh_merge_output_dir(
 
 def reset_merge_capability_cache_for_tests() -> None:
     """测试专用：清 -merge_files_list 探测缓存。"""
-    global _merge_files_list_supported
-    _merge_files_list_supported = None
+    _reset_engine_merge_cache()
 
 
 def _map_agent_path_to_center(path: str, plan_run_id: int, center_root: str) -> str:
