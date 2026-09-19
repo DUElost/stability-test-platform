@@ -877,7 +877,7 @@ async def test_complete_job_terminal_conflicting_payload_is_read_only():
             conflict_audit = (
                 db.query(AuditLog)
                 .filter(
-                    AuditLog.resource_type == "job",
+                    AuditLog.resource_type == "job_instance",
                     AuditLog.resource_id == str(seed["job_id"]),
                     AuditLog.action == "terminal_payload_conflict",
                 )
