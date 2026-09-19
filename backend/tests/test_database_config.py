@@ -47,6 +47,10 @@ def test_get_async_engine_kwargs_for_postgres_keeps_pool_settings():
         "pool_size": 30,
         "max_overflow": 60,
         "pool_recycle": 1800,
+        # #2632：asyncpg 的 application_name 走 server_settings（不是顶层参数）；
+        # 套件内 TESTING=1（conftest），故期望值是 tests 名——名字映射由
+        # backend/tests/core/test_db_application_name.py 钉住。
+        "connect_args": {"server_settings": {"application_name": "stability-tests"}},
     }
 
 
@@ -64,6 +68,8 @@ def test_get_sync_engine_kwargs_for_postgres_sets_pool_capacity():
         "pool_size": 30,
         "max_overflow": 60,
         "pool_recycle": 1800,
+        # #2632：psycopg / psycopg2 直接吃顶层 application_name。
+        "connect_args": {"application_name": "stability-tests"},
     }
 
 
