@@ -140,10 +140,10 @@ Agent 侧的挂载在这些站点由运维按分享约定自行完成，S5 对�
 - **S4**：落地宿主进程内存采样器（`/usr/local/sbin/stp-mem-top` + `stp-mem-top.timer`）与
   **退役判据守卫**（`stp-script-guard.{service,timer}`，每日 09:30 跑 `--guard`、落 textfile
   指标，见 [script-versioning](../development/script-versioning.md)），
-  **PG 猜 schema 指纹采集**（`stp-pg-guard.{service,timer}`，每 5 分钟只读 PG 日志、落
-  textfile 指标供 `StabilityPgSchemaGuessing` 使用，见
-  [production-diagnostics](./production-diagnostics.md)），`enable --now` 相应单元，
-  并实测 `http://127.0.0.1:<端口>/-/ready` 才报 PASS。
+  `enable --now` 相应单元，并实测 `http://127.0.0.1:<端口>/-/ready` 才报 PASS。
+  （PG 猜 schema 指纹采集 `stp-pg-guard.{service,timer}` **不在站点安装面**：它读 PG
+  服务日志、只在**控制面宿主**上有意义，站点装了也扫不到任何东西——#2788 纠正了此处
+  原先「S4 一并落地」的表述；该单元按控制面宿主手工安装，规则只留平台文件。）
 
 - **S4b（漂移检测）**：`tools/dev/check-monitoring-assets.py` 把 `monitoring_artifacts()`
   的每一项与站点已装副本逐字节比对（期望内容 = 源文件按本机事实渲染）。退出码

@@ -1,4 +1,6 @@
-# Rendered by the site installer for <deploy-root> — do not edit by hand.
+# 控制面宿主单元（#2632 缺口①）——**不在站点安装清单**（MONITORING_SAMPLER）：它只读
+# PG 服务日志，而 PG 只在控制面宿主机上；站点装了也扫不到东西（#2788 纠正）。安装于
+# 控制面宿主时手工替换 <deploy-root>。do not edit by hand.
 [Unit]
 Description=STP PostgreSQL schema-guessing fingerprint probe (#2632, read-only)
 

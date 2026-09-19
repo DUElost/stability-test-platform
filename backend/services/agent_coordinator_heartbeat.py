@@ -58,6 +58,14 @@ _VALID_COORDINATOR_PHASES = {
 }
 
 
+def _prh_lock_key(entry: dict) -> int:
+    """#2796：plan_run_host 行锁的全序键；非整型 id 归 0（随后被 `if not prh_id` 跳过）。"""
+    try:
+        return int(entry.get("id") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 async def record_agent_coordinator_heartbeat(
     db: AsyncSession,
     payload: _CoordinatorHeartbeatIn,
@@ -112,7 +120,11 @@ async def record_agent_coordinator_heartbeat(
     # 持 job 行等 prh 行）。两个循环互相独立，交换顺序即可；下面的
     # `db.execute(update(JobInstance))` 会先执行并锁住 job 行，plan_run_host 的变更
     # 随后才 flush。
-    for j in payload.jobs:
+    #
+    # #2796：集合**内部**同样要全序——payload 序来自 agent 侧字典插入序，与
+    # extend_leases_batch 的 `ORDER BY id`（#992 全序约定）交错仍可成环，故按
+    # job_id 升序取锁。
+    for j in sorted(payload.jobs, key=lambda item: item.job_id):
         reported = j.execution_state
         state_val = reported if reported in _VALID_EXECUTION_STATES else None
         # ADR-0026 §3 clock discipline (#288):
@@ -144,7 +156,8 @@ async def record_agent_coordinator_heartbeat(
             .execution_options(synchronize_session=False)
         )
 
-    for entry in payload.plan_run_hosts:
+    # #2796：plan_run_host 集合内部同样按 id 升序取锁（同上；#1980 的方向序不变）。
+    for entry in sorted(payload.plan_run_hosts, key=_prh_lock_key):
         prh_id = entry.get("id")
         pr_id = entry.get("plan_run_id")
         hid = entry.get("host_id")

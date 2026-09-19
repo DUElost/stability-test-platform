@@ -6,10 +6,17 @@ node-exporter 一个抓取 job，而安装清单把**整份**仓库规则文件�
 通」就报 `monitoring_ready`。**「监控就绪」与「规则结构性不可触发」同时成立。**
 
 **终态（#2643 方向 1 已落地，owner 裁决 2026-09-18）**：站点只装「站点可见面」规则
-（`deploy/prometheus/site-alerts.yml`，2 条 textfile 面），平台文件里其余 19 条引用的都是
-控制面进程指标——站点那个唯一的 node-exporter job 结构上抽不到，装了也恒不触发。
-债务清单因此**已清零**，且判据保留两个方向的可判性：往站点文件里加控制面域规则 → 红；
-站点子集与平台文件定义分叉 → 红（新增的对拍）。
+（`deploy/prometheus/site-alerts.yml`），平台文件里其余规则引用的都是控制面进程指标——
+站点那个唯一的 node-exporter job 结构上抽不到，装了也恒不触发。判据保留三个方向的可判性：
+往站点文件里加控制面域规则 → 红；站点子集与平台文件定义分叉 → 红（新增的对拍）；
+**引用「仓库有生产者、但站点安装清单里没有该单元」的 textfile 指标 → 红**（#2788）。
+
+**#2788（判据修正）**：旧的「站点可见 textfile 面」取的是**仓库全部** textfile 生产者
+（`tests/metrics_registry._TEXTFILE_PRODUCERS`），于是 `stp_pg_guard_*`（生产者
+`stp-pg-guard.{service,timer}` 是**控制面宿主**单元，`MONITORING_SAMPLER` 里没有）被误判成
+「站点可见」——`StabilityPgSchemaGuessing` 装到站点后 `absent(stp_pg_guard_last_run)` 恒真、
+**每站点永久 firing**。现在「站点可见 textfile 面」按**安装清单**过滤（见
+`site_textfile_metric_index`），与「装了但恒不触发」是同一判据的两半。
 
 真值全部**派生**，不用 grep 计数：
 
@@ -35,7 +42,12 @@ from pathlib import Path
 
 import yaml
 
-from tests.metrics_registry import metric_registry_index, textfile_metric_index
+from tests.metrics_registry import (
+    _TEXTFILE_PRODUCERS,
+    metric_registry_index,
+    textfile_metric_index,
+    textfile_metrics_for,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 STAGES_REL = "tools/site_config/stages.py"
@@ -100,6 +112,60 @@ def site_scrape_jobs() -> dict[str, set[str]]:
     return jobs
 
 
+#: textfile 生产者 → 站点安装清单里对应的单元名（#2788）。``None`` = 站点不装该单元。
+#: 新增 textfile 生产者**必须**在这里登记（未登记即红）——否则「仓库有生产者」会被
+#: 误判成「站点可见」，正是 #2788 的成因。
+_PRODUCER_SITE_UNIT: dict[str, str | None] = {
+    "tools/dev/script_guard_probe.py": "stp-script-guard",
+    # 控制面宿主单元：读 PG 服务日志，而 PG 只在控制面宿主上（站点装了也扫不到）
+    "tools/dev/pg_error_guard.py": None,
+}
+
+
+def site_installed_sampler_units() -> set[str]:
+    """站点安装清单 ``MONITORING_SAMPLER`` 里落地的 systemd 单元名（AST 取字面量）。"""
+    tree = ast.parse((REPO_ROOT / STAGES_REL).read_text(encoding="utf-8"), filename=STAGES_REL)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(isinstance(t, ast.Name) and t.id == "MONITORING_SAMPLER"
+                   for t in node.targets):
+            continue
+        units: set[str] = set()
+        for elt in _iter_tuple_elements(node.value):
+            items = list(_iter_tuple_elements(elt))
+            if len(items) >= 2 and isinstance(items[1], ast.Constant):
+                name = str(items[1].value).rsplit("/", 1)[-1]
+                for suffix in (".service", ".timer"):
+                    if name.endswith(suffix):
+                        units.add(name[: -len(suffix)])
+                        break
+        assert units, f"{STAGES_REL} 的 MONITORING_SAMPLER 结构变了，取不到单元名"
+        return units
+    raise AssertionError(f"{STAGES_REL} 里找不到 MONITORING_SAMPLER——安装清单改名了？")
+
+
+def site_textfile_metric_index() -> dict[str, set[str]]:
+    """**站点装得到**的 textfile 指标（#2788：按安装清单过滤，而非「仓库有没有生产者」）。
+
+    生产者文件 → 单元名 → 单元是否在 ``MONITORING_SAMPLER``，三级全部显式；任何一级
+    缺登记都红（未登记的 textfile 生产者不得悄悄获得「站点可见」身份）。
+    """
+    units = site_installed_sampler_units()
+    index: dict[str, set[str]] = {}
+    for rel in _TEXTFILE_PRODUCERS:
+        assert rel in _PRODUCER_SITE_UNIT, (
+            f"textfile 生产者 {rel} 未登记站点单元（_PRODUCER_SITE_UNIT）——新增即红："
+            "先回答「它的单元在不在 MONITORING_SAMPLER 里」")
+        if _PRODUCER_SITE_UNIT[rel] in units:
+            for name in textfile_metrics_for(rel):
+                index.setdefault(name, set())
+    assert index, (
+        "站点 textfile 面为空——要么 MONITORING_SAMPLER 结构变了，要么登记全错；"
+        "空判据会让下面的 inert 对拍静默变绿")
+    return index
+
+
 def rule_expressions(rules_path: Path) -> list[tuple[str, str]]:
     """[(告警名, expr 全文)]——yaml 解析，折叠标量（`>-`）的多行 expr 也拿得到。"""
     doc = yaml.safe_load(rules_path.read_text(encoding="utf-8"))
@@ -117,27 +183,34 @@ def referenced_metrics(expr: str, universe: set[str]) -> set[str]:
 
 
 def inert_rules_at_site() -> tuple[set[str], dict[str, set[str]]]:
-    """返回（站点结构性不可触发的告警名, 告警名 → 引用的控制面指标）。"""
+    """返回（站点结构性不可触发的告警名, 告警名 → 站点装不到的指标）。
+
+    「站点装不到」= 引用了站点可见面之外的指标。#2788 后站点可见面按**安装清单**过滤，
+    故「仓库有 textfile 生产者、但站点不装那个单元」（如控制面宿主的 `stp_pg_guard_*`）
+    也会被判进来，而不是像旧判据那样被误判成站点可见。
+    """
     control_plane, _unqueryable = metric_registry_index()
-    site_visible = set(textfile_metric_index()) | PROMETHEUS_BUILTIN
+    site_visible = set(site_textfile_metric_index()) | PROMETHEUS_BUILTIN
+    # 全集 = 注册表 ∪ 站点可见面 ∪ 仓库全部 textfile：后者的唯一用途是让「已知但站点装不到」
+    # 能被表达出来；不纳入全集的话这些名字会走「未知指标」分支，报错指向拼写而误导。
+    known = set(control_plane) | site_visible | set(textfile_metric_index())
     inert: set[str] = set()
     detail: dict[str, set[str]] = {}
-    universe = set(control_plane) | site_visible
     installed = site_installed_rule_files()
     for rel in installed:
         path = REPO_ROOT / rel
         if not path.is_file():
             continue
         for name, expr in rule_expressions(path):
-            refs = referenced_metrics(expr, universe)
+            refs = referenced_metrics(expr, known)
             assert refs, (
                 f"{rel} 的 {name} 没引用到任何已知指标——要么指标名拼错（结构层该同时红），"
                 "要么抓取面出现了新命名空间（那要先把该名字纳入站点可见面，别绕过对拍）"
             )
-            only_control_plane = bool(refs & set(control_plane)) and not (refs & site_visible)
-            if only_control_plane:
+            not_site = refs - site_visible
+            if not_site:
                 inert.add(name)
-                detail[name] = refs & set(control_plane)
+                detail[name] = not_site
     return inert, detail
 
 
@@ -185,11 +258,33 @@ def test_debt_register_is_not_hollow() -> None:
     control_plane, _ = metric_registry_index()
     assert len(control_plane) >= 100, "控制面注册表指标数异常偏少——全集解析退化了"
     assert set(textfile_metric_index()), "textfile 生产者索引为空——站点可见面的判据基础没了"
+    assert set(site_textfile_metric_index()), "站点 textfile 面为空——按清单过滤的判据退化了"
     inert, _detail = inert_rules_at_site()
     assert inert == set(), (
         f"站点装入的规则里仍有结构性不可触发的：{sorted(inert)}——"
         "方向 1 的终态是**零条**；往站点文件里加控制面域规则会在这里红"
     )
+
+
+def test_producer_unit_must_be_in_the_site_install_manifest() -> None:
+    """#2788：textfile 生产者「在仓库里」不等于「站点装得到」。
+
+    反例形态（本单来源）：把平台的 `StabilityPgSchemaGuessing`（生产者 `stp-pg-guard`
+    是**控制面宿主**单元）放进站点子集——旧判据只看仓库 textfile 生产者索引，会放行；
+    新判据按 `MONITORING_SAMPLER` 过滤后把它判进 inert（站点上 `absent()` 恒真 ⇒ 永久 firing）。
+    """
+    site_visible = set(site_textfile_metric_index()) | PROMETHEUS_BUILTIN
+    known = set(textfile_metric_index()) | site_visible
+    refs = referenced_metrics(
+        "stp_pg_schema_error_events >= 5 or absent(stp_pg_guard_last_run)", known)
+    assert refs, "指标本身必须是已知的（否则退化成拼写判据，报文会误导）"
+    assert refs - site_visible, (
+        "控制面宿主的 textfile 生产者必须判为「站点装不到」——否则站点装了它的规则会"
+        "结构性不可触发（#2788 的假绿成因）"
+    )
+    # 反向：脚本守卫的生产者单元在清单里，必须仍是站点可见
+    assert "stp_script_guard_last_run" in site_visible
+    assert "stp-script-guard" in site_installed_sampler_units()
 
 
 def test_folding_multiline_expr_is_still_read() -> None:
