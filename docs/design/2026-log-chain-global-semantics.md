@@ -3,6 +3,7 @@
 - **状态**：Living（语义汇总；不新增决策）
 - **读者**：需要整条设备日志链语义（含已选定的 ADR-0033 Phase 2 选项 A）的人；不要求读完全部 ADR
 - **权威关系**：行为细节以代码与测试为准；Accepted ADR 与 [`2026-scan-upload-merge-contract.md`](./2026-scan-upload-merge-contract.md) 为内容权威；本文是**可引用汇总**（填 ownership X2「缺可引用汇总」），不新增决策
+- **全链地图**：系统级链路图 / 逻辑坐标 / Central namespace 见 [`2026-device-log-chain-contract.md`](./2026-device-log-chain-contract.md)（Living Contract；**非**第五 owner；本文为其阶段展开）
 - **关联**：ADR-0025 / 0027 / 0028 / 0032 / 0033；[`2026-semantic-ownership.md`](./2026-semantic-ownership.md) X2；[`2026-09-18-adr0033-phase2-unisoc-merge-blocker.md`](../notes/architecture/2026-09-18-adr0033-phase2-unisoc-merge-blocker.md)；#745 / #2546 / #463
 - **日期**：2026-09-19
 
@@ -334,6 +335,7 @@ ownership 索引（`2026-semantic-ownership.md`）**X2**：日志域四层权威
 | 跨进程契约 | [`2026-scan-upload-merge-contract.md`](./2026-scan-upload-merge-contract.md) |
 | 上送时序图 | [`2026-adr-0025-log-flow-sequence.md`](./2026-adr-0025-log-flow-sequence.md) |
 | ownership X2 | [`2026-semantic-ownership.md`](./2026-semantic-ownership.md) §1 |
+| 全链地图 / 逻辑坐标 | [`2026-device-log-chain-contract.md`](./2026-device-log-chain-contract.md) |
 | Agent scan | `backend/agent/scan_runner.py`、`unisoc_scan_runner.py`、`upload_manager.py`、`event_uploader.py` |
 | 控制面 | `backend/services/dedup_scan.py`、`dedup_extract.py`、SAQ tasks |
 
