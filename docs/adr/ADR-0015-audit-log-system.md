@@ -26,7 +26,7 @@
 | user_id | Integer (FK) | 操作用户 ID |
 | username | String | 用户名（冗余存储） |
 | action | String | 操作类型（create/update/delete/start/cancel 等） |
-| resource_type | String | 资源类型（host / device / script / script_catalog / notification_channel / notification_rule / schedule / resource_pool / action_template（已于 #1526 删除，仅存历史行） / job_instance / plan_run 等） |
+| resource_type | String | 资源类型：**唯一权威 = 实体对应的表名**；无独立表的实体（session/wifi/task 等）在 `backend/core/audit.py` 的 `AUDIT_RESOURCE_TYPES` 显式登记。写侧只使用规范值；历史别名（job→job_instance、script_catalog→script，#2778）只在读取侧归并 | 
 | resource_id | Integer | 资源 ID |
 | details | JSON | 操作详情 |
 | ip_address | String | 客户端 IP |
@@ -70,6 +70,7 @@
 - ✅ AuditLog 数据模型定义
 - ✅ 审计日志 API（只读）
 - ✅ 前端 AuditLogPage
+- ✅ 资源类型词表收敛（#2778）：写侧统一「表名」规范值，历史别名由列表过滤展开与 facets 归并吸收
 - ⏳ 在关键业务操作点植入审计记录
 
 > ⚠️ **2026-06-12 审计覆盖现状**：当前 `record_audit` / `record_audit_async` 覆盖了 8 个路由模块（`hosts` / `devices` / `scripts` / `schedules` / `notifications` / `resource_pools` / `action_templates` / `plan_runs[abort]`），以及 3 个服务层调用点（`plan_dispatcher_sync` dispatch 失败 / wifi 分配 / recycler）。**尚未覆盖的写操作路由**：
