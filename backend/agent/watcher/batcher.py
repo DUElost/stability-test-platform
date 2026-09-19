@@ -40,7 +40,9 @@ logger = logging.getLogger(__name__)
 
 
 # 默认即时直通的 category 集合（crash 类，单条事件足以触发 bugreport）
-DEFAULT_IMMEDIATE_CATEGORIES: Set[str] = {"AEE", "VENDOR_AEE"}
+# UNIVIEW（#1998 P2 实时性）：展锐唤醒事件必须即时到达 DeviceLogWatcher
+# （batch 默认 5s 会吃掉秒级收益）；watcher 侧拦截为 reconciler.wake()，不落 emit。
+DEFAULT_IMMEDIATE_CATEGORIES: Set[str] = {"AEE", "VENDOR_AEE", "UNIVIEW"}
 
 
 @dataclass
