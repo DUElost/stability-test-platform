@@ -26,13 +26,6 @@ if __name__ == "__main__" and __package__ is None:
     from agent.bootstrap_subsystems import start_disk_and_watcher_subsystems
     from agent.startup_identity import bootstrap_process_identity
     from agent.control_handler import ControlHandlerDeps, build_control_handler
-    from agent.active_job_bindings import (
-        ActiveJobOccupancy,
-        JobRunnerStateSlot,
-        build_deregister_active_job,
-        build_on_lease_lost,
-        build_register_active_job,
-    )
     from agent.recovery_runtime import (
         ResumeJobSlot,
         build_cancel_recovery_job,
@@ -55,15 +48,13 @@ if __name__ == "__main__" and __package__ is None:
         RecoveryActionsSlot,
         build_heartbeat_thread,
     )
+    from agent.host_control_plane import start_host_control_plane
     from agent.config import ensure_dirs
     from agent.job_runner import JobRunnerState, run_task_wrapper
-    from agent.lease_renewer import LeaseRenewer
     from agent.mq.producer import StepTraceWriter
     from agent.outbox_drainer import OutboxDrainThread
     from agent.step_trace_uploader import StepTraceUploader
     from agent.patrol_recovery import build_patrol_job_not_running_handler
-    from agent.operation_scheduler import OperationScheduler
-    from agent.coordinator import HostRunCoordinator
 else:
     from .adb_wrapper import AdbWrapper
     from .recovery_executor import (
@@ -72,13 +63,6 @@ else:
     from .bootstrap_subsystems import start_disk_and_watcher_subsystems
     from .startup_identity import bootstrap_process_identity
     from .control_handler import ControlHandlerDeps, build_control_handler
-    from .active_job_bindings import (
-        ActiveJobOccupancy,
-        JobRunnerStateSlot,
-        build_deregister_active_job,
-        build_on_lease_lost,
-        build_register_active_job,
-    )
     from .recovery_runtime import (
         ResumeJobSlot,
         build_cancel_recovery_job,
@@ -101,11 +85,9 @@ else:
         RecoveryActionsSlot,
         build_heartbeat_thread,
     )
+    from .host_control_plane import start_host_control_plane
     from .config import ensure_dirs
     from .job_runner import JobRunnerState, run_task_wrapper
-    from .lease_renewer import LeaseRenewer
-    from .operation_scheduler import OperationScheduler
-    from .coordinator import HostRunCoordinator
     from .mq.producer import StepTraceWriter
     from .outbox_drainer import OutboxDrainThread
     from .step_trace_uploader import StepTraceUploader
@@ -239,65 +221,28 @@ def main() -> None:
     )
     heartbeat_thread.start()
 
-    # ADR-0026 Step 5b: create host-global scheduler + coordinator BEFORE
-    # any component that references them (LeaseRenewer, claim loop, etc.).
-    operation_scheduler = OperationScheduler()
-    # Late-bind: HeartbeatThread starts before scheduler exists.
-    heartbeat_thread._get_operation_stats = operation_scheduler.concurrency_snapshot
-    coordinator = HostRunCoordinator(
-        api_url, host_id, agent_instance_id, agent_secret=agent_secret,
+    plane = start_host_control_plane(
+        api_url=api_url,
+        host_id=host_id,
+        agent_instance_id=agent_instance_id,
+        agent_secret=agent_secret,
         local_db=local_db,
-    )
-    # ADR-0026 Step 5b: wire scheduler to coordinator for abort/cancel
-    coordinator.set_scheduler(operation_scheduler)
-    # Start the per-host coordinator heartbeat (reports coordinator
-    # heartbeats + per-job execution_state to control plane).
-    coordinator.start()
-    control_deps.coordinator = coordinator
-    control_deps.operation_scheduler = operation_scheduler
-    control_deps.heartbeat_thread = heartbeat_thread
-
-
-    occupancy = ActiveJobOccupancy(
-        lock=_active_jobs_lock,
-        job_ids=_active_job_ids,
-        device_ids=_active_device_ids,
-        job_tokens=_active_job_tokens,
-        device_owner=_active_device_owner,
-    )
-    job_runner_slot = JobRunnerStateSlot()
-    # ADR-0019 Phase 3b: lease 丢失回调（409 时 LeaseRenewer 内部已清理，此处处理外部状态）
-    _on_lease_lost = build_on_lease_lost(
-        occupancy=occupancy,
-        job_runner_slot=job_runner_slot,
-        coordinator=coordinator,
-        local_db=local_db,
-    )
-
-    # 启动 lease 续租器
-    lease_renewer = LeaseRenewer(
-        api_url,
+        heartbeat_thread=heartbeat_thread,
+        control_deps=control_deps,
         active_jobs_lock=_active_jobs_lock,
         active_job_ids=_active_job_ids,
+        active_device_ids=_active_device_ids,
+        active_job_tokens=_active_job_tokens,
+        active_device_owner=_active_device_owner,
         lock_renewal_stop_event=_lock_renewal_stop_event,
-        agent_instance_id=agent_instance_id,
-        on_lease_lost=_on_lease_lost,
-        host_id=host_id,
-        coordinator=coordinator,
     )
-    lease_renewer.start()
-
-    # ADR-0019 Phase 2b + Phase 3a/3b: 活跃 job 注册/注销（捕获 lease_renewer + local_db）
-    _register_active_job = build_register_active_job(
-        occupancy=occupancy,
-        lease_renewer=lease_renewer,
-        local_db=local_db,
-    )
-    _deregister_active_job = build_deregister_active_job(
-        occupancy=occupancy,
-        lease_renewer=lease_renewer,
-        local_db=local_db,
-    )
+    operation_scheduler = plane.operation_scheduler
+    coordinator = plane.coordinator
+    occupancy = plane.occupancy
+    job_runner_slot = plane.job_runner_slot
+    lease_renewer = plane.lease_renewer
+    _register_active_job = plane.register_active_job
+    _deregister_active_job = plane.deregister_active_job
 
     # 真实 control handler 在 deps 就绪后注册；回放启动窗口暂存命令（P2-2a）
     sio_client.set_control_handler(_handle_control)
