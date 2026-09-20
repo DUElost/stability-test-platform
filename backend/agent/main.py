@@ -22,7 +22,6 @@ if __name__ == "__main__" and __package__ is None:
     from agent.adb_wrapper import AdbWrapper
     from agent.recovery_executor import (
         run_recovery_sync_if_needed,
-        trigger_recovery_sync_on_device_reconnect,
     )
     from agent.bootstrap_subsystems import start_disk_and_watcher_subsystems
     from agent.startup_identity import bootstrap_process_identity
@@ -52,20 +51,23 @@ if __name__ == "__main__" and __package__ is None:
         initialize_local_stores,
         replay_early_control_commands,
     )
+    from agent.heartbeat_bindings import (
+        RecoveryActionsSlot,
+        build_heartbeat_thread,
+    )
     from agent.config import ensure_dirs
-    from agent.log_archiver import collect_archive_heartbeat_metrics
-    from agent.heartbeat_thread import HeartbeatThread
     from agent.job_runner import JobRunnerState, run_task_wrapper
     from agent.lease_renewer import LeaseRenewer
     from agent.mq.producer import StepTraceWriter
     from agent.outbox_drainer import OutboxDrainThread
-    from agent.scan_runner import ScanRunner
     from agent.step_trace_uploader import StepTraceUploader
+    from agent.patrol_recovery import build_patrol_job_not_running_handler
+    from agent.operation_scheduler import OperationScheduler
+    from agent.coordinator import HostRunCoordinator
 else:
     from .adb_wrapper import AdbWrapper
     from .recovery_executor import (
         run_recovery_sync_if_needed,
-        trigger_recovery_sync_on_device_reconnect,
     )
     from .bootstrap_subsystems import start_disk_and_watcher_subsystems
     from .startup_identity import bootstrap_process_identity
@@ -95,17 +97,19 @@ else:
         initialize_local_stores,
         replay_early_control_commands,
     )
+    from .heartbeat_bindings import (
+        RecoveryActionsSlot,
+        build_heartbeat_thread,
+    )
     from .config import ensure_dirs
-    from .log_archiver import collect_archive_heartbeat_metrics
-    from .heartbeat_thread import HeartbeatThread
     from .job_runner import JobRunnerState, run_task_wrapper
     from .lease_renewer import LeaseRenewer
     from .operation_scheduler import OperationScheduler
     from .coordinator import HostRunCoordinator
     from .mq.producer import StepTraceWriter
     from .outbox_drainer import OutboxDrainThread
-    from .scan_runner import ScanRunner
     from .step_trace_uploader import StepTraceUploader
+    from .patrol_recovery import build_patrol_job_not_running_handler
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
@@ -206,29 +210,14 @@ def main() -> None:
     )
 
 
-    # ADR-0019 Phase 1: capacity helper — thread-safe active job count
-    def _get_active_job_count() -> int:
-        with _active_jobs_lock:
-            return len(_active_job_ids)
-
-    # ADR-0019 Phase 3c: active device count for effective_slots
-    def _get_active_device_count() -> int:
-        with _active_jobs_lock:
-            return len(_active_device_ids)
-
-    _execute_recovery_actions = None
+    # ADR-0019 Phase 1/3c: capacity getters live inside build_heartbeat_thread
+    recovery_actions_slot = RecoveryActionsSlot()
 
     # One-shot protocol gate: do not start workers/background threads when this
     # Agent build is below the backend's minimum supported version.
     check_agent_version(api_url, host_id, mount_points, host_info)
 
-    # 启动心跳守护线程（独立于任务执行循环）
-    try:
-        from agent.version_info import read_artifact_digest
-    except ImportError:  # pragma: no cover - 部署形态分支
-        from .version_info import read_artifact_digest
-
-    heartbeat_thread = HeartbeatThread(
+    heartbeat_thread = build_heartbeat_thread(
         api_url=api_url,
         host_id=host_id,
         adb_path=adb_path,
@@ -236,46 +225,17 @@ def main() -> None:
         host_info=host_info,
         poll_interval=poll_interval,
         sio_client=sio_client,
-        catalog_versions=lambda: {
-            "script_catalog_version": script_registry.version,
-        },
-        on_scripts_outdated=script_registry.initialize,
-        get_active_job_count=_get_active_job_count,
-        get_active_device_count=_get_active_device_count,
+        script_registry=script_registry,
+        local_db=local_db,
+        mq_producer=mq_producer,
         agent_instance_id=agent_instance_id,
         boot_id=boot_id,
         agent_version=_agent_pkg_version,
         agent_code_revision=_agent_code_revision,
-        agent_artifact_digest=lambda: read_artifact_digest(),
-        agent_resources_digest=lambda: read_artifact_digest("resources"),
-        get_outbox_counts=lambda: {
-            "terminal_outbox_pending": local_db.count_pending_terminals(),
-            "log_signal_outbox_pending": local_db.count_pending_log_signals(),
-            # #302: 死信总量随心跳上报（历史累计，跨 Agent 重启保留）。
-            "log_signal_dead_letter_total": local_db.count_log_signal_dead_letters(),
-            # #762/#742: 终态 outbox 死信行数（distinct 卡死行口径；事件计数见 drainer
-            # snapshot 的 conflicts_retained_total，勿当积压 gauge）。
-            "terminal_outbox_dead_letter_total": local_db.count_terminal_dead_letters(),
-            # #739 面②/#2188 D 步：分片登记失败（半交付）进程级累计，重启清零。
-            "scan_shard_register_failure_total": ScanRunner.shard_register_failure_total(),
-        },
-        # ADR-0025 Sprint 2: 上报归档指标到 extra['archive']（归档禁用时回调返回 None）
-        get_archive_metrics=collect_archive_heartbeat_metrics,
-        on_devices_reconnected=lambda serials: (
-            trigger_recovery_sync_on_device_reconnect(
-                reconnected_serials=serials,
-                local_db=local_db,
-                api_url=api_url,
-                host_id=host_id,
-                agent_instance_id=agent_instance_id,
-                boot_id=boot_id,
-                execute_actions=_execute_recovery_actions,
-            )
-            if _execute_recovery_actions is not None
-            else False
-        ),
-        # ADR-0026 P2-2: apply server log_rate_limit hint to SocketIO batcher
-        on_log_rate_limit=mq_producer.set_log_rate_limit,
+        active_jobs_lock=_active_jobs_lock,
+        active_job_ids=_active_job_ids,
+        active_device_ids=_active_device_ids,
+        recovery_actions_slot=recovery_actions_slot,
     )
     heartbeat_thread.start()
 
@@ -358,9 +318,7 @@ def main() -> None:
         resume_slot=resume_slot,
         cancel_recovery_job=_cancel_recovery_job,
     )
-    _execute_recovery_actions = _execute_recovery_actions_impl_closure
-
-    from .patrol_recovery import build_patrol_job_not_running_handler
+    recovery_actions_slot.value = _execute_recovery_actions_impl_closure
 
     patrol_job_not_running_recovery = build_patrol_job_not_running_handler(
         api_url=api_url,
