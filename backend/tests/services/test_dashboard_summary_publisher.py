@@ -220,6 +220,123 @@ async def test_compute_hang_times_out_and_retries(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_hang_timeout_does_not_multiplicate_under_heartbeats(monkeypatch):
+    """#2882：超时出口不得演变成线程增殖。
+
+    挂起期间心跳持续 `schedule_dashboard_summary_push()`（每次把 `_failure_streak`
+    清零并再武装）——旧实现里每轮武装都起新 compute 线程（flush 已因超时收尾，
+    串行化判据形同虚设），占满默认执行器与池连接。修复＝在飞判据（线程真正收尾
+    前不再起第二个 compute）＋线程收尾后补推待推的脏数据（不丢唤醒）。
+
+    反向自证：无在飞判据时，本用例挂起阶段的 `len(calls) == 1` 必红（心跳×退避
+    会叠出多次 compute）。
+    """
+    import threading
+
+    monkeypatch.setenv("STP_DASHBOARD_SUMMARY_PUSH_INTERVAL_SECONDS", "0.01")
+    pub._reset_for_tests()
+    monkeypatch.setattr(pub, "_COMPUTE_TIMEOUT_SECONDS", 0.05)
+    pub.bind_event_loop(asyncio.get_running_loop())
+
+    release = threading.Event()
+    started = threading.Event()
+    calls: list[int] = []
+
+    def _hang(_db):
+        calls.append(1)
+        started.set()
+        release.wait(timeout=1.5)
+        return {}
+
+    broadcast = AsyncMock()
+    try:
+        with patch(
+            "backend.services.dashboard_summary_publisher.compute_dashboard_summary",
+            _hang,
+        ), patch(
+            "backend.services.dashboard_summary_publisher.SessionLocal",
+        ) as session_local, patch(
+            "backend.realtime.socketio_server.broadcast_dashboard_summary",
+            broadcast,
+        ), patch(
+            "backend.services.dashboard_summary_publisher.dashboard_summary_push_total",
+        ):
+            session_local.return_value.close = lambda: None
+
+            pub.schedule_dashboard_summary_push()
+            assert await asyncio.to_thread(started.wait, 1.0)
+
+            # 超时发生（0.05s）后连续 6 次心跳——每次都会清零退避并再武装
+            for _ in range(6):
+                await asyncio.sleep(0.05)
+                pub.schedule_dashboard_summary_push()
+            await asyncio.sleep(0.1)
+
+            assert len(calls) == 1, (
+                f"挂起期间起了 {len(calls)} 个 compute——超时线程增殖未挡住（#2882）"
+            )
+            assert broadcast.await_count == 0, "挂起的 compute 不该产生推送"
+
+            # 线程真正收尾：在飞清除，脏标记（心跳期间保持置位）必须被补推
+            release.set()
+            for _ in range(40):
+                if len(calls) >= 2 and broadcast.await_count >= 1:
+                    break
+                await asyncio.sleep(0.05)
+            assert len(calls) == 2, "线程收尾后没有补算——在飞判据丢了唤醒"
+            assert broadcast.await_count >= 1, "补算结果没有补推"
+    finally:
+        release.set()
+        pub._reset_for_tests()
+
+
+@pytest.mark.asyncio
+async def test_compute_runs_on_dedicated_executor(monkeypatch):
+    """#2882：compute 必须排**专用**执行器，不得再进全进程共享的默认执行器。
+
+    判别力：`run_in_executor(None, ...)`（=默认池）会让 seen 收进 None；本用例
+    断言收进的是 publisher 私有 executor 单例。
+    """
+    monkeypatch.setenv("STP_DASHBOARD_SUMMARY_PUSH_INTERVAL_SECONDS", "0.01")
+    pub._reset_for_tests()
+    loop = asyncio.get_running_loop()
+    pub.bind_event_loop(loop)
+
+    seen: list = []
+    real = loop.run_in_executor
+
+    def _spy(executor, fn, *args, **kw):
+        seen.append(executor)
+        return real(executor, fn, *args, **kw)
+
+    monkeypatch.setattr(loop, "run_in_executor", _spy)
+
+    with patch(
+        "backend.services.dashboard_summary_publisher.compute_dashboard_summary",
+        return_value={},
+    ), patch(
+        "backend.services.dashboard_summary_publisher.SessionLocal",
+    ) as session_local, patch(
+        "backend.realtime.socketio_server.broadcast_dashboard_summary",
+        AsyncMock(),
+    ), patch(
+        "backend.services.dashboard_summary_publisher.dashboard_summary_push_total",
+    ):
+        session_local.return_value.close = lambda: None
+        pub.schedule_dashboard_summary_push()
+        for _ in range(40):
+            if seen:
+                break
+            await asyncio.sleep(0.02)
+
+    assert seen, "compute 没有经过 run_in_executor"
+    assert seen[0] is pub._get_executor(), "compute 排进了共享/默认执行器（#2882）"
+    assert getattr(seen[0], "_max_workers", None) == 1
+
+    pub._reset_for_tests()
+
+
+@pytest.mark.asyncio
 async def test_failure_path_actually_uses_backoff(monkeypatch):
     """接线判据：#2447 的退避必须由**失败路径**触发（不是只在单测里直接调 `_schedule_retry`）。
 
