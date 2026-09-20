@@ -1072,9 +1072,17 @@ def _assert_plan_deletable(db: Session, plan_id: int) -> None:
     if run_count:
         raise HTTPException(
             status_code=409,
+            # #2836：原话「remove or archive plan runs first」**两条出路都不存在**——
+            # 没有删 plan_run 的端点，`POST /plan-runs/{id}/archive` 归档的是日志、
+            # 且本守卫只看 PlanRun 行数 ⇒ 按提示操作一万次也删不掉。改成陈述真实事实：
+            # 历史按设计保留、run 由 retention 按 PLAN_RUN_RETENTION_DAYS 老化、
+            # 想立刻停用请 PUT 改名标注（plan 无 enabled/archived 列，别再发明一个）。
             detail=(
-                f"cannot delete plan with {run_count} execution record(s); "
-                "remove or archive plan runs first"
+                f"plan has {run_count} execution record(s); they are kept as history, "
+                "so the plan cannot be deleted (there is no plan-run delete endpoint — "
+                "runs age out via run retention under PLAN_RUN_RETENTION_DAYS). "
+                "To take it out of service, rename it via PUT /api/v1/plans/"
+                f"{plan_id} (e.g. prefix '[deprecated] ')."
             ),
         )
 
