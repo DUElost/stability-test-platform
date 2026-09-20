@@ -155,3 +155,72 @@ def test_script_is_idempotent(diag_ready) -> None:
         ).fetchone()[0] == 1
     with psycopg.connect(diag_ready["diag"], autocommit=True) as conn:
         assert conn.execute("SELECT count(*) FROM t_before").fetchone()[0] == 1
+
+
+# ── #2849：PG15 部署面纳入覆盖（脚本 ship 的镜像就是 15-alpine）─────────────
+
+
+@pytest.fixture(scope="module")
+def diag_ready_pg15():
+    """在 **PG15** 上跑一遍脚本（`deploy/postgres/docker-compose.yml` 仍 ship 15-alpine）。
+
+    #2849 的审计结论是「自检在 PG≤15 恒红：role-wide SET 落 `pg_authid.rolconfig`、
+    `pg_db_role_setting` 零行」。**实测证伪**（PG 15.18 + PG 16 两代容器）：
+
+    - `pg_authid` 在 **15 上就没有 `rolconfig` 列**（该列不是 PG16 才删的）；
+    - `ALTER ROLE <r> SET …`（不带 IN DATABASE）在 **15 与 16 都落
+      `pg_db_role_setting`（setdatabase = 0）**——`pg_roles.rolconfig` 只是它的视图。
+
+    所以自检原本就不红；真实缺口是**覆盖**：CI 与既有 fixture 只跑 16，而部署面是 15。
+    本 fixture 把 15 纳进来钉住这个事实（修前它在原版脚本上就通过——这正是结论本身）。
+    """
+    psycopg = pytest.importorskip("psycopg")
+    from testcontainers.postgres import PostgresContainer
+
+    with PostgresContainer("postgres:15-alpine") as container:
+        base = container.get_connection_url().replace(
+            "postgresql+psycopg2://", "postgresql://", 1
+        )
+        admin = base
+        app = _dsn(base, APP_OWNER, "app-test-only")
+        with psycopg.connect(admin, autocommit=True) as conn:
+            conn.execute(f"CREATE ROLE {APP_OWNER} LOGIN PASSWORD 'app-test-only'")
+            conn.execute(f"GRANT CREATE, USAGE ON SCHEMA public TO {APP_OWNER}")
+            conn.execute(SQL.read_text(encoding="utf-8"))  # ← §4 自检在这里
+        yield {"admin": admin, "app": app}
+
+
+def test_script_selfcheck_passes_on_pg15(diag_ready_pg15) -> None:
+    """PG15 部署面上脚本必须跑完（含 §4 自检）——fixture 建立即已证明。
+
+    再独立验一次「只读闸真的生效」：15 与 16 的落点同形（`pg_db_role_setting`）。
+    """
+    import psycopg
+
+    with psycopg.connect(diag_ready_pg15["admin"], autocommit=True) as conn:
+        rows = conn.execute(
+            "SELECT setconfig FROM pg_db_role_setting s WHERE s.setrole = %s::regrole",
+            (DIAG_ROLE,),
+        ).fetchall()
+    settings = [setting for (cfg,) in rows for setting in (cfg or [])]
+    assert any("default_transaction_read_only=on" in s for s in settings), (
+        "PG15 上 role-wide 设置应在 pg_db_role_setting(setdatabase=0)——若这里为空，"
+        "说明目录语义变了，请重新核对后再改自检"
+    )
+    assert any("log_statement=all" in s for s in settings)
+
+
+def test_read_gate_works_on_pg15(diag_ready_pg15) -> None:
+    """行为面同款抽样：15 上只读角色能读、写被拒（与 16 的用例同判据）。"""
+    import psycopg
+
+    with psycopg.connect(diag_ready_pg15["app"], autocommit=True) as conn:
+        conn.execute("CREATE TABLE t_pg15 (id int PRIMARY KEY)")
+        conn.execute("INSERT INTO t_pg15 VALUES (1)")
+    with psycopg.connect(diag_ready_pg15["admin"], autocommit=True) as conn:
+        conn.execute(f"ALTER ROLE {DIAG_ROLE} PASSWORD 'diag-pg15-only'")
+    with psycopg.connect(_dsn(diag_ready_pg15["admin"], DIAG_ROLE, "diag-pg15-only"),
+                         autocommit=True) as conn:
+        assert conn.execute("SELECT id FROM t_pg15").fetchall() == [(1,)]
+        with pytest.raises(psycopg.Error):
+            conn.execute("INSERT INTO t_pg15 VALUES (2)")

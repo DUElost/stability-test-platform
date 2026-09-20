@@ -102,10 +102,10 @@ def test_start_job_runtime_wires_and_starts():
 
 
 def test_main_wires_job_runtime():
-    import backend.agent.main as agent_main
+    import backend.agent.agent_application as app
     from tools.dev.source_anchor import SourceGuard
 
-    guard = SourceGuard.of_module(agent_main).anchored("start_job_runtime(")
+    guard = SourceGuard.of_module(app).anchored("start_job_runtime(")
     guard.assert_absent(
         "OutboxDrainThread(",
         why="#736 outbox 构造已迁出 main",

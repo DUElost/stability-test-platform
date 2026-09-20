@@ -112,14 +112,14 @@ def test_bootstrap_process_identity_assembles_fields():
 
 
 def test_main_wires_startup_identity():
-    import backend.agent.main as agent_main
+    import backend.agent.agent_application as app
     from tools.dev.source_anchor import SourceGuard
 
-    # 正锚点：startup identity bootstrap 仍在 main；否定：不得回潮直连 load_required_host_id
-    guard = SourceGuard.of_module(agent_main).anchored(
+    # 正锚点：startup identity bootstrap 在编排层；否定：不得回潮直连 load_required_host_id
+    guard = SourceGuard.of_module(app).anchored(
         "bootstrap_process_identity("
     )
     guard.assert_absent(
         "load_required_host_id()",
-        why="#736 HOST_ID bootstrap 已抽出，main 不得回潮直连 load_required_host_id",
+        why="#736 HOST_ID bootstrap 已抽出，编排层不得回潮直连 load_required_host_id",
     )
