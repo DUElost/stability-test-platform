@@ -23,7 +23,7 @@ class JobRunnerStateSlot:
 
 @dataclass(frozen=True)
 class ActiveJobOccupancy:
-    """Shared in-memory occupancy sets (module globals in ``main``)."""
+    """Shared in-memory occupancy sets (owned by ``AgentApplication``)."""
 
     lock: Any
     job_ids: Set[int]

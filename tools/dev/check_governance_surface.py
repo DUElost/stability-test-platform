@@ -63,6 +63,7 @@ import datetime
 import os
 import re
 import sys
+import tempfile
 from urllib.parse import unquote
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -905,9 +906,39 @@ def check_ownership_domain_fields(
 
 
 NOTE_CLASSES = {"feature", "bug-fix", "simplification", "architecture", "process", "testing"}
+#: #2883：白名单外允许存在的目录。`archived` 是有意的归档面（历史 Note 不再走 S10 契约）。
+#: 其余未知目录一律报错——S10 只遍历 NOTE_CLASSES，错名目录（如 `bugfix`）会让整目录
+#: Note 永久免检，而免检是「不存在」而不是「报错」。
+NOTE_CLASS_DIRS_ALLOWED_EXTRA = {"archived"}
 NOTE_HEADER_CUTOFF = "2026-09-05"
 #: 四节契约（AGENTS.md）：cutoff 起新增 Note 必须齐备（#1299）
 NOTE_REQUIRED_SECTIONS = ("## Decision", "## Alternatives", "## Verification", "## Revisit")
+
+
+def check_note_class_dirs(notes_root: str) -> list[str]:
+    """S10(#2883)：`docs/notes/` 下的目录必须是已知 class 或显式归档面。
+
+    遍历面是白名单（`NOTE_CLASSES`），所以错名目录不是「报错」而是「不存在」——
+    里面的 Note 既不被 S10 校验，也没有任何信号提示它们被漏掉。只对**含 .md 的**
+    目录报错（空目录/仅 README 不构成免检面），避免把占位目录误伤成违规。
+    """
+    issues: list[str] = []
+    if not os.path.isdir(notes_root):
+        return issues
+    for name in sorted(os.listdir(notes_root)):
+        path = os.path.join(notes_root, name)
+        if not os.path.isdir(path):
+            continue
+        if name in NOTE_CLASSES or name in NOTE_CLASS_DIRS_ALLOWED_EXTRA:
+            continue
+        notes = [f for f in os.listdir(path) if f.endswith(".md") and f != "README.md"]
+        if not notes:
+            continue
+        issues.append(
+            f"S10 docs/notes/{name}: 未知 Note 目录——其中 {len(notes)} 份 .md "
+            "不在 S10 校验面内（#2883）：移到规范目录或登记进 NOTE_CLASSES"
+        )
+    return issues
 
 
 def check_agent_note_header(label: str, text: str) -> list[str]:
@@ -1541,6 +1572,7 @@ def run_check() -> int:
     issues += check_hard_invariant_anchors(agents_text)
 
     notes_root = os.path.join(ROOT, "docs", "notes")
+    issues += check_note_class_dirs(notes_root)
     for class_name in sorted(NOTE_CLASSES):
         class_dir = os.path.join(notes_root, class_name)
         for filename in sorted(os.listdir(class_dir)):
@@ -1798,6 +1830,28 @@ def run_self_test() -> int:
         True,
     )
 
+    with tempfile.TemporaryDirectory() as tmp_notes:
+        os.makedirs(os.path.join(tmp_notes, "bug-fix"))
+        open(os.path.join(tmp_notes, "bug-fix", "2026-09-19-ok.md"),
+             "w", encoding="utf-8").close()
+        os.makedirs(os.path.join(tmp_notes, "archived"))
+        open(os.path.join(tmp_notes, "archived", "2026-01-01-old.md"),
+             "w", encoding="utf-8").close()
+        os.makedirs(os.path.join(tmp_notes, "empty-placeholder"))
+        expect(
+            "S10 规范目录 + 归档面不拦（#2883）",
+            lambda: check_note_class_dirs(tmp_notes),
+            False,
+        )
+        os.makedirs(os.path.join(tmp_notes, "bugfix"))  # 错名目录（无连字符）
+        open(os.path.join(tmp_notes, "bugfix", "2026-09-19-misfiled.md"),
+             "w", encoding="utf-8").close()
+        expect(
+            "S10 错名 note 目录被拦（#2883）",
+            lambda: check_note_class_dirs(tmp_notes),
+            True,
+        )
+
     invariants_full = (
         "- ASGI 入口是 `socketio.ASGIApp(sio_server, fastapi_app)`\n"
         "- Pipeline 顶层只接受 `lifecycle`，action 唯一格式是 `script:<name>`。\n"
@@ -1977,8 +2031,6 @@ def run_self_test() -> int:
                "01", "Accepted", "1.2", None, "Accepted", "1.2", ["1.0", "1.2"],
                None, None) != [],
            False)
-
-    import tempfile
 
     with tempfile.TemporaryDirectory() as tmp:
         absent = os.path.join(tmp, "pr-agent.yml")

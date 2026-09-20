@@ -84,6 +84,16 @@ class TestColumnWidthGuard:
         """列宽本体断言：#2792 迁移（t9u0v1w2x3y4）须与模型同步为 32。"""
         assert JobLogSignal.__table__.c.source.type.length == 32
 
+    def test_caller_widths_are_the_judgement_source(self):
+        """#2885：判据是传入宽度（线上=库实采），模型常量只是缺省。
+
+        同一个 19 字符 `reconciler_rollback`：按模型（32）放行、按窄库（16）必须拒绝——
+        库落后于迁移时，后者才是真实约束。
+        """
+        row = {"job_id": 1, "seq_no": 1, "source": "reconciler_rollback", "host_id": "h"}
+        assert log_signal_column_overflow(row) == []
+        assert log_signal_column_overflow(row, {"source": 16}) == ["source"]
+
     @staticmethod
     def _envelope(source: str) -> dict:
         from datetime import datetime, timezone
@@ -99,3 +109,32 @@ class TestColumnWidthGuard:
             "fencing_token": "f" * 8,
             "agent_instance_id": "inst",
         }
+
+
+class TestDeployedColumnWidths:
+    """#2885：列宽判据取自库实采 schema，探针坏了才降级为模型常量。"""
+
+    @pytest.mark.asyncio(loop_scope="module")
+    async def test_widths_come_from_deployed_schema_not_model(self, monkeypatch):
+        from backend.core.database import AsyncSessionLocal
+        from backend.services import agent_log_signals as als
+
+        # 把模型常量打成哨兵：若实现退回模型，断言会看到 999 而不是真实列宽
+        monkeypatch.setattr(als, "_log_signal_column_widths", lambda: {"source": 999})
+        async with AsyncSessionLocal() as db:
+            widths = await als.deployed_column_widths(db)
+
+        assert widths["source"] == 32  # 迁移 t9u0v1w2x3y4 在部署库上已落地
+        assert widths["source"] != 999
+
+    @pytest.mark.asyncio(loop_scope="module")
+    async def test_probe_failure_degrades_to_model_widths(self, monkeypatch):
+        """探针坏（权限/连接）不得拦停写入：退模型宽度并留 warning。"""
+        from backend.services import agent_log_signals as als
+
+        class _BoomDB:
+            async def execute(self, *args, **kwargs):
+                raise RuntimeError("probe down")
+
+        monkeypatch.setattr(als, "_log_signal_column_widths", lambda: {"source": 7})
+        assert await als.deployed_column_widths(_BoomDB()) == {"source": 7}

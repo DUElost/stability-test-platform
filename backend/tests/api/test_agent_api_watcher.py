@@ -979,6 +979,54 @@ async def test_log_signals_contract_violation_isolated():
 
 
 @pytest.mark.asyncio(loop_scope="module")
+async def test_log_signals_use_deployed_column_width(monkeypatch):
+    """#2885：超宽判定以**库实采**宽度为准，而不是模型常量。
+
+    模拟「库落后于迁移」：探针报 source 只有 16 字符时，契约白名单里合法的
+    `reconciler_rollback`（19 字符）必须在入库前逐条拒绝——按模型常量的 32 放行的话，
+    整批 INSERT 会被 PG abort（#2792 的原始 P1 会原样复现，而守卫给的是绿灯）。
+    """
+    from backend.services import agent_log_signals as als
+
+    seed = _seed_job_with_policy(job_status=JobStatus.RUNNING.value)
+    _setup_watcher_lease(seed)
+
+    async def _narrow(db):
+        return {"source": 16}
+
+    try:
+        # 基线：真探针（部署库实采 32）放行同一来源
+        baseline = _make_signal(
+            seed["job_id"], seed["device_serial"], seed["host_id"], seq_no=1,
+            source="reconciler_rollback",
+        )
+        async with AsyncSessionLocal() as async_db:
+            ok = await ingest_log_signals(
+                payload=LogSignalBatchIn(signals=[baseline]), db=async_db, _=None,
+            )
+        assert ok.error is None
+        assert ok.data["inserted"] == 1, ok.data
+
+        # 窄库：同一来源必须被逐条拒绝，而不是放行后让整批炸在 INSERT 上
+        monkeypatch.setattr(als, "deployed_column_widths", _narrow)
+        narrow_sig = _make_signal(
+            seed["job_id"], seed["device_serial"], seed["host_id"], seq_no=2,
+            source="reconciler_rollback",
+        )
+        async with AsyncSessionLocal() as async_db:
+            narrow = await ingest_log_signals(
+                payload=LogSignalBatchIn(signals=[narrow_sig]), db=async_db, _=None,
+            )
+        assert narrow.error is None
+        assert narrow.data["inserted"] == 0
+        assert len(narrow.data["rejected"]) == 1
+        assert "exceeds column width" in narrow.data["rejected"][0]["reason"]
+        assert "source" in narrow.data["rejected"][0]["reason"]
+    finally:
+        _cleanup_seed(seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
 async def test_log_signals_mixed_batch_partial_accept():
     """#1048 核心场景：同批好坏混合 —— 好记录入库，坏记录单独隔离不连坐。
 

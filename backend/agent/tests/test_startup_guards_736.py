@@ -65,15 +65,15 @@ def test_ensure_adb_server_on_startup_ok():
 
 
 def test_main_wires_startup_guards():
-    import backend.agent.main as agent_main
+    import backend.agent.agent_application as app
     from tools.dev.source_anchor import SourceGuard
 
-    guard = SourceGuard.of_module(agent_main).anchored("check_agent_version(")
+    guard = SourceGuard.of_module(app).anchored("check_agent_version(")
     guard.assert_absent(
         "agent_version_too_old",
-        why="#736 startup_guards 已抽出，main 不得回潮版本门禁字面量",
+        why="#736 startup_guards 已抽出，编排层不得回潮版本门禁字面量",
     )
     guard.assert_absent(
         "adb_server_reconciled",
-        why="#736 ADB 收敛已迁出 main",
+        why="#736 ADB 收敛已迁出编排层",
     )

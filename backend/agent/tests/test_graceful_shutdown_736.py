@@ -79,15 +79,15 @@ def test_shutdown_agent_runtime_order():
 
 
 def test_main_wires_shutdown_helper():
-    import backend.agent.main as agent_main
+    import backend.agent.agent_loop as agent_loop
     from tools.dev.source_anchor import SourceGuard
 
-    guard = SourceGuard.of_module(agent_main).anchored("shutdown_agent_runtime(")
+    guard = SourceGuard.of_module(agent_loop).anchored("shutdown_agent_runtime(")
     guard.assert_absent(
         "agent_shutting_down",
-        why="#736 graceful_shutdown 已抽出，main 不得回潮停机日志字面量",
+        why="#736 graceful_shutdown 已抽出，loop 外壳不得回潮停机日志字面量",
     )
     guard.assert_absent(
         "EventUploader.instance().stop",
-        why="#736 停机单例 stop 已迁出 main",
+        why="#736 停机单例 stop 已迁出 loop 外壳",
     )
