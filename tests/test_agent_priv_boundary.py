@@ -23,6 +23,7 @@ from pathlib import Path
 
 import yaml
 
+from tools.dev.source_anchor import SourceGuard
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WRAPPER = REPO_ROOT / "backend/agent/stp_agent_priv.py"
@@ -30,6 +31,23 @@ SMOKE = REPO_ROOT / "tools/dev/stp_agent_priv_smoke.sh"
 INSTALL_SCRIPT = REPO_ROOT / "backend/agent/install_agent.sh"
 UPDATE_PLAYBOOK = REPO_ROOT / "tools/ansible/playbooks/update_agent.yml"
 ROLE_DEFAULTS = REPO_ROOT / "tools/ansible/roles/agent_deploy/defaults/main.yml"
+
+#: 被扫的两个真源（wrapper 与安装脚本都会随部署链搬家）——否定断言前必须先锚定语义位。
+_WRAPPER_REL = "backend/agent/stp_agent_priv.py"
+_INSTALL_SCRIPT_REL = "backend/agent/install_agent.sh"
+_APPLY_CODE_ANCHOR = "def cmd_apply_code(args, conf):"
+_PROTECT_LOOP_ANCHOR = "for item in PROTECT_ONLY_PATHS:"
+_WRAPPER_SRC_ANCHOR = 'WRAPPER_SRC="$SCRIPT_DIR/stp_agent_priv.py"'
+
+#: ADR-0037 收口前的宽免密规则面：任意 rsync/cp/chmod/chown/ln/stat 以 root 执行。
+_BANNED_BROAD_SUDO_RULES = (
+    "NOPASSWD: /usr/bin/rsync",
+    "NOPASSWD: /bin/rsync",
+    "NOPASSWD: /usr/bin/cp, /bin/cp",
+    "NOPASSWD: /usr/bin/chown, /bin/chown",
+    "NOPASSWD: /usr/bin/ln, /bin/ln",
+    "NOPASSWD: /usr/bin/stat, /bin/stat",
+)
 
 
 def _load_wrapper():
@@ -73,8 +91,11 @@ def test_wrapper_fixed_policy_flags():
     assert "os.fwalk(" in text
     assert "follow_symlinks=False" in text
     assert "os.O_NOFOLLOW" in text
-    # 不提供任意目标路径参数（固定 INSTALL_DIR）
-    assert "--dest" not in text
+    # 不提供任意目标路径参数（固定 INSTALL_DIR）——先锚在 apply-code 的实现入口上
+    SourceGuard.of_repo_path(_WRAPPER_REL).anchored(_APPLY_CODE_ANCHOR).assert_absent(
+        "--dest",
+        why="目标路径必须固定为 INSTALL_DIR：给 root 侧 wrapper 传任意 dest 就是任意覆盖",
+    )
 
 
 def test_wrapper_protect_only_paths():
@@ -96,7 +117,11 @@ def test_wrapper_protect_only_paths():
     text = WRAPPER.read_text(encoding="utf-8")
     # protect-only 追加环存在，且不产生 --exclude=resources/
     assert "for item in PROTECT_ONLY_PATHS:" in text
-    assert '"--exclude=resources/"' not in text
+    # 锚在 protect-only 追加环本身：这一段被搬走时，判据必须过期而不是恒真
+    SourceGuard.of_repo_path(_WRAPPER_REL).anchored(_PROTECT_LOOP_ANCHOR).assert_absent(
+        '"--exclude=resources/"',
+        why="#1950：exclude 会拦掉 resources/ 分发，P2 独立通道不存在时等于分发断档",
+    )
     assert '"--exclude=%s" % item' in text  # mtbf 的 exclude 仍在
 
 
@@ -148,13 +173,13 @@ def test_install_script_deploys_wrapper_and_drops_broad_rules():
     assert "install -D -m 0755 -o root -g root \"$WRAPPER_SRC\" /usr/local/sbin/stp-agent-priv" in text
     assert "/usr/local/sbin/stp-agent-priv bootstrap" in text
     assert "/usr/local/sbin/stp-agent-priv selftest" in text
-    # 旧宽规则不得回潮
-    for banned in (
-        "NOPASSWD: /usr/bin/rsync", "NOPASSWD: /bin/rsync",
-        "NOPASSWD: /usr/bin/cp, /bin/cp", "NOPASSWD: /usr/bin/chown, /bin/chown",
-        "NOPASSWD: /usr/bin/ln, /bin/ln", "NOPASSWD: /usr/bin/stat, /bin/stat",
-    ):
-        assert banned not in text, banned
+    # 旧宽规则不得回潮：先锚在「部署 wrapper」这一行——它是宽规则的替代品
+    guard = SourceGuard.of_repo_path(_INSTALL_SCRIPT_REL).anchored(_WRAPPER_SRC_ANCHOR)
+    for banned in _BANNED_BROAD_SUDO_RULES:
+        guard.assert_absent(
+            banned,
+            why="ADR-0037 已把 root 提权面收口为 wrapper 单命令，宽规则复活即边界失守",
+        )
     # wrapper 源文件不进安装目录
     assert 'rm -f "$INSTALL_DIR/agent/stp_agent_priv.py"' in text
 
