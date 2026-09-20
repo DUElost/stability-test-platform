@@ -21,12 +21,29 @@ _EVENT_DIR_BASENAME_RE = re.compile(
     r")_",
 )
 
+# #2822：watcher（inotifyd 兜底）经 `_compose_local_path` 落地为
+# `<epoch_ms>_<原事件目录名>`——13 位毫秒前缀是**结构化命名**（防同名冲突），
+# 不是事件名的一部分。标记链（upload_task→collect_upload_event_dir_names）
+# 必须认得这一形态，否则 inotifyd-only 场景下 DLE 永远停在 LOCAL（静默断链，
+# #389 同类：正则过严的断链不长嘴）。剥离只用于**识别**；
+# `event_dir_basename_from_path` 仍返回带前缀全名——它与 DLE.remote_path 及
+# scan xls 的 Path 列同形，是标记匹配键，剥离反而会引入新的不匹配。
+_WATCHER_EPOCH_MS_PREFIX_RE = re.compile(r"^\d{13}_")
+
 
 def is_event_dir_basename(name: str) -> bool:
-    """Return True if ``name`` looks like a timestamp-prefixed event directory."""
+    """Return True if ``name`` looks like a timestamp-prefixed event directory.
+
+    两种落地形态都算（#2822）：reconciler 原名（`2026_..._db.01.ANR`）与
+    watcher 加毫秒前缀（`1789826505754_2026_..._db.01.ANR`）。剥前缀后**剩余段
+    必须自己过原判据**——不是「任何 13 位数打头」都放行，避免误收无关目录。
+    """
     if not name or name.startswith("."):
         return False
-    return bool(_EVENT_DIR_BASENAME_RE.match(name))
+    if _EVENT_DIR_BASENAME_RE.match(name):
+        return True
+    stripped = _WATCHER_EPOCH_MS_PREFIX_RE.sub("", name, count=1)
+    return stripped != name and bool(_EVENT_DIR_BASENAME_RE.match(stripped))
 
 
 def event_dir_basename_from_path(path: str) -> str | None:
