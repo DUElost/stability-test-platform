@@ -90,18 +90,21 @@ def test_on_lease_lost_uses_late_bound_job_runner_state():
 
 
 def test_main_wires_active_job_bindings():
-    import backend.agent.main as agent_main
+    import backend.agent.host_control_plane as plane
+    import backend.agent.job_runtime as job_runtime
     from tools.dev.source_anchor import SourceGuard
 
-    # 正锚点：占位工厂仍在 main 接线；否定：不得回潮内联 register 闭包
-    guard = (
-        SourceGuard.of_module(agent_main)
+    # 正锚点：占位工厂在 host_control_plane；slot 赋值在 job_runtime
+    plane_guard = (
+        SourceGuard.of_module(plane)
         .anchored("build_register_active_job(")
         .anchored("build_deregister_active_job(")
         .anchored("build_on_lease_lost(")
-        .anchored("job_runner_slot.value = job_runner_state")
     )
-    guard.assert_absent(
+    plane_guard.assert_absent(
         "def _register_active_job(",
-        why="#736 active_job_bindings 已抽出，main 不得回潮内联 register 闭包",
+        why="#736 active_job_bindings 已抽出，plane 不得回潮内联 register 闭包",
+    )
+    SourceGuard.of_module(job_runtime).anchored(
+        "job_runner_slot.value = job_runner_state"
     )
