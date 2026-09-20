@@ -581,6 +581,14 @@ class HeartbeatThread:
         except Exception as exc:
             logger.debug("kernel_usb_fault_poll_failed: %s", exc)
             usb_fault_reasons = []
+        # #2957：通道可用性单独上报。上面的 except 把「判据算不出来」咽成了空 reason
+        # 列表，控制面无从分辨「没有故障」与「从没检查过」——这里补的正是第二个事实
+        # （取值口径见 kernel_usb_faults.CHANNEL_*）。
+        try:
+            usb_kernel_log_channel = self._kernel_usb_watch.channel_state()
+        except Exception as exc:
+            logger.debug("kernel_usb_channel_state_failed: %s", exc)
+            usb_kernel_log_channel = None
 
         cap_result = compute_capacity(
             active_job_count=active_count,
@@ -595,6 +603,7 @@ class HeartbeatThread:
             adb_state_counts=adb_state_counts,
             usb_root_hub_count=usb_root_hub_count,
             usb_fault_reasons=usb_fault_reasons,
+            usb_kernel_log_channel=usb_kernel_log_channel,
         )
 
         with self._capacity_lock:

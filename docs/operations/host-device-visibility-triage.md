@@ -56,7 +56,8 @@ cat /sys/bus/usb/devices/<dev>:1.0/interface      # "MIDI function" = MIDI-only
 
 - `USB n` 徽标（`capacity.usb_device_count`，`frontend/src/components/network/ExpandableHostTable.tsx`）——L4 在页面上唯一可见的信号；
 - `adb_multiple_servers`（warning 级 reason → DEGRADED，`backend/agent/capacity_reporter.py:156`），配套自愈 `ensure_single_adb_server()`（`backend/agent/device_discovery.py:178`，需 `STP_ADB_AUTO_REPAIR=1` 且无在跑任务）；
-- **L1 的两个内核判据已落地（#2900）**：`usb_host_controller_dead`（内核报 `HC died` / `xHCI … not responding` **且此刻 USB 一台都看不到** ⇒ DEGRADED；设备回树自动回落）与 `usb_link_degraded`（窗口内 `error -71/-110` 或「cable is bad」超阈，对应本表的慢性劣化）。实现：`backend/agent/kernel_usb_faults.py`（低频读 `journalctl -k`，首扫读整段 boot，失败按「未知」不报）；前端标签见 `ExpandableHostTable.tsx` 的 `REASON_LABELS`；
+- **L1 的两个内核判据已落地（#2900）**：`usb_host_controller_dead`（内核报 `HC died` / `xHCI … not responding` **且此刻 USB 一台都看不到** ⇒ DEGRADED；设备回树自动回落）与 `usb_link_degraded`（窗口内 `error -71/-110` 或「cable is bad」超阈）。实现：`backend/agent/kernel_usb_faults.py`（低频读 `journalctl -k`，首扫读整段 boot，读不到按「未知」不报）。
+  ⚠ **这两条的前提是 agent 能读到内核日志**：Agent 服务 `User=android`（`backend/agent/install_agent.sh`）且安装脚本从未把它加进 `adm`/`systemd-journal`；非特权 `journalctl -k` 退出码 0、stdout 只有 `-- No entries --`（与「内核干净」同形），而 `kernel.dmesg_restrict=1` 也堵死了 `dmesg`/`/dev/kmsg` 备用路。⇒ 现网这类 host 上两条 reason **恒不出现**，其通道态由 `capacity.usb_kernel_log` 单独上报（`ok`/`unavailable`/`unknown`），覆盖缺口自身有告警 `StabilityUsbKernelLogChannelDark`；裁决与三条路线见 #2957。**在这条通道被授权之前，L1 的人肉判据仍然是上机 `journalctl -k | grep -E 'xhci|HC died'`（§2）**。
 - 刷机链路的同类记录：[`firmware-requests/2026-08-26-persist-sys-usb-config-adb.md`](./firmware-requests/2026-08-26-persist-sys-usb-config-adb.md)（刷完 userdata 清空 → adbd 不启动 → `adb devices` 连 unauthorized 都不显示 → 需人工开一次 USB 调试）。
 
 **#2902 起（2026-09-20）：L2/L3/L4 在平台侧可直接判别**（全部为观测面，不参与槽位/门禁计算）：
@@ -79,8 +80,13 @@ cat /sys/bus/usb/devices/<dev>:1.0/interface      # "MIDI function" = MIDI-only
 
 - adb 一台都枚举不到且 USB 树仍在（`usb_device_count > root hub 数`）的中间形态，
   仍需按 §2 上机差分定位（`total_devices == 0` 且**有**外设时既非空树也非 adb 全死）。
-- L1 的**告警通道**未接：平台告警规则文件当前无加载路径（#2880），故 #2900 只落
-  reason → DEGRADED，不写不会生效的告警规则。
+- L1 的告警半边已接（#2900）：`/metrics` 拉取期把 `health.reasons` 折成
+  `stability_host_health_reason{host_id,reason}`，规则 `StabilityHostUsbControllerDead`
+  （critical）与 `StabilityHostUsbLinkDegraded`（warning）在
+  `deploy/prometheus/alerts-stability-platform.yml`；词表四处一致性由
+  `tests/test_host_health_reason_surface.py` 对拍。**但中心侧规则文件仍是人工副本**
+  （`docs/operations/README.md` §6：随仓库更新需人工重放 + `POST /-/reload`，ADR-0011
+  正式挂载未落地）——合并 ≠ 生效。
 
 ## 4. 2026-09-14 实证
 

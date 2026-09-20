@@ -23,6 +23,8 @@ from backend.core.metrics import (
     device_online,
     get_metrics_response,
     host_device_adb_state,
+    host_health_reason,
+    host_kernel_log_channel,
     host_online,
     is_prometheus_available,
     sweep_stale_host_gauge_children,
@@ -154,6 +156,127 @@ def _refresh_host_device_adb_gauges(db: Session) -> None:
         logger.warning("metrics_host_adb_gauge_refresh_failed", exc_info=True)
 
 
+#: #2900/#2957：host 健康 reason 的**封闭分桶词表**。逐字取自 agent 侧的产出点
+#: （`capacity_reporter._compute_health` 的 `reasons.append(...)` 字面量 +
+#: `kernel_usb_faults` 的 `REASON_*` 常量），由
+#: `tests/test_host_health_reason_surface.py` 双向绑回源码：agent 加了新 reason 而
+#: 这里没跟 ⇒ 红；这里留了 agent 已不产出的 reason ⇒ 也红。**不做成 import agent 模块**
+#: 是因为词表一半是字面量、一半是常量，混两种口径比统一抄一遍更容易漂（守卫测的是
+#: 真值本身，抄错了当场红）。
+#: `other` 是兜底桶：agent 先于控制面发新 reason 时，它进 `other` 而**不是**消失——
+#: 与 `_adb_state_bucket` 同理由（不让自由字符串直接当 label 值，也不让事实凭空蒸发）。
+_HEALTH_REASONS = (
+    "cpu_high",
+    "ram_high",
+    "disk_high",
+    "disk_unknown",
+    "mount_failed",
+    "adb_low_healthy_devices",
+    "adb_multiple_servers",
+    "usb_tree_empty",
+    "usb_host_controller_dead",
+    "usb_link_degraded",
+    "other",
+)
+
+#: #2957：内核日志通道可用性词表（agent 侧 `kernel_usb_faults.CHANNEL_STATES`）。
+#: `unknown` 同时兜住「老 agent 没这个字段」——那是**未覆盖**而非「通道正常」。
+_KERNEL_LOG_STATES = ("ok", "unavailable", "unknown")
+
+#: #2900/#2957：本轮**已暴露过** label child 的 host，两个 gauge 各一份——
+#: 一台 host 可以「通道有值但 reason 未上报」（老 agent / health 块缺 reasons），
+#: 共用一份差集会让它上一轮的 reason 值被冻结在 registry 里（停刷新 ≠ 停暴露，
+#: #2791 的教训就是这一条）。
+_reason_gauge_exposed_hosts: set[str] = set()
+_channel_gauge_exposed_hosts: set[str] = set()
+
+
+def _refresh_host_health_gauges(db: Session) -> None:
+    """#2900 的控制面半边 + #2957 的通道可见性：把 `host.extra` 里的 agent 判定折成可告警 series。
+
+    存在理由（#2900 原文的失效形状）：Agent 上报的 reason 落到 `host_extra["health"]`
+    这个 JSON 就停了（`api/routes/heartbeat.py` 只赋值、不计量），告警文件里没有任何
+    expr 引用它 ⇒「xHCI 主控死亡、整机 USB 全盲 11 天」零告警。本函数补的是那条链的
+    最后一跳：**指标化才有资格被告警**。
+
+    四条口径是刻意的：
+
+    - **在册 + ONLINE 才落值**（与 `_refresh_host_device_adb_gauges` 同口径，
+      ADR-0038 D5）：OFFLINE/DEGRADED host 的 reason 是**上一次心跳的快照**，冻结在
+      registry 里就是一台已失联机器的永久红灯；那种机器该由心跳超时类告警负责；
+    - **拿不到 `health.reasons` 列表的 host 不进 reason 指标**（未知 ≠ 干净）：
+      宁可不产 series，也不把「没上报」写成「一切正常」——那正是本单要治的假绿；
+    - **每台落值 host 的全词表都写（含 0）**：缺 series 时 PromQL 窗口里没有基线，
+      「从来没这个 reason」与「刚掉出词表」不可分辨；
+    - **两 gauge 独立差集 remove**（#2791 同族）：移出在册/转 OFFLINE 的 host 其 child
+      必须被移除，而不是停刷新。
+    """
+    if not is_prometheus_available():
+        return
+    try:
+        rows = (
+            db.query(Host.id, Host.extra)
+            .filter(
+                Host.retired_at.is_(None),
+                Host.status == HostStatus.ONLINE.value,
+            )
+            .all()
+        )
+    except SQLAlchemyError:
+        logger.warning("metrics_host_health_gauge_refresh_failed", exc_info=True)
+        return
+
+    live_reason: set[str] = set()
+    live_channel: set[str] = set()
+    try:
+        for raw_host_id, extra in rows:
+            host_id = str(raw_host_id)
+            blob = extra if isinstance(extra, dict) else {}
+
+            health = blob.get("health")
+            reasons = health.get("reasons") if isinstance(health, dict) else None
+            if isinstance(reasons, list):
+                present = {r for r in reasons if isinstance(r, str)}
+                known = present & set(_HEALTH_REASONS)
+                if present - known:
+                    # 新 reason 先落 `other` 兜底桶：不静默消失（词表绑定见守卫测试）
+                    known = known | {"other"}
+                for reason in _HEALTH_REASONS:
+                    host_health_reason.labels(host_id=host_id, reason=reason).set(
+                        1 if reason in known else 0
+                    )
+                live_reason.add(host_id)
+
+            # #2957：通道可用性落 capacity（观测面，不参与 health.status，更不打闸）。
+            # 键缺失 = 老 agent / 从未扫成 → `unknown`，与 `unavailable`（明确读不到）分开：
+            # 前者是覆盖缺口，后者是 #2900 判据恒不命中的直接原因。
+            capacity = blob.get("capacity")
+            raw_channel = (
+                capacity.get("usb_kernel_log") if isinstance(capacity, dict) else None
+            )
+            state = raw_channel if raw_channel in _KERNEL_LOG_STATES else "unknown"
+            for candidate in _KERNEL_LOG_STATES:
+                host_kernel_log_channel.labels(host_id=host_id, state=candidate).set(
+                    1 if candidate == state else 0
+                )
+            live_channel.add(host_id)
+    except Exception:
+        # 渲染中途出错：本轮不落新值，也不清旧 child（下轮自愈），但绝不 500 整次抓取。
+        logger.warning("metrics_host_health_gauge_render_failed", exc_info=True)
+        return
+
+    for host_id in _reason_gauge_exposed_hosts - live_reason:
+        for reason in _HEALTH_REASONS:
+            host_health_reason.remove(host_id, reason)
+    for host_id in _channel_gauge_exposed_hosts - live_channel:
+        for state in _KERNEL_LOG_STATES:
+            host_kernel_log_channel.remove(host_id, state)
+    _reason_gauge_exposed_hosts.clear()
+    _reason_gauge_exposed_hosts.update(live_reason)
+    _channel_gauge_exposed_hosts.clear()
+    _channel_gauge_exposed_hosts.update(live_channel)
+
+
 _LOCK_WAIT_SQL = text(
     "SELECT count(*) AS waiters, "
     # 必须用 clock_timestamp()（真实当前时间）而不是 now()：now() 是**事务起始**
@@ -253,6 +376,7 @@ async def metrics(
     """
     _refresh_fleet_gauges(db)
     _refresh_host_device_adb_gauges(db)
+    _refresh_host_health_gauges(db)
     _refresh_lock_wait_gauges(db)
     _refresh_chain_coverage_gauges(db)
     _sweep_push_host_gauge_children(db)
