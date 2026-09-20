@@ -334,6 +334,12 @@ class TestRunRetentionCleanup:
             result.all.return_value = (
                 id_rows if PlanRun.__tablename__ in tables else []
             )
+            # #2793：orphan 早退用 ``.scalars().all()``。裸 MagicMock 为真值且
+            # ``len==0``，会误进 ``if empty_path_ids:`` 多一次 commit——本 fixture
+            # 无孤儿空 path 行，显式返回 ``[]``（生产：空则不 commit）。
+            scalars = MagicMock()
+            scalars.all.return_value = []
+            result.scalars.return_value = scalars
             return result
 
         db.execute.side_effect = _execute
@@ -349,6 +355,7 @@ class TestRunRetentionCleanup:
                    return_value=self._patched_session(db)):
             run_retention_cleanup()
 
+        # PlanRun 删除路径一次 commit；orphan 早退在本 fixture（无空 path 行）不 commit。
         db.commit.assert_called_once()
 
     def test_deletes_job_artifacts_before_job_instances(self):
@@ -375,6 +382,12 @@ class TestRunRetentionCleanup:
 
         db = MagicMock()
         db.query.return_value = FakeQuery(items=[])
+        # 与 ``_mock_db_with_runs`` 同口径：orphan 早退的 ``.scalars().all()``
+        # 必须是空 list，否则 MagicMock 真值会误 commit（#2793）。
+        empty = MagicMock()
+        empty.scalars.return_value.all.return_value = []
+        empty.all.return_value = []
+        db.execute.return_value = empty
 
         with patch("backend.scheduler.cron_scheduler.SessionLocal",
                    return_value=self._patched_session(db)):

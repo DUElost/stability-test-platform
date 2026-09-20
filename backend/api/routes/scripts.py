@@ -353,7 +353,7 @@ def scan_scripts(
     record_audit(
         db,
         action="scan_rebaseline" if force_rebaseline else "scan",
-        resource_type="script_catalog",
+        resource_type="script",
         details=result.to_dict(),
         user_id=current_user.id,
         username=current_user.username,

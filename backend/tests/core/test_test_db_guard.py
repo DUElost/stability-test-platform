@@ -99,6 +99,46 @@ def test_control_plane_env_file_present(tmp_path):
     assert control_plane_env_file_present(tmp_path) is True
 
 
+# ── #2794：判定加固（query 覆盖 / multihost / unix socket 路径）───────────────
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        # query 覆盖 libpq 实际连接的 host（authority 段只是幌子）
+        "postgresql+psycopg://postgres:pw@db.example:5432/stp_test?host=127.0.0.1",
+        "postgresql+psycopg://postgres:pw@db.example:5432/stp_test?hostaddr=127.0.0.1",
+        # multihost：libpq 逗号分隔逐个尝试，任一为 loopback 即可能连到本机实例
+        "postgresql+psycopg://postgres:pw@db.example:5432,127.0.0.1:5432/stp_test",
+        # unix socket 路径形态（本机实例的另一种写法）
+        "postgresql+psycopg://postgres:pw@db.example:5432/stp_test?host=/var/run/postgresql",
+        # 127.0.0.0/8 非 .1 也是本机；IPv4-mapped IPv6 同样落回本机
+        "postgresql+psycopg://postgres:pw@127.0.0.2:5432/stp_test",
+        "postgresql+psycopg://postgres:pw@[::ffff:127.0.0.1]:5432/stp_test",
+    ],
+)
+def test_control_plane_loopback_bypass_forms_rejected(url):
+    """#2794：旧判定只看 `urlsplit().hostname`——query 覆盖 / multihost / socket 路径
+    都能绕过它，把 TRUNCATE 打到本机生产实例，必须一并拒。"""
+    with pytest.raises(UnsafeTestDatabaseUrl, match="loopback"):
+        guard_test_database_url(url, on_control_plane_host=True)
+
+
+def test_bypass_forms_allowed_off_control_plane():
+    """加固不得误伤 CI / 普通开发机（第 3 道闸不参与判定）。"""
+    for url in (
+        "postgresql+psycopg://u:p@db.example:5432/stp_test?host=127.0.0.1",
+        "postgresql+psycopg://u:p@h1:5432,127.0.0.1:5432/stp_test",
+    ):
+        assert guard_test_database_url(url, on_control_plane_host=False) == url
+
+
+def test_control_plane_remote_multihost_without_loopback_allowed():
+    """多 host 但都不在 loopback（共享验证库形态）仍按原样放行。"""
+    url = "postgresql+psycopg://u:p@db1.example:5432,db2.example:5432/stp_test"
+    assert guard_test_database_url(url, on_control_plane_host=True) == url
+
+
 def test_control_plane_env_file_found_through_worktree(tmp_path):
     """worktree 里没有未跟踪的 .env.backend——必须回溯主检出再判（#2632）。
 

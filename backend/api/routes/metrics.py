@@ -67,6 +67,12 @@ def _refresh_fleet_gauges(db: Session) -> None:
 #: 不随 adb 原始状态串漂移；顺序即落值顺序，测试与告警选择器都按它对齐）。
 _ADB_STATE_BUCKETS = ("device", "offline", "unauthorized", "other")
 
+#: #2791：本进程**已暴露过**的 host_id。prometheus_client 的 label child 一旦创建
+#: 就常驻 registry，只刷新在册集合会留下冻结的故障值（「先 live、批量 offline、
+#: 后退役」的 host 会被 StabilityHostAdbOfflineConcentration 永久 firing），
+#: 基数也会随机器轮换单调增长。故每轮按差集 `remove`（位置参数形态）。
+_adb_gauge_exposed_hosts: set[str] = set()
+
 
 def _adb_state_bucket(raw: Optional[str]) -> str:
     """把 adb 的自由字符串归进封闭词表。
@@ -90,7 +96,9 @@ def _refresh_host_device_adb_gauges(db: Session) -> None:
     三条口径是刻意的：
 
     - **退役 host 不进指标**（ADR-0038 D5：退役 = 不再是容量）——否则退役机上残留的设备行
-      会让告警永远盯着一台已不存在的机器，且没人会去处理它；
+      会让告警永远盯着一台已不存在的机器，且没人会去处理它。**含差集清理**（#2791）：
+      「先 live 后退役」的 host 其 label child 必须被 remove，而不是只停止刷新
+      （prometheus_client 的 child 常驻 registry，停刷新 = 冻结故障值）；
     - 设备行经 `join Host` 过滤：`host_id` 为空或指向不存在 host 的设备**不计**——
       它们没有 host 归属，硬造一个 `(none)` 标签值会让 fleet 级异常混进 per-host 视角；
     - 每台在册 host 的四个桶**全部落值（含 0）**：缺 series 时 `max_over_time` 窗口里没有
@@ -120,6 +128,16 @@ def _refresh_host_device_adb_gauges(db: Session) -> None:
                 host_device_adb_state.labels(host_id=host_id, state=bucket).set(
                     buckets.get(bucket, 0)
                 )
+        # #2791：退役/移出在册的 host 必须**移除**其 label child——只刷新 live 集合会
+        # 把退役前的故障值冻结在 registry 里（告警无 liveness 门 ⇒ 15m 起永久 firing），
+        # 与「退役 host 不进指标（ADR-0038 D5）」相反。差集清理只对上一轮已暴露过的
+        # host 生效；remove 不存在的 child 是 no-op，故进程重启后首轮也安全。
+        live_set = set(live_hosts)
+        for host_id in _adb_gauge_exposed_hosts - live_set:
+            for bucket in _ADB_STATE_BUCKETS:
+                host_device_adb_state.remove(host_id, bucket)
+        _adb_gauge_exposed_hosts.clear()
+        _adb_gauge_exposed_hosts.update(live_set)
     except SQLAlchemyError:
         # 与舰队 gauge 同一失败姿势：DB 抖动时跳过本组，不拖垮整次抓取。
         logger.warning("metrics_host_adb_gauge_refresh_failed", exc_info=True)
