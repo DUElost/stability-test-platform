@@ -304,15 +304,12 @@ BASELINE = frozenset(
         "backend/tests/services/test_job_log_signal.py",  # 1
         "backend/tests/test_ci_and_test_harness_files.py",  # 5
         "backend/tests/test_deployment_files.py",  # 6
-        "tests/test_agentctl_contract.py",  # 2
         "tests/test_ansible_config_channel_2218.py",  # 1
         "tests/test_deploy_scripts.py",  # 3
         "tests/test_dev_bootstrap_seed.py",  # 1
-        "tests/test_install_agent_noninteractive.py",  # 2  # 原 3 处，1 处属临时目录产物
         "tests/test_pg_restore_drill.py",  # 1
         "tests/test_script_seed_static_guards.py",  # 1
         "tests/test_seed_revision_version_guard.py",  # 1
-        "tests/test_site_preflight.py",  # 2
     }
 )
 

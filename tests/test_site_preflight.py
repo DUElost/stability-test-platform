@@ -4,9 +4,17 @@ import subprocess
 import sys
 from pathlib import Path
 
+from tools.dev.source_anchor import SourceGuard
 from tools.site_config.ops import CommandResult
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+#: 零写入 / 零依赖是**模块级契约**：锚点编在被契约约束的那个入口上，
+#: 入口搬走时判据必须报「用例过期」而不是对空文本恒真（#2639）。
+_PREFLIGHT_REL = "tools/site_config/preflight.py"
+_CHECKS_REL = "tools/site_config/checks.py"
+_RUN_PREFLIGHT_ANCHOR = "def run_preflight"
+_CHECK_CLASS_ANCHOR = "class Check"
 from tools.site_config.preflight import run_preflight
 from tools.site_config.validation import Check
 
@@ -255,9 +263,11 @@ def test_checks_are_check_instances_with_remediation():
 
 def test_preflight_module_exposes_no_write_helpers():
     """零写入是契约：模块里不应出现写文件/建目录的调用。"""
-    source = (Path(__file__).resolve().parents[1] / "tools/site_config/preflight.py").read_text(encoding="utf-8")
+    guard = SourceGuard.of_repo_path(_PREFLIGHT_REL).anchored(_RUN_PREFLIGHT_ANCHOR)
     for forbidden in ("write_text", "os.makedirs", "mkdir(", "open(", "subprocess"):
-        assert forbidden not in source
+        guard.assert_absent(
+            forbidden, why="零写入是 preflight 的契约：它只读，写盘属于 install/ensure 链"
+        )
     assert isinstance(run_preflight(ops=healthy_ops())["checks"][0], dict)
     assert Check  # 校验构造器仍由 validation 提供，preflight 只组装
 
@@ -292,12 +302,15 @@ def test_database_probe_degrades_when_dependencies_are_absent():
 
 
 def test_checks_module_stays_dependency_free():
-    source = (REPO_ROOT / "tools/site_config/checks.py").read_text(encoding="utf-8")
+    guard = SourceGuard.of_repo_path(_CHECKS_REL).anchored(_CHECK_CLASS_ANCHOR)
     for dependency in (
         "import pydantic", "from pydantic", "import yaml", "from yaml",
         "import psycopg", "from psycopg",
     ):
-        assert dependency not in source, dependency
+        guard.assert_absent(
+            dependency,
+            why="checks.py 必须在未装站点依赖的机器上可 import（preflight 先于 pip 跑）",
+        )
 
 
 def test_main_module_only_imports_preflight_at_module_level():
