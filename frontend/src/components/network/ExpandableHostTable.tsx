@@ -120,6 +120,10 @@ const REASON_LABELS: Record<string, string> = {
   mount_failed: '挂载失败',
   adb_low_healthy_devices: '无健康设备',
   adb_multiple_servers: 'ADB 多 server 冲突',
+  // #2900：内核 USB 子系统故障（agent 读内核日志判定）——主机可能一台设备都看不到
+  // 而心跳全正常，这两条是唯一可见信号。
+  usb_host_controller_dead: 'USB 主控失联（xHCI 死亡）',
+  usb_link_degraded: 'USB 链路劣化',
 };
 
 const AGENT_SYNC_LABELS: Record<AgentCodeSyncStatus, string> = {

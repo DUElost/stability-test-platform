@@ -511,6 +511,34 @@ class TestEventsEndpoint:
         assert facets["by_stage"]["all"] == data["total"]
         assert facets["by_severity"]["all"] == data["total"]
 
+    def test_events_include_historical_alias_audit_rows(
+        self, client, auth_headers, chain_setup, db_session,
+    ):
+        """#2872：历史 `resource_type="job"` 别名行不得在本视图静默消失。
+
+        审计行 append-only（ADR-0015），别名只在读侧归并（#2778）——按规范值精确
+        匹配会让 09-19 前由 `agent_completion` 写入的行整体缺席。
+        """
+        cur_run = chain_setup["current_run"]
+        job = chain_setup["job_running"]
+        db_session.add(AuditLog(
+            action="job_terminalized",
+            resource_type="job",  # #2778 历史别名（规范值 job_instance）
+            resource_id=str(job.id),
+            details={"plan_run_id": cur_run.id, "repro": "alias-2872"},
+            timestamp=_now(),
+            username="alias-repro",
+        ))
+        db_session.commit()
+
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/events",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        titles = [e["title"] for e in resp.json()["data"]["events"]]
+        assert "job_terminalized" in titles
+
     def test_events_filter_by_severity(
         self, client, auth_headers, chain_setup,
     ):
