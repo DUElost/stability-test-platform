@@ -80,10 +80,10 @@ def test_run_agent_loop_ticks_then_shuts_down_on_signal():
 
 
 def test_main_wires_agent_loop():
-    import backend.agent.main as agent_main
+    import backend.agent.agent_application as app
     from tools.dev.source_anchor import SourceGuard
 
-    guard = SourceGuard.of_module(agent_main).anchored("run_agent_loop(")
+    guard = SourceGuard.of_module(app).anchored("run_agent_loop(")
     guard.assert_absent(
         "process_claim_tick(",
         why="#736 claim tick 调用已迁出 main",

@@ -210,7 +210,7 @@
 | `AGENT_POST_RETRY_BASE_DELAY` | `1` | ✅ | 运行时 | `backend/agent/api_client.py:43` |
 | `AGENT_SECRET` | `` | ✅ | 运行时 | `backend/agent/api_client.py:35` |
 | `AIMONKEY_RESOURCE_DIR` | `` | ✅ | 运行时 | `backend/agent/aimonkey_paths.py:23` |
-| `API_URL` | `http://127.0.0.1:8000` | ✅ | 运行时 | `backend/agent/control_handler.py:188` |
+| `API_URL` | `http://127.0.0.1:8000` | ✅ | 运行时 | `backend/agent/agent_application.py:66` |
 | `ARTIFACT_RETENTION_DAYS` | `30` | ✅ | 运行时 | `backend/core/settings/scheduler.py:74` |
 | `AUDIT_LOG_BUSINESS_RETENTION_DAYS` | `90` | ✅ | 运行时 | `backend/core/settings/scheduler.py:110` |
 | `AUDIT_LOG_RETENTION_BATCH_SIZE` | `5000` | ✅ | 运行时 | `backend/core/settings/scheduler.py:113` |
@@ -253,7 +253,7 @@
 | `HOT_UPDATE_ABORT_POLL_TIMEOUT_SECONDS` | `45` | ✅ | 运行时 | `backend/services/host_upgrade_gate.py:53` |
 | `JWT_SECRET_KEY` | `` | ✅ | 运行时 | `backend/core/security.py:18` |
 | `LOG_BASE_DIR` | `data/logs` | ✅ | 运行时 | `backend/realtime/log_writer.py:19` |
-| `LOG_LEVEL` | `INFO` | ✅ | 运行时 | `backend/agent/main.py:106` |
+| `LOG_LEVEL` | `INFO` | ✅ | 运行时 | `backend/agent/main.py:23` |
 | `MAX_ADMISSION_REQUEUE_ATTEMPTS` | `3` | ✅ | 运行时 | `backend/core/settings/scheduler.py:86` |
 | `MAX_PRECHECK_REENQUEUE_ATTEMPTS` | `1` | ✅ | 运行时 | `backend/core/settings/scheduler.py:85` |
 | `MOUNT_POINTS` | `` | ✅ | 运行时 | `backend/agent/startup_identity.py:121` |
@@ -323,13 +323,13 @@
 | `STP_AGENT_STATE_DB` | `` | ✅ | 运行时 | `backend/agent/aee/state_store.py:15` |
 | `STP_AGENT_VERSION` | `unknown` | — | 运行时 | `backend/agent/script_verifier.py:115` |
 | `STP_ALLOW_REGISTER` | `` | ✅ | 运行时 | `backend/core/settings/security.py:51` |
-| `STP_ALLOW_UNSAFE_TEST_DATABASE_URL` | `` | — | 运行时 | `backend/core/db_url_guard.py:43` |
+| `STP_ALLOW_UNSAFE_TEST_DATABASE_URL` | `` | — | 运行时 | `backend/core/db_url_guard.py:44` |
 | `STP_API_DOCS_ENABLED` | `-` | ✅ | 运行时 | `backend/main.py:347` |
 | `STP_ARTIFACT_DIGEST_CACHE` | `` | — | 运行时 | `backend/services/artifact_digest.py:49` |
 | `STP_AUDIT_BACKEND` | `` | — | 运行时 | `backend/scripts/audit_stage_a_env.py:10` |
 | `STP_AUDIT_ENV_FILE` | `-` | — | 运行时 | `backend/scripts/audit_stage_a_env.py:11` |
-| `STP_BACKEND_DEDUP_SCAN_PYTHON` | `` | ✅ | 运行时 | `backend/services/dedup_scan.py:45` |
-| `STP_BACKEND_DEDUP_SCAN_SCRIPT` | `` | ✅ | 运行时 | `backend/services/dedup_scan.py:46` |
+| `STP_BACKEND_DEDUP_SCAN_PYTHON` | `` | ✅ | 运行时 | `backend/services/dedup_scan.py:46` |
+| `STP_BACKEND_DEDUP_SCAN_SCRIPT` | `` | ✅ | 运行时 | `backend/services/dedup_scan.py:47` |
 | `STP_BACKEND_URL` | `http://127.0.0.1:8000` | — | 运行时 | `backend/scripts/batch_hot_update.py:305` |
 | `STP_BARRIER_MAX_WAIT_SECONDS` | `1800` | ✅ | 运行时 | `backend/agent/pipeline_engine.py:226` |
 | `STP_BARRIER_PROGRESS_STALE_SECONDS` | `-` | ✅ | 运行时 | `backend/agent/pipeline_engine.py:190` |
@@ -343,9 +343,9 @@
 | `STP_COUNTER_RECONCILE_INTERVAL_SECONDS` | `300` | ✅ | 运行时 | `backend/core/settings/scheduler.py:69` |
 | `STP_COUNTER_RECONCILE_LOOKBACK_HOURS` | `48` | ✅ | 运行时 | `backend/core/settings/scheduler.py:81` |
 | `STP_CSRF_ENABLED` | `1` | ✅ | 运行时 | `backend/core/csrf.py:37` |
-| `STP_DASHBOARD_SUMMARY_PUSH_INTERVAL_SECONDS` | `-` | ✅ | 运行时 | `backend/services/dashboard_summary_publisher.py:38` |
+| `STP_DASHBOARD_SUMMARY_PUSH_INTERVAL_SECONDS` | `-` | ✅ | 运行时 | `backend/services/dashboard_summary_publisher.py:44` |
 | `STP_DEDUP_LOG_ENCODING` | `utf-8` | — | 运行时 | `backend/main.py:199` |
-| `STP_DEDUP_PLACE` | `SH` | — | 运行时 | `backend/services/dedup_scan.py:63` |
+| `STP_DEDUP_PLACE` | `SH` | — | 运行时 | `backend/services/dedup_scan.py:64` |
 | `STP_DEDUP_SCAN_PYTHON` | `` | ✅ | 运行时 | `backend/agent/scan_runner.py:379` |
 | `STP_DEDUP_SCAN_SCRIPT` | `` | ✅ | 运行时 | `backend/agent/scan_runner.py:380` |
 | `STP_DEDUP_SCAN_TAG` | `` | ✅ | 运行时 | `backend/agent/scan_runner.py:385` |
@@ -370,7 +370,7 @@
 | `STP_INITIAL_ADMIN_USER` | `` | — | 运行时 | `backend/scripts/bootstrap_admin.py:33` |
 | `STP_JIRA_BASE_URL` | `-` | ✅ | 运行时 | `backend/services/jira_project_key.py:36` |
 | `STP_JIRA_TOKEN` | `-` | ✅ | 运行时 | `backend/services/jira_project_key.py:39` |
-| `STP_JOB_WORKER_POOL_SIZE` | `50` | ✅ | 运行时 | `backend/agent/main.py:513` |
+| `STP_JOB_WORKER_POOL_SIZE` | `50` | ✅ | 运行时 | `backend/agent/job_runtime.py:112` |
 | `STP_LOCAL_DISK_MONITOR_INTERVAL_SECONDS` | `300.0` | ✅ | 运行时 | `backend/agent/settings.py:129` |
 | `STP_LOCAL_DISK_SPILL_TARGET` | `70.0` | ✅ | 运行时 | `backend/agent/settings.py:131` |
 | `STP_LOCAL_DISK_SPILL_THRESHOLD` | `80.0` | ✅ | 运行时 | `backend/agent/settings.py:130` |
@@ -381,7 +381,7 @@
 | `STP_LOG_RATE_LIMIT_MIN` | `20` | ✅ | 运行时 | `backend/services/agent_host_heartbeat.py:36` |
 | `STP_MAX_CLAIM_SLOTS` | `-` | ✅ | 运行时 | `backend/agent/capacity_reporter.py:93` |
 | `STP_MAX_CONCURRENT_OPERATIONS` | `-` | ✅ | 运行时 | `backend/agent/operation_scheduler.py:38` |
-| `STP_METRICS_AUTH_REQUIRED` | `1` | ✅ | 运行时 | `backend/api/routes/metrics.py:172` |
+| `STP_METRICS_AUTH_REQUIRED` | `1` | ✅ | 运行时 | `backend/api/routes/metrics.py:198` |
 | `STP_NOTIFY_SAQ_RETRIES` | `-` | — | 运行时 | `backend/services/notification_service.py:98` |
 | `STP_NOTIFY_SAQ_TIMEOUT_S` | `-` | ✅ | 运行时 | `backend/services/notification_service.py:101` |
 | `STP_PHASE_BARRIER_ENABLED` | `1` | ✅ | 运行时 | `backend/agent/job_runner.py:220` |
@@ -426,8 +426,8 @@
 | `STP_WATCHER_AEE_RECONCILE_HOSTS` | `` | — | 运行时 | `backend/agent/aee/reconciler.py:195` |
 | `STP_WATCHER_AEE_RECONCILE_INTERVAL_SECONDS` | `180` | ✅ | 运行时 | `backend/agent/bootstrap_subsystems.py:135` |
 | `STP_WATCHER_AEE_SUBDIR_LAYOUT` | `stp` | ✅ | 运行时 | `backend/agent/aee/paths.py:194` |
-| `STP_WATCHER_ENABLED` | `true` | ✅ | 运行时 | `backend/agent/main.py:114` |
-| `STP_WATCHER_PLAN_DEFAULT` | `true` | ✅ | 运行时 | `backend/agent/main.py:115` |
+| `STP_WATCHER_ENABLED` | `true` | ✅ | 运行时 | `backend/agent/agent_application.py:36` |
+| `STP_WATCHER_PLAN_DEFAULT` | `true` | ✅ | 运行时 | `backend/agent/agent_application.py:37` |
 | `STP_WATCHER_UNISOC_INOTIFYD` | `false` | ✅ | 运行时 | `backend/agent/job_session.py:314` |
 | `SUDO_GID` | `` | — | 运行时 | `backend/agent/stp_agent_priv.py:227` |
 | `SUDO_UID` | `` | — | 运行时 | `backend/agent/stp_agent_priv.py:84` |
@@ -474,6 +474,7 @@
 | `SUDO_USER` | sudo 调用时由系统注入（stp_agent_priv；SUDO_UID 缺失时的兜底） |
 
 <!-- env-inventory:end -->
+
 
 
 
