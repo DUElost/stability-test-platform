@@ -130,3 +130,47 @@ mtk.aee.mode`），不产生机型分支 → 不存在「本应路由却没路�
   checklist 的判定说明，避免后续评审重复争论 install_apk 类参数驱动脚本；
 - **平台扩列（QCOM 等）**：一旦出现非 MTK 平台脚本族，按本表模式先核
   fail-fast/step_trace 两要素，再纳入清单。
+
+## 2026-09-19 复扫 delta（基线 `9e5ca074`）
+
+复扫范围 = **34 族最新版本**（原基线 32 族；族数 +2 全部来自 UNISOC 线，见下）。
+判据与上文相同：以协议字符串 / 代码路径为准，不按符号名猜测。结论先行：
+**未新增「本应路由却没路由」实例；两个机型路由族在版本推进后三要素不变；
+新增族全部为平台专有工具，不承载机型路由。**
+
+### 三条 grep（原口径 + 放宽）
+
+| 扫描 | 结果 |
+|---|---|
+| `getprop (ro.product\|ro.board\|ro.hardware\|ro.boot\|persist.vendor)` | `ro.product.model` 仍仅 `flash_firmware` / `monkey_test` 两族用于**路由**；`unisoc_probe` 读取它仅作**上报字段**；`ro.boot.ddrsize`（gpu_*）、`persist.vendor.mtk.aee.mode`（aee_prepare）为能力/状态探测 |
+| `args.get("…(model\|family\|platform\|variant\|brand\|oem\|soc\|chip\|vendor\|device_type)…")`（比原口径放宽） | 仅 `flash_firmware.family`（显式覆盖口，缺省仍指纹路由且 `decided_by` 归因）与 `model_ready_wait_seconds`（时序，非路由）——**无把机型差异推给调用方的参数** |
+| 硬编码机型字面量（`MLD[-_]?LX\|AD11\|X6851\|Z2582\|Infinix\|transsion\|honor`） | 无「按机型分支且无 fail-fast」实例；命中均为路由表键 / 注释 / 附加式默认（`com.transsion.*` 包名、Z2582 注释） |
+
+### 版本推进复核（flash_firmware v1.3.15 → v1.3.17）
+
+| 要素 | v1.3.17 位置 |
+|---|---|
+| 未匹配 fail-fast + 已知集合 | :1310-1311 |
+| 路由决策进 metrics | :1211（params）/ :1367（fingerprint）/ :1570 |
+| 双拼写键（下划线/连字符） | :672 / :678 |
+
+`monkey_test` 仍为 v1.2.2（三要素未变）；其余族（`gpu_setup` v1.2.1 / `gpu_finish`
+v1.0.5 / `powercycle_setup` v1.2.0 等）经三条 grep 复核无新增机型分支。
+
+### 新增 2 族（平台扩列触发条件已消费）
+
+| 族（最新版） | 行为随机型/平台变？ | 吸收方式 | 判定 |
+|---|---|---|---|
+| `unisoc_probe` v1.0.1 | 平台专有（UNISOC，诊断探针） | 缺 serial / 设备不可达 **fail-fast**，其余如实上报 | ✔ 不适用路由 |
+| `unisoc_signal_trigger` v1.0.2 | 平台专有（UNISOC uniview，诱发式验收工具） | 恒 `success=True`（= 脚本执行完成），事件是否产生由 `metrics.new_entries` 判读 | ✔ 不适用路由；成功语义已明示 |
+
+### 基线已有、本轮补判的 2 族（原表「其余族」未点名）
+
+| 族（最新版） | 行为随机型/平台变？ | 吸收方式 | 判定 |
+|---|---|---|---|
+| `aee_signal_trigger` v1.0.1 | 平台专有（MTK AEE，诱发式验收工具） | 与 unisoc 同构：执行完成即 success，事件供 metrics 判读 | ✔ 不适用路由 |
+| `flash_preflight` v1.0.4 | 否（**host 侧**预检） | 参数是 host 配置（`dialout_user` 等），与设备差异无关 | ✔ 不适用（host 层） |
+
+**Revisit 更新**：上文「平台扩列（QCOM 等）」触发条件已消费（UNISOC 两族已核，判非
+路由族）；下一次触发条件维持：新增读 `ro.product.model` 的族、新增机型分支、或脚本族
+大幅改版后按三条 grep 重扫并在本表追加版本行。

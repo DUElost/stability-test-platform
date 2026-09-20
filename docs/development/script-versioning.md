@@ -96,8 +96,9 @@ ADR-0029 v2 把**项目模型**收敛为登记簿（客户 / 关系 / 形态 / J
 `push_resources` 等）不适用——逐条标注「不适用 + 理由」，不要直接跳过。
 
 - [ ] **自行读指纹路由，不吃调用方按机型传参**：不得要求调用方用 `step.params` /
-  `default_params` / 多 Plan / 多脚本版本去分化机型差异。反例见 #507 A 节点名的
-  `install_apk`（纯 `apk_path` 参数驱动）；
+  `default_params` / 多 Plan / 多脚本版本去分化**机型**差异。反例形态 = 调用方按机型
+  传参（如 `step.params.device_model`）让脚本内分支；**项目/用例维度的参数不算**，
+  见下「判定边界」；
 - [ ] **路由未匹配一律 fail-fast**：路由表是闭集白名单，不得静默落「默认分支」；
   错误信息必须带**实测指纹值 + 已知集合**，现场一次定位补键。样板：
   `backend/agent/scripts/flash_firmware/v1.3.14/flash_firmware.py:1222-1228`
@@ -110,6 +111,13 @@ ADR-0029 v2 把**项目模型**收敛为登记簿（客户 / 关系 / 形态 / J
   ro.product.model` 返回连字符（`MLD-LX3`），`adb devices` 的 model 字段是下划线，
   两者不同源（同文件 :67、:170-173、:585-594）。路由键要收两套拼写或先归一化再查表，
   否则「路由吸收差异」会变成「路由自己制造差异」。
+
+**判定边界：「adb 指纹读不出」的差异不判落空**（#507 A 节判定口径，并入本清单）。
+差异维度若属**项目 / 用例 / 编排选择**，脚本即使读指纹也推不出来，按 ADR-0029 归
+登记簿 / 编排层职责——`install_apk.apk_path`（同设备跑不同项目的用例包）、
+`push_resources.files`、`monkey_setup.steps`、`connect_wifi.ssid`、
+`clean_env.uninstall_packages` 等均属此类，**判可接受**；不要按「参数驱动」误判为
+约束落空（#507 A 节已逐项判定，避免评审重复争论）。
 
 评审时怎么验：
 
