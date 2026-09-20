@@ -510,13 +510,13 @@ def _mark_running_timeout(
     Lease stays ACTIVE — the device remains blocked. Reconciler will
     finalize (UNKNOWN→FAILED + release lease) after the grace period.
 
-    #2905（**欠账，待裁决**）：本函数**不写审计**，而同族的 `_mark_pending_timeout`
-    （ADR-0019 依据）与 `_mark_patrol_stall`（ADR-0022 D10 依据）都写。RUNNING→UNKNOWN
-    是真实故障里最高频的一类（Agent 掉线 / 租约宽限 / abort 未 ACK），不写意味着一个 job
-    变 UNKNOWN 在审计面无痕（只剩 status_reason 与 `task_run_state_changes` 这类瞬时指标）。
-    是否补写属**方向选择**：写了要确认落进 ADR-0049 的 business 桶（否则反而打开保留策略的
-    缺口），不写则把豁免理由按同族形态写在这里。见 `backend/tests/
-    test_recycler_terminalization_audit_guard.py` 的豁免登记与 issue #2905。
+    #2905（**已裁决：写审计**）：RUNNING→UNKNOWN 是真实故障里最高频的一类（Agent 掉线 /
+    租约宽限 / abort 未 ACK），此前本函数不写审计——一个 job 变 UNKNOWN 在审计面无痕，只剩
+    `status_reason` 与瞬时指标 `task_run_state_changes`（重启即失忆、答不了「具体哪些 job」）。
+    裁决与同族（`_mark_pending_timeout` / `_mark_patrol_stall`）对齐：写 `job_running_timeout`，
+    resource_type=job_instance。保留分层：新 action **不进** SESSION/SECURITY 显式集 ⇒ 按
+    ADR-0049 D2 落 **business 默认桶（90d）**（`audit_log_cleanup` 用 `NOT IN(...)` 兜底，
+    对新 action 封闭）。
 
     CAS re-checks the same liveness signal used for the timeout verdict
     (#991 / R06-F06) — never ``updated_at``. Batch lease renewals pin
@@ -599,6 +599,31 @@ def _mark_running_timeout(
 
     task_run_state_changes.labels(from_state=old_status, to_state="UNKNOWN").inc()
     recycler_timeouts.labels(timeout_type="running").inc()
+
+    # #2905：与同族两条路径对齐的持久证据（业务事件 ⇒ ADR-0049 的 business 默认桶 90d）。
+    # 三个触发面可同时成立，如实记下当次判定用到的那些（None = 本次未用该面）。
+    record_audit(
+        db,
+        action="job_running_timeout",
+        resource_type="job_instance",
+        resource_id=job.id,
+        details={
+            "plan_run_id": job.plan_run_id,
+            "device_id": job.device_id,
+            "old_status": old_status,
+            "reason": reason,
+            "coordinator_deadline": (
+                coordinator_heartbeat_deadline.isoformat()
+                if coordinator_heartbeat_deadline is not None else None
+            ),
+            "execution_deadline": (
+                execution_heartbeat_deadline.isoformat()
+                if execution_heartbeat_deadline is not None else None
+            ),
+            "require_unreported": require_unreported,
+        },
+        username="system",
+    )
 
     logger.warning(
         "job_timeout_to_unknown",
