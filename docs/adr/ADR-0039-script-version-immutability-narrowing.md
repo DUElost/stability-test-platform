@@ -146,7 +146,7 @@
 ### 4.3 落地顺序（依赖关系）
 
 1. **先完成 #735 本体（P0）**：修复 `check_unreferenced_script_versions.py`（已完成，PR #1660）+ 执行退役动作（60 个零引用活跃版本，**对生产库的写操作，须单独走生产变更流程**）；
-2. **本 ADR 裁决通过**后，同 PR 修订 `AGENTS.md` **总原则**该句与 `check-script-version-immutability.py` 判据（D1/D7）；
+2. **本 ADR 裁决通过**后，同 PR 修订 `AGENTS.md` **总原则**该句与 `check-script-version-immutability.py` 判据（D1/D7），并把确权索引行 `script-version-immutability` 的 owner 改指本 ADR D1（§8 已登记同口径触发器）；
 3. **冷却期（D3）满后**，由人工 PR 分批删除（D2）。**建议首批只删已退役最久、族内无在用版本的小批**，验证流程后再放量。
 
 **在 1 与 2 完成前，不得执行任何删除。**
