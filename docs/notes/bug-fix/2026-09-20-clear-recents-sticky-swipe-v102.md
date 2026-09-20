@@ -16,7 +16,7 @@ Class: bug-fix
 
 ## Verification
 
-- 实机 6R0A57SSAE7000295：Clear all 后 Weather 仍在；上滑后 `task_view`=0。
+- 实机 Z2581（plan_run 463 失败样例）：Clear all 后 Weather 仍在；上滑后 `task_view`=0。
 - 合入后 scan + 热更新；Plan 57 改指 `1.0.2` 再试跑 / 全量。
 
 ## Revisit
