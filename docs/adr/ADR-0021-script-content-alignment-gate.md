@@ -9,7 +9,7 @@
 
 ## 背景
 
-ADR-0020 完成 Plan / PlanStep 切换后，编排定义、Job 派发、Agent 执行三者基本对齐：`PlanRun.plan_snapshot` 已内嵌每个 step 的 `script_name` / `script_version` / `nfs_path` / `content_sha256`，Agent 在执行 step 前通过 `ScriptRegistry` 解析脚本元数据。
+ADR-0020 完成 Plan / PlanStep 切换后，编排定义、Job 派发、Agent 执行三者基本对齐：`PlanRun.plan_snapshot` 已内嵌每个 step 的 `script_name` / `script_version` / `nfs_path`（**无** `content_sha256`；sha 由门禁现取于 live `Script.content_sha256`，见 D1/D4），Agent 在执行 step 前通过 `ScriptRegistry` 解析脚本元数据。
 
 但脚本**内容一致性**依然是裸露的工程债：
 

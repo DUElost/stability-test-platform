@@ -140,6 +140,21 @@ reconcile（~10s job，concurrency group 仍串行）。cron 保留作低频兜�
 每次都触发（延迟几分钟到 2 小时），而 `*/10` 在 25.6h 内只兑现 4 次。取 23 分
 而非整点以避开 GitHub 的整点调度高峰。
 
+## 补充（2026-09-20，次序语义与等待时间口径）
+
+`repository-workflow.md` §PR 与 Merge Queue 的「FIFO auto-merge」措辞做了一次**精确化**
+（原句「同仓库非 draft eligible PR 只有队首启用 auto-merge」拗口，且没写明「谁是最老」）：
+
+- eligible = 同仓库、非 draft 的 open PR；**队首 = 其中 `createdAt` 最早者**
+  （脚本 `sort_by(.createdAt)` + `select(isDraft==false)`），**只有队首**启用 auto-merge；
+- **新开的 PR 排到队尾、不插队**；等待时间 ≈「创建时间早于本 PR 的 open PR 数」×
+  单个合入间隔。2026-09-20 实测：稳态 **2.5–3 分钟/个**（连续 14 次合入的间隔中位 182s），
+  8–20 分钟的空档对应红队首停摆（当日 #2860 卡 39 分钟即一例）；
+- **判读合入序必须按时间升序**：升序后 PR 号严格递增 = FIFO（实测
+  `#2853→…→#2869→#2874→#2875`）。`git log --first-parent` 的清单是**时间倒序**，直接读号
+  会得到「严格递减」的排序假象——本会话曾据此误判为 LIFO，把 ~10 分钟的量级估成
+  1.5–2.5 小时；正确做法是把 `(提交时间, PR 号)` 升序排序后再看是否递增。
+
 ## Revisit
 
 若 open PR 常态 >3 或出现外部 fork 贡献潮，再评估轻量队列状态 API 或

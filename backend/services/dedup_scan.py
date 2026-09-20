@@ -1269,8 +1269,21 @@ def _publish_merge_to_center(
 
 
 def _register_merge_artifacts(db: Session, plan_run_id: int, merge_dir: Path) -> int:
-    """扫 merge_dir 取 Result_MergeFiles*.xls → 写 plan_run_artifact。"""
+    """扫 merge_dir 取 Result_MergeFiles*.xls → 写 plan_run_artifact。
+
+    #2888：中心发布用的是**固定路径 + ``copytree(dirs_exist_ok=True)``**，产物名又稳定
+    （``Result_MergeFiles*.xls``）——同一 run+platform 的第二次 merge 会**覆盖**中心
+    同名文件；而本函数的幂等键是 ``(plan_run_id, storage_uri)``，URI 不变 ⇒ 命中既有行
+    直接跳过 ⇒ 磁盘内容已换、``size_bytes`` 停在旧值（「DB 说 X、盘上 Y」，按 size 对账
+    会得到错结论）。
+
+    现语义（2026-09-20 裁决，见 #2888）：**同一 URI = 该 run+platform 的最新 merge 结果**，
+    重复 merge 允许覆盖中心产物，登记行随之刷新 ``size_bytes``；旧值进 warning 日志留痕
+    （表内无「上一版尺寸」列，且本路径不做版本并存——需要历史并存时应改中心路径带批次/
+    时间戳，届时 ``storage_uri`` 天然唯一，本判重逻辑自动正确）。
+    """
     count = 0
+    refreshed = 0
     for xls in sorted(merge_dir.glob("Result_MergeFiles*.xls")):
         existing = db.execute(
             select(PlanRunArtifact).where(
@@ -1278,9 +1291,16 @@ def _register_merge_artifacts(db: Session, plan_run_id: int, merge_dir: Path) ->
                 PlanRunArtifact.storage_uri == str(xls),
             )
         ).scalar_one_or_none()
-        if existing:
-            continue
         size = xls.stat().st_size if xls.exists() else 0
+        if existing:
+            if existing.size_bytes != size:
+                logger.warning(
+                    "merge_artifact_overwritten uri=%s old_size=%s new_size=%s",
+                    xls, existing.size_bytes, size,
+                )
+                existing.size_bytes = size
+                refreshed += 1
+            continue
         db.add(PlanRunArtifact(
             plan_run_id=plan_run_id,
             host_id=None,
@@ -1289,7 +1309,7 @@ def _register_merge_artifacts(db: Session, plan_run_id: int, merge_dir: Path) ->
             size_bytes=size,
         ))
         count += 1
-    if count:
+    if count or refreshed:
         db.commit()
     return count
 

@@ -286,7 +286,9 @@ function DeviceTable({
             virtualize && 'sticky top-0 z-10',
           )}
         >
-          <TableRow className="bg-muted/50 hover:bg-muted/50">
+          {/* #2850：sticky 表头必须近乎不透明——行要从它下面滚过去，/50 会透印。
+              口径出处：DeviceTablePanel.tsx:80-81「勿当底色漂移改成 /50」。 */}
+          <TableRow className="bg-muted/95 hover:bg-muted/95">
             <TableHead className="h-auto px-3 py-2 text-left">Serial</TableHead>
             <TableHead className="h-auto px-2 py-2 text-left">Host</TableHead>
             <TableHead className="h-auto px-2 py-2 text-left">连接</TableHead>

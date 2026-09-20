@@ -534,3 +534,76 @@ def test_count_usb_devices_returns_zero_when_no_target_devices(completed_process
     cp = completed_process_factory(stdout="Bus 001 Device 001: ID 1d6b:0002 Linux Foundation 2.0 root hub\n")
     with patch.object(device_module.subprocess, "run", return_value=cp):
         assert device_module.count_usb_devices() == 0
+
+
+# ── #2902：L2/L4 分辨（sysfs ADB 接口数）+ 空树基线（root hub 数）+ L3 state 分桶 ──
+
+def _write_usb_iface(root, name, cls, sub):
+    d = root / name
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "bInterfaceClass").write_text(cls + "\n", encoding="utf-8")
+    (d / "bInterfaceSubClass").write_text(sub + "\n", encoding="utf-8")
+
+
+def test_count_adb_interface_devices_dedupes_per_device(tmp_path):
+    """ff:42 = ADB 接口；同设备多接口只算一台；非 ADB 接口不计数。"""
+    _write_usb_iface(tmp_path, "1-2:1.0", "ff", "42")   # ADB
+    _write_usb_iface(tmp_path, "1-2:1.1", "ff", "42")   # 同设备第二接口 → 去重
+    _write_usb_iface(tmp_path, "1-3:1.0", "01", "01")   # MIDI function（L4 形态）
+    _write_usb_iface(tmp_path, "1-4:1.0", "ff", "43")   # 其它子类，不是 ADB
+    (tmp_path / "usb1").mkdir()                          # 非接口目录，忽略
+
+    assert device_module.count_adb_interface_devices(str(tmp_path)) == 1
+
+
+def test_count_adb_interface_devices_is_case_insensitive(tmp_path):
+    _write_usb_iface(tmp_path, "1-2:1.0", "FF", "42")
+    assert device_module.count_adb_interface_devices(str(tmp_path)) == 1
+
+
+def test_count_adb_interface_devices_returns_none_when_sysfs_unreadable(tmp_path):
+    """sysfs 读不到 → None（未知），不能伪装成 0（假 L4）。"""
+    assert device_module.count_adb_interface_devices(str(tmp_path / "missing")) is None
+
+
+def test_parse_lsusb_root_hubs_counts_1d6b_lines():
+    text = (
+        "Bus 001 Device 001: ID 1d6b:0002 Linux Foundation 2.0 root hub\n"
+        "Bus 002 Device 001: ID 1d6b:0003 Linux Foundation 3.0 root hub\n"
+        "Bus 001 Device 006: ID 0e8d:201c MediaTek Inc. MLD-LX3\n"
+    )
+    assert device_module.parse_lsusb_root_hubs(text) == 2
+
+
+def test_count_usb_devices_and_root_hubs_single_probe(completed_process_factory):
+    """一次 lsusb 同时给出两数（心跳每拍只 fork 一次）。"""
+    cp = completed_process_factory(stdout=_LSUSB_MIXED)
+
+    with patch.object(device_module.subprocess, "run", return_value=cp) as mock_run:
+        devices, root_hubs = device_module.count_usb_devices_and_root_hubs()
+
+    assert devices == 2
+    assert root_hubs == 2
+    mock_run.assert_called_once_with(["lsusb"], capture_output=True, text=True, timeout=5)
+
+
+def test_bucket_adb_states_counts_only_adb_visible_rows():
+    """L3 分桶只统计 adb 可见行；非 adb 设备（L2/L4 差集对象）不混入。"""
+    devices = [
+        {"adb_connected": True, "adb_state": "device"},
+        {"adb_connected": True, "adb_state": "offline"},
+        {"adb_connected": True, "adb_state": "unauthorized"},
+        {"adb_connected": True, "adb_state": "weird-state"},
+        {"adb_connected": True, "adb_state": ""},
+        {"adb_connected": False, "adb_state": "offline"},   # 不在 adb 列表 → 不计
+        {"adb_state": "device"},                            # 缺 adb_connected → 不计
+    ]
+    assert device_module.bucket_adb_states(devices) == {
+        "device": 1, "offline": 1, "unauthorized": 1, "other": 2,
+    }
+
+
+def test_bucket_adb_states_empty_list():
+    assert device_module.bucket_adb_states([]) == {
+        "device": 0, "offline": 0, "unauthorized": 0, "other": 0,
+    }

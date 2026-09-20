@@ -54,10 +54,13 @@ Registry 细则（写入协议、scope 语法与 overlap 谓词、三维状态�
 PR/CI 恒 no-op，故**不接入**，留痕靠下述收窗纪律（论证见 issue #1097）：
 
 - **先批量核销再收窗（#1234）**：`python tools/dev/ai_work.py update --all`
-  ——一次 gh 调用刷新全部已登记 PR 的终态（MERGED/CLOSED），一次九步写落盘，
+  ——一次 gh 调用刷新已登记 PR 的终态（MERGED/CLOSED），一次九步写落盘，
   **不刷任何 `last_seen`**（无 execution identity 即不冒充心跳）。逐条 `update`
   刷上百条记录是分钟级；批量是秒级，且能一次清掉「已合入但缓存仍称开放」的
-  陈旧记录（实测 22 条一次清空）；
+  陈旧记录（实测 22 条一次清空）。
+  **覆盖面边界**：批量路径只取 GitHub 最新 400 个 PR——更早合入的记录不会被刷到，
+  用单条 `python tools/dev/ai_work.py update --id <requirement>` 兜底核销
+  （`status` 对这类记录会标 `stale-cache` 并提示 `update --id`）；
 - 批次收窗与合入核销/reconcile 前先跑 `python tools/dev/ai_work.py drift
   --strict`；有提示先处置再收尾——STALE 记录人工裁决、declaration-drift
   补/收窄 scope、overlap 改串行；
@@ -67,6 +70,37 @@ PR/CI 恒 no-op，故**不接入**，留痕靠下述收窗纪律（论证见 iss
 - 一页速查（registry 记录 / worktree / 本地与远端分支四类判据）见
   [`closure-cheatsheet.md`](./closure-cheatsheet.md)——**不新增规范**，冲突以本文与
   [`ai/execution-contract.md`](ai/execution-contract.md) 为准。
+
+## worktree 与本地分支清理
+
+**前置（顺序固定）**：先按上节「Registry 批次收窗」跑 `update --all`（更早记录用单条
+`update --id` 兜底）与 `drift --strict`，再动本机资源——顺序反了会把「已合入」误判成
+待清理。四层判据的一页速查见 [`closure-cheatsheet.md`](./closure-cheatsheet.md)。
+
+### worktree
+
+| 判定 | 条件 | 动作 |
+|---|---|---|
+| 可删 | 分支 patch 全在 `origin/main` **且** `git -C <worktree> status --porcelain` 为空 **且** 对应 Execution `lifecycle=FINISHED` | `git worktree remove <path>`（**不加** `--force`） |
+| 保留 | Execution 仍 `CODING`（即使 PR 已合入）/ 有任何未提交改动（含未跟踪文件）/ registry 无记录（多为别家 harness 的 scratch，交用户裁决）/ main worktree 里他人的文件 | 不动 |
+
+- 移除后 `git worktree prune -v`；移除 worktree **不删分支**，需要时
+  `git worktree add <path> <branch>` 重建；
+- **每次清理前重查列表**（别家会话可能刚新建）；`/tmp/stp-*` 这类无 `.git` 的 scratch
+  目录逐文件定性后再删（2026-09-15 实测：4 个目录里藏着 2 份**未落地草稿**——
+  「scratch」≠ 可删）。
+
+### 本地分支
+
+| 判定 | 判据 | 动作 |
+|---|---|---|
+| 安全集 | `git for-each-ref --merged origin/main refs/heads` | 可删；**不能**拿 `git branch -d` 的默认判定当安全网（本地 `main` 常落后，落后量不定） |
+| 直删 | `git cherry origin/main <branch>` 的 `+` 行数 = 0（rebase 合入 patch-id 不变 / 合并后同步） | 可删 |
+| 人工核 | `+` > 0（squash/amend 改写了 patch-id，或真未合） | `gh pr list --state merged --head <branch>` 核 PR 已 merged + 内容等价 ⇒ 可删；否则保留 |
+| 备份 ref | 仅「PR MERGED 但 patch 改写」 | `git update-ref refs/backup/<date>/<branch> <sha>` 后再删 |
+| 保留 | `main` / 被 worktree 占用（`git branch -vv` 行首 `+`）/ registry 仍 `CODING` | 不动 |
+
+收尾 `git fetch --prune origin`。远端侧见下节（共享态，动作前须人工确认）。
 
 ## 远端分支生命周期与补删
 
@@ -79,7 +113,10 @@ PR/CI 恒 no-op，故**不接入**，留痕靠下述收窗纪律（论证见 iss
 
 1. `git fetch --prune origin`，取 `git branch -r --no-merged origin/main`；
 2. 逐个 `git cherry origin/main <branch>` 判内容是否已在主干：
-   - `+` 数 = 0 ⇒ 内容已在主干（合并后同步 / 改写合入）→ **删**；
+   - `+` 数 = 0 ⇒ 内容已在主干（合并后同步提交 / **rebase 合入**——patch-id 不变）→ **删**；
+   - `+` > 0 且 `gh pr list --state merged --head <branch>` 显示 PR 已合入、且逐文件核对
+     主干已含**等价改动** → **删**（squash/amend 等改写合入会改 patch-id，`+` 不为 0，
+     故不能只看 `+`）；
    - `+` > 0 且 PR 为 CLOSED、关闭评论写明**被同修 PR 取代**、且逐文件核对主干已含
      等价改动 → **删**（2026-09-20 实例：`fix/2706-…`，其唯一补丁的候选集修复已由
      #2708 落进 `tools/site_config/handover.py`）；
@@ -89,8 +126,8 @@ PR/CI 恒 no-op，故**不接入**，留痕靠下述收窗纪律（论证见 iss
    未合并且未被取代的 WIP——四类一律不动；
 4. **执行纪律**：远端删除是**共享态动作**——先出「清单 + 逐条判据」交人工确认，再
    `git push origin --delete <branch>` 批量执行，最后 `git fetch --prune` 收尾。
-   本地分支仍按本地清理规程（worktree 占用者、`CODING` 记录、有未提交改动者保留），
-   两侧判据不混用。
+   本地分支与 worktree 按上一节[「worktree 与本地分支清理」](#worktree-与本地分支清理)
+   处置，两侧判据不混用。
 
 **与「关闭未合」记录的关系**：PR 被关闭而未放弃的 Execution 仍在 registry 风险窗口
 （僵尸第二类），唯一出口是人工 `finish --abandon` 或 reopen——删远端分支既不改变该
@@ -99,8 +136,13 @@ PR/CI 恒 no-op，故**不接入**，留痕靠下述收窗纪律（论证见 iss
 ## PR 与 Merge Queue
 
 - `main` 启用分支保护，PR 是唯一合入路径；不要直推或手动点击 Merge；
-- `.github/workflows/enable-auto-merge.yml` 维护 FIFO auto-merge，同仓库非 draft eligible
-  PR 只有队首启用 auto-merge；
+- `.github/workflows/enable-auto-merge.yml` 维护 **FIFO auto-merge 队列**
+  （`scripts/ci/pr-automerge-queue.sh`）：eligible = 同仓库、非 draft 的 open PR；
+  **队首 = eligible 中创建时间最早者**（脚本按 `createdAt` 升序取），且**只有队首**启用
+  auto-merge（其余 `--disable-auto`，多持有者会被遥测判为破坏不变式）；
+- **次序语义**：队首合入后下一个依次顶上；**新开的 PR 排到队尾、不插队**（不是最新优先）。
+  排队等待时间 ≈ 「创建时间早于本 PR 的 open PR 数」× 单个合入间隔（2026-09-20 实测稳态
+  **2.5–3 分钟/个**；红队首停摆时整队暂停，见下节）；
 - **禁止 Execution 自持 auto-merge**：PR 跑到「就绪 + Registry 登记」为止，合入交给
   队列——不得自行 `gh pr merge --auto` / GraphQL `enablePullRequestAutoMerge`
   （含 `--squash`），也不得替其他 PR 做 update-branch / nudge。多持有者会破坏 FIFO
