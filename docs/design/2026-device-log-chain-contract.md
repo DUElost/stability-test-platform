@@ -16,7 +16,8 @@
   （#2783；**被本文引用的展开文**，不是第二份地图权威）。
 - **关联**：[#2546](https://github.com/DUElost/stability-test-platform/issues/2546)；
   [`2026-semantic-ownership.md`](./2026-semantic-ownership.md) X2；
-  ADR-0033 Phase 2 阻塞笔记。
+  ADR-0033 Phase 2 **选项 A 已落地**（原阻塞笔记出口见
+  [`2026-09-19-adr0033-phase2-option-a.md`](../notes/architecture/2026-09-19-adr0033-phase2-option-a.md)）。
 - **日期**：2026-09-19
 
 **冲突处理**：代码与测试为准；散文冲突时回写权威 ADR / 本 Contract / 展开文。
