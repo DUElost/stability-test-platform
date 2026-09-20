@@ -139,8 +139,12 @@ def _is_source_like(value: ast.AST) -> bool:
     """
     return _provenance(value) != _PRODUCT and _contains_reader(value)
 #: 命中处数**下限**（不是现状计数）：判据被削弱时兜底，存量迁移不会撞红它。
-SITE_FLOOR = 50
+#: 取十位而不是贴现状：贴现状会逼每次迁移同时改两处，迟早改漏——双向收紧由 BASELINE 负责。
+SITE_FLOOR = 40
 
+#: 〔产物路径轴 n/m〕＝该文件 m 处里有 n 处断言的对象在 `tmp_path` 下（安装/渲染产物，不是仓库源），
+#: 迁移它们只能编出**假锚点**。这些位点等「口径轴二」（判据识别 tmp 目录派生读取）释放，勿先动手。
+#: 实测与理由见 `docs/notes/testing/2026-09-20-source-scan-batch4-playbook-priv-2639.md`。
 #: 存量清单（只能缩短）。注释里的数字是**该文件内的否定断言处数**，仅供排优先级。
 BASELINE = frozenset(
     {
@@ -152,21 +156,19 @@ BASELINE = frozenset(
         "backend/tests/services/test_job_log_signal.py",  # 1
         "backend/tests/test_ci_and_test_harness_files.py",  # 5
         "backend/tests/test_deployment_files.py",  # 6
-        "backend/tests/test_ssh_security.py",  # 1
-        "tests/test_agent_priv_boundary.py",  # 3
+        "backend/tests/test_ssh_security.py",  # 1  # 〔产物路径轴 1/1〕
         "tests/test_agentctl_contract.py",  # 2
         "tests/test_ansible_config_channel_2218.py",  # 1
         "tests/test_deploy_scripts.py",  # 3
         "tests/test_dev_bootstrap_seed.py",  # 1
-        "tests/test_install_agent_noninteractive.py",  # 3
+        "tests/test_install_agent_noninteractive.py",  # 3  # 〔产物路径轴 1/3〕
         "tests/test_pg_restore_drill.py",  # 1
-        "tests/test_prepare_env.py",  # 1
+        "tests/test_prepare_env.py",  # 1  # 〔产物路径轴 1/1〕
         "tests/test_script_seed_static_guards.py",  # 1
         "tests/test_seed_revision_version_guard.py",  # 1
-        "tests/test_site_bootstrap.py",  # 2
-        "tests/test_site_install.py",  # 3
+        "tests/test_site_bootstrap.py",  # 2  # 〔产物路径轴 2/2〕
+        "tests/test_site_install.py",  # 3  # 〔产物路径轴 3/3〕
         "tests/test_site_preflight.py",  # 2
-        "tests/test_update_agent_playbook.py",  # 4
     }
 )
 

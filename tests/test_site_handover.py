@@ -390,6 +390,62 @@ class TestHandover:
 
         assert _status(report, "handover.MS-01") != "PASS", report["checks"]
 
+    # ── #2852：候选槽的「最新运行赢、同运行取最坏」──────────────────────────
+
+    def test_new_failure_not_masked_by_old_sibling_pass(self, tmp_path):
+        """方向 a（假 PASS 最危险）：run 1 发 `install.s3.db`=PASS 入桶；run 2 迁移**失败**
+        只发 `install.s3.migrate`=FAIL ⇒ 修前按候选顺序取到桶里的旧 PASS，站点实际装坏了
+        handover 却判 PASS 出文件。现在组内只认最近一次发出该槽的运行。
+        """
+        state_dir = _state_dir(tmp_path, omit=("install.s3.db", "install.s3.migrate"))
+        self._with_evidence(
+            state_dir, {"install.s3.db": {"status": "PASS", "run": 1}},
+            extra_stages=[{"stage": "S3", "status": "FAIL", "checks": ["install.s3.migrate"]}],
+        )
+
+        report = run_handover(
+            _site_yaml(tmp_path), state_dir=state_dir,
+            verify_report=_verify_report(tmp_path), system_root=tmp_path,
+        )
+
+        assert _status(report, "handover.MS-01") != "PASS", report["checks"]
+        assert _status(report, "handover.MS-04") != "PASS", report["checks"]
+
+    def test_new_pass_not_masked_by_old_sibling_failure(self, tmp_path):
+        """方向 b（假 FAIL）：run 1 数据库不可达发 `install.s3.db`=FAIL 入桶；run 2 走迁移
+        成功发 `install.s3.migrate`=PASS ⇒ 修前命中桶里的旧 FAIL、handover 拒写文件。
+        """
+        state_dir = _state_dir(tmp_path, omit=("install.s3.db", "install.s3.migrate"))
+        self._with_evidence(
+            state_dir, {"install.s3.db": {"status": "FAIL", "run": 1}},
+            extra_stages=[{"stage": "S3", "status": "PASS", "checks": ["install.s3.migrate"]}],
+        )
+
+        report = run_handover(
+            _site_yaml(tmp_path), state_dir=state_dir,
+            verify_report=_verify_report(tmp_path), system_root=tmp_path,
+        )
+
+        assert _status(report, "handover.MS-01") == "PASS", report["checks"]
+
+    def test_worst_wins_within_the_same_run(self, tmp_path):
+        """同一次运行内多成员同时在场 ⇒ 取最坏：一个 PASS 永不遮蔽兄弟 FAIL。"""
+        state_dir = _state_dir(tmp_path, omit=("install.s3.db", "install.s3.migrate"))
+        self._with_evidence(
+            state_dir,
+            {
+                "install.s3.db": {"status": "PASS", "run": 2},
+                "install.s3.migrate": {"status": "FAIL", "run": 2},
+            },
+        )
+
+        report = run_handover(
+            _site_yaml(tmp_path), state_dir=state_dir,
+            verify_report=_verify_report(tmp_path), system_root=tmp_path,
+        )
+
+        assert _status(report, "handover.MS-01") != "PASS", report["checks"]
+
     def test_failing_mapped_check_fails_the_item(self, tmp_path):
         report = run_handover(
             _site_yaml(tmp_path), state_dir=_state_dir(tmp_path),
