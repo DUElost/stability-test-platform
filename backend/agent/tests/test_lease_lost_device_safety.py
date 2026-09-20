@@ -15,7 +15,6 @@ import threading
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import backend.agent.main as agent_main
 import backend.agent.recovery_executor as recovery_executor
 from backend.agent.job_runner import JobRunnerState
 
@@ -121,13 +120,14 @@ def test_lease_lost_without_active_job_releases_slot_immediately():
 
 
 def test_main_wires_lease_lost_to_shared_helper():
-    """接线回归：main 经 active_job_bindings 走共享 helper（含 keep 占位语义）。"""
+    """接线回归：host_control_plane 经 active_job_bindings 走共享 helper。"""
     import backend.agent.active_job_bindings as bindings
+    import backend.agent.host_control_plane as plane
 
-    main_text = Path(agent_main.__file__).read_text(encoding="utf-8")
+    plane_text = Path(plane.__file__).read_text(encoding="utf-8")
     bindings_text = Path(bindings.__file__).read_text(encoding="utf-8")
     helper_text = Path(recovery_executor.__file__).read_text(encoding="utf-8")
 
-    assert "build_on_lease_lost(" in main_text
+    assert "build_on_lease_lost(" in plane_text
     assert "handle_lease_lost(" in bindings_text
     assert "keep_device_slot=abort_dispatched" in helper_text

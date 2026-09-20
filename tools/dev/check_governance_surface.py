@@ -26,7 +26,7 @@ AI 门禁 workflow——所有 AI 会话行为的上游事实源。本脚本只�
   S10 class 目录内 Agent Note 必须日期命名（yyyy-mm-dd-主题.md），且 2026-09-05 起
       新增 Note 的 Status/Class 头部与 class 目录一致、四节（Decision/Alternatives/
       Verification/Revisit）齐备（#1299）
-  S11 AGENTS.md 硬不变量锚点逐条在场（防整条删除/改写静默丢失——S4 同模式）
+  S11 AGENTS.md 锚点逐条在场（硬不变量 + 总原则「已发布脚本不可删改」；防整条删除/改写静默丢失——S4 同模式）
   S12 ADR 索引一致性：头部状态行 ↔ adr/README 主表/DOC-MAP/M7 看板（status 词级
       + 规范位版本），头部行 ↔ 版本记录块**最新版本**（按版本号取最大：书写顺序
       在各形态间不一致，#861/#867 五次复发后的确定性收口）；
@@ -271,8 +271,10 @@ def check_root_headings(label: str, text: str) -> list[str]:
     return issues
 
 
-# S11: 硬不变量锚串刻意取 AGENTS.md 原文——改写措辞必须连锚一起改，
-# 让「不变量静默消失/被改写」这件事本身过不了门禁（S9 只查章节名、S6 只查体量）。
+# S11: 锚串刻意取 AGENTS.md 原文——改写措辞必须连锚一起改，
+# 让「条款静默消失/被改写」这件事本身过不了门禁（S9 只查章节名、S6 只查体量）。
+# 主体覆盖 ## 硬不变量；另含 ## 总原则「已发布脚本不可删改」一句（#2546 / e82515 F5：
+# 该句不在硬不变量节、此前无锚；ADR-0039 Accepted 当日须同 PR 改写本锚）。
 HARD_INVARIANT_ANCHORS = [
     ("ASGI 入口", r"socketio\.ASGIApp\(sio_server, fastapi_app\)"),
     ("Pipeline 顶层只接受 lifecycle", r"Pipeline 顶层只接受 `lifecycle`"),
@@ -285,13 +287,17 @@ HARD_INVARIANT_ANCHORS = [
     ("业务表名单数", r"数据库业务表名使用单数"),
     ("default_params 不可原地修改", r"`default_params` 不可原地修改"),
     ("前端类型入口", r"frontend/src/utils/api/types\.ts"),
+    (
+        "已发布脚本版本不可原地修改或删除",
+        r"已发布 `backend/agent/scripts/<name>/v<version>/` 不可原地修改或删除",
+    ),
 ]
 
 
 def check_hard_invariant_anchors(text: str) -> list[str]:
-    """S11: 硬不变量锚点逐条在场。"""
+    """S11: AGENTS.md 锚点逐条在场（硬不变量 + F5 总原则脚本不可删改句）。"""
     return [
-        f"S11 AGENTS.md: 硬不变量锚点缺失「{label}」（{pattern}）——"
+        f"S11 AGENTS.md: 锚点缺失「{label}」（{pattern}）——"
         f"确认是否被删除/改写；有意改写须同步更新锚点表"
         for label, pattern in HARD_INVARIANT_ANCHORS
         if not re.search(pattern, text)
@@ -1718,7 +1724,9 @@ def run_self_test() -> int:
         "- 生产环境必须满足 secure cookie、受限 SameSite 和 CSRF guard。\n"
         "- Pydantic 只使用 v2 API；数据库业务表名使用单数。\n"
         "- 已存在脚本版本的 `default_params` 不可原地修改。\n"
-        "- 前端 API 类型以 `frontend/src/utils/api/types.ts` 为入口。"
+        "- 前端 API 类型以 `frontend/src/utils/api/types.ts` 为入口。\n"
+        "- 已发布 `backend/agent/scripts/<name>/v<version>/` 不可原地修改或删除；"
+        "新行为使用新版本。"
     )
     expect(
         "S11 锚点齐全",
