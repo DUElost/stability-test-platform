@@ -24,6 +24,22 @@ Tool Contract + 包存储，既有工具族的新版本目录允许继续 legacy
 - `STP_SCRIPT_ROOT` 必须显式配置；扫描机与运行机不同时另设
   `STP_SCRIPT_RUNTIME_ROOT`。
 
+- **待激活对账（#2931）**：「合入 → 到部署树 → scan 注册 → `plan_step` 重指」四道里，
+  第 3 道做没做此前无任何东西会喊（`check_unreferenced_script_versions` 的输入是
+  DB 行，结构性看不见「磁盘有、库无行」）。收尾判据：新版本合入后跑
+
+  ```bash
+  STP_SCRIPT_ROOT=<部署树>/backend/agent/scripts \
+    python -m backend.scripts.check_unreferenced_script_versions --pending-activation
+  ```
+
+  确认它**不再列出该版本**——视图空才是「磁盘 head 均已注册且激活」的证据。
+  三态：`unregistered`=库无行（scan 未跑或跑在旧树）；`inactive`=有行未激活
+  （反激活遗留）；不列出=已生效。按族 **head 版本**报告（族内旧版零引用是
+  #735 退役面，不进此账——存量 backlog 会把真滞后淹掉，判据落目录行/数据行，
+  不做散字符串相邻匹配）。工具只读；退出码 0=对账完成（账本非门禁），
+  2=`STP_SCRIPT_ROOT` 未设=无从判定，不得读成「没有落后项」。
+
 ## 已发布版本不可变
 
 `script.content_sha256` 是扫描时冻结的期望值。原地修改已发布版本只会产生 conflict，
@@ -38,6 +54,29 @@ python tools/dev/check-script-version-immutability.py --base origin/main
 
 `POST /scripts/scan?force_rebaseline=true` 只用于契约已经被外部破坏后的恢复：仅 admin
 可调用，有 RUNNING、QUEUED 或 PRECHECK PlanRun 时返回 409。不能作为日常改版路径。
+
+## 新版本上线收尾（模板钉钉 + 控制面生效）
+
+「版本目录已合入」≠「下一窗会跑到新行为」。执行链按精确版本解析、无 latest 兜底
+（#2865）：合入后若未完成下列收尾，修复在真机上等于不存在。
+
+仓库侧（可进 PR，由守卫锁住）：
+
+1. 新增 `backend/agent/scripts/<name>/v<ver>/`（全量副本，见上）；
+2. 若该脚本出现在 `backend/schemas/pipeline_templates/*.json`，把对应
+   `action: script:<name>` 的 `version` **钉到磁盘最新版**——模板是编辑器种子，
+   钉旧版会让新建 Plan 继续带泄漏/旧语义；守卫
+   `tests/test_pipeline_template_script_pins_2865.py` 对
+   `check_device` / `monkey_setup` 做「模板 pin == 磁盘最新」对拍（名单可随复发面扩）。
+
+控制面侧（运维授权写操作，不进 PR）：
+
+3. `POST /scripts/scan`，确认 `created` 命中且 `conflicts=0`；
+4. 把仍引用旧版的 `plan_step` 重指到新版（生产周期链等存量 Plan **不会**随模板自动迁）；
+5. 单机验证后再放量。
+
+同族最新 active 版本受退役判据「承接面豁免」（见下），**注册与重指不必绑成一批**；
+但重指未做前，修复对线上无效——不要把「代码已合」记成「问题已闭」。
 
 ## 种子迁移治理（#942 裁决 A）
 
