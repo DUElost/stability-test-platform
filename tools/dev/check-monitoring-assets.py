@@ -77,12 +77,36 @@ def resolve_deploy_root(explicit: str | None) -> tuple[Path, str]:
     return REPO_ROOT, "回退：脚本所在仓库根（未探测到运行中的 backend unit）"
 
 
-def expected_text(source: Path, deploy_root: Path) -> str:
-    """渲染期望内容：只做「本机可确定」的替换，与 installer 的 substitution 集同源子集。"""
+def resolve_deploy_user(explicit: str | None) -> tuple[str, str]:
+    """`<deploy-user>` 的权威来源是**运行中的 backend unit 的 `User=`**（与 `<deploy-root>`
+    取 `WorkingDirectory=` 同法）。
+
+    #2866：含该占位符的模板（`stp-skill-usage.service`）此前恒 `skipped` ⇒ 新增采样项 =
+    新增盲区（改了 `User=`/`ExecStart=` 也不会判 DRIFT）。探测不到（开发机没有该 unit）
+    时返回空串——**此时占位符保持原样、该条目继续 skipped**（不猜、也不假 DRIFT）。
+    """
+    if explicit:
+        return explicit, "--deploy-user 显式给定"
+    probe = subprocess.run(["systemctl", "show", "stability-backend", "-p", "User"],
+                           capture_output=True, text=True)
+    match = re.search(r"User=(\S+)", probe.stdout or "")
+    if probe.returncode == 0 and match:
+        return match.group(1), "systemd stability-backend.User"
+    return "", "未探测到运行中的 backend unit（该占位符保持 skipped）"
+
+
+def expected_text(source: Path, deploy_root: Path, deploy_user: str = "") -> str:
+    """渲染期望内容：只做「本机可确定」的替换，与 installer 的 substitution 集同源子集。
+
+    `deploy_user` 为空 ⇒ **不替换** `<deploy-user>`：残留占位符会让该条目落 `skipped`
+    （与「探测不到」同义），而不是拿字面量去比对判出假 DRIFT。
+    """
     text = source.read_text(encoding="utf-8")
     for token, value in _RESOLVABLE.items():
         if value is not None:
             text = text.replace(token, value)
+    if deploy_user:
+        text = text.replace("<deploy-user>", deploy_user)
     return text.replace("<deploy-root>", str(deploy_root))
 
 
@@ -132,7 +156,9 @@ def candidate_paths(destination: str) -> list[str]:
     return paths
 
 
-def inspect(system_root: Path, deploy_root: Path, repo_root: Path = REPO_ROOT) -> list[dict]:
+def inspect(
+    system_root: Path, deploy_root: Path, repo_root: Path = REPO_ROOT, deploy_user: str = ""
+) -> list[dict]:
     """逐资产比对。返回 [{source,destination,hit,state,detail}]，顺序与清单一致。"""
     results: list[dict] = []
     for source_rel, dest_rel, _mode in monitoring_artifacts():
@@ -147,7 +173,7 @@ def inspect(system_root: Path, deploy_root: Path, repo_root: Path = REPO_ROOT) -
                          detail="仓库源文件不存在（清单与仓库已脱节，无从比对）")
             results.append(entry)
             continue
-        want = expected_text(src, deploy_root)
+        want = expected_text(src, deploy_root, deploy_user)
         # 残余占位符要在**替换之后**判：先判会把已可确定的（如 <prometheus-retention>
         # 取 installer 常量）也算成不可确定，资产被误记 SKIP、检测面静默变小（实测踩过）。
         residual = _UNKNOWN_PLACEHOLDER.findall(want)
@@ -190,6 +216,8 @@ def summarize(results: list[dict]) -> tuple[int, dict[str, int]]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--system-root", default="/", help="比对的系统根（测试/多机用）")
+    parser.add_argument("--deploy-user", default=None,
+                        help="期望内容里 <deploy-user> 的取值；缺省探测运行中的 backend unit 的 User=")
     parser.add_argument("--deploy-root", default=None,
                         help="期望内容里 <deploy-root> 的取值；缺省探测运行中的 backend unit")
     parser.add_argument("--repo-root", default=str(REPO_ROOT),
@@ -199,18 +227,22 @@ def main(argv: list[str] | None = None) -> int:
 
     system_root = Path(args.system_root)
     deploy_root, reason = resolve_deploy_root(args.deploy_root)
-    results = inspect(system_root, deploy_root, repo_root=Path(args.repo_root))
+    deploy_user, user_reason = resolve_deploy_user(args.deploy_user)
+    results = inspect(system_root, deploy_root, repo_root=Path(args.repo_root),
+                      deploy_user=deploy_user)
     exit_code, counts = summarize(results)
 
     if args.json:
         print(json.dumps({"repo_root": args.repo_root,
                           "repo_source": describe_source_repo(Path(args.repo_root)), "counts": counts, "exit_code": exit_code,
                           "deploy_root": str(deploy_root), "deploy_root_source": reason,
+                          "deploy_user": deploy_user, "deploy_user_source": user_reason,
                           "assets": results}, ensure_ascii=False, indent=2))
         return exit_code
 
     print("# 监控/告警资产漂移检测（事实源：monitoring_artifacts()）")
     print(f"# <deploy-root> = {deploy_root}（依据：{reason}）")
+    print(f"# <deploy-user> = {deploy_user or '(未确定)'}（依据：{user_reason}）")
     print(f"# 事实源 = {describe_source_repo(Path(args.repo_root))}")
     for item in results:
         mark = {MATCH: "OK  ", DRIFT: "DRIFT", ABSENT: "ABSENT", SKIPPED: "SKIP ",
