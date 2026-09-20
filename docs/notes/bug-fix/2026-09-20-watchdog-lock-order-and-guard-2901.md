@@ -4,8 +4,8 @@ Status: implemented
 Class: bug-fix
 
 - 日期：2026-09-20
-- 关联：`#2901`（本单）、锁序家族 `#2635` / `#2787` / `#2796` / `#2871`（第三处，修复在队未合入）、
-  `docs/notes/bug-fix/2026-09-19-lock-order-two-halves-2787-2796.md`
+- 关联：`#2901`（本单）、锁序家族 `#2635` / `#2787` / `#2796` / `#2871`（第三处，已由
+  PR #2903 合入）、`docs/notes/bug-fix/2026-09-19-lock-order-two-halves-2787-2796.md`
 
 ## Decision
 
@@ -26,9 +26,8 @@ Class: bug-fix
 - **判据**（AST）：循环**自身**体内出现 `with_for_update()` ⇒ 其迭代集合必须有确定的全序来源；
 - **认三种形态**：① `sorted(...)`（含 `enumerate(sorted(...))`）；② 迭代对象是名字，且其**同一
   函数内**的赋值源文段含 `order_by(` 或 `sorted(`；③ 内联调用自带 `order_by(`；
-- **欠账显式**：`_PENDING_TOTAL_ORDER` 登记尚未修的行锁循环（当前仅 `agent_recovery.py` 的
-  `payload.active_jobs` ⇒ #2871，其修复 PR **在队未合入**），并有**陈旧即红**的对照用例
-  （修复合入后不删登记同样红）；
+- **欠账显式**：`_PENDING_TOTAL_ORDER` 登记尚未修的行锁循环，并有**陈旧即红**的对照用例
+  （修复合入后不删登记同样红）。#2871 合入后登记已清空（见 Revisit）；
 - **补一条针对性直证**：`session_watchdog` 的 **host 行锁是 ORM UPDATE**、不进
   `with_for_update` 分支 ⇒ 通用判据看不到它，故单列一条钉住该文件两条查询的 `order_by`
   （去掉任一即红，见 Verification 的变异表）。
@@ -67,9 +66,9 @@ Class: bug-fix
 
 ## Revisit
 
-- **欠账登记 `agent_recovery.py / payload.active_jobs`**：#2871 的修复 PR 合入后必须删掉该
-  登记（陈旧即红会强制这一条）。若 #2871 最终选择了别的修法（非 sorted/order_by 形态），
-  判据要跟着扩形态，而不是把登记留成永久豁免。
+- **欠账登记已清**：#2871 经 PR #2903 合入后，
+  `agent_recovery.py` / `payload.active_jobs` 已用 `sorted(..., key=job_id)`，
+  `_PENDING_TOTAL_ORDER` 对应条目已删除（陈旧即红强制这一条）；登记表当前为空。
 - **判据的已知盲区**（写下来免得下次当它全能）：① 循环内的 ORM UPDATE 行锁（本单的 host 行
   即此形态，靠针对性直证覆盖）；② 动态拼装的查询（`select(...)` 由变量拼出）；③ 在**另一个
   函数**里定序后再传入的集合；④ 非 `with_for_update` 的显式锁（如 advisory lock）。

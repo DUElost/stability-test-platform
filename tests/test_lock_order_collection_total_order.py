@@ -13,8 +13,9 @@
    （内存里定序，`enumerate(sorted(...))` 这类先赋值再枚举的形态也归此条）；
 3. 迭代对象本身是内联调用且源文段含 `order_by(`。
 
-第 5 处（待办的 #2871 修复）在 `_PENDING_TOTAL_ORDER` 里显式登记，修复合入后该登记必须删
+`_PENDING_TOTAL_ORDER` 登记尚未修、但有明确在队单的行锁循环；修复合入后该登记必须删
 （陈旧登记同样红）——这是本仓对「已知欠账」的既有形态（如种子门禁的 legacy 清单）。
+#2871（`agent_recovery.py` / `payload.active_jobs`）已由 PR #2903 合入，登记表当前为空。
 """
 from __future__ import annotations
 
@@ -25,10 +26,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 BACKEND = REPO_ROOT / "backend"
 
 #: 尚未修、但有明确在队单的行锁循环：`(文件, 迭代对象源文段)` → 说明。
-#: 修复合入后本条必须为空——`test_pending_total_order_entries_are_not_stale` 会红。
-_PENDING_TOTAL_ORDER: dict[tuple[str, str], str] = {
-    ("backend/services/agent_recovery.py", "payload.active_jobs"): "#2871 在队：该集合逐条取 job 行锁，需补 id 全序",
-}
+#: 修复合入后必须删登记——`test_pending_total_order_entries_are_not_stale` 会红。
+_PENDING_TOTAL_ORDER: dict[tuple[str, str], str] = {}
 
 
 def _has_lock(node: ast.AST) -> bool:
