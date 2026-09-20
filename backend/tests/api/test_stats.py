@@ -316,11 +316,67 @@ class TestPlanFailedDevices:
         response = client.get("/api/v1/stats/plan-failed-devices", headers=auth_headers)
         assert response.status_code == 200
         items = response.json()["items"]
-        assert len(items) == 2
-        assert items[0]["plan_name"] == "bad-plan"
-        assert items[0]["failed"] == 2
-        assert items[1]["plan_name"] == "good-plan"
-        assert items[1]["failed"] == 0
+        # #2848 改了这里的契约（原断言要求 good-plan 以 failed=0 出现在第 2 行）：
+        # 这张图排的是失败台数，零失败行没有信息量——健康期它会让图里多出一排零高柱，
+        # 而不是让空态出现。故 `HAVING` 从「滤空组」改成「滤零失败」。
+        assert [(i["plan_name"], i["failed"]) for i in items] == [("bad-plan", 2)]
+
+
+    def test_healthy_window_returns_no_rows_so_empty_state_shows(
+        self, client, auth_headers, db_session, sample_host, sample_device,
+    ) -> None:
+        """全通过窗口 → items 为空（前端 `data.length === 0` 才拿得到空态，#2848）。"""
+        now = datetime.now(timezone.utc)
+        plan = Plan(name="all-ok-plan", description="")
+        db_session.add(plan)
+        db_session.flush()
+        run = _make_plan_run(db_session, plan.id)
+        db_session.add(JobInstance(
+            plan_run_id=run.id, plan_id=plan.id,
+            device_id=sample_device.id, host_id=sample_host.id,
+            status="COMPLETED", pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+            started_at=now - timedelta(minutes=10), ended_at=now - timedelta(minutes=9),
+        ))
+        db_session.commit()
+
+        items = client.get("/api/v1/stats/plan-failed-devices", headers=auth_headers).json()["items"]
+        assert items == []
+
+    def test_tie_break_is_servers_alone(
+        self, client, auth_headers, db_session, sample_host, sample_device,
+    ) -> None:
+        """同失败数时按 `total_jobs DESC` 排——**这个 tie-break 只有服务端一处**（#2848）。
+
+        前端原先二次 `sort(failed DESC)`，键比服务端少一个：同分次序两边可以各说一套。
+        这里钉住服务端权威次序，前端用例钉住「不再重排」。
+        """
+        now = datetime.now(timezone.utc)
+        few = Plan(name="tie-few", description="")
+        many = Plan(name="tie-many", description="")
+        db_session.add_all([few, many])
+        db_session.flush()
+        second_device = _make_device(db_session, sample_host.id, "TIE-DEVICE-2")
+        for plan, runs in ((few, 1), (many, 3)):
+            for _ in range(runs):
+                run = _make_plan_run(db_session, plan.id, status="FAILED")
+                db_session.add(JobInstance(
+                    plan_run_id=run.id, plan_id=plan.id,
+                    device_id=sample_device.id, host_id=sample_host.id,
+                    status="FAILED", pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+                    started_at=now - timedelta(minutes=10), ended_at=now - timedelta(minutes=9),
+                ))
+            db_session.add(JobInstance(
+                plan_run_id=_make_plan_run(db_session, plan.id).id, plan_id=plan.id,
+                device_id=second_device.id, host_id=sample_host.id,
+                status="COMPLETED", pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+                started_at=now - timedelta(minutes=10), ended_at=now - timedelta(minutes=9),
+            ))
+        db_session.commit()
+
+        items = client.get("/api/v1/stats/plan-failed-devices", headers=auth_headers).json()["items"]
+        assert [i["plan_name"] for i in items] == ["tie-many", "tie-few"], (
+            "同 failed 数应按 total_jobs DESC 排（服务端唯一权威）"
+        )
 
 
 class TestPlanRunFailedDeviceTrend:

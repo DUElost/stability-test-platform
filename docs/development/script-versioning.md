@@ -55,6 +55,29 @@ python tools/dev/check-script-version-immutability.py --base origin/main
 `POST /scripts/scan?force_rebaseline=true` 只用于契约已经被外部破坏后的恢复：仅 admin
 可调用，有 RUNNING、QUEUED 或 PRECHECK PlanRun 时返回 409。不能作为日常改版路径。
 
+## 新版本上线收尾（模板钉钉 + 控制面生效）
+
+「版本目录已合入」≠「下一窗会跑到新行为」。执行链按精确版本解析、无 latest 兜底
+（#2865）：合入后若未完成下列收尾，修复在真机上等于不存在。
+
+仓库侧（可进 PR，由守卫锁住）：
+
+1. 新增 `backend/agent/scripts/<name>/v<ver>/`（全量副本，见上）；
+2. 若该脚本出现在 `backend/schemas/pipeline_templates/*.json`，把对应
+   `action: script:<name>` 的 `version` **钉到磁盘最新版**——模板是编辑器种子，
+   钉旧版会让新建 Plan 继续带泄漏/旧语义；守卫
+   `tests/test_pipeline_template_script_pins_2865.py` 对
+   `check_device` / `monkey_setup` 做「模板 pin == 磁盘最新」对拍（名单可随复发面扩）。
+
+控制面侧（运维授权写操作，不进 PR）：
+
+3. `POST /scripts/scan`，确认 `created` 命中且 `conflicts=0`；
+4. 把仍引用旧版的 `plan_step` 重指到新版（生产周期链等存量 Plan **不会**随模板自动迁）；
+5. 单机验证后再放量。
+
+同族最新 active 版本受退役判据「承接面豁免」（见下），**注册与重指不必绑成一批**；
+但重指未做前，修复对线上无效——不要把「代码已合」记成「问题已闭」。
+
 ## 种子迁移治理（#942 裁决 A）
 
 数据迁移里的种子逻辑（INSERT/UPDATE `script` 表、停用旧版本）**不受服务层

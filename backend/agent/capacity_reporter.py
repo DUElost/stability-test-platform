@@ -42,6 +42,9 @@ def compute_capacity(
     adb_server_conflict: bool = False,
     max_claim_slots: "Optional[int]" = None,
     usb_device_count: Optional[int] = None,
+    adb_interface_count: Optional[int] = None,
+    adb_state_counts: Optional[dict] = None,
+    usb_root_hub_count: Optional[int] = None,
     usb_fault_reasons: Optional[Sequence[str]] = None,
 ) -> dict:
     """返回 {"capacity": {...}, "health": {...}}。
@@ -58,6 +61,15 @@ def compute_capacity(
     物理设备（授权/驱动/多 fork-server 等）。为 None 表示无法判定（非 0）。
     刻意不参与 device_slots / effective_slots / health 任何计算。
 
+    #2902（L2/L3/L4 分辨，均为观测面，不改变槽位计算）：
+    - ``adb_interface_count`` — sysfs 里暴露 ADB 接口（ff:42）的设备数。与
+      ``adb_state_counts.device`` 一起可判「L2：接口集合 ⊋ adb 列表」；
+    - ``adb_state_counts`` — `adb devices` 的 state 分桶（device/offline/
+      unauthorized/other），非 device 桶非空即 L3（设备侧 adbd/授权）；
+    - ``usb_root_hub_count`` — lsusb 里 root hub 条数，仅作**空树判据输入**
+      （不上报：见 capacity dict 注释），与 usb_device_count 合用判「USB 树上只剩
+      控制器」→ 空树 reason（覆盖 total_devices==0 的旧门禁短路）。
+
     usb_fault_reasons — 内核 USB 子系统故障（#2900，`kernel_usb_faults` 判定后传入）：
     warning 级 reason，只进 DEGRADED，不进 health_limit（打闸口径见 #2902）。
     """
@@ -67,6 +79,8 @@ def compute_capacity(
         online_healthy_devices,
         total_devices,
         adb_server_conflict=adb_server_conflict,
+        usb_device_count=usb_device_count,
+        usb_root_hub_count=usb_root_hub_count,
         usb_fault_reasons=usb_fault_reasons,
     )
     health_limit = _compute_health_limit(
@@ -86,6 +100,10 @@ def compute_capacity(
         "available_slots": device_slots,
         "effective_slots": effective_slots,
         "usb_device_count": usb_device_count,
+        "adb_interface_count": adb_interface_count,
+        "adb_state_counts": adb_state_counts,
+        # usb_root_hub_count **不上报**：它只是 `usb_tree_empty` 判据的输入（空树基线），
+        # 页面不需要；上报会让心跳 payload 增幅越过 issue 的 <100B 验收线（实测 121B）。
     }
 
     return {"capacity": capacity, "health": health}
@@ -132,12 +150,15 @@ def _compute_health(
     online_healthy_devices: int,
     total_devices: int,
     adb_server_conflict: bool = False,
+    usb_device_count: Optional[int] = None,
+    usb_root_hub_count: Optional[int] = None,
     usb_fault_reasons: Optional[Sequence[str]] = None,
 ) -> dict:
     """产出结构化 health 快照。
 
     阈值与 _compute_health_limit 完全一致（blocking reason → UNSCHEDULABLE）；
-    warning 级 reason（如 adb_multiple_servers）只进 DEGRADED，不打闸。
+    warning 级 reason（如 adb_multiple_servers、usb_tree_empty）只进 DEGRADED，
+    不打闸——usb_tree_empty 属观测面，且空树时本就没有设备可调度。
 
     ``usb_fault_reasons`` 由 `kernel_usb_faults`（#2900）判定后传入——内核 USB 子系统
     故障（xHCI 主控死亡 / 慢性链路劣化）**独立于设备数**，故不参与
@@ -165,6 +186,8 @@ def _compute_health(
         reasons.append("adb_low_healthy_devices")
     if adb_server_conflict:
         reasons.append("adb_multiple_servers")
+    if _usb_tree_empty(usb_device_count, usb_root_hub_count, total_devices):
+        reasons.append("usb_tree_empty")
     for reason in usb_fault_reasons or ():
         if reason not in reasons:
             reasons.append(reason)
@@ -185,3 +208,25 @@ def _compute_health(
         "mount_ok": mount_ok,
         "adb_ok": not adb_dead,
     }
+
+
+def _usb_tree_empty(
+    usb_device_count: Optional[int],
+    usb_root_hub_count: Optional[int],
+    total_devices: int,
+) -> bool:
+    """USB 树上只剩控制器、且没有任何已发现设备（#2902）。
+
+    旧门禁的盲区：`adb_low_healthy_devices` 要求 ``total_devices > 0``——整树死亡
+    （xHCI 失联/被解绑）时 `total_devices == 0`，host 恒显 HEALTHY，**最严重的
+    故障形态恰好是唯一不告警的形态**（.63 与 8.87 实测）。本判据补上这一格：
+
+    - 两个计数都**可判定**（None = 采集失败，不据此报警）；
+    - ``usb_device_count <= usb_root_hub_count``（lsusb 里只有 1d6b 系控制器）；
+    - 且 ``total_devices == 0``（agent 一台设备都没发现）。
+
+    warning 级（DEGRADED）：空树时没有设备可调度，无需打闸，但必须在页面上可见。
+    """
+    if usb_device_count is None or usb_root_hub_count is None:
+        return False
+    return usb_device_count <= usb_root_hub_count and total_devices == 0
