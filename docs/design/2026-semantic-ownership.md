@@ -122,7 +122,7 @@
 |---|---|---|
 | 控制面 / 执行分层 | 0001, 0006, 0014, 0016, 0017, 0018 | 已填关键行；其余见 TBD |
 | 状态机 / 租约 / 调度 | 0003, 0019, 0022, 0026, 0027, 0048 | 已填关键行 |
-| Plan / 脚本 / 工具接入 | 0020, 0021, 0023, 0033, 0039→Proposed 不强制 | 已填 X1 相关 + flash |
+| Plan / 脚本 / 工具接入 | 0020, 0021, 0023, 0033, 0039→Proposed 不强制 | 已填 X1 相关 + flash；**不可变契约范围**此前无 owner（0020 正文 0 命中「不可变」）→ 本轮补 `script-version-immutability` |
 | 日志 / 存储 / merge | 0025, 0028, 0032 + design 契约；全链地图 [`2026-device-log-chain-contract.md`](./2026-device-log-chain-contract.md) | 已填 X2/X3；Contract = 路由入口 |
 | 后处理 / Jira | 0012 | 已填（深嵌口径见 §3） |
 | 会话 / 安全 | 0024 | 已填 |
@@ -149,6 +149,7 @@
 | `script-content` | concept | 脚本内容 / sha 对账权威 | `docs/adr/ADR-0021-script-content-alignment-gate.md :: ### D4 — 平台 DB 是脚本内容唯一权威` | 改 D4 |
 | `script-runtime-catalog` | concept | 可派发 `(name, version)` 运行时权威 | `docs/adr/ADR-0033-tool-kit-ecosystem-integration.md :: ### D3：代码仓与工具资产包物理解耦（Manifest + Package Store）` | 第二套版本体系 |
 | `script-meta-freeze` | concept | `plan_snapshot` 步骤身份冻结面；非独立权威（**无** `script_meta` 键；inventory key 名保留） | `docs/adr/ADR-0021-script-content-alignment-gate.md :: ## 引用 / 关联` | 再称「唯一权威」或把假键写成第三权威 |
+| `script-version-immutability` | concept | 已发布脚本版本「不可原地修改 / 删除」契约的**范围**（Accepted ADR 面无承载体，正文真源在 development 文档） | `docs/development/script-versioning.md :: ## 已发布版本不可变` | ADR-0039 转 Accepted（收窄为「直至零引用退役」）→ **同 PR** 把本行 owner 改指 0039 D1，并同步 `AGENTS.md` 总原则行（S11 第 12 锚）与 `check-script-version-immutability.py` 判据 |
 | `dle-record` | concept | 设备日志事件终态台账 | `docs/adr/ADR-0028-device-log-event-and-continuous-upload.md :: 唯一权威记录` | 改唯一记录主张 |
 | `log-signal-stream` | concept | 异常事件权威流 | `docs/adr/ADR-0018-infrastructure-layer-framework-adoption.md :: \`log_signal\` 是异常事件权威流` | 旁路上报 |
 | `dedup-pipeline-behavior` | concept | 并列 dedup/merge 行为与分区 | `docs/adr/ADR-0032-unisoc-mtk-parallel-dedup-pipelines.md :: ### D1：两条并列流水线，禁止交叉混用` | 混流水线 |
@@ -179,7 +180,8 @@
 
 ## 6. 评审采纳对照（#2546 多 harness）
 
-依据：`docs/reviews/REVIEW_SEMANTIC_OWNERSHIP_*`（含 004377、e82515、ae8cd9、c42fb9、54cd71、497952 等）及 issue 评论 N1–N6。
+依据：`docs/reviews/REVIEW_SEMANTIC_OWNERSHIP_*` **八稿全量** = 004377（claude-code）· 7f3504（claude）· 0b6e98（CodeBuddy）· 497952（Cursor）· ae8cd9（Cursor/Composer）· 54cd71（Codex）· c42fb9（Antigravity）· e82515（Zcode）；另含 issue 评论 N1–N6。
+> 本行此前只列六稿（漏 0b6e98、7f3504）——而这两稿各自贡献了**阻断级**修正（见 §6.1 末两行与 §6.2 的 S6 条目）。
 
 ### 6.1 已采纳
 
@@ -196,6 +198,9 @@
 | X1/X2/X3 | 评审推荐单行口径 | §1 |
 | F-5 | flash 补登记 | `flash-tool` |
 | 触碰即补 | `归属域` 不做一次扫全库 | §7、adr/README |
+| 0b6e98（CodeBuddy，**此前未登记**） | 四处修订：冲突条款必须反转（F2）；`归属域` 改为「表 → ADR 反查」字段驱动（删 A② 必填）；S15 只留可机读判据（F3）；**膨胀上界不用 S6**（F6） | §0 硬边界、§4.2、§7、§6.2 S6 条 |
+| 7f3504（claude-code，**此前未登记**） | 阻断 1–4：禁挂内容裁决条款；S15 不得复用 S2；**不得把按需表塞进 S6 常驻预算**；X1 裁决须换成真载体并把两处幽灵引用登记为勘误 | §0 硬边界、§4.2②、§6.2 S6 条、§8 |
+| 本 PR（#2546 follow-up，codex） | 「不可变契约范围」入表——把 F-1 从口头纪律变成 S15 可拦的表行 | `script-version-immutability` |
 
 ### 6.2 未采纳 / 延后（及理由）
 
@@ -209,6 +214,7 @@
 | 合并/重编号 ADR | N5 / issue 纪律 |
 | 一次补齐全部 ADR 头部 `归属域` | 字段驱动；假阳性面过大 |
 | 前端 ADR-0013 实锚 | 本轮仍 TBD（不扩前端 Inventory） |
+| S6 `RESIDENT_BUDGETS` 作本表膨胀上界（**issue 初稿与 N 系列均由立案方提出**） | **拒**，2 源共振（7f3504 阻断 3 + 0b6e98 F6）：S6 语义 = **常驻启动入口**预算，本表是 `docs/design/` 按需文档（`DOC-MAP` 自身亦不在该表内）；用语义错位的机制防膨胀，正是本单要治的病。**推荐替代 = S15 内「本表 ≤ N 行」自卡（零新机制）→ 实测 `check_ownership_table` 无此行数判据，尚未落地**，登记为开放缺口 |
 
 ### 6.3 用户相对初评的增量（本修订强制采纳）
 
@@ -239,6 +245,7 @@
 |---|---|
 | `ADR-0021` 关联区 `script_meta` 括注 | 已降级为冻结副本 / 非独立权威；假键名由 #2856 去掉（本索引 X1 / `script-meta-freeze` 同步） |
 | ADR-0033 D1 无 flash | 本表 `flash-tool` 已指向 v1.3「刷机补登记」句；D1 Tier3 表已列 `flash_*` |
+| `ADR-0039` 幽灵引用与「硬不变量」字样（基线 `479104a3`） | ① §1.1 已校正（明写「**不在** `## 硬不变量`；S11 第 12 锚覆盖在场性」）；② §1.3 与 D4 的幽灵 `plan_step.script_sha` → 由**在飞 PR #2929** 收（本 PR 不抢同一文件；真载体 = `PlanStep.script_name/version` `backend/models/plan.py:95-96` + `step_trace` `backend/models/job.py:95`）；③ **残留**：D1 首句与 §7 增补第 2 条仍写「将 `AGENTS.md` **硬不变量**…收窄 / 同 PR 修订 `AGENTS.md` 硬不变量」，而该条实际位于 `AGENTS.md` **总原则** `:15-16` → 随 0039 转 Accepted 的 PR 一并改，触发器已挂在 `script-version-immutability` 行 |
 
 ---
 
@@ -263,3 +270,4 @@
 | 2026-09-19 | 增 `log-chain-map`：Device Log Chain Contract = 全链地图/路由入口（非第五内容权威）；X2 口径同步 |
 | 2026-09-20 | #2546 Closed 后：**Draft → Living**；补 N6/F-07 Domain Authority 注记；§9 纠 Phase 2 过时表述（选项 A 已他单落地） |
 | 2026-09-20 | X1 / `script-meta-freeze`：去掉幽灵 `plan_snapshot.script_meta` 假键名，对齐 #2856 / Mode C（步骤身份冻结面） |
+| 2026-09-20 | **#2546 follow-up（codex）**：补 `script-version-immutability` 行（F-1 机制化）；§6 依据行改八稿全量并补登 0b6e98 / 7f3504；§6.2 登记「S6 作膨胀上界」被 2 源拒 + 推荐替代未落地；§8 登记 ADR-0039 三处状态（含 `:66`/`:149` 残留） |

@@ -534,3 +534,43 @@ tests:
             对照 docs/operations/incident-2026-07-29-host-8-87-xhci-death-and-adb-outage.md
             判据树。注意本告警**只观测**：平台侧自动 reconnect 未实现（会打断在跑的 job，
             需裁决，见 #2754 / #722）。
+
+  # ---- #2909③ StabilityChainCoverageGap ----
+  - interval: 1m
+    input_series:
+      - series: 'stability_chain_coverage_devices{kind="online_total"}'
+        values: '600x60'
+      - series: 'stability_chain_coverage_devices{kind="gap_missing"}'
+        values: '90x60'
+    alert_rule_test:
+      - eval_time: 59m
+        alertname: StabilityChainCoverageGap
+        exp_alerts: []
+      - eval_time: 65m
+        alertname: StabilityChainCoverageGap
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              domain: schedule
+            exp_annotations:
+              summary: 周期回归链的 fleet 覆盖差超 10%（存在结构性掉出清单的 ONLINE 设备）
+              description: >-
+                未退役 host 上 ONLINE 的设备中，>10% 不在任何 enabled task_schedule 的
+                device_ids 清单里且持续 60m（分母下限 50 台防 fleet 缩容误报）。
+                链清单是 放量时点的存储快照（schedule.device_ids 无再生成路径，
+                链后续段只做 status 修剪不扩列——见 #2909 诊断），放量后接入/回潮
+                的设备会永久离开周期观测面。排查：/metrics 的
+                stability_chain_coverage_devices 三元组 + #2909 评论的定案 SQL 形态；
+                处置在 #2909 问题②的裁决（动态派生或清单再生成），不是调高本阈值。
+
+  # ---- #2909③ 反向：10% 以内不报（含 exactly 0.1） ----
+  - interval: 1m
+    input_series:
+      - series: 'stability_chain_coverage_devices{kind="online_total"}'
+        values: '600x70'
+      - series: 'stability_chain_coverage_devices{kind="gap_missing"}'
+        values: '60x70'
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: StabilityChainCoverageGap
+        exp_alerts: []
