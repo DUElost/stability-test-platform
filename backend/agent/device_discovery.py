@@ -467,6 +467,33 @@ def count_usb_devices() -> Optional[int]:
         int  — 成功采集（0 表示确实没枚举到目标设备）；
         None — 无法判定（lsusb 缺失/超时/非零退出），调用方应显示「未知」而非 0。
     """
+    count, _root_hubs = count_usb_devices_and_root_hubs()
+    return count
+
+
+def parse_lsusb_root_hubs(text: str) -> int:
+    """统计 `lsusb` 输出里的 root hub 条数（`1d6b:` 系，纯函数，#2902）。
+
+    root hub 每台机器固定存在（USB2/3 各一条）——它是「空树」判据的基线：
+    `疑似 Android 设备数 ≤ root hub 数` 且 `discovered_devices == 0`
+    ⇒ USB 树上只有控制器、没有任何外设（#2902 的 `usb_tree_empty`）。
+    """
+    count = 0
+    for line in text.splitlines():
+        match = _LSUSB_LINE_RE.match(line.strip())
+        if match and match.group(1).lower() == _ROOT_HUB_VID:
+            count += 1
+    return count
+
+
+def count_usb_devices_and_root_hubs() -> Tuple[Optional[int], Optional[int]]:
+    """一次 `lsusb` 同时取「疑似 Android 设备数」与「root hub 数」（#2902）。
+
+    两次分别调用会各自 fork 一次 lsusb（心跳每拍一次），故合并为单次采集；
+    `count_usb_devices()` 保留为薄包装（历史调用方与测试不受影响）。
+
+    Returns: (设备数, root hub 数)；两者同为 None 表示无法判定。
+    """
     try:
         result = subprocess.run(
             ["lsusb"],
@@ -476,19 +503,88 @@ def count_usb_devices() -> Optional[int]:
         )
     except FileNotFoundError:
         logger.debug("lsusb_not_found: skipping usb device count")
-        return None
+        return None, None
     except subprocess.TimeoutExpired:
         logger.warning("lsusb_timeout: %ss", _LSUSB_TIMEOUT_SECONDS)
-        return None
+        return None, None
     except Exception as e:
         logger.debug("lsusb_failed: %s", e)
-        return None
+        return None, None
 
     if result.returncode != 0:
         logger.debug("lsusb_nonzero_exit: rc=%s stderr=%s", result.returncode, result.stderr)
+        return None, None
+
+    text = result.stdout or ""
+    return parse_lsusb_output(text), parse_lsusb_root_hubs(text)
+
+
+# ── ADB 接口层计数（L2/L4 分辨，#2902）───────────────────────────────────────
+#
+# 只读 sysfs（agent 用户可读，无需 root）：暴露 ADB 接口（bInterfaceClass=ff、
+# bInterfaceSubClass=42）的 USB **设备**集合。判别规则（triage §2）：
+#   - 接口设备集合 ⊋ `adb devices` 集合 → L2（主机 adb server 漏项）；
+#   - 接口设备集合为空 且 `USB n > 0`        → L4（设备没有 ADB 接口，如 MIDI 模式 0e8d:2046）；
+#   - 两侧集合相等 → 无 L2，继续看 state（L3，由 `adb devices` 的 state 桶给出）。
+# 该值**仅供观测对照**，不参与 capacity 槽位/健康门禁计算（与 usb_device_count 同口径）。
+
+_SYSFS_USB_DEVICES = "/sys/bus/usb/devices"
+_ADB_IFACE_CLASS = "ff"
+_ADB_IFACE_SUBCLASS = "42"
+
+
+def count_adb_interface_devices(
+    sysfs_root: str = _SYSFS_USB_DEVICES,
+) -> Optional[int]:
+    """数出暴露 ADB 接口（ff:42）的 USB 设备数（纯文件读取，#2902）。
+
+    接口目录形如 `1-2:1.0`——取 `:` 前的设备名去重（一台设备可能暴露多个接口）。
+    目录缺失/不可读 → None（**未知，而非 0**）：把「读不到 sysfs」当成「没有 ADB
+    接口」会制造假 L4。
+    """
+    try:
+        entries = os.listdir(sysfs_root)
+    except OSError as exc:
+        logger.debug("sysfs_usb_unreadable root=%s err=%s", sysfs_root, exc)
         return None
 
-    return parse_lsusb_output(result.stdout or "")
+    devices: set[str] = set()
+    for name in entries:
+        if ":" not in name:
+            continue
+        iface_dir = os.path.join(sysfs_root, name)
+        try:
+            with open(os.path.join(iface_dir, "bInterfaceClass"), encoding="utf-8") as fh:
+                cls = fh.read().strip().lower()
+            if cls != _ADB_IFACE_CLASS:
+                continue
+            with open(os.path.join(iface_dir, "bInterfaceSubClass"), encoding="utf-8") as fh:
+                sub = fh.read().strip().lower()
+        except OSError:
+            continue
+        if sub == _ADB_IFACE_SUBCLASS:
+            devices.add(name.split(":", 1)[0])
+    return len(devices)
+
+
+def bucket_adb_states(devices: List[Dict[str, Any]]) -> Dict[str, int]:
+    """按 `adb devices` 的 state 给设备分桶（纯函数，#2902）。
+
+    只统计 **adb 可见**（``adb_connected is True``）的行——不在 adb 列表里的设备
+    正是 L2/L4 判据要暴露的差集对象，混进 state 桶会让「在线 vs USB 差值」失去
+    分辨力。桶：``device`` / ``offline`` / ``unauthorized`` / ``other``（含
+    ``unknown`` 等非预期取值），空字符串按 ``other`` 计。
+    """
+    buckets = {"device": 0, "offline": 0, "unauthorized": 0, "other": 0}
+    for dev in devices:
+        if dev.get("adb_connected") is not True:
+            continue
+        state = str(dev.get("adb_state") or "").strip().lower()
+        if state in ("device", "offline", "unauthorized"):
+            buckets[state] += 1
+        else:
+            buckets["other"] += 1
+    return buckets
 
 
 def collect_device_info(adb_path: str, serial: str, raw_adb_state: str = "device") -> Dict[str, Any]:

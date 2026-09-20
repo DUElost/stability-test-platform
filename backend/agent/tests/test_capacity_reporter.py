@@ -321,3 +321,96 @@ def test_usb_device_count_does_not_rescue_adb_dead_host():
     assert result["capacity"]["effective_slots"] == 0
     assert result["health"]["status"] == "UNSCHEDULABLE"
     assert "adb_low_healthy_devices" in result["health"]["reasons"]
+
+
+# ── #2902：L2/L3/L4 分辨信号 + total==0 的空树门禁 ───────────────────────────
+
+def _cap(**overrides):
+    """构造调用参数（默认：健康主机、零设备），按需覆盖。"""
+    kwargs = dict(
+        active_job_count=0,
+        active_device_count=0,
+        online_healthy_devices=0,
+        total_devices=0,
+        system_stats=_healthy_system_stats(),
+        mount_status=_healthy_mount_status(),
+    )
+    kwargs.update(overrides)
+    return compute_capacity(**kwargs)
+
+
+def test_usb_tree_empty_degrades_healthy_looking_host():
+    """整树死亡形态：lsusb 只剩 root hub、agent 一台设备都没发现。
+
+    旧门禁在这一形态下恒显 HEALTHY（`adb_low_healthy_devices` 要求 total>0）——
+    最严重的故障形态恰好是唯一不告警的形态（#2902 的核心缺口）。
+    """
+    result = _cap(usb_device_count=2, usb_root_hub_count=2)
+
+    assert result["health"]["status"] == "DEGRADED"
+    assert "usb_tree_empty" in result["health"]["reasons"]
+
+
+def test_usb_tree_empty_not_fired_when_devices_discovered():
+    result = _cap(total_devices=16, online_healthy_devices=16,
+                  usb_device_count=2, usb_root_hub_count=2)
+    assert "usb_tree_empty" not in result["health"]["reasons"]
+
+
+def test_usb_tree_empty_not_fired_when_usb_has_peripherals():
+    """USB 上还有外设（设备数 > root hub 数）→ 不是空树。"""
+    result = _cap(usb_device_count=16, usb_root_hub_count=2)
+    assert "usb_tree_empty" not in result["health"]["reasons"]
+
+
+def test_usb_tree_empty_not_fired_when_probe_failed():
+    """采集失败（None）不得据以报警——未知 ≠ 空。"""
+    assert "usb_tree_empty" not in _cap(
+        usb_device_count=None, usb_root_hub_count=None
+    )["health"]["reasons"]
+    assert "usb_tree_empty" not in _cap(
+        usb_device_count=2, usb_root_hub_count=None
+    )["health"]["reasons"]
+
+
+def test_usb_tree_empty_is_warning_level_not_blocking():
+    """warning 级：空树不进 UNSCHEDULABLE（此时本就没有设备可调度）。"""
+    health = _cap(usb_device_count=2, usb_root_hub_count=2)["health"]
+    assert health["status"] == "DEGRADED"
+    assert health["adb_ok"] is True
+
+
+def test_l2_l3_l4_signals_reported_in_capacity():
+    state_counts = {"device": 1, "offline": 1, "unauthorized": 1, "other": 0}
+    cap = _cap(
+        total_devices=3, online_healthy_devices=1,
+        usb_device_count=3, usb_root_hub_count=2,
+        adb_interface_count=3, adb_state_counts=state_counts,
+    )["capacity"]
+
+    assert cap["adb_interface_count"] == 3
+    assert cap["adb_state_counts"] == state_counts
+    # root hub 数只作空树判据输入，不上报（心跳体积预算内）：
+    assert "usb_root_hub_count" not in cap
+
+
+def test_l2_l3_l4_signals_default_to_none_without_wiring():
+    """未接线时行为与引入前一致（三键为 None、health 不新增 reason）。"""
+    result = _cap(total_devices=2, online_healthy_devices=2)
+    cap = result["capacity"]
+
+    assert cap["adb_interface_count"] is None
+    assert cap["adb_state_counts"] is None
+    assert "usb_tree_empty" not in result["health"]["reasons"]
+
+
+def test_new_payload_keys_within_heartbeat_budget():
+    """心跳 payload 增幅 <100B（#2902 验收项）。"""
+    import json
+
+    cap = _cap(
+        adb_interface_count=16,
+        adb_state_counts={"device": 14, "offline": 1, "unauthorized": 1, "other": 0},
+    )["capacity"]
+    new_keys = {k: cap[k] for k in ("adb_interface_count", "adb_state_counts")}
+    assert len(json.dumps(new_keys, separators=(",", ":"))) < 100

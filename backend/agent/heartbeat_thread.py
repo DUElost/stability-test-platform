@@ -537,19 +537,35 @@ class HeartbeatThread:
         )
         total_devices = len(devices_list)
 
-        # lsusb 对照计数：物理 USB 侧枚举到的疑似 Android 设备数。与上面的
-        # online_healthy（adb devices 口径）并排展示，差值暴露「设备在 USB 上
-        # 但 ADB 看不到」。失败返回 None（显示未知而非 0），不影响心跳主流程。
+        # lsusb 对照计数：物理 USB 侧枚举到的疑似 Android 设备数（+ root hub 数，
+        # #2902 空树判据的基线）。与上面的 online_healthy（adb devices 口径）并排
+        # 展示，差值暴露「设备在 USB 上但 ADB 看不到」。失败返回 None（显示未知而
+        # 非 0），不影响心跳主流程。
         try:
-            usb_device_count = device_discovery.count_usb_devices()
+            usb_device_count, usb_root_hub_count = (
+                device_discovery.count_usb_devices_and_root_hubs()
+            )
         except Exception as exc:
             logger.debug("usb_device_count_failed: %s", exc)
-            usb_device_count = None
+            usb_device_count, usb_root_hub_count = None, None
         if usb_device_count is not None and usb_device_count != online_healthy:
             logger.info(
                 "usb_adb_device_mismatch usb=%s adb_online_healthy=%s total_adb=%s",
                 usb_device_count, online_healthy, total_devices,
             )
+
+        # #2902：L2/L4 分辨信号——sysfs 里暴露 ADB 接口（ff:42）的设备数。
+        # 与 adb_state_counts.device 的差集 = L2（adb server 漏项）；接口数为 0
+        # 而 USB n > 0 = L4（设备侧无 ADB 接口）。纯只读，不参与槽位计算。
+        try:
+            adb_interface_count = device_discovery.count_adb_interface_devices()
+        except Exception as exc:
+            logger.debug("adb_interface_count_failed: %s", exc)
+            adb_interface_count = None
+
+        # #2902：L3——`adb devices` 的 state 分桶（device/offline/unauthorized/other）。
+        # 复用本拍已抓到的 devices_list（含 adb_state），不额外调 adb。
+        adb_state_counts = device_discovery.bucket_adb_states(devices_list)
 
         cap_result = compute_capacity(
             active_job_count=active_count,
@@ -560,6 +576,9 @@ class HeartbeatThread:
             mount_status=mount_status,
             adb_server_conflict=adb_server_conflict,
             usb_device_count=usb_device_count,
+            adb_interface_count=adb_interface_count,
+            adb_state_counts=adb_state_counts,
+            usb_root_hub_count=usb_root_hub_count,
         )
 
         with self._capacity_lock:
