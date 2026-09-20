@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from backend.api.response import ApiResponse, ok
 from backend.api.routes.auth import get_current_active_user, User
 from backend.core.audit import record_audit
+from backend.core.settings.scheduler import get_scheduler_settings
 from backend.core.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
 from backend.core.device_serial import is_placeholder_serial
 from backend.core.database import get_db
@@ -486,6 +487,34 @@ def _validate_assembled_lifecycle(
                 ),
             },
         )
+    # #2948：跨参数不变式在**写入边界**成立——此前 `barrier >= coord_timeout`
+    # 只在 Agent env 加载处校验（adr0026_params），Plan 填的 barrier 两个字段经
+    # dispatcher 原样进 lifecycle 后同样支配运行期行为（#872/#174 误杀前科），
+    # 但 PUT/POST 畅通（实测 barrier=5 被 200 接受）。比较基准取 `_sched()` 的
+    # 协调器存活窗——与 recycler 判死、env 校验同一真值源，不造第二套默认。
+    # barrier_max_wait 非空=绝对硬顶（#117：null 才是无上限）：硬顶短于存活窗
+    # 与不设 barrier 同效（host 一有迟滞即放弃同步），故同判。
+    coord_timeout = get_scheduler_settings().coordinator_heartbeat_timeout_seconds
+    for field, value in (
+        ("barrier_timeout_seconds", barrier_timeout_seconds),
+        ("barrier_max_wait_seconds", barrier_max_wait_seconds),
+    ):
+        if value is not None and value < coord_timeout:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "INVALID_BARRIER_CONFIGURATION",
+                    "message": (
+                        f"{field}={value} 小于协调器存活窗 coordinator_heartbeat_timeout"
+                        f"={coord_timeout}s：host 级 barrier 必须活得过协调器判死窗，"
+                        "否则批次将在正常迟滞处放弃同步（#872/#174 型误杀）。"
+                        "调大该值或删除本字段（barrier_timeout 留空=Agent 侧 env 默认；"
+                        "barrier_max_wait 留空=不设硬顶）。"
+                    ),
+                    "field": field,
+                    "coordinator_heartbeat_timeout_seconds": coord_timeout,
+                },
+            )
     lifecycle = _assemble_lifecycle_for_validation(
         steps, patrol_interval_seconds, timeout_seconds, barrier_timeout_seconds,
         barrier_max_wait_seconds,
@@ -1028,12 +1057,15 @@ def update_plan(
                 created_at=now,
             ))
     elif {"patrol_interval_seconds", "timeout_seconds",
-          "barrier_timeout_seconds"} & fields_set:
+          "barrier_timeout_seconds", "barrier_max_wait_seconds"} & fields_set:
+        # #2948：条件集补 barrier_max_wait_seconds——原漏项让「只改硬顶」的
+        # PUT 不进任何再校验；调用同时补第 5 参，否则 max_wait 恒不被比对。
         _validate_assembled_lifecycle(
             steps,
             plan.patrol_interval_seconds,
             plan.timeout_seconds,
             plan.barrier_timeout_seconds,
+            plan.barrier_max_wait_seconds,
         )
 
     record_audit(
