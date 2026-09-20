@@ -179,9 +179,19 @@ def scan_codex(codex_dir: str, slugs: list[str]) -> dict[str, tuple[int, str | N
     return {s: (len(sessions[s]), last_date[s]) for s in slugs}
 
 
-def is_hollow(age_days: int | None, strong_calls: int, stype: str) -> bool:
-    """HOLLOW 判定：强信号为零 × 分型观察窗；出生时间未知不判（证据不足）。"""
+def is_hollow(
+    age_days: int | None, strong_calls: int, stype: str, *, strong_source_present: bool = True
+) -> bool:
+    """HOLLOW 判定：强信号为零 × 分型观察窗；出生时间未知不判（证据不足）。
+
+    #2851：**强信号源不在场时不判洞**——`claude` 转录目录缺失而 codex 存在时，
+    `claude={}` 会让每个 skill 的 `strong_calls` 都是 0，于是「没有数据」被静默当成
+    「零调用」，超过观察窗的 skill 全部误判 HOLLOW（timer 恒红、表格还把未扫描的源
+    印成「Claude 调用 0 次 最近 从未」——那是把观测缺口说成观测事实）。
+    """
     if age_days is None:
+        return False
+    if not strong_source_present:
         return False
     return age_days >= HOLLOW_DAYS[stype] and strong_calls == 0
 
@@ -302,19 +312,23 @@ def main() -> int:
     print("# Claude 列=Skill 工具调用（判洞唯一依据）；Codex 列=SKILL.md 被读取的"
           "会话数（读取≠触发，审计噪声未甄别，仅供删留裁决参考）；"
           "判洞只依赖「是否为零」——零值可靠，正数仅代表有人知道它\n")
+    strong_present = "claude" in sources
     for it in items:
         total, last = claude.get(it["name"], (0, None))
         cx, cx_last = codex.get(it["name"], (0, None))
         age_days = (int((now - it["birth"]) / 86400) if it["birth"] else None)
         age_s = f"{age_days}d" if age_days is not None else "?"
         flag = ""
-        if is_hollow(age_days, total, it["type"]):
+        if is_hollow(age_days, total, it["type"], strong_source_present=strong_present):
             flag = f"  ⚠️ HOLLOW(≥{HOLLOW_DAYS[it['type']]}d/{it['type']})"
             hollow += 1
         codex_s = (f"{cx} 会话 最近 {cx_last or '—'}"
                    if "codex" in sources else "未扫")
+        # #2851：缺源时列里写「未扫」而不是「0 次/从未」——不给观测缺口编造观测事实
+        claude_s = (f"调用 {total:>3} 次 最近 {_fmt_last(last):<16}"
+                    if strong_present else "未扫（源不在场，不判洞）      ")
         print(f"[{it['dir']:<{width}}] 出生 {age_s:>4} {it['type']:<10} "
-              f"| Claude 调用 {total:>3} 次 最近 {_fmt_last(last):<16} "
+              f"| Claude {claude_s} "
               f"| Codex 读 {codex_s}{flag}")
         if not it["desc"]:
             print(f"{'':<{width+4}}⚠️ description 为空（S7 应已拦；此处兜底提示）")
