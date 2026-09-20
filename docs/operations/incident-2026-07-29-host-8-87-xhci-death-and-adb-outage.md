@@ -121,7 +121,7 @@ adb start-server
 
 | 项 | 说明 |
 |----|------|
-| **监控 `dmesg` / journal** | 对 Agent host 告警 `HC died` 或 `xhci_hcd.*not responding`，触发人工或自动 unbind/rebind / reboot |
+| **监控 `dmesg` / journal** | ~~对 Agent host 告警 `HC died` 或 `xhci_hcd.*not responding`，触发人工或自动 unbind/rebind / reboot~~ **已落地（#2900，2026-09-20）**：Agent 低频读 `journalctl -k`，`HC died` / `not responding` 且此刻 USB 一台都看不到 ⇒ `usb_host_controller_dead` reason（host DEGRADED，设备回树自动回落）；慢性 `-71/-110` 风暴 ⇒ `usb_link_degraded`。**仍不会自动 unbind/rebind**（#2900 的「不做什么」）：动作仍需人工 |
 | **USB Hub 供电与拓扑** | 减少 `0bda:0411` 级联层数；Hub 独立供电；避免热插拔风暴 |
 | **BIOS / fwupd** | 8.87 仍为 2.4.0；与 9.126 同属 Dell 老固件风险组，升级需 drain + reboot，见 9.126 §5 |
 | **Agent 侧** | #160：启动时确保单一 ADB server，避免恢复后设备拆分 |

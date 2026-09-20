@@ -54,3 +54,48 @@ def test_export_summary_uses_all_jobs_when_devices_truncated(
     assert len(data["devices"]) == 500
     assert all(d["status"] == JobStatus.COMPLETED.value for d in data["devices"])
     assert JobStatus.FAILED.value not in {d["status"] for d in data["devices"]}
+
+
+def test_export_summary_reports_failed_devices_2847(
+    db_session, sample_plan_run, sample_plan, sample_host,
+):
+    """#2847: summary 必须带 failed 键，markdown 的 "Failed devices" 才不是恒 0。
+
+    口径 = FAILED + ABORTED（未成功的设备，与 ``report_service`` 的运行报告一致）；
+    逐状态计数仍逐行可见。
+    """
+    statuses = [
+        JobStatus.COMPLETED.value,
+        JobStatus.FAILED.value,
+        JobStatus.FAILED.value,
+        JobStatus.ABORTED.value,
+    ]
+    devices = [
+        Device(
+            serial=f"export-2847-dev-{i}",
+            host_id=sample_host.id,
+            status=DeviceStatus.ONLINE.value,
+        )
+        for i in range(len(statuses))
+    ]
+    db_session.add_all(devices)
+    db_session.flush()
+    db_session.add_all([
+        JobInstance(
+            plan_run_id=sample_plan_run.id,
+            plan_id=sample_plan.id,
+            device_id=devices[i].id,
+            host_id=sample_host.id,
+            status=status,
+            pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+        )
+        for i, status in enumerate(statuses)
+    ])
+    db_session.commit()
+
+    data = export_mod.build_plan_run_export(db_session, sample_plan_run)
+    assert data["summary"]["failed"] == 3
+
+    markdown = export_mod.plan_run_export_to_markdown(data)
+    assert "- Failed devices: 3" in markdown
+    assert "- ABORTED: 1" in markdown  # 合计之外仍逐状态可见，不藏数
