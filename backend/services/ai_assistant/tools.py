@@ -16,6 +16,7 @@ from typing import Any
 from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
+from backend.core.audit import expand_resource_type_filter
 from backend.core.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
 from backend.models.audit import AuditLog
 from backend.models.enums import DeviceStatus, HostStatus, PlanRunStatus
@@ -424,7 +425,11 @@ def _q_audit_logs(db: Session, args: dict) -> str:
         q = q.filter(AuditLog.action.ilike(f"%{action}%"))
     resource_type = _opt_str(args.get("resource_type"), "resource_type", 64)
     if resource_type:
-        q = q.filter(AuditLog.resource_type == resource_type)
+        # #2872：同 feeds 的漏点——审计行 append-only（ADR-0015），按规范值精确匹配
+        # 会漏掉 09-19 前写入的 `job` 别名行；展开成「规范值 + 历史别名」。
+        q = q.filter(
+            AuditLog.resource_type.in_(expand_resource_type_filter(resource_type))
+        )
     logs = q.order_by(AuditLog.id.desc()).limit(limit).all()
     if not logs:
         return "没有匹配的审计记录。"

@@ -35,6 +35,19 @@ Python 3.11 下重新生成对应 lock。日常重生成沿用已有 pin；只�
 `tests/test_requirements_lock.py` 与 `tests/test_requirements_dev_lock.py` 校验 source/lock
 同步；测试和 lint 依赖不得加入生产 `requirements.txt`。
 
+### 依赖收敛台账（#739 面③）
+
+两项已知的依赖收敛/跟踪项，完整判据、三阶段路径与出口见
+[`2026-09-20-dependency-convergence-739.md`](../notes/process/2026-09-20-dependency-convergence-739.md)：
+
+| 依赖 | 现状 | 触发条件（命中任一即评估/排期） |
+|---|---|---|
+| `xlwt` / `xlrd` | 生产使用面仅 `backend/services/dedup_{scan,extract}.py` 读写 `.xls`（merge 报告写回）；`xlwt` 自 2017 无维护；`openpyxl` 不能读写 `.xls` ⇒ 替换 = 产物格式迁移 | Toolkit 侧支持 `.xlsx` 产物 / 产线不再消费 `.xls` / 两库在目标 Python 上失效 |
+| `apscheduler` | pin `>=4.0.0a6,<5.0`（4.x 仍为预发布） | 4.0 首个非预发布发布 / 使用面（执行器路由、动态作业、调度生命周期）出现缺陷或 CVE |
+
+`tests/test_excel_dependency_inventory.py` 冻结 `xlrd`/`xlwt` 的**生产**使用面：新增耦合必须先更新
+台账与迁移规划（测试夹具用这两个库不受限）。
+
 ## Lint 与本地门禁
 
 - Ruff 与 ESLint 都是阻塞门禁，ESLint 使用 `--max-warnings 0`；

@@ -24,6 +24,7 @@ from backend.core.metrics import (
     host_device_adb_state,
     host_online,
     is_prometheus_available,
+    sweep_stale_host_gauge_children,
     record_db_lock_waiters,
 )
 from backend.models.enums import DeviceStatus, HostStatus
@@ -251,6 +252,7 @@ async def metrics(
     _refresh_fleet_gauges(db)
     _refresh_host_device_adb_gauges(db)
     _refresh_lock_wait_gauges(db)
+    _sweep_push_host_gauge_children(db)
     data, content_type = get_metrics_response()
     return Response(content=data, media_type=content_type)
 
@@ -267,3 +269,27 @@ async def metrics_health():
         "status": "healthy",
         "prometheus_available": is_prometheus_available()
     }
+
+
+def _sweep_push_host_gauge_children(db: Session) -> None:
+    """#2873：拉取端差集清理推式 per-host gauge 的退役 host child。
+
+    live=「在册」（retired_at IS NULL）——短暂掉线 host 的末值有操作意义不清；
+    只处理「不再是容量」的（ADR-0038 D5），与 adb_state 的 #2791 差集同族但
+    live 口径更宽。失败只跳过本轮（不拖垮渲染），下个拉取周期自愈。
+    """
+    try:
+        live = {
+            str(hid)
+            for (hid,) in db.query(Host.id).filter(Host.retired_at.is_(None)).all()
+        }
+    except SQLAlchemyError:
+        logger.warning("metrics_push_gauge_sweep_query_failed", exc_info=True)
+        return
+    try:
+        removed = sweep_stale_host_gauge_children(live)
+        if removed:
+            logger.info("metrics_push_gauge_children_swept count=%d", removed)
+    except Exception:
+        # registry 状态异常不应让 /metrics 500：child 清理是尽力而为的卫生动作。
+        logger.warning("metrics_push_gauge_sweep_failed", exc_info=True)
