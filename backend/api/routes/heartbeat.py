@@ -19,7 +19,10 @@ from backend.core.metrics import (
     record_agent_outbox_pending,
     record_host_operation_concurrency,
 )
-from backend.services.dashboard_summary import device_update_is_material
+from backend.services.dashboard_summary import (
+    device_connectivity_changed,
+    device_update_is_material,
+)
 from backend.services.dashboard_summary_publisher import schedule_dashboard_summary_push
 from backend.api.schemas import HeartbeatIn
 from backend.api.routes.auth import verify_agent_secret
@@ -40,6 +43,24 @@ from backend.services.agent_host_heartbeat import (  # noqa: F401
     _suggested_heartbeat_interval,
     _suggested_log_rate_limit,
 )
+
+def _device_status_log_level(
+    *,
+    prev_status: str | None,
+    new_status: str | None,
+    is_new_device: bool,
+) -> int:
+    """#2960：设备业务状态的逐行日志该用哪个级别。
+
+    只有**翻转**（或新设备首见）值得 INFO。判定必须在 `device.status` 赋值**之后**做，
+    参数分开传就是为了让「新值 vs 心跳前的旧值」这件事在签名上是显式的——写成
+    `device.status != prev_status` 放在赋值之前，两侧同为旧值，恒判稳态，
+    于是真事故也会被静音（本仓第一次写就踩了这个，见调用点注释）。
+    """
+    if is_new_device or new_status != prev_status:
+        return logging.INFO
+    return logging.DEBUG
+
 
 def _should_write_hardware_snapshot(device: Device, now: datetime) -> bool:
     """True when hardware metrics may be persisted (downsampling gate)."""
@@ -459,7 +480,31 @@ def _process_heartbeat_with_db(
                     and device.adb_state not in ("offline", "unknown", "")):
                 online_healthy_count += 1
 
-            logger.info(f"device_adb_update: serial={serial}, adb_state={device.adb_state}, adb_connected={device.adb_connected}, network_latency={dev_data.get('network_latency')}")
+            # #2960：**稳态不占 INFO**。同一台设备的同一事实每 5s 重播一次，第 2 次起
+            # 信息量为 0（单日 392 万行、占 backend.log 68% 就是这么来的）；按**变化**留痕
+            # 恰好只保留有用的那部分——「什么时候翻的」。
+            # 刻意降 DEBUG 而不是删掉，且文案逐字不变：排查单机时把该 logger 调到 DEBUG
+            # 即恢复全量逐设备轨迹，既有 grep 习惯不破。判据与「要不要落库」共用同一个
+            # `device_connectivity_changed`（两份定义迟早一个变吵一个变哑）。
+            logger.log(
+                (
+                    logging.INFO
+                    if is_new_device
+                    or device_connectivity_changed(
+                        prev_adb_state=prev_adb_state,
+                        new_adb_state=device.adb_state,
+                        prev_adb_connected=prev_adb_connected,
+                        new_adb_connected=device.adb_connected,
+                    )
+                    else logging.DEBUG
+                ),
+                "device_adb_update: serial=%s, adb_state=%s, adb_connected=%s, "
+                "network_latency=%s",
+                serial,
+                device.adb_state,
+                device.adb_connected,
+                dev_data.get("network_latency"),
+            )
 
             # Update hardware info (downsampled — connectivity always updates)
             write_hw = _should_write_hardware_snapshot(device, now)
@@ -492,18 +537,57 @@ def _process_heartbeat_with_db(
             # Phase 6c: Business status — based on ADB connection and active lease
             # ADB 已发现设备但状态非 "device"（如 unauthorized）：设备物理在线但不可用，
             # 区别于纯粹未被发现的 OFFLINE，需要操作员介入（如重新授权调试）。
+            # #2960：状态四支同理——只在状态**翻转**（或新设备首见）时占 INFO。BUSY↔ONLINE
+            # 每次 job 起止各一条，仍是有效审计量级；稳态 ONLINE 每设备每小时 720 条重复才是
+            # 噪声。级别一律在**赋值之后**算：在这里第一版写成「链前算一次」，比的是
+            # 旧值与旧值 ⇒ 恒 DEBUG，连真翻转都被静音（用例 test_adb_fact_flip_still_logs_at_info
+            # 当场抓到）。判据只有一个来源 `_device_status_log_level`，四支共用。
             if device.adb_state not in ("device", "offline", "unknown", "", None) and not device.adb_connected:
                 device.status = "ERROR"
-                logger.info(f"device_status_error: serial={serial}, adb_state={device.adb_state}")
+                logger.log(
+                    _device_status_log_level(
+                        prev_status=prev_status,
+                        new_status=device.status,
+                        is_new_device=is_new_device,
+                    ),
+                    "device_status_error: serial=%s, adb_state=%s",
+                    serial,
+                    device.adb_state,
+                )
             elif not device.adb_connected:
                 device.status = "OFFLINE"
-                logger.info(f"device_status_offline: serial={serial}, reason=adb_connected_false")
+                logger.log(
+                    _device_status_log_level(
+                        prev_status=prev_status,
+                        new_status=device.status,
+                        is_new_device=is_new_device,
+                    ),
+                    "device_status_offline: serial=%s, reason=adb_connected_false",
+                    serial,
+                )
             elif device.id and device.id in busy_device_ids:
                 device.status = "BUSY"
-                logger.info(f"device_status_busy: serial={serial}, device_id={device.id}")
+                logger.log(
+                    _device_status_log_level(
+                        prev_status=prev_status,
+                        new_status=device.status,
+                        is_new_device=is_new_device,
+                    ),
+                    "device_status_busy: serial=%s, device_id=%s",
+                    serial,
+                    device.id,
+                )
             else:
                 device.status = "ONLINE"
-                logger.info(f"device_status_online: serial={serial}, adb_connected=true, no_active_lease")
+                logger.log(
+                    _device_status_log_level(
+                        prev_status=prev_status,
+                        new_status=device.status,
+                        is_new_device=is_new_device,
+                    ),
+                    "device_status_online: serial=%s, adb_connected=true, no_active_lease",
+                    serial,
+                )
 
             if is_new_device or device_update_is_material(
                 prev_status=prev_status,
