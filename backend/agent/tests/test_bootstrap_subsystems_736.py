@@ -172,14 +172,14 @@ def test_start_disk_subsystems_enables_watcher_stack():
 
 
 def test_main_wires_bootstrap_helper():
-    import backend.agent.main as agent_main
+    import backend.agent.agent_application as app
     from tools.dev.source_anchor import SourceGuard
 
-    # 正锚点：bootstrap 调用仍在 main；否定：不得回潮直连 LogArchiver.configure
-    guard = SourceGuard.of_module(agent_main).anchored(
+    # 正锚点：bootstrap 调用在编排层；否定：不得回潮直连 LogArchiver.configure
+    guard = SourceGuard.of_module(app).anchored(
         "start_disk_and_watcher_subsystems("
     )
     guard.assert_absent(
         "LogArchiver.instance().configure(",
-        why="#736 disk/watcher bootstrap 已抽出，main 不得回潮直连 LogArchiver 配置",
+        why="#736 disk/watcher bootstrap 已抽出，编排层不得回潮直连 LogArchiver 配置",
     )
