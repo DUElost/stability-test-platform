@@ -56,12 +56,14 @@ cat /sys/bus/usb/devices/<dev>:1.0/interface      # "MIDI function" = MIDI-only
 
 - `USB n` 徽标（`capacity.usb_device_count`，`frontend/src/components/network/ExpandableHostTable.tsx`）——L4 在页面上唯一可见的信号；
 - `adb_multiple_servers`（warning 级 reason → DEGRADED，`backend/agent/capacity_reporter.py:156`），配套自愈 `ensure_single_adb_server()`（`backend/agent/device_discovery.py:178`，需 `STP_ADB_AUTO_REPAIR=1` 且无在跑任务）；
+- **L1 的两个内核判据已落地（#2900）**：`usb_host_controller_dead`（内核报 `HC died` / `xHCI … not responding` **且此刻 USB 一台都看不到** ⇒ DEGRADED；设备回树自动回落）与 `usb_link_degraded`（窗口内 `error -71/-110` 或「cable is bad」超阈，对应本表的慢性劣化）。实现：`backend/agent/kernel_usb_faults.py`（低频读 `journalctl -k`，首扫读整段 boot，失败按「未知」不报）；前端标签见 `ExpandableHostTable.tsx` 的 `REASON_LABELS`；
 - 刷机链路的同类记录：[`firmware-requests/2026-08-26-persist-sys-usb-config-adb.md`](./firmware-requests/2026-08-26-persist-sys-usb-config-adb.md)（刷完 userdata 清空 → adbd 不启动 → `adb devices` 连 unauthorized 都不显示 → 需人工开一次 USB 调试）。
 
 缺口（仅记录，未改行为）：
 
 - `capacity` 只上报 `online_healthy_devices` 与 `usb_device_count`，**区分不了 L2/L3/L4**——三者都可能表现为「在线 0 + USB n>0」；要远程自诊断需 Agent 补报接口层信息（如 `ff:42` 计数或按 state 的 adb 计数）；
-- adb 一台都枚举不到时 `total_devices == 0`，`adb_low_healthy_devices` 门禁不触发（`capacity_reporter.py:117,141`），这些 host 仍显示 HEALTHY。
+- adb 一台都枚举不到时 `total_devices == 0`，`adb_low_healthy_devices` 门禁不触发（`capacity_reporter.py:117,141`），这些 host 仍显示 HEALTHY。**#2900 只补了「有内核证据的失明」**：无证据的零设备仍走本缺口，归 #2902；
+- L1 的**告警通道**未接：平台告警规则文件当前无加载路径（#2880），故本批只落 reason → DEGRADED，不写不会生效的告警规则。
 
 ## 4. 2026-09-14 实证
 

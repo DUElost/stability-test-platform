@@ -14,8 +14,16 @@ global:
 # 告警规则目录（与 config.file 同级的 rules/）：installer 把仓库里的
 # deploy/prometheus/site-alerts.yml（**站点可见面子集**，#2643 方向 1）渲到
 # etc/stp/prometheus/rules/。平台全量规则（alerts-stability-platform.yml）由控制面
-# 自己的挂载路径承接（ADR-0011 待挂载），站点不装——它引用的控制面指标在这里
-# 结构上无样本，装了只会让「监控就绪」看起来更完整。
+# 自己的挂载路径承接，站点不装——它引用的控制面指标在这里结构上无样本，装了只会让
+# 「监控就绪」看起来更完整。
+#
+# #2880 实测（控制面宿主 2026-09-20，只读）：该文件**已有人工副本**落在
+# /etc/prometheus/rules/（副本时间 2026-09-17 22:36，325 行），而仓库同文件 393 行
+# ——**缺 StabilityHostAdbOfflineConcentration 与 StabilityPgSchemaGuessing 两条**。
+# 即「挂了文件」≠「规则在评估」：副本不会自己跟着仓库走，同步是**人工步骤**
+# （重放仓库文件到该路径 + `POST http://127.0.0.1:9091/-/reload`；unit 已开
+# --web.enable-lifecycle，无需重启）。ADR-0011 的**正式挂载**（随安装链落地、可复现）
+# 仍未落地——人工副本是过渡形态，缺的是一条能随仓库更新的路径。
 # **没有这一段，规则装了也不会被加载**——#2488 之前模板里根本没有 rule_files，
 # 于是按流程装出来的站点结构上不可能产生任何告警，而 installer 照样报 monitoring_ready
 # （它只看服务起没起、/-/ready 通不通）。

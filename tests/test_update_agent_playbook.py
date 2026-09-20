@@ -2,8 +2,15 @@ from pathlib import Path
 
 import yaml
 
+from tools.dev.source_anchor import SourceGuard
 
 PLAYBOOK = Path("tools/ansible/playbooks/update_agent.yml")
+_PLAYBOOK_REL = "tools/ansible/playbooks/update_agent.yml"
+
+#: 锚点必须是**当前真实存在**的语义位：锚点找不到 = `AnchorDrift`（用例已过期，
+#: 改指新真源），禁词复活 = `FormRegression`（防线抓到了东西）。见 #2639。
+_SYNC_TASK_ANCHOR = "Sync changed agent code into installed agent directory"
+_API_URL_LINE_ANCHOR = 'line: "API_URL={{ agent_upgrade_api_url }}"'
 
 
 def _tasks():
@@ -16,11 +23,25 @@ def _tasks():
 
 
 def test_update_agent_syncs_directly_without_remote_staging_copy():
-    text = PLAYBOOK.read_text(encoding="utf-8")
+    """更新链直接 rsync 到安装目录，不得回到「先把整棵树 copy 到远端临时目录」的旧形态。
 
-    assert "Copy latest agent source tree to remote temp directory" not in text
-    assert "agent_remote_tmp_dir" not in text
-    assert "ansible.builtin.copy:\n        src: \"{{ agent_source_dir }}/\"" not in text
+    旧写法是裸 `assert 词 not in text`：playbook 一旦改名或这段同步逻辑搬走，它会**恒真**
+    而继续报绿（#2639）。先以同步任务名证明扫的还是那段实现，再判退役形态。
+    """
+    guard = SourceGuard.of_repo_path(_PLAYBOOK_REL).anchored(_SYNC_TASK_ANCHOR)
+
+    guard.assert_absent(
+        "Copy latest agent source tree to remote temp directory",
+        why="远端暂存 copy 任务已随直连 rsync 退役，复活即回到两段式发布",
+    )
+    guard.assert_absent(
+        "agent_remote_tmp_dir",
+        why="远端临时目录变量只为旧暂存形态存在，留着就是死配置面",
+    )
+    guard.assert_absent(
+        "ansible.builtin.copy:\n        src: \"{{ agent_source_dir }}/\"",
+        why="整棵源码树的 copy 模块会带 .git/__pycache__ 越界，已由 rsync 过滤策略取代",
+    )
 
 
 def test_update_agent_previews_changes_before_syncing_or_restarting():
@@ -134,5 +155,9 @@ def test_api_url_refresh_never_writes_empty_override():
     text = PLAYBOOK.read_text(encoding="utf-8")
 
     assert 'line: "API_URL={{ agent_upgrade_api_url }}"' in text
-    assert 'line: "API_URL={{ agent_api_url }}"' not in text
+    # 先锚在**替代它的那一行**上：回写目标一旦被搬走，这条判据必须报「用例过期」而不是恒真
+    SourceGuard.of_repo_path(_PLAYBOOK_REL).anchored(_API_URL_LINE_ANCHOR).assert_absent(
+        'line: "API_URL={{ agent_api_url }}"',
+        why="#1250：未注入的 agent_api_url 默认空，无条件回写会把心跳 URL 打成空",
+    )
     assert "Resolve upgrade gate target (explicit vars win, else deployed .env)" in text
