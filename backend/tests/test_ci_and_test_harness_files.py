@@ -2,8 +2,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from tools.dev.source_anchor import SourceGuard
 
 ROOT = Path(__file__).resolve().parents[2]
+
+#: 锚点编在**取代被禁形态的那一样东西**上（#2639 第七批）：真容器夹具取代 sqlite 兜底、
+#: 人工测试清单取代已下线的 PR Agent 文案。
+_CONFTEST_REL = "backend/tests/conftest.py"
+_POSTGRES_CONTAINER_ANCHOR = "PostgresContainer"
+_PR_TEMPLATE_REL = ".github/pull_request_template.md"
+_MANUAL_TEST_CHECKLIST_ANCHOR = "## 测试"
 
 
 def test_ci_workflow_runs_agent_tests_frontend_vitest_and_uses_lockfile():
@@ -18,7 +26,10 @@ def test_ci_workflow_runs_agent_tests_frontend_vitest_and_uses_lockfile():
 def test_backend_conftest_uses_postgres_testcontainers_not_sqlite_fallback():
     conftest = (ROOT / "backend" / "tests" / "conftest.py").read_text(encoding="utf-8")
 
-    assert "ALLOW_SQLITE_TESTS" not in conftest
+    SourceGuard.of_repo_path(_CONFTEST_REL).anchored(_POSTGRES_CONTAINER_ANCHOR).assert_absent(
+        "ALLOW_SQLITE_TESTS",
+        why="sqlite 兜底会让 PG 专属行为（JSONB/表达式索引/约束名）在 CI 里静默不测",
+    )
     assert "PostgresContainer" in conftest
 
 
@@ -40,9 +51,9 @@ def test_testing_doc_does_not_advertise_sqlite_fallback():
 
 def test_pr_template_does_not_advertise_retired_pr_agent():
     """PR Agent advisory review 已下线：模板不得再引导 /review 或承诺 AI 审查。"""
-    template = (ROOT / ".github" / "pull_request_template.md").read_text(encoding="utf-8")
-
-    assert "PR-Agent" not in template
-    assert "PR Agent" not in template
-    assert "/review" not in template
-    assert "security concerns 会阻断合入" not in template
+    guard = SourceGuard.of_repo_path(_PR_TEMPLATE_REL).anchored(_MANUAL_TEST_CHECKLIST_ANCHOR)
+    for retired in ("PR-Agent", "PR Agent", "/review", "security concerns 会阻断合入"):
+        guard.assert_absent(
+            retired,
+            why="PR Agent advisory review 已下线：模板再引导它会让作者把安全性交给不存在的审查",
+        )
