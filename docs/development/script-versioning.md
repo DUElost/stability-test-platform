@@ -24,6 +24,22 @@ Tool Contract + 包存储，既有工具族的新版本目录允许继续 legacy
 - `STP_SCRIPT_ROOT` 必须显式配置；扫描机与运行机不同时另设
   `STP_SCRIPT_RUNTIME_ROOT`。
 
+- **待激活对账（#2931）**：「合入 → 到部署树 → scan 注册 → `plan_step` 重指」四道里，
+  第 3 道做没做此前无任何东西会喊（`check_unreferenced_script_versions` 的输入是
+  DB 行，结构性看不见「磁盘有、库无行」）。收尾判据：新版本合入后跑
+
+  ```bash
+  STP_SCRIPT_ROOT=<部署树>/backend/agent/scripts \
+    python -m backend.scripts.check_unreferenced_script_versions --pending-activation
+  ```
+
+  确认它**不再列出该版本**——视图空才是「磁盘 head 均已注册且激活」的证据。
+  三态：`unregistered`=库无行（scan 未跑或跑在旧树）；`inactive`=有行未激活
+  （反激活遗留）；不列出=已生效。按族 **head 版本**报告（族内旧版零引用是
+  #735 退役面，不进此账——存量 backlog 会把真滞后淹掉，判据落目录行/数据行，
+  不做散字符串相邻匹配）。工具只读；退出码 0=对账完成（账本非门禁），
+  2=`STP_SCRIPT_ROOT` 未设=无从判定，不得读成「没有落后项」。
+
 ## 已发布版本不可变
 
 `script.content_sha256` 是扫描时冻结的期望值。原地修改已发布版本只会产生 conflict，

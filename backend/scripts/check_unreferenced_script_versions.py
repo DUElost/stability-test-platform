@@ -11,6 +11,7 @@
     python -m backend.scripts.check_unreferenced_script_versions --json
     python -m backend.scripts.check_unreferenced_script_versions --name flash_firmware
     python -m backend.scripts.check_unreferenced_script_versions --guard   # 巡检：超期零引用仍活跃 → exit 1
+    STP_SCRIPT_ROOT=... python -m backend.scripts.check_unreferenced_script_versions --pending-activation  # #2931 待激活视图
     python backend/scripts/check_unreferenced_script_versions.py --guard   # 路径形态等价
 
 只读 SELECT；不写库、不改状态。退出码：默认恒 0（诊断工具，非门禁）；`--guard` 是显式
@@ -22,7 +23,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
 import sys
+from collections.abc import Iterable
 from datetime import date
 from pathlib import Path
 
@@ -46,7 +50,7 @@ from backend.services.script_retirement import (
     days_until_cooldown_expiry,
     retirement_candidates,
     version_key,
-)
+)  # version_key 同供待激活视图使用（#2931）
 
 # `--guard` 三个判定码之外的第四个退出码：工具自身异常，与 0/1/2 正交（不是判定结果）。
 GUARD_ERROR_EXIT = 3
@@ -152,6 +156,60 @@ def _report(
     return plan, hold
 
 
+# ── #2931：待激活视图（磁盘 head 版本 vs script 表）─────────────────────────
+# 判据按票面教训落在**目录行与数据行**上，不做散字符串相邻匹配；每族只看磁盘
+# head 版本——#735 的存量零引用 backlog 会把全量对拍淹掉（今天实测踩过），而
+# 「激活滞后」的定义就在 head 上：族内旧版未引用是退役问题，head 缺行/未激活
+# 才是「修复合入了却不生效」的上线问题。三态：
+#   unregistered（script 表无行）→ 第 3 道（scan 注册）未做；
+#   inactive（有行但 is_active=false）→ 反激活遗留/退役误伤；
+#   不列出 active——视图的输出即「落后集合」，空 = 全部生效，
+#   与 script-versioning.md 的收尾判据「合入后该视图不再列出它」同构。
+
+_DIR_VERSION_RE = re.compile(r"^v(.+)$")
+
+
+def scan_disk_script_versions(root: Path) -> dict[str, list[str]]:
+    """枚举 `STP_SCRIPT_ROOT` 下 `<name>/v<version>/` 目录（非法名/非目录跳过）。"""
+    out: dict[str, list[str]] = {}
+    if not root.is_dir():
+        return out
+    for fam in sorted(root.iterdir()):
+        if not fam.is_dir() or fam.name.startswith((".", "_")):
+            continue
+        versions: list[str] = []
+        for child in fam.iterdir():
+            if not child.is_dir():
+                continue
+            m = _DIR_VERSION_RE.match(child.name)
+            if m and m.group(1):
+                versions.append(m.group(1))
+        if versions:
+            out[fam.name] = sorted(versions)
+    return out
+
+
+def pending_activation_view(
+    disk: dict[str, list[str]],
+    db_rows: Iterable[dict],  # {name, version, is_active}
+    *,
+    name_filter: "str | None" = None,
+) -> list[dict]:
+    """每族磁盘 head 版本（version_key 最大）的激活状态；只返回落后项。"""
+    by_key = {(r["name"], r["version"]): bool(r["is_active"]) for r in db_rows}
+    lagging: list[dict] = []
+    for name, versions in sorted(disk.items()):
+        if name_filter and name != name_filter:
+            continue
+        head = max(versions, key=version_key)
+        key = (name, head)
+        if key not in by_key:
+            lagging.append({"name": name, "head_version": head, "state": "unregistered"})
+        elif not by_key[key]:
+            lagging.append({"name": name, "head_version": head, "state": "inactive"})
+    return lagging
+
+
 def _evaluate(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json", action="store_true", help="输出 JSON")
@@ -170,6 +228,12 @@ def _evaluate(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--today",
         help="判定基准日 YYYY-MM-DD（默认取本机日期；测试/复算用）",
+    )
+    parser.add_argument(
+        "--pending-activation",
+        action="store_true",
+        help="待激活视图（#2931）：枚举 STP_SCRIPT_ROOT 的磁盘 head 版本与 script 表对账，"
+        "只列 unregistered/inactive——版本上线五步的第 3 道有没有做，从此可查",
     )
     args = parser.parse_args(argv)
     today = date.fromisoformat(args.today) if args.today else date.today()
@@ -191,6 +255,28 @@ def _evaluate(argv: list[str] | None = None) -> int:
 
     if args.name:
         rows = [r for r in rows if r["name"] == args.name]
+
+    if args.pending_activation:
+        script_root = (os.getenv("STP_SCRIPT_ROOT") or "").strip()
+        if not script_root:
+            # 与 scan 端点同姿势：根未配置 = 无从判定（exit 2），不是「没有落后项」。
+            print("PENDING UNKNOWN: STP_SCRIPT_ROOT 未设置，磁盘侧不可枚举", file=sys.stderr)
+            return 2
+        lagging = pending_activation_view(
+            scan_disk_script_versions(Path(script_root)), rows,
+            name_filter=args.name,
+        )
+        if args.json:
+            print(json.dumps({"pending_activation": lagging}, ensure_ascii=False, indent=2))
+        elif not lagging:
+            print("pending-activation: 全部脚本族磁盘 head 版本均已在库且 active（无待激活项）")
+        else:
+            print(f"pending-activation: {len(lagging)} 个族 head 落后（未注册/未激活）：")
+            for item in lagging:
+                print(f"  {item['name']} v{item['head_version']}  -> {item['state']}")
+        # 视图是账本不是门禁：退出码 0 表「对账完成」；落后项的处置走版本五步，
+        # 不在此处判红（guard 语义保留给 #735 的退役巡检）。
+        return 0
 
     candidates = [r for r in rows if r["refs"] == 0 and r["is_active"]]
     facts = build_facts(rows, usage)
