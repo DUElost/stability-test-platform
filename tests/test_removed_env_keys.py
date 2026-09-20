@@ -206,8 +206,9 @@ def test_guard_discriminates_bare_from_annotated(tmp_path: Path) -> None:
 def test_history_exclusion_is_load_bearing(tmp_path) -> None:
     """排除面必须**承重**：留档里确有裸引用，若不排除就会追改历史。
 
-    取具体文件而不是「目录名不在扫描集合里」——`tools/archive/` 与
-    `docs/archive/` 同名不同义，按目录名断言会被它撞出假红（实测）。
+    取具体文件而不是「目录名不在扫描集合里」——历史上 `tools/archive/` 与
+    `docs/archive/` 同名不同义，按目录名断言会被它撞出假红（实测；`tools/archive/`
+    已随 #739 面③ 连墓碑一并删除，判据仍取具体文件）。
     """
     from_path = REPO / "docs" / "archive" / "openspec" / "specs" / "session-lifecycle" / "spec.md"
     note = REPO / "docs" / "notes" / "bug-fix" / "2026-09-13-ghost-configs-dead-metrics-737.md"
