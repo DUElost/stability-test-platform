@@ -69,11 +69,13 @@ ROOT = Path(__file__).resolve().parents[2]
 #:   main 406 → 320 → 封顶 **336**。
 #: - 2026-09-20 十七次下调（#736：claim loop 外壳抽出 `agent_loop.py`）：
 #:   main 320 → 269 → 封顶 **283**。
+#: - 2026-09-20 十八次下调（#736：薄壳 `AgentApplication`）：
+#:   main 269 → 33 → 封顶 **34**。
 CEILINGS: dict[str, int] = {
     "backend/api/routes/plan_runs.py": 507,
     "backend/api/routes/agent_api.py": 411,
     "backend/api/routes/projects.py": 378,
-    "backend/agent/main.py": 283,
+    "backend/agent/main.py": 34,
 }
 
 
