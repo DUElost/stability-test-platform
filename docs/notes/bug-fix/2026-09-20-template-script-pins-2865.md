@@ -5,14 +5,14 @@ Class: bug-fix
 
 ## Decision
 
-#2865：`check_device` v1.0.1 与 `monkey_setup` v2.3.8 已合入主线，但
+#2865：`check_device` v1.0.2 与 `monkey_setup` v2.3.9 已合入主线，但
 `backend/schemas/pipeline_templates/*.json` 仍钉 `1.0.0`，仓库侧零引用。
 脚本执行按精确版本解析、无 latest 兜底 ⇒ 从模板新建的 Plan 带不到修复。
 
 本 PR 只做仓库侧收尾：
 
-1. 8 个模板的 `script:check_device` → `1.0.1`；`monkey.json` /
-   `monkey_watcher_patrol.json` 的 `script:monkey_setup` → `2.3.8`
+1. 8 个模板的 `script:check_device` → `1.0.2`；`monkey.json` /
+   `monkey_watcher_patrol.json` 的 `script:monkey_setup` → `2.3.9`
    （钉值取自磁盘最新目录，与当时 `origin/main` 一致）；
 2. 守卫 `tests/test_pipeline_template_script_pins_2865.py`：上述两族
    「模板 pin == 磁盘最新」对拍，防止再出现「版本合入、模板未钉」；
@@ -22,8 +22,8 @@ Class: bug-fix
 **明确不做**：`POST /scripts/scan` 与存量 `plan_step` 重指——生产写操作，
 需运维授权；未做前周期链上的既有 Plan 仍跑旧版（与 issue 边界一致）。
 
-在飞的 #2802（`check_device` v1.0.2）与 #2862（`monkey_setup` v2.3.9）合入时，
-本守卫会逼它们同批再钉模板——这是刻意的耦合，不是遗漏。
+#2802（`check_device` v1.0.2）与 #2862（`monkey_setup` v2.3.9）已合入 main；
+本 PR 在追 main 后由守卫逼出同批再钉——证明耦合有效。
 
 ## Alternatives
 
