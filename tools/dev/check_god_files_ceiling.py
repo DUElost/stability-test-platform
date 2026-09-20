@@ -61,11 +61,13 @@ ROOT = Path(__file__).resolve().parents[2]
 #:   main 630 → 536 → 封顶 **563**。
 #: - 2026-09-19 十三次下调（#736：SIO/LocalDB 抽出 `local_runtime.py`）：
 #:   main 536 → 503 → 封顶 **529**。
+#: - 2026-09-20 十四次下调（#736：heartbeat 接线抽出 `heartbeat_bindings.py`）：
+#:   main 503 → 461 → 封顶 **485**。
 CEILINGS: dict[str, int] = {
     "backend/api/routes/plan_runs.py": 507,
     "backend/api/routes/agent_api.py": 411,
     "backend/api/routes/projects.py": 378,
-    "backend/agent/main.py": 529,
+    "backend/agent/main.py": 485,
 }
 
 

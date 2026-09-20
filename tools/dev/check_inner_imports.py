@@ -46,7 +46,9 @@ SCAN_DIRS = (ROOT / "backend", ROOT / "tools", ROOT / "scripts")
 #: 升为模块顶层 → **606 → 604**。
 #: 2026-09-19 #736 `local_runtime`：DLE `bind_local_db` 双形态 import 升顶层
 #: → **604 → 602**。
-_BASELINE = 602
+#: 2026-09-20 #736 `heartbeat_bindings`：`read_artifact_digest` 双形态 + 
+#: `patrol_recovery` 顶层化 → **602 → 599**。
+_BASELINE = 599
 
 _FROZEN_SCRIPT_RE = re.compile(r"^backend/agent/scripts/[^/]+/v[0-9][^/]*/")
 _FROZEN_ALEMBIC_PREFIX = "backend/alembic/versions/"
