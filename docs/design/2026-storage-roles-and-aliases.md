@@ -130,6 +130,8 @@ ADR-0025 / 方案 C 正文里大量「15.4」= **中心存储这个角色**，�
 **现态**为 `tools/{name}/` 下的版本化源码目录，由 Agent 经路径 env 配置调用（展锐三工具族，
 legacy 例外，见 ADR-0033 v1.2 §5.4）；**终态（条件落地）**为
 `tools/{name}/{version}/` 的 `.tar.gz` + sha256 校验（触发条件见同节）。
+**2026-09-20 评估**：§5.4 三条均**未触发**，包存储不排期——见
+[`2026-09-20-adr0033-package-store-trigger-assessment.md`](../notes/architecture/2026-09-20-adr0033-package-store-trigger-assessment.md)。
 
 ### 4.5 PG / Redis
 

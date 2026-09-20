@@ -1,7 +1,7 @@
 # ADR-0033：外部工具统一接入契约规范与包管理解耦模型（Tool-Kit Ecosystem Integration）
 
-- 状态：**Accepted（v1.5）**
-- 落地状态：**部分落地**（Phase 2 控制面 B5 样板·选项 A：薄 `DedupMergeEngine` 包现态 `start_log_scan -merge_files_list`；Scan-Result-GT 仍仅 Agent B2；**不做**包存储 / Phase 3；D0/D3 权威已生效——见 §5）
+- 状态：**Accepted（v1.6）**
+- 落地状态：**部分落地**（Phase 2 控制面 B5 样板·选项 A：薄 `DedupMergeEngine` 包现态 `start_log_scan -merge_files_list`；Scan-Result-GT 仍仅 Agent B2；**包存储未触发、不排期**——见 §5.4 评估锚；Phase 3 未做；D0/D3 权威已生效——见 §5）
 - 优先级：P1
 - 目标里程碑：M7
 - 日期：2026-09-03
@@ -21,6 +21,7 @@
 | v1.3 | 2026-09-18 | **D1 刷机补登记**：Tier 3 典型工具增列 `flash_firmware` / `flash_preflight`；原厂 flashtool 不入仓；提权面仍归 ADR-0037 D5（#2546 F-5） |
 | v1.4 | 2026-09-18 | **Phase 2 阻塞登记**（非决策变更）：控制面 unisoc/`Scan-Result-GT` `DedupMergeEngine` 样板与 ADR-0032 D3「同一 merge 工具」+ GT 仅 `-d` CLI 冲突；停做适配器，待 A/B/C 出口（#745） |
 | v1.5 | 2026-09-19 | **Phase 2 选项 A 拍板落地**：样板 = 包 **B5** 现态 `start_log_scan -merge_files_list`（两平台同一工具）；Scan-Result-GT **继续只做 B2** Agent 主机汇总，不插 merge 循环；纠正 v1.0–v1.4「unisoc GT = DedupMergeEngine」措辞；薄适配器 `backend/services/dedup/`；不做包存储 / Phase 3 / 不修订 D3（#745 / #2546） |
+| v1.6 | 2026-09-20 | **包存储触发条件评估锚**（非决策变更）：§5.4 三条对照仓内/文档现态 → **未触发**；评估正本 [`2026-09-20-adr0033-package-store-trigger-assessment.md`](../notes/architecture/2026-09-20-adr0033-package-store-trigger-assessment.md)；不改 D 决策、不排期 tar.gz/`tools_cache`（#745 / #2546） |
 
 ---
 
@@ -193,6 +194,7 @@ ADR-0033 自 2026-09-03 Accepted 起至 2026-09-10 **无任何落地提交**（�
 | 展锐三工具族（`Start-Log-Scan` / `Monkey-Log-Scan-GT-SPRD` / `Scan-Result-GT`） | 中心存储 `tools/{name}/` 下的**未打包源码目录** + `STP_UNISOC_*` / `STP_AGENT_UNISOC_*` 路径键 | ① 仅限这三个已存在族，**不得扩散**到新族或新工具；② 路径键必须登记在 `docs/development/environment-variables.md`（本次已补）；③ **不得再新增工具私有 env 键**——新增即违反 D0 分级准入与设计文档 §6「环境去黑盒化」 |
 
 - **设计文档 §6「环境去黑盒化」就此收窄**：Tier 1 平台工具（`Start-Log-Scan`）与 Tier 2 主机工具（展锐采集 / 汇总去重）的路径键属上述既有例外；Tier 3 设备端工具（`scripts/` 内已发布脚本族）继续沿用既有版本目录约定，不引入工具私有路径变量。
+- **评估结论锚（v1.6，非决策变更）**：2026-09-20 对账三条触发条件 → **未触发**（无第二 Tier1/2 包化族、无 `tools/` 复制/就地修改事故、Phase 3 未启动）。书面结论与过渡纪律强化见 [`2026-09-20-adr0033-package-store-trigger-assessment.md`](../notes/architecture/2026-09-20-adr0033-package-store-trigger-assessment.md)。**在触发前不得排期包存储实现。**
 
 ### 5.5 裁定四：未落地状态显式化（决策效力与实现进度分离）
 
@@ -203,6 +205,8 @@ ADR-0033 自 2026-09-03 Accepted 起至 2026-09-10 **无任何落地提交**（�
 ### 5.6 对账与复议触发器
 
 **本次同步面**：`docs/adr/README.md` 主表 + M7 看板、`docs/DOC-MAP.md` 行、`docs/development/script-versioning.md` 指针、`docs/reviews/TOOLKIT_INTEGRATION_FEASIBILITY_2026-08-26.md` §6 承接补注（4-P1 已由 ADR-0032 承接）。
+
+**包存储触发对账（v1.6）**：最新书面评估见 [`2026-09-20-adr0033-package-store-trigger-assessment.md`](../notes/architecture/2026-09-20-adr0033-package-store-trigger-assessment.md)（结论：**未触发**）。条件变化时先更新该评估再排期实现。
 
 **复议触发器**：
 
