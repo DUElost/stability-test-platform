@@ -95,7 +95,7 @@ ADR-0020 完成 `Plan / PlanStep` 一次性切换，ADR-0021 / ADR-0022 在派�
 
 **实施前提（必须在 C5 之前完成）**：
 
-- **snapshot 扩展 `nfs_path`**：当前 `_fetch_script_metadata`（`plan_dispatcher_sync.py:123`）只取 `default_params` / `param_schema`，`_build_plan_snapshot`（`plan_dispatcher_sync.py:147`）也不写 `nfs_path`。要在 DeviceDetailDrawer 展示脚本路径，需**先修改 `_fetch_script_metadata` 和 `_build_plan_snapshot`**，为每个 step 写入 `nfs_path` 字段。此改动属于 C1（D1 dispatcher 改动）的一部分，不拆分新切片。
+- **snapshot 已含 `nfs_path`（前置已落地）**：`_fetch_script_metadata` 选取 `Script.nfs_path`，`build_plan_snapshot`（`plan_dispatcher_core.py`）写入每 step 的 `nfs_path`。D3 DeviceDetailDrawer 可直接从 `plan_snapshot.steps[*].nfs_path` 展示，**不再**需要另改 dispatcher。
 
 - **ScriptManagementPage 需支持 URL 查询参数**：当前 `ScriptManagementPage`（`frontend/src/pages/scripts/ScriptManagementPage.tsx:11`）不读取 `?name=X&version=Y` 查询参数，也不支持根据 query 自动筛选/定位/展开版本。在 D3 的 deep-link 完全生效之前，需先给 ScriptManagementPage 增加 URL 参数解析逻辑（作为 C7 D8 前端改动的一部分）。在未实现之前，deep-link 仍跳转到脚本管理页，但不会自动定位到指定版本。**此 gap 不影响 C5 合入，但需在 C7 处收口**。
 
@@ -209,7 +209,7 @@ ADR-0020 完成 `Plan / PlanStep` 一次性切换，ADR-0021 / ADR-0022 在派�
 
 1. **D1 两阶段校验**（§D1）：已明确"阶段 1 在 prepare 时 400 拒绝（不创建 PlanRun 行）/ 阶段 2 在 `complete_plan_run_dispatch` 时 FAILED 审计（PlanRun 行已存在，供前端观测）"，消除了原文档"回写 result_summary 但又要避免先建 PlanRun 行"的矛盾。
 
-2. **plan_snapshot 缺少 `nfs_path`**（§D3 实施前提）：当前 `_fetch_script_metadata`（`plan_dispatcher_sync.py:123`）只取 `default_params` / `param_schema`，`_build_plan_snapshot`（`plan_dispatcher_sync.py:147`）也不写 `nfs_path`。D3 要在 DeviceDetailDrawer 展示脚本路径，须在 C1 中修改 `_fetch_script_metadata` 和 `_build_plan_snapshot` 写入 `nfs_path` 字段。
+2. **plan_snapshot `nfs_path` 已写入**（§D3 实施前提，已落地）：`_fetch_script_metadata` 选取 `nfs_path`，`build_plan_snapshot` 写入每 step；D3 DeviceDetailDrawer 可直接消费，无需再改 dispatcher。
 
 3. **D3 deep-link 需要 ScriptManagementPage 支持 URL 参数**（§D3 实施前提）：当前 `ScriptManagementPage`（`ScriptManagementPage.tsx:11`）不读取 `?name=X&version=Y` 查询参数。deep-link 跳转在 C5 可先不做定位，C7（ScriptManagementPage 改造）时收口。
 
