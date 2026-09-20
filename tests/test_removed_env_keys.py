@@ -20,7 +20,9 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Iterator
+
+from tests.repo_scan import tracked_and_new_files
+
 
 REPO = Path(__file__).resolve().parents[1]
 LEDGER = REPO / "docs" / "development" / "environment-variables.md"
@@ -82,25 +84,38 @@ def ledger_keys(text: str) -> list[str]:
     return keys
 
 
-def _scanned_files() -> Iterator[Path]:
-    for name in SCAN_ROOTS:
-        for path in (REPO / name).rglob("*"):
-            if not path.is_file():
-                continue
-            rel = path.relative_to(REPO)
-            if any(rel.parts[: len(p.parts)] == p.parts for p in EXCLUDE_PREFIXES if len(rel.parts) >= len(p.parts)):
-                continue
-            if path.suffix not in SCAN_SUFFIXES and ".env" not in path.name:
-                continue
-            if "__pycache__" in rel.parts:
-                continue
-            yield path
-    for name in SCAN_FILES:
-        base = REPO / name
-        if not base.is_dir():
+def _scanned_files() -> list[Path]:
+    """扫描面 = **仓库跟踪内容**（#2870），不是文件系统。
+
+    原先对每个 `SCAN_ROOTS` 目录 `rglob("*")`，于是两类与仓库内容无关的东西进了判定集：
+
+    - `.wt/*` —— 并行 Execution 的 worktree，里面是整仓副本（本机 10 个 = 14,645 个 `.py`）；
+    - 本地未跟踪的 `backend/.env` —— 里面留着陈旧键，直接把守卫在**本机**点红，
+      而 CI（干净检出）恒绿 ⇒ 「真回归与噪声不可分」，红灯失去信息量。
+
+    换成 `git ls-files`（已跟踪 ∪ 未跟踪且未被 .gitignore 命中，与
+    `tools/dev/check-internal-ip-leak.py` 同一口径）后：`backend/.env.example` 这类
+    **已跟踪**示例仍在集内（见 `test_scan_universe_covers_the_faces_that_actually_drifted`），
+    本地 `.env` 与 worktree 副本自然出局。含未跟踪新文件是**刻意保留**的：
+    #2402 的教训是只取已跟踪会让「`git add` 之前」这个最该拦的时点不在门禁眼里。
+    """
+    roots = SCAN_ROOTS + tuple(x.as_posix() for x in SCAN_FILES)
+    out: list[Path] = []
+    for rel in tracked_and_new_files(REPO):
+        if not rel.startswith(roots):
             continue
-        for path in base.rglob("*.yml"):
-            yield path
+        if any(rel.startswith(f"{x.as_posix()}/") for x in EXCLUDE_PREFIXES):
+            continue
+        path = REPO / rel
+        if not path.is_file():          # 索引里有、盘上没有（半删除态）：跳过而非炸扫描
+            continue
+        if "__pycache__" in path.parts:
+            continue
+        if path.suffix not in SCAN_SUFFIXES and ".env" not in path.name:
+            continue
+        out.append(path)
+    assert out, "扫描面为空 ⇒ 本守卫会静默全绿（#2870/#2639 同形失效）"
+    return out
 
 
 def bare_references(keys: list[str], files: list[Path]) -> list[str]:
