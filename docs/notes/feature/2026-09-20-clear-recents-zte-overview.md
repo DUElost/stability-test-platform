@@ -1,6 +1,9 @@
 # clear_recents：概览键清空最近任务（中兴样机批量）
 
-日期：2026-09-20 · 类型：feature · Execution：`clear-zte-recents-overview`
+Status: implemented
+Class: feature
+
+Execution：`clear-zte-recents-overview`
 
 ## Decision
 
