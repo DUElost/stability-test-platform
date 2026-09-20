@@ -10,6 +10,7 @@ from backend.services.job_log_signal import (
     count_orphan_log_signals,
     list_orphan_log_signals,
 )
+from tools.dev.source_anchor import SourceGuard
 
 
 def test_count_and_list_orphan_log_signals(
@@ -80,10 +81,14 @@ def test_orphan_log_signals_endpoint_admin_only(
 
 def test_upload_manager_import_fallback_uses_aee_paths():
     """#213 E2: no duplicated resolve_shared_storage_root in ImportError branch."""
-    import inspect
-
     from backend.agent import upload_manager as um
 
-    src = inspect.getsource(um)
-    assert "from agent.aee.paths import resolve_shared_storage_root" in src
-    assert 'for alias in ("STP_WATCHER_NFS_BASE_DIR"' not in src
+    # 锚点＝共用的解析入口本身：它在场才说明「不再复制一份 alias 循环」这条判据
+    # 扫的还是同一段实现（复制到别处 / 整段搬走都会先 AnchorDrift）。
+    guard = SourceGuard.of_module(um).anchored(
+        "from agent.aee.paths import resolve_shared_storage_root", expect=1
+    )
+    guard.assert_absent(
+        'for alias in ("STP_WATCHER_NFS_BASE_DIR"',
+        why="#213 E2：不得再复制一份 resolve_shared_storage_root 的 alias 探测循环",
+    )

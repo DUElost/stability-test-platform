@@ -19,6 +19,7 @@ import ast
 import re
 from pathlib import Path
 
+from tools.dev.source_anchor import SourceGuard
 
 SEED_VERSIONS_DIR = Path(__file__).resolve().parents[1] / "backend" / "alembic" / "versions"
 
@@ -271,6 +272,10 @@ _THIS = Path(__file__).resolve()
 _CONTAINER_FILE = _THIS.parent / "test_script_seed_governance.py"
 _CI = _THIS.parents[1] / ".github" / "workflows" / "ci.yml"
 _RUN_GATES = _THIS.parents[1] / "scripts" / "run_gates.py"
+_REPO_ROOT = _THIS.parents[1]
+#: 两个接线文件**共同**的替代物：容器文件的合法 ignore 行。有共同替代物 ⇒
+#: 循环不需要 per-file 锚点表（#2639 第七批判据）。
+_CONTAINER_IGNORE_LINE = "--ignore=tests/test_script_seed_governance.py"
 
 _STATIC_NAMES = (
     "test_new_seed_migrations_deactivating_versions_check_references",
@@ -305,7 +310,12 @@ def test_this_file_is_on_the_pr_path():
     """接线：本文件不得出现在 CI / run_gates 的 `--ignore` 名单里（否则等于白拆）。"""
     name = _THIS.name
     for path in (_CI, _RUN_GATES):
-        text = path.read_text(encoding="utf-8")
-        assert f"tests/{name}" not in text, f"{path.name} 把本文件忽略了——PR 路径将不跑它"
+        guard = SourceGuard.of_repo_path(path.relative_to(_REPO_ROOT)).anchored(
+            _CONTAINER_IGNORE_LINE, expect=1
+        )
+        guard.assert_absent(
+            f"tests/{name}",
+            why=f"{path.name} 把本文件忽略了——PR 路径将不跑它（静态判据等于白拆）",
+        )
     # 反向：容器文件必须仍在 ignore 名单里（否则 PR 路径会尝试起容器）
     assert "tests/test_script_seed_governance.py" in _CI.read_text(encoding="utf-8")

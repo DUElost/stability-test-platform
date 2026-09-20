@@ -9,6 +9,7 @@ import pytest
 from backend.core import metrics
 from backend.services import dedup_extract as ds_extract
 from backend.services import dedup_scan as ds
+from tools.dev.source_anchor import SourceGuard
 
 
 @pytest.fixture(autouse=True)
@@ -1268,11 +1269,13 @@ class TestResolveCenterEventPath:
 
     def test_source_has_no_cross_run_glob(self):
         """契约测试 ③：本路径不得再对着中心盘做 `devices/*` 跨 run glob。"""
-        from pathlib import Path as _Path
-
-        src = _Path(ds.__file__).read_text(encoding="utf-8")
-        assert 'Path(center_root, "devices").glob' not in src
-        assert "_center_event_dir_from_dle" in src
+        # 锚点编在「取代跨 run glob 的那一样东西」上：按 DLE 事件目录精确定位中心目录。
+        # 用 def 行并钉次数——函数被复制或多处各写一份也是漂移（#2639）。
+        guard = SourceGuard.of_module(ds).anchored("def _center_event_dir_from_dle", expect=1)
+        guard.assert_absent(
+            'Path(center_root, "devices").glob',
+            why="中心盘 devices/* 跨 run glob 会串到别的 plan_run 的产物（#2888 契约 ③）",
+        )
 
 
 # ── #2888：二次 merge 覆盖中心同名产物时，登记行随内容刷新 ──────────────────

@@ -302,15 +302,8 @@ BASELINE = frozenset(
         "backend/agent/tests/test_device_flash_scripts.py",  # 5
         "backend/agent/tests/test_flash_firmware_v1316.py",  # 1
         "backend/agent/tests/test_flash_preflight_v102.py",  # 1
-        "backend/tests/services/test_agent_installer.py",  # 3
-        "backend/tests/services/test_dedup_scan_merge.py",  # 1
-        "backend/tests/services/test_job_log_signal.py",  # 1
         "tests/test_ansible_config_channel_2218.py",  # 1
         "tests/test_deploy_scripts.py",  # 3
-        "tests/test_dev_bootstrap_seed.py",  # 1
-        "tests/test_pg_restore_drill.py",  # 1
-        "tests/test_script_seed_static_guards.py",  # 1
-        "tests/test_seed_revision_version_guard.py",  # 1
     }
 )
 

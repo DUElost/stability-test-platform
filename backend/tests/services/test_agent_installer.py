@@ -13,6 +13,7 @@ from backend.services.agent_installer import (
     prepare_install_agent,
     start_install_agent_runconsole,
 )
+from tools.dev.source_anchor import SourceGuard
 
 
 @pytest.fixture(autouse=True)
@@ -276,10 +277,20 @@ def test_prepare_install_agent_key_only_passes_private_key_to_inventory(mock_hos
     assert out["ok"] is True
     inv_path = Path(out["cmd"][out["cmd"].index("-i") + 1])
     try:
-        content = inv_path.read_text(encoding="utf-8")
-        assert "ansible_ssh_private_key_file=/home/ops/.ssh/id_ed25519" in content
-        assert "ansible_password=" not in content
-        assert "ansible_become_password=" not in content
+        # 判的是**运行期生成的 inventory**（tempfile.mkstemp），不是仓库源；
+        # 锚点＝私钥键那一行——它正是「空密码键」的替代物，缺席即 AnchorDrift。
+        guard = SourceGuard(
+            inv_path.read_text(encoding="utf-8"),
+            origin=f"临时 inventory {inv_path.name}",
+        ).anchored("ansible_ssh_private_key_file=/home/ops/.ssh/id_ed25519", expect=1)
+        guard.assert_absent(
+            "ansible_password=",
+            why="#1252：仅私钥凭据不得落 ansible_password 空键（会覆盖私钥认证）",
+        )
+        guard.assert_absent(
+            "ansible_become_password=",
+            why="#1252：同上，become 密码也不能写成空串",
+        )
     finally:
         # 断言失败也必须清理临时 inventory（失败路径曾残留 .stp-install-*.ini）
         out["cleanup"]()
@@ -307,10 +318,18 @@ def test_prepare_install_agent_password_inventory_unchanged(mock_host):
 
     inv_path = Path(out["cmd"][out["cmd"].index("-i") + 1])
     try:
-        content = inv_path.read_text(encoding="utf-8")
-        assert "ansible_password=secret" in content
-        assert "ansible_become_password=secret" in content
-        assert "ansible_ssh_private_key_file" not in content
+        guard = SourceGuard(
+            inv_path.read_text(encoding="utf-8"),
+            origin=f"临时 inventory {inv_path.name}",
+        ).anchored("ansible_password=secret", expect=1)
+        guard.assert_present(
+            "ansible_become_password=secret",
+            why="#1252 回归：密码凭据路径仍要写 become 密码",
+        )
+        guard.assert_absent(
+            "ansible_ssh_private_key_file",
+            why="#1252：密码凭据没有 key_path，不得写出私钥文件键",
+        )
     finally:
         out["cleanup"]()
 
