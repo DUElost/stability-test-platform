@@ -39,6 +39,8 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from tools.dev.textfile_metrics import render_gauges, write_atomic
+
 #: 生产者声明：names 由 tests/metrics_registry.py 从本字面量静态提取（无标签）。
 _METRIC_HELP = {
     "stp_pg_undefined_table_events": "窗口内 PG 报「关系不存在」的 ERROR 条数（猜表名指纹）",
@@ -143,23 +145,18 @@ def collect(
 
 def render_metrics(values: dict[str, int], *, ran_at: int) -> str:
     """textfile 指标（无标签；gauge——窗口计数天然是「当前值」）。"""
-    lines: list[str] = []
-    mapping = {f"stp_pg_{kind}_events": values[kind] for kind in _FINGERPRINTS}
+    mapping: dict[str, object] = {
+        f"stp_pg_{kind}_events": values[kind] for kind in _FINGERPRINTS
+    }
     mapping["stp_pg_schema_error_events"] = values["total"]
     mapping["stp_pg_guard_last_run"] = ran_at
-    for name, value in mapping.items():
-        lines.append(f"# HELP {name} {_METRIC_HELP[name]}")
-        lines.append(f"# TYPE {name} gauge")
-        lines.append(f"{name} {value}")
-    return "\n".join(lines) + "\n"
+    # #2881：收敛到公共原语（第三处生产者出现时抽的 helper）
+    return render_gauges(_METRIC_HELP, mapping)
 
 
 def write_metrics(path: Path, text: str) -> None:
     """原子落盘（同目录临时文件 + rename），避免 node_exporter 读到半截文件。"""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    tmp.replace(path)
+    write_atomic(path, text)
 
 
 def _self_test() -> int:

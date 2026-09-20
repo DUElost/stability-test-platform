@@ -6,7 +6,7 @@
 import math
 import os
 import logging
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +42,7 @@ def compute_capacity(
     adb_server_conflict: bool = False,
     max_claim_slots: "Optional[int]" = None,
     usb_device_count: Optional[int] = None,
+    usb_fault_reasons: Optional[Sequence[str]] = None,
 ) -> dict:
     """返回 {"capacity": {...}, "health": {...}}。
 
@@ -56,6 +57,9 @@ def compute_capacity(
     与 online_healthy_devices（adb devices 口径）并排展示，差值即 ADB 未枚举到的
     物理设备（授权/驱动/多 fork-server 等）。为 None 表示无法判定（非 0）。
     刻意不参与 device_slots / effective_slots / health 任何计算。
+
+    usb_fault_reasons — 内核 USB 子系统故障（#2900，`kernel_usb_faults` 判定后传入）：
+    warning 级 reason，只进 DEGRADED，不进 health_limit（打闸口径见 #2902）。
     """
     health = _compute_health(
         system_stats,
@@ -63,6 +67,7 @@ def compute_capacity(
         online_healthy_devices,
         total_devices,
         adb_server_conflict=adb_server_conflict,
+        usb_fault_reasons=usb_fault_reasons,
     )
     health_limit = _compute_health_limit(
         system_stats, mount_status,
@@ -127,11 +132,17 @@ def _compute_health(
     online_healthy_devices: int,
     total_devices: int,
     adb_server_conflict: bool = False,
+    usb_fault_reasons: Optional[Sequence[str]] = None,
 ) -> dict:
     """产出结构化 health 快照。
 
     阈值与 _compute_health_limit 完全一致（blocking reason → UNSCHEDULABLE）；
     warning 级 reason（如 adb_multiple_servers）只进 DEGRADED，不打闸。
+
+    ``usb_fault_reasons`` 由 `kernel_usb_faults`（#2900）判定后传入——内核 USB 子系统
+    故障（xHCI 主控死亡 / 慢性链路劣化）**独立于设备数**，故不参与
+    `_compute_health_limit` 的打闸判据（那是 #2902 的门禁议题），只把 host 从
+    HEALTHY 拉成 DEGRADED，让「心跳正常但 USB 全瞎」不再无声。
     """
     reasons: List[str] = []
     cpu = system_stats.get("cpu_load", 0)
@@ -154,6 +165,9 @@ def _compute_health(
         reasons.append("adb_low_healthy_devices")
     if adb_server_conflict:
         reasons.append("adb_multiple_servers")
+    for reason in usb_fault_reasons or ():
+        if reason not in reasons:
+            reasons.append(reason)
 
     if cpu > 90 or ram > 95 or disk is None or disk > 95 or not mount_ok or adb_dead:
         status = "UNSCHEDULABLE"
