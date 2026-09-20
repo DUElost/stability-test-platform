@@ -527,6 +527,7 @@ jobs:
             backend/tests/services/test_abort_lock_order_1985.py \
             backend/tests/api/test_shared_row_lock_order_1980.py \
             backend/tests/api/test_recovery_sync_lock_order_2015.py \
+            backend/tests/api/test_recovery_sync_lock_order_2871.py \
             backend/tests/api/test_coordinator_heartbeat_lock_order_2796.py \
             backend/tests/scheduler/test_reconciler_renew_lock_order.py \
             backend/tests/scheduler/test_reconciler_drain_lock_order_2635.py \
