@@ -23,8 +23,11 @@ from typing import Any
 from backend.agent.pipeline_validator import validate_pipeline_def as agent_validate
 from backend.core.pipeline_validator import validate_pipeline_def as core_validate
 
-_AGENT_COPY = Path(__file__).resolve().parents[1] / "pipeline_validator.py"
-_CORE_COPY = Path(__file__).resolve().parents[2] / "core" / "pipeline_validator.py"
+# #739 第二批：本文件自 `backend/agent/tests/` 迁入（棘轮清零）；双端副本的源码锚点
+# 改为按仓库根反查，不再依赖测试文件自身所在目录。
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_AGENT_COPY = _REPO_ROOT / "backend" / "agent" / "pipeline_validator.py"
+_CORE_COPY = _REPO_ROOT / "backend" / "core" / "pipeline_validator.py"
 
 
 def _normalized(validate, pipeline_def: Any) -> Any:
