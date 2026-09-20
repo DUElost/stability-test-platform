@@ -91,11 +91,11 @@ def test_claim_tick_rolls_back_on_register_failure():
 
 
 def test_main_wires_claim_tick():
-    import backend.agent.main as agent_main
+    import backend.agent.agent_loop as agent_loop
     from tools.dev.source_anchor import SourceGuard
 
-    guard = SourceGuard.of_module(agent_main).anchored("process_claim_tick(")
+    guard = SourceGuard.of_module(agent_loop).anchored("process_claim_tick(")
     guard.assert_absent(
         "pending_jobs_fetched",
-        why="#736 claim_loop 已抽出，main 不得回潮 claim 日志字面量",
+        why="#736 claim_loop 已抽出，loop 外壳不得回潮 claim 日志字面量",
     )

@@ -214,8 +214,19 @@ class EventUploader:
         self._api_url = api_url.rstrip("/")
         self._agent_secret = agent_secret
         self._host_id = host_id
-        self._nfs_root = nfs_root or str(get_aee_nfs_root())
-        self._configured = bool(self._api_url and self._agent_secret and self._host_id)
+        try:
+            root = nfs_root or str(get_aee_nfs_root())
+        except RuntimeError:
+            # #2845：无共享存储根不是「配置错误」而是「本机没有上送目的地」——
+            # 目标路径 = {root}/devices/…，根为空会退化成 CWD 相对路径。
+            # 与 api_url/agent_secret/host_id 缺失同口径：按未配置 no-op（不抛），
+            # 否则 bootstrap 与 reload_config 两条调用链都会被 RuntimeError 打断。
+            root = ""
+            logger.warning("event_uploader_no_shared_root — 组件按未配置降级")
+        self._nfs_root = root
+        self._configured = bool(
+            self._api_url and self._agent_secret and self._host_id and root
+        )
         logger.info(
             "event_uploader_configured enabled=%s host=%s nfs_root=%s",
             _event_uploader_enabled(),
