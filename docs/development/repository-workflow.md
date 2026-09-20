@@ -65,6 +65,34 @@ PR/CI 恒 no-op，故**不接入**，留痕靠下述收窗纪律（论证见 iss
   记录 + overlap 提示；全量仍用不带 `--risk` 的 `status`）；
 - 输出与处置结论随批次收尾评论留痕（#1035 Evidence 台账回溯组同载体）。
 
+## 远端分支生命周期与补删
+
+**基线：合入即删由仓库设置承载**——`delete_branch_on_merge=true`（GitHub 侧），PR 合入时
+自动删头分支，无需人工动作（2026-09-20 实测：一日内 5 个 PR 合入后远端分支自动消失）。
+
+**三种需要「补删」的例外**：① 合入后被继续推「同步 main」提交的分支会**复活**；
+② rebase/改写合入的分支（patch-id 与主干不同）自动删可能漏；③ **关闭未合**的 PR 分支
+不会被自动删。收窗时按下列判据批量核一遍：
+
+1. `git fetch --prune origin`，取 `git branch -r --no-merged origin/main`；
+2. 逐个 `git cherry origin/main <branch>` 判内容是否已在主干：
+   - `+` 数 = 0 ⇒ 内容已在主干（合并后同步 / 改写合入）→ **删**；
+   - `+` > 0 且 PR 为 CLOSED、关闭评论写明**被同修 PR 取代**、且逐文件核对主干已含
+     等价改动 → **删**（2026-09-20 实例：`fix/2706-…`，其唯一补丁的候选集修复已由
+     #2708 落进 `tools/site_config/handover.py`）；
+   - `+` > 0 且无取代 → **保留**；确要删则先打 `refs/backup/<date>/<branch>` 备份 ref
+     （与本地改写合入同款保护），并在删除说明里留判据；
+3. **保留面**：`main`、open PR 的头分支、registry 中仍 `CODING` 的 Execution 分支、
+   未合并且未被取代的 WIP——四类一律不动；
+4. **执行纪律**：远端删除是**共享态动作**——先出「清单 + 逐条判据」交人工确认，再
+   `git push origin --delete <branch>` 批量执行，最后 `git fetch --prune` 收尾。
+   本地分支仍按本地清理规程（worktree 占用者、`CODING` 记录、有未提交改动者保留），
+   两侧判据不混用。
+
+**与「关闭未合」记录的关系**：PR 被关闭而未放弃的 Execution 仍在 registry 风险窗口
+（僵尸第二类），唯一出口是人工 `finish --abandon` 或 reopen——删远端分支既不改变该
+状态，也不构成替他人收口。
+
 ## PR 与 Merge Queue
 
 - `main` 启用分支保护，PR 是唯一合入路径；不要直推或手动点击 Merge；
