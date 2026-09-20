@@ -45,7 +45,7 @@
 
 - DB 的 `script.content_sha256` 是扫描时磁盘内容的快照，扫描遇 sha 不一致只记 `conflicts`、**不动 DB**——DB 期望值被永久冻结；
 - 2026-07-31 事故（`tools/dev/check-script-version-immutability.py` 头注）：一次全仓 `ruff --fix` 原地改写版本目录 → 27 行 script 中 18 行 DB sha 与磁盘永久失配 → 平台仅有的两个 Plan 全部准入 `script_verify_failed`，**派发彻底中断**，且自愈推送修不好（推的是磁盘内容，对不上 DB）；
-- 因此全量副本不是懒政，是「历史可复现 + 派发二值安全」的实现方式：版本字节独立、可校验、可 pin（`plan_step.script_sha`，ADR-0023）。
+- 因此全量副本不是懒政，是「历史可复现 + 派发二值安全」的实现方式：版本字节独立、可校验、可 pin（`Script.content_sha256`，ADR-0021 / ADR-0023；**无** `plan_step.script_sha` 列；#2546 Mode C）。
 
 **本 ADR 不削弱上述任何一条**：它收窄的是「保留多久」，不是「可不可改」。删除与改写是两种风险——改写会静默破坏**已有**引用，删除只影响**未来**重新派发。
 
@@ -94,7 +94,7 @@
 
 删除后：
 
-- **历史记录不受影响**：`plan_step.script_sha`、`step_trace`、`job_instance` 等历史事实仍完整，**对历史 run 的溯源成立**；
+- **历史记录不受影响**：`plan_step` 的 `(script_name, script_version)`、`plan_snapshot`、`step_trace`、`job_instance` 等历史事实仍完整（**无** `plan_step.script_sha` 列；#2546 Mode C），**对历史 run 的溯源成立**；
 - **重新派发失效**：若有人把该版本重新加回某个 Plan，准入阶段会因磁盘无该目录而失败（`script_verify_failed` 类），这是**期望行为**（显式失败优于静默降级）；
 - **不提供**「删除后仍可重新派发」的旁路（如归档自动还原）。若未来出现真实的重跑需求，应按 D5 走新版本或恢复 Git 历史，而不是给删除动作加隐藏的还原层。
 
