@@ -139,7 +139,7 @@ def _is_source_like(value: ast.AST) -> bool:
     """
     return _provenance(value) != _PRODUCT and _contains_reader(value)
 #: 命中处数**下限**（不是现状计数）：判据被削弱时兜底，存量迁移不会撞红它。
-#: 现状 45 处/21 文件（#2639 第四批迁移 playbook+agent_priv 共 7 处后由 50 下调）。
+#: 取十位而不是贴现状：贴现状会逼每次迁移同时改两处，迟早改漏——双向收紧由 BASELINE 负责。
 SITE_FLOOR = 40
 
 #: 〔产物路径轴 n/m〕＝该文件 m 处里有 n 处断言的对象在 `tmp_path` 下（安装/渲染产物，不是仓库源），
