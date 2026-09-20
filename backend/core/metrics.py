@@ -661,6 +661,18 @@ host_operation_waiters = Gauge(
     ['host_id'],
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
+# #2909 问题③：周期回归链的覆盖差可发现化（拉取期现算于 api/routes/metrics.py）。
+# kind 是封闭词表：online_total=fleet 未退役 host 上的 ONLINE 设备数；
+# scheduled_union=全部 enabled task_schedule 存储清单的并集大小（含已掉线台，
+# 反映清单存量）；gap_missing=ONLINE ∉ 任何 schedule 清单（「20% 断了没人知道」
+# 的那个量）。ratio 由 PromQL 现算，指标只落原子事实。
+chain_coverage_devices = Gauge(
+    'stability_chain_coverage_devices',
+    'Periodic-regression chain coverage facts computed at scrape time '
+    '(kind=online_total|scheduled_union|gap_missing) (#2909)',
+    ['kind'],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
 # ============================================================================
 # Build Info
 # ============================================================================
