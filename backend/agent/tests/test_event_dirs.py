@@ -44,3 +44,29 @@ def test_find_event_dir_under_root_nested(tmp_path):
 
     found = find_event_dir_under_root(root, "2026_0629_002306_121_db.71.JE")
     assert found == event
+
+
+# ── #2822：watcher（inotifyd 兜底）落地名 `<epoch_ms>_<原名>` 的标记链识别 ──
+
+# issue 实证样本（#310 E2E，host .92 / A2WENX6814000151，run-445 xls 同形态）
+_WATCHER_LANDED = "1789826505754_2026_0827_221918_553_db.01.ANR"
+
+
+def test_watcher_epoch_ms_prefix_is_recognized():
+    assert is_event_dir_basename(_WATCHER_LANDED)
+
+
+def test_watcher_landed_name_extracts_as_full_basename_with_prefix():
+    # 匹配键必须是**带前缀全名**：DLE.remote_path 与 scan xls 的 Path 列就是这个
+    # 形态，剥了前缀反而断链（识别放宽 ≠ 返回键改写）。
+    got = event_dir_basename_from_path(
+        f"/mnt/stp-aee/devices/unassigned/ev-7/{_WATCHER_LANDED}/__exp_main.txt"
+    )
+    assert got == _WATCHER_LANDED
+
+
+def test_epoch_prefix_strip_does_not_admit_arbitrary_names():
+    # 13 位前缀 + 不合格剩余段 → 仍然不认（防误收非事件目录）
+    assert not is_event_dir_basename("1789826505754_random_stuff")
+    assert not is_event_dir_basename("178982650575_db.01.ANR")       # 12 位不算
+    assert not is_event_dir_basename("17898265057542026_0827_221918_553_db")  # 14 位粘连不算
