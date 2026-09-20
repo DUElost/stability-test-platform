@@ -67,11 +67,13 @@ ROOT = Path(__file__).resolve().parents[2]
 #:   main 461 → 406 → 封顶 **427**。
 #: - 2026-09-20 十六次下调（#736：job-pool/recovery 抽出 `job_runtime.py`）：
 #:   main 406 → 320 → 封顶 **336**。
+#: - 2026-09-20 十七次下调（#736：claim loop 外壳抽出 `agent_loop.py`）：
+#:   main 320 → 269 → 封顶 **283**。
 CEILINGS: dict[str, int] = {
     "backend/api/routes/plan_runs.py": 507,
     "backend/api/routes/agent_api.py": 411,
     "backend/api/routes/projects.py": 378,
-    "backend/agent/main.py": 336,
+    "backend/agent/main.py": 283,
 }
 
 

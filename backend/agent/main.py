@@ -1,9 +1,8 @@
 import logging
 import os
-import signal
 import sys
 import threading
-from typing import Dict, Optional, Set
+from typing import Dict, Set
 
 # 自动加载 .env 文件（支持手动运行时读取配置）
 # 优先加载当前工作目录的 .env，不覆盖已有环境变量
@@ -22,8 +21,7 @@ if __name__ == "__main__" and __package__ is None:
     from agent.bootstrap_subsystems import start_disk_and_watcher_subsystems
     from agent.startup_identity import bootstrap_process_identity
     from agent.control_handler import ControlHandlerDeps, build_control_handler
-    from agent.claim_loop import process_claim_tick
-    from agent.graceful_shutdown import shutdown_agent_runtime
+    from agent.agent_loop import run_agent_loop
     from agent.startup_guards import (
         check_agent_version,
         ensure_adb_server_on_startup,
@@ -40,15 +38,14 @@ if __name__ == "__main__" and __package__ is None:
     from agent.host_control_plane import start_host_control_plane
     from agent.job_runtime import start_job_runtime
     from agent.config import ensure_dirs
-    from agent.job_runner import JobRunnerState, run_task_wrapper
+    from agent.job_runner import run_task_wrapper
     from agent.mq.producer import StepTraceWriter
 else:
     from .adb_wrapper import AdbWrapper
     from .bootstrap_subsystems import start_disk_and_watcher_subsystems
     from .startup_identity import bootstrap_process_identity
     from .control_handler import ControlHandlerDeps, build_control_handler
-    from .claim_loop import process_claim_tick
-    from .graceful_shutdown import shutdown_agent_runtime
+    from .agent_loop import run_agent_loop
     from .startup_guards import (
         check_agent_version,
         ensure_adb_server_on_startup,
@@ -65,13 +62,12 @@ else:
     from .host_control_plane import start_host_control_plane
     from .job_runtime import start_job_runtime
     from .config import ensure_dirs
-    from .job_runner import JobRunnerState, run_task_wrapper
+    from .job_runner import run_task_wrapper
     from .mq.producer import StepTraceWriter
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
-logger = logging.getLogger(__name__)
 
 # Device Log Watcher feature flag —— 全局 STP_WATCHER_ENABLED 或 Plan 默认开启。
 # Plan 执行默认开启 watcher（STP_WATCHER_PLAN_DEFAULT=true）时，即使全局 env=false
@@ -150,7 +146,6 @@ def main() -> None:
 
     # Assigned after the executor is created; the control closure also handles
     # commands received during the small startup window.
-    job_runner_state: Optional[JobRunnerState] = None
     control_deps = ControlHandlerDeps()
     _handle_control = build_control_handler(
         deps=control_deps,
@@ -212,7 +207,6 @@ def main() -> None:
     )
     operation_scheduler = plane.operation_scheduler
     coordinator = plane.coordinator
-    occupancy = plane.occupancy
     job_runner_slot = plane.job_runner_slot
     lease_renewer = plane.lease_renewer
     _register_active_job = plane.register_active_job
@@ -252,68 +246,23 @@ def main() -> None:
         watcher_globally_enabled=STP_WATCHER_ENABLED,
         watcher_plan_default=STP_WATCHER_PLAN_DEFAULT,
     )
-    outbox_drain = runtime.outbox_drain
-    executor = runtime.executor
-    job_runner_state = runtime.job_runner_state
-    step_trace_uploader = runtime.step_trace_uploader
-    _recovery_sync_stop = runtime.recovery_sync_stop
-    _recovery_sync_thread = runtime.recovery_sync_thread
-
-    # SIGTERM / SIGINT graceful shutdown
-    _shutdown_event = threading.Event()
-    def _signal_handler(signum, frame):
-        sig_name = signal.Signals(signum).name
-        logger.info("received_%s, initiating graceful shutdown", sig_name)
-        _shutdown_event.set()
-
-    signal.signal(signal.SIGTERM, _signal_handler)
-    signal.signal(signal.SIGINT, _signal_handler)
-
-    try:
-        while not _shutdown_event.is_set():
-            try:
-                process_claim_tick(
-                    api_url=api_url,
-                    host_id=host_id,
-                    agent_instance_id=agent_instance_id,
-                    occupancy=occupancy,
-                    heartbeat_thread=heartbeat_thread,
-                    register_active_job=_register_active_job,
-                    deregister_active_job=_deregister_active_job,
-                    lease_renewer=lease_renewer,
-                    local_db=local_db,
-                    coordinator=coordinator,
-                    executor=executor,
-                    adb=adb,
-                    job_runner_state=job_runner_state,
-                    mq_producer=mq_producer,
-                    script_registry=script_registry,
-                    patrol_checkpoint_store=patrol_checkpoint_store,
-                    operation_scheduler=operation_scheduler,
-                    step_trace_uploader=step_trace_uploader,
-                    run_task_wrapper=run_task_wrapper,
-                )
-            except Exception:
-                logger.exception("agent_loop_failed", extra={"host_id": host_id})
-            # Use event wait instead of sleep so SIGTERM wakes us immediately
-            _shutdown_event.wait(poll_interval)
-    finally:
-        shutdown_agent_runtime(
-            coordinator=coordinator,
-            operation_scheduler=operation_scheduler,
-            job_runner_state=job_runner_state,
-            executor=executor,
-            step_trace_uploader=step_trace_uploader,
-            outbox_drain=outbox_drain,
-            log_signal_drainer=log_signal_drainer,
-            recovery_sync_stop=_recovery_sync_stop,
-            recovery_sync_thread=_recovery_sync_thread,
-            heartbeat_thread=heartbeat_thread,
-            lease_renewer=lease_renewer,
-            mq_producer=mq_producer,
-            local_db=local_db,
-            sio_client=sio_client,
-        )
+    run_agent_loop(
+        api_url=api_url,
+        poll_interval=poll_interval,
+        host_id=host_id,
+        agent_instance_id=agent_instance_id,
+        plane=plane,
+        runtime=runtime,
+        heartbeat_thread=heartbeat_thread,
+        adb=adb,
+        mq_producer=mq_producer,
+        script_registry=script_registry,
+        patrol_checkpoint_store=patrol_checkpoint_store,
+        run_task_wrapper=run_task_wrapper,
+        log_signal_drainer=log_signal_drainer,
+        local_db=local_db,
+        sio_client=sio_client,
+    )
 
 
 if __name__ == "__main__":
