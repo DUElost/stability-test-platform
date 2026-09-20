@@ -17,6 +17,7 @@ import os
 import stat
 from dataclasses import asdict, replace
 from pathlib import Path
+from typing import Any
 from types import ModuleType
 from typing import Callable
 
@@ -456,6 +457,13 @@ def _state_runs(state_dir: Path) -> int:
 EVIDENCE_RELEASES_KEPT = 5
 
 
+def _int_or_zero(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _stage_status_map(stages: list[dict]) -> dict[str, str]:
     """把一次运行的 stages 摊平成 `check_id → stage.status`（同一 check 只出现在一个 stage 里）。"""
     out: dict[str, str] = {}
@@ -468,7 +476,9 @@ def _stage_status_map(stages: list[dict]) -> dict[str, str]:
     return out
 
 
-def _accumulated_evidence(state_dir: Path, release: str, stages: list[dict]) -> dict:
+def _accumulated_evidence(
+    state_dir: Path, release: str, stages: list[dict], run: int
+) -> dict:
     """按**发布物**累积 `check_id → status`（#2718）。
 
     为什么：`stages` 只记最近一次运行，而不同运行形态发出的证据 ID 不同——plain
@@ -500,11 +510,15 @@ def _accumulated_evidence(state_dir: Path, release: str, stages: list[dict]) -> 
     previous_release = str(previous.get("release") or "")
     if previous_release and "evidence" not in previous:
         seeded = evidence.setdefault(previous_release, {})
+        previous_run = _int_or_zero(previous.get("runs"))
         for check_id, status in _stage_status_map(previous.get("stages") or []).items():
-            seeded.setdefault(check_id, status)
+            seeded.setdefault(check_id, {"status": status, "run": previous_run})
 
     bucket = evidence.setdefault(release, {})
-    bucket.update(_stage_status_map(stages))
+    # #2852：每条证据带**运行序号**——读侧据此在同一候选槽内只认「最近一次发出该槽的运行」，
+    # 否则互斥路径的旧值会掩盖本次真值（旧 PASS 掩盖新 FAIL / 旧 FAIL 掩盖新 PASS）。
+    for check_id, status in _stage_status_map(stages).items():
+        bucket[check_id] = {"status": status, "run": run}
 
     while len(evidence) > EVIDENCE_RELEASES_KEPT:
         del evidence[next(iter(evidence))]  # 丢最早插入的那个发布物
@@ -513,14 +527,15 @@ def _accumulated_evidence(state_dir: Path, release: str, stages: list[dict]) -> 
 
 def _state_payload(ctx: InstallContext, stages: list[dict]) -> dict:
     release = ctx.config.release.expected_release
+    run = _state_runs(ctx.state_dir) + 1
     return {
         "site_id": ctx.config.site.id,
-        "runs": _state_runs(ctx.state_dir) + 1,
+        "runs": run,
         "target": ctx.config.control_plane.target,
         "release": release,
         "config_digest": _config_digest(ctx.config_path),
         "dry_run": ctx.dry_run,
         "stages": stages,
         # #2718：按发布物累积的证据视图（handover 的 MS 项读它，不再只看最近一次运行）
-        "evidence": _accumulated_evidence(ctx.state_dir, release, stages),
+        "evidence": _accumulated_evidence(ctx.state_dir, release, stages, run),
     }
