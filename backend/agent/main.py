@@ -3,7 +3,6 @@ import os
 import signal
 import sys
 import threading
-from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Optional, Set
 
 # 自动加载 .env 文件（支持手动运行时读取配置）
@@ -20,26 +19,9 @@ if __name__ == "__main__" and __package__ is None:
     # 直接运行时的导入路径处理
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from agent.adb_wrapper import AdbWrapper
-    from agent.recovery_executor import (
-        run_recovery_sync_if_needed,
-    )
     from agent.bootstrap_subsystems import start_disk_and_watcher_subsystems
     from agent.startup_identity import bootstrap_process_identity
     from agent.control_handler import ControlHandlerDeps, build_control_handler
-    from agent.active_job_bindings import (
-        ActiveJobOccupancy,
-        JobRunnerStateSlot,
-        build_deregister_active_job,
-        build_on_lease_lost,
-        build_register_active_job,
-    )
-    from agent.recovery_runtime import (
-        ResumeJobSlot,
-        build_cancel_recovery_job,
-        build_execute_recovery_actions,
-        build_resume_recovered_job,
-        start_periodic_recovery_sync,
-    )
     from agent.claim_loop import process_claim_tick
     from agent.graceful_shutdown import shutdown_agent_runtime
     from agent.startup_guards import (
@@ -55,37 +37,16 @@ if __name__ == "__main__" and __package__ is None:
         RecoveryActionsSlot,
         build_heartbeat_thread,
     )
+    from agent.host_control_plane import start_host_control_plane
+    from agent.job_runtime import start_job_runtime
     from agent.config import ensure_dirs
     from agent.job_runner import JobRunnerState, run_task_wrapper
-    from agent.lease_renewer import LeaseRenewer
     from agent.mq.producer import StepTraceWriter
-    from agent.outbox_drainer import OutboxDrainThread
-    from agent.step_trace_uploader import StepTraceUploader
-    from agent.patrol_recovery import build_patrol_job_not_running_handler
-    from agent.operation_scheduler import OperationScheduler
-    from agent.coordinator import HostRunCoordinator
 else:
     from .adb_wrapper import AdbWrapper
-    from .recovery_executor import (
-        run_recovery_sync_if_needed,
-    )
     from .bootstrap_subsystems import start_disk_and_watcher_subsystems
     from .startup_identity import bootstrap_process_identity
     from .control_handler import ControlHandlerDeps, build_control_handler
-    from .active_job_bindings import (
-        ActiveJobOccupancy,
-        JobRunnerStateSlot,
-        build_deregister_active_job,
-        build_on_lease_lost,
-        build_register_active_job,
-    )
-    from .recovery_runtime import (
-        ResumeJobSlot,
-        build_cancel_recovery_job,
-        build_execute_recovery_actions,
-        build_resume_recovered_job,
-        start_periodic_recovery_sync,
-    )
     from .claim_loop import process_claim_tick
     from .graceful_shutdown import shutdown_agent_runtime
     from .startup_guards import (
@@ -101,16 +62,11 @@ else:
         RecoveryActionsSlot,
         build_heartbeat_thread,
     )
+    from .host_control_plane import start_host_control_plane
+    from .job_runtime import start_job_runtime
     from .config import ensure_dirs
     from .job_runner import JobRunnerState, run_task_wrapper
-    from .lease_renewer import LeaseRenewer
-    from .operation_scheduler import OperationScheduler
-    from .coordinator import HostRunCoordinator
     from .mq.producer import StepTraceWriter
-    from .outbox_drainer import OutboxDrainThread
-    from .step_trace_uploader import StepTraceUploader
-    from .patrol_recovery import build_patrol_job_not_running_handler
-
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
@@ -239,169 +195,72 @@ def main() -> None:
     )
     heartbeat_thread.start()
 
-    # ADR-0026 Step 5b: create host-global scheduler + coordinator BEFORE
-    # any component that references them (LeaseRenewer, claim loop, etc.).
-    operation_scheduler = OperationScheduler()
-    # Late-bind: HeartbeatThread starts before scheduler exists.
-    heartbeat_thread._get_operation_stats = operation_scheduler.concurrency_snapshot
-    coordinator = HostRunCoordinator(
-        api_url, host_id, agent_instance_id, agent_secret=agent_secret,
+    plane = start_host_control_plane(
+        api_url=api_url,
+        host_id=host_id,
+        agent_instance_id=agent_instance_id,
+        agent_secret=agent_secret,
         local_db=local_db,
-    )
-    # ADR-0026 Step 5b: wire scheduler to coordinator for abort/cancel
-    coordinator.set_scheduler(operation_scheduler)
-    # Start the per-host coordinator heartbeat (reports coordinator
-    # heartbeats + per-job execution_state to control plane).
-    coordinator.start()
-    control_deps.coordinator = coordinator
-    control_deps.operation_scheduler = operation_scheduler
-    control_deps.heartbeat_thread = heartbeat_thread
-
-
-    occupancy = ActiveJobOccupancy(
-        lock=_active_jobs_lock,
-        job_ids=_active_job_ids,
-        device_ids=_active_device_ids,
-        job_tokens=_active_job_tokens,
-        device_owner=_active_device_owner,
-    )
-    job_runner_slot = JobRunnerStateSlot()
-    # ADR-0019 Phase 3b: lease 丢失回调（409 时 LeaseRenewer 内部已清理，此处处理外部状态）
-    _on_lease_lost = build_on_lease_lost(
-        occupancy=occupancy,
-        job_runner_slot=job_runner_slot,
-        coordinator=coordinator,
-        local_db=local_db,
-    )
-
-    # 启动 lease 续租器
-    lease_renewer = LeaseRenewer(
-        api_url,
+        heartbeat_thread=heartbeat_thread,
+        control_deps=control_deps,
         active_jobs_lock=_active_jobs_lock,
         active_job_ids=_active_job_ids,
+        active_device_ids=_active_device_ids,
+        active_job_tokens=_active_job_tokens,
+        active_device_owner=_active_device_owner,
         lock_renewal_stop_event=_lock_renewal_stop_event,
-        agent_instance_id=agent_instance_id,
-        on_lease_lost=_on_lease_lost,
-        host_id=host_id,
-        coordinator=coordinator,
     )
-    lease_renewer.start()
-
-    # ADR-0019 Phase 2b + Phase 3a/3b: 活跃 job 注册/注销（捕获 lease_renewer + local_db）
-    _register_active_job = build_register_active_job(
-        occupancy=occupancy,
-        lease_renewer=lease_renewer,
-        local_db=local_db,
-    )
-    _deregister_active_job = build_deregister_active_job(
-        occupancy=occupancy,
-        lease_renewer=lease_renewer,
-        local_db=local_db,
-    )
+    operation_scheduler = plane.operation_scheduler
+    coordinator = plane.coordinator
+    occupancy = plane.occupancy
+    job_runner_slot = plane.job_runner_slot
+    lease_renewer = plane.lease_renewer
+    _register_active_job = plane.register_active_job
+    _deregister_active_job = plane.deregister_active_job
 
     # 真实 control handler 在 deps 就绪后注册；回放启动窗口暂存命令（P2-2a）
     sio_client.set_control_handler(_handle_control)
     replay_early_control_commands(early_control_queue, _handle_control)
 
-    # 启动终态 Outbox Drain 线程
-    outbox_drain = OutboxDrainThread(api_url, local_db, interval=15.0)
-    outbox_drain.start()
-
-    # ── ADR-0019 Phase 3a: Recovery Sync ──
-    resume_slot = ResumeJobSlot()
-    _cancel_recovery_job = build_cancel_recovery_job(job_runner_slot)
-    _execute_recovery_actions_impl_closure = build_execute_recovery_actions(
-        lease_renewer=lease_renewer,
-        local_db=local_db,
-        outbox_drain=outbox_drain,
-        register_active_job=_register_active_job,
-        resume_slot=resume_slot,
-        cancel_recovery_job=_cancel_recovery_job,
-    )
-    recovery_actions_slot.value = _execute_recovery_actions_impl_closure
-
-    patrol_job_not_running_recovery = build_patrol_job_not_running_handler(
+    runtime = start_job_runtime(
         api_url=api_url,
         host_id=host_id,
         agent_instance_id=agent_instance_id,
         boot_id=boot_id,
+        agent_secret=agent_secret,
         local_db=local_db,
-        execute_actions=_execute_recovery_actions_impl_closure,
-    )
-
-    # StepTrace HTTP 批量上报（Phase 3.7: acked=0 补传 → Phase 4: 唯一上报路径）
-    step_trace_uploader = StepTraceUploader(
-        api_url, local_db, agent_secret=agent_secret, interval=5.0,
-    )
-    step_trace_uploader.start()
-
-    # ADR-0026 Step 5b: thread pool sized for ALL devices the host manages
-    # (up to ~50), NOT permit-limited. Concurrent script/ADB operations are
-    # gated by the OperationScheduler; distinct device jobs share the pool
-    # and wait for their turn.
-    # ADR-0026 Step 5b: independent pool for admitted jobs (no longer
-    # permit‑limited — the OperationScheduler gates concurrency separately).
-    max_workers = int(os.getenv("STP_JOB_WORKER_POOL_SIZE", "50"))
-    executor = ThreadPoolExecutor(
-        max_workers=max_workers, thread_name_prefix="task-worker"
-    )
-    job_runner_state = JobRunnerState(
+        lease_renewer=lease_renewer,
+        register_active_job=_register_active_job,
+        deregister_active_job=_deregister_active_job,
+        job_runner_slot=job_runner_slot,
+        recovery_actions_slot=recovery_actions_slot,
+        control_deps=control_deps,
+        coordinator=coordinator,
+        operation_scheduler=operation_scheduler,
+        adb=adb,
+        mq_producer=mq_producer,
+        script_registry=script_registry,
+        patrol_checkpoint_store=patrol_checkpoint_store,
+        run_task_wrapper=run_task_wrapper,
         active_jobs_lock=_active_jobs_lock,
         active_job_ids=_active_job_ids,
         active_device_ids=_active_device_ids,
         active_job_tokens=_active_job_tokens,
-        running_worker_tokens={},
-        watcher_globally_enabled=STP_WATCHER_ENABLED,
-        watcher_plan_default=STP_WATCHER_PLAN_DEFAULT,
-        lock_register=_register_active_job,
-        lock_deregister=_deregister_active_job,
+        active_device_owner=_active_device_owner,
         device_id_register=_register_active_device,
         device_id_deregister=_deregister_active_device,
-        active_device_owner=_active_device_owner,
-        on_job_not_running_recovery=patrol_job_not_running_recovery,
+        watcher_globally_enabled=STP_WATCHER_ENABLED,
+        watcher_plan_default=STP_WATCHER_PLAN_DEFAULT,
     )
-    control_deps.job_runner_state = job_runner_state
-    job_runner_slot.value = job_runner_state
+    outbox_drain = runtime.outbox_drain
+    executor = runtime.executor
+    job_runner_state = runtime.job_runner_state
+    step_trace_uploader = runtime.step_trace_uploader
+    _recovery_sync_stop = runtime.recovery_sync_stop
+    _recovery_sync_thread = runtime.recovery_sync_thread
 
-    resume_slot.value = build_resume_recovered_job(
-        agent_instance_id=agent_instance_id,
-        coordinator=coordinator,
-        executor=executor,
-        adb=adb,
-        api_url=api_url,
-        host_id=host_id,
-        job_runner_state=job_runner_state,
-        mq_producer=mq_producer,
-        script_registry=script_registry,
-        local_db=local_db,
-        patrol_checkpoint_store=patrol_checkpoint_store,
-        operation_scheduler=operation_scheduler,
-        step_trace_uploader=step_trace_uploader,
-        run_task_wrapper=run_task_wrapper,
-    )
-
-    # Recovery sync execution（启动一次 + #784 周期兜底）
-    run_recovery_sync_if_needed(
-        local_db=local_db,
-        api_url=api_url,
-        host_id=host_id,
-        agent_instance_id=agent_instance_id,
-        boot_id=boot_id,
-        execute_actions=_execute_recovery_actions_impl_closure,
-    )
-    _recovery_sync_stop, _recovery_sync_thread, _recovery_sync_interval = (
-        start_periodic_recovery_sync(
-            local_db=local_db,
-            api_url=api_url,
-            host_id=host_id,
-            agent_instance_id=agent_instance_id,
-            boot_id=boot_id,
-            execute_actions=_execute_recovery_actions_impl_closure,
-        )
-    )
     # SIGTERM / SIGINT graceful shutdown
     _shutdown_event = threading.Event()
-
     def _signal_handler(signum, frame):
         sig_name = signal.Signals(signum).name
         logger.info("received_%s, initiating graceful shutdown", sig_name)

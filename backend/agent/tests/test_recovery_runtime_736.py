@@ -99,16 +99,16 @@ def test_start_periodic_recovery_sync_starts_thread():
 
 
 def test_main_wires_recovery_runtime():
-    import backend.agent.main as agent_main
+    import backend.agent.job_runtime as job_runtime
     from tools.dev.source_anchor import SourceGuard
 
     guard = (
-        SourceGuard.of_module(agent_main)
+        SourceGuard.of_module(job_runtime)
         .anchored("build_execute_recovery_actions(")
         .anchored("build_resume_recovered_job(")
         .anchored("start_periodic_recovery_sync(")
     )
     guard.assert_absent(
         "def _resume_recovered_job_impl(",
-        why="#736 recovery_runtime 已抽出，main 不得回潮内联 resume 闭包",
+        why="#736 recovery_runtime 已抽出，job_runtime 不得回潮内联 resume 闭包",
     )
