@@ -14,6 +14,19 @@
 所以正确迁移的函数天然零命中，不需要文件级豁免；可豁免的只有 `EXEMPT` 里两个「描述该形态」
 的元文件，且被 `test_exempt_list_is_not_self_defeating` 钉死不扩大。
 
+**断言对象必须真的是「那篇源文本」**：读进来的文本若被 `json.loads` / `yaml.safe_load` /
+`ast.parse` 解析成结构、被渲染函数产出成页面、或与序列化产物混进同一条表达式，
+那么 `assert x not in 结果` 判的是**行为**（解析器/渲染器对不对），不是源扫描——它没有真源
+锚点可编，硬要迁移只会造出假锚点。这类形态不算 offender（#2639 落地后复盘：存量里有 7 处
+根本不是源扫描，把它们计入债务清单会让「还剩多少活」失真）。
+
+**但默认方向是反的**：源文本进了**未登记**的函数时，按「仍然是文本」处理、照旧判红。
+判据少抓可以下一轮补，**静默放过正是本棘轮要消灭的那件事**。放过路径**只有「显式登记的产物消费者」一条**，其余全按源文本判红——
+夹具 `mystery.py`（未知消费者仍须命中）与 `washed_text.py`（洗过的文本仍须命中）钉住这个默认值，
+`parsed.py`/`rendered.py`/`mixed.py` 钉住登记形态，另有
+`test_tightening_only_subtracts_never_adds` 把「本收紧只做减法」变成逐位点比对，
+`test_product_consumers_are_load_bearing` 禁止登记不再在场的产物消费者（死条目＝未来的黑洞）。
+
 用 AST 而非文本 grep 是承接 #2641/#2642 的教训：注释里的同形文本不得满足判据，
 判据必须落在代码行上。
 
@@ -42,6 +55,89 @@ EXEMPT = {
     "tests/test_source_scan_anchor_ratchet.py",
 }
 _SOURCE_READER_ATTRS = {"read_text", "getsource"}
+
+#: 结果**不再是文本**的具名消费者：解析成结构、或渲染/序列化成产物。
+#: 对产物判「某词不存在」是**行为断言**（渲染器/解析器对不对），不是源扫描——它没有
+#: 「真源锚点」可编，硬迁移只会造出假锚点。每条必须带理由，且不得留死条目
+#: （见 `test_product_consumers_are_load_bearing`）。
+_PRODUCT_CONSUMERS = {
+    "json.loads": "文本已被解析成 Python 结构，断言对象是 dict/list 不是源文本",
+    "json.dumps": "序列化产物，不是任何真源文件",
+    "yaml.safe_load": "同 json.loads（YAML 侧）",
+    "ast.parse": "解析成 AST，后续判的是节点不是文本",
+    "render_navigation_page": "站点导航页**渲染产物**（tests/test_site_handover.py 三例）",
+}
+
+_SRC = "src"  # 是那篇源文本（含保文本变换）
+_PRODUCT = "prod"  # 已被解析/渲染成别的东西——不属于本判据
+_UNKNOWN = "unknown"  # 判不出来：**按源文本处理**（宁可多判，不可漏判）
+
+
+def _callee_key(node: ast.Call) -> str:
+    """调用者的可判定名字：`json.loads(x)` → "json.loads"；`a.read_text().replace()` → "replace"。"""
+    func = node.func
+    parts: list[str] = []
+    while isinstance(func, ast.Attribute):
+        parts.append(func.attr)
+        func = func.value
+    if isinstance(func, ast.Name):
+        parts.append(func.id)
+        return ".".join(reversed(parts))
+    return parts[0] if parts else ""
+
+
+def _arg_expr(node: ast.expr) -> ast.expr:
+    """`f(*src)` 里的 `Starred` 拆一层；其余实参本身就是表达式。"""
+    return node.value if isinstance(node, ast.Starred) else node
+
+
+def _contains_reader(node: ast.AST) -> bool:
+    return any(_reader_call(child) for child in ast.walk(node))
+
+
+def _pick(parts: list[str]) -> str:
+    """混合表达式：产物一旦混进来就不再是纯源文本；否则见源文本即源文本。"""
+    if _PRODUCT in parts:
+        return _PRODUCT
+    if _SRC in parts:
+        return _SRC
+    return _UNKNOWN
+
+
+def _provenance(node: ast.AST) -> str:
+    """该表达式的值是「源文本」还是「解析/渲染产物」。不做数据流，判不出即 `_UNKNOWN`。"""
+    if isinstance(node, ast.Call):
+        if _reader_call(node):
+            return _SRC
+        key = _callee_key(node)
+        if key in _PRODUCT_CONSUMERS:
+            return _PRODUCT
+        arg_provs = [_provenance(_arg_expr(a)) for a in node.args]
+        arg_provs += [_provenance(kw.value) for kw in node.keywords]
+        arg_provs = [p for p in arg_provs if p != _UNKNOWN]
+        if _SRC in arg_provs:
+            return _UNKNOWN  # 源文本进了**未知**函数：算不算文本判不出来 → 保守按文本
+        return _PRODUCT if _PRODUCT in arg_provs else _UNKNOWN
+    if isinstance(node, ast.Attribute | ast.Subscript):
+        return _provenance(node.value)
+    if isinstance(node, ast.BinOp):
+        return _pick([_provenance(node.left), _provenance(node.right)])
+    if isinstance(node, ast.JoinedStr):
+        return _pick([_provenance(v) for v in node.values])
+    if isinstance(node, ast.IfExp):
+        return _pick([_provenance(node.body), _provenance(node.orelse)])
+    if isinstance(node, ast.BoolOp):
+        return _pick([_provenance(v) for v in node.values])
+    return _UNKNOWN
+
+
+def _is_source_like(value: ast.AST) -> bool:
+    """绑成「源码文本变量」的口径：**判得出是产物才放过**，未知一律按源文本算。
+
+    与旧版（子树里出现过 `read_text()` 就算）相比只**减去**可证的解析/渲染形态，
+    不新增任何放过路径——假阳性可以慢慢收，**假阴性是静默的**（#2639 的立单理由）。
+    """
+    return _provenance(value) != _PRODUCT and _contains_reader(value)
 #: 命中处数**下限**（不是现状计数）：判据被削弱时兜底，存量迁移不会撞红它。
 SITE_FLOOR = 50
 
@@ -56,11 +152,10 @@ BASELINE = frozenset(
         "backend/tests/services/test_job_log_signal.py",  # 1
         "backend/tests/test_ci_and_test_harness_files.py",  # 5
         "backend/tests/test_deployment_files.py",  # 6
-        "backend/tests/test_schema_sync_guard.py",  # 2
         "backend/tests/test_ssh_security.py",  # 1
         "tests/test_agent_priv_boundary.py",  # 3
         "tests/test_agentctl_contract.py",  # 2
-        "tests/test_ansible_config_channel_2218.py",  # 2
+        "tests/test_ansible_config_channel_2218.py",  # 1
         "tests/test_deploy_scripts.py",  # 3
         "tests/test_dev_bootstrap_seed.py",  # 1
         "tests/test_install_agent_noninteractive.py",  # 3
@@ -69,8 +164,7 @@ BASELINE = frozenset(
         "tests/test_script_seed_static_guards.py",  # 1
         "tests/test_seed_revision_version_guard.py",  # 1
         "tests/test_site_bootstrap.py",  # 2
-        "tests/test_site_handover.py",  # 3
-        "tests/test_site_install.py",  # 4
+        "tests/test_site_install.py",  # 3
         "tests/test_site_preflight.py",  # 2
         "tests/test_update_agent_playbook.py",  # 4
     }
@@ -82,10 +176,10 @@ def _reader_call(node: ast.AST) -> bool:
 
 
 def _source_bound_names(fn: ast.AST) -> set[str]:
-    """函数内被「源码文本读取」结果绑定的变量名。"""
+    """函数内被「源码文本读取」结果绑定的变量名（解析/渲染产物不算）。"""
     names: set[str] = set()
     for node in ast.walk(fn):
-        if isinstance(node, ast.Assign) and any(_reader_call(c) for c in ast.walk(node.value)):
+        if isinstance(node, ast.Assign) and _is_source_like(node.value):
             for target in node.targets:
                 if isinstance(target, ast.Name):
                     names.add(target.id)
@@ -102,7 +196,7 @@ def _negations_on_source(fn: ast.AST, names: set[str]) -> list[int]:
             continue
         right = node.test.comparators[0]
         bound_name = isinstance(right, ast.Name) and right.id in names
-        if bound_name or _reader_call(right):
+        if bound_name or _is_source_like(right):
             hits.append(node.lineno)
     return hits
 
@@ -227,6 +321,46 @@ def test_detector_discriminates(tmp_path: Path) -> None:
         '    assert "row.state = ev.state" not in src\n',
         encoding="utf-8",
     )
+    # **解析成结构**后判键存在性：断言对象不是源文本，放过（#2639 假阳性主因之一）
+    (pkg / "parsed.py").write_text(
+        "import json\nfrom pathlib import Path\n\n\ndef t():\n"
+        '    data = json.loads(Path("x").read_text(encoding="utf-8"))\n'
+        '    assert "remove_table|ghost" not in data\n',
+        encoding="utf-8",
+    )
+    # 渲染**产物**：同上，判的是渲染器的输出，不是任何真源文件
+    (pkg / "rendered.py").write_text(
+        "from pathlib import Path\n\n\ndef t(ctx):\n"
+        '    page = render_navigation_page(Path("x").read_text(encoding="utf-8"), ctx)\n'
+        '    assert "<deploy-root>" not in page\n',
+        encoding="utf-8",
+    )
+    # 产物与文本**混在一起**再判：整表达式已不是纯源文本，放过
+    (pkg / "mixed.py").write_text(
+        "import json\nfrom pathlib import Path\n\n\ndef t(report):\n"
+        '    blob = json.dumps(report) + Path("x").read_text(encoding="utf-8")\n'
+        '    assert "PRIVATE" not in blob\n',
+        encoding="utf-8",
+    )
+    # **洗一遍文本**再判（去注释/换行）：仍是源扫描，必须命中——把这类判成产物，
+    # 就是本判据最贵的一类错误（静默漏防），故单独钉一条。
+    (pkg / "washed_text.py").write_text(
+        "from pathlib import Path\n\n\ndef t():\n"
+        '    code = "\\n".join(\n'
+        '        line\n'
+        '        for line in Path("x").read_text(encoding="utf-8").splitlines()\n'
+        '        if not line.startswith("#")\n'
+        "    )\n"
+        '    assert "become: yes" not in code\n',
+        encoding="utf-8",
+    )
+    # 源文本进了**未知**函数：算不算文本判不出来 → 保守按源文本命中
+    (pkg / "mystery.py").write_text(
+        "from pathlib import Path\n\n\ndef t():\n"
+        '    out = some_unregistered_helper(Path("x").read_text(encoding="utf-8"))\n'
+        '    assert "SECRET" not in out\n',
+        encoding="utf-8",
+    )
     # 已导入助手的文件里**残留**一条裸否定断言：整文件豁免会把它放走，故必须命中
     (pkg / "regressed.py").write_text(
         "from pathlib import Path\n"
@@ -238,7 +372,59 @@ def test_detector_discriminates(tmp_path: Path) -> None:
     )
     # 仓库外路径会退化成绝对路径（见 scan_offenders 的 rel 计算），按文件名比对
     found = {Path(rel).name for rel in scan_offenders([pkg])}
-    assert found == {"bad.py", "smuggled.py", "regressed.py"}, found
+    assert found == {"bad.py", "smuggled.py", "regressed.py", "washed_text.py", "mystery.py"}, found
+
+
+def _callee_keys_in(roots: list[Path]) -> set[str]:
+    """语料里真实出现过的调用者名字（含末段方法名，便于按 `json.loads` 这类点号名比对）。"""
+    keys: set[str] = set()
+    for path in iter_candidates(roots):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for call in (n for n in ast.walk(tree) if isinstance(n, ast.Call)):
+            key = _callee_key(call)
+            keys.add(key)
+            keys.add(key.rsplit(".", 1)[-1])
+    return keys
+
+
+def test_product_consumers_are_load_bearing() -> None:
+    """`_PRODUCT_CONSUMERS` 每条都要**有理由**且**在语料里真的出现**。
+
+    登记一个不再被任何代码使用的「产物消费者」，等于给未来留一个静默放过位：
+    以后同名函数读源码再判禁词会被直接判成产物而不再受检。故此处强制「要么在场，要么删掉」。
+    """
+    keys = _callee_keys_in(_default_roots())
+    dead = sorted(k for k in _PRODUCT_CONSUMERS if k not in keys)
+    assert not dead, f"这些产物消费者已不在扫描面里，请删除（留着就是未来的漏判位）：{dead}"
+    no_reason = sorted(k for k, v in _PRODUCT_CONSUMERS.items() if not v.strip())
+    assert not no_reason, f"这些条目没写理由，写不清它为什么不是源文本就不该登记：{no_reason}"
+
+
+def test_tightening_only_subtracts_never_adds() -> None:
+    """新口径必须是旧口径的**子集**：只允许减少命中，绝不允许新增放过路径之外的命中。
+
+    这条是「假阳性可以慢慢收，假阴性是静默的」的可执行化：哪天有人把默认值从
+    「未知按源文本」翻成「未知按产物」，命中数会**下降**但方向错了——这里用逐位点
+    比对把它拦下来（而不是只看总数）。
+    """
+    def legacy_bound_names(fn: ast.AST) -> set[str]:
+        names: set[str] = set()
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Assign) and any(_reader_call(c) for c in ast.walk(node.value)):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        names.add(target.id)
+        return names
+
+    lost: list[str] = []
+    for path in iter_candidates(_default_roots()):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for fn in (n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)):
+            old, new = legacy_bound_names(fn), _source_bound_names(fn)
+            if not new <= old:
+                rel = path.relative_to(REPO_ROOT).as_posix() if path.is_relative_to(REPO_ROOT) else path.name
+                lost.append(f"{rel}:{fn.name} 新增绑定 {sorted(new - old)}")
+    assert not lost, "判据出现了旧口径没有的绑定（本收紧只做减法）：\n" + "\n".join(lost)
 
 
 def test_exempt_list_is_not_self_defeating() -> None:
