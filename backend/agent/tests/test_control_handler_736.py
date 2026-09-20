@@ -96,15 +96,15 @@ def test_reload_config_reapplies_runtime():
 
 
 def test_main_wires_control_handler_builder():
-    import backend.agent.main as agent_main
+    import backend.agent.agent_application as app
     import backend.agent.job_runtime as job_runtime
     from tools.dev.source_anchor import SourceGuard
 
-    # 正锚点：control_handler 组装仍在 main；job_runner_state 晚绑定在 job_runtime
-    guard = SourceGuard.of_module(agent_main).anchored("build_control_handler(")
+    # 正锚点：control_handler 组装在 AgentApplication；job_runner_state 晚绑定在 job_runtime
+    guard = SourceGuard.of_module(app).anchored("build_control_handler(")
     guard.assert_absent(
         'elif command == "reload_config":',
-        why="#736 control_handler 已抽出，main 不得回潮内联 reload_config 分支",
+        why="#736 control_handler 已抽出，编排层不得回潮内联 reload_config 分支",
     )
     SourceGuard.of_module(job_runtime).anchored(
         "control_deps.job_runner_state = job_runner_state"
