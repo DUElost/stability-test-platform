@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import importlib.util
 import re
+
+from tests.repo_scan import iter_scanned
 import sys
 from pathlib import Path
 
@@ -230,10 +232,13 @@ class TestReaderSurface:
     def test_readers_outside_tests_are_registered(self):
         pattern = re.compile(r'os\.(?:environ\.get|getenv)\(\s*["\']TEST_DATABASE_URL["\']')
         found: set[str] = set()
-        for path in REPO_ROOT.rglob("*.py"):
+        # 扫描面 = 仓库跟踪内容（#2870）。原先的 REPO_ROOT.rglob 会把 `.wt/*` 里整仓副本
+        # 读进来：本机 10 个 worktree = 60 项差异全来自副本 ⇒ 本机恒红、CI 恒绿，
+        # 真回归与噪声不可分。
+        for path in iter_scanned(
+            (".py",), root=REPO_ROOT, exclude_prefixes=("backend/tests/", "tests/")
+        ):
             rel = path.relative_to(REPO_ROOT).as_posix()
-            if rel.startswith(("backend/tests/", "tests/")) or "/.git/" in rel:
-                continue
             if pattern.search(path.read_text(encoding="utf-8", errors="ignore")):
                 found.add(rel)
         assert found == set(self._READERS_OUTSIDE_TESTS), (

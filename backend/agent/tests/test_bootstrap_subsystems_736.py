@@ -78,6 +78,8 @@ def test_start_disk_subsystems_skips_watcher_when_disabled():
     scan.return_value.configure.assert_called_once_with()
     uscan.return_value.configure.assert_called_once_with()
     upload.return_value.configure.assert_called_once_with()
+    # #2845：根由 bootstrap 解析后显式传入，不靠组件内部再读一次 env
+    assert event_uploader.configure.call_args.kwargs["nfs_root"] == "/tmp/cifs"
     event_uploader.start.assert_called_once()
     disk_monitor.configure.assert_called_once()
     disk_monitor.start.assert_called_once()
@@ -159,6 +161,10 @@ def test_start_disk_subsystems_enables_watcher_stack():
 
     assert result is drainer
     disk_monitor.configure.assert_not_called()  # empty cifs_root skips spill monitor
+    # #2845：同上——无共享存储根时 EventUploader 也整体不启用（否则 configure
+    # 内部求 get_aee_nfs_root() 抛 RuntimeError 打断 bootstrap）
+    event_uploader.configure.assert_not_called()
+    event_uploader.start.assert_not_called()
     watcher_mgr.configure.assert_called_once()
     watcher_mgr.reconcile_on_startup.assert_called_once()
     drainer.start.assert_called_once()

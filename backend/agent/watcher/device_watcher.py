@@ -64,6 +64,9 @@ class WatcherStats:
     immediate_emits: int = 0
     batch_emits: int = 0
     source_restarts: int = 0         # #1049：inotifyd 源退出后的成功重连次数
+    # #2886：无消费方（未接线/自关闭停摆）时被消费的 UNIVIEW 唤醒事件数。
+    # 随 summary.watcher_stats 回流平台——UNIVIEW 覆盖归零在此字段前是纯 debug 静默。
+    unisoc_wake_no_consumer: int = 0
 
     @classmethod
     def from_batcher(
@@ -73,6 +76,7 @@ class WatcherStats:
         dropped_extra: int = 0,
         puller: Optional[PullerStats] = None,
         source_restarts: int = 0,
+        unisoc_wake_no_consumer: int = 0,
     ) -> "WatcherStats":
         pulls_ok = puller.pulls_ok if puller else 0
         pulls_failed = (
@@ -88,6 +92,7 @@ class WatcherStats:
             immediate_emits=b.immediate_emits,
             batch_emits=b.batch_emits,
             source_restarts=source_restarts,
+            unisoc_wake_no_consumer=unisoc_wake_no_consumer,
         )
 
     def to_dict(self) -> Dict[str, int]:
@@ -100,6 +105,7 @@ class WatcherStats:
             "immediate_emits": self.immediate_emits,
             "batch_emits":     self.batch_emits,
             "source_restarts": self.source_restarts,
+            "unisoc_wake_no_consumer": self.unisoc_wake_no_consumer,
         }
 
 
@@ -184,6 +190,8 @@ class DeviceLogWatcher:
         self._started = False
         self._stopped = False
         self._extra_dropped = 0     # SignalEmitter contract 违规等导致的额外丢弃
+        # #2886：无消费方时被消费的 UNIVIEW 事件计数（进 stats → summary 回流平台）
+        self._unisoc_wake_no_consumer = 0
 
         # #1049：源监督（观察 is_running()，退出后退避重连）
         self._supervisor_thread: Optional[threading.Thread] = None
@@ -253,10 +261,23 @@ class DeviceLogWatcher:
                     self._serial, self._job_id,
                 )
         else:
-            logger.debug(
-                "unisoc_wake_no_reconciler serial=%s job=%d path=%s",
-                self._serial, self._job_id, getattr(event, "path", None),
-            )
+            # #2886：无消费方（reconciler 未接线或已自关闭停摆）时，本 job 的
+            # UNIVIEW 覆盖归零——此前只有 debug 一行，#806 的可见性兜底对这条
+            # 路径结构性无效（它复位的是 AEE/VENDOR_AEE 的 emit 抑制位）。
+            # 出口＝首见 WARNING（运维可 grep）+ 计数进 stats（随 summary 回流平台）。
+            self._unisoc_wake_no_consumer += 1
+            if self._unisoc_wake_no_consumer == 1:
+                logger.warning(
+                    "unisoc_wake_no_consumer serial=%s job=%d path=%s "
+                    "no UNIVIEW producer for this job (reconciler unwired or "
+                    "self-shutdown); subsequent events only counted",
+                    self._serial, self._job_id, getattr(event, "path", None),
+                )
+            else:
+                logger.debug(
+                    "unisoc_wake_no_consumer serial=%s job=%d count=%d",
+                    self._serial, self._job_id, self._unisoc_wake_no_consumer,
+                )
         return True
 
     def _should_emit_inotifyd(self, event: WatcherEvent) -> bool:
@@ -285,6 +306,7 @@ class DeviceLogWatcher:
             dropped_extra=self._extra_dropped,
             puller=self._puller.stats if self._puller is not None else None,
             source_restarts=self._source_restarts,
+            unisoc_wake_no_consumer=self._unisoc_wake_no_consumer,
         )
 
     @property

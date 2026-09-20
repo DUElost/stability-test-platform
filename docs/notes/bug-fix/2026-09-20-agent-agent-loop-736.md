@@ -1,7 +1,7 @@
 # #736 切片：claim loop 外壳抽出 `agent_loop`
 
 Status: implemented
-Class: bugfix
+Class: bug-fix
 
 ## Decision
 
