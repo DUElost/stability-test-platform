@@ -139,7 +139,18 @@ def _read_json(path: Path) -> tuple[dict[str, Any] | None, str | None]:
     return (payload, None) if isinstance(payload, dict) else (None, "install_state")
 
 
-def _stage_index(state: dict[str, Any]) -> dict[str, str]:
+def _status_run(value: Any) -> tuple[str, int]:
+    """证据条目 → `(status, run)`；兼容旧格式（纯字符串，无运行序号 ⇒ run=0）。"""
+    if isinstance(value, dict):
+        try:
+            run = int(value.get("run") or 0)
+        except (TypeError, ValueError):
+            run = 0
+        return str(value.get("status") or ""), run
+    return str(value or ""), 0
+
+
+def _stage_index(state: dict[str, Any]) -> dict[str, tuple[str, int]]:
     """Map every recorded check id to the status of the stage that reported it.
 
     #2718：先用**按发布物累积**的证据视图打底（`evidence[<release>]`），再用最近一次运行的
@@ -149,37 +160,40 @@ def _stage_index(state: dict[str, Any]) -> dict[str, str]:
 
     旧格式状态（只有 `stages`，无 `evidence`）行为不变。
     """
-    index: dict[str, str] = {}
+    index: dict[str, tuple[str, int]] = {}
     release = str(state.get("release") or "")
     evidence = state.get("evidence")
     if release and isinstance(evidence, dict):
         bucket = evidence.get(release)
         if isinstance(bucket, dict):
-            index.update({str(k): str(v) for k, v in bucket.items()})
+            index.update({str(k): _status_run(v) for k, v in bucket.items()})
+    # 最近一次运行的 stages 覆盖同 ID（用 state 的 runs 当序号 ⇒ 一定比桶里旧条目新）
+    latest_run = _status_run({"run": state.get("runs"), "status": ""})[1]
     for entry in state.get("stages", []):
         if not isinstance(entry, dict):
             continue
         status = str(entry.get("status") or "")
         for check_id in entry.get("checks", []):
-            index[str(check_id)] = status
+            index[str(check_id)] = (status, latest_run)
     return index
 
 
-def _verify_index(report: dict[str, Any] | None) -> dict[str, str]:
+def _verify_index(report: dict[str, Any] | None) -> dict[str, tuple[str, int]]:
     if not isinstance(report, dict):
         return {}
-    index: dict[str, str] = {}
+    index: dict[str, tuple[str, int]] = {}
     for entry in report.get("checks", []):
         if isinstance(entry, dict) and entry.get("check_id"):
-            index[str(entry["check_id"])] = str(entry.get("status") or "")
+            # verify 报告没有运行序号：统一成 run=0（与 stages 索引同形，_match 只认一个形状）
+            index[str(entry["check_id"])] = (str(entry.get("status") or ""), 0)
     return index
 
 
 def _resolve(
     item: AcceptanceItem,
     *,
-    stages: dict[str, str],
-    verify: dict[str, str],
+    stages: dict[str, tuple[str, int]],
+    verify: dict[str, tuple[str, int]],
     runs: int,
 ) -> Check:
     """Turn one acceptance item into a three-state check."""
@@ -188,23 +202,29 @@ def _resolve(
     failed: list[str] = []
     blocked_evidence: list[str] = []
 
-    def _match(slot: CheckSlot, index: dict[str, str], source: str) -> None:
+    def _match(slot: CheckSlot, index: dict[str, tuple[str, int]], source: str) -> None:
         """一个槽位可给多个候选 ID（#2404）。
 
-        同一语义在不同路径会发出不同 ID，而安装记录只保留**最近一次**运行的集合：
-        例如 S3 在「数据库已在 head」时发 `install.s3.db`、在「本次应用了迁移」时发
-        `install.s3.migrate`（互斥）。固定要求其一会让已装站点的交接证据永远缺失。
-        命中规则：按候选顺序取**第一个存在**的 ID；都不存在才算缺失，缺失文案给出
-        `A or B`，避免只报一半让人以为漏记。
+        同一语义在不同路径会发出不同 ID，而安装记录按发布物**累计**（#2718）——例如 S3 在
+        「数据库已在 head」时发 `install.s3.db`、在「本次应用了迁移」时发 `install.s3.migrate`
+        （互斥）。命中规则（#2852 修正）：
+
+        1. 候选组内**只认最近一次发出该槽的运行**（条目带运行序号）——互斥路径的旧值就此退役，
+           两个方向都不再误判：旧 PASS 不得掩盖新 FAIL，旧 FAIL 也不得掩盖新 PASS；
+        2. 同一次运行内多个成员同时在场时取**最坏**（FAIL > BLOCKED > PASS）——一个 PASS
+           永不遮蔽兄弟 FAIL；
+        3. 都不存在才算缺失，缺失文案给出 `A or B`，避免只报一半让人以为漏记。
         """
         candidates = (slot,) if isinstance(slot, str) else slot
-        status = None
-        hit = candidates[0]
-        for candidate in candidates:
-            if candidate in index:
-                status = index[candidate]
-                hit = candidate
-                break
+        # index 的值在 _stage_index/_verify_index 里已归一成 (status, run)，此处直接用
+        present = [(c, *index[c]) for c in candidates if c in index]
+        status, hit = None, candidates[0]
+        if present:
+            newest = max(run for _c, _s, run in present)
+            same_run = [(c, st) for c, st, run in present if run == newest]
+            # 最坏优先：FAIL < BLOCKED < PASS（取序最小的那个作为命中）
+            rank = {"FAIL": 0, "BLOCKED": 1, "PASS": 2}
+            hit, status = min(same_run, key=lambda pair: rank.get(pair[1], 1))
         if status is None:
             missing.append(" or ".join(candidates))
         elif status == "PASS":

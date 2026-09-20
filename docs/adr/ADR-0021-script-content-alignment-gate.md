@@ -42,7 +42,7 @@ ADR-0020 完成 Plan / PlanStep 切换后，编排定义、Job 派发、Agent �
 - **派发门禁仅作用于 MANUAL 路径**。SCHEDULE（cron 触发）和 CHAIN（PlanRun 链路触发）维持现有同步派发，不经门禁。后续若需扩展由独立 ADR 决议。
 - 入队 SAQ task `precheck_and_dispatch(plan_run_id)`，同步阻塞返回 `{plan_run_id, ...}` 给前端。
 - task 内部按以下阶段推进，每个阶段把进展写入 `run_context.precheck`：
-  1. **verify** — 对涉及的每个 host 通过 SocketIO RPC 取得 Agent 实测 sha256，与 `plan_snapshot.script_meta` 比对。
+  1. **verify** — 对涉及的每个 host 通过 SocketIO RPC 取得 Agent 实测 sha256，与 **plan_snapshot 步骤身份 ∩ 平台 DB `Script.content_sha256`** 比对（`backend/services/precheck/scripts.py`；快照**无** `script_meta` 键）。
   2. **sync**（仅当 verify 失败时）— 对每个失败 host 触发 hot-update（rsync + Agent restart）。
   3. **re-verify** — 同步后再次 verify。
   4. **dispatch** — 全部对齐后创建 JobInstance 行，PlanRun 进入"对齐完成"状态（仍为 status='RUNNING'，`run_context.precheck.phase='ready'`）。
@@ -96,7 +96,7 @@ PlanRun 列表语义：所有派发尝试（成功 / 失败）都在列表中可
 ### D4 — 平台 DB 是脚本内容唯一权威
 
 - Agent 不与 Git 比对、不与本地 SQLite 比对、不与 NFS 缓存比对；
-- 验证方向：Agent 计算磁盘文件 sha256，回报后端，后端用 `plan_snapshot.script_meta[*].content_sha256` 对账；
+- 验证方向：Agent 计算磁盘文件 sha256，回报后端，后端用 plan_snapshot 各 step 的 `(script_name, script_version)` 身份 ∩ live `Script.content_sha256` 对账（**非**不存在的 `plan_snapshot.script_meta[*].content_sha256`；#2546 / Mode C）；
 - DB sha 写入路径：`POST /api/v1/scripts/scan`（运维显式触发）、`POST /api/v1/scripts/{name}/versions`（新建版本时写入）。其他途径不允许修改 sha。
 
 ### D5 — 同步通道 = host hot-update
@@ -294,7 +294,7 @@ abort 不只是为热更新服务——它是产品独立价值的运维功能�
 
 - ADR-0018 — Watcher 子系统主线（Job 终态聚合复用）
 - ADR-0019 — Device Lease v2（abort 协议依赖 lease 释放）
-- ADR-0020 — Plan-Step 一次性切换（`plan_snapshot.script_meta` 为派发时刻自 D4 冻结的副本，用于追溯与幂等；快照隔离见 ADR-0020，**非独立权威源**；#2546 X1）
+- ADR-0020 — Plan-Step 一次性切换（plan_snapshot 冻结各 step 的 `(script_name, script_version)`[/nfs_path] 身份；verify 期望 sha **现取**于 live `Script.content_sha256`，快照隔离见 ADR-0020，**非独立权威源**；#2546 X1）
 - `backend/services/host_updater.py` — hot-update 既有实现
 - `backend/realtime/socketio_server.py` — SocketIO 服务端，本 ADR 在此扩展 RPC 能力
 - `backend/agent/ws_client.py` — Agent SocketIO 客户端，本 ADR 在此注册 verify_scripts handler
