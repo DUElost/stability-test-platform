@@ -127,7 +127,7 @@ flowchart TD
 - **元数据清单（Manifest）**：
   - 主代码仓中仅保留 `tool_manifest.yaml`，定义工具名称、版本、适用架构、执行入口、超时及依赖配置；
   - **双版本体系权威裁定**：架构不变量保持一致——执行引擎仍以 `script:<name>` 作为调用标识，但 **DB script 目录（script catalog）仍是唯一运行时权威**；`tool_manifest.yaml` 是发布格式，注册时编译进 script 行（沿用 `capabilities.json` → scan → DB 的既有先例，#171），不是并存的第二套版本体系；
-  - **升级工具包 = 新建 script 版本行**（`content_sha256 := tarball sha256`），保 ADR-0023 `plan_step.script_sha` 溯源；ADR-0020 不可变、422 与退役 409 守卫（`SCRIPT_STILL_REFERENCED`）原样复用，零新机制；
+  - **升级工具包 = 新建 script 版本行**（`content_sha256 := tarball sha256`），保 ADR-0021 / ADR-0023 经由 `Script.content_sha256` 溯源（**无** `plan_step.script_sha` 列；#2546 Mode C）；ADR-0020 不可变、422 与退役 409 守卫（`SCRIPT_STILL_REFERENCED`）原样复用，零新机制；
   - **CI 门禁分工**：PR 门禁（无 NFS 访问）只管 Git 侧——manifest schema lint + 已登记版本条目 append-only；tarball 存在性与 sha256 校验发生在注册时、Agent 拉取时与控制面周期健康巡检。
 
 ### D4：防腐适配器架构（Anti-Corruption Layer, ACL）

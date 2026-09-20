@@ -47,12 +47,10 @@ def _wait_queued(scheduler, device_id: int, timeout: float = 2.0) -> None:
 
 class TestStartupOrder:
     def test_coordinator_constructed_before_start(self):
-        """Verify in main() source that coordinator = HostRunCoordinator(...)
-        appears before coordinator.start(). Simple source-text check."""
-        from backend.agent.main import main
+        """Verify HostRunCoordinator(...) appears before .start() in plane wiring."""
+        from backend.agent.host_control_plane import start_host_control_plane
 
-        src = inspect.getsource(main)
-        # Find line numbers of the key statements
+        src = inspect.getsource(start_host_control_plane)
         lines = src.split("\n")
         construct_line = start_line = None
         for i, line in enumerate(lines, 1):

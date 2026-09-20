@@ -23,7 +23,13 @@ from backend.services.mtbf_suite import (
     suite_from_rows,
 )
 
-_FIXTURES = Path(__file__).resolve().parent / "fixtures" / "mtbf"
+# #739 第二批：本文件自 `backend/agent/tests/` 迁入。fixtures 是**两套件共用**的测试数据
+# （`backend/agent/tests/test_mtbf_scripts.py` 仍在用），故留在原地、按仓库根反查；
+# 这只是数据引用，不构成 import 边界（边界管的是 import）。
+_FIXTURES = (
+    Path(__file__).resolve().parents[3]
+    / "backend" / "agent" / "tests" / "fixtures" / "mtbf"
+)
 
 
 @pytest.fixture(scope="module")
