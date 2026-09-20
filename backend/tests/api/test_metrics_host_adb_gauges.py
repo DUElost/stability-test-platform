@@ -16,11 +16,12 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _host(db, host_id: str, *, retired: bool = False) -> Host:
+def _host(db, host_id: str, *, retired: bool = False,
+          status: str = HostStatus.ONLINE.value) -> Host:
     # host.ip 有唯一约束（host_ip_key）——每台派生一个不同地址，别共用常量。
     octet = (sum(ord(ch) for ch in host_id) % 200) + 10
     host = Host(
-        id=host_id, hostname=host_id, status=HostStatus.ONLINE.value,
+        id=host_id, hostname=host_id, status=status,
         ip=f"10.44.0.{octet}", ssh_user="root", ssh_port=22, extra={},
         last_heartbeat=_now(), created_at=_now(),
     )
@@ -120,4 +121,32 @@ def test_series_removed_after_host_is_retired(client, db_session, monkeypatch):
     assert 'host_id="adb-live"' not in second, (
         "退役后该 host 的 series 仍在 /metrics 里（prometheus_client label child 常驻"
         " registry，停刷新 = 冻结故障值）——#2791"
+    )
+
+
+def test_ghost_host_offline_rows_excluded_and_series_removed(client, db_session, monkeypatch):
+    """#2802 评论第 4 条：per-host adb gauge 必须剔除幽灵 host（agent 停报、
+    adb_state 冻结在 offline 的行），否则告警恒响。
+
+    两拍：先 ONLINE（offline 波可见）→ host 判 OFFLINE（心跳超时）→ 重拉后
+    series 必须**消失**（停刷新=冻结值，与退役 #2791 同理但触发路径不同：
+    这里是 status 翻转，退役是 retired_at）。
+    """
+    monkeypatch.setenv("STP_METRICS_AUTH_REQUIRED", "0")
+    _host(db_session, "adb-ghost")
+    for i in range(6):
+        _device(db_session, f"adb-ghost-{i}", "adb-ghost", "offline")
+    db_session.commit()
+
+    first = client.get("/metrics").text
+    assert 'stability_host_device_adb_state{host_id="adb-ghost",state="offline"} 6.0' in first
+
+    host = db_session.get(Host, "adb-ghost")
+    host.status = HostStatus.OFFLINE.value
+    db_session.commit()
+
+    second = client.get("/metrics").text
+    assert 'host_id="adb-ghost"' not in second, (
+        "OFFLINE（幽灵）host 的设备桶仍在指标里——冻结的 offline 值会让"
+        "StabilityHostAdbOfflineConcentration 对每台死 host 恒 firing"
     )

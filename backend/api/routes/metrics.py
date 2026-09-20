@@ -110,7 +110,10 @@ def _refresh_host_device_adb_gauges(db: Session) -> None:
         rows = (
             db.query(Device.host_id, Device.adb_state, func.count())
             .join(Host, Host.id == Device.host_id)
-            .filter(Host.retired_at.is_(None))
+            .filter(
+                Host.retired_at.is_(None),
+                Host.status == HostStatus.ONLINE.value,
+            )
             .group_by(Device.host_id, Device.adb_state)
             .all()
         )
@@ -118,9 +121,14 @@ def _refresh_host_device_adb_gauges(db: Session) -> None:
         for host_id, adb_state, count in rows:
             buckets = counted.setdefault(host_id, {b: 0 for b in _ADB_STATE_BUCKETS})
             buckets[_adb_state_bucket(adb_state)] += int(count)
+        # liveness 门同口径：OFFLINE/DEGRADED host 不进在册集——其旧 label child
+        # 由 #2791 差集机制 remove，故障值不会冻结在 registry。
         live_hosts = [
             host_id
-            for (host_id,) in db.query(Host.id).filter(Host.retired_at.is_(None)).all()
+            for (host_id,) in db.query(Host.id).filter(
+                Host.retired_at.is_(None),
+                Host.status == HostStatus.ONLINE.value,
+            ).all()
         ]
         for host_id in live_hosts:
             buckets = counted.get(host_id, {b: 0 for b in _ADB_STATE_BUCKETS})
