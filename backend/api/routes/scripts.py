@@ -535,6 +535,8 @@ def update_script(
 
         invalidate_script_catalog_version_cache()
     except Exception:
+        # #739 面② 分诊：同 script_catalog 扫描路径——缓存带 TTL（默认 30s），
+        # 失效失败自愈；脚本写操作本身已 commit，不因缓存层失败改判失败。
         pass
     db.refresh(script)
     return ok(_script_out(script))

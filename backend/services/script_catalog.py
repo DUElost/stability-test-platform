@@ -424,5 +424,7 @@ def scan_script_root(
 
         invalidate_script_catalog_version_cache()
     except Exception:
+        # #739 面② 分诊：版本缓存带 TTL（默认 30s，STP_SCRIPT_CATALOG_VERSION_CACHE_TTL），
+        # 失效失败会在 TTL 内自愈，且扫描结果已 commit——不因缓存层失败反过来报扫描失败。
         pass
     return result
