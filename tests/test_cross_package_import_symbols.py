@@ -87,12 +87,15 @@ def _module_surface(path: Path):
                         opaque = True
                     else:
                         names.add(alias.asname or alias.name.split(".")[0])
-            elif isinstance(node, (ast.If, ast.Try)):
+            elif isinstance(node, (ast.If, ast.Try, ast.With, ast.AsyncWith)):
                 walk(node.body)
                 walk(getattr(node, "orelse", []) or [])
                 for handler in getattr(node, "handlers", []) or []:
                     walk(handler.body)
                 walk(getattr(node, "finalbody", []) or [])
+            elif isinstance(node, ast.Match):
+                for case in node.cases:
+                    walk(case.body)
 
     text = path.read_text(encoding="utf-8")
     tree = ast.parse(text)
