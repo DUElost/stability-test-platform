@@ -11,7 +11,7 @@
   [#2741](https://github.com/DUElost/stability-test-platform/issues/2741)（裁决与实现载体）/
   [#2789](https://github.com/DUElost/stability-test-platform/issues/2789) /
   [ADR-0050](./ADR-0050-install-evidence-retention-alignment.md)（`install_agent*` 落 business 90d 与 ADR-0044 D3
-  「持久证据」的视界对齐——Proposed 待裁决）/
+  「持久证据」的视界对齐——已裁决：丙案「明示接受 90d 视界」，Accepted v1.0）/
   #777 R-08（风险总表对应行）/
   [ADR-0020](./ADR-0020-plan-step-one-shot-migration.md)（`plan_migration_audit`「保留 ≥6 个月后转归档」先例）
 

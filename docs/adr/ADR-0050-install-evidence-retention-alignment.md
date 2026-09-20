@@ -1,14 +1,15 @@
 # ADR-0050：audit_logs 保留期与 ADR-0044 D3 安装证据的对齐
 
-- 状态：**Proposed** v0.1（2026-09-19 起草，三选一待 owner 裁决；裁决记录回填 #2789）
+- 状态：**Accepted** v1.0（2026-09-20 owner 裁决采丙「明示接受 90d 视界」，裁决记录见 #2789 评论；v0.1 决策材料 2026-09-19 起草、PR #2816 合入）
 - 优先级：P3（读数优雅退化、无数据完整性风险；但两条 Accepted ADR 间存在未成文耦合，先立此防漂移）
 - 目标里程碑：M7
-- 日期：2026-09-19
+- 日期：2026-09-19（v1.0：2026-09-20）
 - 决策者：owner（DUElost）
 - 标签：audit_logs, retention, install-evidence, host, #2789, #2741, #2694
 - 关联：[#2789](https://github.com/DUElost/stability-test-platform/issues/2789)
   （发现与证据）/ [ADR-0049](./ADR-0049-audit-log-retention-layering.md)（分层保留期裁决）/
-  [ADR-0044](./ADR-0044-agent-install-execution-ownership.md) D3（审计 = 安装状态的持久证据）
+  [ADR-0044](./ADR-0044-agent-install-execution-ownership.md) D3（审计 = 安装状态的持久证据；
+  v1.1 已按本裁决补视界注记）
 
 ## 1. 背景与问题
 
@@ -29,49 +30,53 @@ ADR-0049 落地的分层裁剪（`backend/scheduler/audit_log_cleanup.py`）把
 `host.extra.agent_installed[_at]`（心跳 keep-list，不依赖审计），**不受影响**；
 受影响的只是「最近一次安装运行」这一面（成功/失败/丢失的可见性）。
 
-## 2. 决策（三选一，待 owner 裁决）
+## 2. 决策（2026-09-20 owner 裁决：采丙）
 
-### 丙：明示接受 90d 视界（推荐）
+**丙 · 明示接受 90d 视界**：ADR-0044 D3 补注「持久 = 审计保留期视界内
+（business 默认 90d，`AUDIT_LOG_BUSINESS_RETENTION_DAYS` 可调）」（随本裁决以
+ADR-0044 v1.1 落地）；`hosts.py::_latest_install_audits` docstring 标注同一
+视界。零迁移、零行为变更。
 
-ADR-0044 D3 补注「持久 = 审计保留期视界内（business 默认 90d，env 可调）」；
-`hosts.py` 安装状态派生函数的 docstring 标注同一视界。零迁移、零行为变更。
-
-理由：
+裁决依据：
 
 1. 安装**运行状态**的取证价值天然短程——它回答「最近一次装没装成」；
    跨季度的运行明细不是现有任何消费方的读法（全仓 grep 无其它读取方）；
 2. 布尔事实（装没装上）已在 `host.extra` 无界保留，安装与否的长期事实不丢；
 3. 退化方向是优雅的：视界外读作 "idle"（无运行），不是误报失败；
-4. business 层的 90d 本就是运维旋钮（`AUDIT_LOG_BUSINESS_RETENTION_DAYS`），
-   有更长需求改配置即可，不需结构变更。
+4. business 层的 90d 本就是运维旋钮，有更长需求改配置即可，不需结构变更。
 
-### 甲：`install_agent*` 登记进 security 层
+## 3. Alternatives（未采纳）
 
-`SECURITY_ACTIONS` 加两个 action，一行改动，视界升到 180d。代价：install
-事件不是「账号/凭据安全事件链」，塞进 security 层稀释 D1 的语义轴；且 180d
-仍是有限视界，问题只是被推迟、未定义点依旧存在。
+- **甲：`install_agent*` 登记进 security 层**（`SECURITY_ACTIONS` 加两个
+  action，视界升到 180d）：install 事件不是「账号/凭据安全事件链」，塞进
+  security 层稀释 ADR-0049 D1 的语义轴；且 180d 仍是有限视界——「持久没有
+  视界定义」这个未定义点只是被推迟，没有被回答。
+- **乙：安装运行事实源迁移专表（console 落库）**：结构上最正确（历史无界、
+  可结构化查询、与保留期解耦），但成本是新表 + 迁移 + console 写点 + 读路径
+  切换；ADR-0044 §5 已论证「真需要『安装历史』应当由审计承载」——在产品提出
+  安装历史查询需求之前，现在付这个成本属于超前建设。触发条件见 §5。
+- **统一改 security 180d 或更长的全局视界**：为单一读取方面目放宽整层保留，
+  与 ADR-0049 D1 的分层取向矛盾——弃。
 
-### 乙：安装运行事实源迁移专表（console 落库）
-
-新建安装运行表（console 终态写库），修订 ADR-0044 D3 为「审计 = 短视界事实，
-专表 = 无界安装历史」。结构上最正确：历史无界、可结构化查询、与保留期解耦。
-成本：新表 + 迁移 + console 写点 + 读路径切换。ADR-0044 §5 已论证「真需要
-『安装历史』应当由审计承载」——在产品提出安装历史查询需求之前，现在付这个
-成本属于超前建设。
-
-## 3. Consequences（按推荐项丙）
+## 4. Consequences
 
 - 正面：跨 ADR 耦合成文（D3 的「持久」有了明确视界定义）；#2789 的盲区关闭；
   零迁移风险。
-- 负面/代价：>90d 的安装运行状态不可查（同 ADR-0049 §4 对 business 层的一般
-  性代价，此处只是把它显式化到安装面）。
-- 中性：若未来需要更长视界，先调 env；需要结构化安装历史时，乙回归为正解。
+- 负面/代价：>90d（默认）的安装运行状态不可查（同 ADR-0049 §4 对 business 层
+  的一般性代价，此处只是把它显式化到安装面）。
+- 中性：若需要更长视界，调 `AUDIT_LOG_BUSINESS_RETENTION_DAYS` 即可；需要
+  结构化安装历史时，乙回归为正解（见 §5）。
 
-## 4. Revisit
+## 5. Revisit
 
-- owner 裁决后：把选定项回填为本 ADR 的 Accepted 决策，并同步 ADR-0044 /
-  ADR-0049 的关联行与实现（甲/乙各有对应代码面，丙仅 docstring）。
 - 产品提出「安装历史」查询/报表需求 ⇒ 乙升级为正解，届时连同 console 写点
-  一起设计。
+  一起设计，并把本 ADR 与 ADR-0044 D3 一并修订。
 - `SECURITY_ACTIONS` / 读取方新增依赖审计无界保留的 action 时 ⇒ 先回到本
   ADR 的「视界定义」检查一遍，而不是默认「持久 = 永久」。
+
+## 6. 版本记录
+
+- v1.0（2026-09-20）：owner 裁决采丙；§2 由「三选一待裁决」改写为决策与依据，
+  甲/乙移入 §3 未采纳；ADR-0044 升 v1.1 补 D3 视界注；`hosts.py` docstring
+  同步。
+- v0.1（2026-09-19）：起草，三选一决策材料（PR #2816）。
