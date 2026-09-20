@@ -35,7 +35,7 @@
 
 | ID | 主题 | 选定口径 | 说明 |
 |---|---|---|---|
-| **X1** | 脚本「唯一权威」三处字面 | **内容** = ADR-0021 `### D4`；**运行时** = ADR-0033 `### D3`；`plan_snapshot.script_meta` = 派发时刻自 D4 冻结的**副本**，**不是**第三权威源 | 采纳多数评审；0021 关联区括注已措辞降级（见 §8） |
+| **X1** | 脚本「唯一权威」三处字面 | **内容** = ADR-0021 `### D4`；**运行时** = ADR-0033 `### D3`；`plan_snapshot` 步骤身份（`(script_name, script_version)` 等）= 派发时刻自 D4 冻结的**副本面**，**不是**第三权威源（快照**无** `script_meta` 键；#2856 / Mode C） | 采纳多数评审；0021 关联区括注已措辞降级（见 §8）；假键名勘误随 #2856 |
 | **X2** | 日志域四层权威 | **四层都对**；表内分四行登记 + 路由行 `log-chain-map`。**不是冲突**，是缺可引用汇总 → [`2026-log-chain-global-semantics.md`](./2026-log-chain-global-semantics.md)。全链**地图/路由**见 [`2026-device-log-chain-contract.md`](./2026-device-log-chain-contract.md)（Living Contract，Ownership Authority only，**非**第五内容权威） | S15 **不得**把四层并存判成 ≥2 owner；`log-chain-map` **不得**当第五内容 owner |
 | **X3** | merge 执行位置归属 | **现状登记** = ADR-0027 清单**第 7 条**；**产物与中心布局** = ADR-0025；**B1 迁 worker 触发后**结构面才归 ADR-0033 | 与 B0 相容；边行 `R-merge-locus` |
 
@@ -148,7 +148,7 @@
 | `run-terminal-semantics` | concept | 执行终态语义（完成即绿等） | `docs/adr/ADR-0048-execution-status-semantics-v2.md :: ### D1 终态语义：完成即绿，abort 才红（owner 确认）` | 恢复通过率轴 |
 | `script-content` | concept | 脚本内容 / sha 对账权威 | `docs/adr/ADR-0021-script-content-alignment-gate.md :: ### D4 — 平台 DB 是脚本内容唯一权威` | 改 D4 |
 | `script-runtime-catalog` | concept | 可派发 `(name, version)` 运行时权威 | `docs/adr/ADR-0033-tool-kit-ecosystem-integration.md :: ### D3：代码仓与工具资产包物理解耦（Manifest + Package Store）` | 第二套版本体系 |
-| `script-meta-freeze` | concept | 派发冻结副本；非独立权威 | `docs/adr/ADR-0021-script-content-alignment-gate.md :: ## 引用 / 关联` | 再称「唯一权威」 |
+| `script-meta-freeze` | concept | `plan_snapshot` 步骤身份冻结面；非独立权威（**无** `script_meta` 键；inventory key 名保留） | `docs/adr/ADR-0021-script-content-alignment-gate.md :: ## 引用 / 关联` | 再称「唯一权威」或把假键写成第三权威 |
 | `dle-record` | concept | 设备日志事件终态台账 | `docs/adr/ADR-0028-device-log-event-and-continuous-upload.md :: 唯一权威记录` | 改唯一记录主张 |
 | `log-signal-stream` | concept | 异常事件权威流 | `docs/adr/ADR-0018-infrastructure-layer-framework-adoption.md :: \`log_signal\` 是异常事件权威流` | 旁路上报 |
 | `dedup-pipeline-behavior` | concept | 并列 dedup/merge 行为与分区 | `docs/adr/ADR-0032-unisoc-mtk-parallel-dedup-pipelines.md :: ### D1：两条并列流水线，禁止交叉混用` | 混流水线 |
@@ -237,7 +237,7 @@
 
 | 位置 | 动作 |
 |---|---|
-| `ADR-0021` 关联区 `script_meta` 括注 | 已降级为冻结副本 / 非独立权威（本 PR） |
+| `ADR-0021` 关联区 `script_meta` 括注 | 已降级为冻结副本 / 非独立权威；假键名由 #2856 去掉（本索引 X1 / `script-meta-freeze` 同步） |
 | ADR-0033 D1 无 flash | 本表 `flash-tool` 已指向 v1.3「刷机补登记」句；D1 Tier3 表已列 `flash_*` |
 
 ---
@@ -262,3 +262,4 @@
 | 2026-09-18 | TBD 七行升实锚；保留 `frontend-feature-expansion` TBD；`LINK_TREES += docs/adr` + 修 0044/0045 幽灵链 |
 | 2026-09-19 | 增 `log-chain-map`：Device Log Chain Contract = 全链地图/路由入口（非第五内容权威）；X2 口径同步 |
 | 2026-09-20 | #2546 Closed 后：**Draft → Living**；补 N6/F-07 Domain Authority 注记；§9 纠 Phase 2 过时表述（选项 A 已他单落地） |
+| 2026-09-20 | X1 / `script-meta-freeze`：去掉幽灵 `plan_snapshot.script_meta` 假键名，对齐 #2856 / Mode C（步骤身份冻结面） |

@@ -60,12 +60,20 @@ def start_disk_and_watcher_subsystems(
     ScanRunner.instance().configure()
     UnisocScanRunner.instance().configure()
     UploadManager.instance().configure()
-    EventUploader.instance().configure(
-        api_url=api_url,
-        agent_secret=agent_secret,
-        host_id=str(host_id),
-    )
-    EventUploader.instance().start()
+    # #2845：EventUploader 的上送目的地是 {cifs_root}/devices/…，无共享存储根时
+    # 既无处落盘、configure 又会去求 get_aee_nfs_root() 抛 RuntimeError 打断整个
+    # bootstrap。与下面的 spill monitor 同判据：根为空 = 组件不启用。
+    if cifs_root:
+        EventUploader.instance().configure(
+            api_url=api_url,
+            agent_secret=agent_secret,
+            host_id=str(host_id),
+            nfs_root=cifs_root,
+        )
+        EventUploader.instance().start()
+        logger.info("event_uploader=started cifs=%s", cifs_root)
+    else:
+        logger.info("event_uploader_skipped cifs_root_empty")
     if cifs_root:
         LocalDiskMonitor.instance().configure(
             hdd_root=hdd_root,

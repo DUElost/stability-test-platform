@@ -1,7 +1,7 @@
 """Claim / poll tick extracted from ``main`` (#736).
 
 One iteration of the Agent claim loop: capacity → fetch → occupy → register →
-submit. ``main`` keeps the ``while`` / signal / ``finally`` shutdown shell.
+submit. The ``while`` / signal / ``finally`` shell lives in ``agent_loop``.
 """
 
 from __future__ import annotations

@@ -36,6 +36,31 @@ def test_enabled_by_default(monkeypatch):
     assert EventUploader.is_enabled() is True
 
 
+def test_configure_without_shared_root_degrades_to_noop(monkeypatch):
+    """#2845：无共享存储根时 configure 不得抛错打断调用方（bootstrap / reload_config）。
+
+    上送目的地 = ``{root}/devices/…``，根为空会退化成 CWD 相对路径，所以按
+    「未配置」no-op，而不是照常启动。
+    """
+    monkeypatch.delenv("STP_AEE_NFS_ROOT", raising=False)
+    up = EventUploader.instance()
+    up.configure(api_url="http://x", agent_secret="s", host_id="h1")  # 不抛
+    assert up.is_configured() is False
+    assert up.enqueue_local_event(event={"id": "1", "local_path": "/tmp/x"}) is False
+
+
+def test_configure_recovers_when_shared_root_appears_later(monkeypatch):
+    """#2845：降级不是终态——reload_config 重读 .env 后带 force=True 即可启用。"""
+    monkeypatch.delenv("STP_AEE_NFS_ROOT", raising=False)
+    up = EventUploader.instance()
+    up.configure(api_url="http://x", agent_secret="s", host_id="h1")
+    assert up.is_configured() is False
+
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", "/tmp/stp-aee-nfs-test")
+    up.configure(api_url="http://x", agent_secret="s", host_id="h1", force=True)
+    assert up.is_configured() is True
+
+
 def test_explicit_zero_disables(monkeypatch):
     """#287：=0 是唯一关闭方式；过滤模型下非 force 的 LOCAL 入队仍被拒绝。"""
     monkeypatch.setenv("STP_DEVICE_LOG_EVENT_ENABLED", "0")
