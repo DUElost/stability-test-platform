@@ -5,6 +5,21 @@
 [最小部署清单](../../docs/production-minimum-deployment-checklist.md) 使用宿主机
 PostgreSQL 或受控基础设施服务。
 
+## 版本对齐（#2945）
+
+| 面 | 大版本 |
+|---|---|
+| **生产库（权威）** | **17** |
+| 本模板 / 根 `docker-compose.yml` 默认镜像 | `postgres:17-alpine`（`POSTGRES_IMAGE`） |
+| CI / testcontainers 日常迁移冒烟 | 仍以 `postgres:16` 为主（速度与存量夹具）；PG15 有专项覆盖（#2863）；空库 `upgrade head` 另有 PG17 冒烟 |
+
+不要把模板默认钉回 15：那是「本地绿、生产行为不同」的复发面（`rolconfig` /
+`pg_db_role_setting` 等大版本差异）。需要旧版复现时显式设
+`POSTGRES_IMAGE=postgres:15-alpine`，不要改默认。
+
+守卫：`tests/test_postgres_compose_image_2945.py` 钉住「compose 默认 major ==
+生产 major == 17」。
+
 ## 使用
 
 1. 复制并填写本地 `.env`（已被 `.gitignore` 忽略）：
@@ -18,7 +33,8 @@ PostgreSQL 或受控基础设施服务。
    不再回退到内置口令。两个变量都必须设置：compose 插值在 profile 过滤前
    执行，即使不启用 admin profile，缺失的 `PGADMIN_PASSWORD` 也会导致
    整体启动失败；
-3. 启动：
+3. （可选）用 `POSTGRES_IMAGE` 覆盖镜像标签；未设时默认 `postgres:17-alpine`；
+4. 启动：
 
    ```bash
    docker compose -f deploy/postgres/docker-compose.yml up -d
