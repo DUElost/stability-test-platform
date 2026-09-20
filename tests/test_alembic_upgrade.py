@@ -63,6 +63,20 @@ def test_alembic_upgrade_head_succeeds_from_pre_status_enum_schema():
     assert result.returncode == 0, result.stderr
 
 
+def test_alembic_upgrade_head_from_empty_on_postgres_17():
+    """#2945：生产是 PG17——空库 upgrade head 在 17 上必须绿（跨大版本冒烟）。
+
+    日常 CI 仍以 16 为主（速度）；15 有 diag-readonly 专项。这里只补生产大版本
+    空库一条，避免模板默认跟生产背离后迁移在 17 上静默炸。
+    """
+    with PostgresContainer("postgres:17") as postgres:
+        env = os.environ.copy()
+        env["DATABASE_URL"] = _normalize_database_url(postgres.get_connection_url())
+        result = _alembic(env, "upgrade", "head")
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_dev_bootstrap_from_empty_database_produces_seeded_schema():
     """#2381：compose 的 dev 库入口从空库必须带出字典 seed。
 

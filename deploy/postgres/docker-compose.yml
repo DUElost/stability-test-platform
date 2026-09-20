@@ -2,7 +2,8 @@ version: '3.8'
 
 services:
   postgres:
-    image: postgres:15-alpine
+    # 默认对齐生产大版本（PG17）；本地可 POSTGRES_IMAGE=postgres:15-alpine 等覆盖（#2945）
+    image: ${POSTGRES_IMAGE:-postgres:17-alpine}
     container_name: stability-postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-stability}
