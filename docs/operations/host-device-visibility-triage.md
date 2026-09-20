@@ -59,11 +59,28 @@ cat /sys/bus/usb/devices/<dev>:1.0/interface      # "MIDI function" = MIDI-only
 - **L1 的两个内核判据已落地（#2900）**：`usb_host_controller_dead`（内核报 `HC died` / `xHCI … not responding` **且此刻 USB 一台都看不到** ⇒ DEGRADED；设备回树自动回落）与 `usb_link_degraded`（窗口内 `error -71/-110` 或「cable is bad」超阈，对应本表的慢性劣化）。实现：`backend/agent/kernel_usb_faults.py`（低频读 `journalctl -k`，首扫读整段 boot，失败按「未知」不报）；前端标签见 `ExpandableHostTable.tsx` 的 `REASON_LABELS`；
 - 刷机链路的同类记录：[`firmware-requests/2026-08-26-persist-sys-usb-config-adb.md`](./firmware-requests/2026-08-26-persist-sys-usb-config-adb.md)（刷完 userdata 清空 → adbd 不启动 → `adb devices` 连 unauthorized 都不显示 → 需人工开一次 USB 调试）。
 
-缺口（仅记录，未改行为）：
+**#2902 起（2026-09-20）：L2/L3/L4 在平台侧可直接判别**（全部为观测面，不参与槽位/门禁计算）：
 
-- `capacity` 只上报 `online_healthy_devices` 与 `usb_device_count`，**区分不了 L2/L3/L4**——三者都可能表现为「在线 0 + USB n>0」；要远程自诊断需 Agent 补报接口层信息（如 `ff:42` 计数或按 state 的 adb 计数）；
-- adb 一台都枚举不到时 `total_devices == 0`，`adb_low_healthy_devices` 门禁不触发（`capacity_reporter.py:117,141`），这些 host 仍显示 HEALTHY。**#2900 只补了「有内核证据的失明」**：无证据的零设备仍走本缺口，归 #2902；
-- L1 的**告警通道**未接：平台告警规则文件当前无加载路径（#2880），故本批只落 reason → DEGRADED，不写不会生效的告警规则。
+- `capacity.adb_interface_count` — sysfs 里暴露 ADB 接口（`ff:42`）的设备数
+  （`device_discovery.count_adb_interface_devices`，纯只读文件扫描；读不到 → `null` 未知，
+  不当 0——否则制造假 L4）；
+- `capacity.adb_state_counts` — `adb devices` 按 state 分桶
+  （`device` / `offline` / `unauthorized` / `other`，只统计 adb 可见行）；
+- 判别规则（与 §2 的人工商口径同构）：
+  - `adb_interface_count == 0` 且 `usb_device_count > 0` → **L4**（设备无 ADB 接口）；
+  - `adb_interface_count > adb_state_counts.device` → **L2**（主机 adb server 漏项）；
+  - `adb_state_counts` 的非 `device` 桶非空 → **L3**（设备侧 adbd / 授权）；
+- **新增 `usb_tree_empty` reason**（warning → DEGRADED）：`usb_device_count ≤ root hub 数`
+  且 `discovered_devices == 0`——覆盖「整树死亡时 `total_devices == 0` 使
+  `adb_low_healthy_devices` 短路」的盲区（.63 / 8.87 形态不再恒显 HEALTHY）；
+  root hub 数只作判据输入、不上报（心跳 payload 增幅实测 98B，预算 <100B）。
+
+遗留（仅记录）：
+
+- adb 一台都枚举不到且 USB 树仍在（`usb_device_count > root hub 数`）的中间形态，
+  仍需按 §2 上机差分定位（`total_devices == 0` 且**有**外设时既非空树也非 adb 全死）。
+- L1 的**告警通道**未接：平台告警规则文件当前无加载路径（#2880），故 #2900 只落
+  reason → DEGRADED，不写不会生效的告警规则。
 
 ## 4. 2026-09-14 实证
 
