@@ -136,8 +136,13 @@ PR/CI 恒 no-op，故**不接入**，留痕靠下述收窗纪律（论证见 iss
 ## PR 与 Merge Queue
 
 - `main` 启用分支保护，PR 是唯一合入路径；不要直推或手动点击 Merge；
-- `.github/workflows/enable-auto-merge.yml` 维护 FIFO auto-merge，同仓库非 draft eligible
-  PR 只有队首启用 auto-merge；
+- `.github/workflows/enable-auto-merge.yml` 维护 **FIFO auto-merge 队列**
+  （`scripts/ci/pr-automerge-queue.sh`）：eligible = 同仓库、非 draft 的 open PR；
+  **队首 = eligible 中创建时间最早者**（脚本按 `createdAt` 升序取），且**只有队首**启用
+  auto-merge（其余 `--disable-auto`，多持有者会被遥测判为破坏不变式）；
+- **次序语义**：队首合入后下一个依次顶上；**新开的 PR 排到队尾、不插队**（不是最新优先）。
+  排队等待时间 ≈ 「创建时间早于本 PR 的 open PR 数」× 单个合入间隔（2026-09-20 实测稳态
+  **2.5–3 分钟/个**；红队首停摆时整队暂停，见下节）；
 - **禁止 Execution 自持 auto-merge**：PR 跑到「就绪 + Registry 登记」为止，合入交给
   队列——不得自行 `gh pr merge --auto` / GraphQL `enablePullRequestAutoMerge`
   （含 `--squash`），也不得替其他 PR 做 update-branch / nudge。多持有者会破坏 FIFO
