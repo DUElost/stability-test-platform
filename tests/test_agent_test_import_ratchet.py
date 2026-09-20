@@ -1,4 +1,4 @@
-"""#739：agent **测试**侧的控制面 import 清单冻结（棘轮）。
+"""#739：agent **测试**侧的控制面 import **已清零**（终态不变式守卫）。
 
 与生产侧边界（`tests/test_agent_import_boundary.py`）是不同的两件事：
 
@@ -6,31 +6,33 @@
   已由静态守卫钉死）；
 - **测试**里 import 控制面 → 不会炸：套件 conftest 在收集期就 `setdefault` 了
   `DATABASE_URL` / `JWT_SECRET_KEY`（#2428），`agent-tests-collect` 也抓不到
-  （2026-09-17 实测：注入越界 import 后仍 2130 全收集通过）。
+  （2026-09-17 实测：注入越界 import 后仍 2130 全收集通过）——所以这条边界由**静态 AST 守卫**钉住。
 
-实测有 14 个 agent 测试文件仍在 import 控制面模块。收敛方式**已裁决**
-（2026-09-20，owner）：**分批迁移到 `backend/tests/` + 横跨契约文件就地解耦**。
-第一批已完成 7 个——迁移 5 个纯控制面文件（`test_adr0026_params` /
-`test_app_scheduler_executors` / `test_leader_election` / `test_logging_setup` /
-`test_socketio_redis_adapter` → `backend/tests/{core,scheduler,realtime}/`）、
-就地解耦 2 个横跨文件（`test_step_log_batching` 的控制面侧 2 例 →
-`backend/tests/realtime/test_step_log_ingest_contract.py`；`test_legacy_tool_cleanup`
-的跨包墓碑 2 例 → `backend/tests/test_legacy_tombstones.py`）。**当前剩 7 个**
-（大文件为主：`test_saq_scan_pipeline` 1287 行 / `test_cron_scheduler` 408 行），
-按同方向分批收敛。
+历史与收敛（owner 裁决 2026-09-20：**分批迁移到 `backend/tests/` + 横跨契约文件就地解耦**）：
 
-本守卫只做一件事：**冻结现状、不许新增**，并给每一个条目留下「为什么现在还允许」的说明。
+- 存量曾有 **14 个** agent 测试文件 import 控制面；
+- 第一批（7 个）：迁移 5（`test_adr0026_params` / `test_logging_setup` /
+  `test_app_scheduler_executors` / `test_leader_election` / `test_socketio_redis_adapter`）
+  + 就地解耦 2（`test_step_log_batching` 的服务端 2 例、`test_legacy_tool_cleanup`
+  的跨包墓碑 2 例）；
+- 第二批（7 个）：全部迁移——`test_aee_metadata` / `test_login_lockout` /
+  `test_pipeline_validator_parity_738` → `backend/tests/core/`；`test_cron_scheduler`
+  → `backend/tests/scheduler/`；`test_mtbf_suite` → `backend/tests/services/`；
+  `test_p3_3_multi_instance` → `backend/tests/realtime/`；`test_saq_scan_pipeline`
+  → `backend/tests/tasks/`。
 
-判据（四条）：
+本守卫现在的职责是**终态不变式**：清单为空、agent 测试不得再 import 控制面。
+确有必要的例外必须先在此登记并写明理由（含「为何不能迁移/解耦」），且只减不增。
 
-1. 清单**外**的文件不得 import 控制面包（``backend.<非 agent>``）；
-2. 清单**内**每个文件的跨包 import **模块数不得超过登记值**——防止「既然在清单里，
-   就再多引几个」这种清单内漂移；
-3. 条目**失效**（文件不再 import 控制面、或文件已删除）→ 报红，提示删条目
-   （同 `_LEGACY_SEEDS_WITHOUT_REF_CHECK` 的过期判定）；
+判据（四条，对空清单同样成立）：
+
+1. 清单**外**的文件不得 import 控制面包（``backend.<非 agent>``）——即任何越界都红；
+2. 清单**内**每个文件的跨包 import **模块数不得超过登记值**（防清单内漂移）；
+3. 条目**失效**（文件不再 import 控制面、或文件已删除）→ 报红，提示删条目；
 4. 扫描面非空（目录改名/搬走后不能恒绿）。
 
-终态出口：随各文件迁移或解耦，**逐条删除**本清单——它是存量台账，不是许可。
+终态出口：**已到达**（清单清零）；此后任何新增越界都在 PR 门禁（agent-tests*）外
+由本文件拦截。
 """
 
 from __future__ import annotations
@@ -41,19 +43,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 AGENT_TESTS_DIR = REPO_ROOT / "backend" / "agent" / "tests"
 
-#: 存量清单：文件名 → (允许的跨包 import 模块数, 说明)。**只减不增**。
-_CONTROL_PLANE_IMPORTS: dict[str, tuple[int, str]] = {
-    "test_aee_metadata.py": (1, "待裁决：aee_metadata 归控制面 core/"),
-    "test_cron_scheduler.py": (7, "待裁决：控制面 cron 调度（最大的一处）"),
-    "test_login_lockout.py": (2, "待裁决：登录锁定属控制面 auth"),
-    "test_mtbf_suite.py": (1, "待裁决：mtbf_suite 属控制面 services/"),
-    "test_p3_3_multi_instance.py": (3, "待裁决：多实例（SocketIO/调度）属控制面"),
-    "test_pipeline_validator_parity_738.py": (
-        1,
-        "**有意**：#738 的双端 parity 测试——它本来就该同时 import 两份实现",
-    ),
-    "test_saq_scan_pipeline.py": (5, "待裁决：SAQ/scan 链属控制面"),
-}
+#: 存量清单：文件名 → (允许的跨包 import 模块数, 说明)。**已清零**（#739 面① 两批收敛完成）；
+#: 现在只允许为空——新增越界必须先迁移/解耦，确有例外才登记并写明理由。
+_CONTROL_PLANE_IMPORTS: dict[str, tuple[int, str]] = {}
 
 
 def control_plane_imports(source: str) -> set[str]:
