@@ -351,3 +351,32 @@ def test_source_repo_handles_non_git_root(monkeypatch, tmp_path):
     assert "非 git 树" in line and "⚠" in line
 
 
+def test_deploy_user_placeholder_is_resolved_when_known(tmp_path, fake_repo):
+    """#2866：`<deploy-user>` 能由本机事实（backend unit 的 `User=`）确定时，该条目必须
+    **参与判定**——否则「新增采样项 = 新增盲区」（改了 User=/ExecStart= 也永远 SKIP）。
+
+    三面都要：已知 ⇒ match；已知但副本是别的用户 ⇒ **真 DRIFT**（证明在真比对）；
+    未知 ⇒ 仍 skipped（占位符残留，不猜、也不拿字面量判假 DRIFT）。
+    """
+    from tools.site_config.stages import monitoring_artifacts
+
+    src_rel = "deploy/control-plane/systemd/stp-skill-usage.service"
+    dest_rel = next(d for s, d, _m in monitoring_artifacts() if s == src_rel)
+    source = fake_repo / src_rel
+    source.write_text("User=<deploy-user>\nExecStart=/x\n", encoding="utf-8")
+
+    system_root = tmp_path / "sys"
+    dest = system_root / _mod.candidate_paths(dest_rel)[0]
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
+    def state(**kwargs) -> str:
+        results = _mod.inspect(system_root, fake_repo, repo_root=fake_repo, **kwargs)
+        return next(r["state"] for r in results if r["source"] == src_rel)
+
+    dest.write_text(_mod.expected_text(source, fake_repo, "deployuser"), encoding="utf-8")
+    assert state(deploy_user="deployuser") == _mod.MATCH
+
+    dest.write_text(_mod.expected_text(source, fake_repo, "someoneelse"), encoding="utf-8")
+    assert state(deploy_user="deployuser") == _mod.DRIFT, "已知 deploy-user 时必须是真比对"
+
+    assert state(deploy_user="") == _mod.SKIPPED, "未知时保持 skipped，不猜"

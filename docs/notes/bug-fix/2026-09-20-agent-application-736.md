@@ -1,7 +1,7 @@
 # #736 切片：薄壳 `AgentApplication`
 
 Status: implemented
-Class: bugfix
+Class: bug-fix
 
 ## Decision
 

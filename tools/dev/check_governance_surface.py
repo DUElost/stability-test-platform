@@ -59,9 +59,11 @@ verify-before-asserting: --self-test 对每条规则构造"已知坏样例必红
 """
 from __future__ import annotations
 
+import datetime
 import os
 import re
 import sys
+import tempfile
 from urllib.parse import unquote
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -904,9 +906,39 @@ def check_ownership_domain_fields(
 
 
 NOTE_CLASSES = {"feature", "bug-fix", "simplification", "architecture", "process", "testing"}
+#: #2883：白名单外允许存在的目录。`archived` 是有意的归档面（历史 Note 不再走 S10 契约）。
+#: 其余未知目录一律报错——S10 只遍历 NOTE_CLASSES，错名目录（如 `bugfix`）会让整目录
+#: Note 永久免检，而免检是「不存在」而不是「报错」。
+NOTE_CLASS_DIRS_ALLOWED_EXTRA = {"archived"}
 NOTE_HEADER_CUTOFF = "2026-09-05"
 #: 四节契约（AGENTS.md）：cutoff 起新增 Note 必须齐备（#1299）
 NOTE_REQUIRED_SECTIONS = ("## Decision", "## Alternatives", "## Verification", "## Revisit")
+
+
+def check_note_class_dirs(notes_root: str) -> list[str]:
+    """S10(#2883)：`docs/notes/` 下的目录必须是已知 class 或显式归档面。
+
+    遍历面是白名单（`NOTE_CLASSES`），所以错名目录不是「报错」而是「不存在」——
+    里面的 Note 既不被 S10 校验，也没有任何信号提示它们被漏掉。只对**含 .md 的**
+    目录报错（空目录/仅 README 不构成免检面），避免把占位目录误伤成违规。
+    """
+    issues: list[str] = []
+    if not os.path.isdir(notes_root):
+        return issues
+    for name in sorted(os.listdir(notes_root)):
+        path = os.path.join(notes_root, name)
+        if not os.path.isdir(path):
+            continue
+        if name in NOTE_CLASSES or name in NOTE_CLASS_DIRS_ALLOWED_EXTRA:
+            continue
+        notes = [f for f in os.listdir(path) if f.endswith(".md") and f != "README.md"]
+        if not notes:
+            continue
+        issues.append(
+            f"S10 docs/notes/{name}: 未知 Note 目录——其中 {len(notes)} 份 .md "
+            "不在 S10 校验面内（#2883）：移到规范目录或登记进 NOTE_CLASSES"
+        )
+    return issues
 
 
 def check_agent_note_header(label: str, text: str) -> list[str]:
@@ -1291,6 +1323,80 @@ def check_gate_ci_mapping(gates_src: str, workflows: dict[str, str]) -> list[str
     return issues
 
 
+#: #2864：skill frontmatter `type` 的合法取值。它是 **HOLLOW 判洞窗口的判据源**
+#: （`tools/dev/skill_usage_report.py` 的 `HOLLOW_DAYS`：persistent 14d / event 60d），
+#: 因此不能由被检方文件单方面改写——取值与登记都在本门禁校验。
+_SKILL_TYPES = frozenset({"persistent", "event"})
+
+#: `type: event` 的登记表：slug → (批准依据, 复查期限 `YYYY-MM-DD`)。
+#: `event` 把判洞窗口从 14 天放大到 60 天（4.3×）——**必须显式登记**：未登记即红
+#: （否则改一行 frontmatter 就自授豁免）；复查期过即红（逼一次重新裁决）；
+#: 登记项与实际分型不符（改回 persistent / skill 已删）也红（台账只减不增）。
+#: 批准依据：owner 裁决 2026-09-19（`docs/design/2026-08-governance-surface-protection.md`
+#: §8 待决点行 + §9 修订记录 2026-09-19 条：全 harness 零作业触发证据成立，
+#: 但低频是场景属性）；复查期限取 +90 天。
+_SKILL_EVENT_TYPE_REGISTRY: dict[str, tuple[str, str]] = {
+    "agent-host-onboard": (
+        "低频事件场景（扩容/替换故障机/批量上线才触发）：owner 裁决 2026-09-19",
+        "2026-12-20",
+    ),
+    "device-lease-release": (
+        "低频事件场景（租约异常/紧急释放才触发）：owner 裁决 2026-09-19",
+        "2026-12-20",
+    ),
+}
+
+
+def _skill_frontmatter_fields(text: str) -> dict[str, str]:
+    """解析 SKILL.md frontmatter 的扁平键值（含行内注释剥离）。"""
+    if not text.startswith("---"):
+        return {}
+    end = text.find("\n---", 3)
+    if end < 0:
+        return {}
+    fields: dict[str, str] = {}
+    for m in re.finditer(r"^([\w-]+):\s*(.*)$", text[4:end], re.M):
+        fields[m.group(1)] = m.group(2).split("#", 1)[0].strip().strip("\"'")
+    return fields
+
+
+def check_skill_type_registry(
+    seen_types: dict[str, str], *, today: str
+) -> list[str]:
+    """S7b（#2864）：`type` 取值合法性 + `event` 分型登记 / 复查期 / 失效条目。
+
+    判据源完整性：`type` 决定 HOLLOW 观察窗（14d/60d），若取值与 `event` 的授予
+    完全由被检方文件说了算，门禁的判据就握在被检方手里。本函数把它拉回校验面。
+    """
+    issues: list[str] = []
+    for slug, stype in sorted(seen_types.items()):
+        if stype not in _SKILL_TYPES:
+            issues.append(
+                f"S7b {slug}: 未知 type={stype!r}（合法取值：{sorted(_SKILL_TYPES)}）"
+                "——未知值会被判洞逻辑静默降级为更严窗口，且新增分型无人把关"
+            )
+        if stype == "event" and slug not in _SKILL_EVENT_TYPE_REGISTRY:
+            issues.append(
+                f"S7b {slug}: type=event 未登记——60 天判洞窗口是豁免面，"
+                "必须在 _SKILL_EVENT_TYPE_REGISTRY 登记批准依据与复查期"
+                "（否则改一行 frontmatter 即自授 4.3× 窗口）"
+            )
+    for slug, (reason, review_by) in sorted(_SKILL_EVENT_TYPE_REGISTRY.items()):
+        actual = seen_types.get(slug)
+        if actual != "event":
+            issues.append(
+                f"S7b {slug}: 登记为 event 但实际为 {actual!r}（已改回/已删除）"
+                "——请删除该登记条目（台账只减不增）"
+            )
+            continue
+        if review_by < today:
+            issues.append(
+                f"S7b {slug}: event 登记复查期已过（{review_by}，今天 {today}）"
+                f"——重新裁决后更新复查期（依据：{reason[:48]}…）"
+            )
+    return issues
+
+
 def check_skill_frontmatter(dirname: str, text: str) -> list[str]:
     """S7: skill 目录的 SKILL.md frontmatter 必须合法，且 name 与目录名一致。
 
@@ -1418,14 +1524,21 @@ def run_check() -> int:
 
     skills_dir = os.path.join(ROOT, ".claude", "skills")
     if os.path.isdir(skills_dir):
+        seen_skill_types: dict[str, str] = {}
         for d in sorted(os.listdir(skills_dir)):
             sk_path = os.path.join(skills_dir, d, "SKILL.md")
             if os.path.isfile(sk_path):
-                issues += check_skill_frontmatter(
-                    d, open(sk_path, encoding="utf-8").read()
+                sk_text = open(sk_path, encoding="utf-8").read()
+                issues += check_skill_frontmatter(d, sk_text)
+                # #2864：缺省即 persistent（与判洞逻辑一致）；未知值原样收进 S7b 判红。
+                seen_skill_types[d] = (
+                    _skill_frontmatter_fields(sk_text).get("type", "") or "persistent"
                 )
             else:
                 issues.append(f"S7 .claude/skills/{d}/: 缺 SKILL.md")
+        issues += check_skill_type_registry(
+            seen_skill_types, today=datetime.date.today().isoformat()
+        )
 
     pr_agent_path = os.path.join(ROOT, ".github", "workflows", "pr-agent.yml")
     issues += check_pr_agent_retired(pr_agent_path)
@@ -1459,6 +1572,7 @@ def run_check() -> int:
     issues += check_hard_invariant_anchors(agents_text)
 
     notes_root = os.path.join(ROOT, "docs", "notes")
+    issues += check_note_class_dirs(notes_root)
     for class_name in sorted(NOTE_CLASSES):
         class_dir = os.path.join(notes_root, class_name)
         for filename in sorted(os.listdir(class_dir)):
@@ -1716,6 +1830,28 @@ def run_self_test() -> int:
         True,
     )
 
+    with tempfile.TemporaryDirectory() as tmp_notes:
+        os.makedirs(os.path.join(tmp_notes, "bug-fix"))
+        open(os.path.join(tmp_notes, "bug-fix", "2026-09-19-ok.md"),
+             "w", encoding="utf-8").close()
+        os.makedirs(os.path.join(tmp_notes, "archived"))
+        open(os.path.join(tmp_notes, "archived", "2026-01-01-old.md"),
+             "w", encoding="utf-8").close()
+        os.makedirs(os.path.join(tmp_notes, "empty-placeholder"))
+        expect(
+            "S10 规范目录 + 归档面不拦（#2883）",
+            lambda: check_note_class_dirs(tmp_notes),
+            False,
+        )
+        os.makedirs(os.path.join(tmp_notes, "bugfix"))  # 错名目录（无连字符）
+        open(os.path.join(tmp_notes, "bugfix", "2026-09-19-misfiled.md"),
+             "w", encoding="utf-8").close()
+        expect(
+            "S10 错名 note 目录被拦（#2883）",
+            lambda: check_note_class_dirs(tmp_notes),
+            True,
+        )
+
     invariants_full = (
         "- ASGI 入口是 `socketio.ASGIApp(sio_server, fastapi_app)`\n"
         "- Pipeline 顶层只接受 `lifecycle`，action 唯一格式是 `script:<name>`。\n"
@@ -1896,8 +2032,6 @@ def run_self_test() -> int:
                None, None) != [],
            False)
 
-    import tempfile
-
     with tempfile.TemporaryDirectory() as tmp:
         absent = os.path.join(tmp, "pr-agent.yml")
         present = os.path.join(tmp, "exists.yml")
@@ -1923,6 +2057,66 @@ def run_self_test() -> int:
     expect("S7 name 错配目录", lambda: check_skill_frontmatter("foo", bad_name), True)
     expect("S7 description 空", lambda: check_skill_frontmatter("foo", bad_desc), True)
     expect("S7 缺 frontmatter", lambda: check_skill_frontmatter("foo", no_fm), True)
+
+    # ── S7b 夹具（#2864：type 取值 + event 分型登记）─────────────────────
+    # 夹具按登记表动态生成「全集基线」：登记表增删条目时夹具不漂移。
+    _reg_base = {slug: "event" for slug in _SKILL_EVENT_TYPE_REGISTRY}
+    expect(
+        "S7b 已登记 event 且在期",
+        lambda: check_skill_type_registry(_reg_base, today="2026-09-20"),
+        False,
+    )
+    expect(
+        "S7b 未登记 event（自授窗口）",
+        lambda: check_skill_type_registry(
+            {**_reg_base, "rogue-skill": "event"}, today="2026-09-20"
+        ),
+        True,
+    )
+    expect(
+        "S7b 未知 type 取值",
+        lambda: check_skill_type_registry(
+            {**_reg_base, "x": "monthly"}, today="2026-09-20"
+        ),
+        True,
+    )
+    expect(
+        "S7b 缺省 persistent 合法",
+        lambda: check_skill_type_registry(
+            {**_reg_base, "x": "persistent"}, today="2026-09-20"
+        ),
+        False,
+    )
+    expect(
+        "S7b 复查期已过",
+        lambda: check_skill_type_registry(_reg_base, today="2027-01-01"),
+        True,
+    )
+    expect(
+        "S7b 登记条目失效（已改回 persistent）",
+        lambda: check_skill_type_registry(
+            {**{k: "persistent" for k in _reg_base}}, today="2026-09-20"
+        ),
+        True,
+    )
+    expect(
+        "S7b 登记条目失效（skill 已删除）",
+        lambda: check_skill_type_registry({}, today="2026-09-20"),
+        True,
+    )
+    expect(
+        "S7b 带行内注释的 type 仍识别为 event（登记在期 → 绿）",
+        lambda: check_skill_type_registry(
+            {
+                **_reg_base,
+                "agent-host-onboard": _skill_frontmatter_fields(
+                    "---\nname: agent-host-onboard\ntype: event  # 低频注释\n---\n"
+                )["type"],
+            },
+            today="2026-09-20",
+        ),
+        False,
+    )
 
     # ── S5x 夹具（#2445）──────────────────────────────────────────────────
     # 判据已经改成「真实 job 的真实 step name + PR 事件可达性」，夹具因此必须
