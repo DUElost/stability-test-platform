@@ -21,6 +21,7 @@ from backend.agent.watcher.batcher import DEFAULT_IMMEDIATE_CATEGORIES
 from backend.agent.watcher.device_watcher import DeviceLogWatcher
 from backend.agent.watcher.policy import WatcherPolicy
 from backend.agent.watcher.sources import ProbeResult, WatcherCapability, WatcherEvent
+from backend.agent.job_session import JobSessionSummary
 
 
 # ----------------------------------------------------------------------
@@ -164,6 +165,8 @@ def test_uniview_event_wakes_and_never_emits(db, monkeypatch):
     watcher._on_batch([_event("UNIVIEW"), _event("AEE")])
     assert len(wakes) == 1
     assert [e.category for e in emits] == ["AEE"], "UNIVIEW 不得经 inotifyd 路径 emit"
+    # 接线在场时不计「无消费方」（#2886 计数只覆盖静默路径）
+    assert watcher.stats.unisoc_wake_no_consumer == 0
 
 
 def test_uniview_event_does_not_reach_puller(db):
@@ -201,6 +204,25 @@ def test_uniview_without_callback_still_consumed(db, monkeypatch):
     assert emits == []
 
 
+def test_uniview_without_consumer_warns_once_and_counts(db, caplog):
+    """#2886：无消费方的 UNIVIEW 消费必须有非 debug 出口——首见 WARNING +
+    计数进 stats（summary.watcher_stats 通道回流平台），后续事件不再刷 WARNING。"""
+    import logging
+
+    watcher = _watcher(db)
+    with caplog.at_level(logging.DEBUG):
+        watcher._on_batch([_event("UNIVIEW"), _event("UNIVIEW"), _event("UNIVIEW")])
+    assert watcher.stats.unisoc_wake_no_consumer == 3
+    # 计数键必须进 to_dict（manager handle.stats.update(stats.to_dict()) 通道）
+    assert watcher.stats.to_dict()["unisoc_wake_no_consumer"] == 3
+    warns = [
+        r for r in caplog.records
+        if "unisoc_wake_no_consumer" in r.getMessage()
+        and r.levelno >= logging.WARNING
+    ]
+    assert len(warns) == 1, f"WARNING 应恰一次，实得 {len(warns)}"
+
+
 def test_uniview_is_immediate_category():
     """UNIVIEW 必须进 immediate 集：batch 默认 5s 会吃掉秒级收益（#1998）。"""
     assert "UNIVIEW" in DEFAULT_IMMEDIATE_CATEGORIES
@@ -234,6 +256,10 @@ def _bare_session(monkeypatch, *, gate: bool, platform: str):
     session._policy = WatcherPolicy()
     session._serial = "UNI-G"
     session._job_id = 993
+    # 与生产 __init__ 同形：summary 快照冻结于 policy 修改之前（#2887 的成因面）
+    session._summary = JobSessionSummary(
+        job_id=993, policy_snapshot=session._policy.to_dict(),
+    )
     return session
 
 
@@ -243,6 +269,7 @@ def test_gate_default_off_leaves_policy_untouched(monkeypatch):
     session._maybe_apply_unisoc_inotifyd_paths()
     assert session._policy is before
     assert "UNIVIEW" not in session._policy.paths
+    assert session._summary.policy_snapshot["required_categories"] != ["UNIVIEW"]
 
 
 def test_gate_on_unisoc_injects_uniview_paths(monkeypatch):
@@ -252,6 +279,9 @@ def test_gate_on_unisoc_injects_uniview_paths(monkeypatch):
     assert session._policy.required_categories == ["UNIVIEW"]
     # MTK 缺省分类保留：探测/订阅面只增不改
     assert "AEE" in session._policy.paths
+    # #2887：上报面与实际订阅面同源——注入后 summary 快照必须已刷新
+    assert session._summary.policy_snapshot["required_categories"] == ["UNIVIEW"]
+    assert "UNIVIEW" in session._summary.policy_snapshot["paths"]
 
 
 def test_gate_on_non_unisoc_leaves_policy_untouched(monkeypatch):
@@ -259,3 +289,4 @@ def test_gate_on_non_unisoc_leaves_policy_untouched(monkeypatch):
     session._maybe_apply_unisoc_inotifyd_paths()
     assert "UNIVIEW" not in session._policy.paths
     assert session._policy.required_categories != ["UNIVIEW"]
+    assert session._summary.policy_snapshot["required_categories"] != ["UNIVIEW"]
