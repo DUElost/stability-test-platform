@@ -1,10 +1,10 @@
 # 跨域语义归属索引（Ownership Authority）
 
-- **状态**：Draft（#2546 收口草案；方案 A + 评审 Accept-with-nits + 2026-09-18 用户三点修正）
-- **日期**：2026-09-18
+- **状态**：Living（#2546 Closed 后升格；Ownership Authority + S15 已在 `main` 生效；非内容宪法）
+- **日期**：2026-09-20
 - **目的**：回答「这个概念/关系的定义权归谁」——**只做归属索引，不做内容宪法**
 - **范围**：现行 **Accepted**（及同等生效）ADR 均可纳入索引；非仅 ADR-0033/0020
-- **关联**：[#2546](https://github.com/DUElost/stability-test-platform/issues/2546)；评审 `docs/reviews/REVIEW_SEMANTIC_OWNERSHIP_*`；[`adr/README.md`](../adr/README.md)
+- **关联**：[#2546](https://github.com/DUElost/stability-test-platform/issues/2546)（Closed）；评审 `docs/reviews/REVIEW_SEMANTIC_OWNERSHIP_*`；[`adr/README.md`](../adr/README.md)
 
 ---
 
@@ -17,6 +17,8 @@
 | Domain Authority | 事实/概念是什么 | 被指向的域内 ADR / design / 契约 |
 | ADR | 采用什么方案 | `docs/adr/` |
 | Code / Tests | 如何实现 | 源码与测试 |
+
+> **Domain Authority 注记（N6 / F-07）**：仓内「冲突时以本文为准」的最强形态见 [`execution-contract.md`](../development/ai/execution-contract.md)（**操作规格**，可回溯修订 ADR）。其资格来自「该文即操作规格」，**不可**被本索引援引为自我授权先例——索引不是操作规格，不得抄条款、只可抄「操作规格才配挂该条款」这一资格判据。
 
 **硬边界**：
 
@@ -116,7 +118,7 @@
 
 ### 5.1 域覆盖矩阵（首批）
 
-| 域 | 代表 Accepted ADR | 本草案状态 |
+| 域 | 代表 Accepted ADR | 本表覆盖状态 |
 |---|---|---|
 | 控制面 / 执行分层 | 0001, 0006, 0014, 0016, 0017, 0018 | 已填关键行；其余见 TBD |
 | 状态机 / 租约 / 调度 | 0003, 0019, 0022, 0026, 0027, 0048 | 已填关键行 |
@@ -189,7 +191,7 @@
 | N3 | S15 仅 monitored 表行 | §4.1 |
 | N4 | Referential ≠ Semantic | §4.4 |
 | N5 | ADR identity 不可变；仅 Superseded/Scoped/Historical | §7 |
-| N6 | 五层模型 | §0 表 |
+| N6 | 五层模型 + Domain Authority「操作规格才配挂冲突条款」注记（F-07） | §0 表与注记 |
 | S15 nits | 表内判据；不复用 S2；锚用结构化/` :: `；③字段驱动 | §4 |
 | X1/X2/X3 | 评审推荐单行口径 | §1 |
 | F-5 | flash 补登记 | `flash-tool` |
@@ -242,8 +244,10 @@
 
 ## 9. 非目标
 
-- 不替代 #2108；不实现 0033 Phase 2；不改脚本版本树；不合并重编号 ADR。
+- 不替代 #2108；不改脚本版本树；不合并重编号 ADR。
+- 0033 Phase 2 控制面 B5 样板（选项 A）已由他单落地（ADR-0033 v1.5）；本索引**不**承担包存储 / Phase 3 / 设备端样板。
 - Y1/Y2 机制受益于本表，关单范围仍以触碰时补行为准。
+- `frontend-feature-expansion` 仍 TBD（触碰 ADR-0013 / 前端 IA 大改时再升实锚）。
 
 ---
 
@@ -257,3 +261,4 @@
 | 2026-09-18 | follow-up：S15 门禁落地；ADR-0033 v1.3 D1 flash 补登记；`flash-tool` 锚改指 0033 |
 | 2026-09-18 | TBD 七行升实锚；保留 `frontend-feature-expansion` TBD；`LINK_TREES += docs/adr` + 修 0044/0045 幽灵链 |
 | 2026-09-19 | 增 `log-chain-map`：Device Log Chain Contract = 全链地图/路由入口（非第五内容权威）；X2 口径同步 |
+| 2026-09-20 | #2546 Closed 后：**Draft → Living**；补 N6/F-07 Domain Authority 注记；§9 纠 Phase 2 过时表述（选项 A 已他单落地） |
