@@ -46,7 +46,7 @@ deploy/
 ├── nginx/frontend-docker.conf
 └── prometheus/
     ├── site-alerts.yml               # 站点安装的子集（#2643 方向 1）
-    ├── alerts-stability-platform.yml # 平台全量（控制面挂载路径，ADR-0011 待挂载）
+    ├── alerts-stability-platform.yml # 平台全量（控制面人工副本已挂载于 /etc/prometheus/rules/；ADR-0011 正式挂载待落地，副本需人工同步——见本文件 §告警规则）
     └── alertmanager.yml
 ```
 
@@ -76,7 +76,10 @@ deploy/
 
 - 指标：`GET /metrics`（生产建议保持 `STP_METRICS_AUTH_REQUIRED=1`，必要时叠加 Nginx IP 白名单）  
 - Grafana：`docs/grafana/stability-platform-dashboard.json`  
-- 告警规则：平台全量 `deploy/prometheus/alerts-stability-platform.yml`（ADR-0011 待挂载）；
+- 告警规则：平台全量 `deploy/prometheus/alerts-stability-platform.yml`——控制面宿主
+  当前是**人工副本**（`/etc/prometheus/rules/`，随仓库更新需人工重放 + `POST /-/reload`；
+  2026-09-20 实测该副本落后仓库 2 条规则，缺 `StabilityHostAdbOfflineConcentration` 与
+  `StabilityPgSchemaGuessing`），ADR-0011 的正式挂载仍未落地；
   **站点安装的是其子集** `deploy/prometheus/site-alerts.yml`（#2643 方向 1：站点 Prometheus
   只抓本机 node-exporter，平台那批控制面指标在站点结构性无样本——装了也恒不触发，
   却让「监控就绪」看起来更完整）。两者的定义一致性由
