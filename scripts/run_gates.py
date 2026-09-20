@@ -234,7 +234,8 @@ GATES = {
     # 它现在拦的是「与 env 无关的 import 期失败」（缺依赖、语法/导入链断裂）。
     # agent **生产代码**的 import 边界由静态守卫
     # tests/test_agent_import_boundary.py 钉住（不依赖运行时表现）；
-    # agent **测试**侧的越界面仍是待裁决存量（14 个文件），见 backend/agent/AGENTS.md。
+    # agent **测试**侧的越界面剩 7 个文件（2026-09-20 第一批：迁移 5 + 就地解耦 2，
+    # 台账与去向见 tests/test_agent_test_import_ratchet.py），见 backend/agent/AGENTS.md。
     # CI 对应物=ci.yml pr-agent-tests job「Collect agent tests in clean env」step。
     "agent-tests-collect": (
         f'env -i PATH="$PATH" PYTHONPATH=. {PY} -m pytest '

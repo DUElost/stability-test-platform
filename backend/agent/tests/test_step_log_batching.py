@@ -5,8 +5,6 @@ from __future__ import annotations
 from collections import deque
 from unittest.mock import MagicMock
 
-import pytest
-
 from backend.agent.socketio_client import AgentSocketIOClient
 from backend.agent.mq.producer import StepTraceWriter
 
@@ -94,66 +92,5 @@ def test_step_trace_writer_noop_when_stream_disabled(monkeypatch):
     sio.send_log.assert_not_called()
 
 
-@pytest.mark.asyncio
-async def test_on_step_log_accepts_batch(monkeypatch):
-    from backend.realtime import socketio_server as sio_mod
-
-    emitted = []
-
-    class FakeSio:
-        async def emit(self, event, payload, namespace=None, room=None):
-            emitted.append((event, payload, room))
-
-    written = []
-
-    async def fake_append(job_id, lines):
-        written.append((job_id, list(lines)))
-
-    monkeypatch.setattr(sio_mod, "get_sio", lambda: FakeSio())
-    monkeypatch.setattr(
-        "backend.realtime.log_writer.append_log_lines", fake_append,
-    )
-
-    ns = sio_mod.AgentNamespace("/agent")
-    await ns.on_step_log("sid", {
-        "job_id": 42,
-        "run_id": 42,
-        "lines": [
-            {"step_id": "s1", "seq": 1, "level": "INFO", "ts": "t1", "msg": "a"},
-            {"step_id": "s1", "seq": 2, "level": "WARN", "ts": "t2", "msg": "b"},
-        ],
-    })
-
-    assert len(written) == 1
-    assert written[0][0] == 42
-    assert [x["msg"] for x in written[0][1]] == ["a", "b"]
-    # #2400：落盘是唯一去向——原先每行还向 job:/run: 两个无订阅方的房间双投，
-    # 现在不再有任何推送（要恢复推送须同时接上订阅端，见
-    # tests/test_realtime_wiring_contract.py）。
-    assert emitted == []
-
-
-@pytest.mark.asyncio
-async def test_on_step_log_rejects_legacy_single_line(monkeypatch):
-    from backend.realtime import socketio_server as sio_mod
-
-    written = []
-
-    async def fake_append(job_id, lines):
-        written.append((job_id, list(lines)))
-
-    monkeypatch.setattr(
-        "backend.realtime.log_writer.append_log_lines", fake_append,
-    )
-
-    ns = sio_mod.AgentNamespace("/agent")
-    await ns.on_step_log("sid", {
-        "job_id": 42,
-        "step_id": "s1",
-        "seq": 1,
-        "level": "INFO",
-        "ts": "t1",
-        "msg": "legacy",
-    })
-
-    assert written == []
+# 控制面侧的两条（on_step_log 服务端摄取）已随 #739 面①迁出：
+# backend/tests/realtime/test_step_log_ingest_contract.py
