@@ -893,11 +893,15 @@ def test_monitoring_installs_alert_rules_and_guard_units(tmp_path, monkeypatch):
     assert "rule_files:" in conf and "rules/*.yml" in conf
 
     joined = [" ".join(call) for call in ops.calls]
-    for unit in ("stp-script-guard.service", "stp-script-guard.timer"):
+    for unit in ("stp-script-guard.service", "stp-script-guard.timer",
+                 "stp-skill-usage.service", "stp-skill-usage.timer"):
         assert _system_file(tmp_path, f"etc/systemd/system/{unit}").is_file(), unit
     # 守卫 timer 不 restart（那不是发行版包那套 $ARGS 问题），但必须 enable，否则又是
     # 「指标有人产、没人跑」
     assert "systemctl enable --now stp-script-guard.timer" in joined
+    # #2866：skill 用量探针同形——装了不 enable 就是「防建而不用的探针自己建而不用」
+    # （删掉 S4 的 enable 这一行，本断言必须红）
+    assert "systemctl enable --now stp-skill-usage.timer" in joined
 
 
 def test_alert_rules_file_and_installed_copy_stay_in_sync(tmp_path, monkeypatch):
@@ -1574,9 +1578,14 @@ def test_accumulated_evidence_folds_old_format_and_overrides_with_latest(tmp_pat
     }), encoding="utf-8")
 
     merged = install_module._accumulated_evidence(
-        state_dir, "rel-A", [{"stage": "S0", "status": "PASS", "checks": ["install.s0"]}],
+        state_dir, "rel-A",
+        [{"stage": "S0", "status": "PASS", "checks": ["install.s0"]}], run=2,
     )
-    assert merged["rel-A"] == {"install.s5": "PASS", "install.s0": "PASS"}
+    # #2852：桶值带运行序号；旧格式折入的条目用上一份状态的 runs 当序号
+    assert merged["rel-A"] == {
+        "install.s5": {"status": "PASS", "run": 1},
+        "install.s0": {"status": "PASS", "run": 2},
+    }
     # 写回（安装链就是这么落盘的）——下一步验证它对**读回来的** evidence 继续合并
     (state_dir / "install-state.json").write_text(
         json.dumps({"release": "rel-A", "evidence": merged, "stages": []}), encoding="utf-8",
@@ -1584,10 +1593,11 @@ def test_accumulated_evidence_folds_old_format_and_overrides_with_latest(tmp_pat
 
     # 同发布物重跑：本次没发的 ID 保留，发了的以本次为准
     merged = install_module._accumulated_evidence(
-        state_dir, "rel-A", [{"stage": "S5", "status": "FAIL", "checks": ["install.s5"]}],
+        state_dir, "rel-A",
+        [{"stage": "S5", "status": "FAIL", "checks": ["install.s5"]}], run=3,
     )
-    assert merged["rel-A"]["install.s5"] == "FAIL"
-    assert merged["rel-A"]["install.s0"] == "PASS"
+    assert merged["rel-A"]["install.s5"] == {"status": "FAIL", "run": 3}
+    assert merged["rel-A"]["install.s0"] == {"status": "PASS", "run": 2}
 
 
 def test_accumulated_evidence_is_per_release_and_bounded(tmp_path):
@@ -1601,7 +1611,7 @@ def test_accumulated_evidence_is_per_release_and_bounded(tmp_path):
         release = f"rel-{index}"
         merged = install_module._accumulated_evidence(
             state_dir, release,
-            [{"stage": "S0", "status": "PASS", "checks": ["install.s0"]}],
+            [{"stage": "S0", "status": "PASS", "checks": ["install.s0"]}], run=index + 1,
         )
         path.write_text(json.dumps({"release": release, "runs": index + 1,
                                     "evidence": merged, "stages": []}), encoding="utf-8")

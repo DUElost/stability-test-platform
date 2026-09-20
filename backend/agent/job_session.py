@@ -76,6 +76,9 @@ class JobSessionSummary:
     # 'unavailable'（今日实测），reconciler 死活只能从信号反推。控制面
     # watcher_summary 为 Dict[str,Any] 未消费本键，仅为运维可观测（#96 同构先例）。
     platform_reconciler: str = ""
+    # #2886：reconciler 连续错误自关闭的事实（在位标记只写一次、停摆不回写，
+    # 平台侧此前无从看到「这台设备从 T 时刻起没有事件链了」）。
+    platform_reconciler_shutdown: bool = False
     log_signal_count: int = 0
     # #96：per-source 拆分（log_signal_count = watcher + reconciler），
     # 便于诊断哪条路径没干活。控制面不改 schema，只读 log_signal_count；
@@ -95,10 +98,15 @@ class JobSessionSummary:
             "watcher_stopped_at": _iso(self.watcher_stopped_at),
             "watcher_capability": self.watcher_capability,
             "platform_reconciler": self.platform_reconciler,
+            "platform_reconciler_shutdown": self.platform_reconciler_shutdown,
             "log_signal_count":   self.log_signal_count,
             "watcher_signal_count":  self.watcher_signal_count,
             "reconciler_signal_count": self.reconciler_signal_count,
             "watcher_stats":      self.watcher_stats,
+            # #2887：订阅策略快照，与 watcher 实际订阅面同源（UNISOC 注入后已刷新）。
+            # 控制面 watcher_summary 为 Dict[str,Any] 未消费本键，仅为运维可观测
+            #（#96 / #2394-③ 同构先例）——排障时它就是「该 job 实际订阅面」的权威读数。
+            "policy_snapshot":    self.policy_snapshot,
             # M0/Task2: Agent 无独立 /metrics 暴露面,reconciler 进程内计数(尤其
             # ticks_skipped_unchanged)通过 complete 通道带出,由后端桥接到中心 /metrics。
             "reconciler_stats":   self.reconciler_stats,
@@ -326,6 +334,9 @@ class JobSession:
                 "UNIVIEW": [str(UNIVIEW_ROOT)],
             }
             self._policy.required_categories = ["UNIVIEW"]
+            # #2887：policy 被原地改，而 summary 的快照是 __init__ 时的 dict 副本——
+            # 不刷新则上报的策略面与实际订阅面相反（排障读数失真）。
+            self._summary.policy_snapshot = self._policy.to_dict()
             logger.info(
                 "unisoc_inotifyd_paths_applied job_id=%d serial=%s root=%s",
                 self._job_id, self._serial, UNIVIEW_ROOT,
@@ -497,8 +508,17 @@ class JobSession:
         与启动失败回滚同路（`set_aee_reconciler_active(False)`）：否则 reconciler
         停摆后 watcher 仍抑制 AEE/VENDOR_AEE 信号与 DLE 注册，该 Job 余下生命
         周期信号静默全黑（#72 现场要消灭的盲区形态）。
+
+        #2886：停摆事实同时回写 summary（`platform_reconciler_shutdown`）——在位
+        标记 `platform_reconciler` 只在启动成功时写一次，此前自关闭对平台完全不可见。
         """
         def _callback() -> None:
+            self._summary.platform_reconciler_shutdown = True
+            logger.warning(
+                "platform_reconciler_self_shutdown job_id=%d serial=%s "
+                "(watcher emit 抑制位复位 + unisoc wake 清除随后)",
+                self._job_id, self._serial,
+            )
             try:
                 if self._handle is not None and self._handle.impl is not None:
                     self._handle.impl.set_aee_reconciler_active(False)

@@ -384,6 +384,13 @@ def get_plan_failed_devices(
     since = datetime.now(timezone.utc) - timedelta(days=days)
     params = {"since": since}
 
+    # #2848：这张图排的是「失败台数」，`failed = 0` 的组没有信息量——健康期它会让图里
+    # 多出一排零高柱 + 数字 0，而不是让空态出现。原先的 `HAVING COUNT(*) > 0` 只滤空组
+    # （每组必然 ≥1 行），从不滤零失败，所以过滤要落在**度量本身**上。
+    # 排序与条数只有这一处权威：前端原先又 sort + slice(0, 10)，既与服务端 tie-break
+    # （`failed DESC, total_jobs DESC`）不一致，又把调用方要的 `limit > 10` 静默截回 10。
+    # （注释必须留在 Python 侧：PostgreSQL 不认 `#` 注释，写进 SQL 会直接语法错误——
+    #   这一版就是这么炸的，被端点测试当场抓住。）
     stmt = text("""
         SELECT p.id, p.name,
                COUNT(*) AS total_jobs,
@@ -394,7 +401,7 @@ def get_plan_failed_devices(
     """
             """
         GROUP BY p.id, p.name
-        HAVING COUNT(*) > 0
+        HAVING SUM(CASE WHEN j.status IN ('FAILED', 'ABORTED') THEN 1 ELSE 0 END) > 0
         ORDER BY failed DESC, total_jobs DESC
     """)
     rows = db.execute(stmt, params).fetchall()

@@ -373,9 +373,16 @@ def test_to_complete_payload_shape(lock_tracker, patch_manager):
         "watcher_signal_count", "reconciler_signal_count",
         # #2394-③：reconciler 在位标记（未启动时为空串）
         "platform_reconciler",
+        # #2886：自关闭事实回写（默认 False，自关闭回调置位）
+        "platform_reconciler_shutdown",
+        # #2887：订阅策略快照（与实际订阅面同源；运维可观测键，后端不消费）
+        "policy_snapshot",
     }
     assert set(payload.keys()) == expected_keys
     assert payload["platform_reconciler"] == ""
+    assert payload["platform_reconciler_shutdown"] is False
+    assert payload["policy_snapshot"] == session.summary.policy_snapshot
+    assert "required_categories" in payload["policy_snapshot"]
     # M0/Task2: reconciler_stats 默认空 dict(未灰度开启 reconciler 时)
     assert payload["reconciler_stats"] == {}
     # #96: 未启动 reconciler 时 per-source 拆分仍存在且为 0
@@ -1013,10 +1020,17 @@ def test_reconciler_self_shutdown_wiring_resets_watcher(
 
     callback = captured.get("on_self_shutdown")
     assert callable(callback), "构造 reconciler 必须注入 on_self_shutdown"
+    assert session._summary.platform_reconciler_shutdown is False, (
+        "未自关闭前 summary 的停摆事实必须为 False（默认值）"
+    )
     callback()
     assert impl._aee_reconciler_active is False, (
         "自关闭回调必须复位 watcher 抑制位（set_aee_reconciler_active(False)）"
     )
+    # #2886：停摆事实必须随 summary 回写——此前在位标记只在启动成功时写一次，
+    # 自关闭后平台侧看到的是「reconciler 还活着」的反向读数。
+    assert session._summary.platform_reconciler_shutdown is True
+    assert session.summary.to_complete_payload()["platform_reconciler_shutdown"] is True
 
     session.__exit__(None, None, None)
     assert 101 not in lock_tracker.active_jobs
