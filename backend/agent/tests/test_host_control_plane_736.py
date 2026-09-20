@@ -68,10 +68,10 @@ def test_start_host_control_plane_wires_and_starts():
 
 
 def test_main_wires_host_control_plane():
-    import backend.agent.main as agent_main
+    import backend.agent.agent_application as app
     from tools.dev.source_anchor import SourceGuard
 
-    guard = SourceGuard.of_module(agent_main).anchored("start_host_control_plane(")
+    guard = SourceGuard.of_module(app).anchored("start_host_control_plane(")
     guard.assert_absent(
         "OperationScheduler(",
         why="#736 scheduler 构造已迁出 main",

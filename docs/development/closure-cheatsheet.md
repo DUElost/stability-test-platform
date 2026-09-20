@@ -1,6 +1,6 @@
 # 收口速查表（registry / worktree / 本地分支 / 远端分支）
 
-> **一页速查，不新增规范**：每条判据的权威源见「权威源」列，冲突以权威源为准。
+> **一页速查，不新增规范**：各节的权威源见**节尾引用**，冲突以权威源为准。
 > 适用场景：批次收窗、PR 合入核销、僵尸记录收口、worktree 与分支清理。
 
 ## 0. 收窗前四步（顺序固定）
@@ -29,9 +29,11 @@ risk = integration ∈ {PR_OPEN, READY}
 | 僵尸 ②（关闭未合） | `CLOSED` + 同条件 | **仍在窗且占 issue 槽位** → 二选一：abandon 出窗 / reopen·转手重新 declare |
 | 悬挂引用 | 记录 `CODING` 但 worktree 目录不存在 | 核 PR：MERGED ⇒ `finish --pr <N>`；无 PR 且 zombie ⇒ `finish --abandon` |
 | 关闭未合的**等价核验** | `git cherry origin/main <branch>` 的 `+` 补丁逐文件对主干核对（同一 issue 的同修 PR 是否已带等价内容进主干） | 等价 ⇒ owner 授权后 abandon + 独有补丁打 `refs/backup/<date>/<branch>`；**不等价 ⇒ 不 abandon**（reopen/转手） |
+| **缓存失效（`landed`）** | 分支/`origin/<branch>` 已是 `origin/main` 祖先，或 merge 主题含 `#<pr_number>` | 该缓存对 risk 判定失效 ⇒ 按**出窗**处理，标 `stale-cache`，用 `update --id <requirement>` 核销（`MERGED` 只能由 T6 写入） |
 
 - `finish --abandon` **有开放 PR 时只警告、留窗**至 GitHub 终态（T4）；
-- 权威源：[`ai/execution-contract.md`](./ai/execution-contract.md) §3.1–§3.4。
+- 权威源：[`ai/execution-contract.md`](./ai/execution-contract.md) §3.1–§3.3
+  （§3.4 是 declare 查重，与收口无关）。
 
 ## B. Worktree
 
@@ -45,6 +47,8 @@ risk = integration ∈ {PR_OPEN, READY}
 
 - **每次清理前重查列表**（别家会话可能刚新建）；`/tmp/stp-*` scratch 逐文件定性后再删
   （「scratch」≠ 可删——曾藏未落地草稿）。
+- 权威源：[`repository-workflow.md`](./repository-workflow.md)
+  §worktree 与本地分支清理 › worktree。
 
 ## C. 本地分支
 
@@ -59,13 +63,16 @@ risk = integration ∈ {PR_OPEN, READY}
 
 收尾顺带 `git fetch --prune origin`。
 
+- 权威源：[`repository-workflow.md`](./repository-workflow.md)
+  §worktree 与本地分支清理 › 本地分支。
+
 ## D. 远端分支（共享态，动作前须人工确认）
 
 | 判定 | 判据 | 动作 |
 |---|---|---|
 | 基线 | 仓库 `delete_branch_on_merge=true` | 合入即自动删，无需人工 |
-| 补删 ① | 合并后被推「同步 main」提交而复活 | 判据同 C（`git cherry` `+`=0）⇒ 删 |
-| 补删 ② | 改写合入（patch-id 与主干不同） | 同上 |
+| 补删 ① | 合并后被推「同步 main」提交而复活 | `git cherry` `+`=0（内容已在主干）⇒ 删 |
+| 补删 ② | squash/amend 等**改写合入**（patch-id 变，`+` 不为 0） | `gh pr list --state merged --head <branch>` 核 PR 已 merged + 逐文件核对主干等价 ⇒ 删；否则保留 |
 | 补删 ③ | **关闭未合**的 PR 分支 | 先做 A 的「等价核验」；等价 ⇒ 删 |
 | 保留 | `main` / open PR 头分支 / registry `CODING` 分支 / 未合并且未被取代的 WIP | 不动 |
 

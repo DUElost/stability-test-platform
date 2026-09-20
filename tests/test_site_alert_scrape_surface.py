@@ -119,6 +119,8 @@ _PRODUCER_SITE_UNIT: dict[str, str | None] = {
     "tools/dev/script_guard_probe.py": "stp-script-guard",
     # 控制面宿主单元：读 PG 服务日志，而 PG 只在控制面宿主上（站点装了也扫不到）
     "tools/dev/pg_error_guard.py": None,
+    # #2881：站点安装清单含 stp-skill-usage.{service,timer}（stages.py MONITORING_SAMPLER）
+    "tools/dev/skill_usage_probe.py": "stp-skill-usage",
 }
 
 

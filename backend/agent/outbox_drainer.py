@@ -357,7 +357,12 @@ class OutboxDrainThread:
             if isinstance(err, dict):
                 return err.get("current_status")
         except Exception:
-            pass
+            # #739 面②：错误响应体不可解析时返回 None 交调用方做通用处置；
+            # 留一条 debug 以便区分"服务端契约漂移"与"确实没有该字段"。
+            logger.debug(
+                "terminal_error_body_unparsed status=%s",
+                getattr(response, "status_code", None),
+            )
         return None
 
     @staticmethod
@@ -371,5 +376,9 @@ class OutboxDrainThread:
             if isinstance(error, dict) and error.get("code"):
                 return str(error["code"])
         except Exception:
-            pass
+            # 同 `_extract_current_status`：契约漂移需要留痕（#739 面②）
+            logger.debug(
+                "terminal_error_code_unparsed status=%s",
+                getattr(response, "status_code", None),
+            )
         return None

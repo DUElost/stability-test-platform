@@ -40,21 +40,30 @@ async def _check_host_heartbeat_timeouts(db) -> tuple[int, int]:
     threshold = datetime.now(timezone.utc) - timedelta(
         seconds=HOST_HEARTBEAT_TIMEOUT_SECONDS,
     )
+    # #2901（锁序家族 #2635/#2787/#2796/#2871 的第四处）：下方循环体逐行取 job 行锁，
+    # 取锁顺序 = 本查询的返回序。**必须按 id 全序**——对侧 `agent_lease_extend.py` 是
+    # `ORDER BY JobInstance.id`，无保证的返回序与之交错即可成环。host 行同理（循环里
+    # `host.status = OFFLINE` 的 UPDATE 落在同一事务内）。
     dead_hosts = (await db.execute(
-        select(Host).where(
+        select(Host)
+        .where(
             Host.last_heartbeat < threshold,
             Host.status == HostStatus.ONLINE.value,
         )
+        .order_by(Host.id)
     )).scalars().all()
 
     hosts_offline = 0
     affected_jobs = 0
     for host in dead_hosts:
         running_jobs = (await db.execute(
-            select(JobInstance).where(
+            select(JobInstance)
+            .where(
                 JobInstance.host_id == host.id,
                 JobInstance.status == JobStatus.RUNNING.value,
             )
+            # 同上：job 行锁按 id 升序取（与 extend/complete/reconciler 同一全序）
+            .order_by(JobInstance.id)
         )).scalars().all()
 
         for job in running_jobs:
