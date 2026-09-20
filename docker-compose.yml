@@ -1,6 +1,7 @@
 services:
   postgres:
-    image: postgres:15-alpine
+    # 默认对齐生产大版本（PG17）；可用 POSTGRES_IMAGE 覆盖（#2945）
+    image: ${POSTGRES_IMAGE:-postgres:17-alpine}
     # Dev-only database. Keep it off production defaults when sharing a host.
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-stp_dev}

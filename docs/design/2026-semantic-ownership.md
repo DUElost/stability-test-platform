@@ -245,7 +245,7 @@
 |---|---|
 | `ADR-0021` 关联区 `script_meta` 括注 | 已降级为冻结副本 / 非独立权威；假键名由 #2856 去掉（本索引 X1 / `script-meta-freeze` 同步） |
 | ADR-0033 D1 无 flash | 本表 `flash-tool` 已指向 v1.3「刷机补登记」句；D1 Tier3 表已列 `flash_*` |
-| `ADR-0039` 幽灵引用与「硬不变量」字样（基线 `479104a3`） | ① §1.1 已校正（明写「**不在** `## 硬不变量`；S11 第 12 锚覆盖在场性」）；② §1.3 与 D4 的幽灵 `plan_step.script_sha` → 由**在飞 PR #2929** 收（本 PR 不抢同一文件；真载体 = `PlanStep.script_name/version` `backend/models/plan.py:95-96` + `step_trace` `backend/models/job.py:95`）；③ **残留**：D1 首句与 §7 增补第 2 条仍写「将 `AGENTS.md` **硬不变量**…收窄 / 同 PR 修订 `AGENTS.md` 硬不变量」，而该条实际位于 `AGENTS.md` **总原则** `:15-16` → 随 0039 转 Accepted 的 PR 一并改，触发器已挂在 `script-version-immutability` 行 |
+| `ADR-0039` 幽灵引用与「硬不变量」字样（基线 `479104a3`） | ① §1.1 已校正（明写「**不在** `## 硬不变量`；S11 第 12 锚覆盖在场性」）；② §1.3 与 D4 的幽灵 `plan_step.script_sha` → **已由 #2929 收**（真载体 = `PlanStep.script_name/version` + `step_trace` + `Script.content_sha256`）；③ D1 首句与 §4.3 落地序第 2 条的「`AGENTS.md` **硬不变量**」误标 → **已纠为总原则**（本轮；仍 **Proposed**，不升 Accepted；契约收窄与 `AGENTS.md`/门禁改写仍挂 `script-version-immutability` 行，待 #735 写操作齐后随 Accepted） |
 
 ---
 
@@ -271,3 +271,4 @@
 | 2026-09-20 | #2546 Closed 后：**Draft → Living**；补 N6/F-07 Domain Authority 注记；§9 纠 Phase 2 过时表述（选项 A 已他单落地） |
 | 2026-09-20 | X1 / `script-meta-freeze`：去掉幽灵 `plan_snapshot.script_meta` 假键名，对齐 #2856 / Mode C（步骤身份冻结面） |
 | 2026-09-20 | **#2546 follow-up（codex）**：补 `script-version-immutability` 行（F-1 机制化）；§6 依据行改八稿全量并补登 0b6e98 / 7f3504；§6.2 登记「S6 作膨胀上界」被 2 源拒 + 推荐替代未落地；§8 登记 ADR-0039 三处状态（含 `:66`/`:149` 残留） |
+| 2026-09-20 | ADR-0039 D1 / §4.3「硬不变量」误标 → **总原则**；§8 ②/#2929 与 ③ 收口（仍 Proposed，不升 Accepted） |
