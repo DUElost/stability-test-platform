@@ -69,15 +69,15 @@ def test_build_heartbeat_thread_reconnect_uses_slot():
 
 
 def test_main_wires_heartbeat_builder():
-    import backend.agent.main as agent_main
+    import backend.agent.agent_application as app
     from tools.dev.source_anchor import SourceGuard
 
-    guard = SourceGuard.of_module(agent_main).anchored("build_heartbeat_thread(")
+    guard = SourceGuard.of_module(app).anchored("build_heartbeat_thread(")
     guard.assert_absent(
         "scan_shard_register_failure_total",
-        why="#736 heartbeat outbox 字面量已迁出 main",
+        why="#736 heartbeat outbox 字面量已迁出编排层",
     )
     guard.assert_absent(
         "HeartbeatThread(",
-        why="#736 HeartbeatThread 构造已迁出 main",
+        why="#736 HeartbeatThread 构造已迁出编排层",
     )
