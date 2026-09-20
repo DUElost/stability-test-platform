@@ -1109,6 +1109,11 @@ def _install_status_summary(console_status: str | None, found: bool, has_run: bo
 def _latest_install_audits(db: Session, host_id: str) -> tuple[Any, Any]:
     """最近一次安装请求 / 最近一次安装结果（ADR-0044 D3：审计是持久证据）。
 
+    「持久」的视界（ADR-0050 丙案）：审计保留期视界内——`install_agent*` 落
+    business 默认桶（默认 90d，AUDIT_LOG_BUSINESS_RETENTION_DAYS 可调）。视界
+    外的安装运行不再可回溯，本函数读空 → 状态按「无运行」派生；装没装上的
+    布尔事实不受影响（`host.extra.agent_installed[_at]` 无界保留）。
+
     按 (timestamp, id) 排序取最新——同一秒内产生的两条也要稳定可比（id 单调）。
     """
     def _latest(action: str) -> Any:

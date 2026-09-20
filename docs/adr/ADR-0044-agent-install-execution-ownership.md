@@ -1,12 +1,12 @@
 # ADR-0044：Agent 安装的执行归属——RunConsole 自持，SAQ 不再持有安装
 
-- 状态：**Accepted** v1.0（2026-09-15，owner 裁决：按「本质问题」把安装从作业窗口里摘出来；由 [#2220](https://github.com/DUElost/stability-test-platform/issues/2220) 触发，现场证据见该单；D3/D4 在实施中两次修正：先是发现「活动登记在结束时清空」会使状态读不到结果，改为 DB 来源；现场复跑又发现 `host.extra` 会被心跳重建覆盖，故最终定为「审计 = 持久证据」）
+- 状态：**Accepted** v1.1（2026-09-15，owner 裁决：按「本质问题」把安装从作业窗口里摘出来；由 [#2220](https://github.com/DUElost/stability-test-platform/issues/2220) 触发，现场证据见该单；D3/D4 在实施中两次修正：先是发现「活动登记在结束时清空」会使状态读不到结果，改为 DB 来源；现场复跑又发现 `host.extra` 会被心跳重建覆盖，故最终定为「审计 = 持久证据」）；**v1.1（2026-09-20）**：D3 补「持久」的视界定义——审计保留期视界内（business 默认 90d，env 可调），见 [ADR-0050](./ADR-0050-install-evidence-retention-alignment.md) 丙案裁决（#2789）
 - 优先级：P1
 - 目标里程碑：M7
 - 日期：2026-09-15
 - 决策者：平台研发组（owner 裁决，2026-09-15）
 - 标签：Agent 安装, RunConsole, SAQ, 作业超时, 状态语义, #2220
-- 关联：[设计：RunConsole 多实例归属](../design/2026-09-13-run-console-multi-instance-ownership.md)（console 能力面）、[ADR-0027](./ADR-0027-control-plane-horizontal-scaling.md)（多实例；console 仍为实例本地）、[ADR-0021](./ADR-0021-script-content-alignment-gate.md)（维护窗口/升级门禁）、[#2225](https://github.com/DUElost/stability-test-platform/pull/2225)（最小修复：CANCELED ≠ FAILED，本 ADR 保留其判据）、[ADR-0050](./ADR-0050-install-evidence-retention-alignment.md)（D3「持久证据」的保留视界定义——Proposed 待裁决，[#2789](https://github.com/DUElost/stability-test-platform/issues/2789)）
+- 关联：[设计：RunConsole 多实例归属](../design/2026-09-13-run-console-multi-instance-ownership.md)（console 能力面）、[ADR-0027](./ADR-0027-control-plane-horizontal-scaling.md)（多实例；console 仍为实例本地）、[ADR-0021](./ADR-0021-script-content-alignment-gate.md)（维护窗口/升级门禁）、[#2225](https://github.com/DUElost/stability-test-platform/pull/2225)（最小修复：CANCELED ≠ FAILED，本 ADR 保留其判据）、[ADR-0050](./ADR-0050-install-evidence-retention-alignment.md)（D3「持久证据」的保留视界定义——**已裁决：丙案，本 v1.1 落地**，[#2789](https://github.com/DUElost/stability-test-platform/issues/2789)）
 
 ## 1. 背景
 
@@ -50,6 +50,10 @@ CANCELED 与 FAILED 分开报，解决了**读数**，没解决**归属**。
 - **D3（状态落库 = 审计，不是 host.extra）**：
   - **开始**：路由写 `install_agent_request` 审计（`details.console_run_id`）——内存里的
     「活动运行」注册表在安装结束/进程重启后就没；审计是 append-only，才是持久证据；
+  - **「持久」的视界（v1.1 补，[ADR-0050](./ADR-0050-install-evidence-retention-alignment.md) 丙案）**：
+    持久 = **审计保留期视界内**——`install_agent*` 落 business 默认桶（默认 90d，
+    `AUDIT_LOG_BUSINESS_RETENTION_DAYS` 可调，ADR-0049 D1）；视界外的安装**运行**不再可回溯
+    （状态读作「无运行」），装没装上的布尔事实仍由 `host.extra.agent_installed[_at]` 无界保留；
   - **结束**：console 的 `on_complete(run)` 回调写 `install_agent` 审计（`ok` / `rc` /
     `console_status` / `log_path` / `console_run_id`），并维护 `host.extra.agent_installed[_at]`
     （该键在心跳的 keep-list 里，能穿过 `extra` 重建；`status == "SUCCESS"` 才置位）。
