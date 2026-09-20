@@ -46,6 +46,7 @@ def compute_capacity(
     adb_state_counts: Optional[dict] = None,
     usb_root_hub_count: Optional[int] = None,
     usb_fault_reasons: Optional[Sequence[str]] = None,
+    usb_kernel_log_channel: Optional[str] = None,
 ) -> dict:
     """返回 {"capacity": {...}, "health": {...}}。
 
@@ -72,6 +73,12 @@ def compute_capacity(
 
     usb_fault_reasons — 内核 USB 子系统故障（#2900，`kernel_usb_faults` 判定后传入）：
     warning 级 reason，只进 DEGRADED，不进 health_limit（打闸口径见 #2902）。
+
+    usb_kernel_log_channel — #2957：上面那些 USB reason 的**判据通道**是否可读
+    （`kernel_usb_faults.CHANNEL_*`）。放 capacity 不放 health.reasons——它是传感器
+    自身状态而不是主机故障：进 reasons 会把整个 fleet 刷成 DEGRADED（页面噪声 +
+    与真故障同色），而我们要能单独问出「这条判据今天算不算数」。
+    与 `usb_device_count` 同族：纯观测，不参与任何槽位/门禁计算。
     """
     health = _compute_health(
         system_stats,
@@ -102,6 +109,9 @@ def compute_capacity(
         "usb_device_count": usb_device_count,
         "adb_interface_count": adb_interface_count,
         "adb_state_counts": adb_state_counts,
+        # #2957：内核日志通道可用性（ok / unavailable / unknown）。键名取短是为了留在
+        # #2902 立的心跳 payload 预算里；值用完整词，它会直接成为 PromQL 的 label 值。
+        "usb_kernel_log": usb_kernel_log_channel,
         # usb_root_hub_count **不上报**：它只是 `usb_tree_empty` 判据的输入（空树基线），
         # 页面不需要；上报会让心跳 payload 增幅越过 issue 的 <100B 验收线（实测 121B）。
     }

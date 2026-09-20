@@ -15,6 +15,10 @@ from pathlib import Path
 from backend.agent import heartbeat_thread as hb_mod
 from backend.agent.capacity_reporter import compute_capacity
 from backend.agent.kernel_usb_faults import (
+    CHANNEL_OK,
+    CHANNEL_STATES,
+    CHANNEL_UNKNOWN,
+    CHANNEL_UNAVAILABLE,
     LINK_ERROR_THRESHOLD,
     REASON_HC_DEAD,
     REASON_LINK_DEGRADED,
@@ -365,3 +369,71 @@ def test_heartbeat_tick_wires_kernel_usb_watch():
     assert "usb_fault_reasons" in capacity_kwargs, (
         "心跳未把 usb_fault_reasons 传给 compute_capacity——探测算了但上不了报"
     )
+    # #2957：通道可用性走的是**另一条**上报路径（capacity，不是 reason）。它最容易在
+    # 重构时被当成"同一个 watch 的同一个结论"合并掉——合掉就等于把「没查过」重新
+    # 塞回 reason 列表，控制面又会把它读成「查过且没问题」。
+    state_attr_calls = [
+        call.func.attr for call in calls
+        if isinstance(call.func, ast.Attribute) and call.func.attr == "channel_state"
+    ]
+    assert state_attr_calls, "心跳未读取 watch.channel_state()——#2957 的通道态上不了报"
+    assert "usb_kernel_log_channel" in capacity_kwargs, (
+        "心跳未把 usb_kernel_log_channel 传给 compute_capacity"
+    )
+
+
+class TestChannelState:
+    """#2957：判据**通道**的可用性必须单独可问——它决定控制面那条告警是「查过且干净」还是「没查过」。
+
+    实测前提（本文件不重复取证，见 #2957）：Agent 以 `User=android` 运行、不在
+    adm/systemd-journal 组，非特权 `journalctl -k` 退出码 0 且 stdout 只有
+    `-- No entries --` ⇒ `scan_kernel_usb_faults` 返回 None。此时若只有 reason 列表，
+    控制面看到的就是「48/48 台没有任何 USB 故障」，而真相是「48/48 台从未检查过」。
+    """
+
+    def test_unknown_until_first_scan_completes(self):
+        clock, rec = _Clock(), _Recorder([KernelUsbFaults()])
+        watch = _watch(clock, rec)
+        assert watch.channel_state() == CHANNEL_UNKNOWN   # 还没扫过：不许冒充「正常」
+        watch.poll(usb_device_count=3)
+        assert _wait(lambda: len(rec.calls) == 1)
+        assert _wait(lambda: watch.channel_state() == CHANNEL_OK)
+
+    def test_blind_scan_is_unavailable_and_never_ok(self):
+        """扫描返回 None ⇒ `unavailable`。这一条是 #2957 的全部动机：不能咽成「干净」。"""
+        clock, rec = _Clock(), _Recorder([None])
+        watch = _watch(clock, rec)
+        reasons = watch.poll(usb_device_count=0)
+        assert _wait(lambda: len(rec.calls) == 1)
+        assert _wait(lambda: watch.channel_state() == CHANNEL_UNAVAILABLE)
+        # 未知 ≠ 故障：通道黑时既不报失明、也不报正常
+        assert reasons == []
+
+    def test_channel_recovers_when_access_is_granted(self):
+        """ops 加了组之后下一拍自动回 `ok`——本字段是**最近一次**结论，不是启动期快照。"""
+        clock, rec = _Clock(), _Recorder([None, KernelUsbFaults(hc_dead=0)])
+        watch = _watch(clock, rec)
+        watch.poll(usb_device_count=0)
+        assert _wait(lambda: watch.channel_state() == CHANNEL_UNAVAILABLE)
+        clock.advance(61)
+        watch.poll(usb_device_count=0)
+        assert _wait(lambda: watch.channel_state() == CHANNEL_OK)
+
+    def test_scan_crash_counts_as_unavailable_not_ok(self):
+        """扫描器抛异常同样按「未知」处理：异常不等于「读到了干净日志」。"""
+        clock = _Clock()
+
+        def boom(*, since=None):
+            raise RuntimeError("journalctl 不存在")
+
+        watch = KernelUsbWatch(
+            interval_seconds=60.0, window_seconds=3600.0, scanner=boom,
+            monotonic=lambda: clock.mono, wall_clock=lambda: clock.wall,
+        )
+        watch.poll(usb_device_count=0)
+        assert _wait(lambda: watch.channel_state() == CHANNEL_UNAVAILABLE)
+
+    def test_reason_and_channel_vocabularies_are_disjoint(self):
+        """reason 与通道态是两套词表，混用会让「传感器坏了」伪装成「设备坏了」。"""
+        assert not ({REASON_HC_DEAD, REASON_LINK_DEGRADED} & set(CHANNEL_STATES))
+        assert set(CHANNEL_STATES) == {CHANNEL_OK, CHANNEL_UNAVAILABLE, CHANNEL_UNKNOWN}
