@@ -44,6 +44,28 @@ def _high_temp(temp: Any) -> bool:
     return temp is not None and temp > HIGH_TEMP_THRESHOLD
 
 
+def device_connectivity_changed(
+    *,
+    prev_adb_state: Any,
+    new_adb_state: Any,
+    prev_adb_connected: Any,
+    new_adb_connected: Any,
+) -> bool:
+    """设备的 ADB 连通性事实（state / connected）是否变化。
+
+    #2960 把它从 `device_update_is_material` 里**显式抽出来**，是为了让两个消费方共用
+    同一份判定：一个决定「这次心跳要不要落库」，另一个决定「这条逐设备日志值不值得在
+    INFO 上再占一行」。各留一份定义，它们就会朝相反方向被放宽（日志先变吵）或收紧
+    （审计先变哑）——而这条链的稳态量级是 626 台 ONLINE 设备 × 每 5s 一拍，实测单日
+    392 万行、占 `backend.log` 的 68%。
+    """
+    if prev_adb_state != new_adb_state:
+        return True
+    if bool(prev_adb_connected) != bool(new_adb_connected):
+        return True
+    return False
+
+
 def device_update_is_material(
     *,
     prev_status: Any,
@@ -64,9 +86,12 @@ def device_update_is_material(
     """
     if prev_status != new_status:
         return True
-    if prev_adb_state != new_adb_state:
-        return True
-    if bool(prev_adb_connected) != bool(new_adb_connected):
+    if device_connectivity_changed(
+        prev_adb_state=prev_adb_state,
+        new_adb_state=new_adb_state,
+        prev_adb_connected=prev_adb_connected,
+        new_adb_connected=new_adb_connected,
+    ):
         return True
     if _low_battery(prev_battery_level) != _low_battery(new_battery_level):
         return True
