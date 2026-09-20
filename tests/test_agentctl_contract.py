@@ -6,16 +6,29 @@ import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
+from tools.dev.source_anchor import SourceGuard
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 AGENTCTL_SCRIPT = REPO_ROOT / "backend/agent/agentctl.sh"
 INSTALL_SCRIPT = REPO_ROOT / "backend/agent/install_agent.sh"
 
+#: 否定断言前必须先证明「扫的还是那段实现」——锚点编在**替代物**上（#2639）。
+_INSTALL_SCRIPT_REL = "backend/agent/install_agent.sh"
+_AGENTCTL_INSTALL_ANCHOR = 'install -m 755 "$SCRIPT_DIR/agentctl.sh" "$INSTALL_DIR/agentctl"'
+_HOST_ID_PASSTHROUGH_ANCHOR = "HOST_ID=$HOST_ID"
+
 
 def test_install_script_deploys_tracked_agentctl_script():
     text = INSTALL_SCRIPT.read_text(encoding="utf-8")
 
-    assert 'cat > "$INSTALL_DIR/agentctl"' not in text
+    # 旧形态：安装脚本内联 heredoc 造 agentctl —— 与仓库里的 agentctl.sh 会分叉
+    SourceGuard.of_repo_path(_INSTALL_SCRIPT_REL).anchored(
+        _AGENTCTL_INSTALL_ANCHOR
+    ).assert_absent(
+        'cat > "$INSTALL_DIR/agentctl"',
+        why="agentctl 已改为跟踪仓库脚本安装，内联生成即出现两份真相",
+    )
     assert re.search(
         r'(install -m 755|cp)\s+"\$SCRIPT_DIR/agentctl\.sh"\s+"\$INSTALL_DIR/agentctl"',
         text,
@@ -27,7 +40,13 @@ def test_install_script_defaults_to_fixed_host_id_mode():
 
     assert "HOST_ID=$HOST_ID" in text
     assert "AUTO_REGISTER_HOST=false" in text
-    assert "HOST_ID=auto" not in text
+    # 锚在显式透传 host id 的那一行：它被搬走时本判据必须报「用例过期」而不是恒真
+    SourceGuard.of_repo_path(_INSTALL_SCRIPT_REL).anchored(
+        _HOST_ID_PASSTHROUGH_ANCHOR
+    ).assert_absent(
+        "HOST_ID=auto",
+        why="主机身份必须显式给定（R02-R01）：默认 auto 会让多台 Agent 共用注册身份",
+    )
 
 
 def test_agentctl_health_returns_nonzero_for_critical_failures():

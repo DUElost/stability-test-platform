@@ -18,9 +18,15 @@ from pathlib import Path
 
 import yaml
 
+from tools.dev.source_anchor import SourceGuard
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 INSTALL_SCRIPT = REPO_ROOT / "backend/agent/install_agent.sh"
 INSTALL_PLAYBOOK = REPO_ROOT / "tools/ansible/playbooks/install_agent.yml"
+
+#: 锚点编在「非交互执行」这个替代任务名上：任务被改名/搬走时判据必须过期（#2639）。
+_INSTALL_PLAYBOOK_REL = "tools/ansible/playbooks/install_agent.yml"
+_NONINTERACTIVE_TASK_ANCHOR = "Run install script non-interactively"
 
 _API_URL_BLOCK_START = "# API_URL 解析（#I4 非交互化）"
 _HOST_ID_BLOCK_START = "# 获取本机信息用于生成唯一标识"
@@ -448,8 +454,16 @@ class TestInstallPlaybookContract:
             assert options["mode"] == "0644"
 
     def test_install_task_is_not_a_pipe_into_read(self):
-        text = INSTALL_PLAYBOOK.read_text(encoding="utf-8")
-        assert "printf '%s\\n%s\\n'" not in text
-        assert "| bash install_agent.sh" not in text
+        guard = SourceGuard.of_repo_path(_INSTALL_PLAYBOOK_REL).anchored(
+            _NONINTERACTIVE_TASK_ANCHOR
+        )
+        guard.assert_absent(
+            "printf '%s\\n%s\\n'",
+            why="两步 printf 只存在于旧「管道喂 bash」形态，回潮即把 stdin 抢给脚本",
+        )
+        guard.assert_absent(
+            "| bash install_agent.sh",
+            why="#2324：ansible 的 stdout 会被解析，管道形态让脚本读不到交互输入而静默卡住",
+        )
         task = self._task("Run install script non-interactively")
         assert task["ansible.builtin.command"]["cmd"] == "bash install_agent.sh"
