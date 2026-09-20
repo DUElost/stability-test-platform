@@ -261,6 +261,40 @@ groups:
             docs/notes/architecture/2026-09-14-shared-row-lock-table.md 的 I1–I4 核对
             是否出现新的加锁顺序反向。
 
+      # ---- #2881 skill 用量探针的执行者指标 --------------------------------------
+      # 生产者 = tools/dev/skill_usage_probe.py 的 node-exporter textfile（不是 backend
+      # 应用指标）。名字由 tests/metrics_registry.py 的 textfile_metric_index() 从生产者
+      # 源码静态提取，因此同样受「未知指标即红」的结构层约束——不是豁免口子。
+      # hollow 是周级事实（skill 建而不用），故给 7 天持续窗口而不是立刻响。
+      - alert: StabilitySkillUsageHollow
+        expr: stp_skill_usage_hollow > 0
+        for: 7d
+        labels:
+          severity: warning
+        annotations:
+          summary: 有 skill 达到观察窗且从未被强信号触发（HOLLOW）
+          description: >-
+            stp_skill_usage_hollow 连续 7 天大于 0。处置二选一：删除该 skill，或改写
+            description 让触发词真实可命中（design/2026-08-governance-surface-protection.md
+            §8.1 观察台账）。删前核对 Codex 列会话性质（读取≠触发，审计噪声未甄别）。
+            探针只报告，不自动删除任何 skill。
+
+      # 四种不可信形态合成一条（避免告警风暴）：探针崩了（broken）、强信号源不在场
+      # （unknown ⇒ 洞数未知，不得当成 0）、以及「探针其实没在跑」（last_run 陈旧或指标
+      # 消失）。最后一条尤其要紧——停摆时 hollow=0 仍会被读到，看起来像「干净」。
+      # 阈值 172800s = 48h：探针每周一次 + Persistent=true 补跑，两天无结果即真停摆。
+      - alert: StabilitySkillUsageUntrusted
+        expr: stp_skill_usage_broken == 1 or stp_skill_usage_unknown == 1 or time() - stp_skill_usage_last_run > 172800 or absent(stp_skill_usage_last_run)
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: skill 用量探针不可信（崩溃／源不可得／停摆）
+          description: >-
+            broken=1（探针自身异常）、unknown=1（强信号源不在场，洞数未知）或 last_run
+            超过 48 小时未更新／指标消失。此时 hollow 的读数没有意义：先修探针或确认转录源
+            仍在（--home 指向的部署用户家目录），并确认 stp-skill-usage.timer 在跑。
+
       # ---- #735 退役守卫的执行者指标 -------------------------------------------
       # 生产者 = tools/dev/script_guard_probe.py 的 node-exporter textfile（不是 backend
       # 应用指标）。名字由 tests/metrics_registry.py 的 textfile_metric_index() 从生产者
@@ -363,6 +397,33 @@ groups:
   # 放宽下限要先看 fleet 里有多少 3–5 台的 host，别在告警里猜。
   - name: stability-platform-fleet-link
     rules:
+      # #2909③：周期回归链覆盖差——ONLINE 设备掉出全部 enabled schedule 清单。
+      # 阈值 10%：本告警上线时实测 gap=12.6%（#2909 人肉排查发现），即它应当在
+      # 部署后立即 firing——这是设计意图（把「断了 20% 都没人知道」变成必须响的铃）。
+      # 修清单（#2909 问题②的裁决落地）后自然回落；调阈值前先想清楚要掩盖的是什么。
+      - alert: StabilityChainCoverageGap
+        expr: >-
+          (
+            sum without (kind) (stability_chain_coverage_devices{kind="gap_missing"})
+            /
+            sum without (kind) (stability_chain_coverage_devices{kind="online_total"})
+          ) > 0.1
+          and
+          sum without (kind) (stability_chain_coverage_devices{kind="online_total"}) >= 50
+        for: 60m
+        labels:
+          severity: warning
+          domain: schedule
+        annotations:
+          summary: 周期回归链的 fleet 覆盖差超 10%（存在结构性掉出清单的 ONLINE 设备）
+          description: >-
+            未退役 host 上 ONLINE 的设备中，>10% 不在任何 enabled task_schedule 的
+            device_ids 清单里且持续 60m（分母下限 50 台防 fleet 缩容误报）。
+            链清单是 放量时点的存储快照（schedule.device_ids 无再生成路径，
+            链后续段只做 status 修剪不扩列——见 #2909 诊断），放量后接入/回潮
+            的设备会永久离开周期观测面。排查：/metrics 的
+            stability_chain_coverage_devices 三元组 + #2909 评论的定案 SQL 形态；
+            处置在 #2909 问题②的裁决（动态派生或清单再生成），不是调高本阈值。
       - alert: StabilityHostAdbOfflineConcentration
         expr: >-
           (

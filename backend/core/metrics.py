@@ -7,7 +7,7 @@ Exposes key metrics for monitoring and alerting.
 import functools
 import logging
 import os
-from typing import Callable, Dict
+from typing import Callable, Dict, Any
 
 logger = logging.getLogger(__name__)
 
@@ -661,6 +661,18 @@ host_operation_waiters = Gauge(
     ['host_id'],
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
+# #2909 问题③：周期回归链的覆盖差可发现化（拉取期现算于 api/routes/metrics.py）。
+# kind 是封闭词表：online_total=fleet 未退役 host 上的 ONLINE 设备数；
+# scheduled_union=全部 enabled task_schedule 存储清单的并集大小（含已掉线台，
+# 反映清单存量）；gap_missing=ONLINE ∉ 任何 schedule 清单（「20% 断了没人知道」
+# 的那个量）。ratio 由 PromQL 现算，指标只落原子事实。
+chain_coverage_devices = Gauge(
+    'stability_chain_coverage_devices',
+    'Periodic-regression chain coverage facts computed at scrape time '
+    '(kind=online_total|scheduled_union|gap_missing) (#2909)',
+    ['kind'],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
 # ============================================================================
 # Build Info
 # ============================================================================
@@ -849,6 +861,42 @@ def record_reconciler_dirs_oversized_skipped(host_id: str, amount: int):
     reconciler_dirs_oversized_skipped_total.labels(host_id=str(host_id or "unknown")).inc(n)
 
 
+# ============================================================================
+# #2873：per-host 推式 Gauge 的 label child 差集清理
+# ============================================================================
+# prometheus_client 的 label child 一旦创建就**常驻 registry**：host 退役/移出
+# 在册后「停止刷新」= 把最后一个值（往往是故障值）永久冻结——#2791 为拉取侧的
+# adb_state gauge 修过同型问题，本文件这 7 组推式 per-host gauge 是它的补集。
+# 写点全部收口在本文件（心跳/完成回报/OperationScheduler 桥接），故在此记账：
+# 每次 set 前登记 (gauge, host_id, 其余 label 值)；/metrics 拉取端调用
+# `sweep_stale_host_gauge_children(live)` 对不在 live 集的 host remove 全部 child。
+# live 口径=「在册（retired_at IS NULL）」，与 issue 判据同源：短暂掉线的 host
+# 其末值仍有操作意义，只清「不再是容量」的（ADR-0038 D5 语义）。
+# 前提：所有受影响 gauge 的 labelnames 以 host_id 打头（remove 为位置参数）。
+_PUSH_HOST_GAUGES: dict[int, Any] = {}
+_PUSH_HOST_CHILDREN: dict[int, dict[str, set[tuple[str, ...]]]] = {}
+
+
+def _note_host_child(gauge: Any, host_id: str, rest: tuple[str, ...]) -> None:
+    _PUSH_HOST_GAUGES[id(gauge)] = gauge
+    _PUSH_HOST_CHILDREN.setdefault(id(gauge), {}).setdefault(host_id, set()).add(rest)
+
+
+def sweep_stale_host_gauge_children(live_host_ids: set[str]) -> int:
+    """移除不再在册 host 的全部 child metric；返回移除数（/metrics 拉取端调用）。"""
+    removed = 0
+    for gid, per_host in _PUSH_HOST_CHILDREN.items():
+        gauge = _PUSH_HOST_GAUGES[gid]
+        for host_id in [h for h in per_host if h not in live_host_ids]:
+            for rest in per_host.pop(host_id):
+                try:
+                    gauge.remove(host_id, *rest)
+                except KeyError:
+                    pass  # child 已被其它路径清掉：语义上已达成
+                removed += 1
+    return removed
+
+
 def set_reconciler_unresolved_dirs(host_id: str, value: int):
     """#2394: 末拍 unresolved 快照（0 也有意义=最近 job 全收敛，照写）。"""
     if not PROMETHEUS_AVAILABLE:
@@ -857,7 +905,9 @@ def set_reconciler_unresolved_dirs(host_id: str, value: int):
         n = int(value)
     except (TypeError, ValueError):
         return
-    reconciler_unresolved_dirs.labels(host_id=str(host_id or "unknown")).set(max(0, n))
+    hid = str(host_id or "unknown")
+    _note_host_child(reconciler_unresolved_dirs, hid, ())
+    reconciler_unresolved_dirs.labels(host_id=hid).set(max(0, n))
 
 
 def set_watcher_reconciler_present(host_id: str, platform: str):
@@ -865,6 +915,7 @@ def set_watcher_reconciler_present(host_id: str, platform: str):
     if not PROMETHEUS_AVAILABLE:
         return
     plat = str(platform or "").strip().upper() or "UNKNOWN"
+    _note_host_child(watcher_reconciler_present, str(host_id or "unknown"), (plat,))
     watcher_reconciler_present.labels(
         host_id=str(host_id or "unknown"), platform=plat,
     ).set(1)
@@ -874,7 +925,9 @@ def set_reconciler_burst_mode_active(host_id: str, active: bool):
     """Set AEE reconciler burst-mode gauge (1=burst / 0=baseline) for a host (D2)."""
     if not PROMETHEUS_AVAILABLE:
         return
-    reconciler_burst_mode_active.labels(host_id=str(host_id or "unknown")).set(1 if active else 0)
+    hid = str(host_id or "unknown")
+    _note_host_child(reconciler_burst_mode_active, hid, ())
+    reconciler_burst_mode_active.labels(host_id=hid).set(1 if active else 0)
 
 
 def record_watcher_capability(capability: str):
@@ -894,6 +947,7 @@ def record_agent_outbox_pending(host_id: str, outbox_type: str, count: int):
     """Update Agent outbox backlog gauge from heartbeat extra."""
     if not PROMETHEUS_AVAILABLE:
         return
+    _note_host_child(agent_outbox_pending, str(host_id), (str(outbox_type),))
     agent_outbox_pending.labels(
         host_id=str(host_id),
         type=outbox_type,
@@ -1142,6 +1196,9 @@ def record_host_operation_concurrency(
         return
     hid = str(host_id or "unknown")
     try:
+        _note_host_child(host_operation_slots_held, hid, ())
+        _note_host_child(host_operation_slots_max, hid, ())
+        _note_host_child(host_operation_waiters, hid, ())
         host_operation_slots_held.labels(host_id=hid).set(max(0, int(held)))
         host_operation_slots_max.labels(host_id=hid).set(max(0, int(max_slots)))
         host_operation_waiters.labels(host_id=hid).set(max(0, int(waiting)))

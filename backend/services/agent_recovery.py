@@ -301,7 +301,11 @@ async def sync_agent_recovery(
     # ── Active job actions ──
     _recovery_grace_seconds = 300  # UNKNOWN grace for recovery, matches watchdog
     job_actions: list[_RecoveryAction] = []
-    for entry in payload.active_jobs:
+    # #2871（I2 锁序家族第三处）：集合内部按 job_id 升序取锁。原先按 payload 上报顺序
+    # 逐条 FOR UPDATE，而本函数只在末尾提交一次——即一次请求持全部 job 行锁；与
+    # extend_leases_batch 的 ORDER BY JobInstance.id（#992 全序约定）交错即可成环，
+    # 与 #2796（coordinator-heartbeat 集合内序）同形。
+    for entry in sorted(payload.active_jobs, key=lambda e: e.job_id):
         # Lock the complete ownership tuple.  Shared AGENT_SECRET authenticates
         # an Agent process, not a host/job relationship; the fencing token and
         # relational checks below establish that relationship.

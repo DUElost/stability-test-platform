@@ -1,7 +1,7 @@
 # #736 切片：`AgentApplication` 生命周期阶段方法
 
 Status: implemented
-Class: bugfix
+Class: bug-fix
 
 ## Decision
 

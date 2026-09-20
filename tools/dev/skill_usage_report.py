@@ -42,6 +42,7 @@ Codex 列并抽查会话性质。
 from __future__ import annotations
 
 import argparse
+import json
 import glob
 import os
 import re
@@ -280,10 +281,22 @@ def main() -> int:
                     help="存在洞态 skill 时 exit 1（gate 与 stp-skill-usage.timer 消费）")
     ap.add_argument("--self-test", action="store_true",
                     help="离线红绿自证（不读真实转录）")
+    # #2881：textfile 生产者按本仓惯例以 root 跑（stp-script-guard / stp-mem-top 同款），
+    # 而转录在**部署用户**家目录里 ⇒ 由探针显式传入源路径（CLI 而非 env：新环境变量要进
+    # environment-variables.md 与 env 门禁，unit 直接写进 ExecStart 就够）。
+    ap.add_argument("--transcript-dir", default=None,
+                    help="Claude 转录目录（缺省按当前用户 HOME 推导）")
+    ap.add_argument("--codex-dir", default=None,
+                    help="Codex 会话目录（缺省按当前用户 HOME 推导）")
+    ap.add_argument("--json", action="store_true",
+                    help="机器可读输出（探针消费）：hollow 数、源在场标志、逐 skill 事实")
     args = ap.parse_args()
 
     if args.self_test:
         return _self_test()
+
+    transcript_dir = args.transcript_dir or TRANSCRIPT_DIR
+    codex_dir = args.codex_dir or CODEX_DIR
 
     items = inventory()
     if not items:
@@ -292,19 +305,51 @@ def main() -> int:
 
     slugs = [i["name"] for i in items]
     sources = []
-    if os.path.isdir(TRANSCRIPT_DIR):
+    if os.path.isdir(transcript_dir):
         sources.append("claude")
-    if os.path.isdir(CODEX_DIR):
+    if os.path.isdir(codex_dir):
         sources.append("codex")
     if not sources:
-        print(f"[skip] 无任何转录数据源（claude={TRANSCRIPT_DIR} codex={CODEX_DIR}）"
+        print(f"[skip] 无任何转录数据源（claude={transcript_dir} codex={codex_dir}）"
               "——本机不可观测 ≠ 违规，退出 0")
+        if args.json:
+            print(json.dumps({
+                "hollow": 0, "skills": [], "scanned": [],
+                "strong_source_present": False, "weak_source_present": False,
+                "skipped": "no_transcript_source",
+            }, ensure_ascii=False))
         return 0
 
-    claude = scan_claude(TRANSCRIPT_DIR, slugs) if "claude" in sources else {}
-    codex = scan_codex(CODEX_DIR, slugs) if "codex" in sources else {}
+    claude = scan_claude(transcript_dir, slugs) if "claude" in sources else {}
+    codex = scan_codex(codex_dir, slugs) if "codex" in sources else {}
 
     now = time.time()
+
+    if args.json:
+        # #2881：机器可读输出**只**打 JSON（混着人类表格的 stdout 没法解析）。判据仍走同一个
+        # is_hollow（不复制一份判断），缺源/零调用由「strong_source_present」与逐条 calls
+        # 分开报，探针据此把缺源折成 unknown 而不是 hollow（#2851 同源语义）。
+        strong_present = "claude" in sources
+        rows = []
+        json_hollow = 0
+        for it in items:
+            total, _last = claude.get(it["name"], (0, None))
+            cx, _cx = codex.get(it["name"], (0, None))
+            age_days = (int((now - it["birth"]) / 86400) if it["birth"] else None)
+            is_hole = is_hollow(age_days, total, it["type"])
+            json_hollow += 1 if is_hole else 0
+            rows.append({
+                "dir": it["dir"], "type": it["type"], "age_days": age_days,
+                "claude_calls": total, "codex_sessions": cx, "hollow": is_hole,
+            })
+        print(json.dumps({
+            "hollow": json_hollow,
+            "strong_source_present": strong_present,
+            "weak_source_present": "codex" in sources,
+            "skills": rows,
+        }, ensure_ascii=False))
+        return 1 if (json_hollow and args.strict) else 0
+
     hollow = 0
     width = max(len(i["dir"]) for i in items)
     print(f"# skill 用量报告（强信号 claude: {'✓' if 'claude' in sources else '✗'}"
