@@ -7,6 +7,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from backend.models.enums import JobStatus
 from backend.models.host import Device
 from backend.models.job import JobInstance, StepTrace
 from backend.models.plan import Plan
@@ -33,6 +34,12 @@ def build_plan_run_export(db: Session, pr: PlanRun) -> dict[str, Any]:
         str(status): int(cnt) for status, cnt in status_rows
     }
     total = sum(status_counts.values())
+    # #2847：summary 原先没有 failed 键，markdown 消费端的 ``summary.get("failed", 0)``
+    # 把真失败数吞成恒 0。口径与 ``report_service`` 的运行报告一致：未成功的设备
+    # = FAILED + ABORTED（ABORTED 不计入任何成功语义）；逐状态计数仍在下方可见。
+    failed = status_counts.get(JobStatus.FAILED.value, 0) + status_counts.get(
+        JobStatus.ABORTED.value, 0
+    )
 
     jobs = (
         db.query(JobInstance)
@@ -108,6 +115,7 @@ def build_plan_run_export(db: Session, pr: PlanRun) -> dict[str, Any]:
         "result_summary": pr.result_summary,
         "summary": {
             "total_jobs": total,
+            "failed": failed,
             "status_counts": status_counts,
             "truncated": truncated,
             "max_jobs": _EXPORT_MAX_JOBS,

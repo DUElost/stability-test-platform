@@ -49,6 +49,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
@@ -69,6 +70,44 @@ def _require_local(base_url: str, allow_remote: bool) -> None:
         )
 
 
+#: dev 栈（`docker-compose.yml`）的库名与 PG 映射端口——seed/cleanup 只认这两个特征之一。
+DEV_DB_NAME = "stp_dev"
+DEV_DB_PORT = 15432
+
+
+def _require_dev_db_target() -> None:
+    """seed/cleanup 是**破坏性腿**（写 30 host / 510 job；cleanup 直接 DELETE 同规模）：
+    import `backend.core.database`（import 期即建引擎）**之前**必须先确认目标是 dev 库。
+
+    #2844：`backend.core.database` 的 DSN 经 `env_source.resolve_database_url()` 解析——
+    ambient 没有 `DATABASE_URL` 时**静默回退仓库根 `.env.backend`（生产 env 源）**。
+    忘一条 `export` 就把 seed/cleanup 打在真生产库上，而 run 腿有 `_require_local`
+    拒绝非回环控制面、这三条腿此前**零守卫**（守卫不对称）。故这里 fail-closed：
+
+    - 必须**显式**导出 `DATABASE_URL`（不接受任何文件兜底）；
+    - 目标须是 dev 形态：库名 `stp_dev` 或 PG 端口 15432（compose 映射）。
+
+    对照：`backend/core/db_url_guard.py`（#1300/#2632 系）守的是 `TEST_DATABASE_URL`；
+    本探针的目标是 dev 栈（库名不含 test），故用 dev 特征而非 test 命名约定。
+    """
+    dsn = os.environ.get("DATABASE_URL", "").strip()
+    if not dsn:
+        raise SystemExit(
+            "拒绝：seed/cleanup 是破坏性操作，必须**显式**导出 DATABASE_URL——"
+            "未导出时 backend.core.database 会静默回退仓库根 .env.backend（生产 env 源，见 #2844）"
+        )
+    # SQLAlchemy 方言后缀（postgresql+psycopg://）urlsplit 认不出，剥掉再解析
+    parts = urlsplit(re.sub(r"^[a-z0-9+]+://", "postgresql://", dsn, count=1, flags=re.I))
+    dbname = parts.path.lstrip("/").split("?")[0]
+    port = parts.port
+    if dbname == DEV_DB_NAME or port == DEV_DB_PORT:
+        return
+    raise SystemExit(
+        f"拒绝：目标库 {dbname or '?'}@{parts.hostname or '?'}:{port or '?'} 不像 dev 栈"
+        f"（只接受库名 {DEV_DB_NAME} 或端口 {DEV_DB_PORT}）——生产/未知库上一律不动手"
+    )
+
+
 # ── seed / cleanup（直连 dev 库）──────────────────────────────────────────
 def _session():
     from backend.core.database import SessionLocal
@@ -77,6 +116,7 @@ def _session():
 
 
 def cmd_seed(args: argparse.Namespace) -> int:
+    _require_dev_db_target()
     from uuid import uuid4
 
     from sqlalchemy import insert
@@ -109,7 +149,6 @@ def cmd_seed(args: argparse.Namespace) -> int:
             .values(
                 name=f"scale-{suffix}",
                 description="abort scale probe",
-                failure_threshold=0.0,
                 created_by="abort_scale_probe",
             )
             .returning(Plan.id)
@@ -119,7 +158,6 @@ def cmd_seed(args: argparse.Namespace) -> int:
             .values(
                 plan_id=plan_id,
                 status=PlanRunStatus.RUNNING.value,
-                failure_threshold=0.0,
                 plan_snapshot={"name": f"scale-{suffix}", "plan_id": plan_id},
                 run_type="MANUAL",
                 triggered_by="abort_scale_probe",
@@ -201,6 +239,7 @@ def cmd_seed(args: argparse.Namespace) -> int:
 
 
 def cmd_cleanup(args: argparse.Namespace) -> int:
+    _require_dev_db_target()
     from sqlalchemy import delete, select
 
     from backend.models.device_lease import DeviceLease

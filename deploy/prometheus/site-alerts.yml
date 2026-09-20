@@ -37,3 +37,25 @@ groups:
       summary: 脚本退役守卫不可信（崩溃／事实不可得／停摆）
       description: broken=1（工具自身异常）、unknown=1（执行事实维度不可得）或 last_run 超过 48 小时未更新／指标消失。此时 due 的读数没有意义，不得据此退役任何版本：先修
         probe 或判据端，并确认 stp-script-guard.timer 仍在运行。
+  - alert: StabilitySkillUsageHollow
+    expr: stp_skill_usage_hollow > 0
+    for: 7d
+    labels:
+      severity: warning
+    annotations:
+      summary: 有 skill 达到观察窗且从未被强信号触发（HOLLOW）
+      description: >-
+        stp_skill_usage_hollow 连续 7 天大于 0。处置二选一：删除该 skill，或改写
+        description 让触发词真实可命中（design/2026-08-governance-surface-protection.md
+        §8.1 观察台账）。删前核对 Codex 列会话性质（读取≠触发，审计噪声未甄别）。
+        探针只报告，不自动删除任何 skill。
+  - alert: StabilitySkillUsageUntrusted
+    expr: stp_skill_usage_broken == 1 or stp_skill_usage_unknown == 1 or time() - stp_skill_usage_last_run
+      > 172800 or absent(stp_skill_usage_last_run)
+    for: 10m
+    labels:
+      severity: warning
+    annotations:
+      summary: skill 用量探针不可信（崩溃／源不可得／停摆）
+      description: broken=1（探针自身异常）、unknown=1（强信号源不在场，洞数未知）或 last_run 超过 48 小时未更新／指标消失。此时 hollow 的读数没有意义：先修探针或确认转录源
+        仍在（--home 指向的部署用户家目录），并确认 stp-skill-usage.timer 在跑。

@@ -1,7 +1,7 @@
 # #736 切片：job 运行时抽出 `job_runtime`
 
 Status: implemented
-Class: bugfix
+Class: bug-fix
 
 ## Decision
 

@@ -17,6 +17,7 @@ from backend.models.audit import AuditLog
 from backend.models.host import Device
 from backend.models.job import JobInstance, JobLogSignal, StepTrace
 from backend.models.plan_run import PlanRun
+from backend.core.audit import expand_resource_type_filter
 from backend.services.plan_run_read_common import (
     LIVE_PATROL_HEARTBEAT_WINDOW,
     TERMINAL_PR_STATUSES,
@@ -360,10 +361,14 @@ def build_plan_run_events(
     # 5) audit_logs(plan_run / job_instance / dispatch_gate)
     # AuditLog.resource_id 列宽到 String(64) 后(g0b1c2d3e4f5 迁移),需将整型主键
     # 转字符串再比较;PG 严格类型不会做隐式 varchar=int 转换。
+    # #2872：筛选值走 expand_resource_type_filter——审计行 append-only（ADR-0015），
+    # 09-19 前写入的 `job` 别名行必须与规范值一起被筛到，否则在本视图静默消失。
     job_id_strs = [str(j) for j in (job_ids or [-1])]
     audit_q = select(AuditLog).where(
-        ((AuditLog.resource_type == "plan_run") & (AuditLog.resource_id == str(pr.id)))
-        | ((AuditLog.resource_type == "job_instance") & (AuditLog.resource_id.in_(job_id_strs)))
+        (AuditLog.resource_type.in_(expand_resource_type_filter("plan_run"))
+         & (AuditLog.resource_id == str(pr.id)))
+        | (AuditLog.resource_type.in_(expand_resource_type_filter("job_instance"))
+           & AuditLog.resource_id.in_(job_id_strs))
     ).order_by(AuditLog.timestamp.desc())
     for log in db.execute(audit_q).scalars().all():
         sev = "warn" if "abort" in (log.action or "") or "fail" in (log.action or "") else "info"
