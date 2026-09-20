@@ -45,8 +45,10 @@ heartbeat/logs/SAQ 的 to_thread 名额与池连接。
 - `test_dashboard_summary.py` + publisher 套件：22 passed；既有用例（#2447 退避、
   #2447 串行化、#2799 超时出口/丢唤醒收口）全部原样通过——超时路径断言
   （`_failure_streak>=1`/`_flush_task is None`/broadcast==0）与在飞判据兼容。
-- 待办（提交前）：变异自证——①删 `_arm_flush_cb` 在飞判据 ⇒ 增殖用例必红；
-  ②换回默认执行器（executor=None）⇒ 隔离用例必红。每步清 `__pycache__`。
+- 变异自证（每步清 `__pycache__`，还原后套件复绿）：① 摘掉 `_arm_flush_cb` 的在飞
+  判据 ⇒ `test_hang_timeout_does_not_multiplicate_under_heartbeats` 红（其余 8 例仍绿，
+  说明判据独立可判别）；② `run_in_executor(None, ...)` 换回默认执行器 ⇒
+  `test_compute_runs_on_dedicated_executor` 红。
 
 ## Revisit
 
