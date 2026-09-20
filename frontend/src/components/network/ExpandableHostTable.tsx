@@ -119,6 +119,9 @@ const REASON_LABELS: Record<string, string> = {
   disk_unknown: '磁盘未知',
   mount_failed: '挂载失败',
   adb_low_healthy_devices: '无健康设备',
+  // #2902：USB 树上只剩控制器（零权限判据）——`adb_low_healthy_devices` 要求
+  // total_devices>0，整树死亡时它恒不成立，这条才是那种形态的唯一可见信号。
+  usb_tree_empty: 'USB 总线空树（主控/供电异常）',
   adb_multiple_servers: 'ADB 多 server 冲突',
   // #2900：内核 USB 子系统故障（agent 读内核日志判定）——主机可能一台设备都看不到
   // 而心跳全正常，这两条是唯一可见信号。

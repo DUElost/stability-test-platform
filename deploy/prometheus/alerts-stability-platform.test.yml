@@ -574,3 +574,166 @@ tests:
       - eval_time: 65m
         alertname: StabilityChainCoverageGap
         exp_alerts: []
+
+  # ============================================================================
+  # #2900 / #2957 —— host 级 USB 失明与「判据通道是否真的在跑」
+  #
+  # 三条刻意的 not-fire 断言（缺一条，对应阈值/选择器就失去判别力）：
+  #   1. `for:` 窗口（3m 不亮主控死亡、40m 不亮链路劣化）——只抬时间窗不会无人知；
+  #   2. 健康 host 的两条 reason 全 0（「从来没这个 reason」必须有基线 series，
+  #      这也是 _refresh_host_health_gauges 里「全词表含 0 落值」那条口径的证据）；
+  #   3. **只命中 link_degraded 的 host 不得点亮 controller_dead**（反之亦然）——
+  #      这一条钉的是 `reason=` 标签选择器真的在起作用。删掉选择器，两台机器会同时
+  #      亮两条告警：那正是 #1257「引用不存在的标签」的镜像形态（标签存在但没限定住）。
+  # host_id 用 RFC5737 TEST-NET-1 合成值（public 仓库不得写真实资产地址）。
+  # ----------------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+    - series: stability_host_health_reason{host_id="192-0-2-63", reason="usb_host_controller_dead"}
+      values: 1x70
+    - series: stability_host_health_reason{host_id="192-0-2-63", reason="usb_link_degraded"}
+      values: '0x70'
+    - series: stability_host_health_reason{host_id="192-0-2-102", reason="usb_host_controller_dead"}
+      values: '0x70'
+    - series: stability_host_health_reason{host_id="192-0-2-102", reason="usb_link_degraded"}
+      values: 1x70
+    - series: stability_host_health_reason{host_id="192-0-2-90", reason="usb_host_controller_dead"}
+      values: '0x70'
+    - series: stability_host_health_reason{host_id="192-0-2-90", reason="usb_link_degraded"}
+      values: '0x70'
+    alert_rule_test:
+    - eval_time: 3m
+      alertname: StabilityHostUsbControllerDead
+      exp_alerts: []
+    - eval_time: 10m
+      alertname: StabilityHostUsbControllerDead
+      exp_alerts:
+      - exp_labels:
+          severity: critical
+          host_id: 192-0-2-63
+          reason: usb_host_controller_dead
+        exp_annotations:
+          summary: Host USB controller is dead — the whole host is USB-blind
+          description: 该 host 的内核报出 xHCI 主控死亡（`HC died; cleaning up`）**且此刻 USB 总线上 一台设备都看不到**。这不是 adb/adbd 问题：主控死了以后内核再也收不到任何 USB 事件，**不会自愈**，SSH 与心跳照常，平台侧只有这一条 reason 能表达它。 先按 docs/operations/host-device-visibility-triage.md 的 L1 层取证 （`journalctl -k | grep -E 'xhci|HC died'`），确认后用 unbind/rebind 救回 （fleet 已有两例当场恢复，23/23 设备回归），reboot 是兜底。 **不要自动 rebind**：会打断在跑的 job，自愈与否待本告警有数据后另议（#2900「不做什么」）。 这台机器的产能已归零，请把它从调度里摘掉再处理（设备租约见 device-lease-release SOP）。
+    - eval_time: 40m
+      alertname: StabilityHostUsbLinkDegraded
+      exp_alerts: []
+    - eval_time: 50m
+      alertname: StabilityHostUsbLinkDegraded
+      exp_alerts:
+      - exp_labels:
+          severity: warning
+          host_id: 192-0-2-102
+          reason: usb_link_degraded
+        exp_annotations:
+          summary: Chronic USB link errors on one host (pre-death signature)
+          description: 该 host 最近一小时的内核日志里 USB 传输错误超阈（`error -71`/`error -110` 计数 ≥20，或 `Maybe the USB cable is bad?` ≥5）且持续 45m。这是**死亡前兆** 而不是死亡：#2900 的 .102 案例在 HC died 之前以每日 400~3700 行的速率风暴了 两周，全程零告警。窗口比主控死亡那条长（45m vs 5m），因为瞬态插拔抖动也会 命中阈值，而真实劣化会持续数小时到数天。处置：查线/查 hub 供电（SS 线松动、 劣质 hub、EMI 都是已知成因），别等它死——主控一死就只能 unbind/rebind。 同 host 若同时出现 StabilityHostUsbControllerDead，以那条为准（本条是前兆面）。
+    - eval_time: 50m
+      alertname: StabilityHostUsbControllerDead
+      exp_alerts:
+      - exp_labels:
+          severity: critical
+          host_id: 192-0-2-63
+          reason: usb_host_controller_dead
+        exp_annotations:
+          summary: Host USB controller is dead — the whole host is USB-blind
+          description: 该 host 的内核报出 xHCI 主控死亡（`HC died; cleaning up`）**且此刻 USB 总线上 一台设备都看不到**。这不是 adb/adbd 问题：主控死了以后内核再也收不到任何 USB 事件，**不会自愈**，SSH 与心跳照常，平台侧只有这一条 reason 能表达它。 先按 docs/operations/host-device-visibility-triage.md 的 L1 层取证 （`journalctl -k | grep -E 'xhci|HC died'`），确认后用 unbind/rebind 救回 （fleet 已有两例当场恢复，23/23 设备回归），reboot 是兜底。 **不要自动 rebind**：会打断在跑的 job，自愈与否待本告警有数据后另议（#2900「不做什么」）。 这台机器的产能已归零，请把它从调度里摘掉再处理（设备租约见 device-lease-release SOP）。
+  - interval: 1m
+    input_series:
+    - series: stability_host_kernel_log_channel{host_id="192-0-2-10", state="unavailable"}
+      values: 1x600
+    - series: stability_host_kernel_log_channel{host_id="192-0-2-11", state="unavailable"}
+      values: 1x600
+    - series: stability_host_kernel_log_channel{host_id="192-0-2-12", state="unavailable"}
+      values: 1x600
+    - series: stability_host_kernel_log_channel{host_id="192-0-2-13", state="unavailable"}
+      values: 1x600
+    - series: stability_host_kernel_log_channel{host_id="192-0-2-14", state="unavailable"}
+      values: 1x600
+    - series: stability_host_kernel_log_channel{host_id="192-0-2-15", state="unavailable"}
+      values: 1x600
+    - series: stability_host_kernel_log_channel{host_id="192-0-2-20", state="ok"}
+      values: 1x600
+    - series: stability_host_kernel_log_channel{host_id="192-0-2-21", state="ok"}
+      values: 1x600
+    - series: stability_host_kernel_log_channel{host_id="192-0-2-22", state="ok"}
+      values: 1x600
+    - series: stability_host_kernel_log_channel{host_id="192-0-2-23", state="ok"}
+      values: 1x600
+    - series: stability_host_kernel_log_channel{host_id="192-0-2-24", state="ok"}
+      values: 1x600
+    - series: stability_host_kernel_log_channel{host_id="192-0-2-25", state="ok"}
+      values: 1x600
+    alert_rule_test:
+    - eval_time: 5h
+      alertname: StabilityUsbKernelLogChannelDark
+      exp_alerts: []
+    - eval_time: 7h
+      alertname: StabilityUsbKernelLogChannelDark
+      exp_alerts:
+      - exp_labels:
+          severity: warning
+        exp_annotations:
+          summary: Kernel-log USB detector is structurally blind on most hosts
+          description: '过半（且 ≥5 台）在册 host 的 agent **读不到内核日志**，因此 #2900 的 `usb_host_controller_dead` / `usb_link_degraded` 这两条判据在它们身上 **永远不会命中**——上面两条告警此时是绿的，但绿色不代表已覆盖。 出口由 #2957 裁决：给 agent 用户 `systemd-journal` 组（权限扩张，需签字， 且 48 台都要重跑安装步骤）、改用零权限的结果层判据（`usb_tree_empty`， #2902；但它今天还需补一道「DB 里本来有设备」的合取才不会误报）、 或 sudoers 只放行 `journalctl -k -o cat` 这一条固定子命令（与 install_agent.sh 「提权面收敛为 wrapper 固定子命令」的先例同族）。 注意 `state="unknown"`（老 agent 未上报该字段）是**覆盖缺口**而不是本告警的 射程：它计入分母、不计入分子，避免 fleet 升级期间与 A/B/C 裁决混成一件事。'
+  - interval: 10m
+    input_series:
+    - series: stability_host_kernel_log_channel{host_id="192-0-2-30", state="unavailable"}
+      values: 1x600
+    - series: stability_host_kernel_log_channel{host_id="192-0-2-31", state="unavailable"}
+      values: 1x600
+    - series: stability_host_kernel_log_channel{host_id="192-0-2-32", state="unavailable"}
+      values: 1x600
+    - series: stability_host_kernel_log_channel{host_id="192-0-2-33", state="unavailable"}
+      values: 1x600
+    - series: stability_host_kernel_log_channel{host_id="192-0-2-40", state="ok"}
+      values: 1x600
+    alert_rule_test:
+    - eval_time: 8h
+      alertname: StabilityUsbKernelLogChannelDark
+      exp_alerts: []
+  - interval: 10m
+    input_series:
+    - series: stability_host_kernel_log_channel{host_id="192-0-2-10", state="unavailable"}
+      values: 1x600
+    - series: stability_host_kernel_log_channel{host_id="192-0-2-11", state="unavailable"}
+      values: 1x600
+    - series: stability_host_kernel_log_channel{host_id="192-0-2-12", state="unavailable"}
+      values: 1x600
+    - series: stability_host_kernel_log_channel{host_id="192-0-2-13", state="unavailable"}
+      values: 1x600
+    - series: stability_host_kernel_log_channel{host_id="192-0-2-14", state="unavailable"}
+      values: 1x600
+    - series: stability_host_kernel_log_channel{host_id="192-0-2-15", state="unavailable"}
+      values: 1x600
+    - series: stability_host_kernel_log_channel{host_id="192-0-2-50", state="unknown"}
+      values: 1x600
+    - series: stability_host_kernel_log_channel{host_id="192-0-2-51", state="unknown"}
+      values: 1x600
+    - series: stability_host_kernel_log_channel{host_id="192-0-2-52", state="unknown"}
+      values: 1x600
+    - series: stability_host_kernel_log_channel{host_id="192-0-2-53", state="unknown"}
+      values: 1x600
+    - series: stability_host_kernel_log_channel{host_id="192-0-2-54", state="unknown"}
+      values: 1x600
+    - series: stability_host_kernel_log_channel{host_id="192-0-2-55", state="unknown"}
+      values: 1x600
+    - series: stability_host_kernel_log_channel{host_id="192-0-2-56", state="unknown"}
+      values: 1x600
+    - series: stability_host_kernel_log_channel{host_id="192-0-2-57", state="unknown"}
+      values: 1x600
+    - series: stability_host_kernel_log_channel{host_id="192-0-2-58", state="unknown"}
+      values: 1x600
+    - series: stability_host_kernel_log_channel{host_id="192-0-2-59", state="unknown"}
+      values: 1x600
+    - series: stability_host_kernel_log_channel{host_id="192-0-2-60", state="unknown"}
+      values: 1x600
+    alert_rule_test:
+    - eval_time: 8h
+      alertname: StabilityUsbKernelLogChannelDark
+      exp_alerts: []
+
+  # ---- #2957 通道覆盖面的两条 not-fire 钉子 ----
+  # 只有 4 台 unavailable（绝对下限 5 未达）⇒ 不亮；
+  # 6 台 unavailable + 11 台 unknown ⇒ 不亮（老 agent 未上报字段计入分母而不计入
+  # 分子：升级期内既不会伪报「全 fleet 已覆盖」，也不会把「还没升」误判成「读不到」）。

@@ -54,6 +54,16 @@ CABLE_SUSPECT_THRESHOLD = 5
 REASON_HC_DEAD = "usb_host_controller_dead"
 REASON_LINK_DEGRADED = "usb_link_degraded"
 
+#: 内核日志**通道可用性**（#2957）。刻意与 reason 分开：reason 表示「设备出事」，
+#: 本字段表示「我看不看得到设备出事」。二者混在一个词表里，运维就会把
+#: 「恒未知」读成「恒干净」——正是 #2900 的失效形状在本单里的复发形态。
+CHANNEL_UNKNOWN = "unknown"          # 首次扫描尚未完成（进程启动后的头几拍）
+CHANNEL_OK = "ok"                    # 最近一次扫描真的读到了内核日志
+CHANNEL_UNAVAILABLE = "unavailable"  # 最近一次扫描读不到（无 adm/systemd-journal 组成员资格等）
+
+#: 词表（控制面按它建 gauge 分桶，两侧不得各写一套字面量）。
+CHANNEL_STATES = (CHANNEL_OK, CHANNEL_UNAVAILABLE, CHANNEL_UNKNOWN)
+
 #: journalctl 在「看不到系统消息」时的 stderr 提示片段（小写比对）——命中即「未知」。
 _BLIND_HINT_MARKERS = (
     "not seeing messages from other users and the system",
@@ -190,6 +200,19 @@ class KernelUsbWatch:
         self._hc_dead_latched = False
         self._samples: deque[Tuple[float, int, int]] = deque()
         self._warned_unavailable = False
+        self._channel_state = CHANNEL_UNKNOWN
+
+    def channel_state(self) -> str:
+        """最近一次扫描的**通道**结论（与「有没有故障」正交）。
+
+        #2957 实测：Agent 以 `User=android` 运行（`install_agent.sh` 写死），从未加入
+        `adm`/`systemd-journal`；非特权用户 `journalctl -k` **退出码 0、stdout 只有
+        `-- No entries --`**，与「内核干净」同形——本模块按未知处理（返回 None）。
+        若这个「未知」不单独上报，控制面看到的就是「48/48 台没有任何 USB 故障」，
+        而真相是「48/48 台从未检查过」。
+        """
+        with self._lock:
+            return self._channel_state
 
     # ── 调用方接口 ───────────────────────────────────────────────────────
     def poll(self, *, usb_device_count: Optional[int]) -> List[str]:
@@ -238,6 +261,7 @@ class KernelUsbWatch:
         with self._lock:
             self._scanning = False
             if faults is None:
+                self._channel_state = CHANNEL_UNAVAILABLE
                 if not self._warned_unavailable:
                     self._warned_unavailable = True
                     logger.warning(
@@ -245,6 +269,7 @@ class KernelUsbWatch:
                         "USB 主控故障不参与 health（#2900）"
                     )
                 return
+            self._channel_state = CHANNEL_OK
             if faults.hc_dead_seen:
                 self._hc_dead_latched = True
             self._samples.append(

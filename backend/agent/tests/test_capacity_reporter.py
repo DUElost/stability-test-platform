@@ -3,6 +3,8 @@
 max_concurrent_jobs removed — capacity is now gated by free device count and health only.
 """
 
+import json
+
 import pytest
 
 from backend.agent.capacity_reporter import compute_capacity
@@ -404,13 +406,62 @@ def test_l2_l3_l4_signals_default_to_none_without_wiring():
     assert "usb_tree_empty" not in result["health"]["reasons"]
 
 
+def test_usb_kernel_log_channel_is_observation_only():
+    """#2957：通道态只进 capacity——进 reasons 会把整 fleet 刷成 DEGRADED。
+
+    「传感器读不到」不是「主机坏了」：把它塞进 health.reasons 会有两个后果，
+    都比它的收益大——① status 变 DEGRADED，页面上一片红却没有任何一台设备真的
+    出问题；②运维学会忽略这条红，于是真 reason（#2900 的 xHCI 死亡）也被一起淹掉。
+    """
+    result = _cap(usb_kernel_log_channel="unavailable")
+
+    assert result["capacity"]["usb_kernel_log"] == "unavailable"
+    assert result["health"]["status"] == "HEALTHY"
+    assert result["health"]["reasons"] == []
+
+
+def test_usb_kernel_log_channel_defaults_to_none_when_unwired():
+    """未接线时键存在但为 None：控制面按 unknown 处理，不猜「正常」。"""
+    assert _cap()["capacity"]["usb_kernel_log"] is None
+
+
+def test_usb_kernel_log_channel_does_not_change_slots():
+    """通道态不得参与任何槽位/打闸计算（与 usb_device_count 同族的纯观测口径）。"""
+    with_dark = _cap(
+        active_job_count=0, active_device_count=0,
+        online_healthy_devices=4, total_devices=4,
+        system_stats=_healthy_system_stats(), mount_status=_healthy_mount_status(),
+        usb_kernel_log_channel="unavailable",
+    )
+    baseline = _cap(
+        active_job_count=0, active_device_count=0,
+        online_healthy_devices=4, total_devices=4,
+        system_stats=_healthy_system_stats(), mount_status=_healthy_mount_status(),
+    )
+    assert with_dark["capacity"]["effective_slots"] == baseline["capacity"]["effective_slots"]
+    assert with_dark["capacity"]["available_slots"] == baseline["capacity"]["available_slots"]
+
+
 def test_new_payload_keys_within_heartbeat_budget():
     """心跳 payload 增幅 <100B（#2902 验收项）。"""
-    import json
-
+    cap = _cap(
+        adb_interface_count=16,
+        adb_state_counts={"device": 14, "offline": 1, "unauthorized": 1, "other": 0},
+    )["capacity"]
     cap = _cap(
         adb_interface_count=16,
         adb_state_counts={"device": 14, "offline": 1, "unauthorized": 1, "other": 0},
     )["capacity"]
     new_keys = {k: cap[k] for k in ("adb_interface_count", "adb_state_counts")}
     assert len(json.dumps(new_keys, separators=(",", ":"))) < 100
+
+
+def test_usb_kernel_log_key_has_its_own_payload_budget():
+    """#2957 的增量单独计预算，不并进 #2902 那条断言。
+
+    合并成一条「三键合计 <100B」会让两个 issue 的验收项互相绑架：任一侧改名都把对方
+    打红，而真正该被约束的是**每个 issue 各自引入的增量**。实测本键最坏取值
+    （"unavailable"）= 31 字节，约为 #2902 两键合计的三分之一。
+    """
+    cap = _cap(usb_kernel_log_channel="unavailable")["capacity"]
+    assert len(json.dumps({"usb_kernel_log": cap["usb_kernel_log"]}, separators=(",", ":"))) < 60
