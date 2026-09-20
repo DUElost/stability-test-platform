@@ -6,27 +6,18 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { ShieldAlert } from 'lucide-react';
 import { CHART_COLORS } from '@/design-system/colors';
 import type { PlanFailedDevicesItem } from '@/utils/api/types';
+import { buildFailedDeviceRows } from './failedDeviceRows';
 
 interface PlanFailedDevicesChartProps {
   data?: PlanFailedDevicesItem[];
   isLoading?: boolean;
 }
 
-function getLabel(d: PlanFailedDevicesItem): string {
-  return d.plan_name.length > 20 ? d.plan_name.slice(0, 19) + '...' : d.plan_name;
-}
-
 /**
  * ADR-0048：「方案成功率排行」的后继——设备失败台数是事实指标，不做通过率评判。
  */
 export function PlanFailedDevicesChart({ data, isLoading }: PlanFailedDevicesChartProps) {
-  const chartData = useMemo(() => {
-    if (!data || data.length === 0) return [];
-    return data
-      .map((d) => ({ ...d, label: getLabel(d) }))
-      .sort((a, b) => b.failed - a.failed)
-      .slice(0, 10);
-  }, [data]);
+  const chartData = useMemo(() => buildFailedDeviceRows(data), [data]);
 
   const skeleton = (
     <Card>

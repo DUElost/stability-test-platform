@@ -40,6 +40,12 @@ def test_hollow_verdict_table(age, calls, stype, expected):
     assert _mod.is_hollow(age, calls, stype) is expected
 
 
+def test_hollow_verdict_requires_strong_source_present():
+    """#2851：强信号源不在场时，任何年龄/任何调用数都**不判洞**——缺源 ≠ 零调用。"""
+    assert _mod.is_hollow(999, 0, "persistent", strong_source_present=False) is False
+    assert _mod.is_hollow(61, 0, "event", strong_source_present=False) is False
+
+
 # ---------------------------------------------------------------- 扫描器红绿
 
 def _make_tree(tmp_path: Path, skill_types: dict[str, str],
@@ -143,6 +149,22 @@ def test_exit_zero_when_no_transcript_source(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(sys, "argv", ["skill_usage_report.py", "--strict"])
     assert _mod.main() == 0
     assert "skip" in capsys.readouterr().out
+
+
+def test_claude_source_missing_does_not_judge_hollow(monkeypatch, tmp_path, capsys):
+    """#2851：**弱信号源在场、强信号源缺源**（他机/新站点形态）⇒ 不判洞、--strict 退 0。
+
+    修前：`claude={}` ⇒ 每个 skill 强信号都是 0 ⇒ 超过观察窗的全部误判 HOLLOW，
+    `stp-skill-usage.timer` 与 `check:gov` 恒红；表格还把未扫描的源印成
+    「Claude 调用 0 次 最近 从未」——把观测缺口说成了观测事实。
+    """
+    _patch_world(monkeypatch, tmp_path, [_SKILL], False, True)
+    monkeypatch.setattr(sys, "argv", ["skill_usage_report.py", "--strict"])
+
+    assert _mod.main() == 0
+    out = capsys.readouterr().out
+    assert "未扫" in out, out
+    assert "HOLLOW" not in out, out
 
 
 @pytest.mark.parametrize("strict,expected", [(True, 1), (False, 0)])

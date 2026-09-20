@@ -1273,3 +1273,94 @@ class TestResolveCenterEventPath:
         src = _Path(ds.__file__).read_text(encoding="utf-8")
         assert 'Path(center_root, "devices").glob' not in src
         assert "_center_event_dir_from_dle" in src
+
+
+# ── #2888：二次 merge 覆盖中心同名产物时，登记行随内容刷新 ──────────────────
+
+def _merge_xls_row(db_session, plan_run_id, uri):
+    from sqlalchemy import select
+
+    from backend.models.plan_run_artifact import PlanRunArtifact
+
+    return db_session.execute(
+        select(PlanRunArtifact).where(
+            PlanRunArtifact.plan_run_id == plan_run_id,
+            PlanRunArtifact.storage_uri == uri,
+        )
+    ).scalars().all()
+
+
+def test_merge_artifact_register_refreshes_size_on_overwrite(
+    db_session, sample_plan_run, tmp_path, caplog,
+):
+    """#2888：中心固定路径 + copytree 覆盖 => 内容换了而 URI 不变。
+
+    旧行为：命中既有行直接跳过 ⇒ `size_bytes` 停在旧值（DB 说 X、盘上 Y）。
+    新语义：同一 URI = 该 run+platform 的**最新** merge 结果，登记行随之刷新，
+    旧值进 warning 日志留痕。
+    """
+    import logging
+
+    merge_dir = tmp_path / "merge"
+    merge_dir.mkdir()
+    xls = merge_dir / "Result_MergeFiles.xls"
+    xls.write_bytes(b"a" * 100)
+
+    assert ds._register_merge_artifacts(db_session, sample_plan_run.id, merge_dir) == 1
+    rows = _merge_xls_row(db_session, sample_plan_run.id, str(xls))
+    assert [r.size_bytes for r in rows] == [100]
+
+    # 第二次 merge：同名文件被覆盖（内容变了），URI 不变
+    xls.write_bytes(b"b" * 250)
+    with caplog.at_level(logging.WARNING):
+        assert ds._register_merge_artifacts(db_session, sample_plan_run.id, merge_dir) == 0
+    db_session.expire_all()
+    rows = _merge_xls_row(db_session, sample_plan_run.id, str(xls))
+    assert len(rows) == 1, "不得产生重复行（唯一约束 + 先查后写不变）"
+    assert rows[0].size_bytes == 250, "磁盘内容已换，登记行必须同步"
+    assert "merge_artifact_overwritten" in caplog.text
+    assert "old_size=100" in caplog.text and "new_size=250" in caplog.text
+
+
+def test_merge_artifact_register_noop_when_size_unchanged(
+    db_session, sample_plan_run, tmp_path, caplog,
+):
+    """尺寸未变（幂等重跑）：不写库、不告警。"""
+    import logging
+
+    merge_dir = tmp_path / "merge"
+    merge_dir.mkdir()
+    xls = merge_dir / "Result_MergeFiles.xls"
+    xls.write_bytes(b"x" * 64)
+    assert ds._register_merge_artifacts(db_session, sample_plan_run.id, merge_dir) == 1
+
+    with caplog.at_level(logging.WARNING):
+        assert ds._register_merge_artifacts(db_session, sample_plan_run.id, merge_dir) == 0
+    assert "merge_artifact_overwritten" not in caplog.text
+    rows = _merge_xls_row(db_session, sample_plan_run.id, str(xls))
+    assert [r.size_bytes for r in rows] == [64]
+
+
+def test_merge_artifact_register_backfills_null_size(
+    db_session, sample_plan_run, tmp_path,
+):
+    """历史行为 nullable：既有行 size 为 None 时也要补齐（同一条刷新路径）。"""
+    from backend.models.plan_run_artifact import PlanRunArtifact
+
+    merge_dir = tmp_path / "merge"
+    merge_dir.mkdir()
+    xls = merge_dir / "Result_MergeFiles.xls"
+    xls.write_bytes(b"y" * 40)
+    db_session.add(PlanRunArtifact(
+        plan_run_id=sample_plan_run.id,
+        host_id=None,
+        storage_uri=str(xls),
+        artifact_type=ds.ARTIFACT_TYPE_MERGE,
+        size_bytes=None,
+    ))
+    db_session.commit()
+
+    assert ds._register_merge_artifacts(db_session, sample_plan_run.id, merge_dir) == 0
+    db_session.expire_all()
+    rows = _merge_xls_row(db_session, sample_plan_run.id, str(xls))
+    assert [r.size_bytes for r in rows] == [40]

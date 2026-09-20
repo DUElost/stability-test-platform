@@ -11,6 +11,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from . import device_discovery
 from .heartbeat import send_heartbeat
+from .kernel_usb_faults import KernelUsbWatch
 from .settings import get_heartbeat_settings
 
 logger = logging.getLogger(__name__)
@@ -109,6 +110,9 @@ class HeartbeatThread:
         self._reconnect_cooldown: float = _hb.stp_adb_reconnect_cooldown_seconds
         self._last_reconnect_offline_at: float = -self._reconnect_cooldown
         self._mass_offline_ticks = 0
+        # #2900：内核 USB 子系统故障（xHCI 死亡 / 慢性链路劣化）——低频扫描、后台线程，
+        # 每拍只读快照；设备数口径（online_healthy/usb_device_count）看不见这类失明。
+        self._kernel_usb_watch = KernelUsbWatch()
         self._devices_lock = threading.Lock()
         self._effective_slots: int = 0
         self._capacity_lock = threading.Lock()
@@ -567,6 +571,17 @@ class HeartbeatThread:
         # 复用本拍已抓到的 devices_list（含 adb_state），不额外调 adb。
         adb_state_counts = device_discovery.bucket_adb_states(devices_list)
 
+        # #2900：内核日志侧的 USB 子系统故障（xHCI 死亡 / 慢性链路劣化）。判据与设备数
+        # 口径正交——三例失明场景里 adb/USB 计数全瞎（主机本来就没设备可数），只有内核
+        # 日志留痕。poll() 非阻塞（扫描在后台线程），节流 60s，失败不影响心跳主流程。
+        try:
+            usb_fault_reasons = self._kernel_usb_watch.poll(
+                usb_device_count=usb_device_count,
+            )
+        except Exception as exc:
+            logger.debug("kernel_usb_fault_poll_failed: %s", exc)
+            usb_fault_reasons = []
+
         cap_result = compute_capacity(
             active_job_count=active_count,
             active_device_count=active_device_count,
@@ -579,6 +594,7 @@ class HeartbeatThread:
             adb_interface_count=adb_interface_count,
             adb_state_counts=adb_state_counts,
             usb_root_hub_count=usb_root_hub_count,
+            usb_fault_reasons=usb_fault_reasons,
         )
 
         with self._capacity_lock:

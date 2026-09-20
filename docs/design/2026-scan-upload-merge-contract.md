@@ -52,6 +52,18 @@
 第 2 条的查询失败时**跳过本轮清理**（留残留优于毁交付物）；被保留与被删除的目录都在
 日志里留名（`merge_local_sweep_kept_referenced` / `merge_local_stale_swept`）。
 
+### 重复 merge 的产物语义（#2888 裁决）
+
+中心发布的落点是**固定路径** `dedup/{plan_run_id}/merge[/{platform}]`，产物名稳定
+（`Result_MergeFiles*.xls`），写入用 `copytree(dirs_exist_ok=True)` ⇒ 同一 run +
+platform 的**第二次 merge 会覆盖**中心同名文件。登记侧幂等键是
+`(plan_run_id, storage_uri)`：URI 不变时命中既有行。
+
+**裁决（2026-09-20）：允许覆盖**，语义为「同一 URI = 该 run+platform 的**最新** merge
+结果」；登记行随之刷新 `size_bytes`，旧值进 `merge_artifact_overwritten` warning 留痕
+（表内无「上一版尺寸」列）。需要历次产物并存时应改中心路径带批次/时间戳
+（`storage_uri` 天然唯一，判重逻辑自动正确），属另一个方向，本裁决不含。
+
 ## SAQ 链和完备性
 
 ```text
