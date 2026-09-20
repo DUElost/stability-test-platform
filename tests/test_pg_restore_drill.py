@@ -3,9 +3,12 @@ import re
 import subprocess
 from pathlib import Path
 
+from tools.dev.source_anchor import SourceGuard
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RESTORE_SCRIPT = REPO_ROOT / "scripts/pg_restore_test.sh"
+#: 守卫用的仓库相对路径（SourceGuard 按 repo root 解析，#2639）。
+RESTORE_SCRIPT_REL = "scripts/pg_restore_test.sh"
 
 # stub psql：按调用形态分派；STUB_* 环境变量由测试注入。
 # 恢复分支校验 ON_ERROR_STOP=1 确实被传入（缺失即失败），使静态参数成为运行时可观察行为。
@@ -100,4 +103,11 @@ def test_table_shortfall_is_fatal_not_warning():
 
     assert match is not None, "table count guard not found"
     assert "exit 1" in match.group("body")
-    assert "WARNING" not in text
+    # 锚点＝表数不足判定块本身：它在场才证明「致命而非告警」判的还是同一处；
+    # 整脚本任何 WARNING 都算回归（把残缺库说成恢复成功的那条老路）。
+    SourceGuard.of_repo_path(RESTORE_SCRIPT_REL).anchored(
+        'if [ "${TABLE_COUNT}" -lt 5 ]; then', expect=1
+    ).assert_absent(
+        "WARNING",
+        why="表数不足必须 exit 1 而非 WARNING——降级成告警会让残缺库看起来像恢复成功",
+    )

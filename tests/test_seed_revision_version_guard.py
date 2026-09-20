@@ -36,6 +36,8 @@ from pathlib import Path
 
 import pytest
 
+from tools.dev.source_anchor import SourceGuard
+
 ROOT = Path(__file__).resolve().parents[1]
 VERSIONS = ROOT / "backend" / "alembic" / "versions"
 SCRIPTS = ROOT / "backend" / "agent" / "scripts"
@@ -220,12 +222,18 @@ def test_exemptions_are_backed_by_a_repair_revision():
 
 def test_repair_revision_does_not_newly_activate_anything():
     """补行必须 is_active=false：修复不能顺手扩大派发面（详见迁移 docstring）。"""
-    text = (VERSIONS / f"{REPAIR_REVISION}_repair_flash_firmware_seed_identity_2399.py")\
-        .read_text(encoding="utf-8")
-    assert "INSERT INTO script" in text, "找不到补行的 INSERT 语句块，判据需随之更新"
-    assert re.search(r"CAST\(:pschema AS jsonb\), CAST\(:dparams AS jsonb\), false,", text), (
-        "补行的 is_active 不是 false——空库会凭空多出一个可派发版本（#2399 docstring）")
-    assert "is_active = true" not in text, "修复迁移不得把任何版本置为 active"
+    # 锚点＝补行末位的 is_active=false：它正是 `is_active = true` 的替代物。
+    guard = SourceGuard.of_repo_path(
+        f"backend/alembic/versions/{REPAIR_REVISION}_repair_flash_firmware_seed_identity_2399.py"
+    ).anchored("CAST(:pschema AS jsonb), CAST(:dparams AS jsonb), false,", expect=1)
+    guard.assert_present(
+        "INSERT INTO script",
+        why="找不到补行的 INSERT 语句块，判据需随之更新",
+    )
+    guard.assert_absent(
+        "is_active = true",
+        why="修复迁移不得把任何版本置为 active——空库会凭空多出可派发版本（#2399 docstring）",
+    )
 
 
 def test_three_versions_params_are_identical():

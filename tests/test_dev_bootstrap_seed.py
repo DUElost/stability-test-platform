@@ -26,8 +26,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+from tools.dev.source_anchor import SourceGuard
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "backend" / "scripts" / "init_dev_db.py"
+#: 守卫用的仓库相对路径（SourceGuard 按 repo root 解析，#2639）。
+SCRIPT_REL = "backend/scripts/init_dev_db.py"
 
 
 def _source() -> str:
@@ -189,9 +193,12 @@ def test_create_all_fallback_is_labelled_with_cost_and_exit():
 
 def test_bare_unlabelled_ready_line_is_gone():
     """旧的 ``print("dev_db_schema_ready")`` 不区分路径，是 #2381 的遮蔽来源。"""
-    src = SCRIPT.read_text(encoding="utf-8")
-    assert 'print("dev_db_schema_ready")' not in src, (
-        "ready 输出必须带 path=，否则 create_all 兜底与 alembic 链在日志里同形"
+    # 锚点＝带 path= 的那条 ready 输出：它就是裸行的替代物。
+    SourceGuard.of_repo_path(SCRIPT_REL).anchored(
+        'print("dev_db_schema_ready path=alembic")', expect=1
+    ).assert_absent(
+        'print("dev_db_schema_ready")',
+        why="ready 输出必须带 path=，否则 create_all 兜底与 alembic 链在日志里同形（#2381）",
     )
 
 
