@@ -6,7 +6,8 @@
 # 而站点 Prometheus 只有一个 node-exporter job——那 19 条在站点上**结构性无样本**：
 # 既不触发也不报错，只让 installer 报出「监控就绪」的假象，同时把「装了 21 条」
 # 写进运维印象。它们仍留在 `alerts-stability-platform.yml`（控制面挂载路径见
-# docs/operations/README.md 的 ADR-0011 待挂载项）。
+# docs/operations/README.md 的挂载项）。注意那一路当前是**人工副本**：改了平台文件后
+# 需人工重放 + reload 才会生效（#2880 实测副本曾落后 2 条规则）。
 #
 # 规则内容与平台文件**逐字段一致**（tests/test_site_alert_scrape_surface.py 对拍）——
 # 改规则时改平台文件、再同步本文件，别让两份定义漂移。
