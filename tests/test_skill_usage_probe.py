@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+from tools.dev.source_anchor import SourceGuard
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 _spec = importlib.util.spec_from_file_location(
     "skill_usage_probe", REPO_ROOT / "tools" / "dev" / "skill_usage_probe.py"
@@ -136,7 +138,10 @@ def test_main_fails_loud_when_metrics_unwritable(monkeypatch, tmp_path, capsys):
 
 
 def test_probe_uses_only_stdlib_and_no_credentials():
-    """探针只读本机转录、不连网、不读凭据（与姊妹探针同一纪律）。"""
-    source = (REPO_ROOT / "tools" / "dev" / "skill_usage_probe.py").read_text(encoding="utf-8")
+    """探针只读本机转录、不连网、不读凭据（与姊妹探针同一纪律）。
+
+    源扫描走 #2639 的 `SourceGuard`：锚点不在 ⇒ 用例过期（响亮），而不是让否定断言恒真。
+    """
+    guard = SourceGuard.of_repo_path("tools/dev/skill_usage_probe.py").anchored("def run_report(")
     for forbidden in ("requests", "psycopg", "DATABASE_URL", "AGENT_SECRET", "JWT_SECRET"):
-        assert forbidden not in source, forbidden
+        guard.assert_absent(forbidden, why=f"#2881：探针不得依赖 {forbidden}")

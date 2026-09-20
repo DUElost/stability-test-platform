@@ -20,6 +20,9 @@ Class: bug-fix
 3. **`stp-skill-usage.service` 改为不降权 + 显式指路**：`--home /home/<deploy-user> --deploy-root <deploy-root>`；
 4. **两条告警**（平台文件 + 站点子集，逐字段一致）：`StabilitySkillUsageHollow`（`hollow > 0`，`for: 7d`）
    与 `StabilitySkillUsageUntrusted`（broken/unknown/last_run>48h/absent 合成一条）；
+   **并补 promtool 场景用例**（`alerts-stability-platform.test.yml` 三块，照 script-guard 同族形状）：
+   hollow=3 卡 `for: 7d` 两侧（145h 不报 / 170h 报）、`broken=1` 触发 Untrusted、全健康两项都不报。
+   数值刻意选在「`> 0` 上方一点、任何被抬高的阈值下方」，让逐条阈值变异仍能被归因到本告警；
 5. **登记**：`tests/metrics_registry.py` 的 `_TEXTFILE_PRODUCERS`、
    `tests/test_site_alert_scrape_surface.py` 的 `_PRODUCER_SITE_UNIT`（站点清单含该单元 ⇒ 映射 `stp-skill-usage`）、
    `tests/test_alert_metric_producers.py` 的 `_SELF_OWNED_METRIC_RE` 前缀集；
@@ -70,6 +73,18 @@ Class: bug-fix
 - **定向变异**：去掉「缺源折 unknown」→ **3 failed**；删掉站点单元登记 → **3 failed**；
   扩 `_SELF_OWNED_METRIC_RE` 前缀集之前 `test_alert_metric_producers` 本来就是红的
   （那两条断言即该登记的**正向守卫**，本轮实测踩到并修）；
+- **CI 首轮红（`pr-agent-tests`，3 failed）——两处都是本单的漏项，已修，记账**：
+  ① `test_prometheus_alerts_contract.py::test_every_alert_rule_has_scenario_case` 判红：
+  新增两条规则却没补 promtool 场景 ⇒ **「加规则」与「加场景」是同一件事**，漏后者等于阈值/时间窗
+  漂移不可见；② `test_alert_count_claims_are_live.py::test_detector_accepts_live_claims` 判红：
+  该判据的绿样例用**派生真值**构造「N/M 已全覆盖」句，本单使覆盖变成 25/23 ⇒ 句子不再是真话
+  ——**判据自身正确工作**，不是误伤（修法只能是补齐覆盖，不能改夹具）；
+  ③ `test_source_scan_anchor_ratchet.py` 判红：新增的 `test_skill_usage_probe.py` 里那条
+  `forbidden not in source` 是未走 `SourceGuard` 的源扫描否定断言（锚点漂移时恒真）⇒ 已改为
+  `SourceGuard.of_repo_path(...).anchored("def run_report(")` + `assert_absent(..., why=...)`；
+- 修后本地复跑：`test_prometheus_alerts_contract + test_alert_count_claims_are_live` → **43 passed**
+  （152s，含 promtool）；`test_skill_usage_probe + test_source_scan_anchor_ratchet` → **21 passed**；
+  全量 `tests/` → 见 PR；
 - `python scripts/run_gates.py check:quick` → **12 gates 绿**。
 
 ## Revisit
