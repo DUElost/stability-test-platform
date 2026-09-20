@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.metrics import record_log_signal_ingested
@@ -44,9 +44,35 @@ def _log_signal_column_widths() -> Dict[str, int]:
     }
 
 
-def log_signal_column_overflow(row: Dict[str, Any]) -> List[str]:
-    """返回该行超出列宽的字段名清单（空 = 无溢出）。"""
-    widths = _log_signal_column_widths()
+async def deployed_column_widths(db: AsyncSession) -> Dict[str, int]:
+    """**库实采**列宽（information_schema）——#2885：模型常量只是「代码认为多宽」。
+
+    模型与迁移是两份可独立漂移的事实：库落后于迁移时，按模型宽度放行的值仍会让整批
+    INSERT abort（#2792 的原始 P1 原样复现，而守卫给的是绿灯）。采样失败（权限/连接/
+    非 PG）退回模型宽度并留 warning：写侧的主职是写入，探针坏了降级为旧行为，不拦停。
+    """
+    try:
+        rows = (await db.execute(text(
+            "SELECT column_name, character_maximum_length FROM information_schema.columns "
+            "WHERE table_name = :table AND table_schema = current_schema() "
+            "AND character_maximum_length IS NOT NULL"
+        ), {"table": JobLogSignal.__tablename__})).all()
+    except Exception as exc:  # noqa: BLE001 — 探针坏 != 写入停摆，降级为模型宽度
+        logger.warning("log_signal_column_width_probe_failed err=%s", exc)
+        return _log_signal_column_widths()
+    widths = {str(name): int(length) for name, length in rows}
+    return widths or _log_signal_column_widths()
+
+
+def log_signal_column_overflow(
+    row: Dict[str, Any], widths: Optional[Dict[str, int]] = None,
+) -> List[str]:
+    """返回该行超出列宽的字段名清单（空 = 无溢出）。
+
+    ``widths`` 缺省取模型派生宽度（离线调用/单测）；线上摄取传入
+    :func:`deployed_column_widths` 的库实采值（#2885）。
+    """
+    widths = _log_signal_column_widths() if widths is None else widths
     return sorted(
         key for key, width in widths.items()
         if row.get(key) is not None and len(str(row[key])) > width
@@ -205,10 +231,12 @@ async def ingest_agent_log_signals(
         })
 
     # #2792：超宽行逐条拒绝——单条超宽会让 PG abort 整条多行 INSERT，
-    # 同批其余信号一起进死信（#1048 批毒化）。列宽从模型派生（见模块头）。
+    # 同批其余信号一起进死信（#1048 批毒化）。列宽以**库实采**为准（#2885）：
+    # 模型常量在库落后于迁移时会给绿灯，而 INSERT 照炸。
+    widths = await deployed_column_widths(db)
     kept: List[Dict[str, Any]] = []
     for row in rows:
-        over = log_signal_column_overflow(row)
+        over = log_signal_column_overflow(row, widths)
         if over:
             rejected.append({
                 "job_id": row["job_id"],
