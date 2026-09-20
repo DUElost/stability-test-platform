@@ -83,7 +83,7 @@ class _FakeResponse:
 
 
 def _build_drain(local_db):
-    from backend.agent.main import OutboxDrainThread
+    from backend.agent.outbox_drainer import OutboxDrainThread
 
     return OutboxDrainThread(
         api_url="http://fake:8000",
@@ -185,7 +185,7 @@ class TestSigtermGracefulShutdown:
             local_db.enqueue_terminal(99, {"update": {"status": "FAILED"}})
             local_db.enqueue_terminal(100, {"update": {"status": "FINISHED"}})
 
-            from backend.agent.main import OutboxDrainThread
+            from backend.agent.outbox_drainer import OutboxDrainThread
 
             success_resp = MagicMock()
             success_resp.status_code = 200
@@ -551,7 +551,7 @@ class TestParseCurrentStatus:
     """Verify 409 response body parsing."""
 
     def test_parse_detail_dict(self):
-        from backend.agent.main import OutboxDrainThread
+        from backend.agent.outbox_drainer import OutboxDrainThread
 
         resp = _FakeResponse(409, {
             "detail": {"current_status": "FAILED", "message": "..."},
@@ -559,14 +559,14 @@ class TestParseCurrentStatus:
         assert OutboxDrainThread._parse_current_status(resp) == "FAILED"
 
     def test_parse_missing_detail(self):
-        from backend.agent.main import OutboxDrainThread
+        from backend.agent.outbox_drainer import OutboxDrainThread
 
         resp = _FakeResponse(409, {"error": "something"})
         assert OutboxDrainThread._parse_current_status(resp) is None
 
     def test_parse_no_current_status_in_detail(self):
         """detail dict without current_status returns None."""
-        from backend.agent.main import OutboxDrainThread
+        from backend.agent.outbox_drainer import OutboxDrainThread
 
         resp = _FakeResponse(409, {
             "detail": {"message": "transition rejected"},
@@ -574,7 +574,7 @@ class TestParseCurrentStatus:
         assert OutboxDrainThread._parse_current_status(resp) is None
 
     def test_parse_malformed_body(self):
-        from backend.agent.main import OutboxDrainThread
+        from backend.agent.outbox_drainer import OutboxDrainThread
 
         resp = MagicMock()
         resp.json.side_effect = ValueError("not json")
