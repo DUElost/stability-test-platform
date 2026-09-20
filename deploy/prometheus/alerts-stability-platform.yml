@@ -397,6 +397,33 @@ groups:
   # 放宽下限要先看 fleet 里有多少 3–5 台的 host，别在告警里猜。
   - name: stability-platform-fleet-link
     rules:
+      # #2909③：周期回归链覆盖差——ONLINE 设备掉出全部 enabled schedule 清单。
+      # 阈值 10%：本告警上线时实测 gap=12.6%（#2909 人肉排查发现），即它应当在
+      # 部署后立即 firing——这是设计意图（把「断了 20% 都没人知道」变成必须响的铃）。
+      # 修清单（#2909 问题②的裁决落地）后自然回落；调阈值前先想清楚要掩盖的是什么。
+      - alert: StabilityChainCoverageGap
+        expr: >-
+          (
+            sum without (kind) (stability_chain_coverage_devices{kind="gap_missing"})
+            /
+            sum without (kind) (stability_chain_coverage_devices{kind="online_total"})
+          ) > 0.1
+          and
+          sum without (kind) (stability_chain_coverage_devices{kind="online_total"}) >= 50
+        for: 60m
+        labels:
+          severity: warning
+          domain: schedule
+        annotations:
+          summary: 周期回归链的 fleet 覆盖差超 10%（存在结构性掉出清单的 ONLINE 设备）
+          description: >-
+            未退役 host 上 ONLINE 的设备中，>10% 不在任何 enabled task_schedule 的
+            device_ids 清单里且持续 60m（分母下限 50 台防 fleet 缩容误报）。
+            链清单是 放量时点的存储快照（schedule.device_ids 无再生成路径，
+            链后续段只做 status 修剪不扩列——见 #2909 诊断），放量后接入/回潮
+            的设备会永久离开周期观测面。排查：/metrics 的
+            stability_chain_coverage_devices 三元组 + #2909 评论的定案 SQL 形态；
+            处置在 #2909 问题②的裁决（动态派生或清单再生成），不是调高本阈值。
       - alert: StabilityHostAdbOfflineConcentration
         expr: >-
           (

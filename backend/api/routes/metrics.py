@@ -12,13 +12,14 @@ import secrets
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
-from sqlalchemy import func, text
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from backend.core.agent_secret import AgentSecretNotConfiguredError, require_agent_secret
 from backend.core.database import get_db
 from backend.core.metrics import (
+    chain_coverage_devices,
     device_online,
     get_metrics_response,
     host_device_adb_state,
@@ -29,6 +30,7 @@ from backend.core.metrics import (
 )
 from backend.models.enums import DeviceStatus, HostStatus
 from backend.models.host import Device, Host
+from backend.models.schedule import TaskSchedule
 from backend.services.auth_session import authenticate_token
 
 logger = logging.getLogger(__name__)
@@ -252,6 +254,7 @@ async def metrics(
     _refresh_fleet_gauges(db)
     _refresh_host_device_adb_gauges(db)
     _refresh_lock_wait_gauges(db)
+    _refresh_chain_coverage_gauges(db)
     _sweep_push_host_gauge_children(db)
     data, content_type = get_metrics_response()
     return Response(content=data, media_type=content_type)
@@ -293,3 +296,40 @@ def _sweep_push_host_gauge_children(db: Session) -> None:
     except Exception:
         # registry 状态异常不应让 /metrics 500：child 清理是尽力而为的卫生动作。
         logger.warning("metrics_push_gauge_sweep_failed", exc_info=True)
+
+def _refresh_chain_coverage_gauges(db: Session) -> None:
+    """#2909③：链覆盖差三元组，拉取期现算（fleet 表小，与 _refresh_fleet_gauges 同法）。
+
+    清单侧读 `task_schedule.device_ids`（enabled 行 JSON 并集）——这是**权威源**而非
+    观测样本：链 run 的即时修剪（#2909 诊断里规模浮动的来源）不参与判定，
+    度量的是「结构上有没有设备掉出全部清单」，正是本告警要抓的失效。
+    退役 host 的设备不计 online_total（ADR-0038 D5：退役=不再是容量，与 fleet
+    gauge 同族口径；否则退役机上冻结的 ONLINE 行会把 gap 虚报大）。
+    """
+    try:
+        online_ids = set(
+            db.execute(
+                select(Device.id)
+                .join(Host, Host.id == Device.host_id)
+                .where(
+                    Device.status == DeviceStatus.ONLINE.value,
+                    Host.retired_at.is_(None),
+                )
+            ).scalars().all()
+        )
+        scheduled: set[int] = set()
+        for (ids,) in db.query(TaskSchedule.device_ids).filter(
+            TaskSchedule.enabled == True,  # noqa: E712
+        ).all():
+            if isinstance(ids, list):
+                for x in ids:
+                    try:
+                        scheduled.add(int(x))
+                    except (TypeError, ValueError):
+                        continue
+        gap = len(online_ids - scheduled)
+        chain_coverage_devices.labels(kind="online_total").set(len(online_ids))
+        chain_coverage_devices.labels(kind="scheduled_union").set(len(scheduled))
+        chain_coverage_devices.labels(kind="gap_missing").set(gap)
+    except SQLAlchemyError:
+        logger.warning("metrics_chain_coverage_refresh_failed", exc_info=True)
