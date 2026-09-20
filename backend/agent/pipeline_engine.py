@@ -831,7 +831,9 @@ def _terminate_process_tree(proc: subprocess.Popen, *, grace_seconds: float = 2.
             try:
                 proc.kill()
             except Exception:
-                pass
+                # #739 面②：兜底 kill 也失败 ⇒ 进程可能存活（Windows 路径）；
+                # 此前静默，后续步骤的异常会指向别处，故补 warning。
+                logger.warning("proc_kill_failed pid=%d（进程可能仍存活）", proc.pid)
         return
     pgid = _resolve_pgid(proc)
     if pgid is None:

@@ -79,6 +79,14 @@ class WatcherSummaryPayload(TypedDict, total=False):
     #   { ticks_total, ticks_with_new, ticks_skipped_unchanged, new_entries_total,
     #     signals_emitted, signals_dropped, tick_errors }
     reconciler_stats:   Dict[str, int]
+    # #2394-③：reconciler 在位标记（"<PLATFORM>:<ClassName>"，空=未启动）。
+    #   ——契约补登记：payload 自 #2394 起已带出，本 shape 此前漏列。
+    platform_reconciler: str
+    # #2886：reconciler 连续错误自关闭的事实（UNIVIEW/AEE 覆盖归零对平台可见）。
+    platform_reconciler_shutdown: bool
+    # #2887：订阅策略快照，与 watcher 实际订阅面同源（UNISOC 注入后已刷新）。
+    #   控制面不消费该键，仅为运维可观测（#96 同构先例）。
+    policy_snapshot:    Dict[str, Any]
 
 
 class JobCompleteRequest(TypedDict, total=False):

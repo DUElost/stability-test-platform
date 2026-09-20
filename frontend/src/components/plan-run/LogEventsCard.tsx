@@ -187,7 +187,7 @@ export default function LogEventsCard({ runId, isTerminal }: Props) {
         <>
           <div className="max-h-[360px] overflow-y-auto">
             <table className="w-full text-[11px]">
-              <thead className="sticky top-0 bg-muted/50">
+              <thead className="sticky top-0 bg-muted/95">
                 <tr className={cn('text-left', TEXT.subtitle)}>
                   <th className="px-4 py-1.5 font-medium">序列号</th>
                   <th className="px-2 py-1.5 font-medium">平台</th>

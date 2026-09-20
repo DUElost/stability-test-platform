@@ -613,6 +613,18 @@ def test_running_timeout_transitions_to_unknown(engine, monkeypatch):
             assert job.ended_at is not None, "ended_at must be set"
             # #146: UNKNOWN 行不留运行子状态，避免并发统计误判。
             assert job.execution_state is None
+            # #2905：RUNNING→UNKNOWN 必须有持久证据（与 pending/patrol 两条同族路径对齐）——
+            # 删掉 _mark_running_timeout 里的 record_audit 调用，本断言即红。
+            audit = (
+                db.query(AuditLog)
+                .filter(
+                    AuditLog.action == "job_running_timeout",
+                    AuditLog.resource_type == "job_instance",
+                    AuditLog.resource_id == str(seed["job_id"]),
+                )
+                .first()
+            )
+            assert audit is not None, "RUNNING→UNKNOWN 未写审计（#2905）"
         finally:
             db.close()
     finally:
