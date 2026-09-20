@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from tools.dev.source_anchor import SourceGuard
-
-REPO = Path(__file__).resolve().parents[1]
 
 ENTRIES = [
     (
@@ -29,9 +25,8 @@ def test_pull_sites_use_registered_tmpdir() -> None:
 
 def test_cleanup_wired_into_main_finally() -> None:
     for rel, _leak in ENTRIES:
-        text = (REPO / rel).read_text(encoding="utf-8")
-        body = text.split("def main() -> None:", 1)[-1]
         guard = SourceGuard.of_repo_path(rel).anchored("def main() -> None:")
+        body = guard.text.split("def main() -> None:", 1)[-1]
         guard.assert_present("_discard_result_tmpdirs()", why="#2834：main 退出前必须回收")
         assert "finally:" in body
         assert "_discard_result_tmpdirs()" in body.rpartition("finally:")[2]
@@ -39,7 +34,14 @@ def test_cleanup_wired_into_main_finally() -> None:
 
 def test_create_and_delete_share_prefix_constant() -> None:
     for rel, _leak in ENTRIES:
-        text = (REPO / rel).read_text(encoding="utf-8")
+        guard = SourceGuard.of_repo_path(rel).anchored("_PULL_TMP_PREFIX")
+        text = guard.text
         assert text.count("_PULL_TMP_PREFIX") >= 3
-        assert 'startswith("powercycle-results-")' not in text
-        assert 'startswith("sleep-results-")' not in text
+        guard.assert_absent(
+            'startswith("powercycle-results-")',
+            why="#2834：删除侧硬编码前缀字面量会与创建侧脱钩",
+        )
+        guard.assert_absent(
+            'startswith("sleep-results-")',
+            why="#2834：删除侧硬编码前缀字面量会与创建侧脱钩",
+        )
