@@ -7,6 +7,8 @@ Class: bug-fix
 - 关联：`#2905`（本单）、`#2778`（同形守卫的先例：`backend/tests/test_audit_resource_type_guard.py`）、
   ADR-0019 Phase 4c / ADR-0022 D10（另两条路径的审计依据）、ADR-0044 D3 / ADR-0049（审计=持久证据、分层保留）、
   `#2694`（审计无界增长的关切）
+- 裁决依据：[`#2905` 的 codex 实测包](https://github.com/DUElost/stability-test-platform/issues/2905)——触发量、
+  覆盖真相、豁免路径成立性；其关键事实本单**已本地复核**（见 Verification）
 
 ## Decision
 
@@ -14,22 +16,31 @@ Class: bug-fix
 
 1. **补审计**：`_mark_running_timeout`（RUNNING→UNKNOWN）此前是同族三条路径里**唯一不写审计**的
    一条——`_mark_pending_timeout`（ADR-0019 依据）与 `_mark_patrol_stall`（ADR-0022 D10）都写。
-   后果是真实故障里**最高频**的那一类（Agent 掉线 / 租约宽限 / abort 未 ACK）在审计面无痕，
-   只剩 `status_reason` 与瞬时指标 `task_run_state_changes`——指标重启即失忆，答不了
-   「**具体哪些 job** 变 UNKNOWN 了」。现按同族形态补 `record_audit(action="job_running_timeout",
-   resource_type="job_instance")`，details 记 `plan_run_id`/`device_id`/`old_status`/`reason` 与
-   当次判定用到的触发面（`coordinator_deadline`/`execution_deadline`/`require_unreported`），
-   `username="system"`（与 `_mark_patrol_stall` 一致）。
+   后果：审计面无痕，只剩 `status_reason` 与瞬时指标 `task_run_state_changes`——指标重启即失忆。
+   现按同族形态补 `record_audit(action="job_running_timeout", resource_type="job_instance")`，
+   details 记 `plan_run_id`/`device_id`/`old_status`/`reason` 与当次判定用到的触发面
+   （`coordinator_deadline`/`execution_deadline`/`require_unreported`），`username="system"`
+   （与 `_mark_patrol_stall` 一致）。
 2. **新增守卫** `backend/tests/test_recycler_terminalization_audit_guard.py`（纯 AST、离线、秒级，
    照 #2778 的形状）：`backend/scheduler/recycler.py` 里每个 `_mark_*` 函数**要么**调用
    `record_audit*`，**要么**出现在 `_AUDIT_EXEMPT` 且**理由非空**；豁免表**陈旧即红**
    （函数已写审计或已改名 → 条目必须删）。→「新增第四条同族路径、悄悄不写审计」从此**未知即红**。
+
+**决定性依据（本单复核过的那条）**：`JobStateMachine.transition` 无条件写
+`job.status_reason = reason`（`backend/services/state_machine.py:41`），而 UNKNOWN 的 grace 到期由
+`device_lease_reconciler.py:229/369` 落 FAILED、reason=`unknown_grace_timeout`——**原降判 reason
+（running / coordinator / execution 哪条 deadline 断的）被覆盖**。即豁免路径「只查 `status_reason`」
+在时间线走完后**不成立**；本审计是「当初为什么 UNKNOWN」唯一的持久痕迹。
 
 **保留分层（写之前先确认的配套问题）**：`job_running_timeout` 不进 `SESSION_ACTIONS` /
 `SECURITY_ACTIONS` 显式集 ⇒ 按 ADR-0049 D2 落 **business 默认桶（90d）**。
 `backend/scheduler/audit_log_cleanup.py` 用的是 `AuditLog.action.notin_(SESSION | SECURITY)`，
 对**新 action 封闭**——即新审计不会掉进「未分层」状态，这正是 #2694 那条关切的答案。
 `_AUDIT_EXEMPT` 现为**空表**：三条路径都写了审计，空表本身也是判据的一部分。
+
+**量级**：codex 实测包给出生产近 30 天该路径 **0 次**、现存 UNKNOWN **0 行**（`job_terminalized`
+33,935 / `patrol_stall_detected` 4,350 是历史对照）⇒ 「写审计加剧无界增长」的隐忧在当下数据里是
+零成本；新增行数上界 = grace 链出现频次，而它一旦出现本就属于要逐条有痕的量级。
 
 **不做**：不改运行期判定逻辑（只加证据，不改谁超时）；不扩守卫射程到全仓（见 Revisit）。
 
@@ -60,6 +71,11 @@ Class: bug-fix
   否则「把表清空」这种正当改动会连带打红自测；
 - 早期一轮已验的守卫变异（保持有效）：新增一条不写审计的 `_mark_*` → 1 failed；豁免表登记一个
   已写审计的函数 → 1 failed；豁免理由整条掏空 → 3 failed；
+- **裁决依据的本地复核**（不代替实测，只核事实面）：`backend/services/state_machine.py:41`
+  确为无条件 `job.status_reason = reason`；UNKNOWN grace 落 FAILED 的两处调用点
+  `device_lease_reconciler.py:229/369` 传的 reason 是 `unknown_grace_timeout` ⇒ 覆盖成立。
+  触发量数字（30 天 0 次 / 现存 UNKNOWN 0 行）出自 codex 的只读实测包，本单**未复跑**
+  （避免在生产库上做非必需查询），按其原始读数引用；
 - `python scripts/run_gates.py check:quick` → **12 gates 绿**。
 
 ## Revisit
@@ -75,3 +91,6 @@ Class: bug-fix
 - **排障入口**：以后「这批 job 为什么集体 UNKNOWN」可以直接查 `audit_logs.action='job_running_timeout'`
   拿 `plan_run_id`/`device_id`/`reason` 与命中的触发面；`status_reason` 与指标降级为交叉验证，
   不再是唯一线索。
+- **`status_reason` 的覆盖语义本身**（`state_machine.transition` 无条件覆盖上一跳 reason）不在本单
+  范围：本单用审计解决**可追溯性**，没有改状态机语义——改它属执行状态机方向，需 ADR 裁决。
+  本单落定后，审计已能回答「当初为什么 UNKNOWN」，这条收紧的紧迫性下降。

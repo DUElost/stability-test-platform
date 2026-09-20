@@ -518,6 +518,14 @@ def _mark_running_timeout(
     ADR-0049 D2 落 **business 默认桶（90d）**（`audit_log_cleanup` 用 `NOT IN(...)` 兜底，
     对新 action 封闭）。
 
+    决定性依据（@codex 的 #2905 实测包 + 本地复核）：`JobStateMachine.transition`
+    无条件写 `status_reason`（`backend/services/state_machine.py:41`），而 UNKNOWN 的 grace
+    到期走 `device_lease_reconciler.py:229/369` 落 FAILED、reason=`unknown_grace_timeout`
+    ——**原降判 reason（哪条 deadline 断的）被覆盖**。即「只查 status_reason」这条豁免理由
+    在时间线走完后不成立；本审计是「当初为什么 UNKNOWN」唯一的持久痕迹。
+    量级参考（同包实测）：生产近 30 天该路径 0 次、现存 UNKNOWN 0 行 ⇒ 新增行数上界
+    = grace 链出现频次，一旦出现本就是需要逐条有痕的事故症状。
+
     CAS re-checks the same liveness signal used for the timeout verdict
     (#991 / R06-F06) — never ``updated_at``. Batch lease renewals pin
     ``updated_at`` while only refreshing ``last_execution_heartbeat_at``;
