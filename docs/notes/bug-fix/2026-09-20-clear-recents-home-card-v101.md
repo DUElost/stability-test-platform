@@ -1,7 +1,7 @@
 # clear_recents v1.0.1：排除 ZTE「主屏幕」残留卡
 
 Status: implemented
-Class: feature
+Class: bug-fix
 
 ## Decision
 
