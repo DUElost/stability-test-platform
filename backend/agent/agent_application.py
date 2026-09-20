@@ -1,16 +1,22 @@
 """Thin AgentApplication shell extracted from ``main`` (#736).
 
-Owns process-local active-job occupancy state and the startup orchestration
-formerly inlined in ``main()``. Lifecycle phase methods
-(initialize / start_background / …) are deferred — this slice is a single
-``run()`` that wires existing extract modules.
+Owns process-local active-job occupancy state and lifecycle phases that wire
+existing extract modules:
+
+- ``initialize`` — identity / stores / control handler build
+- ``start_background_tasks`` — heartbeat + host control plane
+- ``register_handlers`` — SocketIO control + early-command replay
+- ``start_job_runtime`` — pool / recovery plane
+- ``run_loop`` — claim loop; ``graceful_shutdown`` runs in its ``finally``
+  via ``shutdown_agent_runtime`` (not inlined here)
 """
 
 from __future__ import annotations
 
 import os
 import threading
-from typing import Dict, Set
+from dataclasses import dataclass
+from typing import Any, Dict, List, Set
 
 from .adb_wrapper import AdbWrapper
 from .agent_loop import run_agent_loop
@@ -18,9 +24,9 @@ from .bootstrap_subsystems import start_disk_and_watcher_subsystems
 from .config import ensure_dirs
 from .control_handler import ControlHandlerDeps, build_control_handler
 from .heartbeat_bindings import RecoveryActionsSlot, build_heartbeat_thread
-from .host_control_plane import start_host_control_plane
+from .host_control_plane import HostControlPlane, start_host_control_plane
 from .job_runner import run_task_wrapper
-from .job_runtime import start_job_runtime
+from .job_runtime import JobRuntime, start_job_runtime
 from .local_runtime import (
     connect_socketio_with_early_control,
     initialize_local_stores,
@@ -37,8 +43,39 @@ STP_WATCHER_ENABLED = os.getenv("STP_WATCHER_ENABLED", "true").lower() == "true"
 STP_WATCHER_PLAN_DEFAULT = os.getenv("STP_WATCHER_PLAN_DEFAULT", "true").lower() == "true"
 
 
+@dataclass
+class _BootContext:
+    """Mutable bag passed between AgentApplication lifecycle phases."""
+
+    api_url: str
+    host_id: str
+    agent_instance_id: str
+    boot_id: str
+    agent_secret: str
+    adb_path: str
+    poll_interval: float
+    mount_points: Any
+    host_info: Any
+    agent_pkg_version: str
+    agent_code_revision: str
+    adb: Any
+    sio_client: Any
+    early_control_queue: List[Any]
+    local_db: Any
+    patrol_checkpoint_store: Any
+    script_registry: Any
+    log_signal_drainer: Any
+    mq_producer: Any
+    control_deps: ControlHandlerDeps
+    handle_control: Any
+    recovery_actions_slot: RecoveryActionsSlot
+    heartbeat_thread: Any = None
+    plane: HostControlPlane | None = None
+    runtime: JobRuntime | None = None
+
+
 class AgentApplication:
-    """Process-scoped Agent runtime: occupancy state + startup → claim loop."""
+    """Process-scoped Agent runtime: occupancy state + phased startup → loop."""
 
     def __init__(self) -> None:
         # 全局活跃 Job 追踪（语义上存的就是 job_instance.id）
@@ -61,103 +98,112 @@ class AgentApplication:
         with self.active_jobs_lock:
             self.active_device_ids.discard(did)
 
-    def run(self) -> None:
-        """Bootstrap identity → planes → claim loop (blocks until shutdown)."""
+    def initialize(self) -> _BootContext:
+        """Identity, local stores, control-handler build (not yet registered)."""
         api_url = os.getenv("API_URL", "http://127.0.0.1:8000")
-
         ensure_dirs()
 
         identity = bootstrap_process_identity(api_url)
-        host_info = identity.host_info
-        agent_instance_id = identity.agent_instance_id
-        boot_id = identity.boot_id
-        host_id = identity.host_id
-        agent_pkg_version = identity.agent_version
-        agent_code_revision = identity.agent_code_revision
-        poll_interval = identity.poll_interval
-        mount_points = identity.mount_points
-        adb_path = identity.adb_path
-        agent_secret = identity.agent_secret
-
-        adb = AdbWrapper(adb_path=adb_path)
-        ensure_adb_server_on_startup(adb_path)
+        adb = AdbWrapper(adb_path=identity.adb_path)
+        ensure_adb_server_on_startup(identity.adb_path)
         sio_client, early_control_queue = connect_socketio_with_early_control(
-            api_url, host_id, agent_secret
+            api_url, identity.host_id, identity.agent_secret
         )
-        stores = initialize_local_stores(api_url=api_url, agent_secret=agent_secret)
-        local_db = stores.local_db
-        patrol_checkpoint_store = stores.patrol_checkpoint_store
-        script_registry = stores.script_registry
-
+        stores = initialize_local_stores(
+            api_url=api_url, agent_secret=identity.agent_secret
+        )
         log_signal_drainer = start_disk_and_watcher_subsystems(
-            local_db=local_db,
+            local_db=stores.local_db,
             api_url=api_url,
-            agent_secret=agent_secret,
-            host_id=str(host_id),
-            agent_instance_id=agent_instance_id,
+            agent_secret=identity.agent_secret,
+            host_id=str(identity.host_id),
+            agent_instance_id=identity.agent_instance_id,
             adb=adb,
-            adb_path=adb_path,
+            adb_path=identity.adb_path,
             sio_client=sio_client,
         )
 
         # Step trace local writer (Redis XADD removed in Phase 4; HTTP via uploader)
-        mq_producer = StepTraceWriter("", host_id, local_db=local_db)
+        mq_producer = StepTraceWriter(
+            "", identity.host_id, local_db=stores.local_db
+        )
         # ADR-0026 P2-2: wire pipeline _MQStepLogger → SocketIO batched step_log
         mq_producer.bind_sio_client(sio_client)
 
-        # Assigned after the executor is created; the control closure also handles
-        # commands received during the small startup window.
         control_deps = ControlHandlerDeps()
         handle_control = build_control_handler(
             deps=control_deps,
             mq_producer=mq_producer,
-            host_id=str(host_id),
+            host_id=str(identity.host_id),
             api_url=api_url,
-            agent_secret=agent_secret,
-            adb_path=adb_path,
-            local_db=local_db,
+            agent_secret=identity.agent_secret,
+            adb_path=identity.adb_path,
+            local_db=stores.local_db,
             active_jobs_lock=self.active_jobs_lock,
             active_job_ids=self.active_job_ids,
             ensure_adb_server=ensure_adb_server_on_startup,
         )
 
-        # ADR-0019 Phase 1/3c: capacity getters live inside build_heartbeat_thread
-        recovery_actions_slot = RecoveryActionsSlot()
-
-        # One-shot protocol gate: do not start workers/background threads when this
-        # Agent build is below the backend's minimum supported version.
-        check_agent_version(api_url, host_id, mount_points, host_info)
-
-        heartbeat_thread = build_heartbeat_thread(
+        return _BootContext(
             api_url=api_url,
-            host_id=host_id,
-            adb_path=adb_path,
-            mount_points=mount_points,
-            host_info=host_info,
-            poll_interval=poll_interval,
+            host_id=identity.host_id,
+            agent_instance_id=identity.agent_instance_id,
+            boot_id=identity.boot_id,
+            agent_secret=identity.agent_secret,
+            adb_path=identity.adb_path,
+            poll_interval=identity.poll_interval,
+            mount_points=identity.mount_points,
+            host_info=identity.host_info,
+            agent_pkg_version=identity.agent_version,
+            agent_code_revision=identity.agent_code_revision,
+            adb=adb,
             sio_client=sio_client,
-            script_registry=script_registry,
-            local_db=local_db,
+            early_control_queue=early_control_queue,
+            local_db=stores.local_db,
+            patrol_checkpoint_store=stores.patrol_checkpoint_store,
+            script_registry=stores.script_registry,
+            log_signal_drainer=log_signal_drainer,
             mq_producer=mq_producer,
-            agent_instance_id=agent_instance_id,
-            boot_id=boot_id,
-            agent_version=agent_pkg_version,
-            agent_code_revision=agent_code_revision,
+            control_deps=control_deps,
+            handle_control=handle_control,
+            recovery_actions_slot=RecoveryActionsSlot(),
+        )
+
+    def start_background_tasks(self, ctx: _BootContext) -> None:
+        """Version gate, heartbeat, and host control plane."""
+        check_agent_version(
+            ctx.api_url, ctx.host_id, ctx.mount_points, ctx.host_info
+        )
+        heartbeat_thread = build_heartbeat_thread(
+            api_url=ctx.api_url,
+            host_id=ctx.host_id,
+            adb_path=ctx.adb_path,
+            mount_points=ctx.mount_points,
+            host_info=ctx.host_info,
+            poll_interval=ctx.poll_interval,
+            sio_client=ctx.sio_client,
+            script_registry=ctx.script_registry,
+            local_db=ctx.local_db,
+            mq_producer=ctx.mq_producer,
+            agent_instance_id=ctx.agent_instance_id,
+            boot_id=ctx.boot_id,
+            agent_version=ctx.agent_pkg_version,
+            agent_code_revision=ctx.agent_code_revision,
             active_jobs_lock=self.active_jobs_lock,
             active_job_ids=self.active_job_ids,
             active_device_ids=self.active_device_ids,
-            recovery_actions_slot=recovery_actions_slot,
+            recovery_actions_slot=ctx.recovery_actions_slot,
         )
         heartbeat_thread.start()
-
-        plane = start_host_control_plane(
-            api_url=api_url,
-            host_id=host_id,
-            agent_instance_id=agent_instance_id,
-            agent_secret=agent_secret,
-            local_db=local_db,
+        ctx.heartbeat_thread = heartbeat_thread
+        ctx.plane = start_host_control_plane(
+            api_url=ctx.api_url,
+            host_id=ctx.host_id,
+            agent_instance_id=ctx.agent_instance_id,
+            agent_secret=ctx.agent_secret,
+            local_db=ctx.local_db,
             heartbeat_thread=heartbeat_thread,
-            control_deps=control_deps,
+            control_deps=ctx.control_deps,
             active_jobs_lock=self.active_jobs_lock,
             active_job_ids=self.active_job_ids,
             active_device_ids=self.active_device_ids,
@@ -166,29 +212,33 @@ class AgentApplication:
             lock_renewal_stop_event=self.lock_renewal_stop_event,
         )
 
-        # 真实 control handler 在 deps 就绪后注册；回放启动窗口暂存命令（P2-2a）
-        sio_client.set_control_handler(handle_control)
-        replay_early_control_commands(early_control_queue, handle_control)
+    def register_handlers(self, ctx: _BootContext) -> None:
+        """Bind real control handler and replay the early-control window (P2-2a)."""
+        ctx.sio_client.set_control_handler(ctx.handle_control)
+        replay_early_control_commands(ctx.early_control_queue, ctx.handle_control)
 
-        runtime = start_job_runtime(
-            api_url=api_url,
-            host_id=host_id,
-            agent_instance_id=agent_instance_id,
-            boot_id=boot_id,
-            agent_secret=agent_secret,
-            local_db=local_db,
-            lease_renewer=plane.lease_renewer,
-            register_active_job=plane.register_active_job,
-            deregister_active_job=plane.deregister_active_job,
-            job_runner_slot=plane.job_runner_slot,
-            recovery_actions_slot=recovery_actions_slot,
-            control_deps=control_deps,
-            coordinator=plane.coordinator,
-            operation_scheduler=plane.operation_scheduler,
-            adb=adb,
-            mq_producer=mq_producer,
-            script_registry=script_registry,
-            patrol_checkpoint_store=patrol_checkpoint_store,
+    def start_job_plane(self, ctx: _BootContext) -> None:
+        """Outbox / recovery / executor plane (after handlers are live)."""
+        assert ctx.plane is not None
+        ctx.runtime = start_job_runtime(
+            api_url=ctx.api_url,
+            host_id=ctx.host_id,
+            agent_instance_id=ctx.agent_instance_id,
+            boot_id=ctx.boot_id,
+            agent_secret=ctx.agent_secret,
+            local_db=ctx.local_db,
+            lease_renewer=ctx.plane.lease_renewer,
+            register_active_job=ctx.plane.register_active_job,
+            deregister_active_job=ctx.plane.deregister_active_job,
+            job_runner_slot=ctx.plane.job_runner_slot,
+            recovery_actions_slot=ctx.recovery_actions_slot,
+            control_deps=ctx.control_deps,
+            coordinator=ctx.plane.coordinator,
+            operation_scheduler=ctx.plane.operation_scheduler,
+            adb=ctx.adb,
+            mq_producer=ctx.mq_producer,
+            script_registry=ctx.script_registry,
+            patrol_checkpoint_store=ctx.patrol_checkpoint_store,
             run_task_wrapper=run_task_wrapper,
             active_jobs_lock=self.active_jobs_lock,
             active_job_ids=self.active_job_ids,
@@ -200,23 +250,36 @@ class AgentApplication:
             watcher_globally_enabled=STP_WATCHER_ENABLED,
             watcher_plan_default=STP_WATCHER_PLAN_DEFAULT,
         )
+
+    def run_loop(self, ctx: _BootContext) -> None:
+        """Claim loop; graceful_shutdown is the ``finally`` of ``run_agent_loop``."""
+        assert ctx.plane is not None and ctx.runtime is not None
+        assert ctx.heartbeat_thread is not None
         run_agent_loop(
-            api_url=api_url,
-            poll_interval=poll_interval,
-            host_id=host_id,
-            agent_instance_id=agent_instance_id,
-            plane=plane,
-            runtime=runtime,
-            heartbeat_thread=heartbeat_thread,
-            adb=adb,
-            mq_producer=mq_producer,
-            script_registry=script_registry,
-            patrol_checkpoint_store=patrol_checkpoint_store,
+            api_url=ctx.api_url,
+            poll_interval=ctx.poll_interval,
+            host_id=ctx.host_id,
+            agent_instance_id=ctx.agent_instance_id,
+            plane=ctx.plane,
+            runtime=ctx.runtime,
+            heartbeat_thread=ctx.heartbeat_thread,
+            adb=ctx.adb,
+            mq_producer=ctx.mq_producer,
+            script_registry=ctx.script_registry,
+            patrol_checkpoint_store=ctx.patrol_checkpoint_store,
             run_task_wrapper=run_task_wrapper,
-            log_signal_drainer=log_signal_drainer,
-            local_db=local_db,
-            sio_client=sio_client,
+            log_signal_drainer=ctx.log_signal_drainer,
+            local_db=ctx.local_db,
+            sio_client=ctx.sio_client,
         )
+
+    def run(self) -> None:
+        """Phased bootstrap → claim loop (blocks until shutdown)."""
+        ctx = self.initialize()
+        self.start_background_tasks(ctx)
+        self.register_handlers(ctx)
+        self.start_job_plane(ctx)
+        self.run_loop(ctx)
 
 
 def run_agent_application() -> None:

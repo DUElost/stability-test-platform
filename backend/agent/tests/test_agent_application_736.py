@@ -74,6 +74,24 @@ def test_run_agent_application_constructs_and_runs():
     run.assert_called_once()
 
 
+def test_agent_application_exposes_lifecycle_phases():
+    """#736 验收：阶段方法存在且单方法行数 ≤100。"""
+    import inspect
+
+    app = AgentApplication
+    for name in (
+        "initialize",
+        "start_background_tasks",
+        "register_handlers",
+        "start_job_plane",
+        "run_loop",
+        "run",
+    ):
+        assert hasattr(app, name), name
+        lines = len(inspect.getsourcelines(getattr(app, name))[0])
+        assert lines <= 100, f"{name} has {lines} lines"
+
+
 def test_main_delegates_to_agent_application():
     import backend.agent.main as agent_main
     from tools.dev.source_anchor import SourceGuard
