@@ -24,8 +24,8 @@ verify 期望 sha 现取于 live `Script.content_sha256`
 
 ## Verification
 
-- `rg -n '内嵌每个 step.*content_sha256' docs/adr/ADR-0021-script-content-alignment-gate.md` → 0
-- `rg -n 'content_sha256' docs/adr/ADR-0021-script-content-alignment-gate.md` → 仅 DB/verify/否定句
+- `rg -n 'nfs_path` / `content_sha256' docs/adr/ADR-0021-script-content-alignment-gate.md` → 0（旧「内嵌列表」已拆）
+- `rg -n 'content_sha256' docs/adr/ADR-0021-script-content-alignment-gate.md` → 仅 DB/verify/「**无**」否定句
 - `python3 scripts/run_gates.py check:quick`
 
 ## Revisit
