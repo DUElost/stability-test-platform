@@ -18,6 +18,9 @@
 / `create_engine`，发生在 `main()` 的 try 之前）时，解释器的默认退出码恰好也是 1。故
 `summarize` 以「payload 是否带 `guard` 块」区分真判定与进程早死：不带 ⇒ broken（见其实现）。
 
+#2884 把同一条判据推广到 0/2：rc=0 而没有 `guard` 块是 payload 形状漂移，rc=2 还可能是
+argparse 用法错误（与 `GUARD_UNKNOWN` 同码）——都不读成「无到期项 / 未知」。
+
 1/2 不 fail 的理由：让 timer 因「存在待授权退役项」天天 failed，会把真正的工具故障淹死在
 告警疲劳里；到期数量与「未知」是**数据**，交给指标与人消费，而不是任务状态。
 `due=0` 必须能与「从没跑过」区分 ⇒ 另出 `last_run` 指标；指标写不出去就当场失败，不做
@@ -112,6 +115,21 @@ def run_guard(python_exe: str, today: str | None) -> tuple[int, dict]:
     return proc.returncode, payload
 
 
+def _guard_block(payload: dict) -> dict | None:
+    """payload 里的 `guard` 块；缺失或形状不对都返回 None（⇒ broken）。"""
+    guard = payload.get("guard") if isinstance(payload, dict) else None
+    return guard if isinstance(guard, dict) else None
+
+
+def _violations_of(guard: dict) -> float | None:
+    """`guard.violations` 数量；形状漂移返回 None（调用方按 broken 处理）。"""
+    raw = guard.get("violations", 0) or 0
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 def summarize(rc: int, payload: dict) -> tuple[dict[str, float], int]:
     """纯函数：把 (退出码, payload) 折成 (指标, 任务退出码)。
 
@@ -122,15 +140,22 @@ def summarize(rc: int, payload: dict) -> tuple[dict[str, float], int]:
     `resolve_database_url()` / `create_engine` 都发生在 `main()` 的 try 之前）。判据 = payload
     是否带本工具约定的 `guard` 块：带 ⇒ 真判定（1=有活要干，任务成功）；不带 ⇒ 进程没走到
     输出那一步，折成 broken——否则守卫的死讯会被读成「有活要干」，broken 永不置位。
+
+    #2884：同一条判据对 0/2 也成立。rc=0 且没有 `guard` 块是 payload 形状漂移（判据多打一行、
+    输出被 banner 污染），rc=2 还可能是 argparse 用法错误（与 `GUARD_UNKNOWN` 同码）——两者都
+    是「进程没走到输出那一步」，按 broken 归因，不读成「无到期项 / 未知」。
     """
-    guard = payload.get("guard") if isinstance(payload, dict) else None
-    violations = float((guard or {}).get("violations", 0) or 0)
+    guard = _guard_block(payload)
+    if guard is None and rc in (GUARD_OK, GUARD_DUE, GUARD_UNKNOWN):
+        return {"due": 0.0, "unknown": 0.0, "broken": 1.0}, 1
     if rc == GUARD_OK:
+        violations = _violations_of(guard)
+        if violations is None:  # 数量取不出：码说「无到期项」也不得读成干净
+            return {"due": 0.0, "unknown": 0.0, "broken": 1.0}, 1
         return {"due": violations, "unknown": 0.0, "broken": 0.0}, 0
     if rc == GUARD_DUE:
-        if guard is None:
-            return {"due": 0.0, "unknown": 0.0, "broken": 1.0}, 1
         # 码说「有到期项」而 payload 给不出数量：显示 1 而不是 0——把脏读成干净更糟。
+        violations = _violations_of(guard) or 0.0
         return {"due": max(violations, 1.0), "unknown": 0.0, "broken": 0.0}, 0
     if rc == GUARD_UNKNOWN:
         return {"due": 0.0, "unknown": 1.0, "broken": 0.0}, 0

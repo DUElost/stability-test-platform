@@ -248,8 +248,10 @@ def complete_job(
         if local_db is not None and outbox_ok:
             try:
                 local_db.ack_terminal(job_id)
-            except Exception:
-                pass
+            except Exception as exc:
+                # #739 面②：ack 失败会让该 terminal 留在 outbox、后续被 drainer 重发
+                # （服务端按 fencing/digest 幂等），但现场需要能解释"为什么又发了一次"。
+                logger.warning("outbox_ack_terminal_failed job=%d: %s", job_id, exc)
     except Exception as exc:
         if local_db is not None and outbox_ok:
             logger.warning(
