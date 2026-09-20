@@ -63,7 +63,10 @@ PR/CI 恒 no-op，故**不接入**，留痕靠下述收窗纪律（论证见 iss
   补/收窄 scope、overlap 改串行；
 - 开工前检看风险面用 `python tools/dev/ai_work.py status --risk`（只列在窗
   记录 + overlap 提示；全量仍用不带 `--risk` 的 `status`）；
-- 输出与处置结论随批次收尾评论留痕（#1035 Evidence 台账回溯组同载体）。
+- 输出与处置结论随批次收尾评论留痕（#1035 Evidence 台账回溯组同载体）；
+- 一页速查（registry 记录 / worktree / 本地与远端分支四类判据）见
+  [`closure-cheatsheet.md`](./closure-cheatsheet.md)——**不新增规范**，冲突以本文与
+  [`ai/execution-contract.md`](ai/execution-contract.md) 为准。
 
 ## 远端分支生命周期与补删
 
