@@ -510,6 +510,14 @@ def _mark_running_timeout(
     Lease stays ACTIVE — the device remains blocked. Reconciler will
     finalize (UNKNOWN→FAILED + release lease) after the grace period.
 
+    #2905（**欠账，待裁决**）：本函数**不写审计**，而同族的 `_mark_pending_timeout`
+    （ADR-0019 依据）与 `_mark_patrol_stall`（ADR-0022 D10 依据）都写。RUNNING→UNKNOWN
+    是真实故障里最高频的一类（Agent 掉线 / 租约宽限 / abort 未 ACK），不写意味着一个 job
+    变 UNKNOWN 在审计面无痕（只剩 status_reason 与 `task_run_state_changes` 这类瞬时指标）。
+    是否补写属**方向选择**：写了要确认落进 ADR-0049 的 business 桶（否则反而打开保留策略的
+    缺口），不写则把豁免理由按同族形态写在这里。见 `backend/tests/
+    test_recycler_terminalization_audit_guard.py` 的豁免登记与 issue #2905。
+
     CAS re-checks the same liveness signal used for the timeout verdict
     (#991 / R06-F06) — never ``updated_at``. Batch lease renewals pin
     ``updated_at`` while only refreshing ``last_execution_heartbeat_at``;
