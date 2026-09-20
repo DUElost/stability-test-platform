@@ -64,6 +64,10 @@ def _durable_get_attempts(event_id: str) -> Optional[int]:
 
     Missing STP_AGENT_STATE_DB / LocalDB → None（调用方回退内存）。
     """
+    if not os.environ.get("STP_AGENT_STATE_DB", ""):
+        # #739 面②：未配置状态库是 docstring 已声明的**预期路径**，显式返回，
+        # 不走异常——否则「未配置」与「真读失败」在日志里不可分。
+        return None
     try:
         try:
             from backend.agent.aee.state_store import ScriptStateStore
@@ -73,7 +77,13 @@ def _durable_get_attempts(event_id: str) -> Optional[int]:
         if raw.strip() == "":
             return None
         return max(0, int(raw))
-    except Exception:
+    except Exception as exc:
+        # #739 面②：真读失败（锁/表缺失/IO/坏值）会静默改变重试阶梯——此前 `pass`
+        # 一律回退内存计数，现场看不出账目为何漂移。补一条 warning（每次重试至多一条）。
+        logger.warning(
+            "attempts_state_read_failed event_id=%s err=%s（本次回退内存计数）",
+            event_id, exc,
+        )
         return None
 
 
@@ -204,8 +214,19 @@ class EventUploader:
         self._api_url = api_url.rstrip("/")
         self._agent_secret = agent_secret
         self._host_id = host_id
-        self._nfs_root = nfs_root or str(get_aee_nfs_root())
-        self._configured = bool(self._api_url and self._agent_secret and self._host_id)
+        try:
+            root = nfs_root or str(get_aee_nfs_root())
+        except RuntimeError:
+            # #2845：无共享存储根不是「配置错误」而是「本机没有上送目的地」——
+            # 目标路径 = {root}/devices/…，根为空会退化成 CWD 相对路径。
+            # 与 api_url/agent_secret/host_id 缺失同口径：按未配置 no-op（不抛），
+            # 否则 bootstrap 与 reload_config 两条调用链都会被 RuntimeError 打断。
+            root = ""
+            logger.warning("event_uploader_no_shared_root — 组件按未配置降级")
+        self._nfs_root = root
+        self._configured = bool(
+            self._api_url and self._agent_secret and self._host_id and root
+        )
         logger.info(
             "event_uploader_configured enabled=%s host=%s nfs_root=%s",
             _event_uploader_enabled(),

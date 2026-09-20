@@ -73,17 +73,17 @@ def test_initialize_local_stores_binds_and_migrates():
 
 
 def test_main_wires_local_runtime():
-    import backend.agent.main as agent_main
+    import backend.agent.agent_application as app
     from tools.dev.source_anchor import SourceGuard
 
-    guard = SourceGuard.of_module(agent_main).anchored(
+    guard = SourceGuard.of_module(app).anchored(
         "connect_socketio_with_early_control("
     )
     guard.assert_absent(
         "early_control_replay_failed",
-        why="#736 local_runtime 已抽出，main 不得回潮 early-control 回放日志",
+        why="#736 local_runtime 已抽出，编排层不得回潮 early-control 回放日志",
     )
     guard.assert_absent(
         "AgentSocketIOClient(",
-        why="#736 SocketIO 连接已迁出 main",
+        why="#736 SocketIO 连接已迁出编排层",
     )
