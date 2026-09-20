@@ -26,6 +26,8 @@ _TEXTFILE_PRODUCERS = (
     "tools/dev/script_guard_probe.py",
     # #2632：PG 日志「猜 schema」指纹采集（控制面宿主 timer 跑，写 textfile 指标）
     "tools/dev/pg_error_guard.py",
+    # #2881：skill 用量（HOLLOW）巡检（站点 timer 跑，写 textfile 指标）
+    "tools/dev/skill_usage_probe.py",
 )
 _TEXTFILE_HELP_ATTR = "_METRIC_HELP"
 _METRIC_NAME_RE = re.compile(r"[a-zA-Z_:][a-zA-Z0-9_:]*")

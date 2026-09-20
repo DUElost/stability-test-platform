@@ -30,11 +30,12 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+from tools.dev.textfile_metrics import render_gauges, write_atomic
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
@@ -146,20 +147,13 @@ def render_metrics(values: dict[str, float], *, ran_at: int) -> str:
         "stp_script_guard_broken": f"{values['broken']:g}",
         "stp_script_guard_last_run": str(int(ran_at)),
     }
-    lines: list[str] = []
-    for name, val in mapping.items():
-        lines.append(f"# HELP {name} {_METRIC_HELP[name]}")
-        lines.append(f"# TYPE {name} gauge")
-        lines.append(f"{name} {val}")
-    return "\n".join(lines) + "\n"
+    # #2881：渲染/落盘与 pg_error_guard 逐行相同，第三个生产者出现时收敛到公共原语
+    return render_gauges(_METRIC_HELP, mapping)
 
 
 def write_metrics(path: Path, text: str) -> None:
     """原子替换：node_exporter 可能正在读，半截文件会被解析成脏数据。"""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, path)
+    write_atomic(path, text)
 
 
 def main(argv: list[str] | None = None) -> int:

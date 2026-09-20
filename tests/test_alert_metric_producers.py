@@ -313,9 +313,12 @@ def weak_reference_sites(files, defs: dict[str, dict]) -> dict[str, list[str]]:
 # 本仓告警允许引用的自有指标：backend 进程指标，与本仓自己生产的 node-exporter
 # textfile 指标（#735 守卫、#2632 的 PG 指纹采集器）。前缀集必须成组维护——只认
 # `stability_` 时，引用 `stp_script_guard_*` 的告警会在这里被判"未解析出指标名"
-# （CI pr-agent-tests 实测红）；#2632 的 `stp_pg_*` 是同一形态的第二次。
+# （CI pr-agent-tests 实测红）；#2632 的 `stp_pg_*` 是同一形态的第二次；#2881 的
+# `stp_skill_usage_*` 是第三次（同一形态出现三次仍按此形态维护：前缀集成组登记）。
 # 那条断言是**解析退化保护**，正确的响应是扩前缀集，而不是删断言或改指标命名。
-_SELF_OWNED_METRIC_RE = re.compile(r"\b(?:stability_|stp_script_guard_|stp_pg_)[a-zA-Z0-9_:]+\b")
+_SELF_OWNED_METRIC_RE = re.compile(
+    r"\b(?:stability_|stp_script_guard_|stp_pg_|stp_skill_usage_)[a-zA-Z0-9_:]+\b"
+)
 
 
 def alert_metric_names() -> list[str]:
