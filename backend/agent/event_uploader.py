@@ -64,6 +64,10 @@ def _durable_get_attempts(event_id: str) -> Optional[int]:
 
     Missing STP_AGENT_STATE_DB / LocalDB → None（调用方回退内存）。
     """
+    if not os.environ.get("STP_AGENT_STATE_DB", ""):
+        # #739 面②：未配置状态库是 docstring 已声明的**预期路径**，显式返回，
+        # 不走异常——否则「未配置」与「真读失败」在日志里不可分。
+        return None
     try:
         try:
             from backend.agent.aee.state_store import ScriptStateStore
@@ -73,7 +77,13 @@ def _durable_get_attempts(event_id: str) -> Optional[int]:
         if raw.strip() == "":
             return None
         return max(0, int(raw))
-    except Exception:
+    except Exception as exc:
+        # #739 面②：真读失败（锁/表缺失/IO/坏值）会静默改变重试阶梯——此前 `pass`
+        # 一律回退内存计数，现场看不出账目为何漂移。补一条 warning（每次重试至多一条）。
+        logger.warning(
+            "attempts_state_read_failed event_id=%s err=%s（本次回退内存计数）",
+            event_id, exc,
+        )
         return None
 
 
