@@ -43,6 +43,19 @@ def _guard_payload(status: str, violations: int) -> dict:
          {"due": 0.0, "unknown": 0.0, "broken": 1.0}, 1),
         # 使用事实不可得：显式 unknown，不降级成 due=0
         (2, _guard_payload("UNKNOWN", 0), {"due": 0.0, "unknown": 1.0, "broken": 0.0}, 0),
+        # #2884：rc=2 也可能是 argparse 用法错误（与 UNKNOWN 同码）——没有 `guard`
+        # 块就是「进程没走到输出那一步」，按 broken 归因而不是「未知」
+        (2, {"_stderr_tail": "argparse: unrecognized arguments: --guard"},
+         {"due": 0.0, "unknown": 0.0, "broken": 1.0}, 1),
+        # #2884：rc=0 的 payload 形状漂移（判据多打一行 / 输出被 banner 污染）——
+        # 原先直接落成 "GUARD OK: 无到期项"，broken 恒 0
+        (0, {"_stdout_tail": "garbage"}, {"due": 0.0, "unknown": 0.0, "broken": 1.0}, 1),
+        (0, {}, {"due": 0.0, "unknown": 0.0, "broken": 1.0}, 1),
+        # `guard` 块在但形状不对：同属漂移，不得 AttributeError 崩掉巡检（崩 = 指标停在旧值）
+        (0, {"guard": ["not-a-dict"]}, {"due": 0.0, "unknown": 0.0, "broken": 1.0}, 1),
+        (0, {"guard": {"violations": "abc"}}, {"due": 0.0, "unknown": 0.0, "broken": 1.0}, 1),
+        # 码说有到期项而数量取不出：显示 1（现有口径），不因形状漂移把脏读成干净
+        (1, {"guard": {"violations": "abc"}}, {"due": 1.0, "unknown": 0.0, "broken": 0.0}, 0),
         # 工具自身异常：唯一要让 systemd 标 failed 的一档
         (3, {}, {"due": 0.0, "unknown": 0.0, "broken": 1.0}, 1),
     ],
