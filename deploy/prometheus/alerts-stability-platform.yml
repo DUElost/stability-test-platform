@@ -452,3 +452,81 @@ groups:
             对照 docs/operations/incident-2026-07-29-host-8-87-xhci-death-and-adb-outage.md
             判据树。注意本告警**只观测**：平台侧自动 reconnect 未实现（会打断在跑的 job，
             需裁决，见 #2754 / #722）。
+      # --------------------------------------------------------------------
+      # #2900：host 的 xHCI 主控死亡后，整机 USB 对内核**永久不可见且不自愈**，而
+      # SSH / systemd / Agent 心跳全正常 ⇒ 平台显示 ONLINE/HEALTHY、产能静默归零。
+      # fleet 三例实证，最长失明 11 天（.102 死前还有两周慢性链路风暴无人知）。
+      # 判据来自 agent 侧「内核日志证据 ∧ 此刻零设备」的合取（`kernel_usb_faults.py`），
+      # 经 `health.reasons` 上报、由 `api/routes/metrics.py` 折成 reason gauge。
+      # **这两条规则只吃那个合取结论，不自己发明第二套失明判据**（第二份真值迟早漂）。
+      # 为什么不用「设备数为 0」直接告警：fleet 里既有 adb offline 幽灵行、也有本来
+      # 就没插设备的 host（2026-09-20 实测：2 台报 `usb_tree_empty` 的 host 其 device
+      # 表行数为 0），任何设备计数型规则今天上线就常亮若干台——#2754 交过同机 A/B 数据。
+      # 可触发性受 #2957 限制（内核日志通道在无 journal 读权限的 host 上恒为未知），
+      # 下面第三条规则就是为此而设：绿色不等于已覆盖，覆盖缺口自己会红。
+      - alert: StabilityHostUsbControllerDead
+        expr: stability_host_health_reason{reason="usb_host_controller_dead"} >= 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Host USB controller is dead — the whole host is USB-blind
+          description: >-
+            该 host 的内核报出 xHCI 主控死亡（`HC died; cleaning up`）**且此刻 USB 总线上
+            一台设备都看不到**。这不是 adb/adbd 问题：主控死了以后内核再也收不到任何 USB
+            事件，**不会自愈**，SSH 与心跳照常，平台侧只有这一条 reason 能表达它。
+            先按 docs/operations/host-device-visibility-triage.md 的 L1 层取证
+            （`journalctl -k | grep -E 'xhci|HC died'`），确认后用 unbind/rebind 救回
+            （fleet 已有两例当场恢复，23/23 设备回归），reboot 是兜底。
+            **不要自动 rebind**：会打断在跑的 job，自愈与否待本告警有数据后另议（#2900「不做什么」）。
+            这台机器的产能已归零，请把它从调度里摘掉再处理（设备租约见 device-lease-release SOP）。
+      - alert: StabilityHostUsbLinkDegraded
+        expr: stability_host_health_reason{reason="usb_link_degraded"} >= 1
+        for: 45m
+        labels:
+          severity: warning
+        annotations:
+          summary: Chronic USB link errors on one host (pre-death signature)
+          description: >-
+            该 host 最近一小时的内核日志里 USB 传输错误超阈（`error -71`/`error -110`
+            计数 ≥20，或 `Maybe the USB cable is bad?` ≥5）且持续 45m。这是**死亡前兆**
+            而不是死亡：#2900 的 .102 案例在 HC died 之前以每日 400~3700 行的速率风暴了
+            两周，全程零告警。窗口比主控死亡那条长（45m vs 5m），因为瞬态插拔抖动也会
+            命中阈值，而真实劣化会持续数小时到数天。处置：查线/查 hub 供电（SS 线松动、
+            劣质 hub、EMI 都是已知成因），别等它死——主控一死就只能 unbind/rebind。
+            同 host 若同时出现 StabilityHostUsbControllerDead，以那条为准（本条是前兆面）。
+      # #2957：上面两条的可触发性**前提是 agent 能读到内核日志**。实测 Agent 服务
+      # `User=android`（`backend/agent/install_agent.sh`），安装脚本只加过 `dialout`，
+      # 从未加入 `adm`/`systemd-journal`；非特权 `journalctl -k` 退出码 0、stdout 只有
+      # `-- No entries --`（与「内核干净」同形），而 `kernel.dmesg_restrict=1` 又堵死了
+      # dmesg/`/dev/kmsg` 两条备用路（本机实测 open 报 EPERM）。⇒ agent 侧诚实返回
+      # 「未知」，但控制面若看不见「未知」，就会把 48/48 台从未检查读成 48/48 台干净。
+      # 本规则把这个覆盖缺口显式化：**fleet 级一条**（不是 per-host，否则上线即 48 条红灯
+      # 淹没真信号），过半且 ≥5 台读不到时才红。
+      - alert: StabilityUsbKernelLogChannelDark
+        expr: >-
+          (
+            sum(stability_host_kernel_log_channel{state="unavailable"}) >= 5
+          )
+          and
+          (
+            sum(stability_host_kernel_log_channel{state="unavailable"})
+            /
+            sum(stability_host_kernel_log_channel) >= 0.5
+          )
+        for: 6h
+        labels:
+          severity: warning
+        annotations:
+          summary: Kernel-log USB detector is structurally blind on most hosts
+          description: >-
+            过半（且 ≥5 台）在册 host 的 agent **读不到内核日志**，因此 #2900 的
+            `usb_host_controller_dead` / `usb_link_degraded` 这两条判据在它们身上
+            **永远不会命中**——上面两条告警此时是绿的，但绿色不代表已覆盖。
+            出口由 #2957 裁决：给 agent 用户 `systemd-journal` 组（权限扩张，需签字，
+            且 48 台都要重跑安装步骤）、改用零权限的结果层判据（`usb_tree_empty`，
+            #2902；但它今天还需补一道「DB 里本来有设备」的合取才不会误报）、
+            或 sudoers 只放行 `journalctl -k -o cat` 这一条固定子命令（与 install_agent.sh
+            「提权面收敛为 wrapper 固定子命令」的先例同族）。
+            注意 `state="unknown"`（老 agent 未上报该字段）是**覆盖缺口**而不是本告警的
+            射程：它计入分母、不计入分子，避免 fleet 升级期间与 A/B/C 裁决混成一件事。

@@ -171,6 +171,31 @@ host_device_adb_state = Gauge(
     ['host_id', 'state'],  # state: device | offline | unauthorized | other
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
+# #2900/#2957：Agent 已经算出的 host 健康 reason 此前**只落进 `host.extra` 这个 JSON
+# 就停了**——`deploy/prometheus/alerts-stability-platform.yml` 全文没有任何 expr 引用
+# 它们，于是「xHCI 主控死亡致整机 USB 全盲」（fleet 三例、最长 11 天零告警）在告警面
+# 上不存在。本 gauge 把 reason 词表折成 per-host 0/1 series，使「有 reason」第一次
+# 可被 PromQL 问出来。词表是**封闭**的（见 api/routes/metrics.py 的 _HEALTH_REASONS，
+# 由 tests/test_host_health_reason_surface.py 绑回 agent 源码），否则告警选择器漏一个
+# 值就静默不告（#1257 的不存在标签选择器、#1958 的四周零指标同族）。
+host_health_reason = Gauge(
+    'stability_host_health_reason',
+    'Host health reasons reported by the agent heartbeat (1 = present)',
+    ['host_id', 'reason'],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+# #2957：上面那些 USB 判据**能不能真的读到内核日志**。Agent 以 `User=android` 运行、
+# 不在 adm/systemd-journal 组，实测非特权 `journalctl -k` 退出码 0 且 stdout 只有
+# `-- No entries --`——与「内核干净」同形；`dmesg_restrict=1` 又把 /dev/kmsg 与 dmesg
+# 两条备用路都堵死（本机实测 open 报 EPERM）。所以 reason 全 0 有两种截然相反的成因：
+# 「查过且干净」与「根本没查过」。本 gauge 把后者单独暴露，使「绿而空」不再是
+# 一种无法区分的状态。三态词表见 kernel_usb_faults.CHANNEL_STATES。
+host_kernel_log_channel = Gauge(
+    'stability_host_kernel_log_channel',
+    'Agent kernel-log channel availability per host (exactly one state = 1)',
+    ['host_id', 'state'],  # state: ok | unavailable | unknown
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
 # ============================================================================
 # Risk Classification Metrics
 # ============================================================================
