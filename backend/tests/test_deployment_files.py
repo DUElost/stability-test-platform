@@ -6,14 +6,36 @@ import subprocess
 import sys
 from pathlib import Path
 
+from tools.dev.source_anchor import SourceGuard
 
 ROOT = Path(__file__).resolve().parents[2]
+
+#: 否定断言前先证明「看的是同一份配置」——锚点一律编在**替代物**上（#2639 第七批）。
+_COMPOSE_REL = "docker-compose.yml"
+_COMPOSE_ENV_ANCHOR = "POSTGRES_PASSWORD: ${POSTGRES_PASSWORD"
+_NGINX_ASSETS_ANCHOR = "location /assets/"
+_FRONTEND_DOCKER_REL = "deploy/nginx/frontend-docker.conf"
+_UPSTREAM_ANCHOR = "http://server:8000"
+_HTTPS_CONF_REL = "deploy/control-plane/nginx/stability-platform-https.conf"
+_SERVER_NAME_ANCHOR = "<server-name>"
+_TLS_CERT_ANCHOR = "<tls-cert-path>"
+
+#: 两份部署文档用**不同**的根变量表达同一件事（checklist 用 `$STP_DEPLOY_ROOT`、runbook 用
+#: `$CONTROL_DIR`，实测彼此 0 命中），循环里的守卫因此必须按文件带锚点。缺项**必须红**：
+#: 没有锚点的循环判据就是恒真空守。
+_DOC_ANCHORS = {
+    "docs/production-minimum-deployment-checklist.md": "$STP_DEPLOY_ROOT",
+    "docs/preprod-drill-runbook.md": "$CONTROL_DIR",
+}
 
 
 def test_docker_compose_does_not_hardcode_postgres_password():
     compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
 
-    assert "POSTGRES_PASSWORD: password" not in compose
+    SourceGuard.of_repo_path(_COMPOSE_REL).anchored(_COMPOSE_ENV_ANCHOR).assert_absent(
+        "POSTGRES_PASSWORD: password",
+        why="口令只能来自 env：写进 compose 会随 diff 与镜像层外泄",
+    )
     assert "POSTGRES_PASSWORD: ${POSTGRES_PASSWORD" in compose
 
 
@@ -143,7 +165,12 @@ def test_nginx_templates_cache_hashed_assets_without_spa_fallback():
         assert 'Cache-Control "no-cache, no-store, must-revalidate"' in conf
         assert "location /assets/" in conf
         assert 'Cache-Control "public, max-age=31536000, immutable"' in conf
-        assert 'Cache-Control "public, max-age=31536000, immutable" always' not in conf
+        SourceGuard.of_repo_path(template.relative_to(ROOT).as_posix()).anchored(
+            _NGINX_ASSETS_ANCHOR
+        ).assert_absent(
+            'Cache-Control "public, max-age=31536000, immutable" always',
+            why="assets location 已带 immutable；再叠 always 会让 404 与变更后内容被长期缓存",
+        )
         assert "try_files $uri =404;" in conf
 
 
@@ -153,7 +180,10 @@ def test_frontend_docker_nginx_targets_server_service():
     ).read_text(encoding="utf-8")
 
     assert "http://server:8000" in nginx_conf
-    assert "http://backend:8000" not in nginx_conf
+    SourceGuard.of_repo_path(_FRONTEND_DOCKER_REL).anchored(_UPSTREAM_ANCHOR).assert_absent(
+        "http://backend:8000",
+        why="compose 里的服务名是 server；指 backend 会让前端容器反代到不存在的上游",
+    )
 
 
 def test_control_plane_template_verifier_passes():
@@ -177,8 +207,14 @@ def test_https_template_parameterizes_domain_and_certificate_paths():
 
     for placeholder in ("<server-name>", "<tls-cert-path>", "<tls-key-path>"):
         assert placeholder in conf
-    assert "stp.example.com" not in conf
-    assert "/etc/letsencrypt/live/" not in conf
+    SourceGuard.of_repo_path(_HTTPS_CONF_REL).anchored(_SERVER_NAME_ANCHOR).assert_absent(
+        "stp.example.com",
+        why="I2：域名只能占位，写死示例域名会让站点装机后指向别人的主机",
+    )
+    SourceGuard.of_repo_path(_HTTPS_CONF_REL).anchored(_TLS_CERT_ANCHOR).assert_absent(
+        "/etc/letsencrypt/live/",
+        why="I2：证书路径只能占位，写死 CA 目录等于假定站点用同一种证书来源",
+    )
 
 
 def test_deploy_docs_render_the_site_placeholders():
@@ -237,13 +273,20 @@ def test_deploy_docs_render_templates_instead_of_copying_them():
     for doc_path in docs:
         doc = doc_path.read_text(encoding="utf-8")
         assert "$STP_DEPLOY_ROOT" in doc or "$CONTROL_DIR" in doc
+        rel = doc_path.relative_to(ROOT).as_posix()
+        anchor = _DOC_ANCHORS.get(rel)
+        assert anchor, f"文档 {rel} 不在 per-file 锚点表里——新增被扫文档必须补锚点，否则判据变恒真"
+        guard = SourceGuard.of_repo_path(rel).anchored(anchor)
         for verbatim in (
             "cp deploy/control-plane/systemd/",
             "cp deploy/control-plane/nginx/",
             "cp deploy/control-plane/logrotate/",
             'cp "$CONTROL_DIR/deploy/control-plane/',
         ):
-            assert verbatim not in doc, f"{doc_path.name} 原样拷贝模板：{verbatim}"
+            guard.assert_absent(
+                verbatim,
+                why=f"#1256：{doc_path.name} 必须渲染模板而不是原样拷贝（否则 <deploy-root> 会落进 /etc）",
+            )
 
 
 def test_nginx_body_limit_covers_suite_upload_budget():

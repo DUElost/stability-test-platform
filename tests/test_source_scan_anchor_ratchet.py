@@ -287,7 +287,10 @@ class _TmpScope:
 
 #: 命中处数**下限**（不是现状计数）：判据被削弱时兜底，存量迁移不会撞红它。
 #: 取十位而不是贴现状：贴现状会逼每次迁移同时改两处，迟早改漏——双向收紧由 BASELINE 负责。
-SITE_FLOOR = 30
+#: 这里取 10 而不是 20：存量里有三类位点**本就不该迁**（不可变已发布脚本版本、
+#: 去注释后再判的预处理形态、无共同锚点的循环形态，合计约 11 处），地板应当落在
+#: 那份**永久残余**之下——这样它只在判据真被大面积削弱时响，而不是陪着每批迁移一路下调。
+SITE_FLOOR = 10
 
 #: 「产物路径轴」（口径轴二）已在判据内实现：读 `tmp_path`/临时目录下产物的位点**不算**源扫描，
 #: 故不再进本清单。三条边界（只认形参种子、逐位点放过、repo-fed 压过 tmp-rooted）与
@@ -302,8 +305,6 @@ BASELINE = frozenset(
         "backend/tests/services/test_agent_installer.py",  # 3
         "backend/tests/services/test_dedup_scan_merge.py",  # 1
         "backend/tests/services/test_job_log_signal.py",  # 1
-        "backend/tests/test_ci_and_test_harness_files.py",  # 5
-        "backend/tests/test_deployment_files.py",  # 6
         "tests/test_ansible_config_channel_2218.py",  # 1
         "tests/test_deploy_scripts.py",  # 3
         "tests/test_dev_bootstrap_seed.py",  # 1
