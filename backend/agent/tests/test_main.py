@@ -15,11 +15,11 @@ try:
     # 从真正的定义处导入 —— 否则 main.py 里那行「未使用」的 import 会被
     # lint 清掉,测试随之崩塌(2026-07 就这么炸过一次)。
     from backend.agent.api_client import complete_run
-    from backend.agent.main import HeartbeatThread
+    from backend.agent.heartbeat_thread import HeartbeatThread
     from backend.agent.startup_guards import ensure_adb_server_on_startup
 except ModuleNotFoundError:
     from agent.api_client import complete_run
-    from agent.main import HeartbeatThread
+    from agent.heartbeat_thread import HeartbeatThread
     from agent.startup_guards import ensure_adb_server_on_startup
 
 

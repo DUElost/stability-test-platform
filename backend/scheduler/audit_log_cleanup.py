@@ -125,26 +125,40 @@ def audit_log_cleanup_job() -> dict[str, int]:
             pruned["business"] = _prune_layer(
                 session, actions=None, cutoff=cutoffs["business"], limit=batch
             )
-        for name, count in pruned.items():
+        # 出了 `with session.begin()` 就是**已提交的既成事实**：下面任何失败都不能
+        # 再把返回值改写成「没删」。这是 #2789 记的那处对账矛盾的根——旧实现让
+        # 汇总审计的写入失败落到同一个外层 except，于是「行已删、指标已自增、
+        # 返回值与日志却说零」。
+        committed = dict(pruned)
+        for name, count in committed.items():
             if count:
                 audit_retention_pruned_total.labels(layer=name).inc(count)
-        if sum(pruned.values()):
-            # 汇总审计在裁剪事务**提交后**写（ADR-0049 D5）：它失败只丢一条
-            # 审计（record_audit 内部 savepoint 自兜底），不回滚已完成的裁剪。
-            record_audit(
-                session,
-                action=SUMMARY_ACTION,
-                resource_type="audit_log",
-                details={"pruned": dict(pruned), "days": days},
-            )
-            session.commit()
+        summary_audit_failed = False
+        if sum(committed.values()):
+            # ADR-0049 D5：汇总审计写在裁剪事务之后，失败只丢这一条审计，
+            # **不回滚**已完成的裁剪。所以它的异常必须就地接住，且要有自己的名字。
+            try:
+                record_audit(
+                    session,
+                    action=SUMMARY_ACTION,
+                    resource_type="audit_log",
+                    details={"pruned": dict(committed), "days": days},
+                )
+                session.commit()
+            except Exception:
+                session.rollback()   # 只回滚这一笔审计；删除在前一个事务里已提交
+                summary_audit_failed = True
+                logger.exception("audit_retention_summary_audit_failed")
         logger.info(
-            "audit_retention_pruned session=%d business=%d security=%d",
-            pruned["session"], pruned["business"], pruned["security"],
+            "audit_retention_pruned session=%d business=%d security=%d "
+            "summary_audit_failed=%s",
+            committed["session"], committed["business"], committed["security"],
+            int(summary_audit_failed),
         )
-        return pruned
+        return committed
     except Exception:
-        # 返回值只反映「已提交的删除」——事务内失败已回滚，恒报零。
+        # 走到这里说明**裁剪事务本身**没提交成功（已回滚）——此时报零才是诚实的。
+        # 已提交的删除永远不会走到这条分支。
         logger.exception("audit_log_cleanup_failed")
         return {"session": 0, "business": 0, "security": 0}
     finally:
