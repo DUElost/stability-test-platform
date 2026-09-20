@@ -8,9 +8,18 @@
   `DATABASE_URL` / `JWT_SECRET_KEY`（#2428），`agent-tests-collect` 也抓不到
   （2026-09-17 实测：注入越界 import 后仍 2130 全收集通过）。
 
-实测有 **14 个** agent 测试文件仍在 import 控制面模块。它们的收敛方式
-（迁移到 `backend/tests/` / 就地解耦 / 承认现状）**尚未裁决**，本守卫只做一件事：
-**冻结现状、不许新增**，并给每一个条目留下「为什么现在还允许」的说明。
+实测有 14 个 agent 测试文件仍在 import 控制面模块。收敛方式**已裁决**
+（2026-09-20，owner）：**分批迁移到 `backend/tests/` + 横跨契约文件就地解耦**。
+第一批已完成 7 个——迁移 5 个纯控制面文件（`test_adr0026_params` /
+`test_app_scheduler_executors` / `test_leader_election` / `test_logging_setup` /
+`test_socketio_redis_adapter` → `backend/tests/{core,scheduler,realtime}/`）、
+就地解耦 2 个横跨文件（`test_step_log_batching` 的控制面侧 2 例 →
+`backend/tests/realtime/test_step_log_ingest_contract.py`；`test_legacy_tool_cleanup`
+的跨包墓碑 2 例 → `backend/tests/test_legacy_tombstones.py`）。**当前剩 7 个**
+（大文件为主：`test_saq_scan_pipeline` 1287 行 / `test_cron_scheduler` 408 行），
+按同方向分批收敛。
+
+本守卫只做一件事：**冻结现状、不许新增**，并给每一个条目留下「为什么现在还允许」的说明。
 
 判据（四条）：
 
@@ -34,13 +43,8 @@ AGENT_TESTS_DIR = REPO_ROOT / "backend" / "agent" / "tests"
 
 #: 存量清单：文件名 → (允许的跨包 import 模块数, 说明)。**只减不增**。
 _CONTROL_PLANE_IMPORTS: dict[str, tuple[int, str]] = {
-    "test_adr0026_params.py": (1, "待裁决：ADR-0026 参数校验在控制面侧"),
     "test_aee_metadata.py": (1, "待裁决：aee_metadata 归控制面 core/"),
-    "test_app_scheduler_executors.py": (3, "待裁决：调度器执行器属控制面"),
     "test_cron_scheduler.py": (7, "待裁决：控制面 cron 调度（最大的一处）"),
-    "test_leader_election.py": (4, "待裁决：选主属控制面"),
-    "test_legacy_tool_cleanup.py": (4, "待裁决：清理面横跨 agent 与控制面"),
-    "test_logging_setup.py": (1, "待裁决：logging_setup 归控制面 core/"),
     "test_login_lockout.py": (2, "待裁决：登录锁定属控制面 auth"),
     "test_mtbf_suite.py": (1, "待裁决：mtbf_suite 属控制面 services/"),
     "test_p3_3_multi_instance.py": (3, "待裁决：多实例（SocketIO/调度）属控制面"),
@@ -49,8 +53,6 @@ _CONTROL_PLANE_IMPORTS: dict[str, tuple[int, str]] = {
         "**有意**：#738 的双端 parity 测试——它本来就该同时 import 两份实现",
     ),
     "test_saq_scan_pipeline.py": (5, "待裁决：SAQ/scan 链属控制面"),
-    "test_socketio_redis_adapter.py": (2, "待裁决：SocketIO Redis 适配属控制面"),
-    "test_step_log_batching.py": (2, "待裁决：批量上送契约横跨两侧"),
 }
 
 

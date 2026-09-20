@@ -34,5 +34,6 @@ realtime/scheduler/models/alembic/main）——Agent 部署在无控制面的主
 
 注意与测试面的区别：`backend/agent/tests/` 的 env 由 conftest 自供（#2428），
 测试里 import 控制面**不会**在干净环境炸掉——所以这条边界由**静态 AST 守卫**钉住。
-测试侧另有**只减不增**的清单棘轮（`tests/test_agent_test_import_ratchet.py`，
-当前 14 个文件）；收敛方式（迁移到 `backend/tests/` / 就地解耦）待裁决。
+测试侧另有**只减不增**的清单棘轮（`tests/test_agent_test_import_ratchet.py`）。
+收敛方式已裁决（2026-09-20）：分批迁移到 `backend/tests/` + 横跨契约文件就地解耦；
+第一批已完成 7 个（迁移 5 + 解耦 2），**当前剩 7 个**（批次与去向见棘轮文件抬头）。

@@ -142,20 +142,6 @@ def test_run_report_page_no_longer_lives_under_legacy_tasks_directory():
     router.assert_absent("../pages/tasks/RunReportPage", why="页面已迁到 runs 目录，回指 tasks 即路径腐化")
 
 
-def test_legacy_backend_task_schema_module_is_removed():
-    legacy_path = REPO_ROOT / "backend" / "api" / "schemas" / "task.py"
-    assert not legacy_path.exists(), f"legacy backend task schema module still present: {legacy_path}"
-
-    import backend.api as backend_api
-    from backend.api import schemas as api_schemas
-
-    assert "TaskCreate" not in backend_api.__dict__
-    assert "TaskDispatch" not in backend_api.__dict__
-    assert "TaskCreate" not in api_schemas.__dict__
-    assert "TaskDispatch" not in api_schemas.__dict__
-    assert "TaskOut" in api_schemas.__dict__
-
-
 def test_legacy_tasks_socket_refresh_path_is_removed():
     """旧 tasks 实时刷新链（后端广播 → 前端事件名 → 缓存键）不得复活。"""
     events = (
@@ -215,23 +201,9 @@ def test_watcher_summary_api_tests_do_not_reference_legacy_patrol_scripts():
     )
 
 
-def test_legacy_aee_script_names_use_single_shared_source():
-    from backend.agent.registry import script_registry
-    from backend.agent.aee import state_migration
-    from backend.api.routes import plans, scripts
-    from backend.core.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
-    from backend.services import script_catalog
-
-    assert plans.LEGACY_AEE_SCRIPT_NAMES is LEGACY_AEE_SCRIPT_NAMES
-    assert scripts.LEGACY_AEE_SCRIPT_NAMES is LEGACY_AEE_SCRIPT_NAMES
-    assert script_catalog.LEGACY_AEE_SCRIPT_NAMES is LEGACY_AEE_SCRIPT_NAMES
-    assert script_registry.LEGACY_AEE_SCRIPT_NAMES is LEGACY_AEE_SCRIPT_NAMES
-
-    assert "_LEGACY_AEE_SCRIPT_NAMES" not in plans.__dict__
-    assert "_LEGACY_AEE_SCRIPT_NAMES" not in scripts.__dict__
-    assert "_LEGACY_AEE_SCRIPT_NAMES" not in script_catalog.__dict__
-    assert "_LEGACY_AEE_SCRIPT_NAMES" not in script_registry.__dict__
-    assert not hasattr(state_migration, "migrate_legacy_aee_state_store")
+# `test_legacy_aee_script_names_use_single_shared_source`（跨包共享来源断言）
+# 与 `test_legacy_backend_task_schema_module_is_removed` 已随 #739 面① 迁出：
+# backend/tests/test_legacy_tombstones.py
 
 
 def test_agent_runtime_imports_without_backend_package():
