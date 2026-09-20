@@ -50,6 +50,9 @@ CI 侧同型调用点已在 #2790 修掉，探针这个调用点被漏。
 
 - `python -m pytest tests/test_abort_scale_probe_guards.py -q` → **8 passed**（守卫三态 +
   端到端入口 + 两条结构判据）；
+- `python -m pytest tests/test_source_scan_anchor_ratchet.py::test_offenders_equal_baseline_no_growth_no_staleness -q`
+  → **passed**（#2860 CI：`pr-agent-tests` repo_rc=1 曾因本文件裸 `assert … not in source`
+  增长棘轮 offender；已改为 `SourceGuard.of_repo_path(...).anchored(...).assert_absent(...)`）；
 - **4 条定向变异逐条回退即红**：去掉 `cmd_seed` 的守卫调用 → **2 failed**；守卫空集分支失效
   → **1 failed**；守卫提前 `return` 放行一切 → **3 failed**；重新引用 `failure_threshold`
   → **1 failed**；
@@ -60,6 +63,10 @@ CI 侧同型调用点已在 #2790 修掉，探针这个调用点被漏。
 （去掉守卫）时它真的去连了那个地址（因口令不符被拒，未触及数据）。已改为**未监听端口 5599**：
 守卫失效时得到的是「连接被拒」，而不是「打到疑似生产库」。**破坏性工具的测试夹具本身也必须
 遵守红线**——这条与「变异的锚点必须有判别力」同源，都是「测的是不是那件事」。
+
+**CI 自纠（#2897 / #2860）**：否定结构判据最初写成裸 `read_text` + `assert "failure_threshold" not in
+source`，触犯 #2639 棘轮（锚点漂移时恒真空守）。未放宽守卫、未扩 BASELINE——只把该断言迁到
+`SourceGuard.assert_absent`。
 
 ## Revisit
 

@@ -8,15 +8,12 @@ DELETE 同规模）。它的 run 腿有 `_require_local`（拒绝非回环控制
 """
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from tools.dev import abort_scale_probe as probe
+from tools.dev.source_anchor import SourceGuard
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-PROBE_SOURCE = REPO_ROOT / "tools" / "dev" / "abort_scale_probe.py"
-
+PROBE_REL = "tools/dev/abort_scale_probe.py"
 DEV_DSN = "postgresql+psycopg://stp:change-me-local@127.0.0.1:15432/stp_dev"
 
 
@@ -66,16 +63,19 @@ def test_probe_does_not_reference_removed_failure_threshold_column():
     探针的 `seed` 腿仍给它绑值会让 seed **当场崩**（`ArgumentError: Unconsumed column
     names`）——即整条 seed→run→cleanup 链不可用。CI 侧同型调用点已在 #2790 修掉，这条
     钉住探针这个调用点（removal 类迁移的消费面核对：tools/ 与 backend/ 都要查）。
+
+    源扫描否定断言走 SourceGuard（#2639）：锚点漂移时报「用例已过期」，不会恒真空守。
     """
-    source = PROBE_SOURCE.read_text(encoding="utf-8")
-    assert "failure_threshold" not in source, (
-        "探针又引用了已删除的列（#2843）；该列随 ADR-0048/#2734 移除，ORM insert 会直接抛错"
+    guard = SourceGuard.of_repo_path(PROBE_REL).anchored("def cmd_seed(")
+    guard.assert_absent(
+        "failure_threshold",
+        why="#2843：探针又引用已删列会让 seed 当场 ArgumentError",
     )
 
 
 def test_probe_seed_and_cleanup_call_the_guard_first():
     """结构判据：破坏性入口的**第一条语句**就是守卫（惰性 import 的 ORM 在它之后）。"""
-    source = PROBE_SOURCE.read_text(encoding="utf-8")
+    source = SourceGuard.of_repo_path(PROBE_REL).anchored("def _require_dev_db_target()").text
     for entry in ("def cmd_seed(", "def cmd_cleanup("):
         index = source.index(entry)
         body = source[index : index + 400]
