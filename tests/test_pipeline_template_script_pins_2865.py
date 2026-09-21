@@ -52,14 +52,40 @@ PINNED_SCRIPTS: dict[str, str] = {
 
 #: 故意钉旧/滞后豁免：action → (pin 版本, 理由+删除条件)。
 #: 理由必须可核查（引用 issue/账），删除条件必须可达（不是"以后再说"）。
-#: 09-21 清空：首批三条（ensure_root 1.0.1 / powercycle_setup 1.2.1 /
-#: gpu_setup 1.2.1）登记的删除条件是「部署跑过 scan、版本注册激活」，
-#: `--pending-activation` 实测已返回无待激活项 → 例外失去存续理由，
-#: pin 一次追至磁盘 head（8 处 / 7 模板）。
-#: 机制**不是**死代码，是滞后项唯一的显式出口：新增豁免往这里加一行即可，
-#: 但追平后守卫拒绝保留（判据抽成 `_exception_lag_reason`，空清单下由
-#: `test_exception_shape_predicate_has_teeth` 变异自证，不因清单为空而失牙）。
-EXCEPTIONS: dict[str, tuple[str, str]] = {}
+#: 09-21 #3044 已清空 ensure_root / gpu_setup / powercycle_setup@1.2.1 三条
+#: （scan 收口）并把 pin 追到当时已注册 head；判据抽成 `_exception_lag_reason`，
+#: 空清单下由 `test_exception_shape_predicate_has_teeth` 变异自证。
+#: 本 PR（#2975/#2979/#2980）又引入未 scan 的磁盘 head → 重登记下方例外；
+#: powercycle_setup 豁免版本跟 #3044 已追平的 1.2.2（disk head 现为 1.2.3）。
+EXCEPTIONS: dict[str, tuple[str, str]] = {
+    "script:powercycle_setup": (
+        "1.2.2",
+        "#2979：v1.2.3（prefs 删除判据改同源单探测）已合但 script 表无行"
+        "（#3044 已把 pin/例外追到已注册的 1.2.2）。删除条件：部署 scan 注册"
+        "激活 v1.2.3 后 pin 追平并移除本条。",
+    ),
+    "script:monkey_setup": (
+        "2.3.9",
+        "#2975：v2.3.10（步骤 metrics 聚合进顶层出口）已合 main 但 script 表无行"
+        "——scan 前 pin 未注册版 = monkey/巡逻模板新建 Plan 全 422。删除条件："
+        "scan 注册激活 v2.3.10 后 pin 追平并移除本条。",
+    ),
+    "script:gpu_finish": (
+        "1.0.6",
+        "#2980：v1.0.7（SIGTERM 处理器 + ≥24h 孤儿启动清扫）未注册进 script 表。"
+        "删除条件：部署 scan 注册激活 v1.0.7 后 pin 追平并移除本条。",
+    ),
+    "script:powercycle_finish": (
+        "1.0.5",
+        "#2980：v1.0.6（SIGTERM 处理器 + ≥24h 孤儿启动清扫）未注册进 script 表。"
+        "删除条件：部署 scan 注册激活 v1.0.6 后 pin 追平并移除本条。",
+    ),
+    "script:sleep_finish": (
+        "1.0.3",
+        "#2980：v1.0.4（SIGTERM 处理器 + ≥24h 孤儿启动清扫）未注册进 script 表。"
+        "删除条件：部署 scan 注册激活 v1.0.4 后 pin 追平并移除本条。",
+    ),
+}
 
 
 def _exception_lag_reason(version: str, reason: str, head: str) -> str | None:
