@@ -1,6 +1,6 @@
 # 执行协议契约（Execution Protocol）
 
-> **最后更新**：2026-09-21（§3 同步 ADR-0043 per-host 宽限时钟；该头部是**约定不自校验**，见文末备注）  
+> **最后更新**：2026-09-21（#3003 校准；§3 同步 ADR-0043 per-host 宽限时钟；该头部是**约定不自校验**，见文末备注）  
 > **关联**：主链路概览见 [`01-execution-pipeline.md`](./01-execution-pipeline.md)；实现见近期 migration `c8d9e0f1a2b3`、preflight `backend/scripts/migration/preflight_execution_protocol.py`；abort 时钟主体见 [`ADR-0043`](../adr/ADR-0043-abort-grace-subject-alignment.md)。
 
 本文记录 **PlanRun / Job / Agent** 的硬契约：状态机边界、abort、claim 门禁、snapshot 派发与 schema 约束。产品叙述级流程仍以 `01` 为准。

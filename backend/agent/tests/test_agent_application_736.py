@@ -69,8 +69,15 @@ def test_agent_application_run_wires_planes_and_loop():
 
 
 def test_run_agent_application_constructs_and_runs():
-    with patch.object(AgentApplication, "run") as run:
+    # #2961：入口先取单实例锁——本用例只验「构造 + run」的接线，故把守卫打桩，
+    # 免得在跑着开发态 Agent 的机器上取锁失败把整个 pytest 进程 sys.exit 掉。
+    # 守卫本身的判据在 test_agent_singleton_2961.py。
+    with (
+        patch("backend.agent.agent_application.enforce_single_instance") as lock,
+        patch.object(AgentApplication, "run") as run,
+    ):
         run_agent_application()
+    lock.assert_called_once()
     run.assert_called_once()
 
 
