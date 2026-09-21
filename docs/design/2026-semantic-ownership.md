@@ -145,7 +145,7 @@
 | `pipeline-action-model` | concept | Pipeline / `script:` action 唯一执行模型 | `docs/adr/ADR-0014-pipeline-execution-engine.md :: ### 执行模型` | 恢复 `shell:` 等旁路 |
 | `device-lease` | concept | Device Lease / fencing / 容量 | `docs/adr/ADR-0019-android-device-lease-and-capacity-scheduling.md :: ### 1. Device Lease 模型` | 改租约粒度或锁模型 |
 | `plan-run-scaling` | concept | PlanRun 准入队列与四层调度不变量 | `docs/adr/ADR-0026-plan-execution-scaling.md :: ### 2. 四条不可破坏的不变量` | 破坏 QUEUED/permit 不变量 |
-| `run-terminal-semantics` | concept | 执行终态语义（完成即绿等） | `docs/adr/ADR-0048-execution-status-semantics-v2.md :: ### D1 终态语义：完成即绿，abort 才红（owner 确认）` | 恢复通过率轴 |
+| `run-terminal-semantics` | concept | 执行终态语义（v1.1 三态：完成不判红、有失败=黄、abort=红） | `docs/adr/ADR-0048-execution-status-semantics-v2.md :: ### D1 终态语义：完成不判红，abort 才红（v1.1 三态，owner 确认）` | 重新引入阈值轴/设备失败判红 |
 | `script-content` | concept | 脚本内容 / sha 对账权威 | `docs/adr/ADR-0021-script-content-alignment-gate.md :: ### D4 — 平台 DB 是脚本内容唯一权威` | 改 D4 |
 | `script-runtime-catalog` | concept | 可派发 `(name, version)` 运行时权威 | `docs/adr/ADR-0033-tool-kit-ecosystem-integration.md :: ### D3：代码仓与工具资产包物理解耦（Manifest + Package Store）` | 第二套版本体系 |
 | `script-meta-freeze` | concept | `plan_snapshot` 步骤身份冻结面；非独立权威（**无** `script_meta` 键；inventory key 名保留） | `docs/adr/ADR-0021-script-content-alignment-gate.md :: ## 引用 / 关联` | 再称「唯一权威」或把假键写成第三权威 |
