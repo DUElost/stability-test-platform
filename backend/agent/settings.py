@@ -24,7 +24,7 @@ from functools import lru_cache
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from backend.agent.xhci_auto_rebind import parse_host_whitelist
+from .xhci_auto_rebind import parse_host_whitelist
 
 logger = logging.getLogger(__name__)
 
