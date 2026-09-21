@@ -49,6 +49,9 @@ from backend.services.jira_vendor import (
     load_vendor_tool_env,
     resolve_vendor_tool,
 )
+from backend.services.device_log_event_download import (
+    build_device_log_event_download_response,
+)
 from backend.services.plan_run_artifact_download import (
     build_plan_run_artifact_download_response,
 )
@@ -412,9 +415,22 @@ def download_plan_run_artifact(
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_active_user),
 ):
-    """PlanRunArtifact 下载（ADR-0033 Phase A3 / #3013）：scan/merge xls。"""
+    """PlanRunArtifact 下载（ADR-0033 Phase A3 / #3013）：scan/merge/extract_bundle。"""
     return build_plan_run_artifact_download_response(
         db, plan_run_id=run_id, artifact_id=artifact_id,
+    )
+
+
+@scan_router.get("/{run_id}/log-events/{event_id}/download")
+def download_plan_run_log_event(
+    run_id: int,
+    event_id: str,
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_active_user),
+):
+    """DLE remote_path 下载（#3013）：目录 zip / 单文件直出。"""
+    return build_device_log_event_download_response(
+        db, plan_run_id=run_id, event_id=event_id,
     )
 
 

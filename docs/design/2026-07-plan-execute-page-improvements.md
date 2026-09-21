@@ -82,7 +82,7 @@
 **文件**：`PlanExecutePage.tsx`
 
 1. 巡检周期/超时用 `formatDurationSeconds` 显示（步骤 0 meta 行、第 4 步卡片、预览弹窗）。
-2. `failure_threshold == null` 显示「未设置（按默认 5% 生效）」。
+2. ~~`failure_threshold == null` 显示「未设置（按默认 5% 生效）」~~——**已作废（ADR-0048，2026-09-18；#2992）**：该字段与「默认 5%」语义均已从 API 与快照移除；通过率展示见 ADR-0048 v1.1（前端从 `completed/total` 派生）。
 3. 第 4 步加「编辑 Plan」跳转 → `/orchestration/plans/{selectedPlanId}`。
 
 ### Phase 6（P3）：交互细节修缮
@@ -310,7 +310,7 @@ frontend/src/
 | **B1** | `DispatchCockpit` | 替 `PreviewDialog`；全宽面板；保留备注 C1、只读参数 C2、「编辑 Plan」 | 发起路径不回退瘦 Dialog |
 | **B2** | 按节点派发表 | 选中数 / `effective_slots` /「全部立即」或「N 立即 · M 将排队」；文案写明 = B4 增强，非准入 ETA | 超选节点黄字；缺槽位字段不估 |
 | **B3** | 墙钟参考 | 近 ≤5 次终态 Run 的 `started_at→ended_at` 均值；标注「整次耗时参考，长稳可能为天级」；样本不足显示「暂无」 | 不展示虚构开跑时钟 |
-| **B4** | 参数 ⓘ ⑨ | 巡检/超时/失败阈值旁 Tooltip（工程师语义） | hover 可读后果说明 |
+| **B4** | 参数 ⓘ ⑨ | 巡检/超时旁 Tooltip（工程师语义）；原先的「失败阈值」一项**已作废**（ADR-0048，2026-09-18：字段移除） | hover 可读后果说明 |
 
 #### 穿插小项（可随 A/B 带上）
 

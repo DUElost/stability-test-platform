@@ -657,7 +657,7 @@ tests:
           reason: usb_link_degraded
         exp_annotations:
           summary: Chronic USB link errors on one host (pre-death signature)
-          description: 该 host 最近一小时的内核日志里 USB 传输错误超阈（`error -71`/`error -110` 计数 ≥20，或 `Maybe the USB cable is bad?` ≥5）且持续 45m。这是**死亡前兆** 而不是死亡：#2900 的 .102 案例在 HC died 之前以每日 400~3700 行的速率风暴了 两周，全程零告警。窗口比主控死亡那条长（45m vs 5m），因为瞬态插拔抖动也会 命中阈值，而真实劣化会持续数小时到数天。处置：查线/查 hub 供电（SS 线松动、 劣质 hub、EMI 都是已知成因），别等它死——主控一死就只能 unbind/rebind。 同 host 若同时出现 StabilityHostUsbControllerDead，以那条为准（本条是前兆面）。
+          description: 该 host 最近一小时的内核日志里 USB 传输错误超阈（`error -71`/`error -110` 计数 ≥20，或 `Maybe the USB cable is bad?` ≥5）且持续 45m。**计数只取增量窗样本**：agent 重启时重跑的「整段 boot」累计不参与（#2978）——所以这条报的是「现在正在劣化」，不是「本 boot 曾经劣化」。这是**死亡前兆** 而不是死亡：#2900 的 .102 案例在 HC died 之前以每日 400~3700 行的速率风暴了 两周，全程零告警。窗口比主控死亡那条长（45m vs 5m），因为瞬态插拔抖动也会 命中阈值，而真实劣化会持续数小时到数天。处置：查线/查 hub 供电（SS 线松动、 劣质 hub、EMI 都是已知成因），别等它死——主控一死就只能 unbind/rebind。 同 host 若同时出现 StabilityHostUsbControllerDead，以那条为准（本条是前兆面）。
     - eval_time: 50m
       alertname: StabilityHostUsbControllerDead
       exp_alerts:
@@ -705,7 +705,7 @@ tests:
           severity: warning
         exp_annotations:
           summary: Kernel-log USB detector is structurally blind on most hosts
-          description: '过半（且 ≥5 台）在册 host 的 agent **读不到内核日志**，因此 #2900 的 `usb_host_controller_dead` / `usb_link_degraded` 这两条判据在它们身上 **永远不会命中**——上面两条告警此时是绿的，但绿色不代表已覆盖。 出口由 #2957 裁决：给 agent 用户 `systemd-journal` 组（权限扩张，需签字， 且 48 台都要重跑安装步骤）、改用零权限的结果层判据（`usb_tree_empty`， #2902；但它今天还需补一道「DB 里本来有设备」的合取才不会误报）、 或 sudoers 只放行 `journalctl -k -o cat` 这一条固定子命令（与 install_agent.sh 「提权面收敛为 wrapper 固定子命令」的先例同族）。 注意 `state="unknown"`（老 agent 未上报该字段）是**覆盖缺口**而不是本告警的 射程：它计入分母、不计入分子，避免 fleet 升级期间与 A/B/C 裁决混成一件事。'
+          description: '过半（且 ≥5 台）在册 host 的 agent **读不到内核日志**，因此 #2900 的 `usb_host_controller_dead` / `usb_link_degraded` 这两条判据在它们身上 **永远不会命中**——上面两条告警此时是绿的，但绿色不代表已覆盖。 出口由 #2957 裁决：给 agent 用户 `systemd-journal` 组（权限扩张，需签字， 且 48 台都要重跑安装步骤）、改用零权限的结果层判据（`usb_tree_empty`， #2902——其「DB 里本来有设备」合取已由下方 `StabilityHostUsbBlind`（#2967） 补上并接管失明 paging）、 或 sudoers 只放行 `journalctl -k -o cat` 这一条固定子命令（与 install_agent.sh 「提权面收敛为 wrapper 固定子命令」的先例同族）。 注意 `state="unknown"`（老 agent 未上报该字段）是**覆盖缺口**而不是本告警的 射程：它计入分母、不计入分子，避免 fleet 升级期间与 A/B/C 裁决混成一件事。'
   - interval: 10m
     input_series:
     - series: stability_host_kernel_log_channel{host_id="192-0-2-30", state="unavailable"}
@@ -767,3 +767,67 @@ tests:
   # 只有 4 台 unavailable（绝对下限 5 未达）⇒ 不亮；
   # 6 台 unavailable + 11 台 unknown ⇒ 不亮（老 agent 未上报字段计入分母而不计入
   # 分子：升级期内既不会伪报「全 fleet 已覆盖」，也不会把「还没升」误判成「读不到」）。
+
+  # ---- #2967 StabilityHostUsbBlind：结果层失明合取的三态 ----
+  # fire：tree_empty ∧ 账上 12 台离线设备（.102 死亡窗离线回放形状）；
+  # not-fire（钉子 1）：空柜机（.91 型）tree_empty 但设备零落账（无 adb_state series）；
+  # not-fire（钉子 2）：热更重启瞬态 tick（.61 型，09-21 实测）空树 10min 后清除，
+  #                    for:15m 吸收。eval_time:30m 的 exp_alerts 是对全体 host 的断言，
+  #                    两台钉子机若误亮会连带 fire 断言一起红。
+  - interval: 1m
+    input_series:
+    - series: stability_host_health_reason{host_id="192-0-2-102", reason="usb_tree_empty"}
+      values: 1x600
+    - series: stability_host_device_adb_state{host_id="192-0-2-102", state="offline"}
+      values: 12x600
+    - series: stability_host_health_reason{host_id="192-0-2-91", reason="usb_tree_empty"}
+      values: 1x600
+    - series: stability_host_health_reason{host_id="192-0-2-61", reason="usb_tree_empty"}
+      values: 0x1 1x10 0x490
+    - series: stability_host_device_adb_state{host_id="192-0-2-61", state="device"}
+      values: 20x600
+    alert_rule_test:
+    - eval_time: 10m
+      alertname: StabilityHostUsbBlind
+      exp_alerts: []
+    - eval_time: 30m
+      alertname: StabilityHostUsbBlind
+      exp_alerts:
+      - exp_labels:
+          severity: critical
+          host_id: 192-0-2-102
+          reason: usb_tree_empty
+        exp_annotations:
+          summary: Host USB is blind while the platform ledger still has devices on it
+          description: "结果层判据（#2967：#2957 权限僵局期间的失明 paging）：agent 报 USB 树空 （lsusb 只剩 root hub ∧ 一台设备都没发现），但该 host 的 `device` 账上 仍有设备行——xHCI 主控死亡（`HC died`，不自愈）或 hub 供电/链路整体掉线 的形状。SSH 与心跳照常、产能静默归零（fleet 实测失明窗 7~11 天： 8.87 / .102 / .63）。处置：按 triage.md L1 取证——agent 通道恒 UNKNOWN （#2957），需 `sudo journalctl -k | grep -E 'xhci|HC died'`；空闲窗 （active_jobs=0）后用 xHCI unbind/rebind 救回（8.87 文档 §3.1； .63 实测 20s/23-23、.102 实测 20s/11-11），reboot 兜底。**不要自动 rebind**（门控自愈见 #2972，勿在告警处置里顺手做）。若确认该机柜已撤线 （设备行全是 ghost），清账关闭本告警，而不是给本规则加静音条件。"
+  # ---- #2959 连接槽耗尽 / 池排队超时：真实 kind 标签各喂一条 ----
+  # 样本用的 kind 值必须与 backend/core/metrics.py 的白名单一致，否则规则会"看着有场景、
+  # 实际选了代码不会产出的标签值"（#1257 形态）。两条分别用 async / sync 侧，
+  # 顺带钉住「alert 保留 engine 标签」——定位时要一眼看出是哪个池。
+  - interval: 1m
+    input_series:
+    - series: stability_db_pool_checkout_failures_total{engine="async", kind="slots_exhausted"}
+      values: 0+1x20
+    - series: stability_db_pool_checkout_failures_total{engine="sync", kind="timeout"}
+      values: 0+1x20
+    alert_rule_test:
+    - eval_time: 20m
+      alertname: StabilityDbConnectionSlotsExhausted
+      exp_alerts:
+      - exp_labels:
+          engine: async
+          kind: slots_exhausted
+          severity: warning
+        exp_annotations:
+          summary: PostgreSQL rejected new connections (too_many_connections, SQLSTATE 53300)
+          description: 控制面取连接时收到 PG 拒绝新建连接。先分清占满槽的是谁：非超级用户可用 = max_connections − superuser_reserved（当前 100 − 3 = 97），而应用侧 sync/async 两个池各自上限 90、合计 180 已超过它（ADR-0047 D1/D2 未裁决）； 同机 ad-hoc 诊断会话与批量终态化波次（abort / 超时收尾）都是尖峰来源。 本告警只负责"发生过的没人知道"这件事，不代裁容量方向。 池内排队超时是另一条 StabilityDbPoolCheckoutTimeout。
+    - eval_time: 20m
+      alertname: StabilityDbPoolCheckoutTimeout
+      exp_alerts:
+      - exp_labels:
+          engine: sync
+          kind: timeout
+          severity: warning
+        exp_annotations:
+          summary: SQLAlchemy QueuePool checkout timed out (pool saturated)
+          description: 有请求在池内排队到 pool_timeout 仍没拿到连接。与上一条的区别是关键： 这条说明**池自身**已饱和（PG 未必满）；先查谁长期持有连接—— singleton 调度任务在长事务里取连接、或保留清理/NFS 回收这类慢 I/O 夹在 事务中间（#703 已修 leader election 一处，同类形态可再核）。 注意 pool_timeout 目前未显式设置（SQLAlchemy 默认 30s），所以触发时 调用方多半已经等了 30s：用户侧表现为卡顿而非快速失败，这是 ADR-0047 D2 要裁决的"失败形态"，不是本告警能替代的。

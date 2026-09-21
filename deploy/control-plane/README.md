@@ -14,27 +14,48 @@
   `DATABASE_URL is not set and <repo>/.env.backend has no DATABASE_URL`。
 - 端口：默认 `127.0.0.1:8000`（仅本机回环；对外由 nginx 代理）。
 
-## 启动
+## 启动：systemd 常驻（默认路径）
+
+单元模板就在本目录 `systemd/stability-backend.service`，由站点安装器渲染到
+`/etc/systemd/system/`（渲染面见 `tools/site_config/plan.py`；同目录另有 `-migrate` /
+`-nomigrate` 两个变体）。启动用：
 
 ```bash
-cd <repo>            # 例如 /home/debian13/stability-test-platform
-venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8000
+sudo systemctl start stability-backend
+journalctl -u stability-backend -f
 ```
 
-长期运行时以后台方式起（nohup 或 systemd 均可）。**当前部署是手工拉起的前台/后台进程**
-（`ps -ef | grep uvicorn` 可见 `PPID=1`），仓库内没有启动脚本。
+单元自带三道 `ExecStartPre`，**手工起进程一道都不会跑**：
+
+| 前置 | 是否阻断 | 拦的是谁 |
+|---|---|---|
+| `alembic upgrade head` | 阻断 | 库停在旧 schema |
+| `tools/dev/check_alembic_at_head.py` | **硬**阻断（#1882） | 代码超前于库——带病 500 对外服务 |
+| `tools/dev/check-deploy-source.sh` | 带 `-` 前缀＝不阻断 | 部署源不是 `main` / 工作区脏（runbook 在部署动作前显式跑它） |
+
+并有 `StartLimitIntervalSec=300` / `StartLimitBurst=3`（#2058）：守卫一红会停在稳定
+`failed`，而不是 `Restart=always` 每 5s 重跑「upgrade + 守卫」把真因埋在 `activating` 里。
+
+手工 `venv/bin/uvicorn …` 只用于**没有该单元的开发机**（`cd <repo> && venv/bin/uvicorn
+backend.main:app --host 127.0.0.1 --port 8000`）；在生产机上它等于绕过上面整张表。
+
+> 沿革：本文件曾自述「当前部署是手工拉起的前台/后台进程，仓库内没有启动脚本」——已过期
+> （#2997）。仓库里既有单元模板也有渲染器，两份 runbook
+> （`docs/operations/2026-08-29-post-review-deploy-runbook.md`、`docs/preprod-drill-runbook.md`）
+> 用的都是 `systemctl`。
 
 ## 重启（推进代码后必做）
 
 ```bash
 # 1) 确认不在写操作高峰（重启窗口内接口会短暂不可用）
-# 2) 记录当前进程
-ps -ef | grep "[u]vicorn backend.main:app"
-# 3) 停止后重新启动
-kill <pid>
-cd <repo> && venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8000 &
-# 4) 复核（见「验证」）
+sudo systemctl restart stability-backend
+# 2) 复核（见「验证」）
+systemctl is-active stability-backend && journalctl -u stability-backend -n 50
 ```
+
+**不要再用 `kill <pid>` + `nohup uvicorn … &`**：那条路径同时绕过 #1882 的 schema 对齐硬门禁
+与 #2058 的 start-limit 保护——正是本文件「两个坑」想避免的那类事故。旧文档里
+「`PPID=1` 说明它是后台进程」只是 nohup 的副作用，不是它看起来正常的理由。
 
 > 自动合并队列与 CI 都跑在 GitHub 侧，**不受控制面重启影响**。
 
