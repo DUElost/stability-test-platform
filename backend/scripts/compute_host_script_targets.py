@@ -5,7 +5,7 @@
 「脚本版本生效」现有账都只看 DB / 部署树；run 作用域的 host 侧核验
 （`backend/services/admission_pump.py` 的 `_verify_scripts_phase`）只在派发时覆盖
 「本 run 的 host × 本 run 快照」，维护窗 / 近期无 run 的 host 无账（#2958 实证：
-`172.21.15.89` 缺 3 个版本目录而 DB 面全绿）。
+`172.21.x.x` 缺 3 个版本目录而 DB 面全绿）。
 
 本工具**只读**计算「每台 host 预期会用到哪些 (族, 版本)」= **可达集**，以及相对
 **全集**的差集（`n_a`：全集有、该 host 不会跑到 → 不判红）。它是第五道闸的输入面；
@@ -29,7 +29,7 @@ host 侧核验复用既有 `verify_scripts` RPC（见 #2958 评论的落库方�
 用法:
     python -m backend.scripts.compute_host_script_targets
     python -m backend.scripts.compute_host_script_targets --json
-    python -m backend.scripts.compute_host_script_targets --host 172.21.15.89 --detail
+    python -m backend.scripts.compute_host_script_targets --host 172.21.x.x --detail
     python -m backend.scripts.compute_host_script_targets --only-gaps --days 7
     python -m backend.scripts.compute_host_script_targets --full
 """
