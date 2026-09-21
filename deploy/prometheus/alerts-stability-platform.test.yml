@@ -705,7 +705,7 @@ tests:
           severity: warning
         exp_annotations:
           summary: Kernel-log USB detector is structurally blind on most hosts
-          description: '过半（且 ≥5 台）在册 host 的 agent **读不到内核日志**，因此 #2900 的 `usb_host_controller_dead` / `usb_link_degraded` 这两条判据在它们身上 **永远不会命中**——上面两条告警此时是绿的，但绿色不代表已覆盖。 出口由 #2957 裁决：给 agent 用户 `systemd-journal` 组（权限扩张，需签字， 且 48 台都要重跑安装步骤）、改用零权限的结果层判据（`usb_tree_empty`， #2902；但它今天还需补一道「DB 里本来有设备」的合取才不会误报）、 或 sudoers 只放行 `journalctl -k -o cat` 这一条固定子命令（与 install_agent.sh 「提权面收敛为 wrapper 固定子命令」的先例同族）。 注意 `state="unknown"`（老 agent 未上报该字段）是**覆盖缺口**而不是本告警的 射程：它计入分母、不计入分子，避免 fleet 升级期间与 A/B/C 裁决混成一件事。'
+          description: '过半（且 ≥5 台）在册 host 的 agent **读不到内核日志**，因此 #2900 的 `usb_host_controller_dead` / `usb_link_degraded` 这两条判据在它们身上 **永远不会命中**——上面两条告警此时是绿的，但绿色不代表已覆盖。 出口由 #2957 裁决：给 agent 用户 `systemd-journal` 组（权限扩张，需签字， 且 48 台都要重跑安装步骤）、改用零权限的结果层判据（`usb_tree_empty`， #2902——其「DB 里本来有设备」合取已由下方 `StabilityHostUsbBlind`（#2967） 补上并接管失明 paging）、 或 sudoers 只放行 `journalctl -k -o cat` 这一条固定子命令（与 install_agent.sh 「提权面收敛为 wrapper 固定子命令」的先例同族）。 注意 `state="unknown"`（老 agent 未上报该字段）是**覆盖缺口**而不是本告警的 射程：它计入分母、不计入分子，避免 fleet 升级期间与 A/B/C 裁决混成一件事。'
   - interval: 10m
     input_series:
     - series: stability_host_kernel_log_channel{host_id="192-0-2-30", state="unavailable"}
@@ -893,6 +893,38 @@ tests:
               summary: Script presence ledger is stale or missing
               description: >-
                 脚本在位账本两天没有完整刷新（`stability_script_presence_sweep_timestamp` 是最近一轮里最旧一行的观测时刻），或指标根本没出现——两种形态都意味着 `StabilityHostScriptPresenceGap` 的绿色**不可信**（绿而空，同 #2900/#2984）。 常见成因：迁移未跑（表不存在）、`SCRIPT_PRESENCE_SWEEP_CRON` 被清空、 或 sweep 作业连续失败（看 `stability_apscheduler_job_runs_total{job_name="script_presence_sweep",outcome="error"}`）。
+  # ---- #2967 StabilityHostUsbBlind：结果层失明合取的三态 ----
+  # fire：tree_empty ∧ 账上 12 台离线设备（.102 死亡窗离线回放形状）；
+  # not-fire（钉子 1）：空柜机（.91 型）tree_empty 但设备零落账（无 adb_state series）；
+  # not-fire（钉子 2）：热更重启瞬态 tick（.61 型，09-21 实测）空树 10min 后清除，
+  #                    for:15m 吸收。eval_time:30m 的 exp_alerts 是对全体 host 的断言，
+  #                    两台钉子机若误亮会连带 fire 断言一起红。
+  - interval: 1m
+    input_series:
+    - series: stability_host_health_reason{host_id="192-0-2-102", reason="usb_tree_empty"}
+      values: 1x600
+    - series: stability_host_device_adb_state{host_id="192-0-2-102", state="offline"}
+      values: 12x600
+    - series: stability_host_health_reason{host_id="192-0-2-91", reason="usb_tree_empty"}
+      values: 1x600
+    - series: stability_host_health_reason{host_id="192-0-2-61", reason="usb_tree_empty"}
+      values: 0x1 1x10 0x490
+    - series: stability_host_device_adb_state{host_id="192-0-2-61", state="device"}
+      values: 20x600
+    alert_rule_test:
+    - eval_time: 10m
+      alertname: StabilityHostUsbBlind
+      exp_alerts: []
+    - eval_time: 30m
+      alertname: StabilityHostUsbBlind
+      exp_alerts:
+      - exp_labels:
+          severity: critical
+          host_id: 192-0-2-102
+          reason: usb_tree_empty
+        exp_annotations:
+          summary: Host USB is blind while the platform ledger still has devices on it
+          description: "结果层判据（#2967：#2957 权限僵局期间的失明 paging）：agent 报 USB 树空 （lsusb 只剩 root hub ∧ 一台设备都没发现），但该 host 的 `device` 账上 仍有设备行——xHCI 主控死亡（`HC died`，不自愈）或 hub 供电/链路整体掉线 的形状。SSH 与心跳照常、产能静默归零（fleet 实测失明窗 7~11 天： 8.87 / .102 / .63）。处置：按 triage.md L1 取证——agent 通道恒 UNKNOWN （#2957），需 `sudo journalctl -k | grep -E 'xhci|HC died'`；空闲窗 （active_jobs=0）后用 xHCI unbind/rebind 救回（8.87 文档 §3.1； .63 实测 20s/23-23、.102 实测 20s/11-11），reboot 兜底。**不要自动 rebind**（门控自愈见 #2972，勿在告警处置里顺手做）。若确认该机柜已撤线 （设备行全是 ghost），清账关闭本告警，而不是给本规则加静音条件。"
   # ---- #2959 连接槽耗尽 / 池排队超时：真实 kind 标签各喂一条 ----
   # 样本用的 kind 值必须与 backend/core/metrics.py 的白名单一致，否则规则会"看着有场景、
   # 实际选了代码不会产出的标签值"（#1257 形态）。两条分别用 async / sync 侧，

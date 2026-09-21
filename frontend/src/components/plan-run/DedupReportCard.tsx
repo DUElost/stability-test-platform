@@ -39,6 +39,7 @@ const REASON_SUFFIX: Record<string, string> = {
 const TYPE_LABELS: Record<string, string> = {
   scan_result_xls: 'Scan',
   merge_result_xls: 'Merge',
+  extract_bundle: 'Extract / Jira 包',
 };
 
 function formatSize(bytes?: number | null): string {
