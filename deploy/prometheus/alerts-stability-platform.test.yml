@@ -431,6 +431,33 @@ tests:
         alertname: StabilitySkillUsageHollow
         exp_alerts: []
 
+  # #2977：缺源（unknown=1）时即便 hollow>0 也不得报 Hollow——只走 Untrusted。
+  - interval: 1m
+    input_series:
+      - series: 'stp_skill_usage_hollow'
+        values: '3x12100'
+      - series: 'stp_skill_usage_broken'
+        values: '0x12100'
+      - series: 'stp_skill_usage_unknown'
+        values: '1x12100'
+      - series: 'stp_skill_usage_last_run'
+        values: '99999999999x12100'
+    alert_rule_test:
+      - eval_time: 170h
+        alertname: StabilitySkillUsageHollow
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: StabilitySkillUsageUntrusted
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: skill 用量探针不可信（崩溃／源不可得／停摆）
+              description: >-
+                broken=1（探针自身异常）、unknown=1（强信号源不在场，洞数未知）或 last_run
+                超过 48 小时未更新／指标消失。此时 hollow 的读数没有意义：先修探针或确认转录源
+                仍在（--home 指向的部署用户家目录），并确认 stp-skill-usage.timer 在跑。
+
   # #2394①/#2252 回归防线场景（覆盖两条新告警；host 标签形状取自
   # backend/core/metrics.py 的注册表定义）。
   - interval: 1m
@@ -536,12 +563,15 @@ tests:
             需裁决，见 #2754 / #722）。
 
   # ---- #2909③ StabilityChainCoverageGap ----
+  # 样本必须**覆盖到第二个 eval_time 之后**：series 在 t=59m 结束而 eval 在 65m，
+  # 超过 Prometheus 的 5 分钟 staleness 窗口 ⇒ 表达式取空、`got:[]`
+  # （promtool 3.13.3 报「exp 有 / got 空」；本机 2.53.3 容忍，见 #2970 的 Note）。
   - interval: 1m
     input_series:
       - series: 'stability_chain_coverage_devices{kind="online_total"}'
-        values: '600x60'
+        values: '600x70'
       - series: 'stability_chain_coverage_devices{kind="gap_missing"}'
-        values: '90x60'
+        values: '90x70'
     alert_rule_test:
       - eval_time: 59m
         alertname: StabilityChainCoverageGap

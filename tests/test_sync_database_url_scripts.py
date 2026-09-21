@@ -25,6 +25,7 @@ NEEDS_HELPER = "create_engine(normalize_sync_database_url("
 HELPER_SITES = (
     "backend/scripts/check_seed_identity.py",
     "backend/scripts/check_unreferenced_script_versions.py",
+    "backend/scripts/compute_host_script_targets.py",
     "tools/dev/backfill-no-scan-gate-upload-state.py",
     "tools/dev/backfill-test-project.py",
     "tools/dev/retire_script_versions.py",

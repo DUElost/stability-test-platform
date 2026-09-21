@@ -137,9 +137,13 @@ Agent 侧的挂载在这些站点由运维按分享约定自行完成，S5 对�
   能产生样本的规则；平台全量规则 `deploy/prometheus/alerts-stability-platform.yml` 留给
   控制面自己的挂载路径，见 [README](./README.md) 的可观测性一节；由 `prometheus.yml` 的
   `rule_files` 段加载，两者缺一规则就只是文件）；
-- **S4**：落地宿主进程内存采样器（`/usr/local/sbin/stp-mem-top` + `stp-mem-top.timer`）与
+- **S4**：落地宿主进程内存采样器（`/usr/local/sbin/stp-mem-top` + `stp-mem-top.timer`）、
   **退役判据守卫**（`stp-script-guard.{service,timer}`，每日 09:30 跑 `--guard`、落 textfile
-  指标，见 [script-versioning](../development/script-versioning.md)），
+  指标，见 [script-versioning](../development/script-versioning.md)）与 **skill 用量探针**
+  （`stp-skill-usage.{service,timer}`，每周一 09:30 跑
+  `tools/dev/skill_usage_probe.py --home /home/<deploy-user> --deploy-root <deploy-root>`，
+  root 跑、写 textfile 指标并供两条 `StabilitySkillUsage*` 规则消费——执行者与退出码契约见
+  [README](./README.md) 可观测性一节），
   `enable --now` 相应单元，并实测 `http://127.0.0.1:<端口>/-/ready` 才报 PASS。
   （PG 猜 schema 指纹采集 `stp-pg-guard.{service,timer}` **不在站点安装面**：它读 PG
   服务日志、只在**控制面宿主**上有意义，站点装了也扫不到任何东西——#2788 纠正了此处
