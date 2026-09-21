@@ -20,6 +20,13 @@
     skipped   源文件含无法由本机事实确定的占位符（`<site-id>`、`<prometheus-port>`…）
     source-missing  清单指向的仓库源文件不存在（清单与仓库脱节）⇒ **无从比对，计入 EXIT_UNKNOWN**
                     （#2800：此前记为 SKIPPED、全 SKIP 仍 exit 0，与本文件自己的退出码契约矛盾）
+
+**源随落点定，不随清单名定（#2985）**：同一个 `etc/…/alerts-stability-platform.yml` 在两种
+宿主上是**两份不同的东西**——站点装的是 `site-alerts.yml` 子集（installer 渲染），存量控制面
+宿主放的是 `alerts-stability-platform.yml` 平台全量**人工副本**（原样拷贝、不渲染）。若拿清单里
+的站点源去比存量宿主上的平台副本，该资产恒报 DRIFT（判别力退化成常亮灯）、补救提示还指向一个
+本机不会加载的落点。故存量兜底落点自带事实源、比对口径与补救路径（见 ``LEGACY_FALLBACKS``），
+比对与提示都用**实际用的那份源**（输出字段 ``source_used``）。
 """
 from __future__ import annotations
 
@@ -29,6 +36,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
@@ -36,13 +44,40 @@ if str(REPO_ROOT) not in sys.path:
 
 from tools.site_config.stages import monitoring_artifacts  # noqa: E402
 
+class LegacyFallback(NamedTuple):
+    """存量（installer 之前）部署的兜底落点及其**专属事实源/比对口径/补救路径**。
+
+    `source`：该落点上实际运行的那份仓库源。同名不同物时（#2985）必须按落点换源；
+    None = 与清单源同源（改名不改物，如 `prometheus.yml`）。
+    `remedy`：该落点专用的补救路径；None = 用 ``DEFAULT_REMEDY``。
+    `render`：期望内容是否按 installer 的替换集渲染。False = **人工副本**口径：
+    逐字节等于仓库源本身（副本靠人手抄，不经过渲染；#2985 实测本机那份就是原样拷贝）。
+    """
+
+    destination: str
+    source: str | None = None
+    remedy: str | None = None
+    render: bool = True
+
+
+DEFAULT_REMEDY = "改仓库 + 重跑安装，不要手改站点副本"
+
 #: 存量部署（installer 之前的机器）使用的发行版落点。本机就没有 `/etc/stp/`，
 #: Prometheus 直接读 `/etc/prometheus/prometheus.yml`——只认 installer 路径会让这类
 #: 机器永远「全部 absent」，检测退化成零信息。顺序：本站资产路径优先，发行版兜底。
 LEGACY_FALLBACKS = {
-    "etc/stp/prometheus/prometheus.yml": "etc/prometheus/prometheus.yml",
-    "etc/stp/prometheus/rules/alerts-stability-platform.yml": (
-        "etc/prometheus/rules/alerts-stability-platform.yml"),
+    "etc/stp/prometheus/prometheus.yml": LegacyFallback("etc/prometheus/prometheus.yml"),
+    # #2985：控制面宿主的同名副本是**平台全量**（人工重放 + `POST /-/reload`，
+    # ADR-0011 正式挂载未落地，见 docs/operations/README.md §6）——与站点安装的子集
+    # 同名不同物，源/比对口径/补救都必须跟着落点走（原先比站点源、按渲染后的期望判，
+    # 对原样拷贝的平台副本恒报 DRIFT 且补救落点不生效）。
+    "etc/stp/prometheus/rules/alerts-stability-platform.yml": LegacyFallback(
+        "etc/prometheus/rules/alerts-stability-platform.yml",
+        source="deploy/prometheus/alerts-stability-platform.yml",
+        remedy="改上面这份仓库源后**重放控制面副本**并 POST /-/reload"
+               "（人工副本按原样拷贝，重跑站点安装不会更新它；ADR-0011 正式挂载未落地）",
+        render=False,
+    ),
 }
 
 #: 能由本机/仓库事实唯一确定的占位符；其余一律 skipped，不猜。
@@ -152,43 +187,63 @@ def candidate_paths(destination: str) -> list[str]:
     paths = [destination]
     legacy = LEGACY_FALLBACKS.get(destination)
     if legacy:
-        paths.append(legacy)
+        paths.append(legacy.destination)
     return paths
 
 
 def inspect(
     system_root: Path, deploy_root: Path, repo_root: Path = REPO_ROOT, deploy_user: str = ""
 ) -> list[dict]:
-    """逐资产比对。返回 [{source,destination,hit,state,detail}]，顺序与清单一致。"""
+    """逐资产比对。返回 [{source,source_used,destination,hit,state,detail,remedy}]，顺序与清单一致。"""
     results: list[dict] = []
     for source_rel, dest_rel, _mode in monitoring_artifacts():
         entry: dict = {"source": source_rel, "destination": dest_rel, "hit": None,
-                       "state": ABSENT, "detail": ""}
-        src = repo_root / source_rel
+                       "state": ABSENT, "detail": "", "source_used": source_rel,
+                       "remedy": DEFAULT_REMEDY}
+        hit_rel = next((rel for rel in candidate_paths(dest_rel)
+                        if (system_root / rel).is_file()), None)
+        # 命中的是存量兜底落点 ⇒ 事实源/比对口径/补救路径都随落点换（#2985）。
+        render = True
+        if hit_rel is not None and hit_rel != dest_rel:
+            fallback = LEGACY_FALLBACKS.get(dest_rel)
+            if fallback is not None:
+                if fallback.source:
+                    entry["source_used"] = fallback.source
+                if fallback.remedy:
+                    entry["remedy"] = fallback.remedy
+                render = fallback.render
+        src = repo_root / entry["source_used"]
         if not src.is_file():
             # #2800：源缺失是「无从比对」，不是「跳过」——漂移检测最该响的形态之一
             # （改了仓库/移动了文件、清单没跟上），静默 exit 0 会让 check-deploy-source
             # 照常打「一致」。
             entry.update(state=SOURCE_MISSING,
-                         detail="仓库源文件不存在（清单与仓库已脱节，无从比对）")
+                         detail=f"仓库源文件不存在（{entry['source_used']}；"
+                                "清单与仓库已脱节，无从比对）")
             results.append(entry)
             continue
-        want = expected_text(src, deploy_root, deploy_user)
-        # 残余占位符要在**替换之后**判：先判会把已可确定的（如 <prometheus-retention>
-        # 取 installer 常量）也算成不可确定，资产被误记 SKIP、检测面静默变小（实测踩过）。
-        residual = _UNKNOWN_PLACEHOLDER.findall(want)
-        hit = next((system_root / rel for rel in candidate_paths(dest_rel)
-                    if (system_root / rel).is_file()), None)
-        if hit is None:
+        if render:
+            want = expected_text(src, deploy_root, deploy_user)
+            # 残余占位符要在**替换之后**判：先判会把已可确定的（如 <prometheus-retention>
+            # 取 installer 常量）也算成不可确定，资产被误记 SKIP、检测面静默变小（实测踩过）。
+            residual = _UNKNOWN_PLACEHOLDER.findall(want)
+        else:
+            # 人工副本口径（#2985）：占位符原样保留就是它的事实形态，逐字节等于仓库源
+            # 才是「副本 == 事实源」这条不变量的直接判据；不参与占位符判定。
+            want = src.read_text(encoding="utf-8")
+            residual = []
+        if hit_rel is None:
             entry.update(detail=f"落点不存在（候选：{', '.join(candidate_paths(dest_rel))}）")
         elif residual:
-            entry.update(hit=str(hit.relative_to(system_root)), state=SKIPPED,
+            entry.update(hit=hit_rel, state=SKIPPED,
                          detail=f"源含不可由本机确定的占位符 {sorted(set(residual))}")
         else:
-            got = hit.read_text(encoding="utf-8", errors="replace")
-            entry.update(hit=str(hit.relative_to(system_root)),
+            got = (system_root / hit_rel).read_text(encoding="utf-8", errors="replace")
+            entry.update(hit=hit_rel,
                          state=MATCH if got == want else DRIFT,
-                         detail="" if got == want else "内容与仓库渲染结果不一致")
+                         detail="" if got == want else (
+                             "内容与仓库渲染结果不一致" if render
+                             else "内容与仓库源不一致（人工副本须与原样拷贝逐字节相同）"))
         results.append(entry)
     return results
 
@@ -250,11 +305,14 @@ def main(argv: list[str] | None = None) -> int:
         where = item["hit"] or item["destination"]
         print(f"  [{mark:5s}] {where}" + (f"  ← {item['detail']}" if item["detail"] else ""))
         if item["state"] == DRIFT:
-            print(f"          源文件：{item['source']}（改仓库 + 重跑安装，不要手改站点副本）")
+            # 打印**实际比对用的源**（#2985）：存量落点可能对应另一份源，
+            # 提示里的源文件必须是操作者真正该改的那一份。
+            print(f"          源文件：{item['source_used']}（{item['remedy']}）")
     print(f"  统计：match {counts[MATCH]} · drift {counts[DRIFT]} · absent {counts[ABSENT]} "
           f"· skipped {counts[SKIPPED]} · source-missing {counts[SOURCE_MISSING]}")
     if counts[DRIFT]:
-        print("  ⇒ 站点副本落后于/偏离仓库：跑站点安装（installer S2b/S4）或按 runbook 重新渲染。")
+        print("  ⇒ 有副本偏离仓库：按上方各条「源文件」指向的那一份改，再走它对应的落地路径"
+              "（站点资产 = 重跑安装 S2b/S4；控制面人工副本 = 重放 + POST /-/reload）。")
     elif counts[SOURCE_MISSING]:
         print("  ⇒ 无从判定：清单指向的仓库源文件缺失（清单与仓库脱节）——"
               "修清单或恢复源文件后重跑（本次不给出「一致」结论）。")

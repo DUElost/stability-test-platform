@@ -223,20 +223,27 @@ lifecycle:
 | `GET /plan-runs/{id}/timeline` | 三阶段(init/patrol/teardown)聚合,含 patrol_cycle_index / active_devices | `step_trace` GROUP BY (job_id, stage) + `JobInstance.patrol_*_cycle_count` | `idx_step_trace_job_stage` + `idx_job_instance_patrol_heartbeat` |
 | `GET /plan-runs/{id}/events?stage=&severity=&limit=&offset=` | 多源事件流(trigger / step 失败 / log_signal / audit) | 4 表 UNION,内存合并排序 | `idx_step_trace_job_status_ts` + `idx_job_log_signal_detected` + `ix_audit_resource` |
 | `GET /plan-runs/{id}/devices?status=&host_id=` | per-device matrix + by_status/by_host facet,含 backoff/risk 派生 | `JobInstance` + `Device` | `idx_job_instance_status` |
-| `GET /plan-runs/{id}/watcher-summary?window_minutes=` | log_signal 按 category 聚合 + trend(对比上一窗口)+ exceeded 标志 | `JobLogSignal` GROUP BY category | `idx_job_log_signal_category` + `idx_job_log_signal_detected` |
+| `GET /plan-runs/{id}/watcher-summary?window_minutes=` | log_signal 按 category 聚合 + trend(对比上一窗口) | `JobLogSignal` GROUP BY category | `idx_job_log_signal_category` + `idx_job_log_signal_detected` |
 
 #### C5a₂ Prometheus 指标族
 
 | 指标 | 类型 | 标签 | 触发点 |
 |---|---|---|---|
 | `stability_plan_run_terminal_total` | Counter | `status` | `apply_plan_run_aggregation` 终态时 |
-| `stability_plan_run_pass_rate` | Histogram | `status` | 同上(buckets: 0/0.5/0.8/0.9/0.95/0.98/0.99/1.0) |
+| `stability_plan_run_pass_rate`（**已退役**，见下注） | ~~Histogram~~ | — | ~~同上~~ |
 | `stability_dispatch_gate_runs_total` | Counter | `outcome` | `_drive_dispatch_gate` finally(passed/synced_passed/failed/skipped) |
 | `stability_dispatch_gate_duration_seconds` | Histogram | `outcome` | 同上 |
 | `stability_patrol_heartbeat_total` | Counter | `has_failures` | `POST /agent/jobs/{id}/patrol-heartbeat` |
 | `stability_patrol_failure_streak_observed` | Histogram | — | 同上(观察到的 streak 分布) |
 | `stability_patrol_manual_action_total` | Counter | `action` | manual-retry / manual-exit 端点 |
 | `stability_log_signal_total` | Counter | `category` | `POST /agent/log-signals` 每条入库的 signal |
+
+> **已被取代（2026-09-18；#2992 勘误）**：本表两处建立在 `failure_threshold` 判定轴上，已随
+> [ADR-0048](./ADR-0048-execution-status-semantics-v2.md) 移除——① `watcher-summary` 行的
+> **`exceeded` 标志**（当前响应字段见 `backend/api/schemas/plan_run.py::WatcherSummaryOut`，
+> 无 `exceeded`）；② **`stability_plan_run_pass_rate` histogram 整条退役**（`backend/core/metrics.py`
+> 已注明；展示层通过率改由前端从 `completed/total` 派生，不落 Prometheus 序列）。
+> 本文件 D8 处那条「已被取代」注记只覆盖 D8 本身，不覆盖这两处，故就地点注。
 
 ### 前端改动 (本 ADR 不做,后续 C5b/C5c 跟进)
 
@@ -251,7 +258,7 @@ lifecycle:
 3. `backend/tests/agent/test_patrol_heartbeat_uploader.py` — 批量+重试模式
 4. `backend/tests/agent/test_pipeline_engine_patrol.py` — patrol 成功不写 trace / 失败写 trace / 退避计算 / manual-exit 跳出
 5. `backend/tests/agent/test_manual_exit_release.py` — manual-exit 后下个 Plan 能 acquire 同 device
-6. `backend/tests/services/test_failure_threshold_includes_backoff.py` — 退避中 job 计入 failure_threshold
+6. ~~`backend/tests/services/test_failure_threshold_includes_backoff.py` — 退避中 job 计入 failure_threshold~~ ——**已作废（2026-09-18，ADR-0048）**：该测试随阈值判定轴一并删除，文件已不存在（D1–D7 的退避语义不受影响，见 D8 注记）。
 7. `backend/tests/api/test_plan_run_aggregation_endpoints.py`(C5a₂)— 5 端点 15 cases:chain 链/timeline stage 聚合/events 多源融合/devices facet+派生/watcher-summary trend
 
 ## 不在本 ADR 范围
