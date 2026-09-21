@@ -1,6 +1,6 @@
 # 执行协议契约（Execution Protocol）
 
-> **最后更新**：2026-09-21（#3003 校准；§3 同步 ADR-0043 per-host 宽限时钟；该头部是**约定不自校验**，见文末备注）  
+> **最后更新**：2026-09-21（#3003 校准 + §3 同步 ADR-0043 per-host 宽限时钟；本头部自本日起随正文同步）  
 > **关联**：主链路概览见 [`01-execution-pipeline.md`](./01-execution-pipeline.md)；实现见近期 migration `c8d9e0f1a2b3`、preflight `backend/scripts/migration/preflight_execution_protocol.py`；abort 时钟主体见 [`ADR-0043`](../adr/ADR-0043-abort-grace-subject-alignment.md)。
 
 本文记录 **PlanRun / Job / Agent** 的硬契约：状态机边界、abort、claim 门禁、snapshot 派发与 schema 约束。产品叙述级流程仍以 `01` 为准。
@@ -156,7 +156,7 @@ Watcher policy 取自 **PlanRun.plan_snapshot**，不再读 live `Plan.watcher_p
 
 ---
 
-> **关于本文的「最后更新」头部**：它是**约定自述、无机器校验**——没有任何门禁把该日期与
-> `git log -1 --format=%cs -- <本文件>` 对拍，故长期会漂（#2990 落地时正文已被改多次而头部仍是
-> 2026-07-15）。要么下次把它改成生成物（同 `environment-variables.md` 的附录块做法），
-> 要么按「可派生量不写死」（#2663）删掉；在此之前，读者应把它当**作者签名**而非事实。
+> **关于本文的「最后更新」头部**：无机器校验（没有任何门禁把该日期与
+> `git log -1 --format=%cs -- <本文件>` 对拍）。#3003 起 DOC-MAP 常驻义务要求改正文语义时同步
+> 刷新本头部（做不到就删字段）；#2990 落地前正文已改多次而头部仍是 2026-07-15，即该义务写成前的漂证。
+> 要么下次把它改成生成物（同 `environment-variables.md` 的附录块做法），要么按「可派生量不写死」（#2663）删掉。
