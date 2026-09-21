@@ -1,7 +1,7 @@
 # ADR-0033：外部工具统一接入契约规范与包管理解耦模型（Tool-Kit Ecosystem Integration）
 
-- 状态：**Accepted（v1.8）**
-- 落地状态：**部分落地**（Phase 2 B5 `DedupMergeEngine`；Phase A：D0 新族门禁 + Tool Contract 脚手架 + Jira 薄 ACL（#3005）；Phase A3：`PlanRunArtifact` 下载 API + DedupReportCard 链接 + `jira/runs?plan_run_id=`（#3015/#3013）；Scan-Result-GT 仍仅 Agent B2；**包存储未触发、不排期**——见 §5.4 评估锚；Phase 3 / DLE zip 未做；D0/D3 权威已生效——见 §5）
+- 状态：**Accepted（v1.9）**
+- 落地状态：**部分落地**（Phase 2 B5 `DedupMergeEngine`；Phase A：D0 新族门禁 + Tool Contract 脚手架 + Jira 薄 ACL（#3005）；Phase A3：`PlanRunArtifact` 下载 + DedupReportCard + `jira/runs?plan_run_id=`（#3015）+ DLE zip / `extract_bundle` 登记下载 / PlanRun 内嵌 Jira 历史（#3013 follow-ups）；Scan-Result-GT 仍仅 Agent B2；**包存储未触发、不排期**——见 §5.4 评估锚；Phase 3 未做；D0/D3 权威已生效——见 §5）
 - 优先级：P1
 - 目标里程碑：M7
 - 日期：2026-09-03
@@ -24,6 +24,7 @@
 | v1.6 | 2026-09-20 | **包存储触发条件评估锚**（非决策变更）：§5.4 三条对照仓内/文档现态 → **未触发**；评估正本 [`2026-09-20-adr0033-package-store-trigger-assessment.md`](../notes/architecture/2026-09-20-adr0033-package-store-trigger-assessment.md)；不改 D 决策、不排期 tar.gz/`tools_cache`（#745 / #2546） |
 | v1.7 | 2026-09-21 | **Phase A 机械落地**（非决策变更）：D0 新族门禁 `check_new_script_family.py`；D2 脚手架 `verify_tool_contract.py` + fixture；Jira 薄 ACL `backend/services/jira_vendor/`；**不做**包存储 / ToolRun 表 / PlanRun 日志 UI（#745） |
 | v1.8 | 2026-09-21 | **Phase A3 最小导航切片**（非决策变更）：`GET /plan-runs/{id}/artifacts/{id}/download` + DedupReportCard 下载链 + `GET /jira/runs?plan_run_id=`（#3013）；不做 Package Store / ToolRun / DLE zip |
+| v1.9 | 2026-09-21 | **Phase A3 follow-ups**（非决策变更）：DLE `log-events/{id}/download`（目录 zip）；extract 登记 `extract_bundle` + 目录 zip 下载；PlanRun 详情内嵌 `JiraRunHistory`（#3013） |
 
 ---
 

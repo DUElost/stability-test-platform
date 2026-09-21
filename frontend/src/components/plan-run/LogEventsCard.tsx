@@ -194,6 +194,7 @@ export default function LogEventsCard({ runId, isTerminal }: Props) {
                   <th className="px-2 py-1.5 font-medium">类型</th>
                   <th className="px-2 py-1.5 font-medium">状态</th>
                   <th className="px-2 py-1.5 font-medium">路径</th>
+                  <th className="px-2 py-1.5 font-medium">操作</th>
                   <th className="px-4 py-1.5 font-medium text-right">检测时间</th>
                 </tr>
               </thead>
@@ -218,6 +219,19 @@ export default function LogEventsCard({ runId, isTerminal }: Props) {
                     </td>
                     <td className="px-2 py-1.5 font-mono max-w-[260px] truncate" title={displayPath(ev)}>
                       {displayPath(ev)}
+                    </td>
+                    <td className="px-2 py-1.5 whitespace-nowrap">
+                      {ev.remote_path && (ev.state === 'REMOTE' || ev.state === 'ARCHIVED') ? (
+                        <a
+                          href={api.planRuns.logEventDownloadUrl(runId, ev.id)}
+                          className="text-primary underline-offset-2 hover:underline"
+                          data-testid={`log-event-download-${ev.id}`}
+                        >
+                          下载
+                        </a>
+                      ) : (
+                        <span className={TEXT.caption}>—</span>
+                      )}
                     </td>
                     <td className="px-4 py-1.5 text-right whitespace-nowrap">
                       {formatLocalDateTime(ev.detected_at)}
