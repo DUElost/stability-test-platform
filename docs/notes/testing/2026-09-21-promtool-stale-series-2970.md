@@ -28,6 +28,16 @@ promtool test rules alerts-stability-platform.test.yml
 而 CI 全量 job 固定 **3.13.3**；PR 阶段按 #2151 的成文理由**不装 promtool**（不引第三方二进制进 PR 门禁），
 所以这条只在夜间全量里显形——正是 backstop 该拦的东西。
 
+**并补一条不依赖 promtool 的结构层判据**（`test_scenario_eval_times_are_within_the_sample_window`）：
+逐组取「组内**最长**的 series 末点 + 5m」，要求该组每个 `eval_time` 都落在里面。
+理由：这条错误的**发现成本**与错误大小完全不成比例（写错 5 个字 ⇒ 夜间红 ⇒ 队列停摆一天），
+而它本质是**结构问题**（数据窗口 vs 判据时刻），不需要 promtool 就能判——与 #2151 的分层一致
+（结构层恒跑、语义层交给 promtool）。边界**有意**只判「整组样本先用完」；「只有某一条 series
+提前过期」要读表达式语义（`absent()` 形态本就依赖序列消失），仍归 promtool 层，已在用例 docstring 写明。
+
+- **只改数据、不加判据**：这条错误的发现成本（夜间红 + 队列停摆一天）与错误大小（少写 10 个样本点）
+  完全不成比例，而它由结构层零成本可拦；不加等于把同类再犯留给下一次夜间。否。
+
 ## Alternatives
 
 - **把 firing 的 `eval_time` 从 65m 挪到 62m**（样本仍在 staleness 窗口内）：能过，但把判据顶在
@@ -45,6 +55,10 @@ promtool test rules alerts-stability-platform.test.yml
 - **修后**：同命令 **SUCCESS**；再用本机 `promtool`（2.53.3）跑同文件也 **SUCCESS**（不回归）；
 - **变异（断言有牙）**：把 firing 块的 `gap_missing` 由 `90x70` 改成 `60x70`（比值 0.1，不满足 `> 0.1`）
   ⇒ 3.13.3 报 `got:[]`；还原即绿。即 65m 那条断言不是「只要 series 在就亮」的空转；
+- **新结构层判据的边界实测**：以末点 t=59m 为基准，`eval_time` 63m/64m ⇒ 3.13.3 **SUCCESS**、
+  65m ⇒ **FAILED** ⇒ 判据取「≤ 末点 + 5m」与 promtool 实际行为一致（含边界）；
+- **新判据的红绿双向**：场景修好时 **1 passed**（0.09s，不需 promtool）；把场景改回 `x60` ⇒
+  **1 failed** 且点名 `group#11 StabilityChainCoverageGap: eval_time=65m 超出样本末点 59m + 5m`；还原即绿；
 - **59m 那条不报**仍是 `for: 60m` 的边界证据（样本自 t=0 起就满足比值，59m 未满 60m ⇒ 不亮）；
 - 全量口径：`PATH=<3.13.3> python -m pytest tests/ -q` → 见 PR；`check:quick` → 见 PR。
 
