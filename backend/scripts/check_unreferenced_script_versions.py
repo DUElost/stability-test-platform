@@ -12,6 +12,7 @@
     python -m backend.scripts.check_unreferenced_script_versions --name flash_firmware
     python -m backend.scripts.check_unreferenced_script_versions --guard   # 巡检：超期零引用仍活跃 → exit 1
     STP_SCRIPT_ROOT=... python -m backend.scripts.check_unreferenced_script_versions --pending-activation  # #2931 待激活视图
+    STP_SCRIPT_ROOT=... python -m backend.scripts.check_unreferenced_script_versions --plan-step-drift     # #3030 重指漂移视图
     python backend/scripts/check_unreferenced_script_versions.py --guard   # 路径形态等价
 
 只读 SELECT；不写库、不改状态。退出码：默认恒 0（诊断工具，非门禁）；`--guard` 是显式
@@ -210,6 +211,262 @@ def pending_activation_view(
     return lagging
 
 
+# ── plan_step 重指漂移视图（#3030）───────────────────────────────────────────
+# 四道里第 4 道（既有 Plan 的 `plan_step.script_version` 重指）此前无账：第 3 道由上面的
+# `--pending-activation` 记账，本视图补第 4 道。两轴分类按 owner 裁决（#3030，2026-09-21）：
+#   轴 2 活跃度：≤14d 有 PlanRun 或 enabled schedule = active；≤30d = semi_active；否则
+#               historical（不追，须并进冻结登记或列待裁决）。判据以 PlanRun 为主——
+#               实测 44 个落后 Plan 里只有 1 个有 enabled schedule，只按 schedule 判会漏 43。
+#   轴 1 追平风险（Δ 类型，优先级 review_required > metadata_diff > metadata_compatible）：
+#               - review_required：族/Plan 命中 `_PLAN_PIN_REVIEW` 登记表（含复查期）；
+#               - metadata_diff：新旧版本在 DB 的 default_params/param_schema 有差异，
+#                 或 head/钉版在库缺行（保守判需人工核）；
+#               - metadata_compatible：其余。**不等于安全**——check_device v1.0.2 的
+#                 150s 内建预算在 DB 元数据上查不出来（#2981），登记表是必要补充。
+# 只读；账本非门禁（exit 0），`STP_SCRIPT_ROOT` 未配置 = 无从判定（exit 2），与
+# `--pending-activation` 同姿势。
+
+PLAN_STEP_DRIFT_ACTIVE_DAYS = 14
+PLAN_STEP_DRIFT_SEMI_ACTIVE_DAYS = 30
+
+#: 冻结/待核登记表（轴 1 的 (a)/(c) 类载体）：key = `family:<name>` 或 `plan:<id>`。
+#: 命中即把相关落后步骤标 review_required 并带 reason + 复查期；复查期过期时在报告里
+#: 单列「须重新裁决」——不允许无登记、无复查期的沉默冻结。
+_PLAN_PIN_REVIEW: dict[str, dict[str, str]] = {
+    "family:check_device": {
+        "reason": (
+            "追至 >=1.0.2 需同族步骤 timeout ≥180s（内建 total_budget_seconds=150，"
+            "#2981）；配套修订未落地前不追"
+        ),
+        "review_by": "2026-10-21",
+    },
+}
+
+_PLAN_STEP_DRIFT_QUERY = text(
+    """
+    SELECT ps.plan_id,
+           p.name AS plan_name,
+           ps.script_name,
+           ps.script_version,
+           (SELECT max(pr.started_at)::date
+              FROM plan_run pr WHERE pr.plan_id = ps.plan_id) AS last_run_on,
+           COALESCE((SELECT bool_or(ts.enabled)
+                       FROM task_schedules ts WHERE ts.plan_id = ps.plan_id), false)
+             AS schedule_enabled
+    FROM plan_step ps
+    JOIN plan p ON p.id = ps.plan_id
+    ORDER BY ps.plan_id, ps.script_name
+    """
+)
+
+_SCRIPT_METADATA_QUERY = text(
+    """
+    SELECT name, version,
+           default_params::text AS default_params,
+           param_schema::text AS param_schema
+    FROM script
+    """
+)
+
+
+def compute_plan_step_facts(db) -> list[dict]:
+    """返回 [{plan_id, plan_name, script_name, script_version, last_run_on, schedule_enabled}]。"""
+    out: list[dict] = []
+    for r in db.execute(_PLAN_STEP_DRIFT_QUERY).mappings():
+        last = r["last_run_on"]
+        out.append(
+            {
+                "plan_id": int(r["plan_id"]),
+                "plan_name": r["plan_name"],
+                "script_name": str(r["script_name"]),
+                "script_version": str(r["script_version"]),
+                "last_run_on": last if isinstance(last, date) else None,
+                "schedule_enabled": bool(r["schedule_enabled"]),
+            }
+        )
+    return out
+
+
+def compute_script_metadata(db) -> dict[tuple[str, str], tuple[str, str]]:
+    """{(name, version): (default_params, param_schema)}（文本形态，只做相等性对拍）。"""
+    return {
+        (str(r["name"]), str(r["version"])): (r["default_params"], r["param_schema"])
+        for r in db.execute(_SCRIPT_METADATA_QUERY).mappings()
+    }
+
+
+def classify_plan_activity(
+    last_run_on: "date | None", schedule_enabled: bool, *, today: date
+) -> str:
+    """轴 2：active / semi_active / historical（判据以 PlanRun 为主、schedule 为辅）。"""
+    if schedule_enabled:
+        return "active"
+    if last_run_on is None:
+        return "historical"
+    age = (today - last_run_on).days
+    if age <= PLAN_STEP_DRIFT_ACTIVE_DAYS:
+        return "active"
+    if age <= PLAN_STEP_DRIFT_SEMI_ACTIVE_DAYS:
+        return "semi_active"
+    return "historical"
+
+
+def _review_expired(review_by: "str | None", today: date) -> bool:
+    """登记表复查期判定；值不可解析按过期处理（宁红不漏）。"""
+    if not review_by:
+        return False
+    try:
+        return date.fromisoformat(str(review_by)) < today
+    except ValueError:
+        return True
+
+
+def plan_step_drift_view(
+    disk: dict[str, list[str]],
+    plan_steps: Iterable[dict],
+    script_meta: dict[tuple[str, str], tuple[str, str]],
+    *,
+    today: date,
+    registry: "dict[str, dict[str, str]] | None" = None,
+    name_filter: "str | None" = None,
+) -> dict:
+    """对拍「磁盘 head vs plan_step 钉版」，只返回落后步骤（含两轴标注）。
+
+    族在磁盘无 head（未收录/已删）时跳过并计数——无从判定不等于不落后。
+    """
+    reg = _PLAN_PIN_REVIEW if registry is None else registry
+    heads = {name: max(versions, key=version_key) for name, versions in disk.items() if versions}
+    steps: list[dict] = []
+    skipped_no_head = 0
+    for s in plan_steps:
+        name = s["script_name"]
+        if name_filter and name != name_filter:
+            continue
+        head = heads.get(name)
+        if head is None:
+            skipped_no_head += 1
+            continue
+        pinned = s["script_version"]
+        if pinned == head:
+            continue
+        entry = reg.get(f"plan:{s['plan_id']}") or reg.get(f"family:{name}")
+        if entry is not None:
+            delta = "review_required"
+        elif (name, pinned) not in script_meta or (name, head) not in script_meta:
+            delta = "metadata_diff"  # 库缺行：保守判需人工核
+        elif script_meta[(name, pinned)] != script_meta[(name, head)]:
+            delta = "metadata_diff"
+        else:
+            delta = "metadata_compatible"
+        item = {
+            "plan_id": s["plan_id"],
+            "plan_name": s["plan_name"],
+            "script_name": name,
+            "pinned_version": pinned,
+            "head_version": head,
+            "activity": classify_plan_activity(
+                s.get("last_run_on"), bool(s.get("schedule_enabled")), today=today
+            ),
+            "delta_type": delta,
+        }
+        if entry is not None:
+            item["review_reason"] = entry.get("reason", "")
+            item["review_by"] = entry.get("review_by", "")
+        steps.append(item)
+
+    by_activity = {"active": 0, "semi_active": 0, "historical": 0}
+    by_delta = {"review_required": 0, "metadata_diff": 0, "metadata_compatible": 0}
+    for it in steps:
+        by_activity[it["activity"]] += 1
+        by_delta[it["delta_type"]] += 1
+    expired = [
+        {"key": k, "reason": v.get("reason", ""), "review_by": v.get("review_by", "")}
+        for k, v in sorted(reg.items())
+        if _review_expired(v.get("review_by"), today)
+    ]
+    return {
+        "steps": steps,
+        "summary": {
+            "lagging_steps": len(steps),
+            "lagging_plans": len({it["plan_id"] for it in steps}),
+            "by_activity": by_activity,
+            "by_delta": by_delta,
+            "skipped_no_disk_head": skipped_no_head,
+        },
+        "expired_review_entries": expired,
+    }
+
+
+def _evaluate_plan_step_drift(args, today: date) -> int:
+    """`--plan-step-drift` 分支：只读取事实、打印账本，不写库。"""
+    script_root = (os.getenv("STP_SCRIPT_ROOT") or "").strip()
+    if not script_root:
+        print(
+            "PLAN-STEP-DRIFT UNKNOWN: STP_SCRIPT_ROOT 未设置，磁盘 head 不可枚举",
+            file=sys.stderr,
+        )
+        return 2
+    url, source = resolve_database_url()
+    engine = create_engine(normalize_sync_database_url(url))
+    try:
+        with engine.connect() as conn:
+            plan_steps = compute_plan_step_facts(conn)
+            script_meta = compute_script_metadata(conn)
+    finally:
+        engine.dispose()
+
+    view = plan_step_drift_view(
+        scan_disk_script_versions(Path(script_root)),
+        plan_steps,
+        script_meta,
+        today=today,
+        name_filter=args.name,
+    )
+    if args.json:
+        print(
+            json.dumps({"plan_step_drift": view}, ensure_ascii=False, indent=2, default=str)
+        )
+        return 0
+
+    summary = view["summary"]
+    print(f"# plan_step 重指漂移（env 源：{source}；磁盘根：{script_root}）")
+    print(
+        f"落后 {summary['lagging_steps']} 步 / {summary['lagging_plans']} Plan"
+        f"（活跃 {summary['by_activity']['active']}、"
+        f"半活跃 {summary['by_activity']['semi_active']}、"
+        f"历史 {summary['by_activity']['historical']}；"
+        f"需人工核 {summary['by_delta']['review_required']}、"
+        f"元数据差异 {summary['by_delta']['metadata_diff']}）"
+    )
+    if summary["skipped_no_disk_head"]:
+        print(f"（{summary['skipped_no_disk_head']} 步的族在磁盘无 head，已跳过）")
+    labels = {"active": "活跃", "semi_active": "半活跃", "historical": "历史"}
+    for bucket in ("active", "semi_active", "historical"):
+        bucket_steps = [s for s in view["steps"] if s["activity"] == bucket]
+        if not bucket_steps:
+            continue
+        print(f"\n[{labels[bucket]}] {len(bucket_steps)} 步")
+        for s in sorted(bucket_steps, key=lambda x: (x["plan_id"], x["script_name"])):
+            mark = ""
+            if s["delta_type"] == "review_required":
+                mark = (
+                    f"  需人工核：{s.get('review_reason', '')}"
+                    f"（复查 {s.get('review_by', '')}）"
+                )
+            elif s["delta_type"] == "metadata_diff":
+                mark = "  元数据差异（先核参数契约再追）"
+            print(
+                f"  plan {s['plan_id']:>3} {s['plan_name'][:28]:<28} "
+                f"{s['script_name']} {s['pinned_version']} → {s['head_version']}{mark}"
+            )
+    if view["expired_review_entries"]:
+        print("\n冻结/待核登记已过期（须重新裁决）：")
+        for e in view["expired_review_entries"]:
+            print(f"  {e['key']}  复查期 {e['review_by']}  {e['reason']}")
+    # 账本非门禁：落后项的处置走版本五步第 4 道（重指），不在此判红。
+    return 0
+
+
 def _evaluate(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json", action="store_true", help="输出 JSON")
@@ -235,8 +492,18 @@ def _evaluate(argv: list[str] | None = None) -> int:
         help="待激活视图（#2931）：枚举 STP_SCRIPT_ROOT 的磁盘 head 版本与 script 表对账，"
         "只列 unregistered/inactive——版本上线五步的第 3 道有没有做，从此可查",
     )
+    parser.add_argument(
+        "--plan-step-drift",
+        action="store_true",
+        help="重指漂移视图（#3030）：对拍 STP_SCRIPT_ROOT 的磁盘 head 与 plan_step 钉版，"
+        "按活跃度三态（活跃/半活跃/历史）+ Δ 类型（需人工核/元数据差异/元数据兼容）"
+        "只列落后步骤——版本上线五步的第 4 道有没有做，从此可查",
+    )
     args = parser.parse_args(argv)
     today = date.fromisoformat(args.today) if args.today else date.today()
+
+    if args.plan_step_drift:
+        return _evaluate_plan_step_drift(args, today)
 
     url, source = resolve_database_url()
     # resolve_database_url 给的是异步驱动 URL（生产库即 postgresql+asyncpg://），
