@@ -167,6 +167,25 @@ def test_claude_source_missing_does_not_judge_hollow(monkeypatch, tmp_path, caps
     assert "HOLLOW" not in out, out
 
 
+def test_json_path_missing_strong_source_reports_zero_hollow(monkeypatch, tmp_path, capsys):
+    """#2977：--json 与表格同判——缺强信号源时 hollow=0（即使 skill 已超观察窗）。
+
+    修前 json 分支漏传 strong_source_present，默认 True ⇒ hollow=1，探针 textfile
+    与裸 Hollow 告警恒红，与表格路径「不判洞」相反。
+    """
+    import json
+
+    # birth 极早 ⇒ age_days 远超 persistent 窗口；强源缺席时仍不得判洞。
+    _patch_world(monkeypatch, tmp_path, [_SKILL], False, True)
+    monkeypatch.setattr(sys, "argv", ["skill_usage_report.py", "--json", "--strict"])
+
+    assert _mod.main() == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["strong_source_present"] is False
+    assert payload["hollow"] == 0
+    assert all(not row["hollow"] for row in payload["skills"])
+
+
 @pytest.mark.parametrize("strict,expected", [(True, 1), (False, 0)])
 def test_strict_exit_contract(monkeypatch, tmp_path, capsys, strict, expected):
     args = ["skill_usage_report.py"] + (["--strict"] if strict else [])

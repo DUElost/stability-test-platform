@@ -1223,6 +1223,10 @@ GATE_TO_CI_ANCHOR = {
     "compileall": ("ci.yml", "Compile check"),
     "pollution": ("ci.yml", "空行注入污染检查"),
     "immutability": ("ci.yml", "脚本版本不可变检查"),
+    # ADR-0033 D0 新族门禁（#745）：与 immutability 同模式接入 lint job。
+    "new-script-family": ("ci.yml", "ADR-0033 D0 新脚本族检查"),
+    # ADR-0033 D2 Tool Contract 脚手架（#745）：fixture 靶子 + --self-test。
+    "tool-contract": ("ci.yml", "ADR-0033 Tool Contract 检查"),
     # alembic revision 不可变门禁（#2258 / #2046，ADR-0039 邻域）：与
     # immutability 同模式接入 ci.yml lint job（含 --self-test 自证）；锚点即该 step 的 name。
     "alembic-immutability": ("ci.yml", "alembic revision 不可变检查"),

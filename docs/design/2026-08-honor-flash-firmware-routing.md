@@ -82,7 +82,7 @@ SPFT Linux console 版 `-p <port>` 打开层损坏（扫描层能匹配、打开
 | `gate_other_mtk` | true | adb reboot **前**按 `STP_DEVICE_SERIAL` 经 sysfs 反查目标口（BROM 态无 serial，必须趁早）；把其它处于刷机态（pid ∈ {0003,2000,2001,201c,2026,3000}）的 MTK 口 `authorized=0`，普通态(2046)手机不受影响；刷完 try/finally 恢复。无 serial / 无写权限 / 非 Linux 时跳过并记录原因 |
 | `max_attempts` | 2（cap 4) | 整链路重试环（每次 = 重启 + flash_tool + 等结果）；launch 类环境错误立即终止不重试；attempt>1 先退避再重画门控（authorized 只对当前设备实例生效） |
 | `retry_backoff_seconds` | 10 | 相邻尝试间隔，负值钳 0 |
-| `strict_env_check` | false | 启动前置检：可执行位 / ldd 缺库 / adb（流程需要时）/ ttyACM 写入路径（dialout 组或 udev 0666 规则）。前三者硬失败在拿锁前短路；ttyACM 不明默认仅 WARNING，strict 升级为失败 |
+| `strict_env_check` | false | 启动前置检：可执行位 / ldd 缺库 / adb（流程需要时）/ ttyACM 写入路径（规则形态：`MODE="0660"` + `GROUP="dialout"` 为新形态，legacy `0666` 接受但告警；并判 Agent 用户是否属 dialout）。前三者硬失败在拿锁前短路；ttyACM 不明默认仅 WARNING，strict 升级为失败 |
 
 metrics 新增 `attempts[]` / `attempt_count` / `gating` / `env_precheck`；
 v1.2.0 全部顶层 metrics 键保留（exit_code/stdout_tail 等取最后一次尝试）。
@@ -91,8 +91,12 @@ v1.2.0 全部顶层 metrics 键保留（exit_code/stdout_tail 等取最后一次
 
 主机级 flock（`/tmp/stp-flash-firmware.lock`）+ lock-wait 打戳不变：门控
 解决「工具抓错设备」，锁保证同一时刻一台 host 只有一场刷写。非 root USB
-权限由 dialout 组 + udev 规则（`KERNEL=="ttyACM*", ATTRS{idVendor}=="0e8d",
-MODE="0666"`）提供，预检会在缺失时给出修复动作。
+权限由 dialout 组 + udev 规则提供，**当前形态是最小权限的
+`KERNEL=="ttyACM*", ATTRS{idVendor}=="0e8d", GROUP="dialout", MODE="0660"`
+（#2284）**——安装链写这条，仅当 Agent 用户**未**持久属于 `dialout`（无该组
+或加组未生效）时才退化为 `MODE="0666"` 并记 warning（#2353；0666 等于把
+MTK 串口开放给任何本地用户，可干扰刷机流）。预检**接受两种形态**，但对 0666
+按 legacy 形态告警并给出对齐动作。
 
 ## 4. env 键（hot-update fleet 白名单）
 

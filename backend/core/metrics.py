@@ -420,7 +420,8 @@ db_pool_checkout_seconds = Histogram(
 
 db_pool_checkout_failures_total = Counter(
     'stability_db_pool_checkout_failures_total',
-    'Pool checkout failures by class (timeout=pool exhausted, error=DBAPI/driver)',
+    'Pool checkout failures by class (timeout=pool queue wait, slots_exhausted=PG '
+    'rejected new connection, error=other DBAPI/driver)',
     ['engine', 'kind'],
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
@@ -1069,7 +1070,10 @@ def record_plan_run_abort_lock_seconds(seconds: float, phase: str):
 
 # 值域白名单（#1927 的基数纪律）：label 值必须是有界集合，否则 Python client 的
 # 子序列永不回收——观测面自己变成泄漏面。
-_DB_POOL_CHECKOUT_FAILURE_KINDS = ("timeout", "error")
+# 值域与 `database.classify_pool_checkout_failure` 一一对应；#2959 加了 slots_exhausted
+# （PG 拒新建连接）。**两边必须同步**：这里漏一个值，那条失败就会被静默折叠回
+  # "error"，而告警按 kind 分派——折叠等于把刚建立的可分辨性又抹掉。
+_DB_POOL_CHECKOUT_FAILURE_KINDS = ("timeout", "slots_exhausted", "error")
 _ABORT_FANOUT_SCOPES = ("run", "host")
 
 
@@ -1087,7 +1091,8 @@ def record_db_pool_checkout(engine_label: str, seconds: float):
 
 
 def record_db_pool_checkout_failure(engine_label: str, kind: str):
-    """#703：借不到连接。`timeout`=池耗尽，其余 DBAPI/驱动失败记 `error`。"""
+    """#703/#2959：借不到连接。`timeout`=池内排队超时，`slots_exhausted`=PG 拒绝新建
+    连接（槽位耗尽），其余记 `error`。未列入白名单的值一律归 `error`（基数纪律）。"""
     if not PROMETHEUS_AVAILABLE:
         return
     normalized = kind if kind in _DB_POOL_CHECKOUT_FAILURE_KINDS else "error"

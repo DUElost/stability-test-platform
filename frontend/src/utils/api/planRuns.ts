@@ -202,6 +202,10 @@ export const planRuns = {
   artifactDownloadUrl: (runId: number, jobId: number, artifactId: number) =>
     `/api/v1/plan-runs/${runId}/jobs/${jobId}/artifacts/${artifactId}/download`,
 
+  /** ADR-0033 Phase A3 / #3013：PlanRunArtifact（scan/merge xls）下载。 */
+  planRunArtifactDownloadUrl: (runId: number, artifactId: number) =>
+    `/api/v1/plan-runs/${runId}/artifacts/${artifactId}/download`,
+
   // ADR-0025 Sprint 3: crash 详情端点
   getCrashDetails: (runId: number, packageName?: string) =>
     unwrapApiResponse<CrashDetailEntry[]>(
