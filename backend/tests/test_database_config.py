@@ -281,3 +281,123 @@ def test_attach_pool_metrics_installs_checkout_probe_on_pg_engine():
         assert getattr(pgish.pool, "_stp_checkout_instrumented", False) is True
     finally:
         pgish.dispose()
+
+
+# ── #2959：取连接失败的成因分类（连接槽耗尽必须与"其它 DBAPI 错误"分得开）──────────
+def _probe_failures():
+    """覆盖三类成因的真实形状：两个驱动直抛、被 SQLAlchemy 包一层、纯消息、排队超时。"""
+    import asyncpg
+    import psycopg.errors as pe
+    from sqlalchemy.exc import TimeoutError as SATimeoutError
+
+    from backend.core.database import classify_pool_checkout_failure as classify
+
+    class _Wrapped(Exception):
+        pass
+
+    outer = _Wrapped("DBAPI wrap")
+    outer.__cause__ = pe.TooManyConnections(
+        "remaining connection slots are reserved for roles with the SUPERUSER attribute"
+    )
+    cases = {
+        "asyncpg 直抛": classify(
+            asyncpg.exceptions.TooManyConnectionsError('too many connections for role "stp"')
+        ),
+        "psycopg 直抛": classify(
+            pe.TooManyConnections("remaining connection slots are reserved")
+        ),
+        "被 SQLAlchemy 包一层": classify(outer),
+        "只有消息无 sqlstate": classify(
+            RuntimeError("FATAL: remaining connection slots are reserved for SUPERUSER")
+        ),
+        "QueuePool 排队超时": classify(
+            SATimeoutError("QueuePool limit of size 30 overflow 60 reached", None, None)
+        ),
+        "无关 DBAPI 错误": classify(
+            asyncpg.exceptions.UndefinedTableError('relation "nope" does not exist')
+        ),
+    }
+    return cases
+
+
+def test_classify_pool_checkout_failure_separates_three_causes():
+    """槽耗尽 ≠ 排队超时 ≠ 其它错误——三者处置不同，混一类等于没埋（#2959 缺口①）。"""
+    cases = _probe_failures()
+    assert cases["asyncpg 直抛"] == "slots_exhausted"
+    assert cases["psycopg 直抛"] == "slots_exhausted"
+    assert cases["被 SQLAlchemy 包一层"] == "slots_exhausted", (
+        "SQLAlchemy 会把 DBAPI 异常包一层；只判最外层的结果就是分类永远不命中"
+    )
+    assert cases["只有消息无 sqlstate"] == "slots_exhausted"
+    assert cases["QueuePool 排队超时"] == "timeout"
+    assert cases["无关 DBAPI 错误"] == "error"
+
+
+def test_classifier_output_domain_matches_metrics_whitelist():
+    """分类器产出的 kind 集合必须 ⊆ metrics 侧白名单，否则会被**静默折叠回 error**。
+
+    两侧各自演进是这个契约唯一的失效方式（我加 kind 时踩过一次），所以钉成门禁：
+    新 kind 只在一边加 → 这里红，而不是等到线上发现"告警从不响"。
+    """
+    from backend.core.metrics import _DB_POOL_CHECKOUT_FAILURE_KINDS
+
+    produced = set(_probe_failures().values())
+    assert produced <= set(_DB_POOL_CHECKOUT_FAILURE_KINDS), (
+        f"分类器产出 {sorted(produced)}，白名单 {sorted(_DB_POOL_CHECKOUT_FAILURE_KINDS)} —— "
+        "缺席的 kind 会被折叠成 error，按 kind 分派的告警随之失效"
+    )
+    assert {"slots_exhausted", "timeout"} <= produced, "两类主要成因都得有实际样本可达"
+
+
+def test_metric_label_is_not_folded_for_new_kind():
+    """白名单放行时，Prometheus 上真的出现 kind="slots_exhausted" 的子序列。"""
+    from backend.core import metrics
+
+    if not metrics.PROMETHEUS_AVAILABLE:
+        import pytest
+
+        pytest.skip("prometheus_client 不可用")
+    from prometheus_client import REGISTRY
+
+    def count() -> float:
+        return REGISTRY.get_sample_value(
+            "stability_db_pool_checkout_failures_total",
+            {"engine": "probe", "kind": "slots_exhausted"},
+        ) or 0.0
+
+    before = count()
+    metrics.record_db_pool_checkout_failure("probe", "slots_exhausted")
+    assert count() == before + 1, "被折叠成 error 时这里为 0（子序列不存在）"
+    # 越界值仍必须收敛进 error（基数纪律，#1927）
+    metrics.record_db_pool_checkout_failure("probe", "totally-new-kind")
+    assert (REGISTRY.get_sample_value(
+        "stability_db_pool_checkout_failures_total", {"engine": "probe", "kind": "error"}
+    ) or 0.0) >= 1
+
+
+def test_pool_connect_wrapper_records_classified_kind_end_to_end(monkeypatch):
+    """从 `Pool.connect()` 包装到 `_record_pool_checkout` 的 kind 参数，走一遍真链路。
+
+    只测 `classify_*` 不够：生产上真正决定告警响不响的是**包装点有没有把分类结果传下去**。
+    """
+    from backend.core import database as dbmod
+
+    recorded: list[tuple[str, float, str | None]] = []
+    monkeypatch.setattr(
+        dbmod, "_record_pool_checkout",
+        lambda label, elapsed, failure: recorded.append((label, elapsed, failure)),
+    )
+
+    class _Pool:
+        def connect(self, *args, **kwargs):
+            raise RuntimeError("FATAL: remaining connection slots are reserved")
+
+    pool = _Pool()
+    dbmod._instrument_pool_connect(pool, "async")
+    try:
+        pool.connect()
+    except RuntimeError:
+        pass
+    assert recorded and recorded[-1][2] == "slots_exhausted", (
+        f"包装点没把成因传下去：{recorded}"
+    )
