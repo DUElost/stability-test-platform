@@ -365,6 +365,41 @@ class TestDocstringKeyContract:
 
 # (后端模型文件, 模型名, TS 文件, 接口名)
 _MODEL_PAIRS: tuple[tuple[str, str, str, str], ...] = (
+    # #2958 第五道闸：host 脚本在位矩阵（六态计数 + 逐目标态）
+    (
+        "backend/api/schemas/script_presence.py",
+        "ScriptPresenceItem",
+        "frontend/src/utils/api/types.ts",
+        "ScriptPresenceItem",
+    ),
+    # #2958 第五道闸：host 脚本在位矩阵（六态计数 + 逐目标态）
+    (
+        "backend/api/schemas/script_presence.py",
+        "ScriptPresenceCounts",
+        "frontend/src/utils/api/types.ts",
+        "ScriptPresenceCounts",
+    ),
+    # #2958 第五道闸：host 脚本在位矩阵（六态计数 + 逐目标态）
+    (
+        "backend/api/schemas/script_presence.py",
+        "HostScriptPresenceOut",
+        "frontend/src/utils/api/types.ts",
+        "HostScriptPresence",
+    ),
+    # #2958 第五道闸：host 脚本在位矩阵（六态计数 + 逐目标态）
+    (
+        "backend/api/schemas/script_presence.py",
+        "ScriptPresenceSummaryOut",
+        "frontend/src/utils/api/types.ts",
+        "ScriptPresenceSummary",
+    ),
+    # #2958 第五道闸：host 脚本在位矩阵（六态计数 + 逐目标态）
+    (
+        "backend/api/schemas/script_presence.py",
+        "ScriptPresenceSweepOut",
+        "frontend/src/utils/api/types.ts",
+        "ScriptPresenceRefreshResult",
+    ),
     (
         "backend/api/schemas/plan_run.py",
         "WatcherSummaryOut",

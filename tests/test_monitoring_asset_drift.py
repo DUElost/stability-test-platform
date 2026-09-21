@@ -167,15 +167,91 @@ def test_legacy_distro_path_is_accepted(tmp_path, fake_repo):
     """
     system_root = tmp_path / "sys"
     from tools.site_config.stages import monitoring_artifacts
-    rel = "deploy/prometheus/site-alerts.yml"
+    rel = "deploy/prometheus/prometheus.yml"
     dest_rel = next(d for s, d, _ in monitoring_artifacts() if s == rel)
-    legacy = _mod.LEGACY_FALLBACKS[dest_rel]
+    legacy = _mod.LEGACY_FALLBACKS[dest_rel].destination
     target = system_root / legacy
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(_mod.expected_text(fake_repo / rel, fake_repo), encoding="utf-8")
     entry = next(r for r in _mod.inspect(system_root, fake_repo, repo_root=fake_repo) if r["source"] == rel)
     assert entry["state"] == _mod.MATCH
     assert entry["hit"] == legacy
+    # 同名同物（源不换）：比对源仍是清单里那一份
+    assert entry["source_used"] == rel
+
+
+def _install_legacy_platform_copy(fake_repo, system_root, *, mutate=None):
+    """在存量发行版落点放**平台全量**副本（控制面宿主形态），返回 (dest_rel, source_rel)。
+
+    人工副本口径是**原样拷贝**（不渲染占位符），故这里直接写源文件内容。
+    """
+    from tools.site_config.stages import monitoring_artifacts
+    dest_rel = next(d for s, d, _ in monitoring_artifacts()
+                    if s == "deploy/prometheus/site-alerts.yml")
+    fallback = _mod.LEGACY_FALLBACKS[dest_rel]
+    source_rel = fallback.source
+    assert source_rel, "存量平台副本必须自带事实源（#2985）"
+    src = fake_repo / source_rel
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_text("# 平台全量规则\nheader=<deploy-root>\n- alert: A\n- alert: B\n",
+                   encoding="utf-8")
+    target = system_root / fallback.destination
+    target.parent.mkdir(parents=True, exist_ok=True)
+    text = src.read_text(encoding="utf-8")
+    target.write_text(mutate(source_rel, text) if mutate else text, encoding="utf-8")
+    return dest_rel, source_rel
+
+
+def test_legacy_platform_copy_is_compared_against_its_own_source(tmp_path, fake_repo):
+    """#2985：存量落点上的平台全量副本必须对**平台源**比对——同名不同物，源随落点定。
+
+    此前拿清单里的站点子集源去比平台全量副本 ⇒ 该资产在本类宿主上恒 DRIFT，
+    判别力退化成常亮灯（真漂移只是碰巧被同一条覆盖）。
+    """
+    system_root = tmp_path / "sys"
+    _install_legacy_platform_copy(fake_repo, system_root)
+    entry = next(r for r in _mod.inspect(system_root, fake_repo, repo_root=fake_repo)
+                 if r["destination"] == "etc/stp/prometheus/rules/alerts-stability-platform.yml")
+    assert entry["state"] == _mod.MATCH, entry
+    assert entry["source_used"] == "deploy/prometheus/alerts-stability-platform.yml"
+    assert entry["hit"] == "etc/prometheus/rules/alerts-stability-platform.yml"
+    # 人工副本不渲染：占位符原样保留也算 match（否则本机这类原样拷贝恒 DRIFT）
+    assert "<deploy-root>" in (system_root / entry["hit"]).read_text(encoding="utf-8")
+
+
+def test_legacy_platform_copy_rendered_placeholder_is_drift(tmp_path, fake_repo):
+    """判据的另一半：人工副本口径是**逐字节等于仓库源**。
+
+    有人「好心」把 <deploy-root> 渲染成路径（功能上无害）时，副本已不是原样拷贝 ⇒
+    报 DRIFT 并给出「按原样拷贝」的补救，而不是默默放过（放过就等于判据可以漂）。
+    """
+    system_root = tmp_path / "sys"
+    _install_legacy_platform_copy(
+        fake_repo, system_root,
+        mutate=lambda s, t: t.replace("<deploy-root>", "/srv/somewhere"))
+    entry = next(r for r in _mod.inspect(system_root, fake_repo, repo_root=fake_repo)
+                 if r["destination"] == "etc/stp/prometheus/rules/alerts-stability-platform.yml")
+    assert entry["state"] == _mod.DRIFT, entry
+    assert "人工副本须与原样拷贝逐字节相同" in entry["detail"]
+
+
+def test_legacy_platform_copy_drift_names_the_real_source_and_remedy(
+        tmp_path, fake_repo, capsys):
+    """反向自证：变异（删一条平台告警）仍要报 DRIFT，且提示里给的是**实际比对源**与
+    人工副本的补救路径——「把判据一起改成恒绿」与「补救落点不生效」都要挡住。"""
+    system_root = tmp_path / "sys"
+    _install_legacy_platform_copy(
+        fake_repo, system_root,
+        mutate=lambda s, t: t.replace("- alert: B\n", ""))
+    rc = _mod.main(["--system-root", str(system_root), "--repo-root", str(fake_repo),
+                    "--deploy-root", str(fake_repo)])
+    out = capsys.readouterr().out
+    assert rc == _mod.EXIT_DRIFT, out
+    drift_block = [ln for ln in out.splitlines() if "DRIFT" in ln]
+    assert any("etc/prometheus/rules/alerts-stability-platform.yml" in ln for ln in drift_block), out
+    assert "deploy/prometheus/alerts-stability-platform.yml" in out, out
+    assert "重放控制面副本" in out, out
+    assert "不要手改站点副本" not in out, "存量平台副本不得套用站点安装的补救提示"
 
 
 def test_deploy_root_prefers_systemd_over_script_repo(tmp_path, monkeypatch):
@@ -252,6 +328,18 @@ def test_wired_call_warns_and_does_not_propagate_exit_code():
     assert "|| true" not in segment, "不许用 || true 吞掉诊断输出"
 
 
+def test_wired_call_forwards_the_remedy_line_not_just_the_verdict():
+    """#2985：判定行后面的「源文件：…」是补救提示（该改哪份源、走哪条落地路径）。
+
+    只透出判定行 ⇒ 操作者看得到红、看不到怎么修（尤其存量宿主上「重跑站点安装」
+    对人工副本不生效的那类）。过滤器必须把续行一起带上。
+    """
+    text = SH.read_text(encoding="utf-8")
+    at = text.index("check-monitoring-assets.py")
+    segment = text[at:at + 900]
+    assert "源文件" in segment, "补救提示（源文件行）必须被接线透出，否则只是换了种红法"
+
+
 def test_guard_still_passes_when_detector_reports_drift(tmp_path, fake_repo):
     """端到端：检测器 exit 1 时，用同一套 shell 结构跑一遍，脚本仍应给出 WARN 且整体成功。"""
     system_root = tmp_path / "sys"
@@ -266,7 +354,8 @@ def test_guard_still_passes_when_detector_reports_drift(tmp_path, fake_repo):
         + ' --deploy-root ' + str(fake_repo) + ' 2>&1)"; then\n'
         '  echo "OK line"\nelse\n'
         '  echo "check-deploy-source: WARN —— drift" >&2\n'
-        '  printf \'%s\\n\' "$drift_out" | grep -E \'^[[:space:]]+\\[(DRIFT|SKIP |ABSENT|MISS )\' >&2\n'
+        "  printf '%s\\n' \"$drift_out\" | grep -E "
+        "'^[[:space:]]+(\\[(DRIFT|SKIP |ABSENT|MISS )|源文件：)' >&2\n"
         'fi\nexit 0\n', encoding="utf-8")
     proc = subprocess.run(["bash", str(wrapper)], capture_output=True, text=True,
                           env={**os.environ, "PYTHONPATH": str(REPO_ROOT)})
@@ -276,6 +365,7 @@ def test_guard_still_passes_when_detector_reports_drift(tmp_path, fake_repo):
     assert "No such file" not in proc.stderr, "子进程没起来 ⇒ 断言假绿"
     assert "usage:" not in proc.stderr, "参数没被接受 ⇒ 断言假绿"
     assert "DRIFT" in proc.stderr  # 漂移行确实被透出来了，不是静默吞掉
+    assert "源文件：" in proc.stderr, "补救提示也要透出来（#2985）"
 
 
 # ---------------------------------------------------------------- 事实源标注
