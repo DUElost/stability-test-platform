@@ -40,6 +40,25 @@ Tool Contract + 包存储，既有工具族的新版本目录允许继续 legacy
   不做散字符串相邻匹配）。工具只读；退出码 0=对账完成（账本非门禁），
   2=`STP_SCRIPT_ROOT` 未设=无从判定，不得读成「没有落后项」。
 
+- **重指漂移对账（#3030）**：第 4 道（既有 Plan 的 `plan_step.script_version` 重指）
+  同样此前无账——存量 Plan 不会随模板更新而迁移（实测 24 族 / 155 步 / 44 Plan）。
+  收尾判据：新版本合入 **且** 分发后跑
+
+  ```bash
+  STP_SCRIPT_ROOT=<部署树>/backend/agent/scripts \
+    python -m backend.scripts.check_unreferenced_script_versions --plan-step-drift
+  ```
+
+  确认该视图**不再列出活跃 Plan 的相关步骤**（半活跃 Plan 随下个窗口清）。两轴口径
+  按 #3030 裁决：**活跃度**以 PlanRun 为主判据（≤14d 活跃 / ≤30d 半活跃 / 更早历史；
+  schedule 仅补充——实测 44 个落后 Plan 里只有 1 个有启用 schedule）；**Δ 类型**为
+  `review_required`（命中登记表，含复查期）> `metadata_diff`（DB 参数元数据有差异/
+  缺行）> `metadata_compatible`——最后一档**不等于安全**（`check_device v1.0.2` 的
+  150s 内建预算在 DB 元数据上查不出来，#2981），故**追平前必须过参数/预算契约核对**，
+  不通过者在登记表里写明理由与复查期后冻结（禁止无登记、无复查期的沉默冻结）。
+  追平动作仍走「控制面侧」第 4 步（单事务重指 + `bump plan.updated_at`），同族一次
+  到位以免半升级；视图只读、账本非门禁（exit 0 / 根未设为 2），退役判红语义仍归 #735。
+
 ## 已发布版本不可变
 
 `script.content_sha256` 是扫描时冻结的期望值。原地修改已发布版本只会产生 conflict，

@@ -68,6 +68,14 @@ class SchedulerSettings(DomainSettings):
     stp_admission_pump_interval_seconds: int = 5
     stp_counter_reconcile_interval_seconds: int = 300
     stp_signal_link_reconcile_interval_seconds: int = 300
+    # #2958 第五道闸：host 脚本在位矩阵的 sweep 节奏（cron 五段，**本机时区**——
+    # 与 stp-script-guard.timer 的 OnCalendar 同口径）。默认每天 09:30 一次，与既有
+    # 每日治理窗对齐、避开链派发窗；账本是「存量可见性」而非实时告警，一天一跑足够
+    # （单轮成本：每台一次 verify_scripts RPC，10s 超时内）。空串 = 显式停用（不注册，
+    # 监控面读作「该作业不存在」）。
+    script_presence_sweep_cron: str = "30 9 * * *"
+    # 历史可达窗口（天）：决定「该 host 预期会跑到哪些版本」的历史面。
+    script_presence_history_days: int = Field(default=30, ge=1, le=365)
 
     # ── recycler：批量、保留与宽限 ──
     recycler_batch_size: int = 200

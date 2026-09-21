@@ -75,6 +75,68 @@ export interface Host {
   retire_alerted_at?: string | null;
 }
 
+// ─── 脚本在位矩阵（#2958 第五道闸） ────────────────────────────────────────────
+
+/**
+ * 闭词表六态（与后端 `services.script_presence.PRESENCE_STATES` 同形）：
+ * `present` 在位；`missing` 文件缺失 / `mismatch` 内容不符 → **缺口**（等价告警口径）；
+ * `unknown` agent 不可达（既不是绿也不是缺口）；`n_a` 该机不会跑到；`maintenance` 维护窗内缺口。
+ */
+export type ScriptPresenceState =
+  | 'present'
+  | 'missing'
+  | 'mismatch'
+  | 'unknown'
+  | 'n_a'
+  | 'maintenance';
+
+/** 按态计数：六态恒全（缺为 0），消费方不必补基线。 */
+export interface ScriptPresenceCounts {
+  present: number;
+  missing: number;
+  mismatch: number;
+  unknown: number;
+  n_a: number;
+  maintenance: number;
+}
+
+/** 单个「host × 目标版本」的当前态（`items` 已过滤 `n_a`）。 */
+export interface ScriptPresenceItem {
+  name: string;
+  version: string;
+  state: ScriptPresenceState;
+  detail: string;
+}
+
+/** `GET /script-presence/hosts/{host_id}`。 */
+export interface HostScriptPresence {
+  host_id: string;
+  checked_at: string | null;
+  sweep_id: string;
+  counts: ScriptPresenceCounts;
+  items: ScriptPresenceItem[];
+}
+
+/** `GET /script-presence/summary`（fleet 级聚合，**不含**逐台缺口名单）。 */
+export interface ScriptPresenceSummary {
+  counts: ScriptPresenceCounts;
+  hosts_total: number;
+  hosts_with_gap: number;
+  full_versions: number;
+  checked_at_min: string | null;
+  checked_at_max: string | null;
+  /** true = 最近一次完整 sweep 超过 48h 或无行——不得当绿读。 */
+  stale: boolean;
+}
+
+/** `POST /script-presence/refresh?host_id=…`（单机按需重核）。 */
+export interface ScriptPresenceRefreshResult {
+  sweep_id: string;
+  host_id: string;
+  rows: number;
+  counts: ScriptPresenceCounts;
+}
+
 export interface Device {
   id: number;
   serial: string;

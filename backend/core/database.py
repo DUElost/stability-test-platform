@@ -54,7 +54,7 @@ def _instrument_pool_connect(pool, engine_label: str) -> None:
         try:
             return real_connect(*args, **kwargs)
         except Exception as exc:  # 只分类，不改语义：原样抛出
-            failure = "timeout" if isinstance(exc, SQLAlchemyTimeoutError) else "error"
+            failure = classify_pool_checkout_failure(exc)
             raise
         finally:
             _record_pool_checkout(engine_label, time.perf_counter() - started, failure)
@@ -108,6 +108,60 @@ def _is_deadlock(orig: object) -> bool:
     if state is not None:
         return state == _DEADLOCK_SQLSTATE
     return "deadlock detected" in str(orig).lower()
+
+
+# SQLSTATE 53300 = too_many_connections。两个驱动都用同一串（实测：
+# `asyncpg.exceptions.TooManyConnectionsError.sqlstate == psycopg.errors.TooManyConnections.sqlstate
+# == "53300"`），所以按 sqlstate 判、按消息兜底（与 `_is_deadlock` 同一纪律）。
+_SLOT_EXHAUSTED_SQLSTATE = "53300"
+_SLOT_EXHAUSTED_MESSAGE_HINTS = (
+    "too many connections",
+    "remaining connection slots are reserved",
+)
+
+
+def _iter_exception_chain(orig: object, limit: int = 6):
+    """异常链上的候选对象（sqlstate 可能被包在 `__cause__` / `__context__` 里）。
+
+    为什么要走链而不是只看最外层：取连接失败时 SQLAlchemy 会把 DBAPI 异常包成自己的
+    `DisconnectionError` / `DBAPIError`，**最外层没有 sqlstate**——只判最外层的结果就是
+    "看着分类生效了，但生产上永远归到 error"（和 #1958 那轮"被通用 except 吞掉"同族）。
+    """
+    seen = 0
+    node = orig
+    while node is not None and seen < limit:
+        yield node
+        node = getattr(node, "__cause__", None) or getattr(node, "__context__", None)
+        seen += 1
+
+
+def _is_slot_exhausted(orig: object) -> bool:
+    """PG 侧拒新建连接（槽位耗尽）——与「池内排队超时」是两种成因，处置也不同。"""
+    for node in _iter_exception_chain(orig):
+        if getattr(node, "sqlstate", None) == _SLOT_EXHAUSTED_SQLSTATE:
+            return True
+        text = str(node).lower()
+        if any(hint in text for hint in _SLOT_EXHAUSTED_MESSAGE_HINTS):
+            return True
+    return False
+
+
+def classify_pool_checkout_failure(exc: BaseException) -> str:
+    """把「借不到连接」的异常归到三类之一（**指标值域，必须与 metrics 侧白名单一致**）。
+
+    - `timeout`：池内排队到 `pool_timeout` 仍未拿到（池饱和）；
+    - `slots_exhausted`：PostgreSQL 拒绝新建连接（槽位耗尽 / 保留槽挤占）；
+    - `error`：其余 DBAPI/驱动失败。
+
+    为什么非要有中间那类：#2959 的现场是 `TooManyConnectionsError` 一天 1211 次，
+    全部混进 `kind="error"`——既有告警按 error 报就会把驱动抖动、网络重置和"数据库
+    已经不接受连接"混成一条，而这三种的处置完全不同。**分不出来就等于没埋。**
+    """
+    if isinstance(exc, SQLAlchemyTimeoutError):
+        return "timeout"
+    if _is_slot_exhausted(exc):
+        return "slots_exhausted"
+    return "error"
 
 
 # engine_label → 已注册的 handle_error 回调。仅用于「接线是否生效」的可断言性

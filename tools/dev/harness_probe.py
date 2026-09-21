@@ -6,7 +6,9 @@
 - 双题探针是最小完备的：契约层只有两个语义对象（根启动契约 + scoped 真身）；
 - 判卷确定性（唯一探针串 + 正则），零 LLM judge——语义层随模型漂移，结构层稳定；
 - EXPECTED 显式编码：实际偏离预期即红（**行为漂移检测器**，即使偏离是「变好」——
-  行为变化本身就是信号，如 #857 上游修复后对照行变绿提示退役 wrapper）；
+  行为变化本身就是信号）。#857 的先例即此形态：对照行 `claude-subdir-plain` 由
+  否翻「是」，检测器如实报红，人工裁定为「仓库侧 symlink 已把根契约送达子目录」
+  而非「上游修复」，期望值随之更新（见 #2964 / `docs/notes/process/2026-09-08-857-root-claude-symlink.md`）；
 - 不进常规 CI：每家一次真实非交互 LLM 会话（30-60s，外部依赖）——挂 check:gov
   手动/低频（ADR-0034 §2.7 P3 同款注意力预算纪律）。
 
@@ -72,16 +74,21 @@ FORMS = [
         "command": "sh {root}/tools/dev/claude_with_root.sh {prompt}",
         "cwd": "backend/agent",
         "expected": {"q1": True, "q2": True},
-        "note": "#857 根供给；对照行 claude-subdir-plain 变绿时本形态可退役",
+        "note": "#857 根供给 wrapper——symlink 形态（2026-09-08 起）落地后已降级为后备；"
+                "退役判据见 857 note 的 Revisit（连续批次无 fallback 命中），不在本探针里自动判",
     },
     {
         "id": "claude-subdir-plain",
-        "desc": "Claude Code 子目录裸跑（#857 对照组——上游修复监测行）",
+        "desc": "Claude Code 子目录裸跑（#857 symlink 送达——根契约回归哨兵）",
         "command": "claude -p {prompt}",
         "cwd": "backend/agent",
-        "expected": {"q1": False, "q2": True},
-        "note": "预期 Q1=否（@import 子目录不解析，上游 #79046/#87020）；"
-                "变 Q1=是 = 上游修复，提示 claude_with_root.sh 退役",
+        "expected": {"q1": True, "q2": True},
+        "note": "预期 Q1=是：根 CLAUDE.md 是指向 AGENTS.md 的 symlink（#857 仓库侧绕过，"
+                "2026-09-08 起），子目录裸跑经 ancestor 加载拿到完整根契约。"
+                "变 Q1=否 = 该送达通道失效（symlink 被换回 @import 薄壳、或上游加载行为变化），"
+                "是回归信号。#2964：本行原为「上游修复监测行」（预期 Q1=否），但 #857 的 "
+                "symlink 让 @import 通道从仓库消失、上游是否修复已不再相关——期望值不改会把"
+                "恒 DRIFT 当成常态、哨兵判别力归零。",
     },
     {
         "id": "codex",
@@ -261,7 +268,7 @@ def run_self_test() -> int:
     drifts = compare({"graded": True, "q1": False, "q2": True}, {"q1": True, "q2": True})
     expect("q1 偏离检出", drifts == ["q1=False（预期 True）"])
     drifts = compare({"graded": True, "q1": True, "q2": True}, {"q1": False, "q2": True})
-    expect("变好也是漂移（#857 修复监测）", len(drifts) == 1)
+    expect("偏离预期即漂移（与变化方向无关）", len(drifts) == 1)
     expect("不可判卷不算漂移", compare({"graded": False, "error": "timeout"},
                                        {"q1": True}) == ["不可判卷（timeout）"])
 
