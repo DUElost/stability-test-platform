@@ -40,6 +40,7 @@ class TestPlanRunArtifactDownload(unittest.TestCase):
             path.write_bytes(b"xls")
             art = MagicMock()
             art.plan_run_id = 7
+            art.artifact_type = "scan_result_xls"
             art.storage_uri = f"file://{path}"
             db = MagicMock()
             db.get.return_value = art
@@ -49,6 +50,28 @@ class TestPlanRunArtifactDownload(unittest.TestCase):
                 )
             self.assertEqual(Path(resp.path), path)
             self.assertEqual(resp.filename, "Result.xls")
+
+    def test_extract_bundle_directory_zips(self):
+        import zipfile
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            jira = Path(temp_dir) / "jira" / "7"
+            jira.mkdir(parents=True)
+            (jira / "note.txt").write_text("bundle", encoding="utf-8")
+            art = MagicMock()
+            art.plan_run_id = 7
+            art.artifact_type = "extract_bundle"
+            art.storage_uri = str(jira)
+            db = MagicMock()
+            db.get.return_value = art
+            with patch.dict("os.environ", {"STP_AEE_NFS_ROOT": temp_dir}):
+                resp = build_plan_run_artifact_download_response(
+                    db, plan_run_id=7, artifact_id=3,
+                )
+            self.assertEqual(resp.media_type, "application/zip")
+            with zipfile.ZipFile(resp.path) as zf:
+                self.assertIn("note.txt", zf.namelist())
+            Path(resp.path).unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

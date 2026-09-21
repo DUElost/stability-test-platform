@@ -18,6 +18,9 @@ logger = logging.getLogger(__name__)
 # #1070: jira 事件目录内完成凭据；缺此文件视为半成品，不得跳过重拷。
 _EXTRACT_COMPLETE_MARKER = ".stp_extract_complete"
 
+# ADR-0033 / #3013：extract 成功后登记的 PlanRunArtifact 类型（目录 → 下载侧 zip）。
+ARTIFACT_TYPE_EXTRACT = "extract_bundle"
+
 #: ``run_context.extract.missing_items`` 的留存上限（#2186）：缺口要能下钻，但不能把**无界**
 #: 列表写进 run_context（行数随 fleet 规模线性增长）。超出只记总数，前端显示"还有 N 条"。
 _MISSING_ITEMS_MAX = 20
@@ -411,6 +414,7 @@ def run_extract_sync(plan_run_id: int) -> int:
             # #386: 同 basename 未进 jira、保持 REMOTE 的行数（内容差异时人工复核）。
             "same_basename_left_remote": same_basename_left_remote,
         })
+        _register_extract_bundle(db, plan_run_id=plan_run_id, jira_dir=jira_dir)
         logger.info(
             "dedup_extract_done plan_run=%d extracted=%d remote_paths=%d",
             plan_run_id, extracted, len(remote_path_rows),
@@ -418,6 +422,47 @@ def run_extract_sync(plan_run_id: int) -> int:
         return extracted
     finally:
         db.close()
+
+
+def _dir_size_bytes(root: Path) -> int:
+    total = 0
+    for path in root.rglob("*"):
+        if path.is_file() and not path.is_symlink():
+            try:
+                total += path.stat().st_size
+            except OSError:
+                continue
+    return total
+
+
+def _register_extract_bundle(
+    db: Session,
+    *,
+    plan_run_id: int,
+    jira_dir: Path,
+) -> None:
+    """幂等登记 ``extract_bundle``（键 ``(plan_run_id, storage_uri)``，与 scan 同形）。"""
+    storage_uri = str(jira_dir)
+    size = _dir_size_bytes(jira_dir) if jira_dir.is_dir() else 0
+    existing = db.execute(
+        select(PlanRunArtifact).where(
+            PlanRunArtifact.plan_run_id == plan_run_id,
+            PlanRunArtifact.storage_uri == storage_uri,
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        existing.artifact_type = ARTIFACT_TYPE_EXTRACT
+        existing.size_bytes = size
+        db.commit()
+        return
+    db.add(PlanRunArtifact(
+        plan_run_id=plan_run_id,
+        host_id=None,
+        storage_uri=storage_uri,
+        artifact_type=ARTIFACT_TYPE_EXTRACT,
+        size_bytes=size,
+    ))
+    db.commit()
 
 
 def collect_upload_event_dir_names(db: Session, plan_run_id: int) -> list[str]:
@@ -447,6 +492,7 @@ def collect_upload_event_dir_names(db: Session, plan_run_id: int) -> list[str]:
 
 
 __all__ = [
+    "ARTIFACT_TYPE_EXTRACT",
     "collect_upload_event_dir_names",
     "parse_event_dir_names_from_xls",
     "run_extract_sync",

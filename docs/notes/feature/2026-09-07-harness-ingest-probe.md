@@ -12,10 +12,10 @@ Class: feature
 1. **黑盒观测加载结果**，不白盒推断加载机制——读 harness 源码/文档断言行为会随版本失真（#88405 实例：文档与行为矛盾）；
 2. **双题探针是最小完备的**：P0b/G2 之后契约层只有两个语义对象（根启动契约 + scoped 真身），探针覆盖两对象 = 覆盖契约体系全部加载面；
 3. **确定性结构判卷**（唯一探针串 + 正则），零 LLM judge——结构层稳定，语义层随模型漂移（R1 实证）；
-4. **EXPECTED 显式编码 = 行为漂移检测器**：每形态的预期结果（来自实测）写死，实际偏离即红——**即使偏离「变好」**（#857 上游修复 → `claude-subdir-plain` 对照行变绿 → 输出提示 wrapper 退役）。被动跟踪上游变主动发现；
+4. **EXPECTED 显式编码 = 行为漂移检测器**：每形态的预期结果（来自实测）写死，实际偏离即红——**即使偏离「变好」**。判据是「偏离」而不是「变坏」：检测器如实报红，由人裁定这是上游修复、仓库侧变化、还是环境噪声，裁定后**期望值必须同步更新**，否则恒 DRIFT 会让哨兵判别力归零（#2964 的 `claude-subdir-plain` 正是这样：`#857` 的 symlink 让对照行由否翻「是」，检测器报红是对的，错的是期望值一直没跟）；
 5. **不进常规 CI**：每家一次真实非交互 LLM 会话（分钟级+外部依赖）——挂 `check:gov` 手跑，与 ADR §2.7 P3 同款注意力预算纪律。
 
-七形态（六家自动化 + Zcode 人工指引）：claude-with-root / **claude-subdir-plain（#857 对照组——上游修复监测行）** / codex / cursor / opencode / codebuddy / zcode(manual)。
+七形态（六家自动化 + Zcode 人工指引）：claude-with-root（后备供给）/ **claude-subdir-plain（#857 symlink 送达——根契约回归哨兵）** / codex / cursor / opencode / codebuddy / zcode(manual)。
 
 **与 `invariant-diff` gate（并行会话已落地，进 check:pr）的分工**——#855 的两条腿：invariant-diff 守**差异面**（声明/不变量的 diff 偏离，静态可判、可进 CI）；harness-probe 守**能力面**（各 Harness 实际摄取了什么，只能黑盒实测）——互补不重复。#857 类结构性缺上下文由后者覆盖（前者对其盲）。
 
@@ -35,6 +35,12 @@ Class: feature
 
 ## Revisit
 
-- **#857 上游修复监测**：`claude-subdir-plain` 行 Q1 变「是」即上游修复信号 → 评估 wrapper 退役；
+- **#857 上游修复监测已收口（#2964，2026-09-21）**：`claude-subdir-plain` 的 Q1
+  由否翻「是」不是上游修复，而是 #857 的仓库侧绕过（根 `CLAUDE.md` → `AGENTS.md`
+  symlink，2026-09-08）让 `@import` 通道从仓库消失——上游是否修复已不再相关，本行
+  语义改为**根契约送达的回归哨兵**（预期 Q1=是；变否则是通道失效）。原「变绿即
+  提示 wrapper 退役」的判据随之作废：wrapper 退役另按
+  [`2026-09-08-857-root-claude-symlink.md`](../process/2026-09-08-857-root-claude-symlink.md)
+  的 Revisit（连续批次无 fallback 命中）判；
 - harness 版本升级后重跑矩阵（升级安全网）；
 - 结果 JSON 时间序列积累后，评估接入 P4 观察位的数据面。

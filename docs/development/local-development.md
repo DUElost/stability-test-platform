@@ -49,6 +49,67 @@ compose 构建把 API/WS 基址烤成 `localhost:18000`，而 `127.0.0.1` 与 `l
 - Compose 开发环境不得复用生产 `STP_NFS_ROOT`、AEE、本地日志或挂载点。
 - 若与生产同机并存，开发流量与生产流量必须使用不同端口和不同目录。
 
+### 存量 dev 卷的 PG 大版本（#2945 的射程补充，#2963）
+
+Compose 的 PG 默认镜像**跟随生产大版本**（当前 `postgres:17-alpine`，`#2945`），可用项目根
+`.env` 的 `POSTGRES_IMAGE` 覆盖（compose 自动加载 `.env`，不需要 `--env-file`）。带来一个
+存量处境：卷 `*_postgres_dev_data` 若由更早大版本初始化，PG16+ **不再读取旧大版本目录**（硬失败，
+不是隐式兼容），一次 `docker compose up -d <任意服务>` 会让**整条 dev 栈**起不来——终端只说
+`dependency failed to start`，真因在 `docker compose logs postgres`：
+
+```text
+FATAL:  database files are incompatible with server
+DETAIL:  The data directory was initialized by PostgreSQL version 15, which is not
+         compatible with this version 17.11.
+```
+
+**卷没坏**（卷内 `PG_VERSION` 完好），别删卷。两条路：
+
+**① 立即恢复（旧大版本继续用，秒级）**：把原大版本写进 `.env` 再起栈。原版本号取自卷内
+`PG_VERSION`（例：15）：
+
+```bash
+echo 'POSTGRES_IMAGE=postgres:15-alpine' >> .env    # 项目根 .env，compose 自动加载
+docker compose up -d
+```
+
+**② 正式迁移到新大版本（先备份；迁移期间同机其他会话的 dev 栈会中断，动手前对表）**：
+
+```bash
+# 0) 卷名：用 compose 自己解析出的名字，别 grep（本机同时存在多个项目的同名卷，会撞多行）
+VOL=$(docker compose config --format json \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["volumes"]["postgres_dev_data"]["name"])')
+
+# 1) 备份 dump（旧栈还在时做；起不来时用临时 15 容器挂 $VOL 取出同一份）
+docker compose exec -T postgres sh -c 'pg_dump -Fc -U "$POSTGRES_USER" "$POSTGRES_DB"' > /tmp/stp_dev_$(date +%F).dump
+
+# 2) 记下校验基线（恢复后要能对上）
+docker compose exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "select count(*) from pg_tables where schemaname = current_schema()"'
+docker compose exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "select count(*) from plan_run"'
+
+# 3) 停栈；旧卷复制留证（磁盘够就做。不做也行——第 1 步的 dump 就是退路）
+docker compose down
+docker volume create "${VOL}_pg15"
+docker run --rm -v "$VOL":/src -v "${VOL}_pg15":/dst alpine sh -c 'cp -a /src/. /dst/'
+
+# 4) 让 compose 用新大版本起一个空卷，再把 dump 灌回去
+docker volume rm "$VOL"
+docker compose up -d postgres
+docker compose exec -T postgres sh -c 'pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists' \
+  < /tmp/stp_dev_<步骤 1 的日期>.dump
+
+# 5) 起全栈（server 会跑 init_dev_db → alembic upgrade head），日志应有 dev_db_schema_ready path=alembic
+docker compose up -d
+```
+
+校验点：步骤 2 的两个计数与迁移前一致、`/health` 200、`docker compose logs server` 里
+`dev_db_schema_ready path=alembic`（不是 `path=create_all_legacy`——那条路不带字典 seed，#2381）。
+全部对上后留证卷可留可删（`docker volume rm "${VOL}_pg15"`）。
+
+**不要**把默认退回 15 或删掉 `POSTGRES_IMAGE`：本地要能测到大版本行为差（#2849）正是 #2945 的动机；
+本段只补「存量卷怎么办」。真正的终态是启动期机械判据（比卷内 `PG_VERSION` 与镜像 major，不一致
+即打印上面的指引），当前 dev 栈没有统一启动入口可挂，先以本段文档兜底。
+
 ### dev 库的 schema 与字典 seed（#2381）
 
 Compose 起的 PostgreSQL 由 `backend/scripts/init_dev_db.py` 初始化（`ENV=production`

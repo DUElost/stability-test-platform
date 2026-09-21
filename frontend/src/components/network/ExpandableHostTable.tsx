@@ -19,9 +19,15 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { StatusBadge } from '@/components/ui/status-badge';
-import { ChevronDown, Server, Cpu, HardDrive, MemoryStick, Clock, Activity, AlertTriangle, CheckCircle2, MoreHorizontal, Pencil, Trash2, CircleSlash, RotateCcw } from 'lucide-react';
+import { ChevronDown, Server, Cpu, HardDrive, MemoryStick, Clock, Activity, AlertTriangle, CheckCircle2, MoreHorizontal, Pencil, Trash2, CircleSlash, RotateCcw, ClipboardCheck, RefreshCw } from 'lucide-react';
 import { resourceUsageBgClass, resourceUsageTextClass, STAT } from '@/design-system/tokens';
 import { formatBytesFromGb, formatDateTimeFull, formatDurationSeconds, formatLocalTime, parseIsoToDate } from '@/utils/format';
+import type {
+  HostScriptPresence,
+  ScriptPresenceItem,
+  ScriptPresenceState,
+  ScriptPresenceSummary,
+} from '@/utils/api/types';
 
 export interface HostResources {
   cpu_load: number;
@@ -97,6 +103,15 @@ interface ExpandableHostTableProps {
   canManageWatcherAdminState?: boolean;
   selectedIds?: Set<string | number>;
   onSelectionChange?: (ids: Set<string | number>) => void;
+  /**
+   * #2958 第五道闸：fleet 级脚本在位汇总（父组件拉取一次；缺省则不渲染汇总行）。
+   * 汇总只有计数、**没有逐台名单**，故逐台明细只能走下面两个逐台回调。
+   */
+  scriptPresenceSummary?: ScriptPresenceSummary | null;
+  /** 展开某台主机时按需拉该机矩阵（缺省则展开行内不出现「脚本在位」区块）。 */
+  onLoadHostScriptPresence?: (hostId: string | number) => Promise<HostScriptPresence>;
+  /** 单机按需重核；成功后组件会重新拉一次该机矩阵。 */
+  onRefreshHostScriptPresence?: (hostId: string | number) => Promise<unknown>;
 }
 
 function getResourceColor(percentage: number): string {
@@ -161,6 +176,61 @@ function agentSyncBadgeClass(status: AgentCodeSyncStatus | undefined): string {
   }
 }
 
+/** #2958 第五道闸：六态中文文案（与后端闭词表一一对应）。 */
+const SCRIPT_PRESENCE_LABELS: Record<ScriptPresenceState, string> = {
+  present: '在位',
+  missing: '缺失',
+  mismatch: '内容不符',
+  unknown: '未知',
+  n_a: '不适用',
+  maintenance: '维护窗',
+};
+
+/**
+ * 缺口（红）> 未知（灰）> 维护窗（黄）> 在位（绿）：运维先看要动手的。
+ * `unknown` 不得渲染成绿，也不计缺口——它的动作是「等 agent 可达」。
+ */
+const SCRIPT_PRESENCE_ORDER: Record<ScriptPresenceState, number> = {
+  missing: 0,
+  mismatch: 1,
+  unknown: 2,
+  maintenance: 3,
+  present: 4,
+  n_a: 5,
+};
+
+function scriptPresenceStateClass(state: ScriptPresenceState): string {
+  switch (state) {
+    case 'present':
+      return 'bg-success/10 text-success';
+    case 'missing':
+    case 'mismatch':
+      return 'bg-destructive/10 text-destructive';
+    case 'maintenance':
+      return 'bg-warning/10 text-warning';
+    default:
+      return 'bg-muted/50 text-muted-foreground';
+  }
+}
+
+function sortScriptPresenceItems(items: ScriptPresenceItem[]): ScriptPresenceItem[] {
+  return [...items].sort((a, b) => {
+    const byState = SCRIPT_PRESENCE_ORDER[a.state] - SCRIPT_PRESENCE_ORDER[b.state];
+    if (byState !== 0) return byState;
+    return `${a.name}@${a.version}`.localeCompare(`${b.name}@${b.version}`);
+  });
+}
+
+interface HostPresenceLoad {
+  status: 'loading' | 'ready' | 'error';
+  data?: HostScriptPresence;
+  error?: string;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function formatHeartbeatLabel(value?: string): string {
   if (!value) return '—';
   const date = parseIsoToDate(value);
@@ -189,11 +259,61 @@ export function ExpandableHostTable({
   canManageWatcherAdminState = false,
   selectedIds,
   onSelectionChange,
+  scriptPresenceSummary,
+  onLoadHostScriptPresence,
+  onRefreshHostScriptPresence,
 }: ExpandableHostTableProps) {
   const [expandedRows, setExpandedRows] = useState<Set<string | number>>(new Set());
   const [statusFilter, setStatusFilter] = useState<'all' | HostTableData['status']>('all');
   const selectable = !!onSelectionChange;
   const selectAllRef = useRef<HTMLInputElement>(null);
+  // #2958：逐台矩阵按需拉取（展开时才请求）+ fleet 汇总明细面板开合。
+  const [presenceByHost, setPresenceByHost] = useState<Record<string, HostPresenceLoad>>({});
+  const [presenceRefreshing, setPresenceRefreshing] = useState<Set<string | number>>(new Set());
+  const presenceInFlight = useRef<Set<string>>(new Set());
+  const [presenceBreakdownOpen, setPresenceBreakdownOpen] = useState(false);
+
+  const loadHostPresence = async (hostId: string | number, force = false) => {
+    if (!onLoadHostScriptPresence) return;
+    const key = String(hostId);
+    if (!force && presenceInFlight.current.has(key)) return;
+    presenceInFlight.current.add(key);
+    setPresenceByHost((prev) => ({
+      ...prev,
+      [key]: { ...prev[key], status: 'loading', error: undefined },
+    }));
+    try {
+      const data = await onLoadHostScriptPresence(hostId);
+      setPresenceByHost((prev) => ({ ...prev, [key]: { status: 'ready', data } }));
+    } catch (error) {
+      setPresenceByHost((prev) => ({
+        ...prev,
+        [key]: { ...prev[key], status: 'error', error: errorMessage(error) },
+      }));
+    } finally {
+      presenceInFlight.current.delete(key);
+    }
+  };
+
+  const refreshHostPresence = async (hostId: string | number) => {
+    if (!onRefreshHostScriptPresence) return;
+    setPresenceRefreshing((prev) => new Set(prev).add(hostId));
+    try {
+      await onRefreshHostScriptPresence(hostId);
+      await loadHostPresence(hostId, true);
+    } catch (error) {
+      setPresenceByHost((prev) => ({
+        ...prev,
+        [String(hostId)]: { ...prev[String(hostId)], status: 'error', error: errorMessage(error) },
+      }));
+    } finally {
+      setPresenceRefreshing((prev) => {
+        const next = new Set(prev);
+        next.delete(hostId);
+        return next;
+      });
+    }
+  };
 
   const filteredHosts = useMemo(() => {
     if (statusFilter === 'all') return hosts;
@@ -237,6 +357,9 @@ export function ExpandableHostTable({
       newExpanded.delete(id);
     } else {
       newExpanded.add(id);
+      if (onLoadHostScriptPresence && presenceByHost[String(id)] === undefined) {
+        void loadHostPresence(id);
+      }
     }
     setExpandedRows(newExpanded);
   };
@@ -256,6 +379,13 @@ export function ExpandableHostTable({
       agentTrackable: onlineHosts.length,
     };
   }, [hosts]);
+
+  // #2958：缺口语义 = missing + mismatch（与告警口径一致）；unknown 不计缺口。
+  const presenceCounts = scriptPresenceSummary?.counts;
+  const presenceGapCount = presenceCounts
+    ? presenceCounts.missing + presenceCounts.mismatch
+    : 0;
+  const presenceStale = scriptPresenceSummary?.stale === true;
 
   return (
     <TooltipProvider>
@@ -348,6 +478,97 @@ export function ExpandableHostTable({
           </button>
         </div>
 
+        {/* #2958 第五道闸：脚本在位 fleet 汇总（逐台明细在展开行内，汇总接口不含名单） */}
+        {scriptPresenceSummary && presenceCounts && (
+          <div
+            data-testid="script-presence-summary"
+            className={cn(
+              'rounded-lg border px-3 py-2',
+              presenceStale
+                ? 'border-warning/40 bg-warning/5'
+                : presenceGapCount > 0
+                  ? 'border-destructive/30 bg-destructive/5'
+                  : 'border-border bg-card',
+            )}
+          >
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs">
+              <span className="inline-flex items-center gap-1.5 text-sm font-medium text-foreground">
+                <ClipboardCheck className="h-4 w-4 text-muted-foreground" />
+                脚本在位
+              </span>
+              <span
+                className={cn(
+                  'font-medium',
+                  presenceStale
+                    ? 'text-muted-foreground'
+                    : presenceGapCount > 0
+                      ? 'text-destructive'
+                      : 'text-success',
+                )}
+              >
+                缺口 {scriptPresenceSummary.hosts_with_gap} 台
+                {presenceGapCount > 0 && `（${presenceGapCount} 项）`}
+              </span>
+              <span className="text-muted-foreground">未知 {presenceCounts.unknown} 台</span>
+              <span className="text-muted-foreground">维护窗 {presenceCounts.maintenance} 台</span>
+              {presenceStale && (
+                <span
+                  className="inline-flex items-center gap-1 font-medium text-warning"
+                  data-testid="script-presence-stale"
+                >
+                  <AlertTriangle className="h-3.5 w-3.5" />
+                  账本陈旧（最近完整 sweep：
+                  {scriptPresenceSummary.checked_at_min
+                    ? formatDateTimeFull(scriptPresenceSummary.checked_at_min)
+                    : '无记录'}
+                  ）
+                </span>
+              )}
+              <button
+                type="button"
+                aria-expanded={presenceBreakdownOpen}
+                onClick={() => setPresenceBreakdownOpen((open) => !open)}
+                className="ml-auto rounded-md px-2 py-0.5 font-medium text-primary transition-colors hover:bg-primary/10"
+              >
+                {presenceBreakdownOpen ? '收起明细' : '展开明细'}
+              </button>
+            </div>
+            {presenceBreakdownOpen && (
+              <div className="mt-2 space-y-1 border-t border-border pt-2 text-[11px] text-muted-foreground">
+                <div className="flex flex-wrap gap-x-3 gap-y-1">
+                  <span>在位 {presenceCounts.present}</span>
+                  <span className={presenceCounts.missing > 0 ? 'text-destructive' : undefined}>
+                    缺失 {presenceCounts.missing}
+                  </span>
+                  <span className={presenceCounts.mismatch > 0 ? 'text-destructive' : undefined}>
+                    内容不符 {presenceCounts.mismatch}
+                  </span>
+                  <span>未知 {presenceCounts.unknown}</span>
+                  <span className={presenceCounts.maintenance > 0 ? 'text-warning' : undefined}>
+                    维护窗 {presenceCounts.maintenance}
+                  </span>
+                  <span>不适用 {presenceCounts.n_a}</span>
+                  <span>目标版本 {scriptPresenceSummary.full_versions}</span>
+                  <span>覆盖主机 {scriptPresenceSummary.hosts_total}</span>
+                </div>
+                <p>
+                  fleet 汇总不含逐台名单：逐台缺口请展开下方对应主机行查看，并用该区块的「重新核验」单机重核。
+                </p>
+                <p>
+                  最近完整 sweep：
+                  {scriptPresenceSummary.checked_at_min
+                    ? formatDateTimeFull(scriptPresenceSummary.checked_at_min)
+                    : '无记录'}
+                  {' → '}
+                  {scriptPresenceSummary.checked_at_max
+                    ? formatDateTimeFull(scriptPresenceSummary.checked_at_max)
+                    : '无记录'}
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Table */}
         <div className="rounded-xl border border-border bg-card">
           <Table className="min-w-[720px]">
@@ -381,6 +602,12 @@ export function ExpandableHostTable({
             <TableBody>
               {filteredHosts.map((host) => {
                 const isExpanded = expandedRows.has(host.id);
+                // #2958：逐台矩阵（展开时按需拉取；未拉过 = undefined）。
+                const presence = presenceByHost[String(host.id)];
+                const refreshingPresence = presenceRefreshing.has(host.id);
+                const presenceItems = presence?.data
+                  ? sortScriptPresenceItems(presence.data.items)
+                  : [];
 
                 return (
                   <Fragment key={host.id}>
@@ -970,6 +1197,124 @@ export function ExpandableHostTable({
                               </div>
                             </div>
                           </div>
+
+                          {/* #2958 第五道闸：脚本在位矩阵（展开时按需拉；缺口优先排序） */}
+                          {onLoadHostScriptPresence && (
+                            <div
+                              data-testid={`host-script-presence-${host.id}`}
+                              className="mt-4 rounded-lg border border-border bg-card p-3"
+                            >
+                              <div className="mb-2 flex flex-wrap items-center gap-2">
+                                <ClipboardCheck className="h-4 w-4 text-muted-foreground" />
+                                <span className="text-sm font-medium text-foreground">脚本在位</span>
+                                {presence?.data?.checked_at && (
+                                  <span
+                                    className="text-[11px] text-muted-foreground"
+                                    title={formatLocalTime(presence.data.checked_at)}
+                                  >
+                                    核验于 {formatHeartbeatLabel(presence.data.checked_at)}
+                                  </span>
+                                )}
+                                {onRefreshHostScriptPresence && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      void refreshHostPresence(host.id);
+                                    }}
+                                    disabled={refreshingPresence}
+                                    aria-label={`${host.name ?? host.id} 重新核验脚本在位`}
+                                    className="ml-auto inline-flex items-center gap-1 rounded-md bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary transition-colors hover:bg-primary/15 disabled:cursor-not-allowed disabled:opacity-50"
+                                  >
+                                    <RefreshCw className={cn('h-3.5 w-3.5', refreshingPresence && 'animate-spin')} />
+                                    {refreshingPresence ? '核验中...' : '重新核验'}
+                                  </button>
+                                )}
+                              </div>
+                              {presenceStale && (
+                                <p
+                                  data-testid={`host-script-presence-stale-${host.id}`}
+                                  className="mb-2 rounded-md bg-warning/10 px-2 py-1 text-[11px] text-warning"
+                                >
+                                  账本陈旧（最近完整 sweep：
+                                  {scriptPresenceSummary?.checked_at_min
+                                    ? formatDateTimeFull(scriptPresenceSummary.checked_at_min)
+                                    : '无记录'}
+                                  ），当前状态可能已过期
+                                </p>
+                              )}
+                              {presence?.status === 'error' && (
+                                <p className="mb-2 text-[11px] text-destructive">
+                                  核验数据加载失败：{presence.error || '未知错误'}
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      void loadHostPresence(host.id, true);
+                                    }}
+                                    className="ml-2 rounded-md px-1.5 py-0.5 font-medium text-primary hover:bg-primary/10"
+                                  >
+                                    重试
+                                  </button>
+                                </p>
+                              )}
+                              {!presence || (presence.status === 'loading' && !presence.data) ? (
+                                <span className="text-xs text-muted-foreground">加载中...</span>
+                              ) : presence.data ? (
+                                <div className="space-y-1.5">
+                                  <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+                                    <span>在位 {presence.data.counts.present}</span>
+                                    <span
+                                      className={
+                                        presence.data.counts.missing + presence.data.counts.mismatch > 0
+                                          ? 'text-destructive'
+                                          : undefined
+                                      }
+                                    >
+                                      缺口 {presence.data.counts.missing + presence.data.counts.mismatch}
+                                      （缺失 {presence.data.counts.missing} · 内容不符 {presence.data.counts.mismatch}）
+                                    </span>
+                                    <span>未知 {presence.data.counts.unknown}</span>
+                                    <span>维护窗 {presence.data.counts.maintenance}</span>
+                                  </div>
+                                  {presenceItems.length === 0 ? (
+                                    <p className="text-xs text-muted-foreground">
+                                      暂无条目——该主机尚未跑过 sweep，可点「重新核验」。
+                                    </p>
+                                  ) : (
+                                    <ul className="divide-y divide-border/60">
+                                      {presenceItems.map((item) => (
+                                        <li
+                                          key={`${item.name}@${item.version}`}
+                                          className="flex items-start gap-2 py-1.5"
+                                        >
+                                          <span
+                                            className={cn(
+                                              'mt-px inline-flex shrink-0 items-center rounded-full px-1.5 py-0.5 text-[11px] font-medium',
+                                              scriptPresenceStateClass(item.state),
+                                            )}
+                                          >
+                                            {SCRIPT_PRESENCE_LABELS[item.state] ?? item.state}
+                                          </span>
+                                          <span className="shrink-0 font-mono text-xs text-foreground">
+                                            {item.name}@{item.version}
+                                          </span>
+                                          {item.detail && (
+                                            <span
+                                              className="min-w-0 truncate text-[11px] text-muted-foreground"
+                                              title={item.detail}
+                                            >
+                                              {item.detail}
+                                            </span>
+                                          )}
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  )}
+                                </div>
+                              ) : null}
+                            </div>
+                          )}
                         </TableCell>
                       </TableRow>
                     )}

@@ -79,7 +79,9 @@ deploy/
 - 告警规则：平台全量 `deploy/prometheus/alerts-stability-platform.yml`——控制面宿主
   当前是**人工副本**（`/etc/prometheus/rules/`，随仓库更新需人工重放 + `POST /-/reload`；
   落后几条**不写在这里**——那是要抄的派生量，抄一次就开始说谎：用两份文件的 `alert` 名做
-  集合差即可当场得出，`tools/dev/check-monitoring-assets.py` 也会报这个文件的漂移），
+  集合差即可当场得出，`tools/dev/check-monitoring-assets.py` 也按**这份平台源**逐字节比对
+  该副本（#2985：同名副本与站点安装的子集文件不是同一份东西，源随落点定；副本**原样拷贝**
+  即算一致，改了仓库没重放才报 DRIFT，提示行会给出去向）），
   ADR-0011 的正式挂载仍未落地；
   **站点安装的是其子集** `deploy/prometheus/site-alerts.yml`（#2643 方向 1：站点 Prometheus
   只抓本机 node-exporter，平台那批控制面指标在站点结构性无样本——装了也恒不触发，
@@ -110,6 +112,18 @@ deploy/
   `/var/lib/prometheus/node-exporter/stp-skill-usage.prom`（`stp_skill_usage_{hollow,unknown,broken,last_run}`），
   消费方 `StabilitySkillUsageHollow` / `StabilitySkillUsageUntrusted` 两条规则；`--strict` 只在
   `python scripts/run_gates.py check:gov`（深挖跑它）
+- **host 脚本在位矩阵（第五道闸，#2958）**：常设 sweep 每天 09:30（`SCRIPT_PRESENCE_SWEEP_CRON`，
+  控制面进程内作业）对「未退役 host × 目标版本集（`plan_step.enabled` ∩ `script.is_active`）」
+  跑一轮 `verify_scripts` RPC（只读 sha256 核验，不占维护窗），结果落 `host_script_presence`
+  （六态：`present / missing / mismatch / unknown / n_a / maintenance`）。查询：
+  `GET /api/v1/script-presence/summary`（fleet 汇总 + `stale`）与
+  `GET /api/v1/script-presence/hosts/{host_id}`（单机明细）；单机按需重核
+  `POST /api/v1/script-presence/refresh?host_id=…`。指标
+  `stability_host_script_presence{host_id,state}` + 账本新鲜度
+  `stability_script_presence_sweep_timestamp`；告警两条成对：
+  `StabilityHostScriptPresenceGap`（缺口 >0，维护窗与未知态不计入）与
+  `StabilityScriptPresenceSweepStale`（账本缺失或 >48h 未刷新——**只装第一条会读成绿**）。
+  它是 #2931 四道账之外的第五道：前四道只看 DB/部署树，本道看主机实际文件。
 
 ---
 

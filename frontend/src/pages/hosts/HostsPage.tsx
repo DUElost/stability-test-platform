@@ -12,7 +12,7 @@ import HostBulkActionBar from '@/components/host/HostBulkActionBar';
 import HostOperationPanel from '@/components/host/HostOperationPanel';
 import { api, coerceHostList, fetchHostList, toApiError } from '@/utils/api';
 import type { Host } from '@/utils/api/types';
-import { hostKeys } from '@/utils/api/queryKeys';
+import { hostKeys, scriptPresenceKeys } from '@/utils/api/queryKeys';
 import { Button } from '@/components/ui/button';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { ErrorState } from '@/components/ui/error-state';
@@ -75,6 +75,21 @@ export default function HostsPage() {
     retiredPeekQ.data === undefined
       ? null
       : coerceHostList(retiredPeekQ.data).length > 0;
+
+  // #2958 第五道闸：脚本在位 fleet 汇总（逐台矩阵在展开行内按需拉，不进本页查询）。
+  const scriptPresenceQ = useQuery({
+    queryKey: scriptPresenceKeys.summary(),
+    queryFn: () => api.scriptPresence.summary(),
+    refetchInterval: 60000,
+  });
+  const loadHostScriptPresence = (hostId: string | number) =>
+    api.scriptPresence.host(hostId);
+  const refreshHostScriptPresence = async (hostId: string | number) => {
+    const result = await api.scriptPresence.refresh(hostId);
+    void queryClient.invalidateQueries({ queryKey: scriptPresenceKeys.summary() });
+    return result;
+  };
+
   const liveHostIds = useMemo(
     () => new Set(hosts.map((host) => String(host.id))),
     [hosts],
@@ -822,6 +837,9 @@ export default function HostsPage() {
         isAdmin={isAdmin}
         selectedIds={visibleSelectedHostIds}
         onSelectionChange={setSelectedHostIds}
+        scriptPresenceSummary={scriptPresenceQ.data ?? null}
+        onLoadHostScriptPresence={loadHostScriptPresence}
+        onRefreshHostScriptPresence={refreshHostScriptPresence}
       />
 
       {isAdmin && (
