@@ -604,3 +604,44 @@ groups:
             .63 实测 20s/23-23、.102 实测 20s/11-11），reboot 兜底。**不要自动
             rebind**（门控自愈见 #2972，勿在告警处置里顺手做）。若确认该机柜已撤线
             （设备行全是 ghost），清账关闭本告警，而不是给本规则加静音条件。
+
+  # #2958 第五道闸：host 脚本**在位矩阵**（常设 sweep 落 `host_script_presence`，
+  # 每日 09:30 一轮）。两条规则成对——只装第一条会出现「sweep 死了但面板全绿」，
+  # 与 #2881/#2900 的同族教训（绿而空）一致。
+  - name: stability-platform-script-presence
+    rules:
+      # 缺口 = missing（文件缺失/不可读）+ mismatch（sha 或 support 文件不符）。
+      # `unknown`（agent 不可达）**不计入**：那是覆盖缺口，不是「这台缺文件」；
+      # `maintenance` 也不计入：维护窗兼作升级锁，窗口内缺口不判事故（归队前补分发
+      # 由流程盯，#2865 遗留项）。阈值 > 0：只要有一台 host 有一个目标版本不在位就红。
+      - alert: StabilityHostScriptPresenceGap
+        expr: sum by (host_id) (stability_host_script_presence{state=~"missing|mismatch"}) > 0
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: Host is missing target script versions the fleet expects
+          description: >-
+            该 host 有至少一个「按可达集算预期会用到」的脚本版本不在位（missing=文件缺失
+            / mismatch=内容不符），由每日常设 sweep 的 verify_scripts 核验得出。与派发期
+            的 SFTP 自愈不同，这条**不依赖有没有 run** —— 维护窗 / 近期无派发的 host 也会
+            被记账（#2958 的 `.89` 就是这种形态：DB 面全绿、机器上缺 3 个版本目录）。
+            处置：先就地重核（`POST /api/v1/script-presence/refresh?host_id=…`，单机一轮
+            RPC），确认后再走分发（维护中的 host 需先解除窗口，`HOST_IN_MAINTENANCE`
+            会拒绝热更新）。注意账本每日刷新一次，读数最多滞后 24h——告警里的
+            `checked_at` 见 `GET /api/v1/script-presence/hosts/{host_id}`。
+      # 账本新鲜度：sweep 停摆（迁移没跑/调度没注册/作业连续失败）时上面的缺口规则会
+      # 「看起来绿」——本规则把「没在评估」显式化。阈值 172800s = 48h = 2× 日周期。
+      - alert: StabilityScriptPresenceSweepStale
+        expr: absent(stability_script_presence_sweep_timestamp) or time() - stability_script_presence_sweep_timestamp > 172800
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: Script presence ledger is stale or missing
+          description: >-
+            脚本在位账本两天没有完整刷新（`stability_script_presence_sweep_timestamp`
+            是最近一轮里最旧一行的观测时刻），或指标根本没出现——两种形态都意味着
+            `StabilityHostScriptPresenceGap` 的绿色**不可信**（绿而空，同 #2900/#2984）。
+            常见成因：迁移未跑（表不存在）、`SCRIPT_PRESENCE_SWEEP_CRON` 被清空、
+            或 sweep 作业连续失败（看 `stability_apscheduler_job_runs_total{job_name="script_presence_sweep",outcome="error"}`）。
