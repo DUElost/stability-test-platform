@@ -35,6 +35,12 @@ ADR-0029（每版本全量副本）。
 
 - 新建：重扫确认 `created` 命中且 `conflicts=0`；引用该版本的 Plan precheck 通过
 - 退役：活动目录不再列出该版本，且**历史版本目录仍在磁盘**（`git status` 无删除）
+- **第 4 道（既有 Plan 重指）**：`STP_SCRIPT_ROOT=<部署树>/backend/agent/scripts
+  python -m backend.scripts.check_unreferenced_script_versions --plan-step-drift`——
+  活跃 Plan 的步骤不再出现在该视图（半活跃随下个窗口清）；追平前先看 Δ 类型：
+  `review_required` / `metadata_diff` 必须人工核参数/预算契约再改版本号（#3030）
+- **登记表复查期**：`--plan-step-drift` 输出里的「冻结/待核登记已过期」非空 = 该冻结
+  已到复评日，须重新裁决（不许沉默冻结）
 
 ## 踩坑守卫（负向约束）
 

@@ -175,6 +175,11 @@ export const suiteKeys = {
   planEditor: () => ['suites-for-plan-editor'] as const,
 } as const;
 
+/** #2958 第五道闸：脚本在位矩阵。逐台矩阵在展开行内按需拉（不进缓存键体系）。 */
+export const scriptPresenceKeys = {
+  summary: () => ['script-presence', 'summary'] as const,
+} as const;
+
 /** ADR-0031 平台 AI 助手。 */
 export const aiAssistantKeys = {
   config: () => ['ai-assistant-config'] as const,

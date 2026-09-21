@@ -70,6 +70,30 @@ vi.mock('../../utils/api', async (importOriginal) => {
     hotUpdate: {
       trigger: vi.fn().mockResolvedValue({}),
     },
+    scriptPresence: {
+      summary: vi.fn().mockResolvedValue({
+        counts: { present: 0, missing: 0, mismatch: 0, unknown: 0, n_a: 0, maintenance: 0 },
+        hosts_total: 0,
+        hosts_with_gap: 0,
+        full_versions: 0,
+        checked_at_min: null,
+        checked_at_max: null,
+        stale: false,
+      }),
+      host: vi.fn().mockResolvedValue({
+        host_id: 'h1',
+        checked_at: null,
+        sweep_id: '',
+        counts: { present: 0, missing: 0, mismatch: 0, unknown: 0, n_a: 0, maintenance: 0 },
+        items: [],
+      }),
+      refresh: vi.fn().mockResolvedValue({
+        sweep_id: 'sweep-test',
+        host_id: 'h1',
+        rows: 0,
+        counts: { present: 0, missing: 0, mismatch: 0, unknown: 0, n_a: 0, maintenance: 0 },
+      }),
+    },
     planRuns: {
       list: vi.fn().mockResolvedValue([]),
     },

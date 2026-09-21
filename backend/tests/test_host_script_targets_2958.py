@@ -10,14 +10,14 @@
 """
 from __future__ import annotations
 
-from backend.scripts.compute_host_script_targets import (
+from backend.scripts.compute_host_script_targets import summarize
+from backend.services.script_presence import (
     build_full_target_set,
     compute_host_targets,
     group_steps_by_plan,
     observed_host_plans,
     parse_device_ids,
     scheduled_host_plans,
-    summarize,
 )
 
 

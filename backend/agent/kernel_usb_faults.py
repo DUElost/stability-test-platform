@@ -24,6 +24,9 @@ fleet 内已 3 例（跨机型跨厂商），最长失明 11 天，全靠人工�
   `/usr/share/locale/zh_CN/LC_MESSAGES/systemd.mo` 存在），提示匹配不能依赖语言环境。
 - **扫描走后台线程**——`journalctl -k` 在坏盘/大日志下可能秒级，心跳主循环不得被拖慢
   （心跳超时会被 session_watchdog 判 OFFLINE，那是比失明更响的误报）；
+- **一个样本只声明它所覆盖区间的计数**（#2978）——boot 首扫覆盖整段 boot，其**计数**
+  不入 1 小时窗（只留 INFO 取证），否则一次 agent 重启就能把干净 host 拉成 DEGRADED 最长
+  1 小时并撑满 `StabilityHostUsbLinkDegraded` 的 45m 窗；它的**布尔** latch 照用 boot 全量；
 - **失明是「日志证据 ∧ 此刻零设备」的合取**——单看日志会把「死过但已 unbind/rebind
   救回」的 host 永久标红；单看设备数会把「本来就没接设备」误判。设备回树即自动回落。
 """
@@ -325,10 +328,34 @@ class KernelUsbWatch:
                     )
                 return
             self._channel_state = CHANNEL_OK
+            # 不变量（#2978）：**一个样本只能声明它所覆盖区间的计数**。
+            # `since is None` 的 boot 扫描覆盖「整段 boot」（可能是 3 天），它越过阈值
+            # 不代表「最近 1 小时」越过阈值——把它塞进 3600s 窗就是拿量纲不同的数当增量用，
+            # 现网后果：每次 agent 热更新/服务重启都会重跑 boot 首扫，一台当前干净、只是
+            # 本 boot 早期有过插拔风暴的 host 会被拉成 DEGRADED 最长 1h，并可能点亮
+            # `StabilityHostUsbLinkDegraded`（for: 45m ⇒ 单条样本就够撑满整窗）。
             if faults.hc_dead_seen:
-                self._hc_dead_latched = True
+                self._hc_dead_latched = True   # 布尔事实用 boot 全量是**对的**：覆盖
+                                               # 「死亡发生在本次进程启动之前」
+            if since is None:
+                if faults.link_errors or faults.cable_suspect:
+                    # 不入窗，但也不是丢掉：留一条 INFO 供取证（现网真在风暴时看得见它），
+                    # 只是它不再冒充"最近一小时"去驱动 reason/告警。
+                    logger.info(
+                        "kernel_usb_boot_counts_not_windowed link_errors=%d "
+                        "cable_suspect=%d lines=%d window=%ds（整段 boot 累计，"
+                        "不参与计数窗，见 #2978）",
+                        faults.link_errors,
+                        faults.cable_suspect,
+                        faults.lines,
+                        int(self._window_seconds),
+                    )
+                self._prune_locked()
+                return
+            # 增量扫描：时间戳取**区间起点**（= 上次扫描的游标），不是扫描时刻——与 boot
+            # 那条不变量同一条规则，顺带去掉样本比其区间"年轻"一个扫描周期的偏差。
             self._samples.append(
-                (self._wall_clock(), faults.link_errors, faults.cable_suspect)
+                (since, faults.link_errors, faults.cable_suspect)
             )
             self._prune_locked()
 
