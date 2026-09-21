@@ -47,6 +47,7 @@ vi.mock('@/utils/api', async (importOriginal) => {
         hostFailureRate: vi.fn().mockResolvedValue({ items: [] }),
         planFailedDevices: vi.fn().mockResolvedValue({ items: [] }),
         planRunFailedDeviceTrend: vi.fn().mockResolvedValue({ points: [] }),
+        planRunPassRateTrend: vi.fn().mockResolvedValue({ points: [] }),
       },
       results: {
         summary: vi.fn().mockResolvedValue({
@@ -79,6 +80,7 @@ vi.mock('@/components/charts', () => ({
   HostFailureRateChart: () => <div data-testid="host-failure-rate-chart" />,
   PlanFailedDevicesChart: () => <div data-testid="plan-failed-devices-chart" />,
   PlanRunFailedDeviceTrendChart: () => <div data-testid="plan-run-failed-device-trend-chart" />,
+  PlanRunPassRateTrendChart: () => <div data-testid="plan-run-pass-rate-trend-chart" />,
   RiskDistributionChart: () => <div data-testid="risk-distribution-chart" />,
 }));
 

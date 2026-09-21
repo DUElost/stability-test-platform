@@ -267,7 +267,9 @@ groups:
       # 源码静态提取，因此同样受「未知指标即红」的结构层约束——不是豁免口子。
       # hollow 是周级事实（skill 建而不用），故给 7 天持续窗口而不是立刻响。
       - alert: StabilitySkillUsageHollow
-        expr: stp_skill_usage_hollow > 0
+        # #2977：缺源时 hollow 读数无意义——须与 Untrusted（unknown==1）互斥，
+        # 否则两条告警叠在同一状态上、处置指引互相矛盾。
+        expr: stp_skill_usage_hollow > 0 and stp_skill_usage_unknown == 0
         for: 7d
         labels:
           severity: warning
