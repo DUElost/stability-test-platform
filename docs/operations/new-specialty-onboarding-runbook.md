@@ -63,10 +63,12 @@ curl -s -X POST '<base>/api/v1/projects' -H "Authorization: Bearer $TOKEN" \
 ## 3. Step 2 —— 专项（specialty）确认
 
 ```bash
-curl -s '<base>/api/v1/plans/specialties' -H "Authorization: Bearer $TOKEN"
+curl -s '<base>/api/v1/specialties' -H "Authorization: Bearer $TOKEN"
 ```
 
-返回既有专项字典（key + 展示名）。**已知缺口**：specialty 目前没有 REST 管理
+端点挂在 `/api/v1` 前缀上，**不在 `/plans` 下**（写 `/api/v1/plans/specialties`
+会被 `GET /plans/{plan_id}` 接住并回 422）。返回既有专项字典
+（`data: [{key, display_name, …}]`）。**已知缺口**：specialty 目前没有 REST 管理
 路由，新专项 key 需 DB 登记（`specialty` 表，key 唯一 + sort_order）；联系平台
 维护者插入或等管理面立项。已有标签够用就跳过本步。
 

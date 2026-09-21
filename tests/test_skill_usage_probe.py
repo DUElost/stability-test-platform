@@ -54,6 +54,13 @@ def _payload(hollow: int, *, strong: bool = True, weak: bool = True) -> dict:
             {"hollow": 0.0, "unknown": 1.0, "broken": 0.0},
             0,
         ),
+        # #2977：缺源时即便上游误报 hollow>0，也不得原样写出（裸 Hollow 告警会叠警）
+        (
+            0,
+            _payload(3, strong=False),
+            {"hollow": 0.0, "unknown": 1.0, "broken": 0.0},
+            0,
+        ),
         # 无任何源（report 的 skip 形态）：同样折 unknown
         (
             0,

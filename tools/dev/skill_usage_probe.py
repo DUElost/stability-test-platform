@@ -96,9 +96,10 @@ def summarize(rc: int, payload: dict) -> tuple[dict[str, float], int]:
         return {"hollow": 0.0, "unknown": 0.0, "broken": 1.0}, 1
     hollow = float(payload.get("hollow") or 0)
     if not payload.get("strong_source_present", True):
-        # #2851：缺源 ⇒「零调用」与「没数据」不可分，hollow 读数无意义 ⇒ 折 unknown；
-        # 同时把 hollow 原样带出（人工读时仍在），但告警只看 unknown。
-        return {"hollow": hollow, "unknown": 1.0, "broken": 0.0}, 0
+        # #2851 / #2977：缺源 ⇒「零调用」与「没数据」不可分，hollow 读数无意义 ⇒
+        # 折 unknown，并把 hollow **置 0**。告警规则曾是裸 `hollow > 0`（无 unknown
+        # 门），原样带出假 hollow 会与 Untrusted 叠警且处置指引互相矛盾。
+        return {"hollow": 0.0, "unknown": 1.0, "broken": 0.0}, 0
     return {"hollow": hollow, "unknown": 0.0, "broken": 0.0}, 0
 
 
