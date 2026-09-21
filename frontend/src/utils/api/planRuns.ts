@@ -202,9 +202,13 @@ export const planRuns = {
   artifactDownloadUrl: (runId: number, jobId: number, artifactId: number) =>
     `/api/v1/plan-runs/${runId}/jobs/${jobId}/artifacts/${artifactId}/download`,
 
-  /** ADR-0033 Phase A3 / #3013：PlanRunArtifact（scan/merge xls）下载。 */
+  /** ADR-0033 Phase A3 / #3013：PlanRunArtifact（scan/merge/extract_bundle）下载。 */
   planRunArtifactDownloadUrl: (runId: number, artifactId: number) =>
     `/api/v1/plan-runs/${runId}/artifacts/${artifactId}/download`,
+
+  /** #3013：DLE remote_path 下载（目录 zip / 单文件）。 */
+  logEventDownloadUrl: (runId: number, eventId: string) =>
+    `/api/v1/plan-runs/${runId}/log-events/${eventId}/download`,
 
   // ADR-0025 Sprint 3: crash 详情端点
   getCrashDetails: (runId: number, packageName?: string) =>

@@ -1061,7 +1061,15 @@ def recycle_once() -> None:
     #     started_at / init 完成时间作为首周期锚点，避免只能退回 15 分钟 RUNNING timeout。
     with SessionLocal() as db:
         stall_transitions = 0
-        for job, interval, age in _collect_patrol_stall_candidates(db, now):
+        # 锁序（#2974）：循环体逐行 `_mark_patrol_stall` 取 job 行锁（`update(JobInstance)`）
+        # 且**同事务持有到末尾 commit** ⇒ 取锁顺序 = 迭代顺序。批次**选择**按 overdue DESC
+        # （先杀最该杀的，见 `_build_patrol_stall_candidates_stmt`），但**取锁**必须按
+        # job id 升序：对侧 `agent_lease_extend` / `agent_coordinator_heartbeat` 都按 id
+        # 升序取，而 patrol-stall 与 lease renew 设计上会同时命中同一 job（ADR-0026
+        # 不变式③）——两侧序不同源即成环（#2871/#2901 家族）。
+        for job, interval, age in sorted(
+            _collect_patrol_stall_candidates(db, now), key=lambda item: item[0].id
+        ):
             reason = (
                 f"patrol_stall: age={int(age)}s > "
                 f"{interval}*{PATROL_STALL_MULTIPLIER}={interval * PATROL_STALL_MULTIPLIER}s"

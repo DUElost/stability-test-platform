@@ -51,6 +51,7 @@ from backend.api.routes.schedules import router as schedules_router
 from backend.api.routes.settings import router as settings_router
 from backend.api.routes.pipeline import router as pipeline_router
 from backend.api.routes.scripts import router as scripts_router
+from backend.api.routes.script_presence import router as script_presence_router
 from backend.api.routes.agent_api import router as agent_api_router
 from backend.api.routes.resource_pools import router as resource_pools_router
 # ADR-0020: Plan-based orchestration
@@ -74,7 +75,8 @@ from backend.core.limiter import RateLimitMiddleware
 from backend.core.metrics import init_build_info
 from backend.core.release_manifest import resolve_build_info
 from backend.core.redis import redact_redis_url
-from backend.core.request_metrics import ApiRequestMetricsMiddleware
+from backend.core.exception_log import describe_db_failure
+from backend.core.request_metrics import ApiRequestMetricsMiddleware, endpoint_label
 from backend.core.security import is_production_like_env, validate_production_auth_cookie_settings
 from backend.realtime.socketio_server import create_sio_server, capture_main_loop
 from backend.services.state_machine import InvalidTransitionError
@@ -93,9 +95,12 @@ logger = logging.getLogger(__name__)
 # #563: give backend.** a stdout handler. Without this every app-level
 # logger.info() fell through to logging.lastResort (stderr, WARNING+ only),
 # so periodic sweeps and startup registration left no trace in production.
-from backend.core.logging_setup import configure_logging
+from backend.core.logging_setup import configure_logging, install_access_log_filter
 
 configure_logging()
+# #3020：access 行里 99.99% 是 200、87% 来自 7 条 agent 内部轮询路径——只丢这些
+# 「成功 + 高频轮询」行，非 2xx 恒保留；`STP_ACCESS_LOG_FULL=1` 可整条关闭降噪。
+install_access_log_filter()
 
 # Patch uvicorn loggers to include timestamps while preserving colors
 from uvicorn.logging import AccessFormatter, DefaultFormatter
@@ -378,7 +383,24 @@ async def invalid_transition_handler(request: Request, exc: InvalidTransitionErr
 
 @_fastapi_app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
+    """未捕获异常 → 500。日志**体积按失败族分档**（#3042，见 `core/exception_log.py`）。
+
+    数据库侧失败（槽耗尽 / 死锁 / 池排队超时…）每种只全栈一次、之后一行；其余异常
+    一律保留全栈——那些是真 bug，栈就是答案本身。状态码与响应体形状**不变**。
+    """
+    db_failure = describe_db_failure(
+        exc,
+        method=request.method,
+        # 端点**模板**而非原始 path：带 ID 的路径会把日志键撑成无界（同 #1927 基数纪律）
+        endpoint=endpoint_label(request),
+        client=(request.client.host if request.client else "-"),
+    )
+    if db_failure is None:
+        logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
+    elif db_failure.first_of_family:
+        logger.error("%s first_of_family=1", db_failure.message, exc_info=exc)
+    else:
+        logger.error("%s", db_failure.message)
     return JSONResponse(status_code=500, content={"data": None, "error": {"code": "INTERNAL_ERROR", "message": "Internal server error"}})
 # 中间件注册顺序遵循 Starlette LIFO:最先 add 的在请求链最内层。
 # 期望请求链:CORS(最外,确保 4xx 也带 CORS 头) → RateLimit → CSRF(最内,贴近路由)
@@ -419,6 +441,7 @@ _fastapi_app.include_router(settings_router)
 _fastapi_app.include_router(ai_assistant_router)
 _fastapi_app.include_router(pipeline_router)
 _fastapi_app.include_router(scripts_router)
+_fastapi_app.include_router(script_presence_router)
 _fastapi_app.include_router(agent_api_router)
 _fastapi_app.include_router(resource_pools_router)
 # ADR-0020: Plan-based orchestration

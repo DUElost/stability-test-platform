@@ -197,6 +197,32 @@ host_kernel_log_channel = Gauge(
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
 # ============================================================================
+# Script Presence Metrics（#2958 第五道闸）
+# ============================================================================
+
+# #2958：host × 脚本目标版本的**在位矩阵**。存在理由与本文件其它 per-host 面同型：
+# agent 侧核验（`verify_scripts` RPC）只在**派发时**覆盖「本 run 的 host × 本 run
+# 快照」——维护窗 / 近期无 run 的 host 无账（`.89` 缺 3 个版本目录而 DB 面全绿）。
+# 常设 sweep（每日）把结果落 `host_script_presence`，本 gauge 把它折成 per-host ×
+# **闭词表六态**的 series，使「哪台缺什么」第一次可被 PromQL 问出来。
+# 口径（与 `services/script_presence.PRESENCE_STATES` 绑定，新增态必须同步）：
+#   present / missing / mismatch / unknown / n_a / maintenance
+# `unknown`（agent 不可达）**不是绿**；`n_a` 是「该 host 不会跑到」不判红；
+# `maintenance` 是维护窗内的缺口（不判红，归队前补分发由流程盯）。
+host_script_presence = Gauge(
+    'stability_host_script_presence',
+    'Host script presence rows per state (control-plane DB view)',
+    ['host_id', 'state'],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+# #2958：账本新鲜度 = 最近一次**完整** sweep 里最旧一行的观测时刻（unix 秒）。
+# 缺了它，「探针死了」与「全在位」不可分辨——#2900/#2984 的同族教训（绿而空）。
+script_presence_sweep_timestamp = Gauge(
+    'stability_script_presence_sweep_timestamp',
+    'Oldest checked_at of the last complete script presence sweep (unix seconds)',
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+# ============================================================================
 # Risk Classification Metrics
 # ============================================================================
 
@@ -420,7 +446,8 @@ db_pool_checkout_seconds = Histogram(
 
 db_pool_checkout_failures_total = Counter(
     'stability_db_pool_checkout_failures_total',
-    'Pool checkout failures by class (timeout=pool exhausted, error=DBAPI/driver)',
+    'Pool checkout failures by class (timeout=pool queue wait, slots_exhausted=PG '
+    'rejected new connection, error=other DBAPI/driver)',
     ['engine', 'kind'],
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
@@ -1069,7 +1096,10 @@ def record_plan_run_abort_lock_seconds(seconds: float, phase: str):
 
 # 值域白名单（#1927 的基数纪律）：label 值必须是有界集合，否则 Python client 的
 # 子序列永不回收——观测面自己变成泄漏面。
-_DB_POOL_CHECKOUT_FAILURE_KINDS = ("timeout", "error")
+# 值域与 `database.classify_pool_checkout_failure` 一一对应；#2959 加了 slots_exhausted
+# （PG 拒新建连接）。**两边必须同步**：这里漏一个值，那条失败就会被静默折叠回
+  # "error"，而告警按 kind 分派——折叠等于把刚建立的可分辨性又抹掉。
+_DB_POOL_CHECKOUT_FAILURE_KINDS = ("timeout", "slots_exhausted", "error")
 _ABORT_FANOUT_SCOPES = ("run", "host")
 
 
@@ -1087,7 +1117,8 @@ def record_db_pool_checkout(engine_label: str, seconds: float):
 
 
 def record_db_pool_checkout_failure(engine_label: str, kind: str):
-    """#703：借不到连接。`timeout`=池耗尽，其余 DBAPI/驱动失败记 `error`。"""
+    """#703/#2959：借不到连接。`timeout`=池内排队超时，`slots_exhausted`=PG 拒绝新建
+    连接（槽位耗尽），其余记 `error`。未列入白名单的值一律归 `error`（基数纪律）。"""
     if not PROMETHEUS_AVAILABLE:
         return
     normalized = kind if kind in _DB_POOL_CHECKOUT_FAILURE_KINDS else "error"

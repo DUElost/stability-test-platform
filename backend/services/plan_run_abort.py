@@ -125,7 +125,10 @@ def _bulk_abort_pending_jobs(
         for jid in aborted_ids
         if pending_host_by_id.get(jid)
     )
-    for hid, cnt in host_counts.items():
+    # 锁序（#2974）：循环体逐 host `update(PlanRunHost)` 取行锁且同事务持有到提交，
+    # 取锁顺序必须与对侧的全序一致 ⇒ 按 host_id 升序取，而不是 Counter 的插入序。
+    for hid in sorted(host_counts):
+        cnt = host_counts[hid]
         db.execute(
             update(PlanRunHost)
             .where(
