@@ -211,6 +211,11 @@ class HeartbeatSettings(BaseSettings):
     stp_adb_auto_repair: str = "0"
     stp_adb_repair_cooldown_seconds: float = 300
 
+    # ── heartbeat_thread：xHCI 空树自动 unbind/rebind（#2972）──
+    # 仅精确 "1" 启用；空白名单 = 无人放行（须逐台写入 host id）
+    stp_xhci_auto_rebind: str = "0"
+    stp_xhci_auto_rebind_hosts: str = ""
+
     # ── heartbeat_thread：批量 adb offline 自愈重连（#2754 自愈半边）──
     # 仅精确 "1" 启用（同 stp_adb_auto_repair 的显式 opt-in 语义）
     stp_adb_reconnect_auto: str = "0"
@@ -242,6 +247,18 @@ class HeartbeatSettings(BaseSettings):
     def adb_auto_repair_enabled(self) -> bool:
         """迁移前语义：仅精确 `"1"` 视为启用（同 auth 域 `cookie_secure_enabled`）。"""
         return self.stp_adb_auto_repair == "1"
+
+    @property
+    def xhci_auto_rebind_enabled(self) -> bool:
+        """#2972：仅精确 `"1"` 启用 xHCI 自动 rebind。"""
+        return self.stp_xhci_auto_rebind == "1"
+
+    @property
+    def xhci_auto_rebind_hosts(self) -> frozenset[str]:
+        """#2972：白名单 host id；空集 = 无人放行。"""
+        from backend.agent.xhci_auto_rebind import parse_host_whitelist
+
+        return parse_host_whitelist(self.stp_xhci_auto_rebind_hosts)
 
     @model_validator(mode="after")
     def _warn_inverted_interval_clamp(self) -> "HeartbeatSettings":
