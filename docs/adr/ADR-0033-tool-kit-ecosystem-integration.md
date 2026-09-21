@@ -25,7 +25,7 @@
 | v1.7 | 2026-09-21 | **Phase A 机械落地**（非决策变更）：D0 新族门禁 `check_new_script_family.py`；D2 脚手架 `verify_tool_contract.py` + fixture；Jira 薄 ACL `backend/services/jira_vendor/`；**不做**包存储 / ToolRun 表 / PlanRun 日志 UI（#745） |
 | v1.8 | 2026-09-21 | **Phase A3 最小导航切片**（非决策变更）：`GET /plan-runs/{id}/artifacts/{id}/download` + DedupReportCard 下载链 + `GET /jira/runs?plan_run_id=`（#3013）；不做 Package Store / ToolRun / DLE zip |
 | v1.9 | 2026-09-21 | **Phase A3 follow-ups**（非决策变更）：DLE `log-events/{id}/download`（目录 zip）；extract 登记 `extract_bundle` + 目录 zip 下载；PlanRun 详情内嵌 `JiraRunHistory`（#3013） |
-| v1.10 | 2026-09-21 | **D0 可拦对象口径**（#3014 案 3A，非决策变更）：§5.6 定「计数口径 = 带外部资产的族」+ 首次基线（16 / 19，`clear_recents`、`unisoc_*` 判非 D0 对象）；§5.1 修正「新族门禁零触发」的成因（分母选错，非本期巧合）；脚本膨胀账继续归 ADR-0039 / #735。不动 D0–D4 与 §5.4 三条触发条件本身。相对 Phase A3 follow-ups（v1.9）顺延为 v1.10 |
+| v1.10 | 2026-09-21 | **D0 可拦对象口径**（#3014 案 3A，非决策变更）：§5.6 定「计数口径 = 带外部资产的族」+ 首次基线（16 / 19，`clear_recents`、`unisoc_*` 判非 D0 对象）；§5.1 修正「新族门禁零触发」的成因（分母选错，非本期巧合）；**案 3A-1 采选项 A**——§5.6 增「门禁射程 = 归类动作」三态（`platform-authored` 放行 / `external-tool` 仍禁 / 未声明红，判据实现在 #3055）；脚本膨胀账继续归 ADR-0039 / #735。不动 D0–D4 与 §5.4 三条触发条件本身。相对 Phase A3 follow-ups（v1.9）顺延为 v1.10 |
 
 ---
 
