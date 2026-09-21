@@ -698,6 +698,12 @@ async def _reconcile_aborted_running_jobs(db) -> tuple[int, list[dict]]:
                     host_abort_at_text.isnot(None),
                 ),
             )
+            # 锁序（#2974）：下面逐个候选项在 `_abort_reaper_recheck_job` 里取 job 行锁，
+            # 而 `begin_nested()` 是 SAVEPOINT、不释放 PG 行锁 ⇒ 一个 tick 在提交前持有
+            # **整批** job 行锁，取锁顺序 = 本结果集顺序。对侧 `agent_lease_extend` /
+            # `agent_coordinator_heartbeat` 都按 job id 升序取，故这里钉 id 全序
+            # （Python 侧过滤保序，消费点另有一次显式就地重排兜底）。
+            .order_by(JobInstance.id)
         )).all()
         rows = [
             (job, plan_run)
@@ -718,6 +724,14 @@ async def _reconcile_aborted_running_jobs(db) -> tuple[int, list[dict]]:
         if at is None or at >= grace_deadline:
             continue
         reap_rows.append((job, plan_run, subject or "run"))
+
+    # 锁序（#2974）：本列表逐个在 `_abort_reaper_recheck_job` 里取 job 行锁，而
+    # `begin_nested()` 是 SAVEPOINT、不释放 PG 行锁 ⇒ 一个 tick 在提交前持有整批
+    # job 行锁，取锁顺序 = 本列表顺序。上面查询已 `order_by(JobInstance.id)`、
+    # Python 侧过滤保序；这里再显式就地重排一次：把「本列表是全序集合」写在消费点，
+    # 免得日后有人换了来源（对侧 agent_lease_extend / agent_coordinator_heartbeat
+    # 都按 job id 升序取）。
+    reap_rows.sort(key=lambda item: item[0].id)
 
     unknown_count = 0
     broadcast_items: list[dict] = []

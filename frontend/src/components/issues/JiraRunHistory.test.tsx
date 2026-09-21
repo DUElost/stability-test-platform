@@ -94,7 +94,34 @@ describe('JiraRunHistory', () => {
     fireEvent.change(screen.getByLabelText('按厂商过滤'), { target: { value: 'tinno' } });
 
     await waitFor(() =>
-      expect(listRuns).toHaveBeenLastCalledWith({ vendor: 'tinno', status: undefined, limit: 50 }),
+      expect(listRuns).toHaveBeenLastCalledWith({
+        vendor: 'tinno',
+        status: undefined,
+        plan_run_id: undefined,
+        limit: 50,
+      }),
+    );
+  });
+
+  it('planRunId 固定过滤并隐藏厂商筛选（#3013）', async () => {
+    listRuns.mockResolvedValue([]);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <JiraRunHistory planRunId={42} />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByTestId('plan-run-jira-history')).toBeInTheDocument();
+    expect(screen.queryByLabelText('按厂商过滤')).not.toBeInTheDocument();
+    expect(await screen.findByText(/本 PlanRun 暂无提单记录/)).toBeInTheDocument();
+    await waitFor(() =>
+      expect(listRuns).toHaveBeenCalledWith({
+        vendor: undefined,
+        status: undefined,
+        plan_run_id: 42,
+        limit: 50,
+      }),
     );
   });
 });

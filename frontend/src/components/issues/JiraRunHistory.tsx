@@ -1,6 +1,8 @@
 /**
  * JiraRunHistory — 批量提单历史记录列表 + 日志 replay。
  * 数据来自后端 jira_run 表（持久化），点击展开用 LiveConsole 只读 replay 日志。
+ *
+ * ``planRunId`` 给出时固定按 PlanRun 过滤（#3013）：隐藏厂商筛选，空态文案收窄。
  */
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -27,16 +29,25 @@ const STATUS_VARIANT: Record<string, 'success' | 'destructive' | 'warning' | 'se
 const VENDORS = ['', 'transsion', 'tinno'];
 const STATUSES = ['', 'RUNNING', 'SUCCESS', 'FAILED', 'CANCELED'];
 
-export default function JiraRunHistory() {
+interface Props {
+  /** 给出时只列该 PlanRun 的 Jira 历史（PlanRun 详情内嵌）。 */
+  planRunId?: number;
+  /** 覆盖默认标题（内嵌场景可写「本 PlanRun 提单历史」）。 */
+  title?: string;
+}
+
+export default function JiraRunHistory({ planRunId, title }: Props = {}) {
   const [vendor, setVendor] = useState('');
   const [status, setStatus] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const scoped = planRunId != null;
 
   const { data: runs, isLoading, isError, refetch, isFetching } = useQuery({
-    queryKey: ['jira-runs', vendor, status],
+    queryKey: ['jira-runs', planRunId ?? null, scoped ? '' : vendor, status],
     queryFn: () => dedup.listRuns({
-      vendor: vendor || undefined,
+      vendor: scoped ? undefined : (vendor || undefined),
       status: status || undefined,
+      plan_run_id: planRunId,
       limit: 50,
     }),
   });
@@ -44,19 +55,21 @@ export default function JiraRunHistory() {
   const toggle = (id: string) => setExpandedId(prev => prev === id ? null : id);
 
   return (
-    <Card>
+    <Card data-testid={scoped ? 'plan-run-jira-history' : 'jira-run-history'}>
       <CardHeader>
         <div className="flex items-center justify-between">
-          <CardTitle>历史提交记录</CardTitle>
+          <CardTitle>{title ?? (scoped ? '本 PlanRun 提单历史' : '历史提交记录')}</CardTitle>
           <div className="flex items-center gap-2">
-            <select
-              aria-label="按厂商过滤"
-              className={cn(FORM.select, 'min-w-0 h-9')}
-              value={vendor}
-              onChange={e => setVendor(e.target.value)}
-            >
-              {VENDORS.map(v => <option key={v || 'all'} value={v}>{v || '全部厂商'}</option>)}
-            </select>
+            {!scoped && (
+              <select
+                aria-label="按厂商过滤"
+                className={cn(FORM.select, 'min-w-0 h-9')}
+                value={vendor}
+                onChange={e => setVendor(e.target.value)}
+              >
+                {VENDORS.map(v => <option key={v || 'all'} value={v}>{v || '全部厂商'}</option>)}
+              </select>
+            )}
             <select
               aria-label="按状态过滤"
               className={cn(FORM.select, 'min-w-0 h-9')}
@@ -79,7 +92,11 @@ export default function JiraRunHistory() {
             {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-16 w-full" />)}
           </div>
         ) : !runs || runs.length === 0 ? (
-          <InlineEmpty>暂无提单记录 · 在「批量提单」页签执行后，记录会出现在这里</InlineEmpty>
+          <InlineEmpty>
+            {scoped
+              ? '本 PlanRun 暂无提单记录'
+              : '暂无提单记录 · 在「批量提单」页签执行后，记录会出现在这里'}
+          </InlineEmpty>
         ) : (
           <div className="space-y-2">
             {runs.map(run => {

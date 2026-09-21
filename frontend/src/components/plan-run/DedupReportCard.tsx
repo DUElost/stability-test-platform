@@ -39,6 +39,7 @@ const REASON_SUFFIX: Record<string, string> = {
 const TYPE_LABELS: Record<string, string> = {
   scan_result_xls: 'Scan',
   merge_result_xls: 'Merge',
+  extract_bundle: 'Extract / Jira 包',
 };
 
 function formatSize(bytes?: number | null): string {
@@ -490,6 +491,13 @@ export default function DedupReportCard({
                     <span className="flex-1 truncate font-mono text-muted-foreground/70" title={a.storage_uri}>
                       {a.storage_uri}
                     </span>
+                    <a
+                      href={api.planRuns.planRunArtifactDownloadUrl(runId, a.id)}
+                      className="shrink-0 underline underline-offset-2 text-muted-foreground hover:text-foreground"
+                      data-testid={`dedup-artifact-download-${a.id}`}
+                    >
+                      下载
+                    </a>
                   </div>
                 ))}
               </div>

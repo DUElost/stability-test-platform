@@ -46,6 +46,13 @@ AI 门禁 workflow——所有 AI 会话行为的上游事实源。本脚本只�
       里的 vX.Y 不误绑）。已发布脚本版本目录（backend/agent/scripts/）内容冻结
       （ADR-0020），扫进去会产出「红灯但不可修」的死结，故排除。
   S15 语义归属表（#2546）：`docs/design/2026-semantic-ownership.md` 表内
+      ④ 每行「复议触发器」非空（登记即僵化是真风险，行数不是；#3014 案 2A）
+      ⑤ 锚目标若为 docs/adr/ADR-* 则其头部状态必须是 Accepted——表守得住「锚还在」，
+        守住不住「锚还指向有效权威」（ADR-0048 v1.1 改标题即实例；#3014 案 2A）。
+        非 ADR 目标只由 ② 管存在性与命中数，不重复判状态
+      ⑦ 新建 ADR（头部日期 ≥ OWNERSHIP_FIELD_CUTOFF）必须写 `归属域：` 行——
+        模板早已列该字段，但「可选」使其 1/51 落地、③ 实际休眠；按 S10 的
+        日期 cutoff 先例只约束新建，零 retroactive 红灯（#3014 案 1A）
       ① key 唯一；② 非 TBD 行的 `path :: 定位` 锚可解析且命中恰 1（自带解析器，
       **不**复用 S2）；③ ADR 头部已写 `归属域：semantic-ownership <key>` 时 key
       必须落在表内（字段驱动；未写不报错）。文件缺失则跳过（叠合入 #2751 前）。
@@ -811,14 +818,20 @@ _OWNERSHIP_KEY_CELL = re.compile(r"^`([a-zA-Z0-9][a-zA-Z0-9._-]*)`$")
 _OWNERSHIP_ANCHOR = re.compile(
     r"(docs/[A-Za-z0-9_./-]+\.md)\s*::\s*(.+?)(?=\s*(?:；|;|$))"
 )
+_ADR_ANY_STATUS_LINE = re.compile(r"^\s*-\s*状态[：:].*$", re.M)
+#: #3014 案 1A：新建 ADR 必须写 `归属域：`（按头部日期 cutoff，同 S10 先例）。
+#: 取裁决落地次日，避免把裁决前已存在的 ADR 判成 retroactive 红灯。
+OWNERSHIP_FIELD_CUTOFF = "2026-09-22"
+_ADR_DATE_LINE = re.compile(r"^\s*-\s*日期[：:]\s*(\d{4}-\d{2}-\d{2})", re.M)
+_OWNERSHIP_DOMAIN_NA = re.compile(r"^\s*-\s*归属域[：:]\s*n/a\b", re.I)
 _OWNERSHIP_DOMAIN = re.compile(
     r"^-\s*归属域：\s*semantic-ownership\s+(`?)([a-zA-Z0-9][a-zA-Z0-9._-]*)\1\s*$"
 )
 
 
-def parse_ownership_table(text: str) -> list[tuple[str, str]]:
-    """解析 ownership 表 → [(key, owner_anchor_cell)]。"""
-    rows: list[tuple[str, str]] = []
+def parse_ownership_table(text: str) -> list[tuple[str, str, str]]:
+    """解析 ownership 表 → [(key, owner_anchor_cell, trigger_cell)]。"""
+    rows: list[tuple[str, str, str]] = []
     in_table = False
     for line in text.splitlines():
         if line.startswith("| key |") or line.startswith("|key|"):
@@ -838,7 +851,8 @@ def parse_ownership_table(text: str) -> list[tuple[str, str]]:
         km = _OWNERSHIP_KEY_CELL.match(cells[0])
         if not km:
             continue
-        rows.append((km.group(1), cells[3]))
+        trigger = cells[4] if len(cells) > 4 else ""
+        rows.append((km.group(1), cells[3], trigger))
     return rows
 
 
@@ -855,13 +869,18 @@ def check_ownership_table(text: str, resolve_path) -> list[str]:
         return ["S15 语义归属表: 未解析到任何 ownership 数据行"]
 
     seen: dict[str, int] = {}
-    for key, _ in rows:
+    for key, _, _ in rows:
         seen[key] = seen.get(key, 0) + 1
     for key, n in sorted(seen.items()):
         if n > 1:
             issues.append(f"S15 语义归属表: key `{key}` 出现 {n} 次（须恰好 1）")
 
-    for key, anchor_cell in rows:
+    for key, anchor_cell, trigger_cell in rows:
+        # ④：登记即僵化——每行必须写「复议触发器」，否则该列会永久沉默
+        if not trigger_cell.strip() or trigger_cell.strip() in {"—", "-", "–"}:
+            issues.append(
+                f"S15 `{key}`: 复议触发器为空（每行须写触发条件或「无」的显式理由）"
+            )
         if _ownership_anchor_is_tbd(anchor_cell):
             continue
         anchors = list(_OWNERSHIP_ANCHOR.finditer(anchor_cell))
@@ -884,6 +903,41 @@ def check_ownership_table(text: str, resolve_path) -> list[str]:
                 issues.append(
                     f"S15 `{key}`: 锚 `{rel} :: {locator}` 命中 {hits} 处（须恰 1）"
                 )
+            # ⑤：ADR 型锚的状态必须是 Accepted（非 ADR 目标由 ② 管存在性即可）
+            base = os.path.basename(rel)
+            if base.startswith("ADR-"):
+                sl = _ADR_ANY_STATUS_LINE.search(body)
+                if sl is None:
+                    issues.append(
+                        f"S15 `{key}`: 锚目标 {base} 无头部「- 状态」行，"
+                        f"无法判定 owner 是否仍有效"
+                    )
+                else:
+                    status, _ver = parse_adr_status_line(sl.group(0))
+                    if status != "Accepted":
+                        issues.append(
+                            f"S15 `{key}`: 锚目标 {base} 状态为 {status or '无法解析'}"
+                            f"（须 Accepted；owner 漂移到 Superseded/Proposed）"
+                        )
+    return issues
+
+
+def check_ownership_field_on_new_adrs(adr_texts: dict[str, str]) -> list[str]:
+    """S15⑦：头部日期 ≥ cutoff 的新建 ADR 必须写 `归属域：`（或显式 n/a）。"""
+    issues: list[str] = []
+    for fn, text in sorted(adr_texts.items()):
+        dm = _ADR_DATE_LINE.search(text)
+        if dm is None or dm.group(1) < OWNERSHIP_FIELD_CUTOFF:
+            continue  # 无日期行 / cutoff 前的存量：不追溯
+        has = any(
+            _OWNERSHIP_DOMAIN.match(line.strip()) or _OWNERSHIP_DOMAIN_NA.match(line.strip())
+            for line in text.splitlines()
+        )
+        if not has:
+            issues.append(
+                f"S15 {fn}: 新建 ADR（日期 {dm.group(1)} ≥ {OWNERSHIP_FIELD_CUTOFF}）"
+                f"缺 `归属域：semantic-ownership <key>` 或 `归属域：n/a（理由）`"
+            )
     return issues
 
 
@@ -1169,6 +1223,10 @@ GATE_TO_CI_ANCHOR = {
     "compileall": ("ci.yml", "Compile check"),
     "pollution": ("ci.yml", "空行注入污染检查"),
     "immutability": ("ci.yml", "脚本版本不可变检查"),
+    # ADR-0033 D0 新族门禁（#745）：与 immutability 同模式接入 lint job。
+    "new-script-family": ("ci.yml", "ADR-0033 D0 新脚本族检查"),
+    # ADR-0033 D2 Tool Contract 脚手架（#745）：fixture 靶子 + --self-test。
+    "tool-contract": ("ci.yml", "ADR-0033 Tool Contract 检查"),
     # alembic revision 不可变门禁（#2258 / #2046，ADR-0039 邻域）：与
     # immutability 同模式接入 ci.yml lint job（含 --self-test 自证）；锚点即该 step 的 name。
     "alembic-immutability": ("ci.yml", "alembic revision 不可变检查"),
@@ -1677,7 +1735,7 @@ def run_check() -> int:
         issues += check_ownership_table(
             ownership_text, lambda rel: os.path.join(ROOT, rel)
         )
-        owned_keys = {k for k, _ in parse_ownership_table(ownership_text)}
+        owned_keys = {k for k, _, _ in parse_ownership_table(ownership_text)}
         adr_dir = os.path.join(ROOT, "docs", "adr")
         adr_texts: dict[str, str] = {}
         if os.path.isdir(adr_dir):
@@ -1687,6 +1745,7 @@ def run_check() -> int:
                         os.path.join(adr_dir, fn), encoding="utf-8"
                     ).read()
         issues += check_ownership_domain_fields(adr_texts, owned_keys)
+        issues += check_ownership_field_on_new_adrs(adr_texts)
 
     for issue in issues:
         print(f"[BLOCK] {issue}")
@@ -2577,6 +2636,60 @@ def run_self_test() -> int:
             {"alpha"},
         ),
         True,
+    )
+
+    # S15④/⑤/⑦（#3014 案 1A / 2A）
+    _hdr = "| key | kind | 一句话 | owner_anchor | 复议触发器 |\n|---|---|---|---|---|\n"
+    _adr_anchor = (
+        "`docs/adr/ADR-0001-control-plane-and-agent-architecture.md :: ## 决策`"
+    )
+    expect(
+        "S15⑤ ADR 型锚指向 Accepted 为绿",
+        lambda: check_ownership_table(
+            _hdr + f"| `alpha` | concept | a | {_adr_anchor} | x |\n",
+            lambda rel: os.path.join(ROOT, rel),
+        ),
+        False,
+    )
+    expect(
+        "S15④ 复议触发器为空判红",
+        lambda: check_ownership_table(
+            _hdr + f"| `alpha` | concept | a | {_adr_anchor} |  |\n",
+            lambda rel: os.path.join(ROOT, rel),
+        ),
+        True,
+    )
+    expect(
+        "S15⑤ 锚目标非 Accepted（ADR-0039 Proposed）判红",
+        lambda: check_ownership_table(
+            _hdr
+            + "| `alpha` | concept | a | "
+              "`docs/adr/ADR-0039-script-version-immutability-narrowing.md :: 本 ADR 裁决通过`"
+              " | x |\n",
+            lambda rel: os.path.join(ROOT, rel),
+        ),
+        True,
+    )
+    expect(
+        "S15⑦ 新建 ADR 已写归属域为绿",
+        lambda: check_ownership_field_on_new_adrs({
+            "ADR-9001-x.md": "- 日期：2099-01-01\n- 归属域：n/a（纯前端文案）\n",
+        }),
+        False,
+    )
+    expect(
+        "S15⑦ 新建 ADR 缺归属域判红",
+        lambda: check_ownership_field_on_new_adrs({
+            "ADR-9001-x.md": "- 日期：2099-01-01\n- 状态：Proposed\n",
+        }),
+        True,
+    )
+    expect(
+        "S15⑦ cutoff 前存量 ADR 不追溯为绿",
+        lambda: check_ownership_field_on_new_adrs({
+            "ADR-0020-plan-step.md": "- 日期：2026-06-12\n- 状态：Accepted\n",
+        }),
+        False,
     )
 
     if failures:
