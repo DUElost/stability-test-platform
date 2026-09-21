@@ -32,7 +32,7 @@
 - 日期：YYYY-MM-DD
 - 决策者：架构组/研发组
 - 标签：调度, 数据库, 安全
-- 归属域：semantic-ownership <key>（可选；触碰/新建时补；key 见 docs/design/2026-semantic-ownership.md）
+- 归属域：semantic-ownership <key>（新建 ADR 必填，无对应概念写 `n/a（理由）`；存量触碰时补。key 见 docs/design/2026-semantic-ownership.md）
 
 ## 背景
 
@@ -47,7 +47,8 @@
 ## 关联实现/文档
 ```
 
-> `归属域` 字段**触碰即补**，不做一次性全库补齐。该字段指向的是
+> `归属域` 字段：**新建 ADR 必填**（S15⑦ 按头部日期 ≥ 2026-09-22 判，`n/a（理由）` 为合法逃生值），
+> 存量**触碰即补**，不做一次性全库补齐（#3014 案 1A）。该字段指向的是
 > [语义归属索引](../design/2026-semantic-ownership.md) 的表行 key，**不是**把内容裁决权交给索引。
 
 ## 当前 ADR 清单
