@@ -653,6 +653,18 @@ export interface PlanRunFailedDeviceTrendResponse {
   days: number;
 }
 
+/** ADR-0048 v1.1（#2982）：终态 run 按日 completed/total 均值——纯展示指标，与失败设备数双口径并存。 */
+export interface PlanRunPassRatePoint {
+  date: string;
+  avg_pass_rate: number;
+  run_count: number;
+}
+
+export interface PlanRunPassRateTrendResponse {
+  points: PlanRunPassRatePoint[];
+  days: number;
+}
+
 // ─── 通知/调度/审计类型 ──────────────────────────────────────────────────────
 
 export interface NotificationChannel {

@@ -39,7 +39,8 @@ groups:
       description: broken=1（工具自身异常）、unknown=1（执行事实维度不可得）或 last_run 超过 48 小时未更新／指标消失。此时 due 的读数没有意义，不得据此退役任何版本：先修
         probe 或判据端，并确认 stp-script-guard.timer 仍在运行。
   - alert: StabilitySkillUsageHollow
-    expr: stp_skill_usage_hollow > 0
+    # #2977：与平台全量副本同形——缺源（unknown==1）时不得再报 Hollow。
+    expr: stp_skill_usage_hollow > 0 and stp_skill_usage_unknown == 0
     for: 7d
     labels:
       severity: warning

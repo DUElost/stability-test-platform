@@ -13,7 +13,7 @@ def _job(status: JobStatus) -> SimpleNamespace:
 
 
 def test_apply_plan_run_aggregation_uses_single_status_rule():
-    """ADR-0048：设备 FAILED 是事实、不改 run 状态——完成即 SUCCESS。"""
+    """ADR-0048 v1.1：完成但有设备失败 → PARTIAL_SUCCESS（黄，唯一单规则入口）。"""
     from backend.services.plan_run_aggregation import apply_plan_run_aggregation
 
     run = SimpleNamespace(
@@ -31,7 +31,7 @@ def test_apply_plan_run_aggregation_uses_single_status_rule():
     applied = apply_plan_run_aggregation(run, jobs)
 
     assert applied is True
-    assert run.status == PlanRunStatus.SUCCESS.value
+    assert run.status == PlanRunStatus.PARTIAL_SUCCESS.value
     assert run.ended_at is not None
     assert run.result_summary == {
         "total": 3,
@@ -75,7 +75,7 @@ def test_sync_plan_aggregator_delegates_to_terminalization():
     mock_term.assert_called_once_with(terminal_job, db)
 
 
-# ── abort → FAILED override（#783 裁决，ADR-0048 后唯一非绿来源）────────────
+# ── abort → FAILED override（#783 裁决，v1.1 语义下唯一红来源）────────────────
 
 
 def test_aggregation_aborted_forces_failed():
@@ -99,8 +99,11 @@ def test_aggregation_aborted_forces_failed():
     assert run.result_summary["failed"] == 1
 
 
-def test_failed_devices_never_yield_partial():
-    """ADR-0048：设备失败（无论占比）落 SUCCESS——PARTIAL_SUCCESS 不再产出。"""
+def test_failed_devices_yield_partial_success_never_failed():
+    """ADR-0048 v1.1：设备失败（无论占比）→ PARTIAL_SUCCESS——永不判红、永不产出阈值语义。
+
+    断言「永不为 FAILED」即阈值轴防回潮的行为面：任何占比都不许红。
+    """
     from backend.services.plan_run_aggregation import apply_plan_run_aggregation
 
     for failed_count, completed_count in [(1, 2), (2, 1), (1, 0), (5, 5)]:
@@ -114,11 +117,26 @@ def test_failed_devices_never_yield_partial():
         )
         apply_plan_run_aggregation(run, jobs)
 
-        assert run.status == PlanRunStatus.SUCCESS.value, (
-            f"failed={failed_count}/{len(jobs)} 不应改 run 状态"
+        assert run.status == PlanRunStatus.PARTIAL_SUCCESS.value, (
+            f"failed={failed_count}/{len(jobs)} 应判黄不判红"
         )
         assert run.result_summary["failed_only"] == failed_count
         assert run.result_summary["failed"] == failed_count
+
+
+def test_zero_failed_devices_yield_success():
+    """v1.1 绿侧语义：全部 job COMPLETED → SUCCESS（黄只由 failed_only>0 触发）。"""
+    from backend.services.plan_run_aggregation import apply_plan_run_aggregation
+
+    run = SimpleNamespace(
+        id=5, status=PlanRunStatus.RUNNING.value,
+        ended_at=None, result_summary=None,
+    )
+    jobs = [_job(JobStatus.COMPLETED)] * 4
+    apply_plan_run_aggregation(run, jobs)
+
+    assert run.status == PlanRunStatus.SUCCESS.value
+    assert run.result_summary["failed_only"] == 0
 
 
 def test_aggregation_unknown_overrides_aborted():
@@ -165,7 +183,7 @@ def test_aggregation_only_aborted_no_failed():
 
 @pytest.mark.parametrize("terminal_status", [
     PlanRunStatus.SUCCESS.value,
-    PlanRunStatus.PARTIAL_SUCCESS.value,  # 存量行仍受守卫保护（ADR-0048：不再产出）
+    PlanRunStatus.PARTIAL_SUCCESS.value,  # v1.1 恢复产出，终态写入守卫同样覆盖（二次聚合不得改写）
     PlanRunStatus.FAILED.value,
 ])
 def test_aggregation_skipped_when_run_already_terminal(terminal_status):
@@ -399,7 +417,7 @@ def test_finalize_notifies_run_completed_on_success():
 
 
 def test_finalize_notifies_run_completed_despite_failed_devices():
-    """ADR-0048：设备失败不再触发 RUN_FAILED——告警信噪比回归执行链语义。"""
+    """ADR-0048 v1.1：黄色 PARTIAL 归 RUN_COMPLETED 侧——告警信噪比仍属执行链语义。"""
     from backend.services.plan_run_aggregation import apply_plan_run_aggregation
 
     run = SimpleNamespace(
@@ -418,7 +436,7 @@ def test_finalize_notifies_run_completed_despite_failed_devices():
 
     event_type, context = notify.call_args[0]
     assert event_type == "RUN_COMPLETED"
-    assert run.status == PlanRunStatus.SUCCESS.value
+    assert run.status == PlanRunStatus.PARTIAL_SUCCESS.value
     assert context["run_id"] == 302
     assert "1 failed" in context["error_message"]  # 失败台数在通知里可见
 
@@ -557,18 +575,18 @@ def test_maybe_notify_risk_high_emits_once_for_level_s():
     db.commit.assert_called()
 
 
-# ── ADR-0048 结构断言：判定轴只剩 abort ──────────────────────────────────────
+# ── ADR-0048 v1.1 结构断言：判定轴=abort(红)/failed_only(黄)/无(绿)，阈值不回潮 ────
 
 
 def test_resolve_plan_run_status_signature_has_no_threshold_axes():
-    """结构钉：判定入口不再有 failure_threshold/里程碑参数（防回潮）。"""
+    """结构钉：判定入口参数恰好三计数（failure_threshold/total 等比例轴不可入参，防回潮）。"""
     import inspect
 
     from backend.services.plan_run_aggregation import _resolve_plan_run_status
 
     params = inspect.signature(_resolve_plan_run_status).parameters
-    assert set(params) == {"aborted", "abort_requested"}
-    # AST 检查 return 表达式：判定函数只能返回 SUCCESS/FAILED（docstring 允许提及废止词）
+    assert set(params) == {"failed_only", "aborted", "abort_requested"}
+    # AST 检查 return 表达式：判定函数只能返回三终态（docstring 允许提及废止词）
     import ast
     tree = ast.parse(inspect.getsource(_resolve_plan_run_status).lstrip())
     returns = {
@@ -576,7 +594,16 @@ def test_resolve_plan_run_status_signature_has_no_threshold_axes():
         for n in ast.walk(tree)
         if isinstance(n, ast.Return) and n.value is not None
     }
-    assert returns == {"PlanRunStatus.FAILED", "PlanRunStatus.SUCCESS"}, returns
+    assert returns == {
+        "PlanRunStatus.FAILED",
+        "PlanRunStatus.PARTIAL_SUCCESS",
+        "PlanRunStatus.SUCCESS",
+    }, returns
+    # v1.1 防回潮：函数体内不得出现除法/比率形态（阈值轴的算式特征）
+    assert not [
+        n for n in ast.walk(tree) if isinstance(n, ast.BinOp)
+        and isinstance(n.op, (ast.Div, ast.FloorDiv))
+    ], "判定函数出现比率运算——failure_threshold 轴疑似回潮"
 
 
 def test_milestone_probe_is_gone():
