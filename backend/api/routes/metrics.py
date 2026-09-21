@@ -174,6 +174,7 @@ _HEALTH_REASONS = (
     "adb_low_healthy_devices",
     "adb_multiple_servers",
     "usb_tree_empty",
+    "adb_interfaces_missing",
     "usb_host_controller_dead",
     "usb_link_degraded",
     "other",
