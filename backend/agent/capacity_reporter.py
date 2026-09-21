@@ -60,7 +60,8 @@ def compute_capacity(
     usb_device_count — lsusb 枚举到的疑似 Android 设备数，**纯观测对照**：
     与 online_healthy_devices（adb devices 口径）并排展示，差值即 ADB 未枚举到的
     物理设备（授权/驱动/多 fork-server 等）。为 None 表示无法判定（非 0）。
-    刻意不参与 device_slots / effective_slots / health 任何计算。
+    不参与 device_slots / effective_slots；health 仅用于空树（#2902）与
+    L4「USB 有设备但 ADB 接口全无」（#3046）两条 warning reason。
 
     #2902（L2/L3/L4 分辨，均为观测面，不改变槽位计算）：
     - ``adb_interface_count`` — sysfs 里暴露 ADB 接口（ff:42）的设备数。与
@@ -88,6 +89,7 @@ def compute_capacity(
         adb_server_conflict=adb_server_conflict,
         usb_device_count=usb_device_count,
         usb_root_hub_count=usb_root_hub_count,
+        adb_interface_count=adb_interface_count,
         usb_fault_reasons=usb_fault_reasons,
     )
     health_limit = _compute_health_limit(
@@ -162,13 +164,15 @@ def _compute_health(
     adb_server_conflict: bool = False,
     usb_device_count: Optional[int] = None,
     usb_root_hub_count: Optional[int] = None,
+    adb_interface_count: Optional[int] = None,
     usb_fault_reasons: Optional[Sequence[str]] = None,
 ) -> dict:
     """产出结构化 health 快照。
 
     阈值与 _compute_health_limit 完全一致（blocking reason → UNSCHEDULABLE）；
-    warning 级 reason（如 adb_multiple_servers、usb_tree_empty）只进 DEGRADED，
-    不打闸——usb_tree_empty 属观测面，且空树时本就没有设备可调度。
+    warning 级 reason（如 adb_multiple_servers、usb_tree_empty、
+    adb_interfaces_missing）只进 DEGRADED，不打闸——观测面，且当下本就没有
+    可调度的健康设备。
 
     ``usb_fault_reasons`` 由 `kernel_usb_faults`（#2900）判定后传入——内核 USB 子系统
     故障（xHCI 主控死亡 / 慢性链路劣化）**独立于设备数**，故不参与
@@ -198,6 +202,8 @@ def _compute_health(
         reasons.append("adb_multiple_servers")
     if _usb_tree_empty(usb_device_count, usb_root_hub_count, total_devices):
         reasons.append("usb_tree_empty")
+    if _adb_interfaces_missing(usb_device_count, adb_interface_count):
+        reasons.append("adb_interfaces_missing")
     for reason in usb_fault_reasons or ():
         if reason not in reasons:
             reasons.append(reason)
@@ -240,3 +246,20 @@ def _usb_tree_empty(
     if usb_device_count is None or usb_root_hub_count is None:
         return False
     return usb_device_count <= usb_root_hub_count and total_devices == 0
+
+
+def _adb_interfaces_missing(
+    usb_device_count: Optional[int],
+    adb_interface_count: Optional[int],
+) -> bool:
+    """L4：USB 枚举到设备，但 sysfs 上 ADB 接口（ff:42）数为 0（#3046）。
+
+    ``adb_low_healthy_devices`` 看的是 adb devices 列表（``total_devices``），
+    ``usb_tree_empty`` 要求 USB 计数≈0——二者之间的缝：USB n>0 且接口全无时，
+    host 会静默 HEALTHY（.65/.20 实测数周）。本判据只补观测面，不打闸。
+
+    None = 采集失败，不据此报警（未知 ≠ 缺失）。
+    """
+    if usb_device_count is None or adb_interface_count is None:
+        return False
+    return usb_device_count > 0 and adb_interface_count == 0
