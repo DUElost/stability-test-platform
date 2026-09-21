@@ -59,6 +59,9 @@ promtool test rules alerts-stability-platform.test.yml
   65m ⇒ **FAILED** ⇒ 判据取「≤ 末点 + 5m」与 promtool 实际行为一致（含边界）；
 - **新判据的红绿双向**：场景修好时 **1 passed**（0.09s，不需 promtool）；把场景改回 `x60` ⇒
   **1 failed** 且点名 `group#11 StabilityChainCoverageGap: eval_time=65m 超出样本末点 59m + 5m`；还原即绿；
+- **新判据在 PR 门禁条件下恒跑**（这条是它存在的理由）：`PATH=<空目录>env -i … pytest -k
+  "eval_times_are_within or alert_scenarios_fire"` → 场景层 **skipped**（promtool 不可用，与 PR 路径同形）、
+  新判据 **1 passed / 0.08s**——即「本地无 promtool」不再等于「这条事实无人校验」；
 - **59m 那条不报**仍是 `for: 60m` 的边界证据（样本自 t=0 起就满足比值，59m 未满 60m ⇒ 不亮）；
 - 全量口径：`PATH=<3.13.3> python -m pytest tests/ -q` → 见 PR；`check:quick` → 见 PR。
 
