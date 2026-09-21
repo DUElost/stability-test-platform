@@ -101,11 +101,15 @@ deploy/
   （`backend/services/file_server_monitor.py`）。采样器落地背景见
   [`notes/feature/2026-09-14-hostproc-memory-metrics.md`](../notes/feature/2026-09-14-hostproc-memory-metrics.md)
 - skill 用量探针（HOLLOW 检测，#2785）：`deploy/control-plane/systemd/stp-skill-usage.{service,timer}`——
-  每周一 09:30 跑 `tools/dev/skill_usage_report.py --strict`（强信号=Claude Skill
-  工具调用、弱信号=Codex SKILL.md 读取，观察窗按 SKILL.md frontmatter `type`
-  分型：persistent 14 天 / event 60 天）。退出码契约：0=无洞或缺转录源（新站点
-  恒绿不扰人），1=有洞 → unit failed，由 `systemctl --failed` / journal 承接
-  人审；深挖跑 `python scripts/run_gates.py check:gov`
+  每周一 09:30 跑 `tools/dev/skill_usage_probe.py --home /home/<deploy-user> --deploy-root <deploy-root>`
+  （强信号=Claude Skill 工具调用、弱信号=Codex SKILL.md 读取，观察窗按 SKILL.md frontmatter `type`
+  分型：persistent 14 天 / event 60 天；root 跑，源目录走 CLI 显式指路）。**退出码契约（#2881 起反转，
+  #2984 同步文档）：`0`=跑完**——无洞 / 有洞 / 缺转录源都算跑完，「有洞」的出口是下面那组指标与告警，
+  不再靠 unit failed；**`1`=探针自身异常**（判据崩溃 / 指标写不出去）→ unit failed，由
+  `systemctl --failed` / journal 承接人审。指标出口：textfile
+  `/var/lib/prometheus/node-exporter/stp-skill-usage.prom`（`stp_skill_usage_{hollow,unknown,broken,last_run}`），
+  消费方 `StabilitySkillUsageHollow` / `StabilitySkillUsageUntrusted` 两条规则；`--strict` 只在
+  `python scripts/run_gates.py check:gov`（深挖跑它）
 
 ---
 
