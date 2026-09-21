@@ -137,6 +137,9 @@ const REASON_LABELS: Record<string, string> = {
   // #2902：USB 树上只剩控制器（零权限判据）——`adb_low_healthy_devices` 要求
   // total_devices>0，整树死亡时它恒不成立，这条才是那种形态的唯一可见信号。
   usb_tree_empty: 'USB 总线空树（主控/供电异常）',
+  // #3046：USB 枚举到设备，但 sysfs ADB 接口（ff:42）数为 0——adb_low /
+  // usb_tree_empty 之间的缝；warning 级，不打闸。
+  adb_interfaces_missing: 'USB 有设备但无 ADB 接口',
   adb_multiple_servers: 'ADB 多 server 冲突',
   // #2900：内核 USB 子系统故障（agent 读内核日志判定）——主机可能一台设备都看不到
   // 而心跳全正常，这两条是唯一可见信号。
