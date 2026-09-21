@@ -27,4 +27,10 @@ Class: bug-fix
 ## Revisit
 
 新增动态 `action=f"…"` / 形参时：先把闭合全集写入 allowlist，再登记
-`_DYNAMIC_ACTION_SITES`；行号漂移会使僵尸断言变红。
+`_DYNAMIC_ACTION_SITES`。
+
+> 2026-09-21 修订：本条原写「行号漂移会使僵尸断言变红」——登记键当时含 lineno，
+> 于是 #3031 在 `plan_run_abort.py` 上方插入 3 行就让 main 当场红，且报错指向错误的
+> 处置。登记键已改为**形态键**（文件::函数链::`action=` 源码 → 次数），行号漂移不再
+> 惊动守卫；见
+> [`2026-09-21-audit-action-dynamic-key-anchor-3017.md`](2026-09-21-audit-action-dynamic-key-anchor-3017.md)。
