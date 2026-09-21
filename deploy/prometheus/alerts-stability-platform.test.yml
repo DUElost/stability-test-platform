@@ -563,12 +563,15 @@ tests:
             需裁决，见 #2754 / #722）。
 
   # ---- #2909③ StabilityChainCoverageGap ----
+  # 样本必须**覆盖到第二个 eval_time 之后**：series 在 t=59m 结束而 eval 在 65m，
+  # 超过 Prometheus 的 5 分钟 staleness 窗口 ⇒ 表达式取空、`got:[]`
+  # （promtool 3.13.3 报「exp 有 / got 空」；本机 2.53.3 容忍，见 #2970 的 Note）。
   - interval: 1m
     input_series:
       - series: 'stability_chain_coverage_devices{kind="online_total"}'
-        values: '600x60'
+        values: '600x70'
       - series: 'stability_chain_coverage_devices{kind="gap_missing"}'
-        values: '90x60'
+        values: '90x70'
     alert_rule_test:
       - eval_time: 59m
         alertname: StabilityChainCoverageGap
