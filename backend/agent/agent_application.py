@@ -33,7 +33,11 @@ from .local_runtime import (
     replay_early_control_commands,
 )
 from .mq.producer import StepTraceWriter
-from .startup_guards import check_agent_version, ensure_adb_server_on_startup
+from .startup_guards import (
+    check_agent_version,
+    enforce_single_instance,
+    ensure_adb_server_on_startup,
+)
 from .startup_identity import bootstrap_process_identity
 
 # Device Log Watcher feature flag —— 全局 STP_WATCHER_ENABLED 或 Plan 默认开启。
@@ -284,4 +288,7 @@ class AgentApplication:
 
 def run_agent_application() -> None:
     """Entry used by ``main`` — one process, one ``AgentApplication``."""
+    # #2961：单实例守卫必须早于 AgentApplication 的任何动作——版本门控心跳、
+    # HOST_ID 注册、设备上报都在它内部，第二个进程一旦走到那里就开始叠加。
+    enforce_single_instance()
     AgentApplication().run()

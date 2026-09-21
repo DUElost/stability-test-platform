@@ -2,7 +2,7 @@
 
 > **最后更新**：2026-09-14  
 > **运维模板权威源**：`backend/.env.example`、`backend/agent/.env.example`、根目录 `.env.server.example`。  
-> **代码侧完整读取清单**：见文末[附录](#附录运行时读取清单自动生成勿手改)（自动生成 + 漂移门禁，#737）。  
+> **代码侧完整读取清单**：见文末[附录](#附录运行时读取清单自动生成勿手改)（自动生成；漂移门禁比的是**语义列**——变量 / 默认 / 示例登记 / 类别，**不含「首个读取点」那一列的行号**，#737 / #2999）。  
 > 本文其余章节只整理**常用/易踩坑**变量；模板未列的内部/开发变量以附录为准。
 
 ---
@@ -25,15 +25,15 @@
 | `JWT_SECRET_KEY` | JWT 签名；生产必改 |
 | `AGENT_SECRET` | Agent HTTP/SocketIO 共用密钥；与 Agent 侧一致 |
 | `ENV` | `development` / `internal` / `production`。内网 HTTP 正式环境用 `internal`；HTTPS 才用 `production` |
-| `AUTH_COOKIE_SECURE` / `AUTH_COOKIE_SAMESITE` | Cookie 策略；`production` 强制 secure + lax/strict（ADR-0024） |
-| `STP_CSRF_ENABLED` | 浏览器 CSRF；生产/正式须开启 |
+| `AUTH_COOKIE_SECURE` / `AUTH_COOKIE_SAMESITE` | Cookie 策略。**强制面是 `production` 与 `internal` 两个**（`backend/core/security.py::PRODUCTION_LIKE_ENVS`，ADR-0024 v1.1）：`ENV=production` 必须 `AUTH_COOKIE_SECURE=1`；**两环境都**校验 SameSite 取值合法且拒绝 `none`。`internal`（无 TLS 内网部署）唯一豁免的是 Secure 本身——纯 HTTP 下 Secure cookie 会被浏览器丢弃，强制它等于必然拒启且无安全收益 |
+| `STP_CSRF_ENABLED` | 浏览器 CSRF。`production` **与** `internal` 都**禁止显式关闭**：显式 `0`/`false`/`no`/`off` 会让进程拒绝启动（不是「告警后继续跑」） |
 | `CORS_ORIGINS` | 前端 Origin 白名单（须与浏览器访问地址完全一致） |
 | `STP_ALLOW_REGISTER` | 公开注册；生产默认关闭 |
 | `STP_METRICS_AUTH_REQUIRED` | `/metrics` 鉴权（建议生产 `1`） |
 | `STP_API_DOCS_ENABLED` | `/docs` `/redoc` `/openapi.json` 开关，缺省开；白名单 `1/true/yes/on` 为开、其余值一律关。控制面对公网开放前置 `0`（G22）；脚本客户端走 `/auth/token` bearer 不受影响 |
 | `STP_ENABLE_INPROCESS_SAQ` | `1`=进程内 SAQ Worker；`0`=仅 producer（enqueue），需外部 worker 同队列消费（ADR-0026 P0） |
 | `DEVICE_SNAPSHOT_INTERVAL` | 心跳硬件字段降采样间隔秒（默认 30） |
-| `STP_HEARTBEAT_INTERVAL_BASE` / `_MIN` / `_MAX` | 控制面建议 Agent 心跳周期（随在线设备数缓增） |
+| `STP_HEARTBEAT_INTERVAL_BASE` / `_MIN` / `_MAX` | 控制面建议 Agent 心跳周期（随在线设备数缓增）。**同一批键名在两个进程里是两套默认值，必须分别读**：控制面 `backend/services/agent_host_heartbeat.py` 的模块级 `HEARTBEAT_INTERVAL_BASE/_MIN/_MAX` 用 `20 / 15 / 60` 算建议值（缓增后钳进该区间）；Agent 侧 `backend/agent/settings.py` 的 `stp_heartbeat_interval_min/_max` 另用 `10 / 120` 钳住**收到的**建议值。`backend/.env.example` 示例登记的是控制面那一组 |
 | `STP_LOG_RATE_LIMIT_BASE` / `_MIN` | 控制面建议每 host `step_log` 行速率（随设备数收紧；ADR-0026 P2-2） |
 | `STP_DASHBOARD_SUMMARY_PUSH_INTERVAL_SECONDS` | Dashboard 摘要 WS 合流推送间隔（默认 `1.0`；#2324） |
 | `STP_UI_RATE_LIMIT_REQUESTS` | UI HTTP 限流桶（默认 `300` /60s；#2324） |
@@ -163,7 +163,10 @@
 > 读者既查不到某个键什么时候没的，也无从判断「文档里还写着它」是正当引用还是陈旧失真）。
 > 机器判据由 `tests/test_removed_env_keys.py` 承担：解析下表第一列的 code span 得到键名，
 > 再扫全仓（`docs/**` 除 `docs/archive/**`、`docs/notes/**`；`backend/**`；
-> `deploy/**`；`tools/**`；`scripts/**`；`.github/workflows/*.yml`），要求每一处命中
+> `deploy/**`；`tools/**`；`scripts/**`；`.github/workflows/*.yml`——文件集合取
+> `git ls-files`，且**只取后缀 ∈ {`.md`,`.py`,`.yml`,`.yaml`,`.sh`,`.example`} 或名字含
+> `.env` 的文件**：`.service` / `.conf` / `.sql` 等**不在扫描面内**，往这些文件里写已删键
+> 守卫不会响（#2999 记为已知面，扩展后缀前先确认没有存量命中）），要求每一处命中
 > **同一行内**带 `已移除` / `已删除` / `无读取点` / `removed` 之一——裸引用即红。
 > `docs/archive/**`（openspec 留档）与 `docs/notes/**`（一次性 Note，追加式历史）按「历史
 > 陈述不追改」的既有实践排除，与 ADR 正文里 `~~划线 + 已移除`` 的勘误形态同源。
@@ -176,15 +179,17 @@
 | `BACKPRESSURE_LAG_THRESHOLD` | 已移除（Redis 背压于 Phase 4 移除；#737 `5dc2d030` 清示例） | 无 | 无替代旋钮：`backend/services/agent_host_heartbeat.py::get_backpressure()` 恒返回 `None`（SocketIO 自带 TCP 背压） |
 | `BACKPRESSURE_RELEASE_THRESHOLD` | 已移除（同 `BACKPRESSURE_LAG_THRESHOLD`） | 无 | 同上——迟滞释放对（lag/release）随 Redis 背压一起消失，不再存在「恢复阈值」 |
 | `BACKPRESSURE_LOG_RATE_LIMIT` | 已移除（同上） | 无 | 日志速率上限不再取静态 env：`suggested_log_rate_limit()` 按在线 host 数派生，真实旋钮是 `STP_LOG_RATE_LIMIT_BASE` / `STP_LOG_RATE_LIMIT_MIN` |
+| `ENABLE_CRON_SCHEDULER` | 已移除（**全仓零读取点**，#2999 登记；此前只留在 ADR-0002 正文与 `docs/archive/**` 里，既无账也无门禁） | 无 | cron 派发常驻无开关：`backend/scheduler/app_scheduler.py::register_schedules` 无条件 `_add(..., id="cron_check")`，真实旋钮是 `CRON_POLL_INTERVAL`；`backend/scheduler/cron_scheduler.py::check_and_fire_schedules` 由该 interval 驱动。ADR-0002 正文已按 `USE_SESSION_WATCHDOG` 的同形写法加行内标注 |
 
 ---
 
 ## 附录：运行时读取清单（自动生成，勿手改）
 
-> 生成：`python tools/dev/env_inventory.py --write`；
+> 生成：`python tools/dev/env_inventory.py --write`；  
 > 校验：`python tools/dev/env_inventory.py --check`（已接入 `run_gates.py` 的
 > `check:quick` / `check:pr`）：只比较**语义**（名称/默认值/登记状态/类别），
-> 纯行号平移不触发；`读取点` 列是上次 `--write` 的导航快照，可能与当前行号有偏差。
+> 纯行号平移不触发；`读取点` 列是上次 `--write` 的导航快照，可能与当前行号有偏差（#2999：该列刻意不参与比对，故 main 上曾长期是过期行号而门禁恒绿——要新鲜度就重跑
+> `--write`，别把它当被守护的事实）。
 > 覆盖范围：`backend/**/*.py`（不含 `backend/agent/scripts/**`——版本化脚本目录
 > 自管环境契约，见 ADR-0020）+ ADR-0042 的 Settings 类字段（`validation_alias`/
 > `alias`/`AliasChoices`/`env_prefix`）；`示例` 列 ✅ = 该名出现在任一 `.env*.example`
@@ -196,11 +201,11 @@
 示例文件是**运维模板**（承载需要运维/机型调整的子集）；本表是**代码侧完整清单**。
 门禁：每个读取名必须「登记进示例」或「内部声明」二选一，二者之外即红。
 
-| 变量 | 默认 | 示例 | 类别 | 首个读取点 |
+| 变量 | 默认 | 示例 | 类别 | 首个读取点（导航快照，不比行号） |
 |---|---|---|---|---|
 | `ABORT_REAPER_GRACE_SECONDS` | `60` | ✅ | 运行时 | `backend/core/job_timeout_config.py:77` |
 | `ADB_PATH` | `adb` | ✅ | 运行时 | `backend/agent/pipeline_engine.py:1004` |
-| `ADMISSION_REQUEUE_BACKOFF_SECONDS` | `60` | ✅ | 运行时 | `backend/core/settings/scheduler.py:95` |
+| `ADMISSION_REQUEUE_BACKOFF_SECONDS` | `60` | ✅ | 运行时 | `backend/core/settings/scheduler.py:87` |
 | `AGENT_INSTALL_DIR` | `-` | ✅ | 运行时 | `backend/agent/config.py:21` |
 | `AGENT_LEASE_EXTEND_BATCH_CHUNK` | `100` | ✅ | 运行时 | `backend/agent/settings.py:170` |
 | `AGENT_LEASE_EXTEND_BATCH_MAX` | `200` | ✅ | 运行时 | `backend/services/agent_lease_extend.py:37` |
@@ -211,12 +216,12 @@
 | `AGENT_SECRET` | `` | ✅ | 运行时 | `backend/agent/api_client.py:35` |
 | `AIMONKEY_RESOURCE_DIR` | `` | ✅ | 运行时 | `backend/agent/aimonkey_paths.py:23` |
 | `API_URL` | `http://127.0.0.1:8000` | ✅ | 运行时 | `backend/agent/agent_application.py:103` |
-| `ARTIFACT_RETENTION_DAYS` | `30` | ✅ | 运行时 | `backend/core/settings/scheduler.py:82` |
-| `AUDIT_LOG_BUSINESS_RETENTION_DAYS` | `90` | ✅ | 运行时 | `backend/core/settings/scheduler.py:118` |
-| `AUDIT_LOG_RETENTION_BATCH_SIZE` | `5000` | ✅ | 运行时 | `backend/core/settings/scheduler.py:121` |
-| `AUDIT_LOG_RETENTION_INTERVAL_SECONDS` | `3600` | ✅ | 运行时 | `backend/core/settings/scheduler.py:123` |
-| `AUDIT_LOG_SECURITY_RETENTION_DAYS` | `180` | ✅ | 运行时 | `backend/core/settings/scheduler.py:119` |
-| `AUDIT_LOG_SESSION_RETENTION_DAYS` | `30` | ✅ | 运行时 | `backend/core/settings/scheduler.py:117` |
+| `ARTIFACT_RETENTION_DAYS` | `30` | ✅ | 运行时 | `backend/core/settings/scheduler.py:74` |
+| `AUDIT_LOG_BUSINESS_RETENTION_DAYS` | `90` | ✅ | 运行时 | `backend/core/settings/scheduler.py:110` |
+| `AUDIT_LOG_RETENTION_BATCH_SIZE` | `5000` | ✅ | 运行时 | `backend/core/settings/scheduler.py:113` |
+| `AUDIT_LOG_RETENTION_INTERVAL_SECONDS` | `3600` | ✅ | 运行时 | `backend/core/settings/scheduler.py:115` |
+| `AUDIT_LOG_SECURITY_RETENTION_DAYS` | `180` | ✅ | 运行时 | `backend/core/settings/scheduler.py:111` |
+| `AUDIT_LOG_SESSION_RETENTION_DAYS` | `30` | ✅ | 运行时 | `backend/core/settings/scheduler.py:109` |
 | `AUTH_ACCESS_COOKIE_NAME` | `stp_access_token` | ✅ | 运行时 | `backend/core/settings/security.py:44` |
 | `AUTH_COOKIE_PATH` | `/` | ✅ | 运行时 | `backend/core/settings/security.py:46` |
 | `AUTH_COOKIE_SAMESITE` | `lax` | ✅ | 运行时 | `backend/core/settings/security.py:48` |
@@ -269,7 +274,7 @@
 | `PRECHECK_NOTIFY_DEBOUNCE_SECONDS` | `0.5` | — | 运行时 | `backend/services/precheck/notify.py:14` |
 | `PRECHECK_QUEUE_STALE_SECONDS` | `90` | ✅ | 运行时 | `backend/core/job_timeout_config.py:68` |
 | `PRECHECK_REAPER_INTERVAL_SECONDS` | `45` | ✅ | 运行时 | `backend/core/settings/scheduler.py:58` |
-| `PROMETHEUS_MULTIPROC_DIR` | `-` | — | 运行时 | `backend/core/metrics.py:1283` |
+| `PROMETHEUS_MULTIPROC_DIR` | `-` | — | 运行时 | `backend/core/metrics.py:1262` |
 | `QUEUE_DEPTH_POLL_INTERVAL_SECONDS` | `15` | ✅ | 运行时 | `backend/core/settings/scheduler.py:57` |
 | `RECONCILER_DRAIN_BATCH` | `20` | ✅ | 运行时 | `backend/core/settings/scheduler.py:42` |
 | `RECONCILER_DRAIN_MAX_SECONDS` | `5.0` | ✅ | 运行时 | `backend/core/settings/scheduler.py:54` |
@@ -346,16 +351,16 @@
 | `STP_COUNTER_RECONCILE_LOOKBACK_HOURS` | `48` | ✅ | 运行时 | `backend/core/settings/scheduler.py:89` |
 | `STP_CSRF_ENABLED` | `1` | ✅ | 运行时 | `backend/core/csrf.py:37` |
 | `STP_DASHBOARD_SUMMARY_PUSH_INTERVAL_SECONDS` | `-` | ✅ | 运行时 | `backend/services/dashboard_summary_publisher.py:65` |
-| `STP_DEDUP_LOG_ENCODING` | `utf-8` | — | 运行时 | `backend/main.py:200` |
+| `STP_DEDUP_LOG_ENCODING` | `utf-8` | — | 运行时 | `backend/main.py:199` |
 | `STP_DEDUP_PLACE` | `SH` | — | 运行时 | `backend/services/dedup_scan.py:64` |
 | `STP_DEDUP_SCAN_PYTHON` | `` | ✅ | 运行时 | `backend/agent/scan_runner.py:379` |
 | `STP_DEDUP_SCAN_SCRIPT` | `` | ✅ | 运行时 | `backend/agent/scan_runner.py:380` |
 | `STP_DEDUP_SCAN_TAG` | `` | ✅ | 运行时 | `backend/agent/scan_runner.py:385` |
-| `STP_DEDUP_WORK_DIR` | `logs/dedup_uploads` | ✅ | 运行时 | `backend/api/routes/dedup.py:72` |
+| `STP_DEDUP_WORK_DIR` | `logs/dedup_uploads` | ✅ | 运行时 | `backend/api/routes/dedup.py:75` |
 | `STP_DEVICE_DISK_SAMPLE_INTERVAL_SECONDS` | `300` | ✅ | 运行时 | `backend/agent/settings.py:221` |
 | `STP_DEVICE_LOG_EVENT_ENABLED` | `-` | ✅ | 运行时 | `backend/agent/event_uploader.py:119` |
 | `STP_DEVICE_SERIAL` | `-` | — | 测试 | `backend/agent/tests/test_pipeline_engine_script_action.py:51` |
-| `STP_ENABLE_INPROCESS_SAQ` | `1` | ✅ | 运行时 | `backend/main.py:206` |
+| `STP_ENABLE_INPROCESS_SAQ` | `1` | ✅ | 运行时 | `backend/main.py:205` |
 | `STP_EVENT_UPLOADER_PRUNE_LOCAL` | `0` | ✅ | 运行时 | `backend/agent/event_uploader.py:587` |
 | `STP_EXTRACT_BACKEND` | `` | — | 运行时 | `backend/scripts/jira_extract_run52.py:10` |
 | `STP_FILE_SERVER_ADDRESS` | `` | ✅ | 运行时 | `backend/services/file_server_monitor.py:253` |
@@ -383,7 +388,7 @@
 | `STP_LOG_RATE_LIMIT_MIN` | `20` | ✅ | 运行时 | `backend/services/agent_host_heartbeat.py:36` |
 | `STP_MAX_CLAIM_SLOTS` | `-` | ✅ | 运行时 | `backend/agent/capacity_reporter.py:126` |
 | `STP_MAX_CONCURRENT_OPERATIONS` | `-` | ✅ | 运行时 | `backend/agent/operation_scheduler.py:38` |
-| `STP_METRICS_AUTH_REQUIRED` | `1` | ✅ | 运行时 | `backend/api/routes/metrics.py:387` |
+| `STP_METRICS_AUTH_REQUIRED` | `1` | ✅ | 运行时 | `backend/api/routes/metrics.py:324` |
 | `STP_NOTIFY_SAQ_RETRIES` | `-` | — | 运行时 | `backend/services/notification_service.py:98` |
 | `STP_NOTIFY_SAQ_TIMEOUT_S` | `-` | ✅ | 运行时 | `backend/services/notification_service.py:101` |
 | `STP_PHASE_BARRIER_ENABLED` | `1` | ✅ | 运行时 | `backend/agent/job_runner.py:220` |

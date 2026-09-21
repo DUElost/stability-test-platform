@@ -5,6 +5,11 @@
 > **待删/归档清单**：[`DOC-RETIREMENT.md`](./DOC-RETIREMENT.md)
 
 本页只保留三样常驻必需品：**阅读顺序**、**文档分层定义与登记簿**、**权威归属**。
+
+> **「最后更新」头部义务〔#3003〕**：凡带该头部的事实文档，**改动正文语义的提交必须同步
+> 刷新本页/本文的「最后更新」日期**；做不到就删掉该字段、只留 git 历史——陈旧的日期比没有
+> 更坏（它是读者最廉价的时效判据）。`docs/README.md` 与 `07-execution-protocol.md` 曾长期
+> 声称比自身内容旧，已于 #3003 校准并纳入本义务。
 逐文件的描述型索引（设计 / 开发运维 / PRD·验收）已迁往 [hub README](./README.md)，按需查阅。
 冲突时以**代码与测试**为准。  
 根目录 [`../README.md`](../README.md) 保持精简；环境变量、测试禁区、执行协议细则在子文档。
@@ -53,7 +58,7 @@ operations/README.md → production-minimum-deployment-checklist.md
 | **开发** | [`development/`](./development/) | 本地环境、**env 表**、测试约定 |
 | **运维** | [`operations/`](./operations/) + runbook | 部署、Agent 版本、联调、监控 |
 | **共享启动契约** | [`../AGENTS.md`](../AGENTS.md) | 总原则、跨模块硬不变量、安全红线与按需入口 |
-| **Claude 入口** | [`../CLAUDE.md`](../CLAUDE.md) | 导入共享契约并路由状态机与领域细节 |
+| **Claude 入口** | [`../CLAUDE.md`](../CLAUDE.md) | **symlink → `AGENTS.md`**（#857；共享启动契约的 Claude harness 薄壳，无独立内容〔#3003〕） |
 | **全面审查指引** | [`reviews/PROJECT_REVIEW_PLAN.md`](./reviews/PROJECT_REVIEW_PLAN.md) | 全面只读审查总纲（R01–R15 范围与入口、逐轮基线与报告模板、跨区收口）；**指引而非审查结果**，总纲建立不代表任何区域已审查完成 |
 | **跨区收口** | [`reviews/REVIEW_CROSS_REGION_CHAIN_A_2026-09-12.md`](./reviews/REVIEW_CROSS_REGION_CHAIN_A_2026-09-12.md) | §6 链 A（执行链）六跳逐跳对证（五要素 + file:line + 既有测试盘点）、场景覆盖矩阵、缺口 G-1～G-9；**静态对证而非动态验证通过** |
 | **跨区收口** | [`reviews/REVIEW_CROSS_REGION_CHAIN_B_2026-09-13.md`](./reviews/REVIEW_CROSS_REGION_CHAIN_B_2026-09-13.md) | §6 链 B（日志链）六跳逐跳对证（DLE 状态机权威 + 五要素 + file:line）、五必测场景矩阵、发现 F-B1～F-B4、缺口 G-B1～G-B5；**静态对证而非动态验证通过** |
@@ -97,7 +102,7 @@ operations/README.md → production-minimum-deployment-checklist.md
 | **Living 审查** | [`reviews/PLATFORM_LEDGER_AUDIT_2026-09-15.md`](./reviews/PLATFORM_LEDGER_AUDIT_2026-09-15.md) | **台账审计报告**（只读，基线 2026-09-15）：复核 8 份 `📌 [总表]` 台账 + #910/#1737/#1035 共 162 个 issue 引用；**核心结论**——逐项挂 issue 号的台账 **8 份零假闭环**（逐项状态核验 8/8 + 源码级抽验 3 份），而**仅给汇总计数的风险表出现 2 处登记过期**（#1515 R-01/R-02「已修未回写」，已由 PR #2102/#2117 更正为 2/1/6）；含 #1515 清单 11/11 复核、R10/R07 源码级抽验、#1737 五项验收复核（审计日工作已完成未关闭；**2026-09-16 已关闭**）、#1035 自杀条款「批次未定义」疑问、**方法论 6 条**与 3 次审计自查更正；**增量**：#1522 一条 issue 建议被正确拒绝（判据应验「现象是否消除」而非「建议是否被采纳」） |
 | **实现规格** | [`reviews/IMPLEMENTATION_SPEC_PROMPT.md`](./reviews/IMPLEMENTATION_SPEC_PROMPT.md) | 阶段 3 重构实现规格——Agent 工作提示词（产出 device-log-event implementation spec） |
 | **设计** | [`design/2026-08-27-platform-ai-assistant.md`](./design/2026-08-27-platform-ai-assistant.md) | 平台 AI 助手设计（组件职责/轮次时序/动作状态机/权限隔离矩阵/安全边界/部署观测；ADR-0031 配套） |
-| **架构 ADR** | [`adr/ADR-0033-tool-kit-ecosystem-integration.md`](./adr/ADR-0033-tool-kit-ecosystem-integration.md) | 外部工具统一接入契约规范与包管理解耦模型（三层宿主/Tool Contract/Manifest×DB catalog/防腐适配器/与 ADR-0032 权威分家；D0·D3 即刻生效、包存储条件落地；**落地状态：部分落地**——Phase 2 B5；Phase A D0/Contract/Jira ACL（#3005）；Phase A3 下载+#3015 + follow-ups #3028/#3013；§5.4 包存储评估 **未触发**（[`2026-09-20-adr0033-package-store-trigger-assessment`](./notes/architecture/2026-09-20-adr0033-package-store-trigger-assessment.md)）；Accepted v1.9；#745/#2546） |
+| **架构 ADR** | [`adr/ADR-0033-tool-kit-ecosystem-integration.md`](./adr/ADR-0033-tool-kit-ecosystem-integration.md) | 外部工具统一接入契约规范与包管理解耦模型（三层宿主/Tool Contract/Manifest×DB catalog/防腐适配器/与 ADR-0032 权威分家；D0·D3 即刻生效、包存储条件落地；**落地状态：部分落地**——Phase 2 B5；Phase A D0/Contract/Jira ACL（#3005）；Phase A3 下载+#3015 + follow-ups #3028/#3013；§5.4 包存储评估 **未触发**（[`2026-09-20-adr0033-package-store-trigger-assessment`](./notes/architecture/2026-09-20-adr0033-package-store-trigger-assessment.md)）；§5.6 **D0 可拦对象口径**=带外部资产的族（#3014 案 3A）；Accepted v1.10；#745/#2546） |
 | **架构 ADR** | [`adr/ADR-0034-multi-harness-execution-contract.md`](./adr/ADR-0034-multi-harness-execution-contract.md) | 多 Harness 并行执行契约与执行登记（选择权原则/三维状态模型/Registry 非调度器/overlap 真值表/drift gate 非 merge queue/G2 真身+薄壳/Role=元数据+扩展点（v1.7 收敛，v1.8 缺省归一化+再开启条件）/并发上限反转——移除 ≈2-3、守对象重锚在窗 Execution 规模与 reconcile 负载（v1.9）/附录 A 增补 dsh web 实测——根级基线✅+scoped 触碰动态✅、静态 patch disabled 与运行时矛盾（v1.10）/dsh web 转正回填——Registry CLI 全周期 dogfood 通过 #1256→PR #1291、0.1.5 复测一致（v1.11）/CodeBuddy CLI/IDE 分立——附录 A 原单行实为 CLI 结论、2026-09-11 人工补测 IDE 得 Q1=否/Q2=是/Q3=一次（Zcode 同形态，与 CLI 相反）、照 Cursor 先例拆两行并校正 CLI 版本 2.149.0、补 IDE 版本 4.11.3（v1.12）；**Accepted v1.12**；两轮八源评审综合见 `reviews/REVIEW_ADR0034_MULTI_HARNESS_2026-09-06_synthesis.md`） |
 | **架构 ADR** | [`adr/ADR-0035-agent-host-identity.md`](./adr/ADR-0035-agent-host-identity.md) | Agent 主机身份与凭据体系（决策四段化：§3 当前状态=接受共享 AGENT_SECRET+威胁模型与冒充面收窄 / §4 目标形态=A 每主机凭据 / §5 迁移路径=C 注册质询+实施骨架 / §6 升级触发条件+§6.1 检测来源（信号来源/检出方/命中后第一步）；四方案对比；ADR Accepted ≠ 实施已启动；两份竞争提案合并为单一权威；R02-R01/#906；**Accepted v1.2**） |
 | **架构 ADR** | [`adr/ADR-0036-notification-delivery-semantics.md`](./adr/ADR-0036-notification-delivery-semantics.md) | 通知投递语义契约（How delivery behaves：`ACCEPTED`=渠道接受请求≠DELIVERED/三态失败/强制 deadline/SAQ 唯一重试 owner+投递级幂等成对/at-least-once+每通道去重键/投递事实落 DB/同步仅限连通性测试；协议码与 retry 参数不入正文；挂起送达回执与入站契约；**Accepted v1.0（2026-09-11 定稿）**；与 ADR-0011 分工 What vs How；R11 #1117/#1120/#1122） |
@@ -118,7 +123,7 @@ operations/README.md → production-minimum-deployment-checklist.md
 
 ## 权威 vs 归档
 
-- **权威**：本树 `design/` · `development/` · `operations/` · `adr/` · `prd/` · `acceptance/`，及根 `AGENTS.md` / `CLAUDE.md` 摘要  
+- **权威**：本树 `design/` · `development/` · `operations/` · `adr/` · `prd/` · `acceptance/`，及根 `AGENTS.md`（`CLAUDE.md` 为其 symlink〔#3003〕）  
 - **概念/关系 owner 索引**：[`design/2026-semantic-ownership.md`](./design/2026-semantic-ownership.md)（目录粒度仍由本页承担；**不**因该索引获得「以索引为准」的内容裁决权）
 - **设备日志全链地图**：[`design/2026-device-log-chain-contract.md`](./design/2026-device-log-chain-contract.md)（Living Contract；内容权威仍属 ADR-0018/0025/0028/0032 + scan-upload-merge；阶段展开见 `2026-log-chain-global-semantics.md`）
 - **全面审查指引**：`reviews/PROJECT_REVIEW_PLAN.md`（分区导航与覆盖清单；不是审查结果）

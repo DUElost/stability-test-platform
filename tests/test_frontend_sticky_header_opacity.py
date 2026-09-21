@@ -22,8 +22,14 @@ FRONTEND_SRC = REPO_ROOT / "frontend" / "src"
 
 #: 表头元素的起始标记（sticky 一定挂在这些元素或其直接子 TableRow 上）。
 _HEADER_OPEN = re.compile(r"<(TableHeader|thead|TableHead|TableRow)\b")
-#: sticky 表头的判据窗口：从起始标记往下找 N 行，看到 `sticky top-0` 即认定是表头行。
+#: **识别**窗口：从起始标记往下找 N 行，看到 `sticky top-0` 即认定这是 sticky 表头。
+#: 它只负责「这是不是表头」，不负责取透明度值（见 `_BLOCK_MAX_LINES`）。
 _WINDOW_LINES = 8
+#: **取值**窗口：从起始标记找到该元素的闭合标签（同名标签配对），上限行数。
+#: #2986：固定 8 行的取值窗口够不到 `DeviceOverview.tsx` 的透明度（它在 `TableHeader`
+#: 内第 11 行）——该文件因此贡献 0 个被测值却仍计入反空转下限，把 `/95` 改回 `/50`
+#: 也全绿。取值面必须跟着**元素块**走，而不是跟着「识别用的那几行」走。
+_BLOCK_MAX_LINES = 60
 _ALPHA = re.compile(r"\bbg-[a-zA-Z][\w-]*/(\d{1,3})\b")
 _STICKY = re.compile(r"sticky\s+top-0")
 #: 不变量的口径出处（本守卫引用它；它消失了说明口径被改，守卫要同步而不是静默通过）。
@@ -58,16 +64,42 @@ def _frontend_tsx() -> list[Path]:
     return sorted(out)
 
 
+def _element_block(lines: list[str], start: int, tag: str) -> list[str]:
+    """起始标记所在元素的整块文本：按同名标签配对找闭合，受 `_BLOCK_MAX_LINES` 上限约束。
+
+    配对是轻量正则（`<Tag` / `</Tag>` / 自闭合 `<Tag … />`），JSX 文本里出现同名标签
+    字面量不在本仓的写法范围内；配不上时退化为「起始 + 上限行」，宁可多取几行也不静默
+    取空——空集正是 #2986 的失效形态。
+    """
+    open_re = re.compile(rf"<{tag}\b")
+    close_re = re.compile(rf"</{tag}\b")
+    self_close_re = re.compile(rf"<{tag}\b[^>]*/>")
+    depth = 0
+    end = min(len(lines), start + _BLOCK_MAX_LINES)
+    for j in range(start, end):
+        depth += (len(open_re.findall(lines[j])) - len(self_close_re.findall(lines[j]))) - len(
+            close_re.findall(lines[j])
+        )
+        if depth <= 0:
+            return lines[start : j + 1]
+    return lines[start:end]
+
+
 def _sticky_header_windows(text: str) -> list[tuple[int, str]]:
-    """返回 (起始行号, 窗口文本)：表头元素且窗口内出现 `sticky top-0` 的那些。"""
+    """返回 (起始行号, 取值块文本)：表头元素且识别窗口内出现 `sticky top-0` 的那些。
+
+    取值块 = 整个元素（可能是 `<thead>…</thead>` 或单个自闭合 `<TableRow … />`），
+    透明度值在块内任意深度都算——#2986 的漏判正是「值落在识别窗口之外」。
+    """
     lines = text.splitlines()
     out: list[tuple[int, str]] = []
     for i, line in enumerate(lines):
-        if not _HEADER_OPEN.search(line):
+        m = _HEADER_OPEN.search(line)
+        if not m:
             continue
-        window = lines[i : i + _WINDOW_LINES]
-        if any(_STICKY.search(w) for w in window):
-            out.append((i + 1, "\n".join(window)))
+        if not any(_STICKY.search(w) for w in lines[i : i + _WINDOW_LINES]):
+            continue
+        out.append((i + 1, "\n".join(_element_block(lines, i, m.group(1)))))
     return out
 
 
@@ -84,6 +116,7 @@ def test_source_of_truth_for_the_invariant_is_still_there() -> None:
 def test_no_sticky_header_below_the_opacity_floor() -> None:
     offenders: list[str] = []
     checked_in: set[str] = set()
+    measured: set[str] = set()
     for path in _frontend_tsx():
         rel = path.relative_to(REPO_ROOT).as_posix()
         if rel in ALLOW_LOW_ALPHA:
@@ -91,15 +124,20 @@ def test_no_sticky_header_below_the_opacity_floor() -> None:
         text = path.read_text(encoding="utf-8")
         for lineno, window in _sticky_header_windows(text):
             checked_in.add(rel)
-            for m in _ALPHA.finditer(window):
+            hits = list(_ALPHA.finditer(window))
+            if hits:
+                measured.add(rel)
+            for m in hits:
                 if int(m.group(1)) < 95:
                     offenders.append(f"{rel}:{lineno} 用了 {m.group(0)}")
-    # 下界：判据的窗口行数与元素标记都是**假设**，假设失配时 `checked_in` 会静默变小，
+    # 下界：判据的窗口行数与元素标记都是**假设**，假设失配时集合会静默变小，
     # 于是上面那条聚合断言退化成「零违规」的恒真——正是 #2639/#2641 数过的失效形态。
-    # 取 5 = 本仓现存含 sticky 表头的组件数（#2850 报的 4 处 + 口径来源 DeviceTablePanel）。
-    assert len(checked_in) >= 5, (
-        f"只认出 {len(checked_in)} 个含 sticky 表头的组件（现存应 ≥5）——判据窗口/标记"
-        "形态已失配，本守卫会在漂移重现时静默通过；先修判据，不接受空集"
+    # #2986：下界必须建在**取出过值**的文件上。只数「被识别成表头」的文件会把
+    # 「认出来了但一个值都没取到」算作覆盖（DeviceOverview 就这样贡献 0 个值却计入 5）。
+    # 取 5 = 本仓现存含 sticky 表头且真取到透明度值的组件数。
+    assert len(measured) >= 5, (
+        f"只从 {len(measured)} 个组件取到透明度值（识别到表头的有 {len(checked_in)} 个，现存应 ≥5）"
+        "——取值窗口/元素配对已失配，本守卫会在漂移重现时静默通过；先修判据，不接受空集"
     )
     assert not offenders, (
         "sticky 表头必须近乎不透明（行从它下面滚过会透印）；改回 /95："
@@ -141,8 +179,16 @@ def test_guard_catches_the_original_shape_and_ignores_non_headers() -> None:
     ],
 )
 def test_the_four_reported_headers_are_fixed(rel: str) -> None:
-    """#2850 点名的四处逐个钉：漏改一处就该红，而不是靠上面那条聚合断言碰运气。"""
+    """#2850 点名的四处逐个钉：漏改一处就该红，而不是靠上面那条聚合断言碰运气。
+
+    #2986：每个文件还必须**至少取到一个值**——「认出来了但一个值都没测」等于这条
+    参数化用例恒真（DeviceOverview 原本正是如此）。
+    """
     text = (REPO_ROOT / rel).read_text(encoding="utf-8")
-    for lineno, window in _sticky_header_windows(text):
+    windows = _sticky_header_windows(text)
+    assert windows, f"{rel} 里没有认出 sticky 表头——判据形态与实现脱节，不是「已修」"
+    measured = [m for _, window in windows for m in _ALPHA.finditer(window)]
+    assert measured, f"{rel} 认出了表头但一个透明度值都没取到（#2986 的失效形态）"
+    for lineno, window in windows:
         for m in _ALPHA.finditer(window):
             assert int(m.group(1)) >= 95, f"{rel}:{lineno} 仍是 {m.group(0)}"
