@@ -1,11 +1,20 @@
-"""#2865：pipeline 模板对关键脚本的 version pin 必须等于磁盘最新版。
+"""#2865/#2998：pipeline 模板的 version pin 必须等于「已注册且激活的最新版」。
 
 背景：脚本执行按精确版本解析、无 latest 兜底；目录合入后若模板仍钉旧版，
 新建 Plan 永远带不到修复（#2802 D0 / #2777 降级都曾因此「合入了但不生效」）。
 
-本守卫只锁「已在模板里出现、且近期因零引用复发过」的脚本族；全仓所有脚本
-一律追最新会误伤故意钉旧稳定版的步骤。名单扩张条件：再出现一次「版本已合
-入、模板未钉、下一窗仍旧行为」的同形审计。
+#2998 把名单从两族扩到**模板出现的全部脚本族**——扩面依据不是偏好而是本守卫
+自己的扩张条款（「再出现一次同形审计即扩」）：#2998 就是复发实例，且 git 考古
+证实各钉旧值全是**引入时默认值从未跟随**（无任何"故意钉旧"的成文决定，模板
+最后的 pin 变更恰是 #2865 往最新版追）。"误伤故意钉旧"的担忧由 EXCEPTIONS
+承接而非全族豁免：故意钉旧必须在这里登记 (版本, 理由+删除条件) 二元组，
+无理由的例外过不了本文件自己的一致性断言。
+
+pin 上界语义（#2998 实现时暴露）：**磁盘最新版 ≠ 可 pin**。prepare 的
+`_validate_script_refs` 按 script 表校验（不存在/未激活 → 422），磁盘 head
+未注册时 pin 上去会让该模板新建 Plan 全灭。故对拍基准 = 磁盘 head，除非
+EXCEPTIONS 登记滞后项（如 gpu_setup：disk 1.2.2 未注册，pin 跟 DB head
+1.2.1，scan 注册后删除例外并追 pin——账在 #2931 --pending-activation）。
 """
 
 from __future__ import annotations
@@ -17,10 +26,49 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 TEMPLATES_DIR = REPO_ROOT / "backend/schemas/pipeline_templates"
 SCRIPTS_DIR = REPO_ROOT / "backend/agent/scripts"
 
-# action → 脚本目录名。仅覆盖 #2865 点名的两族（模板里确有引用）。
+# 全 16 族：模板里出现过的每个 `action: script:<name>`（#2998 扩面；名单由
+# `grep -h "script:" backend/schemas/pipeline_templates/*.json` 派生，新增
+# 脚本族进模板时必须同步加行——漏加会被 test_template_script_actions_covered
+# 抓住，见文件底部）。
 PINNED_SCRIPTS: dict[str, str] = {
     "script:check_device": "check_device",
+    "script:ensure_root": "ensure_root",
+    "script:gpu_check": "gpu_check",
+    "script:gpu_finish": "gpu_finish",
+    "script:gpu_setup": "gpu_setup",
+    "script:monkey_check": "monkey_check",
+    "script:monkey_launch": "monkey_launch",
+    "script:monkey_resource_push": "monkey_resource_push",
     "script:monkey_setup": "monkey_setup",
+    "script:monkey_teardown": "monkey_teardown",
+    "script:powercycle_check": "powercycle_check",
+    "script:powercycle_finish": "powercycle_finish",
+    "script:powercycle_setup": "powercycle_setup",
+    "script:sleep_check": "sleep_check",
+    "script:sleep_finish": "sleep_finish",
+    "script:sleep_setup": "sleep_setup",
+}
+
+#: 故意钉旧/滞后豁免：action → (pin 版本, 理由+删除条件)。
+#: 理由必须可核查（引用 issue/账），删除条件必须可达（不是"以后再说"）。
+EXCEPTIONS: dict[str, tuple[str, str]] = {
+    "script:ensure_root": (
+        "1.0.1",
+        "#2998：v1.0.2 已合 main 但 script 表无行（DB 实测仅 1.0.0/1.0.1）——同一批"
+        "scan 欠账。删除条件：scan 注册激活 v1.0.2 后 pin 追平并移除本条。",
+    ),
+    "script:powercycle_setup": (
+        "1.2.1",
+        "#2998/#3006：v1.2.2（boot 门+有界重试，09-21 合入）尚未注册进 script 表"
+        "（--pending-activation 在列，与 gpu_setup 同窗滞后）。删除条件：部署 scan"
+        "注册激活 v1.2.2 后 pin 追平并移除本条。",
+    ),
+    "script:gpu_setup": (
+        "1.2.1",
+        "#2998/#2931：disk v1.2.2 未注册进 script 表（--pending-activation 视图"
+        "在列），pin 上去会让 gpu 模板新建 Plan 被 _validate_script_refs 422。"
+        "删除条件：部署跑过 scan、v1.2.2 注册激活后把 pin 追至 1.2.2 并移除本条。",
+    ),
 }
 
 
@@ -50,8 +98,25 @@ def _iter_script_steps(obj: object):
             yield from _iter_script_steps(item)
 
 
+def _all_template_script_actions(obj: object):
+    """遍历模板里**所有** `script:<name>` action（不经 PINNED_SCRIPTS 过滤）。"""
+    if isinstance(obj, dict):
+        action = obj.get("action")
+        if isinstance(action, str) and action.startswith("script:"):
+            yield action
+        for value in obj.values():
+            yield from _all_template_script_actions(value)
+    elif isinstance(obj, list):
+        for value in obj:
+            yield from _all_template_script_actions(value)
+
+
 def test_pinned_template_scripts_track_latest_on_disk() -> None:
-    expected = {action: _latest_on_disk(name) for action, name in PINNED_SCRIPTS.items()}
+    expected = {
+        action: EXCEPTIONS[action][0] if action in EXCEPTIONS
+        else _latest_on_disk(name)
+        for action, name in PINNED_SCRIPTS.items()
+    }
     template_files = sorted(TEMPLATES_DIR.glob("*.json"))
     assert template_files, "no pipeline templates"
 
@@ -74,6 +139,33 @@ def test_pinned_template_scripts_track_latest_on_disk() -> None:
         f"守卫名单 {sorted(missing)} 在模板里已无引用——删名单项或恢复模板步骤，"
         "勿留空守卫"
     )
+
+
+def test_template_script_actions_all_in_guard_list() -> None:
+    """新脚本族进模板必须同步进名单（#2998 扩面的防回潮：漏名单=漏守卫）。"""
+    actions: set[str] = set()
+    for path in sorted(TEMPLATES_DIR.glob("*.json")):
+        actions.update(_all_template_script_actions(json.loads(path.read_text(encoding="utf-8"))))
+    unguarded = sorted(actions - set(PINNED_SCRIPTS))
+    assert not unguarded, (
+        f"模板引用了名单外的脚本族 {unguarded}——加进 PINNED_SCRIPTS"
+        "（确有故意钉旧理由的进 EXCEPTIONS 并写明删除条件）"
+    )
+
+
+def test_exceptions_are_real_lags_with_reasons() -> None:
+    """例外三断言：有非空可核查理由；豁免版本确实≠磁盘 head（head 追上后必须删）；
+    豁免版本 <= disk head（不允许钉一个磁盘不存在的高版本——那是反向幻觉）。"""
+    for action, (version, reason) in EXCEPTIONS.items():
+        name = PINNED_SCRIPTS[action]
+        assert reason.strip() and ("#" in reason), f"{action} 例外缺 issue 引用的理由"
+        head = _latest_on_disk(name)
+        assert version != head, (
+            f"{action} 豁免版本 {version} 已等于磁盘 head {head}——滞后已消除，删例外并追 pin"
+        )
+        vt = tuple(int(x) for x in version.split("."))
+        ht = tuple(int(x) for x in head.split("."))
+        assert vt <= ht, f"{action} 豁免版本 {version} 超过磁盘 head {head}"
 
 
 def test_guard_has_teeth_when_template_lags_disk() -> None:

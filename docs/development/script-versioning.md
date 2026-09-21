@@ -64,10 +64,13 @@ python tools/dev/check-script-version-immutability.py --base origin/main
 
 1. 新增 `backend/agent/scripts/<name>/v<ver>/`（全量副本，见上）；
 2. 若该脚本出现在 `backend/schemas/pipeline_templates/*.json`，把对应
-   `action: script:<name>` 的 `version` **钉到磁盘最新版**——模板是编辑器种子，
-   钉旧版会让新建 Plan 继续带泄漏/旧语义；守卫
-   `tests/test_pipeline_template_script_pins_2865.py` 对
-   `check_device` / `monkey_setup` 做「模板 pin == 磁盘最新」对拍（名单可随复发面扩）。
+   `action: script:<name>` 的 `version` 钉到**已注册且激活的最新版**——模板是
+   编辑器种子，钉旧版让新建 Plan 继续带旧语义（#2998 起守卫覆盖模板内全部 16 族）；
+   但**磁盘最新版若无 script 表 active 行则不可 pin**（prepare 的
+   `_validate_script_refs` 按库校验，pin 未注册版 = 该模板新建 Plan 全 422）。
+   两界不一致时用 `EXCEPTIONS` 登记 (版本, 理由+删除条件) 并依赖上面的
+   `--pending-activation` 视图清账；例外版本追平磁盘 head 后守卫会**拒绝保留**
+   该豁免（强制删条目并追 pin）。
 
 控制面侧（运维授权写操作，不进 PR）：
 
