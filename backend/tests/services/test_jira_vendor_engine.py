@@ -42,9 +42,15 @@ def test_unknown_stage_raises():
 
 def test_engine_source_has_no_api_routes_import():
     """分层：services 不得引用 api.routes（与 check_layering 同口径）。"""
-    from pathlib import Path
+    import backend.services.jira_vendor.stability_jira as mod
 
-    root = Path(__file__).resolve().parents[2] / "services" / "jira_vendor"
-    for path in root.rglob("*.py"):
-        text = path.read_text(encoding="utf-8")
-        assert "backend.api.routes" not in text, path
+    from tools.dev.source_anchor import SourceGuard
+
+    guard = SourceGuard.of_module(mod).anchored(
+        "class StabilityJiraAutomationEngine",
+        expect=1,
+    )
+    guard.assert_absent(
+        "backend.api.routes",
+        why="Jira 薄 ACL 不得反向依赖路由层",
+    )
