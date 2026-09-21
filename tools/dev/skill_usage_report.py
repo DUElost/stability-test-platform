@@ -336,7 +336,11 @@ def main() -> int:
             total, _last = claude.get(it["name"], (0, None))
             cx, _cx = codex.get(it["name"], (0, None))
             age_days = (int((now - it["birth"]) / 86400) if it["birth"] else None)
-            is_hole = is_hollow(age_days, total, it["type"])
+            # #2977：必须与表格路径同传 strong_source_present——缺省 True 会把缺源
+            # 当成「零调用」，探针随之把 hollow>0 写进 textfile，裸告警恒红。
+            is_hole = is_hollow(
+                age_days, total, it["type"], strong_source_present=strong_present
+            )
             json_hollow += 1 if is_hole else 0
             rows.append({
                 "dir": it["dir"], "type": it["type"], "age_days": age_days,
