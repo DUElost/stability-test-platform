@@ -27,7 +27,7 @@
 | username | String | 用户名（冗余存储） |
 | action | String | 操作类型（create/update/delete/start/cancel 等） |
 | resource_type | String | 资源类型：**唯一权威 = 实体对应的表名**；无独立表的实体（session/wifi/task 等）在 `backend/core/audit.py` 的 `AUDIT_RESOURCE_TYPES` 显式登记。写侧只使用规范值；历史别名（job→job_instance、script_catalog→script，#2778）只在读取侧归并 | 
-| resource_id | Integer | 资源 ID |
+| resource_id | String(64) | 资源 ID（**非整型**：宿主资源为 UUID 时为文本，`backend/models/audit.py:33`） |
 | details | JSON | 操作详情 |
 | ip_address | String | 客户端 IP |
 | timestamp | DateTime | 操作时间 |
@@ -36,6 +36,11 @@
 
 - `ix_audit_user_ts`：用户 ID + 时间戳（支持按用户查询）
 - `ix_audit_resource`：资源类型 + 资源 ID（支持按资源追踪）
+- `ix_audit_action_ts`：action + 时间戳（#2694：facets 对 `action` 做 `group_by`，
+  该表生产实测 26 万行、86+ 种 action，无索引即全表聚合；复合列序兼供「按 action
+  过滤 + 时间倒序」走索引序）
+- `ix_audit_ts`：时间戳单列（#2694：列表默认 `order_by(timestamp.desc())`，
+  不带 user 过滤时走不到前导列为 `user_id` 的 `ix_audit_user_ts`，退化为全表排序）
 
 ### API 端点
 

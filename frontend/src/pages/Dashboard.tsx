@@ -13,7 +13,7 @@ import {
   Activity,
   TrendingUp,
 } from 'lucide-react';
-import { DeviceStatusChart, HostResourceChart, ActivityChart, CompletionTrendChart, HostFailureRateChart, PlanFailedDevicesChart, PlanRunFailedDeviceTrendChart, RiskDistributionChart } from '@/components/charts';
+import { DeviceStatusChart, HostResourceChart, ActivityChart, CompletionTrendChart, HostFailureRateChart, PlanFailedDevicesChart, PlanRunFailedDeviceTrendChart, PlanRunPassRateTrendChart, RiskDistributionChart } from '@/components/charts';
 import { DashboardStatCard } from '@/components/dashboard/DashboardStatCard';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { Card, CardHeader, CardTitle } from '@/components/ui/card';
@@ -72,6 +72,13 @@ export default function Dashboard() {
   const { data: failedTrendData, isLoading: failedTrendLoading, error: failedTrendError, refetch: refetchFailedTrend } = useQuery({
     queryKey: ['stats-plan-run-failed-device-trend'],
     queryFn: () => api.stats.planRunFailedDeviceTrend(30),
+    refetchInterval: 60000,
+  });
+
+  // ADR-0048 v1.1（#2982）：通过率趋势回归纯展示位，与失败设备数趋势双口径并存
+  const { data: passRateTrendData, isLoading: passRateTrendLoading, error: passRateTrendError, refetch: refetchPassRateTrend } = useQuery({
+    queryKey: ['stats-plan-run-pass-rate-trend'],
+    queryFn: () => api.stats.planRunPassRateTrend(30),
     refetchInterval: 60000,
   });
 
@@ -290,6 +297,24 @@ export default function Dashboard() {
               <PlanRunFailedDeviceTrendChart
                 data={failedTrendData?.points ?? []}
                 isLoading={failedTrendLoading}
+              />
+            )}
+          </div>
+          <div>
+            {passRateTrendError ? (
+              <Card className="p-4">
+                <CardHeader className="px-0 pt-0 pb-3">
+                  <CardTitle className="flex items-center gap-2 text-sm font-medium">
+                    <TrendingUp size={14} className={CHART_SECTION.icon} />
+                    运行通过率趋势 (30d)
+                  </CardTitle>
+                </CardHeader>
+                <InlineError message="运行通过率趋势加载失败" onRetry={() => void refetchPassRateTrend()} />
+              </Card>
+            ) : (
+              <PlanRunPassRateTrendChart
+                data={passRateTrendData?.points ?? []}
+                isLoading={passRateTrendLoading}
               />
             )}
           </div>
