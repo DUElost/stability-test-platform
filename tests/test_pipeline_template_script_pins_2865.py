@@ -13,8 +13,9 @@
 pin 上界语义（#2998 实现时暴露）：**磁盘最新版 ≠ 可 pin**。prepare 的
 `_validate_script_refs` 按 script 表校验（不存在/未激活 → 422），磁盘 head
 未注册时 pin 上去会让该模板新建 Plan 全灭。故对拍基准 = 磁盘 head，除非
-EXCEPTIONS 登记滞后项（如 gpu_setup：disk 1.2.2 未注册，pin 跟 DB head
-1.2.1，scan 注册后删除例外并追 pin——账在 #2931 --pending-activation）。
+EXCEPTIONS 登记滞后项；登记与清除由 `--pending-activation` 视图（#2931）驱动
+——视图清空即说明磁盘 head 已在库且激活，例外就没有存续理由（首批三条已于
+09-21 按此清除，见 `EXCEPTIONS` 注释与本文件的牙测试）。
 """
 
 from __future__ import annotations
@@ -51,23 +52,17 @@ PINNED_SCRIPTS: dict[str, str] = {
 
 #: 故意钉旧/滞后豁免：action → (pin 版本, 理由+删除条件)。
 #: 理由必须可核查（引用 issue/账），删除条件必须可达（不是"以后再说"）。
+#: 故意钉旧/滞后豁免：action → (pin 版本, 理由+删除条件)。
+#: 理由必须可核查（引用 issue/账），删除条件必须可达（不是"以后再说"）。
+#: 09-21 #3044 已清空 ensure_root / gpu_setup / powercycle_setup@1.2.1 三条
+#: （scan 收口）；本 PR（#2975/#2976/#2979/#2980）又引入新磁盘 head，
+#: pin 仍停在 DB 可激活的旧版——登记下方例外。判据抽成 `_exception_lag_reason`，
+#: 空清单下由 `test_exception_shape_predicate_has_teeth` 变异自证。
 EXCEPTIONS: dict[str, tuple[str, str]] = {
-    "script:ensure_root": (
-        "1.0.1",
-        "#2998：v1.0.2 已合 main 但 script 表无行（DB 实测仅 1.0.0/1.0.1）——同一批"
-        "scan 欠账。删除条件：scan 注册激活 v1.0.2 后 pin 追平并移除本条。",
-    ),
     "script:powercycle_setup": (
-        "1.2.1",
-        "#2998/#3006/#2979：v1.2.2（boot 门+有界重试）与 v1.2.3（prefs 删除判据改"
-        "同源单探测）均未注册进 script 表（--pending-activation 在列，与 gpu_setup"
-        "同窗滞后）。删除条件：部署 scan 注册激活最新版后 pin 追平并移除本条。",
-    ),
-    "script:gpu_setup": (
-        "1.2.1",
-        "#2998/#2931：disk v1.2.2 未注册进 script 表（--pending-activation 视图"
-        "在列），pin 上去会让 gpu 模板新建 Plan 被 _validate_script_refs 422。"
-        "删除条件：部署跑过 scan、v1.2.2 注册激活后把 pin 追至 1.2.2 并移除本条。",
+        "1.2.2",
+        "#2998/#3006/#2979：v1.2.3（prefs 删除判据改同源单探测）已合 main 但 script "
+        "表未必已注册激活。删除条件：scan 注册激活 v1.2.3 后 pin 追平并移除本条。",
     ),
     "script:monkey_setup": (
         "2.3.9",
@@ -91,6 +86,23 @@ EXCEPTIONS: dict[str, tuple[str, str]] = {
         "删除条件：部署 scan 注册激活 v1.0.4 后 pin 追平并移除本条。",
     ),
 }
+
+
+def _exception_lag_reason(version: str, reason: str, head: str) -> str | None:
+    """例外仍成立的判据（纯函数）：成立返回 None，不成立返回原因。
+
+    三条（#2998）：理由须可核查（引 issue/账）；豁免版本已追平磁盘 head 即须删；
+    不得钉一个磁盘不存在的更高版本（那是反向幻觉，pin 上去 scan 也注册不出来）。
+    """
+    if not reason.strip() or "#" not in reason:
+        return "例外缺 issue 引用的理由"
+    if version == head:
+        return f"豁免版本 {version} 已等于磁盘 head {head}——滞后已消除，删例外并追 pin"
+    version_tuple = tuple(int(part) for part in version.split("."))
+    head_tuple = tuple(int(part) for part in head.split("."))
+    if version_tuple > head_tuple:
+        return f"豁免版本 {version} 超过磁盘 head {head}"
+    return None
 
 
 def _latest_on_disk(script_name: str) -> str:
@@ -179,14 +191,20 @@ def test_exceptions_are_real_lags_with_reasons() -> None:
     豁免版本 <= disk head（不允许钉一个磁盘不存在的高版本——那是反向幻觉）。"""
     for action, (version, reason) in EXCEPTIONS.items():
         name = PINNED_SCRIPTS[action]
-        assert reason.strip() and ("#" in reason), f"{action} 例外缺 issue 引用的理由"
-        head = _latest_on_disk(name)
-        assert version != head, (
-            f"{action} 豁免版本 {version} 已等于磁盘 head {head}——滞后已消除，删例外并追 pin"
-        )
-        vt = tuple(int(x) for x in version.split("."))
-        ht = tuple(int(x) for x in head.split("."))
-        assert vt <= ht, f"{action} 豁免版本 {version} 超过磁盘 head {head}"
+        problem = _exception_lag_reason(version, reason, _latest_on_disk(name))
+        assert problem is None, f"{action} 例外不成立：{problem}"
+
+
+def test_exception_shape_predicate_has_teeth() -> None:
+    """清单清空后 `test_exceptions_are_real_lags_with_reasons` 会空转——判据自身的牙
+    改由本用例变异自证：三种失效各命中一次，且真滞后必须放行（否则出口形同虚设）。"""
+    head = _latest_on_disk("check_device")
+    assert _exception_lag_reason("1.0.0", "以后再说吧", head), "无理由的例外被放行了"
+    assert _exception_lag_reason("1.0.0", "   ", head), "空白理由的例外被放行了"
+    assert _exception_lag_reason(head, "#2998：示例理由", head), "已追平 head 的例外被放行了"
+    future = ".".join(str(int(part) + 9) for part in head.split("."))
+    assert _exception_lag_reason(future, "#2998：示例理由", head), "超过 head 的例外被放行了"
+    assert _exception_lag_reason("0.0.1", "#2998：示例理由", head) is None, "真滞后被误杀"
 
 
 def test_guard_has_teeth_when_template_lags_disk() -> None:
