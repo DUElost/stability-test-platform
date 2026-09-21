@@ -149,6 +149,31 @@ Agent 侧的挂载在这些站点由运维按分享约定自行完成，S5 对�
   服务日志、只在**控制面宿主**上有意义，站点装了也扫不到任何东西——#2788 纠正了此处
   原先「S4 一并落地」的表述；该单元按控制面宿主手工安装，规则只留平台文件。）
 
+  **控制面宿主单元（`stp-pg-guard.{service,timer}`）——手工步骤，漏装不会报错**：它只
+  在控制面宿主机上有意义，因此没有站点安装器能替你做这一步；而漏装的**唯一表现**是
+  `StabilityPgSchemaGuessing` **恒响**——规则的 `absent(stp_pg_guard_last_run)` 兜底把
+  「没有数据」判成 firing（2026-09-21 本机实测：规则随平台副本重放上线后立刻 firing，
+  而生产者从未安装，空转到被发现）。安装与验证（在控制面宿主上执行）：
+
+  ```bash
+  ROOT=<deploy-root>                      # 例如 /home/<deploy-user>/stability-test-platform
+  for u in stp-pg-guard.service stp-pg-guard.timer; do
+    sed "s|<deploy-root>|$ROOT|g" "$ROOT/deploy/control-plane/systemd/$u" \
+      | sudo tee /etc/systemd/system/$u >/dev/null
+  done
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now stp-pg-guard.timer
+  sudo systemctl start stp-pg-guard.service      # 立刻产出首份指标，不必等 5min 周期
+
+  # 三件套验证（缺一即视为没装上）：
+  systemctl show stp-pg-guard.service -p Result          # Result=success
+  ls -l /var/lib/prometheus/node-exporter/stp-pg-guard.prom
+  curl -s http://127.0.0.1:<node-exporter端口>/metrics | grep stp_pg_guard_last_run
+  ```
+
+  装上后 `StabilityPgSchemaGuessing` 应在 `for` 窗（600s）内转 `inactive`——**注意它是
+  `absent` 兜底型判据，「绿」只在生产者真的在跑时才代表「没有猜 schema」**。
+
 - **S4b（漂移检测）**：`tools/dev/check-monitoring-assets.py` 把 `monitoring_artifacts()`
   的每一项与站点已装副本逐字节比对（期望内容 = 源文件按本机事实渲染）。退出码
   `0` 无漂移 / `1` 有漂移 / `2` 无从判定；每项四态 `match|drift|absent|skipped`
