@@ -217,6 +217,7 @@ ADR-0033 自 2026-09-03 Accepted 起至 2026-09-10 **无任何落地提交**（�
 - 首次基线（2026-09-21，`origin/main`）：35 族 → **带外部资产 16 族**（`flash_firmware` / `flash_preflight` = SP Flash Tool；`gpu_setup` / `gpu_check` / `gpu_finish` = Antutu APK；`monkey_*` 五族、`powercycle_*` / `sleep_*` / `mtbf_setup` = APK 资源）**；**纯 adb/python 平台自研 19 族**，其中 `clear_recents`（09-20 入场，第 35 族）与 `unisoc_probe` / `unisoc_signal_trigger`（09-14）经判 **非 D0 对象** → 不需要 Tool Contract 准入、不触发 §5.4 条件 1（#2827「未触发」结论由此获得依据）。
 - 复算命令：`grep -rl "Permission is hereby granted\|GNU General Public\|All rights reserved" backend/agent/scripts/`（第三方源码树 → 应 0 命中）；`git grep -l "STP_UNISOC\|Scan-Result-GT\|Start-Log-Scan" origin/main -- backend`（外部工具族的实际调用位置）。
 - **口径变更不改判据本身**：§5.4 三条触发条件仍按**形态**限定（需要版本化分发 + 防篡改校验 / 中心存储源码目录 + env 路径扩散 / Phase 3 启动），本条只规定"怎么数"。
+- **门禁射程 = 归类动作，不是族数**（#3014 案 3A-1，选项 A）：`tools/dev/check_new_script_family.py` 检测到新增顶层族时，要求**同一 PR 内出现归类声明** —— `ADR-0033 归类：<family> = platform-authored` 或 `= external-tool`（写在本 ADR §5.6、Agent Note 或 PR 描述任一处、且出现在 diff 内即可）。判为 `platform-authored`（纯 adb / python，无厂商二进制、无第三方源码树、无需独立分发的大体积资产）→ **放行**；判为 `external-tool` → 必须走 D0 分级准入（Tool Contract + §5.4 触发后的包形态登记）或按 §5.4 显式登记 legacy 例外。**不建豁免清单**（避免第二个事实源）：声明本身即事实，随 PR 一起被审。
 
 **复议触发器**：
 
