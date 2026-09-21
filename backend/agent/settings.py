@@ -24,6 +24,8 @@ from functools import lru_cache
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from backend.agent.xhci_auto_rebind import parse_host_whitelist
+
 logger = logging.getLogger(__name__)
 
 
@@ -256,8 +258,6 @@ class HeartbeatSettings(BaseSettings):
     @property
     def xhci_auto_rebind_hosts(self) -> frozenset[str]:
         """#2972：白名单 host id；空集 = 无人放行。"""
-        from backend.agent.xhci_auto_rebind import parse_host_whitelist
-
         return parse_host_whitelist(self.stp_xhci_auto_rebind_hosts)
 
     @model_validator(mode="after")
