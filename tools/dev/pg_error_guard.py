@@ -39,7 +39,13 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from tools.dev.textfile_metrics import render_gauges, write_atomic
+# #2973：与 script_guard_probe 同形——ExecStart 直接跑本文件时 sys.path[0]=tools/dev，
+# 必须先把仓库根塞进 path，再 import tools.dev.*（见 skill_usage_probe）。
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from tools.dev.textfile_metrics import render_gauges, write_atomic  # noqa: E402
 
 #: 生产者声明：names 由 tests/metrics_registry.py 从本字面量静态提取（无标签）。
 _METRIC_HELP = {
