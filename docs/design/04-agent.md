@@ -53,13 +53,25 @@ backend/agent/
 
 ---
 
-## 3. 主循环（main.py）
+## 3. 主循环（`agent_application.py`；`main.py` 只剩入口）
 
-1. 读 env：`API_URL`、`HOST_ID`、`POLL_INTERVAL`  
-2. 初始化 LocalDB、ScriptRegistry  
-3. 可选启动：Watcher、`LogArchiver`、`HddSpillMonitor`（当前与 `STP_WATCHER_ENABLED` 耦合 — 已知债）  
-4. 线程池：`fetch_pending_jobs` → `JobRunner.run`  
-5. 心跳线程：主机指标、archive 指标、outbox 积压  
+`backend/agent/main.py` 现在只做 dotenv + logging + `run_agent_application()`（#736 已把它拆薄，
+其余按主题分文件）。真实生命周期是 `AgentApplication.run()` 的**五个阶段**（顺序即契约）：
+
+1. `initialize` — 读 env（`API_URL` / `HOST_ID` / `POLL_INTERVAL` …）、进程身份与注册、
+   `AdbWrapper` + ADB server、SocketIO 连接与**早到 control 缓存**、LocalDB / ScriptRegistry 等
+   本地存储；磁盘与 watcher 子系统也在此起步（见下条）  
+2. `start_background_tasks` — 心跳线程（主机指标、archive 指标、outbox 积压）+ host 控制面  
+3. `register_handlers` — SocketIO control handler 注册 + 早到命令重放  
+4. `start_job_plane` — 线程池 / recovery 面：`fetch_pending_jobs` → `JobRunner.run`  
+5. `run_loop` — claim 循环（阻塞到退出）；`graceful_shutdown` 在其 `finally` 里跑
+   （由 `shutdown_agent_runtime` 承担，不在 `AgentApplication` 内联）  
+
+**子系统门控各不相同**（`bootstrap_subsystems.start_disk_and_watcher_subsystems`，别一锅端）：
+`LogArchiver` **无条件**启动；`EventUploader` 与 `LocalDiskMonitor`（HddSpill）只按
+**共享存储根** `cifs_root` 门控（#2845：无根时按未配置跳过并记 `event_uploader_skipped cifs_root_empty`）；
+只有 `LogWatcherManager` + `OutboxDrainer` + artifact uploader 这一段看 `watcher_subsystem_enabled()`
+（§5）。旧文档写的「HddSpill 当前与 `STP_WATCHER_ENABLED` 耦合 — 已知债」**已不成立**，别再照它去修。
 
 ---
 
@@ -80,7 +92,12 @@ backend/agent/
 
 ## 5. Watcher 子系统（ADR-0018）
 
-**开关**：`STP_WATCHER_ENABLED`（默认 `false` 灰度）
+**开关**（`backend/agent/watcher/enable.py::watcher_subsystem_enabled`）：
+`STP_WATCHER_ENABLED` **与** `STP_WATCHER_PLAN_DEFAULT` **默认都是 `true`**，取 `global_on or plan_default`
+——**两键任一为真即启用，只有两者都显式 `false` 才整体关闭**（要真关必须两个都关，
+按「默认灰度、显式开」理解会把 fleet 的 watcher 状态判反）。
+本开关只管**子系统要不要起**；单个 job 要不要挂 watcher 另走
+`job_wants_watcher(run, globally_enabled, plan_default)`：`watcher_policy.enabled is False` 可逐 job 显式退出，否则在两键之上再按「是否 Plan 执行」判定。
 
 ```
 DeviceLogWatcher

@@ -111,13 +111,19 @@ npx vitest run src/pages/execution/PlanRunDetailPage.test.tsx
 - PlanRun capabilities（如 `final_archive`）由后端权威控制；测试须显式 mock，勿依赖「缺省为 true」。  
 - Watcher 信号防抖 2s：断言 refetch 用 `waitFor({ timeout: 4000 })`。
 
-### jsdom 的边界（#2700）：几何/命中/浏览器语义在此**结构上不可测**
+### jsdom 的边界（#2700）：几何/命中/布局在此**结构上不可测**
 
 vitest 跑在 jsdom 上（`frontend/vitest.config.ts`），而 jsdom **没有布局引擎**：
 `getBoundingClientRect()` 恒全 0、`elementFromPoint()` 无意义、滚动位置与
-`position: fixed` 的覆盖关系不存在，autofill/下载/`document.title` 也不在其中（实测
-`src/**/*.test.tsx` 里 0 个文件引用 `getBoundingClientRect`/`elementFromPoint`/
-`offsetParent` 三者）。因此——
+`position: fixed` 的覆盖关系不存在（实测 `src/**/*.test.tsx` 里 0 个文件引用
+`getBoundingClientRect`/`elementFromPoint`/`offsetParent` 三者）。因此——
+
+**不可测的是「布局/命中/绘制」这一维，不是笼统的「浏览器语义」**（#2988 纠正本节早期
+的过度外推）：`document.title` 与「导出内容」在 jsdom 里都断得动——
+`frontend/src/hooks/useDocumentTitle.test.tsx` 直接断 `document.title`，
+`frontend/src/pages/execution/PlanRunLogsPage.test.tsx` 的 `stubBlobUrl()` stub `URL.createObjectURL`
+取回真实 Blob 文本，断分块 / 静默截断 / BOM 字节。把这两样也说成「jsdom 测不到」，
+会让人另建浏览器层锚点或误判「回归在日常套件里不可验证」——正是 #2700 要避免的那件事。
 
 - **「我加了 jsdom 用例」不等于守住了遮挡/命中类回归**：这类结论依赖「屏幕上谁压住谁」，
   在此维度上写多少用例都是 0 覆盖；
@@ -132,12 +138,12 @@ vitest 跑在 jsdom 上（`frontend/vitest.config.ts`），而 jsdom **没有布
 
 **已发生的 5 例（浏览器层若建，锚点用例直接取此表，不要为覆盖率另造）**：
 
-| 单 | 缺陷 | jsdom 为何测不到 |
+| 单 | 缺陷 | 为什么不能只靠「加了个 jsdom 用例」（含现有覆盖） |
 |---|---|---|
 | #2614 | 全选后固定底部批量条压住分页控件，坐标点击被吞 | 纯覆盖层几何；实现方的用例注释自陈「jsdom 没有布局引擎，测不了命中测试」 |
 | #2453 | 密码管理器 autofill 后建不出用户 | autofill 不派发 React 的 change 事件，是浏览器行为 |
-| #2363 | 部分路由 `document.title` 不更新 | 标题是浏览器表面 |
-| #2028 | PlanRun 日志页 CSV 导出（blob 下载）零测试 | 下载与 blob 语义 |
+| #2363 | 部分路由 `document.title` 不更新 | **已被 jsdom 覆盖**：`useDocumentTitle.test.tsx` + `frontend/src/router/routeTitles.test.ts`（标题字符串在 jsdom 里可读可断）；仍测不到的是「浏览器标签页上真看到的标题」 |
+| #2028 | PlanRun 日志页 CSV 导出（blob 下载）零测试 | **导出内容已被 jsdom 覆盖**（stub `createObjectURL` 取 Blob 文本断分块/截断/BOM）；仍不可测的只有真实下载落盘与浏览器下载 UI |
 | #1708 | 项目编辑「改字段+改 key」并发双请求，字段静默丢失 | 需要真实网络时序与浏览器并发语义 |
 
 层与 #169（夜间真实设备 E2E）**不同**：那条覆盖 ADB/文件系统/硬件，不含浏览器 UI 层。

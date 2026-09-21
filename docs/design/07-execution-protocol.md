@@ -1,7 +1,7 @@
 # 执行协议契约（Execution Protocol）
 
-> **最后更新**：2026-09-21（#3003 校准；本头部自本日起随正文同步）  
-> **关联**：主链路概览见 [`01-execution-pipeline.md`](./01-execution-pipeline.md)；实现见近期 migration `c8d9e0f1a2b3`、preflight `backend/scripts/migration/preflight_execution_protocol.py`。
+> **最后更新**：2026-09-21（#3003 校准 + §3 同步 ADR-0043 per-host 宽限时钟；本头部自本日起随正文同步）  
+> **关联**：主链路概览见 [`01-execution-pipeline.md`](./01-execution-pipeline.md)；实现见近期 migration `c8d9e0f1a2b3`、preflight `backend/scripts/migration/preflight_execution_protocol.py`；abort 时钟主体见 [`ADR-0043`](../adr/ADR-0043-abort-grace-subject-alignment.md)。
 
 本文记录 **PlanRun / Job / Agent** 的硬契约：状态机边界、abort、claim 门禁、snapshot 派发与 schema 约束。产品叙述级流程仍以 `01` 为准。
 
@@ -74,11 +74,23 @@
 `plan_run_abort.py` + Agent `control abort` + `device_lease_reconciler` abort reaper：
 
 1. PENDING → 直接 ABORTED（释租约若存在）。
-2. RUNNING → **保持 RUNNING**，写 `run_context.abort_requested`（含 `deadline_at`、job 列表），按 **host** 分发 SocketIO `command=abort`（只带本机 job_ids）。
+2. RUNNING → **保持 RUNNING**，写 abort 请求并**按请求主体落时钟**（ADR-0043 D1：请求主体 ≡ 计时主体）：
+   run 级 abort 写 `run_context.abort_requested` 的 `at` / `deadline_at`（含 job 列表）；
+   host 级 abort **不写 run 级 `at`**，只维护 `abort_requested` 的名单语义，计时落在
+   `abort_requested_hosts[host_id].at`，且**首次写入、后续不重置**（D2）。随后按 **host**
+   分发 SocketIO `command=abort`（只带本机 `requested_job_ids`）。
 3. Agent 杀进程树 → `/complete` status=ABORTED → 释租约 → 聚合。
 4. ACK 超时（`ABORT_REAPER_GRACE_SECONDS`）→ Job **UNKNOWN**（lease **不释放**）→ 再走 UNKNOWN grace → FAILED。
+   reaper **按主体取时钟**：两把钟并存时取更早者（D1/D3），`abort_requested_hosts` 缺失的
+   历史 run 退化为只看 run 级 `at`（D4，绝不变成无人回收）；回收主体差异落在 `status_reason`
+   ——host 主体为 `abort_ack_timeout_host`、run 主体为 `abort_ack_timeout`（D6）。
 
-禁止：在 Agent ACK 前释放 ACTIVE lease（避免设备被重新调度而旧进程仍存活）。
+禁止：在 Agent ACK 前释放 ACTIVE lease（避免设备被重新调度而旧进程仍存活）；
+禁止 host 级 abort 写或重置 run 级 `at` —— 那正是 ADR-0043 删掉的「N×GRACE + 最后写入者赢」行为。
+写入侧 `plan_run_abort.py::abort_plan_run` 的 host 级分支与消费侧
+`device_lease_reconciler._reconcile_aborted_running_jobs` 都有测试钉子
+（`backend/tests/api/test_plan_run_abort_api.py::test_host_abort_writes_host_clock_not_run_level_at`、
+`backend/tests/scheduler/test_abort_reaper.py`）。
 
 ---
 
@@ -137,7 +149,14 @@ Watcher policy 取自 **PlanRun.plan_snapshot**，不再读 live `Plan.watcher_p
 | 区域 | 用例入口（示例） |
 |------|------------------|
 | 协议 / complete | `backend/tests/api/test_agent_dual_write.py` |
-| abort / reaper | `test_plan_run_abort_*`、`test_abort_reaper.py` |
+| abort / reaper | `test_plan_run_abort_*`、`test_abort_reaper.py`、`test_abort_subject_predicate_2270.py`（ADR-0043 主体取钟） |
 | 链 | `test_plan_chain_trigger.py`、`test_plan_chain_e2e.py` |
 | 版本门禁 | `test_agent_version_gate.py` |
 | 前端 capabilities | `PlanRunDetailPage.test.tsx`（final_archive 等） |
+
+---
+
+> **关于本文的「最后更新」头部**：无机器校验（没有任何门禁把该日期与
+> `git log -1 --format=%cs -- <本文件>` 对拍）。#3003 起 DOC-MAP 常驻义务要求改正文语义时同步
+> 刷新本头部（做不到就删字段）；#2990 落地前正文已改多次而头部仍是 2026-07-15，即该义务写成前的漂证。
+> 要么下次把它改成生成物（同 `environment-variables.md` 的附录块做法），要么按「可派生量不写死」（#2663）删掉。
