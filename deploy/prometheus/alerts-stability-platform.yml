@@ -568,8 +568,39 @@ groups:
             **永远不会命中**——上面两条告警此时是绿的，但绿色不代表已覆盖。
             出口由 #2957 裁决：给 agent 用户 `systemd-journal` 组（权限扩张，需签字，
             且 48 台都要重跑安装步骤）、改用零权限的结果层判据（`usb_tree_empty`，
-            #2902；但它今天还需补一道「DB 里本来有设备」的合取才不会误报）、
+            #2902——其「DB 里本来有设备」合取已由下方 `StabilityHostUsbBlind`（#2967）
+            补上并接管失明 paging）、
             或 sudoers 只放行 `journalctl -k -o cat` 这一条固定子命令（与 install_agent.sh
             「提权面收敛为 wrapper 固定子命令」的先例同族）。
             注意 `state="unknown"`（老 agent 未上报该字段）是**覆盖缺口**而不是本告警的
             射程：它计入分母、不计入分子，避免 fleet 升级期间与 A/B/C 裁决混成一件事。
+      # #2967：结果层失明合取。#2957 使内核日志通道在现网恒 unavailable ⇒ 上方
+      # ControllerDead 不会命中任何真实死亡；本条用两个零权限信号接管 paging：
+      #   agent 报 `usb_tree_empty`（#2902 判据：lsusb 树只剩控制器 ∧ agent 零发现设备）
+      #   ∧ 该 host 在 `device` 账上有行（sum host_device_adb_state > 0，四桶全量）。
+      # 两道守卫的实测依据：不合物取会误报空柜机（09-20：命中 tree_empty 的两台里
+      # .91 设备表 0 行）；无 for: 会误报热更重启瞬态（09-21 批量推送：.61 重启 tick
+      # 报过一次空树、账上仍 20 台，for 吸收）。ghost row 担忧在本合取下反转成立：
+      # 「账上有设备 ∧ 内核零可见」即使行全陈旧，本身就是要上报的账实不符形态
+      # （ghost 该被清账而不是被静音，#2754）；锚点**不设新鲜度窗**——设 7d 窗会让
+      # .63 型 11 天长失明在第 7 天自我静音，恰是 #2900 付过学费的形态。
+      - alert: StabilityHostUsbBlind
+        expr: >-
+          stability_host_health_reason{reason="usb_tree_empty"} >= 1
+          and on (host_id) (sum by (host_id) (stability_host_device_adb_state) > 0)
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: Host USB is blind while the platform ledger still has devices on it
+          description: >-
+            结果层判据（#2967：#2957 权限僵局期间的失明 paging）：agent 报 USB 树空
+            （lsusb 只剩 root hub ∧ 一台设备都没发现），但该 host 的 `device` 账上
+            仍有设备行——xHCI 主控死亡（`HC died`，不自愈）或 hub 供电/链路整体掉线
+            的形状。SSH 与心跳照常、产能静默归零（fleet 实测失明窗 7~11 天：
+            8.87 / .102 / .63）。处置：按 triage.md L1 取证——agent 通道恒 UNKNOWN
+            （#2957），需 `sudo journalctl -k | grep -E 'xhci|HC died'`；空闲窗
+            （active_jobs=0）后用 xHCI unbind/rebind 救回（8.87 文档 §3.1；
+            .63 实测 20s/23-23、.102 实测 20s/11-11），reboot 兜底。**不要自动
+            rebind**（门控自愈见 #2972，勿在告警处置里顺手做）。若确认该机柜已撤线
+            （设备行全是 ghost），清账关闭本告警，而不是给本规则加静音条件。
