@@ -49,6 +49,9 @@ from backend.services.jira_vendor import (
     load_vendor_tool_env,
     resolve_vendor_tool,
 )
+from backend.services.plan_run_artifact_download import (
+    build_plan_run_artifact_download_response,
+)
 from backend.services.run_console import (
     RunConsole,
     RunKeyBusyError,
@@ -299,16 +302,19 @@ async def start_jira_run(
 def list_jira_runs(
     vendor: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
+    plan_run_id: Optional[int] = Query(None, ge=1),
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_active_user),
 ):
-    """批量提单历史记录列表（按 created_at 倒序，可选 vendor/status 过滤）。"""
+    """批量提单历史记录列表（按 created_at 倒序，可选 vendor/status/plan_run_id 过滤）。"""
     q = select(JiraRun).order_by(JiraRun.created_at.desc()).limit(limit)
     if vendor:
         q = q.where(JiraRun.vendor == vendor)
     if status:
         q = q.where(JiraRun.status == status)
+    if plan_run_id is not None:
+        q = q.where(JiraRun.plan_run_id == plan_run_id)
     rows = db.execute(q).scalars().all()
     return ok([JiraRunOut.model_validate(r) for r in rows])
 
@@ -397,6 +403,19 @@ def cancel_jira_run(
 # ── ADR-0025 Sprint 4: 归档-2 scan/merge 端点（绑 PlanRun）──────────────────
 
 scan_router = APIRouter(prefix="/api/v1/plan-runs", tags=["dedup-scan"])
+
+
+@scan_router.get("/{run_id}/artifacts/{artifact_id}/download")
+def download_plan_run_artifact(
+    run_id: int,
+    artifact_id: int,
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_active_user),
+):
+    """PlanRunArtifact 下载（ADR-0033 Phase A3 / #3013）：scan/merge xls。"""
+    return build_plan_run_artifact_download_response(
+        db, plan_run_id=run_id, artifact_id=artifact_id,
+    )
 
 
 @scan_router.post("/{run_id}/dedup/scan", response_model=ApiResponse[DedupScanTriggerOut])
