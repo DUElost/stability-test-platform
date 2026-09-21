@@ -8,3 +8,4 @@ export { CompletionTrendChart } from './CompletionTrendChart';
 export { HostFailureRateChart } from './HostFailureRateChart';
 export { PlanFailedDevicesChart } from './PlanFailedDevicesChart';
 export { PlanRunFailedDeviceTrendChart } from './PlanRunFailedDeviceTrendChart';
+export { PlanRunPassRateTrendChart } from './PlanRunPassRateTrendChart';

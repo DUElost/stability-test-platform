@@ -171,14 +171,14 @@ def test_recount_detects_drift():
     assert run.failed_job_count == 1
 
 
-def test_post_flash_failure_yields_success_through_terminalization(
+def test_post_flash_failure_yields_partial_success_through_terminalization(
     db_session, sample_device,
 ):
-    """ADR-0048 端到端判据：刷机后步骤失败的批次经真实终态化路径落 SUCCESS。
+    """ADR-0048 v1.1 端到端判据：刷机后步骤失败的批次经真实终态化路径落 PARTIAL_SUCCESS（黄）。
 
-    #1591-④ 里程碑豁免已随通过率轴移除——新语义下设备失败本就不改 run 状态，
-    这条保留走真实 db_session 的终态化全链回归（原用例盯「漏传 db 静默不生效」，
-    现在盯「任何回潮的阈值/豁免逻辑不得重新进入终态化路径」）。
+    v1.1 恢复三态：有设备失败=黄，但**永不判红**——本条保留走真实 db_session 的
+    终态化全链回归，盯「设备失败被误判成 FAILED（阈值/豁免逻辑回潮）」与
+    「漏传 db 静默不生效」两类回归。
     """
     from datetime import datetime, timezone
 
@@ -234,5 +234,5 @@ def test_post_flash_failure_yields_success_through_terminalization(
     applied, status = on_job_terminal_sync(job, db_session, run=run)
 
     assert applied is True
-    # ADR-0048：完成即绿——设备失败（含刷机后步骤失败）不产生 PARTIAL/FAILED
-    assert status == PlanRunStatus.SUCCESS.value
+    # ADR-0048 v1.1：完成有设备失败=黄（不产生 FAILED——设备失败永不判红的内核不变）
+    assert status == PlanRunStatus.PARTIAL_SUCCESS.value

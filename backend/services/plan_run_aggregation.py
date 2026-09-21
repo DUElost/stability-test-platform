@@ -28,19 +28,24 @@ _NOTIFY_AS_FAILED = {PlanRunStatus.FAILED}
 
 def _resolve_plan_run_status(
     *,
+    failed_only: int,
     aborted: int,
     abort_requested: bool,
 ) -> PlanRunStatus:
-    """Resolve the terminal PlanRun status (ADR-0048 semantics v2).
+    """Resolve the terminal PlanRun status (ADR-0048 v1.1 semantics).
 
     稳定性平台的设备失败/掉线是施压测试的正常现象——run 状态只表达**执行链**：
     全部 job 落终态后，存在 abort（或 abort_requested）→ FAILED（#783：人工中止=
-    未覆盖计划）；其余一律 SUCCESS，设备失败台数只是 ``failed_job_count`` 事实。
-    ``PARTIAL_SUCCESS`` 不再产出（枚举与消费面保留给存量历史行）。通过率判定轴
-    （``failure_threshold`` / #1591-④ 里程碑豁免）已随 ADR-0048 移除。
+    未覆盖计划）；``failed_only > 0`` → PARTIAL_SUCCESS（黄：链完整跑完、过程有
+    设备失败——**台数多少都不判红、不断链、不触发 RUN_FAILED**）；其余 → SUCCESS。
+    阈值判定轴（``failure_threshold`` / #1591-④ 里程碑豁免）仍随 ADR-0048 v1.0
+    废止：判定输入只有 ``failed_only/aborted/abort_requested`` 三个计数，
+    重新引入比例线或豁免参数即违反 v1.1 裁决（结构测试钉住签名）。
     """
     if aborted > 0 or abort_requested:
         return PlanRunStatus.FAILED
+    if failed_only > 0:
+        return PlanRunStatus.PARTIAL_SUCCESS
     return PlanRunStatus.SUCCESS
 
 
@@ -217,7 +222,9 @@ def apply_plan_run_aggregation_from_counters(run: Any, *, db: Any = None) -> boo
     aborted = int(getattr(run, "aborted_job_count", 0) or 0)
     completed = int(getattr(run, "completed_job_count", 0) or 0)
     abort_requested = _abort_requested(run)
-    new_status = _resolve_plan_run_status(aborted=aborted, abort_requested=abort_requested)
+    new_status = _resolve_plan_run_status(
+        failed_only=failed_only, aborted=aborted, abort_requested=abort_requested,
+    )
     return _finalize_plan_run(
         run,
         new_status=new_status,
@@ -260,7 +267,7 @@ def apply_plan_run_aggregation(run: Any, jobs: Sequence[Any], *, db: Any = None)
     abort_requested = _abort_requested(run)
 
     new_status = _resolve_plan_run_status(
-        aborted=aborted, abort_requested=abort_requested,
+        failed_only=failed_only, aborted=aborted, abort_requested=abort_requested,
     )
     return _finalize_plan_run(
         run,
