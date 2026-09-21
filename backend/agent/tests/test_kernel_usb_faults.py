@@ -286,22 +286,28 @@ class TestWatch:
         assert watch.poll(usb_device_count=0) == []   # 无 reason，也不留半截状态
 
     def test_chronic_errors_accumulate_in_window(self):
-        """单轮 7 条不报（正常热插拔抖动），窗口内累积到 20 才报（.102 的两周风暴）。"""
+        """单轮 7 条不报（正常热插拔抖动），窗内累积到 20 才报（.102 的两周风暴）。
+
+        **本用例改过**（#2978）：旧版第 3 轮就断言出 reason，那是把**首扫的整段 boot 计数**
+        当成"最近一小时"的第 1 个样本用——量纲不同却参与求和。修后首扫只贡献布尔 latch，
+        计数从第 2 轮起入窗 ⇒ 到阈值需 4 轮（3 个增量样本 = 21 ≥ 20）。旧断言是在为 bug 背书。
+        """
         clock, rec = _Clock(), _Recorder([KernelUsbFaults(link_errors=7)])
         watch = _watch(clock, rec)
 
-        watch.poll(usb_device_count=5)              # 第 1 轮
+        watch.poll(usb_device_count=5)               # 第 1 轮 = boot 全量
         assert _wait(lambda: len(rec.calls) == 1)
-        assert watch.poll(usb_device_count=5) == []  # 7 < 20
+        assert watch.poll(usb_device_count=5) == []   # 7 是整段 boot 的量，不入窗
+
+        for rnd in (2, 3):
+            clock.advance(61)
+            watch.poll(usb_device_count=5)            # 增量轮
+            assert _wait(lambda n=rnd: len(rec.calls) == n)
+            assert watch.poll(usb_device_count=5) == []   # 7 / 14 < 20
 
         clock.advance(61)
-        watch.poll(usb_device_count=5)              # 第 2 轮
-        assert _wait(lambda: len(rec.calls) == 2)
-        assert watch.poll(usb_device_count=5) == []  # 14 < 20
-
-        clock.advance(61)
-        watch.poll(usb_device_count=5)              # 第 3 轮
-        assert _wait(lambda: len(rec.calls) == 3)
+        watch.poll(usb_device_count=5)               # 第 4 轮
+        assert _wait(lambda: len(rec.calls) == 4)
         assert watch.poll(usb_device_count=5) == [REASON_LINK_DEGRADED]  # 21 ≥ 20
 
 
@@ -560,3 +566,92 @@ class TestReadabilityProbe:
         assert _wait(lambda: watch.channel_state() == CHANNEL_UNAVAILABLE), (
             "真扫描器在 rc=0/全空 的形状下仍把通道报成可读——现网 36 台的假绿就是这么来的"
         )
+
+
+class TestBootCountsNotWindowed:
+    """#2978：一个样本只能声明**它所覆盖区间**的计数。
+
+    旧实现把 boot 首扫（覆盖整段 boot，可能是 3 天）的累计条数按「本次扫描时刻」塞进
+    3600s 窗，于是 `StabilityHostUsbLinkDegraded` 的告警文案（"最近一小时…超阈且持续 45m"）
+    可以由一段与文案不符的区间支撑；且每次 agent 热更新/重启都会重跑 boot 首扫 ⇒
+    一台当前干净、只是本 boot 早期有过插拔风暴的 host 会被拉成 DEGRADED 最长 1 小时。
+    """
+
+    def test_boot_storm_does_not_degrade_a_quiet_host(self):
+        """issue 的复现形状：首扫 100 条、之后每拍 0 条 ⇒ 全程不许出 reason。"""
+        clock, rec = _Clock(), _Recorder([
+            KernelUsbFaults(link_errors=100, cable_suspect=30, lines=9000),
+            KernelUsbFaults(),
+        ])
+        watch = _watch(clock, rec)
+
+        watch.poll(usb_device_count=12)
+        assert _wait(lambda: len(rec.calls) == 1)
+        assert watch.poll(usb_device_count=12) == [], (
+            "整段 boot 的累计计数又冒充起「最近一小时」了"
+        )
+
+        clock.advance(3599)                          # 窗尾：单条 boot 样本曾能撑满 45m 告警窗
+        watch.poll(usb_device_count=12)
+        assert _wait(lambda: len(rec.calls) == 2)
+        assert watch.poll(usb_device_count=12) == []
+
+    def test_incremental_storm_still_degrades(self):
+        """反向钉子：真在风暴（增量窗里就有 100 条）必须照报，别把修复做成漏报。"""
+        clock, rec = _Clock(), _Recorder([
+            KernelUsbFaults(),
+            KernelUsbFaults(link_errors=100),
+        ])
+        watch = _watch(clock, rec)
+
+        watch.poll(usb_device_count=12)
+        assert _wait(lambda: len(rec.calls) == 1)
+        assert watch.poll(usb_device_count=12) == []
+
+        clock.advance(61)
+        watch.poll(usb_device_count=12)
+        assert _wait(lambda: len(rec.calls) == 2)
+        assert watch.poll(usb_device_count=12) == [REASON_LINK_DEGRADED]
+
+    def test_hc_dead_latch_still_uses_boot_evidence(self):
+        """布尔事实不变：boot 首扫看到 `HC died` 仍要能 latch（覆盖「死于本进程之前」）。"""
+        clock, rec = _Clock(), _Recorder([KernelUsbFaults(hc_dead=1, lines=4)])
+        watch = _watch(clock, rec)
+        watch.poll(usb_device_count=0)
+        assert _wait(lambda: len(rec.calls) == 1)
+        assert watch.poll(usb_device_count=0) == [REASON_HC_DEAD]
+
+    def test_sample_is_stamped_at_interval_start(self):
+        """不变量的直接形状：增量样本的时间戳 = 区间起点（= 上次游标），不是扫描时刻。"""
+        clock, rec = _Clock(), _Recorder([
+            KernelUsbFaults(),
+            KernelUsbFaults(link_errors=1),
+        ])
+        watch = _watch(clock, rec)
+        boot_wall = clock.wall
+        watch.poll(usb_device_count=3)
+        assert _wait(lambda: len(rec.calls) == 1)
+        clock.advance(61)
+        watch.poll(usb_device_count=3)
+        assert _wait(lambda: len(rec.calls) == 2)
+        assert watch._samples, "增量样本没入窗"
+        assert watch._samples[-1][0] == boot_wall, (
+            f"样本应按区间起点 {boot_wall} 打戳，实得 {watch._samples[-1][0]}"
+        )
+
+    def test_boot_counts_are_kept_for_forensics(self, caplog):
+        """不入窗 ≠ 丢掉：留一条 INFO，真在风暴时运维仍能在 agent 日志里看到量级。"""
+        import logging as _logging
+
+        clock, rec = _Clock(), _Recorder([
+            KernelUsbFaults(link_errors=100, cable_suspect=30, lines=9000),
+            KernelUsbFaults(),
+        ])
+        watch = _watch(clock, rec)
+        with caplog.at_level(_logging.INFO, logger="backend.agent.kernel_usb_faults"):
+            watch.poll(usb_device_count=12)
+            assert _wait(lambda: len(rec.calls) == 1)
+        assert any(
+            "kernel_usb_boot_counts_not_windowed" in r.getMessage() and "link_errors=100" in r.getMessage()
+            for r in caplog.records
+        ), [r.getMessage() for r in caplog.records]
