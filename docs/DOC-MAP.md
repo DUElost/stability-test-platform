@@ -5,6 +5,11 @@
 > **待删/归档清单**：[`DOC-RETIREMENT.md`](./DOC-RETIREMENT.md)
 
 本页只保留三样常驻必需品：**阅读顺序**、**文档分层定义与登记簿**、**权威归属**。
+
+> **「最后更新」头部义务〔#3003〕**：凡带该头部的事实文档，**改动正文语义的提交必须同步
+> 刷新本页/本文的「最后更新」日期**；做不到就删掉该字段、只留 git 历史——陈旧的日期比没有
+> 更坏（它是读者最廉价的时效判据）。`docs/README.md` 与 `07-execution-protocol.md` 曾长期
+> 声称比自身内容旧，已于 #3003 校准并纳入本义务。
 逐文件的描述型索引（设计 / 开发运维 / PRD·验收）已迁往 [hub README](./README.md)，按需查阅。
 冲突时以**代码与测试**为准。  
 根目录 [`../README.md`](../README.md) 保持精简；环境变量、测试禁区、执行协议细则在子文档。
@@ -53,7 +58,7 @@ operations/README.md → production-minimum-deployment-checklist.md
 | **开发** | [`development/`](./development/) | 本地环境、**env 表**、测试约定 |
 | **运维** | [`operations/`](./operations/) + runbook | 部署、Agent 版本、联调、监控 |
 | **共享启动契约** | [`../AGENTS.md`](../AGENTS.md) | 总原则、跨模块硬不变量、安全红线与按需入口 |
-| **Claude 入口** | [`../CLAUDE.md`](../CLAUDE.md) | 导入共享契约并路由状态机与领域细节 |
+| **Claude 入口** | [`../CLAUDE.md`](../CLAUDE.md) | **symlink → `AGENTS.md`**（#857；共享启动契约的 Claude harness 薄壳，无独立内容〔#3003〕） |
 | **全面审查指引** | [`reviews/PROJECT_REVIEW_PLAN.md`](./reviews/PROJECT_REVIEW_PLAN.md) | 全面只读审查总纲（R01–R15 范围与入口、逐轮基线与报告模板、跨区收口）；**指引而非审查结果**，总纲建立不代表任何区域已审查完成 |
 | **跨区收口** | [`reviews/REVIEW_CROSS_REGION_CHAIN_A_2026-09-12.md`](./reviews/REVIEW_CROSS_REGION_CHAIN_A_2026-09-12.md) | §6 链 A（执行链）六跳逐跳对证（五要素 + file:line + 既有测试盘点）、场景覆盖矩阵、缺口 G-1～G-9；**静态对证而非动态验证通过** |
 | **跨区收口** | [`reviews/REVIEW_CROSS_REGION_CHAIN_B_2026-09-13.md`](./reviews/REVIEW_CROSS_REGION_CHAIN_B_2026-09-13.md) | §6 链 B（日志链）六跳逐跳对证（DLE 状态机权威 + 五要素 + file:line）、五必测场景矩阵、发现 F-B1～F-B4、缺口 G-B1～G-B5；**静态对证而非动态验证通过** |
@@ -118,7 +123,7 @@ operations/README.md → production-minimum-deployment-checklist.md
 
 ## 权威 vs 归档
 
-- **权威**：本树 `design/` · `development/` · `operations/` · `adr/` · `prd/` · `acceptance/`，及根 `AGENTS.md` / `CLAUDE.md` 摘要  
+- **权威**：本树 `design/` · `development/` · `operations/` · `adr/` · `prd/` · `acceptance/`，及根 `AGENTS.md`（`CLAUDE.md` 为其 symlink〔#3003〕）  
 - **概念/关系 owner 索引**：[`design/2026-semantic-ownership.md`](./design/2026-semantic-ownership.md)（目录粒度仍由本页承担；**不**因该索引获得「以索引为准」的内容裁决权）
 - **设备日志全链地图**：[`design/2026-device-log-chain-contract.md`](./design/2026-device-log-chain-contract.md)（Living Contract；内容权威仍属 ADR-0018/0025/0028/0032 + scan-upload-merge；阶段展开见 `2026-log-chain-global-semantics.md`）
 - **全面审查指引**：`reviews/PROJECT_REVIEW_PLAN.md`（分区导航与覆盖清单；不是审查结果）

@@ -1,6 +1,6 @@
 # 执行协议契约（Execution Protocol）
 
-> **最后更新**：2026-07-15  
+> **最后更新**：2026-09-21（#3003 校准；本头部自本日起随正文同步）  
 > **关联**：主链路概览见 [`01-execution-pipeline.md`](./01-execution-pipeline.md)；实现见近期 migration `c8d9e0f1a2b3`、preflight `backend/scripts/migration/preflight_execution_protocol.py`。
 
 本文记录 **PlanRun / Job / Agent** 的硬契约：状态机边界、abort、claim 门禁、snapshot 派发与 schema 约束。产品叙述级流程仍以 `01` 为准。
