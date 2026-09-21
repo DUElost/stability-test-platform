@@ -45,4 +45,14 @@ describe('stats analytics client', () => {
     expect(getMock).toHaveBeenCalledWith('/stats/plan-run-failed-device-trend', { params: { days: 30 } });
     expect(result).toEqual({ points: [], days: 30 });
   });
+
+  it('planRunPassRateTrend requests /stats/plan-run-pass-rate-trend with days param (ADR-0048 v1.1 #2982)', async () => {
+    getMock.mockResolvedValueOnce({ data: { points: [], days: 30 } });
+    const { stats } = await import('./analytics');
+
+    const result = await stats.planRunPassRateTrend(30);
+
+    expect(getMock).toHaveBeenCalledWith('/stats/plan-run-pass-rate-trend', { params: { days: 30 } });
+    expect(result).toEqual({ points: [], days: 30 });
+  });
 });

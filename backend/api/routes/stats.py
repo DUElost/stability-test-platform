@@ -102,6 +102,20 @@ class PlanRunFailedDeviceTrendResponse(BaseModel):
     days: int
 
 
+class PlanRunPassRatePoint(BaseModel):
+    """ADR-0048 v1.1（#2982）：按日对终态 run 的 completed/total 求日均——纯展示指标，
+    不参与任何成败判定（阈值轴仍废止）。"""
+
+    date: str
+    avg_pass_rate: float = 0.0
+    run_count: int = 0
+
+
+class PlanRunPassRateTrendResponse(BaseModel):
+    points: List[PlanRunPassRatePoint]
+    days: int
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -496,3 +510,89 @@ def get_plan_run_failed_device_trend(
         cursor += timedelta(days=1)
 
     return PlanRunFailedDeviceTrendResponse(points=points, days=days)
+
+
+@router.get("/plan-run-pass-rate-trend", response_model=PlanRunPassRateTrendResponse)
+def get_plan_run_pass_rate_trend(
+    days: int = Query(30, ge=1, le=90),
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
+    """ADR-0048 v1.1（#2982）：运行通过率趋势——终态 run 按日求 completed/total 均值。
+
+    纯展示指标，不参与成败判定：口径与 run 列表页前端派生一致（分子=COMPLETED job
+    数，分母=该 run 全部 job 数，含 aborted/failed）。与「失败设备数趋势」双口径并存。
+    """
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    dialect = db.bind.dialect.name if db.bind is not None else ""
+
+    if dialect == "postgresql":
+        stmt = text("""
+            SELECT
+                to_char(date_trunc('day', pr.ended_at), 'YYYY-MM-DD') AS day,
+                AVG(CASE WHEN rs.total > 0 THEN rs.completed::float / rs.total ELSE NULL END) AS avg_pass_rate,
+                COUNT(*) AS run_count
+            FROM (
+                SELECT plan_run_id,
+                       COUNT(*) AS total,
+                       SUM(CASE WHEN status = 'COMPLETED' THEN 1 ELSE 0 END) AS completed
+                FROM job_instance
+                WHERE plan_run_id IN (
+                    SELECT id FROM plan_run WHERE ended_at >= :since AND ended_at IS NOT NULL
+                )
+                GROUP BY plan_run_id
+            ) rs
+            JOIN plan_run pr ON rs.plan_run_id = pr.id
+            WHERE pr.ended_at >= :since AND pr.ended_at IS NOT NULL
+            GROUP BY date_trunc('day', pr.ended_at)
+            ORDER BY day
+        """)
+    else:
+        stmt = text("""
+            SELECT
+                date(pr.ended_at) AS day,
+                AVG(CASE WHEN rs.total > 0 THEN CAST(rs.completed AS REAL) / rs.total ELSE NULL END) AS avg_pass_rate,
+                COUNT(*) AS run_count
+            FROM (
+                SELECT plan_run_id,
+                       COUNT(*) AS total,
+                       SUM(CASE WHEN status = 'COMPLETED' THEN 1 ELSE 0 END) AS completed
+                FROM job_instance
+                WHERE plan_run_id IN (
+                    SELECT id FROM plan_run WHERE ended_at >= :since AND ended_at IS NOT NULL
+                )
+                GROUP BY plan_run_id
+            ) rs
+            JOIN plan_run pr ON rs.plan_run_id = pr.id
+            WHERE pr.ended_at >= :since AND pr.ended_at IS NOT NULL
+            GROUP BY date(pr.ended_at)
+            ORDER BY day
+        """)
+
+    rows = db.execute(stmt, {"since": since}).fetchall()
+
+    buckets: dict[str, dict] = {}
+    for row in rows:
+        day_str = row[0]
+        avg_pr = row[1]
+        rc = row[2]
+        if day_str:
+            buckets[day_str] = {
+                "avg_pass_rate": round(float(avg_pr), 4) if avg_pr is not None else 0.0,
+                "run_count": int(rc),
+            }
+
+    points = []
+    cursor = since.date()
+    end = datetime.now(timezone.utc).date()
+    while cursor <= end:
+        key = cursor.isoformat()
+        b = buckets.get(key, {})
+        points.append(PlanRunPassRatePoint(
+            date=key,
+            avg_pass_rate=b.get("avg_pass_rate", 0.0),
+            run_count=b.get("run_count", 0),
+        ))
+        cursor += timedelta(days=1)
+
+    return PlanRunPassRateTrendResponse(points=points, days=days)
