@@ -49,6 +49,13 @@ reload_config（免重启，只影响 reload 之后开场的 per-Job 会话）�
      22:01:48 attempt=2 verify_recovered，#828 机制）与 inotifyd 源 31 次断连
      退避重连全自愈（含 adb root 重启 adbd 造成的断连）——创建半程的
      真实环境韧性无保留通过。
+   - **[2026-09-21 更新] 断链已修复并复测通过，本条升级为「已验」**：#2822
+     合入（`27b060a0` 识别 epoch 前缀）+ 控制面 09-21 重启生效后，对 run-445
+     重扫（`POST /plan-runs/445/dedup/scan?is_final=true`）复测：卡滞的
+     watcher 源 DLE `704d68f7…` 全链 LOCAL→UPLOAD_PENDING→REMOTE（20:28:10
+     `event_uploader_ok`）→ARCHIVED（20:28:13，extract 产物
+     `jira/445/<epoch_ms>_<原名>` 实盘在），触发→终态 4.3 分钟。证据评论
+     在 #2822。
 3. **`job_log_signal.device_log_event_id` 关联** ✅：signal 7938
    （source=inotifyd，seq_no=1）→ DLE b41499aa；重放 DLE 的 signal 关联同构。
 4. **程序留档** ✅：`docs/operations/2026-09-19-inotifyd-only-e2e-procedure.md`
@@ -98,9 +105,7 @@ reload_config（免重启，只影响 reload 之后开场的 per-Job 会话）�
 
 ## Revisit
 
-- 上送断链修复：#2822（正则侧最小修 / puller 命名契约归一，二选一）。修复
-  落地后可用本程序（含重放法）复测 LOCAL→UPLOAD_PENDING→REMOTE 半程，
-  预期一轮即可闭合。
+- 上送断链修复：**已落地（2026-09-21）——#2822 以正则侧最小修合入
+  （`27b060a0`），复测一轮即闭合（见验收标准 2 的更新段与 #2822 评论）。**
 - 若未来 Reconciler 长期下线（灰度回退场景），inotifyd-only 将成为常态主路，
-  届时本程序的翻转/还原步骤可直接复用为演练脚本（修复 #2822 前注意其上送
-  断链影响面）。
+  届时本程序的翻转/还原步骤可直接复用为演练脚本。
