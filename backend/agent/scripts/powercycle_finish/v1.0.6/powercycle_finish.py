@@ -1,0 +1,281 @@
+# -*- coding: utf-8 -*-
+"""PowerCycle 停止 + 结果收取（teardown 阶段，issue #462 P0b；G15 对齐 §3.2）。
+
+v1.0.6（#2980）：**把 SIGTERM 路径也纳入临时目录回收**。v1.0.5 的 ``finally``
+只覆盖脚本内部异常与 ``SystemExit``——但步骤墙钟到点时引擎是对**进程组**发
+SIGTERM（再升 SIGKILL），CPython 默认不把 SIGTERM 转成异常，``finally`` 根本
+不执行。本版本：main() 开头为 SIGTERM 装处理器（转 ``SystemExit(143)``，让既有
+finally 照常回收；引擎 SIGTERM→SIGKILL 宽限 ~2s，回收的是本地目录，充裕）；
+另在启动时兜底清扫 **≥24h 的陈旧孤儿目录**（SIGKILL 升级/断电仍会漏，形状判据
+同 v1.0.5 回收：gettempdir 直接子项 ∧ 本族前缀，再叠加陈旧门槛——合法步骤墙钟
+≤600s，24h 远大于任何并行兄弟的在飞窗口，不会误删别人的活跃目录）。
+
+v1.0.5（#2834 同形收口）：回收本次自建的临时结果目录。v1.0.0–v1.0.4 用
+``tempfile.mkdtemp(prefix="powercycle-results-")`` 拉结果后从不删除——与
+``gpu_finish`` 同形状（#2834 实测总量 <1MB，但失败路径仍会单调堆积）。登记 +
+``main()`` 的 ``finally`` 统一回收；形状不符不删。
+
+移植自 stability_PowerCycle-Test/scripts/stop.ps1 + lib.ps1（Stop-PowerCycleTask，
+AutoTestTool 后端）。PC pc-watchdog / MSSV 收尾不移植（G15 D3/D4）。
+
+流程：
+0. **等待设备系统就绪（v1.0.1 发现⑦ + v1.0.2 发现⑪）**：PowerCycle 设备每
+   ~75s 重启一次，teardown 撞上重启窗口会 adb device not found → 结果收集
+   失败（验收 0/4）。收取前置 = get-state==device **且 sys.boot_completed==1**
+   （v1.0.2：boot 早期 adbd 在线但 /data 未挂载，run-as stat 失败——
+   实测 abort 后 teardown 在此时段写 prefs 失败）。最长 wait_device_online_seconds。
+1. 停任务：prefs auto_resume=false+running=false → POWER_CYCLE_STOP 优雅停止 → force-stop 兜底
+2. 拉取 powercycle_result.txt（主路径 /sdcard/Android/data/.../files/PowerCycle/，旧路径兜底）
+   ——**v1.0.4（#830）**：stop→pull 之间撞设备重启窗口时，等设备重新就绪后重拉
+   （最多 collect_attempts 次，单次等待 collect_retry_wait_seconds 秒）；旧行为
+   首次 adb pull 失败即 raise，teardown 失败后重跑 setup 的 uninstall 会连结果
+   文件一起清掉（数据丢失）。
+3. 解析（parse_powercycle_result）→ 摘要 metrics
+4. 逐行结果写 {STP_AEE_NFS_ROOT}/power-cycle/{project}/results/{run_id}.json
+   （run_id = 收尾时刻 powercycle_YYYYmmdd_HHMMSS_<serial>——v1.0.1 加设备维度，
+   多设备并行同秒不再互相覆盖，发现⑨）
+5. stdout JSON 只带摘要（step_trace 64KiB 截断约束同 MTBF）
+
+STP_STEP_PARAMS:
+{
+    "project": "legacy",
+    "force_stop": true,                // 优雅停止失败时强制杀（stop.bat -Force 语义）
+    "wait_device_online_seconds": 600, // 收取前置：等待设备上线的最大秒数（默认 600）
+    "collect_attempts": 3,             // v1.0.4（#830）：收取阶段最多尝试次数（含首次）
+    "collect_retry_wait_seconds": 120  // v1.0.4（#830）：每次重试前等设备就绪的最大秒数
+}
+
+输出 (stdout): {"success": true/false, "metrics": {...}, "detail_uri": "..."}
+metrics: {run_id, cycles_done, expected_cycles, reboot_failures, final_status, result_bytes}
+final_status: PASS | INCOMPLETE（无 finished 行 = 测试未收尾）
+"""
+from __future__ import annotations
+
+import json
+import shutil
+import signal
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+from _lib import (
+    adb,
+    adb_shell,
+    device_online,
+    device_serial,
+    output_result,
+    param_or_env,
+    params,
+    parse_powercycle_result,
+    parse_size_from_ls,
+    result_paths,
+    results_dir,
+    stop_task,
+)
+
+
+#: 本族临时结果目录前缀——建/删必须同一字面量（#2834 同形）。
+_PULL_TMP_PREFIX = "powercycle-results-"
+
+#: 本次执行自建的临时目录清单，由 ``main()`` 的 finally 回收。
+_TEMP_RESULT_DIRS: list[Path] = []
+
+
+def _mk_result_tmpdir() -> Path:
+    """建本次执行的临时结果目录并登记（登记是回收的唯一途径）。"""
+    path = Path(tempfile.mkdtemp(prefix=_PULL_TMP_PREFIX))
+    _TEMP_RESULT_DIRS.append(path)
+    return path
+
+
+def _discard_result_tmpdirs() -> None:
+    """回收本次自建的临时结果目录；形状不符就不删。"""
+    tmp_root = Path(tempfile.gettempdir()).resolve()
+    while _TEMP_RESULT_DIRS:
+        path = _TEMP_RESULT_DIRS.pop()
+        try:
+            resolved = path.resolve()
+        except OSError:
+            continue
+        if resolved.parent != tmp_root or not resolved.name.startswith(_PULL_TMP_PREFIX):
+            sys.stderr.write(
+                f"powercycle_finish: skip tmp cleanup (unexpected shape) {resolved}\n"
+            )
+            continue
+        shutil.rmtree(resolved, ignore_errors=True)
+
+
+#: #2980：孤儿目录兜底清扫的陈旧门槛。合法步骤墙钟上限 600s（powercycle.json），
+#: 24h 是它的 ×144——远大于任何并行兄弟的在飞窗口，只会命中真遗孤。
+_STALE_TMPDIR_SECONDS = 24 * 3600
+
+
+def _install_sigterm_guard() -> None:
+    """#2980：SIGTERM 转 ``SystemExit``——墙钟到点时让 ``main()`` 的 finally
+    照常回收临时目录（CPython 默认不把 SIGTERM 转成异常，finally 不执行）。
+
+    引擎升级 SIGKILL 前有 ~2s grace（pipeline_engine ``_terminate_process_tree``），
+    回收是本地 rmtree，时间充裕；SIGKILL 漏网的由 ``_sweep_stale_result_tmpdirs``
+    在下次启动时兜底。
+    """
+
+    def _abort(signum, _frame):  # noqa: ANN001, ANN202
+        raise SystemExit(128 + signum)
+
+    signal.signal(signal.SIGTERM, _abort)
+
+
+def _sweep_stale_result_tmpdirs(max_age_seconds: float = _STALE_TMPDIR_SECONDS) -> None:
+    """#2980 兜底：清 **≥24h 的陈旧孤儿目录**（SIGKILL 升级 / 断电遗留）。
+
+    形状判据同 v1.0.5 回收（``gettempdir()`` 直接子项 ∧ 本族前缀），再叠加
+    陈旧门槛——宁可多留一天，不可误删兄弟并行执行的活跃目录。
+    """
+    tmp_root = Path(tempfile.gettempdir()).resolve()
+    cutoff = time.time() - max_age_seconds
+    try:
+        entries = sorted(tmp_root.iterdir())
+    except OSError:      # 临时根不可读：放弃本轮兜底，不炸主流程
+        return
+    for path in entries:
+        if not path.name.startswith(_PULL_TMP_PREFIX):
+            continue
+        try:
+            if path.is_dir() and path.stat().st_mtime < cutoff:
+                shutil.rmtree(path, ignore_errors=True)
+        except OSError:  # stat/删除竞态（外部已清）：跳过
+            continue
+
+
+_DEFAULT_WAIT_ONLINE = 600   # 默认等待设备上线秒数（收取前置）
+_DEFAULT_COLLECT_ATTEMPTS = 3       # v1.0.4（#830）：收取阶段最多尝试次数（含首次）
+_DEFAULT_COLLECT_RETRY_WAIT = 120   # v1.0.4（#830）：重试前等设备就绪的最大秒数
+
+
+def _wait_device_online(timeout_s: int) -> bool:
+    """轮询设备**系统就绪**（v1.0.2），最长 timeout_s 秒。
+
+    PowerCycle 设备持续重启——收取动作必须在设备稳定窗口内执行
+    （验收发现⑦）。v1.0.2（发现⑪）：get-state==device 只说明 adbd 在线，
+    boot 早期 /data 未挂载（实测 run-as stat 失败、包不可见）——
+    追加 ``sys.boot_completed==1`` 判定系统真正就绪。
+    """
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        if device_online():
+            booted = adb_shell("getprop sys.boot_completed", timeout=15).strip()
+            if booted == "1":
+                return True
+        time.sleep(10)
+    return False
+
+
+def _pull_result_file() -> Path:
+    """拉取结果文件（主路径优先，旧路径兜底）；都不存在则报错。"""
+    for path in result_paths():
+        ls = adb_shell(f"ls -l {path}", timeout=30).strip()
+        if parse_size_from_ls(ls) <= 0:
+            continue
+        local = _mk_result_tmpdir() / Path(path).name
+        rc, _, err = adb("pull", path, str(local), timeout=120)
+        if rc != 0:
+            raise RuntimeError(f"adb pull 失败 {path}: {err.strip() or 'rc=%d' % rc}")
+        if local.is_file():
+            return local
+    if not device_online():
+        # v1.0.4（#830）：设备离线时 `ls` 同样返回空——不能误报成「文件不存在」，
+        # 由上层按重启窗口重试。
+        raise RuntimeError("设备离线（可能处重启窗口），未确认结果文件是否存在")
+    raise RuntimeError("设备端没有 powercycle_result.txt（主路径与旧路径均不存在），任务可能未真正运行")
+
+
+def _collect_with_retry(wait_s: int, attempts: int) -> Path:
+    """stop 后收取，撞设备重启窗口时等设备回来重拉（v1.0.4，#830）。
+
+    PowerCycle 设备每 ~75s 重启一次：stop→pull 之间的重启会让 adb 暂时
+    不可用。旧行为首次失败即 raise → teardown 失败，重跑 setup 的 uninstall
+    连结果文件一起清掉（数据丢失）。此处每次失败后等设备重新就绪
+    （get-state==device 且 boot_completed==1）再试，最多 attempts 次。
+    """
+    last_exc: RuntimeError | None = None
+    tried = 0
+    for _ in range(attempts):
+        if tried and not _wait_device_online(wait_s):
+            break
+        tried += 1
+        try:
+            return _pull_result_file()
+        except RuntimeError as exc:
+            last_exc = exc
+    raise RuntimeError(
+        f"收取结果失败（尝试 {tried}/{attempts} 次，单次重试等待 {wait_s}s）：{last_exc}"
+    ) from last_exc
+
+
+def _run(cfg: dict) -> dict:
+    project = str(param_or_env(cfg, "project", "STP_POWER_CYCLE_PROJECT", "legacy"))
+    force = str(param_or_env(cfg, "force_stop", "STP_POWER_CYCLE_FORCE_STOP", "true")).lower() == "true"
+    wait_online = int(str(param_or_env(
+        cfg, "wait_device_online_seconds", "STP_POWER_CYCLE_WAIT_ONLINE_SECONDS", _DEFAULT_WAIT_ONLINE,
+    )) or _DEFAULT_WAIT_ONLINE)
+    collect_attempts = max(1, int(str(param_or_env(
+        cfg, "collect_attempts", "STP_POWER_CYCLE_COLLECT_ATTEMPTS", _DEFAULT_COLLECT_ATTEMPTS,
+    )) or _DEFAULT_COLLECT_ATTEMPTS))
+    collect_wait = int(str(param_or_env(
+        cfg, "collect_retry_wait_seconds", "STP_POWER_CYCLE_COLLECT_RETRY_WAIT_SECONDS",
+        _DEFAULT_COLLECT_RETRY_WAIT,
+    )) or _DEFAULT_COLLECT_RETRY_WAIT)
+
+    serial = device_serial()
+    if not _wait_device_online(wait_online):
+        raise RuntimeError(
+            f"设备 {serial} 在 {wait_online}s 内未上线（持续重启/离线），无法收取结果——"
+            f"请提高 wait_device_online_seconds 或核对设备状态"
+        )
+
+    stop_task(force=force)
+    time.sleep(2)   # 等结果文件收尾（服务停止时 flush）
+
+    local_file = _collect_with_retry(collect_wait, collect_attempts)
+    parsed = parse_powercycle_result(local_file.read_bytes())
+    run_id = f"powercycle_{time.strftime('%Y%m%d_%H%M%S')}_{serial}"
+    final_status = parsed["final_status"] or "INCOMPLETE"
+    metrics = {
+        "run_id": run_id,
+        "cycles_done": parsed["cycles_done"],
+        "expected_cycles": parsed["expected_cycles"],
+        "reboot_failures": parsed["reboot_failures"],
+        "final_status": final_status,
+        "result_bytes": local_file.stat().st_size,
+    }
+
+    # 逐行结果写中心存储（P2 test_case_result 数据源，mtbf/sleep results/ 同款）
+    detail_dir = results_dir(project)
+    detail_dir.mkdir(parents=True, exist_ok=True)
+    detail_file = detail_dir / f"{run_id}.json"
+    detail_file.write_text(
+        json.dumps({"run_id": run_id, "metrics": metrics, "entries": parsed["entries"]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return {"metrics": metrics, "detail_uri": str(detail_file)}
+
+
+def main() -> None:
+    cfg = params()
+    _install_sigterm_guard()        # #2980：墙钟 SIGTERM 也要走 finally 回收
+    _sweep_stale_result_tmpdirs()   # #2980：SIGKILL 漏网的孤儿下次启动兜底清
+    try:
+        try:
+            result = _run(cfg)
+        except Exception as exc:  # noqa: BLE001
+            output_result(False, error_message=str(exc))
+            sys.exit(1)
+        output_result(True, **result)
+    finally:
+        # #2834：sys.exit(1) 的 SystemExit 同样走这里——失败路径才是累积主力。
+        _discard_result_tmpdirs()
+
+
+if __name__ == "__main__":
+    main()

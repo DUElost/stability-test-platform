@@ -59,15 +59,36 @@ EXCEPTIONS: dict[str, tuple[str, str]] = {
     ),
     "script:powercycle_setup": (
         "1.2.1",
-        "#2998/#3006：v1.2.2（boot 门+有界重试，09-21 合入）尚未注册进 script 表"
-        "（--pending-activation 在列，与 gpu_setup 同窗滞后）。删除条件：部署 scan"
-        "注册激活 v1.2.2 后 pin 追平并移除本条。",
+        "#2998/#3006/#2979：v1.2.2（boot 门+有界重试）与 v1.2.3（prefs 删除判据改"
+        "同源单探测）均未注册进 script 表（--pending-activation 在列，与 gpu_setup"
+        "同窗滞后）。删除条件：部署 scan 注册激活最新版后 pin 追平并移除本条。",
     ),
     "script:gpu_setup": (
         "1.2.1",
         "#2998/#2931：disk v1.2.2 未注册进 script 表（--pending-activation 视图"
         "在列），pin 上去会让 gpu 模板新建 Plan 被 _validate_script_refs 422。"
         "删除条件：部署跑过 scan、v1.2.2 注册激活后把 pin 追至 1.2.2 并移除本条。",
+    ),
+    "script:monkey_setup": (
+        "2.3.9",
+        "#2975：v2.3.10（步骤 metrics 聚合进顶层出口）已合 main 但 script 表无行"
+        "——scan 前 pin 未注册版 = monkey/巡逻模板新建 Plan 全 422。删除条件："
+        "scan 注册激活 v2.3.10 后 pin 追平并移除本条。",
+    ),
+    "script:gpu_finish": (
+        "1.0.6",
+        "#2980：v1.0.7（SIGTERM 处理器 + ≥24h 孤儿启动清扫）未注册进 script 表。"
+        "删除条件：部署 scan 注册激活 v1.0.7 后 pin 追平并移除本条。",
+    ),
+    "script:powercycle_finish": (
+        "1.0.5",
+        "#2980：v1.0.6（SIGTERM 处理器 + ≥24h 孤儿启动清扫）未注册进 script 表。"
+        "删除条件：部署 scan 注册激活 v1.0.6 后 pin 追平并移除本条。",
+    ),
+    "script:sleep_finish": (
+        "1.0.3",
+        "#2980：v1.0.4（SIGTERM 处理器 + ≥24h 孤儿启动清扫）未注册进 script 表。"
+        "删除条件：部署 scan 注册激活 v1.0.4 后 pin 追平并移除本条。",
     ),
 }
 

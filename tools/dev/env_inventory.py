@@ -143,6 +143,11 @@ _INTERNAL_ONLY: dict[str, str] = {
     # os.environ 读取点；现只作为远端脚本内的 shell 变量经 argv 交 wrapper，
     # 不再是控制面读取的环境变量。
     "FAKE_TAR_SLEEP": "测试夹具（模拟 tar 耗时），无常驻配置语义",
+    # #2980 测试（test_finish_sigterm_tmp_cleanup_2980）子进程夹具：入口脚本/标记
+    # 文件/临时根三个路径交接键，刻意不用 STP_ 前缀（非平台配置命名空间）。
+    "FINISHTEST_ENTRY": "测试夹具：SIGTERM 子进程 e2e 的入口脚本路径交接",
+    "FINISHTEST_MARKER": "测试夹具：同上，_mk_result_tmpdir 登记完成的标记文件",
+    "FINISHTEST_TMP": "测试夹具：同上，results_dir 落点的临时根",
     "HOST_IP": "测试注入的 host 身份；生产由 Agent 自行解析",
     "PRECHECK_NOTIFY_DEBOUNCE_SECONDS": "precheck 通知去抖：实现细节（防重复推送），不属运维旋钮",
     # #2341：prometheus_client 的**第三方约定键**（不是本平台的运维旋钮）。本仓是单进程
