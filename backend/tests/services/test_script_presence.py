@@ -22,7 +22,6 @@ from backend.models.plan_run import PlanRun, PlanRunHost
 from backend.models.script import Script
 from backend.models.script_presence import HostScriptPresence
 from backend.services import script_presence as sp
-from backend.services.precheck import verify as verify_mod
 
 FULL = [("a", "1.0.0"), ("b", "2.0.0")]
 
@@ -166,7 +165,8 @@ async def test_run_sweep_persists_present_and_na_rows(db_session, engine, monkey
             for hid in host_ids
         }
 
-    monkeypatch.setattr(verify_mod, "gather_verify", fake_gather)
+    # 顶层导入后 patch 点必须在**使用方**的命名空间（服务模块）
+    monkeypatch.setattr(sp, "gather_verify", fake_gather)
     factory = sessionmaker(bind=engine)
     result = await sp.run_sweep(days=30, db_factory=factory)
 

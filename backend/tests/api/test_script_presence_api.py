@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 
 from backend.models.host import Host
 from backend.models.script_presence import HostScriptPresence
-from backend.services.precheck import verify as verify_mod
+from backend.services import script_presence as sp
 
 
 def _seed_host(db_session, host_id: str = "h-api") -> Host:
@@ -90,7 +90,7 @@ async def test_refresh_is_host_scoped(client, db_session, admin_headers, monkeyp
         return {hid: (True, [], None) for hid in host_ids}
 
     # 目标集为空（无 plan_step）→ sweep 不发 RPC，但该机行照写（如实暴露「无目标」）
-    monkeypatch.setattr(verify_mod, "gather_verify", fake_gather)
+    monkeypatch.setattr(sp, "gather_verify", fake_gather)
     r = client.post("/api/v1/script-presence/refresh?host_id=h-refresh", headers=admin_headers)
     assert r.status_code == 200
     data = r.json()["data"]

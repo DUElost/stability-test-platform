@@ -29,6 +29,7 @@ import json
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Optional
+from uuid import uuid4
 
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -42,6 +43,7 @@ from backend.models.schedule import TaskSchedule
 from backend.models.script import Script
 from backend.models.script_presence import HostScriptPresence
 from backend.services.host_maintenance import in_maintenance_window
+from backend.services.precheck.verify import gather_verify
 
 logger = logging.getLogger(__name__)
 
@@ -372,8 +374,6 @@ async def run_sweep(
     返回汇总（写库行数、各态计数、缺口 host 数、轮次 id）。RPC 只对**可达集非空**
     的 host 发起（无目标的 host 只写 ``n_a`` 行，仍刷新新鲜度）。
     """
-    from backend.services.precheck.verify import gather_verify
-
     sweep_id = _new_sweep_id()
 
     def _facts() -> dict:
@@ -450,7 +450,6 @@ def _persist(db_factory, rows: list[dict]) -> int:
 
 
 def _new_sweep_id() -> str:
-    from uuid import uuid4
     return uuid4().hex
 
 

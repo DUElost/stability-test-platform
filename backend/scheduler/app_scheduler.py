@@ -34,6 +34,7 @@ from backend.core.settings.scheduler import (
 # 只依赖 core 层（audit/database/metrics/settings/models），无回边到 scheduler
 # 域——保持函数级反而会推高 inner-imports 棘轮（#738 基线只许下调）。
 from backend.scheduler.audit_log_cleanup import audit_log_cleanup_job
+from backend.scheduler.script_presence_sweep import script_presence_sweep_job
 
 logger = logging.getLogger(__name__)
 
@@ -314,8 +315,6 @@ async def register_schedules(scheduler: AsyncScheduler) -> None:
     # 每天一次（默认 09:30，本机时区）——账本是存量可见性，不做实时；空串 = 显式停用
     # （不注册，监控面读作「该作业不存在」而非「注册了但从不跑」）。
     if (presence_cron := (_sched().script_presence_sweep_cron or "").strip()):
-        from backend.scheduler.script_presence_sweep import script_presence_sweep_job
-
         await _add(
             _instrumented("script_presence_sweep", script_presence_sweep_job, singleton=True),
             CronTrigger.from_crontab(presence_cron),
