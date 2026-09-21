@@ -40,12 +40,14 @@ frontend/src/
 | `/results` | 结果汇总 | 登录 |
 | `/script-management` | 脚本目录 | 登录 |
 | `/hosts`, `/devices` | 主机/设备 | 登录 |
-| `/schedules`, `/resources`, `/issue-tracker` | 调度/资源 | 登录 |
+| `/schedules`, `/issue-tracker` | 调度/问题跟踪 | 登录 |
+| `/projects`, `/projects/:projectKey` | 项目登记簿（ADR-0029 P2，页面级筛选、无全局选择器） | 登录 |
+| `/test-suites`, `/test-suites/:suiteId` | 测试套件与套件详情 | 登录 |
 | `/account/password` | 修改密码 | 登录 |
 | `/assistant` | AI 助手 | 登录 |
 | `/assistant/approvals` | AI 助手待审批队列 | **admin** |
 | `/notifications` | 通知记录 | 登录可见；页面内**配置页签（渠道/规则）仅 admin**（#1196） |
-| `/users`, `/audit`, `/settings`, `/storage`, `/wifi` | 管理（`/wifi` 自 #2360 起 admin-only） | **admin** |
+| `/users`, `/audit`, `/settings`, `/settings/ai-assistant`, `/storage`, `/wifi` | 管理（`/wifi` = WiFi 资源池，自 #2360 起 admin-only） | **admin** |
 
 **守卫**：`ProtectedRoute`（登录）、`AdminRoute`（`role === 'admin'`）。  
 **代码分割**：除 auth 外页面均 `React.lazy()`。
@@ -90,10 +92,9 @@ frontend/src/
 | `PrecheckSummaryRow` | 准入检查摘要行 |
 | `BusinessFlowStepper` / `PlanRunEventStream` | 业务流步进器 + 事件流 |
 | `DeviceOverview` / `DeviceDetailDrawer` / `DeviceFilterBar` | 设备矩阵；`is_stuck` / deadline / aborted UI |
-| `WatcherSummaryCard` | 异常聚合 |
 | `ArchiveStatusCard` | Agent 运维指标（`WatcherAgentOpsMetrics`）+ 扫描状态 |
 | `DedupReportCard` | 去重报告 |
-| `AnomalyDashboard` | 包名榜、crash 下钻 |
+| `AnomalyDashboard` | 异常聚合（watcher 数据 + 时间范围切换）、包名榜、crash 下钻 |
 
 状态与派生：`planRunStatus.ts`、`deviceUiStatus.ts`、`deviceLinkStatus.ts`。
 
@@ -105,7 +106,7 @@ frontend/src/
 |----|-----------|
 | 主机 | `ExpandableHostTable`（紧凑列 / code sync）、`HostBulkActionBar`（浮动、单机热更新）、`HostsPage` |
 | 通知 | `NotificationBell`（AppShell）、`NotificationsPage` 通知记录 tab → `notification_logs` API |
-| Pipeline 编辑 | `PlanEditPage`、`PipelineEditor` |
+| Pipeline 编辑 | `pages/orchestration/PlanEditPage`（画布与检查器在 `components/pipeline/`：`PlanCanvas`、`PlanStepInspector`） |
 | 脚本 | `ScriptManagementPage` |
 | 日志 | `XTerminal`、`PlanRunLogsPage` |
 
@@ -165,5 +166,6 @@ frontend/src/
 
 ## 8. 测试
 
-- 77 个测试文件（`*.test.tsx` 50 + `*.test.ts` 27）分布于 `components/`、`pages/`、`utils/`
-- 见 [`development/testing.md`](../development/testing.md)
+- 测试文件按 `*.test.tsx`（组件/页面）与 `*.test.ts`（纯逻辑/工具）两类分布；
+  **不在此硬编码计数**——这类数字随改动漂移（同 #2663 的计数陈旧族），需要时以仓库实测为准
+- 分层、运行方式与 jsdom 边界见 [`development/testing.md`](../development/testing.md)

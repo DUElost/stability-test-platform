@@ -267,11 +267,15 @@ def adopt_unassigned_event_dirs(db: Session, plan_run_id: int) -> int:
         return 0
 
     rows = db.execute(
-        select(DeviceLogEvent.id, DeviceLogEvent.remote_path).where(
+        select(DeviceLogEvent.id, DeviceLogEvent.remote_path)
+        .where(
             DeviceLogEvent.plan_run_id == plan_run_id,
             DeviceLogEvent.state.in_(_REMOTE_STATES),
             DeviceLogEvent.remote_path.like("%/devices/unassigned/%"),
         )
+        # 锁序（#2974）：循环体逐行 `update(DeviceLogEvent)` 取行锁，锁持有到 `db.commit()`
+        # 为止 ⇒ 取锁顺序 = 本结果集顺序，必须与对侧一致的全序（id 升序）。
+        .order_by(DeviceLogEvent.id)
     ).all()
     if not rows:
         return 0
