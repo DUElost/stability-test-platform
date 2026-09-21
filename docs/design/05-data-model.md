@@ -50,7 +50,7 @@
 
 | 字段 | 说明 |
 |------|------|
-| `status` | RUNNING / SUCCESS / FAILED / QUEUED / PRECHECK（PARTIAL_SUCCESS 仅存量吸收态，不再产出，ADR-0048）（QUEUED/PRECHECK 为准入队列状态，`STP_PLAN_ADMISSION_QUEUE_ENABLED` 默认开） |
+| `status` | RUNNING / SUCCESS / PARTIAL_SUCCESS / FAILED / QUEUED / PRECHECK（PARTIAL_SUCCESS=完成但有设备失败，黄；ADR-0048 v1.1 恢复产出，无阈值线、永不因设备失败判红）（QUEUED/PRECHECK 为准入队列状态，`STP_PLAN_ADMISSION_QUEUE_ENABLED` 默认开） |
 | `plan_snapshot` | 派发时 JSON 快照 |
 | `parent_plan_run_id` | Plan 链 |
 | `run_type` | MANUAL / SCHEDULE / CHAIN |
