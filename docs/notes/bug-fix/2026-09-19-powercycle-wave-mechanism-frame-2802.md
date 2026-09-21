@@ -32,6 +32,8 @@ Class: bug-fix
 
    **计划侧配套（随上机执行）**：`plan 54` 的 `check_device` 步骤 `timeout_seconds` 需从 **30s 放大到 ≥180s**（否则重试预算会被 agent 墙钟杀掉，反而丢失证据）；其余 33 个引用该脚本的计划维持 30s 不变（范围最小）。
 
+   **D1′ 扩展（本 PR）：`powercycle_setup` v1.2.2** —— r477 终态归因显示 107 个失败 job **全部**落在两个无重试/弱等待步骤上（含 `powercycle_setup` 失败 59 / 仅 `ensure_root` 失败 48），其中 `powercycle_setup` 的 59 条为 21× `pm install: Error: device is still booting` + 19× `push: adb: error: failed to get feature set: device '<serial>' not found` + 10× `ParcelableException`。旧实现（v1.2.0/v1.2.1）重试前只 `wait-for-device`——**adbd 在 boot 早期即在线**，而 10s 退避又短于设备侧 ~75s 重启周期 ⇒ 重试仍落在重启窗内。本版把重试前置改为**等系统就绪**（`get-state==device` 且 `sys.boot_completed==1`，与 `check_device v1.0.2` / `powercycle_finish` 同判定），尝试上限默认 3 次、等待总预算默认 90s（`STP_ATT_INSTALL_MAX_ATTEMPTS` / `STP_ATT_INSTALL_READY_SECONDS` / `STP_ATT_INSTALL_WAIT_BUDGET_SECONDS` 可覆盖），失败报文追加 `attempts=` / `history=[`（逐次归类 not_found/offline/still_booting/closed/no_space/timeout/other）；**首试仍走快速路径**（不等就绪、正常设备耗时不变），判定语义不变（仍要求 `Success`）。
+
 2. **D1 吸收（若证据属瞬时类）**：init 步骤（`check_device`/`ensure_root`）对 adb 瞬时失败做 wait-for-device + 有界重试/退避（先例同上），并把重试次数写进 metrics——**必须有界**，否则把真设备故障掩盖成恢复。
 3. **D2 host 侧治理（若证据指向 host-local USB/adb）**：对脏 host 做定向排查（USB 控制器/集线器、内核日志、adb server 版本与并发），必要时下调该 host 的并发操作上限；不做全 fleet 全局并发闸。
 4. **D3 计划侧（暂不采用）**：原单建议的「powercycle_setup 全局并发闸 / 开关机链分波派发」**不予采纳**——前提（T+5~10min 风暴）已被推翻，且 host 慢性特征与「全 fleet 无节流并发」不符；仅当 D0 证据重新显示 install 风暴耦合时才回到此选项。
@@ -55,11 +57,13 @@ Class: bug-fix
 - **自伤检查**：98 台失败设备与 437 台通过设备分别左连「最近一次 powercycle COMPLETED（不含本窗）」，失败组 0 台 <15min；
 - **D1′ 验证（check_device v1.0.2）**：`backend/agent/tests/test_check_device_scripts.py` 共 **14 例**（v1.0.1 8 例 + v1.0.2 6 例：快速路径不轮询 / 重启窗口由重试吸收 / boot_completed=0 时继续轮询 / 预算耗尽带 attempts+history+证据 / 报文有界 / expect_root 语义保留）；**变异检查**：去掉 boot_completed 门（视为就绪）→ boot 门用例立刻红（1 failed, 13 passed），恢复后全绿。
 - **D0 扩展验证（ensure_root v1.0.1）**：`backend/agent/tests/test_ensure_root_scripts.py` 7 例全绿（已 root→skip 语义不变 / adb root 成功路径 / 失败带 rc+stdout+stderr+id_u+state / 异常路径带 exc / 截断有界 / `max_attempts` 生效 / `get-state` 异常不破坏判定）；**变异检查**：移除报文 `id_u=` 字段 → 诊断用例立刻红（1 failed, 6 passed），恢复后全绿；`tools/dev/check-script-version-immutability.py --base origin/main` → OK。
+- **D1′ 扩展验证（powercycle_setup v1.2.2）**：`backend/agent/tests/test_powercycle_setup_v122.py` **7 例**全绿（首试快速路径不做就绪探测 / 重启窗由「等就绪 + 重试」吸收 / `boot_completed=0` 时继续轮询不放行 / 预算耗尽报文带 `attempts=`+`history=`+原文证据 / `attempts` 上限可由 env 收窄且报文有界 / 退避 knob 仍有效 / **v1.2.1 对照锚点**：只 `wait-for-device` 且无 boot 门）；**变异检查**：去掉 `boot_completed` 门 → boot 门用例立刻红（1 failed, 6 passed），恢复后全绿；powercycle 全族（`test_powercycle_scripts.py` + v121 + v122）**81 passed**；`tools/dev/check-script-version-immutability.py --base origin/main` → OK（v1.2.1 未原地改动）。
 - **D0 落地验证**：`backend/agent/tests/test_check_device_scripts.py` 8 例全绿（成功路径语义不变 / unexpected output 带 rc+stdout+stderr+adb_state / 乱码可读 / 超时带部分输出 / 长输出有界且含省略号 / `get-state` 自身异常不破坏判定 / expect_root 两分支不变）；**变异检查**：移除报文中 `rc=` 字段 → 诊断用例立刻红（1 failed, 7 passed），恢复后全绿；`tools/dev/check-script-version-immutability.py --base origin/main` → OK（v1.0.0 未被原地改动）；
 - **未做**：窗内原始字节抓取（需真机窗，今晚 21:22）；host 侧 USB/内核取证（需登录 host，未授权范围）；v1.0.1 上机分发与 plan_step 重指（按脚本版本上线五步另起单执行）。
 
 ## Revisit
 
+- **r477（2026-09-21 03:20 窗，首个 v1.0.2 生效窗）已给出口径结论**：`check_device` 硬失败 0（对照 r457 的 106）、重试吸收 108/108 = 100%（耗时全在 ≥15s 桶，最大 76s）；107 个失败 job 全部落在 `powercycle_setup`(59) 与 `ensure_root`(48)。⇒ 下一个窗（09:20 系）验证本版 `powercycle_setup v1.2.2` 上机后那 59 条是否归零；`ensure_root` v1.0.2（D1″）由并行会话推进，同窗可一并看。
 - 今晚 21:22 窗后：按 D0 证据把失败归类为「adb 传输类（offline/unauthorized/closed）」「设备状态类（乱码/banner）」「host 资源类（超时）」，据此在 D1/D2 间定修法；
 - D0 上线前若窗口先到，人工抓取按上文校正窗口（T+0~3min）执行，脏/净 host 各一台；
 - r427（唯一低失败的开关机窗）异常：先按「host 慢性 + 该窗脏 host 参与度」重算，若仍不能解释再单独立项。
