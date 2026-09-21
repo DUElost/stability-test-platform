@@ -1,7 +1,7 @@
 # ADR-0033：外部工具统一接入契约规范与包管理解耦模型（Tool-Kit Ecosystem Integration）
 
-- 状态：**Accepted（v1.6）**
-- 落地状态：**部分落地**（Phase 2 控制面 B5 样板·选项 A：薄 `DedupMergeEngine` 包现态 `start_log_scan -merge_files_list`；Scan-Result-GT 仍仅 Agent B2；**包存储未触发、不排期**——见 §5.4 评估锚；Phase 3 未做；D0/D3 权威已生效——见 §5）
+- 状态：**Accepted（v1.7）**
+- 落地状态：**部分落地**（Phase 2 控制面 B5 样板·选项 A：薄 `DedupMergeEngine` 包现态 `start_log_scan -merge_files_list`；Phase A：D0 新族门禁 + Tool Contract 脚手架 + Jira 薄 ACL；Scan-Result-GT 仍仅 Agent B2；**包存储未触发、不排期**——见 §5.4 评估锚；Phase 3 / PlanRun 日志 UI 未做；D0/D3 权威已生效——见 §5）
 - 优先级：P1
 - 目标里程碑：M7
 - 日期：2026-09-03
@@ -22,6 +22,7 @@
 | v1.4 | 2026-09-18 | **Phase 2 阻塞登记**（非决策变更）：控制面 unisoc/`Scan-Result-GT` `DedupMergeEngine` 样板与 ADR-0032 D3「同一 merge 工具」+ GT 仅 `-d` CLI 冲突；停做适配器，待 A/B/C 出口（#745） |
 | v1.5 | 2026-09-19 | **Phase 2 选项 A 拍板落地**：样板 = 包 **B5** 现态 `start_log_scan -merge_files_list`（两平台同一工具）；Scan-Result-GT **继续只做 B2** Agent 主机汇总，不插 merge 循环；纠正 v1.0–v1.4「unisoc GT = DedupMergeEngine」措辞；薄适配器 `backend/services/dedup/`；不做包存储 / Phase 3 / 不修订 D3（#745 / #2546） |
 | v1.6 | 2026-09-20 | **包存储触发条件评估锚**（非决策变更）：§5.4 三条对照仓内/文档现态 → **未触发**；评估正本 [`2026-09-20-adr0033-package-store-trigger-assessment.md`](../notes/architecture/2026-09-20-adr0033-package-store-trigger-assessment.md)；不改 D 决策、不排期 tar.gz/`tools_cache`（#745 / #2546） |
+| v1.7 | 2026-09-21 | **Phase A 机械落地**（非决策变更）：D0 新族门禁 `check_new_script_family.py`；D2 脚手架 `verify_tool_contract.py` + fixture；Jira 薄 ACL `backend/services/jira_vendor/`；**不做**包存储 / ToolRun 表 / PlanRun 日志 UI（#745） |
 
 ---
 
@@ -163,7 +164,7 @@ flowchart TD
 
 ADR-0033 自 2026-09-03 Accepted 起至 2026-09-10 **无任何落地提交**（同期 567 次提交中 127 fix / 89 docs / 12 feat），而账目继续增长（基线 `fdf0247c` → `a009eeee`）：
 
-- **契约要素（v1.5 前）曾全代码零命中**：`tool_manifest.yaml`、`tools_cache/`、`--context`、`summary.json` 消费分支、`tools/dev/verify_tool_contract.py`、manifest 门禁；v1.5 起控制面 B5 薄接缝落地为 `backend/services/dedup/`（`DedupMergeEngine` / `StartLogScanMergeEngine`），**仍无**包存储与 Tool Contract 全要素；
+- **契约要素（v1.5 前）曾全代码零命中**：`tool_manifest.yaml`、`tools_cache/`、`--context`、`summary.json` 消费分支、`tools/dev/verify_tool_contract.py`、manifest 门禁；v1.5 起控制面 B5 薄接缝落地为 `backend/services/dedup/`（`DedupMergeEngine` / `StartLogScanMergeEngine`）；**v1.7** 起 D0 新族门禁 + `verify_tool_contract.py`（fixture 靶子）+ Jira 薄 ACL `backend/services/jira_vendor/` 已落地，**仍无**包存储与存量 Tool Contract 全要素；
 - **脚本膨胀未减速**：`backend/agent/scripts/` 版本目录 **100 → 110**（新增 10 个**全部落在既有族**）、`.py` 文件 **180 → 199**、行数 **59,406 → 67,288**（+7,882 / 7 天）、工具族 **32 → 32**；env 读键 **191 → 199**；
 - **现实已跑出第三条路**：中心存储 `/mnt/stp-aee/tools/` 下为**未打包源码目录**（`Start-Log-Scan` / `Monkey-Log-Scan-GT-SPRD` / `Scan-Result-GT`），Agent 经 4 个私有 env 配置路径（2026-08-31 ADR-0032 落地时引入）。
 
@@ -198,7 +199,7 @@ ADR-0033 自 2026-09-03 Accepted 起至 2026-09-10 **无任何落地提交**（�
 
 ### 5.5 裁定四：未落地状态显式化（决策效力与实现进度分离）
 
-- **落地状态：部分落地**（Phase 2 控制面 B5 样板·选项 A 已落地薄 `DedupMergeEngine`；包存储 / Phase 3 / 设备端样板仍未排期；2026-09-18 阻塞由 v1.5 选定 A 解除，见 §4）；D0/D3 权威已生效，D2 按族准入；
+- **落地状态：部分落地**（Phase 2 控制面 B5 样板·选项 A 已落地薄 `DedupMergeEngine`；Phase A：D0 新族门禁 + Tool Contract 脚手架 + Jira 薄 ACL 已落地；包存储 / Phase 3 / 设备端样板 / PlanRun 日志 UI 仍未排期；2026-09-18 阻塞由 v1.5 选定 A 解除，见 §4）；D0/D3 权威已生效，D2 按族准入；
 - §4 的时间点作废为参考序，排期以 issue 为准；
 - **不因超期自动降级本 ADR 的决策效力**，反之也**不得因"纸面 Accepted"当作已落地基线**——索引面（`docs/adr/README.md`、`docs/DOC-MAP.md`、M7 看板）与本文头部"落地状态"行须同步体现这一区分。
 
