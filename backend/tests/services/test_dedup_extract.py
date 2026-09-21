@@ -177,6 +177,14 @@ def test_run_extract_sync_uses_dle_remote_paths_only(
     ) == "keep"
     assert not (jira / "2026_0603_030136_973_db.38.JE").exists()
     assert (jira / "Result_MergeFiles.xls").is_file()
+    # #3013：extract 成功后登记 extract_bundle（独立 SessionLocal commit）
+    db_session.expire_all()
+    bundle = db_session.query(PlanRunArtifact).filter_by(
+        plan_run_id=sample_plan_run.id,
+        artifact_type="extract_bundle",
+    ).one()
+    assert bundle.storage_uri == str(jira)
+    assert bundle.size_bytes and bundle.size_bytes > 0
 
 
 def test_run_extract_sync_writes_run_context_extract(

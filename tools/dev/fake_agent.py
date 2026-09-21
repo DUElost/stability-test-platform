@@ -23,8 +23,8 @@ job / step 级实时面在隔离 dev 栈里**曾经不可测**：派发门禁要
 3. **凭据不外泄**：``AGENT_SECRET`` 只从环境读、不打印；``fencing_token`` 由本文件
    唯一一处取用（``fencing_token_for``），**永不打印、永不落盘**。
 
-自踩过的 5 个坑（都已在实现里处理）
-------------------------------------
+自踩过的坑（前 5 条已在实现里处理；6–8 是观测类，#3034）
+----------------------------------------------------------
 - 后端镜像**没有** ``websocket-client`` → 生产 Agent 按 #1121 走 websocket-only，
   夹具连不上，只能退回 polling；polling 会话约 5 分钟掉一次 → 内置自愈重连。
   这不是 bug，是 dev 与生产的契约差异（``--transport`` 可显式指定）。
@@ -37,6 +37,16 @@ job / step 级实时面在隔离 dev 栈里**曾经不可测**：派发门禁要
   ``DEVFIX001`` 在两台 host 之间来回改绑，第二台 host **一台自己的设备都拿不到**，
   ``claim`` 恒返回 ``[]``，测试者会把它误判成产品缺陷。现在 serial 缺省就带 host
   尾段（``192.0.2.12`` → ``DEVFIX012-001``），要固定前缀用 ``--serial-prefix``。
+- **``serve`` 不发 coordinator 心跳**（#3034）：``_http_beat`` 只打
+  ``/api/v1/heartbeat``。``EXECUTING_STEP`` 下执行时钟靠 extend-batch，别指望
+  coordinator 心跳喂 ``last_execution_heartbeat_at``——否则 job 会被
+  ``running_timeout`` 收掉，看起来像「回收器杀了正常 job」（ADR-0026 §3；技能
+  ``test-env-self-check`` 有可抄配方）。
+- **跨 worktree 判祖先必须显式传 commit**（#3034）：另一个 worktree 里的 ``HEAD``
+  不是你以为的那份；``git merge-base`` / ``git merge-base --is-ancestor`` 要带
+  具体 sha，不要裸 ``HEAD``。
+- **dev server 镜像无 ``ps`` / ``pkill``**（#3034 / #2743）：清理夹具只能 Python 扫
+  ``/proc`` + ``os.kill``；宿主上 ``pkill -f``「已 terminate」不等于容器内已死。
 
 用法
 ----

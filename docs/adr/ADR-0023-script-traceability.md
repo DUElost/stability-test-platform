@@ -109,7 +109,7 @@ ADR-0020 完成 `Plan / PlanStep` 一次性切换，ADR-0021 / ADR-0022 在派�
 
 1. `PlanRunTopbar` 右侧加按钮「查看快照」（图标 + 文字），打开 right Drawer。
 2. Drawer 内容：
-   - 顶部：`Plan 名称` / `failure_threshold` / `patrol_interval_seconds` / `watcher_policy`；
+   - 顶部：`Plan 名称` / `patrol_interval_seconds` / `watcher_policy`；`failure_threshold` 一项已由 **ADR-0048**（2026-09-18；v1.1 2026-09-20 恢复 PARTIAL_SUCCESS 三态产出与前端派生通过率展示）移除——快照与 API 均不再含该字段，不再展示；
    - 步骤列表按 `(stage, sort_order)` 排序，每行折叠卡片：`step_key` / `script_name@version` / `timeout_seconds` / `retry` / `enabled` / `default_params`（展开） / `param_schema`（展开）；
    - 底部 system note：「快照由 `prepare_plan_run` 写入，与当时 Script 表元数据一致；后续 Script 升级不影响此快照。」
 3. **不**为 snapshot 增加新端点——`GET /plan-runs/{id}` 已返回 `plan_snapshot` 字段，前端从 `useQuery(['plan-run', id])` 直接读。
