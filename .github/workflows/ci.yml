@@ -238,6 +238,20 @@ jobs:
           python tools/dev/check-script-version-immutability.py \
             --base "origin/${{ github.base_ref || github.ref_name }}"
 
+      # ADR-0033 D0：禁止新增 backend/agent/scripts/ 顶层工具族（#745 in-tree breaker）。
+      # 既有族新版本仍绿；包存储未触发前新族无合法 in-tree 出口。
+      - name: ADR-0033 D0 新脚本族检查
+        run: |
+          python tools/dev/check_new_script_family.py --self-test
+          python tools/dev/check_new_script_family.py \
+            --base "origin/${{ github.base_ref || github.ref_name }}"
+
+      # ADR-0033 D2：Tool Contract 验证器 + fixture 靶子（新族准入脚手架）。
+      - name: ADR-0033 Tool Contract 检查
+        run: |
+          python tools/dev/verify_tool_contract.py --self-test
+          python tools/dev/verify_tool_contract.py
+
       # alembic revision 不可变检查（#2258 / #2046）：已合入 main 的 revision 被改写
       # 或删除即红（停在其后的库不会再执行被插入的祖先，check_alembic_at_head 的等值
       # 判定判不出来）；唯一豁免 = 同一 PR 为被改写者附了重放迁移（#1717 形态）。

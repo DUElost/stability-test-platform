@@ -15,7 +15,7 @@
 ### 后台线程（daemon thread）
 
 - `recycler`：回收超时 JobInstance、释放设备锁、清理物理 artifact 文件。
-- `cron_scheduler`：按 cron 创建任务（受 `ENABLE_CRON_SCHEDULER` 环境变量控制，默认启用）。
+- `cron_scheduler`（默认启用）：按 cron 创建任务。由 ~~`ENABLE_CRON_SCHEDULER` 环境变量控制~~——〔#2999 标注〕该键**已移除、全仓零读取点**，cron 派发现**常驻无开关**，真实旋钮是 `CRON_POLL_INTERVAL`；见 [环境变量文档 §6](../development/environment-variables.md#6-已移除的键)。
 
 ### 异步任务（asyncio task）
 
