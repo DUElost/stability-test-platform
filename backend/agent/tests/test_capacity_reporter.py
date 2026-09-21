@@ -382,6 +382,50 @@ def test_usb_tree_empty_is_warning_level_not_blocking():
     assert health["adb_ok"] is True
 
 
+def test_adb_interfaces_missing_l4_degrades_silent_healthy_host():
+    """#3046 L4：USB n>0 且 ADB 接口全无 → DEGRADED（.65/.20 静默 HEALTHY 的缝）。
+
+    adb devices 列表为空时 total_devices==0，adb_low_healthy_devices 不成立；
+    USB 有外设时 usb_tree_empty 也不成立——必须单独合取。
+    """
+    result = _cap(
+        total_devices=0,
+        online_healthy_devices=0,
+        usb_device_count=18,
+        usb_root_hub_count=2,
+        adb_interface_count=0,
+    )
+    assert result["health"]["status"] == "DEGRADED"
+    assert "adb_interfaces_missing" in result["health"]["reasons"]
+    assert "usb_tree_empty" not in result["health"]["reasons"]
+    assert "adb_low_healthy_devices" not in result["health"]["reasons"]
+
+
+def test_adb_interfaces_missing_not_fired_when_interfaces_present():
+    result = _cap(
+        usb_device_count=16, usb_root_hub_count=2, adb_interface_count=12,
+        total_devices=12, online_healthy_devices=12,
+    )
+    assert "adb_interfaces_missing" not in result["health"]["reasons"]
+
+
+def test_adb_interfaces_missing_not_fired_when_probe_unknown():
+    assert "adb_interfaces_missing" not in _cap(
+        usb_device_count=18, adb_interface_count=None,
+    )["health"]["reasons"]
+    assert "adb_interfaces_missing" not in _cap(
+        usb_device_count=None, adb_interface_count=0,
+    )["health"]["reasons"]
+
+
+def test_adb_interfaces_missing_is_warning_not_blocking():
+    health = _cap(
+        usb_device_count=16, usb_root_hub_count=2, adb_interface_count=0,
+    )["health"]
+    assert health["status"] == "DEGRADED"
+    assert health["adb_ok"] is True
+
+
 def test_l2_l3_l4_signals_reported_in_capacity():
     state_counts = {"device": 1, "offline": 1, "unauthorized": 1, "other": 0}
     cap = _cap(

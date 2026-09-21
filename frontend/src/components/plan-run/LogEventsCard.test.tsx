@@ -18,6 +18,8 @@ vi.mock('@/utils/api', () => ({
   api: {
     planRuns: {
       getLogEvents: mocks.getLogEvents,
+      logEventDownloadUrl: (runId: number, eventId: string) =>
+        `/api/v1/plan-runs/${runId}/log-events/${eventId}/download`,
     },
   },
 }));
@@ -81,6 +83,14 @@ describe('LogEventsCard (#529)', () => {
     expect(screen.getByText('REMOTE')).toBeInTheDocument();
     expect(screen.getByText('UPLOAD_PENDING')).toBeInTheDocument();
     expect(screen.getByText('ARCHIVED')).toBeInTheDocument();
+
+    // #3013：REMOTE/ARCHIVED + remote_path → 下载链接
+    const remoteId = realPayload.items.find((i) => i.state === 'REMOTE')!.id;
+    const download = screen.getByTestId(`log-event-download-${remoteId}`);
+    expect(download).toHaveAttribute(
+      'href',
+      `/api/v1/plan-runs/103/log-events/${remoteId}/download`,
+    );
   });
 
   // #2288：筛选选项必须来自**服务端全集**，不是已加载窗口。

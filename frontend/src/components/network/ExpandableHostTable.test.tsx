@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { ExpandableHostTable, type HostTableData } from './ExpandableHostTable';
@@ -370,5 +370,144 @@ describe('ADR-0038 退役显示与入口（#1807）', () => {
 
     expect(screen.getByText('未知')).toBeInTheDocument();
     expect(screen.queryByText('内容漂移')).not.toBeInTheDocument();
+  });
+});
+
+describe('脚本在位（#2958 第五道闸）', () => {
+  const summary = {
+    counts: { present: 40, missing: 1, mismatch: 2, unknown: 3, n_a: 4, maintenance: 1 },
+    hosts_total: 48,
+    hosts_with_gap: 2,
+    full_versions: 51,
+    checked_at_min: '2026-09-21T00:00:00Z',
+    checked_at_max: '2026-09-21T06:00:00Z',
+    stale: false,
+  };
+
+  const hostPresence = {
+    host_id: String(host.id),
+    checked_at: '2026-09-21T06:00:00Z',
+    sweep_id: 'sweep-1',
+    counts: { present: 1, missing: 1, mismatch: 0, unknown: 1, n_a: 3, maintenance: 0 },
+    items: [
+      { name: 'flash_preflight', version: '1.0.2', state: 'present' as const, detail: '' },
+      { name: 'ensure_root', version: '0.3.0', state: 'unknown' as const, detail: 'agent 不可达' },
+      {
+        name: 'powercycle_setup',
+        version: '0.2.0',
+        state: 'missing' as const,
+        detail: '文件缺失 /opt/stp/scripts/powercycle_setup/v0.2.0/run.sh',
+      },
+    ],
+  };
+
+  it('fleet 汇总行报缺口台数与未知/维护台数，明细面板给六态分解', () => {
+    render(<ExpandableHostTable hosts={[host]} scriptPresenceSummary={summary} />);
+
+    const bar = screen.getByTestId('script-presence-summary');
+    expect(within(bar).getByText(/缺口 2 台/)).toBeInTheDocument();
+    expect(within(bar).getByText(/^未知 3 台$/)).toBeInTheDocument();
+    expect(within(bar).getByText(/^维护窗 1 台$/)).toBeInTheDocument();
+    // 非陈旧时不得出现陈旧提示，缺口按红读
+    expect(screen.queryByTestId('script-presence-stale')).not.toBeInTheDocument();
+    expect(within(bar).getByText(/缺口 2 台/).className).toContain('text-destructive');
+
+    fireEvent.click(within(bar).getByRole('button', { name: '展开明细' }));
+    expect(within(bar).getByText('内容不符 2')).toBeInTheDocument();
+    expect(within(bar).getByText('缺失 1')).toBeInTheDocument();
+    expect(within(bar).getByText('不适用 4')).toBeInTheDocument();
+    expect(within(bar).getByText('目标版本 51')).toBeInTheDocument();
+    // 汇总没有逐台名单，文案要指路到展开行
+    expect(within(bar).getByText(/不含逐台名单/)).toBeInTheDocument();
+  });
+
+  it('stale=true 时汇总读作陈旧（不当绿读）', () => {
+    render(
+      <ExpandableHostTable hosts={[host]} scriptPresenceSummary={{ ...summary, stale: true }} />,
+    );
+
+    expect(screen.getByTestId('script-presence-stale')).toHaveTextContent('账本陈旧');
+    const gap = screen.getByText(/缺口 2 台/);
+    expect(gap.className).not.toContain('text-success');
+    expect(gap.className).not.toContain('text-destructive');
+    expect(gap.className).toContain('text-muted-foreground');
+  });
+
+  it('展开主机行才拉单机矩阵，缺口在前、未知不读成绿', async () => {
+    const onLoad = vi.fn().mockResolvedValue(hostPresence);
+    render(<ExpandableHostTable hosts={[host]} onLoadHostScriptPresence={onLoad} />);
+
+    expect(onLoad).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText(host.name));
+
+    await screen.findByText('powercycle_setup@0.2.0');
+    expect(onLoad).toHaveBeenCalledWith(host.id);
+
+    const block = screen.getByTestId(`host-script-presence-${host.id}`);
+    const rows = within(block).getAllByRole('listitem').map((li) => li.textContent ?? '');
+    expect(rows).toHaveLength(3);
+    expect(rows[0]).toContain('powercycle_setup@0.2.0');
+    expect(rows[0]).toContain('缺失');
+    expect(rows[1]).toContain('ensure_root@0.3.0');
+    expect(rows[2]).toContain('flash_preflight@1.0.2');
+    expect(rows[0]).toContain('文件缺失 /opt/stp/scripts/powercycle_setup/v0.2.0/run.sh');
+    expect(within(block).getByText('缺失').className).toContain('text-destructive');
+    expect(within(block).getByText('未知').className).toContain('text-muted-foreground');
+    expect(within(block).getByText('在位').className).toContain('text-success');
+  });
+
+  it('「重新核验」调 refresh 并重拉该机矩阵', async () => {
+    const onLoad = vi.fn().mockResolvedValue(hostPresence);
+    const onRefresh = vi.fn().mockResolvedValue({});
+    render(
+      <ExpandableHostTable
+        hosts={[host]}
+        onLoadHostScriptPresence={onLoad}
+        onRefreshHostScriptPresence={onRefresh}
+      />,
+    );
+
+    fireEvent.click(screen.getByText(host.name));
+    await screen.findByText('powercycle_setup@0.2.0');
+
+    fireEvent.click(screen.getByRole('button', { name: `${host.name} 重新核验脚本在位` }));
+    await waitFor(() => expect(onRefresh).toHaveBeenCalledWith(host.id));
+    await waitFor(() => expect(onLoad).toHaveBeenCalledTimes(2));
+  });
+
+  it('stale=true 时逐台区块顶部给陈旧提示', async () => {
+    const onLoad = vi.fn().mockResolvedValue(hostPresence);
+    render(
+      <ExpandableHostTable
+        hosts={[host]}
+        scriptPresenceSummary={{ ...summary, stale: true }}
+        onLoadHostScriptPresence={onLoad}
+      />,
+    );
+
+    fireEvent.click(screen.getByText(host.name));
+
+    const banner = await screen.findByTestId(`host-script-presence-stale-${host.id}`);
+    expect(banner).toHaveTextContent('账本陈旧');
+    expect(banner).toHaveTextContent('当前状态可能已过期');
+  });
+
+  it('加载失败显示错误与重试入口（不渲染成空矩阵）', async () => {
+    const onLoad = vi.fn().mockRejectedValue(new Error('网络不可达'));
+    render(<ExpandableHostTable hosts={[host]} onLoadHostScriptPresence={onLoad} />);
+
+    fireEvent.click(screen.getByText(host.name));
+
+    expect(await screen.findByText(/核验数据加载失败：网络不可达/)).toBeInTheDocument();
+    expect(screen.queryByText(/暂无条目/)).not.toBeInTheDocument();
+  });
+
+  it('未提供逐台 fetcher 时不出现「脚本在位」区块（既有调用方零回归）', () => {
+    render(<ExpandableHostTable hosts={[host]} />);
+
+    fireEvent.click(screen.getByText(host.name));
+
+    expect(screen.getByText('Agent 版本')).toBeInTheDocument();
+    expect(screen.queryByText('脚本在位')).not.toBeInTheDocument();
   });
 });

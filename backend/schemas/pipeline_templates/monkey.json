@@ -15,7 +15,7 @@
       {
         "step_id": "ensure_root",
         "action": "script:ensure_root",
-        "version": "1.0.1",
+        "version": "1.0.2",
         "timeout_seconds": 60,
         "retry": 1,
         "params": {

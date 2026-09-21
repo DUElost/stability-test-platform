@@ -50,3 +50,17 @@ def test_readme_documents_production_major() -> None:
 def test_env_example_ships_matching_default() -> None:
     example = (REPO / "deploy/postgres/.env.example").read_text(encoding="utf-8")
     assert f"POSTGRES_IMAGE=postgres:{PRODUCTION_PG_MAJOR}-alpine" in example
+
+
+def test_daily_dev_doc_covers_existing_volume_major_switch() -> None:
+    """#2963：#2945 只验了**空库**路径，存量卷这条射程要有日常入口的落点。
+
+    存量 dev 卷（更早大版本初始化）在默认镜像跟到 17 后会让整条栈起不来，而唯一解法
+    `POSTGRES_IMAGE` 当时只写在 bug-fix note 里（`local-development.md` 零命中）——
+    照日常文档操作的人必然踩。守卫钉三件事：现场原话可检索、立即解法、正式迁移路径。
+    """
+    doc = (REPO / "docs/development/local-development.md").read_text(encoding="utf-8")
+    assert "POSTGRES_IMAGE" in doc, "日常文档必须写出覆盖口（否则只有踩过的人知道）"
+    assert "database files are incompatible with server" in doc, "现场原话要可检索"
+    assert "pg_dump" in doc and "pg_restore" in doc, "存量卷的正式迁移路径要可照抄"
+    assert "#2963" in doc

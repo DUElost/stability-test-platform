@@ -1,5 +1,12 @@
-import apiClient from './client';
-import type { Host, PaginatedResponse } from './types';
+import apiClient, { unwrapApiResponse } from './client';
+import type {
+  ApiResponseEnvelope,
+  Host,
+  HostScriptPresence,
+  PaginatedResponse,
+  ScriptPresenceRefreshResult,
+  ScriptPresenceSummary,
+} from './types';
 
 export interface HostMutationInput {
   name: string;
@@ -54,6 +61,31 @@ export function coerceHostList(data: unknown): Host[] {
   }
   return [];
 }
+
+/**
+ * #2958 第五道闸：host 脚本在位矩阵（`ok()` 信封，故走 `unwrapApiResponse`）。
+ *
+ * 单机矩阵按需拉（展开某台时一次），fleet 汇总只有聚合计数——逐台缺口要走 `host()`。
+ */
+export const scriptPresence = {
+  summary: () =>
+    unwrapApiResponse(
+      apiClient.get<ApiResponseEnvelope<ScriptPresenceSummary>>('/script-presence/summary'),
+    ),
+  host: (hostId: number | string) =>
+    unwrapApiResponse(
+      apiClient.get<ApiResponseEnvelope<HostScriptPresence>>(`/script-presence/hosts/${hostId}`),
+    ),
+  /** 单机按需重核（未知 host 404；全 fleet 刷新由每日 sweep 承担）。 */
+  refresh: (hostId: number | string) =>
+    unwrapApiResponse(
+      apiClient.post<ApiResponseEnvelope<ScriptPresenceRefreshResult>>(
+        '/script-presence/refresh',
+        undefined,
+        { params: { host_id: hostId } },
+      ),
+    ),
+};
 
 export const heartbeat = {
   send: (hostId: number, data: { status: string; mount_status?: Record<string, unknown> }) =>

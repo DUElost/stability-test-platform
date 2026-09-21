@@ -76,8 +76,10 @@ fi
 if drift_out="$("$PYTHON" "$REPO_ROOT/tools/dev/check-monitoring-assets.py" 2>&1)"; then
     echo "check-deploy-source: OK —— 监控/告警资产与仓库渲染结果一致"
 else
-    echo "check-deploy-source: WARN —— 监控/告警资产与仓库不一致（不阻塞本次部署，按 runbook 重跑站点安装）：" >&2
-    printf '%s\n' "$drift_out" | grep -E '^[[:space:]]+\[(DRIFT|SKIP |ABSENT|MISS )' | sed 's/^/  /' >&2
+    echo "check-deploy-source: WARN —— 监控/告警资产与仓库不一致（不阻塞本次部署；按下方「源文件」提示的落地路径处置）：" >&2
+    # #2985：判定行后面的「源文件：…」是**补救提示**（哪份源、走哪条落地路径）——只透出
+    # 判定行会让操作者看不到该改什么，把「恒报 DRIFT 的常亮灯」换成「恒报 DRIFT 且无从下手」。
+    printf '%s\n' "$drift_out" | grep -E '^[[:space:]]+(\[(DRIFT|SKIP |ABSENT|MISS )|源文件：)' | sed 's/^/  /' >&2
 fi
 
 echo "check-deploy-source: OK —— 工作树在 main，tracked 工作区干净，schema 未超前 head"
