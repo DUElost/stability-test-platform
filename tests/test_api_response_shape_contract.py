@@ -579,6 +579,13 @@ _MODEL_PAIRS: tuple[tuple[str, str, str, str], ...] = (
         "frontend/src/utils/api/types.ts",
         "PlanRunFailedDeviceTrendResponse",
     ),
+    # ADR-0048 v1.1 / #2982：通过率趋势作为纯展示指标回归（双口径并存）。
+    (
+        "backend/api/routes/stats.py",
+        "PlanRunPassRateTrendResponse",
+        "frontend/src/utils/api/types.ts",
+        "PlanRunPassRateTrendResponse",
+    ),
     (
         "backend/api/routes/results.py",
         "ResultsSummary",

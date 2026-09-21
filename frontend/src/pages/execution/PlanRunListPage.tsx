@@ -55,7 +55,15 @@ function runDurationSeconds(run: PlanRun): number | null {
   return Math.max(0, Math.floor((end.getTime() - start.getTime()) / 1000));
 }
 
-/** ADR-0048：通过率不是平台指标——列表展示失败设备台数事实。 */
+/** ADR-0048 v1.1（#2982）：通过率=completed/total 纯前端派生显示（不消费任何后端 pass_rate 字段——该字段仍废止）。非终态行 result_summary 为空 →「—」。 */
+function formatPassRate(run: PlanRun): string {
+  const total = run.result_summary?.total;
+  const completed = run.result_summary?.completed;
+  if (typeof total !== 'number' || total <= 0 || typeof completed !== 'number') return '—';
+  return `${Math.round((completed / total) * 100)}%`;
+}
+
+/** 失败设备台数事实（ADR-0048 v1.0 保留，与通过率双口径并存）。 */
 function formatFailedDevices(run: PlanRun): string {
   const failed = run.result_summary?.failed;
   return typeof failed === 'number' && failed > 0 ? String(failed) : '—';
@@ -248,6 +256,7 @@ export default function PlanRunListPage() {
                       <TableHead className="h-9 px-3">状态</TableHead>
                       <TableHead className="h-9 px-3">Plan</TableHead>
                       <TableHead className="h-9 px-3">设备</TableHead>
+                      <TableHead className="h-9 px-3">通过率</TableHead>
                       <TableHead className="h-9 px-3">失败设备</TableHead>
                       <TableHead className="h-9 px-3">类型</TableHead>
                       <TableHead className="h-9 px-3">触发者</TableHead>
@@ -279,6 +288,9 @@ export default function PlanRunListPage() {
                         </TableCell>
                         <TableCell className={cn('px-3 py-2.5 text-xs tabular-nums', TEXT.caption)}>
                           {run.device_count ?? 0}
+                        </TableCell>
+                        <TableCell className={cn('px-3 py-2.5 text-xs tabular-nums', TEXT.caption)}>
+                          {formatPassRate(run)}
                         </TableCell>
                         <TableCell className={cn('px-3 py-2.5 text-xs tabular-nums', TEXT.caption)}>
                           {formatFailedDevices(run)}

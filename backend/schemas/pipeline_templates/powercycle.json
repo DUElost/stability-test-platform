@@ -8,14 +8,14 @@
         "step_id": "check_device",
         "action": "script:check_device",
         "version": "1.0.2",
-        "timeout_seconds": 30,
+        "timeout_seconds": 180,
         "retry": 1,
         "params": {}
       },
       {
         "step_id": "powercycle_setup",
         "action": "script:powercycle_setup",
-        "version": "1.0.0",
+        "version": "1.2.1",
         "timeout_seconds": 900,
         "retry": 1,
         "params": {}
@@ -27,7 +27,7 @@
         {
           "step_id": "powercycle_check",
           "action": "script:powercycle_check",
-          "version": "1.0.0",
+          "version": "1.0.8",
           "timeout_seconds": 60,
           "retry": 0,
           "params": {}
@@ -38,7 +38,7 @@
       {
         "step_id": "powercycle_finish",
         "action": "script:powercycle_finish",
-        "version": "1.0.0",
+        "version": "1.0.5",
         "timeout_seconds": 600,
         "retry": 1,
         "params": {}

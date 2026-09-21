@@ -38,11 +38,14 @@ import sys
 import time
 from pathlib import Path
 
-from tools.dev.textfile_metrics import render_gauges, write_atomic
-
+# #2973：`python tools/dev/script_guard_probe.py`（systemd ExecStart 同形）时
+# sys.path[0]=tools/dev，仓库根不在 path——顶层 `from tools.dev…` 会在自举前炸。
+# 与 skill_usage_probe / queue_head_telemetry（#1659）同款：先 bootstrap 再 import。
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+
+from tools.dev.textfile_metrics import render_gauges, write_atomic  # noqa: E402
 
 DEFAULT_METRICS_PATH = "/var/lib/prometheus/node-exporter/stp-script-guard.prom"
 MODULE = "backend.scripts.check_unreferenced_script_versions"
