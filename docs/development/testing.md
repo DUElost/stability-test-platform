@@ -148,6 +148,21 @@ vitest 跑在 jsdom 上（`frontend/vitest.config.ts`），而 jsdom **没有布
 
 层与 #169（夜间真实设备 E2E）**不同**：那条覆盖 ADB/文件系统/硬件，不含浏览器 UI 层。
 
+### UI / worktree 取证通用判据（#3034）
+
+浏览器或跨 worktree 取证时，下列两条会给出**错误观测但不报错**：
+
+- **PageHeader 渲染在 `<main>` 之外**：按 `main` 子树计数「创建入口 / 标题」会系统性
+  低估（例如误判 `/schedules` 空态无创建入口）。计数前先确认目标节点是否在
+  `main` 内，或改用角色/测试 id，不要假设「页头 ∈ main」。
+- **跨 worktree 判祖先必须显式传 commit**：`HEAD` 在另一个 worktree 里指向别的东西；
+  `git merge-base` / `--is-ancestor` 请带具体 sha，否则会得出「某修复已在 / 不在
+  dev」的反向结论。
+
+dev 栈与假 Agent 驱动的观测类陷阱（compose `-e` 转发、`/proc` 自匹配、coordinator
+不喂执行心跳、nginx 重启空响应、镜像无 `ps`/`pkill`）见
+`.agents/skills/test-env-self-check/SKILL.md` 与 `tools/dev/fake_agent.py` 模块头。
+
 ---
 
 ## 5. CI（`.github/workflows/ci.yml`）
