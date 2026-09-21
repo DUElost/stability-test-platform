@@ -77,6 +77,13 @@ cat /sys/bus/usb/devices/<dev>:1.0/interface      # "MIDI function" = MIDI-only
   且 `discovered_devices == 0`——覆盖「整树死亡时 `total_devices == 0` 使
   `adb_low_healthy_devices` 短路」的盲区（.63 / 8.87 形态不再恒显 HEALTHY）；
   root hub 数只作判据输入、不上报（心跳 payload 增幅实测 98B，预算 <100B）。
+- **#2967 起：`usb_tree_empty` 的失明 paging 已建**——规则
+  `StabilityHostUsbBlind`（critical，`for: 15m`）= `usb_tree_empty` ∧
+  `sum(host_device_adb_state) > 0`（该 host `device` 账上有行）。合取两道守卫各有实测依据：
+  无合取则空柜机常亮（09-20 命中 tree_empty 的 .91 设备零落账）；无 `for` 则热更重启的
+  单 tick 瞬态空树误报（09-21 批量推送中 .61 账上 20 台仍亮过一次）。ghost 行在本合取下
+  **反转**为「账实不符该上报」，锚点不设新鲜度窗（防 .63 型 11 天失明第 7 天自静默）。
+  它是 #2957 内核通道僵局期间 L1 失明的现役 paging 通道。
 
 遗留（仅记录）：
 
