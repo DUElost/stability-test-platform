@@ -79,7 +79,12 @@ export const dedup = {
       apiClient.post(`/jira/runs/${consoleRunId}/cancel`, {}),
     ),
 
-  listRuns: (params?: { vendor?: string; status?: string; limit?: number }) =>
+  listRuns: (params?: {
+    vendor?: string;
+    status?: string;
+    plan_run_id?: number;
+    limit?: number;
+  }) =>
     unwrapApiResponse<JiraRunRecord[]>(
       apiClient.get(`/jira/runs`, { params }),
     ),
