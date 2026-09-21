@@ -261,6 +261,47 @@ groups:
             docs/notes/architecture/2026-09-14-shared-row-lock-table.md 的 I1–I4 核对
             是否出现新的加锁顺序反向。
 
+      # ---- #2959：取连接失败的两类成因，各自一条 ---------------------------------
+      # 09-20 生产实测：`TooManyConnectionsError` 单日 **1211 次** 只进 backend_error.log，
+      # 当时 26 条规则无一覆盖连接槽耗尽 / 池饱和——"没告警"被读成"没发生"，与 #2104
+      # 给普通锁等待补规则的动机同形（消掉一类代价之后，转移到另一类代价却无人盯）。
+      # 生产者 = backend/core/database.py 取连接包装 → classify_pool_checkout_failure；
+      # **kind 取值与 backend/core/metrics.py 的白名单一一对应**：这里若选一个代码不会
+      # 产出的标签值，就是 #1257 那条"永不触发、永不误报、静默失效"的形态，故场景测试
+      # 用真实 kind 标签喂样本（deploy/prometheus/alerts-stability-platform.test.yml）。
+      # 两条分开是因为处置不同：槽耗尽要么减池/抬上限/削尖峰（ADR-0047 D1/D2），
+      # 排队超时说明池内已饱和而 PG 侧未必满——合在一条就会互相掩盖。
+      - alert: StabilityDbConnectionSlotsExhausted
+        expr: increase(stability_db_pool_checkout_failures_total{kind="slots_exhausted"}[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: PostgreSQL rejected new connections (too_many_connections, SQLSTATE 53300)
+          description: >-
+            控制面取连接时收到 PG 拒绝新建连接。先分清占满槽的是谁：非超级用户可用
+            = max_connections − superuser_reserved（当前 100 − 3 = 97），而应用侧
+            sync/async 两个池各自上限 90、合计 180 已超过它（ADR-0047 D1/D2 未裁决）；
+            同机 ad-hoc 诊断会话与批量终态化波次（abort / 超时收尾）都是尖峰来源。
+            本告警只负责"发生过的没人知道"这件事，不代裁容量方向。
+            池内排队超时是另一条 StabilityDbPoolCheckoutTimeout。
+
+      - alert: StabilityDbPoolCheckoutTimeout
+        expr: increase(stability_db_pool_checkout_failures_total{kind="timeout"}[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: SQLAlchemy QueuePool checkout timed out (pool saturated)
+          description: >-
+            有请求在池内排队到 pool_timeout 仍没拿到连接。与上一条的区别是关键：
+            这条说明**池自身**已饱和（PG 未必满）；先查谁长期持有连接——
+            singleton 调度任务在长事务里取连接、或保留清理/NFS 回收这类慢 I/O 夹在
+            事务中间（#703 已修 leader election 一处，同类形态可再核）。
+            注意 pool_timeout 目前未显式设置（SQLAlchemy 默认 30s），所以触发时
+            调用方多半已经等了 30s：用户侧表现为卡顿而非快速失败，这是 ADR-0047 D2
+            要裁决的"失败形态"，不是本告警能替代的。
+
       # ---- #2881 skill 用量探针的执行者指标 --------------------------------------
       # 生产者 = tools/dev/skill_usage_probe.py 的 node-exporter textfile（不是 backend
       # 应用指标）。名字由 tests/metrics_registry.py 的 textfile_metric_index() 从生产者
