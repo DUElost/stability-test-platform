@@ -231,7 +231,9 @@ RUNNING job 新增 `execution_state` 子状态列（拟），把「一个 RUNNIN
 
 ### 6. O(1) 终态聚合计数器 + 单一 terminalization 入口
 
-**现状（已核实）**：`PlanAggregator.on_job_terminal` 每次终态 `SELECT` 全部兄弟 job 重算（`backend/services/aggregator.py:46-51`），O(N²)（缺口③）。且现有聚合语义**区分 FAILED 与 ABORTED**：`apply_plan_run_aggregation` 分别统计 `failed_only` 与 `aborted`（`backend/services/plan_run_aggregation.py:43-44`），并据此推导 SUCCESS / PARTIAL_SUCCESS / FAILED（`:58-66`）、写入 `result_summary` 的 `failed_only` / `aborted` 字段（`:83-85`）。
+**现状（已核实）**：`PlanAggregator.on_job_terminal` 每次终态 `SELECT` 全部兄弟 job 重算（`backend/services/aggregator.py`），O(N²)（缺口③）。且聚合语义**区分 FAILED 与 ABORTED**：`apply_plan_run_aggregation` 分别统计 `failed_only` 与 `aborted`，并据此推导 SUCCESS / PARTIAL_SUCCESS / FAILED、写入 `result_summary` 的 `failed_only` / `aborted` 字段。
+
+> **已被取代（2026-09-18；v1.1 2026-09-20 恢复三态产出，#2992 勘误）**：本段原先引用的行号（`plan_run_aggregation.py:43-44` / `:58-66` / `:83-85`）已随实现改写漂移，故删行号锚。推导规则由 [ADR-0048](./ADR-0048-execution-status-semantics-v2.md) 取代：判定输入只有 `failed_only` / `aborted` / `abort_requested` 三个计数（`_resolve_plan_run_status`）——`failed_only > 0` → PARTIAL_SUCCESS 且**不判红、不断链**，比例阈值不再参与终态判定；本节对计数器区分度的要求（须能直接推导终态）不变。
 
 **目标**：在 `plan_run` / `plan_run_host` 上维护**原子计数器列**（拟），字段统一为五列——必须保持与现有聚合同等的区分度，否则终态判定无法由计数器直接推导：
 
@@ -265,7 +267,8 @@ RUNNING job 新增 `execution_state` 子状态列（拟），把「一个 RUNNIN
 
 即把一个 PlanRun 的 N 台设备拆成若干批，每批跑完整生命周期（init→patrol→teardown）再放下一批。
 
-- **驳回理由**：长稳测试的语义是「N 台设备**同时**跑 8 天」，不是「N 台设备分批各跑 8 天」。分批会让同一 PlanRun 的设备处于不同的时间进度，patrol wave / barrier 无法对齐，failure_threshold（`backend/models/plan_run.py:44`）的「失败设备占比」失去同一时间基准。把长生命周期状态当成可分批调度的瞬时任务，是本 ADR 明确反对的。第三层 OperationScheduler 限制的是**瞬时脚本执行并发**，不是长跑设备数——两者正交。
+- **驳回理由**：长稳测试的语义是「N 台设备**同时**跑 8 天」，不是「N 台设备分批各跑 8 天」。分批会让同一 PlanRun 的设备处于不同的时间进度，patrol wave / barrier 无法对齐。把长生命周期状态当成可分批调度的瞬时任务，是本 ADR 明确反对的。第三层 OperationScheduler 限制的是**瞬时脚本执行并发**，不是长跑设备数——两者正交。
+  > **已被取代（2026-09-18，#2992 勘误）**：本段原先举的例证 `failure_threshold`（`backend/models/plan_run.py:44`）的「失败设备占比」——该判定轴与两表列已由 [ADR-0048](./ADR-0048-execution-status-semantics-v2.md) 移除，行号亦已漂移（现为 `plan_snapshot`）；「分批破坏同一时间基准」的结论不依赖该例证。
 
 ### 方案 C：`GLOBAL_MAX_RUNNING_JOBS` 全局 RUNNING 上限（驳回）
 

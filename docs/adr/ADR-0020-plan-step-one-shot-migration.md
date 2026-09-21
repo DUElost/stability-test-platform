@@ -7,6 +7,13 @@
 - 决策者：平台研发组
 - 标签：编排模型, 数据迁移, JobInstance, Plan, 一次性切换
 
+> **后续勘误（#2992）**：本文件写于 2026-05，其中建议 schema 的 `plan` / `plan_run` DDL、
+> JSON 示例与「每个生成的 Plan 复制原 Workflow 的 `failure_threshold`」条款都带
+> `failure_threshold` 字段——该判定轴与两表列**已被 [ADR-0048](./ADR-0048-execution-status-semantics-v2.md)
+> 移除（2026-09-18；v1.1 2026-09-20 恢复 PARTIAL_SUCCESS 三态产出与前端派生通过率展示）**。
+> 上述片段保留为历史记录，不再作为活契约引用；当前 schema 与判定输入见
+> `backend/models/plan_run.py`、`backend/services/plan_run_aggregation.py`。
+
 ## 背景
 
 当前编排模型为：
@@ -214,7 +221,7 @@ CREATE UNIQUE INDEX uniq_plan_run_chain_child
 
 - Plan 任意时刻可编辑。
 - 进行中的 PlanRun 和 JobInstance 使用创建时刻的 `plan_snapshot` / `pipeline_def`，后续 Plan 编辑不回溯。
-- PlanRun 创建时复制 Plan 的 `failure_threshold`，后续 Plan 修改不影响已创建 PlanRun 的阈值判定。
+- PlanRun 创建时把 Plan 的判定输入复制进快照，后续 Plan 修改不回溯。（原句所举的 `failure_threshold` 已由 **ADR-0048**（2026-09-18）移除——两表列 drop、阈值判定轴废止；快照隔离结论不依赖该字段。）
 - 每个 PlanRun 仅使用其 Plan 自身的 `watcher_policy`，不继承上游 PlanRun 或 root PlanRun 的 watcher_policy。
 - lifecycle timing、watcher、archive 与 `next_plan_id` 都只从 `plan_snapshot` 读取；派发、claim、recovery 和链触发不得回读 live Plan 补值。
 

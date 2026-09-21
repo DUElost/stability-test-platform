@@ -79,7 +79,9 @@ deploy/
 - 告警规则：平台全量 `deploy/prometheus/alerts-stability-platform.yml`——控制面宿主
   当前是**人工副本**（`/etc/prometheus/rules/`，随仓库更新需人工重放 + `POST /-/reload`；
   落后几条**不写在这里**——那是要抄的派生量，抄一次就开始说谎：用两份文件的 `alert` 名做
-  集合差即可当场得出，`tools/dev/check-monitoring-assets.py` 也会报这个文件的漂移），
+  集合差即可当场得出，`tools/dev/check-monitoring-assets.py` 也按**这份平台源**逐字节比对
+  该副本（#2985：同名副本与站点安装的子集文件不是同一份东西，源随落点定；副本**原样拷贝**
+  即算一致，改了仓库没重放才报 DRIFT，提示行会给出去向）），
   ADR-0011 的正式挂载仍未落地；
   **站点安装的是其子集** `deploy/prometheus/site-alerts.yml`（#2643 方向 1：站点 Prometheus
   只抓本机 node-exporter，平台那批控制面指标在站点结构性无样本——装了也恒不触发，
