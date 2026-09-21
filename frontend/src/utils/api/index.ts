@@ -8,7 +8,7 @@ export {
   registerAuthFailureHandler,
 } from './client';
 export { auth } from './auth';
-export { hosts, heartbeat, hotUpdate, agentInstall, fetchHostList, coerceHostList } from './hosts';
+export { hosts, scriptPresence, heartbeat, hotUpdate, agentInstall, fetchHostList, coerceHostList } from './hosts';
 export { jobs } from './jobs';
 export { devices, fetchAllDevices } from './devices';
 export { projects, assignDevicesToProject } from './projects';
@@ -58,10 +58,12 @@ export type {
   AiAssistantConfig, AiAssistantConfigUpdate, AiConnectionTestResult,
   AiChatSession, AiToolCallInfo, AiChatMessageMeta, AiChatMessage,
   AiAssistantAction, AiActionLogEntry,
+  ScriptPresenceState, ScriptPresenceCounts, ScriptPresenceItem,
+  HostScriptPresence, ScriptPresenceSummary, ScriptPresenceRefreshResult,
 } from './types';
 
 import { auth } from './auth';
-import { hosts, heartbeat, hotUpdate, agentInstall } from './hosts';
+import { hosts, scriptPresence, heartbeat, hotUpdate, agentInstall } from './hosts';
 import { jobs } from './jobs';
 import { devices } from './devices';
 import { projects, assignDevicesToProject } from './projects';
@@ -81,6 +83,7 @@ import { aiAssistant } from './aiAssistant';
 export const api = {
   auth,
   hosts,
+  scriptPresence,
   jobs,
   heartbeat,
   hotUpdate,

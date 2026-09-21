@@ -197,6 +197,32 @@ host_kernel_log_channel = Gauge(
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
 # ============================================================================
+# Script Presence Metrics（#2958 第五道闸）
+# ============================================================================
+
+# #2958：host × 脚本目标版本的**在位矩阵**。存在理由与本文件其它 per-host 面同型：
+# agent 侧核验（`verify_scripts` RPC）只在**派发时**覆盖「本 run 的 host × 本 run
+# 快照」——维护窗 / 近期无 run 的 host 无账（`.89` 缺 3 个版本目录而 DB 面全绿）。
+# 常设 sweep（每日）把结果落 `host_script_presence`，本 gauge 把它折成 per-host ×
+# **闭词表六态**的 series，使「哪台缺什么」第一次可被 PromQL 问出来。
+# 口径（与 `services/script_presence.PRESENCE_STATES` 绑定，新增态必须同步）：
+#   present / missing / mismatch / unknown / n_a / maintenance
+# `unknown`（agent 不可达）**不是绿**；`n_a` 是「该 host 不会跑到」不判红；
+# `maintenance` 是维护窗内的缺口（不判红，归队前补分发由流程盯）。
+host_script_presence = Gauge(
+    'stability_host_script_presence',
+    'Host script presence rows per state (control-plane DB view)',
+    ['host_id', 'state'],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+# #2958：账本新鲜度 = 最近一次**完整** sweep 里最旧一行的观测时刻（unix 秒）。
+# 缺了它，「探针死了」与「全在位」不可分辨——#2900/#2984 的同族教训（绿而空）。
+script_presence_sweep_timestamp = Gauge(
+    'stability_script_presence_sweep_timestamp',
+    'Oldest checked_at of the last complete script presence sweep (unix seconds)',
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+# ============================================================================
 # Risk Classification Metrics
 # ============================================================================
 

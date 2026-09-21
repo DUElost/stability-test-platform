@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import secrets
+from datetime import timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
@@ -26,14 +27,21 @@ from backend.core.metrics import (
     host_health_reason,
     host_kernel_log_channel,
     host_online,
+    host_script_presence,
     is_prometheus_available,
     sweep_stale_host_gauge_children,
     record_db_lock_waiters,
+    script_presence_sweep_timestamp,
 )
 from backend.models.enums import DeviceStatus, HostStatus
 from backend.models.host import Device, Host
 from backend.models.schedule import TaskSchedule
 from backend.services.auth_session import authenticate_token
+from backend.services.script_presence import (
+    PRESENCE_STATES as _PRESENCE_STATES,
+    presence_counts_by_host as _presence_counts_by_host,
+    sweep_freshness_range as _presence_freshness_range,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -189,6 +197,61 @@ _KERNEL_LOG_STATES = ("ok", "unavailable", "unknown")
 #: #2791 的教训就是这一条）。
 _reason_gauge_exposed_hosts: set[str] = set()
 _channel_gauge_exposed_hosts: set[str] = set()
+
+
+#: #2958：上一轮**已暴露过** label child 的 host（差集清理用，与其它两组各一份——
+#: 共用一份会让「这轮没数据」的 host 被上一轮的差值误删/误留）。
+_presence_gauge_exposed_hosts: set[str] = set()
+
+
+def _refresh_script_presence_gauges(db: Session) -> None:
+    """#2958：host × 脚本目标版本的六态计数 + 账本新鲜度（拉取期从表现算）。
+
+    四条口径与 `_refresh_host_device_adb_gauges` / `_refresh_host_health_gauges` 同源：
+
+    - **不在册不落值**：账本由 sweep 对「未退役 host × 全集」整轮 upsert，故表里有行的
+      host 即在册；OFFLINE host 不额外排除——它的态是 ``unknown``（sweep 当场核过、
+      如实记录），不是「冻结的旧绿」，本函数正是要靠它把「长期不可达」暴露出来；
+    - **未知 ≠ 干净**：``unknown`` 是独立 series，不与 present 合并；
+    - **每台全词表写（含 0）**：PromQL 窗口里要有基线，「从来没缺过」与「刚缺又好了」
+      才可分辨；
+    - **差集 remove（#2791 同族）**：从账本消失的 host（退役/删行）必须移除 child，
+      否则冻结在 registry 里恒 firing。
+    另：表未建（迁移未跑）时只警告不抛——不让一个新面拖垮整次抓取。
+    """
+    if not is_prometheus_available():
+        # 先清差集，避免升级/降级（prometheus_client 消失）时残留非空集合
+        _presence_gauge_exposed_hosts.clear()
+        return
+    try:
+        rows = _presence_counts_by_host(db)
+        fresh_min, _fresh_max = _presence_freshness_range(db)
+    except SQLAlchemyError:
+        logger.warning("metrics_script_presence_refresh_failed", exc_info=True)
+        return
+
+    counted: dict[str, dict[str, int]] = {}
+    for r in rows:
+        state = str(r["state"])
+        if state not in _PRESENCE_STATES:
+            continue  # 未知态不进指标（词表新增必须同步 metrics.py，由守卫测试绑住）
+        buckets = counted.setdefault(str(r["host_id"]), {s: 0 for s in _PRESENCE_STATES})
+        buckets[state] += int(r["n"])
+    for host_id, buckets in counted.items():
+        for state in _PRESENCE_STATES:
+            host_script_presence.labels(host_id=host_id, state=state).set(buckets.get(state, 0))
+
+    live = set(counted)
+    for host_id in _presence_gauge_exposed_hosts - live:
+        for state in _PRESENCE_STATES:
+            host_script_presence.remove(host_id, state)
+    _presence_gauge_exposed_hosts.clear()
+    _presence_gauge_exposed_hosts.update(live)
+
+    if fresh_min is not None:
+        if fresh_min.tzinfo is None:
+            fresh_min = fresh_min.replace(tzinfo=timezone.utc)
+        script_presence_sweep_timestamp.set(fresh_min.timestamp())
 
 
 def _refresh_host_health_gauges(db: Session) -> None:
@@ -377,6 +440,7 @@ async def metrics(
     _refresh_fleet_gauges(db)
     _refresh_host_device_adb_gauges(db)
     _refresh_host_health_gauges(db)
+    _refresh_script_presence_gauges(db)
     _refresh_lock_wait_gauges(db)
     _refresh_chain_coverage_gauges(db)
     _sweep_push_host_gauge_children(db)

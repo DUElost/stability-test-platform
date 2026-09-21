@@ -14,6 +14,7 @@ from backend.models.resource_pool import ResourceAllocation, ResourcePool
 from backend.models.notification import AlertRule, ChannelType, EventType, NotificationChannel, NotificationLog, NotificationSeverity, NotificationSource
 from backend.models.schedule import TaskSchedule
 from backend.models.script import Script
+from backend.models.script_presence import HostScriptPresence
 from backend.models.token_blacklist import RevokedRefreshToken
 from backend.models.suite import TestCase, TestSuite
 from backend.models.case_result import TestCaseResult
@@ -61,6 +62,7 @@ __all__ = [
     "ResourceAllocation",
     "ResourcePool",
     "RevokedRefreshToken",
+    "HostScriptPresence",
     "Script",
     "Specialty",
     "StepTrace",

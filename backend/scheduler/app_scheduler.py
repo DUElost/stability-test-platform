@@ -17,6 +17,7 @@ from datetime import timedelta
 from typing import Callable
 
 from apscheduler import AsyncScheduler, ConflictPolicy, TaskDefaults
+from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from backend.core.metrics import (
@@ -61,6 +62,7 @@ SINGLETON_SCHEDULE_IDS: frozenset[str] = frozenset({
     "revoked_token_cleanup",
     "auto_archive_sweep",
     "audit_log_cleanup",
+    "script_presence_sweep",
 })
 
 
@@ -181,7 +183,7 @@ async def register_schedules(scheduler: AsyncScheduler) -> None:
 
     async def _add(
         func: Callable,
-        trigger: IntervalTrigger,
+        trigger: IntervalTrigger | CronTrigger,
         *,
         id: str,
         misfire_grace_time=MISFIRE_GRACE,
@@ -307,6 +309,20 @@ async def register_schedules(scheduler: AsyncScheduler) -> None:
         id="auto_archive_sweep",
     )
     logger.info("schedule_registered id=auto_archive_sweep interval=%ds", _sched().auto_archive_poll_interval_seconds)
+
+    # #2958 第五道闸：host 脚本在位矩阵（可达集 × verify_scripts → 五态落库）。
+    # 每天一次（默认 09:30，本机时区）——账本是存量可见性，不做实时；空串 = 显式停用
+    # （不注册，监控面读作「该作业不存在」而非「注册了但从不跑」）。
+    if (presence_cron := (_sched().script_presence_sweep_cron or "").strip()):
+        from backend.scheduler.script_presence_sweep import script_presence_sweep_job
+
+        await _add(
+            _instrumented("script_presence_sweep", script_presence_sweep_job, singleton=True),
+            CronTrigger.from_crontab(presence_cron),
+            id="script_presence_sweep",
+            misfire_grace_time=timedelta(hours=2),
+        )
+        logger.info("schedule_registered id=script_presence_sweep cron=%s", presence_cron)
 
     # ── ADR-0026 Step 4: admission queue pump ──
     # Registered unconditionally: with the env flag off the pump runs in
