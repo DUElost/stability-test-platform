@@ -105,7 +105,7 @@ cd frontend && npx vitest run && npx tsc --noEmit
 | 通知 | `notification_logs` + 前端铃铛 / 历史页 | [`design/03-frontend.md`](./docs/design/03-frontend.md) |
 | 主机 UI | 紧凑主机表、浮动批量栏、单机热更新 | 同上 |
 
-关键决策记录见 [`docs/adr/`](./docs/adr/)；根 [`CLAUDE.md`](./CLAUDE.md) 仅保留 ADR 决策摘要表。
+关键决策记录见 [`docs/adr/`](./docs/adr/)（摘要表在 [`docs/adr/README.md`](./docs/adr/README.md)）；根 [`CLAUDE.md`](./CLAUDE.md) 是**指向 `AGENTS.md` 的 symlink**（#857 起的 Claude harness 薄壳，无独立内容〔#3003〕）。
 
 ---
 
