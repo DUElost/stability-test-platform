@@ -170,6 +170,28 @@ def test_repo_doc_inventory_is_in_sync():
     assert result.returncode == 0, result.stdout + result.stderr
     assert "env-inventory:begin" in DOC.read_text(encoding="utf-8")
 
+
+def test_write_is_idempotent(tmp_path, monkeypatch):
+    """#2999：`--write` 的自述是「幂等」，但写回路径曾额外补一个 `\\n`。
+
+    后果不是抽象的：每跑一次就在文末多一个空行（本仓实测尾部空行
+    21→22→23→24），把「刷新生成块」的 PR 染上无关空白 diff。本用例把
+    自述变成判据——同一份代码连写两次，字节必须完全一致。
+    """
+    mod = _load_module()
+    doc = tmp_path / "environment-variables.md"
+    doc.write_text(DOC.read_text(encoding="utf-8"), encoding="utf-8")
+    monkeypatch.setattr(mod, "DOC", doc)
+    # ROOT 也要挪走：`--write` 用 `DOC.relative_to(ROOT)` 打印，且示例登记取自
+    # `ROOT.glob`——留空集即可，幂等判据与登记内容无关。
+    monkeypatch.setattr(mod, "ROOT", tmp_path)
+    monkeypatch.setattr(sys, "argv", [str(TOOL), "--write"])
+
+    assert mod.main() == 0
+    first = doc.read_bytes()
+    assert mod.main() == 0
+    assert doc.read_bytes() == first, "--write 不幂等：每次运行都会改变文件字节"
+
 def test_signature_ignores_line_numbers_and_detects_semantics():
     """#1952 教训：行号平移不算漂移；默认值/登记/类别变化才算。"""
     mod = _load_module()
