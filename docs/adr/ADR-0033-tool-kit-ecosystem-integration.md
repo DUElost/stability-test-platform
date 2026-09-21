@@ -1,7 +1,7 @@
 # ADR-0033：外部工具统一接入契约规范与包管理解耦模型（Tool-Kit Ecosystem Integration）
 
-- 状态：**Accepted（v1.8）**
-- 落地状态：**部分落地**（Phase 2 控制面 B5 样板·选项 A：薄 `DedupMergeEngine` 包现态 `start_log_scan -merge_files_list`；Phase A：D0 新族门禁 + Tool Contract 脚手架 + Jira 薄 ACL；Scan-Result-GT 仍仅 Agent B2；**包存储未触发、不排期**——见 §5.4 评估锚；Phase 3 / PlanRun 日志 UI 未做；D0/D3 权威已生效——见 §5）
+- 状态：**Accepted（v1.9）**
+- 落地状态：**部分落地**（Phase 2 B5 `DedupMergeEngine`；Phase A：D0 新族门禁 + Tool Contract 脚手架 + Jira 薄 ACL（#3005）；Phase A3：`PlanRunArtifact` 下载 API + DedupReportCard 链接 + `jira/runs?plan_run_id=`（#3015/#3013）；Scan-Result-GT 仍仅 Agent B2；**包存储未触发、不排期**——见 §5.4 评估锚；Phase 3 / DLE zip 未做；D0/D3 权威已生效——见 §5；§5.6 **D0 可拦对象口径**已定——见 v1.9）
 - 优先级：P1
 - 目标里程碑：M7
 - 日期：2026-09-03
@@ -23,7 +23,8 @@
 | v1.5 | 2026-09-19 | **Phase 2 选项 A 拍板落地**：样板 = 包 **B5** 现态 `start_log_scan -merge_files_list`（两平台同一工具）；Scan-Result-GT **继续只做 B2** Agent 主机汇总，不插 merge 循环；纠正 v1.0–v1.4「unisoc GT = DedupMergeEngine」措辞；薄适配器 `backend/services/dedup/`；不做包存储 / Phase 3 / 不修订 D3（#745 / #2546） |
 | v1.6 | 2026-09-20 | **包存储触发条件评估锚**（非决策变更）：§5.4 三条对照仓内/文档现态 → **未触发**；评估正本 [`2026-09-20-adr0033-package-store-trigger-assessment.md`](../notes/architecture/2026-09-20-adr0033-package-store-trigger-assessment.md)；不改 D 决策、不排期 tar.gz/`tools_cache`（#745 / #2546） |
 | v1.7 | 2026-09-21 | **Phase A 机械落地**（非决策变更）：D0 新族门禁 `check_new_script_family.py`；D2 脚手架 `verify_tool_contract.py` + fixture；Jira 薄 ACL `backend/services/jira_vendor/`；**不做**包存储 / ToolRun 表 / PlanRun 日志 UI（#745） |
-| v1.8 | 2026-09-21 | **D0 可拦对象口径**（#3014 案 3A，非决策变更）：§5.6 定「计数口径 = 带外部资产的族」+ 首次基线（16 / 19，`clear_recents`、`unisoc_*` 判非 D0 对象）；§5.1 修正「新族门禁零触发」的成因（分母选错，非本期巧合）；脚本膨胀账继续归 ADR-0039 / #735。不动 D0–D4 与 §5.4 三条触发条件本身 |
+| v1.8 | 2026-09-21 | **Phase A3 最小导航切片**（非决策变更）：`GET /plan-runs/{id}/artifacts/{id}/download` + DedupReportCard 下载链 + `GET /jira/runs?plan_run_id=`（#3013）；不做 Package Store / ToolRun / DLE zip |
+| v1.9 | 2026-09-21 | **D0 可拦对象口径**（#3014 案 3A，非决策变更）：§5.6 定「计数口径 = 带外部资产的族」+ 首次基线（16 / 19，`clear_recents`、`unisoc_*` 判非 D0 对象）；§5.1 修正「新族门禁零触发」的成因（分母选错，非本期巧合）；脚本膨胀账继续归 ADR-0039 / #735。不动 D0–D4 与 §5.4 三条触发条件本身。相对 Phase A3（v1.8）顺延为 v1.9 |
 
 ---
 
@@ -170,7 +171,7 @@ ADR-0033 自 2026-09-03 Accepted 起至 2026-09-10 **无任何落地提交**（�
 - **现实已跑出第三条路**：中心存储 `/mnt/stp-aee/tools/` 下为**未打包源码目录**（`Start-Log-Scan` / `Monkey-Log-Scan-GT-SPRD` / `Scan-Result-GT`），Agent 经 4 个私有 env 配置路径（2026-08-31 ADR-0032 落地时引入）。
 
 **诊断（处方与病根错位）**：本 ADR 自述的病根是 ADR-0020 的「不可变 + 每次小改全量复制代码树」（§1）；而 D0 分级准入只拦**新工具族**——本期 10 个新版本目录全部落在既有族，**新族门禁零触发**。
-> **v1.8 复核修正成因**：上面「零触发」不是本期巧合，而是**分母选错**。D0 正文管的是「外部工具**源码**全量复制入仓」，而实测 `backend/agent/scripts/` 现 35 族中 **0 族含第三方源码**（无 LICENSE / 版权头命中），展锐三族实际在中心存储 `tools/`（§5.4 过渡形态）——**该目录的族数与版本目录数从来不是 D0 的可拦对象计数**。本节账目（族数 / 版本目录 / 行数 / env 读键）继续作为**脚本膨胀账**有效，归 ADR-0039 与 #735；D0 侧口径改见 §5.6「D0 可拦对象口径」。即：唯一可立即见效的机制在当前账单来源上不生效，治本的 D2 + D3 + Phase 3 是大工程且收益延迟。本版**不改病根判断**（改 ADR-0020 复制契约属另一方向级问题，见 §5.6），只重排落地优先级并把已发生的例外显式登记。
+> **v1.9 复核修正成因**：上面「零触发」不是本期巧合，而是**分母选错**。D0 正文管的是「外部工具**源码**全量复制入仓」，而实测 `backend/agent/scripts/` 现 35 族中 **0 族含第三方源码**（无 LICENSE / 版权头命中），展锐三族实际在中心存储 `tools/`（§5.4 过渡形态）——**该目录的族数与版本目录数从来不是 D0 的可拦对象计数**。本节账目（族数 / 版本目录 / 行数 / env 读键）继续作为**脚本膨胀账**有效，归 ADR-0039 与 #735；D0 侧口径改见 §5.6「D0 可拦对象口径」。即：唯一可立即见效的机制在当前账单来源上不生效，治本的 D2 + D3 + Phase 3 是大工程且收益延迟。本版**不改病根判断**（改 ADR-0020 复制契约属另一方向级问题，见 §5.6），只重排落地优先级并把已发生的例外显式登记。
 
 ### 5.2 裁定一：D0 与 D3 的权威即刻生效
 
@@ -211,7 +212,7 @@ ADR-0033 自 2026-09-03 Accepted 起至 2026-09-10 **无任何落地提交**（�
 
 **包存储触发对账（v1.6）**：最新书面评估见 [`2026-09-20-adr0033-package-store-trigger-assessment.md`](../notes/architecture/2026-09-20-adr0033-package-store-trigger-assessment.md)（结论：**未触发**）。条件变化时先更新该评估再排期实现。
 
-**D0 可拦对象口径（v1.8，#3014 案 3A）**：判「D0 分级准入是否首次有真实对象 / §5.4 条件 1 是否成立」，**计数口径 = 带外部资产的族**（依赖厂商二进制、第三方源码套件，或需独立分发的大体积 APK），**不是** `backend/agent/scripts/` 的族数或版本目录数。
+**D0 可拦对象口径（v1.9，#3014 案 3A）**：判「D0 分级准入是否首次有真实对象 / §5.4 条件 1 是否成立」，**计数口径 = 带外部资产的族**（依赖厂商二进制、第三方源码套件，或需独立分发的大体积 APK），**不是** `backend/agent/scripts/` 的族数或版本目录数。
 
 - 首次基线（2026-09-21，`origin/main`）：35 族 → **带外部资产 16 族**（`flash_firmware` / `flash_preflight` = SP Flash Tool；`gpu_setup` / `gpu_check` / `gpu_finish` = Antutu APK；`monkey_*` 五族、`powercycle_*` / `sleep_*` / `mtbf_setup` = APK 资源）**；**纯 adb/python 平台自研 19 族**，其中 `clear_recents`（09-20 入场，第 35 族）与 `unisoc_probe` / `unisoc_signal_trigger`（09-14）经判 **非 D0 对象** → 不需要 Tool Contract 准入、不触发 §5.4 条件 1（#2827「未触发」结论由此获得依据）。
 - 复算命令：`grep -rl "Permission is hereby granted\|GNU General Public\|All rights reserved" backend/agent/scripts/`（第三方源码树 → 应 0 命中）；`git grep -l "STP_UNISOC\|Scan-Result-GT\|Start-Log-Scan" origin/main -- backend`（外部工具族的实际调用位置）。
