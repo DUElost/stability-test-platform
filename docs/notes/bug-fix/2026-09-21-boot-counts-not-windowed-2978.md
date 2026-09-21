@@ -57,6 +57,9 @@ Class: bug-fix
 - `pytest tests/ -q --deselect tests/test_prometheus_alerts_contract.py` 与 `run_gates check:quick`
   → `1681 passed, 39 deselected` / `[OK] check:quick (12 gates)`；`ruff` 干净、
   `check-internal-ip-leak` 3684 文件通过
+- **rebase 到含 #2970（场景层新轴）的 main 后复跑**（两侧都改过 `alerts-stability-platform.test.yml`，
+  旧结果不可沿用）：`tests/test_prometheus_alerts_contract.py` → `40 passed in 352.94s`；
+  `promtool test rules` → `SUCCESS`；本文件用例 → `42 passed`
 
 **pending**
 
