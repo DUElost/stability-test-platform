@@ -69,7 +69,7 @@ const sampleRuns = [
     ended_at: '2026-08-31T13:00:00Z',
     project_key: 'proj-a',
     device_count: 4,
-    result_summary: { total: 4, failed: 3 },
+    result_summary: { total: 4, completed: 1, failed: 3 },
   },
   {
     id: 103,
@@ -112,6 +112,26 @@ describe('PlanRunListPage', () => {
     expect(screen.getByText('12')).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: '失败设备' })).toBeInTheDocument();
     expect(screen.getAllByText('3').length).toBeGreaterThan(0);  // ADR-0048：失败台数
+    // ADR-0048 v1.1（#2982）：通过率列=前端派生 completed/total，与失败设备列双口径并存
+    expect(screen.getByRole('columnheader', { name: '通过率' })).toBeInTheDocument();
+    expect(screen.getByText('25%')).toBeInTheDocument();   // #102: 1/4
+    expect(screen.getByText('100%')).toBeInTheDocument();  // #103: 1/1
+  });
+
+  it('filters PARTIAL_SUCCESS tab via API (ADR-0048 v1.1 恢复三态)', async () => {
+    const user = userEvent.setup();
+    listPageMock
+      .mockResolvedValueOnce(pageOf())
+      .mockResolvedValue(pageOf([]));
+    renderPage();
+    await screen.findByText('MTBF overnight');
+
+    await user.click(screen.getByTestId('plan-run-status-PARTIAL_SUCCESS'));
+    await waitFor(() => {
+      expect(listPageMock).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'PARTIAL_SUCCESS', skip: 0 }),
+      );
+    });
   });
 
   it('filters by status tab via API', async () => {
