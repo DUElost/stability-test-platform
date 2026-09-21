@@ -13,6 +13,8 @@ vi.mock('@/utils/api', () => ({
       triggerScan: vi.fn(),
       triggerMerge: vi.fn(),
       triggerExtract: vi.fn(),
+      planRunArtifactDownloadUrl: (runId: number, artifactId: number) =>
+        `/api/v1/plan-runs/${runId}/artifacts/${artifactId}/download`,
     },
   },
 }));
@@ -421,5 +423,29 @@ describe('DedupReportCard', () => {
     expect(await screen.findByText(/去重状态加载失败/)).toBeTruthy();
     expect(screen.queryByText(/暂无去重产物/)).toBeNull();
     expect(screen.getByRole('button', { name: '重试' })).toBeTruthy();
+  });
+
+  it('#3013: artifact rows expose PlanRunArtifact download link', async () => {
+    (api.planRuns.getDedupStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      plan_run_id: 1,
+      artifacts: [
+        {
+          id: 42,
+          plan_run_id: 1,
+          host_id: 'host-a',
+          storage_uri: '/mnt/stp-aee/dedup/1/mtk/Result.xls',
+          artifact_type: 'merge_result_xls',
+          size_bytes: 2048,
+          scan_round_id: null,
+          created_at: '2026-09-21T00:00:00Z',
+        },
+      ],
+    });
+
+    render(<DedupReportCard runId={1} />, { wrapper });
+
+    const link = await screen.findByTestId('dedup-artifact-download-42');
+    expect(link).toHaveAttribute('href', '/api/v1/plan-runs/1/artifacts/42/download');
+    expect(link).toHaveTextContent('下载');
   });
 });
