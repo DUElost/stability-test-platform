@@ -32,7 +32,7 @@
 - 日期：YYYY-MM-DD
 - 决策者：架构组/研发组
 - 标签：调度, 数据库, 安全
-- 归属域：semantic-ownership <key>（可选；触碰/新建时补；key 见 docs/design/2026-semantic-ownership.md）
+- 归属域：semantic-ownership <key>（新建 ADR 必填，无对应概念写 `n/a（理由）`；存量触碰时补。key 见 docs/design/2026-semantic-ownership.md）
 
 ## 背景
 
@@ -47,8 +47,11 @@
 ## 关联实现/文档
 ```
 
-> `归属域` 字段**触碰即补**，不做一次性全库补齐。该字段指向的是
+> `归属域` 字段：**新建 ADR 必填**（S15⑦ 按头部日期 ≥ 2026-09-22 判，`n/a（理由）` 为合法逃生值），
+> 存量**触碰即补**，不做一次性全库补齐（#3014 案 1A）。该字段指向的是
 > [语义归属索引](../design/2026-semantic-ownership.md) 的表行 key，**不是**把内容裁决权交给索引。
+> **修订既有 ADR 时不要把 `- 日期：` 改成修订日**：S15⑦ 以该日期判「是否新建」，把旧 ADR 的日期
+> 刷到 cutoff 之后会让它突然需要 `归属域` 字段；修订一律走 `- 版本记录：`（#3014 案 1A 使用边界）。
 
 ## 当前 ADR 清单
 
@@ -87,7 +90,7 @@
 | [ADR-0031](./ADR-0031-platform-ai-assistant.md) | 平台 AI 助手（运维域 LLM 助手与风险分级自治边界） | Accepted | P1 | M8 | v1.7：阶段三落地（附录 A **Accepted** #658；工具面扩至 T0×14 / T1×3 / T2a×3 / T2b×6；新增 `t2b_auto_dispatch_allowlist`）。v1.6：权限对齐 **D8**（助手权限 ⊆ 账号 API 权限——`admin_only` 镜像 `require_admin`、`auto_approve` 与执行面复检发起人、`scan_script_catalog`/`test_notification_channel` 标 admin-only）。v1.5：阶段二全栈 ✅（T0-T3 四级自治 / httpx 载体 / DB+Fernet / RunConsole / 角色裁剪工具面 / 二轮审核 H1–M5）。设计见 [docs/design/2026-08-27-platform-ai-assistant.md](../design/2026-08-27-platform-ai-assistant.md) |
 | [ADR-0031-A](./ADR-0031-A-appendix-phase3-core-write-tools.md) | ADR-0031 附录 A：阶段三核心业务写操作（Plan 执行链路工具面，#658） | Accepted | P1 | M8 | v1.0（2026-08-31 合入 main）：在不破坏「助手权限 ⊆ 账号 API 权限」（D8）前提下把 Plan 执行链路写操作纳入助手工具面 |
 | [ADR-0032](./ADR-0032-unisoc-mtk-parallel-dedup-pipelines.md) | 展锐与 MTK 并列日志链路（Watcher + 归档）（#463 / #73） | Accepted | P1 | M7 | v1.1：**D8 增补展锐 inotifyd 实时唤醒层**（opt-in 默认关；UNIVIEW 事件只作 reconciler.wake 唤醒、无双写；采纳前置=真机探测清单 #1998）/ v1.0：**DLE 终态语义两平台同构**（§D10，#463 裁决——`ARCHIVED` 同义同判、extract 归档链无平台分支、否决「上送即归档」）/ v0.9：**平台路由收口**（R1 完备性按 (host, platform) 期望集、R2 逐平台 merge 结果落 `run_context.merge_platforms`、R3 条件裁决由 v0.8 达成——D3 维持「同一 merge 工具」、R4 未支持态与死接口收口 a1/b1/b3，见 §D9）/ v0.8：**B3 spike 已执行**（2026-09-15，五项验收实测通过，D3「UNISOC 复用 MTK merge 工具」转已验证；第 1 项精确化为「列数同构、两列命名有差异且被工具归一」）/ v0.7：platform 路由；w1 Watcher + D4c 归档；`dedup/{run}/{mtk,unisoc}/` + 双 merge；TAG 共用 |
-| [ADR-0033](./ADR-0033-tool-kit-ecosystem-integration.md) | 外部工具统一接入契约规范与包管理解耦模型（#745） | Accepted | P1 | M7 | v1.6：§5.4 包存储触发条件评估锚 → **未触发**（notes `2026-09-20-adr0033-package-store-trigger-assessment`）；v1.5：Phase 2 **选项 A**——B5 薄 `DedupMergeEngine` 包现态 `start_log_scan -merge_files_list`（GT 仍只做 B2；纠正「GT=merge 引擎」措辞；见 notes `2026-09-19-adr0033-phase2-option-a`）；v1.4 阻塞登记；v1.3 D1 flash（#2546）；v1.2 收窄；**落地状态：部分落地**（B5 样板；包存储未触发/不排期；Phase 3 未做）；#745/#2546 |
+| [ADR-0033](./ADR-0033-tool-kit-ecosystem-integration.md) | 外部工具统一接入契约规范与包管理解耦模型（#745） | Accepted | P1 | M7 | v1.10：§5.6 **D0 可拦对象口径**=带外部资产的族（#3014 案 3A；16/35 带资产，`clear_recents`+`unisoc_*` 判非 D0）；v1.9：Phase A3 follow-ups DLE zip + extract_bundle + PlanRun Jira 历史（notes `2026-09-21-adr0033-phase-a3-followups`）；v1.8：PlanRunArtifact 下载+#3015；v1.7：Phase A D0/Contract/Jira ACL；v1.6：§5.4 包存储评估未触发；v1.5 B5；**部分落地**（B5 + Phase A + A3；包存储未触发；Phase 3 未做）；#745/#3013/#2546 |
 | [ADR-0034](./ADR-0034-multi-harness-execution-contract.md) | 多 Harness 并行执行契约与执行登记（#855 / #857） | Accepted | P1 | M7 | v1.12：CodeBuddy CLI/IDE 分立——附录 A 原单行实为 CLI 结论却被读作覆盖整个产品线（IDE 从未探针），2026-09-11 人工补测 IDE 得 Q1=否/Q2=是/Q3=一次（Zcode 同形态，与 CLI 相反），照 Cursor 先例拆两行、CLI 版本校正为 2.149.0、IDE 版本 4.11.3 补入（2026-09-11）；v1.11：dsh web 转正回填——Registry CLI 全周期 dogfood 通过（#1256/PR #1291，2026-09-10 合入）、0.1.5-rc.1 加载复测一致（2026-09-11）；v1.10：附录 A 增补 dsh web 实测——根级基线注入 ✅ + scoped 触碰后动态注入 ✅（typed source 实证）、静态 patch 层 disabled 与运行时矛盾记录在案、工作区原生目录选择器坑、Registry CLI 未 dogfood（2026-09-08）；v1.9：并发上限反转——移除 ≈2-3（未实测继承、被多批次 5+ 会话常态超出），瓶颈校准为集成收尾侧，守对象重锚为在窗 Execution 规模与 reconcile 负载（2026-09-08）；v1.8：role 缺省归一化（declare 缺省写 implementation）+ Role 扩展再开启条件成文（2026-09-08）；v1.7：Role 定位收敛——元数据+扩展点、默认 implementation、Role Runtime 降级 deferred（2026-09-08）；v1.6：选择权原则（Harness 由开发者决定）/ 三维状态模型 lifecycle×liveness×integration（ADR 实现选择，非冻结条款）/ Registry=visibility-only 非调度器 / `--path-format=absolute` 唯一发现方式 / effective scope=declared∪derived(diff) 并集恒成立+drift 提示 / overlap 真值表（开放 PR 恒在风险窗口）/ drift gate 非 merge queue / G2 真身+薄壳（symlink 优先）/ Antigravity=带规则的高级顾问不入 Harness 名单。执行细则权威源 `docs/development/ai/execution-contract.md`（P0a 建立）；两轮八源多 Harness 评审综合见 [reviews](../reviews/REVIEW_ADR0034_MULTI_HARNESS_2026-09-06_synthesis.md) |
 | [ADR-0035](./ADR-0035-agent-host-identity.md) | Agent 主机身份与凭据体系（R02-R01/#906） | Accepted | P1 | — | v1.2：**触发条件检测来源**（§6.1 四条触发各自钉到信号来源/检出方/命中后第一步——原四条全依赖外部信号，无来源映射即无人监视）；v1.1：**决策四段化**——§3 当前状态（接受共享 AGENT_SECRET + 威胁模型/冒充面收窄）/ §4 目标形态（A 每主机凭据）/ §5 迁移路径（C 注册质询 + 实施骨架）/ §6 升级触发条件；**ADR Accepted ≠ 实施已启动**，实施单另行拆分；由两份竞争提案 #1147（当前状态）+ #1163/#1170（目标形态）合并为单一权威 |
 | [ADR-0036](./ADR-0036-notification-delivery-semantics.md) | 通知投递语义契约（Notification Delivery Semantics Contract） | **Accepted** | P2 | M7 | v1.0：定稿（2026-09-11，R11 #1117/#1120/#1122，台账 #1125）：定义 How delivery behaves——`ACCEPTED` = 渠道明确接受请求（≠ DELIVERED）/ 三态失败 `REJECTED_PERMANENT`·`REJECTED_TRANSIENT`·`UNKNOWN` / 网络投递必须有 deadline / 重试由 SAQ 唯一负责且**投递级幂等为成对硬约束** / at-least-once + 每通道去重键 / 投递事实必须落 DB / 同步仅限管理员连通性测试；协议状态码与 retry 参数**不入正文**；挂起端到端送达回执与入站契约。与 ADR-0011 分工 What vs How |
@@ -99,14 +102,19 @@
 | [ADR-0042](./ADR-0042-settings-convergence-and-bare-read-boundary.md) | 配置读取收敛——分域 pydantic-settings 与裸读取边界（#737 deferred） | **Accepted** | P1 | M7 | v1.2：P2 已落地四片（2026-09-18 回填 #2661：控制面 reconciler 旋钮 + 安全与会话域 + 磁盘与日志归档域 + agent 心跳/协调/注册域；回填进度而非 P2 收口，余域按 D2 逐个评估。v1.1：P1 试点完成（2026-09-14；依赖 #1970 + D6 门禁 #1971 + 调度域 21 旋钮 #1977 + agent 租约域 5 旋钮与 reload 钩子 #1984；实作约束 C1/C2 见 §P1））：D1 分域 Settings；D2 迁移判据（≥3 旋钮 / 默认值-类型转换重复 ≥2 处 / 需跨字段校验）；D3 env 名与别名不变（validation_alias）；D4 惰性 get_settings() + Agent reload_settings()；D5 排除注入型/协议键与 scripts 目录；D6 env_inventory 门禁解析 Settings 字段；D7 分阶段（P1 试点 1 控制面域 + 1 agent 域） |
 | [ADR-0043](./ADR-0043-abort-grace-subject-alignment.md) | 中止宽限的请求主体同构（Abort Grace Subject Alignment） | **Accepted** | P1 | M7 | v1.1：D3 覆盖判据裁决为「host 时钟**存在**即覆盖」（§9-4，追认 PR #2165 的实现口径）；v1.0：定稿（2026-09-15，#2050 触发、#1928 删除孤儿结构时指路要求先立 ADR；owner 裁决三项全采纳，裁决记录 §9；**v1.0 实施已落地**：2026-09-15 [PR #2165](https://github.com/DUElost/stability-test-platform/pull/2165)（[#2154](https://github.com/DUElost/stability-test-platform/issues/2154) 跟踪，D1–D4/D6 全部接线 + 测试钉子见 §8.1）：D1 请求主体 ≡ 计时主体（run 级 abort 写 run 级 `at`；host 级写 `abort_requested_hosts[host].at`；reaper 按主体取时钟、并存时取更早 deadline）+ D2 自首次请求起算、后续请求不重置（消除 N×GRACE 与「最后写入者赢」）+ D3 主体内 late-claim job 自动纳入（消掉 #2050 残留窗口）+ D4 兼容退化（键缺失回退 run 级、不回填历史，绝不变成「无人回收」）+ D5 显式不做 per-job 时钟 / 不动 UNKNOWN 后续语义 / 不裁 ADR-0019 租约 grace / 不引跨实例协调；#2050 的 `requested_job_ids` 名单语义保留为**正交**的候选面判据 |
 | [ADR-0044](./ADR-0044-agent-install-execution-ownership.md) | Agent 安装的执行归属——RunConsole 自持，SAQ 不再持有安装 | **Accepted** | P1 | M7 | v1.1：2026-09-20 D3 补「持久」视界定义（business 默认 90d，ADR-0050 丙案，#2789）；v1.0：2026-09-15 owner 裁决（[#2220](https://github.com/DUElost/stability-test-platform/issues/2220) 触发）：D1 安装以 RunConsole 为唯一 owner（无作业窗口）+ D2 路由只起 console 与写请求审计、删除 `install_agent_task` 与等待职责 + D3 结果审计与 `agent_installed` 由 `on_complete` 落库 + D4 `/install/status` 改 console-only（新增 `console_found`、去 `saq_key`）+ D5 保留 #2225 的「CANCELED ≠ FAILED」并补「记录消失按取消报」+ D6 不加可配窗口、不改 in-process 生命周期（跨重启存活列为终态候选） |
-| [ADR-0045](./ADR-0045-risk-level-vocabulary.md) | 风险分级的对外词表——统一到 S/A/B，翻译只留在前端（#2494） | **Accepted** | P2 | M7 | v1.0：2026-09-17 owner 裁决（D1 判定源唯一 = `log_observation` 活链；D2 对外 `S/A/B/UNKNOWN`，删服务端翻译表、`RiskDistribution` 改 `s/a/b/unknown`、趋势 `NONE`→`UNKNOWN`；D3 翻译只在前端徽标表一处；D4 `UNKNOWN` 不可折叠；D5 告警 severity 属另一轴、本 ADR 不动；D6 直接改不双写，前置清点 #2485）；**未落地**，实施清单与判据见 §6，承接单 #2494 |
+| [ADR-0045](./ADR-0045-risk-level-vocabulary.md) | 风险分级的对外词表——统一到 S/A/B，翻译只留在前端（#2494） | **Accepted** | P2 | M7 | v1.0：2026-09-17 owner 裁决（D1 判定源唯一 = `log_observation` 活链；D2 对外 `S/A/B/UNKNOWN`，删服务端翻译表、`RiskDistribution` 改 `s/a/b/unknown`、趋势 `NONE`→`UNKNOWN`；D3 翻译只在前端徽标表一处；D4 `UNKNOWN` 不可折叠；D5 告警 severity 属另一轴、本 ADR 不动；D6 直接改不双写，前置清点 #2485）；**已落地**（`adf9c24a`：服务端词表 + 前端徽标表），承接单 #2494 |
 | [ADR-0046](./ADR-0046-control-plane-checkout-roles.md) | 控制面检出的角色分离——开发工作区 vs 部署源（#1987 / #2386） | **Proposed** | P1 | M7 | v1.0：2026-09-17 起草，**待 owner 裁决**，六个裁决点全开：D1 部署源是否必须与开发工作区**物理**分离；D2「盘上缺失」是否仍等于「已退役」（= #2386 验收第 3 条的阻塞点，本稿取向=退役改显式动作、scan 只报告）；D3 scan / hot-update / 派发补推必须解析到同一个已校验 revision（现状 `_AGENT_SOURCE_DIR` 硬编码在运行代码父目录、无 env 可改指）；D4 部署检出的推进权（#1987 的直接症状是谁都动不了）；D5 是否需要「按 revision 回滚 Agent」——**这是 A/B 的主判据**；D6 审计必须落 revision 且与实际推送字节一致。方案 A 独立只读部署检出 / B 按 revision 归档只读树 / C 现状（**只作已标注的过渡**，出口指向 A 或 B）；本 ADR 不改代码，落地拆单与裁决前的证据缺口见 §7 |
 | [ADR-0047](./ADR-0047-db-pool-and-connection-capacity.md) | 控制面 DB 连接池与 PG 上限的容量取向——预算归属与不变量（#703 ②） | **Proposed** | P1 | M7 | v1.0：2026-09-18 起草，**待 owner 裁决**，D1–D6 全开：D1 是否把「`n_instances × n_engines × (pool_size+max_overflow) ≤ max_connections − 预留 − 非应用连接`」做成启动期硬不变量（现状两侧各自合法、合起来非法：单进程两池峰值 180 vs `max_connections=100`）；D2 `pool_timeout` 取值与超时对外形态（默认 30s 排队 vs 快失败 503）；D3 sync/async 双池是否合并为单一预算（属代码结构决策，本 ADR 判为不在容量单里顺手做）；D4 是否引入 pgbouncer——**若选它，`stability_db_pool_*` 三条序列语义必须同 PR 改写**（transaction pooling 会再打断一次「连接身份」假设，#2519 已实测 `Session.commit()` 归还连带 session 级 advisory lock 的同类坑）；D5 告警落在事件侧（`checkout_failures{kind="timeout"}`）而非水位侧，阈值必须来自真实分布；D6 多实例（ADR-0027）时 `n_instances` 现在就该进公式。方案 甲收预算+快失败 / 乙放宽 DB / 丙外部池代理 / 丁只补观测（**取向=带出口的过渡**）；本 ADR 不改代码与参数，裁决前缺的证据见 §4 | 
 | [ADR-0048](./ADR-0048-execution-status-semantics-v2.md) | 执行状态语义 v2——移除 run 级测试通过率判定（#2734 / v1.1 #2982） | **Accepted** | P1 | M7 | v1.1：2026-09-20 owner 重议恢复 PARTIAL_SUCCESS 真实产出（failed_only>0 即黄、无阈值线、设备失败永不判红不断链）与通过率显示（前端派生 completed/total，列表页通过率列 + Dashboard 通过率趋势图双口径回归；后端 pass_rate 字段/阈值列仍废止不回灌）；v1.0：2026-09-18 owner 裁决（`failure_threshold` 阈值判红轴与展示链整体移除，#783 abort→FAILED 保留）；supersede ADR-0022 D8；落实 #815 |
 | [ADR-0049](./ADR-0049-audit-log-retention-layering.md) | audit_logs 分层保留期与裁剪（#2694 拆单 / #2741） | Accepted | P2 | M7 | v1.0：2026-09-19 owner 裁决四问全采推荐项——D1 分层 180/90/30（security/business/session，`token_issued` 归 security）、D2 business 为 NOT IN 默认桶+安全 action 登记义务、D3 会话类同表不折叠、D4 单例批删作业（0=停用）+不复用锁序机器、D5 汇总审计自免环；`terminal_payload_conflict` 爆发行不例外；实现随本 ADR 同 PR 落地（#2741） |
 | [ADR-0050](./ADR-0050-install-evidence-retention-alignment.md) | audit_logs 保留期与 ADR-0044 D3 安装证据的对齐（#2789） | **Accepted** | P3 | M7 | v1.0：2026-09-20 owner 裁决采丙「明示接受 90d 视界」（零迁移；D3 持久=审计保留视界内，business 默认 90d env 可调；布尔事实走 host.extra 不丢）；甲（入 security 层，180d 仍有限）与乙（专表，超前建设）未采纳；v0.1 决策材料 PR #2816 |
 
-## Proposed 里程碑看板（2026 上半年）
+## 里程碑看板（由主表「目标里程碑」列派生）
+
+> **维护约定（#2989）**：本表是主清单「目标里程碑」列的**派生视图**——主表标了 `M7`
+> 的 ADR **必须**出现在下行；新增 ADR 写主表时同步补本行。标题不再写
+> 「Proposed」——板上含 Accepted / Proposed 混态，真正未决项以状态列
+> `Proposed` 为准（当前：ADR-0039 / 0046 / 0047）。
 
 | 里程碑 | 目标日期 | 包含 ADR |
 |---|---|---|
@@ -116,10 +124,11 @@
 | M4 | 2026-06+ | ADR-0025（方案 C Sprint 1–4）；PRD/设计/验收见 [`docs/DOC-MAP.md`](../DOC-MAP.md) |
 | M5 | 2026-07 | ADR-0026 P0–P2（规模化执行正确性 + 控制面减负） |
 | M6 | 待定 | ADR-0027（控制面水平扩展；重启条件见 ADR-0025 D1） |
-| M7 | 进行中 | ADR-0029（项目分类域·登记簿；v2.5 派生归属 M1–M4 **已落地**）；ADR-0030（**Accepted** v1.9：P0 ✅ / P1 ✅ / D6 ✅ / **P2 核心 ✅** #429）；ADR-0031（**Accepted**：阶段二全栈 ✅，2026-08-28）；ADR-0032（**Accepted** v1.1：展锐 Watcher+归档；平台路由收口 R1–R4 + DLE 终态语义两平台同构（§D10，#463）+ **D8 增补 inotifyd 实时唤醒层**（opt-in 默认关，#1998）；v0.8：**B3 spike 已执行**，#463/#73）；ADR-0033（**Accepted** v1.6：§5.4 包存储评估**未触发**；v1.5 Phase 2 选项 A·B5 薄适配器部分落地；v1.4 阻塞登记；v1.3 D1 flash；v1.2 收窄；D0/D3 即刻生效、包存储条件落地；#745）；ADR-0034（**Accepted** v1.12：多 Harness 执行契约，#855/#857）；ADR-0043（**Accepted** v1.1：中止宽限的请求主体同构，#2050/#1928/#1880；**实施已落地** 2026-09-15 [PR #2165](https://github.com/DUElost/stability-test-platform/pull/2165)，[#2154](https://github.com/DUElost/stability-test-platform/issues/2154)；v1.1 D3 判据裁决）；ADR-0037（**Accepted** v0.5：Agent 主机提权边界——wrapper 单入口与窄面 sudoers 已全队落地，legacy 分支/哨兵与宽文件退役完成（#2133/#2134/#2180）；R02 评审一稿 #2206） |
+| M7 | 进行中 | **Proposed（未决）**：ADR-0039、ADR-0046、ADR-0047。<br>**Accepted**：ADR-0029（M1–M4 已落地）、0030、0031、0032、0033（v1.10；§5.6 D0=带外部资产的族；部分落地）、0034、0036、0037、0038、0040、0042、0043（实施已落地）、0044、0045（词表已落地 `adf9c24a`）、0048、0049、0050。 |
 
 ## 维护约定
 
 - 每次关键架构变化必须新增或更新 ADR，并在 MR/PR 中引用。
 - 若 ADR 被替代，旧 ADR 不删除，仅将状态改为 `Superseded` 并指向新 ADR。
 - AI 生成方案或修改代码时，优先检索本目录并遵循 `Accepted` ADR。
+- 里程碑看板与主表「目标里程碑」列必须同批更新（#2989）；漏板 = 未决项隐身。

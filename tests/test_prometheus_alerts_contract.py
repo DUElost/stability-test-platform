@@ -87,7 +87,13 @@ def _alert_exprs() -> list[tuple[str, str]]:
 # 解析器，不在表达式：合法 PromQL 不该为了让解析器满意而被拆开。
 # 同一盲区对 `_aggregation_clauses` 的内层指标定位也成立（那边只扫聚合后的第一个非函数
 # token）；本仓尚无「聚合 + 集合运算」混用的规则，真出现时按同样方式处理，别静默误判。
+# #2967 补第二形态：向量匹配修饰符（`and on (host_id)`、`group_left(y)`）——`on` 本体
+# 会被「后随 ( 视为函数」规则跳过，但括号里的标签列表成为裸 token 被误读成指标名。
+# 同一条原则：盲区修在解析器，合法 PromQL 不为解析器让路。
 _SET_OPERATORS = frozenset({"or", "and", "unless"})
+_VECTOR_MATCH_RE = re.compile(
+    r"\b(?:on|ignoring|group_left|group_right)\b\s*(?:\([^)]*\))?"
+)
 
 
 def _selectors(expr: str) -> list[tuple[str, list[str]]]:
@@ -100,6 +106,7 @@ def _selectors(expr: str) -> list[tuple[str, list[str]]]:
     selectors: list[tuple[str, list[str]]] = []
     covered_until = -1
     stripped = _AGG_PREFIX_RE.sub("( ) ", expr)
+    stripped = _VECTOR_MATCH_RE.sub(" ", stripped)
     for match in _TOKEN_RE.finditer(stripped):
         if match.start() < covered_until:
             continue
@@ -148,6 +155,12 @@ def test_selector_parser_skips_functions_and_reads_labels():
     assert _selectors(
         'a_total == 1 or b_total == 1 or absent(stp_guard_last_run)'
     ) == [("a_total", []), ("b_total", []), ("stp_guard_last_run", [])]
+    # 向量匹配修饰符（#2967 StabilityHostUsbBlind 形态）：`and on (host_id)` 的标签
+    # 列表不得被误读成指标；左侧带标签选择器与聚合内层仍各自要抓到。
+    assert _selectors(
+        'stability_a_total{reason="x"} >= 1 and on (host_id) '
+        '(sum by (host_id) (stability_b_total) > 0)'
+    ) == [("stability_a_total", ["reason"]), ("stability_b_total", [])]
 
 
 def test_aggregation_parser_reads_labels_and_inner_metric():
@@ -278,6 +291,91 @@ def test_scenario_input_series_match_metric_registry():
     assert not problems, (
         "promtool 场景输入序列与指标注册表不一致：\n" + "\n".join(problems)
         + "\n（CI 无 promtool，该文件从不真跑；名字/标签错了只会让场景证据空转）"
+    )
+
+
+#: Prometheus 的 staleness 窗口：样本末点之后 5 分钟内仍算「在」，之后整条序列消失。
+#: 边界实测（promtool 3.13.3，2026-09-21）：末点 59m + eval 64m ⇒ SUCCESS，65m ⇒ FAILED。
+_STALENESS_MINUTES = 5
+
+_DURATION_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*(ms|s|m|h|d|w|y)?\s*$")
+_DURATION_MINUTES = {
+    "ms": 1 / 60000, "s": 1 / 60, "m": 1, "h": 60, "d": 1440, "w": 10080, "y": 525600,
+}
+
+
+def _duration_minutes(text: object) -> float | None:
+    """promtool 的时长字面量（``1m`` / ``30s`` / ``145h``）→ 分钟；裸数字按秒。"""
+    match = _DURATION_RE.match(str(text))
+    if not match:
+        return None
+    return float(match.group(1)) * _DURATION_MINUTES[match.group(2) or "s"]
+
+
+def _sample_count(values: object) -> int | None:
+    """``'600x70'`` / ``'1+1x10'`` / 空格分隔列表 → 样本点数；别的形态返回 None（不判）。"""
+    text = str(values).strip()
+    if not text:
+        return None
+    tail = re.search(r"x(\d+)$", text)
+    if tail:
+        return int(tail.group(1))
+    tokens = text.split()
+    return len(tokens) if tokens else None
+
+
+def test_scenario_eval_times_are_within_the_sample_window():
+    """每个 ``eval_time`` 必须落在该组样本末点 + 5m 内，否则表达式取空、断言恒空转（#2970）。
+
+    为什么必须在结构层：promtool **只在夜间全量可用**（PR 路径不引第三方二进制，#2151），
+    而本机 promtool 2.x 对该形态**容忍**——#2970 实测 2.53.3 绿、3.13.3 红。于是这条错误的
+    代价不是「PR 红」，而是「夜间红 + 一整天的队列停摆」。
+
+    判据边界（有意，别读成「样本窗口已完全受控」）：按**组内最长**的 series 计算窗口，
+    「整组样本先于 eval_time 用完」这一类必拦；「只有某一条 series 提前过期」不在此判——
+    那要读表达式语义（``absent()`` 等形态本就依赖序列消失），归 promtool 层。
+    """
+    data = yaml.safe_load(SCENARIOS.read_text(encoding="utf-8"))
+    groups = data.get("tests") or []
+    assert groups, "场景文件未解析出任何 tests 组——判据会因解析退化而空跑"
+
+    problems: list[str] = []
+    checked = 0
+    for seq, group in enumerate(groups):
+        if not isinstance(group, dict):
+            continue
+        counts = [
+            count
+            for count in (
+                _sample_count(item.get("values"))
+                for item in (group.get("input_series") or [])
+                if isinstance(item, dict)
+            )
+            if count
+        ]
+        interval = _duration_minutes(group.get("interval", "1m"))
+        if not counts or interval is None:
+            continue
+        last = interval * (max(counts) - 1)
+        for case in group.get("alert_rule_test") or []:
+            if not isinstance(case, dict):
+                continue
+            eval_minutes = _duration_minutes(case.get("eval_time", "0s"))
+            if eval_minutes is None:
+                continue
+            checked += 1
+            if eval_minutes > last + _STALENESS_MINUTES:
+                problems.append(
+                    f"group#{seq} {case.get('alertname')}: eval_time={case.get('eval_time')} "
+                    f"超出样本末点 {last:g}m + {_STALENESS_MINUTES}m"
+                )
+
+    assert checked, "没有解析到任何 eval_time——判据空转（场景文件结构变了？）"
+    assert not problems, (
+        "场景 eval_time 落在样本窗口之外（Prometheus staleness=5m ⇒ 表达式取空，"
+        "该断言恒空转、只在夜间全量里显形）：\n  "
+        + "\n  ".join(problems)
+        + f"\n改法：延长该组 input_series 的样本点数以覆盖 eval_time（{SCENARIOS.name}）"
     )
 
 

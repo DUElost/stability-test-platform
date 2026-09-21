@@ -2,12 +2,13 @@
 
 只测 config 解析 + argv 拼装（无 DB / 无 app）。
 端点 HTTP 层（鉴权/multipart/RunConsole 调用）的集成测试见 test_dedup_jira_endpoints.py。
+
+ADR-0033 Phase A：实现体在 ``backend.services.jira_vendor``；路由再导出同名门面。
 """
 
 from __future__ import annotations
 
-
-from backend.api.routes.dedup import resolve_vendor_tool, build_jira_argv
+from backend.services.jira_vendor import build_jira_argv, resolve_vendor_tool
 
 
 def test_resolve_vendor_tool_none_when_unset(monkeypatch):
@@ -74,3 +75,12 @@ def test_build_argv_upload_list_ignores_reporter():
         input_xls="/data/Result.xls", reporter="alice",
     )
     assert "--reporter" not in argv
+
+
+def test_build_argv_upload_list_injects_project_key():
+    argv = build_jira_argv(
+        "transsion", "upload_list", "/tool", "/py",
+        input_xls="/data/Result.xls", jira_project_key="CAM",
+    )
+    assert "--set-project-key" in argv
+    assert "CAM" in argv
