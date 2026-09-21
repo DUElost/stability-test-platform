@@ -261,6 +261,47 @@ groups:
             docs/notes/architecture/2026-09-14-shared-row-lock-table.md 的 I1–I4 核对
             是否出现新的加锁顺序反向。
 
+      # ---- #2959：取连接失败的两类成因，各自一条 ---------------------------------
+      # 09-20 生产实测：`TooManyConnectionsError` 单日 **1211 次** 只进 backend_error.log，
+      # 当时 26 条规则无一覆盖连接槽耗尽 / 池饱和——"没告警"被读成"没发生"，与 #2104
+      # 给普通锁等待补规则的动机同形（消掉一类代价之后，转移到另一类代价却无人盯）。
+      # 生产者 = backend/core/database.py 取连接包装 → classify_pool_checkout_failure；
+      # **kind 取值与 backend/core/metrics.py 的白名单一一对应**：这里若选一个代码不会
+      # 产出的标签值，就是 #1257 那条"永不触发、永不误报、静默失效"的形态，故场景测试
+      # 用真实 kind 标签喂样本（deploy/prometheus/alerts-stability-platform.test.yml）。
+      # 两条分开是因为处置不同：槽耗尽要么减池/抬上限/削尖峰（ADR-0047 D1/D2），
+      # 排队超时说明池内已饱和而 PG 侧未必满——合在一条就会互相掩盖。
+      - alert: StabilityDbConnectionSlotsExhausted
+        expr: increase(stability_db_pool_checkout_failures_total{kind="slots_exhausted"}[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: PostgreSQL rejected new connections (too_many_connections, SQLSTATE 53300)
+          description: >-
+            控制面取连接时收到 PG 拒绝新建连接。先分清占满槽的是谁：非超级用户可用
+            = max_connections − superuser_reserved（当前 100 − 3 = 97），而应用侧
+            sync/async 两个池各自上限 90、合计 180 已超过它（ADR-0047 D1/D2 未裁决）；
+            同机 ad-hoc 诊断会话与批量终态化波次（abort / 超时收尾）都是尖峰来源。
+            本告警只负责"发生过的没人知道"这件事，不代裁容量方向。
+            池内排队超时是另一条 StabilityDbPoolCheckoutTimeout。
+
+      - alert: StabilityDbPoolCheckoutTimeout
+        expr: increase(stability_db_pool_checkout_failures_total{kind="timeout"}[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: SQLAlchemy QueuePool checkout timed out (pool saturated)
+          description: >-
+            有请求在池内排队到 pool_timeout 仍没拿到连接。与上一条的区别是关键：
+            这条说明**池自身**已饱和（PG 未必满）；先查谁长期持有连接——
+            singleton 调度任务在长事务里取连接、或保留清理/NFS 回收这类慢 I/O 夹在
+            事务中间（#703 已修 leader election 一处，同类形态可再核）。
+            注意 pool_timeout 目前未显式设置（SQLAlchemy 默认 30s），所以触发时
+            调用方多半已经等了 30s：用户侧表现为卡顿而非快速失败，这是 ADR-0047 D2
+            要裁决的"失败形态"，不是本告警能替代的。
+
       # ---- #2881 skill 用量探针的执行者指标 --------------------------------------
       # 生产者 = tools/dev/skill_usage_probe.py 的 node-exporter textfile（不是 backend
       # 应用指标）。名字由 tests/metrics_registry.py 的 textfile_metric_index() 从生产者
@@ -491,7 +532,7 @@ groups:
           summary: Chronic USB link errors on one host (pre-death signature)
           description: >-
             该 host 最近一小时的内核日志里 USB 传输错误超阈（`error -71`/`error -110`
-            计数 ≥20，或 `Maybe the USB cable is bad?` ≥5）且持续 45m。这是**死亡前兆**
+            计数 ≥20，或 `Maybe the USB cable is bad?` ≥5）且持续 45m。**计数只取增量窗样本**：agent 重启时重跑的「整段 boot」累计不参与（#2978）——所以这条报的是「现在正在劣化」，不是「本 boot 曾经劣化」。这是**死亡前兆**
             而不是死亡：#2900 的 .102 案例在 HC died 之前以每日 400~3700 行的速率风暴了
             两周，全程零告警。窗口比主控死亡那条长（45m vs 5m），因为瞬态插拔抖动也会
             命中阈值，而真实劣化会持续数小时到数天。处置：查线/查 hub 供电（SS 线松动、
@@ -527,8 +568,39 @@ groups:
             **永远不会命中**——上面两条告警此时是绿的，但绿色不代表已覆盖。
             出口由 #2957 裁决：给 agent 用户 `systemd-journal` 组（权限扩张，需签字，
             且 48 台都要重跑安装步骤）、改用零权限的结果层判据（`usb_tree_empty`，
-            #2902；但它今天还需补一道「DB 里本来有设备」的合取才不会误报）、
+            #2902——其「DB 里本来有设备」合取已由下方 `StabilityHostUsbBlind`（#2967）
+            补上并接管失明 paging）、
             或 sudoers 只放行 `journalctl -k -o cat` 这一条固定子命令（与 install_agent.sh
             「提权面收敛为 wrapper 固定子命令」的先例同族）。
             注意 `state="unknown"`（老 agent 未上报该字段）是**覆盖缺口**而不是本告警的
             射程：它计入分母、不计入分子，避免 fleet 升级期间与 A/B/C 裁决混成一件事。
+      # #2967：结果层失明合取。#2957 使内核日志通道在现网恒 unavailable ⇒ 上方
+      # ControllerDead 不会命中任何真实死亡；本条用两个零权限信号接管 paging：
+      #   agent 报 `usb_tree_empty`（#2902 判据：lsusb 树只剩控制器 ∧ agent 零发现设备）
+      #   ∧ 该 host 在 `device` 账上有行（sum host_device_adb_state > 0，四桶全量）。
+      # 两道守卫的实测依据：不合物取会误报空柜机（09-20：命中 tree_empty 的两台里
+      # .91 设备表 0 行）；无 for: 会误报热更重启瞬态（09-21 批量推送：.61 重启 tick
+      # 报过一次空树、账上仍 20 台，for 吸收）。ghost row 担忧在本合取下反转成立：
+      # 「账上有设备 ∧ 内核零可见」即使行全陈旧，本身就是要上报的账实不符形态
+      # （ghost 该被清账而不是被静音，#2754）；锚点**不设新鲜度窗**——设 7d 窗会让
+      # .63 型 11 天长失明在第 7 天自我静音，恰是 #2900 付过学费的形态。
+      - alert: StabilityHostUsbBlind
+        expr: >-
+          stability_host_health_reason{reason="usb_tree_empty"} >= 1
+          and on (host_id) (sum by (host_id) (stability_host_device_adb_state) > 0)
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: Host USB is blind while the platform ledger still has devices on it
+          description: >-
+            结果层判据（#2967：#2957 权限僵局期间的失明 paging）：agent 报 USB 树空
+            （lsusb 只剩 root hub ∧ 一台设备都没发现），但该 host 的 `device` 账上
+            仍有设备行——xHCI 主控死亡（`HC died`，不自愈）或 hub 供电/链路整体掉线
+            的形状。SSH 与心跳照常、产能静默归零（fleet 实测失明窗 7~11 天：
+            8.87 / .102 / .63）。处置：按 triage.md L1 取证——agent 通道恒 UNKNOWN
+            （#2957），需 `sudo journalctl -k | grep -E 'xhci|HC died'`；空闲窗
+            （active_jobs=0）后用 xHCI unbind/rebind 救回（8.87 文档 §3.1；
+            .63 实测 20s/23-23、.102 实测 20s/11-11），reboot 兜底。**不要自动
+            rebind**（门控自愈见 #2972，勿在告警处置里顺手做）。若确认该机柜已撤线
+            （设备行全是 ghost），清账关闭本告警，而不是给本规则加静音条件。

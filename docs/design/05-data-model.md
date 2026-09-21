@@ -62,7 +62,7 @@
 |------|------|
 | `plan_run_id`, `plan_id` | NOT NULL |
 | `device_id`, `host_id` | 扇出目标 |
-| `status` | PENDING / RUNNING / COMPLETED / FAILED / ABORTED |
+| `status` | PENDING / RUNNING / COMPLETED / FAILED / ABORTED / **UNKNOWN**（围栏恢复态：心跳断/abort 未 ACK 时由 recycler 判入，持 ACTIVE 租约的 job 才可进入；合法转出仅 `UNKNOWN → RUNNING`（recovery 补报必先复活）与 `UNKNOWN → FAILED`（宽限期超时）——`state_machine.py` VALID_TRANSITIONS，#3001） |
 | `pipeline_def` | 完整 lifecycle JSON |
 
 ### StepTrace
@@ -117,9 +117,9 @@
 
 | 表 | 说明 |
 |----|------|
-| `user` | 认证用户、`role` |
+| `users` | 认证用户、`role`（复数历史例外见 §表名注记，#3001） |
 | `revoked_refresh_token` | Refresh 黑名单 jti（ADR-0024） |
-| `audit_log` | 审计（ADR-0015） |
+| `audit_logs` | 审计（ADR-0015；复数历史例外，#3001） |
 
 ---
 
@@ -127,7 +127,7 @@
 
 | 表 | 说明 |
 |----|------|
-| `notification_channel` / `alert_rule` | 告警 |
+| `notification_channels` / `alert_rules` | 告警（复数历史例外，#3001） |
 | `notification_delivery` | **投递事实层**（#1167 P4 / ADR-0036 D6）：每行 = 一次「通知 × 通道」投递，`unique(notification_log_id, channel)`；状态词表 `requested`→`dispatched`→`accepted`/`retrying`→`failed`（向前兼容，未来加 `delivered` 不改契约）。**本表为权威**：P4 起幂等判定读本表，无本表行的历史日志才回落 `notification_logs.context.channel_delivery` JSONB |
 | `plan_run_artifact` | PlanRun 级 dedup xls 等（Sprint 4 扩展） |
 
