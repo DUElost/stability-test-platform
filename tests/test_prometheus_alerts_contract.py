@@ -87,7 +87,13 @@ def _alert_exprs() -> list[tuple[str, str]]:
 # 解析器，不在表达式：合法 PromQL 不该为了让解析器满意而被拆开。
 # 同一盲区对 `_aggregation_clauses` 的内层指标定位也成立（那边只扫聚合后的第一个非函数
 # token）；本仓尚无「聚合 + 集合运算」混用的规则，真出现时按同样方式处理，别静默误判。
+# #2967 补第二形态：向量匹配修饰符（`and on (host_id)`、`group_left(y)`）——`on` 本体
+# 会被「后随 ( 视为函数」规则跳过，但括号里的标签列表成为裸 token 被误读成指标名。
+# 同一条原则：盲区修在解析器，合法 PromQL 不为解析器让路。
 _SET_OPERATORS = frozenset({"or", "and", "unless"})
+_VECTOR_MATCH_RE = re.compile(
+    r"\b(?:on|ignoring|group_left|group_right)\b\s*(?:\([^)]*\))?"
+)
 
 
 def _selectors(expr: str) -> list[tuple[str, list[str]]]:
@@ -100,6 +106,7 @@ def _selectors(expr: str) -> list[tuple[str, list[str]]]:
     selectors: list[tuple[str, list[str]]] = []
     covered_until = -1
     stripped = _AGG_PREFIX_RE.sub("( ) ", expr)
+    stripped = _VECTOR_MATCH_RE.sub(" ", stripped)
     for match in _TOKEN_RE.finditer(stripped):
         if match.start() < covered_until:
             continue
@@ -148,6 +155,12 @@ def test_selector_parser_skips_functions_and_reads_labels():
     assert _selectors(
         'a_total == 1 or b_total == 1 or absent(stp_guard_last_run)'
     ) == [("a_total", []), ("b_total", []), ("stp_guard_last_run", [])]
+    # 向量匹配修饰符（#2967 StabilityHostUsbBlind 形态）：`and on (host_id)` 的标签
+    # 列表不得被误读成指标；左侧带标签选择器与聚合内层仍各自要抓到。
+    assert _selectors(
+        'stability_a_total{reason="x"} >= 1 and on (host_id) '
+        '(sum by (host_id) (stability_b_total) > 0)'
+    ) == [("stability_a_total", ["reason"]), ("stability_b_total", [])]
 
 
 def test_aggregation_parser_reads_labels_and_inner_metric():
