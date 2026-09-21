@@ -20,14 +20,13 @@ Workflow JobInstance 状态转换（M2 主路径）：
 PENDING → RUNNING → COMPLETED
                   → FAILED
                   → ABORTED
-                  → UNKNOWN → RUNNING    (Agent 恢复)
-                            → COMPLETED  (Agent 补报)
+                  → UNKNOWN → RUNNING    (Agent recovery 复活；补报的迟到完成必经此路边再走 RUNNING→COMPLETED 〔#3001〕)
                             → FAILED     (宽限期超时)
 
 ~~PENDING_TOOL → PENDING  (工具就绪后回到待认领队列)~~  ← ⚠️ 已移除：PENDING_TOOL 从未落地，已在 JobStatus 枚举和 state_machine.py 中不存在
 ```
 
-> ⚠️ **状态机勘误 (2026-06-12)**：`PENDING_TOOL` 状态从未在 `backend/models/enums.py` 的 JobStatus 枚举和 `backend/services/state_machine.py` 的 VALID_TRANSITIONS 中实现，画入图中属文档历史遗留。此外，代码允许 `PENDING → FAILED` 和 `PENDING → ABORTED`（recycler 超时回收直通），`UNKNOWN → COMPLETED`（Agent 补报）和 `UNKNOWN → RUNNING` 三条路径，此图未完整画出。
+> ⚠️ **状态机勘误 (2026-06-12)**：`PENDING_TOOL` 状态从未在 `backend/models/enums.py` 的 JobStatus 枚举和 `backend/services/state_machine.py` 的 VALID_TRANSITIONS 中实现，画入图中属文档历史遗留。此外，代码允许 `PENDING → FAILED` 和 `PENDING → ABORTED`（recycler 超时回收直通），此图未完整画出。〔勘误之勘误 2026-09-21，#3001：本段原文所列 `UNKNOWN → COMPLETED`（Agent 补报）**并非合法路径**——`state_machine.py` 的 VALID_TRANSITIONS 只允许 `UNKNOWN → {RUNNING, FAILED}`（文件内注释明示：迟到完成必须先经 recovery 重建租约，否则宽限期超时是唯一合法终路）。以代码为准。〕
 ```
 
 Legacy TaskRun 状态转换（保留兼容）：
@@ -36,7 +35,11 @@ Legacy TaskRun 状态转换（保留兼容）：
 
 ### 统一设备锁服务
 
-`backend/services/device_lock.py` 提供 acquire / extend / release 三个原子操作（async + sync 双版本），所有锁操作收敛到此服务：
+> 〔#3001 状态注记〕`backend/services/device_lock.py` **已不存在**：设备锁已收敛到
+> `device_leases` 表 + fencing token（ADR-0019 体系，`lease_manager.py:11` 记录旧
+> `device.lock_run_id`/`lock_expires_at` 兼容列已移除）。下方 acquire/extend/release
+> 三操作描述保留为**历史语义**（对应现行为 `claim_jobs_for_host` /
+> `agent_lease_extend` / recycler 释放路径），按本节写代码前先读 ADR-0019。
 
 - **acquire_lock**：CAS 语义 — 设备空闲、租约过期、或同 job 重入时获取锁
   - WHERE 条件：`lock_run_id IS NULL OR lock_expires_at IS NULL OR lock_expires_at < :now OR lock_run_id = :job_id`
@@ -104,7 +107,7 @@ PipelineEngine 在两个层面验证锁：
 
 ## 关联实现/文档
 
-- `backend/services/device_lock.py` — 统一设备锁服务
+- ~~`backend/services/device_lock.py`~~ — 统一设备锁服务（**已移除**，由 `device_leases` + fencing token 取代，〔#3001〕）
 - `backend/tasks/session_watchdog.py` — 会话看门狗
 - `backend/services/state_machine.py` — JobInstance 状态机
 - `backend/api/routes/agent_api.py` — claim / complete / extend_lock 端点
@@ -114,6 +117,6 @@ PipelineEngine 在两个层面验证锁：
 - ~~`backend/services/dispatcher.py`~~ — ~~Workflow 派发（不再预锁）~~ → 已删除，由 `backend/services/plan_dispatcher*.py` 替代（见 ADR-0020）
 - [`archive/openspec/specs/device-concurrency-guard/spec.md`](../archive/openspec/specs/device-concurrency-guard/spec.md) — 设备并发守卫规范（**已归档**，以 ADR 为准）
 - [`archive/openspec/specs/session-lifecycle/spec.md`](../archive/openspec/specs/session-lifecycle/spec.md) — 会话生命周期规范（**已归档**）
-- `backend/tests/services/test_device_lock.py` — 锁服务测试
+- ~~`backend/tests/services/test_device_lock.py`~~ — （文件已不存在〔#3001 实测〕）租约行为测试现位于 `backend/tests/services/` 的 lease/claim 族用例
 - `backend/tests/tasks/test_session_watchdog.py` — 看门狗测试
 - `backend/tests/services/test_session_lease.py` — 会话租约集成测试

@@ -15,7 +15,12 @@
   （含 `AliasChoices` 多别名）或 `env_prefix + 字段名.upper()`；
 - 渲染确定性表格（变量 | 默认 | 示例登记 | 类别 | 首个读取点）写入
   `docs/development/environment-variables.md` 的生成块（marker 之间，勿手改）；
-- `--check` 与文档生成块逐字节比对：代码新增读取名而文档未刷新即红。
+- `--check` 比对的是**语义签名**（变量 | 默认 | 示例登记 | 类别）：新增读取名、默认值或
+  类别变了即红。**「首个读取点」一列刻意不参与比对**（`doc_signature()` 只取前四列）——
+  行号会随该行之上任何无关改动漂移，纳入比对等于让每个 PR 都得重跑 `--write`。
+  代价（#2999 实测）：主工作树里那一列曾长期是过期行号（`#736` 拆分后 `API_URL`
+  指 `agent_application.py:66`，实为 `:103`），而门禁恒绿。故该列定位是**导航快照**，
+  要新鲜度就重跑 `--write`；表头已据此改名，别把它当被守护的事实。
 
 退出码：漂移/用法错 → 1；一致或写入成功 → 0。`--self-test` 离线红绿双向自证。
 """
@@ -402,7 +407,7 @@ def render_block(reads: dict[str, dict], registered: set[str]) -> str:
         "示例文件是**运维模板**（承载需要运维/机型调整的子集）；本表是**代码侧完整清单**。",
         "门禁：每个读取名必须「登记进示例」或「内部声明」二选一，二者之外即红。",
         "",
-        "| 变量 | 默认 | 示例 | 类别 | 首个读取点 |",
+        "| 变量 | 默认 | 示例 | 类别 | 首个读取点（导航快照，不比行号） |",
         "|---|---|---|---|---|",
     ]
     for name in sorted(reads):
@@ -523,8 +528,11 @@ def main() -> int:
     block = render_block(reads, example_keys())
 
     if args.write:
+        # 不额外补换行：`_replace_block` 保留 marker 之外的原文，加 "\n" 会让每次
+        # `--write` 都在文末多一个空行（与本选项自述的「幂等」相反，#2999 实测：
+        # 连跑三次尾部空行 21→22→23→24）。
         DOC.write_text(
-            _replace_block(DOC.read_text(encoding="utf-8"), block) + "\n",
+            _replace_block(DOC.read_text(encoding="utf-8"), block),
             encoding="utf-8",
         )
         print(f"[OK] 已刷新 {DOC.relative_to(ROOT)}（{len(reads)} 个读取名）")
