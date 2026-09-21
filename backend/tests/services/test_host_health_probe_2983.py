@@ -1,16 +1,28 @@
-"""#2983：控制面 host 健康探针——解析/对账纯函数。"""
+"""#2983：控制面 host 健康探针——解析/对账/SSH 白名单执行器。"""
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+
+import pytest
+
 from backend.services.host_health_probe import (
+    ProbeArgvRefused,
     ProbeRound,
     ProbeVerdict,
     TOPOLOGY_BLIND,
     TOPOLOGY_EMPTY_CABINET,
     TOPOLOGY_OK,
+    assert_argv_whitelisted,
+    build_sudo_s_command,
     classify_lsusb_topology,
+    collect_probe_round_via_ssh,
     consecutive_strike_open,
     parse_journal_probe,
     reconcile_agent_health,
+    resolve_probe_argv,
+    run_whitelisted_sudo,
+    select_probe_host_ids,
 )
 
 # .102 死亡定式（与 kernel_usb_faults / issue 同字面）
@@ -95,3 +107,97 @@ def test_consecutive_strike_requires_n_rounds():
         )
         is False
     )
+
+
+def test_probe_argv_whitelist_refuses_unknown():
+    with pytest.raises(ProbeArgvRefused):
+        resolve_probe_argv("rm_rf")
+    with pytest.raises(ProbeArgvRefused):
+        assert_argv_whitelisted(["bash", "-c", "id"])
+    cmd = build_sudo_s_command(resolve_probe_argv("lsusb"))
+    assert cmd.startswith("sudo -S -p '' -- ")
+    assert "lsusb" in cmd
+    assert ";" not in cmd
+
+
+class _FakeChannel:
+    def __init__(self, rc: int = 0):
+        self._rc = rc
+
+    def shutdown_write(self) -> None:
+        return None
+
+    def recv_exit_status(self) -> int:
+        return self._rc
+
+
+class _FakeFile:
+    def __init__(self, data: bytes = b"", *, channel: _FakeChannel | None = None):
+        self._data = data
+        self.channel = channel or _FakeChannel()
+
+    def write(self, _data: str) -> None:
+        return None
+
+    def flush(self) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return self._data
+
+
+class _FakeSSH:
+    def __init__(self, outputs: dict[str, tuple[int, str, str]]):
+        self.outputs = outputs
+        self.commands: list[str] = []
+
+    def exec_command(self, cmd: str, timeout: int = 10):
+        self.commands.append(cmd)
+        key = "lsusb" if "lsusb" in cmd else "journal_kernel_2h"
+        rc, out, err = self.outputs[key]
+        ch = _FakeChannel(rc)
+        return (
+            _FakeFile(channel=ch),
+            _FakeFile(out.encode(), channel=ch),
+            _FakeFile(err.encode(), channel=ch),
+        )
+
+
+def test_run_whitelisted_sudo_and_collect_round():
+    client = _FakeSSH(
+        {
+            "lsusb": (0, "\n".join(_LSUSB_BLIND) + "\n", ""),
+            "journal_kernel_2h": (0, "\n".join(_HC_DIED_JOURNAL) + "\n", ""),
+        }
+    )
+    out = run_whitelisted_sudo(client, "lsusb", sudo_password="secret-not-logged")
+    assert out.rc == 0
+    assert "0bda" in out.stdout
+    assert all("secret" not in c for c in client.commands)
+
+    round_ = collect_probe_round_via_ssh(client, sudo_password="secret-not-logged")
+    assert round_.journal.hc_dead_seen is True
+    assert round_.topology.classification == TOPOLOGY_BLIND
+    result = reconcile_agent_health([], round_)
+    assert result.verdict == ProbeVerdict.AGENT_MUTE
+
+
+def test_select_probe_host_ids_filters_retired_maintenance_offline():
+    now = datetime(2026, 9, 21, 12, 0, tzinfo=timezone.utc)
+    hosts = [
+        SimpleNamespace(
+            id="online", status="ONLINE", retired_at=None, maintenance_until=None,
+        ),
+        SimpleNamespace(
+            id="offline", status="OFFLINE", retired_at=None, maintenance_until=None,
+        ),
+        SimpleNamespace(
+            id="retired", status="ONLINE",
+            retired_at=now - timedelta(days=1), maintenance_until=None,
+        ),
+        SimpleNamespace(
+            id="maint", status="ONLINE", retired_at=None,
+            maintenance_until=now + timedelta(minutes=10),
+        ),
+    ]
+    assert select_probe_host_ids(hosts, now=now) == ["online"]

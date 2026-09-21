@@ -1,21 +1,26 @@
-"""#2983：控制面 host 健康探针——纯解析 / 对账层（第一切片）。
+"""#2983：控制面 host 健康探针——解析 / 对账 / SSH 白名单执行器。
 
-本模块**不**做 SSH、不读凭据、不调度。它把探针原始文本折成事实，并与
-agent 自报的 ``extra.health.reasons`` 对账——这是「第四条通道」里可离线预演
-的那一截（issue 验收：.102 journal 回放命中；.90/.91 判空柜不判失明）。
+切片①：纯解析与对账（可离线预演 .102 / 空柜）。
+切片②：固定 argv 白名单 + ``sudo -S`` 远程执行（**不**落凭据、**不**接 cron）。
+cron/SAQ 调度与告警接线留后续切片。
 
-SSH 采集与 cron 接线是后续切片；签名词表与 Agent 侧
-``backend.agent.kernel_usb_faults`` 同源（同字面量，避免双源漂移）。
+签名词表与 Agent 侧 ``backend.agent.kernel_usb_faults`` 同源。
 """
 from __future__ import annotations
 
+import logging
+import shlex
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
-from typing import Iterable, Optional, Sequence, Set
+from typing import Any, Iterable, Optional, Protocol, Sequence, Set
 
 from backend.agent.kernel_usb_faults import (
     parse_kernel_usb_faults,
 )
+from backend.services.host_maintenance import in_maintenance_window
+
+logger = logging.getLogger(__name__)
 
 # 拓扑判定词表（进对账信号；后续告警规则按此建）。
 TOPOLOGY_OK = "ok"
@@ -201,3 +206,136 @@ def consecutive_strike_open(
         return False
     window = recent_verdicts[-need:]
     return all(v in strike_on for v in window)
+
+
+# ---------------------------------------------------------------------------
+# 切片②：SSH 白名单执行（固定 argv，非 shell 串）
+# ---------------------------------------------------------------------------
+
+class ProbeArgvRefused(ValueError):
+    """argv 不在白名单——拒绝拼进 sudo。"""
+
+
+# 只读探针命令：key → 完整 argv（不含 sudo）。journal 用相对窗口，游标由调度层另存。
+PROBE_ARGV_WHITELIST: dict[str, tuple[str, ...]] = {
+    "lsusb": ("lsusb",),
+    "journal_kernel_2h": (
+        "journalctl",
+        "-k",
+        "--no-pager",
+        "-o",
+        "cat",
+        "--since",
+        "-2h",
+    ),
+}
+
+
+def resolve_probe_argv(name: str) -> tuple[str, ...]:
+    """按名取白名单 argv；未知名拒绝。"""
+    argv = PROBE_ARGV_WHITELIST.get(name)
+    if not argv:
+        raise ProbeArgvRefused(f"probe argv not whitelisted: {name!r}")
+    return argv
+
+
+def assert_argv_whitelisted(argv: Sequence[str]) -> tuple[str, ...]:
+    """校验任意 argv 是否整表命中白名单（防调用方手拼）。"""
+    key = tuple(argv)
+    if key not in PROBE_ARGV_WHITELIST.values():
+        raise ProbeArgvRefused(f"probe argv not whitelisted: {list(argv)!r}")
+    return key
+
+
+def build_sudo_s_command(argv: Sequence[str]) -> str:
+    """拼 ``sudo -S -p '' -- <argv…>``；argv 必须已在白名单。"""
+    safe = assert_argv_whitelisted(argv)
+    # -p ''：关掉密码提示，避免混进 stdout；口令只走 stdin（调用方写入，不记日志）
+    return "sudo -S -p '' -- " + " ".join(shlex.quote(part) for part in safe)
+
+
+@dataclass(frozen=True)
+class RemoteProbeOutput:
+    name: str
+    rc: int
+    stdout: str
+    stderr: str
+
+
+def run_whitelisted_sudo(
+    client: Any,
+    name: str,
+    *,
+    sudo_password: str,
+    timeout: int = 10,
+) -> RemoteProbeOutput:
+    """经已建立的 SSH client 跑一条白名单探针（``sudo -S``）。
+
+    **绝不**把 ``sudo_password`` 写入日志或异常消息。``client`` 需提供
+    ``exec_command(cmd, timeout=…)``（paramiko.SSHClient 同形）。
+    """
+    argv = resolve_probe_argv(name)
+    cmd = build_sudo_s_command(argv)
+    try:
+        stdin, stdout, stderr = client.exec_command(cmd, timeout=timeout)
+    except TypeError:
+        # 部分 mock / 旧签名无 timeout 关键字
+        stdin, stdout, stderr = client.exec_command(cmd)
+    try:
+        if sudo_password:
+            stdin.write(sudo_password + "\n")
+            stdin.flush()
+        stdin.channel.shutdown_write()
+    except Exception:
+        # 写口令失败仍继续读，避免把口令带进异常链
+        logger.warning("host_health_probe sudo stdin write failed name=%s", name)
+    out = stdout.read().decode("utf-8", errors="replace")
+    err = stderr.read().decode("utf-8", errors="replace")
+    rc = stdout.channel.recv_exit_status()
+    return RemoteProbeOutput(name=name, rc=rc, stdout=out, stderr=err)
+
+
+def collect_probe_round_via_ssh(
+    client: Any,
+    *,
+    sudo_password: str,
+    timeout: int = 10,
+) -> ProbeRound:
+    """一次 SSH 会话采集 lsusb + journal，折成 ``ProbeRound``。"""
+    lsusb = run_whitelisted_sudo(
+        client, "lsusb", sudo_password=sudo_password, timeout=timeout,
+    )
+    journal = run_whitelisted_sudo(
+        client, "journal_kernel_2h", sudo_password=sudo_password, timeout=timeout,
+    )
+    return ProbeRound(
+        journal=parse_journal_probe(journal.stdout.splitlines()),
+        topology=classify_lsusb_topology(lsusb.stdout.splitlines()),
+    )
+
+
+class _HostProbeCandidate(Protocol):
+    id: Any
+    status: Any
+    retired_at: Any
+    maintenance_until: Any
+
+
+def select_probe_host_ids(
+    hosts: Sequence[_HostProbeCandidate],
+    *,
+    now: Optional[datetime] = None,
+) -> list[str]:
+    """ONLINE ∧ 非 retired ∧ 非维护窗 → 探针目标 id 列表。"""
+    selected: list[str] = []
+    for host in hosts:
+        if str(getattr(host, "status", "") or "") != "ONLINE":
+            continue
+        if getattr(host, "retired_at", None) is not None:
+            continue
+        if in_maintenance_window(
+            getattr(host, "maintenance_until", None), now=now,
+        ):
+            continue
+        selected.append(str(host.id))
+    return selected
