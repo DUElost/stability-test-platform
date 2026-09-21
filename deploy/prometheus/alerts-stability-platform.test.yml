@@ -657,7 +657,7 @@ tests:
           reason: usb_link_degraded
         exp_annotations:
           summary: Chronic USB link errors on one host (pre-death signature)
-          description: 该 host 最近一小时的内核日志里 USB 传输错误超阈（`error -71`/`error -110` 计数 ≥20，或 `Maybe the USB cable is bad?` ≥5）且持续 45m。这是**死亡前兆** 而不是死亡：#2900 的 .102 案例在 HC died 之前以每日 400~3700 行的速率风暴了 两周，全程零告警。窗口比主控死亡那条长（45m vs 5m），因为瞬态插拔抖动也会 命中阈值，而真实劣化会持续数小时到数天。处置：查线/查 hub 供电（SS 线松动、 劣质 hub、EMI 都是已知成因），别等它死——主控一死就只能 unbind/rebind。 同 host 若同时出现 StabilityHostUsbControllerDead，以那条为准（本条是前兆面）。
+          description: 该 host 最近一小时的内核日志里 USB 传输错误超阈（`error -71`/`error -110` 计数 ≥20，或 `Maybe the USB cable is bad?` ≥5）且持续 45m。**计数只取增量窗样本**：agent 重启时重跑的「整段 boot」累计不参与（#2978）——所以这条报的是「现在正在劣化」，不是「本 boot 曾经劣化」。这是**死亡前兆** 而不是死亡：#2900 的 .102 案例在 HC died 之前以每日 400~3700 行的速率风暴了 两周，全程零告警。窗口比主控死亡那条长（45m vs 5m），因为瞬态插拔抖动也会 命中阈值，而真实劣化会持续数小时到数天。处置：查线/查 hub 供电（SS 线松动、 劣质 hub、EMI 都是已知成因），别等它死——主控一死就只能 unbind/rebind。 同 host 若同时出现 StabilityHostUsbControllerDead，以那条为准（本条是前兆面）。
     - eval_time: 50m
       alertname: StabilityHostUsbControllerDead
       exp_alerts:
