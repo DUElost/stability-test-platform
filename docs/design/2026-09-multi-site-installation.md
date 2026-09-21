@@ -125,7 +125,7 @@ agents:
 | `agents[].ssh_port` | 逐主机 SSH 端口，范围 **1..65535**，默认 **22**。#2283 之前 `ansible_port` 被解析后丢弃、Host 行恒以 22 建立，因此非 22 的站点必须逐台声明（漏声明会连到错误服务，通常安装中途失败） | 落进 inventory 的 `ansible_port`（见 `docs/operations/installation.md` 的 Agent 清单），并进入 Host 创建/复用校验 |
 | 秘密绑定 | 按站点生成/提供，格式与权限验证，不复制 A 的值，不用占位值启动 | `DATABASE_URL`、`REDIS_URL`、`JWT_SECRET_KEY`、`AGENT_SECRET`、`SSH_CREDENTIALS_FERNET_KEY` 等既有键 |
 | `navigation` | 只发布获准信息；URL 只允许受控站点/文档目标，不带凭据。I5：`contact`/`documentation_url` 由 S2 渲染进站点导航页（HTML 转义，显示名与负责人是自由文本） | `/var/www/stability-site/index.html`（0644，nginx `/site/` 只读提供）+ `handover.json`；不引入统一登录、不污染前端发布物 |
-| `monitoring` | 站点本地监控栈（#2197）：`enabled`（默认装）+ `prometheus_port`（默认 9091）。用发行版 `prometheus` / `prometheus-node-exporter` 包与其 unit，只通过 `/etc/default` 的 `$ARGS` 收窄监听面；抓取配置渲染到 `/etc/stp/prometheus/prometheus.yml`（job `file-server` → 回环 node-exporter），宿主进程内存采样器（`stp-mem-top.timer`）随栈落地 | `/storage` 页的数据源：后端默认查 `127.0.0.1:9091`（`STP_PROMETHEUS_URL` 未设时）；端口与 job 名改动必须同步后端环境，否则页面静默空掉；整栈只听回环 |
+| `monitoring` | 站点本地监控栈（#2197）：`enabled`（默认装）+ `prometheus_port`（默认 9091）。用发行版 `prometheus` / `prometheus-node-exporter` 包与其 unit，只通过 `/etc/default` 的 `$ARGS` 收窄监听面；抓取配置渲染到 `/etc/stp/prometheus/prometheus.yml`（job `file-server` → 回环 node-exporter），宿主进程内存采样器（`stp-mem-top.timer`）与 skill 用量探针（`stp-skill-usage.{service,timer}`，root 跑、写 textfile 指标并供 `StabilitySkillUsage*` 规则消费）随栈落地 | `/storage` 页的数据源：后端默认查 `127.0.0.1:9091`（`STP_PROMETHEUS_URL` 未设时）；端口与 job 名改动必须同步后端环境，否则页面静默空掉；整栈只听回环 |
 
 I1 的标准拓扑要求控制面、中心存储和每个 Agent 使用不同目标；不支持将多个安装角色合并到同一台机器。目标只做主机名大小写/末尾点、IP 表示法规范化；不同 DNS 别名是否指向同一机器必须在远端预检核验。
 部署/Agent 安装/本地 AEE 目录不得与共享挂载根相同或互为父子，Agent 安装目录也不得包含本地 AEE 根。路径使用无转义的字母、数字、下划线、点和短横线分段；拒绝穿越、模板/命令表达式、共享根和系统目录。远端 symlink 与真实磁盘身份仍未检查。
