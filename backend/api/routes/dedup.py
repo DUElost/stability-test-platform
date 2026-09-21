@@ -19,7 +19,7 @@ import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from sqlalchemy import select
@@ -44,6 +44,11 @@ from backend.models.host import Host
 from backend.models.jira_run import JiraRun
 from backend.models.user import User
 from backend.services.jira_issue_parser import parse_issue_keys
+from backend.services.jira_vendor import (
+    build_jira_argv,
+    load_vendor_tool_env,
+    resolve_vendor_tool,
+)
 from backend.services.run_console import (
     RunConsole,
     RunKeyBusyError,
@@ -58,77 +63,6 @@ router = APIRouter(prefix="/api/v1/jira", tags=["dedup-jira"])
 _VENDORS = {"transsion", "tinno"}
 _STAGES = {"upload_list", "create"}
 _SOURCES = {"upload", "plan_run"}
-
-
-def resolve_vendor_tool(vendor: str) -> Optional[Dict[str, str]]:
-    """从 env 解析厂商工具的解释器 + 目录。未配置返回 None（→ 端点 503）。
-
-    env 约定（部署级，见 §9.4）：
-      STP_JIRA_<VENDOR>_PYTHON  工具自带解释器（Tinno 用其 venv38/python）
-      STP_JIRA_<VENDOR>_DIR     工具目录（含 generate_/create_ 脚本 + config/ + 凭据）
-    """
-    v = vendor.upper()
-    python = os.getenv(f"STP_JIRA_{v}_PYTHON", "").strip()
-    tool_dir = os.getenv(f"STP_JIRA_{v}_DIR", "").strip()
-    if not python or not tool_dir:
-        return None
-    return {"python": python, "dir": tool_dir}
-
-
-def build_jira_argv(
-    vendor: str, stage: str, tool_dir: str, python: str,
-    *, input_xls: str, dry_run: bool = True, reporter: Optional[str] = None,
-    jira_project_key: Optional[str] = None,
-) -> List[str]:
-    """按 (vendor, stage) 拼装厂商工具 argv（不走 shell）。两阶段均需输入文件。
-
-    stage=upload_list: generate_<vendor>_jira_upload_list.py --add-main-excel <Result_*.xls>
-    stage=create:      create_<vendor>_jira_batch_from_excel.py <JIRA_Upload_List_*.xlsx> [--dry-run] [--reporter <reporter>]
-       （create 消费 stage1 产出的上传模板；输入文件作为位置参数传入，
-         reporter 指定建单负责人；具体 CLI 形参可按工具版本在部署侧微调。）
-
-    jira_project_key（G17）：仅 upload_list 阶段注入 `--set-project-key`。
-    工具内部按机型的 affect_project_mapping 逐行优先、注入值只替换默认槽位
-    （2026-08-27 对照 Transsion/Tinno generate 脚本源码确认），因此登记簿的
-    粗粒度键不会覆盖细粒度映射；Moto 工具无此参数（vendor 未接，见 G16）。
-    """
-    d = Path(tool_dir)
-    if stage == "upload_list":
-        script = d / f"generate_{vendor}_jira_upload_list.py"
-        argv = [python, str(script), "--add-main-excel", input_xls]
-        if jira_project_key:
-            argv += ["--set-project-key", jira_project_key]
-        return argv
-    if stage == "create":
-        script = d / f"create_{vendor}_jira_batch_from_excel.py"
-        argv = [python, str(script), "--add-excel-file", input_xls]
-        if dry_run:
-            argv.append("--dry-run")
-        if reporter:
-            argv += ["--reporter", reporter]
-        return argv
-    raise RunConsoleError(f"unknown stage: {stage}")
-
-
-def _load_vendor_tool_env(tool_dir: str) -> Dict[str, str]:
-    """读取厂商工具目录下的凭据 env 文件，叠加到子进程环境（不记录值）。"""
-    root = Path(tool_dir)
-    out: Dict[str, str] = {}
-    for path in (root / ".env.local", root / "tools" / ".env"):
-        if not path.is_file():
-            continue
-        for raw_line in path.read_text(encoding="utf-8").splitlines():
-            line = raw_line.strip()
-            if not line or line.startswith("#"):
-                continue
-            if line.startswith("export "):
-                line = line[7:].strip()
-            key, _, value = line.partition("=")
-            key = key.strip()
-            if not key:
-                continue
-            out[key] = value.strip().strip('"').strip("'")
-    return out
 
 
 def _work_dir() -> Path:
@@ -338,7 +272,7 @@ async def start_jira_run(
             run_key=f"jira:{vendor}",
             cmd=argv,
             cwd=tool["dir"],
-            env=_load_vendor_tool_env(tool["dir"]),
+            env=load_vendor_tool_env(tool["dir"]),
             label=f"jira-{vendor}-{stage}",
             on_complete=_on_jira_run_complete,
             run_id=console_run_id,
