@@ -12,7 +12,16 @@ fleet 内已 3 例（跨机型跨厂商），最长失明 11 天，全靠人工�
 三条刻意的口径：
 
 - **扫描失败返回 None（未知 ≠ 干净）**——与 `device_discovery.count_usb_devices` 同款：
-  读不到日志时既不报故障、也不假装检查过，首次失败留一条 warning；
+  读不到日志时既不报故障、也不假装检查过，首次失败留一条 warning。
+  **判「读不到」不能只看 stderr 提示串**：#2957 实测本模块真正使用的两种 argv
+  （`-k --no-pager -o cat --boot` 与 `… --since @<ts>`）在非特权下都是
+  **rc=0 / stdout 空 / stderr 也空**——提示串只出现在 `-n 3`、`--since -1h` 这类
+  *别的*形状里。⇒ 只靠 `_BLIND_HINT_MARKERS` 会把「从没读到」判成「读到且干净」，
+  连 `channel_state()` 都会报 `ok`（现网 36/36 台已升级 host 全部如此）。
+  现在补一道**可读性探针**：任何一次扫描折出 0 行时，问一句「整段 boot 里有没有
+  哪怕一行内核日志」（`--boot --lines=1`）；没有就是读不到，返回 None。
+  同时给子进程钉 `LC_ALL=C`/`LANG=C`——systemd 的提示串是翻译的（本机
+  `/usr/share/locale/zh_CN/LC_MESSAGES/systemd.mo` 存在），提示匹配不能依赖语言环境。
 - **扫描走后台线程**——`journalctl -k` 在坏盘/大日志下可能秒级，心跳主循环不得被拖慢
   （心跳超时会被 session_watchdog 判 OFFLINE，那是比失明更响的误报）；
 - **失明是「日志证据 ∧ 此刻零设备」的合取**——单看日志会把「死过但已 unbind/rebind
@@ -22,6 +31,7 @@ fleet 内已 3 例（跨机型跨厂商），最长失明 11 天，全靠人工�
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import threading
 import time
@@ -115,6 +125,42 @@ def parse_kernel_usb_faults(lines: Iterable[str]) -> KernelUsbFaults:
     )
 
 
+def _journal_env() -> dict:
+    """给 journalctl 钉死 C locale。
+
+    systemd 的消息是翻译过的（本机 `locale -a` 有 `zh_CN`，且
+    `/usr/share/locale/zh_CN/LC_MESSAGES/systemd.mo` 存在）⇒ 任何**按文本**匹配提示串
+    的判据都必须与语言环境无关，否则中文 host 上匹配静默失效（比不匹配更坏：它看起来像"没问题"）。
+    """
+    env = dict(os.environ)
+    env["LC_ALL"] = "C"
+    env["LANG"] = "C"
+    return env
+
+
+def kernel_log_is_readable(
+    *,
+    timeout: float = 20.0,
+    journalctl: str = "journalctl",
+) -> bool:
+    """整段 boot 里是否存在**至少一行**内核日志——「读得到」的正向证据。
+
+    为什么必须有这道探针：非特权 `journalctl -k --no-pager -o cat --boot` 的实测输出是
+    rc=0 + stdout 空 + stderr 空（`#2957`，同机 sudo 对照为 373,600 行），
+    与「这台机开机后一行内核日志都没有」完全同形。`--lines=1` 让成本与日志总量无关。
+    """
+    argv = [journalctl, "-k", "--no-pager", "-o", "cat", "--boot", "--lines=1"]
+    try:
+        proc = subprocess.run(
+            argv, capture_output=True, text=True, timeout=timeout, env=_journal_env()
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if proc.returncode != 0:
+        return False
+    return bool((proc.stdout or "").strip())
+
+
 def scan_kernel_usb_faults(
     *,
     since: Optional[float] = None,
@@ -129,7 +175,9 @@ def scan_kernel_usb_faults(
     argv = [journalctl, "-k", "--no-pager", "-o", "cat"]
     argv += ["--since", f"@{int(since)}"] if since else ["--boot"]
     try:
-        proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run(
+            argv, capture_output=True, text=True, timeout=timeout, env=_journal_env()
+        )
     except (OSError, subprocess.SubprocessError) as exc:
         logger.debug("kernel_usb_scan_failed: %s", exc)
         return None
@@ -148,7 +196,14 @@ def scan_kernel_usb_faults(
     if any(marker in stderr for marker in _BLIND_HINT_MARKERS):
         logger.debug("kernel_usb_scan_blind stderr=%s", stderr.strip()[-200:])
         return None
-    return parse_kernel_usb_faults(proc.stdout.splitlines())
+    faults = parse_kernel_usb_faults(proc.stdout.splitlines())
+    if faults.lines == 0:
+        # 两种成因同形：①增量窗确实没有新内核日志（可读）；②非特权下 rc=0/空 stdout/空 stderr
+        # （读不到）。只有 ①能被探针放行——探针也拿不到一行就按未知处理（#2957）。
+        if not kernel_log_is_readable(timeout=timeout, journalctl=journalctl):
+            logger.debug("kernel_usb_scan_empty_and_unreadable since=%r", since)
+            return None
+    return faults
 
 
 def usb_kernel_fault_reasons(
