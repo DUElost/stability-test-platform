@@ -1,4 +1,8 @@
-# Rendered by the site installer for <deploy-root> — do not edit by hand.
+# 控制面宿主单元（与 `stp-pg-guard.service` 同族，#2632 缺口①）——**不在站点安装清单**
+# （MONITORING_SAMPLER）：它只驱动只读的 PG 服务日志探针，而 PG 只在控制面宿主机上，
+# 站点装了也扫不到东西（#2788 纠正；本行原先误称「Rendered by the site installer」，
+# 而该标记是本仓判定「站点安装资产」的判据）。安装于控制面宿主时手工替换
+# <deploy-root>。do not edit by hand.
 [Unit]
 Description=Periodic STP PostgreSQL schema-guessing fingerprint probe (every 5 min)
 
