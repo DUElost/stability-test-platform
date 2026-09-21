@@ -437,3 +437,126 @@ class TestChannelState:
         """reason 与通道态是两套词表，混用会让「传感器坏了」伪装成「设备坏了」。"""
         assert not ({REASON_HC_DEAD, REASON_LINK_DEGRADED} & set(CHANNEL_STATES))
         assert set(CHANNEL_STATES) == {CHANNEL_OK, CHANNEL_UNAVAILABLE, CHANNEL_UNKNOWN}
+
+
+class TestReadabilityProbe:
+    """#2957：0 行内核日志**不许**被读成「查过且干净」——本机实测的假绿形状。
+
+    本类存在的理由是一次真实的判据失效：#2911 用 `_BLIND_HINT_MARKERS` 匹配 stderr 提示串
+    来区分「读不到」与「干净」，而**该串在模块真正使用的 argv 形状下根本不出现**：
+
+        $ journalctl -k --no-pager -o cat --boot     # 非特权用户
+        rc=0  stdout=0 字节  stderr=0 字节           # ← 与「这台机没有内核日志」同形
+        $ sudo journalctl -k --no-pager -o cat --boot | wc -l
+        373600                                       # ← 真读到的形状
+
+    于是 36/36 台已升级 host 全部上报 `usb_kernel_log=ok`，fleet 级"通道失明"告警恒绿。
+    现有 `test_permission_hint_is_unknown_not_clean` 之所以没抓到它：它喂的是 `-n 3` /
+    `--since -1h` 那类**别的**形状才会产生的 stderr——**桩的形状必须是被测调用的形状**。
+    """
+
+    @staticmethod
+    def _fake(monkeypatch, *, window=("", "", 0), probe=("", "", 0)):
+        """按 argv 分派输出：含 `--lines=1` 的是可读性探针，其余是窗口扫描。"""
+        from backend.agent import kernel_usb_faults as kuf
+
+        calls: list = []
+
+        def _run(argv, **kwargs):
+            class _P:
+                pass
+
+            proc = _P()
+            is_probe = any("--lines=1" in a for a in argv)
+            out, err, rc = probe if is_probe else window
+            calls.append((list(argv), kwargs))
+            proc.stdout, proc.stderr, proc.returncode = out, err, rc
+            return proc
+
+        monkeypatch.setattr(kuf.subprocess, "run", _run)
+        return calls
+
+    def test_real_blind_shape_is_unknown_not_clean(self, monkeypatch):
+        """生产形状（rc=0/stdout 空/stderr 空）必须判未知——这就是现网 36 台的真实状态。"""
+        from backend.agent import kernel_usb_faults as kuf
+
+        self._fake(monkeypatch)  # 两个形状都空
+        assert kuf.scan_kernel_usb_faults(since=None) is None
+        assert kuf.scan_kernel_usb_faults(since=1_700_000_000.0) is None
+
+    def test_quiet_window_still_counts_as_read(self, monkeypatch):
+        """反向钉子：窗口 0 行但 boot 里有日志 = **静默窗**，不许误判成读不到。
+
+        没有这条，修复会走成另一个假红：增量扫描在健康 host 上大多数时候就是 0 行。
+        """
+        from backend.agent import kernel_usb_faults as kuf
+
+        self._fake(
+            monkeypatch,
+            window=("", "", 0),
+            probe=("xhci_hcd 0000:00:14.0: HC died; cleaning up\n", "", 0),
+        )
+        faults = kuf.scan_kernel_usb_faults(since=1_700_000_000.0)
+        assert faults is not None and faults.lines == 0
+
+    def test_window_with_lines_needs_no_probe(self, monkeypatch):
+        """读到东西就别再花一次 fork：探针只在 0 行时跑。"""
+        from backend.agent import kernel_usb_faults as kuf
+
+        calls = self._fake(
+            monkeypatch, window=("\n".join(XHCI_DEATH_LINES) + "\n", "", 0)
+        )
+        faults = kuf.scan_kernel_usb_faults(since=None)
+        assert faults is not None and faults.hc_dead_seen
+        assert [a[0] for a in calls] == [
+            ["journalctl", "-k", "--no-pager", "-o", "cat", "--boot"]
+        ]
+
+    def test_journalctl_runs_locale_pinned(self, monkeypatch):
+        """提示串匹配依赖文本 ⇒ 子进程语言环境必须钉死（systemd 消息是翻译过的）。"""
+        from backend.agent import kernel_usb_faults as kuf
+
+        calls = self._fake(monkeypatch, window=("\n".join(XHCI_DEATH_LINES) + "\n", "", 0))
+        kuf.scan_kernel_usb_faults(since=None)
+        self._fake(monkeypatch)
+        kuf.kernel_log_is_readable()
+        assert len(calls) == 1, f"窗口有日志时不该再跑探针：{[c[0] for c in calls]}"
+        # **每个** journalctl 调用都得钉 locale：只断言 calls[0] 会被「把 env 从另一处删掉」
+        # 这种变异骗过（本单 M3 第一版实测就是这样假绿的）。
+        for argv, kwargs in calls:
+            env = kwargs.get("env")
+            assert env is not None, f"{argv} 未固定语言环境——提示串匹配会随 locale 静默失效"
+            assert env["LC_ALL"] == "C" and env["LANG"] == "C"
+            assert env.get("PATH"), "env 必须是 os.environ 的副本，不能把 PATH 弄丢"
+
+    def test_probe_failure_shapes_are_not_readable(self, monkeypatch):
+        from backend.agent import kernel_usb_faults as kuf
+
+        self._fake(monkeypatch, probe=("", "", 1))
+        assert kuf.kernel_log_is_readable() is False
+        self._fake(monkeypatch, probe=("   \n", "", 0))
+        assert kuf.kernel_log_is_readable() is False
+        self._fake(monkeypatch, probe=("one kernel line\n", "", 0))
+        assert kuf.kernel_log_is_readable() is True
+
+    def test_watch_reports_unavailable_on_the_real_shape(self, monkeypatch):
+        """端到端：真 `scan_kernel_usb_faults` + 空 journalctl 形状 ⇒ 通道必须是 unavailable。
+
+        这一条是给 `channel_state()` 兜底的：前面几条测判据，这条测**上报**——
+        现网看到的正是这个字段，它报 `ok` 就等于替失明盖了章。
+        """
+        clock = _Clock()
+        # 不伪造扫描结果：走真 `scan_kernel_usb_faults` + 真 argv，只把 journalctl 的
+        # 输出替成实测形状——否则又会犯「桩的形状不是被测调用的形状」那个原错。
+        self._fake(monkeypatch)
+        watch = KernelUsbWatch(
+            interval_seconds=60.0,
+            window_seconds=3600.0,
+            monotonic=lambda: clock.mono,
+            wall_clock=lambda: clock.wall,
+        )
+        assert watch.channel_state() == CHANNEL_UNKNOWN
+        assert watch.poll(usb_device_count=0) == []
+        assert _wait(lambda: watch.channel_state() == CHANNEL_UNAVAILABLE), (
+            "真扫描器在 rc=0/全空 的形状下仍把通道报成可读——现网 36 台的假绿就是这么来的"
+        )

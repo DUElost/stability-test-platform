@@ -16,6 +16,7 @@ import DispatchGateCard from '@/components/plan-run/DispatchGateCard';
 import ArchiveStatusCard from '@/components/plan-run/ArchiveStatusCard';
 import DedupReportCard from '@/components/plan-run/DedupReportCard';
 import LogEventsCard from '@/components/plan-run/LogEventsCard';
+import JiraRunHistory from '@/components/issues/JiraRunHistory';
 import TestCaseResultsCard from '@/components/plan-run/TestCaseResultsCard';
 import PrecheckSummaryRow from '@/components/plan-run/PrecheckSummaryRow';
 import {
@@ -361,6 +362,8 @@ export default function PlanRunDetailPage() {
               extractSummary={runQ.data?.run_context?.extract}
               mergePlatforms={runQ.data?.run_context?.merge_platforms}
             />
+
+            <JiraRunHistory planRunId={id} />
 
             <BusinessFlowStepper
               timeline={timelineQ.data}

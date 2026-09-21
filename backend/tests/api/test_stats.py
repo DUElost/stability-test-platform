@@ -443,6 +443,79 @@ class TestPlanRunFailedDeviceTrend:
         assert today_point["failed_devices"] == 1
 
 
+class TestPlanRunPassRateTrend:
+    """ADR-0048 v1.1（#2982）：通过率趋势回归纯展示指标，与失败设备数趋势双口径并存。"""
+
+    def test_empty(self, client, auth_headers):
+        response = client.get("/api/v1/stats/plan-run-pass-rate-trend", headers=auth_headers)
+        assert response.status_code == 200
+        data = response.json()
+        assert "points" in data
+        assert data["days"] == 30
+        # 空数据也应返回 [since, today] 区间内每天一个占位点
+        assert len(data["points"]) >= 1
+        assert all(p["run_count"] == 0 and p["avg_pass_rate"] == 0.0 for p in data["points"])
+
+    def test_custom_days_param(self, client, auth_headers):
+        response = client.get(
+            "/api/v1/stats/plan-run-pass-rate-trend", params={"days": 7}, headers=auth_headers,
+        )
+        assert response.status_code == 200
+        assert response.json()["days"] == 7
+
+    def test_days_out_of_range_rejected(self, client, auth_headers):
+        """契约面：days 仅 1..90（越界 422，不静默截断）。"""
+        for bad in (0, 91):
+            response = client.get(
+                "/api/v1/stats/plan-run-pass-rate-trend",
+                params={"days": bad}, headers=auth_headers,
+            )
+            assert response.status_code == 422, f"days={bad} 应被拒"
+
+    def test_aggregates_completed_plan_runs_by_day(
+        self, client, auth_headers, db_session, sample_host, sample_device,
+    ):
+        now = datetime.now(timezone.utc)
+        plan = Plan(name="pass-rate-trend-plan", description="")
+        db_session.add(plan)
+        db_session.flush()
+
+        plan_run = PlanRun(
+            plan_id=plan.id,
+            status="SUCCESS",
+            plan_snapshot={"plan_id": plan.id},
+            run_type="MANUAL",
+            triggered_by="pytest",
+            ended_at=now,
+        )
+        db_session.add(plan_run)
+        db_session.flush()
+        second_device = _make_device(
+            db_session, sample_host.id, "PASSRATE-TREND-DEVICE-2",
+        )
+
+        for status, device in zip(
+            ("COMPLETED", "FAILED"),
+            (sample_device, second_device),
+            strict=True,
+        ):
+            db_session.add(JobInstance(
+                plan_run_id=plan_run.id, plan_id=plan.id,
+                device_id=device.id, host_id=sample_host.id,
+                status=status, pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+                started_at=now - timedelta(minutes=10), ended_at=now - timedelta(minutes=9),
+            ))
+        db_session.commit()
+
+        response = client.get("/api/v1/stats/plan-run-pass-rate-trend", headers=auth_headers)
+        assert response.status_code == 200
+        points = response.json()["points"]
+        today_point = next(p for p in points if p["date"] == now.date().isoformat())
+        assert today_point["run_count"] == 1
+        # 2 台里 1 台 COMPLETED → 当日日均通过率 = 0.5（纯展示口径 completed/total）
+        assert today_point["avg_pass_rate"] == 0.5
+
+
 class TestFileServerOverview:
     """Endpoint /api/v1/stats/file-server — admin-only，未设共享根返回 503。"""
 

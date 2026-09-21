@@ -1,5 +1,5 @@
 import apiClient from './client';
-import type { ResultsSummary, ActivityResponse, CompletionTrendResponse, DashboardSummary, FileServerOverview, HostFailureRateResponse, PlanFailedDevicesResponse, PlanRunFailedDeviceTrendResponse, RiskTrend } from './types';
+import type { ResultsSummary, ActivityResponse, CompletionTrendResponse, DashboardSummary, FileServerOverview, HostFailureRateResponse, PlanFailedDevicesResponse, PlanRunFailedDeviceTrendResponse, PlanRunPassRateTrendResponse, RiskTrend } from './types';
 
 export const results = {
   summary: (limit?: number, projectKey?: string) =>
@@ -34,4 +34,7 @@ export const stats = {
     apiClient.get<PlanFailedDevicesResponse>('/stats/plan-failed-devices', { params: { days, limit } }).then(r => r.data),
   planRunFailedDeviceTrend: (days: number = 30) =>
     apiClient.get<PlanRunFailedDeviceTrendResponse>('/stats/plan-run-failed-device-trend', { params: { days } }).then(r => r.data),
+  /** ADR-0048 v1.1（#2982）：运行通过率趋势，纯展示指标，与失败设备数趋势双口径并存。 */
+  planRunPassRateTrend: (days: number = 30) =>
+    apiClient.get<PlanRunPassRateTrendResponse>('/stats/plan-run-pass-rate-trend', { params: { days } }).then(r => r.data),
 };
