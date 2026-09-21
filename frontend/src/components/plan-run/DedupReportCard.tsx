@@ -490,6 +490,13 @@ export default function DedupReportCard({
                     <span className="flex-1 truncate font-mono text-muted-foreground/70" title={a.storage_uri}>
                       {a.storage_uri}
                     </span>
+                    <a
+                      href={api.planRuns.planRunArtifactDownloadUrl(runId, a.id)}
+                      className="shrink-0 underline underline-offset-2 text-muted-foreground hover:text-foreground"
+                      data-testid={`dedup-artifact-download-${a.id}`}
+                    >
+                      下载
+                    </a>
                   </div>
                 ))}
               </div>
