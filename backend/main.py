@@ -94,9 +94,12 @@ logger = logging.getLogger(__name__)
 # #563: give backend.** a stdout handler. Without this every app-level
 # logger.info() fell through to logging.lastResort (stderr, WARNING+ only),
 # so periodic sweeps and startup registration left no trace in production.
-from backend.core.logging_setup import configure_logging
+from backend.core.logging_setup import configure_logging, install_access_log_filter
 
 configure_logging()
+# #3020：access 行里 99.99% 是 200、87% 来自 7 条 agent 内部轮询路径——只丢这些
+# 「成功 + 高频轮询」行，非 2xx 恒保留；`STP_ACCESS_LOG_FULL=1` 可整条关闭降噪。
+install_access_log_filter()
 
 # Patch uvicorn loggers to include timestamps while preserving colors
 from uvicorn.logging import AccessFormatter, DefaultFormatter
