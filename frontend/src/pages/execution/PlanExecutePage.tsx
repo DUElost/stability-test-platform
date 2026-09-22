@@ -13,7 +13,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton';
 import { useToast } from '@/hooks/useToast';
 import { usePagination } from '@/hooks/usePagination';
-import { api, ApiError, fetchAllDevices, fetchAllPlans, fetchHostList, type HostActiveJob, type PlanRunPreview } from '@/utils/api';
+import { api, ApiError, fetchAllDevices, fetchAllHosts, fetchAllPlans, type HostActiveJob, type PlanRunPreview } from '@/utils/api';
 import { deviceKeys, hostKeys, jobKeys, planKeys, planRunKeys } from '@/utils/api/queryKeys';
 import { Smartphone, ExternalLink, RefreshCw, Trash2, ChevronLeft } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
@@ -226,11 +226,11 @@ export default function PlanExecutePage() {
 
   const { data: hostsList, isError: hostsError, refetch: refetchHosts } = useQuery({
     // #2053：就绪度里的 `retired_at` 门禁必须**拿得到**退役主机——默认的
-    // fetchHostList(include_retired=false) 会被后端过滤，hostMap 里查不到该设备，
+    // fetchAllHosts(false) 会被后端过滤，hostMap 里查不到该设备，
     // 退役分支与「节点离线」分支都命中不了（门恒空转）。用 ADR-0038 已有的
     // retiredList 键（含退役）与主机页共享前缀失效。
     queryKey: hostKeys.retiredList(),
-    queryFn: () => fetchHostList(0, 200, true),
+    queryFn: () => fetchAllHosts(true),  // #3152：翻页拉全（含退役，见上行注释）
     // #2599：host 维度曾只在挂载时取一次——页面挂载后新注册/变更的主机在长驻的
     // 选机工作台上看不到（标签退化成内部 slug、在线判定 fail-open、容量核算整体
     // 忽略）。与同页 devices / activeJobs 同频（20s），也与设备页既有做法一致。

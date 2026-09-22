@@ -18,6 +18,8 @@ vi.mock('@/utils/api', async (importOriginal) => {
   return {
     ...actual,
     fetchHostList: (...args: unknown[]) => mockFetchHostList(...args),
+    // #3152：hostMap 数据源改 fetchAllHosts——委托回同一 mock（无参调用=不含退役）
+    fetchAllHosts: (includeRetired = false) => mockFetchHostList(0, 200, includeRetired),
     // #3131：页面按 total 翻页拉全量（不再单次 list(0,1200)），故数据源在这一层注入
     fetchAllDevicePages: (...args: unknown[]) => mockFetchAllDevicePages(...args),
     // ADR-0029：批量归入走独立导出（非 api 属性）

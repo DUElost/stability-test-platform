@@ -1,4 +1,5 @@
 import apiClient, { unwrapApiResponse } from './client';
+import { fetchAllPages } from './paginate';
 import type {
   ApiResponseEnvelope,
   Host,
@@ -45,9 +46,25 @@ export const hosts = {
   ) => apiClient.patch<Host>(`/hosts/${id}/watcher-admin-state`, data).then(r => r.data),
 };
 
-/** Shared react-query fetcher — always returns Host[], never the paginated envelope. */
+/**
+ * Shared react-query fetcher — always returns Host[], never the paginated envelope.
+ * 取「一页」的原底：`#3152` 后全量消费方一律走 `fetchAllHosts`，本函数只留给
+ * 刻意取一页的调用方（如 `HostsPage` 的 retiredPeek 存在性探针 `limit=1`）。
+ */
 export const fetchHostList = (skip = 0, limit = 200, includeRetired = false) =>
   hosts.list(skip, limit, includeRetired).then((res) => res.items);
+
+/**
+ * 主机全量（#3152）——`limit=200` 是 `GET /hosts` 的**单次响应护栏**（`hosts.py` 的
+ * `le=200`），不是 fleet 总量：四个按"一页=全部"消费的调用方，越界后果分别是
+ * HostsPage 上第 201 台起从管理页消失、设备/计划视图的 host 归属静默变「-」。
+ * 含退役视图尤其会撞线：退役主机不删除（ADR-0038 D5），换机世代单调累积。
+ * 与 devices（#3131）、plans（#3147）同族，走同一个 `fetchAllPages` 原语；
+ * offset 翻页的全序前提由 `/hosts` 的 `order_by(Host.id)`（主键）满足。
+ * 返回 `Host[]` 而非 envelope——维持 `hostKeys` 的缓存形状契约（queryKeys.ts:26）。
+ */
+export const fetchAllHosts = async (includeRetired = false): Promise<Host[]> =>
+  (await fetchAllPages((skip, limit) => hosts.list(skip, limit, includeRetired), 200)).items;
 
 /** Normalize react-query cache to Host[] (tolerates legacy PaginatedResponse pollution). */
 export function coerceHostList(data: unknown): Host[] {

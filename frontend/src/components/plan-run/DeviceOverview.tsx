@@ -24,7 +24,7 @@ import type {
 import { DEVICE_UI_STATUS } from './deviceUiStatus';
 import { DEVICE_LINK_STATUS } from './deviceLinkStatus';
 import { useQuery } from '@tanstack/react-query';
-import { fetchHostList } from '@/utils/api';
+import { fetchAllHosts } from '@/utils/api';
 import { hostKeys } from '@/utils/api/queryKeys';
 import { hostLabel } from '@/utils/hostDisplay';
 import {
@@ -461,7 +461,7 @@ export default function DeviceOverview({
   // 显示名一律走 hostLabel()；查不到（权限不足/缓存未到）时回落 host_id，与旧行为一致。
   const { data: hostList } = useQuery({
     queryKey: hostKeys.retiredList(),
-    queryFn: () => fetchHostList(0, 200, true),
+    queryFn: () => fetchAllHosts(true),  // #3152：翻页拉全（含退役，历史设备要能归属）
   });
   const hostMap = useMemo(
     () => new Map((hostList ?? []).map(host => [String(host.id), host])),

@@ -77,9 +77,11 @@ Class: bug-fix
 - **`PlanListPage` 仍是"取一页 + 真实总数"，没有分页 UI**：计划数超过请求上限时 KPI 会
   诚实地报 >100，但列表只显示 100 行且**无提示**——这是 `#496` 的范畴（分页 + 虚拟滚动 +
   轮询策略），本单只保证"总数不说谎"。
-- **同族未迁移**：`fetchHostList` 仍丢 `total`（`HostsPage:60`、`DeviceOverview:464`、
-  `PlanExecutePage:232`，host 48 / 上限 200）、`UsersPage:31`、`AuditLogPage:132`。
-  统一走 `fetchAllPages` 时一并收口；`coerceHostList` 那份双形状容忍也应随之退休。
+- **同族未迁移**：~~`fetchHostList` 仍丢 `total`~~ **已于 #3152 收口**（`fetchAllHosts`
+  走同一 `fetchAllPages` 原语）。`UsersPage:31`、`AuditLogPage:132` 两处未迁（users=4、
+  audit 已有服务端分页，离边界远，见 #3152 的 Revisit）。
+  **`coerceHostList` 随之退休的说法有误，已在 #3152 更正**：它是测试背书的缓存形状
+  守卫（`HostsPage.test.tsx` 专测 envelope 写入），守的是复发模式而非历史残留，保留。
 - **新增列表消费方一律禁用 `list(0, N)` 形态**：要么 `fetchAllPages`/`fetchAllPlans`，要么
   把 `total` 用起来。`le` 不是"一次能装下整个集合"的承诺。
 - `devices.ts` 的 `DEVICE_PAGE_LIMIT = 1200` 与 `le=_DEVICE_LIST_MAX_LIMIT` 仍是两处手抄
