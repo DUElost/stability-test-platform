@@ -26,10 +26,11 @@ import {
   Zap,
   Search,
   Tag,
+  HardDrive,
 } from 'lucide-react';
 import { ENTITY_STATUS_COLORS } from '@/design-system/colors';
 import { FORM, resourceUsageBgClass, resourceUsageTextClass, STAT, TEXT } from '@/design-system/tokens';
-import { formatDateTimeFull } from '@/utils/format';
+import { formatBytes, formatDateTimeFull } from '@/utils/format';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 
 export type DeviceStatus = 'idle' | 'testing' | 'offline' | 'error';
@@ -44,6 +45,19 @@ function latencyTextClass(latency: number): string {
   if (latency > 300) return 'text-destructive';
   if (latency > 120) return 'text-warning';
   return 'text-success';
+}
+
+/** /data 分区用量摘要（字节口径，#2757 心跳上报）；未上报或 total<=0 → null，不猜。 */
+function diskSummary(device: DeviceTableData): { pct: number; total: number; used: number; free: number } | null {
+  const total = device.disk_total;
+  const used = device.disk_used;
+  if (total == null || used == null || total <= 0) return null;
+  return {
+    pct: Math.min(100, (used / total) * 100),
+    total,
+    used,
+    free: Math.max(0, total - used),
+  };
 }
 
 export interface DeviceTableData {
@@ -66,6 +80,10 @@ export interface DeviceTableData {
   attribution_source?: 'mapped' | 'unmapped' | null;
   /** adb 连接状态（unauthorized = USB 调试未授权，读不到型号/平台） */
   adb_state?: string | null;
+  /** /data 分区总容量（字节，心跳上报；未上报为 null） */
+  disk_total?: number | null;
+  /** /data 分区已用（字节，心跳上报；未上报为 null） */
+  disk_used?: number | null;
 }
 
 interface ExpandableDeviceTableProps {
@@ -96,9 +114,10 @@ export function ExpandableDeviceTable({
   const pageSize = 50;
   const selectable = !!onSelectionChange;
 
-  // 网络/标签列：全空时不渲染（B7——生产 515 台无 latency/tags，白占 ~15% 宽）
+  // 网络/标签/存储列：全空时不渲染（B7——生产 515 台无 latency/tags，白占 ~15% 宽）
   const hasNetworkData = devices.some((d) => d.network_latency != null);
   const hasTagData = devices.some((d) => (d.tags?.length ?? 0) > 0);
+  const hasDiskData = devices.some((d) => diskSummary(d) != null);
 
   // 防抖搜索，减少不必要的过滤计算
   const debouncedSearch = useDebouncedValue(searchQuery, 300);
@@ -402,6 +421,7 @@ export function ExpandableDeviceTable({
               <TableHead className="min-w-[100px] font-medium">状态</TableHead>
               <TableHead className="min-w-[120px] font-medium">电量</TableHead>
               <TableHead className="min-w-[90px] font-medium">温度</TableHead>
+              {hasDiskData && <TableHead className="min-w-[140px] font-medium">存储</TableHead>}
               {hasNetworkData && <TableHead className="min-w-[110px] font-medium">网络</TableHead>}
               {hasTagData && <TableHead className="min-w-[160px] font-medium">标签</TableHead>}
               <TableHead className="min-w-[180px] font-medium">所属主机</TableHead>
@@ -411,6 +431,7 @@ export function ExpandableDeviceTable({
           <TableBody>
             {paginatedDevices.map((device) => {
               const isExpanded = expandedRows.has(device.id);
+              const disk = diskSummary(device);
 
               return (
                 <Fragment key={device.id}>
@@ -522,6 +543,27 @@ export function ExpandableDeviceTable({
                         <span className="text-muted-foreground/40">—</span>
                       )}
                     </TableCell>
+                    {hasDiskData && (
+                      <TableCell className="px-3 py-1.5">
+                        {disk ? (
+                          <div
+                            className="flex items-center gap-2"
+                            title={`已用 ${formatBytes(disk.used)} / 共 ${formatBytes(disk.total)}（最近一次 df /data 上报）`}
+                          >
+                            <Progress
+                              value={disk.pct}
+                              className="h-2 w-14"
+                              indicatorClassName={resourceUsageBgClass(disk.pct)}
+                            />
+                            <span className={cn('font-mono text-xs whitespace-nowrap', resourceUsageTextClass(disk.pct))}>
+                              剩 {formatBytes(disk.free)}
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-muted-foreground/40">—</span>
+                        )}
+                      </TableCell>
+                    )}
                     {hasNetworkData && (
                       <TableCell className="px-3 py-1.5">
                         {device.network_latency != null ? (
@@ -575,8 +617,8 @@ export function ExpandableDeviceTable({
                   {/* Expanded Details */}
                   {isExpanded && (
                     <TableRow className="bg-muted/40 hover:bg-muted/40">
-                      <TableCell colSpan={selectable ? 11 : 10} className="p-4">
-                        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+                      <TableCell colSpan={selectable ? 12 : 11} className="p-4">
+                        <div className="grid grid-cols-1 md:grid-cols-6 gap-4">
                           {/* Device Info */}
                           <div className="bg-card rounded-lg border border-border p-3">
                             <div className="flex items-center gap-2 mb-2">
@@ -652,6 +694,39 @@ export function ExpandableDeviceTable({
                               </span>
                               {device.temperature != null && <span className="text-sm text-muted-foreground">°C</span>}
                             </div>
+                          </div>
+
+                          {/* Storage（/data 分区，心跳 df 上报） */}
+                          <div className="bg-card rounded-lg border border-border p-3">
+                            <div className="flex items-center gap-2 mb-2">
+                              <HardDrive className="w-4 h-4 text-muted-foreground" />
+                              <span className="text-sm font-medium text-foreground">存储空间</span>
+                            </div>
+                            {disk ? (
+                              <div className="space-y-2">
+                                <div className="flex justify-between text-xs mb-1">
+                                  <span className="text-muted-foreground">已用 {formatBytes(disk.used)}</span>
+                                  <span className={cn('font-mono font-medium', resourceUsageTextClass(disk.pct))}>
+                                    {disk.pct.toFixed(0)}%
+                                  </span>
+                                </div>
+                                <Progress
+                                  value={disk.pct}
+                                  className="h-2"
+                                  indicatorClassName={resourceUsageBgClass(disk.pct)}
+                                />
+                                <div className="flex justify-between text-xs">
+                                  <span className="text-muted-foreground">可用</span>
+                                  <span className="font-mono text-foreground">{formatBytes(disk.free)}</span>
+                                </div>
+                                <div className="flex justify-between text-xs">
+                                  <span className="text-muted-foreground">总容量 (/data)</span>
+                                  <span className="font-mono text-foreground">{formatBytes(disk.total)}</span>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="text-xs text-muted-foreground/40">未上报（等待 df /data 采样）</div>
+                            )}
                           </div>
 
                           {/* Network */}
