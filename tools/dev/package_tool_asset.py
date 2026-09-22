@@ -84,13 +84,19 @@ def collect_package_files(src: Path, exclude_dirs: frozenset[str] = DEFAULT_EXCL
     return sorted(out)
 
 
-def build_deterministic_tar_gz(src: Path, out: Path, *, version_stamp: int = 0) -> dict:
+def build_deterministic_tar_gz(
+    src: Path, out: Path, *, version_stamp: int = 0, files: list[Path] | None = None
+) -> dict:
     """把 ``src``（排除面后）打成确定性 tar.gz 写入 ``out``，返回登记要素。
+
+    ``files`` 显式给定包内成员（相对 ``src``）时跳过 ``collect_package_files``——
+    ADR-0051 Phase 2a 用 ``git ls-files`` 枚举版本目录，让 sha 只取决于 Git 内容、
+    与工作树里的未跟踪产物无关。
 
     确定性来源：成员按相对路径排序；uid/gid 归零、uname/gname 清空、mtime 固定；
     gzip 头 mtime=0；GNU 格式（无 PAX 扩展头）。同内容复跑必得同 sha。
     """
-    files = collect_package_files(src)
+    files = sorted(files) if files is not None else collect_package_files(src)
     out.parent.mkdir(parents=True, exist_ok=True)
     buf = io.BytesIO()
     with gzip.GzipFile(filename="", mode="wb", fileobj=buf, mtime=version_stamp) as gz:
@@ -139,9 +145,11 @@ def load_manifest(path: Path) -> dict:
 
 
 def register_entry(
-    doc: dict, name: str, version: str, sha: str, artifact: str, python_rel: str, script_rel: str
+    doc: dict, name: str, version: str, sha: str, artifact: str, python_rel: str | None, script_rel: str
 ) -> tuple[dict, bool]:
     """纯函数：向 manifest 文档追加版本条目（幂等：同版本同 sha 放行，异 sha 拒绝）。
+
+    ``python_rel=None`` = 包内无解释器，由 Agent 自身解释器执行（ADR-0051 D4：平台脚本族）。
 
     返回 (doc, appended)。append-only/退役规则由门禁统一执法；这里只防手滑覆盖。
     """

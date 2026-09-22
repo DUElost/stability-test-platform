@@ -260,6 +260,9 @@ jobs:
           python tools/dev/check_tool_manifest.py --self-test
           python tools/dev/check_tool_manifest.py \
             --base "origin/${{ github.base_ref || github.ref_name }}"
+          # ADR-0051 Phase 2a：脚本版本目录 ⇄ 包登记等价（与 run_gates tool-manifest 同命令）
+          python tools/dev/check_script_packages.py --self-test
+          python tools/dev/check_script_packages.py
 
       # alembic revision 不可变检查（#2258 / #2046）：已合入 main 的 revision 被改写
       # 或删除即红（停在其后的库不会再执行被插入的祖先，check_alembic_at_head 的等值

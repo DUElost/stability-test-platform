@@ -976,6 +976,8 @@ export interface ScriptEntry {
   version: string;
   nfs_path: string;
   content_sha256: string;
+  /** ADR-0051 D3：整包 sha（tool_manifest 登记，scan 回填）；null = 尚未登记为包。 */
+  package_sha256?: string | null;
   param_schema: Record<string, unknown>;
   default_params: Record<string, unknown>;
   is_active: boolean;

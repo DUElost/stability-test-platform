@@ -136,9 +136,13 @@ GATES = {
     ),
     # ADR-0033 Phase B（#3075）：tool_manifest 唯一事实源的 schema lint +
     # append-only（退役仅 retired 单向翻转；artifact 布局=C4；契约字段禁混装=C5）。
+    # ADR-0051 Phase 2a：平台脚本版本目录 ⇄ 包登记的等价检查并入本门禁（重建 sha ==
+    # 登记 sha；未登记 / 幽灵条目红），不另立 gate（D8 治理面做减法）。
     "tool-manifest": (
         f"{PY} tools/dev/check_tool_manifest.py --self-test && "
-        f"{PY} tools/dev/check_tool_manifest.py --base {BASE_REF}",
+        f"{PY} tools/dev/check_tool_manifest.py --base {BASE_REF} && "
+        f"{PY} tools/dev/check_script_packages.py --self-test && "
+        f"{PY} tools/dev/check_script_packages.py",
         ROOT,
         None,
     ),

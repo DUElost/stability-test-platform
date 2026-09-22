@@ -137,6 +137,7 @@ class ScriptOut(BaseModel):
     version: str
     nfs_path: str
     content_sha256: str
+    package_sha256: Optional[str] = None
     capabilities: List[str]
     param_schema: Dict[str, Any]
     default_params: Dict[str, Any]
@@ -175,6 +176,7 @@ def _script_out(script: Script) -> ScriptOut:
         version=script.version,
         nfs_path=script.nfs_path,
         content_sha256=script.content_sha256,
+        package_sha256=script.package_sha256,
         capabilities=list(script.capabilities or []),
         param_schema=script.param_schema or {},
         default_params=script.default_params or {},
