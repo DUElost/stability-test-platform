@@ -59,6 +59,8 @@ vi.mock('@/components/pipeline/PlanStepInspector', () => ({
 }));
 
 vi.mock('@/utils/api', () => ({
+  // #3147：Plan 编辑器经 usePlanEditForm 拉全量计划（`fetchAllPlans`）
+  fetchAllPlans: vi.fn().mockResolvedValue([]),
   api: {
     plans: {
       get: vi.fn(),

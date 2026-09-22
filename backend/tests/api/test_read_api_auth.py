@@ -236,7 +236,7 @@ class TestReadApiAuthWithSeededData:
     def test_list_plans_with_auth(self, client, auth_headers, sample_plan):
         resp = client.get("/api/v1/plans", headers=auth_headers)
         assert resp.status_code == 200
-        assert any(p["id"] == sample_plan.id for p in resp.json()["data"])
+        assert any(p["id"] == sample_plan.id for p in resp.json()["items"])
 
     def test_get_plan_run_with_auth(self, client, auth_headers, seeded_plan_run):
         resp = client.get(

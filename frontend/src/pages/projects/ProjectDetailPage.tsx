@@ -90,7 +90,7 @@ export default function ProjectDetailPage() {
 
   const plansQ = useQuery({
     queryKey: projectKeys.plansOf(projectKey),
-    queryFn: () => api.plans.list(0, CARD_PREVIEW_LIMIT, projectKey),
+    queryFn: () => api.plans.list(0, CARD_PREVIEW_LIMIT, projectKey).then((r) => r.items),
   });
 
   // ADR-0029 P2：项目级风险趋势（按天 S/A/B，run 级 DLE 权威聚合）
