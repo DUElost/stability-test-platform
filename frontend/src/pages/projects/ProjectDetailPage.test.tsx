@@ -99,9 +99,10 @@ describe('ProjectDetailPage', () => {
       items: [{ id: 1, serial: 'S-1', model: 'M1', status: 'ONLINE', project_key: 'proj-a' }],
       total: 1,
     });
-    mocks.listPlans.mockResolvedValue([
-      { id: 1, name: 'Plan A', steps: [], project_key: 'proj-a' },
-    ]);
+    mocks.listPlans.mockResolvedValue({
+      items: [{ id: 1, name: 'Plan A', steps: [], project_key: 'proj-a' }],
+      total: 1,
+    });
     mocks.riskTrend.mockResolvedValue({
       project_key: 'proj-a',
       days: 30,

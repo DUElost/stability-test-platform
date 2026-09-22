@@ -83,3 +83,43 @@ def test_probe_seed_and_cleanup_call_the_guard_first():
         assert body.index("_require_dev_db_target()") < body.index("import"), (
             f"{entry} 的守卫必须在任何 import 之前（import backend.models 会连带建引擎）"
         )
+
+
+#: 生产侧 kind 词表（backend/core/metrics.py 的 _DB_POOL_CHECKOUT_FAILURE_KINDS）。
+#: 本腿**不**消费该词表——判据是「按 kind 全量汇总」，故此表只用于断言语义对齐。
+_KNOWN_KINDS = ("timeout", "slots_exhausted", "error")
+
+
+def test_checkout_failures_aggregate_by_kind_not_enumerated():
+    """#2959：`slots_exhausted` 必须进汇总——枚举式判据曾把它漏在 [OK] 之外。"""
+    after = {
+        'stability_db_pool_checkout_failures_total{engine="sync",kind="timeout"}': 3,
+        'stability_db_pool_checkout_failures_total{engine="async",kind="slots_exhausted"}': 5,
+        'stability_db_pool_checkout_failures_total{engine="sync",kind="error"}': 2,
+        'stability_db_pool_checkout_seconds_count{engine="sync"}': 99,
+    }
+    before = {name: 0 for name in after}
+    got = probe.checkout_failures_by_kind(after, before)
+    assert got == {"timeout": 3.0, "slots_exhausted": 5.0, "error": 2.0}
+    assert sum(got.values()) == 10.0, "总数必须覆盖全部 kind，才不会被当成「无失败」"
+
+
+def test_checkout_failures_include_every_kind_present_in_metrics():
+    """判据与 kind 无关：指标里出现什么 kind，汇总里就必须有什么（防再枚举）。"""
+    after = {
+        f'stability_db_pool_checkout_failures_total{{engine="sync",kind="{kind}"}}': 1
+        for kind in _KNOWN_KINDS
+    }
+    after['stability_db_pool_checkout_failures_total{engine="sync",kind="brand_new_kind"}'] = 1
+    got = probe.checkout_failures_by_kind(after, {name: 0 for name in after})
+    assert set(got) == set(_KNOWN_KINDS) | {"brand_new_kind"}
+    assert all(value == 1 for value in got.values())
+
+
+def test_checkout_failures_delta_is_per_kind():
+    """增量按每条序列的 after-before 取，不受其它 kind / 直方图族干扰。"""
+    name = 'stability_db_pool_checkout_failures_total{engine="sync",kind="slots_exhausted"}'
+    after = {name: 7, 'stability_db_pool_checkout_failures_total{engine="sync",kind="timeout"}': 4}
+    before = {name: 6, 'stability_db_pool_checkout_failures_total{engine="sync",kind="timeout"}': 4}
+    got = probe.checkout_failures_by_kind(after, before)
+    assert got == {"slots_exhausted": 1.0, "timeout": 0.0}

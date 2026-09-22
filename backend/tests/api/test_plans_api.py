@@ -220,7 +220,7 @@ class TestPlanCRUD:
 
         resp = client.get("/api/v1/plans", headers=auth_headers)
         assert resp.status_code == 200
-        items = resp.json()["data"]
+        items = resp.json()["items"]
         assert any(p["name"] == name for p in items)
 
     def test_list_plans_hides_existing_legacy_aee_plan(
@@ -232,8 +232,51 @@ class TestPlanCRUD:
         resp = client.get("/api/v1/plans", headers=auth_headers)
 
         assert resp.status_code == 200
-        plan_ids = {item["id"] for item in resp.json()["data"]}
+        plan_ids = {item["id"] for item in resp.json()["items"]}
         assert legacy_plan_id not in plan_ids
+
+    def test_list_plans_total_excludes_hidden_and_paging_is_gapless(
+        self, client, auth_headers, sample_script, db_session,
+    ):
+        """#3147：legacy AEE 过滤必须在**分页之前**。
+
+        此前 `offset/limit` 先取行、再用 Python 谓词滤掉隐藏计划，于是 ① `total` 会把
+        被隐藏的多算进去；② 页边界按未过滤行数算 ⇒ 逐页翻（skip 递增 = 已取条数）时
+        可见计划会被跳过。这里把 3 个可见计划与 1 个隐藏计划交错放置，用 limit=1 逐页
+        翻完，断言可见计划一个不少、`total` 不含隐藏项。
+        """
+        _ensure_legacy_aee_scripts(db_session)
+        tagged = _uniq("paged")
+        visible_ids = []
+        for i in range(3):
+            create = client.post("/api/v1/plans", json={
+                "name": f"{tagged}-{i}", "steps": _minimal_steps(),
+                "project_key": "GENERIC", "specialty_key": "ops",
+            }, headers=auth_headers)
+            assert create.status_code in (200, 201), create.text
+            visible_ids.append(create.json()["data"]["id"])
+        hidden_id = TestPlanDispatchFailFast._insert_legacy_plan(db_session)
+
+        first = client.get("/api/v1/plans?skip=0&limit=1", headers=auth_headers).json()
+        assert first["total"] == len(visible_ids), (
+            f"total 应为可见计划数 {len(visible_ids)}（不含隐藏的 {hidden_id}），实为 {first['total']}"
+        )
+
+        seen: list[int] = []
+        skip = 0
+        while True:
+            page = client.get(
+                f"/api/v1/plans?skip={skip}&limit=1", headers=auth_headers
+            ).json()
+            rows = [p for p in page["items"] if p["name"].startswith(tagged)]
+            if not page["items"]:
+                break
+            seen.extend(p["id"] for p in rows)
+            skip += len(page["items"])
+
+        assert sorted(seen) == sorted(visible_ids), (
+            "逐页翻必须把所有可见计划取到且不重复"
+        )
 
     def test_update_plan(self, client, auth_headers, sample_script):
         name = _uniq("plan")
@@ -813,7 +856,7 @@ class TestPlanListFilters:
         def _names(**params) -> set[str]:
             resp = client.get("/api/v1/plans", params=params, headers=auth_headers)
             assert resp.status_code == 200, resp.text
-            return {p["name"] for p in resp.json()["data"]}
+            return {p["name"] for p in resp.json()["items"]}
 
         assert _names(project_key=_project.project_key) == {tagged["name"]}
         assert _names(specialty_key=_specialty.key) == {tagged["name"]}
@@ -910,7 +953,7 @@ class TestAppendChainTail:
         )
         assert resp.status_code == 409, resp.text
 
-        plans = client.get("/api/v1/plans?skip=0&limit=200", headers=auth_headers).json()["data"]
+        plans = client.get("/api/v1/plans?skip=0&limit=200", headers=auth_headers).json()["items"]
         assert not any(p["name"].startswith("orphan_") for p in plans)
         fresh_head = client.get(f"/api/v1/plans/{head['id']}", headers=auth_headers).json()["data"]
         assert fresh_head["next_plan_id"] is None

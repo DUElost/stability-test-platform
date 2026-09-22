@@ -28,6 +28,8 @@ vi.mock('@/utils/api', () => ({
       list: (...a: unknown[]) => mocks.plansList(...a),
     },
   },
+  // #3147：计划选择器改为翻页拉全量（`fetchAllPlans`，模块顶层导出），mock 返回数组
+  fetchAllPlans: (...a: unknown[]) => mocks.plansList(...a),
   toApiError: (e: unknown) => ({ message: String(e) }),
 }));
 

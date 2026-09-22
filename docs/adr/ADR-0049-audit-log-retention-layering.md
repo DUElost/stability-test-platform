@@ -31,7 +31,7 @@
 
 | 层 | 默认 | 覆盖 | 依据 |
 |---|---|---|---|
-| security | 180d | `login_failed` / `login_locked` / `change_password(_failed)` / `token_{issued,failed,locked}` / `refresh_rejected` / `user_{created,updated,deleted,active_toggled}` / `host_key_replaced` / `initial_admin_created` | 安全事件链（谁对账号/凭据做了什么）；对齐 ADR-0020 六个月先例 |
+| security | 180d | `login_failed` / `login_locked` / `change_password(_failed)` / `token_{issued,failed,locked}` / `refresh_rejected` / `register` / `user_{created,updated,deleted,active_toggled}` / `host_key_replaced` / `initial_admin_created` | 安全事件链（谁对账号/凭据做了什么）；对齐 ADR-0020 六个月先例。`register`＝公开自助注册（账号创建），与 `user_created` 同族，v1.1 由 business 纠正归此（#3108） |
 | business | 90d | **默认桶**：未显式归入另两层的全部 action | 业务诊断价值随时间衰减；`terminal_payload_conflict` 爆发行**不例外**（裁决问 3） |
 | session | 30d | `refresh` / `login`（成功）/ `logout` | 例行会话心跳，取证价值最低；生产占 3%、dev 占 62%，短保留在两种环境都成立 |
 

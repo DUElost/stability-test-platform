@@ -18,7 +18,7 @@ export { scripts } from './tools';
 export { resourcePools } from './resourcePools';
 export { results, stats } from './analytics';
 export { users, notifications, schedules, audit } from './management';
-export { plans } from './plans';
+export { plans, fetchAllPlans, fetchAllPlanPages } from './plans';
 export { planRuns } from './planRuns';
 export { runs } from './runs';
 export { suites } from './suites';

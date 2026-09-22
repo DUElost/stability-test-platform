@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, toApiError, type TaskSchedule, type TaskScheduleCreatePayload } from '@/utils/api';
+import { api, fetchAllPlans, toApiError, type TaskSchedule, type TaskScheduleCreatePayload } from '@/utils/api';
 import { planKeys, scheduleKeys } from '@/utils/api/queryKeys';
 import { useToast } from '@/hooks/useToast';
 import { useConfirm } from '@/hooks/useConfirm';
@@ -75,7 +75,8 @@ export default function SchedulesPage() {
   });
   const plansQ = useQuery({
     queryKey: planKeys.list(200),
-    queryFn: () => api.plans.list(0, 200),
+    // #3147：计划选择器要**完整**计划集——被 le 截断即静默少选项
+    queryFn: () => fetchAllPlans(),
   });
   const schedules = schedulesQ.data ?? [];
   const plans = plansQ.data ?? [];

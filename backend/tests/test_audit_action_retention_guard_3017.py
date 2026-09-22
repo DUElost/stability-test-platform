@@ -343,3 +343,37 @@ def test_registered_dynamic_shapes_are_all_live() -> None:
         assert seen.get(key, 0) == expected, (
             f"登记 {expected} 处、实见 {seen.get(key, 0)} 处：{key}"
         )
+
+
+#: 账号 / 凭据事件链的**目标层**（ADR-0049 D1 表里的 security 行）。
+#: 上面的 AST 守卫只能发现「未登记的 action」，发现不了「已登记但归错层」——
+#: `register`（公开自助注册＝账号创建）就被登记进了 business allowlist ⇒ 静默 90d
+#: （#3108）。故这里把**层**也钉住：落错层必须是一条报红的测试，而不是一次静默改配置。
+_ACCOUNT_CREDENTIAL_ACTIONS: frozenset[str] = frozenset({
+    "register",
+    "login_failed",
+    "login_locked",
+    "change_password",
+    "change_password_failed",
+    "initial_admin_created",
+    "token_issued",
+    "token_failed",
+    "token_locked",
+    "refresh_rejected",
+    "user_created",
+    "user_updated",
+    "user_deleted",
+    "user_active_toggled",
+    "host_key_replaced",
+})
+
+
+def test_account_and_credential_actions_stay_in_security_layer() -> None:
+    """账号/凭据事件必须留 security 层（180d），不得被业务 allowlist 注销成 90d。"""
+    missing = _ACCOUNT_CREDENTIAL_ACTIONS - SECURITY_ACTIONS
+    assert not missing, f"这些账号/凭据事件不在 security 层：{sorted(missing)}"
+    mislayered = _ACCOUNT_CREDENTIAL_ACTIONS & BUSINESS_ACTIONS_ALLOWLIST
+    assert not mislayered, (
+        f"这些账号/凭据事件被登记成「故意留 90d」的业务动作：{sorted(mislayered)}"
+        " —— 业务 allowlist 的语义是「90d 是本意」，不能拿来注销安全事件"
+    )
