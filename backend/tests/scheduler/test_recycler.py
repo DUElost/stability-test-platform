@@ -1398,18 +1398,27 @@ def _step_trace_stall_seed(
     trace_age_seconds: int,
     event_type: str = "COMPLETED",
     fresh_liveness: bool = True,
+    patrol_heartbeat_age_seconds: int | None = None,
     execution_state: str | None = "PATROL_SLEEP",
+    pipeline_def: dict | None = None,
 ) -> dict:
-    """RUNNING job whose heartbeats stay fresh but step_trace is stale."""
+    """RUNNING job whose execution heartbeats stay fresh but step_trace is stale.
+
+    ``patrol_heartbeat_age_seconds`` 单独控制 patrol 通道（#3146）：缺省跟随
+    ``fresh_liveness``；显式传秒数可构造「执行心跳新鲜 + patrol 心跳陈旧」的
+    #3061 真僵尸形态，或「patrol 心跳新鲜」的健康巡航形态（ADR-0022：patrol
+    成功步不写 trace，巡航期 trace 静默是设计形态）。
+    """
+    patrol_age_seconds = (
+        patrol_heartbeat_age_seconds
+        if patrol_heartbeat_age_seconds is not None
+        else (30 if fresh_liveness else 13 * 3600)
+    )
     seed = _seed_running_job(
         started_at=now - timedelta(hours=13),
         updated_at=now - timedelta(seconds=30),
-        pipeline_def=PATROL_PIPELINE_DEF,
-        last_patrol_heartbeat_at=(
-            now - timedelta(seconds=30)
-            if fresh_liveness
-            else now - timedelta(hours=13)
-        ),
+        pipeline_def=pipeline_def if pipeline_def is not None else PATROL_PIPELINE_DEF,
+        last_patrol_heartbeat_at=now - timedelta(seconds=patrol_age_seconds),
         execution_state=execution_state,
         last_execution_heartbeat_at=(
             now - timedelta(seconds=30) if fresh_liveness else now - timedelta(hours=13)
@@ -1437,9 +1446,17 @@ def _step_trace_stall_seed(
 
 
 def test_step_trace_stall_transitions_running_to_unknown_when_stale(engine, monkeypatch):
-    """Fresh patrol/coordinator heartbeats but terminal trace age > threshold → UNKNOWN."""
+    """#3061 真僵尸形态：非 patrol 计划（patrol 检测器不适用）trace 陈旧 → UNKNOWN。
+
+    执行心跳（``last_execution_heartbeat_at``）保持新鲜——按 #3061 初衷，执行器存活
+    不豁免僵尸判定；因该 job 无 patrol 段，patrol 检测器不介入，由 step_trace 检测器
+    独立抓出（真僵尸）。
+    """
     now = datetime.now(timezone.utc)
-    seed = _step_trace_stall_seed(now, trace_age_seconds=7200)
+    seed = _step_trace_stall_seed(
+        now, trace_age_seconds=7200, patrol_heartbeat_age_seconds=13 * 3600,
+        pipeline_def=PIPELINE_DEF,
+    )
     emits = _patch_recycler_neutrals(monkeypatch)
 
     before = recycler.recycler_timeouts.labels(timeout_type="step_trace_stall")._value.get()
@@ -1552,3 +1569,121 @@ def test_step_trace_stall_disabled_when_threshold_zero(engine, monkeypatch):
             db.close()
     finally:
         _cleanup_seed(seed)
+
+
+def test_step_trace_stall_keeps_patrol_cruise_running(engine, monkeypatch):
+    """#3146：ADR-0022 让 patrol 成功步不写 step_trace ⇒ 「trace 静默 + patrol 心跳新鲜」
+    是**健康巡航**形态（2026-09-22 r510 误杀形态：738 条误标 → 释放 lease → 中止波），
+    不得标 UNKNOWN。
+    """
+    now = datetime.now(timezone.utc)
+    seed = _step_trace_stall_seed(
+        now, trace_age_seconds=7200, patrol_heartbeat_age_seconds=120,
+    )
+    emits = _patch_recycler_neutrals(monkeypatch)
+
+    before = recycler.recycler_timeouts.labels(timeout_type="step_trace_stall")._value.get()
+    try:
+        recycler.recycle_once()
+
+        db = SessionLocal()
+        try:
+            job = db.get(JobInstance, seed["job_id"])
+            assert job.status == JobStatus.RUNNING.value
+            assert job.ended_at is None
+            audits = (
+                db.query(AuditLog)
+                .filter(
+                    AuditLog.action == "step_trace_stall_detected",
+                    AuditLog.resource_id == str(seed["job_id"]),
+                )
+                .all()
+            )
+            assert audits == []
+        finally:
+            db.close()
+
+        unknown_emits = [
+            d for (e, d, _kw) in emits
+            if e == "job_status" and d.get("payload", {}).get("status") == "UNKNOWN"
+        ]
+        assert unknown_emits == []
+
+        after = recycler.recycler_timeouts.labels(timeout_type="step_trace_stall")._value.get()
+        assert after == before
+    finally:
+        _cleanup_seed(seed)
+
+
+def test_step_trace_stall_cas_no_op_when_patrol_heartbeat_raced_in(engine, monkeypatch):
+    """collect→mark 之间 patrol 心跳落地（race-in）→ CAS 失配：不标 UNKNOWN、不写审计。"""
+    from sqlalchemy import update as sa_update
+
+    now = datetime.now(timezone.utc)
+    seed = _step_trace_stall_seed(
+        now, trace_age_seconds=7200, patrol_heartbeat_age_seconds=13 * 3600,
+    )
+    _patch_recycler_neutrals(monkeypatch)
+    try:
+        db = SessionLocal()
+        try:
+            db.execute(
+                sa_update(JobInstance)
+                .where(JobInstance.id == seed["job_id"])
+                .values(last_patrol_heartbeat_at=now - timedelta(seconds=10))
+            )
+            db.commit()
+
+            job = db.get(JobInstance, seed["job_id"])
+            flipped = recycler._mark_step_trace_stall(
+                db, job, now,
+                last_ts=now - timedelta(seconds=7200),
+                event_type="COMPLETED",
+                reason="step_trace_stall: last=COMPLETED age=7200s > 3600s",
+            )
+            assert flipped is False
+
+            db.expire_all()
+            job = db.get(JobInstance, seed["job_id"])
+            assert job.status == JobStatus.RUNNING.value
+            audits = (
+                db.query(AuditLog)
+                .filter(
+                    AuditLog.action == "step_trace_stall_detected",
+                    AuditLog.resource_id == str(seed["job_id"]),
+                )
+                .all()
+            )
+            assert audits == []
+        finally:
+            db.close()
+    finally:
+        _cleanup_seed(seed)
+
+
+def test_step_trace_stall_collector_pins_patrol_guard_both_ways(engine, monkeypatch):
+    """直接钉 collector 那道闸（#3146 第一层）：
+    ① patrol 心跳新鲜 → **不**进候选（巡航健康）；② patrol 心跳陈旧且无 patrol 段
+    → 进候选（真僵尸形态）。这样单独删掉 collector 的豁免过滤会立刻变红。
+    """
+    now = datetime.now(timezone.utc)
+    healthy = _step_trace_stall_seed(
+        now, trace_age_seconds=7200, patrol_heartbeat_age_seconds=120,
+    )
+    zombie = _step_trace_stall_seed(
+        now, trace_age_seconds=7200, patrol_heartbeat_age_seconds=13 * 3600,
+        pipeline_def=PIPELINE_DEF,
+    )
+    _patch_recycler_neutrals(monkeypatch)
+    try:
+        db = SessionLocal()
+        try:
+            candidates = recycler._collect_step_trace_stall_candidates(db, now)
+            ids = {job.id for job, _ts, _et in candidates}
+            assert healthy["job_id"] not in ids
+            assert zombie["job_id"] in ids
+        finally:
+            db.close()
+    finally:
+        _cleanup_seed(healthy)
+        _cleanup_seed(zombie)

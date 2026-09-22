@@ -66,8 +66,13 @@ def access_log_full() -> bool:
 
 
 def is_access_log_noise(path: str, status_code: int) -> bool:
-    """该 access 行是否属于「高频内部轮询的成功行」（纯函数，便于自证）。"""
-    if status_code >= 400:
+    """该 access 行是否属于「高频内部轮询的**成功**行」（纯函数，便于自证）。
+
+    只丢 2xx：`1xx/3xx` 与非 2xx 一样**保留**。判据写成 `not (200 <= sc < 300)`
+    而非 `sc >= 400`——后者会把重定向也当成功吞掉，与上面声明的
+    「非 2xx 恒保留」不一致（#3100）。
+    """
+    if not (200 <= status_code < 300):
         return False
     clean = path.split("?", 1)[0]
     return any(pattern.search(clean) for pattern in ACCESS_LOG_NOISE_PATTERNS)

@@ -316,6 +316,30 @@ def _series(metrics: dict[str, float], pattern: str) -> float:
     return sum(value for name, value in metrics.items() if rx.search(name))
 
 
+def checkout_failures_by_kind(
+    after: dict[str, float], before: dict[str, float]
+) -> dict[str, float]:
+    """按 ``kind`` 汇总 ``stability_db_pool_checkout_failures_total`` 的增量。
+
+    **刻意不枚举 kind**（#2959）：枚举式判据（只查 ``timeout`` / ``error``）会漏掉
+    新成因——槽耗尽 ``kind="slots_exhausted"`` 发生时序列在涨、而压测腿仍打印
+    ``[OK]``，正是这条腿要消除的「序列在、计数对，但分不出成因」。按 kind 全量汇总
+    后，新增 kind 自动进入失败判据。
+    """
+    out: dict[str, float] = {}
+    for name in after:
+        match = re.fullmatch(r"stability_db_pool_checkout_failures_total\{(.*)\}", name)
+        if not match:
+            continue
+        kind_match = re.search(r'kind="([^"]+)"', match.group(1))
+        if not kind_match:
+            continue
+        kind = kind_match.group(1)
+        increment = _series(after, re.escape(name)) - _series(before, re.escape(name))
+        out[kind] = round(out.get(kind, 0.0) + increment, 6)
+    return out
+
+
 def _hist_quantile(
     metrics: dict[str, float], base: str, q: float, label_filter: str = ""
 ) -> float | None:
@@ -421,6 +445,11 @@ def cmd_run(args: argparse.Namespace) -> int:
             edge = float(le.group(1))
             fanout_bucket = edge if fanout_bucket is None else min(fanout_bucket, edge)
 
+    # 取连接失败**按 kind 汇总，不枚举**（#2959）：枚举式判据（timeout/error 两条）
+    # 会漏掉新成因——槽耗尽（kind="slots_exhausted"）发生时序列在涨、而本腿打印
+    # [OK]。见 `checkout_failures_by_kind`。
+    by_kind = checkout_failures_by_kind(after, before)
+
     summary = {
         "abort": {"http_status": abort_status, "seconds": round(abort_seconds, 3)},
         "reads": {
@@ -431,12 +460,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             "p99_ms": round(latencies[max(0, int(len(latencies) * 0.99) - 1)], 1),
         },
         "db_pool": {
-            "checkout_timeout_delta": delta(
-                r'^stability_db_pool_checkout_failures_total\{[^}]*kind="timeout"'
-            ),
-            "checkout_error_delta": delta(
-                r'^stability_db_pool_checkout_failures_total\{[^}]*kind="error"'
-            ),
+            "checkout_failures_delta_by_kind": by_kind,
+            "checkout_failures_delta_total": round(sum(by_kind.values()), 6),
             "checkout_p99_seconds": pool_p99,
         },
         "fanout": {
@@ -452,8 +477,15 @@ def cmd_run(args: argparse.Namespace) -> int:
     failures: list[str] = []
     if abort_status != 200:
         failures.append(f"abort HTTP {abort_status}")
-    if summary["db_pool"]["checkout_timeout_delta"] > 0:
-        failures.append(f"池 checkout 超时 {summary['db_pool']['checkout_timeout_delta']} 次")
+    if summary["db_pool"]["checkout_failures_delta_total"] > 0:
+        detail = ", ".join(
+            f"{kind}={value}"
+            for kind, value in sorted(by_kind.items())
+            if value > 0
+        )
+        failures.append(
+            f"池取连接失败 {summary['db_pool']['checkout_failures_delta_total']} 次（{detail}）"
+        )
     if pool_p99 is not None and pool_p99 > args.p99_budget:
         failures.append(f"借连接 p99 {pool_p99}s > 预算 {args.p99_budget}s")
     if any(code != 200 for code in codes):
@@ -467,7 +499,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     if failures:
         print("\n[FAIL] " + "；".join(failures), file=sys.stderr)
         return 1
-    print("\n[OK] 规模压测腿：无池超时、并发读无失败、扇出样本如实落在 run 作用域")
+    print("\n[OK] 规模压测腿：无池取连接失败（按 kind 全量汇总）、并发读无失败、扇出样本如实落在 run 作用域")
     return 0
 
 

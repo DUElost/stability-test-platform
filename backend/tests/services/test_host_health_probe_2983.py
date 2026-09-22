@@ -10,12 +10,14 @@ from backend.services.host_health_probe import (
     ProbeArgvRefused,
     ProbeRound,
     ProbeVerdict,
+    RemoteProbeOutput,
     TOPOLOGY_BLIND,
     TOPOLOGY_EMPTY_CABINET,
     TOPOLOGY_OK,
     assert_argv_whitelisted,
     build_sudo_s_command,
     classify_lsusb_topology,
+    collect_failure_reason,
     collect_probe_round_via_ssh,
     consecutive_strike_open,
     parse_journal_probe,
@@ -325,3 +327,72 @@ def test_probe_one_host_writes_extra_and_audits_on_strike(engine, monkeypatch):
         assert "not-logged" not in str(audits[0].details)
     finally:
         db.close()
+
+
+# ---------------------------------------------------------------------------
+# #2983 复核：采集失败必须是独立结论（不能顺着分支被读成「干净」）
+# ---------------------------------------------------------------------------
+
+
+def test_collect_failure_reason_truth_table():
+    assert collect_failure_reason(RemoteProbeOutput("lsusb", 0, "bus\n", "")) is None
+    assert collect_failure_reason(RemoteProbeOutput("lsusb", 127, "x", "")) == "lsusb:rc=127"
+    # 非特权 journalctl 的形态：rc=0 + 空输出（#2957）—— 不得当成「读过且干净」
+    assert (
+        collect_failure_reason(RemoteProbeOutput("journal_kernel_2h", 0, "", "hint"))
+        == "journal_kernel_2h:empty_stdout"
+    )
+    assert (
+        collect_failure_reason(RemoteProbeOutput("lsusb", 0, "   \n", ""))
+        == "lsusb:empty_stdout"
+    )
+
+
+def test_successful_collect_records_no_failures():
+    client = _FakeSSH(
+        {
+            "lsusb": (0, "\n".join(_LSUSB_BLIND) + "\n", ""),
+            "journal_kernel_2h": (0, "\n".join(_HC_DIED_JOURNAL) + "\n", ""),
+        }
+    )
+    round_ = collect_probe_round_via_ssh(client, sudo_password="pw")
+    assert round_.collect_failed == ()
+
+
+def test_sudo_failure_is_recorded_and_does_not_read_as_aligned():
+    """sudo 失败（rc=127/密码错）时，空结果不得被读成 ALIGNED。"""
+    client = _FakeSSH({"lsusb": (127, "", "sudo: command not found"),
+                       "journal_kernel_2h": (127, "", "sudo: command not found")})
+    round_ = collect_probe_round_via_ssh(client, sudo_password="pw")
+    assert round_.collect_failed == ("lsusb:rc=127", "journal_kernel_2h:rc=127")
+    assert reconcile_agent_health([], round_).verdict == ProbeVerdict.PROBE_ERROR
+
+
+def test_unprivileged_journal_shape_is_probe_error_not_aligned():
+    """#2957 的形态（journalctl rc=0 + 空输出）在探针侧必须成 PROBE_ERROR。"""
+    client = _FakeSSH(
+        {
+            "lsusb": (0, "\n".join(_LSUSB_BLIND) + "\n", ""),
+            "journal_kernel_2h": (0, "", "Hint: You are currently not seeing messages..."),
+        }
+    )
+    round_ = collect_probe_round_via_ssh(client, sudo_password="pw")
+    assert round_.collect_failed == ("journal_kernel_2h:empty_stdout",)
+    assert reconcile_agent_health([], round_).verdict == ProbeVerdict.PROBE_ERROR
+
+
+def test_collect_failure_beats_empty_cabinet_alignment():
+    """空柜早退不得掩盖采集失败——否则「采不到」被读成「机柜空、一切正常」。"""
+    client = _FakeSSH({"lsusb": (127, "", "boom"), "journal_kernel_2h": (127, "", "boom")})
+    round_ = collect_probe_round_via_ssh(client, sudo_password="pw")
+    result = reconcile_agent_health(["usb_tree_empty"], round_)
+    assert result.verdict == ProbeVerdict.PROBE_ERROR
+    assert any(s.startswith("collect_failed:") for s in result.signals)
+
+
+def test_collect_failure_beats_probe_quiet():
+    """agent 自报故障 + 探针采不到 ⇒ PROBE_ERROR（不是「探针本轮安静」，那是替哑探针背书）。"""
+    client = _FakeSSH({"lsusb": (127, "", "boom"), "journal_kernel_2h": (127, "", "boom")})
+    round_ = collect_probe_round_via_ssh(client, sudo_password="pw")
+    result = reconcile_agent_health(["usb_host_controller_dead"], round_)
+    assert result.verdict == ProbeVerdict.PROBE_ERROR

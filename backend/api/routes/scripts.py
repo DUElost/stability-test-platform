@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import distinct, text
+from sqlalchemy import bindparam, distinct, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -22,7 +22,7 @@ from backend.core.agent_secret import AgentSecretNotConfiguredError, require_age
 from backend.core.audit import record_audit
 from backend.core.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
 from backend.core.database import get_db
-from backend.models.enums import PlanRunStatus
+from backend.models.enums import PASSING_PLAN_RUN_STATUSES, PlanRunStatus
 from backend.models.plan import PlanStep
 from backend.models.plan_run import PlanRun
 from backend.models.script import Script
@@ -888,7 +888,7 @@ def get_script_usage(
                 step->>'script_version' AS script_version,
                 COUNT(DISTINCT pr.id) AS run_count,
                 COUNT(DISTINCT pr.id) FILTER (
-                    WHERE pr.status = 'SUCCESS'
+                    WHERE pr.status IN :passing
                 ) AS success_count
             FROM plan_run pr
             JOIN test_project tp ON tp.id = pr.project_id
@@ -899,8 +899,9 @@ def get_script_usage(
               AND step->>'script_name' = :name
             GROUP BY tp.project_key, step->>'script_version'
             """
-        ),
-        params,
+        ).bindparams(bindparam("passing", expanding=True)),
+        # #3101：分子与分母同口径——PARTIAL_SUCCESS 算通过（与链触发/种子验收同判）。
+        {**params, "passing": sorted(PASSING_PLAN_RUN_STATUSES)},
     ).all()
 
     projects = _merge_script_usage_projects(

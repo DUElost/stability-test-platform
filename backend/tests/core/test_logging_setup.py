@@ -157,9 +157,9 @@ def test_noise_filter_drops_successful_polling_lines(path, monkeypatch):
 
 
 @pytest.mark.parametrize("path", NOISE_PATHS)
-@pytest.mark.parametrize("status", [404, 422, 500, 503])
+@pytest.mark.parametrize("status", [301, 302, 304, 404, 422, 500, 503])
 def test_noise_filter_keeps_non_2xx(path, status, monkeypatch):
-    """排查面不受影响：这些端点的非 2xx 一条不丢。"""
+    """排查面不受影响：这些端点的非 2xx 一条不丢（含 3xx 重定向，#3100）。"""
     monkeypatch.delenv(ACCESS_LOG_FULL_ENV, raising=False)
     assert AccessLogNoiseFilter().filter(_access_record(path, status)) is True
 
@@ -220,6 +220,7 @@ def test_is_access_log_noise_truth_table():
     """纯函数判据本身：路径相似但不同端点不得误伤。"""
     assert is_access_log_noise("/api/v1/agent/jobs/9/patrol-heartbeat", 200) is True
     assert is_access_log_noise("/api/v1/agent/jobs/9/patrol-heartbeat", 500) is False
+    assert is_access_log_noise("/api/v1/agent/jobs/9/patrol-heartbeat", 302) is False
     assert is_access_log_noise("/api/v1/heartbeat-detail", 200) is False
     assert is_access_log_noise("/api/v1/heartbeat", 200) is True
 

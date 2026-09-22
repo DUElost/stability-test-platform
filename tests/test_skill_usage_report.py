@@ -124,12 +124,21 @@ def test_inventory_type_parsing(tmp_path):
 
 # ---------------------------------------------------------------- 退出码契约
 
-def _patch_world(monkeypatch, tmp_path, items, claude_exists, codex_exists):
+def _patch_world(monkeypatch, tmp_path, items, claude_exists, codex_exists,
+                 claude_files=1, codex_files=1):
+    """exists=True 时同时落**转录文件**——#3105 起「在场」= 目录存在且非空。
+
+    只建空目录已不足以代表「源在场」：那正是 #3105 要拦的形态（转录被轮转/清理 ⇒
+    不得判 HOLLOW）。需要「目录在但空」的用例显式传 ``*_files=0``。
+    """
     claude = tmp_path / "claude_src"
     codex = tmp_path / "codex_src"
-    for d, exists in ((claude, claude_exists), (codex, codex_exists)):
+    for d, exists, files in ((claude, claude_exists, claude_files),
+                             (codex, codex_exists, codex_files)):
         if exists:
             d.mkdir(parents=True, exist_ok=True)
+            for i in range(files):
+                (d / f"s{i}.jsonl").write_text("", encoding="utf-8")
     monkeypatch.setattr(_mod, "inventory", lambda: items)
     monkeypatch.setattr(_mod, "TRANSCRIPT_DIR", str(claude))
     monkeypatch.setattr(_mod, "CODEX_DIR", str(codex))
@@ -184,6 +193,57 @@ def test_json_path_missing_strong_source_reports_zero_hollow(monkeypatch, tmp_pa
     assert payload["strong_source_present"] is False
     assert payload["hollow"] == 0
     assert all(not row["hollow"] for row in payload["skills"])
+
+
+def test_has_transcripts_requires_files_not_just_a_directory(tmp_path):
+    """#3105：判据是「存在且非空」，不是「is_dir」。"""
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert _mod._has_transcripts(str(empty)) is False
+
+    flat = tmp_path / "flat"
+    flat.mkdir()
+    (flat / "s.jsonl").write_text("", encoding="utf-8")
+    assert _mod._has_transcripts(str(flat)) is True
+
+    nested = tmp_path / "nested"
+    (nested / "a" / "b").mkdir(parents=True)
+    (nested / "a" / "b" / "rollout-x.jsonl").write_text("", encoding="utf-8")
+    assert _mod._has_transcripts(str(nested)) is True
+
+    assert _mod._has_transcripts(str(tmp_path / "absent")) is False
+
+
+def test_empty_strong_dir_does_not_judge_hollow(monkeypatch, tmp_path, capsys):
+    """#3105：强信号目录**存在但空**（转录被轮转/清理）⇒ 与缺源同判，不得判 HOLLOW。
+
+    修前 `os.path.isdir` 即算在场 ⇒ 每个过窗 skill 收到 0 调用 ⇒ 判 HOLLOW，
+    7 天告警按「0 调用」让人删/改 skill，而真相是「没有数据」。
+    """
+    import json
+
+    _patch_world(monkeypatch, tmp_path, [_SKILL], True, True,
+                 claude_files=0, codex_files=1)
+    monkeypatch.setattr(sys, "argv", ["skill_usage_report.py", "--json", "--strict"])
+
+    assert _mod.main() == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["strong_source_present"] is False
+    assert payload["hollow"] == 0
+
+
+def test_all_sources_empty_falls_back_to_skip(monkeypatch, tmp_path, capsys):
+    """两个源目录都在但都空 ⇒ 视为「无转录数据源」，退出 0（不可观测 ≠ 违规）。"""
+    import json
+
+    _patch_world(monkeypatch, tmp_path, [_SKILL], True, True,
+                 claude_files=0, codex_files=0)
+    monkeypatch.setattr(sys, "argv", ["skill_usage_report.py", "--json", "--strict"])
+
+    assert _mod.main() == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload.get("skipped") == "no_transcript_source"
+    assert payload["hollow"] == 0
 
 
 @pytest.mark.parametrize("strict,expected", [(True, 1), (False, 0)])

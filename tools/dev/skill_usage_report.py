@@ -116,6 +116,19 @@ def inventory(skills_dir: str = SKILLS_DIR) -> list[dict]:
     return out
 
 
+def _has_transcripts(directory: str) -> bool:
+    """「源在场」= 目录存在**且**里面真有转录文件（#3105）。
+
+    只判 ``isdir`` 会把「目录在、转录被轮转/清理」读成「在场且零调用」，于是每个
+    过了观察窗的 skill 都被判 HOLLOW——即 #2977 修掉的「没有数据被当成零调用」
+    在下一层复现（那时的修法只堵了「目录不存在」）。递归 glob 同时覆盖 claude 的
+    扁平布局与 codex 的 ``**`` 布局。
+    """
+    if not os.path.isdir(directory):
+        return False
+    return bool(glob.glob(os.path.join(directory, "**", "*.jsonl"), recursive=True))
+
+
 def scan_claude(claude_dir: str, slugs: list[str]) -> dict[str, tuple[int, int | None]]:
     """强信号：单遍扫描 Claude 转录 → {slug: (调用数, 最近调用 unix 时间|None)}。"""
     counts = {s: 0 for s in slugs}
@@ -305,19 +318,22 @@ def main() -> int:
 
     slugs = [i["name"] for i in items]
     sources = []
-    if os.path.isdir(transcript_dir):
+    if _has_transcripts(transcript_dir):
         sources.append("claude")
-    if os.path.isdir(codex_dir):
+    if _has_transcripts(codex_dir):
         sources.append("codex")
     if not sources:
-        print(f"[skip] 无任何转录数据源（claude={transcript_dir} codex={codex_dir}）"
-              "——本机不可观测 ≠ 违规，退出 0")
+        # #3105：`--json` 下 stdout 必须是**纯 JSON**——探针 `json.loads(stdout)`，
+        # 多打一行人类文案会被判 `broken`（=「探针崩了」告警），而真相只是本机无源。
         if args.json:
             print(json.dumps({
                 "hollow": 0, "skills": [], "scanned": [],
                 "strong_source_present": False, "weak_source_present": False,
                 "skipped": "no_transcript_source",
             }, ensure_ascii=False))
+        else:
+            print(f"[skip] 无任何转录数据源（claude={transcript_dir} codex={codex_dir}）"
+                  "——本机不可观测 ≠ 违规，退出 0")
         return 0
 
     claude = scan_claude(transcript_dir, slugs) if "claude" in sources else {}
