@@ -32,6 +32,10 @@ risk = integration ∈ {PR_OPEN, READY}
 | **缓存失效（`landed`）** | 分支/`origin/<branch>` 已是 `origin/main` 祖先，或 merge 主题含 `#<pr_number>` | 该缓存对 risk 判定失效 ⇒ 按**出窗**处理，标 `stale-cache`，用 `update --id <requirement>` 核销（`MERGED` 只能由 T6 写入） |
 
 - `finish --abandon` **有开放 PR 时只警告、留窗**至 GitHub 终态（T4）；
+- **判读 PR 终态别用 REST `.state`**：已合入的 PR 在 `gh api …/pulls/<N>` 里同样返回
+  `closed`（合入事实在独立字段 `.merged`）——按它判僵尸 ② 会把**已合入**的记录误送
+  abandon 流程。用 `gh pr view <N> --json state`（返回 `MERGED`），或 REST 侧写
+  `state==closed and merged==false` 才算「关闭未合」；
 - 权威源：[`ai/execution-contract.md`](./ai/execution-contract.md) §3.1–§3.3
   （§3.4 是 declare 查重，与收口无关）。
 
