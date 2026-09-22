@@ -56,6 +56,7 @@ from backend.core.job_timeout_config import (
     PATROL_STALL_MULTIPLIER,
     PATROL_RUNNING_HEARTBEAT_TIMEOUT_SECONDS,
     RUNNING_HEARTBEAT_TIMEOUT_SECONDS,
+    STEP_TRACE_STALL_SECONDS,
     running_heartbeat_timeout_seconds,
 )
 
@@ -754,6 +755,147 @@ def _mark_patrol_stall(
     return True
 
 
+# ── #3061: step_trace 静默回收（Pass #2c）────────────────────────────────────
+# 心跳/coordinator 仍 fresh 但 step 长期无进展（如无 timeout 的 watcher 计划卡死）。
+
+
+def _step_trace_stall_cutoff(now: datetime) -> datetime | None:
+    if STEP_TRACE_STALL_SECONDS <= 0:
+        return None
+    return now - timedelta(seconds=STEP_TRACE_STALL_SECONDS)
+
+
+def _step_trace_still_stalled(job_id: int, cutoff: datetime):
+    """EXISTS：该 job 最新 step_trace 为终态且 original_ts 早于 cutoff。"""
+    max_ts = (
+        select(func.max(StepTrace.original_ts))
+        .where(StepTrace.job_id == job_id)
+        .scalar_subquery()
+    )
+    return exists(
+        select(1).where(
+            StepTrace.job_id == job_id,
+            StepTrace.original_ts == max_ts,
+            StepTrace.event_type != "STARTED",
+            StepTrace.original_ts < cutoff,
+        )
+    )
+
+
+def _collect_step_trace_stall_candidates(
+    db, now: datetime,
+) -> list[tuple[JobInstance, datetime, str]]:
+    cutoff = _step_trace_stall_cutoff(now)
+    batch_limit = _sched().step_trace_stall_batch_limit
+    if cutoff is None or batch_limit <= 0:
+        return []
+
+    max_ts = (
+        select(
+            StepTrace.job_id.label("job_id"),
+            func.max(StepTrace.original_ts).label("last_ts"),
+        )
+        .group_by(StepTrace.job_id)
+        .subquery("step_trace_max_ts")
+    )
+    rows = (
+        db.query(JobInstance, max_ts.c.last_ts, StepTrace.event_type)
+        .join(max_ts, max_ts.c.job_id == JobInstance.id)
+        .join(
+            StepTrace,
+            and_(
+                StepTrace.job_id == JobInstance.id,
+                StepTrace.original_ts == max_ts.c.last_ts,
+            ),
+        )
+        .filter(
+            JobInstance.status == JobStatus.RUNNING.value,
+            max_ts.c.last_ts < cutoff,
+            StepTrace.event_type != "STARTED",
+        )
+        .order_by(max_ts.c.last_ts.asc())
+        .limit(batch_limit)
+        .all()
+    )
+    return [(job, last_ts, event_type) for job, last_ts, event_type in rows]
+
+
+def _mark_step_trace_stall(
+    db,
+    job: JobInstance,
+    now: datetime,
+    *,
+    last_ts: datetime,
+    event_type: str,
+    reason: str,
+) -> bool:
+    cutoff = _step_trace_stall_cutoff(now)
+    if cutoff is None:
+        return False
+    updated = db.execute(
+        update(JobInstance)
+        .execution_options(synchronize_session=False)
+        .where(
+            JobInstance.id == job.id,
+            JobInstance.status == JobStatus.RUNNING.value,
+            _step_trace_still_stalled(job.id, cutoff),
+        )
+        .values(
+            status=JobStatus.UNKNOWN.value,
+            status_reason=reason,
+            ended_at=now,
+            updated_at=now,
+            execution_state=None,
+        )
+        .returning(JobInstance.id)
+    ).first()
+    if updated is None:
+        return False
+
+    age_seconds = int((now - last_ts).total_seconds())
+    record_audit(
+        db,
+        action="step_trace_stall_detected",
+        resource_type="job_instance",
+        resource_id=job.id,
+        details={
+            "plan_run_id": job.plan_run_id,
+            "device_id": job.device_id,
+            "last_trace_at": last_ts.isoformat(),
+            "last_event_type": event_type,
+            "age_seconds": age_seconds,
+            "threshold_seconds": STEP_TRACE_STALL_SECONDS,
+        },
+        username="system",
+    )
+    recycler_timeouts.labels(timeout_type="step_trace_stall").inc()
+    task_run_state_changes.labels(from_state="RUNNING", to_state="UNKNOWN").inc()
+    logger.warning(
+        "step_trace_stall_detected",
+        extra={
+            "job_id": job.id,
+            "plan_run_id": job.plan_run_id,
+            "age_seconds": age_seconds,
+            "last_event_type": event_type,
+        },
+    )
+    schedule_emit(
+        "job_status",
+        {
+            "type": "JOB_STATUS",
+            "payload": {
+                "job_id": job.id,
+                "plan_run_id": job.plan_run_id,
+                "status": "UNKNOWN",
+                "reason": reason,
+            },
+        },
+        namespace="/dashboard",
+        room=f"plan_run:{job.plan_run_id}",
+    )
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Main recycler pass
 # ---------------------------------------------------------------------------
@@ -1087,6 +1229,35 @@ def recycle_once() -> None:
             except Exception:
                 logger.exception("recycler_patrol_stall_failed job=%d", job.id)
         if stall_transitions:
+            db.commit()
+
+    # 2c) step_trace 静默 — 最新 trace 为终态且超过 STEP_TRACE_STALL_SECONDS 无新活动。
+    #     补 patrol/execution/coordinator 心跳仍 fresh 但 pipeline 卡死的缝（#3061）。
+    with SessionLocal() as db:
+        trace_stall_transitions = 0
+        for job, last_ts, event_type in sorted(
+            _collect_step_trace_stall_candidates(db, now),
+            key=lambda item: item[0].id,
+        ):
+            age = (now - last_ts).total_seconds()
+            reason = (
+                f"step_trace_stall: last={event_type} age={int(age)}s > "
+                f"{STEP_TRACE_STALL_SECONDS}s"
+            )
+            try:
+                with db.begin_nested():
+                    if _mark_step_trace_stall(
+                        db,
+                        job,
+                        now,
+                        last_ts=last_ts,
+                        event_type=event_type,
+                        reason=reason,
+                    ):
+                        trace_stall_transitions += 1
+            except Exception:
+                logger.exception("recycler_step_trace_stall_failed job=%d", job.id)
+        if trace_stall_transitions:
             db.commit()
 
     # 3) Deferred post-completion for orphan terminal jobs

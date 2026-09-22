@@ -81,6 +81,8 @@ class SchedulerSettings(DomainSettings):
     recycler_batch_size: int = 200
     artifact_retention_days: int = 30
     patrol_stall_batch_limit: int = 100
+    # #3061：step_trace 静默回收每轮条数（Pass #2c；0 = 与 patrol 同口径停用该 pass）
+    step_trace_stall_batch_limit: int = Field(default=100, ge=0)
     coordinator_heartbeat_timeout_seconds: int = 300
     post_completion_grace_seconds: int = 120
     post_completion_max_defer_seconds: int = 6 * 3600

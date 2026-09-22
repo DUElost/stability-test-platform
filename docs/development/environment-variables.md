@@ -105,6 +105,7 @@
 | `PATROL_RUNNING_HEARTBEAT_TIMEOUT_SECONDS` | 300（dev 180） | patrol 阶段心跳窗口 |
 | `HOST_HEARTBEAT_TIMEOUT_SECONDS` | 300 | session_watchdog 判定 host 掉线的窗口；#1518 起单点收敛（此前该处默认 120——窗口实际上扩大了 2.5 倍） |
 | `PATROL_STALL_MULTIPLIER` | 3 | patrol stall 倍数 |
+| `STEP_TRACE_STALL_SECONDS` | 3600 | 最新 step_trace 终态超过此秒数 → UNKNOWN（0=关闭，#3061） |
 | `UNKNOWN_GRACE_SECONDS` | 300 | UNKNOWN grace 后释放租约并 FAILED |
 | `ABORT_REAPER_GRACE_SECONDS` | 60 | abort ACK 超时 → UNKNOWN（租约仍保留） |
 | `PRECHECK_QUEUE_STALE_SECONDS` | 90 | precheck SAQ 丢失后补 enqueue 窗口 |
@@ -269,6 +270,8 @@
 | `PATROL_RUNNING_HEARTBEAT_TIMEOUT_SECONDS` | `300` | ✅ | 运行时 | `backend/core/job_timeout_config.py:56` |
 | `PATROL_STALL_BATCH_LIMIT` | `100` | ✅ | 运行时 | `backend/core/settings/scheduler.py:83` |
 | `PATROL_STALL_MULTIPLIER` | `3` | ✅ | 运行时 | `backend/core/job_timeout_config.py:63` |
+| `STEP_TRACE_STALL_BATCH_LIMIT` | `100` | ✅ | 运行时 | `backend/core/settings/scheduler.py:85` |
+| `STEP_TRACE_STALL_SECONDS` | `3600` | ✅ | 运行时 | `backend/core/job_timeout_config.py:71` |
 | `PLAN_RUN_RETENTION_BATCH_SIZE` | `100` | ✅ | 运行时 | `backend/core/settings/scheduler.py:110` |
 | `PLAN_RUN_RETENTION_DAYS` | `3` | ✅ | 运行时 | `backend/core/settings/scheduler.py:98` |
 | `POLL_INTERVAL` | `5` | ✅ | 运行时 | `backend/agent/startup_identity.py:120` |
