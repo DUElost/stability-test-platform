@@ -28,7 +28,9 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from backend.core.job_timeout_config import HOST_HEARTBEAT_TIMEOUT_SECONDS
+from backend.core.metrics import plan_chain_settle_outcome_total
 from backend.core.settings.scheduler import get_scheduler_settings
+from backend.models.device_lease import DeviceLease
 from backend.models.host import Device
 from backend.models.job import JobInstance
 from backend.models.plan import Plan
@@ -67,6 +69,88 @@ def _settle_wait_left(parent: PlanRun, now: datetime) -> float:
     if settle <= 0 or parent.ended_at is None:
         return 0.0
     return settle - (now - _aware_utc(parent.ended_at)).total_seconds()
+
+
+def _settle_ready_gate_enabled() -> bool:
+    """#3082：就绪提前放行门控开关。getattr 缺省 True 同时兜住测试里
+    monkeypatch 成 SimpleNamespace 的场景——字段缺失按开启处理，
+    不让就绪判据因 settings 桩件陈旧而被静默关掉。"""
+    return bool(getattr(
+        get_scheduler_settings(), "chain_trigger_settle_ready_gate_enabled", True,
+    ))
+
+
+def _settle_ready_decision(
+    rows: Sequence[tuple[Any, Any, Any, Any]],
+    *,
+    now: datetime,
+    active_lease_ids: set[int],
+) -> bool:
+    """#3082：settle 窗内「设备就绪」提前放行判据（纯函数，sync/async 共用）。
+
+    口径（偏保守，任一不满足即继续等窗）：
+    - 子段候选集非空且**无排除设备**——BUSY/ERROR/过期 OFFLINE 的排除态
+      本身就是 teardown 冲击未落回的信号；
+    - 候选设备当前 ``device.status`` **全部** ONLINE——job COMPLETED 但仍 BUSY
+      （#2648 的收尾过渡态）或心跳窗内瞬时 OFFLINE 都不算就绪；
+    - 候选设备上无 ACTIVE 租约——被其它 run/维护占用同样不算空闲。
+
+    无候选行（父段无 job）→ False：不借就绪路径提前进入 no_devices 语义，
+    窗过后再按现行行为处理。
+    """
+    if not rows:
+        return False
+    device_ids, excluded = _select_chain_devices(rows, now=now)
+    if not device_ids or excluded:
+        return False
+    status_by_id = {int(d): str(st or "") for d, _job_status, st, _last_seen in rows}
+    if any(status_by_id[d] != "ONLINE" for d in device_ids):
+        return False
+    return not (active_lease_ids & set(device_ids))
+
+
+def _chain_settle_ready_sync(db: Session, parent_id: int, now: datetime) -> bool:
+    """窗内就绪探测：父段 job×设备状态 + ACTIVE 租约，两次索引查询。"""
+    rows = db.execute(
+        select(JobInstance.device_id, JobInstance.status, Device.status, Device.last_seen)
+        .join(Device, Device.id == JobInstance.device_id)
+        .where(JobInstance.plan_run_id == parent_id)
+    ).all()
+    if not rows:
+        return False
+    lease_ids = db.execute(
+        select(DeviceLease.device_id)
+        .where(
+            DeviceLease.device_id.in_({int(r[0]) for r in rows}),
+            DeviceLease.status == "ACTIVE",
+        )
+    ).scalars().all()
+    return _settle_ready_decision(
+        rows, now=now, active_lease_ids={int(x) for x in lease_ids},
+    )
+
+
+async def _chain_settle_ready_async(
+    db: AsyncSession, parent_id: int, now: datetime
+) -> bool:
+    """#3082：async 路径同判据（即时触发路径与 sync 补偿路径对称）。"""
+    rows = (await db.execute(
+        select(JobInstance.device_id, JobInstance.status, Device.status, Device.last_seen)
+        .join(Device, Device.id == JobInstance.device_id)
+        .where(JobInstance.plan_run_id == parent_id)
+    )).all()
+    if not rows:
+        return False
+    lease_ids = (await db.execute(
+        select(DeviceLease.device_id)
+        .where(
+            DeviceLease.device_id.in_({int(r[0]) for r in rows}),
+            DeviceLease.status == "ACTIVE",
+        )
+    )).scalars().all()
+    return _settle_ready_decision(
+        rows, now=now, active_lease_ids={int(x) for x in lease_ids},
+    )
 
 
 def _select_chain_devices(
@@ -297,14 +381,28 @@ async def trigger_next_plan(
         return None
 
     if respect_settle:
-        left = _settle_wait_left(parent, now or datetime.now(timezone.utc))
+        now_ts = now or datetime.now(timezone.utc)
+        left = _settle_wait_left(parent, now_ts)
         if left > 0:
-            logger.info(
-                "plan_chain_trigger_settling parent=%d left_seconds=%d "
-                "(chain reconciler will fire next tick)",
-                parent.id, int(left),
-            )
-            return None
+            # #3082：窗内若就绪条件已满足则提前放行，固定窗退化为上限兜底；
+            # 未就绪维持 #2755 语义（睡满窗，由下一 tick 重试）。
+            if _settle_ready_gate_enabled() and await _chain_settle_ready_async(
+                db, parent.id, now_ts
+            ):
+                plan_chain_settle_outcome_total.labels(outcome="early_release").inc()
+                logger.info(
+                    "plan_chain_trigger_settle_early_release parent=%d saved_seconds=%d "
+                    "(all chain devices ONLINE and idle; settle acts as upper bound)",
+                    parent.id, int(left),
+                )
+            else:
+                plan_chain_settle_outcome_total.labels(outcome="settling_skipped").inc()
+                logger.info(
+                    "plan_chain_trigger_settling parent=%d left_seconds=%d "
+                    "(chain reconciler will fire next tick)",
+                    parent.id, int(left),
+                )
+                return None
 
     # #2648：以父段 job 终态为主判据（COMPLETED 无条件入列），瞬时 device.status
     # 仅对非 COMPLETED job 兜底——teardown 后 BUSY→ONLINE 回写滞后不再踢出健康设备。
@@ -403,14 +501,27 @@ def trigger_next_plan_sync(
         return None
 
     if respect_settle:
-        left = _settle_wait_left(parent, now or datetime.now(timezone.utc))
+        now_ts = now or datetime.now(timezone.utc)
+        left = _settle_wait_left(parent, now_ts)
         if left > 0:
-            logger.info(
-                "plan_chain_trigger_settling parent=%d left_seconds=%d "
-                "(chain reconciler will fire next tick)",
-                parent.id, int(left),
-            )
-            return None
+            # #3082：与 async 路径同判据——窗内就绪即提前放行，未就绪维持 #2755。
+            if _settle_ready_gate_enabled() and _chain_settle_ready_sync(
+                db, parent.id, now_ts
+            ):
+                plan_chain_settle_outcome_total.labels(outcome="early_release").inc()
+                logger.info(
+                    "plan_chain_trigger_settle_early_release parent=%d saved_seconds=%d "
+                    "(all chain devices ONLINE and idle; settle acts as upper bound)",
+                    parent.id, int(left),
+                )
+            else:
+                plan_chain_settle_outcome_total.labels(outcome="settling_skipped").inc()
+                logger.info(
+                    "plan_chain_trigger_settling parent=%d left_seconds=%d "
+                    "(chain reconciler will fire next tick)",
+                    parent.id, int(left),
+                )
+                return None
 
     # #2648：同 async 路径——父段 job 终态为主判据
     rows = db.execute(
