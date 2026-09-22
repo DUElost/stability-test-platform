@@ -314,7 +314,7 @@ ownership 索引（`2026-semantic-ownership.md`）**X2**：日志域四层权威
 | 例外 | 形态 | 边界 |
 |------|------|------|
 | 展锐三族 | 中心 `tools/{name}/` **未打包源码目录** + 私有路径 env | 仅这三族；不得扩散；不得再增工具私有 env 键 |
-| 族名 | `Start-Log-Scan` / `Monkey-Log-Scan-GT-SPRD` / `Scan-Result-GT` | 终态仍是 Package Store；**2026-09-20 评估：§5.4 未触发**（[`评估笔记`](../notes/architecture/2026-09-20-adr0033-package-store-trigger-assessment.md)） |
+| 族名 | `Start-Log-Scan` / `Monkey-Log-Scan-GT-SPRD` / `Scan-Result-GT` | 终态仍是 Package Store；**2026-09-22 评估：§5.4 已触发**（条件 4·多站点；[`评估笔记`](../notes/architecture/2026-09-22-adr0033-package-store-multisite-trigger.md)；实现 [#3075](https://github.com/DUElost/stability-test-platform/issues/3075)） |
 
 **其他已知边界**
 
@@ -331,7 +331,7 @@ ownership 索引（`2026-semantic-ownership.md`）**X2**：日志域四层权威
 | 并列双轨 + D3 同一 merge | [ADR-0032](../adr/ADR-0032-unisoc-mtk-parallel-dedup-pipelines.md) |
 | 过滤上送 + DLE | [ADR-0025](../adr/ADR-0025-phase4-architecture-alignment.md)、[ADR-0028](../adr/ADR-0028-device-log-event-and-continuous-upload.md) |
 | merge 实例绑定 | [ADR-0027](../adr/ADR-0027-control-plane-horizontal-scaling.md) 清单第 7 |
-| 工具结构 / Phase 2 选项 A | [ADR-0033](../adr/ADR-0033-tool-kit-ecosystem-integration.md) v1.6；[选项 A Note](../notes/architecture/2026-09-19-adr0033-phase2-option-a.md)；[§5.4 包存储评估·未触发](../notes/architecture/2026-09-20-adr0033-package-store-trigger-assessment.md) |
+| 工具结构 / Phase 2 选项 A | [ADR-0033](../adr/ADR-0033-tool-kit-ecosystem-integration.md) v1.11；[选项 A Note](../notes/architecture/2026-09-19-adr0033-phase2-option-a.md)；[§5.4 包存储评估·已触发](../notes/architecture/2026-09-22-adr0033-package-store-multisite-trigger.md) |
 | 跨进程契约 | [`2026-scan-upload-merge-contract.md`](./2026-scan-upload-merge-contract.md) |
 | 上送时序图 | [`2026-adr-0025-log-flow-sequence.md`](./2026-adr-0025-log-flow-sequence.md) |
 | ownership X2 | [`2026-semantic-ownership.md`](./2026-semantic-ownership.md) §1 |

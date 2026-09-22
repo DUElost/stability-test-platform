@@ -1,14 +1,14 @@
 # ADR-0033：外部工具统一接入契约规范与包管理解耦模型（Tool-Kit Ecosystem Integration）
 
-- 状态：**Accepted（v1.10）**
-- 落地状态：**部分落地**（Phase 2 B5 `DedupMergeEngine`；Phase A：D0 新族门禁 + Tool Contract 脚手架 + Jira 薄 ACL（#3005）；Phase A3：`PlanRunArtifact` 下载 + DedupReportCard + `jira/runs?plan_run_id=`（#3015）+ DLE zip / `extract_bundle` 登记下载 / PlanRun 内嵌 Jira 历史（#3013 follow-ups）；Scan-Result-GT 仍仅 Agent B2；**包存储未触发、不排期**——见 §5.4 评估锚；Phase 3 未做；D0/D3 权威已生效——见 §5；§5.6 **D0 可拦对象口径**已定——见 v1.10）
+- 状态：**Accepted（v1.11）**
+- 落地状态：**部分落地**（Phase 2 B5 `DedupMergeEngine`；Phase A：D0 新族门禁 + Tool Contract 脚手架 + Jira 薄 ACL（#3005）；Phase A3：`PlanRunArtifact` 下载 + DedupReportCard + `jira/runs?plan_run_id=`（#3015）+ DLE zip / `extract_bundle` 登记下载 / PlanRun 内嵌 Jira 历史（#3013 follow-ups）；Scan-Result-GT 仍仅 Agent B2；**包存储已触发（§5.4 条件 4·多站点）、可排期、尚未实现**——见 §5.4 评估锚与 [#3075](https://github.com/DUElost/stability-test-platform/issues/3075)；Phase 3 未做；D0/D3 权威已生效——见 §5；§5.6 **D0 可拦对象口径**已定——见 v1.10）
 - 优先级：P1
 - 目标里程碑：M7
 - 日期：2026-09-03
 - 决策者：平台研发组
-- 标签：toolkit, adapter, anti-corruption, package-store, scripts, dedup, jira, flash, #745, #735, #738, #1237, #2546
+- 标签：toolkit, adapter, anti-corruption, package-store, scripts, dedup, jira, flash, multi-site, #745, #735, #738, #1237, #2546, #3075
 - 归属域：semantic-ownership flash-tool
-- 关联 Issue：[#745](https://github.com/DUElost/stability-test-platform/issues/745)（追踪 Epic）、[#735](https://github.com/DUElost/stability-test-platform/issues/735)（脚本膨胀治理）、[#738](https://github.com/DUElost/stability-test-platform/issues/738)（架构解耦与防腐）、[#1237](https://github.com/DUElost/stability-test-platform/issues/1237)（v1.2 收窄）、[#2546](https://github.com/DUElost/stability-test-platform/issues/2546)（语义归属 / flash 补登记）
+- 关联 Issue：[#745](https://github.com/DUElost/stability-test-platform/issues/745)（追踪 Epic）、[#735](https://github.com/DUElost/stability-test-platform/issues/735)（脚本膨胀治理）、[#738](https://github.com/DUElost/stability-test-platform/issues/738)（架构解耦与防腐）、[#1237](https://github.com/DUElost/stability-test-platform/issues/1237)（v1.2 收窄）、[#2546](https://github.com/DUElost/stability-test-platform/issues/2546)（语义归属 / flash 补登记）、[#3075](https://github.com/DUElost/stability-test-platform/issues/3075)（Phase B Package Store 实现跟踪）
 - 背景分析：[`TOOLKIT_INTEGRATION_FEASIBILITY_2026-08-26.md`](../reviews/TOOLKIT_INTEGRATION_FEASIBILITY_2026-08-26.md)；设计方案：[`2026-09-external-tools-integration-and-package-architecture.md`](../design/2026-09-external-tools-integration-and-package-architecture.md)
 
 ## 修订记录
@@ -26,6 +26,7 @@
 | v1.8 | 2026-09-21 | **Phase A3 最小导航切片**（非决策变更）：`GET /plan-runs/{id}/artifacts/{id}/download` + DedupReportCard 下载链 + `GET /jira/runs?plan_run_id=`（#3013）；不做 Package Store / ToolRun / DLE zip |
 | v1.9 | 2026-09-21 | **Phase A3 follow-ups**（非决策变更）：DLE `log-events/{id}/download`（目录 zip）；extract 登记 `extract_bundle` + 目录 zip 下载；PlanRun 详情内嵌 `JiraRunHistory`（#3013） |
 | v1.10 | 2026-09-21 | **D0 可拦对象口径**（#3014 案 3A，非决策变更）：§5.6 定「计数口径 = 带外部资产的族」+ 首次基线（16 / 19，`clear_recents`、`unisoc_*` 判非 D0 对象）；§5.1 修正「新族门禁零触发」的成因（分母选错，非本期巧合）；**案 3A-1 采选项 A**——§5.6 增「门禁射程 = 归类动作」三态（`platform-authored` 放行 / `external-tool` 仍禁 / 未声明红，判据实现在 #3055）；脚本膨胀账继续归 ADR-0039 / #735。不动 D0–D4 与 §5.4 三条触发条件本身。相对 Phase A3 follow-ups（v1.9）顺延为 v1.10 |
+| v1.11 | 2026-09-22 | **§5.4 增第四条触发条件·多站点部署**（方向级修订）：用户裁定「多站点部署 = §5.4 触发」——多站点是平台镜像与外部工具资产物理解耦的需求来源，防止工具/脚本合入持续腐化平台主干；评估结论锚改为**已触发**（条件 4）；撤销「触发前不得排期」；实现跟踪 [#3075](https://github.com/DUElost/stability-test-platform/issues/3075)；评估正本 [`2026-09-22-adr0033-package-store-multisite-trigger.md`](../notes/architecture/2026-09-22-adr0033-package-store-multisite-trigger.md)。**本版不实现** tar.gz/`tools_cache` 代码；条件 1–3 现态对账仍可不成立，但任一条件（含新增第 4 条）成立即可排期 |
 
 ---
 
@@ -156,7 +157,7 @@ flowchart TD
   - **Scan-Result-GT 边界**：GT 公开 CLI 仅 `scan_result.py -d`（Agent **B2** 主机汇总）；**不**插进控制面 merge 循环；v1.0–v1.4「unisoc GT = DedupMergeEngine」措辞作废，阻塞笔记出口见 [`2026-09-18-adr0033-phase2-unisoc-merge-blocker.md`](../notes/architecture/2026-09-18-adr0033-phase2-unisoc-merge-blocker.md)，选定 A 的 Agent Note 见 [`2026-09-19-adr0033-phase2-option-a.md`](../notes/architecture/2026-09-19-adr0033-phase2-option-a.md)；
   - **明确不做（本阶段）**：包存储 tar.gz、Phase 3 存量归一、修订 ADR-0032 D3 换独立 unisoc merge 工具（选项 B）、Agent 侧 GT Adapter 作为 Phase 2 主样板（选项 C）；
   - 设备端样板：GPU / 开关机 / 休眠唤醒（#462）按照统一 Tool Contract 模板化接入（依赖工具包缓存机制就绪，排期见设计文档 §5）；
-  - 实现工具包本地校验解压缓存机制（仍受 §5.4 条件落地约束，本轮不排期）；
+  - 实现工具包本地校验解压缓存机制（§5.4 条件 4 已触发，实现跟踪 [#3075](https://github.com/DUElost/stability-test-platform/issues/3075)；本 ADR 修订不实现代码）；
 - **Phase 3（远期·存量归一）**：存量 MTK 扫描与 Jira 提单迁移至适配器体系（重构而非行为变更，验收 = 与 ADR-0032 行为等价）；在 Web 管理面暴露外部工具管理面板。
 
 ---
@@ -187,11 +188,12 @@ ADR-0033 自 2026-09-03 Accepted 起至 2026-09-10 **无任何落地提交**（�
 
 ### 5.4 裁定三：包存储（D3 分发机制）改为条件落地，并登记 legacy 例外
 
-- tar.gz + sha256 + `tools_cache/` + 注册流 + 周期巡检作为**终态出口**保留；在下列**触发条件**任一出现前不排期：
+- tar.gz + sha256 + `tools_cache/` + 注册流 + 周期巡检作为**终态出口**保留；在下列**触发条件**任一出现前不排期（v1.11 起已增第 4 条；**条件 4 已成立 → 可排期**）：
   1. 出现**第二个**需要版本化分发 + 防篡改校验的 Tier 1/2 工具族（现有展锐三族之外的第一个）；或
   2. 出现因多机复制不一致、或源码目录被就地修改而导致的**真实事故**；或
-  3. Phase 3 存量归一启动（包存储是该迁移的前置）。
-- 在此之前，Tier 1/2 外部工具的**过渡形态** = 中心存储版本化源码目录（`tools/{name}/`）+ 路径 env 配置 + 本节登记义务。**这是标注过的过渡，不是终态**（终态出口即上述三条触发后的包存储）。
+  3. Phase 3 存量归一启动（包存储是该迁移的前置）；或
+  4. **多站点部署**成为正式需求并进入交付实施（平台镜像与外部工具资产必须可独立版本化、按 digest 校验分发，防止各站工具/脚本合入与人肉同步持续腐化平台主干）——**2026-09-22 用户裁定**；关联 [ADR-0041](./ADR-0041-independent-site-delivery-and-management.md) / [`多站点交付 PRD`](../prd/2026-multi-site-delivery.md)。
+- 在触发前，Tier 1/2 外部工具的**过渡形态** = 中心存储版本化源码目录（`tools/{name}/`）+ 路径 env 配置 + 本节登记义务。**这是标注过的过渡，不是终态**（终态出口即上述触发后的包存储）。**v1.11 起条件 4 已触发**：过渡形态在实现落地前仍可运维使用，但**不得再扩散**，且不得把「每站人肉 rsync `tools/`」写成终态。
 - **legacy 例外显式登记**（2026-08-31 ADR-0032 落地，早于本 ADR 生效，按 legacy 追溯承认）：
 
 | 例外对象 | 形态 | 边界 |
@@ -199,11 +201,11 @@ ADR-0033 自 2026-09-03 Accepted 起至 2026-09-10 **无任何落地提交**（�
 | 展锐三工具族（`Start-Log-Scan` / `Monkey-Log-Scan-GT-SPRD` / `Scan-Result-GT`） | 中心存储 `tools/{name}/` 下的**未打包源码目录** + `STP_UNISOC_*` / `STP_AGENT_UNISOC_*` 路径键 | ① 仅限这三个已存在族，**不得扩散**到新族或新工具；② 路径键必须登记在 `docs/development/environment-variables.md`（本次已补）；③ **不得再新增工具私有 env 键**——新增即违反 D0 分级准入与设计文档 §6「环境去黑盒化」 |
 
 - **设计文档 §6「环境去黑盒化」就此收窄**：Tier 1 平台工具（`Start-Log-Scan`）与 Tier 2 主机工具（展锐采集 / 汇总去重）的路径键属上述既有例外；Tier 3 设备端工具（`scripts/` 内已发布脚本族）继续沿用既有版本目录约定，不引入工具私有路径变量。
-- **评估结论锚（v1.6，非决策变更）**：2026-09-20 对账三条触发条件 → **未触发**（无第二 Tier1/2 包化族、无 `tools/` 复制/就地修改事故、Phase 3 未启动）。书面结论与过渡纪律强化见 [`2026-09-20-adr0033-package-store-trigger-assessment.md`](../notes/architecture/2026-09-20-adr0033-package-store-trigger-assessment.md)。**在触发前不得排期包存储实现。**
+- **评估结论锚（v1.11）**：2026-09-22 对账 → **已触发**（条件 4·多站点；条件 1–3 现态仍可不成立）。书面结论见 [`2026-09-22-adr0033-package-store-multisite-trigger.md`](../notes/architecture/2026-09-22-adr0033-package-store-multisite-trigger.md)。历史「未触发」快照保留于 [`2026-09-20-adr0033-package-store-trigger-assessment.md`](../notes/architecture/2026-09-20-adr0033-package-store-trigger-assessment.md)。**触发后可排期包存储实现**（跟踪 [#3075](https://github.com/DUElost/stability-test-platform/issues/3075)）；本 ADR 修订本身**不实现**代码。
 
 ### 5.5 裁定四：未落地状态显式化（决策效力与实现进度分离）
 
-- **落地状态：部分落地**（Phase 2 控制面 B5 样板·选项 A 已落地薄 `DedupMergeEngine`；Phase A：D0 新族门禁 + Tool Contract 脚手架 + Jira 薄 ACL 已落地；包存储 / Phase 3 / 设备端样板 / PlanRun 日志 UI 仍未排期；2026-09-18 阻塞由 v1.5 选定 A 解除，见 §4）；D0/D3 权威已生效，D2 按族准入；
+- **落地状态：部分落地**（Phase 2 控制面 B5 样板·选项 A 已落地薄 `DedupMergeEngine`；Phase A：D0 新族门禁 + Tool Contract 脚手架 + Jira 薄 ACL 已落地；**包存储已触发（条件 4）可排期、尚未实现**——跟踪 #3075；Phase 3 / 设备端样板仍未排期；2026-09-18 阻塞由 v1.5 选定 A 解除，见 §4）；D0/D3 权威已生效，D2 按族准入；
 - §4 的时间点作废为参考序，排期以 issue 为准；
 - **不因超期自动降级本 ADR 的决策效力**，反之也**不得因"纸面 Accepted"当作已落地基线**——索引面（`docs/adr/README.md`、`docs/DOC-MAP.md`、M7 看板）与本文头部"落地状态"行须同步体现这一区分。
 
@@ -211,18 +213,18 @@ ADR-0033 自 2026-09-03 Accepted 起至 2026-09-10 **无任何落地提交**（�
 
 **本次同步面**：`docs/adr/README.md` 主表 + M7 看板、`docs/DOC-MAP.md` 行、`docs/development/script-versioning.md` 指针、`docs/reviews/TOOLKIT_INTEGRATION_FEASIBILITY_2026-08-26.md` §6 承接补注（4-P1 已由 ADR-0032 承接）。
 
-**包存储触发对账（v1.6）**：最新书面评估见 [`2026-09-20-adr0033-package-store-trigger-assessment.md`](../notes/architecture/2026-09-20-adr0033-package-store-trigger-assessment.md)（结论：**未触发**）。条件变化时先更新该评估再排期实现。
+**包存储触发对账（v1.11）**：最新书面评估见 [`2026-09-22-adr0033-package-store-multisite-trigger.md`](../notes/architecture/2026-09-22-adr0033-package-store-multisite-trigger.md)（结论：**已触发**——条件 4·多站点）。2026-09-20「未触发」快照见 [`2026-09-20-adr0033-package-store-trigger-assessment.md`](../notes/architecture/2026-09-20-adr0033-package-store-trigger-assessment.md)。实现排期以 [#3075](https://github.com/DUElost/stability-test-platform/issues/3075) 为准。
 
 **D0 可拦对象口径（v1.10，#3014 案 3A）**：判「D0 分级准入是否首次有真实对象 / §5.4 条件 1 是否成立」，**计数口径 = 带外部资产的族**（依赖厂商二进制、第三方源码套件，或需独立分发的大体积 APK），**不是** `backend/agent/scripts/` 的族数或版本目录数。
 
 - 首次基线（2026-09-21，`origin/main`）：35 族 → **带外部资产 16 族**（`flash_firmware` / `flash_preflight` = SP Flash Tool；`gpu_setup` / `gpu_check` / `gpu_finish` = Antutu APK；`monkey_*` 五族、`powercycle_*` / `sleep_*` / `mtbf_setup` = APK 资源）**；**纯 adb/python 平台自研 19 族**，其中 `clear_recents`（09-20 入场，第 35 族）与 `unisoc_probe` / `unisoc_signal_trigger`（09-14）经判 **非 D0 对象** → 不需要 Tool Contract 准入、不触发 §5.4 条件 1（#2827「未触发」结论由此获得依据）。
 - 复算命令：`grep -rl "Permission is hereby granted\|GNU General Public\|All rights reserved" backend/agent/scripts/`（第三方源码树 → 应 0 命中）；`git grep -l "STP_UNISOC\|Scan-Result-GT\|Start-Log-Scan" origin/main -- backend`（外部工具族的实际调用位置）。
-- **口径变更不改判据本身**：§5.4 三条触发条件仍按**形态**限定（需要版本化分发 + 防篡改校验 / 中心存储源码目录 + env 路径扩散 / Phase 3 启动），本条只规定"怎么数"。
+- **口径变更不改判据本身**：§5.4 条件 1–3 仍按**形态**限定（需要版本化分发 + 防篡改校验 / 中心存储源码目录 + env 路径扩散 / Phase 3 启动）；条件 4（多站点）按**需求/交付裁定**成立，与条件 1 的族计数正交。本条只规定条件 1「怎么数」。
 - **门禁射程 = 归类动作，不是族数**（#3014 案 3A-1，选项 A）：`tools/dev/check_new_script_family.py` 检测到新增顶层族时，要求**同一 PR 内出现归类声明** —— `ADR-0033 归类：<family> = platform-authored` 或 `= external-tool`（载体 = **diff 或提交说明**内任一行——门禁只扫 `git diff base...head` 与 `git log base..head`，**不读 PR 描述**；写在 §5.6 或 Agent Note 里则自然进 diff）。判为 `platform-authored`（纯 adb / python，无厂商二进制、无第三方源码树、无需独立分发的大体积资产）→ **放行**；判为 `external-tool` → 必须走 D0 分级准入（Tool Contract + §5.4 触发后的包形态登记）或按 §5.4 显式登记 legacy 例外。**不建豁免清单**（避免第二个事实源）：声明本身即事实，随 PR 一起被审。
 
 **复议触发器**：
 
-1. §5.4 三条包存储触发条件任一成立 → 立即排期落地，撤销过渡形态标注；
-2. 出现**第二个**使用"中心存储源码目录 + env 路径"形态的工具族（即过渡形态开始扩散）→ 先行复议是否提前落地包存储；
+1. §5.4 四条包存储触发条件任一成立 → 立即排期落地（v1.11：条件 4 已成立 → 跟踪 #3075）；过渡形态在包存储样板落地前保留运维可用性，但标注为待撤销；
+2. 出现**第二个**使用"中心存储源码目录 + env 路径"形态的工具族（即过渡形态开始扩散）→ 视为违纪，不得再默许，优先推进 #3075 而非再开例外；
 3. 脚本膨胀治理（#735「差量分发 / 共享基础库」长效机制）若形成方向级提案 → 与本 ADR 的 D3 权威裁定对齐；**ADR-0020「每版本全量副本 + 绝对不可变」是否修订属独立方向级问题**，必要时由新 ADR 裁决（本 ADR 不代答）。
 

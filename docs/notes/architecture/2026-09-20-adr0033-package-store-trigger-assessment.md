@@ -3,6 +3,11 @@
 Status: implemented
 Class: architecture
 
+> **Supersession（2026-09-22）**：本文是 **2026-09-20 当日**「条件 1–3 → 未触发」快照，结论作为历史事实保留。
+> **最新评估锚**已改为**已触发**（§5.4 新增条件 4·多站点）——见
+> [`2026-09-22-adr0033-package-store-multisite-trigger.md`](./2026-09-22-adr0033-package-store-multisite-trigger.md)
+> 与 ADR-0033 **v1.11**。勿再把本文当作当前「不得排期」依据。
+
 ## Decision
 
 **结论：未触发。** 三条 §5.4 触发条件在 2026-09-20 评估基线下均**不成立**；
