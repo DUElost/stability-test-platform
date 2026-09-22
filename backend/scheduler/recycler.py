@@ -765,6 +765,23 @@ def _step_trace_stall_cutoff(now: datetime) -> datetime | None:
     return now - timedelta(seconds=STEP_TRACE_STALL_SECONDS)
 
 
+def _patrol_liveness_since_cutoff(cutoff: datetime):
+    """#3146：patrol 心跳新鲜 ⇒ 巡航循环仍在跑 ⇒ 豁免僵尸判定。
+
+    ADR-0022 让 patrol 成功步 **按设计不写 step_trace**（``suppress_success_trace=True``），
+    所以 monkey 类计划巡航期的「trace 静默」是设计形态——只用 trace 判据会把
+    健康巡航 job 当僵尸（2026-09-22 r510 实测：738 条误标 → 释放 lease → 中止波）。
+    #3061 的真僵尸（12.5h 无 patrol 活动、无 trace）patrol 心跳同样静默，仍会被抓。
+
+    注意：**不**用 ``last_execution_heartbeat_at``/``last_progress_at`` 豁免——
+    #3061 的初衷正是「执行器/心跳可能仍在，而流水线已死」，把心跳当豁免会回退该能力。
+    """
+    return and_(
+        JobInstance.last_patrol_heartbeat_at.isnot(None),
+        JobInstance.last_patrol_heartbeat_at >= cutoff,
+    )
+
+
 def _step_trace_still_stalled(job_id: int, cutoff: datetime):
     """EXISTS：该 job 最新 step_trace 为终态且 original_ts 早于 cutoff。"""
     max_ts = (
@@ -812,6 +829,8 @@ def _collect_step_trace_stall_candidates(
             JobInstance.status == JobStatus.RUNNING.value,
             max_ts.c.last_ts < cutoff,
             StepTrace.event_type != "STARTED",
+            # #3146：patrol 心跳新鲜 ⇒ 巡航在推进（ADR-0022 巡航期无 trace 属设计形态）
+            ~_patrol_liveness_since_cutoff(cutoff),
         )
         .order_by(max_ts.c.last_ts.asc())
         .limit(batch_limit)
@@ -839,6 +858,8 @@ def _mark_step_trace_stall(
             JobInstance.id == job.id,
             JobInstance.status == JobStatus.RUNNING.value,
             _step_trace_still_stalled(job.id, cutoff),
+            # #3146：与 collector 同判据——patrol 心跳在 collect→mark 之间转新则放弃标记
+            ~_patrol_liveness_since_cutoff(cutoff),
         )
         .values(
             status=JobStatus.UNKNOWN.value,
