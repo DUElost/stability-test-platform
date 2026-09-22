@@ -937,10 +937,10 @@ class TestListFilters:
 
         resp = client.get("/api/v1/plans?project_key=proj-a", headers=auth_headers)
         assert resp.status_code == 200
-        names = {p["name"] for p in resp.json()["data"]}
+        names = {p["name"] for p in resp.json()["items"]}
         assert names == {"plan-filt-a"}
         # 标签字段（PR 2 前端依赖）：PlanOut.project_key 填充
-        assert resp.json()["data"][0]["project_key"] == "proj-a"
+        assert resp.json()["items"][0]["project_key"] == "proj-a"
 
     def test_plan_runs_filter_by_project_key(
         self, client, auth_headers, db_session, project_a

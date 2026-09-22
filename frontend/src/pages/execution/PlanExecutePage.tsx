@@ -13,7 +13,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton';
 import { useToast } from '@/hooks/useToast';
 import { usePagination } from '@/hooks/usePagination';
-import { api, ApiError, fetchAllDevices, fetchHostList, type HostActiveJob, type PlanRunPreview } from '@/utils/api';
+import { api, ApiError, fetchAllDevices, fetchAllPlans, fetchHostList, type HostActiveJob, type PlanRunPreview } from '@/utils/api';
 import { deviceKeys, hostKeys, jobKeys, planKeys, planRunKeys } from '@/utils/api/queryKeys';
 import { Smartphone, ExternalLink, RefreshCw, Trash2, ChevronLeft } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
@@ -220,7 +220,8 @@ export default function PlanExecutePage() {
     refetch: refetchPlans,
   } = useQuery({
     queryKey: planKeys.list(500),
-    queryFn: () => api.plans.list(0, 500),
+    // #3147：计划选择器要完整集合（此前请求 500，而加了 le=200 后会直接 422）
+    queryFn: () => fetchAllPlans(),
   });
 
   const { data: hostsList, isError: hostsError, refetch: refetchHosts } = useQuery({

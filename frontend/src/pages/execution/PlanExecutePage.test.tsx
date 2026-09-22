@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import PlanExecutePage from './PlanExecutePage';
-import { api, ApiError, fetchAllDevices, fetchHostList } from '@/utils/api';
+import { api, ApiError, fetchAllDevices, fetchAllPlans, fetchHostList } from '@/utils/api';
 import { hostKeys } from '@/utils/api/queryKeys';
 
 const mocks = vi.hoisted(() => ({
@@ -35,6 +35,8 @@ vi.mock('@/utils/api', async (importOriginal) => {
     ...actual,
     fetchHostList: vi.fn().mockResolvedValue([]),
     fetchAllDevices: vi.fn().mockResolvedValue([]),
+    // #3147：计划选择器改走翻页拉全量
+    fetchAllPlans: vi.fn().mockResolvedValue([]),
     api: {
       plans: {
         list: vi.fn(),
@@ -104,8 +106,8 @@ function renderPage({
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
   });
-  if (plansFailure) (api.plans.list as any).mockRejectedValue(plansFailure);
-  else (api.plans.list as any).mockResolvedValue(plans);
+  if (plansFailure) (fetchAllPlans as any).mockRejectedValue(plansFailure);
+  else (fetchAllPlans as any).mockResolvedValue(plans);
   if (devicesFailure) (fetchAllDevices as any).mockRejectedValue(devicesFailure);
   else (fetchAllDevices as any).mockResolvedValue(devices);
   (api.plans.previewRun as any).mockResolvedValue({

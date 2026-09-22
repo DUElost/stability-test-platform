@@ -443,7 +443,11 @@ def ensure_smoke_plan(
     r = client.get("/api/v1/plans?limit=200")
     if r.status_code != 200:
         die(f"list plans status={r.status_code} body={r.text[:300]}")
-    plans = _unwrap(r.json())
+    # #3147：`GET /plans` 已收敛到 `{items, total, skip, limit}`（此前是 `ok()` 包的信封
+    # + 裸数组）。这里刻意两种都接：本脚本打的是**已部署**的控制面，回滚/灰度期间可能
+    # 还是旧版本——`_unwrap` 会把旧信封解成裸数组，新形态则走 `items`。
+    payload = _unwrap(r.json())
+    plans = payload.get("items") if isinstance(payload, dict) else payload
     if not isinstance(plans, list):
         die(f"list plans 返回非列表: {plans}")
     matched = [p for p in plans if p.get("name") == plan_name]

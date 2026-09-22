@@ -5,6 +5,7 @@ import { useToast } from '@/hooks/useToast';
 import {
   api,
   ApiError,
+  fetchAllPlans,
   type Plan,
   type PlanCreate,
   type PlanUpdate,
@@ -80,7 +81,8 @@ export function usePlanEditForm(planId: number | null) {
     refetch: refetchAllPlans,
   } = useQuery({
     queryKey: planKeys.list(200),
-    queryFn: () => api.plans.list(0, 200),
+    // #3147：链尾下拉与 next_plan_id 名称解析需要**完整**计划集，不能单次请求当全量
+    queryFn: () => fetchAllPlans(),
   });
 
   const {
@@ -353,7 +355,9 @@ export function usePlanEditForm(planId: number | null) {
       // 创建新 Plan、更新 next_plan_id,冲突整体回滚——不再产生孤立 Plan。
       // 链尾在最近 200 条内时携带其版本令牌;链尾不可见/超出窗口时省略,
       // 服务端仍以行锁保证原子追加(旧实现此时会静默跳过连接)。
-      const plansList = await api.plans.list(0, 200);
+      // #3147：形状改为 {items,…}；**窗口语义刻意不变**——这里只看最近 200 条，
+      // 链尾超出窗口时省略版本令牌（服务端行锁仍保证原子追加，见上行注释）。
+      const plansList = (await api.plans.list(0, 200)).items;
       const byId = new Map(plansList.map((p) => [p.id, p]));
       let cursor: Plan | undefined = byId.get(planId!);
       const seen = new Set<number>();

@@ -24,7 +24,12 @@ vi.mock('react-router-dom', async () => {
 vi.mock('@/utils/api', () => ({
   api: {
     plans: {
-      list: mocks.listPlans,
+      // #3147：`GET /plans` 现在返回 {items,total,skip,limit}；本文件各处 fixture 仍按
+      // 行数组书写，在这一层统一包成新契约（断言看的是行，不该被传输形状污染）。
+      list: (async (...a: unknown[]) => {
+        const rows = await mocks.listPlans(...a);
+        return Array.isArray(rows) ? { items: rows, total: rows.length, skip: 0, limit: 50 } : rows;
+      }) as unknown as typeof mocks.listPlans,
       create: mocks.createPlan,
       delete: mocks.deletePlan,
       listSpecialties: mocks.listSpecialties,
@@ -155,5 +160,31 @@ describe('PlanListPage grouping', () => {
     const groupA = screen.getByTestId('plan-group-A57');
     expect(groupA).toHaveTextContent('A57（1）');
     expect(within(groupA).getByText('Ops-C')).toBeInTheDocument();
+  });
+
+  // #3147：此前 KPI 用 `plans.length`（已加载条数）当总数，请求上限一被越过就少报，
+  // 且同屏与列表行数互相印证，看不出错。总数只能取服务端 total。
+  it('shows the server total on the KPI, not the loaded row count', async () => {
+    // 刻意让 total（130）> 行数（2）：请求上限被越过时 KPI 必须仍报真实总数。
+    // 传对象而非数组 ⇒ 上面的 mock 包装原样放行（不被 rows.length 覆盖）。
+    mocks.listPlans.mockResolvedValue({
+      items: [
+        { id: 1, name: 'PLAN-A', steps: [], created_at: '2026-08-26T00:00:00Z', updated_at: '2026-08-26T00:00:00Z' },
+        { id: 2, name: 'PLAN-B', steps: [], created_at: '2026-08-26T00:00:00Z', updated_at: '2026-08-26T00:00:00Z' },
+      ],
+      total: 130,
+      skip: 0,
+      limit: 100,
+    });
+
+    renderPage();
+
+    expect(await screen.findByText('PLAN-A')).toBeInTheDocument();
+    // 两行都渲染（列表行数 = 2），但 KPI 必须报服务端 total
+    expect(screen.getByText('PLAN-B')).toBeInTheDocument();
+    // label 与数值在卡片内是兄弟节点，故定位到 KPI 栅格再断言（不是 label 的直接父级）
+    const kpiGrid = screen.getByText('Plan 总数').closest('div.grid');
+    expect(kpiGrid).not.toBeNull();
+    expect(within(kpiGrid as HTMLElement).getByText('130')).toBeInTheDocument();
   });
 });
