@@ -67,7 +67,7 @@ export default function PlanListPage() {
   const [specialtyKey, setSpecialtyKey] = useState<string | undefined>(undefined);
 
   const {
-    data: plans,
+    data: plansPage,
     isLoading,
     isError,
     error,
@@ -100,6 +100,10 @@ export default function PlanListPage() {
     onError: (err: unknown) => toast.error(toApiError(err).message),
   });
 
+  // #3147：列表响应是 {items, total, skip, limit}——KPI 的 total 必须用**服务端 total**，
+  // 用 `plans.length` 会在计划数越过请求上限时把"已加载条数"当成总数（同屏自相矛盾）。
+  const plans = plansPage?.items;
+
   const filtered = useMemo(() => {
     if (!plans) return [];
     const q = search.toLowerCase();
@@ -118,10 +122,10 @@ export default function PlanListPage() {
   };
 
   const stats = useMemo(() => ({
-    total: plans?.length ?? 0,
+    total: plansPage?.total ?? plans?.length ?? 0,
     withSteps: plans?.filter(p => p.steps?.length > 0).length ?? 0,
     chained: plans?.filter(p => p.next_plan_id != null).length ?? 0,
-  }), [plans]);
+  }), [plans, plansPage?.total]);
 
   // ADR-0029 D6（#448）：项目×专项二维分组——按 project_key 保序分组。
   const grouped = useMemo(() => {

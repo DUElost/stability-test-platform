@@ -16,6 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.api.response import ApiResponse, ok
+from backend.api.schemas import PaginatedResponse
 from backend.api.routes.auth import get_current_active_user, User
 from backend.core.audit import record_audit
 from backend.core.settings.scheduler import get_scheduler_settings
@@ -43,6 +44,11 @@ from backend.services.plan_dispatcher_sync import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["plans"])
+
+# `GET /plans` 的单次响应 limit 护栏，与 hosts/users/schedules 同档（200）。
+# 加它的同时必须把消费方的请求降到 ≤ 本值：此前 `/plans` 无 `le=`，前端
+# `PlanExecutePage` 请求 500 是合法的，加护栏后即成 HTTP 422（#3147）。
+_PLAN_LIST_MAX_LIMIT = 200
 
 def _require_plan_owner_or_admin(plan: Plan, user: User) -> None:
     """Plan 写操作鉴权:admin 或 plan 的 created_by 才放行。
@@ -899,15 +905,26 @@ def append_chain_tail(
     return ok(_plan_out(new_plan, steps))
 
 
-@router.get("/plans", response_model=ApiResponse[List[PlanOut]])
+@router.get("/plans", response_model=PaginatedResponse)
 def list_plans(
-    skip: int = 0,
-    limit: int = 50,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=_PLAN_LIST_MAX_LIMIT),
     project_key: Optional[str] = Query(None, description="ADR-0029: filter by project key"),
     specialty_key: Optional[str] = Query(None, description="ADR-0029 D6: filter by specialty key"),
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
+    """计划列表（#3147：收敛到仓内统一的 `{items, total, skip, limit}` 契约）。
+
+    此前返回 `ApiResponse[List[PlanOut]]`（裸数组，无 `total`），是仓内唯一一个
+    "列表但没有总数"的端点 ⇒ 计划侧的截断**无法被任何消费方检测**（对比
+    `devices`/`hosts`/`plan_runs`）。语义与 `devices.list_devices` 对齐。
+
+    **legacy AEE 过滤必须在分页之前**：此前是 `offset/limit` 之后再用 Python 谓词
+    滤掉含 `scan_aee` / `export_mobilelogs` 步的计划，于是 ① 页边界按**未过滤**行数
+    算，翻页会重复/漏；② 任何 `total` 都会多算被隐藏的。谓词只认两个 `script_name`
+    （`backend/core/legacy_aee.py`），故下推为 `NOT EXISTS` 子查询。
+    """
     plans = db.query(Plan)
     if project_key:
         # 未知 key 一律 404（与 projects 路由同语义）
@@ -920,11 +937,20 @@ def list_plans(
         if spec is None:
             raise HTTPException(status_code=404, detail="specialty not found")
         plans = plans.filter(Plan.specialty_id == spec.id)
-    plans = plans.order_by(Plan.created_at.desc())\
+
+    hidden_ids = select(PlanStep.plan_id).where(
+        PlanStep.script_name.in_(sorted(LEGACY_AEE_SCRIPT_NAMES))
+    )
+    plans = plans.filter(~Plan.id.in_(hidden_ids))
+
+    total = plans.count()
+    # `created_at` 同批创建可并列 ⇒ 必须补唯一 tie-breaker，否则 offset 翻页在跨请求
+    # 间不是全序（#3123 同型判据）
+    plans = plans.order_by(Plan.created_at.desc(), Plan.id.desc())\
         .offset(skip).limit(limit).all()
 
     if not plans:
-        return ok([])
+        return PaginatedResponse(items=[], total=total, skip=skip, limit=limit)
 
     plan_ids = [p.id for p in plans]
     all_steps = db.query(PlanStep).filter(PlanStep.plan_id.in_(plan_ids))\
@@ -933,12 +959,11 @@ def list_plans(
     for s in all_steps:
         steps_by_plan.setdefault(s.plan_id, []).append(s)
 
-    visible_plans = [
+    items = [
         _plan_out(p, steps_by_plan.get(p.id, []))
         for p in plans
-        if not _plan_steps_include_legacy_aee_scripts(steps_by_plan.get(p.id, []))
     ]
-    return ok(visible_plans)
+    return PaginatedResponse(items=items, total=total, skip=skip, limit=limit)
 
 
 @router.get("/plans/{plan_id}", response_model=ApiResponse[PlanOut])
