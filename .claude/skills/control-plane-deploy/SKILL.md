@@ -5,10 +5,10 @@ description: 生产控制面部署与 Agent 热更新操作 SOP。触发时机�
 
 # 控制面部署与 Agent 热更新 SOP
 
-> **状态：§0 / §1 / §1.5 / §2 / §3 已真机校准**（最近一次端到端：2026-09-22，逐条见
-> §7 校准记录）。残余 `⚠️待校对` 只标在**尚未实跑验证**的条目上（如 §6 的 SP Flash Tool
-> 依赖行），其余步骤可当已校准执行。改本文件时请在**同一个 PR** 追加 §7 记录行——
-> 校准来自实跑，不来自推演。
+> **状态：全文已真机校准，无 `⚠️待校对` 条目**（最近一次端到端：2026-09-22；两处历史遗留的
+> 待校对项——§6 的 SP Flash Tool 依赖行与 §3 的带外资源身份——已于同日实机验证并收口，逐条见
+> §7 校准记录）。**校准有保质期**：任何一条若与现场不符，请按「实跑→改文→同 PR 追加 §7 行」
+> 的顺序更新——校准来自实跑，不来自推演。
 > 权威细节：`docs/operations/agent-version-and-hot-update.md`、
 > `docs/operations/2026-08-27-agent-rollback-readiness-audit.md`。
 
@@ -158,9 +158,18 @@ PYTHONPATH=. venv/bin/python -m backend.scripts.batch_hot_update --direct
   ⇒ **`backend/agent/scripts/` 里的新版本靠这一步才落到主机**（DB `active` ≠ 主机有文件，
   见 `script-version-lifecycle` §A 第 5 步）——判断「有没有下发」不要用 `script-presence`
   的 `missing=0`（无 Plan 引用的新版本不在账本全集内）。
-- **带外文件**：`resources/**` 现在是 protect-only（`stp_agent_priv.PROTECT_ONLY_PATHS`，
-  #1950/#2019），`--delete` 不再清它；`resources/` 之外的带外文件仍会被 `--delete` 抹掉——
-  这类资源一律在**最终**热更新之后放置。⚠️待校对（未逐台核对带外目录内容）
+- **带外文件**：`resources/**` 是 protect-only（`stp_agent_priv.PROTECT_ONLY_PATHS = ["resources/***"]`，
+  #1950/#2019，契约测试逐项锁定）——只防删除、不做 exclude，必须写 `***`（尾斜杠只匹配目录节点自身）；
+  `resources/` **之外**的带外文件仍会被 `--delete` 抹掉，故带外资源仍在**最终**热更新之后放置。
+  ✅2026-09-22 实测：连跑两轮 code 推送（48 台）后，主机 `resources/`（aimonkey 82M + flashtool 149M）
+  仍在位且 mtime 未变 ⇒ 「code 推送不抹带外资源」成立。
+- **但「resources 已收敛」不能只看徽标**：主机上报的 `agent_resources_digest` 是部署流程**写进去的
+  意图值**（`write-digest` 只校验 `sha256:<hex>` 格式、从不重算），不是主机实测——`plan_convergence`
+  的 `resources_drift` 因此在比对「控制面写的值 vs 控制面期望」，主机真实内容不参与。
+  ✅同日逐台复核（用**主机上同一份** `artifact_digest.py` 现算 48 台，先核对两侧模块 sha256 一致）：
+  code 侧 48/48 与期望一致；resources 侧 **41/48 一致、7 台偏离**（差异只是 CRLF→LF，语义同一，
+  但平台判其 converged 且永远不会收敛它）。要判 resources 真实到位，必须自算比对——
+  探针与结论见 `docs/notes/process/2026-09-22-sop-warn-items-verification.md`，机制缺口是 issue #3128。
 - **不要**在 hot-update 未返回成功时抢 `reload_config`（曾致 event_uploader 读到旧 flag）。
 
 ## 4. 版本门控顺序（强制）
@@ -178,7 +187,7 @@ PYTHONPATH=. venv/bin/python -m backend.scripts.batch_hot_update --direct
 
 | 坑 | 处置 |
 |----|------|
-| SP Flash Tool host 缺库 | `sudo -n apt-get install -y --no-install-recommends libice6 libsm6 libxrender1 libfontconfig1 libglib2.0-0` ⚠️待校对 |
+| SP Flash Tool host 缺库 ✅2026-09-22 真机验证 | 五个包名与工具真实依赖**一致**（`ldd` 在控制面与真机各核一次：缺库主机上 `flash_tool` 有 11 个未解析依赖，正好含这五个；工具自带的 Qt4 在 `lib/` 里，不是系统前置）。**正经处置走平台 provisioning**：`POST /api/v1/hosts/{id}/flash-prereqs/ensure`（= `tools/ansible/playbooks/ensure_flash_prereqs.yml`，内含 `libglib2.0-0t64` 兜底 + dialout/udev 归位；ADR-0037 D5「provisioning 归位、运行期脚本不装包」）。逃生阀（平台不可用时）：`sudo -n apt-get install -y --no-install-recommends libice6 libsm6 libxrender1 libfontconfig1 libglib2.0-0`——Debian 13 上 `libglib2.0-0` 是过渡名，apt 装别名 rc=0，但**复查要用 `dpkg -s libglib2.0-0t64`**。实测 fleet 分布：48 台中 38 台齐、**10 台五库全缺（全在 `agent_legacy` 组）**，缺库主机上刷机前置检查会明确失败（不静默）；处置命令与探针见 `docs/notes/process/2026-09-22-sop-warn-items-verification.md` |
 | MLD 拼写 | `getprop ro.product.model` 返回 `MLD-LX3`（连字符），`adb devices` 是下划线——以 getprop 为准 |
 | 部署后代码 | 部署验证完成后按仓库流程走 PR 合入，不直推 main |
 | 本地 ref 陈旧 | worktree 基于 origin/main 前必 fetch；构建前用 `merge-base --is-ancestor <PR mergeCommit> origin/main` 校验 |
@@ -199,6 +208,7 @@ PYTHONPATH=. venv/bin/python -m backend.scripts.batch_hot_update --direct
 | 2026-08-30 | 新增部署源守卫步骤（§1 step 2/4 前各一行 `tools/dev/check-deploy-source.sh`）：共享工作树曾跑在未合入分支上被推上生产，重启前强制校验 HEAD==main 且工作区干净；已装 systemd unit 另加 `ExecStartPre=-` 兜底（失败仅记日志不中断） | 2026-08-30 事故复盘 + PR |
 | 2026-09-15 | **修正 §0 凭据段**（上表 08-30 的「双 `-F`」在实测中不可用）：token 端点请求体是 form-urlencoded（`--data-urlencode`）；取 token 必须带 `Origin: http://127.0.0.1` 过 CSRF（否则 403 `CSRF check failed`）；用户名来源 `$STP_ADMIN_USER`= `stp-admin`（按 `admin` 会 401）；补响应形状差异（`/api/v1/hosts` 裸数组 vs hot-update `{data:}`） | #2180 D 步上线实操（issue #2203） |
 | 2026-09-22 | **四段全链路端到端实跑（后端 pull+restart / 前端换包 / scan / 48 台热更新到 `45c159cf`）后逐条校准**：① §0 **修正** 09-15 行记的「hot-update 是 `{data:}`」——该路由无 `response_model`，实测回顶层裸对象 `{"ok":true,…}`；② §1 守卫描述补「载荷根未跟踪文件」硬拦；③ §2 补「scan 只写注册表、主机生效必须跑 §3」；④ §3 补「判据是 digest 不是 revision」「desired digest = 现算工作树（含未跟踪文件）」「write-digest 写控制面 desired ⇒ 自愈」「实测 ~3s/台（旧稿 20s/台过时）」「code 载荷口径」；⑤ §6 **推翻** 08-31 的「热更新清带外资源」——`resources/***` 已是 protect-only（#1950/#2019），并新增「载荷根未跟踪文件」行（#3112） | 本次部署实操 + #3111/#3112 |
+| 2026-09-22 | **两处历史 `⚠️待校对` 项实机验证并解除**（详见 `docs/notes/process/2026-09-22-sop-warn-items-verification.md`）：① §6「SP Flash Tool 缺库」——五个包名与工具真实依赖一致（控制面+真机 `ldd`、缺库主机 11 个未解析依赖），fleet 分布 38 齐 / 10 缺（全在 `agent_legacy`），处置改指平台 provisioning（ADR-0037 D5）+ 保留带 `t64` 说明的逃生阀；② §3 带外资源——protect-only 实测成立（两轮 code 推送后 resources 仍在位、mtime 未变），**但**盘点 48 台发现 resources 身份 41/48 一致、7 台字节级偏离（仅 CRLF→LF）而平台判 converged：身份是自报意图、从不自测，机制缺口立 issue #3128 | 真机 ansible 只读探针（48 台全量，含主机侧自算 digest 对拍）+ issue #3128 |
 
 ## 踩坑守卫（负向约束）
 
@@ -220,6 +230,12 @@ PYTHONPATH=. venv/bin/python -m backend.scripts.batch_hot_update --direct
   `script-version-lifecycle` §A 第 5 步）；
 - 带外文件：`resources/**` 由 `PROTECT_ONLY_PATHS` 保护（§6 已修正在案），但
   `resources/` 之外的带外文件仍会被 `--delete` 抹掉——部署前确认无此类残留或放到热更新之后；
+- **`agent_resources_digest` 是「自报意图」，不得当「实测到位」用**：`write-digest` 只校验格式、
+  主机从不重算。要判 resources 真到位必须自算比对（§3 的探针；机制缺口见 #3128）。同理，
+  `resources_digest` 一致而实际偏离时平台**不会**自愈——发现偏离要连同「为什么没测出来」一起记；
+- **刷机前置缺库走平台 provisioning，不手敲 apt**：`POST /api/v1/hosts/{id}/flash-prereqs/ensure`
+  （ansible `ensure_flash_prereqs.yml`，含 t64 兜底与 dialout/udev 归位；ADR-0037 D5）。
+  手敲 apt 只是平台不可用时的逃生阀（§6 行内给了带 t64 说明的写法）；
 - **不要**在 hot-update 未返回成功时抢 `reload_config`（曾致 event_uploader 读到旧
   flag）；
 - 版本门控顺序强制：先推 Agent → 确认 `agent_code_sync_status` 多 matched → 再设
