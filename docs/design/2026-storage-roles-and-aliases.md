@@ -128,10 +128,12 @@ ADR-0025 / 方案 C 正文里大量「15.4」= **中心存储这个角色**，�
 `mtbf/{project}/`（MTBF 清单/全局参数 + `results/{run_dir}__job{job_id}__{serial}.json`（`mtbf_finish` v1.5.0+ 稳定身份，缺维度省略对应段）；
 控制面写配置、Agent 写 `results/`，见 [P0 设计 §4.4](../design/2026-08-mtbf-p0-runner-design.md)）、`tools/`（外部工具，ADR-0033）：
 **现态**为 `tools/{name}/` 下的版本化源码目录，由 Agent 经路径 env 配置调用（展锐三工具族，
-legacy 例外，见 ADR-0033 v1.2 §5.4）；**终态（条件落地）**为
-`tools/{name}/{version}/` 的 `.tar.gz` + sha256 校验（触发条件见同节）。
-**2026-09-20 评估**：§5.4 三条均**未触发**，包存储不排期——见
-[`2026-09-20-adr0033-package-store-trigger-assessment.md`](../notes/architecture/2026-09-20-adr0033-package-store-trigger-assessment.md)。
+legacy 例外，见 ADR-0033 v1.2 §5.4）；**终态（已触发、待实现）**为
+`tools/{name}/{version}/` 的 `.tar.gz` + sha256 校验（§5.4 条件 4·多站点已触发，见同节）。
+**2026-09-22 评估**：§5.4 **已触发**（条件 4），包存储可排期——见
+[`2026-09-22-adr0033-package-store-multisite-trigger.md`](../notes/architecture/2026-09-22-adr0033-package-store-multisite-trigger.md)
+与实现跟踪 [#3075](https://github.com/DUElost/stability-test-platform/issues/3075)
+（2026-09-20「未触发」快照仍保留作历史）。
 
 ### 4.5 PG / Redis
 
