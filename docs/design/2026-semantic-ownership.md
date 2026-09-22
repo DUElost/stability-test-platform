@@ -159,7 +159,7 @@
 | `script-content` | concept | 脚本内容 / sha 对账权威 | `docs/adr/ADR-0021-script-content-alignment-gate.md :: ### D4 — 平台 DB 是脚本内容唯一权威` | 改 D4 |
 | `script-runtime-catalog` | concept | 可派发 `(name, version)` 运行时权威 | `docs/adr/ADR-0033-tool-kit-ecosystem-integration.md :: ### D3：代码仓与工具资产包物理解耦（Manifest + Package Store）` | 第二套版本体系 |
 | `script-meta-freeze` | concept | `plan_snapshot` 步骤身份冻结面；非独立权威（**无** `script_meta` 键；inventory key 名保留） | `docs/adr/ADR-0021-script-content-alignment-gate.md :: ## 引用 / 关联` | 再称「唯一权威」或把假键写成第三权威 |
-| `script-version-immutability` | concept | 已发布脚本版本「不可原地修改 / 删除」契约的**范围**（Accepted ADR 面无承载体，正文真源在 development 文档） | `docs/development/script-versioning.md :: ## 已发布版本不可变` | ADR-0039 转 Accepted（收窄为「直至零引用退役」）→ **同 PR** 把本行 owner 改指 0039 D1，并同步 `AGENTS.md` 总原则行（S11 第 12 锚）与 `check-script-version-immutability.py` 判据 |
+| `script-version-immutability` | concept | 已发布**发布单元**「不可原地修改 / 删除」契约的**范围**（ADR-0051 D1：不可变性属于内容寻址包；Phase 3 前版本目录仍是发布单元；删除按 D5 继承 ADR-0039 D2/D3） | `docs/adr/ADR-0051-release-unit-and-content-addressing.md :: ### D1（核心）：发布单元 = 内容寻址包` | ADR-0051 Phase 2a 落地（包登记 + 等价证明）→ `script-versioning.md`「已发布版本不可变」节改写为包口径；Phase 3 删目录 → `check-script-version-immutability.py` 同 PR 退役、本行范围句去掉过渡句 |
 | `dle-record` | concept | 设备日志事件终态台账 | `docs/adr/ADR-0028-device-log-event-and-continuous-upload.md :: 唯一权威记录` | 改唯一记录主张 |
 | `log-signal-stream` | concept | 异常事件权威流 | `docs/adr/ADR-0018-infrastructure-layer-framework-adoption.md :: \`log_signal\` 是异常事件权威流` | 旁路上报 |
 | `dedup-pipeline-behavior` | concept | 并列 dedup/merge 行为与分区 | `docs/adr/ADR-0032-unisoc-mtk-parallel-dedup-pipelines.md :: ### D1：两条并列流水线，禁止交叉混用` | 混流水线 |

@@ -283,7 +283,7 @@ def check_root_headings(label: str, text: str) -> list[str]:
 # S11: 锚串刻意取 AGENTS.md 原文——改写措辞必须连锚一起改，
 # 让「条款静默消失/被改写」这件事本身过不了门禁（S9 只查章节名、S6 只查体量）。
 # 主体覆盖 ## 硬不变量；另含 ## 总原则「已发布脚本不可删改」一句（#2546 / e82515 F5：
-# 该句不在硬不变量节、此前无锚；ADR-0039 Accepted 当日须同 PR 改写本锚）。
+# 该句不在硬不变量节、此前无锚；ADR-0051 v1.0（2026-09-22）已按 D1 改写为「发布单元」措辞并同步本锚）。
 HARD_INVARIANT_ANCHORS = [
     ("ASGI 入口", r"socketio\.ASGIApp\(sio_server, fastapi_app\)"),
     ("Pipeline 顶层只接受 lifecycle", r"Pipeline 顶层只接受 `lifecycle`"),
@@ -297,8 +297,9 @@ HARD_INVARIANT_ANCHORS = [
     ("default_params 不可原地修改", r"`default_params` 不可原地修改"),
     ("前端类型入口", r"frontend/src/utils/api/types\.ts"),
     (
-        "已发布脚本版本不可原地修改或删除",
-        r"已发布 `backend/agent/scripts/<name>/v<version>/` 不可原地修改或删除",
+        "已发布发布单元不可原地修改（ADR-0051）",
+        r"已发布的发布单元不可原地修改（ADR-0051）[\s\S]{0,160}?"
+        r"`backend/agent/scripts/<name>/v<version>/` 目录仍是发布单元，同样不可原地修改或删除",
     ),
 ]
 
@@ -1923,8 +1924,9 @@ def run_self_test() -> int:
         "- Pydantic 只使用 v2 API；数据库业务表名使用单数。\n"
         "- 已存在脚本版本的 `default_params` 不可原地修改。\n"
         "- 前端 API 类型以 `frontend/src/utils/api/types.ts` 为入口。\n"
-        "- 已发布 `backend/agent/scripts/<name>/v<version>/` 不可原地修改或删除；"
-        "新行为使用新版本。"
+        "- 已发布的发布单元不可原地修改（ADR-0051）：包条目与 `packages/`；Phase 3 前\n"
+        "  `backend/agent/scripts/<name>/v<version>/` 目录仍是发布单元，同样不可原地修改或删除；\n"
+        "  删除按 ADR-0051 D5。新行为使用新版本。"
     )
     expect(
         "S11 锚点齐全",

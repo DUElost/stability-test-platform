@@ -12,8 +12,9 @@
 - 不读取、打印、提交或复制当前任务不需要的凭据、token、私钥、连接串与主机清单。
 - 本机可能同时是生产控制面和生产数据库宿主；测试必须使用隔离环境，禁止在生产库
   试跑测试、迁移或破坏性诊断。
-- 已发布 `backend/agent/scripts/<name>/v<version>/` 不可原地修改或删除；新行为使用
-  新版本。
+- 已发布的发布单元不可原地修改（ADR-0051）：包条目与 `packages/`；Phase 3 前
+  `backend/agent/scripts/<name>/v<version>/` 目录仍是发布单元，同样不可原地修改或删除；
+  删除按 ADR-0051 D5。新行为使用新版本。
 - Python 工具和测试使用当前解释器的 `python -m ...` 形式，避免命中另一套环境。
 - 非平凡变更必须附 Agent Note；方向级决策使用 ADR。
 - `main` 只通过 PR 合入；不要直推或手动 Merge，现有 FIFO auto-merge 负责串行集成；
