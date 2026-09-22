@@ -20,7 +20,13 @@ from typing import Any, Iterable, Optional, Protocol, Sequence, Set
 from backend.agent.kernel_usb_faults import (
     parse_kernel_usb_faults,
 )
+from backend.core.audit import record_audit
+from backend.core.database import SessionLocal
+from backend.core.settings.scheduler import get_scheduler_settings
+from backend.core.ssh_security import create_ssh_client, resolve_host_ssh_credentials
+from backend.models.host import Host
 from backend.services.host_maintenance import in_maintenance_window
+from backend.services.host_updater import _resolve_ssh_creds
 
 logger = logging.getLogger(__name__)
 
@@ -413,12 +419,6 @@ def probe_one_host(
     collect_round=None,
 ) -> dict[str, Any]:
     """单机探针：SSH → 对账 → 写 extra → 可选审计。返回摘要（无凭据）。"""
-    from backend.core.audit import record_audit
-    from backend.core.database import SessionLocal
-    from backend.core.ssh_security import create_ssh_client, resolve_host_ssh_credentials
-    from backend.models.host import Host
-    from backend.services.host_updater import _resolve_ssh_creds
-
     ssh_connect = ssh_connect or create_ssh_client
     collect_round = collect_round or collect_probe_round_via_ssh
     now = datetime.now(timezone.utc)
@@ -540,10 +540,6 @@ def run_probe_sweep_once(
     collect_round=None,
 ) -> dict[str, Any]:
     """一轮 fleet 探针：选机 → 并发执行 → 汇总。"""
-    from backend.core.database import SessionLocal
-    from backend.core.settings.scheduler import get_scheduler_settings
-    from backend.models.host import Host
-
     sched = get_scheduler_settings()
     workers = concurrency if concurrency is not None else sched.host_health_probe_concurrency
     to = timeout if timeout is not None else sched.host_health_probe_timeout_seconds

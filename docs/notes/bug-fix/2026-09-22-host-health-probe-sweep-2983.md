@@ -26,6 +26,9 @@ Class: bug-fix
 - `pytest backend/tests/services/test_host_health_probe_2983.py -q`
 - `pytest backend/tests/realtime/test_p3_3_multi_instance.py -k singleton -q`
 - `python scripts/run_gates.py check:quick`（env-inventory）
+- `python tools/dev/check_inner_imports.py` → 598 ≤ 基线 598（切片③曾在
+  `probe_one_host` / `run_probe_sweep_once` 内加 8 处局部 import；已升为模块顶层，
+  无环；未上调 `_BASELINE`）
 
 ## Revisit
 
