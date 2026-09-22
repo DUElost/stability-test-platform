@@ -53,6 +53,9 @@ class ProbeVerdict(str, Enum):
     AGENT_MUTE = "agent_mute"  # 探针见故障、自报无对应 reason
     PROBE_QUIET = "probe_quiet"  # 自报有故障、探针本轮未见（单轮不当罪）
     TOPOLOGY_MISMATCH = "topology_mismatch"
+    #: 探针**自己没采到数据**（非零 rc / 该有输出却为空）。必须与 ALIGNED 区分：
+    #: 否则「采集失败」被读成「设备干净」，正是本模块存在的理由被绕过（#2983 复核）。
+    PROBE_ERROR = "probe_error"
 
 
 @dataclass(frozen=True)
@@ -77,6 +80,8 @@ class TopologyFacts:
 class ProbeRound:
     journal: JournalProbeFacts
     topology: TopologyFacts
+    #: 采集失败的探针（``name:reason``）；空 = 本轮两条都拿到了数据（#2983 复核）。
+    collect_failed: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -158,11 +163,20 @@ def reconcile_agent_health(
 ) -> ReconcileResult:
     """探针一轮 vs agent ``health.reasons`` 对账。
 
+    - 探针**自己没采到数据** → ``PROBE_ERROR``（优先于一切：空结果不是「干净」）；
     - 探针见 HC died / 拓扑失明，而 agent 无 ``usb_host_controller_dead`` /
       ``usb_tree_empty`` → ``AGENT_MUTE``（医生哑了）；
     - 拓扑空柜不升为失明信号（.90/.91）；
     - agent 自报故障而探针本轮安静 → ``PROBE_QUIET``（单轮不当罪，供连续窗吸收）。
     """
+    if round_.collect_failed:
+        # 采集失败必须**最先**判：否则「采不到」会顺着下面的分支被读成 ALIGNED
+        # 或（有 agent 故障时）PROBE_QUIET——两者都在替一个哑探针背书（#2983 复核）。
+        return ReconcileResult(
+            ProbeVerdict.PROBE_ERROR,
+            tuple(f"collect_failed:{reason}" for reason in round_.collect_failed),
+        )
+
     reasons = {str(r) for r in agent_reasons}
     signals: list[str] = []
     journal = round_.journal
@@ -308,22 +322,46 @@ def run_whitelisted_sudo(
     return RemoteProbeOutput(name=name, rc=rc, stdout=out, stderr=err)
 
 
+def collect_failure_reason(output: RemoteProbeOutput) -> Optional[str]:
+    """采集失败的判据（#2983 复核）：非零 rc，或**该探针本该有输出却为空**。
+
+    空 stdout 不得当成「干净」——非特权 ``journalctl`` 正是以
+    ``rc=0 + 空 stdout + stderr 提示`` 的形态被判成「读过且干净」（#2957 的形态）。
+    探针宁可报采集失败，也不能把「没采到」说成「没问题」。
+    """
+    if output.rc != 0:
+        return f"{output.name}:rc={output.rc}"
+    if not output.stdout.strip():
+        return f"{output.name}:empty_stdout"
+    return None
+
+
 def collect_probe_round_via_ssh(
     client: Any,
     *,
     sudo_password: str,
     timeout: int = 10,
 ) -> ProbeRound:
-    """一次 SSH 会话采集 lsusb + journal，折成 ``ProbeRound``。"""
-    lsusb = run_whitelisted_sudo(
-        client, "lsusb", sudo_password=sudo_password, timeout=timeout,
+    """一次 SSH 会话采集 lsusb + journal，折成 ``ProbeRound``。
+
+    ``rc`` / ``stderr`` 此前被算出来却从不检查 ⇒ ``sudo`` 失败（密码错、sudoers
+    缺规则、未装 sudo ⇒ rc 127）与「真的干净」不可区分，被判 ALIGNED（#2983 复核）。
+    现在两条探针都过 ``collect_failure_reason``，失败写进 ``collect_failed``。
+    """
+    outputs = (
+        run_whitelisted_sudo(client, "lsusb", sudo_password=sudo_password, timeout=timeout),
+        run_whitelisted_sudo(
+            client, "journal_kernel_2h", sudo_password=sudo_password, timeout=timeout
+        ),
     )
-    journal = run_whitelisted_sudo(
-        client, "journal_kernel_2h", sudo_password=sudo_password, timeout=timeout,
+    failures = tuple(
+        reason for reason in (collect_failure_reason(o) for o in outputs) if reason
     )
+    lsusb, journal = outputs
     return ProbeRound(
         journal=parse_journal_probe(journal.stdout.splitlines()),
         topology=classify_lsusb_topology(lsusb.stdout.splitlines()),
+        collect_failed=failures,
     )
 
 

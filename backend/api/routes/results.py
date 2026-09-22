@@ -18,6 +18,7 @@ from backend.models.job import JobInstance
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
 from backend.models.project import Specialty, TestProject
+from backend.models.enums import PASSING_PLAN_RUN_STATUSES
 from backend.core.metrics import risk_jobs_by_level
 from backend.services.log_observation import (
     aggregate_risk_levels_by_job,
@@ -445,7 +446,8 @@ def get_risk_trend(
             else "UNKNOWN"
         )
         total_runs += 1
-        if run.status == "SUCCESS":
+        # #3101：分子与分母同口径——PARTIAL_SUCCESS 算通过（与链触发/种子验收同判）。
+        if run.status in PASSING_PLAN_RUN_STATUSES:
             success_runs += 1
         if level == "S":
             s_runs.append({

@@ -13,6 +13,7 @@ from backend.agent.xhci_auto_rebind import (
     REASON_ACTIVE_JOBS,
     REASON_DISABLED,
     REASON_FUSE_BOOT,
+    REASON_HOST_LEDGER_EMPTY,
     REASON_MAINTENANCE,
     REASON_NOT_WHITELISTED,
     REASON_TICKS_SHORT,
@@ -21,6 +22,7 @@ from backend.agent.xhci_auto_rebind import (
     decide,
     env_enabled,
     evaluate_gate,
+    is_usb_tree_verifiably_empty,
     list_xhci_pci_ids,
     parse_host_whitelist,
     rebind_controllers,
@@ -33,8 +35,12 @@ def _gate(**overrides) -> GateInput:
         host_id="172.21.15.63",
         enabled=True,
         whitelist=frozenset({"172.21.15.63"}),
-        usb_device_count=2,
+        # 「可证为空」的形态：没有目标外设、没有被关键词排除的外设、agent 也没发现
+        # 设备——这才是允许 rebind 的输入（#2972 复核）。
+        usb_device_count=0,
         usb_root_hub_count=2,
+        other_usb_nodes=0,
+        host_ledger_device_rows=8,
         discovered_devices=0,
         empty_tree_ticks=EMPTY_TREE_TICKS_NEED,
         active_jobs=0,
@@ -52,6 +58,16 @@ def _gate(**overrides) -> GateInput:
         ("whitelist", frozenset(), REASON_NOT_WHITELISTED),
         ("discovered_devices", 1, REASON_TREE_NOT_EMPTY),
         ("usb_device_count", 16, REASON_TREE_NOT_EMPTY),
+        # 「2 台非 ADB 模式的手机」（L4 拓扑）在旧谓词 usb_device_count <= root_hub_count
+        # 下被判成空树并放行（#2972 复核①）——这是回归钉子。
+        ("usb_device_count", 2, REASON_TREE_NOT_EMPTY),
+        # 被 `_NON_TARGET_USB_KEYWORDS` 排除的外设（USB 归档盘 / 网卡）在旧谓词里
+        # 完全不可见，rebind 会把它们从总线拔掉。
+        ("other_usb_nodes", 1, REASON_TREE_NOT_EMPTY),
+        # root hub 一个都读不到 = lsusb 没采到，那是「未知」不是「空」。
+        ("usb_root_hub_count", 0, REASON_TREE_NOT_EMPTY),
+        # 空柜 / 闲置机：其它条件全绿，但没有「本应有设备」的证据（#2967 合取）。
+        ("host_ledger_device_rows", 0, REASON_HOST_LEDGER_EMPTY),
         ("empty_tree_ticks", EMPTY_TREE_TICKS_NEED - 1, REASON_TICKS_SHORT),
         ("active_jobs", 1, REASON_ACTIVE_JOBS),
         ("active_devices", 2, REASON_ACTIVE_DEVICES),
@@ -66,6 +82,21 @@ def test_gate_each_condition_alone_blocks(field, value, reason):
 
 def test_gate_all_green_allows():
     assert evaluate_gate(_gate()).allowed is True
+
+
+def test_two_non_adb_phones_are_not_a_verifiably_empty_tree():
+    """#2972 复核①：`<=` 把非空树读成空树——动作门控要求**可证**为空。"""
+    assert is_usb_tree_verifiably_empty(2, 2, 0, 0) is False
+    assert is_usb_tree_verifiably_empty(0, 2, 0, 0) is True
+    assert is_usb_tree_verifiably_empty(0, 2, 1, 0) is False
+    assert is_usb_tree_verifiably_empty(0, 0, 0, 0) is False
+    assert is_usb_tree_verifiably_empty(None, None, 0, 0) is False
+
+
+def test_destructive_action_requires_host_to_have_devices():
+    """#2972 复核②：空柜/闲置机不得触发 rebind（无故障证据却消耗熔断额度）。"""
+    decision = evaluate_gate(_gate(host_ledger_device_rows=0))
+    assert decision.block_reason == REASON_HOST_LEDGER_EMPTY
 
 
 def test_env_enabled_exact_one_only():

@@ -32,9 +32,11 @@ REASON_TICKS_SHORT = "empty_ticks_short"
 REASON_ACTIVE_JOBS = "active_jobs"
 REASON_ACTIVE_DEVICES = "active_devices"
 REASON_MAINTENANCE = "in_maintenance"
+REASON_HOST_LEDGER_EMPTY = "host_ledger_empty"
 REASON_FUSE_BOOT = "fuse_boot_limit"
 REASON_FUSE_WINDOW = "fuse_48h_limit"
 REASON_FUSE_RETRY = "fuse_retry_exhausted"
+REASON_NO_PCI_IDS = "no_pci_ids"
 
 
 class Action(str, Enum):
@@ -53,6 +55,13 @@ class GateInput:
     whitelist: frozenset[str]
     usb_device_count: Optional[int]
     usb_root_hub_count: Optional[int]
+    #: lsusb 里被 `_NON_TARGET_USB_KEYWORDS` 排除的非 root-hub 节点数（USB 归档盘 /
+    #: 网卡 / 采集卡…）。**必须单独传**：`usb_device_count` 把这类节点整个丢掉了，
+    #: 只看它无法区分「没有外设」与「只有非目标外设」（#2972 复核）。
+    other_usb_nodes: int
+    #: 该 host 在设备台账里的行数（`stability_host_device_adb_state` 的来源）。
+    #: 0 = 这台机器本来就不接设备（空柜/未接线），与「控制器死了」不可区分。
+    host_ledger_device_rows: int
     discovered_devices: int
     empty_tree_ticks: int
     active_jobs: int
@@ -80,15 +89,30 @@ def env_enabled(raw: str | None = None) -> bool:
     return raw == "1"
 
 
-def is_usb_tree_empty(
+def is_usb_tree_verifiably_empty(
     usb_device_count: Optional[int],
     usb_root_hub_count: Optional[int],
+    other_usb_nodes: int,
     discovered_devices: int,
 ) -> bool:
-    """与 ``capacity_reporter._usb_tree_empty`` 同形（#2967 合取对齐）。"""
+    """动作门控专用判据：USB 树**可证**为空（而不是「不排除为空」）。
+
+    与告警侧 `capacity_reporter._usb_tree_empty` 的宽松谓词**刻意不同**：告警漏报的
+    代价是少一次告警；rebind 是**破坏性**动作（unbind 会把该控制器下的设备全部从总线
+    摘掉），误判的代价是拔掉正在用的设备。因此这里要求：
+
+    - ``usb_device_count == 0``：原式 ``<= usb_root_hub_count`` 会把「2 台处于非 ADB
+      模式的手机」（L4 拓扑，正是 #3046 记录的那类）读成空树并放行；
+    - ``other_usb_nodes == 0``：`parse_lsusb_output` 按关键词排除了存储/网卡/摄像头等，
+      旧谓词对它们完全不可见 ⇒「空柜 + 一块 USB 归档盘」也读成空树，rebind 会把盘拔掉；
+    - ``usb_root_hub_count > 0``：一个 root hub 都读不到 = lsusb 没采到，那是「未知」不是「空」；
+    - ``discovered_devices == 0``：agent 一台设备都没发现。
+    """
     if usb_device_count is None or usb_root_hub_count is None:
         return False
-    return usb_device_count <= usb_root_hub_count and discovered_devices == 0
+    if usb_root_hub_count <= 0:
+        return False
+    return usb_device_count == 0 and other_usb_nodes == 0 and discovered_devices == 0
 
 
 def evaluate_gate(inp: GateInput) -> GateDecision:
@@ -97,10 +121,15 @@ def evaluate_gate(inp: GateInput) -> GateDecision:
         return GateDecision(False, REASON_DISABLED)
     if inp.host_id not in inp.whitelist:
         return GateDecision(False, REASON_NOT_WHITELISTED)
-    if not is_usb_tree_empty(
-        inp.usb_device_count, inp.usb_root_hub_count, inp.discovered_devices,
+    if not is_usb_tree_verifiably_empty(
+        inp.usb_device_count, inp.usb_root_hub_count,
+        inp.other_usb_nodes, inp.discovered_devices,
     ):
         return GateDecision(False, REASON_TREE_NOT_EMPTY)
+    if inp.host_ledger_device_rows <= 0:
+        # #2967 给**告警**加的「本应有设备」合取，门控侧同样需要：空柜/闲置/未接线的
+        # 机器满足其它全部条件，却没有可判别的故障证据，据此 rebind 只会烧掉熔断额度。
+        return GateDecision(False, REASON_HOST_LEDGER_EMPTY)
     if inp.empty_tree_ticks < EMPTY_TREE_TICKS_NEED:
         return GateDecision(False, REASON_TICKS_SHORT)
     if inp.active_jobs > 0:
@@ -248,7 +277,7 @@ def run_if_allowed(
     pci_ids = list_ids(sysfs_dir)
     if not pci_ids:
         logger.warning("xhci_auto_rebind_no_pci_ids host=%s", inp.host_id)
-        return Action.NOOP, "no_pci_ids", []
+        return Action.NOOP, REASON_NO_PCI_IDS, []
     fuse.record_attempt(now)
     results = rebind_controllers(pci_ids, sysfs_dir=sysfs_dir, write=write)
     return Action.REBIND, None, results
