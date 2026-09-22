@@ -587,7 +587,12 @@ def bucket_adb_states(devices: List[Dict[str, Any]]) -> Dict[str, int]:
     return buckets
 
 
-def collect_device_info(adb_path: str, serial: str, raw_adb_state: str = "device") -> Dict[str, Any]:
+def collect_device_info(
+    adb_path: str,
+    serial: str,
+    raw_adb_state: str = "device",
+    include_metrics: bool = True,
+) -> Dict[str, Any]:
     """
     采集单台设备的基础信息
 
@@ -597,6 +602,11 @@ def collect_device_info(adb_path: str, serial: str, raw_adb_state: str = "device
         raw_adb_state: `adb devices -l` 原始上报状态（discover_devices 产出）。
             非 "device"（如 "unauthorized"/"no permissions"/"authorizing"）说明
             设备已被 ADB 发现但不可用，直接判定为 error，不再探测 shell（探测必然失败）。
+        include_metrics: 慢指标（电量/温度 dumpsys、版本 getprop、网络延迟 ping）
+            采集开关。False 时只做 echo 连接性快探——心跳对慢指标按 serial due
+            门控降频（STP_DEVICE_INFO_SAMPLE_INTERVAL_SECONDS），非 due 拍用它；
+            ping 单台最坏 15s×2，是 tick 拖慢在线状态上报的头号来源。
+            被跳过的键保持 None，由 HeartbeatThread 用最近一次采样缓存回填。
 
     Returns:
         设备信息字典
@@ -655,6 +665,13 @@ def collect_device_info(adb_path: str, serial: str, raw_adb_state: str = "device
         info["adb_connected"] = False
         return info
 
+    # 采集 SoC 平台 (#73) — 结果按 serial 缓存,只有首次探测真正走 adb
+    info["platform"] = detect_device_platform(adb_path, serial)
+
+    if not include_metrics:
+        # 非 due 拍：echo 连接性 + 平台缓存即全本拍职责，慢指标由调用方回填
+        return info
+
     # 采集电池信息
     try:
         result = subprocess.run(
@@ -681,9 +698,6 @@ def collect_device_info(adb_path: str, serial: str, raw_adb_state: str = "device
             info["build_display_id"] = result.stdout.strip()
     except Exception as e:
         logger.warning(f"build_display_id_failed: {serial}, error={e}")
-
-    # 采集 SoC 平台 (#73) — 结果按 serial 缓存,只有首次探测真正走 adb
-    info["platform"] = detect_device_platform(adb_path, serial)
 
     # 采集网络延迟 (主目标 223.5.5.5, 备用 8.8.8.8)
     latency = _ping_with_fallback(adb_path, serial, "223.5.5.5", fallback="8.8.8.8")
