@@ -101,6 +101,11 @@ class HeartbeatThread:
         # #2757：设备 /data 容量按 serial 缓存（最近一次采样值），每拍心跳都带
         self._disk_by_serial: Dict[str, Dict[str, Optional[int]]] = {}
         self._next_disk_sample_monotonic: float = 0.0
+        # 慢指标（电量/温度/版本/网络延迟）按 serial 低频采样 + 缓存（同 #2757
+        # 思路，门控更严——见 _slow_metrics_due）；每拍心跳仍带最近一次值。
+        self._slow_sample_interval: float = _hb.stp_device_info_sample_interval_seconds
+        self._slow_metrics_by_serial: Dict[str, Dict[str, Any]] = {}
+        self._slow_metrics_next_due: Dict[str, float] = {}
         self._pending_reconnected_serials: List[str] = []
         self._adb_repair_cooldown: float = _hb.stp_adb_repair_cooldown_seconds
         # 初始化为 -cooldown：fresh 进程的 time.monotonic() 可能小于冷却值
@@ -216,16 +221,94 @@ class HeartbeatThread:
         except Exception:
             logger.exception("heartbeat_tick_failed")
 
-    def _collect_device_infos(self, discovered: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    # 慢指标键：短期变化小、每拍全采是 tick 拖慢在线状态上报的主因
+    # （ping 单台最坏 15s×2）。与 payload/DB 键名一致。
+    _SLOW_METRIC_KEYS = ("battery_level", "temperature", "network_latency", "build_display_id")
+
+    def _slow_metrics_due(self, serial: str, raw_adb_state: str) -> bool:
+        """本拍是否对该 serial 采慢指标（读**上一拍**的连接态，须在写回之前调用）。
+
+        强制采样（不等窗口）的三种场景：
+        - 新设备接入：无缓存（首见）→ 立即采，避免页面最长空一个窗口；
+        - 断线后自动恢复 / 开关机专项里的每次重启回线：上一拍非连通 →
+          断电/离线期间电量温度真实变了，旧缓存会误导，回线首拍必重采；
+        - settings 不可用（#2279）/ 窗口<=0：不节流，行为回退改造前（每拍采）。
+        """
+        if self._slow_sample_interval <= 0:
+            return True
+        if serial not in self._slow_metrics_by_serial:
+            return True
+        if self._last_adb_connected_by_serial.get(serial) is not True:
+            return True
+        if raw_adb_state != "device":
+            # 不可用设备慢探测必然失败（collect 侧也短路），不必重设窗口
+            return False
+        return time.monotonic() >= self._slow_metrics_next_due.get(serial, 0.0)
+
+    def _absorb_slow_metrics(self, serial: str, info: Dict[str, Any], collected: bool) -> None:
+        """慢指标缓存与回填。
+
+        - ``collected=True``：新值合并进缓存（探测失败的 None 键**不覆盖**上一轮
+          好值，与 #2757 disk 的保守语义同形），重设窗口到期点，并把合并结果写回
+          info（保持「payload=缓存」单一口径）；
+        - ``collected=False``：把缓存回填进 info——未连通设备的 info 保持
+          None 缺省（控制面 ``_update_if_not_none`` 跳过、不误清库中旧值），
+          连通设备则每拍带上最近一次值（幂等写）。
+        """
+        if not collected:
+            if info.get("adb_connected") is not True:
+                return
+            cached = self._slow_metrics_by_serial.get(serial)
+            if not cached:
+                return
+            for key in self._SLOW_METRIC_KEYS:
+                if info.get(key) is None and cached.get(key) is not None:
+                    info[key] = cached[key]
+            return
+        cached = self._slow_metrics_by_serial.get(serial, {})
+        merged = {
+            key: (info.get(key) if info.get(key) is not None else cached.get(key))
+            for key in self._SLOW_METRIC_KEYS
+        }
+        if all(value is None for value in merged.values()):
+            # 全失败（echo 通过但 dumpsys/getprop/ping 都没落值，如重启后服务
+            # 未稳）：不写缓存、不设窗口——保持「首见强采」语义，下一拍重试
+            return
+        self._slow_metrics_by_serial[serial] = merged
+        self._slow_metrics_next_due[serial] = (
+            time.monotonic() + self._slow_sample_interval
+        )
+        for key, value in merged.items():
+            info[key] = value
+
+    def _collect_device_infos(
+        self, discovered: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
         """并发采集每台设备信息（#730），返回与 ``discovered`` 同序的结果列表。
 
         单设备 ADB 假死时，其探测超时不再逐台累加到心跳主循环；整轮采集耗时
         由「单个设备最坏探测时长」约束（配合 ``_DEVICE_PROBE_MAX_WORKERS``）。
         单设备采集异常（非 ADB 超时路径的意外异常）只影响该设备：记 error 并
         继续，不中断整轮心跳。
+
+        慢指标（电量/温度/版本/延迟）按 serial due 门控降频：非 due 设备
+        ``include_metrics=False`` 只做 echo 快探，值由 ``_absorb_slow_metrics``
+        从缓存回填——tick 时长不再被 ping 超时拖长，在线状态上报更跟手。
         """
         if not discovered:
             return []
+        due_by_serial = {
+            dev["serial"]: self._slow_metrics_due(
+                dev["serial"], dev.get("adb_state", "device"),
+            )
+            for dev in discovered
+        }
+        n_slow = sum(1 for v in due_by_serial.values() if v)
+        if n_slow:
+            logger.info(
+                "device_slow_metrics_sampled devices=%d/%d window=%ss",
+                n_slow, len(discovered), self._slow_sample_interval,
+            )
         with ThreadPoolExecutor(
             max_workers=min(len(discovered), _DEVICE_PROBE_MAX_WORKERS),
             thread_name_prefix="hb-probe",
@@ -236,17 +319,21 @@ class HeartbeatThread:
                     self._adb_path,
                     dev["serial"],
                     raw_adb_state=dev.get("adb_state", "device"),
+                    include_metrics=due_by_serial[dev["serial"]],
                 )
                 for dev in discovered
             ]
             infos: List[Dict[str, Any]] = []
             # 不用 zip(strict=)：Agent 运行环境兼容旧 python3，按索引取保序
             for idx, dev in enumerate(discovered):
+                serial = dev["serial"]
                 try:
-                    infos.append(futures[idx].result())
+                    info = futures[idx].result()
                 except Exception:
-                    logger.exception("device_collect_failed serial=%s", dev["serial"])
-                    infos.append({"adb_state": "error", "adb_connected": False})
+                    logger.exception("device_collect_failed serial=%s", serial)
+                    info = {"adb_state": "error", "adb_connected": False}
+                self._absorb_slow_metrics(serial, info, due_by_serial[serial])
+                infos.append(info)
             return infos
 
     def _maybe_sample_disk(
@@ -397,6 +484,13 @@ class HeartbeatThread:
         # 「读不到 = 不启用该可选项」处理。心跳是 Agent 的**生命线**，其可用性
         # 不得依赖某个**可选**修复旋钮的取值是否合法。
         heartbeat_settings = self._read_heartbeat_settings_safe()
+        # 慢指标采样窗口逐拍从 Settings 取（#2086 热重载同路径）。#2279 语义在此
+        # 取「不节流」方向退化：settings 读不到 → 每拍采集（改造前行为），
+        # 慢指标是页面必采项，宁可不降频也不能丢新鲜度。
+        self._slow_sample_interval = (
+            heartbeat_settings.stp_device_info_sample_interval_seconds
+            if heartbeat_settings is not None else 0
+        )
         try:
             discovered = device_discovery.discover_devices(self._adb_path)
             infos = self._collect_device_infos(discovered)

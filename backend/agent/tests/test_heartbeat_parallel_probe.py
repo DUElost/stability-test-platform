@@ -49,7 +49,7 @@ def test_tick_probes_devices_concurrently_not_serially(monkeypatch):
     max_inflight = 0
     lock = threading.Lock()
 
-    def fake_collect(adb_path, serial, raw_adb_state="device"):
+    def fake_collect(adb_path, serial, raw_adb_state="device", include_metrics=True):
         nonlocal inflight, max_inflight
         with lock:
             inflight += 1
@@ -88,7 +88,7 @@ def test_tick_device_probe_exception_is_isolated(monkeypatch):
         {"serial": "BOOM", "adb_state": "device", "model": None},
     ]
 
-    def fake_collect(adb_path, serial, raw_adb_state="device"):
+    def fake_collect(adb_path, serial, raw_adb_state="device", include_metrics=True):
         if serial == "BOOM":
             raise RuntimeError("unexpected probe failure")
         return {"adb_state": "device", "adb_connected": True}

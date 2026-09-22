@@ -122,6 +122,11 @@ def _iterable_has_total_order(source: str, loop: ast.For | ast.AsyncFor, func: a
         return True
     if isinstance(it, ast.Name):
         for sub in ast.walk(func):
+            # 定序必须发生在**取锁之前**（#2974 残余）：`.sort()` 落在循环之后时，
+            # 锁早已按未定序的顺序取过——判据此前只问「函数里有没有排序」，不看位置，
+            # 于是把重排写在取锁之后也能过（假阴性口，实测 `rows.sort()` 挪到循环后仍返 []）。
+            if getattr(sub, "lineno", 0) >= loop.lineno:
+                continue
             if isinstance(sub, ast.Assign):
                 names = [t for t in sub.targets if isinstance(t, ast.Name)]
             elif isinstance(sub, ast.AnnAssign) and isinstance(sub.target, ast.Name):
@@ -131,7 +136,7 @@ def _iterable_has_total_order(source: str, loop: ast.For | ast.AsyncFor, func: a
             if any(t.id == it.id for t in names) and _ordered_segment(source, sub):
                 return True
             # 就地排序（`rows.sort(key=…)`）与 `sorted()` 同义，同样算「内存里定序」：
-            # #2974 的两处修复都把重排写在消费点，判据要认得这个形态。
+            # #2974 的两处修复都把重排写在消费点（循环之前），判据要认得这个形态。
             if (
                 isinstance(sub, ast.Call)
                 and isinstance(sub.func, ast.Attribute)
@@ -196,6 +201,33 @@ async def f(db):
     violations = lock_loop_violations(bad)
     assert len(violations) == 1, violations
     assert "无全序来源" in violations[0]
+
+
+def test_detector_requires_ordering_to_precede_the_locks():
+    """#2974 残余：定序必须发生在**取锁之前**，否则「函数里出现过排序」就会被误当全序。
+
+    此前判据只问「这个函数里有没有 `sorted()`/`.sort()`/`order_by()`」，不看位置 ——
+    把 `rows.sort()` 写在取锁循环**之后**（或写在另一条只对部分行生效的分支里）同样返回
+    「有全序」，于是判据对「先取锁、后排」这一真实竞态隐形。绿侧则必须放行 #2974 的两处
+    修复形态（排序语句在循环之前）。"""
+    sort_after = """
+async def f(db):
+    rows = (await db.execute(select(Job))).scalars().all()
+    for row in rows:
+        await db.execute(select(Job).where(Job.id == row.id).with_for_update())
+    rows.sort(key=lambda r: r.id)
+"""
+    violations = lock_loop_violations(sort_after)
+    assert len(violations) == 1, f"取锁之后才排序被放行了（假阴性口）：{violations}"
+
+    sort_before = """
+async def f(db):
+    rows = (await db.execute(select(Job))).scalars().all()
+    rows.sort(key=lambda r: r.id)
+    for row in rows:
+        await db.execute(select(Job).where(Job.id == row.id).with_for_update())
+"""
+    assert lock_loop_violations(sort_before) == [], "取锁前定序（#2974 两处修复的形态）被误杀"
 
 
 def test_detector_accepts_the_three_ordered_shapes():

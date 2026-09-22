@@ -22,7 +22,11 @@ dist-prod.bak-*/
 dist-preview/
 dist-preview.bak-*/
 build/
-venv/
+# 无尾斜杠：`venv/` 只匹配**目录**，工作树里一个同名的 symlink（并行 worktree 常这么
+# 软链主树 venv）不被忽略，`git add -A` 就会把它提交进树（#3117 实测：main 曾被塞进
+# 一条指向构建机绝对路径的 `venv` symlink，并让生产工作树的 pull 撞位失败）。
+# 同区的 `.venv` 一直是无斜杠写法，此处对齐。
+venv
 env/
 .env*
 !.env.example
