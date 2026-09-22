@@ -10,6 +10,7 @@ const mockFetchHostList = vi.fn();
 const mockProjectsList = vi.fn();
 const mockAssignDevicesToProject = vi.fn();
 const mockCreateDevice = vi.fn();
+const mockBulkSwipeTrail = vi.fn();
 const mockUseAuthSession = vi.fn(() => ({ data: { role: 'admin' } }));
 
 vi.mock('@/utils/api', async (importOriginal) => {
@@ -32,6 +33,7 @@ vi.mock('@/utils/api', async (importOriginal) => {
         ...actual.api.devices,
         list: (...args: unknown[]) => mockDevicesList(...args),
         create: (...args: unknown[]) => mockCreateDevice(...args),
+        bulkSwipeTrail: (...args: unknown[]) => mockBulkSwipeTrail(...args),
       },
     },
   };
@@ -126,6 +128,13 @@ describe('DevicesPage', () => {
       },
     ]);
     mockAssignDevicesToProject.mockResolvedValue([]);
+    mockBulkSwipeTrail.mockResolvedValue({
+      enabled: true,
+      ok: 1,
+      failed: 0,
+      skipped: 0,
+      results: [],
+    });
   });
 
   it('resolves host name when device host_id is a string', async () => {
@@ -180,6 +189,24 @@ describe('DevicesPage', () => {
     expect(screen.queryByTestId('device-bulk-assign-project')).not.toBeInTheDocument();
     // 批量标签入口同样不显示（非 admin）
     expect(screen.queryByTestId('device-bulk-tags')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('device-bulk-swipe-trail-on')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('device-bulk-swipe-trail-off')).not.toBeInTheDocument();
+  });
+
+  it('admin can bulk-enable swipe trail on selected devices', async () => {
+    mockUseAuthSession.mockReturnValue({ data: { role: 'admin' } });
+    const DevicesPage = (await import('./DevicesPage')).default;
+    render(<DevicesPage />, { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(screen.getByText('TEST-SERIAL')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByLabelText('选择设备 TEST-SERIAL'));
+    fireEvent.click(await screen.findByTestId('device-bulk-swipe-trail-on'));
+
+    await waitFor(() => {
+      expect(mockBulkSwipeTrail).toHaveBeenCalledWith([1], true);
+    });
   });
 
   it('#823：添加设备后失效覆盖任意筛选态的设备列表', async () => {

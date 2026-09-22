@@ -109,3 +109,70 @@ def test_main_wires_control_handler_builder():
     SourceGuard.of_module(job_runtime).anchored(
         "control_deps.job_runner_state = job_runner_state"
     )
+
+
+def test_set_device_swipe_trail_rejects_bad_payload():
+    handle, _ = _handler()
+    assert handle({"command": "set_device_swipe_trail", "payload": {}}) == {
+        "ok": False,
+        "error": "serials must be a non-empty list",
+    }
+    assert handle(
+        {"command": "set_device_swipe_trail", "payload": {"serials": ["a"], "enabled": 1}}
+    ) == {"ok": False, "error": "enabled must be a bool"}
+
+
+def test_set_device_swipe_trail_runs_both_settings(monkeypatch):
+    handle, _ = _handler()
+    calls: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(list(argv))
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(
+        "backend.agent.control_handler.subprocess.run",
+        fake_run,
+    )
+    ack = handle(
+        {
+            "command": "set_device_swipe_trail",
+            "payload": {"serials": ["SER1", "SER2"], "enabled": True},
+        }
+    )
+    assert ack["ok"] is True
+    assert [r["ok"] for r in ack["results"]] == [True, True]
+    # 每台两条：show_touches + pointer_location
+    assert len(calls) == 4
+    assert calls[0] == [
+        "adb", "-s", "SER1", "shell", "settings", "put", "system", "show_touches", "1",
+    ]
+    assert calls[1][7] == "pointer_location"
+    assert calls[2][2] == "SER2"
+    assert all(c[-1] == "1" for c in calls)
+
+
+def test_set_device_swipe_trail_disable_and_per_serial_failure(monkeypatch):
+    handle, _ = _handler()
+
+    def fake_run(argv, **kwargs):
+        serial = argv[2]
+        if serial == "BAD":
+            return MagicMock(returncode=1, stdout="", stderr="device offline")
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(
+        "backend.agent.control_handler.subprocess.run",
+        fake_run,
+    )
+    ack = handle(
+        {
+            "command": "set_device_swipe_trail",
+            "payload": {"serials": ["OK", "BAD"], "enabled": False},
+        }
+    )
+    assert ack["ok"] is True
+    by_serial = {r["serial"]: r for r in ack["results"]}
+    assert by_serial["OK"]["ok"] is True
+    assert by_serial["BAD"]["ok"] is False
+    assert "offline" in by_serial["BAD"]["error"]

@@ -1,5 +1,5 @@
-import apiClient from './client';
-import type { Device, PaginatedResponse } from './types';
+import apiClient, { unwrapApiResponse } from './client';
+import type { ApiResponseEnvelope, BulkSwipeTrailResult, Device, PaginatedResponse } from './types';
 
 export const devices = {
   list: (skip = 0, limit = 50, status?: string, tags?: string, projectKey?: string, unassigned = false) =>
@@ -18,6 +18,13 @@ export const devices = {
     apiClient.post<Device>('/devices', data).then(r => r.data),
   updateTags: (id: number, tags: string[]) =>
     apiClient.put<Device>(`/devices/${id}/tags`, tags).then(r => r.data),
+  bulkSwipeTrail: (deviceIds: number[], enabled: boolean) =>
+    unwrapApiResponse(
+      apiClient.post<ApiResponseEnvelope<BulkSwipeTrailResult>>('/devices/bulk-swipe-trail', {
+        device_ids: deviceIds,
+        enabled,
+      }),
+    ),
 };
 
 /** 后端 GET /devices 的 limit 上限（backend/api/routes/devices.py le=1200）。 */
