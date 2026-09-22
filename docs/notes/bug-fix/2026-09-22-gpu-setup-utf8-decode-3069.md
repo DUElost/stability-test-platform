@@ -66,10 +66,11 @@ UI dump、getprop 都可能带），任何一个 `adb` 调用点都可能踩到�
 
 ## Revisit
 
-- **注册与激活是独立的一步**：本 PR 只发版本目录。要生效还需要
-  `POST /scripts/scan` 注册 + 引用该步骤的 Plan 重钉到 v1.2.3（模板族 pin 走 #2998 的机制）。
-  在激活之前，GPU 窗仍会按 v1.2.2 全灭——**止血开关**是 Plan step params 或
-  `STP_GPU_COMPAT_PROBE=false`（回到 v1.2.1 行为），标注为过渡。
+- **模板 pin 已同批追到 1.2.3**（#2865/#2998：合入新版本必须同批钉模板）。
+  生产生效仍需 `POST /scripts/scan` 注册激活 v1.2.3；scan 前新建 Plan 会
+  因未注册版本 422。在激活之前，已有 GPU 窗仍会按 v1.2.2 全灭——**止血开关**
+  是 Plan step params 或 `STP_GPU_COMPAT_PROBE=false`（回到 v1.2.1 行为），
+  标注为过渡。
 - **同族排查**：其它脚本族（powercycle_setup / sleep / monkey 等）的 `_lib.py` 里
   也有 `text=True` 的 adb 封装，只是目前没有「读设备文件」的新路径踩到它。
   下次改到哪一族，顺手按本单口径收口；**不要**为此发起跨族批量改版（改动面大、

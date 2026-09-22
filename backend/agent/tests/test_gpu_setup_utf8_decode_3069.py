@@ -9,15 +9,23 @@
 from __future__ import annotations
 
 import importlib.util
-import re
 import sys
 from pathlib import Path
 
 import pytest
 
+from tools.dev.source_anchor import SourceGuard
+
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 V123 = SCRIPTS / "gpu_setup" / "v1.2.3"
 V122 = SCRIPTS / "gpu_setup" / "v1.2.2"
+
+LIB_REL = "backend/agent/scripts/gpu_setup/v1.2.3/_lib.py"
+SETUP_REL = "backend/agent/scripts/gpu_setup/v1.2.3/gpu_setup.py"
+
+#: v1.2.2 的崩溃入口形态：``subprocess.run(..., text=True, timeout=...)``。
+#: 绑完整形参片段，避开模块 docstring / 注释里对旧写法的正当提及。
+STRICT_DECODE_SHAPE = "text=True, timeout="
 
 #: 生产实测的坏字节形态：位置 1 是 0xf9（UTF-8 里 0xf9 从不作首字节，也不合法）。
 BROKEN_DEVICE_OUTPUT = b"\x02\xf9 INSTRUMENTATION_STATUS: class=com.transsion\n"
@@ -56,33 +64,30 @@ def test_signature_classification_survives_broken_bytes():
     assert lib.classify_compat_failure(blob) == "uiautomation_already_registered"
 
 
-def _function_body(source: str, header: str) -> str:
-    """截取某个顶层函数体（到下一个顶层 ``def`` 为止）。"""
-    start = source.index(header)
-    rest = source[start:]
-    nxt = re.search(r"(?m)^def ", rest[1:])
-    return rest[: nxt.start() + 1] if nxt else rest
-
-
 def test_v123_no_longer_decodes_strictly():
-    """静态守卫：v1.2.3 的 adb 路径不得再出现 ``text=True``（崩溃入口）。
+    """静态守卫：v1.2.3 的 adb 路径不得再出现严格解码（崩溃入口）。
 
     以源码形态钉住——用例跑不了真 adb，但「用没用严格解码」是可判定的。
-    判据只看**函数体**（散文与模块 docstring 里正当地会提到这个旧写法），
-    且取代码用法 ``text=True,`` / ``text=True)`` —— 免得被说明文字绊倒。
+    判据绑 ``text=True, timeout=`` 完整形参片段（v1.2.2 原形），避开散文提及。
     """
-    for rel, header in (
-        ("_lib.py", "def adb("),
-        ("gpu_setup.py", "def _pre_reboot_device("),
-    ):
-        body = _function_body((V123 / rel).read_text(encoding="utf-8"), header)
-        for usage in ("text=True,", "text=True)"):
-            assert usage not in body, (
-                f"gpu_setup/v1.2.3/{rel} 的 {header} 里又出现了 {usage!r}"
-                "—— #3069：严格解码会把坏字节炸成 init 失败"
-            )
-    assert "decode_device_output(" in _function_body(
-        (V123 / "_lib.py").read_text(encoding="utf-8"), "def adb("
+    lib = SourceGuard.of_repo_path(LIB_REL).anchored("def adb(")
+    lib.assert_absent(
+        STRICT_DECODE_SHAPE,
+        why="#3069：严格解码会把坏字节炸成 init 失败",
+    )
+    lib.assert_present(
+        "decode_device_output(",
+        why="#3069：adb 必须走宽容解码",
+    )
+
+    setup = SourceGuard.of_repo_path(SETUP_REL).anchored("def _pre_reboot_device(")
+    setup.assert_absent(
+        STRICT_DECODE_SHAPE,
+        why="#3069：getprop 直连同样不得严格解码",
+    )
+    setup.assert_present(
+        "decode_device_output(",
+        why="#3069：boot_completed 走宽容解码",
     )
 
 
