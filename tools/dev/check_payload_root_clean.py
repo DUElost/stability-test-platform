@@ -62,7 +62,7 @@ def _repo_root(explicit: str | None) -> Path:
     except (OSError, subprocess.SubprocessError) as exc:
         print(f"check_payload_root_clean: FAIL —— 无法执行 git（{exc}）；载荷根状态未知即视为未通过",
               file=sys.stderr)
-        raise SystemExit(1)
+        raise SystemExit(1) from None
     if proc.returncode != 0:
         reason = _first_stderr_line(proc, "git rev-parse --show-toplevel")
         print(f"check_payload_root_clean: FAIL —— 无法定位 git 仓库根（{reason}）；"
@@ -95,7 +95,7 @@ def untracked_files(repo_root: Path, payload_root: str) -> list[str]:
     except (OSError, subprocess.SubprocessError) as exc:
         print(f"check_payload_root_clean: FAIL —— 无法执行 git（{exc}）；"
               "载荷根状态未知即视为未通过", file=sys.stderr)
-        raise SystemExit(1)
+        raise SystemExit(1) from None
     if proc.returncode != 0:
         reason = _first_stderr_line(proc, f"git status -- {payload_root}")
         print(f"check_payload_root_clean: FAIL —— 读取 {payload_root} 的 git 状态失败"

@@ -58,6 +58,7 @@ def script_presence_summary(
             setattr(counts, state, getattr(counts, state) + n)
         if state in presence.GAP_STATES:
             hosts_with_gap.add(str(r["host_id"]))
+    covered, uncovered = _coverage(db)
     fresh_min, fresh_max = presence.sweep_freshness_range(db)
     now = datetime.now(timezone.utc)
     if fresh_min is not None and fresh_min.tzinfo is None:
@@ -68,7 +69,8 @@ def script_presence_summary(
         counts=counts,
         hosts_total=len({str(r["host_id"]) for r in rows}),
         hosts_with_gap=len(hosts_with_gap),
-        full_versions=_full_versions(db),
+        full_versions=covered,
+        uncovered_active_versions=uncovered,
         checked_at_min=fresh_min,
         checked_at_max=fresh_max,
         stale=(fresh_min is None) or (now - fresh_min > STALE_AFTER),
@@ -121,7 +123,15 @@ async def refresh_script_presence(
     return ok(payload)
 
 
-def _full_versions(db: Session) -> int:
-    """全集版本数（summary 用的轻量口径：只取 steps ∩ active 的计数）。"""
+def _coverage(db: Session) -> tuple[int, int]:
+    """`(账本覆盖的版本数, 覆盖不到的 active 版本数)`——一次 facts 加载算两侧（#3111）。
+
+    两侧互补：`|active| = 覆盖 + 未覆盖`。后者只计数不逐条返回：生产实测未覆盖集有
+    47 个（`|active|=97`），列出来是噪声，而它要纠正的是「`missing=0` 是否等于全部在位」
+    这个读法——计数足以纠正，具体是哪些直接查 `GET /api/v1/scripts`。
+    """
     facts = presence.load_facts(db, days=presence.DEFAULT_HISTORY_DAYS)
-    return len(presence.build_full_target_set(facts["steps"], facts["scripts"]))
+    return (
+        len(presence.build_full_target_set(facts["steps"], facts["scripts"])),
+        len(presence.active_unreferenced_versions(facts["steps"], facts["scripts"])),
+    )
