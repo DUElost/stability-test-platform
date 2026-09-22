@@ -180,3 +180,83 @@ async def test_run_sweep_persists_present_and_na_rows(db_session, engine, monkey
         assert rows[0].state == sp.STATE_PRESENT
         assert rows[0].sweep_id == result["sweep_id"] and rows[0].sweep_id
         assert sp.sweep_freshness(session) is not None
+
+
+# ── #3111：账本**覆盖边界**（active 但无 Plan 引用的版本）────────────────────
+
+
+def test_active_unreferenced_versions_is_complement_of_full_target_set():
+    """两侧互补：`|active| = |full| + |uncovered|`，交集为空，停用版本两侧都不进。
+
+    只测一侧会让「两边用了不同的 referenced 口径」逃逸，所以要双向对拍。
+    """
+    script_rows = _script_rows(
+        ("a", "1.0.0", {}), ("b", "2.0.0", {}), ("c", "3.0.0", {}),
+    )
+    script_rows.append({**_script_rows(("d", "4.0.0", {}))[0], "is_active": False})
+    step_rows = [{"plan_id": 1, "script_name": "a", "script_version": "1.0.0"}]
+
+    full = sp.build_full_target_set(step_rows, script_rows)
+    uncovered = sp.active_unreferenced_versions(step_rows, script_rows)
+
+    assert full == [("a", "1.0.0")]
+    assert uncovered == [("b", "2.0.0"), ("c", "3.0.0")]        # 停用的 d 不计入
+    active = {(str(r["name"]), str(r["version"])) for r in script_rows if r["is_active"]}
+    assert set(full) | set(uncovered) == active
+    assert not (set(full) & set(uncovered))
+
+
+def test_active_unreferenced_versions_catches_newly_merged_unreferenced_version():
+    """#3085 形态：新版本已 active、尚无 Plan 引用 → 必须落在覆盖差集里。
+
+    反向自证：把它挂进一个启用步骤后必须**从差集消失**（否则这个面只是摆设），
+    并同时进全集——两侧一起动才说明它们真的由同一对集合派生。
+    """
+    script_rows = _script_rows(("fill_storage", "1.1.0", {}), ("fill_storage", "1.1.1", {}))
+
+    assert sp.active_unreferenced_versions([], script_rows) == [
+        ("fill_storage", "1.1.0"), ("fill_storage", "1.1.1"),
+    ]
+
+    steps = [{"plan_id": 7, "script_name": "fill_storage", "script_version": "1.1.1"}]
+    assert sp.active_unreferenced_versions(steps, script_rows) == [("fill_storage", "1.1.0")]
+    assert sp.build_full_target_set(steps, script_rows) == [("fill_storage", "1.1.1")]
+
+
+async def test_run_sweep_reports_uncovered_active_without_writing_rows(
+    db_session, engine, monkeypatch, caplog
+):
+    """未覆盖的 active 版本**不落行**，由计数与日志承担（#3111）。
+
+    这条同时钉住两件容易做反的事：① 未覆盖 ≠ 缺口，不得往五态里塞 missing；
+    ② 它必须出现在 sweep 结果与日志里，否则「账本不核验它」这件事又回到不可见。
+    """
+    db_session.add(Host(id="h-unc", hostname="h-unc", status="ONLINE"))
+    db_session.add(Script(
+        name="fill_storage", version="1.1.1", script_type="test",
+        nfs_path="/opt/agent/scripts/fill_storage/v1.1.1/fill_storage.py",
+        content_sha256="0" * 64, is_active=True,
+    ))
+    db_session.commit()
+
+    calls: list[list[str]] = []
+
+    async def fake_gather(host_ids, expected):
+        calls.append(list(host_ids))
+        return {hid: (True, [], None) for hid in host_ids}
+
+    monkeypatch.setattr(sp, "gather_verify", fake_gather)
+    factory = sessionmaker(bind=engine)
+    with caplog.at_level("INFO", logger="backend.services.script_presence"):
+        result = await sp.run_sweep(days=30, db_factory=factory)
+
+    assert result["full_versions"] == 0
+    assert result["uncovered_active_versions"] == 1
+    assert calls == [], "无 Plan 引用 ⇒ 无可达集 ⇒ 不发 RPC"
+    assert result["counts"][sp.STATE_MISSING] == 0, "未覆盖不得折成 missing（那是假缺口）"
+    with factory() as session:
+        rows = session.execute(select(HostScriptPresence)).scalars().all()
+        assert rows == [], "未覆盖版本一样不落行——账本对它确实无话可说"
+    assert any("script_presence_uncovered_active" in r.message for r in caplog.records), (
+        "覆盖差集必须进日志，否则这个面只在 API 里、日 sweep 时无人看见"
+    )

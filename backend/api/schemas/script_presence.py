@@ -50,6 +50,16 @@ class ScriptPresenceSummaryOut(BaseModel):
     hosts_total: int = 0
     hosts_with_gap: int = 0
     full_versions: int = 0
+    uncovered_active_versions: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "已 active 但**无任何 Plan 引用**的版本数（#3111）：这些版本进不了任何主机的"
+            "可达集，账本一行都不写。读汇总时 `counts.missing/mismatch = 0` **只**覆盖"
+            " `full_versions`，不含它们——新合并、尚无 Plan 引用的脚本版本正落在这个盲区，"
+            "其到位情况看 `agent_code_sync_status` 与一次 fleet 热更新"
+        ),
+    )
     checked_at_min: Optional[datetime] = None
     checked_at_max: Optional[datetime] = None
     stale: bool = Field(
