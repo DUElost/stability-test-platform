@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "tools": {
+    "Start-Log-Scan": {
+      "versions": [
+        {
+          "artifact": "packages/Start-Log-Scan/2026.09.22.tar.gz",
+          "package_sha256": "87a793a70b42e1b7ea45f263db92b771dda44ad68aa6070a48da68b898be51f6",
+          "python": "venv/bin/python",
+          "retired": false,
+          "script": "start_log_scan.py",
+          "version": "2026.09.22"
+        }
+      ]
+    }
+  }
+}

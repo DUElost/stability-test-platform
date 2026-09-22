@@ -58,8 +58,12 @@
 | `STP_AEE_MAX_CONCURRENT_PULLS` | Agent only。主机级 AEE/`adb pull`+mobilelog/bugreport 并发槽（**默认 2**，#740）。机械盘宿主机保持小值；SSD 可酌情上调。hot-update **不下发**（按机 I/O 能力） |
 | `STP_EVENT_UPLOADER_PRUNE_LOCAL` | Agent only。上送成功后删本机事件目录并标 `PRUNED`（**默认 0**）。**禁止** fleet 同步（#217）：hot-update 仅下发 `_FLEET_ENV_KEYS` allowlist（`hot_update_env_overrides()`），本键不在列表中，控制面误设也不会进 payload。风险：CIFS 事后不可读时本地已无副本。灰度：单机改 Agent `.env` + `reload_config` |
 | `STP_BACKEND_DEDUP_SCAN_PYTHON` / `_SCRIPT` | **仅控制面**：后端 merge/scan 工具路径（#518 起不再回落旧无前缀键） |
-| `STP_DEDUP_SCAN_PYTHON` / `_SCRIPT` | **仅 Agent**：Agent 侧 scan 工具路径（hot-update 经 `STP_AGENT_*` 源键写入） |
+| `STP_DEDUP_SCAN_PYTHON` / `_SCRIPT` | **仅 Agent**：Agent 侧 scan 工具路径（hot-update 经 `STP_AGENT_*` 源键写入）；包引用生效时会被 `tools_cache` 路径覆盖，包失效时仍是回退面 |
 | `STP_AGENT_DEDUP_SCAN_PYTHON` / `_SCRIPT` | **仅控制面**：Agent 侧 scan 工具路径的源键，hot-update 写成 Agent 的无前缀键 |
+| `STP_DEDUP_SCAN_PACKAGE_REF` | **仅 Agent**：包引用 `"<name>/<version>"`（ADR-0033 Phase B，#3075）。空＝整体 no-op（逃生阀默认关）；设置且拉取核验成功 → scan 工具 python/script 切到 `tools_cache/{name}/{version}/`，任何失败保持 env 路径并回退（一个版本窗口）。不进 `AGENT_PATH_ENV_KEYS`（是引用非路径） |
+| `STP_AGENT_DEDUP_SCAN_PACKAGE_REF` | **仅控制面**：上述包引用的源键，hot-update 写成无前缀键（空值不推） |
+| `STP_PACKAGES_ROOT` | **可选（Agent）**：站点包源覆盖；缺省派生自 `{STP_AEE_NFS_ROOT}/packages`（#3075 C4：每站中心存储，与过渡 `tools/` 物理分开） |
+| `STP_TOOLS_CACHE_ROOT` | **可选（Agent）**：本机解包缓存根覆盖；缺省派生自 `{AGENT_INSTALL_DIR}/tools_cache` |
 | `STP_JIRA_BASE_URL` / `STP_JIRA_TOKEN` | **可选**：JIRA REST 基址与 Bearer token（#710）。配置后 dedup 提单前对 `jira_project_key` 做一次存在性探测（`GET /rest/api/2/project/{key}`），404 记 WARNING 不阻断；未配置则跳过探测（保持 best-effort） |
 | `STP_AGENT_UNISOC_LOG_SCAN_PYTHON` / `_SCRIPT` | **仅控制面**：展锐采集工具（`Monkey-Log-Scan-GT-SPRD`）路径的源键，hot-update 写成 `STP_UNISOC_LOG_SCAN_*`（ADR-0032） |
 | `STP_AGENT_UNISOC_SCAN_RESULT_PYTHON` / `_SCRIPT` | **仅控制面**：展锐汇总去重工具（`Scan-Result-GT`）路径的源键，hot-update 写成 `STP_UNISOC_SCAN_RESULT_*`（ADR-0032） |
@@ -203,7 +207,7 @@
 
 <!-- env-inventory:begin（generated：python tools/dev/env_inventory.py --write） -->
 
-共 **259** 个读取名（`backend/**`，不含 `backend/agent/scripts/**`；含 ADR-0042 Settings 字段）：**231** 个已在 `.env*.example` 登记，**28** 个声明为内部（理由见下节）。
+共 **260** 个读取名（`backend/**`，不含 `backend/agent/scripts/**`；含 ADR-0042 Settings 字段）：**232** 个已在 `.env*.example` 登记，**28** 个声明为内部（理由见下节）。
 示例文件是**运维模板**（承载需要运维/机型调整的子集）；本表是**代码侧完整清单**。
 门禁：每个读取名必须「登记进示例」或「内部声明」二选一，二者之外即红。
 
@@ -234,9 +238,9 @@
 | `AUTH_COOKIE_SECURE` | `0` | ✅ | 运行时 | `backend/core/settings/security.py:47` |
 | `AUTH_REFRESH_COOKIE_NAME` | `stp_refresh_token` | ✅ | 运行时 | `backend/core/settings/security.py:45` |
 | `AUTO_ARCHIVE_POLL_INTERVAL_SECONDS` | `120` | ✅ | 运行时 | `backend/core/settings/scheduler.py:72` |
-| `AUTO_REGISTER_HOST` | `false` | ✅ | 运行时 | `backend/agent/settings.py:288` |
-| `AUTO_REGISTER_MAX_RETRIES` | `0` | ✅ | 运行时 | `backend/agent/settings.py:289` |
-| `AUTO_REGISTER_RETRY_DELAY` | `10` | ✅ | 运行时 | `backend/agent/settings.py:290` |
+| `AUTO_REGISTER_HOST` | `false` | ✅ | 运行时 | `backend/agent/settings.py:296` |
+| `AUTO_REGISTER_MAX_RETRIES` | `0` | ✅ | 运行时 | `backend/agent/settings.py:297` |
+| `AUTO_REGISTER_RETRY_DELAY` | `10` | ✅ | 运行时 | `backend/agent/settings.py:298` |
 | `BACKGROUND_POOL_MAX_QUEUE` | `200` | ✅ | 运行时 | `backend/core/thread_pool.py:22` |
 | `BACKGROUND_POOL_SIZE` | `8` | ✅ | 运行时 | `backend/core/thread_pool.py:20` |
 | `CHAIN_RECONCILER_INTERVAL_SECONDS` | `60` | ✅ | 运行时 | `backend/core/settings/scheduler.py:59` |
@@ -370,9 +374,9 @@
 | `STP_DASHBOARD_SUMMARY_PUSH_INTERVAL_SECONDS` | `-` | ✅ | 运行时 | `backend/services/dashboard_summary_publisher.py:65` |
 | `STP_DEDUP_LOG_ENCODING` | `utf-8` | — | 运行时 | `backend/main.py:204` |
 | `STP_DEDUP_PLACE` | `SH` | — | 运行时 | `backend/services/dedup_scan.py:64` |
-| `STP_DEDUP_SCAN_PYTHON` | `` | ✅ | 运行时 | `backend/agent/scan_runner.py:379` |
-| `STP_DEDUP_SCAN_SCRIPT` | `` | ✅ | 运行时 | `backend/agent/scan_runner.py:380` |
-| `STP_DEDUP_SCAN_TAG` | `` | ✅ | 运行时 | `backend/agent/scan_runner.py:385` |
+| `STP_DEDUP_SCAN_PYTHON` | `` | ✅ | 运行时 | `backend/agent/scan_runner.py:384` |
+| `STP_DEDUP_SCAN_SCRIPT` | `` | ✅ | 运行时 | `backend/agent/scan_runner.py:385` |
+| `STP_DEDUP_SCAN_TAG` | `` | ✅ | 运行时 | `backend/agent/scan_runner.py:399` |
 | `STP_DEDUP_WORK_DIR` | `logs/dedup_uploads` | ✅ | 运行时 | `backend/api/routes/dedup.py:75` |
 | `STP_DEVICE_DISK_SAMPLE_INTERVAL_SECONDS` | `300` | ✅ | 运行时 | `backend/agent/settings.py:228` |
 | `STP_DEVICE_INFO_SAMPLE_INTERVAL_SECONDS` | `1800` | ✅ | 运行时 | `backend/agent/settings.py:236` |

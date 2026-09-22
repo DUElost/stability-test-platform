@@ -1,7 +1,7 @@
 # ADR-0033：外部工具统一接入契约规范与包管理解耦模型（Tool-Kit Ecosystem Integration）
 
-- 状态：**Accepted（v1.11）**
-- 落地状态：**部分落地**（Phase 2 B5 `DedupMergeEngine`；Phase A：D0 新族门禁 + Tool Contract 脚手架 + Jira 薄 ACL（#3005）；Phase A3：`PlanRunArtifact` 下载 + DedupReportCard + `jira/runs?plan_run_id=`（#3015）+ DLE zip / `extract_bundle` 登记下载 / PlanRun 内嵌 Jira 历史（#3013 follow-ups）；Scan-Result-GT 仍仅 Agent B2；**包存储已触发（§5.4 条件 4·多站点）、可排期、尚未实现**——见 §5.4 评估锚与 [#3075](https://github.com/DUElost/stability-test-platform/issues/3075)；Phase 3 未做；D0/D3 权威已生效——见 §5；§5.6 **D0 可拦对象口径**已定——见 v1.10）
+- 状态：**Accepted（v1.12）**
+- 落地状态：**部分落地**（Phase 2 B5 `DedupMergeEngine`；Phase A：D0 新族门禁 + Tool Contract 脚手架 + Jira 薄 ACL（#3005）；Phase A3：`PlanRunArtifact` 下载 + DedupReportCard + `jira/runs?plan_run_id=`（#3015）+ DLE zip / `extract_bundle` 登记下载 / PlanRun 内嵌 Jira 历史（#3013 follow-ups）；Scan-Result-GT 仍仅 Agent B2；**包存储（Phase B）第一切片已落机械面（v1.12）**：Git 唯一事实源 `tool_manifest.json` + 确定性打包器 `package_tool_asset.py` + lint/append-only 门禁 `check_tool_manifest.py` + Agent `tools_cache` 拉取核验与 env 回退（`backend/agent/tool_cache.py` × `scan_runner`），全链逃生阀默认关（`STP_DEDUP_SCAN_PACKAGE_REF` 未设＝no-op），发布与 fleet 切换属运维推进项；全族迁移、控制面侧切包与 Phase 3 仍未做——见 §5.4 评估锚与 [#3075](https://github.com/DUElost/stability-test-platform/issues/3075)；D0/D3 权威已生效——见 §5；§5.6 **D0 可拦对象口径**已定——见 v1.10）
 - 优先级：P1
 - 目标里程碑：M7
 - 日期：2026-09-03
@@ -27,6 +27,7 @@
 | v1.9 | 2026-09-21 | **Phase A3 follow-ups**（非决策变更）：DLE `log-events/{id}/download`（目录 zip）；extract 登记 `extract_bundle` + 目录 zip 下载；PlanRun 详情内嵌 `JiraRunHistory`（#3013） |
 | v1.10 | 2026-09-21 | **D0 可拦对象口径**（#3014 案 3A，非决策变更）：§5.6 定「计数口径 = 带外部资产的族」+ 首次基线（16 / 19，`clear_recents`、`unisoc_*` 判非 D0 对象）；§5.1 修正「新族门禁零触发」的成因（分母选错，非本期巧合）；**案 3A-1 采选项 A**——§5.6 增「门禁射程 = 归类动作」三态（`platform-authored` 放行 / `external-tool` 仍禁 / 未声明红，判据实现在 #3055）；脚本膨胀账继续归 ADR-0039 / #735。不动 D0–D4 与 §5.4 三条触发条件本身。相对 Phase A3 follow-ups（v1.9）顺延为 v1.10 |
 | v1.11 | 2026-09-22 | **§5.4 增第四条触发条件·多站点部署**（方向级修订）：用户裁定「多站点部署 = §5.4 触发」——多站点是平台镜像与外部工具资产物理解耦的需求来源，防止工具/脚本合入持续腐化平台主干；评估结论锚改为**已触发**（条件 4）；撤销「触发前不得排期」；实现跟踪 [#3075](https://github.com/DUElost/stability-test-platform/issues/3075)；评估正本 [`2026-09-22-adr0033-package-store-multisite-trigger.md`](../notes/architecture/2026-09-22-adr0033-package-store-multisite-trigger.md)。**本版不实现** tar.gz/`tools_cache` 代码；条件 1–3 现态对账仍可不成立，但任一条件（含新增第 4 条）成立即可排期 |
+| v1.12 | 2026-09-22 | **Phase B 第一切片落地**（非决策变更，#3075）：登记 `tool_manifest.json`（Git 唯一事实源；载体由「`tool_manifest.yaml`」改为 **JSON**——PyYAML 不在 `backend/requirements.txt`，生产镜像/fleet 解释器不保证可用，stdlib 为零依赖硬约束）；确定性打包器 `tools/dev/package_tool_asset.py`（整包 `package_sha256`，与 `script.content_sha256` 的 entry-file sha 语义分离＝裁决 C1）；门禁 `tools/dev/check_tool_manifest.py`（schema lint + append-only：删除/原地改写红、退役仅 `retired` 单向翻转、artifact 钉 `packages/{name}/{version}.tar.gz`＝C2/C4；条目字段恰好分发六元组，执行契约禁混装＝C5）；Agent 侧 `backend/agent/tool_cache.py` 拉取＋整包核验＋`.stp-verified` 幂等标记，`scan_runner` 优先级「显式传参 > 包面 > env 路径」、失败一律回退（C3），`STP_AGENT_DEDUP_SCAN_PACKAGE_REF` 走既有 env 推送链（C6 只切 Agent 侧）；`Start-Log-Scan@2026.09.22` 样板已登记（6.1 MB / 735 文件，复跑同 sha）。全链**逃生阀默认关**：发布与 fleet 推送属运维推进项，本版不触发生产切换 |
 
 ---
 
@@ -201,11 +202,11 @@ ADR-0033 自 2026-09-03 Accepted 起至 2026-09-10 **无任何落地提交**（�
 | 展锐三工具族（`Start-Log-Scan` / `Monkey-Log-Scan-GT-SPRD` / `Scan-Result-GT`） | 中心存储 `tools/{name}/` 下的**未打包源码目录** + `STP_UNISOC_*` / `STP_AGENT_UNISOC_*` 路径键 | ① 仅限这三个已存在族，**不得扩散**到新族或新工具；② 路径键必须登记在 `docs/development/environment-variables.md`（本次已补）；③ **不得再新增工具私有 env 键**——新增即违反 D0 分级准入与设计文档 §6「环境去黑盒化」 |
 
 - **设计文档 §6「环境去黑盒化」就此收窄**：Tier 1 平台工具（`Start-Log-Scan`）与 Tier 2 主机工具（展锐采集 / 汇总去重）的路径键属上述既有例外；Tier 3 设备端工具（`scripts/` 内已发布脚本族）继续沿用既有版本目录约定，不引入工具私有路径变量。
-- **评估结论锚（v1.11）**：2026-09-22 对账 → **已触发**（条件 4·多站点；条件 1–3 现态仍可不成立）。书面结论见 [`2026-09-22-adr0033-package-store-multisite-trigger.md`](../notes/architecture/2026-09-22-adr0033-package-store-multisite-trigger.md)。历史「未触发」快照保留于 [`2026-09-20-adr0033-package-store-trigger-assessment.md`](../notes/architecture/2026-09-20-adr0033-package-store-trigger-assessment.md)。**触发后可排期包存储实现**（跟踪 [#3075](https://github.com/DUElost/stability-test-platform/issues/3075)）；本 ADR 修订本身**不实现**代码。
+- **评估结论锚（v1.11）**：2026-09-22 对账 → **已触发**（条件 4·多站点；条件 1–3 现态仍可不成立）。书面结论见 [`2026-09-22-adr0033-package-store-multisite-trigger.md`](../notes/architecture/2026-09-22-adr0033-package-store-multisite-trigger.md)。历史「未触发」快照保留于 [`2026-09-20-adr0033-package-store-trigger-assessment.md`](../notes/architecture/2026-09-20-adr0033-package-store-trigger-assessment.md)。**触发后可排期包存储实现**（跟踪 [#3075](https://github.com/DUElost/stability-test-platform/issues/3075)）；本 ADR 修订本身**不实现**代码。**v1.12 更新**：#3075 第一切片已落机械面（Git `tool_manifest.json` 唯一事实源 + 确定性打包器 + lint/append-only 门禁 + Agent `tools_cache` 拉取核验与 env 回退；全链逃生阀默认关，发布与 fleet 切换为运维推进项）。
 
 ### 5.5 裁定四：未落地状态显式化（决策效力与实现进度分离）
 
-- **落地状态：部分落地**（Phase 2 控制面 B5 样板·选项 A 已落地薄 `DedupMergeEngine`；Phase A：D0 新族门禁 + Tool Contract 脚手架 + Jira 薄 ACL 已落地；**包存储已触发（条件 4）可排期、尚未实现**——跟踪 #3075；Phase 3 / 设备端样板仍未排期；2026-09-18 阻塞由 v1.5 选定 A 解除，见 §4）；D0/D3 权威已生效，D2 按族准入；
+- **落地状态：部分落地**（Phase 2 控制面 B5 样板·选项 A 已落地薄 `DedupMergeEngine`；Phase A：D0 新族门禁 + Tool Contract 脚手架 + Jira 薄 ACL 已落地；**包存储（Phase B）第一切片已落机械面（v1.12）**——`tool_manifest.json` + 打包器 + 门禁 + Agent `tools_cache` 拉取核验/env 回退，逃生阀默认关、fleet 未切换；全族搬家与控制面侧切包仍跟踪 #3075；Phase 3 / 设备端样板仍未排期；2026-09-18 阻塞由 v1.5 选定 A 解除，见 §4）；D0/D3 权威已生效，D2 按族准入；
 - §4 的时间点作废为参考序，排期以 issue 为准；
 - **不因超期自动降级本 ADR 的决策效力**，反之也**不得因"纸面 Accepted"当作已落地基线**——索引面（`docs/adr/README.md`、`docs/DOC-MAP.md`、M7 看板）与本文头部"落地状态"行须同步体现这一区分。
 
@@ -213,7 +214,7 @@ ADR-0033 自 2026-09-03 Accepted 起至 2026-09-10 **无任何落地提交**（�
 
 **本次同步面**：`docs/adr/README.md` 主表 + M7 看板、`docs/DOC-MAP.md` 行、`docs/development/script-versioning.md` 指针、`docs/reviews/TOOLKIT_INTEGRATION_FEASIBILITY_2026-08-26.md` §6 承接补注（4-P1 已由 ADR-0032 承接）。
 
-**包存储触发对账（v1.11）**：最新书面评估见 [`2026-09-22-adr0033-package-store-multisite-trigger.md`](../notes/architecture/2026-09-22-adr0033-package-store-multisite-trigger.md)（结论：**已触发**——条件 4·多站点）。2026-09-20「未触发」快照见 [`2026-09-20-adr0033-package-store-trigger-assessment.md`](../notes/architecture/2026-09-20-adr0033-package-store-trigger-assessment.md)。实现排期以 [#3075](https://github.com/DUElost/stability-test-platform/issues/3075) 为准。
+**包存储触发对账（v1.11）**：最新书面评估见 [`2026-09-22-adr0033-package-store-multisite-trigger.md`](../notes/architecture/2026-09-22-adr0033-package-store-multisite-trigger.md)（结论：**已触发**——条件 4·多站点）。2026-09-20「未触发」快照见 [`2026-09-20-adr0033-package-store-trigger-assessment.md`](../notes/architecture/2026-09-20-adr0033-package-store-trigger-assessment.md)。实现进度以 [#3075](https://github.com/DUElost/stability-test-platform/issues/3075) 为准（v1.12：第一切片机械面已落地；`Start-Log-Scan@2026.09.22` 为登记样板）。
 
 **D0 可拦对象口径（v1.10，#3014 案 3A）**：判「D0 分级准入是否首次有真实对象 / §5.4 条件 1 是否成立」，**计数口径 = 带外部资产的族**（依赖厂商二进制、第三方源码套件，或需独立分发的大体积 APK），**不是** `backend/agent/scripts/` 的族数或版本目录数。
 
