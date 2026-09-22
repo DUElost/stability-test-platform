@@ -22,6 +22,21 @@ class PlanRunStatus(str, Enum):
     PRECHECK        = "PRECHECK"
 
 
+#: 「通过」的 PlanRun 终态：**部分成功与完全成功同判**（跑到的设备都过了，只是有的
+#: 没跑到）。这是本仓多处已经在用的语义——链触发
+#: （`plan_chain_trigger.TRIGGERABLE_TERMINAL_STATUSES`）与种子验收
+#: （`scripts/seed_and_smoke.PASSING_STATUSES`）都是这一组——故立为单一来源。
+#:
+#: 为什么需要它（#3101）：ADR-0048 v1.1 恢复 PARTIAL_SUCCESS 三态后，run 级「成功率」
+#: 消费面只认 SUCCESS 而分母含 PARTIAL_SUCCESS，于是「设备有失败的 run」同时被算进
+#: 分母、被排除在分子外 ⇒ 项目/脚本页的成功率无声下降，且与上面两处判据互相矛盾。
+#: 这些消费面一律引用本常量，勿再写字面量 `'SUCCESS'`。
+PASSING_PLAN_RUN_STATUSES: frozenset[str] = frozenset({
+    PlanRunStatus.SUCCESS.value,
+    PlanRunStatus.PARTIAL_SUCCESS.value,
+})
+
+
 class HostStatus(str, Enum):
     ONLINE   = "ONLINE"
     OFFLINE  = "OFFLINE"
