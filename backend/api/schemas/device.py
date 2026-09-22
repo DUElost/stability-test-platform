@@ -20,6 +20,28 @@ class BulkProjectAssignIn(BaseModel):
     device_ids: List[int]
 
 
+class BulkSwipeTrailIn(BaseModel):
+    """设备页批量开关滑动留痕（show_touches + pointer_location）。"""
+
+    device_ids: List[int]
+    enabled: bool
+
+
+class BulkSwipeTrailDeviceResult(BaseModel):
+    device_id: int
+    serial: str
+    status: str  # ok | failed | skipped
+    error: Optional[str] = None
+
+
+class BulkSwipeTrailOut(BaseModel):
+    enabled: bool
+    ok: int = 0
+    failed: int = 0
+    skipped: int = 0
+    results: List[BulkSwipeTrailDeviceResult] = Field(default_factory=list)
+
+
 class DeviceOut(ORMBaseModel):
     id: int
     serial: str

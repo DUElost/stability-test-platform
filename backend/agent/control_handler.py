@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+import subprocess
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,6 +25,10 @@ from .unisoc_scan_runner import UnisocScanRunner
 from .upload_manager import UploadManager
 
 logger = logging.getLogger(__name__)
+
+# 设备页批量「滑动留痕」：硬编码两条 settings，不接受任意 shell。
+_SWIPE_TRAIL_SETTINGS = ("show_touches", "pointer_location")
+_SWIPE_TRAIL_ADB_TIMEOUT_S = 10
 
 
 @dataclass
@@ -81,6 +86,62 @@ def reload_runtime_env(env_file: Path | None = None) -> bool:
 
 # Back-compat alias.
 _reload_runtime_env = reload_runtime_env
+
+
+def _set_device_swipe_trail(
+    *,
+    adb_path: str,
+    serials: Any,
+    enabled: Any,
+) -> Dict[str, Any]:
+    """Toggle show_touches + pointer_location on listed serials (whitelist)."""
+    if not isinstance(serials, list) or not serials:
+        return {"ok": False, "error": "serials must be a non-empty list"}
+    if not isinstance(enabled, bool):
+        return {"ok": False, "error": "enabled must be a bool"}
+
+    value = "1" if enabled else "0"
+    results: List[Dict[str, Any]] = []
+    for raw in serials:
+        if not isinstance(raw, str) or not raw.strip():
+            results.append({"serial": raw, "ok": False, "error": "invalid serial"})
+            continue
+        serial = raw.strip()
+        try:
+            for key in _SWIPE_TRAIL_SETTINGS:
+                completed = subprocess.run(
+                    [
+                        adb_path,
+                        "-s",
+                        serial,
+                        "shell",
+                        "settings",
+                        "put",
+                        "system",
+                        key,
+                        value,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=_SWIPE_TRAIL_ADB_TIMEOUT_S,
+                    check=False,
+                )
+                if completed.returncode != 0:
+                    err = (completed.stderr or completed.stdout or "").strip()
+                    raise RuntimeError(err or f"adb exit {completed.returncode}")
+            results.append({"serial": serial, "ok": True})
+        except subprocess.TimeoutExpired:
+            results.append({"serial": serial, "ok": False, "error": "timeout"})
+        except Exception as exc:  # noqa: BLE001 — per-serial failure must not abort batch
+            results.append({"serial": serial, "ok": False, "error": str(exc)[:200]})
+
+    logger.info(
+        "control_set_device_swipe_trail enabled=%s total=%d ok=%d",
+        enabled,
+        len(results),
+        sum(1 for r in results if r.get("ok")),
+    )
+    return {"ok": True, "results": results}
 
 
 def build_control_handler(
@@ -245,6 +306,12 @@ def build_control_handler(
                 replayed,
             )
             return {"ok": replayed, "event_id": event_id}
+        elif command == "set_device_swipe_trail":
+            return _set_device_swipe_trail(
+                adb_path=adb_path,
+                serials=payload.get("serials"),
+                enabled=payload.get("enabled"),
+            )
         else:
             logger.warning("unknown_control_command: %s", command)
             return {"ok": False, "error": f"unknown command: {command}"}
