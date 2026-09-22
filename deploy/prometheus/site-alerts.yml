@@ -3,9 +3,11 @@
 #
 # #2643 方向 1（owner 裁决 2026-09-18）：**站点只装「站点可见面」规则**。
 # 平台其余规则引用的都是控制面进程指标（https://…/metrics 上的 stability_*），
-# 而站点 Prometheus 只有一个 node-exporter job——那 19 条在站点上**结构性无样本**：
-# 既不触发也不报错，只让 installer 报出「监控就绪」的假象，同时把「装了 21 条」
-# 写进运维印象。它们仍留在 `alerts-stability-platform.yml`（控制面挂载路径见
+# 而站点 Prometheus 只有一个 node-exporter job——那些规则在站点上**结构性无样本**：
+# 既不触发也不报错，只让 installer 报出「监控就绪」的假象，同时把「装了一整套规则」
+# 写进运维印象（两侧条数不在此处固化：抄进来的计数会随规则增删说谎，#2663/#3098；
+# 需要规模时用两份文件的 `alert` 名做集合差当场算）。它们仍留在
+# `alerts-stability-platform.yml`（控制面挂载路径见
 # docs/operations/README.md 的挂载项）。注意那一路当前是**人工副本**：改了平台文件后
 # 需人工重放 + reload 才会生效（#2880 实测副本曾落后 2 条规则）。
 #
