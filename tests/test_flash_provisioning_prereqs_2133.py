@@ -26,6 +26,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[1]
 INSTALL_SCRIPT = REPO_ROOT / "backend/agent/install_agent.sh"
 UPDATE_PLAYBOOK = REPO_ROOT / "tools/ansible/playbooks/update_agent.yml"
+ENSURE_PLAYBOOK = REPO_ROOT / "tools/ansible/playbooks/ensure_flash_prereqs.yml"
 GROUP_VARS = REPO_ROOT / "tools/ansible/group_vars/linux_hosts.yml"
 PREFLIGHT_DIR = REPO_ROOT / "backend/agent/scripts/flash_preflight"
 
@@ -197,3 +198,24 @@ def test_group_vars_package_list_matches_preflight():
     data = yaml.safe_load(GROUP_VARS.read_text(encoding="utf-8"))
     assert data["agent_flash_prereq_packages"] == list(pf._DEFAULT_PACKAGES)
     assert data["agent_ensure_flash_prereqs"] is False, "默认必须关闭（opt-in）"
+
+
+def test_ensure_flash_prereqs_playbook_matches_preflight_udev():
+    """主机页入口 playbook 与 flash_preflight 两种 udev 形态逐字一致。"""
+    assert ENSURE_PLAYBOOK.exists()
+    pf = _load_preflight()
+    data = yaml.safe_load(ENSURE_PLAYBOOK.read_text(encoding="utf-8"))
+    tasks = data[0]["tasks"]
+    rule_tasks = [
+        t for t in tasks
+        if t.get("ansible.builtin.copy", {}).get("dest")
+        == "/etc/udev/rules.d/98-ttyacm-mtk.rules"
+    ]
+    contents = {t["ansible.builtin.copy"]["content"].strip() for t in rule_tasks}
+    assert contents == {
+        pf._UDEV_RULE_LINE.strip(), pf._UDEV_RULE_LINE_LEGACY.strip(),
+    }
+    text = ENSURE_PLAYBOOK.read_text(encoding="utf-8")
+    assert "groups: dialout" in text
+    assert "agent_flash_prereq_packages | join(' ')" in text
+    assert "stp-agent-priv restart" in text

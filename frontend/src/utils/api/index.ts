@@ -8,7 +8,7 @@ export {
   registerAuthFailureHandler,
 } from './client';
 export { auth } from './auth';
-export { hosts, scriptPresence, heartbeat, hotUpdate, agentInstall, fetchHostList, coerceHostList } from './hosts';
+export { hosts, scriptPresence, heartbeat, hotUpdate, agentInstall, flashPrereqs, fetchHostList, coerceHostList } from './hosts';
 export { jobs } from './jobs';
 export { devices, fetchAllDevices } from './devices';
 export { projects, assignDevicesToProject } from './projects';
@@ -63,7 +63,7 @@ export type {
 } from './types';
 
 import { auth } from './auth';
-import { hosts, scriptPresence, heartbeat, hotUpdate, agentInstall } from './hosts';
+import { hosts, scriptPresence, heartbeat, hotUpdate, agentInstall, flashPrereqs } from './hosts';
 import { jobs } from './jobs';
 import { devices } from './devices';
 import { projects, assignDevicesToProject } from './projects';
@@ -88,6 +88,7 @@ export const api = {
   heartbeat,
   hotUpdate,
   agentInstall,
+  flashPrereqs,
   devices,
   projects,
   assignDevicesToProject,

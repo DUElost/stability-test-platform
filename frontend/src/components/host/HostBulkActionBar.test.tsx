@@ -6,7 +6,7 @@ describe('HostBulkActionBar', () => {
   it('renders nothing when selected=0', () => {
     const { container } = render(
       <HostBulkActionBar
-        counts={{ selected: 0, firstInstall: 0, reinstall: 0, hotUpdate: 0 }}
+        counts={{ selected: 0, firstInstall: 0, reinstall: 0, hotUpdate: 0, flashPrereqs: 0 }}
         isAdmin
         onInstall={vi.fn()}
         onClear={vi.fn()}
@@ -19,7 +19,7 @@ describe('HostBulkActionBar', () => {
     const onInstall = vi.fn();
     render(
       <HostBulkActionBar
-        counts={{ selected: 3, firstInstall: 2, reinstall: 0, hotUpdate: 1 }}
+        counts={{ selected: 3, firstInstall: 2, reinstall: 0, hotUpdate: 1, flashPrereqs: 0 }}
         isAdmin
         onInstall={onInstall}
         onClear={vi.fn()}
@@ -37,7 +37,7 @@ describe('HostBulkActionBar', () => {
     const onHotUpdate = vi.fn();
     render(
       <HostBulkActionBar
-        counts={{ selected: 5, firstInstall: 2, reinstall: 1, hotUpdate: 2 }}
+        counts={{ selected: 5, firstInstall: 2, reinstall: 1, hotUpdate: 2, flashPrereqs: 0 }}
         isAdmin
         onInstall={vi.fn()}
         onHotUpdate={onHotUpdate}
@@ -56,7 +56,7 @@ describe('HostBulkActionBar', () => {
     const onHotUpdate = vi.fn();
     render(
       <HostBulkActionBar
-        counts={{ selected: 1, firstInstall: 0, reinstall: 0, hotUpdate: 1 }}
+        counts={{ selected: 1, firstInstall: 0, reinstall: 0, hotUpdate: 1, flashPrereqs: 0 }}
         isAdmin
         onInstall={vi.fn()}
         onHotUpdate={onHotUpdate}
@@ -73,7 +73,7 @@ describe('HostBulkActionBar', () => {
   it('disables install when no installable hosts', () => {
     render(
       <HostBulkActionBar
-        counts={{ selected: 2, firstInstall: 0, reinstall: 0, hotUpdate: 2 }}
+        counts={{ selected: 2, firstInstall: 0, reinstall: 0, hotUpdate: 2, flashPrereqs: 0 }}
         isAdmin
         onInstall={vi.fn()}
         onClear={vi.fn()}
@@ -85,7 +85,7 @@ describe('HostBulkActionBar', () => {
   it('shows progress and locks conflicting actions during batch hot-update', () => {
     render(
       <HostBulkActionBar
-        counts={{ selected: 3, firstInstall: 1, reinstall: 0, hotUpdate: 2 }}
+        counts={{ selected: 3, firstInstall: 1, reinstall: 0, hotUpdate: 2, flashPrereqs: 0 }}
         isAdmin
         hotUpdatePending
         hotUpdateProgressLabel="热更新 1/2"
@@ -106,7 +106,7 @@ describe('HostBulkActionBar', () => {
     const onClear = vi.fn();
     render(
       <HostBulkActionBar
-        counts={{ selected: 1, firstInstall: 1, reinstall: 0, hotUpdate: 0 }}
+        counts={{ selected: 1, firstInstall: 1, reinstall: 0, hotUpdate: 0, flashPrereqs: 0 }}
         isAdmin
         onInstall={vi.fn()}
         onClear={onClear}
