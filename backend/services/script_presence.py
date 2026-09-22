@@ -82,20 +82,6 @@ DEFAULT_HISTORY_DAYS = 30
 
 # ── 纯函数层（CLI 脚本与 sweep 共用同一实现）───────────────────────────────
 
-#: **RPC 级**失败（没拿到逐条结果）的判据——只有这些才把整机判 unknown（#3135）。
-#: 与 `precheck.verify.verify_one_host` 的三种返回对齐：`agent_offline` / `rpc_failed: …`
-#: / `verify_exception: …`；`sha_mismatch` 是**逐条结果可用**的信号，不在其中。
-_UNREACHABLE_ERRORS = ("agent_offline",)
-_UNREACHABLE_PREFIXES = ("rpc_failed", "verify_exception")
-
-
-def _is_unreachable_error(err: Optional[str]) -> bool:
-    """RPC 级失败（拿不到逐条结果）→ True；`None` / `sha_mismatch` → False。"""
-    if not err:
-        return False
-    return err in _UNREACHABLE_ERRORS or err.startswith(_UNREACHABLE_PREFIXES)
-
-
 def build_full_target_set(
     step_rows: list[dict], script_rows: list[dict]
 ) -> list[tuple[str, str]]:
@@ -283,14 +269,13 @@ def classify_host_presence(
 ) -> dict[tuple[str, str], tuple[str, str]]:
     """把「RPC 结果 + 可达性 + 维护窗」折成逐目标的 ``(state, detail)``。
 
-    优先级：``n_a``（可达集外）> ``unknown``（**RPC 级**失败）> ``maintenance``（窗口内缺口）
-    > agent 报的逐条 present/missing/mismatch。细节：
+    优先级：``n_a``（可达集外）> ``unknown``（无逐条结果）> ``maintenance``（窗口内缺口）
+    > agent 报的 present/missing/mismatch。细节：
 
-    - **只有 RPC 级失败**（`agent_offline` / `rpc_failed*` / `verify_exception*`）才把该 host
-      的可达目标整片记 ``unknown``——那才是「没拿到结果」；``sha_mismatch`` 这类**逐条结果
-      可用**的失败必须逐条判，否则「个别文件缺/不符」会被塌成整片 unknown、缺口面失效
-      （**#3135** 实测：一台未下发新载荷的主机整机 28 个 unknown，而真因只是
-      `clear_recents 1.0.4` 一个 sha 不符）；
+    - **``verify_ok=False`` 是两种情形，不得混为一谈**（#3135）：
+      ① RPC 整体不可用（agent 不可达 / 超时，``results`` 为空）→ 所有可达目标记 unknown，
+      不写成 present——未知不是绿；
+      ② RPC 成功但核验**发现**有失败 → agent 回了逐条结果，按逐条判。
     - 维护窗只把**缺口**改记 maintenance；``present`` 保持 present（在位是事实）；
     - agent 结果里缺行（老 agent / 未上报）记 ``unknown`` + ``not_reported``，
       不猜 missing；
@@ -299,15 +284,15 @@ def classify_host_presence(
     by_key: dict[tuple[str, str], dict] = {
         (str(e.get("name")), str(e.get("version"))): e for e in (verify_entries or [])
     }
-    # #3135：只有「没拿到逐条结果」才整片 unknown；`sha_mismatch` 等逐条失败要落进 missing/mismatch
-    unreachable = _is_unreachable_error(verify_error) or (not verify_ok and not by_key)
+    # #3135（主干 #3136 版）：只有「没有任何逐条结果」才算整体不可用
+    per_entry_available = bool(by_key)
     out: dict[tuple[str, str], tuple[str, str]] = {}
     for key in sorted(set(full)):
         name, version = key
         if key not in reachable:
             out[key] = (STATE_N_A, "")
             continue
-        if unreachable:
+        if not verify_ok and not per_entry_available:
             out[key] = (STATE_UNKNOWN, (verify_error or "verify_failed")[:256])
             continue
         entry = by_key.get(key)

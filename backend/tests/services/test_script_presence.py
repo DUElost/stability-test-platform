@@ -381,40 +381,6 @@ async def test_run_sweep_reports_uncovered_active_without_writing_rows(
     )
 
 
-# ── #3135：逐条失败不得塌成整片 unknown ─────────────────────────────────────
-
-def test_classify_per_entry_failure_is_not_collapsed_to_unknown():
-    """#3135 回归：`sha_mismatch` 是「逐条结果可用」的信号，必须逐条落 missing/mismatch。
-
-    修前：`not verify_ok` 一刀切 ⇒ 整机可达目标全 unknown（实测一台机 28 个 unknown，
-    而真因只是 `clear_recents@1.0.4` 一个 sha 不符）——缺口面因此失效。
-    """
-    reachable = set(FULL)
-    states = sp.classify_host_presence(
-        host_id="h1", full=FULL, reachable=reachable, in_maintenance=False,
-        verify_ok=False,                      # gather_verify 的 all_ok：有一条不过就是 False
-        verify_error="sha_mismatch",          # 但逐条结果在 verify_entries 里
-        verify_entries=[
-            {"name": "a", "version": "1.0.0", "ok": True, "exists": True},
-            {"name": "b", "version": "2.0.0", "ok": False, "exists": True,
-             "error": "support_file_mismatch:_adb.py"},
-        ],
-    )
-    assert states[("a", "1.0.0")] == (sp.STATE_PRESENT, "")          # 好的仍然是绿
-    assert states[("b", "2.0.0")][0] == sp.STATE_MISMATCH            # 坏的落进缺口面
-    assert all(s != sp.STATE_UNKNOWN for s, _d in states.values())
-
-
-def test_classify_unreachable_error_still_marks_whole_host_unknown():
-    """反向护栏：RPC 级失败（没拿到结果）仍必须整机 unknown——不能被 #3135 的放宽带走。"""
-    for err in ("agent_offline", "rpc_failed: timeout", "verify_exception: boom"):
-        states = sp.classify_host_presence(
-            host_id="h1", full=[("a", "1.0.0")], reachable={("a", "1.0.0")},
-            in_maintenance=False, verify_ok=False, verify_entries=[], verify_error=err,
-        )
-        assert states[("a", "1.0.0")] == (sp.STATE_UNKNOWN, err)
-
-
 def test_classify_sha_mismatch_without_entries_still_unknown_not_green():
     """没拿到任何逐条结果 + 非不可达错误 → 只能如实 unknown（不猜 present/missing）。"""
     states = sp.classify_host_presence(
