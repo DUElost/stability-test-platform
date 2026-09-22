@@ -94,11 +94,20 @@ python tools/dev/check-script-version-immutability.py --base origin/main
 控制面侧（运维授权写操作，不进 PR）：
 
 3. `POST /scripts/scan`，确认 `created` 命中且 `conflicts=0`；
-4. 把仍引用旧版的 `plan_step` 重指到新版（生产周期链等存量 Plan **不会**随模板自动迁）；
-5. 单机验证后再放量。
+4. **下发到主机**——scan 只写控制面注册表，**不送文件**：脚本是从主机本地树执行的
+   （`Script.nfs_path` = `/opt/stability-test-agent/agent/scripts/…`，
+   `backend/agent/pipeline_engine.py` 直接用该路径起进程），所以跳过这一步，生产主机上
+   根本没有新版文件。canary 一台 `POST /api/v1/hosts/<host_id>/hot-update` 通过后，
+   `PYTHONPATH=. venv/bin/python -m backend.scripts.batch_hot_update --direct` 放量，
+   并以逐台 `agent_code_sync_status=matched` 收口（实测 ~3s/台）。判到位**不要**看
+   `script-presence` 的 `missing=0`：无 Plan 引用的新版本不在账本全集内（#3111）；
+5. 把仍引用旧版的 `plan_step` 重指到新版（生产周期链等存量 Plan **不会**随模板自动迁）；
+6. 单机验证后再放量。
 
 同族最新 active 版本受退役判据「承接面豁免」（见下），**注册与重指不必绑成一批**；
-但重指未做前，修复对线上无效——不要把「代码已合」记成「问题已闭」。
+但重指未做前，修复对线上无效；同理**未下发前主机侧也没有文件**（2026-09-22 实测：
+`fill_storage` v1.1.1 已 active、47 台主机无此版本文件，#3111）——不要把「代码已合」
+或「库里已 active」记成「问题已闭」。
 
 ## 种子迁移治理（#942 裁决 A）
 

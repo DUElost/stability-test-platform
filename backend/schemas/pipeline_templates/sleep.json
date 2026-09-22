@@ -38,7 +38,7 @@
       {
         "step_id": "sleep_finish",
         "action": "script:sleep_finish",
-        "version": "1.0.3",
+        "version": "1.0.4",
         "timeout_seconds": 600,
         "retry": 1,
         "params": {}

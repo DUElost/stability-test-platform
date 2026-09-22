@@ -123,6 +123,12 @@ export interface ScriptPresenceSummary {
   hosts_total: number;
   hosts_with_gap: number;
   full_versions: number;
+  /**
+   * 已 active 但**无任何 Plan 引用**的版本数（#3111）：进不了任何主机的可达集，
+   * 账本一行都不写。读汇总时 `counts.missing/mismatch = 0` **只**覆盖 `full_versions`，
+   * 不含它们——新合并、尚无 Plan 引用的脚本版本正落在这个盲区。
+   */
+  uncovered_active_versions: number;
   checked_at_min: string | null;
   checked_at_max: string | null;
   /** true = 最近一次完整 sweep 超过 48h 或无行——不得当绿读。 */

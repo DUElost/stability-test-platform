@@ -379,6 +379,9 @@ describe('脚本在位（#2958 第五道闸）', () => {
     hosts_total: 48,
     hosts_with_gap: 2,
     full_versions: 51,
+    // #3111：账本不核验的 active 版本（无 Plan 引用）——与 full_versions 刻意不同值，
+    // 免得断言两边写同一个数时把「字段接错」放过去。
+    uncovered_active_versions: 46,
     checked_at_min: '2026-09-21T00:00:00Z',
     checked_at_max: '2026-09-21T06:00:00Z',
     stale: false,
@@ -417,6 +420,8 @@ describe('脚本在位（#2958 第五道闸）', () => {
     expect(within(bar).getByText('缺失 1')).toBeInTheDocument();
     expect(within(bar).getByText('不适用 4')).toBeInTheDocument();
     expect(within(bar).getByText('目标版本 51')).toBeInTheDocument();
+    // #3111：未覆盖的 active 版本数必须在明细里，且与目标版本分开读
+    expect(within(bar).getByText(/^账本未覆盖 46$/)).toBeInTheDocument();
     // 汇总没有逐台名单，文案要指路到展开行
     expect(within(bar).getByText(/不含逐台名单/)).toBeInTheDocument();
   });
