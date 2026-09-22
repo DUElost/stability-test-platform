@@ -400,4 +400,32 @@ describe('ProjectDetailPage', () => {
     });
     confirmSpy.mockRestore();
   });
+
+  // #3134：卡title 用 project 侧真实计数、列表最多渲染 20 条。超限时必须明说，
+  // 否则同屏出现「设备（513）」与 20 行两个互相矛盾的数字且无从解释。
+  it('explains the device list truncation when the project has more than 20 devices', async () => {
+    mocks.getProject.mockResolvedValue(makeDetail({ device_count: 513 }));
+    renderPage();
+
+    expect(await screen.findByText(/设备（513）/)).toBeInTheDocument();
+    // 提示里的数字与 title 同源（project.device_count），不会自相矛盾
+    expect(screen.getByText(/共 513 台，此处最多显示 20 台/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '在设备页筛选查看' })).toBeInTheDocument();
+  });
+
+  it('explains the plan list truncation when the project has more than 20 plans', async () => {
+    mocks.getProject.mockResolvedValue(makeDetail({ plan_count: 25 }));
+    renderPage();
+
+    expect(await screen.findByText(/计划（25）/)).toBeInTheDocument();
+    expect(screen.getByText(/共 25 个，此处最多显示 20 个/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '在 Plan 管理页筛选查看' })).toBeInTheDocument();
+  });
+
+  it('stays quiet when both lists fit within the preview limit', async () => {
+    renderPage();
+
+    expect(await screen.findByText(/设备（1）/)).toBeInTheDocument();
+    expect(screen.queryByText(/此处最多显示/)).not.toBeInTheDocument();
+  });
 });
