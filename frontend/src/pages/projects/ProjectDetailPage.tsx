@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Archive,
@@ -37,6 +37,31 @@ const JIRA_KEY_RE = /^[A-Z][A-Z0-9-]*$/;
 import { coverageSummary } from './inventoryDisplay';
 import { FACET_FIELD_ENTRIES } from './facetFields';
 
+/** 卡内列表的预览条数上限：超过它的项目改由卡脚提示 + 引导到全量页面（#3134）。 */
+const CARD_PREVIEW_LIMIT = 20;
+
+/** #3134：卡内列表被预览上限截断时的卡脚说明——说清总数与上限，并给出全量入口。 */
+function TruncationNote({
+  count,
+  unit,
+  to,
+  label,
+}: {
+  count: number;
+  unit: string;
+  to: string;
+  label: string;
+}) {
+  return (
+    <p className={cn('mt-2 border-t border-border pt-2 text-xs', TEXT.subtitle)}>
+      共 {count} {unit}，此处最多显示 {CARD_PREVIEW_LIMIT} {unit}。
+      <Link to={to} className="ml-1 underline underline-offset-2 hover:text-foreground">
+        {label}
+      </Link>
+    </p>
+  );
+}
+
 /** #1708：rename 已生效、字段 update 失败——携带新 key 供 onError 跳转，页面不停留在失效 URL。 */
 class PartialSaveError extends Error {
   constructor(
@@ -60,12 +85,12 @@ export default function ProjectDetailPage() {
 
   const devicesQ = useQuery({
     queryKey: projectKeys.devicesOf(projectKey),
-    queryFn: () => api.devices.list(0, 20, undefined, undefined, projectKey),
+    queryFn: () => api.devices.list(0, CARD_PREVIEW_LIMIT, undefined, undefined, projectKey),
   });
 
   const plansQ = useQuery({
     queryKey: projectKeys.plansOf(projectKey),
-    queryFn: () => api.plans.list(0, 20, projectKey),
+    queryFn: () => api.plans.list(0, CARD_PREVIEW_LIMIT, projectKey),
   });
 
   // ADR-0029 P2：项目级风险趋势（按天 S/A/B，run 级 DLE 权威聚合）
@@ -236,6 +261,11 @@ export default function ProjectDetailPage() {
   const project = detailQ.data!;
   const devices = devicesQ.data?.items ?? [];
   const plans = plansQ.data ?? [];
+  // #3134：卡title 用的是 project 侧的真实计数，列表却最多渲染 CARD_PREVIEW_LIMIT 条
+  // ——超过时必须在卡内明说，否则同屏两个数字（513 / 20 行）互相矛盾且无从解释。
+  // 判据就用 title 那个计数本身：同一张卡内数字自洽，不会出现"标题 513 / 提示 511"。
+  const devicesTruncated = (project.device_count ?? 0) > CARD_PREVIEW_LIMIT;
+  const plansTruncated = (project.plan_count ?? 0) > CARD_PREVIEW_LIMIT;
 
   return (
     <PageContainer width="content" className={LAYOUT.pageGap}>
@@ -454,6 +484,14 @@ export default function ProjectDetailPage() {
                 ))}
               </ul>
             )}
+            {!devicesQ.isLoading && devicesTruncated && (
+              <TruncationNote
+                count={project.device_count}
+                unit="台"
+                to="/devices"
+                label="在设备页筛选查看"
+              />
+            )}
           </CardContent>
         </Card>
 
@@ -481,6 +519,14 @@ export default function ProjectDetailPage() {
                   </li>
                 ))}
               </ul>
+            )}
+            {!plansQ.isLoading && plansTruncated && (
+              <TruncationNote
+                count={project.plan_count}
+                unit="个"
+                to="/orchestration/plans"
+                label="在 Plan 管理页筛选查看"
+              />
             )}
           </CardContent>
         </Card>

@@ -18,7 +18,9 @@ DB 面全绿就是该盲区的实证。本模块把核验做成**常设账**：
 `state` 是**闭词表**（`PRESENCE_STATES`）：``present / missing / mismatch / unknown /
 n_a / maintenance``。两条刻意的口径：
 
-- ``unknown``（agent 不可达）**不是绿**——与 `agent_offline` 语义一致；
+- ``unknown``（agent 不可达）**不是绿**——与 `agent_offline` 语义一致。注意它与
+  「核验发现有失败」是两回事：后者 agent **回了**逐条结果，须按逐条判（#3135，
+  见 `classify_host_presence`）；
 - 维护窗内 host 的缺口记 ``maintenance`` 而非 missing/mismatch：维护窗兼作升级锁，
   窗口内不收作业、无即时影响（归队前补分发由 #2865 遗留项盯），否则维护期恒红。
 
@@ -267,10 +269,16 @@ def classify_host_presence(
 ) -> dict[tuple[str, str], tuple[str, str]]:
     """把「RPC 结果 + 可达性 + 维护窗」折成逐目标的 ``(state, detail)``。
 
-    优先级：``n_a``（可达集外）> ``unknown``（RPC 失败）> ``maintenance``（窗口内缺口）
+    优先级：``n_a``（可达集外）> ``unknown``（无逐条结果）> ``maintenance``（窗口内缺口）
     > agent 报的 present/missing/mismatch。细节：
 
-    - RPC 失败（agent 不可达）时**所有可达目标都记 unknown**，不写成 present——未知不是绿；
+    - **``verify_ok=False`` 是两种情形，不得混为一谈**（#3135）：
+      ① RPC 整体不可用（agent 不可达 / 超时，``results`` 为空）→ 所有可达目标记 unknown，
+      不写成 present——未知不是绿；
+      ② RPC 成功但核验**发现**有失败 → agent 回了逐条结果，按逐条判：
+      该条 ok=present、缺文件=missing、其余=mismatch，**只有没被回报的条目**才 unknown。
+      旧实现把 ② 也塌成「整片 unknown + 一个笼统错误码」：一次单文件缺失会让 28 个可达条目
+      一起变 unknown（27 个其实无辜），`missing`/`mismatch` 在最有用的情形下永不产生；
     - 维护窗只把**缺口**改记 maintenance；``present`` 保持 present（在位是事实）；
     - agent 结果里缺行（老 agent / 未上报）记 ``unknown`` + ``not_reported``，
       不猜 missing；
@@ -279,13 +287,15 @@ def classify_host_presence(
     by_key: dict[tuple[str, str], dict] = {
         (str(e.get("name")), str(e.get("version"))): e for e in (verify_entries or [])
     }
+    # #3135：只有「没有任何逐条结果」才算整体不可用（情形 ①）。
+    per_entry_available = bool(by_key)
     out: dict[tuple[str, str], tuple[str, str]] = {}
     for key in sorted(set(full)):
         name, version = key
         if key not in reachable:
             out[key] = (STATE_N_A, "")
             continue
-        if not verify_ok:
+        if not verify_ok and not per_entry_available:
             out[key] = (STATE_UNKNOWN, (verify_error or "verify_failed")[:256])
             continue
         entry = by_key.get(key)
