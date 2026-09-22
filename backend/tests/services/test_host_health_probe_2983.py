@@ -201,3 +201,127 @@ def test_select_probe_host_ids_filters_retired_maintenance_offline():
         ),
     ]
     assert select_probe_host_ids(hosts, now=now) == ["online"]
+
+
+def test_apply_probe_result_opens_strike_after_need_agent_mute_rounds():
+    from backend.services.host_health_probe import (
+        HEALTH_PROBE_EXTRA_KEY,
+        apply_probe_result_to_extra,
+    )
+
+    now = datetime(2026, 9, 22, 10, 0, tzinfo=timezone.utc)
+    extra = apply_probe_result_to_extra(
+        {"health": {"reasons": []}},
+        verdict=ProbeVerdict.AGENT_MUTE.value,
+        signals=("probe_hc_dead",),
+        topology=TOPOLOGY_BLIND,
+        now=now,
+        strike_need=2,
+    )
+    assert extra[HEALTH_PROBE_EXTRA_KEY]["strike_open"] is False
+
+    extra = apply_probe_result_to_extra(
+        extra,
+        verdict=ProbeVerdict.AGENT_MUTE.value,
+        signals=("probe_hc_dead",),
+        topology=TOPOLOGY_BLIND,
+        now=now + timedelta(minutes=10),
+        strike_need=2,
+    )
+    assert extra[HEALTH_PROBE_EXTRA_KEY]["strike_open"] is True
+    assert extra[HEALTH_PROBE_EXTRA_KEY]["recent_verdicts"] == [
+        "agent_mute",
+        "agent_mute",
+    ]
+
+
+def test_probe_one_host_writes_extra_and_audits_on_strike(engine, monkeypatch):
+    from backend.core.database import SessionLocal
+    from backend.core.ssh_security import ResolvedSshCredentials, encrypt_ssh_password
+    from backend.models.audit import AuditLog
+    from backend.models.enums import HostStatus
+    from backend.models.host import Host
+    from backend.services.host_health_probe import (
+        HEALTH_PROBE_EXTRA_KEY,
+        ProbeRound,
+        parse_journal_probe,
+        classify_lsusb_topology,
+        probe_one_host,
+    )
+
+    db = SessionLocal()
+    try:
+        host = Host(
+            id="probe-host-102",
+            hostname="probe-102",
+            ip_address="192.0.2.102",
+            status=HostStatus.ONLINE.value,
+            ssh_user="root",
+            ssh_port=22,
+            ssh_password_enc=encrypt_ssh_password("not-logged"),
+            extra={"health": {"status": "HEALTHY", "reasons": []}},
+        )
+        db.add(host)
+        db.commit()
+    finally:
+        db.close()
+
+    mute_round = ProbeRound(
+        journal=parse_journal_probe(_HC_DIED_JOURNAL),
+        topology=classify_lsusb_topology(_LSUSB_BLIND),
+    )
+
+    class _FakeClient:
+        def close(self):
+            return None
+
+    def _fake_connect(**kwargs):
+        assert kwargs.get("hostname") == "192.0.2.102"
+        return _FakeClient()
+
+    def _fake_collect(client, *, sudo_password, timeout):
+        assert sudo_password == "not-logged"
+        return mute_round
+
+    monkeypatch.setattr(
+        "backend.core.ssh_security.resolve_host_ssh_credentials",
+        lambda host, inventory_lookup=None: (
+            ResolvedSshCredentials(user="root", password="not-logged"),
+            False,
+        ),
+    )
+
+    # First tick — no strike yet
+    s1 = probe_one_host(
+        "probe-host-102",
+        timeout=5,
+        strike_need=2,
+        ssh_connect=_fake_connect,
+        collect_round=_fake_collect,
+    )
+    assert s1["ok"] is True
+    assert s1["strike_open"] is False
+
+    s2 = probe_one_host(
+        "probe-host-102",
+        timeout=5,
+        strike_need=2,
+        ssh_connect=_fake_connect,
+        collect_round=_fake_collect,
+    )
+    assert s2["strike_open"] is True
+
+    db = SessionLocal()
+    try:
+        host = db.get(Host, "probe-host-102")
+        assert host.extra[HEALTH_PROBE_EXTRA_KEY]["strike_open"] is True
+        audits = (
+            db.query(AuditLog)
+            .filter(AuditLog.action == "host_health_probe_agent_mute")
+            .all()
+        )
+        assert len(audits) == 1
+        assert "password" not in str(audits[0].details).lower()
+        assert "not-logged" not in str(audits[0].details)
+    finally:
+        db.close()
