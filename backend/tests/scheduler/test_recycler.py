@@ -1385,3 +1385,170 @@ def test_patrol_stall_picks_most_overdue_when_mixed_intervals(engine, monkeypatc
         _cleanup_seed(seed_a)
         _cleanup_seed(seed_b)
         _cleanup_seed(seed_c)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# #3061: step_trace stall detection (Pass #2c)
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def _step_trace_stall_seed(
+    now: datetime,
+    *,
+    trace_age_seconds: int,
+    event_type: str = "COMPLETED",
+    fresh_liveness: bool = True,
+    execution_state: str | None = "PATROL_SLEEP",
+) -> dict:
+    """RUNNING job whose heartbeats stay fresh but step_trace is stale."""
+    seed = _seed_running_job(
+        started_at=now - timedelta(hours=13),
+        updated_at=now - timedelta(seconds=30),
+        pipeline_def=PATROL_PIPELINE_DEF,
+        last_patrol_heartbeat_at=(
+            now - timedelta(seconds=30)
+            if fresh_liveness
+            else now - timedelta(hours=13)
+        ),
+        execution_state=execution_state,
+        last_execution_heartbeat_at=(
+            now - timedelta(seconds=30) if fresh_liveness else now - timedelta(hours=13)
+        ),
+    )
+    if fresh_liveness and execution_state in {"PATROL_SLEEP", "WAITING_DEVICE"}:
+        _seed_fresh_coordinator_heartbeat(seed, at=now - timedelta(seconds=30))
+
+    trace_at = now - timedelta(seconds=trace_age_seconds)
+    db = SessionLocal()
+    try:
+        db.add(StepTrace(
+            job_id=seed["job_id"],
+            step_id="monkey_launch",
+            stage="init",
+            event_type=event_type,
+            status="RUNNING" if event_type == "STARTED" else "COMPLETED",
+            original_ts=trace_at,
+            created_at=trace_at,
+        ))
+        db.commit()
+    finally:
+        db.close()
+    return seed
+
+
+def test_step_trace_stall_transitions_running_to_unknown_when_stale(engine, monkeypatch):
+    """Fresh patrol/coordinator heartbeats but terminal trace age > threshold → UNKNOWN."""
+    now = datetime.now(timezone.utc)
+    seed = _step_trace_stall_seed(now, trace_age_seconds=7200)
+    emits = _patch_recycler_neutrals(monkeypatch)
+
+    before = recycler.recycler_timeouts.labels(timeout_type="step_trace_stall")._value.get()
+    try:
+        recycler.recycle_once()
+
+        db = SessionLocal()
+        try:
+            job = db.get(JobInstance, seed["job_id"])
+            assert job is not None
+            assert job.status == JobStatus.UNKNOWN.value
+            assert job.ended_at is not None
+            assert job.execution_state is None
+            assert "step_trace_stall" in (job.status_reason or "")
+
+            audit = (
+                db.query(AuditLog)
+                .filter(
+                    AuditLog.action == "step_trace_stall_detected",
+                    AuditLog.resource_id == str(seed["job_id"]),
+                )
+                .one()
+            )
+            assert audit.details["last_event_type"] == "COMPLETED"
+            assert audit.details["age_seconds"] >= 7200
+        finally:
+            db.close()
+
+        unknown_emits = [
+            (e, d) for (e, d, _kw) in emits
+            if e == "job_status" and d.get("payload", {}).get("status") == "UNKNOWN"
+        ]
+        assert len(unknown_emits) == 1
+
+        after = recycler.recycler_timeouts.labels(timeout_type="step_trace_stall")._value.get()
+        assert after - before == 1
+    finally:
+        _cleanup_seed(seed)
+
+
+def test_step_trace_stall_keeps_fresh_trace_running(engine, monkeypatch):
+    now = datetime.now(timezone.utc)
+    seed = _step_trace_stall_seed(now, trace_age_seconds=600)
+    emits = _patch_recycler_neutrals(monkeypatch)
+
+    before = recycler.recycler_timeouts.labels(timeout_type="step_trace_stall")._value.get()
+    try:
+        recycler.recycle_once()
+
+        db = SessionLocal()
+        try:
+            job = db.get(JobInstance, seed["job_id"])
+            assert job.status == JobStatus.RUNNING.value
+            audits = (
+                db.query(AuditLog)
+                .filter(
+                    AuditLog.action == "step_trace_stall_detected",
+                    AuditLog.resource_id == str(seed["job_id"]),
+                )
+                .all()
+            )
+            assert audits == []
+        finally:
+            db.close()
+
+        stall_emits = [
+            d for (e, d, _kw) in emits
+            if e == "job_status" and d.get("payload", {}).get("job_id") == seed["job_id"]
+        ]
+        assert stall_emits == []
+
+        after = recycler.recycler_timeouts.labels(timeout_type="step_trace_stall")._value.get()
+        assert after == before
+    finally:
+        _cleanup_seed(seed)
+
+
+def test_step_trace_stall_skips_inflight_started_trace(engine, monkeypatch):
+    now = datetime.now(timezone.utc)
+    seed = _step_trace_stall_seed(now, trace_age_seconds=7200, event_type="STARTED")
+    _patch_recycler_neutrals(monkeypatch)
+
+    try:
+        recycler.recycle_once()
+
+        db = SessionLocal()
+        try:
+            job = db.get(JobInstance, seed["job_id"])
+            assert job.status == JobStatus.RUNNING.value
+        finally:
+            db.close()
+    finally:
+        _cleanup_seed(seed)
+
+
+def test_step_trace_stall_disabled_when_threshold_zero(engine, monkeypatch):
+    now = datetime.now(timezone.utc)
+    seed = _step_trace_stall_seed(now, trace_age_seconds=7200)
+    monkeypatch.setattr(recycler, "STEP_TRACE_STALL_SECONDS", 0)
+    _patch_recycler_neutrals(monkeypatch)
+
+    try:
+        recycler.recycle_once()
+
+        db = SessionLocal()
+        try:
+            job = db.get(JobInstance, seed["job_id"])
+            assert job.status == JobStatus.RUNNING.value
+        finally:
+            db.close()
+    finally:
+        _cleanup_seed(seed)

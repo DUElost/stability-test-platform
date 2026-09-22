@@ -8,6 +8,7 @@ apply when ``ENV`` is set and not ``production`` (and ``TESTING!=1``).
 | ``DISPATCHED_TIMEOUT_SECONDS`` / ``RUN_DISPATCHED_TIMEOUT_SECONDS`` | 120 | 120 |
 | ``RUNNING_HEARTBEAT_TIMEOUT_SECONDS`` / ``RUN_HEARTBEAT_TIMEOUT_SECONDS`` | 900 | 900 |
 | ``PATROL_RUNNING_HEARTBEAT_TIMEOUT_SECONDS`` | 300 | 180 |
+| ``STEP_TRACE_STALL_SECONDS`` | 3600 | 3600 |
 | ``HOST_HEARTBEAT_TIMEOUT_SECONDS`` | 300 | 300 |
 | ``UNKNOWN_GRACE_SECONDS`` | 300 | 300 |
 """
@@ -63,6 +64,13 @@ PATROL_RUNNING_HEARTBEAT_TIMEOUT_SECONDS = _int_env(
 PATROL_STALL_MULTIPLIER = _int_env(
     "PATROL_STALL_MULTIPLIER",
     production_default=3,
+)
+
+# RUNNING job with no step_trace activity beyond this window → recycler UNKNOWN (#3061).
+# 0 = disable Pass #2c. Latest trace must be terminal (not STARTED).
+STEP_TRACE_STALL_SECONDS = _int_env(
+    "STEP_TRACE_STALL_SECONDS",
+    production_default=3600,
 )
 
 PRECHECK_QUEUE_STALE_SECONDS = _int_env(
