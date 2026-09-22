@@ -10,7 +10,7 @@ export {
 export { auth } from './auth';
 export { hosts, scriptPresence, heartbeat, hotUpdate, agentInstall, flashPrereqs, fetchHostList, coerceHostList } from './hosts';
 export { jobs } from './jobs';
-export { devices, fetchAllDevices } from './devices';
+export { devices, fetchAllDevices, fetchAllDevicePages, type DeviceListFilters } from './devices';
 export { projects, assignDevicesToProject } from './projects';
 export { logs } from './logs';
 export { pipeline } from './pipeline';

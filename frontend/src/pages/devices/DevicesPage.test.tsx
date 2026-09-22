@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { deviceKeys } from '@/utils/api/queryKeys';
 
-const mockDevicesList = vi.fn();
+const mockFetchAllDevicePages = vi.fn();
 const mockFetchHostList = vi.fn();
 const mockProjectsList = vi.fn();
 const mockAssignDevicesToProject = vi.fn();
@@ -18,6 +18,8 @@ vi.mock('@/utils/api', async (importOriginal) => {
   return {
     ...actual,
     fetchHostList: (...args: unknown[]) => mockFetchHostList(...args),
+    // #3131：页面按 total 翻页拉全量（不再单次 list(0,1200)），故数据源在这一层注入
+    fetchAllDevicePages: (...args: unknown[]) => mockFetchAllDevicePages(...args),
     // ADR-0029：批量归入走独立导出（非 api 属性）
     assignDevicesToProject: (...args: unknown[]) => mockAssignDevicesToProject(...args),
     api: {
@@ -31,7 +33,6 @@ vi.mock('@/utils/api', async (importOriginal) => {
       },
       devices: {
         ...actual.api.devices,
-        list: (...args: unknown[]) => mockDevicesList(...args),
         create: (...args: unknown[]) => mockCreateDevice(...args),
         bulkSwipeTrail: (...args: unknown[]) => mockBulkSwipeTrail(...args),
       },
@@ -85,7 +86,7 @@ function createWrapper() {
 describe('DevicesPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockDevicesList.mockResolvedValue({
+    mockFetchAllDevicePages.mockResolvedValue({
       items: [
         {
           id: 1,
@@ -150,7 +151,7 @@ describe('DevicesPage', () => {
 
   // 设备存储指标：API 已产出 disk_total/disk_used（字节），页面须透传到表的「存储」列
   it('passes disk telemetry through to the storage column', async () => {
-    mockDevicesList.mockResolvedValue({
+    mockFetchAllDevicePages.mockResolvedValue({
       items: [
         {
           id: 1,

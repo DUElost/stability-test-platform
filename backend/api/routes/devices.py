@@ -29,6 +29,14 @@ from backend.services.device_swipe_trail import bulk_set_swipe_trail
 # SEED 项目成员不算真实归属映射。
 _USER_SOURCE = "USER"
 
+# `GET /devices` 的**单次响应** limit 护栏。它是体积护栏，**不是 fleet 总量**：
+# 48 host × 25 台 = 1200 已把本值压满，而 ADR-0026 的规模目标是 60+ host / 1000+
+# device（= 1500 台），即本值已落在承诺包线之内（#3131）。客户端要全量必须按 skip
+# 翻页（前端 `fetchAllDevicePages`）；把本值当成「一次能装下整个 fleet」的写法在扩容
+# 后只会静默少设备。调大本值等于把墙往后挪，且单次响应体积随之线性上涨
+# （1200 台实测 473 KB / 220 ms），正解是消费方翻页而不是抬护栏。
+_DEVICE_LIST_MAX_LIMIT = 1200
+
 logger = logging.getLogger(__name__)
 
 
@@ -344,7 +352,7 @@ def list_devices(
         False, description="ADR-0038 D5：默认隐藏退役主机上的设备，显式置 true 才显示",
     ),
     skip: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=1200),
+    limit: int = Query(50, ge=1, le=_DEVICE_LIST_MAX_LIMIT),
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
