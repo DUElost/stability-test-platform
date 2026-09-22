@@ -1,8 +1,9 @@
-"""#2983：控制面 host 健康探针——解析 / 对账 / SSH 白名单执行器。
+"""#2983：控制面 host 健康探针——解析 / 对账 / SSH 白名单 / 调度 sweep。
 
 切片①：纯解析与对账（可离线预演 .102 / 空柜）。
-切片②：固定 argv 白名单 + ``sudo -S`` 远程执行（**不**落凭据、**不**接 cron）。
-cron/SAQ 调度与告警接线留后续切片。
+切片②：固定 argv 白名单 + ``sudo -S`` 远程执行。
+切片③：APScheduler 周期 sweep（并发帽 + ``host.extra.health_probe`` 连续窗）。
+告警规则另开（本模块只落库与指标）。
 
 签名词表与 Agent 侧 ``backend.agent.kernel_usb_faults`` 同源。
 """
@@ -10,17 +11,29 @@ from __future__ import annotations
 
 import logging
 import shlex
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Iterable, Optional, Protocol, Sequence, Set
 
 from backend.agent.kernel_usb_faults import (
     parse_kernel_usb_faults,
 )
+from backend.core.audit import record_audit
+from backend.core.database import SessionLocal
+from backend.core.settings.scheduler import get_scheduler_settings
+from backend.core.ssh_security import create_ssh_client, resolve_host_ssh_credentials
+from backend.models.host import Host
 from backend.services.host_maintenance import in_maintenance_window
+from backend.services.host_updater import _resolve_ssh_creds
 
 logger = logging.getLogger(__name__)
+
+# host.extra 键：连续窗与最近一轮摘要（口令绝不进此块）
+HEALTH_PROBE_EXTRA_KEY = "health_probe"
+_RECENT_VERDICTS_CAP = 8
+PROBE_ERROR_VERDICT = "probe_error"
 
 # 拓扑判定词表（进对账信号；后续告警规则按此建）。
 TOPOLOGY_OK = "ok"
@@ -339,3 +352,248 @@ def select_probe_host_ids(
             continue
         selected.append(str(host.id))
     return selected
+
+
+# ---------------------------------------------------------------------------
+# 切片③：周期 sweep（并发帽 + extra 连续窗）
+# ---------------------------------------------------------------------------
+
+
+def append_probe_verdict(
+    recent: Sequence[str],
+    verdict: str,
+    *,
+    cap: int = _RECENT_VERDICTS_CAP,
+) -> list[str]:
+    """追加一轮 verdict 字符串，截断到 cap。"""
+    out = [str(v) for v in recent if v] + [str(verdict)]
+    return out[-cap:]
+
+
+def _agent_reasons_from_extra(extra: dict[str, Any] | None) -> list[str]:
+    health = (extra or {}).get("health") or {}
+    reasons = health.get("reasons") or []
+    if not isinstance(reasons, list):
+        return []
+    return [str(r) for r in reasons if r]
+
+
+def apply_probe_result_to_extra(
+    extra: dict[str, Any] | None,
+    *,
+    verdict: str,
+    signals: Sequence[str],
+    topology: str,
+    now: datetime,
+    strike_need: int,
+) -> dict[str, Any]:
+    """写 ``health_probe`` 摘要；返回可赋回 ``host.extra`` 的新 dict。"""
+    payload = dict(extra or {})
+    prev = dict(payload.get(HEALTH_PROBE_EXTRA_KEY) or {})
+    recent = append_probe_verdict(prev.get("recent_verdicts") or [], verdict)
+    verdict_enums: list[ProbeVerdict] = []
+    for raw in recent:
+        try:
+            verdict_enums.append(ProbeVerdict(raw))
+        except ValueError:
+            continue
+    strike = consecutive_strike_open(verdict_enums, need=strike_need)
+    payload[HEALTH_PROBE_EXTRA_KEY] = {
+        "checked_at": now.isoformat(),
+        "verdict": verdict,
+        "signals": list(signals),
+        "topology": topology,
+        "recent_verdicts": recent,
+        "strike_open": strike,
+        "strike_need": strike_need,
+    }
+    return payload
+
+
+def probe_one_host(
+    host_id: str,
+    *,
+    timeout: int,
+    strike_need: int,
+    ssh_connect=None,
+    collect_round=None,
+) -> dict[str, Any]:
+    """单机探针：SSH → 对账 → 写 extra → 可选审计。返回摘要（无凭据）。"""
+    ssh_connect = ssh_connect or create_ssh_client
+    collect_round = collect_round or collect_probe_round_via_ssh
+    now = datetime.now(timezone.utc)
+    summary: dict[str, Any] = {"host_id": host_id, "ok": False}
+
+    with SessionLocal() as db:
+        host = db.get(Host, host_id)
+        if host is None:
+            summary["error"] = "host_not_found"
+            return summary
+        try:
+            creds, migrated = resolve_host_ssh_credentials(
+                host, inventory_lookup=_resolve_ssh_creds,
+            )
+            if migrated:
+                db.add(host)
+        except Exception:
+            logger.warning(
+                "host_health_probe_creds_failed host=%s", host_id,
+            )
+            summary["error"] = "creds_failed"
+            host.extra = apply_probe_result_to_extra(
+                host.extra,
+                verdict=PROBE_ERROR_VERDICT,
+                signals=("creds_failed",),
+                topology=TOPOLOGY_UNKNOWN,
+                now=now,
+                strike_need=strike_need,
+            )
+            db.add(host)
+            db.commit()
+            return summary
+
+        client = None
+        try:
+            host_ip = getattr(host, "ip_address", None) or getattr(host, "ip", None) or ""
+            client = ssh_connect(
+                hostname=host_ip,
+                port=int(getattr(host, "ssh_port", None) or 22),
+                username=creds.user,
+                password=creds.password,
+                key_path=creds.key_path,
+                known_hosts_path=creds.known_hosts_path,
+                timeout=timeout,
+            )
+            round_ = collect_round(
+                client, sudo_password=creds.password, timeout=timeout,
+            )
+            result = reconcile_agent_health(
+                _agent_reasons_from_extra(host.extra), round_,
+            )
+            host.extra = apply_probe_result_to_extra(
+                host.extra,
+                verdict=result.verdict.value,
+                signals=result.signals,
+                topology=round_.topology.classification,
+                now=now,
+                strike_need=strike_need,
+            )
+            strike_open = bool(
+                (host.extra or {}).get(HEALTH_PROBE_EXTRA_KEY, {}).get("strike_open")
+            )
+            if strike_open and result.verdict == ProbeVerdict.AGENT_MUTE:
+                record_audit(
+                    db,
+                    action="host_health_probe_agent_mute",
+                    resource_type="host",
+                    resource_id=host_id,
+                    details={
+                        "verdict": result.verdict.value,
+                        "signals": list(result.signals),
+                        "topology": round_.topology.classification,
+                        "strike_need": strike_need,
+                    },
+                    username="system",
+                )
+            db.add(host)
+            db.commit()
+            summary.update(
+                {
+                    "ok": True,
+                    "verdict": result.verdict.value,
+                    "strike_open": strike_open,
+                    "topology": round_.topology.classification,
+                }
+            )
+            return summary
+        except Exception as exc:
+            logger.warning(
+                "host_health_probe_failed host=%s err=%s",
+                host_id, type(exc).__name__,
+            )
+            host.extra = apply_probe_result_to_extra(
+                host.extra,
+                verdict=PROBE_ERROR_VERDICT,
+                signals=("ssh_or_remote_failed",),
+                topology=TOPOLOGY_UNKNOWN,
+                now=now,
+                strike_need=strike_need,
+            )
+            db.add(host)
+            db.commit()
+            summary["error"] = type(exc).__name__
+            return summary
+        finally:
+            if client is not None:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+
+
+def run_probe_sweep_once(
+    *,
+    concurrency: int | None = None,
+    timeout: int | None = None,
+    strike_need: int | None = None,
+    ssh_connect=None,
+    collect_round=None,
+) -> dict[str, Any]:
+    """一轮 fleet 探针：选机 → 并发执行 → 汇总。"""
+    sched = get_scheduler_settings()
+    workers = concurrency if concurrency is not None else sched.host_health_probe_concurrency
+    to = timeout if timeout is not None else sched.host_health_probe_timeout_seconds
+    need = strike_need if strike_need is not None else sched.host_health_probe_strike_need
+    workers = max(1, int(workers))
+    to = max(1, int(to))
+    need = max(1, int(need))
+
+    with SessionLocal() as db:
+        hosts = db.query(Host).all()
+        target_ids = select_probe_host_ids(hosts)
+
+    tallies = {
+        "selected": len(target_ids),
+        "ok": 0,
+        "errors": 0,
+        "strike_open": 0,
+        "by_verdict": {},
+    }
+    if not target_ids:
+        return tallies
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [
+            pool.submit(
+                probe_one_host,
+                hid,
+                timeout=to,
+                strike_need=need,
+                ssh_connect=ssh_connect,
+                collect_round=collect_round,
+            )
+            for hid in target_ids
+        ]
+        for fut in as_completed(futures):
+            try:
+                summary = fut.result()
+            except Exception as exc:
+                tallies["errors"] += 1
+                logger.warning(
+                    "host_health_probe_future_failed err=%s", type(exc).__name__,
+                )
+                continue
+            if summary.get("ok"):
+                tallies["ok"] += 1
+                v = str(summary.get("verdict") or "")
+                tallies["by_verdict"][v] = tallies["by_verdict"].get(v, 0) + 1
+                if summary.get("strike_open"):
+                    tallies["strike_open"] += 1
+            else:
+                tallies["errors"] += 1
+
+    logger.info(
+        "host_health_probe_sweep_done selected=%d ok=%d errors=%d strike_open=%d",
+        tallies["selected"], tallies["ok"], tallies["errors"], tallies["strike_open"],
+    )
+    return tallies

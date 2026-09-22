@@ -76,6 +76,11 @@ class SchedulerSettings(DomainSettings):
     script_presence_sweep_cron: str = "30 9 * * *"
     # 历史可达窗口（天）：决定「该 host 预期会跑到哪些版本」的历史面。
     script_presence_history_days: int = Field(default=30, ge=1, le=365)
+    # #2983：控制面 host 健康探针周期（秒）。默认 600=10min；0 = 不注册该作业。
+    host_health_probe_interval_seconds: int = Field(default=600, ge=0)
+    host_health_probe_concurrency: int = Field(default=4, ge=1, le=32)
+    host_health_probe_timeout_seconds: int = Field(default=10, ge=1, le=60)
+    host_health_probe_strike_need: int = Field(default=2, ge=1, le=10)
 
     # ── recycler：批量、保留与宽限 ──
     recycler_batch_size: int = 200
