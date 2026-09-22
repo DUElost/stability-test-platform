@@ -65,6 +65,20 @@ export function formatBytesFromGb(gb: number): string {
   return `${gb.toFixed(1)} GB`;
 }
 
+/** 原始字节 → 1024 进制可读串（B/KiB/MiB/GiB/TiB；与 FileServerPage 本地实现同口径）。 */
+export function formatBytes(value: number | null | undefined, empty = '—'): string {
+  if (value == null || !Number.isFinite(value)) return empty;
+  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+  let scaled = Math.max(0, value);
+  let unit = 0;
+  while (scaled >= 1024 && unit < units.length - 1) {
+    scaled /= 1024;
+    unit += 1;
+  }
+  const digits = scaled >= 100 || unit === 0 ? 0 : scaled >= 10 ? 1 : 2;
+  return `${scaled.toFixed(digits)} ${units[unit]}`;
+}
+
 /** Ratio as percentage string (e.g. 42%). */
 export function formatPercent(
   numerator: number,

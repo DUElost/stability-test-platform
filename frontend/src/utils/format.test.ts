@@ -1,6 +1,21 @@
 import { describe, it, expect } from 'vitest';
-import { formatDateTimeLocale, formatDurationSeconds, formatUnixSeconds } from './format';
+import { formatBytes, formatDateTimeLocale, formatDurationSeconds, formatUnixSeconds } from './format';
 import { datetimeLocalInputToIso } from './time';
+
+describe('formatBytes', () => {
+  it('字节按 1024 进制选单位（设备 df 上报的字节口径）', () => {
+    expect(formatBytes(512)).toBe('512 B');
+    expect(formatBytes(1024)).toBe('1.00 KiB');
+    expect(formatBytes(1536 * 1024 * 1024)).toBe('1.50 GiB');
+    expect(formatBytes(128 * 1024 ** 3)).toBe('128 GiB');
+  });
+
+  it('null/NaN 返回占位（未上报设备显示破折号而非 0）', () => {
+    expect(formatBytes(null)).toBe('—');
+    expect(formatBytes(undefined, '未知')).toBe('未知');
+    expect(formatBytes(NaN)).toBe('—');
+  });
+});
 
 describe('formatDateTimeLocale', () => {
   it('合法 ISO 输出 zh-CN 24h 本地串', () => {

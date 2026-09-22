@@ -213,6 +213,42 @@ describe('ExpandableDeviceTable', () => {
     expect(screen.queryByTestId('device-table-selection-spacer')).not.toBeInTheDocument();
   });
 
+  // 设备存储空间指标（#2757 心跳 df 上报的字节口径 → /devices 渲染）
+  it('renders the storage column with free space when devices report disk', () => {
+    const withDisk = devices.map((d) => ({
+      ...d,
+      disk_total: 128 * 1024 ** 3,
+      disk_used: 100 * 1024 ** 3,
+    }));
+    render(<ExpandableDeviceTable devices={withDisk} />);
+
+    expect(screen.getByRole('columnheader', { name: '存储' })).toBeInTheDocument();
+    expect(screen.getByText('剩 28.0 GiB')).toBeInTheDocument();
+    expect(screen.getByTitle(/已用 100 GiB \/ 共 128 GiB/)).toBeInTheDocument();
+  });
+
+  it('hides the storage column when no device reports disk telemetry', () => {
+    render(<ExpandableDeviceTable devices={devices} />);
+    expect(screen.queryByRole('columnheader', { name: '存储' })).not.toBeInTheDocument();
+  });
+
+  it('shows storage breakdown in the expanded detail card', () => {
+    const withDisk = devices.map((d) => ({
+      ...d,
+      disk_total: 128 * 1024 ** 3,
+      disk_used: 100 * 1024 ** 3,
+    }));
+    render(<ExpandableDeviceTable devices={withDisk} />);
+    fireEvent.click(screen.getByText('SERIAL-1'));
+
+    expect(screen.getByText('存储空间')).toBeInTheDocument();
+    expect(screen.getByText('总容量 (/data)')).toBeInTheDocument();
+    expect(screen.getByText('128 GiB')).toBeInTheDocument();
+    expect(screen.getByText('78%')).toBeInTheDocument();
+    // 未上报的行在详情里显式说明，而不是渲染 0
+    expect(screen.queryByText('未上报（等待 df /data 采样）')).not.toBeInTheDocument();
+  });
+
   it('does not reserve clearance when the table is not selectable', () => {
     const many = Array.from({ length: 51 }, (_, i) => ({
       ...devices[0],

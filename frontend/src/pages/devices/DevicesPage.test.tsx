@@ -148,6 +148,33 @@ describe('DevicesPage', () => {
     });
   });
 
+  // 设备存储指标：API 已产出 disk_total/disk_used（字节），页面须透传到表的「存储」列
+  it('passes disk telemetry through to the storage column', async () => {
+    mockDevicesList.mockResolvedValue({
+      items: [
+        {
+          id: 1,
+          serial: 'TEST-SERIAL',
+          model: 'TestModel',
+          host_id: '198-51-100-123',
+          status: 'ONLINE',
+          tags: [],
+          last_seen: '2026-08-05T18:00:00+08:00',
+          disk_total: 128 * 1024 ** 3,
+          disk_used: 100 * 1024 ** 3,
+        },
+      ],
+      total: 1,
+    });
+    const DevicesPage = (await import('./DevicesPage')).default;
+    render(<DevicesPage />, { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(screen.getByRole('columnheader', { name: '存储' })).toBeInTheDocument();
+      expect(screen.getByText('剩 28.0 GiB')).toBeInTheDocument();
+    });
+  });
+
   it('admin can bulk-assign selected devices to a project', async () => {
     const user = userEvent.setup();
     const DevicesPage = (await import('./DevicesPage')).default;
