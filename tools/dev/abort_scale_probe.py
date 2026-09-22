@@ -448,7 +448,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     # 取连接失败**按 kind 汇总，不枚举**（#2959）：枚举式判据（timeout/error 两条）
     # 会漏掉新成因——槽耗尽（kind="slots_exhausted"）发生时序列在涨、而本腿打印
     # [OK]。见 `checkout_failures_by_kind`。
-    checkout_failures_by_kind = checkout_failures_by_kind(after, before)
+    by_kind = checkout_failures_by_kind(after, before)
 
     summary = {
         "abort": {"http_status": abort_status, "seconds": round(abort_seconds, 3)},
@@ -460,10 +460,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             "p99_ms": round(latencies[max(0, int(len(latencies) * 0.99) - 1)], 1),
         },
         "db_pool": {
-            "checkout_failures_delta_by_kind": checkout_failures_by_kind,
-            "checkout_failures_delta_total": round(
-                sum(checkout_failures_by_kind.values()), 6
-            ),
+            "checkout_failures_delta_by_kind": by_kind,
+            "checkout_failures_delta_total": round(sum(by_kind.values()), 6),
             "checkout_p99_seconds": pool_p99,
         },
         "fanout": {
@@ -482,7 +480,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     if summary["db_pool"]["checkout_failures_delta_total"] > 0:
         detail = ", ".join(
             f"{kind}={value}"
-            for kind, value in sorted(checkout_failures_by_kind.items())
+            for kind, value in sorted(by_kind.items())
             if value > 0
         )
         failures.append(
