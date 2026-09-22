@@ -18,15 +18,16 @@ Epic #745 要求的 in-tree ingestion breaker 此前未落地——本门禁补�
 三态判据：
 
 - 全部新族 = ``platform-authored`` → **绿**（平台自研能力不是 D0 对象，见 ADR-0033 §5.6）；
-- 有族声明为 ``external-tool`` → **红**：外部工具在 §5.4 触发前无合法 in-tree 出口，
-  须走中心存储 + env 路径并显式登记 legacy 例外；
+- 有族声明为 ``external-tool`` → **红**：外部工具无合法 in-tree 出口，须走 D0 分级准入
+  （Tool Contract + §5.4 触发后的包形态登记），或按 §5.4 显式登记 legacy 例外
+  （legacy 例外仅限已登记对象，不得扩散）；
 - 有族**未声明** → **红**，并给出声明写法。**读不到 diff 时同样按未声明处理（fail-closed）**。
 
 刻意**不建豁免清单**：豁免清单会变成第二个事实源；声明随 PR 一起被审。
 
-包存储 / ``tool_manifest.yaml`` 仍按 §5.4 **未触发不排期**；因此新族的合法出口
-不是「先塞 manifest 再入仓」，而是等触发条件成立后走 Contract + 包存储，或走显式
-ADR 例外登记。本门禁只保证「不得默默新开 in-tree 族」。
+包存储 / ``tool_manifest.yaml`` 已按 §5.4 **第 4 条（多站点）触发、可排期**（ADR-0033
+v1.11；实现跟踪 #3075）；因此新族的合法出口是走 Contract + 包形态登记，或走显式
+ADR 例外登记，而不是「先塞 manifest 再入仓」。本门禁只保证「不得默默新开 in-tree 族」。
 
 用法::
 
@@ -205,8 +206,9 @@ def _report(
         "\n    ADR-0033 归类：<family> = platform-authored"
         "\n    ADR-0033 归类：<family> = external-tool"
         "\n判据：纯 adb/python、无厂商二进制 / 第三方源码树 / 需独立分发的大体积资产"
-        " → platform-authored 放行；否则属外部工具，在 §5.4 触发前**无合法 in-tree 出口**，"
-        "请走中心存储 + env 路径并显式登记 legacy 例外。"
+        " → platform-authored 放行；否则属外部工具，**无合法 in-tree 出口**："
+        "须走 D0 分级准入（Tool Contract + §5.4 触发后的包形态登记，实现跟踪 #3075），"
+        "或按 §5.4 显式登记 legacy 例外（仅限已登记对象）。"
         "\n不要指望本门禁的豁免清单——它刻意没有（避免第二个事实源）。",
         file=sys.stderr,
     )

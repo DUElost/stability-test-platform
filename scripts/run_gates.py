@@ -119,7 +119,8 @@ GATES = {
         None,
     ),
     # ADR-0033 D0：禁止新增 backend/agent/scripts/ 顶层工具族（#745 in-tree breaker）。
-    # 既有族新版本仍绿；包存储未触发前新族无合法 in-tree 出口。
+    # 既有族新版本仍绿；新族须归类声明，external-tool 无 in-tree 出口
+    # （ADR-0033 §5.6；§5.4 条件 4 已触发，跟踪 #3075）。
     "new-script-family": (
         f"{PY} tools/dev/check_new_script_family.py --self-test && "
         f"{PY} tools/dev/check_new_script_family.py --base {BASE_REF}",
