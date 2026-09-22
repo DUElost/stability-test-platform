@@ -23,6 +23,7 @@ Class: feature
 - `npm --prefix frontend run test -- --run DeviceBulkActionBar DevicesPage` → 13 passed
 - ruff / tsc / compileall on touched paths → green
 - `python3 tools/dev/check_inner_imports.py` → `[OK] 598 ≤ 598`（把 `HTTPException` / `bulk_set_swipe_trail` 两处函数体内 import 升到模块顶层，未动基线）
+- `BulkSwipeTrailOut` / `BulkSwipeTrailDeviceResult` 登记进 `tests/test_api_response_shape_contract.py` `_MODEL_PAIRS`（对拍 `BulkSwipeTrailResult` / `BulkSwipeTrailResultItem`），消 `pr-agent-tests` 红灯
 - `check:quick`：本机 `schema-at-head` 因业务库 alembic 落后于 code head 红灯（与本变无关、禁止对生产库 upgrade）；其余静态门禁按文件跑通
 
 ## Revisit
