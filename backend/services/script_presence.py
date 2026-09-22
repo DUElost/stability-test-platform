@@ -21,6 +21,14 @@ n_a / maintenance``。两条刻意的口径：
 - ``unknown``（agent 不可达）**不是绿**——与 `agent_offline` 语义一致；
 - 维护窗内 host 的缺口记 ``maintenance`` 而非 missing/mismatch：维护窗兼作升级锁，
   窗口内不收作业、无即时影响（归队前补分发由 #2865 遗留项盯），否则维护期恒红。
+
+**覆盖边界（#3111）**：全集**不含**「active 但无任何 Plan 引用」的版本，而这类版本在
+生产里并不罕见（实测 `|active|=97` vs `|full|=50`）。它们一行都不会写进账本，于是
+汇总里的 `missing/mismatch = 0` **只**能读成「有 Plan 会跑的版本都在位」，**不能**读成
+「所有 active 版本都在位」——新合并、尚未被 Plan 引用的脚本版本（如 #3085 的
+`fill_storage` v1.1.1）正是落在这个盲区里。`active_unreferenced_versions()` 把这个
+差集暴露给汇总与日志；到位情况本身由 code digest 同步面（`agent_code_sync_status`）
+与一次 fleet 热更新负责，不在本账本的五态里。
 """
 from __future__ import annotations
 
@@ -82,6 +90,33 @@ def build_full_target_set(
     }
     active = {(str(r["name"]), str(r["version"])) for r in script_rows if r.get("is_active")}
     return sorted(referenced & active)
+
+
+def active_unreferenced_versions(
+    step_rows: list[dict], script_rows: list[dict]
+) -> list[tuple[str, str]]:
+    """`active − 被启用步骤引用` = **账本覆盖不到**的 active 版本（#3111）。
+
+    与 `build_full_target_set` 出自同一对集合、方向相反：全集是 `referenced ∩ active`，
+    这里是 `active − referenced`。两者互补，`|active| = |full| + |uncovered|`。
+
+    为什么要有这个面：这些版本不会进任何主机的可达集，于是每行都是 `n_a`——
+    汇总里的 `missing/mismatch = 0` **只**说明「有 Plan 会跑的版本都在位」，不能读成
+    「所有 active 版本都在位」。生产实测 `|active|=97 / |full|=50 / uncovered=47`
+    （2026-09-22），`fill_storage` v1.1.1（#3085 新版本、尚无 Plan 引用）就在其中：
+    它在 DB 里 active、脚本却要从**主机本地树**执行（`Script.nfs_path`），只有一次
+    fleet 热更新才会把文件送上主机。
+
+    这里只回集合本身（供汇总计数与日志），**不**把它们折进五态：历史上刻意用
+    「可达集」收敛告警面（见模块 docstring 的假缺口说明），把无人引用的 active 版本
+    一律判 missing 会立刻产生成片噪声——「账本没验过」与「本机缺」是两件事。
+    """
+    referenced = {
+        (str(r["script_name"]), str(r["script_version"]))
+        for r in step_rows
+    }
+    active = {(str(r["name"]), str(r["version"])) for r in script_rows if r.get("is_active")}
+    return sorted(active - referenced)
 
 
 def build_expected_manifests(
@@ -382,6 +417,9 @@ async def run_sweep(
 
     facts = await asyncio.to_thread(_facts)
     full = build_full_target_set(facts["steps"], facts["scripts"])
+    # #3111：全集之外的 active 版本（无 Plan 引用）账本一行都不写——把差集报出来，
+    # 免得下游把 `missing/mismatch=0` 读成「所有 active 版本都在位」。
+    uncovered = active_unreferenced_versions(facts["steps"], facts["scripts"])
     manifests = build_expected_manifests(facts["scripts"], full)
     by_plan = group_steps_by_plan(facts["steps"])
     scheduled = scheduled_host_plans(facts["schedules"], facts["devices"])
@@ -432,15 +470,29 @@ async def run_sweep(
         "hosts": len(hosts),
         "hosts_verified": len(need_rpc),
         "full_versions": len(full),
+        "uncovered_active_versions": len(uncovered),
         "rows": written,
         **summary,
     }
     logger.info(
-        "script_presence_sweep_done sweep=%s hosts=%d verified=%d rows=%d gaps=%d unknown=%d",
+        "script_presence_sweep_done sweep=%s hosts=%d verified=%d rows=%d gaps=%d unknown=%d"
+        " full=%d uncovered_active=%d",
         sweep_id, len(hosts), len(need_rpc), written,
         summary["counts"].get(STATE_MISSING, 0) + summary["counts"].get(STATE_MISMATCH, 0),
         summary["counts"].get(STATE_UNKNOWN, 0),
+        len(full), len(uncovered),
     )
+    if uncovered:
+        # 恒在的事实而非事故：日 sweep 里记 info（warning 会变成常亮灯），但要能一眼看到
+        # 「这次账本没覆盖哪些 active 版本」——新合并版本正是从这里被发现还没下发的。
+        preview = ", ".join(f"{n}@{v}" for n, v in uncovered[:10])
+        more = f" …(+{len(uncovered) - 10})" if len(uncovered) > 10 else ""
+        logger.info(
+            "script_presence_uncovered_active n=%d versions=%s%s"
+            "（无 Plan 引用 ⇒ 任何主机的可达集都没有它，账本不核验；"
+            "missing=0 不含这些版本，到位情况看 agent_code_sync_status）",
+            len(uncovered), preview, more,
+        )
     return result
 
 
