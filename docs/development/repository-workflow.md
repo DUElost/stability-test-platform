@@ -150,6 +150,10 @@ PR/CI 恒 no-op，故**不接入**，留痕靠下述收窗纪律（论证见 iss
   Registry 的 merge 主题通道静默失效；
 - `.github/workflows/pr-update-branch.yml` 与队列 reconcile 在队首通过 required checks
   且落后 `main` 时更新分支；
+- **判读 PR 终态用 `gh pr view <N> --json state`**（`OPEN` / `MERGED` / `CLOSED`）；REST
+  `GET /pulls/<N>` 的 `.state` **只有 `open` / `closed` 两个取值——已合入的 PR 也返回
+  `closed`**，合入事实在独立字段 `.merged` / `.merged_at`。轮询监控合入、或判「关闭未合」
+  时按 REST `.state` 会误判，REST 侧必须写 `state==closed and merged==false`；
 - fork、`frontend-major` 和 `github_actions` 更新不进入自动合入；
 - required checks：`lint`、`CodeQL`、`pr-typecheck`、`pr-compileall`、
   `pr-agent-tests`、`pr-migrate-empty-db`；
