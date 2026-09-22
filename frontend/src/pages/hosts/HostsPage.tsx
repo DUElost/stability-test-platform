@@ -205,6 +205,7 @@ export default function HostsPage() {
     setPanelOpen: setOpPanelOpen,
     startInstallBatch,
     startHotUpdateBatch,
+    startFlashPrereqsBatch,
     cancelInstall,
     markTerminal,
     closePanel,
@@ -216,6 +217,15 @@ export default function HostsPage() {
         if (ev.ok) {
           queryClient.invalidateQueries({ queryKey: hostKeys.list() });
           queryClient.invalidateQueries({ queryKey: ['host-detail', ev.hostId] });
+        }
+        return;
+      }
+      if (ev.kind === 'flash_prereqs') {
+        if (ev.ok) {
+          toast.success(`主机 ${ev.label} 刷机前置已补齐`);
+          queryClient.invalidateQueries({ queryKey: hostKeys.list() });
+        } else {
+          toast.error(`主机 ${ev.label} 刷机前置失败：${ev.error || ev.status}`);
         }
         return;
       }
@@ -557,6 +567,7 @@ export default function HostsPage() {
     let firstInstall = 0;
     let reinstall = 0;
     let hotUpdate = 0;
+    let flashPrereqs = 0;
     for (const h of selected) {
       if (h.status === 'ONLINE') {
         hotUpdate += 1;
@@ -565,12 +576,16 @@ export default function HostsPage() {
       } else {
         firstInstall += 1;
       }
+      if (h.agent_installed) {
+        flashPrereqs += 1;
+      }
     }
     return {
       selected: visibleSelectedHostIds.size,
       firstInstall,
       reinstall,
       hotUpdate,
+      flashPrereqs,
     };
   }, [visibleSelectedHostIds, hosts]);
 
@@ -582,7 +597,52 @@ export default function HostsPage() {
   const hotUpdateOpPending = hostOps.some(
     (op) => op.kind === 'hot_update' && (op.status === 'pending' || op.status === 'running'),
   );
+  const flashPrereqsPending = hostOps.some(
+    (op) =>
+      op.kind === 'flash_prereqs' &&
+      (op.status === 'pending' || op.status === 'running'),
+  );
   const hotUpdatePanelOps = hostOps.some((op) => op.kind === 'hot_update');
+
+  const resolveFlashPrereqsTargets = (hostIds: Array<string | number>) => {
+    return hostIds
+      .map((id) => {
+        const full = hosts?.find((h: Host) => h.id === id);
+        if (!full || full.retired_at || !full.agent_installed) return null;
+        return {
+          hostId: full.id,
+          label: full.name ?? full.ip ?? String(full.id),
+          agentInstalled: true,
+        };
+      })
+      .filter((t): t is NonNullable<typeof t> => t != null);
+  };
+
+  const handleFlashPrereqs = async (hostId: number | string) => {
+    const targets = resolveFlashPrereqsTargets([hostId]);
+    if (!targets.length) {
+      toast.info('仅已安装 Agent 的主机可补齐刷机前置');
+      return;
+    }
+    const ok = await confirmDialog({
+      description: `确定对主机「${targets[0].label}」补齐刷机前置（dialout / udev / Qt 库）？不会热更新代码。`,
+    });
+    if (!ok) return;
+    await startFlashPrereqsBatch(targets);
+  };
+
+  const handleBulkFlashPrereqs = async () => {
+    const targets = resolveFlashPrereqsTargets(Array.from(visibleSelectedHostIds));
+    if (!targets.length) {
+      toast.info('选中主机中没有可补齐刷机前置的目标（需已安装 Agent）');
+      return;
+    }
+    const ok = await confirmDialog({
+      description: `确定对 ${targets.length} 台主机补齐刷机前置（dialout / udev / Qt 库）？不会热更新代码。`,
+    });
+    if (!ok) return;
+    await startFlashPrereqsBatch(targets);
+  };
 
   const handleSelectedHotUpdate = async () => {
     if (visibleSelectedHostIds.size === 0 || bulkHotUpdateProgress) return;
@@ -797,7 +857,11 @@ export default function HostsPage() {
             data-testid="host-op-panel-reopen"
             onClick={() => setOpPanelOpen(true)}
           >
-            {hotUpdatePanelOps ? '热更新进度' : '安装进度'}
+            {hostOps.some((o) => o.kind === 'flash_prereqs')
+              ? '刷机前置进度'
+              : hotUpdatePanelOps
+                ? '热更新进度'
+                : '安装进度'}
             {installPending || hotUpdateOpPending
               ? ` (${hostOps.filter((o) => o.status === 'pending' || o.status === 'running').length} 进行中)`
               : ` (${hostOps.filter((o) => o.status === 'success').length} 成功 / ${hostOps.filter((o) => o.status === 'failed').length} 失败${hostOps.some((o) => o.status === 'canceled') ? ` / ${hostOps.filter((o) => o.status === 'canceled').length} 已取消` : ''}${hostOps.some((o) => o.status === 'skipped') ? ` / ${hostOps.filter((o) => o.status === 'skipped').length} 跳过` : ''})`}
@@ -824,6 +888,10 @@ export default function HostsPage() {
         isInstalling={(hostId: string | number) =>
           isHostOpBusy(hostId, ['install', 'reinstall'])
         }
+        onFlashPrereqs={isAdmin ? handleFlashPrereqs : undefined}
+        isFlashPrereqs={(hostId: string | number) =>
+          isHostOpBusy(hostId, 'flash_prereqs')
+        }
         onEdit={isAdmin ? handleEdit : undefined}
         onDelete={isAdmin ? handleDelete : undefined}
         onRetire={isAdmin ? handleRetire : undefined}
@@ -846,8 +914,14 @@ export default function HostsPage() {
         <HostBulkActionBar
           counts={bulkCounts}
           isAdmin={isAdmin}
-          installPending={installPending || hotUpdateOpPending}
-          hotUpdatePending={bulkHotUpdateProgress != null || hotUpdateOpPending || installPending}
+          installPending={installPending || hotUpdateOpPending || flashPrereqsPending}
+          hotUpdatePending={
+            bulkHotUpdateProgress != null ||
+            hotUpdateOpPending ||
+            installPending ||
+            flashPrereqsPending
+          }
+          flashPrereqsPending={flashPrereqsPending || installPending || hotUpdateOpPending}
           hotUpdateProgressLabel={bulkHotUpdateProgress
             ? `${bulkHotUpdateProgress.phase === 'checking' ? '预检' : '热更新'} ${bulkHotUpdateProgress.completed}/${bulkHotUpdateProgress.total}`
             : hotUpdateOpPending
@@ -855,6 +929,7 @@ export default function HostsPage() {
               : undefined}
           onInstall={handleBulkInstall}
           onHotUpdate={handleSelectedHotUpdate}
+          onFlashPrereqs={handleBulkFlashPrereqs}
           onDelete={handleBulkDelete}
           onClear={() => setSelectedHostIds(new Set())}
         />

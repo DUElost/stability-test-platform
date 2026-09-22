@@ -252,9 +252,11 @@ export default function HostOperationPanel({
                     <span className={cn('text-[11px]', TEXT.subtle)}>
                       {op.kind === 'hot_update'
                         ? '热更新'
-                        : op.kind === 'reinstall'
-                          ? '重新安装'
-                          : '首次安装'}
+                        : op.kind === 'flash_prereqs'
+                          ? '刷机前置'
+                          : op.kind === 'reinstall'
+                            ? '重新安装'
+                            : '首次安装'}
                     </span>
                     {(op.status === 'pending' || op.status === 'running') && (
                       <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
@@ -270,6 +272,7 @@ export default function HostOperationPanel({
                   </button>
                   {onCancelInstall &&
                     op.kind !== 'hot_update' &&
+                    op.kind !== 'flash_prereqs' &&
                     // #2255 残余：只在**真正在跑**的行渲染取消。pending 是排队态（并发闸门
                     // 之下尚未 trigger，没有 console run），点取消必然 409——现场表现为
                     // 行内落一条英文 detail.message，像是操作失败。排队行不提供取消。
@@ -324,7 +327,11 @@ export default function HostOperationPanel({
                     )}
                   >
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    {op.kind === 'hot_update' ? '正在热更新…' : '正在启动安装…'}
+                    {op.kind === 'hot_update'
+                      ? '正在热更新…'
+                      : op.kind === 'flash_prereqs'
+                        ? '正在补齐刷机前置…'
+                        : '正在启动安装…'}
                   </div>
                 )}
               </div>

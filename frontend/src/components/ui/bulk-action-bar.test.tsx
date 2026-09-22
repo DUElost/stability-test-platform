@@ -35,7 +35,7 @@ describe('bulk-action-bar 共享规格', () => {
 
     render(
       <HostBulkActionBar
-        counts={{ selected: 3, firstInstall: 2, reinstall: 1, hotUpdate: 2 }}
+        counts={{ selected: 3, firstInstall: 2, reinstall: 1, hotUpdate: 2, flashPrereqs: 0 }}
         isAdmin
         onInstall={vi.fn()}
         onClear={vi.fn()}

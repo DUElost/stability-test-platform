@@ -90,6 +90,7 @@ agent_secret: >-
 # 的 provisioning 段在显式开启时补齐：dialout + 固定 udev 0666 规则 + 包集合。
 # 默认 false：常规更新不触碰系统包面；刷机主机用
 #   ansible-playbook ... update_agent.yml -l <hosts> -e agent_ensure_flash_prereqs=true
+# 或控制面主机页「刷机前置」→ ensure_flash_prereqs.yml（强制执行，不依赖本开关）。
 agent_ensure_flash_prereqs: false
 
 # ── 源树 resources 前置断言（#2166）──────────────────────────────────────
