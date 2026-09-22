@@ -92,7 +92,7 @@ PipelineEngine 在两个层面验证锁：
 
 ## 落地与后续动作
 
-- ✅ 统一设备锁服务 `device_lock.py`（async + sync）
+- ✅ 统一设备锁服务 `device_lock.py`（async + sync）（⚠️ 该模块**已移除**：设备锁已收敛到 `device_leases` + fencing token，见下方「设备锁由 `device_leases` + fencing token 替代」条与 §关联实现/文档——〔#3099〕补标注，与前两项的勘误体例一致）
 - ✅ 会话看门狗 `session_watchdog.py`（Host 超时 + 锁过期 + UNKNOWN 宽限）
 - ✅ Claim 端点 savepoint + 锁获取原子操作
 - ✅ Complete 端点自动释放锁
