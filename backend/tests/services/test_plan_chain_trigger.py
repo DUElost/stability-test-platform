@@ -582,8 +582,11 @@ def test_select_chain_devices_naive_last_seen_treated_as_utc():
 class TestChainTriggerSettleWindow:
     """#2755：即时链触发路径的最小稳定窗（r431 后 2s 触发→40.6% init 失败）。
 
-    判据：窗口内**跳过**（不设 flag、不建 child、日志可观测），由 reconciler 下一
-    tick 以默认 `respect_settle=False` 补偿；补偿路径与幂等回放不受窗约束。
+    判据：窗口内**未就绪则跳过**（不设 flag、不建 child、日志可观测），由
+    reconciler 下一 tick 重试；补偿路径与幂等回放不受窗约束。#3082 后窗内设备
+    就绪（全 ONLINE 无 ACTIVE 租约）会提前放行——本类断言的是「未就绪仍睡满窗」
+    语义，故种子统一把设备置回 teardown 过渡态（BUSY）。就绪放行的用例见
+    TestChainTriggerSettleReadyGate。
     """
 
     @staticmethod
@@ -630,6 +633,13 @@ class TestChainTriggerSettleWindow:
             lambda: SimpleNamespace(chain_trigger_settle_seconds=180),
         )
 
+    @staticmethod
+    def _make_teardown_transient(db_session, sample_device):
+        """#3082：模拟 #2648 的生产形态——job 已 COMPLETED 但设备仍 BUSY
+        （teardown 收尾过渡态）。就绪门控下这不算就绪，窗内必须仍跳过。"""
+        sample_device.status = "BUSY"
+        db_session.commit()
+
     def test_within_window_skips_without_side_effects(
         self, db_session, sample_device, sample_host, sample_script, monkeypatch, caplog,
     ):
@@ -638,6 +648,7 @@ class TestChainTriggerSettleWindow:
         self._settle180(monkeypatch)
         parent = self._seed_parent(db_session, sample_device, sample_host, sample_script,
                                    ended_at=datetime.now(timezone.utc))
+        self._make_teardown_transient(db_session, sample_device)
         with caplog.at_level(logging.INFO):
             out = trigger_next_plan_sync(parent, db_session, respect_settle=True)
         assert out is None
@@ -685,6 +696,7 @@ class TestChainTriggerSettleWindow:
         self._settle180(monkeypatch)
         parent = self._seed_parent(db_session, sample_device, sample_host, sample_script,
                                    ended_at=datetime.now(timezone.utc))
+        self._make_teardown_transient(db_session, sample_device)
         with caplog.at_level(logging.INFO):
             child = reconcile_chain_trigger_sync(parent.id, db_session)
         assert child is None
@@ -718,6 +730,7 @@ class TestChainTriggerSettleWindow:
         self._settle180(monkeypatch)
         parent = self._seed_parent(db_session, sample_device, sample_host, sample_script,
                                    ended_at=datetime.now(timezone.utc))
+        self._make_teardown_transient(db_session, sample_device)
         db_session.execute(
             update(PlanRun).where(PlanRun.id == parent.id)
             .values(next_plan_triggered=True)
@@ -760,3 +773,254 @@ class TestChainTriggerSettleWindow:
         db_session.refresh(parent)
         out = trigger_next_plan_sync(parent, db_session, respect_settle=True)
         assert out is not None and out.id == existing.id
+
+
+class TestChainTriggerSettleReadyGate:
+    """#3082：settle 窗内「设备就绪」提前放行——固定窗退化为上限兜底。
+
+    判据（偏保守，对照 #2755）：候选设备**全部** ONLINE、无 ACTIVE 租约且
+    排除表为空才提前触发；BUSY 过渡态 / 租约占用 / 排除项非空 / 关闭门控的
+    回退开关，任一情况必须仍睡满窗。
+    """
+
+    @staticmethod
+    def _settle180(monkeypatch):
+        from types import SimpleNamespace
+        monkeypatch.setattr(
+            "backend.services.plan_chain_trigger.get_scheduler_settings",
+            lambda: SimpleNamespace(chain_trigger_settle_seconds=180),
+        )
+
+    @staticmethod
+    def _seed_lease(db_session, device, host, *, status="ACTIVE"):
+        from backend.models.device_lease import DeviceLease
+        lease = DeviceLease(
+            device_id=device.id, host_id=host.id, lease_type="job",
+            status=status, fencing_token=f"tok-3082-{status.lower()}",
+            lease_generation=1, agent_instance_id="agent-3082",
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        )
+        db_session.add(lease)
+        db_session.commit()
+        return lease
+
+    def test_ready_within_window_releases_early(
+        self, db_session, sample_device, sample_host, sample_script, monkeypatch, caplog,
+    ):
+        import logging
+        self._settle180(monkeypatch)
+        parent = TestChainTriggerSettleWindow._seed_parent(
+            db_session, sample_device, sample_host, sample_script,
+            ended_at=datetime.now(timezone.utc),
+        )
+        # sample_device 恒为 ONLINE 无租约 → 就绪，不得干等满 180s
+        with caplog.at_level(logging.INFO):
+            child = trigger_next_plan_sync(parent, db_session, respect_settle=True)
+        assert child is not None and child.status == "QUEUED"
+        assert "plan_chain_trigger_settle_early_release" in caplog.text
+        assert "plan_chain_trigger_settling" not in caplog.text
+        db_session.expire_all()
+        assert db_session.get(PlanRun, parent.id).next_plan_triggered is True
+
+    def test_active_lease_blocks_early_release(
+        self, db_session, sample_device, sample_host, sample_script, monkeypatch, caplog,
+    ):
+        import logging
+        self._settle180(monkeypatch)
+        parent = TestChainTriggerSettleWindow._seed_parent(
+            db_session, sample_device, sample_host, sample_script,
+            ended_at=datetime.now(timezone.utc),
+        )
+        self._seed_lease(db_session, sample_device, sample_host)
+        with caplog.at_level(logging.INFO):
+            out = trigger_next_plan_sync(parent, db_session, respect_settle=True)
+        assert out is None
+        assert "plan_chain_trigger_settling" in caplog.text
+
+    def test_released_lease_does_not_block(
+        self, db_session, sample_device, sample_host, sample_script, monkeypatch,
+    ):
+        """租约谓词是 ACTIVE——历史 RELEASED 行不得把链钉死在窗上。"""
+        self._settle180(monkeypatch)
+        parent = TestChainTriggerSettleWindow._seed_parent(
+            db_session, sample_device, sample_host, sample_script,
+            ended_at=datetime.now(timezone.utc),
+        )
+        self._seed_lease(db_session, sample_device, sample_host, status="RELEASED")
+        child = trigger_next_plan_sync(parent, db_session, respect_settle=True)
+        assert child is not None
+
+    def test_excluded_device_blocks_early_release(
+        self, db_session, sample_device, sample_host, sample_script, monkeypatch,
+    ):
+        """父段另一台设备 ABORTED+BUSY → 排除表非空即冲击未落回，继续等窗。"""
+        from backend.models.host import Device
+        self._settle180(monkeypatch)
+        parent = TestChainTriggerSettleWindow._seed_parent(
+            db_session, sample_device, sample_host, sample_script,
+            ended_at=datetime.now(timezone.utc),
+        )
+        busy = Device(
+            serial="test-device-busy-3082", host_id=sample_host.id,
+            status="BUSY", last_seen=datetime.now(timezone.utc),
+        )
+        db_session.add(busy)
+        db_session.flush()
+        db_session.add(JobInstance(
+            plan_run_id=parent.id, plan_id=parent.plan_id,
+            device_id=busy.id, host_id=sample_host.id,
+            status=JobStatus.ABORTED.value,
+            pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+        ))
+        db_session.commit()
+        out = trigger_next_plan_sync(parent, db_session, respect_settle=True)
+        assert out is None
+
+    def test_gate_disabled_restores_fixed_window(
+        self, db_session, sample_device, sample_host, sample_script, monkeypatch, caplog,
+    ):
+        """回退开关：门控关时即使就绪也睡满窗（#2755 纯固定窗语义）。"""
+        import logging
+        from types import SimpleNamespace
+        monkeypatch.setattr(
+            "backend.services.plan_chain_trigger.get_scheduler_settings",
+            lambda: SimpleNamespace(
+                chain_trigger_settle_seconds=180,
+                chain_trigger_settle_ready_gate_enabled=False,
+            ),
+        )
+        parent = TestChainTriggerSettleWindow._seed_parent(
+            db_session, sample_device, sample_host, sample_script,
+            ended_at=datetime.now(timezone.utc),
+        )
+        with caplog.at_level(logging.INFO):
+            out = trigger_next_plan_sync(parent, db_session, respect_settle=True)
+        assert out is None
+        assert "plan_chain_trigger_settling" in caplog.text
+
+    def test_no_jobs_parent_waits_window(
+        self, db_session, sample_host, sample_script, monkeypatch,
+    ):
+        """父段无 job 行：不得借就绪路径提前进入 no_devices 语义，仍等窗。"""
+        self._settle180(monkeypatch)
+        child_plan = Plan(name="rg-child")
+        parent_plan = Plan(name="rg-parent", next_plan_id=child_plan.id)
+        db_session.add_all([parent_plan, child_plan])
+        db_session.flush()
+        pr = PlanRun(
+            plan_id=parent_plan.id, status="SUCCESS",
+            plan_snapshot={
+                "plan": {"id": parent_plan.id, "next_plan_id": child_plan.id},
+                "steps": [],
+            },
+            run_type="MANUAL", triggered_by="test",
+            started_at=datetime.now(timezone.utc),
+            ended_at=datetime.now(timezone.utc),
+        )
+        db_session.add(pr)
+        db_session.commit()
+        assert trigger_next_plan_sync(pr, db_session, respect_settle=True) is None
+
+
+def _rows_result(rows, lease_ids=()):
+    """#3082 async mock：同一 result 形状同时满足 `.all()`（状态行）与
+    `.scalars().all()`（租约 id）。"""
+    result = MagicMock()
+    result.all.return_value = list(rows)
+    result.scalars.return_value.all.return_value = list(lease_ids)
+    return result
+
+
+@pytest.mark.asyncio
+async def test_async_ready_releases_early_within_window(monkeypatch):
+    """async 即时路径与 sync 补偿路径同判据：窗内就绪即提前放行。"""
+    from types import SimpleNamespace
+    monkeypatch.setattr(
+        "backend.services.plan_chain_trigger.get_scheduler_settings",
+        lambda: SimpleNamespace(chain_trigger_settle_seconds=180),
+    )
+    parent = PlanRun(
+        id=4242, plan_id=10, status="SUCCESS", chain_index=0,
+        root_plan_run_id=None, triggered_by="test", next_plan_triggered=False,
+        plan_snapshot={"plan": {"id": 10, "next_plan_id": 20}, "steps": []},
+        ended_at=datetime(2026, 9, 22, 12, 0, 0, tzinfo=timezone.utc),
+    )
+    rows = [(7, "COMPLETED", "ONLINE", None)]
+    child_stub = SimpleNamespace(id=99)
+    mock_db = MagicMock()
+    mock_db.execute = AsyncMock(side_effect=[
+        _scalar_result(parent),      # 父行 key-share 读
+        _scalar_result(None),        # existing child 检查
+        _rows_result(rows),          # #3082 就绪探测：设备状态行
+        _rows_result(rows, []),      # #3082 就绪探测：ACTIVE 租约
+        _rows_result(rows),          # 主流程设备筛选
+    ])
+    mock_db.run_sync = AsyncMock(return_value=child_stub)
+    mock_db.commit = AsyncMock()
+    mock_db.get = AsyncMock(return_value=child_stub)
+
+    out = await trigger_next_plan(
+        parent, mock_db, respect_settle=True,
+        now=datetime(2026, 9, 22, 12, 0, 30, tzinfo=timezone.utc),
+    )
+    assert out is child_stub
+    assert mock_db.execute.await_count == 5
+    mock_db.run_sync.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_async_not_ready_still_skips_within_window(monkeypatch):
+    """反证：#2648 过渡态（job COMPLETED 但设备 BUSY）在 async 路径同样不放行。"""
+    from types import SimpleNamespace
+    monkeypatch.setattr(
+        "backend.services.plan_chain_trigger.get_scheduler_settings",
+        lambda: SimpleNamespace(chain_trigger_settle_seconds=180),
+    )
+    parent = PlanRun(
+        id=4243, plan_id=10, status="SUCCESS", chain_index=0,
+        root_plan_run_id=None, triggered_by="test", next_plan_triggered=False,
+        plan_snapshot={"plan": {"id": 10, "next_plan_id": 20}, "steps": []},
+        ended_at=datetime(2026, 9, 22, 12, 0, 0, tzinfo=timezone.utc),
+    )
+    busy_rows = [(7, "COMPLETED", "BUSY", None)]
+    mock_db = MagicMock()
+    mock_db.execute = AsyncMock(side_effect=[
+        _scalar_result(parent),
+        _scalar_result(None),
+        _rows_result(busy_rows),
+        _rows_result(busy_rows, []),
+    ])
+    mock_db.run_sync = AsyncMock()
+    mock_db.commit = AsyncMock()
+
+    out = await trigger_next_plan(
+        parent, mock_db, respect_settle=True,
+        now=datetime(2026, 9, 22, 12, 0, 30, tzinfo=timezone.utc),
+    )
+    assert out is None
+    mock_db.run_sync.assert_not_awaited()
+
+
+def test_settle_ready_decision_matrix():
+    """#3082 判据真值表：仅「候选全 ONLINE、无 ACTIVE 租约、无排除」放行，其余保守等窗。"""
+    from backend.services.plan_chain_trigger import _settle_ready_decision
+
+    now = datetime(2026, 9, 22, 12, 0, 0, tzinfo=timezone.utc)
+    # rows 形状与设备查询一致：(device_id, job_status, device_status, last_seen)
+    assert _settle_ready_decision([], now=now, active_lease_ids=set()) is False
+
+    rows = [(1, "COMPLETED", "ONLINE", None), (2, "COMPLETED", "ONLINE", None)]
+    assert _settle_ready_decision(rows, now=now, active_lease_ids=set()) is True
+    assert _settle_ready_decision(rows, now=now, active_lease_ids={2}) is False
+
+    # job COMPLETED 但设备仍 BUSY（#2648 过渡态）：候选集不含它，就绪判定必须不过
+    rows_busy = [(1, "COMPLETED", "ONLINE", None), (2, "COMPLETED", "BUSY", None)]
+    assert _settle_ready_decision(rows_busy, now=now, active_lease_ids=set()) is False
+
+    # 排除表非空（ABORTED+BUSY）即冲击未落回
+    rows_excluded = [(1, "COMPLETED", "ONLINE", None), (2, "ABORTED", "BUSY", None)]
+    assert _settle_ready_decision(rows_excluded, now=now, active_lease_ids=set()) is False
+
+    # 心跳窗内瞬时 OFFLINE 属于候选（#1822），但 ONLINE 谓词不满足 → 不放行
+    rows_offline = [(1, "FAILED", "OFFLINE", now - timedelta(seconds=60))]
+    assert _settle_ready_decision(rows_offline, now=now, active_lease_ids=set()) is False

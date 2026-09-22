@@ -62,6 +62,11 @@ class SchedulerSettings(DomainSettings):
     # 失败 40.6% vs 2.7h 间隔 4.6%）。窗锚定 ended_at，即时路径与 reconciler
     # 补偿路径都过同一道窗，故实际触发时刻 ≈ settle + (0~60s)。0 = 关闭（回退旧行为）。
     chain_trigger_settle_seconds: int = 180
+    # #3082：settle 窗内的「设备就绪」提前放行门控——链候选设备（按现行
+    # `_select_chain_devices` 口径）全部 ONLINE 且无 ACTIVE 租约、且无排除设备时，
+    # 窗内即时放行，固定窗退化为上限兜底；任一不满足仍睡满窗（保持 #2755 尖峰防护）。
+    # False = 回到纯固定窗语义（止血回退开关，非默认）。
+    chain_trigger_settle_ready_gate_enabled: bool = True
     # 一天扫一次 expired jti 即可（refresh 黑名单只随主动登出增长；见原注释）
     revoked_token_cleanup_interval_seconds: int = 24 * 3600
     auto_archive_poll_interval_seconds: int = 120

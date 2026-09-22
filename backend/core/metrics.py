@@ -117,6 +117,16 @@ device_update_suppressed_total = Counter(
     'DEVICE_UPDATE suppressed because update was immaterial (#2324)',
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
+# #3082：链触发 settle 窗的评估结局——区分「窗内未就绪跳过」与「就绪提前放行」。
+# 存在理由：#2755 的固定窗让「父段已结束但仍在等窗」与「链断了」在观测面上不可分辨；
+# outcome 词表（settling_skipped | early_release）让提前放行率可直接被 PromQL 问出来
+# （放行率 ≈0 = 就绪判据过严；≈1 且 init 失败率回升 = 判据过松，回退开关见 settings）。
+plan_chain_settle_outcome_total = Counter(
+    'stability_plan_chain_settle_outcome_total',
+    'Outcomes of the chain-trigger settle window evaluation (#3082)',
+    ['outcome'],  # settling_skipped | early_release
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
 # ============================================================================
 # Task Run Metrics
 # ============================================================================
