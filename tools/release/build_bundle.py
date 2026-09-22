@@ -238,7 +238,9 @@ def build_bundle(
     out.mkdir(parents=True, exist_ok=True)
     for name in TREE_LAYOUT:
         _copy_tree(repo_root / name, out / name)
-    for extra in ("ruff.toml",):
+    # tool_manifest.json：Git 唯一事实源（ADR-0033 D3 / ADR-0051 D3）——scan 回填
+    # script.package_sha256 从部署树根读它，bundle 形态必须随身携带。
+    for extra in ("ruff.toml", "tool_manifest.json"):
         if (repo_root / extra).exists():
             shutil.copy2(repo_root / extra, out / extra)
 

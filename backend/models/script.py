@@ -20,6 +20,10 @@ class Script(Base):
     # ADR-0020: entry-file sha lives in content_sha256; companion modules in the
     # same version directory (e.g. _adb.py) are tracked here for scan/verify.
     support_files_manifest = Column(JSONB, nullable=False, default=dict, server_default="{}")
+    # ADR-0051 D3（ADR-0033 v1.13 C1 双列）：整包 sha，来自 tool_manifest.json 登记条目，
+    # 由 scan 回填；与 content_sha256（入口文件 sha）语义分离。NULL = 尚未登记为包
+    # （Phase 2a 前的行 / 无对应版本目录的已退役行）。运行时校验唯一判据（Phase 2b 起）。
+    package_sha256 = Column(String(64), nullable=True)
     # #171: 脚本能力元数据（如 ["progress_stamps"]），由版本目录 capabilities.json
     # 在 scan_script_root 时登记；Plan 的 stall_seconds 门禁依赖此列而非硬编码白名单。
     capabilities = Column(JSONB, nullable=False, default=list, server_default="[]")

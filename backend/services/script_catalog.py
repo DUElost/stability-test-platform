@@ -24,6 +24,9 @@ _SUPPORTED_SUFFIXES = {
 }
 
 _CAPABILITIES_FILE = "capabilities.json"
+#: ADR-0051 D3：Git 唯一事实源，位于仓库根 / bundle 根（build_bundle 随身复制）。
+_DEFAULT_MANIFEST_PATH = Path(__file__).resolve().parents[2] / "tool_manifest.json"
+_MANIFEST_DEFAULT = object()
 
 
 @dataclass
@@ -33,6 +36,11 @@ class ScriptScanResult:
     deactivated: int = 0
     conflicts: List[Dict[str, str]] = field(default_factory=list)
     rebaselined: List[Dict[str, str]] = field(default_factory=list)
+    #: ADR-0051 Phase 2a：本轮从 tool_manifest.json 回填 ``package_sha256`` 的行数。
+    package_backfilled: int = 0
+    #: 行上已有 ``package_sha256`` 但与 manifest 登记值不等（manifest append-only 下
+    #: 只可能来自库侧被改或 manifest 违规改写）；与 ``conflicts`` 分开：后者是内容冲突。
+    package_conflicts: List[Dict[str, str]] = field(default_factory=list)
     # #2386：反激活的**明细**。只有计数是不够的——scan 的输入是
     # ``STP_SCRIPT_ROOT`` 指向的那棵树（生产上就是共享主工作树的当前检出），
     # 而「盘上缺失」是**单向**反激活（目录回来再扫也不复活，需显式重激活）。
@@ -51,6 +59,8 @@ class ScriptScanResult:
             "deactivated": self.deactivated,
             "conflicts": self.conflicts,
             "rebaselined": self.rebaselined,
+            "package_backfilled": self.package_backfilled,
+            "package_conflicts": self.package_conflicts,
             "deactivated_versions": self.deactivated_versions,
             "deactivation_skipped_versions": self.deactivation_skipped_versions,
         }
@@ -217,6 +227,45 @@ def _runtime_path(root: Path, entry: Path, runtime_root: str | None) -> str:
     return str(PurePosixPath(normalized_root, *relative_parts))
 
 
+def load_package_index(manifest_path: str | Path | None) -> Dict[Tuple[str, str], str]:
+    """``(name, version) → package_sha256``，只收未 retired 的条目；文件缺失/坏 → 空（回填静默跳过）。
+
+    平台脚本族与外部工具族同住一份 manifest；这里不区分——scan 只按 (name, version) 命中。
+    """
+    if not manifest_path:
+        return {}
+    path = Path(manifest_path)
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        logger.warning("script_scan_manifest_unreadable path=%s（package_sha256 回填跳过）", path)
+        return {}
+    index: Dict[Tuple[str, str], str] = {}
+    for name, tool in (doc.get("tools") or {}).items():
+        for entry in (tool or {}).get("versions") or []:
+            if entry.get("retired"):
+                continue
+            sha = entry.get("package_sha256")
+            if isinstance(sha, str) and len(sha) == 64:
+                index[(str(name), str(entry.get("version")))] = sha
+    return index
+
+
+def _backfill_package_sha(row: Script, expected: str | None, result: ScriptScanResult, now: datetime) -> None:
+    """ADR-0051 D3：manifest 有登记且行上为空 → 回填；不等 → 记 package_conflicts、不改写。"""
+    if expected is None:
+        return
+    if row.package_sha256 is None:
+        row.package_sha256 = expected
+        row.updated_at = now
+        result.package_backfilled += 1
+    elif row.package_sha256 != expected:
+        result.package_conflicts.append({
+            "name": row.name, "version": row.version,
+            "db_sha256": row.package_sha256, "manifest_sha256": expected,
+        })
+
+
 def scan_script_root(
     db: Session,
     root: str | Path,
@@ -224,6 +273,7 @@ def scan_script_root(
     *,
     force_rebaseline: bool = False,
     allow_deactivate: bool = False,
+    manifest_path: str | Path | None | object = _MANIFEST_DEFAULT,
 ) -> ScriptScanResult:
     """Scan ``root`` and reconcile the ``script`` table.
 
@@ -254,6 +304,9 @@ def scan_script_root(
     root_path = Path(root).resolve()
     if not root_path.exists() or not root_path.is_dir():
         raise FileNotFoundError(f"script root not found: {root_path}")
+    if manifest_path is _MANIFEST_DEFAULT:
+        manifest_path = _DEFAULT_MANIFEST_PATH if _DEFAULT_MANIFEST_PATH.is_file() else None
+    package_index = load_package_index(manifest_path)  # type: ignore[arg-type]
 
     result = ScriptScanResult()
     seen_keys: set[tuple[str, str]] = set()
@@ -268,6 +321,7 @@ def scan_script_root(
         content_sha256 = sha256_file(entry)
         support_manifest = support_files_manifest(entry.parent, entry)
         capabilities = read_capabilities(entry.parent)
+        package_sha = package_index.get(key)
         existing = existing_by_key.get(key)
 
         if existing is None:
@@ -279,6 +333,7 @@ def scan_script_root(
                 version=version,
                 nfs_path=_runtime_path(root_path, entry, runtime_root),
                 content_sha256=content_sha256,
+                package_sha256=package_sha,
                 support_files_manifest=support_manifest,
                 capabilities=capabilities,
                 param_schema={},
@@ -339,6 +394,8 @@ def scan_script_root(
             existing.capabilities = capabilities
             existing.nfs_path = _runtime_path(root_path, entry, runtime_root)
             existing.is_active = True
+            # 重锚内容身份的同时重锚包身份（登记值即当前树的包，见 check_script_packages）。
+            existing.package_sha256 = package_sha
             existing.updated_at = now
             continue
 
@@ -354,6 +411,7 @@ def scan_script_root(
         # deactivated — that state only ever comes from the admin deactivate
         # endpoint or a seed migration, and silently resurrecting it defeats
         # those decisions. Re-activation is an explicit operator action.
+        _backfill_package_sha(existing, package_sha, result, now)
         result.skipped += 1
 
     # #2386：反激活的输入必须是**部署目标树**。被扫的子树与 `origin/main` 不一致

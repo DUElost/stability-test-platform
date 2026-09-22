@@ -12,6 +12,1826 @@
           "version": "2026.09.22"
         }
       ]
+    },
+    "aee_prepare": {
+      "versions": [
+        {
+          "artifact": "packages/aee_prepare/1.0.0.tar.gz",
+          "package_sha256": "71806848d1f475fdb32ba3acef4eedfd78fbc9dbc3b1f6dd9b05ea28e7b70df8",
+          "python": null,
+          "retired": false,
+          "script": "aee_prepare.py",
+          "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/aee_prepare/1.0.1.tar.gz",
+          "package_sha256": "ed060a82944c1090c9b63cfb6f397d6c23a5e4fa38e5cbb030ec0aeb6e8902fa",
+          "python": null,
+          "retired": false,
+          "script": "aee_prepare.py",
+          "version": "1.0.1"
+        }
+      ]
+    },
+    "aee_signal_trigger": {
+      "versions": [
+        {
+          "artifact": "packages/aee_signal_trigger/1.0.0.tar.gz",
+          "package_sha256": "1d0aacf886e71ea5df3d544fab24eff7e8189e92c7f317fdaa36fa4101322b0e",
+          "python": null,
+          "retired": false,
+          "script": "aee_signal_trigger.py",
+          "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/aee_signal_trigger/1.0.1.tar.gz",
+          "package_sha256": "4b91565c15677834529c6301284e282fa439e2bd637397c83d86c7344120965f",
+          "python": null,
+          "retired": false,
+          "script": "aee_signal_trigger.py",
+          "version": "1.0.1"
+        }
+      ]
+    },
+    "check_device": {
+      "versions": [
+        {
+          "artifact": "packages/check_device/1.0.0.tar.gz",
+          "package_sha256": "ddade4e35bed5d19c8b5194360330f5ec12d3b2f7926f8f6849723b0583edd7a",
+          "python": null,
+          "retired": false,
+          "script": "check_device.py",
+          "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/check_device/1.0.1.tar.gz",
+          "package_sha256": "f181209d7ad5be7d7d4309a219f077d4085fff69c6e311e136ef7f24ef8347a2",
+          "python": null,
+          "retired": false,
+          "script": "check_device.py",
+          "version": "1.0.1"
+        },
+        {
+          "artifact": "packages/check_device/1.0.2.tar.gz",
+          "package_sha256": "fe9059d446c7b304aa9182eacd14e2637648a371716937737bf76b4925a0ebad",
+          "python": null,
+          "retired": false,
+          "script": "check_device.py",
+          "version": "1.0.2"
+        }
+      ]
+    },
+    "clean_env": {
+      "versions": [
+        {
+          "artifact": "packages/clean_env/1.0.0.tar.gz",
+          "package_sha256": "e20bc2037fa7f14ecc097948b6a808a9a325a92d831b88b2aa63f005f38c5bd8",
+          "python": null,
+          "retired": false,
+          "script": "clean_env.py",
+          "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/clean_env/1.0.1.tar.gz",
+          "package_sha256": "a331f42e974f707af019d0cef99f185f02ada951afdf277f4bf2103ec715699d",
+          "python": null,
+          "retired": false,
+          "script": "clean_env.py",
+          "version": "1.0.1"
+        },
+        {
+          "artifact": "packages/clean_env/1.1.0.tar.gz",
+          "package_sha256": "a28393858287cb74c047a66d7ab54ddda7f3a58bf64d28d67b8cbbb1eac6be3c",
+          "python": null,
+          "retired": false,
+          "script": "clean_env.py",
+          "version": "1.1.0"
+        }
+      ]
+    },
+    "clear_recents": {
+      "versions": [
+        {
+          "artifact": "packages/clear_recents/1.0.0.tar.gz",
+          "package_sha256": "d9f67e0ff72103efa49bb556a0d1d98c7a820f3c249ba0d7fe33ad7b4fca33d7",
+          "python": null,
+          "retired": false,
+          "script": "clear_recents.py",
+          "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/clear_recents/1.0.1.tar.gz",
+          "package_sha256": "af63aaa5b42f9cb75113b79df8b372a87c8df26b3ab90f75060562a01423310d",
+          "python": null,
+          "retired": false,
+          "script": "clear_recents.py",
+          "version": "1.0.1"
+        },
+        {
+          "artifact": "packages/clear_recents/1.0.2.tar.gz",
+          "package_sha256": "780c03d52517e960bf9a59ecfd7c4772e79b9443bf86c39f463588a1eaaf4bdb",
+          "python": null,
+          "retired": false,
+          "script": "clear_recents.py",
+          "version": "1.0.2"
+        },
+        {
+          "artifact": "packages/clear_recents/1.0.3.tar.gz",
+          "package_sha256": "a2cf7274ca85668367da5a49581e5d63ab477af73b2d78e8a03e409c5fa2b437",
+          "python": null,
+          "retired": false,
+          "script": "clear_recents.py",
+          "version": "1.0.3"
+        },
+        {
+          "artifact": "packages/clear_recents/1.0.4.tar.gz",
+          "package_sha256": "a237213e24b34d340cb90224bd4d082cbe94e8e6db3ee9c1c78067ea1a9f9b89",
+          "python": null,
+          "retired": false,
+          "script": "clear_recents.py",
+          "version": "1.0.4"
+        },
+        {
+          "artifact": "packages/clear_recents/1.0.5.tar.gz",
+          "package_sha256": "c6b8b3b9c36951eeece221e17aaae18e14dc6f0a1622435326711a1977deed0b",
+          "python": null,
+          "retired": false,
+          "script": "clear_recents.py",
+          "version": "1.0.5"
+        }
+      ]
+    },
+    "connect_wifi": {
+      "versions": [
+        {
+          "artifact": "packages/connect_wifi/1.0.0.tar.gz",
+          "package_sha256": "0bab878dc931fc30b4b814aded0177fdacf34cba617064706babbbf25e8dfe40",
+          "python": null,
+          "retired": false,
+          "script": "connect_wifi.py",
+          "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/connect_wifi/1.0.1.tar.gz",
+          "package_sha256": "05ff99b7fa583d5dbbddb5262ba53d91d646fc70aadcc81dbfa214493f93ea45",
+          "python": null,
+          "retired": false,
+          "script": "connect_wifi.py",
+          "version": "1.0.1"
+        },
+        {
+          "artifact": "packages/connect_wifi/1.0.2.tar.gz",
+          "package_sha256": "8fd716d3ac1760adfadde6695a33dfb682a7b10b1dcc28d0b029d2e891dcc97a",
+          "python": null,
+          "retired": false,
+          "script": "connect_wifi.py",
+          "version": "1.0.2"
+        }
+      ]
+    },
+    "ensure_root": {
+      "versions": [
+        {
+          "artifact": "packages/ensure_root/1.0.0.tar.gz",
+          "package_sha256": "d1fc881626cbd5a2a390858d587c67be112b8f38e678f8f66dd34164d9171e5f",
+          "python": null,
+          "retired": false,
+          "script": "ensure_root.py",
+          "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/ensure_root/1.0.1.tar.gz",
+          "package_sha256": "8d7c4d96d975650fc59448a8c85a98a298645362b312c2c53e5040648cd85e93",
+          "python": null,
+          "retired": false,
+          "script": "ensure_root.py",
+          "version": "1.0.1"
+        },
+        {
+          "artifact": "packages/ensure_root/1.0.2.tar.gz",
+          "package_sha256": "a647b5c1765034b5301fd7433254dffc8ff88f81ffd69d3af3027914a57f9e1e",
+          "python": null,
+          "retired": false,
+          "script": "ensure_root.py",
+          "version": "1.0.2"
+        }
+      ]
+    },
+    "fill_storage": {
+      "versions": [
+        {
+          "artifact": "packages/fill_storage/1.0.0.tar.gz",
+          "package_sha256": "3dfd1173fe830b84b0059c7e03106c990d226778ec385a3b39f194a0da7ff4fe",
+          "python": null,
+          "retired": false,
+          "script": "fill_storage.py",
+          "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/fill_storage/1.0.1.tar.gz",
+          "package_sha256": "ce6d9d05c41ed1566ac5bda55c511031993a717d82b8ded6e8b90573694c657f",
+          "python": null,
+          "retired": false,
+          "script": "fill_storage.py",
+          "version": "1.0.1"
+        },
+        {
+          "artifact": "packages/fill_storage/1.0.2.tar.gz",
+          "package_sha256": "479f09b09e6368ee8311fc1289cad419f1cf6ef12333cc129596a165c012ce52",
+          "python": null,
+          "retired": false,
+          "script": "fill_storage.py",
+          "version": "1.0.2"
+        },
+        {
+          "artifact": "packages/fill_storage/1.1.0.tar.gz",
+          "package_sha256": "7e57194887296590259bb44ce153da4ded85c257f8832412bbe97d9ac0374d88",
+          "python": null,
+          "retired": false,
+          "script": "fill_storage.py",
+          "version": "1.1.0"
+        },
+        {
+          "artifact": "packages/fill_storage/1.1.1.tar.gz",
+          "package_sha256": "fcf062b2c9112377e1c136b5f5678d78192f0bbfa6c0cc9ea05f8be4c181c308",
+          "python": null,
+          "retired": false,
+          "script": "fill_storage.py",
+          "version": "1.1.1"
+        }
+      ]
+    },
+    "flash_firmware": {
+      "versions": [
+        {
+          "artifact": "packages/flash_firmware/1.0.0.tar.gz",
+          "package_sha256": "52344816405d9ed61d267ad9f48716aaf8db3d9d022979ccbd2b7e8e3f5c4190",
+          "python": null,
+          "retired": false,
+          "script": "flash_firmware.py",
+          "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/flash_firmware/1.0.1.tar.gz",
+          "package_sha256": "52344816405d9ed61d267ad9f48716aaf8db3d9d022979ccbd2b7e8e3f5c4190",
+          "python": null,
+          "retired": false,
+          "script": "flash_firmware.py",
+          "version": "1.0.1"
+        },
+        {
+          "artifact": "packages/flash_firmware/1.1.0.tar.gz",
+          "package_sha256": "27caeef78b82ad05fb45415aed1ec76199d5b080ef4a62a217d51cbf8ce31acf",
+          "python": null,
+          "retired": false,
+          "script": "flash_firmware.py",
+          "version": "1.1.0"
+        },
+        {
+          "artifact": "packages/flash_firmware/1.2.0.tar.gz",
+          "package_sha256": "29f72a1e9ea71770369a71453855a5695ed8b3ad057be21f9aa6493f68600819",
+          "python": null,
+          "retired": false,
+          "script": "flash_firmware.py",
+          "version": "1.2.0"
+        },
+        {
+          "artifact": "packages/flash_firmware/1.3.0.tar.gz",
+          "package_sha256": "421bd8698d941982eb573b5241f573a4b8e947f9498052933fdc3b179ccd28fc",
+          "python": null,
+          "retired": false,
+          "script": "flash_firmware.py",
+          "version": "1.3.0"
+        },
+        {
+          "artifact": "packages/flash_firmware/1.3.1.tar.gz",
+          "package_sha256": "ec6959c7101cea0abb642bd8b7ddabf08c27d2d85175feb9dd971709ee00fee2",
+          "python": null,
+          "retired": false,
+          "script": "flash_firmware.py",
+          "version": "1.3.1"
+        },
+        {
+          "artifact": "packages/flash_firmware/1.3.2.tar.gz",
+          "package_sha256": "58fcdf96716b5aa4f794ce2f06e0332f99e4b13cf103972fb082aad1c15e1c6a",
+          "python": null,
+          "retired": false,
+          "script": "flash_firmware.py",
+          "version": "1.3.2"
+        },
+        {
+          "artifact": "packages/flash_firmware/1.3.3.tar.gz",
+          "package_sha256": "7f7d8fce59edfbf4905b495b36b599023f77f5152bae2c24ed1541a223cb4465",
+          "python": null,
+          "retired": false,
+          "script": "flash_firmware.py",
+          "version": "1.3.3"
+        },
+        {
+          "artifact": "packages/flash_firmware/1.3.4.tar.gz",
+          "package_sha256": "05526bae0193bd9fdf4ecd9ecb8658b847d867da9eea9049e364ee5c6af3adaf",
+          "python": null,
+          "retired": false,
+          "script": "flash_firmware.py",
+          "version": "1.3.4"
+        },
+        {
+          "artifact": "packages/flash_firmware/1.3.5.tar.gz",
+          "package_sha256": "bb853b4ad86f5bf111d23c91c92d39a7c17fc8b23a03f14c4e87e78878220809",
+          "python": null,
+          "retired": false,
+          "script": "flash_firmware.py",
+          "version": "1.3.5"
+        },
+        {
+          "artifact": "packages/flash_firmware/1.3.6.tar.gz",
+          "package_sha256": "70e642c79e8654fb972b389910528009bdaae923b265b9c4abfdf691381640ee",
+          "python": null,
+          "retired": false,
+          "script": "flash_firmware.py",
+          "version": "1.3.6"
+        },
+        {
+          "artifact": "packages/flash_firmware/1.3.7.tar.gz",
+          "package_sha256": "dc23b88a77f8b63ae37d0d6873fa225294c095465fb57a794b6cd0c0393f59a4",
+          "python": null,
+          "retired": false,
+          "script": "flash_firmware.py",
+          "version": "1.3.7"
+        },
+        {
+          "artifact": "packages/flash_firmware/1.3.8.tar.gz",
+          "package_sha256": "67b6ff492685cbe8d87d47dd97d81d83cdc2d02a31debbf79ab6c2545959d05b",
+          "python": null,
+          "retired": false,
+          "script": "flash_firmware.py",
+          "version": "1.3.8"
+        },
+        {
+          "artifact": "packages/flash_firmware/1.3.9.tar.gz",
+          "package_sha256": "1599723cccd93e076dae45e3666532afb0506714bb94650645425a1902d2bc99",
+          "python": null,
+          "retired": false,
+          "script": "flash_firmware.py",
+          "version": "1.3.9"
+        },
+        {
+          "artifact": "packages/flash_firmware/1.3.10.tar.gz",
+          "package_sha256": "767fb3adb03ba108485970f319cda4b0ed6e509e14a9ff2edeeebc982d9a2e3a",
+          "python": null,
+          "retired": false,
+          "script": "flash_firmware.py",
+          "version": "1.3.10"
+        },
+        {
+          "artifact": "packages/flash_firmware/1.3.11.tar.gz",
+          "package_sha256": "36c8a2ac90e02e4d75a0f5fd51755b2be3eff42d732a0f614e84e75e97310732",
+          "python": null,
+          "retired": false,
+          "script": "flash_firmware.py",
+          "version": "1.3.11"
+        },
+        {
+          "artifact": "packages/flash_firmware/1.3.12.tar.gz",
+          "package_sha256": "b45993f60a429d0add941c76303c00214bd81d516826f773e9c1a6c60399f3b0",
+          "python": null,
+          "retired": false,
+          "script": "flash_firmware.py",
+          "version": "1.3.12"
+        },
+        {
+          "artifact": "packages/flash_firmware/1.3.13.tar.gz",
+          "package_sha256": "10a4e75fa76355f70cc0f0d946b029fb33a524a2deff7aa11b47fdd9dbcb1a6d",
+          "python": null,
+          "retired": false,
+          "script": "flash_firmware.py",
+          "version": "1.3.13"
+        },
+        {
+          "artifact": "packages/flash_firmware/1.3.14.tar.gz",
+          "package_sha256": "90868a2107dad134b92534aa5b8d43a9d6ea2cd06959992f5de04b2aaee3d8a1",
+          "python": null,
+          "retired": false,
+          "script": "flash_firmware.py",
+          "version": "1.3.14"
+        },
+        {
+          "artifact": "packages/flash_firmware/1.3.15.tar.gz",
+          "package_sha256": "af7d4e2730dd06361b43c7b2bd3fcbd8677dbc214b6383b0cade6e872362cca8",
+          "python": null,
+          "retired": false,
+          "script": "flash_firmware.py",
+          "version": "1.3.15"
+        },
+        {
+          "artifact": "packages/flash_firmware/1.3.16.tar.gz",
+          "package_sha256": "4d0330401196611c28a4d233c4f3bde7602adfd57986675480bcf996ad1b2ffe",
+          "python": null,
+          "retired": false,
+          "script": "flash_firmware.py",
+          "version": "1.3.16"
+        },
+        {
+          "artifact": "packages/flash_firmware/1.3.17.tar.gz",
+          "package_sha256": "d9eb058bd91c22280aa33313feb1597f330d22057650931896186093e95f712b",
+          "python": null,
+          "retired": false,
+          "script": "flash_firmware.py",
+          "version": "1.3.17"
+        }
+      ]
+    },
+    "flash_preflight": {
+      "versions": [
+        {
+          "artifact": "packages/flash_preflight/1.0.0.tar.gz",
+          "package_sha256": "62165fea88bb7d434154d1c2e245832d3f2f9fcb5d6cc13392641d0e69e8a73f",
+          "python": null,
+          "retired": false,
+          "script": "flash_preflight.py",
+          "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/flash_preflight/1.0.1.tar.gz",
+          "package_sha256": "0078bb31a83f9e6a6e852aa9adb1c31f1c37e974baf1bb007e9c5b91d772e62f",
+          "python": null,
+          "retired": false,
+          "script": "flash_preflight.py",
+          "version": "1.0.1"
+        },
+        {
+          "artifact": "packages/flash_preflight/1.0.2.tar.gz",
+          "package_sha256": "dfc0993bdd7141fda570bd1358fade30be4ee64cb79c452279552596c3c39695",
+          "python": null,
+          "retired": false,
+          "script": "flash_preflight.py",
+          "version": "1.0.2"
+        },
+        {
+          "artifact": "packages/flash_preflight/1.0.3.tar.gz",
+          "package_sha256": "1d5d38d9e31b2cb6669a25e6f999ac9ed027f9011e4146fd35e1f269939f1878",
+          "python": null,
+          "retired": false,
+          "script": "flash_preflight.py",
+          "version": "1.0.3"
+        },
+        {
+          "artifact": "packages/flash_preflight/1.0.4.tar.gz",
+          "package_sha256": "1cdbae8b0a6d5fc131460e13cd38ac88470567527de1639f636230d6f2607e2c",
+          "python": null,
+          "retired": false,
+          "script": "flash_preflight.py",
+          "version": "1.0.4"
+        }
+      ]
+    },
+    "gpu_check": {
+      "versions": [
+        {
+          "artifact": "packages/gpu_check/1.0.0.tar.gz",
+          "package_sha256": "b454fdc57ce1a53db071072ce1706f670c3f06a7be3195db6798eb8f5e094f8d",
+          "python": null,
+          "retired": false,
+          "script": "gpu_check.py",
+          "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/gpu_check/1.0.1.tar.gz",
+          "package_sha256": "3b66d163d524ec9967d48145aba696130fc57c42aadb283cc81e02f98b71f356",
+          "python": null,
+          "retired": false,
+          "script": "gpu_check.py",
+          "version": "1.0.1"
+        },
+        {
+          "artifact": "packages/gpu_check/1.0.2.tar.gz",
+          "package_sha256": "6833448555ebf49c23d472e00971e5e03a52d0cb0a876c8c9c6f81d8cad1eab1",
+          "python": null,
+          "retired": false,
+          "script": "gpu_check.py",
+          "version": "1.0.2"
+        },
+        {
+          "artifact": "packages/gpu_check/1.0.3.tar.gz",
+          "package_sha256": "57b0321f7f433943b4484bb6adc0028f89d5356922093cd35ac67a9bc664938b",
+          "python": null,
+          "retired": false,
+          "script": "gpu_check.py",
+          "version": "1.0.3"
+        },
+        {
+          "artifact": "packages/gpu_check/1.0.4.tar.gz",
+          "package_sha256": "6ce4640df7105e971f460cf89043bb6c79f7229e19ba16db53c5a5bad2bc261b",
+          "python": null,
+          "retired": false,
+          "script": "gpu_check.py",
+          "version": "1.0.4"
+        },
+        {
+          "artifact": "packages/gpu_check/1.0.5.tar.gz",
+          "package_sha256": "b86136dd8ed58dfefc1da5d166e5c057a94ff74436a30a35d1dd959616301787",
+          "python": null,
+          "retired": false,
+          "script": "gpu_check.py",
+          "version": "1.0.5"
+        },
+        {
+          "artifact": "packages/gpu_check/1.0.6.tar.gz",
+          "package_sha256": "4c9aed35c20cce8fff729cba4c6b69348da5640c0c1bbf6cd988a818cbad044f",
+          "python": null,
+          "retired": false,
+          "script": "gpu_check.py",
+          "version": "1.0.6"
+        },
+        {
+          "artifact": "packages/gpu_check/1.0.7.tar.gz",
+          "package_sha256": "00c9180ebb0dfb133ac354a238c6e7388478c97d11c04044cd9c3c15439db36a",
+          "python": null,
+          "retired": false,
+          "script": "gpu_check.py",
+          "version": "1.0.7"
+        },
+        {
+          "artifact": "packages/gpu_check/1.0.8.tar.gz",
+          "package_sha256": "3c041f51193feab78ccf8d1b874c4136ad0b23b41cbe438feec04b7ba13222b4",
+          "python": null,
+          "retired": false,
+          "script": "gpu_check.py",
+          "version": "1.0.8"
+        },
+        {
+          "artifact": "packages/gpu_check/1.0.9.tar.gz",
+          "package_sha256": "9150d9236fb18344eca3c22675597c7b1dc9b62740f67f6547ae0955b8600491",
+          "python": null,
+          "retired": false,
+          "script": "gpu_check.py",
+          "version": "1.0.9"
+        },
+        {
+          "artifact": "packages/gpu_check/1.0.10.tar.gz",
+          "package_sha256": "99fcb2903a3bb4700317154695ec926906685d295a1492823de83bb783ae78ab",
+          "python": null,
+          "retired": false,
+          "script": "gpu_check.py",
+          "version": "1.0.10"
+        }
+      ]
+    },
+    "gpu_finish": {
+      "versions": [
+        {
+          "artifact": "packages/gpu_finish/1.0.0.tar.gz",
+          "package_sha256": "13dec94ab8ad28bbba2a40b769353457ed099ffe655d791edf0d5d308f8f472f",
+          "python": null,
+          "retired": false,
+          "script": "gpu_finish.py",
+          "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/gpu_finish/1.0.1.tar.gz",
+          "package_sha256": "3edc2cc95bac52f6ef148fe1afae6166a60bbf9fea938d0ad753053a86b78226",
+          "python": null,
+          "retired": false,
+          "script": "gpu_finish.py",
+          "version": "1.0.1"
+        },
+        {
+          "artifact": "packages/gpu_finish/1.0.2.tar.gz",
+          "package_sha256": "9731e2bb5747a0f38d06927a6bd5f0a27a17fa66b5e0c89cdfa4205d8d58e8ff",
+          "python": null,
+          "retired": false,
+          "script": "gpu_finish.py",
+          "version": "1.0.2"
+        },
+        {
+          "artifact": "packages/gpu_finish/1.0.3.tar.gz",
+          "package_sha256": "514dd5d6177f13287e726179974ec99706ccb67c58b528c902be3d513f63fbeb",
+          "python": null,
+          "retired": false,
+          "script": "gpu_finish.py",
+          "version": "1.0.3"
+        },
+        {
+          "artifact": "packages/gpu_finish/1.0.4.tar.gz",
+          "package_sha256": "7bd13586d0e59f0b177b5fe07cc9a199f5b43044ad5f9f8fa0575f88af3421b6",
+          "python": null,
+          "retired": false,
+          "script": "gpu_finish.py",
+          "version": "1.0.4"
+        },
+        {
+          "artifact": "packages/gpu_finish/1.0.5.tar.gz",
+          "package_sha256": "a1579e698ae9dbe88d5a81f90a19aacee52b1b5477c4cee5b201d290b7628b9c",
+          "python": null,
+          "retired": false,
+          "script": "gpu_finish.py",
+          "version": "1.0.5"
+        },
+        {
+          "artifact": "packages/gpu_finish/1.0.6.tar.gz",
+          "package_sha256": "4500759f9e38a8dfb667afe27b8b739fdb47a15e57308aa06214d7fdafd57d73",
+          "python": null,
+          "retired": false,
+          "script": "gpu_finish.py",
+          "version": "1.0.6"
+        },
+        {
+          "artifact": "packages/gpu_finish/1.0.7.tar.gz",
+          "package_sha256": "8e772d7a927fb79c59c4e503378531de10e6913e7918e22b80a1eed70a49e836",
+          "python": null,
+          "retired": false,
+          "script": "gpu_finish.py",
+          "version": "1.0.7"
+        }
+      ]
+    },
+    "gpu_setup": {
+      "versions": [
+        {
+          "artifact": "packages/gpu_setup/1.0.0.tar.gz",
+          "package_sha256": "1d1b752e65d5ba07c8f5d442e59e3035d03c24ef4712954c0a3e98737a8fc469",
+          "python": null,
+          "retired": false,
+          "script": "gpu_setup.py",
+          "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/gpu_setup/1.0.1.tar.gz",
+          "package_sha256": "854f6b742dd72e6834ace84547a42367422d0902f64f9b38dc92f6a7b4e86f00",
+          "python": null,
+          "retired": false,
+          "script": "gpu_setup.py",
+          "version": "1.0.1"
+        },
+        {
+          "artifact": "packages/gpu_setup/1.0.2.tar.gz",
+          "package_sha256": "a96d736c6ea902a4b15e787eb8d57402c4cfbd4b598880db1b7a90a9c8300a64",
+          "python": null,
+          "retired": false,
+          "script": "gpu_setup.py",
+          "version": "1.0.2"
+        },
+        {
+          "artifact": "packages/gpu_setup/1.0.4.tar.gz",
+          "package_sha256": "b6f31e9db728d8a998bb63147f3382d126245ce462c1ed4d315f63b9e76f21d2",
+          "python": null,
+          "retired": false,
+          "script": "gpu_setup.py",
+          "version": "1.0.4"
+        },
+        {
+          "artifact": "packages/gpu_setup/1.0.5.tar.gz",
+          "package_sha256": "00e973ce35dbe39f24fb20bb951de24458438ace74fc110fb59226fbaac1645e",
+          "python": null,
+          "retired": false,
+          "script": "gpu_setup.py",
+          "version": "1.0.5"
+        },
+        {
+          "artifact": "packages/gpu_setup/1.0.6.tar.gz",
+          "package_sha256": "af57bdae51ea08210221d9b60b36a855d349d1aa0f5a0d4722da2e2621fe448e",
+          "python": null,
+          "retired": false,
+          "script": "gpu_setup.py",
+          "version": "1.0.6"
+        },
+        {
+          "artifact": "packages/gpu_setup/1.0.7.tar.gz",
+          "package_sha256": "5dc39170092f8373901ea7da17d3a5459d61f2e9ae1b1afc57917f34a6ef7e31",
+          "python": null,
+          "retired": false,
+          "script": "gpu_setup.py",
+          "version": "1.0.7"
+        },
+        {
+          "artifact": "packages/gpu_setup/1.0.8.tar.gz",
+          "package_sha256": "bb74ffae01507847ef9ccd974b144b716c1295abb3a11d5ab2fe5d8aeaf1a5c5",
+          "python": null,
+          "retired": false,
+          "script": "gpu_setup.py",
+          "version": "1.0.8"
+        },
+        {
+          "artifact": "packages/gpu_setup/1.0.9.tar.gz",
+          "package_sha256": "872f6829e457451823b53858745bdf1c0916a0eeccabdaf8be7c38fba7448ddd",
+          "python": null,
+          "retired": false,
+          "script": "gpu_setup.py",
+          "version": "1.0.9"
+        },
+        {
+          "artifact": "packages/gpu_setup/1.0.10.tar.gz",
+          "package_sha256": "ec0f48c081766428a471c9c18b2e26730cff612125733da9fa4e0b9ab03133a0",
+          "python": null,
+          "retired": false,
+          "script": "gpu_setup.py",
+          "version": "1.0.10"
+        },
+        {
+          "artifact": "packages/gpu_setup/1.1.0.tar.gz",
+          "package_sha256": "d99aba1ea03dc3cf7b54c5de23935715f15c44f667d96b5694a9186ed6e5596f",
+          "python": null,
+          "retired": false,
+          "script": "gpu_setup.py",
+          "version": "1.1.0"
+        },
+        {
+          "artifact": "packages/gpu_setup/1.2.0.tar.gz",
+          "package_sha256": "2d6fe8a8c65472b361f8c1c2368c3d23a318c28b38ba23380496f0d46ff76fc9",
+          "python": null,
+          "retired": false,
+          "script": "gpu_setup.py",
+          "version": "1.2.0"
+        },
+        {
+          "artifact": "packages/gpu_setup/1.2.1.tar.gz",
+          "package_sha256": "5baaa722bb6a69d698eb50a1eddc4c2b394031ec7d0b50b9ad24c2eb8032d49e",
+          "python": null,
+          "retired": false,
+          "script": "gpu_setup.py",
+          "version": "1.2.1"
+        },
+        {
+          "artifact": "packages/gpu_setup/1.2.2.tar.gz",
+          "package_sha256": "a997b4d9eb5f37df996ca79e11e86c05d2b8e81feb247a12eedeb7b1d4221785",
+          "python": null,
+          "retired": false,
+          "script": "gpu_setup.py",
+          "version": "1.2.2"
+        },
+        {
+          "artifact": "packages/gpu_setup/1.2.3.tar.gz",
+          "package_sha256": "e93f75fce96969d03b3f94bc3fcfb04a6ba87f97133e6ff6fe1538acf60c8e3c",
+          "python": null,
+          "retired": false,
+          "script": "gpu_setup.py",
+          "version": "1.2.3"
+        }
+      ]
+    },
+    "install_apk": {
+      "versions": [
+        {
+          "artifact": "packages/install_apk/1.0.0.tar.gz",
+          "package_sha256": "7d0d174c78557f08a8230e7dbee43b582a463a86df8cfa681f78cc4c9dbd2cc4",
+          "python": null,
+          "retired": false,
+          "script": "install_apk.py",
+          "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/install_apk/1.0.1.tar.gz",
+          "package_sha256": "7d0d174c78557f08a8230e7dbee43b582a463a86df8cfa681f78cc4c9dbd2cc4",
+          "python": null,
+          "retired": false,
+          "script": "install_apk.py",
+          "version": "1.0.1"
+        },
+        {
+          "artifact": "packages/install_apk/1.0.2.tar.gz",
+          "package_sha256": "ea192738d767a580895c34b4f81147512bdc7e047db92411ee1e27a1f3224927",
+          "python": null,
+          "retired": false,
+          "script": "install_apk.py",
+          "version": "1.0.2"
+        },
+        {
+          "artifact": "packages/install_apk/1.1.0.tar.gz",
+          "package_sha256": "158022e2962d5a9da1c427567d1e502cea62872588b40c9a197294a6430232c7",
+          "python": null,
+          "retired": false,
+          "script": "install_apk.py",
+          "version": "1.1.0"
+        }
+      ]
+    },
+    "monkey_check": {
+      "versions": [
+        {
+          "artifact": "packages/monkey_check/1.0.0.tar.gz",
+          "package_sha256": "c9c0fb7f393696913bf075e858815724cd992a10845d3e0dda30e8ef3862ba6d",
+          "python": null,
+          "retired": false,
+          "script": "monkey_check.py",
+          "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/monkey_check/2.0.0.tar.gz",
+          "package_sha256": "50a2404bd5d5ed15939846ba00795131e99c0c993ee6c87bfd01e6135fb951a4",
+          "python": null,
+          "retired": false,
+          "script": "monkey_check.py",
+          "version": "2.0.0"
+        },
+        {
+          "artifact": "packages/monkey_check/2.0.1.tar.gz",
+          "package_sha256": "50a2404bd5d5ed15939846ba00795131e99c0c993ee6c87bfd01e6135fb951a4",
+          "python": null,
+          "retired": false,
+          "script": "monkey_check.py",
+          "version": "2.0.1"
+        },
+        {
+          "artifact": "packages/monkey_check/2.0.2.tar.gz",
+          "package_sha256": "003760dc1a15d6d8bdb4702c1f60043605599a90ae3f35949e810daaabc22e2a",
+          "python": null,
+          "retired": false,
+          "script": "monkey_check.py",
+          "version": "2.0.2"
+        },
+        {
+          "artifact": "packages/monkey_check/2.0.3.tar.gz",
+          "package_sha256": "0b784ce1a34c983c602a8654b88c21d3fb4bd953cc613729403f8dcf3b13c363",
+          "python": null,
+          "retired": false,
+          "script": "monkey_check.py",
+          "version": "2.0.3"
+        }
+      ]
+    },
+    "monkey_launch": {
+      "versions": [
+        {
+          "artifact": "packages/monkey_launch/1.0.0.tar.gz",
+          "package_sha256": "7d6acd6ed179f7090b917e1636571b36d7faa8f7842cfc5c4561016bd1ca3dc3",
+          "python": null,
+          "retired": false,
+          "script": "monkey_launch.py",
+          "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/monkey_launch/2.0.0.tar.gz",
+          "package_sha256": "2f4f7307aa0f796776117669f67b93a94d4f4710b8f5bc550abd0c3fbbcac7ea",
+          "python": null,
+          "retired": false,
+          "script": "monkey_launch.py",
+          "version": "2.0.0"
+        },
+        {
+          "artifact": "packages/monkey_launch/4.0.0.tar.gz",
+          "package_sha256": "a13e785081e3a7caedf58eeda1f2d798f2953ec33684f16a855eff322501a314",
+          "python": null,
+          "retired": false,
+          "script": "monkey_launch.py",
+          "version": "4.0.0"
+        },
+        {
+          "artifact": "packages/monkey_launch/5.0.0.tar.gz",
+          "package_sha256": "2f4f7307aa0f796776117669f67b93a94d4f4710b8f5bc550abd0c3fbbcac7ea",
+          "python": null,
+          "retired": false,
+          "script": "monkey_launch.py",
+          "version": "5.0.0"
+        },
+        {
+          "artifact": "packages/monkey_launch/5.0.1.tar.gz",
+          "package_sha256": "a441ca61caa28b516e5705fd87b1c4998782e706267fa8f940d84532319a54d8",
+          "python": null,
+          "retired": false,
+          "script": "monkey_launch.py",
+          "version": "5.0.1"
+        },
+        {
+          "artifact": "packages/monkey_launch/5.0.2.tar.gz",
+          "package_sha256": "a6767f53415355758e6fbe8dac315a47ee07e88e5277e5c23200582b469df242",
+          "python": null,
+          "retired": false,
+          "script": "monkey_launch.py",
+          "version": "5.0.2"
+        },
+        {
+          "artifact": "packages/monkey_launch/5.1.0.tar.gz",
+          "package_sha256": "d0a46b54592bf2a8fbcf1403cfd1530c06bdef6146253dcedd853ebcc6a7f5a8",
+          "python": null,
+          "retired": false,
+          "script": "monkey_launch.py",
+          "version": "5.1.0"
+        },
+        {
+          "artifact": "packages/monkey_launch/5.2.0.tar.gz",
+          "package_sha256": "cb5a94b2115dd0d1bdd75a56ab42bd2a39ce89d67a0fe221d6856e9952ba8513",
+          "python": null,
+          "retired": false,
+          "script": "monkey_launch.py",
+          "version": "5.2.0"
+        }
+      ]
+    },
+    "monkey_resource_push": {
+      "versions": [
+        {
+          "artifact": "packages/monkey_resource_push/1.0.0.tar.gz",
+          "package_sha256": "627c7907ee52d9ac05f19e0e83bd22ccc7897eec88d2f48f169c073a1fa632c1",
+          "python": null,
+          "retired": false,
+          "script": "monkey_resource_push.py",
+          "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/monkey_resource_push/1.0.1.tar.gz",
+          "package_sha256": "ca5bd9ab45e3f11b001a58925e10253bf630e75aac37cd57367b65badc42a80d",
+          "python": null,
+          "retired": false,
+          "script": "monkey_resource_push.py",
+          "version": "1.0.1"
+        },
+        {
+          "artifact": "packages/monkey_resource_push/1.1.0.tar.gz",
+          "package_sha256": "e4c7645870ee21c291434b4c52483d7460009703613ac4f4b27e249fa99eb03b",
+          "python": null,
+          "retired": false,
+          "script": "monkey_resource_push.py",
+          "version": "1.1.0"
+        }
+      ]
+    },
+    "monkey_setup": {
+      "versions": [
+        {
+          "artifact": "packages/monkey_setup/1.0.0.tar.gz",
+          "package_sha256": "4e49646c32636fe9ec9693ec3b8b839e4558e030383118f1eab945147bdd33ab",
+          "python": null,
+          "retired": false,
+          "script": "monkey_setup.py",
+          "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/monkey_setup/1.1.0.tar.gz",
+          "package_sha256": "007d8c3503a8831f2069986fcf5e41f0c499079ff264491fb35b27e1993157b0",
+          "python": null,
+          "retired": false,
+          "script": "monkey_setup.py",
+          "version": "1.1.0"
+        },
+        {
+          "artifact": "packages/monkey_setup/1.2.0.tar.gz",
+          "package_sha256": "013ba85496bd19b5b1ec9a06fa13a76fcc549884e1cb33fc8217f87be3e37797",
+          "python": null,
+          "retired": false,
+          "script": "monkey_setup.py",
+          "version": "1.2.0"
+        },
+        {
+          "artifact": "packages/monkey_setup/1.3.0.tar.gz",
+          "package_sha256": "4ebe0fb52d66f81e3f0d9877e9ecedbc7650d6f411690686d79899fcc759f745",
+          "python": null,
+          "retired": false,
+          "script": "monkey_setup.py",
+          "version": "1.3.0"
+        },
+        {
+          "artifact": "packages/monkey_setup/2.0.0.tar.gz",
+          "package_sha256": "33000edaf65cd0bccdab852d0e195ea36767dcfa3485f73e8de5657408bcf27d",
+          "python": null,
+          "retired": false,
+          "script": "monkey_setup.py",
+          "version": "2.0.0"
+        },
+        {
+          "artifact": "packages/monkey_setup/2.1.0.tar.gz",
+          "package_sha256": "b93868e920201592508ddda7bc959d54e5602f711c7dc938d39e24d6885e252f",
+          "python": null,
+          "retired": false,
+          "script": "monkey_setup.py",
+          "version": "2.1.0"
+        },
+        {
+          "artifact": "packages/monkey_setup/2.2.0.tar.gz",
+          "package_sha256": "cc43acae283c8706556e058c029fe76bf68a3855a4a815dbc563fc32bb99af54",
+          "python": null,
+          "retired": false,
+          "script": "monkey_setup.py",
+          "version": "2.2.0"
+        },
+        {
+          "artifact": "packages/monkey_setup/2.3.0.tar.gz",
+          "package_sha256": "f0b941344d8b64292f12aba90ed57a8bb33bf753b5228e17b15df8e701975ec4",
+          "python": null,
+          "retired": false,
+          "script": "monkey_setup.py",
+          "version": "2.3.0"
+        },
+        {
+          "artifact": "packages/monkey_setup/2.3.1.tar.gz",
+          "package_sha256": "0df195cd6999d2ab9ebe2d54b7bd2850dce8b2f1aaf0c3a2887ca8e6b44bc05f",
+          "python": null,
+          "retired": false,
+          "script": "monkey_setup.py",
+          "version": "2.3.1"
+        },
+        {
+          "artifact": "packages/monkey_setup/2.3.2.tar.gz",
+          "package_sha256": "208d4685610ca7ad46ad16ce0958307ee34af520dfc87f5a0c70141272230818",
+          "python": null,
+          "retired": false,
+          "script": "monkey_setup.py",
+          "version": "2.3.2"
+        },
+        {
+          "artifact": "packages/monkey_setup/2.3.3.tar.gz",
+          "package_sha256": "aa80db21f13148e9b2eca177f07e300efbb3e69a1bac7f95da89e6f501bde6e6",
+          "python": null,
+          "retired": false,
+          "script": "monkey_setup.py",
+          "version": "2.3.3"
+        },
+        {
+          "artifact": "packages/monkey_setup/2.3.4.tar.gz",
+          "package_sha256": "448e0063bc461c60ddf48a42fa326213a574dce27711573eaaf335b0c45f371d",
+          "python": null,
+          "retired": false,
+          "script": "monkey_setup.py",
+          "version": "2.3.4"
+        },
+        {
+          "artifact": "packages/monkey_setup/2.3.5.tar.gz",
+          "package_sha256": "6eb048460027ca83876f5e9431c83fc1fef1520ed1bb347d4c163cb4799e13ab",
+          "python": null,
+          "retired": false,
+          "script": "monkey_setup.py",
+          "version": "2.3.5"
+        },
+        {
+          "artifact": "packages/monkey_setup/2.3.6.tar.gz",
+          "package_sha256": "bf0fc15d94e1720277df75a83a83e38f8be1468b36175d20925d46b6bd3b32aa",
+          "python": null,
+          "retired": false,
+          "script": "monkey_setup.py",
+          "version": "2.3.6"
+        },
+        {
+          "artifact": "packages/monkey_setup/2.3.7.tar.gz",
+          "package_sha256": "4664f4caa338040a87e5d943c453bb679bc8107658cb176a24ab913c38a4c05d",
+          "python": null,
+          "retired": false,
+          "script": "monkey_setup.py",
+          "version": "2.3.7"
+        },
+        {
+          "artifact": "packages/monkey_setup/2.3.8.tar.gz",
+          "package_sha256": "027d433fb78a7f8da9d74cfad6753eb1a2a31a6a6e2233767dfbb23936faf956",
+          "python": null,
+          "retired": false,
+          "script": "monkey_setup.py",
+          "version": "2.3.8"
+        },
+        {
+          "artifact": "packages/monkey_setup/2.3.9.tar.gz",
+          "package_sha256": "ada5d7981fe1ccf295df61b111409b33daef99da5c1857e7fcf6e780cf19f8db",
+          "python": null,
+          "retired": false,
+          "script": "monkey_setup.py",
+          "version": "2.3.9"
+        },
+        {
+          "artifact": "packages/monkey_setup/2.3.10.tar.gz",
+          "package_sha256": "8446f15623a94b435680cb3aefce4d9200a7b4dc02834c9dc97b39360d17e959",
+          "python": null,
+          "retired": false,
+          "script": "monkey_setup.py",
+          "version": "2.3.10"
+        },
+        {
+          "artifact": "packages/monkey_setup/2.3.11.tar.gz",
+          "package_sha256": "8059c8634742ea1ae18b5b4dd03383ae0b1413457b01aa4409f51043266e74c7",
+          "python": null,
+          "retired": false,
+          "script": "monkey_setup.py",
+          "version": "2.3.11"
+        }
+      ]
+    },
+    "monkey_teardown": {
+      "versions": [
+        {
+          "artifact": "packages/monkey_teardown/1.0.0.tar.gz",
+          "package_sha256": "d533aa0def6edc9292362c80fabccc1906319b3410f721fd28bf93b1d0fcc3de",
+          "python": null,
+          "retired": false,
+          "script": "monkey_teardown.py",
+          "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/monkey_teardown/1.0.1.tar.gz",
+          "package_sha256": "f7c86f1627f54f5ba44c342c9f595df5478b3ee12591dd5b1e015c543800f792",
+          "python": null,
+          "retired": false,
+          "script": "monkey_teardown.py",
+          "version": "1.0.1"
+        },
+        {
+          "artifact": "packages/monkey_teardown/1.0.2.tar.gz",
+          "package_sha256": "0d91afc732399ee0f44213c182566f00455c0b2cfef374a7a65d9a61285934f3",
+          "python": null,
+          "retired": false,
+          "script": "monkey_teardown.py",
+          "version": "1.0.2"
+        },
+        {
+          "artifact": "packages/monkey_teardown/1.0.3.tar.gz",
+          "package_sha256": "a335292d7343a71e6c35b77a52e5aa8a2f746551f53c7713d4d01b5a516cc4ee",
+          "python": null,
+          "retired": false,
+          "script": "monkey_teardown.py",
+          "version": "1.0.3"
+        }
+      ]
+    },
+    "monkey_test": {
+      "versions": [
+        {
+          "artifact": "packages/monkey_test/1.0.0.tar.gz",
+          "package_sha256": "5e50c6f8c59156fe9f1a08e71c77cf0891bac903679fe321d4424e3d8683c8d6",
+          "python": null,
+          "retired": false,
+          "script": "monkey_test.py",
+          "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/monkey_test/1.1.0.tar.gz",
+          "package_sha256": "5e50c6f8c59156fe9f1a08e71c77cf0891bac903679fe321d4424e3d8683c8d6",
+          "python": null,
+          "retired": false,
+          "script": "monkey_test.py",
+          "version": "1.1.0"
+        },
+        {
+          "artifact": "packages/monkey_test/1.2.0.tar.gz",
+          "package_sha256": "e841b0276b2ecdf4f77e2e9f3e84a377e11269fa505968398a23a132d418fd21",
+          "python": null,
+          "retired": false,
+          "script": "monkey_test.py",
+          "version": "1.2.0"
+        },
+        {
+          "artifact": "packages/monkey_test/1.2.1.tar.gz",
+          "package_sha256": "5e67407cda7a99d7c19d0d7c0ca06260f424b239103403709dc8014c10cc7847",
+          "python": null,
+          "retired": false,
+          "script": "monkey_test.py",
+          "version": "1.2.1"
+        },
+        {
+          "artifact": "packages/monkey_test/1.2.2.tar.gz",
+          "package_sha256": "7f3a6e942851c9d85c373740e2e171c6f4f06b7e3f78df388d3d8b5d26ede9c3",
+          "python": null,
+          "retired": false,
+          "script": "monkey_test.py",
+          "version": "1.2.2"
+        }
+      ]
+    },
+    "mtbf_check": {
+      "versions": [
+        {
+          "artifact": "packages/mtbf_check/1.0.0.tar.gz",
+          "package_sha256": "a0d88e761a8265eca3ed3c189285ca4dcc040eaa35ef912b2f8e07a0a824c400",
+          "python": null,
+          "retired": false,
+          "script": "mtbf_check.py",
+          "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/mtbf_check/1.1.0.tar.gz",
+          "package_sha256": "73b1f68b611a7593033ae9480eef2f7d5418c182b5a1e8fb9d2567c90e2d6f7e",
+          "python": null,
+          "retired": false,
+          "script": "mtbf_check.py",
+          "version": "1.1.0"
+        },
+        {
+          "artifact": "packages/mtbf_check/1.2.0.tar.gz",
+          "package_sha256": "73b1f68b611a7593033ae9480eef2f7d5418c182b5a1e8fb9d2567c90e2d6f7e",
+          "python": null,
+          "retired": false,
+          "script": "mtbf_check.py",
+          "version": "1.2.0"
+        },
+        {
+          "artifact": "packages/mtbf_check/1.3.0.tar.gz",
+          "package_sha256": "f6a0450740da339dcb9c29f280c86807f9badba512656789a6258de196b558b1",
+          "python": null,
+          "retired": false,
+          "script": "mtbf_check.py",
+          "version": "1.3.0"
+        },
+        {
+          "artifact": "packages/mtbf_check/1.4.0.tar.gz",
+          "package_sha256": "a62da89507a661d101f6b344c213d2113ba51933033e691443cfdae3d907681f",
+          "python": null,
+          "retired": false,
+          "script": "mtbf_check.py",
+          "version": "1.4.0"
+        },
+        {
+          "artifact": "packages/mtbf_check/1.5.0.tar.gz",
+          "package_sha256": "25034cf51971b3ded24a262cf4d3863a9cc5fb23d9e8cc1b7fa5108513332ebb",
+          "python": null,
+          "retired": false,
+          "script": "mtbf_check.py",
+          "version": "1.5.0"
+        }
+      ]
+    },
+    "mtbf_finish": {
+      "versions": [
+        {
+          "artifact": "packages/mtbf_finish/1.0.0.tar.gz",
+          "package_sha256": "819d298af11ce028638a596c79f11b7cdaa99e4e5feda810f991552197efe51f",
+          "python": null,
+          "retired": false,
+          "script": "mtbf_finish.py",
+          "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/mtbf_finish/1.1.0.tar.gz",
+          "package_sha256": "5c5bb189763cc8818d52e43f0a3cc36d67f4dc6e3a517f406aef2573c8c4e001",
+          "python": null,
+          "retired": false,
+          "script": "mtbf_finish.py",
+          "version": "1.1.0"
+        },
+        {
+          "artifact": "packages/mtbf_finish/1.2.0.tar.gz",
+          "package_sha256": "5c5bb189763cc8818d52e43f0a3cc36d67f4dc6e3a517f406aef2573c8c4e001",
+          "python": null,
+          "retired": false,
+          "script": "mtbf_finish.py",
+          "version": "1.2.0"
+        },
+        {
+          "artifact": "packages/mtbf_finish/1.3.0.tar.gz",
+          "package_sha256": "869291f97dc9b523eca9d46b8359a9cf4210c8905a72c0452cee9dd41d8e21c7",
+          "python": null,
+          "retired": false,
+          "script": "mtbf_finish.py",
+          "version": "1.3.0"
+        },
+        {
+          "artifact": "packages/mtbf_finish/1.4.0.tar.gz",
+          "package_sha256": "c0bf95aa0367902dd62c1aee195c4212af854ae7bb8bffdd4fccc617f8974583",
+          "python": null,
+          "retired": false,
+          "script": "mtbf_finish.py",
+          "version": "1.4.0"
+        },
+        {
+          "artifact": "packages/mtbf_finish/1.5.0.tar.gz",
+          "package_sha256": "23b6860728735d9db216ea21025e158c2b83a95edd8fa2af778e830caf219cb6",
+          "python": null,
+          "retired": false,
+          "script": "mtbf_finish.py",
+          "version": "1.5.0"
+        },
+        {
+          "artifact": "packages/mtbf_finish/1.6.0.tar.gz",
+          "package_sha256": "35f9055792bbb13a02996aad7c026ba1c35b8dd937123881da8cdd8f4d717e3f",
+          "python": null,
+          "retired": false,
+          "script": "mtbf_finish.py",
+          "version": "1.6.0"
+        }
+      ]
+    },
+    "mtbf_setup": {
+      "versions": [
+        {
+          "artifact": "packages/mtbf_setup/1.0.0.tar.gz",
+          "package_sha256": "5c350e1a777a04473a4b5784ab7b7824c1e57513ce2e5066836ca15fcab87ff1",
+          "python": null,
+          "retired": false,
+          "script": "mtbf_setup.py",
+          "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/mtbf_setup/1.1.0.tar.gz",
+          "package_sha256": "30aa6095d9dac139e0524228d10ddc788199187eb11a87b9b32edb7b1aae0b49",
+          "python": null,
+          "retired": false,
+          "script": "mtbf_setup.py",
+          "version": "1.1.0"
+        },
+        {
+          "artifact": "packages/mtbf_setup/1.2.0.tar.gz",
+          "package_sha256": "30aa6095d9dac139e0524228d10ddc788199187eb11a87b9b32edb7b1aae0b49",
+          "python": null,
+          "retired": false,
+          "script": "mtbf_setup.py",
+          "version": "1.2.0"
+        },
+        {
+          "artifact": "packages/mtbf_setup/1.3.0.tar.gz",
+          "package_sha256": "cce73d65f0d68e92a4d83298e6b0c7138338cb867b83b850abb01101a5527547",
+          "python": null,
+          "retired": false,
+          "script": "mtbf_setup.py",
+          "version": "1.3.0"
+        },
+        {
+          "artifact": "packages/mtbf_setup/1.4.0.tar.gz",
+          "package_sha256": "a4ceb35838360947938b096c528c50564e227d3e8e34af1f83726e94729d1aa4",
+          "python": null,
+          "retired": false,
+          "script": "mtbf_setup.py",
+          "version": "1.4.0"
+        },
+        {
+          "artifact": "packages/mtbf_setup/1.4.1.tar.gz",
+          "package_sha256": "078a8246e9c03fc72ec7190fcbb065f277aa5bd1276b33108331179fb819b46b",
+          "python": null,
+          "retired": false,
+          "script": "mtbf_setup.py",
+          "version": "1.4.1"
+        }
+      ]
+    },
+    "noop": {
+      "versions": [
+        {
+          "artifact": "packages/noop/1.0.0.tar.gz",
+          "package_sha256": "dae3bc0ce5b98a575532b392c843d93b34dfd49030f80af74b2f192f301204c9",
+          "python": null,
+          "retired": false,
+          "script": "noop.py",
+          "version": "1.0.0"
+        }
+      ]
+    },
+    "oobe_skip": {
+      "versions": [
+        {
+          "artifact": "packages/oobe_skip/1.0.0.tar.gz",
+          "package_sha256": "4a26fc759ece4019487a899a3678838d2b3477cb29fa66148e979dddd0eb5560",
+          "python": null,
+          "retired": false,
+          "script": "oobe_skip.py",
+          "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/oobe_skip/1.1.0.tar.gz",
+          "package_sha256": "b88e818d43b82b998e412d67f4eb10d2e61e5b289fa19c8f3d79a93045f22c22",
+          "python": null,
+          "retired": false,
+          "script": "oobe_skip.py",
+          "version": "1.1.0"
+        },
+        {
+          "artifact": "packages/oobe_skip/1.1.1.tar.gz",
+          "package_sha256": "88803de11d3b4b53060ad2fb9bd8eb9eb0b92e5603cfbf35fa62f5b9551396a3",
+          "python": null,
+          "retired": false,
+          "script": "oobe_skip.py",
+          "version": "1.1.1"
+        },
+        {
+          "artifact": "packages/oobe_skip/1.1.2.tar.gz",
+          "package_sha256": "b29225297ceb4b799a594b65e7bb02cf7888c86806553b4af79c9a44bd44db2f",
+          "python": null,
+          "retired": false,
+          "script": "oobe_skip.py",
+          "version": "1.1.2"
+        }
+      ]
+    },
+    "powercycle_check": {
+      "versions": [
+        {
+          "artifact": "packages/powercycle_check/1.0.0.tar.gz",
+          "package_sha256": "ffa803c95b920e70a92f2d4765e5f87347b6730aa093da1ea52730136ace6228",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_check.py",
+          "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/powercycle_check/1.0.1.tar.gz",
+          "package_sha256": "d22fa129adf83ad7d48825f1c6931f419fd3954340e384ab6ec4342b925e0026",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_check.py",
+          "version": "1.0.1"
+        },
+        {
+          "artifact": "packages/powercycle_check/1.0.2.tar.gz",
+          "package_sha256": "e5bd7be53f7ad5511f63726e4b33aec49595de6333227be578bad76f53c5dee4",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_check.py",
+          "version": "1.0.2"
+        },
+        {
+          "artifact": "packages/powercycle_check/1.0.3.tar.gz",
+          "package_sha256": "871383784484a8c76642efc603db68515f70d8b043b3e8628de5c4eecf7debd7",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_check.py",
+          "version": "1.0.3"
+        },
+        {
+          "artifact": "packages/powercycle_check/1.0.4.tar.gz",
+          "package_sha256": "57ce6e7a1f1616abc7fb87299d2a99a50777f756fc0e51f63ad2e38149d36db6",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_check.py",
+          "version": "1.0.4"
+        },
+        {
+          "artifact": "packages/powercycle_check/1.0.5.tar.gz",
+          "package_sha256": "9b1916459fc7f4bd565f1c979015fc7472554a5ac46d61e56a48d1eefd3e30c3",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_check.py",
+          "version": "1.0.5"
+        },
+        {
+          "artifact": "packages/powercycle_check/1.0.6.tar.gz",
+          "package_sha256": "e034bf72ed7c1fb8fc83906340a236fc972a7367c6bec6acecc153e8a2f65332",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_check.py",
+          "version": "1.0.6"
+        },
+        {
+          "artifact": "packages/powercycle_check/1.0.7.tar.gz",
+          "package_sha256": "96e95cde7256f4f7234104a66ee001dce9e183afdabba0736befe59bd90ae7a8",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_check.py",
+          "version": "1.0.7"
+        },
+        {
+          "artifact": "packages/powercycle_check/1.0.8.tar.gz",
+          "package_sha256": "211edbd992c8ee97db9ef392a843568d296d677d3a6152fb8e330b61e754f19d",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_check.py",
+          "version": "1.0.8"
+        }
+      ]
+    },
+    "powercycle_finish": {
+      "versions": [
+        {
+          "artifact": "packages/powercycle_finish/1.0.0.tar.gz",
+          "package_sha256": "c4177efdb66bed411f54354fec6a4a88d3abbd78656c6a5ab2c0d3898b1c5ae6",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_finish.py",
+          "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/powercycle_finish/1.0.1.tar.gz",
+          "package_sha256": "bce78a59c84cc495d1a43299e5b29db3fab869d68a7d150220f98e1246b54364",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_finish.py",
+          "version": "1.0.1"
+        },
+        {
+          "artifact": "packages/powercycle_finish/1.0.2.tar.gz",
+          "package_sha256": "665fcb2e4913abf37ddd3e32d270549a3b86674bf1d72864d2e4f8487902a61f",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_finish.py",
+          "version": "1.0.2"
+        },
+        {
+          "artifact": "packages/powercycle_finish/1.0.3.tar.gz",
+          "package_sha256": "c708a33fb584e326e6f1574318d03242e8bcef5f56516cf2a4a6c7b1666c05e3",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_finish.py",
+          "version": "1.0.3"
+        },
+        {
+          "artifact": "packages/powercycle_finish/1.0.4.tar.gz",
+          "package_sha256": "7255ad2fe7c1f938b3d28246ea7a96940b55c91384fcea68cb2e01165e589449",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_finish.py",
+          "version": "1.0.4"
+        },
+        {
+          "artifact": "packages/powercycle_finish/1.0.5.tar.gz",
+          "package_sha256": "50c533ebd62114a4d901fe85f50f6b4c5df4df847e857cc1c334184c2ede6ff2",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_finish.py",
+          "version": "1.0.5"
+        },
+        {
+          "artifact": "packages/powercycle_finish/1.0.6.tar.gz",
+          "package_sha256": "b6b8e9982d2d8e7853a9064d0fcdf6a89b3651d618d212e19debefbf690aeda5",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_finish.py",
+          "version": "1.0.6"
+        }
+      ]
+    },
+    "powercycle_setup": {
+      "versions": [
+        {
+          "artifact": "packages/powercycle_setup/1.0.0.tar.gz",
+          "package_sha256": "ca808172136d13380087bfde6d5787ba8b6b7ee4783f63dce0eaa2ec69789edd",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_setup.py",
+          "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/powercycle_setup/1.0.1.tar.gz",
+          "package_sha256": "88aae2409fa631f41b44557bc000dfa65fd56f57fe8445214bacca248041c9e5",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_setup.py",
+          "version": "1.0.1"
+        },
+        {
+          "artifact": "packages/powercycle_setup/1.0.2.tar.gz",
+          "package_sha256": "9ee40b158ee9d75cc77820767a2dea248af2d9a6a7006781346facf9e1f3674c",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_setup.py",
+          "version": "1.0.2"
+        },
+        {
+          "artifact": "packages/powercycle_setup/1.1.0.tar.gz",
+          "package_sha256": "f30141ba072159ac32d22f38f874efd751736d4ddf33a7a2dd320ddcc84f6ab6",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_setup.py",
+          "version": "1.1.0"
+        },
+        {
+          "artifact": "packages/powercycle_setup/1.2.0.tar.gz",
+          "package_sha256": "f205de42516734fc366338058e652eb579c3eb213866bc3f1056c339c22ff6f8",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_setup.py",
+          "version": "1.2.0"
+        },
+        {
+          "artifact": "packages/powercycle_setup/1.2.1.tar.gz",
+          "package_sha256": "e898d34a9b1b3edb52c19f37cb1929bbba3d6a571e673f60c17d40597d708729",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_setup.py",
+          "version": "1.2.1"
+        },
+        {
+          "artifact": "packages/powercycle_setup/1.2.2.tar.gz",
+          "package_sha256": "911c054133839275596925b3398e8d4cd3e215ef421802c419e82f5e7d6133fd",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_setup.py",
+          "version": "1.2.2"
+        },
+        {
+          "artifact": "packages/powercycle_setup/1.2.3.tar.gz",
+          "package_sha256": "8c6b88b8fff07f74b9ec2cd29be3e1da32edbca876ebaa0e82113a01b3659f84",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_setup.py",
+          "version": "1.2.3"
+        },
+        {
+          "artifact": "packages/powercycle_setup/1.2.4.tar.gz",
+          "package_sha256": "5768956dc70c459332d23baf3a55e06cf9c49b4074617ece7d2c135be9762a7f",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_setup.py",
+          "version": "1.2.4"
+        },
+        {
+          "artifact": "packages/powercycle_setup/1.2.5.tar.gz",
+          "package_sha256": "202c762c70f9db8780e6dee6b09c94cb0ee86d0a0192069b0d739971b0df7a56",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_setup.py",
+          "version": "1.2.5"
+        }
+      ]
+    },
+    "push_resources": {
+      "versions": [
+        {
+          "artifact": "packages/push_resources/1.0.0.tar.gz",
+          "package_sha256": "b823a2129e709028fd95dbd8effe592583fe5ef0789c77e8e49e29590236234c",
+          "python": null,
+          "retired": false,
+          "script": "push_resources.py",
+          "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/push_resources/1.0.1.tar.gz",
+          "package_sha256": "795214ed0aacf30fe95b8b081b76c6fe9b9eea916e1c8f6b63b14056e7b10355",
+          "python": null,
+          "retired": false,
+          "script": "push_resources.py",
+          "version": "1.0.1"
+        },
+        {
+          "artifact": "packages/push_resources/1.1.0.tar.gz",
+          "package_sha256": "28b3fc67c3eabe12824d44a50e48be8afe7542cd6006f301914ae492ee54275f",
+          "python": null,
+          "retired": false,
+          "script": "push_resources.py",
+          "version": "1.1.0"
+        }
+      ]
+    },
+    "sleep_check": {
+      "versions": [
+        {
+          "artifact": "packages/sleep_check/1.0.0.tar.gz",
+          "package_sha256": "bc7ae187edc0b4eedbe237386520c67ecc80f1b8a65367e70193ea4a7a2f46e2",
+          "python": null,
+          "retired": false,
+          "script": "sleep_check.py",
+          "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/sleep_check/1.0.1.tar.gz",
+          "package_sha256": "e5f088838119872dab340412785bb0d5578f2cb10fd0d43fd339748fae787914",
+          "python": null,
+          "retired": false,
+          "script": "sleep_check.py",
+          "version": "1.0.1"
+        },
+        {
+          "artifact": "packages/sleep_check/1.0.2.tar.gz",
+          "package_sha256": "2944bb4f0d5ec580562de0101b929b3b630e4401e4aa4ce9d6f12b6cf9038988",
+          "python": null,
+          "retired": false,
+          "script": "sleep_check.py",
+          "version": "1.0.2"
+        },
+        {
+          "artifact": "packages/sleep_check/1.0.3.tar.gz",
+          "package_sha256": "244f6b51fa19b5b7f8f2b0dccc3e644617d0e8910d275ba081f514914e94bcd6",
+          "python": null,
+          "retired": false,
+          "script": "sleep_check.py",
+          "version": "1.0.3"
+        },
+        {
+          "artifact": "packages/sleep_check/1.0.4.tar.gz",
+          "package_sha256": "b863c9ff94d169d3839b932ac3bea69537e65988f6f87b5cd7186d314be05f4d",
+          "python": null,
+          "retired": false,
+          "script": "sleep_check.py",
+          "version": "1.0.4"
+        }
+      ]
+    },
+    "sleep_finish": {
+      "versions": [
+        {
+          "artifact": "packages/sleep_finish/1.0.0.tar.gz",
+          "package_sha256": "3ab75752a29ade4b43eaf0462fd7f54d8d02cafe6c80cb1dc10903bb65b4ba46",
+          "python": null,
+          "retired": false,
+          "script": "sleep_finish.py",
+          "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/sleep_finish/1.0.1.tar.gz",
+          "package_sha256": "7967c6e7ae4a927ea26f737e9e7b6328f376d7ec5f75f2ede40a86caa706d654",
+          "python": null,
+          "retired": false,
+          "script": "sleep_finish.py",
+          "version": "1.0.1"
+        },
+        {
+          "artifact": "packages/sleep_finish/1.0.2.tar.gz",
+          "package_sha256": "e65f242fd35bb322496b51f0a6cef13af3afaa043aba5d9da6ec533e39cdc332",
+          "python": null,
+          "retired": false,
+          "script": "sleep_finish.py",
+          "version": "1.0.2"
+        },
+        {
+          "artifact": "packages/sleep_finish/1.0.3.tar.gz",
+          "package_sha256": "5520a5ec6329de2d9bc4d72cc467f465b48a75363c17cfd8a68ba61723690207",
+          "python": null,
+          "retired": false,
+          "script": "sleep_finish.py",
+          "version": "1.0.3"
+        },
+        {
+          "artifact": "packages/sleep_finish/1.0.4.tar.gz",
+          "package_sha256": "7bc4697ecae944c1fb20261aee7214982d957668d732dfcf0c584a6207c57b43",
+          "python": null,
+          "retired": false,
+          "script": "sleep_finish.py",
+          "version": "1.0.4"
+        }
+      ]
+    },
+    "sleep_setup": {
+      "versions": [
+        {
+          "artifact": "packages/sleep_setup/1.0.0.tar.gz",
+          "package_sha256": "5cb20192cf8c8dd5c24f986136e17390d4649c82979fe302c290c6312755157f",
+          "python": null,
+          "retired": false,
+          "script": "sleep_setup.py",
+          "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/sleep_setup/1.0.1.tar.gz",
+          "package_sha256": "0c5e7200b303d544e3e435c90966d519066209b62d79685b81e37e19ec770a63",
+          "python": null,
+          "retired": false,
+          "script": "sleep_setup.py",
+          "version": "1.0.1"
+        },
+        {
+          "artifact": "packages/sleep_setup/1.0.2.tar.gz",
+          "package_sha256": "ed411cdfbbca5c4ff2ea30b34f34b77a3372c090fe15e5a3c2fc90c2b257355b",
+          "python": null,
+          "retired": false,
+          "script": "sleep_setup.py",
+          "version": "1.0.2"
+        },
+        {
+          "artifact": "packages/sleep_setup/1.0.3.tar.gz",
+          "package_sha256": "2c0052833635e82e179e98277057c19c6af5c68ec71f9188ce9b7759b0599dcc",
+          "python": null,
+          "retired": false,
+          "script": "sleep_setup.py",
+          "version": "1.0.3"
+        }
+      ]
+    },
+    "stop_aimonkey": {
+      "versions": [
+        {
+          "artifact": "packages/stop_aimonkey/1.0.0.tar.gz",
+          "package_sha256": "529a1fdd366e816d1051f7bd028905a26ce36144f54c1dc16e0d352de135d2a3",
+          "python": null,
+          "retired": false,
+          "script": "stop_aimonkey.py",
+          "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/stop_aimonkey/1.0.1.tar.gz",
+          "package_sha256": "a12391c8e60451900ef4f859deab23da557a3424e51bc0dcf5a8b1f06121e135",
+          "python": null,
+          "retired": false,
+          "script": "stop_aimonkey.py",
+          "version": "1.0.1"
+        }
+      ]
+    },
+    "unisoc_probe": {
+      "versions": [
+        {
+          "artifact": "packages/unisoc_probe/1.0.0.tar.gz",
+          "package_sha256": "249924b53c36ee523920955276be4b9d92848f8c7ae0d8366dde0a865263540f",
+          "python": null,
+          "retired": false,
+          "script": "unisoc_probe.py",
+          "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/unisoc_probe/1.0.1.tar.gz",
+          "package_sha256": "943f0fc2e1f83c700d4a82e1934ab64f986d9913b1371c6abe11e8ac59e95e50",
+          "python": null,
+          "retired": false,
+          "script": "unisoc_probe.py",
+          "version": "1.0.1"
+        }
+      ]
+    },
+    "unisoc_signal_trigger": {
+      "versions": [
+        {
+          "artifact": "packages/unisoc_signal_trigger/1.0.0.tar.gz",
+          "package_sha256": "6a4d648f8e9ba7f13569a76daf71bdd759dd9433772714b74d4e2152330ea128",
+          "python": null,
+          "retired": false,
+          "script": "unisoc_signal_trigger.py",
+          "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/unisoc_signal_trigger/1.0.1.tar.gz",
+          "package_sha256": "2bc008f9d831406090731be9244d9f65c5f87c9ae85749428e586e2b5b5888b9",
+          "python": null,
+          "retired": false,
+          "script": "unisoc_signal_trigger.py",
+          "version": "1.0.1"
+        },
+        {
+          "artifact": "packages/unisoc_signal_trigger/1.0.2.tar.gz",
+          "package_sha256": "cdd64a1a8a2b049d6e0997c349808964e447fe26a0f0852aa772e9fae5ae8609",
+          "python": null,
+          "retired": false,
+          "script": "unisoc_signal_trigger.py",
+          "version": "1.0.2"
+        }
+      ]
     }
   }
 }

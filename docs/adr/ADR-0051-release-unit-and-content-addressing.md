@@ -6,6 +6,7 @@
 - 日期：2026-09-22
 - 决策者：owner（DUElost，2026-09-22）；起草：平台研发组
 - 归属域：semantic-ownership script-version-immutability
+- 落地状态：Phase 0 ✅（#3162）；**Phase 2a ✅**（`tool_manifest.json` 登记 35 族 210 版本、`script.package_sha256` 列 + scan 回填、`check_script_packages.py` 并入 tool-manifest 门禁、等价证明对生产库 210/210 通过；包尚未发布到站点 `packages/`，属运维推进项）；Phase 1 / 2b / 3 / 4 / 5 待排期
 - 归属说明：v1.0 起 `script-version-immutability` 的 owner_anchor 改指本 ADR D1（语义归属表同 PR 改）
 - 标签：release-unit, content-addressing, package-store, script-versioning, deploy-source, anti-corruption, #735, #3075, #1987, #2386
 - 关联：[#735](https://github.com/DUElost/stability-test-platform/issues/735)（脚本膨胀治理）/ [#3075](https://github.com/DUElost/stability-test-platform/issues/3075)（ADR-0033 Phase B 包存储实现）/ [#1987](https://github.com/DUElost/stability-test-platform/issues/1987)、[#2386](https://github.com/DUElost/stability-test-platform/issues/2386)（部署源与检出双重角色）
@@ -184,7 +185,7 @@ ADR-0039 转 Superseded 的时机 = 本 ADR Accepted 当日（§9）。
 |---|---|---|---|
 | **0** | 本 ADR 裁决 + §9 四组机械改动 | — | S11 锚 / S12 ⑤ + 索引一致性 / 共享元文件串行领单 |
 | **1** | 本机控制面切 bundle 安装形态（D6 选 B）：`build_bundle` → install 到 `<releases>/<digest>/` → unit `WorkingDirectory` 与 `STP_SCRIPT_ROOT` 改指 → `check-deploy-source.sh` 去减号；**附部署根外部物料清单** | Phase 0 | 运行期非门禁（最危险）：inventory.ini / dist-prod / venv 物料缺失 |
-| **2a** | 打包 + 登记 + 等价证明：对 210 行 `script` 从 `origin/main` 当前目录打包 → `tool_manifest.json` 登记 → 新增 `package_sha256` 列并回填 → 证明入口 sha == `content_sha256` 且伴随 sha == `support_files_manifest`（基准 = 当前字节，见 §1.3）。**`nfs_path` 不动**，可回滚 | Phase 0 | `check_tool_manifest` append-only；alembic 迁移门禁 |
+| **2a** ✅ | 打包 + 登记 + 等价证明：对 210 行 `script` 从 `origin/main` 当前目录打包 → `tool_manifest.json` 登记 → 新增 `package_sha256` 列并回填 → 证明入口 sha == `content_sha256` 且伴随 sha == `support_files_manifest`（基准 = 当前字节，见 §1.3）。**`nfs_path` 不动**，可回滚。**已落地**：`tools/dev/check_script_packages.py`（`git ls-files` 成员 + 确定性打包 + 登记 + 等价门禁）、`backend/scripts/check_script_package_equivalence.py`（只读证明，生产 212 行 = 210 ok + 2 无目录退役行）、迁移 `ad51c1d3f2a1`、scan 回填（`package_backfilled` / `package_conflicts`）；manifest 条目 `python: null` = Agent 自身解释器 | Phase 0 | `check_tool_manifest` append-only；alembic 迁移门禁 |
 | **2b** | 切执行路径（D4）：`ScriptRegistry` → `ensure_package` → 三处耦合解除 → `verify_scripts` 整包校验 → `agent-code` 排除 `scripts/`；按 script 行灰度 | 2a + Phase 1 | Agent 测试面（`backend/agent/tests`）大面积改夹具；ADR-0043 宽限判据测试 |
 | **3** | 一次性删除 208 个版本目录；每族留一棵源码树 | **只依赖 2a**（不等 2b） | `check-script-version-immutability.py` 须同 PR 退役；棘轮基线归零 |
 | **4** | 外部工具与资源入包（D7）：展锐三族 + flashtool + aimonkey；控制面摘要面；删 `STP_UNISOC_*` | Phase 1（清单形态）+ ADR-0042 D3 修订 | #737 清单门禁 + `.env*.example` 奇偶；digest 契约测试 |

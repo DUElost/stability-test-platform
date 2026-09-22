@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import shutil
+import sys
 import tarfile
 import tempfile
 from dataclasses import dataclass
@@ -195,7 +196,8 @@ def resolve_packaged_scan_tool(env: Optional[Mapping[str, str]] = None) -> Optio
     pkg_dir = ensure_package(name, version, sha, packages_root, cache_root)
     if not pkg_dir:
         return None
-    python_abs = pkg_dir / str(entry.get("python", ""))
+    # ADR-0051 D4：``python: null`` = 包内无解释器，用 Agent 自身解释器。
+    python_abs = pkg_dir / str(entry["python"]) if entry.get("python") else Path(sys.executable)
     script_abs = pkg_dir / str(entry.get("script", ""))
     if not python_abs.exists() or not script_abs.is_file():
         logger.error("tool_cache_entry_paths_missing %s@%s python=%s script=%s", name, version, python_abs, script_abs)
