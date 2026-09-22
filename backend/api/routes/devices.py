@@ -23,6 +23,7 @@ from backend.api.schemas.device import (
     BulkSwipeTrailOut,
 )
 from backend.api.routes.auth import get_current_active_user, require_admin, User
+from backend.services.device_swipe_trail import bulk_set_swipe_trail
 
 # 与 backend/api/routes/projects.py 的库存口径一致（ADR-0029 v2.5）：
 # SEED 项目成员不算真实归属映射。
@@ -261,8 +262,6 @@ async def bulk_swipe_trail(
     """
     if not payload.device_ids:
         raise HTTPException(status_code=422, detail="device_ids must not be empty")
-
-    from backend.services.device_swipe_trail import bulk_set_swipe_trail
 
     out = await bulk_set_swipe_trail(
         db,

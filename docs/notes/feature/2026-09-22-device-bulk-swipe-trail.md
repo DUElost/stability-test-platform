@@ -22,6 +22,7 @@ Class: feature
 - `.venv/bin/python -m pytest backend/agent/tests/test_control_handler_736.py backend/tests/api/test_devices_bulk_swipe_trail.py -q` → 15 passed
 - `npm --prefix frontend run test -- --run DeviceBulkActionBar DevicesPage` → 13 passed
 - ruff / tsc / compileall on touched paths → green
+- `python3 tools/dev/check_inner_imports.py` → `[OK] 598 ≤ 598`（把 `HTTPException` / `bulk_set_swipe_trail` 两处函数体内 import 升到模块顶层，未动基线）
 - `check:quick`：本机 `schema-at-head` 因业务库 alembic 落后于 code head 红灯（与本变无关、禁止对生产库 upgrade）；其余静态门禁按文件跑通
 
 ## Revisit
