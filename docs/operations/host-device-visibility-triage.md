@@ -77,7 +77,11 @@ cat /sys/bus/usb/devices/<dev>:1.0/interface      # "MIDI function" = MIDI-only
   且 `discovered_devices == 0`——覆盖「整树死亡时 `total_devices == 0` 使
   `adb_low_healthy_devices` 短路」的盲区（.63 / 8.87 形态不再恒显 HEALTHY）；
   root hub 数只作判据输入、不上报（心跳 payload 增幅实测 98B，预算 <100B）。
-- **#3046 起：L4 不再静默**——`_adb_interfaces_missing`（`usb_device_count > 0 ∧ adb_interface_count == 0`，`None` = 采集失败视为未知、不触发）产出 reason `adb_interfaces_missing`（warning → DEGRADED，不打闸）。它的用途只有一个：**把运维从「反射式重启 adb server」上拉开**——看到这条直接照 §1 L4 行走设备侧人工，§4 的 kill/start-server 对照实验已证 adb 侧无效。连续 ≥2 拍去抖与 paging 属告警面，另单（#3046 Revisit）。
+- **#3046 起：L4 不再静默**——`_adb_interfaces_missing`（`usb_device_count > 0 ∧ adb_interface_count == 0`，`None` = 采集失败视为未知、不触发）产出 reason `adb_interfaces_missing`（warning → DEGRADED，不打闸）。它的用途只有一个：**把运维从「反射式重启 adb server」上拉开**——看到这条直接照 §1 L4 行走设备侧人工，§4 的 kill/start-server 对照实验已证 adb 侧无效。
+- **#3046 Revisit：L4 paging 已建**——规则 `StabilityHostAdbInterfacesMissing`
+  （warning，`for: 2m`）= `adb_interfaces_missing`。**不合物取设备账**（`usb > 0`
+  本身即「本来有设备」证据）；**不做恢复自动化**（报单人撤回方向③）。处置注解钉死
+  §1 L4 设备侧人工，并禁 `adb kill-server` / xHCI rebind。
 - **#2967 起：`usb_tree_empty` 的失明 paging 已建**——规则
   `StabilityHostUsbBlind`（critical，`for: 15m`）= `usb_tree_empty` ∧
   `sum(host_device_adb_state) > 0`（该 host `device` 账上有行）。合取两道守卫各有实测依据：
