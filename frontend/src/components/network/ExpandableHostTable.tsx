@@ -553,6 +553,11 @@ export function ExpandableHostTable({
                   </span>
                   <span>不适用 {presenceCounts.n_a}</span>
                   <span>目标版本 {scriptPresenceSummary.full_versions}</span>
+                  {/* #3111：账本只核验被 Plan 引用的版本——把「没被核验的 active 版本数」
+                      摆在目标版本旁边，`缺口 0 台` 才不会被读成「所有 active 版本都在位」。 */}
+                  <span title="已 active 但无任何 Plan 引用的版本：不进任何主机的可达集，账本不核验它们（缺口/missing 计数不含）">
+                    账本未覆盖 {scriptPresenceSummary.uncovered_active_versions}
+                  </span>
                   <span>覆盖主机 {scriptPresenceSummary.hosts_total}</span>
                 </div>
                 <p>
@@ -1238,7 +1243,9 @@ export function ExpandableHostTable({
                                     核验于 {formatHeartbeatLabel(presence.data.checked_at)}
                                   </span>
                                 )}
-                                {onRefreshHostScriptPresence && (
+                                {/* #3091：该按钮触发写端点（require_admin）——非管理员不渲染，
+                                    与同元素其它管理动作（isAdmin && …）保持一致 */}
+                                {isAdmin && onRefreshHostScriptPresence && (
                                   <button
                                     type="button"
                                     onClick={(e) => {

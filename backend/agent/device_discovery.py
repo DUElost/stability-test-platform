@@ -41,15 +41,26 @@ def _parse_df_size(token: str) -> Optional[int]:
 def parse_df_data(output: str) -> Tuple[Optional[int], Optional[int]]:
     """``df /data`` 输出 → ``(total_bytes, used_bytes)``；解析不出返回 ``(None, None)``。
 
-    兼容三种真实形态（判据保守，对不上就 None，不猜）：
+    兼容四种真实形态（判据保守，对不上就 None，不猜）：
 
     - toybox 两行表：``<fs> <size> <used> <avail> <pct> <mount>``（size 带人类后缀）
     - busybox 两行表：同列布局，但表头是 ``1K-blocks``——裸数字是 KiB，须 ×1024
     - toybox 单行：``/data: <used> <avail> <pct> /data``（total = used + avail）
+    - bind 穿透两行表（#3133，ZTE Z2581/Z2582、部分 MLD 实测）：列布局同 busybox，
+      但 ``df /data`` 解析到 bind/穿透挂载，**Mounted on 列显示规范挂载点**
+      （``/mnt/pass_through/0/emulated``），整行无 ``/data`` 字样——数据行以
+      ``/dev`` 文件系统列开头。
+
+    数据行判据（#2757 只认 ``/data`` 字样，#3133 扩为「含 /data 或以 /dev 开头」）：
+    ``df`` 带路径参数时只回该文件系统一行，故取首个匹配行无歧义；表头行
+    （``Filesystem …``）与错误行（``df: /data: No such …``）天然不匹配 /dev 前缀。
     """
     lines = output.splitlines()
     one_k_blocks = any("1K-blocks" in line for line in lines)
-    rows = [line for line in lines if "/data" in line]
+    rows = [
+        line for line in lines
+        if "/data" in line or line.lstrip().startswith("/dev")
+    ]
     if not rows:
         return (None, None)
     tokens = rows[0].split()
@@ -587,7 +598,12 @@ def bucket_adb_states(devices: List[Dict[str, Any]]) -> Dict[str, int]:
     return buckets
 
 
-def collect_device_info(adb_path: str, serial: str, raw_adb_state: str = "device") -> Dict[str, Any]:
+def collect_device_info(
+    adb_path: str,
+    serial: str,
+    raw_adb_state: str = "device",
+    include_metrics: bool = True,
+) -> Dict[str, Any]:
     """
     采集单台设备的基础信息
 
@@ -597,6 +613,11 @@ def collect_device_info(adb_path: str, serial: str, raw_adb_state: str = "device
         raw_adb_state: `adb devices -l` 原始上报状态（discover_devices 产出）。
             非 "device"（如 "unauthorized"/"no permissions"/"authorizing"）说明
             设备已被 ADB 发现但不可用，直接判定为 error，不再探测 shell（探测必然失败）。
+        include_metrics: 慢指标（电量/温度 dumpsys、版本 getprop、网络延迟 ping）
+            采集开关。False 时只做 echo 连接性快探——心跳对慢指标按 serial due
+            门控降频（STP_DEVICE_INFO_SAMPLE_INTERVAL_SECONDS），非 due 拍用它；
+            ping 单台最坏 15s×2，是 tick 拖慢在线状态上报的头号来源。
+            被跳过的键保持 None，由 HeartbeatThread 用最近一次采样缓存回填。
 
     Returns:
         设备信息字典
@@ -655,6 +676,13 @@ def collect_device_info(adb_path: str, serial: str, raw_adb_state: str = "device
         info["adb_connected"] = False
         return info
 
+    # 采集 SoC 平台 (#73) — 结果按 serial 缓存,只有首次探测真正走 adb
+    info["platform"] = detect_device_platform(adb_path, serial)
+
+    if not include_metrics:
+        # 非 due 拍：echo 连接性 + 平台缓存即全本拍职责，慢指标由调用方回填
+        return info
+
     # 采集电池信息
     try:
         result = subprocess.run(
@@ -681,9 +709,6 @@ def collect_device_info(adb_path: str, serial: str, raw_adb_state: str = "device
             info["build_display_id"] = result.stdout.strip()
     except Exception as e:
         logger.warning(f"build_display_id_failed: {serial}, error={e}")
-
-    # 采集 SoC 平台 (#73) — 结果按 serial 缓存,只有首次探测真正走 adb
-    info["platform"] = detect_device_platform(adb_path, serial)
 
     # 采集网络延迟 (主目标 223.5.5.5, 备用 8.8.8.8)
     latency = _ping_with_fallback(adb_path, serial, "223.5.5.5", fallback="8.8.8.8")

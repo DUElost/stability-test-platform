@@ -29,6 +29,14 @@ from backend.services.device_swipe_trail import bulk_set_swipe_trail
 # SEED 项目成员不算真实归属映射。
 _USER_SOURCE = "USER"
 
+# `GET /devices` 的**单次响应** limit 护栏。它是体积护栏，**不是 fleet 总量**：
+# 48 host × 25 台 = 1200 已把本值压满，而 ADR-0026 的规模目标是 60+ host / 1000+
+# device（= 1500 台），即本值已落在承诺包线之内（#3131）。客户端要全量必须按 skip
+# 翻页（前端 `fetchAllDevicePages`）；把本值当成「一次能装下整个 fleet」的写法在扩容
+# 后只会静默少设备。调大本值等于把墙往后挪，且单次响应体积随之线性上涨
+# （1200 台实测 473 KB / 220 ms），正解是消费方翻页而不是抬护栏。
+_DEVICE_LIST_MAX_LIMIT = 1200
+
 logger = logging.getLogger(__name__)
 
 
@@ -344,15 +352,21 @@ def list_devices(
         False, description="ADR-0038 D5：默认隐藏退役主机上的设备，显式置 true 才显示",
     ),
     skip: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=1200),
+    limit: int = Query(50, ge=1, le=_DEVICE_LIST_MAX_LIMIT),
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
-    # 稳定次序：last_seen 相同（尤其是全 NULL 的新设备）时 PG 不保证顺序，
-    # 追加 Device.id 作 tie-breaker，保证分页与前端列表顺序可复现（#537）
+    # 稳定次序：排序列**只能由恒定身份列构成**。#537 只补了 tie-breaker，主键仍是
+    # last_seen——而该列每次设备心跳都被重写（routes/heartbeat.py），于是「组内顺序
+    # 确定」并不等于「跨时刻顺序稳定」：列值一变，全序就整体重排。生产实测 862 台、
+    # 10s 窗口内前 50 行 0% 重合、位置中位移动 250 行，前端每 10s 轮询一次即整页换人
+    # （#3123）。改为 (host_id, id)：同主机设备成片，`id` 唯一保证全序，offset 分页在
+    # 跨请求间也稳定。**不要在此引入任何被心跳重写的遥测列**（last_seen / battery_level /
+    # temperature / status…），否则本缺陷原样复现。「最近活跃」由 last_seen 列自身与
+    # 状态筛选卡片承载，不需要靠排序表达。
     query = (
         db.query(Device)
-        .order_by(Device.last_seen.desc().nullslast(), Device.id.asc())
+        .order_by(Device.host_id.asc().nullslast(), Device.id.asc())
     )
 
     # ADR-0038 D5 不变量 1「退役不再是容量」落到**设备派生库存**（#1805 验收矩阵

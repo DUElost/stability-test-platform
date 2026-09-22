@@ -11,7 +11,7 @@ vi.mock('./client', () => ({
 }));
 
 import apiClient from './client';
-import { fetchAllDevices } from './devices';
+import { fetchAllDevicePages, fetchAllDevices } from './devices';
 
 const device = (id: number) => ({ id, serial: `SN-${id}`, status: 'ONLINE' });
 
@@ -55,5 +55,67 @@ describe('fetchAllDevices', () => {
 
     await expect(fetchAllDevices()).resolves.toEqual([]);
     expect(apiClient.get).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('fetchAllDevicePages', () => {
+  beforeEach(() => {
+    vi.mocked(apiClient.get).mockReset();
+  });
+
+  it('returns the server total alongside the accumulated items', async () => {
+    vi.mocked(apiClient.get).mockResolvedValue({
+      data: { items: [device(1), device(2)], total: 2, skip: 0, limit: 1200 },
+    });
+
+    // total 必须原样带出：判「有没有拿全」只能靠它，不能用 items.length（#3131）
+    await expect(fetchAllDevicePages()).resolves.toEqual({
+      items: [device(1), device(2)],
+      total: 2,
+    });
+  });
+
+  it('reports a short read when the server total cannot be reached', async () => {
+    vi.mocked(apiClient.get)
+      .mockResolvedValueOnce({ data: { items: [device(1)], total: 9, skip: 0, limit: 1200 } })
+      .mockResolvedValueOnce({ data: { items: [], total: 9, skip: 1, limit: 1200 } });
+
+    // total 与实际不符时出口，不让调用方死循环；此时 items.length < total 就是
+    // 「没拿全」的信号，页面据此显示横幅而不是假装拿齐了
+    await expect(fetchAllDevicePages()).resolves.toEqual({ items: [device(1)], total: 9 });
+    expect(apiClient.get).toHaveBeenCalledTimes(2);
+  });
+
+  it('carries the project filter through every page', async () => {
+    vi.mocked(apiClient.get)
+      .mockResolvedValueOnce({
+        data: { items: Array.from({ length: 1200 }, (_, i) => device(i + 1)), total: 1300, skip: 0, limit: 1200 },
+      })
+      .mockResolvedValueOnce({
+        data: { items: Array.from({ length: 100 }, (_, i) => device(1201 + i)), total: 1300, skip: 1200, limit: 1200 },
+      });
+
+    const { items, total } = await fetchAllDevicePages({ projectKey: 'proj-a' });
+
+    expect(items).toHaveLength(1300);
+    expect(total).toBe(1300);
+    expect(apiClient.get).toHaveBeenNthCalledWith(1, '/devices', {
+      params: { skip: 0, limit: 1200, project_key: 'proj-a' },
+    });
+    expect(apiClient.get).toHaveBeenNthCalledWith(2, '/devices', {
+      params: { skip: 1200, limit: 1200, project_key: 'proj-a' },
+    });
+  });
+
+  it('sends the unassigned sentinel instead of project_key', async () => {
+    vi.mocked(apiClient.get).mockResolvedValue({
+      data: { items: [], total: 0, skip: 0, limit: 1200 },
+    });
+
+    await fetchAllDevicePages({ unassigned: true });
+
+    expect(apiClient.get).toHaveBeenCalledWith('/devices', {
+      params: { skip: 0, limit: 1200, unassigned: true },
+    });
   });
 });

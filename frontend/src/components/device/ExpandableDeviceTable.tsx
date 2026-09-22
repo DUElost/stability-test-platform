@@ -29,7 +29,7 @@ import {
   HardDrive,
 } from 'lucide-react';
 import { ENTITY_STATUS_COLORS } from '@/design-system/colors';
-import { FORM, resourceUsageBgClass, resourceUsageTextClass, STAT, TEXT } from '@/design-system/tokens';
+import { ALERT_BOX, FORM, resourceUsageBgClass, resourceUsageTextClass, STAT, TEXT } from '@/design-system/tokens';
 import { formatBytes, formatDateTimeFull } from '@/utils/format';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 
@@ -88,6 +88,14 @@ export interface DeviceTableData {
 
 interface ExpandableDeviceTableProps {
   devices: DeviceTableData[];
+  /**
+   * 服务端报告的设备总数（`GET /devices` 的 `total`）。用于「全部设备」卡显示真实
+   * 总数，并在 `devices` 少于它时提示列表不完整（#3131）。
+   *
+   * 不传时退化为 `devices.length`；但 `limit` 只是**单次响应护栏**，设备数越过它时
+   * 已加载条数会小于真实总数，所以真实页面（DevicesPage）必须传。
+   */
+  totalCount?: number;
   selectedIds?: Set<number>;
   onSelectionChange?: (ids: Set<number>) => void;
   onFilteredDevicesChange?: (devices: DeviceTableData[]) => void;
@@ -99,6 +107,7 @@ function hostFilterKey(device: DeviceTableData): string {
 
 export function ExpandableDeviceTable({
   devices,
+  totalCount,
   selectedIds,
   onSelectionChange,
   onFilteredDevicesChange,
@@ -252,16 +261,34 @@ export function ExpandableDeviceTable({
     onSelectionChange(next);
   };
 
+  const truncated = totalCount != null && devices.length < totalCount;
   const stats = useMemo(() => ({
-    total: devices.length,
+    // 真实总数优先：拿已加载条数当总数会在越过单次响应护栏时静默少报（#3131）
+    total: totalCount ?? devices.length,
     idle: devices.filter(d => d.status === 'idle').length,
     testing: devices.filter(d => d.status === 'testing').length,
     offline: devices.filter(d => d.status === 'offline').length,
     error: devices.filter(d => d.status === 'error').length,
-  }), [devices]);
+  }), [devices, totalCount]);
 
   return (
     <div className="space-y-4">
+      {/* #3131：列表不完整时必须说出来——下方状态统计与搜索/筛选都只作用于已加载
+          部分，静默截断会让「搜不到」被读成「不存在」 */}
+      {truncated && (
+        <div
+          role="alert"
+          data-testid="device-table-truncated"
+          className={cn('flex items-start gap-2 rounded-lg px-3 py-2 text-xs', ALERT_BOX.warning)}
+        >
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>
+            设备总数 {totalCount} 台，本次仅加载 {devices.length} 台：下方状态统计与
+            搜索/筛选只作用于已加载部分，未加载的设备不会出现在结果里。
+          </span>
+        </div>
+      )}
+
       {/* Summary Stats — 稀疏数字筛选卡 */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
         <button

@@ -379,6 +379,9 @@ describe('脚本在位（#2958 第五道闸）', () => {
     hosts_total: 48,
     hosts_with_gap: 2,
     full_versions: 51,
+    // #3111：账本不核验的 active 版本（无 Plan 引用）——与 full_versions 刻意不同值，
+    // 免得断言两边写同一个数时把「字段接错」放过去。
+    uncovered_active_versions: 46,
     checked_at_min: '2026-09-21T00:00:00Z',
     checked_at_max: '2026-09-21T06:00:00Z',
     stale: false,
@@ -417,6 +420,8 @@ describe('脚本在位（#2958 第五道闸）', () => {
     expect(within(bar).getByText('缺失 1')).toBeInTheDocument();
     expect(within(bar).getByText('不适用 4')).toBeInTheDocument();
     expect(within(bar).getByText('目标版本 51')).toBeInTheDocument();
+    // #3111：未覆盖的 active 版本数必须在明细里，且与目标版本分开读
+    expect(within(bar).getByText(/^账本未覆盖 46$/)).toBeInTheDocument();
     // 汇总没有逐台名单，文案要指路到展开行
     expect(within(bar).getByText(/不含逐台名单/)).toBeInTheDocument();
   });
@@ -462,6 +467,7 @@ describe('脚本在位（#2958 第五道闸）', () => {
     render(
       <ExpandableHostTable
         hosts={[host]}
+        isAdmin
         onLoadHostScriptPresence={onLoad}
         onRefreshHostScriptPresence={onRefresh}
       />,
@@ -473,6 +479,25 @@ describe('脚本在位（#2958 第五道闸）', () => {
     fireEvent.click(screen.getByRole('button', { name: `${host.name} 重新核验脚本在位` }));
     await waitFor(() => expect(onRefresh).toHaveBeenCalledWith(host.id));
     await waitFor(() => expect(onLoad).toHaveBeenCalledTimes(2));
+  });
+
+  it('非管理员不渲染「重新核验」（#3091：该动作触发 require_admin 写端点）', async () => {
+    const onLoad = vi.fn().mockResolvedValue(hostPresence);
+    const onRefresh = vi.fn().mockResolvedValue({});
+    render(
+      <ExpandableHostTable
+        hosts={[host]}
+        onLoadHostScriptPresence={onLoad}
+        onRefreshHostScriptPresence={onRefresh}
+      />,
+    );
+
+    fireEvent.click(screen.getByText(host.name));
+    await screen.findByText('powercycle_setup@0.2.0');   // 区块本身仍可读
+
+    expect(
+      screen.queryByRole('button', { name: `${host.name} 重新核验脚本在位` }),
+    ).toBeNull();
   });
 
   it('stale=true 时逐台区块顶部给陈旧提示', async () => {

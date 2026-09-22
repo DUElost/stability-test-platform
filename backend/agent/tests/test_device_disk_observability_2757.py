@@ -36,7 +36,7 @@ def _make_thread(monkeypatch, discovered_devices):
     )
     monkeypatch.setattr(
         "backend.agent.heartbeat_thread.device_discovery.collect_device_info",
-        lambda adb_path, serial, raw_adb_state="device": {
+        lambda adb_path, serial, raw_adb_state="device", include_metrics=True: {
             "adb_state": raw_adb_state,
             "adb_connected": raw_adb_state == "device",
         },
@@ -73,6 +73,27 @@ def test_parse_df_data_forms():
 
     decimal_suffix = "/data: 1.5G 0.5G 75% /data"
     assert device_discovery.parse_df_data(decimal_suffix) == (2 * _G, int(1.5 * _G))
+
+
+def test_parse_df_data_bind_passthrough_form():
+    """#3133 第四形态（真机 .56/16552100 Z2581、.100/A2WENX6817000110 MLD_LX3）：
+    df /data 解析到 bind/穿透挂载，Mounted on 列显示规范挂载点、整行无 /data——
+    旧行过滤落空 → disk_total 恒 NULL（fleet 中 Z2581 覆盖仅 44% 的根因）。"""
+    zte_pass_through = (
+        "Filesystem       1K-blocks     Used Available Use% Mounted on\n"
+        "/dev/block/dm-51 106649584 22015392  84634192  21% /mnt/pass_through/0/emulated\n"
+    )
+    assert device_discovery.parse_df_data(zte_pass_through) == (
+        106649584 * _K, 22015392 * _K,
+    )
+
+    unisoc_pass_through = (
+        "Filesystem       1K-blocks    Used Available Use% Mounted on\n"
+        "/dev/block/dm-55 115064800 9280924 105783876   9% /mnt/pass_through/0/emulated\n"
+    )
+    assert device_discovery.parse_df_data(unisoc_pass_through) == (
+        115064800 * _K, 9280924 * _K,
+    )
 
 
 def test_parse_df_data_garbage_is_none_not_guesswork():

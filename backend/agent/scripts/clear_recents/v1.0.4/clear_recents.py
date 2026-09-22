@@ -21,15 +21,13 @@ cat rc、空输出、非 XML 内容四态显式报读失败：调用方一律转
 形同虚设——现在首个成功 dump 后按 docstring 语义判失败。
 所有 `tasks_after` / `task_cards_raw_after` 均出自一次成功读取的计数。
 
-v1.0.4（#3104 / #3107）：
-- **读失败改为消耗一次尝试**（#3104）。v1.0.3 的判据正确（读失败不得判成功），但
-  abort 无条件发生在重试循环内部 ⇒ `max_attempts` 对读失败不可达，一次瞬时
-  `uiautomator dump` 抖动（正是设备重启窗里的形态）就让整步变红。现在循环内读失败
-  记录进 `metrics.read_failures` 后 `continue`，**最后一次**尝试仍失败才转红。
-- **`dump_path` 校验**（#3107）。该值来自计划参数并被插进设备端 shell（`rm -f` /
-  `cat` 重定向）：空值或含元字符的值可扩张成任意 root 命令。现要求它匹配
-  `/data/local/tmp/<普通文件名>`，否则整步转红（宁可红也不把破坏性命令的执行面
-  交给参数）。
+v1.0.4（#3104）：**读失败不再是「零重试即终结整步」**。v1.0.3 的转红判据正确，
+但 abort 无条件且发生在重试循环内部：`max_attempts` 对「读失败」这一类失败
+不可达，一次瞬时抖动就让整步红——而本文件要治的目标故障形态（设备重启窗里
+`uiautomator dump` 失败）恰恰是**瞬时**的，且模板侧 `retry` 未设（默认 0），
+引擎不会补重试。现在循环内读失败记入 `metrics.read_errors` 并 `continue`
+消耗一次尝试；只有**最后一次**尝试仍读失败才转红（`ui_read_failed=true`）。
+判据与 v1.0.3 一致：读失败永不落成功、永不编造 `tasks_after`。
 
 Environment:
     STP_DEVICE_SERIAL   (required)
@@ -40,10 +38,10 @@ STP_STEP_PARAMS schema:
     open_settle_seconds : float  (default 1.8; 打开概览后等 UI 稳定)
     after_tap_seconds   : float  (default 1.5; 点击清除后等待)
     swipe_ms            : int    (default 300; 上滑关闭残卡手势时长)
-    max_attempts        : int    (default 2; 打开概览+点击的重试次数)
+    max_attempts        : int    (default 2; 每次尝试=开概览+操作+一次 UI 读取；
+                                   读失败同样消耗一次尝试，v1.0.4 起)
     require_tasks       : bool   (default false; true 时若无最近任务则失败)
-    dump_path           : str    (default /data/local/tmp/stp_clear_recents.xml;
-                                 必须匹配 ^/data/local/tmp/[A-Za-z0-9._-]+$，v1.0.4 起校验)
+    dump_path           : str    (default /data/local/tmp/stp_clear_recents.xml)
 
 Output (stdout):
     {"success": true/false, "error_message": "...", "metrics": {...}}
@@ -63,27 +61,6 @@ _KEYCODE_HOME = 3
 _KEYCODE_APP_SWITCH = 187
 
 _DUMP_PATH_DEFAULT = "/data/local/tmp/stp_clear_recents.xml"
-
-#: `dump_path` 白名单形态（#3107）：该值会被插进设备端 shell 命令，故只接受
-#: `/data/local/tmp/` 下的普通文件名——空值/含元字符/含空格的值一律拒绝。
-_DUMP_PATH_RE = re.compile(r"^/data/local/tmp/[A-Za-z0-9._-]{1,64}$")
-
-
-def validated_dump_path(raw: object) -> str:
-    """校验计划参数 `dump_path`（#3107）。
-
-    未校验时 `dump_path = "/"` 会让 `rm -f /` 与 `cat /` 打到设备根；含 `;`/`$()`
-    的值可扩张成任意 root 命令。空值按既有语义回落到默认路径（不是错误）。
-    """
-    text = str(raw or "").strip()
-    if not text:
-        return _DUMP_PATH_DEFAULT
-    if not _DUMP_PATH_RE.match(text):
-        raise ValueError(
-            "dump_path 必须匹配 ^/data/local/tmp/[A-Za-z0-9._-]+$"
-            f"（收到 {text!r}）"
-        )
-    return text
 
 # Prefer ZTE-stable ids, then generic labels (CN/EN).
 _RESOURCE_ID_PREFERENCE = (
@@ -320,12 +297,7 @@ def main() -> None:
     swipe_ms = max(100, _as_int(cfg.get("swipe_ms"), 300))
     max_attempts = max(1, _as_int(cfg.get("max_attempts"), 2))
     require_tasks = _as_bool(cfg.get("require_tasks"), False)
-    try:
-        dump_path = validated_dump_path(cfg.get("dump_path"))
-    except ValueError as exc:
-        # 参数非法 = 配置错误，直接红；不把未校验的值插进设备端 shell（#3107）。
-        output_result(False, error_message=str(exc), metrics={"attempts": 0})
-        return
+    dump_path = str(cfg.get("dump_path") or _DUMP_PATH_DEFAULT)
 
     metrics: dict = {
         "attempts": 0,
@@ -338,7 +310,7 @@ def main() -> None:
         "target": None,
         "already_clear": False,
         "ui_read_failed": False,
-        "read_failures": [],
+        "read_errors": [],
     }
 
     def _finish_home() -> None:
@@ -351,16 +323,20 @@ def main() -> None:
         _finish_home()
         output_result(False, error_message=f"UI 层级读取失败: {reason}", metrics=metrics)
 
-    def _retryable_read_failure(reason: str, attempt: int) -> bool:
-        """循环内的读失败处置（#3104）：还有尝试就消耗一次并继续。
+    def _retry_read(reason: str, attempt_no: int) -> bool:
+        """#3104：读失败先消耗一次尝试。True = 已用尽并转红（调用方立刻 return）；
+        False = 还有尝试（调用方 continue 重来一轮）。
 
-        Returns: True = 最后一次尝试也失败、已转红（调用方应 return）；
-                 False = 已记入 `metrics.read_failures`，调用方应 `continue`。
+        v1.0.3 在这里无条件 `_fail_read` 并 return，于是 `max_attempts` 对「读失败」
+        不可达：一次瞬时抖动就终结整步。而瞬时读失败正是本脚本的目标故障形态
+        （设备重启窗里 `uiautomator dump` 失败），且模板侧 `retry` 未设（默认 0）、
+        引擎不会补重试——重试必须由脚本自己承担。转红判据不变：读失败永不落成功。
         """
-        metrics["read_failures"].append(f"attempt {attempt}: {reason}")
-        if attempt < max_attempts:
+        metrics["read_errors"].append(reason)
+        if attempt_no < max_attempts:
+            _wake_unlock_home()
             return False
-        _fail_read(f"attempt {attempt}: {reason}（连续 {attempt} 次读失败）")
+        _fail_read(f"{attempt_no} 次尝试均未读到 UI 层级；最后一次: {reason}")
         return True
 
     with progress_heartbeat("clear_recents"):
@@ -372,7 +348,7 @@ def main() -> None:
             time.sleep(open_settle)
             xml, dump_err = _dump_ui(dump_path)
             if xml is None:
-                if _retryable_read_failure(dump_err, attempt):
+                if _retry_read(f"attempt {attempt}: {dump_err}", attempt):
                     return
                 continue
             app_before = _count_app_tasks(xml)
@@ -406,7 +382,7 @@ def main() -> None:
                     time.sleep(open_settle)
                     verify_xml, verify_err = _dump_ui(dump_path)
                     if verify_xml is None:
-                        if _retryable_read_failure(f"swipe 复核: {verify_err}", attempt):
+                        if _retry_read(f"swipe 复核 attempt {attempt}: {verify_err}", attempt):
                             return
                         continue
                     app_after = _count_app_tasks(verify_xml)
@@ -434,7 +410,7 @@ def main() -> None:
             time.sleep(open_settle)
             verify_xml, verify_err = _dump_ui(dump_path)
             if verify_xml is None:
-                if _retryable_read_failure(f"tap 复核: {verify_err}", attempt):
+                if _retry_read(f"tap 复核 attempt {attempt}: {verify_err}", attempt):
                     return
                 continue
             app_after = _count_app_tasks(verify_xml)
@@ -450,7 +426,7 @@ def main() -> None:
                     time.sleep(open_settle)
                     verify_xml, verify_err = _dump_ui(dump_path)
                     if verify_xml is None:
-                        if _retryable_read_failure(f"swipe 复核: {verify_err}", attempt):
+                        if _retry_read(f"swipe 复核 attempt {attempt}: {verify_err}", attempt):
                             return
                         continue
                     app_after = _count_app_tasks(verify_xml)

@@ -38,6 +38,11 @@ try:
 except ImportError:  # Agent install layout (no ``backend.`` package)
     from agent.upload_manager import ShardRegistrationError
 
+try:
+    from backend.agent.tool_cache import resolve_packaged_scan_tool
+except ImportError:  # Agent install layout
+    from agent.tool_cache import resolve_packaged_scan_tool
+
 logger = logging.getLogger(__name__)
 
 _SCAN_SUBPROCESS_TIMEOUT = 600
@@ -378,6 +383,15 @@ class ScanRunner:
             return
         self._scan_tool_python = scan_tool_python or os.getenv("STP_DEDUP_SCAN_PYTHON", "").strip()
         self._scan_tool_script = scan_tool_script or os.getenv("STP_DEDUP_SCAN_SCRIPT", "").strip()
+        # ADR-0033 Phase B（#3075）：配置了包引用且拉取核验成功 → 工具路径切到
+        # tools_cache（C6 只切 Agent 侧）；显式传参优先于包面（测试/受控调用），
+        # 任何失败保持 env 路径不变（C3 回退一个版本窗口）。
+        if not scan_tool_python and not scan_tool_script:
+            pkg = resolve_packaged_scan_tool()
+            if pkg:
+                self._scan_tool_python = pkg.python
+                self._scan_tool_script = pkg.script
+                logger.info("scan_runner_package_active tool=%s@%s", pkg.name, pkg.version)
         self._hdd_root = hdd_root or str(get_aee_local_root())
         # P1-2：与控制面 run_merge_sync 同逻辑读 STP_DEDUP_SCAN_TAG
         #（含 factory 大小写不敏感 → factory，否则 shanghai）；显式传 side 时优先。

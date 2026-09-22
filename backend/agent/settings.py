@@ -227,6 +227,14 @@ class HeartbeatSettings(BaseSettings):
     # 0/负 = 关闭（刻意不进 _v_positive_pacing 钳制——「关」是合法档位而非非法值）
     stp_device_disk_sample_interval_seconds: float = 300
 
+    # ── heartbeat_thread：设备慢指标（电量/温度/版本/网络延迟）低频采样窗口 ──
+    # 在线态（adb devices + echo 连通性）不受此旋钮影响，始终每拍上报。
+    # 与 disk 旋钮不同：**0/负 = 不节流（回退每拍采集，改造前行为）**——慢指标
+    # 是页面必采项，不存在「关掉」档；「不节流」才是非法值之外的安全回退。
+    # 刻意不进 _v_positive_pacing 钳制（0 是合法语义）。强制采样不受窗口约束：
+    # 新设备首见 / 断线恢复首拍 / settings 不可用（#2279）时始终每拍采。
+    stp_device_info_sample_interval_seconds: float = 1800
+
     @field_validator(
         "coordinator_heartbeat_interval",
         "stp_heartbeat_interval_min",

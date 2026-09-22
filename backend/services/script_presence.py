@@ -18,9 +18,19 @@ DB 面全绿就是该盲区的实证。本模块把核验做成**常设账**：
 `state` 是**闭词表**（`PRESENCE_STATES`）：``present / missing / mismatch / unknown /
 n_a / maintenance``。两条刻意的口径：
 
-- ``unknown``（agent 不可达）**不是绿**——与 `agent_offline` 语义一致；
+- ``unknown``（agent 不可达）**不是绿**——与 `agent_offline` 语义一致。注意它与
+  「核验发现有失败」是两回事：后者 agent **回了**逐条结果，须按逐条判（#3135，
+  见 `classify_host_presence`）；
 - 维护窗内 host 的缺口记 ``maintenance`` 而非 missing/mismatch：维护窗兼作升级锁，
   窗口内不收作业、无即时影响（归队前补分发由 #2865 遗留项盯），否则维护期恒红。
+
+**覆盖边界（#3111）**：全集**不含**「active 但无任何 Plan 引用」的版本，而这类版本在
+生产里并不罕见（实测 `|active|=97` vs `|full|=50`）。它们一行都不会写进账本，于是
+汇总里的 `missing/mismatch = 0` **只**能读成「有 Plan 会跑的版本都在位」，**不能**读成
+「所有 active 版本都在位」——新合并、尚未被 Plan 引用的脚本版本（如 #3085 的
+`fill_storage` v1.1.1）正是落在这个盲区里。`active_unreferenced_versions()` 把这个
+差集暴露给汇总与日志；到位情况本身由 code digest 同步面（`agent_code_sync_status`）
+与一次 fleet 热更新负责，不在本账本的五态里。
 """
 from __future__ import annotations
 
@@ -31,7 +41,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Optional
 from uuid import uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -82,6 +92,33 @@ def build_full_target_set(
     }
     active = {(str(r["name"]), str(r["version"])) for r in script_rows if r.get("is_active")}
     return sorted(referenced & active)
+
+
+def active_unreferenced_versions(
+    step_rows: list[dict], script_rows: list[dict]
+) -> list[tuple[str, str]]:
+    """`active − 被启用步骤引用` = **账本覆盖不到**的 active 版本（#3111）。
+
+    与 `build_full_target_set` 出自同一对集合、方向相反：全集是 `referenced ∩ active`，
+    这里是 `active − referenced`。两者互补，`|active| = |full| + |uncovered|`。
+
+    为什么要有这个面：这些版本不会进任何主机的可达集，于是每行都是 `n_a`——
+    汇总里的 `missing/mismatch = 0` **只**说明「有 Plan 会跑的版本都在位」，不能读成
+    「所有 active 版本都在位」。生产实测 `|active|=97 / |full|=50 / uncovered=47`
+    （2026-09-22），`fill_storage` v1.1.1（#3085 新版本、尚无 Plan 引用）就在其中：
+    它在 DB 里 active、脚本却要从**主机本地树**执行（`Script.nfs_path`），只有一次
+    fleet 热更新才会把文件送上主机。
+
+    这里只回集合本身（供汇总计数与日志），**不**把它们折进五态：历史上刻意用
+    「可达集」收敛告警面（见模块 docstring 的假缺口说明），把无人引用的 active 版本
+    一律判 missing 会立刻产生成片噪声——「账本没验过」与「本机缺」是两件事。
+    """
+    referenced = {
+        (str(r["script_name"]), str(r["script_version"]))
+        for r in step_rows
+    }
+    active = {(str(r["name"]), str(r["version"])) for r in script_rows if r.get("is_active")}
+    return sorted(active - referenced)
 
 
 def build_expected_manifests(
@@ -232,10 +269,13 @@ def classify_host_presence(
 ) -> dict[tuple[str, str], tuple[str, str]]:
     """把「RPC 结果 + 可达性 + 维护窗」折成逐目标的 ``(state, detail)``。
 
-    优先级：``n_a``（可达集外）> ``unknown``（RPC 失败）> ``maintenance``（窗口内缺口）
+    优先级：``n_a``（可达集外）> ``unknown``（无逐条结果）> ``maintenance``（窗口内缺口）
     > agent 报的 present/missing/mismatch。细节：
 
-    - RPC 失败（agent 不可达）时**所有可达目标都记 unknown**，不写成 present——未知不是绿；
+    - **``verify_ok=False`` 是两种情形，不得混为一谈**（#3135）：
+      ① RPC 整体不可用（agent 不可达 / 超时，``results`` 为空）→ 所有可达目标记 unknown，
+      不写成 present——未知不是绿；
+      ② RPC 成功但核验**发现**有失败 → agent 回了逐条结果，按逐条判。
     - 维护窗只把**缺口**改记 maintenance；``present`` 保持 present（在位是事实）；
     - agent 结果里缺行（老 agent / 未上报）记 ``unknown`` + ``not_reported``，
       不猜 missing；
@@ -244,13 +284,15 @@ def classify_host_presence(
     by_key: dict[tuple[str, str], dict] = {
         (str(e.get("name")), str(e.get("version"))): e for e in (verify_entries or [])
     }
+    # #3135（主干 #3136 版）：只有「没有任何逐条结果」才算整体不可用
+    per_entry_available = bool(by_key)
     out: dict[tuple[str, str], tuple[str, str]] = {}
     for key in sorted(set(full)):
         name, version = key
         if key not in reachable:
             out[key] = (STATE_N_A, "")
             continue
-        if not verify_ok:
+        if not verify_ok and not per_entry_available:
             out[key] = (STATE_UNKNOWN, (verify_error or "verify_failed")[:256])
             continue
         entry = by_key.get(key)
@@ -382,6 +424,9 @@ async def run_sweep(
 
     facts = await asyncio.to_thread(_facts)
     full = build_full_target_set(facts["steps"], facts["scripts"])
+    # #3111：全集之外的 active 版本（无 Plan 引用）账本一行都不写——把差集报出来，
+    # 免得下游把 `missing/mismatch=0` 读成「所有 active 版本都在位」。
+    uncovered = active_unreferenced_versions(facts["steps"], facts["scripts"])
     manifests = build_expected_manifests(facts["scripts"], full)
     by_plan = group_steps_by_plan(facts["steps"])
     scheduled = scheduled_host_plans(facts["schedules"], facts["devices"])
@@ -426,27 +471,93 @@ async def run_sweep(
             })
 
     written = await asyncio.to_thread(_persist, db_factory, rows)
+    round_hosts = [str(h["id"]) for h, _reachable in per_host]
+    removed = await asyncio.to_thread(
+        _cleanup_orphans, db_factory, round_hosts, sweep_id,
+        full_scope=host_ids is None,
+    )
     summary = summarize_states(rows)
     result = {
         "sweep_id": sweep_id,
         "hosts": len(hosts),
         "hosts_verified": len(need_rpc),
         "full_versions": len(full),
+        "uncovered_active_versions": len(uncovered),
         "rows": written,
+        "orphans_removed": removed,
         **summary,
     }
     logger.info(
-        "script_presence_sweep_done sweep=%s hosts=%d verified=%d rows=%d gaps=%d unknown=%d",
+        "script_presence_sweep_done sweep=%s hosts=%d verified=%d rows=%d gaps=%d unknown=%d"
+        " full=%d uncovered_active=%d",
         sweep_id, len(hosts), len(need_rpc), written,
         summary["counts"].get(STATE_MISSING, 0) + summary["counts"].get(STATE_MISMATCH, 0),
         summary["counts"].get(STATE_UNKNOWN, 0),
+        len(full), len(uncovered),
     )
+    if uncovered:
+        # 恒在的事实而非事故：日 sweep 里记 info（warning 会变成常亮灯），但要能一眼看到
+        # 「这次账本没覆盖哪些 active 版本」——新合并版本正是从这里被发现还没下发的。
+        preview = ", ".join(f"{n}@{v}" for n, v in uncovered[:10])
+        more = f" …(+{len(uncovered) - 10})" if len(uncovered) > 10 else ""
+        logger.info(
+            "script_presence_uncovered_active n=%d versions=%s%s"
+            "（无 Plan 引用 ⇒ 任何主机的可达集都没有它，账本不核验；"
+            "missing=0 不含这些版本，到位情况看 agent_code_sync_status）",
+            len(uncovered), preview, more,
+        )
     return result
 
 
 def _persist(db_factory, rows: list[dict]) -> int:
     with db_factory() as db:
         return _persist_rows(db, rows)
+
+
+def _cleanup_orphans(
+    db_factory, round_hosts: list[str], sweep_id: str, *, full_scope: bool
+) -> int:
+    """#3089：删掉**不在本轮生成集**里的行——账本只增不减会被历史行钉死三个面。
+
+    存在理由（#3089）：sweep 只写「当前未退役 host × 当前目标集」，但从不删行，于是
+
+    - 退役 host / 目标集收缩（版本改指、脚本停用）留下的孤儿行把 ``min(checked_at)``
+      永久钉在过去 ⇒ ``StabilityScriptPresenceSweepStale`` 恒响（即使每轮都成功）；
+    - 孤儿行末态若是 missing/mismatch，gauge child 永不移除 ⇒ ``…PresenceGap`` 恒响；
+    - ``refresh`` 对这类行还会静默空转（现在改为 404，见路由）。
+
+    判据：**只有本轮写过、且 sweep_id 匹配的行留下**（sweep 是整轮 upsert，同轮所有行共享
+    sweep_id）。两种作用域：
+
+    - ``full_scope``（全量 sweep）：``NOT (host_id ∈ 本轮 AND sweep_id = 本轮)`` 一律删——
+      既清退役 host，也清本轮 host 的旧目标版本；
+    - 否则（单机 refresh）：只清**该 host**的孤儿行，绝不触碰其他 host 的行
+      （否则一次单机刷新会把全表清空）。
+
+    只在 upsert **成功之后**执行，且失败即抛：宁可不删，也不要「删了没补」。
+    """
+    with db_factory() as db:
+        if full_scope:
+            keep = and_(
+                HostScriptPresence.host_id.in_(round_hosts),
+                HostScriptPresence.sweep_id == sweep_id,
+            )
+            removed = (
+                db.query(HostScriptPresence)
+                .filter(~keep)
+                .delete(synchronize_session=False)
+            )
+        else:
+            removed = (
+                db.query(HostScriptPresence)
+                .filter(
+                    HostScriptPresence.host_id == (round_hosts[0] if round_hosts else ""),
+                    HostScriptPresence.sweep_id != sweep_id,
+                )
+                .delete(synchronize_session=False)
+            )
+        db.commit()
+        return int(removed or 0)
 
 
 def _new_sweep_id() -> str:

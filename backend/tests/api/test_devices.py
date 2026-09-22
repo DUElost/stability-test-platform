@@ -1,9 +1,10 @@
 """
 Tests for devices API routes
 """
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
+from backend.models.enums import DeviceStatus
 from backend.models.host import Device
 
 
@@ -104,32 +105,81 @@ class TestListDevices:
         assert device_data["serial"] == sample_device.serial
         assert device_data["model"] == sample_device.model
 
-    def test_list_devices_ordered_by_id(self, client, sample_host, admin_headers, auth_headers):
-        """Test devices are ordered by id"""
-        # Create multiple devices
-        prefix = f"ORDER-{uuid4().hex[:8]}"
-        created_serials = []
-        for i in range(3):
-            serial = f"{prefix}-{i}"
-            created_serials.append(serial)
-            client.post(
-                "/api/v1/devices",
-                json={
-                    "serial": serial,
-                    "model": "OrderModel",
-                    "host_id": sample_host.id,
-                },
-                headers=admin_headers,
-            )
+    def test_list_devices_order_is_host_then_id(
+        self, client, db_session, sample_host, sample_offline_host, auth_headers
+    ):
+        """排序契约：`host_id` 升序（NULL 最后）→ `id` 升序（#3123）。
 
-        response = client.get("/api/v1/devices", headers=auth_headers)
-        data = response.json()
-        # 接口按 last_seen DESC NULLS LAST 排序——新设备 last_seen 全 NULL，
-        # NULL 组内顺序 PG 不保证。断言集合与去重，不依赖 NULL 组内顺序。
+        刻意让 `last_seen` 与 id 顺序**相反**：旧实现按 `last_seen DESC` 排序，
+        会返回 id 倒序，本用例当场红。排序列一旦含被心跳重写的遥测列，顺序就会
+        在两次轮询之间整体重排，因此这里断言的是「顺序 = (host_id, id) 序」，
+        与任何时间戳无关。
+        """
+        prefix = f"ORDER-{uuid4().hex[:8]}"
+        now = datetime.now(timezone.utc)
+        hosts = (sample_host, sample_offline_host)
+        for host in hosts:
+            for i in range(3):
+                # 后登记的 last_seen 更新 → 与 id 升序相反（旧实现会倒着返回）
+                db_session.add(
+                    Device(
+                        serial=f"{prefix}-{host.id}-{i}",
+                        host_id=host.id,
+                        status=DeviceStatus.ONLINE.value,
+                        last_seen=now - timedelta(minutes=10 * (2 - i)),
+                    )
+                )
+        db_session.commit()
+
+        data = client.get("/api/v1/devices", headers=auth_headers).json()
         serials = [d["serial"] for d in data]
-        assert all(s in serials for s in created_serials)
+        # 分页完整性：不得重复、不得漏（offset 分页依赖服务端全序，见 #3123）
         assert len(serials) == len(set(serials))
-        assert set(created_serials).issubset(serials)
+
+        created = [d for d in data if d["serial"].startswith(prefix)]
+        assert len(created) == 2 * 3
+        assert [d["serial"] for d in created] == [
+            d["serial"] for d in sorted(created, key=lambda d: (str(d["host_id"]), d["id"]))
+        ]
+
+    def test_list_devices_order_survives_heartbeat(
+        self, client, db_session, sample_host, auth_headers
+    ):
+        """一次心跳（重写 `last_seen`）不得改变列表顺序——#3123 的直接症状。
+
+        旧实现下 `last_seen DESC` 会把刚心跳的设备顶到第一位，于是前端每 10s 轮询
+        看到整页换人（生产实测前 50 行 0% 重合）。
+        """
+        prefix = f"HB-{uuid4().hex[:8]}"
+        now = datetime.now(timezone.utc)
+        for i in range(3):
+            db_session.add(
+                Device(
+                    serial=f"{prefix}-{i}",
+                    host_id=sample_host.id,
+                    status=DeviceStatus.ONLINE.value,
+                    last_seen=now - timedelta(minutes=i),
+                )
+            )
+        db_session.commit()
+
+        before = [
+            d["serial"] for d in client.get("/api/v1/devices", headers=auth_headers).json()
+            if d["serial"].startswith(prefix)
+        ]
+        assert len(before) == 3
+
+        # 模拟最后一台心跳：last_seen 刷成最新
+        last = db_session.query(Device).filter(Device.serial == f"{prefix}-2").one()
+        last.last_seen = now + timedelta(seconds=1)
+        db_session.commit()
+
+        after = [
+            d["serial"] for d in client.get("/api/v1/devices", headers=auth_headers).json()
+            if d["serial"].startswith(prefix)
+        ]
+        assert after == before
+        assert after[-1] == f"{prefix}-2"
 
     def test_list_devices_status_offline_when_host_offline(
         self, client, db_session, sample_device, sample_offline_host, auth_headers

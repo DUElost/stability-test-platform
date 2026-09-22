@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ChevronDown, Search, X } from 'lucide-react';
-import { api } from '@/utils/api';
+import { fetchAllDevices } from '@/utils/api';
 import { deviceKeys } from '@/utils/api/queryKeys';
 import { FORM, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
@@ -13,7 +13,13 @@ interface DeviceMultiSelectProps {
 
 /**
  * 设备多选（定时任务表单）——替代手填 ID 串。按 serial/model 过滤、勾选即选；
- * 已选以 chip 呈现可单独移除。全量拉取（fleet 当前规模 ~百台，虚滚无必要）。
+ * 已选以 chip 呈现可单独移除。
+ *
+ * #3131：必须走 `fetchAllDevices`（按 total 翻页）而不是单次 `list(0, 1200)`。
+ * 后者在设备数越过单次响应护栏时**静默少设备**——这里少设备不是观感问题：排程会
+ * 因此少挂设备且没有任何提示。同键（`deviceKeys.all()`）的 PlanExecutePage 用的就是
+ * `fetchAllDevices`，此前两处语义不同 ⇒ 谁先挂载谁的数据进缓存，同一页面在不同
+ * 访问路径下看到的设备集可能不一样；统一后该分歧消失。
  */
 export function DeviceMultiSelect({ selectedIds, onChange }: DeviceMultiSelectProps) {
   const [open, setOpen] = useState(false);
@@ -21,7 +27,7 @@ export function DeviceMultiSelect({ selectedIds, onChange }: DeviceMultiSelectPr
 
   const devicesQ = useQuery({
     queryKey: deviceKeys.all(),
-    queryFn: () => api.devices.list(0, 1200).then((r) => r.items),
+    queryFn: () => fetchAllDevices(),
     staleTime: 60_000,
   });
   const devices = useMemo(() => devicesQ.data ?? [], [devicesQ.data]);

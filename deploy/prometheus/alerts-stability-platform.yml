@@ -1,17 +1,22 @@
-# Prometheus AlertManager rules for stability-test-platform.
-# Rendered by the site installer for <deploy-root> — do not edit by hand.
+# Prometheus AlertManager rules for stability-test-platform —— **控制面（平台）全量规则集**。
+# 这份仓库文件是唯一事实源。
 #
-# 这份仓库文件是唯一事实源：站点侧 /etc/stp/prometheus/rules/*.yml 只是安装产物。
-# 由 tools/site_config/stages.py 的 MONITORING_RULES 安装，并由 prometheus.yml 的
-# rule_files 段加载。两者缺一，规则就只活在仓库里——#2488 之前正是那种状态：
+# **它不在站点安装清单里**（#2643 方向 1，owner 裁决 2026-09-18）：站点装的是
+# `deploy/prometheus/site-alerts.yml` 这个「站点可见面子集」，渲染落点
+# `etc/stp/prometheus/rules/`，由 `tools/site_config/stages.py` 的 `MONITORING_RULES` 声明，
+# 该终态由 `tests/test_site_alert_scrape_surface.py` 钉死。本文规则引用的都是控制面进程指标，
+# 而站点那个唯一的 node-exporter job 结构上抽不到 —— 装过去也恒不触发，只让「监控就绪」
+# 更像真的。新增规则时请先想清楚它属于哪一面。
+#
+# 控制面宿主上的落点是 `/etc/prometheus/rules/alerts-stability-platform.yml`，性质是**人工副本**
+# （原样拷贝、不渲染）：`docs/operations/README.md` §6 —— 随仓库更新需**人工重放 + `POST /-/reload`**，
+# 没有自动同步。注意**同名文件在两种宿主上不是同一样东西**（站点那份是 `site-alerts.yml` 的渲染
+# 产物），所以 `tools/dev/check-monitoring-assets.py` 按**落点所属宿主角色**选事实源，
+# 而不是按清单名选（#2985）。
+#
+# 历史（保留）：#2488 之前这条链是断的——规则文件既不在安装清单、模板也没有 `rule_files` 段，
 # 仓库里的告警一条也没上线，本机那份手工拷贝停在旧条数（当时的具体数字见 #2488 的 Note）。
 # 改 labels/severity 请改这里，并同步重跑 promtool test rules（场景文件必须跟着改）。
-#
-# 去向提醒（#2643）：本文件**整份**被安装到站点，而站点的抓取面只有本机 node-exporter
-# （`deploy/prometheus/prometheus.yml` 单 job）。因此引用控制面 `stability_*` 指标的规则在站点
-# **恒无样本**——不触发也不报错。这类规则由 `tests/test_site_alert_scrape_surface.py` 逐条登记，
-# 只准缩短不准扩大；「站点只装站点可见面规则」还是「站点补控制面 /metrics 抓取」属方向裁决，
-# 由 #2643 的 owner 定。新增规则时请先想清楚它属于哪一面。
 
 groups:
   - name: stability-platform-main-chain
@@ -325,9 +330,14 @@ groups:
       # 四种不可信形态合成一条（避免告警风暴）：探针崩了（broken）、强信号源不在场
       # （unknown ⇒ 洞数未知，不得当成 0）、以及「探针其实没在跑」（last_run 陈旧或指标
       # 消失）。最后一条尤其要紧——停摆时 hollow=0 仍会被读到，看起来像「干净」。
-      # 阈值 172800s = 48h：探针每周一次 + Persistent=true 补跑，两天无结果即真停摆。
+      # 阈值 1209600s = 14 天 = **2× 生产周期**（`stp-skill-usage.timer` 是周级
+      # `Mon *-*-* 09:30` + `Persistent=true` 补跑）：连续两次没结果才是真停摆。
+      # 原值 172800s（48h）是 0.29× 周期，会让本告警每周约 5 天持续 firing，
+      # 把「探针崩了 / 源不可得 / 真停摆」三种真信号淹在恒响里（#3106）。
+      # 判据不再手写：tests/test_staleness_threshold_vs_timer_period_3106.py
+      # 从对应 timer 的 OnCalendar / OnUnitActiveSec 推导周期，断言阈值 ≥ 2×周期。
       - alert: StabilitySkillUsageUntrusted
-        expr: stp_skill_usage_broken == 1 or stp_skill_usage_unknown == 1 or time() - stp_skill_usage_last_run > 172800 or absent(stp_skill_usage_last_run)
+        expr: stp_skill_usage_broken == 1 or stp_skill_usage_unknown == 1 or time() - stp_skill_usage_last_run > 1209600 or absent(stp_skill_usage_last_run)
         for: 10m
         labels:
           severity: warning
@@ -335,7 +345,7 @@ groups:
           summary: skill 用量探针不可信（崩溃／源不可得／停摆）
           description: >-
             broken=1（探针自身异常）、unknown=1（强信号源不在场，洞数未知）或 last_run
-            超过 48 小时未更新／指标消失。此时 hollow 的读数没有意义：先修探针或确认转录源
+            超过 14 天（2× 周级周期）未更新／指标消失。此时 hollow 的读数没有意义：先修探针或确认转录源
             仍在（--home 指向的部署用户家目录），并确认 stp-skill-usage.timer 在跑。
 
       # ---- #735 退役守卫的执行者指标 -------------------------------------------

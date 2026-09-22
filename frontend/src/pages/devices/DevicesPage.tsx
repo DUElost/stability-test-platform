@@ -10,7 +10,7 @@ import { AddDeviceModal } from './components/AddDeviceModal';
 import { BatchEditDeviceTagsDialog, type DeviceTagOperation } from './components/BatchEditDeviceTagsDialog';
 import { AssignProjectDialog } from './components/AssignProjectDialog';
 import { ProjectFilterSelect, UNASSIGNED_FILTER_VALUE } from '@/components/project/ProjectFilterSelect';
-import { api, assignDevicesToProject, fetchHostList, toApiError } from '@/utils/api';
+import { api, assignDevicesToProject, fetchAllDevicePages, fetchHostList, toApiError } from '@/utils/api';
 import type { Host } from '@/utils/api/types';
 import { deviceKeys, hostKeys } from '@/utils/api/queryKeys';
 import { Button } from '@/components/ui/button';
@@ -48,11 +48,19 @@ export default function DevicesPage() {
   // #2369：仅设备页订阅 fleet:devices，material DEVICE_UPDATE 合流失效列表。
   useFleetDeviceUpdates(true);
 
-  const { data: devices, isLoading, error } = useQuery({
+  // #3131：翻页拉全量并保留 total——`limit` 是单次响应护栏（按 25 台/主机，48 host
+  // 满挂 = 1200 已把上限压满，而 ADR-0026 的目标是 60+ host / 1000+ device），
+  // 单次请求会在扩容后静默少设备。表格「全部设备」卡改用真实 total，差集由表格内
+  // 横幅提示，不再拿已加载条数当总数。
+  const { data: devicesPage, isLoading, error } = useQuery({
     queryKey: deviceKeys.list(projectKey, unassignedOnly),
-    queryFn: () => api.devices.list(0, 1200, undefined, undefined, effectiveProjectKey, unassignedOnly).then(res => res.items),
+    queryFn: () => fetchAllDevicePages({
+      projectKey: effectiveProjectKey,
+      unassigned: unassignedOnly,
+    }),
     refetchInterval: 10000,
   });
+  const devices = devicesPage?.items;
 
   const { data: hosts } = useQuery({
     queryKey: hostKeys.list(),
@@ -397,6 +405,7 @@ export default function DevicesPage() {
       <div>
         <ExpandableDeviceTable
           devices={formattedDevices}
+          totalCount={devicesPage?.total}
           selectedIds={selectedDeviceIds}
           onSelectionChange={setSelectedDeviceIds}
           onFilteredDevicesChange={handleFilteredDevicesChange}

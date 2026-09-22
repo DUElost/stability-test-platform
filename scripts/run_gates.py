@@ -119,7 +119,8 @@ GATES = {
         None,
     ),
     # ADR-0033 D0：禁止新增 backend/agent/scripts/ 顶层工具族（#745 in-tree breaker）。
-    # 既有族新版本仍绿；包存储未触发前新族无合法 in-tree 出口。
+    # 既有族新版本仍绿；新族须归类声明，external-tool 无 in-tree 出口
+    # （ADR-0033 §5.6；§5.4 条件 4 已触发，跟踪 #3075）。
     "new-script-family": (
         f"{PY} tools/dev/check_new_script_family.py --self-test && "
         f"{PY} tools/dev/check_new_script_family.py --base {BASE_REF}",
@@ -130,6 +131,14 @@ GATES = {
     "tool-contract": (
         f"{PY} tools/dev/verify_tool_contract.py --self-test && "
         f"{PY} tools/dev/verify_tool_contract.py",
+        ROOT,
+        None,
+    ),
+    # ADR-0033 Phase B（#3075）：tool_manifest 唯一事实源的 schema lint +
+    # append-only（退役仅 retired 单向翻转；artifact 布局=C4；契约字段禁混装=C5）。
+    "tool-manifest": (
+        f"{PY} tools/dev/check_tool_manifest.py --self-test && "
+        f"{PY} tools/dev/check_tool_manifest.py --base {BASE_REF}",
         ROOT,
         None,
     ),
@@ -321,12 +330,13 @@ PROFILES = {
         "schema-at-head", "env-inventory",
         "ruff", "eslint", "tsc", "knip", "compileall", "orphan-models",
         "gov-surface", "ai-work", "god-files", "inner-imports",
-        "new-script-family", "tool-contract",
+        "new-script-family", "tool-contract", "tool-manifest",
     ],
     "check:pr": [
         "schema-at-head", "env-inventory",
         "ruff", "eslint", "tsc", "knip", "compileall", "layering", "orphan-models",
         "pollution", "immutability", "new-script-family", "tool-contract",
+        "tool-manifest",
         "alembic-immutability", "invariant-diff",
         "gov-surface", "ip-leak", "prom-alerts", "agent-tests-collect", "agent-tests",
         "pr-migrate", "god-files", "inner-imports",
