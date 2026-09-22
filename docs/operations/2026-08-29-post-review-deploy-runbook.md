@@ -47,12 +47,15 @@ git checkout main                         # 部署源必须是 main（并发会�
 git fetch origin main
 git log -1 --oneline origin/main          # 确认目标 commit
 git pull --ff-only origin main            # 或已合并的 release 分支
-./tools/dev/check-deploy-source.sh        # 部署源守卫：HEAD==main 且无未提交改动，退出码须为 0
+./tools/dev/check-deploy-source.sh        # 部署源守卫：HEAD==main、无未提交改动、热更新载荷根 backend/agent/ 无未跟踪文件，退出码须为 0
 ```
 
-> 守卫除上述两项外还调 `tools/dev/check_alembic_at_head.py --allow-behind`：**库超前于
+> 守卫除上述三项外还调 `tools/dev/check_alembic_at_head.py --allow-behind`：**库超前于
 > 代码 head 或修订未知**同样非 0 退出；库**落后**只 WARN（本步位于 `alembic upgrade head`
 > 之前，「pull → 守卫 → 迁移」的中间态本就合法）；无 `DATABASE_URL` 时该检查 WARN 跳过。
+> 载荷根那一项是 #3112 补的：`backend/agent/` 是热更新打包与 desired digest 的同一枚举根，
+> 那里的未跟踪文件会随热更新推到全部主机并让全 fleet 变 drift；仓库根其余位置的未跟踪
+> 文件仍只 WARN。
 
 ### 1.2 依赖（requirements 有变时）
 
