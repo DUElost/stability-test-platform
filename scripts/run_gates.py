@@ -134,6 +134,14 @@ GATES = {
         ROOT,
         None,
     ),
+    # ADR-0033 Phase B（#3075）：tool_manifest 唯一事实源的 schema lint +
+    # append-only（退役仅 retired 单向翻转；artifact 布局=C4；契约字段禁混装=C5）。
+    "tool-manifest": (
+        f"{PY} tools/dev/check_tool_manifest.py --self-test && "
+        f"{PY} tools/dev/check_tool_manifest.py --base {BASE_REF}",
+        ROOT,
+        None,
+    ),
     # alembic revision 不可变门禁（#2258，承接 #2046）：已合入 main 的 revision 被
     # 改写/删除即红——停在其后的库不会再执行被插入的祖先，而 check_alembic_at_head
     # 只做等值判定、判不出来。唯一豁免 = 同一 diff 为被改写者附了重放迁移（#1717 形态）。
@@ -322,12 +330,13 @@ PROFILES = {
         "schema-at-head", "env-inventory",
         "ruff", "eslint", "tsc", "knip", "compileall", "orphan-models",
         "gov-surface", "ai-work", "god-files", "inner-imports",
-        "new-script-family", "tool-contract",
+        "new-script-family", "tool-contract", "tool-manifest",
     ],
     "check:pr": [
         "schema-at-head", "env-inventory",
         "ruff", "eslint", "tsc", "knip", "compileall", "layering", "orphan-models",
         "pollution", "immutability", "new-script-family", "tool-contract",
+        "tool-manifest",
         "alembic-immutability", "invariant-diff",
         "gov-surface", "ip-leak", "prom-alerts", "agent-tests-collect", "agent-tests",
         "pr-migrate", "god-files", "inner-imports",

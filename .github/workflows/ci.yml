@@ -253,6 +253,14 @@ jobs:
           python tools/dev/verify_tool_contract.py --self-test
           python tools/dev/verify_tool_contract.py
 
+      # ADR-0033 Phase B（#3075）：tool_manifest.json 唯一事实源——schema lint +
+      # append-only（删除禁止；原地改写禁止；退役仅 retired 单向翻转）。
+      - name: ADR-0033 tool_manifest 检查
+        run: |
+          python tools/dev/check_tool_manifest.py --self-test
+          python tools/dev/check_tool_manifest.py \
+            --base "origin/${{ github.base_ref || github.ref_name }}"
+
       # alembic revision 不可变检查（#2258 / #2046）：已合入 main 的 revision 被改写
       # 或删除即红（停在其后的库不会再执行被插入的祖先，check_alembic_at_head 的等值
       # 判定判不出来）；唯一豁免 = 同一 PR 为被改写者附了重放迁移（#1717 形态）。
