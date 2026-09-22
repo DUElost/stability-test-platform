@@ -36,7 +36,7 @@ def _make_thread(monkeypatch, discovered_devices):
     )
     monkeypatch.setattr(
         "backend.agent.heartbeat_thread.device_discovery.collect_device_info",
-        lambda adb_path, serial, raw_adb_state="device": {
+        lambda adb_path, serial, raw_adb_state="device", include_metrics=True: {
             "adb_state": raw_adb_state,
             "adb_connected": raw_adb_state == "device",
         },

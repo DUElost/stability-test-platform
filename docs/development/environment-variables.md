@@ -375,6 +375,7 @@
 | `STP_DEDUP_SCAN_TAG` | `` | ✅ | 运行时 | `backend/agent/scan_runner.py:385` |
 | `STP_DEDUP_WORK_DIR` | `logs/dedup_uploads` | ✅ | 运行时 | `backend/api/routes/dedup.py:75` |
 | `STP_DEVICE_DISK_SAMPLE_INTERVAL_SECONDS` | `300` | ✅ | 运行时 | `backend/agent/settings.py:228` |
+| `STP_DEVICE_INFO_SAMPLE_INTERVAL_SECONDS` | `1800` | ✅ | 运行时 | `backend/agent/settings.py:236` |
 | `STP_DEVICE_LOG_EVENT_ENABLED` | `-` | ✅ | 运行时 | `backend/agent/event_uploader.py:119` |
 | `STP_DEVICE_SERIAL` | `-` | — | 测试 | `backend/agent/tests/test_pipeline_engine_script_action.py:51` |
 | `STP_ENABLE_INPROCESS_SAQ` | `1` | ✅ | 运行时 | `backend/main.py:210` |
