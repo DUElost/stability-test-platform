@@ -39,7 +39,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Optional
 from uuid import uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -79,6 +79,20 @@ DEFAULT_HISTORY_DAYS = 30
 
 
 # ── 纯函数层（CLI 脚本与 sweep 共用同一实现）───────────────────────────────
+
+#: **RPC 级**失败（没拿到逐条结果）的判据——只有这些才把整机判 unknown（#3135）。
+#: 与 `precheck.verify.verify_one_host` 的三种返回对齐：`agent_offline` / `rpc_failed: …`
+#: / `verify_exception: …`；`sha_mismatch` 是**逐条结果可用**的信号，不在其中。
+_UNREACHABLE_ERRORS = ("agent_offline",)
+_UNREACHABLE_PREFIXES = ("rpc_failed", "verify_exception")
+
+
+def _is_unreachable_error(err: Optional[str]) -> bool:
+    """RPC 级失败（拿不到逐条结果）→ True；`None` / `sha_mismatch` → False。"""
+    if not err:
+        return False
+    return err in _UNREACHABLE_ERRORS or err.startswith(_UNREACHABLE_PREFIXES)
+
 
 def build_full_target_set(
     step_rows: list[dict], script_rows: list[dict]
@@ -267,10 +281,14 @@ def classify_host_presence(
 ) -> dict[tuple[str, str], tuple[str, str]]:
     """把「RPC 结果 + 可达性 + 维护窗」折成逐目标的 ``(state, detail)``。
 
-    优先级：``n_a``（可达集外）> ``unknown``（RPC 失败）> ``maintenance``（窗口内缺口）
-    > agent 报的 present/missing/mismatch。细节：
+    优先级：``n_a``（可达集外）> ``unknown``（**RPC 级**失败）> ``maintenance``（窗口内缺口）
+    > agent 报的逐条 present/missing/mismatch。细节：
 
-    - RPC 失败（agent 不可达）时**所有可达目标都记 unknown**，不写成 present——未知不是绿；
+    - **只有 RPC 级失败**（`agent_offline` / `rpc_failed*` / `verify_exception*`）才把该 host
+      的可达目标整片记 ``unknown``——那才是「没拿到结果」；``sha_mismatch`` 这类**逐条结果
+      可用**的失败必须逐条判，否则「个别文件缺/不符」会被塌成整片 unknown、缺口面失效
+      （**#3135** 实测：一台未下发新载荷的主机整机 28 个 unknown，而真因只是
+      `clear_recents 1.0.4` 一个 sha 不符）；
     - 维护窗只把**缺口**改记 maintenance；``present`` 保持 present（在位是事实）；
     - agent 结果里缺行（老 agent / 未上报）记 ``unknown`` + ``not_reported``，
       不猜 missing；
@@ -279,13 +297,15 @@ def classify_host_presence(
     by_key: dict[tuple[str, str], dict] = {
         (str(e.get("name")), str(e.get("version"))): e for e in (verify_entries or [])
     }
+    # #3135：只有「没拿到逐条结果」才整片 unknown；`sha_mismatch` 等逐条失败要落进 missing/mismatch
+    unreachable = _is_unreachable_error(verify_error) or (not verify_ok and not by_key)
     out: dict[tuple[str, str], tuple[str, str]] = {}
     for key in sorted(set(full)):
         name, version = key
         if key not in reachable:
             out[key] = (STATE_N_A, "")
             continue
-        if not verify_ok:
+        if unreachable:
             out[key] = (STATE_UNKNOWN, (verify_error or "verify_failed")[:256])
             continue
         entry = by_key.get(key)
@@ -464,6 +484,11 @@ async def run_sweep(
             })
 
     written = await asyncio.to_thread(_persist, db_factory, rows)
+    round_hosts = [str(h["id"]) for h, _reachable in per_host]
+    removed = await asyncio.to_thread(
+        _cleanup_orphans, db_factory, round_hosts, sweep_id,
+        full_scope=host_ids is None,
+    )
     summary = summarize_states(rows)
     result = {
         "sweep_id": sweep_id,
@@ -472,6 +497,7 @@ async def run_sweep(
         "full_versions": len(full),
         "uncovered_active_versions": len(uncovered),
         "rows": written,
+        "orphans_removed": removed,
         **summary,
     }
     logger.info(
@@ -499,6 +525,52 @@ async def run_sweep(
 def _persist(db_factory, rows: list[dict]) -> int:
     with db_factory() as db:
         return _persist_rows(db, rows)
+
+
+def _cleanup_orphans(
+    db_factory, round_hosts: list[str], sweep_id: str, *, full_scope: bool
+) -> int:
+    """#3089：删掉**不在本轮生成集**里的行——账本只增不减会被历史行钉死三个面。
+
+    存在理由（#3089）：sweep 只写「当前未退役 host × 当前目标集」，但从不删行，于是
+
+    - 退役 host / 目标集收缩（版本改指、脚本停用）留下的孤儿行把 ``min(checked_at)``
+      永久钉在过去 ⇒ ``StabilityScriptPresenceSweepStale`` 恒响（即使每轮都成功）；
+    - 孤儿行末态若是 missing/mismatch，gauge child 永不移除 ⇒ ``…PresenceGap`` 恒响；
+    - ``refresh`` 对这类行还会静默空转（现在改为 404，见路由）。
+
+    判据：**只有本轮写过、且 sweep_id 匹配的行留下**（sweep 是整轮 upsert，同轮所有行共享
+    sweep_id）。两种作用域：
+
+    - ``full_scope``（全量 sweep）：``NOT (host_id ∈ 本轮 AND sweep_id = 本轮)`` 一律删——
+      既清退役 host，也清本轮 host 的旧目标版本；
+    - 否则（单机 refresh）：只清**该 host**的孤儿行，绝不触碰其他 host 的行
+      （否则一次单机刷新会把全表清空）。
+
+    只在 upsert **成功之后**执行，且失败即抛：宁可不删，也不要「删了没补」。
+    """
+    with db_factory() as db:
+        if full_scope:
+            keep = and_(
+                HostScriptPresence.host_id.in_(round_hosts),
+                HostScriptPresence.sweep_id == sweep_id,
+            )
+            removed = (
+                db.query(HostScriptPresence)
+                .filter(~keep)
+                .delete(synchronize_session=False)
+            )
+        else:
+            removed = (
+                db.query(HostScriptPresence)
+                .filter(
+                    HostScriptPresence.host_id == (round_hosts[0] if round_hosts else ""),
+                    HostScriptPresence.sweep_id != sweep_id,
+                )
+                .delete(synchronize_session=False)
+            )
+        db.commit()
+        return int(removed or 0)
 
 
 def _new_sweep_id() -> str:
