@@ -1,6 +1,6 @@
 ---
 name: script-version-lifecycle
-description: Agent 脚本版本的「新建」与「退役」SOP。触发时机：修改或新增刷机/设备脚本（需要新版本）、退役不再使用的脚本版本、处理 script_verify_failed 或 SCRIPT_STILL_REFERENCED 报错。
+description: Agent 脚本版本的「新建」与「退役」SOP。触发时机：修改或新增刷机/设备脚本（需要新版本）、新版本合并后要把文件下发到主机、退役不再使用的脚本版本、处理 script_verify_failed 或 SCRIPT_STILL_REFERENCED 报错。
 ---
 
 # Agent 脚本版本生命周期（新建 / 退役）
@@ -21,6 +21,18 @@ ADR-0029（每版本全量副本）。
 2. 版本 pin 走既有参数（如 `STP_FLASH_FIRMWARE_VERSION`），不要硬编码路径
 3. 门禁：`python tools/dev/check-script-version-immutability.py --base origin/main`
 4. 扫描注册：`POST /scripts/scan`——`conflicts` 非空即停，按冲突项修复后重扫
+5. **下发到主机（版本生效的最后一公里）**——脚本是**从主机本地树执行**的
+   （`Script.nfs_path` = `/opt/stability-test-agent/agent/scripts/<name>/v<版本>/…`，
+   `backend/agent/pipeline_engine.py` 直接用该路径起进程），scan 只把版本写进控制面
+   注册表，**主机上还没有文件**：
+   - canary 一台：`POST /api/v1/hosts/<host_id>/hot-update`，期望
+     `{"ok":true,"code_version":"<仓库 HEAD>"}`；
+   - 批量：`PYTHONPATH=. venv/bin/python -m backend.scripts.batch_hot_update --direct`
+     （默认跳过有在跑 job 的主机；实测 ~3s/台，48 台约 4 分钟）；
+   - 校验：`GET /api/v1/hosts` 逐台 `agent_code_sync_status=matched`。
+   > 2026-09-22 实测（#3111）：`fill_storage` v1.1.1 合并后 DB 已 active，而 47 台主机
+   > 仍停在一天前的载荷；此时 `GET /script-presence/summary` 的 `missing=0` **不能**
+   > 证明主机有这个版本——它无 Plan 引用、不在账本全集内（见「后置验证」第一条）。
 
 ## B. 退役版本
 
@@ -34,6 +46,11 @@ ADR-0029（每版本全量副本）。
 ## 后置验证
 
 - 新建：重扫确认 `created` 命中且 `conflicts=0`；引用该版本的 Plan precheck 通过
+- 新建（**到位**，与「注册」分开看）：`GET /api/v1/script-presence/summary` 的
+  `uncovered_active_versions` = 「已 active 但无任何 Plan 引用」的版本数——这些版本
+  账本**不会**核验，所以 `counts.missing/mismatch = 0` 只覆盖 `full_versions`，不含它们。
+  新版本在没被 Plan 引用前正落在这个集合里，其到位情况只能靠「第 5 步已跑」+
+  逐台 `agent_code_sync_status=matched` 确认（明细面板里与「目标版本」并排显示）
 - 退役：活动目录不再列出该版本，且**历史版本目录仍在磁盘**（`git status` 无删除）
 - **第 4 道（既有 Plan 重指）**：`STP_SCRIPT_ROOT=<部署树>/backend/agent/scripts
   python -m backend.scripts.check_unreferenced_script_versions --plan-step-drift`——
@@ -44,6 +61,10 @@ ADR-0029（每版本全量副本）。
 
 ## 踩坑守卫（负向约束）
 
+- **DB `active` ≠ 主机可用（#3111）**：脚本从主机本地树执行，scan 只写注册表——新版本
+  合并后不跑一次 fleet 热更新，就停在「版本已 active、Plan 一引用即在 precheck/派发
+  缺文件」的空档，而 `script-presence` 的 `missing=0` 会一路保持绿（该版本无 Plan 引用
+  ⇒ 不在账本全集内）。下发是新建版本的**组成部分**，不是可选项；
 - **退役 ≠ 删除**：删除版本目录会被 CI 拦下，并使历史 `plan_step.script.sha` 与磁盘
   永久失配——2026-07-31 的全平台派发中断即此类漂移引发
   （`docs/operations/incident-2026-07-31-script-sha-drift-dispatch-outage.md`）；
