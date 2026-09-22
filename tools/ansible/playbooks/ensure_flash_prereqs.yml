@@ -1,0 +1,122 @@
+# 刷机前置归位（主机页入口 / #2133 / ADR-0037 D5）
+#
+# 与 update_agent.yml 的 opt-in 段同源：dialout + MTK ttyACM 规则 + Qt/X 五库。
+# 本 playbook **强制**执行（不依赖 agent_ensure_flash_prereqs 开关），供控制面
+# POST /hosts/{id}/flash-prereqs/ensure 调用；常规热更新仍不触碰系统包面。
+#
+# 用法：
+#   ansible-playbook tools/ansible/playbooks/ensure_flash_prereqs.yml -l <host>
+#
+# dialout 变更后必须重启 Agent，否则进程组集合仍不含 gid 20。
+---
+- name: Ensure flash prerequisites on agent host
+  hosts: linux_hosts
+  gather_facts: false
+  become: false
+
+  tasks:
+    - name: Check dialout group exists (#2133)
+      become: true
+      ansible.builtin.command: getent group dialout
+      register: agent_flash_dialout_group
+      changed_when: false
+      failed_when: false
+
+    - name: Ensure agent user is in dialout group (#2133)
+      become: true
+      ansible.builtin.user:
+        name: "{{ agent_user }}"
+        groups: dialout
+        append: true
+      register: agent_flash_dialout
+      failed_when: false
+      when: agent_flash_dialout_group.rc | default(1) == 0
+
+    - name: Check agent user is a dialout member (#2133/#2353)
+      become: true
+      ansible.builtin.shell: id -nG {{ agent_user }} | tr ' ' '\n' | grep -qx dialout
+      register: agent_flash_dialout_member
+      changed_when: false
+      failed_when: false
+
+    - name: Ensure MTK ttyACM udev rule — 0660 + dialout (#2133/#2284)
+      become: true
+      ansible.builtin.copy:
+        dest: /etc/udev/rules.d/98-ttyacm-mtk.rules
+        content: "KERNEL==\"ttyACM*\", ATTRS{idVendor}==\"0e8d\", GROUP=\"dialout\", MODE=\"0660\"\n"
+        owner: root
+        group: root
+        mode: "0644"
+      register: agent_flash_udev_rule_0660
+      failed_when: false
+      when: agent_flash_dialout_member.rc | default(1) == 0
+
+    - name: Ensure MTK ttyACM udev rule — 0666 fallback, not a dialout member (#2133/#2353)
+      become: true
+      ansible.builtin.copy:
+        dest: /etc/udev/rules.d/98-ttyacm-mtk.rules
+        content: "KERNEL==\"ttyACM*\", ATTRS{idVendor}==\"0e8d\", MODE=\"0666\"\n"
+        owner: root
+        group: root
+        mode: "0644"
+      register: agent_flash_udev_rule_0666
+      failed_when: false
+      when: agent_flash_dialout_member.rc | default(1) != 0
+
+    - name: Reload udev rules after rule change (#2133)
+      become: true
+      ansible.builtin.command: udevadm control --reload
+      changed_when: false
+      failed_when: false
+      when: >-
+        (agent_flash_udev_rule_0660.changed | default(false))
+        or (agent_flash_udev_rule_0666.changed | default(false))
+
+    - name: Ensure flash prerequisite packages (#2133)
+      become: true
+      ansible.builtin.shell: |
+        set -o pipefail
+        pkg_installed() {
+          [ "$(dpkg-query -W -f='${Status}' "$1" 2>/dev/null)" = "install ok installed" ]
+        }
+        if ! command -v dpkg-query >/dev/null 2>&1; then
+          echo "SKIP: non-dpkg host"; exit 0
+        fi
+        missing=""
+        for pkg in {{ agent_flash_prereq_packages | join(' ') }}; do
+          if ! pkg_installed "$pkg"; then
+            case "$pkg" in
+              *-0) pkg_installed "${pkg}t64" || missing="$missing $pkg" ;;
+              *) missing="$missing $pkg" ;;
+            esac
+          fi
+        done
+        if [ -z "$missing" ]; then echo "OK: flash prereq packages present"; exit 0; fi
+        DEBIAN_FRONTEND=noninteractive apt-get update -qq >/dev/null 2>&1 || true
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $missing
+        echo "INSTALLED:$missing"
+      args:
+        executable: /bin/bash
+      register: agent_flash_prereq_pkgs
+      changed_when: "'INSTALLED:' in agent_flash_prereq_pkgs.stdout"
+      failed_when: false
+
+    - name: Restart agent after dialout membership change (#2133)
+      become: true
+      ansible.builtin.command: /usr/local/sbin/stp-agent-priv restart
+      register: agent_flash_restart
+      failed_when: false
+      when: agent_flash_dialout.changed | default(false)
+
+    - name: Report flash prerequisite provisioning result (#2133/#2353)
+      ansible.builtin.debug:
+        msg: >-
+          flash prereqs: dialout_member_rc={{ agent_flash_dialout_member.rc | default('n/a') }}
+          (0=member) dialout_changed={{ agent_flash_dialout.changed | default(false) }}
+          dialout_usermod_failed={{ agent_flash_dialout.failed | default(false) }}
+          udev_rule_changed={{ (agent_flash_udev_rule_0660.changed | default(false))
+          or (agent_flash_udev_rule_0666.changed | default(false)) }}
+          packages_rc={{ agent_flash_prereq_pkgs.rc | default('n/a') }}
+          packages_out={{ agent_flash_prereq_pkgs.stdout_lines | default([]) | join(' | ') }}
+          agent_restarted={{ agent_flash_restart.rc is defined }}
+          agent_restart_rc={{ agent_flash_restart.rc | default('skipped') }}

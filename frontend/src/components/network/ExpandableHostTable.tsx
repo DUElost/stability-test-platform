@@ -91,6 +91,8 @@ interface ExpandableHostTableProps {
   isHotUpdating?: (hostId: string | number) => boolean;
   onInstall?: (hostId: string | number) => void;
   isInstalling?: (hostId: string | number) => boolean;
+  onFlashPrereqs?: (hostId: string | number) => void;
+  isFlashPrereqs?: (hostId: string | number) => boolean;
   onEdit?: (host: HostTableData) => void;
   onDelete?: (host: HostTableData) => void;
   /** ADR-0038 D2：退役 / 解除退役（admin；原因由调用方收集）。 */
@@ -248,6 +250,8 @@ export function ExpandableHostTable({
   isHotUpdating,
   onInstall,
   isInstalling,
+  onFlashPrereqs,
+  isFlashPrereqs,
   onEdit,
   onDelete,
   onRetire,
@@ -869,18 +873,37 @@ export function ExpandableHostTable({
                           {host.retired_at ? (
                             <span className="text-muted-foreground/40 text-xs">已退役</span>
                           ) : host.status === 'ONLINE' && onHotUpdate ? (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onHotUpdate(host.id);
-                              }}
-                              disabled={isHotUpdating?.(host.id)}
-                              aria-label={`${host.name ?? host.id} 热更新 Agent`}
-                              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-primary bg-primary/10 hover:bg-primary/15 rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
-                            >
-                              {isHotUpdating?.(host.id) ? '更新中...' : '热更新'}
-                            </button>
+                            <>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onHotUpdate(host.id);
+                                }}
+                                disabled={isHotUpdating?.(host.id) || isFlashPrereqs?.(host.id)}
+                                aria-label={`${host.name ?? host.id} 热更新 Agent`}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-primary bg-primary/10 hover:bg-primary/15 rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                              >
+                                {isHotUpdating?.(host.id) ? '更新中...' : '热更新'}
+                              </button>
+                              {onFlashPrereqs && host.agent_installed !== false && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onFlashPrereqs(host.id);
+                                  }}
+                                  disabled={
+                                    isFlashPrereqs?.(host.id) || isHotUpdating?.(host.id)
+                                  }
+                                  aria-label={`${host.name ?? host.id} 补齐刷机前置`}
+                                  title="补齐 dialout / udev / Qt 刷机依赖"
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-muted-foreground bg-muted/60 hover:bg-muted rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                                >
+                                  {isFlashPrereqs?.(host.id) ? '补齐中...' : '刷机前置'}
+                                </button>
+                              )}
+                            </>
                           ) : host.status !== 'ONLINE' && onInstall ? (
                             <button
                               type="button"
