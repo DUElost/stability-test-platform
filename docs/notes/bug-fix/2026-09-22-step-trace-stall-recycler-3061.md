@@ -1,5 +1,8 @@
 # step_trace 静默回收（#3061）
 
+Status: implemented
+Class: bug-fix
+
 ## Decision
 
 在 `recycler.recycle_once` 增加 Pass **#2c**：`RUNNING` job 若最新 `step_trace` 为终态
