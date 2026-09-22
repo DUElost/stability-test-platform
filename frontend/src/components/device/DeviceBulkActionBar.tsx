@@ -1,4 +1,4 @@
-import { CheckCheck, Copy, Download, FolderKanban, Tags, X } from 'lucide-react';
+import { CheckCheck, Copy, Download, FolderKanban, Pointer, Tags, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { BULK_BAR_INNER_CLASS, BULK_BAR_OUTER_CLASS } from '@/components/ui/bulk-action-bar';
 
@@ -11,9 +11,14 @@ interface DeviceBulkActionBarProps {
   tagUpdatePending?: boolean;
   /** ADR-0029：批量归入项目（admin 动作，非 admin 不显示入口） */
   canAssignProject?: boolean;
+  /** admin：批量开关滑动留痕（show_touches + pointer_location） */
+  canSwipeTrail?: boolean;
+  swipeTrailPending?: boolean;
   onSelectAllFiltered: () => void;
   onEditTags: () => void;
   onAssignProject?: () => void;
+  onSwipeTrailOn?: () => void;
+  onSwipeTrailOff?: () => void;
   onCopySerials: () => void;
   onExport: () => void;
   onClear: () => void;
@@ -27,9 +32,13 @@ export default function DeviceBulkActionBar({
   canEditTags = false,
   tagUpdatePending = false,
   canAssignProject = false,
+  canSwipeTrail = false,
+  swipeTrailPending = false,
   onSelectAllFiltered,
   onEditTags,
   onAssignProject = () => {},
+  onSwipeTrailOn = () => {},
+  onSwipeTrailOff = () => {},
   onCopySerials,
   onExport,
   onClear,
@@ -108,6 +117,33 @@ export default function DeviceBulkActionBar({
               <FolderKanban className="h-3.5 w-3.5" />
               归入项目
             </Button>
+          )}
+
+          {canSwipeTrail && (
+            <>
+              <Button
+                size="sm"
+                variant="outline"
+                data-testid="device-bulk-swipe-trail-on"
+                disabled={swipeTrailPending}
+                onClick={onSwipeTrailOn}
+                className="gap-1"
+              >
+                <Pointer className="h-3.5 w-3.5" />
+                {swipeTrailPending ? '下发中…' : '开启滑动留痕'}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                data-testid="device-bulk-swipe-trail-off"
+                disabled={swipeTrailPending}
+                onClick={onSwipeTrailOff}
+                className="gap-1"
+              >
+                <Pointer className="h-3.5 w-3.5" />
+                {swipeTrailPending ? '下发中…' : '关闭滑动留痕'}
+              </Button>
+            </>
           )}
 
           <Button size="sm" variant="outline" onClick={onCopySerials} className="gap-1">

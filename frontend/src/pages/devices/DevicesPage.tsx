@@ -289,6 +289,23 @@ export default function DevicesPage() {
     },
   });
 
+  const swipeTrailMutation = useMutation({
+    mutationFn: (enabled: boolean) =>
+      api.devices.bulkSwipeTrail(Array.from(selectedDeviceIds), enabled),
+    onSuccess: (result) => {
+      const verb = result.enabled ? '开启' : '关闭';
+      const summary = `滑动留痕已${verb}：成功 ${result.ok} · 失败 ${result.failed} · 跳过 ${result.skipped}`;
+      if (result.failed > 0 || result.ok === 0) {
+        toast.error(summary);
+      } else {
+        toast.success(summary);
+      }
+    },
+    onError: (error: unknown) => {
+      toast.error(`滑动留痕下发失败: ${toApiError(error).message}`);
+    },
+  });
+
   if (isLoading) {
     return (
       <PageContainer width="wide">
@@ -392,9 +409,13 @@ export default function DevicesPage() {
         canEditTags={isAdmin}
         tagUpdatePending={tagUpdateMutation.isPending}
         canAssignProject={isAdmin}
+        canSwipeTrail={isAdmin}
+        swipeTrailPending={swipeTrailMutation.isPending}
         onSelectAllFiltered={handleSelectAllFiltered}
         onEditTags={() => setIsTagDialogOpen(true)}
         onAssignProject={() => setIsAssignDialogOpen(true)}
+        onSwipeTrailOn={() => swipeTrailMutation.mutate(true)}
+        onSwipeTrailOff={() => swipeTrailMutation.mutate(false)}
         onCopySerials={handleCopySerials}
         onExport={handleExportSelected}
         onClear={() => setSelectedDeviceIds(new Set())}

@@ -17,7 +17,11 @@ from backend.models.project import TestProject
 from backend.models.project_model import ProjectModel
 from backend.api.schemas import DeviceCreate, DeviceOut, PaginatedResponse
 from backend.api.response import ApiResponse, ok
-from backend.api.schemas.device import BulkProjectAssignIn
+from backend.api.schemas.device import (
+    BulkProjectAssignIn,
+    BulkSwipeTrailIn,
+    BulkSwipeTrailOut,
+)
 from backend.api.routes.auth import get_current_active_user, require_admin, User
 
 # 与 backend/api/routes/projects.py 的库存口径一致（ADR-0029 v2.5）：
@@ -241,6 +245,48 @@ def bulk_assign_project(
         )
         items.append(out)
     return ok(items)
+
+
+@router.post("/bulk-swipe-trail", response_model=ApiResponse[BulkSwipeTrailOut])
+async def bulk_swipe_trail(
+    payload: BulkSwipeTrailIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+    request: Request = None,
+):
+    """对选中设备批量开关滑动留痕（show_touches + pointer_location）。
+
+    Agent 白名单 control；无 host / host 离线计入 skipped；Agent 未连或
+    单台 adb 失败计入 failed。
+    """
+    if not payload.device_ids:
+        raise HTTPException(status_code=422, detail="device_ids must not be empty")
+
+    from backend.services.device_swipe_trail import bulk_set_swipe_trail
+
+    out = await bulk_set_swipe_trail(
+        db,
+        device_ids=payload.device_ids,
+        enabled=payload.enabled,
+    )
+    record_audit(
+        db,
+        action="bulk_swipe_trail",
+        resource_type="device",
+        resource_id=None,
+        details={
+            "enabled": payload.enabled,
+            "device_ids": list(payload.device_ids),
+            "ok": out.ok,
+            "failed": out.failed,
+            "skipped": out.skipped,
+        },
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
+    db.commit()
+    return ok(out)
 
 
 def _blank_to_none(value: Optional[str]) -> Optional[str]:
