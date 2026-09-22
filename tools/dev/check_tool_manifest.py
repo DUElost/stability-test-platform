@@ -10,7 +10,9 @@
   多一个字段（如执行契约要素）即红：分发面与契约面不得混装（C5）；
 - ``package_sha256`` 64 位小写十六进制（整包 sha，区别于 ``script.content_sha256`` 的
   entry-file sha，C1）；``artifact`` 必须等于 ``packages/{name}/{version}.tar.gz``（C4 布局）；
-- ``python``/``script`` 为包内相对路径（无绝对/``..``/空段）；``retired`` 必须是 bool；
+- ``script`` 为包内相对路径（无绝对/``..``/空段）；``python`` 为包内相对路径**或 null**
+  （null = 包内无解释器，由 Agent 自身解释器执行——ADR-0051 D4 平台脚本族；外部工具族仍须给包内路径）；
+  ``retired`` 必须是 bool；
 - 族名与版本条目不得重复。
 
 **append-only（相对 --base）**
@@ -106,6 +108,8 @@ def lint_manifest(doc: object) -> list[str]:
             if entry["artifact"] != want:
                 errs.append(f"{tag}: artifact 必须等于 {want!r}（C4 布局）")
             for f in ("python", "script"):
+                if f == "python" and entry[f] is None:
+                    continue  # ADR-0051 D4：平台脚本族无包内解释器
                 err = validate_relative_member(entry[f], field=f"{tag}.{f}")
                 if err:
                     errs.append(err)
@@ -211,6 +215,14 @@ def run_self_test() -> int:
     bad_traverse["tools"]["tool"]["versions"][0]["python"] = "../system/bin/python"
     if not any("python" in e for e in lint_manifest(bad_traverse)):
         failures.append("python 字段含 .. 应红")
+    null_py = json.loads(json.dumps(good))
+    null_py["tools"]["tool"]["versions"][0]["python"] = None
+    if lint_manifest(null_py):
+        failures.append(f"python=null（ADR-0051 平台脚本族）应绿，实际 {lint_manifest(null_py)}")
+    empty_py = json.loads(json.dumps(good))
+    empty_py["tools"]["tool"]["versions"][0]["python"] = ""
+    if not any("python" in e for e in lint_manifest(empty_py)):
+        failures.append("python 空串应红（只有 null 表示无包内解释器）")
     dup = json.loads(json.dumps(good))
     dup["tools"]["tool"]["versions"].append(entry())
     if not any("重复" in e for e in lint_manifest(dup)):

@@ -61,7 +61,11 @@ Tool Contract + 包存储，既有工具族的新版本目录允许继续 legacy
 
 ## 已发布版本不可变
 
-> **ADR-0051（2026-09-22 Accepted）**：不可变性的承载物从源码目录移到内容寻址包；Phase 3 前本节口径（版本目录不可变）继续有效，Phase 2a 落地后本节改写为包口径。
+> **ADR-0051（2026-09-22 Accepted）**：不可变性的承载物从源码目录移到内容寻址包；Phase 3 前本节口径（版本目录不可变）继续有效。
+>
+> **Phase 2a 已落地**：每个版本目录同时对应 `tool_manifest.json` 一条登记（`package_sha256` = 从 `git ls-files` 成员确定性打包的整包 sha；`python: null` = Agent 自身解释器）。新增版本目录后运行
+> `python tools/dev/check_script_packages.py --register` 追加登记；`tool-manifest` 门禁会重建每个包并与登记值比对（原地改目录 → sha 不等 → 红）。`script.package_sha256` 由 scan 从 manifest 回填（响应里 `package_backfilled` / `package_conflicts`）；
+> 生产只读证明：`DATABASE_URL=… python -m backend.scripts.check_script_package_equivalence`。发布包到站点：`python tools/dev/check_script_packages.py --publish --packages-root <STP_AEE_NFS_ROOT>/packages`（运维动作，Phase 2b 前置）。
 
 `script.content_sha256` 是扫描时冻结的期望值。原地修改已发布版本只会产生 conflict，
 不会更新数据库基线；引用该版本的 Plan 会在 precheck 阶段
