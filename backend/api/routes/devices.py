@@ -348,11 +348,17 @@ def list_devices(
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
-    # 稳定次序：last_seen 相同（尤其是全 NULL 的新设备）时 PG 不保证顺序，
-    # 追加 Device.id 作 tie-breaker，保证分页与前端列表顺序可复现（#537）
+    # 稳定次序：排序列**只能由恒定身份列构成**。#537 只补了 tie-breaker，主键仍是
+    # last_seen——而该列每次设备心跳都被重写（routes/heartbeat.py），于是「组内顺序
+    # 确定」并不等于「跨时刻顺序稳定」：列值一变，全序就整体重排。生产实测 862 台、
+    # 10s 窗口内前 50 行 0% 重合、位置中位移动 250 行，前端每 10s 轮询一次即整页换人
+    # （#3123）。改为 (host_id, id)：同主机设备成片，`id` 唯一保证全序，offset 分页在
+    # 跨请求间也稳定。**不要在此引入任何被心跳重写的遥测列**（last_seen / battery_level /
+    # temperature / status…），否则本缺陷原样复现。「最近活跃」由 last_seen 列自身与
+    # 状态筛选卡片承载，不需要靠排序表达。
     query = (
         db.query(Device)
-        .order_by(Device.last_seen.desc().nullslast(), Device.id.asc())
+        .order_by(Device.host_id.asc().nullslast(), Device.id.asc())
     )
 
     # ADR-0038 D5 不变量 1「退役不再是容量」落到**设备派生库存**（#1805 验收矩阵
