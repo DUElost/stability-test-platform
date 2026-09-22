@@ -163,7 +163,11 @@ RunConsole 承载 dedup JIRA 工具与 Agent 安装等受控子进程。当前�
 | `stability_log_signal_total` | Watcher |
 | `stability_apscheduler_job_*` | 调度 job |
 
-告警草案：`deploy/prometheus/alerts-stability-platform.yml`（ADR-0011 待运维挂载）。
+告警规则：平台全量在 `deploy/prometheus/alerts-stability-platform.yml`，站点只装其**站点可见面子集**
+`deploy/prometheus/site-alerts.yml`（#2643 方向 1）；控制面宿主上的那份是**人工重放**的副本——改规则
+需重放 + `POST /-/reload`，口径与落差判据见 [operations/README.md §6](../operations/README.md#6-可观测性)。
+ADR-0011 的正式挂载仍未落地。〔#3098：原句写作「告警草案…（ADR-0011 待运维挂载）」，会让人以为规则
+从未挂载、无需同步〕
 
 ---
 

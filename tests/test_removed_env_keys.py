@@ -45,11 +45,16 @@ MARKER = re.compile(r"已移除|已删除|无读取点|removed")
 _MD_LINK_TARGET = re.compile(r"\]\([^)]*\)")
 
 #: 台账下界：这些键的「已删除」事实必须留在登记面里（#2661）。
+#: **手工维护的独立清单，不从台账派生**——派生会让「删掉整张表」重新成为绕过手段
+#: （下界与表体同源即恒真）。代价是两处维护：§6 每新增一行，须同步把键加到这里，
+#: 否则删掉该行不会触发本判据（#3099 尾账即此形态：`ENABLE_CRON_SCHEDULER` 已登记
+#: 但不在下界内）。
 MIN_LEDGER_KEYS = {
     "USE_SESSION_WATCHDOG",
     "BACKPRESSURE_LAG_THRESHOLD",
     "BACKPRESSURE_RELEASE_THRESHOLD",
     "BACKPRESSURE_LOG_RATE_LIMIT",
+    "ENABLE_CRON_SCHEDULER",
 }
 
 _KEY_CELL = re.compile(r"^`([A-Z][A-Z0-9_]*)`$")

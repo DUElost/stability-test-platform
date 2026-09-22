@@ -100,4 +100,5 @@
 
 ### 数据库
 - `audit_logs` 表
-- 索引：`ix_audit_user_ts`, `ix_audit_resource`
+- 索引：`ix_audit_user_ts`, `ix_audit_resource`, `ix_audit_action_ts`, `ix_audit_ts`
+  （后两条见 §索引优化 / #2694；本行与那里保持同源——〔#3099〕补，此前只列了前两条）
