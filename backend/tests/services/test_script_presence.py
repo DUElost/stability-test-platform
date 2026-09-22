@@ -379,3 +379,96 @@ async def test_run_sweep_reports_uncovered_active_without_writing_rows(
     assert any("script_presence_uncovered_active" in r.message for r in caplog.records), (
         "覆盖差集必须进日志，否则这个面只在 API 里、日 sweep 时无人看见"
     )
+
+
+def test_classify_sha_mismatch_without_entries_still_unknown_not_green():
+    """没拿到任何逐条结果 + 非不可达错误 → 只能如实 unknown（不猜 present/missing）。"""
+    states = sp.classify_host_presence(
+        host_id="h1", full=[("a", "1.0.0")], reachable={("a", "1.0.0")},
+        in_maintenance=False, verify_ok=False, verify_entries=[], verify_error="sha_mismatch",
+    )
+    assert states[("a", "1.0.0")] == (sp.STATE_UNKNOWN, "sha_mismatch")
+
+
+# ── #3089：账本差集清理 ────────────────────────────────────────────────────
+
+async def test_run_sweep_removes_orphans_full_scope(db_session, engine, monkeypatch):
+    """全量 sweep 必须删掉「不在本轮生成集」的行：退役 host 的整行 + 旧目标版本的残留。"""
+    live = Host(id="h-live", hostname="h-live", status="ONLINE")
+    retired = Host(id="h-retired", hostname="h-retired", status="OFFLINE")
+    retired.retired_at = datetime.now(timezone.utc)
+    db_session.add_all([live, retired])
+    db_session.add(Script(
+        name="a", version="1.0.0", script_type="test",
+        nfs_path="/opt/agent/scripts/a/v1.0.0/a.py", content_sha256="0" * 64, is_active=True,
+    ))
+    plan = Plan(name="p-orphan")
+    db_session.add(plan)
+    db_session.flush()
+    db_session.add(PlanStep(plan_id=plan.id, step_key="s1", script_name="a",
+                            script_version="1.0.0", stage="init", enabled=True))
+    run = PlanRun(plan_id=plan.id, plan_snapshot={"steps": []}, run_type="MANUAL",
+                  started_at=datetime.now(timezone.utc))
+    db_session.add(run)
+    db_session.flush()
+    db_session.add(PlanRunHost(plan_run_id=run.id, host_id=live.id))
+    # 孤儿①：退役 host 的行（旧 sweep_id）
+    # 孤儿②：live host 上「已不在目标集」的旧版本行
+    db_session.add_all([
+        HostScriptPresence(host_id=retired.id, name="a", version="1.0.0", state="present",
+                           detail="", checked_at=datetime.now(timezone.utc) - timedelta(days=5),
+                           sweep_id="old-sweep"),
+        HostScriptPresence(host_id=live.id, name="gone_script", version="9.9.9", state="mismatch",
+                           detail="", checked_at=datetime.now(timezone.utc) - timedelta(days=5),
+                           sweep_id="old-sweep"),
+    ])
+    db_session.commit()
+
+    async def fake_gather(host_ids, expected):
+        return {hid: (True, [{"name": "a", "version": "1.0.0", "exists": True, "ok": True}],
+                       None) for hid in host_ids}
+
+    monkeypatch.setattr(sp, "gather_verify", fake_gather)
+    factory = sessionmaker(bind=engine)
+    result = await sp.run_sweep(days=30, db_factory=factory)
+
+    assert result["orphans_removed"] == 2
+    with factory() as session:
+        rows = session.execute(select(HostScriptPresence)).scalars().all()
+        keys = {(r.host_id, r.name, r.version) for r in rows}
+        assert (retired.id, "a", "1.0.0") not in keys          # 退役 host 整行清掉
+        assert (live.id, "gone_script", "9.9.9") not in keys   # 旧目标版本清掉
+        assert (live.id, "a", "1.0.0") in keys                 # 本轮行留下
+        # 新鲜度不再被历史行钉死
+        assert sp.sweep_freshness(session) >= datetime.now(timezone.utc) - timedelta(minutes=5)
+
+
+async def test_run_sweep_host_scoped_touches_only_that_host(db_session, engine, monkeypatch):
+    """单机 refresh 只清该 host 的孤儿行——绝不触碰别的 host（否则一次刷新清空全表）。"""
+    h1 = Host(id="h-one", hostname="h-one", status="ONLINE")
+    h2 = Host(id="h-two", hostname="h-two", status="ONLINE")
+    db_session.add_all([h1, h2])
+    db_session.commit()
+    old = datetime.now(timezone.utc) - timedelta(days=3)
+    db_session.add_all([
+        HostScriptPresence(host_id="h-one", name="a", version="1.0.0", state="present",
+                           detail="", checked_at=old, sweep_id="old-sweep"),
+        HostScriptPresence(host_id="h-two", name="b", version="2.0.0", state="present",
+                           detail="", checked_at=old, sweep_id="old-sweep"),
+    ])
+    db_session.commit()
+
+    async def fake_gather(host_ids, expected):
+        return {hid: (True, [], None) for hid in host_ids}
+
+    monkeypatch.setattr(sp, "gather_verify", fake_gather)
+    factory = sessionmaker(bind=engine)
+    result = await sp.run_sweep(days=30, host_ids=["h-one"], db_factory=factory)
+
+    with factory() as session:
+        rows = session.execute(select(HostScriptPresence)).scalars().all()
+        kept = {(r.host_id, r.name, r.version) for r in rows}
+        assert ("h-one", "a", "1.0.0") not in kept     # h-one 的旧行被本轮差集清掉
+        assert ("h-two", "b", "2.0.0") in kept         # 别的 host 原样保留
+        assert all(r.host_id == "h-two" for r in rows)  # 且本轮没给 h-two 写任何行
+    assert result["orphans_removed"] == 1

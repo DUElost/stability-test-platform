@@ -1243,7 +1243,9 @@ export function ExpandableHostTable({
                                     核验于 {formatHeartbeatLabel(presence.data.checked_at)}
                                   </span>
                                 )}
-                                {onRefreshHostScriptPresence && (
+                                {/* #3091：该按钮触发写端点（require_admin）——非管理员不渲染，
+                                    与同元素其它管理动作（isAdmin && …）保持一致 */}
+                                {isAdmin && onRefreshHostScriptPresence && (
                                   <button
                                     type="button"
                                     onClick={(e) => {
