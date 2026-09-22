@@ -195,3 +195,18 @@ export const agentInstall = {
   cancel: (hostId: number | string) =>
     apiClient.post<AgentInstallCancelResult>(`/hosts/${hostId}/install/cancel`).then(r => r.data),
 };
+
+/** 刷机前置归位（主机页；ADR-0037 D5）— dialout + udev + Qt 五库。 */
+export type FlashPrereqsTriggerResult = AgentInstallTriggerResult;
+export type FlashPrereqsStatus = AgentInstallStatus;
+
+export const flashPrereqs = {
+  ensure: (hostId: number | string) =>
+    apiClient
+      .post<FlashPrereqsTriggerResult>(`/hosts/${hostId}/flash-prereqs/ensure`)
+      .then((r) => r.data),
+  status: (hostId: number | string) =>
+    apiClient
+      .get<FlashPrereqsStatus>(`/hosts/${hostId}/flash-prereqs/status`)
+      .then((r) => r.data),
+};

@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 import logging
 import os
+import shutil
 import time
 import uuid
 
@@ -41,6 +42,11 @@ from backend.services.agent_installer import (
     install_request_problem,
     normalize_install_api_url,
     start_install_agent_runconsole,
+)
+from backend.services.flash_prereqs import (
+    flash_prereqs_outcome_snapshot,
+    get_active_flash_prereqs_console_id,
+    start_ensure_flash_prereqs_runconsole,
 )
 from backend.services.host_maintenance import HostMaintenanceConflict
 from backend.services.host_retirement import retire_host, unretire_host
@@ -1271,6 +1277,128 @@ def host_install_cancel(
             if canceled
             else "The run could not be canceled (already terminal, or its owner instance is unreachable)."
         ),
+    }
+
+
+# ── 刷机前置归位（主机页；ADR-0037 D5 / #2133）──────────────────────────
+
+
+@router.post("/{host_id}/flash-prereqs/ensure")
+def host_ensure_flash_prereqs(
+    host_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """补齐刷机前置：dialout + MTK ttyACM udev + Qt/X 运行库（Ansible，RunConsole）。
+
+    不绑在热更新默认路径上；常规 hot-update 不触碰系统包面。
+    """
+    missing = [
+        cmd for cmd in ("ansible-playbook", "sshpass")
+        if not shutil.which(cmd)
+    ]
+    if missing:
+        raise HTTPException(
+            status_code=501,
+            detail=(
+                f"刷机前置归位缺少依赖：{', '.join(missing)}。"
+                f"控制平面请执行：apt install ansible-core sshpass。"
+            ),
+        )
+
+    host = db.get(Host, host_id)
+    if not host:
+        raise HTTPException(status_code=404, detail="host not found")
+    if not host.ip:
+        raise HTTPException(status_code=400, detail="Host has no IP address configured")
+    if host.retired_at is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "HOST_RETIRED",
+                "message": (
+                    f"Host {host_id} is retired; unretire it before ensuring "
+                    "flash prerequisites."
+                ),
+            },
+        )
+
+    initiated_by = current_user.username if current_user else None
+    started = start_ensure_flash_prereqs_runconsole(
+        host_id, initiated_by=initiated_by
+    )
+    if not started.get("ok"):
+        msg = started.get("message", "start failed")
+        if msg == "flash prereqs already in progress":
+            cid = started.get("console_run_id")
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": msg,
+                    "console_run_id": cid,
+                    "room": f"console:{cid}" if cid else None,
+                },
+            )
+        raise HTTPException(status_code=400, detail=msg)
+
+    console_run_id = started["console_run_id"]
+    room = started["room"]
+    record_audit(
+        db,
+        action="ensure_flash_prereqs_request",
+        resource_type="host",
+        resource_id=host_id,
+        details={
+            "host_id": host_id,
+            "ip": host.ip,
+            "console_run_id": console_run_id,
+        },
+        user_id=current_user.id if current_user else None,
+        username=current_user.username if current_user else None,
+    )
+    db.commit()
+    return {
+        "ok": True,
+        "host_id": host_id,
+        "console_run_id": console_run_id,
+        "room": room,
+        "status": "running",
+        "message": "flash prerequisites ensure started",
+    }
+
+
+@router.get("/{host_id}/flash-prereqs/status")
+def host_flash_prereqs_status(
+    host_id: str,
+    _db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
+    """查询刷机前置归位运行状态（RunConsole）。"""
+    active_run_id = get_active_flash_prereqs_console_id(host_id)
+    if active_run_id:
+        snapshot = flash_prereqs_outcome_snapshot(active_run_id)
+        console_status = snapshot.get("status")
+        return {
+            "host_id": host_id,
+            "status": _install_status_summary(
+                console_status, bool(snapshot["found"]), True
+            ),
+            "console_run_id": active_run_id,
+            "console_status": console_status,
+            "console_found": bool(snapshot["found"]),
+            "exit_code": snapshot.get("exit_code"),
+            "room": f"console:{active_run_id}",
+            "log_path": snapshot.get("log_path"),
+        }
+    return {
+        "host_id": host_id,
+        "status": "idle",
+        "console_run_id": None,
+        "console_status": None,
+        "console_found": False,
+        "exit_code": None,
+        "room": None,
+        "log_path": None,
     }
 
 

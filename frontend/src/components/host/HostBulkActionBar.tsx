@@ -1,4 +1,4 @@
-import { CheckCheck, Download, RotateCw, Trash2, X } from 'lucide-react';
+import { CheckCheck, Download, RotateCw, Trash2, Wrench, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { BULK_BAR_INNER_CLASS, BULK_BAR_OUTER_CLASS } from '@/components/ui/bulk-action-bar';
 
@@ -10,6 +10,8 @@ export interface BulkActionCounts {
   reinstall: number;
   /** ONLINE → 可进入安全热更新预检 */
   hotUpdate: number;
+  /** 已安装主机 → 可补齐刷机前置 */
+  flashPrereqs: number;
 }
 
 interface Props {
@@ -17,9 +19,11 @@ interface Props {
   isAdmin: boolean;
   installPending?: boolean;
   hotUpdatePending?: boolean;
+  flashPrereqsPending?: boolean;
   hotUpdateProgressLabel?: string;
   onInstall: () => void;
   onHotUpdate?: () => void;
+  onFlashPrereqs?: () => void;
   onDelete?: () => void;
   onClear: () => void;
 }
@@ -29,9 +33,11 @@ export default function HostBulkActionBar({
   isAdmin,
   installPending,
   hotUpdatePending = false,
+  flashPrereqsPending = false,
   hotUpdateProgressLabel,
   onInstall,
   onHotUpdate,
+  onFlashPrereqs,
   onDelete,
   onClear,
 }: Props) {
@@ -44,16 +50,19 @@ export default function HostBulkActionBar({
       : counts.reinstall > 0 && counts.firstInstall === 0
         ? `重新安装 (${counts.reinstall})`
         : `首次安装 (${counts.firstInstall})`;
-  const canHotUpdate = counts.hotUpdate > 0 && !!onHotUpdate && !hotUpdatePending;
+  const busy = Boolean(installPending || hotUpdatePending || flashPrereqsPending);
+  const canHotUpdate = counts.hotUpdate > 0 && !!onHotUpdate && !busy;
+  const canFlashPrereqs = counts.flashPrereqs > 0 && !!onFlashPrereqs && !busy;
   const hotUpdateDisabledReason = counts.hotUpdate === 0
     ? '选中的主机当前不在线，无法热更新'
-    : hotUpdatePending
-      ? '安全热更新正在执行'
+    : busy
+      ? '有主机运维操作正在执行'
       : '当前主机无法热更新';
   const breakdown = [
     counts.firstInstall > 0 ? `首次安装 ${counts.firstInstall}` : null,
     counts.reinstall > 0 ? `重新安装 ${counts.reinstall}` : null,
     counts.hotUpdate > 0 ? `在线 ${counts.hotUpdate}` : null,
+    counts.flashPrereqs > 0 ? `可补刷机前置 ${counts.flashPrereqs}` : null,
   ].filter(Boolean).join(' · ');
 
   return (
@@ -85,7 +94,7 @@ export default function HostBulkActionBar({
               size="sm"
               variant="default"
               data-testid="host-bulk-install"
-              disabled={installable === 0 || installPending || hotUpdatePending}
+              disabled={installable === 0 || busy}
               title={
                 installable === 0
                   ? '选中主机均已在线或无可安装目标（在线主机可单选后热更新）'
@@ -113,13 +122,36 @@ export default function HostBulkActionBar({
                 : `热更新${counts.hotUpdate > 1 ? ` (${counts.hotUpdate})` : ''}`}
             </Button>
 
+            {onFlashPrereqs && (
+              <Button
+                size="sm"
+                variant="outline"
+                data-testid="host-bulk-flash-prereqs"
+                disabled={!canFlashPrereqs}
+                title={
+                  canFlashPrereqs
+                    ? '补齐 dialout / udev / Qt 刷机依赖（不跑热更新）'
+                    : counts.flashPrereqs === 0
+                      ? '选中主机均未安装 Agent，无法补齐刷机前置'
+                      : '有主机运维操作正在执行'
+                }
+                onClick={onFlashPrereqs}
+                className="gap-1"
+              >
+                <Wrench className="h-3.5 w-3.5" />
+                {flashPrereqsPending
+                  ? '补齐中…'
+                  : `刷机前置${counts.flashPrereqs > 1 ? ` (${counts.flashPrereqs})` : ''}`}
+              </Button>
+            )}
+
             {onDelete && (
               <Button
                 size="sm"
                 variant="destructive"
                 data-testid="host-bulk-delete"
                 onClick={onDelete}
-                disabled={hotUpdatePending}
+                disabled={busy}
                 className="gap-1"
               >
                 <Trash2 className="h-3.5 w-3.5" />
@@ -133,13 +165,12 @@ export default function HostBulkActionBar({
           size="sm"
           variant="ghost"
           data-testid="host-bulk-clear"
-          aria-label="取消选择"
-          title="取消选择"
           onClick={onClear}
-          disabled={hotUpdatePending}
-          className="ml-auto h-8 w-8 shrink-0 p-0 text-muted-foreground"
+          disabled={busy}
+          className="gap-1 text-muted-foreground"
         >
-          <X className="h-4 w-4" />
+          <X className="h-3.5 w-3.5" />
+          取消选择
         </Button>
       </div>
     </div>

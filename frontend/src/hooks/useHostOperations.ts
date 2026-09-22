@@ -7,7 +7,7 @@ import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { api } from '@/utils/api';
 import type { HotUpdateResult } from '@/utils/api/hosts';
 
-export type HostOpKind = 'install' | 'reinstall' | 'hot_update';
+export type HostOpKind = 'install' | 'reinstall' | 'hot_update' | 'flash_prereqs';
 export type HostOpStatus =
   | 'pending'
   | 'running'
@@ -176,6 +176,46 @@ export async function waitInstallTerminal(
     await sleep(pollMs);
   }
   return { ok: false, status: 'TIMEOUT', message: `等待安装超时（${Math.round(timeoutMs / 1000)}s）` };
+}
+
+/** 轮询至刷机前置 RunConsole 终态。 */
+export async function waitFlashPrereqsTerminal(
+  hostId: string,
+  opts: { pollMs?: number; timeoutMs?: number } = {},
+): Promise<{ ok: boolean; status: string; message?: string }> {
+  const pollMs = opts.pollMs ?? DEFAULT_POLL_MS;
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    try {
+      const st = await api.flashPrereqs.status(hostId);
+      const cs = st.console_status;
+      if (cs === 'SUCCESS') return { ok: true, status: cs };
+      if (cs === 'FAILED' || cs === 'CANCELED') {
+        return { ok: false, status: cs, message: cs };
+      }
+      if (st.status === 'lost') {
+        return {
+          ok: false,
+          status: 'CANCELED',
+          message: '刷机前置运行记录已丢失（控制面重启或记录过期）',
+        };
+      }
+      const replay = TERMINAL_BY_SUMMARY[st.status];
+      if (replay) {
+        return { ok: replay === 'SUCCESS', status: replay, message: st.status };
+      }
+    } catch {
+      /* 短暂失败继续轮询 */
+    }
+    await sleep(pollMs);
+  }
+  return {
+    ok: false,
+    status: 'TIMEOUT',
+    message: `等待刷机前置超时（${Math.round(timeoutMs / 1000)}s）`,
+  };
 }
 
 async function mapPool<T, R>(
@@ -516,12 +556,70 @@ export function useHostOperations(opts?: {
     }
   }, []);
 
+  const startFlashPrereqsBatch = useCallback(
+    async (targets: HostOpTarget[]) => {
+      if (!targets.length || runningRef.current) return;
+      runningRef.current = true;
+      terminalNotifiedRef.current = new Set();
+
+      const initial: HostOpItem[] = targets.map((t) => ({
+        hostId: String(t.hostId),
+        label: t.label,
+        kind: 'flash_prereqs',
+        status: 'pending',
+        consoleRunId: null,
+      }));
+      setOps(initial);
+      setPanelOpen(true);
+
+      try {
+        await mapPool(initial, concurrency, async (item) => {
+          updateOp(item.hostId, { status: 'running' });
+          let consoleRunId: string | null;
+          try {
+            const res = await api.flashPrereqs.ensure(item.hostId);
+            consoleRunId = res.console_run_id;
+            updateOp(item.hostId, { status: 'running', consoleRunId });
+          } catch (err) {
+            const cid = extract409ConsoleId(err);
+            if (cid) {
+              consoleRunId = cid;
+              updateOp(item.hostId, { status: 'running', consoleRunId: cid });
+            } else {
+              const message = extractErrorMessage(err);
+              updateOp(item.hostId, { status: 'failed', error: message });
+              emitTerminal(item, false, 'FAILED', message);
+              return;
+            }
+          }
+
+          const terminal = await waitFlashPrereqsTerminal(item.hostId, { pollMs });
+          if (terminal.ok) {
+            updateOp(item.hostId, { status: 'success', consoleRunId });
+            emitTerminal(item, true, terminal.status);
+          } else {
+            updateOp(item.hostId, {
+              status: 'failed',
+              consoleRunId,
+              error: terminal.message ?? terminal.status,
+            });
+            emitTerminal(item, false, terminal.status, terminal.message);
+          }
+        });
+      } finally {
+        runningRef.current = false;
+      }
+    },
+    [concurrency, emitTerminal, pollMs, updateOp],
+  );
+
   return {
     ops,
     panelOpen,
     setPanelOpen,
     startInstallBatch,
     startHotUpdateBatch,
+    startFlashPrereqsBatch,
     markTerminal,
     closePanel,
     clearOps,
