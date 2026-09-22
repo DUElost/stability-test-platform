@@ -17,19 +17,23 @@ import pytest
 _SCRIPTS = Path(__file__).resolve().parents[2] / "agent" / "scripts" / "clear_recents"
 
 
-def _load_v105():
-    d = _SCRIPTS / "v1.0.5"
-    spec = importlib.util.spec_from_file_location("_adb_cr105", d / "_adb.py")
+def _load_version(version: str, tag: str):
+    d = _SCRIPTS / version
+    spec = importlib.util.spec_from_file_location(f"_adb_{tag}", d / "_adb.py")
     assert spec and spec.loader
     adb_mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(adb_mod)
     sys.modules["_adb"] = adb_mod
-    spec2 = importlib.util.spec_from_file_location("clear_recents_105", d / "clear_recents.py")
+    spec2 = importlib.util.spec_from_file_location(f"clear_recents_{tag}", d / "clear_recents.py")
     assert spec2 and spec2.loader
     mod = importlib.util.module_from_spec(spec2)
     spec2.loader.exec_module(mod)
     sys.modules.pop("_adb", None)
     return mod
+
+
+def _load_v105():
+    return _load_version("v1.0.5", "cr_v105")
 
 
 @pytest.mark.parametrize(
@@ -82,7 +86,10 @@ def test_invalid_dump_path_fails_step_without_touching_device(monkeypatch, capsy
 
 
 def test_v104_had_no_validation_this_is_the_regression_pin():
-    """对照锚点：v1.0.4 没有校验函数（旧版本不可变，只读断言）。"""
-    d = _SCRIPTS / "v1.0.4"
-    text = (d / "clear_recents.py").read_text(encoding="utf-8")
-    assert "validated_dump_path" not in text
+    """对照锚点：v1.0.4 没有校验函数（旧版本不可变，只读断言）。
+
+    语义断言（hasattr on loaded module）而非源文本扫描——后者是
+    `test_source_scan_anchor_ratchet` 拦的形态（锚点漂移时恒真）。
+    """
+    mod = _load_version("v1.0.4", "cr_v104")
+    assert not hasattr(mod, "validated_dump_path")
