@@ -10,9 +10,9 @@ Class: bug-fix
 | 设备 | 分区空闲 | 主占用（2026-09-22 root 实读） |
 |---|---|---|
 | `62002360`(.59，**12/12 窗全中**) | 129 MB（100%） | `/data/corefile` **86.6 GB**（614×`core-crash_dump64-*`，属主 `nfc`/`wifi`） |
-| `6R0A77SSDE7000117`(.76) | 267 MB | `/data/local/tmp/fill.bin` **45.5 GB** + `/data/ylog/ap` 44.1 GB |
-| `6R0A77SSDE7000091`(.76) | 448 MB | `/data/media/0/Download` 47.3 GB + `…/Android` 13 GB + ylog 27.5 GB |
-| `6R0A57SSAE7000320`(.75) | 342 MB | `/data/ylog/ap` **81.5 GB** + fill.bin 14.9 GB |
+| `6R0A77SS****0117`(.76) | 267 MB | `/data/local/tmp/fill.bin` **45.5 GB** + `/data/ylog/ap` 44.1 GB |
+| `6R0A77SS****0091`(.76) | 448 MB | `/data/media/0/Download` 47.3 GB + `…/Android` 13 GB + ylog 27.5 GB |
+| `6R0A57SS****0320`(.75) | 342 MB | `/data/ylog/ap` **81.5 GB** + fill.bin 14.9 GB |
 
 止血已执行（本单记录）：`/data/corefile/*` 白名单清理 **12 台回收 ~1.06 TB**；低风险白名单（`fill.bin`/`stp_ui.xml`/`fastbot--running-*`/`FillTest`/`sd_logs`）**4 台回收 ~66.6 GB**；4 台 OFFLINE 未触达。
 
