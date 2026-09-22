@@ -18,7 +18,9 @@ DB 面全绿就是该盲区的实证。本模块把核验做成**常设账**：
 `state` 是**闭词表**（`PRESENCE_STATES`）：``present / missing / mismatch / unknown /
 n_a / maintenance``。两条刻意的口径：
 
-- ``unknown``（agent 不可达）**不是绿**——与 `agent_offline` 语义一致；
+- ``unknown``（agent 不可达）**不是绿**——与 `agent_offline` 语义一致。注意它与
+  「核验发现有失败」是两回事：后者 agent **回了**逐条结果，须按逐条判（#3135，
+  见 `classify_host_presence`）；
 - 维护窗内 host 的缺口记 ``maintenance`` 而非 missing/mismatch：维护窗兼作升级锁，
   窗口内不收作业、无即时影响（归队前补分发由 #2865 遗留项盯），否则维护期恒红。
 

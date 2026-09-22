@@ -74,6 +74,125 @@ def test_classify_rpc_failure_is_unknown_not_green():
     assert states[("b", "2.0.0")][0] == sp.STATE_UNKNOWN
 
 
+# ── #3135：`verify_ok=False` 的两种情形不得混为一谈 ─────────────────────────
+
+
+def test_classify_partial_failure_uses_per_entry_results():
+    """核验**有失败但 agent 回了逐条结果** → 按逐条判，不塌成整片 unknown。
+
+    失效形态（2026-09-22 实测）：一台未下发新载荷的主机上 1 个文件缺失，账本把 28 个
+    可达条目全记 `unknown/sha_mismatch`——27 个无辜条目被掩盖、真正的 `missing` 不产生。
+    """
+    states = sp.classify_host_presence(
+        host_id="h1", full=FULL, reachable=set(FULL), in_maintenance=False,
+        verify_ok=False,
+        verify_entries=[
+            {"name": "a", "version": "1.0.0", "ok": True, "exists": True},
+            {"name": "b", "version": "2.0.0", "ok": False, "exists": False,
+             "error": "file_missing_or_unreadable"},
+        ],
+        verify_error="sha_mismatch",
+    )
+    assert states[("a", "1.0.0")] == (sp.STATE_PRESENT, ""), "无辜条目不得被塌成 unknown"
+    assert states[("b", "2.0.0")] == (sp.STATE_MISSING, "file_missing_or_unreadable"), (
+        "有逐条结果时，缺口必须如实判 missing/mismatch——否则缺口面在最有用的情形下失效"
+    )
+    # 缺口确实进了告警口径
+    rows = [{"host_id": "h1", "state": s, "checked_at": None} for s, _ in states.values()]
+    assert sp.summarize_states(rows)["hosts_with_gap"] == 1
+
+
+def test_classify_partial_failure_unreported_entry_stays_unknown():
+    """有逐条结果但**某条没被回报** → 该条 unknown/not_reported（仍然不猜），其余照判。"""
+    states = sp.classify_host_presence(
+        host_id="h1", full=FULL, reachable=set(FULL), in_maintenance=False,
+        verify_ok=False,
+        verify_entries=[{"name": "a", "version": "1.0.0", "ok": True, "exists": True}],
+        verify_error="sha_mismatch",
+    )
+    assert states[("a", "1.0.0")] == (sp.STATE_PRESENT, "")
+    assert states[("b", "2.0.0")] == (sp.STATE_UNKNOWN, "not_reported")
+
+
+def test_classify_partial_failure_mismatch_outranks_maintenance_only_for_gaps():
+    """维护窗内：逐条判出的缺口改记 maintenance，present 仍是 present（与整体失败路径一致）。"""
+    states = sp.classify_host_presence(
+        host_id="h1", full=FULL, reachable=set(FULL), in_maintenance=True,
+        verify_ok=False,
+        verify_entries=[
+            {"name": "a", "version": "1.0.0", "ok": True, "exists": True},
+            {"name": "b", "version": "2.0.0", "ok": False, "exists": True,
+             "error": "sha_mismatch"},
+        ],
+        verify_error="sha_mismatch",
+    )
+    assert states[("a", "1.0.0")][0] == sp.STATE_PRESENT
+    assert states[("b", "2.0.0")][0] == sp.STATE_MAINTENANCE
+
+
+async def test_run_sweep_partial_failure_persists_gap_not_all_unknown(
+    db_session, engine, monkeypatch
+):
+    """端到端：sweep 在「部分失败」下必须落出 present + missing，而不是整台 unknown。
+
+    这条钉的是 2026-09-22 现场走的那条路径（单机 refresh → 部分失败 → 全 unknown）。
+    """
+    host = Host(id="h-part", hostname="h-part", status="ONLINE")
+    db_session.add(host)
+    for name, version, in (("a", "1.0.0"), ("b", "2.0.0")):
+        db_session.add(Script(
+            name=name, version=version, script_type="test",
+            nfs_path=f"/opt/agent/scripts/{name}/v{version}/{name}.py",
+            content_sha256="0" * 64, is_active=True,
+        ))
+    plan = Plan(name="p-part")
+    db_session.add(plan)
+    db_session.flush()
+    for key, (name, version) in enumerate((("a", "1.0.0"), ("b", "2.0.0"))):
+        db_session.add(PlanStep(
+            plan_id=plan.id, step_key=f"s{key}", script_name=name,
+            script_version=version, stage="init", enabled=True,
+        ))
+    run = PlanRun(
+        plan_id=plan.id, plan_snapshot={"steps": []}, run_type="MANUAL",
+        started_at=datetime.now(timezone.utc),
+    )
+    db_session.add(run)
+    db_session.flush()
+    db_session.add(PlanRunHost(plan_run_id=run.id, host_id=host.id))
+    db_session.commit()
+
+    async def fake_gather(host_ids, expected):
+        # 真实形态：RPC 通了、agent 回了逐条，但有条目不符（verify_ok=False + err 笼统）
+        return {
+            hid: (
+                False,
+                [
+                    {"name": "a", "version": "1.0.0", "ok": True, "exists": True},
+                    {"name": "b", "version": "2.0.0", "ok": False, "exists": False,
+                     "error": "file_missing_or_unreadable"},
+                ],
+                "sha_mismatch",
+            )
+            for hid in host_ids
+        }
+
+    monkeypatch.setattr(sp, "gather_verify", fake_gather)
+    factory = sessionmaker(bind=engine)
+    result = await sp.run_sweep(days=30, db_factory=factory)
+
+    with factory() as session:
+        rows = {
+            (r.name, r.version): (r.state, r.detail)
+            for r in session.execute(select(HostScriptPresence)).scalars().all()
+        }
+    assert rows[("a", "1.0.0")][0] == sp.STATE_PRESENT
+    assert rows[("b", "2.0.0")] == (sp.STATE_MISSING, "file_missing_or_unreadable")
+    assert result["counts"][sp.STATE_UNKNOWN] == 0, "有逐条结果时不该再有 unknown"
+    assert result["counts"][sp.STATE_MISSING] == 1
+    assert result["hosts_with_gap"] == 1
+
+
 def test_classify_gap_states_detail_and_not_reported():
     reachable = set(FULL)
     states = sp.classify_host_presence(
