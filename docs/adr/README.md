@@ -108,13 +108,14 @@
 | [ADR-0048](./ADR-0048-execution-status-semantics-v2.md) | 执行状态语义 v2——移除 run 级测试通过率判定（#2734 / v1.1 #2982） | **Accepted** | P1 | M7 | v1.1：2026-09-20 owner 重议恢复 PARTIAL_SUCCESS 真实产出（failed_only>0 即黄、无阈值线、设备失败永不判红不断链）与通过率显示（前端派生 completed/total，列表页通过率列 + Dashboard 通过率趋势图双口径回归；后端 pass_rate 字段/阈值列仍废止不回灌）；v1.0：2026-09-18 owner 裁决（`failure_threshold` 阈值判红轴与展示链整体移除，#783 abort→FAILED 保留）；supersede ADR-0022 D8；落实 #815 |
 | [ADR-0049](./ADR-0049-audit-log-retention-layering.md) | audit_logs 分层保留期与裁剪（#2694 拆单 / #2741） | Accepted | P2 | M7 | v1.0：2026-09-19 owner 裁决四问全采推荐项——D1 分层 180/90/30（security/business/session，`token_issued` 归 security）、D2 business 为 NOT IN 默认桶+安全 action 登记义务、D3 会话类同表不折叠、D4 单例批删作业（0=停用）+不复用锁序机器、D5 汇总审计自免环；`terminal_payload_conflict` 爆发行不例外；实现随本 ADR 同 PR 落地（#2741） |
 | [ADR-0050](./ADR-0050-install-evidence-retention-alignment.md) | audit_logs 保留期与 ADR-0044 D3 安装证据的对齐（#2789） | **Accepted** | P3 | M7 | v1.0：2026-09-20 owner 裁决采丙「明示接受 90d 视界」（零迁移；D3 持久=审计保留视界内，business 默认 90d env 可调；布尔事实走 host.extra 不丢）；甲（入 security 层，180d 仍有限）与乙（专表，超前建设）未采纳；v0.1 决策材料 PR #2816 |
+| [ADR-0051](./ADR-0051-release-unit-and-content-addressing.md) | 发布单元与内容寻址——不可变性从源码目录移到包（#735 / #3075 / #1987 / #2386） | **Proposed** | P1 | M7 | v0.1：2026-09-22 起草，**待 owner 裁决** D1–D8（§10 五个裁决点）；§2 正面回应 ADR-0039 D6 对 P2 的否决（否决前提 = 运行时事实面是目录，本 ADR 撤销该前提）；显式继承 ADR-0039 D2/D3/D4/D5/D7、接管 ADR-0046 D1–D6（选 B）、修订 ADR-0033 D3 一句措辞采 C1 双列；落地按 Phase 0/1/2a/2b/3/4/5，Phase 3 删 208 目录只依赖 2a；Accepted 当日须同 PR 完成 §9 四组机械改动（S11 锚 / S12 ⑤ 入向 40+12 文件改指） |
 
 ## 里程碑看板（由主表「目标里程碑」列派生）
 
 > **维护约定（#2989）**：本表是主清单「目标里程碑」列的**派生视图**——主表标了 `M7`
 > 的 ADR **必须**出现在下行；新增 ADR 写主表时同步补本行。标题不再写
 > 「Proposed」——板上含 Accepted / Proposed 混态，真正未决项以状态列
-> `Proposed` 为准（当前：ADR-0039 / 0046 / 0047）。
+> `Proposed` 为准（当前：ADR-0039 / 0046 / 0047 / 0051）。
 
 | 里程碑 | 目标日期 | 包含 ADR |
 |---|---|---|
@@ -124,7 +125,7 @@
 | M4 | 2026-06+ | ADR-0025（方案 C Sprint 1–4）；PRD/设计/验收见 [`docs/DOC-MAP.md`](../DOC-MAP.md) |
 | M5 | 2026-07 | ADR-0026 P0–P2（规模化执行正确性 + 控制面减负） |
 | M6 | 待定 | ADR-0027（控制面水平扩展；重启条件见 ADR-0025 D1） |
-| M7 | 进行中 | **Proposed（未决）**：ADR-0039、ADR-0046、ADR-0047。<br>**Accepted**：ADR-0029（M1–M4 已落地）、0030、0031、0032、0033（v1.11；§5.4 条件 4 多站点已触发包存储可排期；部分落地）、0034、0036、0037、0038、0040、0042、0043（实施已落地）、0044、0045（词表已落地 `adf9c24a`）、0048、0049、0050。 |
+| M7 | 进行中 | **Proposed（未决）**：ADR-0039、ADR-0046、ADR-0047、ADR-0051。<br>**Accepted**：ADR-0029（M1–M4 已落地）、0030、0031、0032、0033（v1.11；§5.4 条件 4 多站点已触发包存储可排期；部分落地）、0034、0036、0037、0038、0040、0042、0043（实施已落地）、0044、0045（词表已落地 `adf9c24a`）、0048、0049、0050。 |
 
 ## 维护约定
 
