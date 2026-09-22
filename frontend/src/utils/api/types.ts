@@ -170,6 +170,22 @@ export interface Device {
   disk_used?: number | null;
 }
 
+/** `POST /devices/bulk-swipe-trail` — 批量开关滑动留痕。 */
+export interface BulkSwipeTrailResultItem {
+  device_id: number;
+  serial: string;
+  status: 'ok' | 'failed' | 'skipped';
+  error?: string | null;
+}
+
+export interface BulkSwipeTrailResult {
+  enabled: boolean;
+  ok: number;
+  failed: number;
+  skipped: number;
+  results: BulkSwipeTrailResultItem[];
+}
+
 export interface Task {
   id: number;
   name: string;

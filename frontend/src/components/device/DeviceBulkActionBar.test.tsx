@@ -62,6 +62,7 @@ describe('DeviceBulkActionBar', () => {
         selectedFilteredCount={2}
         statusSummary="空闲 1 · 离线 1"
         canEditTags
+        canSwipeTrail
         {...handlers}
         onSelectAllFiltered={onSelectAllFiltered}
       />,
@@ -70,8 +71,43 @@ describe('DeviceBulkActionBar', () => {
     expect(screen.getByTestId('device-bulk-action-bar')).toHaveClass('fixed', 'bottom-4');
     expect(screen.getByText('空闲 1 · 离线 1')).toBeInTheDocument();
     expect(screen.getByTestId('device-bulk-tags')).toBeInTheDocument();
+    expect(screen.getByTestId('device-bulk-swipe-trail-on')).toBeInTheDocument();
+    expect(screen.getByTestId('device-bulk-swipe-trail-off')).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('device-select-all-filtered'));
     expect(onSelectAllFiltered).toHaveBeenCalledOnce();
+  });
+
+  it('invokes swipe-trail callbacks for admin buttons', () => {
+    const onSwipeTrailOn = vi.fn();
+    const onSwipeTrailOff = vi.fn();
+    render(
+      <DeviceBulkActionBar
+        selectedCount={3}
+        filteredCount={3}
+        selectedFilteredCount={3}
+        canSwipeTrail
+        {...handlers}
+        onSwipeTrailOn={onSwipeTrailOn}
+        onSwipeTrailOff={onSwipeTrailOff}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('device-bulk-swipe-trail-on'));
+    fireEvent.click(screen.getByTestId('device-bulk-swipe-trail-off'));
+    expect(onSwipeTrailOn).toHaveBeenCalledOnce();
+    expect(onSwipeTrailOff).toHaveBeenCalledOnce();
+  });
+
+  it('hides swipe-trail buttons without canSwipeTrail', () => {
+    render(
+      <DeviceBulkActionBar
+        selectedCount={1}
+        filteredCount={1}
+        selectedFilteredCount={1}
+        {...handlers}
+      />,
+    );
+    expect(screen.queryByTestId('device-bulk-swipe-trail-on')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('device-bulk-swipe-trail-off')).not.toBeInTheDocument();
   });
 
 });
