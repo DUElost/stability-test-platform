@@ -18,7 +18,7 @@
 | **L1 内核 / USB 子系统** | `lsusb`/sysfs 里手机整体变少或为空，`USB n` 同时掉 | `sudo dmesg -T` 出现 `xHCI host not responding` / `HC died; cleaning up` / `error -71(-110)` | xHCI driver unbind/rebind 或 reboot；完整判据见 [8.87 事故复盘](./incident-2026-07-29-host-8-87-xhci-death-and-adb-outage.md) |
 | **L2 主机 adb server** | 设备在 USB 上**有 ADB 接口**，`adb devices` 却少或为空 | 「ADB 接口设备集合 ⊋ adb 列表集合」（§2 probe）；`pgrep -af 'fork-server server'` 出现多实例 / 非 5037 端口 / 非 Agent 属主 | 多 server（#160）由 Agent 自检并可选自愈；**单 server 卡死**才用 `adb kill-server && adb start-server`（打断在途 adb 会话，须先确认无在跑任务） |
 | **L3 设备 adbd / 授权** | `adb devices` 能列出该设备，但 state 是 `offline` / `unauthorized` | 两侧集合相等（无 L2 漏项），且存在非 `device` 行 | `adb reconnect offline`、重插、设备侧确认授权或重启；属**设备侧**，server 重启无效 |
-| **L4 设备 USB 功能集** | `USB n > 0` 而在线为 0 或明显偏低 | sysfs 接口里**没有** `ff:42`；`.../1.0/interface` 返回 `MIDI function`（`0e8d:2046`） | 只能设备侧人工：屏幕上把 USB 配置切回 MTP/文件传输并开启 USB 调试；adb 侧一切操作无效 |
+| **L4 设备 USB 功能集** | `USB n > 0` 而在线为 0 或明显偏低 | sysfs 接口里**没有** `ff:42`；`.../1.0/interface` 返回 `MIDI function`（`0e8d:2046`） | 只能设备侧人工：屏幕上把 USB 配置切回 MTP/文件传输并开启 USB 调试；adb 侧一切操作无效（平台侧自 #3046 起给 reason `adb_interfaces_missing`，见 §3） |
 
 PID/接口名是 MLD-LX3 等 MediaTek 机型 2026-09-14 实测口径：`0e8d:201c` 暴露
 `ff:42` 且 iInterface=`ADB Interface`（adb 可见，正常态）；`0e8d:2046` 暴露
@@ -54,8 +54,8 @@ cat /sys/bus/usb/devices/<dev>:1.0/interface      # "MIDI function" = MIDI-only
 
 已有：
 
-- `USB n` 徽标（`capacity.usb_device_count`，`frontend/src/components/network/ExpandableHostTable.tsx`）——L4 在页面上唯一可见的信号；
-- `adb_multiple_servers`（warning 级 reason → DEGRADED，`backend/agent/capacity_reporter.py:156`），配套自愈 `ensure_single_adb_server()`（`backend/agent/device_discovery.py:178`，需 `STP_ADB_AUTO_REPAIR=1` 且无在跑任务）；
+- `USB n` 徽标（`capacity.usb_device_count`，`frontend/src/components/network/ExpandableHostTable.tsx`）——L4 曾长期是页面上**唯一**可见的信号，#3046 起不再是（下方有 reason）；
+- `adb_multiple_servers`（warning 级 reason → DEGRADED，`backend/agent/capacity_reporter.py::_compute_health`），配套自愈 `ensure_single_adb_server()`（`backend/agent/device_discovery.py::ensure_single_adb_server`，需 `STP_ADB_AUTO_REPAIR=1` 且无在跑任务）；
 - **L1 的两个内核判据已落地（#2900）**：`usb_host_controller_dead`（内核报 `HC died` / `xHCI … not responding` **且此刻 USB 一台都看不到** ⇒ DEGRADED；设备回树自动回落）与 `usb_link_degraded`（窗口内 `error -71/-110` 或「cable is bad」超阈）。实现：`backend/agent/kernel_usb_faults.py`（低频读 `journalctl -k`，首扫读整段 boot，读不到按「未知」不报）。
   ⚠ **这两条的前提是 agent 能读到内核日志**（现网实测：不满足）。Agent 服务 `User=android`（`backend/agent/stability-test-agent.service:9` 与 `install_agent.sh` 两条路径同写死），安装脚本只加过 `dialout`，从未加 `adm`/`systemd-journal`；`kernel.dmesg_restrict=1` 又堵死 dmesg//`dev/kmsg` 备用路（实测非特权 `open()` 报 `EPERM`）。
   **失效形状（#2957，2026-09-21 由本仓自己的指标证实，不再是推断）**：本模块使用的 argv `journalctl -k --no-pager -o cat --boot` 在非特权下返回 **rc=0 / stdout 空 / stderr 空**——**连权限提示都不打印**（提示只出现在 `-n 3`、`--since -1h` 之类的别的形状里），所以「未知 ≠ 干净」那道守卫在这条路径上不生效，36/36 台已升级 host 一度上报 `usb_kernel_log=ok`（同机 `sudo` 对照：真读到时是 373,600 行）。现在的判据是**正向可读性探针**（`--boot --lines=1` 取不到一行即判未知），并把子进程钉 `LC_ALL=C`/`LANG=C`（systemd 提示串是翻译过的，按文本匹配不能依赖语言环境）。
@@ -77,6 +77,7 @@ cat /sys/bus/usb/devices/<dev>:1.0/interface      # "MIDI function" = MIDI-only
   且 `discovered_devices == 0`——覆盖「整树死亡时 `total_devices == 0` 使
   `adb_low_healthy_devices` 短路」的盲区（.63 / 8.87 形态不再恒显 HEALTHY）；
   root hub 数只作判据输入、不上报（心跳 payload 增幅实测 98B，预算 <100B）。
+- **#3046 起：L4 不再静默**——`_adb_interfaces_missing`（`usb_device_count > 0 ∧ adb_interface_count == 0`，`None` = 采集失败视为未知、不触发）产出 reason `adb_interfaces_missing`（warning → DEGRADED，不打闸）。它的用途只有一个：**把运维从「反射式重启 adb server」上拉开**——看到这条直接照 §1 L4 行走设备侧人工，§4 的 kill/start-server 对照实验已证 adb 侧无效。连续 ≥2 拍去抖与 paging 属告警面，另单（#3046 Revisit）。
 - **#2967 起：`usb_tree_empty` 的失明 paging 已建**——规则
   `StabilityHostUsbBlind`（critical，`for: 15m`）= `usb_tree_empty` ∧
   `sum(host_device_adb_state) > 0`（该 host `device` 账上有行）。合取两道守卫各有实测依据：
