@@ -55,37 +55,13 @@ PINNED_SCRIPTS: dict[str, str] = {
 #: 09-21 #3044 已清空 ensure_root / gpu_setup / powercycle_setup@1.2.1 三条
 #: （scan 收口）并把 pin 追到当时已注册 head；判据抽成 `_exception_lag_reason`，
 #: 空清单下由 `test_exception_shape_predicate_has_teeth` 变异自证。
-#: 本 PR（#2975/#2979/#2980）又引入未 scan 的磁盘 head → 重登记下方例外；
-#: powercycle_setup 豁免版本跟 #3044 已追平的 1.2.2（disk head 现为 1.2.3）。
-EXCEPTIONS: dict[str, tuple[str, str]] = {
-    "script:powercycle_setup": (
-        "1.2.2",
-        "#2979：v1.2.3（prefs 删除判据改同源单探测）已合但 script 表无行"
-        "（#3044 已把 pin/例外追到已注册的 1.2.2）。删除条件：部署 scan 注册"
-        "激活 v1.2.3 后 pin 追平并移除本条。",
-    ),
-    "script:monkey_setup": (
-        "2.3.9",
-        "#2975：v2.3.10（步骤 metrics 聚合进顶层出口）已合 main 但 script 表无行"
-        "——scan 前 pin 未注册版 = monkey/巡逻模板新建 Plan 全 422。删除条件："
-        "scan 注册激活 v2.3.10 后 pin 追平并移除本条。",
-    ),
-    "script:gpu_finish": (
-        "1.0.6",
-        "#2980：v1.0.7（SIGTERM 处理器 + ≥24h 孤儿启动清扫）未注册进 script 表。"
-        "删除条件：部署 scan 注册激活 v1.0.7 后 pin 追平并移除本条。",
-    ),
-    "script:powercycle_finish": (
-        "1.0.5",
-        "#2980：v1.0.6（SIGTERM 处理器 + ≥24h 孤儿启动清扫）未注册进 script 表。"
-        "删除条件：部署 scan 注册激活 v1.0.6 后 pin 追平并移除本条。",
-    ),
-    "script:sleep_finish": (
-        "1.0.3",
-        "#2980：v1.0.4（SIGTERM 处理器 + ≥24h 孤儿启动清扫）未注册进 script 表。"
-        "删除条件：部署 scan 注册激活 v1.0.4 后 pin 追平并移除本条。",
-    ),
-}
+#: 09-22 清空 #2975/#2979/#2980 引入的五条（monkey_setup / powercycle_setup /
+#: gpu_finish / powercycle_finish / sleep_finish）：各条写的删除条件——
+#: 「部署 scan 注册激活 vX 后 pin 追平并移除」——已按 `--pending-activation`
+#: 视图判据满足（输出「全部脚本族磁盘 head 版本均已在库且 active（无待激活项）」），
+#: 故 pin 一并追平到磁盘 head 并移除本条。清单再次为空是本文件设计的稳态：
+#: 例外只在「磁盘 head 未注册」的窗口内存在，该窗口由 scan 收口。
+EXCEPTIONS: dict[str, tuple[str, str]] = {}
 
 
 def _exception_lag_reason(version: str, reason: str, head: str) -> str | None:
