@@ -925,6 +925,29 @@ tests:
         exp_annotations:
           summary: Host USB is blind while the platform ledger still has devices on it
           description: "结果层判据（#2967：#2957 权限僵局期间的失明 paging）：agent 报 USB 树空 （lsusb 只剩 root hub ∧ 一台设备都没发现），但该 host 的 `device` 账上 仍有设备行——xHCI 主控死亡（`HC died`，不自愈）或 hub 供电/链路整体掉线 的形状。SSH 与心跳照常、产能静默归零（fleet 实测失明窗 7~11 天： 8.87 / .102 / .63）。处置：按 triage.md L1 取证——agent 通道恒 UNKNOWN （#2957），需 `sudo journalctl -k | grep -E 'xhci|HC died'`；空闲窗 （active_jobs=0）后用 xHCI unbind/rebind 救回（8.87 文档 §3.1； .63 实测 20s/23-23、.102 实测 20s/11-11），reboot 兜底。**不要自动 rebind**（门控自愈见 #2972，勿在告警处置里顺手做）。若确认该机柜已撤线 （设备行全是 ghost），清账关闭本告警，而不是给本规则加静音条件。"
+  # ---- #3046 Revisit StabilityHostAdbInterfacesMissing：L4 paging 两态 ----
+  # fire：.65 同源——reason 持续 ≥2m；
+  # not-fire：单 tick 瞬态（owner 取样未见，仍用 for 吸收）在 2m 前清除。
+  - interval: 1m
+    input_series:
+    - series: stability_host_health_reason{host_id="192-0-2-65", reason="adb_interfaces_missing"}
+      values: 1x30
+    - series: stability_host_health_reason{host_id="192-0-2-20", reason="adb_interfaces_missing"}
+      values: 0x1 1x1 0x28
+    alert_rule_test:
+    - eval_time: 1m
+      alertname: StabilityHostAdbInterfacesMissing
+      exp_alerts: []
+    - eval_time: 5m
+      alertname: StabilityHostAdbInterfacesMissing
+      exp_alerts:
+      - exp_labels:
+          severity: warning
+          host_id: 192-0-2-65
+          reason: adb_interfaces_missing
+        exp_annotations:
+          summary: Host has USB devices but zero ADB interfaces (L4 — device-side only)
+          description: "L4 判据（#3046 Revisit paging）：agent 报 `adb_interfaces_missing` （USB 枚举到设备，但 sysfs 上 ADB 接口 `ff:42` 数为 0）已持续 ≥2m。 这不是 adb server / xHCI 问题——设备 USB gadget 没暴露 ADB 接口时， `adb devices` 连 offline 都不会出现。处置：按 docs/operations/host-device-visibility-triage.md §1 L4——**设备侧人工** 把 USB 配置切回 MTP/文件传输并开启 USB 调试。**不要** `adb kill-server` / `adb start-server` / xHCI rebind（§4 对照实验已证无效；恢复自动化已撤回）。 fleet 同源形态：.65/.20 曾静默 HEALTHY 数周（合计 34 台设备）。"
   # ---- #2959 连接槽耗尽 / 池排队超时：真实 kind 标签各喂一条 ----
   # 样本用的 kind 值必须与 backend/core/metrics.py 的白名单一致，否则规则会"看着有场景、
   # 实际选了代码不会产出的标签值"（#1257 形态）。两条分别用 async / sync 侧，
