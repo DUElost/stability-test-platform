@@ -1,6 +1,6 @@
 # ADR-0039：脚本版本不可变契约收窄——「直至零引用退役」
 
-- 状态：**Proposed**
+- 状态：**Superseded** by [ADR-0051](./ADR-0051-release-unit-and-content-addressing.md)（2026-09-22：D1 被吸收；D2/D3/D4/D5/D7 由 ADR-0051 D5 **显式继承**、作用域从目录改为包；D6 对 P2 的否决其前提「运行时事实面 = 源码目录」被 ADR-0051 §2 撤销。正文保留为历史依据）
 - 版本记录：v0.1（2026-09-13 初版，由 #735 §2 长效机制可行性研究触发；承接 `docs/reviews/SCRIPT_VERSION_BLOAT_ENDGAME_FEASIBILITY_2026-09-10.md` 的 P1 路径）
 - 优先级：P1
 - 目标里程碑：M7

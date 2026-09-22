@@ -1,6 +1,6 @@
 # ADR-0033：外部工具统一接入契约规范与包管理解耦模型（Tool-Kit Ecosystem Integration）
 
-- 状态：**Accepted（v1.12）**
+- 状态：**Accepted（v1.13）**
 - 落地状态：**部分落地**（Phase 2 B5 `DedupMergeEngine`；Phase A：D0 新族门禁 + Tool Contract 脚手架 + Jira 薄 ACL（#3005）；Phase A3：`PlanRunArtifact` 下载 + DedupReportCard + `jira/runs?plan_run_id=`（#3015）+ DLE zip / `extract_bundle` 登记下载 / PlanRun 内嵌 Jira 历史（#3013 follow-ups）；Scan-Result-GT 仍仅 Agent B2；**包存储（Phase B）第一切片已落机械面（v1.12）**：Git 唯一事实源 `tool_manifest.json` + 确定性打包器 `package_tool_asset.py` + lint/append-only 门禁 `check_tool_manifest.py` + Agent `tools_cache` 拉取核验与 env 回退（`backend/agent/tool_cache.py` × `scan_runner`），全链逃生阀默认关（`STP_DEDUP_SCAN_PACKAGE_REF` 未设＝no-op），发布与 fleet 切换属运维推进项；全族迁移、控制面侧切包与 Phase 3 仍未做——见 §5.4 评估锚与 [#3075](https://github.com/DUElost/stability-test-platform/issues/3075)；D0/D3 权威已生效——见 §5；§5.6 **D0 可拦对象口径**已定——见 v1.10）
 - 优先级：P1
 - 目标里程碑：M7
@@ -27,6 +27,7 @@
 | v1.9 | 2026-09-21 | **Phase A3 follow-ups**（非决策变更）：DLE `log-events/{id}/download`（目录 zip）；extract 登记 `extract_bundle` + 目录 zip 下载；PlanRun 详情内嵌 `JiraRunHistory`（#3013） |
 | v1.10 | 2026-09-21 | **D0 可拦对象口径**（#3014 案 3A，非决策变更）：§5.6 定「计数口径 = 带外部资产的族」+ 首次基线（16 / 19，`clear_recents`、`unisoc_*` 判非 D0 对象）；§5.1 修正「新族门禁零触发」的成因（分母选错，非本期巧合）；**案 3A-1 采选项 A**——§5.6 增「门禁射程 = 归类动作」三态（`platform-authored` 放行 / `external-tool` 仍禁 / 未声明红，判据实现在 #3055）；脚本膨胀账继续归 ADR-0039 / #735。不动 D0–D4 与 §5.4 三条触发条件本身。相对 Phase A3 follow-ups（v1.9）顺延为 v1.10 |
 | v1.11 | 2026-09-22 | **§5.4 增第四条触发条件·多站点部署**（方向级修订）：用户裁定「多站点部署 = §5.4 触发」——多站点是平台镜像与外部工具资产物理解耦的需求来源，防止工具/脚本合入持续腐化平台主干；评估结论锚改为**已触发**（条件 4）；撤销「触发前不得排期」；实现跟踪 [#3075](https://github.com/DUElost/stability-test-platform/issues/3075)；评估正本 [`2026-09-22-adr0033-package-store-multisite-trigger.md`](../notes/architecture/2026-09-22-adr0033-package-store-multisite-trigger.md)。**本版不实现** tar.gz/`tools_cache` 代码；条件 1–3 现态对账仍可不成立，但任一条件（含新增第 4 条）成立即可排期 |
+| v1.13 | 2026-09-22 | **D3 一句措辞修订**（由 [ADR-0051](./ADR-0051-release-unit-and-content-addressing.md) D3 裁决）：原「升级工具包 = 新建 script 版本行（`content_sha256 := tarball sha256`）」与 v1.12 裁决 C1（整包 `package_sha256` 与 entry-file sha 语义分离）互斥，改为「`package_sha256 := tarball sha256`；`content_sha256` 仍为入口 sha」。D0/D1/D2/D4 与 DB catalog 唯一运行时权威不变；Phase B 后续切片并入 ADR-0051 Phase 4 |
 | v1.12 | 2026-09-22 | **Phase B 第一切片落地**（非决策变更，#3075）：登记 `tool_manifest.json`（Git 唯一事实源；载体由「`tool_manifest.yaml`」改为 **JSON**——PyYAML 不在 `backend/requirements.txt`，生产镜像/fleet 解释器不保证可用，stdlib 为零依赖硬约束）；确定性打包器 `tools/dev/package_tool_asset.py`（整包 `package_sha256`，与 `script.content_sha256` 的 entry-file sha 语义分离＝裁决 C1）；门禁 `tools/dev/check_tool_manifest.py`（schema lint + append-only：删除/原地改写红、退役仅 `retired` 单向翻转、artifact 钉 `packages/{name}/{version}.tar.gz`＝C2/C4；条目字段恰好分发六元组，执行契约禁混装＝C5）；Agent 侧 `backend/agent/tool_cache.py` 拉取＋整包核验＋`.stp-verified` 幂等标记，`scan_runner` 优先级「显式传参 > 包面 > env 路径」、失败一律回退（C3），`STP_AGENT_DEDUP_SCAN_PACKAGE_REF` 走既有 env 推送链（C6 只切 Agent 侧）；`Start-Log-Scan@2026.09.22` 样板已登记（6.1 MB / 735 文件，复跑同 sha）。全链**逃生阀默认关**：发布与 fleet 推送属运维推进项，本版不触发生产切换 |
 
 ---
@@ -133,7 +134,7 @@ flowchart TD
 - **元数据清单（Manifest）**：
   - 主代码仓中仅保留 `tool_manifest.yaml`，定义工具名称、版本、适用架构、执行入口、超时及依赖配置；
   - **双版本体系权威裁定**：架构不变量保持一致——执行引擎仍以 `script:<name>` 作为调用标识，但 **DB script 目录（script catalog）仍是唯一运行时权威**；`tool_manifest.yaml` 是发布格式，注册时编译进 script 行（沿用 `capabilities.json` → scan → DB 的既有先例，#171），不是并存的第二套版本体系；
-  - **升级工具包 = 新建 script 版本行**（`content_sha256 := tarball sha256`），保 ADR-0021 / ADR-0023 经由 `Script.content_sha256` 溯源（**无** `plan_step.script_sha` 列；#2546 Mode C）；ADR-0020 不可变、422 与退役 409 守卫（`SCRIPT_STILL_REFERENCED`）原样复用，零新机制；
+  - **升级工具包 = 新建 script 版本行**（**v1.13 / ADR-0051 D3**：`package_sha256 := tarball sha256`，新增列；`content_sha256` 仍为入口文件 sha——v1.12 裁决 C1 的双列语义；v1.0–v1.12 原文「`content_sha256 := tarball sha256`」作废），保 ADR-0021 / ADR-0023 经由 `Script.content_sha256` 溯源（**无** `plan_step.script_sha` 列；#2546 Mode C）；ADR-0020 不可变、422 与退役 409 守卫（`SCRIPT_STILL_REFERENCED`）原样复用，零新机制；
   - **CI 门禁分工**：PR 门禁（无 NFS 访问）只管 Git 侧——manifest schema lint + 已登记版本条目 append-only；tarball 存在性与 sha256 校验发生在注册时、Agent 拉取时与控制面周期健康巡检。
 
 ### D4：防腐适配器架构（Anti-Corruption Layer, ACL）
