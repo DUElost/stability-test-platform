@@ -110,3 +110,18 @@ python scripts/run_gates.py check:gov      # 治理面专项
    清理只能用 Python 扫 `/proc` + `os.kill`（见夹具 docstring）；`pkill -f` 在镜像内
    不可用。  
    误判表现：宿主侧打印「已 terminate」为真，容器内夹具仍在替不存在的 host 心跳。
+
+## 踩坑守卫：GitHub 写操作（观测类，非夹具）（#3034 第 8 条）
+
+与上面同族但来源不同：**工具的报错文本 ≠ 实际执行状态**。`gh api -X POST` 连打
+`EOF` 时请求可能已经落地，按「失败」直接重发就是重复单（真实代价：#2617）。
+
+- `gh` 的 `EOF`/超时判为**结果未知**，不是「未执行」——写动作前先用一次**读**确定化
+  （按标题/ID 数命中数），确认未落地才允许重发；重试次数 + EOF 次数 = 重复单数；
+- 先证明故障面再归因：`curl -o /dev/null -w '%{http_code}' https://api.github.com/`
+  与无鉴权 `rate_limit` 都正常 ⇒ 不是网络/配额；
+- `gh` 卡住时 `curl` 直调 REST 是有效旁路（同一 token：`gh auth token`）——实测
+  `gh` 9 连败 vs `curl` 2 连成，故障在 `gh` 的 transport/重试路径，不在 GitHub；
+- 评论类写动作有现成工具 `tools/dev/gh_comment_once.py`（幂等 marker + 发布前查重 +
+  查重不可用即不发）；权威纪律见 `docs/development/repository-workflow.md`
+  §GitHub 交互的幂等与重试（#2131）。
