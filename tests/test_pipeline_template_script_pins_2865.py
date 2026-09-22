@@ -66,9 +66,10 @@ EXCEPTIONS: dict[str, tuple[str, str]] = {
     ),
     "script:monkey_setup": (
         "2.3.9",
-        "#2975：v2.3.10（步骤 metrics 聚合进顶层出口）已合 main 但 script 表无行"
+        "#2975：v2.3.10（步骤 metrics 聚合进顶层出口）已合 main 但 script 表无行，"
+        "#3107 又把磁盘 head 推到 v2.3.11（log_dirs 参数校验）——两版都未注册"
         "——scan 前 pin 未注册版 = monkey/巡逻模板新建 Plan 全 422。删除条件："
-        "scan 注册激活 v2.3.10 后 pin 追平并移除本条。",
+        "scan 注册激活 v2.3.11 后 pin 追平并移除本条。",
     ),
     "script:gpu_finish": (
         "1.0.6",
