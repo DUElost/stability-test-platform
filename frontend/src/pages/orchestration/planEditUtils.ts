@@ -10,12 +10,17 @@ export const EMPTY_LIFECYCLE: PipelineDef = {
   lifecycle: {
     init: [
       {
+        // 与 8 个种子模板同值（check_device 1.0.2 / 180s / retry 1）。
+        // 编辑器新建的 Plan 直接提交本对象，所以这里就是**第二个生产者**：
+        // 曾钉 check_device 1.0.0 + 30s + retry 0，用编辑器建的 Plan 拿不到
+        // v1.0.1 的诊断修复与 v1.0.2 的 boot 门/150s 预算（#3109）。
+        // 守卫：tests/test_check_device_template_timeout_2981.py 同时解析本文件。
         step_id: 'step_init_1',
         action: 'script:check_device',
-        version: '1.0.0',
+        version: '1.0.2',
         params: {},
-        timeout_seconds: 30,
-        retry: 0,
+        timeout_seconds: 180,
+        retry: 1,
         enabled: true,
       },
     ],

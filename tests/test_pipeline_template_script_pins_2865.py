@@ -207,6 +207,39 @@ def test_exception_shape_predicate_has_teeth() -> None:
     assert _exception_lag_reason("0.0.1", "#2998：示例理由", head) is None, "真滞后被误杀"
 
 
+def _version_dir_exists(script_name: str, version: str) -> bool:
+    return (SCRIPTS_DIR / script_name / f"v{version}").is_dir()
+
+
+def test_every_pin_and_exception_resolves_to_a_real_version_dir() -> None:
+    """pin 与例外值都必须对应磁盘上**真实存在**的版本目录（#3109）。
+
+    `_exception_lag_reason` 只比版本号大小（`0.0.1 < head` 即放行），所以一个不存在
+    的版本号能被写进 EXCEPTIONS 而不报错；而模板 pin 一个不存在的版本会让该模板
+    新建 Plan 全 422（`plans._validate_script_refs` 只认 script 表）。守卫此前只对
+    版本号做大小比较，写错一个字符就能静默引用一个既不在磁盘也不在 DB 的版本。
+    """
+    bad: list[str] = []
+    for action, name in PINNED_SCRIPTS.items():
+        version = EXCEPTIONS[action][0] if action in EXCEPTIONS else _latest_on_disk(name)
+        if not _version_dir_exists(name, version):
+            bad.append(f"{action}：期望版本 v{version} 在 scripts/{name}/ 下不存在")
+    for action, (version, _reason) in EXCEPTIONS.items():
+        name = PINNED_SCRIPTS[action]
+        if not _version_dir_exists(name, version):
+            bad.append(f"EXCEPTIONS[{action}]：豁免版本 v{version} 在 scripts/{name}/ 下不存在")
+    assert not bad, (
+        "pin / 例外引用了磁盘上不存在的版本：\n  " + "\n  ".join(bad)
+    )
+
+
+def test_version_dir_existence_check_has_teeth() -> None:
+    """变异自证：不存在的版本必须判否、真实存在必须判是（否则上面那条是空转）。"""
+    assert _version_dir_exists("check_device", _latest_on_disk("check_device"))
+    assert not _version_dir_exists("check_device", "99.99.99")
+    assert not _version_dir_exists("no_such_family", "1.0.0")
+
+
 def test_guard_has_teeth_when_template_lags_disk() -> None:
     """变异自证：模板故意钉旧版时判据必须红。"""
     latest_check = _latest_on_disk("check_device")
