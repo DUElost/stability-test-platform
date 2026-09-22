@@ -41,15 +41,26 @@ def _parse_df_size(token: str) -> Optional[int]:
 def parse_df_data(output: str) -> Tuple[Optional[int], Optional[int]]:
     """``df /data`` 输出 → ``(total_bytes, used_bytes)``；解析不出返回 ``(None, None)``。
 
-    兼容三种真实形态（判据保守，对不上就 None，不猜）：
+    兼容四种真实形态（判据保守，对不上就 None，不猜）：
 
     - toybox 两行表：``<fs> <size> <used> <avail> <pct> <mount>``（size 带人类后缀）
     - busybox 两行表：同列布局，但表头是 ``1K-blocks``——裸数字是 KiB，须 ×1024
     - toybox 单行：``/data: <used> <avail> <pct> /data``（total = used + avail）
+    - bind 穿透两行表（#3133，ZTE Z2581/Z2582、部分 MLD 实测）：列布局同 busybox，
+      但 ``df /data`` 解析到 bind/穿透挂载，**Mounted on 列显示规范挂载点**
+      （``/mnt/pass_through/0/emulated``），整行无 ``/data`` 字样——数据行以
+      ``/dev`` 文件系统列开头。
+
+    数据行判据（#2757 只认 ``/data`` 字样，#3133 扩为「含 /data 或以 /dev 开头」）：
+    ``df`` 带路径参数时只回该文件系统一行，故取首个匹配行无歧义；表头行
+    （``Filesystem …``）与错误行（``df: /data: No such …``）天然不匹配 /dev 前缀。
     """
     lines = output.splitlines()
     one_k_blocks = any("1K-blocks" in line for line in lines)
-    rows = [line for line in lines if "/data" in line]
+    rows = [
+        line for line in lines
+        if "/data" in line or line.lstrip().startswith("/dev")
+    ]
     if not rows:
         return (None, None)
     tokens = rows[0].split()
