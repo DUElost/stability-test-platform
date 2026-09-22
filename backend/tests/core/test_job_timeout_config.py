@@ -23,6 +23,7 @@ def test_production_defaults(monkeypatch):
     assert mod.RUNNING_HEARTBEAT_TIMEOUT_SECONDS == 900
     assert mod.PATROL_RUNNING_HEARTBEAT_TIMEOUT_SECONDS == 300
     assert mod.PATROL_STALL_MULTIPLIER == 3
+    assert mod.STEP_TRACE_STALL_SECONDS == 3600
     assert mod.HOST_HEARTBEAT_TIMEOUT_SECONDS == 300
     assert mod.UNKNOWN_GRACE_SECONDS == 300
 
