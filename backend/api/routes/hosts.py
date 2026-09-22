@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 import logging
 import os
+import shutil
 import time
 import uuid
 
@@ -1292,8 +1293,6 @@ def host_ensure_flash_prereqs(
 
     不绑在热更新默认路径上；常规 hot-update 不触碰系统包面。
     """
-    import shutil
-
     missing = [
         cmd for cmd in ("ansible-playbook", "sshpass")
         if not shutil.which(cmd)

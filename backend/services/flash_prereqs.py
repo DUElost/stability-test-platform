@@ -15,8 +15,10 @@ import threading
 from pathlib import Path
 from typing import Any, Callable
 
+from backend.core.audit import record_audit
 from backend.core.database import SessionLocal
 from backend.core.ssh_security import resolve_host_ssh_credentials
+from backend.models.host import Host
 from backend.services.host_updater import _resolve_ssh_creds
 from backend.services.run_console import RunConsole, RunConsoleError, RunKeyBusyError
 
@@ -49,8 +51,6 @@ def prepare_ensure_flash_prereqs(host_id: str) -> dict[str, Any]:
     """解析 SSH 凭据并构造 ansible-playbook argv。"""
     db = SessionLocal()
     try:
-        from backend.models.host import Host
-
         host = db.get(Host, host_id)
         if not host:
             return {"ok": False, "message": f"host {host_id} not found"}
@@ -206,9 +206,6 @@ def flash_prereqs_outcome_snapshot(console_run_id: str) -> dict[str, Any]:
 
 def _record_outcome(host_id: str, run: Any, initiated_by: str | None) -> None:
     try:
-        from backend.core.audit import record_audit
-        from backend.models.host import Host
-
         status = getattr(run, "status", None)
         exit_code = getattr(run, "exit_code", None)
         run_id = getattr(run, "run_id", None)
