@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import ast
 from contextlib import contextmanager
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from backend.realtime import agent_sid_registry as reg
+from backend.scheduler import app_scheduler
 from backend.scheduler.app_scheduler import (
     SINGLETON_SCHEDULE_IDS,
     _instrumented,
@@ -15,26 +18,63 @@ from backend.scheduler.app_scheduler import (
 )
 
 
-def test_singleton_schedule_ids_cover_p3_3_jobs():
-    expected = {
-        "recycler",
-        "session_watchdog",
-        "device_lease_reconciler",
-        "cron_check",
-        "retention_cleanup",
-        "precheck_reaper",
-        "plan_chain_reconciler",
-        "revoked_token_cleanup",
-        "auto_archive_sweep",
-        # #2741 / ADR-0049：audit_logs 分层保留期裁剪（多实例下单例防重复删）。
-        "audit_log_cleanup",
+#: ADR-0027 的**政策**清单（不是实现的副本）：以下作业自带 *internal* leadership，
+#: 再包一层就是不同 DB session 上的嵌套 advisory lock —— 会把 tick 打死。
+#: 这份留在测试里手写是对的：它表达「不许重复包」这个决定，不跟注册代码同变。
+INTERNAL_LEADERSHIP_IDS = frozenset(
+    {
+        "admission_pump",
+        "counter_reconcile",
+        "signal_link_reconcile",
+        "saq_queue_depth_poll",
     }
-    assert SINGLETON_SCHEDULE_IDS == expected
+)
+
+
+def _singleton_call_site_ids() -> set[str]:
+    """真实来源 = `app_scheduler` 里 `_instrumented(name, fn, singleton=True)` 的 name。
+
+    判据为什么改成读 AST（#3060：main 全量 CI 确定性红）：本用例原先自带一份手抄的
+    `expected` 字面量，于是同一清单存在**三处**（prod 常量 / 注册站点 / 测试字面量）。
+    #2958 加 `script_presence_sweep` 时同步了前两处、漏了第三处 —— 确定性红，且红在
+    「只有第三处会报」的位置上，排查成本被这份副本放大。测试这份副本被消灭后，前两处
+    谁漏改都会在这里红，报错还直接点名是哪一侧、缺哪几项。
+    """
+    tree = ast.parse(Path(app_scheduler.__file__).read_text(encoding="utf-8"))
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if getattr(node.func, "id", None) != "_instrumented" or not node.args:
+            continue
+        first = node.args[0]
+        if not (isinstance(first, ast.Constant) and isinstance(first.value, str)):
+            continue
+        for kw in node.keywords:
+            if kw.arg == "singleton" and isinstance(kw.value, ast.Constant):
+                if kw.value.value is True:
+                    found.add(first.value)
+    return found
+
+
+def test_singleton_schedule_ids_cover_p3_3_jobs():
+    call_sites = _singleton_call_site_ids()
+    # 取数失效不得伪装成"清单一致"：AST 形状变了要先修本用例，不许放宽断言。
+    assert call_sites, "_instrumented(singleton=True) 站点数为 0：取数失效，先修本用例"
+
+    declared = set(SINGLETON_SCHEDULE_IDS)
+    not_declared = sorted(call_sites - declared)
+    not_wrapped = sorted(declared - call_sites)
+    assert not not_declared and not not_wrapped, (
+        "单例清单与注册站点不一致（两处都在 app_scheduler.py，改一处即可，"
+        "不要再往测试里抄第三份）: "
+        f"站点 singleton=True 但常量未登记 {not_declared}; "
+        f"常量登记但站点未包 leadership {not_wrapped}"
+    )
+
     # Internal leadership — must NOT double-wrap.
-    assert "admission_pump" not in SINGLETON_SCHEDULE_IDS
-    assert "counter_reconcile" not in SINGLETON_SCHEDULE_IDS
-    assert "signal_link_reconcile" not in SINGLETON_SCHEDULE_IDS
-    assert "saq_queue_depth_poll" not in SINGLETON_SCHEDULE_IDS
+    double = sorted(declared & INTERNAL_LEADERSHIP_IDS)
+    assert not double, f"内部 leadership 作业被重复包了一层 leadership：{double}"
 
 
 def test_with_leadership_skips_sync_when_not_leader(monkeypatch):
