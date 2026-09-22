@@ -604,28 +604,30 @@ groups:
             .63 实测 20s/23-23、.102 实测 20s/11-11），reboot 兜底。**不要自动
             rebind**（门控自愈见 #2972，勿在告警处置里顺手做）。若确认该机柜已撤线
             （设备行全是 ghost），清账关闭本告警，而不是给本规则加静音条件。
-      # #3046 Revisit：L4 paging。reason `adb_interfaces_missing` 已由 #3049 产出
+      # #3046 / #3068：L4 paging。reason `adb_interfaces_missing` 已由 #3049 产出
       # （`usb_device_count > 0 ∧ adb_interface_count == 0`）；本条只负责响铃。
       # **不合物取设备账**：`usb > 0` 本身就是「本来有设备」的证据（#3046 选型）。
       # **不做恢复自动化**：§4 kill/start-server 对照实验已证 adb 侧无效，报单人撤回
       # 方向③；处置只能设备侧切回 MTP + 开 USB 调试（triage.md §1 L4）。
-      # `for: 2m` ≈ 连续 ≥2–3 心跳拍（owner 09-21 取样：开关机链压测窗内未见瞬时 L4）。
+      # `for: 30m`（#3068 选型 2）：L4 慢性需人工上机、现网常驻命中——短 for 上线即常亮，
+      # 把「待办」当「事件」；观测层仍瞬时如实，去抖只在告警面。
       - alert: StabilityHostAdbInterfacesMissing
         expr: stability_host_health_reason{reason="adb_interfaces_missing"} >= 1
-        for: 2m
+        for: 30m
         labels:
           severity: warning
         annotations:
           summary: Host has USB devices but zero ADB interfaces (L4 — device-side only)
           description: >-
-            L4 判据（#3046 Revisit paging）：agent 报 `adb_interfaces_missing`
-            （USB 枚举到设备，但 sysfs 上 ADB 接口 `ff:42` 数为 0）已持续 ≥2m。
+            L4 判据（#3046/#3068 paging）：agent 报 `adb_interfaces_missing`
+            （USB 枚举到设备，但 sysfs 上 ADB 接口 `ff:42` 数为 0）已持续 ≥30m。
             这不是 adb server / xHCI 问题——设备 USB gadget 没暴露 ADB 接口时，
             `adb devices` 连 offline 都不会出现。处置：按
             docs/operations/host-device-visibility-triage.md §1 L4——**设备侧人工**
             把 USB 配置切回 MTP/文件传输并开启 USB 调试。**不要** `adb kill-server`
             / `adb start-server` / xHCI rebind（§4 对照实验已证无效；恢复自动化已撤回）。
             fleet 同源形态：.65/.20 曾静默 HEALTHY 数周（合计 34 台设备）。
+            本告警接受「没人处理就一直亮」= 待办而非抢修事件（#3068）。
 
   # #2958 第五道闸：host 脚本**在位矩阵**（常设 sweep 落 `host_script_presence`，
   # 每日 09:30 一轮）。两条规则成对——只装第一条会出现「sweep 死了但面板全绿」，
