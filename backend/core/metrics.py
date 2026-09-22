@@ -222,6 +222,14 @@ script_presence_sweep_timestamp = Gauge(
     'Oldest checked_at of the last complete script presence sweep (unix seconds)',
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
+# #2983：控制面 SSH 探针连续窗 strike（host.extra.health_probe.strike_open）。
+# 1 = 连续 N 轮 AGENT_MUTE；0 = 未开。差集清理与其它 per-host gauge 同族。
+host_health_probe_strike = Gauge(
+    'stability_host_health_probe_strike',
+    'Control-plane host health probe consecutive AGENT_MUTE strike (1=open)',
+    ['host_id'],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
 # ============================================================================
 # Risk Classification Metrics
 # ============================================================================

@@ -35,6 +35,7 @@ from backend.core.settings.scheduler import (
 # 域——保持函数级反而会推高 inner-imports 棘轮（#738 基线只许下调）。
 from backend.scheduler.audit_log_cleanup import audit_log_cleanup_job
 from backend.scheduler.script_presence_sweep import script_presence_sweep_job
+from backend.scheduler.host_health_probe_sweep import host_health_probe_sweep_once
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,7 @@ SINGLETON_SCHEDULE_IDS: frozenset[str] = frozenset({
     "auto_archive_sweep",
     "audit_log_cleanup",
     "script_presence_sweep",
+    "host_health_probe_sweep",
 })
 
 
@@ -322,6 +324,22 @@ async def register_schedules(scheduler: AsyncScheduler) -> None:
             misfire_grace_time=timedelta(hours=2),
         )
         logger.info("schedule_registered id=script_presence_sweep cron=%s", presence_cron)
+
+    # #2983：控制面 SSH 健康探针（第四条通道）。0 = 显式停用。
+    if (probe_interval := _sched().host_health_probe_interval_seconds) > 0:
+        await _add(
+            _instrumented(
+                "host_health_probe_sweep",
+                host_health_probe_sweep_once,
+                singleton=True,
+            ),
+            IntervalTrigger(seconds=probe_interval),
+            id="host_health_probe_sweep",
+        )
+        logger.info(
+            "schedule_registered id=host_health_probe_sweep interval=%ds",
+            probe_interval,
+        )
 
     # ── ADR-0026 Step 4: admission queue pump ──
     # Registered unconditionally: with the env flag off the pump runs in

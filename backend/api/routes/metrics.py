@@ -28,6 +28,7 @@ from backend.core.metrics import (
     host_kernel_log_channel,
     host_online,
     host_script_presence,
+    host_health_probe_strike,
     is_prometheus_available,
     sweep_stale_host_gauge_children,
     record_db_lock_waiters,
@@ -37,6 +38,7 @@ from backend.models.enums import DeviceStatus, HostStatus
 from backend.models.host import Device, Host
 from backend.models.schedule import TaskSchedule
 from backend.services.auth_session import authenticate_token
+from backend.services.host_health_probe import HEALTH_PROBE_EXTRA_KEY
 from backend.services.script_presence import (
     PRESENCE_STATES as _PRESENCE_STATES,
     presence_counts_by_host as _presence_counts_by_host,
@@ -203,6 +205,46 @@ _channel_gauge_exposed_hosts: set[str] = set()
 #: #2958：上一轮**已暴露过** label child 的 host（差集清理用，与其它两组各一份——
 #: 共用一份会让「这轮没数据」的 host 被上一轮的差值误删/误留）。
 _presence_gauge_exposed_hosts: set[str] = set()
+_probe_strike_gauge_exposed_hosts: set[str] = set()
+
+
+def _refresh_host_health_probe_strike_gauges(db: Session) -> None:
+    """#2983：把 ``host.extra.health_probe.strike_open`` 折成 per-host gauge。"""
+    if not is_prometheus_available():
+        _probe_strike_gauge_exposed_hosts.clear()
+        return
+    try:
+        rows = (
+            db.query(Host.id, Host.extra)
+            .filter(
+                Host.retired_at.is_(None),
+                Host.status == HostStatus.ONLINE.value,
+            )
+            .all()
+        )
+    except SQLAlchemyError:
+        logger.warning("metrics_host_health_probe_strike_refresh_failed", exc_info=True)
+        return
+
+    live: set[str] = set()
+    try:
+        for raw_host_id, extra in rows:
+            host_id = str(raw_host_id)
+            blob = extra if isinstance(extra, dict) else {}
+            probe = blob.get(HEALTH_PROBE_EXTRA_KEY)
+            if not isinstance(probe, dict):
+                continue
+            strike = 1.0 if probe.get("strike_open") else 0.0
+            host_health_probe_strike.labels(host_id=host_id).set(strike)
+            live.add(host_id)
+    except Exception:
+        logger.warning("metrics_host_health_probe_strike_render_failed", exc_info=True)
+        return
+
+    for host_id in _probe_strike_gauge_exposed_hosts - live:
+        host_health_probe_strike.remove(host_id)
+    _probe_strike_gauge_exposed_hosts.clear()
+    _probe_strike_gauge_exposed_hosts.update(live)
 
 
 def _refresh_script_presence_gauges(db: Session) -> None:
@@ -441,6 +483,7 @@ async def metrics(
     _refresh_fleet_gauges(db)
     _refresh_host_device_adb_gauges(db)
     _refresh_host_health_gauges(db)
+    _refresh_host_health_probe_strike_gauges(db)
     _refresh_script_presence_gauges(db)
     _refresh_lock_wait_gauges(db)
     _refresh_chain_coverage_gauges(db)

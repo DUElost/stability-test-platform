@@ -257,6 +257,10 @@
 | `FINISHTEST_MARKER` | `-` | — | 测试 | `backend/agent/tests/test_finish_sigterm_tmp_cleanup_2980.py:44` |
 | `FINISHTEST_TMP` | `-` | — | 测试 | `backend/agent/tests/test_finish_sigterm_tmp_cleanup_2980.py:73` |
 | `HOST_HEARTBEAT_TIMEOUT_SECONDS` | `300` | ✅ | 运行时 | `backend/core/job_timeout_config.py:86` |
+| `HOST_HEALTH_PROBE_CONCURRENCY` | `4` | ✅ | 运行时 | `backend/core/settings/scheduler.py:81` |
+| `HOST_HEALTH_PROBE_INTERVAL_SECONDS` | `600` | ✅ | 运行时 | `backend/core/settings/scheduler.py:80` |
+| `HOST_HEALTH_PROBE_STRIKE_NEED` | `2` | ✅ | 运行时 | `backend/core/settings/scheduler.py:83` |
+| `HOST_HEALTH_PROBE_TIMEOUT_SECONDS` | `10` | ✅ | 运行时 | `backend/core/settings/scheduler.py:82` |
 | `HOST_ID` | `` | ✅ | 运行时 | `backend/agent/host_registry.py:28` |
 | `HOST_IP` | `-` | — | 测试 | `backend/agent/tests/test_agent.py:84` |
 | `HOT_UPDATE_ABORT_POLL_INTERVAL_SECONDS` | `1.0` | ✅ | 运行时 | `backend/services/host_upgrade_gate.py:56` |
