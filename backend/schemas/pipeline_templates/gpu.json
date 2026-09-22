@@ -48,7 +48,7 @@
       {
         "step_id": "gpu_finish",
         "action": "script:gpu_finish",
-        "version": "1.0.6",
+        "version": "1.0.7",
         "timeout_seconds": 600,
         "retry": 1,
         "params": {}
