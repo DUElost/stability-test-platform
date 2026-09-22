@@ -119,4 +119,14 @@ describe('#2848 不变量钉在调用点（#2987）', () => {
     render(<PlanFailedDevicesChart data={serverOrder} isLoading={false} />);
     expect(captured.data?.map((r) => r.plan_id)).toEqual([2, 1, 3]);
   });
+
+  it('乱序输入也原样透传：任何重排（含稳定单键）都被这条抓住', () => {
+    // 上一条测不出「按 failed 单键的**稳定**重排」：输入本身已是 failed 降序，
+    // 稳定排序对它是恒等变换 ⇒ 把 sort 加回调用点仍然绿（#2987 残余）。这条把输入
+    // 换成**未按 failed 降序**的顺序，于是判据只剩「原样透传」一个解释：任何
+    // 重排（稳定或非稳定、单键或多键）都会改序。
+    const notFailedDesc = [row(1, 1, 10), row(2, 9, 20), row(3, 5, 30)];
+    render(<PlanFailedDevicesChart data={notFailedDesc} isLoading={false} />);
+    expect(captured.data?.map((r) => r.plan_id)).toEqual([1, 2, 3]);
+  });
 });
