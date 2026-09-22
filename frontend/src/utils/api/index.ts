@@ -8,7 +8,7 @@ export {
   registerAuthFailureHandler,
 } from './client';
 export { auth } from './auth';
-export { hosts, scriptPresence, heartbeat, hotUpdate, agentInstall, flashPrereqs, fetchHostList, coerceHostList } from './hosts';
+export { hosts, scriptPresence, heartbeat, hotUpdate, agentInstall, flashPrereqs, fetchHostList, fetchAllHosts, coerceHostList } from './hosts';
 export { jobs } from './jobs';
 export { devices, fetchAllDevices, fetchAllDevicePages, type DeviceListFilters } from './devices';
 export { projects, assignDevicesToProject } from './projects';

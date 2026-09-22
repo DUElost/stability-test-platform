@@ -10,7 +10,7 @@ import { AddDeviceModal } from './components/AddDeviceModal';
 import { BatchEditDeviceTagsDialog, type DeviceTagOperation } from './components/BatchEditDeviceTagsDialog';
 import { AssignProjectDialog } from './components/AssignProjectDialog';
 import { ProjectFilterSelect, UNASSIGNED_FILTER_VALUE } from '@/components/project/ProjectFilterSelect';
-import { api, assignDevicesToProject, fetchAllDevicePages, fetchHostList, toApiError } from '@/utils/api';
+import { api, assignDevicesToProject, fetchAllDevicePages, fetchAllHosts, toApiError } from '@/utils/api';
 import type { Host } from '@/utils/api/types';
 import { deviceKeys, hostKeys } from '@/utils/api/queryKeys';
 import { Button } from '@/components/ui/button';
@@ -64,7 +64,7 @@ export default function DevicesPage() {
 
   const { data: hosts } = useQuery({
     queryKey: hostKeys.list(),
-    queryFn: () => fetchHostList(0, 200),
+    queryFn: () => fetchAllHosts(),  // #3152：翻页拉全，越界会让设备行的主机名静默变「-」
     refetchInterval: 10000,
   });
 

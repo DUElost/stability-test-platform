@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import PlanExecutePage from './PlanExecutePage';
-import { api, ApiError, fetchAllDevices, fetchAllPlans, fetchHostList } from '@/utils/api';
+import { api, ApiError, fetchAllDevices, fetchAllHosts, fetchAllPlans } from '@/utils/api';
 import { hostKeys } from '@/utils/api/queryKeys';
 
 const mocks = vi.hoisted(() => ({
@@ -33,7 +33,7 @@ vi.mock('@/utils/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/utils/api')>();
   return {
     ...actual,
-    fetchHostList: vi.fn().mockResolvedValue([]),
+    fetchAllHosts: vi.fn().mockResolvedValue([]),
     fetchAllDevices: vi.fn().mockResolvedValue([]),
     // #3147：计划选择器改走翻页拉全量
     fetchAllPlans: vi.fn().mockResolvedValue([]),
@@ -117,7 +117,7 @@ function renderPage({
     total_steps: 1,
   });
   (api.plans.run as any).mockResolvedValue({ id: 88 });
-  (fetchHostList as any).mockResolvedValue(hosts);
+  (fetchAllHosts as any).mockResolvedValue(hosts);
   if (getHost) {
     (api.hosts.get as any).mockImplementation(async (id: string) => getHost(id));
   } else {
@@ -179,7 +179,7 @@ describe('PlanExecutePage host 维度新鲜度（#2599）', () => {
     // 现场形态：host 维度只在挂载时取一次——页面挂载后新注册/变更的主机在长驻的
     // 选机工作台上看不到（标签退化成内部 slug、在线判定 fail-open、容量核算忽略）。
     const { queryClient } = renderPage();
-    await waitFor(() => expect(fetchHostList).toHaveBeenCalledWith(0, 200, true));
+    await waitFor(() => expect(fetchAllHosts).toHaveBeenCalledWith(true));
     const hostQuery = queryClient.getQueryCache().find({ queryKey: hostKeys.retiredList() });
     // 缓存上的 options 类型面不含 refetchInterval（它在 observer 选项里），收窄后读
     const options = hostQuery?.options as { refetchInterval?: number } | undefined;
@@ -251,16 +251,16 @@ describe('PlanExecutePage', () => {
 
     await goToDeviceStep();
 
-    // 关键断言：默认的 fetchHostList(include_retired=false) 会被后端把退役主机
+    // 关键断言：默认的 fetchAllHosts(false) 会被后端把退役主机
     // 过滤掉 → hostMap 查不到 → `retired_at` 门禁与「节点离线」都不会命中。
-    await waitFor(() => expect(fetchHostList).toHaveBeenCalledWith(0, 200, true));
+    await waitFor(() => expect(fetchAllHosts).toHaveBeenCalledWith(true));
 
     // 行为断言：退役主机上的 ONLINE 设备不得被算成「可用」（ready=false）。
     // 修复前 hostMap 查不到该主机 → retired 分支与「节点离线」分支都不命中 → 算成可用。
     // 页面级只钉「调用参数」——退役分支本身的判定由
     // `src/utils/planExecuteReadiness.test.ts` 覆盖；本用例补的正是 #2053 的
     // 缺口：调用方拿不到退役主机（默认 include_retired=false）→ 门恒空转。
-    await waitFor(() => expect(fetchHostList).toHaveBeenCalledWith(0, 200, true));
+    await waitFor(() => expect(fetchAllHosts).toHaveBeenCalledWith(true));
     expect(await screen.findByLabelText(/RETIRED01/i)).toBeInTheDocument();
   });
 

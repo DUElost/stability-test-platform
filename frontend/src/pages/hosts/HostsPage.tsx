@@ -10,7 +10,7 @@ import { AddHostModal } from './components/AddHostModal';
 import HostHotUpdateConfirmDialog from '@/components/host/HostHotUpdateConfirmDialog';
 import HostBulkActionBar from '@/components/host/HostBulkActionBar';
 import HostOperationPanel from '@/components/host/HostOperationPanel';
-import { api, coerceHostList, fetchHostList, toApiError } from '@/utils/api';
+import { api, coerceHostList, fetchAllHosts, fetchHostList, toApiError } from '@/utils/api';
 import type { Host } from '@/utils/api/types';
 import { hostKeys, scriptPresenceKeys } from '@/utils/api/queryKeys';
 import { Button } from '@/components/ui/button';
@@ -57,7 +57,9 @@ export default function HostsPage() {
   const [showRetired, setShowRetired] = useState(false);
   const { data: hostsData, isLoading, error } = useQuery({
     queryKey: showRetired ? hostKeys.retiredList() : hostKeys.list(),
-    queryFn: () => fetchHostList(0, 200, showRetired),
+    // #3152：全量列表按服务端 total 翻页——单次 `list(0,200)` 在第 201 台起会让主机
+    // 从管理页消失（含退役视图随换机世代单调累积，最先撞线）。
+    queryFn: () => fetchAllHosts(showRetired),
     refetchInterval: 10000,
   });
   const hosts = useMemo(() => coerceHostList(hostsData), [hostsData]);

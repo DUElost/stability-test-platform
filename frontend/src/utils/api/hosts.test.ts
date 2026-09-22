@@ -11,7 +11,7 @@ vi.mock('./client', () => ({
 }));
 
 import apiClient from './client';
-import { coerceHostList, fetchHostList } from './hosts';
+import { coerceHostList, fetchAllHosts, fetchHostList } from './hosts';
 
 describe('fetchHostList', () => {
   beforeEach(() => {
@@ -47,5 +47,41 @@ describe('fetchHostList', () => {
     expect(coerceHostList([host])).toEqual([host]);
     expect(coerceHostList({ items: [host], total: 1, skip: 0, limit: 200 })).toEqual([host]);
     expect(coerceHostList(null)).toEqual([]);
+  });
+});
+
+describe('fetchAllHosts', () => {
+  beforeEach(() => {
+    vi.mocked(apiClient.get).mockReset();
+  });
+
+  it('keeps paging past the 200-per-response cap so the host list is complete (#3152)', async () => {
+    const host = (id: number) => ({ id: `h${id}`, name: `node-${id}`, ip: '10.0.0.1', status: 'ONLINE' });
+    const pageOne = { items: Array.from({ length: 200 }, (_, i) => host(i + 1)), total: 250, skip: 0, limit: 200 };
+    const pageTwo = { items: Array.from({ length: 50 }, (_, i) => host(201 + i)), total: 250, skip: 200, limit: 200 };
+    vi.mocked(apiClient.get)
+      .mockResolvedValueOnce({ data: pageOne })
+      .mockResolvedValueOnce({ data: pageTwo });
+
+    const all = await fetchAllHosts(false);
+
+    expect(all).toHaveLength(250);
+    expect(all[249].id).toBe('h250');
+    expect(apiClient.get).toHaveBeenCalledTimes(2);
+    expect(apiClient.get).toHaveBeenLastCalledWith(
+      '/hosts',
+      { params: { skip: 200, limit: 200, include_retired: false } },
+    );
+  });
+
+  it('threads include_retired through every page (ADR-0038 D5：退役视图同样会越 200)', async () => {
+    vi.mocked(apiClient.get).mockResolvedValue({ data: { items: [], total: 0, skip: 0, limit: 200 } });
+
+    await fetchAllHosts(true);
+
+    expect(apiClient.get).toHaveBeenCalledWith(
+      '/hosts',
+      { params: { skip: 0, limit: 200, include_retired: true } },
+    );
   });
 });

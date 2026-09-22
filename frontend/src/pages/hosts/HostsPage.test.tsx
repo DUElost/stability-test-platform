@@ -23,6 +23,8 @@ vi.mock('../../utils/api', async (importOriginal) => {
   return {
     ...actual,
     fetchHostList: (...args: unknown[]) => mockFetchHostList(...args),
+    // #3152：主列表 queryFn 改 fetchAllHosts——委托回同一 mock，参数按原「一页=200」记账
+    fetchAllHosts: (includeRetired = false) => mockFetchHostList(0, 200, includeRetired),
     api: {
     hosts: {
       list: (...args: unknown[]) => mockHostsList(...args),

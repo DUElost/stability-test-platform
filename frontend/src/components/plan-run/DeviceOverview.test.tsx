@@ -13,7 +13,7 @@ const HOSTS = [
 
 vi.mock('@/utils/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/utils/api')>();
-  return { ...actual, fetchHostList: vi.fn(async () => HOSTS) };
+  return { ...actual, fetchAllHosts: vi.fn(async () => HOSTS) };
 });
 
 function renderWithClient(ui: React.ReactElement) {

@@ -23,7 +23,8 @@ export const planKeys = {
 } as const;
 
 export const hostKeys = {
-  /** Always use fetchHostList() as queryFn — cache must store Host[], not PaginatedResponse. */
+  /** queryFn 一律 fetchAllHosts()/fetchHostList()（#3152）——cache 必须存 Host[]，
+   *  不是 PaginatedResponse envelope；全量消费方用前者，limit=1 存在性探针用后者。 */
   list: () => ['hosts'] as const,
   /**
    * ADR-0038 D5：含退役主机的列表（与 `list()` 同前缀，`invalidateQueries({queryKey:
