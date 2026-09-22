@@ -15,6 +15,7 @@
 
 | 层 | 典型观察 | 只读判据 | 处置 |
 |---|---|---|---|
+| **L0 意图 / 作业层（先问这层）** | `USB n` 与在线数一起归零、`lsusb` 只剩 root hub，**但该 host 近一段时间没有 job** | **平台侧读不到判据**——`device` 只有 `ONLINE/OFFLINE/BUSY/ERROR`，没有 retired/archived/空置位 ⇒ 只能问人、看作业与搬迁记录 | 先确认是不是**有意**清空/关机/搬迁（#3065 现网实例）；确认后**不要**继续按 L1–L4 定成因。解除只能来自账侧或规则豁免（#2962 设备意图位、#3068 paging 取舍） |
 | **L1 内核 / USB 子系统** | `lsusb`/sysfs 里手机整体变少或为空，`USB n` 同时掉 | `sudo dmesg -T` 出现 `xHCI host not responding` / `HC died; cleaning up` / `error -71(-110)` | xHCI driver unbind/rebind 或 reboot；完整判据见 [8.87 事故复盘](./incident-2026-07-29-host-8-87-xhci-death-and-adb-outage.md) |
 | **L2 主机 adb server** | 设备在 USB 上**有 ADB 接口**，`adb devices` 却少或为空 | 「ADB 接口设备集合 ⊋ adb 列表集合」（§2 probe）；`pgrep -af 'fork-server server'` 出现多实例 / 非 5037 端口 / 非 Agent 属主 | 多 server（#160）由 Agent 自检并可选自愈；**单 server 卡死**才用 `adb kill-server && adb start-server`（打断在途 adb 会话，须先确认无在跑任务） |
 | **L3 设备 adbd / 授权** | `adb devices` 能列出该设备，但 state 是 `offline` / `unauthorized` | 两侧集合相等（无 L2 漏项），且存在非 `device` 行 | `adb reconnect offline`、重插、设备侧确认授权或重启；属**设备侧**，server 重启无效 |
@@ -25,6 +26,14 @@ PID/接口名是 MLD-LX3 等 MediaTek 机型 2026-09-14 实测口径：`0e8d:201
 `01:01`（`MIDI function`）+`01:03`，**没有 ADB 接口，任何 adb server 都看不到**。
 注意 `backend/agent/scripts/flash_firmware/*` 注释把 2046 称作「普通态手机」——那里的
 含义是「非刷机态」，不代表有 ADB 接口。
+
+> **为什么 L0 排在 L1 前面（2026-09-22 现网教训，#3065）**：同一条「整机 USB 看不见」的
+> 观察，这天先被读成「控制器故障」（xHCI rebind 被执行，事后确认不必要），再被读成「机柜侧共享
+> 成因事件」，而现场真值是**人为把 20 台手机手动断开**、另有两台机柜**设备处于关机**。三次都是
+> 同一个推理错：只在「测试断电」与「硬件故障」之间做排除，**从没把「有人正在有意操作这批机器」
+> 列进候选**。缺 L0 这层表达能力时，任何自动成因判据都会周期性地把正常作业读成故障——
+> `StabilityHostUsbBlind` 会持续 firing 直到账侧改对，就是这个缺口的告警面症状。
+> 所以：先问 L0，再跑 §2 的只读采集；两者都排除后才谈 L1–L4 的处置。
 
 ## 2. 只读采集命令（在 host 上，经授权的 SSH）
 
