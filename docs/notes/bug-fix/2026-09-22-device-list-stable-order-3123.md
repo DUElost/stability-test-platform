@@ -76,13 +76,25 @@ tie-breaker 保证的只是「同一时刻的组内顺序」——列值一变�
 - **变异自证**：把 `order_by` 临时改回旧实现，上述两例**均红**
   （`assert after == before` 与 `(host_id, id)` 顺序断言各命中一次）；恢复后绿。
   这排除了「用例只是恰好通过」。
+- **生产数据 A/B**（同一份库、同一时间窗，只读；新语句即本次改动后的 SQL）：
+  相隔 10s（= 前端一个轮询周期）两次快照的**前 N 行重合度**——
+
+  | 深度 | 新 `(host_id, id)` | 旧 `(last_seen DESC, id)` |
+  |---|---|---|
+  | 前 10 行 | 100% | 0% |
+  | 前 50 行 | 100% | 0% |
+  | 前 100 行 | 100% | 0% |
+
+  新排序下的 offset 分页（页大小 200、页间 150ms 往返）收集 862 台、**去重后仍 862，
+  0 重复**（旧排序同期实测 5 轮中 3 轮各丢 14-20 台）。
 - `pytest backend/tests/api/test_devices.py`（22 passed）、
   `+ test_host_retirement_read_filters_1804.py + test_project_routes.py`（110 passed）；
   另全量 `pytest backend/tests/api`：**1295 passed**（462s）。
 - `scripts/run_gates.py check:quick`：14 门全绿（含 ruff / eslint / tsc / knip / gov-surface）。
 - `vitest run src/utils/api/devices.test.ts src/pages/devices src/components/device`：31 + 3 passed。
-- 未做：真机浏览器确认（改动是服务端排序，前端不消费排序语义；`fetchAllDevices` 的分页
-  分支在本机 862 台 < 1200 上限时不会被走到）。
+- 未做：真机浏览器确认。改动是服务端排序，前端不消费排序语义（表格按后端给定顺序渲染），
+  故按上面的生产库 A/B 判到位；`fetchAllDevices` 的分页分支在本机 862 台 < 1200 上限时
+  不会被走到，其修复效果由上面的 SQL 级复现承担。
 
 ## Revisit
 
