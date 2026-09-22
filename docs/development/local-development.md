@@ -299,18 +299,28 @@ WSL 跨机：另设 `STP_SCRIPT_RUNTIME_ROOT=/opt/stability-test-agent/scripts`�
 ## 6. 专属 worktree 里跑门禁（并行执行）
 
 并行 Execution 用专属 worktree（约定位置 `<repo>/.wt/<name>`，见
-[`repository-workflow.md`](./repository-workflow.md)）。**新建的 worktree 没有依赖**，
-而 `scripts/run_gates.py check:quick` 会跑到前端门禁，缺依赖时停在
-`eslint: command not found`。复用主检出已装好的依赖即可（符号链接，不复制）：
+[`repository-workflow.md`](./repository-workflow.md)）。**新建的 worktree 既没有依赖、
+也没有本地配置**，而 `scripts/run_gates.py check:quick` 会跑到前端门禁，缺依赖时停在
+`eslint: command not found`。复用主检出已装好的依赖与本地配置即可（符号链接，不复制）：
 
 ```bash
 # 前端：链接建在 frontend/ 下（相对仓根 3 层）
 ln -s ../../../frontend/node_modules frontend/node_modules
 # Python：链接建在 worktree 根 `.wt/<name>/`（相对仓根 2 层）
 ln -s ../../.venv .venv
+# 测试配置：`scripts/run_pytest.sh` 只在 `.env.test` 存在时 source 它
+ln -s ../../.env.test .env.test
 ```
 
-`node_modules` / `.venv` 均被 `.gitignore` 覆盖，链接不会污染 `git status`。
+`node_modules` / `.venv` / `.env.test` 均被 `.gitignore` 覆盖，链接不会污染 `git status`。
+三者缺一的表现各不相同，**只有前两件会当场报错**：
+
+| 缺 | 表现 |
+|---|---|
+| `node_modules` | `check:quick` 立即红（`eslint: command not found`） |
+| `.venv` | `run_pytest.sh` 报「没有那个文件或目录」 |
+| `.env.test` | `check:quick` 仍全绿；只有走 `run_pytest.sh` 才提示 `hint: copy .env.test.example ...` |
+
 若确实要独立安装依赖，按 [`dependencies-and-quality.md`](./dependencies-and-quality.md) 走。
 
 > 门禁与跳过规则本身对 worktree 布局是透明的；历史上曾在 `.wt/` 下出现假红
