@@ -61,6 +61,8 @@ Tool Contract + 包存储，既有工具族的新版本目录允许继续 legacy
 
 ## 已发布版本不可变
 
+> **ADR-0051（2026-09-22 Accepted）**：不可变性的承载物从源码目录移到内容寻址包；Phase 3 前本节口径（版本目录不可变）继续有效，Phase 2a 落地后本节改写为包口径。
+
 `script.content_sha256` 是扫描时冻结的期望值。原地修改已发布版本只会产生 conflict，
 不会更新数据库基线；引用该版本的 Plan 会在 precheck 阶段
 `script_verify_failed`，self-heal 也无法修复磁盘内容与数据库期望值的失配。
@@ -236,7 +238,7 @@ python -m backend.scripts.check_unreferenced_script_versions [--json] [--name fl
   管理是**有条件的**——仅当被扫子树 == 部署目标（`origin/main`）时才反激活；否则跳过，并把
   跳过的版本显式列进响应 `deactivation_skipped_versions` 且写审计。目录仍在的已停用行永不
   复活；需要无条件反激活时走显式出口 `POST /api/v1/scripts/scan?allow_deactivate=true`
-  （传了即跳过 git 判定）。「盘上缺失」是否等于「已退役」的取向由 **ADR-0046 D2** 裁决，
+  （传了即跳过 git 判定）。「盘上缺失」是否等于「已退役」已由 **ADR-0051 D6**（接管 ADR-0046 D2）裁决为**否**——退役改显式动作、scan 只报告（落地在 ADR-0051 Phase 1 之后），
   当前方向 = scan 只报告、退役走显式运维动作。
 - 反过来的坑是**种子迁移**：已应用的 seed 迁移在 `upgrade()` 分支里显式 `is_active = true`，
   因此空库重建/灾备会复活退役状态。退役是生产数据事实，不经迁移链表达（迁移丢操作者身份与

@@ -1,12 +1,12 @@
 # ADR-0051：发布单元与内容寻址——不可变性从源码目录移到包
 
-- 状态：**Proposed** v0.1（2026-09-22 起草，**待 owner 裁决**；本稿不声明 Accepted。Accepted 当日须同 PR 完成 §9 四组机械改动，否则 S11/S12 门禁当场红）
+- 状态：**Accepted** v1.0（2026-09-22 owner 裁决：§10 五个裁决点**全采推荐项**——D1 包模型 / D3 采 C1 双列 / D6 选 B / D2 例外声明 + 棘轮 / Phase 3 只依赖 2a；§9 四组机械改动随本版同 PR 落地；v0.1 决策材料 PR #3158）
 - 优先级：P1（脚本目录 12 天翻倍、控制面部署源与开发工作区同一棵检出已造成事故；多站点交付 ADR-0041 依赖可 digest 校验的发布物）
 - 目标里程碑：M7
 - 日期：2026-09-22
-- 决策者：待裁决（起草：平台研发组）
+- 决策者：owner（DUElost，2026-09-22）；起草：平台研发组
 - 归属域：semantic-ownership script-version-immutability
-- 归属说明：Proposed 期间该 key 的 owner_anchor 维持表内现值；本 ADR Accepted 当日随 §9 一并改指
+- 归属说明：v1.0 起 `script-version-immutability` 的 owner_anchor 改指本 ADR D1（语义归属表同 PR 改）
 - 标签：release-unit, content-addressing, package-store, script-versioning, deploy-source, anti-corruption, #735, #3075, #1987, #2386
 - 关联：[#735](https://github.com/DUElost/stability-test-platform/issues/735)（脚本膨胀治理）/ [#3075](https://github.com/DUElost/stability-test-platform/issues/3075)（ADR-0033 Phase B 包存储实现）/ [#1987](https://github.com/DUElost/stability-test-platform/issues/1987)、[#2386](https://github.com/DUElost/stability-test-platform/issues/2386)（部署源与检出双重角色）
   / [ADR-0020](./ADR-0020-plan-step-one-shot-migration.md)（本 ADR 修订其「已发布版本目录不可变」的承载物）
@@ -24,6 +24,7 @@
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
+| v1.0 | 2026-09-22 | **owner 裁决 Accepted**：§10 全采推荐项；§9 四组机械改动落地（`AGENTS.md` 总原则条款改写 + S11 锚同步；ADR-0039 / ADR-0046 转 Superseded；adr/README + M7 + DOC-MAP + 语义归属表改指；ADR-0033 D3 一句措辞改采 C1 → v1.13）；D1 补「Phase 3 前版本目录仍是发布单元」过渡句（否则目录保护在 2a 前被提前撤销） |
 | v0.1 | 2026-09-22 | 初稿：用户两轮逐项核对后的方案定稿为 ADR 草案；§2 正面回应 ADR-0039 D6；§3 八条决策；§5 落地顺序按 2a/2b 拆分；§9 Accepted 当日的四组同 PR 机械改动清单 |
 
 ---
@@ -91,6 +92,7 @@
 
 - 平台自研脚本族、外部工具族、控制面代码、Agent 代码、主机资源，**统一**以内容寻址 artifact 为发布单元；身份 = `sha256:<hex>`（复用 ADR-0040 D1 算法与双侧实现，**不另造**）。
 - `AGENTS.md` 总原则「已发布 `backend/agent/scripts/<name>/v<version>/` 不可原地修改或删除」改写为「**已发布的包（`packages/{name}/{version}.tar.gz` 及其登记条目）不可原地修改；删除按 ADR-0039 D2/D3 继承条款**」（S11 锚同 PR 改写，见 §9）。
+- **过渡句（v1.0）**：Phase 3 完成前，`backend/agent/scripts/<name>/v<version>/` 目录**仍是发布单元**，同样不可原地修改或删除（`check-script-version-immutability.py` 判据不变，Phase 3 随目录一起退役）。这是标注过的过渡，出口 = §5 Phase 3。
 - 硬不变量「已存在脚本版本的 `default_params` 不可原地修改；参数变化通过新版本表达」**不变**——新版本 = 新包，成本从「复制目录」降为「打包」。
 
 ### D2：源码——每族一棵源码树，版本目录退役
@@ -215,7 +217,7 @@ ADR-0039 转 Superseded 的时机 = 本 ADR Accepted 当日（§9）。
 - `docs/design/2026-storage-roles-and-aliases.md` 登记 `packages/` 与 `<releases>/` 角色；
 - `docs/development/environment-variables.md` 随 Phase 4 删键。
 
-## 9. Accepted 当日的四组同 PR 机械改动（缺一即门禁红）
+## 9. Accepted 当日的四组同 PR 机械改动（缺一即门禁红）——**v1.0 已随本版落地**
 
 | 组 | 改动 | 触发的门禁 |
 |---|---|---|
@@ -224,7 +226,9 @@ ADR-0039 转 Superseded 的时机 = 本 ADR Accepted 当日（§9）。
 | ③ | `docs/adr/README.md` 主表 + M7 看板、`docs/DOC-MAP.md` 行、ADR-0033 D3 一句措辞与其 README 摘要 | S12 索引一致性（status 词级）、S14 注释版本引用 |
 | ④ | 共享元文件（`AGENTS.md` / `CLAUDE.md` / DOC-MAP / adr README）串行领单 | 执行契约「同一时间只由一个 Execution 修改」 |
 
-## 10. 需要 owner 裁决的点（本稿只给判据与取向）
+## 10. 裁决记录（2026-09-22，owner 全采推荐项）
+
+> v0.1 起草时的五个裁决点与取向原文保留如下；owner 于 2026-09-22 裁定**全部采推荐项**（用户原话「按推荐建议进行下一步」）。
 
 1. **D1**：不可变性的承载物从目录改为包——这是全部其余决策的前提；否决即整篇作废。
 2. **D3**：采 C1 双列（推荐）还是按 ADR-0033 D3 原文让 `content_sha256` 承载整包 sha（弃入口 sha 溯源双轨）。
