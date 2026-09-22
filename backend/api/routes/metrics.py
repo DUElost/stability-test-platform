@@ -270,6 +270,10 @@ def _refresh_script_presence_gauges(db: Session) -> None:
         rows = _presence_counts_by_host(db)
         fresh_min, _fresh_max = _presence_freshness_range(db)
     except SQLAlchemyError:
+        # #3102：本函数是抓取链的**中间**一环（后续还有 lock-wait / 链覆盖等组），
+        # 失败的读会把共享 session 的事务置为 aborted——不 rollback 的话，后续各组
+        # 会在同一次 scrape 里连环失败并静默缺失（比「缺这一组」严重得多）。
+        db.rollback()
         logger.warning("metrics_script_presence_refresh_failed", exc_info=True)
         return
 

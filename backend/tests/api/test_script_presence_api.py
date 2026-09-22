@@ -142,3 +142,24 @@ async def test_refresh_is_host_scoped(client, db_session, admin_headers, monkeyp
 
     r2 = client.post("/api/v1/script-presence/refresh?host_id=nope", headers=admin_headers)
     assert r2.status_code == 404
+
+
+# ── #3091：写端点必须 require_admin ────────────────────────────────────────
+
+def test_refresh_requires_admin(client, db_session, auth_headers):
+    """非管理员触发 refresh 必须 403（写端点：agent RPC + 账本 upsert，与同域写端点一致）。"""
+    _seed_host(db_session, "h-admin")
+    db_session.commit()
+    r = client.post("/api/v1/script-presence/refresh?host_id=h-admin", headers=auth_headers)
+    assert r.status_code == 403
+
+
+def test_refresh_retired_host_is_404(client, db_session, admin_headers):
+    """#3089：退役 host 不在账本射程 → 明确 4xx（此前 200 + 全零是静默空转）。"""
+    host = _seed_host(db_session, "h-retired-presence")
+    host.retired_at = datetime.now(timezone.utc)
+    db_session.commit()
+    r = client.post("/api/v1/script-presence/refresh?host_id=h-retired-presence",
+                    headers=admin_headers)
+    assert r.status_code == 404
+    assert "retired" in r.json()["detail"]

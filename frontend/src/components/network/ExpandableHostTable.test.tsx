@@ -467,6 +467,7 @@ describe('脚本在位（#2958 第五道闸）', () => {
     render(
       <ExpandableHostTable
         hosts={[host]}
+        isAdmin
         onLoadHostScriptPresence={onLoad}
         onRefreshHostScriptPresence={onRefresh}
       />,
@@ -478,6 +479,25 @@ describe('脚本在位（#2958 第五道闸）', () => {
     fireEvent.click(screen.getByRole('button', { name: `${host.name} 重新核验脚本在位` }));
     await waitFor(() => expect(onRefresh).toHaveBeenCalledWith(host.id));
     await waitFor(() => expect(onLoad).toHaveBeenCalledTimes(2));
+  });
+
+  it('非管理员不渲染「重新核验」（#3091：该动作触发 require_admin 写端点）', async () => {
+    const onLoad = vi.fn().mockResolvedValue(hostPresence);
+    const onRefresh = vi.fn().mockResolvedValue({});
+    render(
+      <ExpandableHostTable
+        hosts={[host]}
+        onLoadHostScriptPresence={onLoad}
+        onRefreshHostScriptPresence={onRefresh}
+      />,
+    );
+
+    fireEvent.click(screen.getByText(host.name));
+    await screen.findByText('powercycle_setup@0.2.0');   // 区块本身仍可读
+
+    expect(
+      screen.queryByRole('button', { name: `${host.name} 重新核验脚本在位` }),
+    ).toBeNull();
   });
 
   it('stale=true 时逐台区块顶部给陈旧提示', async () => {
