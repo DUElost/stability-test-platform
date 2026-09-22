@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ExpandableDeviceTable } from './ExpandableDeviceTable';
 import { BULK_BAR_SPACER_CLASS } from '@/components/ui/bulk-action-bar';
@@ -259,6 +259,31 @@ describe('ExpandableDeviceTable', () => {
 
     // 没有 onSelectionChange => 页面不会渲染批量条 => 不该有无故留白
     expect(screen.queryByTestId('device-table-selection-spacer')).not.toBeInTheDocument();
+  });
+
+  // #3131：limit 是单次响应护栏，设备数越过它时已加载条数 < 服务端 total。
+  // 拿 devices.length 当总数会静默少报，必须用 total 并显式提示列表不完整。
+  it('shows the server total on the all-devices card, not the loaded count', () => {
+    render(<ExpandableDeviceTable devices={devices} totalCount={9} />);
+
+    // 「全部设备」文案在下拉的 option 里也有一份，按角色取统计卡按钮
+    const allCard = screen.getByRole('button', { name: /全部设备/ });
+    expect(within(allCard).getByText('9')).toBeInTheDocument();
+  });
+
+  it('warns when fewer devices than the server total are loaded', () => {
+    render(<ExpandableDeviceTable devices={devices} totalCount={9} />);
+
+    const banner = screen.getByTestId('device-table-truncated');
+    expect(banner).toHaveTextContent('设备总数 9 台，本次仅加载 1 台');
+    // 搜索/筛选只作用于已加载部分——必须说出来，否则「搜不到」会被读成「不存在」
+    expect(banner).toHaveTextContent('未加载的设备不会出现在结果里');
+  });
+
+  it('stays quiet when everything is loaded', () => {
+    render(<ExpandableDeviceTable devices={devices} totalCount={1} />);
+
+    expect(screen.queryByTestId('device-table-truncated')).not.toBeInTheDocument();
   });
 
 });
