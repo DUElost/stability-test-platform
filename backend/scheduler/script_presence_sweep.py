@@ -13,13 +13,20 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from backend.services.script_presence import DEFAULT_HISTORY_DAYS, run_sweep
+from backend.core.settings.scheduler import get_scheduler_settings
+from backend.services.script_presence import run_sweep
 
 logger = logging.getLogger(__name__)
 
 
-async def script_presence_sweep_job(*, days: int = DEFAULT_HISTORY_DAYS) -> dict[str, Any]:
-    """跑一轮 sweep 并返回汇总（APScheduler 会把返回值记进 job 结果）。"""
+async def script_presence_sweep_job(*, days: int | None = None) -> dict[str, Any]:
+    """跑一轮 sweep 并返回汇总（APScheduler 会把返回值记进 job 结果）。
+
+    `days` 缺省取 `SCRIPT_PRESENCE_HISTORY_DAYS`（#3089：该旋钮此前无读取方，
+    登记了却不生效——现在调度与按需刷新都走它）。
+    """
+    if days is None:
+        days = int(get_scheduler_settings().script_presence_history_days)
     result = await run_sweep(days=days)
     logger.info(
         "script_presence_sweep_job_done sweep=%s hosts=%d rows=%d gaps=%d unknown=%d",

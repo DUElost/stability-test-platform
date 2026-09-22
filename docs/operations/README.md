@@ -118,7 +118,7 @@ deploy/
   （六态：`present / missing / mismatch / unknown / n_a / maintenance`）。查询：
   `GET /api/v1/script-presence/summary`（fleet 汇总 + `stale`）与
   `GET /api/v1/script-presence/hosts/{host_id}`（单机明细）；单机按需重核
-  `POST /api/v1/script-presence/refresh?host_id=…`。指标
+  `POST /api/v1/script-presence/refresh?host_id=…`（管理员；退役 host 返回 404）。指标
   `stability_host_script_presence{host_id,state}` + 账本新鲜度
   `stability_script_presence_sweep_timestamp`；告警两条成对：
   `StabilityHostScriptPresenceGap`（缺口 >0，维护窗与未知态不计入）与
