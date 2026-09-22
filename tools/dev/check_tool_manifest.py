@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -146,17 +147,30 @@ def append_only_diff(base_doc: dict, head_doc: dict) -> list[str]:
     return errs
 
 
+def _git_env() -> dict:
+    # 判据走退出码，stderr 文案不参与判定（#2957 教训：本地化 git 会换文案）。
+    return {**os.environ, "LC_ALL": "C"}
+
+
 def load_ref_manifest(ref: str) -> dict | None:
     """读 ``ref`` 上的 manifest；文件不存在返回 None（首登合法），JSON 坏 → SystemExit。"""
-    proc = subprocess.run(
-        ["git", "show", f"{ref}:{MANIFEST_PATH}"], capture_output=True, text=True, check=False
+    rev = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
+        capture_output=True, text=True, check=False, env=_git_env(),
     )
-    if proc.returncode != 0:
-        if "does not contain" in proc.stderr or "exists on disk, but not in" in proc.stderr:
-            return None
-        raise SystemExit(f"git show {ref}:{MANIFEST_PATH} 失败:\n{proc.stderr.strip()}")
+    if rev.returncode != 0:
+        raise SystemExit(f"基线 ref 不可解析：{ref}（CI 浅克隆需 fetch base；fail-closed）")
+    exists = subprocess.run(
+        ["git", "cat-file", "-e", f"{ref}:{MANIFEST_PATH}"],
+        capture_output=True, text=True, check=False, env=_git_env(),
+    )
+    if exists.returncode != 0:
+        return None  # 该 ref 无此文件（首次登记合法）
+    raw = subprocess.run(
+        ["git", "show", f"{ref}:{MANIFEST_PATH}"], capture_output=True, text=True, check=False, env=_git_env()
+    ).stdout
     try:
-        return json.loads(proc.stdout)
+        return json.loads(raw)
     except json.JSONDecodeError as exc:
         raise SystemExit(f"{ref}:{MANIFEST_PATH} 不是合法 JSON: {exc}") from None
 
