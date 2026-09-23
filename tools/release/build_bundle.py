@@ -204,10 +204,14 @@ def _digests(bundle: Path) -> dict[str, str]:
     extra = {
         "stp_schemas/pipeline_schema.json": str(bundle / "backend" / "schemas" / "pipeline_schema.json"),
     }
-    return {
+    out = {
         kind: module.digest_entries(module.collect_artifact_entries(str(agent_dir), extra, kind=kind))
         for kind in ("code", "resources")
     }
+    # ADR-0051 Phase 4：控制面自身载荷（backend/** 除 agent）也有摘要面——
+    # #2269 的「不在任何摘要面内」类文件从此进摘要（不排除 .env*，见量具 docstring）。
+    out["control-plane"] = module.digest_entries(module.collect_control_plane_entries(str(bundle)))
+    return out
 
 
 def build_bundle(
@@ -265,6 +269,7 @@ def build_bundle(
         "components": [
             {"name": "agent-code", "digest": digests["code"]},
             {"name": "host-resources", "digest": digests["resources"]},
+            {"name": "control-plane", "digest": digests["control-plane"]},
         ],
         "database": {"schema_target": schema_target or _schema_target(out)},
         "compatibility": {
@@ -295,6 +300,7 @@ def build_bundle(
         "revision": revision,
         "components": {
             "agent-code": digests["code"], "host-resources": digests["resources"],
+            "control-plane": digests["control-plane"],
         },
         "schema_target": manifest["database"]["schema_target"],
         "wheelhouse": wheelhouse,
