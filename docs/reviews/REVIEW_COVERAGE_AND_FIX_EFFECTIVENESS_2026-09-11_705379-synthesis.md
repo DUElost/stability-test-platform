@@ -88,7 +88,7 @@
      - [`backend/realtime/log_writer.py:20-26`](../../backend/realtime/log_writer.py#L20-L26) `_locks: Dict[int, asyncio.Lock]` **无任何淘汰机制**，随不同 `job_id` 单调递增泄漏；
      - [`backend/agent/heartbeat_thread.py:84,185`](../../backend/agent/heartbeat_thread.py#L84) `_pending_reconnected_serials` 在心跳失败时无限累积。
 5. **跨时区、时钟阶跃与 NTP 风险（Timezone, Clock Skew & NTP Steps）**：
-   - Agent 脚本多处使用 `time.time()` 进行超时死等（如 [`mtbf_setup.py:236`](../../backend/agent/scripts/mtbf_setup/v1.3.0/mtbf_setup.py#L236)），而非单调时钟 `time.monotonic()`。NTP 对时回跳时死等挂死，前跳时用例早退；
+   - Agent 脚本多处使用 `time.time()` 进行超时死等（如 [`mtbf_setup.py:236`](../../backend/agent/scripts/mtbf_setup/mtbf_setup.py)），而非单调时钟 `time.monotonic()`。NTP 对时回跳时死等挂死，前跳时用例早退；
    - 多处把本地 naive 时间通过 `replace(tzinfo=timezone.utc)` 强转修正，导致乐观锁冲突误判（如 `plans.py:718`）。
 6. **客户端写请求幂等性缺失（Client-supplied Idempotency）**：
    - 全仓 104 个写端点中，**0 个支持客户端传入 `Idempotency-Key` 或 `X-Request-Id`**，仅有服务端派生的内部防重；前端或 Agent 在网络抖动重试 POST 时无端到端防重保护。

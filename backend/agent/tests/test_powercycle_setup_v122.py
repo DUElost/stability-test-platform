@@ -36,13 +36,13 @@ def _load(name: str, rel_path: str):
 
 @pytest.fixture(scope="module")
 def lib_v122():
-    return _load("powercycle_lib_v122", "powercycle_setup/v1.2.2/_lib.py")
+    return _load("powercycle_lib_v122", "powercycle_setup/_lib.py")
 
 
 @pytest.fixture(scope="module")
 def lib_v121():
     """对照锚点：v1.2.1 不可变，只读加载以钉住「只等 adbd」的旧形态。"""
-    return _load("powercycle_lib_v121_anchor", "powercycle_setup/v1.2.1/_lib.py")
+    return _load("powercycle_lib_v121_anchor", "powercycle_setup/_lib.py")
 
 
 class _FakeAdb:
@@ -205,24 +205,3 @@ class TestV122EvidenceOnExhaustion:
         assert 7.0 in clock["sleeps"]
 
 
-class TestV121Anchor:
-    def test_v121_waits_only_for_adbd_not_boot_completed(
-        self, lib_v121, monkeypatch, tmp_path
-    ):
-        """对照锚点：v1.2.1 重试前只 ``wait-for-device``（不看 boot_completed）。
-
-        该版本已发布、不可原地修改——本用例只读断言其行为，证明 v1.2.2 的差异
-        来源是判定（系统就绪 vs adbd 可见）而不是环境。
-        """
-        _patch_clock(monkeypatch, lib_v121)
-        fake = _FakeAdb({
-            "push": [(1, "", "adb: device 'S1' not found"), (0, "1 file pushed", "")],
-            "pm install": [(0, "Success", "")],
-            "wait-for-device": [(0, "", "")],
-        })
-        monkeypatch.setattr(lib_v121, "adb", fake)
-
-        lib_v121.install_apk(_apk(tmp_path))
-
-        assert fake.count("wait-for-device") == 1
-        assert fake.count("getprop") == 0, "v1.2.1 无 boot 门——v1.2.2 的差异来源"

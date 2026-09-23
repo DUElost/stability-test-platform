@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 _SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
-_V103 = _SCRIPTS / "flash_preflight" / "v1.0.3" / "flash_preflight.py"
+_V103 = _SCRIPTS / "flash_preflight" / "flash_preflight.py"
 
 
 def _load():

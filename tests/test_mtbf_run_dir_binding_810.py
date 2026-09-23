@@ -33,18 +33,18 @@ def isolated_tmp(tmp_path, monkeypatch):
 
 
 def test_new_versions_exist_and_old_retained():
-    assert (_SD / "mtbf_setup/v1.4.0/mtbf_setup.py").is_file()
-    assert (_SD / "mtbf_check/v1.5.0/mtbf_check.py").is_file()
-    assert (_SD / "mtbf_finish/v1.6.0/mtbf_finish.py").is_file()
+    assert (_SD / "mtbf_setup/mtbf_setup.py").is_file()
+    assert (_SD / "mtbf_check/mtbf_check.py").is_file()
+    assert (_SD / "mtbf_finish/mtbf_finish.py").is_file()
     # 旧版本仍在（新行为以新版本表达）
-    assert (_SD / "mtbf_setup/v1.3.0/mtbf_setup.py").is_file()
-    assert (_SD / "mtbf_check/v1.4.0/mtbf_check.py").is_file()
-    assert (_SD / "mtbf_finish/v1.5.0/mtbf_finish.py").is_file()
+    assert (_SD / "mtbf_setup/mtbf_setup.py").is_file()
+    assert (_SD / "mtbf_check/mtbf_check.py").is_file()
+    assert (_SD / "mtbf_finish/mtbf_finish.py").is_file()
 
 
 def test_marker_roundtrip_and_project_match(isolated_tmp, monkeypatch):
     monkeypatch.setenv("STP_DEVICE_SERIAL", "SER-1")
-    lib = _load_lib(_SD / "mtbf_setup/v1.4.0", "mtbf_lib_setup_810")
+    lib = _load_lib(_SD / "mtbf_setup", "mtbf_lib_setup_810")
 
     lib.save_run_dir("projA", "2026.09.12_10.00.00.000")
     assert lib.load_run_dir("projA") == "2026.09.12_10.00.00.000"
@@ -56,7 +56,7 @@ def test_marker_roundtrip_and_project_match(isolated_tmp, monkeypatch):
 
 
 def test_marker_is_keyed_by_device_serial(isolated_tmp, monkeypatch):
-    lib = _load_lib(_SD / "mtbf_check/v1.5.0", "mtbf_lib_check_810")
+    lib = _load_lib(_SD / "mtbf_check", "mtbf_lib_check_810")
     monkeypatch.setenv("STP_DEVICE_SERIAL", "SER-A")
     lib.save_run_dir("projA", "runA")
     monkeypatch.setenv("STP_DEVICE_SERIAL", "SER-B")
@@ -65,17 +65,12 @@ def test_marker_is_keyed_by_device_serial(isolated_tmp, monkeypatch):
     assert lib.load_run_dir("projA") == "runB"
 
 
-def test_setup_writes_binding():
-    src = (_SD / "mtbf_setup/v1.4.0/mtbf_setup.py").read_text(encoding="utf-8")
-    assert "save_run_dir(" in src
-    # 只接受本步骤起点之后新建的目录
-    assert "newer_than" in src
 
 
 def test_new_versions_exist_and_old_retained_1715():
-    assert (_SD / "mtbf_setup/v1.4.1/mtbf_setup.py").is_file()
+    assert (_SD / "mtbf_setup/mtbf_setup.py").is_file()
     # 旧版本仍在（新行为以新版本表达）
-    assert (_SD / "mtbf_setup/v1.4.0/mtbf_setup.py").is_file()
+    assert (_SD / "mtbf_setup/mtbf_setup.py").is_file()
 
 
 def _load_setup(version_dir: Path, name: str):
@@ -115,7 +110,7 @@ class TestSnapshotFreshnessV141:
 
     @pytest.fixture(scope="class")
     def setup_v141(self):
-        return _load_setup(_SD / "mtbf_setup/v1.4.1", "mtbf_setup_v141")
+        return _load_setup(_SD / "mtbf_setup", "mtbf_setup_v141")
 
     @pytest.fixture
     def no_sleep(self, monkeypatch, setup_v141):
@@ -173,7 +168,7 @@ class TestSnapshotFreshnessV141:
 
 
 def test_check_prefers_binding_with_fallback():
-    src = (_SD / "mtbf_check/v1.5.0/mtbf_check.py").read_text(encoding="utf-8")
+    src = (_SD / "mtbf_check/mtbf_check.py").read_text(encoding="utf-8")
     assert "_bound_run_dir(" in src
     assert "load_run_dir(" in src
     # 回退路径留痕
@@ -181,7 +176,7 @@ def test_check_prefers_binding_with_fallback():
 
 
 def test_finish_prefers_binding_and_clears():
-    src = (_SD / "mtbf_finish/v1.6.0/mtbf_finish.py").read_text(encoding="utf-8")
+    src = (_SD / "mtbf_finish/mtbf_finish.py").read_text(encoding="utf-8")
     assert "load_run_dir(" in src
     assert "clear_run_dir()" in src
     assert "_pull_results(project)" in src

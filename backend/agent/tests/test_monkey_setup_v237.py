@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 
 _SCRIPT_DIR = (
-    Path(__file__).resolve().parents[2] / "agent" / "scripts" / "monkey_setup" / "v2.3.7"
+    Path(__file__).resolve().parents[2] / "agent" / "scripts" / "monkey_setup"
 )
 
 

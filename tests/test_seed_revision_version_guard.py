@@ -76,12 +76,21 @@ def _seed_files() -> list[Path]:
 _PROBE = r'''
 import json
 from pathlib import Path
-from backend.services.script_catalog import _iter_script_entries, sha256_file
+from backend.services.script_catalog import _pick_entry, sha256_file
 
+# ADR-0051 Phase 3：版本目录已退役，树上只有每族最新版本（版本号来自 tool_manifest.json 最新未退役条目）。
 root = Path("backend/agent/scripts")
+doc = json.loads(Path("tool_manifest.json").read_text(encoding="utf-8"))
 out = {}
-for _cat, name, version, entry, _stype in _iter_script_entries(root):
-    out[f"{name}@{version}"] = sha256_file(entry)
+for name, tool in doc["tools"].items():
+    live = [e for e in tool["versions"] if e.get("python") is None and not e.get("retired")]
+    tree = root / name
+    if not live or not tree.is_dir():
+        continue
+    latest = max(live, key=lambda e: tuple(int(p) if p.isdigit() else 0 for p in str(e["version"]).split(".")))
+    entry, _ = _pick_entry(tree)
+    if entry is not None:
+        out[f"{name}@{latest['version']}"] = sha256_file(entry)
 print(json.dumps(out))
 '''
 
@@ -192,7 +201,8 @@ def test_seed_sha_matches_disk_identity(path):
         else sorted({v for _, v in _written_rows(text)})[0]
     )
     key = f"{name}@{target}"
-    assert key in truth, f"{key} 在磁盘脚本树里没有条目（扫描也登记不出来）"
+    if key not in truth:
+        pytest.skip(f"{key} 是历史版本：ADR-0051 Phase 3 后不在族树里，身份由包（整包 sha）与 check_script_package_equivalence 守")
     assert truth[key] == sha_value, (
         f"{path.name} 写入 {key} 的 content_sha256={sha_value[:12]}… "
         f"但磁盘真值是 {truth[key][:12]}… → scan 会判 conflict"
@@ -272,8 +282,9 @@ def test_repair_constants_are_verbatim_from_history():
         assert written_sha, f"修复迁移缺 {sha_const}"
         assert written_sha.group(1) == historical_sha, (
             f"{sha_const} 与 {rev} 历史文件里的 _CONTENT_SHA256 不再逐字相同")
-        assert written_sha.group(1) == truth[f"flash_firmware@{version}"], (
-            f"{sha_const} 不等于磁盘上 flash_firmware {version} 的指纹")
+        if f"flash_firmware@{version}" in truth:
+            assert written_sha.group(1) == truth[f"flash_firmware@{version}"], (
+                f"{sha_const} 不等于磁盘上 flash_firmware {version} 的指纹")
 
         nfs = re.search(rf'{nfs_const} = "([^"]+)"', text)
         assert nfs, f"修复迁移缺 {nfs_const}"

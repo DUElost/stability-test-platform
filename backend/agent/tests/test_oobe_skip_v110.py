@@ -17,7 +17,7 @@ import pytest
 
 _SCRIPT_DIR = (
     Path(__file__).resolve().parents[2]
-    / "agent" / "scripts" / "oobe_skip" / "v1.1.0"
+    / "agent" / "scripts" / "oobe_skip"
 )
 
 spec = importlib.util.spec_from_file_location(

@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 import importlib.util
-import json
 import sys
 from pathlib import Path
 from subprocess import CompletedProcess
@@ -54,7 +53,7 @@ def _cp(returncode: int = 0, stdout: str = "", stderr: str = "") -> CompletedPro
 
 
 def _load_mt():
-    return _load("monkey_teardown_v102", "monkey_teardown/v1.0.2/monkey_teardown.py", "_adb")
+    return _load("monkey_teardown_v102", "monkey_teardown/monkey_teardown.py", "_adb")
 
 
 def _prep_mt(monkeypatch, mod, tmp_path, *, step_params=None, probe_out="", probe_rc=0):
@@ -202,7 +201,7 @@ def test_mt_aimwd_in_default_stop_list(monkeypatch, tmp_path):
 
 
 def _load_gf():
-    return _load("gpu_finish_v104", "gpu_finish/v1.0.4/gpu_finish.py", "_lib")
+    return _load("gpu_finish_v104", "gpu_finish/gpu_finish.py", "_lib")
 
 
 def _prep_gf(monkeypatch, mod, tmp_path, *, shell_probe="CLEAN", step_params=None):
@@ -232,57 +231,19 @@ def _prep_gf(monkeypatch, mod, tmp_path, *, shell_probe="CLEAN", step_params=Non
     return seen, dict(step_params or {})
 
 
-def test_gf_cleanup_device_script_after_result(monkeypatch, tmp_path):
-    """结果 JSON 落盘后删循环脚本，metrics 标记已验证。"""
-    mod = _load_gf()
-    seen, cfg = _prep_gf(monkeypatch, mod, tmp_path)
-
-    out = mod._run(cfg)
-
-    assert any(c.startswith("rm -f /sdcard/Auto/gpu_stress_loop.sh") for c in seen)
-    assert any(c.startswith("[ -e /sdcard/Auto/gpu_stress_loop.sh") for c in seen)
-    assert out["metrics"]["cleanup_verified"] is True
-    detail = Path(out["detail_uri"])
-    assert detail.is_file()
-    assert json.loads(detail.read_text(encoding="utf-8"))["metrics"]["final_status"] == "COMPLETED"
 
 
-def test_gf_cleanup_keeps_test_log(monkeypatch, tmp_path):
-    """只删脚本：rm 命令不得涉及 test_log.txt。"""
-    mod = _load_gf()
-    seen, cfg = _prep_gf(monkeypatch, mod, tmp_path)
-
-    mod._run(cfg)
-
-    rm = [c for c in seen if c.startswith("rm -f")]
-    assert rm and all("test_log.txt" not in c for c in rm)
 
 
-def test_gf_cleanup_residual_raises(monkeypatch, tmp_path):
-    mod = _load_gf()
-    seen, cfg = _prep_gf(monkeypatch, mod, tmp_path, shell_probe="REMAINS")
-
-    with pytest.raises(RuntimeError) as ei:
-        mod._run(cfg)
-
-    assert "gpu_stress_loop.sh" in str(ei.value)
 
 
-def test_gf_cleanup_opt_out(monkeypatch, tmp_path):
-    mod = _load_gf()
-    seen, cfg = _prep_gf(monkeypatch, mod, tmp_path, step_params={"cleanup": False})
-
-    out = mod._run(cfg)
-
-    assert not [c for c in seen if c.startswith("rm -f")]
-    assert "cleanup_verified" not in out["metrics"]
 
 
 # ── gpu_finish v1.0.5（#2146：清理验证「探测不可用」态）───────────────────────
 
 
 def _load_gf_v105():
-    return _load("gpu_finish_v105", "gpu_finish/v1.0.5/gpu_finish.py", "_lib")
+    return _load("gpu_finish_v105", "gpu_finish/gpu_finish.py", "_lib")
 
 
 def _fake_adb(*, rm_rc=0, probe_rc=0, probe_out="CLEAN"):

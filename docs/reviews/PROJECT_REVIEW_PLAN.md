@@ -145,7 +145,7 @@
   [控制面脚本目录](../../backend/services/script_catalog.py)。
 - **测试入口**：[脚本校验测试](../../backend/agent/tests/test_script_verifier.py)、
   [脚本注册测试](../../backend/agent/tests/test_script_registry.py)、
-  [版本不可变门禁测试](../../tests/test_script_version_immutability_gate.py)。
+  `版本不可变门禁测试`（已随 ADR-0051 Phase 3 退役）。
 - **权威文档**：[脚本版本约定](../development/script-versioning.md)、
   [工具接入 ADR](../adr/ADR-0033-tool-kit-ecosystem-integration.md)、
   [工具接入设计](../design/2026-09-external-tools-integration-and-package-architecture.md)。

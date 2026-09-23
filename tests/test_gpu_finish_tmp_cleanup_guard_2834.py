@@ -19,7 +19,7 @@ from pathlib import Path
 from tools.dev.source_anchor import SourceGuard
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-ENTRY_REL = "backend/agent/scripts/gpu_finish/v1.0.6/gpu_finish.py"
+ENTRY_REL = "backend/agent/scripts/gpu_finish/gpu_finish.py"
 
 #: v1.0.5 的旧形态：`local = Path(tempfile.mkdtemp(prefix="gpu-results-")) / "test_log.txt"`
 LEAK_SHAPE = 'Path(tempfile.mkdtemp(prefix="'

@@ -35,7 +35,7 @@ def _load(name: str, rel_path: str):
 
 @pytest.fixture(scope="module")
 def finish():
-    return _load("mtbf_finish_v150", "mtbf_finish/v1.5.0/mtbf_finish.py")
+    return _load("mtbf_finish_v150", "mtbf_finish/mtbf_finish.py")
 
 
 class TestResultStem:

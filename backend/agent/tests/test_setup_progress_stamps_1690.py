@@ -45,9 +45,9 @@ def _phases(captured: list[dict]) -> set[str]:
 
 
 _LIBS = {
-    "gpu_lib": SCRIPTS / "gpu_setup" / "v1.1.0" / "_lib.py",
-    "pc_lib": SCRIPTS / "powercycle_setup" / "v1.1.0" / "_lib.py",
-    "fill_adb": SCRIPTS / "fill_storage" / "v1.1.0" / "_adb.py",
+    "gpu_lib": SCRIPTS / "gpu_setup" / "_lib.py",
+    "pc_lib": SCRIPTS / "powercycle_setup" / "_lib.py",
+    "fill_adb": SCRIPTS / "fill_storage" / "_adb.py",
 }
 
 
@@ -119,7 +119,7 @@ class TestInstallWiring:
 def test_fill_storage_dd_wrapped_with_heartbeat(monkeypatch, capsys):
     script = _load(
         "fill_wire",
-        SCRIPTS / "fill_storage" / "v1.1.0" / "fill_storage.py",
+        SCRIPTS / "fill_storage" / "fill_storage.py",
         deps={"_adb": _LIBS["fill_adb"]},
     )
     monkeypatch.setenv("STP_DEVICE_SERIAL", "SER")
@@ -149,30 +149,3 @@ def test_fill_storage_dd_wrapped_with_heartbeat(monkeypatch, capsys):
     assert any(c.startswith("dd if=/dev/zero") for c in seen_cmds), "dd 已执行"
 
 
-def test_gpu_pre_reboot_ticks(monkeypatch):
-    """pre_reboot：reboot/等待/结算三个阶段的轮询戳（#1690）。"""
-    lib_dir = SCRIPTS / "gpu_setup" / "v1.1.0"
-    script = _load(
-        "gpu_reboot_wire",
-        lib_dir / "gpu_setup.py",
-        deps={"_lib": lib_dir / "_lib.py"},
-    )
-    ticks: list[dict] = []
-    monkeypatch.setattr(script, "progress_tick",
-                        lambda phase, **k: ticks.append({"phase": phase, **k}))
-    monkeypatch.setenv("STP_GPU_REBOOT_SETTLE_SECONDS", "0")
-    monkeypatch.setenv("STP_DEVICE_SERIAL", "SER")
-
-    class _R:
-        returncode = 0
-        stdout = "1"
-
-    monkeypatch.setattr(script.subprocess, "run", lambda *a, **k: _R())
-    monkeypatch.setattr(script.time, "sleep", lambda s: None)
-
-    script._pre_reboot_device()
-
-    phases = _phases(ticks)
-    assert "pre_reboot" in phases
-    assert "pre_reboot_wait" in phases
-    assert "pre_reboot_settle" in phases

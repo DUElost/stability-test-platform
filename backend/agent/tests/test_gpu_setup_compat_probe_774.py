@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
-V122 = SCRIPTS / "gpu_setup" / "v1.2.2"
+V122 = SCRIPTS / "gpu_setup"
 
 
 def _load_lib():

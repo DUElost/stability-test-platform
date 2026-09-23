@@ -667,19 +667,23 @@ def _run_service_tool(
             db.close()
 
     if name == "scan_script_catalog":
-        from backend.services.script_catalog import scan_script_root
+        from backend.services.script_catalog import default_packages_root, sync_scripts_from_manifest
 
-        root = os.getenv("STP_SCRIPT_ROOT", "").strip()
-        if not root:
-            raise RuntimeError("STP_SCRIPT_ROOT 未配置（scripts scan 503 同源约束）")
+        packages_root = default_packages_root()
+        if packages_root is None:
+            raise RuntimeError("STP_PACKAGES_ROOT / STP_AEE_NFS_ROOT 未配置（scripts scan 503 同源约束）")
         db = SessionLocal()
         try:
-            result = scan_script_root(db, root)
+            result = sync_scripts_from_manifest(
+                db, (os.getenv("STP_TOOL_MANIFEST") or "").strip() or None, packages_root,
+                (os.getenv("STP_SCRIPT_RUNTIME_ROOT") or "").strip() or None,
+            )
         finally:
             db.close()
         return (
-            f"扫描完成：新建 {result.created} / 跳过 {result.skipped} / "
-            f"停用 {result.deactivated} / 冲突 {len(result.conflicts)}"
+            f"同步完成：新建 {result.created} / 跳过 {result.skipped} / "
+            f"退役 {result.deactivated} / 冲突 {len(result.conflicts)} / "
+            f"包缺失 {len(result.package_missing)}"
         )
 
     if name == "test_notification_channel":

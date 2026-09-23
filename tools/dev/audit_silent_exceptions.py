@@ -45,7 +45,9 @@ ROOT = Path(__file__).resolve().parents[2]
 SCAN_DIRS = (ROOT / "backend", ROOT / "tools", ROOT / "scripts")
 
 #: 已发布脚本版本目录（ADR-0020 不可修改）——排除。
-_FROZEN_SCRIPT_RE = re.compile(r"^backend/agent/scripts/[^/]+/v[0-9][^/]*/")
+# ADR-0051 Phase 3：版本目录已退役，脚本族树（backend/agent/scripts/<name>/）按包发布、
+# 属独立审计面，整棵排除（此前只排除 v<version>/ 冻结目录）。
+_FROZEN_SCRIPT_RE = re.compile(r"^backend/agent/scripts/[^/]+/")
 #: alembic 历史 revision（#2258 不可改写）——排除。
 _FROZEN_ALEMBIC_PREFIX = "backend/alembic/versions/"
 #: 第三方随包工具（AIMonkey / flashtool）——**不是我们的代码**，排除。

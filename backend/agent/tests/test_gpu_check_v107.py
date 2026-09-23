@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 _SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
-_V107 = _SCRIPTS / "gpu_check" / "v1.0.7"
+_V107 = _SCRIPTS / "gpu_check"
 
 
 def _load():

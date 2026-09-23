@@ -11,8 +11,8 @@
     python -m backend.scripts.check_unreferenced_script_versions --json
     python -m backend.scripts.check_unreferenced_script_versions --name flash_firmware
     python -m backend.scripts.check_unreferenced_script_versions --guard   # 巡检：超期零引用仍活跃 → exit 1
-    STP_SCRIPT_ROOT=... python -m backend.scripts.check_unreferenced_script_versions --pending-activation  # #2931 待激活视图
-    STP_SCRIPT_ROOT=... python -m backend.scripts.check_unreferenced_script_versions --plan-step-drift     # #3030 重指漂移视图
+    python -m backend.scripts.check_unreferenced_script_versions --pending-activation  # #2931 待激活视图（head 来自 tool_manifest.json）
+    python -m backend.scripts.check_unreferenced_script_versions --plan-step-drift     # #3030 重指漂移视图（head 来自 tool_manifest.json）
     python backend/scripts/check_unreferenced_script_versions.py --guard   # 路径形态等价
 
 只读 SELECT；不写库、不改状态。退出码：默认恒 0（诊断工具，非门禁）；`--guard` 是显式
@@ -170,24 +170,40 @@ def _report(
 _DIR_VERSION_RE = re.compile(r"^v(.+)$")
 
 
-def scan_disk_script_versions(root: Path) -> dict[str, list[str]]:
-    """枚举 `STP_SCRIPT_ROOT` 下 `<name>/v<version>/` 目录（非法名/非目录跳过）。"""
+def _manifest_path_or_none() -> "str | None":
+    """ADR-0051 Phase 3：版本 head 的事实源 = `tool_manifest.json`（`STP_TOOL_MANIFEST` 可覆盖，缺省仓根）。"""
+    explicit = (os.getenv("STP_TOOL_MANIFEST") or "").strip()
+    cand = Path(explicit) if explicit else Path(__file__).resolve().parents[2] / "tool_manifest.json"
+    return str(cand) if cand.is_file() else None
+
+
+def scan_manifest_script_versions(manifest_path: Path) -> dict[str, list[str]]:
+    """ADR-0051 Phase 3：「磁盘 head」改由 `tool_manifest.json` 定义——每族**未退役**版本列表（排序）。
+
+    版本目录已退役，Git 唯一事实源就是 manifest；平台脚本族 = 任一条目 `python` 为 null 的族。
+    缺失/坏文件 → 空（调用方按 UNKNOWN 处理）。
+    """
     out: dict[str, list[str]] = {}
-    if not root.is_dir():
+    try:
+        doc = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
         return out
-    for fam in sorted(root.iterdir()):
-        if not fam.is_dir() or fam.name.startswith((".", "_")):
+    for name, tool in (doc.get("tools") or {}).items():
+        versions = (tool or {}).get("versions") or []
+        if not any(e.get("python") is None for e in versions):
             continue
-        versions: list[str] = []
-        for child in fam.iterdir():
-            if not child.is_dir():
-                continue
-            m = _DIR_VERSION_RE.match(child.name)
-            if m and m.group(1):
-                versions.append(m.group(1))
-        if versions:
-            out[fam.name] = sorted(versions)
+        live = sorted(str(e["version"]) for e in versions if e.get("version") and not e.get("retired"))
+        if live:
+            out[str(name)] = live
     return out
+
+
+def scan_disk_script_versions(root: Path) -> dict[str, list[str]]:
+    """兼容名：Phase 3 前枚举 `<name>/v<version>/` 目录；现委托 manifest（`root` 视为仓根或 manifest 路径）。"""
+    p = Path(root)
+    if p.is_file():
+        return scan_manifest_script_versions(p)
+    return scan_manifest_script_versions(p / "tool_manifest.json")
 
 
 def pending_activation_view(
@@ -223,7 +239,7 @@ def pending_activation_view(
 #                 或 head/钉版在库缺行（保守判需人工核）；
 #               - metadata_compatible：其余。**不等于安全**——check_device v1.0.2 的
 #                 150s 内建预算在 DB 元数据上查不出来（#2981），登记表是必要补充。
-# 只读；账本非门禁（exit 0），`STP_SCRIPT_ROOT` 未配置 = 无从判定（exit 2），与
+# 只读；账本非门禁（exit 0），`tool_manifest.json` 不可读 = 无从判定（exit 2），与
 # `--pending-activation` 同姿势。
 
 PLAN_STEP_DRIFT_ACTIVE_DAYS = 14
@@ -399,10 +415,10 @@ def plan_step_drift_view(
 
 def _evaluate_plan_step_drift(args, today: date) -> int:
     """`--plan-step-drift` 分支：只读取事实、打印账本，不写库。"""
-    script_root = (os.getenv("STP_SCRIPT_ROOT") or "").strip()
+    script_root = _manifest_path_or_none()
     if not script_root:
         print(
-            "PLAN-STEP-DRIFT UNKNOWN: STP_SCRIPT_ROOT 未设置，磁盘 head 不可枚举",
+            "PLAN-STEP-DRIFT UNKNOWN: tool_manifest.json 不可读（STP_TOOL_MANIFEST 或仓根）",
             file=sys.stderr,
         )
         return 2
@@ -489,13 +505,13 @@ def _evaluate(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--pending-activation",
         action="store_true",
-        help="待激活视图（#2931）：枚举 STP_SCRIPT_ROOT 的磁盘 head 版本与 script 表对账，"
+        help="待激活视图（#2931）：枚举 tool_manifest.json 的 head 版本与 script 表对账，"
         "只列 unregistered/inactive——版本上线五步的第 3 道有没有做，从此可查",
     )
     parser.add_argument(
         "--plan-step-drift",
         action="store_true",
-        help="重指漂移视图（#3030）：对拍 STP_SCRIPT_ROOT 的磁盘 head 与 plan_step 钉版，"
+        help="重指漂移视图（#3030）：对拍 tool_manifest.json 的 head 与 plan_step 钉版，"
         "按活跃度三态（活跃/半活跃/历史）+ Δ 类型（需人工核/元数据差异/元数据兼容）"
         "只列落后步骤——版本上线五步的第 4 道有没有做，从此可查",
     )
@@ -524,7 +540,7 @@ def _evaluate(argv: list[str] | None = None) -> int:
         rows = [r for r in rows if r["name"] == args.name]
 
     if args.pending_activation:
-        script_root = (os.getenv("STP_SCRIPT_ROOT") or "").strip()
+        script_root = _manifest_path_or_none()
         if not script_root:
             # 与 scan 端点同姿势：根未配置 = 无从判定（exit 2），不是「没有落后项」。
             print("PENDING UNKNOWN: STP_SCRIPT_ROOT 未设置，磁盘侧不可枚举", file=sys.stderr)

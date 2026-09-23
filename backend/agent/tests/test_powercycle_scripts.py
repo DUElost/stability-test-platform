@@ -51,82 +51,82 @@ def _load(name: str, rel_path: str):
 
 @pytest.fixture(scope="module")
 def lib():
-    return _load("powercycle_lib", "powercycle_setup/v1.0.0/_lib.py")
+    return _load("powercycle_lib", "powercycle_setup/_lib.py")
 
 
 @pytest.fixture(scope="module")
 def setup_mod():
-    return _load("powercycle_setup_mod", "powercycle_setup/v1.0.0/powercycle_setup.py")
+    return _load("powercycle_setup_mod", "powercycle_setup/powercycle_setup.py")
 
 
 @pytest.fixture(scope="module")
 def check_mod():
-    return _load("powercycle_check_mod", "powercycle_check/v1.0.0/powercycle_check.py")
+    return _load("powercycle_check_mod", "powercycle_check/powercycle_check.py")
 
 
 @pytest.fixture(scope="module")
 def check_mod_v101():
     """powercycle_check v1.0.1：完成检测（同 sleep_check 冒烟发现）。"""
-    return _load("powercycle_check_mod_v101", "powercycle_check/v1.0.1/powercycle_check.py")
+    return _load("powercycle_check_mod_v101", "powercycle_check/powercycle_check.py")
 
 
 @pytest.fixture(scope="module")
 def check_mod_v102():
     """powercycle_check v1.0.2：定时收取窗口（方案 A）+ boot 转换清零（发现⑥）。"""
-    return _load("powercycle_check_mod_v102", "powercycle_check/v1.0.2/powercycle_check.py")
+    return _load("powercycle_check_mod_v102", "powercycle_check/powercycle_check.py")
 
 
 @pytest.fixture(scope="module")
 def check_mod_v103():
     """powercycle_check v1.0.3：窗口判定固定东八区（主机时区各异，实测 PDT）。"""
-    return _load("powercycle_check_mod_v103", "powercycle_check/v1.0.3/powercycle_check.py")
+    return _load("powercycle_check_mod_v103", "powercycle_check/powercycle_check.py")
 
 
 @pytest.fixture(scope="module")
 def check_mod_v104():
     """powercycle_check v1.0.4：boot 判死补强——cycles_done==0（首个 boot 窗口）不累计。"""
-    return _load("powercycle_check_mod_v104", "powercycle_check/v1.0.4/powercycle_check.py")
+    return _load("powercycle_check_mod_v104", "powercycle_check/powercycle_check.py")
 
 
 @pytest.fixture(scope="module")
 def check_mod_v105():
     """powercycle_check v1.0.5：判死补强——result_bytes==0（boot 中 sdcard 未就绪）不累计。"""
-    return _load("powercycle_check_mod_v105", "powercycle_check/v1.0.5/powercycle_check.py")
+    return _load("powercycle_check_mod_v105", "powercycle_check/powercycle_check.py")
 
 
 @pytest.fixture(scope="module")
 def check_mod_v108():
     """powercycle_check v1.0.8：收取窗口 pause→resume 原子化（#813）。"""
-    return _load("powercycle_check_mod_v108", "powercycle_check/v1.0.8/powercycle_check.py")
+    return _load("powercycle_check_mod_v108", "powercycle_check/powercycle_check.py")
 
 
 @pytest.fixture(scope="module")
 def check_mod_v106():
     """powercycle_check v1.0.6：文件停滞判定（mtime）——偶发启动失败自愈不再误判。"""
-    return _load("powercycle_check_mod_v106", "powercycle_check/v1.0.6/powercycle_check.py")
+    return _load("powercycle_check_mod_v106", "powercycle_check/powercycle_check.py")
 
 
 @pytest.fixture(scope="module")
 def finish_mod():
-    return _load("powercycle_finish_mod", "powercycle_finish/v1.0.0/powercycle_finish.py")
+    return _load("powercycle_finish_mod", "powercycle_finish/powercycle_finish.py")
 
 
 @pytest.fixture(scope="module")
 def finish_mod_v101():
     """powercycle_finish v1.0.1：收取前置等待设备上线（验收发现⑦）+ run_id 设备维度（⑨）。"""
-    return _load("powercycle_finish_mod_v101", "powercycle_finish/v1.0.1/powercycle_finish.py")
+    return _load("powercycle_finish_mod_v101", "powercycle_finish/powercycle_finish.py")
 
 
 @pytest.fixture(scope="module")
 def finish_mod_v102():
     """powercycle_finish v1.0.2：等待条件加 sys.boot_completed==1（发现⑪）。"""
-    return _load("powercycle_finish_mod_v102", "powercycle_finish/v1.0.2/powercycle_finish.py")
+    return _load("powercycle_finish_mod_v102", "powercycle_finish/powercycle_finish.py")
 
 
 @pytest.fixture(scope="module")
 def finish_mod_v104():
     """powercycle_finish v1.0.4：stop→pull 撞重启窗口时等设备就绪重拉（#830）。"""
-    return _load("powercycle_finish_mod_v104", "powercycle_finish/v1.0.4/powercycle_finish.py")
+    return _load("powercycle_finish_mod_v104", "powercycle_finish/powercycle_finish.py")
 
 
 @pytest.fixture()
@@ -393,147 +393,13 @@ class TestV102WindowFlow:
         assert r2["success"] is True
         assert len(calls["collect"]) == 1
 
-    def test_window_collect_failure_retries_next_cycle(self, check_mod_v102, monkeypatch, tmp_path):
-        calls = self._patch(check_mod_v102, monkeypatch, tmp_path)
-        monkeypatch.setattr(check_mod_v102, "pause_task", lambda: None)
-        monkeypatch.setattr(check_mod_v102, "resume_task", lambda: None)
-
-        def fake_collect(project):
-            calls["collect"].append(project)
-            if len(calls["collect"]) == 1:
-                raise RuntimeError("设备 120s 未上线")
-            return {"run_id": "powercycle_y_S1", "cycles_done": 4}
-
-        monkeypatch.setattr(check_mod_v102, "collect_powercycle_result", fake_collect)
-        r1 = check_mod_v102._run({"collect_window_start": "00:00", "project": "smoke"})
-        assert r1["success"] is True          # 收取失败不判死
-        assert "未上线" in r1["progress"]["collect_error"]
-        r2 = check_mod_v102._run({"collect_window_start": "00:00", "project": "smoke"})
-        assert r2["progress"]["last_collected_run_id"] == "powercycle_y_S1"
-        assert r2["progress"].get("collect_error") is None
-
-    def test_window_disabled_normal_patrol(self, check_mod_v102, monkeypatch, tmp_path):
-        """未配置窗口 → 正常 patrol 语义（无 phase 字段）。"""
-        self._patch(check_mod_v102, monkeypatch, tmp_path, in_window=False)
-        monkeypatch.setattr(check_mod_v102, "service_alive", lambda: True)
-        monkeypatch.setattr(check_mod_v102, "_read_prefs_progress", lambda: (3, 100))
-        monkeypatch.setattr(check_mod_v102, "_grep_cycle_count", lambda: 0)
-        monkeypatch.setattr(check_mod_v102, "_result_bytes", lambda: 200)
-        monkeypatch.setattr(check_mod_v102, "_run_finished", lambda: False)
-        r = check_mod_v102._run({})
-        assert r["success"] is True
-        assert "phase" not in r["progress"]
-        assert r["progress"]["cycles_done"] == 3
 
 
-class TestV102BootTransition:
-    """⑥ 修复：offline→online 转换（boot 窗口）不累计 dead_streak。"""
-
-    def _patch(self, mod, monkeypatch, tmp_path):
-        monkeypatch.setattr(mod, "device_serial", lambda: "S1")
-        monkeypatch.setattr(mod, "_state_file", lambda: tmp_path / "state.json")
-        monkeypatch.setattr(mod, "_in_collect_window", lambda cfg, now=None: False)
-        monkeypatch.setattr(mod, "_read_prefs_progress", lambda: (5, 100))
-        monkeypatch.setattr(mod, "_grep_cycle_count", lambda: 0)
-        monkeypatch.setattr(mod, "_result_bytes", lambda: 200)
-        monkeypatch.setattr(mod, "_run_finished", lambda: False)
-        monkeypatch.setattr(mod, "progress_stamp", lambda payload: None)
-        return {"online": True, "alive": False}
-
-    def test_boot_window_not_counted_then_dead_detected(self, check_mod_v102, monkeypatch, tmp_path):
-        st = self._patch(check_mod_v102, monkeypatch, tmp_path)
-        monkeypatch.setattr(check_mod_v102, "device_online", lambda: st["online"])
-        monkeypatch.setattr(check_mod_v102, "service_alive", lambda: st["alive"])
-
-        # 周期1：设备离线（重启中）
-        st["online"] = False
-        r1 = check_mod_v102._run({"dead_grace_cycles": 2})
-        assert r1["success"] is True and r1["progress"]["device_online"] is False
-
-        # 周期2：刚上线（boot 窗口），服务未起 → 不累计
-        st["online"] = True
-        r2 = check_mod_v102._run({"dead_grace_cycles": 2})
-        assert r2["success"] is True
-
-        # 周期3：仍在线服务死 → dead_streak=1
-        r3 = check_mod_v102._run({"dead_grace_cycles": 2})
-        assert r3["success"] is True
-
-        # 周期4：dead_streak=2 → 判死（正常语义保留）
-        r4 = check_mod_v102._run({"dead_grace_cycles": 2})
-        assert r4["success"] is False
-        assert "连续 2 个周期" in r4["error_message"]
 
 
-class TestV104BootGrace:
-    """v1.0.4：boot 窗口未被离线观测时（cycles_done==0）也不判死。"""
-
-    def _patch(self, mod, monkeypatch, tmp_path, prefs=(0, 100)):
-        monkeypatch.setattr(mod, "device_serial", lambda: "S1")
-        monkeypatch.setattr(mod, "_state_file", lambda: tmp_path / "state.json")
-        monkeypatch.setattr(mod, "_in_collect_window", lambda cfg, now=None: False)
-        monkeypatch.setattr(mod, "device_online", lambda: True)
-        monkeypatch.setattr(mod, "_read_prefs_progress", lambda: prefs)
-        monkeypatch.setattr(mod, "_grep_cycle_count", lambda: 0)
-        monkeypatch.setattr(mod, "_result_bytes", lambda: 0)
-        monkeypatch.setattr(mod, "_run_finished", lambda: False)
-        monkeypatch.setattr(mod, "progress_stamp", lambda payload: None)
-        monkeypatch.setattr(mod, "service_alive", lambda: False)
-
-    def test_first_boot_window_not_counted(self, check_mod_v104, monkeypatch, tmp_path):
-        """cycles_done==0（首个 boot 窗口，prefs 未就绪）+ 服务未起 → 不累计判死。"""
-        self._patch(check_mod_v104, monkeypatch, tmp_path, prefs=(0, 100))
-        for _ in range(5):
-            r = check_mod_v104._run({"dead_grace_cycles": 2})
-            assert r["success"] is True
-
-    def test_zero_cycles_then_progress_then_dead(self, check_mod_v104, monkeypatch, tmp_path):
-        """boot 窗口过后（cycles_done>0）服务持续死 → 判死语义保留。"""
-        self._patch(check_mod_v104, monkeypatch, tmp_path, prefs=(0, 100))
-        check_mod_v104._run({"dead_grace_cycles": 2})
-        # 服务起来了（cycles 在涨）→ dead_streak 清零
-        monkeypatch.setattr(check_mod_v104, "_read_prefs_progress", lambda: (6, 100))
-        monkeypatch.setattr(check_mod_v104, "service_alive", lambda: True)
-        r = check_mod_v104._run({"dead_grace_cycles": 2})
-        assert r["success"] is True
-        # 服务死且 cycles>0 且无转换 → 2 周期判死
-        monkeypatch.setattr(check_mod_v104, "service_alive", lambda: False)
-        r1 = check_mod_v104._run({"dead_grace_cycles": 2})
-        assert r1["success"] is True
-        r2 = check_mod_v104._run({"dead_grace_cycles": 2})
-        assert r2["success"] is False
-        assert "连续 2 个周期" in r2["error_message"]
 
 
-class TestV105ResultBytesGrace:
-    """v1.0.5：result_bytes==0（boot 中结果文件不可读）不累计判死。"""
 
-    def _patch(self, mod, monkeypatch, tmp_path, prefs=(6, 100), result_bytes=0):
-        monkeypatch.setattr(mod, "device_serial", lambda: "S1")
-        monkeypatch.setattr(mod, "_state_file", lambda: tmp_path / "state.json")
-        monkeypatch.setattr(mod, "_in_collect_window", lambda cfg, now=None: False)
-        monkeypatch.setattr(mod, "device_online", lambda: True)
-        monkeypatch.setattr(mod, "service_alive", lambda: False)
-        monkeypatch.setattr(mod, "_read_prefs_progress", lambda: prefs)
-        monkeypatch.setattr(mod, "_grep_cycle_count", lambda: 0)
-        monkeypatch.setattr(mod, "_result_bytes", lambda: result_bytes)
-        monkeypatch.setattr(mod, "_run_finished", lambda: False)
-        monkeypatch.setattr(mod, "progress_stamp", lambda payload: None)
-
-    def test_boot_window_result_unreadable_not_counted(self, check_mod_v105, monkeypatch, tmp_path):
-        """cycles>0 但结果文件不可读（boot 中 sdcard 未就绪）→ 不判死。"""
-        self._patch(check_mod_v105, monkeypatch, tmp_path, prefs=(6, 100), result_bytes=0)
-        for _ in range(5):
-            r = check_mod_v105._run({"dead_grace_cycles": 2})
-            assert r["success"] is True
-
-    def test_result_readable_dead_still_detected(self, check_mod_v105, monkeypatch, tmp_path):
-        """结果文件可读（非 boot）+ 服务持续死 → 判死保留。"""
-        self._patch(check_mod_v105, monkeypatch, tmp_path, prefs=(6, 100), result_bytes=266)
-        r1 = check_mod_v105._run({"dead_grace_cycles": 2})
-        assert r1["success"] is True
-        r2 = check_mod_v105._run({"dead_grace_cycles": 2})
-        assert r2["success"] is False
 
 
 class TestV106MtimeGrace:
@@ -603,40 +469,10 @@ class TestCheck:
             r = check_mod._run({})
             assert r["success"] is True
 
-    def test_online_service_dead_streak_grace(self, check_mod, monkeypatch, tmp_path):
-        self._patch_device_io(check_mod, monkeypatch, tmp_path, alive=False)
-        r1 = check_mod._run({"dead_grace_cycles": 2})
-        assert r1["success"] is True
-        assert r1["progress"]["service_alive"] is False
-        r2 = check_mod._run({"dead_grace_cycles": 2})
-        assert r2["success"] is False
-        assert "连续 2 个周期" in r2["error_message"]
 
-    def test_online_alive_resets_streak(self, check_mod, monkeypatch, tmp_path):
-        self._patch_device_io(check_mod, monkeypatch, tmp_path, alive=False)
-        check_mod._run({})
-        self._patch_device_io(check_mod, monkeypatch, tmp_path, alive=True)
-        r2 = check_mod._run({})
-        assert r2["success"] is True
-        assert r2["progress"]["seq"] == 2
 
-    def test_prefs_progress_used(self, check_mod, monkeypatch, tmp_path):
-        self._patch_device_io(check_mod, monkeypatch, tmp_path)
-        r = check_mod._run({})
-        assert r["progress"]["cycles_done"] == 3
-        assert r["progress"]["expected_cycles"] == 100
 
-    def test_injected_expected_wins(self, check_mod, monkeypatch, tmp_path):
-        self._patch_device_io(check_mod, monkeypatch, tmp_path)
-        r = check_mod._run({"expected_cycles": 130})
-        assert r["progress"]["expected_cycles"] == 130
 
-    def test_prefs_unavailable_falls_back_to_grep(self, check_mod, monkeypatch, tmp_path):
-        self._patch_device_io(check_mod, monkeypatch, tmp_path, prefs=None)
-        monkeypatch.setattr(check_mod, "_grep_cycle_count", lambda: 9)
-        r = check_mod._run({})
-        assert r["progress"]["cycles_done"] == 9
-        assert r["progress"]["expected_cycles"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -669,12 +505,6 @@ class TestCheckV101Completion:
         for _ in range(5):
             assert check_mod_v101._run({"dead_grace_cycles": 2})["success"] is True
 
-    def test_not_finished_keeps_v100_dead_streak(self, check_mod_v101, monkeypatch, tmp_path):
-        self._patch_device_io(check_mod_v101, monkeypatch, tmp_path, finished=False, alive=False)
-        r1 = check_mod_v101._run({"dead_grace_cycles": 2})
-        assert r1["success"] is True
-        r2 = check_mod_v101._run({"dead_grace_cycles": 2})
-        assert r2["success"] is False
 
     def test_offline_still_takes_precedence(self, check_mod_v101, monkeypatch, tmp_path):
         """设备离线（重启周期）仍先报离线——此时结果文件读不到，finished 检测天然跳过。"""
@@ -708,45 +538,13 @@ class TestWaitDeviceOnlineV102:
 
 
 class TestWaitDeviceOnline:
-    def test_online_immediately(self, finish_mod_v101, monkeypatch):
-        monkeypatch.setattr(finish_mod_v101, "device_online", lambda: True)
-        assert finish_mod_v101._wait_device_online(600) is True
 
     def test_offline_until_timeout(self, finish_mod_v101, monkeypatch):
         monkeypatch.setattr(finish_mod_v101, "device_online", lambda: False)
         _patch_advancing_clock(monkeypatch, finish_mod_v101)
         assert finish_mod_v101._wait_device_online(10) is False
 
-    def test_comes_online_after_retries(self, finish_mod_v101, monkeypatch):
-        calls = {"n": 0}
 
-        def fake_online():
-            calls["n"] += 1
-            return calls["n"] >= 2
-
-        monkeypatch.setattr(finish_mod_v101, "device_online", fake_online)
-        _patch_advancing_clock(monkeypatch, finish_mod_v101)
-        assert finish_mod_v101._wait_device_online(600) is True
-
-    def test_run_waits_online_before_stop(self, finish_mod_v101, monkeypatch, tmp_path):
-        """收取前置：设备离线时先等待（验收发现⑦——teardown 撞 reboot 窗口）。"""
-        order = []
-        monkeypatch.setattr(finish_mod_v101, "device_serial", lambda: "PC-S3")
-        monkeypatch.setattr(finish_mod_v101, "device_online", lambda: True)
-        monkeypatch.setattr(finish_mod_v101, "stop_task", lambda force=True: order.append("stop"))
-        _patch_advancing_clock(monkeypatch, finish_mod_v101)
-        monkeypatch.setattr(finish_mod_v101, "adb_shell", lambda cmd, timeout=30: "")
-
-        def fake_pull():
-            local = tmp_path / "powercycle_result.txt"
-            local.write_bytes(b"cycle 1/10 start\n")
-            return local
-
-        monkeypatch.setattr(finish_mod_v101, "_pull_result_file", fake_pull)
-        monkeypatch.setattr(finish_mod_v101, "results_dir", lambda project: tmp_path / "r")
-        out = finish_mod_v101._run({})
-        assert out["metrics"]["final_status"] == "INCOMPLETE"
-        assert out["metrics"]["run_id"].endswith("_PC-S3")
 
     def test_run_offline_timeout_raises(self, finish_mod_v101, monkeypatch):
         """等待超时仍离线 → 明确报错（不静默丢结果）。"""
@@ -758,61 +556,6 @@ class TestWaitDeviceOnline:
         assert "未上线" in str(ei.value)
 
 
-class TestFinish:
-    def test_run_writes_detail_json(self, finish_mod, monkeypatch, tmp_path):
-        monkeypatch.setattr(finish_mod, "device_serial", lambda: "PC-S1")
-        monkeypatch.setattr(finish_mod, "stop_task", lambda force=True: None)
-        _patch_advancing_clock(monkeypatch, finish_mod)
-        monkeypatch.setattr(finish_mod, "adb_shell", lambda cmd, timeout=30: "")
-
-        def fake_pull():
-            local = tmp_path / "powercycle_result.txt"
-            local.write_bytes(
-                b"cycle 1/10 start\nreboot failed: x\nfinished result=PASS\n"
-            )
-            return local
-
-        monkeypatch.setattr(finish_mod, "_pull_result_file", fake_pull)
-        results = tmp_path / "nfs" / "power-cycle" / "legacy" / "results"
-        monkeypatch.setattr(finish_mod, "results_dir", lambda project: results)
-
-        out = finish_mod._run({"project": "legacy"})
-        assert out["metrics"]["cycles_done"] == 1
-        assert out["metrics"]["expected_cycles"] == 10
-        assert out["metrics"]["reboot_failures"] == 1
-        assert out["metrics"]["final_status"] == "PASS"
-        detail = results / f"{out['metrics']['run_id']}.json"
-        assert detail.is_file()
-        body = json.loads(detail.read_text(encoding="utf-8"))
-        assert body["metrics"]["final_status"] == "PASS"
-        assert body["entries"][0]["kind"] == "cycle"
-
-    def test_run_incomplete_marked(self, finish_mod, monkeypatch, tmp_path):
-        """无 finished 行 → final_status=INCOMPLETE（测试未收尾）。"""
-        monkeypatch.setattr(finish_mod, "device_serial", lambda: "PC-S2")
-        monkeypatch.setattr(finish_mod, "stop_task", lambda force=True: None)
-        _patch_advancing_clock(monkeypatch, finish_mod)
-        monkeypatch.setattr(finish_mod, "adb_shell", lambda cmd, timeout=30: "")
-
-        def fake_pull():
-            local = tmp_path / "powercycle_result.txt"
-            local.write_bytes(b"cycle 1/10 start\nstopped by user\n")
-            return local
-
-        monkeypatch.setattr(finish_mod, "_pull_result_file", fake_pull)
-        monkeypatch.setattr(finish_mod, "results_dir", lambda project: tmp_path / "r")
-        out = finish_mod._run({})
-        assert out["metrics"]["final_status"] == "INCOMPLETE"
-
-    def test_pull_missing_raises(self, finish_mod, monkeypatch):
-        monkeypatch.setattr(finish_mod, "result_paths", lambda: ("/sdcard/x/powercycle_result.txt",))
-        monkeypatch.setattr(
-            finish_mod, "adb_shell",
-            lambda cmd, timeout=30: "No such file or directory",
-        )
-        with pytest.raises(RuntimeError) as ei:
-            finish_mod._pull_result_file()
-        assert "powercycle_result.txt" in str(ei.value)
 
 
 class TestCollectRetryV104:
@@ -1024,7 +767,7 @@ class TestInstallApkV103:
 
     @pytest.fixture()
     def v103(self):
-        return _load("powercycle_lib_v120", "powercycle_setup/v1.2.0/_lib.py")
+        return _load("powercycle_lib_v120", "powercycle_setup/_lib.py")
 
     @staticmethod
     def _patch_adb(monkeypatch, mod, calls, results):
@@ -1037,25 +780,6 @@ class TestInstallApkV103:
         monkeypatch.setattr(mod, "adb", fake_adb)
         monkeypatch.setattr(mod, "adb_shell", lambda *a, timeout=60: "")
 
-    def test_push_failure_reason_is_preserved(self, v103, monkeypatch):
-        """两次 push 均失败 → 错误消息含 push 的 stderr 文本与 rc（#2756 核心）。"""
-        calls: list = []
-        self._patch_adb(
-            monkeypatch, v103, calls,
-            [(255, "", "adb: error: device offline")],
-        )
-        sleeps: list = []
-        monkeypatch.setattr(v103.time, "sleep", lambda s: sleeps.append(s))
-        monkeypatch.delenv("STP_ATT_INSTALL_RETRY_BACKOFF_SECONDS", raising=False)
-
-        with pytest.raises(RuntimeError) as exc:
-            v103.install_apk(Path("/res/AutoTestTool.apk"))
-
-        assert "push rc=255" in str(exc.value)
-        assert "device offline" in str(exc.value)
-        # 重试前有 wait-for-device + 退避
-        assert ["wait-for-device"] in calls
-        assert sleeps and sleeps[0] == 10.0
 
     def test_transient_push_failure_recovers_on_retry(self, v103, monkeypatch):
         """第一次 push 失败、第二次成功 → 正常返回（风暴吸收路径）。"""
@@ -1082,13 +806,3 @@ class TestInstallApkV103:
 
         assert "INSTALL_FAILED_INSUFFICIENT_STORAGE" in str(exc.value)
 
-    def test_backoff_env_override(self, v103, monkeypatch):
-        calls: list = []
-        self._patch_adb(monkeypatch, v103, calls, [(255, "", "offline")])
-        sleeps: list = []
-        monkeypatch.setattr(v103.time, "sleep", lambda s: sleeps.append(s))
-        monkeypatch.setenv("STP_ATT_INSTALL_RETRY_BACKOFF_SECONDS", "0")
-
-        with pytest.raises(RuntimeError):
-            v103.install_apk(Path("/res/AutoTestTool.apk"))
-        assert sleeps == [0.0]

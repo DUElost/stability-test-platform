@@ -344,12 +344,8 @@ def test_flash_primitives_constants_match_published_scripts(wrapper):
     （v1.0.3 起为 0660 + legacy 0666 双形态），钉死历史版本会在下次改版时假红
     （与 #2048「用例只钉当时版本」同一教训）。
     """
-    base = ROOT / "backend/agent/scripts/flash_preflight"
-    latest = max(
-        (p for p in base.iterdir() if p.is_dir() and p.name.startswith("v")),
-        key=lambda p: tuple(int(seg) for seg in p.name[1:].split(".")),
-    )
-    preflight = (latest / "flash_preflight.py").read_text(encoding="utf-8")
+    # ADR-0051 Phase 3：族树即最新版本（版本目录已退役）
+    preflight = (ROOT / "backend/agent/scripts/flash_preflight/flash_preflight.py").read_text(encoding="utf-8")
     assert wrapper.UDEV_RULE_PATH in preflight
     assert wrapper.UDEV_RULE_LINE.strip() in preflight
     assert wrapper.UDEV_RULE_LINE_LEGACY.strip() in preflight
