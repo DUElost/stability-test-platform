@@ -84,6 +84,15 @@ def collect_package_files(src: Path, exclude_dirs: frozenset[str] = DEFAULT_EXCL
     return sorted(out)
 
 
+def _normalized_mode(info: "tarfile.TarInfo") -> int:
+    """纯函数：tar 成员权限位 → Git 语义（symlink 0o777；目录 0o755；文件按可执行位 0o755/0o644）。"""
+    if info.issym():
+        return 0o777
+    if info.isdir():
+        return 0o755
+    return 0o755 if info.mode & 0o111 else 0o644
+
+
 def build_deterministic_tar_gz(
     src: Path, out: Path, *, version_stamp: int = 0, files: list[Path] | None = None
 ) -> dict:
@@ -107,6 +116,12 @@ def build_deterministic_tar_gz(
                 info.uid = info.gid = 0
                 info.uname = info.gname = ""
                 info.mtime = version_stamp
+                # ADR-0051 Phase 2b 勘误：权限位按 Git 语义归一化——只保留「可执行位」
+                # （文件 0644 / 0755，目录 0755，symlink 0777）。否则同一份 Git 内容在
+                # umask 002 的机器上打出 0664、在 CI 上打出 0644，sha 分叉（#3165 后
+                # 实测：210 个脚本包全部因此不等价，72250d4b 曾按 644 环境重登记）。
+                # 与 ADR-0040 digest 的 (relpath, 可执行位, sha) 三元组同口径。
+                info.mode = _normalized_mode(info)
                 if full.is_symlink():
                     tar.addfile(info)  # symlink：数据段即链接目标
                     continue

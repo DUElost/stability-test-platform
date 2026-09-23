@@ -472,3 +472,12 @@ async def test_run_sweep_host_scoped_touches_only_that_host(db_session, engine, 
         assert ("h-two", "b", "2.0.0") in kept         # 别的 host 原样保留
         assert all(r.host_id == "h-two" for r in rows)  # 且本轮没给 h-two 写任何行
     assert result["orphans_removed"] == 1
+
+
+def test_expected_manifests_carry_package_sha256_only_when_present():
+    rows = _script_rows(("a", "1.0.0", {}), ("b", "2.0.0", {}))
+    rows[0]["package_sha256"] = "c" * 64
+    rows[1]["package_sha256"] = None
+    out = sp.build_expected_manifests(rows, FULL)
+    assert out[0]["package_sha256"] == "c" * 64
+    assert "package_sha256" not in out[1]

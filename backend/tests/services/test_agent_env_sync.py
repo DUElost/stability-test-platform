@@ -267,3 +267,16 @@ def test_unisoc_scoped_keys_are_written_to_unprefixed_agent_keys(monkeypatch):
     overrides = hot_update_env_overrides("/opt/stability-test-agent")
     assert overrides["STP_UNISOC_LOG_SCAN_SCRIPT"] == "/mnt/automation-toolkit/scan_log_gt.py"
     assert "STP_AGENT_UNISOC_LOG_SCAN_PYTHON" not in overrides
+
+
+def test_script_packages_switch_is_agent_scoped_and_off_by_default(monkeypatch):
+    """ADR-0051 Phase 2b：STP_AGENT_SCRIPT_PACKAGES → STP_SCRIPT_PACKAGES；未设即不推（逃生阀默认关）。"""
+    monkeypatch.delenv("STP_AGENT_SCRIPT_PACKAGES", raising=False)
+    monkeypatch.setenv("STP_SCRIPT_PACKAGES", "strict")  # 控制面自身的同名键绝不能漏到 Agent
+    overrides = hot_update_env_overrides("/opt/stability-test-agent")
+    assert "STP_SCRIPT_PACKAGES" not in overrides
+
+    monkeypatch.setenv("STP_AGENT_SCRIPT_PACKAGES", "on")
+    overrides = hot_update_env_overrides("/opt/stability-test-agent")
+    assert overrides["STP_SCRIPT_PACKAGES"] == "on"
+    assert "STP_AGENT_SCRIPT_PACKAGES" not in overrides

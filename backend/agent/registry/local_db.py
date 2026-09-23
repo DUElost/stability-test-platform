@@ -73,6 +73,7 @@ class LocalDB:
                 script_type     TEXT    NOT NULL,
                 nfs_path        TEXT    NOT NULL,
                 content_sha256  TEXT    NOT NULL,
+                package_sha256  TEXT,
                 updated_at      TEXT    NOT NULL
             );
             CREATE TABLE IF NOT EXISTS agent_state (
@@ -145,6 +146,7 @@ class LocalDB:
             );
         """)
         self._ensure_step_trace_schema()
+        self._ensure_script_cache_schema()
         self._ensure_log_signal_outbox_schema()
         self._restore_intent_signal_sequences()
         self._ensure_dle_register_outbox_schema()
@@ -173,6 +175,15 @@ class LocalDB:
                 self._thread_local.conn = conn
                 self._connections[threading.get_ident()] = conn
             return conn
+
+    def _ensure_script_cache_schema(self) -> None:
+        """ADR-0051 Phase 2b：老库补 ``package_sha256`` 列（幂等 ALTER，与 step_trace 同套路）。"""
+        columns = {
+            row["name"]
+            for row in self._conn.execute("PRAGMA table_info(script_cache)").fetchall()
+        }
+        if "package_sha256" not in columns:
+            self._conn.execute("ALTER TABLE script_cache ADD COLUMN package_sha256 TEXT")
 
     def _ensure_step_trace_schema(self) -> None:
         columns = {
@@ -528,8 +539,8 @@ class LocalDB:
                         """
                         INSERT OR REPLACE INTO script_cache
                         (cache_key, script_id, name, version, script_type, nfs_path,
-                         content_sha256, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                         content_sha256, package_sha256, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             cache_key,
@@ -539,6 +550,7 @@ class LocalDB:
                             entry.get("script_type", ""),
                             entry.get("nfs_path", ""),
                             entry.get("content_sha256", ""),
+                            entry.get("package_sha256") or None,
                             now,
                         ),
                     )
@@ -551,8 +563,8 @@ class LocalDB:
                     """
                     INSERT OR REPLACE INTO script_cache
                     (cache_key, script_id, name, version, script_type, nfs_path,
-                     content_sha256, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                     content_sha256, package_sha256, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         cache_key,
@@ -562,6 +574,7 @@ class LocalDB:
                         entry.get("script_type", ""),
                         entry.get("nfs_path", ""),
                         entry.get("content_sha256", ""),
+                        entry.get("package_sha256") or None,
                         now,
                     ),
                 )
@@ -577,6 +590,7 @@ class LocalDB:
                 "script_type": row["script_type"],
                 "nfs_path": row["nfs_path"],
                 "content_sha256": row["content_sha256"],
+                "package_sha256": row["package_sha256"] or None,
             }
             for row in rows
         }

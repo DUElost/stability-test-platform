@@ -41,6 +41,8 @@ from datetime import datetime, timedelta, timezone
 
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from .script_packages import PackageUnavailable, resolve_script_path
+
 
 logger = logging.getLogger(__name__)
 
@@ -797,12 +799,13 @@ def _await_tree_exit(
         time.sleep(_GROUP_EXIT_POLL_INTERVAL_SECONDS)
 
 
-def _script_terminate_grace_seconds(nfs_path: str | None) -> float:
-    """#1591：flash_firmware 门控 settle 常需数秒；默认 2s 宽限会被 SIGKILL 打断。"""
-    path = (nfs_path or "").replace("\\", "/")
-    if "/flash_firmware/" in path:
-        return 8.0
-    return 2.0
+def _script_terminate_grace_seconds(script_name: str | None) -> float:
+    """#1591：flash_firmware 门控 settle 常需数秒；默认 2s 宽限会被 SIGKILL 打断。
+
+    ADR-0051 D4：按脚本 **名** 判定（曾按 ``nfs_path`` 子串判定——路径形态被当契约；
+    包路径 ``tools_cache/flash_firmware/<ver>/`` 恰好仍含该子串只是侥幸）。
+    """
+    return 8.0 if (script_name or "") == "flash_firmware" else 2.0
 
 
 def _terminate_process_tree(proc: subprocess.Popen, *, grace_seconds: float = 2.0) -> None:
@@ -1752,9 +1755,17 @@ class PipelineEngine:
         except Exception as exc:
             return StepResult(success=False, exit_code=1, error_message=str(exc))
 
+        # ADR-0051 D4：DB 权威（entry.package_sha256）→ 包身份 → 本机 tools_cache；
+        # 开关关 / 无包 sha / 拉取失败 → 回退 nfs_path（strict 模式下失败即步骤失败）。
+        try:
+            resolved = resolve_script_path(entry)
+        except PackageUnavailable as exc:
+            return StepResult(success=False, exit_code=2, error_message=f"script package unavailable: {exc}")
+        script_path = resolved.path
+
         runners = {
-            "python": [sys.executable, entry.nfs_path],
-            "shell": ["bash", entry.nfs_path],
+            "python": [sys.executable, script_path],
+            "shell": ["bash", script_path],
         }
         cmd = runners.get(entry.script_type)
         if cmd is None:
@@ -1783,16 +1794,16 @@ class PipelineEngine:
             env["STP_AGENT_INSTALL_DIR"] = str(BASE_DIR)
         except Exception:
             pass
-        try:
-            agent_dir = str(Path(entry.nfs_path).resolve().parents[3])
-            existing_py_path = env.get("PYTHONPATH", "")
-            env["PYTHONPATH"] = (
-                agent_dir
-                if not existing_py_path
-                else f"{agent_dir}{os.pathsep}{existing_py_path}"
-            )
-        except (IndexError, ValueError):
-            pass
+        # ADR-0051 D4：agent 目录 = 本模块所在目录（部署态 <install>/agent、开发态
+        # backend/agent），不再由 nfs_path 的 parents[3] 推导——包路径深度不同，推导会算错。
+        agent_dir = str(Path(__file__).resolve().parent)
+        existing_py_path = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = (
+            agent_dir
+            if not existing_py_path
+            else f"{agent_dir}{os.pathsep}{existing_py_path}"
+        )
+        env["STP_SCRIPT_SOURCE"] = resolved.source
 
         timeout_seconds = _resolve_step_wall_clock(step)
         stall_seconds = _resolve_step_stall_seconds(step)
@@ -1813,7 +1824,7 @@ class PipelineEngine:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                cwd=os.path.dirname(entry.nfs_path) or None,
+                cwd=resolved.cwd or None,
                 **_popen_isolation_kwargs(),
             )
             # #1003：组身份必须在任何 wait/poll 之前留存 —— 父被回收后
@@ -1822,7 +1833,7 @@ class PipelineEngine:
             self._set_active_process(
                 proc,
                 allow_after_cancel=(ctx.phase == "teardown"),
-                script_path=entry.nfs_path,
+                script_path=script_path,
             )
             try:
                 outcome = _pump_process(
@@ -1833,9 +1844,7 @@ class PipelineEngine:
                     # progress-aware barrier 判断同 host 的 peer 是否还在推进。
                     on_progress=lambda: self._update_execution_state("EXECUTING_STEP"),
                     log_paths=log_paths,
-                    terminate_grace_seconds=_script_terminate_grace_seconds(
-                        entry.nfs_path,
-                    ),
+                    terminate_grace_seconds=_script_terminate_grace_seconds(name),
                 )
                 if outcome.reason is not None:
                     combined_output = "\n".join(

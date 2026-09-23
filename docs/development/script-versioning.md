@@ -66,6 +66,8 @@ Tool Contract + 包存储，既有工具族的新版本目录允许继续 legacy
 > **Phase 2a 已落地**：每个版本目录同时对应 `tool_manifest.json` 一条登记（`package_sha256` = 从 `git ls-files` 成员确定性打包的整包 sha；`python: null` = Agent 自身解释器）。新增版本目录后运行
 > `python tools/dev/check_script_packages.py --register` 追加登记；`tool-manifest` 门禁会重建每个包并与登记值比对（原地改目录 → sha 不等 → 红）。`script.package_sha256` 由 scan 从 manifest 回填（响应里 `package_backfilled` / `package_conflicts`）；
 > 生产只读证明：`DATABASE_URL=… python -m backend.scripts.check_script_package_equivalence`。发布包到站点：`python tools/dev/check_script_packages.py --publish --packages-root <STP_AEE_NFS_ROOT>/packages`（运维动作，Phase 2b 前置）。
+>
+> **Phase 2b 已落地（代码面）**：Agent 按 `script.package_sha256` 经 `tools_cache` 执行脚本，由 `STP_SCRIPT_PACKAGES` 控制（`off` 默认 / `on` 灰度回退 / `strict` 终态），控制面源键 `STP_AGENT_SCRIPT_PACKAGES` 走 hot-update env 推送。切换顺序：发包 → scan 回填 → `on` 灰度（看 verify_scripts 的 `package_active` 与 WARNING `script_packages_fallback_tree`）→ `strict` → 才可进入 Phase 3 删目录。**删目录前不得把 fleet 留在 off/on**：热更新 `rsync --delete` 会把主机上的版本目录一并清掉。
 
 `script.content_sha256` 是扫描时冻结的期望值。原地修改已发布版本只会产生 conflict，
 不会更新数据库基线；引用该版本的 Plan 会在 precheck 阶段

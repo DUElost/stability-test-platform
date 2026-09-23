@@ -162,6 +162,10 @@ _INTERNAL_ONLY: dict[str, str] = {
     "STP_AGENT_VERSION": "hot-update 写入的版本标记（派生值，不自设）",
     "STP_ALLOW_UNSAFE_TEST_DATABASE_URL": "测试守卫逃生门：仅本地测试库用，生产禁止设置",
     "STP_ARTIFACT_DIGEST_CACHE": "制品摘要缓存的紧急关闭开关（内部实现细节）",
+    # ADR-0051 Phase 2b：pipeline_engine 给脚本子进程拼 PYTHONPATH（读父进程值再前置 agent 目录）
+    # 与写 STP_SCRIPT_SOURCE=package|tree（只写给子进程、Agent 自身不读）——都不是部署配置。
+    "PYTHONPATH": "脚本子进程环境拼装：继承父进程 PYTHONPATH 并前置 agent 目录（非配置项）",
+    "STP_SCRIPT_SOURCE": "只写给脚本子进程的观测变量（package|tree），Agent 自身不读（非配置项）",
     # #2026：以下 8 条随「`backend/scripts/**` 不再被误跳」首次进入清单——均为一次性
     # 诊断/引导脚本的 CLI 等价入参（各自有 `--backend` / `--host-id` / `--env-file`
     # 或本机默认值），不属部署环境配置，故声明内部而非登记进运维模板。

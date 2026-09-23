@@ -144,6 +144,8 @@ def build_expected_manifests(
         support = r.get("support_files_manifest") or {}
         if isinstance(support, dict) and support:
             entry["support_files"] = {str(k): str(v) for k, v in support.items()}
+        if r.get("package_sha256"):
+            entry["package_sha256"] = str(r["package_sha256"])
         out.append(entry)
     return out
 
@@ -348,6 +350,7 @@ def load_facts(db: Session, *, days: int) -> dict[str, list[dict]]:
             select(
                 Script.name, Script.version, Script.is_active,
                 Script.nfs_path, Script.content_sha256, Script.support_files_manifest,
+                Script.package_sha256,
             ).where(Script.is_active.is_(True))
         ).mappings()
     ]

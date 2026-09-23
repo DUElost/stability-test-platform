@@ -24,6 +24,7 @@ def expected_scripts_for_run(plan_run: PlanRun, db: Session) -> list[dict]:
             Script.content_sha256,
             Script.nfs_path,
             Script.support_files_manifest,
+            Script.package_sha256,
         ).where(Script.is_active.is_(True))
     ).all()
     results: list[dict] = []
@@ -39,6 +40,9 @@ def expected_scripts_for_run(plan_run: PlanRun, db: Session) -> list[dict]:
         manifest = dict(r.support_files_manifest or {})
         if manifest:
             entry["support_files"] = manifest
+        # ADR-0051 D4：整包 sha 随 expected 下发；Agent 开关开时按包核验（并预热 tools_cache）。
+        if r.package_sha256:
+            entry["package_sha256"] = r.package_sha256
         results.append(entry)
     return results
 
