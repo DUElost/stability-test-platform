@@ -89,12 +89,13 @@ def test_flash_v1315_persist_and_clear(tmp_path, monkeypatch):
 
 
 def test_pipeline_flash_terminate_grace():
-    """#1591：flash_firmware 取消宽限加长，给 settle 留时间。"""
+    """#1591：flash_firmware 取消宽限加长，给 settle 留时间。
+
+    ADR-0051 D4：判据按脚本**名**——路径子串曾被当契约，包路径形态下不再可靠。
+    """
     from backend.agent.pipeline_engine import _script_terminate_grace_seconds
 
-    assert _script_terminate_grace_seconds(
-        "/opt/agent/scripts/flash_firmware/v1.3.15/flash_firmware.py",
-    ) == 8.0
-    assert _script_terminate_grace_seconds(
-        "/opt/agent/scripts/oobe_skip/v1.1.2/oobe_skip.py",
-    ) == 2.0
+    assert _script_terminate_grace_seconds("flash_firmware") == 8.0
+    assert _script_terminate_grace_seconds("oobe_skip") == 2.0
+    assert _script_terminate_grace_seconds("/opt/agent/scripts/flash_firmware/v1.3.15/flash_firmware.py") == 2.0
+    assert _script_terminate_grace_seconds(None) == 2.0

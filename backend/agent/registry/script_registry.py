@@ -25,6 +25,8 @@ class ScriptEntry:
     script_type: str
     nfs_path: str
     content_sha256: str
+    #: ADR-0051 D3/D4：整包 sha（控制面从 tool_manifest 回填）；None = 该版本尚未登记为包。
+    package_sha256: str | None = None
 
 
 class ScriptNotFoundLocally(Exception):
@@ -97,6 +99,7 @@ class ScriptRegistry:
                     script_type=item.get("script_type", ""),
                     nfs_path=item.get("nfs_path", ""),
                     content_sha256=item.get("content_sha256", ""),
+                    package_sha256=item.get("package_sha256") or None,
                 )
                 self._cache[self._key(name, version)] = entry
             self._version = self._compute_version()
@@ -109,6 +112,7 @@ class ScriptRegistry:
                 "script_type": entry.script_type,
                 "nfs_path": entry.nfs_path,
                 "content_sha256": entry.content_sha256,
+                "package_sha256": entry.package_sha256,
             }
             for key, entry in self._cache.items()
         })
@@ -131,6 +135,7 @@ class ScriptRegistry:
                     script_type=item.get("script_type", ""),
                     nfs_path=item.get("nfs_path", ""),
                     content_sha256=item.get("content_sha256", ""),
+                    package_sha256=item.get("package_sha256") or None,
                 )
             self._version = self._compute_version()
 

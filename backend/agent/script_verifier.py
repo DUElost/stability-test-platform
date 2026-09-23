@@ -13,6 +13,8 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
 
+from .script_packages import package_mode, verify_package
+
 logger = logging.getLogger(__name__)
 
 _HASH_CHUNK_BYTES = 65536
@@ -63,6 +65,15 @@ def _verify_support_files(
     return True, None
 
 
+def _package_mode_on() -> bool:
+    return package_mode() != "off"
+
+
+def _verify_package(entry: dict) -> tuple[bool, str | None]:
+    """ADR-0051 D4：expected 带 ``package_sha256`` 且本机开关开 → 拉包整包核验（顺便预热）。"""
+    return verify_package(entry)
+
+
 def verify_scripts_payload(
     expected: Iterable[dict],
     *,
@@ -87,9 +98,15 @@ def verify_scripts_payload(
         support_files = entry.get("support_files") or {}
         support_ok, support_err = _verify_support_files(nfs_path, support_files)
         entry_ok = exists and actual_sha == expected_sha
-        ok = entry_ok and support_ok
+        # ADR-0051 D4：expected 带 package_sha256 且本机开关开 → 以包核验为准（Phase 3 后
+        # 主机树上没有文件，文件判定只作观测）；否则维持文件判定。
+        package_active = bool(entry.get("package_sha256")) and _package_mode_on()
+        package_ok, package_err = _verify_package(entry) if package_active else (True, None)
+        ok = package_ok if package_active else (entry_ok and support_ok)
         if ok:
             error = None
+        elif package_active:
+            error = package_err or "package_unavailable"
         elif not exists:
             error = "file_missing_or_unreadable"
         elif not entry_ok:
@@ -106,6 +123,7 @@ def verify_scripts_payload(
                 "exists": exists,
                 "ok": ok,
                 "error": error,
+                "package_active": package_active,
             }
         )
 

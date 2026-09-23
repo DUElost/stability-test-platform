@@ -1,12 +1,12 @@
 # ADR-0051：发布单元与内容寻址——不可变性从源码目录移到包
 
-- 状态：**Accepted** v1.0（2026-09-22 owner 裁决：§10 五个裁决点**全采推荐项**——D1 包模型 / D3 采 C1 双列 / D6 选 B / D2 例外声明 + 棘轮 / Phase 3 只依赖 2a；§9 四组机械改动随本版同 PR 落地；v0.1 决策材料 PR #3158）
+- 状态：**Accepted** v1.1（2026-09-23：**勘误 Phase 3 依赖**——删目录须在 2b 且 fleet 全部切到包模式之后，原「只依赖 2a」不成立；v1.0 2026-09-22 owner 裁决：§10 五个裁决点**全采推荐项**——D1 包模型 / D3 采 C1 双列 / D6 选 B / D2 例外声明 + 棘轮 / Phase 3 只依赖 2a；§9 四组机械改动随本版同 PR 落地；v0.1 决策材料 PR #3158）
 - 优先级：P1（脚本目录 12 天翻倍、控制面部署源与开发工作区同一棵检出已造成事故；多站点交付 ADR-0041 依赖可 digest 校验的发布物）
 - 目标里程碑：M7
 - 日期：2026-09-22
 - 决策者：owner（DUElost，2026-09-22）；起草：平台研发组
 - 归属域：semantic-ownership script-version-immutability
-- 落地状态：Phase 0 ✅（#3162）；**Phase 2a ✅**（`tool_manifest.json` 登记 35 族 210 版本、`script.package_sha256` 列 + scan 回填、`check_script_packages.py` 并入 tool-manifest 门禁、等价证明对生产库 210/210 通过；包尚未发布到站点 `packages/`，属运维推进项）；Phase 1 / 2b / 3 / 4 / 5 待排期
+- 落地状态：Phase 0 ✅（#3162）；**Phase 2b ✅ 代码面**（`script_packages.py` + 开关默认 off；fleet 切换属运维推进项：先 `--publish` 发包 → `STP_AGENT_SCRIPT_PACKAGES=on` 灰度 → `strict`）；**Phase 2a ✅**（`tool_manifest.json` 登记 35 族 210 版本、`script.package_sha256` 列 + scan 回填、`check_script_packages.py` 并入 tool-manifest 门禁、等价证明对生产库 210/210 通过；包尚未发布到站点 `packages/`，属运维推进项）；Phase 1 / 2b / 3 / 4 / 5 待排期
 - 归属说明：v1.0 起 `script-version-immutability` 的 owner_anchor 改指本 ADR D1（语义归属表同 PR 改）
 - 标签：release-unit, content-addressing, package-store, script-versioning, deploy-source, anti-corruption, #735, #3075, #1987, #2386
 - 关联：[#735](https://github.com/DUElost/stability-test-platform/issues/735)（脚本膨胀治理）/ [#3075](https://github.com/DUElost/stability-test-platform/issues/3075)（ADR-0033 Phase B 包存储实现）/ [#1987](https://github.com/DUElost/stability-test-platform/issues/1987)、[#2386](https://github.com/DUElost/stability-test-platform/issues/2386)（部署源与检出双重角色）
@@ -25,6 +25,7 @@
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
+| v1.1 | 2026-09-23 | **勘误 + Phase 2b 落地**：§5「Phase 3 不必等 2b」**撤销**——热更新对 agent 树 `rsync --delete`，版本目录就在这棵树里（`_TAR_EXCLUDES` 未排除 `scripts/`），删目录会随下一次热更新把主机上的脚本一并删掉；scan 亦以目录为注册输入。Phase 3 前置改为 **2a + 2b + fleet 全部 `STP_SCRIPT_PACKAGES=strict` 且一轮 verify_scripts 全 `package_active`** + scan 注册改读 manifest（Phase 3 自身范围）。D4 落地：`backend/agent/script_packages.py`（DB 权威 `package_sha256` → `tool_cache.ensure_package` → `tools_cache`），三处形态耦合解除，`verify_scripts` 在开关开时按整包核验并预热；开关 `STP_SCRIPT_PACKAGES=off|on|strict` 默认 off（源键 `STP_AGENT_SCRIPT_PACKAGES` 走既有 env 推送链）；`agent-code` tarball **本版不排除** `scripts/`（排除即等于删主机目录，归 Phase 3）。另修 2a 打包器缺陷：tar 权限位按 Git 语义归一化（此前随 umask 分叉，`72250d4b` 只是按 644 环境重登记） |
 | v1.0 | 2026-09-22 | **owner 裁决 Accepted**：§10 全采推荐项；§9 四组机械改动落地（`AGENTS.md` 总原则条款改写 + S11 锚同步；ADR-0039 / ADR-0046 转 Superseded；adr/README + M7 + DOC-MAP + 语义归属表改指；ADR-0033 D3 一句措辞改采 C1 → v1.13）；D1 补「Phase 3 前版本目录仍是发布单元」过渡句（否则目录保护在 2a 前被提前撤销） |
 | v0.1 | 2026-09-22 | 初稿：用户两轮逐项核对后的方案定稿为 ADR 草案；§2 正面回应 ADR-0039 D6；§3 八条决策；§5 落地顺序按 2a/2b 拆分；§9 Accepted 当日的四组同 PR 机械改动清单 |
 
@@ -117,8 +118,8 @@
   1. `:1787` `Path(entry.nfs_path).resolve().parents[3]` 注入 PYTHONPATH——硬编码 `agent/scripts/<name>/<ver>/` 深度；换 cache 布局后算错目录、共享库 import 静默失败 → 改为显式 `entry.package_root`；
   2. `:1816` `cwd=os.path.dirname(entry.nfs_path)`——脚本工作目录形态变更（相对产物、同级 `_adb.py`）→ cwd = 包解压根，包内相对布局与现目录一致；
   3. `:804` `"/flash_firmware/" in path` 决定 8 s 终止宽限（ADR-0043 / #1591）——cache 路径恰好仍含该子串而侥幸不破，但这是「路径形态被当契约」的实证 → 改为按 `name` 判定。
-- 双轨：按 script 行灰度（`package_sha256` 为空 → 旧路径；非空 → 包路径），控制面零改动（沿 ADR-0033 v1.1「契约翻译在 Agent 边缘」）。
-- `agent-code` artifact **排除 `scripts/`**：热更新载荷从 128.7k 行降为 Agent 代码本身；脚本按需拉包。
+- 双轨（v1.1 落地形态）：**Agent 侧开关** `STP_SCRIPT_PACKAGES`——`off`（默认，逃生阀关：一律 `nfs_path`，不碰包源）/ `on`（优先包，失败回退 `nfs_path` 并记 WARNING）/ `strict`（只走包，失败 = 步骤 exit 2）；叠加按 script 行灰度（`package_sha256` 为空 → 旧路径）。控制面只在 expected 清单多带 `package_sha256`（沿 ADR-0033 v1.1「契约翻译在 Agent 边缘」）。scan 回填一次把 210 行全部置非空，所以行级灰度不足以控制切换节奏，开关是必要的。
+- `agent-code` artifact 排除 `scripts/` **推迟到 Phase 3**：Phase 3 前排除等于让 `rsync --delete` 清掉主机目录，而回退路径正是这些目录。
 
 ### D5：显式继承 ADR-0039 D2 / D3 / D4 / D5 / D7，作用域从目录改为包
 
@@ -187,11 +188,11 @@ ADR-0039 转 Superseded 的时机 = 本 ADR Accepted 当日（§9）。
 | **1** | 本机控制面切 bundle 安装形态（D6 选 B）：`build_bundle` → install 到 `<releases>/<digest>/` → unit `WorkingDirectory` 与 `STP_SCRIPT_ROOT` 改指 → `check-deploy-source.sh` 去减号；**附部署根外部物料清单** | Phase 0 | 运行期非门禁（最危险）：inventory.ini / dist-prod / venv 物料缺失 |
 | **2a** ✅ | 打包 + 登记 + 等价证明：对 210 行 `script` 从 `origin/main` 当前目录打包 → `tool_manifest.json` 登记 → 新增 `package_sha256` 列并回填 → 证明入口 sha == `content_sha256` 且伴随 sha == `support_files_manifest`（基准 = 当前字节，见 §1.3）。**`nfs_path` 不动**，可回滚。**已落地**：`tools/dev/check_script_packages.py`（`git ls-files` 成员 + 确定性打包 + 登记 + 等价门禁）、`backend/scripts/check_script_package_equivalence.py`（只读证明，生产 212 行 = 210 ok + 2 无目录退役行）、迁移 `ad51c1d3f2a1`、scan 回填（`package_backfilled` / `package_conflicts`）；manifest 条目 `python: null` = Agent 自身解释器 | Phase 0 | `check_tool_manifest` append-only；alembic 迁移门禁 |
 | **2b** | 切执行路径（D4）：`ScriptRegistry` → `ensure_package` → 三处耦合解除 → `verify_scripts` 整包校验 → `agent-code` 排除 `scripts/`；按 script 行灰度 | 2a + Phase 1 | Agent 测试面（`backend/agent/tests`）大面积改夹具；ADR-0043 宽限判据测试 |
-| **3** | 一次性删除 208 个版本目录；每族留一棵源码树 | **只依赖 2a**（不等 2b） | `check-script-version-immutability.py` 须同 PR 退役；棘轮基线归零 |
+| **3** | 一次性删除 210 个版本目录；每族留一棵源码树；scan 注册改读 manifest；`agent-code` 排除 `scripts/` | **2a + 2b + fleet 全部 `strict` 且一轮 verify 全 `package_active`**（v1.1 勘误：删目录随热更新清主机树，回退路径消失） | `check-script-version-immutability.py` 须同 PR 退役；棘轮基线归零 |
 | **4** | 外部工具与资源入包（D7）：展锐三族 + flashtool + aimonkey；控制面摘要面；删 `STP_UNISOC_*` | Phase 1（清单形态）+ ADR-0042 D3 修订 | #737 清单门禁 + `.env*.example` 奇偶；digest 契约测试 |
 | **5** | 治理减法与登记簿（D8） | 各自的顺序约束（D8） | 例外声明格式统一 |
 
-**Phase 3 不必等 2b**：删目录只依赖「包已登记且字节等价」，与执行路径切换解耦。
+**Phase 3 必须等 2b 与 fleet 切换**（v1.1 勘误）：v1.0 写「删目录只依赖 2a」时漏看了两条运行时事实——①热更新 `agent-code` tarball 含 `scripts/`、主机端 `apply-code` 是 `rsync --delete`，仓库删目录 = 下一次热更新删主机目录；②scan 以目录为注册输入，删目录 = 反激活全部行。回退路径（`nfs_path`）与注册输入都随目录消失，所以 2b 的 `strict` 模式必须先在全 fleet 跑绿。
 
 ---
 

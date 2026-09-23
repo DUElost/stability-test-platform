@@ -148,3 +148,39 @@ class TestBundleCarriesManifest:
 def test_version_key_numeric(v, expected):
     assert tuple(x for pair in checker.version_key(v) for x in pair) == expected
     assert checker.version_key("1.3.9") < checker.version_key("1.3.17")
+
+
+class TestModeNormalization:
+    """ADR-0051 Phase 2b 勘误：sha 不得随 umask 变化，只随 Git 可执行位变化。"""
+
+    def test_umask_variants_same_sha_exec_bit_differs(self, tmp_path):
+        src = tmp_path / "src"
+        src.mkdir()
+        f = src / "a.py"
+        f.write_text("A\n", encoding="utf-8")
+        f.chmod(0o644)
+        s644 = packer.build_deterministic_tar_gz(src, tmp_path / "1.tar.gz")["package_sha256"]
+        f.chmod(0o664)
+        s664 = packer.build_deterministic_tar_gz(src, tmp_path / "2.tar.gz")["package_sha256"]
+        f.chmod(0o600)
+        s600 = packer.build_deterministic_tar_gz(src, tmp_path / "3.tar.gz")["package_sha256"]
+        assert s644 == s664 == s600
+        f.chmod(0o755)
+        s755 = packer.build_deterministic_tar_gz(src, tmp_path / "4.tar.gz")["package_sha256"]
+        f.chmod(0o775)
+        s775 = packer.build_deterministic_tar_gz(src, tmp_path / "5.tar.gz")["package_sha256"]
+        assert s755 == s775 and s755 != s644
+
+    def test_normalized_mode_pure_function(self):
+        import tarfile
+
+        info = tarfile.TarInfo("x")
+        info.type = tarfile.REGTYPE
+        info.mode = 0o664
+        assert packer._normalized_mode(info) == 0o644
+        info.mode = 0o770
+        assert packer._normalized_mode(info) == 0o755
+        info.type = tarfile.DIRTYPE
+        assert packer._normalized_mode(info) == 0o755
+        info.type = tarfile.SYMTYPE
+        assert packer._normalized_mode(info) == 0o777
