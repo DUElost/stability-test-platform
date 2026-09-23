@@ -1,11 +1,11 @@
 # install_apk 用例只 stub sleep 不推时钟：60–90 秒忙等按圈吃内存，冻结控制面宿主（#3202）
 
-Status: implemented
+Status: implemented（夹具：#3210 已合入失败路径；本 PR 补齐瞬态 push 路径 + 守卫）
 Class: bug-fix
 
 ## Decision
 
-`backend/agent/tests/test_powercycle_scripts.py::TestInstallApkV103` 的两条用例把
+`backend/agent/tests/test_powercycle_scripts.py::TestInstallApkV103` 的两条用例曾把
 `v103.time.sleep` 换成 `lambda s: None`，但**没有同时替换 `v103.time.time`**。被测
 `install_apk` 的等待环靠真时钟判 deadline：
 
@@ -23,6 +23,10 @@ Class: bug-fix
 -        monkeypatch.setattr(v103.time, "sleep", lambda s: None)
 +        _patch_advancing_clock(monkeypatch, v103)
 ```
+
+落地节奏：PR #3210（`b74f579f`）先把 `test_pm_install_failure_output_preserved` 改成
+`_patch_advancing_clock`；本 PR（#3213）在与 main 合流后保留该改动，并把同形的
+`test_transient_push_failure_recovers_on_retry` 一并改掉，避免留下第二条 busy-wait 路径。
 
 配套一条**函数粒度**的守卫 `tests/test_agent_clock_stub_guard_3202.py`：某函数若把
 `<mod>.time.sleep` 换成 no-op，同一函数内必须推进时钟。粒度必须是函数——该文件本来就有
@@ -62,7 +66,8 @@ pytest tests/test_agent_clock_stub_guard_3202.py -q → 3 passed（含判别力�
 ```
 
 版本对应（防误报）：`64d0ef93`（复现点）与 PR #3208 已推 head `2f47ad96` 之间该文件
-`git diff --numstat` 为空 ⇒ 缺陷确已进入 main（`8bc6bc1e`）。
+`git diff --numstat` 为空 ⇒ 缺陷确已进入 main（`8bc6bc1e`）。随后 #3210（`b74f579f`）修了
+失败路径一处；合流后本 PR 仍保留守卫与瞬态 push 路径的同形修复。
 
 ## Revisit
 
