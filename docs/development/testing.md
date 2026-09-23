@@ -34,6 +34,7 @@ cp .env.test.example .env.test   # 首次
 | 场景 | 做法 |
 |------|------|
 | 日常验证 | 优先 `pytest backend/agent/tests/` |
+| 任何 `pytest` / 构建命令 | **套 cgroup 内存硬顶**（本机可能同时是生产控制面宿主，见下「测试执行内存硬顶」） |
 | 必须跑 `backend/tests/` | **Docker testcontainers**（`conftest` 在未设 `TEST_DATABASE_URL` 时拉起临时 `postgres:16`） |
 | 迁移试验 | 禁止对业务库试跑 `alembic upgrade`；在 CI / 容器 / 开发机验证 |
 | ❌ 禁止 | `TEST_DATABASE_URL=...@localhost:5432/<业务库>` |
@@ -41,6 +42,26 @@ cp .env.test.example .env.test   # 首次
 **无 SQLite 退路**：`conftest` 固定拉起 testcontainers Postgres（`test_ci_and_test_harness_files.py` 契约钉住不得存在 SQLite 回退路径）。
 
 用户须在 `docker` 组（`permission denied` 时 `usermod -aG docker` 后重新登录），不要用生产 `DATABASE_URL` 代替测试库。
+
+### 测试执行内存硬顶（#3200：反复整机冻结换来的判据）
+
+本机可能同时是**生产控制面宿主**（同机 PostgreSQL + NFS 导出 + 控制面 API）。在这种机器上，
+一条失控的测试循环不是「测试慢」而是**整机不可用**：`backend/agent/tests` 已造成 2026-08-03
+三次（#123）与 2026-09-23 13:42 一次（#3200）冻结；后者 120 秒内单进程 anon
+2.6 GiB→15.3 GiB、swap 只剩 658 MiB，journald / SSH / 监控抓取全部停止，只能人工强制重启
+（wtmp 标 `crash`）。所以缺省姿势是套硬顶，而不是裸跑：
+
+```bash
+systemd-run --user --scope -p MemoryMax=6G -p MemorySwapMax=0 -- \
+  env -i PATH="$PATH" HOME="$HOME" PYTHONPATH=. \
+  venv/bin/python -m pytest backend/agent/tests/ -q
+```
+
+- `MemorySwapMax=0` 是**故意**禁止逃逸到 swap——换页风暴正是失速的形态；
+- 被顶杀死（rc=137 / `Memory cgroup out of memory`）是**结论不是障碍**：有失控循环，去定位它，
+  别靠加大上限续跑；
+- 高危夹具形态见 §7「假时钟」条；宿主侧兜底防线与验证步骤见
+  `deploy/control-plane/host-defense/README.md`。
 
 ### 测试容器与残留巡检（#1482）
 
@@ -204,6 +225,12 @@ dev 栈与假 Agent 驱动的观测类陷阱（compose `-e` 转发、`/proc` 自
   让后来者排队、放大交错窗口让无锁实现必交叉），必须在注释里写明**为什么没有可等的量**。
 - **否定断言**（"之后再没有 X"）单独注意：非事件没有正向可等的量 → 先等前提成立
   （"已处理完"、"线程已退出"）再断言，否则按 (b) 保留并说明。
+- **(c) 时钟上界在假时钟下不是上界**（#3200）：`_patch_advancing_clock` 这类夹具让 `sleep(s)`
+  直接推进 `time.time()`（它修掉的是墙钟 busy-wait，见
+  `docs/notes/process/2026-09-17-agent-suite-clock-hotspots.md`）。代价是 `while time.time() <
+  deadline` 型循环在测试里**每秒可迭代数十万次**：退出条件一旦不成立，后果从「慢」变成
+  「吃内存」（实测 ≈160 MB/s，120 s 吃 12.7 GiB ⇒ 整机冻结）。用假时钟加速时，同一循环必须另有
+  **与迭代计数挂钩的上界**（`for _ in range(N)`、轮询次数断言），整目录验证按 §2 套内存硬顶。
 
 为什么值得守：这个套件里裸等待造成的随机红**只在特定 job（夜间 / PR 路径）暴露**，
 平均晚一天被发现（#2551）；而等量算错还会造成更隐蔽的**"静默没测到"**——断言依赖的状态
@@ -264,7 +291,7 @@ guard.assert_absent("row.state = ev.state", why="#2025 裸赋值不得回潮")  
 - 真机 ADB/NFS 不在默认 CI  
 - 控制面全量可能较慢；可按文件跑 `-x`  
 - E2E dedup extract 需共享存储环境  
-- **mock `subprocess.Popen` 必须补全 `stdout`/`stderr`（#123）**：`pipeline_engine._pump_process` 用 reader 线程逐行读流；未配置的 `MagicMock` 流会让 `readline()` 永不返回空串、reader 无限 append，内存以数百 MB/s 增长直至 OOM（曾导致整机冻结）。写法：`proc.stdout = io.StringIO(""); proc.stderr = io.StringIO("")`。整目录验证建议套内存上限：`systemd-run --user --scope -p MemoryMax=6G -p MemorySwapMax=0 -- venv/bin/python -m pytest backend/agent/tests/ -q`
+- **mock `subprocess.Popen` 必须补全 `stdout`/`stderr`（#123）**：`pipeline_engine._pump_process` 用 reader 线程逐行读流；未配置的 `MagicMock` 流会让 `readline()` 永不返回空串、reader 无限 append，内存以数百 MB/s 增长直至 OOM（曾导致整机冻结）。写法：`proc.stdout = io.StringIO(""); proc.stderr = io.StringIO("")`。整目录验证的内存硬顶是**规范姿势**而非建议，命令见 §2「测试执行内存硬顶」。
 
 ## 9. 真机清理三态回归（夹具，#2162）
 

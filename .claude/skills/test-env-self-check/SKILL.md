@@ -1,6 +1,6 @@
 ---
 name: test-env-self-check
-description: 在本仓库运行后端/前端测试或排查环境异常前的自检清单（解释器、测试库指向、WSL ADB 端口、脚本根）。触发时机：准备跑 pytest/vitest、测试收集期报错、Agent 心跳正常但设备数为 0。
+description: 在本仓库运行后端/前端测试或排查环境异常前的自检清单（解释器、测试库指向、内存硬顶、WSL ADB 端口、脚本根）。触发时机：准备跑 pytest/vitest、测试收集期报错、套件内存增长异常或被 cgroup 杀、Agent 心跳正常但设备数为 0。
 ---
 
 # 测试与环境自检
@@ -31,15 +31,40 @@ unset TEST_DATABASE_URL   # 让 conftest 走 Docker testcontainers（推荐）
 - **无 SQLite 退路**：`conftest` 固定拉起 testcontainers Postgres（契约测试钉住不得
   存在 SQLite 回退路径，见 `docs/development/testing.md`）。
 
-## 3. 快速短路验证（<40s）
+## 3. 测试执行内存硬顶（生产控制面宿主 = 本机时的红线）
+
+本机同时是**生产控制面宿主**（同机跑 PostgreSQL + NFS 导出 + 控制面 API）。一条失控的
+测试循环就能把整机打死：`backend/agent/tests` 的历史上已有 **2026-08-03 三次**（#123）与
+**2026-09-23 13:42**（#3200）整机冻结，后者是 120 秒内 anon 2.6 GiB→15.3 GiB、swap 打到
+只剩 658 MiB，只能人工按电源。所以**裸跑不是缺省姿势**：
 
 ```bash
-python -m pytest backend/agent/tests/ -q          # Agent 侧自足套件
-TESTING=1 JWT_SECRET_KEY=test-secret \
-  python -m pytest backend/tests/api/<目标文件> -q  # 控制面单文件需 PG
+# 任何 pytest 都套 cgroup 硬顶：超限只损失这一次运行，不再冻结整机
+systemd-run --user --scope -p MemoryMax=6G -p MemorySwapMax=0 -- \
+  env -i PATH="$PATH" HOME="$HOME" PYTHONPATH=. \
+  venv/bin/python -m pytest backend/agent/tests/ -q
 ```
 
-## 4. WSL Agent 环境（仅涉及 Agent 联调时）
+- `MemorySwapMax=0` 是**故意**的：不许逃逸到 swap（换页风暴正是失速的形态）。
+- 被顶杀死（rc=137 / `Memory cgroup out of memory`）是**结论不是障碍**：说明有失控循环，
+  去定位它，别靠加大 `MemoryMax` 续跑。
+- 已知高危形态：`_patch_advancing_clock` 这类**假时钟推进**夹具——它把墙钟 busy-wait
+  变成每秒数十万次迭代，退出条件一旦不成立就从「耗秒」变成「吃内存」。等待/重试环必须
+  另有**迭代上界**（判据见 `docs/development/testing.md` §7）。
+
+## 4. 快速短路验证（<40s）
+
+```bash
+# Agent 侧自足套件（套顶，见 §3）
+systemd-run --user --scope -p MemoryMax=6G -p MemorySwapMax=0 -- \
+  python -m pytest backend/agent/tests/ -q
+# 控制面单文件需 PG
+TESTING=1 JWT_SECRET_KEY=test-secret \
+  systemd-run --user --scope -p MemoryMax=6G -p MemorySwapMax=0 -- \
+  python -m pytest backend/tests/api/<目标文件> -q
+```
+
+## 5. WSL Agent 环境（仅涉及 Agent 联调时）
 
 ```bash
 grep -q '^ANDROID_ADB_SERVER_PORT=' backend/agent/.env 2>/dev/null \
@@ -51,7 +76,7 @@ grep -q '^ANDROID_ADB_SERVER_PORT=' backend/agent/.env 2>/dev/null \
 - `STP_SCRIPT_ROOT` 必须显式设置；扫描机≠运行机时另设
   `STP_SCRIPT_RUNTIME_ROOT`。
 
-## 5. 更全的门禁矩阵
+## 6. 更全的门禁矩阵
 
 ```bash
 python scripts/run_gates.py check:quick    # 纯静态一轮
@@ -66,6 +91,9 @@ python scripts/run_gates.py check:gov      # 治理面专项
 - `TEST_DATABASE_URL` 一律不得指向 `stp`（生产）或 `stp_dev`（compose 容器库名）——
   §2 的短路检查不过就停；
 - 测试与 ruff 一律 `python -m` 形式（裸 `pytest` 会落到另一套解释器，报错信号滞后）；
+- **裸跑 `pytest` 不带 cgroup 内存硬顶**（§3）是本机最贵的一次教训：本机就是生产控制面
+  宿主，一条失控循环即可整机冻结并只能人肉按电源（#123 三次 / #3200 一次）。被顶杀死时去
+  定位失控循环，**不要**靠加大 `MemoryMax` 续跑；
 - **无 SQLite 退路**（`ALLOW_SQLITE_TESTS` 不存在于 fixture）；确需隔离库时 `unset
   TEST_DATABASE_URL` 走 testcontainers；
 - WSL Agent 必须 `ANDROID_ADB_SERVER_PORT=5039`；Linux 生产 host 用默认 5037（误配

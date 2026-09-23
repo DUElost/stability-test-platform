@@ -129,6 +129,8 @@ MESSAGES = {
     "install_frontend": "The public entry did not serve the front-end bundle; check the deploy-root traversal bits and the Nginx root.",
     "install_health": "The control plane did not reach a healthy, schema-aligned state in time.",
     "install_monitoring": "The site monitoring stack did not come up; check the package install, that the distribution unit reads ARGS from /etc/default, and `systemctl status prometheus prometheus-node-exporter`.",
+    # 宿主 OOM/卡死防线（#3200）：装了不等于生效——见 stages.py 的 host_defense_artifacts()。
+    "install_host_defense": "The host OOM defense line is not actually armed: install the earlyoom package, keep --dryrun out of /etc/default/earlyoom, and after `systemctl daemon-reexec` the readback `systemctl show -p RuntimeWatchdogUSec --value` must be non-zero. A config file that was written but never armed is exactly how the 2026-09-23 control-plane hang still needed a human at the power button.",
     # ── S5 Agent 接入（I4）───────────────────────────────────────────────
     "agent_key_permissions": "Own the declared private key with mode 0600 as the control-plane service account so Ansible can read it.",
     "agent_install_unconfigured": "Set STP_AGENT_INSTALL_API_URL on the control plane (S2 renders it) and retry the install.",
@@ -230,4 +232,3 @@ def passed(check_id: str, role: str, location: str, code: str, message: str, rem
 def blocked(check_id: str, role: str, location: str, code: str, message: str, remediation: str) -> Check:
     """Verified as *not verifiable* here; it never certifies the step either."""
     return Check(check_id, role, "BLOCKED", location, code, message, remediation)
-

@@ -1112,13 +1112,15 @@ def _install_status_summary(console_status: str | None, found: bool, has_run: bo
     return _INSTALL_STATUS_BY_CONSOLE.get(console_status, "unknown")
 
 
-def _latest_install_audits(db: Session, host_id: str) -> tuple[Any, Any]:
-    """最近一次安装请求 / 最近一次安装结果（ADR-0044 D3：审计是持久证据）。
+def _latest_console_audits(
+    db: Session, host_id: str, request_action: str, outcome_action: str
+) -> tuple[Any, Any]:
+    """最近一次「请求」/最近一次「结果」审计（ADR-0044 D3：审计是持久证据）。
 
-    「持久」的视界（ADR-0050 丙案）：审计保留期视界内——`install_agent*` 落
-    business 默认桶（默认 90d，AUDIT_LOG_BUSINESS_RETENTION_DAYS 可调）。视界
-    外的安装运行不再可回溯，本函数读空 → 状态按「无运行」派生；装没装上的
-    布尔事实不受影响（`host.extra.agent_installed[_at]` 无界保留）。
+    「持久」的视界（ADR-0050 丙案）：审计保留期视界内——`install_agent*` 与
+    `ensure_flash_prereqs*` 均落 business 默认桶（默认 90d，
+    AUDIT_LOG_BUSINESS_RETENTION_DAYS 可调）。视界外的运行不再可回溯，
+    本函数读空 → 状态按「无运行」派生。
 
     按 (timestamp, id) 排序取最新——同一秒内产生的两条也要稳定可比（id 单调）。
     """
@@ -1130,7 +1132,12 @@ def _latest_install_audits(db: Session, host_id: str) -> tuple[Any, Any]:
             .first()
         )
 
-    return _latest("install_agent_request"), _latest("install_agent")
+    return _latest(request_action), _latest(outcome_action)
+
+
+def _latest_install_audits(db: Session, host_id: str) -> tuple[Any, Any]:
+    """最近一次安装请求 / 最近一次安装结果（ADR-0044 D3）。"""
+    return _latest_console_audits(db, host_id, "install_agent_request", "install_agent")
 
 
 def _outcome_console_status(details: dict[str, Any]) -> str:
@@ -1370,10 +1377,16 @@ def host_ensure_flash_prereqs(
 @router.get("/{host_id}/flash-prereqs/status")
 def host_flash_prereqs_status(
     host_id: str,
-    _db: Session = Depends(get_db),
+    db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
-    """查询刷机前置归位运行状态（RunConsole）。"""
+    """查询刷机前置归位运行状态（ADR-0044 D4 同口径：活动运行优先，其次审计回放）。
+
+    #3180：registry `_ACTIVE_CONSOLE_BY_HOST` 的终态可读窗口只有 `on_complete`
+    记完 outcome 到清位的几毫秒，前端 2s 轮询必然错过；清位后若只回 `idle`，
+    成功的补齐也会空转到 900s TIMEOUT 并占死批次槽。回放分支让终态在注册位
+    清除后依然可观测（数据面 `ensure_flash_prereqs*` 审计一直都有，读路补上）。
+    """
     active_run_id = get_active_flash_prereqs_console_id(host_id)
     if active_run_id:
         snapshot = flash_prereqs_outcome_snapshot(active_run_id)
@@ -1390,15 +1403,51 @@ def host_flash_prereqs_status(
             "room": f"console:{active_run_id}",
             "log_path": snapshot.get("log_path"),
         }
+
+    # 没有活动运行：回放审计里的最近一次刷机前置补齐（同 install/status 的二级/三级）。
+    request_row, outcome_row = _latest_console_audits(
+        db, host_id, "ensure_flash_prereqs_request", "ensure_flash_prereqs"
+    )
+    if request_row is None:
+        return {
+            "host_id": host_id,
+            "status": _install_status_summary(None, False, False),
+            "console_run_id": None,
+            "console_status": None,
+            "console_found": False,
+            "exit_code": None,
+            "room": None,
+            "log_path": None,
+        }
+    request_details = dict(request_row.details or {})
+    started_run_id = request_details.get("console_run_id")
+    if outcome_row is not None and outcome_row.timestamp >= request_row.timestamp:
+        details = dict(outcome_row.details or {})
+        console_status = _outcome_console_status(details)
+        run_id = details.get("console_run_id") or started_run_id
+        return {
+            "host_id": host_id,
+            "status": _install_status_summary(console_status, True, True),
+            "console_run_id": run_id,
+            "console_status": console_status,
+            "console_found": False,
+            "exit_code": details.get("rc"),
+            "room": None,
+            "log_path": details.get("log_path")
+            or (str(RunConsole.instance().log_file_path(run_id)) if run_id else None),
+        }
+    # 有请求、没有更新的结果 → lost（控制面重启 / 结果未及落库），调用方按取消处理。
     return {
         "host_id": host_id,
-        "status": "idle",
-        "console_run_id": None,
+        "status": _install_status_summary(None, False, True),
+        "console_run_id": started_run_id,
         "console_status": None,
         "console_found": False,
         "exit_code": None,
         "room": None,
-        "log_path": None,
+        "log_path": (
+            str(RunConsole.instance().log_file_path(started_run_id)) if started_run_id else None
+        ),
     }
 
 

@@ -1,0 +1,27 @@
+# 控制面宿主 OOM 防线（earlyoom 启动参数）。
+# Rendered by the site installer for <deploy-root> — do not edit by hand.
+# 事实源：本文件；安装与生效判据见 tools/site_config/stages.py 的 HOST_DEFENSE_* 与
+# 同目录 README.md。改这里即改全线：S4 会重写 /etc/default/earlyoom、restart 单元，
+# 并核对「不再是 --dryrun」——空转的防线不算防线。
+# 关联：#3200（2026-09-23 13:42 整机卡死）、#123（2026-08-03 三次同形）、#3050 G2
+#
+# 历史：2026-09-14 起草时选了「只看不杀」的 dry-run；2026-09-23 那次卡死里它打了
+# 307 行「低内存」而一个进程都没动，最后仍靠人按电源。⇒ 撤 dryrun，成为真防线。
+#
+# 触发条件：avail <15%(-m) 且 swap 剩余 <8%(-s) 才动作；到 8%/4% 升级 SIGKILL。
+#   ⇒ 它是**最后**一道，不是第一道；第一道是测试执行的 cgroup 硬顶
+#     （docs/development/testing.md §2「测试执行内存硬顶」）。
+#
+# 四处实质变更逐条有据（详见 docs/notes/process/2026-09-23-host-memory-defense-line-3200.md）：
+#   1) 删 --dryrun           —— 见上
+#   2) --prefer 补 python     —— earlyoom 匹配的是**进程名 comm**（--help："process names"）；
+#      失控体 comm=`python`（venv/bin/python -m pytest），旧表只有 python3/python3.13 ⇒ 不命中。
+#      实测死前它锁定的候选是 24 MiB 的 zcode zygote（oom_score 1172），不是 15.3 GiB 的元凶。
+#   3) 去 -n（D-Bus 通知）+ 加 -p —— 失速窗内 journald 有它的子进程
+#      「Failed to open connection to "system" message bus」与内核
+#      「cgroup: fork rejected by pids controller in /system.slice/earlyoom.service」；
+#      -p 让它自身 nice=-20、oom_score_adj=-100，别在失速期被人一起拖死。
+#   4) --avoid 补 redis-server / node_exporter —— 生产依赖，09-14 原表漏了（redis 是队列面）。
+#
+# --avoid 保护生产/桌面关键进程；--prefer 优先牺牲 harness/浏览器/测试类用户进程。
+EARLYOOM_ARGS="-r 300 -m 15,8 -s 8,4 -p --ignore-root-user --avoid '(^|/)(postgres|postgresql|redis-server|node_exporter|dockerd|containerd|containerd-shim.*|prometheus.*|uvicorn|gunicorn|nginx|caddy|sshd|systemd.*|journald|dbus-daemon|dbus-broker.*|gdm.*|clash.*|pipewire.*|wireplumber|Xorg|Xwayland|gnome-shell|gnome-session.*|gnome-software|earlyoom)$' --prefer '(^|/)(node|codebuddy|zcode|cursor|opencode|claude|codex|ghostty|yandex_browser|chrome|chromium|electron|python|python3|python3\.[0-9]+|pytest)$'"

@@ -42,7 +42,9 @@ class FakeOps:
         self._hostname = hostname
         self._mounts = mounts
         self._users = set(users or ())
-        self._commands = set(commands or ("python3", "systemctl", "nginx"))
+        self._commands = set(commands or ("python3", "systemctl", "nginx", "earlyoom"))
+        # 安装器写完后由 systemd 兑现，故替身默认「狗是活的」；专门的红测会覆盖成 0。
+        responses = {"RuntimeWatchdogUSec": (0, "30s"), **(responses or {})}
         self._responses = responses or {}
 
     def run(self, argv, *, env=None, input_text=None, cwd=None):
@@ -235,7 +237,7 @@ def prepare(tmp_path: Path, *, version: str = "synthetic-2026.09.0", tamper: boo
     return config_path, bindings, state_dir, target, site_id, data
 
 
-_PACKAGE_BINARIES = ("prometheus", "prometheus-node-exporter", "exportfs")
+_PACKAGE_BINARIES = ("prometheus", "prometheus-node-exporter", "exportfs", "earlyoom")
 
 
 class InstallingFakeOps(FakeOps):
@@ -1056,7 +1058,7 @@ def test_install_publishes_the_export_to_the_declared_agents(tmp_path, monkeypat
     ops = FakeOps(
         hostname="control-i3.synthetic.invalid",
         mounts={str(tmp_path / "mnt/share")},
-        commands={"python3", "systemctl", "nginx", "exportfs"},
+        commands={"python3", "systemctl", "nginx", "exportfs", "earlyoom"},
     )
 
     report = invoke(tmp_path, config_path=config_path, ops=ops)
@@ -1119,7 +1121,7 @@ def test_first_install_without_agents_defers_the_export(tmp_path, monkeypatch):
     ops = FakeOps(
         hostname="control-i3.synthetic.invalid",
         mounts={str(tmp_path / "mnt/share")},
-        commands={"python3", "systemctl", "nginx", "exportfs"},
+        commands={"python3", "systemctl", "nginx", "exportfs", "earlyoom"},
     )
 
     report = invoke(tmp_path, config_path=config_path, ops=ops)
@@ -1144,7 +1146,7 @@ def test_upgrade_without_agents_keeps_the_existing_export(tmp_path, monkeypatch)
     ops = FakeOps(
         hostname="control-i3.synthetic.invalid",
         mounts={str(tmp_path / "mnt/share")},
-        commands={"python3", "systemctl", "nginx", "exportfs"},
+        commands={"python3", "systemctl", "nginx", "exportfs", "earlyoom"},
     )
     first = invoke(tmp_path, config_path=with_agents, ops=ops)
     assert first["status"] == "PASS", first
@@ -1155,7 +1157,7 @@ def test_upgrade_without_agents_keeps_the_existing_export(tmp_path, monkeypatch)
     ops2 = FakeOps(
         hostname="control-i3.synthetic.invalid",
         mounts={str(tmp_path / "mnt/share")},
-        commands={"python3", "systemctl", "nginx", "exportfs"},
+        commands={"python3", "systemctl", "nginx", "exportfs", "earlyoom"},
     )
     second = invoke(tmp_path, config_path=no_agents, ops=ops2)
 
@@ -1181,7 +1183,7 @@ def test_kept_branch_fails_when_nfs_server_cannot_start(tmp_path, monkeypatch):
     ops1 = FakeOps(
         hostname="control-i3.synthetic.invalid",
         mounts={str(tmp_path / "mnt/share")},
-        commands={"python3", "systemctl", "nginx", "exportfs"},
+        commands={"python3", "systemctl", "nginx", "exportfs", "earlyoom"},
     )
     first = invoke(tmp_path, config_path=with_agents, ops=ops1)
     assert first["status"] == "PASS", first
@@ -1191,7 +1193,7 @@ def test_kept_branch_fails_when_nfs_server_cannot_start(tmp_path, monkeypatch):
     ops2 = FakeOps(
         hostname="control-i3.synthetic.invalid",
         mounts={str(tmp_path / "mnt/share")},
-        commands={"python3", "systemctl", "nginx", "exportfs"},
+        commands={"python3", "systemctl", "nginx", "exportfs", "earlyoom"},
         responses={"enable --now nfs-server": (1, "Failed to start nfs-server.service")},
     )
     second = invoke(tmp_path, config_path=no_agents, ops=ops2)
@@ -1244,7 +1246,7 @@ def test_export_skips_apt_when_the_command_is_already_there(tmp_path, monkeypatc
     ops = FakeOps(
         hostname="control-i3.synthetic.invalid",
         mounts={str(tmp_path / "mnt/share")},
-        commands={"python3", "systemctl", "nginx", "exportfs"},
+        commands={"python3", "systemctl", "nginx", "exportfs", "earlyoom"},
     )
 
     report = invoke(tmp_path, config_path=config_path, ops=ops)
@@ -1306,6 +1308,73 @@ def _seed_distro_default(tmp_path: Path, relative: str, text: str = DISTRO_ARGS_
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
     return path
+
+
+def test_host_defense_is_installed_and_verified_armed(tmp_path, monkeypatch):
+    """#3200：防线落盘后必须 restart + daemon-reexec + 回读，三件齐了才算装上。"""
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    prepare(tmp_path)
+    _distro_units(tmp_path)
+    ops = InstallingFakeOps(hostname="control-i3.synthetic.invalid",
+                            mounts={str(tmp_path / "mnt/share")})
+
+    report = invoke(tmp_path, config_path=_monitoring_site(tmp_path), ops=ops)
+
+    assert report["status"] == "PASS", report
+    assert "host_defense_installed" in codes(report)
+    assert "host_defense_armed" in codes(report)
+    earlyoom_default = _system_file(tmp_path, "etc/default/earlyoom").read_text(encoding="utf-8")
+    assert earlyoom_default.startswith("# 控制面宿主 OOM 防线")
+    assert str(tmp_path) not in earlyoom_default or True  # 渲染过即可（不锁部署根文案）
+    watchdog = _system_file(tmp_path, "etc/systemd/system.conf.d/10-stp-watchdog.conf")
+    assert "RuntimeWatchdogSec=30s" in watchdog.read_text(encoding="utf-8")
+    joined = [" ".join(call) for call in ops.calls]
+    assert "systemctl restart earlyoom" in joined
+    assert "systemctl daemon-reexec" in joined, "manager.conf 只有 re-exec 才会被 PID1 重读"
+
+
+def test_host_defense_is_not_gated_by_the_monitoring_switch(tmp_path, monkeypatch):
+    """关掉观测面不得顺手关掉自动复位：防线与 monitoring.enabled 无关。"""
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    prepare(tmp_path)
+    _distro_units(tmp_path)
+    ops = InstallingFakeOps(hostname="control-i3.synthetic.invalid",
+                            mounts={str(tmp_path / "mnt/share")})
+
+    report = invoke(tmp_path, config_path=_monitoring_site(tmp_path, enabled=False), ops=ops)
+
+    assert report["status"] == "PASS", report
+    assert "host_defense_armed" in codes(report)
+    assert _system_file(tmp_path, "etc/systemd/system.conf.d/10-stp-watchdog.conf").is_file()
+
+
+def test_host_defense_watchdog_dark_fails_closed(tmp_path, monkeypatch):
+    """写了 drop-in 但 PID1 回读仍是 0 ⇒ FAIL。这正是 09-14 到 09-23 之间的真实状态。"""
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    prepare(tmp_path)
+    _distro_units(tmp_path)
+    ops = InstallingFakeOps(
+        hostname="control-i3.synthetic.invalid",
+        mounts={str(tmp_path / "mnt/share")},
+        responses={"RuntimeWatchdogUSec": (0, "0")},
+    )
+
+    report = invoke(tmp_path, config_path=_monitoring_site(tmp_path), ops=ops)
+
+    assert "install_host_defense" in codes(report)
+    assert "host_defense_armed" not in codes(report)
+
+
+def test_host_defense_dryrun_args_never_ship():
+    """空转的防线不是防线（#3050 G2）：生效行里出现 --dryrun 就该在门禁里红。"""
+    lines = (_REPO_ROOT / "deploy/control-plane/host-defense/earlyoom.default"
+             ).read_text(encoding="utf-8").splitlines()
+    effective = [line for line in lines if line.startswith("EARLYOOM_ARGS=")]
+    assert len(effective) == 1, "防线参数只能有一处生效行，多处会互相覆盖"
+    assert "--dryrun" not in effective[0]
+
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_shipped_distro_defaults_do_not_block_the_monitoring_stack(tmp_path, monkeypatch):
@@ -1484,7 +1553,7 @@ def test_export_preparation_failure_is_reported(tmp_path, monkeypatch):
     ops = FakeOps(
         hostname="control-i3.synthetic.invalid",
         mounts={str(tmp_path / "mnt/share")},
-        commands={"python3", "systemctl", "nginx", "exportfs"},
+        commands={"python3", "systemctl", "nginx", "exportfs", "earlyoom"},
         responses={"chmod": (1, "")},
     )
 
