@@ -125,6 +125,7 @@ curl -s -H "$AUTH" -X POST http://127.0.0.1:8000/api/v1/scripts/scan \
   而 47 台主机无此文件，就是漏了这步。
 - **scan 幂等**：seed 预建版本显示 created=0/skipped 是正常，勿误判未注册；conflicts 出现时先 `sha256sum` 比对磁盘 vs DB，再决定是否 `?force_rebaseline=true`（需无在途 PlanRun）。
 - **版本号无 v 前缀**：DB `script.version` 存 `2.3.4` 形式（scan 剥 v）。
+- **ADR-0051 Phase 2a 起 scan 还回填 `package_sha256`**（✅2026-09-23 实跑）：响应多两键 `package_backfilled` / `package_conflicts`，来源是仓根 `tool_manifest.json`。首次回填期望 `package_backfilled=210`、`package_conflicts=[]`；之后只读证明 `DATABASE_URL=… venv/bin/python -m backend.scripts.check_script_package_equivalence` 应 `EQUIVALENCE OK … backfilled=<行数>`。新增脚本版本目录后先 `venv/bin/python tools/dev/check_script_packages.py --register`（否则 tool-manifest 门禁红），合入后 `--publish --packages-root /mnt/stp-aee/packages`（把 tar.gz 与 manifest 副本发到站点包源，Agent 从这里拉）。
 
 ## 3. Agent fleet 热更新
 
@@ -171,6 +172,8 @@ PYTHONPATH=. venv/bin/python -m backend.scripts.batch_hot_update --direct
   但平台判其 converged 且永远不会收敛它）。要判 resources 真实到位，必须自算比对——
   探针与结论见 `docs/notes/process/2026-09-22-sop-warn-items-verification.md`，机制缺口是 issue #3128。
 - **不要**在 hot-update 未返回成功时抢 `reload_config`（曾致 event_uploader 读到旧 flag）。
+- **判「哪些 host 忙」要经 `device.host_id` join**（✅2026-09-23）：`job_instance.host_id` 列在生产上常为空，按它查会得到 0 台忙、随后 hot-update API 回 `HOST_HAS_ACTIVE_JOBS`（带 `active_jobs` 清单；**不要**顺手 `abort_running_jobs`）。批量脚本默认跳过忙碌主机（`"skipped": "active_jobs"`），run 结束后**重跑同一命令**即可补齐，已收敛的回 `converged`（实测 `SUMMARY ok=11 converged=11 fail=0 skipped=37`）。
+- **ADR-0051 Phase 2b 脚本包执行开关**（✅2026-09-23 灰度实跑）：在 `.env.backend` 加 `STP_AGENT_SCRIPT_PACKAGES=on|strict`，**重启后端**（API 路径的 env 来自后端进程环境）再 hot-update，响应 `env_keys_synced` 应含 `STP_SCRIPT_PACKAGES`。**digest 相等时 env-only 变更是 `nothing-to-converge`**（不下发），改开关值必须 `batch_hot_update --direct --force`。验证：`POST /script-presence/refresh?host_id=…`（走 verify_scripts 的整包核验并预热 `tools_cache`）后主机上 `find /opt/stability-test-agent/tools_cache -name .stp-verified | wc -l` = 全集版本数（实测 52），`journalctl -u stability-test-agent | grep -c script_packages_fallback_tree` = 0。全 fleet 无回退后再切 `strict`；**Phase 3 删目录前 fleet 必须全在 strict**（ADR-0051 v1.1）。
 
 ## 4. 版本门控顺序（强制）
 
@@ -208,6 +211,7 @@ PYTHONPATH=. venv/bin/python -m backend.scripts.batch_hot_update --direct
 | 2026-08-30 | 新增部署源守卫步骤（§1 step 2/4 前各一行 `tools/dev/check-deploy-source.sh`）：共享工作树曾跑在未合入分支上被推上生产，重启前强制校验 HEAD==main 且工作区干净；已装 systemd unit 另加 `ExecStartPre=-` 兜底（失败仅记日志不中断） | 2026-08-30 事故复盘 + PR |
 | 2026-09-15 | **修正 §0 凭据段**（上表 08-30 的「双 `-F`」在实测中不可用）：token 端点请求体是 form-urlencoded（`--data-urlencode`）；取 token 必须带 `Origin: http://127.0.0.1` 过 CSRF（否则 403 `CSRF check failed`）；用户名来源 `$STP_ADMIN_USER`= `stp-admin`（按 `admin` 会 401）；补响应形状差异（`/api/v1/hosts` 裸数组 vs hot-update `{data:}`） | #2180 D 步上线实操（issue #2203） |
 | 2026-09-22 | **四段全链路端到端实跑（后端 pull+restart / 前端换包 / scan / 48 台热更新到 `45c159cf`）后逐条校准**：① §0 **修正** 09-15 行记的「hot-update 是 `{data:}`」——该路由无 `response_model`，实测回顶层裸对象 `{"ok":true,…}`；② §1 守卫描述补「载荷根未跟踪文件」硬拦；③ §2 补「scan 只写注册表、主机生效必须跑 §3」；④ §3 补「判据是 digest 不是 revision」「desired digest = 现算工作树（含未跟踪文件）」「write-digest 写控制面 desired ⇒ 自愈」「实测 ~3s/台（旧稿 20s/台过时）」「code 载荷口径」；⑤ §6 **推翻** 08-31 的「热更新清带外资源」——`resources/***` 已是 protect-only（#1950/#2019），并新增「载荷根未跟踪文件」行（#3112） | 本次部署实操 + #3111/#3112 |
+| 2026-09-23 | **ADR-0051 Phase 2a/2b 上线实跑校准**：§2 补 scan 的 `package_backfilled`/`package_conflicts` 与 `--register`/`--publish` 两步；§3 补「忙碌判定经 `device.host_id` join、批量跳过后重跑补齐」「脚本包开关 `STP_AGENT_SCRIPT_PACKAGES` 需重启后端再推、env-only 变更须 `--force`、用 presence refresh + `tools_cache` 计数 + 日志 fallback 计数三件套验证」。现场：迁移 `ad51c1d3f2a1`、发布 210 包、scan 回填 210、11/48 台切到 `on`（其余 37 台被 plan_run 518 活跃 job 跳过） | 本次上线实操 |
 | 2026-09-22 | **两处历史 `⚠️待校对` 项实机验证并解除**（详见 `docs/notes/process/2026-09-22-sop-warn-items-verification.md`）：① §6「SP Flash Tool 缺库」——五个包名与工具真实依赖一致（控制面+真机 `ldd`、缺库主机 11 个未解析依赖），fleet 分布 38 齐 / 10 缺（全在 `agent_legacy`），处置改指平台 provisioning（ADR-0037 D5）+ 保留带 `t64` 说明的逃生阀；② §3 带外资源——protect-only 实测成立（两轮 code 推送后 resources 仍在位、mtime 未变），**但**盘点 48 台发现 resources 身份 41/48 一致、7 台字节级偏离（仅 CRLF→LF）而平台判 converged：身份是自报意图、从不自测，机制缺口立 issue #3128 | 真机 ansible 只读探针（48 台全量，含主机侧自算 digest 对拍）+ issue #3128 |
 
 ## 踩坑守卫（负向约束）
