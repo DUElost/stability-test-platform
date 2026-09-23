@@ -33,7 +33,7 @@ Class: process
   与 Git 源 `cmp` 一致；后端重启后 `/health` healthy；scan 响应
   `{"created":0,"skipped":210,"conflicts":[],"package_backfilled":210,"package_conflicts":[]}`；
   等价证明 `EQUIVALENCE OK rows=212 ok=210 backfilled=210 failing=0`；
-- canary `172-21-15-102`：hot-update `ok=true reason=deployed code_version=28e24185`，
+- canary `172-21-x-x`：hot-update `ok=true reason=deployed code_version=28e24185`，
   `env_keys_synced` 含 `STP_SCRIPT_PACKAGES`；presence refresh 52 行 0 missing / 0 mismatch；
   主机 `tools_cache` 52 个 `.stp-verified`，fallback 0，错误 0；
 - 批量 `--direct`：`SUMMARY ok=11 converged=11 fail=0 skipped=37`（37 台被 plan_run 518 活跃 job 跳过）；
@@ -45,3 +45,4 @@ Class: process
 - plan_run 518 结束后重跑批量命令补齐 37 台；全 fleet `fallback=0` 后改 `strict`（需 `--force`）；
   之后才可进入 ADR-0051 Phase 3。
 - `job_instance.host_id` 为空的成因与是否回填，另立单。
+
