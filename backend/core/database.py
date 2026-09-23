@@ -251,12 +251,45 @@ def _pool_env_int(name: str, default: int) -> int:
     return value if value > 0 else default
 
 
+#: 共享 `_pool_capacity_kwargs()` 的引擎数（sync + async，同源容量）。ADR-0047 D1 的
+#: 不变量按这个数乘：每加一个引擎就多一份池，预算校验与门禁都必须跟着走。
+DB_POOL_ENGINES = 2
+
+
 def _pool_capacity_kwargs() -> Dict[str, object]:
-    """同步/异步引擎共用的池容量参数（同源 env 驱动，默认 30 / 60 / 1800）."""
+    """同步/异步引擎共用的池容量参数（同源 env 驱动，默认 20 / 20 / 1800 / 2s）.
+
+    ADR-0047 v1.1（2026-09-23 裁决）：
+    - 默认容量从 30/60 收到 **20/20**——两侧合计 80，落在 PG 可用槽
+      （`max_connections − superuser_reserved − reserved`）以内；
+    - `pool_timeout` 显式设 **2s**（此前是 SQLAlchemy 默认 30s）：排队到 2s 就快失败，
+      调用方拿到 503 + `Retry-After`（`DB_OVERLOADED`）而不是等 30s 的「假卡顿」。
+    预算是否成立不靠默认值保证：启动期由 `tools/dev/check_db_pool_budget.py` 硬校验。
+    """
     return {
-        "pool_size": _pool_env_int("STP_DB_POOL_SIZE", 30),
-        "max_overflow": _pool_env_int("STP_DB_MAX_OVERFLOW", 60),
+        "pool_size": _pool_env_int("STP_DB_POOL_SIZE", 20),
+        "max_overflow": _pool_env_int("STP_DB_MAX_OVERFLOW", 20),
         "pool_recycle": _pool_env_int("STP_DB_POOL_RECYCLE", 1800),
+        "pool_timeout": _pool_env_int("STP_DB_POOL_TIMEOUT", 2),
+    }
+
+
+def pool_capacity() -> Dict[str, int]:
+    """池容量的**单一读数口**（ADR-0047 D1）：每引擎上限与应用侧总上限。
+
+    门禁（`tools/dev/check_db_pool_budget.py`）与测试都从这里取数，避免「校验器自己
+    另算一份」——两份算术就是下一次口径漂移的种子。env 非法值仍按 `_pool_env_int`
+    回退默认（回退后若仍超出预算，门禁负责拒绝启动）。
+    """
+    kwargs = _pool_capacity_kwargs()
+    per_engine = int(kwargs["pool_size"]) + int(kwargs["max_overflow"])
+    return {
+        "pool_size": int(kwargs["pool_size"]),
+        "max_overflow": int(kwargs["max_overflow"]),
+        "pool_timeout": int(kwargs["pool_timeout"]),
+        "per_engine": per_engine,
+        "engines": DB_POOL_ENGINES,
+        "app_total": per_engine * DB_POOL_ENGINES,
     }
 
 

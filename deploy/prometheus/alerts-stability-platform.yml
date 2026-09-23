@@ -278,22 +278,28 @@ groups:
       # 排队超时说明池内已饱和而 PG 侧未必满——合在一条就会互相掩盖。
       - alert: StabilityDbConnectionSlotsExhausted
         expr: increase(stability_db_pool_checkout_failures_total{kind="slots_exhausted"}[15m]) > 0
-        for: 5m
+        # ADR-0047 D5（2026-09-23 裁决）：**无 for**。槽耗尽意味着硬不变量已被突破
+        # （PG 明确拒绝建连），不是趋势——R523 现场 5m 的 for 让告警在事故恢复后
+        # （20:23）才 firing，而 1401 条 53300 早在 20:18 就打完了。
         labels:
-          severity: warning
+          severity: critical
         annotations:
           summary: PostgreSQL rejected new connections (too_many_connections, SQLSTATE 53300)
           description: >-
-            控制面取连接时收到 PG 拒绝新建连接。先分清占满槽的是谁：非超级用户可用
-            = max_connections − superuser_reserved（当前 100 − 3 = 97），而应用侧
-            sync/async 两个池各自上限 90、合计 180 已超过它（ADR-0047 D1/D2 未裁决）；
-            同机 ad-hoc 诊断会话与批量终态化波次（abort / 超时收尾）都是尖峰来源。
-            本告警只负责"发生过的没人知道"这件事，不代裁容量方向。
+            控制面取连接时收到 PG 拒绝新建连接。非超级用户可用
+            = max_connections − superuser_reserved − reserved_connections（当前 100 − 3 − 0 = 97），
+            应用侧 sync/async 两池各自上限（默认 20+20）合计 80，已由启动期
+            check_db_pool_budget.py 硬校验（ADR-0047 D1）；本告警亮起说明该不变量被越过：
+            要么池参数被改大（门禁未生效/被绕过），要么 PG 侧上限被下调，要么同机
+            ad-hoc 会话（备份/迁移/人工 psql）吃掉了预留（STP_DB_CONNECTION_RESERVE）。
+            尖峰来源按 R523 实测是**批量终态化波次**（abort / 超时收尾，490 job → 1644 次
+            /complete）。终态侧已由独立舱壁削峰（StabilityTerminalBulkheadRejected），
+            本告警此后应接近零——再亮就是上面三种形态之一，不是常态。
             池内排队超时是另一条 StabilityDbPoolCheckoutTimeout。
 
       - alert: StabilityDbPoolCheckoutTimeout
         expr: increase(stability_db_pool_checkout_failures_total{kind="timeout"}[15m]) > 0
-        for: 5m
+        # ADR-0047 D5：立即触发（池自身饱和不需要再观察 5m）。
         labels:
           severity: warning
         annotations:
@@ -303,9 +309,32 @@ groups:
             这条说明**池自身**已饱和（PG 未必满）；先查谁长期持有连接——
             singleton 调度任务在长事务里取连接、或保留清理/NFS 回收这类慢 I/O 夹在
             事务中间（#703 已修 leader election 一处，同类形态可再核）。
-            注意 pool_timeout 目前未显式设置（SQLAlchemy 默认 30s），所以触发时
-            调用方多半已经等了 30s：用户侧表现为卡顿而非快速失败，这是 ADR-0047 D2
-            要裁决的"失败形态"，不是本告警能替代的。
+            ADR-0047 v1.1 起 pool_timeout=2s（显式，不再是 SQLAlchemy 默认 30s），
+            所以调用方等的是 2s 内的快失败（对外 503 + Retry-After，DB_OVERLOADED）；
+            触发说明**并发需求真的超过了池容量**（默认 20+20/引擎），而不是把卡顿
+            藏在 30s 的排队里。
+
+      # ADR-0047 D5（#2959）：终态舱壁拒绝率——过载背压的**直接**信号。
+      # 与上面两条的关系：那两条是「已经撞墙」，这条是「主动削峰在起作用」。
+      # 阈值口径：连续 5m 每个 5m 窗都有拒绝（≈ 持续削峰 ≥10m）才报，避免一次
+      # 瞬态拒绝就 page；magnitude 阈值待隔离压测给出分布后再收紧（ADR-0047 §4）。
+      - alert: StabilityTerminalBulkheadRejected
+        expr: increase(stability_terminal_bulkhead_rejected_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Terminal (/complete) bulkhead is shedding load continuously
+          description: >-
+            /agent/jobs/{id}/complete 的并发舱壁连续 ≥10m 在拒绝请求（默认 16 并发 /
+            等待预算 500ms）。它是**设计内的背压**（R523 之后新增，ADR-0047 D2）：
+            终态事实在 Agent 本地 SQLite outbox 里不会丢，峰值过后由 outbox 补送，
+            PlanRun 收敛会晚几十秒。持续拒绝说明三点之一：① 设备规模 × 单批终态
+            的到达率已经超过 16（考虑按实测抬舱壁，并同步核对池预算）；
+            ② Agent 侧退避未生效（重试仍在原地打转，见 P0-3）；
+            ③ 舱壁之外的通道（heartbeat/steps/claim）被别的慢查询拖住。
+            用 stability_terminal_bulkhead_inflight / _waiting 判断是「满负荷在跑」
+            还是「持名额的请求卡住了」。
 
       # ---- #2881 skill 用量探针的执行者指标 --------------------------------------
       # 生产者 = tools/dev/skill_usage_probe.py 的 node-exporter textfile（不是 backend
