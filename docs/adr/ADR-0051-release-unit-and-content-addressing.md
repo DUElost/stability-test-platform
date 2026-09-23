@@ -6,7 +6,7 @@
 - 日期：2026-09-22
 - 决策者：owner（DUElost，2026-09-22）；起草：平台研发组
 - 归属域：semantic-ownership script-version-immutability
-- 落地状态：Phase 0 ✅（#3162）；**Phase 3 ✅**（版本目录删除 + 族树 + manifest 注册 + tarball 排除 + 门禁退役）；**Phase 2b ✅ 且 fleet 48/48 已 `strict`**（2026-09-23 实操：发包 → on 灰度 → strict）；**Phase 2a ✅**（`tool_manifest.json` 登记 35 族 210 版本、`script.package_sha256` 列 + scan 回填、`check_script_packages.py` 并入 tool-manifest 门禁、等价证明对生产库 210/210 通过；包尚未发布到站点 `packages/`，属运维推进项）；Phase 1 / 2b / 3 / 4 / 5 待排期
+- 落地状态：Phase 0 ✅（#3162）；Phase 4 部分 ✅（控制面摘要面：`release-manifest.json` 新增 `control-plane` component，`backend/**` 除 agent、**不排除 `.env*`**——#2269「不在任何摘要面内」根因封死；build/S0 共用同一量具文件，S0 比对 declared 全键、旧两键 bundle 兼容）；**Phase 3 ✅**（版本目录删除 + 族树 + manifest 注册 + tarball 排除 + 门禁退役）；**Phase 2b ✅ 且 fleet 48/48 已 `strict`**（2026-09-23 实操：发包 → on 灰度 → strict）；**Phase 2a ✅**（`tool_manifest.json` 登记 35 族 210 版本、`script.package_sha256` 列 + scan 回填、`check_script_packages.py` 并入 tool-manifest 门禁、等价证明对生产库 210/210 通过；包尚未发布到站点 `packages/`，属运维推进项）；Phase 1 / 2b / 3 / 4 / 5 待排期
 - 归属说明：v1.0 起 `script-version-immutability` 的 owner_anchor 改指本 ADR D1（语义归属表同 PR 改）
 - 标签：release-unit, content-addressing, package-store, script-versioning, deploy-source, anti-corruption, #735, #3075, #1987, #2386
 - 关联：[#735](https://github.com/DUElost/stability-test-platform/issues/735)（脚本膨胀治理）/ [#3075](https://github.com/DUElost/stability-test-platform/issues/3075)（ADR-0033 Phase B 包存储实现）/ [#1987](https://github.com/DUElost/stability-test-platform/issues/1987)、[#2386](https://github.com/DUElost/stability-test-platform/issues/2386)（部署源与检出双重角色）

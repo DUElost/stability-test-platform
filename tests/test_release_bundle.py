@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.agent.artifact_digest import collect_artifact_entries, digest_entries
+from backend.agent.artifact_digest import collect_artifact_entries, collect_control_plane_entries, digest_entries
 from tools.release.build_bundle import MANIFEST_NAME, BundleError, build_bundle, main
 from tools.site_config.manifest import load_release_manifest
 
@@ -73,6 +73,7 @@ def reference_digests(bundle: Path) -> dict[str, str]:
     return {
         "agent-code": digest_entries(collect_artifact_entries(agent_dir, extra, kind="code")),
         "host-resources": digest_entries(collect_artifact_entries(agent_dir, extra, kind="resources")),
+        "control-plane": digest_entries(collect_control_plane_entries(str(bundle))),
     }
 
 
@@ -103,7 +104,7 @@ def test_bundle_carries_the_documented_layout_and_manifest(tmp_path):
 def test_manifest_is_accepted_by_the_installer_side_loader(tmp_path):
     out, _ = built(tmp_path)
     manifest = load_release_manifest(out / MANIFEST_NAME)
-    assert {component.name for component in manifest.components} == {"agent-code", "host-resources"}
+    assert {component.name for component in manifest.components} == {"agent-code", "host-resources", "control-plane"}
     for component in manifest.components:
         assert component.digest.startswith("sha256:")
 
@@ -114,6 +115,48 @@ def test_digests_match_an_independent_adr0040_recomputation(tmp_path):
     assert result["components"] == expected
     manifest = json.loads((out / MANIFEST_NAME).read_text(encoding="utf-8"))
     assert {item["name"]: item["digest"] for item in manifest["components"]} == expected
+
+
+def test_control_plane_surface_isolates_agent_payload(tmp_path):
+    """ADR-0051 Phase 4：control-plane 覆盖 backend/**（除 agent）——两面的漂移互不串扰。"""
+    out, _ = built(tmp_path)
+    cp = {c["name"]: c["digest"] for c in json.loads((out / "release-manifest.json").read_text(encoding="utf-8"))["components"]}
+    assert "control-plane" in cp and cp["control-plane"] == reference_digests(out)["control-plane"]
+    cp = {c["name"]: c["digest"] for c in json.loads((out / "release-manifest.json").read_text(encoding="utf-8"))["components"]}
+
+    (out / "backend/api").mkdir(parents=True)
+    (out / "backend/api/routes.py").write_text("X = 1\n", encoding="utf-8")
+    again = reference_digests(out)
+    assert again["control-plane"] != cp["control-plane"], "控制面载荷新增文件必须改变 control-plane 摘要"
+    assert again["agent-code"] == cp["agent-code"], "backend/agent 之外的变化不得动 agent-code"
+
+    shutil.rmtree(out / "backend/api")
+    (out / "backend/agent/sample.py").write_text("VALUE = 2\n", encoding="utf-8")
+    again = reference_digests(out)
+    assert again["agent-code"] != cp["agent-code"]
+    assert again["control-plane"] == cp["control-plane"], "agent 树内容不得进入控制面摘要（分区隔离）"
+
+
+def test_control_plane_digest_covers_env_files(tmp_path):
+    """#2269 根因是构建机 `.env`「不在任何摘要面内」：control-plane **不排除** .env——
+    若 ignore 被误改让它溜进 bundle，摘要当场变化（S0 fail-closed 才有机会拦）。"""
+    out, _ = built(tmp_path)
+    before = digest_entries(collect_control_plane_entries(str(out)))
+    (out / "backend/.env").write_text("SECRET=leaked\n", encoding="utf-8")
+    assert digest_entries(collect_control_plane_entries(str(out))) != before, ".env 必须进 control-plane 摘要面"
+
+
+def test_legacy_two_component_manifest_still_loads(tmp_path):
+    """兼容性：旧 release-manifest（无 control-plane）仍是合法清单（REQUIRED_COMPONENTS 不变，
+    S0 比对按 declared 全键，旧 declared 两键照旧可过）。"""
+    from tools.site_config.manifest import parse_release_manifest
+
+    out, _ = built(tmp_path)
+    path = out / "release-manifest.json"
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    doc["components"] = [c for c in doc["components"] if c["name"] != "control-plane"]
+    manifest = parse_release_manifest(json.dumps(doc))
+    assert {c.name for c in manifest.components} == {"agent-code", "host-resources"}
 
 
 def test_digest_is_content_addressed_not_a_tree_hash(tmp_path):
@@ -213,7 +256,7 @@ def test_cli_reports_the_bundle_as_json(tmp_path, capsys):
     assert code == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["schema_target"] == "bbbb2222"
-    assert set(payload["components"]) == {"agent-code", "host-resources"}
+    assert set(payload["components"]) == {"agent-code", "host-resources", "control-plane"}
     assert (out / MANIFEST_NAME).is_file()
 
 

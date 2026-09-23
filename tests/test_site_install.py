@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from backend.agent.artifact_digest import collect_artifact_entries, digest_entries
+from backend.agent.artifact_digest import collect_artifact_entries, collect_control_plane_entries, digest_entries
 from tools.site_config import stages
 from tools.site_config.install import run_install
 from tools.site_config.ops import CommandResult
@@ -133,6 +133,7 @@ def _bundle(tmp_path: Path) -> tuple[Path, dict[str, str]]:
     digests = {
         "agent-code": digest_entries(collect_artifact_entries(str(bundle / "backend/agent"), extra, kind="code")),
         "host-resources": digest_entries(collect_artifact_entries(str(bundle / "backend/agent"), extra, kind="resources")),
+        "control-plane": digest_entries(collect_control_plane_entries(str(bundle))),
     }
     return bundle, digests
 
@@ -145,7 +146,7 @@ def _manifest(version: str, digests: dict[str, str]) -> dict:
         "components": [
             {"name": "agent-code", "digest": digests["agent-code"]},
             {"name": "host-resources", "digest": digests["host-resources"]},
-        ],
+        ] + ([{"name": "control-plane", "digest": digests["control-plane"]}] if "control-plane" in digests else []),
         "database": {"schema_target": CODE_HEAD},
         "compatibility": {
             "agent_protocol": ">=1.0,<2.0",
@@ -212,9 +213,13 @@ def _site(tmp_path: Path, bundle: Path, *, target: str, site_id: str, marker_dis
     }
 
 
-def prepare(tmp_path: Path, *, version: str = "synthetic-2026.09.0", tamper: bool = False):
+def prepare(tmp_path: Path, *, version: str = "synthetic-2026.09.0", tamper: bool = False,
+            tamper_control_plane: bool = False):
     target, site_id = "control-i3.synthetic.invalid", "synthetic-i3"
     bundle, digests = _bundle(tmp_path)
+    if tamper_control_plane:
+        # 篡改发生在 manifest 生成**之后**：declared 的 control-plane 与落盘树不再一致。
+        (bundle / "backend/api_extra.py").write_text("EXTRA = 1\n", encoding="utf-8")
     manifest = _manifest(version, digests)
     (bundle / "release-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     if tamper:
@@ -1689,3 +1694,22 @@ def test_accumulated_evidence_is_per_release_and_bounded(tmp_path):
     assert len(final) == install_module.EVIDENCE_RELEASES_KEPT, sorted(final)
     assert "rel-0" not in final and "rel-1" not in final, "最早的发布物桶应被丢弃"
     assert f"rel-{install_module.EVIDENCE_RELEASES_KEPT + 1}" in final
+
+
+def test_three_component_bundle_passes_s0(tmp_path):
+    """ADR-0051 Phase 4：新 bundle（三面，含 control-plane）S0 全键比对通过。"""
+    prepare(tmp_path)
+    report = invoke(tmp_path)
+    assert "release_digest" not in codes(report)
+    assert "digest_matched" in codes(report)
+
+
+def test_control_plane_tamper_blocks_s0(tmp_path):
+    """control-plane 摘要面真正 load-bearing：backend/**（agent 外）被改 → release_digest 红。
+
+    反例证明（verify-before-asserting）：agent 外文件改动**不会**动 agent-code/host-resources——
+    没有 control-plane 面时这类漂移正是「不在任何摘要面内」的 #2269 形态。
+    """
+    prepare(tmp_path, tamper_control_plane=True)
+    report = invoke(tmp_path)
+    assert "release_digest" in codes(report)

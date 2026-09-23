@@ -190,6 +190,10 @@ def _digest_bundle(ctx: InstallContext) -> dict[str, str] | None:
             "host-resources": digest_module.digest_entries(
                 digest_module.collect_artifact_entries(str(agent_dir), extra, kind="resources")
             ),
+            # ADR-0051 Phase 4：控制面载荷面（backend/** 除 agent，含 .env*——不豁免）。
+            "control-plane": digest_module.digest_entries(
+                digest_module.collect_control_plane_entries(str(ctx.bundle))
+            ),
         }
     except OSError:
         return None
@@ -371,16 +375,14 @@ def _run_locked(
         _safe(checks, "release_bundle_forbidden_entries", location="$.release.bundle", role="site", check_id="install.s0.hygiene")
         return _report(checks, stages)
     actual = _digest_bundle(ctx)
-    if (
-        actual is None
-        or declared.get("agent-code") != actual.get("agent-code")
-        or declared.get("host-resources") != actual.get("host-resources")
-    ):
+    # ADR-0051 Phase 4：比对 declared 的**全部** component——旧 bundle 无 control-plane 仍绿，
+    # 新 bundle 声明了就必须匹配（缺实现的老量具 → actual.get 为 None → 红，fail-closed 方向正确）。
+    if actual is None or any(declared.get(name) != actual.get(name) for name in declared):
         _safe(checks, "release_digest", location="$.release.bundle", role="site", check_id="install.s0.digest")
         return _report(checks, stages)
     checks.append(_pass(
         "install.s0.digest", "site", "$.release.bundle", "digest_matched",
-        "Bundle content matches the declared agent-code and host-resources digests.",
+        "Bundle content matches every declared component digest (agent-code / host-resources / control-plane when present).",
         "Digests prove integrity only; release origin still requires the pipeline attestation.",
     ))
     bindings_checks = load_bindings(ctx)
