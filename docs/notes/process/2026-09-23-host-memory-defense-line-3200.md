@@ -3,7 +3,7 @@
 Status: implemented
 Class: process
 
-> 落地范围：本机已生效；**仓库侧仅入库事实源，安装清单未接**（T1 尾账见 Revisit）。
+> 落地范围：本机已生效；仓库侧事实源 + **安装清单/漂移检测已接**（#3200 T1 完成，见下）。
 
 ## Decision
 
@@ -29,6 +29,21 @@ earlyoom 在 `--dryrun`（只看不杀，打了 307 行低内存日志零动作�
 3. **`testing.md` §7 新增 (c) 条**：假时钟推进型夹具（`_patch_advancing_clock`，2026-09-17
    Note 为压墙钟引入）使 `deadline` 不再构成上界——同一条失控循环的表现从「耗秒」变成
    「耗内存」。要求等待/重试环另有**与迭代计数挂钩的上界**。
+
+### T1 追加（同日晚些：把防线从「手工资」变成装配判据）
+
+PR #3201 落的是事实源，但资产仍靠手工重放、且无漂移检测——正是 #3050 批过的「执行者只在
+本机」。T1 把它们接进装配链：`stages.py` 新增 `host_defense_artifacts()/host_assets()`，
+S1 装包 → S2 渲染（渲染期即拒绝生效行带 `--dryrun`）→ S4 落盘 + `restart earlyoom` +
+`daemon-reexec` + **回读验证**，任一不过即 `install_host_defense` 红灯；漂移检测面从
+`monitoring_artifacts()` 改指 `host_assets()`（同一事实不留两套清单）。
+
+一处**有意改变安装语义**的决定：防线不挂 `monitoring.enabled`。观测开关可以关，自动复位
+不能关；代价是所有站点从此要求 earlyoom 包（缺包即 S1 FAIL，不静默降级）。
+
+一条自己踩到的判据缺陷：`--dryrun` 守卫最初按整文件子串判，而解释性注释里正提到这个旗标
+⇒ 装配期自我触发，38 条测试同时红。改为只判 `EARLYOOM_ARGS=` 生效行（`testing.md` §7
+「源扫描型守卫」同族的反向教训：**判形态先要判准作用域**）。
 
 ## Alternatives
 
@@ -67,11 +82,8 @@ sudo fuser /dev/watchdog0                                              # PID 1
 
 ## Revisit
 
-- **T1 尾账（必须）**：这两份资产目前**只活在本机 + 仓库文件**，未进
-  `tools/site_config/stages.py` 安装清单，也未进 `check-monitoring-assets.py` 的漂移检测面。
-  不接上就是 #3050 批过的「执行者只活在本机」。接入时要同时做 `restart earlyoom` +
-  `daemon-reexec`（只落文件会产生「已装但没生效」的假象），并决定 `earlyoom` 是否进
-  `MONITORING_PACKAGES`。前置：#3098 对 stages.py 的在窗改动合入。
+- ~~T1 尾账~~ **已完成**：资产进 `host_defense_artifacts()`，安装链含生效回读，
+  漂移检测覆盖（本机实测 11 match / 0 drift）。`earlyoom` 成为控制面宿主的硬前置（缺包即红）。
 - **G1（#3050）**：宿主内存告警需按现网分布重标为**结果判据 + 短 `for:`**——本次实测终局只有
   2 分钟（13:40→13:42），`HostMemAvailableLow(for:10m)` 结构上不可能响，`HostSwapFreeLow`
   在死前 14 分钟自行消警；而 `node_pressure_io_waiting` 全窗 ≈0.99 早已成立。

@@ -135,6 +135,26 @@ MONITORING_SAMPLER = (
      "etc/systemd/system/stp-skill-usage.timer", 0o644),
 )
 
+# ── 控制面宿主 OOM/卡死防线（#3200）───────────────────────────────────
+# 09-14 那次卡死的处置留了两处「看起来在保护、实际不动作」：earlyoom 停在 --dryrun
+# （只看不杀）、板载 watchdog 根本没武装（RuntimeWatchdogSec 从未写过）。09-23 13:42
+# 同形再挂，仍然只能靠人按电源。⇒ 防线资产与监控栈同批渲染/安装/漂移检测，且安装判据
+# 要求「验证到生效」：写了文件不算装好。
+HOST_DEFENSE_PACKAGES = ("earlyoom",)
+# 判据用可执行名（同 MONITORING_BINARIES 口径）：dpkg 状态对「已知但未装」也返回 0。
+HOST_DEFENSE_BINARIES = ("earlyoom",)
+EARLYOOM_UNIT = "earlyoom"
+# /etc/default/earlyoom 是发行版资产（出厂不带本站标记）→ 与 MONITORING_DISTRO_DEFAULTS
+# 同一归属判据：只挡「标了别站」的情况，裸默认值/运维手改先备份再覆盖。
+HOST_DEFENSE_DISTRO_DEFAULTS = (
+    ("deploy/control-plane/host-defense/earlyoom.default", "etc/default/earlyoom", 0o644),
+)
+# manager.conf drop-in 是本站自管资产（带 <deploy-root>）→ 走 #2088 共享路径归属守卫。
+HOST_DEFENSE_ASSETS = (
+    ("deploy/control-plane/host-defense/10-stp-watchdog.conf",
+     "etc/systemd/system.conf.d/10-stp-watchdog.conf", 0o644),
+)
+
 NGINX_SITES = {
     "internal": "deploy/control-plane/nginx/stability-platform.conf",
     "production": "deploy/control-plane/nginx/stability-platform-https.conf",
@@ -427,6 +447,26 @@ def monitoring_site_assets() -> tuple[tuple[str, str, int], ...]:
     return (*MONITORING_CONFIGS, *MONITORING_SAMPLER)
 
 
+def host_defense_artifacts() -> tuple[tuple[str, str, int], ...]:
+    """宿主 OOM 防线资产。**与 monitoring.enabled 无关**：
+
+    关掉观测面可以接受，关掉「卡死时会不会自动复位 / 会不会杀掉失控进程」不能接受——
+    那正是 09-23 需要人跑到机房按电源的原因。清单仍只有一处定义，`host_assets()`
+    把它与监控栈合成漂移检测面（同一事实不留两套清单）。
+    """
+    return (*HOST_DEFENSE_DISTRO_DEFAULTS, *HOST_DEFENSE_ASSETS)
+
+
+def host_defense_site_assets() -> tuple[tuple[str, str, int], ...]:
+    """防线资产里属于本站自管的那部分（走共享路径归属守卫）。"""
+    return (*HOST_DEFENSE_ASSETS,)
+
+
+def host_assets() -> tuple[tuple[str, str, int], ...]:
+    """控制面宿主上受漂移检测的全部资产（监控栈 + 防线）。"""
+    return (*monitoring_artifacts(), *host_defense_artifacts())
+
+
 def _distro_default_conflict(ctx: InstallContext, destination: Path) -> bool:
     """发行版默认值文件是否属于**别的站点**（本站渲染过的可以覆盖）。"""
     try:
@@ -559,6 +599,27 @@ def stage_s1_basics(ctx: InstallContext) -> list[Check]:
         "Declared base dependencies are present on the target.",
         "Install missing base packages with the site profile before re-running.",
     ))
+
+    # 宿主 OOM 防线（#3200）：**不受 monitoring.enabled 约束**——控制面宿主一律要有 earlyoom。
+    if ctx.dry_run:
+        checks.append(_pass(
+            "install.s1.host_defense", "control_plane", "$.platform", "host_defense_planned",
+            "Installing the host OOM defense line (earlyoom) is planned.",
+            "The defense is unconditional; only its drop-ins are site-rendered.",
+        ))
+    else:
+        if not all(ctx.ops.command_exists(n) for n in HOST_DEFENSE_BINARIES):
+            ctx.ops.run(["apt-get", "install", "-y", *HOST_DEFENSE_PACKAGES])
+        if not all(ctx.ops.command_exists(n) for n in HOST_DEFENSE_BINARIES):
+            return _safe(
+                checks, "install_host_defense", location="$.platform",
+                role="control_plane", check_id="install.s1.host_defense",
+            )
+        checks.append(_pass(
+            "install.s1.host_defense", "control_plane", "$.platform", "host_defense_installed",
+            "earlyoom is installed on the control-plane host.",
+            "S4 writes its args, restarts the unit, and refuses to pass while it is still --dryrun.",
+        ))
 
     if config.monitoring.enabled:
         # 站点本地监控栈（#2197）：包与 unit 都用发行版提供的那套，安装器只负责
@@ -830,6 +891,24 @@ def stage_s2_release_env(ctx: InstallContext) -> list[Check]:
                         role="control_plane", check_id="install.s2.monitoring",
                     )
                 _write_text(render_root / Path(source).name, text)
+        # 防线资产与 monitoring.enabled 无关（#3200）：同样渲染、同样做占位符校验。
+        for source, _destination, _mode in host_defense_artifacts():
+            text = _render((bundle / source).read_text(encoding="utf-8"), substitutions)
+            if _UNRESOLVED_TEMPLATE_PLACEHOLDER.search(text):
+                return _safe(
+                    checks, "install_host_defense", location="$.platform",
+                    role="control_plane", check_id="install.s2.host_defense",
+                )
+            # 空转的防线不算防线：装配期就把 --dryrun 挡在门外（#3050 G2 的复发形态）。
+            # 只看**生效行**——解释性注释里会提到这个旗标，整文件判据会自己绊自己。
+            if any(line.startswith("EARLYOOM_ARGS=") and "--dryrun" in line
+                   for line in text.splitlines()):
+                return _safe(
+                    checks, "install_host_defense", location="$.platform",
+                    role="control_plane", check_id="install.s2.host_defense",
+                )
+            _write_text(render_root / Path(source).name, text)
+
         if config.storage.export_to_agents:
             exports_dir = ctx.system_root / EXPORTS_DIR
             exports_dir.mkdir(parents=True, exist_ok=True)
@@ -1132,7 +1211,8 @@ def stage_s4_entry(ctx: InstallContext) -> list[Check]:
         *(
             (render_root / Path(source).name, ctx.system_root / destination)
             for source, destination, _mode in (
-                monitoring_site_assets() if config.monitoring.enabled else ()
+                *(monitoring_site_assets() if config.monitoring.enabled else ()),
+                *host_defense_site_assets(),
             )
         ),
     ]
@@ -1152,6 +1232,16 @@ def stage_s4_entry(ctx: InstallContext) -> list[Check]:
         return _safe(
             checks, "install_conflict", location="$.monitoring.enabled",
             role="control_plane", check_id="install.s4.monitoring",
+        )
+    # 防线里的发行版默认值（/etc/default/earlyoom）走同一判据，但**不看** monitoring 开关：
+    # 观测开关关掉可以接受，把 OOM 防线交给别站配置不能接受（#3200）。
+    if any(
+        _distro_default_conflict(ctx, ctx.system_root / destination)
+        for _source, destination, _mode in HOST_DEFENSE_DISTRO_DEFAULTS
+    ):
+        return _safe(
+            checks, "install_host_defense", location="$.control_plane.deploy_root",
+            role="control_plane", check_id="install.s4.host_defense",
         )
     if ctx.dry_run:
         return [
@@ -1179,6 +1269,11 @@ def stage_s4_entry(ctx: InstallContext) -> list[Check]:
             target = ctx.system_root / destination
             install_shared_asset(ctx, render_root / Path(source).name, target)
             os.chmod(target, mode)
+    # 防线资产无条件落地（#3200）：earlyoom 参数 + systemd manager drop-in。
+    for source, destination, mode in host_defense_artifacts():
+        target = ctx.system_root / destination
+        install_shared_asset(ctx, render_root / Path(source).name, target)
+        os.chmod(target, mode)
     if ctx.ops.run(["systemctl", "daemon-reload"]).returncode != 0:
         return _safe(checks, "install_units", location="$.control_plane.deploy_root", role="control_plane", check_id="install.s4.units")
     checks.append(_pass(
@@ -1280,6 +1375,47 @@ def stage_s4_entry(ctx: InstallContext) -> list[Check]:
             "Prometheus answers on loopback and the local node-exporter is scraped.",
             "The storage page reads this endpoint; keep the stack on loopback.",
         ))
+    # ── 宿主防线收口（#3200）：装完必须**验到生效** ─────────────────────────
+    # 09-14 留下的正是「文件在、狗没武装、earlyoom 只看不杀」这种看起来完成了的状态；
+    # 09-23 那次整机卡死里它们一个都没动作，仍然靠人按电源。manager.conf 只有
+    # daemon-reexec 才会被 PID1 重读（daemon-reload 不行），所以必须 re-exec 后回读。
+    defense_bad: str | None = None
+    if not all(ctx.ops.command_exists(name) for name in HOST_DEFENSE_BINARIES):
+        defense_bad = "earlyoom 可执行文件缺失"
+    else:
+        if ctx.ops.run(["systemctl", "restart", EARLYOOM_UNIT]).returncode != 0:
+            defense_bad = "earlyoom 重启失败"
+        elif ctx.ops.run(["systemctl", "is-active", "--quiet", EARLYOOM_UNIT]).returncode != 0:
+            defense_bad = "earlyoom 未处于 active"
+        else:
+            try:
+                args_text = (ctx.system_root / "etc/default/earlyoom").read_text(
+                    encoding="utf-8", errors="replace")
+            except OSError:
+                args_text = ""
+            if any(line.startswith("EARLYOOM_ARGS=") and "--dryrun" in line
+                   for line in args_text.splitlines()):
+                defense_bad = "earlyoom 仍在 --dryrun：空转的不是防线（#3050 G2）"
+    if defense_bad is None and ctx.ops.run(["systemctl", "daemon-reexec"]).returncode != 0:
+        defense_bad = "daemon-reexec 失败：watchdog 不会被武装"
+    if defense_bad is None:
+        armed = (ctx.ops.run(
+            ["systemctl", "show", "-p", "RuntimeWatchdogUSec", "--value"]
+        ).stdout or "").strip()
+        if armed in ("", "0", "0s"):
+            defense_bad = "RuntimeWatchdogUSec 仍为 0：狗没武装，写了 drop-in 也不动"
+    if defense_bad is not None:
+        return _safe(
+            checks, "install_host_defense", location="$.control_plane.deploy_root",
+            role="control_plane", check_id="install.s4.host_defense",
+        )
+    checks.append(_pass(
+        "install.s4.host_defense", "control_plane", "$.control_plane.deploy_root",
+        "host_defense_armed",
+        "earlyoom 按本站参数在跑且不再是 dry-run；PID1 回读 RuntimeWatchdogUSec 非 0。",
+        "硬件 watchdog 是卡死后自动复位的唯一保证，别在任何站点上把它关掉。",
+    ))
+
     return checks
 
 
