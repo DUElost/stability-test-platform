@@ -30,12 +30,18 @@ def test_adr_0045_notes_say_landed_not_pending() -> None:
 
 
 def test_m7_board_lists_proposed_and_covers_main_table_m7() -> None:
-    """看板须显式点出 Proposed 未决项，且包含主表全部 M7 ADR 编号。"""
+    """看板须显式点出 Proposed 未决项（或声明当前无），且包含主表全部 M7 ADR 编号。"""
     text = README.read_text(encoding="utf-8")
     assert "## 里程碑看板" in text
-    assert "Proposed（未决）" in text
+    board = text.split("## 里程碑看板", 1)[1].split("## 维护约定", 1)[0]
+    # Zero-Proposed is valid when the board explicitly declares it (e.g. after ADR-0047 Accepted).
+    has_proposed_list = "Proposed（未决）" in board
+    has_zero_proposed = "Proposed" in board and "当前：无" in board
+    assert has_proposed_list or has_zero_proposed, (
+        "看板须含「Proposed（未决）」或显式声明 Proposed 当前：无"
+    )
     for num in ("0039", "0046", "0047"):
-        assert f"ADR-{num}" in text.split("## 里程碑看板", 1)[1]
+        assert f"ADR-{num}" in board
 
     main_m7 = set()
     for row in _main_table_rows():
@@ -51,7 +57,6 @@ def test_m7_board_lists_proposed_and_covers_main_table_m7() -> None:
             if m:
                 main_m7.add(m.group(1))
 
-    board = text.split("## 里程碑看板", 1)[1].split("## 维护约定", 1)[0]
     missing = sorted(n for n in main_m7 if f"ADR-{n}" not in board and f"{n}" not in board)
     # 0045 等用缩写「0045」也算覆盖
     missing = [n for n in missing if n not in board]
