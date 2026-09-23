@@ -788,7 +788,10 @@ class TestInstallApkV103:
             monkeypatch, v103, calls,
             [(1, "", "protocol fault"), (0, "", ""), (0, "Success", "")],
         )
-        monkeypatch.setattr(v103.time, "sleep", lambda s: None)
+        # 消掉同形脆形态（#3202）：当前 mock results 让 wait_system_ready 立刻就绪所以
+        # 不炸，但只 stub sleep 不推时钟——results 一变短就会变成 60–90 s 忙等并按圈
+        # calls.append。守卫按形态判红/绿，不要当成误报。
+        _patch_advancing_clock(monkeypatch, v103)
 
         v103.install_apk(Path("/res/AutoTestTool.apk"))  # 不抛即通过
 
@@ -799,6 +802,10 @@ class TestInstallApkV103:
             monkeypatch, v103, calls,
             [(0, "", ""), (3, "Failure [INSTALL_FAILED_INSUFFICIENT_STORAGE]", "")],
         )
+        # 必须连时钟一起推进：`install_apk` 的等待用真 time.time() 判 deadline
+        # （wait_system_ready 内 while True + sleep(min(5s, remaining))）。只把 sleep 变成 no-op
+        # 等于把 60–90 s 墙钟跑满的忙等，且每圈往 adb 桩的 list 里 append ⇒ ≈150 MB/s，
+        # 空闲 CI runner 能扛、生产控制面宿主（只剩 3–8 GiB 余量）直接冻结。#3202
         _patch_advancing_clock(monkeypatch, v103)
 
         with pytest.raises(RuntimeError) as exc:
