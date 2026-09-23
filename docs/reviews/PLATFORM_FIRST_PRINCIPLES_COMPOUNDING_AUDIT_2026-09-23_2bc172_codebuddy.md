@@ -10,7 +10,8 @@
 > ADR-0051 v1.2 记录 fleet 48/48 已 `strict`）。经 `git diff 512e61a8..8bc6bc1e`
 > 复核，F-01～F-07、F-10～F-13 的引用锚点未变动（唯一差异：`admission_pump.py` +4 行，
 > 为 Phase 3 的补推跳过 `package_active`）；**F-08 按新基线改写为「已收口 + 残留」**，
-> **F-09 为 Phase 3 当日暴露、待真机复核**。
+> **F-09 已于当日真机复核坐实**（§3 F-09：48/48 机队实测默认路径不存在、
+> 覆盖源全空，下一次刷机窗必失败，当前潜伏未爆发）。
 >
 > **同日并行稿**：`PLATFORM_FIRST_PRINCIPLES_CAPACITY_2026-09-23_ae232a3_codex.md`
 > （codex 会话；落稿时尚未入仓，故不设链接）。按「会话×模型」为独立单位，
@@ -251,32 +252,61 @@ agent 上报或配置声明、控制面只读表；过渡期保留现有函数�
    两道对账（`--pending-activation` / `--plan-step-drift`）仍**账本非门禁**（exit 0/2），
    上线后必须按作业级判据验证（族内 head 追平 ≠ 下一窗跑到新行为）。
 
-### F-09 【扩展·P1｜Phase 3 当日暴露，待真机复核】族树扁平化把相对资源路径改错位
+### F-09 【扩展·P1｜已真机复核坐实，潜伏】族树扁平化把相对资源路径改错位
 
-**证据**：族树化后 `backend/agent/scripts/flash_firmware/flash_firmware.py:867-870` 的
-`_DEFAULT_REL_FLASH_TOOL = ("..","..","..","resources","flashtool",...)` 仍按旧布局
-（`<name>/v<version>/<entry>.py` 多一层）写：
+**结论（2026-09-23 复核）**：`flash_firmware` / `flash_preflight` 的默认工具路径在
+`STP_SCRIPT_PACKAGES=strict` 下指向不存在目录，**下一次刷机窗会在 preflight 第一步失败**；
+最近一次刷机 run 在 Phase 3 合入之前（run 509，2026-09-22 13:46），故当前**潜伏未爆发**，
+且属安全失败（不碰设备）。
 
-- 源码态解析到 `<repo>/backend/resources/flashtool`（实际资源在
-  `<repo>/backend/agent/resources/`）；
-- 包模式解析到 `<install>/resources/flashtool`（安装链落位
-  `<install>/agent/resources/flashtool`，`backend/agent/install_agent.sh:250`）。
+**证据链（全部 primary）**：
 
-同类相对锚点另见 `backend/agent/scripts/flash_preflight/flash_preflight.py:95`、
-`backend/agent/scripts/gpu_setup/_lib.py:245`（`parents[3]`）。**GPU 幸免**因为
-`gpu_setup.py:34` 的 DB `default_params` 带绝对路径 `/opt/stability-test-agent/agent/resources/gpu`；
-**flash 链没有这层兜底**：`flash_tool_dir` 参数在仓库内无任何模板/runbook/前端引用
-（`git grep` 0 命中），`STP_FLASH_TOOL_DIR` 不在 `backend/services/agent_env_sync.py`
-的 fleet 下发键表内 → **默认路径就是实际路径**。
+1. **解析**（两种模式都错位一层）：`flash_firmware.py:867-870` + `:901-908`
+   （优先级 params > `STP_FLASH_TOOL_DIR` > `__file__` 相对 3 层）；
+   `flash_preflight.py:94-97` + `:274-281`（**只**用 `__file__`，不读 params/env，无逃生口）。
+   包布局实测：`tar tzf /mnt/stp-aee/packages/flash_firmware/1.3.17.tar.gz` → 根下即
+   `flash_firmware.py`；执行位置 `<cache>/flash_firmware/1.3.17/` 上跳 3 层 = `<install>`
+   → `<install>/resources/flashtool/…`（实际在 `<install>/agent/resources/flashtool`，
+   `backend/agent/install_agent.sh:250`）。
+2. **机队实测（48/48 台只读 ad-hoc）**：`TOP_MISSING 48` / `ENV_UNSET 48` /
+   `AGENT_OK 48` / cache 最新 `1.3.17`；同时确认 `AGENT_INSTALL_DIR=/opt/stability-test-agent`、
+   `STP_SCRIPT_PACKAGES=strict`，systemd 仅 `EnvironmentFile=<install>/.env` 且无该 env 键。
+3. **覆盖源全空**：7 个在库刷机计划（id 11/12/39/40/59/61/62）步骤参数均无 `flash_tool_dir`；
+   最近刷机 run 509 的 `plan_snapshot`（派发权威快照）= `flash_preflight` `{}`、
+   `flash_firmware` `{firmware_dir, scatter_file, skip_if_current}`；seed 的 `flash_tool_dir`
+   定义无 `default`。
+4. **失败形态**：flash_firmware → `flash_tool_dir not found: <resolved>`（`:1588-1590`）步骤失败；
+   flash_preflight → "flash_tool not found under resources/flashtool/"（`:353-357`），
+   计划第一步 FAIL。
 
-**机制/第一性**：族树扁平化改变了 `__file__` 深度，所有"相对 `__file__` 推导资源根"
-的隐含前提被同时打断；开发态与安装态的层级差不同，属"本地绿、生产红"类。
+**同类锚点全库回扫（15 处）**：12 个 `_lib.py` 的 `_default_resources_root()` 用
+`parents[3]/resources/<族>`（gpu / powercycle / sleep / mtbf × setup / check / finish），
+同样错位；其中 **check/finish 系列的 `resources_dir()` 无调用点（死代码）**，真正消费的只有
+setup：gpu / powercycle / sleep 的在库计划都显式传了绝对目录（`/mnt/stp-aee/…`）→ 不受影响；
+**mtbf 计划 10 三步 params 全空且主机未设 `STP_MTBF_RESOURCES_DIR` → 很可能同样断
+（未取到最近 run 快照，未定论）**。另 3 处 `_AGENT_ROOT = parents[3]`（`aee_signal_trigger` /
+`monkey_test` / `monkey_resource_push`）只用于 `sys.path.insert`，而 `pipeline_engine`
+已注入 `PYTHONPATH=<agent_dir>`（ADR-0051 D4）→ 非致命。
+（勘误：本稿初版称"GPU 幸免因 DB `default_params` 带绝对路径"**不成立**——
+`gpu_setup.py:34` 是 docstring 示例；GPU 实际靠**计划显式传绝对路径**兜底。）
 
-**出口**：单主机 `packages=strict` 下跑 `flash_preflight` + 一次 `flash_firmware` 复核；
-若确认，把相对层级补回一级（或显式登记 env/参数），并把"资源路径解析仿真"
-加进族树/包改造的验收清单。**判据**：真机 flash 成功且 `metrics.route` 与工具路径
-落在登记位置。（`flash_firmware` 的 DB `default_params` 是否带绝对路径未核——
-只读仓储无法判定。）
+**机制/第一性**：族树扁平化改变了 `__file__` 深度，打断所有"相对 `__file__` 推导资源根"
+的隐含前提；开发态与安装态层级差不同，且包模式在 Phase 3 前从未被实际使用 →
+属"本地绿、生产红"类，静态自查与本地测试都不报。
+
+**出口**：
+
+1. **正解（需发版本）**：flash_firmware 补一层 → 1.3.18；flash_preflight 补一层**并加
+   params/env 出口** → 1.0.5；走 `--register → 合入 → --publish → scan`，再重指 7 个在库
+   计划（`--plan-step-drift` 对账）；mtbf 计划同批核对。
+2. **立即止血**（ops，不进仓，须标注过渡与终态出口）：48 台
+   `ln -s <install>/agent/resources/flashtool <install>/resources/flashtool`
+   ——preflight 不读 env/params，环境变量救不了它。
+3. **防复发**：给门禁加**离线路径解析守卫**——按包布局与开发布局各解析每族资源锚点，
+   断言落点在 `agent/resources/` 下（纯静态、秒级）。
+
+**判据**：单主机 `strict` 下 `flash_preflight` + 一次 `flash_firmware` 全绿，
+且 `metrics.route` 与工具路径落在登记位置。
 
 ### F-10 【容量·P2】无界增长面
 
@@ -331,8 +361,8 @@ DOC-MAP 自述"做不到就删掉该字段"——建议二选一：门禁化（�
 2. **规模化验收设计**：单 host 25 真机（含 F-12 的有效周期硬判据）→ 合成 host 阶梯 →
    真机分档；每档对拍"意图-事实-租约-终态-产物"，互不代验。
 3. **新工具/专项的复利出口**：F-04 真实 jar/ps1 走通一遍 → F-05 资产 digest 绑定 →
-   F-07 capabilities 化 → F-06 平台能力注册表（需 ADR 复议）；F-09 真机复核
-   并入族树/包改造验收清单。
+   F-07 capabilities 化 → F-06 平台能力注册表（需 ADR 复议）；F-09 修复
+   （发新版本 + 7 个在库刷机计划重指）并入族树/包改造验收清单。
 4. **长跑成本**：F-10 TTL、F-11 前端、F-12 固定税（先测再调）。
 5. **治理**：F-13 时效字段门禁化或撤销；registry 归档；F-08 的横切修复分布采数。
 
@@ -360,7 +390,10 @@ F-10 `mtbf/` 与 notification 无 TTL；F-11 前端成本排序；F-13 时效字
   Agent Note；未运行全量 backend/agent/前端测试，未连生产库）。
 - **基线与复核**：主体 `512e61a8`，落稿复核 `8bc6bc1e`；
   受影响条目（F-08/F-09）已按新基线改写，其余锚点经 diff 复核未变动。
-- **未验证 / UNKNOWN**：fleet 当前 `STP_SCRIPT_PACKAGES` / `STP_FLASH_TOOL_DIR` 的实际值；
-  生产是否单实例；`flash_firmware` DB `default_params` 是否带绝对路径；
-  任何 3750 / 25 台的真实运行数据；多查看者浏览器成本；
-  `host_health_probe` 是否与自身 tick 重叠；CodeQL 与分支保护配置（本地无）。
+- **F-09 真机复核（2026-09-23，只读）**：机队 ad-hoc 48/48 台（路径/env/缓存三查，`-m shell`，
+  未写任何文件）；控制面只读 API（token + Bearer，未打印凭据）读在库计划的步骤参数与
+  run 509 的 `plan_snapshot`；包布局以 `tar tzf` 直读站点包源。临时凭据文件已删除。
+  结论：F-09 坐实、潜伏；修复出口见 §3 F-09。
+- **未验证 / UNKNOWN**：生产是否单实例；任何 3750 / 25 台的真实运行数据；
+  多查看者浏览器成本；`host_health_probe` 是否与自身 tick 重叠；
+  CodeQL 与分支保护配置（本地无）；mtbf setup 是否同样断（未取到最近 run 快照）。
