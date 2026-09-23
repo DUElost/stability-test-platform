@@ -20,6 +20,14 @@ ADR-0051 Phase 3 落地后（fleet 48/48 `STP_SCRIPT_PACKAGES=strict`、`agent/s
 （`tool_manifest.json` + 站点 packages/）+ flash 族新版本按 `STP_AGENT_INSTALL_DIR`
 （pipeline_engine 已注入子进程 env）显式解析，落地后删除本注入。
 
+**续作（同单第二段）**：注入只救了读 `STP_FLASH_TOOL_DIR` 的 flash_firmware；
+`flash_preflight v1.0.4` 的 `_locate_flashtool` **完全不读 env**、纯 script_dir 相对——刷机 plan 第一步
+（preflight）在包模式仍必败，注入救不了不读键的旧字节。按不可变契约出 **v1.0.5**：解析顺序
+`STP_FLASH_TOOL_DIR` > `STP_AGENT_INSTALL_DIR` 派生 > 旧相对 fallback（行为超集，v102–v104 测试不锁
+实现所以不破）；`--register flash_preflight 1.0.5` 已进 manifest。合入后部署清单：scan 注册 v1.0.5 →
+**在用刷机 plan 的 preflight 步重指 1.0.4→1.0.5**（12/39/40/59/61/62；废弃 13 不动）——数据变更，
+按 #3030 控制面侧重指流程执行。
+
 ## Alternatives
 
 - **给每个 plan 加 `flash_tool_dir` 参数**：弃——写死绝对路径进 5 组 plan，站点化（ADR-0041）
@@ -32,7 +40,11 @@ ADR-0051 Phase 3 落地后（fleet 48/48 `STP_SCRIPT_PACKAGES=strict`、`agent/s
 ## Verification
 
 - `backend/tests/services/test_agent_env_sync.py` + `test_host_updater.py` +
-  `test_script_reference_check.py` → 62 passed（layout 断言、`STP_FLASH_TOOL_DIR ∈
+  `test_script_reference_check.py` → 62 passed；
+- `test_flash_preflight_v105.py` 4 例 + v102–v104 合跑 → 35 passed（首版 `_touch_exe`
+  返回语义写错致 env 分支拼成 `flash_tool/flash_tool`，**单独跑恰好掩盖**、合跑暴露——
+  教训：fixture 返回目录/文件语义混淆靠组合跑证伪）；
+- Agent 全套 → 2127 passed；`check_script_packages --register flash_preflight 1.0.5` 后真实树等价绿（layout 断言、`STP_FLASH_TOOL_DIR ∈
   agent_path_keys_to_verify` 正反两向）；`check:quick` 15 gates OK；
   `env_inventory --check` OK（手写表登记，未污染生成块——首版误插生成区已移出）；
 - canary 真机核对过断链事实：`resources/flashtool/SP_Flash_Tool_*/flash_tool` 存在、
