@@ -479,6 +479,32 @@ plan_run_abort_fanout_jobs = Histogram(
     buckets=[0, 1, 2, 5, 10, 25, 50, 100, 250, 500, 1000],
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
+# ── ADR-0047 D2（#2959）：终态请求（/complete）的独立并发舱壁 ────────────────
+# R523 现场：490 个 RUNNING 同时回传终态，峰值 55 req/s、波内 1644 次请求，每个请求
+# 在第一次 DB 查询就占一条连接并争同一条 plan_run 行 ⇒ 池被抽干。舱壁把「同时执行的
+# 终态请求」限到 N（默认 16），**排队发生在连接池之外**；等不到就快失败 503。
+# inflight/waiting 是水位（诊断用），rejected 与 wait_seconds 是事件侧（告警用）。
+terminal_bulkhead_inflight = Gauge(
+    'stability_terminal_bulkhead_inflight',
+    'Terminal (/complete) requests currently holding a bulkhead slot',
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+terminal_bulkhead_waiting = Gauge(
+    'stability_terminal_bulkhead_waiting',
+    'Terminal requests waiting for a bulkhead slot (queue is outside the DB pool)',
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+terminal_bulkhead_rejected_total = Counter(
+    'stability_terminal_bulkhead_rejected_total',
+    'Terminal requests rejected by the bulkhead (waited past the wait budget)',
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+terminal_bulkhead_wait_seconds = Histogram(
+    'stability_terminal_bulkhead_wait_seconds',
+    'Time a terminal request waited for a bulkhead slot (including the rejected ones)',
+    buckets=[0.0005, 0.001, 0.005, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
 # #1958：数据库侧检测到的死锁（SQLSTATE 40P01）。
 # 动机：Job/Lease 锁序死锁曾持续复发约四周而平台侧**零指标零告警**——它只在
 # PostgreSQL 服务端日志里可见，且受害事务可能被上层的通用 `except Exception`

@@ -116,3 +116,35 @@ def describe_db_failure(
         message=message,
         first_of_family=ordinal == 1,
     )
+
+
+# ── ADR-0047 D2（#2959）：过载族 → 503 + Retry-After，而不是 500 ─────────────
+
+#: 过载族 SQLSTATE：`53300` = too_many_connections（PG 拒绝新建连接）。
+#: 与 `StabilityDbConnectionSlotsExhausted` 告警的 kind 口径同源。
+_OVERLOAD_SQLSTATES = frozenset({"53300"})
+
+#: 过载响应建议的重试间隔（秒）。调用方（Agent outbox / 前端）按它退避；
+#: 500 的无差别立即重试正是 R523 把尖峰续上的那条回路（1053 个 500 → 3× 尝试）。
+DB_OVERLOAD_RETRY_AFTER_SECONDS = 1
+
+
+def is_db_overload(exc: BaseException) -> bool:
+    """是否「数据库过载」⇒ 对外 503 + `Retry-After`（ADR-0047 D2）。
+
+    判定面刻意收窄，与 D2 裁决一致：
+
+    - `sqlalchemy.exc.TimeoutError`：池内排队到 `pool_timeout`（默认 2s）仍没拿到连接；
+    - SQLSTATE `53300`：PG 侧连接槽耗尽（asyncpg `TooManyConnectionsError` /
+      psycopg 系 `OperationalError`，两边分别带 `sqlstate` / `pgcode`）。
+
+    其余 `DBAPIError`（死锁 `40P01`、连接中断 `08xxx`…）**不在**此列：它们是另一类
+    故障、处置不同（查锁序 / 查网络），不能借「过载」这个词一起改语义。
+    """
+    for node in exception_chain(exc):
+        if isinstance(node, sqlalchemy_exc.TimeoutError):
+            return True
+        state = getattr(node, "sqlstate", None) or getattr(node, "pgcode", None)
+        if isinstance(state, str) and state in _OVERLOAD_SQLSTATES:
+            return True
+    return False

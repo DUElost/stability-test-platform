@@ -19,6 +19,11 @@ ExecStartPre=/bin/bash -lc 'cd <deploy-root>/backend && ../venv/bin/python -m al
 # #1882：schema 对齐硬门禁（无减号）——代码超前于库时拒绝启动，避免带病 500 对外服务。
 # DATABASE_URL 来自 EnvironmentFile；不对齐则本步失败（优先于带着错误 schema 启动）。
 ExecStartPre=<deploy-root>/venv/bin/python <deploy-root>/tools/dev/check_alembic_at_head.py
+# ADR-0047 D1（#2959）：连接预算硬门禁（无减号）——两份池的上限之和必须落在
+# max_connections − superuser_reserved − reserved − reserve 之内。预算不成立即拒启：
+# 带病启动的形态就是 R523（180 预算 vs 97 槽 → 1401 条 53300、1531 次取连接失败）。
+# 实例数与运维预留见 STP_DB_POOL_INSTANCES / STP_DB_CONNECTION_RESERVE。
+ExecStartPre=<deploy-root>/venv/bin/python <deploy-root>/tools/dev/check_db_pool_budget.py
 # 部署源守卫（分支/脏工作树：失败仅记日志不中断——硬失败 + Restart=always
 # 会进 start-limit 循环致生产中断；schema 已由上一行硬拦）
 ExecStartPre=-<deploy-root>/tools/dev/check-deploy-source.sh

@@ -14,6 +14,8 @@ from sqlalchemy.orm import Session
 
 from backend.api.response import ApiResponse, ok
 from backend.core.database import get_async_db, get_db
+# ADR-0047 D2（#2959）：终态请求的独立并发舱壁（池外排队，超预算 503）。
+from backend.core.terminal_bulkhead import terminal_slot
 from backend.api.routes.auth import get_current_active_user
 from backend.api.routes.auth import verify_agent_secret as _verify_agent
 from backend.services.agent_recovery import (
@@ -160,8 +162,14 @@ async def complete_job(
     db: AsyncSession = Depends(get_async_db),
     _=Depends(_verify_agent),
 ):
-    """Transition job to a terminal status."""
-    return ok(await complete_agent_job(db, job_id, payload))
+    """Transition job to a terminal status.
+
+    ADR-0047 D2（#2959）：终态请求走**独立并发舱壁**——名额有限、排队在连接池
+    **之外**、等不到预算即 503 + `Retry-After`（`DB_OVERLOADED`）。批量终态化波次
+    （手动 abort / 超时收尾）因此无法再把连接池抽干（R523：池峰 86+12 ≥ 97 槽）。
+    """
+    async with terminal_slot():
+        return ok(await complete_agent_job(db, job_id, payload))
 
 
 @router.post("/jobs/{job_id}/extend_lock", response_model=ApiResponse[dict])

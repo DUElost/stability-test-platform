@@ -9,7 +9,9 @@
 - 数据库侧失败：每种族全栈一次，之后一行且**零 traceback**（`exc_info is None`）；
 - 一行里必须留得住定位维度：异常类链、SQLSTATE、端点**模板**、客户端地址；
 - 非数据库异常（真 bug）**继续全栈**——收体积不得把诊断能力一起收掉；
-- 状态码与响应体形状不变（500 + `INTERNAL_ERROR`），本单只治体量。
+- 状态码分档（ADR-0047 D2 起）：**过载族**（池排队超时 / SQLSTATE 53300）→ 503 +
+  `Retry-After` + `DB_OVERLOADED`；其余 DB 失败与非 DB 异常仍是 500 + `INTERNAL_ERROR`。
+  本文件钉的是日志形态，状态码断言按当前契约同步。
 """
 from __future__ import annotations
 
@@ -74,11 +76,16 @@ def test_db_failure_first_of_family_keeps_one_traceback(app_with_boom, caplog, f
     caplog.set_level(logging.ERROR, logger="backend.main")
     resp = app_with_boom.get("/api/v1/__test_3042__/boom/41981")
 
-    assert resp.status_code == 500
-    # 响应契约不变：本单只治日志体积，不动状态码与形状
+    assert resp.status_code == 503
+    # 过载族按 ADR-0047 D2 分流：503 + Retry-After（日志分档不变）
+    assert resp.headers["Retry-After"] == "1"
     assert resp.json() == {
         "data": None,
-        "error": {"code": "INTERNAL_ERROR", "message": "Internal server error"},
+        "error": {
+            "code": "DB_OVERLOADED",
+            "message": "Database overloaded, retry later",
+            "retryable": True,
+        },
     }
     recs = _records(caplog)
     assert len(recs) == 1, [r.getMessage() for r in recs]

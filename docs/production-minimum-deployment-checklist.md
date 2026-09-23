@@ -165,6 +165,26 @@ cd "$STP_DEPLOY_ROOT/backend"
 - 使用 `deploy/control-plane/systemd/stability-backend-nomigrate.service` 作为常驻服务
 - 部署时手动/CI 执行 `deploy/control-plane/systemd/stability-backend-migrate.service`（oneshot）
 
+#### 连接预算（ADR-0047 D1，与 schema 门禁并列的硬前置）
+
+rendered unit 有两道**无减号**的 `ExecStartPre`：`check_alembic_at_head.py`（schema 对齐）
+与 `check_db_pool_budget.py`（连接预算）。后者要求
+
+```
+STP_DB_POOL_INSTANCES × 2 引擎 × (STP_DB_POOL_SIZE + STP_DB_MAX_OVERFLOW)
+    ≤ max_connections − superuser_reserved_connections − reserved_connections − STP_DB_CONNECTION_RESERVE
+```
+
+默认值 `1 × 2 × (20+20) = 80 ≤ 97 − 8` 成立。**改池参数前**先手工跑一次：
+
+```bash
+<deploy-root>/venv/bin/python <deploy-root>/tools/dev/check_db_pool_budget.py
+```
+
+越界时它打印 `FAIL` 并以非零码退出 ⇒ systemd 拒绝启动（带病启动的形态就是 R523：
+180 预算对 97 槽 → 1401 条 `53300`、1531 次取连接失败）。多实例（ADR-0027）前必须把
+`STP_DB_POOL_INSTANCES` 改成真实实例数，否则预算按单实例算、总量会超。
+
 启用服务：
 
 ```bash
