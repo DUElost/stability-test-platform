@@ -280,6 +280,9 @@ class TestCheckProgress:
         monkeypatch.setattr(mod, "_read_prefs_progress", lambda: prefs)
         monkeypatch.setattr(mod, "_grep_cycle_count", lambda: 0)
         monkeypatch.setattr(mod, "_result_bytes", lambda: result_bytes)
+        # Phase 3 合并后 check 与 v1.0.1 同树：_run() 先走 _run_finished（直调 adb）。
+        # 本类测的是 prefs/注入进度，不关心完成标记——与 TestCheckV101Completion 对称打桩。
+        monkeypatch.setattr(mod, "_run_finished", lambda: False)
         monkeypatch.setattr(mod, "progress_stamp", lambda payload: None)
 
     def test_prefs_progress_used(self, check_mod, monkeypatch, tmp_path):
