@@ -1,0 +1,25 @@
+# 控制面宿主 OOM 防线（earlyoom 启动参数）——本文件是**事实源**，不是本机运行副本。
+# 关联：#3200（2026-09-23 13:42 整机卡死）、#123（2026-08-03 三次同形）、#3050 G2
+# 安装与验证见同目录 README.md。尚未进 tools/site_config/stages.py 安装清单
+# （#3098 在窗改该文件，避让）——所以这里是**手工安装**，别处不要写「由 installer 渲染」。
+#
+# 为什么不再是 dry-run：2026-09-14 起草时选了「只看不杀」，2026-09-23 那次卡死里它打了
+# 307 行「低内存」而一个进程都没动，最后仍靠人按电源。空转的防线不是防线（#3050 G2）。
+#
+# 触发条件：avail <15%(-m) 且 swap 剩余 <8%(-s) 才动作；到 8%/4% 升级 SIGKILL。
+#   ⇒ 它是**最后**一道，不是第一道；第一道是测试执行的 cgroup 硬顶（docs/development/testing.md §2）。
+#
+# 相对 09-14 草案的四处实质变更（逐条都有本次现场证据）：
+#   1) 删 --dryrun            —— 见上
+#   2) --prefer 补 `python`    —— earlyoom 匹配的是**进程名 comm**（`--help`：
+#      "Preferring to kill process **names** that match regex"）。失控体 comm 是 `python`
+#      （`venv/bin/python -m pytest …`），旧表只有 `python3|python3.13` ⇒ 不命中；
+#      实测死前它锁定的候选是 24 MiB 的 zcode zygote（oom_score 1172），不是 15.3 GiB 的元凶。
+#   3) 去掉 -n（D-Bus 通知）+ 加 -p —— 失速窗内 journald 有 earlyoom 子进程
+#      「Failed to open connection to "system" message bus」与内核
+#      「cgroup: fork rejected by pids controller in /system.slice/earlyoom.service」：
+#      告警分叉在失速期反而加剧 fork 压力；-p 让 earlyoom 自身 oom_score_adj=-100、nice=-20。
+#   4) --avoid 补 redis-server / node_exporter —— 生产依赖，09-14 原表漏了（redis 是队列面）。
+#
+# --avoid 保护生产/桌面关键进程；--prefer 优先牺牲 harness/浏览器/测试类用户进程。
+EARLYOOM_ARGS="-r 300 -m 15,8 -s 8,4 -p --ignore-root-user --avoid '(^|/)(postgres|postgresql|redis-server|node_exporter|dockerd|containerd|containerd-shim.*|prometheus.*|uvicorn|gunicorn|nginx|caddy|sshd|systemd.*|journald|dbus-daemon|dbus-broker.*|gdm.*|clash.*|pipewire.*|wireplumber|Xorg|Xwayland|gnome-shell|gnome-session.*|gnome-software|earlyoom)$' --prefer '(^|/)(node|codebuddy|zcode|cursor|opencode|claude|codex|ghostty|yandex_browser|chrome|chromium|electron|python|python3|python3\.[0-9]+|pytest)$'"
