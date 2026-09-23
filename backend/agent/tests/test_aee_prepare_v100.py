@@ -17,11 +17,14 @@ from pathlib import Path
 
 _SCRIPT_DIR = (
     Path(__file__).resolve().parents[2]
-    / "agent" / "scripts" / "aee_prepare" / "v1.0.0"
+    / "agent" / "scripts" / "aee_prepare"
 )
 
 # 脚本目录自带 _adb.py——加入 sys.path 供 `from _adb import ...` 解析
 sys.path.insert(0, str(_SCRIPT_DIR))
+# ADR-0051 Phase 3：脚本运行时 PYTHONPATH = agent 目录（pipeline_engine 注入），共享模块住 agent 目录
+AGENT_DIR_FOR_SCRIPTS = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(AGENT_DIR_FOR_SCRIPTS))
 
 spec = importlib.util.spec_from_file_location(
     "aee_prepare_v100", _SCRIPT_DIR / "aee_prepare.py"

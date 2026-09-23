@@ -4,7 +4,8 @@
 # 代码、未评审内容或超前 schema 推上生产。
 #
 # 适用动作：migration / restart / hot-update / **scripts/scan**。最后一条是 #2386
-# 补进来的：`POST /scripts/scan` 的输入就是这棵树（STP_SCRIPT_ROOT），而它对
+# 补进来的（ADR-0051 Phase 3 起 scan 的输入已改为 tool_manifest.json + 站点包源，
+# 不再读这棵树；保留本项是因为 manifest 本身来自检出）：`POST /scripts/scan` 曾以这棵树（STP_SCRIPT_ROOT）为输入，而它对
 # 「盘上缺失」的已注册版本做**单向**反激活（目录回来再扫也不复活）。于是「别的会话
 # 把主工作树切到不含该版本的提交」+「窗口内跑了 scan」= 主线活跃版本被静默吃掉，
 # 且事后无法靠再扫恢复。scan 与 restart 之间也有这个窗口，所以 runbook §1.4 在 scan

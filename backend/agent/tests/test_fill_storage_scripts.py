@@ -45,13 +45,13 @@ def _env(monkeypatch):
 
 @pytest.fixture(scope="module")
 def fill_v111():
-    return _load("fill_storage_v111", "fill_storage/v1.1.1/fill_storage.py")
+    return _load("fill_storage_v111", "fill_storage/fill_storage.py")
 
 
 @pytest.fixture(scope="module")
 def fill_v110_anchor():
     """对照锚点：v1.1.0 不可变——高占用时短路 already_met，绝不 rm/dd。"""
-    return _load("fill_storage_v110_anchor", "fill_storage/v1.1.0/fill_storage.py")
+    return _load("fill_storage_v110_anchor", "fill_storage/fill_storage.py")
 
 
 class _Completed:
@@ -198,16 +198,3 @@ class TestV111IdempotentAndShrink:
         assert payload["metrics"]["actual_pct"] == 40
 
 
-class TestV110Anchor:
-    def test_v110_above_target_is_false_green(self, fill_v110_anchor, monkeypatch, capsys):
-        """锚点：v1.1.0 在「used 90%（含自建 60GB）」时报 already_met 且**不动文件**。"""
-        fake = _FakeAdb(used_seq=[90_000], fill_kb=60_000)
-        monkeypatch.setattr(fill_v110_anchor, "adb_shell_quiet", fake)
-        monkeypatch.setattr(fill_v110_anchor, "params", lambda: {"target_percentage": 40})
-
-        fill_v110_anchor.main()
-
-        payload = _result(capsys)
-        assert payload["skipped"] is True and payload["metrics"]["already_met"] is True
-        assert fake.count("rm -f") == 0 and fake.count("dd if=/dev/zero") == 0
-        assert fake.count("du -sk") == 0  # v1.1.0 连自建文件大小都不探测

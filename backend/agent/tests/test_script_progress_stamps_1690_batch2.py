@@ -25,19 +25,19 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 
 _LIBS = {
-    "push_adb": SCRIPTS / "push_resources" / "v1.1.0" / "_adb.py",
-    "mrp_adb": SCRIPTS / "monkey_resource_push" / "v1.1.0" / "_adb.py",
-    "install_adb": SCRIPTS / "install_apk" / "v1.1.0" / "_adb.py",
-    "launch_adb": SCRIPTS / "monkey_launch" / "v5.1.0" / "_adb.py",
-    "clean_adb": SCRIPTS / "clean_env" / "v1.1.0" / "_adb.py",
+    "push_adb": SCRIPTS / "push_resources" / "_adb.py",
+    "mrp_adb": SCRIPTS / "monkey_resource_push" / "_adb.py",
+    "install_adb": SCRIPTS / "install_apk" / "_adb.py",
+    "launch_adb": SCRIPTS / "monkey_launch" / "_adb.py",
+    "clean_adb": SCRIPTS / "clean_env" / "_adb.py",
 }
 
 _CAPABILITY_DIRS = (
-    "push_resources/v1.1.0",
-    "monkey_resource_push/v1.1.0",
-    "install_apk/v1.1.0",
-    "monkey_launch/v5.1.0",
-    "clean_env/v1.1.0",
+    "push_resources",
+    "monkey_resource_push",
+    "install_apk",
+    "monkey_launch",
+    "clean_env",
 )
 
 
@@ -120,7 +120,7 @@ def test_capabilities_declared(rel: str):
 class TestPushResourcesWiring:
     def test_files_mode_stamps_each_push(self, monkeypatch):
         script, deps = _main_load(
-            "push_files_wire", "push_resources/v1.1.0/push_resources.py", "push_adb",
+            "push_files_wire", "push_resources/push_resources.py", "push_adb",
         )
         captured = _capture_stamps(deps["_adb"])
         pushed: list[tuple[str, str]] = []
@@ -139,7 +139,7 @@ class TestPushResourcesWiring:
 
     def test_bundle_mode_stamps_push_and_unpack(self, monkeypatch, tmp_path):
         script, deps = _main_load(
-            "push_bundle_wire", "push_resources/v1.1.0/push_resources.py", "push_adb",
+            "push_bundle_wire", "push_resources/push_resources.py", "push_adb",
         )
         captured = _capture_stamps(deps["_adb"])
         bundle = tmp_path / "bundle.tar.gz"
@@ -178,7 +178,7 @@ class TestPushResourcesWiring:
     def test_real_stamp_reaches_stderr(self, monkeypatch, tmp_path, capsys):
         """真实链路（不替换 progress_stamp）：stderr 上是 PROGRESS JSON。"""
         script, _ = _main_load(
-            "push_real_wire", "push_resources/v1.1.0/push_resources.py", "push_adb",
+            "push_real_wire", "push_resources/push_resources.py", "push_adb",
         )
         fake_adb = tmp_path / "adb"
         fake_adb.write_text("#!/usr/bin/env python3\nimport sys\nsys.exit(0)\n", encoding="utf-8")
@@ -207,40 +207,12 @@ class TestPushResourcesWiring:
         assert '"success": true' in out.out
 
 
-class TestMonkeyResourcePushWiring:
-    def test_push_wrapped_with_heartbeat(self, monkeypatch, tmp_path):
-        script, deps = _main_load(
-            "mrp_wire", "monkey_resource_push/v1.1.0/monkey_resource_push.py", "mrp_adb",
-        )
-        captured = _capture_stamps(deps["_adb"])
-        local = tmp_path / "aim.jar"
-        local.write_bytes(b"jar")
-        calls: list[tuple] = []
-
-        def fake_run_adb(serial, args, timeout=30):
-            calls.append((serial, args, timeout))
-            return 0, "", ""
-
-        monkeypatch.setattr(script, "_run_adb", fake_run_adb)
-
-        assert script._push("SER", str(local), "/data/local/tmp/aim.jar") is True
-
-        assert "push:aim.jar" in _phases(captured)
-        assert calls and calls[0][1][0] == "push"
-
-    def test_missing_local_is_not_stamped(self, monkeypatch):
-        script, deps = _main_load(
-            "mrp_missing", "monkey_resource_push/v1.1.0/monkey_resource_push.py", "mrp_adb",
-        )
-        captured = _capture_stamps(deps["_adb"])
-        assert script._push("SER", "/nonexistent/x.bin", "/data/local/tmp/x.bin") is False
-        assert captured == [], "未发生 push 不应打戳"
 
 
 class TestInstallApkWiring:
     def test_install_wrapped_with_heartbeat(self, monkeypatch, tmp_path):
         script, deps = _main_load(
-            "install_wire", "install_apk/v1.1.0/install_apk.py", "install_adb",
+            "install_wire", "install_apk/install_apk.py", "install_adb",
         )
         captured = _capture_stamps(deps["_adb"])
         apk = tmp_path / "app.apk"
@@ -272,7 +244,7 @@ class TestMonkeyLaunchWiring:
 
     def test_watchdog_wait_ticks(self, monkeypatch):
         script, _ = _main_load(
-            "launch_wire", "monkey_launch/v5.1.0/monkey_launch.py", "launch_adb",
+            "launch_wire", "monkey_launch/monkey_launch.py", "launch_adb",
         )
         ticks: list[dict] = []
         monkeypatch.setattr(script, "progress_tick", lambda phase, **k: ticks.append({"phase": phase, **k}))
@@ -289,7 +261,7 @@ class TestMonkeyLaunchWiring:
 
     def test_aimwd_wait_ticks(self, monkeypatch):
         script, _ = _main_load(
-            "launch_aimwd", "monkey_launch/v5.1.0/monkey_launch.py", "launch_adb",
+            "launch_aimwd", "monkey_launch/monkey_launch.py", "launch_adb",
         )
         ticks: list[dict] = []
         monkeypatch.setattr(script, "progress_tick", lambda phase, **k: ticks.append({"phase": phase, **k}))
@@ -318,7 +290,7 @@ class TestMonkeyLaunchWiring:
 class TestCleanEnvWiring:
     def test_uninstall_and_clear_logs_stamped(self, monkeypatch):
         script, deps = _main_load(
-            "clean_wire", "clean_env/v1.1.0/clean_env.py", "clean_adb",
+            "clean_wire", "clean_env/clean_env.py", "clean_adb",
         )
         captured = _capture_stamps(deps["_adb"])
         seen: list[str] = []

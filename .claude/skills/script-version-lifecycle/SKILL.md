@@ -16,23 +16,19 @@ ADR-0029（每版本全量副本）。
 
 ## A. 新建版本（改脚本行为）
 
-1. 在 `backend/agent/scripts/<name>/v<新版本>/` 建**全量副本**（不得只拷贝差异文件）；
-   入口保持首个非 `_` 前缀的可识别脚本（`.py` / `.sh`）
+1. 直接改族源码树 `backend/agent/scripts/<name>/`（ADR-0051 Phase 3 起无版本目录，每族一棵树）；
+   改完 `python tools/dev/check_script_packages.py --register <name> <新版本>` 追加登记（版本号不可复用）
 2. 版本 pin 走既有参数（如 `STP_FLASH_FIRMWARE_VERSION`），不要硬编码路径
-3. 门禁：`python tools/dev/check-script-version-immutability.py --base origin/main`
-4. 扫描注册：`POST /scripts/scan`——`conflicts` 非空即停，按冲突项修复后重扫
-5. **下发到主机（版本生效的最后一公里）**——脚本是**从主机本地树执行**的
-   （`Script.nfs_path` = `/opt/stability-test-agent/agent/scripts/<name>/v<版本>/…`，
-   `backend/agent/pipeline_engine.py` 直接用该路径起进程），scan 只把版本写进控制面
-   注册表，**主机上还没有文件**：
-   - canary 一台：`POST /api/v1/hosts/<host_id>/hot-update`，期望
-     `{"ok":true,"code_version":"<仓库 HEAD>"}`；
-   - 批量：`PYTHONPATH=. venv/bin/python -m backend.scripts.batch_hot_update --direct`
-     （默认跳过有在跑 job 的主机；实测 ~3s/台，48 台约 4 分钟）；
-   - 校验：`GET /api/v1/hosts` 逐台 `agent_code_sync_status=matched`。
-   > 2026-09-22 实测（#3111）：`fill_storage` v1.1.1 合并后 DB 已 active，而 47 台主机
-   > 仍停在一天前的载荷；此时 `GET /script-presence/summary` 的 `missing=0` **不能**
-   > 证明主机有这个版本——它无 Plan 引用、不在账本全集内（见「后置验证」第一条）。
+3. 门禁：`python tools/dev/check_script_packages.py`（族树重建 sha 须等于最新登记，改树没 `--register` 即红）+ `python tools/dev/check_tool_manifest.py --base origin/main`（append-only）
+4. 合入后发包：`python tools/dev/check_script_packages.py --publish --packages-root /mnt/stp-aee/packages`；再 `POST /scripts/scan`——`package_missing` 非空说明没发包，`conflicts` 非空即停
+5. **让主机拉到新包（版本生效的最后一公里）**——ADR-0051 Phase 3 起脚本从主机本机
+   `tools_cache/<name>/<version>/` 执行（`STP_SCRIPT_PACKAGES=strict`，Agent 按 `script.package_sha256`
+   从站点 `packages/` 拉包并整包核验），主机上**没有**脚本目录，热更新 code 载荷也不再含 `scripts/`：
+   - 第 4 步发包 + scan 后，Plan 派发前的 `verify_scripts` 会自动拉包预热；要提前核验用
+     `POST /api/v1/script-presence/refresh?host_id=<id>`（走整包核验），期望 `missing=0 mismatch=0`；
+   - 主机侧判据：`find /opt/stability-test-agent/tools_cache -name .stp-verified | wc -l` 含新版本，
+     `journalctl -u stability-test-agent | grep -c 'script package unavailable'` 为 0；
+   - **不需要**热更新 Agent 代码来分发脚本（那是 Phase 3 前的形态）。
 
 ## B. 退役版本
 

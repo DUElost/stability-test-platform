@@ -31,7 +31,7 @@ def _load(script_path: Path, name: str):
 
 @pytest.fixture(scope="module")
 def gpu():
-    return _load(_SD / "gpu_check/v1.0.8/gpu_check.py", "gpu_check_v108")
+    return _load(_SD / "gpu_check/gpu_check.py", "gpu_check_v108")
 
 
 class TestProtobufFieldParse:
@@ -58,23 +58,19 @@ class TestProtobufFieldParse:
 
 class TestOfflineExemption:
     def test_sleep_check_has_device_online_gate(self):
-        src = (_SD / "sleep_check/v1.0.3/sleep_check.py").read_text(encoding="utf-8")
+        src = (_SD / "sleep_check/sleep_check.py").read_text(encoding="utf-8")
         assert "device_online" in src
         assert "device_online()" in src
 
     def test_gpu_check_has_device_online_gate(self):
-        src = (_SD / "gpu_check/v1.0.8/gpu_check.py").read_text(encoding="utf-8")
+        src = (_SD / "gpu_check/gpu_check.py").read_text(encoding="utf-8")
         assert "device_online" in src
         assert "device_online()" in src
 
-    def test_new_versions_exist_and_old_retained(self):
-        assert (_SD / "sleep_check/v1.0.4/sleep_check.py").is_file()
-        assert (_SD / "gpu_check/v1.0.10/gpu_check.py").is_file()
-        assert (_SD / "gpu_check/v1.0.9/gpu_check.py").is_file()
-        assert (_SD / "sleep_check/v1.0.3/sleep_check.py").is_file()
-        assert (_SD / "gpu_check/v1.0.8/gpu_check.py").is_file()
-        assert (_SD / "sleep_check/v1.0.2/sleep_check.py").is_file()
-        assert (_SD / "gpu_check/v1.0.7/gpu_check.py").is_file()
+    def test_family_trees_exist(self):
+        """ADR-0051 Phase 3：版本目录已退役，历史版本在包里；这里只守族树在位。"""
+        assert (_SD / "sleep_check/sleep_check.py").is_file()
+        assert (_SD / "gpu_check/gpu_check.py").is_file()
 
 
 class TestOfflineExemptionNoKeyError:
@@ -88,11 +84,11 @@ class TestOfflineExemptionNoKeyError:
 
     @pytest.fixture(scope="module")
     def sleep_v104(self):
-        return _load(_SD / "sleep_check/v1.0.4/sleep_check.py", "sleep_check_v104")
+        return _load(_SD / "sleep_check/sleep_check.py", "sleep_check_v104")
 
     @pytest.fixture(scope="module")
     def gpu_v109(self):
-        return _load(_SD / "gpu_check/v1.0.9/gpu_check.py", "gpu_check_v109")
+        return _load(_SD / "gpu_check/gpu_check.py", "gpu_check_v109")
 
     @staticmethod
     def _stub_sleep(monkeypatch, mod, tmp_path, *, online, alive, state=None):
@@ -234,16 +230,9 @@ class TestProtobufPrefixVerdictV1010:
 
     @pytest.fixture(scope="class")
     def gpu_v1010(self):
-        return _load(_SD / "gpu_check/v1.0.10/gpu_check.py", "gpu_check_v1010")
+        return _load(_SD / "gpu_check/gpu_check.py", "gpu_check_v1010")
 
-    @pytest.fixture(scope="class")
-    def gpu_v109(self):
-        return _load(_SD / "gpu_check/v1.0.9/gpu_check.py", "gpu_check_v109_reg")
 
-    def test_v109_regression_documented(self, gpu_v109):
-        """修复前行为存证：v1.0.9 对真机样本解析为 None。"""
-        assert gpu_v109._last_protobuf_test_result(REAL_MONITOR_SAMPLE) is None
-        assert gpu_v109._run_finished(REAL_MONITOR_SAMPLE) == (True, "no-tests")
 
     def test_v1010_real_sample_is_ok(self, gpu_v1010):
         assert gpu_v1010._last_protobuf_test_result(REAL_MONITOR_SAMPLE) is True

@@ -30,6 +30,25 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 TEMPLATES_DIR = REPO_ROOT / "backend" / "schemas" / "pipeline_templates"
 SCRIPTS_DIR = REPO_ROOT / "backend" / "agent" / "scripts"
 
+
+def _latest_versions() -> dict[str, str]:
+    """ADR-0051 Phase 3：族树 = 每族最新未退役条目（版本目录已退役）。"""
+    doc = json.loads((REPO_ROOT / "tool_manifest.json").read_text(encoding="utf-8"))
+    out: dict[str, str] = {}
+    for name, tool in doc["tools"].items():
+        live = [str(e["version"]) for e in tool["versions"] if e.get("python") is None and not e.get("retired")]
+        if live:
+            out[name] = max(live, key=lambda v: tuple(int(p) if p.isdigit() else 0 for p in v.split(".")))
+    return out
+
+
+def _script_source(name: str, version: str) -> Path | None:
+    """模板钉的版本若是该族最新（应当如此，见 test_pipeline_template_script_pins），源码就在族树；
+    历史版本的源码只在 Git 历史/包里，这里不判（None）。"""
+    if _latest_versions().get(str(name)) != str(version):
+        return None
+    return SCRIPTS_DIR / str(name) / f"{name}.py"
+
 #: 余量：与 #2981 落地时的口径一致（默认预算 150 → 墙钟 ≥180）。预算不是墙钟，步骤还要
 #: 留出收尾/回 HOME/写 stdout 的时间，所以判据是「预算 + 余量」而不是「≥ 预算」。
 _MARGIN = 30
@@ -81,7 +100,9 @@ def _covered_families() -> dict[tuple[str, str], int]:
     """{(脚本名, 版本): 预算} —— 模板里出现、且脚本声明了预算的族。"""
     covered: dict[tuple[str, str], int] = {}
     for _tpl, _action, name, version, _timeout in _iter_script_steps():
-        script = SCRIPTS_DIR / str(name) / f"v{version}" / f"{name}.py"
+        script = _script_source(name, version)
+        if script is None:
+            continue
         if not script.exists():
             continue
         if (budget := _declared_budget(script)) is not None:
@@ -96,7 +117,9 @@ def _covers(timeout: object, budget: int) -> bool:
 def test_template_step_timeout_covers_declared_script_budget() -> None:
     offenders: list[str] = []
     for tpl, action, name, version, timeout in _iter_script_steps():
-        script = SCRIPTS_DIR / str(name) / f"v{version}" / f"{name}.py"
+        script = _script_source(name, version)
+        if script is None:
+            continue
         assert script.exists(), f"{tpl}: {action} v{version} 的脚本文件不存在（{script}）"
         budget = _declared_budget(script)
         if budget is None:
@@ -122,8 +145,8 @@ def test_budget_scanner_is_not_vacuous() -> None:
 
 def test_budget_parser_and_predicate_have_teeth() -> None:
     """红绿双向：对真实脚本取值（解析器），并对 #3087 的形状判红（谓词）。"""
-    check_device = SCRIPTS_DIR / "check_device" / "v1.0.2" / "check_device.py"
-    ensure_root = SCRIPTS_DIR / "ensure_root" / "v1.0.2" / "ensure_root.py"
+    check_device = SCRIPTS_DIR / "check_device" / "check_device.py"
+    ensure_root = SCRIPTS_DIR / "ensure_root" / "ensure_root.py"
     assert _declared_budget(check_device) == 150, "check_device 的预算解析失真"
     assert _declared_budget(ensure_root) == 150, "ensure_root 的预算解析失真"
 

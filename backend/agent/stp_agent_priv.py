@@ -153,6 +153,7 @@ _USB_PORT_RE = re.compile(r"^[0-9]+-[0-9]+(?:\.[0-9]+)*\Z")
 # 自身不进安装目录，venv//logs/ 为宿主侧目录（ADR-0040 D1 明文排除）。
 FIXED_EXCLUDES = [
     "__pycache__/",
+    "scripts/",  # ADR-0051 Phase 3：脚本走包分发，不再随源码树同步（与 host_updater/_TAR_EXCLUDES 同源）
     "*.pyc",
     "test_*.py",
     "tests/",

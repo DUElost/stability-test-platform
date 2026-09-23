@@ -10,6 +10,8 @@ agent_allowed_service_actions:
 
 agent_install_excludes:
   - "__pycache__/"
+  # ADR-0051 Phase 3：脚本走包分发（tools_cache），不再随源码树同步
+  - "scripts/"
   # ADR-0040 P2（#1997）：与部署 digest 输入集契约对齐——源码测试统一
   # test_*.py 宽模式（热更新打包同规则）；venv//logs/ 为宿主侧目录，
   # 源树出现时也不同步。

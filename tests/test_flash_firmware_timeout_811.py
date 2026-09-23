@@ -17,7 +17,7 @@ import pytest
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _SCRIPT = (
     _REPO_ROOT
-    / "backend/agent/scripts/flash_firmware/v1.3.13/flash_firmware.py"
+    / "backend/agent/scripts/flash_firmware/flash_firmware.py"
 )
 
 
@@ -110,5 +110,5 @@ def test_stubborn_process_after_sigkill_fails_closed(monkeypatch):
 def test_new_version_directory_exists_and_is_immutable_target():
     assert _SCRIPT.is_file(), "v1.3.13 脚本目录缺失"
     # 旧版本仍在（不可原地改，新行为以新版本表达）
-    old = _REPO_ROOT / "backend/agent/scripts/flash_firmware/v1.3.12/flash_firmware.py"
+    old = _REPO_ROOT / "backend/agent/scripts/flash_firmware/flash_firmware.py"
     assert old.is_file()

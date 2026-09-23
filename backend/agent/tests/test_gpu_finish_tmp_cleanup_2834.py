@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 _SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
-_REL = "gpu_finish/v1.0.6/gpu_finish.py"
+_REL = "gpu_finish/gpu_finish.py"
 
 
 def _load(name: str, rel_path: str):

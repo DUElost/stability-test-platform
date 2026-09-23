@@ -8,45 +8,53 @@
 Tool Contract + 包存储，既有工具族的新版本目录允许继续 legacy 形态（D0 分级准入）
 ——本文的版本目录约定对已入仓脚本族持续有效。
 
-## 目录与扫描
+## 族树、清单与包（ADR-0051 Phase 3 起）
 
 ```text
-<STP_SCRIPT_ROOT>/<name>/v<version>/<entry>.{py,sh}
+backend/agent/scripts/<name>/<entry>.{py,sh}      # 每族一棵可演进的源码树（无版本目录）
+tool_manifest.json                                # Git 唯一事实源：<name> → versions[{version, package_sha256, script, retired, …}]
+<STP_AEE_NFS_ROOT>/packages/<name>/<version>.tar.gz   # 站点包源：内容寻址的发布单元（不可变）
+<AGENT_INSTALL_DIR>/tools_cache/<name>/<version>/     # Agent 本机缓存：拉包 + 整包 sha 核验后执行
 ```
 
-- 一级目录是脚本名，二级目录以 `v` 开头；扫描器只识别 `.py`（python）与
-  `.sh`（shell）两种后缀（`script_catalog._SUPPORTED_SUFFIXES`）——`.bat/.cmd`
-  等 Windows 批处理**不受支持**（历史文档曾宣称支持，2026-09 按实现收口，
-  #1029）；
-- 入口是首个非 `_` 前缀的可识别脚本；
-- `_` 辅助模块在入口扫描时跳过，但仍受版本目录不可变门禁保护；
-- 扫描结果：`created`、`skipped`、`conflicts`、`deactivated`；
-- `STP_SCRIPT_ROOT` 必须显式配置；扫描机与运行机不同时另设
-  `STP_SCRIPT_RUNTIME_ROOT`。
+- 版本号只住在 `tool_manifest.json`；族树不再带 `v<version>/` 目录（`tool-manifest` 门禁对残留目录判红）；
+- 入口是族树里首个非 `_` 前缀的 `.py` / `.sh`（`.bat/.cmd` 不受支持，#1029）；`_` 辅助模块与
+  `capabilities.json` 一并进包，整包 sha 覆盖全部文件（旧「`_` 文件不计入 entry sha」的盲区已消失）；
+- **发新版本** = 改族树 → `python tools/dev/check_script_packages.py --register <name> <version>`（追加登记，
+  版本号不可复用）→ 合入 → `--publish --packages-root <STP_AEE_NFS_ROOT>/packages`（落包 + 派生
+  `packages/manifest.json` 副本）→ `POST /api/v1/scripts/scan`；
+- **`tool-manifest` 门禁**：manifest append-only（删除/原地改写红、退役仅 `retired:false→true`）+
+  每个族树重建 sha 必须等于该族最新未退役条目——「改了树没发版本」直接红；
+- **scan（`POST /api/v1/scripts/scan`）的注册输入 = manifest + 站点包源**：逐条目打开 tarball 核验整包 sha，
+  从包内取入口 sha / 伴随文件 sha / `capabilities.json` 登记 `script` 行；包未发布 → `package_missing`（只报告）；
+  行与包不一致 → `conflicts`（包不可变，故只能是库侧漂移；`?force_rebaseline=true` 显式重锚，有在途 PlanRun 时 409）；
+  `retired:true` → 行显式 `is_active=false`；活跃行不在 manifest → `unregistered_active`（只报告，永不反激活）。
+  不再读取任何检出目录：`STP_SCRIPT_ROOT` 已无读取点（站点安装仍写它以兼容旧 env 模板），
+  可选覆盖 `STP_TOOL_MANIFEST` / `STP_PACKAGES_ROOT`，运行机路径锚仍由 `STP_SCRIPT_RUNTIME_ROOT` 决定；
+- **执行**：Agent 按行上 `package_sha256` 拉包到 `tools_cache` 执行（`STP_SCRIPT_PACKAGES=strict`，
+  fleet 已于 2026-09-23 全部切换）；`verify_scripts` 按整包核验并预热；主机上不再有脚本目录。
 
 - **待激活对账（#2931）**：「合入 → 到部署树 → scan 注册 → `plan_step` 重指」四道里，
   第 3 道做没做此前无任何东西会喊（`check_unreferenced_script_versions` 的输入是
   DB 行，结构性看不见「磁盘有、库无行」）。收尾判据：新版本合入后跑
 
   ```bash
-  STP_SCRIPT_ROOT=<部署树>/backend/agent/scripts \
-    python -m backend.scripts.check_unreferenced_script_versions --pending-activation
+  python -m backend.scripts.check_unreferenced_script_versions --pending-activation   # head 来自 tool_manifest.json
   ```
 
-  确认它**不再列出该版本**——视图空才是「磁盘 head 均已注册且激活」的证据。
-  三态：`unregistered`=库无行（scan 未跑或跑在旧树）；`inactive`=有行未激活
+  确认它**不再列出该版本**——视图空才是「manifest head 均已注册且激活」的证据。
+  三态：`unregistered`=库无行（scan 未跑或包未发布）；`inactive`=有行未激活
   （反激活遗留）；不列出=已生效。按族 **head 版本**报告（族内旧版零引用是
   #735 退役面，不进此账——存量 backlog 会把真滞后淹掉，判据落目录行/数据行，
   不做散字符串相邻匹配）。工具只读；退出码 0=对账完成（账本非门禁），
-  2=`STP_SCRIPT_ROOT` 未设=无从判定，不得读成「没有落后项」。
+  2=`tool_manifest.json` 不可读=无从判定，不得读成「没有落后项」。
 
 - **重指漂移对账（#3030）**：第 4 道（既有 Plan 的 `plan_step.script_version` 重指）
   同样此前无账——存量 Plan 不会随模板更新而迁移（实测 24 族 / 155 步 / 44 Plan）。
   收尾判据：新版本合入 **且** 分发后跑
 
   ```bash
-  STP_SCRIPT_ROOT=<部署树>/backend/agent/scripts \
-    python -m backend.scripts.check_unreferenced_script_versions --plan-step-drift
+  python -m backend.scripts.check_unreferenced_script_versions --plan-step-drift      # head 来自 tool_manifest.json
   ```
 
   确认该视图**不再列出活跃 Plan 的相关步骤**（半活跃 Plan 随下个窗口清）。两轴口径
@@ -61,25 +69,12 @@ Tool Contract + 包存储，既有工具族的新版本目录允许继续 legacy
 
 ## 已发布版本不可变
 
-> **ADR-0051（2026-09-22 Accepted）**：不可变性的承载物从源码目录移到内容寻址包；Phase 3 前本节口径（版本目录不可变）继续有效。
->
-> **Phase 2a 已落地**：每个版本目录同时对应 `tool_manifest.json` 一条登记（`package_sha256` = 从 `git ls-files` 成员确定性打包的整包 sha；`python: null` = Agent 自身解释器）。新增版本目录后运行
-> `python tools/dev/check_script_packages.py --register` 追加登记；`tool-manifest` 门禁会重建每个包并与登记值比对（原地改目录 → sha 不等 → 红）。`script.package_sha256` 由 scan 从 manifest 回填（响应里 `package_backfilled` / `package_conflicts`）；
-> 生产只读证明：`DATABASE_URL=… python -m backend.scripts.check_script_package_equivalence`。发布包到站点：`python tools/dev/check_script_packages.py --publish --packages-root <STP_AEE_NFS_ROOT>/packages`（运维动作，Phase 2b 前置）。
->
-> **Phase 2b 已落地（代码面）**：Agent 按 `script.package_sha256` 经 `tools_cache` 执行脚本，由 `STP_SCRIPT_PACKAGES` 控制（`off` 默认 / `on` 灰度回退 / `strict` 终态），控制面源键 `STP_AGENT_SCRIPT_PACKAGES` 走 hot-update env 推送。切换顺序：发包 → scan 回填 → `on` 灰度（看 verify_scripts 的 `package_active` 与 WARNING `script_packages_fallback_tree`）→ `strict` → 才可进入 Phase 3 删目录。**删目录前不得把 fleet 留在 off/on**：热更新 `rsync --delete` 会把主机上的版本目录一并清掉。
+不可变性属于**包**：`tool_manifest.json` 条目与站点 `packages/<name>/<version>.tar.gz` 只增不改
+（ADR-0051 D1；append-only 由 `tool-manifest` 门禁执法，删除按 ADR-0051 D5 继承的 ADR-0039 D2/D3：
+仅人工 PR、冷却期、按版本）。族源码树**可以改**，但改了必须登记新版本——否则门禁红，且
+`script.content_sha256` / `package_sha256` 仍钉在已登记的包上，运行时拉的是包不是树。
 
-`script.content_sha256` 是扫描时冻结的期望值。原地修改已发布版本只会产生 conflict，
-不会更新数据库基线；引用该版本的 Plan 会在 precheck 阶段
-`script_verify_failed`，self-heal 也无法修复磁盘内容与数据库期望值的失配。
-
-正常修改必须创建新版本。CI 和本地门禁：
-
-```bash
-python tools/dev/check-script-version-immutability.py --base origin/main
-```
-
-`POST /scripts/scan?force_rebaseline=true` 只用于契约已经被外部破坏后的恢复：仅 admin
+`POST /scripts/scan?force_rebaseline=true` 只用于库侧漂移的恢复（把行重锚到包内容）：仅 admin
 可调用，有 RUNNING、QUEUED 或 PRECHECK PlanRun 时返回 409。不能作为日常改版路径。
 
 ## 新版本上线收尾（模板钉钉 + 控制面生效）
@@ -228,8 +223,9 @@ python -m backend.scripts.check_unreferenced_script_versions [--json] [--name fl
 409 `SCRIPT_STILL_REFERENCED`。重新激活只有 `PUT {"is_active": true}` 一条路，且
 无守卫（不做引用校验）。
 
-退役保留版本目录，只让版本退出活动目录。不要删除历史版本目录：删除会触发不可变
-门禁，也会破坏历史 PlanRun 的重放与追溯。
+退役 = 在 `tool_manifest.json` 把该条目翻成 `retired: true`（append-only 门禁允许的唯一改写）并
+跑一次 scan（行显式 `is_active=false`）。包留在站点包源（历史 PlanRun 重放与追溯靠它）；物理删包按
+ADR-0051 D5 继承的 ADR-0039 D2/D3（仅人工 PR、冷却期、按版本）。族树只在该族**全部**条目退役后才可删。
 
 `refs == 0` 只代表没有当前 Plan 配置引用，不代表没有历史运行。退役前还应查看
 `GET /api/v1/scripts/{id}/usage` 的 `run_count`、`success_rate` 和 `versions_used`；
@@ -240,12 +236,10 @@ python -m backend.scripts.check_unreferenced_script_versions [--json] [--name fl
 
 - **`usage` 的执行事实窗口被 `PLAN_RUN_RETENTION_DAYS` 截断**：库内 run 只覆盖保留期，
   `versions_used` 为空 = 「留存窗口内零执行」，不等于「从未执行」；更早的使用无库内证据。
-- **scan 只报告，退役是显式动作**（#2386 起）：`scan_script_root` 对 `is_active` 的单向
-  管理是**有条件的**——仅当被扫子树 == 部署目标（`origin/main`）时才反激活；否则跳过，并把
-  跳过的版本显式列进响应 `deactivation_skipped_versions` 且写审计。目录仍在的已停用行永不
-  复活；需要无条件反激活时走显式出口 `POST /api/v1/scripts/scan?allow_deactivate=true`
-  （传了即跳过 git 判定）。「盘上缺失」是否等于「已退役」已由 **ADR-0051 D6**（接管 ADR-0046 D2）裁决为**否**——退役改显式动作、scan 只报告（落地在 ADR-0051 Phase 1 之后），
-  当前方向 = scan 只报告、退役走显式运维动作。
+- **scan 只报告，退役是显式动作**（ADR-0051 D6 接管 ADR-0046 D2，Phase 3 落地）：scan 不再有任何
+  「盘上缺失即反激活」路径；退役唯一入口 = manifest `retired:true`（经 PR，可审计）+ scan；活跃行不在
+  manifest 只进 `unregistered_active` 报告。`allow_deactivate` 开关与 `deactivation_skipped_versions` 已随
+  目录模型一起退役。
 - 反过来的坑是**种子迁移**：已应用的 seed 迁移在 `upgrade()` 分支里显式 `is_active = true`，
   因此空库重建/灾备会复活退役状态。退役是生产数据事实，不经迁移链表达（迁移丢操作者身份与
   `audit_logs`）；漂移收口归 #2055 与 #735 长效机制。

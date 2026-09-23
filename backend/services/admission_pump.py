@@ -487,6 +487,10 @@ def _mismatched_entries_for_push(
     for row in verify_results:
         if row.get("ok"):
             continue
+        # ADR-0051 Phase 3：包模式下 verify 失败（package_active）不可能靠 SFTP 推树文件治愈——
+        # 主机按 package_sha256 从站点包源拉包，树文件已随目录模型退役；直接留给 script_verify_failed 显式失败。
+        if row.get("package_active"):
+            continue
         name = row.get("name")
         if not isinstance(name, str) or not name or name in seen:
             continue

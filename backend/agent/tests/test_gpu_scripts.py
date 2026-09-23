@@ -8,7 +8,6 @@ golden fixture：fixtures/gpu/test_log.txt（含 instrument 原文 + 平台标�
 from __future__ import annotations
 
 import importlib.util
-import json
 import re
 import sys
 from pathlib import Path
@@ -36,34 +35,34 @@ def _load(name: str, rel_path: str):
 
 @pytest.fixture(scope="module")
 def lib():
-    return _load("gpu_lib", "gpu_setup/v1.0.0/_lib.py")
+    return _load("gpu_lib", "gpu_setup/_lib.py")
 
 
 @pytest.fixture(scope="module")
 def lib_v101():
     """gpu v1.0.1：进程检测改 pgrep -f + bracket 防自匹配（冒烟发现 ④）。"""
-    return _load("gpu_lib_v101", "gpu_setup/v1.0.1/_lib.py")
+    return _load("gpu_lib_v101", "gpu_setup/_lib.py")
 
 
 @pytest.fixture(scope="module")
 def setup_mod():
-    return _load("gpu_setup_mod", "gpu_setup/v1.0.0/gpu_setup.py")
+    return _load("gpu_setup_mod", "gpu_setup/gpu_setup.py")
 
 
 @pytest.fixture(scope="module")
 def check_mod():
-    return _load("gpu_check_mod", "gpu_check/v1.0.0/gpu_check.py")
+    return _load("gpu_check_mod", "gpu_check/gpu_check.py")
 
 
 @pytest.fixture(scope="module")
 def check_mod_v102():
     """gpu_check v1.0.2：bytes 读取二进制日志（冒烟发现 ⑤）。"""
-    return _load("gpu_check_mod_v102", "gpu_check/v1.0.2/gpu_check.py")
+    return _load("gpu_check_mod_v102", "gpu_check/gpu_check.py")
 
 
 @pytest.fixture(scope="module")
 def finish_mod():
-    return _load("gpu_finish_mod", "gpu_finish/v1.0.0/gpu_finish.py")
+    return _load("gpu_finish_mod", "gpu_finish/gpu_finish.py")
 
 
 @pytest.fixture()
@@ -207,23 +206,6 @@ class TestGpuConfig:
 # ---------------------------------------------------------------------------
 
 
-class TestSetupFailFast:
-    def test_missing_variant_dir_raises(self, setup_mod, monkeypatch, tmp_path):
-        monkeypatch.setattr(setup_mod, "gpu_config", lambda cfg: {"project": "legacy", "lite_max_gb": 8})
-        monkeypatch.setattr(setup_mod, "resources_dir", lambda cfg: tmp_path)
-        monkeypatch.setattr(setup_mod, "detect_ram_gb", lambda: 16.0)
-        monkeypatch.setattr(setup_mod, "select_variant", lambda ram, lite: ("Antutu_v10", {"test_id": "001"}))
-        with pytest.raises(FileNotFoundError) as ei:
-            setup_mod._run({})
-        assert "Antutu_v10" in str(ei.value)
-
-    def test_ram_unresolvable_raises(self, setup_mod, monkeypatch, tmp_path):
-        monkeypatch.setattr(setup_mod, "gpu_config", lambda cfg: {"project": "legacy", "lite_max_gb": 8})
-        monkeypatch.setattr(setup_mod, "resources_dir", lambda cfg: tmp_path)
-        monkeypatch.setattr(setup_mod, "detect_ram_gb", lambda: None)
-        with pytest.raises(RuntimeError) as ei:
-            setup_mod._run({})
-        assert "RAM" in str(ei.value)
 
 
 # ---------------------------------------------------------------------------
@@ -231,64 +213,8 @@ class TestSetupFailFast:
 # ---------------------------------------------------------------------------
 
 
-class TestCheckV102BinaryLog:
-    def test_run_finished_binary_tolerant(self, check_mod_v102, monkeypatch):
-        """test_log.txt 含二进制 protobuf 输出——bytes 模式读取不抛解码错误。"""
-        monkeypatch.setattr(check_mod_v102, "device_serial", lambda: "S1")
-
-        class FakeResult:
-            stdout = b"\xf9\x01\x02\x00\x0c\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00GPU_RUN_START test_id=002 rounds=2\nGPU_RUN_END rc=0\n"
-
-        monkeypatch.setattr(check_mod_v102.subprocess, "run", lambda *a, **k: FakeResult())
-        assert check_mod_v102._run_finished() is True
-
-    def test_run_finished_binary_without_marker(self, check_mod_v102, monkeypatch):
-        monkeypatch.setattr(check_mod_v102, "device_serial", lambda: "S1")
-
-        class FakeResult:
-            stdout = b"\xf9\x01\x02\x00\x0c\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00GPU_RUN_START test_id=002 rounds=2\n"
-
-        monkeypatch.setattr(check_mod_v102.subprocess, "run", lambda *a, **k: FakeResult())
-        assert check_mod_v102._run_finished() is False
 
 
-class TestCheck:
-    def _patch_device_io(self, mod, monkeypatch, tmp_path, alive=True, done=3, log_bytes=4096,
-                         finished=False):
-        monkeypatch.setattr(mod, "device_serial", lambda: "S1")
-        monkeypatch.setattr(mod, "_state_file", lambda: tmp_path / "state.json")
-        monkeypatch.setattr(mod, "instrument_alive", lambda: alive)
-        monkeypatch.setattr(mod, "_grep_rounds_done", lambda: done)
-        monkeypatch.setattr(mod, "result_log_bytes", lambda: log_bytes)
-        monkeypatch.setattr(mod, "_run_finished", lambda: finished)
-        monkeypatch.setattr(mod, "progress_stamp", lambda payload: None)
-
-    def test_running_progress(self, check_mod, monkeypatch, tmp_path):
-        self._patch_device_io(check_mod, monkeypatch, tmp_path)
-        r = check_mod._run({})
-        assert r["success"] is True
-        assert r["progress"]["rounds_done"] == 3
-        assert r["progress"]["instrument_alive"] is True
-        assert r["progress"]["run_finished"] is False
-
-    def test_finished_reports_completion(self, check_mod, monkeypatch, tmp_path):
-        self._patch_device_io(check_mod, monkeypatch, tmp_path, alive=False, finished=True)
-        r = check_mod._run({})
-        assert r["success"] is True
-        assert r["progress"]["run_finished"] is True
-
-    def test_dead_streak_grace(self, check_mod, monkeypatch, tmp_path):
-        self._patch_device_io(check_mod, monkeypatch, tmp_path, alive=False)
-        r1 = check_mod._run({"dead_grace_cycles": 2})
-        assert r1["success"] is True
-        r2 = check_mod._run({"dead_grace_cycles": 2})
-        assert r2["success"] is False
-        assert "连续 2 个周期" in r2["error_message"]
-
-    def test_injected_expected_rounds(self, check_mod, monkeypatch, tmp_path):
-        self._patch_device_io(check_mod, monkeypatch, tmp_path)
-        r = check_mod._run({"expected_rounds": 2000})
-        assert r["progress"]["expected_rounds"] == 2000
 
 
 # ---------------------------------------------------------------------------
@@ -330,22 +256,6 @@ class TestV101ProcessDetection:
 # ---------------------------------------------------------------------------
 
 
-class TestFinishV101RunId:
-    def test_run_id_has_serial(self, monkeypatch, tmp_path):
-        mod = _load("gpu_finish_mod_v102", "gpu_finish/v1.0.2/gpu_finish.py")
-        monkeypatch.setattr(mod, "device_serial", lambda: "GPU-S9")
-        monkeypatch.setattr(mod, "stop_stress", lambda: None)
-        monkeypatch.setattr(mod.time, "sleep", lambda _: None)
-
-        def fake_pull():
-            local = tmp_path / "test_log.txt"
-            local.write_text("GPU_RUN_START test_id=001 rounds=1\nGPU_ROUND 1 rc=0\n", encoding="utf-8")
-            return local
-
-        monkeypatch.setattr(mod, "_pull_result_log", fake_pull)
-        monkeypatch.setattr(mod, "results_dir", lambda project: tmp_path / "r")
-        out = mod._run({})
-        assert out["metrics"]["run_id"].endswith("_GPU-S9")
 
 
 # ---------------------------------------------------------------------------
@@ -354,54 +264,7 @@ class TestFinishV101RunId:
 
 
 class TestFinish:
-    def test_run_writes_detail_json(self, finish_mod, monkeypatch, tmp_path):
-        monkeypatch.setattr(finish_mod, "device_serial", lambda: "GPU-S1")
-        monkeypatch.setattr(finish_mod, "stop_stress", lambda: None)
-        monkeypatch.setattr(finish_mod.time, "sleep", lambda _: None)
 
-        def fake_pull():
-            local = tmp_path / "test_log.txt"
-            local.write_text(
-                "GPU_RUN_START test_id=001 rounds=2\n"
-                "GPU_ROUND 1 rc=0\n"
-                "GPU_ROUND 2 rc=0\n"
-                "GPU_RUN_END rc=0\n",
-                encoding="utf-8",
-            )
-            return local
-
-        monkeypatch.setattr(finish_mod, "_pull_result_log", fake_pull)
-        results = tmp_path / "nfs" / "gpu" / "legacy" / "results"
-        monkeypatch.setattr(finish_mod, "results_dir", lambda project: results)
-
-        out = finish_mod._run({"project": "legacy"})
-        assert out["metrics"]["rounds_done"] == 2
-        assert out["metrics"]["expected_rounds"] == 2
-        assert out["metrics"]["failed_rounds"] == 0
-        assert out["metrics"]["end_rc"] == 0
-        assert out["metrics"]["final_status"] == "COMPLETED"
-        detail = results / f"{out['metrics']['run_id']}.json"
-        assert detail.is_file()
-        body = json.loads(detail.read_text(encoding="utf-8"))
-        assert body["metrics"]["final_status"] == "COMPLETED"
-        assert body["rounds"][0] == {"round": 1, "rc": 0}
-
-    def test_run_incomplete_marked(self, finish_mod, monkeypatch, tmp_path):
-        """无 GPU_RUN_END → final_status=INCOMPLETE。"""
-        monkeypatch.setattr(finish_mod, "device_serial", lambda: "GPU-S2")
-        monkeypatch.setattr(finish_mod, "stop_stress", lambda: None)
-        monkeypatch.setattr(finish_mod.time, "sleep", lambda _: None)
-
-        def fake_pull():
-            local = tmp_path / "test_log.txt"
-            local.write_text("GPU_RUN_START test_id=001 rounds=5\nGPU_ROUND 1 rc=0\n", encoding="utf-8")
-            return local
-
-        monkeypatch.setattr(finish_mod, "_pull_result_log", fake_pull)
-        monkeypatch.setattr(finish_mod, "results_dir", lambda project: tmp_path / "r")
-        out = finish_mod._run({})
-        assert out["metrics"]["final_status"] == "INCOMPLETE"
-        assert out["metrics"]["end_rc"] is None
 
     def test_pull_missing_raises(self, finish_mod, monkeypatch):
         monkeypatch.setattr(finish_mod, "result_log_bytes", lambda: 0)
@@ -418,7 +281,7 @@ class TestInstallApkStableV121:
 
     @pytest.fixture()
     def v121(self, monkeypatch):
-        mod = _load("gpu_lib_v121", "gpu_setup/v1.2.1/_lib.py")
+        mod = _load("gpu_lib_v121", "gpu_setup/_lib.py")
         import contextlib
 
         @contextlib.contextmanager

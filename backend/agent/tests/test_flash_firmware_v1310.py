@@ -20,7 +20,7 @@ from pathlib import Path
 
 _SCRIPT_DIR = (
     Path(__file__).resolve().parents[2]
-    / "agent" / "scripts" / "flash_firmware" / "v1.3.10"
+    / "agent" / "scripts" / "flash_firmware"
 )
 
 spec = importlib.util.spec_from_file_location(

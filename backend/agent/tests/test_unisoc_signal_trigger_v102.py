@@ -11,7 +11,7 @@ from pathlib import Path
 
 _SCRIPT_DIR = (
     Path(__file__).resolve().parents[2]
-    / "agent" / "scripts" / "unisoc_signal_trigger" / "v1.0.2"
+    / "agent" / "scripts" / "unisoc_signal_trigger"
 )
 
 spec = importlib.util.spec_from_file_location(

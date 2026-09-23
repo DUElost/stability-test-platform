@@ -20,13 +20,24 @@ def _mk(root: Path, name: str, *versions: str) -> None:
         (root / name / f"v{v}").mkdir(parents=True)
 
 
-def test_scan_disk_versions_skips_junk_and_reads_names(tmp_path):
-    _mk(tmp_path, "gpu_finish", "1.0.5", "1.0.6")
-    _mk(tmp_path, "_scratch", "0.1")          # 下划线族：扫描器不认（同 _pick_entry 约定）
-    (tmp_path / "loose_file.txt").write_text("x")
-    (tmp_path / "no_version_dirs" / "random").mkdir(parents=True)
-    out = scan_disk_script_versions(tmp_path)
-    assert out == {"gpu_finish": ["1.0.5", "1.0.6"]}  # sorted：视图输出稳定
+def test_scan_manifest_versions_reads_live_platform_families(tmp_path):
+    """ADR-0051 Phase 3：head 来自 tool_manifest.json——只收平台族（python 为 null）的未退役版本，排序输出。"""
+    import json
+    doc = {"schema_version": 1, "tools": {
+        "gpu_finish": {"versions": [
+            {"version": "1.0.6", "package_sha256": "a" * 64, "artifact": "packages/gpu_finish/1.0.6.tar.gz", "python": None, "script": "gpu_finish.py", "retired": False},
+            {"version": "1.0.5", "package_sha256": "b" * 64, "artifact": "packages/gpu_finish/1.0.5.tar.gz", "python": None, "script": "gpu_finish.py", "retired": False},
+            {"version": "1.0.4", "package_sha256": "c" * 64, "artifact": "packages/gpu_finish/1.0.4.tar.gz", "python": None, "script": "gpu_finish.py", "retired": True},
+        ]},
+        "Start-Log-Scan": {"versions": [
+            {"version": "2026.09.22", "package_sha256": "d" * 64, "artifact": "packages/Start-Log-Scan/2026.09.22.tar.gz", "python": "venv/bin/python", "script": "s.py", "retired": False},
+        ]},
+    }}
+    mf = tmp_path / "tool_manifest.json"
+    mf.write_text(json.dumps(doc), encoding="utf-8")
+    assert scan_disk_script_versions(mf) == {"gpu_finish": ["1.0.5", "1.0.6"]}
+    assert scan_disk_script_versions(tmp_path) == {"gpu_finish": ["1.0.5", "1.0.6"]}  # 目录 → 其下 tool_manifest.json
+    assert scan_disk_script_versions(tmp_path / "missing") == {}
 
 
 def test_view_reports_only_head_state_per_family():

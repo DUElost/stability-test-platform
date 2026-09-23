@@ -31,6 +31,7 @@ CI 里挂在 `pr-migrate-empty-db`（空库 upgrade head 之后），本地由
 from __future__ import annotations
 
 import sys
+import json
 from pathlib import Path
 
 from sqlalchemy import create_engine
@@ -39,7 +40,7 @@ from sqlalchemy.orm import Session
 from backend.core.database import normalize_sync_database_url
 from backend.core.env_source import resolve_database_url
 from backend.models.script import Script
-from backend.services.script_catalog import _iter_script_entries, sha256_file
+from backend.services.script_catalog import _pick_entry, sha256_file
 
 SCRIPT_ROOT = Path(__file__).resolve().parents[1] / "agent" / "scripts"
 
@@ -49,11 +50,29 @@ REQUIRED_ROWS = (("flash_firmware", "1.3.7"), ("flash_firmware", "1.3.8"),
 
 
 def disk_identity() -> dict[tuple[str, str], str]:
-    """磁盘上「扫描会登记成什么指纹」的映射，复用扫描自己的入口挑选与哈希。"""
-    return {
-        (name, version): sha256_file(entry)
-        for _cat, name, version, entry, _stype in _iter_script_entries(SCRIPT_ROOT)
-    }
+    """族树上「最新登记版本会登记成什么入口指纹」的映射（ADR-0051 Phase 3）。
+
+    版本目录已退役：树上只有每族最新版本的源码，其版本号来自 ``tool_manifest.json``
+    最新未退役条目。历史版本（如 seed 的 flash_firmware 1.3.7–1.3.9）不在此树里 → 本守卫
+    对它们不判（``expected is None → continue``），它们的身份由包（整包 sha）与
+    ``check_script_package_equivalence`` 守。
+    """
+    manifest = SCRIPT_ROOT.parents[2] / "tool_manifest.json"
+    try:
+        doc = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    out: dict[tuple[str, str], str] = {}
+    for name, tool in (doc.get("tools") or {}).items():
+        versions = [e for e in (tool or {}).get("versions") or [] if e.get("python") is None and not e.get("retired")]
+        tree = SCRIPT_ROOT / str(name)
+        if not versions or not tree.is_dir():
+            continue
+        latest = max(versions, key=lambda e: tuple(int(p) if p.isdigit() else 0 for p in str(e["version"]).split(".")))
+        entry, _ = _pick_entry(tree)
+        if entry is not None:
+            out[(str(name), str(latest["version"]))] = sha256_file(entry)
+    return out
 
 
 def main() -> int:

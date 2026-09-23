@@ -113,11 +113,6 @@ GATES = {
         ROOT,
         None,
     ),
-    "immutability": (
-        f"{PY} tools/dev/check-script-version-immutability.py --base {BASE_REF}",
-        ROOT,
-        None,
-    ),
     # ADR-0033 D0：禁止新增 backend/agent/scripts/ 顶层工具族（#745 in-tree breaker）。
     # 既有族新版本仍绿；新族须归类声明，external-tool 无 in-tree 出口
     # （ADR-0033 §5.6；§5.4 条件 4 已触发，跟踪 #3075）。
@@ -339,7 +334,7 @@ PROFILES = {
     "check:pr": [
         "schema-at-head", "env-inventory",
         "ruff", "eslint", "tsc", "knip", "compileall", "layering", "orphan-models",
-        "pollution", "immutability", "new-script-family", "tool-contract",
+        "pollution", "new-script-family", "tool-contract",
         "tool-manifest",
         "alembic-immutability", "invariant-diff",
         "gov-surface", "ip-leak", "prom-alerts", "agent-tests-collect", "agent-tests",

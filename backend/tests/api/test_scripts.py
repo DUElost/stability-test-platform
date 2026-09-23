@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from backend.models.plan import Plan, PlanStep
 from backend.models.script import Script
+from backend.tests.script_package_site import Site
 
 
 def _uniq(prefix: str) -> str:
@@ -94,207 +95,106 @@ def test_script_crud_and_soft_delete(client, admin_headers, auth_headers):
     assert delete_resp.json()["data"]["deactivated"] == script_id
 
 
-def test_script_scan_registers_conflicts_and_deactivates_missing(
+def _site(tmp_path, monkeypatch, runtime_root="/opt/stability-test-agent/agent/scripts"):
+    site = Site(tmp_path)
+    for k, v in site.env(runtime_root).items():
+        monkeypatch.setenv(k, v)
+    return site
+
+
+def test_script_scan_registers_from_packages_and_reports_missing(
     client, tmp_path, monkeypatch, admin_headers, auth_headers
 ):
-    root = tmp_path / "scripts"
-    version_dir = root / "connect_wifi" / "v1.0.0"
-    version_dir.mkdir(parents=True)
-    entry = version_dir / "connect_wifi.sh"
-    entry.write_text("#!/usr/bin/env bash\necho wifi\n", encoding="utf-8")
+    """ADR-0051 Phase 3：注册输入 = tool_manifest.json + 站点 packages/；未发布的条目只报告。"""
+    site = _site(tmp_path, monkeypatch)
+    site.add("connect_wifi", "1.0.0", {"connect_wifi.sh": "#!/usr/bin/env bash\necho wifi\n"}, script="connect_wifi.sh")
+    site.add("connect_wifi", "1.0.1", {"connect_wifi.sh": "#!/usr/bin/env bash\necho v2\n"}, script="connect_wifi.sh", publish=False)
 
-    monkeypatch.setenv("STP_SCRIPT_ROOT", str(root))
-
-    first_scan = client.post("/api/v1/scripts/scan", headers=admin_headers)
-    assert first_scan.status_code == 200
-    first_data = first_scan.json()["data"]
-    assert first_data["created"] == 1
-    assert first_data["skipped"] == 0
-    assert first_data["deactivated"] == 0
-    assert first_data["conflicts"] == []
-
-    list_resp = client.get("/api/v1/scripts", params={"is_active": True}, headers=auth_headers)
-    assert list_resp.status_code == 200
-    scripts = list_resp.json()["data"]
-    assert len(scripts) == 1
-    assert scripts[0]["name"] == "connect_wifi"
-    assert scripts[0]["category"] == "device"
-    assert scripts[0]["version"] == "1.0.0"
-    assert scripts[0]["script_type"] == "shell"
-
-    second_scan = client.post("/api/v1/scripts/scan", headers=admin_headers)
-    assert second_scan.status_code == 200
-    assert second_scan.json()["data"]["skipped"] == 1
-
-    entry.write_text("#!/usr/bin/env bash\necho changed\n", encoding="utf-8")
-    conflict_scan = client.post("/api/v1/scripts/scan", headers=admin_headers)
-    assert conflict_scan.status_code == 200
-    conflicts = conflict_scan.json()["data"]["conflicts"]
-    assert conflicts == [{"name": "connect_wifi", "version": "1.0.0"}]
-
-    entry.unlink()
-    inactive_scan = client.post("/api/v1/scripts/scan", headers=admin_headers)
-    assert inactive_scan.status_code == 200
-    inactive_data = inactive_scan.json()["data"]
-    assert inactive_data["deactivated"] == 1
-    # #2386：反激活必须**点名**，不能只给一个数字——它是单向的，事后无法靠再扫恢复。
-    assert [(d["name"], d["version"]) for d in inactive_data["deactivated_versions"]] == [
-        ("connect_wifi", "1.0.0"),
+    first = client.post("/api/v1/scripts/scan", headers=admin_headers)
+    assert first.status_code == 200
+    data = first.json()["data"]
+    assert (data["created"], data["skipped"], data["deactivated"], data["conflicts"]) == (1, 0, 0, [])
+    assert [(m["name"], m["version"], m["reason"]) for m in data["package_missing"]] == [
+        ("connect_wifi", "1.0.1", "package_missing")
     ]
-    assert all(d.get("nfs_path") for d in inactive_data["deactivated_versions"]), (
-        "明细要带上被判定为「盘上缺失」的路径，否则排障时还得去库里反查"
-    )
+    scripts = client.get("/api/v1/scripts", params={"is_active": True}, headers=auth_headers).json()["data"]
+    assert [(s["name"], s["version"], s["script_type"], s["category"]) for s in scripts] == [
+        ("connect_wifi", "1.0.0", "shell", "device")
+    ]
+    assert scripts[0]["nfs_path"] == "/opt/stability-test-agent/agent/scripts/connect_wifi/v1.0.0/connect_wifi.sh"
+    assert scripts[0]["package_sha256"]
 
-    inactive_list = client.get("/api/v1/scripts", params={"is_active": True}, headers=auth_headers)
-    assert inactive_list.status_code == 200
-    assert inactive_list.json()["data"] == []
+    second = client.post("/api/v1/scripts/scan", headers=admin_headers).json()["data"]
+    assert (second["created"], second["skipped"]) == (0, 1)
 
-
-def _scan_single_script(client, tmp_path, monkeypatch, admin_headers):
-    """Register one script, then edit it in place so the next scan conflicts."""
-    root = tmp_path / "scripts"
-    version_dir = root / "connect_wifi" / "v1.0.0"
-    version_dir.mkdir(parents=True)
-    entry = version_dir / "connect_wifi.sh"
-    entry.write_text("#!/usr/bin/env bash\necho wifi\n", encoding="utf-8")
-    monkeypatch.setenv("STP_SCRIPT_ROOT", str(root))
-
-    created = client.post("/api/v1/scripts/scan", headers=admin_headers)
-    assert created.status_code == 200
-    assert created.json()["data"]["created"] == 1
-
-    entry.write_text("#!/usr/bin/env bash\necho changed\n", encoding="utf-8")
-    return entry
+    # 退役 = manifest retired:true（显式动作）；不再有「盘上缺失即反激活」
+    site.retire("connect_wifi", "1.0.0")
+    third = client.post("/api/v1/scripts/scan", headers=admin_headers).json()["data"]
+    assert third["deactivated"] == 1
+    assert [(d["name"], d["version"]) for d in third["deactivated_versions"]] == [("connect_wifi", "1.0.0")]
+    assert client.get("/api/v1/scripts", params={"is_active": True}, headers=auth_headers).json()["data"] == []
 
 
-def test_script_scan_force_rebaseline_reanchors_conflicting_checksum(
-    client, tmp_path, monkeypatch, admin_headers
+def test_script_scan_force_rebaseline_reanchors_drifted_row(
+    client, tmp_path, monkeypatch, admin_headers, db_session
 ):
-    _scan_single_script(client, tmp_path, monkeypatch, admin_headers)
+    site = _site(tmp_path, monkeypatch)
+    site.add("connect_wifi", "1.0.0", {"connect_wifi.sh": "echo wifi\n"}, script="connect_wifi.sh")
+    assert client.post("/api/v1/scripts/scan", headers=admin_headers).json()["data"]["created"] == 1
+    row = db_session.query(Script).filter_by(name="connect_wifi", version="1.0.0").one()
+    row.content_sha256 = "f" * 64  # 库侧漂移（包不可变）
+    db_session.commit()
 
-    # Without the flag the row stays frozen — repeated scans keep conflicting,
-    # which is exactly how a repo-wide in-place edit permanently breaks
-    # precheck's expected-sha lookup.
-    for _ in range(2):
-        plain = client.post("/api/v1/scripts/scan", headers=admin_headers)
-        assert plain.status_code == 200
-        assert plain.json()["data"]["conflicts"] == [
-            {"name": "connect_wifi", "version": "1.0.0"}
-        ]
-        assert plain.json()["data"]["rebaselined"] == []
-
-    forced = client.post(
-        "/api/v1/scripts/scan",
-        params={"force_rebaseline": True},
-        headers=admin_headers,
-    )
-    assert forced.status_code == 200
-    data = forced.json()["data"]
-    assert data["conflicts"] == []
-    assert len(data["rebaselined"]) == 1
-    entry_result = data["rebaselined"][0]
-    assert entry_result["name"] == "connect_wifi"
-    assert entry_result["version"] == "1.0.0"
-    assert entry_result["old_sha256"] != entry_result["new_sha256"]
-
-    # DB now matches disk: a plain scan is a clean skip.
-    after = client.post("/api/v1/scripts/scan", headers=admin_headers)
-    assert after.status_code == 200
-    assert after.json()["data"]["skipped"] == 1
-    assert after.json()["data"]["conflicts"] == []
+    plain = client.post("/api/v1/scripts/scan", headers=admin_headers).json()["data"]
+    assert plain["conflicts"] == [{"name": "connect_wifi", "version": "1.0.0"}]
+    forced = client.post("/api/v1/scripts/scan", params={"force_rebaseline": True}, headers=admin_headers).json()["data"]
+    assert [(r["name"], r["version"]) for r in forced["rebaselined"]] == [("connect_wifi", "1.0.0")]
+    db_session.refresh(row)
+    assert row.content_sha256 != "f" * 64
 
 
 def test_script_scan_force_rebaseline_refused_while_plan_run_in_flight(
     client, tmp_path, monkeypatch, admin_headers, sample_plan_run
 ):
-    _scan_single_script(client, tmp_path, monkeypatch, admin_headers)
+    site = _site(tmp_path, monkeypatch)
+    site.add("connect_wifi", "1.0.0", {"connect_wifi.sh": "echo wifi\n"}, script="connect_wifi.sh")
+    assert client.post("/api/v1/scripts/scan", headers=admin_headers).status_code == 200
     assert sample_plan_run.status == "RUNNING"
 
-    refused = client.post(
-        "/api/v1/scripts/scan",
-        params={"force_rebaseline": True},
-        headers=admin_headers,
-    )
+    refused = client.post("/api/v1/scripts/scan", params={"force_rebaseline": True}, headers=admin_headers)
     assert refused.status_code == 409
     assert refused.json()["detail"]["code"] == "PLAN_RUN_IN_FLIGHT"
 
     # The plain scan path stays available while runs are in flight.
     plain = client.post("/api/v1/scripts/scan", headers=admin_headers)
-    assert plain.status_code == 200
-    assert plain.json()["data"]["conflicts"] == [
-        {"name": "connect_wifi", "version": "1.0.0"}
-    ]
+    assert plain.status_code == 200 and plain.json()["data"]["skipped"] == 1
 
 
-def test_script_scan_maps_source_root_to_agent_runtime_root(
+def test_script_scan_ignores_legacy_external_and_windows_batch_entries(
     client, tmp_path, monkeypatch, admin_headers, auth_headers
 ):
-    root = tmp_path / "agent" / "scripts"
-    version_dir = root / "connect_wifi" / "v1.0.0"
-    version_dir.mkdir(parents=True)
-    entry = version_dir / "connect_wifi.sh"
-    entry.write_text("#!/usr/bin/env bash\necho wifi\n", encoding="utf-8")
+    site = _site(tmp_path, monkeypatch)
+    site.add("scan_aee", "1.0.0", {"scan_aee.py": "legacy\n"})                       # legacy 名
+    site.add("Start-Log-Scan", "2026.09.22", {"s.py": "x\n"}, script="s.py", python="venv/bin/python")  # 外部工具族
+    site.add("win_tool", "1.0.0", {"win_tool.bat": "@echo off\n"}, script="win_tool.bat")  # .bat 不支持
+    site.add("ok_tool", "1.0.0", {"ok_tool.py": "print(1)\n"})
 
-    monkeypatch.setenv("STP_SCRIPT_ROOT", str(root))
-    monkeypatch.setenv("STP_SCRIPT_RUNTIME_ROOT", "/opt/stability-test-agent/agent/scripts")
-
-    scan_resp = client.post("/api/v1/scripts/scan", headers=admin_headers)
-    assert scan_resp.status_code == 200
-
-    list_resp = client.get("/api/v1/scripts", params={"is_active": True}, headers=auth_headers)
-    assert list_resp.status_code == 200
-    scripts = list_resp.json()["data"]
-    assert len(scripts) == 1
-    assert (
-        scripts[0]["nfs_path"]
-        == "/opt/stability-test-agent/agent/scripts/connect_wifi/v1.0.0/connect_wifi.sh"
-    )
+    data = client.post("/api/v1/scripts/scan", headers=admin_headers).json()["data"]
+    assert data["created"] == 1
+    assert [(c["name"], c["reason"]) for c in data["package_conflicts"]] == [("win_tool", "package_entry_missing")]
+    names = [s["name"] for s in client.get("/api/v1/scripts", headers=auth_headers).json()["data"]]
+    assert names == ["ok_tool"]
 
 
-def test_script_scan_ignores_legacy_aee_script_directories(
-    client, tmp_path, monkeypatch, admin_headers, auth_headers
-):
-    root = tmp_path / "scripts"
-    legacy_dir = root / "scan_aee" / "v1.0.0"
-    legacy_dir.mkdir(parents=True)
-    (legacy_dir / "scan_aee.py").write_text("print('legacy')\n", encoding="utf-8")
+def test_script_scan_requires_packages_root(client, monkeypatch, admin_headers, tmp_path):
+    monkeypatch.setenv("STP_TOOL_MANIFEST", str(tmp_path / "tool_manifest.json"))
+    monkeypatch.delenv("STP_PACKAGES_ROOT", raising=False)
+    monkeypatch.delenv("STP_AEE_NFS_ROOT", raising=False)
 
-    monkeypatch.setenv("STP_SCRIPT_ROOT", str(root))
+    resp = client.post("/api/v1/scripts/scan", headers=admin_headers)
 
-    scan_resp = client.post("/api/v1/scripts/scan", headers=admin_headers)
-
-    assert scan_resp.status_code == 200
-    data = scan_resp.json()["data"]
-    assert data["created"] == 0
-    assert data["skipped"] == 0
-    assert data["deactivated"] == 0
-    assert data["conflicts"] == []
-
-    list_resp = client.get("/api/v1/scripts", params={"is_active": True}, headers=auth_headers)
-    assert list_resp.status_code == 200
-    assert all(item["name"] != "scan_aee" for item in list_resp.json()["data"])
-
-
-def test_script_scan_ignores_windows_batch_entries(client, tmp_path, monkeypatch, admin_headers, auth_headers):
-    root = tmp_path / "scripts"
-    version_dir = root / "legacy_windows" / "v1.0.0"
-    version_dir.mkdir(parents=True)
-    (version_dir / "legacy_windows.bat").write_text("@echo off\necho legacy\n", encoding="utf-8")
-
-    monkeypatch.setenv("STP_SCRIPT_ROOT", str(root))
-
-    scan_resp = client.post("/api/v1/scripts/scan", headers=admin_headers)
-
-    assert scan_resp.status_code == 200
-    data = scan_resp.json()["data"]
-    assert data["created"] == 0
-    assert data["skipped"] == 0
-    assert data["deactivated"] == 0
-    assert data["conflicts"] == []
-
-    list_resp = client.get("/api/v1/scripts", params={"is_active": True}, headers=auth_headers)
-    assert list_resp.status_code == 200
-    assert all(item["name"] != "legacy_windows" for item in list_resp.json()["data"])
+    assert resp.status_code == 503
+    assert resp.json()["detail"]["code"] == "PACKAGES_ROOT_NOT_CONFIGURED"
 
 
 def test_script_endpoints_require_auth_and_admin_for_writes(client, admin_headers, auth_headers):
@@ -515,31 +415,6 @@ def test_list_script_categories_hides_legacy_aee_only_categories(
     categories = resp.json()["data"]
     assert "legacy-only" not in categories
     assert "device" in categories
-
-
-def test_script_scan_requires_script_root(client, monkeypatch, admin_headers):
-    monkeypatch.delenv("STP_SCRIPT_ROOT", raising=False)
-    monkeypatch.setenv("STP_NFS_ROOT", "/mnt/storage/test-platform")
-
-    resp = client.post("/api/v1/scripts/scan", headers=admin_headers)
-
-    assert resp.status_code == 503
-    detail = resp.json()["detail"]
-    assert detail["code"] == "SCRIPT_ROOT_NOT_CONFIGURED"
-
-
-def test_script_scan_missing_root_returns_structured_error(
-    client, monkeypatch, admin_headers, tmp_path
-):
-    missing_root = tmp_path / "missing-script-root"
-    monkeypatch.setenv("STP_SCRIPT_ROOT", str(missing_root))
-
-    resp = client.post("/api/v1/scripts/scan", headers=admin_headers)
-
-    assert resp.status_code == 400
-    body = resp.json()
-    assert body["detail"]["code"] == "SCRIPT_ROOT_NOT_FOUND"
-    assert body["detail"]["message"]
 
 
 def test_update_rejects_deactivation_when_script_is_still_referenced(

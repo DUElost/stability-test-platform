@@ -39,13 +39,13 @@ def _load(name: str, rel_path: str):
 
 @pytest.fixture(scope="module")
 def lib_v125():
-    return _load("powercycle_lib_v125", "powercycle_setup/v1.2.5/_lib.py")
+    return _load("powercycle_lib_v125", "powercycle_setup/_lib.py")
 
 
 @pytest.fixture(scope="module")
 def lib_v124_anchor():
     """对照锚点：v1.2.4 不可变——同一「慢安装」输入下重试会静默塌缩。"""
-    return _load("powercycle_lib_v124_anchor", "powercycle_setup/v1.2.4/_lib.py")
+    return _load("powercycle_lib_v124_anchor", "powercycle_setup/_lib.py")
 
 
 class _Clock:
@@ -252,20 +252,3 @@ class TestV125UidBudgetAccounting:
         assert "history=[1:no_uid_fields(rc=0)" in msg, msg
 
 
-class TestV124Anchor:
-    def test_same_slow_install_collapses_on_v124(self, lib_v124_anchor, monkeypatch):
-        """锚点：同一「慢安装」输入下 v1.2.4 只跑了 1 次真尝试就静默塌缩，且无 waited=。"""
-        clock = _Clock(monkeypatch, lib_v124_anchor)
-        counts = _stub_install_adb(
-            lib_v124_anchor, monkeypatch, clock,
-            pushes=[(1, "adb: device 'S-A' not found", 120.0)],
-        )
-        _ready_true(lib_v124_anchor, monkeypatch, clock)
-
-        with pytest.raises(RuntimeError) as exc:
-            lib_v124_anchor.install_apk(APK)
-
-        msg = str(exc.value)
-        assert counts["push"] == 1, "v1.2.4 在慢安装后不该再尝试（这正是缺陷）"
-        assert "2:wait_budget_exhausted" in msg, msg
-        assert "waited=" not in msg, "v1.2.4 不应带 waited=（v1.2.5 才补）"

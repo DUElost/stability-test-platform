@@ -125,6 +125,7 @@ curl -s -H "$AUTH" -X POST http://127.0.0.1:8000/api/v1/scripts/scan \
   而 47 台主机无此文件，就是漏了这步。
 - **scan 幂等**：seed 预建版本显示 created=0/skipped 是正常，勿误判未注册；conflicts 出现时先 `sha256sum` 比对磁盘 vs DB，再决定是否 `?force_rebaseline=true`（需无在途 PlanRun）。
 - **版本号无 v 前缀**：DB `script.version` 存 `2.3.4` 形式（scan 剥 v）。
+- **ADR-0051 Phase 3 起 scan 的输入 = `tool_manifest.json` + 站点 `packages/`**（不再扫描检出目录）：响应新增 `package_missing`（未发布）/ `unregistered_active`（活跃行不在 manifest，只报告）；退役 = manifest `retired:true` + scan；`agent-code` 载荷不再含 `scripts/`（主机上的旧目录随热更新清掉，脚本从 `tools_cache` 执行）。
 - **ADR-0051 Phase 2a 起 scan 还回填 `package_sha256`**（✅2026-09-23 实跑）：响应多两键 `package_backfilled` / `package_conflicts`，来源是仓根 `tool_manifest.json`。首次回填期望 `package_backfilled=210`、`package_conflicts=[]`；之后只读证明 `DATABASE_URL=… venv/bin/python -m backend.scripts.check_script_package_equivalence` 应 `EQUIVALENCE OK … backfilled=<行数>`。新增脚本版本目录后先 `venv/bin/python tools/dev/check_script_packages.py --register`（否则 tool-manifest 门禁红），合入后 `--publish --packages-root /mnt/stp-aee/packages`（把 tar.gz 与 manifest 副本发到站点包源，Agent 从这里拉）。
 
 ## 3. Agent fleet 热更新

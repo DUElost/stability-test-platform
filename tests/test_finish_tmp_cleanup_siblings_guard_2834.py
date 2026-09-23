@@ -6,11 +6,11 @@ from tools.dev.source_anchor import SourceGuard
 
 ENTRIES = [
     (
-        "backend/agent/scripts/powercycle_finish/v1.0.5/powercycle_finish.py",
+        "backend/agent/scripts/powercycle_finish/powercycle_finish.py",
         'Path(tempfile.mkdtemp(prefix="powercycle-results-"))',
     ),
     (
-        "backend/agent/scripts/sleep_finish/v1.0.3/sleep_finish.py",
+        "backend/agent/scripts/sleep_finish/sleep_finish.py",
         'Path(tempfile.mkdtemp(prefix="sleep-results-"))',
     ),
 ]

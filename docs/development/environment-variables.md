@@ -64,7 +64,8 @@
 | `STP_AGENT_DEDUP_SCAN_PACKAGE_REF` | **仅控制面**：上述包引用的源键，hot-update 写成无前缀键（空值不推） |
 | `STP_SCRIPT_PACKAGES` | **仅 Agent**：`script:<name>` 步骤按包身份执行的开关（ADR-0051 Phase 2b）。`off`（默认，空同）=逃生阀关、只走 `nfs_path`；`on`=优先 `tools_cache/{name}/{version}/`、拉取/核验失败回退 `nfs_path`（记 WARNING）；`strict`=只走包、失败即步骤失败（exit 2，Phase 3 终态）。`verify_scripts` 在 on/strict 下按整包 sha 核验并预热缓存 |
 | `STP_AGENT_SCRIPT_PACKAGES` | **仅控制面**：上述开关的源键，hot-update 写成无前缀键（空值不推）。切 `on` 前先 `python tools/dev/check_script_packages.py --publish --packages-root <STP_AEE_NFS_ROOT>/packages` |
-| `STP_PACKAGES_ROOT` | **可选（Agent）**：站点包源覆盖；缺省派生自 `{STP_AEE_NFS_ROOT}/packages`（#3075 C4：每站中心存储，与过渡 `tools/` 物理分开） |
+| `STP_PACKAGES_ROOT` | **可选（Agent + 控制面）**：站点包源覆盖；缺省派生自 `{STP_AEE_NFS_ROOT}/packages`（#3075 C4：每站中心存储，与过渡 `tools/` 物理分开）。ADR-0051 Phase 3 起控制面 `POST /scripts/scan` 也从这里读包注册 `script` 行 |
+| `STP_TOOL_MANIFEST` | **可选（控制面）**：Git 唯一事实源 `tool_manifest.json` 路径覆盖（测试 / 非仓根部署树）；缺省仓根或 bundle 根。scan、零引用巡检、模板 pin 测试的「版本 head」都从它读 |
 | `STP_TOOLS_CACHE_ROOT` | **可选（Agent）**：本机解包缓存根覆盖；缺省派生自 `{AGENT_INSTALL_DIR}/tools_cache` |
 | `STP_JIRA_BASE_URL` / `STP_JIRA_TOKEN` | **可选**：JIRA REST 基址与 Bearer token（#710）。配置后 dedup 提单前对 `jira_project_key` 做一次存在性探测（`GET /rest/api/2/project/{key}`），404 记 WARNING 不阻断；未配置则跳过探测（保持 best-effort） |
 | `STP_AGENT_UNISOC_LOG_SCAN_PYTHON` / `_SCRIPT` | **仅控制面**：展锐采集工具（`Monkey-Log-Scan-GT-SPRD`）路径的源键，hot-update 写成 `STP_UNISOC_LOG_SCAN_*`（ADR-0032） |
@@ -209,7 +210,7 @@
 
 <!-- env-inventory:begin（generated：python tools/dev/env_inventory.py --write） -->
 
-共 **262** 个读取名（`backend/**`，不含 `backend/agent/scripts/**`；含 ADR-0042 Settings 字段）：**232** 个已在 `.env*.example` 登记，**30** 个声明为内部（理由见下节）。
+共 **263** 个读取名（`backend/**`，不含 `backend/agent/scripts/**`；含 ADR-0042 Settings 字段）：**233** 个已在 `.env*.example` 登记，**30** 个声明为内部（理由见下节）。
 示例文件是**运维模板**（承载需要运维/机型调整的子集）；本表是**代码侧完整清单**。
 门禁：每个读取名必须「登记进示例」或「内部声明」二选一，二者之外即红。
 
@@ -346,13 +347,13 @@
 | `STP_AEE_SSD_FALLBACK_ROOT` | `-` | ✅ | 运行时 | `backend/agent/aee/paths.py:108` |
 | `STP_AGENT_INSTALL_API_URL` | `` | ✅ | 运行时 | `backend/services/agent_installer.py:52` |
 | `STP_AGENT_MIN_VERSION` | `-` | ✅ | 运行时 | `backend/services/agent_version_gate.py:16` |
-| `STP_AGENT_PIP_INDEX_URL` | `` | ✅ | 运行时 | `backend/services/host_updater.py:627` |
-| `STP_AGENT_PRIV_CONF` | `-` | ✅ | 运行时 | `backend/agent/stp_agent_priv.py:391` |
+| `STP_AGENT_PIP_INDEX_URL` | `` | ✅ | 运行时 | `backend/services/host_updater.py:631` |
+| `STP_AGENT_PRIV_CONF` | `-` | ✅ | 运行时 | `backend/agent/stp_agent_priv.py:392` |
 | `STP_AGENT_RATE_LIMIT_REQUESTS` | `2000` | ✅ | 运行时 | `backend/core/limiter.py:46` |
 | `STP_AGENT_SID_REGISTRY` | `` | ✅ | 运行时 | `backend/realtime/agent_sid_registry.py:42` |
 | `STP_AGENT_SID_REGISTRY_TTL_SECONDS` | `-` | ✅ | 运行时 | `backend/realtime/agent_sid_registry.py:94` |
 | `STP_AGENT_STATE_DB` | `` | ✅ | 运行时 | `backend/agent/aee/state_store.py:15` |
-| `STP_AGENT_VERSION` | `unknown` | — | 运行时 | `backend/agent/script_verifier.py:139` |
+| `STP_AGENT_VERSION` | `unknown` | — | 运行时 | `backend/agent/script_verifier.py:133` |
 | `STP_ALLOW_REGISTER` | `` | ✅ | 运行时 | `backend/core/settings/security.py:51` |
 | `STP_ALLOW_UNSAFE_TEST_DATABASE_URL` | `` | — | 运行时 | `backend/core/db_url_guard.py:44` |
 | `STP_API_DOCS_ENABLED` | `-` | ✅ | 运行时 | `backend/main.py:352` |
@@ -416,6 +417,7 @@
 | `STP_METRICS_AUTH_REQUIRED` | `1` | ✅ | 运行时 | `backend/api/routes/metrics.py:434` |
 | `STP_NOTIFY_SAQ_RETRIES` | `-` | — | 运行时 | `backend/services/notification_service.py:98` |
 | `STP_NOTIFY_SAQ_TIMEOUT_S` | `-` | ✅ | 运行时 | `backend/services/notification_service.py:101` |
+| `STP_PACKAGES_ROOT` | `-` | ✅ | 运行时 | `backend/services/script_catalog.py:241` |
 | `STP_PHASE_BARRIER_ENABLED` | `1` | ✅ | 运行时 | `backend/agent/job_runner.py:220` |
 | `STP_PLATFORM_NAME` | `Stability Test Platform` | ✅ | 运行时 | `backend/api/routes/settings.py:19` |
 | `STP_PROMETHEUS_URL` | `-` | ✅ | 运行时 | `backend/services/file_server_monitor.py:120` |
@@ -426,8 +428,7 @@
 | `STP_RUN_CONSOLE_TERMINAL_RETENTION_SECONDS` | `-` | ✅ | 运行时 | `backend/services/run_console.py:274` |
 | `STP_SCHEDULER_LEADER_ELECTION` | `1` | ✅ | 运行时 | `backend/core/leader_election.py:51` |
 | `STP_SCRIPT_CATALOG_VERSION_CACHE_TTL` | `-` | ✅ | 运行时 | `backend/services/script_catalog_version.py:51` |
-| `STP_SCRIPT_ROOT` | `` | ✅ | 运行时 | `backend/api/routes/scripts.py:151` |
-| `STP_SCRIPT_RUNTIME_ROOT` | `-` | ✅ | 运行时 | `backend/api/routes/scripts.py:166` |
+| `STP_SCRIPT_RUNTIME_ROOT` | `-` | ✅ | 运行时 | `backend/api/routes/scripts.py:157` |
 | `STP_SCRIPT_SOURCE` | `-` | — | 测试 | `backend/agent/tests/test_pipeline_engine_script_action.py:340` |
 | `STP_SIGNAL_LINK_RECONCILE_BATCH` | `200` | ✅ | 运行时 | `backend/core/settings/scheduler.py:103` |
 | `STP_SIGNAL_LINK_RECONCILE_INTERVAL_SECONDS` | `300` | ✅ | 运行时 | `backend/core/settings/scheduler.py:75` |
@@ -445,6 +446,7 @@
 | `STP_STEP_WALL_CLOCK_SECONDS` | `-` | ✅ | 运行时 | `backend/agent/pipeline_engine.py:116` |
 | `STP_STORAGE_NODE_JOB` | `` | ✅ | 运行时 | `backend/services/file_server_monitor.py:325` |
 | `STP_TIMEZONE` | `Asia/Shanghai` | ✅ | 运行时 | `backend/api/routes/settings.py:20` |
+| `STP_TOOL_MANIFEST` | `-` | ✅ | 运行时 | `backend/api/routes/scripts.py:152` |
 | `STP_TRUSTED_PROXIES` | `-` | ✅ | 运行时 | `backend/core/limiter.py:82` |
 | `STP_UI_RATE_LIMIT_REQUESTS` | `300` | ✅ | 运行时 | `backend/core/limiter.py:45` |
 | `STP_UNISOC_LOG_SCAN_POLL_SECONDS` | `-` | ✅ | 运行时 | `backend/agent/unisoc_scan_runner.py:140` |
@@ -464,7 +466,7 @@
 | `STP_WATCHER_UNISOC_INOTIFYD` | `false` | ✅ | 运行时 | `backend/agent/job_session.py:322` |
 | `STP_XHCI_AUTO_REBIND` | `0` | ✅ | 运行时 | `backend/agent/settings.py:218` |
 | `STP_XHCI_AUTO_REBIND_HOSTS` | `` | ✅ | 运行时 | `backend/agent/settings.py:219` |
-| `SUDO_GID` | `` | — | 运行时 | `backend/agent/stp_agent_priv.py:227` |
+| `SUDO_GID` | `` | — | 运行时 | `backend/agent/stp_agent_priv.py:228` |
 | `SUDO_UID` | `` | — | 运行时 | `backend/agent/stp_agent_priv.py:84` |
 | `SUDO_USER` | `-` | — | 运行时 | `backend/agent/stp_agent_priv.py:90` |
 | `TESTING` | `-` | ✅ | 运行时 | `backend/core/agent_secret.py:15` |

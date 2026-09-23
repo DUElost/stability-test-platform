@@ -1,11 +1,10 @@
-"""ADR-0051 Phase 2a：脚本版本目录 → 确定性包 → tool_manifest 登记的仓库侧契约。
+"""ADR-0051 Phase 3：族树 → 确定性包 → tool_manifest 登记的仓库侧契约（`check_script_packages.py`）。
 
-- 打包器：显式成员列表 / ``python=None`` 登记；
-- manifest 门禁：``python: null`` 绿、``""`` 红；
-- check_script_packages：真实树与真实 manifest 等价、幂等登记（与 ``script_catalog``
-  的入口/枚举/legacy 对拍在 ``backend/tests/services/test_script_catalog_package_backfill.py``——
-  仓库级测试目录不导入 backend）；
-- build_bundle 随身携带 ``tool_manifest.json``。
+- 打包器：显式成员列表 / `python=None` 登记 / 权限位归一化；
+- manifest 门禁：`python: null` 绿、`""` 红；
+- checker：真实族树与真实 manifest 最新条目等价；改树未发版本红；残留 v 目录红；退役回落；
+  幽灵族；外部族豁免；publish 只落最新版；
+- build_bundle 随身携带 `tool_manifest.json`。
 """
 
 from __future__ import annotations
@@ -32,13 +31,21 @@ gate = _load("check_tool_manifest_2a", "tools/dev/check_tool_manifest.py")
 checker = _load("check_script_packages_2a", "tools/dev/check_script_packages.py")
 
 
-def _version_dir(root: Path, name: str, version: str, body: str = "print('x')\n") -> Path:
-    d = root / name / f"v{version}"
+def _tree(root: Path, name: str, body: str = "print('x')\n") -> Path:
+    d = root / name
     d.mkdir(parents=True)
     (d / "_adb.py").write_text("ADB = 1\n", encoding="utf-8")
     (d / f"{name}.py").write_text(body, encoding="utf-8")
     (d / "capabilities.json").write_text("[]\n", encoding="utf-8")
     return d
+
+
+def _registered(root: Path, families: dict[str, str]) -> tuple[dict, dict]:
+    rebuilt = checker.rebuild_all(root, packer)
+    doc = {"schema_version": 1, "tools": {}}
+    for fam, ver in families.items():
+        doc, _ = checker.register(doc, fam, ver, rebuilt[fam], packer)
+    return doc, rebuilt
 
 
 class TestPackerExplicitFiles:
@@ -70,14 +77,16 @@ class TestManifestGatePythonNull:
 
 
 class TestRealTreeRegistered:
-    """真实树与真实 manifest 必须等价——这就是 tool-manifest 门禁在 CI 里跑的判定。"""
+    """真实族树与真实 manifest 最新条目必须等价——这就是 tool-manifest 门禁在 CI 里跑的判定。"""
 
-    def test_every_version_dir_registered_and_equivalent(self):
+    def test_every_family_tree_matches_latest_entry(self):
         doc = json.loads((ROOT / "tool_manifest.json").read_text(encoding="utf-8"))
-        expected = checker.expected_entries(ROOT / "backend" / "agent" / "scripts", packer)
-        assert expected, "树上应有版本目录"
-        assert checker.check(doc, expected, ROOT / "backend" / "agent" / "scripts") == []
-        assert all(e["python"] is None for k in expected for e in doc["tools"][k[0]]["versions"])
+        root = ROOT / "backend" / "agent" / "scripts"
+        rebuilt = checker.rebuild_all(root, packer)
+        assert rebuilt, "树上应有族树"
+        assert checker.check(doc, rebuilt, root) == []
+        assert checker.stray_version_dirs(root) == []
+        assert all(e["python"] is None for fam in rebuilt for e in doc["tools"][fam]["versions"])
 
     def test_external_tool_entry_untouched(self):
         doc = json.loads((ROOT / "tool_manifest.json").read_text(encoding="utf-8"))
@@ -88,88 +97,88 @@ class TestRealTreeRegistered:
 class TestCheckerSemantics:
     def test_register_then_check_green_and_idempotent(self, tmp_path):
         root = tmp_path / "scripts"
-        _version_dir(root, "fam", "1.0.0")
-        _version_dir(root, "fam", "1.0.10")
-        _version_dir(root, "fam", "1.0.9")
-        exp = checker.expected_entries(root, packer)
-        doc, added = checker.register({"schema_version": 1, "tools": {}}, exp, packer)
-        assert added == 3
-        assert [e["version"] for e in doc["tools"]["fam"]["versions"]] == ["1.0.0", "1.0.9", "1.0.10"]
-        assert checker.check(doc, exp, root) == []
-        assert checker.register(doc, exp, packer)[1] == 0
+        _tree(root, "fam")
+        doc, rebuilt = _registered(root, {"fam": "1.0.0"})
+        assert checker.check(doc, rebuilt, root) == []
+        assert checker.register(doc, "fam", "1.0.0", rebuilt["fam"], packer)[1] is False
         assert gate.lint_manifest(doc) == []
 
-    def test_in_place_edit_is_red(self, tmp_path):
+    def test_tree_change_without_new_version_is_red_then_register_fixes(self, tmp_path):
         root = tmp_path / "scripts"
-        d = _version_dir(root, "fam", "1.0.0")
-        doc, _ = checker.register({"schema_version": 1, "tools": {}}, checker.expected_entries(root, packer), packer)
-        (d / "_adb.py").write_text("ADB = 2\n", encoding="utf-8")  # 伴随文件也在整包 sha 内（盲区消失）
-        errs = checker.check(doc, checker.expected_entries(root, packer), root)
-        assert errs and "重建 sha" in errs[0]
+        d = _tree(root, "fam")
+        doc, _ = _registered(root, {"fam": "1.0.0"})
+        (d / "_adb.py").write_text("ADB = 2\n", encoding="utf-8")  # 伴随文件也在整包 sha 内
+        rebuilt = checker.rebuild_all(root, packer)
+        errs = checker.check(doc, rebuilt, root)
+        assert errs and "改了树没发版本" in errs[0]
+        with pytest.raises(SystemExit):
+            checker.register(doc, "fam", "1.0.0", rebuilt["fam"], packer)  # 版本号不可复用
+        doc, added = checker.register(doc, "fam", "1.0.1", rebuilt["fam"], packer)
+        assert added and checker.check(doc, rebuilt, root) == []
 
-    def test_ghost_entry_red_unless_retired(self, tmp_path):
+    def test_latest_is_natural_order_and_retire_falls_back(self, tmp_path):
         root = tmp_path / "scripts"
-        _version_dir(root, "fam", "1.0.0")
-        exp = checker.expected_entries(root, packer)
-        doc, _ = checker.register({"schema_version": 1, "tools": {}}, exp, packer)
-        doc["tools"]["fam"]["versions"].append({
-            "version": "2.0.0", "package_sha256": "a" * 64, "artifact": "packages/fam/2.0.0.tar.gz",
-            "python": None, "script": "fam.py", "retired": False,
-        })
-        assert any("无对应版本目录" in e for e in checker.check(doc, exp, root))
+        d = _tree(root, "fam", "v9\n")
+        doc, rebuilt9 = _registered(root, {"fam": "1.0.9"})
+        (d / "fam.py").write_text("v10\n", encoding="utf-8")
+        rebuilt10 = checker.rebuild_all(root, packer)
+        doc, _ = checker.register(doc, "fam", "1.0.10", rebuilt10["fam"], packer)
+        assert checker.latest_entry(doc["tools"]["fam"]["versions"])["version"] == "1.0.10"
+        assert checker.check(doc, rebuilt10, root) == []
         doc["tools"]["fam"]["versions"][-1]["retired"] = True
-        assert checker.check(doc, exp, root) == []
+        assert any("改了树没发版本" in e for e in checker.check(doc, rebuilt10, root))
 
-    def test_publish_writes_layout_and_manifest_copy(self, tmp_path):
+    def test_stray_version_dir_and_ghost_family(self, tmp_path):
         root = tmp_path / "scripts"
-        _version_dir(root, "fam", "1.0.0")
+        d = _tree(root, "fam")
+        doc, rebuilt = _registered(root, {"fam": "1.0.0"})
+        (d / "v1.0.0").mkdir()
+        assert any("不得再有版本目录" in e for e in checker.check(doc, rebuilt, root))
+        (d / "v1.0.0").rmdir()
+        doc["tools"]["ghost"] = {"versions": [{"version": "1.0.0", "package_sha256": "a" * 64,
+                                              "artifact": "packages/ghost/1.0.0.tar.gz", "python": None,
+                                              "script": "ghost.py", "retired": False}]}
+        assert any("族树不存在" in e for e in checker.check(doc, rebuilt, root))
+        doc["tools"]["ghost"]["versions"][0]["retired"] = True
+        assert checker.check(doc, rebuilt, root) == []
+
+    def test_publish_writes_only_latest_and_manifest_copy(self, tmp_path):
+        root = tmp_path / "scripts"
+        _tree(root, "fam")
+        doc, _ = _registered(root, {"fam": "1.0.0"})
         out = tmp_path / "packages"
-        exp = checker.expected_entries(root, packer, out_dir=out)
+        checker.rebuild_all(root, packer, out_dir=out, versions={"fam": "1.0.0"})
         assert (out / "fam" / "1.0.0.tar.gz").is_file()
-        doc, _ = checker.register({"schema_version": 1, "tools": {}}, exp, packer)
         packer.write_site_manifest_copy(doc, out)
         assert json.loads((out / "manifest.json").read_text(encoding="utf-8")) == doc
 
 
 class TestBundleCarriesManifest:
     def test_build_bundle_copies_tool_manifest(self):
-        """bundle 根须携带 Git 唯一事实源（scan 从部署树根回填 package_sha256）。"""
         from tools.dev.source_anchor import SourceGuard
 
         SourceGuard.of_repo_path("tools/release/build_bundle.py").anchored(
             'for extra in ("ruff.toml", "tool_manifest.json"):'
         ).assert_present(
             'shutil.copy2(repo_root / extra, out / extra)',
-            why="tool_manifest.json 必须随 bundle 复制到部署树根，否则 bundle 形态下 scan 回填静默跳过",
+            why="tool_manifest.json 必须随 bundle 复制到部署树根，否则 bundle 形态下 scan 无注册输入",
         )
 
 
-@pytest.mark.parametrize("v, expected", [("1.3.17", (0, 1, 0, 3, 0, 17)), ("2026.09.22", (0, 2026, 0, 9, 0, 22))])
-def test_version_key_numeric(v, expected):
-    assert tuple(x for pair in checker.version_key(v) for x in pair) == expected
-    assert checker.version_key("1.3.9") < checker.version_key("1.3.17")
-
-
 class TestModeNormalization:
-    """ADR-0051 Phase 2b 勘误：sha 不得随 umask 变化，只随 Git 可执行位变化。"""
+    """sha 不得随 umask 变化，只随 Git 可执行位变化。"""
 
     def test_umask_variants_same_sha_exec_bit_differs(self, tmp_path):
         src = tmp_path / "src"
         src.mkdir()
         f = src / "a.py"
         f.write_text("A\n", encoding="utf-8")
-        f.chmod(0o644)
-        s644 = packer.build_deterministic_tar_gz(src, tmp_path / "1.tar.gz")["package_sha256"]
-        f.chmod(0o664)
-        s664 = packer.build_deterministic_tar_gz(src, tmp_path / "2.tar.gz")["package_sha256"]
-        f.chmod(0o600)
-        s600 = packer.build_deterministic_tar_gz(src, tmp_path / "3.tar.gz")["package_sha256"]
-        assert s644 == s664 == s600
-        f.chmod(0o755)
-        s755 = packer.build_deterministic_tar_gz(src, tmp_path / "4.tar.gz")["package_sha256"]
-        f.chmod(0o775)
-        s775 = packer.build_deterministic_tar_gz(src, tmp_path / "5.tar.gz")["package_sha256"]
-        assert s755 == s775 and s755 != s644
+        shas = {}
+        for mode in (0o644, 0o664, 0o600, 0o755, 0o775):
+            f.chmod(mode)
+            shas[mode] = packer.build_deterministic_tar_gz(src, tmp_path / f"{mode}.tar.gz")["package_sha256"]
+        assert shas[0o644] == shas[0o664] == shas[0o600]
+        assert shas[0o755] == shas[0o775] != shas[0o644]
 
     def test_normalized_mode_pure_function(self):
         import tarfile
@@ -184,3 +193,9 @@ class TestModeNormalization:
         assert packer._normalized_mode(info) == 0o755
         info.type = tarfile.SYMTYPE
         assert packer._normalized_mode(info) == 0o777
+
+
+@pytest.mark.parametrize("v, expected", [("1.3.17", (0, 1, 0, 3, 0, 17)), ("2026.09.22", (0, 2026, 0, 9, 0, 22))])
+def test_version_key_numeric(v, expected):
+    assert tuple(x for pair in checker.version_key(v) for x in pair) == expected
+    assert checker.version_key("1.3.9") < checker.version_key("1.3.17")

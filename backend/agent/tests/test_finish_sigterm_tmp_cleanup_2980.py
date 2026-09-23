@@ -32,9 +32,9 @@ _SCRIPTS = REPO_ROOT / "backend" / "agent" / "scripts"
 
 # (标签, 版本目录, 入口文件, 前缀)
 FIXED = [
-    ("gpu_finish", "gpu_finish/v1.0.7/gpu_finish.py", "gpu-results-"),
-    ("powercycle_finish", "powercycle_finish/v1.0.6/powercycle_finish.py", "powercycle-results-"),
-    ("sleep_finish", "sleep_finish/v1.0.4/sleep_finish.py", "sleep-results-"),
+    ("gpu_finish", "gpu_finish/gpu_finish.py", "gpu-results-"),
+    ("powercycle_finish", "powercycle_finish/powercycle_finish.py", "powercycle-results-"),
+    ("sleep_finish", "sleep_finish/sleep_finish.py", "sleep-results-"),
 ]
 
 _DRIVER = '''
@@ -167,28 +167,3 @@ def test_sigterm_reclaims_dirs_and_sweep_keeps_siblings(family, rel, prefix, tmp
     assert left == [sib.name], f"{family}: SIGTERM 后本次临时目录未回收，残留 {left}"
 
 
-def test_anchor_v106_gpu_leaks_on_sigterm(tmp_path, seeded_tmp):
-    """对照锚点（修复前形态）：gpu_finish v1.0.6 收 SIGTERM 即被信号打死，
-    陈旧孤儿不被清扫、本次目录残留。若此锚点变绿，说明前提需重审。"""
-    work = seeded_tmp
-    stale = work / "gpu-results-orphan-48h"
-    stale.mkdir()
-    old = time.time() - 48 * 3600
-    os.utime(stale, (old, old))
-    sib = work / "gpu-results-sibling-fresh"
-    sib.mkdir()
-
-    proc = _spawn(_SCRIPTS / "gpu_finish/v1.0.6/gpu_finish.py", work)
-    try:
-        _wait_marker(work)
-        proc.send_signal(signal.SIGTERM)
-        rc = proc.wait(timeout=15)
-    finally:
-        if proc.poll() is None:
-            proc.kill()
-            proc.wait(timeout=5)
-
-    assert rc == -15, f"锚点失效：v1.0.6 退出码 {rc}≠-15（信号语义已变？）"
-    assert stale.exists(), "锚点失效：v1.0.6 竟清扫了陈旧孤儿"
-    leaked = [p.name for p in work.iterdir() if p.name.startswith("gpu-results-") and p != sib]
-    assert len(leaked) >= 1, "锚点失效：v1.0.6 泄漏路径不可复现"

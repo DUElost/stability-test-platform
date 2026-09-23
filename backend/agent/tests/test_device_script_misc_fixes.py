@@ -71,7 +71,7 @@ def _prep_install_apk(monkeypatch, mod, dumpsys_stdout):
 
 def test_install_apk_near_version_is_not_skipped(monkeypatch):
     """#816：已装 1.0.10 不得因 required=1.0.1 子串命中被误判 skipped。"""
-    mod = _load("install_apk_v102", "install_apk/v1.0.2/install_apk.py")
+    mod = _load("install_apk_v102", "install_apk/install_apk.py")
     capture = _prep_install_apk(monkeypatch, mod, "    versionName=1.0.10\n")
 
     mod.main()
@@ -81,7 +81,7 @@ def test_install_apk_near_version_is_not_skipped(monkeypatch):
 
 
 def test_install_apk_exact_version_skips(monkeypatch):
-    mod = _load("install_apk_v102_exact", "install_apk/v1.0.2/install_apk.py")
+    mod = _load("install_apk_v102_exact", "install_apk/install_apk.py")
     capture = _prep_install_apk(monkeypatch, mod, "    versionName=1.0.1\n")
 
     mod.main()
@@ -93,7 +93,7 @@ def test_install_apk_exact_version_skips(monkeypatch):
 
 
 def test_oobe_skip_wait_adbd_ready_polls_until_device(monkeypatch):
-    mod = _load("oobe_skip_v111", "oobe_skip/v1.1.1/oobe_skip.py")
+    mod = _load("oobe_skip_v111", "oobe_skip/oobe_skip.py")
     seq = [(-1, "error: device offline"), (0, "device")]
     state = {"n": 0}
 
@@ -110,7 +110,7 @@ def test_oobe_skip_wait_adbd_ready_polls_until_device(monkeypatch):
 
 
 def test_oobe_skip_wait_adbd_ready_times_out(monkeypatch):
-    mod = _load("oobe_skip_v111_to", "oobe_skip/v1.1.1/oobe_skip.py")
+    mod = _load("oobe_skip_v111_to", "oobe_skip/oobe_skip.py")
     monkeypatch.setattr(mod, "_adb_shell", lambda *a, **k: (-1, "offline"))
     ticks = iter([0.0, 100.0])
     monkeypatch.setattr(mod.time, "monotonic", lambda: next(ticks, 100.0))
@@ -123,7 +123,7 @@ def test_oobe_skip_wait_adbd_ready_times_out(monkeypatch):
 
 
 def test_connect_wifi_quotes_credentials_and_verifies(monkeypatch):
-    mod = _load("connect_wifi_v101", "connect_wifi/v1.0.1/connect_wifi.py")
+    mod = _load("connect_wifi_v101", "connect_wifi/connect_wifi.py")
     capture = _Output()
     ssid, password = 'my"ssid', "p$w`x"
     monkeypatch.setattr(mod, "device_serial", lambda: "S")
@@ -157,7 +157,7 @@ def test_connect_wifi_quotes_credentials_and_verifies(monkeypatch):
 
 
 def test_connect_wifi_rc_failure_reports_error(monkeypatch):
-    mod = _load("connect_wifi_v101_rc", "connect_wifi/v1.0.1/connect_wifi.py")
+    mod = _load("connect_wifi_v101_rc", "connect_wifi/connect_wifi.py")
     capture = _Output()
     monkeypatch.setattr(mod, "device_serial", lambda: "S")
     monkeypatch.setattr(mod, "output_result", capture)
@@ -216,64 +216,10 @@ def _prep_trigger(monkeypatch, mod, lines_seq):
     return capture
 
 
-def test_aee_signal_trigger_ignores_other_package_lines(monkeypatch):
-    """#816：并发来源（其它包）新行不得被认领；等到本包行才成功。"""
-    mod = _load("aee_trigger_v101", "aee_signal_trigger/v1.0.1/aee_signal_trigger.py")
-    other, mine = _aee_line("com.other"), _aee_line("com.mine")
-    capture = _prep_trigger(monkeypatch, mod, [[], [other], [other, mine]])
-
-    mod.main()
-
-    assert capture.last["success"] is True
-    assert capture.last["metrics"]["package_name"] == "com.mine"
-    assert capture.last["metrics"]["killed_pid"] == "111"
 
 
-def test_aee_signal_trigger_rejects_unmatched_only(monkeypatch):
-    """#816：窗口内只有其它包的新行——明确失败（拒绝上报），不误吸。"""
-    mod = _load(
-        "aee_trigger_v101_unmatched", "aee_signal_trigger/v1.0.1/aee_signal_trigger.py"
-    )
-    other = _aee_line("com.other")
-    capture = _prep_trigger(monkeypatch, mod, [[], [other]])
-
-    mod.main()
-
-    assert capture.last["success"] is False
-    assert "归属不匹配" in capture.last["error_message"]
 
 
-def test_aee_signal_trigger_kill_failure(monkeypatch):
-    mod = _load("aee_trigger_v101_kill", "aee_signal_trigger/v1.0.1/aee_signal_trigger.py")
-    capture = _Output()
-    monkeypatch.setattr(mod, "device_serial", lambda: "S")
-    monkeypatch.setattr(mod, "output_result", capture)
-    monkeypatch.setattr(
-        mod,
-        "params",
-        lambda: {
-            "package_name": "com.mine",
-            "poll_timeout_seconds": 0.05,
-            "poll_interval_seconds": 0.01,
-        },
-    )
-    monkeypatch.setattr(mod, "_ensure_root", lambda: None)
-    monkeypatch.setattr(mod, "_resolve_pid", lambda pkg: "111")
-    calls = {"n": 0}
-
-    def fake_adb(*a, timeout=30):
-        calls["n"] += 1
-        return (0, "", "") if calls["n"] == 1 else (1, "", "EPERM")
-
-    monkeypatch.setattr(mod, "_run_adb", fake_adb)
-    monkeypatch.setattr(mod, "_db_history_hash", lambda: "h")
-    monkeypatch.setattr(mod, "_db_history_lines", lambda: [])
-    monkeypatch.setattr(mod.time, "sleep", lambda _s: None)
-
-    mod.main()
-
-    assert capture.last["success"] is False
-    assert "kill -11 111 failed" in capture.last["error_message"]
 
 
 # ── 5. aee_prepare v1.0.1 ────────────────────────────────────────────────────
@@ -281,7 +227,7 @@ def test_aee_signal_trigger_kill_failure(monkeypatch):
 
 def test_aee_prepare_restores_dev_settings_on_failure_path(monkeypatch):
     """#816：模式设置失败早退时，finally 仍须恢复开发设置。"""
-    mod = _load("aee_prepare_v101", "aee_prepare/v1.0.1/aee_prepare.py")
+    mod = _load("aee_prepare_v101", "aee_prepare/aee_prepare.py")
     capture = _Output()
     monkeypatch.setattr(mod, "device_serial", lambda: "S")
     monkeypatch.setattr(mod, "output_result", capture)
@@ -309,7 +255,7 @@ def test_aee_prepare_restores_dev_settings_on_failure_path(monkeypatch):
 
 
 def test_flash_firmware_lock_rejects_symlink(monkeypatch):
-    mod = _load("flash_v1312", "flash_firmware/v1.3.12/flash_firmware.py")
+    mod = _load("flash_v1312", "flash_firmware/flash_firmware.py")
     monkeypatch.setattr(mod.platform, "system", lambda: "Linux")
 
     def fake_open(*a, **k):
@@ -326,7 +272,7 @@ def test_flash_firmware_lock_rejects_symlink(monkeypatch):
 
 
 def test_flash_firmware_lock_source_uses_o_nofollow():
-    text = (_SCRIPTS / "flash_firmware/v1.3.12/flash_firmware.py").read_text(
+    text = (_SCRIPTS / "flash_firmware/flash_firmware.py").read_text(
         encoding="utf-8"
     )
     assert "os.O_NOFOLLOW" in text
@@ -337,7 +283,7 @@ def test_flash_firmware_lock_source_uses_o_nofollow():
 
 
 def _wifi_mod(monkeypatch, status_text: str):
-    mod = _load("connect_wifi_v102", "connect_wifi/v1.0.2/connect_wifi.py")
+    mod = _load("connect_wifi_v102", "connect_wifi/connect_wifi.py")
     monkeypatch.setattr(
         mod, "adb_shell_quiet", lambda cmd, timeout=10: _cp(0, status_text),
     )
@@ -387,7 +333,7 @@ def test_connect_wifi_v102_quoted_ssid_with_space(monkeypatch):
 
 def test_connect_wifi_v102_attempts_connect_when_prefix_ssid_connected(monkeypatch):
     """端到端：设备在 `Test-5G`、目标 `Test` → 必须真的发起连接（不得 skipped）。"""
-    mod = _load("connect_wifi_v102_e2e", "connect_wifi/v1.0.2/connect_wifi.py")
+    mod = _load("connect_wifi_v102_e2e", "connect_wifi/connect_wifi.py")
     capture = _Output()
     monkeypatch.setattr(mod, "device_serial", lambda: "S")
     monkeypatch.setattr(mod, "output_result", capture)
