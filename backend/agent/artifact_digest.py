@@ -113,6 +113,43 @@ def collect_artifact_entries(
     return entries
 
 
+#: 控制面摘要面（ADR-0051 Phase 4）输入集：bundle 根下 ``backend/**``，
+#: **不深入** ``backend/agent/``（那是 agent-code / host-resources 两面的地盘）。
+#: 与 agent 面相反，**不排除** ``.env*`` / 字节码——构建 ignore 若被误改，这类文件
+#: 一旦进 bundle 必须**改变摘要**（#2269 根因正是「不在任何摘要面内」），而非被豁免。
+_CONTROL_PLANE_ROOT = "backend"
+_CONTROL_PLANE_SKIP_DIRS = frozenset({"agent"})
+#: frontend/dist-prod 属构建产物（另有 provenance 通道），nginx 直读、控制面进程不 import——不进本面。
+
+
+def collect_control_plane_entries(bundle_root: str) -> list[tuple[str, bool, str]]:
+    """``control-plane`` artifact 的规范化序列 ``(relpath, 可执行位, content sha256)``。
+
+    relpath 相对 **bundle 根**（如 ``backend/api/...``）；符号链接跳过（与
+    ``collect_artifact_entries`` 一致）；排序后返回，供 ``digest_entries`` 直接摘要。
+    双侧共用同一文件：build 端（``tools/release/build_bundle.py``）与 install S0 量具
+    （``tools/site_config/install.py``）都从这里取，无镜像分叉面。
+    """
+    entries: list[tuple[str, bool, str]] = []
+    for root, dirs, files in os.walk(os.path.join(bundle_root, _CONTROL_PLANE_ROOT)):
+        rel_dir = os.path.relpath(root, bundle_root).replace(os.sep, "/")
+        if rel_dir == _CONTROL_PLANE_ROOT:
+            dirs[:] = [d for d in dirs if d not in _CONTROL_PLANE_SKIP_DIRS]
+        for name in files:
+            full_path = os.path.join(root, name)
+            if os.path.islink(full_path):
+                continue
+            relpath = os.path.relpath(full_path, bundle_root).replace(os.sep, "/")
+            st = os.stat(full_path)
+            h = hashlib.sha256()
+            with open(full_path, "rb") as f:
+                for chunk in iter(lambda: f.read(1 << 20), b""):
+                    h.update(chunk)
+            entries.append((relpath, bool(st.st_mode & 0o111), h.hexdigest()))
+    entries.sort()
+    return entries
+
+
 def digest_entries(entries: list[tuple[str, bool, str]]) -> str:
     """Digest a normalized ``(relpath, exec, sha256)`` sequence → ``sha256:<hex>``.
 

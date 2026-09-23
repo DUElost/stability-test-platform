@@ -36,11 +36,21 @@ Class: process
   `verify_tool_contract.py:47`、`tool_cache.py:199-205`、
   `flash_firmware.py:867-870`、`install_agent.sh:250`、`gpu_setup/_lib.py:245`。
 - 落稿前运行 `python scripts/run_gates.py check:quick`（15 gates），结果见 PR。
+- **F-09 追加复核（2026-09-23，只读）**：① 机队 ad-hoc（`agent_config` 48/48 台，`-m shell`
+  只读）三查：`<install>/resources/flashtool` 缺失 48、`STP_FLASH_TOOL_DIR` 未设 48、
+  工具实际在 `<install>/agent/resources/flashtool` 48，且 `STP_SCRIPT_PACKAGES=strict`、
+  cache 最新 1.3.17；② 控制面只读 API 核对 7 个在库刷机计划的步骤参数与最近一次刷机
+  run 509 的 `plan_snapshot`——均无 `flash_tool_dir`；③ 站点包源 `tar tzf` 确认包根即
+  `flash_firmware.py`（包模式上跳 3 层落在 `<install>`）。结论：F-09 坐实、潜伏未爆发
+  （最近刷机 run 2026-09-22 13:46，在 Phase 3 之前），失败为安全失败（不碰设备）。
+  复核所用临时凭据文件已删除，未写任何仓库外持久状态。
 - Pending（本轮未做，不得记为通过）：backend/agent/前端全量测试、真机 25 台与
-  150/3750 分档验收、F-09 的真机 flash 复核、生产只读容量复核、issue 状态复核。
+  150/3750 分档验收、F-09 修复后的真机 flash 复核、mtbf setup 同类复核、
+  生产只读容量复核、issue 状态复核。
 
 ## Revisit
 
 F-01/F-02/F-03 处置（或 ADR-0047 裁决、#2959 关闭）后按新 `main` SHA 复审；
-F-09 真机复核结论回填（若确认，修法与验收清单同步）；F-08 残留项在采集到
-"横切修复 × 族数"分布后决定是否复议共享基座。不原地改写本稿取证基线与历史结论。
+F-09 修复（新版本 + 7 个在库计划重指）落地后做一次真机 flash 复核并回填；
+F-08 残留项在采集到"横切修复 × 族数"分布后决定是否复议共享基座。
+不原地改写本稿取证基线与历史结论。
