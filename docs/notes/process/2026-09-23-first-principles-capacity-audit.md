@@ -44,6 +44,19 @@ Class: process
   兜底路径，退役后 #3093/#3094 的「只验 fixture / 可静默 SKIP」从绿灯偏软升级为
   **无兜底的单点**，优先级应在包化终态下重评。ADR 自述的「fleet 48/48 strict」
   本轮未逐台复核，证据等级仍记为历史记录。
+- 收尾后追加（本 Note 随 PR 二次更新）：报告 F06.1 的一处措辞**过头并已更正**——
+  原写「Phase 3 后包通路是唯一通路、没有兜底」，读 `origin/main` 后准确表述为
+  「兜底仍在但语义降级」：`nfs_path` 现在指向每族一棵可变源码树
+  （`backend/services/script_catalog.py:3`），`off` 是 `package_mode` 的缺省档
+  （`backend/agent/script_packages.py:49`–`:57`），`on` 回退不再给冻结字节；
+  且 `package_active` 虽在 ack 里（`backend/agent/script_verifier.py:103`、`:126`），
+  却**不落账不聚合**（`backend/models/script_presence.py:38`–`:58`、
+  `backend/services/script_presence.py:272`–`:314`）⇒ 「fleet 全 strict」当前不可机器核验。
+- 立案前先查重、能留痕就不另立单：`abort_scale_probe` 读 `slots_exhausted` 的缺口
+  **已在 main 修好**（`tools/dev/abort_scale_probe.py:319`–`:334`、`:451`、`:480`），
+  因此 F01 观察腿不新起单，仍留在既有的 #2959；#3093/#3094 只补重评分留痕。
+  最终新建三张：**#3217**（F08 产物丢弃可观测）、**#3219**（F02 心跳时间预算实测）、
+  **#3222**（包模式 fleet 视图）。
 - 顺带纠一处历史账：2026-09-13 链 B 审查的 F-B1（`jira/` 产物永不清理、
   成为无索引孤儿）在本基线**已在代码面关闭**——`backend/storage_families.py`
   单源族清单 + `purge_run_storage_dirs` 覆盖 `devices|dedup|jira|_meta`
@@ -68,6 +81,11 @@ Class: process
 
 ## Revisit
 
+F06.1 的更正基于 `origin/main` 的 Phase 3 后状态：若回到 `ae232a30` 读本报告，
+该节应按其自身标注的修正口径理解，不要把新结论套到旧基线。
+#3217 / #3219 / #3222 任一关闭时，按其验收清单回写对应发现的证据等级
+（从「待验证」升为「实测/已落账」），并**另开新基线复审**，
+不原地改写上文快照。其余触发条件不变：
 ADR-0047 裁决并引入跨实例预算守卫、#2959 关闭，或新目标编入权威容量
 验收文档时重新对拍 F01/模型；B1/B2 与真实 25 台机压测、包全 fleet
 `strict`/`package_active`、#3093/#3094 验收完成后按新的 main SHA 复审。
