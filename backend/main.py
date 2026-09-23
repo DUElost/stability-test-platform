@@ -75,7 +75,12 @@ from backend.core.limiter import RateLimitMiddleware
 from backend.core.metrics import init_build_info
 from backend.core.release_manifest import resolve_build_info
 from backend.core.redis import redact_redis_url
-from backend.core.exception_log import describe_db_failure
+from backend.core.exception_log import (
+    DB_OVERLOAD_RETRY_AFTER_SECONDS,
+    describe_db_failure,
+    is_db_overload,
+)
+from backend.core.terminal_bulkhead import TerminalBulkheadFull
 from backend.core.request_metrics import ApiRequestMetricsMiddleware, endpoint_label
 from backend.core.security import is_production_like_env, validate_production_auth_cookie_settings
 from backend.realtime.socketio_server import create_sio_server, capture_main_loop
@@ -381,12 +386,39 @@ async def invalid_transition_handler(request: Request, exc: InvalidTransitionErr
     )
 
 
+@_fastapi_app.exception_handler(TerminalBulkheadFull)
+async def terminal_bulkhead_full_handler(request: Request, exc: TerminalBulkheadFull):
+    """终态舱壁拒绝 → 503 + `Retry-After`（ADR-0047 D2 / #2959）。
+
+    与「数据库过载」共用同一对外语义（`DB_OVERLOADED` + `retryable`）：调用方
+    （Agent outbox / 前端）只需认一个码就知道「等一会儿再试」，不必区分是 PG 先满
+    还是自家舱壁先满。逐条不写日志——波内会拒绝成百上千次，信号在
+    `stability_terminal_bulkhead_rejected_total` 与首次告警行里（`terminal_bulkhead.py`）。
+    """
+    return JSONResponse(
+        status_code=503,
+        content={
+            "data": None,
+            "error": {
+                "code": "DB_OVERLOADED",
+                "message": "Database overloaded, retry later",
+                "retryable": True,
+            },
+        },
+        headers={"Retry-After": str(DB_OVERLOAD_RETRY_AFTER_SECONDS)},
+    )
+
+
 @_fastapi_app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    """未捕获异常 → 500。日志**体积按失败族分档**（#3042，见 `core/exception_log.py`）。
+    """未捕获异常 → 500；**数据库过载族 → 503 + `Retry-After`**（ADR-0047 D2 / #2959）。
 
-    数据库侧失败（槽耗尽 / 死锁 / 池排队超时…）每种只全栈一次、之后一行；其余异常
-    一律保留全栈——那些是真 bug，栈就是答案本身。状态码与响应体形状**不变**。
+    日志**体积按失败族分档**（#3042，见 `core/exception_log.py`）：数据库侧失败
+    （槽耗尽 / 死锁 / 池排队超时…）每种只全栈一次、之后一行；其余异常一律保留全栈
+    ——那些是真 bug，栈就是答案本身。
+
+    状态码按 D2 分流：过载族（池排队超时 / SQLSTATE 53300）对外 503 + `Retry-After`
+    + `retryable: true`，让 Agent/前端能按语义退避；其余仍是 500 + `INTERNAL_ERROR`。
     """
     db_failure = describe_db_failure(
         exc,
@@ -401,6 +433,19 @@ async def global_exception_handler(request: Request, exc: Exception):
         logger.error("%s first_of_family=1", db_failure.message, exc_info=exc)
     else:
         logger.error("%s", db_failure.message)
+    if is_db_overload(exc):
+        return JSONResponse(
+            status_code=503,
+            content={
+                "data": None,
+                "error": {
+                    "code": "DB_OVERLOADED",
+                    "message": "Database overloaded, retry later",
+                    "retryable": True,
+                },
+            },
+            headers={"Retry-After": str(DB_OVERLOAD_RETRY_AFTER_SECONDS)},
+        )
     return JSONResponse(status_code=500, content={"data": None, "error": {"code": "INTERNAL_ERROR", "message": "Internal server error"}})
 # 中间件注册顺序遵循 Starlette LIFO:最先 add 的在请求链最内层。
 # 期望请求链:CORS(最外,确保 4xx 也带 CORS 头) → RateLimit → CSRF(最内,贴近路由)
