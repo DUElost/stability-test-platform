@@ -14,7 +14,10 @@ Phase 3 起 ``backend/agent/scripts/<name>/`` 是**每族一棵可演进的源�
 - 每个族树的**重建 sha 必须等于该族最新未退役登记条目的 ``package_sha256``**——不等 = 改了树
   没发版本（跑 ``--register <name> <version>``），或树被回退到旧版本；
 - 每个族树的入口文件名必须等于最新条目的 ``script``；平台族 ``python`` 必须为 null；
-- 族树不存在但 manifest 有未退役条目 → 红（删族 = 先 ``retired:true`` 再删树）。
+- 族的归类以**树集**为判据（Phase 4a 起 ``python: null`` 有二义：平台族 与 无包内解释器的
+  外部工具族——`--python-absent` 登记）：有树 = 平台族，必须登记且 sha 匹配；无树的条目
+  （外部工具族，或整个族被删）不做等价、不判红——**平台族整树删除未退役的保护移交 PR 评审
+  + ADR-0051 D5（删除按继承的 ADR-0039 D2 人工 PR + 证据）**。
 
 登记（``--register <name> <version>``）：从族树打包并追加条目（幂等：同版本同 sha 放行；
 异 sha 拒绝——版本号不可复用）。``--publish --packages-root <站点包源>``：把**每族最新**条目的
@@ -203,10 +206,6 @@ def check(doc: dict, rebuilt: dict[str, dict], scripts_root: Path) -> list[str]:
             )
         if latest.get("script") != facts["script"]:
             errs.append(f"{name}: 入口 {facts['script']!r} ≠ 最新登记 script {latest.get('script')!r}")
-    trees = {name for name, _ in iter_family_trees(scripts_root)}
-    for name, versions in fams.items():
-        if name not in trees and latest_entry(versions) is not None:
-            errs.append(f"{name}: manifest 有未退役条目但族树不存在——删族须先 retired:true")
     return errs
 
 
@@ -291,16 +290,13 @@ def run_self_test() -> int:
             failures.append("残留 v 目录应红")
         (root / "beta" / "v9.9.9").rmdir()
 
-        # 有条目无树 → 红；全退役无树 → 绿
+        # 无树条目（外部族 python=null，Phase 4a 二义）不判红——归类以树集为判据
         ghost = json.loads(json.dumps(doc))
         ghost["tools"]["gamma"] = {"versions": [{"version": "1.0.0", "package_sha256": "a" * 64,
                                                  "artifact": "packages/gamma/1.0.0.tar.gz", "python": None,
                                                  "script": "gamma.py", "retired": False}]}
-        if not any("族树不存在" in e for e in check(ghost, rebuilt3, root)):
-            failures.append("有条目无树应红")
-        ghost["tools"]["gamma"]["versions"][0]["retired"] = True
         if check(ghost, rebuilt3, root):
-            failures.append("全退役无树应绿")
+            failures.append(f"无树条目应豁免（外部族语义）：{check(ghost, rebuilt3, root)}")
 
         # 外部工具族（python 非 null）不在射程
         ext = json.loads(json.dumps(doc))
@@ -321,7 +317,7 @@ def run_self_test() -> int:
         for f in failures:
             print(f"[SELFTEST-FAIL] {f}", file=sys.stderr)
         return 1
-    print("[OK] check_script_packages self-test 红绿双向（族树/重建/登记/改树未发版/版本复用/退役回落/残留 v 目录/幽灵族/外部族豁免/publish）")
+    print("[OK] check_script_packages self-test 红绿双向（族树/重建/登记/改树未发版/版本复用/退役回落/残留 v 目录/无树条目豁免/外部族豁免/publish）")
     return 0
 
 

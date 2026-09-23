@@ -280,3 +280,19 @@ def test_script_packages_switch_is_agent_scoped_and_off_by_default(monkeypatch):
     overrides = hot_update_env_overrides("/opt/stability-test-agent")
     assert overrides["STP_SCRIPT_PACKAGES"] == "on"
     assert "STP_AGENT_SCRIPT_PACKAGES" not in overrides
+
+
+def test_unisoc_package_refs_are_agent_scoped(monkeypatch):
+    """ADR-0051 Phase 4a：两族包引用键走既有推送链；未设不推（逃生阀默认关）。"""
+    for k in ("STP_AGENT_UNISOC_LOG_SCAN_PACKAGE_REF", "STP_AGENT_UNISOC_SCAN_RESULT_PACKAGE_REF"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("STP_UNISOC_LOG_SCAN_PACKAGE_REF", "leaked-value")
+    overrides = hot_update_env_overrides("/opt/stability-test-agent")
+    assert "STP_UNISOC_LOG_SCAN_PACKAGE_REF" not in overrides
+
+    monkeypatch.setenv("STP_AGENT_UNISOC_LOG_SCAN_PACKAGE_REF", "Monkey-Log-Scan-GT-SPRD/2026.09.23")
+    monkeypatch.setenv("STP_AGENT_UNISOC_SCAN_RESULT_PACKAGE_REF", "Scan-Result-GT/2026.09.23")
+    overrides = hot_update_env_overrides("/opt/stability-test-agent")
+    assert overrides["STP_UNISOC_LOG_SCAN_PACKAGE_REF"] == "Monkey-Log-Scan-GT-SPRD/2026.09.23"
+    assert overrides["STP_UNISOC_SCAN_RESULT_PACKAGE_REF"] == "Scan-Result-GT/2026.09.23"
+    assert "STP_AGENT_UNISOC_LOG_SCAN_PACKAGE_REF" not in overrides
