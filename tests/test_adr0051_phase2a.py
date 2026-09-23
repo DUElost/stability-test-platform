@@ -3,7 +3,7 @@
 - 打包器：显式成员列表 / `python=None` 登记 / 权限位归一化；
 - manifest 门禁：`python: null` 绿、`""` 红；
 - checker：真实族树与真实 manifest 最新条目等价；改树未发版本红；残留 v 目录红；退役回落；
-  幽灵族；外部族豁免；publish 只落最新版；
+  无树条目豁免（Phase 4a 树集）；外部族豁免；publish 只落最新版；
 - build_bundle 随身携带 `tool_manifest.json`。
 """
 
@@ -138,8 +138,7 @@ class TestCheckerSemantics:
         doc["tools"]["ghost"] = {"versions": [{"version": "1.0.0", "package_sha256": "a" * 64,
                                               "artifact": "packages/ghost/1.0.0.tar.gz", "python": None,
                                               "script": "ghost.py", "retired": False}]}
-        assert any("族树不存在" in e for e in checker.check(doc, rebuilt, root))
-        doc["tools"]["ghost"]["versions"][0]["retired"] = True
+        # Phase 4a：归类以树集为判据——无树条目豁免（外部族 python=null 二义），不报「族树不存在」
         assert checker.check(doc, rebuilt, root) == []
 
     def test_publish_writes_only_latest_and_manifest_copy(self, tmp_path):
