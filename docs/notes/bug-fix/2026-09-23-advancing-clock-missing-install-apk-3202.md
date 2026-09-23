@@ -1,9 +1,11 @@
 # install_apk 用例只 stub sleep 不推时钟：60–90 秒忙等按圈吃内存，冻结控制面宿主（#3202）
 
-Status: implemented（夹具：#3210 已合入失败路径；本 PR 补齐瞬态 push 路径 + 守卫）
+Status: implemented
 Class: bug-fix
 
 ## Decision
+
+（夹具：#3210 已合入失败路径；本 PR 补齐瞬态 push 路径 + 守卫）
 
 `backend/agent/tests/test_powercycle_scripts.py::TestInstallApkV103` 的两条用例曾把
 `v103.time.sleep` 换成 `lambda s: None`，但**没有同时替换 `v103.time.time`**。被测
@@ -77,3 +79,4 @@ pytest tests/test_agent_clock_stub_guard_3202.py -q → 3 passed（含判别力�
   证明不了的那些要么改夹具、要么在文档里写明为什么安全。
 - 若 CI runner 未来内存变小，这类"门禁绿但宿主死"的形态会先以 runner OOM 形式暴露——
   届时本守卫的作用会由 CI 反证，但不要因为 CI 绿就回退它。
+
