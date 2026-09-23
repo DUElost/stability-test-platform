@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from .tool_cache import resolve_packaged_tool
 import logging
 import os
 import time
@@ -56,10 +57,21 @@ class UnisocScanRunner:
         del hdd_root, side
         if self._configured and not force:
             return
-        self._scan_python = scan_tool_python or os.getenv("STP_UNISOC_LOG_SCAN_PYTHON", "").strip()
-        self._scan_script = scan_tool_script or os.getenv("STP_UNISOC_LOG_SCAN_SCRIPT", "").strip()
-        self._result_python = result_python or os.getenv("STP_UNISOC_SCAN_RESULT_PYTHON", "").strip()
-        self._result_script = result_script or os.getenv("STP_UNISOC_SCAN_RESULT_SCRIPT", "").strip()
+        # ADR-0051 Phase 4a：显式传参 > 包面（*PACKAGE_REF 引用键，空=整体 no-op）> env 路径键。
+        # 包面成功即替换 python+script 成对；任何失败保持 env 路径（#3075 C3 回退同款）。
+        log_pkg = script_packages = None
+        if not scan_tool_python and not scan_tool_script:
+            log_pkg = resolve_packaged_tool("STP_UNISOC_LOG_SCAN_PACKAGE_REF")
+        if not result_python and not result_script:
+            script_packages = resolve_packaged_tool("STP_UNISOC_SCAN_RESULT_PACKAGE_REF")
+        self._scan_python = scan_tool_python or (log_pkg.python if log_pkg else "") or os.getenv("STP_UNISOC_LOG_SCAN_PYTHON", "").strip()
+        self._scan_script = scan_tool_script or (log_pkg.script if log_pkg else "") or os.getenv("STP_UNISOC_LOG_SCAN_SCRIPT", "").strip()
+        self._result_python = result_python or (script_packages.python if script_packages else "") or os.getenv("STP_UNISOC_SCAN_RESULT_PYTHON", "").strip()
+        self._result_script = result_script or (script_packages.script if script_packages else "") or os.getenv("STP_UNISOC_SCAN_RESULT_SCRIPT", "").strip()
+        if log_pkg:
+            logger.info("unisoc_scan_runner_package_active scan=%s@%s", log_pkg.name, log_pkg.version)
+        if script_packages:
+            logger.info("unisoc_scan_runner_package_active result=%s@%s", script_packages.name, script_packages.version)
         self._configured = bool(
             self._scan_python and self._scan_script
             and self._result_python and self._result_script

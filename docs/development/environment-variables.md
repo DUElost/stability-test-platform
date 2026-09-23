@@ -449,11 +449,11 @@
 | `STP_TOOL_MANIFEST` | `-` | ✅ | 运行时 | `backend/api/routes/scripts.py:152` |
 | `STP_TRUSTED_PROXIES` | `-` | ✅ | 运行时 | `backend/core/limiter.py:82` |
 | `STP_UI_RATE_LIMIT_REQUESTS` | `300` | ✅ | 运行时 | `backend/core/limiter.py:45` |
-| `STP_UNISOC_LOG_SCAN_POLL_SECONDS` | `-` | ✅ | 运行时 | `backend/agent/unisoc_scan_runner.py:140` |
-| `STP_UNISOC_LOG_SCAN_PYTHON` | `` | ✅ | 运行时 | `backend/agent/unisoc_scan_runner.py:59` |
-| `STP_UNISOC_LOG_SCAN_SCRIPT` | `` | ✅ | 运行时 | `backend/agent/unisoc_scan_runner.py:60` |
-| `STP_UNISOC_SCAN_RESULT_PYTHON` | `` | ✅ | 运行时 | `backend/agent/unisoc_scan_runner.py:61` |
-| `STP_UNISOC_SCAN_RESULT_SCRIPT` | `` | ✅ | 运行时 | `backend/agent/unisoc_scan_runner.py:62` |
+| `STP_UNISOC_LOG_SCAN_POLL_SECONDS` | `-` | ✅ | 运行时 | `backend/agent/unisoc_scan_runner.py:152` |
+| `STP_UNISOC_LOG_SCAN_PYTHON` | `` | ✅ | 运行时 | `backend/agent/unisoc_scan_runner.py:67` |
+| `STP_UNISOC_LOG_SCAN_SCRIPT` | `` | ✅ | 运行时 | `backend/agent/unisoc_scan_runner.py:68` |
+| `STP_UNISOC_SCAN_RESULT_PYTHON` | `` | ✅ | 运行时 | `backend/agent/unisoc_scan_runner.py:69` |
+| `STP_UNISOC_SCAN_RESULT_SCRIPT` | `` | ✅ | 运行时 | `backend/agent/unisoc_scan_runner.py:70` |
 | `STP_VERIFY_BACKEND` | `` | — | 运行时 | `backend/scripts/smoke_jira_api.py:11` |
 | `STP_WATCHER_AEE_RECONCILE_BURST_INTERVAL_SECONDS` | `60` | ✅ | 运行时 | `backend/agent/bootstrap_subsystems.py:144` |
 | `STP_WATCHER_AEE_RECONCILE_BURST_ROUNDS` | `5` | ✅ | 运行时 | `backend/agent/bootstrap_subsystems.py:145` |

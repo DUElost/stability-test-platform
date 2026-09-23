@@ -1,6 +1,30 @@
 {
   "schema_version": 1,
   "tools": {
+    "Monkey-Log-Scan-GT-SPRD": {
+      "versions": [
+        {
+          "artifact": "packages/Monkey-Log-Scan-GT-SPRD/2026.09.23.tar.gz",
+          "package_sha256": "5293491e30570514a6c30a86e6598b43330dfe988bc9524eff26fc17e9b653e3",
+          "python": null,
+          "retired": false,
+          "script": "scan_log_gt.py",
+          "version": "2026.09.23"
+        }
+      ]
+    },
+    "Scan-Result-GT": {
+      "versions": [
+        {
+          "artifact": "packages/Scan-Result-GT/2026.09.23.tar.gz",
+          "package_sha256": "59a76f15822fdb3937d1025118a4f915fe373be69387d6a2abd251cbc2cc4df0",
+          "python": null,
+          "retired": false,
+          "script": "scan_result.py",
+          "version": "2026.09.23"
+        }
+      ]
+    },
     "Start-Log-Scan": {
       "versions": [
         {

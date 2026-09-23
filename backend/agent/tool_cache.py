@@ -174,10 +174,14 @@ def _cache_root(env: Mapping[str, str]) -> Optional[Path]:
     return None
 
 
-def resolve_packaged_scan_tool(env: Optional[Mapping[str, str]] = None) -> Optional[PackageTool]:
-    """scan_runner 的唯一入口：有包引用且拉取核验成功 → 返回包内路径，否则 None（回退 env）。"""
+def resolve_packaged_tool(ref_env_key: str, env: Optional[Mapping[str, str]] = None) -> Optional[PackageTool]:
+    """按 ``ref_env_key``（值为 ``"Name/version"``）解析包工具：拉取核验成功 → 包内路径，否则 None（回退 env）。
+
+    每个族一个独立引用键（#3075 C6 同款逃生阀：键为空 = 整体 no-op）；
+    ADR-0051 Phase 4a 起 scan_runner 与 UnisocScanRunner 共用本泛化入口。
+    """
     environ = env if env is not None else os.environ
-    parsed = parse_package_ref(environ.get("STP_DEDUP_SCAN_PACKAGE_REF", ""))
+    parsed = parse_package_ref(environ.get(ref_env_key, ""))
     if not parsed:
         return None
     name, version = parsed
@@ -203,3 +207,8 @@ def resolve_packaged_scan_tool(env: Optional[Mapping[str, str]] = None) -> Optio
         logger.error("tool_cache_entry_paths_missing %s@%s python=%s script=%s", name, version, python_abs, script_abs)
         return None
     return PackageTool(name=name, version=version, python=str(python_abs), script=str(script_abs))
+
+
+def resolve_packaged_scan_tool(env: Optional[Mapping[str, str]] = None) -> Optional[PackageTool]:
+    """scan_runner 的既有入口（#3075 C6）：委托泛化 resolver，行为不变。"""
+    return resolve_packaged_tool("STP_DEDUP_SCAN_PACKAGE_REF", env)

@@ -54,7 +54,7 @@ DEFAULT_MANIFEST = REPO_ROOT / "tool_manifest.json"
 
 #: 运行态目录/文件：随目录就地产生，不属工具资产。
 DEFAULT_EXCLUDE_DIRS = frozenset(
-    {"logs", "tmp", "result", "merge_result", "__pycache__", ".ace-tool", ".git", ".pytest_cache"}
+    {"logs", "log", "tmp", "result", "merge_result", "__pycache__", ".ace-tool", ".git", ".pytest_cache"}
 )
 DEFAULT_EXCLUDE_FILES = frozenset({"~", ".DS_Store"})
 DEFAULT_EXCLUDE_SUFFIXES = (".pyc", ".pyo", ".log")
@@ -210,6 +210,8 @@ def main() -> int:
     ap.add_argument("--script-relative", default="", help="包内入口脚本相对路径（登记字段）")
     ap.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     ap.add_argument("--write-manifest", action="store_true", help="把新条目追加进 Git manifest 唯一事实源")
+    ap.add_argument("--python-absent", action="store_true",
+                    help="登记 python=null：包内无解释器，由 Agent 自身解释器执行（ADR-0051 D4）")
     ap.add_argument("--packages-root", type=Path, default=None, help="站点中心存储根（C4：写包 + 派生 manifest 副本）")
     ap.add_argument("--dry-run", action="store_true", help="只计算并打印要素，不写任何文件")
     args = ap.parse_args()
@@ -224,8 +226,13 @@ def main() -> int:
                 print(f"[FAIL] {err}", file=sys.stderr)
                 return 1
 
-    if args.write_manifest and not (args.python_relative and args.script_relative):
-        print("[FAIL] --write-manifest 必须同时给 --python-relative 与 --script-relative（C5 分发字段）", file=sys.stderr)
+    if args.python_absent and args.python_relative:
+        print("[FAIL] --python-absent 与 --python-relative 互斥", file=sys.stderr)
+        return 1
+    python_for_entry = None if args.python_absent else (args.python_relative or None)
+    if args.write_manifest and not (args.script_relative and (args.python_absent or args.python_relative)):
+        print("[FAIL] --write-manifest 需要 --script-relative + （--python-relative 或 --python-absent）（C5 分发字段；"
+              "--python-absent = 包内无解释器，由 Agent 自身解释器执行，ADR-0051 D4）", file=sys.stderr)
         return 1
 
     with tempfile.TemporaryDirectory(prefix="stp-pack-") as td:
@@ -241,7 +248,7 @@ def main() -> int:
         doc = load_manifest(args.manifest)
         doc, appended = register_entry(
             doc, args.name, args.version, facts["package_sha256"],
-            artifact_path_for(args.name, args.version), args.python_relative, args.script_relative,
+            artifact_path_for(args.name, args.version), python_for_entry, args.script_relative,
         )
         if appended:
             dump_manifest(doc, args.manifest)

@@ -172,3 +172,34 @@ class TestResolveEntry:
         sha = _make_tar(pkg / "Start-Log-Scan" / "2026.09.22.tar.gz", {"other.py": b"x"})
         _site(pkg, "Start-Log-Scan", "2026.09.22", sha)
         assert resolve_packaged_scan_tool(self._env(tmp_path)) is None
+
+
+class TestResolvePackagedToolGeneric:
+    """ADR-0051 Phase 4a：泛化 resolver——每个族一个引用键；python=null → Agent 自身解释器。"""
+
+    def test_custom_ref_key_with_null_python(self, tmp_path, monkeypatch):
+        import sys
+        from backend.agent.tool_cache import resolve_packaged_tool
+
+        pkg = tmp_path / "packages"
+        sha = _make_tar(pkg / "Scan-Result-GT" / "2026.09.23.tar.gz", {"scan_result.py": b"print('r')"})
+        _site(pkg, "Scan-Result-GT", "2026.09.23", sha, python=None, script="scan_result.py")
+        got = resolve_packaged_tool("STP_UNISOC_SCAN_RESULT_PACKAGE_REF", {
+            "STP_UNISOC_SCAN_RESULT_PACKAGE_REF": "Scan-Result-GT/2026.09.23",
+            "STP_PACKAGES_ROOT": str(pkg),
+            "STP_TOOLS_CACHE_ROOT": str(tmp_path / "cache"),
+        })
+        assert got is not None and got.python == sys.executable
+        assert Path(got.script).name == "scan_result.py"
+
+    def test_other_family_key_not_touched(self, tmp_path):
+        """族隔离：只设 SCAN_RESULT 键不影响 DEDUP 入口（各自独立的 no-op 逃生阀）。"""
+        from backend.agent.tool_cache import resolve_packaged_scan_tool
+
+        pkg = tmp_path / "packages"
+        sha = _make_tar(pkg / "Scan-Result-GT" / "2026.09.23.tar.gz", {"scan_result.py": b"x"})
+        _site(pkg, "Scan-Result-GT", "2026.09.23", sha, python=None, script="scan_result.py")
+        assert resolve_packaged_scan_tool({
+            "STP_UNISOC_SCAN_RESULT_PACKAGE_REF": "Scan-Result-GT/2026.09.23",
+            "STP_PACKAGES_ROOT": str(pkg), "STP_TOOLS_CACHE_ROOT": str(tmp_path / "cache"),
+        }) is None

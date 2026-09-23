@@ -242,3 +242,72 @@ class TestScanStartWatermark:
         assert runner.run_scan_result(
             str(scan_root), 1, "host", scan_start=scan_start,
         ) == str(fresh.resolve())
+
+
+class TestPackagePlane:
+    """ADR-0051 Phase 4a：显式传参 > 包面（*PACKAGE_REF）> env 路径键；空键 = 整体 no-op。"""
+
+    def _pkg(self, python, script):
+        from backend.agent.tool_cache import PackageTool
+
+        return PackageTool(name="X", version="1", python=python, script=script)
+
+    def test_package_plane_replaces_env_keys(self, monkeypatch):
+        import backend.agent.unisoc_scan_runner as mod
+
+        mod.UnisocScanRunner._instance = None
+        monkeypatch.setenv("STP_UNISOC_LOG_SCAN_PYTHON", "/usr/bin/python3")
+        monkeypatch.setenv("STP_UNISOC_LOG_SCAN_SCRIPT", "/tools/log/scan_log_gt.py")
+        monkeypatch.setenv("STP_UNISOC_SCAN_RESULT_PYTHON", "/usr/bin/python3")
+        monkeypatch.setenv("STP_UNISOC_SCAN_RESULT_SCRIPT", "/tools/res/scan_result.py")
+        calls = []
+
+        def fake_resolve(key, env=None):
+            calls.append(key)
+            if key == "STP_UNISOC_LOG_SCAN_PACKAGE_REF":
+                return self._pkg("/venv/py", "/cache/log/scan_log_gt.py")
+            return self._pkg("/venv/py", "/cache/res/scan_result.py")
+
+        monkeypatch.setattr(mod, "resolve_packaged_tool", fake_resolve)
+        runner = mod.UnisocScanRunner.instance()
+        runner.configure(force=True)
+        assert calls == ["STP_UNISOC_LOG_SCAN_PACKAGE_REF", "STP_UNISOC_SCAN_RESULT_PACKAGE_REF"]
+        assert runner._scan_script == "/cache/log/scan_log_gt.py"
+        assert runner._result_script == "/cache/res/scan_result.py"
+
+    def test_explicit_params_win_over_package(self, monkeypatch):
+        import backend.agent.unisoc_scan_runner as mod
+
+        mod.UnisocScanRunner._instance = None
+        monkeypatch.setattr(mod, "resolve_packaged_tool",
+                            lambda key, env=None: pytest.fail(f"显式传参时不得触包面: {key}"))
+        runner = mod.UnisocScanRunner.instance()
+        runner.configure(scan_tool_python="p1", scan_tool_script="s1",
+                         result_python="p2", result_script="s2", force=True)
+        assert runner._scan_python == "p1" and runner._result_script == "s2"
+
+    def test_no_package_falls_back_to_env(self, monkeypatch):
+        import backend.agent.unisoc_scan_runner as mod
+
+        mod.UnisocScanRunner._instance = None
+        monkeypatch.setattr(mod, "resolve_packaged_tool", lambda key, env=None: None)
+        monkeypatch.setenv("STP_UNISOC_LOG_SCAN_PYTHON", "lp")
+        monkeypatch.setenv("STP_UNISOC_LOG_SCAN_SCRIPT", "ls")
+        monkeypatch.setenv("STP_UNISOC_SCAN_RESULT_PYTHON", "rp")
+        monkeypatch.setenv("STP_UNISOC_SCAN_RESULT_SCRIPT", "rs")
+        runner = mod.UnisocScanRunner.instance()
+        runner.configure(force=True)
+        assert runner._scan_python == "lp" and runner._result_python == "rp" and runner.is_configured()
+
+    def test_half_package_none_keeps_env_pair(self, monkeypatch):
+        """result 有包、log 无包：log 保持 env 值——两槽独立。"""
+        import backend.agent.unisoc_scan_runner as mod
+
+        mod.UnisocScanRunner._instance = None
+        monkeypatch.setattr(mod, "resolve_packaged_tool",
+                            lambda key, env=None: self._pkg("x", "pkg-r") if "RESULT" in key else None)
+        monkeypatch.setenv("STP_UNISOC_LOG_SCAN_PYTHON", "lp")
+        monkeypatch.setenv("STP_UNISOC_LOG_SCAN_SCRIPT", "ls")
+        runner = mod.UnisocScanRunner.instance()
+        runner.configure(force=True)
+        assert runner._scan_python == "lp" and runner._result_python == "x"
