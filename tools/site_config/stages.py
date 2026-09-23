@@ -154,6 +154,15 @@ HOST_DEFENSE_ASSETS = (
     ("deploy/control-plane/host-defense/10-stp-watchdog.conf",
      "etc/systemd/system.conf.d/10-stp-watchdog.conf", 0o644),
 )
+# 控制面宿主规则的**人工副本**（与 `alerts-stability-platform.yml` 同一状态：ADR-0011 的
+# 正式挂载未落地，见 docs/operations/README.md 的挂载项）。刻意**不进** S4 的安装清单：
+# 站点侧 Prometheus 读的是 `etc/stp/prometheus/rules/`，把这份写到发行版目录只会造出一个
+# 没人读的孤儿文件（#2643 批过的「装了≠加载」）。这里登记它只为让漂移检测覆盖到——
+# 运行副本与事实源不一致必须可见。重放方式见 deploy/control-plane/host-defense/README.md。
+HOST_RULE_COPIES = (
+    ("deploy/prometheus/alerts-host-resources.yml",
+     "etc/prometheus/rules/alerts-host-resources.yml", 0o644),
+)
 
 NGINX_SITES = {
     "internal": "deploy/control-plane/nginx/stability-platform.conf",
@@ -463,8 +472,12 @@ def host_defense_site_assets() -> tuple[tuple[str, str, int], ...]:
 
 
 def host_assets() -> tuple[tuple[str, str, int], ...]:
-    """控制面宿主上受漂移检测的全部资产（监控栈 + 防线）。"""
-    return (*monitoring_artifacts(), *host_defense_artifacts())
+    """控制面宿主上**受漂移检测**的全部资产：监控栈 + 防线 + 人工副本规则。
+
+    注意 `HOST_RULE_COPIES` 只出现在这里、不在 `host_defense_artifacts()` 里：
+    它由安装器**判**、不由安装器**装**（理由见该常量注释）。
+    """
+    return (*monitoring_artifacts(), *host_defense_artifacts(), *HOST_RULE_COPIES)
 
 
 def _distro_default_conflict(ctx: InstallContext, destination: Path) -> bool:
