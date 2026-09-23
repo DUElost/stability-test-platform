@@ -799,7 +799,7 @@ class TestInstallApkV103:
             monkeypatch, v103, calls,
             [(0, "", ""), (3, "Failure [INSTALL_FAILED_INSUFFICIENT_STORAGE]", "")],
         )
-        monkeypatch.setattr(v103.time, "sleep", lambda s: None)
+        _patch_advancing_clock(monkeypatch, v103)
 
         with pytest.raises(RuntimeError) as exc:
             v103.install_apk(Path("/res/AutoTestTool.apk"))
