@@ -54,9 +54,19 @@ def _git(*args: str) -> str:
 
 
 def validate_relative_member(p: str, *, field: str) -> str | None:
-    """包内相对路径合法性——与 package_tool_asset 同判据（此处独立实现避免跨工具 import 脆链）。"""
-    if not isinstance(p, str) or not p or p.startswith("/"):
-        return f"{field} 必须是包内相对路径（非空、非绝对）：{p!r}"
+    """包内相对路径合法性——与 ``package_tool_asset.validate_relative_member`` **逐分支对齐**
+    （此处保持独立实现，避免跨工具 import 脆链）。
+
+    #3197 项1：本函数曾自称「同判据」却少掉反斜杠与盘符两个拒绝分支——于是
+    ``script: "a\\b"`` / ``"C:x"`` 能过门禁 lint 进 Git manifest，登记工具侧却判非法，
+    两侧对同一份 manifest 给出相反结论。判据对齐由
+    ``tests/test_adr0051_package_member_validator_parity_3197.py`` 同输入集对拍钉住
+    （漂移靠测试闭合，不再靠注释自称）。
+    """
+    if not isinstance(p, str) or not p:
+        return f"{field} 必须是包内相对路径（非空）：{p!r}"
+    if p.startswith("/") or "\\" in p or ":" in p.split("/")[0]:
+        return f"{field} 必须是包内相对路径（不得绝对/含反斜杠/带盘符）：{p!r}"
     if any(seg in ("", "..") for seg in p.split("/")):
         return f"{field} 不得含 '..' 或空段：{p!r}"
     return None
