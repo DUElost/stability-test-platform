@@ -1,7 +1,11 @@
 # ADR-0042：配置读取收敛——分域 pydantic-settings 与裸读取边界
 
-- 状态：**Accepted**（v1.2：P2 已落地四片并回填（进度回填，非 P2 收口）。2026-09-14 裁决：引入 pydantic-settings；按 D2 判据分域迁移，不满足判据者保持裸读）
+- 状态：**Accepted**（v1.3：D3 加 legacy 例外键终态出口豁免（ADR-0051 D7 裁决）；v1.2：P2 已落地四片并回填（进度回填，非 P2 收口）。2026-09-14 裁决：引入 pydantic-settings；按 D2 判据分域迁移，不满足判据者保持裸读）
 - 版本记录：
+  - v1.3（2026-09-23）：**D3 加豁免条款**（由 ADR-0051 D7 裁决、其 Phase 4 的前置）：「不改既有 env 名」
+    不永久钉死 ADR-0033 §5.4 显式登记的 legacy 例外路径键——其终态出口（工具入包：manifest 条目 +
+    站点 packages/）落地后可删；删除须同 PR 同步 `.env*.example`、environment-variables.md、
+    env_inventory 清单门禁与退役台账。其余键的「不重命名/不加第二键」全量有效不变。
   - v1.2（2026-09-18）：**P2 状态回填**（#2661 纠漂移——本 ADR 停在 v1.1 的「P2 待启动」，而 P2 已落地四片，索引面与 §P2 范围三处失真）。四个落地片（均已确认在主线内）：① 控制面 scheduler 四 reconciler 批处理旋钮（`759526d7`）；② 安全与会话域 `core/security` + `cors` → `backend/core/settings/security.py::AuthSessionSettings`（`90377dbe`）；③ agent 侧磁盘与日志归档域 `DiskArchiveSettings`（`b8ebf843`）；④ agent 心跳/协调/注册域 `HeartbeatSettings` + `RegistrationSettings`（`d58093dd`）。**口径**：回填的是「已落地四片」，不是「P2 完成」——余域仍按 D2 逐个评估，P3 收口未启动。
   - v1.1（2026-09-14）：**P1 试点完成并回填**——依赖（#1970）+ D6 门禁（#1971）+ 控制面调度域（#1977，21 旋钮）+ agent 租约域（#1984，5 旋钮 + hot-update reload 钩子）。结论：D1–D4/D6 按裁决落地、等价性测试全绿；新增两条实作约束（见 §P1 试点结论）。P2 待启动。
   - v1.0（2026-09-14）：用户委托本会话裁决——**引入**；载体取 D1 分域 Settings（否决方案 A 薄封装、方案 C 维持现状）；**附加硬约束**：Settings 仅读 `os.environ`（`env_file=None`），不得引入第二个 dotenv 加载器（`env_source.py` 仍是来源与优先级的唯一契约）；D6 门禁扩展为 P1 试点的**前置条件**。**转 Accepted**。
@@ -57,6 +61,15 @@ pydantic-settings 自带的 dotenv 加载）——`.env` 来源与优先级仍�
 
 **D3 环境变量名不变**：字段通过 `validation_alias` 绑定**既有** env 名与别名，
 不引入新前缀、不重命名、不改变 `.env` 文件语义；运维面零感知。
+
+> **v1.3 豁免（2026-09-23，由 [ADR-0051](./ADR-0051-release-unit-and-content-addressing.md) D7 裁决）**：
+> 本条禁的是**改名与新增第二键**造成的漂移，不是把键永久钉死——**ADR-0033 §5.4 显式登记的
+> legacy 例外路径键（`STP_UNISOC_*` / `STP_AGENT_UNISOC_*`）在其终态出口落地后可删除**
+> （终态出口 = 工具入包：`tool_manifest.json` 条目 + 站点 `packages/`，Agent 经 `tools_cache`
+> 解析）。删除时必须同 PR 同步 `.env*.example`、`environment-variables.md` 与
+> `#737` 清单门禁（env_inventory --write），并遵循既有的退役台账
+> （`tests/test_removed_env_keys.py` 的「台账键必须有出处」）。除该例外登记面外，
+> 「不改既有 env 名」继续全量有效。
 
 **D4 惰性访问**：提供 `get_settings()`（`lru_cache` + `cache_clear()`），禁止 import 时固化；
 迁移域的模块级常量改为惰性取值。Agent 侧提供与 hot-update 对齐的 `reload_settings()`
