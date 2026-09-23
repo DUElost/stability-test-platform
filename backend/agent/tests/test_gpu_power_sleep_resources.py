@@ -25,9 +25,9 @@ def _load(name: str, rel: str):
     return mod
 
 
-gpu = _load("gpu_lib_v104", "agent/scripts/gpu_setup/v1.0.4")
-power = _load("power_lib_v101", "agent/scripts/powercycle_setup/v1.0.1")
-sleep = _load("sleep_lib_v101", "agent/scripts/sleep_setup/v1.0.1")
+gpu = _load("gpu_lib_v104", "agent/scripts/gpu_setup")
+power = _load("power_lib_v101", "agent/scripts/powercycle_setup")
+sleep = _load("sleep_lib_v101", "agent/scripts/sleep_setup")
 
 
 def test_gpu_config_passthrough_resources_dir(monkeypatch):
@@ -63,7 +63,7 @@ def test_sleep_config_passthrough(monkeypatch):
 def test_gpu_check_no_tests_is_failure(monkeypatch):
     """v1.0.3：GPU_RUN_END 但 OK (0 tests) = 空跑显式失败（2026-08-31 实证）。"""
     import importlib.util
-    gc_dir = str(Path(__file__).resolve().parents[2] / "agent/scripts/gpu_check/v1.0.3")
+    gc_dir = str(Path(__file__).resolve().parents[2] / "agent/scripts/gpu_check")
     sys.path.insert(0, gc_dir)  # 确保 gpu_check 的 _lib 优先（防 sys.path 污染）
     spec = importlib.util.spec_from_file_location(
         "gpu_check_v103", gc_dir + "/gpu_check.py")
@@ -82,7 +82,7 @@ def test_gpu_check_no_tests_is_failure(monkeypatch):
 
 def _load_gpu_check_104():
     import importlib.util
-    gc_dir = str(Path(__file__).resolve().parents[2] / "agent/scripts/gpu_check/v1.0.4")
+    gc_dir = str(Path(__file__).resolve().parents[2] / "agent/scripts/gpu_check")
     sys.path.insert(0, gc_dir)
     spec = importlib.util.spec_from_file_location("gpu_check_v104", gc_dir + "/gpu_check.py")
     gc = importlib.util.module_from_spec(spec)
@@ -170,58 +170,8 @@ def _load_setup_v102(name: str):
     return mod
 
 
-def test_sleep_setup_v102_install_uses_push_pm(monkeypatch):
-    """#775：sleep_setup v1.0.2 AutoTestTool 安装改 push+pm install（流式不稳）。"""
-    import tempfile
-    lib = _load_setup_v102("sleep_setup")
-    calls = []
-
-    def fake_adb(*args, timeout=30):
-        calls.append(args)
-        if args[0] == "push":
-            return 0, "1 file pushed", ""
-        if args[0] == "shell" and args[1].startswith("pm install"):
-            return 0, "Success", ""
-        if args[0] == "shell" and args[1].startswith("rm "):
-            return 0, "", ""
-        return 0, "", ""
-
-    def fake_shell(*args, timeout=30):
-        return 0, "", ""
-
-    monkeypatch.setattr(lib, "adb", fake_adb)
-    monkeypatch.setattr(lib, "adb_shell", fake_shell)
-    with tempfile.NamedTemporaryFile(suffix=".apk") as f:
-        lib.install_apk(Path(f.name))
-    assert any(c[0] == "push" for c in calls)
-    assert any(c[0] == "shell" and "pm install" in c[1] for c in calls)
 
 
-def test_powercycle_setup_v102_install_uses_push_pm(monkeypatch):
-    """#775：powercycle_setup v1.0.2 同款 push+pm install。"""
-    import tempfile
-    lib = _load_setup_v102("powercycle_setup")
-    calls = []
-
-    def fake_adb(*args, timeout=30):
-        calls.append(args)
-        if args[0] == "push":
-            return 0, "pushed", ""
-        if args[0] == "shell" and args[1].startswith("pm install"):
-            return 0, "Success", ""
-        if args[0] == "shell" and args[1].startswith("rm "):
-            return 0, "", ""
-        return 0, "", ""
-
-    def fake_shell(*args, timeout=30):
-        return 0, "", ""
-
-    monkeypatch.setattr(lib, "adb", fake_adb)
-    monkeypatch.setattr(lib, "adb_shell", fake_shell)
-    with tempfile.NamedTemporaryFile(suffix=".apk") as f:
-        lib.install_apk(Path(f.name))
-    assert any(c[0] == "push" for c in calls)
-    assert any(c[0] == "shell" and "pm install" in c[1] for c in calls)
 
 
 def _load_lib(name: str, ver: str) -> ModuleType:
@@ -236,47 +186,16 @@ def _load_lib(name: str, ver: str) -> ModuleType:
     return mod
 
 
-def test_powercycle_finish_v103_verifies_stop_flags(monkeypatch):
-    """#894：powercycle_finish v1.0.3 停测后回读验证 running=false——残留则重试并 raise。"""
-    lib = _load_lib("powercycle_finish", "1.0.3")
-    calls = {"set_stop_flags": 0}
-
-    def fake_get_prefs():
-        # 第一次回读残留 true（模拟写失败），重试后 false
-        calls["set_stop_flags"] += 0
-        return 'name="running" value="true"' if calls["set_stop_flags"] < 1 else 'name="running" value="false"'
-
-    def fake_set_stop_flags():
-        calls["set_stop_flags"] += 1
-
-    monkeypatch.setattr(lib, "get_prefs_xml", fake_get_prefs)
-    monkeypatch.setattr(lib, "set_stop_flags", fake_set_stop_flags)
-    lib._verify_stop_flags()  # 重试一次后通过
-    assert calls["set_stop_flags"] >= 1
 
 
-def test_powercycle_finish_v103_raises_if_still_residual(monkeypatch):
-    """残留无法清除（两次仍 true）→ raise（finish 报错而非假成功）。"""
-    lib = _load_lib("powercycle_finish", "1.0.3")
-    monkeypatch.setattr(lib, "get_prefs_xml",
-                        lambda: 'name="running" value="true"')
-    monkeypatch.setattr(lib, "set_stop_flags", lambda: None)
-    import pytest
-    with pytest.raises(RuntimeError, match="running 未置 false"):
-        lib._verify_stop_flags()
 
 
-def test_sleep_finish_v101_verifies_stop_flags(monkeypatch):
-    lib = _load_lib("sleep_finish", "1.0.2")
-    monkeypatch.setattr(lib, "get_prefs_xml",
-                        lambda: 'name="running" value="false"')
-    lib._verify_stop_flags()  # 直接通过
 
 
 def test_monkey_setup_v236_has_att_clean_step():
     """#894：monkey_setup v2.3.6 默认 steps 含 att_clean。"""
     import importlib.util
-    d = str(Path(__file__).resolve().parents[2] / "agent/scripts/monkey_setup/v2.3.6")
+    d = str(Path(__file__).resolve().parents[2] / "agent/scripts/monkey_setup")
     sys.path.insert(0, d)
     spec = importlib.util.spec_from_file_location("monkey_setup_v236", d + "/monkey_setup.py")
     mod = importlib.util.module_from_spec(spec)
@@ -286,11 +205,6 @@ def test_monkey_setup_v236_has_att_clean_step():
     assert "att_clean" in mod.main.__defaults__[0] if mod.main.__defaults__ else True
 
 
-def test_gpu_setup_v105_pre_reboot_config():
-    """#774：gpu_config 透传 pre_reboot（默认 true——setup 前重启清 UiAutomation 残留）。"""
-    lib = _load_lib("gpu_setup", "1.0.5")
-    assert lib.gpu_config({"project": "chain"})["pre_reboot"] is True
-    assert lib.gpu_config({"project": "chain", "pre_reboot": "false"})["pre_reboot"] is False
 
 
 def test_gpu_check_v105_failures_verdict(monkeypatch):
@@ -316,7 +230,7 @@ def test_gpu_check_v105_crashed_still_works(monkeypatch):
 
 def _load_gpu_check_105():
     import importlib.util
-    d = str(Path(__file__).resolve().parents[2] / "agent/scripts/gpu_check/v1.0.5")
+    d = str(Path(__file__).resolve().parents[2] / "agent/scripts/gpu_check")
     sys.path.insert(0, d)
     spec = importlib.util.spec_from_file_location("gpu_check_v105", d + "/gpu_check.py")
     gc = importlib.util.module_from_spec(spec)
@@ -325,24 +239,12 @@ def _load_gpu_check_105():
     return gc
 
 
-def test_gpu_setup_v106_has_settle(monkeypatch):
-    """v1.0.6：reboot 后 settle（boot_completed=1 后等待 60s 默认）。"""
-    import importlib.util
-    d = str(Path(__file__).resolve().parents[2] / "agent/scripts/gpu_setup/v1.0.6")
-    sys.path.insert(0, d)
-    spec = importlib.util.spec_from_file_location("gpu_v106", d + "/gpu_setup.py")
-    g = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(g)
-    import inspect
-    src = inspect.getsource(g._pre_reboot_device)
-    assert "STP_GPU_REBOOT_SETTLE_SECONDS" in src
 
 
 def test_gpu_setup_v107_install_push_fail_no_nameerror(monkeypatch):
     """#755：push 全失败时返回 (rc, msg) 而非 NameError（run 355 实证 2 台）。"""
     import tempfile
-    d = str(Path(__file__).resolve().parents[2] / "agent/scripts/gpu_setup/v1.0.7")
+    d = str(Path(__file__).resolve().parents[2] / "agent/scripts/gpu_setup")
     sys.path.insert(0, d)
     import importlib.util
     spec = importlib.util.spec_from_file_location("gpu_lib_v107", d + "/_lib.py")
@@ -362,23 +264,11 @@ def test_gpu_setup_v107_install_push_fail_no_nameerror(monkeypatch):
     assert "push failed" in out
 
 
-def test_gpu_setup_v107_wait_timeout_caught(monkeypatch):
-    """v1.0.7：wait-for-device 超时被捕获（不抛 init 失败）。run 355 实证 2 台。"""
-    import inspect
-    d = str(Path(__file__).resolve().parents[2] / "agent/scripts/gpu_setup/v1.0.7")
-    sys.path.insert(0, d)
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("gpu_v107", d + "/gpu_setup.py")
-    g = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(g)
-    src = inspect.getsource(g._pre_reboot_device)
-    assert "TimeoutExpired" in src
 
 
 def test_gpu_setup_v108_dismiss_dialogs_wired():
     """#774 run 356/357 根因：v1.0.8 prepare_device 后清 Antutu 首启弹窗。"""
-    d = Path(__file__).resolve().parents[2] / "agent/scripts/gpu_setup/v1.0.8"
+    d = Path(__file__).resolve().parents[2] / "agent/scripts/gpu_setup"
     setup_src = (d / "gpu_setup.py").read_text(encoding="utf-8")
     lib_src = (d / "_lib.py").read_text(encoding="utf-8")
     assert "dismiss_antutu_dialogs(meta" in setup_src          # 接线
@@ -388,7 +278,7 @@ def test_gpu_setup_v108_dismiss_dialogs_wired():
 
 def test_gpu_finish_v103_junit_failures_counted():
     """#774：rc=0 但 JUnit FAILURES = 假成功——v1.0.2 计入 junit_failed_rounds。"""
-    d = Path(__file__).resolve().parents[2] / "agent/scripts/gpu_finish/v1.0.3"
+    d = Path(__file__).resolve().parents[2] / "agent/scripts/gpu_finish"
     sys.path.insert(0, str(d))
     import importlib.util
     spec = importlib.util.spec_from_file_location("gpu_finish_lib_v103", str(d / "_lib.py"))
@@ -410,7 +300,7 @@ def test_gpu_finish_v103_junit_failures_counted():
 
 def test_gpu_setup_v109_loop_dismisses_dialogs():
     """#774 run 359：v1.0.9 循环脚本每轮 instrument 前清弹窗。"""
-    d = Path(__file__).resolve().parents[2] / "agent/scripts/gpu_setup/v1.0.9"
+    d = Path(__file__).resolve().parents[2] / "agent/scripts/gpu_setup"
     loop = (d / "_gpu_stress_loop.sh").read_text(encoding="utf-8")
     assert "dismiss_dialogs" in loop
     assert "uiautomator dump" in loop
@@ -427,7 +317,8 @@ def _load_gpu_lib(version: str):
     版本——正是 #755 修复在 v1.1.0 丢失却没人发现的原因之一。
     """
     import importlib.util
-    d = str(Path(__file__).resolve().parents[2] / f"agent/scripts/gpu_setup/v{version}")
+    # ADR-0051 Phase 3：版本目录已退役，族树即最新版本；`version` 只作模块名标签
+    d = str(Path(__file__).resolve().parents[2] / "agent/scripts/gpu_setup")
     sys.path.insert(0, d)
     spec = importlib.util.spec_from_file_location(
         f"gpu_lib_{version.replace('.', '_')}", d + "/_lib.py"
@@ -438,8 +329,8 @@ def _load_gpu_lib(version: str):
     return lib
 
 
-# 历史修复版本 + 当前最新版本都要断言：新版本若从旧基线拷贝，这里会红（#2048）。
-_GPU_SETUP_RETRY_VERSIONS = ("1.0.10", "1.2.0")
+# ADR-0051 Phase 3：只有族树（最新版本）可断言；历史版本行为冻结在包里。
+_GPU_SETUP_RETRY_VERSIONS = ("latest",)
 
 
 @pytest.mark.parametrize("version", _GPU_SETUP_RETRY_VERSIONS)

@@ -17,11 +17,11 @@ import pytest
 from tools.dev.source_anchor import SourceGuard
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
-V123 = SCRIPTS / "gpu_setup" / "v1.2.3"
-V122 = SCRIPTS / "gpu_setup" / "v1.2.2"
+V123 = SCRIPTS / "gpu_setup"
+V122 = SCRIPTS / "gpu_setup"
 
-LIB_REL = "backend/agent/scripts/gpu_setup/v1.2.3/_lib.py"
-SETUP_REL = "backend/agent/scripts/gpu_setup/v1.2.3/gpu_setup.py"
+LIB_REL = "backend/agent/scripts/gpu_setup/_lib.py"
+SETUP_REL = "backend/agent/scripts/gpu_setup/gpu_setup.py"
 
 #: v1.2.2 的崩溃入口形态：``subprocess.run(..., text=True, timeout=...)``。
 #: 绑完整形参片段，避开模块 docstring / 注释里对旧写法的正当提及。

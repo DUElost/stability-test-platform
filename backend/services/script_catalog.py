@@ -1,11 +1,28 @@
-"""Script catalog scanning helpers."""
+"""Script catalog：从 ``tool_manifest.json`` + 站点包源同步 ``script`` 表（ADR-0051 Phase 3）。
+
+Phase 3 起版本目录已退役：``backend/agent/scripts/<name>/`` 是每族一棵源码树，版本号住
+``tool_manifest.json``，发布单元是站点 ``packages/{name}/{version}.tar.gz``。因此注册的输入
+不再是「某棵检出的目录」（ADR-0046 病根），而是 **Git 唯一事实源 + 内容寻址包**：
+
+- 对 manifest 里每个平台脚本条目（``python`` 为 null）：打开包源里的 tarball，整包 sha 必须等于
+  登记的 ``package_sha256``，再从包内取入口文件 sha（``content_sha256``）、伴随脚本 sha
+  （``support_files_manifest``）、``capabilities.json``，登记/复核 ``script`` 行；
+- 包不在站点（尚未 ``--publish``）→ 记 ``package_missing``、不建行不改行；
+- 已登记行与包内容不一致 → ``conflicts``（包不可变，所以只能是库侧漂移）；``force_rebaseline``
+  显式重锚；
+- ``retired: true`` 的条目 → 行显式 ``is_active=False``（退役由人经 PR 翻转 manifest，这就是
+  ADR-0046 D2 要的「显式动作」）；反之**不再**因「盘上缺失」反激活任何行；
+- 活跃行不在 manifest → 只报告 ``unregistered_active``（如历史 seed 行），不动。
+"""
 
 from __future__ import annotations
 
 import hashlib
 import json
 import logging
-import subprocess
+import os
+import tarfile
+import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -26,7 +43,7 @@ _SUPPORTED_SUFFIXES = {
 _CAPABILITIES_FILE = "capabilities.json"
 #: ADR-0051 D3：Git 唯一事实源，位于仓库根 / bundle 根（build_bundle 随身复制）。
 _DEFAULT_MANIFEST_PATH = Path(__file__).resolve().parents[2] / "tool_manifest.json"
-_MANIFEST_DEFAULT = object()
+_DEFAULT_CATEGORY = "device"
 
 
 @dataclass
@@ -36,21 +53,16 @@ class ScriptScanResult:
     deactivated: int = 0
     conflicts: List[Dict[str, str]] = field(default_factory=list)
     rebaselined: List[Dict[str, str]] = field(default_factory=list)
-    #: ADR-0051 Phase 2a：本轮从 tool_manifest.json 回填 ``package_sha256`` 的行数。
+    #: ADR-0051：本轮回填 ``package_sha256`` 的行数（Phase 2a 前的行首次遇到登记值）。
     package_backfilled: int = 0
-    #: 行上已有 ``package_sha256`` 但与 manifest 登记值不等（manifest append-only 下
-    #: 只可能来自库侧被改或 manifest 违规改写）；与 ``conflicts`` 分开：后者是内容冲突。
+    #: 行上 ``package_sha256`` 与 manifest 登记值不等，或站点 tarball 整包 sha ≠ 登记值。
     package_conflicts: List[Dict[str, str]] = field(default_factory=list)
-    # #2386：反激活的**明细**。只有计数是不够的——scan 的输入是
-    # ``STP_SCRIPT_ROOT`` 指向的那棵树（生产上就是共享主工作树的当前检出），
-    # 而「盘上缺失」是**单向**反激活（目录回来再扫也不复活，需显式重激活）。
-    # 于是「主工作树被切到不含某版本的提交 + 窗口内有人跑 scan」会把主线活跃版本
-    # 静默吃掉，事后从 `deactivated: 3` 这个数字看不出被吃的是哪三个。
+    #: 已登记但站点包源里没有 tarball（尚未 ``--publish``）。
+    package_missing: List[Dict[str, str]] = field(default_factory=list)
+    #: 活跃行不在 manifest（历史 seed / 手工登记）——只报告，不反激活。
+    unregistered_active: List[Dict[str, str]] = field(default_factory=list)
+    #: 因 manifest ``retired: true`` 而显式退役的行。
     deactivated_versions: List[Dict[str, str]] = field(default_factory=list)
-    #: #2386：**本会**被反激活、但因「被扫的树不是部署目标」而暂缓的版本。
-    #: 与 `deactivated_versions` 分开：两者语义相反（一个已退役、一个被守卫拦下），
-    #: 混在一起会让「本次到底退役了什么」不可读。
-    deactivation_skipped_versions: List[Dict[str, str]] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -61,53 +73,10 @@ class ScriptScanResult:
             "rebaselined": self.rebaselined,
             "package_backfilled": self.package_backfilled,
             "package_conflicts": self.package_conflicts,
+            "package_missing": self.package_missing,
+            "unregistered_active": self.unregistered_active,
             "deactivated_versions": self.deactivated_versions,
-            "deactivation_skipped_versions": self.deactivation_skipped_versions,
         }
-
-
-def script_tree_matches_deploy_target(
-    root: str | Path,
-    *,
-    base: str = "origin/main",
-) -> Optional[bool]:
-    """被扫的脚本子树是否与**部署目标**（``origin/main``）逐字节一致（#2386）。
-
-    为什么需要：``STP_SCRIPT_ROOT`` 生产上就是**共享主工作树**，而「盘上缺失」是
-    **单向反激活**（目录回来再扫也不复活，需显式重激活）。于是「别的会话把工作树切到
-    不含某版本的提交 + 窗口内有人跑 scan」会把**主线活跃版本**静默吃掉（#2386 现场）。
-
-    返回 ``None`` = **无法判定**（不在 git 仓库内 / 无该 ref / git 不可用）。
-    调用方按 **fail-open** 处理：发布包是不可变发布物，不存在「切分支」这一场景，
-    不该因为判据不可用而挡住合法部署。
-
-    判据与 runbook 里执行者一直手工做的
-    ``git diff --quiet origin/main -- backend/agent/scripts`` 同源——这里把它工具化。
-    """
-    root_path = Path(root).resolve()
-    try:
-        top = subprocess.run(
-            ["git", "-C", str(root_path), "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, timeout=15, check=False,
-        )
-        if top.returncode != 0 or not top.stdout.strip():
-            return None
-        toplevel = Path(top.stdout.strip())
-        rel = root_path.relative_to(toplevel)
-    except (OSError, ValueError, subprocess.SubprocessError):
-        return None
-    try:
-        diff = subprocess.run(
-            ["git", "-C", str(toplevel), "diff", "--quiet", base, "--", str(rel)],
-            capture_output=True, timeout=30, check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if diff.returncode == 0:
-        return True
-    if diff.returncode == 1:
-        return False
-    return None
 
 
 def detect_script_type(path: Path) -> Optional[str]:
@@ -122,33 +91,10 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-_DEFAULT_CATEGORY = "device"
-
-
-def _iter_script_entries(root: Path) -> Iterable[Tuple[str, str, str, Path, str]]:
-    """Yield (category, name, version, entry, script_type).
-
-    Layout: ``root/<name>/v<version>/<entry>.py`` (flat, 2 levels under root).
-    Category is fixed at ``device``.
-    """
-    for name_dir in sorted(p for p in root.iterdir() if p.is_dir()):
-        name = name_dir.name
-        if name in LEGACY_AEE_SCRIPT_NAMES:
-            continue
-        for version_dir in sorted(p for p in name_dir.iterdir() if p.is_dir()):
-            raw_version = version_dir.name
-            if not raw_version.startswith("v") or len(raw_version) <= 1:
-                continue
-            version = raw_version[1:]
-            entry, script_type = _pick_entry(version_dir)
-            if entry:
-                yield _DEFAULT_CATEGORY, name, version, entry, script_type
-
-
-def _pick_entry(version_dir: Path) -> tuple:
-    """Return (entry_path, script_type) for the first script file in *version_dir*."""
+def _pick_entry(tree: Path) -> tuple:
+    """Return (entry_path, script_type) for the first script file in *tree*（族树入口判据）。"""
     candidates = [
-        p for p in sorted(version_dir.iterdir())
+        p for p in sorted(tree.iterdir())
         if p.is_file() and detect_script_type(p) and not p.name.startswith("_")
     ]
     if not candidates:
@@ -157,11 +103,11 @@ def _pick_entry(version_dir: Path) -> tuple:
     return entry, detect_script_type(entry)
 
 
-def support_files_manifest(version_dir: Path, entry: Path) -> dict[str, str]:
+def support_files_manifest(tree: Path, entry: Path) -> dict[str, str]:
     """Map companion script filenames → sha256 (every script file except *entry*)."""
     manifest: dict[str, str] = {}
     entry_resolved = entry.resolve()
-    for path in sorted(version_dir.iterdir()):
+    for path in sorted(tree.iterdir()):
         if not path.is_file():
             continue
         if path.resolve() == entry_resolved:
@@ -172,317 +118,237 @@ def support_files_manifest(version_dir: Path, entry: Path) -> dict[str, str]:
     return manifest
 
 
-def read_capabilities(version_dir: Path) -> list[str]:
-    """Read ``capabilities.json`` from a version directory (e.g. ``progress_stamps``).
-
-    Missing or malformed metadata is treated as "no capabilities" — a version
-    that declares nothing must not pass capability-gated validation. Only
-    non-empty strings are kept and returned sorted for stable comparisons.
-    """
-    meta = version_dir / _CAPABILITIES_FILE
-    if not meta.is_file():
+def read_capabilities(tree: Path) -> list[str]:
+    """``capabilities.json`` → 能力列表（#171）；缺失/坏文件 → []。"""
+    path = tree / _CAPABILITIES_FILE
+    if not path.is_file():
         return []
     try:
-        data = json.loads(meta.read_text(encoding="utf-8"))
+        raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        logger.warning(
-            "script_capabilities_metadata_unreadable dir=%s",
-            version_dir,
-        )
         return []
-    if not isinstance(data, dict):
-        return []
-    raw = data.get("capabilities")
+    if isinstance(raw, dict):
+        raw = raw.get("capabilities")
     if not isinstance(raw, list):
         return []
-    return sorted({
-        str(cap).strip()
-        for cap in raw
-        if isinstance(cap, str) and cap.strip()
-    })
+    return [str(x) for x in raw if isinstance(x, str) and x]
 
 
-def _is_under_root(path: str, root: Path) -> bool:
-    try:
-        Path(path).resolve().relative_to(root)
-        return True
-    except (OSError, ValueError):
-        return False
+def _runtime_path(runtime_root: str | None, packages_root: Path, name: str, version: str, entry_name: str) -> str:
+    """Agent 侧路径锚：``{runtime_root}/{name}/v{version}/{entry}``。
 
-
-def _is_under_runtime_root(path: str, runtime_root: str) -> bool:
-    root = runtime_root.replace("\\", "/").rstrip("/")
-    target = path.replace("\\", "/").rstrip("/")
-    return bool(root) and (target == root or target.startswith(f"{root}/"))
-
-
-def _runtime_path(root: Path, entry: Path, runtime_root: str | None) -> str:
-    if not runtime_root:
-        return str(entry)
-
-    relative_parts = entry.relative_to(root).parts
-    normalized_root = runtime_root.rstrip("/\\")
-    if "\\" in normalized_root or (len(normalized_root) >= 2 and normalized_root[1] == ":"):
-        return str(PureWindowsPath(normalized_root, *relative_parts))
-    return str(PurePosixPath(normalized_root, *relative_parts))
-
-
-def load_package_index(manifest_path: str | Path | None) -> Dict[Tuple[str, str], str]:
-    """``(name, version) → package_sha256``，只收未 retired 的条目；文件缺失/坏 → 空（回填静默跳过）。
-
-    平台脚本族与外部工具族同住一份 manifest；这里不区分——scan 只按 (name, version) 命中。
+    Phase 3 后主机树上已无该目录——Agent 只取 basename 定位包内入口（``script_packages``），
+    保留旧形状是为了历史行同构与 Windows 主机的路径根判定。无 runtime_root 时退回包源路径。
     """
+    if not runtime_root:
+        return str(packages_root / name / f"v{version}" / entry_name)
+    normalized_root = runtime_root.rstrip("/\\")
+    parts = (name, f"v{version}", entry_name)
+    if "\\" in normalized_root or (len(normalized_root) >= 2 and normalized_root[1] == ":"):
+        return str(PureWindowsPath(normalized_root, *parts))
+    return str(PurePosixPath(normalized_root, *parts))
+
+
+def load_manifest(manifest_path: str | Path | None) -> dict:
+    """读 Git 唯一事实源；缺失/坏文件 → 空文档（调用方按「无登记」处理并记 WARNING）。"""
     if not manifest_path:
-        return {}
+        return {"schema_version": 1, "tools": {}}
     path = Path(manifest_path)
     try:
         doc = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        logger.warning("script_scan_manifest_unreadable path=%s（package_sha256 回填跳过）", path)
-        return {}
-    index: Dict[Tuple[str, str], str] = {}
+        logger.warning("script_sync_manifest_unreadable path=%s", path)
+        return {"schema_version": 1, "tools": {}}
+    if not isinstance(doc, dict) or not isinstance(doc.get("tools"), dict):
+        return {"schema_version": 1, "tools": {}}
+    return doc
+
+
+def script_entries(doc: dict) -> Iterable[Tuple[str, dict]]:
+    """manifest 里的平台脚本条目 ``(name, entry)``（``python`` 为 null 的族；跳过 legacy 名）。"""
     for name, tool in (doc.get("tools") or {}).items():
-        for entry in (tool or {}).get("versions") or []:
-            if entry.get("retired"):
-                continue
-            sha = entry.get("package_sha256")
-            if isinstance(sha, str) and len(sha) == 64:
-                index[(str(name), str(entry.get("version")))] = sha
+        versions = (tool or {}).get("versions") or []
+        if not any(e.get("python") is None for e in versions):
+            continue
+        if name in LEGACY_AEE_SCRIPT_NAMES:
+            continue
+        for entry in versions:
+            if isinstance(entry, dict) and entry.get("version"):
+                yield str(name), entry
+
+
+def load_package_index(manifest_path: str | Path | None) -> Dict[Tuple[str, str], str]:
+    """``(name, version) → package_sha256``，只收未 retired 的条目（供 verify/presence 等只读消费）。"""
+    index: Dict[Tuple[str, str], str] = {}
+    for name, entry in script_entries(load_manifest(manifest_path)):
+        if entry.get("retired"):
+            continue
+        sha = entry.get("package_sha256")
+        if isinstance(sha, str) and len(sha) == 64:
+            index[(name, str(entry.get("version")))] = sha
     return index
 
 
-def _backfill_package_sha(row: Script, expected: str | None, result: ScriptScanResult, now: datetime) -> None:
-    """ADR-0051 D3：manifest 有登记且行上为空 → 回填；不等 → 记 package_conflicts、不改写。"""
-    if expected is None:
-        return
-    if row.package_sha256 is None:
-        row.package_sha256 = expected
-        row.updated_at = now
-        result.package_backfilled += 1
-    elif row.package_sha256 != expected:
-        result.package_conflicts.append({
-            "name": row.name, "version": row.version,
-            "db_sha256": row.package_sha256, "manifest_sha256": expected,
-        })
+def _member_ok(ti: tarfile.TarInfo) -> bool:
+    """包成员安全判据（与 ``backend.agent.tool_cache._member_rejection`` 同口径）。"""
+    name = ti.name
+    if name.startswith("/") or ".." in Path(name).parts:
+        return False
+    if ti.issym() or ti.islnk() or ti.isdev():
+        return False
+    return ti.isfile() or ti.isdir()
 
 
-def scan_script_root(
+@dataclass
+class PackageFacts:
+    entry_name: str
+    script_type: str
+    content_sha256: str
+    support_files_manifest: dict[str, str]
+    capabilities: list[str]
+
+
+def read_package_facts(tarball: Path, expected_sha: str, entry_name: str) -> tuple[Optional[PackageFacts], Optional[str]]:
+    """打开站点 tarball：整包 sha 核验 → 解到临时目录 → 取入口/伴随/能力。返回 ``(facts, error)``。"""
+    try:
+        blob = tarball.read_bytes()
+    except OSError:
+        return None, "package_missing"
+    actual = hashlib.sha256(blob).hexdigest()
+    if actual != expected_sha:
+        return None, "package_sha_mismatch"
+    with tempfile.TemporaryDirectory(prefix="stp-script-sync-") as tmp:
+        root = Path(tmp)
+        try:
+            with tarfile.open(tarball, "r:gz") as tar:
+                members = [m for m in tar.getmembers() if _member_ok(m)]
+                tar.extractall(path=root, members=members)
+        except (tarfile.TarError, OSError):
+            return None, "package_unreadable"
+        entry = root / entry_name
+        if not entry.is_file() or detect_script_type(entry) is None:
+            return None, "package_entry_missing"
+        return PackageFacts(
+            entry_name=entry_name,
+            script_type=detect_script_type(entry) or "python",
+            content_sha256=sha256_file(entry),
+            support_files_manifest=support_files_manifest(root, entry),
+            capabilities=read_capabilities(root),
+        ), None
+
+
+def default_packages_root() -> Optional[Path]:
+    raw = (os.getenv("STP_PACKAGES_ROOT") or "").strip()
+    if raw:
+        return Path(raw)
+    nfs = (os.getenv("STP_AEE_NFS_ROOT") or "").strip()
+    return Path(nfs) / "packages" if nfs else None
+
+
+def sync_scripts_from_manifest(
     db: Session,
-    root: str | Path,
+    manifest_path: str | Path | None,
+    packages_root: str | Path | None,
     runtime_root: str | None = None,
     *,
     force_rebaseline: bool = False,
-    allow_deactivate: bool = False,
-    manifest_path: str | Path | None | object = _MANIFEST_DEFAULT,
 ) -> ScriptScanResult:
-    """Scan ``root`` and reconcile the ``script`` table.
-
-    Normal mode implements the ADR-0020 contract: a version whose on-disk
-    sha256 no longer matches the stored one is reported under ``conflicts``
-    and the row is left untouched — publishing changed content requires a new
-    version directory.
-
-    ``is_active`` is scan-managed in one direction only: versions missing from
-    disk are deactivated, but a row deactivated while its directory is still
-    present (admin endpoint / seed migration) is never resurrected —
-    re-activation is an explicit operator action.
-
-    Because that direction is one-way, "missing from disk" is destructive when
-    ``root`` is a *working tree* rather than a release copy (生产上
-    ``STP_SCRIPT_ROOT`` 就是共享主工作树，分支切换窗口内跑一次 scan 即可反激活主线
-    版本）。因此反激活从 not 静默：明细落 ``deactivated_versions``（进响应与 scan
-    审计）并打一条 WARNING。见 #2386 与 runbook §1.4 的前置校验。
-
-    ``force_rebaseline=True`` is the explicit operator escape hatch for the
-    case where that contract has *already* been broken upstream (e.g. a
-    repo-wide mechanical rewrite edited published version directories in
-    place). It re-anchors ``content_sha256``/``nfs_path`` to what is on disk
-    and reports the affected versions under ``rebaselined``. This trades away
-    the "a given version always means the same bytes" guarantee, so callers
-    must gate it on admin auth and on there being no in-flight PlanRun.
-    """
-    root_path = Path(root).resolve()
-    if not root_path.exists() or not root_path.is_dir():
-        raise FileNotFoundError(f"script root not found: {root_path}")
-    if manifest_path is _MANIFEST_DEFAULT:
-        manifest_path = _DEFAULT_MANIFEST_PATH if _DEFAULT_MANIFEST_PATH.is_file() else None
-    package_index = load_package_index(manifest_path)  # type: ignore[arg-type]
-
+    """按 ``tool_manifest.json`` + 站点包源同步 ``script`` 表（见模块 docstring）。"""
+    doc = load_manifest(manifest_path if manifest_path is not None else _DEFAULT_MANIFEST_PATH)
+    pk_root = Path(packages_root) if packages_root else default_packages_root()
+    if pk_root is None:
+        raise FileNotFoundError("packages root not configured (STP_PACKAGES_ROOT / STP_AEE_NFS_ROOT)")
     result = ScriptScanResult()
-    seen_keys: set[tuple[str, str]] = set()
     now = datetime.now(timezone.utc)
-
     existing_rows = db.query(Script).all()
     existing_by_key = {(row.name, row.version): row for row in existing_rows}
+    seen: set[tuple[str, str]] = set()
 
-    for category, name, version, entry, script_type in _iter_script_entries(root_path):
+    for name, entry in script_entries(doc):
+        version = str(entry["version"])
         key = (name, version)
-        seen_keys.add(key)
-        content_sha256 = sha256_file(entry)
-        support_manifest = support_files_manifest(entry.parent, entry)
-        capabilities = read_capabilities(entry.parent)
-        package_sha = package_index.get(key)
-        existing = existing_by_key.get(key)
+        seen.add(key)
+        sha = str(entry.get("package_sha256") or "")
+        row = existing_by_key.get(key)
 
-        if existing is None:
+        if entry.get("retired"):
+            if row is not None and row.is_active:
+                row.is_active = False
+                row.updated_at = now
+                result.deactivated += 1
+                result.deactivated_versions.append({"name": name, "version": version, "nfs_path": row.nfs_path or ""})
+            continue
+
+        tarball = pk_root / name / f"{version}.tar.gz"
+        facts, err = read_package_facts(tarball, sha, str(entry.get("script") or ""))
+        if facts is None:
+            target = result.package_missing if err == "package_missing" else result.package_conflicts
+            target.append({"name": name, "version": version, "reason": err or "unknown", "artifact": str(tarball)})
+            if row is not None:
+                result.skipped += 1
+            continue
+
+        nfs_path = _runtime_path(runtime_root, pk_root, name, version, facts.entry_name)
+        if row is None:
             db.add(Script(
-                name=name,
-                display_name=name,
-                category=category,
-                script_type=script_type,
-                version=version,
-                nfs_path=_runtime_path(root_path, entry, runtime_root),
-                content_sha256=content_sha256,
-                package_sha256=package_sha,
-                support_files_manifest=support_manifest,
-                capabilities=capabilities,
-                param_schema={},
-                default_params={},
-                is_active=True,
-                created_at=now,
-                updated_at=now,
+                name=name, display_name=name, category=_DEFAULT_CATEGORY,
+                script_type=facts.script_type, version=version, nfs_path=nfs_path,
+                content_sha256=facts.content_sha256, package_sha256=sha,
+                support_files_manifest=facts.support_files_manifest,
+                capabilities=facts.capabilities, param_schema={}, default_params={},
+                is_active=True, created_at=now, updated_at=now,
             ))
             result.created += 1
             continue
 
-        stored_manifest = dict(existing.support_files_manifest or {})
-        stored_capabilities = list(existing.capabilities or [])
-        entry_changed = existing.content_sha256 != content_sha256
-        support_changed = stored_manifest != support_manifest
-        capabilities_changed = stored_capabilities != capabilities
-        if entry_changed or support_changed or capabilities_changed:
-            if (
-                not force_rebaseline
-                and not entry_changed
-                and not stored_manifest
-                and support_manifest
-            ):
-                # First scan after support-manifest tracking shipped: anchor
-                # companion modules without treating on-disk state as a conflict.
-                existing.support_files_manifest = support_manifest
-                existing.updated_at = now
-                result.skipped += 1
-                continue
-            if (
-                not force_rebaseline
-                and not entry_changed
-                and not support_changed
-                and not stored_capabilities
-                and capabilities
-            ):
-                # First scan after capability metadata shipped: backfill
-                # silently instead of treating the new column as a conflict.
-                existing.capabilities = capabilities
-                existing.updated_at = now
-                result.skipped += 1
-                continue
+        entry_changed = row.content_sha256 != facts.content_sha256
+        support_changed = dict(row.support_files_manifest or {}) != facts.support_files_manifest
+        caps_changed = list(row.capabilities or []) != facts.capabilities
+        if entry_changed or support_changed or caps_changed:
             if not force_rebaseline:
                 result.conflicts.append({"name": name, "version": version})
                 continue
-            rebaseline_entry = {
-                "name": name,
-                "version": version,
-                "old_sha256": existing.content_sha256 or "",
-                "new_sha256": content_sha256,
-            }
-            if capabilities_changed:
-                rebaseline_entry["old_capabilities"] = stored_capabilities
-                rebaseline_entry["new_capabilities"] = capabilities
-            result.rebaselined.append(rebaseline_entry)
-            existing.content_sha256 = content_sha256
-            existing.support_files_manifest = support_manifest
-            existing.capabilities = capabilities
-            existing.nfs_path = _runtime_path(root_path, entry, runtime_root)
-            existing.is_active = True
-            # 重锚内容身份的同时重锚包身份（登记值即当前树的包，见 check_script_packages）。
-            existing.package_sha256 = package_sha
-            existing.updated_at = now
+            result.rebaselined.append({
+                "name": name, "version": version,
+                "old_sha256": row.content_sha256 or "", "new_sha256": facts.content_sha256,
+            })
+            row.content_sha256 = facts.content_sha256
+            row.support_files_manifest = facts.support_files_manifest
+            row.capabilities = facts.capabilities
+            row.package_sha256 = sha
+            row.nfs_path = nfs_path
+            row.is_active = True
+            row.updated_at = now
             continue
 
-        # 路径锚点跟随站点配置：内容身份（content_sha256）没变，但 runtime_root
-        # 变了（典型：首台 Agent 接入后补齐 STP_SCRIPT_RUNTIME_ROOT）时，nfs_path
-        # 必须跟着更新——它是 Agent 侧路径，控制面推送靠它做映射；停在旧值会让
-        # 每次派发都 `cannot map nfs_path`（238 实测：先装控制面、后接 Agent）。
-        expected_path = _runtime_path(root_path, entry, runtime_root)
-        if runtime_root and existing.nfs_path != expected_path:
-            existing.nfs_path = expected_path
-            existing.updated_at = now
-        # A row deactivated while its directory is still on disk stays
-        # deactivated — that state only ever comes from the admin deactivate
-        # endpoint or a seed migration, and silently resurrecting it defeats
-        # those decisions. Re-activation is an explicit operator action.
-        _backfill_package_sha(existing, package_sha, result, now)
+        if row.package_sha256 is None:
+            row.package_sha256 = sha
+            row.updated_at = now
+            result.package_backfilled += 1
+        elif row.package_sha256 != sha:
+            result.package_conflicts.append({
+                "name": name, "version": version, "reason": "db_package_sha_mismatch",
+                "db_sha256": row.package_sha256, "manifest_sha256": sha,
+            })
+        if runtime_root and row.nfs_path != nfs_path:
+            row.nfs_path = nfs_path
+            row.updated_at = now
         result.skipped += 1
 
-    # #2386：反激活的输入必须是**部署目标树**。被扫的子树与 `origin/main` 不一致
-    # （典型：共享主工作树被别的会话切到某个分支）时**拒绝反激活**——不做语义翻转
-    # （「盘上缺失就反激活」仍是缺省，ADR-0039 D1/D2 的退役轨道不变），只把闸门加在
-    # 「读了非权威树」这个真因上。要真的在非主线树上退役，显式传 `allow_deactivate`。
-    tree_matches = True if allow_deactivate else script_tree_matches_deploy_target(root)
-    guard_blocks = tree_matches is False
-    if guard_blocks:
-        logger.warning(
-            "script_scan_deactivation_guarded root=%s —— 被扫子树与 origin/main 不一致；"
-            "本轮只新增/刷新/报冲突，**不反激活**（列出的是本会反激活的版本）；"
-            "确要退役请切回 main 后重扫，或显式传 allow_deactivate=true",
-            root_path,
-        )
-
     for row in existing_rows:
-        key = (row.name, row.version)
-        if key in seen_keys:
+        if (row.name, row.version) in seen or not row.is_active or row.name in LEGACY_AEE_SCRIPT_NAMES:
             continue
-        if not row.is_active:
-            continue
-        if runtime_root:
-            if not _is_under_runtime_root(row.nfs_path, runtime_root):
-                continue
-        elif not _is_under_root(row.nfs_path, root_path):
-            continue
-        if guard_blocks:
-            result.deactivation_skipped_versions.append({
-                "name": row.name,
-                "version": row.version,
-                "nfs_path": row.nfs_path or "",
-            })
-            continue
-        row.is_active = False
-        row.updated_at = now
-        result.deactivated += 1
-        result.deactivated_versions.append({
-            "name": row.name,
-            "version": row.version,
-            "nfs_path": row.nfs_path or "",
-        })
+        result.unregistered_active.append({"name": row.name, "version": row.version})
 
     if result.deactivated_versions:
-        # 单向 + 静默 = 最难查的组合，所以这里必须显眼（WARNING）并把明细同时落到
-        # 响应与 scan 审计里（`record_audit(details=result.to_dict())`）。
         logger.warning(
-            "script_scan_deactivated count=%d versions=%s "
-            "hint=反激活是单向的（目录回来再扫不复活）；先确认 scan 的输入树就是目标 "
-            "revision（./tools/dev/check-deploy-source.sh），恢复需显式重激活",
-            result.deactivated,
-            [f"{e['name']}@{e['version']}" for e in result.deactivated_versions[:20]],
+            "script_sync_retired count=%d versions=%s（由 tool_manifest retired:true 显式驱动）",
+            result.deactivated, [f"{e['name']}@{e['version']}" for e in result.deactivated_versions[:20]],
         )
-
-    if result.deactivation_skipped_versions:
+    if result.package_missing:
         logger.warning(
-            "script_scan_deactivation_skipped count=%d versions=%s "
-            "reason=non_deploy_tree hint=切回 main 后重扫；确要退役再传 allow_deactivate=true",
-            len(result.deactivation_skipped_versions),
-            [f"{e['name']}@{e['version']}" for e in result.deactivation_skipped_versions[:20]],
+            "script_sync_package_missing count=%d（尚未 --publish 到站点包源）first=%s",
+            len(result.package_missing), result.package_missing[0],
         )
-
     db.commit()
-    try:
-        from backend.services.script_catalog_version import (
-            invalidate_script_catalog_version_cache,
-        )
-
-        invalidate_script_catalog_version_cache()
-    except Exception:
-        # #739 面② 分诊：版本缓存带 TTL（默认 30s，STP_SCRIPT_CATALOG_VERSION_CACHE_TTL），
-        # 失效失败会在 TTL 内自愈，且扫描结果已 commit——不因缓存层失败反过来报扫描失败。
-        pass
     return result

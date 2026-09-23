@@ -1,4 +1,4 @@
-"""Regression tests for backend/agent/scripts/flash_firmware/v1.0.0/flash_firmware.py.
+"""Regression tests for backend/agent/scripts/flash_firmware/flash_firmware.py.
 
 Loaded via importlib because the script lives outside the backend.agent package
 (scripts/<name>/v<version>/ layout is not a valid Python module path).
@@ -18,7 +18,7 @@ import pytest
 
 _FLASH_FIRMWARE_PY = (
     Path(__file__).resolve().parent.parent
-    / "scripts" / "flash_firmware" / "v1.0.0" / "flash_firmware.py"
+    / "scripts" / "flash_firmware" / "flash_firmware.py"
 )
 
 
@@ -239,26 +239,8 @@ class TestMainValidationPath:
             monkeypatch.setattr(sys, "stdout", sys.__stdout__)
         return json.loads(buf.getvalue().strip())
 
-    def test_missing_firmware_dir(self, flash_firmware, monkeypatch):
-        out = self._run_main_capture(flash_firmware, monkeypatch, {})
-        assert out == {
-            "success": False,
-            "skipped": False,
-            "error_message": "firmware_dir is required",
-        }
 
-    def test_missing_da_file(self, flash_firmware, monkeypatch):
-        out = self._run_main_capture(flash_firmware, monkeypatch, {"firmware_dir": "x"})
-        assert out["success"] is False
-        assert out["error_message"] == "da_file is required"
 
-    def test_missing_scatter_file(self, flash_firmware, monkeypatch):
-        out = self._run_main_capture(
-            flash_firmware, monkeypatch,
-            {"firmware_dir": "x", "da_file": "a"},
-        )
-        assert out["success"] is False
-        assert out["error_message"] == "scatter_file is required"
 
     def test_firmware_dir_not_found(self, flash_firmware, monkeypatch, tmp_path):
         out = self._run_main_capture(

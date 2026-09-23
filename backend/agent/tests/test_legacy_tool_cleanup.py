@@ -34,8 +34,7 @@ _RETIRED_TERM_ANCHORS = {
     "backend/agent/pipeline_engine.py": "class PipelineEngine",
     "backend/agent/install_agent.sh": "echo_info() {",
     "backend/agent/DEPLOY.md": "# Agent 服务部署指南",
-    "backend/agent/scripts/monkey_launch/v1.0.0/monkey_launch.py": "def _resolve_aimonkey_dir",
-    "backend/agent/scripts/monkey_launch/v2.0.0/monkey_launch.py": "def _ps_grep",
+    "backend/agent/scripts/monkey_launch/monkey_launch.py": "def _ps_grep",  # 族树（ADR-0051 Phase 3：v1.0.0/v2.0.0 两条并入一棵树）
 }
 _WATCHER_PLAN_REL = "docs/archive/plans/watcher-consolidate-aee-2026-05-27.md"
 _WATCHER_PLAN_ANCHOR = "# Watcher 收编 scan_aee / export_mobilelogs 方案"
@@ -229,27 +228,5 @@ def test_agent_runtime_imports_without_backend_package():
     assert proc.returncode == 0, proc.stderr
 
 
-def test_monkey_launch_resolves_aimonkey_from_env_resource_root(tmp_path, monkeypatch):
-    resource_root = tmp_path / "resources" / "aimonkey"
-    aimonkey_dir = resource_root / "AIMonkeyTest_20260317"
-    aimonkey_dir.mkdir(parents=True)
-    (aimonkey_dir / "MonkeyTest.py").write_text("# test fixture\n", encoding="utf-8")
-    monkeypatch.setenv("AIMONKEY_RESOURCE_DIR", str(resource_root))
-
-    module = _load_monkey_launch("v1.0.0")
-    assert module._resolve_aimonkey_dir({}) == aimonkey_dir
 
 
-def test_monkey_launch_resolves_aimonkey_from_install_resource_root(tmp_path, monkeypatch):
-    import aimonkey_paths
-
-    install_root = tmp_path / "stability-test-agent"
-    agent_dir = install_root / "agent"
-    aimonkey_dir = agent_dir / "resources" / "aimonkey" / "AIMonkeyTest_20260317"
-    aimonkey_dir.mkdir(parents=True)
-    (aimonkey_dir / "MonkeyTest.py").write_text("# fixture\n", encoding="utf-8")
-    monkeypatch.delenv("AIMONKEY_RESOURCE_DIR", raising=False)
-
-    module = _load_monkey_launch("v1.0.0")
-    monkeypatch.setattr(aimonkey_paths, "AGENT_DIR", agent_dir)
-    assert module._resolve_aimonkey_dir({}) == aimonkey_dir

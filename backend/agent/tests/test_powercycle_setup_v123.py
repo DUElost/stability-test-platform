@@ -44,13 +44,13 @@ def _load(name: str, rel_path: str):
 
 @pytest.fixture(scope="module")
 def lib_v123():
-    return _load("powercycle_lib_v123", "powercycle_setup/v1.2.3/_lib.py")
+    return _load("powercycle_lib_v123", "powercycle_setup/_lib.py")
 
 
 @pytest.fixture(scope="module")
 def lib_v122():
     """对照锚点：v1.2.2 不可变，只读加载以钉住「两次调用一败一成即误删」的旧形态。"""
-    return _load("powercycle_lib_v122_anchor", "powercycle_setup/v1.2.2/_lib.py")
+    return _load("powercycle_lib_v122_anchor", "powercycle_setup/_lib.py")
 
 
 def _install_fake_adb(monkeypatch, mod, routes: list[tuple[str, tuple]]):
@@ -158,16 +158,3 @@ class TestV123SingleProbeEvidence:
         assert _rm_calls(calls) == []
 
 
-class TestV122AnchorInterleaving:
-    def test_anchor_v122_deletes_healthy_prefs_on_interleaving(self, lib_v122, monkeypatch):
-        """交错复现（issue 实测形态）：v1.2.2 里 cat rc=-1 + test -f present ⇒ rm。
-        若此锚点变绿（不再删），说明 v1.2.2 形态变了、本文件前提需重审。"""
-        monkeypatch.setattr(lib_v122, "is_root", lambda: True)
-        calls = _install_fake_adb(monkeypatch, lib_v122, [
-            (f"cat {_PREFS_PATH}", (-1, "", "timeout")),
-            ("if [ -f ", (0, "present", "")),
-        ])
-
-        lib_v122.repair_prefs_ownership()
-
-        assert len(_rm_calls(calls)) == 1, "锚点失效：v1.2.2 不再复现交错误删"

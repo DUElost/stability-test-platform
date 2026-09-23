@@ -25,7 +25,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TEMPLATES_DIR = REPO_ROOT / "backend/schemas/pipeline_templates"
-SCRIPTS_DIR = REPO_ROOT / "backend/agent/scripts"
+SCRIPTS_DIR = REPO_ROOT / "backend/agent/scripts"  # 族树（Phase 3 后无版本目录）
 
 # 全 16 族：模板里出现过的每个 `action: script:<name>`（#2998 扩面；名单由
 # `grep -h "script:" backend/schemas/pipeline_templates/*.json` 派生，新增
@@ -91,16 +91,19 @@ def _exception_lag_reason(version: str, reason: str, head: str) -> str | None:
     return None
 
 
+MANIFEST = REPO_ROOT / "tool_manifest.json"
+
+
 def _latest_on_disk(script_name: str) -> str:
+    """ADR-0051 Phase 3：「磁盘 head」= `tool_manifest.json` 里该族最新**未退役**条目（版本目录已退役）。"""
+    doc = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    entries = [e for e in doc["tools"][script_name]["versions"] if not e.get("retired")]
+    assert entries, f"no live manifest entries for {script_name}"
     versions = []
-    for path in (SCRIPTS_DIR / script_name).glob("v*"):
-        if not path.is_dir():
-            continue
-        parts = path.name[1:].split(".")
-        if not all(p.isdigit() for p in parts):
-            continue
-        versions.append((tuple(int(p) for p in parts), path.name[1:]))
-    assert versions, f"no version dirs under {script_name}"
+    for e in entries:
+        parts = str(e["version"]).split(".")
+        assert all(p.isdigit() for p in parts), e["version"]
+        versions.append((tuple(int(p) for p in parts), str(e["version"])))
     versions.sort()
     return versions[-1][1]
 
@@ -194,11 +197,16 @@ def test_exception_shape_predicate_has_teeth() -> None:
 
 
 def _version_dir_exists(script_name: str, version: str) -> bool:
-    return (SCRIPTS_DIR / script_name / f"v{version}").is_dir()
+    """ADR-0051 Phase 3：「版本真实存在」= tool_manifest.json 有该族该版本的**未退役**条目。"""
+    doc = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    tool = doc["tools"].get(script_name)
+    if not tool:
+        return False
+    return any(str(e.get("version")) == version and not e.get("retired") for e in tool["versions"])
 
 
 def test_every_pin_and_exception_resolves_to_a_real_version_dir() -> None:
-    """pin 与例外值都必须对应磁盘上**真实存在**的版本目录（#3109）。
+    """pin 与例外值都必须对应 manifest 里**真实登记**的版本（#3109；Phase 3 后版本目录已退役）。
 
     `_exception_lag_reason` 只比版本号大小（`0.0.1 < head` 即放行），所以一个不存在
     的版本号能被写进 EXCEPTIONS 而不报错；而模板 pin 一个不存在的版本会让该模板

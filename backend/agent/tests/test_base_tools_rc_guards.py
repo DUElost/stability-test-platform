@@ -62,7 +62,7 @@ def _prepare_clean_env(monkeypatch, mod, params, respond):
 
 
 def test_clean_env_uninstall_failure_reports_error(monkeypatch):
-    mod = _load("clean_env_v101", "clean_env/v1.0.1/clean_env.py")
+    mod = _load("clean_env_v101", "clean_env/clean_env.py")
     capture = _prepare_clean_env(
         monkeypatch,
         mod,
@@ -78,7 +78,7 @@ def test_clean_env_uninstall_failure_reports_error(monkeypatch):
 
 
 def test_clean_env_uninstall_not_installed_is_skipped(monkeypatch):
-    mod = _load("clean_env_v101_not_installed", "clean_env/v1.0.1/clean_env.py")
+    mod = _load("clean_env_v101_not_installed", "clean_env/clean_env.py")
     capture = _prepare_clean_env(
         monkeypatch,
         mod,
@@ -93,7 +93,7 @@ def test_clean_env_uninstall_not_installed_is_skipped(monkeypatch):
 
 
 def test_clean_env_uninstall_success_counts(monkeypatch):
-    mod = _load("clean_env_v101_success", "clean_env/v1.0.1/clean_env.py")
+    mod = _load("clean_env_v101_success", "clean_env/clean_env.py")
     capture = _prepare_clean_env(
         monkeypatch,
         mod,
@@ -108,7 +108,7 @@ def test_clean_env_uninstall_success_counts(monkeypatch):
 
 
 def test_clean_env_clear_logs_rc_failure_reports_error(monkeypatch):
-    mod = _load("clean_env_v101_logs", "clean_env/v1.0.1/clean_env.py")
+    mod = _load("clean_env_v101_logs", "clean_env/clean_env.py")
 
     def respond(cmd, timeout=30):
         if "rm -rf" in cmd:
@@ -143,7 +143,7 @@ def _prepare_fill_storage(monkeypatch, mod, params, respond):
 
 
 def test_fill_storage_dd_rc_failure_reports_error(monkeypatch):
-    mod = _load("fill_storage_v101_dd_fail", "fill_storage/v1.0.1/fill_storage.py")
+    mod = _load("fill_storage_v101_dd_fail", "fill_storage/fill_storage.py")
 
     def respond(cmd, timeout=30):
         if "df /data" in cmd:
@@ -160,28 +160,10 @@ def test_fill_storage_dd_rc_failure_reports_error(monkeypatch):
     assert "dd failed" in capture.last["error_message"]
 
 
-def test_fill_storage_df_below_target_reports_error(monkeypatch):
-    mod = _load("fill_storage_v101_df_low", "fill_storage/v1.0.1/fill_storage.py")
-    state = {"df_calls": 0}
-
-    def respond(cmd, timeout=30):
-        if "df /data" in cmd:
-            state["df_calls"] += 1
-            # 首次 10%（need > 0），回读仍 50% < target 90%——dd 退出码 0 但没写满
-            return _cp(0, _df_output(10_000 if state["df_calls"] == 1 else 50_000))
-        return _cp(0, "")
-
-    capture = _prepare_fill_storage(monkeypatch, mod, {"target_percentage": 90}, respond)
-
-    mod.main()
-
-    assert capture.last["success"] is False
-    assert "fill insufficient" in capture.last["error_message"]
-    assert capture.last["metrics"]["actual_pct"] == 50
 
 
 def test_fill_storage_success_reports_actual_pct(monkeypatch):
-    mod = _load("fill_storage_v101_ok", "fill_storage/v1.0.1/fill_storage.py")
+    mod = _load("fill_storage_v101_ok", "fill_storage/fill_storage.py")
     state = {"df_calls": 0}
 
     def respond(cmd, timeout=30):
@@ -236,7 +218,7 @@ def _prepare_push_resources(monkeypatch, mod, bundle, manifest, respond):
 
 
 def test_push_resources_unpack_rc_failure(monkeypatch, tmp_path):
-    mod = _load("push_resources_v101_unpack", "push_resources/v1.0.1/push_resources.py")
+    mod = _load("push_resources_v101_unpack", "push_resources/push_resources.py")
     bundle, manifest, _sha = _make_bundle(tmp_path)
 
     def respond(cmd, timeout=30):
@@ -253,7 +235,7 @@ def test_push_resources_unpack_rc_failure(monkeypatch, tmp_path):
 
 
 def test_push_resources_marker_mismatch(monkeypatch, tmp_path):
-    mod = _load("push_resources_v101_marker", "push_resources/v1.0.1/push_resources.py")
+    mod = _load("push_resources_v101_marker", "push_resources/push_resources.py")
     bundle, manifest, _sha = _make_bundle(tmp_path)
 
     def respond(cmd, timeout=30):
@@ -272,7 +254,7 @@ def test_push_resources_marker_mismatch(monkeypatch, tmp_path):
 
 
 def test_push_resources_success(monkeypatch, tmp_path):
-    mod = _load("push_resources_v101_ok", "push_resources/v1.0.1/push_resources.py")
+    mod = _load("push_resources_v101_ok", "push_resources/push_resources.py")
     bundle, manifest, sha = _make_bundle(tmp_path)
 
     def respond(cmd, timeout=30):
@@ -313,7 +295,7 @@ def test_fill_storage_v102_exact_target_is_not_a_false_failure(monkeypatch):
 
     这里按 dd 的真实行为构造：写入量 = blocks × block_size_kb，回读按实写量。
     """
-    mod = _load("fill_storage_v102_exact", "fill_storage/v1.0.2/fill_storage.py")
+    mod = _load("fill_storage_v102_exact", "fill_storage/fill_storage.py")
     total_kb = 119_473_921
     target_used_kb = total_kb * 60 // 100
     state = {"df_calls": 0, "dd_blocks": 0}
@@ -343,7 +325,7 @@ def test_fill_storage_v102_exact_target_is_not_a_false_failure(monkeypatch):
 
 def test_fill_storage_v102_still_detects_real_shortfall(monkeypatch):
     """对照：核验放宽后仍须抓住真实缺口（dd 退出码 0 但没写满）。"""
-    mod = _load("fill_storage_v102_short", "fill_storage/v1.0.2/fill_storage.py")
+    mod = _load("fill_storage_v102_short", "fill_storage/fill_storage.py")
     total_kb = 119_473_921
     target_used_kb = total_kb * 60 // 100
     state = {"df_calls": 0}

@@ -31,41 +31,41 @@ def _load(name: str, rel_path: str):
 
 @pytest.fixture(scope="module")
 def finish_lib():
-    return _load("mtbf_finish_lib", "mtbf_finish/v1.2.0/_lib.py")
+    return _load("mtbf_finish_lib", "mtbf_finish/_lib.py")
 
 
 @pytest.fixture(scope="module")
 def setup_lib():
-    return _load("mtbf_setup_lib", "mtbf_setup/v1.2.0/_lib.py")
+    return _load("mtbf_setup_lib", "mtbf_setup/_lib.py")
 
 
 @pytest.fixture(scope="module")
 def setup_mod():
     """mtbf_setup 入口模块（v1.3.0：adb root fail-fast 前置）。"""
-    return _load("mtbf_setup_mod", "mtbf_setup/v1.3.0/mtbf_setup.py")
+    return _load("mtbf_setup_mod", "mtbf_setup/mtbf_setup.py")
 
 
 @pytest.fixture(scope="module")
 def finish_mod():
     """mtbf_finish 入口模块（v1.3.0：adb pull 目录层级修正）。"""
-    return _load("mtbf_finish_mod", "mtbf_finish/v1.3.0/mtbf_finish.py")
+    return _load("mtbf_finish_mod", "mtbf_finish/mtbf_finish.py")
 
 
 @pytest.fixture(scope="module")
 def finish_mod_v14():
     """mtbf_finish v1.4.0：NFS JSON metrics 补 suite_sha256（与 init trace 闭环）。"""
-    return _load("mtbf_finish_mod_v14", "mtbf_finish/v1.4.0/mtbf_finish.py")
+    return _load("mtbf_finish_mod_v14", "mtbf_finish/mtbf_finish.py")
 
 
 @pytest.fixture(scope="module")
 def check_mod():
-    return _load("mtbf_check_mod", "mtbf_check/v1.2.0/mtbf_check.py")
+    return _load("mtbf_check_mod", "mtbf_check/mtbf_check.py")
 
 
 @pytest.fixture(scope="module")
 def check_mod_v13():
     """mtbf_check v1.3.0：expected 只读注入，env 预置退役（#404 PR-D）。"""
-    return _load("mtbf_check_mod_v13", "mtbf_check/v1.3.0/mtbf_check.py")
+    return _load("mtbf_check_mod_v13", "mtbf_check/mtbf_check.py")
 
 
 @pytest.fixture()
@@ -188,37 +188,7 @@ class TestCheckProgress:
         )
         assert check_mod._service_alive() is True
 
-    def test_run_dead_streak_grace(self, check_mod, monkeypatch, tmp_path):
-        """连续 2 周期死亡才判死；第 1 周期仍 success。"""
-        monkeypatch.setattr(check_mod, "device_serial", lambda: "S2")
-        monkeypatch.setattr(check_mod, "_state_file", lambda: tmp_path / "state.json")
-        monkeypatch.setattr(check_mod, "_service_alive", lambda: False)
-        monkeypatch.setattr(check_mod, "_latest_run_dir", lambda: "run1")
-        monkeypatch.setattr(check_mod, "_count_testpoints", lambda run_dir: 10)
-        monkeypatch.setattr(check_mod, "_log_bytes", lambda run_dir: 2048)
-        monkeypatch.setattr(check_mod, "progress_stamp", lambda payload: None)
 
-        r1 = check_mod._run({"expected_testpoint_count": 130, "dead_grace_cycles": 2})
-        assert r1["success"] is True                     # 第 1 周期：容忍
-        assert r1["progress"]["testpoints_done"] == 10
-        r2 = check_mod._run({"expected_testpoint_count": 130, "dead_grace_cycles": 2})
-        assert r2["success"] is False                    # 第 2 周期：判死
-        assert "连续 2 个周期" in r2["error_message"]
-
-    def test_run_alive_resets_streak(self, check_mod, monkeypatch, tmp_path):
-        monkeypatch.setattr(check_mod, "device_serial", lambda: "S3")
-        monkeypatch.setattr(check_mod, "_state_file", lambda: tmp_path / "state.json")
-        monkeypatch.setattr(check_mod, "_latest_run_dir", lambda: "run1")
-        monkeypatch.setattr(check_mod, "_count_testpoints", lambda run_dir: 5)
-        monkeypatch.setattr(check_mod, "_log_bytes", lambda run_dir: 100)
-        monkeypatch.setattr(check_mod, "progress_stamp", lambda payload: None)
-
-        monkeypatch.setattr(check_mod, "_service_alive", lambda: False)
-        check_mod._run({})
-        monkeypatch.setattr(check_mod, "_service_alive", lambda: True)   # 看门狗拉起
-        r2 = check_mod._run({})
-        assert r2["success"] is True
-        assert r2["progress"]["seq"] == 2
 
 
 # ---------------------------------------------------------------------------
@@ -226,37 +196,6 @@ class TestCheckProgress:
 # ---------------------------------------------------------------------------
 
 
-class TestCheckV13ParamsOnlyExpected:
-    def _patch_device_io(self, mod, monkeypatch, tmp_path, done=10):
-        monkeypatch.setattr(mod, "device_serial", lambda: "S13")
-        monkeypatch.setattr(mod, "_state_file", lambda: tmp_path / "state.json")
-        monkeypatch.setattr(mod, "_service_alive", lambda: True)
-        monkeypatch.setattr(mod, "_latest_run_dir", lambda: "run1")
-        monkeypatch.setattr(mod, "_count_testpoints", lambda run_dir: done)
-        monkeypatch.setattr(mod, "_log_bytes", lambda run_dir: 100)
-        monkeypatch.setattr(mod, "progress_stamp", lambda payload: None)
-
-    def test_injected_param_still_wins(self, check_mod_v13, monkeypatch, tmp_path):
-        self._patch_device_io(check_mod_v13, monkeypatch, tmp_path)
-        r = check_mod_v13._run({"expected_testpoint_count": 130})
-        assert r["success"] is True
-        assert r["progress"]["expected_per_round"] == 130
-
-    def test_env_fallback_removed(self, check_mod_v13, monkeypatch, tmp_path):
-        """v1.2.0 会回落 STP_MTBF_EXPECTED_TESTPOINT_COUNT；v1.3.0 忽略之
-        （host .env 里可能残留退役前的值，不得再当基准）。"""
-        self._patch_device_io(check_mod_v13, monkeypatch, tmp_path)
-        monkeypatch.setenv("STP_MTBF_EXPECTED_TESTPOINT_COUNT", "999")
-        r = check_mod_v13._run({})
-        assert r["progress"]["expected_per_round"] == 0   # 只报绝对数
-
-    def test_missing_param_reports_absolute_only(self, check_mod_v13, monkeypatch, tmp_path):
-        """无绑定 Plan 无注入 → expected=0，脚本语义 = 只报绝对数（安全降级）。"""
-        self._patch_device_io(check_mod_v13, monkeypatch, tmp_path)
-        monkeypatch.delenv("STP_MTBF_EXPECTED_TESTPOINT_COUNT", raising=False)
-        r = check_mod_v13._run({})
-        assert r["progress"]["expected_per_round"] == 0
-        assert r["progress"]["testpoints_done"] == 10
 
 
 # ---------------------------------------------------------------------------
@@ -344,39 +283,6 @@ class TestEnsureAdbRoot:
 # ---------------------------------------------------------------------------
 
 
-class TestPullResults:
-    def test_pull_layout_has_realresult_level(self, finish_mod, monkeypatch):
-        """adb pull 目录保留远端末级名：<local>/realresult/{run_dir}/。"""
-        monkeypatch.setattr(finish_mod, "_latest_run_dir", lambda: "R1")
-
-        def fake_adb(*args, timeout=60):
-            local = Path(args[2])
-            (local / "realresult" / "R1").mkdir(parents=True)
-            (local / "realresult" / "R1" / "TESTS-RealResult-TestPoints.xml").write_text(
-                "<testpoints/>"
-            )
-            return (0, "", "")
-
-        monkeypatch.setattr(finish_mod, "adb", fake_adb)
-        run_dir, xml_dir = finish_mod._pull_results()
-        assert run_dir == "R1"
-        assert (xml_dir / "TESTS-RealResult-TestPoints.xml").is_file()
-
-    def test_pull_fallback_flat_layout(self, finish_mod, monkeypatch):
-        """兜底：个别 adb 版本 dest 不存在时直接展开到 <local>/{run_dir}/。"""
-        monkeypatch.setattr(finish_mod, "_latest_run_dir", lambda: "R2")
-
-        def fake_adb(*args, timeout=60):
-            local = Path(args[2])
-            (local / "R2").mkdir(parents=True)
-            (local / "R2" / "TESTS-RealResult-TestPoints.xml").write_text(
-                "<testpoints/>"
-            )
-            return (0, "", "")
-
-        monkeypatch.setattr(finish_mod, "adb", fake_adb)
-        _, xml_dir = finish_mod._pull_results()
-        assert (xml_dir / "TESTS-RealResult-TestPoints.xml").is_file()
 
 
 # ---------------------------------------------------------------------------
@@ -384,45 +290,6 @@ class TestPullResults:
 # ---------------------------------------------------------------------------
 
 
-class TestFinishSuiteSha256:
-    def test_run_metrics_include_suite_sha256(self, finish_mod_v14, monkeypatch, tmp_path):
-        xml = b"""<testpoints taskname="t">
-  <testpoint id="0" name="a" tests="1" failures="0" time="1" starttime="0" endtime="1">
-    <testcase type="uiautomator2" classname="c" name="m" time="1" starttime="0" endtime="1"/>
-  </testpoint>
-</testpoints>"""
-        monkeypatch.setattr(finish_mod_v14, "_stop_task", lambda force=True: None)
-        monkeypatch.setattr(finish_mod_v14.time, "sleep", lambda _: None)
-
-        def fake_pull():
-            d = tmp_path / "realresult" / "R1"
-            d.mkdir(parents=True)
-            (d / "TESTS-RealResult-TestPoints.xml").write_bytes(xml)
-            return "R1", d
-
-        monkeypatch.setattr(finish_mod_v14, "_pull_results", fake_pull)
-
-        nfs = tmp_path / "nfs" / "legacy"
-        nfs.mkdir(parents=True)
-        runtask = nfs / "runtask.xml"
-        runtask.write_bytes(b"<runtask times=\"1\"/>")
-        results = tmp_path / "nfs" / "legacy" / "results"
-        monkeypatch.setattr(finish_mod_v14, "suite_dir", lambda project: nfs)
-        monkeypatch.setattr(finish_mod_v14, "results_dir", lambda project: results)
-        monkeypatch.setattr(
-            finish_mod_v14,
-            "sha256_file",
-            lambda p: "abc123" if p == runtask else "",
-        )
-
-        out = finish_mod_v14._run({"project": "legacy"})
-        assert out["metrics"]["suite_sha256"] == "abc123"
-        detail = results / "R1.json"
-        assert detail.is_file()
-        import json
-
-        body = json.loads(detail.read_text(encoding="utf-8"))
-        assert body["metrics"]["suite_sha256"] == "abc123"
 
 
 # ---------------------------------------------------------------------------

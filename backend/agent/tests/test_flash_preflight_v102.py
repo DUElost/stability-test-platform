@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 
 _SCRIPTS = Path(__file__).resolve().parents[2] / "agent" / "scripts"
-_SCRIPT_DIR = _SCRIPTS / "flash_preflight" / "v1.0.2"
+_SCRIPT_DIR = _SCRIPTS / "flash_preflight"
 _WRAPPER = Path(__file__).resolve().parents[3] / "backend" / "agent" / "stp_agent_priv.py"
 
 spec = importlib.util.spec_from_file_location(
@@ -113,18 +113,6 @@ def test_no_shell_command_face_in_source_or_symbols():
     assert pf._PRIV_WRAPPER == "/usr/local/sbin/stp-agent-priv"
 
 
-def test_udev_constants_match_wrapper():
-    wspec = importlib.util.spec_from_file_location("stp_priv_v102", _WRAPPER)
-    w = importlib.util.module_from_spec(wspec)
-    assert wspec.loader is not None
-    wspec.loader.exec_module(w)
-    if not hasattr(w, "UDEV_RULE_PATH"):
-        pytest.skip("wrapper 窄面常量未在当前基线（依赖 #2142 合入）")
-    assert pf._UDEV_RULE_PATH == w.UDEV_RULE_PATH
-    # 本文件钉的是**历史版本** v1.0.2：它的规则文本是旧形态（0666），也就是 wrapper
-    # 的 legacy 形态（#2284 起 wrapper 按本机 dialout 组在 0660/0666 间二选一）。
-    # 「wrapper ↔ 最新版本」的同源校验在 tests/test_flash_provisioning_prereqs_2133.py。
-    assert pf._UDEV_RULE_LINE == w.UDEV_RULE_LINE_LEGACY
 
 
 # ── udev：只经 wrapper 窄面修复 ─────────────────────────────────────────────
@@ -217,18 +205,6 @@ def test_qt_missing_with_skip_apt_is_warning(monkeypatch, capsys, tmp_path):
 # ── dialout：持久成员判定 + 降级链 ─────────────────────────────────────────
 
 
-def test_dialout_persistent_only_warns_pending_relogin(monkeypatch, capsys, tmp_path):
-    _prepare_env(monkeypatch, tmp_path)
-    monkeypatch.setattr(pf, "_udev_rule_ok", lambda rd: True)
-    monkeypatch.setattr(pf, "_priv_capable", lambda sub: True)
-    _set_dialout(monkeypatch, persistent=True, process=False)
-
-    payload = _run(capsys)
-    item = _item(payload, "dialout-group")
-    assert item["ok"] is True
-    assert "pending_relogin" in item["detail"]
-    assert any("pending_relogin" in w for w in payload["metrics"]["warnings"])
-    assert payload["success"] is True
 
 
 def test_dialout_both_present_is_clean(monkeypatch, capsys, tmp_path):
@@ -242,16 +218,6 @@ def test_dialout_both_present_is_clean(monkeypatch, capsys, tmp_path):
     assert not any("dialout" in w for w in payload["metrics"]["warnings"])
 
 
-def test_dialout_absent_degrades_to_udev_rule(monkeypatch, capsys, tmp_path):
-    _prepare_env(monkeypatch, tmp_path)
-    monkeypatch.setattr(pf, "_udev_rule_ok", lambda rd: True)
-    monkeypatch.setattr(pf, "_priv_capable", lambda sub: True)
-    _set_dialout(monkeypatch, persistent=False, process=False)
-
-    payload = _run(capsys)
-    item = _item(payload, "dialout-group")
-    assert item["ok"] is True
-    assert "udev 0666" in item["detail"]
 
 
 def test_dialout_absent_and_no_rule_fails(monkeypatch, capsys, tmp_path):

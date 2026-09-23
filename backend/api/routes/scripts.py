@@ -26,7 +26,7 @@ from backend.models.enums import PASSING_PLAN_RUN_STATUSES, PlanRunStatus
 from backend.models.plan import PlanStep
 from backend.models.plan_run import PlanRun
 from backend.models.script import Script
-from backend.services.script_catalog import scan_script_root
+from backend.services.script_catalog import default_packages_root, sync_scripts_from_manifest
 from backend.services.script_catalog_version import invalidate_script_catalog_version_cache
 
 logger = logging.getLogger(__name__)
@@ -147,19 +147,10 @@ class ScriptOut(BaseModel):
     updated_at: datetime
 
 
-def _script_root() -> str:
-    explicit = (os.getenv("STP_SCRIPT_ROOT") or "").strip()
-    if explicit:
-        return explicit
-    raise_api_http_error(
-        status_code=503,
-        code="SCRIPT_ROOT_NOT_CONFIGURED",
-        message=(
-            "STP_SCRIPT_ROOT is not set; script catalog refuses to default to "
-            "STP_NFS_ROOT/scripts (that key is 中心存储, not the script tree)"
-        ),
-    )
-    raise AssertionError("unreachable")
+def _manifest_path() -> str | None:
+    """ADR-0051：Git 唯一事实源。`STP_TOOL_MANIFEST` 可覆盖（测试/站点 bundle 根），缺省仓根。"""
+    explicit = (os.getenv("STP_TOOL_MANIFEST") or "").strip()
+    return explicit or None
 
 
 def _script_runtime_root() -> str | None:
@@ -303,25 +294,20 @@ def scan_scripts(
     force_rebaseline: bool = Query(
         False,
         description=(
-            "Re-anchor stored content_sha256 to the on-disk bytes for versions "
-            "reported as conflicts. Escape hatch for published version "
-            "directories that were edited in place; refused while any PlanRun "
-            "is in flight."
-        ),
-    ),
-    allow_deactivate: bool = Query(
-        False,
-        description=(
-            "#2386：缺省下，当被扫的脚本子树与部署目标（origin/main）不一致时，"
-            "本轮不反激活任何版本（只新增/刷新/报冲突），把「本会反激活」的清单放进 "
-            "deactivation_skipped_versions 并在审计里留痕。确要在非主线树上退役时显式传 "
-            "true —— 反激活是单向的（目录回来再扫不复活），故这个开关必须由人显式给。"
+            "Re-anchor stored content_sha256 / support manifest / capabilities to the "
+            "published package for versions reported as conflicts. Packages are immutable, "
+            "so a conflict means the DB row drifted; refused while any PlanRun is in flight."
         ),
     ),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin),
     request: Request = None,
 ):
+    """ADR-0051 Phase 3：注册输入 = `tool_manifest.json`（Git 唯一事实源）+ 站点包源 `packages/`。
+
+    不再扫描任何检出目录（ADR-0046 病根已随版本目录退役）；退役由 manifest `retired:true`
+    显式驱动；活跃行不在 manifest 只报告 `unregistered_active`，绝不反激活。
+    """
     if force_rebaseline:
         in_flight = (
             db.query(PlanRun.id)
@@ -339,18 +325,18 @@ def scan_scripts(
                 ),
             )
     try:
-        result = scan_script_root(
+        result = sync_scripts_from_manifest(
             db,
-            _script_root(),
+            _manifest_path(),
+            default_packages_root(),
             _script_runtime_root(),
             force_rebaseline=force_rebaseline,
-            allow_deactivate=allow_deactivate,
         )
-    except FileNotFoundError:
+    except FileNotFoundError as exc:
         raise_api_http_error(
-            status_code=400,
-            code="SCRIPT_ROOT_NOT_FOUND",
-            message="script root not found or unreadable",
+            status_code=503,
+            code="PACKAGES_ROOT_NOT_CONFIGURED",
+            message=str(exc),
         )
     record_audit(
         db,

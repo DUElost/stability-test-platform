@@ -13,8 +13,8 @@ import pytest
 _SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 
 CASES = [
-    ("powercycle_finish", "powercycle_finish/v1.0.5/powercycle_finish.py", "powercycle-results-"),
-    ("sleep_finish", "sleep_finish/v1.0.3/sleep_finish.py", "sleep-results-"),
+    ("powercycle_finish", "powercycle_finish/powercycle_finish.py", "powercycle-results-"),
+    ("sleep_finish", "sleep_finish/sleep_finish.py", "sleep-results-"),
 ]
 
 

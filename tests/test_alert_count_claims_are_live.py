@@ -111,19 +111,20 @@ def live_counts() -> tuple[int, int, int]:
 
 
 def latest_script_version(script_name: str) -> str | None:
-    """磁盘真值：`backend/agent/scripts/<name>/` 下最大版本目录（vX.Y.Z）。"""
-    root = REPO_ROOT / SCRIPTS_DIR / script_name
-    if not root.is_dir():
+    """真值：`tool_manifest.json` 里该族最新**未退役**条目（ADR-0051 Phase 3：版本目录已退役）。"""
+    import json
+
+    doc = json.loads((REPO_ROOT / "tool_manifest.json").read_text(encoding="utf-8"))
+    tool = doc.get("tools", {}).get(script_name)
+    if not tool:
         return None
     versions = [
-        part.name[1:]
-        for part in root.iterdir()
-        if part.is_dir() and re.fullmatch(r"v\d+\.\d+\.\d+", part.name)
+        str(e["version"]) for e in tool["versions"]
+        if not e.get("retired") and re.fullmatch(r"\d+\.\d+\.\d+", str(e.get("version", "")))
     ]
     if not versions:
         return None
-    best = max(versions, key=lambda v: tuple(int(x) for x in v.split(".")))
-    return best
+    return max(versions, key=lambda v: tuple(int(x) for x in v.split(".")))
 
 
 def violations_in_line(line: str, counts: tuple[int, int, int]) -> list[str]:

@@ -54,6 +54,10 @@ _INVENTORY_PATH = Path(__file__).resolve().parent.parent.parent / "tools" / "ans
 # 的 schema 经 extra_files 独立附加（walk 排除不影响 arcname 附加）。
 _TAR_EXCLUDES = {
     "__pycache__",
+    # ADR-0051 Phase 3：脚本不再随 agent-code 下发——Agent 按 script.package_sha256 从站点
+    # packages/ 拉包到 tools_cache（STP_SCRIPT_PACKAGES=strict）。主机上残留的旧版本目录随
+    # 本轮 rsync --delete-excluded 清掉。
+    "scripts",
     "tests",
     ".env.example",
     "install_agent.sh",

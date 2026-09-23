@@ -38,18 +38,18 @@ def _load(name: str, rel_path: str):
 
 @pytest.fixture(scope="module")
 def setup_v124():
-    return _load("powercycle_setup_v124", "powercycle_setup/v1.2.4/powercycle_setup.py")
+    return _load("powercycle_setup_v124", "powercycle_setup/powercycle_setup.py")
 
 
 @pytest.fixture(scope="module")
 def lib_v124():
-    return _load("powercycle_lib_v124", "powercycle_setup/v1.2.4/_lib.py")
+    return _load("powercycle_lib_v124", "powercycle_setup/_lib.py")
 
 
 @pytest.fixture(scope="module")
 def lib_v123_anchor():
     """对照锚点：v1.2.3 不可变——uid 分支仍是「裸调用 + 无证据」的旧形态。"""
-    return _load("powercycle_lib_v123_anchor", "powercycle_setup/v1.2.3/_lib.py")
+    return _load("powercycle_lib_v123_anchor", "powercycle_setup/_lib.py")
 
 
 def _patch_clock(monkeypatch, mod, *, start: float = 1_000_000.0):
@@ -207,16 +207,3 @@ class TestV124UidParse:
         assert "dumpsys=" in msg
 
 
-class TestV123Anchor:
-    def test_v123_uid_failure_has_no_evidence_fields(self, lib_v123_anchor, monkeypatch):
-        """锚点：v1.2.3 的 uid 分支一次调用即抛、报文无 attempts/rc/dumpsys（v1.2.4 才补）。"""
-        monkeypatch.setattr(
-            lib_v123_anchor, "adb_shell", lambda *args, timeout=30: "nothing useful"
-        )
-
-        with pytest.raises(RuntimeError) as exc:
-            lib_v123_anchor.get_app_uid()
-
-        msg = str(exc.value)
-        assert "无法解析" in msg
-        assert "attempts=" not in msg and "dumpsys=" not in msg

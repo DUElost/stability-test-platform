@@ -70,7 +70,7 @@ def _prep_mt(monkeypatch, mod, tmp_path, *, ready_rc=0, pull_rcs=None):
 
 
 def test_monkey_teardown_unreachable_device_fails_precheck(monkeypatch, tmp_path):
-    mod = _load("monkey_teardown_v101_precheck", "monkey_teardown/v1.0.1/monkey_teardown.py")
+    mod = _load("monkey_teardown_v101_precheck", "monkey_teardown/monkey_teardown.py")
     capture = _prep_mt(monkeypatch, mod, tmp_path, ready_rc=1)
 
     mod.main()
@@ -80,7 +80,7 @@ def test_monkey_teardown_unreachable_device_fails_precheck(monkeypatch, tmp_path
 
 
 def test_monkey_teardown_pull_failure_reports_error_and_skips_optional(monkeypatch, tmp_path):
-    mod = _load("monkey_teardown_v101_pull", "monkey_teardown/v1.0.1/monkey_teardown.py")
+    mod = _load("monkey_teardown_v101_pull", "monkey_teardown/monkey_teardown.py")
     capture = _prep_mt(
         monkeypatch,
         mod,
@@ -97,7 +97,7 @@ def test_monkey_teardown_pull_failure_reports_error_and_skips_optional(monkeypat
 
 
 def test_monkey_teardown_success_counts_pulled(monkeypatch, tmp_path):
-    mod = _load("monkey_teardown_v101_ok", "monkey_teardown/v1.0.1/monkey_teardown.py")
+    mod = _load("monkey_teardown_v101_ok", "monkey_teardown/monkey_teardown.py")
     capture = _prep_mt(monkeypatch, mod, tmp_path)
 
     mod.main()
@@ -107,7 +107,7 @@ def test_monkey_teardown_success_counts_pulled(monkeypatch, tmp_path):
 
 
 def test_monkey_teardown_ps_failure_recorded(monkeypatch):
-    mod = _load("monkey_teardown_v101_ps", "monkey_teardown/v1.0.1/monkey_teardown.py")
+    mod = _load("monkey_teardown_v101_ps", "monkey_teardown/monkey_teardown.py")
     monkeypatch.setattr(mod, "adb_shell_quiet", lambda cmd, timeout=10: _cp(0))
     monkeypatch.setattr(
         mod.subprocess, "run", lambda *a, **k: _cp(1, "", "device offline")
@@ -160,7 +160,7 @@ def _match(pid: str) -> dict:
 
 
 def test_stop_aimonkey_unreachable_device_fails_precheck(monkeypatch):
-    mod = _load("stop_aimonkey_v101_precheck", "stop_aimonkey/v1.0.1/stop_aimonkey.py")
+    mod = _load("stop_aimonkey_v101_precheck", "stop_aimonkey/stop_aimonkey.py")
     capture = _prep_sa(
         monkeypatch, mod, [(0, [])], _quiet_responder(ready=1)
     )
@@ -172,7 +172,7 @@ def test_stop_aimonkey_unreachable_device_fails_precheck(monkeypatch):
 
 
 def test_stop_aimonkey_kill_failure_reports_error(monkeypatch):
-    mod = _load("stop_aimonkey_v101_kill", "stop_aimonkey/v1.0.1/stop_aimonkey.py")
+    mod = _load("stop_aimonkey_v101_kill", "stop_aimonkey/stop_aimonkey.py")
     capture = _prep_sa(
         monkeypatch,
         mod,
@@ -187,7 +187,7 @@ def test_stop_aimonkey_kill_failure_reports_error(monkeypatch):
 
 
 def test_stop_aimonkey_post_ps_failure_is_not_clear(monkeypatch):
-    mod = _load("stop_aimonkey_v101_postps", "stop_aimonkey/v1.0.1/stop_aimonkey.py")
+    mod = _load("stop_aimonkey_v101_postps", "stop_aimonkey/stop_aimonkey.py")
     capture = _prep_sa(
         monkeypatch,
         mod,
@@ -203,7 +203,7 @@ def test_stop_aimonkey_post_ps_failure_is_not_clear(monkeypatch):
 
 
 def test_stop_aimonkey_success(monkeypatch):
-    mod = _load("stop_aimonkey_v101_ok", "stop_aimonkey/v1.0.1/stop_aimonkey.py")
+    mod = _load("stop_aimonkey_v101_ok", "stop_aimonkey/stop_aimonkey.py")
     capture = _prep_sa(
         monkeypatch, mod, [(0, [_match("111")]), (0, [])], _quiet_responder()
     )

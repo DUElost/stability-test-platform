@@ -19,7 +19,7 @@ import time as real_time
 from pathlib import Path
 
 _SCRIPTS = Path(__file__).resolve().parents[2] / "agent" / "scripts"
-_SCRIPT_DIR = _SCRIPTS / "flash_preflight" / "v1.0.4"
+_SCRIPT_DIR = _SCRIPTS / "flash_preflight"
 
 spec = importlib.util.spec_from_file_location(
     "flash_preflight_v104", _SCRIPT_DIR / "flash_preflight.py"

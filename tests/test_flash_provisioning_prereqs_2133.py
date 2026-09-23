@@ -36,12 +36,9 @@ def _version_key(name: str) -> tuple:
 
 
 def _latest_preflight_entry() -> Path:
-    """最新 preflight 版本入口（数字段排序——字典序会把 v1.0.9 排在 v1.0.10 后）。"""
-    versions = [p for p in PREFLIGHT_DIR.iterdir()
-                if p.is_dir() and p.name.startswith("v")]
-    latest = max(versions, key=lambda p: _version_key(p.name))
-    entries = [p for p in latest.glob("*.py") if not p.name.startswith("_")]
-    assert entries, f"flash_preflight {latest.name} 无入口文件"
+    """最新 preflight 入口 = 族树入口（ADR-0051 Phase 3：版本目录已退役，树即最新版本）。"""
+    entries = sorted(p for p in PREFLIGHT_DIR.glob("*.py") if not p.name.startswith("_"))
+    assert entries, "flash_preflight 族树无入口文件"
     return entries[0]
 
 

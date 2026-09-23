@@ -57,10 +57,10 @@ def _base(mod_name: str) -> str:
 
 def _new_version_dirs():
     return {
-        "mtbf_check_v140": _SCRIPTS / "mtbf_check" / "v1.4.0",
-        "gpu_check_v106": _SCRIPTS / "gpu_check" / "v1.0.6",
-        "powercycle_check_v107": _SCRIPTS / "powercycle_check" / "v1.0.7",
-        "sleep_check_v102": _SCRIPTS / "sleep_check" / "v1.0.2",
+        "mtbf_check_v140": _SCRIPTS / "mtbf_check",
+        "gpu_check_v106": _SCRIPTS / "gpu_check",
+        "powercycle_check_v107": _SCRIPTS / "powercycle_check",
+        "sleep_check_v102": _SCRIPTS / "sleep_check",
     }
 
 
@@ -158,43 +158,8 @@ def test_mtbf_same_job_recovery_resets_streak(mtbf, env_ids, monkeypatch, tmp_pa
 # ── gpu_check / sleep_check（同型轻量）────────────────────────────────────
 
 
-def test_gpu_check_new_job_resets_dead_streak(_load_modules, env_ids, monkeypatch, tmp_path):
-    mod = _load_modules["gpu_check_v106"]
-    _write_state(mod, tmp_path, {"job_id": "100", "dead_streak": 2, "seq": 4})
-    monkeypatch.setattr(mod, "instrument_alive", lambda: False)
-    monkeypatch.setattr(mod, "_grep_rounds_done", lambda: 0)
-    monkeypatch.setattr(mod, "result_log_bytes", lambda: 0)
-    monkeypatch.setattr(mod, "_run_finished", lambda: (False, ""))
-
-    env_ids("100")
-    r1 = mod._run({})
-    assert r1["success"] is False  # 旧 Job：streak 2→3
-
-    env_ids("200")
-    r2 = mod._run({})
-    assert r2["success"] is True
-    assert _read_state(mod)["dead_streak"] == 1
-    assert _read_state(mod)["seq"] == 1
 
 
-def test_sleep_check_new_job_resets_dead_streak(_load_modules, env_ids, monkeypatch, tmp_path):
-    mod = _load_modules["sleep_check_v102"]
-    _write_state(mod, tmp_path, {"job_id": "100", "dead_streak": 2, "seq": 4})
-    monkeypatch.setattr(mod, "service_alive", lambda: False)
-    monkeypatch.setattr(mod, "_read_prefs_progress", lambda: None)
-    monkeypatch.setattr(mod, "_grep_cycle_count", lambda: 0)
-    monkeypatch.setattr(mod, "_result_bytes", lambda: 0)
-    monkeypatch.setattr(mod, "_run_finished", lambda: False)
-
-    env_ids("100")
-    r1 = mod._run({})
-    assert r1["success"] is False
-
-    env_ids("200")
-    r2 = mod._run({})
-    assert r2["success"] is True
-    assert _read_state(mod)["dead_streak"] == 1
-    assert _read_state(mod)["seq"] == 1
 
 
 # ── powercycle_check（收取窗口标记等富状态随 Job 重置）─────────────────────

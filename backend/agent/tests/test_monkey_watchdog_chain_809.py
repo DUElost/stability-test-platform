@@ -24,6 +24,10 @@ from pathlib import Path
 import pytest
 
 _SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
+# ADR-0051 Phase 3：脚本运行时 PYTHONPATH = agent 目录（共享模块如 aimonkey_paths 住那里）
+AGENT_DIR_FOR_SCRIPTS = Path(__file__).resolve().parent.parent
+if str(AGENT_DIR_FOR_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(AGENT_DIR_FOR_SCRIPTS))
 
 
 def _load(name: str, rel_path: str):
@@ -99,7 +103,7 @@ def _bundle(tmp_path: Path, *, aimwd: str = "file", resource_files=()):
 # ─────────────────────────── monkey_test v1.2.2 ───────────────────────────
 
 def _run_monkey_test(monkeypatch, tmp_path, **kwargs):
-    mod = _load("monkey_test_v122", "monkey_test/v1.2.2/monkey_test.py")
+    mod = _load("monkey_test_v122", "monkey_test/monkey_test.py")
     bundle = _bundle(
         tmp_path,
         aimwd=kwargs.get("aimwd", "file"),
@@ -222,7 +226,7 @@ def test_monkey_running_is_success_gate(monkeypatch, tmp_path):
 # ──────────────────── monkey_test 轮询 helper（#809 门禁底座） ────────────────────
 
 def test_wait_ps_process_sees_process_after_retries(monkeypatch):
-    mod = _load("monkey_test_v122_wait", "monkey_test/v1.2.2/monkey_test.py")
+    mod = _load("monkey_test_v122_wait", "monkey_test/monkey_test.py")
     seq = ["", "", "123 com.android.commands.monkey.Monkey --x"]
 
     monkeypatch.setattr(mod, "_shell", lambda serial, cmd, timeout=15: (0, seq.pop(0)))
@@ -232,7 +236,7 @@ def test_wait_ps_process_sees_process_after_retries(monkeypatch):
 
 
 def test_wait_ps_process_times_out_when_absent(monkeypatch):
-    mod = _load("monkey_test_v122_wait2", "monkey_test/v1.2.2/monkey_test.py")
+    mod = _load("monkey_test_v122_wait2", "monkey_test/monkey_test.py")
 
     monkeypatch.setattr(mod, "_shell", lambda serial, cmd, timeout=15: (0, ""))
     monkeypatch.setattr(mod.time, "sleep", lambda _s: None)
@@ -241,7 +245,7 @@ def test_wait_ps_process_times_out_when_absent(monkeypatch):
 
 
 def test_wait_ps_process_command_carries_watchdog_exclusion(monkeypatch):
-    mod = _load("monkey_test_v122_wait3", "monkey_test/v1.2.2/monkey_test.py")
+    mod = _load("monkey_test_v122_wait3", "monkey_test/monkey_test.py")
     cmds: list[str] = []
 
     def fake_shell(serial, cmd, timeout=15):
@@ -258,7 +262,7 @@ def test_wait_ps_process_command_carries_watchdog_exclusion(monkeypatch):
 # ─────────────────────────── monkey_check v2.0.3 ───────────────────────────
 
 def _load_check():
-    return _load("monkey_check_v203", "monkey_check/v2.0.3/monkey_check.py")
+    return _load("monkey_check_v203", "monkey_check/monkey_check.py")
 
 
 def test_restart_false_on_shell_rc_nonzero(monkeypatch):
@@ -404,7 +408,7 @@ def test_check_does_not_restart_when_watchdog_alive(monkeypatch):
 # ─────────────────────────── monkey_launch v5.0.1 ───────────────────────────
 
 def _load_launch():
-    return _load("monkey_launch_v501", "monkey_launch/v5.0.1/monkey_launch.py")
+    return _load("monkey_launch_v501", "monkey_launch/monkey_launch.py")
 
 
 def _run_launch(monkeypatch, *, aimwd_present, watchdog_already=False, max_wait=1):
@@ -476,7 +480,7 @@ def test_launch_already_running_is_idempotent(monkeypatch):
 # ─────────────────────────── monkey_launch v5.0.2 ───────────────────────────
 
 def _load_launch_v502():
-    return _load("monkey_launch_v502", "monkey_launch/v5.0.2/monkey_launch.py")
+    return _load("monkey_launch_v502", "monkey_launch/monkey_launch.py")
 
 
 def _run_launch_timed(monkeypatch, mod, *, max_wait=15):
@@ -525,14 +529,6 @@ def _run_launch_timed(monkeypatch, mod, *, max_wait=15):
     return captured, exited
 
 
-def test_launch_v501_shared_deadline_fails_when_sh_late(monkeypatch):
-    """#1711 回归：v5.0.1 共用 deadline，sh 迟到后 aimwd 二次 poll 无预算。"""
-    mod = _load_launch()
-    out, exited = _run_launch_timed(monkeypatch, mod)
-
-    assert exited is True
-    assert out["success"] is False
-    assert "MonkeyWatchdog" in (out.get("error_message") or "")
 
 
 def test_launch_v502_independent_aimwd_window_succeeds_when_sh_late(monkeypatch):
@@ -552,7 +548,7 @@ def _run_resource_push(
     monkeypatch, tmp_path, *, aimwd="file", push_ok=True, file_exists=True, file_size=100
 ):
     mod = _load(
-        "monkey_resource_push_v101", "monkey_resource_push/v1.0.1/monkey_resource_push.py"
+        "monkey_resource_push_v101", "monkey_resource_push/monkey_resource_push.py"
     )
     bundle = _bundle(tmp_path, aimwd=aimwd)
     captured: dict = {}

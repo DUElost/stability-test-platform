@@ -16,7 +16,7 @@ _SCRIPTS = Path(__file__).resolve().parents[2] / "agent" / "scripts" / "monkey_s
 
 
 def _load_version(version: str, tag: str):
-    d = _SCRIPTS / version
+    d = _SCRIPTS  # ADR-0051 Phase 3：族树即最新版本（version 只作模块名标签）
     spec = importlib.util.spec_from_file_location(f"_adb_{tag}", d / "_adb.py")
     assert spec and spec.loader
     adb_mod = importlib.util.module_from_spec(spec)
@@ -102,7 +102,3 @@ def test_step_clean_uses_valid_dirs(monkeypatch):
     assert any(c == "mkdir -p /data/aee_exp" for c in issued), issued
 
 
-def test_v2310_had_no_validation_this_is_the_regression_pin():
-    """对照锚点：v2.3.10 没有校验函数（旧版本不可变，只读断言）。"""
-    mod = _load_version("v2.3.10", "ms_v2310")
-    assert not hasattr(mod, "validated_log_dirs")

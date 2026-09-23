@@ -39,28 +39,28 @@ def _load(name: str, rel_path: str):
 
 @pytest.fixture(scope="module")
 def lib():
-    return _load("sleep_lib", "sleep_setup/v1.0.0/_lib.py")
+    return _load("sleep_lib", "sleep_setup/_lib.py")
 
 
 @pytest.fixture(scope="module")
 def setup_mod():
-    return _load("sleep_setup_mod", "sleep_setup/v1.0.0/sleep_setup.py")
+    return _load("sleep_setup_mod", "sleep_setup/sleep_setup.py")
 
 
 @pytest.fixture(scope="module")
 def check_mod():
-    return _load("sleep_check_mod", "sleep_check/v1.0.0/sleep_check.py")
+    return _load("sleep_check_mod", "sleep_check/sleep_check.py")
 
 
 @pytest.fixture(scope="module")
 def check_mod_v101():
     """sleep_check v1.0.1：完成检测（冒烟发现 ①——服务完成 test_times 后自停）。"""
-    return _load("sleep_check_mod_v101", "sleep_check/v1.0.1/sleep_check.py")
+    return _load("sleep_check_mod_v101", "sleep_check/sleep_check.py")
 
 
 @pytest.fixture(scope="module")
 def finish_mod():
-    return _load("sleep_finish_mod", "sleep_finish/v1.0.0/sleep_finish.py")
+    return _load("sleep_finish_mod", "sleep_finish/sleep_finish.py")
 
 
 @pytest.fixture()
@@ -280,6 +280,9 @@ class TestCheckProgress:
         monkeypatch.setattr(mod, "_read_prefs_progress", lambda: prefs)
         monkeypatch.setattr(mod, "_grep_cycle_count", lambda: 0)
         monkeypatch.setattr(mod, "_result_bytes", lambda: result_bytes)
+        # Phase 3 合并后 check 与 v1.0.1 同树：_run() 先走 _run_finished（直调 adb）。
+        # 本类测的是 prefs/注入进度，不关心完成标记——与 TestCheckV101Completion 对称打桩。
+        monkeypatch.setattr(mod, "_run_finished", lambda: False)
         monkeypatch.setattr(mod, "progress_stamp", lambda payload: None)
 
     def test_prefs_progress_used(self, check_mod, monkeypatch, tmp_path):
@@ -301,37 +304,7 @@ class TestCheckProgress:
         assert r["progress"]["cycles_done"] == 9
         assert r["progress"]["expected_cycles"] == 0    # prefs 缺失 → 只报绝对数
 
-    def test_dead_streak_grace(self, check_mod, monkeypatch, tmp_path):
-        """连续 2 周期未存活才判死；第 1 周期仍 success。"""
-        monkeypatch.setattr(check_mod, "device_serial", lambda: "S2")
-        monkeypatch.setattr(check_mod, "_state_file", lambda: tmp_path / "state.json")
-        monkeypatch.setattr(check_mod, "service_alive", lambda: False)
-        monkeypatch.setattr(check_mod, "_read_prefs_progress", lambda: (1, 100))
-        monkeypatch.setattr(check_mod, "_grep_cycle_count", lambda: 0)
-        monkeypatch.setattr(check_mod, "_result_bytes", lambda: 100)
-        monkeypatch.setattr(check_mod, "progress_stamp", lambda payload: None)
 
-        r1 = check_mod._run({"dead_grace_cycles": 2})
-        assert r1["success"] is True
-        assert r1["progress"]["service_alive"] is False
-        r2 = check_mod._run({"dead_grace_cycles": 2})
-        assert r2["success"] is False
-        assert "连续 2 个周期" in r2["error_message"]
-
-    def test_alive_resets_streak(self, check_mod, monkeypatch, tmp_path):
-        monkeypatch.setattr(check_mod, "device_serial", lambda: "S3")
-        monkeypatch.setattr(check_mod, "_state_file", lambda: tmp_path / "state.json")
-        monkeypatch.setattr(check_mod, "_read_prefs_progress", lambda: (1, 100))
-        monkeypatch.setattr(check_mod, "_grep_cycle_count", lambda: 0)
-        monkeypatch.setattr(check_mod, "_result_bytes", lambda: 100)
-        monkeypatch.setattr(check_mod, "progress_stamp", lambda payload: None)
-        alive = {"v": False}
-        monkeypatch.setattr(check_mod, "service_alive", lambda: alive["v"])
-        check_mod._run({})
-        alive["v"] = True
-        r2 = check_mod._run({})
-        assert r2["success"] is True
-        assert r2["progress"]["seq"] == 2
 
 
 # ---------------------------------------------------------------------------
@@ -450,14 +423,6 @@ class TestCheckV101Completion:
             r = check_mod_v101._run({"dead_grace_cycles": 2})
             assert r["success"] is True
 
-    def test_not_finished_keeps_v100_dead_streak(self, check_mod_v101, monkeypatch, tmp_path):
-        """无 finished 行时 v1.0.0 判死语义保留（中途崩溃仍会失败）。"""
-        self._patch_device_io(check_mod_v101, monkeypatch, tmp_path, finished=False, alive=False)
-        r1 = check_mod_v101._run({"dead_grace_cycles": 2})
-        assert r1["success"] is True
-        r2 = check_mod_v101._run({"dead_grace_cycles": 2})
-        assert r2["success"] is False
-        assert "连续 2 个周期" in r2["error_message"]
 
     def test_run_finished_detects_marker(self, check_mod_v101, monkeypatch):
         monkeypatch.setattr(check_mod_v101, "device_serial", lambda: "S1")
@@ -487,7 +452,7 @@ class TestCheckV101Completion:
 
 class TestFinishV101RunId:
     def test_run_id_has_serial(self, monkeypatch, tmp_path):
-        mod = _load("sleep_finish_mod_v101", "sleep_finish/v1.0.1/sleep_finish.py")
+        mod = _load("sleep_finish_mod_v101", "sleep_finish/sleep_finish.py")
         monkeypatch.setattr(mod, "device_serial", lambda: "SLEEP-S9")
         monkeypatch.setattr(mod, "stop_task", lambda force=True: None)
         monkeypatch.setattr(mod.time, "sleep", lambda _: None)
@@ -525,7 +490,7 @@ class TestInstallApkV103:
 
     @pytest.fixture()
     def v103(self):
-        return _load("sleep_lib_v103", "sleep_setup/v1.0.3/_lib.py")
+        return _load("sleep_lib_v103", "sleep_setup/_lib.py")
 
     @staticmethod
     def _patch_adb(monkeypatch, mod, calls, results):

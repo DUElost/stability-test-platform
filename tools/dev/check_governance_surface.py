@@ -283,7 +283,7 @@ def check_root_headings(label: str, text: str) -> list[str]:
 # S11: 锚串刻意取 AGENTS.md 原文——改写措辞必须连锚一起改，
 # 让「条款静默消失/被改写」这件事本身过不了门禁（S9 只查章节名、S6 只查体量）。
 # 主体覆盖 ## 硬不变量；另含 ## 总原则「已发布脚本不可删改」一句（#2546 / e82515 F5：
-# 该句不在硬不变量节、此前无锚；ADR-0051 v1.0（2026-09-22）已按 D1 改写为「发布单元」措辞并同步本锚）。
+# 该句不在硬不变量节、此前无锚；ADR-0051 v1.0 改写为「发布单元」措辞，Phase 3（2026-09-23）去过渡句并同步本锚）。
 HARD_INVARIANT_ANCHORS = [
     ("ASGI 入口", r"socketio\.ASGIApp\(sio_server, fastapi_app\)"),
     ("Pipeline 顶层只接受 lifecycle", r"Pipeline 顶层只接受 `lifecycle`"),
@@ -299,7 +299,7 @@ HARD_INVARIANT_ANCHORS = [
     (
         "已发布发布单元不可原地修改（ADR-0051）",
         r"已发布的发布单元不可原地修改（ADR-0051）[\s\S]{0,160}?"
-        r"`backend/agent/scripts/<name>/v<version>/` 目录仍是发布单元，同样不可原地修改或删除",
+        r"`backend/agent/scripts/<name>/` 是可演进的族源码树，改了树必须登记新版本",
     ),
 ]
 
@@ -748,7 +748,7 @@ _ADR_CODE_REF = re.compile(r"ADR-(\d{4})(?:[^0-9\n]{0,24}?)v(\d+\.\d+)")
 CODE_SCAN_ROOTS = ("backend", "frontend/src")
 CODE_SCAN_EXTS = (".py", ".ts", ".tsx", ".js", ".jsx", ".vue")
 CODE_SCAN_SKIP_DIRS = {"node_modules", "__pycache__", ".venv", "dist", "build"}
-#: 已发布脚本版本目录：内容冻结（ADR-0020 + 硬不变量），改它即触发 immutability
+#: 脚本族树（ADR-0051 Phase 3 起无版本目录；改树须登记新版本，由 tool-manifest 门禁
 #: 门禁——本规则若扫进去，一旦红灯便是「必须改、又不许改」的死结，故整枝排除。
 #: **永久豁免**（#2250 登记）：排除面现有 6 处 ADR 引用——`mtbf_setup`
 #: v1.0.0–v1.4.1 各一处 `ADR-0029 v2.2`（v2.2 补偿机制注记），随版本退役自然淘汰，
@@ -1223,7 +1223,8 @@ GATE_TO_CI_ANCHOR = {
     "knip": ("ci.yml", "knip 死代码检查"),
     "compileall": ("ci.yml", "Compile check"),
     "pollution": ("ci.yml", "空行注入污染检查"),
-    "immutability": ("ci.yml", "脚本版本不可变检查"),
+    # ADR-0051 Phase 3：脚本版本不可变门禁随版本目录退役（不可变性由 tool-manifest 门禁的
+    # append-only + 族树⇄最新登记等价承担）。
     # ADR-0033 D0 新族门禁（#745）：与 immutability 同模式接入 lint job。
     "new-script-family": ("ci.yml", "ADR-0033 D0 新脚本族检查"),
     # ADR-0033 D2 Tool Contract 脚手架（#745）：fixture 靶子 + --self-test。
@@ -1924,9 +1925,9 @@ def run_self_test() -> int:
         "- Pydantic 只使用 v2 API；数据库业务表名使用单数。\n"
         "- 已存在脚本版本的 `default_params` 不可原地修改。\n"
         "- 前端 API 类型以 `frontend/src/utils/api/types.ts` 为入口。\n"
-        "- 已发布的发布单元不可原地修改（ADR-0051）：包条目与 `packages/`；Phase 3 前\n"
-        "  `backend/agent/scripts/<name>/v<version>/` 目录仍是发布单元，同样不可原地修改或删除；\n"
-        "  删除按 ADR-0051 D5。新行为使用新版本。"
+        "- 已发布的发布单元不可原地修改（ADR-0051）：`tool_manifest.json` 条目与站点 `packages/`\n"
+        "  只增不改；`backend/agent/scripts/<name>/` 是可演进的族源码树，改了树必须登记新版本；\n"
+        "  删除按 ADR-0051 D5。"
     )
     expect(
         "S11 锚点齐全",

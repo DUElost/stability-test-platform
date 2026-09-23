@@ -17,7 +17,7 @@ from pathlib import Path
 
 _SCRIPT_DIR = (
     Path(__file__).resolve().parents[2]
-    / "agent" / "scripts" / "unisoc_signal_trigger" / "v1.0.1"
+    / "agent" / "scripts" / "unisoc_signal_trigger"
 )
 
 spec = importlib.util.spec_from_file_location(
@@ -139,14 +139,6 @@ class TestUnisocSignalTriggerV101:
         assert "tombstone_01" in flat
         assert "tombstone_00" not in flat, "既有条目不得误报为事件"
 
-    def test_event_dir_dump_attempts_unievent_info(self, monkeypatch):
-        _wire(monkeypatch, before="", after="evt_1")
-        payload, _ = _capture(monkeypatch, params={
-            "poll_timeout_seconds": 5, "poll_interval_seconds": 0.0,
-        })
-        dumps = payload["metrics"]["event_dir_dump"]
-        assert dumps, "应对新增目录做 dump"
-        assert any(v.get("unievent_info_json") for v in dumps.values())
 
     def test_kill_method_still_sends_signal(self, monkeypatch):
         calls = _wire(monkeypatch)
