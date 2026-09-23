@@ -1,0 +1,119 @@
+# 控制面宿主内存/swap 余量告警（角色文件，本站事实源）。
+# Rendered by the site installer for <deploy-root> — do not edit by hand（站点副本只是安装产物）。
+#
+# ## 为什么另开一个角色文件（#3200 G1，收 #3050 的仓库外草案）
+# 09-14 那次卡死后，宿主内存规则以 `/etc/prometheus/rules/host-memory-draft.yml` 留在**仓库外**，
+# 自述「按 ADR-0011 需独立 ADR，暂避让」。到 09-23 它既没转正也没退役，而且**三条判据在本次
+# 事故里一条都没起作用**。本文件是它的终态替代，草案已从宿主下线。
+#
+# 规则只引用 node-exporter 指标。#3050 09-21 已核实：塞进 `alerts-stability-platform.yml` 会撞
+# `test_alert_metric_producers`（该判据只认本仓自有指标前缀，正确处置是给「外部 exporter 类」
+# 建模，而不是扩前缀集把几十个 node_* 指标都变成"无生产者"）；同时 #2643 已裁「站点只装站点
+# 可见面规则」。角色分文件同时避开这两件：本文件的指标在任何装了 node-exporter 的宿主上可见。
+#
+# ## 阈值来自现网分布，不是推测
+# 采样：Prometheus 127.0.0.1:9091，2026-09-16 10:00 → 2026-09-23 13:00（**全部取在 09-23 卡死之前**），
+# 10020 个分钟点。同窗口内各判据满足的分钟数：
+#
+# | 判据 | 基线满足 | 09-23 事故窗首次满足 |
+# |---|---|---|
+# | 联合余量 < 8 GiB | **0 分钟 (0.000%)** | 13:42（余量 5.40 GiB） |
+# | 当前 − 近 2min 峰值 > 6 GiB（塌陷） | 5 分钟 (0.050%) | **13:05**（未遂）与 **13:38**（比 critical 早 4 分钟） |
+# | majflt > 300 且 联合余量 < 8 GiB | 0 分钟 | 13:43 |
+# | SwapFree < 1.5 GiB | 1 分钟 (0.010%) | 13:43（0.68 GiB） |
+# | `rate(pgmajfault[5m]) > 30`（草案原判据） | **1881 分钟 (18.8%)** | —（无判别力） |
+#
+# 三条由此确定的设计规则：
+# 1. **majflt 不单独告警**：基线 18.8% 的分钟都超 30/s（p99=598、max=1337），草案那条 critical
+#    天天闪——#3050 09-22 的 owner 裁决也据此把换页本体接受为稳态占用。这里降级为「与低余量合取」。
+# 2. **`for:` 一律 1m**：终局阶段实测只有 2 分钟（13:40 余量 16.07 GiB → 13:42 5.40 → 13:43 2.42
+#    之后 journald 与监控抓取全停）。草案的 `for: 10m/15m` 结构上不可能响。
+# 3. **阈值用绝对 GiB，不用百分比**：本机 swap 常态被用掉 12–21 GiB / 23.7 GiB，「还剩 15%」看
+#    着安全而实际只剩 3.5 GiB——百分比口径在这台机器上会说谎。换算用二进制 GiB（1073741824），
+#    写成 `1e9` 会把阈值静默抬高约 7%。
+#
+# ## 挂载现状（重要，别误以为安装器会装它）
+# 本文件登记在 `stages.py` 的 `HOST_RULE_COPIES`，**只进漂移检测、不进 S4 安装清单**：
+# 站点侧 Prometheus 读 `etc/stp/prometheus/rules/`，而控制面宿主读 `etc/prometheus/rules/`；
+# 把这份由安装器写到发行版目录，会造出一个没人读的孤儿文件（#2643 批过的「装了≠加载」）。
+# 所以它与 `alerts-stability-platform.yml` 同状态：**控制面人工副本 + `POST /-/reload`**
+# （ADR-0011 的正式挂载未落地，见 docs/operations/README.md 挂载项）。重放命令见
+# `deploy/control-plane/host-defense/README.md`；不一致会被 `check-monitoring-assets.py` 判 DRIFT。
+#
+# 本文件取代的是 `/etc/prometheus/rules/host-memory-draft.yml`（09-14 的仓库外草案，
+# 已于 2026-09-23 下线并归档到 /root/stp-host-memory-hardening-20260923/）。
+#
+# PSI 判据**试过且被数据否掉**：`node_pressure_memory_stalled_seconds_total` 在基线与事故全程
+# 恒为 0.00（整机死时也是 0——失速表现为 refault/IO 等待，不是 PSI memory stall）；
+# `node_pressure_io_waiting_seconds_total` 基线 p50=0.98、p99=1.00，常年饱和。
+# ⇒ 两个都不能当判别位。**这条同时否掉了 #3050 09-22 裁决里把 io_waiting>0.5 作为 R1 合取位的
+# 设计**：它在任何时刻都成立，所以 R1 实际等价于「#2959 告警在响」，没有加任何信息。
+
+groups:
+  - name: host-resources
+    rules:
+      - alert: StabilityHostMemoryHeadroomCritical
+        expr: (node_memory_MemAvailable_bytes + node_memory_SwapFree_bytes) < 8589934592
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "控制面宿主内存联合余量不足 8 GiB（即将失速）"
+          description: >-
+            MemAvailable + SwapFree = {{ $value | humanize1024 }}B。2026-09-23 卡死前最后
+            一次成功抓取（13:43）该值 2.42 GiB，而 7 天基线最小值 8.92 GiB、满足本判据 0 分钟。
+            第一动作：找 anon 增速最快的进程（/var/log/stp-mem-top.tsv 或 systemd-cgtop -m）
+            并在其 cgroup 内处置；earlyoom 自 09-23 起是真击杀（#3200），若已动手 journal 有记录。
+            处置手册：deploy/control-plane/host-defense/README.md
+      - alert: StabilityHostMemoryHeadroomCollapsing
+        # 「当前余量」比近 2 分钟的峰值低 6 GiB 以上 ⇒ 正在塌陷。
+        # 三种写法实测过（阈值都取 6 GiB，回测 09-16 10:00→09-23 13:00 = 10020 分钟）：
+        #   · 1m 均值差分（offset 2m）：基线 0 误报，但要到 **13:43** 才满足——比 critical 还晚，
+        #     平滑窗把提前量整个吃掉了；
+        #   · 当前值 − 近 2m 峰值 `max_over_time([2m:1m])`：**13:38** 满足（critical 13:42，早 4 分钟）；
+        #     把子查询步长降到 30s（= 本机 scrape_interval）后同样在 **13:05** 抓住了那次未遂；
+        #   · 加绝对余量门（<12 GiB）：门与 critical 重叠，提前量归零。
+        # 代价：基线 5 分钟/周（0.050%）——所以它是 **warning**：提前量是这条规则唯一的存在理由，
+        # 为了少 5 分钟噪声把它调成"只在见底时响"就是白写。
+        expr: >-
+          (
+            node_memory_MemAvailable_bytes + node_memory_SwapFree_bytes
+          )
+          -
+          max_over_time(
+            (node_memory_MemAvailable_bytes + node_memory_SwapFree_bytes)[2m:30s]
+          )
+          < -6442450944
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "控制面宿主内存余量 2 分钟内塌陷超过 6 GiB"
+          description: >-
+            余量比 2 分钟内的峰值低了 6 GiB 以上——失控分配通常就在这几十秒里。09-23 该判据在
+            13:38 首次满足（critical 要到 13:42），并在 13:05 抓住了同一天那次 swap 只剩 306 MiB
+            的未遂。现在就去看 anon 增速者（/var/log/stp-mem-top.tsv 最后一列或 systemd-cgtop -m），
+            不要等见底。
+            处置手册：deploy/control-plane/host-defense/README.md
+      - alert: StabilityHostSwapNearlyGone
+        expr: node_memory_SwapFree_bytes < 1610612736
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "控制面宿主 swap 剩余不足 1.5 GiB"
+          description: >-
+            SwapFree = {{ $value | humanize1024 }}B；09-23 13:43 实测 0.68 GiB 时主机已不应答。
+            与草案「<15% for 15m」的差别（绝对值 + 1m）见本文件头。
+            处置手册：deploy/control-plane/host-defense/README.md
+      - alert: StabilityHostPagingStormUnderLowHeadroom
+        expr: (rate(node_vmstat_pgmajfault[5m]) > 300) and ((node_memory_MemAvailable_bytes + node_memory_SwapFree_bytes) < 8589934592)
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "换页风暴叠加余量不足（失速组合判据）"
+          description: >-
+            majflt {{ $value }} 次/秒且联合余量已 <8 GiB。单独的高 majflt 在本机是稳态
+            （#3050 09-22 裁决），只在与低余量同时出现时构成事故前兆。
+            处置手册：deploy/control-plane/host-defense/README.md
