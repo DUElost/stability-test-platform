@@ -178,3 +178,58 @@ def test_tree_helpers_still_serve_family_trees(tmp_path: Path):
     assert read_capabilities(tree) == ["a"]
     (tree / "capabilities.json").write_text("{bad", encoding="utf-8")
     assert read_capabilities(tree) == []
+
+
+# ── #3196：包身份列（Phase 2b 运行时校验唯一判据）不得被静默清空 ──────────────
+
+
+def test_unreadable_manifest_does_not_clear_package_sha(db_session: Session, tmp_path: Path):
+    """manifest 坏 / 不在场 ⇒ 已回填的 ``package_sha256`` 必须原地保留。
+
+    「读不到登记」在旧形态里被执行成了「把身份写没」。清空方向是 fail-open：列一旦为
+    空，Phase 2b 的按包身份校验就没有可比对象。这里钉的是**不写**，并顺带钉住
+    「全表只上报不动手」（``unregistered_active``）——反激活只能由 retired 显式驱动。
+    """
+    site = Site(tmp_path)
+    sha = site.add("demo", "1.0.0", {"demo.py": "x\n"})
+    _sync(db_session, site)
+    row = db_session.query(Script).filter_by(name="demo", version="1.0.0").one()
+    assert row.package_sha256 == sha
+
+    site.manifest.write_text("{not json", encoding="utf-8")
+    result = _sync(db_session, site)
+    db_session.refresh(row)
+    assert row.package_sha256 == sha and result.rebaselined == []
+    assert [r["name"] for r in result.unregistered_active] == ["demo"]
+
+    site.manifest.unlink()
+    _sync(db_session, site)
+    db_session.refresh(row)
+    assert row.package_sha256 == sha and row.is_active is True
+
+
+def test_entry_without_package_sha_is_named_not_overwritten(db_session: Session, tmp_path: Path):
+    """条目登记值为空 ⇒ 点名 ``manifest_package_sha_missing``，且**不**覆写任何身份列。
+
+    取 ``force_rebaseline=True`` 走重锚分支（#3196 报的正是这条分支无条件覆写
+    ``package_sha256``）。原实现只靠「空登记值不可能等于任何实算 tarball sha」这个
+    **副作用**挡住，本用例把它变成显式判据：宁可标注不一致，不可静默清身份；
+    同时钉住重锚被拒时**内容身份也不被顺手改写**。
+    """
+    site = Site(tmp_path)
+    sha = site.add("demo", "1.0.0", {"demo.py": "x\n"})
+    _sync(db_session, site)
+    row = db_session.query(Script).filter_by(name="demo", version="1.0.0").one()
+    row.content_sha256 = "f" * 64  # 库侧漂移：逼重锚分支执行
+    db_session.commit()
+
+    site.doc["tools"]["demo"]["versions"][0]["package_sha256"] = ""
+    site.write()
+    result = _sync(db_session, site, force_rebaseline=True)
+    db_session.refresh(row)
+
+    assert [(c["name"], c["reason"]) for c in result.package_conflicts] == [
+        ("demo", "manifest_package_sha_missing")
+    ]
+    assert result.rebaselined == []
+    assert row.package_sha256 == sha and row.content_sha256 == "f" * 64

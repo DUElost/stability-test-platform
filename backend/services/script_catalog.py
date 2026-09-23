@@ -177,6 +177,14 @@ def script_entries(doc: dict) -> Iterable[Tuple[str, dict]]:
                 yield str(name), entry
 
 
+_HEX_LOWER = frozenset("0123456789abcdef")
+
+
+def _is_package_sha(value: str) -> bool:
+    """``package_sha256`` 形态判据：64 位小写十六进制（与 ``check_tool_manifest`` 同口径）。"""
+    return len(value) == 64 and all(ch in _HEX_LOWER for ch in value)
+
+
 def load_package_index(manifest_path: str | Path | None) -> Dict[Tuple[str, str], str]:
     """``(name, version) → package_sha256``，只收未 retired 的条目（供 verify/presence 等只读消费）。"""
     index: Dict[Tuple[str, str], str] = {}
@@ -277,6 +285,19 @@ def sync_scripts_from_manifest(
                 row.updated_at = now
                 result.deactivated += 1
                 result.deactivated_versions.append({"name": name, "version": version, "nfs_path": row.nfs_path or ""})
+            continue
+
+        # #3196：登记值缺失/畸形 ⇒ 包身份不可信，显式拦下并点名。
+        # 本函数三处 ``package_sha256`` 写点（新建 / force_rebaseline / 回填）都必须发生在
+        # sha 已被 tarball 实测证明之后；原先只靠 ``read_package_facts`` 的 sha 比较顺带
+        # 挡住（空登记值不可能等于任何实算 sha）——那是**巧合级**保护，分支重排一次就能
+        # 失效。判据挪到前台，另配测试钉「坏 manifest / 缺登记值 ⇒ 列值不被清空」。
+        if not _is_package_sha(sha):
+            result.package_conflicts.append({
+                "name": name, "version": version, "reason": "manifest_package_sha_missing",
+                "db_sha256": (row.package_sha256 or "") if row is not None else "",
+                "manifest_sha256": sha,
+            })
             continue
 
         tarball = pk_root / name / f"{version}.tar.gz"

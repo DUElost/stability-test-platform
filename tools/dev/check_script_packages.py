@@ -41,6 +41,7 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -77,7 +78,13 @@ def pick_entry(tree: Path) -> Path | None:
 
 
 def iter_family_trees(scripts_root: Path) -> list[tuple[str, Path]]:
-    """``[(name, tree)]``，族名字典序；跳过 legacy 名与隐藏/下划线目录。"""
+    """``[(name, tree)]``，族名字典序；跳过 legacy 名与隐藏/下划线目录。
+
+    跳过面本身不是免费的：``.``/``_`` 前缀目录里的脚本源码**仍会随热更新 payload 下发**
+    （与 ``check_payload_root_clean`` 同一枚举面论证），却永久不进包审计。因此这类目录
+    一旦带源码就由 ``skipped_source_dirs`` 报红（#3197 项2）；legacy 名是 ADR-0033 登记的
+    显式例外，不在该判据射程内。
+    """
     out: list[tuple[str, Path]] = []
     if not scripts_root.is_dir():
         return out
@@ -95,6 +102,25 @@ def stray_version_dirs(scripts_root: Path) -> list[str]:
         for child in sorted(tree.iterdir()):
             if child.is_dir() and _VERSION_DIR_RE.match(child.name):
                 out.append(f"{name}/{child.name}")
+    return out
+
+
+def skipped_source_dirs(scripts_root: Path) -> list[str]:
+    """被族枚举跳过（``.``/``_`` 前缀）却仍带 ``.py``/``.sh`` 源码的顶层目录。
+
+    #3197 项2 的闭合形态：原先「无入口 ⇒ 不登记不检查」只写在实现里，无人披露；
+    Phase 3 后「有目录、无入口文件」已改成硬红（见 ``check``），剩下这个**跳过整个目录**
+    的口子——目录里的脚本不进任何 sha 台账，热更新却照样把它发到每台主机。
+    判据只认 ``.py``/``.sh``（``__pycache__`` 里的 ``.pyc`` 不算源码，不误报）。
+    """
+    out: list[str] = []
+    if not scripts_root.is_dir():
+        return out
+    for d in sorted(p for p in scripts_root.iterdir() if p.is_dir()):
+        if not d.name.startswith((".", "_")) or d.name in LEGACY_SCRIPT_NAMES:
+            continue
+        if any(f.suffix in ENTRY_SUFFIXES for f in d.rglob("*") if f.is_file()):
+            out.append(d.name)
     return out
 
 
@@ -155,6 +181,8 @@ def check(doc: dict, rebuilt: dict[str, dict], scripts_root: Path) -> list[str]:
     errs: list[str] = []
     for rel in stray_version_dirs(scripts_root):
         errs.append(f"{rel}: Phase 3 后不得再有版本目录——每族只留一棵源码树，版本号住 tool_manifest.json")
+    for rel in skipped_source_dirs(scripts_root):
+        errs.append(f"{rel}: 目录被族枚举跳过却仍含脚本源码——不进包审计面但仍随热更新下发（#3197 项2）")
     fams = script_families(doc)
     for name, _tree in iter_family_trees(scripts_root):
         facts = rebuilt.get(name)
@@ -204,6 +232,17 @@ def run_self_test() -> int:
 
         if [n for n, _ in iter_family_trees(root)] != ["alpha", "beta"]:
             failures.append("族枚举应跳过 legacy")
+        if skipped_source_dirs(root) != []:
+            failures.append(f"干净树不应有被跳过的源码目录：{skipped_source_dirs(root)}")
+        if "scan_aee" in skipped_source_dirs(root):
+            failures.append("legacy 名是显式例外，不该被本判据报出")
+        (root / "_helper").mkdir()
+        (root / "_helper" / "_lib.py").write_text("H = 1\n", encoding="utf-8")
+        if skipped_source_dirs(root) != ["_helper"]:
+            failures.append(f"被跳过的源码目录应点名：{skipped_source_dirs(root)}")
+        if not any("不进包审计面但仍随热更新下发" in e for e in check({}, {}, root)):
+            failures.append("空 manifest 下跳过面应红（判据可达性）")
+        shutil.rmtree(root / "_helper")
         rebuilt = rebuild_all(root, packer)
         if set(rebuilt) != {"alpha", "beta"} or rebuilt["alpha"]["file_count"] != 3:
             failures.append(f"重建键集/成员数错：{ {k: v['file_count'] for k, v in rebuilt.items()} }")
