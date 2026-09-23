@@ -66,6 +66,7 @@
 | `STP_AGENT_SCRIPT_PACKAGES` | **仅控制面**：上述开关的源键，hot-update 写成无前缀键（空值不推）。切 `on` 前先 `python tools/dev/check_script_packages.py --publish --packages-root <STP_AEE_NFS_ROOT>/packages` |
 | `STP_PACKAGES_ROOT` | **可选（Agent + 控制面）**：站点包源覆盖；缺省派生自 `{STP_AEE_NFS_ROOT}/packages`（#3075 C4：每站中心存储，与过渡 `tools/` 物理分开）。ADR-0051 Phase 3 起控制面 `POST /scripts/scan` 也从这里读包注册 `script` 行 |
 | `STP_TOOL_MANIFEST` | **可选（控制面）**：Git 唯一事实源 `tool_manifest.json` 路径覆盖（测试 / 非仓根部署树）；缺省仓根或 bundle 根。scan、零引用巡检、模板 pin 测试的「版本 head」都从它读 |
+| `STP_FLASH_TOOL_DIR` | **由 hot-update 注入（Agent）**：SP Flash Tool 目录。**过渡**（ADR-0051 Phase 3）：脚本从 `tools_cache` 执行后 `flash_firmware` 的 `script_dir` 相对回退断链，控制面按安装布局显式注入等值路径；终态 = flashtool 入包 + 脚本新版按 `STP_AGENT_INSTALL_DIR` 解析，之后删除本注入 |
 | `STP_TOOLS_CACHE_ROOT` | **可选（Agent）**：本机解包缓存根覆盖；缺省派生自 `{AGENT_INSTALL_DIR}/tools_cache` |
 | `STP_JIRA_BASE_URL` / `STP_JIRA_TOKEN` | **可选**：JIRA REST 基址与 Bearer token（#710）。配置后 dedup 提单前对 `jira_project_key` 做一次存在性探测（`GET /rest/api/2/project/{key}`），404 记 WARNING 不阻断；未配置则跳过探测（保持 best-effort） |
 | `STP_AGENT_UNISOC_LOG_SCAN_PYTHON` / `_SCRIPT` | **仅控制面**：展锐采集工具（`Monkey-Log-Scan-GT-SPRD`）路径的源键，hot-update 写成 `STP_UNISOC_LOG_SCAN_*`（ADR-0032） |
