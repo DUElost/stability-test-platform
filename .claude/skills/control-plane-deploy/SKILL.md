@@ -39,36 +39,34 @@ curl -s http://127.0.0.1:8000/health      # health 路由（非 /api/v1/health�
   会让 `jq '.data.ok'` 恒为 null）；`/scripts/scan`、`/script-presence/*` 这些才是 `{data: …}`。
   可参考已跑通的抽验脚本（token → 目标 host → force 热更新 → 断言 `priv_mode`）：`/tmp/stp-acc/verifyD_sample.sh`（临时产物，机器重建即失）。
 
-## 1. 控制面后端更新与 DB 迁移（本机即生产控制面）
+## 1. 控制面后端更新与 DB 迁移（本机即生产控制面，**bundle 发布根形态**）
 
-> 本机（127.0.0.1:8000）即是生产控制面：代码即跑在 **git 仓库根
-> `/home/debian13/stability-test-platform`**（systemd `WorkingDirectory` 指向它），
-> `#else` 上述清单里的 `/opt/stability-test-platform` 对**本机不成立**（已校准，
-> 该目录不存在）。生产唯一 env 源是 `.env.backend`。
-> 这是**既有人工 SOP**（`docs/production-minimum-deployment-checklist.md` §3.5），
-> 不是 CI/CD 管道——每次上线都要人工执行。
+> 本机（127.0.0.1:8000）即是生产控制面。ADR-0051 Phase 1（2026-09-23 实切）起：unit 的
+> `WorkingDirectory`/`EnvironmentFile`/`ExecStart`/日志全部指向 **`/home/debian13/stp-releases/current`**
+> （符号链接 → `stp-releases/<rev>/` 的 bundle 树），与开发工作区（git 检出）物理分离；仓根不再是运行路径。
+> env 单源：发布根 `.env.backend` 是**指向仓根同名文件的 symlink**（改 env 只改仓根，重启即生效）。
+> 仍是**人工 SOP**，不是 CI/CD 管道。
 
 1. **PR 合入** main（禁直推；auto-merge 由 AGENTS.md 门禁把关）。
-2. **同步代码到生产目录**（本机=仓库根）：`git checkout main && git pull origin main`
+2. **构建 bundle**（在**已拉到目标 main 的检出**里跑；构建输入 = 当前工作树，先 `git pull` +
+   `./tools/dev/check-deploy-source.sh` 确认在 main 且干净——守卫管的是**构建源**，不再是部署源）：
    ```bash
-   git checkout main && git pull origin main
-   ./tools/dev/check-deploy-source.sh   # 部署源守卫：非 main / tracked 有未提交改动 / **载荷根 backend/agent/ 有未跟踪文件**（#3112）/ schema 超前于代码 head → 退出 1，先处理再继续
+   git pull --ff-only origin main && ./tools/dev/check-deploy-source.sh
+   venv/bin/python tools/release/build_bundle.py --repo-root . --out /home/debian13/stp-releases/<rev>
    ```
-   ——部署源就是工作树，务必保持在 main。
-3. **应用 DB 迁移**（禁止直连生产库手动 `alembic upgrade`：
-   AGENTS.md「迁移试验禁对生产库执行」；迁移必须先经 PR + 验证）：
+   `release-manifest.json` 的 `product.version` / 两个 ADR-0040 digest 即部署内容地址；构建机本地态由
+   `find_forbidden_bundle_entries` fail-closed（#2269/#3112 在 bundle 形态的替身）。
+3. **物料与 venv**（首建/新 rev）：发布根需 `venv/`（`python3 -m venv venv && venv/bin/pip install -r backend/requirements.txt`）、
+   `logs/`、`.env.backend`（**symlink 到仓根**，勿复制成第二源）；`tools/ansible/inventory.ini` 随 bundle 携带
+   （gitignored，构建机没有它 → 热更新 SSH 凭据回退会静默消失）。
+4. **切 current 并重启**（回滚 = 把 current 指回旧 rev 或仓根 unit 备份 `*.bak-20260923-phase1`）：
    ```bash
-   cd /home/debian13/stability-test-platform/backend
-   ../venv/bin/python -m alembic upgrade head
-   ```
-   部署后回查：`venv/bin/python -m alembic current` 应等于目标 revision。
-4. **重启服务**（迁移若已解耦为 `-migrate` oneshot，则只重启常驻服务）：
-   ```bash
-   ./tools/dev/check-deploy-source.sh   # 重启前再核一次（并发会话可能已把工作树切走；连带查 schema 未超前 head）
-   sudo systemctl restart stability-backend
-   systemctl is-active stability-backend
+   ln -sfn /home/debian13/stp-releases/<rev> /home/debian13/stp-releases/current.tmp && mv -Tf /home/debian13/stp-releases/current.tmp /home/debian13/stp-releases/current
+   sudo systemctl restart stability-backend   # unit 路径走 current，无需 daemon-reload
    curl -s http://127.0.0.1:8000/health
    ```
+   DB 迁移由 unit 的硬 `ExecStartPre`（`alembic upgrade head` + `check_alembic_at_head.py`）在启动时执行——
+   禁止绕过 unit 直连生产库手动 upgrade（AGENTS.md 红线不变）。
 5. **迁移窗口观察**（改 host.id 类迁移）：Agent 的 `agent:{host_id}` socketio room
    键随 id 变更，Agent 需按新 id 重建心跳/连接——预期一次重连，观测心跳波动；
    完事后对照 `GET /api/v1/hosts` 全部 ONLINE 且 `host.id == host.ip` 派生号一致。
@@ -146,10 +144,10 @@ PYTHONPATH=. venv/bin/python -m backend.scripts.batch_hot_update --direct
   `expected_code_revision` 是**溯源文本**（`expected` 取仓库 HEAD，任何不动 `backend/agent/**`
   的提交都会让它前进）。期望 revision 仍可用
   `backend.services.host_updater.get_agent_code_version()` 取值，但**别拿它判等**。
-- **desired digest = 现算当前工作树**（枚举含未跟踪文件）：并行会话在 `backend/agent/` 下
-  留一个临时文件就能让全 fleet 变 drift（2026-09-22 实测：`sha256:020a7f12…` →
-  `sha256:96ba11d1…`，删掉即复原）。所以**见到整片 drift 先查工作树干不干净**——
-  载荷根的未跟踪文件现在会被部署源守卫硬拦（#3112）。
+- **desired digest = 现算发布根 `backend/agent/` 树**（Phase 1 起不再读开发工作树——并行会话碰
+  仓根不会再让全 fleet drift，2026-09-22 那类事故形态（工作树临时文件 → 全 fleet drift）已消除；
+  drift 只剩「发布根被手改」或「bundle 构建时工作树不干净」）。见到整片 drift：先 `cmp -r` 发布根
+  与 `stp-releases/<rev>` 原树，再查最近一次构建源。
 - **自愈路径**：收敛成功后远端脚本执行 `write-digest`，写入的是**控制面现算的 desired
   digest**（不是主机自算），所以一次成功推送必然把该台置 `matched`（`host_updater.py:380-384`）。
 - **实测 ~3s/台**（2026-09-22：canary `duration_ms=3068`；48 台批量约 4 分钟，
@@ -196,11 +194,12 @@ PYTHONPATH=. venv/bin/python -m backend.scripts.batch_hot_update --direct
 | 部署后代码 | 部署验证完成后按仓库流程走 PR 合入，不直推 main |
 | 本地 ref 陈旧 | worktree 基于 origin/main 前必 fetch；构建前用 `merge-base --is-ancestor <PR mergeCommit> origin/main` 校验 |
 | **热更新清带外资源**（2026-08-31 记录，**该形态已被修**） | 08-31 当时 `--delete` 会清掉 `resources/` 下非豁免目录（只有 `resources/mtbf/` 豁免）。**当前不再成立**：`stp_agent_priv.PROTECT_ONLY_PATHS = ["resources/***"]`（#1950/#2019，契约测试逐项锁定）把整棵 `resources/` 设为 protect-only——只防删除、不做 exclude，且必须写 `***`（尾斜杠只匹配目录节点本身）。`resources/` **之外**的带外文件仍会被 `--delete` 抹掉，故带外资源仍在最终热更新后放置 |
-| **载荷根未跟踪文件**（#3112） | 部署源守卫发现 `backend/agent/` 下有未跟踪文件即**硬失败**（exit 1）：它们会被推到全部主机，并改变 desired digest（全 fleet 变 drift）。处置：归位走 PR／删除／写进 `.gitignore`；`resources/`、`__pycache__` 本就被 gitignore，不受影响 |
+| **载荷根未跟踪文件**（#3112→bundle 形态） | checkout 时代由部署源守卫在部署时硬拦；Phase 1 后判据前移到**构建时**：bundle 复制工作树，未跟踪文件会随构建进发布根并改 desired digest——构建前照跑守卫（§1 步 2），发布根内禁止手改（改动只发生在构建） |
 
 ## 7. 校准记录
 
 | 日期 | 校准了什么 | 来源 |
+| 2026-09-23 | **Phase 1 实切**：§1 重写为 bundle 发布根流程（build_bundle → `stp-releases/<rev>` + `current` 链接；unit 指 current；发布根 `.env.backend` 为仓根 symlink；回滚 = 重指 current / 恢复 `*.bak-20260923-phase1`）；§3「desired digest 现算工作树」与 §6 守卫两条按新形态改写。实切数据：烟测（import / alembic 对齐 / `_AGENT_SOURCE_DIR` 落发布根）全过；切换后 scan `skipped=210 conflicts=0`、单机热更新 `converged(digest-matched, sha256:55bb3dfee75f…)`、presence 0 missing/0 mismatch | 本次实切 + `docs/notes/process/2026-09-23-sop-phase1-bundle-cutover.md` |
 |------|-----------|------|
 | 2026-08-27 | v0 骨架创建（全部 ⚠️待校对） | memory + runbook 预起草 |
 | 2026-08-28 | 新增 §1 控制面后端更新与 DB 迁移路径（本机即生产控制面） | docs/production-minimum-deployment-checklist.md §3.5 + k8l9m0n1o2p3 迁移 |
@@ -217,14 +216,12 @@ PYTHONPATH=. venv/bin/python -m backend.scripts.batch_hot_update --direct
 
 ## 踩坑守卫（负向约束）
 
-- 部署源守卫（`tools/dev/check-deploy-source.sh`）不过就停：非 `main`、有未提交改动、
-  **载荷根 `backend/agent/` 下有未跟踪文件**（#3112：它是载荷内容，会推到全部主机并改变
-  desired digest），或 alembic schema **超前于代码 head / 修订未知**（脚本内调
-  `check_alembic_at_head.py --allow-behind`，库落后只 WARN——「pull → 守卫 →
-  `upgrade head`」的中间态合法；无 `DATABASE_URL` 时 WARN 跳过）时禁止继续部署
-  （共享工作树曾跑在未合入分支上被推上生产）。systemd 侧另有**硬** `ExecStartPre`
-  精确对齐检查（位置在 `upgrade head` 之后，不带 `--allow-behind`；部署源守卫本身
-  在该 unit 里是 `-` 软检查，失败只记日志）；
+- 部署源守卫（`tools/dev/check-deploy-source.sh`）**现在管的是 bundle 的构建源**：构建前不过
+  就停（非 `main` / 有未提交改动 / 载荷根 `backend/agent/` 未跟踪文件 / schema 超前 head 或修订未知，
+  判据不变；库落后 WARN 语义同旧）。unit 侧：alembic 对齐是**硬** `ExecStartPre`（`upgrade head` +
+  `check_alembic_at_head.py`，无减号）；checkout 时代的软守卫 `ExecStartPre=-check-deploy-source.sh`
+  已随 Phase 1 从 unit 移除（发布根无 `.git`，留着只产噪声）；发布根内容以 `release-manifest.json`
+  的 digest 为准；
 - **禁止直连生产库手动 `alembic upgrade`**——迁移走代码与 PR 流程（§1 step 3）；
 - scan `conflicts` 出现时先 `sha256sum` 比对磁盘 vs DB，再决定是否
   `?force_rebaseline=true`（且需无在途 PlanRun）；seed 预建版本 created=0/skipped 是
