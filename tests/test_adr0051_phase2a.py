@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -133,8 +134,13 @@ class TestCheckerSemantics:
         d = _tree(root, "fam")
         doc, rebuilt = _registered(root, {"fam": "1.0.0"})
         (d / "v1.0.0").mkdir()
+        (d / "v1.0.0" / "leftover.py").write_text("x\n", encoding="utf-8")
         assert any("不得再有版本目录" in e for e in checker.check(doc, rebuilt, root))
-        (d / "v1.0.0").rmdir()
+        (d / "v1.0.0" / "leftover.py").unlink()
+        (d / "v1.0.0" / "__pycache__").mkdir()
+        (d / "v1.0.0" / "__pycache__" / "x.pyc").write_bytes(b"x")
+        assert checker.check(doc, rebuilt, root) == []  # 纯 ignored 残壳容忍（老 checkout 升级形态）
+        shutil.rmtree(d / "v1.0.0")
         doc["tools"]["ghost"] = {"versions": [{"version": "1.0.0", "package_sha256": "a" * 64,
                                               "artifact": "packages/ghost/1.0.0.tar.gz", "python": None,
                                               "script": "ghost.py", "retired": False}]}
@@ -198,3 +204,18 @@ class TestModeNormalization:
 def test_version_key_numeric(v, expected):
     assert tuple(x for pair in checker.version_key(v) for x in pair) == expected
     assert checker.version_key("1.3.9") < checker.version_key("1.3.17")
+
+
+class TestStrayTolerance:
+    """老 checkout 的纯 pycache 版本目录残壳不判红；含真文件仍红（fix #3075 后续）。"""
+
+    def test_pycache_only_shell_not_stray_but_real_file_is(self, tmp_path):
+        root = tmp_path / "scripts"
+        fam = root / "fam"
+        shell = fam / "v1.0.0" / "__pycache__"
+        shell.mkdir(parents=True)
+        (shell / "x.cpython-313.pyc").write_bytes(b"x")
+        (fam / "fam.py").write_text("x\n", encoding="utf-8")
+        assert checker.stray_version_dirs(root) == []
+        (fam / "v1.0.0" / "leftover.py").write_text("real\n", encoding="utf-8")
+        assert checker.stray_version_dirs(root) == ["fam/v1.0.0"]

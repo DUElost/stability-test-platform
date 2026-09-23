@@ -270,12 +270,32 @@ def _check_dpkg_installed(package: str) -> "bool | None":
     return False if status is not None else None
 
 
-def _locate_flashtool() -> "str | None":
+def _flashtool_candidates() -> "list[str]":
+    """v1.0.5（#3075）：解析顺序 env `STP_FLASH_TOOL_DIR` > `STP_AGENT_INSTALL_DIR` 派生 > 旧 script_dir 相对。
+
+    旧相对回退（script_dir/../../../resources/…）在 tree 模式下正确；Phase 3 包模式
+    （脚本从 tools_cache 执行）下它指向不存在路径——刷机前置因此在 v1.0.4 上必败。
+    env/安装根两条都是包模式下的正确锚；相对项保留作无 env 环境的最后 fallback。
+    终态（ADR-0051 Phase 4）：flashtool 入包后连 env 一起收敛，本函数改读包内路径。
+    """
+    candidates: "list[str]" = []
+    env_dir = (os.environ.get("STP_FLASH_TOOL_DIR") or "").strip()
+    if env_dir:
+        candidates.append(env_dir)
+    install_dir = (os.environ.get("STP_AGENT_INSTALL_DIR") or "").strip()
+    if install_dir:
+        candidates.append(os.path.join(install_dir.rstrip("/"), "agent", "resources", "flashtool",
+                                       _DEFAULT_FLASHTOOL_REL[-1]))
     base = os.path.dirname(os.path.abspath(__file__))
-    candidate = os.path.normpath(os.path.join(base, *_DEFAULT_FLASHTOOL_REL))
-    exe = os.path.join(candidate, "flash_tool")
-    if os.path.isfile(exe):
-        return exe
+    candidates.append(os.path.normpath(os.path.join(base, *_DEFAULT_FLASHTOOL_REL)))
+    return candidates
+
+
+def _locate_flashtool() -> "str | None":
+    for candidate in _flashtool_candidates():
+        exe = os.path.join(candidate, "flash_tool")
+        if os.path.isfile(exe):
+            return exe
     return None
 
 

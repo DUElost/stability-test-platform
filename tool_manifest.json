@@ -506,6 +506,14 @@
           "retired": false,
           "script": "flash_preflight.py",
           "version": "1.0.4"
+        },
+        {
+          "artifact": "packages/flash_preflight/1.0.5.tar.gz",
+          "package_sha256": "9662b723003581bd37a2972e58fbb25351cb686c7e8c9c9c938919f9e42d67ee",
+          "python": null,
+          "retired": false,
+          "script": "flash_preflight.py",
+          "version": "1.0.5"
         }
       ]
     },
