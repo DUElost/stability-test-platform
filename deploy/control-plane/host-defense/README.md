@@ -6,6 +6,7 @@
 |---|---|---|
 | `earlyoom.default` | `/etc/default/earlyoom` | 兜底：avail≤15% 且 swapfree≤8% 时杀掉用户态失控进程（SIGKILL 档 8%/4%） |
 | `10-stp-watchdog.conf` | `/etc/systemd/system.conf.d/10-stp-watchdog.conf` | 兜底的兜底：PID1 30s 没喂狗 ⇒ 板载 iTCO 硬复位，不需要人到场 |
+| `../../prometheus/alerts-host-resources.yml` | `/etc/prometheus/rules/alerts-host-resources.yml` | 更早一层：余量塌陷/见底时先给个人（#3050 G1，取代 09-14 的仓库外草案） |
 
 **第一道防线不在这里**，而是「测试执行必须带 cgroup 内存硬顶」——见
 `docs/development/testing.md` §2。理由：earlyoom 触发时机器已经在失速边缘，而 2026-09-23
@@ -53,6 +54,27 @@ venv/bin/python tools/dev/check-monitoring-assets.py --repo-root . | tail -3
 第 2 条是硬要求：**「写了 drop-in」≠「狗被武装」**。manager.conf 只在 `daemon-reexec`
 时被 PID1 重读（`daemon-reload` 不行），回读到 0 就是没武装——那正是 09-14 到 09-23 之间
 这台机器的真实状态。
+
+### 宿主内存告警（#3050 G1）重放
+
+这份规则**不在** S4 安装清单里（站点 Prometheus 读 `etc/stp/prometheus/rules/`，控制面读
+`etc/prometheus/rules/`，由安装器盲写只会造出没人读的孤儿文件）。它登记在
+`stages.py:HOST_RULE_COPIES`，只受漂移检测约束，需要人工重放：
+
+```bash
+R=/home/debian13/stability-test-platform
+sed "s#<deploy-root>#$R#g" $R/deploy/prometheus/alerts-host-resources.yml \
+  | sudo tee /etc/prometheus/rules/alerts-host-resources.yml >/dev/null
+promtool check rules /etc/prometheus/rules/alerts-host-resources.yml
+sudo curl -s -X POST http://127.0.0.1:9091/-/reload        # 别 restart：热加载即可
+# 验证：条数应 +4，且表达式**真有样本**（判据不匹配标签会静默恒不触发）
+curl -sG http://127.0.0.1:9091/api/v1/rules --data-urlencode type=alert \
+  | python3 -c 'import sys,json;g=json.load(sys.stdin)["data"]["groups"];print([r["name"] for x in g for r in x["rules"] if x["name"]=="host-resources"])'
+../../venv/bin/python tools/dev/check-monitoring-assets.py --repo-root "$R" | tail -3   # 期望 match、0 drift
+```
+
+阈值是从现网 10020 个分钟点里标定出来的（基线 0/5/1 分钟误报三档），**不要**顺手改回百分比或
+拉长 `for:`：终局阶段实测只有 2 分钟，`for: 10m` 结构上不可能响——那正是草案的失效原因。
 
 ## 尾账
 
