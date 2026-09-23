@@ -29,8 +29,8 @@ _spec.loader.exec_module(_mod)
 def fake_repo(tmp_path):
     """造一棵最小"仓库"：只放清单需要的源文件（内容含 <deploy-root> 标记）。"""
     root = tmp_path / "repo"
-    from tools.site_config.stages import monitoring_artifacts
-    for source_rel, _dest, _mode in monitoring_artifacts():
+    from tools.site_config.stages import host_assets
+    for source_rel, _dest, _mode in host_assets():
         target = root / source_rel
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(f"# source {source_rel}\nroot=<deploy-root>\n", encoding="utf-8")
@@ -39,8 +39,8 @@ def fake_repo(tmp_path):
 
 def _install(repo: Path, system_root: Path, *, mutate=None, skip=()):
     """按清单把"已装副本"铺到 system_root，可注入改动制造漂移。"""
-    from tools.site_config.stages import monitoring_artifacts
-    for source_rel, dest_rel, _mode in monitoring_artifacts():
+    from tools.site_config.stages import host_assets
+    for source_rel, dest_rel, _mode in host_assets():
         if source_rel in skip:
             continue
         dest = system_root / _mod.candidate_paths(dest_rel)[0]
@@ -117,16 +117,16 @@ def test_all_absent_stays_ok(tmp_path, fake_repo):
 
 
 def test_coverage_follows_the_manifest_not_a_hardcoded_list(tmp_path, fake_repo):
-    """检测范围必须等于 `monitoring_artifacts()`——同一事实不留两套清单。
+    """检测范围必须等于 `host_assets()`——同一事实不留两套清单。
 
     #2488 之前规则文件就是因为「清单里没有」而从不被检查；本用例保证以后往清单里
     加资产（例如 Grafana 数据源）会自动进入检测，而不需要同步改这个测试。
     """
-    from tools.site_config.stages import monitoring_artifacts
+    from tools.site_config.stages import host_assets
     system_root = tmp_path / "sys"
     _install(fake_repo, system_root)
     results = _mod.inspect(system_root, fake_repo, repo_root=fake_repo)
-    assert [r["source"] for r in results] == [a[0] for a in monitoring_artifacts()]
+    assert [r["source"] for r in results] == [a[0] for a in host_assets()]
     assert len(results) >= 9  # 规则文件与守卫单元都已在清单里（#2488）
 
 
@@ -166,9 +166,9 @@ def test_legacy_distro_path_is_accepted(tmp_path, fake_repo):
     存量机升级时按同名覆盖，本判据正是钉这一点：老路径仍要被认出。
     """
     system_root = tmp_path / "sys"
-    from tools.site_config.stages import monitoring_artifacts
+    from tools.site_config.stages import host_assets
     rel = "deploy/prometheus/prometheus.yml"
-    dest_rel = next(d for s, d, _ in monitoring_artifacts() if s == rel)
+    dest_rel = next(d for s, d, _ in host_assets() if s == rel)
     legacy = _mod.LEGACY_FALLBACKS[dest_rel].destination
     target = system_root / legacy
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -185,8 +185,8 @@ def _install_legacy_platform_copy(fake_repo, system_root, *, mutate=None):
 
     人工副本口径是**原样拷贝**（不渲染占位符），故这里直接写源文件内容。
     """
-    from tools.site_config.stages import monitoring_artifacts
-    dest_rel = next(d for s, d, _ in monitoring_artifacts()
+    from tools.site_config.stages import host_assets
+    dest_rel = next(d for s, d, _ in host_assets()
                     if s == "deploy/prometheus/site-alerts.yml")
     fallback = _mod.LEGACY_FALLBACKS[dest_rel]
     source_rel = fallback.source
@@ -448,10 +448,10 @@ def test_deploy_user_placeholder_is_resolved_when_known(tmp_path, fake_repo):
     三面都要：已知 ⇒ match；已知但副本是别的用户 ⇒ **真 DRIFT**（证明在真比对）；
     未知 ⇒ 仍 skipped（占位符残留，不猜、也不拿字面量判假 DRIFT）。
     """
-    from tools.site_config.stages import monitoring_artifacts
+    from tools.site_config.stages import host_assets
 
     src_rel = "deploy/control-plane/systemd/stp-skill-usage.service"
-    dest_rel = next(d for s, d, _m in monitoring_artifacts() if s == src_rel)
+    dest_rel = next(d for s, d, _m in host_assets() if s == src_rel)
     source = fake_repo / src_rel
     source.write_text("User=<deploy-user>\nExecStart=/x\n", encoding="utf-8")
 

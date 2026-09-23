@@ -11,42 +11,53 @@
 `docs/development/testing.md` §2。理由：earlyoom 触发时机器已经在失速边缘，而 2026-09-23
 那次的失控体 120 秒就吃了 12.7 GiB；硬顶能把损失压到「一次测试运行」，兜底只能压到「丢一个进程」。
 
-## 安装（控制面宿主，root）
+## 安装（两条路，优先第一条）
+
+**① 站点安装器（推荐）**：资产已在 `tools/site_config/stages.py` 的 `host_defense_artifacts()`
+清单里（`HOST_DEFENSE_DISTRO_DEFAULTS` + `HOST_DEFENSE_ASSETS`，与监控栈合成 `host_assets()`）。
+正常 `site install` 会：S1 装 `earlyoom` 包 → S2 渲染两份资产（渲染期即拒绝 `--dryrun` 的
+生效行）→ S4 落盘 → `systemctl restart earlyoom` → `systemctl daemon-reexec` → **回读验证**
+（`is-active` + `/etc/default/earlyoom` 的生效行 + `RuntimeWatchdogUSec` 非 0）。
+任一项不过 = `install_host_defense` 红灯，安装器不会带着没武装的狗报绿。
+
+> 防线**不挂在 `monitoring.enabled` 上**（与采样器不同）：关掉观测面可以接受，关掉
+> 「卡死后自动复位」不能接受——测试
+> `test_host_defense_is_not_gated_by_the_monitoring_switch` 钉住这一点。
+
+**② 存量控制面宿主（installer 之前的机器）手工重放**：
 
 ```bash
 R=/home/debian13/stability-test-platform          # 仓库根（deploy root）
-cp -a /etc/default/earlyoom /root/earlyoom.$(date +%F)            # 先备份
-install -m 0644 $R/deploy/control-plane/host-defense/earlyoom.default /etc/default/earlyoom
-install -m 0644 $R/deploy/control-plane/host-defense/10-stp-watchdog.conf \
-        /etc/systemd/system.conf.d/10-stp-watchdog.conf
-systemctl restart earlyoom          # EnvironmentFile 只在启动时读
-systemctl daemon-reexec             # manager.conf 由 PID1 重读，必须 reexec 而非 reload
+cp -a /etc/default/earlyoom /root/earlyoom.$(date +%F)
+sed "s#<deploy-root>#$R#g" $R/deploy/control-plane/host-defense/earlyoom.default \
+  | sudo tee /etc/default/earlyoom >/dev/null
+sudo mkdir -p /etc/systemd/system.conf.d
+sed "s#<deploy-root>#$R#g" $R/deploy/control-plane/host-defense/10-stp-watchdog.conf \
+  | sudo tee /etc/systemd/system.conf.d/10-stp-watchdog.conf >/dev/null
+sudo systemctl restart earlyoom && sudo systemctl daemon-reexec   # 缺一不可
 ```
-
-`earlyoom` 包若缺失：`apt-get install -y earlyoom`（本目录不改包安装清单，见下「尾账」）。
 
 ## 验证（装完必须逐条绿，否则等于没装）
 
 ```bash
-# 1) 防线参数生效且**不含 --dryrun**
-tr '\0' ' ' < /proc/$(pgrep -x earlyoom | head -1)/cmdline | grep -o -- "--dryrun" \
-  && echo "FAIL: 仍在 dry-run 空转" || echo "OK: 真防线"
-# 2) 会选中元凶：--prefer 匹配的是 comm，失控体 comm=`python`
-journalctl -u earlyoom -n 5 --no-pager      # 应打印 SIGTERM/SIGKILL 阈值两行
-# 3) 硬件 watchdog 真武装（内核侧证据，不看配置文件）
-systemctl show -p RuntimeWatchdogUSec --value          # 期望 30s
-dmesg | grep -i "Watchdog running with a hardware timeout"
-sudo fuser /dev/watchdog0                              # 期望 PID 1
+# 1) 防线参数生效且**不再是 dry-run**（只看 EARLYOOM_ARGS 生效行）
+grep '^EARLYOOM_ARGS' /etc/default/earlyoom | grep -c -- --dryrun        # 期望 0
+# 2) 硬件 watchdog 真武装（内核侧证据，不看配置文件）
+systemctl show -p RuntimeWatchdogUSec --value                            # 期望 30s
+sudo dmesg | grep -i "Watchdog running with a hardware timeout"
+sudo fuser /dev/watchdog0                                                # 期望 PID 1
+# 3) 运行副本与仓库事实源一致（漂移检测已把这两项纳入清单）
+venv/bin/python tools/dev/check-monitoring-assets.py --repo-root . | tail -3
 ```
 
-第 3 条是硬要求：**「写了 drop-in」≠「狗被武装」**。PID1 只在 `daemon-reexec` 后重读
-manager.conf，且 `RuntimeWatchdogSec` 读回 0 就是没武装（2026-09-23 事故前的状态）。
+第 2 条是硬要求：**「写了 drop-in」≠「狗被武装」**。manager.conf 只在 `daemon-reexec`
+时被 PID1 重读（`daemon-reload` 不行），回读到 0 就是没武装——那正是 09-14 到 09-23 之间
+这台机器的真实状态。
 
-## 尾账（本目录刻意没做完的部分，别当成已完成）
+## 尾账
 
-- **未进 `tools/site_config/stages.py` 安装清单**：该文件当前由 #3098 在窗修改，避让中。
-  进清单时还要注意两件：① 装完必须 `restart earlyoom` + `daemon-reexec`，只落文件会产生
-  「已装但没生效」的假象（正是 #3050 批过的失效模式）；② `earlyoom` 不在
-  `MONITORING_PACKAGES` 里，需要决定是纳入包清单还是降级为可选。
-- **未进 `/etc/default/earlyoom` 的漂移检测**：`tools/dev/check-monitoring-assets.py` 只覆盖
-  监控栈资产。在它纳入之前，本文件与运行副本的一致性靠上面三条验证命令人工保证。
+- ~~未进安装清单/漂移检测~~ → **已做**（本目录资产进 `host_assets()`，`check-monitoring-assets.py`
+  覆盖，2026-09-23 本机实测 `match`）。
+- 仍开着：**#3202**（Phase-3 WIP 里那条 `pytest` 失控环，≈160 MB/s）与 **#3050 G1**
+  （宿主内存告警按现网分布重标为结果判据 + 短 `for:`）。硬顶（第一道防线）见
+  `docs/development/testing.md` §2。

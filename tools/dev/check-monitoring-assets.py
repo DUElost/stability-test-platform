@@ -9,7 +9,7 @@
 **不新开 timer**：漂移只在部署时点有意义（伴随一次 pull / 重启），所以执行者复用
 `tools/dev/check-deploy-source.sh`——它本来就在每次部署前跑、并已挂在 backend unit 的
 `ExecStartPre=-` 上，语义正是「盘上现状 ≠ 仓库现状」。检测范围直接取
-`monitoring_artifacts()`：**同一事实不留两套清单**。
+`host_assets()`（监控栈 + 宿主防线，#3200）：**同一事实不留两套清单**。
 
 判定与退出码（沿用 `--guard` 的分档思路：判定码与「无从判定」分开）：
     0 = 无漂移   1 = 有漂移   2 = 无从判定（清单为空 / **仓库源文件读不到** / 全部非判定）
@@ -42,7 +42,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from tools.site_config.stages import monitoring_artifacts  # noqa: E402
+from tools.site_config.stages import host_assets  # noqa: E402
 
 class LegacyFallback(NamedTuple):
     """存量（installer 之前）部署的兜底落点及其**专属事实源/比对口径/补救路径**。
@@ -196,7 +196,7 @@ def inspect(
 ) -> list[dict]:
     """逐资产比对。返回 [{source,source_used,destination,hit,state,detail,remedy}]，顺序与清单一致。"""
     results: list[dict] = []
-    for source_rel, dest_rel, _mode in monitoring_artifacts():
+    for source_rel, dest_rel, _mode in host_assets():
         entry: dict = {"source": source_rel, "destination": dest_rel, "hit": None,
                        "state": ABSENT, "detail": "", "source_used": source_rel,
                        "remedy": DEFAULT_REMEDY}
@@ -295,7 +295,7 @@ def main(argv: list[str] | None = None) -> int:
                           "assets": results}, ensure_ascii=False, indent=2))
         return exit_code
 
-    print("# 监控/告警资产漂移检测（事实源：monitoring_artifacts()）")
+    print("# 监控/告警资产漂移检测（事实源：host_assets()）")
     print(f"# <deploy-root> = {deploy_root}（依据：{reason}）")
     print(f"# <deploy-user> = {deploy_user or '(未确定)'}（依据：{user_reason}）")
     print(f"# 事实源 = {describe_source_repo(Path(args.repo_root))}")
