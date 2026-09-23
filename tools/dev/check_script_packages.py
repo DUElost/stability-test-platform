@@ -95,12 +95,35 @@ def iter_family_trees(scripts_root: Path) -> list[tuple[str, Path]]:
     return out
 
 
+_IGNORED_RESIDUE_NAMES = frozenset({".DS_Store"})
+_IGNORED_RESIDUE_SUFFIXES = (".pyc", ".pyo")
+
+
+def _has_real_content(dir_: Path) -> bool:
+    """目录是否含**非 ignored 残渣**的文件（`__pycache__`/`*.pyc*o`/`.DS_Store` 之外）。
+
+    老 checkout 升级 Phase 3 后，`git rm` 只删跟踪文件——版本目录常剩一堆 pycache 空壳。
+    新鲜 CI checkout 不会有；本地/站点的旧树必须有容忍，否则 210 项假红。
+    """
+    for _root, dirs, files in os.walk(dir_):
+        dirs[:] = [d for d in dirs if d != "__pycache__"]
+        for f in files:
+            if f in _IGNORED_RESIDUE_NAMES or f.endswith(_IGNORED_RESIDUE_SUFFIXES):
+                continue
+            return True
+    return False
+
+
 def stray_version_dirs(scripts_root: Path) -> list[str]:
-    """Phase 3 后不允许的 ``<name>/v<version>/`` 目录（相对路径列表）。"""
+    """Phase 3 后不允许的 ``<name>/v<version>/`` 目录（相对路径列表）。
+
+    纯 ignored 残壳（只剩 pycache 等）不算 stray——但**不豁免**：调用方 cleanup 由人执行；
+    含任何真实文件的版本目录必红。
+    """
     out: list[str] = []
     for name, tree in iter_family_trees(scripts_root):
         for child in sorted(tree.iterdir()):
-            if child.is_dir() and _VERSION_DIR_RE.match(child.name):
+            if child.is_dir() and _VERSION_DIR_RE.match(child.name) and _has_real_content(child):
                 out.append(f"{name}/{child.name}")
     return out
 
@@ -284,11 +307,17 @@ def run_self_test() -> int:
             failures.append("退役最新版后树应与回落版本不等 → 红")
         doc["tools"]["alpha"]["versions"][-1]["retired"] = False
 
-        # 版本目录残留 → 红
+        # 版本目录残留（含真实文件）→ 红；纯 pycache 残壳 → 容忍（老 checkout 升级形态）
         (root / "beta" / "v9.9.9").mkdir()
+        (root / "beta" / "v9.9.9" / "leftover.py").write_text("x\n", encoding="utf-8")
         if not any("不得再有版本目录" in e for e in check(doc, rebuilt3, root)):
-            failures.append("残留 v 目录应红")
-        (root / "beta" / "v9.9.9").rmdir()
+            failures.append("含真实文件的残留 v 目录应红")
+        (root / "beta" / "v9.9.9" / "leftover.py").unlink()
+        (root / "beta" / "v9.9.9" / "__pycache__").mkdir()
+        (root / "beta" / "v9.9.9" / "__pycache__" / "x.pyc").write_bytes(b"x")
+        if any("不得再有版本目录" in e for e in check(doc, rebuilt3, root)):
+            failures.append("纯 pycache 残壳不应红")
+        shutil.rmtree(root / "beta" / "v9.9.9")
 
         # 无树条目（外部族 python=null，Phase 4a 二义）不判红——归类以树集为判据
         ghost = json.loads(json.dumps(doc))
