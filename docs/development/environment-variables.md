@@ -212,7 +212,7 @@
 
 <!-- env-inventory:begin（generated：python tools/dev/env_inventory.py --write） -->
 
-共 **265** 个读取名（`backend/**`，不含 `backend/agent/scripts/**`；含 ADR-0042 Settings 字段）：**235** 个已在 `.env*.example` 登记，**30** 个声明为内部（理由见下节）。
+共 **267** 个读取名（`backend/**`，不含 `backend/agent/scripts/**`；含 ADR-0042 Settings 字段）：**237** 个已在 `.env*.example` 登记，**30** 个声明为内部（理由见下节）。
 示例文件是**运维模板**（承载需要运维/机型调整的子集）；本表是**代码侧完整清单**。
 门禁：每个读取名必须「登记进示例」或「内部声明」二选一，二者之外即红。
 
@@ -226,9 +226,11 @@
 | `AGENT_LEASE_EXTEND_BATCH_MAX` | `200` | ✅ | 运行时 | `backend/services/agent_lease_extend.py:37` |
 | `AGENT_LEASE_TTL` | `600` | ✅ | 运行时 | `backend/agent/settings.py:174` |
 | `AGENT_LOCK_RENEWAL_INTERVAL` | `60` | ✅ | 运行时 | `backend/agent/settings.py:170` |
-| `AGENT_POST_RETRIES` | `3` | ✅ | 运行时 | `backend/agent/api_client.py:39` |
-| `AGENT_POST_RETRY_BASE_DELAY` | `1` | ✅ | 运行时 | `backend/agent/api_client.py:43` |
-| `AGENT_SECRET` | `` | ✅ | 运行时 | `backend/agent/api_client.py:35` |
+| `AGENT_POST_RETRIES` | `3` | ✅ | 运行时 | `backend/agent/api_client.py:41` |
+| `AGENT_POST_RETRY_BASE_DELAY` | `1` | ✅ | 运行时 | `backend/agent/api_client.py:45` |
+| `AGENT_SECRET` | `` | ✅ | 运行时 | `backend/agent/api_client.py:37` |
+| `AGENT_TERMINAL_ABORT_JITTER_SECONDS` | `5` | ✅ | 运行时 | `backend/agent/api_client.py:69` |
+| `AGENT_TERMINAL_UPLOAD_CONCURRENCY` | `2` | ✅ | 运行时 | `backend/agent/api_client.py:63` |
 | `AIMONKEY_RESOURCE_DIR` | `` | ✅ | 运行时 | `backend/agent/aimonkey_paths.py:23` |
 | `API_URL` | `http://127.0.0.1:8000` | ✅ | 运行时 | `backend/agent/agent_application.py:107` |
 | `ARTIFACT_RETENTION_DAYS` | `30` | ✅ | 运行时 | `backend/core/settings/scheduler.py:92` |
@@ -447,8 +449,8 @@
 | `STP_STEP_STALL_SECONDS` | `-` | ✅ | 运行时 | `backend/agent/pipeline_engine.py:283` |
 | `STP_STEP_WALL_CLOCK_SECONDS` | `-` | ✅ | 运行时 | `backend/agent/pipeline_engine.py:116` |
 | `STP_STORAGE_NODE_JOB` | `` | ✅ | 运行时 | `backend/services/file_server_monitor.py:325` |
-| `STP_TERMINAL_BULKHEAD_CONCURRENCY` | `-` | ✅ | 运行时 | `backend/core/terminal_bulkhead.py:66` |
-| `STP_TERMINAL_BULKHEAD_WAIT_MS` | `-` | ✅ | 运行时 | `backend/core/terminal_bulkhead.py:67` |
+| `STP_TERMINAL_BULKHEAD_CONCURRENCY` | `-` | ✅ | 运行时 | `backend/core/terminal_bulkhead.py:71` |
+| `STP_TERMINAL_BULKHEAD_WAIT_MS` | `-` | ✅ | 运行时 | `backend/core/terminal_bulkhead.py:72` |
 | `STP_TIMEZONE` | `Asia/Shanghai` | ✅ | 运行时 | `backend/api/routes/settings.py:20` |
 | `STP_TOOL_MANIFEST` | `-` | ✅ | 运行时 | `backend/api/routes/scripts.py:152` |
 | `STP_TRUSTED_PROXIES` | `-` | ✅ | 运行时 | `backend/core/limiter.py:82` |

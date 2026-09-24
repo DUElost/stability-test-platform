@@ -5,6 +5,7 @@
 
 import logging
 import os
+import random
 import threading
 import time
 from typing import Any, Dict, Optional
@@ -29,6 +30,12 @@ class OutboxDrainThread:
     _TRANSIENT_HTTP_STATUSES = frozenset({408, 429})
     # Retry-After 的退避上限——防御异常巨大的头部把某一行钉死在本进程里。
     _MAX_RETRY_AFTER_SECONDS = 300.0
+    # #3242：无 Retry-After 的瞬时失败按**指数 + full jitter** 退避，避免 48 台
+    # host 以同一相位每 15s 一起补送（R523 的同步突发就是这个形状）。full jitter
+    # 取 `uniform(0, min(base·2^(attempt-1), cap))`；有 Retry-After 时它是**下限**，
+    # 只能在其之上加抖动（见 `_next_deferral_seconds`）。
+    _BACKOFF_BASE_SECONDS = 15.0
+    _MAX_BACKOFF_SECONDS = 300.0
 
     def __init__(self, api_url: str, local_db, interval: float = 15.0):
         self._api_url = api_url
@@ -123,7 +130,9 @@ class OutboxDrainThread:
 
     def _loop(self) -> None:
         while not self._stop_event.is_set():
-            self._stop_event.wait(self._interval)
+            # #3242：周期本身加 ±20% 抖动——否则 48 台 host 的 15s 周期会长期同相位，
+            # 每个周期都制造一次同步小尖峰（R523 放大回路里最小的那一层）。
+            self._stop_event.wait(self._interval * random.uniform(0.8, 1.2))
             if self._stop_event.is_set():
                 break
             try:
@@ -253,19 +262,26 @@ class OutboxDrainThread:
                         logger.warning(
                             "outbox_drain_unstructured_404_retained job=%d", job_id,
                         )
-                elif status_code in self._TRANSIENT_HTTP_STATUSES:
+                elif (
+                    status_code in self._TRANSIENT_HTTP_STATUSES
+                    or (status_code is not None and status_code >= 500)
+                ):
                     # #1551：408/429 按 HTTP 语义可重试 → 与 5xx 同口径，不判永久、
-                    # 不进死信。429 额外按 Retry-After 退避（缺失/非法则沿用
-                    # 默认节奏），免得自己的重试把限流窗口续上。
-                    self._local_db.bump_terminal_attempt(job_id, str(e))
+                    # 不进死信；按 Retry-After 退避（缺失/非法则用带 jitter 的
+                    # 指数退避），免得自己的重试把限流窗口续上。
+                    # #3242：**503（控制面舱壁/过载）也走这条**——中心在过载时会显式
+                    # 给出建议间隔，继续用 15s 固定节奏会把自己钉在过载窗里。
+                    attempts = self._local_db.bump_terminal_attempt(job_id, str(e))
                     retry_after = self._parse_retry_after(e.response)
-                    if retry_after > 0:
-                        self._defer_until[job_id] = time.monotonic() + min(
-                            retry_after, self._MAX_RETRY_AFTER_SECONDS,
-                        )
+                    deferral = self._next_deferral_seconds(
+                        retry_after=retry_after, attempts=attempts,
+                    )
+                    if deferral > 0:
+                        self._defer_until[job_id] = time.monotonic() + deferral
                     logger.warning(
-                        "outbox_drain_transient_retry job=%d status=%d retry_after=%.0fs",
-                        job_id, status_code, retry_after,
+                        "outbox_drain_transient_retry job=%d status=%d attempts=%d "
+                        "retry_after=%.0fs defer=%.1fs",
+                        job_id, status_code, attempts, retry_after, deferral,
                     )
                 elif status_code is not None and 400 <= status_code < 500:
                     # #762：非 409/404 的 4xx 属中心永久拒绝 → 同走上限死信，
@@ -276,10 +292,19 @@ class OutboxDrainThread:
                 else:
                     # #762：5xx / 无响应属瞬时故障，维持无限重试，不走死信上限
                     # （瞬时故障不得丢终态事实；与 4xx 永久拒绝有本质区别）。
-                    self._local_db.bump_terminal_attempt(job_id, str(e))
+                    # #3242：同样要**错峰**——否则 48 台 host 每 15s 同相位重放。
+                    attempts = self._local_db.bump_terminal_attempt(job_id, str(e))
+                    deferral = self._next_deferral_seconds(
+                        retry_after=0.0, attempts=attempts,
+                    )
+                    if deferral > 0:
+                        self._defer_until[job_id] = time.monotonic() + deferral
             except Exception as e:
-                # 网络异常同 5xx 口径：无限重试，不走死信上限。
-                self._local_db.bump_terminal_attempt(job_id, str(e))
+                # 网络异常同 5xx 口径：无限重试，不走死信上限；同样带 jitter 退避。
+                attempts = self._local_db.bump_terminal_attempt(job_id, str(e))
+                deferral = self._next_deferral_seconds(retry_after=0.0, attempts=attempts)
+                if deferral > 0:
+                    self._defer_until[job_id] = time.monotonic() + deferral
                 logger.warning("outbox_drain_retry job=%d error=%s", job_id, e)
 
         if sent:
@@ -288,6 +313,30 @@ class OutboxDrainThread:
             self._set_pending_backlog(self._local_db.count_pending_terminals())
         self._local_db.prune_acked_terminals()
         return sent
+
+    def _next_deferral_seconds(self, *, retry_after: float, attempts: int) -> float:
+        """下一次尝试前应等待的秒数（#3242：指数 + full jitter；Retry-After 是下限）。
+
+        - 有 Retry-After：它是 HTTP 语义上的**最小**等待，只在其上加 0–25% 抖动——
+          这样既尊重中心的建议间隔，又让多台 host 不在同一秒一起回来；
+        - 无 Retry-After：full jitter `uniform(0, min(base·2^(attempts-1), cap))`。
+          首次失败（attempts=1）期望等 7.5s、上限 15s，与既有 15s 节奏同量级，
+          但不再所有 host 同相位；attempts 变大后退避自然超过 drain 周期，
+          形成跨周期的指数退避。
+        """
+        if retry_after > 0:
+            capped = min(float(retry_after), self._MAX_RETRY_AFTER_SECONDS)
+            # 抖动后的值仍受 `_MAX_RETRY_AFTER_SECONDS` 硬上限约束——上限的语义是
+            # 「异常巨大的头部不得把某一行钉死」，不能被抖动突破（#1551 的既有判据）。
+            return min(
+                capped * (1.0 + random.uniform(0.0, 0.25)),
+                self._MAX_RETRY_AFTER_SECONDS,
+            )
+        ceiling = min(
+            self._BACKOFF_BASE_SECONDS * (2 ** max(0, int(attempts) - 1)),
+            self._MAX_BACKOFF_SECONDS,
+        )
+        return random.uniform(0.0, ceiling)
 
     @staticmethod
     def _parse_retry_after(response) -> float:
