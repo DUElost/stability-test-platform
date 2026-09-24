@@ -327,9 +327,32 @@ def sync_scripts_from_manifest(
             continue
 
         entry_changed = row.content_sha256 != facts.content_sha256
-        support_changed = dict(row.support_files_manifest or {}) != facts.support_files_manifest
-        caps_changed = list(row.capabilities or []) != facts.capabilities
+        stored_manifest = dict(row.support_files_manifest or {})
+        stored_caps = list(row.capabilities or [])
+        support_changed = stored_manifest != facts.support_files_manifest
+        caps_changed = stored_caps != facts.capabilities
         if entry_changed or support_changed or caps_changed:
+            # 首扫回填通道（空库 bootstrap 链——seed 行写 entry sha 但 support/caps 维度为空）：
+            # 入口 sha 合、缺失维度一次性按包回填、**同轮回填 package_sha256**——不逐维分轮
+            # （原实现逐维 continue，53 行 seed 要 3 轮 scan 才收敛，且 conflict 短路时 strict 全拒
+            # ——2026-09-24 落地审查实测）。行上该维度已有值且与包不合 = 真漂移，仍走 conflicts。
+            changed_from_empty = all(
+                row_val_empty
+                for changed, row_val_empty in ((support_changed, not stored_manifest),
+                                               (caps_changed, not stored_caps))
+                if changed
+            ) and (support_changed or caps_changed)
+            if not force_rebaseline and not entry_changed and changed_from_empty:
+                if support_changed:
+                    row.support_files_manifest = facts.support_files_manifest
+                if caps_changed:
+                    row.capabilities = facts.capabilities
+                if row.package_sha256 is None:
+                    row.package_sha256 = sha
+                    result.package_backfilled += 1
+                row.updated_at = now
+                result.skipped += 1
+                continue
             if not force_rebaseline:
                 result.conflicts.append({"name": name, "version": version})
                 continue

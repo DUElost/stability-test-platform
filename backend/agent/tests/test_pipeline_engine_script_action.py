@@ -5,7 +5,23 @@ from __future__ import annotations
 import sys
 from types import SimpleNamespace
 
+import pytest
+
 from backend.agent.pipeline_engine import PipelineEngine
+
+
+@pytest.fixture(autouse=True)
+def _tree_semantics_for_flow_tests(request, monkeypatch):
+    """2026-09-24：strict 默认后，tree 回退目标已删——流程用例 stub 包解析为直映射，
+    包解析本身由 test_script_packages.py 专测；文件名含 package/strict 的用例走真实解析。"""
+    if "package" in request.node.name or "strict" in request.node.name:
+        return
+    import backend.agent.script_packages as sp
+
+    monkeypatch.setattr(
+        "backend.agent.pipeline_engine.resolve_script_path",
+        lambda entry: sp.ResolvedScript(path=entry.nfs_path, cwd=str(__import__("pathlib").Path(entry.nfs_path).parent)),
+    )
 
 
 class FakeScriptRegistry:
@@ -353,8 +369,9 @@ def test_script_executes_from_package_when_switch_on(tmp_path, monkeypatch):
     assert m["pp"].split(":")[0] == str(__import__("pathlib").Path(pe.__file__).resolve().parent)
 
 
-def test_script_executes_from_tree_when_switch_off(tmp_path, monkeypatch):
-    tree = _write_script(tmp_path / "who.py", "import os, json; print(json.dumps({'metrics': {'src': 'tree', 'source_env': os.environ.get('STP_SCRIPT_SOURCE')}}))")
+def test_script_executes_from_package_with_no_switch_configured(tmp_path, monkeypatch):
+    """缺省（无 STP_SCRIPT_PACKAGES）也走包面——2026-09-24 审查修复：默认 strict。"""
+    tree = _write_script(tmp_path / "who.py", "print('{\"metrics\": {\"src\": \"tree\"}}')")
     sha, env = _make_site_package(tmp_path, "who", "1.0.0", "print('{\"metrics\": {\"src\": \"package\"}}')\n")
     for k, v in env.items():
         monkeypatch.setenv(k, v)
@@ -362,20 +379,21 @@ def test_script_executes_from_tree_when_switch_off(tmp_path, monkeypatch):
     engine = PipelineEngine(adb=SimpleNamespace(adb_path="adb"), serial="S", run_id=1,
                             script_registry=PackagedRegistry(tree, sha))
     assert engine.execute(_package_pipeline()).success is True
-    assert engine._shared["who"] == {"src": "tree", "source_env": "tree"}
-    assert not (tmp_path / "tools_cache").exists()
+    assert engine._shared["who"] == {"src": "package"}
 
 
-def test_script_falls_back_to_tree_when_package_missing(tmp_path, monkeypatch):
+def test_package_missing_fails_step_exit_2(tmp_path, monkeypatch):
+    """包不可用 = 显式失败（exit 2），无 tree 回退可回。"""
     tree = _write_script(tmp_path / "who.py", "print('{\"metrics\": {\"src\": \"tree\"}}')")
     _, env = _make_site_package(tmp_path, "who", "1.0.0", "print('x')\n")
     for k, v in env.items():
         monkeypatch.setenv(k, v)
-    monkeypatch.setenv("STP_SCRIPT_PACKAGES", "on")
+    monkeypatch.setenv("STP_SCRIPT_PACKAGES", "on")  # 旧值也只是 strict
     engine = PipelineEngine(adb=SimpleNamespace(adb_path="adb"), serial="S", run_id=1,
                             script_registry=PackagedRegistry(tree, "0" * 64))
-    assert engine.execute(_package_pipeline()).success is True
-    assert engine._shared["who"] == {"src": "tree"}
+    result = engine._execute_step("init", _package_pipeline()["lifecycle"]["init"][0])
+    assert result.success is False and result.exit_code == 2
+    assert "package_unavailable" in (result.error_message or "")
 
 
 def test_strict_mode_fails_step_with_exit_2_when_package_missing(tmp_path, monkeypatch):

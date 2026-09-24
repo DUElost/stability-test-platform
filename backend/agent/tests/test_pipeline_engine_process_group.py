@@ -36,6 +36,17 @@ from backend.agent.pipeline_engine import (
 # ── _popen_isolation_kwargs ─────────────────────────────────────────────
 
 
+@pytest.fixture(autouse=True)
+def _tree_semantics_stub(monkeypatch):
+    """2026-09-24：strict 默认后无包身份的 Fake registry 会被解析拒——本文件测
+    process-tree 语义，包解析由 test_script_packages 专测，此处 stub 为直映射。"""
+    import os
+    import backend.agent.script_packages as sp
+    monkeypatch.setattr(
+        "backend.agent.pipeline_engine.resolve_script_path",
+        lambda entry: sp.ResolvedScript(path=entry.nfs_path, cwd=os.path.dirname(entry.nfs_path)),
+    )
+
 def test_isolation_kwargs_posix(monkeypatch):
     monkeypatch.setattr(pipeline_engine, "_IS_WINDOWS", False)
     kw = _popen_isolation_kwargs()

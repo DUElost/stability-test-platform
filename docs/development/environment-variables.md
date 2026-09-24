@@ -63,7 +63,7 @@
 | `STP_AGENT_DEDUP_SCAN_PYTHON` / `_SCRIPT` | **仅控制面**：Agent 侧 scan 工具路径的源键，hot-update 写成 Agent 的无前缀键 |
 | `STP_DEDUP_SCAN_PACKAGE_REF` | **仅 Agent**：包引用 `"<name>/<version>"`（ADR-0033 Phase B，#3075）。空＝整体 no-op（逃生阀默认关）；设置且拉取核验成功 → scan 工具 python/script 切到 `tools_cache/{name}/{version}/`，任何失败保持 env 路径并回退（一个版本窗口）。不进 `AGENT_PATH_ENV_KEYS`（是引用非路径） |
 | `STP_AGENT_DEDUP_SCAN_PACKAGE_REF` | **仅控制面**：上述包引用的源键，hot-update 写成无前缀键（空值不推） |
-| `STP_SCRIPT_PACKAGES` | **仅 Agent**：`script:<name>` 步骤按包身份执行的开关（ADR-0051 Phase 2b）。`off`（默认，空同）=逃生阀关、只走 `nfs_path`；`on`=优先 `tools_cache/{name}/{version}/`、拉取/核验失败回退 `nfs_path`（记 WARNING）；`strict`=只走包、失败即步骤失败（exit 2，Phase 3 终态）。`verify_scripts` 在 on/strict 下按整包 sha 核验并预热缓存 |
+| `STP_SCRIPT_PACKAGES` | **仅 Agent（过渡末期）**：`script:<name>` 步骤按包身份执行（ADR-0051 D4）。**缺省/空 = `strict`**（2026-09-24 审查修复：tree 回退目标已随 Phase 3 删除，默认走已死路径不可接受）；`off`/`on` 仅为兼容告警别名（等同 strict，解析分支待随 fleet env 模板清理删除）；包不可用 = 步骤 exit 2 显式失败。`verify_scripts` 带 `package_sha256` 即整包核验并预热 |
 | `STP_AGENT_SCRIPT_PACKAGES` | **仅控制面**：上述开关的源键，hot-update 写成无前缀键（空值不推）。切 `on` 前先 `python tools/dev/check_script_packages.py --publish --packages-root <STP_AEE_NFS_ROOT>/packages` |
 | `STP_PACKAGES_ROOT` | **可选（Agent + 控制面）**：站点包源覆盖；缺省派生自 `{STP_AEE_NFS_ROOT}/packages`（#3075 C4：每站中心存储，与过渡 `tools/` 物理分开）。ADR-0051 Phase 3 起控制面 `POST /scripts/scan` 也从这里读包注册 `script` 行 |
 | `STP_TOOL_MANIFEST` | **可选（控制面）**：Git 唯一事实源 `tool_manifest.json` 路径覆盖（测试 / 非仓根部署树）；缺省仓根或 bundle 根。scan、零引用巡检、模板 pin 测试的「版本 head」都从它读 |

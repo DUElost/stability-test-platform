@@ -11,6 +11,19 @@ from backend.agent.operation_scheduler import OperationScheduler
 from backend.agent.pipeline_engine import PipelineEngine
 
 
+import pytest  # noqa: E402  (autouse stub 需要)
+
+@pytest.fixture(autouse=True)
+def _tree_semantics_stub(monkeypatch):
+    """2026-09-24：strict 默认后无包身份的 Fake registry 会被解析拒——本文件测
+    barrier/process 语义，包解析由 test_script_packages 专测，此处 stub 为直映射。"""
+    import os
+    import backend.agent.script_packages as sp
+    monkeypatch.setattr(
+        "backend.agent.pipeline_engine.resolve_script_path",
+        lambda entry: sp.ResolvedScript(path=entry.nfs_path, cwd=os.path.dirname(entry.nfs_path)),
+    )
+
 class FakeScriptRegistry:
     def __init__(self, path: str):
         self.path = path

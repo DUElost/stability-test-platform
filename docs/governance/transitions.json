@@ -20,7 +20,8 @@
       "what": "STP_SCRIPT_PACKAGES 的 off|on 回退模式（fleet 48/48 已 strict；回退对象 agent/scripts/ 目录已全删，模式本身待删）",
       "exit": "adr:ADR-0051#D4",
       "due": "2026-10-31",
-      "status": "active"
+      "status": "done",
+      "evidence": "2026-09-24 落地审查修复 PR：默认改 strict、tree 回退代码删除（off/on 仅余告警别名，解析分支随别名一并移除于 fleet env 模板清理单）"
     },
     {
       "id": "dedup-scan-env-fallback-window",
