@@ -63,7 +63,8 @@ class TestPackerExplicitFiles:
     def test_register_entry_accepts_none_python(self):
         doc, added = packer.register_entry({"schema_version": 1, "tools": {}}, "fam", "1.0.0", "a" * 64,
                                            packer.artifact_path_for("fam", "1.0.0"), None, "fam.py")
-        assert added and doc["tools"]["fam"]["versions"][0]["python"] is None
+        assert added and doc["tools"]["fam"]["kind"] == "script"  # 默认 kind=script（--kind tool 登记外部族）
+        assert doc["tools"]["fam"]["versions"][0]["python"] is None
         assert not gate.lint_manifest(doc)
 
 
@@ -71,8 +72,8 @@ class TestManifestGatePythonNull:
     def test_null_green_empty_red(self):
         entry = {"version": "1.0.0", "package_sha256": "a" * 64, "artifact": "packages/f/1.0.0.tar.gz",
                  "python": None, "script": "f.py", "retired": False}
-        doc = {"schema_version": 1, "tools": {"f": {"versions": [entry]}}}
-        assert gate.lint_manifest(doc) == []
+        doc = {"schema_version": 1, "tools": {"f": {"kind": "script", "versions": [entry]}}}
+        assert gate.lint_manifest(doc) == []  # kind=script + python:null = 平台脚本族标准形
         doc["tools"]["f"]["versions"][0]["python"] = ""
         assert any("python" in e for e in gate.lint_manifest(doc))
 

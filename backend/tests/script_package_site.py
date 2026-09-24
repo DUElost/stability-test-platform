@@ -34,13 +34,15 @@ class Site:
 
     def add(self, name: str, version: str, files: dict[str, str], *, script: str | None = None,
             retired: bool = False, publish: bool = True, sha_override: str | None = None,
-            python: str | None = None) -> str:
+            python: str | None = None, kind: str = "script") -> str:
         blob = tar_bytes(files)
         sha = sha_override or hashlib.sha256(blob).hexdigest()
         if publish:
             (self.packages_root / name).mkdir(exist_ok=True)
             (self.packages_root / name / f"{version}.tar.gz").write_bytes(blob)
-        self.doc["tools"].setdefault(name, {"versions": []})["versions"].append({
+        fam = self.doc["tools"].setdefault(name, {"kind": kind, "versions": []})
+        assert fam.get("kind") == kind, f"kind 不一致：{name}"
+        fam["versions"].append({
             "version": version, "package_sha256": sha, "artifact": f"packages/{name}/{version}.tar.gz",
             "python": python, "script": script or f"{name}.py", "retired": retired,
         })

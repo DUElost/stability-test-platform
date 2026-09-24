@@ -2,6 +2,7 @@
   "schema_version": 1,
   "tools": {
     "Monkey-Log-Scan-GT-SPRD": {
+      "kind": "tool",
       "versions": [
         {
           "artifact": "packages/Monkey-Log-Scan-GT-SPRD/2026.09.23.tar.gz",
@@ -14,6 +15,7 @@
       ]
     },
     "Scan-Result-GT": {
+      "kind": "tool",
       "versions": [
         {
           "artifact": "packages/Scan-Result-GT/2026.09.23.tar.gz",
@@ -26,6 +28,7 @@
       ]
     },
     "Start-Log-Scan": {
+      "kind": "tool",
       "versions": [
         {
           "artifact": "packages/Start-Log-Scan/2026.09.22.tar.gz",
@@ -38,6 +41,7 @@
       ]
     },
     "aee_prepare": {
+      "kind": "script",
       "versions": [
         {
           "artifact": "packages/aee_prepare/1.0.0.tar.gz",
@@ -58,6 +62,7 @@
       ]
     },
     "aee_signal_trigger": {
+      "kind": "script",
       "versions": [
         {
           "artifact": "packages/aee_signal_trigger/1.0.0.tar.gz",
@@ -78,6 +83,7 @@
       ]
     },
     "check_device": {
+      "kind": "script",
       "versions": [
         {
           "artifact": "packages/check_device/1.0.0.tar.gz",
@@ -106,6 +112,7 @@
       ]
     },
     "clean_env": {
+      "kind": "script",
       "versions": [
         {
           "artifact": "packages/clean_env/1.0.0.tar.gz",
@@ -134,6 +141,7 @@
       ]
     },
     "clear_recents": {
+      "kind": "script",
       "versions": [
         {
           "artifact": "packages/clear_recents/1.0.0.tar.gz",
@@ -186,6 +194,7 @@
       ]
     },
     "connect_wifi": {
+      "kind": "script",
       "versions": [
         {
           "artifact": "packages/connect_wifi/1.0.0.tar.gz",
@@ -214,6 +223,7 @@
       ]
     },
     "ensure_root": {
+      "kind": "script",
       "versions": [
         {
           "artifact": "packages/ensure_root/1.0.0.tar.gz",
@@ -242,6 +252,7 @@
       ]
     },
     "fill_storage": {
+      "kind": "script",
       "versions": [
         {
           "artifact": "packages/fill_storage/1.0.0.tar.gz",
@@ -286,6 +297,7 @@
       ]
     },
     "flash_firmware": {
+      "kind": "script",
       "versions": [
         {
           "artifact": "packages/flash_firmware/1.0.0.tar.gz",
@@ -466,6 +478,7 @@
       ]
     },
     "flash_preflight": {
+      "kind": "script",
       "versions": [
         {
           "artifact": "packages/flash_preflight/1.0.0.tar.gz",
@@ -518,6 +531,7 @@
       ]
     },
     "gpu_check": {
+      "kind": "script",
       "versions": [
         {
           "artifact": "packages/gpu_check/1.0.0.tar.gz",
@@ -610,6 +624,7 @@
       ]
     },
     "gpu_finish": {
+      "kind": "script",
       "versions": [
         {
           "artifact": "packages/gpu_finish/1.0.0.tar.gz",
@@ -678,6 +693,7 @@
       ]
     },
     "gpu_setup": {
+      "kind": "script",
       "versions": [
         {
           "artifact": "packages/gpu_setup/1.0.0.tar.gz",
@@ -802,6 +818,7 @@
       ]
     },
     "install_apk": {
+      "kind": "script",
       "versions": [
         {
           "artifact": "packages/install_apk/1.0.0.tar.gz",
@@ -838,6 +855,7 @@
       ]
     },
     "monkey_check": {
+      "kind": "script",
       "versions": [
         {
           "artifact": "packages/monkey_check/1.0.0.tar.gz",
@@ -882,6 +900,7 @@
       ]
     },
     "monkey_launch": {
+      "kind": "script",
       "versions": [
         {
           "artifact": "packages/monkey_launch/1.0.0.tar.gz",
@@ -950,6 +969,7 @@
       ]
     },
     "monkey_resource_push": {
+      "kind": "script",
       "versions": [
         {
           "artifact": "packages/monkey_resource_push/1.0.0.tar.gz",
@@ -978,6 +998,7 @@
       ]
     },
     "monkey_setup": {
+      "kind": "script",
       "versions": [
         {
           "artifact": "packages/monkey_setup/1.0.0.tar.gz",
@@ -1134,6 +1155,7 @@
       ]
     },
     "monkey_teardown": {
+      "kind": "script",
       "versions": [
         {
           "artifact": "packages/monkey_teardown/1.0.0.tar.gz",
@@ -1170,6 +1192,7 @@
       ]
     },
     "monkey_test": {
+      "kind": "script",
       "versions": [
         {
           "artifact": "packages/monkey_test/1.0.0.tar.gz",
@@ -1214,6 +1237,7 @@
       ]
     },
     "mtbf_check": {
+      "kind": "script",
       "versions": [
         {
           "artifact": "packages/mtbf_check/1.0.0.tar.gz",
@@ -1266,6 +1290,7 @@
       ]
     },
     "mtbf_finish": {
+      "kind": "script",
       "versions": [
         {
           "artifact": "packages/mtbf_finish/1.0.0.tar.gz",
@@ -1326,6 +1351,7 @@
       ]
     },
     "mtbf_setup": {
+      "kind": "script",
       "versions": [
         {
           "artifact": "packages/mtbf_setup/1.0.0.tar.gz",
@@ -1378,6 +1404,7 @@
       ]
     },
     "noop": {
+      "kind": "script",
       "versions": [
         {
           "artifact": "packages/noop/1.0.0.tar.gz",
@@ -1390,6 +1417,7 @@
       ]
     },
     "oobe_skip": {
+      "kind": "script",
       "versions": [
         {
           "artifact": "packages/oobe_skip/1.0.0.tar.gz",
@@ -1426,6 +1454,7 @@
       ]
     },
     "powercycle_check": {
+      "kind": "script",
       "versions": [
         {
           "artifact": "packages/powercycle_check/1.0.0.tar.gz",
@@ -1502,6 +1531,7 @@
       ]
     },
     "powercycle_finish": {
+      "kind": "script",
       "versions": [
         {
           "artifact": "packages/powercycle_finish/1.0.0.tar.gz",
@@ -1562,6 +1592,7 @@
       ]
     },
     "powercycle_setup": {
+      "kind": "script",
       "versions": [
         {
           "artifact": "packages/powercycle_setup/1.0.0.tar.gz",
@@ -1646,6 +1677,7 @@
       ]
     },
     "push_resources": {
+      "kind": "script",
       "versions": [
         {
           "artifact": "packages/push_resources/1.0.0.tar.gz",
@@ -1674,6 +1706,7 @@
       ]
     },
     "sleep_check": {
+      "kind": "script",
       "versions": [
         {
           "artifact": "packages/sleep_check/1.0.0.tar.gz",
@@ -1718,6 +1751,7 @@
       ]
     },
     "sleep_finish": {
+      "kind": "script",
       "versions": [
         {
           "artifact": "packages/sleep_finish/1.0.0.tar.gz",
@@ -1762,6 +1796,7 @@
       ]
     },
     "sleep_setup": {
+      "kind": "script",
       "versions": [
         {
           "artifact": "packages/sleep_setup/1.0.0.tar.gz",
@@ -1798,6 +1833,7 @@
       ]
     },
     "stop_aimonkey": {
+      "kind": "script",
       "versions": [
         {
           "artifact": "packages/stop_aimonkey/1.0.0.tar.gz",
@@ -1818,6 +1854,7 @@
       ]
     },
     "unisoc_probe": {
+      "kind": "script",
       "versions": [
         {
           "artifact": "packages/unisoc_probe/1.0.0.tar.gz",
@@ -1838,6 +1875,7 @@
       ]
     },
     "unisoc_signal_trigger": {
+      "kind": "script",
       "versions": [
         {
           "artifact": "packages/unisoc_signal_trigger/1.0.0.tar.gz",

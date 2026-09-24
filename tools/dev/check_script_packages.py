@@ -14,10 +14,9 @@ Phase 3 起 ``backend/agent/scripts/<name>/`` 是**每族一棵可演进的源�
 - 每个族树的**重建 sha 必须等于该族最新未退役登记条目的 ``package_sha256``**——不等 = 改了树
   没发版本（跑 ``--register <name> <version>``），或树被回退到旧版本；
 - 每个族树的入口文件名必须等于最新条目的 ``script``；平台族 ``python`` 必须为 null；
-- 族的归类以**树集**为判据（Phase 4a 起 ``python: null`` 有二义：平台族 与 无包内解释器的
-  外部工具族——`--python-absent` 登记）：有树 = 平台族，必须登记且 sha 匹配；无树的条目
-  （外部工具族，或整个族被删）不做等价、不判红——**平台族整树删除未退役的保护移交 PR 评审
-  + ADR-0051 D5（删除按继承的 ADR-0039 D2 人工 PR + 证据）**。
+- 族的归类 = **族级 ``kind`` 字段**（ADR-0051 v1.3；``python: null`` 自 Phase 4a 有二义，不再作判据）：
+  ``kind=script`` 的族必须有树、必须登记且 sha 匹配，条目在而无树 = 红（ghost 保护）；
+  ``kind=tool`` 的条目不做树等价、无树豁免。
 
 登记（``--register <name> <version>``）：从族树打包并追加条目（幂等：同版本同 sha 放行；
 异 sha 拒绝——版本号不可复用）。``--publish --packages-root <站点包源>``：把**每族最新**条目的
@@ -185,12 +184,14 @@ def rebuild_all(scripts_root: Path, packer, *, out_dir: Path | None = None,
 
 
 def script_families(doc: dict) -> dict[str, list[dict]]:
-    """manifest 里的平台脚本族（任一条目 ``python`` 为 null 即平台族）→ 版本条目列表。"""
+    """manifest 里的平台脚本族（**族级 ``kind == "script"``**，ADR-0051 v1.3）→ 版本条目列表。
+
+    取代 Phase 4a 的「python:null 即平台族」启发——kind 是登记面唯一归类判据。
+    """
     out: dict[str, list[dict]] = {}
     for name, tool in (doc.get("tools") or {}).items():
-        versions = tool.get("versions") or []
-        if any(e.get("python") is None for e in versions):
-            out[name] = versions
+        if tool.get("kind") == "script":
+            out[name] = tool.get("versions") or []
     return out
 
 
@@ -229,6 +230,10 @@ def check(doc: dict, rebuilt: dict[str, dict], scripts_root: Path) -> list[str]:
             )
         if latest.get("script") != facts["script"]:
             errs.append(f"{name}: 入口 {facts['script']!r} ≠ 最新登记 script {latest.get('script')!r}")
+    trees = {name for name, _ in iter_family_trees(scripts_root)}
+    for name, versions in fams.items():
+        if name not in trees and latest_entry(versions) is not None:
+            errs.append(f"{name}: kind=script 但族树不存在——删族须先 retired:true（改类=退役后以 kind=tool 重登记）")
     return errs
 
 
@@ -320,20 +325,29 @@ def run_self_test() -> int:
         shutil.rmtree(root / "beta" / "v9.9.9")
 
         # 无树条目（外部族 python=null，Phase 4a 二义）不判红——归类以树集为判据
+        # kind 驱动（ADR-0051 v1.3）：kind=tool 无树豁免；kind=script 无树 = ghost 红
         ghost = json.loads(json.dumps(doc))
-        ghost["tools"]["gamma"] = {"versions": [{"version": "1.0.0", "package_sha256": "a" * 64,
+        ghost["tools"]["gamma"] = {"kind": "tool", "versions": [{"version": "1.0.0", "package_sha256": "a" * 64,
                                                  "artifact": "packages/gamma/1.0.0.tar.gz", "python": None,
                                                  "script": "gamma.py", "retired": False}]}
         if check(ghost, rebuilt3, root):
-            failures.append(f"无树条目应豁免（外部族语义）：{check(ghost, rebuilt3, root)}")
+            failures.append(f"kind=tool 无树应豁免（python:null 不再作判据）：{check(ghost, rebuilt3, root)}")
+        ghost["tools"]["delta"] = {"kind": "script", "versions": [{"version": "1.0.0", "package_sha256": "a" * 64,
+                                                 "artifact": "packages/delta/1.0.0.tar.gz", "python": None,
+                                                 "script": "delta.py", "retired": False}]}
+        if not any("kind=script 但族树不存在" in e for e in check(ghost, rebuilt3, root)):
+            failures.append("kind=script 无树应红（ghost 保护精确化）")
+        ghost["tools"]["delta"]["versions"][0]["retired"] = True
+        if any("delta" in e for e in check(ghost, rebuilt3, root)):
+            failures.append("kind=script 全退役无树应绿")
 
         # 外部工具族（python 非 null）不在射程
         ext = json.loads(json.dumps(doc))
-        ext["tools"]["Start-Log-Scan"] = {"versions": [{"version": "2026.09.22", "package_sha256": "b" * 64,
+        ext["tools"]["Start-Log-Scan"] = {"kind": "tool", "versions": [{"version": "2026.09.22", "package_sha256": "b" * 64,
                                                         "artifact": "packages/Start-Log-Scan/2026.09.22.tar.gz",
                                                         "python": "venv/bin/python", "script": "s.py", "retired": False}]}
         if check(ext, rebuilt3, root):
-            failures.append(f"外部工具族应豁免：{check(ext, rebuilt3, root)}")
+            failures.append(f"kind=tool 应豁免：{check(ext, rebuilt3, root)}")
 
         # publish：只落最新版
         out = Path(tmp) / "packages"
@@ -346,7 +360,7 @@ def run_self_test() -> int:
         for f in failures:
             print(f"[SELFTEST-FAIL] {f}", file=sys.stderr)
         return 1
-    print("[OK] check_script_packages self-test 红绿双向（族树/重建/登记/改树未发版/版本复用/退役回落/残留 v 目录/无树条目豁免/外部族豁免/publish）")
+    print("[OK] check_script_packages self-test 红绿双向（族树/重建/登记/改树未发版/版本复用/退役回落/残留 v 目录/kind 归类（tool 豁免、script ghost 红、全退役绿）/publish）")
     return 0
 
 
