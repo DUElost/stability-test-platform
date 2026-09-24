@@ -17,5 +17,5 @@ pytest-cov>=7.1.0,<8.0
 # 配置见仓库根 ruff.toml;CI 的 lint job 也装这个
 ruff>=0.16.4,<1.0
 
-# 注:原先这里还有 hypothesis。全仓 0 处引用,backend/tests/pbt/ 只有一个空的
-# __init__.py —— property-based testing 起了个头就没继续。等真要写 PBT 再加回。
+# 注:原先这里还有 hypothesis。旧状态机 PBT 已退役且全仓 0 处引用，依赖与空包
+# 一并删除；等确有 property-based testing 用例时再加回依赖和目录。
