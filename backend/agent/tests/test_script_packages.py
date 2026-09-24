@@ -56,21 +56,23 @@ def site(tmp_path: Path) -> dict:
 
 
 def test_mode_parsing():
-    assert sp.package_mode({}) == "off"
-    assert sp.package_mode({"STP_SCRIPT_PACKAGES": " ON "}) == "on"
+    # 2026-09-24 审查修复：缺省/一切值 → strict（off/on 是过渡别名，仅告警）
+    assert sp.package_mode({}) == "strict"
+    assert sp.package_mode({"STP_SCRIPT_PACKAGES": " ON "}) == "strict"
+    assert sp.package_mode({"STP_SCRIPT_PACKAGES": "off"}) == "strict"
     assert sp.package_mode({"STP_SCRIPT_PACKAGES": "strict"}) == "strict"
-    assert sp.package_mode({"STP_SCRIPT_PACKAGES": "bogus"}) == "off"
+    assert sp.package_mode({"STP_SCRIPT_PACKAGES": "bogus"}) == "strict"
 
 
-def test_off_never_touches_packages(site):
-    env = {**site["env"], "STP_SCRIPT_PACKAGES": "off"}
-    r = sp.resolve_script_path(site["entry"], env)
-    assert r.source == "tree" and r.path == site["entry"].nfs_path and r.cwd == str(site["tree"])
-    assert not site["cache_root"].exists()
+def test_default_config_reaches_package(site):
+    """漏配开关的主机（新装/重装）不再静默走已删除的 tree 路径——默认即包模式。"""
+    r = sp.resolve_script_path(site["entry"], site["env"])
+    assert r.source == "package" and Path(r.path).is_file()
+    assert Path(r.cwd) == site["cache_root"] / "demo" / "1.0.0"
 
 
-def test_on_resolves_into_tools_cache(site):
-    env = {**site["env"], "STP_SCRIPT_PACKAGES": "on"}
+def test_strict_resolves_into_tools_cache(site):
+    env = {**site["env"], "STP_SCRIPT_PACKAGES": "strict"}
     r = sp.resolve_script_path(site["entry"], env)
     assert r.source == "package"
     assert Path(r.path) == site["cache_root"] / "demo" / "1.0.0" / "demo.py"
@@ -80,32 +82,30 @@ def test_on_resolves_into_tools_cache(site):
     assert (site["cache_root"] / "demo" / "1.0.0" / ".stp-verified").read_text().strip() == site["entry"].package_sha256
 
 
-def test_on_without_package_sha_falls_back(site):
-    env = {**site["env"], "STP_SCRIPT_PACKAGES": "on"}
+def test_no_package_sha_raises(site):
+    env = {**site["env"], "STP_SCRIPT_PACKAGES": "on"}  # 旧值仅触发告警，语义=strict
     entry = SimpleNamespace(**{**vars(site["entry"]), "package_sha256": None})
-    r = sp.resolve_script_path(entry, env)
-    assert r.source == "tree" and r.reason == "no_package_sha"
+    with pytest.raises(sp.PackageUnavailable, match="no_package_sha"):
+        sp.resolve_script_path(entry, env)
 
 
-def test_on_with_bad_sha_falls_back_strict_raises(site):
+def test_bad_sha_raises(site):
     env = {**site["env"], "STP_SCRIPT_PACKAGES": "on"}
     entry = SimpleNamespace(**{**vars(site["entry"]), "package_sha256": "0" * 64})
-    r = sp.resolve_script_path(entry, env)
-    assert r.source == "tree" and r.reason == "package_unavailable"
-    with pytest.raises(sp.PackageUnavailable):
-        sp.resolve_script_path(entry, {**env, "STP_SCRIPT_PACKAGES": "strict"})
+    with pytest.raises(sp.PackageUnavailable, match="package_unavailable"):
+        sp.resolve_script_path(entry, env)
 
 
-def test_on_roots_undefined_falls_back(site):
-    r = sp.resolve_script_path(site["entry"], {"STP_SCRIPT_PACKAGES": "on"})
-    assert r.source == "tree" and r.reason == "roots_undefined"
+def test_roots_undefined_raises(site):
+    with pytest.raises(sp.PackageUnavailable, match="roots_undefined"):
+        sp.resolve_script_path(site["entry"], {"STP_SCRIPT_PACKAGES": "on"})
 
 
-def test_entry_missing_in_package_falls_back(site):
+def test_entry_missing_in_package_raises(site):
     env = {**site["env"], "STP_SCRIPT_PACKAGES": "on"}
     entry = SimpleNamespace(**{**vars(site["entry"]), "nfs_path": str(site["tree"] / "other.py")})
-    r = sp.resolve_script_path(entry, env)
-    assert r.source == "tree" and r.reason == "entry_missing_in_package"
+    with pytest.raises(sp.PackageUnavailable, match="entry_missing_in_package"):
+        sp.resolve_script_path(entry, env)
 
 
 def test_windows_nfs_path_basename(site):
@@ -123,14 +123,16 @@ class TestVerifyScriptsPackageMode:
             "package_sha256": site["entry"].package_sha256,
         }]
 
-    def test_off_keeps_file_semantics(self, site, monkeypatch):
+    def test_no_package_sha_keeps_file_semantics(self, site, monkeypatch):
+        """行无包身份（历史 seed 未回填）：verify 不介入，按文件 sha 判。"""
         for k, v in site["env"].items():
             monkeypatch.setenv(k, v)
-        monkeypatch.delenv("STP_SCRIPT_PACKAGES", raising=False)
-        row = verify_scripts_payload(self._expected(site), host_id="h1")["results"][0]
+        exp = self._expected(site)
+        del exp[0]["package_sha256"]
+        row = verify_scripts_payload(exp, host_id="h1")["results"][0]
         assert row["ok"] is True and row["package_active"] is False
 
-    def test_on_verifies_package_even_if_tree_file_missing(self, site, monkeypatch):
+    def test_verifies_package_even_if_tree_file_missing(self, site, monkeypatch):
         for k, v in site["env"].items():
             monkeypatch.setenv(k, v)
         monkeypatch.setenv("STP_SCRIPT_PACKAGES", "on")
@@ -148,11 +150,10 @@ class TestVerifyScriptsPackageMode:
         row = verify_scripts_payload(exp, host_id="h1")["results"][0]
         assert row["ok"] is False and row["error"] == "package_unavailable"
 
-    def test_on_without_package_sha_uses_file(self, site, monkeypatch):
-        for k, v in site["env"].items():
-            monkeypatch.setenv(k, v)
-        monkeypatch.setenv("STP_SCRIPT_PACKAGES", "on")
-        exp = self._expected(site)
-        del exp[0]["package_sha256"]
-        row = verify_scripts_payload(exp, host_id="h1")["results"][0]
-        assert row["ok"] is True and row["package_active"] is False
+    def test_roots_undefined_is_explicit_error(self, site, monkeypatch):
+        monkeypatch.delenv("STP_PACKAGES_ROOT", raising=False)
+        monkeypatch.delenv("STP_TOOLS_CACHE_ROOT", raising=False)
+        monkeypatch.delenv("STP_AEE_NFS_ROOT", raising=False)
+        monkeypatch.delenv("AGENT_INSTALL_DIR", raising=False)
+        row = verify_scripts_payload(self._expected(site), host_id="h1")["results"][0]
+        assert row["ok"] is False and row["error"] == "package_roots_undefined"

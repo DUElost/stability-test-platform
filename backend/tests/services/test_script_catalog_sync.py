@@ -155,6 +155,33 @@ def test_runtime_root_reanchors_nfs_path_and_windows_root(db_session: Session, t
     assert row.nfs_path == r"C:\stp\agent\scripts\demo\v1.0.0\demo.py"
 
 
+def test_seed_rows_backfill_support_caps_and_package_sha_in_one_pass(db_session: Session, tmp_path: Path):
+    """空库 bootstrap 守卫（2026-09-24 落地审查）：seed 行（有 entry sha、无 support/caps/包 sha）
+    首扫必须**单轮**全量回填且零 conflict——多轮收敛或 conflict 短路都会让 strict 站点拒执行。"""
+    site = Site(tmp_path)
+    sha = site.add("demo", "1.0.0", {"demo.py": "print('x')\n", "_adb.py": "ADB = 1\n", "capabilities.json": json.dumps({"capabilities": ["progress_stamps"]})})
+    # 模拟 seed migration 写的行：只有 entry sha
+    import hashlib
+    row = Script(name="demo", script_type="python", version="1.0.0", nfs_path="/seed/demo.py",
+                 content_sha256=hashlib.sha256(b"print('x')\n").hexdigest(),
+                 support_files_manifest={}, capabilities=[], default_params={}, param_schema={}, is_active=True)
+    db_session.add(row)
+    db_session.commit()
+
+    result = _sync(db_session, site)
+    db_session.refresh(row)
+    assert result.conflicts == []
+    assert result.package_backfilled == 1
+    assert row.package_sha256 == sha  # 同一轮：维度 + 包身份一起回填
+    assert row.support_files_manifest and row.capabilities == ["progress_stamps"]
+    again = _sync(db_session, site)
+    assert again.conflicts == [] and again.package_backfilled == 0  # 幂等
+    # 真漂移（行与包都有值且不等）仍必须 conflict，不被回填吞掉
+    row.support_files_manifest = {"_adb.py": "f" * 64}
+    db_session.commit()
+    assert [c["name"] for c in _sync(db_session, site).conflicts] == ["demo"]
+
+
 def test_external_tool_entries_and_bad_manifest_are_ignored(db_session: Session, tmp_path: Path):
     site = Site(tmp_path)
     site.doc["tools"]["Start-Log-Scan"] = {"kind": "tool", "versions": [{

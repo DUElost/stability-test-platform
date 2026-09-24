@@ -1,17 +1,21 @@
 """ADR-0051 Phase 2b：``script:<name>`` 步骤按 **包身份** 解析到本机 ``tools_cache``。
 
 「DB 权威 → 包身份」这一环（ADR-0051 D4）：``ScriptRegistry`` 解析出的条目若带
-``package_sha256``（控制面 scan 从 ``tool_manifest.json`` 回填），且本机开关打开，
-就经 ``tool_cache.ensure_package`` 把 ``packages/{name}/{version}.tar.gz`` 拉到
-``tools_cache/{name}/{version}/`` 并整包核验，脚本从包内执行；否则（开关关 / 行无包 sha /
-拉取核验失败）回退到 ``nfs_path``（Phase 3 前主机树上的版本目录仍在）。
+``package_sha256``（控制面 scan 从 ``tool_manifest.json`` 回填），就经 ``tool_cache.ensure_package``
+把 ``packages/{name}/{version}.tar.gz`` 拉到 ``tools_cache/{name}/{version}/`` 并整包核验，
+脚本从包内执行；任何不可用（行无包 sha / 包源缺失 / sha 不符 / 包内无入口）=
+``PackageUnavailable`` → 步骤 exit 2 显式失败——**无 tree 回退**（回退目标已随 Phase 3 删除）。
 
 开关 ``STP_SCRIPT_PACKAGES``（Agent 侧；控制面源键 ``STP_AGENT_SCRIPT_PACKAGES`` 经
 既有 env 推送链下发）：
 
-- 空 / ``off``（默认）：**逃生阀关**——一律走 ``nfs_path``，不碰包源（无 NFS 读、无告警噪声）；
-- ``on``：优先包，失败回退 ``nfs_path``（灰度期；回退会记 WARNING）；
-- ``strict``：只走包，失败即步骤失败（Phase 3 删目录后的终态；回退无处可回）。
+- **缺省（未配置）= ``strict``**（2026-09-24 落地审查修正）：Phase 3 已删除
+  ``agent/scripts/`` 版本目录，``off``/``on`` 的 tree 回退目标**已不存在**——新装/重装/
+  漏配主机若默认 off 会静默走死路径。包不可用现在必须显式失败，不能假装还有退路。
+- ``off`` / ``on`` 仍被解析但**只作过渡兼容**（等价 strict 的告警别名）：存量 fleet 的
+  ``.env`` 里有显式 ``STP_SCRIPT_PACKAGES=strict``，无行为变化；两模式随台账
+  ``script-packages-off-on-modes`` 到期删除解析分支。
+- ``strict``：只走包，失败 = ``PackageUnavailable``（步骤 exit 2）。
 
 三处形态耦合的出口（ADR-0051 D4）：cwd = 包解压根；PYTHONPATH 注入的 agent 目录不再由
 ``nfs_path`` 的 ``parents[3]`` 推导；终止宽限按脚本 **名** 判定。这些在 ``pipeline_engine``
@@ -31,7 +35,6 @@ from . import tool_cache
 logger = logging.getLogger(__name__)
 
 SWITCH_ENV = "STP_SCRIPT_PACKAGES"
-_MODES = ("off", "on", "strict")
 
 
 class PackageUnavailable(Exception):
@@ -40,21 +43,22 @@ class PackageUnavailable(Exception):
 
 @dataclass(frozen=True)
 class ResolvedScript:
-    path: str      #: 实际执行的入口文件绝对路径
-    cwd: str       #: 子进程工作目录（包根 / 版本目录）
-    source: str    #: ``"package"`` | ``"tree"``
-    reason: str = ""  #: 走 tree 的原因（观测用；package 时为空）
+    path: str      #: 实际执行的入口文件绝对路径（恒为包内）
+    cwd: str       #: 子进程工作目录 = 包解压根
+    source: str = "package"  #: 恒 "package"——tree 回退目标已随 Phase 3 版本目录删除
 
 
 def package_mode(env: Optional[Mapping[str, str]] = None) -> str:
-    """纯函数：``STP_SCRIPT_PACKAGES`` → ``off|on|strict``（非法值按 off，记一次 WARNING）。"""
+    """纯函数：``STP_SCRIPT_PACKAGES`` → ``strict``（缺省）；``off``/``on`` 为过渡别名 → strict + WARNING。
+
+    2026-09-24：tree 回退目标（agent/scripts/ 版本目录）已随 Phase 3 消失，回退语义不再存在，
+    配置了 off/on 的主机视同 strict——但保留一次告警让漏配/旧配置在日志里可见。
+    """
     raw = ((env if env is not None else os.environ).get(SWITCH_ENV) or "").strip().lower()
-    if not raw:
-        return "off"
-    if raw in _MODES:
-        return raw
-    logger.warning("script_packages_bad_mode value=%r → off", raw)
-    return "off"
+    if raw in ("", "strict"):
+        return "strict"
+    logger.warning("script_packages_mode_%s_is_retired_fallback_tree_deleted → strict（台账 script-packages-off-on-modes）", raw)
+    return "strict"
 
 
 def _entry_basename(nfs_path: str) -> str:
@@ -68,32 +72,21 @@ def resolve_script_path(entry, env: Optional[Mapping[str, str]] = None) -> Resol
     永不抛出（``strict`` 例外：抛 ``PackageUnavailable``）。
     """
     environ = env if env is not None else os.environ
-    mode = package_mode(environ)
-    tree = ResolvedScript(path=entry.nfs_path, cwd=os.path.dirname(entry.nfs_path) or "", source="tree")
-    if mode == "off":
-        return tree
+    package_mode(environ)  # 归一（恒 strict）+ 旧值告警
     sha = getattr(entry, "package_sha256", None)
     if not sha:
-        return _fallback(mode, tree, entry, "no_package_sha")
-
+        raise PackageUnavailable(f"{entry.name}@{entry.version}: no_package_sha")
     packages_root = tool_cache._packages_root(environ)
     cache_root = tool_cache._cache_root(environ)
     if not packages_root or not cache_root:
-        return _fallback(mode, tree, entry, "roots_undefined")
+        raise PackageUnavailable(f"{entry.name}@{entry.version}: roots_undefined")
     pkg_dir = tool_cache.ensure_package(entry.name, entry.version, str(sha), packages_root, cache_root)
     if not pkg_dir:
-        return _fallback(mode, tree, entry, "package_unavailable")
+        raise PackageUnavailable(f"{entry.name}@{entry.version}: package_unavailable")
     script_abs = Path(pkg_dir) / _entry_basename(entry.nfs_path)
     if not script_abs.is_file():
-        return _fallback(mode, tree, entry, "entry_missing_in_package")
-    return ResolvedScript(path=str(script_abs), cwd=str(pkg_dir), source="package")
-
-
-def _fallback(mode: str, tree: ResolvedScript, entry, reason: str) -> ResolvedScript:
-    if mode == "strict":
-        raise PackageUnavailable(f"{entry.name}@{entry.version}: {reason}")
-    logger.warning("script_packages_fallback_tree %s@%s reason=%s", entry.name, entry.version, reason)
-    return ResolvedScript(path=tree.path, cwd=tree.cwd, source="tree", reason=reason)
+        raise PackageUnavailable(f"{entry.name}@{entry.version}: entry_missing_in_package")
+    return ResolvedScript(path=str(script_abs), cwd=str(pkg_dir))
 
 
 def verify_package(entry: Mapping[str, object], env: Optional[Mapping[str, str]] = None) -> tuple[bool, Optional[str]]:
@@ -102,9 +95,10 @@ def verify_package(entry: Mapping[str, object], env: Optional[Mapping[str, str]]
     成功即已把包预热进 ``tools_cache``（派发前拉包，步骤启动零等待）。
     """
     environ = env if env is not None else os.environ
+    package_mode(environ)  # 旧值告警入口（结果恒 strict）
     sha = entry.get("package_sha256")
-    if package_mode(environ) == "off" or not sha:
-        return True, None  # 不介入：由调用方按文件 sha 判定
+    if not sha:
+        return True, None  # 行无包身份（历史 seed 未回填）：由调用方按文件 sha 判定
     packages_root = tool_cache._packages_root(environ)
     cache_root = tool_cache._cache_root(environ)
     if not packages_root or not cache_root:
