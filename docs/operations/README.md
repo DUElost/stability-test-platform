@@ -15,6 +15,7 @@
 | [`installation.md`](./installation.md) | **独立站点安装**：`deploy/preflight.sh` → `install.sh` → `agent/install.sh` → verify → handover 全流程、inventory 契约与常见 Fix 对照 |
 | [`site-handover-and-navigation.md`](./site-handover-and-navigation.md) | 独立站点导航入口 /site/、交接证据 handover.json（MS-01…MS-13 的 P1 映射）与签字清单 |
 | [`device-lease-emergency-release.md`](./device-lease-emergency-release.md) | ACTIVE 设备租约紧急释放与回查 |
+| [`2026-09-24-capacity-p0-rollout-runbook.md`](./2026-09-24-capacity-p0-rollout-runbook.md) | **容量 P0 同窗上线手册**（未执行）：控制面 unit 预算门禁/start-limit、Prometheus 平台副本同步、Agent #3242 分发、真机复跑观测（#2959 / #3244 门槛） |
 
 ---
 
