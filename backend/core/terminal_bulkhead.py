@@ -49,7 +49,12 @@ class TerminalBulkheadFull(RuntimeError):
 
 _semaphore: Optional[asyncio.Semaphore] = None
 _semaphore_size: Optional[int] = None
-_rejection_logged = False
+
+#: 同一轮削峰只记**一条**日志（逐条记会把现场可查时长再压一次，#3042 同源纪律）；
+#: 静默超过这个秒数算新一轮 burst——早期实现是「进程生命周期一次」，那会让**第二次**
+#: 事故完全没有起点日志（低优先修正，2026-09-23 裁决）。指标不受此影响。
+_REJECTION_LOG_QUIET_SECONDS = 60.0
+_last_rejection_log_at: Optional[float] = None
 
 
 def _int_env(name: str, default: int) -> int:
@@ -79,11 +84,11 @@ def _get_semaphore() -> asyncio.Semaphore:
 
 
 def _reset_for_tests() -> None:
-    """清进程内状态（闸门 + 「只记一次」标记）。测试专用，生产不调。"""
-    global _semaphore, _semaphore_size, _rejection_logged
+    """清进程内状态（闸门 + 「本 burst 已记日志」标记）。测试专用，生产不调。"""
+    global _semaphore, _semaphore_size, _last_rejection_log_at
     _semaphore = None
     _semaphore_size = None
-    _rejection_logged = False
+    _last_rejection_log_at = None
 
 
 @contextlib.asynccontextmanager
@@ -93,7 +98,7 @@ async def terminal_slot() -> AsyncIterator[None]:
     进入时**不碰数据库**：这是「池外排队」的落点，调用方必须在本上下文内才发起
     第一次 DB 查询（`/complete` 路由里 `get_async_db` 的会话是惰性的，首次使用才取连接）。
     """
-    global _rejection_logged
+    global _last_rejection_log_at
 
     semaphore = _get_semaphore()
     concurrency, wait_budget = limits()
@@ -107,11 +112,15 @@ async def terminal_slot() -> AsyncIterator[None]:
         await asyncio.wait_for(semaphore.acquire(), timeout=wait_budget)
     except TimeoutError:
         terminal_bulkhead_rejected_total.inc()
-        if not _rejection_logged:
-            # 只记一次：波内会拒绝成百上千次，逐条日志会把现场可查时长再压一次（#3042 同源纪律）
-            _rejection_logged = True
+        now = time.monotonic()
+        if (
+            _last_rejection_log_at is None
+            or (now - _last_rejection_log_at) >= _REJECTION_LOG_QUIET_SECONDS
+        ):
+            # 每个 burst 的**起点**留一行；burst 内后续拒绝只进指标。
+            _last_rejection_log_at = now
             logger.warning(
-                "terminal_bulkhead_rejected first_of_burst wait_ms=%d concurrency=%d",
+                "terminal_bulkhead_rejected burst_start wait_ms=%d concurrency=%d",
                 int(wait_budget * 1000),
                 concurrency,
             )

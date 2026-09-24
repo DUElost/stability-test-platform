@@ -108,3 +108,32 @@ Agent 线程内 3 次重试。本条按 owner 批准的方向落 **P0 的第一�
 5. **部署动作**（需窗口）：① 生产 unit 补 `ExecStartPre` 预算门禁（`daemon-reload`）；
    ② `.env.backend` 无需改动（默认值即新值）；③ 重启后端；④ `/etc/prometheus/rules` 副本同步
    + `POST /-/reload`；⑤ 若要让 Agent 侧削峰生效还需机队分发（另一单）。
+
+## 后续修正（2026-09-23 晚，owner 裁决）
+
+1. **门禁 fail-closed 收口**（`tools/dev/check_db_pool_budget.py`）：
+   - 每条 `SHOW` 由宽口径 `except Exception` 收窄为**只容忍**「旧 PG 没有
+     `reserved_connections`」（SQLSTATE `42704` / `psycopg.errors.UndefinedObject`，且仅该键）；
+     连接中途断开、权限不足、其它读失败一律非零退出——宽口径会在「读一半掉线」时退回
+     默认值，那是事实上的 fail-open；
+   - `--env-file` 除 `DATABASE_URL` 外还注入预算键（`STP_DB_POOL_SIZE` /
+     `STP_DB_MAX_OVERFLOW` / `STP_DB_POOL_TIMEOUT` / `STP_DB_POOL_INSTANCES` /
+     `STP_DB_CONNECTION_RESERVE`，ambient 优先、文件补缺项），输出新增 `config_source=`；
+     否则手工检查可能验的是默认值而不是文件里写的值；
+   - 显式传入的 `--env-file` 不存在/不可读 ⇒ 非零退出（静默退回默认 = 一次假绿）。
+2. **舱壁告警判据**（`deploy/prometheus/alerts-stability-platform.yml`）：
+   `increase(...[5m]) > 0` + `for: 5m` **不能证明持续拒绝**——一笔孤立 counter 增量会让
+   表达式保持约 5 分钟为真，边界条件下可进 firing。改为
+   `count_over_time((increase(stability_terminal_bulkhead_rejected_total[1m]) > 0)[10m:1m]) >= 8`
+   （最近 10 分钟里 ≥8 个一分钟窗口有拒绝），去掉 `for:`；定位为**非 paging 诊断 warning**
+   （Alertmanager 路由里只有 critical 走抢修 receiver），paging 条件待 #3243 的量级分布，
+   并应叠加 terminal outbox backlog / 终态收敛延迟 / 父 Run 长时间不终态。
+   场景补两条：单次拒绝后长期静默**不得** firing（含原式会假阳的 `eval 6m` 边界）、
+   10 分钟持续拒绝**必须** firing。
+3. **拒绝日志粒度**：`_rejection_logged` 由「进程生命周期一次」改为「每个 burst 一次」
+   （静默窗 `_REJECTION_LOG_QUIET_SECONDS=60s` 划分 burst），第二次事故不再没有起点日志；
+   指标语义不变。
+
+验证：`pytest`（门禁 13 / 舱壁 9 / 过载 11，全绿）、`promtool test rules` **SUCCESS**、
+真 PG 只读三条——默认值 `[OK] ... config_source=default`；把旧池参数 30/60 写进 env-file 时
+`[FAIL] app_total=180 ... config_source=env-file`（证明文件真的参与判定）；PG 不可达 `rc=1`。
