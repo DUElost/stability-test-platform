@@ -175,7 +175,7 @@ def test_script_scan_ignores_legacy_external_and_windows_batch_entries(
 ):
     site = _site(tmp_path, monkeypatch)
     site.add("scan_aee", "1.0.0", {"scan_aee.py": "legacy\n"})                       # legacy 名
-    site.add("Start-Log-Scan", "2026.09.22", {"s.py": "x\n"}, script="s.py", python="venv/bin/python")  # 外部工具族
+    site.add("Start-Log-Scan", "2026.09.22", {"s.py": "x\n"}, script="s.py", python="venv/bin/python", kind="tool")  # 外部工具族（kind 驱动，ADR-0051 v1.3）
     site.add("win_tool", "1.0.0", {"win_tool.bat": "@echo off\n"}, script="win_tool.bat")  # .bat 不支持
     site.add("ok_tool", "1.0.0", {"ok_tool.py": "print(1)\n"})
 
