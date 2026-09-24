@@ -41,7 +41,8 @@
       "what": "Phase 4a 二义期间 scan 误注册的两行 Unisoc script 表行（Scan-Result-GT / Monkey-Log-Scan-GT-SPRD），v1.3 后不再注册，待软退役",
       "exit": "issue:#3075",
       "due": "2026-09-30",
-      "status": "active"
+      "status": "done",
+      "evidence": "2026-09-24 部署（#3250 合入后）：两行 id=216/217 经 admin PUT is_active=false 软退役，复扫 unregistered_active=[]"
     }
   ]
 }
