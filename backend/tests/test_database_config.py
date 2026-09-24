@@ -44,9 +44,11 @@ def test_normalize_database_urls_for_sqlite():
 def test_get_async_engine_kwargs_for_postgres_keeps_pool_settings():
     assert get_async_engine_kwargs("postgresql+asyncpg://user:pass@localhost:5432/stp") == {
         "pool_pre_ping": True,
-        "pool_size": 30,
-        "max_overflow": 60,
+        "pool_size": 20,
+        "max_overflow": 20,
         "pool_recycle": 1800,
+        # ADR-0047 v1.1 D2：显式 2s，不再回退 SQLAlchemy 默认 30s。
+        "pool_timeout": 2,
         # #2632：asyncpg 的 application_name 走 server_settings（不是顶层参数）；
         # 套件内 TESTING=1（conftest），故期望值是 tests 名——名字映射由
         # backend/tests/core/test_db_application_name.py 钉住。
@@ -65,9 +67,10 @@ def test_get_sync_engine_kwargs_for_postgres_sets_pool_capacity():
     assert get_sync_engine_kwargs("postgresql+psycopg://user:pass@localhost:5432/stp") == {
         "future": True,
         "pool_pre_ping": True,
-        "pool_size": 30,
-        "max_overflow": 60,
+        "pool_size": 20,
+        "max_overflow": 20,
         "pool_recycle": 1800,
+        "pool_timeout": 2,
         # #2632：psycopg / psycopg2 直接吃顶层 application_name。
         "connect_args": {"application_name": "stability-tests"},
     }
@@ -82,7 +85,13 @@ def test_sync_and_async_pool_capacity_share_the_same_env(monkeypatch):
     monkeypatch.setenv("STP_DB_POOL_SIZE", "44")
     monkeypatch.setenv("STP_DB_MAX_OVERFLOW", "88")
     monkeypatch.setenv("STP_DB_POOL_RECYCLE", "600")
-    expected = {"pool_size": 44, "max_overflow": 88, "pool_recycle": 600}
+    monkeypatch.setenv("STP_DB_POOL_TIMEOUT", "7")
+    expected = {
+        "pool_size": 44,
+        "max_overflow": 88,
+        "pool_recycle": 600,
+        "pool_timeout": 7,
+    }
 
     for kwargs in (
         get_async_engine_kwargs("postgresql+asyncpg://user:pass@localhost:5432/stp"),
@@ -97,7 +106,51 @@ def test_pool_env_invalid_or_non_positive_falls_back_to_default(monkeypatch):
     for raw in ("abc", "", "0", "-5"):
         monkeypatch.setenv("STP_DB_POOL_SIZE", raw)
         kwargs = get_sync_engine_kwargs("postgresql+psycopg://user:pass@localhost:5432/stp")
-        assert kwargs["pool_size"] == 30, f"raw={raw!r} 未回退默认"
+        assert kwargs["pool_size"] == 20, f"raw={raw!r} 未回退默认"
+
+
+# ── ADR-0047 v1.1 D1：池容量的单一读数口与预算口径 ────────────────────────────
+
+
+def test_pool_capacity_single_source_of_truth(monkeypatch):
+    """`pool_capacity()` 是门禁与引擎共用的一份算术（默认 20+20 × 2 引擎）。"""
+    from backend.core.database import DB_POOL_ENGINES, pool_capacity
+
+    for name in (
+        "STP_DB_POOL_SIZE",
+        "STP_DB_MAX_OVERFLOW",
+        "STP_DB_POOL_RECYCLE",
+        "STP_DB_POOL_TIMEOUT",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    cap = pool_capacity()
+    assert cap == {
+        "pool_size": 20,
+        "max_overflow": 20,
+        "pool_timeout": 2,
+        "per_engine": 40,
+        "engines": DB_POOL_ENGINES,
+        "app_total": 80,
+    }
+    # 两侧引擎 kwargs 必须与读数口一致——否则门禁校验的就不是真正生效的池。
+    for kwargs in (
+        get_async_engine_kwargs("postgresql+asyncpg://user:pass@localhost:5432/stp"),
+        get_sync_engine_kwargs("postgresql+psycopg://user:pass@localhost:5432/stp"),
+    ):
+        assert kwargs["pool_size"] + kwargs["max_overflow"] == cap["per_engine"]
+
+
+def test_pool_capacity_follows_env(monkeypatch):
+    """env 改一处 ⇒ 读数口的每引擎/总量都跟着变（门禁才能拦住误配）。"""
+    from backend.core.database import pool_capacity
+
+    monkeypatch.setenv("STP_DB_POOL_SIZE", "30")
+    monkeypatch.setenv("STP_DB_MAX_OVERFLOW", "60")
+
+    cap = pool_capacity()
+    assert cap["per_engine"] == 90
+    assert cap["app_total"] == 180
 
 
 def test_attach_pool_metrics_skips_sqlite_and_is_idempotent_safe():
