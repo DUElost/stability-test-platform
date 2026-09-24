@@ -226,6 +226,12 @@ jobs:
             -not -path '*/node_modules/*' \
             | xargs python tools/dev/collapse-blank-pollution.py --check -q
 
+      # ADR-0051 D8：过渡登记簿（lint + 到期执法；退出锚必须可解析）。
+      - name: 过渡登记簿检查(ADR-0051)
+        run: |
+          python tools/dev/check_transitions.py --self-test
+          python tools/dev/check_transitions.py
+
       # ADR-0033 D0：禁止新增 backend/agent/scripts/ 顶层工具族（#745 in-tree breaker）。
       # 既有族新版本仍绿；新族须归类声明，external-tool 无 in-tree 出口
       # （ADR-0033 §5.6；§5.4 条件 4 已触发，跟踪 #3075）。
