@@ -1225,6 +1225,7 @@ GATE_TO_CI_ANCHOR = {
     "pollution": ("ci.yml", "空行注入污染检查"),
     # ADR-0051 Phase 3：脚本版本不可变门禁随版本目录退役（不可变性由 tool-manifest 门禁的
     # append-only + 族树⇄最新登记等价承担）。
+    "transitions": ("ci.yml", "过渡登记簿检查(ADR-0051)"),
     # ADR-0033 D0 新族门禁（#745）：与 immutability 同模式接入 lint job。
     "new-script-family": ("ci.yml", "ADR-0033 D0 新脚本族检查"),
     # ADR-0033 D2 Tool Contract 脚手架（#745）：fixture 靶子 + --self-test。

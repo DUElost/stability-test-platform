@@ -90,6 +90,9 @@ def test_drain_500_retries_indefinitely_no_dead_letter(db):
     with patch("backend.agent.outbox_drainer.requests.post", return_value=resp):
         for _ in range(3):
             assert drainer._drain_once() == 0
+            # #3242：5xx 现在带「指数 + full jitter」退避——本用例观察的是**跨周期**
+            # 的 attempts 累计（真实节奏 15s/轮），把上一轮的退避清掉即可继续。
+            drainer._defer_until.clear()
 
     pending = db.get_pending_terminals()
     assert len(pending) == 1, "5xx must stay pending — not dead-lettered"
@@ -109,6 +112,8 @@ def test_drain_below_max_attempts_stays_pending(db):
     with patch("backend.agent.outbox_drainer.requests.post", return_value=resp):
         for _ in range(3):
             drainer._drain_once()
+            # #3242：同上——清退避以模拟后续 drain 周期（15s/轮）。
+            drainer._defer_until.clear()
 
     pending = db.get_pending_terminals()
     assert len(pending) == 1

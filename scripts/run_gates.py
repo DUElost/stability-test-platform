@@ -129,6 +129,13 @@ GATES = {
         ROOT,
         None,
     ),
+    # ADR-0051 D8：过渡登记簿——lint + 到期执法（due 过了仍 active 即红；exit 锚必须可解析）。
+    "transitions": (
+        f"{PY} tools/dev/check_transitions.py --self-test && "
+        f"{PY} tools/dev/check_transitions.py",
+        ROOT,
+        None,
+    ),
     # ADR-0033 Phase B（#3075）：tool_manifest 唯一事实源的 schema lint +
     # append-only（退役仅 retired 单向翻转；artifact 布局=C4；契约字段禁混装=C5）。
     # ADR-0051 Phase 2a：平台脚本版本目录 ⇄ 包登记的等价检查并入本门禁（重建 sha ==
@@ -329,7 +336,7 @@ PROFILES = {
         "schema-at-head", "env-inventory",
         "ruff", "eslint", "tsc", "knip", "compileall", "orphan-models",
         "gov-surface", "ai-work", "god-files", "inner-imports",
-        "new-script-family", "tool-contract", "tool-manifest",
+        "new-script-family", "tool-contract", "tool-manifest", "transitions",
     ],
     "check:pr": [
         "schema-at-head", "env-inventory",
@@ -338,7 +345,7 @@ PROFILES = {
         "tool-manifest",
         "alembic-immutability", "invariant-diff",
         "gov-surface", "ip-leak", "prom-alerts", "agent-tests-collect", "agent-tests",
-        "pr-migrate", "god-files", "inner-imports",
+        "pr-migrate", "god-files", "inner-imports", "transitions",
     ],
     # 治理面专项：结构门禁 + skill 用量探针 + Harness 摄取矩阵（手跑，分钟级）
     "check:gov": ["gov-surface", "gov-skills", "harness-ingest"],

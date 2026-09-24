@@ -15,7 +15,8 @@ from backend.agent.api_client import TerminalReportLostError, complete_job
 _PAYLOAD = {"status": "FINISHED", "exit_code": 0, "error_code": None}
 
 
-def _post_fail(url, payload, context=None):
+def _post_fail(url, payload, context=None, **kwargs):
+    # #3242：complete_job 现在带 attempts= 调 `_post_with_retry`（终态首发只一次）。
     raise RuntimeError("network down")
 
 
