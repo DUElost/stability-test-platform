@@ -130,7 +130,12 @@ Agent 线程内 3 次重试。本条按 owner 批准的方向落 **P0 的第一�
    并应叠加 terminal outbox backlog / 终态收敛延迟 / 父 Run 长时间不终态。
    场景补两条：单次拒绝后长期静默**不得** firing（含原式会假阳的 `eval 6m` 边界）、
    10 分钟持续拒绝**必须** firing。
-3. **拒绝日志粒度**：`_rejection_logged` 由「进程生命周期一次」改为「每个 burst 一次」
+3. **告警契约解析器补子查询形态**（`tests/test_prometheus_alerts_contract.py`）：
+   持续判据是本仓第一条用**子查询**（`[range:resolution]`）的规则，结构层解析器把
+   `[10m:1m]` 里的 `:1m` 读成了指标名（`未知指标 :1m`）。按既有原则
+   （#735 集合运算符 / #2967 向量匹配修饰符：**盲区修在解析器，合法 PromQL 不为解析器
+   让路**）新增 `_SUBQUERY_MODIFIER_RE` 剥离，并补解析器自证用例（含 `[10m:]` 省略形态）。
+4. **拒绝日志粒度**：`_rejection_logged` 由「进程生命周期一次」改为「每个 burst 一次」
    （静默窗 `_REJECTION_LOG_QUIET_SECONDS=60s` 划分 burst），第二次事故不再没有起点日志；
    指标语义不变。
 
