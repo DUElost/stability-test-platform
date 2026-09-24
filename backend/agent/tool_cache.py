@@ -1,4 +1,4 @@
-"""ADR-0033 Phase B 第一切片（#3075）：Agent 侧包拉取与 ``tools_cache`` 校验。
+"""ADR-0033 Phase B（#3075）+ ADR-0051：Agent 侧包拉取与 ``tools_cache`` 校验（platform script 族与外部工具族共用）。
 
 消费链路（C2 单向派生的终端）：Git ``tool_manifest.json`` → 发布工具生成站点派生
 副本 ``packages/manifest.json`` + ``packages/{name}/{version}.tar.gz``（中心存储）

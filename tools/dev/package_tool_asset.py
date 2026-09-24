@@ -160,7 +160,8 @@ def load_manifest(path: Path) -> dict:
 
 
 def register_entry(
-    doc: dict, name: str, version: str, sha: str, artifact: str, python_rel: str | None, script_rel: str
+    doc: dict, name: str, version: str, sha: str, artifact: str, python_rel: str | None, script_rel: str,
+    kind: str = "script",
 ) -> tuple[dict, bool]:
     """纯函数：向 manifest 文档追加版本条目（幂等：同版本同 sha 放行，异 sha 拒绝）。
 
@@ -168,7 +169,9 @@ def register_entry(
 
     返回 (doc, appended)。append-only/退役规则由门禁统一执法；这里只防手滑覆盖。
     """
-    tool = doc["tools"].setdefault(name, {"versions": []})
+    tool = doc["tools"].setdefault(name, {"kind": kind, "versions": []})
+    if tool.get("kind") != kind:
+        raise SystemExit(f"kind 不一致：{name} 已登记 kind={tool.get('kind')!r}，拒绝以 {kind!r} 追加")
     for entry in tool["versions"]:
         if entry.get("version") == version:
             if entry.get("package_sha256") == sha:
@@ -212,6 +215,8 @@ def main() -> int:
     ap.add_argument("--write-manifest", action="store_true", help="把新条目追加进 Git manifest 唯一事实源")
     ap.add_argument("--python-absent", action="store_true",
                     help="登记 python=null：包内无解释器，由 Agent 自身解释器执行（ADR-0051 D4）")
+    ap.add_argument("--kind", choices=("script", "tool"), default="script",
+                    help="族级 kind：script=参与 script 表注册（平台脚本族）；tool=外部工具族（ADR-0051 v1.3）")
     ap.add_argument("--packages-root", type=Path, default=None, help="站点中心存储根（C4：写包 + 派生 manifest 副本）")
     ap.add_argument("--dry-run", action="store_true", help="只计算并打印要素，不写任何文件")
     args = ap.parse_args()
@@ -249,6 +254,7 @@ def main() -> int:
         doc, appended = register_entry(
             doc, args.name, args.version, facts["package_sha256"],
             artifact_path_for(args.name, args.version), python_for_entry, args.script_relative,
+            kind=args.kind,
         )
         if appended:
             dump_manifest(doc, args.manifest)

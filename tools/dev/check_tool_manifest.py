@@ -5,7 +5,10 @@
 
 **lint（C2/C5 字段面）**
 - 顶层仅 ``schema_version``(=1) 与 ``tools``；
-- ``tools`` 为 族名→{versions:[...]} 映射；族名/版本号限 ``[A-Za-z0-9][A-Za-z0-9._-]*``；
+- ``tools`` 为 族名→{kind, versions:[...]} 映射；族名/版本号限 ``[A-Za-z0-9][A-Za-z0-9._-]*``；
+  ``kind`` ∈ {``script``, ``tool``}（ADR-0051 v1.3 族级字段）：``script``=参与 ``script`` 表注册
+  （平台脚本族，checker 做族树⇄最新条目等价）；``tool``=外部工具族（不注册、不做树等价，
+  由 runner 按包引用键拉取）。``python: null`` 自 Phase 4a 起对两族都合法，族归类**只认 kind**；
 - 版本条目字段集**恰好**为 {version, package_sha256, artifact, python, script, retired}——
   多一个字段（如执行契约要素）即红：分发面与契约面不得混装（C5）；
 - ``package_sha256`` 64 位小写十六进制（整包 sha，区别于 ``script.content_sha256`` 的
@@ -90,8 +93,11 @@ def lint_manifest(doc: object) -> list[str]:
         if not NAME_RE.match(str(name)):
             errs.append(f"非法族名 {name!r}（限 {NAME_RE.pattern}）")
             continue
-        if not isinstance(tool, dict) or set(tool) != {"versions"} or not isinstance(tool["versions"], list):
-            errs.append(f"{name}: 必须且只能含 versions 数组")
+        if not isinstance(tool, dict) or set(tool) != {"kind", "versions"} or not isinstance(tool["versions"], list):
+            errs.append(f"{name}: 必须且只能含 kind + versions 数组（kind=script|tool，ADR-0051 v1.3）")
+            continue
+        if tool["kind"] not in ("script", "tool"):
+            errs.append(f"{name}: kind 必须是 script|tool，实际 {tool['kind']!r}")
             continue
         seen: set[str] = set()
         for i, entry in enumerate(tool["versions"]):
@@ -137,6 +143,9 @@ def append_only_diff(base_doc: dict, head_doc: dict) -> list[str]:
         if head_tool is None:
             errs.append(f"族 {name} 整体消失——删除禁止；退役请用 retired:true")
             continue
+        if base_tool.get("kind") is not None and base_tool.get("kind") != head_tool.get("kind"):
+            errs.append(f"{name}: 族级 kind 不可变（{base_tool.get('kind')!r}→{head_tool.get('kind')!r}）——"
+                        "改 kind=改注册语义，须退役重登记")  # base 无 kind（v1.3 迁移前）= 首次补写，合法
         base_versions = base_tool["versions"]
         head_versions = head_tool["versions"]
         head_list = [e.get("version") for e in head_versions]
@@ -204,11 +213,27 @@ def run_self_test() -> int:
         base.update(over)
         return base
 
-    good = {"schema_version": 1, "tools": {"tool": {"versions": [entry(), entry(version="v1.0.1", artifact="packages/tool/v1.0.1.tar.gz")]}}}
+    good = {"schema_version": 1, "tools": {"tool": {"kind": "tool", "versions": [entry(), entry(version="v1.0.1", artifact="packages/tool/v1.0.1.tar.gz")]}}}
     if lint_manifest(good):
         failures.append(f"合法文档应绿，实际 {lint_manifest(good)}")
     if lint_manifest({"schema_version": 2, "tools": {}}) == []:
         failures.append("schema_version=2 应红")
+    no_kind = json.loads(json.dumps(good))
+    del no_kind["tools"]["tool"]["kind"]
+    if not any("kind" in e for e in lint_manifest(no_kind)):
+        failures.append("缺 kind 应红（ADR-0051 v1.3 族级必填）")
+    bad_kind = json.loads(json.dumps(good))
+    bad_kind["tools"]["tool"]["kind"] = "script?"
+    if not any("script|tool" in e for e in lint_manifest(bad_kind)):
+        failures.append("非法 kind 应红")
+    flip_kind = json.loads(json.dumps(good))
+    flip_kind["tools"]["tool"]["kind"] = "script"
+    if not any("kind 不可变" in e for e in append_only_diff(good, flip_kind)):
+        failures.append("族级 kind 原地改应红")
+    null_py_tool = json.loads(json.dumps(good))
+    null_py_tool["tools"]["tool"]["versions"][0]["python"] = None
+    if lint_manifest(null_py_tool):
+        failures.append(f"kind=tool 且 python=null 应绿（Phase 4a 二义已解）：{lint_manifest(null_py_tool)}")
     bad_field = json.loads(json.dumps(good))
     bad_field["tools"]["tool"]["versions"][0]["exit_codes"] = {"0": "ok"}
     if not any("多余字段" in e for e in lint_manifest(bad_field)):

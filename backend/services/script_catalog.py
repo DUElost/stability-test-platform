@@ -165,10 +165,14 @@ def load_manifest(manifest_path: str | Path | None) -> dict:
 
 
 def script_entries(doc: dict) -> Iterable[Tuple[str, dict]]:
-    """manifest 里的平台脚本条目 ``(name, entry)``（``python`` 为 null 的族；跳过 legacy 名）。"""
+    """manifest 里的平台脚本条目 ``(name, entry)``（族级 ``kind == "script"``，ADR-0051 v1.3；跳过 legacy 名）。
+
+    kind=tool 的外部工具族**不进 ``script`` 表**——运行由 runner 包引用键驱动。
+    消除 Phase 4a ``python:null`` 二义的注册副作用（展锐两族曾被误建 script 行）。
+    """
     for name, tool in (doc.get("tools") or {}).items():
         versions = (tool or {}).get("versions") or []
-        if not any(e.get("python") is None for e in versions):
+        if (tool or {}).get("kind") != "script":
             continue
         if name in LEGACY_AEE_SCRIPT_NAMES:
             continue
