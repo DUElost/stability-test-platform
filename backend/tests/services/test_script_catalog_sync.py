@@ -157,7 +157,7 @@ def test_runtime_root_reanchors_nfs_path_and_windows_root(db_session: Session, t
 
 def test_external_tool_entries_and_bad_manifest_are_ignored(db_session: Session, tmp_path: Path):
     site = Site(tmp_path)
-    site.doc["tools"]["Start-Log-Scan"] = {"versions": [{
+    site.doc["tools"]["Start-Log-Scan"] = {"kind": "tool", "versions": [{
         "version": "2026.09.22", "package_sha256": "b" * 64, "artifact": "packages/Start-Log-Scan/2026.09.22.tar.gz",
         "python": "venv/bin/python", "script": "start_log_scan.py", "retired": False}]}
     site.write()
