@@ -95,6 +95,14 @@ _VECTOR_MATCH_RE = re.compile(
     r"\b(?:on|ignoring|group_left|group_right)\b\s*(?:\([^)]*\))?"
 )
 
+# 子查询修饰符（`[10m:1m]` / `[10m:]`）：跟在 `)` 之后，既不是指标选择器也不是标签块。
+# 不剥离时 `:1m` 会落进 `_TOKEN_RE` 的名字字符集（首字符允许 `:`）→ 被报成
+# 「未知指标 :1m」。判据第一次用子查询（#3248 的「10 分钟里 ≥8 个一分钟窗口」形态）
+# 就踩到本盲区。同 #735（集合运算符）/ #2967（向量匹配修饰符）的处置原则：
+# **盲区修在解析器，合法 PromQL 不为解析器让路**。
+# 冒号只出现在子查询修饰符里（标签块是花括号、区间是纯时长），故按「含冒号的方括号」剥离。
+_SUBQUERY_MODIFIER_RE = re.compile(r"\[[^\[\]]*:[^\[\]]*\]")
+
 
 def _selectors(expr: str) -> list[tuple[str, list[str]]]:
     """从本仓库用到的 PromQL 形态中提取 (指标名, 标签名列表)。
@@ -107,6 +115,7 @@ def _selectors(expr: str) -> list[tuple[str, list[str]]]:
     covered_until = -1
     stripped = _AGG_PREFIX_RE.sub("( ) ", expr)
     stripped = _VECTOR_MATCH_RE.sub(" ", stripped)
+    stripped = _SUBQUERY_MODIFIER_RE.sub(" ", stripped)
     for match in _TOKEN_RE.finditer(stripped):
         if match.start() < covered_until:
             continue
@@ -129,6 +138,9 @@ def _aggregation_clauses(expr: str) -> list[tuple[str, str, list[str], str]]:
     函数包装）。仅覆盖本仓库用到的形态（单层聚合 + 函数包裹）；定位不到
     内层指标的形态由契约用例显式报 problem（提醒更新本解析器），不静默放过。
     """
+    # 子查询修饰符同样不是指标名（见 `_SUBQUERY_MODIFIER_RE`）；此处整串就地剥离，
+    # 后面的 `expr[m.end():]` 切片仍按同一坐标系工作。
+    expr = _SUBQUERY_MODIFIER_RE.sub(" ", expr)
     clauses: list[tuple[str, str, list[str], str]] = []
     for m in _AGG_CLAUSE_RE.finditer(expr):
         labels = [x.strip() for x in m.group("labels").split(",") if x.strip()]
@@ -161,6 +173,21 @@ def test_selector_parser_skips_functions_and_reads_labels():
         'stability_a_total{reason="x"} >= 1 and on (host_id) '
         '(sum by (host_id) (stability_b_total) > 0)'
     ) == [("stability_a_total", ["reason"]), ("stability_b_total", [])]
+
+
+def test_selector_parser_handles_subquery_modifier():
+    """子查询修饰符 `[10m:1m]` 不得被当成指标名（#3248 舱壁告警形态）。
+
+    `count_over_time((increase(x[1m]) > 0)[10m:1m])` 里的 `[10m:1m]` 跟在 `)` 之后；
+    不剥离时 `:1m` 会落进 `_TOKEN_RE` 的名字字符集 → 「未知指标 :1m」。
+    """
+    assert _selectors(
+        "count_over_time((increase(stability_terminal_bulkhead_rejected_total[1m]) > 0)[10m:1m]) >= 8"
+    ) == [("stability_terminal_bulkhead_rejected_total", [])]
+    # resolution 省略形态（`[10m:]`）与带标签的指标同样要正确
+    assert _selectors(
+        'count_over_time((stability_a_total{outcome="failed"})[10m:]) >= 1'
+    ) == [("stability_a_total", ["outcome"])]
 
 
 def test_aggregation_parser_reads_labels_and_inner_metric():

@@ -13,6 +13,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 TOOL = ROOT / "tools" / "dev" / "check_db_pool_budget.py"
 
@@ -114,3 +116,158 @@ def test_cli_skips_when_no_url(tmp_path):
     )
     assert proc.returncode == 0
     assert "DATABASE_URL 未配置" in proc.stdout
+
+
+def test_cli_fails_closed_when_env_file_missing(tmp_path):
+    """显式 `--env-file` 读不到 ⇒ 非零退出（静默退回默认 = 假绿）。"""
+    missing = tmp_path / "no-such.env"
+    proc = subprocess.run(
+        [sys.executable, str(TOOL), "--env-file", str(missing)],
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+        env=_clean_env(),
+    )
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "--env-file 不存在或不可读" in proc.stdout
+
+
+# ── 2026-09-23 裁决补正①：fail-closed 的例外范围只能收在「旧 PG 缺 GUC」一处 ──
+
+
+class _FakeCursor:
+    def __init__(self, value: str):
+        self._value = value
+
+    def fetchone(self):
+        return (self._value,)
+
+
+class _FakeConn:
+    """只实现 `_read_pg_settings` 用到的子集：上下文协议 + `execute(...).fetchone()`。"""
+
+    def __init__(self, values: dict[str, str], raise_for: set[str]):
+        self._values = values
+        self._raise_for = raise_for
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+    def execute(self, sql: str):
+        import psycopg
+
+        key = sql.split()[-1]
+        if key in self._raise_for:
+            raise psycopg.errors.UndefinedObject(f'unrecognized configuration parameter "{key}"')
+        return _FakeCursor(self._values.get(key, "0"))
+
+
+def _patch_connect(monkeypatch, mod, conn):
+    monkeypatch.setattr(mod.psycopg, "connect", lambda *a, **kw: conn)
+
+
+def test_read_pg_settings_tolerates_legacy_missing_reserved_connections(monkeypatch):
+    """旧 PG（无 reserved_connections）⇒ 按 0 计 + 留一条 INFO 说明，其余键照读。"""
+    mod = _load_module()
+    conn = _FakeConn(
+        values={"max_connections": "200", "superuser_reserved_connections": "5"},
+        raise_for={"reserved_connections"},
+    )
+    _patch_connect(monkeypatch, mod, conn)
+
+    settings, notes = mod._read_pg_settings("postgresql://ignored")
+    assert settings == {
+        "max_connections": 200,
+        "superuser_reserved_connections": 5,
+        "reserved_connections": 0,
+    }
+    assert len(notes) == 1 and "reserved_connections" in notes[0]
+    assert mod.available_slots(settings) == 195
+
+
+def test_read_pg_settings_propagates_other_read_failures(monkeypatch):
+    """非「缺 GUC」的读失败（掉线/权限/…) 必须向上抛——宽口径 except 是事实上的 fail-open。"""
+    import psycopg
+
+    mod = _load_module()
+    conn = _FakeConn(values={}, raise_for=set())
+
+    def _boom(sql: str):
+        raise psycopg.OperationalError("connection closed mid-read")
+
+    monkeypatch.setattr(conn, "execute", _boom)
+    _patch_connect(monkeypatch, mod, conn)
+
+    with pytest.raises(psycopg.OperationalError):
+        mod._read_pg_settings("postgresql://ignored")
+
+
+def test_read_pg_settings_rejects_undefined_guc_on_other_keys(monkeypatch):
+    """`max_connections` 报「不存在」说明 PG 环境异常，不得当旧版本容忍掉。"""
+    mod = _load_module()
+    conn = _FakeConn(values={"superuser_reserved_connections": "3"}, raise_for={"max_connections"})
+    _patch_connect(monkeypatch, mod, conn)
+
+    with pytest.raises(mod.psycopg.errors.UndefinedObject):
+        mod._read_pg_settings("postgresql://ignored")
+
+
+# ── 2026-09-23 裁决补正②：`--env-file` 的预算键必须真的参与判定 ──────────────
+
+
+@pytest.fixture
+def _clean_budget_env(monkeypatch):
+    for key in _load_module()._BUDGET_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    yield
+
+
+def test_apply_env_file_config_injects_missing_and_respects_ambient(
+    tmp_path, monkeypatch, _clean_budget_env
+):
+    mod = _load_module()
+    env_file = tmp_path / "env.backend"
+    env_file.write_text(
+        "STP_DB_POOL_SIZE=30\n"
+        "STP_DB_MAX_OVERFLOW=60\n"
+        "STP_DB_POOL_INSTANCES=2\n"
+        "STP_DB_CONNECTION_RESERVE=5\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("STP_DB_MAX_OVERFLOW", "99")  # ambient 优先
+
+    injected = mod.apply_env_file_config(str(env_file))
+
+    import os
+
+    assert os.environ["STP_DB_POOL_SIZE"] == "30"
+    assert os.environ["STP_DB_MAX_OVERFLOW"] == "99", "ambient 必须胜出"
+    assert os.environ["STP_DB_POOL_INSTANCES"] == "2"
+    assert env_file.name not in injected.values()
+    assert set(injected) == {"STP_DB_POOL_SIZE", "STP_DB_POOL_INSTANCES", "STP_DB_CONNECTION_RESERVE"}
+    assert mod.config_source(injected) == "env+env-file"
+
+
+def test_env_file_pool_keys_change_the_verdict(tmp_path, monkeypatch, _clean_budget_env):
+    """补正②的判据：同一个文件，修前判定看默认(20/20 通过)、修后看文件(30/60 拒绝)。"""
+    mod = _load_module()
+    env_file = tmp_path / "env.backend"
+    env_file.write_text(
+        "DATABASE_URL=postgresql://u:p@127.0.0.1:5432/stp\n"
+        "STP_DB_POOL_SIZE=30\n"
+        "STP_DB_MAX_OVERFLOW=60\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@127.0.0.1:5432/stp")
+
+    injected = mod.apply_env_file_config(str(env_file))
+    capacity = mod._pool_capacity()
+    assert injected, "文件里的池键必须被注入"
+    assert capacity["per_engine"] == 90, f"判定必须看到文件里的 30+60，实测 {capacity}"
+
+    ok, line = mod.evaluate(capacity=capacity, instances=1, reserve=8, available=97)
+    assert ok is False and "FAIL" in line
+    assert mod.config_source(injected) == "env-file"

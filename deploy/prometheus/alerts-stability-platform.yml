@@ -316,25 +316,37 @@ groups:
 
       # ADR-0047 D5（#2959）：终态舱壁拒绝率——过载背压的**直接**信号。
       # 与上面两条的关系：那两条是「已经撞墙」，这条是「主动削峰在起作用」。
-      # 阈值口径：连续 5m 每个 5m 窗都有拒绝（≈ 持续削峰 ≥10m）才报，避免一次
-      # 瞬态拒绝就 page；magnitude 阈值待隔离压测给出分布后再收紧（ADR-0047 §4）。
+      #
+      # 持续性判据（2026-09-23 修正，原 `increase(...[5m]) > 0 for: 5m` 有假阳）：
+      # 原式并不能证明「连续拒绝」——一笔孤立的 counter 增量会让它保持约 5 分钟为真，
+      # 边界条件下可进 firing。现式数「最近 10 分钟里有多少个 1 分钟窗口出现过拒绝」，
+      # ≥8 才算持续（等价于「至少 8/10 分钟在削峰」）。`for:` 因此去掉：
+      # 窗口本身就是持续性证明，再叠 for 只会把 8/10 拖成 13/15。
+      #
+      # 定位：**非 paging 的诊断 warning**（Alertmanager 路由里只有 critical 走抢修
+      # receiver，warning 走默认 receiver）。成功吸收的削峰不该打扰人；阈值与
+      # paging 条件等 #3243 的量级分布，届时 paging 应叠加 terminal outbox backlog、
+      # 终态收敛延迟或父 Run 长时间不终态，而不是只看拒绝数。
       - alert: StabilityTerminalBulkheadRejected
-        expr: increase(stability_terminal_bulkhead_rejected_total[5m]) > 0
-        for: 5m
+        expr: count_over_time((increase(stability_terminal_bulkhead_rejected_total[1m]) > 0)[10m:1m]) >= 8
         labels:
           severity: warning
         annotations:
-          summary: Terminal (/complete) bulkhead is shedding load continuously
+          summary: Terminal (/complete) bulkhead is shedding load persistently
           description: >-
-            /agent/jobs/{id}/complete 的并发舱壁连续 ≥10m 在拒绝请求（默认 16 并发 /
-            等待预算 500ms）。它是**设计内的背压**（R523 之后新增，ADR-0047 D2）：
-            终态事实在 Agent 本地 SQLite outbox 里不会丢，峰值过后由 outbox 补送，
-            PlanRun 收敛会晚几十秒。持续拒绝说明三点之一：① 设备规模 × 单批终态
-            的到达率已经超过 16（考虑按实测抬舱壁，并同步核对池预算）；
-            ② Agent 侧退避未生效（重试仍在原地打转，见 P0-3）；
-            ③ 舱壁之外的通道（heartbeat/steps/claim）被别的慢查询拖住。
+            /agent/jobs/{id}/complete 的并发舱壁在最近 10 分钟里有 ≥8 个一分钟窗口
+            在拒绝请求（默认 16 并发 / 等待预算 500ms）——这是**持续**削峰，不是一次
+            瞬态尖峰（单次拒绝只进指标，不报）。舱壁是**设计内的背压**（R523 之后
+            新增，ADR-0047 D2）：终态事实在 Agent 本地 SQLite outbox 里不会丢，峰值
+            过后由 outbox 补送，PlanRun 收敛会晚几十秒。
+            持续拒绝说明三点之一：① 设备规模 × 单批终态的到达率已经超过 16
+            （考虑按实测抬舱壁，并同步核对池预算）；② Agent 侧退避未生效（重试仍在
+            原地打转，见 #3242）；③ 舱壁之外的通道（heartbeat/steps/claim）被别的
+            慢查询拖住。
             用 stability_terminal_bulkhead_inflight / _waiting 判断是「满负荷在跑」
-            还是「持名额的请求卡住了」。
+            还是「持名额的请求卡住了」。**本告警是诊断信号（非 paging）**；
+            #3243 给出量级分布后，paging 条件应叠加 terminal outbox backlog /
+            终态收敛延迟 / 父 Run 长时间不终态，避免为「成功吸收的削峰」报警。
 
       # ---- #2881 skill 用量探针的执行者指标 --------------------------------------
       # 生产者 = tools/dev/skill_usage_probe.py 的 node-exporter textfile（不是 backend
