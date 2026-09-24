@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "transitions": [
+    {
+      "id": "flash-tool-dir-env-injection",
+      "what": "agent_env_sync 按安装布局注入 STP_FLASH_TOOL_DIR（Phase 3 包模式下 flash_firmware/preflight 的 script_dir 相对回退断链的过渡止血，见 2026-09-23 Note）",
+      "exit": "adr:ADR-0051#D7",
+      "due": "2026-12-31",
+      "status": "active"
+    },
+    {
+      "id": "unisoc-env-path-keys",
+      "what": "STP_UNISOC_{LOG_SCAN,SCAN_RESULT}_{PYTHON,SCRIPT} 四路径键保留为包面回退（展锐两族已 --python-absent 入包、fleet 已推包引用键）",
+      "exit": "adr:ADR-0042#D3",
+      "due": "2026-10-31",
+      "status": "active"
+    },
+    {
+      "id": "script-packages-off-on-modes",
+      "what": "STP_SCRIPT_PACKAGES 的 off|on 回退模式（fleet 48/48 已 strict；回退对象 agent/scripts/ 目录已全删，模式本身待删）",
+      "exit": "adr:ADR-0051#D4",
+      "due": "2026-10-31",
+      "status": "active"
+    },
+    {
+      "id": "dedup-scan-env-fallback-window",
+      "what": "scan_runner/UnisocScanRunner 的「包面失败→env 路径」C3 回退窗口（#3075：回退保留一个版本窗口）",
+      "exit": "issue:#3075",
+      "due": "2026-10-31",
+      "status": "active"
+    },
+    {
+      "id": "control-plane-env-lives-in-checkout",
+      "what": "发布根 .env.backend 是指向开发仓根的 symlink（Phase 1 切了部署源，env 源仍挂靠检出；独立站点 env 属多站点交付续集）",
+      "exit": "adr:ADR-0051#D6",
+      "due": "2026-12-31",
+      "status": "active"
+    },
+    {
+      "id": "unisoc-miscreated-script-rows",
+      "what": "Phase 4a 二义期间 scan 误注册的两行 Unisoc script 表行（Scan-Result-GT / Monkey-Log-Scan-GT-SPRD），v1.3 后不再注册，待软退役",
+      "exit": "issue:#3075",
+      "due": "2026-09-30",
+      "status": "active"
+    }
+  ]
+}
