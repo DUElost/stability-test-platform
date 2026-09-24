@@ -980,16 +980,34 @@ tests:
           summary: SQLAlchemy QueuePool checkout timed out (pool saturated)
           description: 有请求在池内排队到 pool_timeout 仍没拿到连接。与上一条的区别是关键： 这条说明**池自身**已饱和（PG 未必满）；先查谁长期持有连接—— singleton 调度任务在长事务里取连接、或保留清理/NFS 回收这类慢 I/O 夹在 事务中间（#703 已修 leader election 一处，同类形态可再核）。 ADR-0047 v1.1 起 pool_timeout=2s（显式，不再是 SQLAlchemy 默认 30s）， 所以调用方等的是 2s 内的快失败（对外 503 + Retry-After，DB_OVERLOADED）； 触发说明**并发需求真的超过了池容量**（默认 20+20/引擎），而不是把卡顿 藏在 30s 的排队里。
   # ---- ADR-0047 D5：终态舱壁持续削峰（新增规则必须带场景，#2151 棘轮）--------
+  # 2026-09-23 修正：判据从 `increase(...[5m]) > 0 for: 5m` 换成「最近 10 分钟里
+  # ≥8 个一分钟窗口有拒绝」。两条场景分别钉住修正的两端——
+  # ① 单次拒绝后长期静默：**不得** firing（原式在边界条件下会假阳）；
+  # ② 持续 10 分钟拒绝：必须 firing。
   - interval: 1m
     input_series:
+    # 只有第 1 分钟发生一次拒绝（counter 0 → 1），此后长期不再增长
+    - series: stability_terminal_bulkhead_rejected_total
+      values: 0 1x19
+    alert_rule_test:
+    # 边界：原式在 eval 6m 时 increase[5m] 仍 >0 且 for: 5m 刚满足 → 会假阳
+    - eval_time: 6m
+      alertname: StabilityTerminalBulkheadRejected
+      exp_alerts: []
+    - eval_time: 20m
+      alertname: StabilityTerminalBulkheadRejected
+      exp_alerts: []
+  - interval: 1m
+    input_series:
+    # 每分钟都在拒绝 ⇒ 10 分钟窗内 10/10 个窗口 >0
     - series: stability_terminal_bulkhead_rejected_total
       values: 0+1x20
     alert_rule_test:
-    - eval_time: 20m
+    - eval_time: 12m
       alertname: StabilityTerminalBulkheadRejected
       exp_alerts:
       - exp_labels:
           severity: warning
         exp_annotations:
-          summary: Terminal (/complete) bulkhead is shedding load continuously
-          description: /agent/jobs/{id}/complete 的并发舱壁连续 ≥10m 在拒绝请求（默认 16 并发 / 等待预算 500ms）。它是**设计内的背压**（R523 之后新增，ADR-0047 D2）： 终态事实在 Agent 本地 SQLite outbox 里不会丢，峰值过后由 outbox 补送， PlanRun 收敛会晚几十秒。持续拒绝说明三点之一：① 设备规模 × 单批终态 的到达率已经超过 16（考虑按实测抬舱壁，并同步核对池预算）； ② Agent 侧退避未生效（重试仍在原地打转，见 P0-3）； ③ 舱壁之外的通道（heartbeat/steps/claim）被别的慢查询拖住。 用 stability_terminal_bulkhead_inflight / _waiting 判断是「满负荷在跑」 还是「持名额的请求卡住了」。
+          summary: Terminal (/complete) bulkhead is shedding load persistently
+          description: "/agent/jobs/{id}/complete 的并发舱壁在最近 10 分钟里有 ≥8 个一分钟窗口 在拒绝请求（默认 16 并发 / 等待预算 500ms）——这是**持续**削峰，不是一次 瞬态尖峰（单次拒绝只进指标，不报）。舱壁是**设计内的背压**（R523 之后 新增，ADR-0047 D2）：终态事实在 Agent 本地 SQLite outbox 里不会丢，峰值 过后由 outbox 补送，PlanRun 收敛会晚几十秒。 持续拒绝说明三点之一：① 设备规模 × 单批终态的到达率已经超过 16 （考虑按实测抬舱壁，并同步核对池预算）；② Agent 侧退避未生效（重试仍在 原地打转，见 #3242）；③ 舱壁之外的通道（heartbeat/steps/claim）被别的 慢查询拖住。 用 stability_terminal_bulkhead_inflight / _waiting 判断是「满负荷在跑」 还是「持名额的请求卡住了」。**本告警是诊断信号（非 paging）**； #3243 给出量级分布后，paging 条件应叠加 terminal outbox backlog / 终态收敛延迟 / 父 Run 长时间不终态，避免为「成功吸收的削峰」报警。"

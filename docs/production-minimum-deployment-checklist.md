@@ -178,12 +178,16 @@ STP_DB_POOL_INSTANCES × 2 引擎 × (STP_DB_POOL_SIZE + STP_DB_MAX_OVERFLOW)
 默认值 `1 × 2 × (20+20) = 80 ≤ 97 − 8` 成立。**改池参数前**先手工跑一次：
 
 ```bash
-<deploy-root>/venv/bin/python <deploy-root>/tools/dev/check_db_pool_budget.py
+<deploy-root>/venv/bin/python <deploy-root>/tools/dev/check_db_pool_budget.py \
+  --env-file <deploy-root>/.env.backend
 ```
 
-越界时它打印 `FAIL` 并以非零码退出 ⇒ systemd 拒绝启动（带病启动的形态就是 R523：
-180 预算对 97 槽 → 1401 条 `53300`、1531 次取连接失败）。多实例（ADR-0027）前必须把
-`STP_DB_POOL_INSTANCES` 改成真实实例数，否则预算按单实例算、总量会超。
+输出行末的 `config_source=` 标明本次预算口径的生效来源（`env` / `env-file` / `env+env-file` /
+`default`）——**看到 `default` 却以为验的是文件**是最容易发生的一次假绿。显式传入的
+`--env-file` 读不到时工具直接非零退出（不退回默认值）。越界时它打印 `FAIL` 并以非零码退出
+⇒ systemd 拒绝启动（带病启动的形态就是 R523：180 预算对 97 槽 → 1401 条 `53300`、
+1531 次取连接失败）。多实例（ADR-0027）前必须把 `STP_DB_POOL_INSTANCES` 改成真实实例数，
+否则预算按单实例算、总量会超。
 
 启用服务：
 

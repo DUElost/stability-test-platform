@@ -139,3 +139,50 @@ async def test_metrics_track_inflight_waiting_and_wait_time(monkeypatch):
     assert _get("stability_terminal_bulkhead_wait_seconds_count") >= wait_count_before + 2
     assert _get("stability_terminal_bulkhead_waiting") == 0.0
     assert _get("stability_terminal_bulkhead_inflight") == 0.0
+
+
+async def test_rejection_log_is_once_per_burst_not_once_per_process(monkeypatch, caplog):
+    """日志粒度是**每个 burst 一行**（2026-09-23 裁决修正）。
+
+    原实现是「进程生命周期一次」：第一次削峰之后，第二次事故完全没有起点日志。
+    现在以静默窗（`_REJECTION_LOG_QUIET_SECONDS`）划分 burst——burst 内只记一行，
+    过了静默窗再拒绝会重新记。
+    """
+    import logging
+
+    monkeypatch.setenv("STP_TERMINAL_BULKHEAD_CONCURRENCY", "1")
+    monkeypatch.setenv("STP_TERMINAL_BULKHEAD_WAIT_MS", "30")
+    caplog.set_level(logging.WARNING, logger="backend.core.terminal_bulkhead")
+
+    async def hold_and_reject() -> None:
+        release = asyncio.Event()
+        ready = asyncio.Event()
+
+        async def holder():
+            async with tb.terminal_slot():
+                ready.set()
+                await release.wait()
+
+        holder_task = asyncio.create_task(holder())
+        await asyncio.wait_for(ready.wait(), timeout=1)
+        for _ in range(3):
+            with pytest.raises(tb.TerminalBulkheadFull):
+                async with tb.terminal_slot():
+                    pytest.fail("超预算的请求不得进入临界区")
+        release.set()
+        await asyncio.wait_for(holder_task, timeout=1)
+
+    await hold_and_reject()
+    burst_one = [r for r in caplog.records if "burst_start" in r.getMessage()]
+    assert len(burst_one) == 1, [r.getMessage() for r in caplog.records]
+
+    # 静默窗已过：把上一轮起点推回 120s 前，下一次拒绝必须重新记一行
+    import time as _time
+
+    monkeypatch.setattr(tb, "_last_rejection_log_at", _time.monotonic() - 120)
+    await hold_and_reject()
+    burst_two = [r for r in caplog.records if "burst_start" in r.getMessage()]
+    assert len(burst_two) == 2, "第二轮削峰必须留下自己的起点日志"
+
+    # 指标不受日志粒度影响：6 次拒绝一个不少
+    assert _get("stability_terminal_bulkhead_rejected_total") >= 6
