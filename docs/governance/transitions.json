@@ -54,7 +54,7 @@
     },
     {
       "id": "center-storage-interim-dedup",
-      "what": "ADR-0053 Phase B 之前的中心存储止血：对已结束超过 24h 的 run，在 devices/ 内把逐文件 SHA-256 相同的文件改为硬链接（路径不变；脚本在仓库外运维目录 ~/stp-ops/2026-09-25-storage/，owner 授权执行），可再生提取副本（本 run 的 devices/ 仍有完整源）按需清理。与 ADR-0053 D2「不能仅靠约定保护共享 inode」存在张力：只处理已结束 run；上送为复制→校验→REMOTE，写完不再修改。2026-09-25 首次执行：删除 A 类提取副本 134 GB，L0 全量执行结果回填 #3308",
+      "what": "ADR-0053 Phase B 之前的中心存储止血：对已结束超过 24h 的 run，在 devices/ 内把逐文件 SHA-256 相同的文件改为硬链接（路径不变；backend/scripts/center_storage_hardlink_dedup.py，按需运行，由 host-storage 磁盘水位告警提示，步骤见 docs/operations/center-storage-hardlink-dedup.md），可再生提取副本（本 run 的 devices/ 仍有完整源）按需清理。与 ADR-0053 D2「不能仅靠约定保护共享 inode」存在张力：只处理已结束 run；上送为复制→校验→REMOTE，写完不再修改。2026-09-25 首次执行：删除 A 类提取副本 134 GB；L0 全量 109 个 run 释放 389.1 GB（#3308）。Phase B 落地时脚本、手册与告警描述中的指引一并删除",
       "exit": "adr:ADR-0053#Phase B",
       "due": "2026-12-31",
       "status": "active"

@@ -28,7 +28,7 @@ tests:
         severity: warning
       exp_annotations:
         summary: /mnt/stp-aee 按近 6 小时的写入速度，72 小时内会写满
-        description: '/mnt/stp-aee 剩余已不足一半，且按近 6 小时的趋势外推 72 小时后为负。 中心存储的增长主要来自 devices/（事件目录，baseline 跨 run 重复）与 jira/（提取副本）， 先用 backend/scripts/measure_center_storage.py 只读分族量化，处置见 #3233。'
+        description: '/mnt/stp-aee 剩余已不足一半，且按近 6 小时的趋势外推 72 小时后为负。 中心存储的增长主要来自 devices/（事件目录，baseline 跨 run 重复）与 jira/（提取副本）， 先用 backend/scripts/measure_center_storage.py 只读分族量化。 devices/ 的跨 run 重复可按需改硬链接回收，不删证据（步骤见 docs/operations/center-storage-hardlink-dedup.md）。处置见 #3233。'
   - eval_time: 8h
     alertname: StabilityHostFilesystemLowSpace
     exp_alerts: []
@@ -50,7 +50,7 @@ tests:
         severity: warning
       exp_annotations:
         summary: /mnt/stp-aee 剩余空间不足 20%
-        description: '/mnt/stp-aee 剩余不足 20%。中心存储写满后 artifact promote、日志归档与提取都会 失败，测试证据随之丢失。先看趋势告警是否同时在响，处置见 #3233。'
+        description: '/mnt/stp-aee 剩余不足 20%。中心存储写满后 artifact promote、日志归档与提取都会 失败，测试证据随之丢失。先看趋势告警是否同时在响； 中心存储可先把 devices/ 的跨 run 重复改硬链接，不删证据（步骤见 docs/operations/center-storage-hardlink-dedup.md）。处置见 #3233。'
   - eval_time: 30m
     alertname: StabilityHostFilesystemCritical
     exp_alerts: []
@@ -75,7 +75,7 @@ tests:
         severity: critical
       exp_annotations:
         summary: /mnt/stp-aee 剩余空间不足 10%
-        description: '/mnt/stp-aee 剩余不足 10%，已接近写满。立即腾出空间：可再生的提取副本可删 （需逐目录确认 devices/ 仍有完整源），不可再生的证据不得删除。处置见 #3233。'
+        description: '/mnt/stp-aee 剩余不足 10%，已接近写满。立即腾出空间： 先把 devices/ 的跨 run 重复改硬链接，不删证据（步骤见 docs/operations/center-storage-hardlink-dedup.md）；再删可再生的提取副本 （需逐目录确认 devices/ 仍有完整源），不可再生的证据不得删除。处置见 #3233。'
 
 # ② 内存/swap 联合余量四条（#3200 G1）：序列按 09-23 真机数字造，塌陷安排在 9–10m 之间展开
 #    （塌陷判据是**瞬时**的：曲线一持平它就归零，所以必须把下跌放在断言时刻之前 1–2 分钟，
