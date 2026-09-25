@@ -155,7 +155,7 @@ ADR-0026 §6（`docs/adr/ADR-0026-plan-execution-scaling.md:232`）的原文分�
 
 ## 8. 实施衔接
 
-- 终态后副作用的编排者按 [#3299](https://github.com/DUElost/stability-test-platform/issues/3299) 的选定方案落在 `backend/services/plan_run_finalization.py`：先做不改事务边界的纯结构重构（收拢 chain / dedup / 通知 / 报告刷新），D1–D4 随后在该模块内实现；
+- 终态后副作用的编排者是 `backend/services/plan_run_finalization.py`（[#3299](https://github.com/DUElost/stability-test-platform/issues/3299) 选定方案）。**不改事务边界的结构重构已由 [#3307](https://github.com/DUElost/stability-test-platform/pull/3307) 完成**：chain / dedup / 通知 / 报告刷新已收拢到该模块，五模块环已解开（C5 基线 5 → 4）。D1–D4 直接在该模块内实现；`apply_*` 调用方以 applied 为条件经 `finalize_parent_run_*` 或 `announce_parent_terminal` 编排副作用，实施时保持这一约束；
 - §7 开放问题在实施 PR 内定值，不改本稿不变量；
 - ADR-0026 §6 已同步标注被本稿替代的两处（见 §3）。
 
