@@ -13,7 +13,6 @@ from __future__ import annotations
 import ast
 import pathlib
 from datetime import datetime, timezone
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from sqlalchemy import select
