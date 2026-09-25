@@ -5,7 +5,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import HTTPException
+from backend.services.errors import ServiceError
 
 from backend.services.agent_claim import (
     ClaimRequest,
@@ -39,7 +39,7 @@ class TestClaimAgentJobsGuards:
                 return_value=False,
             ),
         ):
-            with pytest.raises(HTTPException) as exc:
+            with pytest.raises(ServiceError) as exc:
                 await claim_agent_jobs(
                     db=None,  # type: ignore[arg-type]
                     payload=ClaimRequest(
@@ -48,7 +48,7 @@ class TestClaimAgentJobsGuards:
                         agent_version="1.0.0",
                     ),
                 )
-        assert exc.value.status_code == 426
+        assert exc.value.status == 426
         assert exc.value.detail["code"] == "AGENT_UPGRADE_REQUIRED"
 
     @pytest.mark.asyncio

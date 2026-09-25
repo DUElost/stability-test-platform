@@ -34,6 +34,7 @@ from sqlalchemy import text
 
 import socketio as python_socketio
 
+from backend.api.error_handlers import register_domain_exception_handlers
 from backend.api.routes import auth_router, heartbeat_router, hosts_router
 from backend.api.routes.ai_assistant import router as ai_assistant_router
 from backend.api.routes.devices import router as devices_router
@@ -378,6 +379,9 @@ fastapi_app = _fastapi_app  # Exposed for tests and tooling
 wire_dashboard_ports()
 sio_server = create_sio_server()
 app = python_socketio.ASGIApp(sio_server, _fastapi_app)
+
+# services 领域异常的统一翻译（#3295）：必须早于路由处理任何请求。
+register_domain_exception_handlers(_fastapi_app)
 
 
 @_fastapi_app.exception_handler(InvalidTransitionError)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from fastapi import HTTPException
+from backend.services.errors import ServiceError
 
 from backend.models.enums import EventState
 from backend.services.agent_device_log_events import (
@@ -22,9 +22,9 @@ class TestParseIsoDt:
         assert dt.tzinfo is not None
 
     def test_rejects_garbage(self):
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ServiceError) as exc:
             _parse_iso_dt("not-a-date", "detected_at")
-        assert exc.value.status_code == 400
+        assert exc.value.status == 400
 
 
 class TestAllowedTransitions:

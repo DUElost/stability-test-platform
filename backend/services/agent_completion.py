@@ -18,7 +18,6 @@ import secrets
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from fastapi import HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,6 +39,7 @@ from backend.models.plan_run import PlanRun
 from backend.realtime.socketio_server import broadcast_plan_run_status, broadcast_run_job_update
 from backend.services.aggregator import PlanAggregator
 from backend.services.agent_recovery import resume_expired_lease_for_recovery
+from backend.services.errors import BadRequest, Conflict, NotFound
 from backend.services.lease_manager import release_lease
 from backend.services.state_machine import InvalidTransitionError, JobStateMachine
 
@@ -200,21 +200,21 @@ async def complete_agent_job(
         .with_for_update()
     )).scalars().first()
     if job is None:
-        raise HTTPException(status_code=404, detail="job not found")
+        raise NotFound("job not found")
 
     raw = str(payload.update.get("status", "FAILED")).strip().upper()
     # #779: 未知状态串不得经 .get(..., FAILED) 伪装成真实失败。
     if raw not in _RUN_TO_JOB:
-        raise HTTPException(
-            status_code=400,
-            detail={"code": "INVALID_TERMINAL_STATUS", "requested_status": raw},
-        )
+        raise BadRequest({
+            "code": "INVALID_TERMINAL_STATUS",
+            "requested_status": raw,
+        })
     target = _RUN_TO_JOB[raw]
     if target not in {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.ABORTED}:
-        raise HTTPException(
-            status_code=400,
-            detail={"code": "INVALID_TERMINAL_STATUS", "requested_status": raw},
-        )
+        raise BadRequest({
+            "code": "INVALID_TERMINAL_STATUS",
+            "requested_status": raw,
+        })
 
     completion_fact = {
         "update": payload.update,
@@ -261,13 +261,10 @@ async def complete_agent_job(
                 username="agent",
             )
             await db.commit()
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "code": "STALE_COMPLETION_TOKEN",
-                    "current_status": current_status,
-                },
-            )
+            raise Conflict({
+                "code": "STALE_COMPLETION_TOKEN",
+                "current_status": current_status,
+            })
         expected_digest = job.terminal_payload_digest
         if expected_digest is None:
             historical_trace = (await db.execute(
@@ -324,13 +321,10 @@ async def complete_agent_job(
                 username="agent",
             )
             await db.commit()
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "code": "TERMINAL_PAYLOAD_CONFLICT",
-                    "current_status": current_status,
-                },
-            )
+            raise Conflict({
+                "code": "TERMINAL_PAYLOAD_CONFLICT",
+                "current_status": current_status,
+            })
         current_status = job.status
         await db.rollback()
         return {"job_id": job_id, "status": current_status, "idempotent": True}
@@ -373,27 +367,21 @@ async def complete_agent_job(
                 db, job, payload.fencing_token,
             )
         if valid_lease is None:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "code": "INVALID_OR_EXPIRED_FENCING_TOKEN",
-                    "current_status": job.status,
-                },
-            )
+            raise Conflict({
+                "code": "INVALID_OR_EXPIRED_FENCING_TOKEN",
+                "current_status": job.status,
+            })
 
     transition_from_status = job.status
     try:
         JobStateMachine.transition(job, target, payload.update.get("error_message") or "")
     except InvalidTransitionError as exc:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "INVALID_JOB_TRANSITION",
-                "message": str(exc),
-                "current_status": job.status,
-                "requested_status": target.value,
-            },
-        ) from exc
+        raise Conflict({
+            "code": "INVALID_JOB_TRANSITION",
+            "message": str(exc),
+            "current_status": job.status,
+            "requested_status": target.value,
+        }) from exc
 
     # 持久化一次性完成快照（log_summary + artifact），为新链路报告读取提供数据闭环。
     snapshot = {

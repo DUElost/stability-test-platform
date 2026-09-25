@@ -16,7 +16,6 @@ import json
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from fastapi import HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,6 +24,7 @@ from backend.models.job import JobInstance
 from backend.models.plan_run import PlanRun
 from backend.realtime.socketio_server import broadcast_plan_run_status, broadcast_run_job_update
 from backend.services.agent_completion import _get_valid_runtime_lease
+from backend.services.errors import Conflict, NotFound
 from backend.services.reconciler import reconcile_step_traces
 
 
@@ -65,7 +65,7 @@ async def require_valid_runtime_lease(
 ) -> DeviceLease:
     valid_lease = await _get_valid_runtime_lease(db, job, fencing_token)
     if valid_lease is None:
-        raise HTTPException(status_code=409, detail="invalid or expired fencing_token")
+        raise Conflict("invalid or expired fencing_token")
     return valid_lease
 
 
@@ -96,7 +96,7 @@ async def upload_agent_step_traces(
     for trace in traces:
         job = await db.get(JobInstance, trace.job_id)
         if job is None:
-            raise HTTPException(status_code=404, detail="job not found")
+            raise NotFound("job not found")
         await require_valid_runtime_lease(db, job, trace.fencing_token)
 
     raw = [t.model_dump() for t in traces]
@@ -142,7 +142,7 @@ async def update_agent_job_step_status(
     }
     job = await db.get(JobInstance, job_id)
     if job is None:
-        raise HTTPException(status_code=404, detail="job not found")
+        raise NotFound("job not found")
     await require_valid_runtime_lease(db, job, payload.fencing_token)
 
     result = await reconcile_step_traces("agent", [trace], db)

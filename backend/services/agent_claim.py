@@ -11,7 +11,6 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import HTTPException
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,6 +21,7 @@ from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType
 from backend.models.host import Device, Host
 from backend.models.job import JobInstance
 from backend.models.plan_run import PlanRun, PlanRunHost
+from backend.services.errors import UpgradeRequired
 from backend.services.host_maintenance import in_maintenance_window
 from backend.services.lease_manager import acquire_lease
 from backend.services.plan_dispatcher_core import (
@@ -314,14 +314,11 @@ async def claim_agent_jobs(
     if minimum_version and not agent_version_is_supported(
         payload.agent_version, minimum_version,
     ):
-        raise HTTPException(
-            status_code=426,
-            detail={
-                "code": "AGENT_UPGRADE_REQUIRED",
-                "agent_version": payload.agent_version,
-                "minimum_version": minimum_version,
-            },
-        )
+        raise UpgradeRequired({
+            "code": "AGENT_UPGRADE_REQUIRED",
+            "agent_version": payload.agent_version,
+            "minimum_version": minimum_version,
+        })
 
     claimed, fencing_token_map = await claim_jobs_for_host(
         db, payload.host_id, payload.capacity, payload.agent_instance_id,

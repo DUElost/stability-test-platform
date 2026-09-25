@@ -43,9 +43,11 @@ ignore_imports =
 
 # ---------------------------------------------------------------------------
 # C2 services 不感知 HTTP（只查直接 import）
-# 现状 31 个 service 直接 import fastapi，其中 21 个来自 #1520 上帝文件拆分（另 2 个来自 #1519 下沉）：
-# 行数棘轮达标了，HTTP 语义（HTTPException/Request/FileResponse）随代码一起搬进了 services。
-# 出口：services 抛领域异常，路由层（或一个统一 exception handler）翻译成 HTTP 状态码。
+# 原 36 行基线中 17 行（#1520 拆分的 13 个 agent_* 文件 + error_helpers 4 行）已由
+# #3295 清零：agent_* 域改抛 backend/services/errors.py 领域异常，
+# backend/api/error_handlers.py 统一翻译，响应逐字不变。
+# 剩余 19 行的出口：同一路径（领域异常 + 统一 handler）；artifact_zip /
+# device_log_event_download 等 FileResponse/Request 形态需另行设计返回值类型。
 # ---------------------------------------------------------------------------
 [importlinter:contract:c2-services-no-http]
 name = C2 services 不直接依赖 HTTP 层
@@ -61,23 +63,6 @@ forbidden_modules =
 allow_indirect_imports = True
 unmatched_ignore_imports_alerting = error
 ignore_imports =
-    backend.services.agent_archive_status -> fastapi
-    backend.services.agent_artifacts -> fastapi
-    backend.services.agent_artifacts -> backend.api.error_helpers
-    backend.services.agent_claim -> fastapi
-    backend.services.agent_completion -> fastapi
-    backend.services.agent_device_log_events -> fastapi
-    backend.services.agent_job_heartbeat -> fastapi
-    backend.services.agent_job_heartbeat -> backend.api.error_helpers
-    backend.services.agent_job_status -> fastapi
-    backend.services.agent_job_status -> backend.api.error_helpers
-    backend.services.agent_lease_extend -> fastapi
-    backend.services.agent_log_signals -> fastapi
-    backend.services.agent_patrol_heartbeat -> fastapi
-    backend.services.agent_recovery -> fastapi
-    backend.services.agent_step_status -> fastapi
-    backend.services.agent_upgrade_gate -> fastapi
-    backend.services.agent_upgrade_gate -> backend.api.error_helpers
     backend.services.ai_assistant.dispatch -> fastapi
     backend.services.ai_assistant.plan_run_ops -> fastapi
     backend.services.artifact_zip -> fastapi
