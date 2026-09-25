@@ -376,6 +376,8 @@ describe('ADR-0038 退役显示与入口（#1807）', () => {
 describe('脚本在位（#2958 第五道闸）', () => {
   const summary = {
     counts: { present: 40, missing: 1, mismatch: 2, unknown: 3, n_a: 4, maintenance: 1 },
+    // #3222：fleet 包模式分布；fixture 给空对象即可，本 suite 不读该字段。
+    fleet_packages: {},
     hosts_total: 48,
     hosts_with_gap: 2,
     full_versions: 51,

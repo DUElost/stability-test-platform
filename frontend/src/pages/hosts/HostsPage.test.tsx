@@ -75,9 +75,11 @@ vi.mock('../../utils/api', async (importOriginal) => {
     scriptPresence: {
       summary: vi.fn().mockResolvedValue({
         counts: { present: 0, missing: 0, mismatch: 0, unknown: 0, n_a: 0, maintenance: 0 },
+        fleet_packages: {},
         hosts_total: 0,
         hosts_with_gap: 0,
         full_versions: 0,
+        uncovered_active_versions: 0,
         checked_at_min: null,
         checked_at_max: null,
         stale: false,
