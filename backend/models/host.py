@@ -34,6 +34,10 @@ class Host(Base):
     agent_artifact_digest = Column(String(80))
     # ADR-0040 P2（#1963）：host-resources 身份（分层扩展的显式列）
     agent_resources_digest = Column(String(80))
+    # #3222：脚本包模式的 fleet 级持续可核验（ADR-0051「fleet 全 strict」从人工背书变机器不变量）。
+    # presence sweep 从 verify_scripts ack 的 package_active 推导写列：
+    # package（带包身份的目标全部按包核验）/ tree（全部未按包）/ mixed（部分）/ NULL（unknown：无 ack 或目标全无包身份）。
+    script_packages_mode = Column(String(8))
     last_heartbeat       = Column(DateTime(timezone=True))
     cpu_quota            = Column(Integer, nullable=False, default=2)
     status               = Column(String(32), nullable=False, default="OFFLINE")

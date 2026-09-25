@@ -290,6 +290,18 @@ def sync_scripts_from_manifest(
                     row.updated_at = now
                     result.deactivated += 1
                     result.deactivated_versions.append({"name": name, "version": version, "nfs_path": row.nfs_path or ""})
+                # #3222 附带小项：retired 行若尚无包身份（seed 历史行），一次轮回填后不再读包——
+                # inactive 行不进派发判据，但 catalog 的「登记即有身份」应当无死角。
+                if row.package_sha256 is None and _is_package_sha(sha):
+                    facts, err = read_package_facts(
+                        pk_root / name / f"{version}.tar.gz", sha, str(entry.get("script") or ""))
+                    if facts is not None:
+                        row.package_sha256 = sha
+                        row.content_sha256 = facts.content_sha256
+                        row.support_files_manifest = facts.support_files_manifest
+                        row.capabilities = facts.capabilities
+                        row.updated_at = now
+                        result.package_backfilled += 1
                 continue
             # 空库/新站的历史行仍须建（inactive）：plan_snapshot/step_trace 引用的是
             # (name, version) 字符串，「引用闭合」要求行存在——不建行会让新站 catalog

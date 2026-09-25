@@ -67,8 +67,10 @@ def script_presence_summary(
         fresh_min = fresh_min.replace(tzinfo=timezone.utc)
     if fresh_max is not None and fresh_max.tzinfo is None:
         fresh_max = fresh_max.replace(tzinfo=timezone.utc)
+    fleet_packages = presence.fleet_packages_mode(db)
     payload = ScriptPresenceSummaryOut(
         counts=counts,
+        fleet_packages=fleet_packages,
         hosts_total=len({str(r["host_id"]) for r in rows}),
         hosts_with_gap=len(hosts_with_gap),
         full_versions=covered,

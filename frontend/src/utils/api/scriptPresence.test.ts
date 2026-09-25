@@ -26,6 +26,7 @@ describe('scriptPresence API（#2958 第五道闸）', () => {
   it('summary：GET fleet 汇总并解 ApiResponse 信封', async () => {
     const summary = {
       counts,
+      fleet_packages: {},
       hosts_total: 48,
       hosts_with_gap: 2,
       full_versions: 51,

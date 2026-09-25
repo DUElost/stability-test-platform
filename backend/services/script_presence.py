@@ -37,14 +37,16 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections import Counter
 from datetime import datetime, timedelta, timezone
-from typing import Any, Iterable, Optional
+from typing import Dict, Any, Iterable, Optional
 from uuid import uuid4
 
 from sqlalchemy import and_, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from backend.core import metrics
 from backend.core.database import SessionLocal
 from backend.models.host import Device, Host
 from backend.models.plan import PlanStep
@@ -315,6 +317,25 @@ def classify_host_presence(
     return out
 
 
+def derive_packages_mode(verify_entries: list[dict], reachable_empty: bool) -> Optional[str]:
+    """从 verify ack 推导 host 级包模式（#3222）。
+
+    只统计**带包身份**（expected 行含 package_sha256）的逐条结果：
+    - 无任何带包身份结果 / RPC 不可用 → ``None``（unknown——未知不是绿）；
+    - ack 行 ``package_active`` 全 True → ``package``；全 False → ``tree``；否则 ``mixed``。
+    """
+    if reachable_empty:
+        return None
+    judged = [bool(e.get("package_active")) for e in (verify_entries or []) if e.get("package_sha256")]
+    if not judged:
+        return None
+    if all(judged):
+        return "package"
+    if not any(judged):
+        return "tree"
+    return "mixed"
+
+
 def summarize_states(rows: Iterable[dict]) -> dict[str, Any]:
     """按态汇总（供 API/指标共用；``hosts_with_gap`` 用 host 维度去重）。"""
     counts = {state: 0 for state in PRESENCE_STATES}
@@ -440,6 +461,7 @@ async def run_sweep(
         wanted = {str(h) for h in host_ids}
         hosts = [h for h in hosts if str(h["id"]) in wanted]
 
+    modes: dict[str, Optional[str]] = {}
     per_host: list[tuple[dict, set[tuple[str, str]]]] = []
     for h in hosts:
         hid = str(h["id"])
@@ -472,7 +494,9 @@ async def run_sweep(
                 "state": state, "detail": detail,
                 "checked_at": now, "sweep_id": sweep_id,
             })
+        modes[hid] = derive_packages_mode(entries, reachable_empty=not reachable)
 
+    await asyncio.to_thread(_persist_modes, db_factory, modes)
     written = await asyncio.to_thread(_persist, db_factory, rows)
     round_hosts = [str(h["id"]) for h, _reachable in per_host]
     removed = await asyncio.to_thread(
@@ -510,6 +534,40 @@ async def run_sweep(
             len(uncovered), preview, more,
         )
     return result
+
+
+
+def fleet_packages_mode(db: Session) -> Dict[str, int]:
+    """#3222：host 按包模式计数（package/tree/mixed/unknown；NULL 计 unknown）。"""
+    rows = db.execute(
+        select(Host.script_packages_mode, func.count()).where(Host.retired_at.is_(None)).group_by(Host.script_packages_mode)
+    ).all()
+    out = {"package": 0, "tree": 0, "mixed": 0, "unknown": 0}
+    for mode, n in rows:
+        out[str(mode) if mode in ("package", "tree", "mixed") else "unknown"] += int(n)
+    return out
+
+
+def _persist_modes(db_factory, modes: dict[str, Optional[str]]) -> int:
+    """#3222：把推导出的包模式写 host 显式列（每轮 sweep 全量刷新；unknown 也写 None）。"""
+    if not modes:
+        return 0
+    n = 0
+    with db_factory() as db:
+        for hid, mode in modes.items():
+            row = db.get(Host, hid)
+            if row is not None and row.script_packages_mode != mode:
+                row.script_packages_mode = mode
+                n += 1
+        db.commit()
+    if metrics.PROMETHEUS_AVAILABLE:
+        try:
+            counts = Counter(m or "unknown" for m in modes.values())
+            for label in ("package", "tree", "mixed", "unknown"):
+                metrics.host_script_packages_mode.labels(mode=label).set(counts.get(label, 0))
+        except Exception:  # pragma: no cover - 指标失败不拖垮 sweep
+            logger.exception("script_packages_mode metric failed")
+    return n
 
 
 def _persist(db_factory, rows: list[dict]) -> int:

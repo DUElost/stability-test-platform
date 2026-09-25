@@ -35,6 +35,13 @@ def _presence(db_session, host_id: str, name: str, version: str, state: str,
     ))
 
 
+def test_summary_exposes_fleet_packages_view(client, db_session, admin_headers):
+    """#3222：summary 必含 fleet_packages（fleet 包模式机器视图，ADR-0051 strict 不变量的出口）。"""
+    r = client.get("/api/v1/script-presence/summary", headers=admin_headers)
+    data = r.json()["data"]
+    assert data["fleet_packages"] == {"package": 0, "tree": 0, "mixed": 0, "unknown": 0}
+
+
 def test_summary_without_rows_is_stale_not_green(client, db_session, admin_headers):
     r = client.get("/api/v1/script-presence/summary", headers=admin_headers)
     assert r.status_code == 200

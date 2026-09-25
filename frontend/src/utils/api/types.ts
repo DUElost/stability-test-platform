@@ -120,6 +120,8 @@ export interface HostScriptPresence {
 /** `GET /script-presence/summary`（fleet 级聚合，**不含**逐台缺口名单）。 */
 export interface ScriptPresenceSummary {
   counts: ScriptPresenceCounts;
+  /** #3222：fleet 包模式分布（host.script_packages_mode 聚合；unknown = NULL 数） */
+  fleet_packages: Record<string, number>;
   hosts_total: number;
   hosts_with_gap: number;
   full_versions: number;
