@@ -135,11 +135,13 @@ class TestPlanChainTriggerRollback:
     ):
         # #2755：本例断言 prepare 失败路径——把 settle 窗关掉直达 prepare。
         self._settle_off(monkeypatch)
-        """#986: complete→aggregate 尚未提交时，子 prepare 失败不得回滚父终态。
+        """#986/ADR-0052: 父终态已提交后，子 prepare 失败不得回滚父终态。
 
-        真实调用链：Job 在同会话标为 COMPLETED 后直接 ``on_job_terminal_sync``
-        （不先 commit），聚合触发 ``trigger_next_plan_sync``；prepare 抛错后的
-        ``session.rollback()`` 不得撤销 Job/PlanRun 终态与计数。
+        真实调用链（ADR-0052 新形状）：Job 标终态后 ``on_job_terminal_sync``
+        自管理提交（Job 事实 + pending 标记），TESTING 内联排空在**独立会话**
+        完成父聚合与链式触发；prepare 失败在排空会话里 rollback——Job/PlanRun
+        终态与计数早已各自提交，结构上不可能被撤销（旧形状的"同会话不提前
+        commit + 聚合后统一提交"正是被 #986 修掉的缺陷）。
         """
         from backend.services.job_terminalization import on_job_terminal_sync
 
@@ -183,7 +185,6 @@ class TestPlanChainTriggerRollback:
 
         job.status = JobStatus.COMPLETED.value
         job.ended_at = datetime.now(timezone.utc)
-        # Intentionally no commit — mirrors complete_job before outer commit.
 
         with patch(
             "backend.services.plan_chain_trigger.prepare_plan_run",
@@ -194,10 +195,9 @@ class TestPlanChainTriggerRollback:
             "backend.services.dedup_scan.should_trigger_dedup",
             return_value=False,
         ):
-            applied, status = on_job_terminal_sync(job, db_session)
+            pending_written, _ = on_job_terminal_sync(job, db_session)
 
-        assert applied is True
-        assert status == "SUCCESS"
+        assert pending_written is True
         db_session.expire_all()
         stored_job = db_session.get(JobInstance, job.id)
         stored_run = db_session.get(PlanRun, pr.id)

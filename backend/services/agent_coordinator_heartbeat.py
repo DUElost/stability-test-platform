@@ -120,6 +120,10 @@ async def record_agent_coordinator_heartbeat(
     # 持 job 行等 prh 行）。两个循环互相独立，交换顺序即可；下面的
     # `db.execute(update(JobInstance))` 会先执行并锁住 job 行，plan_run_host 的变更
     # 随后才 flush。
+    # ADR-0052（#3244）后终态事务不再写 plan_run_host（计数移入聚合器，其锁序为
+    # plan_run → plan_run_host、对 job 只读不加锁）；本端点的 job → prh 顺序**保留**
+    # ——它与 abort 批量（job → plan_run → prh）同处「先 job 后 prh」一侧，与聚合器
+    # 无公共持锁资源可成环。
     #
     # #2796：集合**内部**同样要全序——payload 序来自 agent 侧字典插入序，与
     # extend_leases_batch 的 `ORDER BY id`（#992 全序约定）交错仍可成环，故按

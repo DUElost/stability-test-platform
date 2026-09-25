@@ -93,16 +93,19 @@ class TestPlanChainDispatchE2E:
         _admit_plan_run(db_session, parent_run.id)
         _complete_parent_and_aggregate(db_session, parent_run)
 
-        child_run = trigger_next_plan_sync(
-            db_session.get(PlanRun, parent_run.id), db_session,
-        )
-
         db_session.expire_all()
         parent_refreshed = db_session.get(PlanRun, parent_run.id)
         assert parent_refreshed.status == "SUCCESS"
         assert parent_refreshed.next_plan_triggered is True
 
-        assert child_run is not None
+        # ADR-0052：聚合执行器在唤醒路径内已触发链（TESTING=1 内联 drain），
+        # 不再从测试会话手动 trigger——手动重触发会被 next_plan_triggered CAS
+        # 拦住返回 None。子 Run 从库里读。
+        child_run = (
+            db_session.query(PlanRun)
+            .filter(PlanRun.parent_plan_run_id == parent_run.id)
+            .one()
+        )
         assert child_run.plan_id == child_plan.id
         assert child_run.run_type == "CHAIN"
         assert child_run.status == "QUEUED"
