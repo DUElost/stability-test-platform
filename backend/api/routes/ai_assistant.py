@@ -82,7 +82,7 @@ def _bg_task_done(task, *, label: str = "ai_action_execute_failed") -> None:
 def _converge_placeholder_off_loop(session_id: int, error: str) -> None:
     """#2446：后台池满时的占位收敛兜底——移出事件循环线程执行。
 
-    调用点在事件循环上（`saq_worker.enqueue_sync` 的 `on_async_failure` 契约），
+    调用点在事件循环上（`task_queue.enqueue_sync` 的 `on_async_failure` 契约），
     此时既不能再向**已满**的 `thread_pool` 提交，也不能就地做同步 DB 写——
     单进程控制面会在最忙的时刻整体停摆（HTTP/WebSocket 全部阻塞，并叠加
     `QueuePool` 争用）。改用事件循环的**默认 executor**：与后台池相互独立、
@@ -445,7 +445,7 @@ def send_message(
     db.commit()
     db.refresh(placeholder)
 
-    from backend.tasks.saq_worker import enqueue_sync
+    from backend.core.task_queue import enqueue_sync
 
     # M2：max_turns 次串行 LLM 调用的最坏超时；M3：轮次有副作用，retries=0
     cfg = get_or_create_config(db)
@@ -473,7 +473,7 @@ def send_message(
                 submit(fail_pending_placeholders, session_id, error=error)
             except PoolQueueFullError:
                 _converge_placeholder_off_loop(session_id, error)
-        except Exception:  # noqa: BLE001 - 回调必须自身不抛（saq_worker 已兜，双保险）
+        except Exception:  # noqa: BLE001 - 回调必须自身不抛（task_queue 已兜，双保险）
             logger.exception("ai_turn_placeholder_converge_failed session=%s", session_id)
 
     enqueued = enqueue_sync(

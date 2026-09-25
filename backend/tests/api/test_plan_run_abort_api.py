@@ -215,7 +215,7 @@ class TestPlanRunAbort:
             "backend.services.agent_completion.broadcast_plan_run_status",
             new=AsyncMock(),
         ), patch(
-            "backend.tasks.saq_worker.get_queue",
+            "backend.core.task_queue.get_queue",
         ) as get_queue:
             get_queue.return_value.enqueue = AsyncMock()
             async with AsyncSessionLocal() as async_db:

@@ -103,19 +103,19 @@ async def test_publish_control_command_succeeds():
 @pytest.mark.asyncio
 async def test_enqueue_sync_schedules_on_loop():
     """enqueue_sync posts to the stored event loop via run_coroutine_threadsafe."""
-    import backend.tasks.saq_worker as mod
+    import backend.core.task_queue as tq
 
     mock_queue = MagicMock()
     mock_queue.enqueue = AsyncMock(return_value=None)
 
-    original_queue = mod._queue
-    original_loop = mod._loop
+    original_queue = tq._queue
+    original_loop = tq._loop
     try:
-        mod._queue = mock_queue
-        mod._loop = asyncio.get_running_loop()
+        tq._queue = mock_queue
+        tq._loop = asyncio.get_running_loop()
 
         await asyncio.to_thread(
-            mod.enqueue_sync,
+            tq.enqueue_sync,
             "post_completion_task",
             key="pc:1",
             job_id=1,
@@ -127,115 +127,115 @@ async def test_enqueue_sync_schedules_on_loop():
         assert job_arg.kwargs == {"job_id": 1}
         assert job_arg.key == "pc:1"
     finally:
-        mod._queue = original_queue
-        mod._loop = original_loop
+        tq._queue = original_queue
+        tq._loop = original_loop
 
 
 def test_enqueue_sync_drops_when_not_running():
     """enqueue_sync logs warning and returns False when SAQ is not initialised."""
-    import backend.tasks.saq_worker as mod
+    import backend.core.task_queue as tq
 
-    original_queue = mod._queue
-    original_loop = mod._loop
+    original_queue = tq._queue
+    original_loop = tq._loop
     try:
-        mod._queue = None
-        mod._loop = None
-        assert mod.enqueue_sync("post_completion_task", job_id=1) is False
+        tq._queue = None
+        tq._loop = None
+        assert tq.enqueue_sync("post_completion_task", job_id=1) is False
     finally:
-        mod._queue = original_queue
-        mod._loop = original_loop
+        tq._queue = original_queue
+        tq._loop = original_loop
 
 
 def test_enqueue_sync_required_raises_when_not_running():
     """required=True surfaces EnqueueSyncError instead of silent drop."""
-    import backend.tasks.saq_worker as mod
+    import backend.core.task_queue as tq
 
-    original_queue = mod._queue
-    original_loop = mod._loop
+    original_queue = tq._queue
+    original_loop = tq._loop
     try:
-        mod._queue = None
-        mod._loop = None
-        with pytest.raises(mod.EnqueueSyncError, match="SAQ not running"):
-            mod.enqueue_sync("precheck_and_dispatch_task", required=True, plan_run_id=1)
+        tq._queue = None
+        tq._loop = None
+        with pytest.raises(tq.EnqueueSyncError, match="SAQ not running"):
+            tq.enqueue_sync("precheck_and_dispatch_task", required=True, plan_run_id=1)
     finally:
-        mod._queue = original_queue
-        mod._loop = original_loop
+        tq._queue = original_queue
+        tq._loop = original_loop
 
 
 @pytest.mark.asyncio
 async def test_enqueue_sync_required_waits_and_raises_on_enqueue_failure():
     """required=True must surface enqueue failures instead of returning 200."""
-    import backend.tasks.saq_worker as mod
+    import backend.core.task_queue as tq
 
     mock_queue = MagicMock()
     mock_queue.enqueue = AsyncMock(side_effect=ConnectionError("redis down"))
 
-    original_queue = mod._queue
-    original_loop = mod._loop
+    original_queue = tq._queue
+    original_loop = tq._loop
     try:
-        mod._queue = mock_queue
-        mod._loop = asyncio.get_running_loop()
+        tq._queue = mock_queue
+        tq._loop = asyncio.get_running_loop()
 
-        with pytest.raises(mod.EnqueueSyncError, match="enqueue failed"):
+        with pytest.raises(tq.EnqueueSyncError, match="enqueue failed"):
             await asyncio.to_thread(
-                mod.enqueue_sync,
+                tq.enqueue_sync,
                 "precheck_and_dispatch_task",
                 required=True,
                 plan_run_id=1,
             )
     finally:
-        mod._queue = original_queue
-        mod._loop = original_loop
+        tq._queue = original_queue
+        tq._loop = original_loop
 
 
 @pytest.mark.asyncio
 async def test_enqueue_sync_required_reports_dedup_as_not_delivered():
     """R13-F04 (#1216): SAQ returns None on same-key dedup — required must
     report that as not delivered instead of a false success."""
-    import backend.tasks.saq_worker as mod
+    import backend.core.task_queue as tq
 
     mock_queue = MagicMock()
     mock_queue.enqueue = AsyncMock(return_value=None)  # deduped
 
-    original_queue = mod._queue
-    original_loop = mod._loop
+    original_queue = tq._queue
+    original_loop = tq._loop
     try:
-        mod._queue = mock_queue
-        mod._loop = asyncio.get_running_loop()
+        tq._queue = mock_queue
+        tq._loop = asyncio.get_running_loop()
         assert await asyncio.to_thread(
-            mod.enqueue_sync,
+            tq.enqueue_sync,
             "ai_assistant_turn_task",
             key="ai-turn:1",
             required=True,
             session_id=1,
         ) is False
     finally:
-        mod._queue = original_queue
-        mod._loop = original_loop
+        tq._queue = original_queue
+        tq._loop = original_loop
 
 
 @pytest.mark.asyncio
 async def test_enqueue_sync_required_returns_true_on_real_delivery():
-    import backend.tasks.saq_worker as mod
+    import backend.core.task_queue as tq
 
     mock_queue = MagicMock()
     mock_queue.enqueue = AsyncMock(return_value=object())
 
-    original_queue = mod._queue
-    original_loop = mod._loop
+    original_queue = tq._queue
+    original_loop = tq._loop
     try:
-        mod._queue = mock_queue
-        mod._loop = asyncio.get_running_loop()
+        tq._queue = mock_queue
+        tq._loop = asyncio.get_running_loop()
         assert await asyncio.to_thread(
-            mod.enqueue_sync,
+            tq.enqueue_sync,
             "ai_assistant_turn_task",
             key="ai-turn:2",
             required=True,
             session_id=2,
         ) is True
     finally:
-        mod._queue = original_queue
-        mod._loop = original_loop
+        tq._queue = original_queue
+        tq._loop = original_loop
 
 
 # ---------------------------------------------------------------------------
@@ -247,46 +247,48 @@ async def test_enqueue_sync_required_returns_true_on_real_delivery():
 async def test_init_saq_producer_without_worker(monkeypatch):
     """ADR-0026 P0: producer connects without starting an in-process worker."""
     import backend.tasks.saq_worker as mod
+    import backend.core.task_queue as tq
 
     fake_queue = MagicMock()
     fake_queue.connect = AsyncMock()
-    monkeypatch.setattr(mod.Queue, "from_url", lambda *args, **kwargs: fake_queue)
+    monkeypatch.setattr(tq.Queue, "from_url", lambda *args, **kwargs: fake_queue)
     monkeypatch.setenv("STP_ENABLE_INPROCESS_SAQ", "0")
 
-    original_queue = mod._queue
-    original_loop = mod._loop
+    original_queue = tq._queue
+    original_loop = tq._loop
     original_worker_task = mod._worker_task
     try:
-        mod._queue = None
-        mod._loop = None
+        tq._queue = None
+        tq._loop = None
         mod._worker_task = None
-        await mod.init_saq_producer()
-        assert mod.is_saq_producer_ready() is True
-        assert mod.is_saq_ready() is True  # external-worker mode
+        await tq.init_saq_producer()
+        assert tq.is_saq_producer_ready() is True
+        assert tq.is_saq_ready() is True  # external-worker mode
         assert mod._worker_task is None
         fake_queue.connect.assert_awaited_once()
     finally:
-        mod._queue = original_queue
-        mod._loop = original_loop
+        tq._queue = original_queue
+        tq._loop = original_loop
         mod._worker_task = original_worker_task
 
 
 def test_is_saq_ready_requires_worker_when_inprocess(monkeypatch):
     import backend.tasks.saq_worker as mod
+    import backend.core.task_queue as tq
 
     monkeypatch.setenv("STP_ENABLE_INPROCESS_SAQ", "1")
-    original_queue = mod._queue
-    original_loop = mod._loop
+    original_queue = tq._queue
+    original_loop = tq._loop
     original_worker_task = mod._worker_task
     try:
-        mod._queue = MagicMock()
-        mod._loop = MagicMock()
+        tq._queue = MagicMock()
+        tq._loop = MagicMock()
         mod._worker_task = None
-        assert mod.is_saq_producer_ready() is True
-        assert mod.is_saq_ready() is False
+        assert tq.is_saq_producer_ready() is True
+        assert tq.is_saq_ready() is False
     finally:
-        mod._queue = original_queue
-        mod._loop = original_loop
+        tq._queue = original_queue
+        tq._loop = original_loop
         mod._worker_task = original_worker_task
 
 
@@ -294,6 +296,7 @@ def test_is_saq_ready_requires_worker_when_inprocess(monkeypatch):
 async def test_stop_saq_worker_awaits_async_worker_stop():
     """stop_saq_worker awaits Worker.stop() before disconnecting queue."""
     import backend.tasks.saq_worker as mod
+    import backend.core.task_queue as tq
 
     mock_worker = MagicMock()
     mock_worker.stop = AsyncMock(return_value=None)
@@ -303,13 +306,13 @@ async def test_stop_saq_worker_awaits_async_worker_stop():
 
     original_worker = mod._worker
     original_worker_task = mod._worker_task
-    original_queue = mod._queue
-    original_loop = mod._loop
+    original_queue = tq._queue
+    original_loop = tq._loop
     try:
         mod._worker = mock_worker
         mod._worker_task = worker_task
-        mod._queue = mock_queue
-        mod._loop = asyncio.get_running_loop()
+        tq._queue = mock_queue
+        tq._loop = asyncio.get_running_loop()
 
         await mod.stop_saq_worker()
 
@@ -317,15 +320,15 @@ async def test_stop_saq_worker_awaits_async_worker_stop():
         mock_queue.disconnect.assert_awaited_once()
         assert mod._worker is None
         assert mod._worker_task is None
-        assert mod._queue is None
-        assert mod._loop is None
+        assert tq._queue is None
+        assert tq._loop is None
     finally:
         if not worker_task.done():
             worker_task.cancel()
         mod._worker = original_worker
         mod._worker_task = original_worker_task
-        mod._queue = original_queue
-        mod._loop = original_loop
+        tq._queue = original_queue
+        tq._loop = original_loop
 
 
 # ---------------------------------------------------------------------------
@@ -337,13 +340,14 @@ async def test_stop_saq_worker_awaits_async_worker_stop():
 async def test_start_saq_worker_is_idempotent(monkeypatch):
     """start_saq_worker is a no-op when the worker is already running."""
     import backend.tasks.saq_worker as mod
+    import backend.core.task_queue as tq
 
     fake_queue = MagicMock()
     fake_queue.connect = AsyncMock()
     fake_worker = MagicMock()
     fake_worker.start = AsyncMock()
 
-    monkeypatch.setattr(mod.Queue, "from_url", lambda *args, **kwargs: fake_queue)
+    monkeypatch.setattr(tq.Queue, "from_url", lambda *args, **kwargs: fake_queue)
     monkeypatch.setattr(mod, "ControlPlaneWorker", lambda *args, **kwargs: fake_worker)
 
     await mod.start_saq_worker()
@@ -354,17 +358,17 @@ async def test_start_saq_worker_is_idempotent(monkeypatch):
 
 def test_get_saq_job_state_sync_returns_none_when_queue_missing():
     """get_saq_job_state_sync returns None when the SAQ queue is not initialised."""
-    import backend.tasks.saq_worker as mod
+    import backend.core.task_queue as tq
 
-    original_queue = mod._queue
-    original_loop = mod._loop
+    original_queue = tq._queue
+    original_loop = tq._loop
     try:
-        mod._queue = None
-        mod._loop = None
-        assert mod.get_saq_job_state_sync("precheck:1") is None
+        tq._queue = None
+        tq._loop = None
+        assert tq.get_saq_job_state_sync("precheck:1") is None
     finally:
-        mod._queue = original_queue
-        mod._loop = original_loop
+        tq._queue = original_queue
+        tq._loop = original_loop
 
 
 @pytest.mark.asyncio
@@ -372,6 +376,7 @@ async def test_start_saq_worker_recreates_queue_after_stopped_worker(monkeypatch
     """start_saq_worker disconnects old queue before reconnecting when previous
     worker task has completed."""
     import backend.tasks.saq_worker as mod
+    import backend.core.task_queue as tq
 
     old_queue = MagicMock()
     old_queue.disconnect = AsyncMock()
@@ -384,9 +389,9 @@ async def test_start_saq_worker_recreates_queue_after_stopped_worker(monkeypatch
     done_task = asyncio.create_task(asyncio.sleep(0))
     await done_task
 
-    monkeypatch.setattr(mod.Queue, "from_url", lambda *args, **kwargs: fake_queue)
+    monkeypatch.setattr(tq.Queue, "from_url", lambda *args, **kwargs: fake_queue)
     monkeypatch.setattr(mod, "ControlPlaneWorker", lambda *args, **kwargs: fake_worker)
-    mod._queue = old_queue
+    tq._queue = old_queue
     mod._worker_task = done_task
 
     await mod.start_saq_worker()
@@ -849,20 +854,20 @@ async def test_enqueue_sync_reports_async_failure_to_callback():
     吞掉。没有本回调，调用方拿到的 True 只是「已排上事件循环」——通知投递的
     线程池降级因此永远收不到失败信号。
     """
-    import backend.tasks.saq_worker as mod
+    import backend.core.task_queue as tq
 
     mock_queue = MagicMock()
     mock_queue.enqueue = AsyncMock(side_effect=RuntimeError("redis down"))
 
-    original_queue = mod._queue
-    original_loop = mod._loop
+    original_queue = tq._queue
+    original_loop = tq._loop
     seen: list = []
     try:
-        mod._queue = mock_queue
-        mod._loop = asyncio.get_running_loop()
+        tq._queue = mock_queue
+        tq._loop = asyncio.get_running_loop()
 
         scheduled = await asyncio.to_thread(
-            mod.enqueue_sync,
+            tq.enqueue_sync,
             "send_notification_task",
             key="notif:probe",
             on_async_failure=seen.append,
@@ -876,20 +881,20 @@ async def test_enqueue_sync_reports_async_failure_to_callback():
         assert seen, "异步入队失败必须回调 on_async_failure"
         assert isinstance(seen[0], RuntimeError)
     finally:
-        mod._queue = original_queue
-        mod._loop = original_loop
+        tq._queue = original_queue
+        tq._loop = original_loop
 
 
 @pytest.mark.asyncio
 async def test_enqueue_sync_callback_failure_does_not_escape():
     """回调自身抛异常不得外溢（它在事件循环上执行，会污染无关任务）。"""
-    import backend.tasks.saq_worker as mod
+    import backend.core.task_queue as tq
 
     mock_queue = MagicMock()
     mock_queue.enqueue = AsyncMock(side_effect=RuntimeError("redis down"))
 
-    original_queue = mod._queue
-    original_loop = mod._loop
+    original_queue = tq._queue
+    original_loop = tq._loop
     called: list = []
 
     def _boom(_exc):
@@ -897,14 +902,42 @@ async def test_enqueue_sync_callback_failure_does_not_escape():
         raise ValueError("callback bug")
 
     try:
-        mod._queue = mock_queue
-        mod._loop = asyncio.get_running_loop()
-        assert mod.enqueue_sync(
+        tq._queue = mock_queue
+        tq._loop = asyncio.get_running_loop()
+        assert tq.enqueue_sync(
             "send_notification_task", key="notif:probe2", on_async_failure=_boom,
         ) is True
         for _ in range(20):
             await asyncio.sleep(0)
         assert called, "回调未被调用"
     finally:
-        mod._queue = original_queue
-        mod._loop = original_loop
+        tq._queue = original_queue
+        tq._loop = original_loop
+
+
+@pytest.mark.asyncio
+async def test_is_saq_ready_follows_registered_worker_probe(monkeypatch):
+    """生产者端口经 start_saq_worker 登记的探针判断 worker 存活（task_queue 不 import worker）。"""
+    import backend.tasks.saq_worker as mod
+    import backend.core.task_queue as tq
+
+    monkeypatch.setenv("STP_ENABLE_INPROCESS_SAQ", "1")
+    monkeypatch.setattr(tq, "_queue", MagicMock())
+    monkeypatch.setattr(tq, "_loop", MagicMock())
+    monkeypatch.setattr(tq, "_worker_alive_probe", None)
+
+    live = asyncio.create_task(asyncio.sleep(10))
+    try:
+        monkeypatch.setattr(mod, "_worker_task", live)
+        assert tq.is_saq_ready() is False, "未登记探针时不得视为就绪"
+
+        tq.register_worker_alive_probe(mod._worker_running)
+        assert tq.is_saq_ready() is True
+
+        live.cancel()
+        await asyncio.gather(live, return_exceptions=True)
+        assert tq.is_saq_ready() is False, "worker task 结束后应撤销就绪"
+    finally:
+        if not live.done():
+            live.cancel()
+        tq.register_worker_alive_probe(None)

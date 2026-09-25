@@ -326,7 +326,7 @@ class TestDeferredPostCompletion:
 
             from backend.scheduler.recycler import _fill_deferred_post_completions
 
-            with patch("backend.tasks.saq_worker.enqueue_sync") as mock_enqueue:
+            with patch("backend.core.task_queue.enqueue_sync") as mock_enqueue:
                 filled = _fill_deferred_post_completions(db, datetime.now(timezone.utc))
 
             assert filled >= 1, f"Should enqueue at least our orphan job, got {filled}"
@@ -349,7 +349,7 @@ class TestDeferredPostCompletion:
             assert notif_calls[0][1]["event_type"] == "RUN_FAILED"
 
             # Second pass — same job re-enqueued (SAQ key dedup handles idempotency)
-            with patch("backend.tasks.saq_worker.enqueue_sync"):
+            with patch("backend.core.task_queue.enqueue_sync"):
                 filled2 = _fill_deferred_post_completions(db, datetime.now(timezone.utc))
             assert filled2 >= 1, "Orphan job re-enqueued (SAQ key dedup is the idempotency layer)"
 
@@ -434,7 +434,7 @@ class TestDeferredPostCompletion:
             db.commit()
             job_id = job.id
 
-            with patch("backend.tasks.saq_worker.enqueue_sync") as mock_enqueue:
+            with patch("backend.core.task_queue.enqueue_sync") as mock_enqueue:
                 recycler_mod._defer_cutoff_alerted.discard(job_id)
                 filled = _fill_deferred_post_completions(db, now)
 

@@ -567,7 +567,7 @@ async def test_r523_backflow_meets_all_acceptance_lines(agent_secret, fast_grace
     started = time.perf_counter()
     queue = _RecordingQueue()
     try:
-        with patch("backend.tasks.saq_worker.get_queue", lambda: queue):
+        with patch("backend.core.task_queue.get_queue", lambda: queue):
             _abort(seed)
             driver = await _drive_backflow(
                 seed, agent_secret, deadline=started + CONVERGENCE_BUDGET_SECONDS

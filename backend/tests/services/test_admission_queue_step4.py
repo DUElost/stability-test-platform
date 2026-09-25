@@ -528,7 +528,7 @@ class TestAdmissionShrink:
 @pytest.fixture
 def _saq_ready():
     """Pump ticks require a live SAQ producer (Step 4.1 gate)."""
-    with patch("backend.tasks.saq_worker.is_saq_ready", return_value=True):
+    with patch("backend.core.task_queue.is_saq_ready", return_value=True):
         yield
 
 
@@ -538,7 +538,7 @@ class TestPumpTick:
         pr = _queued_run(db_session, f, [f["d1"].id])
 
         with patch(
-            "backend.tasks.saq_worker.enqueue_sync", return_value=True,
+            "backend.core.task_queue.enqueue_sync", return_value=True,
         ) as mock_enq:
             summary = pump_admission_tick()
 
@@ -561,7 +561,7 @@ class TestPumpTick:
         pr = _queued_run(db_session, f, [f["d1"].id])
 
         with patch(
-            "backend.tasks.saq_worker.enqueue_sync", return_value=False,
+            "backend.core.task_queue.enqueue_sync", return_value=False,
         ):
             summary = pump_admission_tick()
 
@@ -577,13 +577,13 @@ class TestPumpTick:
     ):
         """required=True raises EnqueueSyncError on confirmed failure —
         must land back in QUEUED, not strand in PRECHECK."""
-        from backend.tasks.saq_worker import EnqueueSyncError
+        from backend.core.task_queue import EnqueueSyncError
 
         f = step4_fixture
         pr = _queued_run(db_session, f, [f["d1"].id])
 
         with patch(
-            "backend.tasks.saq_worker.enqueue_sync",
+            "backend.core.task_queue.enqueue_sync",
             side_effect=EnqueueSyncError("redis down"),
         ):
             summary = pump_admission_tick()
@@ -599,8 +599,8 @@ class TestPumpTick:
         pr = _queued_run(db_session, f, [f["d1"].id])
 
         with patch(
-            "backend.tasks.saq_worker.is_saq_ready", return_value=False,
-        ), patch("backend.tasks.saq_worker.enqueue_sync") as mock_enq:
+            "backend.core.task_queue.is_saq_ready", return_value=False,
+        ), patch("backend.core.task_queue.enqueue_sync") as mock_enq:
             summary = pump_admission_tick()
 
         assert summary == {
@@ -624,7 +624,7 @@ class TestPumpTick:
         monkeypatch.setenv("STP_PLAN_ADMISSION_QUEUE_ENABLED", "0")
 
         with patch(
-            "backend.tasks.saq_worker.enqueue_sync", return_value=True,
+            "backend.core.task_queue.enqueue_sync", return_value=True,
         ) as mock_enq:
             summary = pump_admission_tick()
 
@@ -634,7 +634,7 @@ class TestPumpTick:
         assert db_session.get(PlanRun, pr.id).status == "PRECHECK"
 
     def test_tick_noop_when_queue_empty(self, db_session, _saq_ready):
-        with patch("backend.tasks.saq_worker.enqueue_sync") as mock_enq:
+        with patch("backend.core.task_queue.enqueue_sync") as mock_enq:
             summary = pump_admission_tick()
         assert summary == {
             "claimed": 0,

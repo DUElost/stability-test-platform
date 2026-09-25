@@ -210,7 +210,7 @@ def pump_admission_tick() -> dict[str, int]:
     runs this tick (Postgres advisory lock). Non-leaders return a zero summary.
     """
     from backend.core.leader_election import hold_scheduler_leadership
-    from backend.tasks.saq_worker import enqueue_sync, is_saq_ready
+    from backend.core.task_queue import enqueue_sync, is_saq_ready
 
     summary = {
         "claimed": 0,

@@ -142,7 +142,7 @@ def create_scheduler() -> AsyncScheduler:
 
     Default executor is ``threadpool`` so sync ticks (admission pump, recycler,
     precheck reaper, …) can call ``enqueue_sync(..., required=True)`` without
-    hitting the event-loop deadlock path in ``saq_worker.enqueue_sync``.
+    hitting the event-loop deadlock path in ``task_queue.enqueue_sync``.
     Truly async jobs must pass ``job_executor="async"`` at ``add_schedule``.
     """
     return AsyncScheduler(
@@ -160,7 +160,7 @@ async def _poll_saq_queue_depth() -> None:
     if not PROMETHEUS_AVAILABLE:
         return
     try:
-        from backend.tasks.saq_worker import get_queue
+        from backend.core.task_queue import get_queue
         queue = get_queue()
         depth = await queue.count("queued")
         saq_queue_depth_gauge.labels(queue_name=queue.name).set(depth)

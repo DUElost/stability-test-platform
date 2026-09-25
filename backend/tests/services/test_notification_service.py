@@ -252,7 +252,7 @@ def test_dispatch_skips_already_ok_channels_on_retry(db_session, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_offline_saq_retry_keeps_event_identity_and_successful_channels(db_session, monkeypatch):
-    from backend.tasks import saq_worker
+    from backend.core import task_queue as tq
     from backend.tasks.saq_tasks import send_notification_task
 
     channels = [
@@ -281,7 +281,7 @@ async def test_offline_saq_retry_keeps_event_identity_and_successful_channels(db
             return rejected_transient("temporary failure")
         return accepted("WEBHOOK")
 
-    monkeypatch.setattr(saq_worker, "enqueue_sync", enqueue)
+    monkeypatch.setattr(tq, "enqueue_sync", enqueue)
     monkeypatch.setattr(mod, "send_to_channel", send)
     source_context = {"device_serial": "OFFLINE-TEST", "device_id": 12, "host_id": "test-host"}
     mod.dispatch_notification_async(EventType.DEVICE_OFFLINE.value, source_context)
@@ -321,7 +321,7 @@ async def test_offline_saq_retry_keeps_event_identity_and_successful_channels(db
 
 @pytest.mark.parametrize("failure_mode", ["unavailable", "exception", "async"])
 def test_offline_fallback_preserves_enqueued_event_identity(monkeypatch, failure_mode):
-    from backend.tasks import saq_worker
+    from backend.core import task_queue as tq
 
     queued = {}
     fallbacks = []
@@ -332,7 +332,7 @@ def test_offline_fallback_preserves_enqueued_event_identity(monkeypatch, failure
             raise RuntimeError("queue down")
         return failure_mode == "async"
 
-    monkeypatch.setattr(saq_worker, "enqueue_sync", enqueue)
+    monkeypatch.setattr(tq, "enqueue_sync", enqueue)
     monkeypatch.setattr(mod, "_dispatch_notification_via_pool", lambda event, context: fallbacks.append(context))
     mod.dispatch_notification_async(EventType.DEVICE_OFFLINE.value, {"device_serial": "OFFLINE-TEST"})
     if failure_mode == "async":
@@ -343,10 +343,10 @@ def test_offline_fallback_preserves_enqueued_event_identity(monkeypatch, failure
 
 
 def test_explicit_offline_event_identity_is_reused(monkeypatch):
-    from backend.tasks import saq_worker
+    from backend.core import task_queue as tq
 
     queued = []
-    monkeypatch.setattr(saq_worker, "enqueue_sync", lambda task, **kwargs: queued.append(kwargs) or True)
+    monkeypatch.setattr(tq, "enqueue_sync", lambda task, **kwargs: queued.append(kwargs) or True)
     context = {"device_serial": "OFFLINE-TEST", "notification_event_id": "stable-event"}
     mod.dispatch_notification_async(EventType.DEVICE_OFFLINE.value, context)
     mod.dispatch_notification_async(EventType.DEVICE_OFFLINE.value, dict(context))
@@ -578,7 +578,7 @@ def test_dispatch_retryable_failure_raises_with_outcome(monkeypatch):
 
 def test_dispatch_async_enqueues_saq(monkeypatch):
     """入队成功 → 不再走线程池；key 含事件身份（去重键）。"""
-    from backend.tasks import saq_worker as sw
+    from backend.core import task_queue as tq
 
     captured: dict = {}
 
@@ -587,7 +587,7 @@ def test_dispatch_async_enqueues_saq(monkeypatch):
         captured.update(kwargs)
         return True
 
-    monkeypatch.setattr(sw, "enqueue_sync", fake_enqueue)
+    monkeypatch.setattr(tq, "enqueue_sync", fake_enqueue)
     pool_called = {"v": False}
     monkeypatch.setattr(
         "backend.core.thread_pool.submit",
@@ -606,9 +606,9 @@ def test_dispatch_async_enqueues_saq(monkeypatch):
 
 def test_dispatch_async_falls_back_to_pool_when_saq_unavailable(monkeypatch):
     """SAQ 未运行（enqueue 返回 False）→ 降级 best-effort 线程池，不外溢。"""
-    from backend.tasks import saq_worker as sw
+    from backend.core import task_queue as tq
 
-    monkeypatch.setattr(sw, "enqueue_sync", lambda *a, **k: False)
+    monkeypatch.setattr(tq, "enqueue_sync", lambda *a, **k: False)
     submitted: dict = {}
     monkeypatch.setattr(
         "backend.core.thread_pool.submit",
@@ -622,12 +622,12 @@ def test_dispatch_async_falls_back_to_pool_when_saq_unavailable(monkeypatch):
 
 def test_dispatch_async_swallows_enqueue_exception(monkeypatch):
     """enqueue 抛异常（Redis 故障）→ 记日志 + 降级线程池，不向调用方外溢。"""
-    from backend.tasks import saq_worker as sw
+    from backend.core import task_queue as tq
 
     def boom(*a, **k):
         raise RuntimeError("redis down")
 
-    monkeypatch.setattr(sw, "enqueue_sync", boom)
+    monkeypatch.setattr(tq, "enqueue_sync", boom)
     submitted: dict = {}
     monkeypatch.setattr(
         "backend.core.thread_pool.submit",
@@ -772,7 +772,7 @@ def test_dispatch_async_falls_back_to_pool_when_async_enqueue_fails(monkeypatch)
     `if enqueued: return` 直接返回、线程池降级永不触发——一次 Redis 抖动就把
     文档承诺的「尽力投递」变成「一行日志后丢弃」。
     """
-    from backend.tasks import saq_worker as sw
+    from backend.core import task_queue as tq
 
     captured: dict = {}
 
@@ -780,7 +780,7 @@ def test_dispatch_async_falls_back_to_pool_when_async_enqueue_fails(monkeypatch)
         captured.update(kwargs)
         return True
 
-    monkeypatch.setattr(sw, "enqueue_sync", fake_enqueue)
+    monkeypatch.setattr(tq, "enqueue_sync", fake_enqueue)
     submitted: dict = {}
     monkeypatch.setattr(
         "backend.core.thread_pool.submit",

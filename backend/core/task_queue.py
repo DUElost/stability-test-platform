@@ -1,0 +1,324 @@
+# -*- coding: utf-8 -*-
+"""SAQ 队列生产者端口——入队、连接与只读探针。
+
+从 ``backend/tasks/saq_worker.py`` 拆出（2026-09-25）：原文件同时是入队 API 与
+worker 生命周期，worker 要 import ``saq_tasks``（→ services），而 services 又要
+import 它来入队，于是 services ↔ tasks 形成 20 个模块的 import 环（靠函数体内
+局部 import 维持可加载）。本模块只依赖 saq / redis / ``core.redis``，位于 services
+之下，services、scheduler、routes 入队都经这里；worker 生命周期留在
+``backend/tasks/saq_worker.py``。
+
+``enqueue_sync`` bridges synchronous callers (recycler running in an
+APScheduler thread) into the async SAQ queue via the stored event loop.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+from typing import Any, Callable, Coroutine, Optional
+
+import redis.asyncio as aioredis
+from saq import Job, Queue
+
+from backend.core.redis import redact_redis_url
+
+logger = logging.getLogger(__name__)
+
+_queue: Optional[Queue] = None
+_loop: Optional[asyncio.AbstractEventLoop] = None
+#: 进程内 worker 的存活探针，由 ``saq_worker.start_saq_worker`` 注册。
+#: 生产者不 import worker（那会把环接回去），只经这个回调询问它是否在跑。
+_worker_alive_probe: Optional[Callable[[], bool]] = None
+
+SAQ_QUEUE_NAME = os.getenv("SAQ_QUEUE_NAME", "stp")
+SAQ_ENQUEUE_WAIT_TIMEOUT = float(os.getenv("SAQ_ENQUEUE_WAIT_TIMEOUT", "5.0"))
+REDIS_PING_TIMEOUT = float(os.getenv("REDIS_PING_TIMEOUT", "3.0"))
+
+
+def get_queue() -> Queue:
+    """Return the SAQ Queue singleton.  Raises if not initialised."""
+    if _queue is None:
+        raise RuntimeError(
+            "SAQ queue not initialised — call init_saq_producer or start_saq_worker first"
+        )
+    return _queue
+
+
+def is_queue_connected() -> bool:
+    """True when the Queue singleton exists (loop may not be bound yet)."""
+    return _queue is not None
+
+
+def register_worker_alive_probe(probe: Optional[Callable[[], bool]]) -> None:
+    """登记进程内 worker 存活探针（``None`` 撤销）。仅 ``saq_worker`` 调用。"""
+    global _worker_alive_probe
+    _worker_alive_probe = probe
+
+
+async def verify_redis_connectivity(
+    redis_url: str | None = None,
+    *,
+    timeout: float | None = None,
+) -> None:
+    """Ping Redis before SAQ worker startup. Raises RuntimeError on failure."""
+    url = redis_url or os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    ping_timeout = REDIS_PING_TIMEOUT if timeout is None else timeout
+    client = await aioredis.from_url(url, encoding="utf-8", decode_responses=True)
+    try:
+        await asyncio.wait_for(client.ping(), timeout=ping_timeout)
+    except Exception as exc:
+        raise RuntimeError(f"Redis unreachable at {redact_redis_url(url)}: {exc}") from exc
+    finally:
+        await client.aclose()
+
+
+def is_saq_producer_ready() -> bool:
+    """True when the SAQ queue singleton is connected (enqueue path usable)."""
+    return _queue is not None and _loop is not None
+
+
+def is_saq_ready() -> bool:
+    """True when enqueue is usable for admission / background tasks.
+
+    - In-process worker mode (``STP_ENABLE_INPROCESS_SAQ=1``): queue connected
+      **and** worker task alive.
+    - External-worker mode (``STP_ENABLE_INPROCESS_SAQ=0``): producer connected
+      is enough — an external process drains the same Redis queue.
+    """
+    if not is_saq_producer_ready():
+        return False
+    if os.getenv("STP_ENABLE_INPROCESS_SAQ", "1") == "1":
+        return _worker_alive_probe is not None and bool(_worker_alive_probe())
+    return True
+
+
+async def init_saq_producer() -> None:
+    """Connect the SAQ queue without starting an in-process worker.
+
+    ADR-0026 P0: allows ``STP_ENABLE_INPROCESS_SAQ=0`` so enqueue / admission
+    pump keep working while an external SAQ worker drains Redis.
+    Idempotent when the queue is already connected.
+    """
+    global _queue, _loop
+
+    if _queue is not None:
+        if _loop is None:
+            _loop = asyncio.get_running_loop()
+        logger.info("saq_producer_start_skip already_connected")
+        return
+
+    _loop = asyncio.get_running_loop()
+    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    _queue = Queue.from_url(redis_url, name=SAQ_QUEUE_NAME)
+    await _queue.connect()
+    logger.info("saq_producer_started queue=%s", SAQ_QUEUE_NAME)
+
+
+async def disconnect_queue(*, swallow_errors: bool) -> None:
+    """断开队列并清空生产者状态。
+
+    ``swallow_errors=True``：producer-only 停机与 worker 崩溃重启前的清理（原
+    ``stop_saq_producer`` / ``start_saq_worker`` 语义）；``False``：worker 正常停机，
+    断开失败照常抛出（原 ``stop_saq_worker`` 语义）。
+    """
+    global _queue, _loop
+
+    if _queue is not None:
+        try:
+            await _queue.disconnect()
+        except Exception:
+            if not swallow_errors:
+                raise
+            logger.debug("saq_queue_disconnect_error", exc_info=True)
+        _queue = None
+    _loop = None
+
+
+async def stop_saq_producer() -> None:
+    """Disconnect the SAQ queue (producer-only / external-worker shutdown)."""
+    await disconnect_queue(swallow_errors=True)
+    logger.info("saq_producer_stopped")
+
+
+# ---------------------------------------------------------------------------
+# Sync bridge — for callers running in sync threads (e.g. recycler)
+# ---------------------------------------------------------------------------
+
+class EnqueueSyncError(RuntimeError):
+    """SAQ job could not be scheduled (worker down or event loop closed)."""
+
+
+def enqueue_sync(
+    task_name: str,
+    *,
+    key: str | None = None,
+    timeout: int = 60,
+    retries: int = 3,
+    required: bool = False,
+    on_async_failure: Optional[Callable[[BaseException], None]] = None,
+    **kwargs,
+) -> bool:
+    """Enqueue a SAQ job from a synchronous context.
+
+    Returns True when the enqueue was scheduled on the event loop.
+    When ``required=False`` (default, recycler/reaper compensating paths),
+    logs a warning and returns False on failure.
+    When ``required=True`` (user-facing dispatch), raises
+    :class:`EnqueueSyncError` so the caller can fail fast (HTTP 503).
+
+    When ``required=False``, uses ``call_soon_threadsafe`` (fire-and-forget).
+    When ``required=True`` and called from a worker thread, blocks up to
+    ``SAQ_ENQUEUE_WAIT_TIMEOUT`` via ``run_coroutine_threadsafe`` so callers
+    can fail fast on Redis errors.  Calling ``required=True`` from the main
+    event loop raises :class:`EnqueueSyncError` (would deadlock).
+
+    ``on_async_failure``（#1555）：仅在 ``required=False`` 的 fire-and-forget 路径
+    生效——``call_soon_threadsafe`` 成功即返回 True，Redis 故障发生在**之后**，
+    调用方无从得知。传入回调可在真正入队失败时收到通知（典型用途：通知投递
+    降级到本地线程池）。回调在事件循环上执行，必须自身不抛。
+
+    Returns:
+        bool: True when the enqueue was **scheduled**（不代表已写入 Redis）.
+    """
+    if _queue is None or _loop is None:
+        msg = f"SAQ not running — cannot enqueue {task_name}"
+        logger.warning("enqueue_sync called but SAQ not running — dropping %s", task_name)
+        if required:
+            raise EnqueueSyncError(msg)
+        return False
+
+    job = Job(
+        function=task_name,
+        kwargs=kwargs,
+        key=key or "",
+        timeout=timeout,
+        retries=retries,
+    )
+
+    async def _do_enqueue():
+        # R13-F04 (#1216): SAQ returns None when a job with the same key is
+        # already enqueued (dedup) — that is NOT a successful (re)delivery.
+        # Propagate the truth so callers can observe/compensate instead of
+        # assuming the round was scheduled.
+        job_ref = await _queue.enqueue(job)
+        logger.info(
+            "enqueue_async_task=%s key=%s deduped=%s",
+            task_name, key, job_ref is None,
+        )
+        return job_ref
+
+    on_main_loop = False
+    try:
+        on_main_loop = asyncio.get_running_loop() is _loop
+    except RuntimeError:
+        pass
+
+    if required and not on_main_loop:
+        try:
+            future = asyncio.run_coroutine_threadsafe(_do_enqueue(), _loop)
+        except RuntimeError as exc:
+            msg = f"event loop closed — cannot enqueue {task_name}"
+            logger.warning("enqueue_sync: event loop closed — dropping %s", task_name)
+            if required:
+                raise EnqueueSyncError(msg) from exc
+            return False
+        try:
+            job_ref = future.result(timeout=SAQ_ENQUEUE_WAIT_TIMEOUT)
+        except Exception as exc:
+            msg = f"enqueue failed for {task_name}: {exc}"
+            logger.exception("enqueue_async_failed task=%s", task_name)
+            raise EnqueueSyncError(msg) from exc
+        return job_ref is not None
+
+    if required and on_main_loop:
+        raise EnqueueSyncError(
+            f"cannot synchronously enqueue {task_name} from the event loop"
+        )
+
+    async def _do_enqueue_best_effort():
+        try:
+            await _do_enqueue()
+        except Exception as exc:
+            logger.exception("enqueue_async_failed task=%s", task_name)
+            # #1555：fire-and-forget 路径的唯一失败出口。没有这个回调，调用方
+            # 拿到的 True 只是「已排上事件循环」，Redis 故障被静默吞掉。
+            if on_async_failure is not None:
+                try:
+                    on_async_failure(exc)
+                except Exception:
+                    logger.exception(
+                        "enqueue_async_failure_callback_failed task=%s", task_name,
+                    )
+
+    try:
+        _loop.call_soon_threadsafe(_loop.create_task, _do_enqueue_best_effort())
+    except RuntimeError as exc:
+        msg = f"event loop closed — cannot enqueue {task_name}"
+        logger.warning("enqueue_sync: event loop closed — dropping %s", task_name)
+        if required:
+            raise EnqueueSyncError(msg) from exc
+        return False
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Sync read helpers — for callers running in sync threads (e.g. reaper)
+# ---------------------------------------------------------------------------
+
+async def _get_saq_job_state(key: str) -> dict | None:
+    """Return the SAQ job dict for *key*, or None if not found."""
+    if _queue is None:
+        return None
+    job = await _queue.job(key)
+    return job.to_dict() if job else None
+
+
+async def _is_worker_alive(worker_id: str | None) -> bool:
+    """Return True if *worker_id* is present in the SAQ worker registry."""
+    if not worker_id or _queue is None:
+        return False
+    info = await _queue.info()
+    return worker_id in (info.get("workers") or {})
+
+
+def _read_from_loop(coro: Coroutine[Any, Any, Any], timeout: float = 3.0) -> Any:
+    """Run *coro* on the main event loop from a thread-pool thread.
+
+    Only call from thread pool (APScheduler sync jobs), **never** from
+    coroutines on ``_loop`` itself — doing so would deadlock.
+
+    The short *timeout* is a safety net for Redis hangs; it should never
+    fire in normal operation.  **When it fires the caller does NOT get
+    ``None`` — ``concurrent.futures.TimeoutError`` propagates** (the body is a
+    bare ``future.result(timeout=...)``), and so does any exception raised by
+    *coro* itself (e.g. ``redis`` connection errors). A task may be left
+    orphaned on the loop; that part degrades gracefully to "skip" on the
+    reaper side, but the exception does not.
+
+    #1559：本 docstring 原先声称「超时后调用者拿到 None」，与实现不符，已把
+    precheck_reaper 的候选循环误当成不需要 try/except（Redis 抖动会中断整轮
+    stale PRECHECK 恢复）。调用方必须自行处理异常。
+
+    Callers must ensure *coro* is only constructed when ``_loop`` is known
+    to be non-None, to avoid "coroutine was never awaited" warnings.
+    """
+    if _loop is None:
+        return None
+    future = asyncio.run_coroutine_threadsafe(coro, _loop)
+    return future.result(timeout=timeout)
+
+
+def get_saq_job_state_sync(key: str) -> dict | None:
+    """Sync wrapper: return SAQ job state dict, or None."""
+    if _loop is None:
+        return None
+    return _read_from_loop(_get_saq_job_state(key))
+
+
+def is_worker_alive_sync(worker_id: str | None) -> bool:
+    """Sync wrapper: return True if the SAQ worker owning *worker_id* is alive."""
+    if _loop is None:
+        return False
+    return bool(_read_from_loop(_is_worker_alive(worker_id)))

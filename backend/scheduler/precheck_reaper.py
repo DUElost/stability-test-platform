@@ -11,7 +11,7 @@ the associated SAQ job status, and either:
   that owns it is no longer alive while the job appears stale.
 
 The reaper is a pure sync function (APScheduler thread-pool job) and uses
-the sync SAQ helpers exposed by ``backend.tasks.saq_worker`` to peek at
+the sync SAQ helpers exposed by ``backend.core.task_queue`` to peek at
 queue state without deadlocking the main event loop.
 """
 
@@ -39,7 +39,7 @@ from backend.services.state_machine import PlanRunStateMachine
 
 # Import sync SAQ helpers at module level so tests can patch them.
 # The underlying functions safely return None when the queue is not initialised.
-from backend.tasks.saq_worker import (
+from backend.core.task_queue import (
     EnqueueSyncError,
     get_saq_job_state_sync,
     is_worker_alive_sync,

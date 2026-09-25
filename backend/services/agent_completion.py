@@ -494,7 +494,7 @@ async def complete_agent_job(
             await broadcast_plan_run_status(run.id, run.status)
 
         try:
-            from backend.tasks.saq_worker import get_queue
+            from backend.core.task_queue import get_queue
             from saq import Job as SaqJob
 
             await get_queue().enqueue(

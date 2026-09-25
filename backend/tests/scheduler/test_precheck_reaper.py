@@ -180,7 +180,7 @@ def test_reaper_enqueue_failure_does_not_bump_requeue_attempts(db_session):
     db_session.add(pr)
     db_session.flush()
 
-    from backend.tasks.saq_worker import EnqueueSyncError
+    from backend.core.task_queue import EnqueueSyncError
 
     with patch(
         "backend.scheduler.precheck_reaper.get_saq_job_state_sync",

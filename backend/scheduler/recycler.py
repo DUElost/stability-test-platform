@@ -934,7 +934,7 @@ def _fill_deferred_post_completions(db, now: datetime) -> int:
     Waits POST_COMPLETION_GRACE_SECONDS after ended_at before triggering,
     giving the agent's outbox drain a window to be the first writer.
     """
-    from backend.tasks.saq_worker import enqueue_sync
+    from backend.core.task_queue import enqueue_sync
 
     grace_deadline = now - timedelta(seconds=_sched().post_completion_grace_seconds)
     terminal_statuses = [

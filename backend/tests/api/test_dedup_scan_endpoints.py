@@ -452,7 +452,7 @@ class TestDedupTriggerHelpers:
         def _boom(*a, **kw):
             raise RuntimeError("redis down")
 
-        monkeypatch.setattr("backend.tasks.saq_worker.enqueue_sync", _boom)
+        monkeypatch.setattr("backend.core.task_queue.enqueue_sync", _boom)
         # 不应抛异常
         enqueue_dedup_terminal_sync(42)
 
@@ -463,7 +463,7 @@ class TestDedupTriggerHelpers:
         def _boom():
             raise RuntimeError("redis down")
 
-        monkeypatch.setattr("backend.tasks.saq_worker.get_queue", _boom)
+        monkeypatch.setattr("backend.core.task_queue.get_queue", _boom)
         # 不应抛异常，且返回 False 供用户触发路径显式报错（#1274）
         assert await enqueue_dedup_terminal_async(42) is False
 
@@ -473,7 +473,7 @@ class TestDedupTriggerHelpers:
 
         queue = MagicMock()
         queue.enqueue = AsyncMock(return_value=MagicMock())
-        monkeypatch.setattr("backend.tasks.saq_worker.get_queue", lambda: queue)
+        monkeypatch.setattr("backend.core.task_queue.get_queue", lambda: queue)
 
         assert await enqueue_dedup_terminal_async(42) is True
         queue.enqueue.assert_awaited_once()
@@ -487,7 +487,7 @@ class TestDedupTriggerHelpers:
 
         queue = MagicMock()
         queue.enqueue = AsyncMock(return_value=None)
-        monkeypatch.setattr("backend.tasks.saq_worker.get_queue", lambda: queue)
+        monkeypatch.setattr("backend.core.task_queue.get_queue", lambda: queue)
 
         with caplog.at_level("INFO"):
             assert await enqueue_dedup_terminal_async(42) is True
