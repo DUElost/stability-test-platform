@@ -4,6 +4,20 @@
 [`06-realtime-and-background.md`](./06-realtime-and-background.md) §9，存储角色见
 [`2026-storage-roles-and-aliases.md`](./2026-storage-roles-and-aliases.md)。
 
+## ADR-0053 已接受的存储演进边界
+
+[ADR-0053 v0.2](../adr/ADR-0053-center-storage-event-dedup.md) 于 2026-09-25 Accepted，
+Phase A–D 尚未实施。以下执行契约继续描述当前实现；切换时以该 ADR 的内容/引用模型为目标：
+
+- EventUploader 复用调度、重试和回执链，执行缺失 blob 上送、校验发布与引用绑定；确认前不得 prune。
+- scan 通过 manifest 物化完整输入，保留工具所需平台/serial/路径语义；这一步完成前不启用 baseline 免拉取。
+- merge 路径重写、extract、下载与 run/unassigned/orphan 回收统一经对象解析边界，
+  不能继续将某个 run 的绝对路径当共享内容身份。
+- 可写提取/工具工作区不硬链接不可变证据；回收受持久引用、正在使用的保活与最终复核约束。
+- baseline/runtime 对拍覆盖 signal、DLE、scan、merge、extract 和提单输入，目录存在不代表语义等价。
+
+这不改变现有筛选上送范围、平台分区或 SAQ 链；API、状态映射与迁移细节随实施切片同步。
+
 ## 控制面 merge
 
 `backend/services/dedup_scan.py:run_merge_sync` 读取中心存储 `dedup/`：

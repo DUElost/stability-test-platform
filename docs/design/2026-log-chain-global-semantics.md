@@ -4,8 +4,8 @@
 - **读者**：需要整条设备日志链语义（含已选定的 ADR-0033 Phase 2 选项 A）的人；不要求读完全部 ADR
 - **权威关系**：行为细节以代码与测试为准；Accepted ADR 与 [`2026-scan-upload-merge-contract.md`](./2026-scan-upload-merge-contract.md) 为内容权威；本文是**可引用汇总**（填 ownership X2「缺可引用汇总」），不新增决策
 - **全链地图**：系统级链路图 / 逻辑坐标 / Central namespace 见 [`2026-device-log-chain-contract.md`](./2026-device-log-chain-contract.md)（Living Contract；**非**第五 owner；本文为其阶段展开）
-- **关联**：ADR-0025 / 0027 / 0028 / 0032 / 0033；[`2026-semantic-ownership.md`](./2026-semantic-ownership.md) X2；[`2026-09-18-adr0033-phase2-unisoc-merge-blocker.md`](../notes/architecture/2026-09-18-adr0033-phase2-unisoc-merge-blocker.md)；#745 / #2546 / #463
-- **日期**：2026-09-19
+- **关联**：ADR-0025 / 0027 / 0028 / 0032 / 0033 / 0053；[`2026-semantic-ownership.md`](./2026-semantic-ownership.md) X2；[`2026-09-18-adr0033-phase2-unisoc-merge-blocker.md`](../notes/architecture/2026-09-18-adr0033-phase2-unisoc-merge-blocker.md)；#745 / #2546 / #463
+- **日期**：2026-09-25
 
 ---
 
@@ -261,6 +261,10 @@ scan_task → upload_task → merge_task → extract_task
 
 ## 5. 与 ADR / ownership（X2）的映射
 
+ADR-0053 v0.2 于 2026-09-25 Accepted，Phase A–D 尚未实施；本节更新定义权路由，
+前文路径与调用链仍描述现态。内容对象与 DLE 观察分离的完整裁决见
+[ADR-0053](../adr/ADR-0053-center-storage-event-dedup.md)，不在汇总页复制一套规范。
+
 ownership 索引（`2026-semantic-ownership.md`）**X2**：日志域四层权威**并存且都对**——缺的是可引用汇总（本文填此位）。
 
 | X2 层 | 回答什么 | 权威锚 | 本文对应 |
@@ -268,7 +272,7 @@ ownership 索引（`2026-semantic-ownership.md`）**X2**：日志域四层权威
 | **DLE 台账** | 事件在哪、什么状态 | ADR-0028「唯一权威记录」→ `dle-record` | §3.1 / §3.6 |
 | **log_signal 流** | 异常事件权威流 | ADR-0018 → `log-signal-stream` | §3.1 |
 | **dedup 行为与分区** | 并列流水线、禁止混工具 | ADR-0032 D1 → `dedup-pipeline-behavior` | §2–§3、§4 |
-| **中心存储 / 三阶段布局** | 搬运 + 汇总去重 + 分类提取 | ADR-0025 D4 → `center-storage-model` | §3.4–§3.6 |
+| **中心存储 / 内容引用** | 内容身份、引用、发布与回收 | ADR-0053 D1–D6 → `center-storage-model` | 目标已接受、待实施；§3.4–§3.6 为当前链路，三阶段职责仍见 ADR-0025 D4 |
 | **merge 执行位置** | 控制面实例绑定 | ADR-0027 第 7 条 → `R-merge-locus` | §3.5 |
 | **merge 消费关系** | merge 消费谁的产物 | scan-upload-merge 契约 → `R-merge-consumes-log` | §3.5 |
 | **工具宿主分层** | Tier1/2/3 | ADR-0033 D1 → `R-tool-hosted-by-tier` | 采集=Tier2；merge=Tier1 |

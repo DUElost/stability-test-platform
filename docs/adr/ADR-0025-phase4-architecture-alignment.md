@@ -7,6 +7,8 @@
 - 决策者：平台研发组
 - 标签：架构, Watcher, 无人值守闭环, 日志归档, 去重, 水平扩展, 部署策略
 - 关联：ADR-0018 (Watcher), ADR-0011 (可观测)
+- 归属域：semantic-ownership center-storage-model（存储内容身份与引用边界已由 ADR-0053 接管；本 ADR 保留三阶段归档职责）
+- 版本记录：2026-09-25：同步 ADR-0053 v0.2 Accepted；D4 物理存储约束局部由新 ADR 取代，实施待开始。
 
 > **Living 部署注记（2026-08-09）**：文中「15.4 / 15.4 CIFS」= **中心存储角色**（目标态 / 上一代盘）。口头 **CIFS = NFS = 中心存储**（同一台分享）。STP 生产中心存储 **过渡**挂在控制面同机 `192.0.2.202`；控制面 IP 不迁。目标独立盘 15.4 或 9.4。侧栏「文件服务器」是控制面健康页，不是中心存储。`STP_NFS_ROOT` 与 `STP_AEE_NFS_ROOT` 同角色。别称对照：[2026-storage-roles-and-aliases.md](../design/2026-storage-roles-and-aliases.md)；切盘后健康页双目标 [#205](https://github.com/DUElost/stability-test-platform/issues/205)（当前冻结）。
 
@@ -122,6 +124,12 @@
 - **实现**：路径 B（Reconciler `STP_WATCHER_AEE_RECONCILE_ENABLED`）已具备全部能力，改为默认开启
 
 ### D4: 日志归档——三阶段（搬运 + 汇总去重 + 分类提取）
+
+> **2026-09-25 裁决更新**：[ADR-0053 v0.2](./ADR-0053-center-storage-event-dedup.md) 已 Accepted。
+> 中心存储终态采用文件 CAS + 事件 manifest + DLE 引用；内容不从属于首次上传 run，
+> 发布、保活与 GC 按引用管理，提取包是独立可写的可再生工作区。本文的三阶段职责、
+> Agent HDD 预处理与筛选上送继续成立；下文按 run 物理目录的布局是迁移前记录，
+> 不再作为目标模型约束。新模型 Phase A–D 尚未实施，当前运行行为仍以代码与测试为准。
 
 > 2026-06-18 重写：原 D4 把归档定义为「LogArchiver 搬运 tar 到 NFS」，不含汇总/去重/分类。按长跑稳定性测试需求，归档重定义为三阶段，覆盖过程中持续归档 + 增量去重 + 终态最终汇总 + 分类提取到 15.4 中心日志服务器。
 

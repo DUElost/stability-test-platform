@@ -1,7 +1,7 @@
 # 跨域语义归属索引（Ownership Authority）
 
 - **状态**：Living（#2546 Closed 后升格；Ownership Authority + S15 已在 `main` 生效；非内容宪法）
-- **日期**：2026-09-20
+- **日期**：2026-09-25
 - **目的**：回答「这个概念/关系的定义权归谁」——**只做归属索引，不做内容宪法**
 - **范围**：现行 **Accepted**（及同等生效）ADR 均可纳入索引；非仅 ADR-0033/0020
 - **关联**：[#2546](https://github.com/DUElost/stability-test-platform/issues/2546)（Closed）；评审 `docs/reviews/REVIEW_SEMANTIC_OWNERSHIP_*`；[`adr/README.md`](../adr/README.md)
@@ -37,7 +37,7 @@
 |---|---|---|---|
 | **X1** | 脚本「唯一权威」三处字面 | **内容** = ADR-0021 `### D4`；**运行时** = ADR-0033 `### D3`；`plan_snapshot` 步骤身份（`(script_name, script_version)` 等）= 派发时刻自 D4 冻结的**副本面**，**不是**第三权威源（快照**无** `script_meta` 键；#2856 / Mode C） | 采纳多数评审；0021 关联区括注已措辞降级（见 §8）；假键名勘误随 #2856 |
 | **X2** | 日志域四层权威 | **四层都对**；表内分四行登记 + 路由行 `log-chain-map`。**不是冲突**，是缺可引用汇总 → [`2026-log-chain-global-semantics.md`](./2026-log-chain-global-semantics.md)。全链**地图/路由**见 [`2026-device-log-chain-contract.md`](./2026-device-log-chain-contract.md)（Living Contract，Ownership Authority only，**非**第五内容权威） | S15 **不得**把四层并存判成 ≥2 owner；`log-chain-map` **不得**当第五内容 owner |
-| **X3** | merge 执行位置归属 | **现状登记** = ADR-0027 清单**第 7 条**；**产物与中心布局** = ADR-0025；**B1 迁 worker 触发后**结构面才归 ADR-0033 | 与 B0 相容；边行 `R-merge-locus` |
+| **X3** | merge 执行位置归属 | **现状登记** = ADR-0027 清单**第 7 条**；**中心内容/引用模型** = ADR-0053（Accepted，待实施）；三阶段归档职责仍见 ADR-0025；**B1 迁 worker 触发后**结构面才归 ADR-0033 | 与 B0 相容；边行 `R-merge-locus` |
 
 ---
 
@@ -163,7 +163,7 @@
 | `dle-record` | concept | 设备日志事件终态台账 | `docs/adr/ADR-0028-device-log-event-and-continuous-upload.md :: 唯一权威记录` | 改唯一记录主张 |
 | `log-signal-stream` | concept | 异常事件权威流 | `docs/adr/ADR-0018-infrastructure-layer-framework-adoption.md :: \`log_signal\` 是异常事件权威流` | 旁路上报 |
 | `dedup-pipeline-behavior` | concept | 并列 dedup/merge 行为与分区 | `docs/adr/ADR-0032-unisoc-mtk-parallel-dedup-pipelines.md :: ### D1：两条并列流水线，禁止交叉混用` | 混流水线 |
-| `center-storage-model` | concept | 中心存储 / 归档布局 | `docs/adr/ADR-0025-phase4-architecture-alignment.md :: ### D4: 日志归档——三阶段（搬运 + 汇总去重 + 分类提取）` | I-12 确认后修 0025 |
+| `center-storage-model` | concept | 中心存储内容身份 / 事件引用 / 发布与回收边界 | `docs/adr/ADR-0053-center-storage-event-dedup.md :: ## 2. D1–D6 裁决` | 修改内容/引用边界；Phase A–D 实施后同步现态契约 |
 | `log-chain-map` | concept | 日志域全链**地图/路由入口**（Ownership Authority only；**非**第五内容权威） | `docs/design/2026-device-log-chain-contract.md :: ## 3. 阶段 owner 表（四层 + 后半段）` | 把 Contract 升格为内容宪法；与四层 ADR 抢定义权 |
 | `R-merge-locus` | relation | `Merge ─executed_at→ 控制面实例` | `docs/adr/ADR-0027-control-plane-horizontal-scaling.md :: 7. **merge（\`run_merge_sync\`）为实例绑定操作**` | B1/B2/多实例互斥 |
 | `R-merge-consumes-log` | relation | `Merge ─consumes→ scan/日志产物` | `docs/design/2026-scan-upload-merge-contract.md :: ## 控制面 merge` | 改输入集 |

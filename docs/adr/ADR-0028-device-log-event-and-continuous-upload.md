@@ -6,6 +6,8 @@
 - 日期：2026-08-09（初版）；2026-08-12（方案 A 修订）
 - 决策者：平台研发组
 - 标签：设备日志, DeviceLogEvent, PlanRun FAILED 上送, HddSpill 修复, PlatformCollector, 存储收敛
+- 归属域：semantic-ownership dle-record
+- 版本记录：2026-09-25：同步 ADR-0053 v0.2 Accepted 的内容引用/发布/状态边界；DLE 唯一权威与过滤模型保留。
 - 背景分析：[`DEVICE_LOG_FLOW_REVIEW_2026-08-09.md`](../reviews/DEVICE_LOG_FLOW_REVIEW_2026-08-09.md)（v3.0）
 
 ## 背景
@@ -21,6 +23,13 @@ ADR-0025（方案 C 存储）建立了三层模型：**Agent HDD 做预处理工
 ADR-0028 初版（2026-08-09）选择了**翻转存储模型**——所有事件无筛选推 CIFS（连续上送全量）。经讨论（2026-08-12），确认此举偏离了 ADR-0025 的设计意图（「HDD 预处理 → CIFS 精选」）。本修订回退到**保留过滤模型、仅修异常路径**的方案 A。
 
 ## 设计基调（方案 A）
+
+> **存储演进裁决（2026-09-25）**：[ADR-0053 v0.2](./ADR-0053-center-storage-event-dedup.md) 已 Accepted，
+> 实施尚未开始。DLE 继续是独立观察事实的唯一权威，目标由 DLE 引用不可变 manifest/blob，
+> 不再靠每 run 独占目录表达内容所有权。本文以下路径与状态图描述迁移前模型；
+> 实施必须先给出采集完成、证据可用、派生物生成的状态映射，保留 PRUNED 中心证据仍可读的语义。
+> 上送改为“校验发布 → 事务绑定引用 → 回执后 prune”，GC 受引用与使用保活约束；
+> baseline 复用先满足强身份与 scan 输入完整条件。筛选上送、FAILED 上送及 DLE/signal 关联不变。
 
 ```
 手机 → Agent HDD（1TB，预处理工作区）← 主副本
@@ -171,7 +180,8 @@ extract 双根遍历：
 ### 负面
 
 - PlanRun FAILED 时 scan 可能产不出足够的 xls（取决于失败发生在哪个阶段）——自动 merge/extract 仍 skip；手动可放行（#697）。事件可能因无 xls 引用而不被上传
-- EventUploader 的 copytree 逻辑保留（执行者定位，不回退）；`CONTINUOUS=1` 仅作为逃生阀模式
+- 当前 EventUploader 的 copytree 执行链保留；`CONTINUOUS` 全量分支已删除（#287，见 D1），
+  目标发布协议按 ADR-0053 D3 实施。
 - `JobLogSignal.job_id` 已由 `CASCADE` 改为 `SET NULL`（migration g5b6c7d8e9f0）
 
 ### 与 ADR-0028 初版（全量上送）的对比
