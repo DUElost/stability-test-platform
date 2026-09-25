@@ -27,6 +27,7 @@ from backend.core.metrics import (
     host_health_reason,
     host_kernel_log_channel,
     host_online,
+    host_script_packages_mode,
     host_script_presence,
     host_health_probe_strike,
     is_prometheus_available,
@@ -41,6 +42,7 @@ from backend.services.auth_session import authenticate_token
 from backend.services.host_health_probe import HEALTH_PROBE_EXTRA_KEY
 from backend.services.script_presence import (
     PRESENCE_STATES as _PRESENCE_STATES,
+    fleet_packages_mode as _fleet_packages_mode,
     presence_counts_by_host as _presence_counts_by_host,
     sweep_freshness_range as _presence_freshness_range,
 )
@@ -301,6 +303,30 @@ def _refresh_script_presence_gauges(db: Session) -> None:
         script_presence_sweep_timestamp.set(fresh_min.timestamp())
 
 
+
+def _refresh_script_packages_mode_gauge(db: Session) -> None:
+    """#3222/#3315：fleet 包模式计数（ADR-0051「fleet 全 strict」的机器不变量）——拉取期从
+    ``host.script_packages_mode`` 列现算，与 summary API 的 ``fleet_packages`` 同源同口径
+    （退役不计、NULL 计 unknown）。
+
+    存在理由：曾由 presence sweep 按**本轮 modes 切片**直接 set——单机 refresh 的 1 台切片把
+    fleet 计数覆盖成 ``{package:1}``（#3315），且进程重启后到下一次全量 cron（每日一次）之前
+    series 恒缺席，「package == 在册 host 数」大半时间不可核验。列是 per-host upsert 的真值，
+    从列现算两个病同时消失（与本文件其它 ``_refresh_*`` 同一口径）。
+    """
+    if not is_prometheus_available():
+        return
+    try:
+        counts = _fleet_packages_mode(db)
+    except SQLAlchemyError:
+        # #3102 同款：共享 session 读失败必须 rollback，否则后续各组连环失败
+        db.rollback()
+        logger.warning("metrics_script_packages_mode_refresh_failed", exc_info=True)
+        return
+    for mode, n in counts.items():
+        host_script_packages_mode.labels(mode=mode).set(n)
+
+
 def _refresh_host_health_gauges(db: Session) -> None:
     """#2900 的控制面半边 + #2957 的通道可见性：把 `host.extra` 里的 agent 判定折成可告警 series。
 
@@ -489,6 +515,7 @@ async def metrics(
     _refresh_host_health_gauges(db)
     _refresh_host_health_probe_strike_gauges(db)
     _refresh_script_presence_gauges(db)
+    _refresh_script_packages_mode_gauge(db)
     _refresh_lock_wait_gauges(db)
     _refresh_chain_coverage_gauges(db)
     _sweep_push_host_gauge_children(db)

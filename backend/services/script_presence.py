@@ -37,7 +37,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Iterable, Optional
 from uuid import uuid4
@@ -46,7 +45,6 @@ from sqlalchemy import and_, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from backend.core import metrics
 from backend.core.database import SessionLocal
 from backend.models.host import Device, Host
 from backend.models.plan import PlanStep
@@ -502,9 +500,7 @@ async def run_sweep(
                     if m.get("package_sha256") and (str(m["name"]), str(m["version"])) in reachable}
         modes[hid] = derive_packages_mode(entries, sha_keys, reachable_empty=not reachable)
 
-    await asyncio.to_thread(
-        _persist_modes, db_factory, modes, full_scope=host_ids is None,
-    )
+    await asyncio.to_thread(_persist_modes, db_factory, modes)
     written = await asyncio.to_thread(_persist, db_factory, rows)
     round_hosts = [str(h["id"]) for h, _reachable in per_host]
     removed = await asyncio.to_thread(
@@ -556,15 +552,13 @@ def fleet_packages_mode(db: Session) -> Dict[str, int]:
     return out
 
 
-def _persist_modes(
-    db_factory, modes: dict[str, Optional[str]], *, full_scope: bool = True
-) -> int:
-    """#3222：把推导出的包模式写 host 显式列（每轮 sweep 全量刷新；unknown 也写 None）。
+def _persist_modes(db_factory, modes: dict[str, Optional[str]]) -> int:
+    """#3222：把推导出的包模式写 host 显式列（本轮作用域内逐 host；unknown 也写 None）。
 
-    #3315：gauge 只在**全量作用域** sweep 更新——单机 refresh 也走 run_sweep(host_ids=[…])，
-    其 modes 是 1 台切片，Counter 聚合会把 fleet 计数覆盖成 {package:1}（2026-09-25 首采
-    当天实测：DB 48/48 package 正确，gauge 却被一次 refresh 打成 1）。列写 per-host
-    upsert 天然不受作用域影响，照写。
+    **只写列，不碰 gauge**（#3315 根因修正）：`stability_host_script_packages_mode` 由
+    `/metrics` 拉取期经 :func:`fleet_packages_mode` 从本列现算（routes/metrics.py，与
+    summary API 同源）。曾在此按本轮 modes 切片 set gauge——单机 refresh 的 1 台切片把
+    fleet 计数覆盖成 {package:1}，且进程重启后到下一次全量 cron 之前 gauge 恒缺席。
     """
     if not modes:
         return 0
@@ -576,13 +570,6 @@ def _persist_modes(
                 row.script_packages_mode = mode
                 n += 1
         db.commit()
-    if full_scope and metrics.PROMETHEUS_AVAILABLE:
-        try:
-            counts = Counter(m or "unknown" for m in modes.values())
-            for label in ("package", "tree", "mixed", "unknown"):
-                metrics.host_script_packages_mode.labels(mode=label).set(counts.get(label, 0))
-        except Exception:  # pragma: no cover - 指标失败不拖垮 sweep
-            logger.exception("script_packages_mode metric failed")
     return n
 
 
