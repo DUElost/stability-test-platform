@@ -36,10 +36,6 @@ layers =
     backend.core
 unmatched_ignore_imports_alerting = error
 ignore_imports =
-    # S2 socketio_server 同时是推送出口（emit/broadcast/call_agent_*）与入站处理器。
-    #    出口：拆为 realtime/emit.py（端口，services 可用）与入站 handlers（放入口层）。
-    backend.realtime.socketio_server -> backend.services.auth_session
-    backend.realtime.socketio_server -> backend.services.run_console
     # S3 服务反向调用调度器实现。
     backend.services.host_upgrade_gate -> backend.scheduler.device_lease_reconciler
     # S4 core 反向依赖 models（审计写库）。出口：审计记录写入下沉到 services 或 models 侧。

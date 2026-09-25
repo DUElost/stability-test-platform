@@ -84,6 +84,7 @@ from backend.core.terminal_bulkhead import TerminalBulkheadFull
 from backend.core.request_metrics import ApiRequestMetricsMiddleware, endpoint_label
 from backend.core.security import is_production_like_env, validate_production_auth_cookie_settings
 from backend.realtime.socketio_server import create_sio_server, capture_main_loop
+from backend.services.realtime_ports import wire_dashboard_ports
 from backend.services.state_machine import InvalidTransitionError
 from backend.scheduler.app_scheduler import create_scheduler, register_schedules
 from backend.core.task_queue import (
@@ -373,6 +374,8 @@ _fastapi_app = FastAPI(
 )
 fastapi_app = _fastapi_app  # Exposed for tests and tooling
 
+# /dashboard 的认证与 console 存在性由 services 实现、在此注入（socketio_server 不反向 import services）。
+wire_dashboard_ports()
 sio_server = create_sio_server()
 app = python_socketio.ASGIApp(sio_server, _fastapi_app)
 

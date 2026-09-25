@@ -18,28 +18,63 @@ import os
 import re
 import secrets
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 import socketio
 from sqlalchemy import text
 
 from backend.core.agent_secret import AgentSecretNotConfiguredError, require_agent_secret
 from backend.core.cors import get_cors_allowed_origins
-from backend.core.database import AsyncSessionLocal, SessionLocal
+from backend.core.database import AsyncSessionLocal
 from backend.core.metrics import record_socketio_connection
 from backend.core.security import ACCESS_COOKIE_NAME, extract_cookie_token
-from backend.services.auth_session import authenticate_token
-from backend.services.run_console import RunConsole
 
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# /dashboard 入站依赖端口
+# ---------------------------------------------------------------------------
+# DashboardNamespace 需要两项能力：按 token 认证用户、判断 console run 是否存在。
+# 实现都在 services（auth_session / run_console）；而本模块是 services 广泛使用
+# 的推送出口，若再反向 import services 即成环（realtime ↔ services）。所以由组装根
+# 注入（``backend/main.py`` → ``services.realtime_ports.wire_dashboard_ports``）。
+# 未注入时 fail-closed：token 认证一律拒绝、console 房间一律不放行。
+_authenticate_user: Optional[Callable[[str], Any]] = None
+_console_run_exists: Optional[Callable[[str], bool]] = None
+
+
+def configure_dashboard_ports(
+    *,
+    authenticate_user: Optional[Callable[[str], Any]],
+    console_run_exists: Optional[Callable[[str], bool]],
+) -> None:
+    """注入 /dashboard 的两项入站能力（``None`` 撤销，恢复 fail-closed）。
+
+    两个回调都是 **sync** 且可能阻塞（DB / 同步 redis），调用方已保证经
+    ``asyncio.to_thread`` 执行。
+    """
+    global _authenticate_user, _console_run_exists
+    _authenticate_user = authenticate_user
+    _console_run_exists = console_run_exists
+
+
 def _authenticate_dashboard_user(token: str):
     """#903 三面校验面（sync）。#1041：必须经 ``asyncio.to_thread`` 执行——
-    本模块跑在事件循环上，sync SessionLocal 直连查询会阻塞整个 Socket.IO
-    循环；入线程池后与 REST 的 sync 依赖同语义，不阻塞并发握手。"""
-    with SessionLocal() as db:
-        return authenticate_token(db, token, expected_type="access")
+    本模块跑在事件循环上，sync DB 查询会阻塞整个 Socket.IO 循环；入线程池后与
+    REST 的 sync 依赖同语义，不阻塞并发握手。"""
+    if _authenticate_user is None:
+        logger.warning("dashboard_auth_port_not_configured — token rejected")
+        return None
+    return _authenticate_user(token)
+
+
+def _console_exists(run_id: str) -> bool:
+    """console run 存在性（sync，可能读同步 redis，须经 ``asyncio.to_thread``）。"""
+    if _console_run_exists is None:
+        logger.warning("dashboard_console_port_not_configured run_id=%s", run_id)
+        return False
+    return bool(_console_run_exists(run_id))
 
 
 def _origin_allowed(environ: dict) -> bool:
@@ -318,7 +353,7 @@ async def _dashboard_room_exists(kind: str, ident: str) -> bool:
         # #2056：注册表读的是**同步** redis（SOCKET_TIMEOUT_SECONDS=2）——直接在
         # 事件循环里调会把整个 ASGI 冻住最多 2s/次，而重连客户端会密集打这条路径。
         # 挪到线程里执行（同步客户端保持原样，供 ticker/线程路径复用）。
-        exists = await asyncio.to_thread(RunConsole.instance().status, ident) is not None
+        exists = await asyncio.to_thread(_console_exists, ident)
         if not exists:
             # #1114：多实例下「非本实例持有」与「不存在」同路径——留可诊断日志
             try:
