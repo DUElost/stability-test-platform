@@ -33,7 +33,7 @@ def test_legacy_aee_script_names_use_single_shared_source():
     from backend.agent.registry import script_registry
     from backend.agent.aee import state_migration
     from backend.api.routes import plans, scripts
-    from backend.core.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
+    from backend.agent.contracts.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
     from backend.services import script_catalog
 
     assert plans.LEGACY_AEE_SCRIPT_NAMES is LEGACY_AEE_SCRIPT_NAMES
@@ -46,3 +46,14 @@ def test_legacy_aee_script_names_use_single_shared_source():
     assert "_LEGACY_AEE_SCRIPT_NAMES" not in script_catalog.__dict__
     assert "_LEGACY_AEE_SCRIPT_NAMES" not in script_registry.__dict__
     assert not hasattr(state_migration, "migrate_legacy_aee_state_store")
+
+
+def test_legacy_aee_constants_live_only_in_contracts_package():
+    """ADR-0054 D5：常量表只有 contracts/ 一份实现，旧副本与兜底壳已删。"""
+    contract = REPO_ROOT / "backend" / "agent" / "contracts" / "legacy_aee.py"
+    assert contract.is_file(), f"缺少契约常量表：{contract}"
+
+    for legacy in ("backend/core/legacy_aee.py", "backend/agent/legacy_aee.py"):
+        assert not (REPO_ROOT / legacy).exists(), (
+            f"legacy_aee 旧副本仍在：{legacy}——ADR-0054 D5 要求删除且不留兜底/再导出壳"
+        )

@@ -11,7 +11,7 @@
 import pytest
 
 from backend.api.routes.plans import PlanStepIn, _assemble_lifecycle_for_validation
-from backend.core.pipeline_validator import validate_pipeline_def
+from backend.agent.contracts.pipeline_validator import validate_pipeline_def
 from backend.models.plan import Plan, PlanStep
 from backend.services.plan_dispatcher_core import (
     build_lifecycle_from_steps,

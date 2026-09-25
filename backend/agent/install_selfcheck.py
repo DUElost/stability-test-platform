@@ -36,7 +36,7 @@ SAMPLE_PIPELINE_DEF = {
 
 def main() -> int:
     try:
-        from .pipeline_validator import validate_pipeline_def
+        from .contracts.pipeline_validator import validate_pipeline_def
 
         ok, errors = validate_pipeline_def(SAMPLE_PIPELINE_DEF)
     except Exception as exc:

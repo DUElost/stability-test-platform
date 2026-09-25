@@ -5,7 +5,7 @@ from fastapi import HTTPException
 
 import backend.api.routes.pipeline as pipeline_routes
 from backend.api.routes.pipeline import TEMPLATES_DIR, _load_template
-from backend.core.pipeline_validator import validate_pipeline_def
+from backend.agent.contracts.pipeline_validator import validate_pipeline_def
 
 
 def test_builtin_pipeline_templates_do_not_use_legacy_phases():

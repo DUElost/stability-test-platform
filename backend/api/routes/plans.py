@@ -20,10 +20,10 @@ from backend.api.schemas import PaginatedResponse
 from backend.api.routes.auth import get_current_active_user, User
 from backend.services.audit_writer import record_audit
 from backend.core.settings.scheduler import get_scheduler_settings
-from backend.core.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
+from backend.agent.contracts.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
 from backend.core.device_serial import is_placeholder_serial
 from backend.core.database import get_db
-from backend.core.pipeline_validator import validate_pipeline_def
+from backend.agent.contracts.pipeline_validator import validate_pipeline_def
 from backend.models.host import Device
 from backend.models.plan import Plan, PlanStep
 from backend.models.plan_run import PlanRun
@@ -923,7 +923,7 @@ def list_plans(
     **legacy AEE 过滤必须在分页之前**：此前是 `offset/limit` 之后再用 Python 谓词
     滤掉含 `scan_aee` / `export_mobilelogs` 步的计划，于是 ① 页边界按**未过滤**行数
     算，翻页会重复/漏；② 任何 `total` 都会多算被隐藏的。谓词只认两个 `script_name`
-    （`backend/core/legacy_aee.py`），故下推为 `NOT EXISTS` 子查询。
+    （`backend/agent/contracts/legacy_aee.py`），故下推为 `NOT EXISTS` 子查询。
     """
     plans = db.query(Plan)
     if project_key:

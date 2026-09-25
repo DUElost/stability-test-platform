@@ -24,17 +24,16 @@
   下发它的 endpoint / SocketIO 命令契约见
   `docs/design/2026-scan-upload-merge-contract.md`。
 
-## import 边界（#739）
+## import 边界（#739 / ADR-0054）
 
-生产代码（含 `scripts/`，不含 tests）**不得 import 控制面包**（api/services/tasks/
-realtime/scheduler/models/alembic/main）——Agent 部署在无控制面的主机上，越界即
-`ImportError`。共享层 `backend.core.*` 仅限显式登记、经核实的纯模块（当前
-`legacy_aee`、`pipeline_validator`），理由写在
-`tests/test_agent_import_boundary.py::_SHARED_ALLOWLIST`。
+生产代码（含 `scripts/`，不含 tests）**不得 import 控制面包**——Agent 部署在无控制面的
+主机上，越界即 `ImportError`；`backend.core.*` 仅限 `_SHARED_ALLOWLIST` 登记项（现只剩
+`metrics`）。共享定义走 `agent/contracts/`（ADR-0054 D1）：agent 侧一律同包相对导入
+（`from .contracts.x import …`，不写 `backend.agent.contracts` 绝对形式，主机上没有
+`backend` 包），控制面侧绝对导入 `backend.agent.contracts.*`（`.importlinter` C3 通配
+放行）。契约纯度与 `agent/__init__.py` 轻量约束由
+`tests/test_agent_import_boundary.py` 的 C6 AST 判据守（细则见该文件抬头）。
 
-注意与测试面的区别：`backend/agent/tests/` 的 env 由 conftest 自供（#2428），
-测试里 import 控制面**不会**在干净环境炸掉——所以这条边界由**静态 AST 守卫**钉住。
-测试侧另有**只减不增**的清单棘轮（`tests/test_agent_test_import_ratchet.py`）。
-收敛方式已裁决（2026-09-20）：分批迁移到 `backend/tests/` + 横跨契约文件就地解耦；
-两批已完成（迁移 12 + 解耦 2），**清单已清零**——agent 测试不得再 import 控制面，
-新越界由该守卫直接判红（批次与去向见棘轮文件抬头）。
+注意与测试面的区别：`backend/agent/tests/` 的 env 由 conftest 自供（#2428），测试里
+import 控制面**不会**在干净环境炸掉——这条边界由**静态 AST 守卫**钉住；测试侧另有只减
+不增的清单棘轮（`tests/test_agent_test_import_ratchet.py`），清单已清零（#739 两批）。

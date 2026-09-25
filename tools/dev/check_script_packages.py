@@ -50,7 +50,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SCRIPTS_ROOT = REPO_ROOT / "backend" / "agent" / "scripts"
 DEFAULT_MANIFEST = REPO_ROOT / "tool_manifest.json"
 ENTRY_SUFFIXES = (".py", ".sh")
-#: 与 ``backend.core.legacy_aee.LEGACY_AEE_SCRIPT_NAMES`` 同值（本工具 stdlib-only，不 import backend）。
+#: 与 ``backend/agent/contracts/legacy_aee.py`` 的 LEGACY_AEE_SCRIPT_NAMES 同值（本工具 stdlib-only，不 import backend）。
 LEGACY_SCRIPT_NAMES = frozenset({"scan_aee", "export_mobilelogs"})
 _VERSION_DIR_RE = re.compile(r"^v[0-9][A-Za-z0-9._-]*$")
 

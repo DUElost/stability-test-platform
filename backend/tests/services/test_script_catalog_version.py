@@ -7,7 +7,7 @@ Agent 重新拉一遍目录。所以这里不"参考实现"，而是**直接 imp
 
 import pytest
 
-from backend.core.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
+from backend.agent.contracts.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
 from backend.models.script import Script
 from backend.services.script_catalog_version import (
     catalog_digest,

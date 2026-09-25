@@ -89,10 +89,13 @@ ignore_imports =
 
 # ---------------------------------------------------------------------------
 # C3 控制面不 import Agent 内部实现（只查直接 import）
-# Agent 是独立部署单元；双方共享的定义现在靠「控制面伸手进 agent」或「同名双份 + parity 测试 /
-# try-except ImportError 兜底」维持（core/pipeline_validator.py 与 agent/pipeline_validator.py
-# 字节级相同）。出口：建立一个零依赖的共享契约包（随 agent 包与控制面同时发布），
-# 把 aee 路径/元数据、watcher 契约、pipeline 校验、digest 算法等移入。
+# Agent 是独立部署单元；双方共享的定义归 `backend/agent/contracts/`（ADR-0054 D1，
+# 随 agent 包与控制面同时发布）。控制面对契约包的 import 由下方通配忽略行放行，
+# import agent 其他模块仍然失败。
+#
+# 其余 5 条基线是尚未搬入 contracts/ 的伸手点，按 ADR-0054 §5 第 2–4 步逐条清理
+# （aee 元数据/路径、watcher 契约、kernel_usb_faults、state_migration）；
+# `unmatched_ignore_imports_alerting = error` 强制「搬走即删行」。
 # ---------------------------------------------------------------------------
 [importlinter:contract:c3-cp-not-into-agent]
 name = C3 控制面不直接 import backend.agent
@@ -112,6 +115,9 @@ forbidden_modules =
 allow_indirect_imports = True
 unmatched_ignore_imports_alerting = error
 ignore_imports =
+    # ADR-0054 D4：共享契约包放行（零匹配会因 unmatched_ignore_imports_alerting=error
+    # 报错，故本行与第一次搬迁同 PR 引入）。
+    backend.** -> backend.agent.contracts.**
     backend.core.aee_metadata -> backend.agent.aee.metadata
     backend.services.agent_log_signals -> backend.agent.watcher.contracts
     backend.services.dedup_extract -> backend.agent.aee.event_dirs

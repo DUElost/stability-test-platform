@@ -76,7 +76,8 @@ docstring 要求与 Agent 侧**字节级等价**并配对照测试）→ 心跳/
 - **`Host.extra` 不新增裸键**（ADR-0038 D4 先例）；宿主状态走显式列（对照 `host.script_catalog_version`）。
 - **硬不变量**：`plan` 只接受 `script:<name>` action、脚本版本不可变契约（ADR-0051 D1/D5 已裁决，含 ADR-0039 继承条款）等不受本 ADR 影响。
 - **schema 生效必须重启**：`pipeline_validator._schema_cache` 是进程内缓存
-  （`backend/agent/pipeline_validator.py:14-22`），2026-08-04 已有「只发文件不重启导致全轮失败」实证。
+  （ADR-0054 搬迁后位于 `backend/agent/contracts/pipeline_validator.py`，搬迁前为
+  `backend/agent/pipeline_validator.py:14-22`），2026-08-04 已有「只发文件不重启导致全轮失败」实证。
 - **控制面本机同时是生产 DB 宿主**：控制面 CPU/内存开销是真实成本，不只是延迟。
 
 ## 2. 决策
