@@ -71,6 +71,12 @@ _ATT_INSTALL_DEFAULT_MAX_ATTEMPTS = 3
 _ATT_INSTALL_DEFAULT_READY_SECONDS = 60.0
 _ATT_INSTALL_DEFAULT_WAIT_BUDGET_SECONDS = 90.0
 _ATT_READY_POLL_SECONDS = 5.0
+#: v1.2.6（#3223）等待环的**迭代上界**。`deadline` 只在"时钟会前进"时才是上界：一旦
+#: `time.sleep` 被换成不耗时的实现（测试侧为压墙钟引入的假时钟夹具缺位、或未来任何同类桩），
+#: 循环会在真墙钟走完前以每秒数十万次迭代调用 adb 并向调用方容器追加对象——实测 ≈150 MB/s，
+#: 2026-09-23 13:42 冻结控制面宿主（那次是 `pytest` 进程 anon 120 s 内 2.6→15.3 GiB）。
+#: 默认 400 轮 = 正常预算(90s/5s=18 轮)的 ~22 倍冗余，健康路径永远碰不到它。
+_ATT_READY_MAX_POLLS_DEFAULT = 400
 
 # v1.2.4：服务启动 / uid 解析的同款「等就绪 + 有界重试」缺省（env 可覆盖）
 _PCS_RETRY_DEFAULT_MAX_ATTEMPTS = 3
@@ -662,6 +668,11 @@ def pcs_retry_ready_seconds() -> float:
     return _att_env_float("STP_PCS_RETRY_READY_SECONDS", _PCS_RETRY_DEFAULT_READY_SECONDS)
 
 
+def att_ready_max_polls() -> int:
+    """`wait_system_ready` 的轮次上界（v1.2.6，``STP_ATT_READY_MAX_POLLS`` 可覆盖）。"""
+    return _att_env_int("STP_ATT_READY_MAX_POLLS", _ATT_READY_MAX_POLLS_DEFAULT)
+
+
 def pcs_retry_wait_budget_seconds() -> float:
     """等待就绪的总预算秒数（v1.2.4；``STP_PCS_RETRY_WAIT_BUDGET_SECONDS`` 可覆盖）。"""
     return _att_env_float(
@@ -696,15 +707,26 @@ def system_ready() -> tuple[bool, str]:
 
 
 def wait_system_ready(deadline: float) -> tuple[bool, str]:
-    """轮询到 ``deadline``（``time.time()`` 基准）为止；返回 (是否就绪, 最后观测)。"""
+    """轮询到 ``deadline``（``time.time()`` 基准）为止；返回 (是否就绪, 最后观测)。
+
+    v1.2.6（#3223）：时钟上界之外再加**轮次上界**。两个上界谁先到算谁，且报文区分
+    （`deadline_exhausted` / `polls_exhausted`）——"设备真没就绪"与"等待环失去了时间约束"
+    是两类故障，混在一条报文里会把后者归因到设备上（本族 v1.2.4 的 ``attempts=1/3`` 误指
+    就是同形教训）。
+    """
     observed = "no observation"
+    max_polls = att_ready_max_polls()
+    polls = 0
     while True:
+        polls += 1
         ok, observed = system_ready()
         if ok:
             return True, observed
         remaining = deadline - time.time()
         if remaining <= 0:
-            return False, observed
+            return False, f"{observed} deadline_exhausted"
+        if polls >= max_polls:
+            return False, f"{observed} polls_exhausted={polls}/{max_polls}"
         time.sleep(min(_ATT_READY_POLL_SECONDS, remaining))
 
 

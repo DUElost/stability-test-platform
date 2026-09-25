@@ -19,7 +19,9 @@ systemctl is-active stability-backend     # 控制面服务态
 curl -s http://127.0.0.1:8000/health      # health 路由（非 /api/v1/health）
 ```
 
-- 凭据注入（CLI 类脚本）：`set -a && . ./.env.backend && set +a`——`load_repo_dotenv()` 只读仓库根 `.env`（生产不存在）。
+- 凭据注入（CLI 类脚本）：`set -a && . ./.env.backend && set +a`（**cwd=发布根**——自 D6 起 `./.env.backend`
+  穿透到站点真身 `stp-releases/env.backend`；在仓根 source 到的是 dev 配置，生产诊断/运维禁止）——
+  `load_repo_dotenv()` 只读仓库根 `.env`（生产不存在）。
   用户名/口令变量是 `$STP_ADMIN_USER`（= `stp-admin`）与 `$STP_ADMIN_PASSWORD`——**不是 `admin`**。
 - admin token（2026-09-15 实测校准）：`/api/v1/auth/token` 回**扁平** OAuth2 体，取 `.access_token`（不是 `.data.access_token`）；
   请求体是 `application/x-www-form-urlencoded`（用 `--data-urlencode`，不是 `-F`），且 `/api/v1/*` 非安全方法要过
@@ -44,7 +46,9 @@ curl -s http://127.0.0.1:8000/health      # health 路由（非 /api/v1/health�
 > 本机（127.0.0.1:8000）即是生产控制面。ADR-0051 Phase 1（2026-09-23 实切）起：unit 的
 > `WorkingDirectory`/`EnvironmentFile`/`ExecStart`/日志全部指向 **`/home/debian13/stp-releases/current`**
 > （符号链接 → `stp-releases/<rev>/` 的 bundle 树），与开发工作区（git 检出）物理分离；仓根不再是运行路径。
-> env 单源：发布根 `.env.backend` 是**指向仓根同名文件的 symlink**（改 env 只改仓根，重启即生效）。
+> env 单源（**D6 终态，2026-09-25 实切**）：生产 env 真身是站点文件 **`stp-releases/env.backend`**（600），
+> 各 rev 根 `.env.backend` 是树内相对 symlink（`→ ../env.backend`）——**改 env 改站点文件，重启即生效**；
+> 仓根 `.env.backend` 自此降级为**纯 dev 配置**（两文件可漂移是显式代价：生产改值/诊断取数一律经站点文件）。
 > 仍是**人工 SOP**，不是 CI/CD 管道。
 
 1. **PR 合入** main（禁直推；auto-merge 由 AGENTS.md 门禁把关）。
@@ -57,7 +61,8 @@ curl -s http://127.0.0.1:8000/health      # health 路由（非 /api/v1/health�
    `release-manifest.json` 的 `product.version` / 两个 ADR-0040 digest 即部署内容地址；构建机本地态由
    `find_forbidden_bundle_entries` fail-closed（#2269/#3112 在 bundle 形态的替身）。
 3. **物料与 venv**（首建/新 rev）：发布根需 `venv/`（`python3 -m venv venv && venv/bin/pip install -r backend/requirements.txt`）、
-   `logs/`、`.env.backend`（**symlink 到仓根**，勿复制成第二源）；`tools/ansible/inventory.ini` 随 bundle 携带
+   `logs/`、`.env.backend`（**symlink 指树内 `../env.backend`**——站点真身，`ln -sfn ../env.backend <rev>/.env.backend`；
+   **不得指仓根**，D6 已闭合：运行时不许触开发检出）；`tools/ansible/inventory.ini` 随 bundle 携带
    （gitignored，构建机没有它 → 热更新 SSH 凭据回退会静默消失）。
 4. **切 current 并重启**（回滚 = 把 current 指回旧 rev 或仓根 unit 备份 `*.bak-20260923-phase1`）：
    ```bash
@@ -215,6 +220,7 @@ PYTHONPATH=. venv/bin/python -m backend.scripts.batch_hot_update --direct
 | 2026-09-23 | **ADR-0051 Phase 2a/2b 上线实跑校准**：§2 补 scan 的 `package_backfilled`/`package_conflicts` 与 `--register`/`--publish` 两步；§3 补「忙碌判定经 `device.host_id` join、批量跳过后重跑补齐」「脚本包开关 `STP_AGENT_SCRIPT_PACKAGES` 需重启后端再推、env-only 变更须 `--force`、用 presence refresh + `tools_cache` 计数 + 日志 fallback 计数三件套验证」。现场：迁移 `ad51c1d3f2a1`、发布 210 包、scan 回填 210、11/48 台切到 `on`（其余 37 台被 plan_run 518 活跃 job 跳过） | 本次上线实操 |
 | 2026-09-22 | **两处历史 `⚠️待校对` 项实机验证并解除**（详见 `docs/notes/process/2026-09-22-sop-warn-items-verification.md`）：① §6「SP Flash Tool 缺库」——五个包名与工具真实依赖一致（控制面+真机 `ldd`、缺库主机 11 个未解析依赖），fleet 分布 38 齐 / 10 缺（全在 `agent_legacy`），处置改指平台 provisioning（ADR-0037 D5）+ 保留带 `t64` 说明的逃生阀；② §3 带外资源——protect-only 实测成立（两轮 code 推送后 resources 仍在位、mtime 未变），**但**盘点 48 台发现 resources 身份 41/48 一致、7 台字节级偏离（仅 CRLF→LF）而平台判 converged：身份是自报意图、从不自测，机制缺口立 issue #3128 | 真机 ansible 只读探针（48 台全量，含主机侧自算 digest 对拍）+ issue #3128 |
 | 2026-09-25 | §6 新增「CLI 跑 run_sweep 全量 = 静默打脏」行：#3315 部署观察中 CLI 全量 sweep 把 `script_packages_mode` 48/48 package 打脏为全 None 且返回形似成功；恢复通道=逐台 `POST /refresh?host_id=`（实测 48 台 fail=0 回到 `{package:48}`）；全量合法触发点只有每日 cron；alert 侧不受影响（吃进程内 gauge，随进程重启清零是正确行为）。入口/防护缺口立 #3333 | #3319 部署实跑 + issue #3333 |
+| 2026-09-25 | **D6 env 自持实切**：§1 引语与物料行按终态改写——站点真身 `stp-releases/env.backend`（600，自仓根 `cp -a` 一次），11 个 rev 根 `.env.backend` 全改树内相对 symlink `→ ../env.backend`；unit/`main.py`/alembic/checker 均 `__file__` 派生，**零代码改动**穿透生效。§0 凭据段补「cwd=发布根」限定（仓根文件降级为 dev，source 错=拿 dev 配置打生产）。切换实测：三道 ExecStartPre 过、auth OK、48/48 心跳新鲜、`fleet_packages={package:48}`；回滚=把 symlink 改回仓根目标+重启 | 本次实切 + `docs/notes/process/2026-09-25-d6-env-self-containment.md` |
 
 ## 踩坑守卫（负向约束）
 
