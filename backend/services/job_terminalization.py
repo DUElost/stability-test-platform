@@ -26,7 +26,9 @@ service:
    (pre-P2 / empty runs)
 5. On successful aggregation, **commits** parent terminal facts, then runs
    chain trigger / dedup enqueue (#986) — chain prepare failure must not
-   ``rollback()`` the parent Job/PlanRun terminalization
+   ``rollback()`` the parent Job/PlanRun terminalization. That post-terminal
+   orchestration itself lives in ``plan_run_finalization`` (#3299); this module
+   only delegates.
 
 Idempotency is the caller's duty: only invoke on the *first* transition into
 a terminal job status (``complete_job`` already short-circuits replays).
@@ -53,6 +55,10 @@ from backend.services.plan_run_aggregation import (
     apply_plan_run_aggregation,
     apply_plan_run_aggregation_from_counters,
 )
+from backend.services.plan_run_finalization import (
+    finalize_parent_run_async,
+    finalize_parent_run_sync,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -62,51 +68,9 @@ _TERMINAL = {
     JobStatus.ABORTED.value,
 }
 
-
-async def _post_aggregation_side_effects_async(
-    run: PlanRun,
-    db: AsyncSession,
-    applied: bool,
-) -> None:
-    """Commit parent terminal facts before chain/dedup side effects (#986).
-
-    ``trigger_next_plan`` may ``rollback()`` on prepare failure. If that shares
-    the still-open complete/aggregation transaction, parent Job terminalization,
-    lease release, and PlanRun aggregation are undone. Commit first so chain
-    failure only affects the child attempt; reconciler can retry the chain.
-    """
-    if not applied:
-        return
-    from backend.services.plan_chain_trigger import trigger_next_plan
-    from backend.services.dedup_scan import (
-        should_trigger_dedup,
-        enqueue_dedup_terminal_async,
-    )
-
-    await db.commit()
-    await trigger_next_plan(run, db, respect_settle=True)
-    if should_trigger_dedup(run.status):
-        await enqueue_dedup_terminal_async(run.id)
-
-
-def _post_aggregation_side_effects_sync(
-    run: PlanRun,
-    db: Session,
-    applied: bool,
-) -> None:
-    """Sync counterpart of ``_post_aggregation_side_effects_async`` (#986)."""
-    if not applied:
-        return
-    from backend.services.plan_chain_trigger import trigger_next_plan_sync
-    from backend.services.dedup_scan import (
-        should_trigger_dedup,
-        enqueue_dedup_terminal_sync,
-    )
-
-    db.commit()
-    trigger_next_plan_sync(run, db, respect_settle=True)
-    if should_trigger_dedup(run.status):
-        enqueue_dedup_terminal_sync(run.id)
+# _post_aggregation_side_effects_async/_sync 自 #3299 起并入
+# backend.services.plan_run_finalization.finalize_parent_run_async/_sync
+# （终态副作用的唯一编排者）；本模块在聚合后直接委托。
 
 
 def _bump_counters(run: PlanRun, job: JobInstance) -> None:
@@ -180,7 +144,7 @@ async def on_job_terminal(
         record_plan_run_aggregation_duration(
             time.perf_counter() - t0, "counters",
         )
-        await _post_aggregation_side_effects_async(run, db, applied)
+        await finalize_parent_run_async(run, db, applied)
         return applied, run.status if applied else None
 
     jobs = await _load_jobs()
@@ -189,7 +153,8 @@ async def on_job_terminal(
     record_plan_run_aggregation_duration(
         time.perf_counter() - t0, "full_scan",
     )
-    await _post_aggregation_side_effects_async(run, db, applied)
+    # 全量扫描路径可命中「空集」终态：编排者据此发「no jobs」文案的 RUN_FAILED。
+    await finalize_parent_run_async(run, db, applied, no_jobs=not jobs)
     return applied, run.status if applied else None
 
 
@@ -235,7 +200,7 @@ def on_job_terminal_sync(
         record_plan_run_aggregation_duration(
             time.perf_counter() - t0, "counters",
         )
-        _post_aggregation_side_effects_sync(run, db, applied)
+        finalize_parent_run_sync(run, db, applied)
         return applied, run.status if applied else None
 
     jobs = (
@@ -248,7 +213,8 @@ def on_job_terminal_sync(
     record_plan_run_aggregation_duration(
         time.perf_counter() - t0, "full_scan",
     )
-    _post_aggregation_side_effects_sync(run, db, applied)
+    # 空集全量扫描终态 → 「no jobs」通知（同 async 路径）。
+    finalize_parent_run_sync(run, db, applied, no_jobs=not jobs)
     return applied, run.status if applied else None
 
 

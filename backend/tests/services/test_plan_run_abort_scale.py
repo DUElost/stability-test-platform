@@ -215,6 +215,7 @@ def _abort_scale(seed: dict, **kwargs) -> dict:
     emit_events: list[str] = []
     with (
         patch("backend.services.plan_run_abort.notify_plan_run_terminal", lambda *a, **k: None),
+        patch("backend.services.plan_run_finalization.notify_plan_run_terminal", lambda *a, **k: None),
         patch("backend.services.plan_run_abort.record_plan_run_abort_lock_seconds", lambda *a, **k: None),
         patch(
             "backend.services.plan_run_abort.record_plan_run_abort_fanout",

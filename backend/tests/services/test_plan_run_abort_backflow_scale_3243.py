@@ -276,6 +276,7 @@ def _abort(seed: dict) -> None:
     """真实 abort（只替掉与判据无关的外呼：socketio / 通知 / 锁时长观测）。"""
     with (
         patch("backend.services.plan_run_abort.notify_plan_run_terminal", lambda *a, **k: None),
+        patch("backend.services.plan_run_finalization.notify_plan_run_terminal", lambda *a, **k: None),
         patch("backend.services.plan_run_abort.record_plan_run_abort_lock_seconds", lambda *a, **k: None),
         patch("backend.services.plan_run_abort.record_plan_run_abort_fanout", lambda *a, **k: None),
         patch("backend.services.plan_run_abort.schedule_agent_control_fanout", lambda items: None),

@@ -23,7 +23,7 @@ from backend.core.ssh_security import (
 from backend.models.audit import AuditLog
 from backend.models.host import Device, Host
 from backend.models.job import JobInstance
-from backend.services.plan_run_abort import abort_pending_job_ids
+from backend.services.plan_run_context import abort_pending_job_ids
 from backend.api.schemas import (
     HostActiveJob,
     HostCreate,

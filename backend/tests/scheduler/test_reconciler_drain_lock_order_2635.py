@@ -2,7 +2,7 @@
 
 `#2531` 为提升解锁速率把终态化搬进候选循环，并声明「一候选一事务边界」。但该边界
 **只在末位候选成立**：`on_job_terminal` 的 `commit()` 位于
-`_post_aggregation_side_effects_async` 的 `applied=True` 分支，而
+终态编排（原 `_post_aggregation_side_effects_async`，#3299 后为 `plan_run_finalization.finalize_parent_run_async`）的 `applied=True` 分支，而
 `plan_run_aggregation` 要求 `terminal_job_count >= total_job_count` 才 `applied`。
 
 于是从第 2 条候选起，同一事务在**已持 `plan_run` 行锁**的情况下再去锁 `job_instance`：

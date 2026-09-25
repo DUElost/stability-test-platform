@@ -266,7 +266,8 @@ async def _reconcile_expired_leases(db) -> tuple[int, int, int]:
         # #2635：**一候选一事务边界**——在此显式提交，使 plan_run 行锁在进入下一候选
         # （取 job 锁）**之前**释放，锁序回到 I2 基准 `job → plan_run`。
         #
-        # 修复前：提交只发生在 `on_job_terminal` → `_post_aggregation_side_effects_async`
+        # 修复前：提交只发生在 `on_job_terminal` → finalization 编排的
+# `plan_run_finalization.finalize_parent_run_async`（原 `_post_aggregation_side_effects_async`，#3299 并入编排者）
         # 的 `applied=True` 分支（即 `terminal_job_count >= total_job_count`，仅**末位**
         # 候选成立）。故从第 2 条候选起，同一事务在**已持 plan_run 行锁**的情况下再去
         # 锁 job 行 ⇒ 实际锁序 `plan_run → job`，与 `complete_agent_job`（`job → plan_run`）

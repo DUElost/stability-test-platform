@@ -5,14 +5,15 @@
 abort 让**同 run 的旁主机**看起来也在 abort 中：热更新门禁永久 409（abort 收口中），
 而 reaper 按主体语义永远不会回收那些 job。
 
-本文件钉住共享判据（`plan_run_abort.run_abort_pending` / `abort_pending_job_ids`）与
+本文件钉住共享判据（#3299 起住 `plan_run_context` 的 `run_abort_pending` /
+`abort_pending_job_ids`）与
 门禁的 `_abort_pending_ids` 的主体语义。
 """
 
 from __future__ import annotations
 
 from backend.services.host_upgrade_gate import _abort_pending_ids
-from backend.services.plan_run_abort import abort_pending_job_ids, run_abort_pending
+from backend.services.plan_run_context import abort_pending_job_ids, run_abort_pending
 
 _HOST_CLOCK = {"at": "2026-09-16T00:00:00+00:00", "reason": "host"}
 

@@ -118,7 +118,7 @@ def _fail_plan_run(pr: PlanRun, db: Session, reason: str) -> None:
     )
     db.commit()
     logger.warning("precheck_reaper_failed plan_run=%d reason=%s", pr.id, reason)
-    from backend.services.plan_run_aggregation import notify_plan_run_terminal
+    from backend.services.plan_run_finalization import notify_plan_run_terminal
     notify_plan_run_terminal(
         pr,
         new_status=PlanRunStatus.FAILED,
@@ -386,7 +386,7 @@ def _recover_stale_precheck_run(
         logger.warning(
             "admission_reaper_failed plan_run=%d attempts=%d", pr.id, attempts,
         )
-        from backend.services.plan_run_aggregation import notify_plan_run_terminal
+        from backend.services.plan_run_finalization import notify_plan_run_terminal
         notify_plan_run_terminal(
             pr,
             new_status=PlanRunStatus.FAILED,

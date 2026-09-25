@@ -176,6 +176,9 @@ def test_abort_locks_pending_job_before_plan_run():
                 with patch(
                     "backend.services.plan_run_abort.notify_plan_run_terminal",
                     lambda *a, **k: None,
+                ), patch(
+                    "backend.services.plan_run_finalization.notify_plan_run_terminal",
+                    lambda *a, **k: None,
                 ):
                     outcome["result"] = abort_plan_run(
                         seed["plan_run_id"], db=session, reason="lock-order-test",
@@ -281,6 +284,9 @@ def test_abort_relocks_pending_jobs_after_commit_before_plan_run():
                 started.set()
                 with patch(
                     "backend.services.plan_run_abort.notify_plan_run_terminal",
+                    lambda *a, **k: None,
+                ), patch(
+                    "backend.services.plan_run_finalization.notify_plan_run_terminal",
                     lambda *a, **k: None,
                 ), patch(
                     "backend.services.plan_run_abort.record_plan_run_abort_lock_seconds",

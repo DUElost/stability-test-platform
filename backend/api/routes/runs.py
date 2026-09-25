@@ -164,7 +164,7 @@ def get_cached_run_report(
     """Return cached report if post-processed, otherwise compute live.
 
     #1082 裁决语义：缓存 = 「该 Job 完成时刻」的报告快照；PlanRun 终态时由
-    post_completion.refresh_report_cache_for_plan_run 批量重算刷新一次——此后
+    plan_run_finalization.refresh_report_cache_for_plan_run 批量重算刷新一次——此后
     快照即最终结果。快照生成时刻经响应体 ``cached_at`` 暴露（= post_processed_at），
     UI 据此标注「截至 xx 时刻」；需要最新口径的调用方走 /runs/{id}/report。
     """

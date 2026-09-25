@@ -583,7 +583,7 @@ def test_abort_all_terminal_running_run_is_not_finalized_as_success(
     assert sample_plan_run.status == PlanRunStatus.RUNNING.value
 
     monkeypatch.setattr(
-        "backend.services.plan_run_aggregation._notify_plan_run_terminal", lambda *a, **k: None,
+        "backend.services.plan_run_finalization.notify_plan_run_terminal", lambda *a, **k: None,
     )
     monkeypatch.setattr(
         "backend.services.plan_run_abort.should_trigger_dedup", lambda *a, **k: False,

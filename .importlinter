@@ -163,7 +163,6 @@ ancestors =
     backend.services
 unmatched_ignore_imports_alerting = error
 ignore_imports =
-    backend.services.plan_run_aggregation -> backend.services.post_completion
     backend.services.project_registry -> backend.services.project_mapping
     backend.services.report_service -> backend.services.log_observation
     backend.services.ai_assistant.tools -> backend.services.ai_assistant.dispatch

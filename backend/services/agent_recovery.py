@@ -32,7 +32,7 @@ from backend.services.plan_dispatcher_core import (
     apply_dispatch_host_watcher_admin_state_to_policy,
     extract_dispatch_host_watcher_admin_states,
 )
-from backend.services.plan_run_abort import abort_pending_job_ids
+from backend.services.plan_run_context import abort_pending_job_ids
 from backend.services.state_machine import InvalidTransitionError, JobStateMachine
 
 logger = logging.getLogger(__name__)

@@ -33,7 +33,7 @@ import time
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 
-from typing import Iterable, Optional
+from typing import Optional
 
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
@@ -51,6 +51,9 @@ from backend.models.plan_run import PlanRun, PlanRunHost
 from backend.services.plan_run_aggregation import (
     apply_plan_run_aggregation,
     apply_plan_run_aggregation_from_counters,
+)
+from backend.services.plan_run_finalization import (
+    announce_parent_terminal,
     notify_plan_run_terminal,
 )
 from backend.services.dedup_scan import should_trigger_dedup, enqueue_dedup_terminal_sync
@@ -156,7 +159,12 @@ def _bulk_abort_pending_jobs(
     )
     total = int(pr.total_job_count or 0)
     if total > 0:
-        apply_plan_run_aggregation_from_counters(pr, db=db)
+        applied = apply_plan_run_aggregation_from_counters(pr, db=db)
+        if applied:
+            # #3299：聚合器已收口为纯计算+落库，终态副作用（RUN_* 通知 +
+            # #1082 报告缓存刷新）由编排者反应；此处不 commit、不触发链
+            # （abort 终态恒 FAILED，链不可续），dedup 在 abort 末尾自理。
+            announce_parent_terminal(pr)
     return aborted_ids
 
 
@@ -241,72 +249,21 @@ def _reload_run_context(db: Session, pr: PlanRun) -> None:
     db.expire(pr, ["run_context"])
 
 
-def run_abort_pending(run_context: object) -> bool:
-    """**run 主体**是否处于 abort 在窗（ADR-0043 主体语义，消费侧共用）。
-
-    run 级 abort 才写 run 级时钟（``abort_requested.at``）；host 级 abort 只维护名单
-    （``requested_job_ids``）与 ``abort_requested_hosts[host].at``。此前消费侧一律按
-    「``run_context`` 里有 ``abort_requested`` 键」判定——于是**一台主机的 host 级
-    abort 会让整个 run（含从未被请求的旁主机）看起来都在 abort 中**：热更新门禁对旁
-    主机永久 409，reaper 又按新语义永远不会回收那些 job（#2270）。
-    """
-    ctx = run_context if isinstance(run_context, dict) else {}
-    abort = ctx.get("abort_requested")
-    return bool(isinstance(abort, dict) and abort.get("at"))
-
-
-def abort_pending_job_ids(
-    run_context: object,
-    jobs: Iterable[tuple[int, str | None]],
-) -> set[int]:
-    """这些 job 里哪些被**在窗**的 abort 请求覆盖（主体感知，供消费侧共用）。
-
-    - run 主体时钟存在 → 覆盖名单内（名单缺失/为空按历史兼容 = 全部）的 job；
-    - host 主体时钟存在 → 覆盖该 host 的 job；
-    - 两个时钟都没有（键在但无时钟）→ **不覆盖任何 job**：这正是旧判据造成「旁主机
-      永久待中止」的形态。
-
-    与 ``device_lease_reconciler`` 的取时钟规则同源（那里要给时间戳取最早者，这里只
-    回答「在不在窗内」）。
-    """
-    ctx = run_context if isinstance(run_context, dict) else {}
-    abort = ctx.get("abort_requested")
-    abort = abort if isinstance(abort, dict) else {}
-    run_clock = bool(abort.get("at"))
-    requested_raw = abort.get("requested_job_ids")
-    requested: set[int] = set()
-    if isinstance(requested_raw, list):
-        for value in requested_raw:
-            try:
-                requested.add(int(value))
-            except (TypeError, ValueError):
-                continue
-    hosts = ctx.get("abort_requested_hosts")
-    hosts = hosts if isinstance(hosts, dict) else {}
-
-    pending: set[int] = set()
-    for job_id, host_id in jobs:
-        if run_clock and (not requested or job_id in requested):
-            pending.add(job_id)
-            continue
-        clock = hosts.get(host_id) if host_id is not None else None
-        if clock is None and host_id is not None:
-            clock = hosts.get(str(host_id))
-        if isinstance(clock, dict) and clock.get("at"):
-            pending.add(job_id)
-    return pending
+# run_abort_pending / abort_pending_job_ids 两判据自 #3299 起住在
+# backend.services.plan_run_context（断 plan_dispatcher_sync → plan_run_abort 环边）；
+# 写入侧仍在下方 host 级分支，判据消费方直接从 plan_run_context import。
 
 
 def schedule_emit(*args, **kwargs):
     """模块级 emit 缝（#2372）：**函数体内**惰性 import callback。
 
-    为什么是这个形状：本模块会被 agent collect 的 clean-env 路径 import
-    （#2270 的 `plan_dispatcher_sync → run_abort_pending`），import 期拉起
-    `socketio_server` 会把 `JWT_SECRET_KEY` 带进来、撞红 agent collect（#2350/#739）；
-    但把 import 挪进调用点函数体后，**模块属性**消失 → 控制面用例的
-    `patch("backend.services.plan_run_abort.schedule_emit")` 全部 AttributeError
-    （11 条确定性红）。两者兼顾的形态是：模块级函数在、副作用不在——patch 的是这个
-    函数对象，真正取 `socketio_server.schedule_emit` 发生在它被调用的那一刻。
+    为什么是这个形状：本模块历史上被 agent collect 的 clean-env 路径 import
+    （#2270 的 `plan_dispatcher_sync → run_abort_pending`，#3299 起该边已断、判据
+    住在 `plan_run_context`），但 `tests/test_plan_run_abort_import_contract.py` 仍
+    钉住两条并存约束：clean-env 可 import（import 期不得拉起 `socketio_server`，
+    #2350/#739 的 `JWT_SECRET_KEY` 教训），且 `schedule_emit` /
+    `schedule_agent_control_fanout` 保持**模块属性**——控制面用例 patch 的是这两个
+    函数对象，真正取 `socketio_server` 发生在被调用的那一刻。
     """
     from backend.realtime.socketio_server import schedule_emit as _emit
 
@@ -732,7 +689,8 @@ def abort_plan_run(
         if has_active is None and pr.status not in _TERMINAL_PLAN_RUN_STATUSES:
             total = int(pr.total_job_count or 0)
             if total > 0:
-                apply_plan_run_aggregation_from_counters(pr, db=db)
+                if apply_plan_run_aggregation_from_counters(pr, db=db):
+                    announce_parent_terminal(pr)
             else:
                 # legacy total_job_count==0：才回退全量扫描。
                 all_jobs = (
@@ -741,7 +699,8 @@ def abort_plan_run(
                     .all()
                 )
                 if all_jobs:
-                    apply_plan_run_aggregation(pr, all_jobs, db=db)
+                    if apply_plan_run_aggregation(pr, all_jobs, db=db):
+                        announce_parent_terminal(pr)
                 elif host_id is None:
                     PlanRunStateMachine.transition(
                         pr, PlanRunStatus.FAILED, reason=reason,
