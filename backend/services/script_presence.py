@@ -317,16 +317,20 @@ def classify_host_presence(
     return out
 
 
-def derive_packages_mode(verify_entries: list[dict], reachable_empty: bool) -> Optional[str]:
+def derive_packages_mode(verify_entries: list[dict], sha_keys: set[tuple[str, str]], reachable_empty: bool) -> Optional[str]:
     """从 verify ack 推导 host 级包模式（#3222）。
 
-    只统计**带包身份**（expected 行含 package_sha256）的逐条结果：
-    - 无任何带包身份结果 / RPC 不可用 → ``None``（unknown——未知不是绿）；
-    - ack 行 ``package_active`` 全 True → ``package``；全 False → ``tree``；否则 ``mixed``。
+    ``sha_keys`` = 本轮 expected 里**带包身份**（含 ``package_sha256``）的 (name, version) 集——
+    agent 的 ack 行不回传该字段（真实形态见 ``script_verifier.verify_scripts_payload``：
+    name/version/expected_sha/actual_sha/ok/exists/error/package_active），判据必须由
+    控制面 expected 侧提供。只统计交集：
+    - 交集为空 / RPC 不可用 → ``None``（unknown——未知不是绿）；
+    - ack ``package_active`` 全 True → ``package``；全 False → ``tree``；否则 ``mixed``。
     """
     if reachable_empty:
         return None
-    judged = [bool(e.get("package_active")) for e in (verify_entries or []) if e.get("package_sha256")]
+    judged = [bool(e.get("package_active")) for e in (verify_entries or [])
+              if (str(e.get("name")), str(e.get("version"))) in sha_keys]
     if not judged:
         return None
     if all(judged):
@@ -494,7 +498,9 @@ async def run_sweep(
                 "state": state, "detail": detail,
                 "checked_at": now, "sweep_id": sweep_id,
             })
-        modes[hid] = derive_packages_mode(entries, reachable_empty=not reachable)
+        sha_keys = {(str(m["name"]), str(m["version"])) for m in manifests
+                    if m.get("package_sha256") and (str(m["name"]), str(m["version"])) in reachable}
+        modes[hid] = derive_packages_mode(entries, sha_keys, reachable_empty=not reachable)
 
     await asyncio.to_thread(_persist_modes, db_factory, modes)
     written = await asyncio.to_thread(_persist, db_factory, rows)
