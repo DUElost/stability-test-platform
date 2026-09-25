@@ -54,6 +54,11 @@ Python 3.11 下重新生成对应 lock。日常重生成沿用已有 pin；只�
 - Ruff 规则取向见 `ruff.toml`，实际 CI 参数见 workflow；
 - 前端脚本以 `frontend/package.json` 为准；
 - 本地门禁入口：`python scripts/run_gates.py check:quick|pr|full`；
+- **新增门禁要写明它合并或替代了哪一条**（门禁预算，2026-09-25）：门禁多数是针对单次事故的
+  正确回应，但总量只增不减时，治理面本身会变成没人能完整掌握的负担。新增门禁的 PR 描述回答
+  「这条与哪条既有门禁同类、能否并入」；能用结构性规则覆盖的（如 `.importlinter` 的一条合约）
+  优先于新写一个扫描脚本。每月结合 `tools/dev/structure_digest.py` 第 4 节看一次新增门禁，
+  以及各门禁近 30 天是否拦截过真实问题，从未拦截的考虑合并或退役；
 - **每个本地门禁都要回答「CI 对应物在哪」**（治理面 S5x，`GATE_TO_CI_ANCHOR`）：锚点登记
   `("ci.yml", "<step name>")`，step name 太通用时 pin 到 job——`("ci.yml", "<job>", "<step name>")`；
   有意仅本地（数据源只在本机）登记 `None` 并写理由。判据匹配的是**某 job 里真实的 step name**，
