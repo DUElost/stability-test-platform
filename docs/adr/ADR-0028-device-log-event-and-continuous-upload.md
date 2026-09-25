@@ -7,7 +7,7 @@
 - 决策者：平台研发组
 - 标签：设备日志, DeviceLogEvent, PlanRun FAILED 上送, HddSpill 修复, PlatformCollector, 存储收敛
 - 归属域：semantic-ownership dle-record
-- 版本记录：2026-09-25：同步 ADR-0053 v0.2 Accepted 的内容引用/发布/状态边界；DLE 唯一权威与过滤模型保留。
+- 版本记录：2026-09-25：同步 ADR-0053 v0.2 Accepted 的内容引用/发布/状态边界；DLE 唯一权威与过滤模型保留。同日（owner 授权 Claude 裁决）：阶段 4「PRUNE_LOCAL fleet 决策」裁定为**不在 fleet 开启**，见「分阶段落地」后的裁决记录。
 - 背景分析：[`DEVICE_LOG_FLOW_REVIEW_2026-08-09.md`](../reviews/DEVICE_LOG_FLOW_REVIEW_2026-08-09.md)（v3.0）
 
 ## 背景
@@ -210,7 +210,25 @@ extract 双根遍历：
 | 1（止血） | P0-1（extract 双根）+ P0-3（merge since）+ P2-6（文档同步）+ P2-2a（handler 顺序） | 3–5 天 | P2-6 已落地（`resolve_shared_storage_root()`）；其余按排期 |
 | 2（可观测） | API 暴露 `run_context.archive` + 前端 N/M host | 1–2 天 | 待排期 |
 | **3（重构）** | **方案 A 实施**：D1（DLE 表）+ D2（FAILED 触发 + 恢复 upload_task）+ D3（状态追踪）+ D4–D9 | ~2 周 | **✅ 生产生效（2026-08-13）** |
-| 4（平台入口+运维） | UNISOC/QCOM stub + 存储切换 SOP + PRUNE_LOCAL fleet 决策 | 按观察窗 | UNISOC/QCOM stub 已锁定（#220）；PRUNE_LOCAL 灰机验证通过（#217），fleet 待决策 |
+| 4（平台入口+运维） | UNISOC/QCOM stub + 存储切换 SOP + PRUNE_LOCAL fleet 决策 | 按观察窗 | UNISOC/QCOM stub 已锁定（#220）；PRUNE_LOCAL 灰机验证通过（#217）；**fleet 决策已裁定：不开启**（2026-09-25，见下方裁决记录） |
+
+### 裁决记录：`STP_EVENT_UPLOADER_PRUNE_LOCAL` 不在 fleet 开启（2026-09-25，owner 授权 Claude 裁决）
+
+阶段 4 的待决项关闭，结论是**不开启**，开关保持「默认 0、禁止 fleet 同步」（#217 不变量不变）：
+
+1. **它要解决的问题已被别的机制兜住。** Agent HDD 的磁盘安全由 HddSpill 负责：≥95% 时上送校验后
+   强制删除本地（`prune_after_upload`，不受该开关约束，#382）。PRUNE_LOCAL 只是把「每次上送后立即删」
+   推广为常态，而设计文档已明令不得用它冒充溢出规则（`docs/design/2026-adr-0025-log-flow-sequence.md` §4.2 MUST NOT）。
+2. **它会削掉下游仍依赖的本地证据。** scan 按 serial/date stamp 从本地 HDD 建扫描树（ADR-0053 §1.1-5），
+   baseline 复用也以本地/受控工作区为输入（ADR-0053 D4）；常态 prune 让这些路径更频繁地回源或缺证据。
+3. **它不缓解真正稀缺的资源。** 容量压力在中心盘（ADR-0053 §1.2：916 GB、7 天 46%→88%），
+   PRUNE_LOCAL 只减 Agent 本地、不减中心，还把中心变成唯一副本（#217 备忘「风险」行）。
+4. **本地 prune 的终态已由 ADR-0053 接管。** D3 规定「回执确认后才允许本地 prune」，是发布协议的一环；
+   本地保留期数值归 #3230 G4。**终态出口**：ADR-0053 Phase B 切换上送/回收路径时，该 env 开关随之退役或并入发布协议，
+   届时同步 `docs/development/environment-variables.md` 与 #217 备忘。
+
+运维后续（登记，不随本裁决执行）：灰机 `192-0-2-143` 的 `PRUNE_LOCAL=1` 已完成 #217 验证使命，
+按 `docs/operations/adr-0028-prune-local-and-spill-gray.md` 第 7 步设回 `0` + `reload_config`，消除单机特例。
 
 ### 方案 A 生产实施记录（2026-08-13）
 

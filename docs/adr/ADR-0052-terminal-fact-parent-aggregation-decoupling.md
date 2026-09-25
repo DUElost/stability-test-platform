@@ -1,6 +1,6 @@
 # ADR-0052：终态事实与父 Run 聚合解耦（Job 事务不写父级热行）
 
-- 状态：**Accepted** v1.0（2026-09-25 裁决：**D1–D5 接受并开始实现；D6 延后**，见 §9）
+- 状态：**Accepted** v1.1（2026-09-25 裁决：**D1–D5 接受并开始实现；D6 不采纳（带复议触发器）；§7 开放问题定值**，见 §9）
 - 优先级：P1（#3243 校准显示：被**接纳**的 `/complete` p99≈1.1s，主项是父行串行段；P0（ADR-0047）治的是容量与过载语义，没拆这条热点）
 - 目标里程碑：M7
 - 日期：2026-09-24
@@ -14,7 +14,7 @@
   / [ADR-0047](./ADR-0047-db-pool-and-connection-capacity.md)（P0 已裁决并落地：预算门禁 / 503 过载语义 / 终态舱壁）
   / [ADR-0012](./ADR-0012-post-completion-pipeline-jira-automation.md)（post_completion 契约；D6 是独立 Decision；其历史措辞差异见 §3 末）
   / [#3243 校准 Note](../notes/bug-fix/2026-09-24-abort-backflow-scale-3243.md)（本稿的量化依据）
-- 版本记录：v1.0（2026-09-25）**裁决**：D1–D5 Accepted、D6 延后（带复议触发器）；§5 拆为「决策门槛（已由 plan_run 556 真机复跑满足）」与「实施验收门槛（原 6 条，实现后复跑判定）」，见 §9；同版勘误：§5 列表 ② 正文由「~1.1s」同步为真机 **2.467s**（与 §5 注及 §9 一致，无决策变化）。v0.1（2026-09-24）首次提出，D1–D6 待裁决；D6（post_completion 隔离）被显式设计为**可单独延后**
+- 版本记录：v1.1（2026-09-25，owner 授权 Claude 裁决）：D6 由「延后」改判为「不采纳，复议触发器保留」；§7 四项开放问题定值（§7 / §9 v1.1 行），不改 D1–D5 不变量。v1.0（2026-09-25）**裁决**：D1–D5 Accepted、D6 延后（带复议触发器）；§5 拆为「决策门槛（已由 plan_run 556 真机复跑满足）」与「实施验收门槛（原 6 条，实现后复跑判定）」，见 §9；同版勘误：§5 列表 ② 正文由「~1.1s」同步为真机 **2.467s**（与 §5 注及 §9 一致，无决策变化）。v0.1（2026-09-24）首次提出，D1–D6 待裁决；D6（post_completion 隔离）被显式设计为**可单独延后**
 
 ## 1. 背景
 
@@ -84,7 +84,7 @@
 - **读兼容**：abort 入口的初始空数组与既有合并逻辑保留；历史 JSON **不动**；确认 UI / 审计 / reaper 完全无依赖后再议历史数据清理（另单，不在实施里顺手做）。
 - 本项是纯删除且收益明确（ABORTED 波里再省一次父行读改写），风险面已被「无消费方」封住（§1.1）。
 
-### D6 post_completion 隔离（独立 Decision，允许单独延后）
+### D6 post_completion 隔离（独立 Decision，允许单独延后；**v1.1 裁决：不采纳，复议触发器见 §9**）
 
 - `post_completion_task` 走**独立队列 + 独立 Worker**（首轮并发 ≈4），不再与 heartbeat / lease / 终态主链共用同一 worker 槽位。
 - SAQ 0.26.4 的 `priority` **仅 postgres broker 可用**（`.venv/lib/python3.13/site-packages/saq/job.py:113`），本平台是 Redis ⇒ 只能落成独立队列 / Worker，不能靠优先级。
@@ -146,17 +146,25 @@ ADR-0026 §6（`docs/adr/ADR-0026-plan-execution-scaling.md:232`）的原文分�
 
 - **观测面**：`plan_run` 行锁等待、pending 深度、聚合批次次数/耗时、`counter drift`、终态收敛时延。
 
-## 7. 开放问题（实施前定，均不改变本稿不变量）
+## 7. 开放问题定值（v1.1，2026-09-25 裁决；均不改变本稿不变量）
 
-1. 批次窗口与批量上限默认值（「有界」的界——压测校准后填数）。
-2. pending 行「消费即删」vs「保留视界」（重建 / 审计需求）。
-3. D6 独立 Worker 的形态（进程内第二 worker vs 独立进程）。
-4. pending 表的命名与迁移（单数表名，随实施 PR + alembic 落地）。
+1. **批次窗口与上限**：**不设固定攒批窗口**（等待 = 0）。合并依赖两件事：唤醒按 `agg:{plan_run_id}` 去重，
+   以及聚合者**排空循环**——提交一批后在同一任务内重查该 Run 的 pending 行，直到为空才退出。
+   排空循环是必需项：SAQ 按 key 去重时，聚合任务运行期间到达的唤醒可能被合并掉，
+   若聚合者只处理一批就退出，余下 pending 要等 300s 修复扫描，破坏 §5-③ 的 120s 收敛。
+   单批上限初值 **500 行**（覆盖一次 ~490 Job 的中止波，使单波通常一批收口）；实施压测只可在本条结构内调数，
+   调数不需修订本 ADR，但须在实施 PR 与 #3244 记录依据。
+2. **pending 行生命周期**：**消费即删**，删除与计数重算同事务（D3）。pending 是工作队列不是事实；
+   事实源是 Job 表（D3「不引入第二计数源」），保留视界会形成需要自己保留期与清理的第二份记录。
+   重建与审计走 Job 表 + `recount_plan_run_counters` / reconciler。
+3. **D6 独立 Worker 形态**：随 D6 不采纳而不定值；复议触发时在 D6 重开的同一修订内定。
+4. **pending 表命名与迁移**：表名 **`plan_run_pending_aggregation`**（单数），列至少 `plan_run_id` / `job_id` /
+   `created_at`，`(plan_run_id, job_id)` 唯一；随实施 PR 以 alembic 单 head 迁移落地，ORM ↔ alembic 同批。
 
 ## 8. 实施衔接
 
 - 终态后副作用的编排者是 `backend/services/plan_run_finalization.py`（[#3299](https://github.com/DUElost/stability-test-platform/issues/3299) 选定方案）。**不改事务边界的结构重构已由 [#3307](https://github.com/DUElost/stability-test-platform/pull/3307) 完成**：chain / dedup / 通知 / 报告刷新已收拢到该模块，五模块环已解开（C5 基线 5 → 4）。D1–D4 直接在该模块内实现；`apply_*` 调用方以 applied 为条件经 `finalize_parent_run_*` 或 `announce_parent_terminal` 编排副作用，实施时保持这一约束；
-- §7 开放问题在实施 PR 内定值，不改本稿不变量；
+- §7 开放问题已于 v1.1 定值；实施 PR 只可按 §7-1 在结构内调数；
 - ADR-0026 §6 已同步标注被本稿替代的两处（见 §3）。
 
 ## 9. 裁决记录（2026-09-25，owner 授权 Claude 裁决）
@@ -166,5 +174,7 @@ ADR-0026 §6（`docs/adr/ADR-0026-plan-execution-scaling.md:232`）的原文分�
 | D1–D5 | **Accepted，开始实现** | 决策门槛已由真机数据满足：[#3244 plan_run 556 复跑](https://github.com/DUElost/stability-test-platform/issues/3244#issuecomment-5830027123)（465 作业 / 37 host，机队 48/48 已分发 #3251）`/complete` p99 **2.467s**，比模拟的 ~1.1s 更差，且舱壁维持 16/500ms 未放宽，因此不是回退，是公平基线；同轮 UI / 心跳面全部 < 0.5s、53300 = 0、500 = 0、池峰 async 4 / sync 11、28.3s 收敛——P0 之后剩下的尾部只剩父行串行段，与 §1.2 判断一致。数据的方向与模拟一致，不确定的只是幅度；再采 1–2 次只会收窄幅度，不会改变「做不做」 |
 | §5 | **拆为两层**（见 §5 v1.0 注） | 原文「数据回来前不转 Accepted、不开始实现」与 ①②（只有实现后才可测）互锁；拆开后 6 条全部保留为实施验收门槛，② 的基线改取真机 2.467s |
 | D6 | **延后**，不随本次接受 | 真机同轮 `post_completion` start = done = 456、`saq_queue_depth` 0、`enqueue_failed` +0：共用 worker 槽位在本轮没有表现为瓶颈，D6 暂无证据支撑。**复议触发器**：终态波次中 `saq_queue_depth` 持续 > 0 超过 60s，或心跳 / 续租任务因 worker 槽位被 post_completion 占满而出现延迟 |
-| 实施前置 | 无额外前置 | 实施 PR 须附：§6 回滚演练记录、§7 开放问题定值；合入并部署后按 §5 六条同口径真机中止复跑，结果贴 #3244 |
+| 实施前置 | 无额外前置 | 实施 PR 须附：§6 回滚演练记录、§7 定值的实现对照（v1.1 已定值）；合入并部署后按 §5 六条同口径真机中止复跑，结果贴 #3244 |
 | 未采纳 | #3244 评论中「保持 Proposed 并排期实现」 | 与 §5「不开始实现」及 AGENTS.md「改变现行执行语义前必须先由 ADR 正式裁决」冲突：开始实现即须先 Accepted |
+| **v1.1** D6 | **不采纳当前形态**（由「延后」改判；复议触发器原样保留） | 「延后」让 D6 以悬置状态常驻待裁清单，但 v1.0 同轮真机数据给出的是否定证据（`post_completion` start = done = 456、`saq_queue_depth` 0、`enqueue_failed` +0），不是证据不足；独立队列 + Worker 还会增加一份进程/槽位预算（ADR-0047 D1 的连接预算随之要重算）。**复议触发器**（不变）：终态波次中 `saq_queue_depth` 持续 > 0 超过 60s，或心跳 / 续租任务因 worker 槽位被 post_completion 占满而延迟。触发即以本 ADR 修订重开，同一修订内定 Worker 形态（§7-3） |
+| **v1.1** §7 | **四项定值**（见 §7） | 窗口 = 0 + 排空循环、单批初值 500；消费即删；D6 形态随 D6 不定值；表名 `plan_run_pending_aggregation`。前两项由 D3「Job 表是唯一事实源」与 §5-③ 120s 收敛直接推出，不依赖压测才能决定结构；压测只校准数字 |
