@@ -423,23 +423,11 @@ async def complete_agent_job(
     if payload.watcher_summary:
         apply_watcher_summary(job, payload.watcher_summary)
 
-    if target == JobStatus.ABORTED:
-        plan_run = (await db.execute(
-            select(PlanRun)
-            .where(PlanRun.id == job.plan_run_id)
-            .with_for_update(key_share=True)
-        )).scalars().first()
-        if plan_run is not None and isinstance(plan_run.run_context, dict):
-            run_context = dict(plan_run.run_context)
-            abort_request = dict(run_context.get("abort_requested") or {})
-            acknowledged = list(
-                abort_request.get("acknowledged_job_ids") or []
-            )
-            if job.id not in acknowledged:
-                acknowledged.append(job.id)
-            abort_request["acknowledged_job_ids"] = acknowledged
-            run_context["abort_requested"] = abort_request
-            plan_run.run_context = run_context
+    # ADR-0052 D5（#3244）：原「ABORTED 分支逐 Job 读改写
+    # run_context.abort_requested.acknowledged_job_ids」已删除——ACK 语义由
+    # Job 终态推导（全仓无消费方；abort 入口的初始空数组与保留合并仍在
+    # plan_run_abort，历史 JSON 不动）。R523 对照：ABORTED 波里每条终态曾
+    # 在此额外排队一次 plan_run 行锁 + 数组重写。
 
     if job.status in _TERMINAL:
         # M0/Task2: 仅在首次终态桥接 reconciler 计数,避免 outbox 重试重复计数。

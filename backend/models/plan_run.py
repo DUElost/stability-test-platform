@@ -83,6 +83,13 @@ class PlanRun(Base):
     failed_job_count    = Column(Integer, nullable=False, default=0, server_default="0")
     aborted_job_count   = Column(Integer, nullable=False, default=0, server_default="0")
 
+    # ADR-0052 D4: duplicate-execution protection for parent-terminal side
+    # effects (通知 / chain / dedup / 报告刷新). Written 'pending' in the SAME
+    # transaction that finalizes the parent (``_finalize_plan_run``); the
+    # orchestration flips it to 'done' after the side-effect block completes.
+    # NULL = never finalized. Recovery replays the block only while 'pending'.
+    terminal_effects_state = Column(String(16))
+
     plan = relationship("Plan", foreign_keys=[plan_id],
                         back_populates="runs")
     # ADR-0029：归属项目（project_id 快照语义——Plan 改归属不影响历史 Run）。
@@ -120,6 +127,13 @@ class PlanRun(Base):
             "enqueued_at",
             postgresql_ops={"priority": "DESC", "enqueued_at": "ASC"},
             postgresql_where=text("status = 'QUEUED'"),
+        ),
+        # ADR-0052 D4 补偿扫描只查 pending 行（终态已提交、副作用未收尾），
+        # 其余 run 恒为 done/NULL——部分索引 keeps 它近乎零成本。
+        Index(
+            "idx_plan_run_terminal_effects_pending",
+            "id",
+            postgresql_where=text("terminal_effects_state = 'pending'"),
         ),
     )
 
@@ -208,4 +222,38 @@ class PlanRunTargetDevice(Base):
         Index("idx_prtd_plan_run_host", "plan_run_host_id"),
         # ADR-0026 P2-3: ordered target-device scan at admission (sort_order).
         Index("idx_prtd_plan_run_sort", "plan_run_id", "sort_order"),
+    )
+
+
+class PlanRunPendingAggregation(Base):
+    """ADR-0052 D2 — durable aggregation trigger (insert-only pending marker).
+
+    Job 终态事务**只插不改**本表的一行（``plan_run_id`` + ``job_id``，复合主键
+    兼去重键——outbox 重放同终态时 ON CONFLICT DO NOTHING 幂等）；父 Run 热行
+    不进入 Job 终态事务。聚合者按 ``plan_run_id`` 合并消费：读 Job 事实重算
+    计数 + **同一事务**删除已消费行（§7-2 消费即删——pending 是工作队列不是事实，
+    事实源是 ``job_instance``）。提交后 SAQ 唤醒（``key=agg:{plan_run_id}`` 去重）
+    只是传输；唤醒丢失由 counter_reconciler 扫描本表重放。
+
+    FK 均 ``ondelete=CASCADE``：retention 直接删 PlanRun 行时标记随行消失，
+    不留孤儿触发。
+    """
+    __tablename__ = "plan_run_pending_aggregation"
+
+    plan_run_id = Column(
+        Integer, ForeignKey("plan_run.id", ondelete="CASCADE"), primary_key=True
+    )
+    # 无 FK：与 PlanRunTargetDevice 同一理由——job 行由其它表引用且删除路径独立，
+    # 标记的语义只到「该 job_id 曾落终态待聚合」，聚合重算读的是 job 事实。
+    job_id = Column(Integer, primary_key=True)
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+
+    __table_args__ = (
+        # 恢复扫描按消费顺序取（最老先聚合）。
+        Index("idx_prpa_run_created", "plan_run_id", "created_at"),
     )

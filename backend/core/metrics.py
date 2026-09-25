@@ -435,6 +435,22 @@ plan_run_counter_drift_total = Counter(
     ['mode'],  # mode: total | terminal | completed | failed | aborted
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
+# ADR-0052 D4（#3244）恢复路径观测。pending_depth 由 counter_reconciler sweep
+# 每轮 set（非实时——实时深度看聚合任务日志 plan_run_aggregated）；持续 > 0
+# 说明唤醒入队失败或 SAQ 停摆，正常应为 0 或短暂尖峰。replayed_total 只在
+# 修复路径触发：pending_drain=唤醒丢失重放，terminal_effects=终态副作用块
+# 崩溃窗口重放。实施验收（§5-③ 120s 收敛）后两者应保持 0。
+plan_run_pending_aggregation_depth = Gauge(
+    'stability_plan_run_pending_aggregation_depth',
+    'plan_run_pending_aggregation backlog rows (ADR-0052 recovery sweep gauge)',
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+plan_run_aggregation_replayed_total = Counter(
+    'stability_plan_run_aggregation_replayed_total',
+    'ADR-0052 recovery replays by the counter_reconciler sweep',
+    ['kind'],  # kind: pending_drain | terminal_effects
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
 # #703：abort 持锁时长 + DB 连接池占用（QueuePool 耗尽观测）
 plan_run_abort_lock_seconds = Histogram(
     'stability_plan_run_abort_lock_seconds',

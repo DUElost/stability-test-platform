@@ -55,6 +55,14 @@ _ADJUDICATED_SAFE: dict[tuple[str, str], str] = {
         "等锁时手里没有锁，与任何取锁顺序都不成环。"
         "（#2974 裁定，2026-09-21；若该 helper 改成锁多行后提交，本登记即失效，必须重裁）"
     ),
+    ("backend/services/plan_run_finalization.py", "range(AGGREGATION_DRAIN_MAX_ROUNDS)"): (
+        "排空轮次不是取锁集合：迭代对象是**轮数上界**（ADR-0052 §7-1 排空循环），"
+        "每轮调用 `_aggregation_round_sync` 只对**同一个** plan_run_id 开独立事务："
+        "锁 1 行父行（FOR NO KEY UPDATE）→ PRH 单语句 `order_by(host_id)` + FOR NO KEY "
+        "UPDATE 定序 → 当场 commit，跨轮不持锁。轮次迭代不引入「集合无全序」问题；"
+        "事务内全序（plan_run → PRH host 升序）与 abort/heartbeat 对侧一致。"
+        "若 helper 改为一次锁多 Run 或跨轮持锁，本登记失效必须重裁。（#3244 裁定，2026-09-26）"
+    ),
 }
 
 

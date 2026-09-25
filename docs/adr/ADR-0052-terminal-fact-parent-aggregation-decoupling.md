@@ -163,6 +163,14 @@ ADR-0026 §6（`docs/adr/ADR-0026-plan-execution-scaling.md:232`）的原文分�
 
 ## 8. 实施衔接
 
+- **实施状态（2026-09-26，#3244 实施 PR）**：D1–D5 已实现——pending 表
+  `plan_run_pending_aggregation`（迁移 `d4e8f2a7c9b1`）、Job 终态事务只写标记
+  （`job_terminalization`）、按 Run 合并聚合 + 排空循环
+  （`plan_run_finalization.drain_plan_run_aggregation_sync`，SAQ 任务
+  `aggregate_plan_run_task`，唤醒 key=`agg:{plan_run_id}`）、D4 标记列
+  `plan_run.terminal_effects_state` + reconciler 双通道恢复（pending 积压重放 /
+  副作用块重放）、ACK 逐 Job 写删除。§7-1 数字未调（批 500 / 帽 50 保持初值）；
+  §5 六条实施验收待部署后按 runbook Step 4 同口径复跑，结果贴 #3244。
 - 终态后副作用的编排者是 `backend/services/plan_run_finalization.py`（[#3299](https://github.com/DUElost/stability-test-platform/issues/3299) 选定方案）。**不改事务边界的结构重构已由 [#3307](https://github.com/DUElost/stability-test-platform/pull/3307) 完成**：chain / dedup / 通知 / 报告刷新已收拢到该模块，五模块环已解开（C5 基线 5 → 4）。D1–D4 直接在该模块内实现；`apply_*` 调用方以 applied 为条件经 `finalize_parent_run_*` 或 `announce_parent_terminal` 编排副作用，实施时保持这一约束；
 - §7 开放问题已于 v1.1 定值；实施 PR 只可按 §7-1 在结构内调数；
 - ADR-0026 §6 已同步标注被本稿替代的两处（见 §3）。

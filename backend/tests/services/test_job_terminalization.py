@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 
 from backend.models.enums import JobStatus, PlanRunStatus
@@ -85,72 +85,101 @@ def test_aggregation_from_counters_abort_override():
         assert notify.call_args[0][0] == "RUN_FAILED"
 
 
-def test_on_job_terminal_sync_bumps_and_aggregates():
+def test_on_job_terminal_sync_writes_pending_and_defers_parent(db_session, sample_device, monkeypatch):
+    """ADR-0052 D1/D2 新形状：终态事务只写 pending 标记 + 自管理提交。
+
+    非 TESTING 语境下唤醒走 enqueue（此处以 mock 记录入队形状）；父 Run 计数
+    **不得**在终态事务内变化（热行移出）。
+    """
+    from datetime import datetime, timezone
+
+    from sqlalchemy import select
+
+    from backend.models.job import JobInstance
+    from backend.models.plan import Plan
+    from backend.models.plan_run import PlanRun, PlanRunPendingAggregation
     from backend.services.job_terminalization import on_job_terminal_sync
 
-    run = _run(total_job_count=2, id=10, plan_id=1)
-    job1 = SimpleNamespace(
-        id=1, plan_run_id=10, host_id=None, status=JobStatus.COMPLETED.value,
+    monkeypatch.delenv("TESTING", raising=False)
+    enqueued: list[dict] = []
+    monkeypatch.setattr(
+        "backend.core.task_queue.enqueue_sync",
+        lambda name, **kwargs: enqueued.append({"name": name, **kwargs}) or True,
     )
-    job2 = SimpleNamespace(
-        id=2, plan_run_id=10, host_id=None, status=JobStatus.COMPLETED.value,
+
+    now = datetime.now(timezone.utc)
+    plan = Plan(name="pending-marker-plan")
+    db_session.add(plan)
+    db_session.flush()
+    run = PlanRun(
+        plan_id=plan.id,
+        status=PlanRunStatus.RUNNING.value,
+        plan_snapshot={"name": plan.name, "steps": []},
+        run_type="MANUAL",
     )
-    db = MagicMock()
+    db_session.add(run)
+    db_session.flush()
+    job = JobInstance(
+        plan_run_id=run.id, plan_id=plan.id,
+        device_id=sample_device.id, host_id=sample_device.host_id,
+        status=JobStatus.COMPLETED.value,
+        pipeline_def={"lifecycle": {}},
+        started_at=now, ended_at=now, created_at=now, updated_at=now,
+    )
+    db_session.add(job)
+    db_session.flush()
 
-    def _transition(obj, status, reason=None):
-        obj.status = status.value if hasattr(status, "value") else status
+    pending_written, _ = on_job_terminal_sync(job, db_session)
+    assert pending_written is True
 
-    with patch(
-        "backend.services.plan_chain_trigger.trigger_next_plan_sync",
-    ) as trigger, patch(
-        "backend.services.dedup_scan.should_trigger_dedup", return_value=False,
-    ), patch(
-        "backend.services.plan_run_aggregation.PlanRunStateMachine.transition",
-        side_effect=_transition,
-    ), patch(
-        "backend.services.plan_run_aggregation.record_plan_run_terminal",
-    ), patch(
-        "backend.services.notification_service.dispatch_notification_async",
-    ):
-        applied1, _ = on_job_terminal_sync(job1, db, run=run)
-        assert applied1 is False
-        assert run.terminal_job_count == 1
-        assert run.completed_job_count == 1
-        db.commit.assert_not_called()
+    db_session.expire_all()
+    marks = (
+        db_session.execute(
+            select(PlanRunPendingAggregation.job_id).where(
+                PlanRunPendingAggregation.plan_run_id == run.id
+            )
+        )
+    ).scalars().all()
+    assert list(marks) == [job.id]
+    assert int(run.terminal_job_count or 0) == 0
+    assert int(run.completed_job_count or 0) == 0
+    assert len(enqueued) == 1
+    assert enqueued[0]["name"] == "aggregate_plan_run_task"
+    assert enqueued[0]["key"] == f"agg:{run.id}"
+    assert enqueued[0]["plan_run_id"] == run.id
 
-        applied2, status = on_job_terminal_sync(job2, db, run=run)
-        assert applied2 is True
-        assert run.terminal_job_count == 2
-        assert status == PlanRunStatus.SUCCESS.value
-        # #986: parent terminal facts commit before chain trigger
-        db.commit.assert_called_once()
-        trigger.assert_called_once()
+    # outbox 重放同终态：ON CONFLICT DO NOTHING ⇒ 标记不重复（幂等锚点）。
+    on_job_terminal_sync(job, db_session)
+    db_session.expire_all()
+    marks2 = (
+        db_session.execute(
+            select(PlanRunPendingAggregation.job_id).where(
+                PlanRunPendingAggregation.plan_run_id == run.id
+            )
+        )
+    ).scalars().all()
+    assert list(marks2) == [job.id]
 
 
-def test_on_job_terminal_sync_dedup_enqueue_after_commit():
-    """#781/#986: enqueue_dedup 必须在 db.commit() 之后（Redis 不可回滚）。"""
-    from backend.services.job_terminalization import on_job_terminal_sync
+def test_finalize_parent_run_sync_orders_commit_before_dedup():
+    """#781/#986：聚合 applied 后**先提交父终态**再跑 chain/dedup。
+
+    ADR-0052 后该顺序契约的载体是编排者（聚合执行器 applied 分支调用它）；
+    终态事务内已无父聚合，用假会话直接钉 finalize 的顺序。
+    """
+    from unittest.mock import MagicMock
+
+    from backend.services.plan_run_finalization import finalize_parent_run_sync
 
     run = _run(
-        total_job_count=1, id=10, plan_id=1,
-        status=PlanRunStatus.RUNNING.value,
-    )
-    job = SimpleNamespace(
-        id=1, plan_run_id=10, host_id=None, status=JobStatus.COMPLETED.value,
+        id=10, plan_id=1,
+        total_job_count=1, terminal_job_count=1, completed_job_count=1,
+        status=PlanRunStatus.SUCCESS.value,
+        terminal_effects_state="pending",
     )
     db = MagicMock()
     order: list[str] = []
-
-    def _commit():
-        order.append("commit")
-
-    def _enqueue(run_id):
-        order.append("enqueue")
-
-    def _transition(obj, status, reason=None):
-        obj.status = status.value if hasattr(status, "value") else status
-
-    db.commit.side_effect = _commit
+    db.commit.side_effect = lambda: order.append("commit")
 
     with patch(
         "backend.services.plan_chain_trigger.trigger_next_plan_sync",
@@ -158,18 +187,18 @@ def test_on_job_terminal_sync_dedup_enqueue_after_commit():
         "backend.services.dedup_scan.should_trigger_dedup", return_value=True,
     ), patch(
         "backend.services.dedup_scan.enqueue_dedup_terminal_sync",
-        side_effect=_enqueue,
-    ), patch(
-        "backend.services.plan_run_aggregation.PlanRunStateMachine.transition",
-        side_effect=_transition,
-    ), patch(
-        "backend.services.plan_run_aggregation.record_plan_run_terminal",
+        side_effect=lambda _rid: order.append("enqueue"),
     ), patch(
         "backend.services.notification_service.dispatch_notification_async",
     ):
-        applied, _ = on_job_terminal_sync(job, db, run=run)
-        assert applied is True
-        assert order == ["commit", "enqueue"]
+        finalize_parent_run_sync(run, db, applied=True)
+
+    assert order[0] == "commit"
+    assert "enqueue" in order
+    assert order.index("commit") < order.index("enqueue")
+    # ADR-0052 D4：副作用块走完 → 置 done（下一次重复唤醒被此拦住）
+    assert order == ["commit", "enqueue", "commit"]
+    assert run.terminal_effects_state == "done"
 
 
 def test_recount_detects_drift():
@@ -248,8 +277,10 @@ def test_post_flash_failure_yields_partial_success_through_terminalization(
     ])
     db_session.commit()
 
-    applied, status = on_job_terminal_sync(job, db_session, run=run)
+    pending_written, _ = on_job_terminal_sync(job, db_session)
+    assert pending_written is True
+    # TESTING=1：唤醒内联排空 ⇒ 父终态在返回时已收敛（旧「终态即聚合」语义）
+    db_session.refresh(run)
 
-    assert applied is True
     # ADR-0048 v1.1：完成有设备失败=黄（不产生 FAILED——设备失败永不判红的内核不变）
-    assert status == PlanRunStatus.PARTIAL_SUCCESS.value
+    assert run.status == PlanRunStatus.PARTIAL_SUCCESS.value
