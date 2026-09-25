@@ -224,6 +224,15 @@ psql "$DATABASE_URL" -c "select count(*) from host where agent_artifact_digest =
 
 补充观测：`increase(stability_terminal_bulkhead_rejected_total[5m])`、`stability_terminal_bulkhead_waiting`、`stability_db_pool_checkout_failures_total` 按 kind 拆分（**应为 0 增长**）。
 
+> **观测量纪律（2026-09-25 复跑实测踩坑）**：对**本轮首次出现**的 5xx / 异常序列，
+> 判据取**原始计数器值**（或 `count_over_time`），**不要用 `increase()`** —— 带标签的计数器序列
+> 「首次自增才出现」，窗口内首个样本已含全部增量，`increase()` 会给出 **0 的假阴性**。
+> 实例（本轮）：`stability_api_requests_total{endpoint="…/complete", status_code="503"}`
+> 原始 = **4**（首样本 `17:22 → 4` 且恒为 4），`increase([30m])` = **0**；同端点
+> `status_code="200"` 序列自 15:34 起连续有样本，`increase()` 正常。未打标签的单例计数器
+> （如 `stability_terminal_bulkhead_rejected_total`）自进程启动即有 0 样本，**不受此影响**。
+> 三方一致核对法：nginx 逐条计数 / 应用侧专用计数器 / 请求级计数器原始值，三者应相等。
+
 > 若本窗中止的是**未完成部署前**就在跑的老 run（例如 plan_run 534 在 Step 3 前已终态），它的数据仍可用于「部署前基线」，不能用作 #3244 的达标证据。
 
 ---
