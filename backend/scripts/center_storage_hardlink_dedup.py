@@ -51,6 +51,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Iterable, NamedTuple, Optional
 
+from sqlalchemy import bindparam, create_engine, text
+
+from backend.core.database import normalize_sync_database_url
+
 DEFAULT_ROOT = "/mnt/stp-aee/devices"
 TMP_SUFFIX = ".stp-dedup-tmp"
 EDGE = 64 * 1024
@@ -235,8 +239,6 @@ def dedup(
 
 def eligible_runs_from_db(conn, *, min_run_age_hours: float, now: Optional[datetime] = None) -> list[int]:
     """已终态且结束超过 ``min_run_age_hours`` 的 run id（只读 SELECT）。"""
-    from sqlalchemy import bindparam, text
-
     cutoff = (now or datetime.now(timezone.utc)) - timedelta(hours=min_run_age_hours)
     stmt = text(_ELIGIBLE_SQL).bindparams(bindparam("statuses", expanding=True))
     rows = conn.execute(stmt, {"statuses": list(TERMINAL_PLAN_RUN_STATUSES), "cutoff": cutoff})
@@ -245,10 +247,6 @@ def eligible_runs_from_db(conn, *, min_run_age_hours: float, now: Optional[datet
 
 def open_readonly_engine(database_url: str):
     """整条连接只读（``default_transaction_read_only``），查询写错也改不了库。"""
-    from sqlalchemy import create_engine
-
-    from backend.core.database import normalize_sync_database_url
-
     return create_engine(
         normalize_sync_database_url(database_url),
         connect_args={"options": "-c default_transaction_read_only=on"},
