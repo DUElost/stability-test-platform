@@ -1,4 +1,4 @@
-"""#3222：host 级包模式推导与 fleet 视图（derive + 聚合 + gauge 作用域）。"""
+"""#3222：host 级包模式推导与 fleet 视图（derive + 聚合 + gauge 拉取期现算）。"""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -52,12 +52,12 @@ def test_fleet_packages_mode_counts(db_session: Session):
     assert fleet_packages_mode(db_session) == {"package": 2, "tree": 0, "mixed": 1, "unknown": 1}
 
 
-# ── #3315：gauge 出口的作用域混淆（fleet 聚合不得被单机 refresh 的部分集覆盖）──
+# ── #3315：gauge 从 host 列拉取期现算；sweep（全量/单机）只写列、永不碰 gauge ──
 
 
 def _spy_packages_gauge(monkeypatch) -> list[tuple[str, int]]:
-    """记录每次 `.set()`：返回 [(mode, value)]。prometheus 在测试环境可能未装，
-    显式把 PROMETHEUS_AVAILABLE 与 gauge 对象一起 patch 到真走指标分支。"""
+    """记录任何对 core 指标对象的 `.set()`：返回 [(mode, value)]。显式把
+    PROMETHEUS_AVAILABLE patch 为 True——若有人在 sweep 里重新加回带开关的 set，分支必走到。"""
     calls: list[tuple[str, int]] = []
 
     class _GaugeSpy:
@@ -100,44 +100,59 @@ def _seed_package_plane(db_session, host_ids: tuple[str, ...]):
     db_session.commit()
 
 
-async def test_full_sweep_sets_fleet_gauge_with_host_count(db_session, engine, monkeypatch):
-    """全量作用域：gauge 聚合 = 全体 host 计数（这是「package == hosts_total」对账的前提）。"""
+async def _fake_gather_all_package(host_ids, expected):
+    # 真实 ack 形态：逐条 package_active，无 package_sha256（见 _e 注释）
+    return {
+        hid: (True, [{"name": "a", "version": "1.0.0", "exists": True, "ok": True,
+                      "package_active": True}], None)
+        for hid in host_ids
+    }
+
+
+def _modes_by_host(engine) -> dict[str, object]:
+    with sessionmaker(bind=engine)() as session:
+        return {h.id: h.script_packages_mode for h in session.execute(select(Host)).scalars()}
+
+
+async def test_sweep_writes_columns_only_never_the_gauge(db_session, engine, monkeypatch):
+    """#3315 根因：sweep 按**本轮切片** set gauge 是病灶（单机 refresh 把 48 打成 1、重启后缺席
+    到下次 cron）。修正后两种作用域都只写列——任何 set 都是回退。"""
     _seed_package_plane(db_session, ("h-a", "h-b"))
     calls = _spy_packages_gauge(monkeypatch)
-
-    async def fake_gather(host_ids, expected):
-        return {
-            hid: (True, [{"name": "a", "version": "1.0.0", "exists": True, "ok": True,
-                          "package_active": True}], None)
-            for hid in host_ids
-        }
-
-    monkeypatch.setattr(sp, "gather_verify", fake_gather)
-    await sp.run_sweep(days=30, db_factory=sessionmaker(bind=engine))
-
-    assert dict(calls) == {"package": 2, "tree": 0, "mixed": 0, "unknown": 0}
-
-
-async def test_host_scoped_sweep_writes_column_but_not_gauge(db_session, engine, monkeypatch):
-    """#3315 回归：单机 refresh（run_sweep(host_ids=[…])）只写列——gauge 是 fleet 聚合，
-    拿 1 台切片 Counter 去 set 会把 48 打成 1（2026-09-25 首采当天实测被覆盖）。"""
-    _seed_package_plane(db_session, ("h-a", "h-b"))
-    calls = _spy_packages_gauge(monkeypatch)
-
-    async def fake_gather(host_ids, expected):
-        return {
-            hid: (True, [{"name": "a", "version": "1.0.0", "exists": True, "ok": True,
-                          "package_active": True}], None)
-            for hid in host_ids
-        }
-
-    monkeypatch.setattr(sp, "gather_verify", fake_gather)
-    await sp.run_sweep(days=30, host_ids=["h-a"], db_factory=sessionmaker(bind=engine))
-
-    assert calls == [], "单机作用域绝不得覆盖 fleet gauge"
+    monkeypatch.setattr(sp, "gather_verify", _fake_gather_all_package)
     factory = sessionmaker(bind=engine)
-    with factory() as session:
-        hosts = session.execute(select(Host)).scalars().all()
-        by_id = {x.id: x for x in hosts}
-    assert by_id["h-a"].script_packages_mode == "package"   # 本轮 host 的列照常写
-    assert by_id["h-b"].script_packages_mode is None        # 未 sweep 的 host 保持 unknown
+
+    await sp.run_sweep(days=30, host_ids=["h-a"], db_factory=factory)
+    assert _modes_by_host(engine) == {"h-a": "package", "h-b": None}   # 单机：只动本轮 host 的列
+
+    await sp.run_sweep(days=30, db_factory=factory)
+    assert _modes_by_host(engine) == {"h-a": "package", "h-b": "package"}
+
+    assert calls == [], "sweep 不得写 fleet gauge（它由 /metrics 拉取期从列现算）"
+
+
+def test_metrics_scrape_derives_packages_gauge_from_host_column(client, db_session, monkeypatch):
+    """拉取期现算：无需任何 sweep（=进程刚重启）即与 summary `fleet_packages` 同口径——
+    退役不计、NULL 计 unknown、四个 mode 全量落值（含 0）。"""
+    monkeypatch.setenv("STP_METRICS_AUTH_REQUIRED", "0")
+    now = datetime.now(timezone.utc)
+    db_session.add_all([
+        Host(id="pm-h1", hostname="pm-h1", status="ONLINE", script_packages_mode="package",
+             last_heartbeat=now, created_at=now),
+        Host(id="pm-h2", hostname="pm-h2", status="ONLINE", script_packages_mode="package",
+             last_heartbeat=now, created_at=now),
+        Host(id="pm-h3", hostname="pm-h3", status="ONLINE", script_packages_mode="mixed",
+             last_heartbeat=now, created_at=now),
+        Host(id="pm-h4", hostname="pm-h4", status="ONLINE",
+             last_heartbeat=now, created_at=now),
+        Host(id="pm-h5", hostname="pm-h5", status="ONLINE", script_packages_mode="tree",
+             retired_at=now, last_heartbeat=now, created_at=now),
+    ])
+    db_session.commit()
+
+    body = client.get("/metrics").text
+
+    assert 'stability_host_script_packages_mode{mode="package"} 2.0' in body
+    assert 'stability_host_script_packages_mode{mode="mixed"} 1.0' in body
+    assert 'stability_host_script_packages_mode{mode="unknown"} 1.0' in body
+    assert 'stability_host_script_packages_mode{mode="tree"} 0.0' in body   # 退役的 tree 不计
