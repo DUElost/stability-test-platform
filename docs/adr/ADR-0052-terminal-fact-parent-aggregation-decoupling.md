@@ -14,7 +14,7 @@
   / [ADR-0047](./ADR-0047-db-pool-and-connection-capacity.md)（P0 已裁决并落地：预算门禁 / 503 过载语义 / 终态舱壁）
   / [ADR-0012](./ADR-0012-post-completion-pipeline-jira-automation.md)（post_completion 契约；D6 是独立 Decision；其历史措辞差异见 §3 末）
   / [#3243 校准 Note](../notes/bug-fix/2026-09-24-abort-backflow-scale-3243.md)（本稿的量化依据）
-- 版本记录：v1.0（2026-09-25）**裁决**：D1–D5 Accepted、D6 延后（带复议触发器）；§5 拆为「决策门槛（已由 plan_run 556 真机复跑满足）」与「实施验收门槛（原 6 条，实现后复跑判定）」，见 §9。v0.1（2026-09-24）首次提出，D1–D6 待裁决；D6（post_completion 隔离）被显式设计为**可单独延后**
+- 版本记录：v1.0（2026-09-25）**裁决**：D1–D5 Accepted、D6 延后（带复议触发器）；§5 拆为「决策门槛（已由 plan_run 556 真机复跑满足）」与「实施验收门槛（原 6 条，实现后复跑判定）」，见 §9；同版勘误：§5 列表 ② 正文由「~1.1s」同步为真机 **2.467s**（与 §5 注及 §9 一致，无决策变化）。v0.1（2026-09-24）首次提出，D1–D6 待裁决；D6（post_completion 隔离）被显式设计为**可单独延后**
 
 ## 1. 背景
 
@@ -126,7 +126,7 @@ ADR-0026 §6（`docs/adr/ADR-0026-plan-execution-scaling.md:232`）的原文分�
 >   ② 的对照基线取 plan_run 556 的 **2.467s**（而非模拟的 ~1.1s）。
 
 1. `plan_run` 热行写入从 ~490 次降到**有界批次**；
-2. `/complete` p99 **明显低于**当前 ~1.1s，且**不靠放宽舱壁**；
+2. `/complete` p99 **明显低于**实施前真机基线 **2.467s**（plan_run 556；v0.1 原文的模拟 ~1.1s 仅作历史参照），且**不靠放宽舱壁**；
 3. 终态 120s 内收敛，计数与 PlanRunHost 一致；
 4. counter drift、500、53300、pool timeout **全为 0**；
 5. chain / dedup / post_completion 无重复、无丢失；

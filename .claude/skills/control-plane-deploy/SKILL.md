@@ -193,6 +193,7 @@ PYTHONPATH=. venv/bin/python -m backend.scripts.batch_hot_update --direct
 | MLD 拼写 | `getprop ro.product.model` 返回 `MLD-LX3`（连字符），`adb devices` 是下划线——以 getprop 为准 |
 | 部署后代码 | 部署验证完成后按仓库流程走 PR 合入，不直推 main |
 | 本地 ref 陈旧 | worktree 基于 origin/main 前必 fetch；构建前用 `merge-base --is-ancestor <PR mergeCommit> origin/main` 校验 |
+| **CLI 跑 `run_sweep` 全量 = 静默打脏**（✅2026-09-25 实跑踩坑，#3315/#3333） | verify RPC（`call_agent_rpc`）走 **backend 进程内 socketio 长连接**，CLI 进程里 48 台全 `AgentNotConnectedError`，但 CLI 返回形似成功（`hosts_verified=48/rows=2496`）——副作用：`host.script_packages_mode` 全被 None 打脏、账本按 `agent_offline` 落库并推进 `checked_at`（summary/UI 新鲜度被喂假；alert 不受影响，它吃进程内 gauge）。全量 sweep 合法触发点**只有每日 cron**（`script_presence_sweep_cron`，默认 09:30）；部署后要立即重采走 `POST /refresh?host_id=` 逐台循环（实测 48 台 fail=0，列恢复 `{package:48}`；gauge 仍要等全量轮）。入口缺口见 #3333 |
 | **热更新清带外资源**（2026-08-31 记录，**该形态已被修**） | 08-31 当时 `--delete` 会清掉 `resources/` 下非豁免目录（只有 `resources/mtbf/` 豁免）。**当前不再成立**：`stp_agent_priv.PROTECT_ONLY_PATHS = ["resources/***"]`（#1950/#2019，契约测试逐项锁定）把整棵 `resources/` 设为 protect-only——只防删除、不做 exclude，且必须写 `***`（尾斜杠只匹配目录节点本身）。`resources/` **之外**的带外文件仍会被 `--delete` 抹掉，故带外资源仍在最终热更新后放置 |
 | **载荷根未跟踪文件**（#3112→bundle 形态） | checkout 时代由部署源守卫在部署时硬拦；Phase 1 后判据前移到**构建时**：bundle 复制工作树，未跟踪文件会随构建进发布根并改 desired digest——构建前照跑守卫（§1 步 2），发布根内禁止手改（改动只发生在构建） |
 
@@ -213,6 +214,7 @@ PYTHONPATH=. venv/bin/python -m backend.scripts.batch_hot_update --direct
 | 2026-09-22 | **四段全链路端到端实跑（后端 pull+restart / 前端换包 / scan / 48 台热更新到 `45c159cf`）后逐条校准**：① §0 **修正** 09-15 行记的「hot-update 是 `{data:}`」——该路由无 `response_model`，实测回顶层裸对象 `{"ok":true,…}`；② §1 守卫描述补「载荷根未跟踪文件」硬拦；③ §2 补「scan 只写注册表、主机生效必须跑 §3」；④ §3 补「判据是 digest 不是 revision」「desired digest = 现算工作树（含未跟踪文件）」「write-digest 写控制面 desired ⇒ 自愈」「实测 ~3s/台（旧稿 20s/台过时）」「code 载荷口径」；⑤ §6 **推翻** 08-31 的「热更新清带外资源」——`resources/***` 已是 protect-only（#1950/#2019），并新增「载荷根未跟踪文件」行（#3112） | 本次部署实操 + #3111/#3112 |
 | 2026-09-23 | **ADR-0051 Phase 2a/2b 上线实跑校准**：§2 补 scan 的 `package_backfilled`/`package_conflicts` 与 `--register`/`--publish` 两步；§3 补「忙碌判定经 `device.host_id` join、批量跳过后重跑补齐」「脚本包开关 `STP_AGENT_SCRIPT_PACKAGES` 需重启后端再推、env-only 变更须 `--force`、用 presence refresh + `tools_cache` 计数 + 日志 fallback 计数三件套验证」。现场：迁移 `ad51c1d3f2a1`、发布 210 包、scan 回填 210、11/48 台切到 `on`（其余 37 台被 plan_run 518 活跃 job 跳过） | 本次上线实操 |
 | 2026-09-22 | **两处历史 `⚠️待校对` 项实机验证并解除**（详见 `docs/notes/process/2026-09-22-sop-warn-items-verification.md`）：① §6「SP Flash Tool 缺库」——五个包名与工具真实依赖一致（控制面+真机 `ldd`、缺库主机 11 个未解析依赖），fleet 分布 38 齐 / 10 缺（全在 `agent_legacy`），处置改指平台 provisioning（ADR-0037 D5）+ 保留带 `t64` 说明的逃生阀；② §3 带外资源——protect-only 实测成立（两轮 code 推送后 resources 仍在位、mtime 未变），**但**盘点 48 台发现 resources 身份 41/48 一致、7 台字节级偏离（仅 CRLF→LF）而平台判 converged：身份是自报意图、从不自测，机制缺口立 issue #3128 | 真机 ansible 只读探针（48 台全量，含主机侧自算 digest 对拍）+ issue #3128 |
+| 2026-09-25 | §6 新增「CLI 跑 run_sweep 全量 = 静默打脏」行：#3315 部署观察中 CLI 全量 sweep 把 `script_packages_mode` 48/48 package 打脏为全 None 且返回形似成功；恢复通道=逐台 `POST /refresh?host_id=`（实测 48 台 fail=0 回到 `{package:48}`）；全量合法触发点只有每日 cron；alert 侧不受影响（吃进程内 gauge，随进程重启清零是正确行为）。入口/防护缺口立 #3333 | #3319 部署实跑 + issue #3333 |
 
 ## 踩坑守卫（负向约束）
 
