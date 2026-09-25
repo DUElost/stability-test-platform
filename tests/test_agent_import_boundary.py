@@ -18,11 +18,19 @@ Agent 进程部署在**没有控制面**的主机上（`backend/agent/` 自成�
 后判定（#2798：此前 ``ast.ImportFrom.level`` 被忽略，相对形态整体逃逸）。传递依赖
 （共享模块自己 import 了控制面）不在本判据内——``_SHARED_ALLOWLIST`` 的每个条目都
 人工核过依赖，新增条目也要照做。
+
+跨包共享的**正门**是契约包 ``backend/agent/contracts/``（ADR-0054 D1）：agent 侧经
+同包相对导入使用，控制面经 ``backend.agent.contracts.*``（``.importlinter`` C3 有通配
+放行）。两条 C6 纯度判据（ADR-0054 D2/D4）也在本文件：
+- ``contracts/`` 只许标准库 + 逐条登记的第三方 + 包内相对导入；
+- ``backend/agent/__init__.py``（D3 v1.0）必须保持轻量——控制面 import 契约时它必然
+  先执行，而 import-linter 看不见这条边。
 """
 
 from __future__ import annotations
 
 import ast
+import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -30,12 +38,13 @@ AGENT_DIR = REPO_ROOT / "backend" / "agent"
 
 #: Agent 生产代码只允许 import 这些跨包模块 → 理由（必须人工核实为纯模块）。
 #: 其余任何 ``backend.<非 agent>`` 一律判违约——包括控制面包与将来新增的顶层包。
+#: ADR-0054 落地后原先的 legacy_aee / pipeline_validator 两条已删：共享定义改从
+#: ``backend/agent/contracts/`` 相对导入（本文件末尾的 C6 判据守其纯度）。
 _SHARED_ALLOWLIST: dict[str, str] = {
-    "backend.core.legacy_aee": "LEGACY_AEE_SCRIPT_NAMES 常量表（纯数据，无运行时依赖）",
-    "backend.core.pipeline_validator": "pipeline_def 校验器（双端共享的纯函数，#738）",
     # #2798：模块体纯（prometheus_client 可选，无 DB/Redis）；消费方（aee/reconciler）
     # 用 try/except + no-op 兜底。注意 backend.core 的**包 init** 会拉 DB（agent 主机上
-    # 该 import 会失败并走兜底），本豁免按「模块体纯度」判，与上两条同口径。
+    # 该 import 会失败并走兜底），本豁免按「模块体纯度」判。
+    # ADR-0054 §3：metrics 不是双方必须一致的定义（agent 缺失时 no-op），不搬入 contracts。
     "backend.core.metrics": "指标原语 record_reconciler_skip_unchanged / burst gauge（best-effort，兜底 no-op）",
 }
 
@@ -148,7 +157,7 @@ def test_detector_sees_static_and_dynamic_control_plane_imports():
     """判据自身的守卫：静态、动态两种形态都要判得出；agent 内 import 不得误报。
 
     扫描器只负责「看见」全部跨包 import（含被豁免的共享层）；是否允许由
-    ``_SHARED_ALLOWLIST`` 判定——所以 ``backend.core.pipeline_validator`` 也应在结果里。
+    ``_SHARED_ALLOWLIST`` 判定——所以 ``backend.core.metrics`` 也应在结果里。
     """
     source = (
         "from backend.api.routes import plans\n"
@@ -157,7 +166,7 @@ def test_detector_sees_static_and_dynamic_control_plane_imports():
         "importlib.import_module('backend.tasks.saq_tasks')\n"
         "__import__('backend.realtime.socketio_server')\n"
         "from backend.agent.pipeline_engine import x\n"
-        "from backend.core.pipeline_validator import validate_pipeline_def\n"
+        "from backend.core.metrics import record_reconciler_skip_unchanged\n"
         "from sqlalchemy import select\n"
     )
     found = {module for _, module in cross_package_imports(source)}
@@ -166,7 +175,7 @@ def test_detector_sees_static_and_dynamic_control_plane_imports():
         "backend.scheduler.cron_scheduler",
         "backend.tasks.saq_tasks",
         "backend.realtime.socketio_server",
-        "backend.core.pipeline_validator",
+        "backend.core.metrics",
     }, found
 
 
@@ -211,3 +220,111 @@ def test_scan_surface_is_not_empty():
     files = _scan_files()
     assert len(files) >= 20, f"agent 生产面扫描异常，只看到 {len(files)} 个文件"
     assert any(path.name == "main.py" for path in files)
+
+
+# ---------------------------------------------------------------------------
+# C6（ADR-0054 D2/D4）：契约包纯度与 agent 包 init 轻量
+# ---------------------------------------------------------------------------
+
+#: contracts/ 允许的第三方依赖（D2「逐条登记」；新增必须过评审，不做一次性放宽）。
+_CONTRACTS_ALLOWED_THIRD_PARTY = frozenset({"jsonschema"})
+#: contracts/ 内的相对导入必须解析回本包（D2 #3：不 import agent 其他模块，也不 import 控制面包）。
+_CONTRACTS_PACKAGE = "backend.agent.contracts"
+#: D3 v1.0：backend/agent/__init__.py 只许标准库与这些 stdlib-only 的包内叶子模块。
+_AGENT_INIT_ALLOWED_RELATIVE = ("backend.agent.adb_wrapper",)
+
+
+def import_hits(source: str, *, module: str | None = None) -> list[tuple[int, str, int]]:
+    """返回 ``[(行号, 绝对模块名, level), …]``：源码里的全部 import 引用。
+
+    ``level`` = PEP 328 相对层级（0 = 绝对导入）；相对导入按 ``module`` 解析为绝对名，
+    不可解析（越过顶层包）时跳过。静态与 ``import_module("…")`` / ``__import__("…")``
+    字面量形态都算——动态字面量本就要求绝对名，记为 ``level=0``。
+    """
+    tree = ast.parse(source)
+    hits: list[tuple[int, str, int]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            resolved = _resolve_import_from(node, module)
+            if resolved:
+                hits.append((node.lineno, resolved, node.level))
+        elif isinstance(node, ast.Import):
+            hits.extend((node.lineno, alias.name, 0) for alias in node.names)
+        elif isinstance(node, ast.Call):
+            func = node.func
+            name = getattr(func, "attr", None) or getattr(func, "id", None)
+            if name in {"import_module", "__import__"} and node.args:
+                first = node.args[0]
+                if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                    hits.append((getattr(node, "lineno", 0), first.value, 0))
+    return sorted(set(hits))
+
+
+def _purity_offenders(
+    path: Path,
+    *,
+    allowed_relative_prefixes: tuple[str, ...],
+    allowed_third_party: frozenset[str] = frozenset(),
+) -> list[str]:
+    """模块的纯度违约清单：非标准库、非登记第三方、且不在允许的相对前缀内。"""
+    offenders: list[str] = []
+    for lineno, name, level in import_hits(
+        path.read_text(encoding="utf-8"), module=_module_name_for(path),
+    ):
+        if level:
+            if any(name == prefix or name.startswith(prefix + ".") for prefix in allowed_relative_prefixes):
+                continue
+        elif name.split(".")[0] in sys.stdlib_module_names or name.split(".")[0] in allowed_third_party:
+            continue
+        offenders.append(f"{path.relative_to(REPO_ROOT).as_posix()}:{lineno} → {name}")
+    return offenders
+
+
+def _contract_files() -> list[Path]:
+    return sorted((AGENT_DIR / "contracts").rglob("*.py"))
+
+
+def test_contracts_package_imports_only_stdlib_registered_third_party_and_itself():
+    """C6（ADR-0054 D2/D4）：契约模块只许标准库 + 登记第三方 + 包内相对导入。"""
+    offenders: list[str] = []
+    for path in _contract_files():
+        offenders += _purity_offenders(
+            path,
+            allowed_relative_prefixes=(_CONTRACTS_PACKAGE,),
+            allowed_third_party=_CONTRACTS_ALLOWED_THIRD_PARTY,
+        )
+    assert offenders == [], (
+        "contracts/ 出现契约纯度之外的 import。契约必须能在 agent 主机的 stdlib-only "
+        "环境加载，且不得 import agent 运行时或其他包（ADR-0054 D2）：\n  "
+        + "\n  ".join(offenders)
+    )
+
+
+def test_contracts_scan_surface_is_not_empty():
+    """扫描面塌陷（目录改名/搬走）不能长得像「全绿」。"""
+    names = {path.name for path in _contract_files()}
+    assert {"__init__.py", "pipeline_validator.py", "legacy_aee.py"} <= names, names
+
+
+def test_agent_package_init_stays_lightweight():
+    """D3 v1.0：控制面 import 契约时必先执行 backend/agent/__init__.py（import-linter 看不见这条边）。"""
+    offenders = _purity_offenders(
+        AGENT_DIR / "__init__.py", allowed_relative_prefixes=_AGENT_INIT_ALLOWED_RELATIVE,
+    )
+    assert offenders == [], (
+        "backend/agent/__init__.py 变重：控制面 import 契约时会连带执行它，"
+        "只许标准库与登记的 stdlib-only 叶子模块（ADR-0054 D3 v1.0）：\n  "
+        + "\n  ".join(offenders)
+    )
+
+
+def test_agent_init_allowlist_targets_are_stdlib_only():
+    """白名单目标自身必须 stdlib-only，否则「轻量」约束被间接绕过。"""
+    offenders: list[str] = []
+    for name in _AGENT_INIT_ALLOWED_RELATIVE:
+        path = REPO_ROOT.joinpath(*name.split(".")).with_suffix(".py")
+        assert path.is_file(), f"白名单目标不存在：{name} ({path})"
+        offenders += _purity_offenders(path, allowed_relative_prefixes=())
+    assert offenders == [], (
+        "backend/agent/__init__.py 的白名单目标不再 stdlib-only：\n  " + "\n  ".join(offenders)
+    )

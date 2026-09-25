@@ -48,14 +48,17 @@ SCAN_DIRS = (ROOT / "backend", ROOT / "tools", ROOT / "scripts")
 #: → **604 → 602**。
 #: 2026-09-20 #736 `heartbeat_bindings`：`read_artifact_digest` 双形态 + 
 #: `patrol_recovery` 顶层化 → **602 → 599**。
-#: 2026-09-26 **上调 597 → 620**（#3244 ADR-0052 聚合执行器 +23）：
+#: 2026-09-26 #3298（ADR-0054 第 1 步）：`job_runner._validate_pipeline_def` 的
+#: core/agent 双形态兜底（try/except 2 处）随契约搬迁归一为 1 处相对导入
+#: → **597 → 596**。
+#: 2026-09-26 **上调 596 → 619**（#3244 ADR-0052 聚合执行器 +23）：
 #: `plan_run_finalization` 聚合轮次/`job_terminalization` 唤醒按该模块既有纪律
 #: （顶层只取 models 纯定义，sqlalchemy 会话、task_queue、saq、聚合/编排依赖
 #: 一律函数体内取——防 plan_run_abort clean-env 契约被牵连）新增 21 处；
 #: `counter_reconciler` 恢复扫描 +2（metrics 局部导入与 leader_election 同型）。
 #: 依赖方向本身无环（job_terminalization → finalization → aggregation），
-#: 留痕于 PR 描述与本行。
-_BASELINE = 620
+#: 留痕于 PR 描述与本行。合并 main(#3358) 后基线 = 596+23 = 619。
+_BASELINE = 619
 
 # ADR-0051 Phase 3：版本目录已退役，脚本族树（backend/agent/scripts/<name>/）按包发布、
 # 属独立审计面，整棵排除（此前只排除 v<version>/ 冻结目录）。

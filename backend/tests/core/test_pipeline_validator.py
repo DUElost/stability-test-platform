@@ -1,4 +1,4 @@
-from backend.core.pipeline_validator import validate_pipeline_def
+from backend.agent.contracts.pipeline_validator import validate_pipeline_def
 
 
 def test_validate_pipeline_def_accepts_lifecycle_script_steps():

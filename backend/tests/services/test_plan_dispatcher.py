@@ -821,7 +821,7 @@ class TestPreviewRunsPipelineValidation:
         self, db_session, _patrol_only_fixture,
     ):
         """预览报错与派发路径同源：都来自 ``validate_pipeline_def`` 的同一批错误。"""
-        from backend.core.pipeline_validator import validate_pipeline_def
+        from backend.agent.contracts.pipeline_validator import validate_pipeline_def
 
         plan, device = _patrol_only_fixture
         steps = (

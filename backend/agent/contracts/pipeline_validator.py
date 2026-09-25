@@ -1,4 +1,10 @@
-"""Pipeline definition validator using JSON Schema."""
+"""Pipeline definition validator using JSON Schema.
+
+契约模块（ADR-0054 D1/D2）：控制面与 Agent 共用**同一实现**——Agent 侧经相对
+导入（``from ..contracts.pipeline_validator import …``），控制面经
+``backend.agent.contracts.pipeline_validator``。模块体只依赖标准库与逐条登记的
+``jsonschema``（缺失时 ``validate_pipeline_def`` 返回明确错误），import 期无 I/O。
+"""
 
 import json
 from pathlib import Path
@@ -10,14 +16,30 @@ except ImportError:
     Draft7Validator = None
     ValidationError = None
 
-_SCHEMA_PATH = Path(__file__).resolve().parent.parent / "schemas" / "pipeline_schema.json"
+_SCHEMA_FILENAME = "pipeline_schema.json"
 _schema_cache: Optional[dict] = None
+
+
+def resolve_pipeline_schema_path() -> Path:
+    """定位运行时工件 ``pipeline_schema.json``（ADR-0054 D6，显式处理两种布局）。
+
+    本文件位于 ``<agent 包>/contracts/``，schema 恒在 **agent 包目录的父目录** 下：
+
+    - 仓库布局：``<repo>/backend/agent/contracts/…`` → ``<repo>/backend/schemas/pipeline_schema.json``
+    - 主机安装布局：``<INSTALL_DIR>/agent/contracts/…`` → ``<INSTALL_DIR>/schemas/pipeline_schema.json``
+
+    以 agent 包目录（``parents[1]``，即 ``contracts/`` 的上一级）为锚点，而不是
+    按 ``__file__`` 裸深度计数：``contracts/`` 内再增删目录层级都不改变解析结果，
+    两种布局共用同一条公式。
+    """
+    agent_package_root = Path(__file__).resolve().parents[1]
+    return agent_package_root.parent / "schemas" / _SCHEMA_FILENAME
 
 
 def _load_schema() -> dict:
     global _schema_cache
     if _schema_cache is None:
-        with open(_SCHEMA_PATH, "r", encoding="utf-8") as f:
+        with open(resolve_pipeline_schema_path(), "r", encoding="utf-8") as f:
             _schema_cache = json.load(f)
     return _schema_cache
 

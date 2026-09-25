@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from backend.api.routes.auth import get_current_active_user, User
-from backend.core.legacy_aee import LEGACY_AEE_TEMPLATE_NAMES
+from backend.agent.contracts.legacy_aee import LEGACY_AEE_TEMPLATE_NAMES
 
 logger = logging.getLogger(__name__)
 

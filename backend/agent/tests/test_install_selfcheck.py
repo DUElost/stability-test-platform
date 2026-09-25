@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 from backend.agent.install_selfcheck import SAMPLE_PIPELINE_DEF, main
-from backend.agent.pipeline_validator import validate_pipeline_def
+from backend.agent.contracts.pipeline_validator import validate_pipeline_def
 
 
 def test_sample_pipeline_is_valid_against_repo_schema():
@@ -25,7 +25,7 @@ def test_main_succeeds_with_installed_layout(capsys):
 
 
 def test_main_fails_when_schema_unavailable(monkeypatch, capsys):
-    import backend.agent.pipeline_validator as validator
+    import backend.agent.contracts.pipeline_validator as validator
 
     def _raise_missing(_pipeline_def):
         raise FileNotFoundError(

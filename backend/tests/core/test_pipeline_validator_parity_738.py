@@ -1,45 +1,79 @@
-"""#738：`pipeline_validator` 的双端副本必须保持**语义一致**。
+"""#738 / ADR-0054：`pipeline_validator` 只有**一份实现**，两种包布局判定一致。
 
-背景：agent 侧保留了一份与 `backend/core/pipeline_validator.py` 逐字相同的副本（两份均
-138 行，`diff` 为空），用途有二：
+历史：本文件曾是「双端副本语义一致」的 parity 测试（agent 侧一份与
+`backend/core/pipeline_validator.py` 逐字相同的拷贝，靠本文件防漂移）。ADR-0054
+裁决把共享定义归入 `backend/agent/contracts/` 后，拷贝与 `except ImportError`
+兜底都已删除——本文件随之改为**单实现测试**，文件名保留历史（#738）。
 
-1. `job_runner._validate_pipeline_def` 的 **ImportError 回落**——独立部署的 agent 可能
-   import 不到 `backend.core`；
-2. `install_selfcheck` 在**安装期**校验 pipeline_def，那时控制面包还不一定在路径上。
-
-所以「双端重复」是**有意为之**（不是可机械删除的死代码；消除它需要一次共享模块的设计
-决策）。但**没有任何东西保证两份副本同步**：一旦漂移，同一个 pipeline_def 会在 agent 侧
-与控制面侧得到**不同的合法性判定**——agent 放行控制面拒绝的定义（或反之）。
-
-本用例把该不变量变成可回归断言：**两份实现对同一语料给出完全一致的结果**。
-判据取「语义一致」而非「逐字相同」——后者会把一次合法的等价重构也判红，而真正要守的是
-"两侧判定不得分歧"。
+现在守三件事：
+1. **单实现**：契约只有 `backend/agent/contracts/pipeline_validator.py` 一份，
+   旧副本（core / agent 各一，含再导出壳）不存在（ADR-0054 D5）；
+2. **两种布局的 import 与 schema 定位都成立**（ADR-0054 D3/D6）：真实仓库布局用
+   进程内导入；主机安装布局（顶层包 ``agent`` + ``<install>/schemas/``）在临时
+   目录里**真跑一遍**子进程导入 + 校验；
+3. **同一语料两侧判定不分歧**：把历史 parity 语料分别喂给两种布局，结果必须逐字
+   一致——不变量从「两份代码不得漂移」变成「一种代码不得挑布局」。
 """
 from __future__ import annotations
 
+import json
+import os
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
-from backend.agent.pipeline_validator import validate_pipeline_def as agent_validate
-from backend.core.pipeline_validator import validate_pipeline_def as core_validate
+from backend.agent.contracts.pipeline_validator import (
+    resolve_pipeline_schema_path,
+    validate_pipeline_def,
+)
 
-# #739 第二批：本文件自 `backend/agent/tests/` 迁入（棘轮清零）；双端副本的源码锚点
-# 改为按仓库根反查，不再依赖测试文件自身所在目录。
+# #739 第二批：本文件自 `backend/agent/tests/` 迁入（棘轮清零）；源码锚点按仓库根反查。
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-_AGENT_COPY = _REPO_ROOT / "backend" / "agent" / "pipeline_validator.py"
-_CORE_COPY = _REPO_ROOT / "backend" / "core" / "pipeline_validator.py"
+_CONTRACT_MODULE = _REPO_ROOT / "backend" / "agent" / "contracts" / "pipeline_validator.py"
+_LEGACY_COPIES = (
+    _REPO_ROOT / "backend" / "core" / "pipeline_validator.py",
+    _REPO_ROOT / "backend" / "agent" / "pipeline_validator.py",
+)
+
+#: 主机布局探针：以顶层包 ``agent`` 导入契约、打印 schema 定位与语料判定。
+#: 在临时安装树（``<install>/agent/`` + ``<install>/schemas/``）里由子进程执行。
+_HOST_LAYOUT_PROBE = r'''
+import json
+import sys
+
+from agent.contracts.pipeline_validator import (
+    resolve_pipeline_schema_path,
+    validate_pipeline_def,
+)
 
 
-def _normalized(validate, pipeline_def: Any) -> Any:
-    """把一次校验调用归一成可比较的值：正常返回 ``(ok, errors)``，抛错则记异常类型。
+def run(pipeline_def):
+    try:
+        ok, errors = validate_pipeline_def(pipeline_def)
+    except Exception as exc:  # noqa: BLE001 - 与仓库侧测试同样的「异常也是结果」
+        return ["raised", type(exc).__name__]
+    return [ok, list(errors)]
 
-    把异常也纳入比对是刻意的：两侧对同一畸形输入「一边抛错、一边返回错误列表」同样是漂移。
-    """
+
+with open(sys.argv[1], encoding="utf-8") as f:
+    corpus = json.load(f)
+
+print(json.dumps({
+    "schema": str(resolve_pipeline_schema_path()),
+    "results": [run(case) for case in corpus],
+}))
+'''
+
+
+def _normalized(validate, pipeline_def: Any) -> list:
+    """把一次校验调用归一成可比对的值：正常返回 ``[ok, errors]``，抛错记异常类型。"""
     try:
         is_valid, errors = validate(pipeline_def)
     except Exception as exc:  # noqa: BLE001 - 就要捕获任意异常做比对
-        return ("raised", type(exc).__name__)
-    return (is_valid, list(errors))
+        return ["raised", type(exc).__name__]
+    return [is_valid, list(errors)]
 
 
 def _valid_lifecycle() -> dict:
@@ -73,7 +107,7 @@ def _valid_lifecycle() -> dict:
 
 
 def _corpus() -> list[tuple[str, Any]]:
-    """覆盖接受形态与各类拒绝形态，形状取自 `backend/tests/core/test_pipeline_validator.py`。"""
+    """历史 parity 语料：接受形态与各类拒绝形态，另含根类型畸形（None/非 dict）。"""
     with_version = {
         "step_id": "prepare",
         "action": "script:prepare",
@@ -107,24 +141,58 @@ def _corpus() -> list[tuple[str, Any]]:
     ]
 
 
-def test_both_copies_exist():
-    """回落落点必须存在——`job_runner` 在 ImportError 时会 import agent 侧那份。"""
-    assert _AGENT_COPY.is_file(), f"缺少 agent 侧回落副本：{_AGENT_COPY}"
-    assert _CORE_COPY.is_file(), f"缺少 core 侧实现：{_CORE_COPY}"
+def test_contract_has_single_implementation_without_legacy_copies():
+    """ADR-0054 D5：只有 contracts/ 一份实现，旧副本（含再导出壳）已删。"""
+    assert _CONTRACT_MODULE.is_file(), f"缺少契约实现：{_CONTRACT_MODULE}"
+    for legacy in _LEGACY_COPIES:
+        assert not legacy.exists(), (
+            f"旧副本仍在：{legacy}——ADR-0054 D5 要求删除且不留再导出壳（壳会让 patch 目标分叉）"
+        )
 
 
-def test_both_copies_agree_on_corpus():
-    divergences = []
-    for name, pipeline_def in _corpus():
-        agent_result = _normalized(agent_validate, pipeline_def)
-        core_result = _normalized(core_validate, pipeline_def)
-        if agent_result != core_result:
-            divergences.append(
-                f"  - {name}: agent={agent_result!r} core={core_result!r}"
-            )
-    assert not divergences, (
-        "两份 pipeline_validator 语义漂移（同一 pipeline_def 在两侧判定不同）：\n"
-        + "\n".join(divergences)
-        + "\n\n修法：让两份副本重新一致（历史上二者逐字相同）；"
-        "若确需各自演进，请把本判据改为显式豁免并说明理由。"
+def test_repo_layout_schema_path_is_the_real_artifact():
+    """D6 仓库布局：契约按 agent 包父目录解析到 ``backend/schemas/pipeline_schema.json``。"""
+    expected = _REPO_ROOT / "backend" / "schemas" / "pipeline_schema.json"
+
+    assert resolve_pipeline_schema_path() == expected
+    assert expected.is_file()
+
+
+def test_host_layout_imports_and_agrees_with_repo_layout(tmp_path):
+    """D3/D6 主机布局：顶层包 ``agent`` + ``<install>/schemas/`` 真子进程跑通，判定一致。
+
+    直接复刻安装后的目录形状（``install_agent.sh`` / DEPLOY.md）：契约文件若按
+    ``__file__`` 裸深度定位 schema（搬迁前的 ``parent.parent``），在本布局必然解析错。
+    """
+    install = tmp_path / "stability-test-agent"
+    for relative in (
+        "agent/__init__.py",
+        "agent/adb_wrapper.py",
+        "agent/contracts/__init__.py",
+        "agent/contracts/pipeline_validator.py",
+    ):
+        source = _REPO_ROOT / "backend" / relative
+        target = install / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+    schema_target = install / "schemas" / "pipeline_schema.json"
+    schema_target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(_REPO_ROOT / "backend" / "schemas" / "pipeline_schema.json", schema_target)
+
+    corpus = [case for _, case in _corpus()]
+    corpus_file = tmp_path / "corpus.json"
+    corpus_file.write_text(json.dumps(corpus), encoding="utf-8")
+
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(install)   # 只给安装树：repo 布局不得参与
+    proc = subprocess.run(
+        [sys.executable, "-c", _HOST_LAYOUT_PROBE, str(corpus_file)],
+        cwd=str(tmp_path), capture_output=True, text=True, env=env,
+    )
+    assert proc.returncode == 0, f"主机布局导入/校验失败：\n{proc.stderr}"
+
+    payload = json.loads(proc.stdout)
+    assert payload["schema"] == str(schema_target)
+    assert payload["results"] == [_normalized(validate_pipeline_def, case) for case in corpus], (
+        "同一契约在主机布局与仓库布局给出不同判定（ADR-0054：不变量是「一种代码不得挑布局」）"
     )

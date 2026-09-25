@@ -31,7 +31,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from backend.core.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
+from backend.agent.contracts.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
 from backend.models.script import Script
 
 _ACTIVE_SCRIPTS = select(Script.name, Script.version, Script.content_sha256).where(

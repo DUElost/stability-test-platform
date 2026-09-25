@@ -147,16 +147,13 @@ class JobRunnerState:
 
 
 def _validate_pipeline_def(pipeline_def: Optional[Dict[str, Any]]) -> Optional[str]:
-    """Validate pipeline structure via shared semantic validator (imported from core).
+    """Validate pipeline structure via the shared contract validator.
 
     This function is a thin adapter that converts the shared
     ``validate_lifecycle_semantics`` return type to the str-or-None form
     expected by the agent job runner.
     """
-    try:
-        from backend.core.pipeline_validator import validate_pipeline_def
-    except ImportError:
-        from .pipeline_validator import validate_pipeline_def
+    from .contracts.pipeline_validator import validate_pipeline_def
 
     if not pipeline_def or not isinstance(pipeline_def, dict):
         return "pipeline_def is required"

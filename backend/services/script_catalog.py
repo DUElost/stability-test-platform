@@ -30,7 +30,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
-from backend.core.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
+from backend.agent.contracts.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
 from backend.models.script import Script
 
 logger = logging.getLogger(__name__)

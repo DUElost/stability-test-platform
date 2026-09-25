@@ -75,7 +75,7 @@ def _doc(step: dict) -> dict:
 
 
 def _errors(doc: dict) -> list[str]:
-    """与 ``backend/core/pipeline_validator.py`` 同格式的错误串。"""
+    """与 ``backend/agent/contracts/pipeline_validator.py`` 同格式的错误串。"""
     out = []
     for err in Draft7Validator(_schema()).iter_errors(doc):
         path = ".".join(str(p) for p in err.absolute_path) or "(root)"
@@ -238,7 +238,7 @@ _CORE_PROBE = r'''
 import json
 from types import SimpleNamespace
 
-from backend.core.pipeline_validator import validate_pipeline_def
+from backend.agent.contracts.pipeline_validator import validate_pipeline_def
 from backend.services.plan_dispatcher_core import (
     apply_step_timing_fields,
     build_lifecycle_from_snapshot,
