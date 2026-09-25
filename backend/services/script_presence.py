@@ -502,7 +502,9 @@ async def run_sweep(
                     if m.get("package_sha256") and (str(m["name"]), str(m["version"])) in reachable}
         modes[hid] = derive_packages_mode(entries, sha_keys, reachable_empty=not reachable)
 
-    await asyncio.to_thread(_persist_modes, db_factory, modes)
+    await asyncio.to_thread(
+        _persist_modes, db_factory, modes, full_scope=host_ids is None,
+    )
     written = await asyncio.to_thread(_persist, db_factory, rows)
     round_hosts = [str(h["id"]) for h, _reachable in per_host]
     removed = await asyncio.to_thread(
@@ -554,8 +556,16 @@ def fleet_packages_mode(db: Session) -> Dict[str, int]:
     return out
 
 
-def _persist_modes(db_factory, modes: dict[str, Optional[str]]) -> int:
-    """#3222：把推导出的包模式写 host 显式列（每轮 sweep 全量刷新；unknown 也写 None）。"""
+def _persist_modes(
+    db_factory, modes: dict[str, Optional[str]], *, full_scope: bool = True
+) -> int:
+    """#3222：把推导出的包模式写 host 显式列（每轮 sweep 全量刷新；unknown 也写 None）。
+
+    #3315：gauge 只在**全量作用域** sweep 更新——单机 refresh 也走 run_sweep(host_ids=[…])，
+    其 modes 是 1 台切片，Counter 聚合会把 fleet 计数覆盖成 {package:1}（2026-09-25 首采
+    当天实测：DB 48/48 package 正确，gauge 却被一次 refresh 打成 1）。列写 per-host
+    upsert 天然不受作用域影响，照写。
+    """
     if not modes:
         return 0
     n = 0
@@ -566,7 +576,7 @@ def _persist_modes(db_factory, modes: dict[str, Optional[str]]) -> int:
                 row.script_packages_mode = mode
                 n += 1
         db.commit()
-    if metrics.PROMETHEUS_AVAILABLE:
+    if full_scope and metrics.PROMETHEUS_AVAILABLE:
         try:
             counts = Counter(m or "unknown" for m in modes.values())
             for label in ("package", "tree", "mixed", "unknown"):
