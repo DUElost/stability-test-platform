@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-from fastapi import HTTPException
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from backend.services.agent_step_status import (
@@ -12,6 +11,7 @@ from backend.services.agent_step_status import (
     update_agent_job_step_status,
     upload_agent_step_traces,
 )
+from backend.services.errors import Conflict, ServiceError
 
 
 class TestUploadStepTracesGuards:
@@ -19,7 +19,7 @@ class TestUploadStepTracesGuards:
     async def test_job_not_found_404(self):
         db = AsyncMock()
         db.get = AsyncMock(return_value=None)
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ServiceError) as exc:
             await upload_agent_step_traces(
                 db,
                 [StepTraceIn(
@@ -29,7 +29,7 @@ class TestUploadStepTracesGuards:
                     fencing_token="tok",
                 )],
             )
-        assert exc.value.status_code == 404
+        assert exc.value.status == 404
 
     @pytest.mark.asyncio
     async def test_invalid_token_409(self):
@@ -39,9 +39,9 @@ class TestUploadStepTracesGuards:
         with patch(
             "backend.services.agent_step_status.require_valid_runtime_lease",
             new_callable=AsyncMock,
-            side_effect=HTTPException(status_code=409, detail="invalid or expired fencing_token"),
+            side_effect=Conflict("invalid or expired fencing_token"),
         ):
-            with pytest.raises(HTTPException) as exc:
+            with pytest.raises(ServiceError) as exc:
                 await upload_agent_step_traces(
                     db,
                     [StepTraceIn(
@@ -51,7 +51,7 @@ class TestUploadStepTracesGuards:
                         fencing_token="bad",
                     )],
                 )
-        assert exc.value.status_code == 409
+        assert exc.value.status == 409
 
 
 class TestUpdateStepStatusGuards:
@@ -59,11 +59,11 @@ class TestUpdateStepStatusGuards:
     async def test_job_not_found_404(self):
         db = AsyncMock()
         db.get = AsyncMock(return_value=None)
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ServiceError) as exc:
             await update_agent_job_step_status(
                 db, 1, "s1", StepStatusIn(status="RUNNING", fencing_token="tok"),
             )
-        assert exc.value.status_code == 404
+        assert exc.value.status == 404
 
     @pytest.mark.asyncio
     async def test_derives_stable_trace_event_id(self):

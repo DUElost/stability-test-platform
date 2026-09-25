@@ -11,7 +11,6 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from fastapi import HTTPException
 from pydantic import BaseModel
 from sqlalchemy import case, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +19,7 @@ from backend.core.metrics import record_patrol_heartbeat
 from backend.models.enums import JobStatus
 from backend.models.job import JobInstance
 from backend.services.agent_completion import _get_valid_runtime_lease
+from backend.services.errors import BadRequest, Conflict, NotFound
 
 
 def _as_utc(dt: datetime | None) -> datetime | None:
@@ -93,7 +93,7 @@ async def record_agent_patrol_heartbeat(
     """
     job = await db.get(JobInstance, job_id)
     if job is None:
-        raise HTTPException(status_code=404, detail="job not found")
+        raise NotFound("job not found")
 
     # ADR-0022 D10: Job 已非 RUNNING(典型:recycler 已把 status 推到 UNKNOWN)→
     # 直接 409 JOB_NOT_RUNNING,与 L1033 CAS 失配的契约统一。本 slice 仅落 backend
@@ -102,34 +102,31 @@ async def record_agent_patrol_heartbeat(
     # lease-lost 收口由 LeaseRenewer (lease_renewer.py:152-167) 通过续租 409/404
     # 触发 _on_lease_lost 兜底完成。
     if job.status != JobStatus.RUNNING.value:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "JOB_NOT_RUNNING",
-                "message": (
-                    f"Job {job_id} status={job.status} (not RUNNING); "
-                    "trigger /agent/recovery/sync to re-establish lease before next patrol cycle"
-                ),
-            },
-        )
+        raise Conflict({
+            "code": "JOB_NOT_RUNNING",
+            "message": (
+                f"Job {job_id} status={job.status} (not RUNNING); "
+                "trigger /agent/recovery/sync to re-establish lease before next patrol cycle"
+            ),
+        })
 
     valid_lease = await _get_valid_runtime_lease(db, job, payload.fencing_token)
     if valid_lease is None:
-        raise HTTPException(status_code=409, detail="invalid or expired fencing_token")
+        raise Conflict("invalid or expired fencing_token")
 
     if payload.success_delta < 0 or payload.failed_delta < 0:
-        raise HTTPException(status_code=400, detail="delta must be non-negative")
+        raise BadRequest("delta must be non-negative")
     if payload.cycle_index < 0:
-        raise HTTPException(status_code=400, detail="cycle_index must be non-negative")
+        raise BadRequest("cycle_index must be non-negative")
     if payload.current_failure_streak < 0:
-        raise HTTPException(status_code=400, detail="current_failure_streak must be non-negative")
+        raise BadRequest("current_failure_streak must be non-negative")
 
     next_retry_dt = None
     if payload.next_retry_at:
         try:
             next_retry_dt = datetime.fromisoformat(payload.next_retry_at.replace("Z", "+00:00"))
         except ValueError:
-            raise HTTPException(status_code=400, detail=f"invalid next_retry_at: {payload.next_retry_at}") from None
+            raise BadRequest(f"invalid next_retry_at: {payload.next_retry_at}") from None
 
     now = datetime.now(timezone.utc)
 
@@ -177,16 +174,13 @@ async def record_agent_patrol_heartbeat(
     )
     if result.first() is None:
         await db.rollback()
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "JOB_NOT_RUNNING",
-                "message": (
-                    f"Job {job_id} status flipped during patrol-heartbeat write; "
-                    "trigger /agent/recovery/sync to re-establish lease before next patrol cycle"
-                ),
-            },
-        )
+        raise Conflict({
+            "code": "JOB_NOT_RUNNING",
+            "message": (
+                f"Job {job_id} status flipped during patrol-heartbeat write; "
+                "trigger /agent/recovery/sync to re-establish lease before next patrol cycle"
+            ),
+        })
     await db.commit()
 
     record_patrol_heartbeat(

@@ -13,16 +13,15 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.api.error_helpers import raise_api_http_error
 from backend.models.enums import JobStatus, LeaseType
 from backend.models.host import Device
 from backend.models.job import JobInstance
 from backend.services.agent_completion import _RUN_TO_JOB, _get_valid_runtime_lease
+from backend.services.errors import Conflict, NotFound
 from backend.services.lease_manager import extend_lease
 
 _DEVICE_LOCK_LEASE_SECONDS = int(os.getenv("DEVICE_LOCK_LEASE_SECONDS", "600"))
@@ -51,7 +50,7 @@ async def record_agent_job_heartbeat(
     """Keep an already claimed RUNNING job alive."""
     job = await db.get(JobInstance, job_id)
     if job is None:
-        raise HTTPException(status_code=404, detail="job not found")
+        raise NotFound("job not found")
 
     # ADR-0019 Phase 4b: validate fencing_token via _get_valid_runtime_lease
     valid_lease = await _get_valid_runtime_lease(
@@ -61,15 +60,14 @@ async def record_agent_job_heartbeat(
         allowed_job_statuses={JobStatus.RUNNING.value},
     )
     if valid_lease is None:
-        raise HTTPException(status_code=409, detail="invalid or expired fencing_token")
+        raise Conflict("invalid or expired fencing_token")
 
     target = _RUN_TO_JOB.get(payload.status.upper(), JobStatus.RUNNING)
     if target != JobStatus.RUNNING:
-        raise_api_http_error(
-            status_code=409,
-            code="TERMINAL_STATUS_REQUIRES_COMPLETE",
-            message="job heartbeat cannot finalize a job; use /complete",
-        )
+        raise Conflict({
+            "code": "TERMINAL_STATUS_REQUIRES_COMPLETE",
+            "message": "job heartbeat cannot finalize a job; use /complete",
+        })
     now = datetime.now(timezone.utc)
     if job.status == JobStatus.RUNNING.value:
         if not job.started_at:
@@ -96,22 +94,22 @@ async def extend_agent_job_lock(
         .with_for_update()
     )).scalars().first()
     if job is None:
-        raise HTTPException(status_code=404, detail="job not found")
+        raise NotFound("job not found")
 
     device = await db.get(Device, job.device_id)
     if device is None:
-        raise HTTPException(status_code=404, detail="device not found")
+        raise NotFound("device not found")
 
     # ADR-0019 Phase 4b: validate fencing_token via _get_valid_runtime_lease
     valid_lease = await _get_valid_runtime_lease(db, job, payload.fencing_token)
     if valid_lease is None:
-        raise HTTPException(status_code=409, detail="invalid or expired fencing_token")
+        raise Conflict("invalid or expired fencing_token")
 
     renewed = await extend_lease(
         db, job.device_id, job_id, LeaseType.JOB, _DEVICE_LOCK_LEASE_SECONDS,
     )
     if not renewed:
-        raise HTTPException(status_code=409, detail="device locked by another job")
+        raise Conflict("device locked by another job")
 
     now = datetime.now(timezone.utc)
     job.updated_at = now

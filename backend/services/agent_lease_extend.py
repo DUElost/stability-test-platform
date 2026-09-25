@@ -13,7 +13,6 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import HTTPException
 from pydantic import BaseModel
 from sqlalchemy import bindparam, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,6 +21,7 @@ from backend.core.metrics import record_lease_extend_batch
 from backend.models.device_lease import DeviceLease
 from backend.models.enums import JobStatus, LeaseStatus, LeaseType
 from backend.models.job import JobInstance
+from backend.services.errors import BatchTooLarge
 
 _DEVICE_LOCK_LEASE_SECONDS = int(os.getenv("DEVICE_LOCK_LEASE_SECONDS", "600"))
 
@@ -154,14 +154,11 @@ async def extend_agent_leases_batch(
     if not items:
         return _ExtendBatchOut(results=[])
     if len(items) > _LEASE_EXTEND_BATCH_MAX:
-        raise HTTPException(
-            status_code=413,
-            detail={
-                "code": "LEASE_BATCH_TOO_LARGE",
-                "max": _LEASE_EXTEND_BATCH_MAX,
-                "received": len(items),
-            },
-        )
+        raise BatchTooLarge({
+            "code": "LEASE_BATCH_TOO_LARGE",
+            "max": _LEASE_EXTEND_BATCH_MAX,
+            "received": len(items),
+        })
 
     # Preserve request order; duplicate job_ids collapse to ONE result entry and
     # the LAST occurrence's token wins (the later token is the more recent claim

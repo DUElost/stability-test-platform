@@ -25,7 +25,7 @@ pytestmark = pytest.mark.skipif(
            "SQLite quick-test 模式下自动跳过。",
 )
 
-from fastapi import HTTPException
+from backend.services.errors import ServiceError
 
 from backend.api.routes.agent_api import ArtifactIn, ingest_artifact, get_archive_status
 from backend.core.database import AsyncSessionLocal, SessionLocal, async_engine
@@ -197,7 +197,7 @@ async def test_ingest_artifact_rejects_unlisted_artifact_type():
     try:
         await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
-            with pytest.raises(HTTPException) as excinfo:
+            with pytest.raises(ServiceError) as excinfo:
                 await ingest_artifact(
                     job_id=seed["job_id"],
                     payload=_artifact_in(
@@ -208,7 +208,7 @@ async def test_ingest_artifact_rejects_unlisted_artifact_type():
                     db=async_db,
                     _=None,
                 )
-        assert excinfo.value.status_code == 400
+        assert excinfo.value.status == 400
         assert "artifact_type" in str(excinfo.value.detail).lower()
 
         # 未入库
@@ -233,7 +233,7 @@ async def test_ingest_artifact_rejects_empty_storage_uri():
     try:
         await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
-            with pytest.raises(HTTPException) as excinfo:
+            with pytest.raises(ServiceError) as excinfo:
                 await ingest_artifact(
                     job_id=seed["job_id"],
                     payload=_artifact_in(
@@ -244,7 +244,7 @@ async def test_ingest_artifact_rejects_empty_storage_uri():
                     db=async_db,
                     _=None,
                 )
-        assert excinfo.value.status_code == 400
+        assert excinfo.value.status == 400
         assert "storage_uri" in str(excinfo.value.detail).lower()
     finally:
         _cleanup_with_artifacts(seed)
@@ -256,7 +256,7 @@ async def test_ingest_artifact_rejects_storage_uri_outside_nfs_root():
     try:
         await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
-            with pytest.raises(HTTPException) as excinfo:
+            with pytest.raises(ServiceError) as excinfo:
                 await ingest_artifact(
                     job_id=seed["job_id"],
                     payload=_artifact_in(
@@ -267,7 +267,7 @@ async def test_ingest_artifact_rejects_storage_uri_outside_nfs_root():
                     db=async_db,
                     _=None,
                 )
-        assert excinfo.value.status_code == 400
+        assert excinfo.value.status == 400
         assert "STP_AEE_NFS_ROOT" in str(excinfo.value.detail)
     finally:
         _cleanup_with_artifacts(seed)
@@ -320,7 +320,7 @@ async def test_ingest_artifact_rejects_negative_size_bytes():
     try:
         await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
-            with pytest.raises(HTTPException) as excinfo:
+            with pytest.raises(ServiceError) as excinfo:
                 await ingest_artifact(
                     job_id=seed["job_id"],
                     payload=_artifact_in(
@@ -332,7 +332,7 @@ async def test_ingest_artifact_rejects_negative_size_bytes():
                     db=async_db,
                     _=None,
                 )
-        assert excinfo.value.status_code == 400
+        assert excinfo.value.status == 400
         assert "size_bytes" in str(excinfo.value.detail).lower()
     finally:
         _cleanup_with_artifacts(seed)
@@ -346,7 +346,7 @@ async def test_ingest_artifact_rejects_negative_size_bytes():
 async def test_ingest_artifact_returns_404_when_job_missing():
     await async_engine.dispose()
     async with AsyncSessionLocal() as async_db:
-        with pytest.raises(HTTPException) as excinfo:
+        with pytest.raises(ServiceError) as excinfo:
             await ingest_artifact(
                 job_id=999999999,
                 payload=_artifact_in(
@@ -357,7 +357,7 @@ async def test_ingest_artifact_returns_404_when_job_missing():
                 db=async_db,
                 _=None,
             )
-    assert excinfo.value.status_code == 404
+    assert excinfo.value.status == 404
     assert "job" in str(excinfo.value.detail).lower()
 
 
@@ -406,7 +406,7 @@ async def test_ingest_artifact_rejects_upload_fencing_mismatch():
     try:
         await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
-            with pytest.raises(HTTPException) as excinfo:
+            with pytest.raises(ServiceError) as excinfo:
                 await ingest_artifact(
                     job_id=seed["job_id"],
                     payload=_artifact_in(
@@ -418,7 +418,7 @@ async def test_ingest_artifact_rejects_upload_fencing_mismatch():
                     db=async_db,
                     _=None,
                 )
-        assert excinfo.value.status_code == 409
+        assert excinfo.value.status == 409
         assert excinfo.value.detail["code"] == "UPLOAD_FENCING_MISMATCH"
     finally:
         _cleanup_with_artifacts(seed)
@@ -463,6 +463,6 @@ async def test_ingest_artifact_accepts_terminal_delayed_upload_with_historical_t
 async def test_archive_status_unknown_host_404():
     await async_engine.dispose()
     async with AsyncSessionLocal() as async_db:
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ServiceError) as exc:
             await get_archive_status("nonexistent-host-zzz", db=async_db, _user=None)
-    assert exc.value.status_code == 404
+    assert exc.value.status == 404

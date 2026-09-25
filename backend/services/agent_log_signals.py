@@ -13,7 +13,6 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,6 +22,7 @@ from backend.models.device_lease import DeviceLease
 from backend.models.enums import JobStatus, LeaseType
 from backend.models.host import Device
 from backend.models.job import JobInstance, JobLogSignal
+from backend.services.errors import Conflict, ServiceError
 
 logger = logging.getLogger(__name__)
 
@@ -139,10 +139,7 @@ async def require_job_bound_upload_lease(
         or lease.agent_instance_id != agent_instance_id
         or (device.serial or "").strip() != (device_serial or "").strip()
     ):
-        raise HTTPException(
-            status_code=409,
-            detail={"code": "UPLOAD_FENCING_MISMATCH"},
-        )
+        raise Conflict({"code": "UPLOAD_FENCING_MISMATCH"})
     return lease
 
 
@@ -196,12 +193,12 @@ async def ingest_agent_log_signals(
                 host_id=s.host_id,
                 device_serial=s.device_serial,
             )
-        except HTTPException as exc:
+        except ServiceError as exc:
             detail = exc.detail
             if isinstance(detail, dict):
                 detail = detail.get("code") or str(detail)
             rejected.append(_rejected_item(
-                s, f"lease_check_failed({exc.status_code}): {detail}",
+                s, f"lease_check_failed({exc.status}): {detail}",
             ))
             continue
 
