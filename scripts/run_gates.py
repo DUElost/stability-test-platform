@@ -65,11 +65,14 @@ GATES = {
         FRONTEND,
         None,
     ),
-    # 分层门禁（#1519）：services/ 不得反向 import api.routes（含 --self-test 红绿自证）。
+    # 分层门禁：仓库根 .importlinter 的 import 边界合约（C1 分层 / C2 services 不依赖
+    # HTTP / C3 控制面不进 agent / C4 core 不依赖 web 框架 / C5 services 无环），
+    # 取代原 check_layering.py（#1519 单条规则，已被 C1/C2 覆盖）。纯静态、<1s；
+    # --no-cache 避免在仓库根留下 .import_linter_cache。CI 对应物=ci.yml lint job「分层检查」。
     "layering": (
-        f"{PY} tools/dev/check_layering.py",
+        f'{PY} -c "from importlinter.cli import lint_imports_command as c; c([\'--no-cache\'])"',
         ROOT,
-        None,
+        {"PYTHONPATH": ROOT},
     ),
     # 孤立 ORM 模型挂载门禁（#1890-B / #734）：模型类零消费方即红（幽灵模型的
     # 镜像形态）。纯 AST/文本扫描、毫秒级；--self-test 红绿双向自证。
@@ -334,7 +337,7 @@ GATES = {
 PROFILES = {
     "check:quick": [
         "schema-at-head", "env-inventory",
-        "ruff", "eslint", "tsc", "knip", "compileall", "orphan-models",
+        "ruff", "eslint", "tsc", "knip", "compileall", "layering", "orphan-models",
         "gov-surface", "ai-work", "god-files", "inner-imports",
         "new-script-family", "tool-contract", "tool-manifest", "transitions",
     ],
