@@ -10,6 +10,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
+from typing import Dict
+
 from pydantic import BaseModel, Field
 
 
@@ -47,6 +49,9 @@ class ScriptPresenceSummaryOut(BaseModel):
     """fleet 汇总（`GET /script-presence/summary`）。"""
 
     counts: ScriptPresenceCounts
+    # #3222：fleet 包模式分布（host.script_packages_mode 聚合；unknown = NULL 数）——
+    # ADR-0051「fleet 全 strict」的机器可核验视图，取代人工背书。
+    fleet_packages: Dict[str, int] = Field(default_factory=dict)
     hosts_total: int = 0
     hosts_with_gap: int = 0
     full_versions: int = 0

@@ -10,6 +10,8 @@ import hashlib
 import json
 from pathlib import Path
 
+from backend.tests.script_package_site import tar_bytes
+
 from sqlalchemy.orm import Session
 
 from backend.models.script import Script
@@ -111,6 +113,33 @@ def test_retired_entries_create_inactive_rows_on_fresh_db(db_session: Session, t
     assert [(m["name"], m["version"], m["reason"]) for m in again.package_missing] == [
         ("demo", "1.0.0", "package_missing")]
     assert db_session.query(Script).filter_by(name="demo", version="1.0.0").first() is None
+
+
+def test_retired_existing_row_backfills_package_sha(db_session: Session, tmp_path: Path):
+    """#3222 附带小项：seed 写过的 retired 行（无包身份）→ 一轮按包补齐后不再读包。"""
+    site = Site(tmp_path)
+    site.add("legacy", "1.0.0", {"legacy.py": "x\n"}, retired=True)
+    site.add("legacy", "1.0.1", {"legacy.py": "y\n"})
+    _sync(db_session, site)  # 建行（1.0.0 inactive 有 sha；1.0.1 active）
+    row = db_session.query(Script).filter_by(name="legacy", version="1.0.0").one()
+    assert row.is_active is False and row.package_sha256
+    # 模拟 seed 直写、无包身份的 retired 历史行
+    seed_row = Script(name="legacy", script_type="python", version="0.9.0", nfs_path="/s/legacy.py",
+                      content_sha256="0" * 64, support_files_manifest={}, capabilities=[],
+                      default_params={}, param_schema={}, is_active=False)
+    db_session.add(seed_row); db_session.commit()
+    blob = tar_bytes({"legacy.py": "old\n"})
+    (site.packages_root / "legacy").mkdir(exist_ok=True)
+    (site.packages_root / "legacy" / "0.9.0.tar.gz").write_bytes(blob)
+    site.doc["tools"]["legacy"]["versions"].insert(0, {
+        "version": "0.9.0", "package_sha256": hashlib.sha256(blob).hexdigest(),
+        "artifact": "packages/legacy/0.9.0.tar.gz", "python": None, "script": "legacy.py", "retired": True})
+    site.write()
+    r = _sync(db_session, site)
+    db_session.refresh(seed_row)
+    assert seed_row.package_sha256 == hashlib.sha256(blob).hexdigest()
+    assert seed_row.content_sha256 == hashlib.sha256(b"old\n").hexdigest() and not seed_row.is_active
+    assert r.package_backfilled >= 1
 
 
 def test_unregistered_active_rows_are_reported_only(db_session: Session, tmp_path: Path):

@@ -225,6 +225,15 @@ host_script_presence = Gauge(
     ['host_id', 'state'],
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
+# #3222：fleet 包模式计数（presence sweep 每轮按 host 推导写列后聚合）。
+# ADR-0051「fleet 全 strict」的机器不变量：期望 {mode="package"} == hosts_total，
+# tree/mixed 出现 = 有主机仍在（已不存在的）tree 语义或半旧代码，unknown = 从未 sweep。
+host_script_packages_mode = Gauge(
+    'stability_host_script_packages_mode',
+    'Host count by script package mode (ADR-0051 #3222)',
+    ['mode'],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
 # #2958：账本新鲜度 = 最近一次**完整** sweep 里最旧一行的观测时刻（unix 秒）。
 # 缺了它，「探针死了」与「全在位」不可分辨——#2900/#2984 的同族教训（绿而空）。
 script_presence_sweep_timestamp = Gauge(
