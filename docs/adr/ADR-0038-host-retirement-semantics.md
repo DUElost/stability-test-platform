@@ -1,8 +1,8 @@
 # ADR-0038：主机退役语义（Host Retirement Semantics）
 
-- 状态：**Accepted**（v0.3 草案，2026-09-22，**待 owner 裁决、尚未生效**——裁决前 §7 各条不生效；v0.2 已定稿 2026-09-13：9 稿评审 synthesis + 人工裁决 D-1～D-6）
+- 状态：**Accepted** v0.3（2026-09-25 裁决 §7.6 A1–A5，§7 D9 生效，见 §7.7；v0.2 已定稿 2026-09-13：9 稿评审 synthesis + 人工裁决 D-1～D-6）
 - 版本记录：
-  - v0.3（2026-09-22 草案，**待 owner 裁决**）：新增 D9「设备面意图（空置 / 人工清空）」——host 生命周期第三维度（可逆、与退役正交）+ 设备面规则豁免（`StabilityHostUsbBlind`）。触发 = 现网 5 台人为清空设备的常亮 critical（#3065）；裁决点见 §7.6；实施单 #3159。
+  - v0.3（2026-09-22 草案；**2026-09-25 裁决生效**，owner 授权 Claude 裁决，见 §7.7：A1/A3/A4/A5 采草案取向，A2 定为「UsbBlind + AdbOfflineConcentration 豁免、内核证据类两条不豁免」，另增 D9.8 意图陈旧告警）：新增 D9「设备面意图（空置 / 人工清空）」——host 生命周期第三维度（可逆、与退役正交）+ 设备面规则豁免（`StabilityHostUsbBlind`）。触发 = 现网 5 台人为清空设备的常亮 critical（#3065）；裁决点见 §7.6；实施单 #3159。
   - v0.2（2026-09-13）：按 9 份独立评审（[#1557](https://github.com/DUElost/stability-test-platform/issues/1557)，综合稿 PR #1677）与人工裁决 D-1～D-6 修订；**转 Accepted**。修订对照见 §6。
   - v0.1（2026-09-12 初版；#796/#937 Revisit 触发）
 - 优先级：P2
@@ -292,7 +292,7 @@
 
 > 评审模型归属（会话 × 模型）见 errata：`docs/reviews/REVIEW_ADR0038_2026-09-13_571d95-attribution.md`。
 
-## 7. v0.3 草案（**待 owner 裁决**；裁决前本节各条不生效）：D9 设备面意图（空置 / 人工清空）
+## 7. v0.3（2026-09-25 裁决生效，§7.7）：D9 设备面意图（空置 / 人工清空）
 
 ### 7.1 触发与事实（2026-09-22 现网）
 
@@ -315,7 +315,7 @@
 - 自动推断被否决（§7.4）：同一形态在候选集缺「人为有意操作」时，任何自动成因判断都会周期性
   把正常作业读成故障（#3065 三次「排除法没做完就定成因」的教训）。⇒ 意图必须**人工显式置位**。
 
-### 7.2 D9（草案）：设备面意图为第三生命周期维度，设备面告警据此豁免
+### 7.2 D9：设备面意图为第三生命周期维度，设备面告警据此豁免
 
 - **D9.1 状态与真源**：`host` 新增可空列 `emptied_at`（`TIMESTAMPTZ`）+ `emptied_by`
   （`String(128)`）+ `emptied_reason`（`Text`，**必填**）。真源只在此三列——**禁 `Host.extra`
@@ -344,6 +344,7 @@
   ```
 
   实现必须用 promtool 场景层固化 `and` / `unless` 语义（两者同级左结合，写错会静默失效）。
+  `StabilityHostAdbOfflineConcentration` 按同构方式在整条表达式外层加同一 `unless`（2026-09-25 A2 裁决，§7.7）。
 - **D9.4 入口与审计**：端点形如 `POST /hosts/{id}/device-intent` / `DELETE`（对齐
   `hosts.py` 的 retire/unretire 权限与审计级别）；`record_audit(strict=True)` **fail-closed**
   （对齐 `backend/services/host_retirement.py:18-19`）。清除 = `emptied_at=NULL`，
@@ -354,9 +355,21 @@
   派发自然落空；收口职责属 retire）。实现单不得以「顺手一致」为由扩矩阵。
 - **D9.7 已知取舍（显式接受）**：长期置位 + 真故障（如 xHCI 死亡）会被豁免静默。接受理由：
   意图由人维护、有 reason 与徽标可审计，且优于 mute/ack（后者会连未预测形态一并埋且不留意图，
-  §7.4）；兜底见 §7.5 Revisit 2。
+  §7.4）；兜底见 D9.8 与 §7.5 Revisit 2。
+- **D9.8 意图陈旧告警（2026-09-25 裁决新增，把 D9.7 的静默风险变成可见）**：置位是人维护的
+  断言「设备面已被人工处置」；当事实与断言相反——该 host 账上重新出现 `adb_state=device` 的设备
+  （设备回场 / 机柜重新上线）——意图即陈旧，必须由人清除。新增规则
+  `StabilityHostDeviceIntentStale`（severity=**warning**，`for: 1h`）：
 
-### 7.3 落地与验收（草案；实施单 #3159）
+  ```promql
+  (sum by (host_id) (stability_host_device_adb_state{state="device"}) > 0)
+    and on (host_id) (stability_host_device_intent{intent="emptied"} == 1)
+  ```
+
+  只提示、**不自动清除**（自动清除 = 系统替人改写人工意图，与 §7.4「自动推断置位」否决同理）。
+  这样「置位后设备回场、忘了清除、之后 xHCI 死亡被静默」的路径在第一步就会响铃。
+
+### 7.3 落地与验收（实施单 #3159）
 
 - 迁移与配套：additive nullable 三列；`check_schema_sync` 对齐（禁 `--rebaseline`）；
   ORM ↔ alembic ↔ Pydantic ↔ `types.ts` 四端配对；单 head。
@@ -365,7 +378,8 @@
   2. 审计 fail-closed（审计异常 ⇒ 事务失败、状态未变）；退役机置位 409；清除幂等；
   3. 指标产出 / 清理（`tests/test_alert_metric_producers.py` 扩一条）；
   4. 规则场景（`tests/test_prometheus_alerts_contract.py` + promtool 场景层）：置位 ⇒ 不 firing；
-     清除 ⇒ firing；
+     清除 ⇒ firing（UsbBlind 与 AdbOfflineConcentration 各一组）；D9.8：置位 ∧ 账上 `state="device"` > 0 ⇒ `StabilityHostDeviceIntentStale` firing，
+     清除 ⇒ 消失；
   5. **现网活样本双向验证**：对现网 4 台给其中 1 台置位 ⇒ 该实例消失、其余 3 台继续 firing；
      清除 ⇒ 实例回来（同一次实验同时证明「豁免生效」与「真故障不被豁免」）；
   6. `check:quick` 全绿 + Agent Note。
@@ -393,7 +407,7 @@
    `StabilityHostUsbControllerDead`、`StabilityHostUsbLinkDegraded`），逐条按「该规则的误报形态
    是否同为人为意图」评估，不做整体套用。
 
-### 7.6 裁决点（owner；对应 #3159）
+### 7.6 裁决点（对应 #3159；裁决结果见 §7.7）
 
 | # | 裁决点 | 草案取向 |
 |---|---|---|
@@ -402,3 +416,24 @@
 | A3 | ADR 形式 | 本增补（v0.3 / D9）（备选：新 ADR） |
 | A4 | 有效期 | 不设自动过期；reason 必填 + 徽标（备选：到期复查） |
 | A5 | 是否挡派发 / 认领 | 不动（D9.6） |
+
+### 7.7 裁决记录（2026-09-25，owner 授权 Claude 裁决）
+
+判断基准是问题本质：缺口是「人为处置后，账（78 行陈旧设备，FK 封路删不掉）与实（USB 树空）
+长期不符，critical 常亮」。设备级清账（B 期 #2962）才是账面终态，但它需要独立的 FK / 租约 /
+serial 唯一性设计；在它落地前，唯一不埋真信号的做法是让人**显式、可审计、可逆**地声明意图，
+并让规则只对该声明豁免。
+
+| # | 裁决 | 依据 |
+|---|---|---|
+| A1 | **采纳**：`emptied_at/by/reason` 三列 | 现只有一种意图；预先做通用枚举要先定义尚不存在的「检修 / 外借」语义与迁移规则。第二种意图出现即按 §7.5-1 升级，届时三列可无损映射为枚举一值 |
+| A2 | **`StabilityHostUsbBlind` 与 `StabilityHostAdbOfflineConcentration` 豁免**（同构 `unless`）；`StabilityHostUsbControllerDead` / `StabilityHostUsbLinkDegraded` **不豁免** | 豁免的判据是「该规则在空置机上的误报形态是否只来自账实不符」（§7.5-4 逐条评估）：UsbBlind 读「树空 ∧ 账上有行」，是；OfflineConcentration 也是——心跳把未再出现的设备行确定性改写为 `adb_state="offline"`（`backend/api/routes/heartbeat.py:139-165` `_mark_missing_devices_offline`），现网 5 台空置机 9–20 行陈旧行 ⇒ 占比 100%、≥5 台，必然同形误报，不是「待实测」项；ControllerDead / LinkDegraded 吃的是内核故障证据（`HC died` / 链路错误），空置机上出现也是真硬件故障，豁免会埋真信号 |
+| A3 | **采纳**：本 ADR 增补（v0.3 / D9） | 「host 生命周期有几个维度、各自由谁写」只应有一份表述（§7.2 D9.2 表），拆新 ADR 会让 host 状态分两处叙述 |
+| A4 | **采纳**：不设自动过期；reason 必填 + 徽标；**另增 D9.8 意图陈旧告警** | 自动过期会在到期瞬间重新拉响已知的误报（闪断式豁免）；D9.7 接受的风险改由 D9.8 在「设备回场」这一可观测事实上响铃兜住，而不是靠时间猜 |
+| A5 | **采纳**：不动派发 / 认领（D9.6） | 设备不在，派发自然落空；「不再使用」的收口职责属 retire（D5 14 面矩阵），不借本项扩矩阵 |
+
+- **生效范围**：§7 各条自本记录起生效，实施按 #3159 执行（§7.3 验收 1–6 + D9.8 场景）。
+- **与规则文件的既有注释**：`StabilityHostUsbBlind` 描述中「清账关闭本告警，而不是给本规则加静音条件」
+  仍是**终态**（B 期 #2962 设备退役落地后，空置机应走清账而非长期置位）；D9 的 `unless` 是人工显式
+  意图，不是静音条件，实施 PR 须同步改写该注释，写明两者关系与 B 期后的复核（§7.5-3）。
+

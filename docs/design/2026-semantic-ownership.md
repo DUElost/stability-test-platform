@@ -163,7 +163,7 @@
 | `dle-record` | concept | 设备日志事件终态台账 | `docs/adr/ADR-0028-device-log-event-and-continuous-upload.md :: 唯一权威记录` | 改唯一记录主张 |
 | `log-signal-stream` | concept | 异常事件权威流 | `docs/adr/ADR-0018-infrastructure-layer-framework-adoption.md :: \`log_signal\` 是异常事件权威流` | 旁路上报 |
 | `dedup-pipeline-behavior` | concept | 并列 dedup/merge 行为与分区 | `docs/adr/ADR-0032-unisoc-mtk-parallel-dedup-pipelines.md :: ### D1：两条并列流水线，禁止交叉混用` | 混流水线 |
-| `center-storage-model` | concept | 中心存储内容身份 / 事件引用 / 发布与回收边界 | `docs/adr/ADR-0053-center-storage-event-dedup.md :: ## 2. D1–D6 裁决` | 修改内容/引用边界；Phase A–D 实施后同步现态契约 |
+| `center-storage-model` | concept | 中心存储内容身份 / 事件引用 / 发布与回收边界 | `docs/adr/ADR-0053-center-storage-event-dedup.md :: ## 2. D1–D7 裁决` | 修改内容/引用边界；Phase A–D 实施后同步现态契约 |
 | `log-chain-map` | concept | 日志域全链**地图/路由入口**（Ownership Authority only；**非**第五内容权威） | `docs/design/2026-device-log-chain-contract.md :: ## 3. 阶段 owner 表（四层 + 后半段）` | 把 Contract 升格为内容宪法；与四层 ADR 抢定义权 |
 | `R-merge-locus` | relation | `Merge ─executed_at→ 控制面实例` | `docs/adr/ADR-0027-control-plane-horizontal-scaling.md :: 7. **merge（\`run_merge_sync\`）为实例绑定操作**` | B1/B2/多实例互斥 |
 | `R-merge-consumes-log` | relation | `Merge ─consumes→ scan/日志产物` | `docs/design/2026-scan-upload-merge-contract.md :: ## 控制面 merge` | 改输入集 |
