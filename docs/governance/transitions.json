@@ -44,6 +44,13 @@
       "due": "2026-09-30",
       "status": "done",
       "evidence": "2026-09-24 部署（#3250 合入后）：两行 id=216/217 经 admin PUT is_active=false 软退役，复扫 unregistered_active=[]"
+    },
+    {
+      "id": "plan-run-retention-disabled",
+      "what": "生产 PLAN_RUN_RETENTION_DAYS=36500（代码默认 3）：PlanRun 保留清理实际停用，保留全部运行明细（owner 2026-09-25 确认有意）。代价是 plan_run/job_instance/step_trace/产物登记/逐用例结果无界增长（150 host×25 device 约 15k job/天）；出口 = 长期事实层（#3230 G4 的方向级 ADR）落地后恢复有界保留，且恢复前须先有库体量增长监测（随 #3233 同批）",
+      "exit": "issue:#3230",
+      "due": "2026-12-31",
+      "status": "active"
     }
   ]
 }

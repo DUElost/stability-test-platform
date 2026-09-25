@@ -57,7 +57,7 @@ Class: bug-fix
 | 背压形态 | 67 次 **503**（12%），**0 次 500** | 验收线 ② ✅ |
 | 取连接失败 | `slots_exhausted` **0**、`timeout` **0** | 验收线 ① ✅ |
 | **池峰（async）** | **17** | 预算 40 ⇒ 本场景下 20/20 有 ~2.4× 余量、reserve=8 成立 |
-| 探针 p99（heartbeat/health） | **51.8ms** | 验收线 ③（<1s）✅ |
+| 探针 p99（heartbeat/health） | **51.8ms** | 验收线 ③（<1s）✅（2026-09-25 更正：**仅 `/health`**——heartbeat 探针缺必填 `status` 每次 422，旧判据只取 200 样本而未察觉；重测与判据改造见 [#3247 Note](./2026-09-25-nightly-red-and-vacuous-capacity-criteria-3247.md)） |
 | 被接纳的 `/complete` p99 | **1.10s** | 见发现 3 ⚠️ |
 | 收敛 | **5.4s**（round 1 排空 67 条用 0.55s） | 预算 120s ✅ |
 | post_completion 扇出 | **490**（去重后，0 重复） | 每个终态恰好一次 ✅ |
@@ -78,7 +78,9 @@ Class: bug-fix
 ## Revisit
 
 1. **本用例的刻意偏差**（别把绿读成生产已验证）：in-process ASGI（无 uvicorn/worker 并行、无真实网络）、
-   37 台 host 同源单 IP（Agent 桶 2000/min 未触顶；UI 桶 300/min 会让探针偶发 429，p99 只取 200 样本）、
+   37 台 host 同源单 IP（Agent 桶 2000/min 未触顶；UI 桶 300/min 会让探针偶发 429，p99 只取 200 样本
+   ——2026-09-25 更正：两个探针路径都在限流豁免清单（`backend/core/limiter.py` 的 `_SKIP_EXACT` / `_SKIP_PREFIXES`），
+   不会 429；被「只取 200」静默排除的是 heartbeat 每次的 422，见 #3247 Note）、
    post_completion 只记入队不执行（真跑需 Redis + worker）、`HostHeartbeatTimeout` 未断言（以探针延迟代理）、
    4 个 FAILED 为预置终态（计数已按事实预置）。
 2. **部署窗复跑**：48 台真机 + uvicorn + worker 的同一场景要再跑一遍，取生产分布回填 ADR-0047 §4；
