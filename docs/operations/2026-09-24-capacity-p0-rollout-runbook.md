@@ -1,8 +1,8 @@
 # 容量 P0 同窗上线执行手册（控制面 unit + 告警副本 + Agent 削峰）
 
-- **状态**：**手册（未执行）**——2026-09-24 11:3x 基于本机只读实测编写；执行者：owner
+- **状态**：**已执行**（2026-09-25）——Step 1 unit 补丁落盘 + Step 2 告警副本同步/reload（09-25 17:17–17:18，**未重启**：门禁的启动实测待下次重启）；Step 3 机队 48/48 分发（09-25 10:00，含 #3251）；Step 4 真机复跑完成（plan_run 556 于 09-25 17:21:18 中止，8 条验收线数据见 [#3244](https://github.com/DUElost/stability-test-platform/issues/3244)）。执行记录：A 段 = [#2959](https://github.com/DUElost/stability-test-platform/issues/2959) 评论（`gh-comment-once:2959-a-stage-executed-20260925`）；编写：2026-09-24 11:3x 基于本机只读实测；执行者：owner
 - **目的**：把 R523 之后**已合入但未生效**的 P0 改动真正落到本机生产控制面与 48 台 Agent，并按 owner 口径采集 #3244 裁决所需的真机数据
-- **关联**：父单 [#2959](https://github.com/DUElost/stability-test-platform/issues/2959)；控制面 [#3241](https://github.com/DUElost/stability-test-platform/pull/3241)（PR 已合）+ [#3249](https://github.com/DUElost/stability-test-platform/pull/3249)（PR 已合）；Agent [#3251](https://github.com/DUElost/stability-test-platform/pull/3251)（PR 已合，**未分发**）；压测 [#3253](https://github.com/DUElost/stability-test-platform/pull/3253)（已合）；ADR 草案 [`ADR-0052`](../adr/ADR-0052-terminal-fact-parent-aggregation-decoupling.md)（Proposed）
+- **关联**：父单 [#2959](https://github.com/DUElost/stability-test-platform/issues/2959)；控制面 [#3241](https://github.com/DUElost/stability-test-platform/pull/3241)（PR 已合）+ [#3249](https://github.com/DUElost/stability-test-platform/pull/3249)（PR 已合）；Agent [#3251](https://github.com/DUElost/stability-test-platform/pull/3251)（PR 已合；09-25 10:00 已 48/48 分发，`code_version=1fafd052`）；压测 [#3253](https://github.com/DUElost/stability-test-platform/pull/3253)（已合）；ADR 草案 [`ADR-0052`](../adr/ADR-0052-terminal-fact-parent-aggregation-decoupling.md)（Proposed）
 - **依据**：ADR-0047 v1.1（D1/D2/D5）、ADR-0051（部署源与内容寻址）、`tools/dev/check-monitoring-assets.py`（资产对账口径）
 
 > 本手册不是执行记录。执行时请在本文件末尾追加「执行记录」或在 #2959 落评论。
