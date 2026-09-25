@@ -225,9 +225,12 @@ host_script_presence = Gauge(
     ['host_id', 'state'],
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
-# #3222：fleet 包模式计数（presence sweep 每轮按 host 推导写列后聚合）。
-# ADR-0051「fleet 全 strict」的机器不变量：期望 {mode="package"} == hosts_total，
-# tree/mixed 出现 = 有主机仍在（已不存在的）tree 语义或半旧代码，unknown = 从未 sweep。
+# #3222：fleet 包模式计数——`/metrics` 拉取期从 host.script_packages_mode 列现算
+# （routes/metrics.py `_refresh_script_packages_mode_gauge`，与 summary fleet_packages 同源；
+# #3315 前曾在 sweep 内按本轮切片 set，单机 refresh 会覆盖 fleet 聚合、重启后缺席到下次 cron）。
+# ADR-0051「fleet 全 strict」的机器不变量：期望 {mode="package"} == 在册 host 数，
+# tree/mixed 出现 = 有主机仍在（已不存在的）tree 语义或半旧代码，unknown = 列为 NULL
+# （从未核过，或最近一次核验不可判）。
 host_script_packages_mode = Gauge(
     'stability_host_script_packages_mode',
     'Host count by script package mode (ADR-0051 #3222)',
