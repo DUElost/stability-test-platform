@@ -79,21 +79,30 @@ def _attach_pool_metrics(engine, engine_label: str) -> None:
         try:
             from backend.core.metrics import record_db_pool_status
 
-            overflow = int(pool.overflow()) if hasattr(pool, "overflow") else 0
+            # 读引擎**当下**的池：`Engine.dispose()` 以 `pool.recreate()` 换池，闭包里的
+            # 旧池此后恒为 0（#3247：CI 全量里 async 池峰读成 0.0）。
+            current = getattr(engine, "pool", None) or pool
+            overflow = int(current.overflow()) if hasattr(current, "overflow") else 0
             record_db_pool_status(
                 engine_label,
-                checked_out=int(pool.checkedout()),
+                checked_out=int(current.checkedout()),
                 overflow=max(0, overflow),
             )
         except Exception:  # noqa: BLE001 — 观测不得拖垮借还连接
             logger.debug("db_pool_metrics_refresh_failed label=%s", engine_label, exc_info=True)
 
+    # 池事件随 `recreate()` 的 `_dispatch` 继承到新池，无需重挂。
     event.listen(pool, "checkout", lambda *a, **k: _refresh())
     event.listen(pool, "checkin", lambda *a, **k: _refresh())
     event.listen(pool, "close", lambda *a, **k: _refresh())
     event.listen(pool, "invalidate", lambda *a, **k: _refresh())
 
     _instrument_pool_connect(pool, engine_label)
+    # `connect` 包装是实例级的，新池不继承：dispose 后重装，否则取连接超时/槽耗尽从此
+    # 不计数——#2959 的池告警与 #3243 验收线①会静默失明（#3247）。
+    event.listen(
+        engine, "engine_disposed", lambda eng: _instrument_pool_connect(eng.pool, engine_label)
+    )
 
 
 # SQLSTATE 40P01 = deadlock_detected。asyncpg 与 psycopg 都在异常对象上暴露

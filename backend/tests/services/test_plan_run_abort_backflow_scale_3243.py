@@ -14,8 +14,18 @@
 7. PlanRun 在 **120s** 内收敛终态；
 8. 恢复**不依赖重启**（全程同一个 app 实例，无进程重启、无人工干预）。
 
+**每条线先证明「量到了」再判「多快/多少」**（#3247 / 2026-09-25 审计 A01）：零样本、
+全 503、单端点失效曾都能让第 3 条的 p99 通过；前序用例 dispose 过 async 引擎后，
+第 1、4 条读的是已拔掉的池观测（CI 全量里 async 池峰恒 0.0）。故探针按端点要求样本数
+与全成功，池采样与取连接观测都必须有非零读数，否则判红而不是判绿。
+
+第 3 条在本用例里的口径是 heartbeat / `/health` 探针。被接纳的 `/complete(200)` p99 只进
+校准摘要、**不在此断言**：它量的是父 Run 行锁串行段（#3244 / ADR-0052 的热点），且随
+runner 负载漂移（同一提交本地 1.1s、共享 CI runner 2.9s）——延迟 SLO 在固定资源的
+容量环境（#105 阶梯）与 ADR-0052 §5 真机门槛里判定，共享 CI 只守不变量（owner 2026-09-25 裁决）。
+
 同时输出一份**校准摘要**（`CALIBRATION_3243` 一行 JSON）：池峰、p50/p99、503 数、
-重放轮次——正好是 ADR-0047 §4 要回填的分布。
+重放轮次、分端点探针——正好是 ADR-0047 §4 要回填的分布。
 
 与既有 `test_plan_run_abort_scale.py` 的分工：那支钉**abort 请求形状**（语句数不随 job 数
 线性增长）且断言 RUNNING 保持 RUNNING 等 ack；本支钉**回流**（ack 之后的那半场）。
@@ -66,7 +76,14 @@ RUNNING_TOTAL = TOTAL_JOBS - FAILED_TOTAL  # 490
 PER_HOST_UPLOAD_CONCURRENCY = 2
 CONVERGENCE_BUDGET_SECONDS = 120.0
 P99_BUDGET_SECONDS = 1.0
-REPLAY_ROUNDS = 3  # 「outbox 重放」轮数上限（每一轮模拟一个 drain 周期）
+#: 「outbox 重放」：真机 Agent 每个 drain 周期（15s + jitter）重放到 ACK 为止，不设轮数上限。
+#: 旧版固定 3 轮，收敛与否取决于 runner 快慢（CI 第 3 轮后仍剩 92 条未 ACK，#3247）。
+#: 这里重放到收敛或耗尽 `CONVERGENCE_BUDGET_SECONDS`（验收线 7 的同一预算）为止。
+REPLAY_INTERVAL_SECONDS = 0.5  # 真机 15s 的 drain 周期压缩（契约不变，只是不等真时钟）
+REPLAY_ROUND_CAP = 400  # 迭代上界（testing.md §7）：墙钟预算之外的第二道闸，正常到不了
+#: 探针判据：每个端点至少这么多次尝试，且**全部** 200——样本不足本身就是失败。
+PROBE_ENDPOINTS = (("/api/v1/heartbeat", "post"), ("/health", "get"))
+MIN_PROBE_SAMPLES_PER_ENDPOINT = 5
 
 _AGENT_SECRET = "3243-scale-secret"
 _PIPELINE_DEF = {"lifecycle": {"init": [], "teardown": []}}
@@ -226,6 +243,9 @@ def _seed_r523_shape() -> dict:
             "running_job_ids": running,
             "tokens": tokens,
             "host_of_job": dict(zip(job_ids, host_of_job, strict=True)),
+            "serials_of_host": {
+                hid: [row["serial"] for row in device_rows if row["host_id"] == hid] for hid in host_ids
+            },
         }
     finally:
         db.close()
@@ -335,6 +355,48 @@ class _PoolSampler:
         self._stop = True
 
 
+def _p99(sorted_values: list[float]) -> float:
+    """与首版校准同一取位口径（`#3243` Note 的历史数字可比）；调用方保证非空。"""
+    return sorted_values[int(len(sorted_values) * 0.99) - 1]
+
+
+def _probe_stats(probe: list[dict]) -> dict[str, dict]:
+    """按端点统计探针：尝试数 / 200 数 / 非 200 分布 / 200 样本的 p99（秒）。"""
+    stats: dict[str, dict] = {}
+    for path, _method in PROBE_ENDPOINTS:
+        rows = [p for p in probe if p["path"] == path]
+        ok = sorted(p["elapsed"] for p in rows if p["status"] == 200)
+        non_200: dict[str, int] = {}
+        for p in rows:
+            if p["status"] != 200:
+                non_200[str(p["status"])] = non_200.get(str(p["status"]), 0) + 1
+        stats[path] = {
+            "attempted": len(rows),
+            "ok": len(ok),
+            "non_200": non_200,
+            "p99_ok": _p99(ok) if ok else None,
+        }
+    return stats
+
+
+def _probe_violations(stats: dict[str, dict]) -> list[str]:
+    """验收线 3 的判据：**先**证明每个端点都量到了且全成功，**再**比 p99。
+
+    #3247（A01）：旧判据两端点混算、只取 200 的延迟、零样本回退 ``[0.0]``——零样本、
+    全 503、heartbeat 全挂而 `/health` 正常，三种都能让「p99 < 1s」通过。
+    """
+    problems: list[str] = []
+    for path, _method in PROBE_ENDPOINTS:
+        s = stats.get(path) or {"attempted": 0, "ok": 0, "non_200": {}, "p99_ok": None}
+        if s["attempted"] < MIN_PROBE_SAMPLES_PER_ENDPOINT:
+            problems.append(f"{path} 探针仅 {s['attempted']} 次（< {MIN_PROBE_SAMPLES_PER_ENDPOINT}）：没量到不等于快")
+        if s["ok"] != s["attempted"]:
+            problems.append(f"{path} 非 200：{s['non_200']}（-1 = 网络层异常）")
+        if s["p99_ok"] is not None and s["p99_ok"] >= P99_BUDGET_SECONDS:
+            problems.append(f"{path} p99={s['p99_ok']:.3f}s ≥ {P99_BUDGET_SECONDS}s")
+    return problems
+
+
 async def _post_complete(client: httpx.AsyncClient, job_id: int, token: str) -> dict:
     started = time.perf_counter()
     response = await client.post(
@@ -350,13 +412,14 @@ async def _post_complete(client: httpx.AsyncClient, job_id: int, token: str) -> 
     }
 
 
-async def _drive_backflow(seed: dict, agent_secret: str) -> dict:
+async def _drive_backflow(seed: dict, agent_secret: str, deadline: float) -> dict:
     """并发回传 490 个终态：首发单发 + 每机并发 2 + 失败交「outbox 重放」轮次。
 
     与 #3251 的 Agent 策略同形（本用例不引入真机，只复刻策略）：
     - 首发每个 job **只打一次**（失败不线程内重试）；
     - 每台 host 同刻最多 `PER_HOST_UPLOAD_CONCURRENCY` 个在飞；
-    - 失败（503/429/5xx/网络）进入下一轮重放，轮间等待一小段（真机是 15s drain 周期）。
+    - 失败（503/429/5xx/网络）进入下一轮重放，轮间等待一小段（真机是 15s drain 周期），
+      重放到 ACK 或 ``deadline``（`perf_counter` 刻度，= 验收线 7 的收敛预算）为止。
     """
     transport = httpx.ASGITransport(app=fastapi_app)
     results: list[dict] = []
@@ -377,17 +440,29 @@ async def _drive_backflow(seed: dict, agent_secret: str) -> dict:
             async with lock:
                 results.append(record)
 
+        # 真实 Agent 形状的心跳：必填 `status` + 本机设备清单。首版缺 `status`，每次都 422
+        # 而旧判据只取 200 的延迟，于是 heartbeat 一次都没量到也照样「p99 通过」（#3247）；
+        # 空设备清单又会让心跳把该 host 的设备标 OFFLINE（`_mark_missing_devices_offline`），
+        # 改写被测场景——所以按种子状态如实上报。
+        probe_host = seed["host_ids"][0]
+        heartbeat_payload = {
+            "host_id": probe_host,
+            "status": "ONLINE",
+            "agent_version": "pytest",
+            "devices": [
+                {"serial": serial, "adb_state": "device", "adb_connected": True}
+                for serial in seed["serials_of_host"][probe_host]
+            ],
+        }
+
         async def _probe_loop() -> None:
             """背景可响应性探针（heartbeat / health）——验收线 3 的测量面。"""
             while True:
-                for path, method in (("/api/v1/heartbeat", "post"), ("/health", "get")):
+                for path, method in PROBE_ENDPOINTS:
                     started = time.perf_counter()
                     try:
                         if method == "post":
-                            resp = await client.post(
-                                path,
-                                json={"host_id": seed["host_ids"][0], "agent_version": "pytest"},
-                            )
+                            resp = await client.post(path, json=heartbeat_payload)
                         else:
                             resp = await client.get(path)
                         status = resp.status_code
@@ -403,7 +478,7 @@ async def _drive_backflow(seed: dict, agent_secret: str) -> dict:
 
         round_log: list[dict] = []
         pending = list(seed["running_job_ids"])
-        for round_index in range(REPLAY_ROUNDS):
+        for round_index in range(REPLAY_ROUND_CAP):
             round_started = time.perf_counter()
             attempted_now = len(pending)
             await asyncio.gather(*(_one(job_id) for job_id in pending))
@@ -417,10 +492,9 @@ async def _drive_backflow(seed: dict, agent_secret: str) -> dict:
                     "elapsed": round(time.perf_counter() - round_started, 3),
                 }
             )
-            if not pending:
+            if not pending or time.perf_counter() >= deadline:
                 break
-            # 「drain 周期」：真机是 15s + jitter；这里压缩到 0.5s（契约不变，只是不等真时钟）
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(REPLAY_INTERVAL_SECONDS)
 
         probe_task.cancel()
         try:
@@ -483,6 +557,8 @@ async def test_r523_backflow_meets_all_acceptance_lines(agent_secret, fast_grace
     timeout_before = _metric(
         "stability_db_pool_checkout_failures_total", {"engine": "async", "kind": "timeout"}
     )
+    # 验收线 1 的「表在不在线」：取连接观测计数必须随本次流量增长，否则失败计数恒 0 也不可信
+    checkouts_before = _metric("stability_db_pool_checkout_seconds_count", {"engine": "async"})
     cap = pool_capacity()
 
     seed = _seed_r523_shape()
@@ -493,7 +569,9 @@ async def test_r523_backflow_meets_all_acceptance_lines(agent_secret, fast_grace
     try:
         with patch("backend.tasks.saq_worker.get_queue", lambda: queue):
             _abort(seed)
-            driver = await _drive_backflow(seed, agent_secret)
+            driver = await _drive_backflow(
+                seed, agent_secret, deadline=started + CONVERGENCE_BUDGET_SECONDS
+            )
         elapsed_total = time.perf_counter() - started
         # 聚合 / 通知等后台项排空（不是重启，等价于等一个 tick）
         await asyncio.to_thread(thread_pool.drain, 30)
@@ -509,18 +587,19 @@ async def test_r523_backflow_meets_all_acceptance_lines(agent_secret, fast_grace
         timeout_after = _metric(
             "stability_db_pool_checkout_failures_total", {"engine": "async", "kind": "timeout"}
         )
+        checkouts_observed = (
+            _metric("stability_db_pool_checkout_seconds_count", {"engine": "async"}) - checkouts_before
+        )
         statuses = [r["status"] for r in driver["results"]]
         five_hundreds = [r for r in driver["results"] if r["status"] == 500]
         unexpected = sorted({s for s in statuses if s not in (200, 409, 503)})
 
         complete_latencies = sorted(r["elapsed"] for r in driver["results"])
         ok_latencies = sorted(r["elapsed"] for r in driver["results"] if r["status"] == 200)
-        probe_latencies = sorted(
-            p["elapsed"] for p in driver["probe"] if p["status"] == 200
-        ) or [0.0]
-        p99_complete = complete_latencies[int(len(complete_latencies) * 0.99) - 1]
-        p99_ok = ok_latencies[int(len(ok_latencies) * 0.99) - 1] if ok_latencies else 0.0
-        p99_probe = probe_latencies[int(len(probe_latencies) * 0.99) - 1]
+        probe_ok_latencies = sorted(p["elapsed"] for p in driver["probe"] if p["status"] == 200)
+        p99_complete = _p99(complete_latencies)
+        p99_ok = _p99(ok_latencies) if ok_latencies else None
+        probe = _probe_stats(driver["probe"])
 
         counts = _recompute_counters(seed["plan_run_id"])
         db = SessionLocal()
@@ -551,11 +630,24 @@ async def test_r523_backflow_meets_all_acceptance_lines(agent_secret, fast_grace
             "p50_complete_ok_ms": round(statistics.median(ok_latencies) * 1000, 1) if ok_latencies else 0.0,
             "p90_complete_ok_ms": round(ok_latencies[int(len(ok_latencies) * 0.9) - 1] * 1000, 1) if ok_latencies else 0.0,
             "p99_complete_ms": round(p99_complete * 1000, 1),
-            "p99_complete_ok_ms": round(p99_ok * 1000, 1),
-            "p99_probe_ms": round(p99_probe * 1000, 1),
+            # 只记录不断言（共享 runner 上随负载漂移）；判定在容量环境与 ADR-0052 §5 真机门槛
+            "p99_complete_ok_ms": round(p99_ok * 1000, 1) if p99_ok is not None else None,
+            # 两端点合并的 200 样本 p99：与首版校准同口径，便于和 #3243 Note 的历史数对照
+            "p99_probe_ms": round(_p99(probe_ok_latencies) * 1000, 1) if probe_ok_latencies else None,
             "probe_samples": len(driver["probe"]),
+            "probe_by_endpoint": {
+                path: {
+                    "attempted": s["attempted"],
+                    "ok": s["ok"],
+                    "non_200": s["non_200"],
+                    "p99_ok_ms": round(s["p99_ok"] * 1000, 1) if s["p99_ok"] is not None else None,
+                }
+                for path, s in probe.items()
+            },
             "pool_peak_async": sampler.peaks["async"],
             "pool_peak_sync": sampler.peaks["sync"],
+            "pool_samples": sampler.samples,
+            "pool_checkouts_observed_async": checkouts_observed,
             "pool_budget_per_engine": cap["per_engine"],
             "post_completion_enqueued": len(queue.enqueued),
             "post_completion_duplicates": queue.duplicates,
@@ -571,6 +663,8 @@ async def test_r523_backflow_meets_all_acceptance_lines(agent_secret, fast_grace
         print("CALIBRATION_3243 " + json.dumps(summary, ensure_ascii=False))
 
         # ── 验收线 1：取连接失败 = 0（ADR-0047 D1/D2 的硬不变量） ───────────
+        # 先证明观测在线：换池（dispose）后观测曾静默脱线，失败计数恒 0 也就不可信（#3247）
+        assert checkouts_observed > 0, "async 取连接观测零增长：验收线 1 无从判定（观测未接到当前池）"
         assert slots_after - slots_before == 0, "出现 slots_exhausted：R523 的形态回来了"
         assert timeout_after - timeout_before == 0, "出现池排队超时：pool_timeout 口径失守"
 
@@ -579,13 +673,15 @@ async def test_r523_backflow_meets_all_acceptance_lines(agent_secret, fast_grace
         assert not unexpected, f"出现非预期状态码：{unexpected}"
 
         # ── 验收线 3：可响应性 —— owner 口径（UI/heartbeat）p99 < 1s ─────────
-        assert p99_probe < P99_BUDGET_SECONDS, f"heartbeat/health p99={p99_probe:.3f}s"
-        # 被**接纳**的终态请求另设临时上界：2× 舱壁等待预算（500ms）。实测值见
-        # summary.p99_complete_ok_ms —— 它偏高指向 plan_run 行锁串行段（#3244 的热点），
-        # 不是舱壁本身；是否拆热点 / 调舱壁留给 #3244 与本次校准数据裁决。
-        assert p99_ok <= 2.0, f"/complete(200) p99={p99_ok:.3f}s 超过临时上界 2s"
+        # 分端点：样本数够、全部 200、p99 达标，三者缺一即红。
+        # 被接纳的 `/complete(200)` p99 见 summary.p99_complete_ok_ms，本用例不断言（模块 docstring）。
+        violations = _probe_violations(probe)
+        assert not violations, "；".join(violations)
 
         # ── 验收线 4：池不越预算（每引擎上限 = pool_size + max_overflow） ────
+        assert sampler.peaks["async"] > 0, (
+            f"async 池峰 0（{sampler.samples} 次采样）：/complete 走 async 池，读 0 说明采样没接到当前池"
+        )
         assert sampler.peaks["async"] <= cap["per_engine"], (
             f"async 池峰 {sampler.peaks['async']} > 上限 {cap['per_engine']}"
         )
@@ -619,3 +715,48 @@ async def test_r523_backflow_meets_all_acceptance_lines(agent_secret, fast_grace
     finally:
         await _dispose_async_engine()
         _cleanup(seed)
+
+
+# ── 验收线 3 判据自身的反例（纯函数，不起库）：判据必须对「没量到/量到失败」判红 ──────
+def _samples(path: str, status: int, elapsed: float, n: int) -> list[dict]:
+    return [{"path": path, "status": status, "elapsed": elapsed} for _ in range(n)]
+
+
+_HB, _HEALTH = PROBE_ENDPOINTS[0][0], PROBE_ENDPOINTS[1][0]
+
+
+@pytest.mark.parametrize(
+    ("probe", "must_mention"),
+    [
+        pytest.param([], [_HB, _HEALTH], id="zero-samples"),
+        pytest.param(
+            _samples(_HB, 503, 5.0, 10) + _samples(_HEALTH, 503, 5.0, 10), ["503"], id="all-503-slow"
+        ),
+        pytest.param(
+            _samples(_HB, 500, 0.01, 10) + _samples(_HEALTH, 200, 0.01, 10), [_HB], id="heartbeat-down"
+        ),
+        pytest.param(
+            _samples(_HB, -1, 0.01, 10) + _samples(_HEALTH, 200, 0.01, 10), ["-1"], id="transport-errors"
+        ),
+        pytest.param(
+            _samples(_HB, 200, 0.01, 2) + _samples(_HEALTH, 200, 0.01, 10), [_HB], id="too-few-samples"
+        ),
+        pytest.param(
+            _samples(_HB, 200, 1.5, 10) + _samples(_HEALTH, 200, 0.01, 10), ["p99"], id="slow-but-200"
+        ),
+    ],
+)
+def test_probe_criterion_rejects_unmeasured_or_failing_probes(probe, must_mention):
+    """#3247（A01）：这些输入在旧判据下全部「p99 < 1s 通过」（零样本回退 [0.0]、只取 200、两端点混算）。"""
+    violations = _probe_violations(_probe_stats(probe))
+    assert violations, "判据放行了失效探针"
+    joined = "；".join(violations)
+    for token in must_mention:
+        assert token in joined, f"违规说明未指出 {token!r}：{joined}"
+
+
+def test_probe_criterion_accepts_healthy_probes():
+    probe = _samples(_HB, 200, 0.02, MIN_PROBE_SAMPLES_PER_ENDPOINT) + _samples(
+        _HEALTH, 200, 0.01, MIN_PROBE_SAMPLES_PER_ENDPOINT
+    )
+    assert _probe_violations(_probe_stats(probe)) == []
