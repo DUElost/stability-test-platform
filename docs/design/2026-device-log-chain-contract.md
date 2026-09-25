@@ -2,14 +2,14 @@
 
 - **状态**：Living Draft（#2546；ChatGPT 分享定型结论落地）
 - **类型**：Living Design / Contract——**不是**新 ADR
-- **目的**：把已分散在 ADR-0018 / 0025 / 0028 / 0032 与
+- **目的**：把已分散在 ADR-0018 / 0025 / 0028 / 0032 / 0053 与
   [`2026-scan-upload-merge-contract.md`](./2026-scan-upload-merge-contract.md)
   中的现有事实，收敛成一张**系统级地图 + 逻辑坐标**；回答「日志从哪到哪、谁定义什么、
   现在在哪」。
 - **非目标**：
   - 不推倒现有采集 / Watcher / DLE / HDD→中心 / MTK·UNISOC 双链；
   - 不新增日志状态机、不新立存储 ADR、不取代上述 ADR 的内容权威；
-  - **暂不大改物理目录**；Contract 定型前不推动目录迁移或 merge 执行位置改造；
+  - 本文不自行裁决物理目录迁移或 merge 执行位置改造；存储演进按已接受的 ADR-0053 分阶段实施；
   - 不实现代码适配器 / 不改运行时行为。
 - **细节展开**：阶段编号（A1–A3 / B1–B6）、B2≠B5、泳道图与易混词表见
   [`2026-log-chain-global-semantics.md`](./2026-log-chain-global-semantics.md)
@@ -96,6 +96,9 @@ Agent HDD ≥95% ──► HddSpill ──► EventUploader(force=True) ──�
 
 ## 3. 阶段 owner 表（四层 + 后半段）
 
+2026-09-25：ADR-0053 v0.2 Accepted 后，存储层定义权转交内容对象与引用模型；
+Phase A–D 尚未实施，本文后续现态物理路径不是新模型已经落地的证明。
+
 与 #2546 X2 一致：**四层都对**，不是竞争 owner。本 Contract 只做 **chain map /
 路由入口**，不是第五层内容权威。
 
@@ -103,7 +106,7 @@ Agent HDD ≥95% ──► HddSpill ──► EventUploader(force=True) ──�
 |--------|----------|-------------------|----------|
 | realtime signal | 异常事件**流** | ADR-0018 → `log-signal-stream` | Watcher → `job_log_signal` |
 | event lifecycle | 事件在哪、什么状态 | ADR-0028 → `dle-record` | DLE 台账 |
-| physical storage | 搬运 / 中心布局 / HDD 模型 | ADR-0025 → `center-storage-model` | HDD、CIFS 角色与三阶段归档 |
+| physical storage | 内容身份 / 引用 / 发布与回收 | ADR-0053 → `center-storage-model` | 目标模型已接受、待实施；三阶段归档与 HDD 职责仍见 ADR-0025 |
 | platform / merge 行为 | 并列流水线、禁止混工具、分区 | ADR-0032 → `dedup-pipeline-behavior` | MTK/UNISOC 分叉与 merge 分区 |
 | scan/upload/merge **执行契约** | SAQ、完备性、跨进程 I/O | [`2026-scan-upload-merge-contract.md`](./2026-scan-upload-merge-contract.md) → `R-merge-consumes-log` 等 | 层 B 后半段 |
 | **chain map（本文）** | 端到端怎么串、坐标与 namespace | Living Contract（路由） | 全图 |
@@ -118,7 +121,7 @@ Agent HDD ≥95% ──► HddSpill ──► EventUploader(force=True) ──�
             │
    ┌────────┼────────┬────────────┐
    ▼        ▼        ▼            ▼
- ADR-0018  ADR-0028  ADR-0025   ADR-0032
+ ADR-0018  ADR-0028  ADR-0053   ADR-0032
  Signal    DLE       Storage    Platform/Merge
             \          |         /
              \         |        /
@@ -266,7 +269,7 @@ extract 可读 spill 第二根路径（ADR-0028 D9）；旧 spill 数据自然�
 | 本地图 / 坐标 | **本文** |
 | 阶段展开 · B2≠B5 · 泳道 | [`2026-log-chain-global-semantics.md`](./2026-log-chain-global-semantics.md) |
 | signal | [ADR-0018](../adr/ADR-0018-infrastructure-layer-framework-adoption.md) |
-| 存储角色与三阶段 | [ADR-0025](../adr/ADR-0025-phase4-architecture-alignment.md)、[`2026-storage-roles-and-aliases.md`](./2026-storage-roles-and-aliases.md) |
+| 存储模型、角色与三阶段 | [ADR-0053](../adr/ADR-0053-center-storage-event-dedup.md)、[ADR-0025](../adr/ADR-0025-phase4-architecture-alignment.md)、[`2026-storage-roles-and-aliases.md`](./2026-storage-roles-and-aliases.md) |
 | DLE / 上送 / HddSpill | [ADR-0028](../adr/ADR-0028-device-log-event-and-continuous-upload.md) |
 | 双平台流水线 | [ADR-0032](../adr/ADR-0032-unisoc-mtk-parallel-dedup-pipelines.md) |
 | 后半段跨进程 | [`2026-scan-upload-merge-contract.md`](./2026-scan-upload-merge-contract.md) |

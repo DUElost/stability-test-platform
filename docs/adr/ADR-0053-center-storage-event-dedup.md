@@ -1,10 +1,10 @@
 # ADR-0053：中心存储事件去重——内容对象、事件引用与 baseline 复用
 
-- 状态：**Proposed** v0.2（2026-09-25：完成代码对证与 D1–D6 裁决建议；尚未由 owner 接受，尚未实施）
+- 状态：**Accepted** v0.2（2026-09-25：owner 明确同意 v0.2 的 D1–D6 裁定及 Phase A→B→C→D 顺序；实施尚未开始）
 - 优先级：P1
 - 目标里程碑：M7
 - 日期：2026-09-25
-- 决策者：owner；本轮评审：Codex
+- 决策者：owner（2026-09-25 确认：“同意ADR-0053 v0.2的裁定”）；本轮评审：Codex
 - 标签：center-storage, device-log-event, baseline, content-addressing, capacity
 - 归属域：semantic-ownership center-storage-model
 - 关联：[#3230](https://github.com/DUElost/stability-test-platform/issues/3230) G4（数据事实与证据分层保留）、
@@ -13,9 +13,10 @@
   [ADR-0028](./ADR-0028-device-log-event-and-continuous-upload.md)、
   [ADR-0051](./ADR-0051-release-unit-and-content-addressing.md)
 - 评审前提：owner 明确项目仍在开发中，**无需用线上兼容成本约束终态选择**。
-  本轮只形成可审阅的架构建议；不把建议冒充已经接受的决策或已实现能力。
-- 版本记录：v0.1 提议跨 run 硬链接；v0.2 修正上送现状，建议改为内容对象与事件引用分离，
-  补齐内容身份、并发发布、GC、baseline 与 scan 依赖。v0.1 的历史动因保留于 §1.2。
+  本版记录已接受的架构方向；架构接受不等于实现完成，Phase A–D 仍须分别验收。
+- 版本记录：v0.1 提议跨 run 硬链接；v0.2 修正上送现状，改为内容对象与事件引用分离，
+  补齐内容身份、并发发布、GC、baseline 与 scan 依赖；2026-09-25 经 owner 接受，Proposed → Accepted。
+  本次状态转换不改变 v0.2 的技术选项。v0.1 的历史动因保留于 §1.2。
 
 ## 1. 当前事实与问题本质
 
@@ -78,7 +79,7 @@ L0 与磁盘告警（#3272）是历史止血，不决定长期模型。
 因此优先收敛身份与生命周期，而非把跨 run 路径查找做成新的基础设施。
 开发期可以一次改正读取边界；不为维持目录布局引入永久双轨，也不借此建设通用分布式存储平台。
 
-## 2. D1–D6 裁决建议
+## 2. D1–D6 裁决
 
 ### D1：保留每 run 的观察事实，拆开内容所有权（修订原 D1）
 
@@ -235,16 +236,19 @@ scan、merge 路径重写、extract、下载、unassigned 归属、run/orphan �
 将 N/M 保留参数、证据到期状态、长期摘要和重建边界交 #3230 G4，保留政策另裁；
 ADR-0053 不以“存储永远不会满”作为验收目标。
 
-## 5. 接受门槛、权威文档与剩余实证
+## 5. 接受记录、权威文档与剩余实证
 
-本轮已把 D1–D6 的推荐选项明确到可实施条件；**owner 尚未对替代 v0.1 的 CAS 方向作出接受记录**，
-因此保持 Proposed。需要确认的是本稿整体终态与依赖顺序，不是再等线上灰度或磁盘压满来证明方向。
-架构接受和实施验收分开：owner 接受后即可登记 Accepted，不要求 CAS 先实现；Phase A–D 仍须逐项验收。
+2026-09-25，owner 明确确认：“同意ADR-0053 v0.2的裁定”。D1–D6 及 Phase A→B→C→D
+依赖顺序自此成为实施基线；D4 的身份与消费链前置条件同样属于已接受裁定，不能绕过。
 
-接受时在同一文档切片同步 ADR-0025 D4、ADR-0028 的存储/状态约束、
-`2026-scan-upload-merge-contract.md`、`2026-storage-roles-and-aliases.md` 和 semantic-ownership 的权威指针；
-覆盖的是存储与引用部分，不推翻 DLE 唯一权威或筛选上送语义。
-本 Proposed 版本不抢先改写这些已接受契约。
+**落地状态：Phase A/B/C/D 均未实施。** 本次仅记录架构接受并同步权威文档；
+当前代码仍按 §1.1 的路径模型运行，实施前不得将 CAS/引用 GC/baseline 免拉取记为已有能力。
+
+本 ADR 接管 `center-storage-model` 的内容身份、共享引用、发布与回收边界；
+ADR-0025 D4 保留三阶段归档与 Agent HDD 工作区职责，原物理布局作为现态/历史记录；
+ADR-0028 保留 DLE 唯一权威、筛选上送与 FAILED 上送语义，路径/状态约束按本 ADR D1/D3 演进。
+同一文档切片同步 scan/upload/merge 契约、存储角色、semantic-ownership 及日志链路由指针。
+具体 API、迁移、状态映射和物理对象根由实施切片落定，不从本次接受推导额外保留期或部署动作。
 
 待实证的是实施能力：目标存储发布/持久性、设备端封口与版本协议、厂商工具输入/修改行为、
 端到端对拍、全量唯一字节比例、吞吐/对象数量与恢复测试。
