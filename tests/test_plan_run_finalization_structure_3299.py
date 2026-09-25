@@ -23,6 +23,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from tools.dev.source_anchor import SourceGuard
+
 SERVICES = Path(__file__).resolve().parents[1] / "backend" / "services"
 
 
@@ -40,8 +42,12 @@ def _imported_modules(module_file: str) -> set[str]:
 
 def test_importlinter_c5_baseline_edge_removed():
     """验收字面判据：基线行不得复活（回归 = 有人重新引入了闭合边）。"""
-    text = (SERVICES.parents[1] / ".importlinter").read_text(encoding="utf-8")
-    assert "backend.services.plan_run_aggregation -> backend.services.post_completion" not in text
+    SourceGuard.of_repo_path(".importlinter").anchored(
+        "[importlinter:contract:c5-services-acyclic]"
+    ).assert_absent(
+        "backend.services.plan_run_aggregation -> backend.services.post_completion",
+        why="#3299 C5：plan_run_aggregation -> post_completion 基线边不得回潮",
+    )
 
 
 def test_aggregation_imports_no_side_effect_modules():
