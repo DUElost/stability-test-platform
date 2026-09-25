@@ -1391,7 +1391,7 @@ async def enqueue_dedup_terminal_async(
     suffix = ("" if is_final else ":inc") + (":ar" if allow_retired else "")
     key = f"scan:{plan_run_id}{suffix}"
     try:
-        from backend.tasks.saq_worker import get_queue
+        from backend.core.task_queue import get_queue
         from saq import Job as SaqJob
 
         queue = get_queue()
@@ -1430,7 +1430,7 @@ def enqueue_dedup_terminal_sync(
     自动/后台路径保持 ``allow_retired=False``（退役主机留给显式 admin 触发）。
     """
     try:
-        from backend.tasks.saq_worker import enqueue_sync
+        from backend.core.task_queue import enqueue_sync
 
         suffix = ("" if is_final else ":inc") + (":ar" if allow_retired else "")
         enqueue_sync(

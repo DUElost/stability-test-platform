@@ -693,7 +693,7 @@ def dispatch_notification_async(event_type: str, context: Dict[str, Any]) -> Non
         context["notification_event_id"] = uuid4().hex
     enqueued = False
     try:
-        from backend.tasks.saq_worker import enqueue_sync
+        from backend.core.task_queue import enqueue_sync
 
         enqueued = enqueue_sync(
             "send_notification_task",

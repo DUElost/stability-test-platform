@@ -36,14 +36,6 @@ layers =
     backend.core
 unmatched_ignore_imports_alerting = error
 ignore_imports =
-    # S1 生产者/消费者同文件：saq_worker 同时是入队 API 与 worker（worker 拉 saq_tasks→services）。
-    #    出口：拆出 backend/tasks/queue.py（get_queue/enqueue_sync/is_saq_ready，不 import saq_tasks）
-    #    并把它放到 services 之下；拆完即删以下 5 行，同时消除 20 模块的 import 环。
-    backend.services.agent_completion -> backend.tasks.saq_worker
-    backend.services.ai_assistant.orchestrator -> backend.tasks.saq_worker
-    backend.services.admission_pump -> backend.tasks.saq_worker
-    backend.services.dedup_scan -> backend.tasks.saq_worker
-    backend.services.notification_service -> backend.tasks.saq_worker
     # S2 socketio_server 同时是推送出口（emit/broadcast/call_agent_*）与入站处理器。
     #    出口：拆为 realtime/emit.py（端口，services 可用）与入站 handlers（放入口层）。
     backend.realtime.socketio_server -> backend.services.auth_session

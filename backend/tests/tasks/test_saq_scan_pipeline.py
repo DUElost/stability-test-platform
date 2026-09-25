@@ -106,7 +106,7 @@ def _scan_task_env(
          patch("backend.services.dedup_scan.run_scan_sync", scan_sync), \
          patch("backend.services.dedup_scan.scan_completeness", completeness), \
          patch("backend.services.dedup_scan.record_scan_archive_state", record_archive), \
-         patch("backend.tasks.saq_worker.get_queue", return_value=queue), \
+         patch("backend.core.task_queue.get_queue", return_value=queue), \
          patch("saq.Job") as job_cls:
         yield job_cls
 
@@ -381,7 +381,7 @@ async def test_scan_task_no_hosts_triggered_skips_poll(monkeypatch):
     with patch("backend.realtime.socketio_server.call_agent_control", new=AsyncMock(return_value=True)):
         mock_queue = MagicMock()
         mock_queue.enqueue = AsyncMock()
-        with patch("backend.tasks.saq_worker.get_queue", return_value=mock_queue), \
+        with patch("backend.core.task_queue.get_queue", return_value=mock_queue), \
              patch("saq.Job", MagicMock()):
             await saq_tasks.scan_task({}, plan_run_id=42, is_final=True)
 
@@ -745,7 +745,7 @@ async def test_merge_task_waits_on_device_log_events(monkeypatch):
          patch.object(saq_tasks, "_write_run_context_sync"):
         mock_queue = MagicMock()
         mock_queue.enqueue = AsyncMock()
-        with patch("backend.tasks.saq_worker.get_queue", return_value=mock_queue), \
+        with patch("backend.core.task_queue.get_queue", return_value=mock_queue), \
              patch("saq.Job") as mock_job_cls:
             await saq_tasks.merge_task({}, plan_run_id=42)
 
@@ -777,7 +777,7 @@ async def test_merge_task_enqueues_extract_on_success(monkeypatch):
          patch.object(saq_tasks, "_write_run_context_sync"):
         mock_queue = MagicMock()
         mock_queue.enqueue = AsyncMock()
-        with patch("backend.tasks.saq_worker.get_queue", return_value=mock_queue), \
+        with patch("backend.core.task_queue.get_queue", return_value=mock_queue), \
              patch("saq.Job") as mock_job_cls:
             await saq_tasks.merge_task({}, plan_run_id=42)
 
@@ -808,7 +808,7 @@ async def test_merge_task_raises_when_merge_all_platforms_failed(monkeypatch):
          patch.object(saq_tasks, "_count_remote_device_log_events", count_remote):
         mock_queue = MagicMock()
         mock_queue.enqueue = AsyncMock()
-        with patch("backend.tasks.saq_worker.get_queue", return_value=mock_queue), \
+        with patch("backend.core.task_queue.get_queue", return_value=mock_queue), \
              patch("saq.Job") as mock_job_cls:
             with pytest.raises(RuntimeError, match="merge all platforms failed"):
                 await saq_tasks.merge_task({}, plan_run_id=42)

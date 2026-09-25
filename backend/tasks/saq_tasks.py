@@ -546,7 +546,7 @@ async def scan_task(
             hosts_expected=(completeness.hosts_expected if completeness else 0),
         )
 
-    from backend.tasks.saq_worker import get_queue
+    from backend.core.task_queue import get_queue
     from saq import Job as SaqJob
 
     try:
@@ -669,7 +669,7 @@ async def _enqueue_extract_task(
     plan_run_id: int, scan_round_id: str | None = None,
 ) -> None:
     """enqueue extract_task（merge 成功后等待 DLE REMOTE，再链式 extract）。"""
-    from backend.tasks.saq_worker import get_queue
+    from backend.core.task_queue import get_queue
     from saq import Job as SaqJob
 
     queue = get_queue()

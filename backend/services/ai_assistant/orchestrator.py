@@ -466,7 +466,7 @@ def ensure_pending_placeholder(session_id: int, db: Session | None = None) -> No
 
 
 def _enqueue_continuation(session_id: int) -> None:
-    """执行完成后续轮（lazy import 防循环依赖：saq_worker → saq_tasks → 本模块）。
+    """执行完成后续轮（入队走 ``backend.core.task_queue``；函数内 import 便于测试按模块属性打桩）。
 
     #2071：轮次内联终态**不入队**——本轮 job 仍持 key，SAQ 必然去重，且本轮
     自己会把结果喂回模型（见轮次内联分支的注释）。这里若继续走 required 语义，
@@ -492,7 +492,7 @@ def _enqueue_continuation(session_id: int) -> None:
         return
 
     try:
-        from backend.tasks.saq_worker import EnqueueSyncError, enqueue_sync
+        from backend.core.task_queue import EnqueueSyncError, enqueue_sync
 
         # M2：轮次最多 max_turns 次串行 LLM 调用，超时按最坏情况估
         #（默认 60s 的 SAQ timeout 会把多轮 T0 链中途砍掉，占位滞留 pending）

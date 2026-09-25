@@ -86,14 +86,13 @@ from backend.core.security import is_production_like_env, validate_production_au
 from backend.realtime.socketio_server import create_sio_server, capture_main_loop
 from backend.services.state_machine import InvalidTransitionError
 from backend.scheduler.app_scheduler import create_scheduler, register_schedules
-from backend.tasks.saq_worker import (
+from backend.core.task_queue import (
     is_saq_ready,
-    start_saq_worker,
-    stop_saq_worker,
     stop_saq_producer,
     init_saq_producer,
     verify_redis_connectivity,
 )
+from backend.tasks.saq_worker import start_saq_worker, stop_saq_worker
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +126,7 @@ for _h in logging.getLogger("uvicorn.access").handlers:
 
 redis_client: Optional[aioredis.Redis] = None
 
-# Readiness 探针的 Redis ping 时限（#1177）：与 saq_worker.REDIS_PING_TIMEOUT
+# Readiness 探针的 Redis ping 时限（#1177）：与 task_queue.REDIS_PING_TIMEOUT
 # 同 env 同缺省——黑洞分区（SYN 丢弃）下 ping 不得悬挂超过 Docker HEALTHCHECK
 # 时限，否则探针任务无限累积。
 _HEALTH_REDIS_PING_TIMEOUT = float(os.getenv("REDIS_PING_TIMEOUT", "3.0"))

@@ -6,7 +6,7 @@ import logging
 
 import pytest
 
-from backend.tasks import saq_worker as saq_mod
+from backend.core import task_queue as tq
 import backend.main as main_mod
 
 
@@ -165,8 +165,8 @@ async def test_verify_redis_connectivity_success(monkeypatch):
     async def _fake_from_url(*_args, **_kwargs):
         return _FakeRedis()
 
-    monkeypatch.setattr(saq_mod.aioredis, "from_url", _fake_from_url)
-    await saq_mod.verify_redis_connectivity("redis://test:6379/0")
+    monkeypatch.setattr(tq.aioredis, "from_url", _fake_from_url)
+    await tq.verify_redis_connectivity("redis://test:6379/0")
 
 
 @pytest.mark.asyncio
@@ -181,9 +181,9 @@ async def test_verify_redis_connectivity_failure(monkeypatch):
 
         return _BadRedis()
 
-    monkeypatch.setattr(saq_mod.aioredis, "from_url", _fake_from_url)
+    monkeypatch.setattr(tq.aioredis, "from_url", _fake_from_url)
     with pytest.raises(RuntimeError, match="Redis unreachable"):
-        await saq_mod.verify_redis_connectivity("redis://user:s3cret@bad:6379/0")
+        await tq.verify_redis_connectivity("redis://user:s3cret@bad:6379/0")
 
 
 @pytest.mark.asyncio
@@ -198,9 +198,9 @@ async def test_verify_redis_connectivity_failure_redacts_password(monkeypatch):
 
         return _BadRedis()
 
-    monkeypatch.setattr(saq_mod.aioredis, "from_url", _fake_from_url)
+    monkeypatch.setattr(tq.aioredis, "from_url", _fake_from_url)
     with pytest.raises(RuntimeError) as exc_info:
-        await saq_mod.verify_redis_connectivity("redis://user:s3cret@bad:6379/0")
+        await tq.verify_redis_connectivity("redis://user:s3cret@bad:6379/0")
 
     assert "s3cret" not in str(exc_info.value)
     assert "redis://user:***@bad:6379/0" in str(exc_info.value)

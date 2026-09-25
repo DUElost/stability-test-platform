@@ -57,7 +57,7 @@ def test_retry_dispatch_returns_run_to_admission_queue(
     db_session.commit()
 
     with patch(
-        "backend.tasks.saq_worker.enqueue_sync",
+        "backend.core.task_queue.enqueue_sync",
     ) as legacy_enqueue:
         resp = client.post(
             f"/api/v1/plan-runs/{run_id}/retry-dispatch",
@@ -84,7 +84,7 @@ def test_retry_dispatch_records_audit_user_id(
     flag_modified(failed_precheck_run, "run_context")
     db_session.commit()
 
-    with patch("backend.tasks.saq_worker.enqueue_sync"):
+    with patch("backend.core.task_queue.enqueue_sync"):
         resp = client.post(
             f"/api/v1/plan-runs/{run_id}/retry-dispatch",
             headers=auth_headers,

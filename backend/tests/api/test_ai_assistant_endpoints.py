@@ -302,7 +302,7 @@ class TestSearchAndTurnGuard:
         db_session.commit()
         # TESTING 下 SAQ worker 不运行——打桩入队（互斥守卫在入队之前，不受影响）
         monkeypatch.setattr(
-            "backend.tasks.saq_worker.enqueue_sync", lambda *a, **k: True
+            "backend.core.task_queue.enqueue_sync", lambda *a, **k: True
         )
 
         r = client.post("/api/v1/ai-assistant/sessions", json={}, headers=admin_headers)
@@ -1005,7 +1005,7 @@ class TestContinuationVisibility:
 
         self._shared_session(monkeypatch, orch, db_session)
         monkeypatch.setattr(
-            "backend.tasks.saq_worker.enqueue_sync", lambda *a, **kw: False
+            "backend.core.task_queue.enqueue_sync", lambda *a, **kw: False
         )
 
         s = self._session_with_placeholder(db_session)
@@ -1051,7 +1051,7 @@ class TestContinuationVisibility:
 
         attempts: list = []
         monkeypatch.setattr(
-            "backend.tasks.saq_worker.enqueue_sync",
+            "backend.core.task_queue.enqueue_sync",
             lambda *a, **k: (attempts.append(k), False)[1],
         )
 
@@ -1667,7 +1667,7 @@ class TestR13P2AssistantFixes:
         monkeypatch.setattr(orch, "SessionLocal", lambda: _Shared(db_session))
         # 若预算生效，则不会调用 enqueue；若被调用则测试失败
         monkeypatch.setattr(
-            "backend.tasks.saq_worker.enqueue_sync",
+            "backend.core.task_queue.enqueue_sync",
             lambda *a, **k: pytest.fail("超预算不应再入队"),
         )
 
@@ -1707,7 +1707,7 @@ class TestTurnEnqueueAsyncFailure:
             cb(RuntimeError("redis down"))  # 模拟稍后的真实入队失败
             return True
 
-        monkeypatch.setattr("backend.tasks.saq_worker.enqueue_sync", _fake_enqueue)
+        monkeypatch.setattr("backend.core.task_queue.enqueue_sync", _fake_enqueue)
         submitted: list = []
         # 回调跑在事件循环上：收敛必须交给后台池，而不是在循环里做同步 DB 写
         monkeypatch.setattr(
@@ -1762,7 +1762,7 @@ class TestTurnEnqueueAsyncFailure:
             kw["on_async_failure"](RuntimeError("redis down"))
             return True
 
-        monkeypatch.setattr("backend.tasks.saq_worker.enqueue_sync", _fake_enqueue)
+        monkeypatch.setattr("backend.core.task_queue.enqueue_sync", _fake_enqueue)
 
         def _pool_full(fn, *a, **k):
             raise PoolQueueFullError("full")
@@ -1856,7 +1856,7 @@ class TestTurnEnqueueAsyncFailure:
     ):
         """SAQ 根本没跑（同步返回 False）时，既有 503 + 占位 failed 不得回退。"""
         _configure(db_session)
-        monkeypatch.setattr("backend.tasks.saq_worker.enqueue_sync", lambda *a, **k: False)
+        monkeypatch.setattr("backend.core.task_queue.enqueue_sync", lambda *a, **k: False)
         sid = client.post(
             "/api/v1/ai-assistant/sessions", json={}, headers=admin_headers,
         ).json()["data"]["id"]
