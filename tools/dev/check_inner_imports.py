@@ -48,7 +48,10 @@ SCAN_DIRS = (ROOT / "backend", ROOT / "tools", ROOT / "scripts")
 #: → **604 → 602**。
 #: 2026-09-20 #736 `heartbeat_bindings`：`read_artifact_digest` 双形态 + 
 #: `patrol_recovery` 顶层化 → **602 → 599**。
-_BASELINE = 597
+#: 2026-09-26 #3298（ADR-0054 第 1 步）：`job_runner._validate_pipeline_def` 的
+#: core/agent 双形态兜底（try/except 2 处）随契约搬迁归一为 1 处相对导入
+#: → **597 → 596**。
+_BASELINE = 596
 
 # ADR-0051 Phase 3：版本目录已退役，脚本族树（backend/agent/scripts/<name>/）按包发布、
 # 属独立审计面，整棵排除（此前只排除 v<version>/ 冻结目录）。

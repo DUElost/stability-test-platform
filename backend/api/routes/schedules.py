@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from backend.core.database import get_db
 from backend.services.audit_writer import record_audit
-from backend.core.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
+from backend.agent.contracts.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
 from backend.models.host import Device
 from backend.models.schedule import TaskSchedule, schedule_timestamp
 from backend.models.plan import Plan, PlanStep

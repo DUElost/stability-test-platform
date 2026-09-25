@@ -30,12 +30,15 @@
 │   ├── registry/                       # 本地注册表
 │   │   ├── local_db.py                 # SQLite WAL
 │   │   └── script_registry.py          # script:<name> 解析
+│   ├── contracts/                      # 控制面/Agent 共享契约（ADR-0054，随包下发）
+│   │   ├── pipeline_validator.py       # pipeline_def 校验（schema 按下方 schemas/ 解析）
+│   │   └── legacy_aee.py               # legacy AEE 常量表
 │   ├── watcher/                        # ADR-0018 设备日志监控
 │   │   └── ...
 │   └── scripts/                        # 可执行脚本（扁平布局）
 │       └── <name>/v<version>/<entry>.py
 ├── schemas/                            # 运行时工件：Pipeline JSON Schema
-│   └── pipeline_schema.json            # pipeline_validator 按 ../schemas/ 解析
+│   └── pipeline_schema.json            # contracts/pipeline_validator 按 agent 包父目录解析
 ├── resources/                          # 测试资源文件
 │   └── aimonkey/                       # AIMONKEY 二进制与配置
 ├── logs/                               # 所有日志统一目录

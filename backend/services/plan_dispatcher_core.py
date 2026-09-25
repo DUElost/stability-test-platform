@@ -12,7 +12,7 @@ from typing import Any, Dict, Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from backend.core.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
+from backend.agent.contracts.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
 from backend.models.host import Device, Host
 from backend.models.plan import Plan, PlanStep
 from backend.services.script_params import merge_effective_params

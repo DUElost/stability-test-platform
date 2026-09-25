@@ -17,7 +17,7 @@ from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from backend.core.audit import expand_resource_type_filter
-from backend.core.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
+from backend.agent.contracts.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
 from backend.models.audit import AuditLog
 from backend.models.enums import DeviceStatus, HostStatus, PlanRunStatus
 from backend.models.host import Device, Host
