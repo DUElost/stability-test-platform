@@ -1,0 +1,78 @@
+# promtool 场景测试：host-storage 三条磁盘水位规则（#3233）。
+# 由 tests/test_host_storage_alerts_3233.py 调度（PROMTOOL_REQUIRED 下缺 promtool 即红）。
+# 运行：promtool test rules deploy/prometheus/alerts-host-resources.test.yml
+rule_files:
+- alerts-host-resources.yml
+tests:
+# ① 趋势：/mnt/stp-aee 剩余 40%、每分钟少约 1.33e8 字节（8 GB/h，72h 外推为负）→ for 1h 后响；
+#    根分区剩余 80% 同样陡降（回测里 09-21 的误报形态）→ 不得响（剩余 < 50% 门）。
+#    采样取 1m：15m 采样会超出 5m 回看窗口，比例那一侧取不到瞬时值，for 永远凑不满。
+- interval: 1m
+  input_series:
+  - series: node_filesystem_size_bytes{device="/dev/sda1",fstype="ext4",mountpoint="/mnt/stp-aee"}
+    values: 1000000000000x540
+  - series: node_filesystem_avail_bytes{device="/dev/sda1",fstype="ext4",mountpoint="/mnt/stp-aee"}
+    values: 400000000000-133333333x540
+  - series: node_filesystem_size_bytes{device="/dev/nvme0n1p2",fstype="ext4",mountpoint="/"}
+    values: 1000000000000x540
+  - series: node_filesystem_avail_bytes{device="/dev/nvme0n1p2",fstype="ext4",mountpoint="/"}
+    values: 800000000000-133333333x540
+  alert_rule_test:
+  - eval_time: 8h
+    alertname: StabilityHostFilesystemFillingUp
+    exp_alerts:
+    - exp_labels:
+        device: /dev/sda1
+        fstype: ext4
+        mountpoint: /mnt/stp-aee
+        severity: warning
+      exp_annotations:
+        summary: /mnt/stp-aee 按近 6 小时的写入速度，72 小时内会写满
+        description: '/mnt/stp-aee 剩余已不足一半，且按近 6 小时的趋势外推 72 小时后为负。 中心存储的增长主要来自 devices/（事件目录，baseline 跨 run 重复）与 jira/（提取副本）， 先用 backend/scripts/measure_center_storage.py 只读分族量化，处置见 #3233。'
+  - eval_time: 8h
+    alertname: StabilityHostFilesystemLowSpace
+    exp_alerts: []
+# ② 比例：剩余 15% 持平（趋势为 0）→ 20% warning 响，10% critical 与趋势判据都不响。
+- interval: 1m
+  input_series:
+  - series: node_filesystem_size_bytes{device="/dev/sda1",fstype="ext4",mountpoint="/mnt/stp-aee"}
+    values: 1000000000000x60
+  - series: node_filesystem_avail_bytes{device="/dev/sda1",fstype="ext4",mountpoint="/mnt/stp-aee"}
+    values: 150000000000x60
+  alert_rule_test:
+  - eval_time: 30m
+    alertname: StabilityHostFilesystemLowSpace
+    exp_alerts:
+    - exp_labels:
+        device: /dev/sda1
+        fstype: ext4
+        mountpoint: /mnt/stp-aee
+        severity: warning
+      exp_annotations:
+        summary: /mnt/stp-aee 剩余空间不足 20%
+        description: '/mnt/stp-aee 剩余不足 20%。中心存储写满后 artifact promote、日志归档与提取都会 失败，测试证据随之丢失。先看趋势告警是否同时在响，处置见 #3233。'
+  - eval_time: 30m
+    alertname: StabilityHostFilesystemCritical
+    exp_alerts: []
+  - eval_time: 30m
+    alertname: StabilityHostFilesystemFillingUp
+    exp_alerts: []
+# ③ 底线：剩余 5% → critical 响。
+- interval: 1m
+  input_series:
+  - series: node_filesystem_size_bytes{device="/dev/sda1",fstype="ext4",mountpoint="/mnt/stp-aee"}
+    values: 1000000000000x30
+  - series: node_filesystem_avail_bytes{device="/dev/sda1",fstype="ext4",mountpoint="/mnt/stp-aee"}
+    values: 50000000000x30
+  alert_rule_test:
+  - eval_time: 10m
+    alertname: StabilityHostFilesystemCritical
+    exp_alerts:
+    - exp_labels:
+        device: /dev/sda1
+        fstype: ext4
+        mountpoint: /mnt/stp-aee
+        severity: critical
+      exp_annotations:
+        summary: /mnt/stp-aee 剩余空间不足 10%
+        description: '/mnt/stp-aee 剩余不足 10%，已接近写满。立即腾出空间：可再生的提取副本可删 （需逐目录确认 devices/ 仍有完整源），不可再生的证据不得删除。处置见 #3233。'
