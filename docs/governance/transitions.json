@@ -35,7 +35,8 @@
       "what": "发布根 .env.backend 是指向开发仓根的 symlink（Phase 1 切了部署源，env 源仍挂靠检出；独立站点 env 属多站点交付续集）",
       "exit": "adr:ADR-0051#D6",
       "due": "2026-12-31",
-      "status": "active"
+      "status": "done",
+      "evidence": "2026-09-25 实切（owner 批准）：站点真身 /home/debian13/stp-releases/env.backend（600，自仓根 cp -a 一次），11 个 rev 根 symlink 全改 ../env.backend；unit EnvironmentFile 与 __file__ 派生读取零代码改动穿透。实测：重启三道 ExecStartPre 过、auth OK、48/48 心跳新鲜、fleet_packages={package:48}。仓根 .env.backend 降级为纯 dev 配置（SOP §0/§1、runbook §0 已同步）。独立站点 env 的渲染分发面留多站点续集（ADR-0041）"
     },
     {
       "id": "unisoc-miscreated-script-rows",
