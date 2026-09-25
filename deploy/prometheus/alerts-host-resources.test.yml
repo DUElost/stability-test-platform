@@ -28,7 +28,7 @@ tests:
         severity: warning
       exp_annotations:
         summary: /mnt/stp-aee 按近 6 小时的写入速度，72 小时内会写满
-        description: '/mnt/stp-aee 剩余已不足一半，且按近 6 小时的趋势外推 72 小时后为负。 中心存储的增长主要来自 devices/（事件目录，baseline 跨 run 重复）与 jira/（提取副本）， 先用 backend/scripts/measure_center_storage.py 只读分族量化，处置见 #3233。'
+        description: '/mnt/stp-aee 剩余已不足一半，且按近 6 小时的趋势外推 72 小时后为负。 中心存储的增长主要来自 devices/（事件目录，baseline 跨 run 重复）与 jira/（提取副本）， 先用 backend/scripts/measure_center_storage.py 只读分族量化。 devices/ 的跨 run 重复可按需改硬链接回收，不删证据（步骤见 docs/operations/center-storage-hardlink-dedup.md）。处置见 #3233。'
   - eval_time: 8h
     alertname: StabilityHostFilesystemLowSpace
     exp_alerts: []
@@ -50,7 +50,7 @@ tests:
         severity: warning
       exp_annotations:
         summary: /mnt/stp-aee 剩余空间不足 20%
-        description: '/mnt/stp-aee 剩余不足 20%。中心存储写满后 artifact promote、日志归档与提取都会 失败，测试证据随之丢失。先看趋势告警是否同时在响，处置见 #3233。'
+        description: '/mnt/stp-aee 剩余不足 20%。中心存储写满后 artifact promote、日志归档与提取都会 失败，测试证据随之丢失。先看趋势告警是否同时在响； 中心存储可先把 devices/ 的跨 run 重复改硬链接，不删证据（步骤见 docs/operations/center-storage-hardlink-dedup.md）。处置见 #3233。'
   - eval_time: 30m
     alertname: StabilityHostFilesystemCritical
     exp_alerts: []
@@ -75,11 +75,14 @@ tests:
         severity: critical
       exp_annotations:
         summary: /mnt/stp-aee 剩余空间不足 10%
-        description: '/mnt/stp-aee 剩余不足 10%，已接近写满。立即腾出空间：可再生的提取副本可删 （需逐目录确认 devices/ 仍有完整源），不可再生的证据不得删除。处置见 #3233。'
+        description: '/mnt/stp-aee 剩余不足 10%，已接近写满。立即腾出空间： 先把 devices/ 的跨 run 重复改硬链接，不删证据（步骤见 docs/operations/center-storage-hardlink-dedup.md）；再删可再生的提取副本 （需逐目录确认 devices/ 仍有完整源），不可再生的证据不得删除。处置见 #3233。'
 
 # ② 内存/swap 联合余量四条（#3200 G1）：序列按 09-23 真机数字造，塌陷安排在 9–10m 之间展开
 #    （塌陷判据是**瞬时**的：曲线一持平它就归零，所以必须把下跌放在断言时刻之前 1–2 分钟，
 #     否则场景会"正确地不响"却什么都没测到——这正是本条第一版踩到的坑）。
+#    高位平台持续到 8m30s（不是 8m）：promtool 3.x 的区间选择器左开，10m 处 `[2m:30s]` 的子查询
+#     从 8m30s 起算；平台若止于 8m，峰值被挡在窗外，差值恰为 -6 GiB（不满足 `<`），场景在 3.x
+#     下不响、只在 2.x 下响（CI 钉 3.13.3，本机 promtool 是 2.53）。两个版本都要过。
 #    真机对照：13:40 余量 16.07 GiB → 13:42 5.40 → 13:43 2.42 GiB（此后 journald 与抓取全停）。
 #    断言时刻**故意不同**：塌陷是瞬时判据（曲线一平就归零）→ 10m 断言；
 #    其余三条是持续判据 → 11m 断言（`for: 1m` 需要多一个评估周期才转 firing）。同一时刻硬套
@@ -87,9 +90,9 @@ tests:
 - interval: 30s
   input_series:
   - series: 'node_memory_MemAvailable_bytes{instance="127.0.0.1:9100",job="file-server"}'
-    values: '12884901888x16 6442450944x2 2147483648x2 1867980800x6'
+    values: '12884901888x17 6442450944x1 2147483648x2 1867980800x6'
   - series: 'node_memory_SwapFree_bytes{instance="127.0.0.1:9100",job="file-server"}'
-    values: '4831838208x16 3221225472x2 1073741824x2 729616629x6'
+    values: '4831838208x17 3221225472x1 1073741824x2 729616629x6'
   - series: 'node_vmstat_pgmajfault{instance="127.0.0.1:9100",job="file-server"}'
     values: '0+12000x24'
   alert_rule_test:

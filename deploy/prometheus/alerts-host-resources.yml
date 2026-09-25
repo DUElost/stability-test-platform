@@ -148,7 +148,8 @@ groups:
           description: >-
             {{ $labels.mountpoint }} 剩余已不足一半，且按近 6 小时的趋势外推 72 小时后为负。
             中心存储的增长主要来自 devices/（事件目录，baseline 跨 run 重复）与 jira/（提取副本），
-            先用 backend/scripts/measure_center_storage.py 只读分族量化，处置见 #3233。
+            先用 backend/scripts/measure_center_storage.py 只读分族量化。
+            devices/ 的跨 run 重复可按需改硬链接回收，不删证据（步骤见 docs/operations/center-storage-hardlink-dedup.md）。处置见 #3233。
       - alert: StabilityHostFilesystemLowSpace
         expr: >-
           node_filesystem_avail_bytes{fstype=~"ext4|xfs|btrfs"}
@@ -160,7 +161,8 @@ groups:
           summary: "{{ $labels.mountpoint }} 剩余空间不足 20%"
           description: >-
             {{ $labels.mountpoint }} 剩余不足 20%。中心存储写满后 artifact promote、日志归档与提取都会
-            失败，测试证据随之丢失。先看趋势告警是否同时在响，处置见 #3233。
+            失败，测试证据随之丢失。先看趋势告警是否同时在响；
+            中心存储可先把 devices/ 的跨 run 重复改硬链接，不删证据（步骤见 docs/operations/center-storage-hardlink-dedup.md）。处置见 #3233。
       - alert: StabilityHostFilesystemCritical
         expr: >-
           node_filesystem_avail_bytes{fstype=~"ext4|xfs|btrfs"}
@@ -171,5 +173,6 @@ groups:
         annotations:
           summary: "{{ $labels.mountpoint }} 剩余空间不足 10%"
           description: >-
-            {{ $labels.mountpoint }} 剩余不足 10%，已接近写满。立即腾出空间：可再生的提取副本可删
+            {{ $labels.mountpoint }} 剩余不足 10%，已接近写满。立即腾出空间：
+            先把 devices/ 的跨 run 重复改硬链接，不删证据（步骤见 docs/operations/center-storage-hardlink-dedup.md）；再删可再生的提取副本
             （需逐目录确认 devices/ 仍有完整源），不可再生的证据不得删除。处置见 #3233。
