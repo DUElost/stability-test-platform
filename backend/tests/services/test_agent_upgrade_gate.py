@@ -1,18 +1,28 @@
-"""#1520 垂直切片：Agent upgrade-gate HTTP 适配服务层直测。"""
+"""#1520 垂直切片：Agent upgrade-gate 直测（#3295 后 HTTP 映射住在 api 层）。
+
+服务层（``backend/services/agent_upgrade_gate.py``）不再构造 HTTP 异常：
+``begin_host_upgrade`` 的领域异常原样传播；翻译器 ``raise_upgrade_gate_http``
+与元组 ``UPGRADE_GATE_DOMAIN_ERRORS`` 在 ``backend/api/error_handlers.py``，
+由 ``backend/api/routes/agent_api.py`` 的端点显式捕获调用。
+"""
 
 from __future__ import annotations
 
 import pytest
-from fastapi import HTTPException
 from unittest.mock import MagicMock, patch
 
+from backend.api.error_handlers import (
+    raise_upgrade_gate_http as _raise_upgrade_gate_http,
+)
+from backend.api.routes.agent_api import (
+    acquire_upgrade_gate as upgrade_gate_endpoint,
+)
 from backend.services.agent_upgrade_gate import (
     UpgradeGateReleaseRequest,
     UpgradeGateRequest,
-    acquire_agent_upgrade_gate,
-    raise_upgrade_gate_http,
     release_agent_upgrade_gate,
 )
+from backend.services.errors import ServiceError
 from backend.services.host_maintenance import HostMaintenanceConflict
 from backend.services.host_upgrade_gate import (
     HostAbortDrainTimeoutError,
@@ -22,18 +32,19 @@ from backend.services.host_upgrade_gate import (
     HostRetiredError,
     HostUpgradeGateError,
 )
+from fastapi import HTTPException
 
 
 class TestRaiseUpgradeGateHttp:
     def test_host_not_found_404(self):
         with pytest.raises(HTTPException) as exc:
-            raise_upgrade_gate_http("h1", HostNotFoundError("missing"))
+            _raise_upgrade_gate_http("h1", HostNotFoundError("missing"))
         assert exc.value.status_code == 404
         assert exc.value.detail["code"] == "HOST_NOT_FOUND"
 
     def test_active_jobs_409(self):
         with pytest.raises(HTTPException) as exc:
-            raise_upgrade_gate_http(
+            _raise_upgrade_gate_http(
                 "h1",
                 HostHasActiveJobsError(active_jobs=[{"id": 1}]),
             )
@@ -43,13 +54,13 @@ class TestRaiseUpgradeGateHttp:
 
 class TestAcquireReleaseGuards:
     def test_release_requires_holder(self):
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ServiceError) as exc:
             release_agent_upgrade_gate(
                 db=MagicMock(),
                 host_id="h1",
                 payload=UpgradeGateReleaseRequest(holder="  "),
             )
-        assert exc.value.status_code == 400
+        assert exc.value.status == 400
 
     def test_acquire_maps_domain_error(self):
         db = MagicMock()
@@ -58,19 +69,19 @@ class TestAcquireReleaseGuards:
             side_effect=HostNotFoundError("gone"),
         ):
             with pytest.raises(HTTPException) as exc:
-                acquire_agent_upgrade_gate(
-                    db,
+                upgrade_gate_endpoint(
                     "h1",
                     UpgradeGateRequest(holder="ansible"),
+                    db,
                 )
         assert exc.value.status_code == 404
         assert exc.value.detail["code"] == "HOST_NOT_FOUND"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# #2638：领域异常 ⇒ HTTP 的**可达性**契约
+# #2638：领域异常 ⇒ HTTP 的**可达性**契约（#3295 后钉在路由端点函数上）
 #
-# `raise_upgrade_gate_http` 里每条 `isinstance` 分支都得被调用方的 `except` 元组接住，
+# `raise_upgrade_gate_http` 里每条 `isinstance` 分支都得被端点的 `except` 元组接住，
 # 否则那条分支永远不执行、异常原样冒到框架层变 500。本单实例是 `HostRetiredError`
 # （ADR-0038 D5 的 409 `HOST_RETIRED` 早就写好了，只是没人接）。
 # 判据取**运行时子类集合**而不是源码字面量：新增异常若没进下面的工厂表，
@@ -118,7 +129,7 @@ def test_acquire_translates_every_domain_error_to_http(name):
         side_effect=error,
     ):
         with pytest.raises(HTTPException) as exc:
-            acquire_agent_upgrade_gate(db, "h1", UpgradeGateRequest(holder="ansible"))
+            upgrade_gate_endpoint("h1", UpgradeGateRequest(holder="ansible"), db)
 
     assert exc.value.status_code == expected_status, name
     assert exc.value.detail["code"] == expected_code, (
@@ -133,9 +144,10 @@ def test_acquire_translates_every_domain_error_to_http(name):
 def test_retired_host_gate_acquire_is_409_not_500():
     """#2638 的原始形状：退役主机申请升级窗口要 409 `HOST_RETIRED`，不是框架层 500。
 
-    这条**不 patch 映射函数**，走真实的 `raise_upgrade_gate_http`，因此如果将来有人
-    把 `HostRetiredError` 从 `except` 元组里拿掉，本用例会以 `HostRetiredError` 失败
-    （而不是 HTTPException）——即「分支重新变成不可达」会被立刻抓住。
+    这条**不 patch 映射函数**，走真实的端点函数 + `raise_upgrade_gate_http`，
+    因此如果将来有人把 `HostRetiredError` 从 `UPGRADE_GATE_DOMAIN_ERRORS` 元组里拿掉，本用例会以
+    `HostRetiredError` 失败（而不是 HTTPException）——即「分支重新变成不可达」
+    会被立刻抓住。
     """
     db = MagicMock()
     with patch(
@@ -143,7 +155,7 @@ def test_retired_host_gate_acquire_is_409_not_500():
         side_effect=HostRetiredError("host h1 is retired"),
     ):
         with pytest.raises(HTTPException) as exc:
-            acquire_agent_upgrade_gate(db, "h1", UpgradeGateRequest(holder="ansible"))
+            upgrade_gate_endpoint("h1", UpgradeGateRequest(holder="ansible"), db)
 
     assert exc.value.status_code == 409
     assert exc.value.detail["code"] == "HOST_RETIRED"

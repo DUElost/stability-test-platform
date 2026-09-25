@@ -12,6 +12,10 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
+from backend.api.error_handlers import (
+    UPGRADE_GATE_DOMAIN_ERRORS,
+    raise_upgrade_gate_http,
+)
 from backend.api.response import ApiResponse, ok
 from backend.core.database import get_async_db, get_db
 # ADR-0047 D2（#2959）：终态请求的独立并发舱壁（池外排队，超预算 503）。
@@ -370,6 +374,8 @@ async def get_archive_status(
 
 
 # ── 升级门禁（#1249）：Ansible 等外部升级入口复用 ADR-0021 D7/D8 协议 ──────────
+# 领域异常 → HTTP 的映射在 backend/api/error_handlers.py（#3295）；
+# 元组 UPGRADE_GATE_DOMAIN_ERRORS 与映射分支同处一文件、同处受 #2638 可达性契约。
 
 
 @router.post("/hosts/{host_id}/upgrade-gate")
@@ -385,7 +391,10 @@ def acquire_upgrade_gate(
     调用方必须在升级完成后调用 ``.../upgrade-gate/release``；进程崩溃等
     异常路径由维护窗口 TTL 过期兜底。
     """
-    return ok(acquire_agent_upgrade_gate(db, host_id, payload))
+    try:
+        return ok(acquire_agent_upgrade_gate(db, host_id, payload))
+    except UPGRADE_GATE_DOMAIN_ERRORS as exc:
+        raise_upgrade_gate_http(host_id, exc)
 
 
 @router.post("/hosts/{host_id}/upgrade-gate/release")

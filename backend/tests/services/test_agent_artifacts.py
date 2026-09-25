@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from fastapi import HTTPException
+from backend.services.errors import ServiceError
 from unittest.mock import AsyncMock, patch
 
 from backend.services.agent_artifacts import (
@@ -36,13 +36,13 @@ class TestArtifactWhitelist:
 class TestIngestGuards:
     @pytest.mark.asyncio
     async def test_empty_storage_uri_400(self):
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ServiceError) as exc:
             await ingest_agent_artifact(
                 db=None,  # type: ignore[arg-type]
                 job_id=1,
                 payload=_payload(storage_uri=""),
             )
-        assert exc.value.status_code == 400
+        assert exc.value.status == 400
 
     @pytest.mark.asyncio
     async def test_unlisted_type_400(self):
@@ -52,13 +52,13 @@ class TestIngestGuards:
                 return_value="/ok",
             ),
         ):
-            with pytest.raises(HTTPException) as exc:
+            with pytest.raises(ServiceError) as exc:
                 await ingest_agent_artifact(
                     db=AsyncMock(),
                     job_id=1,
                     payload=_payload(artifact_type="anr"),
                 )
-        assert exc.value.status_code == 400
+        assert exc.value.status == 400
 
     @pytest.mark.asyncio
     async def test_job_missing_404(self):
@@ -71,6 +71,6 @@ class TestIngestGuards:
             "backend.services.agent_artifacts.require_job_bound_upload_lease",
             new_callable=AsyncMock,
         ):
-            with pytest.raises(HTTPException) as exc:
+            with pytest.raises(ServiceError) as exc:
                 await ingest_agent_artifact(db, 99, _payload())
-        assert exc.value.status_code == 404
+        assert exc.value.status == 404

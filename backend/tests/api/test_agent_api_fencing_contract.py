@@ -3,7 +3,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import HTTPException
+from backend.services.errors import ServiceError
 from pydantic import ValidationError
 
 from backend.api.routes.agent_api import (
@@ -111,7 +111,7 @@ async def test_update_job_status_rejects_invalid_fencing_token_before_transition
         "backend.services.agent_step_status._get_valid_runtime_lease",
         new=AsyncMock(return_value=None),
     ) as mock_validate:
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(ServiceError) as exc_info:
             await update_job_status(
                 job_id=job.id,
                 payload=JobStatusUpdate(
@@ -122,7 +122,7 @@ async def test_update_job_status_rejects_invalid_fencing_token_before_transition
                 _=None,
             )
 
-    assert exc_info.value.status_code == 409
+    assert exc_info.value.status == 409
     assert "fencing_token" in exc_info.value.detail.lower()
     mock_validate.assert_awaited_once()
     db.commit.assert_not_awaited()
@@ -150,7 +150,7 @@ async def test_upload_step_traces_rejects_invalid_fencing_token_before_reconcile
         "backend.services.agent_step_status.reconcile_step_traces",
         new=AsyncMock(return_value=1),
     ) as mock_reconcile:
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(ServiceError) as exc_info:
             await upload_step_traces(
                 traces=[
                     StepTraceIn(
@@ -165,7 +165,7 @@ async def test_upload_step_traces_rejects_invalid_fencing_token_before_reconcile
                 _=None,
             )
 
-    assert exc_info.value.status_code == 409
+    assert exc_info.value.status == 409
     assert "fencing_token" in exc_info.value.detail.lower()
     mock_validate.assert_awaited_once()
     mock_reconcile.assert_not_awaited()
@@ -198,7 +198,7 @@ async def test_update_job_step_status_rejects_invalid_fencing_token_before_recon
         "backend.services.agent_step_status.reconcile_step_traces",
         new=AsyncMock(return_value=1),
     ) as mock_reconcile:
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(ServiceError) as exc_info:
             await update_job_step_status(
                 job_id=job.id,
                 step_id="step-1",
@@ -210,7 +210,7 @@ async def test_update_job_step_status_rejects_invalid_fencing_token_before_recon
                 _=None,
             )
 
-    assert exc_info.value.status_code == 409
+    assert exc_info.value.status == 409
     assert "fencing_token" in exc_info.value.detail.lower()
     mock_validate.assert_awaited_once()
     mock_reconcile.assert_not_awaited()

@@ -11,18 +11,17 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from fastapi import HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.api.error_helpers import raise_api_http_error
 from backend.core.artifact_paths import (
     ArtifactPathError,
     resolve_local_artifact_path,
 )
 from backend.models.job import JobArtifact, JobInstance
 from backend.services.agent_log_signals import require_job_bound_upload_lease
+from backend.services.errors import BadRequest, Conflict, NotFound
 
 logger = logging.getLogger(__name__)
 
@@ -72,34 +71,30 @@ async def ingest_agent_artifact(
     不重复入库，返回已存在的 artifact_id + created=False。
     """
     if not payload.storage_uri:
-        raise HTTPException(status_code=400, detail="storage_uri is required")
+        raise BadRequest("storage_uri is required")
     try:
         resolve_local_artifact_path(payload.storage_uri, must_exist=False)
     except ArtifactPathError as exc:
-        raise_api_http_error(
-            status_code=400,
-            code="INVALID_ARTIFACT_PATH",
-            message=(
+        raise BadRequest({
+            "code": "INVALID_ARTIFACT_PATH",
+            "message": (
                 "artifact path is invalid or outside the allowed root "
                 f"(STP_AEE_NFS_ROOT): {exc}"
             ),
-        )
+        }) from exc
 
     if payload.artifact_type not in _ARTIFACT_TYPE_WHITELIST:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"artifact_type must be one of {sorted(_ARTIFACT_TYPE_WHITELIST)}; "
-                f"got {payload.artifact_type!r}"
-            ),
+        raise BadRequest(
+            f"artifact_type must be one of {sorted(_ARTIFACT_TYPE_WHITELIST)}; "
+            f"got {payload.artifact_type!r}",
         )
 
     if payload.size_bytes is not None and payload.size_bytes < 0:
-        raise HTTPException(status_code=400, detail="size_bytes must be >= 0")
+        raise BadRequest("size_bytes must be >= 0")
 
     job = await db.get(JobInstance, job_id)
     if job is None:
-        raise HTTPException(status_code=404, detail="job not found")
+        raise NotFound("job not found")
     await require_job_bound_upload_lease(
         db,
         job,
@@ -148,7 +143,7 @@ async def ingest_agent_artifact(
             "artifact_ingest_race job_id=%d storage_uri=%s",
             job_id, payload.storage_uri,
         )
-        raise HTTPException(status_code=409, detail="artifact ingest race, please retry")
+        raise Conflict("artifact ingest race, please retry")
     await db.commit()
     return ArtifactOut(artifact_id=existing_id, created=False)
 

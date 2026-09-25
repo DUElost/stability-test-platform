@@ -10,14 +10,13 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.api.error_helpers import raise_api_http_error
 from backend.models.enums import JobStatus
 from backend.models.job import JobInstance
 from backend.services.agent_step_status import require_valid_runtime_lease
+from backend.services.errors import BadRequest, Conflict, NotFound
 
 
 class JobStatusUpdate(BaseModel):
@@ -34,27 +33,25 @@ async def update_agent_job_status(
     """Transition job status via JobStateMachine (compat: RUNNING-only)."""
     job = await db.get(JobInstance, job_id)
     if job is None:
-        raise HTTPException(status_code=404, detail="job not found")
+        raise NotFound("job not found")
 
     await require_valid_runtime_lease(db, job, payload.fencing_token)
 
     try:
         new_status = JobStatus(payload.status.upper())
     except ValueError:
-        raise HTTPException(status_code=400, detail=f"unknown status: {payload.status}") from None
+        raise BadRequest(f"unknown status: {payload.status}") from None
 
     if new_status in {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.ABORTED}:
-        raise_api_http_error(
-            status_code=409,
-            code="TERMINAL_STATUS_REQUIRES_COMPLETE",
-            message="terminal status must be reported through /jobs/{job_id}/complete",
-        )
+        raise Conflict({
+            "code": "TERMINAL_STATUS_REQUIRES_COMPLETE",
+            "message": "terminal status must be reported through /jobs/{job_id}/complete",
+        })
     if new_status != JobStatus.RUNNING:
-        raise_api_http_error(
-            status_code=409,
-            code="INVALID_JOB_TRANSITION",
-            message="status endpoint only accepts RUNNING",
-        )
+        raise Conflict({
+            "code": "INVALID_JOB_TRANSITION",
+            "message": "status endpoint only accepts RUNNING",
+        })
 
     # Compatibility endpoint is now heartbeat-only.  Claim already performs
     # PENDING→RUNNING atomically with lease acquisition, so repeated RUNNING is

@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
-from fastapi import HTTPException
+from backend.services.errors import ServiceError
 
 from backend.models.enums import JobStatus, LeaseStatus
 from backend.services.agent_recovery import (
@@ -118,11 +118,11 @@ class TestRotateRecoveryLeaseToken:
                 return _Result()
 
         lease = _lease(device_id=42)
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ServiceError) as exc:
             await rotate_recovery_lease_token(
                 _Db(),  # type: ignore[arg-type]
                 lease,  # type: ignore[arg-type]
                 agent_instance_id="new-agent",
             )
-        assert exc.value.status_code == 409
+        assert exc.value.status == 409
         assert "recovery device not found" in exc.value.detail
