@@ -59,6 +59,7 @@ jobs:
           cache: pip
           cache-dependency-path: backend/requirements-dev.lock
       - name: Install dependencies
+        id: deps
         # 走 hash 锁定的 dev lock（含运行时依赖 + pytest / testcontainers / ruff /
         # pytest-cov），与本地 `pip install -r requirements-dev.txt` 装的可能是
         # 不同版本——这是有意的：CI 要可复现，本地要能追新。lock 过期时
@@ -89,6 +90,10 @@ jobs:
       # 顺序：promtool 必须在「Run repo-level tests」之前装好（GITHUB_PATH 对后续
       # step 生效；tests/test_ci_promtool_scenario_gate.py 守此序）。
       - name: Install pinned promtool
+        # #3247：一步红不得遮蔽其余套件——此前「Run backend tests」一红，promtool 安装、agent 与
+        # 仓库级测试全被 if: success() 跳过，舱壁告警场景在 promtool 3.13 下的失败因此藏了两夜。
+        # 依赖装好即各自独立跑（backstop 归因本就按 job 汇总全部失败步骤与失败用例）。
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
         env:
           PROMTOOL_VERSION: "3.13.3"
           PROMTOOL_TARBALL_SHA256: "b349c732d8a853e657d0e7ae1bbad4d11b586615fb65fdc59d896b9f869c001e"
@@ -115,6 +120,7 @@ jobs:
       # run 35296277239：agent 76s∥tests/ 503s → 步墙钟 504s）。串行反而更短。
       # PR 路径 agent∥离线子集仍然成立（离线子集无 promtool 长尾）。
       - name: Run agent tests
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
         env:
           # 部分 agent 测试模块在 import 期解析 DATABASE_URL（不真正连接）；
           # job 级已刻意不设（见上方 #1547），这里按需注入。
@@ -122,6 +128,7 @@ jobs:
         run: python -m pytest backend/agent/tests/ -q
       # 根 tests/ 也在 pytest.ini 的 testpaths 里(迁移升级 + 部署脚本契约)。
       - name: Run repo-level tests
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
         env:
           # #2151：本 job 里场景层是**必备**项——promtool 缺失/安装失败时用例 fail
           # 而不是静默 skip。PR 路径不注入该变量（保持 skip）。接线契约由

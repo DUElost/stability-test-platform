@@ -984,11 +984,17 @@ tests:
   # ≥8 个一分钟窗口有拒绝」。两条场景分别钉住修正的两端——
   # ① 单次拒绝后长期静默：**不得** firing（原式在边界条件下会假阳）；
   # ② 持续 10 分钟拒绝：必须 firing。
-  - interval: 1m
+  # 采样间隔 = 生产抓取间隔 15s（deploy/prometheus/prometheus.yml）。#3247：两组原为 1m 采样——
+  # Prometheus 3.x 的区间选择器左开，1m 采样下 `increase(x[1m])` 窗口里只剩 1 个样本、恒无值：
+  # 正向组在 CI 固定的 promtool 3.13 下失败，负向组则恒真通过（规则拿不到数据，空过）。
+  # 本地 promtool 2.53 是闭区间，两组都「对」，所以只在 CI 暴露，且被前序步骤的失败遮蔽了两夜。
+  - interval: 15s
     input_series:
-    # 只有第 1 分钟发生一次拒绝（counter 0 → 1），此后长期不再增长
+    # 只在 75s→90s 之间发生一次拒绝（counter 0 → 1），此后长期不再增长。跳变刻意落在一分钟窗口
+    # **内部**：3.x 左开窗口下，恰好跨在步长边界（如 60s→75s）的单次跳变对每个 increase[1m] 都
+    # 不可见，负向断言会再次退化成空过（放宽阈值到 >= 0 也不红）。
     - series: stability_terminal_bulkhead_rejected_total
-      values: 0 1x19
+      values: 0x5 1x79
     alert_rule_test:
     # 边界：原式在 eval 6m 时 increase[5m] 仍 >0 且 for: 5m 刚满足 → 会假阳
     - eval_time: 6m
@@ -997,11 +1003,11 @@ tests:
     - eval_time: 20m
       alertname: StabilityTerminalBulkheadRejected
       exp_alerts: []
-  - interval: 1m
+  - interval: 15s
     input_series:
-    # 每分钟都在拒绝 ⇒ 10 分钟窗内 10/10 个窗口 >0
+    # 每分钟都在拒绝（每 15s 采样 +0.25）⇒ 10 分钟窗内每个一分钟窗口都 >0
     - series: stability_terminal_bulkhead_rejected_total
-      values: 0+1x20
+      values: 0+0.25x84
     alert_rule_test:
     - eval_time: 12m
       alertname: StabilityTerminalBulkheadRejected
