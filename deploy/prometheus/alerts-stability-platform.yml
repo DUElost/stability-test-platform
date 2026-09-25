@@ -175,6 +175,36 @@ groups:
             ghost 404 storm): check centre routing first.  Before clearing any
             centre-side job rows, read docs/operations/control-plane-db-maintenance.md.
 
+      # #3217：crash artifact 按 ADR-0018 5B2「失败即丢」，此前丢弃数只在 Agent 本机可见——
+      # 测试结论完整、工单材料缺失，且无人知道。指标是 Agent 上报的进程级累计（Gauge 承载，
+      # 重启回落由 increase() 按重置处理）。成因不同则拆条（#3026 口径）：提交即丢是容量/
+      # 背压，promote/POST 失败是存储/网络/后端。
+      - alert: StabilityAgentArtifactSubmitDropped
+        expr: increase(stability_agent_artifact_dropped{stage="submit"}[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Agent dropped crash artifacts at submit (15m)
+          description: >-
+            The Agent artifact uploader dropped submissions (queue full, uploader not
+            running, or invalid payload).  Those crash artifacts are never registered:
+            affected jobs look complete but lack evidence.  Check the host agent log for
+            artifact_uploader_*_dropped and compare the crash burst with the queue depth;
+            do not make the queue unbounded (#3217).
+      - alert: StabilityAgentArtifactDeliveryFailed
+        expr: increase(stability_agent_artifact_dropped{stage=~"promote|post"}[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Agent failed to deliver crash artifacts (15m)
+          description: >-
+            Crash artifacts were lost after submit: promote to the shared root failed
+            (stage=promote) or the registration POST failed without retry (stage=post).
+            Check the shared storage mount on that host first, then centre reachability
+            and POST .../jobs/*/artifacts responses (#3217).
+
   - name: stability-platform-silent-skips
     rules:
       # 稳态不该出现的桶（#518 教训：静默跳过只记日志无人盯 → 指标化）。

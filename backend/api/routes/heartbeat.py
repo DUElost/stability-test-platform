@@ -16,6 +16,7 @@ from backend.models.device_lease import DeviceLease
 from backend.models.enums import LeaseStatus
 from backend.core.metrics import (
     device_update_suppressed_total,
+    record_agent_artifact_upload,
     record_agent_outbox_pending,
     record_host_operation_concurrency,
 )
@@ -349,6 +350,9 @@ def _process_heartbeat_with_db(
             )
         except (TypeError, ValueError):
             pass
+    # #3217：crash artifact 投递的提交数与三路丢失。只落 host.extra（上面的 update）就是
+    # #1257 型「有账面、无告警」——必须显式接到指标，告警才有输入。缺键项由 helper 跳过。
+    record_agent_artifact_upload(host.id, extra)
 
     # ADR-0026 P0: per-host OperationScheduler concurrency (Agent-reported).
     ops = extra.get("operations") if isinstance(extra, dict) else None

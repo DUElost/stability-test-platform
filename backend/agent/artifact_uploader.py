@@ -134,6 +134,24 @@ class ArtifactUploader:
             except Exception:
                 pass
 
+    def heartbeat_counts(self) -> Dict[str, int]:
+        """#3217：随心跳上报的进程级累计量（Agent 重启清零；控制面按计数器语义读）。
+
+        本 uploader 按 5B2 契约「失败即丢」，此前三条丢失路径只在本机日志与 stats 里可见。
+        三条分开报，因为成因与处置不同：
+        - ``dropped_submit``：提交即丢（未启动/已 stop/坏载荷/**队列满**）——容量与背压；
+        - ``dropped_promote``：LOCAL → 共享根 promote 失败——存储面；
+        - ``dropped_post``：登记 POST 失败（异常或非 2xx，不重试）——网络与后端。
+        ``submits`` 是分母：完整率 = 1 − 三路丢失之和 / 提交数（在途最多一个队列深度）。
+        """
+        s = self.stats
+        return {
+            "artifact_submits_total": s.submits_total,
+            "artifact_dropped_submit_total": s.submits_dropped,
+            "artifact_dropped_promote_total": s.promote_failed,
+            "artifact_dropped_post_total": s.posts_failed,
+        }
+
     # ------------------------------------------------------------------
     # 配置 / 启停
     # ------------------------------------------------------------------
