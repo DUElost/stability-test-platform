@@ -100,8 +100,13 @@ export default tseslint.config(
   {
     // shadcn/ui 原语按上游模板生成(空 interface 继承是其惯用写法),
     // 属于 vendored 代码,不按本仓规则改写。
+    // react-refresh 0.5.5+ 把 Radix Root/Portal/Trigger 等再导出判成
+    // 非组件混导出；这些文件本就不是 HMR 边界，关闭该规则。
     files: ['src/components/ui/**'],
-    rules: { '@typescript-eslint/no-empty-object-type': 'off' },
+    rules: {
+      '@typescript-eslint/no-empty-object-type': 'off',
+      'react-refresh/only-export-components': 'off',
+    },
   },
   {
     // 测试文件放宽:mock 与断言里 any / 非空断言是常态
