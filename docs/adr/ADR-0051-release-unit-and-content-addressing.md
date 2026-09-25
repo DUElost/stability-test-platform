@@ -1,6 +1,6 @@
 # ADR-0051：发布单元与内容寻址——不可变性从源码目录移到包
 
-- 状态：**Accepted** v1.5（2026-09-25 落地状态与生产验收纠偏；决策内容不变。历史修订见下表）
+- 状态：**Accepted** v1.6（2026-09-25 D6 env 自持实切；决策内容不变。历史修订见下表）
 - 优先级：P1（脚本目录 12 天翻倍、控制面部署源与开发工作区同一棵检出已造成事故；多站点交付 ADR-0041 依赖可 digest 校验的发布物）
 - 目标里程碑：M7
 - 日期：2026-09-22
@@ -25,6 +25,7 @@
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
+| v1.6 | 2026-09-25 | **D6 最后一米闭合（env 自持）**：生产站点 env 真身落 `/home/debian13/stp-releases/env.backend`（600，自仓根复制一次），全部 11 个 rev 根的 `.env.backend` 由仓根 symlink 改指树内 `../env.backend`——运行时（unit EnvironmentFile、`main.py` 的 `__file__` 派生 dotenv、alembic/各 checker）零代码改动穿透生效；删除开发检出不再影响生产，D6-D1「物理分离」判据完整。**代价显式化**：仓根 `.env.backend` 降级为纯 dev 配置，与站点真身自此两个文件（漂移面），生产改 env 与诊断取数一律经站点文件（SOP §1 已改写）；台账 `control-plane-env-lives-in-checkout` 转 done。切换实测：restart 后三道 ExecStartPre 全过、auth OK、48/48 心跳新鲜、`fleet_packages={package:48, unknown:0}`。未完成（v1.5 行口径中除 D6 外不变）：新站 `default_params` 覆盖差；D7 flashtool/aimonkey、控制面 dedup 工具包化及路径键/回退退出；D8 治理减法。 |
 | v1.5 | 2026-09-25 | **落地状态纠偏与生产验收**：#3258 已于 1fafd05 部署（首扫回填与 strict 默认）；#3262 合入并在 7fee7cf 部署，manifest 109 个存量版本显式 `retired:true`，新站活跃脚本集收敛为 102；#3222 初版在 7fee7cf 的真实 ACK 上误把 48 台全判 unknown，#3265 修复后以 37a56b41 窄幅切换（相对 7fee7cf 仅服务逻辑与测试），生产 48 台逐台刷新得 `package=48`、在位 1249、缺口 0。未完成：新站 `default_params` 覆盖差；D6 env 仍挂靠开发检出；D7 flashtool/aimonkey、控制面 dedup 工具包化及路径键/回退退出；D8 治理减法。运行中计划未因本次部署中止。 |
 | v1.4 | 2026-09-24 | **落地审查修复**（并行会话审计两条高风险，隔离空库实测复现后修）：① Phase 3 的 sync 重写丢了**首扫回填通道**——seed 行（有 entry sha、无 support/caps/包 sha）在空库首扫被 53 行全报 conflict 且短路使 `package_sha256` 永不回填（strict 全拒、新站点不可自举）→ 恢复并强化为**单轮回填全部缺失维度+包身份**（原 scan_script_root 逐维分轮需 3 轮 scan），行有值与包不等的真漂移仍 conflict；新增守卫测试钉「首扫收敛+幂等+真漂移不被吞」。② `STP_SCRIPT_PACKAGES` 缺省 **off→strict**、tree 回退代码删除（回退目标已随 Phase 3 消失，新装/漏配主机静默走死路径）——off/on 仅余告警别名，台账 `script-packages-off-on-modes` 转 done。③ 验证矩阵：隔离库（alembic head→首扫 created=164/skipped=47/conflicts=0/活跃无包sha=0→二扫幂等）。遗留（本 ADR 追认）：seed 行 `default_params` 仅覆盖部分版本（新站参数面 ≰ 生产参数面）与 manifest retired 策略（新站 184 活跃 vs 生产 99）为 Phase 4b/5 数据迁移项，登记于过渡台账续单。 |
 | v1.3 | 2026-09-24 | **族级 `kind` 字段（Phase 5 首项）**：`tools[name]` 由 `{versions}` 变 `{kind, versions}`，`kind ∈ {script, tool}` 成为登记面**唯一族归类判据**——取代 Phase 4a 的「`python:null` 即平台族」启发（`--python-absent` 让外部工具族也有 null python，二义实锤：展锐两族被 scan 误注册进 `script` 表、`check_script_packages` 族分类靠树集反推）。落地：`check_tool_manifest` lint 必填 kind + 族级 kind 不可变（v1.3 前 base 无 kind = 迁移补写合法）；`package_tool_asset --kind`（默认 script）；`script_catalog.script_entries` 只注册 kind=script；`check_script_packages` 归类与 ghost 保护（kind=script 无树恢复判红——Phase 4a 移交 PR 评审的那条保护由 kind 精确回收，**无需再议 schema v2**：kind 是族级字段，不触 C5 版本六元组）。存量 38 族显式迁移（35 script + Start-Log-Scan/Scan-Result-GT/Monkey-Log-Scan-GT-SPRD=tool）。生产数据清理（部署清单）：`script` 表两行误建 Unisoc 行走 admin `PUT is_active=false` 软退役。 |

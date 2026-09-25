@@ -20,6 +20,11 @@ export EXPECT_HEAD="$(cd backend && ../venv/bin/python -m alembic heads | awk '{
 echo "expect alembic head: $EXPECT_HEAD"
 ```
 
+> **本机生产注记（2026-09-25 D6 env 自持实切后）**：生产控制面运行在 bundle 发布根
+> （`/home/debian13/stp-releases/current`，见 `control-plane-deploy` skill §1），env 真身是站点文件
+> **`/home/debian13/stp-releases/env.backend`**——生产运维/诊断取 `DATABASE_URL` 等一律 source 站点文件；
+> `$CONTROL_DIR/.env.backend` 自 D6 起为**纯 dev 配置**（两者可漂移，勿混用）。
+
 凭据（不 echo 明文）：
 
 ```bash
