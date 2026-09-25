@@ -1,10 +1,10 @@
 # ADR-0054：Agent 与控制面的共享契约包——`backend/agent/contracts/`
 
-- 状态：**Proposed** v0.1（2026-09-25 起草；待 owner 裁决）
+- 状态：**Accepted** v1.0（2026-09-25 裁决：D1–D6 全部接受，D3 补一条约束，见 §9）
 - 优先级：P2
 - 目标里程碑：M7
 - 日期：2026-09-25
-- 决策者：owner（待裁决）；起草：平台研发组
+- 决策者：owner（2026-09-25 授权 Claude 裁决，见 §9）；起草：平台研发组
 - 归属域：semantic-ownership control-plane-split
 - 标签：agent, import-boundary, shared-contract, import-linter, ADR-0040, ADR-0051
 - 关联：[#3298](https://github.com/DUElost/stability-test-platform/issues/3298)（实施单，方案已在单内选定）
@@ -14,7 +14,7 @@
   / [ADR-0040](./ADR-0040-deployment-artifact-digest-protocol.md)（`agent-code` 部署单元与 digest 算法）
   / [ADR-0051](./ADR-0051-release-unit-and-content-addressing.md)（发布单元模型）
   / `.importlinter` C3（#3291 引入的「控制面不直接 import `backend.agent`」合约）
-- 版本记录：v0.1（2026-09-25）首次提出，D1–D6 待裁决
+- 版本记录：v1.0（2026-09-25）**裁决**：D1–D6 Accepted；D3 补「`backend/agent/__init__.py` 保持轻量」约束并纳入 C6 判据，见 §9。v0.1（2026-09-25）首次提出，D1–D6 待裁决（PR #3303）
 
 ## 1. 背景
 
@@ -60,6 +60,7 @@ Agent 的运行逻辑（采集、执行、状态迁移）**不属于契约**，�
 - **Agent 侧**：同包**相对导入**（`from .contracts.pipeline_validator import …`、`from ..contracts import …`），不写 `backend.agent.contracts` 绝对形式，也不再写任何 `backend.core` 回退。相对导入在 `backend.agent` 与 `agent` 两种布局下都成立。
 - **控制面侧**：绝对导入 `backend.agent.contracts.<module>`。
 - `contracts/__init__.py` **保持为空**，不做 re-export，避免重演 `watcher/__init__.py` 把运行时拉进来的问题。
+- **v1.0 补**：控制面 import `backend.agent.contracts.x` 时 Python 会先执行 `backend/agent/__init__.py`（grimp 不把它记为 import 边，import-linter 看不见）。该文件目前只导入仅依赖标准库的 `adb_wrapper`，**必须保持轻量**：只允许导入标准库级别的模块，不得导入 agent 运行时子系统。C6 的 AST 测试同时覆盖该文件。
 
 ### D4 门禁
 
@@ -124,3 +125,15 @@ Agent 的运行逻辑（采集、执行、状态迁移）**不属于契约**，�
 - `tests/test_agent_import_boundary.py`（C6 判据；`_SHARED_ALLOWLIST` 收缩）
 - `backend/agent/DEPLOY.md` 目录布局（增加 `contracts/`）
 - `docs/design/2026-semantic-ownership.md`（Accepted 后视需要补 owner 行）
+
+## 9. 裁决记录（2026-09-25，owner 授权 Claude 裁决）
+
+| 项 | 裁决 | 依据 |
+|---|---|---|
+| D1 归属 `backend/agent/contracts/` | **Accepted** | 主机上只有 `agent` 包（`install_agent.sh:637-640`），agent 包外的共享代码必然需要兜底或副本；放在包内不改 ADR-0040 输入集与三处排除集 |
+| D2 纳入判据 | **Accepted** | — |
+| D3 导入规则 | **Accepted，补一条** | 补 `backend/agent/__init__.py` 保持轻量（见 D3 v1.0 补）：它在控制面 import 契约时必然执行，而 import-linter 看不见这条边 |
+| D4 门禁 | **Accepted** | 通配忽略与祖先 forbidden 静默失效两条行为均已在 import-linter 2.15 实测 |
+| D5 完成定义 | **Accepted** | — |
+| D6 工件定位 | **Accepted** | `pipeline_validator` 的 `parent.parent / "schemas"` 在搬迁后必然解析错 |
+| 落地 | 按 §5 四步，首步即可开工 | #3303 合入后无 review 意见；实施单 [#3298](https://github.com/DUElost/stability-test-platform/issues/3298) |
