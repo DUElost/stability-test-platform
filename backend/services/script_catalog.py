@@ -284,11 +284,39 @@ def sync_scripts_from_manifest(
         row = existing_by_key.get(key)
 
         if entry.get("retired"):
-            if row is not None and row.is_active:
-                row.is_active = False
-                row.updated_at = now
-                result.deactivated += 1
-                result.deactivated_versions.append({"name": name, "version": version, "nfs_path": row.nfs_path or ""})
+            if row is not None:
+                if row.is_active:
+                    row.is_active = False
+                    row.updated_at = now
+                    result.deactivated += 1
+                    result.deactivated_versions.append({"name": name, "version": version, "nfs_path": row.nfs_path or ""})
+                continue
+            # 空库/新站的历史行仍须建（inactive）：plan_snapshot/step_trace 引用的是
+            # (name, version) 字符串，「引用闭合」要求行存在——不建行会让新站 catalog
+            # 比生产少一截、历史 run 详情页对不上脚本身份。内容仍取自包（登记 sha 有效才建行）。
+            if not _is_package_sha(sha):
+                result.package_conflicts.append({
+                    "name": name, "version": version, "reason": "manifest_package_sha_missing",
+                    "db_sha256": "", "manifest_sha256": sha,
+                })
+                continue
+            facts, err = read_package_facts(
+                pk_root / name / f"{version}.tar.gz", sha, str(entry.get("script") or ""))
+            if facts is None:
+                target = result.package_missing if err == "package_missing" else result.package_conflicts
+                target.append({"name": name, "version": version, "reason": err or "unknown",
+                               "artifact": str(pk_root / name / f"{version}.tar.gz")})
+                continue
+            db.add(Script(
+                name=name, display_name=name, category=_DEFAULT_CATEGORY,
+                script_type=facts.script_type, version=version,
+                nfs_path=_runtime_path(runtime_root, pk_root, name, version, facts.entry_name),
+                content_sha256=facts.content_sha256, package_sha256=sha,
+                support_files_manifest=facts.support_files_manifest,
+                capabilities=facts.capabilities, param_schema={}, default_params={},
+                is_active=False, created_at=now, updated_at=now,
+            ))
+            result.created += 1
             continue
 
         # #3196：登记值缺失/畸形 ⇒ 包身份不可信，显式拦下并点名。
