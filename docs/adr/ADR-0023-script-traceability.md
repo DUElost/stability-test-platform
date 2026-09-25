@@ -1,6 +1,6 @@
 # ADR-0023: 脚本溯源与观测链路收口
 
-- 状态：Accepted（D1 已实现；D2-D8 仍 Proposed）
+- 状态：Accepted（D1 已实现；2026-09-25 裁决 D2–D8 去留：D2/D3/D4 Accepted 待实施，D6 改判为源头守卫（待实施），D5/D7/D8 撤销——见「2026-09-25 裁决」节）
 - 优先级：P0（D1 为隐患修复 / D2-D8 为观测打通）
 - 目标里程碑：M3.2
 - 日期：2026-05-10
@@ -154,9 +154,29 @@ ADR-0020 完成 `Plan / PlanStep` 一次性切换，ADR-0021 / ADR-0022 在派�
 2. 失活前调 D7 的 usage 端点二次确认。
 3. 复活直接走 `PUT /scripts/{id}` `is_active=true`（已在 ScriptUpdate schema 中允许）。
 
+## 2026-09-25 裁决：D2–D8 去留（owner 授权 Claude 裁决）
+
+D2–D8 自 2026-06-12 起以 Proposed 悬置。其间 ADR-0029 P2-10、ADR-0051（发布单元与显式退役）等已改写了
+其中几项的前提。逐项按「当前代码里该问题是否仍存在」裁决：
+
+| 项 | 裁决 | 依据 |
+|---|---|---|
+| D2 观测端点暴露脚本身份 | **Accepted，待实施（P2）** | 问题仍在：`StageStepOut` 只有 `script_name`，`EventOut` / `DeviceMatrixItem` 无脚本身份（`backend/api/schemas/plan_run.py`），排障时仍需人工翻 `plan_snapshot` 才知道跑的是哪个版本。字段取值规则按原文（从 `plan_snapshot.steps` 查表、全部 Optional） |
+| D3 前端观测组件消费脚本身份 | **Accepted，待实施（P2）**，与 D2 同批 | 原文的组件锚点已过时（`BusinessFlowTimeline` / `DeviceMatrixCard` 已演进为 `BusinessFlowStepper` / `DeviceOverview` / `DeviceDetailDrawer`），实施时按现组件重新落点，展示口径不变（`script_name@version`）；deep-link 前提（ScriptManagementPage 读 URL 参数）随 D3 自身交付，不再挂在 D8 上 |
+| D4 `plan_snapshot` 浏览面 | **Accepted，待实施（P2）** | 纯前端、无新端点，快照已随 `GET /plan-runs/{id}` 返回。原文第 4 条的 WiFi 分配一节改读 `ResourceAllocation`（见 D5） |
+| D5 `run_context.wifi_assignments` 回写 | **撤销（被取代）** | 派发已把每台设备的 WiFi 分配落为表事实：`plan_dispatcher_sync._sync_create_allocations` 写 `ResourceAllocation(job_instance_id, device_id, pool…)`。再往 `run_context` JSON 复制一份会形成第二事实源 |
+| D6 PlanList 失活引用健康度 | **改判：不做健康度徽标；改为在源头补齐引用守卫（Accepted，待实施，P2）** | 「Plan 引用了已停用版本」这一状态已被三处入口挡住：API 停用被引用版本返回 409 `SCRIPT_STILL_REFERENCED`（`backend/api/routes/scripts.py` `_ensure_script_can_be_deactivated`，PUT 与 DELETE 两处调用）；创建/更新 Plan 由 `_validate_script_refs` 对不存在或已停用版本 422；`tools/dev/retire_script_versions.py` 只经上述 API 执行。**唯一缺口**是 release manifest 登记路径：`backend/services/script_catalog.py` 遇 `retired: true` 直接置 `is_active=False`，不查 `plan_step` 引用。在列表上给这种状态打徽标是事后补救；本质修法是让**所有停用入口共用同一守卫**——登记遇到仍被引用的 `retired: true` 条目时不翻转、在扫描结果中报告（ADR-0051 D2「注册只报告」同一取向），由人先迁移引用再重登记。残余的直改库情形由派发门禁（ADR-0021 / 本 ADR D1）兜住 |
+| D7 Script 反向引用端点 | **撤销（被取代）** | `GET /api/v1/scripts/{script_id}/usage`（ADR-0029 P2-10）已提供 Plan 配置引用与执行事实双口径；409 响应体也带 `plan_ids`。不再另开按 `(name, version)` 寻址的同义端点 |
+| D8 停用/复活按钮 | **撤销** | 退役是显式、成批、有判据的动作（ADR-0051 D5 继承 ADR-0039），判据唯一事实源是 `backend/services/script_retirement.py`，执行入口是 `tools/dev/retire_script_versions.py`（见 `script-version-lifecycle` SOP）。单击式 UI 按钮只过引用检查，会绕开「最新版承接豁免 / 冷却期」判据；复活仍可经 `PUT /scripts/{id}` `is_active=true`（admin） |
+
+- 原「C2-C8 前置」中的 `param_schema` 运行时校验**已满足**：`backend/services/script_params.validate_params_against_schema`
+  已在 Plan 保存路径消费（`backend/api/routes/plans.py`）。
+- 实施切片据此收敛为三片：D2+D3（含原 C2/C5）、D4（原 C6，WiFi 节读 `ResourceAllocation`）、端到端测试（原 C8，覆盖范围去掉 D5–D8）。
+  原 C3 / C4 / C7 作废；D6 的源头守卫（catalog `retired: true` 路径补引用检查）另开单（#3349），不并入上述三片；三片跟踪见 #3350。
+
 ## 实施切片
 
-> **实施状态 (2026-06-12)**：C1（D1 fail-fast）已合入代码主线，`plan_dispatcher_sync.py` / `plan_dispatcher_core.py` 中 `_check_script_keys_complete` + 两阶段校验（prepare 400 / dispatch FAILED）均已实现，pytest 覆盖。C2-C8 尚未排期，仍为 Proposed。**前置补充**：`param_schema` 运行时校验需求已从 ADR-0007 迁移至本 ADR，作为 C2-C8 实施的前置项（当前 `param_schema` 仅为 passthrough JSON，无校验消费方）。
+> **实施状态 (2026-06-12)**：C1（D1 fail-fast）已合入代码主线，`plan_dispatcher_sync.py` / `plan_dispatcher_core.py` 中 `_check_script_keys_complete` + 两阶段校验（prepare 400 / dispatch FAILED）均已实现，pytest 覆盖。C2-C8 尚未排期，仍为 Proposed。**（2026-09-25 裁决后：C3/C4/C7 作废，C2/C5/C6/C8 按上节收敛为三片、D6 改为源头守卫，均 Accepted 待实施）****前置补充**：`param_schema` 运行时校验需求已从 ADR-0007 迁移至本 ADR，作为 C2-C8 实施的前置项（当前 `param_schema` 仅为 passthrough JSON，无校验消费方）。
 
 | Commit | 范围 | 单测 | 状态 |
 |---|---|---|---|

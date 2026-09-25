@@ -5,6 +5,7 @@
 - 日期：2026-08-31
 - 父 ADR：[ADR-0031](./ADR-0031-platform-ai-assistant.md)（Accepted v1.7+）
 - 前置：[D8 权限对齐 Agent Note](../notes/architecture/2026-08-31-ai-assistant-permission-parity-d8.md)
+- 版本记录：v1.1（2026-09-25，owner 授权 Claude 裁决）：§7 三项「评审时裁定」的开放问题按已合入实现与 D8 定稿，§3.2 `device_ids` 行同步；v1.0（2026-08-31）#658 合入 `main`
 
 ## 0. 目标
 
@@ -84,7 +85,7 @@ host hot-update、install、生产库任意写、设备租约 SQL 逃生、force
 | 参数 | 校验 |
 |------|------|
 | `plan_id` | 存在、`Plan.is_active` |
-| `device_ids` | 非空、≤ 配置上限（默认 20，可 env）、整数、设备存在 |
+| `device_ids` | 非空、唯一、整数、设备存在；**审批路径不另设助手专属上限**（与 API 对齐，§7-2）；T2b 自动派发受白名单条目 `max_devices` 约束（默认 20、硬顶 50） |
 | 设备状态 | ONLINE、无 ACTIVE lease（或 preview 同源规则） |
 | `wifi_pool_id` | 若 Plan 含 `connect_wifi` 步骤则必填；须 `_require_active_wifi_pool` + `_require_wifi_pool_matches_plan` |
 | host 一致性 | 可选：单次派发限制同一 `host_id`（产品可配置） |
@@ -129,8 +130,21 @@ T2b 提案须展示：**Plan 名称、专项、设备 SN 列表、主机、wifi_
 - D6 表格增补：T2b 提案规则同 T2；镜像 API 为 `get_current_active_user` 的工具对登录用户可见。
 - 触发父 ADR 复议 #3（hot-update 代执行）**不**被本附录覆盖。
 
-## 7. 开放问题（评审时裁定）
+## 7. 开放问题裁定（v1.1，2026-09-25）
 
-1. **中止权限**：是否限制为「仅发起人 or admin 可 abort」？（API 当前登录即可——助手先对齐 API，收紧另开 ADR。）
-2. **单次设备上限**：全局 20 是否足够；GPU 三机场景默认 3 是否写入白名单模板。
-3. **wifi_pool_id**：是否允许助手从自然语言推断 pool，还是必须显式 ID（建议 **必须 ID**，助手先 T0 查 pools 再派发——P2 可加 `list_wifi_pools`）。
+原列为「评审时裁定」，#658 合入时未回填结论。按 D8「助手权限 ⊆ 账号 API 权限」与已合入实现定稿：
+
+1. **中止权限——不在助手侧收紧，与 API 对齐。** `abort_plan_run` 走与 `POST /plan-runs/{run_id}/abort`
+   同一服务函数（`plan_run_ops.run_abort_plan_run` → `abort_plan_run`），API 当前为登录即可，并留审计
+   （`ai_assistant_abort_plan_run`）。只在助手侧收紧会让「助手不能做、UI 能做」，这是入口差异而非安全边界；
+   若确需「仅发起人或 admin 可中止」，那是 API 权限决策，须另立 ADR 同时改 API 与助手。
+   **复议触发器**：出现误中止他人 PlanRun 的实例。
+2. **单次设备上限——审批路径不设助手专属上限；自动派发按白名单条目限定。** 审批路径的闸门是操作卡
+   逐台预览 + 人工批准，另加全局上限只会与 API 行为分叉；幻觉 `device_id` 已由校验拒绝（§4 #7）。
+   T2b 自动派发（无人审批）才需要硬顶：白名单条目 `max_devices` 默认 **20**、硬顶 **50**
+   （`t2b_allowlist.py` `_DEFAULT_MAX_DEVICES` / `_MAX_DEVICES_CAP`）。GPU 三机场景**不写死模板**，
+   由该 Plan 的白名单条目显式配置 `max_devices: 3`（§1 示例即此形态）。
+3. **`wifi_pool_id`——必须显式整数 ID，不从自然语言推断。** 已按此实现（`dispatch.py` 整数校验 +
+   `require_active_wifi_pool` / `require_wifi_pool_matches_plan`）。推断会让助手替人选择资源分配，
+   选错时的后果（设备连错网络）在预览卡上不易察觉。`list_wifi_pools`（T0）保持 P2：
+   用户反馈「不知道 pool id」时再加，加入时仍只做查询、不做推断。

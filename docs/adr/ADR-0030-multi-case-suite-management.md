@@ -1,6 +1,6 @@
 # ADR-0030: 多用例平台化管理（test_suite / test_case + 外部管理面）
 
-- 状态：**Accepted**（v1.9：P2 实施记账。2026-08-24 推进；P0 真机验收 + P1 全部 + **D6 真机冒烟✅** + **P2 核心✅** #429 已完成，实施记账见修订记录；JobArtifact `report` 白名单仍留待）
+- 状态：**Accepted**（v1.10：开放问题 3 裁定——`X-Agent-Secret` 对管理面零授权；v1.9：P2 实施记账。2026-08-24 推进；P0 真机验收 + P1 全部 + **D6 真机冒烟✅** + **P2 核心✅** #429 已完成，实施记账见修订记录；JobArtifact `report` 白名单仍留待）
 - 优先级：**P0（专项接入主线，可先行独立交付）+ P1（多用例实体与管理面）**——见 D6
 - 目标里程碑：M7
 - 日期：2026-08-19
@@ -21,6 +21,7 @@
 | 2026-08-25 | v1.8（绑定翻转硬拒） | **mtbf 系脚本绑定从观测转强制**：未绑定 mtbf 计划在 preview/prepare 即以 `SUITE_BINDING_REQUIRED`（PlanDispatchError 结构化 detail，含 step_key 清单）拒绝；非 mtbf 计划不受影响。翻转依据（issue #404 口径「告警一个完整运行周期归零后」）：观测期（2026-08-24~25）`suite_unbound` 零命中、生产唯一 mtbf Plan 已绑定、全部派发为托管 Run——退化满足即无存量用户。P0 文件真源模式对 mtbf 脚本就此关闭（套件是唯一配置通道）；物化器对无 `dispatch_suite` 存量 Run 的零注入分支保留为防御。设计 §3.4 与 mtbf-api.md §1.5 同步改述 |
 | 2026-08-25 | v1.7（D6 总验收达成） | **真机冒烟签字**：[验收 runbook](../acceptance/2026-08-suite-binding-mtbf-signoff.md) 全矩阵通过——Plan 10 绑定 suite 后 Run #224 在设备 395 跑通准入链，**init trace `suite_sha256` == 门禁 `exported_sha256` 逐字节相等（R1）**；S3 注入 `{"expected_testpoint_count":130,"project":"legacy"}` 实证、S6 守卫 force 不豁免实证、S7 篡改→`sha_mismatch` fail-fast + 重导恢复实证、S5 审计链完整（create/import/update/export + 绑定与准入失败审计）。生产部署窗口同批完成（backend 重启至 main tip，catalog 注册 `mtbf_check@1.3.0`）。副产品两项记录于 runbook §5：① `push_mismatched_scripts` 不推支撑文件——治愈路径缺口，hot-update fallback 解锁，修复另起 PR；② user 构建设备被 root 前置正确拦截（设计行为）。D6 P1 验收信号**全部达成**，#404 可关单；仅余 P2 前端与 `test_case_result` |
 | 2026-09-01 | v1.9（P2 实施记账） | **P2 核心已合 main**（#429 分两块）：① 前端套件管理（`TestSuitesPage` / `TestSuiteDetailPage` / 创建与编辑对话框，`/test-suites` 路由）；② `test_case_result` 落库 + PlanRun `TestCaseResultsCard` 逐条浏览（数据源仍为 NFS `results/{run_dir}.json`，不扩 artifact 白名单）。**仍未做**：JobArtifact `report` 类型白名单扩展（§实施影响 大文件/下载场景）。七挂靠位同步：本行 / 头部 / adr README 清单 + M7 / CLAUDE.md / DOC-MAP Living 表 |
+| 2026-09-25 | v1.10（开放问题 3 裁定，owner 授权 Claude 裁决） | **`X-Agent-Secret` 对套件/用例管理面零授权（读写皆无）**：外部调用方一律以用户身份鉴权（写 = admin，与现行 `require_admin` 一致）。理由：agent secret 是机群共用的回调凭据（ADR-0035 正在把主机身份收敛为逐机凭据），赋予它用例库写权会让任一主机失陷即可改写全平台用例；Agent 运行期取用例走 export-to-tool-dir / 中心存储 / 派发快照，不经管理面。`tools/dev/mtbf-cases.py` 携带的 `X-Agent-Secret` 只用于 `/auth/token` 请求通过 CSRF 中间件（`backend/core/csrf.py` 放行通道 3），不构成授权。复议触发器：出现无法以用户 token 运行的无人值守外部集成（届时按 ADR-0035 签发专用服务凭据，而非复用 agent secret） |
 
 ## 背景
 
@@ -92,6 +93,7 @@ MTBF 专项的用例清单 `runtask.xml`（`/mnt/automation-toolkit/android-tool
   export-to-tool-dir（端点草案见背景分析 §5.5）。复用控制面 8000 端口，**不新增端口**（Agent `:8900` 已按 ADR-0025 取消暴露）。
 - **鉴权**：读 = 登录用户；写 = admin（参照 `_require_plan_owner_or_admin` 的 owner 模式可选）；外部 agent 双通道
   （用户 token / `X-Agent-Secret`，后者写权限在实施评审时定，初版保守）。
+  **v1.10 裁定**：`X-Agent-Secret` 对管理面零授权，外部调用一律用户 token（写 = admin），见修订记录 v1.10。
 - **全量审计**（ADR-0015）：suite/case 的 create/update/delete/import/export/export-to-tool-dir 全部 `record_audit`。
 - **CLI 便捷层**：`tools/mtbf_cases.py`（list/show/import/export/validate），走同一 REST，凭据取自仓库根 `.env.backend` 约定，明文不进 log。**位置与命名实施时在仓库先例内二选一**（`tools/dev/` 单文件 kebab-case vs 独立 `tools/stpctl/`），选定后回写本 ADR 修订记录。
 - **接口文档**：OpenAPI（`/docs` + `/openapi.json`）为真源；`docs/operations/` 补「MTBF 用例管理接口说明」（curl 示例 + 权限），**文档先行**。
@@ -161,7 +163,7 @@ ADR-0029 非目标明确放弃版本化 ExecutionProfile 实体族（5 张表：
 
 1. 设备端 realresult XML 精确 schema——**已定稿 + 真机复核关闭**（反编译定稿见 [P0 设计 §2](../design/2026-08-mtbf-p0-runner-design.md)；PlanRun #218 NFS JSON vs 设备端 XML **38/38 0 不一致**，见 Agent Note §冒烟收尾记录）。
 2. 工具目录 Agent 可达性——**方案已定**（P0 设计 §4 推荐：清单/全局参数走中心存储 `{STP_AEE_NFS_ROOT}/mtbf/{project}/`，APK 走 Agent resources 目录，逐条结果写回 `mtbf/{project}/results/`）；与 PowerCycle 统一，实施 PR 对齐目录约定。
-3. 外部写权限模型：**初版写 = admin**；`X-Agent-Secret` 只读或限定 import/export，P1 评审定。
+3. 外部写权限模型：**已裁定（v1.10）**——写 = admin（用户 token）；`X-Agent-Secret` 对套件/用例管理面零授权（读写皆无），理由与复议触发器见修订记录 v1.10。
 4. `times` 覆盖链定稿：**`task_times` 仅影响 export/deploy**（渲染/部署时的覆盖参数），库内 `root_config.times` 为套件默认值。
 5. 结果落库：**已定稿**（与「影响」段一致）：摘要 metrics + `suite_sha256` 走 step_trace；逐条写中心存储
    `mtbf/{project}/results/{run_dir}__job{job_id}__{serial}.json`（v1.5.0+）；`report_json` 为控制面合成（`report_service`），脚本不写；P2 大文件再走 artifact 白名单扩展。
