@@ -70,9 +70,9 @@ from backend.core.agent_secret import (
     require_agent_secret,
 )
 from backend.core.cors import get_cors_allowed_origins, get_cors_config
-from backend.core.csrf import CSRFOriginMiddleware, is_csrf_enabled
+from backend.api.middleware.csrf import CSRFOriginMiddleware, is_csrf_enabled
 from backend.core.database import async_engine
-from backend.core.limiter import RateLimitMiddleware
+from backend.api.middleware.limiter import RateLimitMiddleware
 from backend.core.metrics import init_build_info
 from backend.core.release_manifest import resolve_build_info
 from backend.core.redis import redact_redis_url
@@ -82,7 +82,7 @@ from backend.core.exception_log import (
     is_db_overload,
 )
 from backend.core.terminal_bulkhead import TerminalBulkheadFull
-from backend.core.request_metrics import ApiRequestMetricsMiddleware, endpoint_label
+from backend.api.middleware.request_metrics import ApiRequestMetricsMiddleware, endpoint_label
 from backend.core.security import is_production_like_env, validate_production_auth_cookie_settings
 from backend.realtime.socketio_server import create_sio_server, capture_main_loop
 from backend.services.realtime_ports import wire_dashboard_ports

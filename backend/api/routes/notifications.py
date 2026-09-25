@@ -19,7 +19,7 @@ from backend.api.schemas import (
     PaginatedResponse,
 )
 from backend.core.database import get_db
-from backend.core.audit import record_audit
+from backend.services.audit_writer import record_audit
 from backend.models.notification import (
     AlertRule,
     ChannelType,

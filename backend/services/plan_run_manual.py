@@ -14,7 +14,7 @@ from typing import Optional
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from backend.core.audit import record_audit
+from backend.services.audit_writer import record_audit
 from backend.core.metrics import record_patrol_manual_action
 from backend.models.host import Device, Host
 from backend.models.job import JobInstance

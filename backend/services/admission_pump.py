@@ -39,7 +39,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
-from backend.core.audit import record_audit
+from backend.services.audit_writer import record_audit
 from backend.core.database import SessionLocal
 from backend.core.metrics import (
     record_admission_queue_latency,

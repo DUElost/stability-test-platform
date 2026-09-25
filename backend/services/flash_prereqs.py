@@ -15,7 +15,7 @@ import threading
 from pathlib import Path
 from typing import Any, Callable
 
-from backend.core.audit import record_audit
+from backend.services.audit_writer import record_audit
 from backend.core.database import SessionLocal
 from backend.core.ssh_security import resolve_host_ssh_credentials
 from backend.models.host import Host

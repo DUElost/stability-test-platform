@@ -19,7 +19,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from backend.core.audit import record_audit
+from backend.services.audit_writer import record_audit
 from backend.models.host import Device
 from backend.models.project import SEED_PROJECT_KEYS, TestProject
 from backend.models.project_model import ProjectModel

@@ -38,7 +38,7 @@ from backend.api.schemas.dedup import (
     JiraRunCancelOut,
     JiraRunStartOut,
 )
-from backend.core.audit import record_audit
+from backend.services.audit_writer import record_audit
 from backend.core.database import SessionLocal, get_db
 from backend.models.host import Host
 from backend.models.jira_run import JiraRun

@@ -291,7 +291,7 @@ class TestRecordAuditStrict:
             self.expunged = True
 
     def test_strict_reraises_missing_table(self):
-        from backend.core.audit import record_audit
+        from backend.services.audit_writer import record_audit
 
         with pytest.raises(Exception, match="audit_logs"):
             record_audit(
@@ -300,7 +300,7 @@ class TestRecordAuditStrict:
             )
 
     def test_default_still_degrades_on_missing_table(self):
-        from backend.core.audit import record_audit
+        from backend.services.audit_writer import record_audit
 
         session = self._FakeSession()
         assert record_audit(

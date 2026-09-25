@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
-from backend.core.audit import record_audit
+from backend.services.audit_writer import record_audit
 from backend.models.enums import JobStatus, PlanRunStatus
 from backend.models.host import Device
 from backend.models.job import JobInstance

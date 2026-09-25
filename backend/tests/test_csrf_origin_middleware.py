@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from prometheus_client import REGISTRY
 
-from backend.core.csrf import CSRFOriginMiddleware
+from backend.api.middleware.csrf import CSRFOriginMiddleware
 
 ALLOWED = ("http://localhost:5173", "http://127.0.0.1:5173")
 

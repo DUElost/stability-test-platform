@@ -40,7 +40,7 @@ def main() -> int:
         return 2
 
     try:
-        from backend.core.audit import record_audit
+        from backend.services.audit_writer import record_audit
         from backend.core.database import SessionLocal
         from backend.core.security import get_password_hash
         from backend.models.user import User

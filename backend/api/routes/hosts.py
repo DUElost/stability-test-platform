@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from typing import Any, List, Union
 
-from backend.core.audit import record_audit
+from backend.services.audit_writer import record_audit
 from backend.core.database import get_db
 from backend.core.host_identity import allocate_host_id
 from backend.core.job_timeout_config import HOST_HEARTBEAT_TIMEOUT_SECONDS

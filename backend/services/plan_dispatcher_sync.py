@@ -922,7 +922,7 @@ def complete_plan_run_dispatch(
     try:
         _validate_dispatch_devices_sync(db, device_ids)
     except PlanDispatchError as exc:
-        from backend.core.audit import record_audit
+        from backend.services.audit_writer import record_audit
         unavailable = exc.unavailable_devices or []
         PlanRunStateMachine.transition(pr, PlanRunStatus.FAILED, reason="devices_unavailable_at_dispatch")
         pr.ended_at = datetime.now(timezone.utc)
@@ -957,7 +957,7 @@ def complete_plan_run_dispatch(
     if orphan_devices:
         # Why: prepare 阶段 _validate_dispatch_devices_sync 已覆盖 no_host;
         # 若仍走到这里说明 complete 前并发 race(host_id 被改为 NULL) — 必须 FAILED 而非静默 WARN。
-        from backend.core.audit import record_audit
+        from backend.services.audit_writer import record_audit
         PlanRunStateMachine.transition(pr, PlanRunStatus.FAILED, reason="devices_without_host")
         pr.ended_at = datetime.now(timezone.utc)
         pr.result_summary = {
@@ -997,7 +997,7 @@ def complete_plan_run_dispatch(
         )
         db.commit()
     except AllocationError as exc:
-        from backend.core.audit import record_audit
+        from backend.services.audit_writer import record_audit
         PlanRunStateMachine.transition(pr, PlanRunStatus.FAILED, reason="wifi_allocation_failed")
         pr.ended_at = datetime.now(timezone.utc)
         pr.result_summary = {
@@ -1028,7 +1028,7 @@ def complete_plan_run_dispatch(
     except SuiteMaterializationConflict as exc:
         # R05-F13 (#976): 门禁后套件内容被改动，物化注入会与已校验内容不一致——
         # 显式失败（可检测），不放行不一致的 expected_testpoint_count。
-        from backend.core.audit import record_audit
+        from backend.services.audit_writer import record_audit
 
         db.rollback()
         PlanRunStateMachine.transition(
@@ -1172,7 +1172,7 @@ def _fail_plan_run_on_device_conflict(
     concurrent abort/aggregation may already have moved it off RUNNING — the
     terminal guard skips the transition in that case (never overwrite).
     """
-    from backend.core.audit import record_audit
+    from backend.services.audit_writer import record_audit
 
     pr = db.execute(
         select(PlanRun)

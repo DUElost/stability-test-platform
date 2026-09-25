@@ -140,7 +140,7 @@ def run_dispatch_plan_run(
     requester_user_id: int | None = None,
 ) -> str:
     """执行派发并写审计（与 API manual dispatch 同源）。"""
-    from backend.core.audit import record_audit
+    from backend.services.audit_writer import record_audit
 
     plan_run_id, summary = execute_dispatch_plan_run(db, params, triggered_by=triggered_by)
     record_audit(

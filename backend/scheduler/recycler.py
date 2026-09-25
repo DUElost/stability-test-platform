@@ -25,7 +25,7 @@ from sqlalchemy import DateTime, Integer, and_, case, cast, exists, func, litera
 from sqlalchemy.dialects.postgresql import JSONB as PG_JSONB
 from sqlalchemy.orm import aliased
 
-from backend.core.audit import record_audit
+from backend.services.audit_writer import record_audit
 from backend.core.database import SessionLocal
 from backend.realtime.socketio_server import schedule_emit
 from backend.core.metrics import (

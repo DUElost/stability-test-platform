@@ -47,7 +47,7 @@ def _imported_record_aliases(tree: ast.AST) -> dict:
     for node in ast.walk(tree):
         if not isinstance(node, ast.ImportFrom):
             continue
-        if not (node.module or "").endswith("core.audit"):
+        if not (node.module or "").endswith(("core.audit", "audit_writer")):
             continue
         for alias in node.names:
             if alias.name in _RECORD_FUNCS:
@@ -207,17 +207,17 @@ def test_alias_table_is_consistent():
 # 每条都是「同一逻辑换一种写法」的绕过形态；缺了任一命中，守卫的绿灯就不足以
 # 作为合规证据。新增识别面时在这里补对应反例。
 _CANONICAL_SNIPPET = (
-    "from backend.core.audit import record_audit\n"
+    "from backend.services.audit_writer import record_audit\n"
     "def f(db):\n"
     "    record_audit(db, action='x', resource_type='job_instance')\n"
 )
 _ALIASED_SNIPPET = (
-    "from backend.core.audit import record_audit as ra\n"
+    "from backend.services.audit_writer import record_audit as ra\n"
     "def f(db):\n"
     "    ra(db, action='x', resource_type='job_instance')\n"
 )
 _NONLITERAL_SNIPPET = (
-    "from backend.core.audit import record_audit\n"
+    "from backend.services.audit_writer import record_audit\n"
     "def f(db, rt):\n"
     "    record_audit(db, action='x', resource_type=rt)\n"
 )
@@ -227,7 +227,7 @@ _GETATTR_SNIPPET = (
     "    getattr(audit, 'record_audit')(db, action='x', resource_type='job_instance')\n"
 )
 _KWARGS_SNIPPET = (
-    "from backend.core.audit import record_audit\n"
+    "from backend.services.audit_writer import record_audit\n"
     "def f(db, extra):\n"
     "    record_audit(db, action='x', **extra)\n"
 )

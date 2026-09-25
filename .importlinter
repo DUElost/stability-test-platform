@@ -29,7 +29,7 @@ name = C1 控制面分层
 type = layers
 layers =
     backend.main
-    backend.api.routes : backend.scheduler : backend.tasks : backend.scripts
+    backend.api.routes : backend.api.middleware : backend.scheduler : backend.tasks : backend.scripts
     backend.services
     backend.realtime | backend.api.schemas
     backend.models
@@ -38,8 +38,9 @@ unmatched_ignore_imports_alerting = error
 ignore_imports =
     # S3 服务反向调用调度器实现。
     backend.services.host_upgrade_gate -> backend.scheduler.device_lease_reconciler
-    # S4 core 反向依赖 models（审计写库）。出口：审计记录写入下沉到 services 或 models 侧。
-    backend.core.audit -> backend.models.audit
+    # S4（core.audit → models.audit）已兑现：#3297 把审计记录写入下沉到
+    # backend/services/audit_writer.py（core/audit.py 只留零依赖词表），
+    # unmatched_ignore_imports_alerting=error 强制本行同 PR 删除。
 
 # ---------------------------------------------------------------------------
 # C2 services 不感知 HTTP（只查直接 import）
@@ -59,6 +60,9 @@ forbidden_modules =
     starlette
     backend.api.routes
     backend.api.error_helpers
+    backend.api.error_handlers
+    backend.api.middleware
+    backend.api.auth_cookies
     backend.api.response
 allow_indirect_imports = True
 unmatched_ignore_imports_alerting = error
@@ -116,6 +120,13 @@ ignore_imports =
 
 # ---------------------------------------------------------------------------
 # C4 core 是最底层：不依赖 web 框架（只查直接 import）
+# #3297 基线清零：csrf / request_metrics / limiter（中间件与 RateLimiter）迁
+# backend/api/middleware/（纯客户端 IP 解析留 core/limiter.py——audit 写入与
+# 限流两侧都要用，core 不得上引 api）；core.audit 的写入下沉
+# backend/services/audit_writer.py、core.security 的 Response cookie 操作拆到
+# backend/api/auth_cookies.py，core 只留零框架依赖的纯函数。
+# 原 ignore_imports 段（6 行）随清零删除——此后 core→fastapi/starlette 直接 import
+# 一律红，无豁免。
 # ---------------------------------------------------------------------------
 [importlinter:contract:c4-core-no-web]
 name = C4 core 不直接依赖 web 框架
@@ -127,15 +138,6 @@ forbidden_modules =
     starlette
 allow_indirect_imports = True
 unmatched_ignore_imports_alerting = error
-# csrf / request_metrics / limiter 是 HTTP 中间件，出口是移到 backend/api/middleware/；
-# audit / security 需拆出不依赖 Request 的纯函数部分。
-ignore_imports =
-    backend.core.audit -> fastapi
-    backend.core.csrf -> starlette
-    backend.core.limiter -> fastapi
-    backend.core.limiter -> starlette
-    backend.core.request_metrics -> starlette
-    backend.core.security -> starlette
 
 # ---------------------------------------------------------------------------
 # C5 services 子模块之间无环（含函数体内 import）

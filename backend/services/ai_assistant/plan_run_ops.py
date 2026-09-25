@@ -224,7 +224,7 @@ def run_manual_retry_job(
         device_currently_disconnected,
         load_job_in_run,
     )
-    from backend.core.audit import record_audit
+    from backend.services.audit_writer import record_audit
     from backend.core.metrics import record_patrol_manual_action
     from backend.models.host import Device, Host
 
@@ -299,7 +299,7 @@ def run_manual_exit_job(
         MANUAL_ACTION_JOB_STATUSES,
         load_job_in_run,
     )
-    from backend.core.audit import record_audit
+    from backend.services.audit_writer import record_audit
     from backend.core.metrics import record_patrol_manual_action
 
     run_id = params["run_id"]
@@ -380,7 +380,7 @@ def run_trigger_plan_run_archive(
     triggered_by: str,
     requester_user_id: int | None = None,
 ) -> str:
-    from backend.core.audit import record_audit
+    from backend.services.audit_writer import record_audit
     from backend.services.plan_run_scan_scope import (
         build_scan_now_payload,
         classify_recycle_targets,

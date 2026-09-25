@@ -14,7 +14,7 @@ import secrets
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from backend.core.audit import record_audit
+from backend.services.audit_writer import record_audit
 from backend.services.errors import BadRequest
 from backend.services.host_upgrade_gate import (
     begin_host_upgrade,

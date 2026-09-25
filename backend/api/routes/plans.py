@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from backend.api.response import ApiResponse, ok
 from backend.api.schemas import PaginatedResponse
 from backend.api.routes.auth import get_current_active_user, User
-from backend.core.audit import record_audit
+from backend.services.audit_writer import record_audit
 from backend.core.settings.scheduler import get_scheduler_settings
 from backend.core.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
 from backend.core.device_serial import is_placeholder_serial

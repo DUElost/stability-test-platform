@@ -19,7 +19,7 @@ from backend.api.response import ApiResponse, ok
 from backend.api.error_helpers import raise_api_http_error
 from backend.api.routes.auth import get_current_active_user, get_current_user, require_admin, User
 from backend.core.agent_secret import AgentSecretNotConfiguredError, require_agent_secret
-from backend.core.audit import record_audit
+from backend.services.audit_writer import record_audit
 from backend.core.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
 from backend.core.database import get_db
 from backend.models.enums import PASSING_PLAN_RUN_STATUSES, PlanRunStatus

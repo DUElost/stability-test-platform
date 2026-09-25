@@ -27,7 +27,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from backend.core.audit import record_audit
+from backend.services.audit_writer import record_audit
 from backend.core.database import SessionLocal
 from backend.core.metrics import audit_retention_pruned_total
 from backend.core.settings.scheduler import get_scheduler_settings

@@ -17,7 +17,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.api.schemas.project import ProjectMapConflictOut, ProjectMapPreviewOut
-from backend.core.audit import record_audit
+from backend.services.audit_writer import record_audit
 from backend.models.host import Device
 from backend.models.project import TestProject
 from backend.models.project_model import ProjectModel

@@ -28,7 +28,7 @@ from backend.api.schemas.ai_assistant import (
     T2bAutoDispatchAllowlistEntry,
 )
 from backend.core.ai_security import decrypt_api_key, encrypt_api_key, mask_api_key
-from backend.core.audit import record_audit
+from backend.services.audit_writer import record_audit
 from backend.core.database import get_db
 from backend.models.ai_assistant import (
     AiAssistantAction,
