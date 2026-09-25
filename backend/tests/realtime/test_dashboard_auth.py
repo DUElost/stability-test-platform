@@ -236,7 +236,7 @@ async def test_dashboard_token_auth_runs_off_event_loop(monkeypatch):
     authenticate_token 经 asyncio.to_thread 进工作线程执行；若回归为在
     on_connect 内直跑 sync SessionLocal，则查询线程与循环线程同 ident，
     本测试即红。"""
-    import backend.realtime.socketio_server as sio_server
+    import backend.services.realtime_ports as ports
 
     monkeypatch.setenv("TESTING", "0")
     seen: dict[str, int] = {}
@@ -252,11 +252,26 @@ async def test_dashboard_token_auth_runs_off_event_loop(monkeypatch):
         seen["auth_thread"] = threading.get_ident()
         return None
 
-    monkeypatch.setattr(sio_server, "SessionLocal", lambda: _FakeSession())
-    monkeypatch.setattr(sio_server, "authenticate_token", _fake_auth)
+    monkeypatch.setattr(ports, "SessionLocal", lambda: _FakeSession())
+    monkeypatch.setattr(ports, "authenticate_token", _fake_auth)
     ns = DashboardNamespace("/dashboard")
 
     with pytest.raises(socketio.exceptions.ConnectionRefusedError):
         await ns.on_connect("sid-T1", environ={}, auth={"token": "some-token"})
 
     assert seen["auth_thread"] != threading.get_ident()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_ports_fail_closed_when_not_wired(monkeypatch):
+    """入站端口未注入时 fail-closed：token 一律拒绝、console 房间一律不放行。"""
+    import backend.realtime.socketio_server as sio_server
+
+    monkeypatch.setenv("TESTING", "0")
+    sio_server.configure_dashboard_ports(authenticate_user=None, console_run_exists=None)
+    token = create_access_token({"sub": "1"})
+    ns = DashboardNamespace("/dashboard")
+
+    with pytest.raises(socketio.exceptions.ConnectionRefusedError):
+        await ns.on_connect("sid-unwired", environ={}, auth={"token": token})
+    assert await sio_server._dashboard_room_exists("console", "con-abcdef012345") is False
