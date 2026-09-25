@@ -126,7 +126,7 @@
           "artifact": "packages/clean_env/1.0.1.tar.gz",
           "package_sha256": "17a6335ca1773d47dcba07a41e9a835c553efdc39fdc0ae7234bedee9ad08458",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "clean_env.py",
           "version": "1.0.1"
         },
@@ -200,7 +200,7 @@
           "artifact": "packages/connect_wifi/1.0.0.tar.gz",
           "package_sha256": "c09d267e95c06af66f2538d50d987fb14175a64696dbde30dd5e8206690991aa",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "connect_wifi.py",
           "version": "1.0.0"
         },
@@ -208,7 +208,7 @@
           "artifact": "packages/connect_wifi/1.0.1.tar.gz",
           "package_sha256": "71b0aadaa2c1c2bf0e07450547c9641c5d801e50a4bc64e9199f9ac51d514bb7",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "connect_wifi.py",
           "version": "1.0.1"
         },
@@ -258,7 +258,7 @@
           "artifact": "packages/fill_storage/1.0.0.tar.gz",
           "package_sha256": "86d830e1f00d23274ea2fb4058cc70b84c09fae36431659a917fd2d5d6954673",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "fill_storage.py",
           "version": "1.0.0"
         },
@@ -266,7 +266,7 @@
           "artifact": "packages/fill_storage/1.0.1.tar.gz",
           "package_sha256": "06b604481f65cfd51bbdb192e50e34806b2554b41ee9c1a75ca4e3dab35a4d7e",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "fill_storage.py",
           "version": "1.0.1"
         },
@@ -274,7 +274,7 @@
           "artifact": "packages/fill_storage/1.0.2.tar.gz",
           "package_sha256": "0319cb9ee43852f08b43c269e88d77ffedf03067a6ad05e68b9c71656d0a70c8",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "fill_storage.py",
           "version": "1.0.2"
         },
@@ -303,7 +303,7 @@
           "artifact": "packages/flash_firmware/1.0.0.tar.gz",
           "package_sha256": "91f3c5e57dc32d6805cff9de456dd16e9a43b874b4802ac74ee26c006ebce341",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "flash_firmware.py",
           "version": "1.0.0"
         },
@@ -311,7 +311,7 @@
           "artifact": "packages/flash_firmware/1.0.1.tar.gz",
           "package_sha256": "91f3c5e57dc32d6805cff9de456dd16e9a43b874b4802ac74ee26c006ebce341",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "flash_firmware.py",
           "version": "1.0.1"
         },
@@ -319,7 +319,7 @@
           "artifact": "packages/flash_firmware/1.1.0.tar.gz",
           "package_sha256": "48953b30e26f92ae831a232b16e76f94c38d149bb39ec8ec633bc459a87e6dea",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "flash_firmware.py",
           "version": "1.1.0"
         },
@@ -327,7 +327,7 @@
           "artifact": "packages/flash_firmware/1.2.0.tar.gz",
           "package_sha256": "73cb311fbe35e5d81088b1540d43e0760dab2a35bcd1289e320801f3cfb0db89",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "flash_firmware.py",
           "version": "1.2.0"
         },
@@ -335,7 +335,7 @@
           "artifact": "packages/flash_firmware/1.3.0.tar.gz",
           "package_sha256": "7bfb7d600be4e501cd70c2e8953ecbb94360350e129f9984d622991c8b7373d3",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "flash_firmware.py",
           "version": "1.3.0"
         },
@@ -343,7 +343,7 @@
           "artifact": "packages/flash_firmware/1.3.1.tar.gz",
           "package_sha256": "eafb2f49e5ca94c704a0fdd2047875291e2d5357394eb59f8e34256950d984d4",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "flash_firmware.py",
           "version": "1.3.1"
         },
@@ -351,7 +351,7 @@
           "artifact": "packages/flash_firmware/1.3.2.tar.gz",
           "package_sha256": "17509a0c5bf5684489d3f613d1a5bdada1c96374021cc80cbcb35719f3bfb399",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "flash_firmware.py",
           "version": "1.3.2"
         },
@@ -359,7 +359,7 @@
           "artifact": "packages/flash_firmware/1.3.3.tar.gz",
           "package_sha256": "3b0283bdbe5aaad22ab06c7d0e47e0925d3fd2dcfbbcbfa41a417ee31f58354d",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "flash_firmware.py",
           "version": "1.3.3"
         },
@@ -367,7 +367,7 @@
           "artifact": "packages/flash_firmware/1.3.4.tar.gz",
           "package_sha256": "c489a45445c4824b5002f2249861b4e184aa38dd6935e1f24f68a13bb80107a2",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "flash_firmware.py",
           "version": "1.3.4"
         },
@@ -375,7 +375,7 @@
           "artifact": "packages/flash_firmware/1.3.5.tar.gz",
           "package_sha256": "c127b31dda5d4030eb04a049a98e097113531f8de9e1cdd6b399a914289a38b5",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "flash_firmware.py",
           "version": "1.3.5"
         },
@@ -383,7 +383,7 @@
           "artifact": "packages/flash_firmware/1.3.6.tar.gz",
           "package_sha256": "64d059e1bfa3020de7c76ea34c0e10e92dd2df34a28cd012ea1fa49350804e0a",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "flash_firmware.py",
           "version": "1.3.6"
         },
@@ -391,7 +391,7 @@
           "artifact": "packages/flash_firmware/1.3.7.tar.gz",
           "package_sha256": "59ee162efe9dbd5d0f8a1fece27634bbe3d9111ae738bf0d7ced7136c2df6e9d",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "flash_firmware.py",
           "version": "1.3.7"
         },
@@ -399,7 +399,7 @@
           "artifact": "packages/flash_firmware/1.3.8.tar.gz",
           "package_sha256": "401e844da9d2e458221193df65168e955d708e75f8fae049ee13e989f462f6bf",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "flash_firmware.py",
           "version": "1.3.8"
         },
@@ -407,7 +407,7 @@
           "artifact": "packages/flash_firmware/1.3.9.tar.gz",
           "package_sha256": "39095cd592b310d9ddf8766f39734d60be2c6462602e16c74eeda72c3876eae5",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "flash_firmware.py",
           "version": "1.3.9"
         },
@@ -415,7 +415,7 @@
           "artifact": "packages/flash_firmware/1.3.10.tar.gz",
           "package_sha256": "7d5b0002700e371eeeff343a35d362c6342a528dde258d6da78ad37ddc43269d",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "flash_firmware.py",
           "version": "1.3.10"
         },
@@ -423,7 +423,7 @@
           "artifact": "packages/flash_firmware/1.3.11.tar.gz",
           "package_sha256": "143deb987c688e6d2f20dc6f0c0e97128ed6570ed43154b05b9d861abbf0f5d4",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "flash_firmware.py",
           "version": "1.3.11"
         },
@@ -431,7 +431,7 @@
           "artifact": "packages/flash_firmware/1.3.12.tar.gz",
           "package_sha256": "e6e04adb4f7788b325d28a91ae24a82be767467aeb463d778122710b1e71ab0a",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "flash_firmware.py",
           "version": "1.3.12"
         },
@@ -439,7 +439,7 @@
           "artifact": "packages/flash_firmware/1.3.13.tar.gz",
           "package_sha256": "1d22a158e540e1b3164d1eea6ef5b66ebf77af9e8194971f858beb34910804e9",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "flash_firmware.py",
           "version": "1.3.13"
         },
@@ -447,7 +447,7 @@
           "artifact": "packages/flash_firmware/1.3.14.tar.gz",
           "package_sha256": "62e4f819f128df1f3e425806cc98ac5c2fd296dbd88b8245ea1c645665da9e3e",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "flash_firmware.py",
           "version": "1.3.14"
         },
@@ -484,7 +484,7 @@
           "artifact": "packages/flash_preflight/1.0.0.tar.gz",
           "package_sha256": "7839a1f03deb2842545dfbd8314a956816d11527c96fac3dfa8028516b96ac9b",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "flash_preflight.py",
           "version": "1.0.0"
         },
@@ -508,7 +508,7 @@
           "artifact": "packages/flash_preflight/1.0.3.tar.gz",
           "package_sha256": "2a814dc682ec3feebbb01ff7658548a04b0fad81a756edf0968d7670d6e15f09",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "flash_preflight.py",
           "version": "1.0.3"
         },
@@ -553,7 +553,7 @@
           "artifact": "packages/gpu_check/1.0.2.tar.gz",
           "package_sha256": "a7c7e35fd4e469b959cb0bf4205be33fd3f360037d5365c8b771c5501a935528",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "gpu_check.py",
           "version": "1.0.2"
         },
@@ -561,7 +561,7 @@
           "artifact": "packages/gpu_check/1.0.3.tar.gz",
           "package_sha256": "d13760f180cd7e1d96352984e69807bc5532bd9d40095ff04ccd79e9e6ea4d20",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "gpu_check.py",
           "version": "1.0.3"
         },
@@ -569,7 +569,7 @@
           "artifact": "packages/gpu_check/1.0.4.tar.gz",
           "package_sha256": "e63aef96fa4fba96744876297f0ba8ae65bc58ca9bec8e16fe883eb90040f04e",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "gpu_check.py",
           "version": "1.0.4"
         },
@@ -593,7 +593,7 @@
           "artifact": "packages/gpu_check/1.0.7.tar.gz",
           "package_sha256": "6bf18ada14296cc8cb43c7434b188e804b4b742ffb048943c4dc93dc81c96b53",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "gpu_check.py",
           "version": "1.0.7"
         },
@@ -601,7 +601,7 @@
           "artifact": "packages/gpu_check/1.0.8.tar.gz",
           "package_sha256": "f2825ad5c772ad39667f817aaca86f467aebbcbe774dbd3e811fb0c817ca8f90",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "gpu_check.py",
           "version": "1.0.8"
         },
@@ -609,7 +609,7 @@
           "artifact": "packages/gpu_check/1.0.9.tar.gz",
           "package_sha256": "8bbc6012ca45863976c087cb91fc6d7494567e4b5ca4019efc279609edfcca0c",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "gpu_check.py",
           "version": "1.0.9"
         },
@@ -630,7 +630,7 @@
           "artifact": "packages/gpu_finish/1.0.0.tar.gz",
           "package_sha256": "09687c92e4fa366d63c2438f7474adf7512bac1d856be225c42796a0da723bd2",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "gpu_finish.py",
           "version": "1.0.0"
         },
@@ -638,7 +638,7 @@
           "artifact": "packages/gpu_finish/1.0.1.tar.gz",
           "package_sha256": "df09f63dad0ce986fc70de0783b4852cb838b41bbdffe58cb567e6ecfcc79bce",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "gpu_finish.py",
           "version": "1.0.1"
         },
@@ -646,7 +646,7 @@
           "artifact": "packages/gpu_finish/1.0.2.tar.gz",
           "package_sha256": "85e6df11299c33c3e159a48d738060d813a89f729b34519088cf52e6d50959b7",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "gpu_finish.py",
           "version": "1.0.2"
         },
@@ -654,7 +654,7 @@
           "artifact": "packages/gpu_finish/1.0.3.tar.gz",
           "package_sha256": "6167da5fa2ed29adb9b9fb4b76fcc5977dce0f679c081f956eb3329034e80100",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "gpu_finish.py",
           "version": "1.0.3"
         },
@@ -662,7 +662,7 @@
           "artifact": "packages/gpu_finish/1.0.4.tar.gz",
           "package_sha256": "6971d48a94fa82201966e2f7219b83f8d49d6fc99be1153a98dee29a904d8c52",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "gpu_finish.py",
           "version": "1.0.4"
         },
@@ -699,7 +699,7 @@
           "artifact": "packages/gpu_setup/1.0.0.tar.gz",
           "package_sha256": "10d2bf7eeeafb2a15d2816e238f8f08cc4646551bb6eded087552c26e71c689c",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "gpu_setup.py",
           "version": "1.0.0"
         },
@@ -707,7 +707,7 @@
           "artifact": "packages/gpu_setup/1.0.1.tar.gz",
           "package_sha256": "e66fdd7398a22a93dff1e03574e175771c79e556eb9d4aecfeed7615c4ab5290",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "gpu_setup.py",
           "version": "1.0.1"
         },
@@ -715,7 +715,7 @@
           "artifact": "packages/gpu_setup/1.0.2.tar.gz",
           "package_sha256": "ba5e0c6275aad95bc158c2d5093ab4ff5078d3536170eb5b34975853ed19621a",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "gpu_setup.py",
           "version": "1.0.2"
         },
@@ -723,7 +723,7 @@
           "artifact": "packages/gpu_setup/1.0.4.tar.gz",
           "package_sha256": "5c715425540b0ff6dade6e580868b82f0251d7f9ebc70813f6a939ff2bbafb26",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "gpu_setup.py",
           "version": "1.0.4"
         },
@@ -731,7 +731,7 @@
           "artifact": "packages/gpu_setup/1.0.5.tar.gz",
           "package_sha256": "37c38fecd19306b6fd50c4f4e1860f2a8d411ffef5eb6f4bb166ed28ffa53c8c",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "gpu_setup.py",
           "version": "1.0.5"
         },
@@ -739,7 +739,7 @@
           "artifact": "packages/gpu_setup/1.0.6.tar.gz",
           "package_sha256": "63511e97b69a057347e430a8449c309a987da21fb1d5fd40e32a24f79ad68c28",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "gpu_setup.py",
           "version": "1.0.6"
         },
@@ -747,7 +747,7 @@
           "artifact": "packages/gpu_setup/1.0.7.tar.gz",
           "package_sha256": "683894da874c4061ab22761957cd1b9c9388a7cecf57650c14981d8237eec308",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "gpu_setup.py",
           "version": "1.0.7"
         },
@@ -755,7 +755,7 @@
           "artifact": "packages/gpu_setup/1.0.8.tar.gz",
           "package_sha256": "f927cf773287f6e94260d947c05e3051aea0bec07c8f2bf62133e0f71a967275",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "gpu_setup.py",
           "version": "1.0.8"
         },
@@ -763,7 +763,7 @@
           "artifact": "packages/gpu_setup/1.0.9.tar.gz",
           "package_sha256": "ac9aa4e4798fd3ddd568120606a457b59726d5de8efecd21580a00f5eb84dc28",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "gpu_setup.py",
           "version": "1.0.9"
         },
@@ -779,7 +779,7 @@
           "artifact": "packages/gpu_setup/1.1.0.tar.gz",
           "package_sha256": "597c66c710d89214fc2b365a02287be26e361a2964bede4db6ce546a6c15ab90",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "gpu_setup.py",
           "version": "1.1.0"
         },
@@ -787,7 +787,7 @@
           "artifact": "packages/gpu_setup/1.2.0.tar.gz",
           "package_sha256": "7b44a7cd80cad7f26067121d4c2af077f31c86d50f053df8d363597755e49c69",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "gpu_setup.py",
           "version": "1.2.0"
         },
@@ -824,7 +824,7 @@
           "artifact": "packages/install_apk/1.0.0.tar.gz",
           "package_sha256": "9c5afd61217f5ad2f8f598faea81e92e5de999f1ab0e9fd3663bd4323d11c1a2",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "install_apk.py",
           "version": "1.0.0"
         },
@@ -840,7 +840,7 @@
           "artifact": "packages/install_apk/1.0.2.tar.gz",
           "package_sha256": "f30faebeba37e31514e13a415ae175d2601008c97af9136535db14c367665553",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "install_apk.py",
           "version": "1.0.2"
         },
@@ -861,7 +861,7 @@
           "artifact": "packages/monkey_check/1.0.0.tar.gz",
           "package_sha256": "193fe50de3a9629bda53ee7b36391b53e918931caea8473a83379ee7c37b5937",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "monkey_check.py",
           "version": "1.0.0"
         },
@@ -869,7 +869,7 @@
           "artifact": "packages/monkey_check/2.0.0.tar.gz",
           "package_sha256": "b0df7c4490dd1258b08700425b181121338e77d14f69bb74f4c5daf74d510e92",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "monkey_check.py",
           "version": "2.0.0"
         },
@@ -877,7 +877,7 @@
           "artifact": "packages/monkey_check/2.0.1.tar.gz",
           "package_sha256": "b0df7c4490dd1258b08700425b181121338e77d14f69bb74f4c5daf74d510e92",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "monkey_check.py",
           "version": "2.0.1"
         },
@@ -906,7 +906,7 @@
           "artifact": "packages/monkey_launch/1.0.0.tar.gz",
           "package_sha256": "7a62884a49a8c29b86de63c675303684c68f251b58f163c4ab0d232f7931d9ef",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "monkey_launch.py",
           "version": "1.0.0"
         },
@@ -914,7 +914,7 @@
           "artifact": "packages/monkey_launch/2.0.0.tar.gz",
           "package_sha256": "678929cb065bef2ad7ae353fdd524053c3cecd20ef2e03c8576191293aac217c",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "monkey_launch.py",
           "version": "2.0.0"
         },
@@ -922,7 +922,7 @@
           "artifact": "packages/monkey_launch/4.0.0.tar.gz",
           "package_sha256": "a8d876574e17739d539e022e37617e605c79bcbaf20dbd48afea2f93eb0c0b98",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "monkey_launch.py",
           "version": "4.0.0"
         },
@@ -938,7 +938,7 @@
           "artifact": "packages/monkey_launch/5.0.1.tar.gz",
           "package_sha256": "306b5bb2c6d1827ee5c8e9ad3ab60a428da131d3bd3956e169596ff278b488bc",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "monkey_launch.py",
           "version": "5.0.1"
         },
@@ -946,7 +946,7 @@
           "artifact": "packages/monkey_launch/5.0.2.tar.gz",
           "package_sha256": "afcb426904b0f87e9277cf00a3ce8a400506185b2081f46e48426b052216e6cd",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "monkey_launch.py",
           "version": "5.0.2"
         },
@@ -954,7 +954,7 @@
           "artifact": "packages/monkey_launch/5.1.0.tar.gz",
           "package_sha256": "cf8c7b8181bfc24cd6297853b0feb635525d6cb2aafe761f82537d9e52139891",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "monkey_launch.py",
           "version": "5.1.0"
         },
@@ -983,7 +983,7 @@
           "artifact": "packages/monkey_resource_push/1.0.1.tar.gz",
           "package_sha256": "a6c5b48e5cd2deb759d7b7fc24e7cc464567f2ef1e8b0fc352a6aa36d47ff1f0",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "monkey_resource_push.py",
           "version": "1.0.1"
         },
@@ -1004,7 +1004,7 @@
           "artifact": "packages/monkey_setup/1.0.0.tar.gz",
           "package_sha256": "d7813dbc606a5c0440e5b497cb95c089208142608b02a818aaf07126f0d6bd09",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "monkey_setup.py",
           "version": "1.0.0"
         },
@@ -1012,7 +1012,7 @@
           "artifact": "packages/monkey_setup/1.1.0.tar.gz",
           "package_sha256": "220798e52add7b9276fb53e2d2324cec6f4ad0e78ab865a96d3c861d86ca6271",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "monkey_setup.py",
           "version": "1.1.0"
         },
@@ -1020,7 +1020,7 @@
           "artifact": "packages/monkey_setup/1.2.0.tar.gz",
           "package_sha256": "41b9a0d520fd4263adf45a0fd2949700c29ea4fc4043a39f74a6d174331f16b6",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "monkey_setup.py",
           "version": "1.2.0"
         },
@@ -1028,7 +1028,7 @@
           "artifact": "packages/monkey_setup/1.3.0.tar.gz",
           "package_sha256": "0b371c1078a6073710e292e75f92350ab322a8248c03c62b954b7edf93378cd5",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "monkey_setup.py",
           "version": "1.3.0"
         },
@@ -1036,7 +1036,7 @@
           "artifact": "packages/monkey_setup/2.0.0.tar.gz",
           "package_sha256": "a3087e04a3494c99fbd58d4749223bd3bfc7e27fb88aef35d0ea91383071939f",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "monkey_setup.py",
           "version": "2.0.0"
         },
@@ -1044,7 +1044,7 @@
           "artifact": "packages/monkey_setup/2.1.0.tar.gz",
           "package_sha256": "7af46a6fd79f549bbd453b0b4992bbae87ce467e00a5819e7b09dac8f141da39",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "monkey_setup.py",
           "version": "2.1.0"
         },
@@ -1052,7 +1052,7 @@
           "artifact": "packages/monkey_setup/2.2.0.tar.gz",
           "package_sha256": "9b6c4591f99efc8b3487d72345594421914ee1c305e7f44a2b11dd340cb38931",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "monkey_setup.py",
           "version": "2.2.0"
         },
@@ -1060,7 +1060,7 @@
           "artifact": "packages/monkey_setup/2.3.0.tar.gz",
           "package_sha256": "4ec4bfc2e222ab204c9657884be1373679aea96354750174945010ffb750d9f9",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "monkey_setup.py",
           "version": "2.3.0"
         },
@@ -1068,7 +1068,7 @@
           "artifact": "packages/monkey_setup/2.3.1.tar.gz",
           "package_sha256": "f177597bebf450022bdcc1f9da9dbb865b0e47dece6f7c4c646cb6e31c03ee79",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "monkey_setup.py",
           "version": "2.3.1"
         },
@@ -1076,7 +1076,7 @@
           "artifact": "packages/monkey_setup/2.3.2.tar.gz",
           "package_sha256": "add6dc546f339f30aa1a7525eb2390f848a8bdb5ef4ea530e1c05d8775924316",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "monkey_setup.py",
           "version": "2.3.2"
         },
@@ -1100,7 +1100,7 @@
           "artifact": "packages/monkey_setup/2.3.5.tar.gz",
           "package_sha256": "a233f457566a34a26da10e33d15683b248d8c343cbe11227e206b463bd9ea77f",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "monkey_setup.py",
           "version": "2.3.5"
         },
@@ -1116,7 +1116,7 @@
           "artifact": "packages/monkey_setup/2.3.7.tar.gz",
           "package_sha256": "a0546320ecf7e654fefb0c5e027357f4fccf7c95eb345a280252e3903c6c2327",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "monkey_setup.py",
           "version": "2.3.7"
         },
@@ -1124,7 +1124,7 @@
           "artifact": "packages/monkey_setup/2.3.8.tar.gz",
           "package_sha256": "a9368acd7f79140121eb2c2564282230db41b83a33c30b904896c3ef525aa6dc",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "monkey_setup.py",
           "version": "2.3.8"
         },
@@ -1161,7 +1161,7 @@
           "artifact": "packages/monkey_teardown/1.0.0.tar.gz",
           "package_sha256": "8fef12e0a1aef46546fdd68faa137c9a3ef2acb8160efa9ef4354900a805c999",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "monkey_teardown.py",
           "version": "1.0.0"
         },
@@ -1169,7 +1169,7 @@
           "artifact": "packages/monkey_teardown/1.0.1.tar.gz",
           "package_sha256": "074207442595598ad79c9ef5904f76fb61b3f00ccd3ecbd240e40106b78ac5f4",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "monkey_teardown.py",
           "version": "1.0.1"
         },
@@ -1198,7 +1198,7 @@
           "artifact": "packages/monkey_test/1.0.0.tar.gz",
           "package_sha256": "1addf0a78b7a50d8b56898dd597b0d95b92a4a846a6747e39dc33b9c2010eab6",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "monkey_test.py",
           "version": "1.0.0"
         },
@@ -1206,7 +1206,7 @@
           "artifact": "packages/monkey_test/1.1.0.tar.gz",
           "package_sha256": "1addf0a78b7a50d8b56898dd597b0d95b92a4a846a6747e39dc33b9c2010eab6",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "monkey_test.py",
           "version": "1.1.0"
         },
@@ -1214,7 +1214,7 @@
           "artifact": "packages/monkey_test/1.2.0.tar.gz",
           "package_sha256": "deabecb054dfb05cfa7752f1b29f4a6a1a3df7e8a68dec52857e152fd978492a",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "monkey_test.py",
           "version": "1.2.0"
         },
@@ -1222,7 +1222,7 @@
           "artifact": "packages/monkey_test/1.2.1.tar.gz",
           "package_sha256": "faacd022c2ef78d84fa52257b5c6d2cc7a8c69745567adeffde6369e8d5915ea",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "monkey_test.py",
           "version": "1.2.1"
         },
@@ -1243,7 +1243,7 @@
           "artifact": "packages/mtbf_check/1.0.0.tar.gz",
           "package_sha256": "c0d9f0b9118bab04b6764b3136a12df3501f15dff0e02fbb1583c6d8141f3e3e",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "mtbf_check.py",
           "version": "1.0.0"
         },
@@ -1251,7 +1251,7 @@
           "artifact": "packages/mtbf_check/1.1.0.tar.gz",
           "package_sha256": "07d962ef3506224e5b5236d4aa12e581e3ea6e040fcfc6bf74c573e93fe69bca",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "mtbf_check.py",
           "version": "1.1.0"
         },
@@ -1267,7 +1267,7 @@
           "artifact": "packages/mtbf_check/1.3.0.tar.gz",
           "package_sha256": "96df3009e37a8b6e29db953f3a9182f9bac9ff62583f351e91c16b592e1054ea",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "mtbf_check.py",
           "version": "1.3.0"
         },
@@ -1275,7 +1275,7 @@
           "artifact": "packages/mtbf_check/1.4.0.tar.gz",
           "package_sha256": "d6eaedaf79abda811510b18a92af295e669d4058f9f3fdc0aad5a1eac96ec462",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "mtbf_check.py",
           "version": "1.4.0"
         },
@@ -1296,7 +1296,7 @@
           "artifact": "packages/mtbf_finish/1.0.0.tar.gz",
           "package_sha256": "adfdb0459ee91cfd7f7a79b324ef1a50f09dae9ee47248dd7106a1d372717ad3",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "mtbf_finish.py",
           "version": "1.0.0"
         },
@@ -1304,7 +1304,7 @@
           "artifact": "packages/mtbf_finish/1.1.0.tar.gz",
           "package_sha256": "9de4c50e9f3a4fb125b054d3a9acbef0e6f20fee17aff585af8a1cfdbec473ea",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "mtbf_finish.py",
           "version": "1.1.0"
         },
@@ -1336,7 +1336,7 @@
           "artifact": "packages/mtbf_finish/1.5.0.tar.gz",
           "package_sha256": "3d5ecc27ae855607394839cbcdbe89af398c8adb7b0f6f4a87f8706dfdef1506",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "mtbf_finish.py",
           "version": "1.5.0"
         },
@@ -1357,7 +1357,7 @@
           "artifact": "packages/mtbf_setup/1.0.0.tar.gz",
           "package_sha256": "9ff9feb880b96d2eeeb49604aa3792339d30bef9165ffbcf4383ad784ba3dbcc",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "mtbf_setup.py",
           "version": "1.0.0"
         },
@@ -1365,7 +1365,7 @@
           "artifact": "packages/mtbf_setup/1.1.0.tar.gz",
           "package_sha256": "d2a27e1c0333ba01ca99c99b73ac8cac1e207e9d90aa81848a6d089512e25a05",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "mtbf_setup.py",
           "version": "1.1.0"
         },
@@ -1389,7 +1389,7 @@
           "artifact": "packages/mtbf_setup/1.4.0.tar.gz",
           "package_sha256": "4692471b083787d0d2d96ef7adbd368601ebc556986405c3a1a8b2c6eb9042c6",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "mtbf_setup.py",
           "version": "1.4.0"
         },
@@ -1423,7 +1423,7 @@
           "artifact": "packages/oobe_skip/1.0.0.tar.gz",
           "package_sha256": "999ac2db7e61d25834255036349a483b3cd02518f8987ce29181011801cae306",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "oobe_skip.py",
           "version": "1.0.0"
         },
@@ -1431,7 +1431,7 @@
           "artifact": "packages/oobe_skip/1.1.0.tar.gz",
           "package_sha256": "bd3127c41a00b6741e0f45f08b1ab867fec28071fb24310d7ceddb8d11d6c36f",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "oobe_skip.py",
           "version": "1.1.0"
         },
@@ -1439,7 +1439,7 @@
           "artifact": "packages/oobe_skip/1.1.1.tar.gz",
           "package_sha256": "a1f8250db3e924233bdea48236cd8d57839568765f789c488bb263f38d715f4e",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "oobe_skip.py",
           "version": "1.1.1"
         },
@@ -1460,7 +1460,7 @@
           "artifact": "packages/powercycle_check/1.0.0.tar.gz",
           "package_sha256": "edee5aaefeb69af0c87c019194e40bd77ee132e62675dd6e4ee9383c9dde49ff",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "powercycle_check.py",
           "version": "1.0.0"
         },
@@ -1476,7 +1476,7 @@
           "artifact": "packages/powercycle_check/1.0.2.tar.gz",
           "package_sha256": "e528a8942892535f7e2f74dfef0d492eb54f16127a3496b70a076a6fc9f97573",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "powercycle_check.py",
           "version": "1.0.2"
         },
@@ -1508,7 +1508,7 @@
           "artifact": "packages/powercycle_check/1.0.6.tar.gz",
           "package_sha256": "6db9d1c57f055f5873ede434ca9f010abe9eab29d65544dddaabb7318391441b",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "powercycle_check.py",
           "version": "1.0.6"
         },
@@ -1516,7 +1516,7 @@
           "artifact": "packages/powercycle_check/1.0.7.tar.gz",
           "package_sha256": "70217e9961fc8ec605816cde38e933af2e02484e6a137f271322289a8b177729",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "powercycle_check.py",
           "version": "1.0.7"
         },
@@ -1553,7 +1553,7 @@
           "artifact": "packages/powercycle_finish/1.0.2.tar.gz",
           "package_sha256": "024cb86c6b7257e63814a16b52d5e06070d257430f57b96a7f9fe0f2cfe88069",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "powercycle_finish.py",
           "version": "1.0.2"
         },
@@ -1561,7 +1561,7 @@
           "artifact": "packages/powercycle_finish/1.0.3.tar.gz",
           "package_sha256": "e2c1ecc79fe202a8651eb9f3241ae5788cfc84080815044529d0497f9a1638b5",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "powercycle_finish.py",
           "version": "1.0.3"
         },
@@ -1598,7 +1598,7 @@
           "artifact": "packages/powercycle_setup/1.0.0.tar.gz",
           "package_sha256": "b87f311f13e8e359d5df94cbdf0ec8d77b136f9b3c20aa6156fa5dd23c80f23a",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "powercycle_setup.py",
           "version": "1.0.0"
         },
@@ -1606,7 +1606,7 @@
           "artifact": "packages/powercycle_setup/1.0.1.tar.gz",
           "package_sha256": "7eddf7e65472ca2c36c75d97a2ece7d6f78366ca6963af1b3c1fe808c582cdd5",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "powercycle_setup.py",
           "version": "1.0.1"
         },
@@ -1683,7 +1683,7 @@
           "artifact": "packages/push_resources/1.0.0.tar.gz",
           "package_sha256": "ed51b9fba5df1add33a0b9253b221dbd5543f035e846c23a1a3111759fed5c14",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "push_resources.py",
           "version": "1.0.0"
         },
@@ -1691,7 +1691,7 @@
           "artifact": "packages/push_resources/1.0.1.tar.gz",
           "package_sha256": "7d2ba8f528e849227d17903a53e5d721bf796560368aecdf30c766375b7f1cdd",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "push_resources.py",
           "version": "1.0.1"
         },
@@ -1728,7 +1728,7 @@
           "artifact": "packages/sleep_check/1.0.2.tar.gz",
           "package_sha256": "30996df3cafa6d93a979707adc4fefb6110a982d9e372a0c8391f7b7c3e97656",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "sleep_check.py",
           "version": "1.0.2"
         },
@@ -1736,7 +1736,7 @@
           "artifact": "packages/sleep_check/1.0.3.tar.gz",
           "package_sha256": "0ce75b01f59ba9d68f709af9866f8c49cd42ad932108edec879fba80982d908c",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "sleep_check.py",
           "version": "1.0.3"
         },
@@ -1765,7 +1765,7 @@
           "artifact": "packages/sleep_finish/1.0.1.tar.gz",
           "package_sha256": "ab380874d42c66de58f7e409d73fe0e991bf96820f69ad8473e8c3898c6d1d60",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "sleep_finish.py",
           "version": "1.0.1"
         },
@@ -1802,7 +1802,7 @@
           "artifact": "packages/sleep_setup/1.0.0.tar.gz",
           "package_sha256": "e19d703e69c31304ddbc4c0b1f4314278f2b5e8429b8ec122726432571fe1563",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "sleep_setup.py",
           "version": "1.0.0"
         },
@@ -1810,7 +1810,7 @@
           "artifact": "packages/sleep_setup/1.0.1.tar.gz",
           "package_sha256": "eec868792fc1cc476193284cb615fe93eb9f5db29e6eb6230a462db70d8bcc99",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "sleep_setup.py",
           "version": "1.0.1"
         },
@@ -1839,7 +1839,7 @@
           "artifact": "packages/stop_aimonkey/1.0.0.tar.gz",
           "package_sha256": "93952f0779dd2ee2cf8d67d47a1b3a5ed72fea6000e079fbec813862a8e68945",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "stop_aimonkey.py",
           "version": "1.0.0"
         },

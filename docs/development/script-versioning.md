@@ -28,7 +28,8 @@ tool_manifest.json                                # Git 唯一事实源：<name>
 - **scan（`POST /api/v1/scripts/scan`）的注册输入 = manifest + 站点包源**：逐条目打开 tarball 核验整包 sha，
   从包内取入口 sha / 伴随文件 sha / `capabilities.json` 登记 `script` 行；包未发布 → `package_missing`（只报告）；
   行与包不一致 → `conflicts`（包不可变，故只能是库侧漂移；`?force_rebaseline=true` 显式重锚，有在途 PlanRun 时 409）；
-  `retired:true` → 行显式 `is_active=false`；活跃行不在 manifest → `unregistered_active`（只报告，永不反激活）。
+  `retired:true` → 行显式 `is_active=false`（新站无行时按包**建 inactive 行**——历史
+  `(name,version)` 引用闭合跨站成立）；活跃行不在 manifest → `unregistered_active`（只报告，永不反激活）。
   不再读取任何检出目录：`STP_SCRIPT_ROOT` 已无读取点（站点安装仍写它以兼容旧 env 模板），
   可选覆盖 `STP_TOOL_MANIFEST` / `STP_PACKAGES_ROOT`，运行机路径锚仍由 `STP_SCRIPT_RUNTIME_ROOT` 决定；
 - **执行**：Agent 按行上 `package_sha256` 拉包到 `tools_cache` 执行（`STP_SCRIPT_PACKAGES=strict`，
@@ -220,7 +221,12 @@ python -m backend.scripts.check_unreferenced_script_versions [--json] [--name fl
 `DELETE /api/v1/scripts/{id}`（专用软退役，审计 `action=deactivate`）或
 `PUT /api/v1/scripts/{id}` 设 `is_active=false`（审计 `action=update`）下线；两者
 共用 `_ensure_script_can_be_deactivated` 同一守卫，仍被 Plan 引用时返回
-409 `SCRIPT_STILL_REFERENCED`。重新激活只有 `PUT {"is_active": true}` 一条路，且
+409 `SCRIPT_STILL_REFERENCED`。**发布级退役（ADR-0051 Phase 4b）**：站点 PUT 只改本站态；
+要让退役跨站/灾备复现，须同步把该条目在 `tool_manifest.json` 翻 `retired: true`
+（批量物化工具 `DATABASE_URL=… python tools/dev/manifest_retire_from_db.py`——以本站 active 集为准，
+被 plan_step 引用者拒动；PR 里人工核对 flip 清单，`tool-manifest` 门禁允许的唯一改写就是这个单向翻转）。
+**manifest 是发布级真源，PUT 是站点态**——只 PUT 不 flip，新站 catalog 会比生产多。
+重新激活只有 `PUT {"is_active": true}` 一条路，且
 无守卫（不做引用校验）。
 
 退役 = 在 `tool_manifest.json` 把该条目翻成 `retired: true`（append-only 门禁允许的唯一改写）并

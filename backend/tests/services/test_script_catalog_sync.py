@@ -93,6 +93,26 @@ def test_retired_entry_deactivates_explicitly_and_missing_never_deactivates(db_s
     assert _sync(db_session, site).deactivated == 0
 
 
+def test_retired_entries_create_inactive_rows_on_fresh_db(db_session: Session, tmp_path: Path):
+    """Phase 4b：新站 catalog 复现——retired 条目必须建行（inactive、内容取自包），
+    否则历史 (name, version) 引用在新站断链；active 条目照常建行。"""
+    site = Site(tmp_path)
+    site.add("demo", "1.0.0", {"demo.py": "old\n"}, retired=True)
+    site.add("demo", "1.0.1", {"demo.py": "new\n"})
+    result = _sync(db_session, site)
+    rows = {r.version: r for r in db_session.query(Script).filter_by(name="demo")}
+    assert result.created == 2 and set(rows) == {"1.0.0", "1.0.1"}
+    assert rows["1.0.0"].is_active is False and rows["1.0.1"].is_active is True
+    assert rows["1.0.0"].package_sha256  # 行身份仍来自包（retired 不豁免包校验）
+    # retired 行的包缺失 ⇒ 只报告 package_missing，不建假行
+    (site.packages_root / "demo" / "1.0.0.tar.gz").unlink()
+    db_session.delete(rows["1.0.0"]); db_session.commit()
+    again = _sync(db_session, site)
+    assert [(m["name"], m["version"], m["reason"]) for m in again.package_missing] == [
+        ("demo", "1.0.0", "package_missing")]
+    assert db_session.query(Script).filter_by(name="demo", version="1.0.0").first() is None
+
+
 def test_unregistered_active_rows_are_reported_only(db_session: Session, tmp_path: Path):
     site = Site(tmp_path)
     db_session.add(Script(name="seeded", script_type="python", version="9.9.9", nfs_path="/x/seeded.py",
