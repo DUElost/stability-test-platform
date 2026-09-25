@@ -1,9 +1,9 @@
 # ADR-0047：控制面 DB 连接池与 PG 上限的容量取向——预算归属与不变量
 
-- 状态：**Accepted** v1.1（2026-09-23 owner 裁决 D1/D2/D5/D6；D3/D4 保留开放并写明复评条件）
+- 状态：**Accepted** v1.2（2026-09-25 §4 校准回填，维持首轮值；v1.1 于 2026-09-23 owner 裁决 D1/D2/D5/D6；D3/D4 保留开放并写明复评条件）
 - 优先级：P1（它已经造成过一次控制面不可用并被踢回登录，且当时配置在算术上不可能同时成立）
 - 目标里程碑：M7
-- 日期：2026-09-18（起草）；2026-09-23（裁决）
+- 日期：2026-09-18（起草）；2026-09-23（裁决）；2026-09-25（v1.2 校准回填）
 - 决策者：owner（2026-09-23）；起草：平台研发组
 - 标签：连接池, QueuePool, PostgreSQL, 过载, 可观测性, #703, #2959
 - 关联：[#703](https://github.com/DUElost/stability-test-platform/issues/703)（本稿源自其收口评论列出的第 ② 面）
@@ -12,7 +12,7 @@
   / [ADR-0026](./ADR-0026-plan-execution-scaling.md)（准入与规模化灰度）
   / [#2365/#2485 风险 gauge 口径](../notes/bug-fix/2026-09-17-risk-gauge-zeroing-and-scope-2365.md)（同类「观测语义归谁」判读先例）
   / [`docs/development/environment-variables.md`](../development/environment-variables.md)（池容量 env 的登记面）
-- 版本记录：v1.0（2026-09-18）首次提出，D1–D6 全部开放；v1.1（2026-09-23）owner 裁决 D1/D2/D5/D6，D3/D4 保留开放，落地 pgbouncer 之外的首轮参数与启动门禁
+- 版本记录：v1.0（2026-09-18）首次提出，D1–D6 全部开放；v1.1（2026-09-23）owner 裁决 D1/D2/D5/D6，D3/D4 保留开放，落地 pgbouncer 之外的首轮参数与启动门禁；v1.2（2026-09-25）**§4 校准回填**（模拟 #3243 + 生产真机 run 556）：`20/20`、`reserve=8`、`2s` **维持**；§5 标注门禁/告警生效状态（门禁启动实测待下次重启）；defer 的终态聚合项改指 ADR-0052
 
 ## 1. 背景：一组在算术上不可能同时成立的默认值
 
@@ -70,7 +70,9 @@
 | **应用合计** | | | **80** |
 | 剩余普通连接槽（97−80） | | | **17**（其中 8 计入 reserve，9 为headroom） |
 
-- 这组值是**首轮候选**：必须在隔离压测中校准（§4），校准只改数字不改不变量。
+- 这组值是**首轮候选**，**已由 §4 校准确认维持**（v1.2，2026-09-25；模拟 #3243 + 生产真机 run 556 两层证据）：
+  `20/20`、`reserve=8`、`pool_timeout=2s` **均维持不改**——两层观测都没有出现要求调数的信号
+  （真机池峰 async 4 / sync 11，预算 40；`checkout_failures` 无任何 kind 序列）。校准只改数字不改不变量。
 
 ### D2（`pool_timeout` 取值）— **接受 2s，超时对外 503**
 
@@ -118,24 +120,41 @@ sync/async 双池的合一是**代码结构决策**（84+ 处同步调用点与�
 
 ## 4. 校准所需的证据（首轮值不是终值）
 
-1. **分布基线**：`checkout_seconds` 的 p50/p99（按 `engine`）、`checkout_failures{kind}` 的日增量
-   ——已具备 R523 / R518 / R522 三个现场样本（§1），仍需**一次受控压测**（490 RUNNING 同时 abort +
-   并发 `/complete` 回流）确认 20/20/2s 不产生新的 `kind="timeout"` 尖峰。
-2. **真实并发来源归因**：APScheduler 周期任务、SAQ 并发 10、`SessionLocal()` 调用点、
-   `/complete` 舱壁前后的到达率。
-3. **非应用连接**：备份、迁移、`check_schema_sync`、人工 psql 的常驻占用分布（拆 reserve 用）。
-4. 校准结果回填本节与 D1 表格；**只改数字，不改不变量与门禁形态**。
+> **校准状态（v1.2，2026-09-25 回填）**：证据分两层记录——**模拟**（隔离压测 #3243，in-process ASGI）
+> 与**生产**（部署窗真机复跑，plan_run 556，数据见 #3244）；**两层互不代验**。
+> 结论：`pool_size=20` / `max_overflow=20` / `reserve=8` / `pool_timeout=2s` **维持首轮值**。
+
+1. **分布基线** —— 两层已具备：
+   - 现场样本：R523 / R518 / R522（§1）；
+   - **模拟（#3243）**：37 host / 490 RUNNING 一次 abort ⇒ 池峰 async **17**（预算 40）、
+     `slots_exhausted` **0**、`timeout` **0**、零 500、放大系数 **1.14**（R523 现场 3.35）、67×503 一轮排空 0.55s；
+   - **生产（2026-09-25 run 556，48 台真机 / 465 作业）**：池峰 **async 4 / sync 11**（overflow 0/0）、
+     `checkout_failures` **无任何 kind 序列**、53300 **0**、500 **0**、4×503（全 `/complete`，设计内背压）、
+     API 侧 **29s 内排空**（T0→`ended_at` 28.3s）、`saq` 任务 +467.8 ≈ 465 终态数。
+     ⇒ **判据达成**：20/20/2s 在两层都**不产生** `kind="timeout"` 尖峰。
+   - ⚠️ **遗留（不属池参数）**：生产 `/complete` p99 **2.47s**（模拟 1.11s），归因父 `plan_run` 行锁串行段，
+     由 **ADR-0052 / #3244** 处置；**不得**据此调大舱壁或池。
+2. **真实并发来源归因** —— **部分**：生产窗口实测 `/complete` 单分钟 **571 条**（T0+29s 内排空）、
+   `saq` 任务 +467.8（≈终态数）；APScheduler 周期任务与 `SessionLocal()` 调用点的分布仍待专项采数。
+3. **非应用连接**（拆 `reserve=8` 用）—— **仍缺**：备份、迁移、`check_schema_sync`、人工 psql 的常驻占用分布未采；
+   **本次不因此改数字**，以「待办」显式保留（承接单 #3261 的剩余项）。
+4. **回填** —— 本节与 D1 表格已按 v1.2 回填；**只改数字/注记，不改不变量与门禁形态**。
 
 ## 5. 影响面（本裁决落地）
 
 - 参数：`_pool_capacity_kwargs()` 默认 30/60 → 20/20，新增 `pool_timeout`（env `STP_DB_POOL_TIMEOUT`）；
-  两侧同源，一处生效。
+  两侧同源，一处生效。**已落地**（#3240，2026-09-23 合入；运行值 = 代码默认，`.env.backend` 无 `STP_DB_POOL_*` 覆盖）。
 - 门禁：新增 `tools/dev/check_db_pool_budget.py` 并挂 `ExecStartPre`（硬）；新增 env
   `STP_DB_POOL_INSTANCES` / `STP_DB_CONNECTION_RESERVE` / `STP_DB_POOL_TIMEOUT`，
   同步 `docs/development/environment-variables.md`（ADR-0042 配置读取收敛判据）。
+  **已落地 + 已实装**（#3240 落代码；实装 unit 于 2026-09-25 17:17 挂上 `ExecStartPre`），
+  **门禁的启动实测待下次重启**：dry-run 输出 `app_total=80 available=97 reserve=8 headroom=17 config_source=default`。
 - 对外语义：`backend/core/exception_log.py` 增 `is_db_overload`，`backend/main.py` 全局 handler
-  对该类返回 503 + `Retry-After`（D2）；日志分档（#3042）不变。
+  对该类返回 503 + `Retry-After`（D2）；日志分档（#3042）不变。**已落地**（#3240）。
 - 指标与告警：新增终态舱壁指标与告警（D5）；`StabilityDbConnectionSlotsExhausted` 改 critical/去 `for`。
+  **已生效**（2026-09-25 17:18 副本同步 + reload；规则 API 实测 40 rules / 9 groups，
+  `StabilityDbConnectionSlotsExhausted` severity=critical、无 `for`，`StabilityTerminalBulkheadRejected` 在场）。
 - 文档：`docs/production-minimum-deployment-checklist.md` §3.5 补「连接预算」前置说明
-  （容量属运维事实，不只属代码）。
-- **不改**：D3（双池结构）、D4（不引入代理）、ADR-0026 §6 的终态聚合语义（P1 另立 ADR 处理）。
+  （容量属运维事实，不只属代码）。**已落地**（#3240）。
+- **不改**：D3（双池结构）、D4（不引入代理）、ADR-0026 §6 的终态聚合语义
+  （P1 已由 [ADR-0052](./ADR-0052-terminal-fact-parent-aggregation-decoupling.md)（2026-09-24 起草，Proposed）处置，随 #3244）。
