@@ -34,7 +34,7 @@ from backend.api.schemas.suite import (
     ValidateOut,
     normalize_export_dir,
 )
-from backend.core.audit import record_audit
+from backend.services.audit_writer import record_audit
 from backend.core.database import get_db
 from backend.core.storage_root import resolve_shared_storage_root
 from backend.models.project import TestProject

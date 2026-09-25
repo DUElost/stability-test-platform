@@ -1,4 +1,10 @@
-"""Security utilities for authentication and authorization."""
+"""Security utilities for authentication and authorization.
+
+#3297（C4 棘轮）：`set_auth_cookies` / `clear_auth_cookies` 是对 Response 的 HTTP
+操作，已拆到 `backend/api/auth_cookies.py`；本模块只留零框架依赖的纯函数
+（token/哈希/环境护栏/cookie 头解析）。生产类环境的 secure/SameSite/CSRF
+启动强制仍由 `validate_production_auth_cookie_settings` 在本模块执行。
+"""
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -9,7 +15,6 @@ import bcrypt
 import jwt
 from jwt import InvalidTokenError
 from pydantic import AfterValidator, StringConstraints
-from starlette.responses import Response
 
 from backend.core.settings.security import get_auth_session_settings
 
@@ -227,42 +232,6 @@ def decode_token(
     return payload
 
 
-def set_auth_cookies(response: Response, access_token: str, refresh_token: str) -> None:
-    response.set_cookie(
-        get_auth_session_settings().auth_access_cookie_name,
-        access_token,
-        max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-        httponly=True,
-        secure=is_auth_cookie_secure(),
-        samesite=_get_cookie_samesite(),
-        path=get_auth_session_settings().auth_cookie_path,
-    )
-    response.set_cookie(
-        get_auth_session_settings().auth_refresh_cookie_name,
-        refresh_token,
-        max_age=REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
-        httponly=True,
-        secure=is_auth_cookie_secure(),
-        samesite=_get_cookie_samesite(),
-        path=get_auth_session_settings().auth_cookie_path,
-    )
-
-
-def clear_auth_cookies(response: Response) -> None:
-    response.delete_cookie(
-        get_auth_session_settings().auth_access_cookie_name,
-        path=get_auth_session_settings().auth_cookie_path,
-        secure=is_auth_cookie_secure(),
-        samesite=_get_cookie_samesite(),
-        httponly=True,
-    )
-    response.delete_cookie(
-        get_auth_session_settings().auth_refresh_cookie_name,
-        path=get_auth_session_settings().auth_cookie_path,
-        secure=is_auth_cookie_secure(),
-        samesite=_get_cookie_samesite(),
-        httponly=True,
-    )
 
 
 def extract_cookie_token(cookie_header: str | None, cookie_name: str) -> Optional[str]:

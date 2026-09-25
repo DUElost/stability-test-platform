@@ -11,7 +11,7 @@ from typing import Optional
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
-from backend.core.audit import record_audit
+from backend.services.audit_writer import record_audit
 from backend.api.schemas.plan_run import PlanRunDispatchRetrySummaryOut
 from backend.core.database import SessionLocal
 from backend.core.metrics import record_dispatch_gate

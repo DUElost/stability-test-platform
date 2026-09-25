@@ -12,9 +12,9 @@ import ipaddress
 
 import pytest
 
+from backend.api.middleware.limiter import RateLimiter
 from backend.core.limiter import (
     DEFAULT_TRUSTED_PROXIES,
-    RateLimiter,
     _parse_networks,
     get_trusted_proxies,
     resolve_client_ip,
@@ -174,7 +174,7 @@ def test_eviction_logging_is_throttled(caplog):
     for i in range(cap):
         rl.is_allowed(f"10.0.{i // 256}.{i % 256}")
 
-    with caplog.at_level(_logging.WARNING, logger="backend.core.limiter"):
+    with caplog.at_level(_logging.WARNING, logger="backend.api.middleware.limiter"):
         for i in range(500):
             rl.is_allowed(f"203.0.113.{i % 256}-{i}")
 
@@ -182,7 +182,7 @@ def test_eviction_logging_is_throttled(caplog):
     # 变成空匹配的假通过(第一版就踩了这个:旧代码写 evicted、断言写 evicting)
     evict_logs = [
         r for r in caplog.records
-        if r.name == "backend.core.limiter" and r.levelno >= _logging.WARNING
+        if r.name == "backend.api.middleware.limiter" and r.levelno >= _logging.WARNING
     ]
     assert len(evict_logs) <= 2, f"500 次淘汰打了 {len(evict_logs)} 条日志,限频失效"
 
@@ -287,7 +287,7 @@ def test_window_rollover_allows_again():
 
 def test_ui_and_agent_limiters_are_separate_instances():
     """#2324：UI / Agent 必须是独立桶，避免共 IP 互相耗尽配额。"""
-    from backend.core import limiter as lim
+    from backend.api.middleware import limiter as lim
 
     assert lim.rate_limiter is not lim.agent_rate_limiter
     assert lim.RATE_LIMIT_REQUESTS == lim.UI_RATE_LIMIT_REQUESTS

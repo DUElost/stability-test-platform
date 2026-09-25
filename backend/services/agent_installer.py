@@ -351,7 +351,7 @@ def _record_install_outcome(host_id: str, run: Any, initiated_by: str | None) ->
     在 RunConsole 的终态回调里执行，故必须自吞异常：审计失败不得影响清理与状态上报。
     """
     try:
-        from backend.core.audit import record_audit
+        from backend.services.audit_writer import record_audit
         from backend.models.host import Host
 
         status = getattr(run, "status", None)

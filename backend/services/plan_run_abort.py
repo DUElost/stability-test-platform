@@ -39,7 +39,7 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from backend.api.schemas.plan_run import PlanRunAbortSummaryOut
-from backend.core.audit import record_audit
+from backend.services.audit_writer import record_audit
 from backend.core.job_timeout_config import ABORT_ACK_GRACE_SECONDS
 from backend.core.metrics import (
     record_plan_run_abort_fanout,

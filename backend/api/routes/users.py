@@ -9,7 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.api.routes.auth import get_current_active_user, require_admin
-from backend.core.audit import record_audit
+from backend.services.audit_writer import record_audit
 from backend.core.database import get_db
 from backend.core.security import PasswordStr, get_password_hash, verify_password
 from backend.models.audit import AuditLog

@@ -29,7 +29,7 @@ from fastapi import HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from backend.core.audit import record_audit
+from backend.services.audit_writer import record_audit
 from backend.models.host import Host
 from backend.models.job import JobInstance
 from backend.models.plan_run import PlanRun, PlanRunHost

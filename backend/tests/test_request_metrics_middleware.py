@@ -18,7 +18,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from prometheus_client import REGISTRY
 
-from backend.core.request_metrics import (
+from backend.api.middleware.request_metrics import (
     ApiRequestMetricsMiddleware,
     normalize_unmatched_path,
 )
@@ -44,7 +44,7 @@ def recorded(monkeypatch) -> list[tuple[str, str, int]]:
     """捕获中间件交给 record_api_request 的 (method, endpoint, status)。"""
     calls: list[tuple[str, str, int]] = []
     monkeypatch.setattr(
-        "backend.core.request_metrics.record_api_request",
+        "backend.api.middleware.request_metrics.record_api_request",
         lambda method, endpoint, status_code, duration: calls.append(
             (method, endpoint, status_code)
         ),

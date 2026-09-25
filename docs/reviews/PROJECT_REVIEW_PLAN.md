@@ -55,7 +55,7 @@
 
 - **范围与边界**：Cookie、CSRF、用户角色、Agent 身份、REST / Socket.IO 鉴权；
   文件访问、SSH、命令入口和审计。AI 特有的工具审批与隔离归 R13，部署落点归 R14。
-- **代码入口**：[安全模块](../../backend/core/security.py)、[CSRF](../../backend/core/csrf.py)、
+- **代码入口**：[安全模块](../../backend/core/security.py)、[CSRF](../../backend/api/middleware/csrf.py)、
   [认证路由](../../backend/api/routes/auth.py)、[SSH 安全](../../backend/core/ssh_security.py)、
   [审计](../../backend/core/audit.py)。
 - **测试入口**：[会话测试](../../backend/tests/api/test_auth_cookie_session.py)、

@@ -114,7 +114,7 @@ def _imported_record_aliases(tree: ast.AST) -> dict[str, str]:
     for node in ast.walk(tree):
         if not isinstance(node, ast.ImportFrom):
             continue
-        if not (node.module or "").endswith("core.audit"):
+        if not (node.module or "").endswith(("core.audit", "audit_writer")):
             continue
         for alias in node.names:
             if alias.name in _RECORD_FUNCS:
@@ -276,7 +276,7 @@ def test_allowlist_does_not_overlap_explicit_layers():
 def test_guard_rejects_unregistered_literal_and_ifexp():
     """变异：未登记字面量与 IfExp 双分支都能被抓住。"""
     src = (
-        "from backend.core.audit import record_audit\n"
+        "from backend.services.audit_writer import record_audit\n"
         "def f(db, flag):\n"
         "    record_audit(db, action='brand_new_security_evt', resource_type='user')\n"
         "    record_audit(db, action='scan' if flag else 'also_unregistered', "
@@ -304,7 +304,7 @@ def test_guard_rejects_unregistered_literal_and_ifexp():
 # ── 锚点自身要有红绿两侧（#3017 的键从 lineno 改成形态键）────────────
 
 _FIXTURE_SRC = (
-    "from backend.core.audit import record_audit\n"
+    "from backend.services.audit_writer import record_audit\n"
     "def emit(db, tag):\n"
     "    record_audit(db, action=tag, resource_type='plan_run')\n"
 )

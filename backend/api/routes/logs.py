@@ -17,7 +17,7 @@ from backend.api.schemas import AgentLogOut, AgentLogQuery
 from backend.api.schemas.agent import OrphanLogSignalListOut, OrphanLogSignalOut
 from backend.api.routes.auth import get_current_active_user, require_admin, User, verify_agent_secret
 from backend.api.response import ApiResponse, ok
-from backend.core.audit import record_audit
+from backend.services.audit_writer import record_audit
 from backend.core.database import get_db
 from backend.core.ssh_security import (
     LOG_FILE_NOT_FOUND_MARKER,

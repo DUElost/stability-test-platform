@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from typing import List, Optional, Union
 
 from backend.core.database import get_db
-from backend.core.audit import record_audit
+from backend.services.audit_writer import record_audit
 from backend.core.job_timeout_config import HOST_HEARTBEAT_TIMEOUT_SECONDS
 from backend.models.host import Host, Device
 from backend.models.project import TestProject

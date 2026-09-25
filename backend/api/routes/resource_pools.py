@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.response import ApiResponse
 from backend.api.routes.auth import get_current_active_user, require_admin, User
-from backend.core.audit import record_audit_async
+from backend.services.audit_writer import record_audit_async
 from backend.core.database import get_async_db
 from backend.models.resource_pool import ResourceAllocation, ResourcePool
 from backend.services.resource_pool import get_pool_load_summary, public_pool_config

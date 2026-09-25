@@ -22,7 +22,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.core.audit import record_audit_async
+from backend.services.audit_writer import record_audit_async
 from backend.core.metrics import (
     post_completion_enqueue_failed_total,
     record_reconciler_dirs_abandoned,

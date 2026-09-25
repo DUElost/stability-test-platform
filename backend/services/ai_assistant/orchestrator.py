@@ -308,7 +308,7 @@ def _audit_action(
     提案 / 自动批准 / 执行开始 / 执行结束此前大多无 ``record_audit``，
     自动 T1 路径缺完整审计链。这里集中一处，事件名 ``ai_assistant_action_<event>``。
     """
-    from backend.core.audit import record_audit
+    from backend.services.audit_writer import record_audit
     from backend.models.user import User as UserModel
 
     actor_id = action.requested_by_user_id

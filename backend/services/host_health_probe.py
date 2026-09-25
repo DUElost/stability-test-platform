@@ -20,7 +20,7 @@ from typing import Any, Iterable, Optional, Protocol, Sequence, Set
 from backend.agent.kernel_usb_faults import (
     parse_kernel_usb_faults,
 )
-from backend.core.audit import record_audit
+from backend.services.audit_writer import record_audit
 from backend.core.database import SessionLocal
 from backend.core.settings.scheduler import get_scheduler_settings
 from backend.core.ssh_security import create_ssh_client, resolve_host_ssh_credentials

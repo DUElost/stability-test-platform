@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from backend.core.agent_secret import AgentSecretNotConfiguredError, require_agent_secret
-from backend.core.audit import record_audit
+from backend.services.audit_writer import record_audit
 from backend.core.database import get_db
 from backend.core.login_lockout import (
     UNKNOWN_ACCOUNT_KEY,
@@ -19,17 +19,16 @@ from backend.core.login_lockout import (
     InvalidCredentials,
     guarded_attempt,
 )
+from backend.api.auth_cookies import clear_auth_cookies, set_auth_cookies
 from backend.core.security import (
     ACCESS_COOKIE_NAME,
     REFRESH_COOKIE_NAME,
     PasswordStr,
-    clear_auth_cookies,
     create_access_token,
     create_refresh_token,
     decode_token,
     get_password_hash,
     is_public_register_allowed,
-    set_auth_cookies,
     verify_password,
 )
 from backend.models.user import User

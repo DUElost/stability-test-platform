@@ -8,7 +8,7 @@ from typing import Literal
 
 from sqlalchemy.orm.attributes import flag_modified
 
-from backend.core.audit import record_audit
+from backend.services.audit_writer import record_audit
 from backend.core.metrics import hot_update_outcome_total
 from backend.services.artifact_digest import (
     ARTIFACT_KIND_CODE,

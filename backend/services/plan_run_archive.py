@@ -14,7 +14,7 @@ from fastapi import HTTPException, Request
 from sqlalchemy.orm import Session
 
 from backend.api.schemas.plan_run import PlanRunArchiveTriggerOut
-from backend.core.audit import record_audit
+from backend.services.audit_writer import record_audit
 from backend.models.job import JobInstance
 from backend.models.plan_run import PlanRun
 from backend.realtime.socketio_server import emit_agent_control
