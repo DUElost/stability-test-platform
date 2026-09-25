@@ -26,8 +26,8 @@ import sys
 import tarfile
 import tempfile
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Mapping, Optional
+from pathlib import Path, PurePosixPath
+from typing import Mapping, Optional, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +103,66 @@ def _member_rejection(ti: tarfile.TarInfo) -> Optional[str]:
     return f"不支持的成员类型 {ti.type!r} @ {name!r}"
 
 
+def _archive_rejection(members: Sequence[tarfile.TarInfo]) -> Optional[str]:
+    """纯函数：整包越界判据（#3169）。返回拒绝原因或 None（放行）。
+
+    逐成员的字面检查挡不住跨成员的组合：``d → /elsewhere`` 加 ``d/x``，第二个成员名本身合法，
+    写入却顺着第一个成员落到解包根外；同名的「先软链、后普通文件」会改写软链目标。所以另加两条：
+
+    - 路径唯一：每条路径至多出现一次；
+    - 不经软链落盘：除软链成员自身外，任何成员路径都不得以某个软链成员为前缀。
+
+    判据只比成员路径、不做 realpath 解析，与链式软链、解包顺序无关。2026-09-25 扫描站点全部
+    214 个已发布包，两种形态均为 0，本判据零误拒。
+    """
+    links: set[tuple[str, ...]] = set()
+    seen: set[tuple[str, ...]] = set()
+    for ti in members:
+        bad = _member_rejection(ti)
+        if bad:
+            return bad
+        parts = PurePosixPath(ti.name).parts
+        if not parts and not ti.isdir():
+            return f"空成员名 {ti.name!r}"
+        if parts in seen:
+            return f"重复成员 {ti.name!r}"
+        seen.add(parts)
+        if ti.issym():
+            links.add(parts)
+    for ti in members:
+        parts = PurePosixPath(ti.name).parts
+        for i in range(1, len(parts) + 1):
+            if parts[:i] in links and not (i == len(parts) and ti.issym()):
+                return f"成员经软链落盘 {ti.name!r}（软链 {'/'.join(parts[:i])!r}）"
+    return None
+
+
+def _extract_kwargs() -> dict:
+    """第二道防线：解释器支持 PEP 706 时用 ``tar`` 过滤器（顺软链解析后越出解包根即拒）。
+
+    不用 ``data``：它拒绝一切绝对软链，而 venv 解释器按约定指向系统 python（Start-Log-Scan 的
+    ``venv/bin/python3 → /usr/bin/python3``）。显式指定也避免 Python 3.14 把缺省改为 ``data`` 后
+    判坏现有包。Agent 只要求 3.10+，无回移的旧解释器（3.10.12 / 3.11.4 以前）只剩
+    ``_archive_rejection`` 这一道——它是权威判据。
+    """
+    return {"filter": "tar"} if hasattr(tarfile, "tar_filter") else {}
+
+
+def _relative_member_error(value: object) -> Optional[str]:
+    """manifest 的 ``python`` / ``script`` 字段判据：与登记侧 ``validate_relative_member`` 逐分支对齐。
+
+    Agent 包不带 ``tools/``，故独立实现；三份实现的裁决由
+    ``tests/test_adr0051_package_member_validator_parity_3197.py`` 同输入集对拍钉住。
+    """
+    if not isinstance(value, str) or not value:
+        return "必须是包内相对路径（非空）"
+    if value.startswith("/") or "\\" in value or ":" in value.split("/")[0]:
+        return "不得绝对/含反斜杠/带盘符"
+    if any(seg in ("", "..") for seg in value.split("/")):
+        return "不得含 '..' 或空段"
+    return None
+
+
 def ensure_package(
     name: str, version: str, package_sha256: str, packages_root: Path, cache_root: Path
 ) -> Optional[Path]:
@@ -135,12 +195,12 @@ def ensure_package(
     tmp = Path(tempfile.mkdtemp(prefix=f".{version}.tmp-", dir=cache_root / name))
     try:
         with tarfile.open(tarball, "r:gz") as tar:
-            for ti in tar.getmembers():
-                bad = _member_rejection(ti)
-                if bad:
-                    logger.error("tool_cache_unsafe_member %s@%s: %s——整包拒绝", name, version, bad)
-                    return None
-            tar.extractall(path=tmp)  # 已全量校验成员，不再逐文件走 filter
+            bad = _archive_rejection(tar.getmembers())
+            if bad:
+                logger.error("tool_cache_unsafe_member %s@%s: %s——整包拒绝", name, version, bad)
+                return None
+            # 摘要只证内容身份、不证解包边界（#3169）：整包预检之外，能用 filter 就再加一道
+            tar.extractall(path=tmp, **_extract_kwargs())
         (tmp / _VERIFY_MARKER).write_text(package_sha256 + "\n", encoding="utf-8")
         if dest.exists():
             shutil.rmtree(dest)
@@ -200,11 +260,26 @@ def resolve_packaged_tool(ref_env_key: str, env: Optional[Mapping[str, str]] = N
     pkg_dir = ensure_package(name, version, sha, packages_root, cache_root)
     if not pkg_dir:
         return None
-    # ADR-0051 D4：``python: null`` = 包内无解释器，用 Agent 自身解释器。
-    python_abs = pkg_dir / str(entry["python"]) if entry.get("python") else Path(sys.executable)
-    script_abs = pkg_dir / str(entry.get("script", ""))
-    if not python_abs.exists() or not script_abs.is_file():
+    # 字段在**消费时刻**再判一次（#3169）：`pkg_dir / "/abs"` 会丢掉左段，`".."` 会越出包目录——
+    # 包身份核验通过后去执行包外文件。判据与登记侧同口径。
+    raw_python, raw_script = entry.get("python"), entry.get("script")
+    for field, value in (("python", raw_python), ("script", raw_script)):
+        if field == "python" and not value:
+            continue  # ADR-0051 D4：``python: null`` = 包内无解释器，用 Agent 自身解释器
+        err = _relative_member_error(value)
+        if err:
+            logger.error("tool_cache_entry_path_invalid %s@%s %s=%r：%s——拒绝使用，回退 env",
+                         name, version, field, value, err)
+            return None
+    # 解释器只做字面 containment：venv 的 python 按约定是指向系统解释器的软链，解析后必在包外。
+    python_abs = pkg_dir.joinpath(*str(raw_python).split("/")) if raw_python else Path(sys.executable)
+    script_abs = pkg_dir.joinpath(*str(raw_script).split("/"))
+    if not python_abs.is_file() or not script_abs.is_file():
         logger.error("tool_cache_entry_paths_missing %s@%s python=%s script=%s", name, version, python_abs, script_abs)
+        return None
+    # 脚本则须实体在包内：不得经包内软链指向包外文件。
+    if not script_abs.resolve().is_relative_to(pkg_dir.resolve()):
+        logger.error("tool_cache_entry_script_outside %s@%s script=%s", name, version, script_abs)
         return None
     return PackageTool(name=name, version=version, python=str(python_abs), script=str(script_abs))
 
