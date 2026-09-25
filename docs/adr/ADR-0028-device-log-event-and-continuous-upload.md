@@ -227,7 +227,7 @@ extract 双根遍历：
    本地保留期数值归 #3230 G4。**终态出口**：ADR-0053 Phase B 切换上送/回收路径时，该 env 开关随之退役或并入发布协议，
    届时同步 `docs/development/environment-variables.md` 与 #217 备忘。
 
-运维后续（登记，不随本裁决执行）：灰机 `192-0-2-143` 的 `PRUNE_LOCAL=1` 已完成 #217 验证使命，
+运维后续（登记，不随本裁决执行；跟踪 #3348）：灰机 `192-0-2-143` 的 `PRUNE_LOCAL=1` 已完成 #217 验证使命，
 按 `docs/operations/adr-0028-prune-local-and-spill-gray.md` 第 7 步设回 `0` + `reload_config`，消除单机特例。
 
 ### 方案 A 生产实施记录（2026-08-13）

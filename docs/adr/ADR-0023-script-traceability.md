@@ -172,7 +172,7 @@ D2–D8 自 2026-06-12 起以 Proposed 悬置。其间 ADR-0029 P2-10、ADR-0051
 - 原「C2-C8 前置」中的 `param_schema` 运行时校验**已满足**：`backend/services/script_params.validate_params_against_schema`
   已在 Plan 保存路径消费（`backend/api/routes/plans.py`）。
 - 实施切片据此收敛为三片：D2+D3（含原 C2/C5）、D4（原 C6，WiFi 节读 `ResourceAllocation`）、端到端测试（原 C8，覆盖范围去掉 D5–D8）。
-  原 C3 / C4 / C7 作废；D6 的源头守卫（catalog `retired: true` 路径补引用检查）另开单，不并入上述三片。
+  原 C3 / C4 / C7 作废；D6 的源头守卫（catalog `retired: true` 路径补引用检查）另开单（#3349），不并入上述三片；三片跟踪见 #3350。
 
 ## 实施切片
 
