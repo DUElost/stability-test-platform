@@ -1673,6 +1673,14 @@
           "retired": false,
           "script": "powercycle_setup.py",
           "version": "1.2.5"
+        },
+        {
+          "artifact": "packages/powercycle_setup/1.2.6.tar.gz",
+          "package_sha256": "c7ee0cd152d9226291e04fe6b340577b961d54be9015e7900372bfff5b021ecb",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_setup.py",
+          "version": "1.2.6"
         }
       ]
     },
