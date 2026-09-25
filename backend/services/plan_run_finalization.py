@@ -92,7 +92,10 @@ def _terminal_message_from_run(run: Any, *, no_jobs: bool) -> str:
     ``no_jobs`` 由调用方显式传入（聚合空集路径），不靠 result_summary 是否存在
     来反推——stale summary 会把「无 job」文案伪装成正常计数。
     """
-    status_value = getattr(run, "status", None)
+    # ``run.status`` 经 PlanRunStateMachine.transition 落库为字符串；若拿到的是
+    # ``PlanRunStatus`` 成员，3.11 下 f-string 会渲染成 ``PlanRunStatus.X``，故取 value。
+    status = getattr(run, "status", None)
+    status_value = getattr(status, "value", status)
     if no_jobs:
         return f"PlanRun {status_value}: no jobs were created for this plan"
     summary = getattr(run, "result_summary", None) or {}

@@ -122,6 +122,45 @@ def test_terminal_notification_failure_does_not_block_aggregation():
     assert run.status == PlanRunStatus.SUCCESS.value
 
 
+def test_terminal_notify_message_text_is_exact():
+    """RUN_* 文案逐字钉住（#3299 前由 ``_finalize_plan_run`` 以 ``new_status.value`` 拼接）。"""
+    run = _run(306)
+    jobs = [_job(JobStatus.COMPLETED), _job(JobStatus.COMPLETED)]
+
+    with patch(
+        "backend.services.notification_service.dispatch_notification_async",
+    ) as notify:
+        assert _apply_and_announce(run, jobs) is True
+
+    _, context = notify.call_args[0]
+    assert context["error_message"] == "PlanRun SUCCESS: 2/2 completed, 0 failed"
+
+
+def test_terminal_message_renders_enum_status_as_value():
+    """``run.status`` 若为 ``PlanRunStatus`` 成员，文案仍渲染为 ``SUCCESS`` 而非 ``PlanRunStatus.SUCCESS``。"""
+    from backend.services.plan_run_finalization import announce_parent_terminal
+
+    run = _run(307)
+    run.status = PlanRunStatus.SUCCESS
+    run.result_summary = {"total": 3, "completed": 3, "failed": 0}
+    empty = _run(308)
+    empty.status = PlanRunStatus.FAILED
+
+    with patch(
+        "backend.services.notification_service.dispatch_notification_async",
+    ) as notify, patch(
+        "backend.services.plan_run_finalization.schedule_report_cache_refresh",
+    ):
+        announce_parent_terminal(run)
+        announce_parent_terminal(empty, no_jobs=True)
+
+    messages = [call.args[1]["error_message"] for call in notify.call_args_list]
+    assert messages == [
+        "PlanRun SUCCESS: 3/3 completed, 0 failed",
+        "PlanRun FAILED: no jobs were created for this plan",
+    ]
+
+
 def test_notify_plan_run_terminal_public_helper_maps_status_string():
     from backend.services.plan_run_finalization import notify_plan_run_terminal
 
