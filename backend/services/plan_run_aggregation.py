@@ -15,7 +15,7 @@ from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Any
 
-from backend.core.metrics import record_plan_run_terminal
+from backend.core.metrics import record_plan_run_counter_drift, record_plan_run_terminal
 from backend.models.enums import JobStatus, PlanRunStatus
 from backend.services.state_machine import PlanRunStateMachine
 
@@ -77,6 +77,10 @@ def _finalize_plan_run(
     通知与报告缓存刷新**不再**发生在这里：调用方在 ``apply_*`` 返回 True 后经
     ``plan_run_finalization.announce_parent_terminal`` 反应，文案输入
     （``result_summary`` 的 total/completed/failed）就是本函数刚写入的值。
+
+    ADR-0052 D4：终态事实与「副作用待执行」标记**同事务**落库——
+    ``terminal_effects_state='pending'`` 由唯一落库点写死，副作用编排完成后置
+    'done'；补偿扫描只重放 pending 行（重复执行保护的持久化锚点）。
     """
     PlanRunStateMachine.transition(run, new_status, reason="aggregation")
     run.ended_at = datetime.now(timezone.utc)
@@ -89,6 +93,9 @@ def _finalize_plan_run(
         "unknown": 0,
         "abort_requested": abort_requested,
     }
+    # getattr 防御：单测 SimpleNamespace 假 run 不得让业务逻辑失败。
+    if hasattr(run, "terminal_effects_state"):
+        run.terminal_effects_state = "pending"
     record_plan_run_terminal(run.status)
     return True
 
@@ -164,3 +171,77 @@ def apply_plan_run_aggregation(run: Any, jobs: Sequence[Any], *, db: Any = None)
         aborted=aborted,
         abort_requested=abort_requested,
     )
+
+
+# ── 计数重算（ADR-0052 D3「读 Job 事实重算」；原住 job_terminalization，#3244 迁入）──
+#
+# jobs 允许两种形状：JobInstance ORM 对象或 ``select(status, host_id)`` 的 Row——
+# 两者都以属性访问暴露 status/host_id。reconciler 传 ORM 对象，聚合器传轻量 Row。
+
+
+def recount_plan_run_counters(run: Any, jobs: Sequence[Any]) -> dict[str, int]:
+    """Recompute counter fields from *jobs*; return before/after drift info."""
+    completed = sum(1 for j in jobs if j.status == JobStatus.COMPLETED.value)
+    failed = sum(1 for j in jobs if j.status == JobStatus.FAILED.value)
+    aborted = sum(1 for j in jobs if j.status == JobStatus.ABORTED.value)
+    terminal = completed + failed + aborted
+    total = len(jobs)
+
+    before = {
+        "total_job_count": int(run.total_job_count or 0),
+        "terminal_job_count": int(run.terminal_job_count or 0),
+        "completed_job_count": int(run.completed_job_count or 0),
+        "failed_job_count": int(run.failed_job_count or 0),
+        "aborted_job_count": int(run.aborted_job_count or 0),
+    }
+    after = {
+        "total_job_count": total,
+        "terminal_job_count": terminal,
+        "completed_job_count": completed,
+        "failed_job_count": failed,
+        "aborted_job_count": aborted,
+    }
+    run.total_job_count = total
+    run.terminal_job_count = terminal
+    run.completed_job_count = completed
+    run.failed_job_count = failed
+    run.aborted_job_count = aborted
+    drifted = before != after
+    if drifted:
+        # #77：漂移即埋点（每漂移列一条）。ADR-0052 后 drift 的**预期**来源是
+        # 聚合器与补偿路径对同一事实的先后改写（恒收敛为相等）；持续 > 0 仍
+        # 说明有入口绕开集中服务，counter_reconciler 修复的同时暴露给 Prometheus
+        # （SLO 守卫 ADR-0026 §6）。getattr 防御：指标是 best-effort，任何异常
+        # 对象（单测 SimpleNamespace）都不得让业务逻辑失败。
+        record_plan_run_counter_drift(
+            getattr(run, "id", None),
+            [
+                col.removesuffix("_job_count")
+                for col in before
+                if before[col] != after[col]
+            ],
+        )
+    return {"before": before, "after": after, "drifted": drifted}
+
+
+def recount_host_counters(prh: Any, jobs: Sequence[Any]) -> bool:
+    """重算单个 PlanRunHost 的投影计数（调用方已按 host_id 分好组）。
+
+    返回是否有变化。total_job_count 不动——prepare 时冻结的目标投影，执行期
+    不重算（与旧 ``_bump_host_counters`` 写面一致：只动 terminal/三类别）。
+    """
+    completed = sum(1 for j in jobs if j.status == JobStatus.COMPLETED.value)
+    failed = sum(1 for j in jobs if j.status == JobStatus.FAILED.value)
+    aborted = sum(1 for j in jobs if j.status == JobStatus.ABORTED.value)
+    terminal = completed + failed + aborted
+    before = (
+        int(prh.terminal_job_count or 0),
+        int(prh.completed_job_count or 0),
+        int(prh.failed_job_count or 0),
+        int(prh.aborted_job_count or 0),
+    )
+    prh.terminal_job_count = terminal
+    prh.completed_job_count = completed
+    prh.failed_job_count = failed
+    prh.aborted_job_count = aborted
+    return before != (terminal, completed, failed, aborted)

@@ -8,7 +8,12 @@ from backend.models.job import JobArtifact, JobInstance, StepTrace
 from backend.models.jira_run import JiraRun
 from backend.models.plan import Plan, PlanStep
 from backend.models.plan_migration_audit import PlanMigrationAudit
-from backend.models.plan_run import PlanRun, PlanRunHost, PlanRunTargetDevice
+from backend.models.plan_run import (
+    PlanRun,
+    PlanRunHost,
+    PlanRunPendingAggregation,
+    PlanRunTargetDevice,
+)
 from backend.models.plan_run_artifact import PlanRunArtifact
 from backend.models.resource_pool import ResourceAllocation, ResourcePool
 from backend.models.notification import AlertRule, ChannelType, EventType, NotificationChannel, NotificationLog, NotificationSeverity, NotificationSource
@@ -56,6 +61,7 @@ __all__ = [
     "PlanRun",
     "PlanRunArtifact",
     "PlanRunHost",
+    "PlanRunPendingAggregation",
     "PlanRunStatus",
     "PlanRunTargetDevice",
     "PlanStep",

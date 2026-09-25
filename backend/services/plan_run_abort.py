@@ -165,6 +165,9 @@ def _bulk_abort_pending_jobs(
             # #1082 报告缓存刷新）由编排者反应；此处不 commit、不触发链
             # （abort 终态恒 FAILED，链不可续），dedup 在 abort 末尾自理。
             announce_parent_terminal(pr)
+            # ADR-0052 D4：本路径的副作用已按 abort 语义执行完（链不适用），
+            # 随 abort 事务一并置 done，不留 pending 给补偿重放。
+            pr.terminal_effects_state = "done"
     return aborted_ids
 
 
@@ -691,6 +694,9 @@ def abort_plan_run(
             if total > 0:
                 if apply_plan_run_aggregation_from_counters(pr, db=db):
                     announce_parent_terminal(pr)
+                    # ADR-0052 D4：abort 收尾路径的副作用已按 abort 语义执行，
+                    # 置 done 随本事务提交（链不适用、dedup 在 abort 末尾自理）。
+                    pr.terminal_effects_state = "done"
             else:
                 # legacy total_job_count==0：才回退全量扫描。
                 all_jobs = (
@@ -701,6 +707,7 @@ def abort_plan_run(
                 if all_jobs:
                     if apply_plan_run_aggregation(pr, all_jobs, db=db):
                         announce_parent_terminal(pr)
+                        pr.terminal_effects_state = "done"
                 elif host_id is None:
                     PlanRunStateMachine.transition(
                         pr, PlanRunStatus.FAILED, reason=reason,

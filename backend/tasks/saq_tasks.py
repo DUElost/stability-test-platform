@@ -272,6 +272,25 @@ async def post_completion_task(ctx: dict, *, job_id: int) -> None:
     logger.info("saq_post_completion_done job_id=%d", job_id)
 
 
+async def aggregate_plan_run_task(ctx: dict, *, plan_run_id: int) -> None:
+    """ADR-0052 D3（#3244）——合并聚合一 Run 的 pending 终态标记。
+
+    唤醒按 ``agg:{plan_run_id}`` 去重 ⇒ 一次终态波通常一批收口；排空循环到
+    无标记才退出（§7-1）。幂等由执行器保证（读 Job 事实重算 + 消费即删同事务
+    + 终态/副作用守卫），异常上抛交 SAQ 重试（retries=3），最终兜底是
+    counter_reconciler 的 pending 扫描。
+    """
+    from backend.services.plan_run_finalization import drain_plan_run_aggregation_sync
+
+    logger.info("saq_aggregate_plan_run_start plan_run=%d", plan_run_id)
+    try:
+        await asyncio.to_thread(drain_plan_run_aggregation_sync, int(plan_run_id))
+    except Exception:
+        logger.exception("saq_aggregate_plan_run_failed plan_run=%d", plan_run_id)
+        raise
+    logger.info("saq_aggregate_plan_run_done plan_run=%d", plan_run_id)
+
+
 async def send_notification_task(
     ctx: dict, *, event_type: str, context: dict
 ) -> None:
@@ -951,6 +970,7 @@ from backend.services.ai_assistant.orchestrator import ai_assistant_turn_task
 
 SAQ_FUNCTIONS = [
     post_completion_task,
+    aggregate_plan_run_task,
     send_notification_task,
     publish_control_command,
     precheck_and_dispatch_task,

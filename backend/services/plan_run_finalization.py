@@ -1,6 +1,11 @@
 # -*- coding: utf-8 -*-
 """#3299 — 父 PlanRun 终态后的唯一副作用编排者（ADR-0052 D3–D4 的聚合者载体）。
 
+**ADR-0052 #3244 落点**：本模块除编排副作用外，还是 D3 合并聚合的执行器宿主
+（``drain_plan_run_aggregation_sync/_async``）：按 ``plan_run_id`` 读 pending
+标记 → 读 Job 事实重算 → 消费即删 → applied 走 ``finalize_parent_run_*``。
+Job 终态事务只写 pending 标记（``job_terminalization``），不再锁/写父级热行。
+
 **问题**：#3292 解开 SAQ 队列 20 模块环后，显露出领域环
 ``plan_dispatcher_sync ↔ plan_run_abort ↔ plan_run_aggregation ↔ post_completion ↔ plan_chain_trigger``，
 靠函数体内 import 维持可加载。「Run 进入终态之后做什么」此前散在三处：
@@ -31,6 +36,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Any
 
@@ -152,6 +158,11 @@ async def finalize_parent_run_async(
     await trigger_next_plan(run, db, respect_settle=True)
     if should_trigger_dedup(run.status):
         await enqueue_dedup_terminal_async(run.id)
+    # ADR-0052 D4：副作用块完整走完 → 置 'done'（独立提交）。崩溃窗口
+    # （父终态已提交、本块未走完）留给 counter_reconciler 的 pending 重放。
+    if getattr(run, "terminal_effects_state", None) == "pending":
+        run.terminal_effects_state = "done"
+        await db.commit()
 
 
 def finalize_parent_run_sync(
@@ -175,6 +186,171 @@ def finalize_parent_run_sync(
     trigger_next_plan_sync(run, db, respect_settle=True)
     if should_trigger_dedup(run.status):
         enqueue_dedup_terminal_sync(run.id)
+    # ADR-0052 D4：同 async 版——走完置 'done'，崩溃窗口留给补偿重放。
+    if getattr(run, "terminal_effects_state", None) == "pending":
+        run.terminal_effects_state = "done"
+        db.commit()
+
+
+# ── ADR-0052 D3：按 plan_run_id 的合并聚合执行器（#3244）─────────────────────
+#
+# 唤醒只携带 ``plan_run_id``；每轮一批：锁父行（FOR NO KEY UPDATE）→ 读
+# pending 标记（≤batch）→ **读 Job 事实重算** run/host 计数（不引入第二计数源）
+# → **同事务**删除已消费标记（§7-2 消费即删）→ applied 则随终态事实同事务落
+# 'pending' 副作用标记（写点在 ``_finalize_plan_run``）→ 提交；提交后经
+# ``finalize_parent_run_*`` 走副作用（chain / dedup / 通知 / 报告），完成置 'done'。
+#
+# 排空循环（§7-1 必需项）：SAQ 按 ``agg:{plan_run_id}`` 去重，任务运行期间到达
+# 的唤醒会被合并掉——只处理一批就退出会把余下 pending 押给 300s 修复扫描，破坏
+# §5-③ 的 120s 收敛。故循环到某轮**取不到标记**才退出（退出前的空查轮覆盖
+# 「标记提交于入队之前」的全部交错；其后再提交的标记必然在唤醒者那边入队成功）。
+#
+# 幂等（D3 at-least-once）：计数是**重算**非增量；删除与重算同事务；父终态有
+# ``_TERMINAL_PLAN_RUN_STATUSES`` 守卫；副作用块有 'pending'/'done' 标记守卫。
+#
+# 执行器只有 sync 核心：SAQ 任务与 async 唤醒路径都经 ``asyncio.to_thread`` 调
+# ``drain_plan_run_aggregation_sync``（worker 槽位形状与 post_completion 同先例），
+# 不给 async 镜像留第二份要同步维护的实现。
+
+#: 单批上限初值（ADR-0052 §7-1，覆盖一次 ~490 Job 的中止波）；
+#: 调数不修订 ADR，但须在实施 PR 与 #3244 记录依据。
+AGGREGATION_BATCH_LIMIT = int(os.getenv("STP_AGGREGATION_BATCH_LIMIT", "500"))
+
+#: 排空循环安全帽：病态热 Run 不使单任务无限驻留；余量由 reconciler 兜底。
+AGGREGATION_DRAIN_MAX_ROUNDS = int(os.getenv("STP_AGGREGATION_DRAIN_MAX_ROUNDS", "50"))
+
+
+def _recount_host_projection_sync(db: Any, plan_run_id: int, jobs: Sequence[Any]) -> None:
+    """per-host 投影重算。锁序与 abort/heartbeat 一致：plan_run → PRH（host_id 升序）。"""
+    from collections import defaultdict
+
+    from sqlalchemy import select
+
+    from backend.models.plan_run import PlanRunHost
+    from backend.services.plan_run_aggregation import recount_host_counters
+
+    prh_rows = (
+        db.execute(
+            select(PlanRunHost)
+            .where(PlanRunHost.plan_run_id == plan_run_id)
+            .order_by(PlanRunHost.host_id)
+            .with_for_update(key_share=True)
+        )
+    ).scalars().all()
+    if not prh_rows:
+        return
+    by_host: dict[Any, list] = defaultdict(list)
+    for j in jobs:
+        if getattr(j, "host_id", None):
+            by_host[j.host_id].append(j)
+    for prh in prh_rows:
+        recount_host_counters(prh, by_host.get(prh.host_id, []))
+
+
+def _aggregation_round_sync(plan_run_id: int) -> tuple[int, bool]:
+    """一批聚合（独立事务）。返回 ``(consumed_marks, applied)``。"""
+    import time
+
+    from sqlalchemy import delete, select
+
+    from backend.core.database import SessionLocal
+    from backend.core.metrics import record_plan_run_aggregation_duration
+    from backend.models.job import JobInstance
+    from backend.models.plan_run import PlanRun, PlanRunPendingAggregation
+    from backend.services.plan_run_aggregation import (
+        apply_plan_run_aggregation_from_counters,
+        recount_plan_run_counters,
+    )
+
+    with SessionLocal() as db:
+        t0 = time.perf_counter()
+        run = (
+            db.execute(
+                select(PlanRun)
+                .where(PlanRun.id == plan_run_id)
+                .with_for_update(key_share=True)  # FOR NO KEY UPDATE（#1473）
+            )
+        ).scalar_one_or_none()
+        if run is None:
+            # 父行已被 retention 删除——pending 标记随 FK CASCADE 消失，无事可做。
+            db.rollback()
+            return 0, False
+        mark_ids = (
+            db.execute(
+                select(PlanRunPendingAggregation.job_id)
+                .where(PlanRunPendingAggregation.plan_run_id == plan_run_id)
+                .order_by(
+                    PlanRunPendingAggregation.created_at,
+                    PlanRunPendingAggregation.job_id,
+                )
+                .limit(AGGREGATION_BATCH_LIMIT)
+            )
+        ).scalars().all()
+        if not mark_ids:
+            db.rollback()
+            return 0, False
+        jobs = (
+            db.execute(
+                select(JobInstance.status, JobInstance.host_id).where(
+                    JobInstance.plan_run_id == plan_run_id
+                )
+            )
+        ).all()
+        recount_plan_run_counters(run, jobs)
+        _recount_host_projection_sync(db, plan_run_id, jobs)
+        db.execute(
+            delete(PlanRunPendingAggregation).where(
+                PlanRunPendingAggregation.plan_run_id == plan_run_id,
+                PlanRunPendingAggregation.job_id.in_(mark_ids),
+            )
+        )
+        # D3：批次内 terminal == total 才触发父终态（守卫/判定语义不变）。
+        applied = apply_plan_run_aggregation_from_counters(run, db=db)
+        record_plan_run_aggregation_duration(time.perf_counter() - t0, "aggregate")
+        db.commit()
+    return len(mark_ids), applied
+
+
+def drain_plan_run_aggregation_sync(plan_run_id: int) -> int:
+    """排空该 Run 的 pending（同步语境；SAQ 任务镜像 + 补偿扫描复用）。"""
+    consumed_total = 0
+    hit_cap = True
+    for _round in range(AGGREGATION_DRAIN_MAX_ROUNDS):
+        consumed, applied = _aggregation_round_sync(plan_run_id)
+        if consumed == 0:
+            hit_cap = False
+            break
+        consumed_total += consumed
+        if applied:
+            # 副作用块与下一轮取标记之间无锁关系（父终态守卫幂等），可安全交叠。
+            _complete_parent_side_effects_sync(int(plan_run_id))
+    if hit_cap:
+        logger.warning(
+            "aggregate_drain_cap_hit plan_run=%s consumed=%d rounds=%d "
+            "— 余量由 SAQ 重试/reconciler 兜底",
+            plan_run_id, consumed_total, AGGREGATION_DRAIN_MAX_ROUNDS,
+        )
+    if consumed_total:
+        logger.info(
+            "plan_run_aggregated plan_run=%s marks_consumed=%d",
+            plan_run_id, consumed_total,
+        )
+    return consumed_total
+
+
+def _complete_parent_side_effects_sync(plan_run_id: int) -> None:
+    """applied 后的副作用编排（独立会话；#986：终态已提交，链失败不回滚事实）。"""
+    from backend.core.database import SessionLocal
+    from backend.models.plan_run import PlanRun
+
+    with SessionLocal() as db:
+        run = db.get(PlanRun, plan_run_id)
+        if run is None:
+            return
+        if getattr(run, "terminal_effects_state", None) != "pending":
+            # 已被其它路径（abort 批量 / reconciler 补偿）收尾——重复唤醒直接收敛。
+            return
+        finalize_parent_run_sync(run, db, applied=True)
 
 
 # ── 链式触发恢复（补偿入口）──────────────────────────────────────────────────

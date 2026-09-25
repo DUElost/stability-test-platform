@@ -1,64 +1,47 @@
-"""ADR-0026 §6 — single job terminalization + O(1) counter bump.
+"""ADR-0052 D1/D2 — Job 终态事务与父 Run 聚合解耦：只写事实 + durable pending 标记。
 
-**事务契约（#986/#1172）**：``on_job_terminal``(_sync) 在聚合后**自行
-commit**（父终态先提交再触发链式派发）。调用方不得在嵌套事务
-（``begin_nested``/未提交的 SAVEPOINT 上下文）内调用——内部 commit 会
-终结外层事务，返回后继续使用同一 session 抛
-``InvalidRequestError``。调用方应在自身事务（如有）提交后调用，且调用后
-不再假定原事务仍开（reconciler/recycler 先例见 #1172）。
+**新形状（#3244 / ADR-0052）**：``on_job_terminal``(_sync) 在调用方的终态事务里
+向 ``plan_run_pending_aggregation`` **插一行**（insert-only，``(plan_run_id,
+job_id)`` 复合主键 + ON CONFLICT DO NOTHING ⇒ outbox 重放幂等），随后**自行
+commit**（保持 #986/#1172/#2531/#2635 的边界契约：调用方不得在 begin_nested 内
+调用，返回后不得假定原事务仍开、且一候选一提交点成立），提交后唤醒父 Run 聚合者：
 
-批量调用方的正确形状（#2531）：**逐候选**「savepoint 落库 → 退出 savepoint →
-立刻为该候选调用本服务」，每条候选自成一个提交点。把多条候选的终态化攒到函数
-尾部统一执行（本服务出现自管理提交后 #1172 的原形状）会把前序候选的写入押在
-最后一条上——后序候选被行锁堵住时前序结果既读不到也不落库，且尾部一次提交会
-把多条候选的父聚合混进同一事务。
+- 生产：SAQ ``function="aggregate_plan_run_task"``、``key="agg:{plan_run_id}"``
+  （按 key 去重 ⇒ 短窗内数百终态合并成一次聚合唤醒；Redis 仅传输，事实源是
+  pending 表）。入队失败只告警——``counter_reconciler`` 的 300s sweep 扫描
+  pending 表重放（ADR-0052 D2/D4 恢复矩阵）。
+- ``TESTING=1``：无进程内 worker 等待语义，直接**同步排空**聚合
+  （等价旧「终态即聚合」行为，测试断言面不漂移）。
 
-Every path that first puts a Job into COMPLETED / FAILED / ABORTED must call
-``on_job_terminal`` (async) or ``on_job_terminal_sync`` afterwards in the
-**same transaction** as the job terminal write (through aggregation). The
-service:
+**该事务不再**（D1）：锁 ``plan_run`` 行、自增 ``plan_run`` / ``plan_run_host``
+计数器、读改写 ``acknowledged_job_ids``（D5：ACK 语义改由 Job 终态推导——
+``run_context.abort_requested`` 的 Job 级追写全删，abort 入口的初始空数组与
+保留合并仍由 ``plan_run_abort`` 维护）。
 
-1. Locks ``plan_run`` with ``FOR NO KEY UPDATE`` (deadlock-safe vs FK KEY SHARE)
-2. Atomically increments the five O(1) counters on ``plan_run`` (+ ``plan_run_host``)
-3. When ``terminal_job_count == total_job_count`` (and total > 0), applies
-   PlanRun aggregation from counters — no full sibling-job SELECT
-4. Falls back to the legacy full-job scan when ``total_job_count == 0``
-   (pre-P2 / empty runs)
-5. On successful aggregation, **commits** parent terminal facts, then runs
-   chain trigger / dedup enqueue (#986) — chain prepare failure must not
-   ``rollback()`` the parent Job/PlanRun terminalization. That post-terminal
-   orchestration itself lives in ``plan_run_finalization`` (#3299); this module
-   only delegates.
+继承 ADR-0026 §6 的不变量：单一 terminalization 入口（所有终态入口仍经本服务）、
+五列计数语义（判定输入见 ADR-0048 D1）、集中服务 + 低频对账 sweep 自愈。
+计数的产生方式由「终态事务内自增」改为「聚合者读 Job 事实重算」（ADR-0052 §3）。
 
-Idempotency is the caller's duty: only invoke on the *first* transition into
-a terminal job status (``complete_job`` already short-circuits replays).
+批量调用方的正确形状（#2531）不变：**逐候选**「savepoint 落库 → 退出 savepoint →
+立刻为该候选调用本服务」；边界现由本模块的 commit 独立成立（不再依赖
+``applied=True``——旧「末位候选才提交」形态正是 #2787 记录的缺陷根源）。
+
+返回值语义变化：旧版返回 ``(applied, run_status)``（末位 Job 同步判定父终态）；
+父终态改由聚合器异步判定后，本函数返回 ``(pending_written, None)``，第二元素
+仅为兼容旧调用形状保留。
 """
 
 from __future__ import annotations
 
 import logging
-import time
-from typing import Any, Optional
+import os
+from typing import Optional
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from backend.core.metrics import (
-    record_plan_run_aggregation_duration,
-    record_plan_run_counter_drift,
-)
 from backend.models.enums import JobStatus
 from backend.models.job import JobInstance
-from backend.models.plan_run import PlanRun, PlanRunHost
-from backend.services.plan_run_aggregation import (
-    apply_plan_run_aggregation,
-    apply_plan_run_aggregation_from_counters,
-)
-from backend.services.plan_run_finalization import (
-    finalize_parent_run_async,
-    finalize_parent_run_sync,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -68,32 +51,96 @@ _TERMINAL = {
     JobStatus.ABORTED.value,
 }
 
-# _post_aggregation_side_effects_async/_sync 自 #3299 起并入
-# backend.services.plan_run_finalization.finalize_parent_run_async/_sync
-# （终态副作用的唯一编排者）；本模块在聚合后直接委托。
+
+def _is_testing_env() -> bool:
+    return os.getenv("TESTING") == "1"
 
 
-def _bump_counters(run: PlanRun, job: JobInstance) -> None:
-    """Increment plan_run (+ matching plan_run_host) counters for *job*."""
-    status = job.status
-    run.terminal_job_count = int(run.terminal_job_count or 0) + 1
-    if status == JobStatus.COMPLETED.value:
-        run.completed_job_count = int(run.completed_job_count or 0) + 1
-    elif status == JobStatus.FAILED.value:
-        run.failed_job_count = int(run.failed_job_count or 0) + 1
-    elif status == JobStatus.ABORTED.value:
-        run.aborted_job_count = int(run.aborted_job_count or 0) + 1
+def _pending_insert_stmt(plan_run_id: int, job_id: int):
+    """insert-only 标记；主键冲突（outbox 重放同终态）时 no-op。"""
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    from backend.models.plan_run import PlanRunPendingAggregation
+
+    return pg_insert(PlanRunPendingAggregation).values(
+        plan_run_id=int(plan_run_id),
+        job_id=int(job_id),
+    ).on_conflict_do_nothing(index_elements=["plan_run_id", "job_id"])
 
 
-def _bump_host_counters(prh: PlanRunHost, job: JobInstance) -> None:
-    status = job.status
-    prh.terminal_job_count = int(prh.terminal_job_count or 0) + 1
-    if status == JobStatus.COMPLETED.value:
-        prh.completed_job_count = int(prh.completed_job_count or 0) + 1
-    elif status == JobStatus.FAILED.value:
-        prh.failed_job_count = int(prh.failed_job_count or 0) + 1
-    elif status == JobStatus.ABORTED.value:
-        prh.aborted_job_count = int(prh.aborted_job_count or 0) + 1
+async def _wake_parent_aggregation_async(plan_run_id: int) -> None:
+    """提交后唤醒聚合者。永不外溢异常（唤醒丢失 = 延迟，事实不丢，D4 恢复矩阵）。"""
+    if _is_testing_env():
+        import asyncio
+
+        from backend.services.plan_run_finalization import (
+            drain_plan_run_aggregation_sync,
+        )
+
+        try:
+            # 与生产 SAQ 任务同一执行器（sync 核心 + 线程），测试语义 = 旧「终态
+            # 即聚合」：本函数返回时父 Run 计数/终态已收敛。
+            await asyncio.to_thread(drain_plan_run_aggregation_sync, plan_run_id)
+        except Exception:
+            logger.exception(
+                "aggregate_inline_drain_failed_async plan_run=%s", plan_run_id,
+            )
+        return
+
+    try:
+        from saq import Job as SaqJob
+
+        from backend.core.task_queue import get_queue
+
+        await get_queue().enqueue(
+            SaqJob(
+                function="aggregate_plan_run_task",
+                kwargs={"plan_run_id": int(plan_run_id)},
+                key=f"agg:{plan_run_id}",
+                timeout=120,
+                retries=3,
+                retry_delay=2.0,
+            )
+        )
+    except Exception as exc:
+        logger.warning(
+            "aggregate_wakeup_failed plan_run=%s err=%s "
+            "— pending 表仍在，由 counter_reconciler 重放",
+            plan_run_id, exc,
+        )
+
+
+def _wake_parent_aggregation_sync(plan_run_id: int) -> None:
+    """Sync counterpart（recycler / reaper 线程语境）。"""
+    if _is_testing_env():
+        from backend.services.plan_run_finalization import (
+            drain_plan_run_aggregation_sync,
+        )
+
+        try:
+            drain_plan_run_aggregation_sync(plan_run_id)
+        except Exception:
+            logger.exception(
+                "aggregate_inline_drain_failed_sync plan_run=%s", plan_run_id,
+            )
+        return
+
+    try:
+        from backend.core.task_queue import enqueue_sync
+
+        enqueue_sync(
+            "aggregate_plan_run_task",
+            key=f"agg:{plan_run_id}",
+            timeout=120,
+            retries=3,
+            plan_run_id=int(plan_run_id),
+        )
+    except Exception as exc:
+        logger.warning(
+            "aggregate_wakeup_failed plan_run=%s err=%s "
+            "— pending 表仍在，由 counter_reconciler 重放",
+            plan_run_id, exc,
+        )
 
 
 async def on_job_terminal(
@@ -107,64 +154,21 @@ async def on_job_terminal(
         )
         return False, None
 
-    run = (
-        await db.execute(
-            select(PlanRun)
-            .where(PlanRun.id == job.plan_run_id)
-            .with_for_update(key_share=True)  # SQLAlchemy key_share → PG FOR NO KEY UPDATE (#1473)
-        )
-    ).scalar_one_or_none()
-    if run is None:
-        return False, None
-
-    _bump_counters(run, job)
-
-    if job.host_id:
-        prh = (
-            await db.execute(
-                select(PlanRunHost).where(
-                    PlanRunHost.plan_run_id == run.id,
-                    PlanRunHost.host_id == job.host_id,
-                )
-            )
-        ).scalar_one_or_none()
-        if prh is not None:
-            _bump_host_counters(prh, job)
-
-    async def _load_jobs():
-        result = await db.execute(
-            select(JobInstance).where(JobInstance.plan_run_id == run.id)
-        )
-        return result.scalars().all()
-
-    total = int(run.total_job_count or 0)
-    if total > 0:
-        t0 = time.perf_counter()
-        applied = apply_plan_run_aggregation_from_counters(run, db=db)
-        record_plan_run_aggregation_duration(
-            time.perf_counter() - t0, "counters",
-        )
-        await finalize_parent_run_async(run, db, applied)
-        return applied, run.status if applied else None
-
-    jobs = await _load_jobs()
-    t0 = time.perf_counter()
-    applied = apply_plan_run_aggregation(run, jobs, db=db)
-    record_plan_run_aggregation_duration(
-        time.perf_counter() - t0, "full_scan",
-    )
-    # 全量扫描路径可命中「空集」终态：编排者据此发「no jobs」文案的 RUN_FAILED。
-    await finalize_parent_run_async(run, db, applied, no_jobs=not jobs)
-    return applied, run.status if applied else None
+    await db.execute(_pending_insert_stmt(job.plan_run_id, job.id))
+    # 终态事实 + pending 标记同一事务一次提交（#1172 边界契约：自管理提交）。
+    await db.commit()
+    await _wake_parent_aggregation_async(int(job.plan_run_id))
+    return True, None
 
 
 def on_job_terminal_sync(
     job: JobInstance,
     db: Session,
-    *,
-    run: Optional[PlanRun] = None,
 ) -> tuple[bool, Optional[str]]:
-    """Sync entry — recycler / abort (optionally with *run* already locked)."""
+    """Sync entry — recycler / reaper 线程语境（同 async 版语义）。
+
+    旧版可选 ``run`` 参数（预锁父行）随 D1 移除父行锁而废止。
+    """
     if job.status not in _TERMINAL:
         logger.warning(
             "on_job_terminal_sync_skipped_non_terminal job=%s status=%s",
@@ -172,92 +176,15 @@ def on_job_terminal_sync(
         )
         return False, None
 
-    if run is None:
-        run = db.execute(
-            select(PlanRun)
-            .where(PlanRun.id == job.plan_run_id)
-            .with_for_update(key_share=True)  # SQLAlchemy key_share → PG FOR NO KEY UPDATE (#1473)
-        ).scalar_one_or_none()
-    if run is None:
-        return False, None
-
-    _bump_counters(run, job)
-
-    if job.host_id:
-        prh = db.execute(
-            select(PlanRunHost).where(
-                PlanRunHost.plan_run_id == run.id,
-                PlanRunHost.host_id == job.host_id,
-            )
-        ).scalar_one_or_none()
-        if prh is not None:
-            _bump_host_counters(prh, job)
-
-    total = int(run.total_job_count or 0)
-    if total > 0:
-        t0 = time.perf_counter()
-        applied = apply_plan_run_aggregation_from_counters(run, db=db)
-        record_plan_run_aggregation_duration(
-            time.perf_counter() - t0, "counters",
-        )
-        finalize_parent_run_sync(run, db, applied)
-        return applied, run.status if applied else None
-
-    jobs = (
-        db.query(JobInstance)
-        .filter(JobInstance.plan_run_id == run.id)
-        .all()
-    )
-    t0 = time.perf_counter()
-    applied = apply_plan_run_aggregation(run, jobs, db=db)
-    record_plan_run_aggregation_duration(
-        time.perf_counter() - t0, "full_scan",
-    )
-    # 空集全量扫描终态 → 「no jobs」通知（同 async 路径）。
-    finalize_parent_run_sync(run, db, applied, no_jobs=not jobs)
-    return applied, run.status if applied else None
+    db.execute(_pending_insert_stmt(job.plan_run_id, job.id))
+    db.commit()
+    _wake_parent_aggregation_sync(int(job.plan_run_id))
+    return True, None
 
 
-def recount_plan_run_counters(run: PlanRun, jobs: list[Any]) -> dict[str, int]:
-    """Recompute counter fields from *jobs*; return before/after drift info."""
-    completed = sum(1 for j in jobs if j.status == JobStatus.COMPLETED.value)
-    failed = sum(1 for j in jobs if j.status == JobStatus.FAILED.value)
-    aborted = sum(1 for j in jobs if j.status == JobStatus.ABORTED.value)
-    terminal = completed + failed + aborted
-    total = len(jobs)
-
-    before = {
-        "total_job_count": int(run.total_job_count or 0),
-        "terminal_job_count": int(run.terminal_job_count or 0),
-        "completed_job_count": int(run.completed_job_count or 0),
-        "failed_job_count": int(run.failed_job_count or 0),
-        "aborted_job_count": int(run.aborted_job_count or 0),
-    }
-    after = {
-        "total_job_count": total,
-        "terminal_job_count": terminal,
-        "completed_job_count": completed,
-        "failed_job_count": failed,
-        "aborted_job_count": aborted,
-    }
-    run.total_job_count = total
-    run.terminal_job_count = terminal
-    run.completed_job_count = completed
-    run.failed_job_count = failed
-    run.aborted_job_count = aborted
-    drifted = before != after
-    if drifted:
-        # #77：漂移即埋点（每漂移列一条）。理论漂移率 = 0——所有终态入口都
-        # 经集中 terminalization；> 0 说明有入口绕开集中服务或并发 race，
-        # counter_reconciler 修复的同时暴露给 Prometheus（SLO 守卫 ADR-0026 §6）。
-        # getattr 防御：指标是 best-effort，任何异常对象（单测 SimpleNamespace）
-        # 都不得让业务逻辑失败。
-        record_plan_run_counter_drift(
-            getattr(run, "id", None),
-            [
-                col.removesuffix("_job_count")
-                for col in before
-                if before[col] != after[col]
-            ],
-        )
-    return {"before": before, "after": after, "drifted": drifted}
+# 兼容再导出：旧导入路径（reconciler/tests 曾从本模块取计数重算）。实现随
+# ADR-0052 #3244 迁入 plan_run_aggregation（依赖方向：编排者/终态 → 聚合器，
+# 终态事务不再消费聚合判定）。
+from backend.services.plan_run_aggregation import (  # noqa: E402,F401
+    recount_plan_run_counters,
+)

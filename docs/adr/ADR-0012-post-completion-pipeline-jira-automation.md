@@ -44,7 +44,10 @@
 「崩溃 → 工单材料」的两条链路**不在同一层、不构成双出口竞争**，书面裁定如下：
 
 - **`JobInstance.jira_draft_json`（per-Job 草稿）= 结构化预览层。**
-  post_completion 在 Job 终态与报告同事务生成，仅服务人工复核
+  post_completion 以 Job 终态事实为输入、在其**事务提交后**由 SAQ 异步生成
+  （措辞订正 #3244 / ADR-0052 §3：原文「与 Job 终态与报告同事务生成」与实现
+  不符——`complete_agent_job` 提交后才 enqueue `pc:{job_id}`，见
+  `backend/services/agent_completion.py`），仅服务人工复核
   （RunReportPage 预览面板、IssueTrackerPage 草稿列表）。全库不存在
   「draft → 工单」自动桥；第 2/3 层策略引擎（若落地）是在 draft 之上叠加
   提单决策，不构成新交付出口。
