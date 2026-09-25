@@ -1043,9 +1043,16 @@ class TestReaperCompetition:
         """Acceptance #3: real interleaving via two sessions + a barrier.
 
         Both writers lock the same PlanRun row, so exactly one commits first
-        and the other's lock-reread/CAS makes it a no-op.  Legal end states:
-        RUNNING with all 3 jobs (admission won), or QUEUED with zero jobs
-        (reaper won before materialisation) — never QUEUED over live jobs.
+        and the other's lock-reread/CAS makes it a no-op.  The synchronization
+        advance point is that row lock: whichever thread reaches it first wins,
+        and that is a pure scheduling outcome the test must NOT pre-assume
+        (#3300: under CPU load the reaper thread wins the lock race often, and
+        the old in-thread ``assert admission_transaction(...) is True`` then
+        recorded a legitimate False as an error).  So: record the admission
+        outcome, and assert the two writers' effects are mutually exclusive
+        and the persisted end state matches the actual winner.  Legal end
+        states: RUNNING with all 3 jobs (admission won), or QUEUED with zero
+        jobs (reaper won before materialisation) — never QUEUED over live jobs.
         """
         import threading
 
@@ -1061,12 +1068,14 @@ class TestReaperCompetition:
         barrier = threading.Barrier(2)
         errors: list[Exception] = []
         reaper_summary: dict = {}
+        admitted: list[bool] = []
 
         def admit():
             db = SessionLocal()
             try:
                 barrier.wait(timeout=5)
-                assert admission_transaction(db, run_id, attempt) is True
+                # 赢家由行锁竞争决定，不在这里假设——记录结果，join 后统一断言。
+                admitted.append(admission_transaction(db, run_id, attempt))
                 db.commit()
             except Exception as exc:  # noqa: BLE001 — surfaced below
                 errors.append(exc)
@@ -1091,21 +1100,32 @@ class TestReaperCompetition:
 
         assert all(not thread.is_alive() for thread in threads)
         assert errors == []
+        assert len(admitted) == 1
         assert reaper_summary["requeued"] + reaper_summary["failed"] <= 1
+
+        # 行锁串行 ⇒ 恰有一方生效：admission 提交 RUNNING 后 reaper 重读必
+        # skip；reaper 先重排后 admission 重读 status≠PRECHECK 必 False。
+        # 两假或两真都不允许——这就是「去 flake」要钉死的推进点判据。
+        reaper_won = reaper_summary["requeued"] + reaper_summary["failed"] == 1
+        assert admitted[0] is not reaper_won, (
+            f"exactly-one-writer invariant broken: "
+            f"admitted={admitted[0]} reaper_summary={reaper_summary}"
+        )
 
         db_session.expire_all()
         persisted = db_session.get(PlanRun, run_id)
         jobs = db_session.query(JobInstance).filter(
             JobInstance.plan_run_id == run_id
         ).count()
-        if persisted.status == "RUNNING":
+        if admitted[0]:
+            assert persisted.status == "RUNNING"
             assert jobs == 3
             assert persisted.queue_reason is None
-        elif persisted.status == "QUEUED":
+        else:
+            assert persisted.status == "QUEUED"
+            assert reaper_summary["requeued"] == 1
             assert jobs == 0
             assert persisted.queue_reason == "PRECHECK_STALE"
-        else:
-            pytest.fail(f"illegal end state after race: {persisted.status} jobs={jobs}")
 
 
 class TestAdmissionRetirePrecheck1805:
