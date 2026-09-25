@@ -1017,3 +1017,41 @@ tests:
         exp_annotations:
           summary: Terminal (/complete) bulkhead is shedding load persistently
           description: "/agent/jobs/{id}/complete 的并发舱壁在最近 10 分钟里有 ≥8 个一分钟窗口 在拒绝请求（默认 16 并发 / 等待预算 500ms）——这是**持续**削峰，不是一次 瞬态尖峰（单次拒绝只进指标，不报）。舱壁是**设计内的背压**（R523 之后 新增，ADR-0047 D2）：终态事实在 Agent 本地 SQLite outbox 里不会丢，峰值 过后由 outbox 补送，PlanRun 收敛会晚几十秒。 持续拒绝说明三点之一：① 设备规模 × 单批终态的到达率已经超过 16 （考虑按实测抬舱壁，并同步核对池预算）；② Agent 侧退避未生效（重试仍在 原地打转，见 #3242）；③ 舱壁之外的通道（heartbeat/steps/claim）被别的 慢查询拖住。 用 stability_terminal_bulkhead_inflight / _waiting 判断是「满负荷在跑」 还是「持名额的请求卡住了」。**本告警是诊断信号（非 paging）**； #3243 给出量级分布后，paging 条件应叠加 terminal outbox backlog / 终态收敛延迟 / 父 Run 长时间不终态，避免为「成功吸收的削峰」报警。"
+  # #3217：Agent 上报的 crash artifact 丢失累计（Gauge 承载、按计数器语义读）。
+  # host-1：5m 后 submit 与 post 两段出现丢失 → 两条告警各自点名 stage 触发；promote 恒 0 不触发；
+  #         30m 时窗口内已无增量 → 告警恢复（事件型，不是一次丢失永久挂红）。
+  # host-2：Agent 重启（累计 5 → 0）且之后无新丢失 → increase 按重置处理，不得误报。
+  - interval: 1m
+    input_series:
+      - series: 'stability_agent_artifact_dropped{host_id="host-1",stage="submit"}'
+        values: '0x5 3x30'
+      - series: 'stability_agent_artifact_dropped{host_id="host-1",stage="post"}'
+        values: '0x5 1x30'
+      - series: 'stability_agent_artifact_dropped{host_id="host-1",stage="promote"}'
+        values: '0x36'
+      - series: 'stability_agent_artifact_dropped{host_id="host-2",stage="submit"}'
+        values: '5x10 0x26'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: StabilityAgentArtifactSubmitDropped
+        exp_alerts:
+          - exp_labels:
+              host_id: host-1
+              stage: submit
+              severity: warning
+            exp_annotations:
+              summary: Agent dropped crash artifacts at submit (15m)
+              description: "The Agent artifact uploader dropped submissions (queue full, uploader not running, or invalid payload).  Those crash artifacts are never registered: affected jobs look complete but lack evidence.  Check the host agent log for artifact_uploader_*_dropped and compare the crash burst with the queue depth; do not make the queue unbounded (#3217)."
+      - eval_time: 12m
+        alertname: StabilityAgentArtifactDeliveryFailed
+        exp_alerts:
+          - exp_labels:
+              host_id: host-1
+              stage: post
+              severity: warning
+            exp_annotations:
+              summary: Agent failed to deliver crash artifacts (15m)
+              description: "Crash artifacts were lost after submit: promote to the shared root failed (stage=promote) or the registration POST failed without retry (stage=post). Check the shared storage mount on that host first, then centre reachability and POST .../jobs/*/artifacts responses (#3217)."
+      - eval_time: 30m
+        alertname: StabilityAgentArtifactSubmitDropped
+        exp_alerts: []

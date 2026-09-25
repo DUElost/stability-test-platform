@@ -10,6 +10,7 @@ import threading
 from dataclasses import dataclass
 from typing import Any, Callable, Optional, Set
 
+from .artifact_uploader import ArtifactUploader
 from .heartbeat_thread import HeartbeatThread
 from .log_archiver import collect_archive_heartbeat_metrics
 from .recovery_executor import trigger_recovery_sync_on_device_reconnect
@@ -118,6 +119,8 @@ def build_heartbeat_thread(
             "terminal_outbox_dead_letter_total": local_db.count_terminal_dead_letters(),
             # #739 面②/#2188 D 步：分片登记失败（半交付）进程级累计，重启清零。
             "scan_shard_register_failure_total": ScanRunner.shard_register_failure_total(),
+            # #3217：crash artifact 投递的提交数与三路丢失（进程级累计，重启清零）。
+            **ArtifactUploader.instance().heartbeat_counts(),
         },
         # ADR-0025 Sprint 2: 上报归档指标到 extra['archive']（禁用时回调返回 None）
         get_archive_metrics=collect_archive_heartbeat_metrics,

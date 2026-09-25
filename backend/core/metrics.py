@@ -708,6 +708,25 @@ agent_outbox_pending = Gauge(
     ['host_id', 'type'],  # terminal | log_signal
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
+# #3217：crash artifact 投递（heartbeat extra；Agent 进程级累计，重启清零）。
+# 用 Gauge 承载 Agent 上报的累计值、在 PromQL 里按计数器语义读（increase() 把回落当作
+# 重置）。不在控制面算差值再 inc 一个 Counter：差值要记「上一次看到的值」，控制面重启
+# 就丢；多实例时心跳分流到不同实例，还会被重复累加。名字不带 _total（Counter 的保留后缀）。
+agent_artifact_submits = Gauge(
+    'stability_agent_artifact_submits',
+    'Crash artifact submissions since Agent process start, reported via heartbeat '
+    '(resets on Agent restart: read with increase())',
+    ['host_id'],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+agent_artifact_dropped = Gauge(
+    'stability_agent_artifact_dropped',
+    'Crash artifacts lost by the Agent uploader since process start, by stage '
+    '(submit=queue full/not running/bad payload, promote=shared-root promote failed, '
+    'post=registration POST failed); heartbeat-reported, resets on Agent restart',
+    ['host_id', 'stage'],  # submit | promote | post
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
 # ============================================================================
 # ADR-0026 P0 / P2 scale metrics (queue / renew / aggregation / concurrency)
 # ============================================================================
@@ -1057,6 +1076,45 @@ def record_agent_outbox_pending(host_id: str, outbox_type: str, count: int):
         host_id=str(host_id),
         type=outbox_type,
     ).set(max(0, int(count)))
+
+
+#: #3217：心跳 extra 键 → `stability_agent_artifact_dropped` 的 stage 标签值。
+AGENT_ARTIFACT_DROP_KEYS = (
+    ("submit", "artifact_dropped_submit_total"),
+    ("promote", "artifact_dropped_promote_total"),
+    ("post", "artifact_dropped_post_total"),
+)
+AGENT_ARTIFACT_SUBMITS_KEY = "artifact_submits_total"
+
+
+def _nonneg_int_or_none(value) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return None
+    return n if n >= 0 else None
+
+
+def record_agent_artifact_upload(host_id: str, extra: dict) -> None:
+    """#3217：心跳 extra 里的 artifact 投递累计量 → 两个 per-host Gauge。
+
+    只认显式键；缺键或非法值的那一项**跳过、不写 0**——旧 Agent 不带这些键，写 0 会让
+    升级窗口里的旧主机被读成「零丢失」（没量到 ≠ 没发生）。
+    """
+    if not PROMETHEUS_AVAILABLE or not isinstance(extra, dict):
+        return
+    hid = str(host_id)
+    submits = _nonneg_int_or_none(extra.get(AGENT_ARTIFACT_SUBMITS_KEY))
+    if submits is not None:
+        _note_host_child(agent_artifact_submits, hid, ())
+        agent_artifact_submits.labels(host_id=hid).set(submits)
+    for stage, key in AGENT_ARTIFACT_DROP_KEYS:
+        dropped = _nonneg_int_or_none(extra.get(key))
+        if dropped is not None:
+            _note_host_child(agent_artifact_dropped, hid, (stage,))
+            agent_artifact_dropped.labels(host_id=hid, stage=stage).set(dropped)
 
 
 def record_admission_queue_latency(seconds: float):
