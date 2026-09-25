@@ -283,12 +283,15 @@ jobs:
           python tools/dev/check_invariant_diff.py \
             --base "origin/${{ github.base_ref || github.ref_name }}"
 
-      # 分层门禁（#1519）：services/ 不得反向 import api.routes（私有符号
-      # 反向依赖穿透）。纯静态、毫秒级；--self-test 红绿双向自证。
+      # 分层门禁：仓库根 .importlinter 的 import 边界合约（C1–C5，取代原
+      # check_layering.py 的 #1519 单条规则）。纯静态、<1s。版本取 dev lock 的
+      # 精确 pin（同上方 ruff 的取法）；已知违规是只减不增的基线，修掉一条须同
+      # PR 删掉对应 ignore 行（unmatched_ignore_imports_alerting = error）。
       - name: 分层检查
         run: |
-          python tools/dev/check_layering.py --self-test
-          python tools/dev/check_layering.py
+          pip install "$(grep -oE '^import-linter==[^ ]+' backend/requirements-dev.lock)" \
+                      "$(grep -oE '^grimp==[^ ]+' backend/requirements-dev.lock)"
+          PYTHONPATH=. lint-imports --no-cache
 
       # 孤立 ORM 模型挂载门禁（#1890-B / #734）：模型类零消费方即红。
       - name: 孤立 ORM 模型检查

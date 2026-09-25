@@ -41,7 +41,7 @@ def test_unknown_stage_raises():
 
 
 def test_engine_source_has_no_api_routes_import():
-    """分层：services 不得引用 api.routes（与 check_layering 同口径）。"""
+    """分层：services 不得引用 api.routes（与 .importlinter C1/C2 同口径）。"""
     import backend.services.jira_vendor.stability_jira as mod
 
     from tools.dev.source_anchor import SourceGuard

@@ -16,6 +16,8 @@ pytest-cov>=7.1.0,<8.0
 # ── Lint ────────────────────────────────────────────────────────────────
 # 配置见仓库根 ruff.toml;CI 的 lint job 也装这个
 ruff>=0.16.4,<1.0
+# 后端 import 边界合约(仓库根 .importlinter);CI lint job 的「分层检查」step 也装这个
+import-linter>=2.15,<3.0
 
 # 注:原先这里还有 hypothesis。旧状态机 PBT 已退役且全仓 0 处引用，依赖与空包
 # 一并删除；等确有 property-based testing 用例时再加回依赖和目录。

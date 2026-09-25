@@ -65,7 +65,7 @@ L1 重议触发条件：治理面写者 >1 人，或 auto mode 成为默认工�
   gate 增删频繁移动，实测已由 214 → 322）。改引**符号名** `FULL_EXCLUDE`
   （定义于 `scripts/run_gates.py`，`check:full` = `GATES − FULL_EXCLUDE`）。
 - `ci.yml` lint job：脚本不可变检查之后追加的治理/门禁类步骤包括「差异面不变量检查」
-  （invariant-diff，BLOCK）、「分层检查」（`check_layering.py`，含 `--self-test`）、
+  （invariant-diff，BLOCK）、「分层检查」（仓库根 `.importlinter` 的 import 边界合约，`lint-imports`）、
   「孤立 ORM 模型检查」（`check_orphan_models.py`，含 `--self-test`）、「上帝文件行数封顶检查」
   （`check_god_files_ceiling.py`）、「局部 import 棘轮检查」、「治理面结构检查(C-G1 L0)」（含
   `--self-test`）与「Execution Registry 自测」。
