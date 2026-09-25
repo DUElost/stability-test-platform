@@ -418,34 +418,34 @@ class TestManualActionObservation:
 class TestPatrolHeartbeatErrors:
     @pytest.mark.asyncio
     async def test_unknown_job_returns_404(self):
-        from fastapi import HTTPException
-        with pytest.raises(HTTPException) as exc:
+        from backend.services.errors import ServiceError
+        with pytest.raises(ServiceError) as exc:
             await _call_heartbeat(
                 999_999_999,
                 PatrolHeartbeatIn(fencing_token="x", cycle_index=1),
             )
-        assert exc.value.status_code == 404
+        assert exc.value.status == 404
 
     @pytest.mark.asyncio
     async def test_invalid_fencing_token_returns_409(self):
-        from fastapi import HTTPException
+        from backend.services.errors import ServiceError
         seed = _seed_patrol_chain()
         try:
-            with pytest.raises(HTTPException) as exc:
+            with pytest.raises(ServiceError) as exc:
                 await _call_heartbeat(
                     seed["job_id"],
                     PatrolHeartbeatIn(fencing_token="wrong", cycle_index=1),
                 )
-            assert exc.value.status_code == 409
+            assert exc.value.status == 409
         finally:
             _cleanup_patrol_chain(seed)
 
     @pytest.mark.asyncio
     async def test_negative_delta_returns_400(self):
-        from fastapi import HTTPException
+        from backend.services.errors import ServiceError
         seed = _seed_patrol_chain()
         try:
-            with pytest.raises(HTTPException) as exc:
+            with pytest.raises(ServiceError) as exc:
                 await _call_heartbeat(
                     seed["job_id"],
                     PatrolHeartbeatIn(
@@ -454,30 +454,30 @@ class TestPatrolHeartbeatErrors:
                         success_delta=-1,
                     ),
                 )
-            assert exc.value.status_code == 400
+            assert exc.value.status == 400
         finally:
             _cleanup_patrol_chain(seed)
 
     @pytest.mark.asyncio
     async def test_negative_cycle_index_returns_400(self):
-        from fastapi import HTTPException
+        from backend.services.errors import ServiceError
         seed = _seed_patrol_chain()
         try:
-            with pytest.raises(HTTPException) as exc:
+            with pytest.raises(ServiceError) as exc:
                 await _call_heartbeat(
                     seed["job_id"],
                     PatrolHeartbeatIn(fencing_token=seed["token"], cycle_index=-1),
                 )
-            assert exc.value.status_code == 400
+            assert exc.value.status == 400
         finally:
             _cleanup_patrol_chain(seed)
 
     @pytest.mark.asyncio
     async def test_invalid_next_retry_at_returns_400(self):
-        from fastapi import HTTPException
+        from backend.services.errors import ServiceError
         seed = _seed_patrol_chain()
         try:
-            with pytest.raises(HTTPException) as exc:
+            with pytest.raises(ServiceError) as exc:
                 await _call_heartbeat(
                     seed["job_id"],
                     PatrolHeartbeatIn(
@@ -486,7 +486,7 @@ class TestPatrolHeartbeatErrors:
                         next_retry_at="not-a-datetime",
                     ),
                 )
-            assert exc.value.status_code == 400
+            assert exc.value.status == 400
         finally:
             _cleanup_patrol_chain(seed)
 
@@ -501,7 +501,7 @@ class TestPatrolHeartbeatStallContract:
     async def test_patrol_heartbeat_returns_409_when_job_not_running(self):
         """改动 A — Job status 在请求进入时已非 RUNNING(典型: recycler 已 CAS 推到 UNKNOWN)
         → helper 之前直接 409 JOB_NOT_RUNNING;DB 上 last_patrol_heartbeat_at 不被更新。"""
-        from fastapi import HTTPException
+        from backend.services.errors import ServiceError
         from sqlalchemy import update as sa_update
 
         seed = _seed_patrol_chain()
@@ -517,7 +517,7 @@ class TestPatrolHeartbeatStallContract:
             finally:
                 db.close()
 
-            with pytest.raises(HTTPException) as exc:
+            with pytest.raises(ServiceError) as exc:
                 await _call_heartbeat(
                     seed["job_id"],
                     PatrolHeartbeatIn(
@@ -526,7 +526,7 @@ class TestPatrolHeartbeatStallContract:
                         success_delta=1,
                     ),
                 )
-            assert exc.value.status_code == 409
+            assert exc.value.status == 409
             assert isinstance(exc.value.detail, dict)
             assert exc.value.detail.get("code") == "JOB_NOT_RUNNING"
             assert "recovery/sync" in exc.value.detail.get("message", "")
@@ -579,7 +579,7 @@ class TestPatrolHeartbeatStallContract:
         通过 monkeypatch 服务层 lease 校验让它在通过前用单独的同步 session
         把真实 DB 行的 status flip 到 UNKNOWN,精确模拟「预校验后、CAS 前」的 race 窗口。
         """
-        from fastapi import HTTPException
+        from backend.services.errors import ServiceError
         from sqlalchemy import update as sa_update
         from backend.services import agent_patrol_heartbeat as patrol_mod
 
@@ -606,7 +606,7 @@ class TestPatrolHeartbeatStallContract:
                 _race_flip_then_pass,
             )
 
-            with pytest.raises(HTTPException) as exc:
+            with pytest.raises(ServiceError) as exc:
                 await _call_heartbeat(
                     seed["job_id"],
                     PatrolHeartbeatIn(
@@ -615,7 +615,7 @@ class TestPatrolHeartbeatStallContract:
                         success_delta=1,
                     ),
                 )
-            assert exc.value.status_code == 409
+            assert exc.value.status == 409
             assert isinstance(exc.value.detail, dict)
             assert exc.value.detail.get("code") == "JOB_NOT_RUNNING"
             assert "flipped" in exc.value.detail.get("message", "")

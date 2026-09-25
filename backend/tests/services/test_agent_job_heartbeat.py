@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from fastapi import HTTPException
+from backend.services.errors import ServiceError
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from backend.models.enums import JobStatus
@@ -20,11 +20,11 @@ class TestJobHeartbeatGuards:
     async def test_job_not_found_404(self):
         db = AsyncMock()
         db.get = AsyncMock(return_value=None)
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ServiceError) as exc:
             await record_agent_job_heartbeat(
                 db, 1, JobHeartbeatIn(fencing_token="tok"),
             )
-        assert exc.value.status_code == 404
+        assert exc.value.status == 404
 
     @pytest.mark.asyncio
     async def test_invalid_token_409(self):
@@ -37,11 +37,11 @@ class TestJobHeartbeatGuards:
             new_callable=AsyncMock,
             return_value=None,
         ):
-            with pytest.raises(HTTPException) as exc:
+            with pytest.raises(ServiceError) as exc:
                 await record_agent_job_heartbeat(
                     db, 1, JobHeartbeatIn(fencing_token="bad"),
                 )
-        assert exc.value.status_code == 409
+        assert exc.value.status == 409
 
     @pytest.mark.asyncio
     async def test_terminal_status_requires_complete(self):
@@ -56,11 +56,11 @@ class TestJobHeartbeatGuards:
             new_callable=AsyncMock,
             return_value=MagicMock(),
         ):
-            with pytest.raises(HTTPException) as exc:
+            with pytest.raises(ServiceError) as exc:
                 await record_agent_job_heartbeat(
                     db, 1, JobHeartbeatIn(status="FAILED", fencing_token="tok"),
                 )
-        assert exc.value.status_code == 409
+        assert exc.value.status == 409
         assert exc.value.detail["code"] == "TERMINAL_STATUS_REQUIRES_COMPLETE"
 
     @pytest.mark.asyncio
@@ -92,11 +92,11 @@ class TestExtendJobLockGuards:
         result.scalars.return_value.first.return_value = None
         db = AsyncMock()
         db.execute = AsyncMock(return_value=result)
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ServiceError) as exc:
             await extend_agent_job_lock(
                 db, 1, ExtendLockIn(fencing_token="tok"),
             )
-        assert exc.value.status_code == 404
+        assert exc.value.status == 404
 
     @pytest.mark.asyncio
     async def test_device_not_found_404(self):
@@ -107,11 +107,11 @@ class TestExtendJobLockGuards:
         db = AsyncMock()
         db.execute = AsyncMock(return_value=result)
         db.get = AsyncMock(return_value=None)
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ServiceError) as exc:
             await extend_agent_job_lock(
                 db, 1, ExtendLockIn(fencing_token="tok"),
             )
-        assert exc.value.status_code == 404
+        assert exc.value.status == 404
         assert "device" in exc.value.detail
 
     @pytest.mark.asyncio
@@ -132,8 +132,8 @@ class TestExtendJobLockGuards:
             new_callable=AsyncMock,
             return_value=False,
         ):
-            with pytest.raises(HTTPException) as exc:
+            with pytest.raises(ServiceError) as exc:
                 await extend_agent_job_lock(
                     db, 1, ExtendLockIn(fencing_token="tok"),
                 )
-        assert exc.value.status_code == 409
+        assert exc.value.status == 409

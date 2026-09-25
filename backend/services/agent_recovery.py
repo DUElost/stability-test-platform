@@ -2,7 +2,7 @@
 
 覆盖 ``/agent/recovery/sync`` 全链路，以及 complete_job 晚到完成也复用的
 ``resume_expired_lease_for_recovery``。路由退化为「解析 → 调服务 → ok()」；
-异常沿用 ``HTTPException``。
+异常抛领域类型（``backend.services.errors``），由 api 层统一 handler 翻译为 HTTP。
 
 边界：本模块不碰 claim / heartbeat / complete 主路径（除共享的 lease grace
 刷新）；Pydantic 入参模型随业务线下沉，路由侧 re-export 保持既有测试导入。
@@ -16,7 +16,6 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,6 +26,7 @@ from backend.models.host import Device, Host
 from backend.models.job import JobInstance
 from backend.models.plan_run import PlanRun
 from backend.services.aggregator import PlanAggregator
+from backend.services.errors import Conflict, NotFound
 from backend.services.lease_manager import release_lease
 from backend.services.plan_dispatcher_core import (
     apply_dispatch_host_watcher_admin_state_to_policy,
@@ -222,7 +222,7 @@ async def rotate_recovery_lease_token(
         .with_for_update()
     )).scalars().first()
     if device is None:
-        raise HTTPException(status_code=409, detail="recovery device not found")
+        raise Conflict("recovery device not found")
     device.lease_generation = int(device.lease_generation or 0) + 1
     lease.lease_generation = device.lease_generation
     lease.fencing_token = f"{lease.device_id}:{device.lease_generation}"
@@ -242,7 +242,7 @@ async def sync_agent_recovery(
     # Load host
     host = await db.get(Host, payload.host_id)
     if host is None:
-        raise HTTPException(status_code=404, detail="host not found")
+        raise NotFound("host not found")
 
     # ── Outbox actions ──
     # （#2030）必须在退役判据**之前**推导并与早返回分支共用：Agent 对空

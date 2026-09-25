@@ -1,28 +1,22 @@
-"""Agent 升级门禁 HTTP 适配（#1520 垂直切片：agent_api upgrade-gate）。
+"""Agent 升级门禁业务（#1520 垂直切片：agent_api upgrade-gate）。
 
-``POST /hosts/{id}/upgrade-gate`` / ``.../release``：把
-``host_upgrade_gate.begin/end_host_upgrade`` 的领域异常映射为 HTTP，并写审计。
-
-路由退化为 ``ok(acquire/release_agent_upgrade_gate(...))``。
+``POST /hosts/{id}/upgrade-gate`` / ``.../release``：调
+``host_upgrade_gate.begin/end_host_upgrade``，领域异常原样向上传播，
+HTTP 映射在 api 层（``backend/api/error_handlers.py`` 的
+``raise_upgrade_gate_http`` + ``UPGRADE_GATE_DOMAIN_ERRORS``，#3295 把它移出 services）。
+成功路径在此写审计。路由退化为「调服务 → ok()」。
 """
 
 from __future__ import annotations
 
 import secrets
 
-from fastapi import HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from backend.api.error_helpers import raise_api_http_error
 from backend.core.audit import record_audit
-from backend.services.host_maintenance import HostMaintenanceConflict
+from backend.services.errors import BadRequest
 from backend.services.host_upgrade_gate import (
-    HostAbortDrainTimeoutError,
-    HostAbortPendingError,
-    HostHasActiveJobsError,
-    HostNotFoundError,
-    HostRetiredError,
     begin_host_upgrade,
     end_host_upgrade,
 )
@@ -41,78 +35,6 @@ class UpgradeGateReleaseRequest(BaseModel):
     holder: str = ""
 
 
-def raise_upgrade_gate_http(host_id: str, exc: Exception) -> None:
-    if isinstance(exc, HostNotFoundError):
-        raise HTTPException(
-            status_code=404,
-            detail={"code": "HOST_NOT_FOUND", "message": str(exc)},
-        ) from None
-    if isinstance(exc, HostAbortPendingError):
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "HOST_ABORT_PENDING",
-                "message": (
-                    f"Abort is still draining for {len(exc.active_jobs)} job(s) "
-                    f"on host {host_id}. Retry in approximately "
-                    f"{exc.retry_after_seconds}s."
-                ),
-                "active_jobs": exc.active_jobs,
-                "retry_after_seconds": exc.retry_after_seconds,
-            },
-        ) from None
-    if isinstance(exc, HostHasActiveJobsError):
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "HOST_HAS_ACTIVE_JOBS",
-                "message": (
-                    f"Host {host_id} has {len(exc.active_jobs)} active job(s). "
-                    "Retry with abort_running_jobs=true to abort then upgrade."
-                ),
-                "active_jobs": exc.active_jobs,
-            },
-        ) from None
-    if isinstance(exc, HostRetiredError):
-        # ADR-0038 D5：退役主机拒绝执行/配置类动作（升级门禁同族）
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "HOST_RETIRED",
-                "message": (
-                    f"Host {host_id} is retired; unretire it before upgrade "
-                    "(ADR-0038 D5)."
-                ),
-            },
-        ) from None
-    if isinstance(exc, HostAbortDrainTimeoutError):
-        raise HTTPException(
-            status_code=504,
-            detail={
-                "code": "ABORT_DRAIN_TIMEOUT",
-                "message": (
-                    f"Aborted jobs but {len(exc.lingering_jobs)} job(s) on host "
-                    f"{host_id} did not reach a terminal state in time. "
-                    "Investigate the agent or retry."
-                ),
-                "lingering_jobs": exc.lingering_jobs,
-                "abort_summary": exc.abort_summary,
-            },
-        ) from None
-    if isinstance(exc, HostMaintenanceConflict):
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "HOST_IN_MAINTENANCE",
-                "message": (
-                    f"Host {host_id} is already in a maintenance window "
-                    "(another upgrade is in progress). Retry later."
-                ),
-            },
-        ) from None
-    raise exc
-
-
 def acquire_agent_upgrade_gate(
     db: Session,
     host_id: str,
@@ -123,28 +45,22 @@ def acquire_agent_upgrade_gate(
     成功即持有窗口：期间该主机的派发与 claim 都被跳过（#960 互斥语义）。
     调用方必须在升级完成后调用 ``.../upgrade-gate/release``；进程崩溃等
     异常路径由维护窗口 TTL 过期兜底。
+
+    ``begin_host_upgrade`` 的领域异常（Host* / HostMaintenanceConflict）
+    不在这里翻译——路由端点的 ``except UPGRADE_GATE_DOMAIN_ERRORS`` 元组 +
+    api 层 ``raise_upgrade_gate_http`` 负责 HTTP 映射。元组必须覆盖映射的每一个
+    领域异常：少一个，那条 HTTP 分支就**从唯一入参路径不可达**，异常原样上抛成
+    500（#2638：退役主机申请升级窗口时 ``HostRetiredError`` 就是这样漏掉的——
+    409 ``HOST_RETIRED`` 早就写好了）。
     """
     effective_holder = payload.holder.strip() or f"upgrade-gate:{secrets.token_hex(4)}"
-    try:
-        gate = begin_host_upgrade(
-            db,
-            host_id,
-            holder=effective_holder,
-            abort_running_jobs=payload.abort_running_jobs,
-            triggered_by="agent-api",
-        )
-    # 元组必须覆盖 `raise_upgrade_gate_http` 映射的每一个领域异常：少一个，那条
-    # HTTP 分支就**从唯一入参路径不可达**，异常原样上抛成 500（#2638：退役主机申请
-    # 升级窗口时 `HostRetiredError` 就是这样漏掉的——409 `HOST_RETIRED` 早就写好了）。
-    except (
-        HostNotFoundError,
-        HostRetiredError,
-        HostAbortPendingError,
-        HostHasActiveJobsError,
-        HostAbortDrainTimeoutError,
-        HostMaintenanceConflict,
-    ) as exc:
-        raise_upgrade_gate_http(host_id, exc)
+    gate = begin_host_upgrade(
+        db,
+        host_id,
+        holder=effective_holder,
+        abort_running_jobs=payload.abort_running_jobs,
+        triggered_by="agent-api",
+    )
 
     record_audit(
         db,
@@ -171,7 +87,7 @@ def release_agent_upgrade_gate(
     """释放维护窗口；holder 不匹配时不误清他人窗口（幂等，可重复调用）。"""
     holder = payload.holder.strip()
     if not holder:
-        raise_api_http_error(400, "HOLDER_REQUIRED", "holder must not be empty")
+        raise BadRequest({"code": "HOLDER_REQUIRED", "message": "holder must not be empty"})
     end_host_upgrade(db, host_id, holder)
     record_audit(
         db,
@@ -185,7 +101,6 @@ def release_agent_upgrade_gate(
     return {"host_id": host_id, "holder": holder, "released": True}
 
 
-# 路由 / 既有测试用的私有名与端点别名。
-_raise_upgrade_gate_http = raise_upgrade_gate_http
+# 路由 / 既有测试用的端点别名。
 acquire_upgrade_gate = acquire_agent_upgrade_gate
 release_upgrade_gate = release_agent_upgrade_gate

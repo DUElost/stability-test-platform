@@ -22,7 +22,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
+from backend.services.errors import ServiceError
 from unittest.mock import AsyncMock, patch
 from sqlalchemy import select
 
@@ -450,14 +450,14 @@ async def test_postgresql_concurrent_conflicting_terminal_payload_is_rejected():
             return_exceptions=True,
         )
         failures = [
-            result for result in results if isinstance(result, HTTPException)
+            result for result in results if isinstance(result, ServiceError)
         ]
         successes = [
             result for result in results if not isinstance(result, Exception)
         ]
         assert len(successes) == 1
         assert len(failures) == 1
-        assert failures[0].status_code == 409
+        assert failures[0].status == 409
         assert failures[0].detail["code"] == "TERMINAL_PAYLOAD_CONFLICT"
 
         with SessionLocal() as db:
@@ -540,13 +540,13 @@ async def test_heartbeat_wrong_token_returns_409():
     _setup_lock_and_lease(seed)
     try:
         async with AsyncSessionLocal() as async_db:
-            with pytest.raises(HTTPException) as exc_info:
+            with pytest.raises(ServiceError) as exc_info:
                 await job_heartbeat(
                     job_id=seed["job_id"],
                     payload=_JobHeartbeatIn(status="RUNNING", fencing_token="WRONG_TOKEN"),
                     db=async_db, _=None,
                 )
-        assert exc_info.value.status_code == 409
+        assert exc_info.value.status == 409
         assert "fencing_token" in exc_info.value.detail.lower()
     finally:
         _cleanup_seed(seed)
@@ -566,13 +566,13 @@ async def test_heartbeat_no_active_lease_returns_409():
     seed = _seed_job(status=JobStatus.RUNNING.value)
     try:
         async with AsyncSessionLocal() as async_db:
-            with pytest.raises(HTTPException) as exc_info:
+            with pytest.raises(ServiceError) as exc_info:
                 await job_heartbeat(
                     job_id=seed["job_id"],
                     payload=_JobHeartbeatIn(status="RUNNING", fencing_token="ANY"),
                     db=async_db, _=None,
                 )
-        assert exc_info.value.status_code == 409
+        assert exc_info.value.status == 409
     finally:
         _cleanup_seed(seed)
 
@@ -606,13 +606,13 @@ async def test_extend_lock_wrong_token_returns_409():
     _setup_lock_and_lease(seed)
     try:
         async with AsyncSessionLocal() as async_db:
-            with pytest.raises(HTTPException) as exc_info:
+            with pytest.raises(ServiceError) as exc_info:
                 await extend_job_lock(
                     job_id=seed["job_id"],
                     payload=_ExtendLockIn(fencing_token="WRONG"),
                     db=async_db, _=None,
                 )
-        assert exc_info.value.status_code == 409
+        assert exc_info.value.status == 409
     finally:
         _cleanup_seed(seed)
 
@@ -631,13 +631,13 @@ async def test_extend_lock_no_active_lease_returns_409():
     seed = _seed_job(status=JobStatus.RUNNING.value)
     try:
         async with AsyncSessionLocal() as async_db:
-            with pytest.raises(HTTPException) as exc_info:
+            with pytest.raises(ServiceError) as exc_info:
                 await extend_job_lock(
                     job_id=seed["job_id"],
                     payload=_ExtendLockIn(fencing_token="ANY"),
                     db=async_db, _=None,
                 )
-        assert exc_info.value.status_code == 409
+        assert exc_info.value.status == 409
     finally:
         _cleanup_seed(seed)
 
@@ -673,7 +673,7 @@ async def test_complete_job_wrong_token_returns_409():
     _setup_lock_and_lease(seed)
     try:
         async with AsyncSessionLocal() as async_db:
-            with pytest.raises(HTTPException) as exc_info:
+            with pytest.raises(ServiceError) as exc_info:
                 await complete_job(
                     job_id=seed["job_id"],
                     payload=_RunCompleteIn(
@@ -682,7 +682,7 @@ async def test_complete_job_wrong_token_returns_409():
                     ),
                     db=async_db, _=None,
                 )
-        assert exc_info.value.status_code == 409
+        assert exc_info.value.status == 409
     finally:
         _cleanup_seed(seed)
 
@@ -800,7 +800,7 @@ async def test_complete_job_idempotent_replay_wrong_token_returns_409():
         assert r1.error is None
 
         async with AsyncSessionLocal() as async_db:
-            with pytest.raises(HTTPException) as exc_info:
+            with pytest.raises(ServiceError) as exc_info:
                 await complete_job(
                     job_id=seed["job_id"],
                     payload=_RunCompleteIn(
@@ -809,7 +809,7 @@ async def test_complete_job_idempotent_replay_wrong_token_returns_409():
                     ),
                     db=async_db, _=None,
                 )
-        assert exc_info.value.status_code == 409
+        assert exc_info.value.status == 409
         assert exc_info.value.detail["code"] == "STALE_COMPLETION_TOKEN"
     finally:
         _cleanup_seed(seed)
@@ -840,7 +840,7 @@ async def test_complete_job_terminal_conflicting_payload_is_read_only():
         assert first.data["status"] == JobStatus.COMPLETED.value
 
         async with AsyncSessionLocal() as async_db:
-            with pytest.raises(HTTPException) as exc:
+            with pytest.raises(ServiceError) as exc:
                 await complete_job(
                     job_id=seed["job_id"],
                     payload=_RunCompleteIn(
@@ -858,7 +858,7 @@ async def test_complete_job_terminal_conflicting_payload_is_read_only():
                     db=async_db,
                     _=None,
                 )
-        assert exc.value.status_code == 409
+        assert exc.value.status == 409
         assert exc.value.detail["code"] == "TERMINAL_PAYLOAD_CONFLICT"
         db = SessionLocal()
         try:
@@ -899,14 +899,14 @@ async def test_update_job_status_wrong_token_returns_409():
     _setup_lock_and_lease(seed)
     try:
         async with AsyncSessionLocal() as async_db:
-            with pytest.raises(HTTPException) as exc_info:
+            with pytest.raises(ServiceError) as exc_info:
                 await update_job_status(
                     job_id=seed["job_id"],
                     payload=JobStatusUpdate(status="FAILED", fencing_token="WRONG_TOKEN"),
                     db=async_db,
                     _=None,
                 )
-        assert exc_info.value.status_code == 409
+        assert exc_info.value.status == 409
         assert "fencing_token" in exc_info.value.detail.lower()
     finally:
         _cleanup_seed(seed)
@@ -918,14 +918,14 @@ async def test_update_job_status_invalid_transition_returns_structured_error():
     token = _setup_lock_and_lease(seed)
     try:
         async with AsyncSessionLocal() as async_db:
-            with pytest.raises(HTTPException) as exc_info:
+            with pytest.raises(ServiceError) as exc_info:
                 await update_job_status(
                     job_id=seed["job_id"],
                     payload=JobStatusUpdate(status="UNKNOWN", fencing_token=token),
                     db=async_db,
                     _=None,
                 )
-        assert exc_info.value.status_code == 409
+        assert exc_info.value.status == 409
         assert exc_info.value.detail["code"] == "INVALID_JOB_TRANSITION"
         assert exc_info.value.detail["message"] == "status endpoint only accepts RUNNING"
     finally:
@@ -947,7 +947,7 @@ async def test_upload_step_traces_wrong_token_returns_409():
     _setup_lock_and_lease(seed)
     try:
         async with AsyncSessionLocal() as async_db:
-            with pytest.raises(HTTPException) as exc_info:
+            with pytest.raises(ServiceError) as exc_info:
                 await upload_step_traces(
                     traces=[
                         StepTraceIn(
@@ -961,7 +961,7 @@ async def test_upload_step_traces_wrong_token_returns_409():
                     db=async_db,
                     _=None,
                 )
-        assert exc_info.value.status_code == 409
+        assert exc_info.value.status == 409
         assert "fencing_token" in exc_info.value.detail.lower()
     finally:
         _cleanup_seed(seed)
@@ -2251,9 +2251,9 @@ async def test_recovery_sync_host_not_found_404():
     )
     mock_db = AsyncMock()
     mock_db.get.return_value = None  # host not found
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ServiceError) as exc:
         await recovery_sync(payload, db=mock_db, _=None)
-    assert exc.value.status_code == 404
+    assert exc.value.status == 404
 
 
 @pytest.mark.asyncio(loop_scope="module")

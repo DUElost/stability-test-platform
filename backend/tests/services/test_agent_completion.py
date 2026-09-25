@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
-from fastapi import HTTPException
+from backend.services.errors import ServiceError
 
 from backend.models.enums import JobStatus, LeaseStatus
 from backend.services.agent_completion import (
@@ -119,7 +119,7 @@ class TestCompleteAgentJobGuards:
             async def execute(self, *_a, **_k):
                 return _Result()
 
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ServiceError) as exc:
             await complete_agent_job(
                 _Db(),  # type: ignore[arg-type]
                 9,
@@ -128,7 +128,7 @@ class TestCompleteAgentJobGuards:
                     fencing_token="t",
                 ),
             )
-        assert exc.value.status_code == 400
+        assert exc.value.status == 400
         assert exc.value.detail["code"] == "INVALID_TERMINAL_STATUS"
 
     @pytest.mark.asyncio
@@ -146,7 +146,7 @@ class TestCompleteAgentJobGuards:
             async def execute(self, *_a, **_k):
                 return _Result()
 
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ServiceError) as exc:
             await complete_agent_job(
                 _Db(),  # type: ignore[arg-type]
                 9,
@@ -155,5 +155,5 @@ class TestCompleteAgentJobGuards:
                     fencing_token="t",
                 ),
             )
-        assert exc.value.status_code == 400
+        assert exc.value.status == 400
         assert exc.value.detail["code"] == "INVALID_TERMINAL_STATUS"

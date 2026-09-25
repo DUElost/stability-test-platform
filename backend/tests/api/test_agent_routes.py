@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
+from backend.services.errors import ServiceError
 
 from backend.api.routes.agent_api import (
     _ExtendLockIn,
@@ -212,7 +212,7 @@ async def test_job_heartbeat_cannot_claim_pending_job():
     try:
         await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
-            with pytest.raises(HTTPException) as exc_info:
+            with pytest.raises(ServiceError) as exc_info:
                 await job_heartbeat(
                     job_id=seed["job_id"],
                     payload=_JobHeartbeatIn(
@@ -221,7 +221,7 @@ async def test_job_heartbeat_cannot_claim_pending_job():
                     db=async_db,
                     _=None,
                 )
-        assert exc_info.value.status_code == 409
+        assert exc_info.value.status == 409
 
         db = SessionLocal()
         try:
@@ -327,14 +327,14 @@ async def test_complete_job_maps_finished_to_completed():
 @pytest.mark.asyncio
 async def test_complete_job_rejects_unknown_status_string():
     """#779：未知/损坏 status 必须 400，不得静默落 FAILED。"""
-    from fastapi import HTTPException
+    from backend.services.errors import ServiceError
 
     seed = _seed_job(status=JobStatus.RUNNING.value)
     token = _setup_lease(seed)
     try:
         await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
-            with pytest.raises(HTTPException) as exc_info:
+            with pytest.raises(ServiceError) as exc_info:
                 await complete_job(
                     job_id=seed["job_id"],
                     payload=_RunCompleteIn(
@@ -344,7 +344,7 @@ async def test_complete_job_rejects_unknown_status_string():
                     db=async_db,
                     _=None,
                 )
-        assert exc_info.value.status_code == 400
+        assert exc_info.value.status == 400
         detail = exc_info.value.detail
         assert detail["code"] == "INVALID_TERMINAL_STATUS"
         assert detail["requested_status"] == "SUCCESS"
@@ -363,14 +363,14 @@ async def test_complete_job_rejects_unknown_status_string():
 @pytest.mark.asyncio
 async def test_complete_job_rejects_whitespace_padded_unknown_status():
     """#779：带空白的未知串 strip 后仍须拒绝（不可伪装 FAILED）。"""
-    from fastapi import HTTPException
+    from backend.services.errors import ServiceError
 
     seed = _seed_job(status=JobStatus.RUNNING.value)
     token = _setup_lease(seed)
     try:
         await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
-            with pytest.raises(HTTPException) as exc_info:
+            with pytest.raises(ServiceError) as exc_info:
                 await complete_job(
                     job_id=seed["job_id"],
                     payload=_RunCompleteIn(
@@ -380,7 +380,7 @@ async def test_complete_job_rejects_whitespace_padded_unknown_status():
                     db=async_db,
                     _=None,
                 )
-        assert exc_info.value.status_code == 400
+        assert exc_info.value.status == 400
         assert exc_info.value.detail["requested_status"] == "DONE"
     finally:
         _cleanup_seed(seed)
@@ -389,14 +389,14 @@ async def test_complete_job_rejects_whitespace_padded_unknown_status():
 @pytest.mark.asyncio
 async def test_complete_job_rejects_non_terminal_mapped_status():
     """#779：映射到 RUNNING 的串（如 RUNNING）亦须 400。"""
-    from fastapi import HTTPException
+    from backend.services.errors import ServiceError
 
     seed = _seed_job(status=JobStatus.RUNNING.value)
     token = _setup_lease(seed)
     try:
         await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
-            with pytest.raises(HTTPException) as exc_info:
+            with pytest.raises(ServiceError) as exc_info:
                 await complete_job(
                     job_id=seed["job_id"],
                     payload=_RunCompleteIn(
@@ -406,7 +406,7 @@ async def test_complete_job_rejects_non_terminal_mapped_status():
                     db=async_db,
                     _=None,
                 )
-        assert exc_info.value.status_code == 400
+        assert exc_info.value.status == 400
         assert exc_info.value.detail["code"] == "INVALID_TERMINAL_STATUS"
     finally:
         _cleanup_seed(seed)
@@ -610,13 +610,13 @@ async def test_extend_lock_conflict():
 
         await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
-            with pytest.raises(HTTPException) as exc_info:
+            with pytest.raises(ServiceError) as exc_info:
                 await extend_job_lock(
                     job_id=seed["job_id"],
                     payload=_ExtendLockIn(fencing_token=token),
                     db=async_db, _=None,
                 )
-        assert exc_info.value.status_code == 409
+        assert exc_info.value.status == 409
     finally:
         _cleanup_seed(seed)
 
@@ -751,7 +751,7 @@ async def test_extend_batch_rejects_oversized_batch(monkeypatch):
     monkeypatch.setattr(lease_extend, "_LEASE_EXTEND_BATCH_MAX", 2)
     await async_engine.dispose()
     async with AsyncSessionLocal() as async_db:
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(ServiceError) as exc_info:
             await extend_leases_batch(
                 payload=_ExtendBatchIn(
                     host_id="h-1",
@@ -761,7 +761,7 @@ async def test_extend_batch_rejects_oversized_batch(monkeypatch):
                 ),
                 db=async_db, _=None,
             )
-    assert exc_info.value.status_code == 413
+    assert exc_info.value.status == 413
 
 
 @pytest.mark.asyncio

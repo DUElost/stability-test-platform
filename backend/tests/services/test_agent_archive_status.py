@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from fastapi import HTTPException
+from backend.services.errors import ServiceError
 from unittest.mock import AsyncMock, MagicMock
 
 from backend.services.agent_archive_status import get_agent_archive_status
@@ -13,9 +13,9 @@ from backend.services.agent_archive_status import get_agent_archive_status
 async def test_host_not_found_404():
     db = AsyncMock()
     db.get = AsyncMock(return_value=None)
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ServiceError) as exc:
         await get_agent_archive_status(db, "missing-host")
-    assert exc.value.status_code == 404
+    assert exc.value.status == 404
 
 
 @pytest.mark.asyncio
