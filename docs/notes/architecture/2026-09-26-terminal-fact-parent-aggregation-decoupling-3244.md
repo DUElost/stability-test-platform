@@ -1,7 +1,7 @@
 # ADR-0052 D1–D5 实施：终态事实与父 Run 聚合解耦（#3244）
 
 Status: implemented
-Class: refactor
+Class: architecture
 
 关联：[#3244](https://github.com/DUElost/stability-test-platform/issues/3244)（实施单）、
 [ADR-0052 v1.1](../../adr/ADR-0052-terminal-fact-parent-aggregation-decoupling.md)（裁决本体：
