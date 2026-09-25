@@ -9,6 +9,10 @@ JSON 真的能喂给 PipelineEngine 跑通"——本文件补上这条链路断�
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import io
+import tarfile
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -26,11 +30,32 @@ from backend.services.admission_pump import claim_queued_plan_runs, plan_admissi
 from backend.services.plan_dispatcher_sync import dispatch_plan_sync
 
 
-class _FakeScriptRegistry:
-    """Resolve every script name to the same on-disk file (test only needs one script)."""
+def _publish_package(packages_root: Path, name: str, version: str, files: dict[str, str]) -> str:
+    """写站点布局 ``packages/{name}/{version}.tar.gz``，返回整包 sha256。
 
-    def __init__(self, path: str):
-        self._path = path
+    ADR-0051 起 Agent 恒 strict：脚本只经「DB 包身份 → tools_cache」执行，没有
+    ``package_sha256`` 的条目直接 ``PackageUnavailable``。所以契约夹具必须给出**真包**，
+    而不是把 strict 关掉——后者验的是一条生产已不存在的路径。
+    """
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for rel, body in sorted(files.items()):
+            data = body.encode("utf-8")
+            info = tarfile.TarInfo(rel)
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+    blob = buf.getvalue()
+    (packages_root / name).mkdir(parents=True, exist_ok=True)
+    (packages_root / name / f"{version}.tar.gz").write_bytes(blob)
+    return hashlib.sha256(blob).hexdigest()
+
+
+class _FakeScriptRegistry:
+    """Resolve every script name to the same published package (test only needs one script)."""
+
+    def __init__(self, entry_basename: str, package_sha256: str):
+        self._entry_basename = entry_basename
+        self._package_sha256 = package_sha256
 
     def resolve(self, name: str, version: str):
         assert name
@@ -40,8 +65,9 @@ class _FakeScriptRegistry:
             name=name,
             version=version,
             script_type="python",
-            nfs_path=self._path,
+            nfs_path=f"/s/{self._entry_basename}",
             content_sha256="c" * 64,
+            package_sha256=self._package_sha256,
         )
 
 
@@ -75,7 +101,7 @@ def _dispatch_fixture(db_session):
 
 
 def test_dispatcher_pipeline_def_is_executable_by_agent_pipeline_engine(
-    db_session, _dispatch_fixture, tmp_path,
+    db_session, _dispatch_fixture, tmp_path, monkeypatch,
 ):
     plan, device, host = _dispatch_fixture
 
@@ -117,18 +143,19 @@ def test_dispatcher_pipeline_def_is_executable_by_agent_pipeline_engine(
     assert "lifecycle" in pipeline_def
     assert set(pipeline_def.keys()) <= {"lifecycle"}, "唯一顶层键必须是 lifecycle（stages/phases 已废弃）"
 
-    script_path = tmp_path / "check_device.py"
-    script_path.write_text(
-        "import json\n"
-        "print(json.dumps({'metrics': {'ok': True}}))\n",
-        encoding="utf-8",
+    packages_root = tmp_path / "packages"
+    package_sha = _publish_package(
+        packages_root, "check_device", "1.0.0",
+        {"check_device.py": "import json\nprint(json.dumps({'metrics': {'ok': True}}))\n"},
     )
+    monkeypatch.setenv("STP_PACKAGES_ROOT", str(packages_root))
+    monkeypatch.setenv("STP_TOOLS_CACHE_ROOT", str(tmp_path / "tools_cache"))
 
     engine = PipelineEngine(
         adb=SimpleNamespace(adb_path="adb"),
         serial=device.serial,
         run_id=job.id,
-        script_registry=_FakeScriptRegistry(str(script_path)),
+        script_registry=_FakeScriptRegistry("check_device.py", package_sha),
         operation_scheduler=OperationScheduler(),
     )
 

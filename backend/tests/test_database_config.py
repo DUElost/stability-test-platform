@@ -336,6 +336,46 @@ def test_attach_pool_metrics_installs_checkout_probe_on_pg_engine():
         pgish.dispose()
 
 
+def test_attach_pool_metrics_survives_engine_dispose(monkeypatch):
+    """#3247：``Engine.dispose()`` 以 ``pool.recreate()`` 换新池后，两类池观测都不得失明。
+
+    曾经的形态（CI 全量里 async 池峰恒读 0.0、本地单跑读 17）：
+    - Gauge 回调读闭包里的**旧池** → dispose 之后 ``checked_out`` 恒 0；
+    - ``connect`` 计时/失败包装装在**旧池实例**上，新池没有 → 取连接超时、槽耗尽从此不计数。
+    生产只在关停时 dispose，但测试进程里前序用例 dispose 过 async 引擎后，#3243 的验收线
+    ①（取连接失败=0）与④（池不越预算）就在量一只已经拔掉的表。
+    """
+    import pytest
+    from sqlalchemy.exc import TimeoutError as SATimeoutError
+
+    from backend.core import database
+
+    engine = _make_probe_pool(size=1, overflow=0, timeout=0.05)
+    # 只为走真实接线入口：本用例验「换池后仍接线」，与方言无关（同 `_make_probe_pool` 的理由）
+    monkeypatch.setattr(database, "is_sqlite_url", lambda url: False)
+    database._attach_pool_metrics(engine, "probe_dispose")
+    old_pool = engine.pool
+    engine.dispose()
+    assert engine.pool is not old_pool, "前提：dispose 必须真的换了池，否则本用例测不到什么"
+
+    get = _probe_registry()
+    timeout_labels = {"engine": "probe_dispose", "kind": "timeout"}
+    timeout_before = get("stability_db_pool_checkout_failures_total", timeout_labels)
+    held = engine.pool.connect()
+    try:
+        assert get("stability_db_pool_checked_out", {"engine": "probe_dispose"}) == 1.0, (
+            "换池后 Gauge 仍在读旧池"
+        )
+        with pytest.raises(SATimeoutError):
+            engine.pool.connect()
+    finally:
+        held.close()
+        engine.dispose()
+    assert get("stability_db_pool_checkout_failures_total", timeout_labels) == timeout_before + 1, (
+        "换池后取连接超时不再计数：connect 包装没随新池重装"
+    )
+
+
 # ── #2959：取连接失败的成因分类（连接槽耗尽必须与"其它 DBAPI 错误"分得开）──────────
 def _probe_failures():
     """覆盖三类成因的真实形状：两个驱动直抛、被 SQLAlchemy 包一层、纯消息、排队超时。"""

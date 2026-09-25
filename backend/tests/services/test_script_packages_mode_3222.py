@@ -9,23 +9,25 @@ from backend.models.host import Host
 from backend.services.script_presence import derive_packages_mode, fleet_packages_mode
 
 
-def _e(name, sha, active):
-    entry = {"name": name, "version": "1.0.0", "ok": True}
-    if sha is not None:
-        entry["package_sha256"] = sha
-        entry["package_active"] = active
-    return entry
+def _e(name, active):
+    # 真实 ack 形态（script_verifier.verify_scripts_payload）：不回传 package_sha256，
+    # 带身份判据在控制面 expected 侧——夹具必须镜像这一形态，曾经的版本塞了
+    # package_sha256 进 ack，测试绿而生产 48 台全 unknown（2026-09-25 首采当场暴露）。
+    return {"name": name, "version": "1.0.0", "ok": True, "package_active": active}
 
 
 def test_derive_matrix():
-    assert derive_packages_mode([], reachable_empty=True) is None
-    assert derive_packages_mode([], reachable_empty=False) is None
-    assert derive_packages_mode([_e("a", None, None)], reachable_empty=False) is None       # 全无包身份 → unknown
-    assert derive_packages_mode([_e("a", "x" * 64, True), _e("b", "y" * 64, True)], False) == "package"
-    assert derive_packages_mode([_e("a", "x" * 64, False)], False) == "tree"
-    assert derive_packages_mode([_e("a", "x" * 64, True), _e("b", "y" * 64, False)], False) == "mixed"
-    # 无包身份的行不参与判定（tree 模式 agent 全部 ok 也不误报 package）
-    assert derive_packages_mode([_e("a", None, None), _e("b", "y" * 64, True)], False) == "package"
+    K = {("a", "1.0.0"), ("b", "1.0.0")}
+    assert derive_packages_mode([], K, reachable_empty=True) is None
+    assert derive_packages_mode([], K, reachable_empty=False) is None
+    assert derive_packages_mode([_e("a", True)], set(), False) is None            # expected 全无包身份 → unknown
+    assert derive_packages_mode([_e("a", True), _e("b", True)], K, False) == "package"
+    assert derive_packages_mode([_e("a", False)], K, False) == "tree"
+    assert derive_packages_mode([_e("a", True), _e("b", False)], K, False) == "mixed"
+    # ack 里有行但都不在 expected 带身份集（老 agent 未回 package_active 等情形）→ unknown 不误报
+    assert derive_packages_mode([_e("c", True)], K, False) is None
+    # 可达集内部分目标带包身份：只判带身份的行，不误伤
+    assert derive_packages_mode([_e("a", True), _e("z", False)], K, False) == "package"
 
 
 def test_fleet_packages_mode_counts(db_session: Session):

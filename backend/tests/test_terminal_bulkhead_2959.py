@@ -55,6 +55,9 @@ async def test_admits_at_most_concurrency_at_a_time(monkeypatch):
     monkeypatch.setenv("STP_TERMINAL_BULKHEAD_CONCURRENCY", "2")
     monkeypatch.setenv("STP_TERMINAL_BULKHEAD_WAIT_MS", "2000")
 
+    # 进程级 Counter 不随 `_reset_for_tests()` 清零：同进程里先跑的用例（如 #3243 回流
+    # 压测会拒 600+ 次）会留下累计值。与本文件其他用例一样只断言**增量**（#3247）。
+    rejected_before = _get("stability_terminal_bulkhead_rejected_total")
     concurrent = 0
     peak = 0
     done = 0
@@ -72,7 +75,7 @@ async def test_admits_at_most_concurrency_at_a_time(monkeypatch):
 
     assert done == 6, "所有请求最终都要被放行（排队而不是丢弃）"
     assert peak == 2, f"同刻持有名额 {peak} ≠ 配置 2"
-    assert _get("stability_terminal_bulkhead_rejected_total") == 0.0
+    assert _get("stability_terminal_bulkhead_rejected_total") == rejected_before, "排队预算内不得拒绝"
 
 
 async def test_wait_budget_rejects_and_does_not_leak_slot(monkeypatch):
