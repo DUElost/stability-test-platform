@@ -1,3 +1,13 @@
+"""PlanRun 终态聚合：纯计算 + 落库（#3299 收口）。
+
+本模块只回答「所有 job 落终态后，父 Run 该是什么状态、事实写进哪些列」；
+**终态之后做什么**（RUN_* 通知、报告缓存刷新、链式触发、dedup 入队、RISK_HIGH、
+链恢复）一律归 ``backend.services.plan_run_finalization`` 编排。``apply_*`` 的
+调用方在返回 True 后经编排者反应（``finalize_parent_run_*`` /
+``announce_parent_terminal``）。不得再在本模块 import 任何上游副作用模块——
+那正是本单解开的五模块环的闭合边。
+"""
+
 from __future__ import annotations
 
 import logging
@@ -23,8 +33,6 @@ _TERMINAL_PLAN_RUN_STATUSES = {
     PlanRunStatus.PARTIAL_SUCCESS.value,
     PlanRunStatus.FAILED.value,
 }
-
-_NOTIFY_AS_FAILED = {PlanRunStatus.FAILED}
 
 def _resolve_plan_run_status(
     *,
@@ -54,116 +62,6 @@ def _abort_requested(run: Any) -> bool:
     return isinstance(run_context, dict) and "abort_requested" in run_context
 
 
-def notify_plan_run_terminal(
-    run: Any,
-    *,
-    new_status: PlanRunStatus | str,
-    error_message: str,
-) -> None:
-    """Best-effort PlanRun-level notification (once per terminalization)."""
-    try:
-        from backend.services.notification_service import dispatch_notification_async
-
-        status = (
-            new_status
-            if isinstance(new_status, PlanRunStatus)
-            else PlanRunStatus(new_status)
-        )
-        event_type = (
-            "RUN_FAILED" if status in _NOTIFY_AS_FAILED else "RUN_COMPLETED"
-        )
-        dispatch_notification_async(event_type, {
-            "run_id": int(run.id),
-            "plan_id": int(getattr(run, "plan_id", 0) or 0),
-            "task_name": f"plan-run-{run.id}",
-            "task_type": "plan",
-            "device_serial": "",
-            "error_message": error_message,
-        })
-    except Exception:
-        logger.exception(
-            "plan_run_terminal_notification_failed plan_run=%s status=%s",
-            getattr(run, "id", None),
-            getattr(new_status, "value", new_status),
-        )
-
-
-# Backward-compatible private alias used by this module.
-_notify_plan_run_terminal = notify_plan_run_terminal
-
-
-def maybe_notify_risk_high(
-    db: Any,
-    *,
-    plan_run_id: int | None,
-    risk_summary: dict[str, Any] | None,
-) -> bool:
-    """Emit RISK_HIGH once when AEE/ANR aggregation reaches level S.
-
-    Deduped via ``run_context.risk_high_notified`` so multi-job post-completion
-    does not spam. Returns True when a notification was dispatched.
-    """
-    if not plan_run_id or not isinstance(risk_summary, dict):
-        return False
-    if str(risk_summary.get("risk_level", "")).upper() != "S":
-        return False
-
-    try:
-        from sqlalchemy import select
-        from sqlalchemy.orm.attributes import flag_modified
-
-        from backend.models.plan_run import PlanRun
-        from backend.services.notification_service import dispatch_notification_async
-
-        pr = db.execute(
-            select(PlanRun)
-            .where(PlanRun.id == int(plan_run_id))
-            .with_for_update(key_share=True)  # SQLAlchemy key_share → PG FOR NO KEY UPDATE (#1473)
-        ).scalar_one_or_none()
-        if pr is None:
-            return False
-
-        run_ctx = dict(pr.run_context or {})
-        if run_ctx.get("risk_high_notified"):
-            return False
-
-        run_ctx["risk_high_notified"] = {
-            "at": datetime.now(timezone.utc).isoformat(),
-            "risk_level": "S",
-            "counts": (risk_summary.get("counts") or {}),
-        }
-        pr.run_context = run_ctx
-        if hasattr(pr, "_sa_instance_state"):
-            flag_modified(pr, "run_context")
-        db.commit()
-
-        counts = risk_summary.get("counts") if isinstance(risk_summary.get("counts"), dict) else {}
-        by_type = counts.get("by_type") if isinstance(counts.get("by_type"), dict) else {}
-        type_bits = ", ".join(f"{k}={v}" for k, v in sorted(by_type.items())[:12])
-        dispatch_notification_async("RISK_HIGH", {
-            "run_id": int(pr.id),
-            "plan_id": int(getattr(pr, "plan_id", 0) or 0),
-            "task_name": f"plan-run-{pr.id}",
-            "task_type": "plan",
-            "risk_summary": (
-                f"PlanRun {pr.id} risk_level=S"
-                + (f" ({type_bits})" if type_bits else "")
-            ),
-            "risk_level": "S",
-            "counts": counts,
-        })
-        return True
-    except Exception:
-        try:
-            db.rollback()
-        except Exception:
-            pass
-        logger.exception(
-            "plan_run_risk_high_notification_failed plan_run=%s", plan_run_id,
-        )
-        return False
-
-
 def _finalize_plan_run(
     run: Any,
     *,
@@ -174,6 +72,12 @@ def _finalize_plan_run(
     aborted: int,
     abort_requested: bool,
 ) -> bool:
+    """把终态事实写到 run 行上（纯计算 + 列赋值，#3299）。
+
+    通知与报告缓存刷新**不再**发生在这里：调用方在 ``apply_*`` 返回 True 后经
+    ``plan_run_finalization.announce_parent_terminal`` 反应，文案输入
+    （``result_summary`` 的 total/completed/failed）就是本函数刚写入的值。
+    """
     PlanRunStateMachine.transition(run, new_status, reason="aggregation")
     run.ended_at = datetime.now(timezone.utc)
     run.result_summary = {
@@ -186,21 +90,6 @@ def _finalize_plan_run(
         "abort_requested": abort_requested,
     }
     record_plan_run_terminal(run.status)
-    failed = failed_only + aborted
-    _notify_plan_run_terminal(
-        run,
-        new_status=new_status,
-        error_message=(
-            f"PlanRun {new_status.value}: {completed}/{total} completed, "
-            f"{failed} failed"
-        ),
-    )
-    # #1082：终态后数据静止 —— 批量重算各 job 的报告缓存，快照从此 = 最终结果。
-    # Best-effort 后台执行（重算 N 份报告不阻塞聚合事务）；调度失败放弃本轮，
-    # /report/cached 的 live 兜底仍给出正确数据。
-    from backend.services.post_completion import _schedule_report_cache_refresh
-
-    _schedule_report_cache_refresh(int(run.id))
     return True
 
 
@@ -251,14 +140,11 @@ def apply_plan_run_aggregation(run: Any, jobs: Sequence[Any], *, db: Any = None)
 
     total = len(jobs)
     if total == 0:
+        # 空集路径同样只落事实（#3299）；RUN_FAILED「no jobs」通知由调用方经
+        # announce_parent_terminal(run, no_jobs=True) 发出。
         PlanRunStateMachine.transition(run, PlanRunStatus.FAILED, reason="empty_job_set")
         run.ended_at = datetime.now(timezone.utc)
         record_plan_run_terminal(run.status)
-        _notify_plan_run_terminal(
-            run,
-            new_status=PlanRunStatus.FAILED,
-            error_message="PlanRun FAILED: no jobs were created for this plan",
-        )
         return True
 
     failed_only = sum(1 for j in jobs if JobStatus(j.status) == JobStatus.FAILED)

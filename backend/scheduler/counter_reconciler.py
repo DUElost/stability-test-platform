@@ -18,6 +18,7 @@ from backend.models.job import JobInstance
 from backend.models.plan_run import PlanRun
 from backend.services.job_terminalization import recount_plan_run_counters
 from backend.services.plan_run_aggregation import apply_plan_run_aggregation_from_counters
+from backend.services.plan_run_finalization import announce_parent_terminal
 
 from backend.core.settings.scheduler import get_scheduler_settings
 
@@ -107,8 +108,12 @@ def _reconcile_plan_run_counters_body(
                 )
                 # #789: recount alone leaves RUNNING runs stuck — re-aggregate when
                 # counters now show all jobs terminal.
-                if int(run.total_job_count or 0) > 0 and apply_plan_run_aggregation_from_counters(run):
-                    aggregated += 1
+                if int(run.total_job_count or 0) > 0:
+                    if apply_plan_run_aggregation_from_counters(run):
+                        # #3299：聚合器已是纯函数——补偿路径落终态后同样要经
+                        # 编排者发 RUN_* 通知与 #1082 报告刷新（原为 apply_* 内联）。
+                        announce_parent_terminal(run)
+                        aggregated += 1
 
         if fixed:
             db.commit()

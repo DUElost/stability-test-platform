@@ -17,7 +17,7 @@ from backend.core.database import get_db
 from backend.models.enums import JobStatus
 from backend.models.job import JobInstance
 from backend.models.plan_run import PlanRun
-from backend.services.plan_run_abort import abort_pending_job_ids
+from backend.services.plan_run_context import abort_pending_job_ids
 
 router = APIRouter(prefix="/api/v1/jobs", tags=["jobs"])
 

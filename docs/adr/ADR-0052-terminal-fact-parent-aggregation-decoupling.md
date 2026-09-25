@@ -25,8 +25,8 @@
 | 每个 Job 终态时，在**同一事务**内锁父 Run 行并自增计数：`SELECT plan_run … FOR NO KEY UPDATE`（`key_share=True`）→ `_bump_counters` → `_bump_host_counters` | `backend/services/job_terminalization.py:135-175`（lock `:150`，计数 `:112/:124`） |
 | ABORTED 分支**额外**一次父行读改写：把 job id 追加进 `run_context.abort_requested.acknowledged_job_ids`（同样 `FOR NO KEY UPDATE`） | `backend/services/agent_completion.py:438-453` |
 | `acknowledged_job_ids` **全仓无消费方**：abort 入口只做初始空数组与保留合并；前端仅类型声明；reaper / 审计 / UI 均不读 | `plan_run_abort.py:445/534/566/577`、`frontend/src/utils/api/types.ts:1602`（grep 全量清单） |
-| 父 Run 终态由**最后到达的那个 Job** 顺带判定：`terminal_job_count == total_job_count` 时 `apply_plan_run_aggregation_from_counters` → `_finalize_plan_run`（状态迁移 + `ended_at` + `result_summary` + 通知 + 报告缓存刷新调度） | `job_terminalization.py:175-181`、`plan_run_aggregation.py:167-204` |
-| chain / dedup 已在**提交后**执行（#986 契约）：`_post_aggregation_side_effects_*` 先 `commit()` 再 `trigger_next_plan` / `enqueue_dedup_terminal_*` | `job_terminalization.py:66-100` |
+| 父 Run 终态由**最后到达的那个 Job** 顺带判定：`terminal_job_count == total_job_count` 时 `apply_plan_run_aggregation_from_counters` → `_finalize_plan_run`（状态迁移 + `ended_at` + `result_summary`）。通知与报告缓存刷新自 #3299 起移出聚合器，由 `plan_run_finalization.announce_parent_terminal` 在 applied 后编排（原「顺带判定附带副作用」的形态即本 ADR 要解耦的） | `job_terminalization.py`、`plan_run_aggregation.py`、`plan_run_finalization.py` |
+| chain / dedup 已在**提交后**执行（#986 契约）：#3299 起为 `plan_run_finalization.finalize_parent_run_*`——announce（通知+刷新）→ `commit()` → `trigger_next_plan` / `enqueue_dedup_terminal_*`（原 `job_terminalization._post_aggregation_side_effects_*` 并入编排者，边界顺序不变） | `job_terminalization.py`、`plan_run_finalization.py` |
 | `post_completion_task` 逐 Job 入队（SAQ `key=pc:{job_id}`，commit 后），与主链**共用单队列** worker（`SAQ_CONCURRENCY` 默认 10） | `agent_completion.py:499-510`、`backend/tasks/saq_worker.py:52-53` |
 | 对账 sweep 已存在且定位是修复路径：`counter_reconciler`（`lookback 48h / batch 200`，周期 300s，leader 选举内跑） | `backend/scheduler/counter_reconciler.py`、`backend/core/settings/scheduler.py:74/101-102` |
 

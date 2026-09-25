@@ -30,7 +30,7 @@ from backend.models.enums import JobStatus
 from backend.models.host import Host
 from backend.models.job import JobInstance
 from backend.models.plan_run import PlanRun
-from backend.services.plan_run_abort import abort_pending_job_ids
+from backend.services.plan_run_context import abort_pending_job_ids
 from backend.services.host_maintenance import (
     HostMaintenanceConflict,
     acquire_maintenance_window,

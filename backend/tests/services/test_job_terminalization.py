@@ -36,13 +36,22 @@ def test_aggregation_from_counters_success():
         terminal_job_count=3,
         completed_job_count=3,
     )
+
+    def _transition(obj, status, reason=None):
+        obj.status = status.value if hasattr(status, "value") else status
+
     with patch("backend.services.plan_run_aggregation.PlanRunStateMachine") as sm, \
          patch("backend.services.plan_run_aggregation.record_plan_run_terminal"), \
          patch("backend.services.notification_service.dispatch_notification_async") as notify:
+        sm.transition.side_effect = _transition
         assert apply_plan_run_aggregation_from_counters(run) is True
         sm.transition.assert_called_once()
         assert run.result_summary["completed"] == 3
         assert run.result_summary["failed_only"] == 0
+        # #3299：聚合器不再内联通知——RUN_* 归编排者（announce）发。
+        notify.assert_not_called()
+        from backend.services.plan_run_finalization import announce_parent_terminal
+        announce_parent_terminal(run)
         assert notify.call_args[0][0] == "RUN_COMPLETED"
 
 
@@ -60,11 +69,19 @@ def test_aggregation_from_counters_abort_override():
         completed_job_count=2,
         run_context={"abort_requested": {"reason": "user"}},
     )
+
+    def _transition(obj, status, reason=None):
+        obj.status = status.value if hasattr(status, "value") else status
+
     with patch("backend.services.plan_run_aggregation.PlanRunStateMachine") as sm, \
          patch("backend.services.plan_run_aggregation.record_plan_run_terminal"), \
          patch("backend.services.notification_service.dispatch_notification_async") as notify:
+        sm.transition.side_effect = _transition
         assert apply_plan_run_aggregation_from_counters(run) is True
         assert sm.transition.call_args[0][1] == PlanRunStatus.FAILED
+        notify.assert_not_called()
+        from backend.services.plan_run_finalization import announce_parent_terminal
+        announce_parent_terminal(run)
         assert notify.call_args[0][0] == "RUN_FAILED"
 
 

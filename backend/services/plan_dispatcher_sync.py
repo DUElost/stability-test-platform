@@ -23,7 +23,7 @@ from backend.models.host import Device, Host
 from backend.models.job import JobInstance
 from backend.models.plan import Plan, PlanStep
 from backend.models.plan_run import PlanRun
-from backend.services.plan_run_abort import run_abort_pending
+from backend.services.plan_run_context import run_abort_pending
 from backend.models.project import TestProject
 from backend.models.project_model import ProjectModel
 from backend.models.resource_pool import ResourceAllocation, ResourcePool
