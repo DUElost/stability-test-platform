@@ -231,6 +231,8 @@ RUNNING job 新增 `execution_state` 子状态列（拟），把「一个 RUNNIN
 
 ### 6. O(1) 终态聚合计数器 + 单一 terminalization 入口
 
+> **部分替代（2026-09-25）**：本节「终态事务内单行原子自增 `terminal_job_count`」与「每个 Job 持 `FOR NO KEY UPDATE` 父行锁」两处执行语义，由 [ADR-0052](./ADR-0052-terminal-fact-parent-aggregation-decoupling.md) D1/D3 替代（父级计数移出 Job 终态事务，改由按 `plan_run_id` 的聚合者批量重算）；「`terminal == total` 触发终态收敛」「单一 terminalization 入口 + 集中服务与对账 sweep 自愈」继承不变。逐条对照见 ADR-0052 §3。
+
 **现状（已核实）**：`PlanAggregator.on_job_terminal` 每次终态 `SELECT` 全部兄弟 job 重算（`backend/services/aggregator.py`），O(N²)（缺口③）。且聚合语义**区分 FAILED 与 ABORTED**：`apply_plan_run_aggregation` 分别统计 `failed_only` 与 `aborted`，并据此推导 SUCCESS / PARTIAL_SUCCESS / FAILED、写入 `result_summary` 的 `failed_only` / `aborted` 字段。
 
 > **已被取代（2026-09-18；v1.1 2026-09-20 恢复三态产出，#2992 勘误）**：本段原先引用的行号（`plan_run_aggregation.py:43-44` / `:58-66` / `:83-85`）已随实现改写漂移，故删行号锚。推导规则由 [ADR-0048](./ADR-0048-execution-status-semantics-v2.md) 取代：判定输入只有 `failed_only` / `aborted` / `abort_requested` 三个计数（`_resolve_plan_run_status`）——`failed_only > 0` → PARTIAL_SUCCESS 且**不判红、不断链**，比例阈值不再参与终态判定；本节对计数器区分度的要求（须能直接推导终态）不变。

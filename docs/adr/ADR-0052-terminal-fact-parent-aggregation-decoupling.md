@@ -1,10 +1,10 @@
 # ADR-0052：终态事实与父 Run 聚合解耦（Job 事务不写父级热行）
 
-- 状态：**Proposed** v0.1（2026-09-24 起草；**未裁决**——按 owner 口径，部署窗真机复跑达标后才转 Accepted，见 §5）
+- 状态：**Accepted** v1.0（2026-09-25 裁决：**D1–D5 接受并开始实现；D6 延后**，见 §9）
 - 优先级：P1（#3243 校准显示：被**接纳**的 `/complete` p99≈1.1s，主项是父行串行段；P0（ADR-0047）治的是容量与过载语义，没拆这条热点）
 - 目标里程碑：M7
 - 日期：2026-09-24
-- 决策者：owner（待裁决）；起草：平台研发组
+- 决策者：owner（2026-09-25 授权 Claude 裁决，见 §9）；起草：平台研发组
 - 归属域：semantic-ownership plan-run-scaling
 - 标签：terminalization, aggregation, row-lock, idempotency, outbox, ADR-0026, #2959, #3244
 - 关联：[#3244](https://github.com/DUElost/stability-test-platform/issues/3244)（实施单：**须 ADR 先行**，本稿是其第一步）
@@ -14,7 +14,7 @@
   / [ADR-0047](./ADR-0047-db-pool-and-connection-capacity.md)（P0 已裁决并落地：预算门禁 / 503 过载语义 / 终态舱壁）
   / [ADR-0012](./ADR-0012-post-completion-pipeline-jira-automation.md)（post_completion 契约；D6 是独立 Decision；其历史措辞差异见 §3 末）
   / [#3243 校准 Note](../notes/bug-fix/2026-09-24-abort-backflow-scale-3243.md)（本稿的量化依据）
-- 版本记录：v0.1（2026-09-24）首次提出，D1–D6 待裁决；D6（post_completion 隔离）被显式设计为**可单独延后**
+- 版本记录：v1.0（2026-09-25）**裁决**：D1–D5 Accepted、D6 延后（带复议触发器）；§5 拆为「决策门槛（已由 plan_run 556 真机复跑满足）」与「实施验收门槛（原 6 条，实现后复跑判定）」，见 §9。v0.1（2026-09-24）首次提出，D1–D6 待裁决；D6（post_completion 隔离）被显式设计为**可单独延后**
 
 ## 1. 背景
 
@@ -118,6 +118,13 @@ ADR-0026 §6（`docs/adr/ADR-0026-plan-execution-scaling.md:232`）的原文分�
 
 **先部署窗真机复跑，逐条核对；在真实 48 台数据回来前不转 Accepted、不开始实现。**
 
+> **v1.0 口径拆分（2026-09-25 裁决，见 §9）**：下列 6 条中 ①② 衡量的是**实现之后**的效果，
+> 实现前不可能达标——若继续作为「转 Accepted」的前置，会与「不开始实现」互锁。因此拆为两层：
+> - **决策门槛**（是否值得做）：真实 48 台数据证明父 Run 热行仍支配 `/complete` 尾部——
+>   **已满足**（plan_run 556：p99 2.467s，舱壁未放宽；③④⑤ 同轮达标）；
+> - **实施验收门槛**（做完是否算成）：下列 6 条原样保留，实现后以同口径真机中止复跑判定，
+>   ② 的对照基线取 plan_run 556 的 **2.467s**（而非模拟的 ~1.1s）。
+
 1. `plan_run` 热行写入从 ~490 次降到**有界批次**；
 2. `/complete` p99 **明显低于**当前 ~1.1s，且**不靠放宽舱壁**；
 3. 终态 120s 内收敛，计数与 PlanRunHost 一致；
@@ -145,3 +152,19 @@ ADR-0026 §6（`docs/adr/ADR-0026-plan-execution-scaling.md:232`）的原文分�
 2. pending 行「消费即删」vs「保留视界」（重建 / 审计需求）。
 3. D6 独立 Worker 的形态（进程内第二 worker vs 独立进程）。
 4. pending 表的命名与迁移（单数表名，随实施 PR + alembic 落地）。
+
+## 8. 实施衔接
+
+- 终态后副作用的编排者按 [#3299](https://github.com/DUElost/stability-test-platform/issues/3299) 的选定方案落在 `backend/services/plan_run_finalization.py`：先做不改事务边界的纯结构重构（收拢 chain / dedup / 通知 / 报告刷新），D1–D4 随后在该模块内实现；
+- §7 开放问题在实施 PR 内定值，不改本稿不变量；
+- ADR-0026 §6 已同步标注被本稿替代的两处（见 §3）。
+
+## 9. 裁决记录（2026-09-25，owner 授权 Claude 裁决）
+
+| 项 | 裁决 | 依据 |
+|---|---|---|
+| D1–D5 | **Accepted，开始实现** | 决策门槛已由真机数据满足：[#3244 plan_run 556 复跑](https://github.com/DUElost/stability-test-platform/issues/3244#issuecomment-5830027123)（465 作业 / 37 host，机队 48/48 已分发 #3251）`/complete` p99 **2.467s**，比模拟的 ~1.1s 更差，且舱壁维持 16/500ms 未放宽，因此不是回退，是公平基线；同轮 UI / 心跳面全部 < 0.5s、53300 = 0、500 = 0、池峰 async 4 / sync 11、28.3s 收敛——P0 之后剩下的尾部只剩父行串行段，与 §1.2 判断一致。数据的方向与模拟一致，不确定的只是幅度；再采 1–2 次只会收窄幅度，不会改变「做不做」 |
+| §5 | **拆为两层**（见 §5 v1.0 注） | 原文「数据回来前不转 Accepted、不开始实现」与 ①②（只有实现后才可测）互锁；拆开后 6 条全部保留为实施验收门槛，② 的基线改取真机 2.467s |
+| D6 | **延后**，不随本次接受 | 真机同轮 `post_completion` start = done = 456、`saq_queue_depth` 0、`enqueue_failed` +0：共用 worker 槽位在本轮没有表现为瓶颈，D6 暂无证据支撑。**复议触发器**：终态波次中 `saq_queue_depth` 持续 > 0 超过 60s，或心跳 / 续租任务因 worker 槽位被 post_completion 占满而出现延迟 |
+| 实施前置 | 无额外前置 | 实施 PR 须附：§6 回滚演练记录、§7 开放问题定值；合入并部署后按 §5 六条同口径真机中止复跑，结果贴 #3244 |
+| 未采纳 | #3244 评论中「保持 Proposed 并排期实现」 | 与 §5「不开始实现」及 AGENTS.md「改变现行执行语义前必须先由 ADR 正式裁决」冲突：开始实现即须先 Accepted |

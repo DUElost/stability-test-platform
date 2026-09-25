@@ -1,8 +1,8 @@
 # 容量 P0 同窗上线执行手册（控制面 unit + 告警副本 + Agent 削峰）
 
-- **状态**：**手册（未执行）**——2026-09-24 11:3x 基于本机只读实测编写；执行者：owner
+- **状态**：**已执行**（2026-09-25）——Step 1 unit 补丁落盘 + Step 2 告警副本同步/reload（09-25 17:17–17:18，**未重启**：门禁的启动实测待下次重启）；Step 3 机队 48/48 分发（09-25 10:00，含 #3251）；Step 4 真机复跑完成（plan_run 556 于 09-25 17:21:18 中止，8 条验收线数据见 [#3244](https://github.com/DUElost/stability-test-platform/issues/3244)）。执行记录：A 段 = [#2959](https://github.com/DUElost/stability-test-platform/issues/2959) 评论（`gh-comment-once:2959-a-stage-executed-20260925`）；编写：2026-09-24 11:3x 基于本机只读实测；执行者：owner
 - **目的**：把 R523 之后**已合入但未生效**的 P0 改动真正落到本机生产控制面与 48 台 Agent，并按 owner 口径采集 #3244 裁决所需的真机数据
-- **关联**：父单 [#2959](https://github.com/DUElost/stability-test-platform/issues/2959)；控制面 [#3241](https://github.com/DUElost/stability-test-platform/pull/3241)（PR 已合）+ [#3249](https://github.com/DUElost/stability-test-platform/pull/3249)（PR 已合）；Agent [#3251](https://github.com/DUElost/stability-test-platform/pull/3251)（PR 已合，**未分发**）；压测 [#3253](https://github.com/DUElost/stability-test-platform/pull/3253)（已合）；ADR 草案 [`ADR-0052`](../adr/ADR-0052-terminal-fact-parent-aggregation-decoupling.md)（Proposed）
+- **关联**：父单 [#2959](https://github.com/DUElost/stability-test-platform/issues/2959)；控制面 [#3241](https://github.com/DUElost/stability-test-platform/pull/3241)（PR 已合）+ [#3249](https://github.com/DUElost/stability-test-platform/pull/3249)（PR 已合）；Agent [#3251](https://github.com/DUElost/stability-test-platform/pull/3251)（PR 已合；09-25 10:00 已 48/48 分发，`code_version=1fafd052`）；压测 [#3253](https://github.com/DUElost/stability-test-platform/pull/3253)（已合）；ADR 草案 [`ADR-0052`](../adr/ADR-0052-terminal-fact-parent-aggregation-decoupling.md)（Proposed）
 - **依据**：ADR-0047 v1.1（D1/D2/D5）、ADR-0051（部署源与内容寻址）、`tools/dev/check-monitoring-assets.py`（资产对账口径）
 
 > 本手册不是执行记录。执行时请在本文件末尾追加「执行记录」或在 #2959 落评论。
@@ -33,7 +33,7 @@
 | B | Prometheus 平台副本同步 + reload | 规则索引里 `StabilityDbConnectionSlotsExhausted` 无 `for:`、`severity=critical`；`StabilityTerminalBulkheadRejected` 在场；`check-monitoring-assets.py` 该项 `match` |
 | C | Agent #3242 分发（48 台）+ 摘要收敛 | 分发结果无 fail；机队 `agent_artifact_digest` 收敛到新 code digest（在跑作业的 host 允许滞后） |
 | D | 真机复跑观测（真实大 run 中止） | 8 条验收线（见 §2 Step 4），**0×53300 / 0×500 / 池不越预算 / 120s 收敛** |
-| E | #3244 裁决输入 | §2 Step 4 的数据表贴到 #3244；达标才把 ADR-0052 转 Accepted（阈值见其 §5） |
+| E | #3244 裁决输入 | §2 Step 4 的数据表贴到 #3244；达标才把 ADR-0052 转 Accepted（阈值见其 §5）。**已完成**：2026-09-25 plan_run 556 数据贴出，ADR-0052 v1.0 转 Accepted（D1–D5），原 6 条改为实施验收门槛，实现后按本 Step 4 同口径复跑 |
 
 ---
 
@@ -224,6 +224,15 @@ psql "$DATABASE_URL" -c "select count(*) from host where agent_artifact_digest =
 
 补充观测：`increase(stability_terminal_bulkhead_rejected_total[5m])`、`stability_terminal_bulkhead_waiting`、`stability_db_pool_checkout_failures_total` 按 kind 拆分（**应为 0 增长**）。
 
+> **观测量纪律（2026-09-25 复跑实测踩坑）**：对**本轮首次出现**的 5xx / 异常序列，
+> 判据取**原始计数器值**（或 `count_over_time`），**不要用 `increase()`** —— 带标签的计数器序列
+> 「首次自增才出现」，窗口内首个样本已含全部增量，`increase()` 会给出 **0 的假阴性**。
+> 实例（本轮）：`stability_api_requests_total{endpoint="…/complete", status_code="503"}`
+> 原始 = **4**（首样本 `17:22 → 4` 且恒为 4），`increase([30m])` = **0**；同端点
+> `status_code="200"` 序列自 15:34 起连续有样本，`increase()` 正常。未打标签的单例计数器
+> （如 `stability_terminal_bulkhead_rejected_total`）自进程启动即有 0 样本，**不受此影响**。
+> 三方一致核对法：nginx 逐条计数 / 应用侧专用计数器 / 请求级计数器原始值，三者应相等。
+
 > 若本窗中止的是**未完成部署前**就在跑的老 run（例如 plan_run 534 在 Step 3 前已终态），它的数据仍可用于「部署前基线」，不能用作 #3244 的达标证据。
 
 ---
@@ -258,7 +267,7 @@ sudo systemctl restart stability-backend
 - 8 项既有监控资产 drift（node-exporter / `stp-mem-top` / `stp-script-guard` / `stp-skill-usage` 等）——本窗口只收敛平台规则副本一项。
 - unit 模板与 Phase-1 现行形态的两处差异（`check-deploy-source.sh` 的去留、StartLimit* 的模板同步）——StartLimit 本窗已在**实装 unit** 恢复；模板同步属 ADR-0051 Phase 追踪。
 - 多实例 `STP_DB_POOL_INSTANCES`（ADR-0027 未启动）。
-- ADR-0052 的实施（须先转 Accepted，且真机数据达标）。
+- ADR-0052 的实施（2026-09-25 已转 Accepted；实施合入后按 Step 4 同口径复跑，判定其 §5 六条实施验收门槛）。
 
 ## 5. 编写时的只读证据（可复核）
 
