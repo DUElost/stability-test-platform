@@ -93,6 +93,7 @@
 | `STP_RUN_CONSOLE_REPLAY_MAX_LINES` | RunConsole replay 单次回放行数上限（默认 `2000`；#1124） |
 | `STP_RUN_CONSOLE_TERMINAL_RETENTION_SECONDS` | RunConsole 终态运行记录保留秒数（默认 `3600`；#1124） |
 | `STP_RUN_CONSOLE_CANCEL_WAIT_SECONDS` | 跨实例 cancel 等待 owner ack 的上界秒数（默认 `3`；超时 fail-closed；#1737 P3） |
+| `PLAN_RUN_RETENTION_DAYS` | 已终态 PlanRun 及其明细的保留天数（默认 `3`）。明细随 run 一并删除：job、step_trace、产物登记、日志信号由 `run_retention_cleanup` 显式删除，逐用例结果经外键 `CASCADE` 删除。**生产覆盖为 `36500`**，即实际停用清理、保留全部历史（owner 2026-09-25 确认有意；过渡台账 `plan-run-retention-disabled`，出口是 #3230 G4 的长期事实层）。**新站点**若沿用默认值，3 天后会删掉全部运行明细——首跑前须显式决定 |
 | `STP_ADMIN_USER` / `STP_ADMIN_PASSWORD` | Compose 开发初始化管理员；**禁止**用于生产默认值 |
 
 ### Agent 协议门禁

@@ -16,6 +16,11 @@ Class: process
 本次更新已完成代码项的状态，区分当前 CI、历史模拟数据与待验收运行态，并记录探针空过和包解压越界的隔离反例。
 复用本 Note，不新建同主题流程决策。仅交付审计文档，不改变生产和状态机。
 
+同日由另一会话/模型（Claude）独立复核，订正在复审稿 §9 **追加**（§1–§8 原文作为快照保留）：
+A03 的生产生效（unit 无预算门禁与 StartLimit、告警副本未同步）与 A06 的保留期（生产
+`PLAN_RUN_RETENTION_DAYS=36500`，owner 确认有意）均改为已核实事实；A01 归因补充、A02 定级、补入遗漏的 #3232。
+保留期覆盖值同批入过渡台账 `plan-run-retention-disabled`，并在 `environment-variables.md` §1 写明新站点陷阱。
+
 ## Alternatives
 
 - 只输出聊天摘要：不采纳；用户明确要求 Codex CLI 产出仓内 Markdown 文档，审计证据
@@ -25,6 +30,9 @@ Class: process
   运行证据，审计报告不能替代决策。
 - 2026-09-25 直接沿用旧报告缺陷清单：不采纳；ADR-0047 已 Accepted、源码回退已删除，
   当前 CI 又有新的失败事实。必须以当前代码重新校准结论。
+- 复核订正直接改写 A01–A08 原文：不采纳；原文是带基线的快照，改写会抹掉「推论与现场不符」的证据，
+  而这正是订正的价值（C2 即「默认值被当成生产值」）。只追加 §9 与文首指针。
+- 保留期覆盖只写文档不入台账：不采纳；台账的到期执法才能让「无界增长」在 12-31 前被当面续期或收口。
 
 ## Verification
 
@@ -51,6 +59,16 @@ Class: process
 - `python -m scripts.run_gates check:quick` → 16 gates 总流程通过，schema-at-head 因未配置数据库明确跳过；
   49 个本地链接解析通过，`git diff --check` 无空白问题。Tool Contract 门禁只覆盖 fixture 的范围已在报告说明。
 
+2026-09-25 独立复核（§9）：
+
+- 生产只读：`systemctl cat stability-backend`（无预算门禁 `ExecStartPre`、无 `StartLimit*`）；
+  已加载规则文件 35 条、无 `StabilityTerminalBulkheadRejected`，与仓库 36 条逐字节不同；
+  env 只 grep 保留期相关键（`PLAN_RUN_RETENTION_DAYS=36500`），未整读 env、未连生产库。
+- CI run 36058517011 日志：`shed_503=602` 与舱壁用例的 `602.0 == 0.0` 对位；`pool_peak_async=0.0`。
+  其修复与本地复现见 PR #3266 的 Note。
+- 链接与锚点：复审稿全部相对链接与文首 §9 锚点按 GitHub slug 规则解析通过；
+  `check_transitions.py` 与 `tests/test_transitions_registry.py`、`tests/test_env_inventory.py` 通过。
+
 ## Revisit
 
 ADR-0047 裁决、产物丢弃对账、恢复演练、工具适配器试点或 150/3750 阶梯压测
@@ -58,3 +76,6 @@ ADR-0047 裁决、产物丢弃对账、恢复演练、工具适配器试点或 1
 
 2026-09-25 起，ADR-0047 的代码裁决已完成；复审关注运行生效与校准，另增加 CI 判据、
 包解压边界和保留清理后长期统计的验证出口。阶段性建议不直接替代 ADR-0052 的裁决门槛。
+
+§9 的 C1 在 #2959 手册 Step 1–2 执行后即过期，届时在 §9 追加一行生效证据，不改原表；
+C2 随过渡台账 `plan-run-retention-disabled` 到期（2026-12-31）复核，或在长期事实层 ADR 立项时收口。
