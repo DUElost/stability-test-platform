@@ -33,7 +33,7 @@
 | B | Prometheus 平台副本同步 + reload | 规则索引里 `StabilityDbConnectionSlotsExhausted` 无 `for:`、`severity=critical`；`StabilityTerminalBulkheadRejected` 在场；`check-monitoring-assets.py` 该项 `match` |
 | C | Agent #3242 分发（48 台）+ 摘要收敛 | 分发结果无 fail；机队 `agent_artifact_digest` 收敛到新 code digest（在跑作业的 host 允许滞后） |
 | D | 真机复跑观测（真实大 run 中止） | 8 条验收线（见 §2 Step 4），**0×53300 / 0×500 / 池不越预算 / 120s 收敛** |
-| E | #3244 裁决输入 | §2 Step 4 的数据表贴到 #3244；达标才把 ADR-0052 转 Accepted（阈值见其 §5） |
+| E | #3244 裁决输入 | §2 Step 4 的数据表贴到 #3244；达标才把 ADR-0052 转 Accepted（阈值见其 §5）。**已完成**：2026-09-25 plan_run 556 数据贴出，ADR-0052 v1.0 转 Accepted（D1–D5），原 6 条改为实施验收门槛，实现后按本 Step 4 同口径复跑 |
 
 ---
 
@@ -267,7 +267,7 @@ sudo systemctl restart stability-backend
 - 8 项既有监控资产 drift（node-exporter / `stp-mem-top` / `stp-script-guard` / `stp-skill-usage` 等）——本窗口只收敛平台规则副本一项。
 - unit 模板与 Phase-1 现行形态的两处差异（`check-deploy-source.sh` 的去留、StartLimit* 的模板同步）——StartLimit 本窗已在**实装 unit** 恢复；模板同步属 ADR-0051 Phase 追踪。
 - 多实例 `STP_DB_POOL_INSTANCES`（ADR-0027 未启动）。
-- ADR-0052 的实施（须先转 Accepted，且真机数据达标）。
+- ADR-0052 的实施（2026-09-25 已转 Accepted；实施合入后按 Step 4 同口径复跑，判定其 §5 六条实施验收门槛）。
 
 ## 5. 编写时的只读证据（可复核）
 
