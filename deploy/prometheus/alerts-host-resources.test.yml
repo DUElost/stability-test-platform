@@ -76,3 +76,85 @@ tests:
       exp_annotations:
         summary: /mnt/stp-aee 剩余空间不足 10%
         description: '/mnt/stp-aee 剩余不足 10%，已接近写满。立即腾出空间：可再生的提取副本可删 （需逐目录确认 devices/ 仍有完整源），不可再生的证据不得删除。处置见 #3233。'
+
+# ② 内存/swap 联合余量四条（#3200 G1）：序列按 09-23 真机数字造，塌陷安排在 9–10m 之间展开
+#    （塌陷判据是**瞬时**的：曲线一持平它就归零，所以必须把下跌放在断言时刻之前 1–2 分钟，
+#     否则场景会"正确地不响"却什么都没测到——这正是本条第一版踩到的坑）。
+#    真机对照：13:40 余量 16.07 GiB → 13:42 5.40 → 13:43 2.42 GiB（此后 journald 与抓取全停）。
+#    断言时刻**故意不同**：塌陷是瞬时判据（曲线一平就归零）→ 10m 断言；
+#    其余三条是持续判据 → 11m 断言（`for: 1m` 需要多一个评估周期才转 firing）。同一时刻硬套
+#    四条会让其中一条"正确地不响"，什么也没测到。
+- interval: 30s
+  input_series:
+  - series: 'node_memory_MemAvailable_bytes{instance="127.0.0.1:9100",job="file-server"}'
+    values: '12884901888x16 6442450944x2 2147483648x2 1867980800x6'
+  - series: 'node_memory_SwapFree_bytes{instance="127.0.0.1:9100",job="file-server"}'
+    values: '4831838208x16 3221225472x2 1073741824x2 729616629x6'
+  - series: 'node_vmstat_pgmajfault{instance="127.0.0.1:9100",job="file-server"}'
+    values: '0+12000x24'
+  alert_rule_test:
+  # 11m 而非 10m：`for: 1m` 在第一格满足后还要一个评估周期才转 firing（promtool 实测）。
+  - eval_time: 11m
+    alertname: StabilityHostMemoryHeadroomCritical
+    exp_alerts:
+    - exp_labels:
+        severity: critical
+        instance: 127.0.0.1:9100
+        job: file-server
+      exp_annotations:
+        summary: "控制面宿主内存联合余量不足 8 GiB（即将失速）"
+        description: "MemAvailable + SwapFree = 3GiB。2026-09-23 卡死前最后 一次成功抓取（13:43）该值 2.42 GiB，而 7 天基线最小值 8.92 GiB、满足本判据 0 分钟。 第一动作：找 anon 增速最快的进程（/var/log/stp-mem-top.tsv 或 systemd-cgtop -m） 并在其 cgroup 内处置；earlyoom 自 09-23 起是真击杀（#3200），若已动手 journal 有记录。 处置手册：deploy/control-plane/host-defense/README.md"
+  - eval_time: 10m
+    alertname: StabilityHostMemoryHeadroomCollapsing
+    exp_alerts:
+    - exp_labels:
+        severity: warning
+        instance: 127.0.0.1:9100
+        job: file-server
+      exp_annotations:
+        summary: "控制面宿主内存余量 2 分钟内塌陷超过 6 GiB"
+        description: "余量比 2 分钟内的峰值低了 6 GiB 以上——失控分配通常就在这几十秒里。09-23 该判据在 13:38 首次满足（critical 要到 13:42），并在 13:05 抓住了同一天那次 swap 只剩 306 MiB 的未遂。现在就去看 anon 增速者（/var/log/stp-mem-top.tsv 最后一列或 systemd-cgtop -m）， 不要等见底。 处置手册：deploy/control-plane/host-defense/README.md"
+  # 11m 而非 10m：`for: 1m` 在第一格满足后还要一个评估周期才转 firing（promtool 实测）。
+  - eval_time: 11m
+    alertname: StabilityHostSwapNearlyGone
+    exp_alerts:
+    - exp_labels:
+        severity: critical
+        instance: 127.0.0.1:9100
+        job: file-server
+      exp_annotations:
+        summary: "控制面宿主 swap 剩余不足 1.5 GiB"
+        description: "SwapFree = 1GiB；09-23 13:43 实测 0.68 GiB 时主机已不应答。 与草案「<15% for 15m」的差别（绝对值 + 1m）见本文件头。 处置手册：deploy/control-plane/host-defense/README.md"
+  # 11m 而非 10m：`for: 1m` 在第一格满足后还要一个评估周期才转 firing（promtool 实测）。
+  - eval_time: 11m
+    alertname: StabilityHostPagingStormUnderLowHeadroom
+    exp_alerts:
+    - exp_labels:
+        severity: critical
+        instance: 127.0.0.1:9100
+        job: file-server
+      exp_annotations:
+        summary: "换页风暴叠加余量不足（失速组合判据）"
+        description: "majflt 400 次/秒且联合余量已 <8 GiB。单独的高 majflt 在本机是稳态 （#3050 09-22 裁决），只在与低余量同时出现时构成事故前兆。 处置手册：deploy/control-plane/host-defense/README.md"
+
+# ③ 负控制：同样这四条在"稳态但紧张"的形态下**不得响**（09-23 之前 7 天的常态：
+#    avail 8 GiB + swapfree 6 GiB = 联合 14 GiB；majflt 高但不伴随低余量 —— 即 #3050
+#    裁为稳态的那团换页噪声，单独看 majflt 会天天响，合取后必须闭嘴）。
+- interval: 30s
+  input_series:
+  - series: 'node_memory_MemAvailable_bytes{instance="127.0.0.1:9100",job="file-server"}'
+    values: '8589934592x60'
+  - series: 'node_memory_SwapFree_bytes{instance="127.0.0.1:9100",job="file-server"}'
+    values: '6442450944x60'
+  - series: 'node_vmstat_pgmajfault{instance="127.0.0.1:9100",job="file-server"}'
+    values: '0+9000x60'
+  alert_rule_test:
+  - eval_time: 30m
+    alertname: StabilityHostMemoryHeadroomCritical
+    exp_alerts: []
+  - eval_time: 30m
+    alertname: StabilityHostSwapNearlyGone
+    exp_alerts: []
+  - eval_time: 30m
+    alertname: StabilityHostPagingStormUnderLowHeadroom
+    exp_alerts: []

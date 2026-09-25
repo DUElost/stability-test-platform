@@ -22,6 +22,13 @@
 #      「cgroup: fork rejected by pids controller in /system.slice/earlyoom.service」；
 #      -p 让它自身 nice=-20、oom_score_adj=-100，别在失速期被人一起拖死。
 #   4) --avoid 补 redis-server / node_exporter —— 生产依赖，09-14 原表漏了（redis 是队列面）。
+#   5) 加 --sort-by-rss —— 2026-09-25 受控演练实测：默认按 kernel oom_score 排序时，
+#      观测实例（同 --avoid/--prefer、--dryrun 不杀）在场上有一个 2 GiB `python` 失控体的情况下，
+#      反复选中一个 1.18 GiB 的 yandex_browser 渲染进程（oom_score 1184，桌面/浏览器系的
+#      oom_score_adj 把它抬了上去）—— 与 09-23 13:42 死前 earlyoom 盯上 24 MiB zcode
+#      （oom_score 1172）而不是 15.3 GiB 元凶 是同一个失效机制。
+#      加 --sort-by-rss 后同一实验它选中真目标（`python3 hog.py` VmRSS 5 GiB）。
+#      ⇒ 只改"选谁"，不改"何时动手"（阈值 -m/-s 保持原样）。
 #
 # --avoid 保护生产/桌面关键进程；--prefer 优先牺牲 harness/浏览器/测试类用户进程。
-EARLYOOM_ARGS="-r 300 -m 15,8 -s 8,4 -p --ignore-root-user --avoid '(^|/)(postgres|postgresql|redis-server|node_exporter|dockerd|containerd|containerd-shim.*|prometheus.*|uvicorn|gunicorn|nginx|caddy|sshd|systemd.*|journald|dbus-daemon|dbus-broker.*|gdm.*|clash.*|pipewire.*|wireplumber|Xorg|Xwayland|gnome-shell|gnome-session.*|gnome-software|earlyoom)$' --prefer '(^|/)(node|codebuddy|zcode|cursor|opencode|claude|codex|ghostty|yandex_browser|chrome|chromium|electron|python|python3|python3\.[0-9]+|pytest)$'"
+EARLYOOM_ARGS="-r 300 -m 15,8 -s 8,4 -p --ignore-root-user --sort-by-rss --avoid '(^|/)(postgres|postgresql|redis-server|node_exporter|dockerd|containerd|containerd-shim.*|prometheus.*|uvicorn|gunicorn|nginx|caddy|sshd|systemd.*|journald|dbus-daemon|dbus-broker.*|gdm.*|clash.*|pipewire.*|wireplumber|Xorg|Xwayland|gnome-shell|gnome-session.*|gnome-software|earlyoom)$' --prefer '(^|/)(node|codebuddy|zcode|cursor|opencode|claude|codex|ghostty|yandex_browser|chrome|chromium|electron|python|python3|python3\.[0-9]+|pytest)$'"
