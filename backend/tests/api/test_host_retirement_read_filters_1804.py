@@ -28,12 +28,16 @@ def _host(
     retired: bool = False,
     heartbeat_age_s: int = 5,
 ) -> Host:
+    # 心跳按**调用时刻**取，不用模块级 `_NOW`：`_NOW` 在收集期求值，而 file-server 的活跃口径是
+    # 「请求时刻 − 180s」。收集后 >175s 才执行的用例（慢 runner 上的全量，#3247：api 用例在第 6 分钟
+    # 才跑到）会把种子心跳判成陈旧，断言失败与被测过滤无关。
+    now = datetime.now(timezone.utc)
     host = Host(
         id=host_id,
         hostname=host_id,
         status=status,
-        last_heartbeat=_NOW - timedelta(seconds=heartbeat_age_s),
-        retired_at=_NOW if retired else None,
+        last_heartbeat=now - timedelta(seconds=heartbeat_age_s),
+        retired_at=now if retired else None,
         retired_by="admin" if retired else None,
         retire_reason="样机报废" if retired else None,
         watcher_admin_active=True,
