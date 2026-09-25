@@ -111,13 +111,14 @@
 | [ADR-0051](./ADR-0051-release-unit-and-content-addressing.md) | 发布单元与内容寻址——不可变性从源码目录移到包（#735 / #3075 / #1987 / #2386） | **Accepted** | P1 | M7 | v1.4：2026-09-24 落地审查修复（空库 bootstrap 首扫零冲突 + strict 默认，见 v1.4）；v1.3：2026-09-24 族级 kind 字段（script/tool 为唯一归类判据，消 python:null 二义；ghost 保护由 kind 回收）；v1.2：2026-09-23 **Phase 3 落地**（210 目录删除、族树、manifest+包注册、tarball 排除 scripts/、不可变门禁退役；fleet 48/48 strict）；v1.1：2026-09-23 **勘误 Phase 3 依赖**（删目录随热更新 `rsync --delete` 清主机树，须等 2b + fleet 全 `strict`）+ Phase 2b 代码面落地（`script_packages.py`，`STP_SCRIPT_PACKAGES` 默认 off）；v1.0：2026-09-22 owner 裁决**全采推荐项**（D1 包模型 / D3 C1 双列 / D6 选 B / D2 例外声明+棘轮 / Phase 3 只依赖 2a），§9 四组机械改动同 PR 落地（AGENTS.md 条款 + S11 锚 / 0039 & 0046 Superseded / 索引与归属表改指 / 0033 D3→v1.13）；D1 补 Phase 3 前目录仍是发布单元的过渡句；v0.1：2026-09-22 起草（PR #3158）；§2 正面回应 ADR-0039 D6 对 P2 的否决（否决前提 = 运行时事实面是目录，本 ADR 撤销该前提）；显式继承 ADR-0039 D2/D3/D4/D5/D7、接管 ADR-0046 D1–D6（选 B）、修订 ADR-0033 D3 一句措辞采 C1 双列；落地按 Phase 0/1/2a/2b/3/4/5，Phase 3 删 208 目录只依赖 2a；§9 已落地 |
 | [ADR-0052](./ADR-0052-terminal-fact-parent-aggregation-decoupling.md) | 终态事实与父 Run 聚合解耦——Job 事务不写父级热行（#2959 / #3244） | **Proposed** | P1 | M7 | v0.1：2026-09-24 起草（owner 口径：**先 ADR 后实现**）——D1 `/complete` 等终态事务不再锁 `plan_run`、不写 `plan_run`/`plan_run_host` 计数、不写 `acknowledged_job_ids`；D2 durable pending 标记（insert-only）+ 提交后唤醒（Redis 仅传输，`counter_reconciler` 只作修复路径）；D3 按 `plan_run_id` 合并聚合、单 Run 单聚合者、读 Job 事实重算、at-least-once 幂等；D4 chain/dedup/通知/报告在父终态提交后且具重复执行保护（含「聚合已提交、投递失败」恢复）；D5 停写 ACK、保历史读兼容；D6 post_completion 独立队列/Worker（**独立 Decision，允许单独延后**）。**替代 ADR-0026 §6 的两处**（终态事务内自增计数 / 每 Job 持父行锁），保留单一 terminalization 入口与对账 sweep 自愈；不动 ADR-0048 D1。Proposed→Accepted 门槛 = 部署窗真机复跑 6 条（见其 §5） |
 | [ADR-0053](./ADR-0053-center-storage-event-dedup.md) | 中心存储事件去重——内容对象、事件引用与 baseline 复用（#3230 / #3233） | **Accepted** | P1 | M7 | v0.2：2026-09-25 owner 接受 D1–D6 与 Phase A→B→C→D。文件 CAS + manifest + DLE 引用；baseline 复用依赖强身份与 scan 输入完整；派生物隔离，发布/GC/可观测为首版条件。Phase A–D 均未实施 |
+| [ADR-0054](./ADR-0054-agent-control-plane-shared-contracts.md) | Agent 与控制面的共享契约包——`backend/agent/contracts/`（#3298 / #738） | **Proposed** | P2 | M7 | v0.1：2026-09-25 起草——D1 共享定义唯一归属 `backend/agent/contracts/`，随 `agent-code` 下发（不改 ADR-0040 输入集、不新增发布单元）；D2 只收契约（stdlib + 登记的可选第三方，无 import 期副作用）；D3 agent 侧相对导入、控制面绝对导入、`__init__` 为空；D4 C3 通配放行 `contracts.**` + C6 纯度用 AST 测试（import-linter 祖先 forbidden 实测静默不生效）；D5 每次搬迁删副本/兜底/parity 测试/C3 行/白名单条目；D6 契约不靠 `__file__` 深度定位工件。落地 4 步：pipeline_validator+legacy_aee → aee/watcher 三模块 → artifact_digest 算法 → kernel_usb_faults/state_migration 逐个判断 |
 
 ## 里程碑看板（由主表「目标里程碑」列派生）
 
 > **维护约定（#2989）**：本表是主清单「目标里程碑」列的**派生视图**——主表标了 `M7`
 > 的 ADR **必须**出现在下行；新增 ADR 写主表时同步补本行。标题不再写
 > 「Proposed」——板上含 Accepted / Proposed 混态，真正未决项以状态列
-> `Proposed` 为准。**Proposed（未决）：ADR-0052**（2026-09-24 起草：终态事实与父 Run 聚合解耦；转 Accepted 的门槛见其 §5；ADR-0047 已于 2026-09-23 转 Accepted）。
+> `Proposed` 为准。**Proposed（未决）：ADR-0052**（2026-09-24 起草：终态事实与父 Run 聚合解耦；转 Accepted 的门槛见其 §5；ADR-0047 已于 2026-09-23 转 Accepted）、**ADR-0054**（2026-09-25 起草：Agent 与控制面共享契约包，#3298）。
 
 | 里程碑 | 目标日期 | 包含 ADR |
 |---|---|---|
@@ -127,7 +128,7 @@
 | M4 | 2026-06+ | ADR-0025（方案 C Sprint 1–4）；PRD/设计/验收见 [`docs/DOC-MAP.md`](../DOC-MAP.md) |
 | M5 | 2026-07 | ADR-0026 P0–P2（规模化执行正确性 + 控制面减负） |
 | M6 | 待定 | ADR-0027（控制面水平扩展；重启条件见 ADR-0025 D1） |
-| M7 | 进行中 | **Superseded**（2026-09-22 由 ADR-0051 取代）：ADR-0039、ADR-0046。<br>**Accepted**：ADR-0029（M1–M4 已落地）、0030、0031、0032、0033（v1.13；§5.4 条件 4 多站点已触发；部分落地；后续切片并入 ADR-0051 Phase 4）、0034、0036、0037、0038（v0.3 草案待裁）、0040、0042、0043（实施已落地）、0044、0045（词表已落地 `adf9c24a`）、**ADR-0047**（v1.1：容量不变量进启动门禁 + 503 过载语义）、0048、0049、0050、**0051**（v1.0；发布单元与内容寻址，Phase 0 已落地，Phase 1–5 待排期）、**0053**（v0.2：内容对象与事件引用分离；2026-09-25 owner 接受；Phase A–D 均未实施）。<br>**Proposed**：**0052**（v0.1：终态事实与父 Run 聚合解耦；待部署窗真机复跑后裁决，见其 §5）。 |
+| M7 | 进行中 | **Superseded**（2026-09-22 由 ADR-0051 取代）：ADR-0039、ADR-0046。<br>**Accepted**：ADR-0029（M1–M4 已落地）、0030、0031、0032、0033（v1.13；§5.4 条件 4 多站点已触发；部分落地；后续切片并入 ADR-0051 Phase 4）、0034、0036、0037、0038（v0.3 草案待裁）、0040、0042、0043（实施已落地）、0044、0045（词表已落地 `adf9c24a`）、**ADR-0047**（v1.1：容量不变量进启动门禁 + 503 过载语义）、0048、0049、0050、**0051**（v1.0；发布单元与内容寻址，Phase 0 已落地，Phase 1–5 待排期）、**0053**（v0.2：内容对象与事件引用分离；2026-09-25 owner 接受；Phase A–D 均未实施）。<br>**Proposed**：**0052**（v0.1：终态事实与父 Run 聚合解耦；待部署窗真机复跑后裁决，见其 §5）、**0054**（v0.1：Agent 与控制面共享契约包 `backend/agent/contracts/`，#3298）。 |
 
 ## 维护约定
 
