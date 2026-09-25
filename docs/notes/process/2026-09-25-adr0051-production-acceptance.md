@@ -18,6 +18,7 @@ ADR-0051 **尚未落地完结**。现站「按内容寻址包执行脚本」已�
 ## Verification
 
 - 构建独立发布根 `stp-releases/37a56b41`；真实目录 venv，依赖 `pip freeze` 与原发布根逐项一致，`python -m pip check` 无破损；Agent code digest 与 host-resources digest 和原发布根相同，schema target 仍为 `c7d2e5f8a1b3`。
+- 本次为缩小生产差异，从已合入 `origin/main` 的 `37a56b41` detached worktree 构建；**没有宣称运行了只接受 `main` 分支的 `check-deploy-source.sh`**。替代前检为 clean worktree、`merge-base --is-ancestor 37a56b41 origin/main`、相对现网的两文件 diff 与 `diff --check`、schema target 对齐、构建后摘要对拍。后续常规整版发布仍按 SOP 从干净 main 执行原守卫。
 - 隔离测试：`python -m pytest -q backend/tests/services/test_script_packages_mode_3222.py`，2 passed。发布根内用真实 ACK 形态导入验证 `derive_packages_mode(...)=package`。
 - 切换后 `stability-backend` active，`/health` healthy、SAQ ready、alembic revision/head 均 `c7d2e5f8a1b3`，进程 cwd 与 `current` 均为 `stp-releases/37a56b41`。
 - 生产逐台 `POST /script-presence/refresh?host_id=…`：48/48 成功，均无 missing/mismatch/unknown。随后 `GET /script-presence/summary`：`fleet_packages={package:48, tree:0, mixed:0, unknown:0}`；`present=1249, missing=0, mismatch=0, unknown=0, n_a=1247`，`hosts_total=48, hosts_with_gap=0, stale=false`。账本仅覆盖 52 个被引用版本，`uncovered_active_versions=50`，故在位零缺口**不代表**全部活跃版本逐台核验。
