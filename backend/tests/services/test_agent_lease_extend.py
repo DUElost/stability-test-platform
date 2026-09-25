@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from fastapi import HTTPException
+from backend.services.errors import ServiceError
 
 from backend.services.agent_lease_extend import (
     _ExtendBatchIn,
@@ -52,10 +52,10 @@ class TestExtendAgentLeasesBatchGuards:
             _ExtendBatchItemIn(job_id=i, fencing_token="t")
             for i in range(_LEASE_EXTEND_BATCH_MAX + 1)
         ]
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ServiceError) as exc:
             await extend_agent_leases_batch(
                 db=None,  # type: ignore[arg-type]
                 payload=_ExtendBatchIn(host_id="h1", leases=items),
             )
-        assert exc.value.status_code == 413
+        assert exc.value.status == 413
         assert exc.value.detail["code"] == "LEASE_BATCH_TOO_LARGE"

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from fastapi import HTTPException
+from backend.services.errors import ServiceError
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from backend.models.enums import JobStatus
@@ -18,11 +18,11 @@ class TestUpdateJobStatusGuards:
     async def test_job_not_found_404(self):
         db = AsyncMock()
         db.get = AsyncMock(return_value=None)
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ServiceError) as exc:
             await update_agent_job_status(
                 db, 1, JobStatusUpdate(status="RUNNING", fencing_token="tok"),
             )
-        assert exc.value.status_code == 404
+        assert exc.value.status == 404
 
     @pytest.mark.asyncio
     async def test_unknown_status_400(self):
@@ -34,11 +34,11 @@ class TestUpdateJobStatusGuards:
             new_callable=AsyncMock,
             return_value=MagicMock(),
         ):
-            with pytest.raises(HTTPException) as exc:
+            with pytest.raises(ServiceError) as exc:
                 await update_agent_job_status(
                     db, 1, JobStatusUpdate(status="NOT_A_STATUS", fencing_token="tok"),
                 )
-        assert exc.value.status_code == 400
+        assert exc.value.status == 400
 
     @pytest.mark.asyncio
     async def test_terminal_requires_complete(self):
@@ -50,11 +50,11 @@ class TestUpdateJobStatusGuards:
             new_callable=AsyncMock,
             return_value=MagicMock(),
         ):
-            with pytest.raises(HTTPException) as exc:
+            with pytest.raises(ServiceError) as exc:
                 await update_agent_job_status(
                     db, 1, JobStatusUpdate(status="FAILED", fencing_token="tok"),
                 )
-        assert exc.value.status_code == 409
+        assert exc.value.status == 409
         assert exc.value.detail["code"] == "TERMINAL_STATUS_REQUIRES_COMPLETE"
 
     @pytest.mark.asyncio
@@ -67,11 +67,11 @@ class TestUpdateJobStatusGuards:
             new_callable=AsyncMock,
             return_value=MagicMock(),
         ):
-            with pytest.raises(HTTPException) as exc:
+            with pytest.raises(ServiceError) as exc:
                 await update_agent_job_status(
                     db, 1, JobStatusUpdate(status="UNKNOWN", fencing_token="tok"),
                 )
-        assert exc.value.status_code == 409
+        assert exc.value.status == 409
         assert exc.value.detail["code"] == "INVALID_JOB_TRANSITION"
 
     @pytest.mark.asyncio

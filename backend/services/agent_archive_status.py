@@ -6,10 +6,10 @@ ADR-0025 Sprint 3：读 ``Host.extra`` 中心跳上报的 archive/capacity/healt
 
 from __future__ import annotations
 
-from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models.host import Host
+from backend.services.errors import NotFound
 
 
 async def get_agent_archive_status(
@@ -24,7 +24,7 @@ async def get_agent_archive_status(
     """
     host = await db.get(Host, host_id)
     if host is None:
-        raise HTTPException(status_code=404, detail="host not found")
+        raise NotFound("host not found")
 
     extra = host.extra if isinstance(host.extra, dict) else {}
 

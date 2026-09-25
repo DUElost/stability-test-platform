@@ -1,12 +1,12 @@
 # ADR-0051：发布单元与内容寻址——不可变性从源码目录移到包
 
-- 状态：**Accepted** v1.4（2026-09-24：**落地审查两条高风险修复**——空库 bootstrap 首扫零 conflict + strict 默认，见 v1.4 修订行；v1.3 2026-09-24：**族级 kind 字段**落地——210 个版本目录删除、每族一棵源码树、scan 改从 manifest+包注册、tarball 排除 `scripts/`、不可变门禁退役；v1.1 2026-09-23：**勘误 Phase 3 依赖**——删目录须在 2b 且 fleet 全部切到包模式之后，原「只依赖 2a」不成立；v1.0 2026-09-22 owner 裁决：§10 五个裁决点**全采推荐项**——D1 包模型 / D3 采 C1 双列 / D6 选 B / D2 例外声明 + 棘轮 / Phase 3 只依赖 2a；§9 四组机械改动随本版同 PR 落地；v0.1 决策材料 PR #3158）
+- 状态：**Accepted** v1.6（2026-09-25 D6 env 自持实切；决策内容不变。历史修订见下表）
 - 优先级：P1（脚本目录 12 天翻倍、控制面部署源与开发工作区同一棵检出已造成事故；多站点交付 ADR-0041 依赖可 digest 校验的发布物）
 - 目标里程碑：M7
 - 日期：2026-09-22
 - 决策者：owner（DUElost，2026-09-22）；起草：平台研发组
 - 归属域：semantic-ownership script-version-immutability
-- 落地状态：**Phase 5 首项 ✅**（v1.3 族 kind 字段——ghost 保护精确回收）；Phase 0 ✅（#3162）；Phase 4 部分 ✅（控制面摘要面：`release-manifest.json` 新增 `control-plane` component，`backend/**` 除 agent、**不排除 `.env*`**——#2269「不在任何摘要面内」根因封死；build/S0 共用同一量具文件，S0 比对 declared 全键、旧两键 bundle 兼容）；**Phase 3 ✅**（版本目录删除 + 族树 + manifest 注册 + tarball 排除 + 门禁退役）；**Phase 2b ✅ 且 fleet 48/48 已 `strict`**（2026-09-23 实操：发包 → on 灰度 → strict）；**Phase 2a ✅**（`tool_manifest.json` 登记 35 族 210 版本、`script.package_sha256` 列 + scan 回填、`check_script_packages.py` 并入 tool-manifest 门禁、等价证明对生产库 210/210 通过；包尚未发布到站点 `packages/`，属运维推进项）；Phase 1 / 2b / 3 / 4 / 5 待排期
+- 落地状态（2026-09-25）：**未完结**。Phase 0、2a、2b、3 已落地；Phase 1 的 bundle 运行根已切换，但生产 `.env.backend` 仍经 symlink 挂靠开发检出；Phase 4 的控制面摘要面、展锐三族包化与 manifest 显式退役已落地，flashtool/aimonkey、控制面 dedup 工具包化及 legacy env/回退退出未完成；Phase 5 的族级 `kind`、过渡登记簿及 `allow_deactivate` 移除已落地，治理减法未收口。#3222 的包模式观测修复已于 2026-09-25 部署，48 台逐台刷新后 `package=48, tree=mixed=unknown=0`，在位 `present=1249, missing=mismatch=unknown=0`；这证明现站包执行，不等于独立站点完整可复现。新站 `default_params` 覆盖差仍待数据迁移。剩余项及证据见修订记录 v1.5 和 [生产验收记录](../notes/process/2026-09-25-adr0051-production-acceptance.md)。
 - 归属说明：v1.0 起 `script-version-immutability` 的 owner_anchor 改指本 ADR D1（语义归属表同 PR 改）
 - 标签：release-unit, content-addressing, package-store, script-versioning, deploy-source, anti-corruption, #735, #3075, #1987, #2386
 - 关联：[#735](https://github.com/DUElost/stability-test-platform/issues/735)（脚本膨胀治理）/ [#3075](https://github.com/DUElost/stability-test-platform/issues/3075)（ADR-0033 Phase B 包存储实现）/ [#1987](https://github.com/DUElost/stability-test-platform/issues/1987)、[#2386](https://github.com/DUElost/stability-test-platform/issues/2386)（部署源与检出双重角色）
@@ -25,6 +25,8 @@
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
+| v1.6 | 2026-09-25 | **D6 最后一米闭合（env 自持）**：生产站点 env 真身落 `/home/debian13/stp-releases/env.backend`（600，自仓根复制一次），全部 11 个 rev 根的 `.env.backend` 由仓根 symlink 改指树内 `../env.backend`——运行时（unit EnvironmentFile、`main.py` 的 `__file__` 派生 dotenv、alembic/各 checker）零代码改动穿透生效；删除开发检出不再影响生产，D6-D1「物理分离」判据完整。**代价显式化**：仓根 `.env.backend` 降级为纯 dev 配置，与站点真身自此两个文件（漂移面），生产改 env 与诊断取数一律经站点文件（SOP §1 已改写）；台账 `control-plane-env-lives-in-checkout` 转 done。切换实测：restart 后三道 ExecStartPre 全过、auth OK、48/48 心跳新鲜、`fleet_packages={package:48, unknown:0}`。未完成（v1.5 行口径中除 D6 外不变）：新站 `default_params` 覆盖差；D7 flashtool/aimonkey、控制面 dedup 工具包化及路径键/回退退出；D8 治理减法。 |
+| v1.5 | 2026-09-25 | **落地状态纠偏与生产验收**：#3258 已于 1fafd05 部署（首扫回填与 strict 默认）；#3262 合入并在 7fee7cf 部署，manifest 109 个存量版本显式 `retired:true`，新站活跃脚本集收敛为 102；#3222 初版在 7fee7cf 的真实 ACK 上误把 48 台全判 unknown，#3265 修复后以 37a56b41 窄幅切换（相对 7fee7cf 仅服务逻辑与测试），生产 48 台逐台刷新得 `package=48`、在位 1249、缺口 0。未完成：新站 `default_params` 覆盖差；D6 env 仍挂靠开发检出；D7 flashtool/aimonkey、控制面 dedup 工具包化及路径键/回退退出；D8 治理减法。运行中计划未因本次部署中止。 |
 | v1.4 | 2026-09-24 | **落地审查修复**（并行会话审计两条高风险，隔离空库实测复现后修）：① Phase 3 的 sync 重写丢了**首扫回填通道**——seed 行（有 entry sha、无 support/caps/包 sha）在空库首扫被 53 行全报 conflict 且短路使 `package_sha256` 永不回填（strict 全拒、新站点不可自举）→ 恢复并强化为**单轮回填全部缺失维度+包身份**（原 scan_script_root 逐维分轮需 3 轮 scan），行有值与包不等的真漂移仍 conflict；新增守卫测试钉「首扫收敛+幂等+真漂移不被吞」。② `STP_SCRIPT_PACKAGES` 缺省 **off→strict**、tree 回退代码删除（回退目标已随 Phase 3 消失，新装/漏配主机静默走死路径）——off/on 仅余告警别名，台账 `script-packages-off-on-modes` 转 done。③ 验证矩阵：隔离库（alembic head→首扫 created=164/skipped=47/conflicts=0/活跃无包sha=0→二扫幂等）。遗留（本 ADR 追认）：seed 行 `default_params` 仅覆盖部分版本（新站参数面 ≰ 生产参数面）与 manifest retired 策略（新站 184 活跃 vs 生产 99）为 Phase 4b/5 数据迁移项，登记于过渡台账续单。 |
 | v1.3 | 2026-09-24 | **族级 `kind` 字段（Phase 5 首项）**：`tools[name]` 由 `{versions}` 变 `{kind, versions}`，`kind ∈ {script, tool}` 成为登记面**唯一族归类判据**——取代 Phase 4a 的「`python:null` 即平台族」启发（`--python-absent` 让外部工具族也有 null python，二义实锤：展锐两族被 scan 误注册进 `script` 表、`check_script_packages` 族分类靠树集反推）。落地：`check_tool_manifest` lint 必填 kind + 族级 kind 不可变（v1.3 前 base 无 kind = 迁移补写合法）；`package_tool_asset --kind`（默认 script）；`script_catalog.script_entries` 只注册 kind=script；`check_script_packages` 归类与 ghost 保护（kind=script 无树恢复判红——Phase 4a 移交 PR 评审的那条保护由 kind 精确回收，**无需再议 schema v2**：kind 是族级字段，不触 C5 版本六元组）。存量 38 族显式迁移（35 script + Start-Log-Scan/Scan-Result-GT/Monkey-Log-Scan-GT-SPRD=tool）。生产数据清理（部署清单）：`script` 表两行误建 Unisoc 行走 admin `PUT is_active=false` 软退役。 |
 | v1.2 | 2026-09-23 | **Phase 3 落地**（fleet 48/48 已 `strict` 后执行）：`backend/agent/scripts/` 210 个版本目录删除，每族保留最新版本内容为源码树；`tool_manifest.json` 210 条目原样保留（append-only）；`check_script_packages.py` 改为「族树重建 sha == 最新未退役条目」+ 残留 v 目录红；`POST /scripts/scan` 改为 `sync_scripts_from_manifest`（manifest + 站点包源，退役由 `retired:true` 显式驱动，永不因盘上缺失反激活，`allow_deactivate` 退役）；`agent-code` tarball / wrapper / Ansible 三处排除集同源加入 `scripts/`；`check-script-version-immutability.py` 与其 CI 步骤退役；AGENTS.md 条款去过渡句；测试面：版本目录用例重指族树、目录模型 catalog 用例重写为包夹具 |
@@ -121,7 +123,7 @@
   1. `:1787` `Path(entry.nfs_path).resolve().parents[3]` 注入 PYTHONPATH——硬编码 `agent/scripts/<name>/<ver>/` 深度；换 cache 布局后算错目录、共享库 import 静默失败 → 改为显式 `entry.package_root`；
   2. `:1816` `cwd=os.path.dirname(entry.nfs_path)`——脚本工作目录形态变更（相对产物、同级 `_adb.py`）→ cwd = 包解压根，包内相对布局与现目录一致；
   3. `:804` `"/flash_firmware/" in path` 决定 8 s 终止宽限（ADR-0043 / #1591）——cache 路径恰好仍含该子串而侥幸不破，但这是「路径形态被当契约」的实证 → 改为按 `name` 判定。
-- 双轨（v1.1 落地形态）：**Agent 侧开关** `STP_SCRIPT_PACKAGES`——`off`（默认，逃生阀关：一律 `nfs_path`，不碰包源）/ `on`（优先包，失败回退 `nfs_path` 并记 WARNING）/ `strict`（只走包，失败 = 步骤 exit 2）；叠加按 script 行灰度（`package_sha256` 为空 → 旧路径）。控制面只在 expected 清单多带 `package_sha256`（沿 ADR-0033 v1.1「契约翻译在 Agent 边缘」）。scan 回填一次把 210 行全部置非空，所以行级灰度不足以控制切换节奏，开关是必要的。
+- 双轨（**v1.1 历史落地形态，已由 v1.4 终止**）：Agent 侧曾用 `STP_SCRIPT_PACKAGES=off|on|strict` 灰度；v1.4 起缺省即 strict、tree 回退代码已删除，`off/on` 仅是告警别名。控制面 expected 清单携带 `package_sha256`，Agent 由包身份校验执行。
 - `agent-code` artifact 排除 `scripts/` **推迟到 Phase 3**：Phase 3 前排除等于让 `rsync --delete` 清掉主机目录，而回退路径正是这些目录。
 
 ### D5：显式继承 ADR-0039 D2 / D3 / D4 / D5 / D7，作用域从目录改为包
@@ -188,12 +190,12 @@ ADR-0039 转 Superseded 的时机 = 本 ADR Accepted 当日（§9）。
 | Phase | 内容 | 依赖 | 会当场变红的门禁（同 PR 处理） |
 |---|---|---|---|
 | **0** | 本 ADR 裁决 + §9 四组机械改动 | — | S11 锚 / S12 ⑤ + 索引一致性 / 共享元文件串行领单 |
-| **1** | 本机控制面切 bundle 安装形态（D6 选 B）：`build_bundle` → install 到 `<releases>/<digest>/` → unit `WorkingDirectory` 与 `STP_SCRIPT_ROOT` 改指 → `check-deploy-source.sh` 去减号；**附部署根外部物料清单** | Phase 0 | 运行期非门禁（最危险）：inventory.ini / dist-prod / venv 物料缺失 |
+| **1** 部分 ✅ | 本机控制面已切 bundle 运行根，unit 从 `current` 启动，外部物料随发布根就位；生产 `.env.backend` 仍指开发检出，独立站点与发布根自包含验收未完 | Phase 0 | 运行期非门禁（最危险）：inventory.ini / dist-prod / venv 物料缺失 |
 | **2a** ✅ | 打包 + 登记 + 等价证明：对 210 行 `script` 从 `origin/main` 当前目录打包 → `tool_manifest.json` 登记 → 新增 `package_sha256` 列并回填 → 证明入口 sha == `content_sha256` 且伴随 sha == `support_files_manifest`（基准 = 当前字节，见 §1.3）。**`nfs_path` 不动**，可回滚。**已落地**：`tools/dev/check_script_packages.py`（`git ls-files` 成员 + 确定性打包 + 登记 + 等价门禁）、`backend/scripts/check_script_package_equivalence.py`（只读证明，生产 212 行 = 210 ok + 2 无目录退役行）、迁移 `ad51c1d3f2a1`、scan 回填（`package_backfilled` / `package_conflicts`）；manifest 条目 `python: null` = Agent 自身解释器 | Phase 0 | `check_tool_manifest` append-only；alembic 迁移门禁 |
 | **2b** | 切执行路径（D4）：`ScriptRegistry` → `ensure_package` → 三处耦合解除 → `verify_scripts` 整包校验 → `agent-code` 排除 `scripts/`；按 script 行灰度 | 2a + Phase 1 | Agent 测试面（`backend/agent/tests`）大面积改夹具；ADR-0043 宽限判据测试 |
 | **3** ✅ | 一次性删除 210 个版本目录；每族留一棵源码树；scan 注册改读 manifest；`agent-code` 排除 `scripts/` | **2a + 2b + fleet 全部 `strict` 且一轮 verify 全 `package_active`**（v1.1 勘误：删目录随热更新清主机树，回退路径消失）——2026-09-23 满足后执行 | `check-script-version-immutability.py` 已同 PR 退役；不再需要目录棘轮（D8 的棘轮对象随目录消失） |
-| **4** | 外部工具与资源入包（D7）：展锐三族 + flashtool + aimonkey；控制面摘要面；删 `STP_UNISOC_*` | Phase 1（清单形态）+ ADR-0042 D3 修订 | #737 清单门禁 + `.env*.example` 奇偶；digest 契约测试 |
-| **5** | 治理减法与登记簿（D8） | 各自的顺序约束（D8） | 例外声明格式统一 |
+| **4** 部分 ✅ | 展锐三族、控制面摘要面与 manifest retired 策略已落地；flashtool/aimonkey、控制面 dedup 工具包化及 legacy 路径键/回退出口未完 | Phase 1（清单形态）+ ADR-0042 D3 修订 | #737 清单门禁 + `.env*.example` 奇偶；digest 契约测试 |
+| **5** 部分 ✅ | 族级 `kind`、过渡登记簿、`allow_deactivate` 移除已落地；`check_new_script_family.py` 与 `check-deploy-source.sh` 治理减法及新站参数数据验收未完 | 各自的顺序约束（D8） | 例外声明格式统一 |
 
 **Phase 3 必须等 2b 与 fleet 切换**（v1.1 勘误）：v1.0 写「删目录只依赖 2a」时漏看了两条运行时事实——①热更新 `agent-code` tarball 含 `scripts/`、主机端 `apply-code` 是 `rsync --delete`，仓库删目录 = 下一次热更新删主机目录；②scan 以目录为注册输入，删目录 = 反激活全部行。回退路径（`nfs_path`）与注册输入都随目录消失，所以 2b 的 `strict` 模式必须先在全 fleet 跑绿。
 

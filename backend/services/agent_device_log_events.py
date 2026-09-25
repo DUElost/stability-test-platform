@@ -14,7 +14,6 @@ from datetime import datetime, timezone
 from typing import List, Optional
 from uuid import UUID
 
-from fastapi import HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,6 +30,7 @@ from backend.services.device_log_event import (
     is_unassigned_remote_path,
     resolve_initial_upload_state,
 )
+from backend.services.errors import BadRequest, Conflict, Forbidden, NotFound
 
 logger = logging.getLogger(__name__)
 
@@ -116,9 +116,8 @@ def _parse_iso_dt(value: str, field: str) -> datetime:
     try:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail=f"device_log_event.{field} invalid ISO8601: {value}",
+        raise BadRequest(
+            f"device_log_event.{field} invalid ISO8601: {value}",
         ) from exc
 
 
@@ -152,9 +151,8 @@ def _validated_remote_path(
                 ))
             except ArtifactPathError:
                 pass
-        raise HTTPException(
-            status_code=400,
-            detail=f"device_log_event.remote_path invalid: {exc}",
+        raise BadRequest(
+            f"device_log_event.remote_path invalid: {exc}",
         ) from exc
 
 
@@ -177,10 +175,7 @@ async def ingest_agent_device_log_events(
 
     for ev in payload.events:
         if ev.state not in _VALID_EVENT_STATES:
-            raise HTTPException(
-                status_code=400,
-                detail=f"device_log_event.state invalid: {ev.state}",
-            )
+            raise BadRequest(f"device_log_event.state invalid: {ev.state}")
 
         detected_dt = _parse_iso_dt(ev.detected_at, "detected_at")
         device_ts = (
@@ -191,16 +186,15 @@ async def ingest_agent_device_log_events(
 
         host = await db.get(Host, ev.host_id)
         if host is None:
-            raise HTTPException(status_code=404, detail=f"host {ev.host_id} not found")
+            raise NotFound(f"host {ev.host_id} not found")
 
         if ev.job_id is not None:
             job = await db.get(JobInstance, ev.job_id)
             if job is None:
-                raise HTTPException(status_code=404, detail=f"job {ev.job_id} not found")
+                raise NotFound(f"job {ev.job_id} not found")
             if job.host_id and job.host_id != ev.host_id:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"device_log_event.host_id {ev.host_id!r} does not match job host {job.host_id!r}",
+                raise BadRequest(
+                    f"device_log_event.host_id {ev.host_id!r} does not match job host {job.host_id!r}",
                 )
             if (
                 ev.plan_run_id is not None
@@ -209,21 +203,17 @@ async def ingest_agent_device_log_events(
             ):
                 # #1052：host/job/plan_run 三元组必须互相一致——错误组合的
                 # 事件会让 extract 在错误的 run 下取数。
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"device_log_event.plan_run_id {ev.plan_run_id} does not "
-                        f"match job plan_run {job.plan_run_id}"
-                    ),
+                raise BadRequest(
+                    f"device_log_event.plan_run_id {ev.plan_run_id} does not "
+                    f"match job plan_run {job.plan_run_id}",
                 )
 
         if ev.id:
             try:
                 event_id = UUID(ev.id)
             except ValueError as exc:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"device_log_event.id invalid UUID: {ev.id}",
+                raise BadRequest(
+                    f"device_log_event.id invalid UUID: {ev.id}",
                 ) from exc
             row = await db.get(DeviceLogEvent, event_id)
             if row is None:
@@ -258,46 +248,34 @@ async def ingest_agent_device_log_events(
                 await db.flush()
             else:
                 if row.host_id != ev.host_id:
-                    raise HTTPException(
-                        status_code=403,
-                        detail=(
-                            f"device_log_event host_id mismatch: "
-                            f"{ev.host_id!r} != {row.host_id!r}"
-                        ),
+                    raise Forbidden(
+                        f"device_log_event host_id mismatch: "
+                        f"{ev.host_id!r} != {row.host_id!r}"
                     )
                 # #1052：身份字段不可变——serial / job_id / plan_run_id 与已入库
                 # 行不一致视为错误组合（跨设备/跨任务混淆或错误 Agent），403。
                 if row.serial != ev.serial:
-                    raise HTTPException(
-                        status_code=403,
-                        detail=(
-                            f"device_log_event serial mismatch: "
-                            f"{ev.serial!r} != {row.serial!r}"
-                        ),
+                    raise Forbidden(
+                        f"device_log_event serial mismatch: "
+                        f"{ev.serial!r} != {row.serial!r}"
                     )
                 if (
                     row.job_id is not None
                     and ev.job_id is not None
                     and row.job_id != ev.job_id
                 ):
-                    raise HTTPException(
-                        status_code=403,
-                        detail=(
-                            f"device_log_event job_id mismatch: "
-                            f"{ev.job_id} != {row.job_id}"
-                        ),
+                    raise Forbidden(
+                        f"device_log_event job_id mismatch: "
+                        f"{ev.job_id} != {row.job_id}"
                     )
                 if (
                     row.plan_run_id is not None
                     and ev.plan_run_id is not None
                     and row.plan_run_id != ev.plan_run_id
                 ):
-                    raise HTTPException(
-                        status_code=403,
-                        detail=(
-                            f"device_log_event plan_run_id mismatch: "
-                            f"{ev.plan_run_id} != {row.plan_run_id}"
-                        ),
+                    raise Forbidden(
+                        f"device_log_event plan_run_id mismatch: "
+                        f"{ev.plan_run_id} != {row.plan_run_id}"
                     )
                 if (
                     row.state in _EXTRACTABLE_STATES
@@ -327,16 +305,13 @@ async def ingest_agent_device_log_events(
                     if target_state != row.state and target_state not in _ALLOWED_TRANSITIONS.get(
                         row.state, frozenset()
                     ):
-                        raise HTTPException(
-                            status_code=409,
-                            detail={
-                                "code": "DLE_INVALID_TRANSITION",
-                                "message": (
-                                    "device_log_event state transition not allowed: "
-                                    f"{row.state} -> {target_state}"
-                                ),
-                            },
-                        )
+                        raise Conflict({
+                            "code": "DLE_INVALID_TRANSITION",
+                            "message": (
+                                "device_log_event state transition not allowed: "
+                                f"{row.state} -> {target_state}"
+                            ),
+                        })
                     row.state = target_state
                     effective_plan_run = (
                         ev.plan_run_id if ev.plan_run_id is not None else row.plan_run_id
@@ -444,13 +419,13 @@ async def list_agent_device_log_events(
         states = [s.strip() for s in state.split(",") if s.strip()]
         invalid = [s for s in states if s not in _VALID_EVENT_STATES]
         if invalid:
-            raise HTTPException(status_code=400, detail=f"invalid state filter: {invalid}")
+            raise BadRequest(f"invalid state filter: {invalid}")
         stmt = stmt.where(DeviceLogEvent.state.in_(states))
 
     stmt = stmt.order_by(DeviceLogEvent.detected_at.asc())
     if limit is not None:
         if limit < 1:
-            raise HTTPException(status_code=400, detail="limit must be >= 1")
+            raise BadRequest("limit must be >= 1")
         stmt = stmt.limit(limit)
 
     rows = (await db.execute(stmt)).scalars().all()

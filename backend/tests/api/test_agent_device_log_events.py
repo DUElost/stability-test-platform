@@ -6,7 +6,7 @@ import os
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
-from fastapi import HTTPException
+from backend.services.errors import ServiceError
 
 import pytest
 
@@ -281,7 +281,7 @@ async def test_update_accepts_legacy_unassigned_remote_path(monkeypatch, tmp_pat
     """#389/#F7: 行被 associate 到 plan_run 后，Agent 后续 patch 仍可能带
     它当初上传的 devices/unassigned/{event_id}/ 旧路径 —— 必须接受，
     否则 400 丢掉状态更新（如 PRUNED）。"""
-    from fastapi import HTTPException
+    from backend.services.errors import ServiceError
 
     nfs = tmp_path / "nfs"
     nfs.mkdir()
@@ -354,13 +354,13 @@ async def test_update_accepts_legacy_unassigned_remote_path(monkeypatch, tmp_pat
             plan_run_id=seed["plan_run_id"],
         )
         async with AsyncSessionLocal() as db:
-            with pytest.raises(HTTPException) as exc_info:
+            with pytest.raises(ServiceError) as exc_info:
                 await ingest_device_log_events(
                     DeviceLogEventBatchIn(events=[bad_ev]),
                     db=db,
                     _=None,
                 )
-        assert exc_info.value.status_code == 400
+        assert exc_info.value.status == 400
     finally:
         _cleanup(seed)
 
@@ -620,9 +620,9 @@ async def test_dle_rejects_job_plan_run_mismatch(monkeypatch, tmp_path):
     (tmp_path / "nfs").mkdir()
     seed = _seed_host_job()
     try:
-        with pytest.raises(HTTPException) as ei:
+        with pytest.raises(ServiceError) as ei:
             await _ingest_one(_ev(seed, plan_run_id=seed["plan_run_id"] + 999))
-        assert ei.value.status_code == 400
+        assert ei.value.status == 400
         assert "plan_run" in str(ei.value.detail)
     finally:
         _cleanup(seed)
@@ -641,16 +641,16 @@ async def test_dle_rejects_identity_mutation_on_update(monkeypatch, tmp_path):
         event_id = r.data["event_ids"][0]
 
         # 改 serial → 403
-        with pytest.raises(HTTPException) as ei:
+        with pytest.raises(ServiceError) as ei:
             await _ingest_one(_ev(seed, id=event_id, serial="other-serial"))
-        assert ei.value.status_code == 403
+        assert ei.value.status == 403
         assert "serial mismatch" in str(ei.value.detail)
 
         # 改 plan_run_id → 与 job 的 plan_run 不一致（400，共享前置校验先拦）
-        with pytest.raises(HTTPException) as ei:
+        with pytest.raises(ServiceError) as ei:
             await _ingest_one(_ev(seed, id=event_id,
                                   plan_run_id=seed["plan_run_id"] + 999))
-        assert ei.value.status_code == 400
+        assert ei.value.status == 400
         assert "does not match job plan_run" in str(ei.value.detail)
 
         # 不带 plan_run_id 的合法迟到补报（LOCAL→UPLOAD_PENDING）→ 归属保留
@@ -684,9 +684,9 @@ async def test_dle_rejects_unlisted_state_transition(monkeypatch, tmp_path):
         await _ingest_one(_ev(seed, id=event_id, state=EventState.UPLOADING.value))
 
         # 表外路径：UPLOADING → LOCAL（回退不在矩阵）→ 409
-        with pytest.raises(HTTPException) as ei:
+        with pytest.raises(ServiceError) as ei:
             await _ingest_one(_ev(seed, id=event_id, state=EventState.LOCAL.value))
-        assert ei.value.status_code == 409
+        assert ei.value.status == 409
         assert ei.value.detail["code"] == "DLE_INVALID_TRANSITION"
     finally:
         _cleanup(seed)
