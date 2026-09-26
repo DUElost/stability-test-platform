@@ -74,3 +74,25 @@ def test_absent_or_invalid_snapshot_never_looks_like_a_zero_tick(
     assert 'host_id="timing-invalid"' not in "\n".join(
         line for line in body.splitlines() if line.startswith("stability_agent_heartbeat_")
     )
+
+
+def test_failed_host_read_rolls_back_shared_session():
+    """/metrics 各组共享 session：读失败必须 rollback，否则同一次 scrape 的后续各组连环失败。"""
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from backend.services.heartbeat_timing_metrics import (
+        refresh_agent_heartbeat_timing_gauges,
+    )
+
+    class _FailingSession:
+        rolled_back = False
+
+        def query(self, *args, **kwargs):
+            raise SQLAlchemyError("simulated read failure")
+
+        def rollback(self):
+            self.rolled_back = True
+
+    session = _FailingSession()
+    refresh_agent_heartbeat_timing_gauges(session)
+    assert session.rolled_back
