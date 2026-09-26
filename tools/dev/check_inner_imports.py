@@ -61,7 +61,16 @@ SCAN_DIRS = (ROOT / "backend", ROOT / "tools", ROOT / "scripts")
 #: 2026-09-26 #3298（ADR-0054 第 2 步）：`device_watcher` 的 core/agent 双形态
 #: 兜底（try/except 各 2 处）随契约搬迁塌成 1 条相对导入 ×2 目标
 #: → **619 → 617**。
-_BASELINE = 617
+#: 2026-09-26 **上调 617 → 626**（#3077 + #3066 A半 + #3341 观测面，+9）：
+#: `plan_run_finalization` 终态可见性信号 7 处（`_prev_window_zero_output` 的
+#: sqlalchemy select / SessionLocal / PlanRun、metrics counter、`plan_chain_trigger`
+#: 助手两处——延续该模块纪律：顶层只取 models 纯定义与 plan_run_events，
+#: SessionLocal/trigger 助手一律函数体内取，不牵连 plan_run_abort clean-env 契约）；
+#: `plan_chain_trigger` 1 处（`dispatch_notification_async`，通知服务重依赖）；
+#: `recycler` 1 处（`case_result_ingest_pending`，与函数内既有 task_queue 懒取同型）。
+#: 依赖方向无环（finalization → chain_trigger 为编排者 → 链触发既有许可向），
+#: 留痕于 PR 描述与本行。
+_BASELINE = 626
 
 # ADR-0051 Phase 3：版本目录已退役，脚本族树（backend/agent/scripts/<name>/）按包发布、
 # 属独立审计面，整棵排除（此前只排除 v<version>/ 冻结目录）。

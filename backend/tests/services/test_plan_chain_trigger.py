@@ -1024,3 +1024,102 @@ def test_settle_ready_decision_matrix():
     # 心跳窗内瞬时 OFFLINE 属于候选（#1822），但 ONLINE 谓词不满足 → 不放行
     rows_offline = [(1, "FAILED", "OFFLINE", now - timedelta(seconds=60))]
     assert _settle_ready_decision(rows_offline, now=now, active_lease_ids=set()) is False
+
+
+# ── #3066 A半：缺失段计算与去重标记 ──────────────────────────────────────────
+
+
+def _seed_three_segment_chain(db_session):
+    grandchild = Plan(name="gap-grandchild")
+    child = Plan(name="gap-child")
+    parent = Plan(name="gap-parent", next_plan_id=None)
+    db_session.add_all([parent, child, grandchild])
+    db_session.flush()
+    parent.next_plan_id = child.id
+    child.next_plan_id = grandchild.id
+    now = datetime.now(timezone.utc)
+    pr = PlanRun(
+        plan_id=parent.id,
+        status="FAILED",
+        plan_snapshot={
+            "plan": {"id": parent.id, "next_plan_id": child.id},
+            "steps": [],
+        },
+        run_type="MANUAL",
+        triggered_by="test",
+        started_at=now,
+    )
+    db_session.add(pr)
+    db_session.commit()
+    db_session.refresh(pr)
+    return pr, parent, child, grandchild
+
+
+def test_chain_missing_segments_counts_uncreated_downstream(db_session):
+    from backend.services.plan_chain_trigger import _chain_missing_segments
+
+    pr, parent, child, grandchild = _seed_three_segment_chain(db_session)
+    # 无子段：child + grandchild 共 2 段未落
+    assert _chain_missing_segments(db_session, pr) == 2
+
+    # 子段已落 → 缺口只剩 grandchild 之后的 1 段
+    now = datetime.now(timezone.utc)
+    child_run = PlanRun(
+        plan_id=child.id,
+        status="RUNNING",
+        plan_snapshot={"plan": {"id": child.id, "next_plan_id": grandchild.id}, "steps": []},
+        parent_plan_run_id=pr.id,
+        root_plan_run_id=pr.id,
+        chain_index=1,
+        run_type="CHAIN",
+        triggered_by="chain",
+        started_at=now,
+    )
+    db_session.add(child_run)
+    db_session.commit()
+    assert _chain_missing_segments(db_session, pr) == 1
+
+
+def test_chain_missing_segments_zero_when_chain_exhausted(db_session):
+    from backend.services.plan_chain_trigger import _chain_missing_segments
+
+    plan = Plan(name="gap-tail")
+    db_session.add(plan)
+    db_session.flush()
+    now = datetime.now(timezone.utc)
+    pr = PlanRun(
+        plan_id=plan.id,
+        status="FAILED",
+        plan_snapshot={"plan": {"id": plan.id, "next_plan_id": None}, "steps": []},
+        run_type="MANUAL",
+        triggered_by="test",
+        started_at=now,
+    )
+    db_session.add(pr)
+    db_session.commit()
+    db_session.refresh(pr)
+    assert _chain_missing_segments(db_session, pr) == 0
+
+
+def test_mark_chain_gap_signaled_dedups_once_per_parent(db_session):
+    from backend.services.plan_chain_trigger import _mark_chain_gap_signaled
+
+    plan = Plan(name="gap-dedup")
+    db_session.add(plan)
+    db_session.flush()
+    now = datetime.now(timezone.utc)
+    pr = PlanRun(
+        plan_id=plan.id,
+        status="FAILED",
+        plan_snapshot={"plan": {"id": plan.id}, "steps": []},
+        run_type="MANUAL",
+        triggered_by="test",
+        started_at=now,
+    )
+    db_session.add(pr)
+    db_session.commit()
+    db_session.refresh(pr)
+
+    assert _mark_chain_gap_signaled(pr, missing=2, reason="parent_failed") is True
+    assert pr.run_context["chain_visibility_gap_signaled"]["missing_segments"] == 2
+    assert _mark_chain_gap_signaled(pr, missing=2, reason="parent_failed") is False

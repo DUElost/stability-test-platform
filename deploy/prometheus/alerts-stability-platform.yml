@@ -72,6 +72,62 @@ groups:
             concurrent race lost an update. SLO: drift ratio P99 < 0.1%;
             escalate when > 1%.
 
+      # #3077：整窗 0 完成——执行链跑完而产出为 0（平台/脚本故障，非设备失败；
+      # ADR-0048 允许面内，不恢复通过率判定轴）。连续 2 窗由发射端升 critical。
+      - alert: StabilityPlanRunZeroOutput
+        expr: increase(stability_plan_run_zero_output_total{level="warning"}[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Plan run finished with zero completions
+          description: >-
+            A plan run reached terminal state with total >= 20 jobs and 0 completed
+            (#3077) — the execution chain ran but produced nothing (platform/script
+            failure, not device failures). Inspect the run's jobs and agent health.
+
+      - alert: StabilityPlanRunZeroOutputConsecutive
+        expr: increase(stability_plan_run_zero_output_total{level="critical"}[15m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Same plan produced zero completions two windows in a row
+          description: >-
+            Two consecutive terminal runs of the same plan finished with zero
+            completions (#3077) — treat as a platform/script outage for that plan
+            and check the fleet/agent side before re-running.
+
+      # #3066 A半：链级可见性——链停本段且下游段未创建；续链语义不变（ADR-0048）。
+      - alert: StabilityPlanChainIncomplete
+        expr: increase(stability_plan_chain_visibility_gap_total[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Plan chain stopped with uncreated downstream segments
+          description: >-
+            A chain stopped at its current segment while downstream plan segments
+            were never created (#3066; parent_failed / dispatch_failed /
+            no_healthy_devices). Chain-break semantics unchanged (ADR-0048) — this
+            makes the missing segments visible; see
+            run_context.chain_visibility_gap_signaled for the stopped run.
+
+      # #3341：post_completion 截止窗行——detail 长期不可读被停止重入队的积压面
+      # （原实现仅一次性 ERROR 日志，无指标无告警）。
+      - alert: StabilityPostCompletionCutoffJobs
+        expr: stability_post_completion_cutoff_jobs > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Terminal jobs cut off past the post-completion defer window
+          description: >-
+            Terminal jobs whose finish detail is still unreadable beyond the
+            post-completion defer cutoff stopped being re-enqueued (#3341); their
+            reports were never persisted and need manual inspection. Readable
+            cutoff rows are re-enqueued and will drain on their own.
+
   - name: stability-platform-security
     rules:
       - alert: StabilityCsrfOriginRejected

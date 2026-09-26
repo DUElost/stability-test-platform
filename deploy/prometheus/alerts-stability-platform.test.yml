@@ -1144,3 +1144,73 @@ tests:
       - eval_time: 30m
         alertname: StabilityAgentArtifactSubmitDropped
         exp_alerts: []
+
+  # ── #3077：整窗 0 完成（warning / critical 由 level 标签区分）──────────────
+  - interval: 1m
+    input_series:
+      - series: 'stability_plan_run_zero_output_total{level="warning"}'
+        values: '0+1x20'
+      - series: 'stability_plan_run_zero_output_total{level="critical"}'
+        values: '0x25'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: StabilityPlanRunZeroOutput
+        exp_alerts:
+          - exp_labels:
+              level: warning
+              severity: warning
+            exp_annotations:
+              summary: "Plan run finished with zero completions"
+              description: "A plan run reached terminal state with total >= 20 jobs and 0 completed (#3077) — the execution chain ran but produced nothing (platform/script failure, not device failures). Inspect the run's jobs and agent health."
+      - eval_time: 20m
+        alertname: StabilityPlanRunZeroOutputConsecutive
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'stability_plan_run_zero_output_total{level="critical"}'
+        values: '0+1x20'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: StabilityPlanRunZeroOutputConsecutive
+        exp_alerts:
+          - exp_labels:
+              level: critical
+              severity: critical
+            exp_annotations:
+              summary: "Same plan produced zero completions two windows in a row"
+              description: "Two consecutive terminal runs of the same plan finished with zero completions (#3077) — treat as a platform/script outage for that plan and check the fleet/agent side before re-running."
+
+  # ── #3066 A半：链级断链可见性 ──────────────────────────────────────────────
+  - interval: 1m
+    input_series:
+      - series: 'stability_plan_chain_visibility_gap_total{reason="parent_failed"}'
+        values: '0+1x20'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: StabilityPlanChainIncomplete
+        exp_alerts:
+          - exp_labels:
+              reason: parent_failed
+              severity: warning
+            exp_annotations:
+              summary: "Plan chain stopped with uncreated downstream segments"
+              description: "A chain stopped at its current segment while downstream plan segments were never created (#3066; parent_failed / dispatch_failed / no_healthy_devices). Chain-break semantics unchanged (ADR-0048) — this makes the missing segments visible; see run_context.chain_visibility_gap_signaled for the stopped run."
+
+  # ── #3341：post_completion 截止窗行 gauge（持续 >0 才告警，可读行排空即恢复）──
+  - interval: 1m
+    input_series:
+      - series: 'stability_post_completion_cutoff_jobs'
+        values: '0x5 3x25'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: StabilityPostCompletionCutoffJobs
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: StabilityPostCompletionCutoffJobs
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "Terminal jobs cut off past the post-completion defer window"
+              description: "Terminal jobs whose finish detail is still unreadable beyond the post-completion defer cutoff stopped being re-enqueued (#3341); their reports were never persisted and need manual inspection. Readable cutoff rows are re-enqueued and will drain on their own."
