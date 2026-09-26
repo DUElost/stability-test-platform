@@ -328,7 +328,11 @@ _ADR_VERSION_TOKEN = re.compile(r"v(\d+\.\d+)")
 _ADR_README_LINK = re.compile(r"\((?:\./)?(ADR-\d{4}[^)]*\.md)\)")
 _ADR_DOCMAP_LINK = re.compile(r"\((?:\./)?adr/(ADR-\d{4}[^)]*\.md)\)")
 _ADR_M7_ENTRY = re.compile(
-    r"ADR-(\d{4})（\*\*(Proposed|Accepted|Superseded|Deprecated)\*\*\s*v(\d+\.\d+)"
+    # M7 看板行两种实存形态（#3205）：完整 `ADR-0036（**Accepted** v1.0…` 与紧凑
+    # `**0051**（v1.8；…` / `**ADR-0047**（v1.3：…`——原正则只认完整形态，对整行
+    # finditer 0 命中，看板状态/版本比对对**全部** ADR 静默失明。紧凑形态无状态词，
+    # status=None（状态比对跳过、版本照比）。
+    r"\*{0,2}(?:ADR-)?(\d{4})\*{0,2}（(?:\*\*(Proposed|Accepted|Superseded|Deprecated)\*\*\s*)?v(\d+\.\d+)"
 )
 
 
@@ -1669,6 +1673,13 @@ def run_check() -> int:
             em.group(1): (em.group(2), em.group(3))
             for em in _ADR_M7_ENTRY.finditer(m7_line)
         }
+        if m7_line and not m7_entries:
+            # #3205 失明下限：看板行在场却解析出 0 条目 = 全部 ADR 的看板比对
+            # 静默跳过（0 条目假绿，#2639/#2870 同纪律）。
+            issues.append(
+                "S12 M7 看板行不可解析（0 条目命中）——全部 ADR 的看板状态/版本比对"
+                f"已静默跳过；行首片段：{m7_line.strip()[:120]!r}"
+            )
         docmap_rows: dict[str, list[str]] = {}
         for line in docmap_text.splitlines():
             fn, tokens = parse_docmap_adr_row(line)
