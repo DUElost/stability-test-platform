@@ -143,6 +143,24 @@ def test_file_changed_after_scan_is_skipped(devices):
     assert _ino(a) != _ino(b)
 
 
+def test_canonical_changed_after_scan_is_skipped(devices):
+    """#3385：canonical 侧同档复核——「哈希后、链接前」被同尺寸原地改写
+    （mtime 变）的 canonical 不得带旧内容链满全组。修复前该侧只比
+    (ino, size)，mtime 漂移逃过拦截。"""
+    a = _write(devices, 1, "e1/x", _blob(1))
+    b = _write(devices, 2, "e1/x", _blob(1))
+    by_size, _ = dd.collect_candidates(
+        devices, [1, 2], min_size=dd.EDGE, mtime_cutoff=time.time() - 3600, execute=False,
+    )
+    groups = dd.find_duplicate_groups(by_size)
+    os.utime(a, (OLD + 60, OLD + 60))  # canonical（组内首个）被改动
+
+    s = dd.link_groups(groups, execute=True)
+
+    assert (s.linked, s.skipped) == (0, 1)
+    assert _ino(a) != _ino(b)
+
+
 def test_stale_tmp_link_is_removed_only_on_execute(devices):
     tmp = _write(devices, 1, "e1/x" + dd.TMP_SUFFIX, b"leftover")
 
