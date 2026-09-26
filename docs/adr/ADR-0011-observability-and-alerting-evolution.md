@@ -52,6 +52,10 @@
   - 框架指标：saq_tasks_total、saq_task_duration、saq_queue_depth、socketio_connections_active、apscheduler_job_runs_total、apscheduler_job_duration（共 6 项）
   - Grafana dashboard：`docs/grafana/stability-platform-dashboard.json`（7 分组、20 面板）
 - 后续以独立 ADR 方式重启告警规则与运维闭环规划（当前 ADR 仅锁定第一层指标基线）
+  - **决策层级澄清（2026-09-26 补，#3050 裁决 D4）**：上句的「独立 ADR」管的是**规划级**变更——告警路由 /
+    receiver 拓扑（如 #3230 的自环）、severity 语义、值班与运维闭环流程；**不是**逐条规则的门槛。单条告警规则的新增、
+    重标或退役，附现网标定证据（回测误报数）+ promtool 场景 + Agent Note 即可合入，不需要 ADR——这是 #2754 / #2900 /
+    #2959 / #3209 以来的既有实践，本条只把它写成文字，不改变现行语义。
 - 通知**投递**语义（成功/失败定义、重试 owner、超时、幂等、同步异步边界、投递事实落库）已由 [ADR-0036](./ADR-0036-notification-delivery-semantics.md) 单独裁决；本 ADR 仅承接其可观测性要求（指标/日志口径），不重复定义投递行为
 
 ## 关联实现/文档
