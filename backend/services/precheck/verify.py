@@ -7,7 +7,7 @@ from typing import Optional
 
 from backend.realtime.socketio_server import AgentNotConnectedError, AgentRpcError, call_agent_rpc
 
-from . import VERIFY_TIMEOUT_SECONDS
+from . import VERIFY_CONCURRENCY, VERIFY_TIMEOUT_SECONDS
 
 
 async def verify_one_host(
@@ -34,8 +34,21 @@ async def verify_one_host(
 async def gather_verify(
     host_ids: list[str], expected: list[dict]
 ) -> dict[str, tuple[bool, list[dict], Optional[str]]]:
-    coros = [verify_one_host(hid, expected) for hid in host_ids]
-    results = await asyncio.gather(*coros, return_exceptions=True)
+    """对一批主机并发核验；#3422 起并发按 ``VERIFY_CONCURRENCY`` 加界。
+
+    加界原因（生产实测，2026-09-26）：单次 gather 内主机数 ≥30 时 ack 大面积
+    超时（而单机粒度调用健康）；admission 全有全无，不设界则大 run 恒不准入。
+    每台仍走 ``verify_one_host`` 的独立超时与错误归因，返回结构与顺序不变。
+    """
+    sem = asyncio.Semaphore(VERIFY_CONCURRENCY)
+
+    async def _verify(hid: str):
+        async with sem:
+            return await verify_one_host(hid, expected)
+
+    results = await asyncio.gather(
+        *(_verify(hid) for hid in host_ids), return_exceptions=True
+    )
     out: dict[str, tuple[bool, list[dict], Optional[str]]] = {}
     for hid, res in zip(host_ids, results, strict=True):
         if isinstance(res, Exception):

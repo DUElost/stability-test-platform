@@ -11,6 +11,7 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+import socketio
 
 from backend.realtime import socketio_server
 from backend.realtime.socketio_server import (
@@ -176,6 +177,44 @@ async def test_call_agent_rpc_wraps_timeout(stub_sio_and_ns):
 
     with pytest.raises(AgentRpcError, match="timed out"):
         await call_agent_rpc("host-A", "verify_scripts", {}, timeout=0.5)
+
+
+@pytest.mark.asyncio
+async def test_call_agent_rpc_maps_socketio_ack_timeout(stub_sio_and_ns):
+    """#3422：python-socketio 的 ack 超时抛的是**它自己的** TimeoutError
+    （``str()`` 为空、与 asyncio 同名类无继承关系）——必须映射为
+    ``timed out``，否则生产上会显示成 ``failed: ``（空消息）误导排查。
+    """
+    fake_sio, fake_ns = stub_sio_and_ns
+    fake_ns._host_to_sid["host-A"] = "sid-A"
+    fake_sio.call.side_effect = socketio.exceptions.TimeoutError()
+
+    with pytest.raises(AgentRpcError, match="timed out after 2.0s"):
+        await call_agent_rpc("host-A", "verify_scripts", {}, timeout=2.0)
+
+
+@pytest.mark.asyncio
+async def test_call_agent_rpc_records_outcome_metrics(stub_sio_and_ns):
+    """#3422：RPC 终局落 ``stability_agent_rpc_total{event,outcome}``。"""
+    from backend.core.metrics import agent_rpc_total
+
+    fake_sio, fake_ns = stub_sio_and_ns
+    fake_ns._host_to_sid["host-A"] = "sid-A"
+
+    def _value(event: str, outcome: str) -> float:
+        return agent_rpc_total.labels(event=event, outcome=outcome)._value.get()
+
+    ok_before = _value("verify_scripts", "ok")
+    timeout_before = _value("verify_scripts", "timeout")
+
+    fake_sio.call.return_value = {"ok": True}
+    await call_agent_rpc("host-A", "verify_scripts", {})
+    assert _value("verify_scripts", "ok") == ok_before + 1
+
+    fake_sio.call.side_effect = socketio.exceptions.TimeoutError()
+    with pytest.raises(AgentRpcError):
+        await call_agent_rpc("host-A", "verify_scripts", {})
+    assert _value("verify_scripts", "timeout") == timeout_before + 1
 
 
 @pytest.mark.asyncio

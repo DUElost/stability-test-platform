@@ -413,6 +413,24 @@ socketio_connections = Gauge(
     ['namespace']  # /agent, /dashboard
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
+# #3422：Agent RPC 终局与耗时。admission 预检（verify_scripts 批量）此前无
+# 任何 RPC 级可观测量——生产上表现为「queue_blockers 里一条空消息」，
+# 排查只能靠外部探针。event 白名单归一（未知 → other，防无界值域）。
+_AGENT_RPC_EVENTS = ("verify_scripts", "control", "ping")
+_AGENT_RPC_OUTCOMES = ("ok", "timeout", "error", "no_ack", "not_connected")
+
+agent_rpc_total = Counter(
+    'stability_agent_rpc_total',
+    'Agent RPC calls by event and outcome',
+    ['event', 'outcome'],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+agent_rpc_duration_seconds = Histogram(
+    'stability_agent_rpc_duration_seconds',
+    'Agent RPC duration by event (seconds)',
+    ['event'],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
 # ============================================================================
 # Background Thread Pool Metrics (#1122)
 # ============================================================================
@@ -941,6 +959,25 @@ def record_socketio_connection(namespace: str, connected: bool):
         socketio_connections.labels(namespace=namespace).inc()
     else:
         socketio_connections.labels(namespace=namespace).dec()
+
+
+def record_agent_rpc(event: str, outcome: str, duration: float) -> None:
+    """#3422：一次 Agent RPC 的终局（ok/timeout/error/no_ack/not_connected）与耗时。
+
+    event/outcome 均白名单归一（未知值不进入 label 值域）。观测绝不影响业务：
+    调用方（``socketio_server.call_agent_rpc``）在异常路径上也要落点，故本函数
+    自身不再抛错。
+    """
+    if not PROMETHEUS_AVAILABLE:
+        return
+    ev = event if event in _AGENT_RPC_EVENTS else "other"
+    oc = outcome if outcome in _AGENT_RPC_OUTCOMES else "error"
+    _safe_emit(lambda: agent_rpc_total.labels(event=ev, outcome=oc).inc())
+    _safe_emit(
+        lambda: agent_rpc_duration_seconds.labels(event=ev).observe(
+            max(0.0, float(duration))
+        )
+    )
 
 
 def record_saq_task(task_name: str, status: str, duration: float):
