@@ -16,7 +16,8 @@
   + 就地解耦 2（`test_step_log_batching` 的服务端 2 例、`test_legacy_tool_cleanup`
   的跨包墓碑 2 例）；
 - 第二批（7 个）：全部迁移——`test_aee_metadata` / `test_login_lockout` /
-  `test_pipeline_validator_parity_738` → `backend/tests/core/`；`test_cron_scheduler`
+  `test_pipeline_validator_parity_738`（2026-09-26 更名 `test_pipeline_validator_contract_738`）
+  → `backend/tests/core/`；`test_cron_scheduler`
   → `backend/tests/scheduler/`；`test_mtbf_suite` → `backend/tests/services/`；
   `test_p3_3_multi_instance` → `backend/tests/realtime/`；`test_saq_scan_pipeline`
   → `backend/tests/tasks/`。

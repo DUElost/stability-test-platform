@@ -3,6 +3,9 @@
 Status: implemented
 Class: process
 
+> **更名注记（2026-09-26）**：本笔记提到的 `test_pipeline_validator_parity_738.py` 已更名为
+> `backend/tests/core/test_pipeline_validator_contract_738.py`（内容自 ADR-0054 起已从双端 parity 改为单实现 + 布局对拍；#3401 A1）。
+
 ## Decision
 
 给 `backend/agent/` 的**生产代码**（含 `scripts/` 下已发布脚本，不含它自己的测试）加一条
