@@ -1,5 +1,12 @@
+import pytest
+
 from backend.services.agent_env_sync import (
+    AGENT_PATH_ENV_KEYS,
     PROTECTED_ENV_KEYS,
+    RETIRED_ENV_KEYS,
+    _AGENT_SCOPED_ENV_KEYS,
+    _FLEET_ENV_KEYS,
+    _install_dir_env_overrides,
     agent_path_keys_to_verify,
     hot_update_env_overrides,
     merge_env_overrides,
@@ -172,7 +179,7 @@ def test_merge_env_overrides_replaces_existing_key():
     ]
     overrides = hot_update_env_overrides()
 
-    new_lines, updated = merge_env_overrides(lines, overrides)
+    new_lines, updated, _removed = merge_env_overrides(lines, overrides)
 
     assert "AIMONKEY_RESOURCE_DIR" in updated
     assert "HOST_ID=abc" in new_lines
@@ -183,7 +190,7 @@ def test_merge_env_overrides_skips_protected_keys_even_if_in_overrides():
     lines = ["HOST_ID=keep-me", "API_URL=http://node.local:8000"]
     overrides = {"HOST_ID": "overwrite", "LOG_DIR": "/opt/stability-test-agent/logs"}
 
-    new_lines, updated = merge_env_overrides(lines, overrides)
+    new_lines, updated, _removed = merge_env_overrides(lines, overrides)
 
     assert "HOST_ID=keep-me" in new_lines
     assert "API_URL=http://node.local:8000" in new_lines
@@ -194,7 +201,7 @@ def test_merge_env_overrides_appends_missing_key():
     lines = ["HOST_ID=abc"]
     overrides = hot_update_env_overrides()
 
-    new_lines, updated = merge_env_overrides(lines, overrides)
+    new_lines, updated, _removed = merge_env_overrides(lines, overrides)
 
     assert "AIMONKEY_RESOURCE_DIR" in updated
     assert any(line.startswith("AIMONKEY_RESOURCE_DIR=") for line in new_lines)
@@ -204,7 +211,7 @@ def test_merge_env_overrides_preserves_comments_and_blank_lines():
     lines = ["", "# keep", "HOST_ID=abc", ""]
     overrides = hot_update_env_overrides()
 
-    new_lines, _updated = merge_env_overrides(lines, overrides)
+    new_lines, _updated, _removed = merge_env_overrides(lines, overrides)
 
     assert new_lines[0] == ""
     assert new_lines[1] == "# keep"
@@ -301,3 +308,72 @@ def test_unisoc_package_refs_are_agent_scoped(monkeypatch):
     assert overrides["STP_UNISOC_LOG_SCAN_PACKAGE_REF"] == "Monkey-Log-Scan-GT-SPRD/2026.09.23"
     assert overrides["STP_UNISOC_SCAN_RESULT_PACKAGE_REF"] == "Scan-Result-GT/2026.09.23"
     assert "STP_AGENT_UNISOC_LOG_SCAN_PACKAGE_REF" not in overrides
+
+
+# ── #3356：退役键删键通道 ────────────────────────────────────────────────
+
+
+def test_retired_keys_are_disjoint_from_all_render_faces():
+    """退役键与一切渲染面（含 PROTECTED）不相交——相顶 = 同步每轮先写后删，
+    渲染面被静默删空（wrapper 收到相交集载荷即 fail-closed，判据提前到测试面）。"""
+    render_faces = (
+        set(_install_dir_env_overrides("/opt/stability-test-agent"))
+        | set(_FLEET_ENV_KEYS)
+        | set(_AGENT_SCOPED_ENV_KEYS.values())
+        | {"STP_NFS_ROOT"}  # STP_AEE_NFS_ROOT 的脚本侧别名
+        | set(PROTECTED_ENV_KEYS)
+        | set(AGENT_PATH_ENV_KEYS)
+    )
+    overlap = sorted(RETIRED_ENV_KEYS & render_faces)
+    assert not overlap, (
+        f"退役键仍在渲染面上（先移渲染面，再进 §6/RETIRED_ENV_KEYS）：{overlap}"
+    )
+
+
+def test_merge_env_overrides_deletes_retired_key_lines():
+    lines = [
+        "# comment kept",
+        "USE_SESSION_WATCHDOG=1",  # 已移除键：删键用例
+        "LOG_DIR=/opt/logs",
+        "ENABLE_CRON_SCHEDULER=0",  # 已移除键：删键用例
+        "",
+    ]
+    new_lines, updated, removed = merge_env_overrides(lines, {"LOG_DIR": "/new/logs"})
+
+    assert "USE_SESSION_WATCHDOG=1" not in new_lines  # 已移除
+    assert "ENABLE_CRON_SCHEDULER=0" not in new_lines  # 已移除
+    assert "# comment kept" in new_lines and "" in new_lines  # 注释/空行不动
+    assert "LOG_DIR=/new/logs" in new_lines
+    assert "LOG_DIR" in updated
+    assert removed == ["ENABLE_CRON_SCHEDULER", "USE_SESSION_WATCHDOG"]  # 已移除键排序回报
+
+
+def test_merge_env_overrides_retire_absent_key_is_idempotent_noop():
+    """不存在的退役键不回报、不追加空行——第二次同步起 removed 恒空（幂等）。"""
+    lines = ["LOG_DIR=/opt/logs"]
+
+    new_lines, _updated, removed = merge_env_overrides(
+        lines, {}, retired_keys=frozenset({"USE_SESSION_WATCHDOG"})  # 已移除
+    )
+
+    assert removed == []
+    assert new_lines == lines
+
+
+def test_merge_env_overrides_rejects_retired_key_in_overrides():
+    """渲染面与退役表相顶 → 镜像与 wrapper 同语义 fail-closed。"""
+    with pytest.raises(ValueError, match="USE_SESSION_WATCHDOG"):  # 已移除键相顶
+        merge_env_overrides(
+            ["USE_SESSION_WATCHDOG=1"], {"USE_SESSION_WATCHDOG": "1"},  # 已移除键相顶用例
+            retired_keys=frozenset({"USE_SESSION_WATCHDOG"}),  # 已移除
+        )
+
+
+def test_merge_env_overrides_empty_payload_keeps_lines_verbatim():
+    lines = ["HOST_ID=abc", "# keep"]
+
+    new_lines, updated, removed = merge_env_overrides(
+        lines, {}, retired_keys=frozenset()
+    )
+
+    assert new_lines == lines and updated == [] and removed == []

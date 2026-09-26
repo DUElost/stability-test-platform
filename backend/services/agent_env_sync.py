@@ -10,6 +10,13 @@ Control plane operators set fleet defaults once (backend ``.env``); each
 Keys the control plane also consumes itself must not be synced verbatim when
 the two roles need different values — those go through ``STP_AGENT_``-prefixed
 source names instead (see ``_AGENT_SCOPED_ENV_KEYS``).
+
+Retired keys (``RETIRED_ENV_KEYS``) are deleted from the host ``.env`` during
+every sync (#3356): removing a key from the render face used to leave the old
+line on hosts forever.  The production write path is the privilege wrapper
+(``stp_agent_priv.py::_sync_env`` via ``host_updater``), which receives the
+retire set per invocation; ``merge_env_overrides`` below is the same-semantics
+mirror kept for tests — do not mistake it for the production path.
 """
 
 from __future__ import annotations
@@ -113,6 +120,24 @@ AGENT_PATH_ENV_KEYS: frozenset[str] = frozenset(
     }
 )
 
+# Retired keys: deleted from the host .env on every sync (#3356 候选 2).
+# 删渲染面键后，旧行曾永远留在主机上（merge 只覆盖/追加）。本表与
+# `docs/development/environment-variables.md` §6「已移除的键」**逐键相等**
+# （tests/test_removed_env_keys.py 双向钉死：§6 加行须同步加这里，删行同理）——
+# §6 是唯一登记面，本表只是它的主机侧执行面，不另立第二份清单。
+# 退役一个渲染键的顺序：先从渲染面移除（_install_dir_env_overrides / 上述各表），
+# 再在 §6 加行并同步本表——两步颠倒会被 render-face 不相交判据拦下。
+# 约束（测试钉死）：与本文件一切在渲染面上的键及 PROTECTED_ENV_KEYS 不相交。
+RETIRED_ENV_KEYS: frozenset[str] = frozenset(
+    {
+        "USE_SESSION_WATCHDOG",  # 已移除（§6）：本行是删键通道引用，非读取点
+        "BACKPRESSURE_LAG_THRESHOLD",  # 已移除（§6）
+        "BACKPRESSURE_RELEASE_THRESHOLD",  # 已移除（§6）
+        "BACKPRESSURE_LOG_RATE_LIMIT",  # 已移除（§6）
+        "ENABLE_CRON_SCHEDULER",  # 已移除（§6）
+    }
+)
+
 
 def _install_dir_env_overrides(install_dir: str) -> dict[str, str]:
     """Paths derived from the standard agent install layout."""
@@ -181,26 +206,50 @@ def agent_path_keys_to_verify(overrides: dict[str, str]) -> list[str]:
 def merge_env_overrides(
     lines: list[str],
     overrides: dict[str, str],
-) -> tuple[list[str], list[str]]:
+    retired_keys: frozenset[str] = RETIRED_ENV_KEYS,
+) -> tuple[list[str], list[str], list[str]]:
     """Merge allowlisted overrides into .env lines.
 
-    Preserves comments, blank lines, and keys outside the allowlist.
-    Returns ``(new_lines, updated_keys)``.
+    Preserves comments, blank lines, and keys outside the allowlist.  Lines
+    whose key is in ``retired_keys`` are dropped entirely (#3356) — retired
+    keys must never also appear in ``overrides`` (ValueError, mirroring the
+    wrapper's fail-closed rejection).  Returns ``(new_lines, updated_keys,
+    removed_keys)``; ``removed_keys`` lists keys whose lines were actually
+    deleted (absent keys are not reported).
+
+    本函数是 wrapper ``stp_agent_priv.py::_sync_env`` 的同语义镜像（测试用），
+    不是生产路径——生产删键经 ``host_updater`` 以 ``--retired-keys-b64`` 下发。
     """
-    if not overrides:
-        return list(lines), []
+    if not overrides and not retired_keys:
+        return list(lines), [], []
+
+    retired = set(retired_keys)
+    conflict = sorted(retired & set(overrides))
+    if conflict:
+        raise ValueError(
+            "retired keys also present in overrides (render/retire tables "
+            "conflict): " + ",".join(conflict)
+        )
 
     seen: set[str] = set()
+    removed: set[str] = set()
     updated_keys: list[str] = []
     new_lines: list[str] = []
 
     for line in lines:
         stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in line:
+        if (
+            not stripped
+            or stripped.startswith("#")
+            or "=" not in line
+        ):
             new_lines.append(line)
             continue
         key, _, _ = line.partition("=")
         key = key.strip()
+        if key in retired:
+            removed.add(key)
+            continue
         if key in PROTECTED_ENV_KEYS:
             new_lines.append(line)
             continue
@@ -217,4 +266,4 @@ def merge_env_overrides(
         new_lines.append(f"{key}={val}")
         updated_keys.append(key)
 
-    return new_lines, updated_keys
+    return new_lines, updated_keys, sorted(removed)

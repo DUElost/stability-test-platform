@@ -538,6 +538,8 @@ def cmd_capabilities(args, conf):
     """
     for command in sorted(_SUBCOMMAND_CONTRACT):
         print(command)
+    for token in _EXTRA_CAPABILITIES:
+        print(token)
     return 0
 
 
@@ -857,8 +859,28 @@ def _sync_env(args, target_fd):
         # #2069：值侧与键侧同档校验——值内换行会顶出额外行（如注入 LD_PRELOAD）。
         _reject_unsafe_env_line(value, "override value for %r" % key)
 
-    if not overrides:
+    # #3356：退役键——merge 后从 .env 整行删除。空载荷 = 无退役键（老调用方兼容）。
+    if args.retired_keys_b64:
+        retired_keys = json.loads(
+            _decode_b64(args.retired_keys_b64, "retired_keys")
+        )
+    else:
+        retired_keys = []
+    if not isinstance(retired_keys, list) or not all(
+        isinstance(key, str) for key in retired_keys
+    ):
+        _fail("retired_keys payload shape invalid")
+    for key in retired_keys:
+        if not _NAME_RE.match(key):
+            _fail("retired key invalid: %r" % key)
+    _conflict = sorted(set(retired_keys) & set(overrides))
+    if _conflict:
+        # 渲染面与退役表相顶 = 控制面两表矛盾：同步每轮先写后删，渲染面静默失效。
+        _fail("retired keys also in overrides: %s" % ",".join(_conflict))
+
+    if not overrides and not retired_keys:
         print("STP_ENV_SYNCED=")
+        print("STP_ENV_RETIRED_REMOVED=")
         print("STP_ENV_PATH_MISSING=")
         return 0
 
@@ -881,8 +903,27 @@ def _sync_env(args, target_fd):
         if key not in seen:
             new_lines.append("%s=%s" % (key, value))
             updated_keys.append(key)
-    _write_env_preserving_owner(target_fd, new_lines, metadata)
+
+    # #3356：删退役键行（在 overrides merge 之后——两集合已验证不相交）。
+    # 删除只发生在解析出 KEY=VALUE 形态的行上；注释与空行原样保留。
+    retired_set = set(retired_keys)
+    removed_keys = set()
+    if retired_set:
+        kept_lines = []
+        for line in new_lines:
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#") and "=" in line:
+                key = line.partition("=")[0].strip()
+                if key in retired_set:
+                    removed_keys.add(key)
+                    continue
+            kept_lines.append(line)
+        new_lines = kept_lines
+
+    if overrides or removed_keys:
+        _write_env_preserving_owner(target_fd, new_lines, metadata)
     print("STP_ENV_SYNCED=" + ",".join(sorted(updated_keys)))
+    print("STP_ENV_RETIRED_REMOVED=" + ",".join(sorted(removed_keys)))
 
     missing = {
         key: overrides[key]
@@ -1048,6 +1089,7 @@ _SUBCOMMAND_CONTRACT = {
     "write-digest": ["--digest", "sha256:" + "0" * 64, "--kind", "resources"],
     "sync-env": [
         "--secret-b64", "AA==", "--overrides-b64", "AA==", "--path-keys-b64", "AA==",
+        "--retired-keys-b64", "AA==",
     ],
     "deps-marker": ["--sha", "0" * 64],
     "fix-ownership": [],
@@ -1055,6 +1097,11 @@ _SUBCOMMAND_CONTRACT = {
     "ensure-udev-rule": [],
     "usb-authorized": ["--port", "1-5.3.1", "--value", "0"],
 }
+
+# #3356：参数级能力标记（capabilities 在子命令行之外逐行输出）。旧 wrapper 只报
+# 子命令名，控制面远端脚本据此对**缺少新参数面**的 wrapper 在任何写动作之前
+# fail-closed（子命令级判据对「同名的 sync-env 缺新 flag」没有判别力）。
+_EXTRA_CAPABILITIES = ("sync-env/retired-keys",)
 
 
 def _registered_subcommands(parser) -> list:
@@ -1140,6 +1187,8 @@ def _build_parser():
     p.add_argument("--secret-b64", default="")
     p.add_argument("--overrides-b64", default="")
     p.add_argument("--path-keys-b64", default="")
+    # #3356：退役键清单（JSON 数组的 b64），merge 后从 .env 删除这些行。
+    p.add_argument("--retired-keys-b64", default="")
 
     p = sub.add_parser("deps-marker", help="write deps installed sha marker")
     p.add_argument("--sha", required=True)
