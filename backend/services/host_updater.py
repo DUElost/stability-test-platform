@@ -16,6 +16,7 @@ import io
 import json
 import logging
 import os
+import re
 import tarfile
 import time
 import uuid
@@ -583,8 +584,21 @@ def _parse_env_retired_removed(stdout_text: str) -> list[str]:
     return []
 
 
+#: `VERSION` 回退值的合法形态（短 sha / 版本串）——防止把坏文件当版本号写进主机 VERSION。
+_AGENT_CODE_VERSION_RE = re.compile(r"[0-9A-Za-z][0-9A-Za-z._-]{3,39}")
+
+
 def get_agent_code_version() -> str:
-    """Return the short git HEAD of the agent source tree, or '' if unavailable."""
+    """Agent 源树的短 revision（仅作**溯源文本**，判据见 ADR-0040 v1.1）；取不到返回 ''。
+
+    两条来源，先 git 后文件回退：
+    - 仓库布局（开发/CI）：`git rev-parse --short HEAD`；
+    - release / bundle 布局（控制面现行部署形态，**不是 git 仓库**）：读
+      ``<agent 源树>/VERSION``——由 ``tools/release/build_bundle.py`` 构建期写入。
+      没有这条回退时，bundle 布局下热更新路径的 ``code_version`` 为空、远端
+      ``write-version`` 被跳过 → 主机 VERSION/`agent_code_revision` 停在上一代
+      （2026-09-26 实测：canary 经 API 热更新后仍报上一代 revision）。
+    """
     import subprocess
 
     try:
@@ -596,10 +610,17 @@ def get_agent_code_version() -> str:
             check=False,
         )
         if completed.returncode == 0:
-            return completed.stdout.strip()
+            short = completed.stdout.strip()
+            if short:
+                return short
     except Exception:
         logger.debug("agent_code_version_lookup_failed", exc_info=True)
-    return ""
+
+    try:
+        value = (_AGENT_SOURCE_DIR / "VERSION").read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    return value if _AGENT_CODE_VERSION_RE.fullmatch(value) else ""
 
 
 def execute_hot_update(
