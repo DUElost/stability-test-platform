@@ -179,6 +179,39 @@ class TestClearDeviceIntent:
         db_session.expire_all()
         assert db_session.get(Host, "intent-h7").emptied_at is None
 
+    def test_clear_reason_rides_single_audit_row_and_noop_writes_none(
+        self, client, db_session, admin_headers,
+    ):
+        """?reason= 并入清除动作的同一条审计；对无意图 host 的清除是 no-op，带 reason 也不留痕。"""
+        _host(db_session, "intent-h7r")
+        client.post(
+            "/api/v1/hosts/intent-h7r/device-intent",
+            json={"reason": "撤线"}, headers=admin_headers,
+        )
+
+        first = client.delete(
+            "/api/v1/hosts/intent-h7r/device-intent",
+            params={"reason": "设备回场"}, headers=admin_headers,
+        )
+        second = client.delete(
+            "/api/v1/hosts/intent-h7r/device-intent",
+            params={"reason": "重复点击"}, headers=admin_headers,
+        )
+
+        assert first.status_code == 200 and second.status_code == 200
+        db_session.expire_all()
+        rows = [
+            row for row in db_session.execute(
+                select(AuditLog).where(
+                    AuditLog.resource_id == "intent-h7r",
+                    AuditLog.action == "clear_device_intent",
+                )
+            ).scalars()
+        ]
+        assert len(rows) == 1, "一次真实清除只留一条审计；no-op 清除不写审计"
+        assert rows[0].details["clear_reason"] == "设备回场"
+        assert "before" in rows[0].details
+
 
 class TestRetireIntentMutex:
     def test_retire_refuses_intent_set_host(self, client, db_session, admin_headers):
