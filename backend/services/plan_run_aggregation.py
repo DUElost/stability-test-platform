@@ -179,8 +179,15 @@ def apply_plan_run_aggregation(run: Any, jobs: Sequence[Any], *, db: Any = None)
 # 两者都以属性访问暴露 status/host_id。reconciler 传 ORM 对象，聚合器传轻量 Row。
 
 
-def recount_plan_run_counters(run: Any, jobs: Sequence[Any]) -> dict[str, int]:
-    """Recompute counter fields from *jobs*; return before/after drift info."""
+def recount_plan_run_counters(
+    run: Any, jobs: Sequence[Any], *, record_drift: bool = True,
+) -> dict[str, int]:
+    """Recompute counter fields from *jobs*; return before/after drift info.
+
+    ``record_drift=False`` 供**聚合器**调用（#3399 裁决 A）：聚合器本身就是
+    计数的唯一写入方，批量补齐必然命中 ``before != after``——那是正常路径，
+    不是漂移。drift 埋点只保留 reconciler/补偿路径（真·偏离事实的修复）。
+    """
     completed = sum(1 for j in jobs if j.status == JobStatus.COMPLETED.value)
     failed = sum(1 for j in jobs if j.status == JobStatus.FAILED.value)
     aborted = sum(1 for j in jobs if j.status == JobStatus.ABORTED.value)
@@ -207,10 +214,10 @@ def recount_plan_run_counters(run: Any, jobs: Sequence[Any]) -> dict[str, int]:
     run.failed_job_count = failed
     run.aborted_job_count = aborted
     drifted = before != after
-    if drifted:
-        # #77：漂移即埋点（每漂移列一条）。ADR-0052 后 drift 的**预期**来源是
-        # 聚合器与补偿路径对同一事实的先后改写（恒收敛为相等）；持续 > 0 仍
-        # 说明有入口绕开集中服务，counter_reconciler 修复的同时暴露给 Prometheus
+    if drifted and record_drift:
+        # #77 / #3399（裁决 A）：drift 埋点 = 「reconciler/补偿路径修复了偏离
+        # Job 事实的计数」。聚合器批量补齐不记（每轮必然发生，记了等于噪声，
+        # 告警无从标定）；持续 > 0 仍说明有入口绕开集中服务，暴露给 Prometheus
         # （SLO 守卫 ADR-0026 §6）。getattr 防御：指标是 best-effort，任何异常
         # 对象（单测 SimpleNamespace）都不得让业务逻辑失败。
         record_plan_run_counter_drift(
