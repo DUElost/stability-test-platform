@@ -8,9 +8,12 @@ alwaysApply: false
 
 修改版本化脚本前必须读取：
 
-- `docs/development/script-versioning.md`：目录、不可变、参数和退役完整契约；
-- `backend/agent/scripts/` 中目标脚本的现有版本；
-- `tools/dev/check-script-version-immutability.py`：CI 不可变门禁。
+- `docs/development/script-versioning.md`：族树、manifest 与包、不可变、参数和退役
+  完整契约（ADR-0051 Phase 3 起：每族一棵可演进源码树，无版本目录）；
+- `backend/agent/scripts/` 中目标脚本族的现有源码树；
+- `tools/dev/check_tool_manifest.py`（manifest append-only + retired 单向翻转）与
+  `tools/dev/check_script_packages.py`（族树重建 sha == 最新未退役条目）：CI 不可变/
+  等价门禁（原 check-script-version-immutability.py 已随 Phase 3 退役，#3279）。
 
 本规则只负责把 Cursor 引导到权威契约。不得在此维护脚本根默认值、注入参数清单或
 扫描结果实现细节。

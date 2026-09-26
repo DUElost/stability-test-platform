@@ -111,21 +111,21 @@ while IFS= read -r file; do
   fi
 done <<< "$staged"
 
-# ── 检查 4:已发布脚本版本不可变(ADR-0020)──
+# ── 检查 4:ADR-0051 发布单元面改动提醒(原「版本目录不可变」检查已随 Phase 3 退役)──
 #
-# CI 的 check-script-version-immutability.py 是合入端兜底;这里是提交现场拦截
-# —— 手滑/AI 会话改坏已发布版本目录时秒级报错,而非等 push 后才红。
-# 只拦 HEAD 中已存在文件的修改/删除(diff-filter=MD);新建版本目录(A)是合法
-# 路径(改契约一律走新版本),不受影响。2026-07-31 ef8808e ruff --fix 原地改写
-# 致 18/27 行 script 的 DB sha 永久失配、全平台派发中断,即此规则要拦的形态。
-published_bad="$(git diff --cached --name-only --diff-filter=MD \
-  -- 'backend/agent/scripts/*/v*/*' || true)"
-if [ -n "$published_bad" ]; then
-  echo "[BLOCK] 已发布脚本版本目录内容不可变(ADR-0020):"
-  printf '%s\n' "$published_bad" | sed 's/^/        M\/D: /'
-  echo "        改脚本契约一律新建版本: POST /api/v1/scripts/{name}/versions"
-  echo "        (确属例外的逃生阀: git commit --no-verify,并需说明 rebaseline 理由)"
-  failed=1
+# 版本目录已不存在(#3279:旧 glob 在 tip 匹配 0 路径,检查永久空转);发布单元 =
+# tool_manifest.json 条目 + 站点包(不可变,append-only 由 check_tool_manifest 门禁
+# 执法,唯一合法改写 = retired:false→true;族树等价由 check_script_packages 执法)。
+# 硬门禁都在 PR 侧(ci.yml 已接线);这里保留提交现场的**即时提示**——族树/清单
+# 改动必须走登记/发布链,ef8808e(ruff --fix 原地改写族树)类事故仍靠这条先看见。
+unit_changed="$(git diff --cached --name-only -- 'backend/agent/scripts/**' 'tool_manifest.json' || true)"
+if [ -n "$unit_changed" ]; then
+  echo "[WARN ] ADR-0051 发布单元面有改动(登记/发布链,PR 门禁会判):"
+  printf '%s\n' "$unit_changed" | sed 's/^/        /'
+  echo "        族树改动 → python tools/dev/check_script_packages.py --register <name> <version>(改树不登记 = 门禁红)"
+  echo "        manifest 既有条目只允许 retired:false→true(check_tool_manifest append-only)"
+  echo "        合入后 → --publish --packages-root <STP_AEE_NFS_ROOT>/packages + POST /scripts/scan"
+  warnings=$((warnings + 1))
 fi
 
 # ── 检查 5:内网主机地址 / 设备序列号(public 仓库)────────────────────

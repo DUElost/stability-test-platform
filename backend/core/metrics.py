@@ -497,6 +497,48 @@ db_pool_overflow = Gauge(
     ['engine'],
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
+# #3327: pg_stat_user_tables is an estimate, not an exact COUNT(*). Label
+# cardinality is bounded by schema/table names; no row, run, or device label.
+db_table_live_rows_estimate = Gauge(
+    'stability_db_table_live_rows_estimate',
+    'Estimated live tuples from pg_stat_user_tables',
+    ['schema', 'table'],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+db_table_dead_rows_estimate = Gauge(
+    'stability_db_table_dead_rows_estimate',
+    'Estimated dead tuples from pg_stat_user_tables',
+    ['schema', 'table'],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+db_table_total_bytes = Gauge(
+    'stability_db_table_total_bytes',
+    'pg_total_relation_size including indexes and TOAST',
+    ['schema', 'table'],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+db_table_seq_scans = Gauge(
+    'stability_db_table_seq_scans',
+    'Cumulative sequential scans mirrored from pg_stat_user_tables',
+    ['schema', 'table'],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+db_table_idx_scans = Gauge(
+    'stability_db_table_idx_scans',
+    'Cumulative index scans mirrored from pg_stat_user_tables',
+    ['schema', 'table'],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+db_table_last_autovacuum_timestamp_seconds = Gauge(
+    'stability_db_table_last_autovacuum_timestamp_seconds',
+    'Unix timestamp of the last automatic vacuum; absent if none',
+    ['schema', 'table'],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+db_table_last_autoanalyze_timestamp_seconds = Gauge(
+    'stability_db_table_last_autoanalyze_timestamp_seconds',
+    'Unix timestamp of the last automatic analyze; absent if none',
+    ['schema', 'table'],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+db_growth_snapshot_timestamp_seconds = Gauge(
+    'stability_db_growth_snapshot_timestamp_seconds',
+    'Unix timestamp of the last successful pg_stat_user_tables sample',
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
 # ── #703 第 3 面：把「池饱和」从**事后翻日志**变成**事前可见** ─────────────────────
 # 上面两个 gauge 只有**状态**（当下借出多少），看不见**等待**：#703 的现场形态是
 # `QueuePool limit of size 30 overflow 60 ...` 把 app 池与 PG max_connections 同时顶满，

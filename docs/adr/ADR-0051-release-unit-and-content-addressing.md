@@ -107,7 +107,7 @@
 ### D2：源码——每族一棵源码树，版本目录退役
 
 - `backend/agent/scripts/<name>/` 下只保留**一棵**可演进的源码树（入口 + 伴随文件 + `capabilities.json`）；版本号由 `tool_manifest.json` 条目承载，不再由目录名承载。
-- 存量 208 个版本目录在 Phase 3 **一次性删除**（前置：Phase 2a 完成且等价证明全绿）；历史可复现性由 git 历史 + 包仓库承担。
+- 存量版本目录在 Phase 3 **一次性删除**（前置：Phase 2a 完成且等价证明全绿）；历史可复现性由 git 历史 + 包仓库承担。计数口径（2026-09-22 基线）：`tool_manifest.json` = 36 族 / 211 条目（含 Start-Log-Scan 1 族 1 条外部工具条目）；`backend/agent/scripts/` 平台脚本 = 35 族 / 210 个 `v*` 目录；参与等价证明并逐字节一致 = **208**（另 2 行为无目录的已退役行）。三口径勿混用——报数注明「manifest 全集 / 平台脚本子集 / 等价证明子集」与时点（#3205）。
 - 迁移期间**不冻结**新增版本目录（09-13→09-22 新增 47 个目录中与前版差异 ≤5 行的为 0，几乎全是真实修复；且 `default_params` 硬不变量逼迫参数改动也必须开新版本）。改为：新增版本目录须在 diff 或提交说明内出现一行 `MIGRATION-EXCEPTION: <原因> #<issue>`（与 `check_new_script_family.py` 的「归类声明」同载体、同判据：只扫 `git diff base...head` 与 `git log base..head`，不读 PR 描述），并计入按周公开上调的棘轮（D8）。
 
 ### D3：script 表——DB catalog 仍是唯一运行时权威；采 C1 双列语义（修订 ADR-0033 D3 一句措辞）
@@ -195,7 +195,7 @@ ADR-0039 转 Superseded 的时机 = 本 ADR Accepted 当日（§9）。
 | **0** | 本 ADR 裁决 + §9 四组机械改动 | — | S11 锚 / S12 ⑤ + 索引一致性 / 共享元文件串行领单 |
 | **1** 部分 ✅ | 本机控制面已切 bundle 运行根，unit 从 `current` 启动，外部物料随发布根就位；生产 env 真身已落站点（D6，2026-09-25）；独立站点 install/回滚可重放验收属多站点续集 | Phase 0 | 运行期非门禁（最危险）：inventory.ini / dist-prod / venv 物料缺失 |
 | **2a** ✅ | 打包 + 登记 + 等价证明：对 210 行 `script` 从 `origin/main` 当前目录打包 → `tool_manifest.json` 登记 → 新增 `package_sha256` 列并回填 → 证明入口 sha == `content_sha256` 且伴随 sha == `support_files_manifest`（基准 = 当前字节，见 §1.3）。**`nfs_path` 不动**，可回滚。**已落地**：`tools/dev/check_script_packages.py`（`git ls-files` 成员 + 确定性打包 + 登记 + 等价门禁）、`backend/scripts/check_script_package_equivalence.py`（只读证明，生产 212 行 = 210 ok + 2 无目录退役行）、迁移 `ad51c1d3f2a1`、scan 回填（`package_backfilled` / `package_conflicts`）；manifest 条目 `python: null` = Agent 自身解释器 | Phase 0 | `check_tool_manifest` append-only；alembic 迁移门禁 |
-| **2b** ✅ | 切执行路径（D4）：`ScriptRegistry` → `ensure_package` → 三处耦合解除 → `verify_scripts` 整包校验 → `agent-code` 排除 `scripts/`；按 script 行灰度 | 2a + Phase 1 | Agent 测试面（`backend/agent/tests`）大面积改夹具；ADR-0043 宽限判据测试 |
+| **2b** ✅ | 切执行路径（D4）：`ScriptRegistry` → `ensure_package` → 三处耦合解除 → `verify_scripts` 整包校验；按 script 行灰度（`agent-code` 排除 `scripts/` 归 Phase 3，v1.1 勘误） | 2a + Phase 1 | Agent 测试面（`backend/agent/tests`）大面积改夹具；ADR-0043 宽限判据测试 |
 | **3** ✅ | 一次性删除 210 个版本目录；每族留一棵源码树；scan 注册改读 manifest；`agent-code` 排除 `scripts/` | **2a + 2b + fleet 全部 `strict` 且一轮 verify 全 `package_active`**（v1.1 勘误：删目录随热更新清主机树，回退路径消失）——2026-09-23 满足后执行 | `check-script-version-immutability.py` 已同 PR 退役；不再需要目录棘轮（D8 的棘轮对象随目录消失） |
 | **4** 部分 ✅ | 展锐三族、控制面摘要面与 manifest retired 策略已落地；D7 绑定机制、flashtool/aimonkey 登记发布、四消费族新版本已合入并发布（待换 rev 激活 + 真机取证 + 计划重指）；第 4 片撤注入/host-resources、控制面 dedup 工具包化及 legacy 路径键/回退出口未完 | Phase 1（清单形态）+ ADR-0042 D3 修订 | #737 清单门禁 + `.env*.example` 奇偶；digest 契约测试 |
 | **5** 部分 ✅ | 族级 `kind`、过渡登记簿、`allow_deactivate` 移除、`check_new_script_family.py` 退役已落地；`check-deploy-source.sh` 结构替代（排在 D7 之后）与新站参数数据验收未完 | 各自的顺序约束（D8） | 例外声明格式统一 |
