@@ -1,38 +1,39 @@
 """Tests for parse_exp_main_summary process/package fallback (ExpMain.analyse 对齐).
 
-agent/aee/metadata.py 是唯一事实源;core/aee_metadata.py 是薄 re-export。
-参数化同时跑两个入口,守卫 re-export 接线不被破坏。
+ADR-0054 第 2 步后：唯一实现是 `backend/agent/contracts/aee_metadata.py`
+（原 `backend/agent/aee/metadata.py` 搬迁而来）；`backend/core/aee_metadata.py`
+再导出壳已删除。原「agent 实现 vs core re-export」的参数化对拍随之收敛为
+单实现测试，另加旧位置墓碑断言（D5：不留再导出壳）。
 """
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-import backend.agent.aee.metadata as agent_metadata
-import backend.core.aee_metadata as core_metadata
+from backend.agent.contracts import aee_metadata
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_LEGACY_COPIES = (
+    _REPO_ROOT / "backend" / "agent" / "aee" / "metadata.py",
+    _REPO_ROOT / "backend" / "core" / "aee_metadata.py",
+)
 
 
-@pytest.fixture(params=[agent_metadata, core_metadata], ids=["agent", "core"])
-def metadata_mod(request):
-    return request.param
+@pytest.fixture
+def metadata_mod():
+    """单一实现（ADR-0054）：契约模块即唯一事实源。"""
+    return aee_metadata
 
 
-def test_core_module_reexports_agent_functions():
-    assert core_metadata.parse_exp_main_summary is agent_metadata.parse_exp_main_summary
-    assert core_metadata.normalize_aee_subtype is agent_metadata.normalize_aee_subtype
-    assert core_metadata.normalize_package_name is agent_metadata.normalize_package_name
-    assert (
-        core_metadata.infer_aee_subtype_from_paths
-        is agent_metadata.infer_aee_subtype_from_paths
-    )
-    assert (
-        core_metadata.resolve_device_log_event_type
-        is agent_metadata.resolve_device_log_event_type
-    )
-    assert (
-        core_metadata.is_placeholder_dle_event_type
-        is agent_metadata.is_placeholder_dle_event_type
-    )
+def test_single_implementation_without_legacy_copies():
+    """ADR-0054 D5：只有 contracts/ 一份实现，旧位置（含再导出壳）已删。"""
+    assert aee_metadata.__file__.endswith("backend/agent/contracts/aee_metadata.py")
+    for legacy in _LEGACY_COPIES:
+        assert not legacy.exists(), (
+            f"旧副本仍在：{legacy}——ADR-0054 D5 要求删除且不留再导出壳"
+        )
 
 
 def _write_exp_main(tmp_path, content: str) -> None:

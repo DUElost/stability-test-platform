@@ -37,7 +37,7 @@ from backend.api.schemas.plan_run import (
     WatcherSignalLinkStatsOut,
     WatcherSummaryOut,
 )
-from backend.core.aee_metadata import (
+from backend.agent.contracts.aee_metadata import (
     infer_aee_subtype_from_paths,
     normalize_aee_subtype,
     normalize_package_name,

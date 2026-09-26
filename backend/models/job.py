@@ -164,7 +164,7 @@ class JobLogSignal(Base):
     本表保留 PlanRun watcher-summary / 风险评级等观测聚合，不驱动
     scan→merge→extract 事件发现。
 
-    字段契约见 backend/agent/watcher/contracts.py LogSignalEnvelope。
+    字段契约见 backend/agent/contracts/watcher_contracts.py LogSignalEnvelope。
     幂等键：(job_id, seq_no) —— OutboxDrainer 按此键去重，重复 POST 不重复插入。
     Agent 通过 POST /api/v1/agent/log-signals 批量上送。
 

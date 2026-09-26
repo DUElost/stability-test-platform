@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
-from .metadata import (
+from ..contracts.aee_metadata import (
     infer_aee_subtype_from_paths,
     normalize_package_name,
     parse_exp_main_summary,
