@@ -907,6 +907,8 @@ def _mark_step_trace_stall(
 # #1175: detail 文件长期不到（缺失/损坏）的终态 job 若无限重入队，报告每次被
 # 回滚且每轮重算。超过该窗口（grace 之后）即停止重试并告警留痕；进程重启会
 # 重置内存去重集，重新各告警一次（可接受）。
+# #3341: 截止行不再占查询名额（SQL 层排除），且截止前经 case_result_ingest_pending
+# 复核——detail 已可读的照常重入队（主路径漏发），确实不可读才真正截止。
 _defer_cutoff_alerted: set[int] = set()
 
 
@@ -915,42 +917,69 @@ def _fill_deferred_post_completions(db, now: datetime) -> int:
 
     Waits POST_COMPLETION_GRACE_SECONDS after ended_at before triggering,
     giving the agent's outbox drain a window to be the first writer.
+
+    #3341：截止界（grace + max_defer）前移到查询之前——超窗行在 SQL 层排除
+    （原实现先 LIMIT 10 再 Python 层过滤，截止行占满名额会饿死补偿通道），
+    辅以 ORDER BY ended_at 取最老优先。截止行先经 case_result_ingest_pending
+    复核：detail 已可读说明只是主路径漏发，照常重入队不截止；确实不可读才
+    截止（行数导 gauge + ERROR 留痕，日志只写已核实的原因）。
     """
     from backend.core.task_queue import enqueue_sync
+    from backend.services.case_result_ingest import case_result_ingest_pending
 
     grace_deadline = now - timedelta(seconds=_sched().post_completion_grace_seconds)
+    defer_cutoff = now - timedelta(
+        seconds=_sched().post_completion_grace_seconds
+        + _sched().post_completion_max_defer_seconds,
+    )
     terminal_statuses = [
         JobStatus.COMPLETED.value, JobStatus.FAILED.value,
         JobStatus.ABORTED.value,
     ]
+    unresolved = [
+        JobInstance.status.in_(terminal_statuses),
+        JobInstance.post_processed_at.is_(None),
+        JobInstance.ended_at.isnot(None),
+    ]
     orphan_jobs = (
         db.query(JobInstance)
         .filter(
-            JobInstance.status.in_(terminal_statuses),
-            JobInstance.post_processed_at.is_(None),
-            JobInstance.ended_at.isnot(None),
+            *unresolved,
+            JobInstance.ended_at >= defer_cutoff,
             JobInstance.ended_at < grace_deadline,
         )
+        .order_by(JobInstance.ended_at.asc())
         .limit(10)
         .all()
     )
 
-    defer_cutoff = now - timedelta(
-        seconds=_sched().post_completion_grace_seconds + _sched().post_completion_max_defer_seconds,
+    cutoff_jobs = (
+        db.query(JobInstance)
+        .filter(*unresolved, JobInstance.ended_at < defer_cutoff)
+        .order_by(JobInstance.ended_at.asc())
+        .limit(10)
+        .all()
     )
-    for job in orphan_jobs:
-        if job.ended_at is not None and job.ended_at < defer_cutoff:
-            if job.id not in _defer_cutoff_alerted:
-                logger.error(
-                    "post_completion_defer_cutoff job=%d plan_run=%s ended=%s "
-                    "— detail 长期未达，停止重入队（报告未持久化，需人工核查）",
-                    job.id, job.plan_run_id, job.ended_at,
-                )
-                _defer_cutoff_alerted.add(job.id)
-    orphan_jobs = [
-        job for job in orphan_jobs
-        if job.ended_at is None or job.ended_at >= defer_cutoff
-    ]
+    cutoff_count = (
+        db.query(func.count(JobInstance.id))
+        .filter(*unresolved, JobInstance.ended_at < defer_cutoff)
+        .scalar()
+        or 0
+    )
+    post_completion_cutoff_jobs.set(cutoff_count)
+
+    for job in cutoff_jobs:
+        if not case_result_ingest_pending(db, job.id):
+            # detail 已可读 = 主路径漏发，照常重入队（enqueue key 同键去重兜住）。
+            orphan_jobs.append(job)
+            continue
+        if job.id not in _defer_cutoff_alerted:
+            logger.error(
+                "post_completion_defer_cutoff job=%d plan_run=%s ended=%s "
+                "— detail 不可读（缺失/损坏），停止重入队（报告未持久化，需人工核查）",
+                job.id, job.plan_run_id, job.ended_at,
+            )
+            _defer_cutoff_alerted.add(job.id)
 
     filled = 0
     for job in orphan_jobs:
