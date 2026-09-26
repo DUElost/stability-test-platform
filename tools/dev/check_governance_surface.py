@@ -52,10 +52,15 @@ AI 门禁 workflow——所有 AI 会话行为的上游事实源。本脚本只�
         非 ADR 目标只由 ② 管存在性与命中数，不重复判状态
       ⑦ 新建 ADR（头部日期 ≥ OWNERSHIP_FIELD_CUTOFF）必须写 `归属域：` 行——
         模板早已列该字段，但「可选」使其 1/51 落地、③ 实际休眠；按 S10 的
-        日期 cutoff 先例只约束新建，零 retroactive 红灯（#3014 案 1A）
+        日期 cutoff 先例只约束新建，零 retroactive 红灯（#3014 案 1A）。
+        #3093②：日期行由被检 ADR 自己填（改一行即整体消失），故 PR 通道
+        （--base）另加 merge-base..HEAD `--diff-filter=A` 的新增判定——
+        新增文件一律要求归属域、不读自填日期；base 不可得时打印射程 NOTE。
       ① key 唯一；② 非 TBD 行的 `path :: 定位` 锚可解析且命中恰 1（自带解析器，
       **不**复用 S2）；③ ADR 头部已写 `归属域：semantic-ownership <key>` 时 key
       必须落在表内（字段驱动；未写不报错）。文件缺失则跳过（叠合入 #2751 前）。
+        #3204：S15③ 另有 diff 联动面——头部版本号相对 base 变化且带归属域的
+        ADR，归属表必须出现在同 PR diff（只在 PR 通道判定；quick 保持现状）。
 
 用法:
     python tools/dev/check_governance_surface.py --check     # 门禁模式
@@ -69,6 +74,7 @@ from __future__ import annotations
 import datetime
 import os
 import re
+import subprocess
 import sys
 import tempfile
 from urllib.parse import unquote
@@ -328,7 +334,11 @@ _ADR_VERSION_TOKEN = re.compile(r"v(\d+\.\d+)")
 _ADR_README_LINK = re.compile(r"\((?:\./)?(ADR-\d{4}[^)]*\.md)\)")
 _ADR_DOCMAP_LINK = re.compile(r"\((?:\./)?adr/(ADR-\d{4}[^)]*\.md)\)")
 _ADR_M7_ENTRY = re.compile(
-    r"ADR-(\d{4})（\*\*(Proposed|Accepted|Superseded|Deprecated)\*\*\s*v(\d+\.\d+)"
+    # M7 看板行两种实存形态（#3205）：完整 `ADR-0036（**Accepted** v1.0…` 与紧凑
+    # `**0051**（v1.8；…` / `**ADR-0047**（v1.3：…`——原正则只认完整形态，对整行
+    # finditer 0 命中，看板状态/版本比对对**全部** ADR 静默失明。紧凑形态无状态词，
+    # status=None（状态比对跳过、版本照比）。
+    r"\*{0,2}(?:ADR-)?(\d{4})\*{0,2}（(?:\*\*(Proposed|Accepted|Superseded|Deprecated)\*\*\s*)?v(\d+\.\d+)"
 )
 
 
@@ -960,6 +970,155 @@ def check_ownership_domain_fields(
     return issues
 
 
+# ── S15⑦/③ diff 通道（#3093② / #3204）───────────────────────────────────
+#: #3093②：「新建 ADR」不得由 ADR 自己头部填的 `- 日期：` 判定（改一行即整体
+#: 消失）。PR 通道（--base 可得）改用版本控制系统事实：相对 merge-base 新增
+#: （`--diff-filter=A`）的 docs/adr/ADR-*.md 一律要求归属域字段；无 base 的
+#: 通道退回日期 cutoff 旧行为，并在输出里如实声明射程（不得静默）。
+_OWNERSHIP_DIFF_ROOTS = ("docs/adr",)
+
+
+def _adr_head_version(text: str) -> str | None:
+    """ADR 头部「状态」行的规范位版本（S12 同源解析；无状态行/无版本 → None）。"""
+    for ln in text.splitlines():
+        if _ADR_ANY_STATUS_LINE.match(ln):
+            return parse_adr_status_line(ln)[1]
+    return None
+
+
+def _added_and_bumped_adr_facts(
+    base: str,
+) -> tuple[
+    list[str] | None,
+    dict[str, tuple[str | None, str | None]],
+    dict[str, bool],
+    bool,
+    str,
+]:
+    """S15⑦/③ 的 git 事实采集（cwd=ROOT）。
+
+    返回 (added_adrs, version_bumps, has_domain, ownership_doc_changed, note)；
+    git 不可得时 added_adrs 为 None、其余为空并附原因——调用方必须打印射程
+    NOTE，不得静默当空集（#3093②）。
+
+    - added_adrs：merge-base(base, HEAD)..HEAD 以 `--diff-filter=A` 新增的
+      docs/adr/ADR-*.md（相对路径）；
+    - version_bumps：同 diff 中内容有改动的 ADR，头部「状态」行规范位版本
+      base→HEAD 变化的文件 → (旧版本, 新版本)——S15③ 的版本 bump 判定；
+    - has_domain：HEAD 文本是否带 `归属域：` 行（S15③ 联动的前提字段）；
+    - ownership_doc_changed：OWNERSHIP_DOC 是否出现在同一 diff。
+    """
+    try:
+        merge_base = subprocess.run(
+            ["git", "merge-base", base, "HEAD"],
+            cwd=ROOT, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        # diff 取「merge-base → 工作树」（省略第二个端点）：本地 gate 未提交的
+        # 变更同样入射程（与磁盘读面的既有语义一致）；CI 干净检出时与
+        # mb..HEAD 等价。未跟踪新文件不入 git diff，由日期 cutoff 通道兜底。
+        changed = subprocess.run(
+            ["git", "diff", "--name-only", merge_base, "--", *_OWNERSHIP_DIFF_ROOTS],
+            cwd=ROOT, capture_output=True, text=True, check=True,
+        ).stdout.splitlines()
+        ownership_changed = subprocess.run(
+            ["git", "diff", "--name-only", merge_base, "--", OWNERSHIP_DOC],
+            cwd=ROOT, capture_output=True, text=True, check=True,
+        ).stdout.splitlines()
+    except (OSError, subprocess.CalledProcessError) as exc:
+        detail = (getattr(exc, "stderr", "") or str(exc)).strip()
+        return None, {}, {}, False, f"git 不可得：{detail[:120]}"
+
+    def _added(rel: str) -> bool:
+        out = subprocess.run(
+            ["git", "diff", "--diff-filter=A", "--name-only", merge_base, "--", rel],
+            cwd=ROOT, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        return bool(out)
+
+    added_adrs: list[str] = []
+    version_bumps: dict[str, tuple[str | None, str | None]] = {}
+    has_domain: dict[str, bool] = {}
+    for rel in sorted(
+        ln.strip()
+        for ln in changed
+        if ln.strip().startswith("docs/adr/ADR-") and ln.strip().endswith(".md")
+    ):
+        disk = os.path.join(ROOT, rel)
+        if not os.path.isfile(disk):
+            continue  # 本 diff 删除的文件：字段判定无对象
+        new_text = open(disk, encoding="utf-8").read()
+        has_domain[os.path.basename(rel)] = any(
+            _OWNERSHIP_DOMAIN.match(ln.strip()) or _OWNERSHIP_DOMAIN_NA.match(ln.strip())
+            for ln in new_text.splitlines()
+        )
+        if _added(rel):
+            added_adrs.append(rel)  # 新建文件走 S15⑦ diff 判定，不参与 bump 比较
+            continue
+        try:
+            old_text = subprocess.run(
+                ["git", "show", f"{merge_base}:{rel}"],
+                cwd=ROOT, capture_output=True, text=True, check=True,
+            ).stdout
+        except (OSError, subprocess.CalledProcessError):
+            continue  # base 无此文件但未判 A（如类型变更）：交既有面
+        old_v = _adr_head_version(old_text)
+        new_v = _adr_head_version(new_text)
+        if old_v and new_v and old_v != new_v:
+            version_bumps[os.path.basename(rel)] = (old_v, new_v)
+    note = f"merge-base {merge_base[:12]}..HEAD"
+    return added_adrs, version_bumps, has_domain, bool(ownership_changed), note
+
+
+def check_ownership_field_on_added_adrs(
+    added_adrs: list[str] | None, adr_texts: dict[str, str]
+) -> list[str]:
+    """S15⑦（diff 通道）：base-diff 新增的 ADR 必须写 `归属域：`——不读自填日期。
+
+    `added_adrs=None` = base diff 不可得：本通道退场，射程缺口由调用方的
+    NOTE 声明（#3093② 判据不得静默消失）。
+    """
+    if added_adrs is None:
+        return []
+    issues: list[str] = []
+    for rel in sorted(added_adrs):
+        text = adr_texts.get(os.path.basename(rel), "")
+        has = any(
+            _OWNERSHIP_DOMAIN.match(ln.strip()) or _OWNERSHIP_DOMAIN_NA.match(ln.strip())
+            for ln in text.splitlines()
+        )
+        if not has:
+            issues.append(
+                f"S15 {rel}: base-diff 判定为本次新增的 ADR 缺 "
+                f"`归属域：semantic-ownership <key>` 或 `归属域：n/a（理由）`"
+            )
+    return issues
+
+
+def check_ownership_table_touched_on_version_bump(
+    version_bumps: dict[str, tuple[str | None, str | None]],
+    has_domain: dict[str, bool],
+    ownership_doc_changed: bool,
+) -> list[str]:
+    """S15③（#3204）：版本 bump × 带归属域的 ADR → 归属表须在同 PR diff 修改。
+
+    纯函数：git 事实由 `_added_and_bumped_adr_facts` 采集后注入，便于自测。
+    不带归属域的 bump 不触发（字段在场归 S15⑦ 管）；base 不可得时调用方传
+    空 dict（= 不判定），射程由 NOTE 声明。
+    """
+    if ownership_doc_changed:
+        return []
+    issues: list[str] = []
+    for fn, (old_v, new_v) in sorted(version_bumps.items()):
+        if not has_domain.get(fn):
+            continue
+        issues.append(
+            f"S15 {fn}: 头部版本 {old_v}→{new_v} 且带归属域，"
+            f"但 {OWNERSHIP_DOC} 未出现在同 PR diff"
+            f"（S15③ 判据：版本 bump 须同 PR 修改归属表）"
+        )
+    return issues
+
+
 NOTE_CLASSES = {"feature", "bug-fix", "simplification", "architecture", "process", "testing"}
 #: #2883：白名单外允许存在的目录。`archived` 是有意的归档面（历史 Note 不再走 S10 契约）。
 #: 其余未知目录一律报错——S10 只遍历 NOTE_CLASSES，错名目录（如 `bugfix`）会让整目录
@@ -1229,7 +1388,7 @@ GATE_TO_CI_ANCHOR = {
     # ADR-0033 D0 新族门禁（#745）已随 ADR-0051 D8 退役：归类 = 族级 kind 登记，族树 ⇄ kind=script
     # 由 tool-manifest 门禁内的 check_script_packages 判定（kind=tool 挂树即红）。
     # ADR-0033 D2 Tool Contract 脚手架（#745）：fixture 靶子 + --self-test。
-    "tool-contract": ("ci.yml", "ADR-0033 Tool Contract 检查"),
+    "tool-contract-fixture": ("ci.yml", "ADR-0033 Tool Contract fixture 自检"),
     # ADR-0033 Phase B（#3075）：tool_manifest 唯一事实源的 lint/append-only 门禁，
     # 同模式接入 lint job（含 --self-test 自证）。
     "tool-manifest": ("ci.yml", "ADR-0033 tool_manifest 检查"),
@@ -1493,7 +1652,7 @@ def check_skill_frontmatter(dirname: str, text: str) -> list[str]:
 
 # ── 门禁执行 ──
 
-def run_check() -> int:
+def run_check(base: str | None = None) -> int:
     issues: list[str] = []
 
     claude_md_path = os.path.join(ROOT, "CLAUDE.md")
@@ -1669,6 +1828,13 @@ def run_check() -> int:
             em.group(1): (em.group(2), em.group(3))
             for em in _ADR_M7_ENTRY.finditer(m7_line)
         }
+        if m7_line and not m7_entries:
+            # #3205 失明下限：看板行在场却解析出 0 条目 = 全部 ADR 的看板比对
+            # 静默跳过（0 条目假绿，#2639/#2870 同纪律）。
+            issues.append(
+                "S12 M7 看板行不可解析（0 条目命中）——全部 ADR 的看板状态/版本比对"
+                f"已静默跳过；行首片段：{m7_line.strip()[:120]!r}"
+            )
         docmap_rows: dict[str, list[str]] = {}
         for line in docmap_text.splitlines():
             fn, tokens = parse_docmap_adr_row(line)
@@ -1752,6 +1918,30 @@ def run_check() -> int:
                     ).read()
         issues += check_ownership_domain_fields(adr_texts, owned_keys)
         issues += check_ownership_field_on_new_adrs(adr_texts)
+        # S15⑦/③ diff 通道（#3093② / #3204）：「新建」与「版本 bump 须同 PR 改
+        # 归属表」改取 merge-base..HEAD 的事实；--base 未给或 git 不可得时如实
+        # 降级并打印射程 NOTE（日期 cutoff 通道仍跑，作无 diff 时的近似）。
+        diff_note = ""
+        if base:
+            added_adrs, version_bumps, bump_domains, table_changed, diff_note = (
+                _added_and_bumped_adr_facts(base)
+            )
+            if added_adrs is not None:
+                issues += check_ownership_field_on_added_adrs(added_adrs, adr_texts)
+                issues += check_ownership_table_touched_on_version_bump(
+                    version_bumps, bump_domains, table_changed
+                )
+            else:
+                print(
+                    f"[NOTE] S15⑦/③ base-diff 不可得（{diff_note}）："
+                    "本轮仅日期 cutoff 近似——日期可被作者自改，射程有限（#3093②）"
+                )
+        else:
+            print(
+                "[NOTE] S15⑦ 未给 --base：新建 ADR 判定退化为头部日期 cutoff"
+                "（日期可被作者自改，射程有限，#3093②）；S15③「版本 bump 同 PR"
+                " 改归属表」只在 PR 通道（--base / CI）判定（#3204）"
+            )
 
     for issue in issues:
         print(f"[BLOCK] {issue}")
@@ -2698,6 +2888,49 @@ def run_self_test() -> int:
         }),
         False,
     )
+    # S15⑦/③ diff 通道（#3093② / #3204）：纯函数面——git 事实由采集器注入。
+    expect(
+        "S15⑦ base-diff 新增 ADR 缺归属域判红（不读自填日期）",
+        lambda: check_ownership_field_on_added_adrs(
+            ["docs/adr/ADR-9002-x.md"],
+            {"ADR-9002-x.md": "- 日期：2020-01-01\n- 状态：Proposed\n"},
+        ),
+        True,
+    )
+    expect(
+        "S15⑦ base-diff 新增 ADR 带归属域为绿",
+        lambda: check_ownership_field_on_added_adrs(
+            ["docs/adr/ADR-9002-x.md"],
+            {"ADR-9002-x.md": "- 状态：Proposed\n- 归属域：n/a（示例）\n"},
+        ),
+        False,
+    )
+    expect(
+        "S15⑦ base 不可得（None）不判红——射程由 NOTE 承担",
+        lambda: check_ownership_field_on_added_adrs(None, {}),
+        False,
+    )
+    expect(
+        "S15③ 版本 bump × 带归属域 × 归属表未动判红",
+        lambda: check_ownership_table_touched_on_version_bump(
+            {"ADR-9003-x.md": ("v1.0", "v1.1")}, {"ADR-9003-x.md": True}, False
+        ),
+        True,
+    )
+    expect(
+        "S15③ 版本 bump × 同 PR 改归属表为绿",
+        lambda: check_ownership_table_touched_on_version_bump(
+            {"ADR-9003-x.md": ("v1.0", "v1.1")}, {"ADR-9003-x.md": True}, True
+        ),
+        False,
+    )
+    expect(
+        "S15③ 不带归属域的 bump 不触发（字段在场归 S15⑦ 管）",
+        lambda: check_ownership_table_touched_on_version_bump(
+            {"ADR-9004-x.md": ("v1.0", "v1.1")}, {"ADR-9004-x.md": False}, False
+        ),
+        False,
+    )
 
     if failures:
         for f in failures:
@@ -2711,7 +2944,12 @@ def run_self_test() -> int:
 def main() -> int:
     if "--self-test" in sys.argv:
         return run_self_test()
-    return run_check()
+    base: str | None = None
+    argv = sys.argv[1:]
+    for i, arg in enumerate(argv):
+        if arg == "--base" and i + 1 < len(argv):
+            base = argv[i + 1]
+    return run_check(base)
 
 
 if __name__ == "__main__":
