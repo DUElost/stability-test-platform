@@ -59,7 +59,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set
 from uuid import uuid4
 
-from ..watcher.contracts import ContractViolation
+from ..contracts.watcher_contracts import ContractViolation
 from .db_history import load_processed_lines, save_processed_lines, state_key
 from .emit_intent import (
     MAX_REPLAY_ATTEMPTS,
@@ -68,7 +68,7 @@ from .emit_intent import (
     save_intents,
 )
 from .paths import PathOutsideRootError, get_aee_local_root, resolve_path_under_aee_local
-from .metadata import resolve_device_log_event_type
+from ..contracts.aee_metadata import resolve_device_log_event_type
 from .processor import ProcessConfig, process_device_logs
 from .state_migration import WATCHER_AEE_STATE_PREFIX
 from .timestamp import parse_timestamp, to_utc
