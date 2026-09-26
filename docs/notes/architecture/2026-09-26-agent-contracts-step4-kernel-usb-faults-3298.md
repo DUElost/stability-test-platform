@@ -70,8 +70,9 @@ Class: architecture
 
 ## Revisit
 
-- 第 4 步剩余：`aee/state_migration`（终态出口已写在 `.importlinter` C3 注释：整体搬入
-  `contracts/` 后删最后 1 条基线）；
+- 第 4 步剩余：`aee/state_migration` 已落地（C3 基线清零，见
+  `2026-09-26-agent-contracts-step4b-state-migration-3298.md`）；ADR-0054 §5 四步全部完成，
+  C3 为零基线合约；
 - `backend/agent/contracts/` 现 7 个模块；`kernel_usb_faults` 契约与采集的边界即
   ADR-0054 D2 的判据样板（「解析/词表进契约、I/O 与线程留 agent」），后续同类拆分照此；
 - `scan_kernel_usb_faults` 的 argv/探针形状（#2957）是 host 侧事实，改动仍需真机验证，

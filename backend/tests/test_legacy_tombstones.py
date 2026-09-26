@@ -31,7 +31,7 @@ def test_legacy_backend_task_schema_module_is_removed():
 
 def test_legacy_aee_script_names_use_single_shared_source():
     from backend.agent.registry import script_registry
-    from backend.agent.aee import state_migration
+    from backend.agent.contracts import aee_state_migration as state_migration
     from backend.api.routes import plans, scripts
     from backend.agent.contracts.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
     from backend.services import script_catalog
@@ -57,3 +57,14 @@ def test_legacy_aee_constants_live_only_in_contracts_package():
         assert not (REPO_ROOT / legacy).exists(), (
             f"legacy_aee 旧副本仍在：{legacy}——ADR-0054 D5 要求删除且不留兜底/再导出壳"
         )
+
+
+def test_aee_state_migration_lives_only_in_contracts_package():
+    """ADR-0054 D5：state_migration 只有 contracts/ 一份实现，旧位置已删。"""
+    contract = REPO_ROOT / "backend" / "agent" / "contracts" / "aee_state_migration.py"
+    assert contract.is_file(), f"缺少契约实现：{contract}"
+
+    legacy = REPO_ROOT / "backend" / "agent" / "aee" / "state_migration.py"
+    assert not legacy.exists(), (
+        f"state_migration 旧副本仍在：{legacy}——ADR-0054 D5 要求删除且不留再导出壳"
+    )

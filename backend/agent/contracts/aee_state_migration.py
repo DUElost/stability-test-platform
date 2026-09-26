@@ -1,4 +1,23 @@
-"""AEE state namespace migration helpers."""
+"""Agent AEE state 键命名空间与迁移契约（M3/#736；ADR-0054 D1/D2）。
+
+契约模块（ADR-0054 第 4 步）：控制面与 Agent 共用**同一实现**——Agent 侧经
+``from ..contracts.aee_state_migration import …``（`aee/` 内模块）或
+``from .contracts.aee_state_migration import …``（包根模块）相对导入；控制面经
+``backend.agent.contracts.aee_state_migration``（`scripts/migrate_watcher_aee_state_keys.py`）。
+
+收进契约的三类定义：
+
+- **键命名空间**：``WATCHER_AEE_STATE_PREFIX``（现行 ``watcher:aee``）与
+  ``LEGACY_PATROL_STATE_PREFIX``（``scan_aee``，M3 迁移源）——agent 写入的键与控制面
+  脚本要匹配的键必须是同一词表（此前 `processor` / `db_history` 各自硬写
+  ``"watcher:aee"`` 字面量，现已统一指向本模块）；
+- **键 schema**：``_AEE_TYPES`` / ``_STATE_KINDS``（``<prefix>:<serial>:<aee_type>:<kind>``）；
+- **合并语义**：``processed_entries`` 取并集、``pending_pull`` 键级合并，旧行保留
+  （M3 兼容窗内可回滚）。
+
+``migrate_legacy_aee_state_keys`` 是两侧（agent 启动守卫 / 控制面运维脚本）执行的同一份
+改写实现——stdlib-only（sqlite3/json）、import 期无 I/O、不 import 任何 agent 或控制面模块。
+"""
 
 from __future__ import annotations
 

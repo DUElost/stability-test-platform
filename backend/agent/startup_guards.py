@@ -15,7 +15,7 @@ from typing import Any, Dict, Optional
 
 from . import __version__ as agent_version
 from . import device_discovery
-from .aee.state_migration import migrate_legacy_aee_state_keys
+from .contracts.aee_state_migration import migrate_legacy_aee_state_keys
 from .config import LOG_DIR
 from .heartbeat import send_heartbeat
 
