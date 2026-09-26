@@ -14,6 +14,7 @@ from backend.tests.script_package_site import tar_bytes
 
 from sqlalchemy.orm import Session
 
+from backend.models.plan import Plan, PlanStep
 from backend.models.script import Script
 from backend.tests.script_package_site import Site
 from backend.services.script_catalog import (
@@ -87,7 +88,7 @@ def test_retired_entry_deactivates_explicitly_and_missing_never_deactivates(db_s
     # manifest retired:true → 显式退役
     site.retire("demo", "1.0.0")
     result = _sync(db_session, site)
-    assert result.deactivated == 1
+    assert result.deactivated == 1 and result.retire_blocked == 0  # 零引用照常翻转（#3349）
     assert result.deactivated_versions[0]["name"] == "demo" and result.deactivated_versions[0]["version"] == "1.0.0"
     assert db_session.query(Script).filter_by(name="demo", version="1.0.0").one().is_active is False
     assert db_session.query(Script).filter_by(name="demo", version="1.1.0").one().is_active is True
@@ -309,3 +310,64 @@ def test_entry_without_package_sha_is_named_not_overwritten(db_session: Session,
     ]
     assert result.rebaselined == []
     assert row.package_sha256 == sha and row.content_sha256 == "f" * 64
+
+
+def test_retired_entry_still_referenced_keeps_active_and_reports(db_session: Session, tmp_path: Path):
+    """#3349（ADR-0023 D6 源头守卫）：被 plan_step 引用的 retired 条目不翻转
+    ``is_active``，结果报告 name/version + plan_ids（与 409
+    SCRIPT_STILL_REFERENCED 同信息）；重指后重扫才照常翻转。"""
+    site = Site(tmp_path)
+    site.add("demo", "1.0.0", {"demo.py": "a\n"})
+    _sync(db_session, site)
+
+    plan = Plan(name="refs-demo-1.0.0")
+    db_session.add(plan)
+    db_session.flush()
+    db_session.add(PlanStep(
+        plan_id=plan.id, step_key="s1", script_name="demo",
+        script_version="1.0.0", stage="patrol", sort_order=0,
+    ))
+    db_session.commit()
+
+    site.retire("demo", "1.0.0")
+    result = _sync(db_session, site)
+
+    row = db_session.query(Script).filter_by(name="demo", version="1.0.0").one()
+    assert row.is_active is True, "被引用的 retired 条目登记后必须保持 active"
+    assert result.retire_blocked == 1 and result.deactivated == 0
+    assert result.retire_blocked_versions == [
+        {"name": "demo", "version": "1.0.0", "plan_ids": [plan.id]},
+    ]
+
+    # 重指（引用消失）后重扫 → 照常翻转
+    db_session.query(PlanStep).filter_by(plan_id=plan.id).delete()
+    db_session.commit()
+    result2 = _sync(db_session, site)
+    assert result2.deactivated == 1 and result2.retire_blocked == 0
+    assert db_session.query(Script).filter_by(name="demo", version="1.0.0").one().is_active is False
+
+
+def test_retire_blocked_still_backfills_package_identity(db_session: Session, tmp_path: Path):
+    """被引用阻断只挡生命周期翻转，不挡 #3222 的包身份补齐（两事正交）。"""
+    site = Site(tmp_path)
+    site.add("demo", "1.0.0", {"demo.py": "a\n"})
+    _sync(db_session, site)
+
+    plan = Plan(name="p")
+    db_session.add(plan)
+    db_session.flush()
+    db_session.add(PlanStep(
+        plan_id=plan.id, step_key="s1", script_name="demo",
+        script_version="1.0.0", stage="patrol", sort_order=0,
+    ))
+    db_session.commit()
+    db_session.query(Script).filter_by(name="demo", version="1.0.0").update({"package_sha256": None})
+    db_session.commit()
+
+    site.retire("demo", "1.0.0")
+    result = _sync(db_session, site)
+
+    assert result.retire_blocked == 1
+    row = db_session.query(Script).filter_by(name="demo", version="1.0.0").one()
+    assert row.is_active is True and row.package_sha256 is not None
+    assert result.package_backfilled == 1
