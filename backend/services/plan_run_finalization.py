@@ -26,23 +26,30 @@ Job 终态事务只写 pending 标记（``job_terminalization``），不再锁/�
 ``plan_chain_trigger``（链触发/恢复）与五模块之外的服务；五模块中只有
 ``plan_run_abort``（notify 缝）、``post_completion``（恢复入口/RISK_HIGH）、
 ``job_terminalization``（终态编排）与 ``backend/scheduler`` 的补偿路径可以指向本模块。
-顶层 import 只取 models 纯定义（enums/列映射）与 ``plan_run_events``（模块体仅 stdlib，
-realtime 在函数内懒取），其余带副作用的依赖
+顶层 import 取 models 纯定义（enums/列映射）、stdlib（``time``/``defaultdict``）、
+``sqlalchemy`` 纯构造子（``select``/``delete``）与 ``plan_run_events``（模块体仅 stdlib，
+realtime 在函数内懒取）；其余带副作用的依赖
 （sqlalchemy 会话、notification_service、chain_trigger、dedup_scan、thread_pool）一律
 函数体内取，使 ``plan_run_abort`` 的 clean-env 契约（#2372：
-``tests/test_plan_run_abort_import_contract.py``）不因本模块而变。
+``tests/test_plan_run_abort_import_contract.py``）不因本模块而变
+（#3376 项 2 复核：纯构造子不构成 clean-env 负担，可回顶层；同 PR 下调棘轮基线）。
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import time
+from collections import defaultdict
 from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy import delete, select
+
 from backend.models.enums import PlanRunStatus
 from backend.models.job import JobInstance
+from backend.models.plan_run import PlanRun, PlanRunHost, PlanRunPendingAggregation
 from backend.services.plan_run_events import emit_plan_run_status
 
 logger = logging.getLogger(__name__)
@@ -238,11 +245,6 @@ AGGREGATION_DRAIN_MAX_ROUNDS = int(os.getenv("STP_AGGREGATION_DRAIN_MAX_ROUNDS",
 
 def _recount_host_projection_sync(db: Any, plan_run_id: int, jobs: Sequence[Any]) -> None:
     """per-host 投影重算。锁序与 abort/heartbeat 一致：plan_run → PRH（host_id 升序）。"""
-    from collections import defaultdict
-
-    from sqlalchemy import select
-
-    from backend.models.plan_run import PlanRunHost
     from backend.services.plan_run_aggregation import recount_host_counters
 
     prh_rows = (
@@ -265,14 +267,8 @@ def _recount_host_projection_sync(db: Any, plan_run_id: int, jobs: Sequence[Any]
 
 def _aggregation_round_sync(plan_run_id: int) -> tuple[int, bool]:
     """一批聚合（独立事务）。返回 ``(consumed_marks, applied)``。"""
-    import time
-
-    from sqlalchemy import delete, select
-
     from backend.core.database import SessionLocal
     from backend.core.metrics import record_plan_run_aggregation_duration
-    from backend.models.job import JobInstance
-    from backend.models.plan_run import PlanRun, PlanRunPendingAggregation
     from backend.services.plan_run_aggregation import (
         apply_plan_run_aggregation_from_counters,
         recount_plan_run_counters,
@@ -360,7 +356,6 @@ def drain_plan_run_aggregation_sync(plan_run_id: int) -> int:
 def _complete_parent_side_effects_sync(plan_run_id: int) -> None:
     """applied 后的副作用编排（独立会话；#986：终态已提交，链失败不回滚事实）。"""
     from backend.core.database import SessionLocal
-    from backend.models.plan_run import PlanRun
 
     with SessionLocal() as db:
         run = db.get(PlanRun, plan_run_id)
@@ -411,10 +406,8 @@ def maybe_notify_risk_high(
         return False
 
     try:
-        from sqlalchemy import select
         from sqlalchemy.orm.attributes import flag_modified
 
-        from backend.models.plan_run import PlanRun
         from backend.services.notification_service import dispatch_notification_async
 
         pr = db.execute(

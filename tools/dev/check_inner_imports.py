@@ -61,7 +61,11 @@ SCAN_DIRS = (ROOT / "backend", ROOT / "tools", ROOT / "scripts")
 #: 2026-09-26 #3298（ADR-0054 第 2 步）：`device_watcher` 的 core/agent 双形态
 #: 兜底（try/except 各 2 处）随契约搬迁塌成 1 条相对导入 ×2 目标
 #: → **619 → 617**。
-_BASELINE = 617
+#: 2026-09-26 #3401 C2-b（#3376 项 2）：`plan_run_finalization` 10 处 +
+#: `job_terminalization` 4 处函数体内 import 回顶层（stdlib/三方纯构造子/models 纯定义，
+#: 非循环依赖掩体）→ **617 → 603**；clean-env 契约（tests/test_plan_run_abort_import_contract.py）
+#: 同位全绿，结构守卫（test_plan_run_finalization_structure_3299.py）不变。
+_BASELINE = 603
 
 # ADR-0051 Phase 3：版本目录已退役，脚本族树（backend/agent/scripts/<name>/）按包发布、
 # 属独立审计面，整棵排除（此前只排除 v<version>/ 冻结目录）。

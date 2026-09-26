@@ -33,15 +33,19 @@ commit**（保持 #986/#1172/#2531/#2635 的边界契约：调用方不得在 be
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from typing import Optional
 
+from saq import Job as SaqJob
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from backend.models.enums import JobStatus
 from backend.models.job import JobInstance
+from backend.models.plan_run import PlanRunPendingAggregation
 
 logger = logging.getLogger(__name__)
 
@@ -58,10 +62,6 @@ def _is_testing_env() -> bool:
 
 def _pending_insert_stmt(plan_run_id: int, job_id: int):
     """insert-only 标记；主键冲突（outbox 重放同终态）时 no-op。"""
-    from sqlalchemy.dialects.postgresql import insert as pg_insert
-
-    from backend.models.plan_run import PlanRunPendingAggregation
-
     return pg_insert(PlanRunPendingAggregation).values(
         plan_run_id=int(plan_run_id),
         job_id=int(job_id),
@@ -71,8 +71,6 @@ def _pending_insert_stmt(plan_run_id: int, job_id: int):
 async def _wake_parent_aggregation_async(plan_run_id: int) -> None:
     """提交后唤醒聚合者。永不外溢异常（唤醒丢失 = 延迟，事实不丢，D4 恢复矩阵）。"""
     if _is_testing_env():
-        import asyncio
-
         from backend.services.plan_run_finalization import (
             drain_plan_run_aggregation_sync,
         )
@@ -88,8 +86,6 @@ async def _wake_parent_aggregation_async(plan_run_id: int) -> None:
         return
 
     try:
-        from saq import Job as SaqJob
-
         from backend.core.task_queue import get_queue
 
         await get_queue().enqueue(
