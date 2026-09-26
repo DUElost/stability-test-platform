@@ -325,12 +325,15 @@ def _b64(text: str) -> str:
 
 
 class _SyncEnvArgs:
-    """`_sync_env` 的最小 args 替身（只带它读取的三个 b64 载荷）。"""
+    """`_sync_env` 的最小 args 替身（只带它读取的 b64 载荷）。"""
 
-    def __init__(self, overrides=None, path_keys=None, secret=""):
+    def __init__(self, overrides=None, path_keys=None, secret="", retired=None):
         self.secret_b64 = _b64(secret) if secret else ""
         self.overrides_b64 = _b64(json.dumps(overrides or {}))
         self.path_keys_b64 = _b64(json.dumps(path_keys or []))
+        self.retired_keys_b64 = (
+            _b64(json.dumps(retired)) if retired is not None else ""
+        )
 
 
 def _env_dir_fd(tmp_path, body: str = "API_URL=http://cp\n"):
@@ -423,3 +426,91 @@ def test_write_env_preserving_owner_is_second_line_of_defense(tmp_path):
     finally:
         os.close(fd)
     assert (tmp_path / ".env").read_text(encoding="utf-8") == "A=1\nB=2\n"
+
+
+# ── #3356: sync-env 退役键删键通道 ───────────────────────────────────────
+
+
+def test_sync_env_deletes_retired_keys_and_reports(capsys, tmp_path):
+    """merge 之后整行删除退役键；实际删到的键经 STP_ENV_RETIRED_REMOVED 回报。"""
+    module = _load_wrapper()
+    body = "API_URL=http://cp\n# keep\nUSE_SESSION_WATCHDOG=1\nSTP_FOO=old\n"
+    fd = _env_dir_fd(tmp_path, body=body)
+    try:
+        rc = module._sync_env(
+            _SyncEnvArgs({"STP_FOO": "new"}, retired=["USE_SESSION_WATCHDOG"]), fd,
+        )
+    finally:
+        os.close(fd)
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "STP_ENV_RETIRED_REMOVED=USE_SESSION_WATCHDOG" in out
+    new_body = (tmp_path / ".env").read_text(encoding="utf-8")
+    assert "USE_SESSION_WATCHDOG" not in new_body
+    assert "# keep" in new_body and "API_URL=http://cp" in new_body
+    assert "STP_FOO=new" in new_body  # 同一轮 overrides 照常 merge
+
+
+def test_sync_env_retired_delete_is_idempotent(capsys, tmp_path):
+    """第二次同步：无残留可删 → 回报空、文件不动（不产生无意义重写）。"""
+    module = _load_wrapper()
+    body = "API_URL=http://cp\nSTP_FOO=1\n"
+    fd = _env_dir_fd(tmp_path, body=body)
+    try:
+        rc = module._sync_env(
+            _SyncEnvArgs({"STP_FOO": "1"}, retired=["USE_SESSION_WATCHDOG"]), fd,
+        )
+    finally:
+        os.close(fd)
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "STP_ENV_RETIRED_REMOVED=" in out
+    assert "STP_ENV_RETIRED_REMOVED=USE_SESSION_WATCHDOG" not in out
+    assert (tmp_path / ".env").read_text(encoding="utf-8") == body
+
+
+def test_sync_env_retired_only_payload_still_deletes(capsys, tmp_path):
+    """overrides 为空载荷而退役键非空 → 仍执行删键（空 overrides 早退不再吞掉删键）。"""
+    module = _load_wrapper()
+    fd = _env_dir_fd(tmp_path, body="API_URL=http://cp\nENABLE_CRON_SCHEDULER=1\n")
+    try:
+        rc = module._sync_env(_SyncEnvArgs({}, retired=["ENABLE_CRON_SCHEDULER"]), fd)
+    finally:
+        os.close(fd)
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "STP_ENV_RETIRED_REMOVED=ENABLE_CRON_SCHEDULER" in out
+    new_body = (tmp_path / ".env").read_text(encoding="utf-8")
+    assert "ENABLE_CRON_SCHEDULER" not in new_body
+    assert "API_URL=http://cp" in new_body
+
+
+def test_sync_env_rejects_retired_key_also_in_overrides(tmp_path):
+    """渲染面与退役表相顶 = 控制面两表矛盾 → fail-closed，.env 不动。"""
+    module = _load_wrapper()
+    fd = _env_dir_fd(tmp_path, body="API_URL=http://cp\nSTP_FOO=1\n")
+    try:
+        _expect_priv_error(
+            module,
+            module._sync_env,
+            _SyncEnvArgs({"STP_FOO": "2"}, retired=["STP_FOO"]),
+            fd,
+        )
+    finally:
+        os.close(fd)
+    assert (tmp_path / ".env").read_text(encoding="utf-8") == "API_URL=http://cp\nSTP_FOO=1\n"
+
+
+def test_sync_env_rejects_invalid_retired_key_name(tmp_path):
+    module = _load_wrapper()
+    fd = _env_dir_fd(tmp_path)
+    try:
+        _expect_priv_error(
+            module,
+            module._sync_env,
+            _SyncEnvArgs({}, retired=["BAD KEY WITH SPACE"]),
+            fd,
+        )
+    finally:
+        os.close(fd)
+    assert (tmp_path / ".env").read_text(encoding="utf-8") == "API_URL=http://cp\n"

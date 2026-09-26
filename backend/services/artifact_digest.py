@@ -162,6 +162,7 @@ def plan_convergence(host, *, force: bool = False) -> ConvergencePlan:
             "deps_refreshed": False,
             "env_keys_synced": [],
             "env_paths_missing": {},
+            "env_keys_retired": [],
             "code_version": "",
             "priv_mode": "unknown",
             "artifact_digest": code_desired,

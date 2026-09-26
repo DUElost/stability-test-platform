@@ -1,11 +1,12 @@
 import base64
 import json
 
-from backend.services.agent_env_sync import hot_update_env_overrides
+from backend.services.agent_env_sync import RETIRED_ENV_KEYS, hot_update_env_overrides
 from backend.services.host_updater import (
     _build_remote_script,
     _parse_deps_refreshed,
     _parse_env_paths_missing,
+    _parse_env_retired_removed,
     _parse_env_synced,
     _parse_priv_mode,
     get_agent_code_version,
@@ -43,8 +44,13 @@ def test_build_remote_script_disables_agent_secret_sync_by_default():
     # #2180：env 哨兵（STP_ENV_SYNCED=/STP_ENV_PATH_MISSING=）改由 wrapper sync-env
     # 打在远端 stdout 上——控制面解析面不变，发射面契约见
     # tests/test_agent_priv_parser_contract.py::test_wrapper_sync_env_emits_control_plane_sentinels
-    assert 'sudo "$PRIV" sync-env --overrides-b64 "$ENV_OVERRIDES_B64" --path-keys-b64 "$ENV_PATH_KEYS_B64"' in script
+    assert (
+        'sudo "$PRIV" sync-env --overrides-b64 "$ENV_OVERRIDES_B64" '
+        '--path-keys-b64 "$ENV_PATH_KEYS_B64" --retired-keys-b64 "$ENV_RETIRED_KEYS_B64"'
+    ) in script
     assert "STP_ENV_SYNCED=" not in script
+    # #3356：参数级能力标记必须进前置判据（旧 wrapper 缺它 = 任何写动作之前 fail-closed）
+    assert "sync-env/retired-keys" in script
 
 
 def test_build_remote_script_includes_allowlisted_env_overrides():
@@ -67,6 +73,35 @@ def test_build_remote_script_includes_allowlisted_env_overrides():
         "/opt/stability-test-agent/agent/resources/aimonkey"
     )
     assert decoded["AGENT_INSTALL_DIR"] == "/opt/stability-test-agent"
+
+
+def test_build_remote_script_carries_retired_env_keys():
+    """#3356 候选 2：退役键清单随每次 sync-env 下发（b64 的 JSON 数组）。"""
+    script = _build_remote_script(
+        install_dir="/opt/stability-test-agent",
+        service_name="stability-test-agent",
+        code_tar_path="/tmp/stp-agent-update.tar.gz",
+        resources_tar_path="",
+        user="android",
+        group="android",
+    )
+    expected_b64 = base64.b64encode(
+        json.dumps(sorted(RETIRED_ENV_KEYS)).encode("utf-8")
+    ).decode("ascii")
+
+    assert f'ENV_RETIRED_KEYS_B64="{expected_b64}"' in script
+    decoded = json.loads(
+        base64.b64decode(
+            script.split('ENV_RETIRED_KEYS_B64="')[1].split('"')[0]
+        ).decode("utf-8")
+    )
+    assert decoded == sorted(RETIRED_ENV_KEYS)
+
+
+def test_parse_env_retired_removed_reads_sentinel():
+    assert _parse_env_retired_removed("STP_ENV_RETIRED_REMOVED=A,B\nOK") == ["A", "B"]
+    assert _parse_env_retired_removed("STP_ENV_RETIRED_REMOVED=\nOK") == []
+    assert _parse_env_retired_removed("no sentinel") == []
 
 
 def test_build_remote_script_delegates_sync_filters_to_wrapper():

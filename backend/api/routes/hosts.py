@@ -967,6 +967,7 @@ def host_hot_update(
         "deps_refreshed": result.get("deps_refreshed", False),
         "env_keys_synced": result.get("env_keys_synced", []),
         "env_paths_missing": result.get("env_paths_missing", {}),
+        "env_keys_retired": result.get("env_keys_retired", []),
         "code_version": result.get("code_version", ""),
         "priv_mode": result.get("priv_mode", "unknown"),
         "abort_summary": aborted_summary,

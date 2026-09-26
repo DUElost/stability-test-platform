@@ -169,6 +169,7 @@ def finalize_hot_update_outcome(
             "deps_refreshed": bool(result.get("deps_refreshed")),
             "env_keys_synced": result.get("env_keys_synced", []),
             "env_paths_missing": result.get("env_paths_missing", {}),
+            "env_keys_retired": result.get("env_keys_retired", []),
             "code_version": result.get("code_version", code_version),
             "priv_mode": result.get("priv_mode", ""),
             "duration_ms": result.get("duration_ms"),
