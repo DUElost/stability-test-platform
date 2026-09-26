@@ -102,12 +102,17 @@ tool_manifest.json                                # Git 唯一事实源：<name>
 
 ## 新版本上线收尾（模板钉钉 + 控制面生效）
 
-「版本目录已合入」≠「下一窗会跑到新行为」。执行链按精确版本解析、无 latest 兜底
-（#2865）：合入后若未完成下列收尾，修复在真机上等于不存在。
+「族树改动已合入」≠「下一窗会跑到新行为」。执行链按精确版本解析、无 latest 兜底
+（#2865）：合入后若未完成下列收尾，修复在真机上等于不存在。注意 ADR-0051 Phase 3 起
+**脚本不再随 hot-update 分发**（`agent-code` 载荷排除 `scripts/`，主机上的旧版本目录已
+随 Phase 3 清掉）：新版本的交付物是 manifest 登记 + 站点包
+`packages/<name>/<version>.tar.gz`，Agent 在派发/预检时经 `tools_cache` 整包核验拉取
+——所以收尾链是「登记 → 发包 → scan → 重指」，**没有热更新步骤**。
 
 仓库侧（可进 PR，由守卫锁住）：
 
-1. 新增 `backend/agent/scripts/<name>/v<ver>/`（全量副本，见上）；
+1. 改族树 → `python tools/dev/check_script_packages.py --register <name> <version>`
+   （追加登记，版本号不可复用；「改树不登记」被 `tool-manifest` 门禁判红）；
 2. 若该脚本出现在 `backend/schemas/pipeline_templates/*.json`，把对应
    `action: script:<name>` 的 `version` 钉到**已注册且激活的最新版**——模板是
    编辑器种子，钉旧版让新建 Plan 继续带旧语义（#2998 起守卫覆盖模板内全部 16 族）；
@@ -119,21 +124,21 @@ tool_manifest.json                                # Git 唯一事实源：<name>
 
 控制面侧（运维授权写操作，不进 PR）：
 
-3. `POST /scripts/scan`，确认 `created` 命中且 `conflicts=0`；
-4. **下发到主机**——scan 只写控制面注册表，**不送文件**：脚本是从主机本地树执行的
-   （`Script.nfs_path` = `/opt/stability-test-agent/agent/scripts/…`，
-   `backend/agent/pipeline_engine.py` 直接用该路径起进程），所以跳过这一步，生产主机上
-   根本没有新版文件。canary 一台 `POST /api/v1/hosts/<host_id>/hot-update` 通过后，
-   `PYTHONPATH=. venv/bin/python -m backend.scripts.batch_hot_update --direct` 放量，
-   并以逐台 `agent_code_sync_status=matched` 收口（实测 ~3s/台）。判到位**不要**看
-   `script-presence` 的 `missing=0`：无 Plan 引用的新版本不在账本全集内（#3111）；
+3. `python tools/dev/check_script_packages.py --publish --packages-root
+   <STP_AEE_NFS_ROOT>/packages` 把包落到站点包源（原子落位 + 只增不改）——**scan 的
+   注册输入是 manifest + 站点包源**，未发包就 scan 会得到 `package_missing`
+   （只报告，行不完整）；
+4. `POST /scripts/scan`，确认 `created` 命中且 `conflicts=0`；
 5. 把仍引用旧版的 `plan_step` 重指到新版（生产周期链等存量 Plan **不会**随模板自动迁）；
-6. 单机验证后再放量。
+6. 单台先跑一轮 Plan：`verify_scripts` 在 precheck / presence 时整包核验拉包、预热
+   `tools_cache`，确认 `step_trace` 无 `script_verify_failed` 后放量跑存量。
 
 同族最新 active 版本受退役判据「承接面豁免」（见下），**注册与重指不必绑成一批**；
-但重指未做前，修复对线上无效；同理**未下发前主机侧也没有文件**（2026-09-22 实测：
-`fill_storage` v1.1.1 已 active、47 台主机无此版本文件，#3111）——不要把「代码已合」
-或「库里已 active」记成「问题已闭」。
+但重指未做前，修复对线上无效——存量 Plan 仍解析到旧版本包，而包不可变、旧行为原样
+重放。不要把「代码已合」或「库里已 active」记成「问题已闭」：判到位看
+`verify_scripts` 预热后的 `tools_cache` 验证标记计数与 `step_trace`（control-plane-deploy
+SOP §2/§3）；`script-presence` 的 `missing=0` 只覆盖被 Plan 引用的版本，无引用的新版本
+不在账本全集内（#3111）。
 
 ## 种子迁移治理（#942 裁决 A）
 
