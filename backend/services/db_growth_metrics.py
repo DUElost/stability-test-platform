@@ -67,6 +67,9 @@ def refresh_db_growth_gauges(db: Session) -> None:
         try:
             rows = db.execute(_QUERY).mappings().all()
         except SQLAlchemyError:
+            # #3102 同款：/metrics 各组共享同一 session，失败的读会把事务置为 aborted，
+            # 不 rollback 则后续 _sweep_push_host_gauge_children 在同一次 scrape 里静默失败。
+            db.rollback()
             logger.warning("db_growth_metrics_refresh_failed", exc_info=True)
             return
 

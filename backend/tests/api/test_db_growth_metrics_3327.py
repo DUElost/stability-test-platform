@@ -57,3 +57,13 @@ def test_removed_table_does_not_leave_frozen_series(client, db_session, monkeypa
 
     monkeypatch.setattr(db_growth_metrics, "_LAST_SAMPLE_MONOTONIC", None)
     assert f'table="{table}"' not in client.get("/metrics").text
+
+
+def test_failed_catalog_read_rolls_back_shared_session(db_session, monkeypatch):
+    """/metrics 各组共享 session：失败的读必须 rollback，后续组才能在同一次 scrape 里继续查询。"""
+    monkeypatch.setattr(db_growth_metrics, "_QUERY", text("SELECT missing_column"))
+    monkeypatch.setattr(db_growth_metrics, "_LAST_SAMPLE_MONOTONIC", None)
+
+    db_growth_metrics.refresh_db_growth_gauges(db_session)
+
+    assert db_session.execute(text("SELECT 1")).scalar() == 1

@@ -295,6 +295,7 @@ def clear_device_intent(
     actor_id: Optional[int],
     actor_username: Optional[str],
     request: Optional[Any] = None,
+    reason: Optional[str] = None,
 ) -> Host:
     """清除设备面意图（D9.4：清除即解除豁免；admin + 审计；幂等）。
 
@@ -309,12 +310,16 @@ def clear_device_intent(
     before = _intent_snapshot(host)
     host.emptied_at = None
 
+    details: dict[str, Any] = {"before": before, "after": _intent_snapshot(host)}
+    if reason:
+        # 可选清除原因并入同一条审计：幂等空操作不留痕，避免「未清除却有清除审计」。
+        details["clear_reason"] = reason
     record_audit(
         db,
         action="clear_device_intent",
         resource_type="host",
         resource_id=host.id,
-        details={"before": before, "after": _intent_snapshot(host)},
+        details=details,
         user_id=actor_id,
         username=actor_username,
         request=request,

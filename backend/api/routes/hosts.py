@@ -723,7 +723,7 @@ def clear_device_intent_endpoint(
 
     写回语义：清 ``emptied_at``；``emptied_by``/``emptied_reason`` 保留为最近
     一次置位痕迹（与 unretire 同惯例，历史在 audit_logs）。幂等：无意图主机
-    调用原样返回。可选 ``?reason=`` 记入审计。
+    调用原样返回。可选 ``?reason=`` 并入清除动作的同一条审计（空操作不写）。
     """
     host = clear_device_intent(
         db,
@@ -731,21 +731,8 @@ def clear_device_intent_endpoint(
         actor_id=current_user.id,
         actor_username=current_user.username,
         request=request,
+        reason=reason or None,
     )
-    if reason:
-        # 清除原因是审计增强项：单独补一条审计（清除动作本体已在服务层留痕）。
-        record_audit(
-            db,
-            action="clear_device_intent",
-            resource_type="host",
-            resource_id=host.id,
-            details={"clear_reason": reason},
-            user_id=current_user.id,
-            username=current_user.username,
-            request=request,
-            strict=True,
-        )
-        db.commit()
     return _host_to_out(host, db=db)
 
 
