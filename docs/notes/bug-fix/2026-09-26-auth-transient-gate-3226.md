@@ -1,5 +1,8 @@
 # 会话探活的瞬时故障不再被路由守卫判为未登录（#3226）
 
+Status: implemented
+Class: bug-fix
+
 日期：2026-09-26 ｜ 归属：前端 / 认证与门控 ｜ 类型：bug-fix
 
 ## Decision
