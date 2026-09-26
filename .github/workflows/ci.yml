@@ -431,6 +431,7 @@ jobs:
               --ignore=tests/test_alembic_upgrade.py \
               --ignore=tests/test_script_seed_governance.py \
               --ignore=tests/test_diag_readonly_role_pg.py \
+              --ignore=tests/test_seed_default_params_face_3289.py \
               -p no:cacheprovider \
               >"$PARALLEL_DIR/repo.log" 2>&1
             echo $? >"$PARALLEL_DIR/repo.rc"
@@ -453,13 +454,13 @@ jobs:
       # #2641：本步**不再**保留 `--ignore=` 的注释锚点——结构守卫已改为按「真实执行者」
       # （代码行里含 `python -m pytest tests/` 的步骤）定位，注释里的同形文本不算判据。
       #
-      # 为什么排除这两个文件：二者真实起 postgres:16 testcontainer 且**无 skip
+      # 为什么排除这些文件：真实起 postgres:16 testcontainer 且**无 skip
       # 兜底**——runner 无 docker 时会硬失败并阻塞全部合入，归夜间 backend-test
-      # （那条路径本就有 PG service）。
+      # （那条路径本就有 PG service / docker）。含 #3289 seed_face 棘轮守卫。
       # ⚠️ #1716/#1707 更正：原注释断言「除 test_alembic_upgrade.py 外全部纯离线」
       # 与事实不符——test_script_seed_governance.py 同样 module 级起容器（当时只
       # 看镜像名而漏判）。现由 tests/test_offline_subset_guard.py 扫源码守这条
-      # 对应关系：凡 import testcontainers 的文件必须在下方 --ignore 名单里，
+      # 对应关系：凡真实构造 PostgresContainer 的文件必须在 --ignore 名单里，
       # 新增容器测试不再可能静默混入 PR 路径。
       - name: Run repo-level tests
         run: |
