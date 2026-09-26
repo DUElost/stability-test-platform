@@ -170,6 +170,14 @@ def retire_host(
         # 幂等：已是退役态则原样返回——不重写 who/when/reason，也不重复审计。
         return host
 
+    if host.emptied_at is not None:
+        # ADR-0038 v0.3 D9.2：置位机走 retire 时取向=拒绝并提示——先清除意图
+        # 再退役，避免「退役隐式吃掉一条人工意图」造成无审计的豁免消失。
+        raise Conflict(
+            "主机已置位设备面意图（emptied）；请先清除意图再退役"
+            "（或确认意图后走 DELETE /device-intent 清除）"
+        )
+
     _assert_no_inflight_work(db, host_id)
 
     before = _snapshot(host)
@@ -233,3 +241,95 @@ def unretire_host(
     db.refresh(host)
     logger.info("host_unretired host=%s by=%s", host.id, actor_username)
     return host
+
+
+def set_device_intent(
+    db: Session,
+    *,
+    host_id: str,
+    reason: str,
+    actor_id: Optional[int],
+    actor_username: Optional[str],
+    request: Optional[Any] = None,
+) -> Host:
+    """置位设备面意图「已由人工处置」（ADR-0038 v0.3 D9.4；admin + 审计；幂等）。
+
+    - 与退役互斥（D9.2）：退役机拒绝置位（409）；
+    - ``reason`` 必填（D9.5：意图由人维护，无 reason 不可复盘）；
+    - 审计 fail-closed 与 retire 同级（意图是设备面告警的豁免依据，
+      留痕缺失时宁可不动状态）。
+    """
+    host = _locked_host(db, host_id)
+    if host.retired_at is not None:
+        raise Conflict("退役主机不能置位设备面意图；如需先清账请走 unretire 流程")
+    if host.emptied_at is not None:
+        # 幂等：已置位则原样返回——不重写 who/when/reason，也不重复审计。
+        return host
+
+    before = _intent_snapshot(host)
+    host.emptied_at = datetime.now(timezone.utc)
+    host.emptied_by = (actor_username or "").strip()[:128] or None
+    host.emptied_reason = reason
+
+    record_audit(
+        db,
+        action="set_device_intent",
+        resource_type="host",
+        resource_id=host.id,
+        details={"reason": reason, "before": before, "after": _intent_snapshot(host)},
+        user_id=actor_id,
+        username=actor_username,
+        request=request,
+        strict=True,
+    )
+    db.commit()
+    db.refresh(host)
+    logger.info("host_device_intent_set host=%s by=%s", host.id, host.emptied_by)
+    return host
+
+
+def clear_device_intent(
+    db: Session,
+    *,
+    host_id: str,
+    actor_id: Optional[int],
+    actor_username: Optional[str],
+    request: Optional[Any] = None,
+) -> Host:
+    """清除设备面意图（D9.4：清除即解除豁免；admin + 审计；幂等）。
+
+    ``emptied_by`` / ``emptied_reason`` **保留为最近一次置位痕迹**（与
+    unretire 同惯例，历史在 ``audit_logs``）——豁免的解除本身也是一次
+    人工动作，同样 fail-closed 留痕。
+    """
+    host = _locked_host(db, host_id)
+    if host.emptied_at is None:
+        return host  # 幂等：本就无意图则原样返回
+
+    before = _intent_snapshot(host)
+    host.emptied_at = None
+
+    record_audit(
+        db,
+        action="clear_device_intent",
+        resource_type="host",
+        resource_id=host.id,
+        details={"before": before, "after": _intent_snapshot(host)},
+        user_id=actor_id,
+        username=actor_username,
+        request=request,
+        strict=True,
+    )
+    db.commit()
+    db.refresh(host)
+    logger.info("host_device_intent_cleared host=%s by=%s", host.id, actor_username)
+    return host
+
+
+def _intent_snapshot(host: Host) -> dict:
+    """意图位审计快照（与 ``_snapshot`` 分开：置位/清除不触退役字段）。"""
+    return {
+        "emptied_at": host.emptied_at.isoformat() if host.emptied_at else None,
+        "emptied_by": host.emptied_by,
+        "emptied_reason": host.emptied_reason,
+    }

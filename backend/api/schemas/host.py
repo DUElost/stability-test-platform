@@ -154,6 +154,11 @@ class HostOut(ORMBaseModel):
     retired_by: Optional[str] = None
     retire_reason: Optional[str] = None
     retire_alerted_at: Optional[datetime] = None
+    # ADR-0038 v0.3 D9：设备面意图（空置 / 人工清空）——置位后设备面告警
+    # 豁免（规则侧 unless），清除即解除；详情页据此渲染徽标。
+    emptied_at: Optional[datetime] = None
+    emptied_by: Optional[str] = None
+    emptied_reason: Optional[str] = None
 
     @field_validator('extra', 'mount_status', mode='before')
     @classmethod
@@ -171,6 +176,17 @@ class HostUnretireIn(BaseModel):
     """ADR-0038 D2：解除退役请求体——原因同样必填（与 retire 审计对称）。"""
 
     retire_reason: str = Field(min_length=1)
+
+
+class HostDeviceIntentIn(BaseModel):
+    """ADR-0038 v0.3 D9.4/D9.5：设备面意图置位请求体——reason 必填。
+
+    意图是设备面告警（UsbBlind / OfflineConcentration）的豁免依据，由人维护、
+    可审计、可逆；不带 reason 的置位会让豁免失去「人为有意操作」的复盘锚点
+    （#3065 三例的教训）。
+    """
+
+    reason: str = Field(min_length=1)
 
 
 class HostLiteOut(ORMBaseModel):

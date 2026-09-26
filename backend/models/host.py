@@ -76,6 +76,14 @@ class Host(Base):
     retire_reason     = Column(Text, nullable=True)
     retire_alerted_at = Column(DateTime(timezone=True), nullable=True)
 
+    # ADR-0038 v0.3 D9.1：设备面意图（空置 / 人工清空）——生命周期第三维度，
+    # 与 status（心跳所有）、retired_at（人工终态）正交，可逆（清除即解除）。
+    # 真源只在此三列，禁 Host.extra 裸键（D4：主心跳每拍重建 extra）。
+    # 与 retired_at 互斥（D9.2）：置位/退役入口各自 409 拒绝对方。
+    emptied_at     = Column(DateTime(timezone=True), nullable=True)
+    emptied_by     = Column(String(128), nullable=True)
+    emptied_reason = Column(Text, nullable=True)
+
     __table_args__ = (
         UniqueConstraint("hostname", name="host_hostname_key"),
         # 心跳超时巡检（reconciler / watchdog）按 last_heartbeat 排序扫描
