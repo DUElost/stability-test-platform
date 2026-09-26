@@ -180,11 +180,3 @@ def on_job_terminal_sync(
     db.commit()
     _wake_parent_aggregation_sync(int(job.plan_run_id))
     return True, None
-
-
-# 兼容再导出：旧导入路径（reconciler/tests 曾从本模块取计数重算）。实现随
-# ADR-0052 #3244 迁入 plan_run_aggregation（依赖方向：编排者/终态 → 聚合器，
-# 终态事务不再消费聚合判定）。
-from backend.services.plan_run_aggregation import (  # noqa: E402,F401
-    recount_plan_run_counters,
-)
