@@ -6,6 +6,7 @@ append-only 冲突拒绝、仓内唯一事实源 lint 恒绿、门禁与 CI/run_
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -80,6 +81,57 @@ class TestPacker:
         assert packer.validate_relative_member("venv/bin/python", field="python") is None
         for bad in ("/abs/p", "", "a/../b", "a//b"):
             assert packer.validate_relative_member(bad, field="python")
+
+
+
+class TestPublishGuard:
+    """站点发布守卫（2026-09-26，ADR-0051 D7 登记 flashtool/aimonkey 前补）：发布字节必须等于 Git 登记 sha，
+    已发布包不得被覆写成另一份内容——此前只带 --packages-root 的发布直接 write_bytes，两条都不查。"""
+
+    @staticmethod
+    def _doc(sha: str) -> dict:
+        doc = {"schema_version": 1, "tools": {}}
+        doc, _ = packer.register_entry(doc, "t", "v1", sha, packer.artifact_path_for("t", "v1"), None, "run.py",
+                                       kind="tool")
+        return doc
+
+    def test_unregistered_rejected(self, tmp_path):
+        bad = packer.publish_rejection({"schema_version": 1, "tools": {}}, "t", "v1", "a" * 64, tmp_path / "x.tar.gz")
+        assert bad and "未在 Git manifest 登记" in bad
+
+    def test_sha_mismatch_rejected(self, tmp_path):
+        bad = packer.publish_rejection(self._doc("a" * 64), "t", "v1", "b" * 64, tmp_path / "x.tar.gz")
+        assert bad and "源目录已变" in bad
+
+    def test_existing_different_package_not_overwritten(self, tmp_path):
+        dest = tmp_path / "t" / "v1.tar.gz"
+        dest.parent.mkdir(parents=True)
+        dest.write_bytes(b"old-bytes")
+        bad = packer.publish_rejection(self._doc("a" * 64), "t", "v1", "a" * 64, dest)
+        assert bad and "只增不改" in bad
+
+    def test_existing_identical_package_is_idempotent(self, tmp_path):
+        dest = tmp_path / "t" / "v1.tar.gz"
+        dest.parent.mkdir(parents=True)
+        dest.write_bytes(b"same")
+        sha = hashlib.sha256(b"same").hexdigest()
+        assert packer.publish_rejection(self._doc(sha), "t", "v1", sha, dest) is None
+
+    def test_publish_after_source_changed_refuses_and_writes_nothing(self, tmp_path):
+        """端到端：登记后源目录变了，只带 --packages-root 的发布必须失败且站点零写入。"""
+        src = _make_src(tmp_path)
+        manifest = tmp_path / "tool_manifest.json"
+        manifest.write_text(json.dumps({"schema_version": 1, "tools": {}}), encoding="utf-8")
+        base = [sys.executable, str(ROOT / "tools/dev/package_tool_asset.py"), "--src", str(src),
+                "--name", "t", "--version", "v1", "--manifest", str(manifest)]
+        reg = subprocess.run([*base, "--kind", "tool", "--python-absent", "--script-relative", "run.py",
+                              "--write-manifest"], capture_output=True, text=True)
+        assert reg.returncode == 0, reg.stderr
+        (src / "run.py").write_text("print('changed after registration')\n", encoding="utf-8")
+        site = tmp_path / "site"
+        pub = subprocess.run([*base, "--packages-root", str(site)], capture_output=True, text=True)
+        assert pub.returncode == 1 and "拒绝发布" in pub.stderr
+        assert not (site / "t" / "v1.tar.gz").exists() and not (site / "manifest.json").exists()
 
 
 class TestToolManifestGate:
