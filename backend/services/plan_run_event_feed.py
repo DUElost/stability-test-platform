@@ -25,6 +25,8 @@ from backend.services.plan_run_read_common import (
     iso,
     max_aware_dt,
     min_aware_dt,
+    resolve_step_script,
+    snapshot_step_scripts,
 )
 
 def log_signal_severity(category: str) -> str:
@@ -266,6 +268,9 @@ def build_plan_run_events(
     # 3) step_trace 失败 / abort 事件
     #    v3: 收紧 WHERE — 只取 event_type=FAILED 或 RUN_COMPLETE + terminal status;
     #    区分 ABORTED (warn + "Job 已中止") 与 FAILED (err + "Job 失败")
+    #    #3350：step 类事件按 (stage, step_id) 查快照补脚本身份；job 级
+    #    （step_id="__job__"）与查不到的键 → None（ADR-0023 D2）
+    script_index = snapshot_step_scripts(pr.plan_snapshot)
     if job_ids:
         bad_traces = db.execute(
             select(StepTrace)
@@ -323,6 +328,11 @@ def build_plan_run_events(
                 ).strip()
             else:
                 description = (t.error_message or "")[:512]
+            # #3350（ADR-0023 D2）：只在这一支（category=step）填脚本身份；
+            # 其余事件类型（trigger/system/log_signal/audit）保持 None
+            script_name, script_version = resolve_step_script(
+                script_index, stage=t.stage, step_key=t.step_id,
+            )
             events.append(EventOut(
                 ts=iso(t.original_ts) or "",
                 stage=evt_stage,
@@ -334,6 +344,8 @@ def build_plan_run_events(
                 device_id=dev_id,
                 device_serial=devices_by_id.get(dev_id) if dev_id else None,
                 ref={"type": "step_trace", "id": t.id},
+                script_name=script_name,
+                script_version=script_version,
             ))
 
     # 4) log_signal 事件(watcher 异常)

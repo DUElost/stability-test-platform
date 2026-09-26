@@ -44,6 +44,9 @@ const fixture: PlanRunDevicesPayload = {
       ui_status: 'running',
       current_stage: 'patrol',
       current_step: 'monkey_check',
+      // #3350（ADR-0023 D2/D3）：快照派生的脚本身份
+      current_script_name: 'monkey_test',
+      current_script_version: '5.2.0',
       patrol_cycle_count: 12,
       patrol_success_cycle_count: 12,
       patrol_failed_cycle_count: 0,
@@ -153,8 +156,27 @@ describe('DeviceOverview', () => {
     expect(within(filter).getByRole('option', { name: /node-a/ })).toHaveValue('host-101');
   });
 
-  it('defaults to grid (minimap) view and switches to table on toggle', () => {
+  // #3350（ADR-0023 D3）：current_step 的脚本身份（快照派生）只在表格视图显示
+  it('表格视图显示 current_step 的脚本身份，无身份时不渲染', async () => {
+    renderInTableView();
+    const withIdentity = screen.getByTestId('device-row-3001');
+    await waitFor(() =>
+      expect(within(withIdentity).getByTestId('device-script-3001')).toHaveTextContent(
+        'monkey_test@5.2.0',
+      ),
+    );
+    // 快照查不到（旧 PlanRun）→ 不渲染该行，而不是显示空壳
+    const withoutIdentity = screen.getByTestId('device-row-3002');
+    expect(within(withoutIdentity).queryByTestId('device-script-3002')).not.toBeInTheDocument();
+  });
+
+  it('缩略图视图保持紧凑：不渲染脚本身份', () => {
     renderWithClient(<DeviceOverview data={fixture} />);
+    const cell = screen.getByTestId('minimap-cell-3001');
+    expect(cell).not.toHaveTextContent('monkey_test');
+  });
+
+  it('defaults to grid (minimap) view and switches to table on toggle', () => {    renderWithClient(<DeviceOverview data={fixture} />);
     expect(screen.getByTestId('minimap-cell-3001')).toBeInTheDocument();
     expect(screen.queryByTestId('device-row-3001')).not.toBeInTheDocument();
 

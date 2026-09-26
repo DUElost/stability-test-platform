@@ -32,7 +32,12 @@ from backend.services.plan_run_queries import (
     derive_device_link_status,
     device_currently_disconnected,
 )
-from backend.services.plan_run_read_common import aware, iso
+from backend.services.plan_run_read_common import (
+    aware,
+    iso,
+    resolve_step_script,
+    snapshot_step_scripts,
+)
 
 FAILED_JOB_STATUSES = {JobStatus.FAILED.value}
 
@@ -234,7 +239,10 @@ def build_plan_run_devices(
     status: Optional[str] = None,
     link_status: Optional[str] = None,
     host_id: Optional[str] = None,
+    plan_snapshot: Optional[dict] = None,
 ) -> PlanRunDevicesOut:
+    # #3350（ADR-0023 D2）：脚本身份从调用方已加载的 plan_snapshot 派生（不新增查询）。
+    script_index = snapshot_step_scripts(plan_snapshot)
     # ADR-0026 P2-3: single JOIN for jobs + device + host + ACTIVE JOB lease
     # (was 4 sequential SELECTs; matters at ~1000 devices / PlanRun).
     joined = db.execute(
@@ -298,6 +306,11 @@ def build_plan_run_devices(
         manual_retry_allowed = (
             j.status == JobStatus.RUNNING.value and not disconnected
         )
+        # #3350（ADR-0023 D2）：current_step 来自巡检心跳（patrol 段语义），
+        # 查不到 → 两个字段都为 None（含 legacy 快照与 __job__ 之外的所有步骤）
+        cur_step_name, cur_step_version = resolve_step_script(
+            script_index, stage="patrol", step_key=j.current_patrol_step,
+        )
         items.append(DeviceMatrixItem(
             device_id=j.device_id,
             device_serial=serial,
@@ -345,6 +358,8 @@ def build_plan_run_devices(
                     JobStatus.ABORTED.value,
                 },
             },
+            current_script_name=cur_step_name,
+            current_script_version=cur_step_version,
         ))
         by_status["all"] += 1
         by_status[exec_status] = by_status.get(exec_status, 0) + 1

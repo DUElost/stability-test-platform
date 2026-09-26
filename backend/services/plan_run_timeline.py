@@ -153,6 +153,8 @@ def build_plan_run_timeline(db: Session, pr: PlanRun) -> PlanRunTimelineOut:
         stages_def[stage].append(StageStepOut(
             step_key=s.get("step_key", ""),
             script_name=s.get("script_name", ""),
+            # #3350（ADR-0023 D2）：快照缺 script_version 键 → None（旧 PlanRun）
+            script_version=(s.get("script_version") or None),
             stage=stage,
             sort_order=int(s.get("sort_order", 0)),
             device_total=job_total,

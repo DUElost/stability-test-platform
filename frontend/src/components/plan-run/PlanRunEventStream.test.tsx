@@ -269,6 +269,33 @@ describe('PlanRunEventStream', () => {
     expect(screen.getByText('请检查网络连接或稍后重试')).toBeInTheDocument();
   });
 
+  // #3350（ADR-0023 D3）：step 类事件显示脚本@版本；非 step 事件该字段恒 null → 不渲染
+  it('step 事件渲染 script@version，非 step 事件不渲染', () => {
+    const payload: PlanRunEventsPayload = {
+      ...events,
+      events: [
+        {
+          ts: '2026-05-08T12:30:00Z', stage: 'patrol', severity: 'err', category: 'step',
+          title: 'monkey_check 步骤失败', description: 'boom',
+          device_serial: 'DEV-3064', job_id: 3064,
+          script_name: 'monkey_test', script_version: '5.2.0',
+        },
+        {
+          ts: '2026-05-08T12:31:00Z', stage: 'system', severity: 'warn', category: 'audit',
+          title: '热更新阻塞', description: 'exists RUNNING job',
+          script_name: null, script_version: null,
+        },
+      ],
+    };
+    render(<PlanRunEventStream events={payload} />);
+    expect(screen.getByTestId('event-script-2026-05-08T12:30:00Z-step')).toHaveTextContent(
+      'monkey_test@5.2.0',
+    );
+    expect(
+      screen.queryByTestId('event-script-2026-05-08T12:31:00Z-audit'),
+    ).not.toBeInTheDocument();
+  });
+
   // #2027：错误面整条（图标/标题/正文）走 AA 变体令牌——原来的 `--destructive`
   // 白底 3.76:1，正文再叠 `/70` 只有 2.62:1。取值本身由
   // `src/design-system/contrast.test.ts` 按 WCAG 公式守着，这里只钉「用没用对令牌」。

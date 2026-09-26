@@ -1,6 +1,6 @@
 # ADR-0023: 脚本溯源与观测链路收口
 
-- 状态：Accepted（D1 已实现；2026-09-25 裁决 D2–D8 去留：D2/D3/D4 Accepted 待实施，D6 改判为源头守卫（待实施），D5/D7/D8 撤销——见「2026-09-25 裁决」节）
+- 状态：Accepted（D1 已实现；**D2–D4 已实现（2026-09-26，#3350）**；D6 改判为源头守卫（#3349 在办）；D5/D7/D8 撤销——见「2026-09-25 裁决」节与「2026-09-26 实施记录」）
 - 优先级：P0（D1 为隐患修复 / D2-D8 为观测打通）
 - 目标里程碑：M3.2
 - 日期：2026-05-10
@@ -174,6 +174,31 @@ D2–D8 自 2026-06-12 起以 Proposed 悬置。其间 ADR-0029 P2-10、ADR-0051
 - 实施切片据此收敛为三片：D2+D3（含原 C2/C5）、D4（原 C6，WiFi 节读 `ResourceAllocation`）、端到端测试（原 C8，覆盖范围去掉 D5–D8）。
   原 C3 / C4 / C7 作废；D6 的源头守卫（catalog `retired: true` 路径补引用检查）另开单（#3349），不并入上述三片；三片跟踪见 #3350。
 
+## 2026-09-26 实施记录：三片落地（#3350）
+
+- **C2（D2）后端**：`EventOut.{script_name,script_version}` / `DeviceMatrixItem.current_script_{name,version}` /
+  `StageStepOut.script_version` 已加；取值统一走
+  `backend/services/plan_run_read_common.snapshot_step_scripts`（`plan_snapshot.steps` 查表，
+  快照缺失/查不到 → None，不抛错）。devices 端点的 `current_step` 来自巡检心跳
+  （`current_patrol_step`，patrol 段语义），故按 `("patrol", step)` 查；
+  events 端点按 `StepTrace(stage, step_id)` 查，`category != "step"` 恒 None。
+  6 条验收用例见 `backend/tests/api/test_plan_run_script_identity_3350.py`（全部通过）。
+- **C5（D3）前端**：组件锚点按现组件落位——`BusinessFlowStepper` 段落内渲染 step chip、
+  `DeviceOverview` 表格 current_step 列、`DeviceDetailDrawer` 脚本 KV 行、
+  `PlanRunEventStream` step 事件行；展示口径统一为 `name@version`
+  （`frontend/src/components/plan-run/scriptIdentity.ts`）。
+  `ScriptManagementPage` 消费 `?name=&version=`（初始值直接取自 URL，不覆盖用户后续输入），
+  `PlanSnapshotDrawer` 的脚本身份反向深链到该 URL。缩略图（minimap）视图刻意不加载荷。
+- **C6（D4）前端**：新增 `PlanSnapshotDrawer`（步骤按 `(stage, sort_order)` 排序、折叠卡片、
+  `default_params`/`param_schema` 展开、空态），入口在 `PlanRunHero` 动作条
+  （原 `PlanRunTopbar` 已演进为 Hero）；数据直接读 `GET /plan-runs/{id}` 的 `plan_snapshot`，
+  不新增端点、不 lazy fetch。
+  **偏离一处（原第 4 条 WiFi 一节不做）**：D5 撤销后 `run_context.wifi_assignments` 没有任何
+  写入方，`ResourceAllocation` 也没有 run 级读取面（只有 pool 管理端点）——渲染该节今天必然是
+  空壳。按「最小方案」不实现；触发器：出现 run 级 allocation 读取面（或在 detail 响应中增字段）时补。
+- **C8（测试）**：后端 6 例 + 前端 vitest（stepper/overview/drawer/event-stream/snapshot-drawer/深链）；
+  原 C8 设想的跨链 e2e（scan → 建 Plan → 触发 → 三端点）未做，触发器：需要跨链回归时补。
+
 ## 实施切片
 
 > **实施状态 (2026-06-12)**：C1（D1 fail-fast）已合入代码主线，`plan_dispatcher_sync.py` / `plan_dispatcher_core.py` 中 `_check_script_keys_complete` + 两阶段校验（prepare 400 / dispatch FAILED）均已实现，pytest 覆盖。C2-C8 尚未排期，仍为 Proposed。**（2026-09-25 裁决后：C3/C4/C7 作废，C2/C5/C6/C8 按上节收敛为三片、D6 改为源头守卫，均 Accepted 待实施）****前置补充**：`param_schema` 运行时校验需求已从 ADR-0007 迁移至本 ADR，作为 C2-C8 实施的前置项（当前 `param_schema` 仅为 passthrough JSON，无校验消费方）。
@@ -181,11 +206,11 @@ D2–D8 自 2026-06-12 起以 Proposed 悬置。其间 ADR-0029 P2-10、ADR-0051
 | Commit | 范围 | 单测 | 状态 |
 |---|---|---|---|
 | **C1** | **D1 风险点收口**：`_fetch_script_metadata` keys 完整性校验 + `_build_lifecycle_from_steps` 改下标 + dispatcher 三处入口失败回写 + `prepare_plan_run` 早期校验。`plan_dispatcher.py`（async）同步对偶。 | pytest 5 cases：① 全部脚本存在 active → 派发成功（回归）② 引用脚本被 deactivate → `PlanDispatchError`，PlanRun 状态 FAILED + result_summary.missing_scripts 列出键 ③ 引用脚本完全不存在 → 同 ② ④ 部分缺失部分存在 → 失败列表精确 ⑤ async 对偶单测 | ✅ 已完成 |
-| **C2** | **D2 后端观测端点字段扩展**：`EventOut.{script_name,script_version}` + `DeviceMatrixItem.current_script_{name,version}` + `StageStepOut.script_version`。从 `plan_snapshot.steps` 查表填充，category != 'step' 时 None。 | pytest 6 cases：① events 端点 step 类事件含脚本身份 ② events 端点 log_signal/audit/trigger 类事件字段为 None ③ devices 端点 current_step 命中 snapshot → 含脚本身份 ④ devices 端点 current_step 不在 snapshot（边界）→ None ⑤ timeline 端点 StageStepOut 含 version ⑥ plan_snapshot 缺失（早期遗留 PlanRun）→ 字段全 None，不抛错 | Proposed |
+| **C2** | **D2 后端观测端点字段扩展**：`EventOut.{script_name,script_version}` + `DeviceMatrixItem.current_script_{name,version}` + `StageStepOut.script_version`。从 `plan_snapshot.steps` 查表填充，category != 'step' 时 None。 | pytest 6 cases：① events 端点 step 类事件含脚本身份 ② events 端点 log_signal/audit/trigger 类事件字段为 None ③ devices 端点 current_step 命中 snapshot → 含脚本身份 ④ devices 端点 current_step 不在 snapshot（边界）→ None ⑤ timeline 端点 StageStepOut 含 version ⑥ plan_snapshot 缺失（早期遗留 PlanRun）→ 字段全 None，不抛错 | ✅ 已完成（2026-09-26，#3350） |
 | **C3** | **D5 wifi 回写**：`complete_plan_run_dispatch` 写入 `run_context.wifi_assignments`（不含 password）+ `flag_modified` + audit。 | pytest 3 cases：① 含 connect_wifi 的 Plan → run_context.wifi_assignments 按 device_id 索引 ② 不含 connect_wifi → 字段不写入 ③ 资源池满 fallback → wifi_assignments 不写 + warning | Proposed |
 | **C4** | **D6 + D7 + D8 后端**：PlanOut.inactive_script_refs（list 端点 1 次 join 聚合）+ Plan 详情 inactive_steps 列表 + `GET /scripts/{name}/versions/{version}/usage` 新端点 + `PUT /scripts/{id}` is_active 切换无新逻辑（已支持）。 | pytest 6 cases：① 全 active → inactive_script_refs=0 ② 引用 deactivate 版本 → 计数正确 ③ Plan 详情 inactive_steps 列表正确 ④ usage 端点空引用 ⑤ usage 端点多 Plan 多 step_key ⑥ usage 端点不存在脚本 → 404 | Proposed |
-| **C5** | **D3 前端观测组件**：`BusinessFlowTimeline` step row 加 `script_name@version` chip + `DeviceMatrixCard` current_step 列扩展 + `DeviceDetailDrawer` KV 行 monospace + `types.ts` 三处类型补字段。 | Vitest 8 cases：① BusinessFlowTimeline 渲染 chip ② step_key 缺失/snapshot 缺失时 chip 不渲染 ③ DeviceMatrixCard 表格视图含脚本 ④ 缩略图视图保持紧凑 ⑤ DeviceDetailDrawer KV 行扩展 ⑥ 字段为 null 时显示 `—` ⑦ Inspector deep-link 含 version query ⑧ 类型回归 | Proposed |
-| **C6** | **D4 plan_snapshot 浏览面**：`PlanSnapshotDrawer` 新组件 + `PlanRunTopbar` 加按钮 + 步骤折叠卡片 + wifi_assignments 节。 | Vitest 5 cases：① 按钮打开 drawer ② 步骤排序 + 字段渲染 ③ default_params/param_schema 展开 ④ wifi_assignments 节存在 ⑤ snapshot 缺失 fallback 显示空态 | Proposed |
+| **C5** | **D3 前端观测组件**：`BusinessFlowTimeline` step row 加 `script_name@version` chip + `DeviceMatrixCard` current_step 列扩展 + `DeviceDetailDrawer` KV 行 monospace + `types.ts` 三处类型补字段。 | Vitest 8 cases：① BusinessFlowTimeline 渲染 chip ② step_key 缺失/snapshot 缺失时 chip 不渲染 ③ DeviceMatrixCard 表格视图含脚本 ④ 缩略图视图保持紧凑 ⑤ DeviceDetailDrawer KV 行扩展 ⑥ 字段为 null 时显示 `—` ⑦ Inspector deep-link 含 version query ⑧ 类型回归 | ✅ 已完成（2026-09-26，#3350） |
+| **C6** | **D4 plan_snapshot 浏览面**：`PlanSnapshotDrawer` 新组件 + `PlanRunTopbar` 加按钮 + 步骤折叠卡片 + wifi_assignments 节。 | Vitest 5 cases：① 按钮打开 drawer ② 步骤排序 + 字段渲染 ③ default_params/param_schema 展开 ④ wifi_assignments 节存在 ⑤ snapshot 缺失 fallback 显示空态 | ✅ 已完成（2026-09-26，#3350） |
 | **C7** | **D6 前端 + D7 前端 + D8 前端**：`PlanListPage` badge + tooltip + `PlanEditPage` banner + 描红 step + ScriptManagementPage 卡片「被 N 个 Plan 引用」链接 + 弹窗 + 失活/复活按钮 + 「显示已停用」toggle。 | Vitest 9 cases：① PlanList badge 数量 ② 0 时不渲染 ③ tooltip 列表 ④ PlanEdit banner ⑤ 描红 step ⑥ Script 引用计数链接 ⑦ 引用列表弹窗 ⑧ 失活二次确认（含 plan_count > 0 的强制勾选）⑨ inactive toggle 切换 | Proposed |
 | **C8** | **集成测试 + 文档**：端到端 `tests/test_script_to_plan_to_observation.py`：扫描脚本 → 创建 Plan → 触发 PlanRun（mock dispatch）→ 拉 timeline + events + devices 三端点，断言能从 step_trace 反向溯源到 `script_name@version`。CLAUDE.md changelog 追加 ADR-0023 段。 | 1 集成 case + 文档 | Proposed |
 

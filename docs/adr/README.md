@@ -79,7 +79,7 @@
 | [ADR-0020](./ADR-0020-plan-step-one-shot-migration.md) | Plan-Step 一次性切换与旧编排模型移除 | Accepted | P0 | M3 | 预扩展/重构 |
 | [ADR-0021](./ADR-0021-script-content-alignment-gate.md) | 派发门禁 / PlanRun 详情 / 脚本内容对齐 | Accepted | P0 | M3 | 已实现（C5a–C6） |
 | [ADR-0022](./ADR-0022-patrol-heartbeat-aggregation.md) | Patrol 周期心跳聚合与退避 | Accepted | P1 | M3 | 已实现 |
-| [ADR-0023](./ADR-0023-script-traceability.md) | 脚本溯源与 sha256 契约 | Accepted | P1 | M3 | D1 已实现；2026-09-25 裁决 D2–D8：D2/D3/D4（观测面脚本身份 + 快照浏览面）Accepted 待实施；D6 改判为源头守卫（catalog `retired: true` 路径补引用检查）待实施；D5/D7/D8 撤销（被 `ResourceAllocation` / `/scripts/{id}/usage` / 退役 SOP 取代） |
+| [ADR-0023](./ADR-0023-script-traceability.md) | 脚本溯源与 sha256 契约 | Accepted | P1 | M3 | D1 已实现；D2/D3/D4（观测面脚本身份 + 快照浏览面 + ScriptManagementPage 深链）**已实现（2026-09-26，#3350）**；D6 改判为源头守卫（catalog `retired: true` 路径补引用检查，#3349 在办）；D5/D7/D8 撤销（被 `ResourceAllocation` / `/scripts/{id}/usage` / 退役 SOP 取代） |
 | [ADR-0024](./ADR-0024-browser-session-security-hardening.md) | 浏览器 Web 会话安全化（HttpOnly Cookie + CSRF + refresh 黑名单 + 可观测） | Accepted | P0 | M3.2 | v1.2：internal 无 TLS 跨标签 refresh 已知限制（Web Locks 不可用，以单标签纪律缓解、随 #46 TLS 消除，#1200）；v1.1：internal 无 TLS 例外契约化（Secure 强制仅 ENV=production，边界与复议触发器见文末修订节，#909）；v1.0：已实现（2026-05-21） |
 | [ADR-0025](./ADR-0025-phase4-architecture-alignment.md) | Phase 4 架构对齐（方案 C：存储三级 + Agent 归档闭环） | Accepted | P2 | M4 | 已实现（Sprint 1–4，见 [DOC-MAP](../DOC-MAP.md) / acceptance） |
 | [ADR-0026](./ADR-0026-plan-execution-scaling.md) | 大规模化测试计划执行架构（PlanRun 准入队列 + 四层调度 + 控制面减负；观测面 #2324 / #2369） | Accepted | P0 | M5 | P0–P2 已收口（含 Step 5b / barrier / terminalization / step_log 批量化 / 索引与指标 / Dashboard 观测面 #2324 + PlanRun/visibility/fleet room #2369）；待定清单 v1 已回填；P3 → ADR-0027 |

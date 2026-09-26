@@ -324,13 +324,15 @@ def get_plan_run_devices(
     """C5a₂ 设备矩阵（``plan_run_devices``）；facet 基于未过滤全集。"""
     t0 = time.perf_counter()
     try:
-        _require_plan_run(db, run_id)
+        pr = _require_plan_run(db, run_id)
         return ok(build_plan_run_devices(
             db,
             run_id,
             status=status,
             link_status=link_status,
             host_id=host_id,
+            # #3350（ADR-0023 D2）：复用已加载的 pr（不新增查询）派生脚本身份
+            plan_snapshot=pr.plan_snapshot,
         ))
     finally:
         record_plan_run_devices_query_duration(time.perf_counter() - t0)
