@@ -82,6 +82,19 @@
         }
       ]
     },
+    "aimonkey": {
+      "kind": "tool",
+      "versions": [
+        {
+          "artifact": "packages/aimonkey/20260317.tar.gz",
+          "package_sha256": "ea4b73a03ec2387f88389b5e6bb32ad2677c19417a81bb8579fa3030ea299406",
+          "python": null,
+          "retired": false,
+          "script": "MonkeyTest.py",
+          "version": "20260317"
+        }
+      ]
+    },
     "check_device": {
       "kind": "script",
       "versions": [
@@ -527,6 +540,19 @@
           "retired": false,
           "script": "flash_preflight.py",
           "version": "1.0.5"
+        }
+      ]
+    },
+    "flashtool": {
+      "kind": "tool",
+      "versions": [
+        {
+          "artifact": "packages/flashtool/1.2444.00.100.tar.gz",
+          "package_sha256": "ffc30c9383b5a487416c7bbd51393281a8a2bd201a7a7271ff0f390d7a149d66",
+          "python": null,
+          "retired": false,
+          "script": "flash_tool",
+          "version": "1.2444.00.100"
         }
       ]
     },
