@@ -59,6 +59,15 @@ def _upsert_admin() -> None:
     if not username or not password:
         print("dev_db_admin_skipped reason=missing STP_ADMIN_USER/STP_ADMIN_PASSWORD")
         return
+    if password == "admin123":
+        # #3353：compose 的 `${STP_ADMIN_PASSWORD:-admin123}` 曾在「没配」时静默生效；
+        # compose 侧已改 fail-closed，但手工/host 直跑仍可能带着这个默认值进来——
+        # 这里显式告警，不让弱口令静默成为控制台口令。
+        print(
+            "dev_db_admin_WEAK_PASSWORD reason=STP_ADMIN_PASSWORD==admin123 ——"
+            " 控制台管理员口令仍是示例默认值（#3353）；请在根目录 .env（compose 插值来源）"
+            "改成随机口令并重建 server 容器（docker compose up -d --force-recreate server）"
+        )
 
     from backend.core.database import SessionLocal
     from backend.core.security import get_password_hash

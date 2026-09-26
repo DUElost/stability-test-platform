@@ -18,6 +18,7 @@ class EventType(str, PyEnum):
     RUN_FAILED = "RUN_FAILED"
     RISK_HIGH = "RISK_HIGH"
     DEVICE_OFFLINE = "DEVICE_OFFLINE"
+    CHAIN_INCOMPLETE = "CHAIN_INCOMPLETE"
 
 
 class NotificationSource(str, PyEnum):
