@@ -15,6 +15,7 @@ import { PANEL, SEGMENTED, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 import DeviceFilterBar from './DeviceFilterBar';
 import SectionHeader from './SectionHeader';
+import { formatScriptIdentity } from './scriptIdentity';
 import type {
   DeviceLinkStatus,
   DeviceMatrixItem,
@@ -373,7 +374,17 @@ function DeviceTable({
                   {d.current_stage}
                 </TableCell>
                 <TableCell className={cn('px-2 py-2 font-mono text-xs', TEXT.body)}>
-                  {d.current_step || '—'}
+                  <div>{d.current_step || '—'}</div>
+                  {/* #3350（ADR-0023 D3）：current_step 的脚本身份（快照派生）；
+                      缩略图视图不加这一行（保持紧凑） */}
+                  {formatScriptIdentity(d.current_script_name, d.current_script_version) && (
+                    <div
+                      className={cn('text-[10px]', TEXT.subtitle)}
+                      data-testid={`device-script-${d.job_id}`}
+                    >
+                      {formatScriptIdentity(d.current_script_name, d.current_script_version)}
+                    </div>
+                  )}
                 </TableCell>
                 <TableCell className={cn('px-2 py-2 text-right font-mono text-xs', TEXT.body)}>
                   #{d.patrol_cycle_count}

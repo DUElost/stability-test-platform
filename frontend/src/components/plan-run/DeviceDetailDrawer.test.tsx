@@ -319,4 +319,22 @@ describe('DeviceDetailDrawer 时间口径（#2420）', () => {
     expect(valueOf('结束时间')).toContain('—');
     expect(valueOf('下次重试')).toContain('—');
   });
+
+  // #3350（ADR-0023 D3）：脚本 KV 行显示 script@version；快照查不到 → —
+  it('脚本行显示 name@version（快照派生）', async () => {
+    render_(
+      <DeviceDetailDrawer
+        device={makeDevice({ current_script_name: 'monkey_test', current_script_version: '5.2.0' })}
+        {...handlers}
+      />,
+    );
+    await screen.findByText('脚本');
+    expect(valueOf('脚本')).toContain('monkey_test@5.2.0');
+  });
+
+  it('脚本行在旧 PlanRun（无身份）上显示 —', async () => {
+    render_(<DeviceDetailDrawer device={makeDevice()} {...handlers} />);
+    await screen.findByText('脚本');
+    expect(valueOf('脚本')).toContain('—');
+  });
 });

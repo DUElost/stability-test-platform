@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Download, X, Loader2, ChevronDown, RotateCcw } from 'lucide-react';
+import { Download, FileText, X, Loader2, ChevronDown, RotateCcw } from 'lucide-react';
 import { Button, buttonVariants } from '@/components/ui/button';
 import {
   AlertDialog,
@@ -37,6 +37,8 @@ interface Props {
   onExportReport?: (format: 'markdown' | 'json') => void;
   /** 复跑：沿用本次 Plan 与设备集重新发起（仅终态显示）。 */
   onRerun?: () => void;
+  /** #3350（ADR-0023 D4）：打开计划快照抽屉。 */
+  onViewSnapshot?: () => void;
   /** Override "now" for deterministic tests. */
   now?: Date;
 }
@@ -47,6 +49,7 @@ export interface PlanRunHeroActionsProps {
   onAbort?: (reason: string) => void;
   onExportReport?: (format: 'markdown' | 'json') => void;
   onRerun?: () => void;
+  onViewSnapshot?: () => void;
   className?: string;
 }
 
@@ -57,6 +60,7 @@ export function PlanRunHeroActions({
   onAbort,
   onExportReport,
   onRerun,
+  onViewSnapshot,
   className,
 }: PlanRunHeroActionsProps) {
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -93,6 +97,20 @@ export function PlanRunHeroActions({
 
   return (
     <div className={cn('flex gap-1.5', className)}>
+      {/* #3350（ADR-0023 D4）：计划快照浏览入口（读 detail 已返回的 plan_snapshot） */}
+      {onViewSnapshot && (
+        <Button
+          variant="outline"
+          size="sm"
+          data-testid="plan-run-snapshot-btn"
+          onClick={onViewSnapshot}
+          disabled={!run}
+          className="flex-1 text-[11px] h-7"
+        >
+          <FileText className="mr-1 h-3 w-3" />
+          查看快照
+        </Button>
+      )}
       <div className="relative flex-1">
         <Button
           variant="outline"
@@ -231,6 +249,7 @@ export default function PlanRunHero({
   onAbort,
   onExportReport,
   onRerun,
+  onViewSnapshot,
   now,
 }: Props) {
   const [tick, setTick] = useState(0);
@@ -401,6 +420,7 @@ export default function PlanRunHero({
         onAbort={onAbort}
         onExportReport={onExportReport}
         onRerun={onRerun}
+        onViewSnapshot={onViewSnapshot}
         className="px-4 pb-4"
       />
     </div>

@@ -238,6 +238,8 @@ class PlanChainOut(BaseModel):
 class StageStepOut(BaseModel):
     step_key: str
     script_name: str
+    # #3350（ADR-0023 D2）：快照里的脚本身份。旧快照缺该键 → None（前端显示 —）
+    script_version: Optional[str] = None
     stage: str
     sort_order: int
     device_total: int                  # = PlanRun jobs 总数
@@ -286,6 +288,10 @@ class EventOut(BaseModel):
     device_id: Optional[int] = None
     device_serial: Optional[str] = None
     ref: Optional[dict] = None         # {type, id} — 用于跳转 step_trace / log_signal
+    # #3350（ADR-0023 D2）：仅 category=step 的事件带脚本身份（从 plan_snapshot
+    # 查表派生）；trigger/system/log_signal/audit 类恒 None
+    script_name: Optional[str] = None
+    script_version: Optional[str] = None
 
 
 class PlanRunEventsOut(BaseModel):
@@ -329,6 +335,10 @@ class DeviceMatrixItem(BaseModel):
     adb_state: Optional[str] = None
     adb_connected: Optional[bool] = None
     capabilities: Optional[dict] = None
+    # #3350（ADR-0023 D2）：current_step 在 plan_snapshot.steps 里查到的脚本身份
+    # （current_step 来自巡检心跳，按 patrol 段查表）；查不到 → None
+    current_script_name: Optional[str] = None
+    current_script_version: Optional[str] = None
 
 
 class PlanRunDevicesOut(BaseModel):

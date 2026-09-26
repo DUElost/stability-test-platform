@@ -20,6 +20,7 @@ import {
 import { cn } from '@/lib/utils';
 import { formatDateTimeLocale } from '@/utils/format';
 import { loadErrorCopy } from '@/utils/api';
+import { formatScriptIdentity } from './scriptIdentity';
 import type {
   EventSeverity,
   EventStage,
@@ -112,6 +113,15 @@ function EventRow({ event }: { event: PlanRunEvent }) {
           <div className="mt-0.5 text-[11px] text-muted-foreground">
             {event.device_serial && <span className="font-mono">{event.device_serial}</span>}
             {event.job_id && <span className="ml-1">· Job #{event.job_id}</span>}
+          </div>
+        )}
+        {/* #3350（ADR-0023 D3）：step 类事件的脚本身份（非 step 事件该字段恒 null） */}
+        {formatScriptIdentity(event.script_name, event.script_version) && (
+          <div
+            className="mt-0.5 font-mono text-[11px] text-muted-foreground"
+            data-testid={`event-script-${event.ts}-${event.category}`}
+          >
+            {formatScriptIdentity(event.script_name, event.script_version)}
           </div>
         )}
       </div>

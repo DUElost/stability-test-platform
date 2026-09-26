@@ -12,6 +12,7 @@ import PlanChainSidebar from '@/components/plan-run/PlanChainSidebar';
 import BusinessFlowStepper from '@/components/plan-run/BusinessFlowStepper';
 import DeviceOverview from '@/components/plan-run/DeviceOverview';
 import DeviceDetailDrawer from '@/components/plan-run/DeviceDetailDrawer';
+import PlanSnapshotDrawer from '@/components/plan-run/PlanSnapshotDrawer';
 import DispatchGateCard from '@/components/plan-run/DispatchGateCard';
 import ArchiveStatusCard from '@/components/plan-run/ArchiveStatusCard';
 import DedupReportCard from '@/components/plan-run/DedupReportCard';
@@ -86,6 +87,8 @@ export default function PlanRunDetailPage() {
   const [diagOpen, setDiagOpen] = useState(false);
   const [leftPanelOpen, setLeftPanelOpen] = useState(false);
   const [finalArchiveOpen, setFinalArchiveOpen] = useState(false);
+  // #3350（ADR-0023 D4）：计划快照抽屉（数据 = runQ.data.plan_snapshot）
+  const [snapshotOpen, setSnapshotOpen] = useState(false);
 
   const {
     runQ,
@@ -257,6 +260,7 @@ export default function PlanRunDetailPage() {
                 isAborting={abortMut.isPending}
                 onAbort={(reason) => abortMut.mutate(reason)}
                 onRerun={() => void handleRerun()}
+                onViewSnapshot={() => setSnapshotOpen(true)}
                 onExportReport={async (format) => {
                   try {
                     const blob = await api.planRuns.exportReport(id, format);
@@ -415,6 +419,13 @@ export default function PlanRunDetailPage() {
         }
         isRetryPending={retryMut.isPending}
         isExitPending={exitMut.isPending}
+      />
+
+      {/* #3350（ADR-0023 D4）：快照浏览面；直接读 detail 已返回的 plan_snapshot */}
+      <PlanSnapshotDrawer
+        open={snapshotOpen}
+        onClose={() => setSnapshotOpen(false)}
+        snapshot={runQ.data?.plan_snapshot ?? null}
       />
 
       <AlertDialog open={finalArchiveOpen} onOpenChange={setFinalArchiveOpen}>
