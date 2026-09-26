@@ -147,14 +147,24 @@ class ScriptOut(BaseModel):
     updated_at: datetime
 
 
+class ScriptScanRetireBlocked(BaseModel):
+    """``retire_blocked_versions`` 条目：retired 但仍被 plan_step 引用（#3349）。"""
+
+    name: str
+    version: str
+    plan_ids: List[int]
+
+
 class ScriptScanOut(BaseModel):
     """``POST /scripts/scan`` 的注册结果（#3285 类型面收口）。
 
-    与 ``services/script_catalog.ScriptScanResult.to_dict()`` 的 10 个键一一对应
+    与 ``services/script_catalog.ScriptScanResult.to_dict()`` 的 12 个键一一对应
     （键集合相等由 ``backend/tests/api/test_scripts.py`` 钉住）。条目内层保持
     ``Dict[str, str]``：键集随来源分支不同（conflicts / rebaselined /
     package_conflicts / package_missing / unregistered_active /
     deactivated_versions），本单只对齐类型面，不窄化内层形状。
+    ``retire_blocked_versions``（#3349，ADR-0023 D6 源头守卫）形状确定
+    （name/version/plan_ids），用具名内层模型。
     """
 
     created: int
@@ -167,6 +177,8 @@ class ScriptScanOut(BaseModel):
     package_missing: List[Dict[str, str]]
     unregistered_active: List[Dict[str, str]]
     deactivated_versions: List[Dict[str, str]]
+    retire_blocked: int
+    retire_blocked_versions: List[ScriptScanRetireBlocked]
 
 
 def _manifest_path() -> str | None:
