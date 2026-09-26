@@ -1,7 +1,7 @@
 # ADR-0040：部署摘要协议（Deployment Artifact Digest Protocol）
 
-- 状态：**Accepted** v1.1
-- 版本记录：v1.0 定稿（2026-09-13；v0.1 初版由 [#1900](https://github.com/DUElost/stability-test-platform/issues/1900) 触发、[#1901](https://github.com/DUElost/stability-test-platform/issues/1901) 跟踪 → owner 裁决采纳 D1–D7，裁决记录见 §9）；v1.1（2026-09-15，[#2057](https://github.com/DUElost/stability-test-platform/issues/2057)）：**判据唯一性**与展示面收口，修订记录见 §10（D1 的身份定义不变）
+- 状态：**Accepted** v1.2（v1.2 修订 D8 **待 owner 裁决**，见 §11）
+- 版本记录：v1.2 修订（2026-09-26，**待 owner 裁决**）：新增 D8——`host-resources` 层退役，内容由 [ADR-0051](./ADR-0051-release-unit-and-content-addressing.md) D7 工具包承接，R1–R4 分阶段（§11）；v1.0 定稿（2026-09-13；v0.1 初版由 [#1900](https://github.com/DUElost/stability-test-platform/issues/1900) 触发、[#1901](https://github.com/DUElost/stability-test-platform/issues/1901) 跟踪 → owner 裁决采纳 D1–D7，裁决记录见 §9）；v1.1（2026-09-15，[#2057](https://github.com/DUElost/stability-test-platform/issues/2057)）：**判据唯一性**与展示面收口，修订记录见 §10（D1 的身份定义不变）
 - 优先级：P2
 - 目标里程碑：M7
 - 日期：2026-09-13
@@ -173,6 +173,36 @@ docstring 要求与 Agent 侧**字节级等价**并配对照测试）→ 心跳/
 4. 不纳入并行升级 / 灰度（与维护窗口、设备作业语义耦合，另主题）；
 5. 不在本 ADR 裁决 artifact 存储（包存储归 ADR-0033 轨道；若落地，身份直接复用本协议 digest，不另造）。
 
+### D8（v1.2，待 owner 裁决）：`host-resources` 层退役——内容由 ADR-0051 D7 工具包承接
+
+**事实（2026-09-26）**：D1 表中 `host-resources` 的全部内容（flashtool / AIMonkey）已作为 `kind=tool` 包登记并发布到站点
+（#3369），消费族新版本在包内声明 `requires_tools`、由引擎经 `tools_cache` 整包核验后按步注入（#3365 / #3378，ADR-0051 v1.7 D7）；
+canary 真机刷机 run 575 与 Monkey run 576 实证从 `tools_cache` 取工具，15 个在用计划重指、48/48 主机预热，
+18:44 全机队回归 `monkey_resource_push 1.1.1` 476 次成功；读 `agent/resources/` 路径的旧版本已 retired（#3431）。
+⇒ **本层已无消费方**，继续保留只剩成本：每轮热更新的资源 digest 判定、第二条下发通道（hot-update + Ansible）、
+以及 §4.2 已承认的信任短板——资源 digest 是部署流程写入的**自报意图**，从不实测（#3128：7/48 台 CRLF 偏离未被感知）。
+
+**决策**：
+
+1. **退役 `host-resources` artifact 及其收敛层**：部署单元 = `agent-code` 单 artifact；工具的身份与分发归 ADR-0051 D7
+   （随脚本版本声明、消费时按包 sha 实测核验——信任模型强于本层的自报 digest，§7-3 对资源层的复议前提随之消失）。
+   D1 表 `host-resources` 行、D3「独立判定/独立通道」、D4「resources 变更不重启」三处随之失效。
+2. **`resources/` 的 protect-only 保留**：退役只停止「下发与判定」，**不做主机侧清理**——`resources/mtbf/` 等主机本地资产
+   与已下发的历史副本原样保留（D3 的 `HOST_LOCAL_PATHS` / wrapper 保护语义不变），故每一步都可无损回滚。
+3. **分阶段（顺序即依赖，每步独立可回滚）**：
+   - **R1 控制面停判停推**：`resources_drift` 恒不产生；hot-update / batch 不再构建、传输资源 tarball；`--force` 收窄为
+     `agent-code` 全量；`agent_resources_digest` 仍接收（兼容旧 Agent 心跳）但不参与任何状态判定（§10 判据唯一性不变）。
+   - **R2 Ansible 归位**：`update_agent.yml` / `install_agent.yml` 停止资源推送，撤 #2166「源树缺 `resources/flashtool` 即拒绝」
+     前置断言——须在 R1 之后（R1 前 Ansible 仍是资源下发通道之一）。
+   - **R3 发布清单**：`release-manifest` 去 `host-resources` 分量（`build_bundle` 与 `tools/site_config` 的 install / plan /
+     checks / manifest 同批）；安装器对**旧** bundle（仍带该分量）照常接受、对新 bundle 不再要求。bundle 从此不依赖
+     `backend/agent/resources/` 外部物料——ADR-0051 D8「`check-deploy-source.sh` 由结构替代（从提交构建）」的前置随之解除。
+   - **R4 Agent 与数据面**：Agent 心跳停报资源 digest；wrapper 资源子命令删除（**ADR-0037 同 PR 回填白名单**，§7-5）；
+     `host.agent_resources_digest` 停写、API / 前端字段标弃用（删列另起迁移，留一个版本窗口）；资源相关告警、
+     `control-plane-deploy` SOP §3「带外资源」两段同批收口。
+4. **过渡登记**：本层以 `host-resources-layer` 进 `docs/governance/transitions.json`（exit = 本条，带到期日），
+   由过渡登记簿门禁计时执法——R4 完成即结项。
+
 ## 3. 备选方案与权衡
 
 | 备选 | 内容 | 否决/保留理由 |
@@ -286,3 +316,14 @@ docstring 要求与 Agent 侧**字节级等价**并配对照测试）→ 心跳/
 - **同步义务**：前端徽章与 `docs/operations/agent-version-and-hot-update.md`（§4 排障表
   「UI 显示 drift」一行）须随本修订更新；实施由
   [#2155](https://github.com/DUElost/stability-test-platform/issues/2155) 跟踪。
+
+## 11. 修订记录（v1.2，2026-09-26，待 owner 裁决）
+
+**性质**：收缩部署单元（`host-resources` 层退役），**不改 D1 的身份定义与 D2/§10 的判据唯一性**——`agent-code` 仍以内容摘要为
+身份、digest 仍是唯一动作判据。触发：ADR-0051 D7 于 2026-09-26 激活后，本层内容全部改由工具包承接、已无消费方（证据见 D8）。
+
+- **§7 复议条目的去向**：§7-1（载荷分层被证伪）随层退役失去对象；§7-3（带外漂移）对资源层不再适用（工具改为消费时实测核验），
+  对 `agent-code` 层原样保留；§7-5（ADR-0037 联动）在 R4 删除资源子命令时触发、同 PR 回填。
+- **备选**：保留本层作「第二下发通道」——弃：两条通道对同一批工具给出两个身份（自报 digest vs 包 sha），正是 §10 判据唯一性
+  要消灭的并存；主机清理一并做——弃：清理与退役解耦才能每步无损回滚，清理若需要另行裁决。
+- **裁决待办**：owner 确认后将本节与 D8 标题的「待 owner 裁决」替换为裁决日期，R1–R4 各开实施 PR（跟踪 #3288）。

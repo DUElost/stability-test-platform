@@ -60,6 +60,13 @@
       "exit": "adr:ADR-0053#Phase B",
       "due": "2026-12-31",
       "status": "active"
+    },
+    {
+      "id": "host-resources-layer",
+      "what": "ADR-0040 D1 的 host-resources 收敛层（flashtool/AIMonkey 经 hot-update 资源层与 Ansible 下发、资源 digest 为部署流程自报）——内容已由 ADR-0051 D7 工具包承接、无消费方（2026-09-26 激活），待按 ADR-0040 D8 的 R1–R4 分阶段退役（resources/ protect-only 保留，不做主机清理）",
+      "exit": "adr:ADR-0040#D8",
+      "due": "2026-12-31",
+      "status": "active"
     }
   ]
 }
