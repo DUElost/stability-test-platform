@@ -116,15 +116,6 @@ GATES = {
         ROOT,
         None,
     ),
-    # ADR-0033 D0：禁止新增 backend/agent/scripts/ 顶层工具族（#745 in-tree breaker）。
-    # 既有族新版本仍绿；新族须归类声明，external-tool 无 in-tree 出口
-    # （ADR-0033 §5.6；§5.4 条件 4 已触发，跟踪 #3075）。
-    "new-script-family": (
-        f"{PY} tools/dev/check_new_script_family.py --self-test && "
-        f"{PY} tools/dev/check_new_script_family.py --base {BASE_REF}",
-        ROOT,
-        None,
-    ),
     # ADR-0033 D2：Tool Contract 验证器 + fixture 靶子（新族准入脚手架；存量双轨）。
     "tool-contract": (
         f"{PY} tools/dev/verify_tool_contract.py --self-test && "
@@ -339,12 +330,12 @@ PROFILES = {
         "schema-at-head", "env-inventory",
         "ruff", "eslint", "tsc", "knip", "compileall", "layering", "orphan-models",
         "gov-surface", "ai-work", "god-files", "inner-imports",
-        "new-script-family", "tool-contract", "tool-manifest", "transitions",
+        "tool-contract", "tool-manifest", "transitions",
     ],
     "check:pr": [
         "schema-at-head", "env-inventory",
         "ruff", "eslint", "tsc", "knip", "compileall", "layering", "orphan-models",
-        "pollution", "new-script-family", "tool-contract",
+        "pollution", "tool-contract",
         "tool-manifest",
         "alembic-immutability", "invariant-diff",
         "gov-surface", "ip-leak", "prom-alerts", "agent-tests-collect", "agent-tests",

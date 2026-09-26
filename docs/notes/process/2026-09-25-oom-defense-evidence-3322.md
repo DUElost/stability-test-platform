@@ -33,6 +33,12 @@ earlyoom 阈值以下，即**在这台同机承载 PostgreSQL + NFS 导出 + 48 
 （拿到一条 journal 证据）与代价不对称，**拒做**；要取得该证据的正当路径是 #3322 里记的
 "低峰 + 提前通知 + 只到 SIGTERM 档"，由 owner 拍风险。
 
+**owner 裁决（2026-09-26，#3322）：不取。** 上述「正当路径」也不在控制面宿主上走——SIGTERM 档
+（avail<15% 且 swapfree<8%，本机 ≈ swap 剩不到 1.9 GiB）就落在 09-23 终局阶段的区间里，到 SIGTERM 档与
+进入失速之间没有可控余量，「只压到 SIGTERM 档」在这台机器上不是有界操作。运行时证据只接受两种来源：
+非生产机上用同一份 `earlyoom.default` 演练，或 #3050 R2′ 自然成立后的复盘核对。证据等级表落在
+`deploy/control-plane/host-defense/README.md`「证据等级」一节，以那里为准。
+
 ## Alternatives
 
 - **直接调 `-m/-s` 让生产 earlyoom 在高位杀一次**：否决——那会让它真杀场上最大的
@@ -74,5 +80,7 @@ check-monitoring-assets.py → match 12 · drift 0（对 origin/main）
 
 - #3318：8 份存量副本的部署根重放（我已按权威值重放并复测 drift 0；若下次部署换根，同口径再来一遍）。
 - #3223 账 1：给 `wait_system_ready` 加**迭代上界**（引信仍在，需脚本新版本，ADR-0039）。
-- 若将来要取"真击杀"证据：先确认 `--sort-by-rss` 已在（否则第一次演练会杀错人），并在演练前
-  把 `--avoid` 复核一遍——本次就发现 09-14 原表漏了 `redis-server`/`node_exporter`。
+- 若将来要取"真击杀"证据（按 2026-09-26 裁决只在非生产机）：先确认 `--sort-by-rss` 已在（否则第一次
+  演练会杀错人），并在演练前把 `--avoid` 复核一遍——本次就发现 09-14 原表漏了 `redis-server`/`node_exporter`。
+- 重议「不在生产宿主取证」的条件：控制面与 PG/NFS 拆机（届时宿主失速不再等于生产中断），或
+  #3050 R2′ 成立后复盘发现 earlyoom 仍选错目标。

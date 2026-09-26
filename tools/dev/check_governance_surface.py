@@ -1226,8 +1226,8 @@ GATE_TO_CI_ANCHOR = {
     # ADR-0051 Phase 3：脚本版本不可变门禁随版本目录退役（不可变性由 tool-manifest 门禁的
     # append-only + 族树⇄最新登记等价承担）。
     "transitions": ("ci.yml", "过渡登记簿检查(ADR-0051)"),
-    # ADR-0033 D0 新族门禁（#745）：与 immutability 同模式接入 lint job。
-    "new-script-family": ("ci.yml", "ADR-0033 D0 新脚本族检查"),
+    # ADR-0033 D0 新族门禁（#745）已随 ADR-0051 D8 退役：归类 = 族级 kind 登记，族树 ⇄ kind=script
+    # 由 tool-manifest 门禁内的 check_script_packages 判定（kind=tool 挂树即红）。
     # ADR-0033 D2 Tool Contract 脚手架（#745）：fixture 靶子 + --self-test。
     "tool-contract": ("ci.yml", "ADR-0033 Tool Contract 检查"),
     # ADR-0033 Phase B（#3075）：tool_manifest 唯一事实源的 lint/append-only 门禁，
