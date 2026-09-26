@@ -83,10 +83,11 @@ def _run_gates_ignored() -> set[str]:
 
 class TestOfflineSubsetGuard:
     def test_detects_known_container_files(self):
-        """自证：扫描器确实能认出已知的两个容器文件（防正则失效导致空集通过）。"""
+        """自证：扫描器确实能认出已知的容器文件（防正则失效导致空集通过）。"""
         found = _files_using_testcontainers()
         assert "tests/test_alembic_upgrade.py" in found
         assert "tests/test_script_seed_governance.py" in found
+        assert "tests/test_seed_default_params_face_3289.py" in found
 
     def test_no_container_file_misses_ci_ignore_list(self):
         """容器测试必须全部在 ci.yml 的 --ignore 名单里（#1707 主断言）。"""

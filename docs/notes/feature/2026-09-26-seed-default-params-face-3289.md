@@ -51,6 +51,10 @@ ADR-0033 v1.15（#3203：`default_params` 归 `kind=script` 由 DB catalog 管�
 - **交叉验证**：基线生成自「alembic head + scan」探针库面，测试从「纯 head +
   manifest 过滤」独立复现，两者逐键相等——scan 零写参数面的结论被双向证实；
 - 生产访问全程只读（SELECT），探针库为 stp-dev 栈内新建隔离库。
+- **PR 离线门禁（#1707）**：`tests/test_seed_default_params_face_3289.py` 加入
+  `ci.yml` / `run_gates.py` 的 `--ignore` 名单（与既有 testcontainer 文件同口径）；
+  `pytest tests/test_offline_subset_guard.py` 全绿。夜间 `backend-test` 仍跑该文件
+  （全量 `pytest tests/` 无 ignore）。
 
 ## Revisit
 
