@@ -10,7 +10,8 @@
      Run（聚合器幂等重算 + 消费即删）；
    - ``terminal_effects_state='pending'`` 残留（聚合已提交、副作用块未走完的
      崩溃窗口）→ 经编排者重放副作用块（chain/dedup/通知各有守卫，块级由
-     pending/done 标记拦住重复）。
+     pending/done 标记拦住重复）；#3376：加 2 分钟时间门槛（不做 CAS），
+     避开与正在执行中的正常副作用块重叠。
 """
 
 from __future__ import annotations
@@ -45,6 +46,12 @@ _OPEN_STATUSES = {
     PlanRunStatus.QUEUED.value,
     PlanRunStatus.PRECHECK.value,
 }
+
+#: #3376 裁决（时间门槛，不做 CAS）：副作用块的正常编排在秒级内完成，2 分钟内的
+#: ``pending`` 行大概率仍在正常路径上——过门槛才视为崩溃窗口补偿，避免与正在执行
+#: 的副作用块重叠。恢复语义不变（该通道本不参与正常时延预算，ADR-0052 D2）；
+#: 门槛以内/以外的罕见重叠仍有下游保护（链 CAS、dedup key、通知幂等、报告刷新幂等）。
+TERMINAL_EFFECTS_REPLAY_MIN_AGE_S = 120
 
 
 def reconcile_plan_run_counters_once(
@@ -237,11 +244,18 @@ def _replay_stale_aggregation_triggers(*, batch_size: int) -> dict:
     # 副作用块残留（聚合已提交、finalize 块崩溃的窗口）。partial index 走
     # idx_plan_run_terminal_effects_pending。逐行独立会话（finalize 自提交，
     # 与批内行锁不同生命周期——对齐 drain 的会话形状）。
+    # #3376 裁决：时间门槛（不做 CAS）——``ended_at`` 与 ``pending`` 在同一终态
+    # 事务写死（plan_run_aggregation._finalize_plan_run），秒级内跑完的副作用块
+    # 不该被恢复扫描抢跑；``ended_at < cutoff`` 对 NULL 不成立（畸形行不重放）。
+    effects_cutoff = datetime.now(timezone.utc) - timedelta(
+        seconds=TERMINAL_EFFECTS_REPLAY_MIN_AGE_S
+    )
     with SessionLocal() as db:
         stale_ids = (
             db.execute(
                 select(PlanRun.id)
                 .where(PlanRun.terminal_effects_state == "pending")
+                .where(PlanRun.ended_at < effects_cutoff)
                 .order_by(PlanRun.id)
                 .limit(batch_size)
             )
