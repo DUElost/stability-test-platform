@@ -105,6 +105,34 @@ def test_bundle_carries_the_documented_layout_and_manifest(tmp_path):
     assert {"22.04", "24.04"} <= set(ubuntu["versions"])
 
 
+def test_bundle_carries_agent_version_for_provenance(tmp_path, monkeypatch):
+    """#3401 A4：bundle 不是 git 仓库——构建期写 `backend/agent/VERSION` 供
+    `get_agent_code_version()` 回退；且 VERSION 不进任何摘要面（载荷元数据排除）。"""
+    import backend.services.host_updater as hu_mod
+
+    out, _ = built(tmp_path)
+    version_file = out / "backend" / "agent" / "VERSION"
+    assert version_file.read_text(encoding="utf-8").strip() == REVISION[:8]
+
+    # 端到端：bundle 布局下取版本不再为空（热更新 code_version 由此而来）
+    monkeypatch.setattr(hu_mod, "_AGENT_SOURCE_DIR", out / "backend" / "agent")
+    assert hu_mod.get_agent_code_version() == REVISION[:8]
+
+    # 不进身份：契约枚举（agent-code 口径）不含 VERSION
+    extra = {
+        "stp_schemas/pipeline_schema.json": str(
+            out / "backend" / "schemas" / "pipeline_schema.json"
+        )
+    }
+    arcnames = {
+        entry[0]
+        for entry in collect_artifact_entries(
+            str(out / "backend" / "agent"), extra, kind="code"
+        )
+    }
+    assert "VERSION" not in arcnames
+
+
 def test_manifest_is_accepted_by_the_installer_side_loader(tmp_path):
     out, _ = built(tmp_path)
     manifest = load_release_manifest(out / MANIFEST_NAME)
