@@ -80,3 +80,20 @@ class ScriptPresenceSweepOut(BaseModel):
     host_id: str
     rows: int = 0
     counts: ScriptPresenceCounts
+
+
+class ScriptPresenceFullSweepOut(BaseModel):
+    """全量按需重采（`POST /script-presence/refresh-all`）的返回（#3333）。
+
+    后端形状即 `services.script_presence.run_sweep` 的汇总键；`counts` 六态恒全。
+    前端无消费方（admin/运维触发面），登记在形状契约的 `_MODEL_UNREGISTERED`。
+    """
+
+    sweep_id: str
+    hosts: int = 0
+    hosts_verified: int = 0
+    full_versions: int = 0
+    uncovered_active_versions: int = 0
+    rows: int = 0
+    orphans_removed: int = 0
+    counts: ScriptPresenceCounts
