@@ -130,7 +130,7 @@
 
 | 域 | 代表 Accepted ADR | 本表覆盖状态 |
 |---|---|---|
-| 控制面 / 执行分层 | 0001, 0006, 0014, 0016, 0017, 0018 | 已填关键行；其余见 TBD |
+| 控制面 / 执行分层 | 0001, 0006, 0014, 0016, 0017, 0018, 0054 | 已填关键行（ADR-0054 契约包边界 = §5.2 的 `agent-cp-contracts`）；其余见 TBD |
 | 状态机 / 租约 / 调度 | 0003, 0019, 0022, 0026, 0027, 0048 | 已填关键行 |
 | Plan / 脚本 / 工具接入 | 0020, 0021, 0023, 0033, 0039→Proposed 不强制 | 已填 X1 相关 + flash；**不可变契约范围**此前无 owner（0020 正文 0 命中「不可变」）→ 本轮补 `script-version-immutability` |
 | 日志 / 存储 / merge | 0025, 0028, 0032 + design 契约；全链地图 [`2026-device-log-chain-contract.md`](./2026-device-log-chain-contract.md) | 已填 X2/X3；Contract = 路由入口 |
@@ -152,6 +152,7 @@
 | key | kind | 一句话 | owner_anchor | 复议触发器 |
 |---|---|---|---|---|
 | `control-plane-split` | concept | 控制面 vs Agent 执行面分层 | `docs/adr/ADR-0001-control-plane-and-agent-architecture.md :: ## 决策` | 合并两面或改职责边界 |
+| `agent-cp-contracts` | concept | Agent/控制面共享定义的唯一归属（`backend/agent/contracts/` 契约包）；C3 单向边界（控制面只准 import 契约包，基线已清零） | `docs/adr/ADR-0054-agent-control-plane-shared-contracts.md :: ### D1 归属：\`backend/agent/contracts/\` 是双方共享定义的唯一归属` | ADR-0054 §7 三条：出现需独立演进的共享定义（重议备选 C）／契约新增第三方依赖（逐条评估）／`contracts/` 出现运行逻辑（D2 被突破） |
 | `pipeline-action-model` | concept | Pipeline / `script:` action 唯一执行模型 | `docs/adr/ADR-0014-pipeline-execution-engine.md :: ### 执行模型` | 恢复 `shell:` 等旁路 |
 | `device-lease` | concept | Device Lease / fencing / 容量 | `docs/adr/ADR-0019-android-device-lease-and-capacity-scheduling.md :: ### 1. Device Lease 模型` | 改租约粒度或锁模型 |
 | `plan-run-scaling` | concept | PlanRun 准入队列与四层调度不变量 | `docs/adr/ADR-0026-plan-execution-scaling.md :: ### 2. 四条不可破坏的不变量` | 破坏 QUEUED/permit 不变量 |
@@ -173,6 +174,8 @@
 | `session-cookie-csrf` | concept | Web 会话 / CSRF / refresh 吊销 | `docs/adr/ADR-0024-browser-session-security-hardening.md :: ## 决策` | 改 Secure/SameSite 边界 |
 | `host-privilege-wrapper` | concept | Agent 主机单一提权入口 | `docs/adr/ADR-0037-agent-host-privilege-boundary.md :: ## 2. 决策` | 宽 sudoers 回流 |
 | `host-retirement` | concept | 主机退役终态语义 | `docs/adr/ADR-0038-host-retirement-semantics.md :: ## 2. 决策` | DELETE 与 retire 再混 |
+| `device-retirement` | concept | 设备退役终态语义（与主机退役正交） | `docs/adr/ADR-0057-device-retirement-semantics.md :: ## 7. 裁决记录（2026-09-26，owner 授权 Claude 裁决）` | 在 `DeviceStatus` 增退役值；出现送修 / 外借等第二种设备意图 |
+| `terminal-fact-layer` | concept | 平台库长期事实层（签名 / 发生 / DLE 摘要 / 运行时长） | `docs/adr/ADR-0056-terminal-fact-layer.md :: ## 8. 裁决记录（2026-09-26，owner 授权 Claude 裁决）` | 事实行随 run 级联删除；单库事实表超出体量基线 |
 | `notification-delivery` | concept | 通知投递成功/失败语义 | `docs/adr/ADR-0036-notification-delivery-semantics.md :: ### 2.1 投递管道（契约对象）` | 改 ACCEPTED≠DELIVERED |
 | `execution-registry` | concept | 多 Harness Execution Registry / 三维状态 | `docs/adr/ADR-0034-multi-harness-execution-contract.md :: ### 2.3 状态模型：lifecycle × liveness × integration 三维正交 — 细则见契约 §3`；细则 `docs/development/ai/execution-contract.md :: ## 3. 状态模型（三维）与 transition table` | 改 Registry 为调度器 |
 | `settings-bare-read` | concept | 配置读取收敛与裸读边界 | `docs/adr/ADR-0042-settings-convergence-and-bare-read-boundary.md :: ## 决策` | 新域绕过分域 settings |
@@ -287,3 +290,5 @@
 | 2026-09-20 | **#2546 follow-up（codex）**：补 `script-version-immutability` 行（F-1 机制化）；§6 依据行改八稿全量并补登 0b6e98 / 7f3504；§6.2 登记「S6 作膨胀上界」被 2 源拒 + 推荐替代未落地；§8 登记 ADR-0039 三处状态（含 `:66`/`:149` 残留） |
 | 2026-09-20 | ADR-0039 D1 / §4.3「硬不变量」误标 → **总原则**；§8 ②/#2929 与 ③ 收口（仍 Proposed，不升 Accepted） |
 | 2026-09-21 | **#3014 案 1A + 2A（codex）**：S15 增 ④（触发器非空）/ ⑤（ADR 型锚状态须 Accepted）/ ⑦（新建 ADR 必填 `归属域`，cutoff `2026-09-22`，不追溯）；§4.2 记「为什么是 ⑤ 而不是行数卡」；§6.2 改判行数自卡；§7 定强制面。`--self-test` 新增 6 条红/绿样例，`--check` 全绿（零 retroactive 红灯） |
+| 2026-09-26 | **ADR-0054 入表（claude）**：补 `agent-cp-contracts` 行——§7 触发 1（新建 Accepted ADR），且 ADR-0054 §8 的「视需要补 owner 行」随 C3 基线清零一并收口 |
+| 2026-09-26 | **ADR-0054 入表（claude）· 矩阵收口**：§5.1「控制面 / 执行分层」代表 ADR 补 `0054`，覆盖状态列指向 §5.2 的 `agent-cp-contracts` 行（承接上一条登记） |
