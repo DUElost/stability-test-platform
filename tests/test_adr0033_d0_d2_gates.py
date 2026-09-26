@@ -8,6 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from tools.dev.source_anchor import SourceGuard
+
 ROOT = Path(__file__).resolve().parents[1]
 RUN_GATES = ROOT / "scripts" / "run_gates.py"
 
@@ -75,24 +77,33 @@ class TestAdr0033GateWiring:
             assert "tool-contract-fixture" in mod.PROFILES[profile]
 
     def test_tool_contract_step_named_honestly(self):
-        """#3094①：CI step 名与 S5x 锚点同步为「fixture 自检」。"""
-        ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-        assert "ADR-0033 Tool Contract fixture 自检" in ci
-        assert "ADR-0033 Tool Contract 检查" not in ci, "旧 step 名残留"
-        surface = (
-            ROOT / "tools" / "dev" / "check_governance_surface.py"
-        ).read_text(encoding="utf-8")
-        assert (
-            '"tool-contract-fixture": ("ci.yml", "ADR-0033 Tool Contract fixture 自检")'
-            in surface
-        ), "S5x 锚点未随改名同步——governance surface 会红"
+        """#3094①：CI step 名与 S5x 锚点同步为「fixture 自检」。
+
+        否定断言走 `SourceGuard` 锚点助手（#2639 棘轮）：先证明被扫文件仍是真源
+        （step 仍调用 `--self-test`），再断言旧名不出现——否则改名/搬走后断言会恒真。
+        """
+        ci = SourceGuard.of_repo_path(".github/workflows/ci.yml").anchored(
+            "python tools/dev/verify_tool_contract.py --self-test"
+        )
+        ci.assert_present("ADR-0033 Tool Contract fixture 自检", why="#3094① 新 step 名")
+        ci.assert_absent("ADR-0033 Tool Contract 检查", why="#3094① 旧 step 名不得回潮")
+        surface = SourceGuard.of_repo_path(
+            "tools/dev/check_governance_surface.py"
+        ).anchored("tool-contract-fixture")
+        surface.assert_present(
+            '"tool-contract-fixture": ("ci.yml", "ADR-0033 Tool Contract fixture 自检")',
+            why="#3094① S5x 锚点须随改名同步，否则 governance surface 会红",
+        )
 
     def test_verify_tool_contract_has_no_skip_switch(self):
-        """#3094②：STP_VERIFY_TOOL_CONTRACT 跳过开关已删——env 置 0 也必须真跑。"""
-        src = (ROOT / "tools" / "dev" / "verify_tool_contract.py").read_text(
-            encoding="utf-8"
+        """#3094②：STP_VERIFY_TOOL_CONTRACT 跳过开关已删——env 置 0 也必须真跑。
+
+        否定断言同样走 `SourceGuard`：锚点 `def main()` 证明读的仍是验证器本体。
+        """
+        src = SourceGuard.of_repo_path("tools/dev/verify_tool_contract.py").anchored(
+            "def main()"
         )
-        assert "STP_VERIFY_TOOL_CONTRACT" not in src, "跳过开关未删净（#3094②）"
+        src.assert_absent("STP_VERIFY_TOOL_CONTRACT", why="#3094② 跳过开关不得回潮")
         env = {**os.environ, "STP_VERIFY_TOOL_CONTRACT": "0"}
         proc = subprocess.run(
             [sys.executable, str(ROOT / "tools" / "dev" / "verify_tool_contract.py")],
