@@ -412,3 +412,27 @@ assert p99_probe < 1.0  # 全失败也通过：这就是待修判据，不是正
 
 **同主题文档现状（防重复投资）**：主干现有 5 份同题审查稿（codex 3、claude 1、codebuddy 1），
 本稿是其中最新且带自我订正的主稿。**后续复核请续写本稿，不要再新增平行文档。**
+
+## 11. 复核订正（2026-09-26 第三轮，基线 `cc3d31e2`）
+
+本节保留 §9–§10 的当时现场记录，按 09-26 09:47 CST 的 `origin/main`、GitHub、
+生产发布目录与现网 Prometheus **只读**复核更新；不是对旧时间点的重写。
+
+| §9–§10 待更新结论 | 当前证据与判定 |
+|---|---|
+| §9-C1 与 §10 最后一行：预算门禁的 `ExecStartPre`、`StabilityTerminalBulkheadRejected` 未生效 | **已生效**。[#2959 Step 1–2 执行记录](https://github.com/DUElost/stability-test-platform/issues/2959)记载 09-25 22:11 规则 reload、22:16 unit 门禁重启；09-26 复核 `systemctl show stability-backend.service` 有 `check_db_pool_budget.py`、`StartLimitBurst=3`，Prometheus 规则 API 中告警为 `health=ok`、`inactive`。 |
+| §10 剩余顺序中的 #3169、#3232、#3261 | 三单均已关闭；#3233 的离机备份、RPO/RTO、演练仍开放。#2959 Step 3–4 已于 09-25 23:09–23:35 执行：控制面发布 `d8c1e0e`，Agent 48/48 同 digest，旧实现下的 run 560–562 中止观测**不构成** ADR-0052 实施验收。 |
+| 包模式 gauge “生产无序列” | 09-26 09:47 查询已有 `package=48`，`tree/mixed/unknown=0`；生产 release 仍为 `d8c1e0e`。因此当前可读，但**不能把该值归因于尚未部署的 #3355**。部署 #3355 后仍须回查 48/48 值与 scrape 持续性（#3333 的触发点问题另计）。 |
+| A04 证据通道闭环 | 48 host 的 artifact 提交/丢弃指标已可查询，丢弃合计为 0；中心“发现→提交→归档→登记→可下载”完整率和 `partial/unknown` 语义仍由 [#3316](https://github.com/DUElost/stability-test-platform/issues/3316) 承接。指标为 0 不能证明未遗漏关键证据。 |
+| ADR-0052 D1–D5 | 实现随 [PR #3359](https://github.com/DUElost/stability-test-platform/pull/3359) 合入；生产 release `d8c1e0e` 尚未包含。部署后按 [ADR §5](../adr/ADR-0052-terminal-fact-parent-aggregation-decoupling.md) 六项与 [runbook Step 4](../operations/2026-09-24-capacity-p0-rollout-runbook.md) 同口径真机复跑，独立验收载体为 [#3370](https://github.com/DUElost/stability-test-platform/issues/3370)。#3244 因代码合入关闭不等于实施验收通过。 |
+| 主干 CI 与目标容量 | `origin/main=cc3d31e2`；全量 run 36188703274 的第 2 次尝试在 09:47 仍运行中，不能记作真绿。现网 48 host / 876 device；[#105](https://github.com/DUElost/stability-test-platform/issues/105) B1 合成 150 host、[#106](https://github.com/DUElost/stability-test-platform/issues/106) B2 真机目标档及 [#107](https://github.com/DUElost/stability-test-platform/issues/107) 连续 ≥7 天均未验收。 |
+
+**缺口编号与收口**：统一处置台账仍是 [#3230](https://github.com/DUElost/stability-test-platform/issues/3230)。
+其正文 G1–G9 中的 G8/G9 已分别指向 #3316/#3317；09-25 最后一条评论把另六项再编成
+G8–G13，造成两个同名 G8/G9。本轮在 #3230 正文并表为 **G1–G15**，保留原 G8/G9，
+将评论六项顺次映射为 G10–G15，历史评论不改写。台账“每条有归属”与“子单验收关闭”
+是两道不同判据；本节及文档索引更新也不代替 #3231/#3233 等未完成工作。
+
+**下一道可判定的终点**：发布包含 #3359 的受控 release 后，完成 #3370 的六项真机验收；
+随后分别取得 #105 B1、#106 B2、#107 长跑、真实浏览器规模与异机恢复证据。未到目标档时
+只认证已测档位，不把 48/876、合成设备或旧实现下的中止观测外推为 150/3750 通过。

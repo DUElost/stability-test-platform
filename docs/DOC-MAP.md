@@ -1,6 +1,6 @@
 # 文档地图（Documentation Map）
 
-> **最后更新**：2026-09-19  
+> **最后更新**：2026-09-26
 > **文档中心**：[`README.md`](./README.md)  
 > **待删/归档清单**：[`DOC-RETIREMENT.md`](./DOC-RETIREMENT.md)
 
@@ -60,6 +60,8 @@ operations/README.md → production-minimum-deployment-checklist.md
 | **共享启动契约** | [`../AGENTS.md`](../AGENTS.md) | 总原则、跨模块硬不变量、安全红线与按需入口 |
 | **Claude 入口** | [`../CLAUDE.md`](../CLAUDE.md) | **symlink → `AGENTS.md`**（#857；共享启动契约的 Claude harness 薄壳，无独立内容〔#3003〕） |
 | **全面审查指引** | [`reviews/PROJECT_REVIEW_PLAN.md`](./reviews/PROJECT_REVIEW_PLAN.md) | 全面只读审查总纲（R01–R15 范围与入口、逐轮基线与报告模板、跨区收口）；**指引而非审查结果**，总纲建立不代表任何区域已审查完成 |
+| **Living 审查** | [`reviews/STP_FIRST_PRINCIPLES_AUDIT_2026-09-25_codex.md`](./reviews/STP_FIRST_PRINCIPLES_AUDIT_2026-09-25_codex.md) | 150 host / 3750 device 与长期复利的本轮主稿；§9–§11 追加复核订正，缺口处置以 [#3230](https://github.com/DUElost/stability-test-platform/issues/3230) 为统一台账；审计结论不等于目标容量已验收 |
+| **历史审查基线** | [`reviews/PLATFORM_FIRST_PRINCIPLES_CAPACITY_2026-09-23_ae232a3_codex.md`](./reviews/PLATFORM_FIRST_PRINCIPLES_CAPACITY_2026-09-23_ae232a3_codex.md) | 150 host / 3750 device 的容量与复利首轮基线（F01–F08）；现态及后续处置接续上方 09-25 主稿与 #3230，勿将首轮快照当生产现值 |
 | **跨区收口** | [`reviews/REVIEW_CROSS_REGION_CHAIN_A_2026-09-12.md`](./reviews/REVIEW_CROSS_REGION_CHAIN_A_2026-09-12.md) | §6 链 A（执行链）六跳逐跳对证（五要素 + file:line + 既有测试盘点）、场景覆盖矩阵、缺口 G-1～G-9；**静态对证而非动态验证通过** |
 | **跨区收口** | [`reviews/REVIEW_CROSS_REGION_CHAIN_B_2026-09-13.md`](./reviews/REVIEW_CROSS_REGION_CHAIN_B_2026-09-13.md) | §6 链 B（日志链）六跳逐跳对证（DLE 状态机权威 + 五要素 + file:line）、五必测场景矩阵、发现 F-B1～F-B4、缺口 G-B1～G-B5；**静态对证而非动态验证通过** |
 | **Living 审查** | [`reviews/DEVICE_LOG_FLOW_REVIEW_2026-08-09.md`](./reviews/DEVICE_LOG_FLOW_REVIEW_2026-08-09.md) | 设备日志流转框架 + 缺陷/DoD/落地顺序（v3.0，阶段 0 ✅）；前一版快照 [`reviews/PROJECT_REVIEW_2026-08-09_previous.md`](./reviews/PROJECT_REVIEW_2026-08-09_previous.md) |
