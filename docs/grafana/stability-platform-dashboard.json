@@ -522,6 +522,69 @@
           "refId": "A"
         }
       ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 102 },
+      "id": 114,
+      "title": "Database Growth (#3327)",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Last successful pg_stat_user_tables sample; a growing age means the DB read failed or scraping stopped.",
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "gridPos": { "h": 5, "w": 24, "x": 0, "y": 103 },
+      "id": 115,
+      "title": "DB Growth Snapshot Age",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "time() - stability_db_growth_snapshot_timestamp_seconds", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "pg_total_relation_size includes table, indexes, and TOAST; compare the same table across days.",
+      "fieldConfig": { "defaults": { "unit": "bytes" } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 108 },
+      "id": 116,
+      "title": "Largest DB Tables",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "topk(15, stability_db_table_total_bytes)", "legendFormat": "{{schema}}.{{table}}", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "n_live_tup and n_dead_tup are PostgreSQL estimates; compare trend and autovacuum recency before attributing bloat.",
+      "fieldConfig": { "defaults": { "unit": "percentunit" } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 108 },
+      "id": 117,
+      "title": "Dead Tuple Share: Top 15",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "topk(15, stability_db_table_dead_rows_estimate / clamp_min(stability_db_table_live_rows_estimate + stability_db_table_dead_rows_estimate, 1))",
+          "legendFormat": "{{schema}}.{{table}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Absent series means PostgreSQL has not recorded an autovacuum for that table.",
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 116 },
+      "id": 118,
+      "title": "Time Since Last Autovacuum: Top 15",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "topk(15, time() - stability_db_table_last_autovacuum_timestamp_seconds)",
+          "legendFormat": "{{schema}}.{{table}}",
+          "refId": "A"
+        }
+      ]
     }
   ],
   "schemaVersion": 39,

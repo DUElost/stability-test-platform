@@ -47,6 +47,7 @@ from backend.services.script_presence import (
     sweep_freshness_range as _presence_freshness_range,
 )
 from backend.services.heartbeat_timing_metrics import refresh_agent_heartbeat_timing_gauges
+from backend.services.db_growth_metrics import refresh_db_growth_gauges
 
 logger = logging.getLogger(__name__)
 
@@ -521,6 +522,7 @@ async def metrics(
     _refresh_lock_wait_gauges(db)
     _refresh_chain_coverage_gauges(db)
     refresh_agent_heartbeat_timing_gauges(db)
+    refresh_db_growth_gauges(db)
     _sweep_push_host_gauge_children(db)
     data, content_type = get_metrics_response()
     return Response(content=data, media_type=content_type)
