@@ -668,6 +668,32 @@ tests:
         exp_annotations:
           summary: Host USB controller is dead — the whole host is USB-blind
           description: 该 host 的内核报出 xHCI 主控死亡（`HC died; cleaning up`）**且此刻 USB 总线上 一台设备都看不到**。这不是 adb/adbd 问题：主控死了以后内核再也收不到任何 USB 事件，**不会自愈**，SSH 与心跳照常，平台侧只有这一条 reason 能表达它。 先按 docs/operations/host-device-visibility-triage.md 的 L1 层取证 （`journalctl -k | grep -E 'xhci|HC died'`），确认后用 unbind/rebind 救回 （fleet 已有两例当场恢复，23/23 设备回归），reboot 是兜底。 **不要自动 rebind**：会打断在跑的 job，自愈与否待本告警有数据后另议（#2900「不做什么」）。 这台机器的产能已归零，请把它从调度里摘掉再处理（设备租约见 device-lease-release SOP）。
+  # ----------------------------------------------------------------------------
+  # StabilitySingleInstanceGuardDegraded（#3092）：守卫降级 = 锁文件连只读都打不开。
+  # 两个断言面：
+  #   1. 降级 host 在 for=10m 之前不点亮（瞬态/重启窗口不误报）；
+  #   2. 同批健康 host（该 reason 恒 0）不得被选择器带上——钉 `reason=` 标签真的在起作用。
+  # ----------------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+    - series: stability_host_health_reason{host_id="192-0-2-77", reason="single_instance_guard_degraded"}
+      values: 1x25
+    - series: stability_host_health_reason{host_id="192-0-2-78", reason="single_instance_guard_degraded"}
+      values: '0x25'
+    alert_rule_test:
+    - eval_time: 5m
+      alertname: StabilitySingleInstanceGuardDegraded
+      exp_alerts: []
+    - eval_time: 15m
+      alertname: StabilitySingleInstanceGuardDegraded
+      exp_alerts:
+      - exp_labels:
+          severity: warning
+          host_id: 192-0-2-77
+          reason: single_instance_guard_degraded
+        exp_annotations:
+          summary: Single-instance guard degraded on one host (double-agent risk)
+          description: 该 host 上 agent 的单实例锁文件**连只读都打不开**（典型：残留一个别的 属主的 0600 锁文件，或锁文件是符号链接），守卫因此降级为不生效—— 此刻若再有一个手工 `python -m agent.main` 起来，两个进程会各持不同 `agent_instance_id` 互相覆盖 `host.last_agent_instance_id`，coordinator fencing 对两者都判 stale，**该 host 的 Coordinator 心跳会被整条拒掉** （2026-07-27 事故：19/20 台被拒 3 天）。守卫的降级事实由心跳 `health.reasons` 上报，本告警就是它的响铃面。 处置：上机 `ls -l <agent>/logs/agent.lock`（LOG_DIR 下），确认属主/类型后 修掉（重新创建或改属主），再重启 agent 让守卫重新判定；期间该 host 别手工起第二个实例。只读回退（0644 root 文件）**不算降级**：那种情况下 守卫照常拦住第二个实例（只少写 pid），不会触发本告警。
   - interval: 1m
     input_series:
     - series: stability_host_kernel_log_channel{host_id="192-0-2-10", state="unavailable"}

@@ -11,7 +11,7 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from . import __version__ as agent_version
 from . import device_discovery
@@ -25,6 +25,25 @@ except ImportError:  # pragma: no cover - 平台分支
     fcntl = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
+
+#: #3092：打开锁文件时不跟随符号链接（Windows/WSL 无此 flag，退化为 0）。
+_O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+
+#: #3092：守卫降级事实（进程级）。守卫无法建立时置为非空原因串，心跳周期读取后
+#: 作为 health reason `single_instance_guard_degraded` 上报；控制面折成
+#: `stability_host_health_reason{reason="single_instance_guard_degraded"}` + 告警。
+#: 只在进程启动时判定一次——实现为「启动期常量」，不随心跳重试。
+_degraded_reason: Optional[str] = None
+
+
+def single_instance_guard_degraded() -> bool:
+    """单实例守卫是否处于降级态（#3092）——降级即「第二个实例可能静默跑起来」。"""
+    return _degraded_reason is not None
+
+
+def _mark_degraded(reason: str) -> None:
+    global _degraded_reason
+    _degraded_reason = reason
 
 
 def migrate_legacy_aee_state_on_startup(db_path: str) -> Dict[str, Any]:
@@ -115,6 +134,34 @@ def _read_lock_holder_pid(path: Path) -> str:
     return "unknown"
 
 
+def _open_lock_file(path: Path) -> Optional[Tuple[int, bool]]:
+    """打开锁文件：先读写（可写 pid），失败退只读；都带 ``O_NOFOLLOW``（#3092）。
+
+    Returns:
+        ``(fd, writable)``；两种打开都失败时 ``None``（调用方按降级处理）。
+    """
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_CLOEXEC | _O_NOFOLLOW, 0o644)
+        return fd, True
+    except OSError as exc:
+        logger.info(
+            "single_instance_lock_open_rw_failed path=%s err=%s — 退只读打开（守卫生效但不写 pid）",
+            path,
+            exc,
+        )
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_CLOEXEC | _O_NOFOLLOW)
+        return fd, False
+    except OSError as exc:
+        logger.warning(
+            "single_instance_guard_unavailable path=%s err=%s — 跳过守卫继续启动"
+            "（降级将随心跳上报 health.reasons）",
+            path,
+            exc,
+        )
+        return None
+
+
 def enforce_single_instance(
     lock_path: Optional[str] = None, *, exit_code: int = 1
 ) -> Optional[int]:
@@ -133,30 +180,46 @@ def enforce_single_instance(
     否则子进程多活一会儿就会顶住锁，把 systemd 的 ``Restart=always``
     拖成启动失败。
 
-    **失败方向**：锁文件建不出来（目录不可写、路径被占等）只记 warning 并继续
-    启动 —— 守卫是纵深防御，不能因文件系统问题让整机 Agent 起不来。真正被
-    占用时才是 fail-fast：记 CRITICAL（含持有者 pid）后 ``sys.exit``，让
-    ``systemctl status`` 与日志同时可见，而不是两个实例静默叠加心跳。
+    **打开方式（#3092）**：先按读写打开（顺带写 pid）；因权限失败（如残留的
+    root 属主 0644/0600 锁文件）时**回退为只读打开同一文件再 flock**——Linux
+    的 flock 对只读 fd 同样生效，守卫照常拦住第二个实例，只是不再写 pid。
+    ``O_NOFOLLOW`` 拦住符号链接锁文件：不跟随、不写入链接目标。只读路径没有
+    截断动作，这也顺带消掉了「跟随链接后被 ftruncate」的风险。
+
+    **失败方向**：只有连只读打开都失败（如 ``0600 root``）或锁文件所在目录
+    不可用时才降级放行——守卫是纵深防御，不能因文件系统问题让整机 Agent
+    起不来。但降级不再只留一行 warning：``_degraded_reason`` 置位后由心跳
+    上报 ``health.reasons``，控制面折成指标与告警（#3092）。真正被占用时才是
+    fail-fast：记 CRITICAL（含持有者 pid）后 ``sys.exit``，让 ``systemctl
+    status`` 与日志同时可见，而不是两个实例静默叠加心跳。
 
     Returns:
         持有锁的 fd（进程存活期间保持打开即保持锁定；``os.open`` 返回的 int
         不会被 GC 关掉）。守卫降级时为 ``None``。
     """
     if fcntl is None:  # pragma: no cover - Windows/WSL 开发机
+        _mark_degraded("no_fcntl")
         logger.warning("single_instance_guard_skipped reason=no_fcntl")
         return None
 
     path = _lock_file_path(lock_path)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_CLOEXEC, 0o644)
     except OSError as exc:
+        _mark_degraded(f"parent_unavailable err={exc}")
         logger.warning(
-            "single_instance_guard_unavailable path=%s err=%s — 跳过守卫继续启动",
+            "single_instance_guard_unavailable path=%s err=%s — 跳过守卫继续启动"
+            "（降级将随心跳上报）",
             path,
             exc,
         )
         return None
+
+    opened = _open_lock_file(path)
+    if opened is None:
+        _mark_degraded("lock_open_failed")
+        return None
+    fd, writable = opened
 
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -171,11 +234,17 @@ def enforce_single_instance(
         os.close(fd)
         sys.exit(exit_code)
 
-    try:
-        os.ftruncate(fd, 0)
-        os.write(fd, f"{os.getpid()}\n".encode("utf-8"))
-    except OSError:  # pid 只是诊断信息，写不上不影响守卫生效
-        logger.debug("single_instance_pid_write_failed path=%s", path, exc_info=True)
+    if writable:
+        try:
+            os.ftruncate(fd, 0)
+            os.write(fd, f"{os.getpid()}\n".encode("utf-8"))
+        except OSError:  # pid 只是诊断信息，写不上不影响守卫生效
+            logger.debug("single_instance_pid_write_failed path=%s", path, exc_info=True)
+    else:
+        logger.info(
+            "single_instance_lock_readonly lock=%s — 守卫生效，pid 未写（只读回退）",
+            path,
+        )
     logger.info("single_instance_lock_acquired lock=%s pid=%s", path, os.getpid())
     return fd
 
