@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from .batcher  import DEFAULT_IMMEDIATE_CATEGORIES, BatcherStats, EventBatcher
-from .contracts import ContractViolation
+from ..contracts.watcher_contracts import ContractViolation
 from .emitter  import SignalEmitter
 from .exceptions import WatcherStartError
 from .policy   import WatcherPolicy
@@ -714,12 +714,8 @@ class DeviceLogWatcher:
 
         meta_event_type = event.category
         subtype = None
-        try:
-            from ..aee.collector import get_collector_for_platform
-            from ..aee.metadata import resolve_device_log_event_type
-        except ImportError:
-            from agent.aee.collector import get_collector_for_platform
-            from agent.aee.metadata import resolve_device_log_event_type
+        from ..aee.collector import get_collector_for_platform
+        from ..contracts.aee_metadata import resolve_device_log_event_type
         collector = get_collector_for_platform(platform)
         parsed_type = None
         if collector is not None:

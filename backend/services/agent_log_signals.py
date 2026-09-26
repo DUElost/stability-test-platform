@@ -82,7 +82,7 @@ def log_signal_column_overflow(
 class LogSignalIn(BaseModel):
     """单条 log_signal 信封。
 
-    字段契约见 backend/agent/watcher/contracts.py LogSignalEnvelope。
+    字段契约见 backend/agent/contracts/watcher_contracts.py LogSignalEnvelope。
     幂等键：(job_id, seq_no)
     """
     job_id:         int
@@ -151,7 +151,7 @@ async def ingest_agent_log_signals(
 
     幂等：用 PostgreSQL `ON CONFLICT (job_id, seq_no) DO NOTHING` 去重。
     副作用：按本批实际新插入数累加 job_instance.log_signal_count。
-    契约：字段校验见 backend.agent.watcher.contracts.validate_log_signal
+    契约：字段校验见 backend.agent.contracts.watcher_contracts.validate_log_signal
     部分接受（#1048）：单条**永久**不可恢复（契约违规 / job 不存在 / 租约
     fencing 不匹配 / detected_at 非法）只隔离该条并在响应 ``rejected`` 里逐条
     报告，不再整批 404/400 连坐 —— 否则 50 条批次混入一条坏记录，其余正常信号
@@ -159,7 +159,7 @@ async def ingest_agent_log_signals(
     """
     from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-    from backend.agent.watcher.contracts import ContractViolation, validate_log_signal
+    from backend.agent.contracts.watcher_contracts import ContractViolation, validate_log_signal
 
     if not payload.signals:
         return {"inserted": 0, "total": 0}

@@ -1,5 +1,10 @@
 """Watcher 子系统的接口契约定义（Agent 侧期望的后端 API shape）。
 
+契约模块（ADR-0054 D1/D2）：控制面与 Agent 共用**同一实现**——Agent 侧经
+``from ..contracts.watcher_contracts import …`` 相对导入，控制面（log-signals
+摄取链）经 ``backend.agent.contracts.watcher_contracts``。放在 contracts/ 也避免
+控制面 import 时经 ``watcher/__init__.py`` 把整个 watcher 运行时拉进控制面进程。
+
 本文件是**单边声明**，不依赖后端真实已实现的 Schema。
 作用：
   1. JobSession / WatcherManager / SignalEmitter 在处理 payload 时做 shape 校验（fail-fast）
@@ -169,7 +174,7 @@ def validate_claim_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     if missing:
         raise ContractViolation(
             f"claim_payload missing required fields: {missing}; "
-            f"契约来自 backend/agent/watcher/contracts.py:REQUIRED_CLAIM_FIELDS"
+            f"契约来自 backend/agent/contracts/watcher_contracts.py:REQUIRED_CLAIM_FIELDS"
         )
     # 类型宽松校验
     for int_field in ("id", "device_id"):
