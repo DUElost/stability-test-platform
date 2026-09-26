@@ -26,7 +26,9 @@ Class: bug-fix
 4. `docs/development/local-development.md`：quickstart 里补「先写根目录 `.env`（两个口令必填）」
    与一段「两个 env 源的分工」说明（插值只读 `.env`/shell；`environment:` 覆盖 `env_file`）。
 5. `backend/tests/test_deployment_files.py`：把钉旧形状的断言（`:-admin123`）改为钉新形状
-   （强制引用 + 不得回归弱默认值）——旧断言正是「口径改了、机械载体没回扫」的那类红。
+   （强制引用 + 不得回归弱默认值）——旧断言正是「口径改了、机械载体没回扫」的那类红；
+   否定断言走 `SourceGuard.of_repo_path(...).anchored(...).assert_absent(...)`（#2639 棘轮），
+   禁止裸 `assert ... not in compose`（PR CI 的 `pr-agent-tests` 并行 gate 会拦）。
 
 ## Alternatives
 
@@ -45,6 +47,8 @@ Class: bug-fix
 | 命令 | 结果 |
 |---|---|
 | `pytest tests/test_compose_required_env_secrets_3353.py backend/tests/test_deployment_files.py tests/test_dev_bootstrap_seed.py -q` | **31 passed**（8 连跑无 flake） |
+| `pytest tests/test_source_scan_anchor_ratchet.py -q`（#2639 棘轮，跟进修 PR CI 红） | **10 passed** |
+| `pytest backend/tests/test_deployment_files.py -q --noconftest`（跟进后） | **19 passed** |
 | `pytest tests/test_compose_required_env_secrets_3353.py -q`（含 docker 真值用例） | **5 passed** |
 | `docker compose config`（本机真值）：未设口令 → rc=15 + 中文提示；两键齐备 → rc=0 | 手工复核两次 |
 | `python tools/dev/env_inventory.py --check` | **[OK] 271 个读取名** |
