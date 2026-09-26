@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from backend.agent.heartbeat_timing import HeartbeatTiming
 from backend.models.enums import HostStatus
@@ -42,6 +42,21 @@ def test_cumulative_buckets_are_exposed_and_removed_on_retirement(
     db_session.commit()
     body = client.get("/metrics").text
     assert 'host_id="timing-h1"' not in "\n".join(
+        line for line in body.splitlines() if line.startswith("stability_agent_heartbeat_")
+    )
+
+
+def test_stale_host_snapshot_is_removed(client, db_session, monkeypatch):
+    monkeypatch.setenv("STP_METRICS_AUTH_REQUIRED", "0")
+    timing = HeartbeatTiming()
+    timing.observe("tick_total", 1.0)
+    host = _host(db_session, "timing-stale", timing.snapshot(slow_due=25, disk_due=0))
+    assert 'host_id="timing-stale"' in client.get("/metrics").text
+
+    host.last_heartbeat = datetime.now(timezone.utc) - timedelta(days=1)
+    db_session.commit()
+    body = client.get("/metrics").text
+    assert 'host_id="timing-stale"' not in "\n".join(
         line for line in body.splitlines() if line.startswith("stability_agent_heartbeat_")
     )
 

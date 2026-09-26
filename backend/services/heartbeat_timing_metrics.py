@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import math
 import threading
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy.exc import SQLAlchemyError
@@ -20,6 +21,7 @@ from backend.core.metrics import (
     agent_heartbeat_phase_sum,
     agent_heartbeat_probe_due,
 )
+from backend.core.job_timeout_config import HOST_HEARTBEAT_TIMEOUT_SECONDS
 from backend.models.host import Host
 
 logger = logging.getLogger(__name__)
@@ -72,7 +74,12 @@ def refresh_agent_heartbeat_timing_gauges(db: Session) -> None:
     if not PROMETHEUS_AVAILABLE:
         return
     try:
-        rows = db.query(Host.id, Host.extra).filter(Host.retired_at.is_(None)).all()
+        fresh_since = datetime.now(timezone.utc) - timedelta(
+            seconds=HOST_HEARTBEAT_TIMEOUT_SECONDS,
+        )
+        rows = db.query(Host.id, Host.extra).filter(
+            Host.retired_at.is_(None), Host.last_heartbeat >= fresh_since,
+        ).all()
     except SQLAlchemyError:
         logger.warning("heartbeat_timing_metrics_refresh_failed", exc_info=True)
         return
