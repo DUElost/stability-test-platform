@@ -1,8 +1,13 @@
-"""ADR-0040 D1/D3（#1907）部署 artifact digest：双侧镜像等价 + 部署契约 + no-op gate。
+"""ADR-0040 D1/D3（#1907）部署 artifact digest：单实现算法 + 枚举对拍 + 部署契约 + no-op gate。
 
-- parity：控制面（host_updater 共享枚举 + artifact_digest）与 Agent 侧
-  镜像实现（backend/agent/artifact_digest.py）对同一 fixture 树产出
-  **字节级相同**的 digest；
+- **单实现**：算法（``digest_entries`` / kind 词表）只有契约包
+  ``backend/agent/contracts/artifact_digest.py`` 一份（ADR-0054 §5 第 3 步）；
+  控制面 services 直接 import 同一函数，旧 ``backend/agent/artifact_digest.py``
+  已删（本文件有断点断言）；两侧不再互为参照，格式改由 known-answer 固定向量
+  钉住（``test_digest_serialization_format_is_pinned``）；
+- **枚举对拍**：控制面（host_updater 共享枚举 + services）与契约树枚举
+  （``collect_artifact_entries``）对同一 fixture 树产出相同 digest——算法同源后
+  仍可能漂移的只剩输入集定义，本判据继续钉住它；
 - 契约：digest 输入集 == tarball 载荷集（同一 ``_iter_payload_files``），
   从 tarball 成员反算的 digest 必须等于树侧 digest；
 - 边界：exec 位、元数据排除（VERSION/ARTIFACT_DIGEST/.env）、
@@ -17,12 +22,50 @@ import hashlib
 import io
 import os
 import tarfile
+from pathlib import Path
 
 import pytest
 
 import backend.services.artifact_digest as ad
 import backend.services.host_updater as hu
-from backend.agent import artifact_digest as agent_ad
+from backend.agent.contracts import artifact_digest as contract_ad
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_LEGACY_COPIES = (
+    _REPO_ROOT / "backend" / "agent" / "artifact_digest.py",
+)
+
+
+def test_single_algorithm_implementation_without_legacy_copy():
+    """ADR-0054 §5 第 3 步/D5：算法只有契约包一份，旧 agent 镜像已删。"""
+    assert ad.digest_entries is contract_ad.digest_entries
+    assert contract_ad.__file__.endswith("backend/agent/contracts/artifact_digest.py")
+    for legacy in _LEGACY_COPIES:
+        assert not legacy.exists(), (
+            f"旧副本仍在：{legacy}——ADR-0054 D5 要求删除且不留再导出壳"
+        )
+
+
+#: 格式锚（known-answer）：序列化参数（紧凑分隔符 / ensure_ascii / 条目顺序）的等价
+#: 改写会静默改变全机队与发布物身份——收敛判定、manifest、Ansible 写入值一体联动，
+#: 只能随显式身份迁移动作更新（hot-update + manifest 重算），不能顺手改。
+_FORMAT_VECTOR = [
+    ("backend/agent/main.py", False, "0" * 64),
+    ("backend/agent/附件.py", True, "1" * 64),
+]
+_FORMAT_VECTOR_DIGEST = "sha256:2c635368c12f9d9187a447616625e80ad92bb6cd87ade8c25191518521cb9ae3"
+#: 空集 digest 也是身份：resources 空集守卫（plan_convergence）按它判定「期望态为空」。
+_EMPTY_DIGEST = "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+
+
+def test_digest_serialization_format_is_pinned():
+    """known-answer：``digest_entries`` 的序列化格式就是部署身份本体。
+
+    双端对拍改为单实现（ADR-0054 第 3 步）后，两侧不再互为参照——用固定向量把
+    格式钉死：改序列化参数即红，而不是等 48 台主机集体报 drift 才发现。
+    """
+    assert ad.digest_entries(_FORMAT_VECTOR) == _FORMAT_VECTOR_DIGEST
+    assert ad.digest_entries([]) == _EMPTY_DIGEST
 
 
 def _write(path, content: bytes, exec_bit: bool = False) -> None:
@@ -83,28 +126,28 @@ def _cp_digest(root, schema_file, monkeypatch) -> str:
     return ad.digest_entries(ad.collect_artifact_entries())
 
 
-def test_parity_control_plane_vs_agent_byte_equivalent(agent_tree, schema_file, monkeypatch):
-    """双侧镜像实现：同一 fixture 树 → 字节级相同 digest（ADR-0040 D1）。"""
+def test_enumeration_parity_control_plane_vs_contract_tree(agent_tree, schema_file, monkeypatch):
+    """两侧输入集枚举：同一 fixture 树 → 相同 digest（算法已同源，剩枚举漂移面）。"""
     cp = _cp_digest(agent_tree, schema_file, monkeypatch)
-    agent = agent_ad.digest_entries(
-        agent_ad.collect_artifact_entries(
+    contract = contract_ad.digest_entries(
+        contract_ad.collect_artifact_entries(
             str(agent_tree),
             extra_files={"stp_schemas/pipeline_schema.json": str(schema_file)},
         )
     )
-    assert cp == agent
+    assert cp == contract
     assert cp.startswith("sha256:")
     assert len(cp) == len("sha256:") + 64
 
 
-def test_parity_empty_tree(agent_tree, tmp_path, monkeypatch):
+def test_enumeration_parity_empty_tree(agent_tree, tmp_path, monkeypatch):
     empty = tmp_path / "empty"
     empty.mkdir()
     monkeypatch.setattr(hu, "_AGENT_SOURCE_DIR", empty)
     monkeypatch.setattr(hu, "_PIPELINE_SCHEMA_FILE", tmp_path / "none.json")
     cp = ad.digest_entries(ad.collect_artifact_entries())
-    agent = agent_ad.digest_entries(agent_ad.collect_artifact_entries(str(empty)))
-    assert cp == agent
+    contract = contract_ad.digest_entries(contract_ad.collect_artifact_entries(str(empty)))
+    assert cp == contract
 
 
 def test_exec_bit_and_content_change_flip_digest(agent_tree, schema_file, monkeypatch):
@@ -287,7 +330,7 @@ def test_iter_payload_files_skip_rules(agent_tree, schema_file, monkeypatch):
 
 
 class TestKindPartition:
-    """code ∪ resources == full 且互斥；两侧镜像等价覆盖两 kind。"""
+    """code ∪ resources == full 且互斥；两侧枚举等价覆盖两 kind。"""
 
     def test_partition_union_equals_full(self, agent_tree, schema_file, monkeypatch):
         # resources/ 大件不入 git（gitignore + 带外布放）——分区测试必须在
@@ -311,17 +354,17 @@ class TestKindPartition:
         assert len({full, code, resources}) == 3
         assert ad.compute_desired_artifact_digest(kind="code") == code
 
-    def test_mirror_parity_both_kinds(self, agent_tree, schema_file, monkeypatch):
+    def test_enumeration_parity_both_kinds(self, agent_tree, schema_file, monkeypatch):
         monkeypatch.setattr(hu, "_AGENT_SOURCE_DIR", agent_tree)
         monkeypatch.setattr(hu, "_PIPELINE_SCHEMA_FILE", schema_file)
         code_cp = ad.collect_artifact_entries(kind="code")
         res_cp = ad.collect_artifact_entries(kind="resources")
         extra = {"stp_schemas/pipeline_schema.json": str(schema_file)}
-        code_ag = agent_ad.collect_artifact_entries(str(agent_tree), kind="code", extra_files=extra)
-        res_ag = agent_ad.collect_artifact_entries(str(agent_tree), kind="resources")
-        # code 身份含 schema arcname（extra），镜像侧对齐 extra 后比较
-        assert ad.digest_entries(code_cp) == agent_ad.digest_entries(code_ag)
-        assert ad.digest_entries(res_cp) == agent_ad.digest_entries(res_ag)
+        code_ag = contract_ad.collect_artifact_entries(str(agent_tree), kind="code", extra_files=extra)
+        res_ag = contract_ad.collect_artifact_entries(str(agent_tree), kind="resources")
+        # code 身份含 schema arcname（extra），契约侧对齐 extra 后比较
+        assert ad.digest_entries(code_cp) == contract_ad.digest_entries(code_ag)
+        assert ad.digest_entries(res_cp) == contract_ad.digest_entries(res_ag)
 
     def test_resources_digest_sensitivity_and_code_isolation(self, agent_tree, schema_file, monkeypatch):
         monkeypatch.setattr(hu, "_AGENT_SOURCE_DIR", agent_tree)

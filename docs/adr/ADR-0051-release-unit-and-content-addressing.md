@@ -55,7 +55,7 @@
 
 - **release bundle 链路**：`tools/release/build_bundle.py` 产出 `release-manifest.json`（`product.version` / `source.revision` + `agent-code` / `host-resources` 两个 ADR-0040 digest）；`tools/site_config/install.py` 版本不符 fail-closed、bundle 内容按 digest 校验；`backend/core/release_manifest.py` 运行时真值优先读清单。**真实缺口只有三块**：控制面自身载荷无摘要面（`_digests()` 只算 `backend/agent`，#2269 自陈构建机 `backend/.env` 曾漏进 bundle 且「不在任何摘要面内」）；tool 包不是清单条目；本机生产控制面仍是 checkout 形态。
 - **包拉取与校验**：`backend/agent/tool_cache.py` 按整包 `package_sha256` 校验后才写 `.stp-verified`（`tar.extractall` 前已全量校验成员）；`tools/dev/check_tool_manifest.py` 做 schema lint + append-only。
-- **digest 算法**：`backend/agent/artifact_digest.py` 规范化序列 `(relpath, 可执行位, sha256)` → `sha256:<hex>`，双侧镜像实现 + 字节级等价性测试（ADR-0040 D1）。
+- **digest 算法**：`backend/agent/contracts/artifact_digest.py` 规范化序列 `(relpath, 可执行位, sha256)` → `sha256:<hex>`（ADR-0054 第 3 步后为**唯一实现**，控制面 services 引用同一算法；搬迁前为 `backend/agent/artifact_digest.py` 双侧镜像 + 字节级等价性测试，ADR-0040 D1）。
 - **硬阻断先例**：同一 unit 内 `check_alembic_at_head.py` 是**无减号** `ExecStartPre`（#2058）。结构性强门禁在本仓已有先例，缺的是推广。
 
 ### 1.3 生产事实基线（2026-09-22 只读实测）

@@ -12,13 +12,14 @@ Prints::
     CODE_DIGEST=sha256:<hex>
     RESOURCES_DIGEST=sha256:<hex>      # empty value when the source has no resources/
 
-stdlib-only by design: loads ``backend/agent/artifact_digest.py`` (the Agent-side
-mirror, byte-level parity with the control plane locked by tests) via importlib —
-never imports the ``backend.*`` package chain (no DATABASE_URL / settings deps).
-The digests are computed on the SAME basis as the control plane's desired
-identity (code tree + pipeline schema arcname; resources/** minus mtbf/), so a
-host updated by Ansible reports digests the next control-plane convergence
-recognizes (no-op steady state; #1943 class lag avoided).
+stdlib-only by design: loads ``backend/agent/contracts/artifact_digest.py``
+（ADR-0054 D1 唯一实现；控制面 services 引用同一算法，故两侧不会各自演化）
+via importlib — never imports the ``backend.*`` package chain (no DATABASE_URL /
+settings deps). The digests are computed on the SAME basis as the control
+plane's desired identity (code tree + pipeline schema arcname; resources/**
+minus mtbf/), so a host updated by Ansible reports digests the next
+control-plane convergence recognizes (no-op steady state; #1943 class lag
+avoided).
 """
 
 from __future__ import annotations
@@ -29,7 +30,7 @@ import sys
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_AGENT_DIGEST_MODULE = _REPO_ROOT / "backend" / "agent" / "artifact_digest.py"
+_AGENT_DIGEST_MODULE = _REPO_ROOT / "backend" / "agent" / "contracts" / "artifact_digest.py"
 
 
 def _load_agent_digest_module():
