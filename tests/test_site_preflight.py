@@ -192,8 +192,9 @@ def test_bundle_layout_is_checked_with_the_missing_paths(tmp_path):
     check = checks_by_id(run_preflight(bundle=bundle, ops=healthy_ops()))["preflight.bundle"]
     assert check["status"] == "FAIL"
     assert "frontend/dist-prod" in check["message"]
-    assert "backend/agent/resources" in check["message"]
     assert "release-manifest.json" in check["message"]
+    # ADR-0040 D8 R3：host-resources 层退役，资源目录不再属于 bundle 布局
+    assert "backend/agent/resources" not in check["message"]
 
     from tools.site_config.preflight import BUNDLE_REQUIRED
 
@@ -202,7 +203,7 @@ def test_bundle_layout_is_checked_with_the_missing_paths(tmp_path):
         if "." in Path(name).name:      # 文件（release-manifest.json 等）
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text("", encoding="utf-8")
-        else:                            # 目录（backend、backend/agent/resources 等）
+        else:                            # 目录（backend、backend/agent 等）
             target.mkdir(parents=True, exist_ok=True)
     assert checks_by_id(run_preflight(bundle=bundle, ops=healthy_ops()))["preflight.bundle"]["status"] == "PASS"
 

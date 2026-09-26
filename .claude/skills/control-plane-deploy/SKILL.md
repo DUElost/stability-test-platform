@@ -58,7 +58,8 @@ curl -s http://127.0.0.1:8000/health      # health 路由（非 /api/v1/health�
    git pull --ff-only origin main && ./tools/dev/check-deploy-source.sh
    venv/bin/python tools/release/build_bundle.py --repo-root . --out /home/debian13/stp-releases/<rev>
    ```
-   `release-manifest.json` 的 `product.version` / 两个 ADR-0040 digest 即部署内容地址；构建机本地态由
+   `release-manifest.json` 的 `product.version` / 分量摘要（`agent-code` + `control-plane`；`host-resources`
+   自 ADR-0040 D8 R3 退役，bundle 不再携带也不再要求 `backend/agent/resources/`）即部署内容地址；构建机本地态由
    `find_forbidden_bundle_entries` fail-closed（#2269/#3112 在 bundle 形态的替身）。
 3. **物料与 venv**（首建/新 rev）：发布根需 `venv/`（`python3 -m venv venv && venv/bin/pip install -r backend/requirements.txt`）、
    `logs/`、`.env.backend`（**symlink 指树内 `../env.backend`**——站点真身，`ln -sfn ../env.backend <rev>/.env.backend`；

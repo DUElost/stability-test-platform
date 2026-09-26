@@ -56,7 +56,8 @@ def tree(tmp_path: Path, *, frontend: bool = True, migrations: dict[str, str] | 
     for name, text in versions.items():
         (root / "backend/alembic/versions" / name).write_text(text, encoding="utf-8")
     (root / "backend/requirements.txt").write_text("fastapi\n", encoding="utf-8")
-    # resources 不在 git：合成树必须带上，否则 build_bundle 会拒绝打包
+    # 构建机仓根的退役资源副本（不在 git）：ADR-0040 D8 R3 起既不是前置、也不进 bundle——
+    # 合成树保留它，正是为了钉住「构建机有、交付物无」
     (root / "backend/agent/resources/tools").mkdir(parents=True)
     (root / "backend/agent/resources/tools/tool.bin").write_bytes(b"binary\n")
     (root / "deploy/control-plane/systemd").mkdir(parents=True)
@@ -76,7 +77,6 @@ def reference_digests(bundle: Path) -> dict[str, str]:
     agent_dir = str(bundle / "backend/agent")
     return {
         "agent-code": digest_entries(collect_artifact_entries(agent_dir, extra, kind="code")),
-        "host-resources": digest_entries(collect_artifact_entries(agent_dir, extra, kind="resources")),
         "control-plane": digest_entries(collect_control_plane_entries(str(bundle))),
     }
 
@@ -136,7 +136,7 @@ def test_bundle_carries_agent_version_for_provenance(tmp_path, monkeypatch):
 def test_manifest_is_accepted_by_the_installer_side_loader(tmp_path):
     out, _ = built(tmp_path)
     manifest = load_release_manifest(out / MANIFEST_NAME)
-    assert {component.name for component in manifest.components} == {"agent-code", "host-resources", "control-plane"}
+    assert {component.name for component in manifest.components} == {"agent-code", "control-plane"}
     for component in manifest.components:
         assert component.digest.startswith("sha256:")
 
@@ -179,14 +179,17 @@ def test_control_plane_digest_covers_env_files(tmp_path):
 
 
 def test_legacy_two_component_manifest_still_loads(tmp_path):
-    """兼容性：旧 release-manifest（无 control-plane）仍是合法清单（REQUIRED_COMPONENTS 不变，
-    S0 比对按 declared 全键，旧 declared 两键照旧可过）。"""
+    """兼容性：旧 release-manifest（agent-code + host-resources、无 control-plane）仍是合法清单——
+    ADR-0040 D8 R3 起必需分量只剩 agent-code，退役的 host-resources 仍可声明（旧 bundle 照收）。"""
     from tools.site_config.manifest import parse_release_manifest
 
     out, _ = built(tmp_path)
     path = out / "release-manifest.json"
     doc = json.loads(path.read_text(encoding="utf-8"))
-    doc["components"] = [c for c in doc["components"] if c["name"] != "control-plane"]
+    doc["components"] = [
+        next(c for c in doc["components"] if c["name"] == "agent-code"),
+        {"name": "host-resources", "digest": "sha256:" + "b" * 64},
+    ]
     manifest = parse_release_manifest(json.dumps(doc))
     assert {c.name for c in manifest.components} == {"agent-code", "host-resources"}
 
@@ -195,11 +198,6 @@ def test_digest_is_content_addressed_not_a_tree_hash(tmp_path):
     out, first = built(tmp_path)
     (out / "backend/agent/sample.py").write_text("VALUE = 2\n", encoding="utf-8")
     assert reference_digests(out)["agent-code"] != first["components"]["agent-code"]
-    # resources 是独立分区：改它只影响 host-resources
-    (out / "backend/agent/resources/tools/tool.bin").write_bytes(b"changed\n")
-    moved = reference_digests(out)
-    assert moved["host-resources"] != first["components"]["host-resources"]
-    assert moved["agent-code"] == reference_digests(out)["agent-code"]
 
 
 def test_landed_tree_keeps_the_agent_symlink(tmp_path):
@@ -218,16 +216,24 @@ def test_rebuild_is_idempotent(tmp_path):
     assert (out / MANIFEST_NAME).read_text(encoding="utf-8") == first_manifest
 
 
-def test_missing_agent_resources_refuse_to_package(tmp_path):
-    """resources 不在 git：缺了它摘要必然与清单不符（238 实测），必须早暴露。"""
+def test_bundle_neither_requires_nor_ships_agent_resources(tmp_path):
+    """ADR-0040 D8 R3：host-resources 层退役——构建机仓根的资源副本不进 bundle，
+    没有它也照常打包（从提交构建不再缺外部物料）。
+
+    反例（R3 前）：带 resources 的树把它原样拷进 bundle 并声明 host-resources 分量；
+    不带 resources 的树直接 `bundle_resources` 拒绝打包。
+    """
     import shutil as _shutil
+
+    out, result = built(tmp_path)
+    assert not (out / "backend/agent/resources").exists(), "退役资源不得随交付物分发"
+    assert "host-resources" not in result["components"]
 
     root = tree(tmp_path)
     _shutil.rmtree(root / "backend/agent/resources")
-    with pytest.raises(BundleError) as caught:
-        build_bundle(root, tmp_path / "bundle", revision=REVISION)
-    assert caught.value.code == "bundle_resources"
-    assert "not in git" in caught.value.detail
+    bare = build_bundle(root, tmp_path / "bundle-bare", revision=REVISION)
+    # 构建机有无资源副本，交付物身份完全一致（交付物与提交同形）
+    assert bare["components"] == result["components"]
 
 
 def test_missing_frontend_build_says_what_to_run(tmp_path):
@@ -288,7 +294,7 @@ def test_cli_reports_the_bundle_as_json(tmp_path, capsys):
     assert code == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["schema_target"] == "bbbb2222"
-    assert set(payload["components"]) == {"agent-code", "host-resources", "control-plane"}
+    assert set(payload["components"]) == {"agent-code", "control-plane"}
     assert (out / MANIFEST_NAME).is_file()
 
 

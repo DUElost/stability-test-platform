@@ -232,7 +232,7 @@ def plan_site_report(config_path: str | Path, *, save_dir: str | Path | None = N
         ))
     checks.append(Check(
         "release.components", "site", "PASS", "$.release.manifest", "components_declared",
-        "Required component digests (agent-code, host-resources) are declared.",
+        "Required component digests (agent-code) are declared.",
         "Digests prove integrity only; they never prove release origin.",
     ))
     unsupported = [

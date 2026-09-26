@@ -29,7 +29,12 @@ if TYPE_CHECKING:
     from typing import Self  # #2268：同 `models.py` 的说明（安装器下限 3.10）
 
 MAX_MANIFEST_BYTES = 1024 * 1024
-REQUIRED_COMPONENTS = frozenset({"agent-code", "host-resources"})
+REQUIRED_COMPONENTS = frozenset({"agent-code"})
+#: ADR-0040 D8 R3：已退役的分量——新 bundle 不再声明；旧 bundle 仍可声明（照收），但其内容
+#: 已无任何下发通道（R1 控制面 / R2 Ansible 都不再推送），S0 / S5 不再核验、不再等待它。
+RETIRED_COMPONENTS = frozenset({"host-resources"})
+#: Agent 心跳自报的分量（S5 只能对这些做「上报 == 声明」断言；control-plane 由 S0 核验，Agent 不报）。
+AGENT_REPORTED_COMPONENTS = frozenset({"agent-code"})
 
 _VERSION_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.-]*$"
 _REVISION_PATTERN = r"^[0-9a-f]{7,40}$"

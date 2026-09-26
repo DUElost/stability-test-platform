@@ -23,7 +23,7 @@ from typing import Callable
 
 from .agents import stage_s5_agents
 from .inventory import InventoryError, materialize_bindings, merge_agents
-from .manifest import load_release_manifest
+from .manifest import RETIRED_COMPONENTS, load_release_manifest
 from .ops import LocalOps, Ops
 from .stages import (
     InstallContext,
@@ -189,9 +189,6 @@ def _digest_bundle(ctx: InstallContext) -> dict[str, str] | None:
         return {
             "agent-code": digest_module.digest_entries(
                 digest_module.collect_artifact_entries(str(agent_dir), extra, kind="code")
-            ),
-            "host-resources": digest_module.digest_entries(
-                digest_module.collect_artifact_entries(str(agent_dir), extra, kind="resources")
             ),
             # ADR-0051 Phase 4：控制面载荷面（backend/** 除 agent，含 .env*——不豁免）。
             "control-plane": digest_module.digest_entries(
@@ -380,12 +377,17 @@ def _run_locked(
     actual = _digest_bundle(ctx)
     # ADR-0051 Phase 4：比对 declared 的**全部** component——旧 bundle 无 control-plane 仍绿，
     # 新 bundle 声明了就必须匹配（缺实现的老量具 → actual.get 为 None → 红，fail-closed 方向正确）。
-    if actual is None or any(declared.get(name) != actual.get(name) for name in declared):
+    # ADR-0040 D8 R3：退役分量（host-resources）除外——旧 bundle 仍可能声明它，照收但不核验：
+    # 其内容已无任何下发通道，核验只剩成本。
+    if actual is None or any(
+        declared.get(name) != actual.get(name)
+        for name in declared if name not in RETIRED_COMPONENTS
+    ):
         _safe(checks, "release_digest", location="$.release.bundle", role="site", check_id="install.s0.digest")
         return _report(checks, stages)
     checks.append(_pass(
         "install.s0.digest", "site", "$.release.bundle", "digest_matched",
-        "Bundle content matches every declared component digest (agent-code / host-resources / control-plane when present).",
+        "Bundle content matches every declared component digest (agent-code / control-plane when present; retired host-resources is not verified).",
         "Digests prove integrity only; release origin still requires the pipeline attestation.",
     ))
     bindings_checks = load_bindings(ctx)
