@@ -13,7 +13,8 @@
 - 边界：exec 位、元数据排除（VERSION/ARTIFACT_DIGEST/.env）、
   ``resources/mtbf/`` 主机本地保护、``__pycache__``/``tests``/``test_*.py``、
   空集、增删文件；
-- no-op gate：``plan_convergence`` 的双层 drift / 空集守卫 / force / no-op 同构。
+- no-op gate：``plan_convergence`` 的单层（agent-code）drift / force / no-op 同构；
+  ADR-0040 D8 R1 起 host-resources 层不参与判定（反向守卫）。
 """
 
 from __future__ import annotations
@@ -54,7 +55,7 @@ _FORMAT_VECTOR = [
     ("backend/agent/附件.py", True, "1" * 64),
 ]
 _FORMAT_VECTOR_DIGEST = "sha256:2c635368c12f9d9187a447616625e80ad92bb6cd87ade8c25191518521cb9ae3"
-#: 空集 digest 也是身份：resources 空集守卫（plan_convergence）按它判定「期望态为空」。
+#: 空集 digest 也是身份（空输入集的恒定值，随格式锚一并钉住）。
 _EMPTY_DIGEST = "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
 
 
@@ -182,10 +183,10 @@ def test_metadata_and_host_local_files_not_in_identity(agent_tree, schema_file, 
 
 
 def test_digest_matches_tarball_payload(agent_tree, schema_file, monkeypatch):
-    """契约守护（P2-B）：各层 digest 输入集 == 对应层 tarball 载荷集。
+    """契约守护：热更新 tarball 载荷集 == code 身份输入集（枚举同源，ADR-0040 D1 / §4.2 缓解）。
 
-    code tarball（默认层）↔ code 身份；resources tarball ↔ resources 身份；
-    两层并集 == full 身份（枚举同源，ADR-0040 D1 / §4.2 缓解）。
+    ADR-0040 D8 R1 起热更新只打 code 层：fixture 树的 ``resources/`` 非空（即「控制面树仍带
+    资源」的形态），载荷里也不得出现 ``resources/**``。分区并集见 ``TestKindPartition``。
     """
     monkeypatch.setattr(hu, "_AGENT_SOURCE_DIR", agent_tree)
     monkeypatch.setattr(hu, "_PIPELINE_SCHEMA_FILE", schema_file)
@@ -203,17 +204,15 @@ def test_digest_matches_tarball_payload(agent_tree, schema_file, monkeypatch):
         entries.sort()
         return entries
 
-    assert ad.digest_entries(_members(hu._build_tarball(kind="code"))) == ad.digest_entries(
+    code_members = _members(hu._build_tarball(kind="code"))
+    assert ad.digest_entries(code_members) == ad.digest_entries(
         ad.collect_artifact_entries(kind="code")
     )
-    assert ad.digest_entries(_members(hu._build_resources_tarball())) == ad.digest_entries(
-        ad.collect_artifact_entries(kind="resources")
-    )
-    full = ad.collect_artifact_entries(kind="full")
-    rel = lambda es: {e[0] for e in es}
-    assert rel(ad.collect_artifact_entries(kind="code")) | rel(
-        ad.collect_artifact_entries(kind="resources")
-    ) == rel(full)
+    assert ad.collect_artifact_entries(kind="resources"), "fixture 必须带非空 resources/"
+    assert not [
+        name for name, _, _ in code_members
+        if name == "resources" or name.startswith("resources/")
+    ]
 
 
 def test_desired_digest_cache_keyed_by_fingerprint(agent_tree, schema_file, monkeypatch):
@@ -254,58 +253,75 @@ class _FakeHost:
 
 
 def test_plan_convergence_states(monkeypatch):
-    """两层判定：code / resources 独立 drift；空集守卫；force；no-op 同构。"""
+    """单层判定（agent-code）：drift / no-op 同构 / force。"""
     from backend.services.artifact_digest import ConvergencePlan
 
     desired = "sha256:" + "a" * 64
-    res_desired = "sha256:" + "c" * 64
-    empty_digest = ad.digest_entries([])
 
     class _FakeHost:
-        def __init__(self, code=None, resources=None):
+        def __init__(self, code=None):
             self.id = "h-1"
             self.agent_artifact_digest = code
-            self.agent_resources_digest = resources
 
-    def _patch(kind_to_digest):
-        def _fake(kind="full"):
-            return kind_to_digest[kind]
-        monkeypatch.setattr(ad, "compute_desired_artifact_digest", _fake)
+    monkeypatch.setattr(
+        ad, "compute_desired_artifact_digest",
+        lambda kind="full": {"code": desired}[kind],
+    )
 
-    digests = {"code": desired, "resources": res_desired, "full": "sha256:" + "d" * 64}
-    _patch(digests)
-
-    # 双层 drift → converged=False
+    # current 缺失 → drift
     plan = ad.plan_convergence(_FakeHost())
-    assert plan.code_drift and plan.resources_drift and not plan.converged
+    assert plan.code_drift and not plan.converged and plan.no_op_result is None
 
-    # 双层匹配 → no-op 结果（与 execute 返回同构）
-    plan = ad.plan_convergence(_FakeHost(desired, res_desired))
-    assert plan.converged and plan.no_op_result is not None
+    # current 不等 → drift
+    plan = ad.plan_convergence(_FakeHost("sha256:" + "b" * 64))
+    assert plan.code_drift and not plan.converged
+
+    # 匹配 → no-op 结果（与 execute 返回同构）
+    plan = ad.plan_convergence(_FakeHost(desired))
+    assert plan.converged and not plan.code_drift
+    assert plan.no_op_result is not None
     assert plan.no_op_result["reason"] == "digest-matched"
+    assert plan.no_op_result["artifact_digest"] == desired
 
-    # code 匹配、resources drift → 只 resources 层动
-    plan = ad.plan_convergence(_FakeHost(desired, None))
-    assert not plan.code_drift and plan.resources_drift
+    # force：匹配也强制 agent-code 全量
+    plan = ad.plan_convergence(_FakeHost(desired), force=True)
+    assert plan.code_drift and not plan.converged and plan.no_op_result is None
 
-    # force：双层皆动
-    plan = ad.plan_convergence(_FakeHost(desired, res_desired), force=True)
-    assert plan.code_drift and plan.resources_drift and plan.no_op_result is None
-
-    # 空集守卫：resources 期望态为空 → 恒 skip（即使 current 也为空/不匹配）
-    empty_d = empty_digest
-    def _fake_empty(kind="full"):
-        return {"code": desired, "resources": empty_d, "full": "sha256:" + "e" * 64}[kind]
-    monkeypatch.setattr(ad, "compute_desired_artifact_digest", _fake_empty)
-    plan = ad.plan_convergence(_FakeHost())
-    assert not plan.resources_drift and plan.resources_skipped_empty
-    assert plan.code_drift  # code 层不受守卫影响
-
-    # no-op 结果构造入口一致性（ConvergencePlan 形状）
     assert set(ConvergencePlan.__dataclass_fields__) == {
-        "code_digest", "code_drift", "resources_digest", "resources_drift",
-        "resources_skipped_empty", "converged", "no_op_result",
+        "code_digest", "code_drift", "converged", "no_op_result",
     }
+
+
+def test_plan_convergence_ignores_host_resources_layer(monkeypatch):
+    """ADR-0040 D8 R1 反向守卫：host-resources 层退役，不参与任何判定。
+
+    控制面树的 ``resources/`` 分区非空、主机上报的 ``agent_resources_digest`` 缺失或
+    不等时，旧实现判 ``resources_drift`` → 不收敛并下发资源层；现在 code 匹配即 no-op，
+    且判定过程根本不计算 resources 身份。
+    """
+    desired = "sha256:" + "a" * 64
+    kinds_computed: list[str] = []
+
+    def _fake(kind="full"):
+        kinds_computed.append(kind)
+        return {"code": desired, "resources": "sha256:" + "c" * 64}[kind]
+
+    monkeypatch.setattr(ad, "compute_desired_artifact_digest", _fake)
+
+    class _FakeHost:
+        id = "h-1"
+        agent_artifact_digest = desired
+
+    for reported in (None, "", "sha256:" + "d" * 64):
+        host = _FakeHost()
+        host.agent_resources_digest = reported
+        plan = ad.plan_convergence(host)
+        assert plan.converged and plan.no_op_result is not None, reported
+        assert "resources_digest" not in plan.no_op_result
+        forced = ad.plan_convergence(host, force=True)
+        assert not [f for f in vars(forced) if f.startswith("resources")]
+    assert set(kinds_computed) == {"code"}, kinds_computed
+    assert not hasattr(ad, "compute_desired_resources_digest")
 
 
 def test_iter_payload_files_skip_rules(agent_tree, schema_file, monkeypatch):

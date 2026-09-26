@@ -67,7 +67,6 @@ def _hot_update_direct(
     from backend.models.job import JobInstance
     from backend.services.host_updater import (
         _build_tarball,
-        _build_resources_tarball,
         _resolve_ssh_creds,
         execute_hot_update,
         get_agent_code_version,
@@ -106,7 +105,6 @@ def _hot_update_direct(
         # #1907 / ADR-0040 D3（P1）：构建惰性化到首个全量部署主机——整批
         # digest-matched 时零构建零传输（no-op 稳态）。
         code_tarball: bytes | None = None
-        resources_tarball: bytes | None = None
         for host in hosts:
             active = (
                 db.query(JobInstance)
@@ -190,17 +188,6 @@ def _hot_update_direct(
                         f"batch_code_tarball_size_bytes={len(code_tarball)} "
                         f"build_seconds={time.monotonic() - build_t0:.1f}"
                     )
-                if (
-                    plan.resources_drift
-                    and not plan.resources_skipped_empty
-                    and resources_tarball is None
-                ):
-                    build_t0 = time.monotonic()
-                    resources_tarball = _build_resources_tarball()
-                    print(
-                        f"batch_resources_tarball_size_bytes={len(resources_tarball)} "
-                        f"build_seconds={time.monotonic() - build_t0:.1f}"
-                    )
                 result = execute_hot_update(
                     host_ip=host.ip or "",
                     ssh_port=host.ssh_port or 22,
@@ -210,15 +197,8 @@ def _hot_update_direct(
                     known_hosts_path=creds.known_hosts_path,
                     code_version=expected,
                     artifact_digest=plan.code_digest,
-                    resources_digest=plan.resources_digest,
                     code_drift=plan.code_drift,
-                    resources_drift=plan.resources_drift and not plan.resources_skipped_empty,
                     code_tarball=code_tarball if plan.code_drift else None,
-                    resources_tarball=(
-                        resources_tarball
-                        if plan.resources_drift and not plan.resources_skipped_empty
-                        else None
-                    ),
                 )
             finally:
                 end_host_upgrade(db, host.id, holder)
@@ -279,8 +259,9 @@ def main() -> int:
         "--force",
         action="store_true",
         help=(
-            "ADR-0040 D3: skip the digest no-op gate and force a full deploy "
-            "(audit trail via hot_update_result outcome)"
+            "ADR-0040 D3: skip the digest no-op gate and force a full agent-code "
+            "deploy (audit trail via hot_update_result outcome; the host-resources "
+            "layer is retired since ADR-0040 D8 and never shipped)"
         ),
     )
     args = parser.parse_args()

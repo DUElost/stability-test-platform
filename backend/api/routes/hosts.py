@@ -797,8 +797,8 @@ def host_hot_update(
     force: bool = Query(
         False,
         description=(
-            "ADR-0040 D3: 跳过 digest no-op 判定强制全量部署（运维逃生阀，"
-            "审计留痕 outcome=deployed）。"
+            "ADR-0040 D3: 跳过 digest no-op 判定强制 agent-code 全量部署（运维逃生阀，"
+            "审计留痕 outcome=deployed；D8 起 host-resources 层已退役、不再下发）。"
         ),
     ),
 ):
@@ -851,7 +851,6 @@ def host_hot_update(
             "message": plan.no_op_result["message"],
             "duration_ms": plan.no_op_result["duration_ms"],
             "artifact_digest": plan.code_digest,
-            "resources_digest": plan.resources_digest,
             "code_version": get_agent_code_version(),
             "abort_summary": None,
         }
@@ -991,9 +990,7 @@ def host_hot_update(
             agent_secret=agent_secret,
             code_version=code_version,
             artifact_digest=plan.code_digest,
-            resources_digest=plan.resources_digest,
             code_drift=plan.code_drift,
-            resources_drift=plan.resources_drift and not plan.resources_skipped_empty,
         )
 
         # ADR-0040 D5：结果审计 + deployed_at 语义 + 指标统一走 finalize 通道
