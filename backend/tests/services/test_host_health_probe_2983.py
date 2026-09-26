@@ -58,6 +58,21 @@ def test_parse_journal_probe_hc_died_replay():
     assert facts.lines == 3
 
 
+def test_journal_parsing_is_the_shared_contract_implementation():
+    """ADR-0054 第 4 步：控制面 journal 解析与控制面/Agent 共用契约**同一实现**。
+
+    探针侧的「签名必须与 agent 一致」不再靠对拍（两边各写一份）维持——契约包
+    `backend/agent/contracts/kernel_usb_faults.py` 是唯一解析实现。两条退化路径都被
+    当场暴露：控制面**私有重写**解析 → 本判据红；**回落 import agent 内部模块**
+    （`backend.agent.kernel_usb_faults`）→ `layering` 门禁 C3 BROKEN（基线行已随本步删除，
+    实测复查过）。
+    """
+    from backend.agent.contracts import kernel_usb_faults as contract
+    from backend.services import host_health_probe as probe
+
+    assert probe.parse_kernel_usb_faults is contract.parse_kernel_usb_faults
+
+
 def test_classify_topology_blind_vs_empty_cabinet():
     blind = classify_lsusb_topology(_LSUSB_BLIND)
     assert blind.classification == TOPOLOGY_BLIND

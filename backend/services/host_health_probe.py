@@ -5,7 +5,8 @@
 切片③：APScheduler 周期 sweep（并发帽 + ``host.extra.health_probe`` 连续窗）。
 告警规则另开（本模块只落库与指标）。
 
-签名词表与 Agent 侧 ``backend.agent.kernel_usb_faults`` 同源。
+签名词表与 Agent 侧同源：契约包 ``backend/agent/contracts/kernel_usb_faults.py``
+（ADR-0054 第 4 步；采集/监视线程留在 agent）。
 """
 from __future__ import annotations
 
@@ -17,7 +18,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Iterable, Optional, Protocol, Sequence, Set
 
-from backend.agent.kernel_usb_faults import (
+from backend.agent.contracts.kernel_usb_faults import (
     parse_kernel_usb_faults,
 )
 from backend.services.audit_writer import record_audit
