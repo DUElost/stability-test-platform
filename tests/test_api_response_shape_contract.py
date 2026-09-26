@@ -837,6 +837,10 @@ _MODEL_BLINDSPOT: dict[str, set[str]] = {
     "backend/api/routes/stats.py": set(),
     "backend/api/routes/results.py": set(),
     "backend/api/routes/hosts.py": set(),
+    # #3333 第 8 批：script_presence.py——三个端点已是具名模型（5 个 presence 模型
+    # 全在 `_MODEL_PAIRS`），新增 `/refresh-all` 的 `ScriptPresenceFullSweepOut` 是
+    # admin/运维触发面（无 SPA 消费方）→ 在 `_MODEL_UNREGISTERED` 具名认领。
+    "backend/api/routes/script_presence.py": set(),
     # #2187 第 7 批：agent_api.py——**Agent 协议面，types.ts 零镜像**（预照证实：
     # 6 具名模型无 TS 对应、10 端点为运行期 dict）。这里的 opt-in 不是找漂移，
     # 是把这条盲区整段认领：消费方是 backend/agent（Python 客户端），形状由
@@ -879,6 +883,9 @@ _MODEL_UNREGISTERED: dict[str, str] = {
     # 全部双向对拍通过并转正进 `_MODEL_PAIRS`，此清单当前只剩 JiraRunOut（解析器
     # 跨文件基类限制）。新豁免须写具体失效条件，勿留泛化占位。
     "PlanRunArchiveTriggerOut": "前端无消费者（admin/运维触发面）；形状由后端测试钉，"
+    "接入前端时在 types.ts 建 interface 并转登记 _MODEL_PAIRS",
+    "ScriptPresenceFullSweepOut": "前端无消费者（#3333 全量按需重采，admin/运维触发面；"
+    "日常消费走 summary/hosts 两个读端点）；形状由 backend/tests/api/test_script_presence_api.py 钉，"
     "接入前端时在 types.ts 建 interface 并转登记 _MODEL_PAIRS",
     "PaginatedResponse": "通用分页壳（items: List[Any]，schemas/base.py）——"
     "声明面无业务字段，内层形状由其成员模型对拍承担，不为壳本身建 TS 配对",
