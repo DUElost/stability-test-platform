@@ -7,7 +7,8 @@ import re
 import signal
 import subprocess
 import sys
-from typing import Dict, List, Any, Optional, Tuple
+import time
+from typing import Callable, Dict, List, Any, Optional, Tuple
 
 from .device_platform import PLATFORM_UNKNOWN, detect_device_platform
 
@@ -603,6 +604,7 @@ def collect_device_info(
     serial: str,
     raw_adb_state: str = "device",
     include_metrics: bool = True,
+    timing_sink: Optional[Callable[[str, float], None]] = None,
 ) -> Dict[str, Any]:
     """
     采集单台设备的基础信息
@@ -622,7 +624,14 @@ def collect_device_info(
     Returns:
         设备信息字典
     """
+    fast_started = time.monotonic()
+
+    def record_fast() -> None:
+        if timing_sink is not None:
+            timing_sink("fast", time.monotonic() - fast_started)
+
     if serial in set(_static_device_serials()):
+        record_fast()
         return {
             "serial": serial,
             "adb_state": "device",
@@ -651,6 +660,7 @@ def collect_device_info(
         info["adb_state"] = raw_adb_state
         info["adb_connected"] = False
         logger.warning(f"adb_device_unusable: {serial}, raw_adb_state={raw_adb_state}, adb_connected=False")
+        record_fast()
         return info
 
     # 检查 ADB 连接状态
@@ -669,20 +679,24 @@ def collect_device_info(
             info["adb_state"] = "offline"
             info["adb_connected"] = False
             logger.warning(f"adb_check_failed: {serial}, returncode={result.returncode}, adb_connected=False")
+            record_fast()
             return info
     except Exception as e:
         logger.warning(f"adb_check_exception: {serial}, error={e}, adb_connected=False")
         info["adb_state"] = "offline"
         info["adb_connected"] = False
+        record_fast()
         return info
 
     # 采集 SoC 平台 (#73) — 结果按 serial 缓存,只有首次探测真正走 adb
     info["platform"] = detect_device_platform(adb_path, serial)
+    record_fast()
 
     if not include_metrics:
         # 非 due 拍：echo 连接性 + 平台缓存即全本拍职责，慢指标由调用方回填
         return info
 
+    slow_started = time.monotonic()
     # 采集电池信息
     try:
         result = subprocess.run(
@@ -714,6 +728,9 @@ def collect_device_info(
     latency = _ping_with_fallback(adb_path, serial, "223.5.5.5", fallback="8.8.8.8")
     if latency is not None:
         info["network_latency"] = latency
+
+    if timing_sink is not None:
+        timing_sink("slow", time.monotonic() - slow_started)
 
     return info
 
