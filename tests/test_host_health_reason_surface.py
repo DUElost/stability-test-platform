@@ -34,7 +34,7 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CAPACITY_REPORTER = REPO_ROOT / "backend/agent/capacity_reporter.py"
-KERNEL_USB_FAULTS = REPO_ROOT / "backend/agent/kernel_usb_faults.py"
+KERNEL_USB_FAULTS = REPO_ROOT / "backend/agent/contracts/kernel_usb_faults.py"
 API_METRICS = REPO_ROOT / "backend/api/routes/metrics.py"
 RULES = REPO_ROOT / "deploy/prometheus/alerts-stability-platform.yml"
 FRONTEND_TABLE = REPO_ROOT / "frontend/src/components/network/ExpandableHostTable.tsx"

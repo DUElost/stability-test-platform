@@ -14,7 +14,8 @@ from pathlib import Path
 
 from backend.agent import heartbeat_thread as hb_mod
 from backend.agent.capacity_reporter import compute_capacity
-from backend.agent.kernel_usb_faults import (
+from backend.agent.kernel_usb_faults import KernelUsbWatch
+from backend.agent.contracts.kernel_usb_faults import (
     CHANNEL_OK,
     CHANNEL_STATES,
     CHANNEL_UNKNOWN,
@@ -23,7 +24,6 @@ from backend.agent.kernel_usb_faults import (
     REASON_HC_DEAD,
     REASON_LINK_DEGRADED,
     KernelUsbFaults,
-    KernelUsbWatch,
     parse_kernel_usb_faults,
     usb_kernel_fault_reasons,
 )

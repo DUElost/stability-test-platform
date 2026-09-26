@@ -69,8 +69,9 @@ Class: architecture
 
 ## Revisit
 
-- ADR-0054 §5 只剩第 4 步（`kernel_usb_faults` 解析 + 签名词表、`aee/state_migration`），
-  C3 剩余 2 条基线是它的出口；
+- ADR-0054 §5 第 4 步的 `kernel_usb_faults` 部分已落地（解析/词表入契约、采集留 agent，
+  见 `2026-09-26-agent-contracts-step4-kernel-usb-faults-3298.md`）；只剩
+  `aee/state_migration`（终态出口写在 `.importlinter` C3 注释）；
 - **digest 格式变更 = 身份迁移**：改 `digest_entries` 序列化、kind 语义或载荷排除集，
   必须同时走 hot-update + manifest/bundle 重算，属显式动作（格式锚会先红）；
 - 三处载荷排除集（`host_updater._TAR_EXCLUDES` / Ansible `agent_install_excludes` /
