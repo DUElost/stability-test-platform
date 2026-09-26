@@ -487,6 +487,14 @@
           "retired": false,
           "script": "flash_firmware.py",
           "version": "1.3.17"
+        },
+        {
+          "artifact": "packages/flash_firmware/1.3.18.tar.gz",
+          "package_sha256": "60b18725c35cdcf69a1e2955fd74eb6f2a2c8d8df8a6af357fca5da069ccd7d5",
+          "python": null,
+          "retired": false,
+          "script": "flash_firmware.py",
+          "version": "1.3.18"
         }
       ]
     },
@@ -540,6 +548,14 @@
           "retired": false,
           "script": "flash_preflight.py",
           "version": "1.0.5"
+        },
+        {
+          "artifact": "packages/flash_preflight/1.0.6.tar.gz",
+          "package_sha256": "d59f5f748c098c7dfa7e2b1930b1474a98fd7ef479a6d44bd925059cbf4bb2c0",
+          "python": null,
+          "retired": false,
+          "script": "flash_preflight.py",
+          "version": "1.0.6"
         }
       ]
     },
@@ -1020,6 +1036,14 @@
           "retired": false,
           "script": "monkey_resource_push.py",
           "version": "1.1.0"
+        },
+        {
+          "artifact": "packages/monkey_resource_push/1.1.1.tar.gz",
+          "package_sha256": "b455c7e62e28059e6d8dbf889afbbbd90daf605acd713fac564cab8f762de140",
+          "python": null,
+          "retired": false,
+          "script": "monkey_resource_push.py",
+          "version": "1.1.1"
         }
       ]
     },
@@ -1259,6 +1283,14 @@
           "retired": false,
           "script": "monkey_test.py",
           "version": "1.2.2"
+        },
+        {
+          "artifact": "packages/monkey_test/1.2.3.tar.gz",
+          "package_sha256": "542f4e7a935806a0eb9bc200d4e017b63808d53311fff8be691ab272b566edf9",
+          "python": null,
+          "retired": false,
+          "script": "monkey_test.py",
+          "version": "1.2.3"
         }
       ]
     },
