@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 #: 否定断言前先证明「看的是同一份配置」——锚点一律编在**替代物**上（#2639 第七批）。
 _COMPOSE_REL = "docker-compose.yml"
 _COMPOSE_ENV_ANCHOR = "POSTGRES_PASSWORD: ${POSTGRES_PASSWORD"
+_COMPOSE_ADMIN_PW_ANCHOR = "STP_ADMIN_PASSWORD: ${STP_ADMIN_PASSWORD:?"
 _NGINX_ASSETS_ANCHOR = "location /assets/"
 _FRONTEND_DOCKER_REL = "deploy/nginx/frontend-docker.conf"
 _UPSTREAM_ANCHOR = "http://server:8000"
@@ -66,7 +67,10 @@ def test_docker_compose_mounts_repo_root_and_dev_storage_only():
     assert "CORS_ORIGINS: http://127.0.0.1:${DEV_FRONTEND_PORT:-15173},http://localhost:${DEV_FRONTEND_PORT:-15173}" in compose
     # #3353：口令类键必须强制引用（未设即 compose 报错），不得再带弱默认值
     assert "STP_ADMIN_PASSWORD: ${STP_ADMIN_PASSWORD:?" in compose
-    assert "STP_ADMIN_PASSWORD:-admin123" not in compose
+    SourceGuard.of_repo_path(_COMPOSE_REL).anchored(_COMPOSE_ADMIN_PW_ANCHOR).assert_absent(
+        "STP_ADMIN_PASSWORD:-admin123",
+        why="#3353：口令类键必须强制引用，不得再带弱默认值",
+    )
     assert "python /app/backend/scripts/init_dev_db.py" in compose
 
 
