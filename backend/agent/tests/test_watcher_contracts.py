@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from backend.agent.watcher.contracts import ContractViolation, validate_log_signal
+from backend.agent.contracts.watcher_contracts import ContractViolation, validate_log_signal
 
 
 def _envelope(**overrides):

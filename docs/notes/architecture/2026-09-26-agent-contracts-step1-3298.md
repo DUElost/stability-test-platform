@@ -86,9 +86,10 @@ Class: architecture
 
 ## Revisit
 
-- ADR-0054 §5 第 2–4 步未做：`aee/metadata`、`aee/event_dirs`、`watcher/contracts`、
-  `artifact_digest` 算法、`kernel_usb_faults`/`state_migration` 逐个判断——C3 的 5 条基线
-  与 `_SHARED_ALLOWLIST` 的 `metrics` 是终态出口，不是永久豁免；
+- ADR-0054 §5 第 2 步已落地（`aee_metadata` / `aee_event_dirs` / `watcher_contracts`，
+  见 `2026-09-26-agent-contracts-step2-3298.md`）；第 3–4 步未做：`artifact_digest`
+  算法、`kernel_usb_faults`/`state_migration` 逐个判断——C3 剩余 2 条基线与
+  `_SHARED_ALLOWLIST` 的 `metrics` 是终态出口，不是永久豁免；
 - `_CONTRACTS_ALLOWED_THIRD_PARTY` 新增依赖必须逐条评审（ADR-0054 §7）；
 - `contracts/` 出现运行逻辑即说明 D2 判据被突破，回审 ADR-0054；
 - 本 PR 遗留一个命名债：`test_pipeline_validator_parity_738.py` 已不含 parity 语义，

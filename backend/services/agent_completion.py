@@ -74,7 +74,7 @@ class _RunCompleteIn(BaseModel):
     update: Dict[str, Any]
     artifact: Optional[Dict[str, Any]] = None
     # Watcher 摘要回填（来自 Agent JobSession.summary.to_complete_payload）
-    # 字段形态参考 backend/agent/watcher/contracts.py WatcherSummaryPayload
+    # 字段形态参考 backend/agent/contracts/watcher_contracts.py WatcherSummaryPayload
     # 可选：watcher_id / watcher_started_at / watcher_stopped_at / watcher_capability / log_signal_count / watcher_stats
     watcher_summary: Optional[Dict[str, Any]] = None
     fencing_token: str  # ADR-0019 Phase 2b: 必填
@@ -122,7 +122,7 @@ async def get_valid_runtime_lease(
 def apply_watcher_summary(job: JobInstance, summary: Dict[str, Any]) -> None:
     """把 Agent 回传的 watcher_summary 回填到 JobInstance 字段。
 
-    字段来源契约：backend/agent/watcher/contracts.py WatcherSummaryPayload
+    字段来源契约：backend/agent/contracts/watcher_contracts.py WatcherSummaryPayload
     只在 summary 非空字段存在时覆写，保持旧字段。
     """
     started = summary.get("watcher_started_at")
@@ -419,7 +419,7 @@ async def complete_agent_job(
     job.terminal_payload_digest = payload_digest
 
     # Watcher 摘要回填（来自 Agent JobSession.summary.to_complete_payload）
-    # 字段契约见 backend/agent/watcher/contracts.py WatcherSummaryPayload
+    # 字段契约见 backend/agent/contracts/watcher_contracts.py WatcherSummaryPayload
     if payload.watcher_summary:
         apply_watcher_summary(job, payload.watcher_summary)
 

@@ -36,12 +36,13 @@ _VERIFY_MARKER = ".stp-verified"
 
 @dataclass(frozen=True)
 class PackageTool:
-    """解析成功的包：绝对路径的包内解释器与入口脚本。"""
+    """解析成功的包：绝对路径的包内解释器与入口脚本（``root`` = 核验后的包解压根）。"""
 
     name: str
     version: str
     python: str
     script: str
+    root: str = ""
 
 
 def parse_package_ref(ref: str) -> Optional[tuple[str, str]]:
@@ -244,7 +245,18 @@ def resolve_packaged_tool(ref_env_key: str, env: Optional[Mapping[str, str]] = N
     parsed = parse_package_ref(environ.get(ref_env_key, ""))
     if not parsed:
         return None
-    name, version = parsed
+    return resolve_packaged_tool_ref(parsed[0], parsed[1], environ)
+
+
+def resolve_packaged_tool_ref(
+    name: str, version: str, env: Optional[Mapping[str, str]] = None
+) -> Optional[PackageTool]:
+    """按 ``(name, version)`` 解析包工具：站点副本登记条目 → 整包 sha 核验拉取 → 入口字段包内校验。
+
+    失败一律 None——回退还是失败由调用方决定：env 引用键路径（展锐 / dedup）回退 env，
+    脚本包声明的工具依赖（ADR-0051 v1.7 D7，``script_packages.inject_required_tools``）fail-closed。
+    """
+    environ = env if env is not None else os.environ
     packages_root = _packages_root(environ)
     cache_root = _cache_root(environ)
     if not packages_root or not cache_root:
@@ -281,7 +293,9 @@ def resolve_packaged_tool(ref_env_key: str, env: Optional[Mapping[str, str]] = N
     if not script_abs.resolve().is_relative_to(pkg_dir.resolve()):
         logger.error("tool_cache_entry_script_outside %s@%s script=%s", name, version, script_abs)
         return None
-    return PackageTool(name=name, version=version, python=str(python_abs), script=str(script_abs))
+    return PackageTool(
+        name=name, version=version, python=str(python_abs), script=str(script_abs), root=str(pkg_dir),
+    )
 
 
 def resolve_packaged_scan_tool(env: Optional[Mapping[str, str]] = None) -> Optional[PackageTool]:

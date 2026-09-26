@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import pytest
 
-from backend.agent.aee.event_dirs import event_dir_basename_from_path
+from backend.agent.contracts.aee_event_dirs import event_dir_basename_from_path
 from backend.models.device_log_event import DeviceLogEvent
 from backend.models.enums import EventState
 from backend.models.plan_run_artifact import PlanRunArtifact
