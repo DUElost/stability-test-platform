@@ -1,6 +1,6 @@
 """add host.emptied_at / emptied_by / emptied_reason — 设备面意图位（#3159，ADR-0038 v0.3 D9.1）
 
-Revision ID: e5f6a7b8c9d0
+Revision ID: f7a8b9c0d1e2
 Revises: d4e8f2a7c9b1
 Create Date: 2026-09-26
 
@@ -23,7 +23,7 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "e5f6a7b8c9d0"
+revision = "f7a8b9c0d1e2"
 down_revision = "d4e8f2a7c9b1"
 branch_labels = None
 depends_on = None
