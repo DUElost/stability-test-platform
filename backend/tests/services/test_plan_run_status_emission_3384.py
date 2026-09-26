@@ -18,6 +18,8 @@ import pathlib
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
+from tools.dev.source_anchor import SourceGuard
+
 from backend.api.routes.agent_api import _RunCompleteIn, complete_job
 from backend.core.database import AsyncSessionLocal
 from backend.models.device_lease import DeviceLease
@@ -33,10 +35,11 @@ from backend.models.job import JobInstance
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun, PlanRunPendingAggregation
 
-_STALE_SITES = (
-    "backend/services/agent_completion.py",
-    "backend/services/agent_step_status.py",
-    "backend/scheduler/recycler.py",
+# 相对路径 → 真源锚点（证明被扫文件仍承载对应路径；搬走时报 AnchorDrift）
+_STALE_SITES: tuple[tuple[str, str], ...] = (
+    ("backend/services/agent_completion.py", "async def complete_agent_job("),
+    ("backend/services/agent_step_status.py", "async def _broadcast_transitioned_jobs("),
+    ("backend/scheduler/recycler.py", "def _mark_pending_timeout("),
 )
 
 
@@ -59,13 +62,18 @@ def _calls_named(tree: ast.Module, name: str) -> list[ast.Call]:
 
 
 def test_stale_broadcast_sites_removed():
-    """旧点若复活：直接 `broadcast_plan_run_status` 或 `schedule_emit("plan_run_status")`。"""
-    for rel in _STALE_SITES:
-        src = (pathlib.Path(__file__).resolve().parents[3] / rel).read_text()
-        assert "broadcast_plan_run_status" not in src, (
-            f"{rel} 不得再引用 broadcast_plan_run_status（#3384：中央补发是唯一发送点）"
+    """旧点若复活：直接 `broadcast_plan_run_status` 或 `schedule_emit("plan_run_status")`。
+
+    否定断言走 `SourceGuard` 锚点助手（#2639 棘轮）：先证明被扫文件仍是对应路径
+    真源，再断言旧发送点不出现——否则文件搬走/改名后断言会恒真。
+    """
+    for rel, anchor in _STALE_SITES:
+        guard = SourceGuard.of_repo_path(rel).anchored(anchor)
+        guard.assert_absent(
+            "broadcast_plan_run_status",
+            why="#3384：中央补发是唯一发送点，旧点不得复活",
         )
-        for call in _calls_named(_tree(rel), "schedule_emit"):
+        for call in _calls_named(ast.parse(guard.text), "schedule_emit"):
             assert not (
                 call.args and isinstance(call.args[0], ast.Constant)
                 and call.args[0].value == "plan_run_status"
