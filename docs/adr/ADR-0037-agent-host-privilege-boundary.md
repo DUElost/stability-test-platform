@@ -65,7 +65,11 @@
   `resources/`，ADR-0040 §4.3 P2 前置，#1950 按 §7-5 同 PR 回填）仅追加
   `--filter=protect` 不 exclude——防 `--delete` 清掉大件的同时保持分发
   照旧，P2 载荷收缩后自然停发。（v0.3 / #2180：legacy 路径的对称过滤面已随
-  迁移期结束删除，filter 只此一处。）
+  迁移期结束删除，filter 只此一处。）（2026-09-26 回填，ADR-0040 §7-5 / D8 R4：
+  ADR-0040 P2-B（#1975）曾新增 `apply-resources` 子命令与 `write-digest --kind resources`
+  （写第二身份文件 `ARTIFACT_DIGEST_RESOURCES`），**未按 §7-5 回填本白名单**；host-resources
+  层退役后二者一并删除，白名单与实现重新一致。`resources/` 的 protect-only 与
+  `ARTIFACT_DIGEST_RESOURCES` 的元数据保护保留——退役不做主机清理。）
 - **D3 存量迁移**：install 链（`install_agent.sh` 内 bootstrap）与
   `update_agent.yml`（Ansible `become`）都部署 wrapper 并生成/重写
   conf 与 sudoers（visudo 校验后原子替换，失败即中止）。迁移期热更新检测
