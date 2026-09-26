@@ -23,13 +23,9 @@ from backend.services.artifact_digest import ConvergencePlan
 _EMPTY_OP = None
 
 
-def _plan(code_digest=DIGEST, code_drift=False, resources_drift=False,
-          resources_skipped_empty=True, converged=True):
+def _plan(code_digest=DIGEST, code_drift=False, converged=True):
     return ConvergencePlan(
         code_digest=code_digest, code_drift=code_drift,
-        resources_digest="sha256:" + "f" * 64,
-        resources_drift=resources_drift,
-        resources_skipped_empty=resources_skipped_empty,
         converged=converged,
         no_op_result=_converged() if converged else None,
     )
@@ -55,6 +51,8 @@ def test_hot_update_noop_returns_converged_without_ssh(
     assert data["converged"] is True
     assert data["reason"] == "digest-matched"
     assert data["artifact_digest"] == DIGEST
+    # ADR-0040 D8 R1：host-resources 层退役，响应不再回传资源身份
+    assert "resources_digest" not in data
     assert finalized["n"] == 1
 
 
@@ -78,10 +76,11 @@ def test_hot_update_force_bypasses_gate_and_deploys(
             False,
         ),
     )
-    exec_calls = {"digest": None}
+    exec_calls = {"digest": None, "kwargs": None}
 
     def fake_exec(**kwargs):
         exec_calls["digest"] = kwargs.get("artifact_digest")
+        exec_calls["kwargs"] = kwargs
         return {
             "ok": True, "converged": False, "reason": "deployed",
             "message": "OK", "duration_ms": 1, "deps_refreshed": False,
@@ -106,4 +105,6 @@ def test_hot_update_force_bypasses_gate_and_deploys(
     assert response.status_code == 200, response.text
     assert response.json()["converged"] is False
     assert exec_calls["digest"] == DIGEST
+    # ADR-0040 D8 R1：--force 收窄为 agent-code 全量，不再请求资源层
+    assert not [k for k in exec_calls["kwargs"] if k.startswith("resources")], exec_calls["kwargs"]
     assert finalized["n"] == 1

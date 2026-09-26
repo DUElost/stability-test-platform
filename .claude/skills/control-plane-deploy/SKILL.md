@@ -157,7 +157,7 @@ PYTHONPATH=. venv/bin/python -m backend.scripts.batch_hot_update --direct
   drift 只剩「发布根被手改」或「bundle 构建时工作树不干净」）。见到整片 drift：先 `cmp -r` 发布根
   与 `stp-releases/<rev>` 原树，再查最近一次构建源。
 - **自愈路径**：收敛成功后远端脚本执行 `write-digest`，写入的是**控制面现算的 desired
-  digest**（不是主机自算），所以一次成功推送必然把该台置 `matched`（`host_updater.py:380-384`）。
+  digest**（不是主机自算），所以一次成功推送必然把该台置 `matched`（`host_updater.py:370-373`）。
 - **实测 ~3s/台**（2026-09-22：canary `duration_ms=3068`；48 台批量约 4 分钟，
   `SUMMARY ok=48 converged=1 fail=0 skipped=0`。旧稿写的「约 20s/台」已过时）。
   stdout 是块缓冲，重定向到文件时日志会长时间为空，**进度看 DB/API 的分布，别盯日志**。

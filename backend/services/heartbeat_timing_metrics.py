@@ -81,6 +81,8 @@ def refresh_agent_heartbeat_timing_gauges(db: Session) -> None:
             Host.retired_at.is_(None), Host.last_heartbeat >= fresh_since,
         ).all()
     except SQLAlchemyError:
+        # #3102 同款：共享 session 读失败必须 rollback，否则同一次 scrape 的后续各组连环失败。
+        db.rollback()
         logger.warning("heartbeat_timing_metrics_refresh_failed", exc_info=True)
         return
     seen: dict[str, set[tuple[str, ...]]] = {name: set() for name in _GAUGES}

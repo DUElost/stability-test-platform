@@ -254,8 +254,10 @@ python -m backend.scripts.check_unreferenced_script_versions [--json] [--name fl
 共用 `_ensure_script_can_be_deactivated` 同一守卫，仍被 Plan 引用时返回
 409 `SCRIPT_STILL_REFERENCED`。**发布级退役（ADR-0051 Phase 4b）**：站点 PUT 只改本站态；
 要让退役跨站/灾备复现，须同步把该条目在 `tool_manifest.json` 翻 `retired: true`
-（批量物化工具 `DATABASE_URL=… python tools/dev/manifest_retire_from_db.py`——以本站 active 集为准，
-被 plan_step 引用者拒动；PR 里人工核对 flip 清单，`tool-manifest` 门禁允许的唯一改写就是这个单向翻转）。
+（批量物化工具 `DATABASE_URL=… python tools/dev/manifest_retire_from_db.py`——只 flip 库中**存在该行**且
+`is_active=false` 的 script 族条目，库中缺行者单列 `missing_rows` 仅报告（缺行 ≠ 已退役，#3386），
+被 plan_step 引用者拒动；默认 dry-run，`--apply` 在 script 表为空 / active 集为空 / 拟 flip 超过非退役
+script 条目半数时拒绝写盘，确认库指向无误后才用 `--force` 显式越过；PR 里人工核对 flip 清单，`tool-manifest` 门禁允许的唯一改写就是这个单向翻转）。
 **manifest 是发布级真源，PUT 是站点态**——只 PUT 不 flip，新站 catalog 会比生产多。
 重新激活只有 `PUT {"is_active": true}` 一条路，且
 无守卫（不做引用校验）。

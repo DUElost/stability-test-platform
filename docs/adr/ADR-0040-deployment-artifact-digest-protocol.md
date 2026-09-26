@@ -198,8 +198,9 @@ canary 真机刷机 run 575 与 Monkey run 576 实证从 `tools_cache` 取工具
      checks / manifest 同批）；安装器对**旧** bundle（仍带该分量）照常接受、对新 bundle 不再要求。bundle 从此不依赖
      `backend/agent/resources/` 外部物料——ADR-0051 D8「`check-deploy-source.sh` 由结构替代（从提交构建）」的前置随之解除。
    - **R4 Agent 与数据面**：Agent 心跳停报资源 digest；wrapper 资源子命令删除（**ADR-0037 同 PR 回填白名单**，§7-5）；
-     `host.agent_resources_digest` 停写、API / 前端字段标弃用（删列另起迁移，留一个版本窗口）；资源相关告警、
-     `control-plane-deploy` SOP §3「带外资源」两段同批收口。
+     `host.agent_resources_digest` 停写、API / 前端字段标弃用（删列另起迁移，留一个版本窗口）；
+     `control-plane-deploy` SOP 中描述资源层判定的段落按 SOP 规则随上线实跑校准（R1 勘误：原文所列「资源相关告警」
+     在仓内不存在——`alerts-host-resources.yml` 是控制面宿主内存告警、与本层无关，无告警面要收）。
 4. **过渡登记**：本层以 `host-resources-layer` 进 `docs/governance/transitions.json`（exit = 本条，带到期日），
    由过渡登记簿门禁计时执法——R4 完成即结项。
 
