@@ -580,3 +580,70 @@ describe('NotificationsPage', () => {
     });
   });
 });
+
+// #3199：查询失败不得被渲染成「没有数据」——判据来自 #1195「查询失败不得展示空态」，
+// 该判据此前只落在 DedupReportCard 与 NotificationBell，页面侧三个页签都漏了。
+describe('通知页失败态真值化（#3199）', () => {
+  it('通知记录加载失败：给失败提示与重试，不显示「暂无通知记录」，也不断言「共 0 条」', async () => {
+    mocks.role = 'user';                       // 非 admin 恒落 logs 页签（#1196 设计）
+    mocks.notifications.listLogs.mockRejectedValue(new Error('HTTP 502'));
+
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText(/通知记录加载失败/)).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: /重试/ })).toBeInTheDocument();
+    expect(screen.queryByText('暂无通知记录')).not.toBeInTheDocument();
+    expect(screen.queryByText(/共 0 条通知/)).not.toBeInTheDocument();
+    expect(screen.getByText(/通知条数未知/)).toBeInTheDocument();
+  });
+
+  it('点「重试」真的重新拉取并恢复列表', async () => {
+    mocks.role = 'user';
+    let first = true;
+    mocks.notifications.listLogs.mockImplementation(() => {
+      if (first) { first = false; return Promise.reject(new Error('HTTP 502')); }
+      return Promise.resolve({ items: [makeLog({ id: 1, read: false, title: '恢复后的告警' })], total: 1, skip: 0, limit: 50 });
+    });
+
+    renderPage();
+    await waitFor(() => expect(screen.getByText(/通知记录加载失败/)).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /重试/ }));
+
+    await waitFor(() => expect(screen.getByText('恢复后的告警')).toBeInTheDocument());
+    expect(screen.queryByText(/通知记录加载失败/)).not.toBeInTheDocument();
+  });
+
+  it('渠道加载失败：不显示「暂无通知渠道」', async () => {
+    setData({ rules: [RULE] });
+    // setData 会把 listChannels 也 mock 成成功，故失败注入必须放在它之后（否则被覆盖）
+    mocks.notifications.listChannels.mockRejectedValue(new Error('HTTP 502'));
+
+    renderPage('/notifications?tab=channels');
+
+    await waitFor(() => expect(screen.getByText(/通知渠道加载失败/)).toBeInTheDocument());
+    expect(screen.queryByText('暂无通知渠道')).not.toBeInTheDocument();
+  });
+
+  it('规则加载失败：不显示「暂无告警规则」', async () => {
+    setData({ channels: [CHANNEL_WEBHOOK] });
+    mocks.notifications.listRules.mockRejectedValue(new Error('HTTP 502'));
+
+    renderPage('/notifications?tab=rules');
+
+    await waitFor(() => expect(screen.getByText(/告警规则加载失败/)).toBeInTheDocument());
+    expect(screen.queryByText('暂无告警规则')).not.toBeInTheDocument();
+  });
+
+  // 反向对照：不能把 error 分支写宽，否则「成功且为空」也会被说成故障。
+  it('成功且为空仍显示空态（不得误报失败）', async () => {
+    mocks.role = 'user';
+    setData({ logs: [] });
+
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('暂无通知记录')).toBeInTheDocument());
+    expect(screen.queryByText(/加载失败/)).not.toBeInTheDocument();
+    expect(screen.getByText('共 0 条通知')).toBeInTheDocument();
+  });
+});

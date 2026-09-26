@@ -1,7 +1,11 @@
-"""Agent-local helpers for normalizing AEE subtype/package metadata.
+"""AEE 事件元数据归一化契约（ADR-0054 D1/D2）。
 
-Hot-update deploys only backend/agent to hosts, so AEE runtime code must not
-require backend.core to be present.
+控制面与 Agent 共用**同一实现**：Agent 侧经 ``from ..contracts.aee_metadata import …``
+相对导入，控制面经 ``backend.agent.contracts.aee_metadata``。事件类型/子类型词表、
+package/process 归一规则、``__exp_main.txt`` / ``ZZ_INTERNAL`` 解析口径在此定义——
+两侧对同一份事件目录必须给出同样的 sub-type/package 判定。
+
+模块体只依赖标准库、import 期无 I/O（解析函数本身按调用方给入的路径读取文件）。
 """
 
 from __future__ import annotations

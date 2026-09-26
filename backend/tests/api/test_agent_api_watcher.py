@@ -5,7 +5,7 @@
   2. POST /agent/jobs/{id}/complete   : 接受 watcher_summary，回填 JobInstance.watcher_*
   3. POST /agent/log-signals          : 幂等 upsert (job_id, seq_no)，累加 log_signal_count
 
-契约来源：backend/agent/watcher/contracts.py
+契约来源：backend/agent/contracts/watcher_contracts.py
 
 注意：
   ingest_log_signals 端点使用 PostgreSQL 方言 `pg_insert(...).on_conflict_do_nothing(...)`，

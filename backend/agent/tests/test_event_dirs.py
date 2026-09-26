@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 
-from backend.agent.aee.event_dirs import (
+from backend.agent.contracts.aee_event_dirs import (
     event_dir_basename_from_path,
     find_event_dir_under_root,
     is_event_dir_basename,

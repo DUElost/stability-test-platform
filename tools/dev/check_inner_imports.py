@@ -58,7 +58,10 @@ SCAN_DIRS = (ROOT / "backend", ROOT / "tools", ROOT / "scripts")
 #: `counter_reconciler` 恢复扫描 +2（metrics 局部导入与 leader_election 同型）。
 #: 依赖方向本身无环（job_terminalization → finalization → aggregation），
 #: 留痕于 PR 描述与本行。合并 main(#3358) 后基线 = 596+23 = 619。
-_BASELINE = 619
+#: 2026-09-26 #3298（ADR-0054 第 2 步）：`device_watcher` 的 core/agent 双形态
+#: 兜底（try/except 各 2 处）随契约搬迁塌成 1 条相对导入 ×2 目标
+#: → **619 → 617**。
+_BASELINE = 617
 
 # ADR-0051 Phase 3：版本目录已退役，脚本族树（backend/agent/scripts/<name>/）按包发布、
 # 属独立审计面，整棵排除（此前只排除 v<version>/ 冻结目录）。

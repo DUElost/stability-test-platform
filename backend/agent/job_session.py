@@ -35,7 +35,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from .watcher import LogWatcherManager, WatcherPolicy, OnUnavailableAction, WatcherStartError
-from .watcher.contracts import ContractViolation, validate_claim_payload
+from .contracts.watcher_contracts import ContractViolation, validate_claim_payload
 
 logger = logging.getLogger(__name__)
 
@@ -602,7 +602,7 @@ class JobSession:
 def _validate_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     """JobSession 专用的 payload 校验。
 
-    复用 contracts.validate_claim_payload；违反契约时升级为 JobStartupError
+    复用 watcher_contracts.validate_claim_payload；违反契约时升级为 JobStartupError
     （让调用方能用单一 except 捕获）。
     """
     try:

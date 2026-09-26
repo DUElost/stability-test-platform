@@ -28,9 +28,10 @@ import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, Optional
+from typing import Mapping, MutableMapping, Optional
 
 from . import tool_cache
+from .tool_requirements import RequirementError, load_requirements
 
 logger = logging.getLogger(__name__)
 
@@ -109,4 +110,37 @@ def verify_package(entry: Mapping[str, object], env: Optional[Mapping[str, str]]
         return False, "package_unavailable"
     if not (Path(pkg_dir) / _entry_basename(str(entry.get("nfs_path") or ""))).is_file():
         return False, "package_entry_missing"
+    # ADR-0051 v1.7 D7：声明的工具依赖一并核验预热——派发前把工具包（刷机工具 ~150MB）拉进
+    # tools_cache，缺失在 precheck/presence 暴露，而不是等到步骤启动时才失败。
+    tool_err = _resolve_required_tools(Path(pkg_dir), environ, None)
+    if tool_err:
+        return False, tool_err
     return True, None
+
+
+def _resolve_required_tools(
+    package_root: Path, environ: Mapping[str, str], inject_into: Optional[MutableMapping[str, str]]
+) -> Optional[str]:
+    """解析包根声明的全部工具依赖：成功返回 None（``inject_into`` 非空时写入各 env 键）；否则返回错误串。"""
+    try:
+        requirements = load_requirements(package_root)
+    except RequirementError as exc:
+        return f"required_tools_invalid: {exc}"
+    for req in requirements:
+        tool = tool_cache.resolve_packaged_tool_ref(req.name, req.version, environ)
+        if tool is None or not tool.root:
+            logger.error("required_tool_unavailable %s@%s package_root=%s", req.name, req.version, package_root)
+            return f"required_tool_unavailable: {req.name}@{req.version}"
+        if inject_into is not None:
+            inject_into[req.env] = tool.root
+            logger.info("required_tool_injected %s@%s %s=%s", req.name, req.version, req.env, tool.root)
+    return None
+
+
+def inject_required_tools(package_root: Path, env: MutableMapping[str, str]) -> Optional[str]:
+    """ADR-0051 v1.7 D7：把脚本包声明的工具依赖核验拉取后注入**本步** env；失败返回错误串。
+
+    fail-closed：声明坏 / 工具包缺失 / sha 不符都让步骤 exit 2（环境/工具错误，ADR-0033），
+    **不**回退主机 env 里同名键——回退会让「包面坏了」被旧的主机路径掩盖，恰是本机制要消灭的形态。
+    """
+    return _resolve_required_tools(package_root, env, env)

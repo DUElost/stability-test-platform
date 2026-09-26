@@ -41,7 +41,7 @@ from datetime import datetime, timedelta, timezone
 
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from .script_packages import PackageUnavailable, resolve_script_path
+from .script_packages import PackageUnavailable, inject_required_tools, resolve_script_path
 
 
 logger = logging.getLogger(__name__)
@@ -1804,6 +1804,11 @@ class PipelineEngine:
             else f"{agent_dir}{os.pathsep}{existing_py_path}"
         )
         env["STP_SCRIPT_SOURCE"] = resolved.source
+        # ADR-0051 v1.7 D7：脚本包声明的工具依赖（capabilities.json requires_tools）——核验拉取后
+        # 把工具包根注入本步 env；在引擎自有键之后写，且声明侧禁止覆写这些键（tool_requirements）。
+        tool_error = inject_required_tools(Path(resolved.cwd), env)
+        if tool_error:
+            return StepResult(success=False, exit_code=2, error_message=tool_error)
 
         timeout_seconds = _resolve_step_wall_clock(step)
         stall_seconds = _resolve_step_stall_seconds(step)
