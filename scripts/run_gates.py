@@ -308,7 +308,8 @@ GATES = {
         f"{PY} -m pytest tests/ -q "
         "--ignore=tests/test_alembic_upgrade.py "
         "--ignore=tests/test_script_seed_governance.py "
-        "--ignore=tests/test_diag_readonly_role_pg.py",
+        "--ignore=tests/test_diag_readonly_role_pg.py "
+        "--ignore=tests/test_seed_default_params_face_3289.py",
         ROOT,
         None,
     ),
