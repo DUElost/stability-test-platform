@@ -147,13 +147,15 @@ _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 # 会放行尾随换行（"1-1\n"），端口名将带着换行进路径。
 _USB_PORT_RE = re.compile(r"^[0-9]+-[0-9]+(?:\.[0-9]+)*\Z")
 
-# 与 tools/ansible/roles/agent_deploy/defaults/main.yml 的 agent_install_excludes
-# 及控制面 `host_updater._TAR_EXCLUDES` / digest 输入集同源（#2030：三处逐项
-# 一致由 tests/test_ansible_digest_contract.py 锁定）；stp_schemas/ 与 wrapper
+# 与 tools/ansible/roles/agent_deploy/defaults/main.yml 的 agent_install_excludes、
+# 以及**契约包**（`backend/agent/contracts/artifact_digest.py::PAYLOAD_EXCLUDES`，
+# tar/digest 的单一源）逐项同源（#2030；ADR-0054 后契约侧为单一源，wrapper/YAML
+# 因无法 import Python 仍是拷贝）——三处一致由
+# tests/test_ansible_digest_contract.py 锁定；stp_schemas/ 与 wrapper
 # 自身不进安装目录，venv//logs/ 为宿主侧目录（ADR-0040 D1 明文排除）。
 FIXED_EXCLUDES = [
     "__pycache__/",
-    "scripts/",  # ADR-0051 Phase 3：脚本走包分发，不再随源码树同步（与 host_updater/_TAR_EXCLUDES 同源）
+    "scripts/",  # ADR-0051 Phase 3：脚本走包分发，不再随源码树同步（与契约包 PAYLOAD_EXCLUDES 同源）
     "*.pyc",
     "test_*.py",
     "tests/",

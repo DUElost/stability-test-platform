@@ -21,6 +21,11 @@ import time
 import uuid
 from pathlib import Path
 
+from backend.agent.contracts.artifact_digest import (
+    PAYLOAD_EXCLUDE_GLOBS,
+    PAYLOAD_EXCLUDE_SUFFIXES,
+    PAYLOAD_EXCLUDES,
+)
 from backend.core.ssh_security import create_ssh_client
 from backend.services.agent_env_sync import (
     RETIRED_ENV_KEYS,
@@ -47,38 +52,16 @@ def _remote_tar_path(prefix: str = "stp") -> str:
 _INVENTORY_PATH = Path(__file__).resolve().parent.parent.parent / "tools" / "ansible" / "inventory.ini"
 
 # Files and dirs excluded from the tarball
-# #2030：本集合 = 「部署流程实际拥有并覆盖的文件集」的排除面（ADR-0040 D1）——
-# 与两条部署通道（`stp_agent_priv.py::FIXED_EXCLUDES`、Ansible
-# `agent_install_excludes`）**同源**，由 `tests/test_ansible_digest_contract.py`
-# 逐项锁定。venv/logs 为宿主侧目录（ADR-0040 D1 明文排除）；stp_agent_priv.py
-# 由 install/update playbook 装到 /usr/local/sbin、不进安装目录；stp_schemas/
-# 的 schema 经 extra_files 独立附加（walk 排除不影响 arcname 附加）。
-_TAR_EXCLUDES = {
-    "__pycache__",
-    # ADR-0051 Phase 3：脚本不再随 agent-code 下发——Agent 按 script.package_sha256 从站点
-    # packages/ 拉包到 tools_cache（STP_SCRIPT_PACKAGES=strict）。主机上残留的旧版本目录随
-    # 本轮 rsync --delete-excluded 清掉。
-    "scripts",
-    "tests",
-    ".env.example",
-    "install_agent.sh",
-    "agentctl.sh",
-    "DEPLOY.md",
-    "stability-test-agent.service",
-    "hosts.txt",
-    "venv",
-    "logs",
-    "stp_agent_priv.py",
-    "stp_schemas",
-    ".deps_installed_sha",
-}
-
-# File suffixes to exclude
-_TAR_EXCLUDE_SUFFIXES = (".pyc",)
-
-# Glob 类排除（#2030）：与 rsync 通道同名的通配模式——显式常量使
-# 「三处排除集同源」可被 tests/test_ansible_digest_contract.py 逐项比较。
-_TAR_EXCLUDE_GLOBS = ("test_*.py",)
+# #2030：本集合 = 「部署流程实际拥有并覆盖的文件集」的排除面（ADR-0040 D1）。
+# **单一源 = 契约包**（`backend/agent/contracts/artifact_digest.py`，ADR-0054 第 3 步
+# 把 digest 归契约）：tar 与 digest 直接引用同一组常量，不再各存一份字面量——
+# 2026-09-26 实证过字面量分叉的后果（契约侧漏 `scripts`，Ansible/bundle 在真实树上
+# 算出的身份与控制面 desired 不一致）。wrapper `FIXED_EXCLUDES` 与 Ansible
+# `agent_install_excludes` 因「单文件脚本 / YAML 数据」无法 import Python，仍是两份
+# 拷贝；四处一致性由 `tests/test_ansible_digest_contract.py` 逐项锁定。
+# venv/logs 为宿主侧目录（ADR-0040 D1 明文排除）；stp_agent_priv.py 由
+# install/update playbook 装到 /usr/local/sbin、不进安装目录；stp_schemas/ 的 schema
+# 经 extra_files 独立附加（walk 排除不影响 arcname 附加）。
 
 # ADR-0040 §5.1（P0 过渡，#1903）：压缩级 9 → 6。实测 252MB 源树打包 16.6s → 6.4s，
 # 体积 125.7MB → 126.0MB（+0.3MB，内网传输代价可忽略）。终态出口 = P1 的 digest 缓存键，
@@ -111,14 +94,14 @@ def _iter_payload_files(kind: str):
     """
     for root, dirs, files in os.walk(_AGENT_SOURCE_DIR):
         # Filter directories in-place
-        dirs[:] = [d for d in dirs if d not in _TAR_EXCLUDES]
+        dirs[:] = [d for d in dirs if d not in PAYLOAD_EXCLUDES]
 
         for name in files:
-            if name in _TAR_EXCLUDES:
+            if name in PAYLOAD_EXCLUDES:
                 continue
-            if name.endswith(_TAR_EXCLUDE_SUFFIXES):
+            if name.endswith(PAYLOAD_EXCLUDE_SUFFIXES):
                 continue
-            if any(fnmatch.fnmatch(name, pattern) for pattern in _TAR_EXCLUDE_GLOBS):
+            if any(fnmatch.fnmatch(name, pattern) for pattern in PAYLOAD_EXCLUDE_GLOBS):
                 continue
 
             full_path = os.path.join(root, name)
