@@ -152,6 +152,7 @@
 | key | kind | 一句话 | owner_anchor | 复议触发器 |
 |---|---|---|---|---|
 | `control-plane-split` | concept | 控制面 vs Agent 执行面分层 | `docs/adr/ADR-0001-control-plane-and-agent-architecture.md :: ## 决策` | 合并两面或改职责边界 |
+| `agent-cp-contracts` | concept | Agent/控制面共享定义的唯一归属（`backend/agent/contracts/` 契约包）；C3 单向边界（控制面只准 import 契约包，基线已清零） | `docs/adr/ADR-0054-agent-control-plane-shared-contracts.md :: ### D1 归属：\`backend/agent/contracts/\` 是双方共享定义的唯一归属` | ADR-0054 §7 三条：出现需独立演进的共享定义（重议备选 C）／契约新增第三方依赖（逐条评估）／`contracts/` 出现运行逻辑（D2 被突破） |
 | `pipeline-action-model` | concept | Pipeline / `script:` action 唯一执行模型 | `docs/adr/ADR-0014-pipeline-execution-engine.md :: ### 执行模型` | 恢复 `shell:` 等旁路 |
 | `device-lease` | concept | Device Lease / fencing / 容量 | `docs/adr/ADR-0019-android-device-lease-and-capacity-scheduling.md :: ### 1. Device Lease 模型` | 改租约粒度或锁模型 |
 | `plan-run-scaling` | concept | PlanRun 准入队列与四层调度不变量 | `docs/adr/ADR-0026-plan-execution-scaling.md :: ### 2. 四条不可破坏的不变量` | 破坏 QUEUED/permit 不变量 |
@@ -287,3 +288,4 @@
 | 2026-09-20 | **#2546 follow-up（codex）**：补 `script-version-immutability` 行（F-1 机制化）；§6 依据行改八稿全量并补登 0b6e98 / 7f3504；§6.2 登记「S6 作膨胀上界」被 2 源拒 + 推荐替代未落地；§8 登记 ADR-0039 三处状态（含 `:66`/`:149` 残留） |
 | 2026-09-20 | ADR-0039 D1 / §4.3「硬不变量」误标 → **总原则**；§8 ②/#2929 与 ③ 收口（仍 Proposed，不升 Accepted） |
 | 2026-09-21 | **#3014 案 1A + 2A（codex）**：S15 增 ④（触发器非空）/ ⑤（ADR 型锚状态须 Accepted）/ ⑦（新建 ADR 必填 `归属域`，cutoff `2026-09-22`，不追溯）；§4.2 记「为什么是 ⑤ 而不是行数卡」；§6.2 改判行数自卡；§7 定强制面。`--self-test` 新增 6 条红/绿样例，`--check` 全绿（零 retroactive 红灯） |
+| 2026-09-26 | **ADR-0054 入表（claude）**：补 `agent-cp-contracts` 行——§7 触发 1（新建 Accepted ADR），且 ADR-0054 §8 的「视需要补 owner 行」随 C3 基线清零一并收口 |
