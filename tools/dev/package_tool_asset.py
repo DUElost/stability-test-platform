@@ -204,6 +204,32 @@ def write_site_manifest_copy(doc: dict, packages_root: Path) -> None:
     )
 
 
+
+def publish_rejection(doc: dict, name: str, version: str, payload_sha: str, dest: Path) -> str | None:
+    """站点发布前核对（读 ``dest``）：返回拒绝原因或 None。
+
+    - Git manifest 必须已登记 ``name@version`` 且登记 sha == 本次打包字节 sha——站点只发布 Git 登记过的
+      内容（C2）；源目录在「登记 → 发布」之间变了，打出来是另一个包，必须拒绝而不是替换；
+    - 站点已存在同名包时字节必须相同——已发布包只增不改（ADR-0051 D1），不得被覆写成另一份内容。
+
+    存在理由：只带 ``--packages-root`` 的发布此前直接 ``write_bytes``，两条都不查（2026-09-26 登记
+    flashtool/aimonkey 前核对发现）；Agent 侧的 sha 核验会拒收错包，但站点本身已被改写。
+    """
+    tool = (doc.get("tools") or {}).get(name) or {}
+    entry = next((v for v in tool.get("versions") or [] if v.get("version") == version), None)
+    if entry is None:
+        return f"{name}@{version} 未在 Git manifest 登记——先 --write-manifest（随 PR 合入）再发布"
+    registered = str(entry.get("package_sha256") or "")
+    if registered != payload_sha:
+        return (f"{name}@{version} 登记 sha {registered[:12]} ≠ 本次打包 {payload_sha[:12]}——"
+                "源目录已变，内容变了就该发新版本号")
+    if dest.exists():
+        existing = hashlib.sha256(dest.read_bytes()).hexdigest()
+        if existing != payload_sha:
+            return f"站点已存在 {dest} 且内容不同（sha {existing[:12]}）——已发布包只增不改，拒绝覆写"
+    return None
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--src", required=True, type=Path, help="工具源码目录（过渡形态 tools/{name}/）")
@@ -274,10 +300,17 @@ def main() -> int:
     if args.packages_root:
         assert doc is not None
         dest = args.packages_root / f"{args.name}/{args.version}.tar.gz"
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(payload)
+        bad = publish_rejection(doc, args.name, args.version, facts["package_sha256"], dest)
+        if bad:
+            print(f"[FAIL] 拒绝发布：{bad}", file=sys.stderr)
+            return 1
+        if dest.exists():
+            print(f"[OK] 站点已有同字节包 {dest}（幂等，不重写）", file=sys.stderr)
+        else:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(payload)
+            print(f"[OK] 包已发布 {dest}", file=sys.stderr)
         write_site_manifest_copy(doc, args.packages_root)
-        print(f"[OK] 包已发布 {dest}", file=sys.stderr)
     return 0
 
 

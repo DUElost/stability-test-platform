@@ -68,6 +68,28 @@ tool_manifest.json                                # Git 唯一事实源：<name>
   追平动作仍走「控制面侧」第 4 步（单事务重指 + `bump plan.updated_at`），同族一次
   到位以免半升级；视图只读、账本非门禁（exit 0 / 根未设为 2），退役判红语义仍归 #735。
 
+### 工具依赖声明（ADR-0051 v1.7 D7）
+
+脚本要用外部工具包（`kind=tool`，如刷机工具、AIMonkey 资源）时，在**族树**的 `capabilities.json`
+里声明，随脚本新版本一起登记：
+
+```json
+{
+  "capabilities": ["progress_stamps"],
+  "requires_tools": {
+    "flashtool": {"version": "1.2444.00.100", "env": "STP_FLASH_TOOL_DIR"}
+  }
+}
+```
+
+- 引擎执行该版本前按 `(族, version)` 经 `tools_cache` 整包核验拉取，把**包根目录**注入本步子进程
+  env 的 `env` 键（`*_DIR` 形态，不得是引擎自有键）；脚本照旧读这个键即可。
+- **fail-closed**：声明坏、工具包缺失/sha 不符/已退役 → 步骤 exit 2（环境/工具错误），**不回退**
+  主机 `.env` 里的同名键；`verify_scripts`（precheck / presence）同步核验并预热，缺失在派发前暴露。
+- 工具版本是脚本版本身份的一部分：**换工具版本 = 改声明 + 登记脚本新版本 + 重指计划**；不新增主机 env 键。
+- 门禁 `check_script_packages`：声明形态合法，且引用指向已登记、`kind=tool`、未退役的条目。门禁只看族树
+  （= 最新版本）——**退役一个 tool 版本前**，先确认没有 active 的老脚本版本仍声明依赖它（运行时会 exit 2）。
+
 ## 已发布版本不可变
 
 不可变性属于**包**：`tool_manifest.json` 条目与站点 `packages/<name>/<version>.tar.gz` 只增不改
