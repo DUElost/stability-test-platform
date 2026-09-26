@@ -127,6 +127,34 @@ plan_chain_settle_outcome_total = Counter(
     ['outcome'],  # settling_skipped | early_release
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
+# #3077：整窗 0 完成机器信号——run 落终态时 total_job_count ≥ 20 且
+# completed_job_count == 0（ADR-0048 允许面：只观测「执行链跑完而产出为 0」的
+# 平台/脚本故障，不恢复通过率判定轴、不改 plan_run.status）。连续 2 窗（同 plan
+# 上一条终态 run 同样 0 产出）由发射端升 critical。
+plan_run_zero_output_total = Counter(
+    'stability_plan_run_zero_output_total',
+    'Terminal plan runs with total >= 20 jobs and zero completions (#3077)',
+    ['level'],  # warning | critical
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+# #3066 A半：链级可见性——链停在当前段且下游段未创建（ADR-0048 中止即断链语义
+# 不变，本信号只让「子 run 数少于预期环数」从不可见变可见）。reason 词表：
+# parent_failed（父段 FAILED 断链）| dispatch_failed（子段派发失败且未落行）|
+# no_healthy_devices（健康门筛空，无设备可派发）。
+plan_chain_visibility_gap_total = Counter(
+    'stability_plan_chain_visibility_gap_total',
+    'PlanRun chains stopped with uncreated downstream segments (#3066)',
+    ['reason'],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+# #3341：post_completion 截止窗行数——终态且 detail 超 defer 窗仍不可读、被截止
+# 守卫停止重入队的 job 数（原实现只打一次 ERROR 日志、无指标，且截止行占满
+# LIMIT 名额会饿死补偿通道）。
+post_completion_cutoff_jobs = Gauge(
+    'stability_post_completion_cutoff_jobs',
+    'Terminal jobs beyond the post-completion defer cutoff (#3341)',
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
 # ============================================================================
 # Task Run Metrics
 # ============================================================================

@@ -22,13 +22,16 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Sequence
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from backend.core.job_timeout_config import HOST_HEARTBEAT_TIMEOUT_SECONDS
-from backend.core.metrics import plan_chain_settle_outcome_total
+from backend.core.metrics import (
+    plan_chain_settle_outcome_total,
+    plan_chain_visibility_gap_total,
+)
 from backend.core.settings.scheduler import get_scheduler_settings
 from backend.models.device_lease import DeviceLease
 from backend.models.host import Device
@@ -45,6 +48,95 @@ logger = logging.getLogger(__name__)
 #: ADR-0048：聚合器不再产出 PARTIAL_SUCCESS（新链恒由 SUCCESS 续跑）；
 #: 保留该值仅为存量兼容——历史 PARTIAL 终态 run 的续链判定（reconciler 同口径）。
 TRIGGERABLE_TERMINAL_STATUSES = {"SUCCESS", "PARTIAL_SUCCESS"}
+
+#: #3066 A半：缺失段遍历深度帽。与读路径 ``plan_run_chain.MAX_CHAIN_DEPTH``
+#: 同源同值（双向防环）；不从读路径/routes 反向 import，镜像约定见其头注。
+_GAP_TRAVERSAL_MAX_DEPTH = 20
+
+
+def _chain_missing_segments(db: Session, plan_run: PlanRun) -> int:
+    """Count downstream plan-chain segments not yet materialized as PlanRuns.
+
+    #3066 A半：期望段数（从当前 run 的 plan 沿 ``next_plan_id`` 数剩余环，
+    快照优先、live Plan 兜底，与触发路径同源）减去本链已落库的后续 run 数
+    （同 root、chain_index 更大）。子段已建但更深层缺口仍在时同样计数。
+    只读。
+    """
+    expected_after = 0
+    cursor_id = _resolve_next_plan_id_sync(plan_run, db)
+    seen: set[int] = set()
+    while cursor_id is not None and expected_after < _GAP_TRAVERSAL_MAX_DEPTH:
+        if cursor_id in seen:
+            break
+        seen.add(cursor_id)
+        expected_after += 1
+        cursor = db.get(Plan, cursor_id)
+        cursor_id = cursor.next_plan_id if cursor is not None else None
+    if expected_after == 0:
+        return 0
+    created_after = db.execute(
+        select(func.count(PlanRun.id)).where(
+            PlanRun.root_plan_run_id == (plan_run.root_plan_run_id or plan_run.id),
+            PlanRun.chain_index > (plan_run.chain_index or 0),
+        )
+    ).scalar() or 0
+    return max(0, expected_after - int(created_after))
+
+
+def _mark_chain_gap_signaled(plan_run: PlanRun, *, missing: int, reason: str) -> bool:
+    """Set the once-per-parent dedup marker; True when this is the first fire.
+
+    标记随调用方既有提交落库（announce 随终态事务、rollback helper 随自愈
+    commit、no-devices 路径由触发函数显式 commit），不自行开事务。
+    """
+    ctx = dict(plan_run.run_context or {})
+    if ctx.get("chain_visibility_gap_signaled"):
+        return False
+    ctx["chain_visibility_gap_signaled"] = {
+        "at": datetime.now(timezone.utc).isoformat(),
+        "reason": reason,
+        "missing_segments": int(missing),
+    }
+    plan_run.run_context = ctx
+    if hasattr(plan_run, "_sa_instance_state"):
+        flag_modified(plan_run, "run_context")
+    return True
+
+
+def _fire_chain_gap_signal(plan_run: PlanRun, *, missing: int, reason: str) -> None:
+    """Emit the chain visibility signal (#3066 A半)：counter+日志+链级事件。
+
+    只观测、不改续链语义（ADR-0048 v1.1 中止即断链）；Prometheus 侧
+    increase(stability_plan_chain_visibility_gap_total)>0 即告警锚。
+    """
+    plan_chain_visibility_gap_total.labels(reason=reason).inc()
+    root_id = plan_run.root_plan_run_id or plan_run.id
+    logger.warning(
+        "plan_chain_visibility_gap parent=%d root=%s chain_index=%s reason=%s "
+        "missing_segments=%d — 链停在当前段且下游段未创建（续链语义不变，仅补可见性）",
+        plan_run.id, root_id, plan_run.chain_index, reason, missing,
+    )
+    try:
+        from backend.services.notification_service import dispatch_notification_async
+
+        dispatch_notification_async("CHAIN_INCOMPLETE", {
+            "run_id": int(plan_run.id),
+            "plan_id": int(getattr(plan_run, "plan_id", 0) or 0),
+            "task_name": f"plan-run-{plan_run.id}",
+            "task_type": "plan",
+            "root_plan_run_id": int(root_id),
+            "chain_index": int(plan_run.chain_index or 0),
+            "reason": reason,
+            "missing_segments": int(missing),
+            "error_message": (
+                f"PlanRun {plan_run.id} 链停在 chain_index={plan_run.chain_index or 0}，"
+                f"下游缺 {missing} 段（reason={reason}）"
+            ),
+        })
+    except Exception:
+        logger.exception(
+            "plan_chain_gap_notification_failed plan_run=%s", plan_run.id,
+        )
 
 
 def _aware_utc(value: datetime | None) -> datetime | None:
@@ -297,7 +389,19 @@ async def _rollback_chain_trigger_async(
             )).first()
             child_exists = existing is not None
         _record_chain_dispatch_failure(pr, error, child_already_created=child_exists)
+        gap_missing = 0
+        if not child_exists:
+            # #3066 A半：子段未落行 = 链确实停在当前段，补可见性信号。
+            gap_missing = await db.run_sync(
+                lambda sync_db: _chain_missing_segments(sync_db, pr)
+            )
+            if gap_missing > 0:
+                _mark_chain_gap_signaled(
+                    pr, missing=gap_missing, reason="dispatch_failed"
+                )
         await db.commit()
+        if gap_missing > 0:
+            _fire_chain_gap_signal(pr, missing=gap_missing, reason="dispatch_failed")
         logger.warning(
             "plan_chain_trigger_rolled_back plan_run=%d child_exists=%s error=%s",
             plan_run_id, child_exists, str(error)[:200],
@@ -329,7 +433,17 @@ def _rollback_chain_trigger_sync(
             ).first()
             child_exists = existing is not None
         _record_chain_dispatch_failure(pr, error, child_already_created=child_exists)
+        gap_missing = 0
+        if not child_exists:
+            # #3066 A半：与 async 同判——子段未落行补可见性信号。
+            gap_missing = _chain_missing_segments(db, pr)
+            if gap_missing > 0:
+                _mark_chain_gap_signaled(
+                    pr, missing=gap_missing, reason="dispatch_failed"
+                )
         db.commit()
+        if gap_missing > 0:
+            _fire_chain_gap_signal(pr, missing=gap_missing, reason="dispatch_failed")
         logger.warning(
             "plan_chain_trigger_sync_rolled_back plan_run=%d child_exists=%s error=%s",
             plan_run_id, child_exists, str(error)[:200],
@@ -419,6 +533,15 @@ async def trigger_next_plan(
         )
     if not device_ids:
         logger.warning("plan_chain_trigger_no_devices plan_run=%d", parent.id)
+        # #3066 A半：健康门筛空 = 链停在本段且下游未创建，补链级可见性信号。
+        missing = await db.run_sync(
+            lambda sync_db: _chain_missing_segments(sync_db, parent)
+        )
+        if missing > 0 and _mark_chain_gap_signaled(
+            parent, missing=missing, reason="no_healthy_devices"
+        ):
+            await db.commit()
+            _fire_chain_gap_signal(parent, missing=missing, reason="no_healthy_devices")
         return None
 
     chain_index = (parent.chain_index or 0) + 1
@@ -539,6 +662,13 @@ def trigger_next_plan_sync(
         logger.warning(
             "plan_chain_trigger_sync_no_devices plan_run=%d", parent.id,
         )
+        # #3066 A半：与 async 同判——健康门筛空补链级可见性信号。
+        missing = _chain_missing_segments(db, parent)
+        if missing > 0 and _mark_chain_gap_signaled(
+            parent, missing=missing, reason="no_healthy_devices"
+        ):
+            db.commit()
+            _fire_chain_gap_signal(parent, missing=missing, reason="no_healthy_devices")
         return None
 
     chain_index = (parent.chain_index or 0) + 1

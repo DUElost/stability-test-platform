@@ -505,3 +505,81 @@ def test_recover_chain_trigger_delegates_to_plan_chain_trigger():
     ) as reconcile:
         recover_chain_trigger(42, db)
     reconcile.assert_called_once_with(42, db)
+
+
+# ── #3077 / #3066 A半：终态可见性信号 ────────────────────────────────────────
+
+
+def test_zero_output_signal_warning_when_first_window():
+    from backend.services import plan_run_finalization as fin
+
+    run = SimpleNamespace(
+        id=601, plan_id=9, status=PlanRunStatus.SUCCESS.value,
+        total_job_count=25, completed_job_count=0, run_context=None,
+    )
+    with patch.object(fin, "_prev_window_zero_output", return_value=False), \
+         patch("backend.core.metrics.plan_run_zero_output_total") as metric:
+        fin._emit_zero_output_signal(run)
+    metric.labels.assert_called_once_with(level="warning")
+    metric.labels.return_value.inc.assert_called_once()
+
+
+def test_zero_output_signal_critical_on_consecutive_window():
+    from backend.services import plan_run_finalization as fin
+
+    run = SimpleNamespace(
+        id=602, plan_id=9, status=PlanRunStatus.SUCCESS.value,
+        total_job_count=25, completed_job_count=0, run_context=None,
+    )
+    with patch.object(fin, "_prev_window_zero_output", return_value=True), \
+         patch("backend.core.metrics.plan_run_zero_output_total") as metric:
+        fin._emit_zero_output_signal(run)
+    metric.labels.assert_called_once_with(level="critical")
+
+
+def test_zero_output_signal_gated_by_threshold_and_nonzero():
+    from backend.services import plan_run_finalization as fin
+
+    small = SimpleNamespace(id=603, plan_id=9, status=PlanRunStatus.SUCCESS.value,
+                            total_job_count=10, completed_job_count=0, run_context=None)
+    partial = SimpleNamespace(id=604, plan_id=9, status=PlanRunStatus.SUCCESS.value,
+                              total_job_count=25, completed_job_count=5, run_context=None)
+    with patch("backend.core.metrics.plan_run_zero_output_total") as metric, \
+         patch.object(fin, "_prev_window_zero_output") as prev:
+        fin._emit_zero_output_signal(small)
+        fin._emit_zero_output_signal(partial)
+    metric.labels.assert_not_called()
+    prev.assert_not_called()
+
+
+def test_parent_chain_gap_signal_fires_for_failed_parent():
+    from backend.services import plan_run_finalization as fin
+
+    run = SimpleNamespace(
+        id=605, plan_id=9, status=PlanRunStatus.FAILED.value,
+        run_context=None, root_plan_run_id=None, chain_index=0,
+    )
+    with patch.object(fin, "_chain_gap_missing_for_run", return_value=3), \
+         patch("backend.services.plan_chain_trigger._mark_chain_gap_signaled", return_value=True) as mark, \
+         patch("backend.services.plan_chain_trigger._fire_chain_gap_signal") as fire:
+        fin._emit_parent_chain_gap_signal(run)
+    mark.assert_called_once()
+    assert mark.call_args.kwargs["reason"] == "parent_failed"
+    fire.assert_called_once()
+
+
+def test_parent_chain_gap_signal_skips_triggerable_and_deduped():
+    from backend.services import plan_run_finalization as fin
+
+    success_run = SimpleNamespace(id=606, plan_id=9, status=PlanRunStatus.SUCCESS.value,
+                                  run_context=None)
+    deduped = SimpleNamespace(
+        id=607, plan_id=9, status=PlanRunStatus.FAILED.value,
+        run_context={"chain_visibility_gap_signaled": {"reason": "parent_failed"}},
+    )
+    with patch.object(fin, "_chain_gap_missing_for_run") as lookup, \
+         patch("backend.services.plan_chain_trigger._fire_chain_gap_signal") as fire:
+        fin._emit_parent_chain_gap_signal(success_run)
+        fin._emit_parent_chain_gap_signal(deduped)
+    lookup.assert_not_called()
+    fire.assert_not_called()

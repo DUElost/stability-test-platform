@@ -6,12 +6,14 @@ Class: bug-fix
 ## Decision
 
 把 #3359（ADR-0052 聚合执行器）新增的函数体内 import 中**非循环依赖掩体**的 14 处回顶层，
-同 PR 下调棘轮 `_BASELINE` **617 → 603**（只降不升）：
+同 PR 下调棘轮；合并 `main`（#3447 观测面把基线 617→626）后按 post-merge 树重算：
+**626 → 610**（原 14 处 + `_prev_window_zero_output` 内已回顶层的 `select`/`PlanRun` 再消 2 处）：
 
 - `plan_run_finalization`（10 处）：`time`、`collections.defaultdict`、`sqlalchemy select/delete`、
   `PlanRunHost`、`JobInstance`（顶层已有、函数内重复）、`PlanRun`（3 个函数）、`PlanRunPendingAggregation`；
 - `job_terminalization`（4 处）：`sqlalchemy.dialects.postgresql.insert`、`PlanRunPendingAggregation`、
   `asyncio`、`saq.Job`；
+- 合并 #3447 后：`_prev_window_zero_output` 不再重复函数体内取 `select`/`PlanRun`（SessionLocal 仍函数内）；
 - `plan_run_finalization` 模块 docstring 的顶层 import 纪律段同步改写（机械载体回扫）。
 
 **边界（刻意不动，属 clean-env / 循环依赖掩体）**：
@@ -32,7 +34,7 @@ Class: bug-fix
 
 | 命令 | 结果 |
 |---|---|
-| `tools/dev/check_inner_imports.py` | **603 处 ≤ 基线 603**（120 文件）|
+| `tools/dev/check_inner_imports.py` | **610 处 ≤ 基线 610**（合并 #3447 后重算；121 文件）|
 | `tests/test_plan_run_abort_import_contract.py`（clean-env 契约） | **1 passed** |
 | `tests/test_plan_run_finalization_structure_3299.py` + `tests/test_inner_import_ratchet.py` | **13 passed**（worktree 需显式 `DATABASE_URL`）|
 | `backend/tests/services/` 四个核心文件（terminalization/finalization/decoupling/aggregation_shared） | **58 passed** |
@@ -45,6 +47,6 @@ Class: bug-fix
 
 ## Revisit
 
-- 基线 603 为新锚点；后续新增函数体内 import 需在 PR 写明理由并上调（棘轮允许但要留痕）；
+- 基线 610 为合并 #3447 后的新锚点；后续新增函数体内 import 需在 PR 写明理由并上调（棘轮允许但要留痕）；
 - 「纯构造子 vs 会话/编排依赖」的边界以本单为准：stdlib、`sqlalchemy` 构造子、models 纯定义可顶层；
   有副作用的服务/会话/队列保持函数内。
