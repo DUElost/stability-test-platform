@@ -66,15 +66,18 @@ jobs:
           )"
           if [ "$run_id" = "0" ]; then
             echo "No full CI run for main tip $main_sha; dispatching"
-            # R15-F06 (#1298): 记录 dispatch 前已存在的 run id —— 新 run 有创建
-            # 延迟，轮询时若只取第一条会把 dispatch 前的旧失败 run 认成本轮结果。
-            pre_existing_ids="$(
-              gh api "repos/$REPO/actions/workflows/ci.yml/runs?branch=main&per_page=50" \
-                --jq '[.workflow_runs[].id] | join(" ")'
+            # #3363: 同一 SHA 上可能已有失败 run。记下 dispatch 前最大 id，
+            # 轮询同时要求 SHA 匹配和 id 增长；列表瞬时不全也不会选到旧 run。
+            pre_existing_json="$(
+              gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$main_sha&per_page=100"
             )"
+            pre_existing_max_id="$(printf '%s' "$pre_existing_json" | jq -r '[.workflow_runs[].id] | max // 0')"
+            printf '%s' "$pre_existing_json" | jq -c \
+              '[.workflow_runs[].id] | sort | {count: length, first: .[:3], last: .[-3:]}' \
+              | sed 's/^/Pre-dispatch runs for main SHA: /'
             gh workflow run ci.yml --ref main -R "$REPO"
             # dispatch 创建有延迟，轮询等待运行出现（最多 10 分钟）。只接受
-            # 不在 pre_existing_ids 中的 run（即本次 dispatch 产生的）。
+            # 同一 main SHA 上 id 大于派发前最大值的 run。
             for _ in $(seq 1 60); do
               # #1548：gh api 的 --jq 只吃一个字符串、没有 --arg —— 写成
               # `--jq --arg pre ...` 会让 gh 报 "accepts 1 arg(s), received 4"，
@@ -82,9 +85,9 @@ jobs:
               # ci/backstop-failed 兜底单，红灯因此彻底静默）。
               # 带参数时一律管道给真正的 jq，与本文件其它处写法一致。
               run_id="$(
-                gh api "repos/$REPO/actions/workflows/ci.yml/runs?branch=main&event=workflow_dispatch&per_page=20" \
-                  | jq -r --arg pre "$pre_existing_ids" \
-                    '($pre | split(" ")) as $pre | [.workflow_runs[] | select(.id as $id | (($pre | index($id|tostring)) | not))][0].id // 0'
+                gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$main_sha&event=workflow_dispatch&per_page=100" \
+                  | jq -r --argjson floor "$pre_existing_max_id" --arg sha "$main_sha" \
+                    '[.workflow_runs[] | select(.head_sha == $sha and .id > $floor) | .id] | max // 0'
               )"
               [ "$run_id" != "0" ] && break
               sleep 10
@@ -92,6 +95,11 @@ jobs:
           fi
           if [ "$run_id" = "0" ]; then
             echo "Dispatched full CI run did not appear within 10 minutes" >&2
+            exit 1
+          fi
+          run_sha="$(gh api "repos/$REPO/actions/runs/$run_id" --jq .head_sha)"
+          if [ "$run_sha" != "$main_sha" ]; then
+            echo "Full CI run $run_id SHA mismatch: expected $main_sha, got $run_sha" >&2
             exit 1
           fi
           echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
@@ -320,6 +328,19 @@ jobs:
       actions: write
       issues: write
     steps:
+      - name: Verify failed CI run belongs to main tip
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          CI_RUN_ID: ${{ needs.verify-and-cleanup.outputs.ci_run_id }}
+          MAIN_SHA: ${{ needs.verify-and-cleanup.outputs.main_sha }}
+        run: |
+          set -euo pipefail
+          run_sha="$(gh api "repos/$REPO/actions/runs/$CI_RUN_ID" --jq .head_sha)"
+          if [ "$run_sha" != "$MAIN_SHA" ]; then
+            echo "Refusing failure attribution: CI run $CI_RUN_ID SHA $run_sha != main $MAIN_SHA" >&2
+            exit 1
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # 只需要与 workflow 同版本的 scripts/ci/backstop-attribution.sh。
@@ -349,6 +370,11 @@ jobs:
           ATTRIBUTION_OUTCOME: ${{ steps.attribution.outcome }}
         run: |
           set -euo pipefail
+          run_sha="$(gh api "repos/$REPO/actions/runs/$CI_RUN_ID" --jq .head_sha)"
+          if [ "$run_sha" != "$MAIN_SHA" ]; then
+            echo "Refusing failure attribution: CI run $CI_RUN_ID SHA $run_sha != main $MAIN_SHA" >&2
+            exit 1
+          fi
           gh label create "ci/backstop-failed" --repo "$REPO" --color d73a4a \
             --description "Main CI backstop failed (auto issue)" || true
           # #384: REST issues 端点混返 PR（带同 label 的 PR 会被误评论/误关），
