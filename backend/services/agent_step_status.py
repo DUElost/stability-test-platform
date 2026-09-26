@@ -21,8 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models.device_lease import DeviceLease
 from backend.models.job import JobInstance
-from backend.models.plan_run import PlanRun
-from backend.realtime.socketio_server import broadcast_plan_run_status, broadcast_run_job_update
+from backend.realtime.socketio_server import broadcast_run_job_update
 from backend.services.agent_completion import _get_valid_runtime_lease
 from backend.services.errors import Conflict, NotFound
 from backend.services.reconciler import reconcile_step_traces
@@ -79,12 +78,9 @@ async def _broadcast_transitioned_jobs(
     for tj_id in transitioned_jobs:
         job = await db.get(JobInstance, tj_id)
         if job is not None:
+            # 父 Run 的 `plan_run_status` 不在 step 路径发（dead/双发点）：
+            # 终态由聚合者判定，plan_run_finalization 提交后统一补发（#3384）。
             await broadcast_run_job_update(job.plan_run_id, tj_id, job.status)
-            pr = await db.get(PlanRun, job.plan_run_id)
-            if pr is not None and pr.status in {
-                "SUCCESS", "PARTIAL_SUCCESS", "FAILED",
-            }:
-                await broadcast_plan_run_status(pr.id, pr.status)
 
 
 async def upload_agent_step_traces(
