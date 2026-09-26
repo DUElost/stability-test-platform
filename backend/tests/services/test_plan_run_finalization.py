@@ -259,6 +259,85 @@ def test_finalize_parent_run_sync_notifies_before_commit_then_chains():
     assert order == ["notify", "commit", "chain", "dedup"]
 
 
+def test_finalize_parent_run_sync_emits_plan_run_status_after_commit():
+    """ADR-0052 D1 后父终态由聚合者判定：``plan_run_status`` 推送由编排者在提交**之后**补发。"""
+    from backend.services.plan_run_aggregation import apply_plan_run_aggregation
+    from backend.services.plan_run_finalization import finalize_parent_run_sync
+
+    run = _run(309)
+    order: list[object] = []
+    db = MagicMock()
+    db.commit.side_effect = lambda: order.append("commit")
+
+    with patch(
+        "backend.services.notification_service.dispatch_notification_async",
+    ), patch(
+        "backend.services.plan_chain_trigger.trigger_next_plan_sync",
+    ), patch(
+        "backend.services.dedup_scan.should_trigger_dedup", return_value=False,
+    ), patch(
+        "backend.services.plan_run_finalization.schedule_report_cache_refresh",
+    ), patch(
+        "backend.services.plan_run_finalization.emit_plan_run_status",
+        side_effect=lambda run_id, status: order.append(("emit", run_id, status)),
+    ):
+        assert apply_plan_run_aggregation(run, [_job(JobStatus.COMPLETED)]) is True
+        finalize_parent_run_sync(run, db, True)
+
+    assert order[:2] == ["commit", ("emit", 309, "SUCCESS")]
+
+
+async def test_finalize_parent_run_async_emits_plan_run_status_after_commit():
+    from unittest.mock import AsyncMock
+
+    from backend.services.plan_run_finalization import finalize_parent_run_async
+
+    run = _run(310)
+    run.status = PlanRunStatus.FAILED  # 枚举成员也须渲染为 value
+    order: list[object] = []
+    db = MagicMock()
+    db.commit = AsyncMock(side_effect=lambda: order.append("commit"))
+
+    with patch(
+        "backend.services.plan_run_finalization.announce_parent_terminal",
+    ), patch(
+        "backend.services.plan_chain_trigger.trigger_next_plan", new=AsyncMock(),
+    ), patch(
+        "backend.services.dedup_scan.should_trigger_dedup", return_value=False,
+    ), patch(
+        "backend.services.plan_run_finalization.emit_plan_run_status",
+        side_effect=lambda run_id, status: order.append(("emit", run_id, status)),
+    ):
+        await finalize_parent_run_async(run, db, True)
+
+    assert order[:2] == ["commit", ("emit", 310, "FAILED")]
+
+
+def test_finalize_parent_run_skips_emit_when_not_applied():
+    from backend.services.plan_run_finalization import finalize_parent_run_sync
+
+    with patch(
+        "backend.services.plan_run_finalization.emit_plan_run_status",
+    ) as emit:
+        finalize_parent_run_sync(_run(311), MagicMock(), False)
+    emit.assert_not_called()
+
+
+def test_emit_plan_run_status_payload_matches_broadcast():
+    """载荷与 ``broadcast_plan_run_status`` 同形：事件名 / namespace / room / type / payload。"""
+    from backend.services.plan_run_events import emit_plan_run_status
+
+    with patch("backend.realtime.socketio_server.schedule_emit") as emit:
+        emit_plan_run_status(312, "PARTIAL_SUCCESS")
+
+    event, data = emit.call_args.args
+    assert event == "plan_run_status"
+    assert emit.call_args.kwargs == {"namespace": "/dashboard", "room": "plan_run:312"}
+    assert data["type"] == "PLAN_RUN_STATUS"
+    assert data["payload"] == {"status": "PARTIAL_SUCCESS"}
+    assert "timestamp" in data
+
+
 # ── RISK_HIGH（自 plan_run_aggregation 迁入）────────────────────────────────
 
 
