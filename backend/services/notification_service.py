@@ -461,6 +461,7 @@ def dispatch_notification(event_type: str, context: Dict[str, Any]) -> None:
     message = _format_message(event_type, context)
     severity = NotificationSeverity.WARNING if event_type in (
         EventType.RUN_FAILED.value, EventType.DEVICE_OFFLINE.value, EventType.RISK_HIGH.value,
+        EventType.CHAIN_INCOMPLETE.value,  # #3066 A半：链级可见性事件按 warning 面
     ) else NotificationSeverity.INFO
 
     try:

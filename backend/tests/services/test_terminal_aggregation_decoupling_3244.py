@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import ast
 import pathlib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 from sqlalchemy import select
@@ -225,8 +225,11 @@ def test_drain_cap_logs_and_leaves_tail_for_recovery(db_session, sample_device, 
 
 
 def test_reconcile_recovery_replays_effects_once(db_session, sample_device):
-    """D4 恢复矩阵：副作用块崩溃窗口 → 补偿扫描重放；done 后不重复。"""
-    from backend.scheduler.counter_reconciler import _replay_stale_aggregation_triggers
+    """D4 恢复矩阵：副作用块崩溃窗口 → 补偿扫描重放；done 后不重复（#3376 门槛外）。"""
+    from backend.scheduler.counter_reconciler import (
+        TERMINAL_EFFECTS_REPLAY_MIN_AGE_S,
+        _replay_stale_aggregation_triggers,
+    )
     from backend.models.plan_run import PlanRun as PR
 
     run, job = _seed_run_with_terminal_job(db_session, sample_device)
@@ -236,6 +239,10 @@ def test_reconcile_recovery_replays_effects_once(db_session, sample_device):
     stored.terminal_job_count = 1
     stored.completed_job_count = 1
     stored.terminal_effects_state = "pending"
+    # #3376：重放查询带时间门槛——把崩溃窗口的 run 摆到门槛之外。
+    stored.ended_at = datetime.now(timezone.utc) - timedelta(
+        seconds=TERMINAL_EFFECTS_REPLAY_MIN_AGE_S + 30
+    )
     db_session.commit()
 
     with patch(
@@ -255,6 +262,60 @@ def test_reconcile_recovery_replays_effects_once(db_session, sample_device):
         out2 = _replay_stale_aggregation_triggers(batch_size=50)
         assert out2["replayed_effects"] == 0
         assert notify.call_count == 1
+
+
+def test_terminal_effects_replay_respects_min_age_gate(db_session, sample_device):
+    """#3376：门槛内的 pending 不重放（不抢跑正常编排）；越过门槛后重放一次并置 done。"""
+    from backend.scheduler.counter_reconciler import (
+        TERMINAL_EFFECTS_REPLAY_MIN_AGE_S,
+        _replay_stale_aggregation_triggers,
+    )
+    from backend.models.plan_run import PlanRun as PR
+
+    run, job = _seed_run_with_terminal_job(db_session, sample_device)
+    stored = db_session.get(PR, run.id)
+    stored.status = PlanRunStatus.SUCCESS.value
+    stored.terminal_job_count = 1
+    stored.completed_job_count = 1
+    stored.terminal_effects_state = "pending"
+    # 门槛内：正常副作用块可能仍在执行——恢复扫描不得抢跑。
+    stored.ended_at = datetime.now(timezone.utc) - timedelta(
+        seconds=TERMINAL_EFFECTS_REPLAY_MIN_AGE_S - 30
+    )
+    db_session.commit()
+
+    with patch(
+        "backend.services.notification_service.dispatch_notification_async",
+    ) as notify, patch(
+        "backend.services.plan_chain_trigger.trigger_next_plan_sync",
+    ), patch(
+        "backend.services.dedup_scan.should_trigger_dedup", return_value=False,
+    ):
+        out = _replay_stale_aggregation_triggers(batch_size=50)
+    assert out["replayed_effects"] == 0
+    assert notify.call_count == 0
+    db_session.expire_all()
+    assert db_session.get(PR, run.id).terminal_effects_state == "pending"
+
+    # 越过门槛：按崩溃窗口补偿，重放一次后置 done。
+    stored = db_session.get(PR, run.id)
+    stored.ended_at = datetime.now(timezone.utc) - timedelta(
+        seconds=TERMINAL_EFFECTS_REPLAY_MIN_AGE_S + 30
+    )
+    db_session.commit()
+
+    with patch(
+        "backend.services.notification_service.dispatch_notification_async",
+    ) as notify2, patch(
+        "backend.services.plan_chain_trigger.trigger_next_plan_sync",
+    ), patch(
+        "backend.services.dedup_scan.should_trigger_dedup", return_value=False,
+    ):
+        out2 = _replay_stale_aggregation_triggers(batch_size=50)
+    assert out2["replayed_effects"] == 1
+    assert notify2.call_count == 1
+    db_session.expire_all()
+    assert db_session.get(PR, run.id).terminal_effects_state == "done"
 
 
 def test_pending_backlog_drained_by_recovery_sweep(db_session, sample_device):
