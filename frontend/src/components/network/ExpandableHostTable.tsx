@@ -60,6 +60,10 @@ export interface HostTableData {
   retired_at?: string | null;
   retired_by?: string | null;
   retire_reason?: string | null;
+  /** ADR-0038 v0.3 D9：设备面意图（空置 / 人工清空）——非空即豁免中 */
+  emptied_at?: string | null;
+  emptied_by?: string | null;
+  emptied_reason?: string | null;
   /** 与 status 正交：曾安装成功 / 有过心跳 */
   agent_installed?: boolean;
   agent_protocol_version?: string | null;

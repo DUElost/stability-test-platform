@@ -373,6 +373,32 @@ describe('ADR-0038 退役显示与入口（#1807）', () => {
   });
 });
 
+describe('ADR-0038 v0.3 D9 设备面意图徽标（#3159）', () => {
+  const emptied: HostTableData = {
+    ...host,
+    status: 'OFFLINE',
+    emptied_at: '2026-09-26T00:00:00Z',
+    emptied_by: 'admin',
+    emptied_reason: '机柜撤线，设备已移机',
+  };
+
+  it('置位主机显示「设备面已处置」徽标，悬浮带 who/reason 与豁免说明', () => {
+    render(<ExpandableHostTable hosts={[emptied]} />);
+
+    const badge = screen.getByTestId(`host-emptied-badge-${emptied.id}`);
+    expect(badge).toHaveTextContent('设备面已处置');
+    expect(badge).toHaveAttribute('title', expect.stringContaining('（admin）'));
+    expect(badge).toHaveAttribute('title', expect.stringContaining('设备已移机'));
+    expect(badge).toHaveAttribute('title', expect.stringContaining('ADR-0038 D9'));
+  });
+
+  it('未置位主机不显示徽标', () => {
+    render(<ExpandableHostTable hosts={[host]} />);
+
+    expect(screen.queryByTestId(`host-emptied-badge-${host.id}`)).not.toBeInTheDocument();
+  });
+});
+
 describe('脚本在位（#2958 第五道闸）', () => {
   const summary = {
     counts: { present: 40, missing: 1, mismatch: 2, unknown: 3, n_a: 4, maintenance: 1 },
