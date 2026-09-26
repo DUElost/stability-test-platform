@@ -67,6 +67,16 @@ PlanRun 但**不发** `plan_run_status` 广播（`device_lease_reconciler.py` `c
 页面靠前端既有 10s/30s 轮询兜底收敛（`planRunDetailUtils.ts`），属有意取舍而非遗漏；
 如需推送级实时性，应作为行为变更单独评审，勿顺手补发。
 
+**PlanRun 终态的推送发送点（#3384，ADR-0052 D1 后口径）**：父 Run 进入终态时，
+`plan_run_status` 由编排者统一补发——`plan_run_finalization._emit_parent_terminal_status`
+在**父终态 commit 之后**调用 `plan_run_events.emit_plan_run_status`（线程安全，
+载荷与 `broadcast_plan_run_status` 同形），覆盖聚合排空与 reconciler 重放两条入口。
+`/complete`（`agent_completion`）、step 状态（`agent_step_status`）、recycler PENDING
+超时三处曾在调用返回后立即读父行再广播：ADR-0052 D1 后父终态由聚合者异步判定，
+生产语义下恒不命中（dead code），TESTING 内联排空下则会与中央补发**双发**，
+已随 #3384 删除。abort 自身路径的 `plan_run_status`（`plan_run_abort` 末尾）
+与上文 reconciler 豁免段均不变。
+
 **租约解锁的收口速率（#2531）**：`device_lease_reconciler` 的 Phase 2
 （UNKNOWN 过宽限 → 释放租约 + 判 FAILED）与 `stale_unknown` 分支**一轮最多排空
 `RECONCILER_DRAIN_BATCH` 台（默认 20）**，且保持「一候选一个事务边界」——
