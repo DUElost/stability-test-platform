@@ -209,10 +209,8 @@ class TestPlanRunAbort:
         with patch(
             # #1520：broadcast 现在由 `agent_completion` 在服务内查取（路由切片后
             # 该名字已不在 agent_api 上）——patch 必须打在**调用时解析**的模块上。
+            # #3384：父 Run 的 plan_run_status 已由编排者统一补发，此路径不再发送。
             "backend.services.agent_completion.broadcast_run_job_update",
-            new=AsyncMock(),
-        ), patch(
-            "backend.services.agent_completion.broadcast_plan_run_status",
             new=AsyncMock(),
         ), patch(
             "backend.core.task_queue.get_queue",

@@ -35,8 +35,7 @@ from backend.core.metrics import (
 from backend.models.device_lease import DeviceLease
 from backend.models.enums import JobStatus, LeaseStatus, LeaseType
 from backend.models.job import JobInstance, StepTrace
-from backend.models.plan_run import PlanRun
-from backend.realtime.socketio_server import broadcast_plan_run_status, broadcast_run_job_update
+from backend.realtime.socketio_server import broadcast_run_job_update
 from backend.services.aggregator import PlanAggregator
 from backend.services.agent_recovery import resume_expired_lease_for_recovery
 from backend.services.errors import BadRequest, Conflict, NotFound
@@ -462,12 +461,10 @@ async def complete_agent_job(
 
     if job.status in _TERMINAL:
         # ── SocketIO push: job completed/failed → notify PlanRun subscribers ──
+        # 父 Run 的 `plan_run_status` 不在此处发：ADR-0052 D1 后终态由聚合者异步判定，
+        # 提交后立即读父行恒非终态（dead code）；统一由 plan_run_finalization
+        # 在父终态 commit 后补发（#3384）。
         await broadcast_run_job_update(job.plan_run_id, job_id, job.status)
-        run = await db.get(PlanRun, job.plan_run_id)
-        if run is not None and run.status in {
-            "SUCCESS", "PARTIAL_SUCCESS", "FAILED",
-        }:
-            await broadcast_plan_run_status(run.id, run.status)
 
         try:
             from backend.core.task_queue import get_queue

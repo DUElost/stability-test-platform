@@ -38,7 +38,6 @@ from backend.core.metrics import (
 )
 from backend.models.enums import JobStatus, LeaseType
 from backend.models.job import JobInstance, StepTrace
-from backend.models.plan_run import PlanRun
 from backend.services.lease_manager import release_lease_sync
 
 from backend.core.settings.scheduler import get_scheduler_settings
@@ -451,14 +450,6 @@ def _mark_pending_timeout(
         username="system",
     )
 
-    # Check if PlanRun became terminal after aggregation (B3)
-    plan_run_terminal = False
-    pr = db.get(PlanRun, job.plan_run_id)
-    if pr is not None and pr.status in {
-        "SUCCESS", "PARTIAL_SUCCESS", "FAILED",
-    }:
-        plan_run_terminal = True
-
     task_run_state_changes.labels(from_state=old_status, to_state="FAILED").inc()
     task_run_total.labels(status="failed", task_type="plan").inc()
     device_lease_released.labels(reason="timeout").inc()
@@ -484,15 +475,6 @@ def _mark_pending_timeout(
             "reason": reason,
         },
     }, namespace="/dashboard", room=room)
-
-    if plan_run_terminal:
-        schedule_emit("plan_run_status", {
-            "type": "PLAN_RUN_STATUS",
-            "payload": {
-                "plan_run_id": job.plan_run_id,
-                "status": pr.status,
-            },
-        }, namespace="/dashboard", room=room)
     return True
 
 
