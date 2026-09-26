@@ -28,8 +28,10 @@ agent_install_excludes:
   # 提权 wrapper 由 install/update playbook 装到 /usr/local/sbin（#1250），
   # 不随代码同步进 Agent 可写的安装目录
   - "stp_agent_priv.py"
-  # #2030：三处排除集（本表 / wrapper FIXED_EXCLUDES / 控制面 _TAR_EXCLUDES）
-  # 逐项同源，由 tests/test_ansible_digest_contract.py 锁定——追加项必须三处同改。
+  # #2030：排除集**单一源 = 契约包**（backend/agent/contracts/artifact_digest.py::
+  # PAYLOAD_EXCLUDES，tar/digest 直接引用）；本表与 wrapper FIXED_EXCLUDES 因
+  # 「YAML 数据 / 单文件脚本」无法 import Python，仍是拷贝——三处一致由
+  # tests/test_ansible_digest_contract.py 锁定，追加项必须三处同改。
   - "*.pyc"
   - "stp_schemas/"
   - ".deps_installed_sha"

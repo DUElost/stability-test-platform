@@ -6,9 +6,11 @@
    `backend/agent/contracts/artifact_digest.py`）的输出与控制面 services digest
    字节级等价（两 kind）——算法已同源（ADR-0054 第 3 步），本判据守的是
    **两侧输入集枚举**仍一致；
-2. **排除集契约**：`agent_deploy/defaults/main.yml` 的 rsync 策略与 digest
-   输入集对齐（test_*.py 宽模式、venv//logs/、mtbf/ 与双身份文件
-   exclude+protect）；
+2. **排除集契约**：排除集的**单一源 = 契约包**（`backend/agent/contracts/artifact_digest.py::PAYLOAD_EXCLUDES`）——
+   tar/digest 直接引用它，wrapper `FIXED_EXCLUDES` 与
+   `agent_deploy/defaults/main.yml` 的 rsync 策略因「单文件脚本 / YAML 数据」
+   无法 import Python、仍是拷贝；本文件对三处逐项锁定（test_*.py 宽模式、
+   venv//logs/、scripts/、mtbf/ 与双身份文件 exclude+protect）；
 3. **playbook 簿记**：`update_agent.yml` 含 compute + 双写入任务，且位于
    health 验证之后（失败/回滚路径天然不写）。
 """
@@ -40,16 +42,19 @@ def _write(path: Path, content: bytes | str, exec_bit: bool = False) -> None:
 
 
 def _build_tree(base: Path) -> Path:
-    """合成 agent 树：代码文件 + resources（含 mtbf）+ 宿主侧目录/元数据。"""
+    """合成 agent 树：代码文件 + scripts（族源码树）+ resources（含 mtbf）+ 宿主侧目录/元数据。"""
     _write(base / "main.py", "print('main')\n")
     _write(base / "tools" / "flash.sh", "#!/bin/sh\n", exec_bit=True)
     _write(base / "tests" / "test_x.py", "junk\n")
     _write(base / "test_top.py", "junk\n")
     _write(base / "venv" / "lib.py", "junk\n")
     _write(base / "logs" / "a.log", "junk\n")
-    # #2030：部署通道不传输的文件（wrapper / Ansible / 热更新 rsync 三处同源）
+    # #2030：部署通道不传输的文件（契约包 / wrapper / Ansible / 热更新 rsync 同源）
     _write(base / "stp_agent_priv.py", "junk\n")
     _write(base / "stp_schemas" / "stale.json", '{"old": 1}')
+    # ADR-0051 Phase 3：脚本族树不随 agent-code 下发——digest 与 tar/rsync 必须同口径
+    # （2026-09-26 实证过分叉：契约侧曾漏 scripts，真实树上两侧身份不一致）
+    _write(base / "scripts" / "scan_aee" / "v1.0.0" / "scan_aee.py", "print('s')\n")
     _write(base / "VERSION", "deadbeef\n")
     _write(base / "ARTIFACT_DIGEST", "sha256:" + "0" * 64 + "\n")
     _write(base / "resources" / "aimonkey" / "monkey.bin", b"BIN", exec_bit=True)
@@ -125,31 +130,40 @@ class TestRsyncPolicyContract:
         assert "ARTIFACT_DIGEST_RESOURCES" in host_local
 
     def test_excludes_same_source_across_three_channels(self):
-        """#2030：Ansible / wrapper / 控制面 digest 三处排除集逐项同源。
+        """#2030：契约包（单一源） / wrapper / Ansible 三处排除集逐项同源。
 
-        任一处新增/遗漏排除项（如只改 Ansible 不改 digest）→ 本用例红，
-        防「指标改了标签、告警没跟」同类的跨通道静默分叉。
+        任一处新增/遗漏排除项（如只改 Ansible 不改契约）→ 本用例红，防跨通道静默分叉
+        （2026-09-26 实证过：契约侧漏 `scripts`，Ansible/bundle 算出的部署身份与
+        控制面 desired 不同）。
         """
         import backend.agent.stp_agent_priv as priv
+        import backend.agent.contracts.artifact_digest as contract
         import backend.services.host_updater as hu
 
         policy = yaml.safe_load(_DEFAULTS.read_text(encoding="utf-8"))
         ansible_excludes = policy["agent_install_excludes"]
         ansible = _normalize_excludes(ansible_excludes)
         wrapper = _normalize_excludes(priv.FIXED_EXCLUDES)
-        # digest 侧的 glob 规则（test_*.py）以显式常量参与比较（#2030）
-        digest = _normalize_excludes(sorted(hu._TAR_EXCLUDES)) | set(hu._TAR_EXCLUDE_GLOBS)
-
-        assert ansible == wrapper == digest, (
-            "三处排除集不同源（#2030）：\n"
-            f"Ansible-only: {sorted(ansible - wrapper - digest)}\n"
-            f"wrapper-only: {sorted(wrapper - ansible - digest)}\n"
-            f"digest-only: {sorted(digest - ansible - wrapper)}"
+        # 契约侧：名字集合 + glob 规则（test_*.py）显式参与比较（#2030）
+        contract_side = (
+            _normalize_excludes(sorted(contract.PAYLOAD_EXCLUDES))
+            | set(contract.PAYLOAD_EXCLUDE_GLOBS)
         )
-        # .pyc 后缀规则三处等价（rsync 用模式、digest 用后缀表）
+
+        assert ansible == wrapper == contract_side, (
+            "三处排除集不同源（#2030）：\n"
+            f"Ansible-only: {sorted(ansible - wrapper - contract_side)}\n"
+            f"wrapper-only: {sorted(wrapper - ansible - contract_side)}\n"
+            f"contract-only: {sorted(contract_side - ansible - wrapper)}"
+        )
+        # 控制面 tar 不得再自存一份字面量——直接引用契约（单一源，ADR-0054）
+        assert not hasattr(hu, "_TAR_EXCLUDES"), "host_updater 又长出了私有 _TAR_EXCLUDES"
+        assert not hasattr(hu, "_TAR_EXCLUDE_SUFFIXES")
+        assert not hasattr(hu, "_TAR_EXCLUDE_GLOBS")
+        # .pyc 后缀规则三处等价（rsync 用模式、契约用后缀表）
         assert "*.pyc" in ansible_excludes
         assert "*.pyc" in priv.FIXED_EXCLUDES
-        assert ".pyc" in hu._TAR_EXCLUDE_SUFFIXES
+        assert ".pyc" in contract.PAYLOAD_EXCLUDE_SUFFIXES
 
     def test_host_local_dirs_excluded_from_code_identity(self, tmp_path, monkeypatch):
         """#2030：部署通道不传输的文件不得进 code 身份（效果级，不只看字符串）。"""
@@ -165,6 +179,7 @@ class TestRsyncPolicyContract:
         for excluded in (
             "stp_agent_priv.py", "venv/lib.py", "logs/a.log",
             "stp_schemas/stale.json", "test_top.py", "tests/test_x.py",
+            "scripts/scan_aee/v1.0.0/scan_aee.py",
         ):
             assert excluded not in arcnames, f"{excluded} 泄漏进 code 身份（#2030）"
         # stp_schemas/ 目录排除不影响 schema 的独立附加通道

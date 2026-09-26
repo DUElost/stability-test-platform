@@ -96,12 +96,14 @@ def agent_tree(tmp_path):
     _write(root / "DEPLOY.md", b"junk")
     _write(root / "stability-test-agent.service", b"junk")
     _write(root / "hosts.txt", b"junk")
-    # #2030：部署通道不传输的文件（wrapper / Ansible / 热更新 rsync 三处同源）
+    # #2030：部署通道不传输的文件（契约包 / wrapper / Ansible / 热更新 rsync 同源）
     _write(root / "stp_agent_priv.py", b"junk")
     _write(root / "venv" / "lib.py", b"junk")
     _write(root / "logs" / "a.log", b"junk")
     _write(root / "stp_schemas" / "stale.json", b"junk")
     _write(root / ".deps_installed_sha", b"junk")
+    # ADR-0051 Phase 3：脚本族树不随 agent-code 下发（digest 与 tar/rsync 同口径）
+    _write(root / "scripts" / "scan_aee" / "v1.0.0" / "scan_aee.py", b"junk")
     # 元数据 / 主机本地
     _write(root / "VERSION", b"deadbeef\n")
     _write(root / "ARTIFACT_DIGEST", b"sha256:" + b"0" * 64 + b"\n")
@@ -316,10 +318,11 @@ def test_iter_payload_files_skip_rules(agent_tree, schema_file, monkeypatch):
     assert not any(a.startswith("resources/mtbf") for a in arcnames)
     assert "stp_schemas/pipeline_schema.json" in arcnames
     assert "VERSION" not in arcnames and "ARTIFACT_DIGEST" not in arcnames
-    # #2030：部署通道不传输的文件不得进载荷/身份（三处排除集同源）
+    # #2030 / ADR-0051 Phase 3：部署通道不传输的文件不得进载荷/身份（契约包为单一源）
     for excluded in (
         "stp_agent_priv.py", "venv/lib.py", "logs/a.log",
         "stp_schemas/stale.json", ".deps_installed_sha",
+        "scripts/scan_aee/v1.0.0/scan_aee.py",
     ):
         assert excluded not in arcnames, f"{excluded} 不应进载荷（#2030）"
     # stp_schemas/ 目录排除不影响 extra_files 的 schema 附加（独立通道）

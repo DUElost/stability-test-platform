@@ -25,13 +25,21 @@ import os
 
 DIGEST_PREFIX = "sha256:"
 
-# 与控制面 _TAR_EXCLUDES / _PAYLOAD_METADATA_EXCLUDES 语义镜像（parity test
-# 以同一 fixture 树锁定两侧一致）。#2030：与两条部署通道（wrapper
-# FIXED_EXCLUDES / Ansible agent_install_excludes）同源——venv/logs 为宿主侧
-# 目录（ADR-0040 D1 明文排除）；stp_agent_priv.py 装到 /usr/local/sbin、
-# stp_schemas/ 经 extra_files 独立附加，均不进安装目录的内容身份。
+# 载荷排除集（#2030 的「同源」自 ADR-0054 起以**本模块为单一源**）：
+# - 控制面 `host_updater` 直接 import 本模块的三个常量（tar 与 digest 同口径）；
+# - wrapper `FIXED_EXCLUDES` 与 Ansible `agent_install_excludes` 因「单文件脚本 /
+#   YAML 数据」无法 import Python，仍是两份拷贝——由
+#   `tests/test_ansible_digest_contract.py` 对四处逐项锁定。
+# 语义：#2030 部署通道不传输集 + ADR-0040 D1 的宿主侧目录（venv/logs）+
+# ADR-0051 Phase 3 的 scripts（脚本走包分发，不再随源码树同步）；stp_agent_priv.py
+# 装到 /usr/local/sbin、stp_schemas/ 经 extra_files 独立附加，均不进安装目录的内容身份。
 PAYLOAD_EXCLUDES = {
     "__pycache__",
+    # ADR-0051 Phase 3：脚本走包分发（tools_cache），不再随源码树同步；主机上残留的
+    # 旧版本目录随 rsync --delete-excluded 清掉。**digest 必须与 tar/rsync 同口径**：
+    # 漏掉这一项会让契约侧身份多算 scripts/**（2026-09-26 实证：真实树上两侧 digest
+    # 分叉、契约侧多 84 条），Ansible/bundle 写出的身份与控制面 desired 永远不一致。
+    "scripts",
     "tests",
     ".env.example",
     "install_agent.sh",
@@ -46,8 +54,8 @@ PAYLOAD_EXCLUDES = {
     ".deps_installed_sha",
 }
 PAYLOAD_EXCLUDE_SUFFIXES = (".pyc",)
-# Glob 类排除（#2030）：与控制面 `_TAR_EXCLUDE_GLOBS` 逐项镜像，
-# 三处排除集同源由 tests/test_ansible_digest_contract.py 锁定。
+# Glob 类排除（#2030）：控制面 tar 引用本常量；wrapper / Ansible 侧以同名模式
+# （`test_*.py`）参与四处比对，由 tests/test_ansible_digest_contract.py 锁定。
 PAYLOAD_EXCLUDE_GLOBS = ("test_*.py",)
 PAYLOAD_METADATA_EXCLUDES = {
     "VERSION", "ARTIFACT_DIGEST", "ARTIFACT_DIGEST_RESOURCES", ".env",
