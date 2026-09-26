@@ -2,8 +2,10 @@
 
 三面：
 1. **parity**：`tools/ansible/compute_deploy_digest.py`（playbook 控制机
-   侧计算，stdlib-only 加载 Agent 镜像算法）的输出与控制面 services digest
-   字节级等价（两 kind）；
+   侧计算，stdlib-only 按路径加载契约实现
+   `backend/agent/contracts/artifact_digest.py`）的输出与控制面 services digest
+   字节级等价（两 kind）——算法已同源（ADR-0054 第 3 步），本判据守的是
+   **两侧输入集枚举**仍一致；
 2. **排除集契约**：`agent_deploy/defaults/main.yml` 的 rsync 策略与 digest
    输入集对齐（test_*.py 宽模式、venv//logs/、mtbf/ 与双身份文件
    exclude+protect）；

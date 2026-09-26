@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import HTTPException
+from backend.services.errors import NotFound
 from sqlalchemy.orm import Session
 
 from backend.models.enums import DeviceStatus, HostStatus, JobStatus
@@ -26,7 +26,7 @@ _ADB_LINK_ERROR_STATES = frozenset({"offline", "unknown", "unauthorized"})
 def load_job_in_run(db: Session, run_id: int, job_id: int) -> JobInstance:
     job = db.get(JobInstance, job_id)
     if job is None or job.plan_run_id != run_id:
-        raise HTTPException(status_code=404, detail="job not found in this plan run")
+        raise NotFound("job not found in this plan run")
     return job
 
 

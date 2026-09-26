@@ -1,6 +1,6 @@
 # ADR-0051：发布单元与内容寻址——不可变性从源码目录移到包
 
-- 状态：**Accepted** v1.6（2026-09-25 D6 env 自持实切；决策内容不变。历史修订见下表）
+- 状态：**Accepted** v1.7（2026-09-26 D7 补脚本→工具绑定条款；其余决策不变。历史修订见下表）
 - 优先级：P1（脚本目录 12 天翻倍、控制面部署源与开发工作区同一棵检出已造成事故；多站点交付 ADR-0041 依赖可 digest 校验的发布物）
 - 目标里程碑：M7
 - 日期：2026-09-22
@@ -25,6 +25,7 @@
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
+| v1.7 | 2026-09-26 | **D7 补「脚本→工具绑定」条款（owner 裁决：脚本包声明依赖）**：D7 原文只定了方向（flashtool/aimonkey 改 `tool_manifest.json` 条目），未定消费脚本如何绑定到工具版本。裁定：消费族**新版本**在包内 `capabilities.json` 声明 `requires_tools: {<族>: {version, env}}`；引擎执行前经 `tools_cache` 整包核验拉取 `kind=tool` 包，把包根注入**本步**子进程 env 的 `env` 键（沿用消费方既有键名，如 `STP_FLASH_TOOL_DIR`）——fail-closed（缺包/坏 sha/退役/坏声明 = 步骤 exit 2，**不回退**主机同名键）；`verify_scripts` 同时核验预热依赖（刷机工具在派发前入缓存）。工具版本随脚本版本内容寻址（换工具 = 发脚本新版本 + 重指计划）；**不新增主机 env 键**（合 ADR-0033 §5.4 例外③）。否决「主机级包引用键（展锐先例）」：新增工具私有 env 键、全 fleet 单版本且工具版本不进脚本身份、env 变更还受 #3356（渲染 env 不在收敛判据）所限。判据单源 `backend/agent/tool_requirements.py`（Agent 运行时与 `check_script_packages` 门禁共用）。 |
 | v1.6 | 2026-09-25 | **D6 最后一米闭合（env 自持）**：生产站点 env 真身落 `/home/debian13/stp-releases/env.backend`（600，自仓根复制一次），全部 11 个 rev 根的 `.env.backend` 由仓根 symlink 改指树内 `../env.backend`——运行时（unit EnvironmentFile、`main.py` 的 `__file__` 派生 dotenv、alembic/各 checker）零代码改动穿透生效；删除开发检出不再影响生产，D6-D1「物理分离」判据完整。**代价显式化**：仓根 `.env.backend` 降级为纯 dev 配置，与站点真身自此两个文件（漂移面），生产改 env 与诊断取数一律经站点文件（SOP §1 已改写）；台账 `control-plane-env-lives-in-checkout` 转 done。切换实测：restart 后三道 ExecStartPre 全过、auth OK、48/48 心跳新鲜、`fleet_packages={package:48, unknown:0}`。未完成（v1.5 行口径中除 D6 外不变）：新站 `default_params` 覆盖差；D7 flashtool/aimonkey、控制面 dedup 工具包化及路径键/回退退出；D8 治理减法。 |
 | v1.5 | 2026-09-25 | **落地状态纠偏与生产验收**：#3258 已于 1fafd05 部署（首扫回填与 strict 默认）；#3262 合入并在 7fee7cf 部署，manifest 109 个存量版本显式 `retired:true`，新站活跃脚本集收敛为 102；#3222 初版在 7fee7cf 的真实 ACK 上误把 48 台全判 unknown，#3265 修复后以 37a56b41 窄幅切换（相对 7fee7cf 仅服务逻辑与测试），生产 48 台逐台刷新得 `package=48`、在位 1249、缺口 0。未完成：新站 `default_params` 覆盖差；D6 env 仍挂靠开发检出；D7 flashtool/aimonkey、控制面 dedup 工具包化及路径键/回退退出；D8 治理减法。运行中计划未因本次部署中止。 |
 | v1.4 | 2026-09-24 | **落地审查修复**（并行会话审计两条高风险，隔离空库实测复现后修）：① Phase 3 的 sync 重写丢了**首扫回填通道**——seed 行（有 entry sha、无 support/caps/包 sha）在空库首扫被 53 行全报 conflict 且短路使 `package_sha256` 永不回填（strict 全拒、新站点不可自举）→ 恢复并强化为**单轮回填全部缺失维度+包身份**（原 scan_script_root 逐维分轮需 3 轮 scan），行有值与包不等的真漂移仍 conflict；新增守卫测试钉「首扫收敛+幂等+真漂移不被吞」。② `STP_SCRIPT_PACKAGES` 缺省 **off→strict**、tree 回退代码删除（回退目标已随 Phase 3 消失，新装/漏配主机静默走死路径）——off/on 仅余告警别名，台账 `script-packages-off-on-modes` 转 done。③ 验证矩阵：隔离库（alembic head→首扫 created=164/skipped=47/conflicts=0/活跃无包sha=0→二扫幂等）。遗留（本 ADR 追认）：seed 行 `default_params` 仅覆盖部分版本（新站参数面 ≰ 生产参数面）与 manifest retired 策略（新站 184 活跃 vs 生产 99）为 Phase 4b/5 数据迁移项，登记于过渡台账续单。 |
@@ -54,7 +55,7 @@
 
 - **release bundle 链路**：`tools/release/build_bundle.py` 产出 `release-manifest.json`（`product.version` / `source.revision` + `agent-code` / `host-resources` 两个 ADR-0040 digest）；`tools/site_config/install.py` 版本不符 fail-closed、bundle 内容按 digest 校验；`backend/core/release_manifest.py` 运行时真值优先读清单。**真实缺口只有三块**：控制面自身载荷无摘要面（`_digests()` 只算 `backend/agent`，#2269 自陈构建机 `backend/.env` 曾漏进 bundle 且「不在任何摘要面内」）；tool 包不是清单条目；本机生产控制面仍是 checkout 形态。
 - **包拉取与校验**：`backend/agent/tool_cache.py` 按整包 `package_sha256` 校验后才写 `.stp-verified`（`tar.extractall` 前已全量校验成员）；`tools/dev/check_tool_manifest.py` 做 schema lint + append-only。
-- **digest 算法**：`backend/agent/artifact_digest.py` 规范化序列 `(relpath, 可执行位, sha256)` → `sha256:<hex>`，双侧镜像实现 + 字节级等价性测试（ADR-0040 D1）。
+- **digest 算法**：`backend/agent/contracts/artifact_digest.py` 规范化序列 `(relpath, 可执行位, sha256)` → `sha256:<hex>`（ADR-0054 第 3 步后为**唯一实现**，控制面 services 引用同一算法；搬迁前为 `backend/agent/artifact_digest.py` 双侧镜像 + 字节级等价性测试，ADR-0040 D1）。
 - **硬阻断先例**：同一 unit 内 `check_alembic_at_head.py` 是**无减号** `ExecStartPre`（#2058）。结构性强门禁在本仓已有先例，缺的是推广。
 
 ### 1.3 生产事实基线（2026-09-22 只读实测）
@@ -159,6 +160,7 @@ ADR-0039 转 Superseded 的时机 = 本 ADR Accepted 当日（§9）。
 
 - ADR-0033 D0 / D1 / D2 / D4 **不变**；Phase B 后续切片（展锐其余两族、控制面侧 `STP_BACKEND_DEDUP_SCAN_*` 切包、env 回退窗口移除）**并入本 ADR Phase 4**，不再单独推进。
 - `resources/`（flashtool / aimonkey）从 `host-resources` artifact 改为 `tool_manifest.json` 条目；`flash_firmware` 对 SP Flash Tool 的引用从硬编码二进制名改为包内相对入口。
+- **脚本→工具绑定（v1.7）**：消费族新版本在包内 `capabilities.json` 声明 `requires_tools: {<工具族>: {"version": …, "env": "<*_DIR 键>"}}`；引擎执行前经 `tools_cache` 核验拉取该 `kind=tool` 包并把**包根**注入本步 env（fail-closed，不回退主机同名键），`verify_scripts` 同步核验预热。工具版本属于脚本版本的身份——换工具版本必须发脚本新版本；不新增主机 env 键。门禁 `check_script_packages`：声明形态合法且引用指向已登记、`kind=tool`、未退役的条目（判据单源 `backend/agent/tool_requirements.py`）。
 - **删除 `STP_UNISOC_*` / `STP_AGENT_UNISOC_*` 路径键**与 ADR-0033 §5.4 例外③「不得再新增工具私有 env 键」同向，但**撞 ADR-0042 D3「env 名不变」与 #737 清单门禁**（`.env*.example` + `tests/test_agent_env_selfsufficiency.py`）。前置：先修订 ADR-0042 D3 为「不改既有 env 名；**已登记 legacy 例外的键在其终态出口落地后可删**」，并同步全部 `.env*.example` 与自足性测试。
 - release manifest 扩展为四类条目：控制面载荷、`agent-code`、tool 包、（过渡期）`host-resources`。控制面摘要面**需要自己的输入集契约与对照测试**（现 `_digests()` 输入集由 `tests/test_ansible_digest_contract.py` 与三处排除集同源锁定，控制面侧无对应物，否则复现 #2269「不在任何摘要面内」）。
 

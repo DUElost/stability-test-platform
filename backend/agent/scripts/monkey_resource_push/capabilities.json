@@ -1,1 +1,11 @@
-{"capabilities": ["progress_stamps"]}
+{
+  "capabilities": [
+    "progress_stamps"
+  ],
+  "requires_tools": {
+    "aimonkey": {
+      "version": "20260317",
+      "env": "AIMONKEY_RESOURCE_DIR"
+    }
+  }
+}

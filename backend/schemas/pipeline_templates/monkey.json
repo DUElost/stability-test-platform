@@ -33,7 +33,7 @@
       {
         "step_id": "monkey_resource_push",
         "action": "script:monkey_resource_push",
-        "version": "1.1.0",
+        "version": "1.1.1",
         "timeout_seconds": 600,
         "retry": 1,
         "params": {}

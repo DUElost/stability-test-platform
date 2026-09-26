@@ -1,7 +1,7 @@
 """项目型号映射写路径（#1520 垂直切片第二刀：projects.py 去 0-service）。
 
 覆盖 `map/preview`、`map/apply`、`rules/{model}` 删除三条写路径及型号归一助手。
-路由退化为「解析 → 调服务 → 序列化」；异常沿用 ``HTTPException``（既有切片先例）。
+路由退化为「解析 → 调服务 → 序列化」；异常抛领域类型（``backend.services.errors``），由 api 层统一 handler 翻译为 HTTP（#3296）。
 
 边界（与 #1805 的「历史集合 vs 可发命令目标」切分呼应）：本模块只写**成员行**
 （v2.5 D10 派生归属的唯一真源），不写设备列、不删快照、不碰派发面。
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from fastapi import HTTPException, Request
+from backend.services.errors import Conflict, NotFound, UnprocessableEntity
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -64,7 +64,7 @@ def map_preview(
 ) -> tuple[ProjectMapPreviewOut, list[Device], dict[str, str]]:
     names = normalize_models(models)
     if not names:
-        raise HTTPException(status_code=422, detail="models must not be empty")
+        raise UnprocessableEntity("models must not be empty")
     # 设备事实按归一匹配（#644 大小写归一回归：设备 model 可能是混合大小写
     # 如 Infinix_X1102D，in_(大写) 全等会 miss——UI 勾选设备事实后映射路径
     # 被锁死）
@@ -151,7 +151,7 @@ def apply_project_mapping(
     reassign_conflicts: bool,
     actor_id: Optional[int],
     actor_username: Optional[str],
-    request: Optional[Request] = None,
+    request: Optional[Any] = None,
 ) -> ProjectMapPreviewOut:
     """admin 应用映射（写 project_model 成员行 + 审计 + 广播）。"""
     project = get_project_or_404(db, project_key)
@@ -161,9 +161,8 @@ def apply_project_mapping(
         db, project, models, reassign_conflicts,
     )
     if preview.conflicts:
-        raise HTTPException(
-            status_code=409,
-            detail="models already mapped to another user project",
+        raise Conflict(
+            "models already mapped to another user project"
         )
     # ADR-0029 P1：规则写入 project_model（活跃唯一索引兜底——同型号
     # 双归属 INSERT 即 IntegrityError，preview 设备级冲突之外的双保险）。
@@ -183,9 +182,8 @@ def apply_project_mapping(
         if existing is not None and existing.project_id != project.id:
             owner = db.get(TestProject, existing.project_id)
             if owner is not None and owner.source == USER_SOURCE and not reassign_conflicts:
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"model {model} already ruled to another project",
+                raise Conflict(
+                    f"model {model} already ruled to another project"
                 )
             # SEED 占用或 reassign：旧成员行让位（uq 只约束活跃行）
             existing.is_active = False
@@ -207,9 +205,8 @@ def apply_project_mapping(
                 # 并发双写最后一道：existing 检查与 INSERT 之间被另一请求
                 # 抢占同一归一型号——409 而非 500（用户可重试）
                 db.rollback()
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"model {model} concurrently claimed by another project",
+                raise Conflict(
+                    f"model {model} concurrently claimed by another project"
                 ) from None
     # v2.5 D10 M3：归属派生——apply 只写成员行，不写设备列（无副本可写）
     record_audit(
@@ -239,7 +236,7 @@ def remove_project_mapping_rule(
     model: str,
     actor_id: Optional[int],
     actor_username: Optional[str],
-    request: Optional[Request] = None,
+    request: Optional[Any] = None,
 ) -> dict[str, Any]:
     """删除项目的一条活跃型号成员行（admin，记审计）。
 
@@ -260,9 +257,8 @@ def remove_project_mapping_rule(
         )
     ).scalar_one_or_none()
     if rule is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"no active rule for model {model}",
+        raise NotFound(
+            f"no active rule for model {model}"
         )
     db.delete(rule)
     record_audit(

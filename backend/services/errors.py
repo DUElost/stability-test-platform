@@ -39,6 +39,12 @@ class NotFound(ServiceError):
     status = 404
 
 
+class UnprocessableEntity(ServiceError):
+    """语义层面不可受理的输入（原 422：格式合法但违反业务规则，如保留名/SEED 限制）。"""
+
+    status = 422
+
+
 class Conflict(ServiceError):
     """与当前持久状态冲突（原 409：fencing 失效、幂等竞争、状态机表外迁移等）。"""
 

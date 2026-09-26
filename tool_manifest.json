@@ -82,6 +82,19 @@
         }
       ]
     },
+    "aimonkey": {
+      "kind": "tool",
+      "versions": [
+        {
+          "artifact": "packages/aimonkey/20260317.tar.gz",
+          "package_sha256": "ea4b73a03ec2387f88389b5e6bb32ad2677c19417a81bb8579fa3030ea299406",
+          "python": null,
+          "retired": false,
+          "script": "MonkeyTest.py",
+          "version": "20260317"
+        }
+      ]
+    },
     "check_device": {
       "kind": "script",
       "versions": [
@@ -474,6 +487,14 @@
           "retired": false,
           "script": "flash_firmware.py",
           "version": "1.3.17"
+        },
+        {
+          "artifact": "packages/flash_firmware/1.3.18.tar.gz",
+          "package_sha256": "60b18725c35cdcf69a1e2955fd74eb6f2a2c8d8df8a6af357fca5da069ccd7d5",
+          "python": null,
+          "retired": false,
+          "script": "flash_firmware.py",
+          "version": "1.3.18"
         }
       ]
     },
@@ -527,6 +548,27 @@
           "retired": false,
           "script": "flash_preflight.py",
           "version": "1.0.5"
+        },
+        {
+          "artifact": "packages/flash_preflight/1.0.6.tar.gz",
+          "package_sha256": "d59f5f748c098c7dfa7e2b1930b1474a98fd7ef479a6d44bd925059cbf4bb2c0",
+          "python": null,
+          "retired": false,
+          "script": "flash_preflight.py",
+          "version": "1.0.6"
+        }
+      ]
+    },
+    "flashtool": {
+      "kind": "tool",
+      "versions": [
+        {
+          "artifact": "packages/flashtool/1.2444.00.100.tar.gz",
+          "package_sha256": "ffc30c9383b5a487416c7bbd51393281a8a2bd201a7a7271ff0f390d7a149d66",
+          "python": null,
+          "retired": false,
+          "script": "flash_tool",
+          "version": "1.2444.00.100"
         }
       ]
     },
@@ -994,6 +1036,14 @@
           "retired": false,
           "script": "monkey_resource_push.py",
           "version": "1.1.0"
+        },
+        {
+          "artifact": "packages/monkey_resource_push/1.1.1.tar.gz",
+          "package_sha256": "b455c7e62e28059e6d8dbf889afbbbd90daf605acd713fac564cab8f762de140",
+          "python": null,
+          "retired": false,
+          "script": "monkey_resource_push.py",
+          "version": "1.1.1"
         }
       ]
     },
@@ -1233,6 +1283,14 @@
           "retired": false,
           "script": "monkey_test.py",
           "version": "1.2.2"
+        },
+        {
+          "artifact": "packages/monkey_test/1.2.3.tar.gz",
+          "package_sha256": "542f4e7a935806a0eb9bc200d4e017b63808d53311fff8be691ab272b566edf9",
+          "python": null,
+          "retired": false,
+          "script": "monkey_test.py",
+          "version": "1.2.3"
         }
       ]
     },

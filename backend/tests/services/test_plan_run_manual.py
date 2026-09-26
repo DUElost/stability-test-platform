@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from fastapi import HTTPException
+from backend.services.errors import ServiceError
 
 from backend.models.audit import AuditLog
 from backend.models.enums import JobStatus
@@ -64,10 +64,10 @@ def test_manual_retry_sets_action_and_writes_audit(db_session):
 def test_manual_retry_rejects_non_running_job(db_session):
     run, job = _seed(db_session, job_status=JobStatus.COMPLETED.value)
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ServiceError) as exc:
         manual_retry_job_sync(db_session, run.id, job.id)
 
-    assert exc.value.status_code == 409
+    assert exc.value.status == 409
 
 
 def test_manual_retry_idempotent_short_circuit(db_session):

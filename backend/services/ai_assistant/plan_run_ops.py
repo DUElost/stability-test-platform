@@ -7,7 +7,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import HTTPException
+from backend.services.errors import ServiceError
 from sqlalchemy.orm import Session
 
 from backend.models.job import JobInstance, JobStatus
@@ -109,7 +109,7 @@ def describe_manual_job_preview(db: Session, params: dict, *, action: str) -> st
 
     try:
         job = load_job_in_run(db, params["run_id"], params["job_id"])
-    except HTTPException:
+    except ServiceError:
         return (
             f"PlanRun #{params['run_id']} job #{params['job_id']}（未找到或不属于该 run）"
         )
@@ -158,7 +158,7 @@ def describe_archive_preview(db: Session, params: dict) -> str:
     return "\n".join(lines)
 
 
-def _http_exception_to_runtime(exc: HTTPException) -> RuntimeError:
+def _service_error_to_runtime(exc: ServiceError) -> RuntimeError:
     detail = exc.detail
     if isinstance(detail, dict):
         detail = detail.get("message") or str(detail)
@@ -232,8 +232,8 @@ def run_manual_retry_job(
     job_id = params["job_id"]
     try:
         job = load_job_in_run(db, run_id, job_id)
-    except HTTPException as exc:
-        raise _http_exception_to_runtime(exc) from exc
+    except ServiceError as exc:
+        raise _service_error_to_runtime(exc) from exc
 
     if job.status not in MANUAL_ACTION_JOB_STATUSES:
         raise RuntimeError(
@@ -306,8 +306,8 @@ def run_manual_exit_job(
     job_id = params["job_id"]
     try:
         job = load_job_in_run(db, run_id, job_id)
-    except HTTPException as exc:
-        raise _http_exception_to_runtime(exc) from exc
+    except ServiceError as exc:
+        raise _service_error_to_runtime(exc) from exc
 
     if job.status not in MANUAL_ACTION_JOB_STATUSES:
         raise RuntimeError(

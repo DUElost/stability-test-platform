@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import subprocess
@@ -17,31 +18,35 @@ import yaml
 _WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "main-ci-backstop.yml"
 _WORKFLOWS_DIR = _WORKFLOW.parent
 
-# `jq -r --arg pre "$pre_existing_ids" '<filter>'` —— 取 filter 字面量做功能验证
+# `jq -r --argjson floor "$pre_existing_max_id" --arg sha "$main_sha" '<filter>'`
+# —— 取 filter 字面量做功能验证
 # （两者之间是「空格 + 续行符 \ + 换行 + 缩进」，故用 [\s\\]* 一次性跨过）
 _JQ_POLL_RE = re.compile(
-    r"jq\s+-r\s+--arg\s+pre\s+\"\$pre_existing_ids\"[\s\\]*'([^']*)'",
+    r'jq\s+-r\s+--argjson\s+floor\s+"\$pre_existing_max_id"\s+--arg\s+sha\s+"\$main_sha"[\s\\]*\'([^\']*)\'',
     re.DOTALL,
 )
 
 
-def _steps() -> list[dict]:
+def _steps(job: str = "verify-and-cleanup") -> list[dict]:
     doc = yaml.safe_load(_WORKFLOW.read_text(encoding="utf-8"))
-    return doc["jobs"]["verify-and-cleanup"]["steps"]
+    return doc["jobs"][job]["steps"]
 
 
-def _step_run(name_fragment: str) -> str:
-    for step in _steps():
+def _step_run(name_fragment: str, job: str = "verify-and-cleanup") -> str:
+    for step in _steps(job):
         if name_fragment in (step.get("name") or ""):
             return step.get("run") or ""
     raise AssertionError(f"step not found: {name_fragment}")
 
 
 def test_redispatch_polling_excludes_pre_existing_runs():
-    """#1298: 重派后的轮询必须排除 dispatch 前已存在的 run id。"""
+    """#1298/#3363: 重派后只接纳同 SHA 且 id 高于派发前快照的 run。"""
     run = _step_run("Ensure full CI run")
-    assert "pre_existing_ids=" in run, "缺少 dispatch 前 run id 快照"
-    assert 'index($id|tostring)) | not' in run, "轮询未排除已存在的 run"
+    assert "pre_existing_max_id=" in run, "缺少 dispatch 前 run id 上界"
+    assert "head_sha=$main_sha&event=workflow_dispatch" in run, "轮询缺少 SHA 查询过滤"
+    assert ".head_sha == $sha and .id > $floor" in run, "轮询缺少响应 SHA 与 id 双重判据"
+    assert 'run_sha="$(gh api "repos/$REPO/actions/runs/$run_id" --jq .head_sha)"' in run
+    assert 'if [ "$run_sha" != "$main_sha" ]; then' in run
     # 旧写法（直接取第一条）不得回归为主判据
     assert '"repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$main_sha&event=workflow_dispatch&per_page=5"' not in run
 
@@ -67,30 +72,51 @@ def test_gh_api_jq_never_receives_jq_options():
 
 
 def test_redispatch_poll_filter_functionally_excludes_preexisting_runs():
-    """#1548：把重派轮询的 jq 过滤器**实际跑一遍**，而不是只断言字符串在场。
+    """#3363：旧失败 run 在场且新 run 延迟出现时，不得选中旧 run。
 
     原判据只检查片段文本，语法错误的 `gh api` 调用因此能长期存活。这里用
-    fixture 验证同一过滤器：只有不在 ``pre_existing_ids`` 里的 run 才被选中，
-    全部已存在时必须回落到 ``0``（否则会把 dispatch 前的旧失败 run 认成本轮）。
+    fixture 验证工作流原样过滤器：同 SHA、id 增长两条同时成立才可选；
+    列表首条旧 run 或不同 SHA 时必须回落到 0。
     """
     run = _step_run("Ensure full CI run")
     match = _JQ_POLL_RE.search(run)
-    assert match, "未找到 `jq -r --arg pre \"$pre_existing_ids\" '...'` 形式的重派过滤器"
+    assert match, "未找到带 SHA 和 id 上界参数的重派过滤器"
     jq = shutil.which("jq")
     if jq is None:
         pytest.skip("jq 不可用，跳过过滤器的功能验证")
     filter_expr = match.group(1)
-    payload = '{"workflow_runs": [{"id": 111}, {"id": 222}]}'
+    sha = "a" * 40
+    other_sha = "b" * 40
 
-    def _select(pre_existing: str) -> str:
+    def _select(runs: list[dict], floor: int = 111) -> str:
         proc = subprocess.run(
-            [jq, "-r", "--arg", "pre", pre_existing, filter_expr],
-            input=payload, capture_output=True, text=True, check=True,
+            [jq, "-r", "--argjson", "floor", str(floor), "--arg", "sha", sha, filter_expr],
+            input=json.dumps({"workflow_runs": runs}),
+            capture_output=True, text=True, check=True,
         )
         return proc.stdout.strip()
 
-    assert _select("111") == "222", "应选中 dispatch 新产生的 run"
-    assert _select("111 222") == "0", "全部已存在时必须返回 0，不得认领旧 run"
+    old = {"id": 111, "head_sha": sha}
+    new = {"id": 222, "head_sha": sha}
+    foreign = {"id": 333, "head_sha": other_sha}
+    assert _select([old]) == "0", "新 run 未入列表时不得认领旧 run"
+    assert _select([old, foreign]) == "0", "不得认领另一 SHA 的 run"
+    assert _select([old, new, foreign]) == "222", "应选中同 SHA 的新 run"
+    assert _select([new, old], floor=222) == "0", "派发前已有的同 SHA run 不得认领"
+
+
+def test_failure_comment_checks_selected_run_sha():
+    steps = _steps("notify-failure")
+    names = [step.get("name") for step in steps]
+    assert names.index("Verify failed CI run belongs to main tip") < names.index(
+        "Rerun failed jobs once and classify (flake vs deterministic)"
+    )
+    verify = _step_run("Verify failed CI run belongs to main tip", job="notify-failure")
+    assert 'if [ "$run_sha" != "$MAIN_SHA" ]; then' in verify
+    run = _step_run("Create or comment failure issue", job="notify-failure")
+    assert 'run_sha="$(gh api "repos/$REPO/actions/runs/$CI_RUN_ID" --jq .head_sha)"' in run
+    assert 'if [ "$run_sha" != "$MAIN_SHA" ]; then' in run
+    assert run.index('if [ "$run_sha" != "$MAIN_SHA" ]; then') < run.index("gh issue comment")
 
 
 def test_branch_delete_requires_tip_contained_in_main():
