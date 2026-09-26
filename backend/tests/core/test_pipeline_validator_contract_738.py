@@ -3,7 +3,8 @@
 历史：本文件曾是「双端副本语义一致」的 parity 测试（agent 侧一份与
 `backend/core/pipeline_validator.py` 逐字相同的拷贝，靠本文件防漂移）。ADR-0054
 裁决把共享定义归入 `backend/agent/contracts/` 后，拷贝与 `except ImportError`
-兜底都已删除——本文件随之改为**单实现测试**，文件名保留历史（#738）。
+兜底都已删除——本文件随之改为**单实现测试**；2026-09-26 收口后更名去掉 `parity`
+（**曾用名 `test_pipeline_validator_parity_738.py`**，历史笔记/注释里的旧名均指本文件）。
 
 现在守三件事：
 1. **单实现**：契约只有 `backend/agent/contracts/pipeline_validator.py` 一份，

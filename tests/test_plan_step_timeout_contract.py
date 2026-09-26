@@ -20,8 +20,9 @@
    文案不指向修法＝没说）。
 
 双端 ``pipeline_validator`` 的一致性**不在本文件重复守**——
-``backend/agent/tests/test_pipeline_validator_parity_738.py`` 已按「语义一致而非逐字相同」
-裁决过（#738）。本单把可行动文案写在**入口呈现层**而不是 validator 里，正是为了不碰那份裁决。
+``backend/tests/core/test_pipeline_validator_contract_738.py``（曾名 ``test_pipeline_validator_parity_738.py``）
+已按「语义一致而非逐字相同」裁决过（#738），ADR-0054 后该文件守的是单实现 + 两种包布局对拍。
+本单把可行动文案写在**入口呈现层**而不是 validator 里，正是为了不碰那份裁决。
 
 为什么用 subprocess 探针而不是顶层 ``import backend...``：``backend.core.database`` 在
 **导入期**解析 ``DATABASE_URL``（根 ``tests/`` 没有 conftest 注入），而整个 ``tests/`` 目录

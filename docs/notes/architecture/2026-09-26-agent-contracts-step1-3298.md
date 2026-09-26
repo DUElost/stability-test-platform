@@ -26,7 +26,8 @@ Class: architecture
 - **D5 完成定义**（本 PR 全部满足）：删除 `backend/core/pipeline_validator.py`、
   `backend/agent/pipeline_validator.py`、`backend/core/legacy_aee.py`、
   `backend/agent/legacy_aee.py`（不留再导出壳）；兜底分支删除；
-  `test_pipeline_validator_parity_738.py` 改为**单实现测试**（见下）；`.importlinter`
+  `test_pipeline_validator_parity_738.py` 改为**单实现测试**（见下；后更名
+  `test_pipeline_validator_contract_738.py`，见 #3401 A1）；`.importlinter`
   C3 无对应基线行可删（5 条基线与本批无关，留给第 2–4 步）；
   `_SHARED_ALLOWLIST` 删 `legacy_aee` / `pipeline_validator` 两条（只剩 `metrics`）。
 - **门禁（D4）**：
@@ -38,8 +39,8 @@ Class: architecture
     当前仅 `jsonschema`）+ 包内相对导入（解析后的模块必须在 `backend.agent.contracts` 内）；
     另按 D3 v1.0 覆盖 `backend/agent/__init__.py` 的轻量约束（只许标准库 +
     白名单叶子模块 `adb_wrapper`，白名单目标自身也被复用同一判据扫描，防间接绕过）。
-- **测试改造**：`backend/tests/core/test_pipeline_validator_parity_738.py`（文件名保留
-  历史）从「双端副本对拍」改为：① 单实现锚点（契约文件存在、两个旧副本不存在）；
+- **测试改造**：`backend/tests/core/test_pipeline_validator_parity_738.py`（时名；后更名
+  `..._contract_738.py`，见下 Revisit）从「双端副本对拍」改为：① 单实现锚点（契约文件存在、两个旧副本不存在）；
   ② 仓库布局 schema 定位 == `backend/schemas/pipeline_schema.json`；
   ③ **主机布局真跑**——在临时目录复刻 `<install>/agent/` + `<install>/schemas/`，
   以 `PYTHONPATH=<install>` 子进程导入顶层包 `agent` 并跑历史语料，判定必须与仓库布局逐字一致
@@ -70,7 +71,7 @@ Class: architecture
 - `backend/agent/tests/`（迁移影响面最大的套件）→ **2160 passed**（4m08s，systemd-run 6G 硬顶）；
 - 控制面相关：`backend/tests/{api/test_pipeline_templates_stages,services/test_plan_barrier_timeout,services/test_script_catalog_version,services/test_plan_dispatcher}.py`
   → **89 passed**；`backend/tests/core/test_pipeline_validator.py` +
-  `test_pipeline_validator_parity_738.py` + `backend/tests/test_legacy_tombstones.py` +
+  `test_pipeline_validator_parity_738.py`（时名） + `backend/tests/test_legacy_tombstones.py` +
   `backend/agent/tests/test_install_selfcheck.py` → **17 passed**；
 - 根 `tests/`（含 Ansible digest 合约、install artifacts、两个 import 棘轮）→ **56 passed**；
 - `layering` gate（`--no-cache`）→ 5 条合约全 KEPT（C3 21 ignored imports）；
@@ -92,5 +93,7 @@ Class: architecture
   `_SHARED_ALLOWLIST` 的 `metrics` 是终态出口，不是永久豁免；
 - `_CONTRACTS_ALLOWED_THIRD_PARTY` 新增依赖必须逐条评审（ADR-0054 §7）；
 - `contracts/` 出现运行逻辑即说明 D2 判据被突破，回审 ADR-0054；
-- 本 PR 遗留一个命名债：`test_pipeline_validator_parity_738.py` 已不含 parity 语义，
-  文件名保留历史；若第 2–4 步也走完后仍有读者被名字误导，再单开改名 PR 并修入链。
+- ~~本 PR 遗留一个命名债：`test_pipeline_validator_parity_738.py` 已不含 parity 语义，
+  文件名保留历史~~ **→ 2026-09-26 已清（#3401 A1，PR 见 #3401 评论）**：更名
+  `backend/tests/core/test_pipeline_validator_contract_738.py`，同 PR 修代码 docstring 2 处 +
+  历史笔记 6 处「更名注记」（见该 PR 描述）。

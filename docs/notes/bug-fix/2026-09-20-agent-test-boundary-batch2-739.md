@@ -3,6 +3,9 @@
 Status: implemented
 Class: bug-fix
 
+> **更名注记（2026-09-26）**：本笔记提到的 `test_pipeline_validator_parity_738.py` 已更名为
+> `backend/tests/core/test_pipeline_validator_contract_738.py`（内容自 ADR-0054 起已从双端 parity 改为单实现 + 布局对拍；#3401 A1）。
+
 ## Decision
 
 第二批（收口批）：把棘轮上剩余 **7 个**文件全部迁到 `backend/tests/` 对应域，
