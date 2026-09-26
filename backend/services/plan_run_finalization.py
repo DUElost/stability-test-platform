@@ -243,7 +243,13 @@ def _emit_parent_chain_gap_signal(run: Any) -> None:
     ctx = dict(getattr(run, "run_context", None) or {})
     if ctx.get("chain_visibility_gap_signaled"):
         return
-    missing = _chain_gap_missing_for_run(run)
+    try:
+        missing = _chain_gap_missing_for_run(run)
+    except Exception:
+        logger.exception(
+            "plan_run_chain_gap_lookup_failed plan_run=%s", getattr(run, "id", None),
+        )
+        return
     if missing <= 0:
         return
     if not _mark_chain_gap_signaled(run, missing=missing, reason="parent_failed"):
