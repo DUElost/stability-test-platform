@@ -197,6 +197,20 @@ def test_script_scan_requires_packages_root(client, monkeypatch, admin_headers, 
     assert resp.json()["detail"]["code"] == "PACKAGES_ROOT_NOT_CONFIGURED"
 
 
+def test_script_scan_response_model_matches_service_keys():
+    """#3285：具名响应模型与 `ScriptScanResult.to_dict()` 的键集合必须相等。
+
+    端点升 `ApiResponse[ScriptScanOut]` 后 FastAPI 默认 `extra=ignore`——只往
+    `to_dict()` 加键而漏改模型时，键会被**静默丢弃**（比原来的 dict 盲区更隐蔽：
+    接口文档与前端都看不出来）。这条断言把「模型 ↔ 服务实际键集」钉死；模型 ↔ TS
+    的另一半由 `tests/test_api_response_shape_contract.py` 的 `_MODEL_PAIRS` 对拍。
+    """
+    from backend.api.routes.scripts import ScriptScanOut
+    from backend.services.script_catalog import ScriptScanResult
+
+    assert set(ScriptScanOut.model_fields) == set(ScriptScanResult().to_dict())
+
+
 def test_script_endpoints_require_auth_and_admin_for_writes(client, admin_headers, auth_headers):
     list_resp = client.get("/api/v1/scripts")
     assert list_resp.status_code == 401

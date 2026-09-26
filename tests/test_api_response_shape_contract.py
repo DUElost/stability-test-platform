@@ -788,6 +788,15 @@ _MODEL_PAIRS: tuple[tuple[str, str, str, str], ...] = (
         "frontend/src/utils/api/types.ts",
         "AuditFacetValue",
     ),
+    # #3285：scan 从 `ApiResponse[dict]` 升具名模型（选项 ②）——10 键注册/报告面
+    # （三个闸口的 package_conflicts / package_missing / unregistered_active 此前
+    # 前端 TS 完全看不见，漂移无门禁可拦），双向对拍并撤销下方 dict 盲区豁免。
+    (
+        "backend/api/routes/scripts.py",
+        "ScriptScanOut",
+        "frontend/src/utils/api/types.ts",
+        "ScriptScanOut",
+    ),
 )
 
 #: 轴线 A/C 的**登记盲区**（按文件 opt-in，判据见
@@ -808,11 +817,10 @@ _MODEL_BLINDSPOT: dict[str, set[str]] = {
     "backend/api/routes/projects.py": {
         "remove_project_rule",
     },
-    # #2187 扩面第 3 批：scripts.py。scan 的 catalog 聚合与 delete 的 ok 壳仍为
-    # 运行期 dict（scan 结果含 conflicts 数组，正规化要连 #2386 的守卫字段一起
-    # 设计，独立小批做）——按台账认领。
+    # #2187 扩面第 3 批：scripts.py。delete 的 ok 壳仍为运行期 dict——按台账认领。
+    # scan 已于 #3285 升 `ApiResponse[ScriptScanOut]` 具名模型（见 `_MODEL_PAIRS`），
+    # 本台账不再豁免 scan_scripts——若它退回 dict，上面的盲区台账会当场变红。
     "backend/api/routes/scripts.py": {
-        "scan_scripts",
         "deactivate_script",
     },
     # #2187 扩面第 4 批：devices.py 无 ApiResponse[dict] 端点（盲区空集），

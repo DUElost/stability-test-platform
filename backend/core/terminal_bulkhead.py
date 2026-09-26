@@ -11,12 +11,15 @@
   用户看到的仍是卡顿——换名字不解决问题（ADR-0047 §3 备选「甲」的代价说明）；
 - 等不到就**快失败**：`503` + `Retry-After`（`DB_OVERLOADED`），让 Agent 把终态事实
   交回本地 outbox（事实先落 SQLite，不丢）而不是占着连接空等；
-- 名额有限，留给 heartbeat / steps / claim / recovery / UI：默认 16 并发对
-  async 池上限 40，余 24 给其余通道。
+- 名额有限，留给 heartbeat / steps / claim / recovery / UI：默认 8 并发对
+  async 池上限 40，余 32 给其余通道；
+- 名额同时是**单事件循环上**的实效并发（#3403）：ADR-0052 D1 之前父行锁让同一 run
+  的终态在 PG 里串行（名义 16、实效约 1）；锁移除后 16 个名额真并发，就绪批次放大，
+  heartbeat / `/health` p99 升 3–8×。默认值因此由 16 重校为 8。
 
 口径（均可 env 覆盖）：
 
-- `STP_TERMINAL_BULKHEAD_CONCURRENCY`（默认 16）：同刻持有的终态名额；
+- `STP_TERMINAL_BULKHEAD_CONCURRENCY`（默认 8）：同刻持有的终态名额；
 - `STP_TERMINAL_BULKHEAD_WAIT_MS`（默认 500）：愿意等多久；超过即拒绝。
 """
 
@@ -68,7 +71,7 @@ def _int_env(name: str, default: int) -> int:
 
 def limits() -> tuple[int, float]:
     """(并发名额, 等待预算秒)。非法/非正 env 回退默认——容量类误配不得退化成零闸门。"""
-    concurrency = _int_env("STP_TERMINAL_BULKHEAD_CONCURRENCY", 16)
+    concurrency = _int_env("STP_TERMINAL_BULKHEAD_CONCURRENCY", 8)
     wait_ms = _int_env("STP_TERMINAL_BULKHEAD_WAIT_MS", 500)
     return concurrency, wait_ms / 1000.0
 

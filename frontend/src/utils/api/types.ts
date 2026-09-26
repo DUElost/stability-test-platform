@@ -989,6 +989,55 @@ export interface ScriptEntry {
   updated_at?: string;
 }
 
+/** scan 结果里 {name, version} 形态的条目。 */
+export interface ScriptScanEntry {
+  name: string;
+  version: string;
+}
+
+/** scan 的重锚条目（force_rebaseline=true 时内容 sha 漂移被重锚）。 */
+export interface ScriptScanRebaselinedEntry {
+  name: string;
+  version: string;
+  old_sha256: string;
+  new_sha256: string;
+}
+
+/** scan 的包面问题条目（package_conflicts / package_missing；键集随来源分支不同）。 */
+export interface ScriptScanPackageIssue {
+  name: string;
+  version: string;
+  reason: string;
+  db_sha256?: string;
+  manifest_sha256?: string;
+  artifact?: string;
+}
+
+/** manifest `retired: true` 显式退役的版本条目。 */
+export interface ScriptScanDeactivatedEntry {
+  name: string;
+  version: string;
+  nfs_path: string;
+}
+
+/**
+ * #3285：`POST /scripts/scan` 的注册结果，与 backend `ScriptScanOut` 一一对应。
+ * ADR-0051 三个闸口的报告面（package_conflicts / package_missing /
+ * unregistered_active）此前在 UI 完全不可见；本类型只对齐声明面，展示与否另议。
+ */
+export interface ScriptScanOut {
+  created: number;
+  skipped: number;
+  deactivated: number;
+  conflicts: ScriptScanEntry[];
+  rebaselined: ScriptScanRebaselinedEntry[];
+  package_backfilled: number;
+  package_conflicts: ScriptScanPackageIssue[];
+  package_missing: ScriptScanPackageIssue[];
+  unregistered_active: ScriptScanEntry[];
+  deactivated_versions: ScriptScanDeactivatedEntry[];
+}
+
 /** ADR-0029 P2-10：脚本在某项目的使用统计（run 维度成功率）。 */
 export interface ScriptUsageVersionUsed {
   script_version: string;

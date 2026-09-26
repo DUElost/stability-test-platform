@@ -1,7 +1,7 @@
 import apiClient from './client';
 import { unwrapApiResponse } from './client';
 import type {
-  ScriptEntry, ScriptUsage,
+  ScriptEntry, ScriptScanOut, ScriptUsage,
 } from './types';
 
 export const scripts = {
@@ -20,9 +20,7 @@ export const scripts = {
   remove: (id: number) =>
     unwrapApiResponse<void>(apiClient.delete(`/scripts/${id}`)),
   scan: () =>
-    unwrapApiResponse<{ created: number; skipped: number; deactivated: number; conflicts: { name: string; version: string }[] }>(
-      apiClient.post('/scripts/scan'),
-    ),
+    unwrapApiResponse<ScriptScanOut>(apiClient.post('/scripts/scan')),
   createVersion: (name: string, data: {
     version: string;
     nfs_path: string;
