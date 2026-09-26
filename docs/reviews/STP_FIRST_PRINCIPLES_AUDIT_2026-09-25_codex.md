@@ -425,7 +425,7 @@ assert p99_probe < 1.0  # 全失败也通过：这就是待修判据，不是正
 | 包模式 gauge “生产无序列” | 09-26 09:47 查询已有 `package=48`，`tree/mixed/unknown=0`；生产 release 仍为 `d8c1e0e`。因此当前可读，但**不能把该值归因于尚未部署的 #3355**。部署 #3355 后仍须回查 48/48 值与 scrape 持续性（#3333 的触发点问题另计）。 |
 | A04 证据通道闭环 | 48 host 的 artifact 提交/丢弃指标已可查询，丢弃合计为 0；中心“发现→提交→归档→登记→可下载”完整率和 `partial/unknown` 语义仍由 [#3316](https://github.com/DUElost/stability-test-platform/issues/3316) 承接。指标为 0 不能证明未遗漏关键证据。 |
 | ADR-0052 D1–D5 | 实现随 [PR #3359](https://github.com/DUElost/stability-test-platform/pull/3359) 合入；生产 release `d8c1e0e` 尚未包含。部署后按 [ADR §5](../adr/ADR-0052-terminal-fact-parent-aggregation-decoupling.md) 六项与 [runbook Step 4](../operations/2026-09-24-capacity-p0-rollout-runbook.md) 同口径真机复跑，独立验收载体为 [#3370](https://github.com/DUElost/stability-test-platform/issues/3370)。#3244 因代码合入关闭不等于实施验收通过。 |
-| 主干 CI 与目标容量 | `origin/main=cc3d31e2`；全量 run 36188703274 的第 2 次尝试在 09:47 仍运行中，不能记作真绿。现网 48 host / 876 device；[#105](https://github.com/DUElost/stability-test-platform/issues/105) B1 合成 150 host、[#106](https://github.com/DUElost/stability-test-platform/issues/106) B2 真机目标档及 [#107](https://github.com/DUElost/stability-test-platform/issues/107) 连续 ≥7 天均未验收。 |
+| 主干 CI 与目标容量 | `origin/main=cc3d31e2`；全量 run 36188703274 的第 2 次尝试在 09:47 仍运行中，不能记作真绿。现网 48 host / 876 device；[#105](https://github.com/DUElost/stability-test-platform/issues/105) B1 合成 150 host 与 [#106](https://github.com/DUElost/stability-test-platform/issues/106) B2 真机目标档未验收。[#107](https://github.com/DUElost/stability-test-platform/issues/107) 09-25 评论判「链自动连续」可通过，但严格零人工动作存在反例，定义仍待 owner 定案，单仍 OPEN。 |
 
 **缺口编号与收口**：统一处置台账仍是 [#3230](https://github.com/DUElost/stability-test-platform/issues/3230)。
 其正文 G1–G9 中的 G8/G9 已分别指向 #3316/#3317；09-25 最后一条评论把另六项再编成
