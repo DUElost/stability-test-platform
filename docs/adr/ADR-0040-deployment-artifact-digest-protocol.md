@@ -331,3 +331,7 @@ canary 真机刷机 run 575 与 Monkey run 576 实证从 `tools_cache` 取工具
   要消灭的并存；主机清理一并做——弃：清理与退役解耦才能每步无损回滚，清理若需要另行裁决。
 - **裁决（2026-09-26）**：owner 采纳 D8 与 R1–R4 的顺序，未作调整；R1–R4 各开实施 PR（跟踪 #3288），R4 完成即结项台账
   `host-resources-layer`。
+- **实施（2026-09-26，代码面全部落地）**：R1 #3437 / R2 #3441 / R3 #3442 / R4a #3443（wrapper，ADR-0037 回填）/ R4b（Agent 停报、
+  契约与镜像的 `full` / `resources` kind 退役、心跳路由停写）；台账 `host-resources-layer` 结项。R4 的「删列另起迁移，留一个
+  版本窗口」登记为新过渡项 `host-resources-digest-column`。上线激活顺序：控制面部署含 R1 的 rev → `update_agent.yml` 装新
+  wrapper → 全机队热更新（Agent 停报）。实施中的两处勘误见 D8 R2（漏算的安装期消费方）与 R4（不存在的「资源相关告警」）。

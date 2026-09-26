@@ -797,7 +797,8 @@ class TestHostArtifactDigestExposure:
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert body["agent_artifact_digest"] == code
-        assert body["agent_resources_digest"] == resources
+        # ADR-0040 D8 R4：资源身份已弃用——字段仍在响应里（版本窗口），但心跳不再写入
+        assert body["agent_resources_digest"] is None
 
 
 class TestHostInstallEndpoint:

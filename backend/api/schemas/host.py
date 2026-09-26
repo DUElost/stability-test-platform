@@ -135,9 +135,15 @@ class HostOut(ORMBaseModel):
     # Agent version display (protocol semver + git revision traceability)
     agent_protocol_version: Optional[str] = None
     agent_code_revision: Optional[str] = None
-    # ADR-0040 D2/P2：Agent 上报的部署身份（内容一致性比对源；站点验收读它）
+    # ADR-0040 D2：Agent 上报的部署身份（内容一致性比对源；站点验收读它）
     agent_artifact_digest: Optional[str] = None
-    agent_resources_digest: Optional[str] = None
+    # ADR-0040 D8 R4：已弃用——host-resources 层退役，Agent 不再上报、控制面不再写；
+    # 只回显停写前的存量值，保留一个版本窗口后随删列迁移移除。
+    agent_resources_digest: Optional[str] = Field(
+        default=None,
+        description="Deprecated (ADR-0040 D8 R4): host-resources layer retired; frozen legacy value, no longer written.",
+        json_schema_extra={"deprecated": True},
+    )
     expected_code_revision: Optional[str] = None
     agent_code_deployed: Optional[str] = None
     agent_code_deployed_at: Optional[str] = None
@@ -211,7 +217,8 @@ class HeartbeatIn(BaseModel):
     agent_version: Optional[str] = None  # ADR-0020 preflight data source
     agent_code_revision: Optional[str] = None  # git short SHA from agent VERSION file
     agent_artifact_digest: str = ""  # ADR-0040 D2: deployed artifact digest from agent ARTIFACT_DIGEST file
-    agent_resources_digest: str = ""  # ADR-0040 P2 (#1963): host-resources identity from ARTIFACT_DIGEST_RESOURCES
+    # ADR-0040 D8 R4：旧 Agent 仍会带这个键——照收（不 422）但控制面忽略，新 Agent 不再发送。
+    agent_resources_digest: str = ""
 
     @field_validator('host_id', mode='before')
     @classmethod

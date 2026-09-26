@@ -62,23 +62,29 @@ PAYLOAD_METADATA_EXCLUDES = {
 }
 
 
-ARTIFACT_KIND_FULL = "full"
+#: 唯一的 kind（ADR-0040 D8 R4）。原 ``full``（P1 全集）与 ``resources``（host-resources 分区，
+#: #1963）随资源层退役删除；``resources/**`` 从此只是**载荷排除项**（主机本地树，wrapper
+#: protect-only 保护）。agent-code 身份的输入集与退役前的 ``code`` 分区逐项相同——身份不漂移。
 ARTIFACT_KIND_CODE = "code"
-ARTIFACT_KIND_RESOURCES = "resources"
 
 
 def collect_artifact_entries(
     source_dir: str,
     extra_files: dict[str, str] | None = None,
-    kind: str = ARTIFACT_KIND_FULL,
+    kind: str = ARTIFACT_KIND_CODE,
 ) -> list[tuple[str, bool, str]]:
     """规范化序列 ``(relpath, 可执行位, content sha256)``，按 relpath 排序。
 
     ``extra_files``：``arcname -> 绝对路径``（如 pipeline schema →
     ``stp_schemas/pipeline_schema.json``），镜像控制面载荷枚举的收尾附加。
-    ``kind`` 分区（#1963，镜像控制面同款）：``full`` / ``code``（全集 −
-    ``resources/**``）/ ``resources``（全集 ∩ ``resources/**``）。
+    ``kind`` 只接受 ``code``（保留形参是为了调用方签名稳定）；其余值 fail-closed——
+    旧的 ``full`` / ``resources`` 若被静默当成 ``code``，会给出一个「看似合法」的错身份。
     """
+    if kind != ARTIFACT_KIND_CODE:
+        raise ValueError(
+            f"unknown artifact kind {kind!r}: only {ARTIFACT_KIND_CODE!r} remains "
+            "(ADR-0040 D8 R4 retired 'full'/'resources')"
+        )
     entries: list[tuple[str, bool, str]] = []
     for root, dirs, files in os.walk(source_dir):
         dirs[:] = [d for d in dirs if d not in PAYLOAD_EXCLUDES]
@@ -95,15 +101,8 @@ def collect_artifact_entries(
             relpath = os.path.relpath(full_path, source_dir).replace(os.sep, "/")
             if relpath in PAYLOAD_METADATA_EXCLUDES:
                 continue
-            if relpath == "resources/mtbf" or relpath.startswith("resources/mtbf/"):
-                continue
-            if kind == ARTIFACT_KIND_CODE and (
-                relpath == "resources" or relpath.startswith("resources/")
-            ):
-                continue
-            if kind == ARTIFACT_KIND_RESOURCES and not (
-                relpath == "resources" or relpath.startswith("resources/")
-            ):
+            # 主机本地树（含 mtbf/），不进载荷与身份（ADR-0040 D8：退役后 protect-only 保留）
+            if relpath == "resources" or relpath.startswith("resources/"):
                 continue
             st = os.stat(full_path)
             h = hashlib.sha256()
@@ -112,21 +111,20 @@ def collect_artifact_entries(
                     h.update(chunk)
             entries.append((relpath, bool(st.st_mode & 0o111), h.hexdigest()))
 
-    if kind != ARTIFACT_KIND_RESOURCES:
-        for arcname, path in sorted((extra_files or {}).items()):
-            st = os.stat(path)
-            h = hashlib.sha256()
-            with open(path, "rb") as f:
-                for chunk in iter(lambda: f.read(1 << 20), b""):
-                    h.update(chunk)
-            entries.append((arcname, bool(st.st_mode & 0o111), h.hexdigest()))
+    for arcname, path in sorted((extra_files or {}).items()):
+        st = os.stat(path)
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        entries.append((arcname, bool(st.st_mode & 0o111), h.hexdigest()))
 
     entries.sort()
     return entries
 
 
 #: 控制面摘要面（ADR-0051 Phase 4）输入集：bundle 根下 ``backend/**``，
-#: **不深入** ``backend/agent/``（那是 agent-code / host-resources 两面的地盘）。
+#: **不深入** ``backend/agent/``（那是 agent-code 面的地盘）。
 #: 与 agent 面相反，**不排除** ``.env*`` / 字节码——构建 ignore 若被误改，这类文件
 #: 一旦进 bundle 必须**改变摘要**（#2269 根因正是「不在任何摘要面内」），而非被豁免。
 _CONTROL_PLANE_ROOT = "backend"

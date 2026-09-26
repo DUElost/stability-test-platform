@@ -80,3 +80,42 @@ def test_provider_exception_degrades_to_empty(monkeypatch):
     thread._tick()
 
     assert sent[0]["agent_artifact_digest"] == ""
+
+
+def test_heartbeat_no_longer_reports_resources_identity(monkeypatch):
+    """ADR-0040 D8 R4：host-resources 层退役——心跳只报 agent-code 身份。
+
+    反例（R4 前）：线程每拍都把 ``agent_resources_digest`` 递给 send_heartbeat，
+    载荷里也带着它（读 ARTIFACT_DIGEST_RESOURCES）。
+    """
+    import inspect
+
+    import backend.agent.heartbeat as heartbeat_mod
+
+    sent = []
+    thread = _make_thread(monkeypatch, "sha256:" + "d" * 64, sent)
+    thread._tick()
+    assert sent and "agent_resources_digest" not in sent[0]
+    assert "agent_resources_digest" not in inspect.signature(heartbeat_mod.send_heartbeat).parameters
+
+    posted = []
+
+    class _Resp:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"ok": True}
+
+    monkeypatch.setattr(
+        heartbeat_mod.requests, "post",
+        lambda url, json=None, headers=None, timeout=None: posted.append(json) or _Resp(),
+    )
+    heartbeat_mod.send_heartbeat(
+        "http://server", "host-1", [], system_stats={}, mount_status={},
+        agent_artifact_digest="sha256:" + "d" * 64,
+    )
+    assert posted and "agent_resources_digest" not in posted[0]
+    assert posted[0]["agent_artifact_digest"] == "sha256:" + "d" * 64
