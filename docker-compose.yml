@@ -6,7 +6,10 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-stp_dev}
       POSTGRES_USER: ${POSTGRES_USER:-stp}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-local}
+      # #3353：口令类键必须显式设置——compose 插值只读根目录 .env 与 shell 环境，
+      # **不读** env_file 的 .env.server；此前 `:-change-me-local` 会把「没配」静默回落成
+      # 固定口令（管理员口令同理）。必须设置即启动报错，不再静默。
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 未设置——写进根目录 .env（compose 插值来源），不是 .env.server}
     volumes:
       - postgres_dev_data:/var/lib/postgresql/data
     ports:
@@ -41,7 +44,7 @@ services:
     # with production.
     env_file: .env.server
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-stp}:${POSTGRES_PASSWORD:-change-me-local}@postgres:5432/${POSTGRES_DB:-stp_dev}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-stp}:${POSTGRES_PASSWORD:?}@postgres:5432/${POSTGRES_DB:-stp_dev}
       REDIS_URL: redis://redis:6379/0
       CORS_ORIGINS: http://127.0.0.1:${DEV_FRONTEND_PORT:-15173},http://localhost:${DEV_FRONTEND_PORT:-15173}
       # 限流的可信代理网段(#81)。这里的拓扑与 systemd 部署不同:容器内
@@ -52,7 +55,9 @@ services:
       # 那会让任何部署在私有网段的非代理主机都能伪造 XFF。
       STP_TRUSTED_PROXIES: ${STP_TRUSTED_PROXIES:-127.0.0.1/32,::1/128,172.16.0.0/12}
       STP_ADMIN_USER: ${STP_ADMIN_USER:-admin}
-      STP_ADMIN_PASSWORD: ${STP_ADMIN_PASSWORD:-admin123}
+      # #3353：管理员口令同样必须显式设置（此前 `:-admin123` 静默生效，
+      # 「按文档把口令写进 .env.server」的人实际拿到的是 admin123）。
+      STP_ADMIN_PASSWORD: ${STP_ADMIN_PASSWORD:?STP_ADMIN_PASSWORD 未设置——写进根目录 .env（compose 插值来源），不是 .env.server}
       STP_SCRIPT_ROOT: /app/backend/agent/scripts
       STP_NFS_ROOT: /var/lib/stp-dev/nfs
       STP_AEE_NFS_ROOT: /var/lib/stp-dev/aee-nfs

@@ -25,6 +25,12 @@
 
 ```bash
 cp .env.server.example .env.server
+# ⚠️ compose 的 `${VAR}` 插值只读**根目录 .env 与 shell 环境**，不读 .env.server（env_file）。
+# 两个口令类键必须写在这里，未设时 `docker compose` 直接报错（#3353，不再静默回落）：
+cat > .env <<'EOF'
+POSTGRES_PASSWORD=<随机口令>
+STP_ADMIN_PASSWORD=<随机口令>
+EOF
 docker compose up --build
 ```
 
@@ -174,6 +180,15 @@ STP_NFS_ROOT=/var/lib/stp-dev/nfs
 STP_AEE_NFS_ROOT=/var/lib/stp-dev/aee-nfs
 STP_AEE_LOCAL_ROOT=/var/lib/stp-dev/aee-local
 ```
+
+> **两个 env 源的分工（#3353）**：`docker-compose.yml` 里的 `${VAR}` 是 **compose 插值**，
+> 只读**根目录 `.env` 与 shell 环境**；`.env.server` 是容器 `env_file`，只影响容器内其余变量。
+> 两者同名键时 `environment:`（插值结果）**优先于** `env_file`——此前
+> `POSTGRES_PASSWORD`/`STP_ADMIN_PASSWORD` 用 `:-默认值` 兜底，导致按文档写进
+> `.env.server` 的口令被静默忽略、实际生效的是 `change-me-local`/`admin123`（#3353 实测）。
+> 现在这两个键**必填**（`${VAR:?…}`，未设即启动报错）；`STP_ADMIN_USER` 与库名保留
+> `:-` 默认值，但同样以根目录 `.env` 为准。`init_dev_db.py` 检测到口令仍是 `admin123`
+> 时会打印 `dev_db_admin_WEAK_PASSWORD` 告警。
 
 ---
 
