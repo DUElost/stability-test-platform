@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.agent.artifact_digest import collect_artifact_entries, collect_control_plane_entries, digest_entries
+from backend.agent.contracts.artifact_digest import collect_artifact_entries, collect_control_plane_entries, digest_entries
 from tools.release.build_bundle import MANIFEST_NAME, BundleError, build_bundle, main
 from tools.site_config.manifest import load_release_manifest
 
@@ -41,7 +41,11 @@ def tree(tmp_path: Path, *, frontend: bool = True, migrations: dict[str, str] | 
         shutil.rmtree(root)
     (root / "backend/agent").mkdir(parents=True)
     (root / "backend/agent/sample.py").write_text("VALUE = 1\n", encoding="utf-8")
-    shutil.copy2(REPO_ROOT / "backend/agent/artifact_digest.py", root / "backend/agent/artifact_digest.py")
+    (root / "backend/agent/contracts").mkdir(parents=True)
+    shutil.copy2(
+        REPO_ROOT / "backend/agent/contracts/artifact_digest.py",
+        root / "backend/agent/contracts/artifact_digest.py",
+    )
     (root / "backend/agent/AGENTS.md").write_text("# agent contract\n", encoding="utf-8")
     # 仓库约定：CLAUDE.md 是指向 AGENTS.md 的符号链接（不得被实体化）
     (root / "backend/agent/CLAUDE.md").symlink_to("AGENTS.md")
@@ -277,9 +281,9 @@ def test_wheelhouse_is_optional_and_off_by_default(tmp_path):
 def test_digest_helper_loads_the_implementation_from_the_bundle(tmp_path):
     """摘要必须由 bundle 内的实现计算：否则打包与安装两侧会各自演化算法。"""
     out, _ = built(tmp_path)
-    source = (out / "backend/agent/artifact_digest.py").read_text(encoding="utf-8")
+    source = (out / "backend/agent/contracts/artifact_digest.py").read_text(encoding="utf-8")
     assert "collect_artifact_entries" in source
-    original = (REPO_ROOT / "backend/agent/artifact_digest.py").read_text(encoding="utf-8")
+    original = (REPO_ROOT / "backend/agent/contracts/artifact_digest.py").read_text(encoding="utf-8")
     assert source == original
     assert sys.version_info >= (3, 11)
 
@@ -337,10 +341,10 @@ def test_no_pycache_written_into_bundle_by_digesting(tmp_path):
     """摘要阶段加载 artifact_digest 不得**在 bundle 内**写出 __pycache__。
 
     修复前 `_load_agent_digest_module` 会 exec_module → 生成
-    `backend/agent/__pycache__`，即构建副产物被写进交付物。
+    `backend/agent/contracts/__pycache__`，即构建副产物被写进交付物。
     """
     out, _ = built(tmp_path)
-    assert not (out / "backend" / "agent" / "__pycache__").exists(), (
+    assert not (out / "backend" / "agent" / "contracts" / "__pycache__").exists(), (
         "摘要阶段在 bundle 内写出了 __pycache__（构建副产物混入交付物）"
     )
 

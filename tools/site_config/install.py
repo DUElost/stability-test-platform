@@ -38,9 +38,12 @@ from .validation import DEFERRED_CHECKS, Check, ConfigValidationError, failure, 
 STATE_FILE = "install-state.json"
 LOCK_FILE = "install.lock"
 
-# #2020：量具不能来自被测物。digest 算法取安装器自身源码树的副本（stdlib-only），
-# bundle 只作为被测数据传入——旧实现以 PYTHONPATH=ctx.bundle 起子进程 import 被校验树。
-_TRUSTED_DIGEST_SOURCE = Path(__file__).resolve().parents[2] / "backend" / "agent" / "artifact_digest.py"
+# #2020：量具不能来自被测物。digest 算法取安装器自身源码树的副本（ADR-0054 D1
+# 契约包，stdlib-only），bundle 只作为被测数据传入——旧实现以 PYTHONPATH=ctx.bundle
+# 起子进程 import 被校验树。
+_TRUSTED_DIGEST_SOURCE = (
+    Path(__file__).resolve().parents[2] / "backend" / "agent" / "contracts" / "artifact_digest.py"
+)
 
 DatabaseProbe = Callable[[str], tuple[str, str | None]]
 

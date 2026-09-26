@@ -174,16 +174,16 @@ def _schema_target(repo_root: Path) -> str:
 
 
 def _load_agent_digest_module(bundle: Path):
-    """按路径加载 ADR-0040 实现（stdlib-only，不触发 backend 包链）。
+    """按路径加载 ADR-0040 digest 实现（ADR-0054 D1 契约包，stdlib-only，不触发 backend 包链）。
 
-    #2269：加载会**在 bundle 内**生成 `backend/agent/__pycache__`——即构建机产物
+    #2269：加载会**在 bundle 内**生成 `backend/agent/contracts/__pycache__`——即构建机产物
     被写进交付物（与 `.env` 同源问题，只是危害小）。故加载期间强制关闭字节码写入，
     使 bundle 保持与源树一致、不含构建副产物。
     """
     import importlib.util
     import sys
 
-    module_path = bundle / "backend" / "agent" / "artifact_digest.py"
+    module_path = bundle / "backend" / "agent" / "contracts" / "artifact_digest.py"
     spec = importlib.util.spec_from_file_location("stp_agent_artifact_digest", module_path)
     if spec is None or spec.loader is None:
         raise BundleError("bundle_digest", f"cannot load {module_path}")
