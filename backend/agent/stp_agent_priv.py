@@ -12,7 +12,6 @@ root 操作收敛为**固定子命令 + 路径/属主/内容校验**：
     capabilities     打印支持的子命令（每行一个）——交付链按集合比对，见 #2319
     bootstrap        写 /etc/stp-agent-priv.conf 与 sudoers（仅 root 安装期）
     apply-code       把 Agent 暂存代码树同步进 $INSTALL_DIR/agent/
-    apply-resources  把暂存 resources/ 同步进 agent/resources/（P2 独立通道）
     install-schema   安装 Pipeline schema（校验 JSON 与调用者属主）
     write-version    写 agent/VERSION（校验短 SHA）
     write-digest     写 agent/ARTIFACT_DIGEST（ADR-0040，校验 sha256:<hex>）
@@ -200,6 +199,8 @@ HOST_LOCAL_PATHS = ["resources/mtbf/"]
 # ADR-0040 §4.3 P2 前置（#1950）：resources/ 仅加 protect（防 --delete 清掉
 # 229MB 大件），**不 exclude**——载荷仍携带 resources/ 期间分发照旧；P2 载荷
 # 收缩（agent-code 剔除 resources/）后分发自然停止、保护已在位。
+# ADR-0040 D8：host-resources 层退役后本保护**永久保留**——退役只停下发，不做主机清理
+# （存量副本与 mtbf/ 主机本地资产原样保留）。
 #
 # #2019：必须写 `resources/***` 而**不是** `resources/`——rsync 里尾斜杠模式
 # 只匹配**目录节点本身**：源树一旦含任一 `resources/*`，`--delete` 仍会清掉
@@ -208,8 +209,9 @@ HOST_LOCAL_PATHS = ["resources/mtbf/"]
 PROTECT_ONLY_PATHS = ["resources/***"]
 # 部署态元数据（#2091）：由部署流程单独受控写入（VERSION / write-digest 系），
 # 既不在载荷里、也不允许被 apply-code 的 --delete/--delete-excluded 清掉——
-# 否则 code-only 收敛会把 resources 记号删掉，而本轮资源层未运行（无人重写）
-# → 文件与主机列记录分叉。语义同 PROTECT_ONLY_PATHS：只防删除、不做 exclude。
+# 否则 code-only 收敛会把记号删掉 → 文件与主机列记录分叉。语义同
+# PROTECT_ONLY_PATHS：只防删除、不做 exclude。ARTIFACT_DIGEST_RESOURCES 自
+# ADR-0040 D8 R4 起不再有写入方（资源层退役），主机上的存量文件仍按「不做主机清理」保留。
 PROTECT_ONLY_METADATA = ["VERSION", "ARTIFACT_DIGEST", "ARTIFACT_DIGEST_RESOURCES"]
 
 
@@ -702,53 +704,6 @@ def cmd_apply_code(args, conf):
     return 0
 
 
-def cmd_apply_resources(args, conf):
-    """ADR-0040 §5-3 P2-B（#1975）：resources 载荷独立收敛通道。
-
-    rsync 范围限定 ``$INSTALL_DIR/agent/resources/`` 子树（--delete 不出界）；
-    ``resources/mtbf/`` 永远主机本地——exclude+protect（#214/#216/#1248 语义）。
-    其余边界与 apply-code 同模式：staged 属主校验、--safe-links、降权执行。
-    """
-    _require_root()
-    caller_uid, _ = _caller_uid()
-    staged = os.path.abspath(args.staged)
-    if is_within(staged, conf["INSTALL_DIR"]):
-        _fail("--staged must be outside INSTALL_DIR")
-    if not os.path.isfile(RSYNC_BIN):
-        _fail("rsync not found: %s" % RSYNC_BIN)
-    agent_uid, agent_gid = _agent_identity(conf)
-    if agent_uid == 0:
-        _fail("apply-resources requires a non-root AGENT_USER")
-
-    def drop_privileges():
-        os.initgroups(conf["AGENT_USER"], agent_gid)
-        os.setgid(agent_gid)
-        os.setuid(agent_uid)
-
-    staged_fd = _open_directory(staged)
-    try:
-        if caller_uid is not None and os.fstat(staged_fd).st_uid != caller_uid:
-            _fail("--staged must be owned by the calling user")
-        with _target_directory(conf, "agent", create=True) as target_fd:
-            argv = [
-                RSYNC_BIN, "-a", "--no-owner", "--no-group", "--delete",
-                "--delete-excluded", "--safe-links",
-                "--exclude=mtbf/",
-                "--filter=protect mtbf/",
-                "/proc/self/fd/%d/resources/" % staged_fd,
-                "/proc/self/fd/%d/resources/" % target_fd,
-            ]
-            rc, _, err = _run(
-                argv, pass_fds=(staged_fd, target_fd), preexec_fn=drop_privileges,
-            )
-    finally:
-        os.close(staged_fd)
-    if rc != 0:
-        _fail("rsync failed rc=%s: %s" % (rc, err.strip()[:300]))
-    print("STP_APPLY_RESOURCES_OK")
-    return 0
-
-
 def cmd_install_schema(args, conf):
     _require_root()
     caller_uid, _ = _caller_uid()
@@ -790,20 +745,14 @@ def cmd_write_version(args, conf):
     return 0
 
 
-_DIGEST_FILENAMES = {"code": "ARTIFACT_DIGEST", "resources": "ARTIFACT_DIGEST_RESOURCES"}
-
-
 def cmd_write_digest(args, conf):
     """ADR-0040 D2：部署收敛成功后受控写入 ARTIFACT_DIGEST（write-version 同族）。
 
-    ``--kind``（#1963，P2 身份分层）：code → ARTIFACT_DIGEST（默认，向后
-    兼容）；resources → ARTIFACT_DIGEST_RESOURCES。
+    只有 agent-code 一个身份：ADR-0040 D8 R4 起 host-resources 层退役，原 ``--kind``
+    （#1963，resources → ARTIFACT_DIGEST_RESOURCES）随之删除。
     """
     _require_root()
     digest = args.digest.strip()
-    kind = getattr(args, "kind", "code") or "code"
-    if kind not in _DIGEST_FILENAMES:
-        _fail("--kind must be 'code' or 'resources'")
     if not digest:
         print("STP_WRITE_DIGEST_SKIPPED")
         return 0
@@ -812,9 +761,9 @@ def cmd_write_digest(args, conf):
         _fail("--digest must be 'sha256:<64 hex chars>' (ADR-0040 D1)")
     with _target_directory(conf, "agent") as target_fd:
         _atomic_write_at(
-            target_fd, _DIGEST_FILENAMES[kind], digest + "\n", 0o644, _agent_identity(conf),
+            target_fd, "ARTIFACT_DIGEST", digest + "\n", 0o644, _agent_identity(conf),
         )
-    print("STP_WRITE_DIGEST_OK kind=%s digest=%s" % (kind, digest))
+    print("STP_WRITE_DIGEST_OK digest=%s" % digest)
     return 0
 
 
@@ -1248,10 +1197,9 @@ _SUBCOMMAND_CONTRACT = {
         "--service", "stability-test-agent",
     ],
     "apply-code": ["--staged", "/tmp/staged"],
-    "apply-resources": ["--staged", "/tmp/staged"],
     "install-schema": ["--file", "/tmp/staged/pipeline_schema.json"],
     "write-version": ["--version", "deadbeef"],
-    "write-digest": ["--digest", "sha256:" + "0" * 64, "--kind", "resources"],
+    "write-digest": ["--digest", "sha256:" + "0" * 64],
     "sync-env": [
         "--secret-b64", "AA==", "--overrides-b64", "AA==", "--path-keys-b64", "AA==",
         "--retired-keys-b64", "AA==",
@@ -1341,15 +1289,9 @@ def _build_parser():
     p.add_argument("--version", default="")
 
     p = sub.add_parser("write-digest", help="write agent/ARTIFACT_DIGEST (ADR-0040)")
-    p.add_argument("--kind", default="code", choices=["code", "resources"])
     # #2011：--digest 属 write-digest（cmd_write_digest 读 args.digest）；此前它被
-    # 误挂到下一段，且 apply-resources 的 add_parser 返回值被丢弃。
+    # 误挂到下一段（当时的下一段是已随 ADR-0040 D8 R4 删除的 apply-resources）。
     p.add_argument("--digest", default="")
-
-    p = sub.add_parser(
-        "apply-resources", help="sync staged resources/ into agent/resources/ (ADR-0040 P2)",
-    )
-    p.add_argument("--staged", required=True)
 
     p = sub.add_parser("sync-env", help="update .env secret/overrides")
     p.add_argument("--secret-b64", default="")
@@ -1426,7 +1368,6 @@ def main(argv=None):
         "install-schema": cmd_install_schema,
         "write-version": cmd_write_version,
         "write-digest": cmd_write_digest,
-        "apply-resources": cmd_apply_resources,
         "sync-env": cmd_sync_env,
         "deps-marker": cmd_deps_marker,
         "fix-ownership": cmd_fix_ownership,
