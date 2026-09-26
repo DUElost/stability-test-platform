@@ -1,6 +1,6 @@
 # ADR-0033：外部工具统一接入契约规范与包管理解耦模型（Tool-Kit Ecosystem Integration）
 
-- 状态：**Accepted（v1.14）**
+- 状态：**Accepted（v1.15）**
 - 落地状态：**部分落地**（Phase 2 B5 `DedupMergeEngine`；Phase A：D0 新族门禁 + Tool Contract 脚手架 + Jira 薄 ACL（#3005）；Phase A3：`PlanRunArtifact` 下载 + DedupReportCard + `jira/runs?plan_run_id=`（#3015）+ DLE zip / `extract_bundle` 登记下载 / PlanRun 内嵌 Jira 历史（#3013 follow-ups）；Scan-Result-GT 仍仅 Agent B2；**包存储（Phase B）第一切片已落机械面（v1.12）**：Git 唯一事实源 `tool_manifest.json` + 确定性打包器 `package_tool_asset.py` + lint/append-only 门禁 `check_tool_manifest.py` + Agent `tools_cache` 拉取核验与 env 回退（`backend/agent/tool_cache.py` × `scan_runner`），全链逃生阀默认关（`STP_DEDUP_SCAN_PACKAGE_REF` 未设＝no-op），发布与 fleet 切换属运维推进项；全族迁移、控制面侧切包与 Phase 3 仍未做——见 §5.4 评估锚与 [#3075](https://github.com/DUElost/stability-test-platform/issues/3075)；D0/D3 权威已生效——见 §5；§5.6 **D0 可拦对象口径**已定——见 v1.10）
 - 优先级：P1
 - 目标里程碑：M7
@@ -29,6 +29,7 @@
 | v1.11 | 2026-09-22 | **§5.4 增第四条触发条件·多站点部署**（方向级修订）：用户裁定「多站点部署 = §5.4 触发」——多站点是平台镜像与外部工具资产物理解耦的需求来源，防止工具/脚本合入持续腐化平台主干；评估结论锚改为**已触发**（条件 4）；撤销「触发前不得排期」；实现跟踪 [#3075](https://github.com/DUElost/stability-test-platform/issues/3075)；评估正本 [`2026-09-22-adr0033-package-store-multisite-trigger.md`](../notes/architecture/2026-09-22-adr0033-package-store-multisite-trigger.md)。**本版不实现** tar.gz/`tools_cache` 代码；条件 1–3 现态对账仍可不成立，但任一条件（含新增第 4 条）成立即可排期 |
 | v1.13 | 2026-09-22 | **D3 一句措辞修订**（由 [ADR-0051](./ADR-0051-release-unit-and-content-addressing.md) D3 裁决）：原「升级工具包 = 新建 script 版本行（`content_sha256 := tarball sha256`）」与 v1.12 裁决 C1（整包 `package_sha256` 与 entry-file sha 语义分离）互斥，改为「`package_sha256 := tarball sha256`；`content_sha256` 仍为入口 sha」。D0/D1/D2/D4 与 DB catalog 唯一运行时权威不变；Phase B 后续切片并入 ADR-0051 Phase 4 |
 | v1.14 | 2026-09-26 | **D0 机械门禁换载体**（由 [ADR-0051](./ADR-0051-release-unit-and-content-addressing.md) D8 裁决，非决策变更）：`check_new_script_family.py`（新族须在 diff/提交说明写归类声明）退役——归类改由 `tool_manifest.json` 族级 `kind` 承担（ADR-0051 v1.3），`check_script_packages` 判三态：新族树未登记 = 未声明归类 → 红；族树挂在 `kind=tool` 条目下 = 外部工具源码入仓 → 红；`kind=script` 登记 = 平台自研声明 → 绿。D0「外部工具源码不入主仓」判据不变，声明从自由文本变为机器可读登记。 |
+| v1.15 | 2026-09-26 | **D3 按对象拆分回写**（[#3203](https://github.com/DUElost/stability-test-platform/issues/3203)，非决策变更——对象拆分已由 [ADR-0051](./ADR-0051-release-unit-and-content-addressing.md) v1.3 族级 `kind` 裁定并落地）：v1.0–v1.14 的 D3 正文把外部工具与平台脚本混称为一条路径（`tool_manifest.yaml` 注册时编译进 `script` 行、升级工具包 = 新建 script 版本行）。现行口径：唯一登记面 = Git `tool_manifest.json`；`kind=script`（平台脚本）经 scan 注册为 `script` 版本行，DB script catalog 仍是其唯一运行时权威；`kind=tool`（外部工具）**绝不建立 `script` 行**，manifest 是其唯一发布事实源、只允许 manifest → 发布 → 站点 → 拉取单向派生（#3075 C2），经 runner 包引用键或 `requires_tools`（ADR-0051 v1.7）消费。包源路径同步为 `packages/{name}/{version}.tar.gz`。D0/D1/D2/D4 不变 |
 | v1.12 | 2026-09-22 | **Phase B 第一切片落地**（非决策变更，#3075）：登记 `tool_manifest.json`（Git 唯一事实源；载体由「`tool_manifest.yaml`」改为 **JSON**——PyYAML 不在 `backend/requirements.txt`，生产镜像/fleet 解释器不保证可用，stdlib 为零依赖硬约束）；确定性打包器 `tools/dev/package_tool_asset.py`（整包 `package_sha256`，与 `script.content_sha256` 的 entry-file sha 语义分离＝裁决 C1）；门禁 `tools/dev/check_tool_manifest.py`（schema lint + append-only：删除/原地改写红、退役仅 `retired` 单向翻转、artifact 钉 `packages/{name}/{version}.tar.gz`＝C2/C4；条目字段恰好分发六元组，执行契约禁混装＝C5）；Agent 侧 `backend/agent/tool_cache.py` 拉取＋整包核验＋`.stp-verified` 幂等标记，`scan_runner` 优先级「显式传参 > 包面 > env 路径」、失败一律回退（C3），`STP_AGENT_DEDUP_SCAN_PACKAGE_REF` 走既有 env 推送链（C6 只切 Agent 侧）；`Start-Log-Scan@2026.09.22` 样板已登记（6.1 MB / 735 文件，复跑同 sha）。全链**逃生阀默认关**：发布与 fleet 推送属运维推进项，本版不触发生产切换 |
 
 ---
@@ -129,14 +130,19 @@ flowchart TD
    - 未就绪 → 步骤不启动、按 ENV_ERROR + `precheck_failed` 记录，不计入测试失败统计（Fail-Fast），杜绝长跑后因环境问题失败。
 
 ### D3：代码仓与工具资产包物理解耦（Manifest + Package Store）
-- **工具包分发机制**：
-  - 外部工具以独立压缩包（`{name}-{version}.tar.gz` 或 wheel）托管于中心存储 `{STP_AEE_NFS_ROOT}/tools/{name}/`（该目录作为权威存储布局在系统架构中补齐登记）；
-  - Agent / 控制面启动或收到新任务时，按需将工具包拉取至本地缓存 `tools_cache/{name}/{version}/`，解压并核验 `sha256` 防篡改。
-- **元数据清单（Manifest）**：
-  - 主代码仓中仅保留 `tool_manifest.yaml`，定义工具名称、版本、适用架构、执行入口、超时及依赖配置；
-  - **双版本体系权威裁定**：架构不变量保持一致——执行引擎仍以 `script:<name>` 作为调用标识，但 **DB script 目录（script catalog）仍是唯一运行时权威**；`tool_manifest.yaml` 是发布格式，注册时编译进 script 行（沿用 `capabilities.json` → scan → DB 的既有先例，#171），不是并存的第二套版本体系；
-  - **升级工具包 = 新建 script 版本行**（**v1.13 / ADR-0051 D3**：`package_sha256 := tarball sha256`，新增列；`content_sha256` 仍为入口文件 sha——v1.12 裁决 C1 的双列语义；v1.0–v1.12 原文「`content_sha256 := tarball sha256`」作废），保 ADR-0021 / ADR-0023 经由 `Script.content_sha256` 溯源（**无** `plan_step.script_sha` 列；#2546 Mode C）；ADR-0020 不可变、422 与退役 409 守卫（`SCRIPT_STILL_REFERENCED`）原样复用，零新机制；
-  - **CI 门禁分工**：PR 门禁（无 NFS 访问）只管 Git 侧——manifest schema lint + 已登记版本条目 append-only；tarball 存在性与 sha256 校验发生在注册时、Agent 拉取时与控制面周期健康巡检。
+
+> **v1.15 按对象拆分（#3203）**：本节 v1.0–v1.14 把外部工具与平台脚本混称为一条路径（「`tool_manifest.yaml` 注册时编译进 `script` 行」「升级工具包 = 新建 script 版本行」）。落地形态已由 ADR-0051 v1.3 族级 `kind` 裁定，以下为现行口径；原文措辞以修订记录为准，不再约束实现。
+
+- **唯一登记面（两类对象共用）**：仓库根 `tool_manifest.json`（Git，append-only；载体 JSON 而非 YAML，见 v1.12）。族级 `kind ∈ {script, tool}` 是**唯一归类判据**（ADR-0051 v1.3），条目只含分发字段（#3075 C5：执行契约要素不进 manifest）。
+- **包存储与本地缓存（两类对象共用）**：每站中心存储 `packages/{name}/{version}.tar.gz`（#3075 C4，与过渡形态 `tools/{name}/` 物理分开），整包指纹 `package_sha256`；Agent / 控制面按需拉取至 `tools_cache/{name}/{version}/` 并整包核验 sha256 防篡改。
+- **对象一：平台脚本（`kind=script`）——DB script catalog 是唯一运行时权威**：
+  - scan 只把 `kind=script` 条目注册为 `script` 版本行（`backend/services/script_catalog.py` `script_entries`）；执行引擎以 `script:<name>` 调用；
+  - **升级 = 新 manifest 条目 + 新 script 版本行**（v1.13：`package_sha256 := tarball sha256` 新列，`content_sha256` 仍为入口文件 sha——v1.12 裁决 C1 双列语义），保 ADR-0021 / ADR-0023 经由 `Script.content_sha256` 溯源（**无** `plan_step.script_sha` 列；#2546 Mode C）；ADR-0020 不可变、422 与退役 409 守卫（`SCRIPT_STILL_REFERENCED`）原样复用，零新机制。
+- **对象二：外部工具（`kind=tool`）——Git manifest 是唯一发布事实源，绝不建立 `script` 行**：
+  - 派生方向只允许 manifest → 发布 → 站点 `packages/` → 拉取核验（#3075 C2），**禁止反写 `script` 表**或另立 DB 登记；
+  - 运行时两种消费入口：runner 的包引用键（如 `STP_*_PACKAGE_REF`，经既有 env 推送链，#3075 C3/C6），或平台脚本包 `capabilities.json` 声明的 `requires_tools` 绑定（ADR-0051 v1.7 D7：引擎执行前拉取核验并把包根注入约定 env 键）；
+  - **升级 = 新 manifest 条目**；消费方经新脚本版本（`requires_tools` 改钉）或包引用键切换，外部工具本身不进入 script 版本体系。
+- **CI 门禁分工**：PR 门禁（无 NFS 访问）只管 Git 侧——`check_tool_manifest.py`（schema lint、族级 `kind` 必填且不可变、已登记条目 append-only、退役仅 `retired` 单向翻转）与 `check_script_packages`（族树与 `kind` 三态归类，ADR-0033 v1.14）；tarball 存在性与 sha256 校验发生在发布、注册、Agent 拉取时与控制面周期健康巡检。
 
 ### D4：防腐适配器架构（Anti-Corruption Layer, ACL）
 - 控制面与 Agent 核心调度只面向通用抽象接口编程（例如 `DedupMergeEngine` 接口仅负责封装 vendor CLI 的调用与返回解析，外围 round/waterline 调度仍由控制面统一管控）；
@@ -180,7 +186,7 @@ ADR-0033 自 2026-09-03 Accepted 起至 2026-09-10 **无任何落地提交**（�
 
 ### 5.2 裁定一：D0 与 D3 的权威即刻生效
 
-- **D0（外部工具源码不入主仓）** 与 **D3 的版本权威裁定**（DB script catalog 唯一运行时权威；`tool_manifest.yaml` 仅发布格式；升级工具包 = 新建 script 版本行）**自本版起即约束评审与实现**，不等 tar.gz / manifest / 缓存机制就绪；
+- **D0（外部工具源码不入主仓）** 与 **D3 的版本权威裁定**（DB script catalog 唯一运行时权威；`tool_manifest.yaml` 仅发布格式；升级工具包 = 新建 script 版本行。**v1.15 注**：现行口径按对象拆分——该权威只覆盖 `kind=script`，`kind=tool` 不入 catalog，见 D3）**自本版起即约束评审与实现**，不等 tar.gz / manifest / 缓存机制就绪；
 - 理由：这两条零成本、零新机制，且正是防止「新族继续全量入仓」与「双版本体系重造」的关键；把它们与包存储解耦，落地不再被大工程阻塞。
 
 ### 5.3 裁定二：D2 收窄为「新工具族准入要求、按族采用」
