@@ -80,6 +80,31 @@ curl -sG http://127.0.0.1:9091/api/v1/rules --data-urlencode type=alert \
 
 - ~~未进安装清单/漂移检测~~ → **已做**（本目录资产进 `host_assets()`，`check-monitoring-assets.py`
   覆盖，2026-09-23 本机实测 `match`）。
-- 仍开着：**#3202**（Phase-3 WIP 里那条 `pytest` 失控环，≈160 MB/s）与 **#3050 G1**
-  （宿主内存告警按现网分布重标为结果判据 + 短 `for:`）。硬顶（第一道防线）见
-  `docs/development/testing.md` §2。
+- ~~#3202~~ → **已做**（PR #3213 补推进时钟；生产脚本侧的轮次上界见 `powercycle_setup` v1.2.6，#3223）。
+- ~~#3050 G1~~ → **已做**（PR #3209：`../../prometheus/alerts-host-resources.yml`，取代 09-14 草案）。
+- 硬顶（第一道防线）见 `docs/development/testing.md` §2。
+
+## 证据等级（#3322，2026-09-26 owner 裁决）
+
+这条防线**有什么证据、没有什么证据**，以本表为准。「装了之后 N 天没卡死」**不是**有效性证据，
+不得作为防线生效的依据引用。
+
+| 层 | 证据 | 出处 |
+|---|---|---|
+| 装配期 | **有**：安装器回读 `is-active`、生效行无 `--dryrun`、`RuntimeWatchdogUSec` 非 0 | #3206 |
+| 选择逻辑（earlyoom 杀谁） | **有**：同款 `--avoid/--prefer` 的 `--dryrun` 观测实例；默认按 `oom_score` 会选错，加 `--sort-by-rss` 后选中失控体 | #3335，`docs/notes/process/2026-09-25-oom-defense-evidence-3322.md` |
+| 告警可用性 | **有**：promtool 正/负例场景 + 10020 个基线分钟 0 误报的回测 | #3209 / #3335 |
+| 运行时实杀 / watchdog 实复位 | **无**，且**不在本宿主上取** | 见下 |
+
+**不在控制面宿主上做实杀/实复位演练（含「只压到 SIGTERM 档」）。** earlyoom 动手要求
+avail<15% **且** swapfree<8%；本机 SwapTotal 23.7 GiB ⇒ swapfree<8% ≈ 剩不到 1.9 GiB，正是
+09-23 终局阶段所在区间（2 分钟内余量 16.07→5.40 GiB），到 SIGTERM 档与进入失速之间没有可控余量；
+本机同载 PostgreSQL + NFS + 全部 agent 心跳，失败的代价是 30s 硬复位 + PG 崩溃恢复。
+
+允许的取证途径只有两条：
+
+1. **非生产机演练**：在不承载 PG/NFS 的主机或 VM 上用本目录同一份 `earlyoom.default` 做实杀；
+   watchdog 复位演练同理只在非生产机做；
+2. **被动取证**：#3050 R2′（earlyoom 非 dryrun 击杀行，或内核 `constraint=CONSTRAINT_NONE`
+   全局 OOM；`CONSTRAINT_MEMCG` 是测试硬顶在工作，不计）自然成立时，复盘必须核对 earlyoom
+   选中的是否为元凶，结论回填本表。

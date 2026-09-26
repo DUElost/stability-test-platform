@@ -1,1 +1,11 @@
-{"capabilities": ["progress_stamps"]}
+{
+  "capabilities": [
+    "progress_stamps"
+  ],
+  "requires_tools": {
+    "flashtool": {
+      "version": "1.2444.00.100",
+      "env": "STP_FLASH_TOOL_DIR"
+    }
+  }
+}

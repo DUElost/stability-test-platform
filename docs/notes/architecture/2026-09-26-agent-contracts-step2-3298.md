@@ -82,8 +82,9 @@ Class: architecture
 
 ## Revisit
 
-- ADR-0054 §5 第 3 步（`artifact_digest` 规范化算法）与第 4 步（`kernel_usb_faults` 解析 +
-  签名词表、`state_migration`）未做；C3 剩余 2 条基线是第 4 步的出口；
+- ADR-0054 §5 第 3 步已落地（`artifact_digest` 归契约包 + 单实现 + 格式锚，见
+  `2026-09-26-agent-contracts-step3-3298.md`）；只剩第 4 步（`kernel_usb_faults` 解析 +
+  签名词表、`state_migration`），C3 剩余 2 条基线是它的出口；
 - `watcher_contracts.py` 的 `WatcherSummaryPayload` 等 shape 与后端 model 的同步义务仍在
   （文件头「不一致必须同步改两边」条款），后续如引入代码生成再议；
 - `agent/contracts/` 已 6 个模块；若继续增长到出现「目录分片」感，回审 D2 判据

@@ -1,7 +1,5 @@
 {
-  "capabilities": [
-    "progress_stamps"
-  ],
+  "capabilities": [],
   "requires_tools": {
     "aimonkey": {
       "version": "20260317",
