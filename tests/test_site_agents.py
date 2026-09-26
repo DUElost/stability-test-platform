@@ -30,6 +30,7 @@ ADMIN_PASSWORD = "admin-secret-9374"
 PUBLIC_URL = "https://control-i4.synthetic.invalid"
 DIGEST_CODE = "sha256:" + "a" * 64
 DIGEST_RESOURCES = "sha256:" + "b" * 64
+DIGEST_CONTROL_PLANE = "sha256:" + "c" * 64
 
 
 def _heartbeat(offset: float = 0.0) -> str:
@@ -47,8 +48,9 @@ def _manifest(path: Path) -> None:
         "product": {"version": "synthetic-2026.09.0"},
         "source": {"revision": "0123456789abcdef0123456789abcdef01234567"},
         "components": [
+            # ADR-0040 D8 R3 起的新 bundle 形态：agent-code + control-plane（host-resources 已退役）
             {"name": "agent-code", "digest": DIGEST_CODE},
-            {"name": "host-resources", "digest": DIGEST_RESOURCES},
+            {"name": "control-plane", "digest": DIGEST_CONTROL_PLANE},
         ],
         "database": {"schema_target": "cafe1234"},
         "compatibility": {
@@ -866,15 +868,15 @@ class TestFailClosed:
         assert slept == [5.0]
         assert _status(checks, "install.s5.digest") == "PASS"
 
-    def test_digest_wait_covers_a_stale_resources_value(self, site):
-        """重装场景：code 早已有值、resources 还是上一版 → 必须继续等，不能立即比对。
+    def test_digest_wait_covers_a_stale_code_value(self, site):
+        """重装场景：上报的 agent-code 还是上一版 → 必须继续等，不能立即比对。
 
         238 实测：Agent 端逐拍重读摘要（#1943），文件写好要等一个心跳周期生效；
-        原来的「任一非空就收工」会在 resources 仍是旧值时下结论并报 mismatch。
+        「任一非空就收工」会在旧值未刷新时下结论并报 mismatch。
         """
         slept: list[float] = []
         stale = "sha256:" + "0" * 64
-        api = FakeApi(resources_sequence=[stale, DIGEST_RESOURCES])
+        api = FakeApi(digest_sequence=[stale, DIGEST_CODE])
 
         checks = _run(
             site(), api,
@@ -883,18 +885,59 @@ class TestFailClosed:
             sleep=lambda seconds: slept.append(seconds),
         )
 
-        assert api.host_reads >= 2, "resources 还没刷新就下了结论"
+        assert api.host_reads >= 2, "上报值还没刷新就下了结论"
         assert slept == [5.0]
         assert _status(checks, "install.s5.digest") == "PASS"
 
-    def test_stale_resources_beyond_the_window_is_a_mismatch(self, site):
+    def test_stale_code_beyond_the_window_is_a_mismatch(self, site):
         """窗口耗尽仍是旧值：如实报 mismatch（不许掩盖）。"""
         stale = "sha256:" + "0" * 64
-        api = FakeApi(resources_sequence=[stale])
+        api = FakeApi(digest_sequence=[stale])
 
         checks = _run(site(), api, digest_timeout=0.0, poll_interval=5.0, sleep=lambda _: None)
 
         assert "agent_digest_mismatch" in _codes(checks)
+
+    def test_declared_control_plane_does_not_stall_the_digest_wait(self, site):
+        """control-plane 由 S0 核验、Agent 从不上报：它不得参与「到齐」判据。
+
+        反例（R3 前）：按「清单声明的全部分量都等于上报值」判到齐——声明了 control-plane 的
+        bundle 永远到不齐，每台 Agent 都空等满 digest_timeout 才放行。
+        """
+        slept: list[float] = []
+        api = FakeApi()
+
+        checks = _run(
+            site(), api,
+            digest_timeout=0.5,
+            poll_interval=0.1,
+            sleep=lambda seconds: slept.append(seconds),
+        )
+
+        assert slept == [], f"agent-code 已一致却仍在等：{len(slept)} 次"
+        assert _status(checks, "install.s5.digest") == "PASS"
+
+    def test_retired_host_resources_is_neither_awaited_nor_compared(self, site):
+        """ADR-0040 D8 R3：旧 bundle 仍声明 host-resources，但 R2 起安装链不再写它的身份——
+        Agent 上报空值或陈旧值都不得拖住 S5，也不得判 mismatch。"""
+        legacy = site()
+        manifest_path = Path(legacy.config.release.manifest)
+        doc = json.loads(manifest_path.read_text(encoding="utf-8"))
+        doc["components"].append({"name": "host-resources", "digest": DIGEST_RESOURCES})
+        manifest_path.write_text(json.dumps(doc), encoding="utf-8")
+        slept: list[float] = []
+        api = FakeApi(resources_sequence=["sha256:" + "0" * 64])
+
+        checks = _run(
+            legacy, api,
+            digest_timeout=0.5,
+            poll_interval=0.1,
+            sleep=lambda seconds: slept.append(seconds),
+        )
+
+        assert slept == []
+        assert "agent_digest_mismatch" not in _codes(checks)
+        assert _status(checks, "install.s5.digest") == "PASS"
 
     def test_missing_content_digest_is_not_a_pass(self, site):
         """Agent 未上报摘要 ≠ 内容一致：不能当 S5 已通过。"""
@@ -1093,7 +1136,7 @@ class TestInstallWiring:
         monkeypatch.setattr(install_module, "stage_s2_release_env", lambda ctx: [])
         monkeypatch.setattr(install_module, "stage_s4_entry", lambda ctx: [])
         monkeypatch.setattr(install_module, "_digest_bundle", lambda ctx: {
-            "agent-code": DIGEST_CODE, "host-resources": DIGEST_RESOURCES,
+            "agent-code": DIGEST_CODE, "control-plane": DIGEST_CONTROL_PLANE,
         })
         monkeypatch.setattr(install_module, "_hostname_evidence", lambda ctx: True)
         monkeypatch.setattr(install_module, "_code_head", lambda ctx: "cafe1234")

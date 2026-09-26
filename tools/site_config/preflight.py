@@ -366,8 +366,9 @@ def _bindings_check(directory: Path) -> Check:
     )
 
 
+# ADR-0040 D8 R3：backend/agent/resources 不再是 bundle 布局的一部分（host-resources 层退役）。
 BUNDLE_REQUIRED = (
-    "release-manifest.json", "backend", "backend/agent", "backend/agent/resources",
+    "release-manifest.json", "backend", "backend/agent",
     "backend/schemas", "frontend/dist-prod", "deploy", "tools",
 )
 

@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 
 from .bindings import BindingError, load_binding
-from .manifest import load_release_manifest
+from .manifest import AGENT_REPORTED_COMPONENTS, load_release_manifest
 from dataclasses import replace
 
 from .ops import Ops
@@ -670,16 +670,19 @@ def assert_agent(
     ))
 
     # 代码/schema/脚本一致：Agent 上报的部署摘要不得与声明发布物冲突。
+    # 只对 **Agent 自报**的分量断言（ADR-0040 D8 R3）：control-plane 由 S0 核验、Agent 从不上报；
+    # host-resources 已退役（旧 bundle 仍可能声明，但 R2 起安装链不再写它的身份）。此前按「清单
+    # 声明的全部分量」判到齐，声明了 control-plane 的 bundle 永远到不齐——每台都空等满 digest_timeout。
+    agent_declared = {
+        key: value for key, value in declared_digests.items() if key in AGENT_REPORTED_COMPONENTS
+    }
     deadline = time.monotonic() + max(0.0, digest_timeout)
     while True:
-        reported = {
-            "agent-code": host_field(host, "agent_artifact_digest"),
-            "host-resources": host_field(host, "agent_resources_digest"),
-        }
-        # 到齐的判据是「清单里声明的每一项都等于上报值」：只看"任一非空"会在重装
-        # 场景提前收工——code 早已有值，resources 还是上一版的值（238 实测）。
-        settled = bool(declared_digests) and all(
-            reported.get(key) == value for key, value in declared_digests.items()
+        reported = {"agent-code": host_field(host, "agent_artifact_digest")}
+        # 到齐的判据是「声明的每一项（Agent 自报范围内）都等于上报值」：只看"任一非空"会在重装
+        # 场景提前收工——上报的还是上一版的值（238 实测）。
+        settled = bool(agent_declared) and all(
+            reported.get(key) == value for key, value in agent_declared.items()
         )
         if settled or time.monotonic() >= deadline:
             break
@@ -692,13 +695,13 @@ def assert_agent(
                                    location="$.control_plane.public_url", role="control_plane")]
     mismatched = [
         key for key, value in reported.items()
-        if value and declared_digests.get(key) and value != declared_digests[key]
+        if value and agent_declared.get(key) and value != agent_declared[key]
     ]
     if mismatched:
         checks.append(_fail("install.s5.digest", "agent_digest_mismatch",
                             location="$.release.manifest", role="site"))
         return checks
-    verified = [key for key, value in reported.items() if value and declared_digests.get(key)]
+    verified = [key for key, value in reported.items() if value and agent_declared.get(key)]
     if not verified:
         # 摘要缺失（旧 Agent 或无 ARTIFACT_DIGEST 工件）不能当作「内容一致」。
         checks.append(_fail("install.s5.digest", "agent_digest_missing",

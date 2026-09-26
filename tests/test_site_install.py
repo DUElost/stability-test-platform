@@ -132,7 +132,6 @@ def _bundle(tmp_path: Path) -> tuple[Path, dict[str, str]]:
     extra = {"stp_schemas/pipeline_schema.json": str(bundle / "backend/schemas/pipeline_schema.json")}
     digests = {
         "agent-code": digest_entries(collect_artifact_entries(str(bundle / "backend/agent"), extra, kind="code")),
-        "host-resources": digest_entries(collect_artifact_entries(str(bundle / "backend/agent"), extra, kind="resources")),
         "control-plane": digest_entries(collect_control_plane_entries(str(bundle))),
     }
     return bundle, digests
@@ -145,8 +144,10 @@ def _manifest(version: str, digests: dict[str, str]) -> dict:
         "source": {"revision": "0123456789abcdef0123456789abcdef01234567"},
         "components": [
             {"name": "agent-code", "digest": digests["agent-code"]},
-            {"name": "host-resources", "digest": digests["host-resources"]},
-        ] + ([{"name": "control-plane", "digest": digests["control-plane"]}] if "control-plane" in digests else []),
+        ]
+        # ADR-0040 D8 R3 前的旧 bundle 还声明 host-resources（已退役分量）
+        + ([{"name": "host-resources", "digest": digests["host-resources"]}] if "host-resources" in digests else [])
+        + ([{"name": "control-plane", "digest": digests["control-plane"]}] if "control-plane" in digests else []),
         "database": {"schema_target": CODE_HEAD},
         "compatibility": {
             "agent_protocol": ">=1.0,<2.0",
@@ -214,9 +215,11 @@ def _site(tmp_path: Path, bundle: Path, *, target: str, site_id: str, marker_dis
 
 
 def prepare(tmp_path: Path, *, version: str = "synthetic-2026.09.0", tamper: bool = False,
-            tamper_control_plane: bool = False):
+            tamper_control_plane: bool = False, legacy_host_resources: str | None = None):
     target, site_id = "control-i3.synthetic.invalid", "synthetic-i3"
     bundle, digests = _bundle(tmp_path)
+    if legacy_host_resources is not None:
+        digests = {**digests, "host-resources": legacy_host_resources}
     if tamper_control_plane:
         # 篡改发生在 manifest 生成**之后**：declared 的 control-plane 与落盘树不再一致。
         (bundle / "backend/api_extra.py").write_text("EXTRA = 1\n", encoding="utf-8")
@@ -1701,8 +1704,19 @@ def test_accumulated_evidence_is_per_release_and_bounded(tmp_path):
 
 
 def test_three_component_bundle_passes_s0(tmp_path):
-    """ADR-0051 Phase 4：新 bundle（三面，含 control-plane）S0 全键比对通过。"""
+    """ADR-0051 Phase 4 / ADR-0040 D8 R3：新 bundle（agent-code + control-plane）S0 全键比对通过。"""
     prepare(tmp_path)
+    report = invoke(tmp_path)
+    assert "release_digest" not in codes(report)
+    assert "digest_matched" in codes(report)
+
+
+def test_legacy_bundle_declaring_retired_host_resources_is_accepted(tmp_path):
+    """ADR-0040 D8 R3：旧 bundle 仍声明 host-resources——照收，但不核验（其内容已无任何下发通道）。
+
+    反例（R3 前）：S0 现算 resources 分区并与声明比对，任意值都会让 `release_digest` 红。
+    """
+    prepare(tmp_path, legacy_host_resources="sha256:" + "b" * 64)
     report = invoke(tmp_path)
     assert "release_digest" not in codes(report)
     assert "digest_matched" in codes(report)

@@ -24,9 +24,12 @@ from pathlib import Path
 
 MANIFEST_NAME = "release-manifest.json"
 TREE_LAYOUT = ("backend", "deploy", "tools", "frontend/dist-prod")
-# Agent 载荷的资源目录不在 git（230MB 工具集）：缺了它 bundle 照样能构建，
-# 但 Agent 的 host-resources 摘要会与清单不符（或功能缺失），要到 S5 才暴露。
-AGENT_RESOURCES = "backend/agent/resources"
+# ADR-0040 D8 R3：host-resources 层退役——Agent 资源目录（不在 git，退役前 230MB 工具集）既不再是
+# 构建前置，也不进 bundle。构建机仓根可能仍躺着退役前的副本（gitignored），按路径剔除，使交付物
+# 与提交同形：bundle 从此不依赖任何 `backend/agent/resources/` 外部物料（ADR-0051 D8「从提交构建」
+# 的前置之一）。
+_RETIRED_AGENT_RESOURCES_PARENT = ("backend", "agent")
+_RETIRED_AGENT_RESOURCES_NAME = "resources"
 DEFAULT_VERSION_PREFIX = "local"
 # #2269：整树复制会把**构建机本地状态**一并打包。最严重的是 `backend/.env`
 # （gitignored，但 `deploy/install.sh` 以仓库根为源 → 它进 bundle → S2 落到站点
@@ -70,9 +73,15 @@ _BUNDLE_IGNORE_GLOBS = shutil.ignore_patterns(*_BUNDLE_IGNORE_PATTERNS)
 
 
 def bundle_ignore(directory: str, names: list[str]) -> set[str]:
-    """`copytree(ignore=...)` 回调：缓存/字节码按 glob，`.env*` 按模板豁免判据。"""
+    """`copytree(ignore=...)` 回调：缓存/字节码按 glob，`.env*` 按模板豁免判据，
+    退役的 Agent 资源目录按路径（ADR-0040 D8 R3）。"""
     ignored = set(_BUNDLE_IGNORE_GLOBS(directory, names))
     ignored.update(name for name in names if _is_forbidden_env_file(name))
+    if (
+        _RETIRED_AGENT_RESOURCES_NAME in names
+        and Path(directory).parts[-2:] == _RETIRED_AGENT_RESOURCES_PARENT
+    ):
+        ignored.add(_RETIRED_AGENT_RESOURCES_NAME)
     return ignored
 
 
@@ -198,15 +207,14 @@ def _load_agent_digest_module(bundle: Path):
 
 
 def _digests(bundle: Path) -> dict[str, str]:
-    """与 S0（install._digest_bundle）同基准：code / resources 两侧都算。"""
+    """与 S0（install._digest_bundle）同基准：agent-code + control-plane（host-resources 已退役）。"""
     module = _load_agent_digest_module(bundle)
     agent_dir = bundle / "backend" / "agent"
     extra = {
         "stp_schemas/pipeline_schema.json": str(bundle / "backend" / "schemas" / "pipeline_schema.json"),
     }
     out = {
-        kind: module.digest_entries(module.collect_artifact_entries(str(agent_dir), extra, kind=kind))
-        for kind in ("code", "resources")
+        "code": module.digest_entries(module.collect_artifact_entries(str(agent_dir), extra, kind="code")),
     }
     # ADR-0051 Phase 4：控制面自身载荷（backend/** 除 agent）也有摘要面——
     # #2269 的「不在任何摘要面内」类文件从此进摘要（不排除 .env*，见量具 docstring）。
@@ -227,11 +235,6 @@ def build_bundle(
     repo_root, out = Path(repo_root).resolve(), Path(out).resolve()
     python = python or sys.executable
     missing = [name for name in TREE_LAYOUT if not (repo_root / name).exists()]
-    if not missing and not (repo_root / AGENT_RESOURCES).is_dir():
-        raise BundleError(
-            "bundle_resources",
-            f"{AGENT_RESOURCES} is not in git; copy it from the build host before packaging",
-        )
     if "frontend/dist-prod" in missing:
         raise BundleError(
             "bundle_frontend", "run `cd frontend && npm ci && npm run build:prod` first",
@@ -274,7 +277,6 @@ def build_bundle(
         "source": {"revision": revision},
         "components": [
             {"name": "agent-code", "digest": digests["code"]},
-            {"name": "host-resources", "digest": digests["resources"]},
             {"name": "control-plane", "digest": digests["control-plane"]},
         ],
         "database": {"schema_target": schema_target or _schema_target(out)},
@@ -305,8 +307,7 @@ def build_bundle(
         "version": version,
         "revision": revision,
         "components": {
-            "agent-code": digests["code"], "host-resources": digests["resources"],
-            "control-plane": digests["control-plane"],
+            "agent-code": digests["code"], "control-plane": digests["control-plane"],
         },
         "schema_target": manifest["database"]["schema_target"],
         "wheelhouse": wheelhouse,
