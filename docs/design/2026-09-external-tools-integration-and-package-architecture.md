@@ -145,47 +145,50 @@ output_dir/
 
 ## 3. 工具包分发、版本化与本地缓存机制
 
-### 3.1 元数据清单：`tool_manifest.yaml`
-外部工具以配置清单形式在平台登记，主仓内不再存放工具实现代码：
-```yaml
-name: unisoc_scan_result
-version: "1.0.4"
-tier: "platform"               # platform / host / device
-description: "展锐 YPLog 汇总去重与 Excel 生成工具"
-package:
-  source: "nfs://tools/unisoc_scan_result/1.0.4/unisoc_scan_result-1.0.4.tar.gz"
-  sha256: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
-entrypoint:
-  runtime: "python"
-  cmd: "python -m unisoc_scan_result.adapter"
-capabilities:
-  platforms: ["unisoc"]
-  timeout_seconds: 1800
+### 3.1 元数据清单：`tool_manifest.json`
+
+> 2026-09-26 回写（ADR-0033 v1.15 / #3203）：载体已定为仓库根 `tool_manifest.json`（ADR-0033 v1.12：stdlib 零依赖），族级 `kind ∈ {script, tool}` 为唯一归类判据（ADR-0051 v1.3）。原 YAML 草案（含 tier / entrypoint / capabilities 字段）作废——执行契约要素不进 manifest（#3075 C5）。
+
+外部工具与平台脚本在同一清单登记，条目只含分发字段；主仓内不存放外部工具实现代码（D0）。现行条目形态（节选）：
+```json
+"flashtool": {
+  "kind": "tool",
+  "versions": [
+    {
+      "version": "1.2444.00.100",
+      "artifact": "packages/flashtool/1.2444.00.100.tar.gz",
+      "package_sha256": "ffc30c93…",
+      "script": "flash_tool",
+      "python": null,
+      "retired": false
+    }
+  ]
+}
 ```
 
 ### 3.2 共享存储布局与 Agent 本地缓存
-- **中心存储归档点**：
-  `{STP_AEE_NFS_ROOT}/tools/{name}/{version}/{name}-{version}.tar.gz`
+- **中心存储归档点**（每站，#3075 C4）：
+  `packages/{name}/{version}.tar.gz`（与过渡形态 `tools/{name}/` 源码目录物理分开）
 - **Agent / 控制面工作节点本地缓存**：
   本地维护 `tools_cache/{name}/{version}/`：
-  1. 检查本地缓存是否存在且 `sha256sum` 与 Manifest 一致；
+  1. 检查本地缓存是否存在且整包 `package_sha256` 与 manifest 一致（`.stp-verified` 幂等标记）；
   2. 若不存在，自共享存储复制到本地并解压；
   3. 执行器在隔离的工作目录（Working Dir）中运行，避免多进程并发执行产生文件写入冲突；
   4. 支持基于最后访问时间的 LRU 磁盘清理策略，保持本地磁盘水位健康。
 
 ### 3.3 注册流与门禁分工
 
-**发布流**（对齐 ADR-0033 D3 双版本体系权威裁定——DB script catalog 仍是唯一运行时权威，manifest 是发布格式）：
+**发布流**（对齐 ADR-0033 D3 v1.15 按对象拆分）：
 
-1. 构建 `{name}-{version}.tar.gz` 并上传至 `{STP_AEE_NFS_ROOT}/tools/{name}/{version}/`；
-2. 注册（扩展现有 script catalog scan，读取 `tool_manifest.yaml`）创建**新的 script 版本行**，`content_sha256 := tarball sha256`，并登记入口 / tier / 契约能力；
-3. 此后一切照旧：ADR-0020 不可变与 422、`plan_step` 引用、退役 409 守卫（`SCRIPT_STILL_REFERENCED`）原样复用，零新机制。
+1. 确定性打包（`tools/dev/package_tool_asset.py --kind script|tool`），在 `tool_manifest.json` 追加版本条目（append-only），发布到站点 `packages/{name}/{version}.tar.gz`；
+2. **`kind=script`（平台脚本）**：scan 把条目注册为**新的 script 版本行**（`package_sha256 := tarball sha256`，`content_sha256` 仍为入口 sha），此后 ADR-0020 不可变与 422、`plan_step` 引用、退役 409 守卫（`SCRIPT_STILL_REFERENCED`）原样复用；
+3. **`kind=tool`（外部工具）**：**不建立 `script` 行**；消费方经 runner 包引用键（`STP_*_PACKAGE_REF`）或平台脚本包 `capabilities.json` 的 `requires_tools`（ADR-0051 v1.7）拉取核验后使用。
 
 **CI 门禁分工**（GitHub Actions runner 无 NFS 访问，这是硬约束）：
 
 | 校验 | 在哪里做 | 时机 |
 |---|---|---|
-| manifest YAML schema lint | PR 门禁（Git 侧） | 每次 PR |
+| manifest schema lint + 族级 `kind` 必填且不可变（`check_tool_manifest.py`） | PR 门禁（Git 侧） | 每次 PR |
 | 已登记版本条目 append-only（不可变） | PR 门禁（Git 侧） | 每次 PR |
 | tarball 存在性 + sha256 一致 | 控制面 | 注册时 |
 | tarball sha256 防篡改复核 | Agent | 每次拉取（D3） |
@@ -299,7 +302,7 @@ gantt
 ## 6. 验收标准与架构守卫（DoD & CI Gates）
 
 1. **主代码仓零外部源码膨胀**（可判定规则，非口号）：
-   - PR 门禁：`backend/agent/scripts/` 新增顶层工具目录必须伴随对应 `tool_manifest.yaml` 注册记录，否则 gate 红；
+   - PR 门禁：`backend/agent/scripts/` 新增顶层族树必须在 `tool_manifest.json` 以 `kind=script` 登记；未登记或挂在 `kind=tool` 条目下即 gate 红（`check_script_packages` 三态，ADR-0033 v1.14）；
    - PR 门禁：manifest 已登记版本条目 append-only（tarball 校验不在 PR CI——runner 无 NFS 访问，分工见 §3.3）；
 2. **契约自测套件**：
    - 编写 `tools/dev/verify_tool_contract.py`，任何新接入的工具适配器必须能通过标准测试（验证 `--check-env`、退出码映射与 `summary.json` 合规性）——§4.2 模板即测试靶子，必须真正实现契约；

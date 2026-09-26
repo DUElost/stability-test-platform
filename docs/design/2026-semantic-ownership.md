@@ -157,7 +157,7 @@
 | `plan-run-scaling` | concept | PlanRun 准入队列与四层调度不变量 | `docs/adr/ADR-0026-plan-execution-scaling.md :: ### 2. 四条不可破坏的不变量` | 破坏 QUEUED/permit 不变量 |
 | `run-terminal-semantics` | concept | 执行终态语义（v1.1 三态：完成不判红、有失败=黄、abort=红） | `docs/adr/ADR-0048-execution-status-semantics-v2.md :: ### D1 终态语义：完成不判红，abort 才红（v1.1 三态，owner 确认）` | 重新引入阈值轴/设备失败判红 |
 | `script-content` | concept | 脚本内容 / sha 对账权威 | `docs/adr/ADR-0021-script-content-alignment-gate.md :: ### D4 — 平台 DB 是脚本内容唯一权威` | 改 D4 |
-| `script-runtime-catalog` | concept | 可派发 `(name, version)` 运行时权威 | `docs/adr/ADR-0033-tool-kit-ecosystem-integration.md :: ### D3：代码仓与工具资产包物理解耦（Manifest + Package Store）` | 第二套版本体系 |
+| `script-runtime-catalog` | concept | 可派发 `(name, version)` 运行时权威（仅 `kind=script`；`kind=tool` 外部工具不入 catalog，ADR-0033 v1.15 / ADR-0051 v1.3） | `docs/adr/ADR-0033-tool-kit-ecosystem-integration.md :: ### D3：代码仓与工具资产包物理解耦（Manifest + Package Store）` | 第二套版本体系 |
 | `script-meta-freeze` | concept | `plan_snapshot` 步骤身份冻结面；非独立权威（**无** `script_meta` 键；inventory key 名保留） | `docs/adr/ADR-0021-script-content-alignment-gate.md :: ## 引用 / 关联` | 再称「唯一权威」或把假键写成第三权威 |
 | `script-version-immutability` | concept | 已发布**发布单元**「不可原地修改 / 删除」契约的**范围**（ADR-0051 D1：不可变性属于内容寻址包；Phase 3 前版本目录仍是发布单元；删除按 D5 继承 ADR-0039 D2/D3） | `docs/adr/ADR-0051-release-unit-and-content-addressing.md :: ### D1（核心）：发布单元 = 内容寻址包` | ADR-0051 Phase 2a 落地（包登记 + 等价证明）→ `script-versioning.md`「已发布版本不可变」节改写为包口径；Phase 3 删目录 → `check-script-version-immutability.py` 同 PR 退役、本行范围句去掉过渡句 |
 | `dle-record` | concept | 设备日志事件终态台账 | `docs/adr/ADR-0028-device-log-event-and-continuous-upload.md :: 唯一权威记录` | 改唯一记录主张 |
