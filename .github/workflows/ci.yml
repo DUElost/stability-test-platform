@@ -239,11 +239,13 @@ jobs:
           python tools/dev/check_transitions.py --self-test
           python tools/dev/check_transitions.py
 
-      # ADR-0033 D0：禁止新增 backend/agent/scripts/ 顶层工具族（#745 in-tree breaker）。
-      # 既有族新版本仍绿；新族须归类声明，external-tool 无 in-tree 出口
-      # （ADR-0033 §5.6；§5.4 条件 4 已触发，跟踪 #3075）。
-      # ADR-0033 D2：Tool Contract 验证器 + fixture 靶子（新族准入脚手架）。
-      - name: ADR-0033 Tool Contract 检查
+      # ADR-0033 D2：Tool Contract **fixture 自检**（#3094 如实命名——绿灯只证
+      # 验证器红绿可测 + fixture 合规，不代表任何真实新族已过准入；真实
+      # entrypoint 验证留触发器：首个 kind=tool 族按 D2 契约登记进
+      # tool_manifest.json 时同 PR 接 --entrypoint，#3075 Package Store 承接。
+      # 旧 D0 注释随 check_new_script_family 退役删除：归类由下方
+      # tool_manifest 检查的族级 kind 判定承担，ADR-0051 D8 / #3093①）。
+      - name: ADR-0033 Tool Contract fixture 自检
         run: |
           python tools/dev/verify_tool_contract.py --self-test
           python tools/dev/verify_tool_contract.py
@@ -310,10 +312,13 @@ jobs:
       # 确定性拦截；S4 禁止已下线的 pr-agent.yml 回潮。检查器自身由 --self-test
       # 正反样例守护（#854：self-test 与 --check 同步进 CI，防检查器回归）；
       # S 规则明细见 tools/dev/check_governance_surface.py 抬头。
+      # S15⑦/③ diff 通道（#3093②/#3204）：base 取 PR 目标分支，fetch-depth: 0
+      # 下 diff 可得；base 不可得时检查器自行降级并打印射程 NOTE。
       - name: 治理面结构检查(C-G1 L0)
         run: |
           python tools/dev/check_governance_surface.py --self-test
-          python tools/dev/check_governance_surface.py --check
+          python tools/dev/check_governance_surface.py --check \
+            --base "origin/${{ github.base_ref || github.ref_name }}"
 
       # Execution Registry（ADR-0034 P1）纯函数红绿自测：离线，不触网不写真实 registry。
       - name: Execution Registry 自测

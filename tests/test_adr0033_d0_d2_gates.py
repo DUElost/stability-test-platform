@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import importlib.util
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -59,11 +62,45 @@ class TestAdr0033GateWiring:
                                              rebuilt["newfam"]["script"], kind="script")
         assert csp.check(as_script, rebuilt, root) == []
 
-    def test_tool_contract_gate(self):
+    def test_tool_contract_fixture_gate(self):
+        """#3094①：门禁如实命名 tool-contract-fixture——绿灯只证 fixture 自检，
+        不再被读成「真实新族已过 Tool Contract 准入」。"""
         mod = _load_run_gates()
-        assert "tool-contract" in mod.GATES
-        cmd, cwd, _ = mod.GATES["tool-contract"]
+        assert "tool-contract-fixture" in mod.GATES
+        assert "tool-contract" not in mod.GATES, "旧 gate 名未退役（#3094）"
+        cmd, cwd, _ = mod.GATES["tool-contract-fixture"]
         assert "verify_tool_contract.py" in cmd
         assert cwd == mod.ROOT
         for profile in ("check:quick", "check:pr"):
-            assert "tool-contract" in mod.PROFILES[profile]
+            assert "tool-contract-fixture" in mod.PROFILES[profile]
+
+    def test_tool_contract_step_named_honestly(self):
+        """#3094①：CI step 名与 S5x 锚点同步为「fixture 自检」。"""
+        ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        assert "ADR-0033 Tool Contract fixture 自检" in ci
+        assert "ADR-0033 Tool Contract 检查" not in ci, "旧 step 名残留"
+        surface = (
+            ROOT / "tools" / "dev" / "check_governance_surface.py"
+        ).read_text(encoding="utf-8")
+        assert (
+            '"tool-contract-fixture": ("ci.yml", "ADR-0033 Tool Contract fixture 自检")'
+            in surface
+        ), "S5x 锚点未随改名同步——governance surface 会红"
+
+    def test_verify_tool_contract_has_no_skip_switch(self):
+        """#3094②：STP_VERIFY_TOOL_CONTRACT 跳过开关已删——env 置 0 也必须真跑。"""
+        src = (ROOT / "tools" / "dev" / "verify_tool_contract.py").read_text(
+            encoding="utf-8"
+        )
+        assert "STP_VERIFY_TOOL_CONTRACT" not in src, "跳过开关未删净（#3094②）"
+        env = {**os.environ, "STP_VERIFY_TOOL_CONTRACT": "0"}
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "tools" / "dev" / "verify_tool_contract.py")],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=120,
+            check=False,
+        )
+        assert proc.returncode == 0, f"env=0 时脚本未真跑：{proc.stderr}"
+        assert "SKIP" not in (proc.stdout + proc.stderr), "仍在打印 SKIP（#3094②）"

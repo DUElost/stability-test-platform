@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 import tempfile
@@ -184,8 +183,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    # 允许在受限环境用 STP_VERIFY_TOOL_CONTRACT=0 跳过（默认不跳）
-    if os.environ.get("STP_VERIFY_TOOL_CONTRACT", "1").strip() in {"0", "false", "no"}:
-        print("SKIP: STP_VERIFY_TOOL_CONTRACT=0")
-        raise SystemExit(0)
     raise SystemExit(main())
