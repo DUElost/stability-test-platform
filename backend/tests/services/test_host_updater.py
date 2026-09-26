@@ -250,6 +250,44 @@ def test_get_agent_code_version_returns_short_hash():
     assert version == "" or all(c in "0123456789abcdef" for c in version)
 
 
+def test_get_agent_code_version_falls_back_to_bundle_version_file(tmp_path, monkeypatch):
+    """#3401 A4：bundle / release 布局不是 git 仓库 → 回退读 <agent 源树>/VERSION。
+
+    没有这条回退时，控制面在 bundle 布局下 `code_version` 为空、远端 write-version
+    被跳过 → 主机 VERSION/`agent_code_revision` 停在上一代（2026-09-26 实测）。
+    """
+    import backend.services.host_updater as hu_mod
+
+    agent_dir = tmp_path / "agent"
+    agent_dir.mkdir()
+    (agent_dir / "VERSION").write_text("0fa1d741\n", encoding="utf-8")
+    monkeypatch.setattr(hu_mod, "_AGENT_SOURCE_DIR", agent_dir)
+
+    assert hu_mod.get_agent_code_version() == "0fa1d741"
+
+
+def test_get_agent_code_version_empty_without_git_or_version_file(tmp_path, monkeypatch):
+    import backend.services.host_updater as hu_mod
+
+    agent_dir = tmp_path / "agent"
+    agent_dir.mkdir()
+    monkeypatch.setattr(hu_mod, "_AGENT_SOURCE_DIR", agent_dir)
+
+    assert hu_mod.get_agent_code_version() == ""
+
+
+def test_get_agent_code_version_ignores_malformed_version_file(tmp_path, monkeypatch):
+    """VERSION 内容不合形态时不得当版本号用（坏文件不该污染主机溯源文本）。"""
+    import backend.services.host_updater as hu_mod
+
+    agent_dir = tmp_path / "agent"
+    agent_dir.mkdir()
+    (agent_dir / "VERSION").write_text("not a version!!\n", encoding="utf-8")
+    monkeypatch.setattr(hu_mod, "_AGENT_SOURCE_DIR", agent_dir)
+
+    assert hu_mod.get_agent_code_version() == ""
+
+
 def _build_script_with_wrapper(**overrides):
     kwargs = {
         "install_dir": "/opt/stability-test-agent",
