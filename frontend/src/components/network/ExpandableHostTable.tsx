@@ -680,6 +680,17 @@ export function ExpandableHostTable({
                                 {host.status === 'ONLINE' ? '已退役但仍在心跳' : '已退役'}
                               </span>
                             )}
+                            {host.emptied_at && (
+                              <span
+                                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-medium cursor-help bg-muted text-muted-foreground"
+                                title={`设备面已由人工处置${host.emptied_by ? `（${host.emptied_by}）` : ''}${
+                                  host.emptied_reason ? `：${host.emptied_reason}` : ''
+                                }——设备面告警（UsbBlind / 批量 offline）豁免中（ADR-0038 D9）`}
+                                data-testid={`host-emptied-badge-${host.id}`}
+                              >
+                                设备面已处置
+                              </span>
+                            )}
                             {host.health_status && host.health_status !== 'HEALTHY' && (
                               <span
                                 className={cn(

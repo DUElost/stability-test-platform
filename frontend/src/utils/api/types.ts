@@ -73,6 +73,10 @@ export interface Host {
   retire_reason?: string | null;
   /** 「已退役但仍在心跳」单次告警的去重时间戳 */
   retire_alerted_at?: string | null;
+  /** ADR-0038 v0.3 D9：设备面意图（空置 / 人工清空）——置位后设备面告警豁免，清除即解除 */
+  emptied_at?: string | null;
+  emptied_by?: string | null;
+  emptied_reason?: string | null;
 }
 
 // ─── 脚本在位矩阵（#2958 第五道闸） ────────────────────────────────────────────
