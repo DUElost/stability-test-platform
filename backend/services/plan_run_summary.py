@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from fastapi import HTTPException
+from backend.services.errors import NotFound
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -18,7 +18,7 @@ from backend.services.plan_run_read_common import iso, resolve_plan_name
 def build_plan_run_summary(db: Session, run_id: int) -> PlanRunJobsSummaryOut:
     pr = db.get(PlanRun, run_id)
     if pr is None:
-        raise HTTPException(status_code=404, detail="plan run not found")
+        raise NotFound("plan run not found")
 
     jobs_result = db.execute(
         select(

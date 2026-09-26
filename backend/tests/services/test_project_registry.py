@@ -11,7 +11,7 @@ API 级行为回归仍由 `backend/tests/api/test_project_routes.py`（75 例）
 from __future__ import annotations
 
 import pytest
-from fastapi import HTTPException
+from backend.services.errors import ServiceError
 from sqlalchemy import select
 
 from backend.models.audit import AuditLog
@@ -56,21 +56,21 @@ def _audit_actions(db_session, resource_id: int) -> list[str]:
 
 class TestCreate:
     def test_rejects_reserved_seed_key(self, db_session, actor):
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ServiceError) as exc:
             create_project_entry(
                 db_session, project_key="HONOR-MLD", display_name="x",
                 customer=None, jira_project_key=None, **actor,
             )
-        assert exc.value.status_code == 422
+        assert exc.value.status == 422
 
     def test_rejects_case_variant_duplicate(self, db_session, actor):
         _make_project(db_session, "PRJ-A")
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ServiceError) as exc:
             create_project_entry(
                 db_session, project_key="prj-a", display_name="x",
                 customer=None, jira_project_key=None, **actor,
             )
-        assert exc.value.status_code == 409
+        assert exc.value.status == 409
 
     def test_creates_user_project_with_audit(self, db_session, actor):
         project = create_project_entry(
@@ -111,12 +111,12 @@ class TestUpdateFacets:
 
     def test_archived_project_is_not_editable(self, db_session, actor):
         _make_project(db_session, "prj-frozen", status="ARCHIVED")
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ServiceError) as exc:
             update_project_facets(
                 db_session, project_key="prj-frozen",
                 provided={"display_name": "x"}, **actor,
             )
-        assert exc.value.status_code == 409
+        assert exc.value.status == 409
         assert "archived" in exc.value.detail
 
 
@@ -133,19 +133,19 @@ class TestRename:
     def test_rename_to_existing_key_conflicts(self, db_session, actor):
         _make_project(db_session, "prj-one")
         _make_project(db_session, "prj-two")
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ServiceError) as exc:
             rename_project_entry(
                 db_session, project_key="prj-one", new_key="prj-two", **actor,
             )
-        assert exc.value.status_code == 409
+        assert exc.value.status == 409
 
     def test_seed_project_cannot_be_renamed(self, db_session, actor):
         _make_project(db_session, "seed-label", source="SEED")
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ServiceError) as exc:
             rename_project_entry(
                 db_session, project_key="seed-label", new_key="brand-new", **actor,
             )
-        assert exc.value.status_code == 422
+        assert exc.value.status == 422
 
 
 class TestArchiveCycle:
@@ -164,15 +164,15 @@ class TestArchiveCycle:
 
     def test_archive_twice_conflicts(self, db_session, actor):
         _make_project(db_session, "prj-double", status="ARCHIVED")
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ServiceError) as exc:
             archive_project_entry(db_session, project_key="prj-double", **actor)
-        assert exc.value.status_code == 409
+        assert exc.value.status == 409
 
     def test_unarchive_active_project_conflicts(self, db_session, actor):
         _make_project(db_session, "prj-active")
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ServiceError) as exc:
             unarchive_project_entry(db_session, project_key="prj-active", **actor)
-        assert exc.value.status_code == 409
+        assert exc.value.status == 409
 
 
 class TestPromoteSeed:
@@ -198,28 +198,28 @@ class TestPromoteSeed:
 
     def test_promote_legacy_rejected(self, db_session, actor):
         _make_project(db_session, "LEGACY", source="SEED")
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ServiceError) as exc:
             promote_seed_project_entry(db_session, project_key="LEGACY", **actor)
-        assert exc.value.status_code == 422
+        assert exc.value.status == 422
 
     def test_promote_archived_rejected(self, db_session, actor):
         _make_project(db_session, "HONOR-ELA", source="SEED", status="ARCHIVED")
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ServiceError) as exc:
             promote_seed_project_entry(
                 db_session, project_key="HONOR-ELA", **actor,
             )
-        assert exc.value.status_code == 409
+        assert exc.value.status == 409
 
     def test_promote_twice_404(self, db_session, actor):
         _make_project(db_session, "HONOR-ELA", source="SEED")
         promote_seed_project_entry(db_session, project_key="HONOR-ELA", **actor)
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ServiceError) as exc:
             promote_seed_project_entry(
                 db_session, project_key="HONOR-ELA", **actor,
             )
-        assert exc.value.status_code == 404
+        assert exc.value.status == 404
 
     def test_promote_unknown_404(self, db_session, actor):
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ServiceError) as exc:
             promote_seed_project_entry(db_session, project_key="NOPE", **actor)
-        assert exc.value.status_code == 404
+        assert exc.value.status == 404

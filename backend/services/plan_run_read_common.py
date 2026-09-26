@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from fastapi import HTTPException
+from backend.services.errors import NotFound
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -80,5 +80,5 @@ def require_plan_run(db: Session, run_id: int) -> PlanRun:
     """Load PlanRun or raise 404 — shared by plan_runs read endpoints."""
     pr = db.get(PlanRun, run_id)
     if pr is None:
-        raise HTTPException(status_code=404, detail="plan run not found")
+        raise NotFound("plan run not found")
     return pr

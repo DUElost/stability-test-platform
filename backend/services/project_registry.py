@@ -2,8 +2,9 @@
 
 覆盖 create / update / rename / archive / unarchive / promote_seed 六条登记簿
 生命周期，以及被多个路由复用的「取项目 + 来源/归档门禁」。路由退化为
-「解析 → 调服务 → 序列化」；异常沿用 ``HTTPException``（与 #1519 / #1520
-首个切片一致的服务层既有先例），``request`` 仅用于审计客户端 IP 提取（可空）。
+「解析 → 调服务 → 序列化」；异常抛领域类型（``backend.services.errors``，
+#3296 起与 #1519 / #1520 下沉符号先例同构），``request`` 仅用于审计客户端 IP
+提取（可空）。
 
 边界：本模块**不**做响应装配（``ProjectSummaryOut`` 等留在路由），也不碰
 inventory / map 映射链（那些仍属 projects.py 的其它业务线）。
@@ -14,7 +15,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Mapping, Optional
 
-from fastapi import HTTPException, Request
+from backend.services.errors import Conflict, NotFound, UnprocessableEntity
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -43,15 +44,14 @@ def get_project_or_404(db: Session, project_key: str) -> TestProject:
         .first()
     )
     if project is None:
-        raise HTTPException(status_code=404, detail="project not found")
+        raise NotFound("project not found")
     return project
 
 
 def require_user_project(project: TestProject) -> None:
     if project.source != USER_SOURCE:
-        raise HTTPException(
-            status_code=422,
-            detail="seed backfill labels cannot be mapped; create a user project",
+        raise UnprocessableEntity(
+            "seed backfill labels cannot be mapped; create a user project"
         )
 
 
@@ -62,23 +62,22 @@ def require_active_project(project: TestProject) -> None:
     仍可改名会破坏「归档 = 冻结」的语义，仍可映射型号则归档形同虚设。
     """
     if project.status == "ARCHIVED":
-        raise HTTPException(
-            status_code=409,
-            detail="archived project is read-only; unarchive to modify",
+        raise Conflict(
+            "archived project is read-only; unarchive to modify"
         )
 
 
 def _ensure_key_available(db: Session, key: str) -> None:
     """SEED 保留名 + 大小写不敏感唯一性（创建/改名共用）。"""
     if key.upper() in SEED_PROJECT_KEYS:
-        raise HTTPException(status_code=422, detail="reserved seed project_key")
+        raise UnprocessableEntity("reserved seed project_key")
     existing = (
         db.query(TestProject)
         .filter(func.lower(TestProject.project_key) == key.lower())
         .first()
     )
     if existing is not None:
-        raise HTTPException(status_code=409, detail="project_key already exists")
+        raise Conflict("project_key already exists")
 
 
 def create_project_entry(
@@ -90,7 +89,7 @@ def create_project_entry(
     jira_project_key: Optional[str],
     actor_id: Optional[int],
     actor_username: Optional[str],
-    request: Optional[Request] = None,
+    request: Optional[Any] = None,
 ) -> TestProject:
     """admin 新建 USER 项目（SEED 保留名 422 / 重复 409，含并发 flush 兜底）。"""
     _ensure_key_available(db, project_key)
@@ -107,7 +106,7 @@ def create_project_entry(
         db.flush()
     except IntegrityError:
         db.rollback()
-        raise HTTPException(status_code=409, detail="project_key already exists") from None
+        raise Conflict("project_key already exists") from None
     record_audit(
         db,
         action="create_project",
@@ -131,7 +130,7 @@ def update_project_facets(
     provided: Mapping[str, Any],
     actor_id: Optional[int],
     actor_username: Optional[str],
-    request: Optional[Request] = None,
+    request: Optional[Any] = None,
 ) -> TestProject:
     """facet 修改，逐字段 ``record_audit``（ADR-0029 D2 / #406）。
 
@@ -141,7 +140,7 @@ def update_project_facets(
     project = get_project_or_404(db, project_key)
     require_user_project(project)
     if project.status == "ARCHIVED":
-        raise HTTPException(status_code=409, detail="archived project cannot be updated")
+        raise Conflict("archived project cannot be updated")
 
     changed: list[tuple[str, object, object]] = []
     for field in UPDATABLE_FIELDS:
@@ -187,7 +186,7 @@ def rename_project_entry(
     new_key: str,
     actor_id: Optional[int],
     actor_username: Optional[str],
-    request: Optional[Request] = None,
+    request: Optional[Any] = None,
 ) -> TestProject:
     """ADR-0029 D2 复核：项目重命名（admin，记审计）。
 
@@ -228,12 +227,12 @@ def archive_project_entry(
     project_key: str,
     actor_id: Optional[int],
     actor_username: Optional[str],
-    request: Optional[Request] = None,
+    request: Optional[Any] = None,
 ) -> TestProject:
     """ADR-0029 D2 / #406 — 归档（SEED 回填标签也可归档 = 显式放弃）。"""
     project = get_project_or_404(db, project_key)
     if project.status == "ARCHIVED":
-        raise HTTPException(status_code=409, detail="project already archived")
+        raise Conflict("project already archived")
 
     project.status = "ARCHIVED"
     project.updated_at = datetime.now(timezone.utc)
@@ -263,7 +262,7 @@ def unarchive_project_entry(
     project_key: str,
     actor_id: Optional[int],
     actor_username: Optional[str],
-    request: Optional[Request] = None,
+    request: Optional[Any] = None,
 ) -> TestProject:
     """#644 P1-4 — 解档：ARCHIVED 项目恢复 ACTIVE（admin，记审计）。
 
@@ -273,7 +272,7 @@ def unarchive_project_entry(
     """
     project = get_project_or_404(db, project_key)
     if project.status != "ARCHIVED":
-        raise HTTPException(status_code=409, detail="project is not archived")
+        raise Conflict("project is not archived")
 
     project.status = "ACTIVE"
     project.updated_at = datetime.now(timezone.utc)
@@ -303,7 +302,7 @@ def promote_seed_project_entry(
     project_key: str,
     actor_id: Optional[int],
     actor_username: Optional[str],
-    request: Optional[Request] = None,
+    request: Optional[Any] = None,
 ) -> TestProject:
     """ADR-0029 P0：SEED 回填标签就地转正为 USER 项目（admin）。
 
@@ -320,16 +319,14 @@ def promote_seed_project_entry(
         .first()
     )
     if seed is None or seed.source != SEED_SOURCE:
-        raise HTTPException(status_code=404, detail="seed project not found")
+        raise NotFound("seed project not found")
     if project_key == "LEGACY":
-        raise HTTPException(
-            status_code=422,
-            detail="LEGACY is the fallback bucket, not promotable",
+        raise UnprocessableEntity(
+            "LEGACY is the fallback bucket, not promotable"
         )
     if seed.status == "ARCHIVED":
-        raise HTTPException(
-            status_code=409,
-            detail="seed project archived, not promotable",
+        raise Conflict(
+            "seed project archived, not promotable"
         )
 
     models = sorted(
