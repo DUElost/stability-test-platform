@@ -466,6 +466,62 @@
           "refId": "A"
         }
       ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 85 },
+      "id": 110,
+      "title": "Agent Heartbeat Timing (#3219)",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Worst host p99 by phase. Agent cumulative buckets are mirrored as gauges; rate handles Agent restart resets. Only hosts with timing-capable Agent versions produce samples.",
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "unit": "s" } },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 86 },
+      "id": 111,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" } },
+      "title": "Heartbeat Phase p99: Worst Host (30m)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "max by (phase) (histogram_quantile(0.99, sum by (host_id, phase, le) (rate(stability_agent_heartbeat_phase_seconds_bucket[30m]))))",
+          "legendFormat": "{{phase}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "unit": "short" } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 94 },
+      "id": 112,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "title": "Heartbeat Probe Due: Fleet Maximum",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "max by (kind) (stability_agent_heartbeat_probe_due)",
+          "legendFormat": "{{kind}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "unit": "s" } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 94 },
+      "id": 113,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" } },
+      "title": "Heartbeat Tick p99: Slowest 10 Hosts (30m)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "topk(10, histogram_quantile(0.99, sum by (host_id, le) (rate(stability_agent_heartbeat_phase_seconds_bucket{phase=\"tick_total\"}[30m]))))",
+          "legendFormat": "{{host_id}}",
+          "refId": "A"
+        }
+      ]
     }
   ],
   "schemaVersion": 39,
