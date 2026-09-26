@@ -17,6 +17,7 @@ import logging
 import os
 import re
 import secrets
+import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional
 
@@ -26,7 +27,7 @@ from sqlalchemy import text
 from backend.core.agent_secret import AgentSecretNotConfiguredError, require_agent_secret
 from backend.core.cors import get_cors_allowed_origins
 from backend.core.database import AsyncSessionLocal
-from backend.core.metrics import record_socketio_connection
+from backend.core.metrics import record_agent_rpc, record_socketio_connection
 from backend.core.security import ACCESS_COOKIE_NAME, extract_cookie_token
 
 logger = logging.getLogger(__name__)
@@ -525,6 +526,7 @@ async def call_agent_rpc(
         "namespace": "/agent",
         "timeout": timeout,
     }
+    t0 = time.perf_counter()
     if sid:
         call_kwargs["to"] = sid
     else:
@@ -535,33 +537,44 @@ async def call_agent_rpc(
         from backend.realtime.socketio_redis import socketio_redis_adapter_enabled
 
         if not socketio_redis_adapter_enabled():
+            record_agent_rpc(event, "not_connected", time.perf_counter() - t0)
             raise AgentNotConnectedError(str(host_id))
         if agent_sid_registry_enabled():
             owner = await lookup_agent_owner(host_id)
             if owner is None:
+                record_agent_rpc(event, "not_connected", time.perf_counter() - t0)
                 raise AgentNotConnectedError(str(host_id))
         call_kwargs["room"] = f"agent:{host_id}"
 
     try:
         ack = await sio.call(event, data, **call_kwargs)
-    except asyncio.TimeoutError as exc:
+    except (asyncio.TimeoutError, socketio.exceptions.TimeoutError) as exc:
+        # #3422：python-socketio 的 ``call`` 在 ack 超时时抛**自己的**
+        # ``socketio.exceptions.TimeoutError``（str 为空、与 asyncio 的同名类
+        # 无继承关系）——只捕 asyncio 会把真实原因显示成 "failed: "（空消息），
+        # 生产上就是据此误导排查的。两条超时路径统一映射为 timed out。
+        record_agent_rpc(event, "timeout", time.perf_counter() - t0)
         raise AgentRpcError(
             f"agent rpc '{event}' to host '{host_id}' timed out after {timeout}s"
         ) from exc
     except Exception as exc:
+        record_agent_rpc(event, "error", time.perf_counter() - t0)
         raise AgentRpcError(
             f"agent rpc '{event}' to host '{host_id}' failed: {exc}"
         ) from exc
 
     if ack is None:
+        record_agent_rpc(event, "no_ack", time.perf_counter() - t0)
         raise AgentRpcError(
             f"agent rpc '{event}' to host '{host_id}' returned no ack payload"
         )
     if not isinstance(ack, dict):
+        record_agent_rpc(event, "error", time.perf_counter() - t0)
         raise AgentRpcError(
             f"agent rpc '{event}' to host '{host_id}' returned non-dict ack: "
             f"{type(ack).__name__}"
         )
+    record_agent_rpc(event, "ok", time.perf_counter() - t0)
     return ack
 
 
