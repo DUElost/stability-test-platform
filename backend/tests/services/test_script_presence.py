@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
@@ -24,6 +25,12 @@ from backend.models.script_presence import HostScriptPresence
 from backend.services import script_presence as sp
 
 FULL = [("a", "1.0.0"), ("b", "2.0.0")]
+
+
+@pytest.fixture(autouse=True)
+def _sweep_ready(monkeypatch):
+    """#3333：本文件测 sweep 本体逻辑，进程就绪面默认置真（拒跑面单列一条用例）。"""
+    monkeypatch.setattr(sp, "agent_rpc_ready", lambda: True)
 
 
 def _script_rows(*rows):
@@ -481,3 +488,62 @@ def test_expected_manifests_carry_package_sha256_only_when_present():
     out = sp.build_expected_manifests(rows, FULL)
     assert out[0]["package_sha256"] == "c" * 64
     assert "package_sha256" not in out[1]
+
+
+async def test_run_sweep_refuses_outside_backend_process_and_writes_nothing(
+    db_session, engine, monkeypatch
+):
+    """#3333 ②：非 backend 进程（SocketIO/Agent 命名空间未就绪）跑全量 sweep 必须拒跑。
+
+    验收口径（裁决原文）：**必须失败且不写任何行**。所以这里同时钉两件事——
+    ① 抛 `SweepNotReadyError`；② `host.script_packages_mode` 与账本一行未动，
+    且连 verify RPC 都没发起（失败必须在**任何动作之前**）。
+    """
+    host = Host(
+        id="h-cli", hostname="h-cli", status="ONLINE",
+        script_packages_mode=None,
+    )
+    db_session.add(host)
+    script_row = Script(
+        name="a", version="1.0.0", script_type="test",
+        nfs_path="/opt/agent/scripts/a/v1.0.0/a.py",
+        content_sha256="0" * 64, is_active=True,
+    )
+    db_session.add(script_row)
+    plan = Plan(name="p-cli")
+    db_session.add(plan)
+    db_session.flush()
+    db_session.add(PlanStep(
+        plan_id=plan.id, step_key="s0", script_name="a", script_version="1.0.0",
+        stage="init", enabled=True,
+    ))
+    run = PlanRun(
+        plan_id=plan.id, plan_snapshot={"steps": []}, run_type="MANUAL",
+        started_at=datetime.now(timezone.utc),
+    )
+    db_session.add(run)
+    db_session.flush()
+    db_session.add(PlanRunHost(plan_run_id=run.id, host_id=host.id))
+    db_session.commit()
+
+    rpc_calls: list = []
+
+    async def _should_not_run(host_ids, expected):
+        rpc_calls.append(list(host_ids))
+        raise AssertionError("拒跑必须发生在任何 RPC 之前")
+
+    monkeypatch.setattr(sp, "gather_verify", _should_not_run)
+    monkeypatch.setattr(sp, "agent_rpc_ready", lambda: False)
+    factory = sessionmaker(bind=engine)
+
+    with pytest.raises(sp.SweepNotReadyError):
+        await sp.run_sweep(days=30, db_factory=factory)
+
+    assert rpc_calls == [], "拒跑前不得发起 verify RPC"
+    with factory() as session:
+        assert session.execute(select(HostScriptPresence)).scalars().all() == [], (
+            "拒跑后账本不得出现任何行（含 n_a/unknown）——否则 checked_at 仍会被推进"
+        )
+        assert session.get(Host, "h-cli").script_packages_mode is None, (
+            "拒跑后 host.script_packages_mode 不得被写（原缺陷：全 None 打脏）"
+        )

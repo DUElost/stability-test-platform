@@ -1,15 +1,19 @@
-"""host 脚本在位矩阵：只读查询 + 单机按需刷新（#2958 第五道闸）。
+"""host 脚本在位矩阵：只读查询 + 单机按需刷新 + 全量按需重采（#2958 第五道闸）。
 
 - ``GET /script-presence/summary``：fleet 汇总（六态计数、缺口 host 数、新鲜度）；
 - ``GET /script-presence/hosts/{host_id}``：单机矩阵（族 × 版本 × 态 + detail）；
 - ``POST /script-presence/refresh?host_id=…``：**单机**按需重核（一轮 verify_scripts RPC，
   10s 超时内）——全 fleet 刷新由每日 timer 承担（`script_presence_sweep_cron`），
   避免把 48 台 × 10s 的墙钟搬进请求路径。
+- ``POST /script-presence/refresh-all``（#3333）：**全量**按需重采（backend 进程内跑
+  `run_sweep`，admin + 简单节流）——部署后 gauge 验证与告警上线的入口；CLI 进程跑
+  全量已被 `run_sweep` 的 fail-closed 拒掉（#3333 ②）。
 
 数据由常设 sweep 落库（`backend/services/script_presence.py`），本层不自己算目标集。
 """
 from __future__ import annotations
 
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -21,6 +25,7 @@ from backend.api.routes.auth import User, get_current_active_user, require_admin
 from backend.api.schemas.script_presence import (
     HostScriptPresenceOut,
     ScriptPresenceCounts,
+    ScriptPresenceFullSweepOut,
     ScriptPresenceItem,
     ScriptPresenceSummaryOut,
     ScriptPresenceSweepOut,
@@ -34,6 +39,10 @@ router = APIRouter(prefix="/api/v1/script-presence", tags=["script-presence"])
 
 #: 新鲜度阈值：>2× 日周期（24h × 2）即视为账本陈旧（告警侧另有 PromQL 版本）。
 STALE_AFTER = timedelta(hours=48)
+
+#: #3333：refresh-all 的进程内节流（简单节流，不跨实例；多实例下各进程各自限流）。
+REFRESH_ALL_MIN_INTERVAL_SECONDS = 60.0
+_last_refresh_all_monotonic: Optional[float] = None
 
 
 def _counts_from_rows(rows) -> ScriptPresenceCounts:
@@ -146,6 +155,59 @@ async def refresh_script_presence(
 def _history_days_default() -> int:
     """历史可达窗口的权威默认值 = `SCRIPT_PRESENCE_HISTORY_DAYS`（#3089：该旋钮此前是死的）。"""
     return int(get_scheduler_settings().script_presence_history_days)
+
+
+@router.post("/refresh-all", response_model=ApiResponse[ScriptPresenceFullSweepOut])
+async def refresh_script_presence_all(
+    days: Optional[int] = Query(
+        None, ge=1, le=365,
+        description="历史可达窗口天数；缺省取 SCRIPT_PRESENCE_HISTORY_DAYS（默认 30）",
+    ),
+    _admin: User = Depends(require_admin),
+):
+    """**全量**按需重采（#3333 ①）：在 backend 进程内跑一轮完整 sweep。
+
+    - 与每日 cron 同语义（`run_sweep` 全量），返回汇总（含六态计数）；
+    - **节流**：距上次发起 < ``REFRESH_ALL_MIN_INTERVAL_SECONDS``（60s）即 429——
+      全量 sweep 是 48 台 × verify RPC 的量级，连点会互相叠加；
+    - 为什么必须有这个入口：CLI 跑全量已被 `run_sweep` 的 fail-closed 拒掉（#3333 ②），
+      部署后的 gauge 验证与告警上线需要一个**合法**的立即重采面；
+    - 节流是进程内的（不跨实例）：多控制面实例下各进程各自限流，语义为「防连点」
+      而非「全局单飞」——全局单飞由 cron 的单例注册承担。
+    """
+    global _last_refresh_all_monotonic
+    now = time.monotonic()
+    if (
+        _last_refresh_all_monotonic is not None
+        and now - _last_refresh_all_monotonic < REFRESH_ALL_MIN_INTERVAL_SECONDS
+    ):
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                "refresh-all 节流中：全量 sweep 至少间隔 "
+                f"{int(REFRESH_ALL_MIN_INTERVAL_SECONDS)}s"
+                "（单机重核可用 POST /script-presence/refresh?host_id=…）"
+            ),
+        )
+    _last_refresh_all_monotonic = now
+
+    effective_days = days or _history_days_default()
+    result = await presence.run_sweep(days=effective_days)
+    counts = ScriptPresenceCounts(**{
+        state: int(result.get("counts", {}).get(state, 0))
+        for state in presence.PRESENCE_STATES
+    })
+    payload = ScriptPresenceFullSweepOut(
+        sweep_id=result.get("sweep_id", ""),
+        hosts=int(result.get("hosts", 0)),
+        hosts_verified=int(result.get("hosts_verified", 0)),
+        full_versions=int(result.get("full_versions", 0)),
+        uncovered_active_versions=int(result.get("uncovered_active_versions", 0)),
+        rows=int(result.get("rows", 0)),
+        orphans_removed=int(result.get("orphans_removed", 0)),
+        counts=counts,
+    )
+    return ok(payload)
 
 
 def _coverage(db: Session) -> tuple[int, int]:

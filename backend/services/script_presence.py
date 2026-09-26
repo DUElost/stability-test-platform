@@ -52,10 +52,15 @@ from backend.models.plan_run import PlanRun, PlanRunHost
 from backend.models.schedule import TaskSchedule
 from backend.models.script import Script
 from backend.models.script_presence import HostScriptPresence
+from backend.realtime.socketio_server import agent_rpc_ready
 from backend.services.host_maintenance import in_maintenance_window
 from backend.services.precheck.verify import gather_verify
 
 logger = logging.getLogger(__name__)
+
+
+class SweepNotReadyError(RuntimeError):
+    """本进程不是 backend 进程（SocketIO/Agent 命名空间未就绪）——全量 sweep 拒跑（#3333）。"""
 
 #: 五态 + 维护态（闭词表；指标/守卫按此枚举，新增值必须同步 metrics 与守卫测试）
 STATE_PRESENT = "present"
@@ -441,7 +446,21 @@ async def run_sweep(
 
     返回汇总（写库行数、各态计数、缺口 host 数、轮次 id）。RPC 只对**可达集非空**
     的 host 发起（无目标的 host 只写 ``n_a`` 行，仍刷新新鲜度）。
+
+    **fail-closed（#3333）**：本进程 SocketIO server / Agent 命名空间未就绪时
+    直接拒跑（``SweepNotReadyError``），**在任何写动作之前**——CLI 独立进程跑全量
+    只会得到 48 台 ``agent_offline``，却把 ``host.script_packages_mode`` 与账本
+    ``checked_at`` 打脏并把新鲜度告警静音（#3315 实跑踩坑）。立即全量重采请走
+    ``POST /api/v1/script-presence/refresh-all``（backend 进程内、admin + 节流）。
     """
+    if not agent_rpc_ready():
+        raise SweepNotReadyError(
+            "run_sweep 必须在 backend 进程内执行（SocketIO server / Agent 命名空间未就绪）："
+            "本进程无法发起 verify_scripts RPC，跑下去只会把 host.script_packages_mode 与"
+            "账本 checked_at 打脏并静音新鲜度告警（#3333）。"
+            "全量重采改用 POST /api/v1/script-presence/refresh-all（admin）。"
+        )
+
     sweep_id = _new_sweep_id()
 
     def _facts() -> dict:
