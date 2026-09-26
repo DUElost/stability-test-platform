@@ -565,6 +565,29 @@ jobs:
             backend/tests/scheduler/test_retention_lock_order_2022.py \
             backend/tests/api/test_metrics_lock_wait_gauges.py
 
+      # 后端静态守卫（2026-09-26 PR 审计后续，owner 裁决「只跑静态守卫」）。
+      #
+      # 为什么：`backend-test` 只在夜间兜底跑，#3421 新增审计 action 未登记保留分层，
+      # `test_audit_action_retention_guard_3017` 在 main 上红了约一小时才由人工发现（#3423）。
+      # 这类守卫是 AST / 结构 / 登记表断言，改动面一偏就红，最该在合入前拦住；整组约 100 例、
+      # 本地实测 ~35s，不改变「PR 不跑全量 backend/tests」的取舍。
+      #
+      # 覆盖判据：`backend/tests/` 下文件名含 `guard` 的测试文件，由
+      # tests/test_static_guard_pr_path_contract.py 锚定——新增同名守卫却不接线，PR 即红。
+      # 放在本 job 的理由与 `env -u DATABASE_URL` 同上一步（conftest 会话级夹具需要 PG）。
+      - name: Run backend static guards
+        run: |
+          env -u DATABASE_URL python -m pytest -q \
+            backend/tests/core/test_test_db_guard.py \
+            backend/tests/test_agent_secret_guards.py \
+            backend/tests/test_audit_action_retention_guard_3017.py \
+            backend/tests/test_audit_read_side_alias_guard.py \
+            backend/tests/test_audit_resource_type_guard.py \
+            backend/tests/test_migration_guard.py \
+            backend/tests/test_recycler_terminalization_audit_guard.py \
+            backend/tests/test_schema_sync_guard.py \
+            backend/tests/test_script_retirement_guard.py
+
   pr-typecheck:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
