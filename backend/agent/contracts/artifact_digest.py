@@ -57,7 +57,6 @@ PAYLOAD_METADATA_EXCLUDES = {
 ARTIFACT_KIND_FULL = "full"
 ARTIFACT_KIND_CODE = "code"
 ARTIFACT_KIND_RESOURCES = "resources"
-_RESOURCES_PREFIX = "resources/"
 
 
 def collect_artifact_entries(
