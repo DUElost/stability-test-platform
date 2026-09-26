@@ -225,9 +225,13 @@ class HeartbeatThread:
             self._safe_tick()
 
     def _safe_tick(self) -> None:
+        # Timing attrs are set in __init__; getattr keeps the swallow-exception
+        # contract when tests construct via __new__ without full init (#3219).
         started = time.monotonic()
-        if self._last_tick_started is not None:
-            self._timing.observe("tick_interval", started - self._last_tick_started)
+        timing = getattr(self, "_timing", None)
+        last_started = getattr(self, "_last_tick_started", None)
+        if last_started is not None and timing is not None:
+            timing.observe("tick_interval", started - last_started)
         self._last_tick_started = started
         self._tick_phases = {}
         self._slow_due_count = 0
@@ -237,9 +241,10 @@ class HeartbeatThread:
         except Exception:
             logger.exception("heartbeat_tick_failed")
         finally:
-            for phase, seconds in self._tick_phases.items():
-                self._timing.observe(phase, seconds)
-            self._timing.observe("tick_total", time.monotonic() - started)
+            if timing is not None:
+                for phase, seconds in (self._tick_phases or {}).items():
+                    timing.observe(phase, seconds)
+                timing.observe("tick_total", time.monotonic() - started)
             self._last_slow_due_count = self._slow_due_count
             self._last_disk_due_count = self._disk_due_count
             self._tick_phases = None
