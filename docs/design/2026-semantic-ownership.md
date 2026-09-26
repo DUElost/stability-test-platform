@@ -174,6 +174,8 @@
 | `session-cookie-csrf` | concept | Web 会话 / CSRF / refresh 吊销 | `docs/adr/ADR-0024-browser-session-security-hardening.md :: ## 决策` | 改 Secure/SameSite 边界 |
 | `host-privilege-wrapper` | concept | Agent 主机单一提权入口 | `docs/adr/ADR-0037-agent-host-privilege-boundary.md :: ## 2. 决策` | 宽 sudoers 回流 |
 | `host-retirement` | concept | 主机退役终态语义 | `docs/adr/ADR-0038-host-retirement-semantics.md :: ## 2. 决策` | DELETE 与 retire 再混 |
+| `device-retirement` | concept | 设备退役终态语义（与主机退役正交） | `docs/adr/ADR-0057-device-retirement-semantics.md :: ## 7. 裁决记录（2026-09-26，owner 授权 Claude 裁决）` | 在 `DeviceStatus` 增退役值；出现送修 / 外借等第二种设备意图 |
+| `terminal-fact-layer` | concept | 平台库长期事实层（签名 / 发生 / DLE 摘要 / 运行时长） | `docs/adr/ADR-0056-terminal-fact-layer.md :: ## 8. 裁决记录（2026-09-26，owner 授权 Claude 裁决）` | 事实行随 run 级联删除；单库事实表超出体量基线 |
 | `notification-delivery` | concept | 通知投递成功/失败语义 | `docs/adr/ADR-0036-notification-delivery-semantics.md :: ### 2.1 投递管道（契约对象）` | 改 ACCEPTED≠DELIVERED |
 | `execution-registry` | concept | 多 Harness Execution Registry / 三维状态 | `docs/adr/ADR-0034-multi-harness-execution-contract.md :: ### 2.3 状态模型：lifecycle × liveness × integration 三维正交 — 细则见契约 §3`；细则 `docs/development/ai/execution-contract.md :: ## 3. 状态模型（三维）与 transition table` | 改 Registry 为调度器 |
 | `settings-bare-read` | concept | 配置读取收敛与裸读边界 | `docs/adr/ADR-0042-settings-convergence-and-bare-read-boundary.md :: ## 决策` | 新域绕过分域 settings |
