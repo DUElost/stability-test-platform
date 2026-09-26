@@ -1,5 +1,8 @@
 # 通知页三个页签的失败态真值化（#3199）
 
+Status: implemented
+Class: bug-fix
+
 日期：2026-09-26 ｜ 归属：前端 / 告警面 ｜ 类型：bug-fix
 
 ## Decision
