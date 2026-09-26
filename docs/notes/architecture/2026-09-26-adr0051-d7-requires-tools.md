@@ -1,6 +1,6 @@
 # ADR-0051 v1.7 D7：脚本包声明工具依赖（requires_tools）——机制落地（2026-09-26）
 
-Status: implemented（机制；尚无真实工具登记与消费方新版本）
+Status: implemented
 Class: architecture
 
 ## Decision
