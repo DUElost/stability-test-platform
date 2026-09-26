@@ -1,6 +1,6 @@
 # ADR-0054：Agent 与控制面的共享契约包——`backend/agent/contracts/`
 
-- 状态：**Accepted** v1.0（2026-09-25 裁决：D1–D6 全部接受，D3 补一条约束，见 §9）
+- 状态：**Accepted** v1.0（2026-09-25 裁决：D1–D6 全部接受，D3 补一条约束，见 §9）；**已落地**（2026-09-26：§5 四步全部合入，C3 基线清零，实施单 [#3298](https://github.com/DUElost/stability-test-platform/issues/3298) 已关闭）
 - 优先级：P2
 - 目标里程碑：M7
 - 日期：2026-09-25
@@ -14,7 +14,7 @@
   / [ADR-0040](./ADR-0040-deployment-artifact-digest-protocol.md)（`agent-code` 部署单元与 digest 算法）
   / [ADR-0051](./ADR-0051-release-unit-and-content-addressing.md)（发布单元模型）
   / `.importlinter` C3（#3291 引入的「控制面不直接 import `backend.agent`」合约）
-- 版本记录：v1.0（2026-09-25）**裁决**：D1–D6 Accepted；D3 补「`backend/agent/__init__.py` 保持轻量」约束并纳入 C6 判据，见 §9。v0.1（2026-09-25）首次提出，D1–D6 待裁决（PR #3303）
+- 版本记录：v1.0（2026-09-25）**裁决**：D1–D6 Accepted；D3 补「`backend/agent/__init__.py` 保持轻量」约束并纳入 C6 判据，见 §9。v0.1（2026-09-25）首次提出，D1–D6 待裁决（PR #3303）。**实施落地**（2026-09-26，[#3298](https://github.com/DUElost/stability-test-platform/issues/3298)）：§5 四步各一 PR——第 1 步 PR #3358（pipeline_validator + legacy_aee；D6 双布局定位 `resolve_pipeline_schema_path` 与两布局测试同 PR）、第 2 步 PR #3364（aee_metadata / aee_event_dirs / watcher_contracts；`core/aee_metadata.py` 再导出壳删除）、第 3 步 PR #3374（artifact_digest 算法归一；`tools/ansible/compute_deploy_digest.py` 改从契约包加载，`test_ansible_digest_contract.py` 保持绿）、第 4 步 PR #3390 / #3392（kernel_usb_faults 解析与词表、aee_state_migration；C3 基线清零）。终态与 §5 预期一致：`_SHARED_ALLOWLIST` 仅剩 `backend.core.metrics`，`contracts/__init__.py` 为空，`backend/agent/__init__.py` 保持轻量（C6 AST 判据钉住）；后续新契约（#3219 `heartbeat_timing`）按 D1/D2 同规则入包
 
 ## 1. 背景
 
@@ -136,4 +136,4 @@ Agent 的运行逻辑（采集、执行、状态迁移）**不属于契约**，�
 | D4 门禁 | **Accepted** | 通配忽略与祖先 forbidden 静默失效两条行为均已在 import-linter 2.15 实测 |
 | D5 完成定义 | **Accepted** | — |
 | D6 工件定位 | **Accepted** | `pipeline_validator` 的 `parent.parent / "schemas"` 在搬迁后必然解析错 |
-| 落地 | 按 §5 四步，首步即可开工 | #3303 合入后无 review 意见；实施单 [#3298](https://github.com/DUElost/stability-test-platform/issues/3298) |
+| 落地 | §5 四步已全部合入（2026-09-26） | PR #3358 / #3364 / #3374 / #3390 / #3392；实施单 [#3298](https://github.com/DUElost/stability-test-platform/issues/3298) 已关闭 |
