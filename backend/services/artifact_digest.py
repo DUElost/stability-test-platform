@@ -5,9 +5,10 @@
 digest 共享同一枚举，契约漂移在共享点消除），条目为规范化序列
 ``(relpath, 可执行位, content sha256)``。
 
-与 ``backend/agent/artifact_digest.py`` 为双侧镜像实现，字节级等价由
-``backend/tests/services/test_artifact_digest.py`` 对照测试锁定（先例：
-``script_catalog_version`` 双侧实现 + parity test）。
+**算法不是本模块的实现**：``digest_entries`` / kind 词表 import 自契约包
+``backend/agent/contracts/artifact_digest.py``（ADR-0054 D1，第 3 步起唯一实现）；
+本模块只保留控制面自己的输入集枚举（``_iter_payload_files``，按 ADR-0054 §5
+第 3 步留在 services）+ 进程缓存 + 收敛判定。
 
 信任模型（ADR-0040 D2）：远端 current digest 由部署流程受控写入
 ``$INSTALL_DIR/agent/ARTIFACT_DIGEST``、经心跳上报；控制面 desired digest
@@ -19,23 +20,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import hashlib
-import json
 import logging
 import os
 import threading
 
+from backend.agent.contracts.artifact_digest import (
+    ARTIFACT_KIND_CODE,
+    ARTIFACT_KIND_FULL,
+    ARTIFACT_KIND_RESOURCES,
+    digest_entries,
+)
 from backend.services.host_updater import _iter_payload_files
 
 logger = logging.getLogger(__name__)
-
-DIGEST_PREFIX = "sha256:"
-
-ARTIFACT_KIND_FULL = "full"        # P1 全集身份（evaluate_convergence 判定用）
-ARTIFACT_KIND_CODE = "code"        # P2：全集 − resources/**
-ARTIFACT_KIND_RESOURCES = "resources"  # P2：全集 ∩ resources/**（除 mtbf/）
-
-# kind 分区（#1963）：code ∪ resources == full、互斥——契约测试守护。
-_RESOURCES_PREFIX = "resources/"
 
 _cache_lock = threading.Lock()
 # 缓存按 kind 分桶（full / code / resources 各自独立指纹）
@@ -73,19 +70,6 @@ def collect_artifact_entries(kind: str = ARTIFACT_KIND_FULL) -> list[tuple[str, 
         entries.append((arcname.replace(os.sep, "/"), bool(st.st_mode & 0o111), h.hexdigest()))
     entries.sort()
     return entries
-
-
-def digest_entries(entries: list[tuple[str, bool, str]]) -> str:
-    """Digest a normalized ``(relpath, exec, sha256)`` sequence → ``sha256:<hex>``.
-
-    纯函数；与 Agent 侧镜像实现必须字节级等价（parity test 锁定）。
-    """
-    payload = json.dumps(
-        [[relpath, is_exec, sha] for relpath, is_exec, sha in entries],
-        ensure_ascii=True,
-        separators=(",", ":"),
-    )
-    return DIGEST_PREFIX + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _input_fingerprint(kind: str = ARTIFACT_KIND_FULL) -> str:

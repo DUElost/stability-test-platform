@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from backend.agent.artifact_digest import collect_artifact_entries, collect_control_plane_entries, digest_entries
+from backend.agent.contracts.artifact_digest import collect_artifact_entries, collect_control_plane_entries, digest_entries
 from tools.site_config import stages
 from tools.site_config.install import run_install
 from tools.site_config.ops import CommandResult
@@ -715,7 +715,11 @@ def test_bundle_cannot_supply_its_own_digest_implementation(tmp_path, monkeypatc
     """
     _config, _bindings, _state, _target, _site, data = prepare(tmp_path)
     bundle = Path(data["release"]["bundle"])
-    (bundle / "backend/agent/artifact_digest.py").write_text(_LYING_DIGEST_STUB, encoding="utf-8")
+    # 与被测物同形：攻击副本放在受信源同相对路径（backend/agent/contracts/），
+    # 且必须落在 agent 载荷内——否则改动不影响任何摘要面，测不出「回显放行」。
+    lying = bundle / "backend/agent/contracts/artifact_digest.py"
+    lying.parent.mkdir(parents=True, exist_ok=True)
+    lying.write_text(_LYING_DIGEST_STUB, encoding="utf-8")
     monkeypatch.chdir(bundle)
     ops = ops_for(tmp_path)
     report = invoke(tmp_path, ops=ops)
