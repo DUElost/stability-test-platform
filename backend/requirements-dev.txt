@@ -15,7 +15,7 @@ pytest-cov>=7.1.0,<8.0
 
 # ── Lint ────────────────────────────────────────────────────────────────
 # 配置见仓库根 ruff.toml;CI 的 lint job 也装这个
-ruff>=0.16.4,<1.0
+ruff>=0.16.5,<1.0
 # 后端 import 边界合约(仓库根 .importlinter);CI lint job 的「分层检查」step 也装这个
 import-linter>=2.15,<3.0
 
