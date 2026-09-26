@@ -2,7 +2,9 @@
 
 两条修复通道（ADR-0052 明确：**不参与正常时延预算**，正常聚合走 SAQ 唤醒）：
 
-1. 计数漂移：对比 ``plan_run`` 计数与 ``job_instance`` 事实并重写（recount）。
+1. 计数漂移：对比 ``plan_run`` 计数与 ``job_instance`` 事实并重写（recount）——
+   **仅对无待聚合标记的 run**（#3399：有标记 ⇒ 聚合器负责，抢跑会把正常滞后
+   记成漂移）。
 2. 聚合触发恢复（#3244）：
    - pending 表有积压（唤醒入队失败 / Redis 抖动 / worker 崩溃）→ 内联排空该
      Run（聚合器幂等重算 + 消费即删）；
@@ -69,6 +71,24 @@ def reconcile_plan_run_counters_once(
         return summary
 
 
+def _has_pending_aggregation(db, plan_run_id: int) -> bool:
+    """该 Run 是否仍有待聚合标记（#3399 规格补充：有标记 ⇒ 跳过本 run）。
+
+    聚合器（SAQ 唤醒 / 排空）才是这些标记的处理者，且聚合器一旦跑完，
+    计数已由它自己读事实重算——reconciler 抢在它前面 recount，只会把
+    「还没轮到聚合器」这段正常滞后记成漂移（误报换个路径复发）。
+    存在性判断走复合主键前缀，成本一次索引探测。
+    """
+    return (
+        db.execute(
+            select(PlanRunPendingAggregation.plan_run_id)
+            .where(PlanRunPendingAggregation.plan_run_id == plan_run_id)
+            .limit(1)
+        ).scalar_one_or_none()
+        is not None
+    )
+
+
 def _reconcile_plan_run_counters_body(
     *,
     lookback_hours: int | None = None,
@@ -81,6 +101,7 @@ def _reconcile_plan_run_counters_body(
     cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback)
 
     scanned = 0
+    skipped_pending = 0
     drifted = 0
     fixed = 0
     aggregated = 0
@@ -103,6 +124,12 @@ def _reconcile_plan_run_counters_body(
 
         for run in rows:
             scanned += 1
+            # #3399：仍有待聚合标记 ⇒ 计数滞后是聚合器跑之前的正常态，跳过。
+            # 标记本身由 _replay_stale_aggregation_triggers 负责排空（唤醒丢失
+            # 计数走 replayed_total，不在这里记 drift）。
+            if _has_pending_aggregation(db, run.id):
+                skipped_pending += 1
+                continue
             jobs = (
                 db.query(JobInstance)
                 .filter(JobInstance.plan_run_id == run.id)
@@ -141,7 +168,13 @@ def _reconcile_plan_run_counters_body(
         else:
             db.rollback()
 
-    summary = {"scanned": scanned, "drifted": drifted, "fixed": fixed, "aggregated": aggregated}
+    summary = {
+        "scanned": scanned,
+        "skipped_pending": skipped_pending,
+        "drifted": drifted,
+        "fixed": fixed,
+        "aggregated": aggregated,
+    }
     if drifted:
         logger.info("counter_reconcile_done %s", summary)
     else:
