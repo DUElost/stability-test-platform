@@ -2,6 +2,8 @@
 
 时间格式化与终态集合原先散落在 ``plan_runs`` 路由与各读侧 service；
 本模块收成单一真源。``require_plan_run`` 供多条读端点共用 404 门禁。
+**#3350（ADR-0023 D2）**：``snapshot_step_scripts`` 把 ``plan_snapshot.steps``
+折成脚本身份查表——timeline / events / devices 三条读端点共用同一份派生规则。
 """
 
 from __future__ import annotations
@@ -22,6 +24,53 @@ TERMINAL_PR_STATUSES = {
     PlanRunStatus.PARTIAL_SUCCESS.value,
     PlanRunStatus.FAILED.value,
 }
+
+
+def snapshot_step_scripts(
+    plan_snapshot: dict | None,
+) -> dict[tuple[str, str], tuple[str, str | None]]:
+    """``plan_snapshot.steps`` → ``{(stage, step_key): (script_name, script_version)}``。
+
+    ADR-0023 D2 的取值规则：**从快照查表派生**（不新增查询、不回落当前 Plan 定义——
+    排查要回答的是「当时跑的是哪个版本」，现行 PlanStep 已被改指别的版本时那个答案
+    会骗人）。快照缺失/结构不合法/字段为空 → 查不到即 None，不抛错（旧 PlanRun
+    常见：迁移前快照只有部分键；D2 验收要求这类 PlanRun 全字段为 None）。
+    """
+    snapshot = plan_snapshot if isinstance(plan_snapshot, dict) else {}
+    index: dict[tuple[str, str], tuple[str, str | None]] = {}
+    for step in snapshot.get("steps") or []:
+        if not isinstance(step, dict):
+            continue
+        stage = str(step.get("stage") or "")
+        step_key = str(step.get("step_key") or "")
+        if not stage or not step_key:
+            continue
+        script_name = str(step.get("script_name") or "").strip()
+        if not script_name:
+            continue
+        version = str(step.get("script_version") or "").strip()
+        index[(stage, step_key)] = (script_name, version or None)
+    return index
+
+
+def resolve_step_script(
+    index: dict[tuple[str, str], tuple[str, str | None]],
+    *,
+    stage: str | None,
+    step_key: str | None,
+) -> tuple[str | None, str | None]:
+    """把 ``(stage, step_key)`` 解析成 ``(script_name, script_version)``；查不到 → (None, None)。
+
+    devices 端点的 ``current_step`` 来自 ``JobInstance.current_patrol_step``（巡检心跳
+    写入，语义上属 patrol 段）——故调用方传 ``stage="patrol"``；events 端点按
+    ``StepTrace.stage`` 原样传。
+    """
+    if not stage or not step_key:
+        return None, None
+    hit = index.get((stage, step_key))
+    if hit is None:
+        return None, None
+    return hit
 
 
 def aware(ts: datetime | None) -> datetime | None:

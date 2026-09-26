@@ -151,6 +151,9 @@ const REASON_LABELS: Record<string, string> = {
   // 而心跳全正常，这两条是唯一可见信号。
   usb_host_controller_dead: 'USB 主控失联（xHCI 死亡）',
   usb_link_degraded: 'USB 链路劣化',
+  // #3092：单实例守卫降级（锁文件连只读都打不开）——同机可能双实例叠加心跳，
+  // 2026-07-27 coordinator 心跳互拒 3 天事故的入口形态。
+  single_instance_guard_degraded: '单实例守卫降级（双实例风险）',
 };
 
 const AGENT_SYNC_LABELS: Record<AgentCodeSyncStatus, string> = {

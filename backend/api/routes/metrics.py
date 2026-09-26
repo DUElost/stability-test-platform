@@ -240,6 +240,8 @@ _HEALTH_REASONS = (
     "adb_interfaces_missing",
     "usb_host_controller_dead",
     "usb_link_degraded",
+    # #3092：单实例守卫降级（锁文件连只读都打不开 ⇒ 同机可能双实例叠加心跳）。
+    "single_instance_guard_degraded",
     "other",
 )
 

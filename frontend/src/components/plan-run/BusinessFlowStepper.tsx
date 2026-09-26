@@ -3,6 +3,7 @@ import { STEPPER_STAGE, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 import type { PlanRunTimeline, TimelineStage } from '@/utils/api/types';
 import SectionHeader from './SectionHeader';
+import { formatScriptIdentity } from './scriptIdentity';
 
 interface Props {
   timeline?: PlanRunTimeline;
@@ -79,6 +80,21 @@ function StageNode({ stageKey, stage, isCurrent }: {
       {patrolCycle != null && (
         <div className="mt-1 text-[11px] font-mono text-warning">周期 #{patrolCycle}</div>
       )}
+      {/* #3350（ADR-0023 D3）：本段每个 step 的脚本身份。缺失（旧快照/无 step）不渲染 */}
+      {stage?.steps?.map((step) => {
+        const identity = formatScriptIdentity(step.script_name, step.script_version);
+        if (!identity) return null;
+        return (
+          <div
+            key={step.step_key}
+            className={cn('mt-1 truncate text-[10px] font-mono', TEXT.subtitle)}
+            data-testid={`stage-step-script-${stageKey}-${step.step_key}`}
+            title={`${step.step_key}: ${identity}`}
+          >
+            {identity}
+          </div>
+        );
+      })}
     </div>
   );
 }

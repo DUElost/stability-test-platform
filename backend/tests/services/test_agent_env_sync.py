@@ -21,10 +21,9 @@ def test_hot_update_env_overrides_uses_install_layout_paths():
     )
     assert overrides["LOG_DIR"] == "/opt/stability-test-agent/logs"
     assert overrides["PYTHONPATH"] == "/opt/stability-test-agent"
-    assert overrides["STP_FLASH_TOOL_DIR"] == (
-        "/opt/stability-test-agent/agent/resources/flashtool"
-        "/SP_Flash_Tool_Selector_exe_Linux_v1.2444.00.100"
-    )  # ADR-0051 Phase 3 过渡止血（flash_firmware 包模式回退断链）
+    # ADR-0051 D7 第 4 片：flash 工具目录改由引擎按脚本包 requires_tools 逐步注入，
+    # hot-update 渲染已撤（台账 flash-tool-dir-env-injection 结项）——加回即红。
+    assert "STP_FLASH_TOOL_DIR" not in overrides
 
 
 def test_hot_update_env_overrides_includes_fleet_keys_from_control_plane(monkeypatch):
@@ -150,7 +149,7 @@ def test_agent_path_keys_to_verify_covers_synced_paths(monkeypatch):
     keys = agent_path_keys_to_verify(overrides)
 
     assert "STP_DEDUP_SCAN_SCRIPT" in keys
-    assert "STP_FLASH_TOOL_DIR" in keys  # 主机缺 resources/flashtool 要在推送时暴露，不是刷机时
+    assert "STP_FLASH_TOOL_DIR" not in keys  # D7 第 4 片：工具目录由步骤级注入（fail-closed）承担，不再做推送时路径核验
     assert "STP_AEE_NFS_ROOT" in keys
     assert "LOG_DIR" not in keys
 

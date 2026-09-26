@@ -1040,6 +1040,16 @@ export interface ScriptScanOut {
   package_missing: ScriptScanPackageIssue[];
   unregistered_active: ScriptScanEntry[];
   deactivated_versions: ScriptScanDeactivatedEntry[];
+  /** #3349（ADR-0023 D6 源头守卫）：retired 但仍被 plan_step 引用、is_active 未翻转。 */
+  retire_blocked: number;
+  retire_blocked_versions: ScriptScanRetireBlocked[];
+}
+
+/** #3349：retired 登记被引用阻断的明细（与 409 SCRIPT_STILL_REFERENCED 同信息）。 */
+export interface ScriptScanRetireBlocked {
+  name: string;
+  version: string;
+  plan_ids: number[];
 }
 
 /** ADR-0029 P2-10：脚本在某项目的使用统计（run 维度成功率）。 */
@@ -1773,6 +1783,8 @@ export type StageStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skip
 export interface StageStep {
   step_key: string;
   script_name: string;
+  /** #3350（ADR-0023 D2）：快照里的脚本版本；旧快照缺该键 → null */
+  script_version?: string | null;
   stage: 'init' | 'patrol' | 'teardown';
   sort_order: number;
   device_total: number;
@@ -1825,6 +1837,9 @@ export interface PlanRunEvent {
   device_id?: number | null;
   device_serial?: string | null;
   ref?: { type: string; id: number } | null;
+  /** #3350（ADR-0023 D2）：仅 category='step' 的事件带脚本身份（快照派生） */
+  script_name?: string | null;
+  script_version?: string | null;
 }
 
 export interface PlanRunEventsPayload {
@@ -1906,6 +1921,9 @@ export interface DeviceMatrixItem {
   adb_connected?: boolean | null;
   current_stage: 'init' | 'patrol' | 'teardown' | 'done' | 'pending' | 'failed' | 'aborted' | 'unknown';
   current_step?: string | null;
+  /** #3350（ADR-0023 D2）：current_step 在快照里查到的脚本身份；查不到 → null */
+  current_script_name?: string | null;
+  current_script_version?: string | null;
   patrol_cycle_count: number;
   patrol_success_cycle_count: number;
   patrol_failed_cycle_count: number;

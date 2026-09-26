@@ -627,6 +627,30 @@ groups:
             命中阈值，而真实劣化会持续数小时到数天。处置：查线/查 hub 供电（SS 线松动、
             劣质 hub、EMI 都是已知成因），别等它死——主控一死就只能 unbind/rebind。
             同 host 若同时出现 StabilityHostUsbControllerDead，以那条为准（本条是前兆面）。
+      # #3092：单实例守卫降级。守卫本身是 #2961 加的（2026-07-27 事故后），
+      # 失败方向按「纵深防御」设计：锁文件打不开时放行启动而不阻塞整机。代价是
+      # 一台同时跑 systemd 实例 + 手工进程的机器会静默回到事故形态——本规则让
+      # 这个代价可见。降级只在启动期判定一次，所以 gauge 值 = 该进程的常量事实；
+      # 重启 Agent 是唯一出口（换回可写锁文件后重启即恢复）。
+      - alert: StabilitySingleInstanceGuardDegraded
+        expr: stability_host_health_reason{reason="single_instance_guard_degraded"} >= 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Single-instance guard degraded on one host (double-agent risk)
+          description: >-
+            该 host 上 agent 的单实例锁文件**连只读都打不开**（典型：残留一个别的
+            属主的 0600 锁文件，或锁文件是符号链接），守卫因此降级为不生效——
+            此刻若再有一个手工 `python -m agent.main` 起来，两个进程会各持不同
+            `agent_instance_id` 互相覆盖 `host.last_agent_instance_id`，coordinator
+            fencing 对两者都判 stale，**该 host 的 Coordinator 心跳会被整条拒掉**
+            （2026-07-27 事故：19/20 台被拒 3 天）。守卫的降级事实由心跳
+            `health.reasons` 上报，本告警就是它的响铃面。
+            处置：上机 `ls -l <agent>/logs/agent.lock`（LOG_DIR 下），确认属主/类型后
+            修掉（重新创建或改属主），再重启 agent 让守卫重新判定；期间该 host
+            别手工起第二个实例。只读回退（0644 root 文件）**不算降级**：那种情况下
+            守卫照常拦住第二个实例（只少写 pid），不会触发本告警。
       # #2957：上面两条的可触发性**前提是 agent 能读到内核日志**。实测 Agent 服务
       # `User=android`（`backend/agent/install_agent.sh`），安装脚本只加过 `dialout`，
       # 从未加入 `adm`/`systemd-journal`；非特权 `journalctl -k` 退出码 0、stdout 只有

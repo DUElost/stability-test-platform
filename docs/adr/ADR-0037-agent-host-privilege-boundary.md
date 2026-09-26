@@ -1,13 +1,13 @@
 # ADR-0037：Agent 主机提权边界（Privilege Boundary Wrapper）
 
-- 状态：**Accepted（v0.5）**
-- 版本记录：v0.5（2026-09-16：§2 D2 事实勘误——`selftest` 只证 wrapper **自洽**，不证它具备热更新脚本将要调用的子命令；脚本头改为「selftest + 能力集合比对」双前置判据，wrapper 新增 `capabilities` 子命令，#2319）；v0.1（2026-09-11 初版，R14-F04 #1250 触发）；v0.2（2026-09-15：§1.2 事实勘误、§2 新增 D5、§4 偏差记录、§5 退役前置修订，#2133）；v0.3（2026-09-15：§5 Revisit #1 执行完毕——legacy 分支与哨兵删除、失败模式改 fail-closed、§4 回滚路径更新，#2180）；v0.4（2026-09-15：**转 Accepted**——R02 安全联审一稿已交付（#2206 / PR #2209，结论「建议接受、无阻断项」）；采纳 S1/O1/O2：§2 新增 D6 边界承担声明、D3 补信任边界措辞、§4 不变量补既有强控制与测试清单、§5 ③ 记评审交付与 S2/S3/O4 处置）
+- 状态：**Accepted（v0.6）**
+- 版本记录：v0.6（2026-09-26：§2 新增 D7——内核日志只读子命令 `read-kernel-log`（#2957：Agent 侧内核 USB 判据的提权读面，两个整数参数 + 固定 argv + 输出上限/超时/截断非零退出），§4 强控制与测试清单同步）；v0.5（2026-09-16：§2 D2 事实勘误——`selftest` 只证 wrapper **自洽**，不证它具备热更新脚本将要调用的子命令；脚本头改为「selftest + 能力集合比对」双前置判据，wrapper 新增 `capabilities` 子命令，#2319）；v0.1（2026-09-11 初版，R14-F04 #1250 触发）；v0.2（2026-09-15：§1.2 事实勘误、§2 新增 D5、§4 偏差记录、§5 退役前置修订，#2133）；v0.3（2026-09-15：§5 Revisit #1 执行完毕——legacy 分支与哨兵删除、失败模式改 fail-closed、§4 回滚路径更新，#2180）；v0.4（2026-09-15：**转 Accepted**——R02 安全联审一稿已交付（#2206 / PR #2209，结论「建议接受、无阻断项」）；采纳 S1/O1/O2：§2 新增 D6 边界承担声明、D3 补信任边界措辞、§4 不变量补既有强控制与测试清单、§5 ③ 记评审交付与 S2/S3/O4 处置）
 - 优先级：P1
 - 目标里程碑：M7
-- 日期：2026-09-11（v0.2 / v0.3 修订 2026-09-15；v0.4 修订 2026-09-15；v0.5 勘误 2026-09-16）
-- 决策者：平台研发组（R02 安全联审；2026-09-15 依据评审一稿裁决转 Accepted）
+- 日期：2026-09-11（v0.2 / v0.3 修订 2026-09-15；v0.4 修订 2026-09-15；v0.5 勘误 2026-09-16；v0.6 增补 2026-09-26）
+- 决策者：平台研发组（R02 安全联审；2026-09-15 依据评审一稿裁决转 Accepted；v0.6 的 D7 由 owner 于 #2957 裁决，实施规格含评审材料与逐项核验）
 - 标签：安全, 提权, sudoers, 热更新, Agent 主机
-- 关联：R14 台账 [#1266](https://github.com/DUElost/stability-test-platform/issues/1266)（R14-F04 [#1250](https://github.com/DUElost/stability-test-platform/issues/1250)）；R02 安全审查（联审项）；ADR-0035（主机身份与凭据方向，wrapper 鉴权面待其落地后重审）；#960（维护窗口）；#1247/#1248（热更新工件与主机本地资源保护）；[#2133](https://github.com/DUElost/stability-test-platform/issues/2133)（flash 链运行时提权收口，v0.2 新增）；[#2134](https://github.com/DUElost/stability-test-platform/issues/2134)（宽文件清除与 legacy 退役）；[#2180](https://github.com/DUElost/stability-test-platform/issues/2180)（legacy 分支与哨兵删除，v0.3）
+- 关联：R14 台账 [#1266](https://github.com/DUElost/stability-test-platform/issues/1266)（R14-F04 [#1250](https://github.com/DUElost/stability-test-platform/issues/1250)）；R02 安全审查（联审项）；ADR-0035（主机身份与凭据方向，wrapper 鉴权面待其落地后重审）；#960（维护窗口）；#1247/#1248（热更新工件与主机本地资源保护）；[#2133](https://github.com/DUElost/stability-test-platform/issues/2133)（flash 链运行时提权收口，v0.2 新增）；[#2134](https://github.com/DUElost/stability-test-platform/issues/2134)（宽文件清除与 legacy 退役）；[#2180](https://github.com/DUElost/stability-test-platform/issues/2180)（legacy 分支与哨兵删除，v0.3）；[#2957](https://github.com/DUElost/stability-test-platform/issues/2957)（内核日志只读通道，v0.6 新增）
 
 ## 1. 背景
 
@@ -109,6 +109,28 @@
   依赖 `realpath` + `_validate_install_dir` + `_reject_anchor_drift` 三道守卫；其余子命令同理。
   因此 §4 把 **parser/边界测试**与强控制清单一起列为不变量（改动即需同步测试），
   并在 `selftest` 中做子命令契约校验。
+- **D7 内核日志只读通道（v0.6 新增，#2957）**：Agent 以 `User=android` 运行，内核
+  USB 判据（#2900）在机队上恒不可读（`dmesg_restrict=1`、`/dev/kmsg` EPERM、非特权
+  `journalctl -k` 输出与「内核干净」同形）。在**不新增组权限、不新增 sudoers 行**的
+  前提下，wrapper 扩展只读窄子命令 `read-kernel-log`：
+
+  ```
+  read-kernel-log (--boot | --since-epoch <int>) [--lines <int>]
+  ```
+
+  固定 argv = `journalctl -k --no-pager -o cat` + 窗口 + `--lines`；约束全部在
+  wrapper 内校验：`--since-epoch` ∈ [0, now]、`--lines` ∈ [1, 5000]（`allow_abbrev=False`
+  拒绝缩写），**不接受**任何路径/单元/匹配表达式（`--file`/`-D`/`-M`/`-u`/`--grep` 等
+  在解析层就不可达）；子进程环境清空后只留 `LC_ALL=C` 与 `PATH=/usr/bin:/bin`、
+  30s 超时、stdout 8 MiB 上限；**超限/超时/非零退出一律 exit 3 + `STP_READ_KERNEL_LOG_*`
+  标记，不做部分投递**（#2957 实测某主机 `--boot` 373,600 行，截断后的偏小计数会
+  冒充完整结果）。解析仍在 Agent 侧（`kernel_usb_faults`），wrapper 只搬运原始输出。
+
+  Agent 侧只在 `capabilities` 含该子命令时经 `sudo -n` 调用，否则维持非特权路径
+  （结果仍为 `unavailable`），两态混跑安全；wrapper 不随热更新下发（D3 同款代价），
+  灰度与生效见 §5。采集侧随之把**首扫从整段 boot 改为最近 1 小时**——boot 截断问题
+  从结构上消除；代价是「进程启动前 1 小时以外的死亡」不再进 L1 latch，该形态由
+  结果层 `usb_tree_empty`（#2902 + #2967 账实合取）承接。
 
 ## 3. 备选与否决
 
@@ -132,10 +154,13 @@
      exclude+protect）、`usb-authorized` 走「`/sys/devices` 下与端口同名的真实目录」判定 +
      `O_NOFOLLOW` 属性读写、`fix-ownership` 仅遍历 `INSTALL_DIR` 且 `follow_symlinks=False`、
      `write-digest` 校验 `sha256:<64 hex>`、`bootstrap` 的 `INSTALL_DIR` 在 `realpath` 后
-     与系统关键目录不得互相包含；
+     与系统关键目录不得互相包含、`read-kernel-log` 的窗口/行数取值校验（互斥必选 +
+     整数范围 + `allow_abbrev=False`）与子进程三收口（环境清空 / 30s 超时 / 8 MiB 上限，
+     超限即非零退出、不部分投递）；
   3. **测试是不变量的一部分**：上述控制由
      `tests/test_agent_priv_parser_contract.py`、`tests/test_agent_priv_boundary.py`、
-     `tests/test_agent_priv_apply_code_protection.py`、`tests/test_remote_script_privilege_paths.py`
+     `tests/test_agent_priv_read_kernel_log.py`、`tests/test_agent_priv_apply_code_protection.py`、
+     `tests/test_remote_script_privilege_paths.py`
      锁定；修改这些控制必须同步这些测试（回归时不得无声削弱）；
   4. **信任边界**（v0.4 / O1）：bootstrap 的可调用主体不构成信任边界——conf 冻结（锚点不可变）才是。
 - **迁移期实测偏差（2026-09-15）**：`/etc/sudoers.d/android` 宽规则仍存于
@@ -182,3 +207,10 @@
      **下线前置**——宽文件删除前必须先完成收敛；
   4. 若出现「wrapper 缺陷导致热更新不可用」的事故，优先修 wrapper 并发新
      版本，不回退到宽 sudoers。
+  5. **D7 灰度与生效（v0.6 / #2957）**：wrapper 不随热更新下发，需逐台跑
+     `tools/ansible/playbooks/update_agent.yml`（或随下一次重装）。灰度 1 → 5 → 全量，
+     每级观察 `stability_host_kernel_log_channel{state="unavailable"}` 回落
+     （#2957 上线前实测 46/46 台为 `unavailable`）。**若首扫 1 小时窗被实证漏判**
+     「agent 重启前已死且结果层未覆盖」的形态，评估给首扫加一次**有界**的 boot
+     摘要路径（届时须同时保留截断→不可用判据）；C 方案实施 PR 未含独立安全评审，
+     若团队要求，评审意见与本 ADR 冲突时以评审意见为准并回写 #2957。

@@ -24,6 +24,7 @@ import { ALERT_BOX, DRAWER, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 import { api } from '@/utils/api';
 import type { DeviceMatrixItem, DeviceUiStatus } from '@/utils/api/types';
+import { formatScriptIdentity } from './scriptIdentity';
 import { formatDateTimeShort } from '@/utils/format';
 import {
   DEVICE_LINK_STATUS,
@@ -189,6 +190,15 @@ export default function DeviceDetailDrawer({
           <KvList
             rows={[
               ['当前步骤', device.current_step || '—', true],
+              // #3350（ADR-0023 D3）：脚本身份（脚本@版本）；旧快照查不到 → —
+              [
+                '脚本',
+                formatScriptIdentity(
+                  device.current_script_name,
+                  device.current_script_version,
+                ) || '—',
+                true,
+              ],
               ['Job 状态', device.job_status, false],
               ...(device.adb_state || device.adb_connected != null
                 ? [[

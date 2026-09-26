@@ -1,4 +1,5 @@
 import { useState, useMemo, Fragment } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -83,10 +84,17 @@ function UsageSection({ script }: { script: ScriptEntry }) {
 export default function ScriptManagementPage() {
   const queryClient = useQueryClient();
   const toast = useToast();
-  const [search, setSearch] = useState('');
+  const [searchParams] = useSearchParams();
+  // #3350（ADR-0023 D3）：`?name=&version=` 深链——初始值直接取自 URL（useState 初始化器，
+  // 不用 effect：mount 后用户改搜索框不被 URL 覆盖；URL 保留便于分享）。
+  const [search, setSearch] = useState(() => searchParams.get('name') ?? '');
   const [showVersionDialog, setShowVersionDialog] = useState(false);
   const [versionTarget, setVersionTarget] = useState<ScriptEntry | null>(null);
-  const [showJson, setShowJson] = useState<Record<string, boolean>>({});
+  const [showJson, setShowJson] = useState<Record<string, boolean>>(() => {
+    const name = searchParams.get('name');
+    const version = searchParams.get('version');
+    return name && version ? { [`${name}:${version}`]: true } : {};
+  });
 
   const { data: scripts, isLoading, isError, error } = useQuery({
     queryKey: ['scripts-active'],

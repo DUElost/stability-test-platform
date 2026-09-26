@@ -509,3 +509,29 @@ def test_usb_kernel_log_key_has_its_own_payload_budget():
     """
     cap = _cap(usb_kernel_log_channel="unavailable")["capacity"]
     assert len(json.dumps({"usb_kernel_log": cap["usb_kernel_log"]}, separators=(",", ":"))) < 60
+
+
+# ── #3092: 单实例守卫降级 ────────────────────────────────────────────────────
+
+def test_single_instance_guard_degraded_is_reported():
+    """守卫降级（锁文件连只读都打不开）→ health.reasons 出现专属 reason。"""
+    health = _cap(single_instance_degraded=True)["health"]
+
+    assert "single_instance_guard_degraded" in health["reasons"]
+    assert health["status"] == "DEGRADED"
+
+
+def test_single_instance_guard_degraded_does_not_block_scheduling():
+    """降级是观测事实，不打闸——health_limit / 槽位口径与 healthy 主机一致。"""
+    degraded = _cap(
+        online_healthy_devices=4, total_devices=4, single_instance_degraded=True
+    )
+    baseline = _cap(online_healthy_devices=4, total_devices=4)
+
+    assert degraded["capacity"]["effective_slots"] == baseline["capacity"]["effective_slots"]
+    assert degraded["capacity"]["available_slots"] == baseline["capacity"]["available_slots"]
+
+
+def test_single_instance_guard_reason_absent_by_default():
+    """未降级的主机不得带上这条 reason（否则全 fleet 刷成 DEGRADED）。"""
+    assert "single_instance_guard_degraded" not in _cap()["health"]["reasons"]
