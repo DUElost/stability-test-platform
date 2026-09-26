@@ -17,6 +17,9 @@ Phase 3 起 ``backend/agent/scripts/<name>/`` 是**每族一棵可演进的源�
 - 族的归类 = **族级 ``kind`` 字段**（ADR-0051 v1.3；``python: null`` 自 Phase 4a 有二义，不再作判据）：
   ``kind=script`` 的族必须有树、必须登记且 sha 匹配，条目在而无树 = 红（ghost 保护）；
   ``kind=tool`` 的条目不做树等价、无树豁免。
+- 族树 ``capabilities.json`` 的 ``requires_tools``（ADR-0051 v1.7 D7：脚本包声明工具依赖）必须形态合法，
+  且每个引用指向**已登记、``kind=tool``、未退役**的条目——判据与 Agent 运行时共用
+  ``backend/agent/tool_requirements.py``（按路径加载，门禁不 import backend）。
 
 登记（``--register <name> <version>``）：从族树打包并追加条目（幂等：同版本同 sha 放行；
 异 sha 拒绝——版本号不可复用）。``--publish --packages-root <站点包源>``：把**每族最新**条目的
@@ -59,6 +62,19 @@ def _load_packer():
     spec = importlib.util.spec_from_file_location("package_tool_asset", Path(__file__).with_name("package_tool_asset.py"))
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _load_requirements_module():
+    """``tool_requirements``（ADR-0051 v1.7 D7）：与 Agent 运行时同一份文件，按路径加载。"""
+    name = "stp_tool_requirements"
+    if name in sys.modules:
+        return sys.modules[name]
+    spec = importlib.util.spec_from_file_location(name, REPO_ROOT / "backend" / "agent" / "tool_requirements.py")
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod  # dataclass 处理字符串注解要经 sys.modules 找到定义模块
     spec.loader.exec_module(mod)
     return mod
 
@@ -241,6 +257,38 @@ def check(doc: dict, rebuilt: dict[str, dict], scripts_root: Path) -> list[str]:
     for name, versions in fams.items():
         if name not in trees and latest_entry(versions) is not None:
             errs.append(f"{name}: kind=script 但族树不存在——删族须先 retired:true（改类=退役后以 kind=tool 重登记）")
+    errs.extend(requires_tools_errors(doc, scripts_root))
+    return errs
+
+
+def requires_tools_errors(doc: dict, scripts_root: Path) -> list[str]:
+    """ADR-0051 v1.7 D7：族树声明的工具依赖必须可解析（空 = 绿）。
+
+    只能看**族树**（= 最新版本）：老版本的包只在站点包根、不在 Git。退役一个 tool 版本前
+    仍被 active 老脚本版本依赖的情形，由运行时 fail-closed（步骤 exit 2）与 presence 核验兜底。
+    """
+    req = _load_requirements_module()
+    tools = doc.get("tools") or {}
+    errs: list[str] = []
+    for name, tree in iter_family_trees(scripts_root):
+        try:
+            requirements = req.load_requirements(tree)
+        except req.RequirementError as exc:
+            errs.append(f"{name}: requires_tools 声明非法——{exc}")
+            continue
+        for r in requirements:
+            fam = tools.get(r.name)
+            if not isinstance(fam, dict):
+                errs.append(f"{name}: requires_tools {r.name}@{r.version} 未登记进 tool_manifest.json")
+                continue
+            if fam.get("kind") != "tool":
+                errs.append(f"{name}: requires_tools {r.name} 是 kind={fam.get('kind')!r}——只能依赖 kind=tool 族")
+                continue
+            entry = next((v for v in fam.get("versions") or [] if v.get("version") == r.version), None)
+            if entry is None:
+                errs.append(f"{name}: requires_tools {r.name}@{r.version} 版本未登记")
+            elif entry.get("retired"):
+                errs.append(f"{name}: requires_tools {r.name}@{r.version} 已 retired——换依赖须发脚本新版本")
     return errs
 
 
@@ -361,6 +409,40 @@ def run_self_test() -> int:
         if check(ext, rebuilt3, root):
             failures.append(f"kind=tool 应豁免：{check(ext, rebuilt3, root)}")
 
+        # ADR-0051 v1.7 D7：requires_tools 只能指向已登记、kind=tool、未退役的条目；声明坏 = 红
+        dep_root = Path(tmp) / "dep_scripts"
+        (dep_root / "flasher").mkdir(parents=True)
+        (dep_root / "flasher" / "flasher.py").write_text("print(1)\n", encoding="utf-8")
+        dep_doc = {"schema_version": 1, "tools": {
+            "flashtool": {"kind": "tool", "versions": [
+                {"version": "1.0", "package_sha256": "c" * 64, "artifact": "packages/flashtool/1.0.tar.gz",
+                 "python": None, "script": "flash_tool", "retired": False},
+                {"version": "0.9", "package_sha256": "d" * 64, "artifact": "packages/flashtool/0.9.tar.gz",
+                 "python": None, "script": "flash_tool", "retired": True}]},
+            "alpha": {"kind": "script", "versions": [
+                {"version": "1.0", "package_sha256": "e" * 64, "artifact": "packages/alpha/1.0.tar.gz",
+                 "python": None, "script": "alpha.py", "retired": False}]},
+        }}
+        dep_cases = [
+            ({"flashtool": {"version": "1.0", "env": "STP_FLASH_TOOL_DIR"}}, None),
+            ({"nope": {"version": "1.0", "env": "STP_FLASH_TOOL_DIR"}}, "未登记进 tool_manifest.json"),
+            ({"alpha": {"version": "1.0", "env": "STP_ALPHA_DIR"}}, "只能依赖 kind=tool"),
+            ({"flashtool": {"version": "9.9", "env": "STP_FLASH_TOOL_DIR"}}, "版本未登记"),
+            ({"flashtool": {"version": "0.9", "env": "STP_FLASH_TOOL_DIR"}}, "已 retired"),
+            ({"flashtool": {"version": "1.0", "env": "PATH"}}, "声明非法"),
+        ]
+        for requires, expect in dep_cases:
+            (dep_root / "flasher" / "capabilities.json").write_text(
+                json.dumps({"capabilities": [], "requires_tools": requires}), encoding="utf-8")
+            got = requires_tools_errors(dep_doc, dep_root)
+            if expect is None and got:
+                failures.append(f"合法 kind=tool 依赖应绿：{got}")
+            if expect is not None and not any(expect in e for e in got):
+                failures.append(f"requires_tools {requires} 应红（含「{expect}」）：{got}")
+        (dep_root / "flasher" / "capabilities.json").write_text("{bad json", encoding="utf-8")
+        if not any("声明非法" in e for e in requires_tools_errors(dep_doc, dep_root)):
+            failures.append("坏 capabilities.json 应红（依赖声明 fail-closed，不同于 read_capabilities 的宽容）")
+
         # publish：只落最新版
         out = Path(tmp) / "packages"
         latest = {n: latest_entry(v)["version"] for n, v in script_families(doc).items()}
@@ -372,7 +454,7 @@ def run_self_test() -> int:
         for f in failures:
             print(f"[SELFTEST-FAIL] {f}", file=sys.stderr)
         return 1
-    print("[OK] check_script_packages self-test 红绿双向（族树/重建/登记/改树未发版/版本复用/退役回落/残留 v 目录/kind 归类（tool 豁免、script ghost 红、全退役绿）/publish）")
+    print("[OK] check_script_packages self-test 红绿双向（族树/重建/登记/改树未发版/版本复用/退役回落/残留 v 目录/kind 归类（tool 豁免、script ghost 红、全退役绿）/requires_tools 引用（未登记/非 tool/缺版本/退役/坏声明）/publish）")
     return 0
 
 

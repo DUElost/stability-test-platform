@@ -12,6 +12,8 @@ import { Loader2 } from 'lucide-react';
 import AppShell from '../layouts/AppShell';
 import { RouteTitle } from '@/hooks/useDocumentTitle';
 import { useAuthSession } from '@/hooks/useAuthSession';
+import { InlineError } from '@/components/ui/error-state';
+import { resolveAuthGate } from './authGate';
 
 // Auth pages stay as static imports (always needed on first load)
 import LoginPage from '../pages/auth/LoginPage';
@@ -61,6 +63,20 @@ function AuthGateLoading() {
   );
 }
 
+/** #3226：会话状态暂时无法确定时的门（不是登录页，也不丢深链）。 */
+function AuthGateTransient({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-background p-6">
+      <div className="w-full max-w-md">
+        <InlineError
+          message="暂时无法确认登录状态（服务不可用或网络异常）。会话未失效，可稍后重试。"
+          onRetry={onRetry}
+        />
+      </div>
+    </div>
+  );
+}
+
 // 未登录访问受保护路由 → /login 并携带来源（登录成功后回跳深链，GUI 评测 2026-09-14）
 function loginRedirectState(location: { pathname: string; search: string; hash: string }) {
   return { from: location.pathname + location.search + location.hash };
@@ -70,8 +86,13 @@ function loginRedirectState(location: { pathname: string; search: string; hash: 
 function ProtectedRoute() {
   const sessionQ = useAuthSession();
   const location = useLocation();
-  if (sessionQ.isLoading) return <AuthGateLoading />;
-  return sessionQ.isSuccess ? (
+  const gate = resolveAuthGate(sessionQ);
+  if (gate === 'loading') return <AuthGateLoading />;
+  // #3226：探活瞬时失败（5xx/断网/超时）不得当成未登录——留在原地并给重试，
+  // 否则控制面部署/抖动窗口里每个刷新都会被弹回登录页重填口令。
+  if (gate === 'transient')
+    return <AuthGateTransient onRetry={() => void sessionQ.refetch()} />;
+  return gate === 'authorized' ? (
     <Outlet />
   ) : (
     <Navigate to="/login" replace state={loginRedirectState(location)} />
@@ -82,8 +103,11 @@ function ProtectedRoute() {
 function AdminRoute() {
   const sessionQ = useAuthSession();
   const location = useLocation();
-  if (sessionQ.isLoading) return <AuthGateLoading />;
-  if (!sessionQ.isSuccess)
+  const gate = resolveAuthGate(sessionQ);
+  if (gate === 'loading') return <AuthGateLoading />;
+  if (gate === 'transient')
+    return <AuthGateTransient onRetry={() => void sessionQ.refetch()} />;
+  if (gate !== 'authorized')
     return <Navigate to="/login" replace state={loginRedirectState(location)} />;
   return sessionQ.data?.role === 'admin' ? <Outlet /> : <Navigate to="/" replace />;
 }

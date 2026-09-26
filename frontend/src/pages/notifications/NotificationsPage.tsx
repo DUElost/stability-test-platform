@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { EmptyState } from '@/components/ui/empty-state';
+import { InlineError } from '@/components/ui/error-state';
 import {
   Dialog,
   DialogContent,
@@ -291,7 +292,13 @@ export default function NotificationsPage() {
             </Button>
           </div>
 
-          {channels.length === 0 ? (
+          {channelsQ.isError ? (
+            // #3199（判据来自 #1195）：查询失败不得展示空态——那是「成功且为空」的语义。
+            <InlineError
+              message="通知渠道加载失败，暂无法判断是否已配置渠道。"
+              onRetry={() => void channelsQ.refetch()}
+            />
+          ) : channels.length === 0 ? (
             <EmptyState
               title="暂无通知渠道"
               description="添加通知渠道以接收告警"
@@ -364,7 +371,13 @@ export default function NotificationsPage() {
             </Button>
           </div>
 
-          {rules.length === 0 ? (
+          {rulesQ.isError ? (
+            // #3199：同上——失败≠没有规则
+            <InlineError
+              message="告警规则加载失败，暂无法判断是否已配置规则。"
+              onRetry={() => void rulesQ.refetch()}
+            />
+          ) : rules.length === 0 ? (
             <EmptyState
               title={channels.length === 0 ? '请先添加通知渠道' : '暂无告警规则'}
               description={channels.length === 0 ? '需要先创建通知渠道才能设置规则' : '添加告警规则以触发通知'}
@@ -609,7 +622,9 @@ function NotificationLogsTab() {
   return (
     <div className="space-y-3">
       <div className="flex justify-between items-center">
-        <span className={cn('text-sm', TEXT.caption)}>共 {total} 条通知</span>
+        <span className={cn('text-sm', TEXT.caption)}>
+          {logsQ.isError ? '通知条数未知（加载失败）' : `共 ${total} 条通知`}
+        </span>
         <Button onClick={handleMarkAllRead} variant="outline" size="sm">
           <CheckCheck size={14} className="mr-1" /> 全部标为已读
         </Button>
@@ -617,6 +632,13 @@ function NotificationLogsTab() {
 
       {logsQ.isLoading ? (
         <PageSkeleton.Block size="lg" />
+      ) : logsQ.isError ? (
+        // #3199（判据来自 #1195）：查询失败曾被渲染成「暂无通知记录」，
+        // 对告警平台等于把「看不到告警」说成「没有告警」。失败必须与成功空结果可分。
+        <InlineError
+          message="通知记录加载失败，暂无法判断是否存在告警。"
+          onRetry={() => void logsQ.refetch()}
+        />
       ) : logs.length === 0 ? (
         <EmptyState
           title="暂无通知记录"
