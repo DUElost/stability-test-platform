@@ -56,7 +56,11 @@ Class: bug-fix
   503 300–348、放大 1.61–1.71、收敛 9.5–10.9 s、async 池峰 13–14 / 40。
 - `backend/tests/test_terminal_bulkhead_2959.py` + `test_db_overload_response_2959.py` +
   `services/test_plan_run_abort_backflow_scale_3243.py` → **28 passed**。
-- CI 取证：待回填（分支 dispatch `ci.yml` 的 backend-test 读数）。
+- 同提交全量 CI（分支 dispatch `ci.yml`，run 36225866095，`55c7eb76`）：backend-test **3739 passed、
+  0 failed**，此前连续两次确定性红的 `test_plan_run_abort_backflow_scale_3243` 通过，即 heartbeat 与
+  `/health` 探针 p99 均 < 1 s；agent 2187 passed；仓库级 1861 passed / 18 skipped；lint、frontend-check、
+  docker-build 全绿。CI 以 `-q` 运行，通过时不打印 `CALIBRATION_3243`，**余量无法从这一轮读出**；按本机
+  读数乘以 CI 约 4 倍的慢速估算，heartbeat 约在 0.6–0.9 s。
 
 ## Revisit
 
