@@ -215,7 +215,14 @@ def check(doc: dict, rebuilt: dict[str, dict], scripts_root: Path) -> list[str]:
             continue
         versions = fams.get(name)
         if not versions:
-            errs.append(f"{name}: 族树未登记进 tool_manifest.json（跑 --register {name} <version>）")
+            other_kind = ((doc.get("tools") or {}).get(name) or {}).get("kind")
+            if other_kind and other_kind != "script":
+                # ADR-0033 D0（ADR-0051 D8 起由本判据承担，原 check_new_script_family 退役）
+                errs.append(f"{name}: 族树存在但登记为 kind={other_kind!r}——外部工具源码不得入仓（ADR-0033 D0）；"
+                            "平台自研族以 kind=script 登记")
+            else:
+                errs.append(f"{name}: 族树未登记进 tool_manifest.json（跑 --register {name} <version>）——"
+                            "登记即归类声明：kind=script = 平台自研（ADR-0033 D0 / ADR-0051 D8）")
             continue
         latest = latest_entry(versions)
         if latest is None:
@@ -340,6 +347,11 @@ def run_self_test() -> int:
         ghost["tools"]["delta"]["versions"][0]["retired"] = True
         if any("delta" in e for e in check(ghost, rebuilt3, root)):
             failures.append("kind=script 全退役无树应绿")
+        # ADR-0051 D8：D0 归类由 kind 承担——族树挂在 kind=tool 条目下 = 外部工具源码入仓，红
+        d0 = json.loads(json.dumps(doc))
+        d0["tools"]["beta"]["kind"] = "tool"
+        if not any("外部工具源码不得入仓" in e for e in check(d0, rebuilt3, root)):
+            failures.append("族树登记为 kind=tool 应红（ADR-0033 D0 由 kind 承担）")
 
         # 外部工具族（python 非 null）不在射程
         ext = json.loads(json.dumps(doc))
