@@ -567,9 +567,9 @@ def _evaluate(argv: list[str] | None = None) -> int:
     if usage_error is not None:
         # 使用事实缺失 → 判据不可用。默认模式仍可给原始候选面；guard 模式不得
         # 把「无从判定」降级为「零使用」后放行或误判。
-        if args.guard:
-            print(f"GUARD UNKNOWN: 执行事实维度不可得：{usage_error}", file=sys.stderr)
-            return 2
+        #
+        # #3167：guard 模式也必须走完下面的 payload 出口再以 2 退出——probe 以
+        # 「rc=2 且带 guard 块」识别 unknown；只往 stderr 说话会被折成 broken。
         plan, hold = None, None
     else:
         plan, hold = _report(facts, today=today, cooldown_days=args.cooldown_days)
@@ -627,6 +627,11 @@ def _evaluate(argv: list[str] | None = None) -> int:
                 print(f"GUARD FAIL: {len(plan)} 个版本超期零引用仍活跃，应退役（见 retirement_plan）")
             elif plan is not None:
                 print("GUARD OK: 无超期零引用活跃版本")
+        if usage_error is not None:
+            # #3167：码 2 的语义靠 payload 里的 `guard.status=UNKNOWN` 传达（上面已输出），
+            # stderr 行只给人看。两种模式共用同一出口，不再在判定前提前 return。
+            print(f"GUARD UNKNOWN: 执行事实维度不可得：{usage_error}", file=sys.stderr)
+            return 2
         return 1 if plan else 0
     return 0
 

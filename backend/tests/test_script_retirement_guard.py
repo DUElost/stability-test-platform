@@ -271,6 +271,41 @@ def test_cli_guard_unknown_when_usage_facts_missing(monkeypatch, capsys):
     assert mod.main(["--guard", "--today", TODAY.isoformat()]) == 2
 
 
+def test_cli_guard_unknown_emits_payload_for_probe(monkeypatch, capsys):
+    """#3167：判据不可得要经**真实 CLI 出口**给出 payload，probe 才能数成 unknown。
+
+    回归点：修前 `--json --guard` + 使用事实不可得只在 stderr 打一行就 `return 2`，
+    stdout 为空 ⇒ probe 的 `summarize` 走「rc=2 无 `guard` 块」分支折成 broken
+    （真未知被读成工具坏了）。本用例**不用** probe 测试里的 `_guard_payload`
+    理想形状，而是跑真实 `main()` 并把真实 payload 过一遍 probe 的 summarize，
+    锁住「产得出 + 数得上」两半。
+    """
+    import importlib.util
+    import json
+    import sys as _sys
+
+    from backend.scripts import check_unreferenced_script_versions as mod
+
+    rows = [{"name": "s", "version": "1.0.0", "is_active": True, "refs": 0}]
+    _patch_db(monkeypatch, mod, rows=rows, usage_error="no jsonb")
+
+    rc = mod.main(["--json", "--guard", "--today", TODAY.isoformat()])
+    payload = json.loads(capsys.readouterr().out)  # 修前 stdout 为空 ⇒ 此断言先红
+    assert rc == 2
+    assert payload["guard"] == {"status": "UNKNOWN", "violations": 0}
+    assert payload["usage_facts_available"] is False
+
+    spec = importlib.util.spec_from_file_location(
+        "script_guard_probe", REPO_ROOT / "tools" / "dev" / "script_guard_probe.py")
+    assert spec and spec.loader
+    probe = importlib.util.module_from_spec(spec)
+    _sys.modules["script_guard_probe"] = probe
+    spec.loader.exec_module(probe)
+    values, exit_code = probe.summarize(rc, payload)
+    assert values == {"due": 0.0, "unknown": 1.0, "broken": 0.0}
+    assert exit_code == 0  # 巡检成功执行；结论未知只进指标，不让 timer failed
+
+
 def test_cli_json_carries_plan_and_guard_status_without_trailing_noise(monkeypatch, capsys):
     import json
 
