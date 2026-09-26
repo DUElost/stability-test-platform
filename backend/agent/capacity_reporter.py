@@ -47,6 +47,7 @@ def compute_capacity(
     usb_root_hub_count: Optional[int] = None,
     usb_fault_reasons: Optional[Sequence[str]] = None,
     usb_kernel_log_channel: Optional[str] = None,
+    single_instance_degraded: bool = False,
 ) -> dict:
     """返回 {"capacity": {...}, "health": {...}}。
 
@@ -80,6 +81,10 @@ def compute_capacity(
     自身状态而不是主机故障：进 reasons 会把整个 fleet 刷成 DEGRADED（页面噪声 +
     与真故障同色），而我们要能单独问出「这条判据今天算不算数」。
     与 `usb_device_count` 同族：纯观测，不参与任何槽位/门禁计算。
+
+    single_instance_degraded — #3092：单实例守卫无法建立（启动期由 `startup_guards`
+    判定）。进 health.reasons 走既有四面对拍词表（agent → 控制面分桶 → 告警选择器 →
+    前端标签）；warning 级，不参与 health_limit。
     """
     health = _compute_health(
         system_stats,
@@ -91,6 +96,7 @@ def compute_capacity(
         usb_root_hub_count=usb_root_hub_count,
         adb_interface_count=adb_interface_count,
         usb_fault_reasons=usb_fault_reasons,
+        single_instance_degraded=single_instance_degraded,
     )
     health_limit = _compute_health_limit(
         system_stats, mount_status,
@@ -166,6 +172,7 @@ def _compute_health(
     usb_root_hub_count: Optional[int] = None,
     adb_interface_count: Optional[int] = None,
     usb_fault_reasons: Optional[Sequence[str]] = None,
+    single_instance_degraded: bool = False,
 ) -> dict:
     """产出结构化 health 快照。
 
@@ -178,6 +185,10 @@ def _compute_health(
     故障（xHCI 主控死亡 / 慢性链路劣化）**独立于设备数**，故不参与
     `_compute_health_limit` 的打闸判据（那是 #2902 的门禁议题），只把 host 从
     HEALTHY 拉成 DEGRADED，让「心跳正常但 USB 全瞎」不再无声。
+
+    ``single_instance_degraded`` 由 `startup_guards`（#3092）在启动期判定后传入：
+    单实例守卫连只读打开锁文件都失败时，同机第二个 Agent 可能静默叠加（2026-07-27
+    心跳互拒事故的形态）。同为 warning 级观测 reason，不打闸。
     """
     reasons: List[str] = []
     cpu = system_stats.get("cpu_load", 0)
@@ -207,6 +218,8 @@ def _compute_health(
     for reason in usb_fault_reasons or ():
         if reason not in reasons:
             reasons.append(reason)
+    if single_instance_degraded:
+        reasons.append("single_instance_guard_degraded")
 
     if cpu > 90 or ram > 95 or disk is None or disk > 95 or not mount_ok or adb_dead:
         status = "UNSCHEDULABLE"

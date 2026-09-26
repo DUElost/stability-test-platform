@@ -15,6 +15,7 @@ from .heartbeat import send_heartbeat
 from .heartbeat_timing import HeartbeatTiming
 from .kernel_usb_faults import KernelUsbWatch
 from .settings import get_heartbeat_settings
+from .startup_guards import single_instance_guard_degraded
 
 logger = logging.getLogger(__name__)
 
@@ -760,6 +761,8 @@ class HeartbeatThread:
             usb_root_hub_count=usb_root_hub_count,
             usb_fault_reasons=usb_fault_reasons,
             usb_kernel_log_channel=usb_kernel_log_channel,
+            # #3092：启动期常量——守卫降级时让「第二个实例可能静默叠加」随心跳可见
+            single_instance_degraded=single_instance_guard_degraded(),
         )
 
         with self._capacity_lock:
