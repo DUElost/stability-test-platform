@@ -6,7 +6,8 @@
       "what": "agent_env_sync 按安装布局注入 STP_FLASH_TOOL_DIR（Phase 3 包模式下 flash_firmware/preflight 的 script_dir 相对回退断链的过渡止血，见 2026-09-23 Note）",
       "exit": "adr:ADR-0051#D7",
       "due": "2026-12-31",
-      "status": "active"
+      "status": "done",
+      "evidence": "2026-09-26 D7 激活：flashtool 入包（#3369，站点发布并经真实 resolver 核验）+ flash 族新版本 requires_tools（#3378）+ canary run 575 真刷（argv0=tools_cache/flashtool/1.2444.00.100/flash_tool，主机日志 required_tool_injected）+ 在用刷机计划 11/12/39/40/59/61/62/68 全部重指 1.3.18/1.0.6（审计 changed=['steps']，plan 68 删 flash_tool_dir）+ 48/48 主机 tools_cache 预热；本 PR 撤 _install_dir_env_overrides 渲染与 AGENT_PATH_ENV_KEYS 登记、旧版本 retired 翻转。存量主机 .env 旧行惰性（步骤注入覆盖），它仍是步骤级注入键，不入 §6/RETIRED_ENV_KEYS"
     },
     {
       "id": "unisoc-env-path-keys",
