@@ -159,6 +159,31 @@ host_heartbeat_missed = Counter(
     ['host_id']
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
+# #3219: Agent-local cumulative histograms mirrored from heartbeat.extra at
+# scrape time. They are Gauges because the Agent owns the counts and may restart;
+# use rate(bucket[window]) for quantiles. Vocabulary is fixed by
+# backend.agent.contracts.heartbeat_timing; no device label is accepted.
+agent_heartbeat_phase_bucket = Gauge(
+    'stability_agent_heartbeat_phase_seconds_bucket',
+    'Cumulative Agent heartbeat tick duration buckets, mirrored per host',
+    ['host_id', 'phase', 'le'],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+agent_heartbeat_phase_sum = Gauge(
+    'stability_agent_heartbeat_phase_seconds_sum',
+    'Cumulative Agent heartbeat tick duration seconds, mirrored per host',
+    ['host_id', 'phase'],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+agent_heartbeat_phase_count = Gauge(
+    'stability_agent_heartbeat_phase_seconds_count',
+    'Cumulative Agent heartbeat tick observations, mirrored per host',
+    ['host_id', 'phase'],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+agent_heartbeat_probe_due = Gauge(
+    'stability_agent_heartbeat_probe_due',
+    'Devices due for a slow or disk probe in the last Agent tick',
+    ['host_id', 'kind'],  # slow | disk
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
 # ============================================================================
 # Device Metrics
 # ============================================================================
@@ -1280,6 +1305,9 @@ _PLAN_RUN_COUNTER_MODES = ("total", "terminal", "completed", "failed", "aborted"
 
 def record_plan_run_counter_drift(plan_run_id: int, modes: "list[str] | tuple[str, ...]"):
     """#77：记录 counter_reconciler 修复的计数器漂移（每漂移列一条）。
+
+    #3399（裁决 A）：调用方只应是 reconciler/补偿路径——聚合器批量补齐是正常
+    路径，不再调用本函数（``recount_plan_run_counters(..., record_drift=False)``）。
 
     ``modes`` 为漂移列短名（total/terminal/completed/failed/aborted）；
     非白名单值过滤掉——防未来新增列悄然扩 label 值域。

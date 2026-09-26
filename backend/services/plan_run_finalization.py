@@ -312,7 +312,10 @@ def _aggregation_round_sync(plan_run_id: int) -> tuple[int, bool]:
                 )
             )
         ).all()
-        recount_plan_run_counters(run, jobs)
+        # #3399 裁决 A：聚合器批量补齐是正常路径（本函数就是计数的唯一写入方），
+        # 不记 drift 埋点——否则每轮聚合都会把「计数器跟上了新事实」记成漂移，
+        # StabilityPlanRunCounterDrift 常态误报。埋点只留 reconciler/补偿路径。
+        recount_plan_run_counters(run, jobs, record_drift=False)
         _recount_host_projection_sync(db, plan_run_id, jobs)
         db.execute(
             delete(PlanRunPendingAggregation).where(
