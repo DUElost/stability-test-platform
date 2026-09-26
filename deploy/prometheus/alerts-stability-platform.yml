@@ -580,7 +580,8 @@ groups:
       # #2900：host 的 xHCI 主控死亡后，整机 USB 对内核**永久不可见且不自愈**，而
       # SSH / systemd / Agent 心跳全正常 ⇒ 平台显示 ONLINE/HEALTHY、产能静默归零。
       # fleet 三例实证，最长失明 11 天（.102 死前还有两周慢性链路风暴无人知）。
-      # 判据来自 agent 侧「内核日志证据 ∧ 此刻零设备」的合取（`kernel_usb_faults.py`），
+      # 判据来自 agent 侧「内核日志证据 ∧ 此刻零设备」的合取
+      # （解析/词表在 backend/agent/contracts/kernel_usb_faults.py），
       # 经 `health.reasons` 上报、由 `api/routes/metrics.py` 折成 reason gauge。
       # **这两条规则只吃那个合取结论，不自己发明第二套失明判据**（第二份真值迟早漂）。
       # 为什么不用「设备数为 0」直接告警：fleet 里既有 adb offline 幽灵行、也有本来

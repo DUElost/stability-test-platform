@@ -199,7 +199,8 @@ host_health_reason = Gauge(
 # `-- No entries --`——与「内核干净」同形；`dmesg_restrict=1` 又把 /dev/kmsg 与 dmesg
 # 两条备用路都堵死（本机实测 open 报 EPERM）。所以 reason 全 0 有两种截然相反的成因：
 # 「查过且干净」与「根本没查过」。本 gauge 把后者单独暴露，使「绿而空」不再是
-# 一种无法区分的状态。三态词表见 kernel_usb_faults.CHANNEL_STATES。
+# 一种无法区分的状态。三态词表见
+# backend/agent/contracts/kernel_usb_faults.py 的 CHANNEL_STATES。
 host_kernel_log_channel = Gauge(
     'stability_host_kernel_log_channel',
     'Agent kernel-log channel availability per host (exactly one state = 1)',

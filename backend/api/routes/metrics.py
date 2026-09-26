@@ -169,8 +169,8 @@ def _refresh_host_device_adb_gauges(db: Session) -> None:
 
 
 #: #2900/#2957：host 健康 reason 的**封闭分桶词表**。逐字取自 agent 侧的产出点
-#: （`capacity_reporter._compute_health` 的 `reasons.append(...)` 字面量 +
-#: `kernel_usb_faults` 的 `REASON_*` 常量），由
+#: （`capacity_reporter._compute_health` 的 `reasons.append(...)` 字面量 + 契约包
+#: `backend/agent/contracts/kernel_usb_faults.py` 的 `REASON_*` 常量），由
 #: `tests/test_host_health_reason_surface.py` 双向绑回源码：agent 加了新 reason 而
 #: 这里没跟 ⇒ 红；这里留了 agent 已不产出的 reason ⇒ 也红。**不做成 import agent 模块**
 #: 是因为词表一半是字面量、一半是常量，混两种口径比统一抄一遍更容易漂（守卫测的是
@@ -192,7 +192,8 @@ _HEALTH_REASONS = (
     "other",
 )
 
-#: #2957：内核日志通道可用性词表（agent 侧 `kernel_usb_faults.CHANNEL_STATES`）。
+#: #2957：内核日志通道可用性词表（契约包
+#: `backend/agent/contracts/kernel_usb_faults.py` 的 `CHANNEL_STATES`）。
 #: `unknown` 同时兜住「老 agent 没这个字段」——那是**未覆盖**而非「通道正常」。
 _KERNEL_LOG_STATES = ("ok", "unavailable", "unknown")
 
