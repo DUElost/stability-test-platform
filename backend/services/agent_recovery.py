@@ -316,10 +316,18 @@ async def sync_agent_recovery(
         # 即可成环（09-15 生产死锁 60 次的环，PG 服务端日志定位）。本路由只
         # 交换两条 SELECT 的次序；下方全部校验（ownership/fencing/boot）与
         # 动作判定不变——job 不存在时 ownership 检查的结论与原先一致。
+        # #3426（死锁家族第五处）：job 行锁用 FOR NO KEY UPDATE（`key_share=True`，
+        # #1473 先例），**不得**用 FOR UPDATE。step_trace 的 INSERT 会对所属
+        # `job_instance` 行取 FK KEY SHARE，而 FOR UPDATE 与 KEY SHARE 冲突：
+        # 本函数在循环里按 job_id 升序持多把 FOR UPDATE、直到末尾才提交，step_trace
+        # 批量插入按其自有顺序取多把 KEY SHARE，两侧交错即成环（2026-09-26 18:45:46
+        # 中止回流窗口实证：`recovery/sync` 的 job FOR UPDATE ↔ step_trace INSERT）。
+        # FOR NO KEY UPDATE 与 KEY SHARE 兼容，且本函数不改 job 的任何键列
+        # （device_id/host_id/plan_run_id 仅作比较），语义不受影响。
         job = (await db.execute(
             select(JobInstance)
             .where(JobInstance.id == entry.job_id)
-            .with_for_update()
+            .with_for_update(key_share=True)  # SQLAlchemy key_share → PG FOR NO KEY UPDATE
         )).scalars().first()
         lease = (await db.execute(
             select(DeviceLease).where(
