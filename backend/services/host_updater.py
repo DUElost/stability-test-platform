@@ -23,6 +23,7 @@ from pathlib import Path
 
 from backend.core.ssh_security import create_ssh_client
 from backend.services.agent_env_sync import (
+    RETIRED_ENV_KEYS,
     agent_path_keys_to_verify,
     hot_update_env_overrides,
 )
@@ -213,6 +214,12 @@ _REQUIRED_PRIV_SUBCOMMANDS = (
     "restart",
 )
 
+# #3356：参数级能力标记——sync-env 需接收 --retired-keys-b64（旧 wrapper 的
+# capabilities 只报子命令名，子命令级判据对「同名子命令缺新 flag」没有判别力）。
+# 与 _REQUIRED_PRIV_SUBCOMMANDS 同一循环做词匹配，缺失即在**任何写动作之前**
+# fail-closed（报错文案指引跑 update_agent.yml 装 wrapper）。
+_REQUIRED_PRIV_CAPABILITIES = ("sync-env/retired-keys",)
+
 
 _REMOTE_SCRIPT = r"""#!/bin/bash
 set -e
@@ -224,6 +231,7 @@ SYNC_AGENT_SECRET="{sync_agent_secret}"
 AGENT_SECRET_B64="{agent_secret_b64}"
 ENV_OVERRIDES_B64="{env_overrides_b64}"
 ENV_PATH_KEYS_B64="{env_path_keys_b64}"
+ENV_RETIRED_KEYS_B64="{env_retired_keys_b64}"
 ARTIFACT_DIGEST="{artifact_digest}"
 RESOURCES_DIGEST="{resources_digest}"
 export PIP_INDEX_URL="{pip_index_url}"
@@ -314,8 +322,9 @@ if [ "$SYNC_AGENT_SECRET" = "1" ]; then
     sudo "$PRIV" sync-env --secret-b64 "$AGENT_SECRET_B64"
 fi
 
-# .env 受控键覆盖（wrapper 内部校验键名与值）
-sudo "$PRIV" sync-env --overrides-b64 "$ENV_OVERRIDES_B64" --path-keys-b64 "$ENV_PATH_KEYS_B64"
+# .env 受控键覆盖（wrapper 内部校验键名与值）；--retired-keys-b64 携带退役键
+# 清单，wrapper 在 merge 后删除这些行并回报实际删到的键（#3356）
+sudo "$PRIV" sync-env --overrides-b64 "$ENV_OVERRIDES_B64" --path-keys-b64 "$ENV_PATH_KEYS_B64" --retired-keys-b64 "$ENV_RETIRED_KEYS_B64"
 
 # Fix ownership
 sudo "$PRIV" fix-ownership
@@ -434,6 +443,11 @@ def _build_remote_script(
     env_path_keys_b64 = base64.b64encode(
         json.dumps(agent_path_keys_to_verify(env_overrides)).encode("utf-8")
     ).decode("ascii")
+    # #3356：退役键清单随每次 sync-env 下发；wrapper 删除后经
+    # STP_ENV_RETIRED_REMOVED 回报实际删到的键（audit 面 = 响应 env_keys_retired）。
+    env_retired_keys_b64 = base64.b64encode(
+        json.dumps(sorted(RETIRED_ENV_KEYS)).encode("utf-8")
+    ).decode("ascii")
 
     # #2180：user/group 已不被远端脚本使用（属主由 wrapper 内部固定），但保留在
     # 签名与调用方（安装器/测试契约稳定）；脚本模板里对应的占位符已删除，多余
@@ -447,14 +461,17 @@ def _build_remote_script(
         agent_secret_b64=agent_secret_b64,
         env_overrides_b64=env_overrides_b64,
         env_path_keys_b64=env_path_keys_b64,
+        env_retired_keys_b64=env_retired_keys_b64,
         user=user,
         group=group,
         pip_index_url=pip_index_url,
         code_version=code_version,
         artifact_digest=artifact_digest,
         resources_digest=resources_digest,
-        # 能力集合注入（#2319）：与 _REQUIRED_PRIV_SUBCOMMANDS 同源
-        required_priv_subcommands=" ".join(_REQUIRED_PRIV_SUBCOMMANDS),
+        # 能力集合注入（#2319/#3356）：子命令与参数级标记同源合并
+        required_priv_subcommands=" ".join(
+            _REQUIRED_PRIV_SUBCOMMANDS + _REQUIRED_PRIV_CAPABILITIES
+        ),
     )
 
 
@@ -565,6 +582,22 @@ def _parse_env_paths_missing(stdout_text: str) -> dict[str, str]:
                 return {}
             return {str(k): str(v) for k, v in decoded.items()}
     return {}
+
+
+def _parse_env_retired_removed(stdout_text: str) -> list[str]:
+    """Extract retired .env keys actually deleted on the agent (#3356).
+
+    Empty payload = nothing left to delete (idempotent second run); a missing
+    sentinel entirely means the wrapper predates the retire channel.
+    """
+    for line in reversed(stdout_text.splitlines()):
+        line = line.strip()
+        if line.startswith("STP_ENV_RETIRED_REMOVED="):
+            raw = line.split("=", 1)[1].strip()
+            if not raw:
+                return []
+            return [key for key in raw.split(",") if key]
+    return []
 
 
 def get_agent_code_version() -> str:
@@ -735,6 +768,7 @@ def execute_hot_update(
             deps_refreshed = _parse_deps_refreshed(out_text)
             env_keys_synced = _parse_env_synced(out_text)
             env_paths_missing = _parse_env_paths_missing(out_text)
+            env_keys_retired = _parse_env_retired_removed(out_text)
             priv_mode = _parse_priv_mode(out_text)
 
             if exit_code != 0:
@@ -748,6 +782,7 @@ def execute_hot_update(
                     "deps_refreshed": deps_refreshed,
                     "env_keys_synced": env_keys_synced,
                     "env_paths_missing": env_paths_missing,
+                    "env_keys_retired": env_keys_retired,
                     "code_version": code_version,
                     "priv_mode": priv_mode,
                     "artifact_digest": artifact_digest,
@@ -761,6 +796,11 @@ def execute_hot_update(
                 )
 
             msg = out_text.strip().split("\n")[-1] if out_text.strip() else "OK"
+            if env_keys_retired:
+                logger.info(
+                    "hot_update_env_keys_retired host=%s removed=%s",
+                    host_ip, ",".join(env_keys_retired),
+                )
             logger.info(
                 "hot_update_success host=%s msg=%s deps_refreshed=%s env_keys_synced=%s code_version=%s",
                 host_ip, msg, deps_refreshed, env_keys_synced, code_version,
@@ -774,6 +814,7 @@ def execute_hot_update(
                 "deps_refreshed": deps_refreshed,
                 "env_keys_synced": env_keys_synced,
                 "env_paths_missing": env_paths_missing,
+                "env_keys_retired": env_keys_retired,
                 "code_version": code_version,
                 "priv_mode": priv_mode,
                 "artifact_digest": artifact_digest,

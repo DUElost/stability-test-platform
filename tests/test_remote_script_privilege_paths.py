@@ -38,10 +38,11 @@ if [ "${args[0]}" = "__PRIV__" ]; then
     shift_args="${args[*]:1}"
     case "$shift_args" in
         *capabilities*)
-            # #2319：能力清单。默认给全量；STUB_WRAPPER_CAPS 可指定子集，用来模拟
-            # 「缺一个子命令但自身自洽」的旧 wrapper（selftest 仍 exit 0）。
+            # #2319/#3356：能力清单（子命令 + 参数级标记）。默认给全量；
+            # STUB_WRAPPER_CAPS 可指定子集，用来模拟「缺一个子命令但自身自洽」
+            # 的旧 wrapper（selftest 仍 exit 0）。
             if [ "${STUB_HAS_WRAPPER:-1}" = "1" ]; then
-                printf '%s\n' ${STUB_WRAPPER_CAPS:-apply-code apply-resources install-schema write-version write-digest sync-env fix-ownership deps-marker restart}
+                printf '%s\n' ${STUB_WRAPPER_CAPS:-apply-code apply-resources install-schema write-version write-digest sync-env fix-ownership deps-marker restart sync-env/retired-keys}
                 exit 0
             fi
             exit 1 ;;

@@ -15,12 +15,17 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
 import psycopg
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+
+# #3356 候选 3：渲染 env 面唯一归属文件。它的 diff = 渲染键/退役键表变更，
+# 而渲染面不进 ADR-0040 收敛判据（digest 不动 ⇒ 非 force 批量 nothing-to-converge）。
+_ENV_RENDER_FILE = "backend/services/agent_env_sync.py"
 
 # 删除兼容回落后必须存在的新键（#518：无前缀键回落删除后，生产只配旧键会
 # resolve_scan_tool() 返回 None → merge 静默跳过，报表缺失却照报 SUCCESS）。
@@ -71,12 +76,46 @@ def _load_env_file(path: Path) -> dict[str, str]:
     return out
 
 
+def _env_render_touch_warnings(diff_base: str | None) -> list[str]:
+    """#3356 候选 3（提示级，不改退出码）：diff 触及渲染 env 面 ⇒ 必须 --force。
+
+    需要调用方给 ``--diff-base <当前部署基线 revision>``；未给则跳过（没有
+    基线就没有「变更」可言）。git 不可用/基线无效时打印原因后跳过，不阻塞。
+    """
+    if not diff_base:
+        return []
+    proc = subprocess.run(
+        ["git", "-C", str(_REPO_ROOT), "diff", "--name-only", f"{diff_base}..HEAD"],
+        capture_output=True, text=True, timeout=30, check=False,
+    )
+    if proc.returncode != 0:
+        print(
+            f"[env-render] diff base {diff_base!r} unusable "
+            f"({proc.stderr.strip()[:120]}); skip #3356 check"
+        )
+        return []
+    changed = set(proc.stdout.split())
+    if _ENV_RENDER_FILE in changed:
+        return [
+            f"diff {diff_base}..HEAD touches {_ENV_RENDER_FILE} "
+            "(渲染键/退役键表)——env 变更不进收敛判据，本批 hot-update 必须 --force"
+        ]
+    print(f"[env-render] {diff_base}..HEAD 不触及 {_ENV_RENDER_FILE}，无需 --force 判据")
+    return []
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--expect-revision",
         default=None,
         help="Optional alembic revision to assert (e.g. k8l9m0n1o2p3)",
+    )
+    parser.add_argument(
+        "--diff-base",
+        default=None,
+        help="Optional deployed revision to diff against; touching "
+        f"{_ENV_RENDER_FILE} ⇒ hot-update must use --force (#3356)",
     )
     args = parser.parse_args()
 
@@ -94,6 +133,9 @@ def main() -> None:
         )
     else:
         print("[env] required keys present: " + ", ".join(_REQUIRED_ENV_KEYS))
+
+    for warning in _env_render_touch_warnings(args.diff_base):
+        print(f"[WARN] {warning}")
 
     with psycopg.connect(url) as conn:
         with conn.cursor() as cur:
@@ -123,6 +165,8 @@ def main() -> None:
     print("  - restart all stability-test-agent hosts (#514 fail-fast / claim cap / step-trace drain)")
     print("  - verify Agent HOST_ID matches hosts.id after k8l9 migration")
     print("  - optional: grep fleet .env for stale STP_MTBF_EXPECTED_TESTPOINT_COUNT")
+    print("  - env 渲染面/退役键变更（agent_env_sync.py）不进收敛判据：本批 hot-update 必须 --force；"
+            "退役键删除清单看响应 env_keys_retired（#3356）")
 
     if issues:
         print("\n[FAIL]", file=sys.stderr)
