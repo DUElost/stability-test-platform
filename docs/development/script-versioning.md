@@ -29,7 +29,11 @@ tool_manifest.json                                # Git 唯一事实源：<name>
   从包内取入口 sha / 伴随文件 sha / `capabilities.json` 登记 `script` 行；包未发布 → `package_missing`（只报告）；
   行与包不一致 → `conflicts`（包不可变，故只能是库侧漂移；`?force_rebaseline=true` 显式重锚，有在途 PlanRun 时 409）；
   `retired:true` → 行显式 `is_active=false`（新站无行时按包**建 inactive 行**——历史
-  `(name,version)` 引用闭合跨站成立）；活跃行不在 manifest → `unregistered_active`（只报告，永不反激活）。
+  `(name,version)` 引用闭合跨站成立）；**该行仍被 `plan_step` 引用时 `is_active` 不翻转**，
+  结果在 `retire_blocked` / `retire_blocked_versions`（name/version + plan_ids，与 409
+  `SCRIPT_STILL_REFERENCED` 同信息）报告——登记路径不产生「Plan 引用已停用版本」态，
+  人工重指后重扫才生效（ADR-0023 D6 源头守卫，#3349）；活跃行不在 manifest →
+  `unregistered_active`（只报告，永不反激活）。
   不再读取任何检出目录：`STP_SCRIPT_ROOT` 已无读取点（站点安装仍写它以兼容旧 env 模板），
   可选覆盖 `STP_TOOL_MANIFEST` / `STP_PACKAGES_ROOT`，运行机路径锚仍由 `STP_SCRIPT_RUNTIME_ROOT` 决定；
 - **执行**：Agent 按行上 `package_sha256` 拉包到 `tools_cache` 执行（`STP_SCRIPT_PACKAGES=strict`，
@@ -257,7 +261,8 @@ python -m backend.scripts.check_unreferenced_script_versions [--json] [--name fl
 无守卫（不做引用校验）。
 
 退役 = 在 `tool_manifest.json` 把该条目翻成 `retired: true`（append-only 门禁允许的唯一改写）并
-跑一次 scan（行显式 `is_active=false`）。包留在站点包源（历史 PlanRun 重放与追溯靠它）；物理删包按
+跑一次 scan（行显式 `is_active=false`；**仍被 plan_step 引用则不生效**——结果 `retire_blocked`
+报告引用方，先重指再重扫，#3349）。包留在站点包源（历史 PlanRun 重放与追溯靠它）；物理删包按
 ADR-0051 D5 继承的 ADR-0039 D2/D3（仅人工 PR、冷却期、按版本）。族树只在该族**全部**条目退役后才可删。
 
 `refs == 0` 只代表没有当前 Plan 配置引用，不代表没有历史运行。退役前还应查看
