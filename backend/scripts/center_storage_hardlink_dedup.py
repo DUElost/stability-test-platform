@@ -192,8 +192,10 @@ def link_groups(
             except OSError:
                 summary.skipped += 1
                 continue
+            # #3385：两侧同档复核——canonical 缺 mtime 时，「哈希完成后、链接执行前」
+            # 被同尺寸原地改写的 canonical 会带着旧内容链满全组（不可恢复的内容丢失）。
             if (now_st.st_ino, now_st.st_size, now_st.st_mtime) != (it.st.st_ino, it.st.st_size, it.st.st_mtime) \
-                    or (c_st.st_ino, c_st.st_size) != (canon.st.st_ino, canon.st.st_size):
+                    or (c_st.st_ino, c_st.st_size, c_st.st_mtime) != (canon.st.st_ino, canon.st.st_size, canon.st.st_mtime):
                 summary.skipped += 1  # 扫描之后被改动过：放弃，不冒险
                 continue
             tmp = it.path + TMP_SUFFIX

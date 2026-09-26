@@ -64,7 +64,13 @@ def test_docker_compose_mounts_repo_root_and_dev_storage_only():
     assert "- ./.docker/dev-aee-local:/var/lib/stp-dev/aee-local" in compose
     assert "STP_RUN_CONSOLE_LOG_ROOT: /tmp/stp-dev/console" in compose
     assert "CORS_ORIGINS: http://127.0.0.1:${DEV_FRONTEND_PORT:-15173},http://localhost:${DEV_FRONTEND_PORT:-15173}" in compose
-    assert "STP_ADMIN_PASSWORD: ${STP_ADMIN_PASSWORD:-admin123}" in compose
+    # #3353：口令类键必须强制引用（未设即 compose 报错），不得再带弱默认值
+    SourceGuard.of_repo_path(_COMPOSE_REL).anchored(
+        "STP_ADMIN_PASSWORD: ${STP_ADMIN_PASSWORD:?"
+    ).assert_absent(
+        "STP_ADMIN_PASSWORD:-admin123",
+        why="#3353：口令类键不得再带弱默认值，未设即 compose 报错",
+    )
     assert "python /app/backend/scripts/init_dev_db.py" in compose
 
 
