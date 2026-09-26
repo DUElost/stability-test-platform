@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from fastapi import HTTPException
+from backend.services.errors import ServiceError
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from backend.services.plan_run_archive import archive_plan_run_logs
@@ -13,11 +13,11 @@ from backend.services.plan_run_archive import archive_plan_run_logs
 async def test_plan_run_not_found_404():
     db = MagicMock()
     db.get = MagicMock(return_value=None)
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ServiceError) as exc:
         await archive_plan_run_logs(
             db, 1, allow_retired=False, user_id=1, username="u",
         )
-    assert exc.value.status_code == 404
+    assert exc.value.status == 404
 
 
 @pytest.mark.asyncio
@@ -25,11 +25,11 @@ async def test_no_jobs_400():
     db = MagicMock()
     db.get = MagicMock(return_value=MagicMock())
     db.query.return_value.filter.return_value.first.return_value = None
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ServiceError) as exc:
         await archive_plan_run_logs(
             db, 1, allow_retired=False, user_id=1, username="u",
         )
-    assert exc.value.status_code == 400
+    assert exc.value.status == 400
     assert "no jobs" in exc.value.detail
 
 

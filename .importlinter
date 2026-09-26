@@ -44,11 +44,13 @@ ignore_imports =
 
 # ---------------------------------------------------------------------------
 # C2 services 不感知 HTTP（只查直接 import）
-# 原 36 行基线中 17 行（#1520 拆分的 13 个 agent_* 文件 + error_helpers 4 行）已由
-# #3295 清零：agent_* 域改抛 backend/services/errors.py 领域异常，
-# backend/api/error_handlers.py 统一翻译，响应逐字不变。
-# 剩余 19 行的出口：同一路径（领域异常 + 统一 handler）；artifact_zip /
-# device_log_event_download 等 FileResponse/Request 形态需另行设计返回值类型。
+# 原 36 行基线分两批清零：#3295 清掉 17 行（#1520 拆分的 13 个 agent_* 文件 +
+# error_helpers 4 行），#3296 清掉 14 行（plan_run_* / project_* / ai_assistant /
+# device_swipe_trail / host_retirement）——两者同走「领域异常 + error_handlers
+# 统一翻译」路径，对外响应逐字不变。
+# 剩余 5 行均为返回 FileResponse/RedirectResponse 的下载服务（artifact_zip、
+# device_log_event_download、job_artifact_download、plan_run_artifact_download），
+# 出口是 services 返回文件描述、路由构造响应，另单处理。
 # ---------------------------------------------------------------------------
 [importlinter:contract:c2-services-no-http]
 name = C2 services 不直接依赖 HTTP 层
@@ -67,25 +69,11 @@ forbidden_modules =
 allow_indirect_imports = True
 unmatched_ignore_imports_alerting = error
 ignore_imports =
-    backend.services.ai_assistant.dispatch -> fastapi
-    backend.services.ai_assistant.plan_run_ops -> fastapi
     backend.services.artifact_zip -> fastapi
     backend.services.artifact_zip -> starlette
     backend.services.device_log_event_download -> fastapi
-    backend.services.device_swipe_trail -> fastapi
-    backend.services.host_retirement -> fastapi
     backend.services.job_artifact_download -> fastapi
-    backend.services.plan_run_archive -> fastapi
     backend.services.plan_run_artifact_download -> fastapi
-    backend.services.plan_run_catalog -> fastapi
-    backend.services.plan_run_job_artifacts -> fastapi
-    backend.services.plan_run_manual -> fastapi
-    backend.services.plan_run_queries -> fastapi
-    backend.services.plan_run_read_common -> fastapi
-    backend.services.plan_run_summary -> fastapi
-    backend.services.plan_wifi -> fastapi
-    backend.services.project_mapping -> fastapi
-    backend.services.project_registry -> fastapi
 
 # ---------------------------------------------------------------------------
 # C3 控制面不 import Agent 内部实现（只查直接 import）

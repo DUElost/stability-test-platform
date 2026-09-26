@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import HTTPException
+from backend.services.errors import ServiceError
 from sqlalchemy.orm import Session
 
 from backend.models.host import Device
@@ -106,7 +106,7 @@ def execute_dispatch_plan_run(
         try:
             require_active_wifi_pool(db, wifi_pool_id)
             require_wifi_pool_matches_plan(db, plan_id, wifi_pool_id)
-        except HTTPException as exc:
+        except ServiceError as exc:
             detail = exc.detail
             if isinstance(detail, dict):
                 detail = detail.get("message") or str(detail)

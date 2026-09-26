@@ -1,8 +1,8 @@
 """PlanRun 手动重试 / 退出业务逻辑（ADR-0022 D7；#1520 首个垂直切片）。
 
 路由退化为「解析 → 调服务 → 序列化」；本模块承担状态校验、设备可达性
-门禁、manual_action 迁移、审计、指标、失效事件与事务提交。异常沿用
-``HTTPException``（与 #1519 下沉符号一致的服务层既有先例）。
+门禁、manual_action 迁移、审计、指标、失效事件与事务提交。异常抛
+领域异常（``backend.services.errors``，#3296 起与 #1519 下沉符号先例同构）。
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import HTTPException
+from backend.services.errors import Conflict
 from sqlalchemy.orm import Session
 
 from backend.services.audit_writer import record_audit
@@ -45,9 +45,8 @@ def manual_retry_job_sync(
     """
     job = load_job_in_run(db, run_id, job_id)
     if job.status not in MANUAL_ACTION_JOB_STATUSES:
-        raise HTTPException(
-            status_code=409,
-            detail=f"job must be RUNNING for manual retry; current status is {job.status}",
+        raise Conflict(
+            f"job must be RUNNING for manual retry; current status is {job.status}"
         )
 
     device = db.get(Device, job.device_id) if job.device_id else None
@@ -56,12 +55,9 @@ def manual_retry_job_sync(
         host_row = db.get(Host, job.host_id)
         host_status = host_row.status if host_row else None
     if device_currently_disconnected(device, host_status):
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "device ADB is not reachable; manual retry cannot restore "
-                "connection — check USB or reboot the device"
-            ),
+        raise Conflict(
+            "device ADB is not reachable; manual retry cannot restore "
+            "connection — check USB or reboot the device"
         )
 
     # Why: 同向 manual_action 已等待 Agent 消费时,重复点击不再二次写 audit / emit / counter。
@@ -125,9 +121,8 @@ def manual_exit_job_sync(
     """
     job = load_job_in_run(db, run_id, job_id)
     if job.status not in MANUAL_ACTION_JOB_STATUSES:
-        raise HTTPException(
-            status_code=409,
-            detail=f"job must be RUNNING for manual exit; current status is {job.status}",
+        raise Conflict(
+            f"job must be RUNNING for manual exit; current status is {job.status}"
         )
 
     # Why: 与 manual_retry 对称 — 同向 EXIT_REQUESTED 已等待 Agent 消费时短路,避免连点

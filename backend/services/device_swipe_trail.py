@@ -9,7 +9,7 @@ import logging
 from collections import defaultdict
 from typing import List, Sequence
 
-from fastapi import HTTPException
+from backend.services.errors import NotFound
 from sqlalchemy.orm import Session, joinedload
 
 from backend.api.schemas.device import (
@@ -44,7 +44,7 @@ async def bulk_set_swipe_trail(
         .all()
     )
     if len(devices) != len(set(device_ids)):
-        raise HTTPException(status_code=404, detail="one or more devices not found")
+        raise NotFound("one or more devices not found")
 
     results: List[BulkSwipeTrailDeviceResult] = []
     by_host: dict[str, list[Device]] = defaultdict(list)

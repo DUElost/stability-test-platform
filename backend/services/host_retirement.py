@@ -23,9 +23,9 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
-from fastapi import HTTPException, Request
+from backend.services.errors import Conflict, NotFound
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -51,7 +51,7 @@ def _locked_host(db: Session, host_id: str) -> Host:
         db.execute(select(Host).where(Host.id == host_id).with_for_update())
     ).scalars().first()
     if host is None:
-        raise HTTPException(status_code=404, detail="host not found")
+        raise NotFound("host not found")
     return host
 
 
@@ -73,9 +73,8 @@ def _assert_no_inflight_work(db: Session, host_id: str) -> None:
         .count()
     )
     if active_jobs:
-        raise HTTPException(
-            status_code=409,
-            detail=f"主机有 {active_jobs} 个活跃 Job，请先 abort 或等其结束再退役",
+        raise Conflict(
+            f"主机有 {active_jobs} 个活跃 Job，请先 abort 或等其结束再退役"
         )
 
     inflight_runs = (
@@ -88,12 +87,9 @@ def _assert_no_inflight_work(db: Session, host_id: str) -> None:
         .count()
     )
     if inflight_runs:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"主机被 {inflight_runs} 个在途 PlanRun 引用"
-                "（QUEUED/PRECHECK/RUNNING），请先等其结束或取消再退役"
-            ),
+        raise Conflict(
+            f"主机被 {inflight_runs} 个在途 PlanRun 引用"
+            "（QUEUED/PRECHECK/RUNNING），请先等其结束或取消再退役"
         )
 
 
@@ -166,7 +162,7 @@ def retire_host(
     reason: str,
     actor_id: Optional[int],
     actor_username: Optional[str],
-    request: Optional[Request] = None,
+    request: Optional[Any] = None,
 ) -> Host:
     """把主机标记为退役（admin + 审计；幂等）。"""
     host = _locked_host(db, host_id)
@@ -207,7 +203,7 @@ def unretire_host(
     reason: str,
     actor_id: Optional[int],
     actor_username: Optional[str],
-    request: Optional[Request] = None,
+    request: Optional[Any] = None,
 ) -> Host:
     """解除退役（admin + 审计；无前置；幂等）。
 

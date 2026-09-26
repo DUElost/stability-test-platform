@@ -14,7 +14,7 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import HTTPException
+from backend.services.errors import NotFound
 from sqlalchemy import String, cast, func, or_, select
 from sqlalchemy.orm import Session, joinedload
 
@@ -194,7 +194,7 @@ def _apply_plan_run_list_filters(
             stmt = stmt.where(PlanRun.status.in_(values))
     if project_key is not None:
         if db.query(TestProject).filter(TestProject.project_key == project_key).first() is None:
-            raise HTTPException(status_code=404, detail="project not found")
+            raise NotFound("project not found")
         stmt = stmt.join(TestProject, PlanRun.project_id == TestProject.id).where(
             TestProject.project_key == project_key
         )
@@ -321,7 +321,7 @@ def build_plan_run_detail(
     """
     pr = db.get(PlanRun, run_id)
     if pr is None:
-        raise HTTPException(status_code=404, detail="plan run not found")
+        raise NotFound("plan run not found")
     jobs = []
     device_count = None
     if include_jobs:

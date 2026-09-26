@@ -8,7 +8,7 @@ API 级回归仍由 `backend/tests/api/test_project_routes.py`（75 例）覆盖
 from __future__ import annotations
 
 import pytest
-from fastapi import HTTPException
+from backend.services.errors import ServiceError
 from sqlalchemy import select
 
 from backend.models.audit import AuditLog
@@ -65,11 +65,11 @@ class TestNormalizeModels:
 class TestPreview:
     def test_empty_models_422(self, db_session):
         project = _project(db_session, "pm-empty")
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ServiceError) as exc:
             preview_project_mapping(
                 db_session, project_key=project.project_key, models=[], reassign_conflicts=False,
             )
-        assert exc.value.status_code == 422
+        assert exc.value.status == 422
 
     def test_user_conflict_reported_and_bypassed_with_reassign(self, db_session):
         owner = _project(db_session, "pm-owner")
@@ -150,22 +150,22 @@ class TestApply:
         _device(db_session, "pm-d5", "C99")
         _rule(db_session, owner, "C99")
 
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ServiceError) as exc:
             apply_project_mapping(
                 db_session, project_key=target.project_key, models=["C99"],
                 reassign_conflicts=False, **_ACTOR,
             )
-        assert exc.value.status_code == 409
+        assert exc.value.status == 409
 
 
 class TestRemoveRule:
     def test_missing_active_rule_404(self, db_session):
         target = _project(db_session, "pm-rm404")
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ServiceError) as exc:
             remove_project_mapping_rule(
                 db_session, project_key=target.project_key, model="NOPE", **_ACTOR,
             )
-        assert exc.value.status_code == 404
+        assert exc.value.status == 404
 
     def test_removes_active_rule_with_audit(self, db_session):
         target = _project(db_session, "pm-rm")
