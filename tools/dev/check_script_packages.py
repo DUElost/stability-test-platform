@@ -39,6 +39,7 @@ Phase 3 起 ``backend/agent/scripts/<name>/`` 是**每族一棵可演进的源�
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -183,20 +184,61 @@ def build_family(tree: Path, packer, out: Path) -> dict | None:
             "file_count": facts["file_count"], "bytes": facts["bytes"]}
 
 
-def rebuild_all(scripts_root: Path, packer, *, out_dir: Path | None = None,
-                versions: dict[str, str] | None = None) -> dict[str, dict]:
-    """每族从当前树重建包；``out_dir`` 给定时按 ``versions[name]`` 落 ``{name}/{version}.tar.gz``。"""
+def rebuild_all(scripts_root: Path, packer, *, build_dir: Path | None = None) -> dict[str, dict]:
+    """每族从当前树重建包到**构建目录**；``build_dir`` 给定时 facts 带 ``path``（供 ``publish_latest`` 取用）。
+
+    构建永不直写站点包根：此前 ``--publish`` 把包边压缩边写进 ``packages/{name}/{version}.tar.gz``——
+    非原子（拉包的 Agent 可读到半截文件）、先于等价判定（改树未发版时会用新字节覆写已发布版本），
+    且全量重写 35 族（2026-09-26 发布 D7 工具包前核对发现）。
+    """
     result: dict[str, dict] = {}
     with tempfile.TemporaryDirectory(prefix="stp-script-pkg-") as tmp:
+        root = build_dir if build_dir is not None else Path(tmp)
         for name, tree in iter_family_trees(scripts_root):
-            if out_dir is not None and versions and name in versions:
-                target = out_dir / name / f"{versions[name]}.tar.gz"
-            else:
-                target = Path(tmp) / f"{name}.tar.gz"
+            target = root / f"{name}.tar.gz"
             facts = build_family(tree, packer, target)
             if facts is not None:
+                if build_dir is not None:
+                    facts["path"] = str(target)
                 result[name] = facts
     return result
+
+
+def publish_latest(rebuilt: dict[str, dict], doc: dict, packages_root: Path) -> tuple[dict[str, list[str]], list[str]]:
+    """把每族**最新未退役**条目的包落到站点（调用前 ``check()`` 必须为绿）。
+
+    返回 ``({"published": [...], "identical": [...]}, errors)``。只增不改（ADR-0051 D1）：
+    站点已有同名包——字节相同则跳过（不重写，不碰正在被拉取的文件），字节不同则拒绝；
+    缺失的包先写同目录临时文件再 ``os.replace``（同文件系统原子替换，读方只会看到旧无/新全）。
+    """
+    done: dict[str, list[str]] = {"published": [], "identical": []}
+    errs: list[str] = []
+    for name, versions in sorted(script_families(doc).items()):
+        latest = latest_entry(versions)
+        if latest is None:
+            continue
+        facts = rebuilt.get(name)
+        label = f"{name}@{latest['version']}"
+        if facts is None or "path" not in facts:
+            errs.append(f"{label}: 无本次构建产物（族树缺失或未以 build_dir 构建）")
+            continue
+        if facts["package_sha256"] != latest.get("package_sha256"):
+            errs.append(f"{label}: 构建 sha {facts['package_sha256'][:12]} ≠ 登记——拒绝发布（先让 check 变绿）")
+            continue
+        dest = packages_root / name / f"{latest['version']}.tar.gz"
+        if dest.exists():
+            existing = hashlib.sha256(dest.read_bytes()).hexdigest()
+            if existing == facts["package_sha256"]:
+                done["identical"].append(label)
+            else:
+                errs.append(f"{label}: 站点已有不同字节（sha {existing[:12]}）——已发布包只增不改，拒绝覆写")
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_name(f".{dest.name}.tmp-{os.getpid()}")
+        shutil.copyfile(facts["path"], tmp)
+        os.replace(tmp, dest)
+        done["published"].append(label)
+    return done, errs
 
 
 def script_families(doc: dict) -> dict[str, list[dict]]:
@@ -443,18 +485,33 @@ def run_self_test() -> int:
         if not any("声明非法" in e for e in requires_tools_errors(dep_doc, dep_root)):
             failures.append("坏 capabilities.json 应红（依赖声明 fail-closed，不同于 read_capabilities 的宽容）")
 
-        # publish：只落最新版
+        # publish：只落最新版；同字节不重写；不同字节拒绝覆写；原子落位不留临时文件
         out = Path(tmp) / "packages"
-        latest = {n: latest_entry(v)["version"] for n, v in script_families(doc).items()}
-        rebuild_all(root, packer, out_dir=out, versions=latest)
-        if not (out / "alpha" / "1.0.10.tar.gz").is_file() or (out / "alpha" / "1.0.9.tar.gz").exists():
-            failures.append("publish 应只落每族最新版")
+        bd = Path(tmp) / "build"
+        bd.mkdir()
+        rb = rebuild_all(root, packer, build_dir=bd)
+        done, perrs = publish_latest(rb, doc, out)
+        if perrs or not (out / "alpha" / "1.0.10.tar.gz").is_file() or (out / "alpha" / "1.0.9.tar.gz").exists():
+            failures.append(f"publish 应只落每族最新版：{done} {perrs}")
+        if any(p.name.startswith(".") for p in out.rglob("*")):
+            failures.append("publish 不应残留临时文件")
+        mtime = (out / "alpha" / "1.0.10.tar.gz").stat().st_mtime_ns
+        done2, perrs2 = publish_latest(rb, doc, out)
+        if perrs2 or done2["published"] or (out / "alpha" / "1.0.10.tar.gz").stat().st_mtime_ns != mtime:
+            failures.append(f"同字节重复发布应跳过且不重写：{done2} {perrs2}")
+        (out / "beta" / "1.0.0.tar.gz").write_bytes(b"tampered")
+        _done3, perrs3 = publish_latest(rb, doc, out)
+        if not any("拒绝覆写" in e for e in perrs3) or (out / "beta" / "1.0.0.tar.gz").read_bytes() != b"tampered":
+            failures.append(f"站点同名不同字节应拒绝且不改动：{perrs3}")
+        if not any("构建 sha" in e for e in publish_latest({**rb, "alpha": {**rb["alpha"], "package_sha256": "0" * 64}},
+                                                          doc, Path(tmp) / "packages2")[1]):
+            failures.append("构建 sha ≠ 登记应拒绝发布")
 
     if failures:
         for f in failures:
             print(f"[SELFTEST-FAIL] {f}", file=sys.stderr)
         return 1
-    print("[OK] check_script_packages self-test 红绿双向（族树/重建/登记/改树未发版/版本复用/退役回落/残留 v 目录/kind 归类（tool 豁免、script ghost 红、全退役绿）/requires_tools 引用（未登记/非 tool/缺版本/退役/坏声明）/publish）")
+    print("[OK] check_script_packages self-test 红绿双向（族树/重建/登记/改树未发版/版本复用/退役回落/残留 v 目录/kind 归类（tool 豁免、script ghost 红、全退役绿）/requires_tools 引用（未登记/非 tool/缺版本/退役/坏声明）/publish（只落最新、同字节不重写、不同字节拒覆写、原子落位））")
     return 0
 
 
@@ -493,13 +550,16 @@ def main() -> int:
     if args.publish and args.packages_root is None:
         print("--publish 需要 --packages-root", file=sys.stderr)
         return 2
-    latest = {n: latest_entry(v)["version"] for n, v in script_families(doc).items() if latest_entry(v)}
-    rebuilt = rebuild_all(args.scripts_root, packer,
-                          out_dir=args.packages_root if args.publish else None, versions=latest)
-    errs = check(doc, rebuilt, args.scripts_root)
-    if args.publish and not errs:
-        packer.write_site_manifest_copy(doc, args.packages_root)
-        print(f"[OK] 发布 {len(rebuilt)} 个族的最新包 → {args.packages_root}，manifest.json 副本已派生")
+    with tempfile.TemporaryDirectory(prefix="stp-script-pkg-build-") as build_dir:
+        rebuilt = rebuild_all(args.scripts_root, packer, build_dir=Path(build_dir))
+        errs = check(doc, rebuilt, args.scripts_root)
+        if args.publish and not errs:
+            done, pub_errs = publish_latest(rebuilt, doc, args.packages_root)
+            errs.extend(pub_errs)
+            if not pub_errs:
+                packer.write_site_manifest_copy(doc, args.packages_root)
+                print(f"[OK] 发布 → {args.packages_root}：新落位 {len(done['published'])}（{', '.join(done['published']) or '无'}）、"
+                      f"同字节跳过 {len(done['identical'])}；manifest.json 副本已派生")
     if errs:
         for e in errs:
             print(f"[FAIL] {e}", file=sys.stderr)
