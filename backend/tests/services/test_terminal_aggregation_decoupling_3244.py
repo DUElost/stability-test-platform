@@ -247,3 +247,64 @@ def test_pending_backlog_drained_by_recovery_sweep(db_session, sample_device):
         )
     ).scalars().all()
     assert list(left) == []
+
+
+# ── 尾随唤醒（#3244 复核）：「最后一轮空查 → SAQ _finish」窗口内被去重的唤醒 ──
+
+
+def _patched_task_env(consumed: int):
+    """把 drain 结果与队列替换掉，返回 (queue_mock, patchers)。"""
+    from unittest.mock import AsyncMock, MagicMock
+
+    queue = MagicMock()
+    queue.enqueue = AsyncMock(return_value=object())
+    return queue, (
+        patch(
+            "backend.services.plan_run_finalization.drain_plan_run_aggregation_sync",
+            return_value=consumed,
+        ),
+        patch("backend.tasks.saq_tasks.get_queue", return_value=queue),
+        patch("backend.tasks.saq_tasks.time.time", return_value=1000.4),
+    )
+
+
+async def test_main_aggregation_task_always_enqueues_tail():
+    """主任务即便本次消费 0 也要补尾随：窗口内被去重的唤醒与本次消费量无关。"""
+    from backend.tasks.saq_tasks import aggregate_plan_run_task
+
+    queue, (p1, p2, p3) = _patched_task_env(consumed=0)
+    with p1, p2, p3:
+        await aggregate_plan_run_task({}, plan_run_id=77)
+
+    queue.enqueue.assert_awaited_once()
+    job = queue.enqueue.await_args.args[0]
+    assert job.function == "aggregate_plan_run_task"
+    assert job.kwargs == {"plan_run_id": 77, "tail": True}
+    assert job.key == "agg-tail:77:1001"
+    assert job.scheduled == 1001
+
+
+async def test_tail_task_continues_only_when_it_consumed():
+    from backend.tasks.saq_tasks import aggregate_plan_run_task
+
+    queue, (p1, p2, p3) = _patched_task_env(consumed=0)
+    with p1, p2, p3:
+        await aggregate_plan_run_task({}, plan_run_id=77, tail=True)
+    queue.enqueue.assert_not_awaited()
+
+    queue, (p1, p2, p3) = _patched_task_env(consumed=3)
+    with p1, p2, p3:
+        await aggregate_plan_run_task({}, plan_run_id=77, tail=True)
+    queue.enqueue.assert_awaited_once()
+
+
+async def test_tail_enqueue_failure_does_not_fail_aggregation():
+    """尾随入队失败只告警：本轮聚合已提交，兜底仍是 counter_reconciler。"""
+    from unittest.mock import AsyncMock
+
+    from backend.tasks.saq_tasks import aggregate_plan_run_task
+
+    queue, (p1, p2, p3) = _patched_task_env(consumed=2)
+    queue.enqueue = AsyncMock(side_effect=RuntimeError("redis down"))
+    with p1, p2, p3:
+        await aggregate_plan_run_task({}, plan_run_id=77)

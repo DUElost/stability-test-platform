@@ -14,6 +14,8 @@ import time
 from datetime import datetime, timezone
 
 from backend.core.dedup_platform import DEDUP_PLATFORMS
+from backend.core.task_queue import get_queue
+from saq import Job as SaqJob
 
 logger = logging.getLogger(__name__)
 
@@ -272,23 +274,58 @@ async def post_completion_task(ctx: dict, *, job_id: int) -> None:
     logger.info("saq_post_completion_done job_id=%d", job_id)
 
 
-async def aggregate_plan_run_task(ctx: dict, *, plan_run_id: int) -> None:
+async def aggregate_plan_run_task(
+    ctx: dict, *, plan_run_id: int, tail: bool = False,
+) -> None:
     """ADR-0052 D3（#3244）——合并聚合一 Run 的 pending 终态标记。
 
     唤醒按 ``agg:{plan_run_id}`` 去重 ⇒ 一次终态波通常一批收口；排空循环到
     无标记才退出（§7-1）。幂等由执行器保证（读 Job 事实重算 + 消费即删同事务
     + 终态/副作用守卫），异常上抛交 SAQ 重试（retries=3），最终兜底是
     counter_reconciler 的 pending 扫描。
+
+    尾随唤醒（#3244 复核）：本任务「最后一轮空查」之后、SAQ ``_finish`` 之前仍在
+    incomplete 集合里，此间同 key 入队被静默去重——落在这个窗口的标记没有唤醒者。
+    故主任务结束时**无条件**补一个 ``agg-tail:{id}:{下一秒}`` 的延迟任务（尾随任务仅在
+    确有消费时继续补），它在窗口关闭后启动并排空。key 取调度秒，与正在运行的尾随
+    任务不同键，不会被其去重。正常唤醒路径不变（无攒批窗口，§7-1）。
     """
     from backend.services.plan_run_finalization import drain_plan_run_aggregation_sync
 
-    logger.info("saq_aggregate_plan_run_start plan_run=%d", plan_run_id)
+    logger.info(
+        "saq_aggregate_plan_run_start plan_run=%d tail=%s", plan_run_id, tail,
+    )
     try:
-        await asyncio.to_thread(drain_plan_run_aggregation_sync, int(plan_run_id))
+        consumed = await asyncio.to_thread(
+            drain_plan_run_aggregation_sync, int(plan_run_id),
+        )
     except Exception:
         logger.exception("saq_aggregate_plan_run_failed plan_run=%d", plan_run_id)
         raise
+    if not tail or consumed:
+        await _enqueue_aggregation_tail(int(plan_run_id))
     logger.info("saq_aggregate_plan_run_done plan_run=%d", plan_run_id)
+
+
+async def _enqueue_aggregation_tail(plan_run_id: int) -> None:
+    """补一个下一秒启动的尾随聚合任务（失败只告警：reconciler 仍兜底）。"""
+    due = int(time.time()) + 1
+    try:
+        await get_queue().enqueue(
+            SaqJob(
+                function="aggregate_plan_run_task",
+                kwargs={"plan_run_id": plan_run_id, "tail": True},
+                key=f"agg-tail:{plan_run_id}:{due}",
+                scheduled=due,
+                timeout=120,
+                retries=3,
+                retry_delay=2.0,
+            )
+        )
+    except Exception as exc:
+        logger.warning(
+            "aggregate_tail_enqueue_failed plan_run=%s err=%s", plan_run_id, exc,
+        )
 
 
 async def send_notification_task(
