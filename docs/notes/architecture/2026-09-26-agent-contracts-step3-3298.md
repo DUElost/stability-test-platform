@@ -77,5 +77,7 @@ Class: architecture
 - 三处载荷排除集（`host_updater._TAR_EXCLUDES` / Ansible `agent_install_excludes` /
   wrapper `FIXED_EXCLUDES`）仍由 `tests/test_ansible_digest_contract.py` 逐项锁定，
   契约包里 `PAYLOAD_EXCLUDES` 是其镜像副本——未在本步合并，若后续仍要收敛，另开一步；
-- `contracts/artifact_digest.py` 里 `_RESOURCES_PREFIX` 常量当前无消费方（搬迁前即如此），
-  本步不做行为无关清理；若契约包做一次 lint 收口，一并处理。
+- ~~`contracts/artifact_digest.py` 里 `_RESOURCES_PREFIX` 常量当前无消费方（搬迁前即如此），
+  本步不做行为无关清理；若契约包做一次 lint 收口，一并处理。~~ **→ 2026-09-26 已清**
+  （#3401 A2）：全仓口径复扫契约包模块级名字，唯一死名就是它，已删除（其余「稀少」名
+  均为正常的最小使用：定义 + 1–2 处消费）。

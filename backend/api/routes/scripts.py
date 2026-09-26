@@ -147,6 +147,28 @@ class ScriptOut(BaseModel):
     updated_at: datetime
 
 
+class ScriptScanOut(BaseModel):
+    """``POST /scripts/scan`` 的注册结果（#3285 类型面收口）。
+
+    与 ``services/script_catalog.ScriptScanResult.to_dict()`` 的 10 个键一一对应
+    （键集合相等由 ``backend/tests/api/test_scripts.py`` 钉住）。条目内层保持
+    ``Dict[str, str]``：键集随来源分支不同（conflicts / rebaselined /
+    package_conflicts / package_missing / unregistered_active /
+    deactivated_versions），本单只对齐类型面，不窄化内层形状。
+    """
+
+    created: int
+    skipped: int
+    deactivated: int
+    conflicts: List[Dict[str, str]]
+    rebaselined: List[Dict[str, str]]
+    package_backfilled: int
+    package_conflicts: List[Dict[str, str]]
+    package_missing: List[Dict[str, str]]
+    unregistered_active: List[Dict[str, str]]
+    deactivated_versions: List[Dict[str, str]]
+
+
 def _manifest_path() -> str | None:
     """ADR-0051：Git 唯一事实源。`STP_TOOL_MANIFEST` 可覆盖（测试/站点 bundle 根），缺省仓根。"""
     explicit = (os.getenv("STP_TOOL_MANIFEST") or "").strip()
@@ -289,7 +311,7 @@ def list_script_categories(
     return ok([row[0] for row in rows if row[0]])
 
 
-@router.post("/scan", response_model=ApiResponse[dict])
+@router.post("/scan", response_model=ApiResponse[ScriptScanOut])
 def scan_scripts(
     force_rebaseline: bool = Query(
         False,

@@ -202,7 +202,7 @@ def test_finalize_parent_run_sync_orders_commit_before_dedup():
 
 
 def test_recount_detects_drift():
-    from backend.services.job_terminalization import recount_plan_run_counters
+    from backend.services.plan_run_aggregation import recount_plan_run_counters
 
     run = _run(total_job_count=1, terminal_job_count=0, completed_job_count=0)
     jobs = [
@@ -220,7 +220,7 @@ def test_recount_detects_drift():
 def test_recount_record_drift_false_skips_metric_but_still_recounts():
     """#3399 裁决 A：record_drift=False 仍重算计数，但不打漂移埋点（聚合器路径）。"""
     from backend.core.metrics import plan_run_counter_drift_total
-    from backend.services.job_terminalization import recount_plan_run_counters
+    from backend.services.plan_run_aggregation import recount_plan_run_counters
 
     run = _run(total_job_count=1, terminal_job_count=0, completed_job_count=0)
     jobs = [

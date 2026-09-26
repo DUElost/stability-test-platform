@@ -8,7 +8,8 @@
 证实各钉旧值全是**引入时默认值从未跟随**（无任何"故意钉旧"的成文决定，模板
 最后的 pin 变更恰是 #2865 往最新版追）。"误伤故意钉旧"的担忧由 EXCEPTIONS
 承接而非全族豁免：故意钉旧必须在这里登记 (版本, 理由+删除条件) 二元组，
-无理由的例外过不了本文件自己的一致性断言。
+例外判据只校验**格式**（理由非空且含 `#` 引用记号，#3093③ 如实降级）——
+issue 是否真实存在、理由是否属实**不在机械面内**（无第二事实源可机检），靠 PR 人审。
 
 pin 上界语义（#2998 实现时暴露）：**磁盘最新版 ≠ 可 pin**。prepare 的
 `_validate_script_refs` 按 script 表校验（不存在/未激活 → 422），磁盘 head
@@ -51,7 +52,9 @@ PINNED_SCRIPTS: dict[str, str] = {
 }
 
 #: 故意钉旧/滞后豁免：action → (pin 版本, 理由+删除条件)。
-#: 理由必须可核查（引用 issue/账），删除条件必须可达（不是"以后再说"）。
+#: 机械面只校验理由**格式**（非空 + 含 `#`，见 `_exception_lag_reason`；
+#: #3093③）：issue 真伪与理由是否属实不校验，靠 PR 人审。
+#: 删除条件必须可达（不是"以后再说"）——追平磁盘 head 即须删，这条是机检的。
 #: 09-21 #3044 已清空 ensure_root / gpu_setup / powercycle_setup@1.2.1 三条
 #: （scan 收口）并把 pin 追到当时已注册 head；判据抽成 `_exception_lag_reason`，
 #: 空清单下由 `test_exception_shape_predicate_has_teeth` 变异自证。
@@ -77,11 +80,13 @@ EXCEPTIONS: dict[str, tuple[str, str]] = {
 def _exception_lag_reason(version: str, reason: str, head: str) -> str | None:
     """例外仍成立的判据（纯函数）：成立返回 None，不成立返回原因。
 
-    三条（#2998）：理由须可核查（引 issue/账）；豁免版本已追平磁盘 head 即须删；
-    不得钉一个磁盘不存在的更高版本（那是反向幻觉，pin 上去 scan 也注册不出来）。
+    三条（#2998；#3093③ 文案如实化）：理由**格式**非空且含 `#`——issue 是否
+    真实存在、理由是否属实不校验（机械面无第二事实源，靠 PR 人审）；
+    豁免版本已追平磁盘 head 即须删；不得钉一个磁盘不存在的更高版本
+    （那是反向幻觉，pin 上去 scan 也注册不出来）。
     """
     if not reason.strip() or "#" not in reason:
-        return "例外缺 issue 引用的理由"
+        return "例外理由为空或缺 `#` 引用记号（机械面只校验格式，#3093③）"
     if version == head:
         return f"豁免版本 {version} 已等于磁盘 head {head}——滞后已消除，删例外并追 pin"
     version_tuple = tuple(int(part) for part in version.split("."))
@@ -176,7 +181,8 @@ def test_template_script_actions_all_in_guard_list() -> None:
 
 
 def test_exceptions_are_real_lags_with_reasons() -> None:
-    """例外三断言：有非空可核查理由；豁免版本确实≠磁盘 head（head 追上后必须删）；
+    """例外三断言：理由**格式**非空且含 `#`（issue 真伪/理由属实性靠人审，
+    #3093③）；豁免版本确实≠磁盘 head（head 追上后必须删）；
     豁免版本 <= disk head（不允许钉一个磁盘不存在的高版本——那是反向幻觉）。"""
     for action, (version, reason) in EXCEPTIONS.items():
         name = PINNED_SCRIPTS[action]

@@ -116,8 +116,11 @@ GATES = {
         ROOT,
         None,
     ),
-    # ADR-0033 D2：Tool Contract 验证器 + fixture 靶子（新族准入脚手架；存量双轨）。
-    "tool-contract": (
+    # ADR-0033 D2：Tool Contract **fixture 自检**（#3094 如实命名）：本 gate 只证
+    # 验证器红绿可测 + fixture 自身合规；真实新族 entrypoint 的契约验证未接线，
+    # 触发器 = 首个 kind=tool 族按 ADR-0033 D2 契约登记进 tool_manifest.json
+    # 时，同 PR 对其接 --entrypoint（#3075 Package Store 准入的正主）。
+    "tool-contract-fixture": (
         f"{PY} tools/dev/verify_tool_contract.py --self-test && "
         f"{PY} tools/dev/verify_tool_contract.py",
         ROOT,
@@ -163,8 +166,10 @@ GATES = {
     ),
     # 治理面结构门禁（synthesis C-G1 L0）：@import 行内失效等事故的确定性拦截。
     # 纯文本检查、毫秒级；--self-test 正反样例自证见该脚本抬头。
+    # S15⑦/③ diff 通道（#3093②/#3204）：base 由 STP_GATE_BASE_REF 覆盖
+    # （CI 用 PR base）；base 不可得时工具自行降级并打印射程 NOTE。
     "gov-surface": (
-        f"{PY} tools/dev/check_governance_surface.py --check",
+        f"{PY} tools/dev/check_governance_surface.py --check --base {BASE_REF}",
         ROOT,
         None,
     ),
@@ -330,12 +335,12 @@ PROFILES = {
         "schema-at-head", "env-inventory",
         "ruff", "eslint", "tsc", "knip", "compileall", "layering", "orphan-models",
         "gov-surface", "ai-work", "god-files", "inner-imports",
-        "tool-contract", "tool-manifest", "transitions",
+        "tool-contract-fixture", "tool-manifest", "transitions",
     ],
     "check:pr": [
         "schema-at-head", "env-inventory",
         "ruff", "eslint", "tsc", "knip", "compileall", "layering", "orphan-models",
-        "pollution", "tool-contract",
+        "pollution", "tool-contract-fixture",
         "tool-manifest",
         "alembic-immutability", "invariant-diff",
         "gov-surface", "ip-leak", "prom-alerts", "agent-tests-collect", "agent-tests",
