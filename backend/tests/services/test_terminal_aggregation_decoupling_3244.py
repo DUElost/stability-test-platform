@@ -159,6 +159,43 @@ def test_drain_loop_consumes_multiple_batches_until_empty(db_session, sample_dev
     assert pf.drain_plan_run_aggregation_sync(run.id) == 0
 
 
+def test_aggregator_drain_does_not_record_counter_drift(db_session, sample_device):
+    """#3399 裁决 A：聚合器批量补齐计数不记 drift（埋点只留 reconciler/补偿路径）。
+
+    聚合器本身就是计数的唯一写入方，catch-up 必然命中 before≠after；若在此
+    埋点，`StabilityPlanRunCounterDrift` 会随每轮聚合成常态告警（生产实测：
+    聚合轮次 == drift 记录数）。
+    """
+    from backend.core.metrics import plan_run_counter_drift_total
+    from backend.services import plan_run_finalization as pf
+
+    run, job = _seed_run_with_terminal_job(db_session, sample_device)
+    db_session.add(PlanRunPendingAggregation(plan_run_id=run.id, job_id=job.id))
+    db_session.commit()
+
+    def _value(mode: str) -> float:
+        return plan_run_counter_drift_total.labels(mode=mode)._value.get()
+
+    before = {m: _value(m) for m in ("total", "terminal", "completed", "failed", "aborted")}
+
+    with patch(
+        "backend.services.notification_service.dispatch_notification_async",
+    ), patch(
+        "backend.services.plan_chain_trigger.trigger_next_plan_sync",
+    ), patch(
+        "backend.services.dedup_scan.should_trigger_dedup", return_value=False,
+    ):
+        consumed = pf.drain_plan_run_aggregation_sync(run.id)
+
+    assert consumed == 1
+    db_session.expire_all()
+    stored = db_session.get(PlanRun, run.id)
+    assert stored.terminal_job_count == 1, "计数仍要被聚合器补齐（只是不埋点）"
+    assert stored.completed_job_count == 1
+    for mode, value in before.items():
+        assert _value(mode) == value, f"聚合器不得记录 {mode} 漂移（#3399）"
+
+
 def test_drain_cap_logs_and_leaves_tail_for_recovery(db_session, sample_device, monkeypatch):
     """安全帽：病态热 Run 不使单任务无限驻留；余量留给 SAQ 重试/修复扫描。"""
     from backend.services import plan_run_finalization as pf

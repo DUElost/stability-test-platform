@@ -217,6 +217,25 @@ def test_recount_detects_drift():
     assert run.failed_job_count == 1
 
 
+def test_recount_record_drift_false_skips_metric_but_still_recounts():
+    """#3399 裁决 A：record_drift=False 仍重算计数，但不打漂移埋点（聚合器路径）。"""
+    from backend.core.metrics import plan_run_counter_drift_total
+    from backend.services.job_terminalization import recount_plan_run_counters
+
+    run = _run(total_job_count=1, terminal_job_count=0, completed_job_count=0)
+    jobs = [
+        SimpleNamespace(status=JobStatus.COMPLETED.value),
+        SimpleNamespace(status=JobStatus.FAILED.value),
+    ]
+    before = plan_run_counter_drift_total.labels(mode="terminal")._value.get()
+
+    result = recount_plan_run_counters(run, jobs, record_drift=False)
+
+    assert result["drifted"] is True, "漂移事实仍要报告给调用方"
+    assert run.terminal_job_count == 2 and run.completed_job_count == 1
+    assert plan_run_counter_drift_total.labels(mode="terminal")._value.get() == before
+
+
 def test_post_flash_failure_yields_partial_success_through_terminalization(
     db_session, sample_device,
 ):

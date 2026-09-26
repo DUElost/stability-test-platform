@@ -1281,6 +1281,9 @@ _PLAN_RUN_COUNTER_MODES = ("total", "terminal", "completed", "failed", "aborted"
 def record_plan_run_counter_drift(plan_run_id: int, modes: "list[str] | tuple[str, ...]"):
     """#77：记录 counter_reconciler 修复的计数器漂移（每漂移列一条）。
 
+    #3399（裁决 A）：调用方只应是 reconciler/补偿路径——聚合器批量补齐是正常
+    路径，不再调用本函数（``recount_plan_run_counters(..., record_drift=False)``）。
+
     ``modes`` 为漂移列短名（total/terminal/completed/failed/aborted）；
     非白名单值过滤掉——防未来新增列悄然扩 label 值域。
     #1927：run 维度不进 label（无界基数），仅记日志。
