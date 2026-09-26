@@ -92,6 +92,7 @@ BUSINESS_ACTIONS_ALLOWLIST: frozenset[str] = frozenset({
     "audit_retention_pruned",  # SUMMARY_ACTION；字面量/常量两条路径都覆盖
     "bulk_assign_project_models",
     "bulk_swipe_trail",
+    "clear_device_intent",  # #3159 host 设备面意图位清除；与 retire/unretire_host 同族
     "create",
     "create_project",
     "create_version",
@@ -133,6 +134,7 @@ BUSINESS_ACTIONS_ALLOWLIST: frozenset[str] = frozenset({
     "retire_host",
     "scan",
     "scan_rebaseline",
+    "set_device_intent",  # #3159 host 设备面意图位置位；与 retire/unretire_host 同族
     "stale_job_completion_rejected",
     "step_trace_stall_detected",
     "terminal_payload_conflict",
