@@ -1,6 +1,6 @@
-# ADR-0040 v1.2 修订起草：host-resources 层退役（2026-09-26，待 owner 裁决）
+# ADR-0040 v1.2：D8 host-resources 层退役（2026-09-26 owner 裁决采纳）
 
-Status: proposed
+Status: implemented
 Class: architecture
 
 ## Decision
@@ -13,7 +13,8 @@ Class: architecture
 R3 release manifest 去分量（解除 ADR-0051 D8 结构替代 `check-deploy-source` 的前置）→ R4 Agent 心跳 / wrapper 子命令（ADR-0037 同 PR 回填）/
 DB 列与前端。本层登记进过渡台账（`host-resources-layer`，exit = ADR-0040#D8，due 2026-12-31）。
 
-方向级修订：以 **draft PR** 提交，不进 FIFO 合入队列；ADR 内如实标「待 owner 裁决」，裁决后替换为日期再转 ready。
+方向级修订：先以 **draft PR** 提交、ADR 内如实标「待 owner 裁决」；2026-09-26 owner 裁决**采纳 D8 与 R1–R4 顺序**（未作调整），
+替换为裁决日期后转 ready。本 PR 只写入决策；R1–R4 的代码与运维动作各开实施 PR。
 
 ## Alternatives
 
@@ -24,10 +25,10 @@ DB 列与前端。本层登记进过渡台账（`host-resources-layer`，exit = 
 
 ## Verification
 
-- 文档修订；`check_transitions` 9 条 / 5 在途（新条目 exit 锚解析通过）；`check:quick` 见 PR
+- 文档修订；`check_transitions` 9 条 / 5 在途（新条目 exit 锚解析通过）；`check:quick` 16 gates OK
 - 事实引用均可回溯：激活证据见 #3288 评论（canary / 重指 / 预热 / 回归），旧版本退役见 #3431，自报 digest 短板见 #3128
 
 ## Revisit
 
-- owner 裁决后：替换「待 owner 裁决」为日期，R1–R4 各开实施 PR（跟踪 #3288）；R4 触发 ADR-0037 §7-5 联动回填。
-- 若裁决为「暂缓」：台账条目 due 同步调整或转 dropped（附理由），不留无主过渡。
+- R1–R4 各开实施 PR（跟踪 #3288），按依赖顺序；R4 触发 ADR-0037 §7-5 联动回填，R4 完成即结项台账 `host-resources-layer`。
+- 若实施中途暂停：台账条目 due 同步调整或转 dropped（附理由），不留无主过渡。

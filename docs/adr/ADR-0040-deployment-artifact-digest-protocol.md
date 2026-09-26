@@ -1,11 +1,11 @@
 # ADR-0040：部署摘要协议（Deployment Artifact Digest Protocol）
 
-- 状态：**Accepted** v1.2（v1.2 修订 D8 **待 owner 裁决**，见 §11）
-- 版本记录：v1.2 修订（2026-09-26，**待 owner 裁决**）：新增 D8——`host-resources` 层退役，内容由 [ADR-0051](./ADR-0051-release-unit-and-content-addressing.md) D7 工具包承接，R1–R4 分阶段（§11）；v1.0 定稿（2026-09-13；v0.1 初版由 [#1900](https://github.com/DUElost/stability-test-platform/issues/1900) 触发、[#1901](https://github.com/DUElost/stability-test-platform/issues/1901) 跟踪 → owner 裁决采纳 D1–D7，裁决记录见 §9）；v1.1（2026-09-15，[#2057](https://github.com/DUElost/stability-test-platform/issues/2057)）：**判据唯一性**与展示面收口，修订记录见 §10（D1 的身份定义不变）
+- 状态：**Accepted** v1.2（v1.2 修订 D8 于 2026-09-26 经 owner 裁决采纳，见 §11）
+- 版本记录：v1.2 修订（2026-09-26，owner 裁决采纳 D8 与 R1–R4 顺序）：新增 D8——`host-resources` 层退役，内容由 [ADR-0051](./ADR-0051-release-unit-and-content-addressing.md) D7 工具包承接，R1–R4 分阶段（§11）；v1.0 定稿（2026-09-13；v0.1 初版由 [#1900](https://github.com/DUElost/stability-test-platform/issues/1900) 触发、[#1901](https://github.com/DUElost/stability-test-platform/issues/1901) 跟踪 → owner 裁决采纳 D1–D7，裁决记录见 §9）；v1.1（2026-09-15，[#2057](https://github.com/DUElost/stability-test-platform/issues/2057)）：**判据唯一性**与展示面收口，修订记录见 §10（D1 的身份定义不变）
 - 优先级：P2
 - 目标里程碑：M7
 - 日期：2026-09-13
-- 决策者：平台研发组（owner 裁决，2026-09-13）
+- 决策者：平台研发组（owner 裁决，2026-09-13；v1.2 D8 裁决 2026-09-26）
 - 标签：热更新, 内容寻址, 收敛, 幂等, 升级, 可观测, #1900, #2057
 - 关联：[#1900](https://github.com/DUElost/stability-test-platform/issues/1900)（问题界定与实测基线）、[#1901](https://github.com/DUElost/stability-test-platform/issues/1901)（本 ADR 跟踪）、[ADR-0021](./ADR-0021-script-content-alignment-gate.md)（升级门禁/维护窗口，本 ADR 复用）、[ADR-0037](./ADR-0037-agent-host-privilege-boundary.md)（提权边界，资源动作扩展须与其联审）、[ADR-0038](./ADR-0038-host-retirement-semantics.md)（D4「禁 `Host.extra` 裸键」先例）、[ADR-0033](./ADR-0033-tool-kit-ecosystem-integration.md)（包存储轨道，未来 artifact 存储复用本协议身份）、`docs/operations/agent-version-and-hot-update.md`（现行热更新契约）
 
@@ -173,7 +173,7 @@ docstring 要求与 Agent 侧**字节级等价**并配对照测试）→ 心跳/
 4. 不纳入并行升级 / 灰度（与维护窗口、设备作业语义耦合，另主题）；
 5. 不在本 ADR 裁决 artifact 存储（包存储归 ADR-0033 轨道；若落地，身份直接复用本协议 digest，不另造）。
 
-### D8（v1.2，待 owner 裁决）：`host-resources` 层退役——内容由 ADR-0051 D7 工具包承接
+### D8（v1.2，2026-09-26 owner 裁决采纳）：`host-resources` 层退役——内容由 ADR-0051 D7 工具包承接
 
 **事实（2026-09-26）**：D1 表中 `host-resources` 的全部内容（flashtool / AIMonkey）已作为 `kind=tool` 包登记并发布到站点
 （#3369），消费族新版本在包内声明 `requires_tools`、由引擎经 `tools_cache` 整包核验后按步注入（#3365 / #3378，ADR-0051 v1.7 D7）；
@@ -317,7 +317,7 @@ canary 真机刷机 run 575 与 Monkey run 576 实证从 `tools_cache` 取工具
   「UI 显示 drift」一行）须随本修订更新；实施由
   [#2155](https://github.com/DUElost/stability-test-platform/issues/2155) 跟踪。
 
-## 11. 修订记录（v1.2，2026-09-26，待 owner 裁决）
+## 11. 修订记录（v1.2，2026-09-26，owner 裁决采纳）
 
 **性质**：收缩部署单元（`host-resources` 层退役），**不改 D1 的身份定义与 D2/§10 的判据唯一性**——`agent-code` 仍以内容摘要为
 身份、digest 仍是唯一动作判据。触发：ADR-0051 D7 于 2026-09-26 激活后，本层内容全部改由工具包承接、已无消费方（证据见 D8）。
@@ -326,4 +326,5 @@ canary 真机刷机 run 575 与 Monkey run 576 实证从 `tools_cache` 取工具
   对 `agent-code` 层原样保留；§7-5（ADR-0037 联动）在 R4 删除资源子命令时触发、同 PR 回填。
 - **备选**：保留本层作「第二下发通道」——弃：两条通道对同一批工具给出两个身份（自报 digest vs 包 sha），正是 §10 判据唯一性
   要消灭的并存；主机清理一并做——弃：清理与退役解耦才能每步无损回滚，清理若需要另行裁决。
-- **裁决待办**：owner 确认后将本节与 D8 标题的「待 owner 裁决」替换为裁决日期，R1–R4 各开实施 PR（跟踪 #3288）。
+- **裁决（2026-09-26）**：owner 采纳 D8 与 R1–R4 的顺序，未作调整；R1–R4 各开实施 PR（跟踪 #3288），R4 完成即结项台账
+  `host-resources-layer`。
