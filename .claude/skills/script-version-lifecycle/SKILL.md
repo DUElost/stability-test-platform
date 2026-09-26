@@ -39,6 +39,9 @@ description: Agent 脚本版本的「新建」与「退役」SOP。触发时机�
    `versions_used`——`refs == 0` 只代表无当前 Plan 引用，**不代表无历史运行**
 3. 执行退役：`PUT /api/v1/scripts/{id}` 设 `is_active=false`
 4. 若返回 409 `SCRIPT_STILL_REFERENCED`：先把引用的 plan_step 重指到新版本，再重试
+5. 发布级退役（manifest `retired:true` + scan）后**重扫一次并核对 `retire_blocked`**：
+   仍被 plan_step 引用的条目 `is_active` 不翻转、在 `retire_blocked_versions`
+   （name/version + plan_ids，与 409 同信息）报告——先重指再重扫（ADR-0023 D6 源头守卫，#3349）
 
 ## 后置验证
 

@@ -3,6 +3,10 @@
 Status: proposed
 Class: architecture
 
+> 已按本文 C 方案实施（2026-09-26）：ADR-0037 v0.6 D7 +
+> [`docs/notes/feature/2026-09-26-kernel-log-readonly-priv-face-2957.md`](../feature/2026-09-26-kernel-log-readonly-priv-face-2957.md)。
+> 本文保留为评审输入的历史记录；实施规格的变动（首扫改 1 小时窗、截断非零退出）见该 Note。
+
 ## Decision
 
 **待评审的推荐方案：给提权 wrapper `stp-agent-priv` 增加一个只读子命令 `read-kernel-log`**，由它以 root 执行固定形态的

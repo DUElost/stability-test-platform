@@ -31,6 +31,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 from sqlalchemy.orm import Session
 
 from backend.agent.contracts.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
+from backend.models.plan import PlanStep
 from backend.models.script import Script
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,10 @@ class ScriptScanResult:
     unregistered_active: List[Dict[str, str]] = field(default_factory=list)
     #: 因 manifest ``retired: true`` 而显式退役的行。
     deactivated_versions: List[Dict[str, str]] = field(default_factory=list)
+    #: ADR-0023 D6 源头守卫（#3349）：retired 条目仍被 ``plan_step`` 引用、不翻转
+    #: ``is_active`` 的行（明细 = name/version + plan_ids，与 409 同信息）。
+    retire_blocked: int = 0
+    retire_blocked_versions: List[Dict[str, list]] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -76,6 +81,8 @@ class ScriptScanResult:
             "package_missing": self.package_missing,
             "unregistered_active": self.unregistered_active,
             "deactivated_versions": self.deactivated_versions,
+            "retire_blocked": self.retire_blocked,
+            "retire_blocked_versions": self.retire_blocked_versions,
         }
 
 
@@ -286,10 +293,31 @@ def sync_scripts_from_manifest(
         if entry.get("retired"):
             if row is not None:
                 if row.is_active:
-                    row.is_active = False
-                    row.updated_at = now
-                    result.deactivated += 1
-                    result.deactivated_versions.append({"name": name, "version": version, "nfs_path": row.nfs_path or ""})
+                    # ADR-0023 D6 源头守卫（#3349）：登记路径不得成为「Plan 引用已停用
+                    # 版本」的入口——仍被 plan_step 引用的 retired 条目不翻转 is_active，
+                    # 报告（name:version + plan_ids，与 409 SCRIPT_STILL_REFERENCED 同信息）；
+                    # 人工重指后重扫才生效。
+                    plan_ids = [
+                        r[0]
+                        for r in db.query(PlanStep.plan_id)
+                        .filter(
+                            PlanStep.script_name == name,
+                            PlanStep.script_version == version,
+                        )
+                        .distinct()
+                        .order_by(PlanStep.plan_id)
+                        .all()
+                    ]
+                    if plan_ids:
+                        result.retire_blocked += 1
+                        result.retire_blocked_versions.append(
+                            {"name": name, "version": version, "plan_ids": plan_ids}
+                        )
+                    else:
+                        row.is_active = False
+                        row.updated_at = now
+                        result.deactivated += 1
+                        result.deactivated_versions.append({"name": name, "version": version, "nfs_path": row.nfs_path or ""})
                 # #3222 附带小项：retired 行若尚无包身份（seed 历史行），一次轮回填后不再读包——
                 # inactive 行不进派发判据，但 catalog 的「登记即有身份」应当无死角。
                 if row.package_sha256 is None and _is_package_sha(sha):
@@ -437,6 +465,13 @@ def sync_scripts_from_manifest(
         logger.warning(
             "script_sync_package_missing count=%d（尚未 --publish 到站点包源）first=%s",
             len(result.package_missing), result.package_missing[0],
+        )
+    if result.retire_blocked_versions:
+        logger.warning(
+            "script_sync_retire_blocked count=%d versions=%s（retired 但仍被 plan_step "
+            "引用，is_active 未翻转——先重指再重扫，ADR-0023 D6 / #3349）",
+            result.retire_blocked,
+            [f"{e['name']}@{e['version']} plans={e['plan_ids']}" for e in result.retire_blocked_versions[:20]],
         )
     db.commit()
     return result

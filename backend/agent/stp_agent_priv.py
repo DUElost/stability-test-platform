@@ -23,6 +23,8 @@ root 操作收敛为**固定子命令 + 路径/属主/内容校验**：
     ensure-udev-rule 写固定 udev 规则（MTK ttyACM → 0660+dialout；调用者非组成员
                     才 0666）并 reload（#2133/D5；#2284；#2353）
     usb-authorized   切换 MTK 设备 sysfs authorized（port 正则 + vendor 校验）
+    read-kernel-log  只读搬运内核日志（journalctl -k，固定形态 + 两个整数参数，
+                    #2957：给 Agent 一条可读内核 USB 日志的最小提权面）
 
 不变量：
 - 所有写路径固定或经前缀校验，永不接受任意目标路径；
@@ -32,7 +34,8 @@ root 操作收敛为**固定子命令 + 路径/属主/内容校验**：
   sudoers，避免注入。
 
 Python 3.6+（主机系统 python3，不使用第三方依赖）。exit code：0 成功、
-1 selftest 失败、2 拒绝（STP_AGENT_PRIV_ERROR）。
+1 selftest 失败、2 拒绝（STP_AGENT_PRIV_ERROR）、3 read-kernel-log 读取失败
+（journalctl 非零退出 / 超时 / 输出截断；stderr 带 ``STP_READ_KERNEL_LOG_*`` 标记）。
 """
 
 import argparse
@@ -44,10 +47,12 @@ import json
 import os
 import pwd
 import re
+import select
 import shutil
 import stat
 import subprocess
 import sys
+import time
 import uuid
 
 WRAPPER_PATH = "/usr/local/sbin/stp-agent-priv"
@@ -58,6 +63,22 @@ SYSTEMCTL_BIN = "/usr/bin/systemctl"
 UDEVADM_BIN = "/usr/bin/udevadm"
 MAX_SCHEMA_BYTES = 2 * 1024 * 1024
 MAX_ENV_PAYLOAD_BYTES = 64 * 1024
+
+# ── read-kernel-log 窄面（#2957 / ADR-0037 D7）──────────────────────────────
+# 只读子命令：Agent 以 android 运行，内核日志在机队上恒不可读
+# （dmesg_restrict=1、/dev/kmsg EPERM、非特权 journalctl 输出与「内核干净」同形），
+# 导致 #2900 的两条内核证据类告警恒绿。本子命令把读权限收敛为
+# **固定 argv + 两个整数参数**，不开放任何 journalctl 选项面（--file/-D/-M/-u/
+# --grep 等一律不可达），也不动 sudo 组权限（A 方案）。
+JOURNALCTL_BIN = "/usr/bin/journalctl"
+#: stdout 上限：超过即视为**截断样本**（非零退出 + stderr 标记），调用方不得当完整结果用。
+#: 依据：#2957 实测一台主机 `journalctl -k --boot` 有 373,600 行（远超 8 MiB），
+#: 截断后计数偏小却与「干净」不可区分——比读不到更危险。
+MAX_KERNEL_LOG_BYTES = 8 * 1024 * 1024
+KERNEL_LOG_TIMEOUT_SECONDS = 30
+MAX_KERNEL_LOG_LINES = 5000
+#: 子进程环境：清空后只留这两项（不设 SYSTEMD_PAGER；--no-pager 双保险）。
+KERNEL_LOG_ENV = {"LC_ALL": "C", "PATH": "/usr/bin:/bin"}
 
 # ── flash 链窄面（ADR-0037 D5 / #2133；#2284 最小权限；#2353 判据改成员资格）──
 # udev 规则：固定路径 + **两个固定形态之一**（与 flash_preflight 最新版本的
@@ -1066,6 +1087,148 @@ def cmd_usb_authorized(args, conf):
     return 0
 
 
+def validate_since_epoch(value, now):
+    """``--since-epoch`` 取值校验（纯函数）：非负整数且不晚于当前时间（#2957）。"""
+    if value < 0:
+        _fail("--since-epoch must be >= 0, got %d" % value)
+    if value > now:
+        _fail("--since-epoch must not be in the future (got %d, now=%d)" % (value, now))
+    return value
+
+
+def validate_kernel_log_lines(value):
+    """``--lines`` 取值校验（纯函数）：None 或 1..MAX（#2957）。"""
+    if value is None:
+        return None
+    if not 1 <= value <= MAX_KERNEL_LOG_LINES:
+        _fail("--lines must be within 1..%d, got %d" % (MAX_KERNEL_LOG_LINES, value))
+    return value
+
+
+def build_kernel_log_argv(*, boot, since_epoch, lines):
+    """固定 argv 构造（纯函数，单测锁定白名单面）。
+
+    只可能出现：``-k --no-pager -o cat`` + ``--boot|--since @<int>`` + ``--lines=<n>``。
+    任何路径/单元/匹配表达式（``--file`` / ``-D`` / ``-M`` / ``-u`` / ``--grep`` 等）
+    都不在构造面里——它们连参数解析层都过不去。
+    """
+    argv = [JOURNALCTL_BIN, "-k", "--no-pager", "-o", "cat"]
+    argv += ["--boot"] if boot else ["--since", "@%d" % since_epoch]
+    if lines is not None:
+        argv.append("--lines=%d" % lines)
+    return argv
+
+
+def _run_kernel_log(argv, timeout=None, max_bytes=None):
+    """执行固定形态的 journalctl 并搬运输出；**不复用 ``_run``**（#2957 约束②）。
+
+    不复用的理由：``_run`` 继承调用者环境、无超时、无输出上限。本子命令按裁决
+    显式收口三件事——环境清空（``KERNEL_LOG_ENV``）、30s 超时、8 MiB 上限；
+    超限即判**截断样本**（不可当完整结果），由调用方以非零退出码上报。
+
+    Returns:
+        ``(status, stdout_bytes, detail)``；``status`` ∈
+        ``ok`` / ``truncated`` / ``timeout`` / ``failed``。
+    """
+    timeout = KERNEL_LOG_TIMEOUT_SECONDS if timeout is None else timeout
+    max_bytes = MAX_KERNEL_LOG_BYTES if max_bytes is None else max_bytes
+    try:
+        proc = subprocess.Popen(
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=dict(KERNEL_LOG_ENV),
+            close_fds=True,
+        )
+    except OSError as exc:
+        return "failed", b"", "cannot exec %s: %s" % (argv[0], exc)
+
+    deadline = time.monotonic() + timeout
+    chunks = []
+    total = 0
+    status = "ok"
+    fd = proc.stdout.fileno()
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                status = "timeout"
+                break
+            ready, _, _ = select.select([fd], [], [], remaining)
+            if not ready:
+                status = "timeout"
+                break
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > max_bytes:
+                # 只判超额、不保留超额内容：截断样本一律作废（#2957 实测 373,600 行）
+                status = "truncated"
+                break
+            chunks.append(chunk)
+    finally:
+        if status != "ok":
+            proc.kill()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
+        detail_err = b""
+        try:
+            detail_err = proc.stderr.read(8192) or b""
+        except OSError:
+            pass
+        proc.stdout.close()
+        proc.stderr.close()
+
+    if status != "ok":
+        return status, b"", detail_err.decode("utf-8", "replace").strip()
+    if proc.returncode != 0:
+        return (
+            "failed",
+            b"",
+            "rc=%s %s" % (proc.returncode, detail_err.decode("utf-8", "replace").strip()[:300]),
+        )
+    return "ok", b"".join(chunks), ""
+
+
+def cmd_read_kernel_log(args, conf):
+    """只读搬运内核日志（#2957 / ADR-0037 D7）。
+
+    面约束：``--boot`` 与 ``--since-epoch`` 二选一（解析层互斥 + required），
+    ``--since-epoch`` ∈ [0, now]、``--lines`` ∈ [1, 5000]；除这两个整数外不接受
+    任何 journalctl 选项。解析仍在 Agent 侧（``kernel_usb_faults``），本命令
+    只搬运原始输出、不做过滤判定；输出被截断时**不做部分投递**，以非零退出码
+    + stderr 标记告知调用方「这一次不可用」。
+    """
+    _require_root()
+    since_epoch = None
+    if args.since_epoch is not None:
+        since_epoch = validate_since_epoch(args.since_epoch, int(time.time()))
+    lines = validate_kernel_log_lines(args.lines)
+    argv = build_kernel_log_argv(boot=bool(args.boot), since_epoch=since_epoch, lines=lines)
+    status, payload, detail = _run_kernel_log(argv)
+    if status == "truncated":
+        print(
+            "STP_READ_KERNEL_LOG_TRUNCATED limit_bytes=%d" % MAX_KERNEL_LOG_BYTES,
+            file=sys.stderr,
+        )
+        return 3
+    if status == "timeout":
+        print(
+            "STP_READ_KERNEL_LOG_TIMEOUT seconds=%d" % KERNEL_LOG_TIMEOUT_SECONDS,
+            file=sys.stderr,
+        )
+        return 3
+    if status != "ok":
+        print("STP_READ_KERNEL_LOG_FAILED %s" % detail, file=sys.stderr)
+        return 3
+    sys.stdout.write(payload.decode("utf-8", "replace"))
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -1098,6 +1261,9 @@ _SUBCOMMAND_CONTRACT = {
     "restart": [],
     "ensure-udev-rule": [],
     "usb-authorized": ["--port", "1-5.3.1", "--value", "0"],
+    # #2957：只读内核日志（D7）。契约 argv 走 --since-epoch 形态（--boot 由解析层
+    # 的互斥组覆盖，探针形态另有单测）。
+    "read-kernel-log": ["--since-epoch", "1555555555"],
 }
 
 # #3356：参数级能力标记（capabilities 在子命令行之外逐行输出）。旧 wrapper 只报
@@ -1209,6 +1375,28 @@ def _build_parser():
     )
     p.add_argument("--port", required=True)
     p.add_argument("--value", required=True, choices=["0", "1"])
+
+    # ADR-0037 D7（#2957）：内核日志只读窄面。allow_abbrev=False——否则 `--since`
+    # 这类缩写会被 argparse 接受，等于把「两个整数参数」的窄面解释权交给前缀匹配。
+    p = sub.add_parser(
+        "read-kernel-log",
+        help="read the kernel log (journalctl -k) with a fixed argv (ADR-0037 D7)",
+        allow_abbrev=False,
+    )
+    window = p.add_mutually_exclusive_group(required=True)
+    window.add_argument("--boot", action="store_true", help="read the current boot")
+    window.add_argument(
+        "--since-epoch",
+        type=int,
+        default=None,
+        help="read since a unix timestamp (>= 0, not in the future)",
+    )
+    p.add_argument(
+        "--lines",
+        type=int,
+        default=None,
+        help="limit output to the last N lines (1..%d)" % MAX_KERNEL_LOG_LINES,
+    )
     return parser
 
 
@@ -1245,6 +1433,7 @@ def main(argv=None):
         "restart": cmd_restart,
         "ensure-udev-rule": cmd_ensure_udev_rule,
         "usb-authorized": cmd_usb_authorized,
+        "read-kernel-log": cmd_read_kernel_log,
     }
     try:
         return handlers[args.command](args, conf)

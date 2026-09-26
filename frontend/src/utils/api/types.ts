@@ -1040,6 +1040,16 @@ export interface ScriptScanOut {
   package_missing: ScriptScanPackageIssue[];
   unregistered_active: ScriptScanEntry[];
   deactivated_versions: ScriptScanDeactivatedEntry[];
+  /** #3349（ADR-0023 D6 源头守卫）：retired 但仍被 plan_step 引用、is_active 未翻转。 */
+  retire_blocked: number;
+  retire_blocked_versions: ScriptScanRetireBlocked[];
+}
+
+/** #3349：retired 登记被引用阻断的明细（与 409 SCRIPT_STILL_REFERENCED 同信息）。 */
+export interface ScriptScanRetireBlocked {
+  name: string;
+  version: string;
+  plan_ids: number[];
 }
 
 /** ADR-0029 P2-10：脚本在某项目的使用统计（run 维度成功率）。 */
