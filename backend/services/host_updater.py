@@ -89,6 +89,8 @@ def _iter_payload_files(kind: str):
     ``code`` = 代码树 + schema（**不含 resources/**，分层后 ~1MB）；``resources``
     = ``resources/**``（除 ``resources/mtbf/``——永远属主机本地）。code 与
     resources 互斥、并集 == full − mtbf（契约测试守护）。
+    ADR-0040 D8 R1 起热更新只打 ``code``：``resources`` 分区不再构建、不再下发，
+    只剩与契约枚举的对拍用途（随 R3 退役）。
 
     #2030：``kind`` 必填——原默认值在 tarball（``code``）与枚举（``full``）
     两侧不对称，漏传会让「打包范围」与「身份范围」静默错配（#2019 同源风险）。
@@ -143,11 +145,6 @@ def _build_tarball(
     return buf.getvalue()
 
 
-def _build_resources_tarball(compresslevel: int = _TARBALL_COMPRESSLEVEL) -> bytes:
-    """ADR-0040 §5-3 P2-B：host-resources 载荷（resources/** 除 mtbf/）。"""
-    return _build_tarball(compresslevel=compresslevel, kind="resources")
-
-
 def _resolve_ssh_creds(host_ip: str) -> dict | None:
     """Look up SSH credentials from Ansible inventory by IP.
 
@@ -186,9 +183,10 @@ def _resolve_ssh_creds(host_ip: str) -> dict | None:
 #: 远端热更新脚本会调用的 wrapper 子命令（#2319）。脚本头按它做**能力**前置判据：
 #: 缺任一项即 fail-closed（`update_agent.yml` 指引），而不是走到调用处才被 argparse
 #: 拒绝（那时代码已同步、服务已重启）。守卫测试钉「脚本里的 $PRIV 调用 ⊆ 本集合」。
+#: ADR-0040 D8 R1：脚本不再调 `apply-resources`（host-resources 层退役），故不再要求——
+#: 新旧 wrapper 都能过判据；wrapper 侧删除该子命令留给 R4（ADR-0037 同 PR 回填）。
 _REQUIRED_PRIV_SUBCOMMANDS = (
     "apply-code",
-    "apply-resources",
     "install-schema",
     "write-version",
     "write-digest",
@@ -210,36 +208,30 @@ set -e
 INSTALL_DIR="{install_dir}"
 SERVICE_NAME="{service_name}"
 CODE_TARB_PATH="{code_tar_path}"
-RESOURCES_TARB_PATH="{resources_tar_path}"
 SYNC_AGENT_SECRET="{sync_agent_secret}"
 AGENT_SECRET_B64="{agent_secret_b64}"
 ENV_OVERRIDES_B64="{env_overrides_b64}"
 ENV_PATH_KEYS_B64="{env_path_keys_b64}"
 ENV_RETIRED_KEYS_B64="{env_retired_keys_b64}"
 ARTIFACT_DIGEST="{artifact_digest}"
-RESOURCES_DIGEST="{resources_digest}"
 export PIP_INDEX_URL="{pip_index_url}"
 
 if [ ! -d "$INSTALL_DIR" ]; then
     echo "ERROR: Agent not installed at $INSTALL_DIR"
-    rm -f "$CODE_TARB_PATH" "$RESOURCES_TARB_PATH"
+    rm -f "$CODE_TARB_PATH"
     exit 1
 fi
 
 CODE_TMP=$(mktemp -d)
-RES_TMP=$(mktemp -d)
-trap 'rm -rf "$CODE_TMP" "$RES_TMP" "$CODE_TARB_PATH" "$RESOURCES_TARB_PATH"' EXIT
+trap 'rm -rf "$CODE_TMP" "$CODE_TARB_PATH"' EXIT
 
-# P2-B 分层（#1975）：双 tar 各自解包；空路径的层整段跳过。
+# 单层载荷：ADR-0040 D8 R1 起只有 agent-code（host-resources 层退役，不再有资源 tar）。
 if [ -n "$CODE_TARB_PATH" ]; then
     tar xzf "$CODE_TARB_PATH" -C "$CODE_TMP"
 fi
-if [ -n "$RESOURCES_TARB_PATH" ]; then
-    tar xzf "$RESOURCES_TARB_PATH" -C "$RES_TMP"
-fi
 
 # Fix CRLF from Windows sources
-find "$CODE_TMP" "$RES_TMP" -type f \( -name "*.py" -o -name "*.sh" \) \
+find "$CODE_TMP" -type f \( -name "*.py" -o -name "*.sh" \) \
     -exec sed -i 's/\r$//' {{}} + 2>/dev/null || true
 
 # 提权边界（#1250/ADR-0037；D 步 #2180）：wrapper 是**唯一**提权面——legacy 裸
@@ -281,12 +273,11 @@ OLD_REQ_SHA=$(sha256sum "$INSTALL_DIR/agent/requirements.txt" 2>/dev/null | cut 
 APPLY_T0=$(date +%s%3N)
 
 # Rsync into install dir
-# NOTE: `--delete` 会删除远端 tarball 中不存在的目录——agent/resources/ 里
-# aimonkey/、flashtool/ 随 hot-update 同步，但 resources/mtbf/ 是 host 级
-# 手工布放（APK 三件套，不在仓库），必须排除，否则每次 hot-update 都会把
-# MTBF 资源清掉（2026-08-20 冒烟 #214/#216「APK 不存在」根因）。
-# ADR-0040 §4.3 P2 前置（#1950）：resources/ 整树加 protect（防源树删除
-# 传播到 host 清掉大件），不 exclude——分发照旧（wrapper 路径同语义）。
+# NOTE: `--delete` 会删除远端 tarball 中不存在的目录——code 载荷不含 agent/resources/
+# （ADR-0040 D8 R1 起该层也不再单独下发：aimonkey/、flashtool/ 改由 ADR-0051 D7 工具包
+# 承接），主机上的 resources/ 靠 wrapper 的 protect-only 整树保留：存量副本与
+# resources/mtbf/（host 级手工布放的 APK 三件套，不在仓库）都不能被清——后者正是
+# 2026-08-20 冒烟 #214/#216「APK 不存在」的根因。退役只停下发、不做主机清理（D8）。
 # #2019：树的写法是 `resources/***`（尾斜杠只护目录节点，见 wrapper 里
 # PROTECT_ONLY_PATHS 的说明）；filter 参数由 wrapper 的 build_apply_code_filters()
 # 生成，本文件不再自持 rsync 面（#2180）。
@@ -383,19 +374,6 @@ fi
 
 fi
 
-# ── ADR-0040 P2-B（#1975）：resources 层独立收敛——D4：不重启、不触碰 deps/env。
-# 空集守卫在控制面（plan_convergence：控制面 resources 分区为空永不下发本层）。
-if [ -n "$RESOURCES_TARB_PATH" ]; then
-RES_APPLY_T0=$(date +%s%3N)
-# wrapper 子命令契约由脚本开头 selftest 保证（apply-resources/write-digest --kind
-# 均在契约表内，旧 wrapper 会在 selftest 阶段 fail-closed）。
-sudo "$PRIV" apply-resources --staged "$RES_TMP"
-sudo "$PRIV" write-digest --kind resources --digest "$RESOURCES_DIGEST"
-echo "STP_RESOURCES_DIGEST=$RESOURCES_DIGEST"
-echo "STP_RESOURCES_APPLY_MS=$(( $(date +%s%3N) - RES_APPLY_T0 ))"
-echo "STP_RESOURCES_APPLIED=1"
-fi
-
 """
 
 
@@ -404,7 +382,6 @@ def _build_remote_script(
     install_dir: str,
     service_name: str,
     code_tar_path: str,
-    resources_tar_path: str,
     user: str,
     group: str,
     sync_agent_secret: bool = False,
@@ -412,7 +389,6 @@ def _build_remote_script(
     pip_index_url: str = "",
     code_version: str = "",
     artifact_digest: str = "",
-    resources_digest: str = "",
 ) -> str:
     agent_secret_b64 = ""
     if sync_agent_secret:
@@ -440,7 +416,6 @@ def _build_remote_script(
         install_dir=install_dir,
         service_name=service_name,
         code_tar_path=code_tar_path,
-        resources_tar_path=resources_tar_path,
         sync_agent_secret="1" if sync_agent_secret else "0",
         agent_secret_b64=agent_secret_b64,
         env_overrides_b64=env_overrides_b64,
@@ -451,7 +426,6 @@ def _build_remote_script(
         pip_index_url=pip_index_url,
         code_version=code_version,
         artifact_digest=artifact_digest,
-        resources_digest=resources_digest,
         # 能力集合注入（#2319/#3356）：子命令与参数级标记同源合并
         required_priv_subcommands=" ".join(
             _REQUIRED_PRIV_SUBCOMMANDS + _REQUIRED_PRIV_CAPABILITIES
@@ -637,29 +611,23 @@ def execute_hot_update(
     code_version: str = "",
     pip_index_url: str = "",
     code_drift: bool = True,
-    resources_drift: bool = False,
     code_tarball: bytes | None = None,
-    resources_tarball: bytes | None = None,
     artifact_digest: str = "",
-    resources_digest: str = "",
 ) -> dict:
-    """Execute a layered hot-update on a remote Linux host（ADR-0040 §5-3 P2-B）。
+    """Execute an ``agent-code`` hot-update on a remote Linux host（ADR-0040 D3）。
 
-    ``code_drift`` / ``resources_drift``：两层是否需要收敛（调用方
-    ``plan_convergence`` 判定；force 时两层皆 True）。``code_tarball`` /
-    ``resources_tarball``：可选预构建载荷（批量惰性构建复用）；None 且该层
-    drift 时按需内建（UI/API 单台路径行为不变）。
-    ``resources_tarball``：资源层载荷（resources/** 除 mtbf/）。None = 资源
-    层无变更或空集守卫跳过；非 None 时远端独立收敛 resources/（**不重启**，
-    D4），成功后写 ``ARTIFACT_DIGEST_RESOURCES``。
-    ``artifact_digest`` / ``resources_digest``：两层 desired 身份，各层收敛
-    成功后由远端受控写入（与 #1943 逐拍上报衔接）。
+    ``code_drift``：是否需要收敛（调用方 ``plan_convergence`` 判定；force 时恒 True）。
+    ``code_tarball``：可选预构建载荷（批量惰性构建复用）；None 时按需内建
+    （UI/API 单台路径）。``artifact_digest``：desired 身份，收敛成功后由远端受控写入
+    （与 #1943 逐拍上报衔接）。
+
+    ADR-0040 D8 R1：``host-resources`` 层已退役——不构建、不传输、不写
+    ``ARTIFACT_DIGEST_RESOURCES``；主机上的 ``resources/`` 由 wrapper protect-only 原样保留。
 
     Returns a dict with keys: ok, converged (bool), reason (str),
-    artifact_digest (str), resources_digest (str), phases (dict), host_id
-    (str), message, duration_ms, deps_refreshed (bool), env_keys_synced
-    (list[str]), env_paths_missing (dict[str, str]), code_version (str),
-    resources_applied (bool).
+    artifact_digest (str), phases (dict), host_id (str), message, duration_ms,
+    deps_refreshed (bool), env_keys_synced (list[str]), env_paths_missing
+    (dict[str, str]), code_version (str).
     Raises no exceptions — failures are captured in the returned dict.
     """
     import paramiko
@@ -673,12 +641,12 @@ def execute_hot_update(
     def _phase_ms(since: float) -> int:
         return int((time.monotonic() - since) * 1000)
 
-    if not code_drift and not resources_drift:
+    if not code_drift:
         return {
             "ok": False,
             "converged": True,
             "reason": "nothing-to-converge",
-            "message": "no code or resources layer requested",
+            "message": "agent-code layer not requested",
             "duration_ms": 0,
             "deps_refreshed": False,
             "env_keys_synced": [],
@@ -686,8 +654,6 @@ def execute_hot_update(
             "code_version": code_version,
             "priv_mode": "unknown",
             "artifact_digest": artifact_digest,
-            "resources_digest": resources_digest,
-            "resources_applied": False,
             "phases": {"digest": 0},
         }
 
@@ -696,21 +662,13 @@ def execute_hot_update(
     # SSH 端口」。stage 在 try 之前初始化，供外层 except 读取。
     stage = "connect"
     try:
-        # 1. Build payloads（#1903：批量入口传预构建载荷整批复用；P2-B 分层
-        #    惰性构建——每层首次需要时才构建，UI/API 单台按需内建）
-        if code_drift and code_tarball is None:
+        # 1. Build payload（#1903：批量入口传预构建载荷整批复用；UI/API 单台按需内建）
+        if code_tarball is None:
             logger.info("hot_update_building_code_tarball source=%s", _AGENT_SOURCE_DIR)
             t_build = time.monotonic()
             code_tarball = _build_tarball(kind="code")
             phases["build_code"] = _phase_ms(t_build)
             logger.info("hot_update_code_tarball_size_bytes=%d", len(code_tarball))
-        if resources_drift and resources_tarball is None:
-            t_build = time.monotonic()
-            resources_tarball = _build_resources_tarball()
-            phases["build_resources"] = _phase_ms(t_build)
-            logger.info(
-                "hot_update_resources_tarball_size_bytes=%d", len(resources_tarball),
-            )
 
         # 2. Connect
         t_connect = time.monotonic()
@@ -724,30 +682,21 @@ def execute_hot_update(
         )
         phases["connect"] = _phase_ms(t_connect)
 
-        code_tar_path = _remote_tar_path() if code_drift else ""
-        resources_tar_path = _remote_tar_path(prefix="res") if resources_drift else ""
+        code_tar_path = _remote_tar_path()
         try:
-            # 3. Upload payloads（按层上传）
+            # 3. Upload payload
             stage = "upload"
             t_upload = time.monotonic()
-            if code_tarball is not None:
-                logger.info("hot_update_uploading_code host=%s:%d", host_ip, ssh_port)
-                sftp.putfo(io.BytesIO(code_tarball), code_tar_path)
-                sftp.chmod(code_tar_path, 0o644)
-            if resources_tarball is not None:
-                logger.info(
-                    "hot_update_uploading_resources host=%s:%d", host_ip, ssh_port,
-                )
-                sftp.putfo(io.BytesIO(resources_tarball), resources_tar_path)
-                sftp.chmod(resources_tar_path, 0o644)
+            logger.info("hot_update_uploading_code host=%s:%d", host_ip, ssh_port)
+            sftp.putfo(io.BytesIO(code_tarball), code_tar_path)
+            sftp.chmod(code_tar_path, 0o644)
             phases["upload"] = _phase_ms(t_upload)
 
-            # 4. Execute remote script（分层条件段：各层无 tar 即整段跳过）
+            # 4. Execute remote script
             script = _build_remote_script(
                 install_dir=_REMOTE_INSTALL_DIR,
                 service_name=_REMOTE_SERVICE_NAME,
                 code_tar_path=code_tar_path,
-                resources_tar_path=resources_tar_path,
                 user=install_user,
                 group=install_group,
                 sync_agent_secret=sync_agent_secret,
@@ -755,7 +704,6 @@ def execute_hot_update(
                 pip_index_url=pip_index_url,
                 code_version=code_version,
                 artifact_digest=artifact_digest,
-                resources_digest=resources_digest,
             )
 
             logger.info("hot_update_executing host=%s", host_ip)
@@ -827,12 +775,10 @@ def execute_hot_update(
 
         finally:
             # #960：用完即删 —— 每个包都是独立路径，留着只会堆积在 /tmp
-            for stale in (code_tar_path, resources_tar_path):
-                if stale:
-                    try:
-                        sftp.remove(stale)
-                    except Exception:
-                        pass
+            try:
+                sftp.remove(code_tar_path)
+            except Exception:
+                pass
             sftp.close()
             client.close()
 

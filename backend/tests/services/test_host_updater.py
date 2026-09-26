@@ -3,6 +3,7 @@ import json
 
 from backend.services.agent_env_sync import RETIRED_ENV_KEYS, hot_update_env_overrides
 from backend.services.host_updater import (
+    _REQUIRED_PRIV_SUBCOMMANDS,
     _build_remote_script,
     _parse_deps_refreshed,
     _parse_env_paths_missing,
@@ -28,7 +29,6 @@ def test_build_remote_script_disables_agent_secret_sync_by_default():
         install_dir="/opt/stability-test-agent",
         service_name="stability-test-agent",
         code_tar_path="/tmp/stp-agent-update.tar.gz",
-        resources_tar_path="",
         user="android",
         group="android",
         sync_agent_secret=False,
@@ -58,7 +58,6 @@ def test_build_remote_script_includes_allowlisted_env_overrides():
         install_dir="/opt/stability-test-agent",
         service_name="stability-test-agent",
         code_tar_path="/tmp/stp-agent-update.tar.gz",
-        resources_tar_path="",
         user="android",
         group="android",
     )
@@ -81,7 +80,6 @@ def test_build_remote_script_carries_retired_env_keys():
         install_dir="/opt/stability-test-agent",
         service_name="stability-test-agent",
         code_tar_path="/tmp/stp-agent-update.tar.gz",
-        resources_tar_path="",
         user="android",
         group="android",
     )
@@ -116,7 +114,6 @@ def test_build_remote_script_delegates_sync_filters_to_wrapper():
         install_dir="/opt/stability-test-agent",
         service_name="stability-test-agent",
         code_tar_path="/tmp/stp-agent-update.tar.gz",
-        resources_tar_path="",
         user="android",
         group="android",
     )
@@ -134,7 +131,6 @@ def test_build_remote_script_includes_agent_secret_update_when_enabled():
         install_dir="/opt/stability-test-agent",
         service_name="stability-test-agent",
         code_tar_path="/tmp/stp-agent-update.tar.gz",
-        resources_tar_path="",
         user="android",
         group="android",
         sync_agent_secret=True,
@@ -153,7 +149,6 @@ def test_build_remote_script_injects_pip_index_url():
         install_dir="/opt/stability-test-agent",
         service_name="stability-test-agent",
         code_tar_path="/tmp/stp-agent-update.tar.gz",
-        resources_tar_path="",
         user="android",
         group="android",
         sync_agent_secret=False,
@@ -175,7 +170,6 @@ def test_build_remote_script_retries_pip_when_deps_marker_stale():
         install_dir="/opt/stability-test-agent",
         service_name="stability-test-agent",
         code_tar_path="/tmp/stp-agent-update.tar.gz",
-        resources_tar_path="",
         user="android",
         group="android",
     )
@@ -226,7 +220,6 @@ def test_build_remote_script_verifies_agent_path_keys(monkeypatch):
         install_dir="/opt/stability-test-agent",
         service_name="stability-test-agent",
         code_tar_path="/tmp/stp-agent-update.tar.gz",
-        resources_tar_path="",
         user="android",
         group="android",
     )
@@ -293,7 +286,6 @@ def _build_script_with_wrapper(**overrides):
         "install_dir": "/opt/stability-test-agent",
         "service_name": "stability-test-agent",
         "code_tar_path": "/tmp/stp-agent-update-abc.tar.gz",
-        "resources_tar_path": "",
         "user": "android",
         "group": "android",
     }
@@ -361,7 +353,6 @@ def test_build_remote_script_exits_nonzero_when_service_not_active():
         install_dir="/opt/stability-test-agent",
         service_name="stability-test-agent",
         code_tar_path="/tmp/stp-agent-update.tar.gz",
-        resources_tar_path="",
         user="android",
         group="android",
         sync_agent_secret=False,
@@ -572,8 +563,6 @@ def test_hot_update_direct_builds_tarball_once_for_all_hosts(monkeypatch):
     def _fake_plan(host, force=False):
         return ConvergencePlan(
             code_digest=desired, code_drift=True,
-            resources_digest="sha256:" + "b" * 64,
-            resources_drift=False, resources_skipped_empty=True,
             converged=False, no_op_result=None,
         )
 
@@ -589,6 +578,8 @@ def test_hot_update_direct_builds_tarball_once_for_all_hosts(monkeypatch):
     assert len(calls["exec"]) == 1
     assert calls["exec"][0]["code_tarball"] == b"T"
     assert calls["exec"][0]["artifact_digest"] == desired
+    # ADR-0040 D8 R1：批量入口不再携带任何 resources 层参数（不构建、不传输）
+    assert not [k for k in calls["exec"][0] if k.startswith("resources")], calls["exec"][0]
     assert finalized["n"] == 1
 
 
@@ -601,7 +592,6 @@ def test_remote_script_writes_artifact_digest_via_wrapper():
         install_dir="/opt/stability-test-agent",
         service_name="stability-test-agent",
         code_tar_path="/tmp/stp-agent-update.tar.gz",
-        resources_tar_path="",
         user="android",
         group="android",
         artifact_digest="sha256:" + "a" * 64,
@@ -619,7 +609,7 @@ def test_remote_script_writes_artifact_digest_via_wrapper():
 
 
 def test_remote_script_selftest_is_the_single_capability_probe():
-    """#2180：子命令契约（含 write-digest/apply-resources）由 wrapper selftest
+    """#2180：子命令契约（含 write-digest）由 wrapper selftest
     前置校验；不再对单个子命令做运行期探测（#1942 的 write-digest 空跑探针退役）。
 
     语义：旧 wrapper（缺任一契约子命令）在 selftest 即 exit≠0 → fail-closed，
@@ -629,7 +619,6 @@ def test_remote_script_selftest_is_the_single_capability_probe():
         install_dir="/opt/stability-test-agent",
         service_name="stability-test-agent",
         code_tar_path="/tmp/stp-agent-update.tar.gz",
-        resources_tar_path="",
         user="android",
         group="android",
         artifact_digest="sha256:" + "a" * 64,
@@ -652,7 +641,6 @@ def test_remote_script_phase_timing_sentinels_present():
         install_dir="/opt/stability-test-agent",
         service_name="stability-test-agent",
         code_tar_path="/tmp/t.tar.gz",
-        resources_tar_path="",
         user="android",
         group="android",
     )
@@ -754,8 +742,6 @@ def test_batch_direct_converged_no_op_skips_gate_and_ssh(monkeypatch):
         ad_mod, "plan_convergence",
         lambda host, force=False: ConvergencePlan(
             code_digest=desired, code_drift=False,
-            resources_digest=desired, resources_drift=False,
-            resources_skipped_empty=False,
             converged=True,
             no_op_result={
                 "ok": True, "converged": True, "reason": "digest-matched",
@@ -782,7 +768,7 @@ def test_build_remote_script_protects_resources_tree():
     """#1950 / ADR-0040 §4.3 P2 前置 → #2180：resources 保护面收归 wrapper。
 
     protect-only（防源树删除传播清掉大件）与 mtbf exclude 均在
-    wrapper apply-code/apply-resources 的固定 filter 内，远端脚本侧不再出现
+    wrapper apply-code 的固定 filter 内，远端脚本侧不再出现
     任何 filter 字面量——语义锁定见
     tests/test_agent_priv_boundary.py::test_wrapper_protect_only_paths。
     """
@@ -790,7 +776,6 @@ def test_build_remote_script_protects_resources_tree():
         install_dir="/opt/stability-test-agent",
         service_name="stability-test-agent",
         code_tar_path="/tmp/stp-agent-update.tar.gz",
-        resources_tar_path="",
         user="android",
         group="android",
     )
@@ -800,44 +785,41 @@ def test_build_remote_script_protects_resources_tree():
     assert "--exclude=" not in script
 
 
-def test_build_remote_script_writes_resources_digest():
-    """#1963 P2 切片① → #2180：resources 身份落第二文件（仅 wrapper --kind）。"""
-    res_digest = "sha256:" + "b" * 64
+def test_remote_script_has_no_resources_layer():
+    """ADR-0040 D8 R1：host-resources 层退役——远端脚本不再有资源层段落。
+
+    不解包资源 tar、不调 wrapper ``apply-resources``、不写 ``ARTIFACT_DIGEST_RESOURCES``；
+    能力判据也不再要求 ``apply-resources``（R4 删 wrapper 子命令前，新旧 wrapper 都得能过）。
+    """
     script = _build_remote_script(
         install_dir="/opt/stability-test-agent",
         service_name="stability-test-agent",
         code_tar_path="/tmp/stp-agent-update.tar.gz",
-        resources_tar_path="",
         user="android",
         group="android",
         artifact_digest="sha256:" + "a" * 64,
-        resources_digest=res_digest,
     )
-    assert f'RESOURCES_DIGEST="{res_digest}"' in script
-    # 仅 wrapper 通道；空跑探测/WARN 放行随 #2180 退役（selftest 前置兜底）
-    assert 'sudo "$PRIV" write-digest --kind resources --digest "$RESOURCES_DIGEST"' in script
-    assert 'write-digest --digest "" --kind resources' not in script
-    assert "WARN: resources digest not written (outdated wrapper)" not in script
-    assert "sudo tee" not in script
+    for token in (
+        "RESOURCES_TARB_PATH",
+        "RESOURCES_DIGEST",
+        "RES_TMP",
+        '"$PRIV" apply-resources',
+        "write-digest --kind resources",
+        "STP_RESOURCES_",
+    ):
+        assert token not in script, f"资源层残留：{token}"
+    assert "apply-resources" not in _REQUIRED_PRIV_SUBCOMMANDS
 
 
-def test_build_remote_script_omits_resources_block_when_empty():
-    script = _build_remote_script(
-        install_dir="/opt/stability-test-agent",
-        service_name="stability-test-agent",
-        code_tar_path="/tmp/stp-agent-update.tar.gz",
-        resources_tar_path="",
-        user="android",
-        group="android",
-        artifact_digest="sha256:" + "a" * 64,
-        resources_digest="",
-    )
-    # 空值时整层被 [ -n "$RESOURCES_TARB_PATH" ] 守护（运行时惰性）：
-    # digest 写入段位于层 guard 之内，不会执行
-    assert 'RESOURCES_DIGEST=""' in script
-    guard = script.index('if [ -n "$RESOURCES_TARB_PATH" ]; then')
-    write_at = script.index('write-digest --kind resources --digest "$RESOURCES_DIGEST"')
-    assert guard < write_at
+def test_execute_hot_update_has_no_resources_parameters():
+    """ADR-0040 D8 R1：入口签名只剩 agent-code 一层——调用方无从再请求资源层下发。"""
+    import inspect
+
+    import backend.services.host_updater as hu
+
+    params = inspect.signature(hu.execute_hot_update).parameters
+    assert not [name for name in params if name.startswith("resources")], list(params)
+    assert not hasattr(hu, "_build_resources_tarball")
 
 
 def _ssh_fakes(putfo_error: BaseException | None):
