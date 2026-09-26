@@ -1,6 +1,6 @@
 # ADR-0051 D7：flashtool / aimonkey 以 kind=tool 登记 + 站点发布守卫（2026-09-26）
 
-Status: implemented（Git 登记；站点发布为合入后运维步骤）
+Status: implemented
 Class: feature
 
 ## Decision
