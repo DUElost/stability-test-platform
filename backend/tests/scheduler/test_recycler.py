@@ -1687,3 +1687,112 @@ def test_step_trace_stall_collector_pins_patrol_guard_both_ways(engine, monkeypa
     finally:
         _cleanup_seed(healthy)
         _cleanup_seed(zombie)
+
+
+# ── #3341：截止行 SQL 层排除 + ORDER BY + gauge + ingest 复核 ───────────────
+
+
+class _DeferredFillCfg:
+    post_completion_grace_seconds = 600
+    post_completion_max_defer_seconds = 86400
+
+
+def _seed_deferred_orphans(db_session, *, now, cutoff_count):
+    """Seed `cutoff_count` beyond-cutoff terminal jobs + 1 in-band fresh orphan."""
+    grace = _DeferredFillCfg.post_completion_grace_seconds
+    max_defer = _DeferredFillCfg.post_completion_max_defer_seconds
+    suffix = uuid4().hex[:8]
+    host = Host(
+        id=f"rc-defer-{suffix}", hostname=f"rc-defer-{suffix}",
+        status=HostStatus.ONLINE.value, last_heartbeat=now, created_at=now,
+    )
+    plan = Plan(name=f"rc-defer-{suffix}")
+    db_session.add_all([host, plan])
+    db_session.flush()
+    run = PlanRun(
+        plan_id=plan.id, status="FAILED",
+        plan_snapshot={"name": plan.name, "plan_id": plan.id},
+        triggered_by="pytest", started_at=now, run_type="MANUAL",
+    )
+    db_session.add(run)
+    db_session.flush()
+    cutoff_ids = []
+    fresh_id = None
+    for i in range(cutoff_count + 1):
+        # (plan_run_id, device_id) 唯一约束——每 job 一台设备。
+        device = Device(
+            serial=f"RCDEF-{suffix}-{i}", host_id=f"rc-defer-{suffix}",
+            status="IDLE", tags=[], created_at=now,
+        )
+        db_session.add(device)
+        db_session.flush()
+        if i < cutoff_count:
+            ended = now - timedelta(seconds=grace + max_defer + 3600)
+        else:
+            ended = now - timedelta(seconds=grace + 60)
+        job = JobInstance(
+            plan_run_id=run.id, plan_id=plan.id, device_id=device.id,
+            host_id=f"rc-defer-{suffix}", status=JobStatus.COMPLETED.value,
+            pipeline_def=PIPELINE_DEF, created_at=now, updated_at=now,
+            started_at=now, ended_at=ended, post_processed_at=None,
+        )
+        db_session.add(job)
+        db_session.flush()
+        if i < cutoff_count:
+            cutoff_ids.append(job.id)
+        else:
+            fresh_id = job.id
+    db_session.commit()
+    return cutoff_ids, fresh_id
+
+
+def test_deferred_fill_cutoff_rows_excluded_and_gauged_3341(db_session, monkeypatch):
+    """10 截止行 + 1 新孤儿：新孤儿仍入队、截止行不占名额不重入队，gauge=10。"""
+    now = datetime.now(timezone.utc)
+    monkeypatch.setattr(recycler, "_sched", lambda: _DeferredFillCfg())
+    cutoff_ids, fresh_id = _seed_deferred_orphans(db_session, now=now, cutoff_count=10)
+
+    enqueued = []
+    monkeypatch.setattr(
+        "backend.core.task_queue.enqueue_sync",
+        lambda task, **kw: enqueued.append(kw.get("key") or task),
+    )
+    monkeypatch.setattr(
+        "backend.services.case_result_ingest.case_result_ingest_pending",
+        lambda db, job_id: True,
+    )
+
+    filled = recycler._fill_deferred_post_completions(db_session, now)
+
+    assert filled == 1
+    assert f"pc:{fresh_id}" in enqueued
+    assert not any(f"pc:{cid}" in enqueued for cid in cutoff_ids)
+    from backend.core.metrics import post_completion_cutoff_jobs
+
+    assert post_completion_cutoff_jobs._value.get() == 10
+
+
+def test_deferred_fill_readable_cutoff_row_reenqueued_3341(db_session, monkeypatch):
+    """截止行 detail 已可读＝主路径漏发：照常重入队不截止。"""
+    now = datetime.now(timezone.utc)
+    monkeypatch.setattr(recycler, "_sched", lambda: _DeferredFillCfg())
+    cutoff_ids, fresh_id = _seed_deferred_orphans(db_session, now=now, cutoff_count=1)
+
+    enqueued = []
+    monkeypatch.setattr(
+        "backend.core.task_queue.enqueue_sync",
+        lambda task, **kw: enqueued.append(kw.get("key") or task),
+    )
+    monkeypatch.setattr(
+        "backend.services.case_result_ingest.case_result_ingest_pending",
+        lambda db, job_id: False,
+    )
+
+    filled = recycler._fill_deferred_post_completions(db_session, now)
+
+    assert filled == 2
+    assert all(f"pc:{cid}" in enqueued for cid in cutoff_ids)
+    assert f"pc:{fresh_id}" in enqueued
+    from backend.core.metrics import post_completion_cutoff_jobs
+
+    assert post_completion_cutoff_jobs._value.get() == 1

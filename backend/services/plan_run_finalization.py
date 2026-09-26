@@ -26,23 +26,30 @@ Job 终态事务只写 pending 标记（``job_terminalization``），不再锁/�
 ``plan_chain_trigger``（链触发/恢复）与五模块之外的服务；五模块中只有
 ``plan_run_abort``（notify 缝）、``post_completion``（恢复入口/RISK_HIGH）、
 ``job_terminalization``（终态编排）与 ``backend/scheduler`` 的补偿路径可以指向本模块。
-顶层 import 只取 models 纯定义（enums/列映射）与 ``plan_run_events``（模块体仅 stdlib，
-realtime 在函数内懒取），其余带副作用的依赖
+顶层 import 取 models 纯定义（enums/列映射）、stdlib（``time``/``defaultdict``）、
+``sqlalchemy`` 纯构造子（``select``/``delete``）与 ``plan_run_events``（模块体仅 stdlib，
+realtime 在函数内懒取）；其余带副作用的依赖
 （sqlalchemy 会话、notification_service、chain_trigger、dedup_scan、thread_pool）一律
 函数体内取，使 ``plan_run_abort`` 的 clean-env 契约（#2372：
-``tests/test_plan_run_abort_import_contract.py``）不因本模块而变。
+``tests/test_plan_run_abort_import_contract.py``）不因本模块而变
+（#3376 项 2 复核：纯构造子不构成 clean-env 负担，可回顶层；同 PR 下调棘轮基线）。
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import time
+from collections import defaultdict
 from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy import delete, select
+
 from backend.models.enums import PlanRunStatus
 from backend.models.job import JobInstance
+from backend.models.plan_run import PlanRun, PlanRunHost, PlanRunPendingAggregation
 from backend.services.plan_run_events import emit_plan_run_status
 
 logger = logging.getLogger(__name__)
@@ -128,6 +135,136 @@ def announce_parent_terminal(run: Any, *, no_jobs: bool = False) -> None:
     # Best-effort 后台执行（重算 N 份报告不阻塞聚合事务）；调度失败放弃本轮，
     # /report/cached 的 live 兜底仍给出正确数据。
     schedule_report_cache_refresh(int(run.id))
+    # #3077 / #3066 A半：终态公共咽喉处的观测信号（各自 best-effort）。
+    try:
+        _emit_terminal_visibility_signals(run)
+    except Exception:
+        logger.exception(
+            "plan_run_terminal_visibility_signal_failed plan_run=%s",
+            getattr(run, "id", None),
+        )
+
+
+#: #3077：整窗 0 完成判定的 job 数下界（owner 2026-09-26 sweep 采纳正文判据，
+#: N=20 排除单设备 smoke 形态；实施期可按现网分布微调并在 PR 记录依据，
+#: 上线满 30 天回看）。
+ZERO_OUTPUT_MIN_JOBS = 20
+
+#: 与聚合器 ``_TERMINAL_PLAN_RUN_STATUSES`` 同口径（SUCCESS/PARTIAL_SUCCESS/FAILED）；
+#: 本地定义避免向聚合器取私有名（依赖方向：编排者 → 聚合器，仅取纯值）。
+_TERMINAL_PLAN_RUN_STATUSES = frozenset({
+    PlanRunStatus.SUCCESS.value,
+    PlanRunStatus.PARTIAL_SUCCESS.value,
+    PlanRunStatus.FAILED.value,
+})
+
+
+def _prev_window_zero_output(run: Any) -> bool:
+    """True when the previous terminal run of the same plan was also zero-output.
+
+    #3077 连续 2 窗判据：取同 plan 早于本 run 的最近一条终态 run（id 序），
+    total ≥ ZERO_OUTPUT_MIN_JOBS 且 completed == 0 即视为上一窗同样零产出。
+    中间夹非终态 run（并发/重排）时按最近终态窗口计。自带短会话——announce
+    发生在终态提交前，prev 窗早已落库，读已提交世界即可。
+    """
+    from backend.core.database import SessionLocal
+
+    with SessionLocal() as db:
+        prev = db.execute(
+            select(PlanRun)
+            .where(
+                PlanRun.plan_id == run.plan_id,
+                PlanRun.id < int(run.id),
+                PlanRun.status.in_(_TERMINAL_PLAN_RUN_STATUSES),
+            )
+            .order_by(PlanRun.id.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+    if prev is None:
+        return False
+    return (
+        int(getattr(prev, "total_job_count", 0) or 0) >= ZERO_OUTPUT_MIN_JOBS
+        and int(getattr(prev, "completed_job_count", 0) or 0) == 0
+    )
+
+
+def _emit_zero_output_signal(run: Any) -> None:
+    """#3077：整窗 0 完成机器信号（level 词表区分 warning / critical）。
+
+    ADR-0048 允许面：只观测「执行链跑完而产出为 0」的平台/脚本故障，不恢复
+    通过率判定轴、不改 plan_run.status。同一 Plan 连续 2 窗 0 产出升 critical；
+    Prometheus 侧 increase(stability_plan_run_zero_output_total)>0 即告警锚。
+    """
+    total = int(getattr(run, "total_job_count", 0) or 0)
+    completed = int(getattr(run, "completed_job_count", 0) or 0)
+    if total < ZERO_OUTPUT_MIN_JOBS or completed != 0:
+        return
+    from backend.core.metrics import plan_run_zero_output_total
+
+    level = "warning"
+    try:
+        if _prev_window_zero_output(run):
+            level = "critical"
+    except Exception:
+        logger.exception(
+            "plan_run_zero_output_prev_window_lookup_failed plan_run=%s",
+            getattr(run, "id", None),
+        )
+    plan_run_zero_output_total.labels(level=level).inc()
+    log = logger.critical if level == "critical" else logger.warning
+    log(
+        "plan_run_zero_output plan_run=%d plan_id=%s total=%d completed=0 level=%s",
+        int(run.id), getattr(run, "plan_id", None), total, level,
+    )
+
+
+def _chain_gap_missing_for_run(run: Any) -> int:
+    """#3066 A半 Hook A 的查数面（独立短会话，读已提交世界）。"""
+    from backend.core.database import SessionLocal
+    from backend.services.plan_chain_trigger import _chain_missing_segments
+
+    with SessionLocal() as db:
+        return _chain_missing_segments(db, run)
+
+
+def _emit_parent_chain_gap_signal(run: Any) -> None:
+    """#3066 A半 Hook A：父段不可触发态（FAILED 断链）的链级可见性。
+
+    abort / 聚合失败的 FAILED 终态不进 ``trigger_next_plan``（reconciler 也只
+    重试 SUCCESS/PARTIAL），是「子 run 数少于预期环数」里最静默的一支——在
+    公共咽喉 announce 处补信号；去重标记随本事务的终态提交落库。
+    """
+    from backend.services.plan_chain_trigger import (
+        TRIGGERABLE_TERMINAL_STATUSES,
+        _fire_chain_gap_signal,
+        _mark_chain_gap_signaled,
+    )
+
+    status = getattr(run, "status", None)
+    status_value = getattr(status, "value", status)
+    if status_value in TRIGGERABLE_TERMINAL_STATUSES:
+        return
+    ctx = dict(getattr(run, "run_context", None) or {})
+    if ctx.get("chain_visibility_gap_signaled"):
+        return
+    try:
+        missing = _chain_gap_missing_for_run(run)
+    except Exception:
+        logger.exception(
+            "plan_run_chain_gap_lookup_failed plan_run=%s", getattr(run, "id", None),
+        )
+        return
+    if missing <= 0:
+        return
+    if not _mark_chain_gap_signaled(run, missing=missing, reason="parent_failed"):
+        return
+    _fire_chain_gap_signal(run, missing=missing, reason="parent_failed")
+
+
+def _emit_terminal_visibility_signals(run: Any) -> None:
+    """终态公共咽喉处的两个观测信号（#3077 / #3066 A半），各自 best-effort。"""
+    _emit_zero_output_signal(run)
+    _emit_parent_chain_gap_signal(run)
 
 
 # ── 终态后的完整编排（原 job_terminalization._post_aggregation_side_effects_*）──
@@ -238,11 +375,6 @@ AGGREGATION_DRAIN_MAX_ROUNDS = int(os.getenv("STP_AGGREGATION_DRAIN_MAX_ROUNDS",
 
 def _recount_host_projection_sync(db: Any, plan_run_id: int, jobs: Sequence[Any]) -> None:
     """per-host 投影重算。锁序与 abort/heartbeat 一致：plan_run → PRH（host_id 升序）。"""
-    from collections import defaultdict
-
-    from sqlalchemy import select
-
-    from backend.models.plan_run import PlanRunHost
     from backend.services.plan_run_aggregation import recount_host_counters
 
     prh_rows = (
@@ -265,14 +397,8 @@ def _recount_host_projection_sync(db: Any, plan_run_id: int, jobs: Sequence[Any]
 
 def _aggregation_round_sync(plan_run_id: int) -> tuple[int, bool]:
     """一批聚合（独立事务）。返回 ``(consumed_marks, applied)``。"""
-    import time
-
-    from sqlalchemy import delete, select
-
     from backend.core.database import SessionLocal
     from backend.core.metrics import record_plan_run_aggregation_duration
-    from backend.models.job import JobInstance
-    from backend.models.plan_run import PlanRun, PlanRunPendingAggregation
     from backend.services.plan_run_aggregation import (
         apply_plan_run_aggregation_from_counters,
         recount_plan_run_counters,
@@ -360,7 +486,6 @@ def drain_plan_run_aggregation_sync(plan_run_id: int) -> int:
 def _complete_parent_side_effects_sync(plan_run_id: int) -> None:
     """applied 后的副作用编排（独立会话；#986：终态已提交，链失败不回滚事实）。"""
     from backend.core.database import SessionLocal
-    from backend.models.plan_run import PlanRun
 
     with SessionLocal() as db:
         run = db.get(PlanRun, plan_run_id)
@@ -411,10 +536,8 @@ def maybe_notify_risk_high(
         return False
 
     try:
-        from sqlalchemy import select
         from sqlalchemy.orm.attributes import flag_modified
 
-        from backend.models.plan_run import PlanRun
         from backend.services.notification_service import dispatch_notification_async
 
         pr = db.execute(
