@@ -159,6 +159,31 @@ host_heartbeat_missed = Counter(
     ['host_id']
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
+# #3219: Agent-local cumulative histograms mirrored from heartbeat.extra at
+# scrape time. They are Gauges because the Agent owns the counts and may restart;
+# use rate(bucket[window]) for quantiles. Vocabulary is fixed by
+# backend.agent.contracts.heartbeat_timing; no device label is accepted.
+agent_heartbeat_phase_bucket = Gauge(
+    'stability_agent_heartbeat_phase_seconds_bucket',
+    'Cumulative Agent heartbeat tick duration buckets, mirrored per host',
+    ['host_id', 'phase', 'le'],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+agent_heartbeat_phase_sum = Gauge(
+    'stability_agent_heartbeat_phase_seconds_sum',
+    'Cumulative Agent heartbeat tick duration seconds, mirrored per host',
+    ['host_id', 'phase'],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+agent_heartbeat_phase_count = Gauge(
+    'stability_agent_heartbeat_phase_seconds_count',
+    'Cumulative Agent heartbeat tick observations, mirrored per host',
+    ['host_id', 'phase'],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+agent_heartbeat_probe_due = Gauge(
+    'stability_agent_heartbeat_probe_due',
+    'Devices due for a slow or disk probe in the last Agent tick',
+    ['host_id', 'kind'],  # slow | disk
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
 # ============================================================================
 # Device Metrics
 # ============================================================================

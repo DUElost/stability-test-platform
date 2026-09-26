@@ -68,11 +68,16 @@ def test_collect_device_info_default_still_probes_slow_metrics(monkeypatch):
     monkeypatch.setattr(device_discovery, "_ping_with_fallback", lambda *a, **k: 12.3)
     monkeypatch.setattr(device_discovery, "detect_device_platform", lambda adb, serial: "MTK")
 
-    info = device_discovery.collect_device_info("adb", "REAL-1")
+    stages = []
+    info = device_discovery.collect_device_info(
+        "adb", "REAL-1", timing_sink=lambda stage, seconds: stages.append((stage, seconds)),
+    )
     assert info["battery_level"] == 87
     assert info["temperature"] == 35
     assert info["network_latency"] == 12.3
     assert info["build_display_id"] == "BUILD-X"
+    assert [stage for stage, _ in stages] == ["fast", "slow"]
+    assert all(seconds >= 0 for _, seconds in stages)
 
 
 # ── HeartbeatThread 层：due 判定矩阵 ─────────────────────────────────────
@@ -169,7 +174,7 @@ def _tick_harness(monkeypatch, interval: float):
     def fake_discover(adb):
         return [{"serial": "S1", "adb_state": state["raw"], "model": None}]
 
-    def fake_collect(adb_path, serial, raw_adb_state="device", include_metrics=True):
+    def fake_collect(adb_path, serial, raw_adb_state="device", include_metrics=True, timing_sink=None):
         state["metrics_calls"].append(include_metrics)
         if raw_adb_state != "device" or not state["online"]:
             return {"adb_state": "offline", "adb_connected": False}

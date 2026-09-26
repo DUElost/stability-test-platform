@@ -6,11 +6,13 @@
 import logging
 import threading
 import time
+from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, List, Optional
 
 from . import device_discovery
 from .heartbeat import send_heartbeat
+from .heartbeat_timing import HeartbeatTiming
 from .kernel_usb_faults import KernelUsbWatch
 from .settings import get_heartbeat_settings
 
@@ -121,6 +123,13 @@ class HeartbeatThread:
         self._devices_lock = threading.Lock()
         self._effective_slots: int = 0
         self._capacity_lock = threading.Lock()
+        self._timing = HeartbeatTiming()
+        self._tick_phases: Optional[Dict[str, float]] = None
+        self._last_tick_started: Optional[float] = None
+        self._slow_due_count = 0
+        self._disk_due_count = 0
+        self._last_slow_due_count = 0
+        self._last_disk_due_count = 0
 
     def reload_from_settings(self) -> None:
         """#2086：`reload_config` 的实例级 re-apply（心跳域）。
@@ -216,10 +225,33 @@ class HeartbeatThread:
             self._safe_tick()
 
     def _safe_tick(self) -> None:
+        started = time.monotonic()
+        if self._last_tick_started is not None:
+            self._timing.observe("tick_interval", started - self._last_tick_started)
+        self._last_tick_started = started
+        self._tick_phases = {}
+        self._slow_due_count = 0
+        self._disk_due_count = 0
         try:
             self._tick()
         except Exception:
             logger.exception("heartbeat_tick_failed")
+        finally:
+            for phase, seconds in self._tick_phases.items():
+                self._timing.observe(phase, seconds)
+            self._timing.observe("tick_total", time.monotonic() - started)
+            self._last_slow_due_count = self._slow_due_count
+            self._last_disk_due_count = self._disk_due_count
+            self._tick_phases = None
+
+    @contextmanager
+    def _phase(self, name: str):
+        started = time.monotonic()
+        try:
+            yield
+        finally:
+            if self._tick_phases is not None:
+                self._tick_phases[name] = time.monotonic() - started
 
     # 慢指标键：短期变化小、每拍全采是 tick 拖慢在线状态上报的主因
     # （ping 单台最坏 15s×2）。与 payload/DB 键名一致。
@@ -304,11 +336,19 @@ class HeartbeatThread:
             for dev in discovered
         }
         n_slow = sum(1 for v in due_by_serial.values() if v)
+        self._slow_due_count = n_slow
         if n_slow:
             logger.info(
                 "device_slow_metrics_sampled devices=%d/%d window=%ss",
                 n_slow, len(discovered), self._slow_sample_interval,
             )
+        probe_times: Dict[str, List[float]] = {"fast": [], "slow": []}
+        probe_times_lock = threading.Lock()
+
+        def note_probe(stage: str, seconds: float) -> None:
+            with probe_times_lock:
+                probe_times[stage].append(seconds)
+
         with ThreadPoolExecutor(
             max_workers=min(len(discovered), _DEVICE_PROBE_MAX_WORKERS),
             thread_name_prefix="hb-probe",
@@ -320,6 +360,7 @@ class HeartbeatThread:
                     dev["serial"],
                     raw_adb_state=dev.get("adb_state", "device"),
                     include_metrics=due_by_serial[dev["serial"]],
+                    timing_sink=note_probe,
                 )
                 for dev in discovered
             ]
@@ -334,11 +375,16 @@ class HeartbeatThread:
                     info = {"adb_state": "error", "adb_connected": False}
                 self._absorb_slow_metrics(serial, info, due_by_serial[serial])
                 infos.append(info)
+            if self._tick_phases is not None:
+                if probe_times["fast"]:
+                    self._tick_phases["probe_fast_max"] = max(probe_times["fast"])
+                if probe_times["slow"]:
+                    self._tick_phases["probe_slow_max"] = max(probe_times["slow"])
             return infos
 
     def _maybe_sample_disk(
         self, discovered: List[Dict[str, Any]], settings: Optional[Any],
-    ) -> None:
+    ) -> int:
         """#2757：设备 ``/data`` 容量低频采样（时间门控 + 按 serial 缓存）。
 
         采集频率与心跳频率解耦——``STP_DEVICE_DISK_SAMPLE_INTERVAL_SECONDS``
@@ -348,22 +394,22 @@ class HeartbeatThread:
         失败（#2279 降级为 None）＝ 本拍不采样，心跳照常。
         """
         if settings is None:
-            return
+            return 0
         interval = getattr(
             settings, "stp_device_disk_sample_interval_seconds", 0,
         ) or 0
         if interval <= 0:
-            return
+            return 0
         now = time.monotonic()
         if now < self._next_disk_sample_monotonic:
-            return
+            return 0
         self._next_disk_sample_monotonic = now + interval
         probe_targets = [
             dev["serial"] for dev in discovered
             if dev.get("adb_state") == "device"
         ]
         if not probe_targets:
-            return
+            return 0
         with ThreadPoolExecutor(
             max_workers=min(len(probe_targets), _DEVICE_PROBE_MAX_WORKERS),
             thread_name_prefix="hb-disk",
@@ -384,6 +430,7 @@ class HeartbeatThread:
         logger.info(
             "device_disk_sampled devices=%d interval=%ss", len(probe_targets), interval,
         )
+        return len(probe_targets)
 
     def _maybe_auto_reconnect_offline(
         self, devices_list: List[Dict[str, Any]], settings: Optional[Any],
@@ -492,9 +539,14 @@ class HeartbeatThread:
             if heartbeat_settings is not None else 0
         )
         try:
-            discovered = device_discovery.discover_devices(self._adb_path)
-            infos = self._collect_device_infos(discovered)
-            self._maybe_sample_disk(discovered, heartbeat_settings)
+            with self._phase("discover"):
+                discovered = device_discovery.discover_devices(self._adb_path)
+            with self._phase("probe_total"):
+                infos = self._collect_device_infos(discovered)
+            disk_started = time.monotonic()
+            self._disk_due_count = self._maybe_sample_disk(discovered, heartbeat_settings)
+            if self._disk_due_count and self._tick_phases is not None:
+                self._tick_phases["disk_sample"] = time.monotonic() - disk_started
             for idx, dev in enumerate(discovered):
                 info = infos[idx]
                 discovered_serials.add(dev["serial"])
@@ -549,6 +601,7 @@ class HeartbeatThread:
         with self._devices_lock:
             self._latest_devices = devices_list
 
+        prepare_started = time.monotonic()
         versions = self._catalog_versions() if self._catalog_versions else {}
 
         # ADR-0019 Phase 3c: 结构化 capacity/health（一次采集，两处复用）
@@ -557,6 +610,10 @@ class HeartbeatThread:
         from .system_monitor import collect_system_stats
 
         system_stats = collect_system_stats()
+        system_stats["heartbeat_timing"] = self._timing.snapshot(
+            slow_due=self._last_slow_due_count,
+            disk_due=self._last_disk_due_count,
+        )
         if self._get_outbox_counts:
             try:
                 system_stats.update(self._get_outbox_counts())
@@ -703,24 +760,27 @@ class HeartbeatThread:
         with self._capacity_lock:
             self._effective_slots = cap_result.get("capacity", {}).get("effective_slots", 0)
 
-        response = send_heartbeat(
-            self._api_url,
-            self._host_id,
-            self._mount_points,
-            host_info=self._host_info,
-            devices=devices_list,
-            script_catalog_version=versions.get("script_catalog_version", ""),
-            capacity=cap_result.get("capacity"),
-            health=cap_result.get("health"),
-            agent_instance_id=self._agent_instance_id,
-            boot_id=self._boot_id,
-            agent_version=self._agent_version,
-            agent_code_revision=self._agent_code_revision,
-            agent_artifact_digest=self._resolve_artifact_digest(),
-            agent_resources_digest=self._resolve_agent_resources_digest(),
-            system_stats=system_stats,
-            mount_status=mount_status,
-        )
+        if self._tick_phases is not None:
+            self._tick_phases["prepare"] = time.monotonic() - prepare_started
+        with self._phase("http"):
+            response = send_heartbeat(
+                self._api_url,
+                self._host_id,
+                self._mount_points,
+                host_info=self._host_info,
+                devices=devices_list,
+                script_catalog_version=versions.get("script_catalog_version", ""),
+                capacity=cap_result.get("capacity"),
+                health=cap_result.get("health"),
+                agent_instance_id=self._agent_instance_id,
+                boot_id=self._boot_id,
+                agent_version=self._agent_version,
+                agent_code_revision=self._agent_code_revision,
+                agent_artifact_digest=self._resolve_artifact_digest(),
+                agent_resources_digest=self._resolve_agent_resources_digest(),
+                system_stats=system_stats,
+                mount_status=mount_status,
+            )
         if response and response.get("script_catalog_outdated") and self._on_scripts_outdated:
             try:
                 self._on_scripts_outdated()
@@ -769,7 +829,8 @@ class HeartbeatThread:
         if response and self._pending_reconnected_serials and self._on_devices_reconnected:
             serials = list(self._pending_reconnected_serials)
             try:
-                recovery_settled = self._on_devices_reconnected(serials)
+                with self._phase("reconnect"):
+                    recovery_settled = self._on_devices_reconnected(serials)
             except Exception as exc:
                 logger.warning("device_reconnect_callback_failed: %s", exc)
                 recovery_settled = False
