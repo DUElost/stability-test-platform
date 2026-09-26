@@ -13,12 +13,13 @@ logger = logging.getLogger(__name__)
 _ARTIFACT_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 # #2016：kind → 文件名的**全集**。原先是 `"code" if kind == "code" else 另一个`，
-# 于是任何拼写错误（`"resource"`/`"full"`/空串）都静默去读 resources 那份身份——
+# 于是任何拼写错误（`"resource"`/`"full"`/空串）都静默去读另一份身份——
 # 报出去的是「另一个真实存在的摘要」，控制面会据此算出假的 aligned/drift，
 # 比读不到更坏。现在只认表里的键，未知键按缺失处理并说出来。
+# ADR-0040 D8 R4：host-resources 层退役，表里只剩 agent-code 一个身份——主机上残留的
+# ARTIFACT_DIGEST_RESOURCES 不再有读取方（也不删它：退役不做主机清理）。
 _ARTIFACT_DIGEST_FILES: dict[str, str] = {
     "code": "ARTIFACT_DIGEST",
-    "resources": "ARTIFACT_DIGEST_RESOURCES",
 }
 #: 身份文件的候选目录（源码态 → 部署态）。提出为常量是为了让「表外 kind 不读另一份身份」
 #: 有用例可钉（原先目录对写死在函数体内，测试无从注入）。
@@ -46,14 +47,13 @@ def read_agent_code_revision() -> str:
     return ""
 
 
-def read_artifact_digest(kind: Literal["code", "resources"] = "code") -> str:
+def read_artifact_digest(kind: Literal["code"] = "code") -> str:
     """Return the deployed artifact digest (ADR-0040), or '' if unavailable/invalid.
 
     与 read_agent_code_revision 同候选路径、同信任模型（部署流程是唯一合法
     写入者）；格式不合法按缺失处理（心跳上报空值，控制面按 drift 收敛）。
-    ``kind``（#1963，P2 身份分层）：code → ARTIFACT_DIGEST；
-    resources → ARTIFACT_DIGEST_RESOURCES；表外的 kind 视为读不到（返回 '' 并 warning），
-    绝不退化成「读另一份身份」（#2016）。
+    ``kind``：只有 code → ARTIFACT_DIGEST（ADR-0040 D8 R4 起 resources 身份退役）；
+    表外的 kind 视为读不到（返回 '' 并 warning），绝不退化成「读另一份身份」（#2016）。
     """
     filename = _ARTIFACT_DIGEST_FILES.get(kind)
     if filename is None:

@@ -32,7 +32,8 @@ class Host(Base):
     # ADR-0040 D2：远端 current artifact digest（部署流程写入、心跳上报）。
     # 显式列（禁 Host.extra 裸键，ADR-0038 D4 先例）；sha256:<hex> ≤ 71 字符。
     agent_artifact_digest = Column(String(80))
-    # ADR-0040 P2（#1963）：host-resources 身份（分层扩展的显式列）
+    # ADR-0040 P2（#1963）：host-resources 身份（分层扩展的显式列）。
+    # ADR-0040 D8 R4：已弃用、不再写入（资源层退役）；保留一个版本窗口后另起迁移删列。
     agent_resources_digest = Column(String(80))
     # #3222：脚本包模式的 fleet 级持续可核验（ADR-0051「fleet 全 strict」从人工背书变机器不变量）。
     # presence sweep 从 verify_scripts ack 的 package_active 推导写列：

@@ -66,6 +66,14 @@
       "what": "ADR-0040 D1 的 host-resources 收敛层（flashtool/AIMonkey 经 hot-update 资源层与 Ansible 下发、资源 digest 为部署流程自报）——内容已由 ADR-0051 D7 工具包承接、无消费方（2026-09-26 激活），待按 ADR-0040 D8 的 R1–R4 分阶段退役（resources/ protect-only 保留，不做主机清理）",
       "exit": "adr:ADR-0040#D8",
       "due": "2026-12-31",
+      "status": "done",
+      "evidence": "2026-09-26 ADR-0040 D8 R1–R4 全部落地：R1 #3437（控制面停判停推，plan_convergence 单层）/ R2 #3441（Ansible 停推，resources/ 整树 host-local；ModemManager 规则改固定形态）/ R3 #3442（release manifest 去 host-resources 分量，bundle 不再携带资源）/ R4a #3443（wrapper 删 apply-resources 与 write-digest --kind，ADR-0037 回填）/ R4b（Agent 停报资源身份、契约与镜像的 full/resources kind 退役、心跳路由停写列）——代码中已无该层的判定、下发、上报与写入；主机 resources/ protect-only 保留（不做主机清理）。上线激活顺序：控制面部署含 R1 的 rev → update_agent.yml 装新 wrapper → 全机队热更新"
+    },
+    {
+      "id": "host-resources-digest-column",
+      "what": "host.agent_resources_digest 列与 HostOut / HeartbeatIn 的 agent_resources_digest 字段在 ADR-0040 D8 R4 后弃用保留：控制面不再写、Agent 不再报（旧 Agent 心跳仍可带该键，照收忽略），HostOut 只回显停写前的存量值——留一个版本窗口供旧 Agent 与外部读者过渡，窗口后另起迁移删列并撤字段",
+      "exit": "adr:ADR-0040#D8",
+      "due": "2026-12-31",
       "status": "active"
     }
   ]

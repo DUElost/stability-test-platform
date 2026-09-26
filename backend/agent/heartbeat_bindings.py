@@ -108,7 +108,6 @@ def build_heartbeat_thread(
         agent_version=agent_version,
         agent_code_revision=agent_code_revision,
         agent_artifact_digest=lambda: read_artifact_digest(),
-        agent_resources_digest=lambda: read_artifact_digest("resources"),
         get_outbox_counts=lambda: {
             "terminal_outbox_pending": local_db.count_pending_terminals(),
             "log_signal_outbox_pending": local_db.count_pending_log_signals(),

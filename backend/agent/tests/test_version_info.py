@@ -29,8 +29,19 @@ def _two_identities(tmp_path, monkeypatch):
 def test_artifact_digest_reads_the_identity_named_by_kind(tmp_path, monkeypatch):
     _two_identities(tmp_path, monkeypatch)
     assert version_info_mod.read_artifact_digest("code") == _CODE
-    assert version_info_mod.read_artifact_digest("resources") == _RESOURCES
     assert version_info_mod.read_artifact_digest() == _CODE  # 默认 code
+
+
+def test_retired_resources_identity_is_never_read(tmp_path, monkeypatch, caplog):
+    """ADR-0040 D8 R4：主机上残留的 ARTIFACT_DIGEST_RESOURCES 不再有读取方（资源层退役），
+    `kind="resources"` 与任何表外 kind 一样按缺失处理并说出来。
+
+    反例（R4 前）：它会读出 `_RESOURCES`，心跳照旧上报资源身份。
+    """
+    _two_identities(tmp_path, monkeypatch)
+    with caplog.at_level("WARNING"):
+        assert version_info_mod.read_artifact_digest("resources") == ""  # type: ignore[arg-type]
+    assert "unknown kind" in caplog.text
 
 
 def test_unknown_kind_never_reads_the_other_identity(tmp_path, monkeypatch, caplog):
@@ -51,4 +62,4 @@ def test_unknown_kind_never_reads_the_other_identity(tmp_path, monkeypatch, capl
 def test_artifact_digest_dirs_are_injectable():
     """守卫自身的前提：目录必须是模块常量，否则上面两条用例无从注入（恒真风险）。"""
     assert isinstance(version_info_mod._ARTIFACT_DIGEST_DIRS, tuple)
-    assert set(version_info_mod._ARTIFACT_DIGEST_FILES) == {"code", "resources"}
+    assert set(version_info_mod._ARTIFACT_DIGEST_FILES) == {"code"}

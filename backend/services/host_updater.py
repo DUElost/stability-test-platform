@@ -85,16 +85,13 @@ def _iter_payload_files(kind: str):
     共享同一枚举——digest 输入集 = 部署输入集由同一份代码保证（ADR-0040 D1）。
     symlink 一律跳过：tar 存链接本身而内容读取会穿透，两侧身份会分叉。
 
-    kind 分层（ADR-0040 §5-3 P2-B，#1975）：``full`` = P1 全集（兼容语义保留）；
-    ``code`` = 代码树 + schema（**不含 resources/**，分层后 ~1MB）；``resources``
-    = ``resources/**``（除 ``resources/mtbf/``——永远属主机本地）。code 与
-    resources 互斥、并集 == full − mtbf（契约测试守护）。
-    ADR-0040 D8 R1 起热更新只打 ``code``：``resources`` 分区不再构建、不再下发，
-    只剩与契约枚举的对拍用途（随 R3 退役）。
-
-    #2030：``kind`` 必填——原默认值在 tarball（``code``）与枚举（``full``）
-    两侧不对称，漏传会让「打包范围」与「身份范围」静默错配（#2019 同源风险）。
+    ``kind`` 只剩 ``code``（代码树 + schema，~1MB）：ADR-0040 D8 R4 随 host-resources 层退役删掉
+    ``full`` / ``resources`` 两个分区，``resources/**`` 从此只是主机本地树的排除项（与契约
+    ``collect_artifact_entries`` 同口径，其余值 fail-closed）。形参保留且必填（#2030：两侧曾因
+    默认值不对称静默错配）。
     """
+    if kind != "code":
+        raise ValueError(f"unknown payload kind {kind!r}: only 'code' remains (ADR-0040 D8 R4)")
     for root, dirs, files in os.walk(_AGENT_SOURCE_DIR):
         # Filter directories in-place
         dirs[:] = [d for d in dirs if d not in PAYLOAD_EXCLUDES]
@@ -113,26 +110,19 @@ def _iter_payload_files(kind: str):
             arcname = os.path.relpath(full_path, _AGENT_SOURCE_DIR).replace(os.sep, "/")
             if arcname in _PAYLOAD_METADATA_EXCLUDES:
                 continue
-            if arcname == "resources/mtbf" or arcname.startswith("resources/mtbf/"):
-                continue
-            if kind == "code" and (
-                arcname == "resources" or arcname.startswith("resources/")
-            ):
-                continue
-            if kind == "resources" and not (
-                arcname == "resources" or arcname.startswith("resources/")
-            ):
+            # 主机本地树（含 mtbf/）：不进载荷与身份（ADR-0040 D8：退役后 protect-only 保留）
+            if arcname == "resources" or arcname.startswith("resources/"):
                 continue
             yield full_path, arcname
 
-    if kind != "resources" and _PIPELINE_SCHEMA_FILE.is_file():
+    if _PIPELINE_SCHEMA_FILE.is_file():
         yield _PIPELINE_SCHEMA_FILE, "stp_schemas/pipeline_schema.json"
 
 
 def _build_tarball(
     kind: str, compresslevel: int = _TARBALL_COMPRESSLEVEL
 ) -> bytes:
-    """Package the deploy payload (``kind``: code / resources / full) into a tarball.
+    """Package the deploy payload (``kind``: code) into a tarball.
 
     ``kind`` 必填（#2030）：与 ``_iter_payload_files`` 取齐，杜绝漏传时
     「打包 code、身份按 full 算」一类静默错配。

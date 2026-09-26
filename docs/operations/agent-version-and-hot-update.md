@@ -85,7 +85,7 @@ Host UI（`ExpandableHostTable`）展示协议版本、部署摘要、code sync 
 （flashtool / AIMonkey 改由 ADR-0051 D7 工具包承接，消费时按包 sha 核验），控制面不再判定、
 构建、传输资源层，也不再写 `ARTIFACT_DIGEST_RESOURCES`；`--force` 只强制 `agent-code` 全量。
 主机上的 `resources/` 由 wrapper 的 protect-only 原样保留（退役不做主机清理）；
-`host.agent_resources_digest` 仍随心跳入库、不参与任何判定（R4 停报停写）。下段 Ansible
+R4 起 Agent 不再上报资源身份、控制面不再写 `host.agent_resources_digest`（列与 API 字段弃用保留一个版本窗口，台账 `host-resources-digest-column`）。下段 Ansible
 通道同样不再推送资源（R2）。
 
 **顺序（#218，避免 Wave 3 竞态）**：

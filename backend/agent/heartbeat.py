@@ -35,10 +35,9 @@ def send_heartbeat(
     # ADR-0020: agent version for preflight consistency check
     agent_version: str = "",
     agent_code_revision: str = "",
-    # ADR-0040 D2: 部署 artifact digest（与 script_catalog_version 同通道同信任模型）
+    # ADR-0040 D2: 部署 artifact digest（与 script_catalog_version 同通道同信任模型）。
+    # 只有 agent-code 一个身份：ADR-0040 D8 R4 起 host-resources 层退役，不再上报资源身份。
     agent_artifact_digest: str = "",
-    # ADR-0040 P2（#1963）：host-resources 身份（ARTIFACT_DIGEST_RESOURCES 只读上报）
-    agent_resources_digest: str = "",
     # Phase 3c: 预收集统计信息（避免 HeartbeatThread 双采）
     system_stats: Optional[Dict[str, Any]] = None,
     mount_status: Optional[Dict[str, Any]] = None,
@@ -79,7 +78,6 @@ def send_heartbeat(
         "agent_code_revision": agent_code_revision,
         # ADR-0040 D2
         "agent_artifact_digest": agent_artifact_digest,
-        "agent_resources_digest": agent_resources_digest,
     }
 
     agent_secret = os.getenv("AGENT_SECRET", "")

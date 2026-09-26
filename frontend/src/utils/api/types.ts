@@ -59,6 +59,7 @@ export interface Host {
   agent_code_revision?: string | null;
   /** ADR-0040 D2/P2：Agent 上报的部署身份（内容一致性比对源） */
   agent_artifact_digest?: string | null;
+  /** @deprecated ADR-0040 D8 R4：host-resources 层退役，后端不再写入（仅回显存量值），随删列迁移移除 */
   agent_resources_digest?: string | null;
   expected_code_revision?: string | null;
   agent_code_deployed?: string | null;

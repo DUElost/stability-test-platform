@@ -16,8 +16,8 @@ digest 共享同一枚举，契约漂移在共享点消除），条目为规范�
 
 收敛判定只有 ``agent-code`` 一层（ADR-0040 D8 R1）：``host-resources`` 层已退役——
 其内容（flashtool / AIMonkey）改由 ADR-0051 D7 工具包承接、消费时按包 sha 实测核验，
-控制面不再判定、不再下发该层；``agent_resources_digest`` 仍随 Agent 心跳入库，
-但不参与任何状态判定（R4 停报停写）。
+控制面不再判定、不再下发该层；R4 起 Agent 不再上报 ``agent_resources_digest``、
+控制面也不再写该列（列保留一个版本窗口，删列另起迁移）。
 """
 
 from __future__ import annotations
@@ -31,7 +31,6 @@ import threading
 
 from backend.agent.contracts.artifact_digest import (
     ARTIFACT_KIND_CODE,
-    ARTIFACT_KIND_FULL,
     digest_entries,
 )
 from backend.services.host_updater import _iter_payload_files
@@ -39,7 +38,7 @@ from backend.services.host_updater import _iter_payload_files
 logger = logging.getLogger(__name__)
 
 _cache_lock = threading.Lock()
-# 缓存按 kind 分桶（full / code / resources 各自独立指纹）
+# 缓存按 kind 分桶（ADR-0040 D8 R4 起只剩 code 一桶；分桶结构保留，缓存形状不随面数变化）
 _cache: dict[str, tuple[str | None, str | None]] = {}
 
 
@@ -56,16 +55,11 @@ def invalidate_artifact_digest_cache() -> None:
         _cache.clear()
 
 
-def collect_artifact_entries(kind: str = ARTIFACT_KIND_FULL) -> list[tuple[str, bool, str]]:
+def collect_artifact_entries(kind: str = ARTIFACT_KIND_CODE) -> list[tuple[str, bool, str]]:
     """规范化序列 ``(relpath, 可执行位, content sha256)``，按 relpath 排序。
 
-    kind 分区（#1963，ADR-0040 §5-3 P2）：``full`` = 共享载荷枚举全集（P1
-    语义不变）；``code`` = 全集 − ``resources/**``；``resources`` = 全集 ∩
-    ``resources/**``（除 ``resources/mtbf/``，枚举层已排除）。code ∪
-    resources == full且互斥，契约测试守护。
-
-    ADR-0040 D8 R1 起收敛只用 ``code``；``resources`` 分区只剩与契约枚举的对拍用途
-    （Ansible / bundle 仍产出该身份，随 R2 / R3 退役）。
+    只有 ``code`` 一个分区（ADR-0040 D8 R4 退役 ``full`` / ``resources``），与契约
+    ``collect_artifact_entries`` 同口径——枚举对拍由契约测试守护。
     """
     entries: list[tuple[str, bool, str]] = []
     for full_path, arcname in _iter_payload_files(kind):
@@ -79,7 +73,7 @@ def collect_artifact_entries(kind: str = ARTIFACT_KIND_FULL) -> list[tuple[str, 
     return entries
 
 
-def _input_fingerprint(kind: str = ARTIFACT_KIND_FULL) -> str:
+def _input_fingerprint(kind: str = ARTIFACT_KIND_CODE) -> str:
     """输入集状态指纹（stat-only，不读内容）——进程缓存的缓存键。"""
     parts = []
     for full_path, arcname in _iter_payload_files(kind):
@@ -89,7 +83,7 @@ def _input_fingerprint(kind: str = ARTIFACT_KIND_FULL) -> str:
     return hashlib.sha256(repr(parts).encode("utf-8")).hexdigest()
 
 
-def compute_desired_artifact_digest(kind: str = ARTIFACT_KIND_FULL) -> str:
+def compute_desired_artifact_digest(kind: str = ARTIFACT_KIND_CODE) -> str:
     """Desired digest：现算 + 进程缓存（缓存键 = 输入集状态指纹，按 kind 分桶）。"""
     if _cache_disabled():
         return digest_entries(collect_artifact_entries(kind))

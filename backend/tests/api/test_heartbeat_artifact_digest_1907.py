@@ -38,11 +38,20 @@ class TestHeartbeatArtifactDigest:
         assert sample_host.agent_artifact_digest == DIGEST
 
 
-# ── #1963 P2 切片①：resources 身份落列 ─────────────────────────────────────
+# ── ADR-0040 D8 R4：resources 身份停写（旧 Agent 照收、不落列） ──────────────────
 
 
-class TestHeartbeatResourcesDigest:
-    def test_heartbeat_persists_resources_digest(self, client, sample_host, db_session):
+class TestHeartbeatResourcesDigestRetired:
+    def test_legacy_resources_digest_is_accepted_but_not_written(self, client, sample_host, db_session):
+        """旧 Agent 仍会带 agent_resources_digest：载荷照收（不 422），但控制面不再写列——
+        停写前的存量值原样保留（列在版本窗口后随迁移删除）。
+
+        反例（R4 前）：心跳会把 RESOURCES_DIGEST 写进 host.agent_resources_digest。
+        """
+        legacy = "sha256:" + "c" * 64
+        sample_host.agent_resources_digest = legacy
+        db_session.commit()
+
         response = client.post(
             "/api/v1/heartbeat",
             json={
@@ -53,15 +62,4 @@ class TestHeartbeatResourcesDigest:
         )
         assert response.status_code == 200
         db_session.refresh(sample_host)
-        assert sample_host.agent_resources_digest == RESOURCES_DIGEST
-
-    def test_heartbeat_empty_resources_digest_no_overwrite(self, client, sample_host, db_session):
-        sample_host.agent_resources_digest = RESOURCES_DIGEST
-        db_session.commit()
-        response = client.post(
-            "/api/v1/heartbeat",
-            json={"host_id": sample_host.id, "status": "ONLINE"},
-        )
-        assert response.status_code == 200
-        db_session.refresh(sample_host)
-        assert sample_host.agent_resources_digest == RESOURCES_DIGEST
+        assert sample_host.agent_resources_digest == legacy

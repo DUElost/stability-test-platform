@@ -186,7 +186,7 @@ def test_digest_matches_tarball_payload(agent_tree, schema_file, monkeypatch):
     """契约守护：热更新 tarball 载荷集 == code 身份输入集（枚举同源，ADR-0040 D1 / §4.2 缓解）。
 
     ADR-0040 D8 R1 起热更新只打 code 层：fixture 树的 ``resources/`` 非空（即「控制面树仍带
-    资源」的形态），载荷里也不得出现 ``resources/**``。分区并集见 ``TestKindPartition``。
+    资源」的形态），载荷里也不得出现 ``resources/**``。
     """
     monkeypatch.setattr(hu, "_AGENT_SOURCE_DIR", agent_tree)
     monkeypatch.setattr(hu, "_PIPELINE_SCHEMA_FILE", schema_file)
@@ -208,7 +208,7 @@ def test_digest_matches_tarball_payload(agent_tree, schema_file, monkeypatch):
     assert ad.digest_entries(code_members) == ad.digest_entries(
         ad.collect_artifact_entries(kind="code")
     )
-    assert ad.collect_artifact_entries(kind="resources"), "fixture 必须带非空 resources/"
+    assert (agent_tree / "resources" / "aimonkey" / "monkey.bin").is_file(), "fixture 必须带非空 resources/"
     assert not [
         name for name, _, _ in code_members
         if name == "resources" or name.startswith("resources/")
@@ -225,7 +225,7 @@ def test_desired_digest_cache_keyed_by_fingerprint(agent_tree, schema_file, monk
     calls = {"n": 0}
     real_collect = ad.collect_artifact_entries
 
-    def counting_collect(kind="full"):
+    def counting_collect(kind="code"):
         calls["n"] += 1
         return real_collect()
 
@@ -265,7 +265,7 @@ def test_plan_convergence_states(monkeypatch):
 
     monkeypatch.setattr(
         ad, "compute_desired_artifact_digest",
-        lambda kind="full": {"code": desired}[kind],
+        lambda kind="code": {"code": desired}[kind],
     )
 
     # current 缺失 → drift
@@ -302,7 +302,7 @@ def test_plan_convergence_ignores_host_resources_layer(monkeypatch):
     desired = "sha256:" + "a" * 64
     kinds_computed: list[str] = []
 
-    def _fake(kind="full"):
+    def _fake(kind="code"):
         kinds_computed.append(kind)
         return {"code": desired, "resources": "sha256:" + "c" * 64}[kind]
 
@@ -327,11 +327,11 @@ def test_plan_convergence_ignores_host_resources_layer(monkeypatch):
 def test_iter_payload_files_skip_rules(agent_tree, schema_file, monkeypatch):
     monkeypatch.setattr(hu, "_AGENT_SOURCE_DIR", agent_tree)
     monkeypatch.setattr(hu, "_PIPELINE_SCHEMA_FILE", schema_file)
-    arcnames = [arc for _, arc in hu._iter_payload_files(kind="full")]
+    arcnames = [arc for _, arc in hu._iter_payload_files(kind="code")]
     assert "main_link.py" not in arcnames  # symlink 不进载荷
     assert "main.py" in arcnames
-    assert "resources/aimonkey/monkey.bin" in arcnames
-    assert not any(a.startswith("resources/mtbf") for a in arcnames)
+    # 主机本地树（含 mtbf/ 与退役前下发的资源副本）不进载荷（ADR-0040 D8）
+    assert not any(a == "resources" or a.startswith("resources/") for a in arcnames)
     assert "stp_schemas/pipeline_schema.json" in arcnames
     assert "VERSION" not in arcnames and "ARTIFACT_DIGEST" not in arcnames
     # #2030 / ADR-0051 Phase 3：部署通道不传输的文件不得进载荷/身份（契约包为单一源）
@@ -345,52 +345,42 @@ def test_iter_payload_files_skip_rules(agent_tree, schema_file, monkeypatch):
     assert "stp_schemas/pipeline_schema.json" in arcnames
 
 
-# ── #1963 P2 切片①：身份分层（code / resources 分区） ──────────────────────
+# ── ADR-0040 D8 R4：kind 只剩 code（full / resources 分区随 host-resources 层退役） ─────────
 
 
-class TestKindPartition:
-    """code ∪ resources == full 且互斥；两侧枚举等价覆盖两 kind。"""
+#: 与 ``agent_tree`` + ``schema_file`` 同内容的树，在**退役前**实现上 ``kind="code"`` 的身份
+#: （用 R4 前的契约模块现算后钉死）。退役 full / resources 不得改变 agent-code 身份——否则全机队
+#: 会因一次纯清理被判 drift 并重推。
+_CODE_IDENTITY_BEFORE_KIND_RETIREMENT = (
+    "sha256:e5f84e356e8c57e6753749f10e4ac21fd4c194b64ab64b63df6e137e314b773b"
+)
 
-    def test_partition_union_equals_full(self, agent_tree, schema_file, monkeypatch):
-        # resources/ 大件不入 git（gitignore + 带外布放）——分区测试必须在
-        # fixture 树上走（与 parity 同款 monkeypatch），真实树 resources 恒空
-        monkeypatch.setattr(hu, "_AGENT_SOURCE_DIR", agent_tree)
-        monkeypatch.setattr(hu, "_PIPELINE_SCHEMA_FILE", schema_file)
-        full = ad.collect_artifact_entries()
-        code = ad.collect_artifact_entries(kind="code")
-        resources = ad.collect_artifact_entries(kind="resources")
-        rel = lambda es: {e[0] for e in es}
-        assert rel(code) | rel(resources) == rel(full)
-        assert not rel(code) & rel(resources)
-        # 分层语义：resources 身份只含 resources/**（且不含 mtbf/）
-        assert rel(resources) and all(r.startswith("resources/") for r in rel(resources))
-        assert all(not r.startswith("resources/mtbf/") for r in rel(resources))
 
-    def test_partition_digests_differ_and_stable(self, agent_tree, schema_file, monkeypatch):
-        full = _cp_digest(agent_tree, schema_file, monkeypatch)
-        code = ad.compute_desired_artifact_digest(kind="code")
-        resources = ad.compute_desired_artifact_digest(kind="resources")
-        assert len({full, code, resources}) == 3
-        assert ad.compute_desired_artifact_digest(kind="code") == code
-
-    def test_enumeration_parity_both_kinds(self, agent_tree, schema_file, monkeypatch):
-        monkeypatch.setattr(hu, "_AGENT_SOURCE_DIR", agent_tree)
-        monkeypatch.setattr(hu, "_PIPELINE_SCHEMA_FILE", schema_file)
-        code_cp = ad.collect_artifact_entries(kind="code")
-        res_cp = ad.collect_artifact_entries(kind="resources")
+class TestSingleCodeKind:
+    def test_code_identity_unchanged_by_kind_retirement(self, agent_tree, schema_file, monkeypatch):
         extra = {"stp_schemas/pipeline_schema.json": str(schema_file)}
-        code_ag = contract_ad.collect_artifact_entries(str(agent_tree), kind="code", extra_files=extra)
-        res_ag = contract_ad.collect_artifact_entries(str(agent_tree), kind="resources")
-        # code 身份含 schema arcname（extra），契约侧对齐 extra 后比较
-        assert ad.digest_entries(code_cp) == contract_ad.digest_entries(code_ag)
-        assert ad.digest_entries(res_cp) == contract_ad.digest_entries(res_ag)
+        assert contract_ad.digest_entries(
+            contract_ad.collect_artifact_entries(str(agent_tree), extra_files=extra)
+        ) == _CODE_IDENTITY_BEFORE_KIND_RETIREMENT
+        assert _cp_digest(agent_tree, schema_file, monkeypatch) == _CODE_IDENTITY_BEFORE_KIND_RETIREMENT
 
-    def test_resources_digest_sensitivity_and_code_isolation(self, agent_tree, schema_file, monkeypatch):
+    def test_retired_kinds_fail_closed(self, agent_tree, schema_file, monkeypatch):
+        """旧 kind 若被静默当成 code，会给出一个「看似合法」的错身份——两侧都必须拒绝。"""
         monkeypatch.setattr(hu, "_AGENT_SOURCE_DIR", agent_tree)
         monkeypatch.setattr(hu, "_PIPELINE_SCHEMA_FILE", schema_file)
-        d1 = ad.compute_desired_artifact_digest(kind="resources")
-        code_d1 = ad.compute_desired_artifact_digest(kind="code")
+        for retired in ("full", "resources"):
+            with pytest.raises(ValueError):
+                contract_ad.collect_artifact_entries(str(agent_tree), kind=retired)
+            with pytest.raises(ValueError):
+                list(hu._iter_payload_files(kind=retired))
+            with pytest.raises(ValueError):
+                ad.collect_artifact_entries(kind=retired)
+        assert not hasattr(contract_ad, "ARTIFACT_KIND_RESOURCES")
+        assert not hasattr(contract_ad, "ARTIFACT_KIND_FULL")
+
+    def test_resources_content_never_moves_code_identity(self, agent_tree, schema_file, monkeypatch):
+        """主机本地树（资源副本 / mtbf）的任何变化都不进 agent-code 身份。"""
+        base = _cp_digest(agent_tree, schema_file, monkeypatch)
         _write(agent_tree / "resources" / "aimonkey" / "monkey.bin", b"CHANGED")
-        assert ad.compute_desired_artifact_digest(kind="resources") != d1
-        # 分层隔离的语义本体：resources 内容变化不影响 code 身份
-        assert ad.compute_desired_artifact_digest(kind="code") == code_d1
+        _write(agent_tree / "resources" / "flashtool" / "flash_tool", b"new-tool", exec_bit=True)
+        assert _cp_digest(agent_tree, schema_file, monkeypatch) == base
