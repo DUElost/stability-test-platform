@@ -122,14 +122,17 @@ curl -s -H "$AUTH" -X POST http://127.0.0.1:8000/api/v1/scripts/scan \
   | jq '.data | {created, skipped, conflicts, deactivated}'
 ```
 
-- **何时需要**：`git diff <上次部署commit>..HEAD -- backend/agent/scripts/` 非空才需要跑；为空是 no-op。
-- **scan 只写控制面注册表**：它不往主机送文件。新版本要**对主机生效**必须再跑 §3（见
-  `script-version-lifecycle` §A 第 5 步）——2026-09-22 实测 `fill_storage` v1.1.1 已 active
-  而 47 台主机无此文件，就是漏了这步。
+- **何时需要**：`git diff <上次部署commit>..HEAD -- backend/agent/scripts/ tool_manifest.json`
+  非空才需要跑；为空是 no-op。**manifest-only 变更（`--register` 登记 / `retired` 翻转）也要
+  scan**——只 diff 族树会漏（#3278；Phase 3 起 scan 的注册输入 = manifest + 站点包源）。
+- **scan 只写控制面注册表**：它不往主机送文件。新版本要**对主机生效**必须先
+  `--publish` 发包到站点 `packages/`（未发包 scan 得 `package_missing`），Agent 侧在
+  派发/预检时经 `tools_cache` 整包核验拉取预热（ADR-0051 Phase 3 起**脚本不随 hot-update
+  分发**，§3 的热更新只送代码与 resources，不再送脚本）。
 - **scan 幂等**：seed 预建版本显示 created=0/skipped 是正常，勿误判未注册；conflicts 出现时先 `sha256sum` 比对磁盘 vs DB，再决定是否 `?force_rebaseline=true`（需无在途 PlanRun）。
 - **版本号无 v 前缀**：DB `script.version` 存 `2.3.4` 形式（scan 剥 v）。
 - **ADR-0051 Phase 3 起 scan 的输入 = `tool_manifest.json` + 站点 `packages/`**（不再扫描检出目录）：响应新增 `package_missing`（未发布）/ `unregistered_active`（活跃行不在 manifest，只报告）；退役 = manifest `retired:true` + scan；`agent-code` 载荷不再含 `scripts/`（主机上的旧目录随热更新清掉，脚本从 `tools_cache` 执行）。
-- **ADR-0051 Phase 2a 起 scan 还回填 `package_sha256`**（✅2026-09-23 实跑）：响应多两键 `package_backfilled` / `package_conflicts`，来源是仓根 `tool_manifest.json`。首次回填期望 `package_backfilled=210`、`package_conflicts=[]`；之后只读证明 `DATABASE_URL=… venv/bin/python -m backend.scripts.check_script_package_equivalence` 应 `EQUIVALENCE OK … backfilled=<行数>`。新增脚本版本目录后先 `venv/bin/python tools/dev/check_script_packages.py --register`（否则 tool-manifest 门禁红），合入后 `--publish --packages-root /mnt/stp-aee/packages`（把 tar.gz 与 manifest 副本发到站点包源，Agent 从这里拉）。
+- **ADR-0051 Phase 2a 起 scan 还回填 `package_sha256`**（✅2026-09-23 实跑）：响应多两键 `package_backfilled` / `package_conflicts`，来源是仓根 `tool_manifest.json`。首次回填期望 `package_backfilled=210`、`package_conflicts=[]`；之后只读证明 `DATABASE_URL=… venv/bin/python -m backend.scripts.check_script_package_equivalence` 应 `EQUIVALENCE OK … backfilled=<行数>`。改族树后先 `venv/bin/python tools/dev/check_script_packages.py --register`（否则 tool-manifest 门禁红），合入后 `--publish --packages-root /mnt/stp-aee/packages`（把 tar.gz 与 manifest 副本发到站点包源，Agent 从这里拉）。
 
 ## 3. Agent fleet 热更新
 
@@ -158,11 +161,12 @@ PYTHONPATH=. venv/bin/python -m backend.scripts.batch_hot_update --direct
 - **实测 ~3s/台**（2026-09-22：canary `duration_ms=3068`；48 台批量约 4 分钟，
   `SUMMARY ok=48 converged=1 fail=0 skipped=0`。旧稿写的「约 20s/台」已过时）。
   stdout 是块缓冲，重定向到文件时日志会长时间为空，**进度看 DB/API 的分布，别盯日志**。
-- 推 `backend/agent/` 源码树（含 scripts/）→ 各 host `/opt/stability-test-agent/agent/`，自动重启 Agent。
-  code 载荷口径 = 整棵 agent 树 −（`tests/`、`test_*.py`、`__pycache__`、`resources/**`、`VERSION`/`ARTIFACT_DIGEST*`/`.env`）
-  ⇒ **`backend/agent/scripts/` 里的新版本靠这一步才落到主机**（DB `active` ≠ 主机有文件，
-  见 `script-version-lifecycle` §A 第 5 步）——判断「有没有下发」不要用 `script-presence`
-  的 `missing=0`（无 Plan 引用的新版本不在账本全集内）。
+- 推 `backend/agent/` 源码树 → 各 host `/opt/stability-test-agent/agent/`，自动重启 Agent。
+  code 载荷口径 = 整棵 agent 树 −（`tests/`、`test_*.py`、`__pycache__`、`resources/**`、
+  **`scripts/`**（ADR-0051 Phase 3 起，`host_updater._TAR_EXCLUDES`）、`VERSION`/`ARTIFACT_DIGEST*`/`.env`）
+  ⇒ **脚本不在这份载荷里**：新版本经「`--register` → `--publish` → scan → verify_scripts
+  拉包预热」链生效（`script-version-lifecycle` §A）；判断脚本版本到位不要用
+  `script-presence` 的 `missing=0`（无 Plan 引用的新版本不在账本全集内）。
 - **带外文件**：`resources/**` 是 protect-only（`stp_agent_priv.PROTECT_ONLY_PATHS = ["resources/***"]`，
   #1950/#2019，契约测试逐项锁定）——只防删除、不做 exclude，必须写 `***`（尾斜杠只匹配目录节点自身）；
   `resources/` **之外**的带外文件仍会被 `--delete` 抹掉，故带外资源仍在**最终**热更新之后放置。
@@ -236,10 +240,10 @@ PYTHONPATH=. venv/bin/python -m backend.scripts.batch_hot_update --direct
 - scan `conflicts` 出现时先 `sha256sum` 比对磁盘 vs DB，再决定是否
   `?force_rebaseline=true`（且需无在途 PlanRun）；seed 预建版本 created=0/skipped 是
   正常，勿误判未注册（§2）；
-- **DB `active` / `matched` 都不等于「主机上有这个脚本文件」**：脚本从主机本地树执行，
-  scan 只写注册表——新版本必须跑一次 §3 才算生效（§2/§3）；判断到位不要用
-  `script-presence` 的 `missing=0`（无 Plan 引用的版本不在账本全集内，见
-  `script-version-lifecycle` §A 第 5 步）；
+- **DB `active` / `matched` 都不等于「新脚本版本已生效」**：ADR-0051 Phase 3 起脚本从
+  `tools_cache` 的包执行、不随 hot-update 走——生效链 = `--register` → `--publish` →
+  scan → verify_scripts 拉包预热（§2 + `script-version-lifecycle` §A）；判断到位不要用
+  `script-presence` 的 `missing=0`（无 Plan 引用的版本不在账本全集内）；
 - 带外文件：`resources/**` 由 `PROTECT_ONLY_PATHS` 保护（§6 已修正在案），但
   `resources/` 之外的带外文件仍会被 `--delete` 抹掉——部署前确认无此类残留或放到热更新之后；
 - **`agent_resources_digest` 是「自报意图」，不得当「实测到位」用**：`write-digest` 只校验格式、

@@ -11,7 +11,7 @@
 | 控制面账号 | `admin` 角色可走完全部步骤；普通用户仅能操作自己 created_by 的 Plan |
 | 网络可达控制面 `:8000` | 本手册统一写 `<base>` = `http://<control-plane>:8000` |
 | 目标设备已入池 | Heartbeat 正常上报、platform 已判定（MTK/UNISOC/QCOM） |
-| （脚本主轨）NFS 脚本树访问权 | 控制面 env `STP_SCRIPT_ROOT` 指向的目录（未配置时 scan 返回 503） |
+| （脚本主轨）站点包源写权限 | `<STP_AEE_NFS_ROOT>/packages/`——Phase 3 起 scan 的注册输入 = `tool_manifest.json` + 站点包源；未发包 scan 得 `package_missing`（#3278：旧 `STP_SCRIPT_ROOT` 前置已废） |
 
 **拿调用凭据**（bearer token，供 curl / Swagger / 外部 agent 用）：
 
@@ -74,32 +74,37 @@ curl -s '<base>/api/v1/specialties' -H "Authorization: Bearer $TOKEN"
 
 ## 4. Step 3 —— 脚本入库
 
-### 4a. 主轨：NFS 目录 + 目录扫描（生产推荐）
+### 4a. 主轨：族树 + manifest 登记 + 站点包（生产推荐；ADR-0051 Phase 3 起）
 
-目录规约（扫描器只认这个形状）：
+发布规约（Phase 3 起无版本目录，每族一棵可演进源码树）：
 
 ```
-{STP_SCRIPT_ROOT}/<script_name>/v<version>/<entry>.py   # 入口文件
-                                   _helper.py            # 同版本伴随模块（_ 开头不作入口）
+backend/agent/scripts/<script_name>/<entry>.py   # 族源码树入口（_ 开头不作入口）
+                                   _helper.py            # 伴随模块
                                    capabilities.json     # 能力声明，见下
+<STP_AEE_NFS_ROOT>/packages/<script_name>/<version>.tar.gz   # 站点包 = 发布单元（不可变）
 ```
 
+- 链路：改族树 → `python tools/dev/check_script_packages.py --register <name> <version>`
+  （manifest 追加登记，版本号不可复用）→ 合入 → `--publish --packages-root <STP_AEE_NFS_ROOT>/packages`
+  → `POST /scripts/scan`；Agent 在派发/预检时经 `tools_cache` 整包核验拉取。
 - `capabilities.json`：`{"capabilities": ["progress_stamps"]}` 等。给 PlanStep 配
   `stall_seconds` 停滞钟的前置条件就是脚本声明 `progress_stamps`（#136/#171 门禁）；
   未声明的脚本配 stall 会被校验拒绝。
-- 内容放置后由 scan 对账 sha256：内容漂移报 `conflicts` 且行不被改动（ADR-0020
-  不可变契约）；修复只能新建版本目录，原地改文件需 admin `force_rebaseline`
-  （有 PlanRun 在飞时被 409 拒绝）。
+- 包不可变（整包 sha，只增不改）：族树与最新登记不一致 = `check_script_packages` 门禁红
+  （改树必须登记新版本）；行与包不一致报 `conflicts`（库侧漂移，修复 = admin
+  `force_rebaseline` 重锚，有 PlanRun 在飞时被 409 拒绝）。
 
 ```bash
 curl -s -X POST '<base>/api/v1/scripts/scan' -H "Authorization: Bearer $TOKEN"
 # 返回 {created, skipped, deactivated, conflicts:[...]} —— conflicts 必须为空再继续
 ```
 
-### 4b. 兜底轨：REST 手动登记
+### 4b. 兜底轨：REST 手动登记（**Phase 3 起已失效**）
 
-scan 不便时逐条登记（fields 与 4a 同一套真源，`content_sha256` 自己算：
-`sha256sum <entry>.py`）：
+ADR-0051 Phase 3 起执行走 `tools_cache` 整包核验（`STP_SCRIPT_PACKAGES=strict` 缺省），
+REST 直登的行没有 `package_sha256`，派发必败——登记一律走 §4a 的 manifest + 包源链。
+以下原文仅作历史留存，勿再使用（#3278）：
 
 ```bash
 curl -s -X POST '<base>/api/v1/scripts' ... -d '{
@@ -114,7 +119,9 @@ curl -s -X POST '<base>/api/v1/scripts' ... -d '{
 - 改默认参数 = 建 `POST /scripts/{name}/versions`（新 version + 新 nfs_path +
   新 sha）；对旧版本的 PUT 只放行非 lifecycle 字段。
 - 停用 `DELETE /scripts/{id}`：仍被 PlanStep 引用时 409（先改 Plan）。
-- 两条轨都会被下一次 scan 以 NFS 树为准覆盖对账——别把 REST 当真源。
+- ~~两条轨都会被下一次 scan 以 NFS 树为准覆盖对账~~——Phase 3 起 scan
+  （`sync_scripts_from_manifest`）以 **manifest + 站点包**为准对账：退役由 `retired:true`
+  显式驱动，永不因盘上缺失反激活；REST 不是真源也不在对账链路里。
 
 ### 参数怎么进脚本（约定）
 
