@@ -216,3 +216,44 @@ def test_ensure_flash_prereqs_playbook_matches_preflight_udev():
     assert "groups: dialout" in text
     assert "agent_flash_prereq_packages | join(' ')" in text
     assert "stp-agent-priv restart" in text
+
+
+#: ModemManager 忽略 MTK 设备的厂商规则（SP Flash Tool 自带；已与 flashtool@1.2444.00.100 工具包
+#: 包根的 99-ttyacms.rules 逐字核对）。刷机期间防 MM 抢占 preloader/BROM 串口。
+_MM_IGNORE_RULE_PATH = "/etc/udev/rules.d/99-ttyacms.rules"
+_MM_IGNORE_RULE_LINE = 'ATTRS{idVendor}=="0e8d", ENV{ID_MM_DEVICE_IGNORE}="1"'
+
+
+def _mm_rule_tasks(playbook: Path) -> list[dict]:
+    tasks = yaml.safe_load(playbook.read_text(encoding="utf-8"))[0]["tasks"]
+    return [
+        t for t in tasks
+        if t.get("ansible.builtin.copy", {}).get("dest") == _MM_IGNORE_RULE_PATH
+    ]
+
+
+def test_modemmanager_ignore_rule_fixed_form_on_all_provisioning_surfaces():
+    """ADR-0040 D8 R2：MM 忽略规则不再从 agent/resources/flashtool 拷——资源层退役后安装链不下发
+    resources/，三个供给面（install_agent.sh §4b / ensure_flash_prereqs.yml / update_agent.yml
+    opt-in 段）改写同一固定形态，与厂商原件逐字一致。"""
+    text = _install_text()
+    assert f'UDEV_MM_RULE="{_MM_IGNORE_RULE_PATH}"' in text
+    assert f"UDEV_MM_LINE='{_MM_IGNORE_RULE_LINE}'" in text
+    for playbook in (ENSURE_PLAYBOOK, UPDATE_PLAYBOOK):
+        tasks = _mm_rule_tasks(playbook)
+        assert len(tasks) == 1, f"{playbook.name} 需恰好一个 MM 忽略规则任务"
+        assert tasks[0]["ansible.builtin.copy"]["content"] == _MM_IGNORE_RULE_LINE + "\n"
+
+
+def test_update_playbook_mm_rule_is_opt_in_and_reloads_udev():
+    """update 链的 MM 规则与 #2133 段同一开关门控（常规更新不碰系统规则面），且变更触发 udev 重载。"""
+    (task,) = _mm_rule_tasks(UPDATE_PLAYBOOK)
+    when = task.get("when")
+    conds = when if isinstance(when, list) else [when]
+    assert any("agent_ensure_flash_prereqs" in str(c) for c in conds), task
+    tasks = _playbook_tasks()
+    reload_task = next(t for t in tasks if t.get("name") == "Reload udev rules after rule change (#2133)")
+    assert "agent_flash_udev_mm_rule.changed" in str(reload_task.get("when")), reload_task
+    ensure_tasks = yaml.safe_load(ENSURE_PLAYBOOK.read_text(encoding="utf-8"))[0]["tasks"]
+    ensure_reload = next(t for t in ensure_tasks if t.get("name") == "Reload udev rules after rule change (#2133)")
+    assert "agent_flash_udev_mm_rule.changed" in str(ensure_reload.get("when")), ensure_reload

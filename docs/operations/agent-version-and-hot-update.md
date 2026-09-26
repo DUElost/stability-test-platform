@@ -86,7 +86,7 @@ Host UI（`ExpandableHostTable`）展示协议版本、部署摘要、code sync 
 构建、传输资源层，也不再写 `ARTIFACT_DIGEST_RESOURCES`；`--force` 只强制 `agent-code` 全量。
 主机上的 `resources/` 由 wrapper 的 protect-only 原样保留（退役不做主机清理）；
 `host.agent_resources_digest` 仍随心跳入库、不参与任何判定（R4 停报停写）。下段 Ansible
-通道的资源推送随 R2 撤除。
+通道同样不再推送资源（R2）。
 
 **顺序（#218，避免 Wave 3 竞态）**：
 
@@ -98,12 +98,15 @@ UI：主机管理页单机「热更新」；浮动批量栏支持多选主机的
 
 CLI：`backend/scripts/batch_hot_update.py`、`tools/ansible/playbooks/update_agent.yml`。
 
-**Ansible 通道身份簿记（ADR-0040 §5-3，#1997）**：`update_agent.yml` 的 rsync
-覆盖两层载荷（代码树 + schema + `resources/**` 除 `mtbf/`），health 验证通过
-后经 `tools/ansible/compute_deploy_digest.py`（stdlib-only，复用 Agent 镜像
-算法）现算双身份并写入远端 `ARTIFACT_DIGEST` / `ARTIFACT_DIGEST_RESOURCES`
-（resources 分区为空时跳过写）。排除集契约与部署 digest 输入集对齐
-（`test_*.py` 宽模式、`venv//logs/`、双身份文件 exclude+protect）。
+**Ansible 通道身份簿记（ADR-0040 §5-3，#1997；D8 R2 起单层）**：`update_agent.yml` 的 rsync
+只同步代码树（+ schema）；`resources/` **整树**是主机本地路径（exclude + protect：不下发、
+不删除），因此从没有 resources 的 git worktree 同步也不会清空主机资源面（原 #2166 源树前置
+断言已撤）。health 验证通过后经 `tools/ansible/compute_deploy_digest.py`（stdlib-only，复用
+契约包算法）现算 agent-code 身份并写入远端 `ARTIFACT_DIGEST`；不再写 `ARTIFACT_DIGEST_RESOURCES`
+（主机上的存量文件仍受保护，R4 处置）。`install_agent.yml` 同口径：安装脚本不拷 `resources/`，
+ModemManager 忽略规则 `99-ttyacms.rules`（此前从 `resources/flashtool` 拷）改由安装脚本与
+`ensure_flash_prereqs.yml` 写固定形态。排除集契约与部署 digest 输入集对齐（`test_*.py` 宽模式、
+`venv//logs/`、身份文件 exclude+protect）。
 
 **升级门禁与维护窗口（#960 / #1249，所有入口统一）**：升级前必须经控制面
 `POST /api/v1/agent/hosts/{id}/upgrade-gate` 申请门禁——该 host 有活跃 Job 时默认 **409**；
@@ -124,7 +127,7 @@ CLI：`backend/scripts/batch_hot_update.py`、`tools/ansible/playbooks/update_ag
 | UI 显示「内容漂移」 | 判据是 digest：`host.agent_artifact_digest` ≠ 控制面现算 desired（ADR-0040 v1.1）。检查远端 `agent/ARTIFACT_DIGEST` 是否写入并随心跳上报；**revision 不等不再构成 drift**（期望修订取仓库 HEAD，见 §1） |
 | UI 显示「未知」 | 主机从未上报 digest（#1907 前部署 / 新装未心跳）→ 等一次心跳，或首次 `--force` 迁移一次写入身份文件；**不是**待更新 |
 | 每次热更新都全量（不 no-op） | 远端 `agent/ARTIFACT_DIGEST` 是否存在且被心跳上报（`host.agent_artifact_digest` 非空）；digest 判定见 ADR-0040；带外改文件属信任模型例外（§7-3） |
-| Ansible 更新后仍 drift 一轮 | `update_agent.yml` 是否跑到了「Write agent ARTIFACT_DIGEST(_RESOURCES)」任务（health 通过后才写）；`compute_deploy_digest.py` 是否与控制面同 checkout 现算；旧 playbook（< #1997）不写身份文件 |
+| Ansible 更新后仍 drift 一轮 | `update_agent.yml` 是否跑到了「Write agent ARTIFACT_DIGEST」任务（health 通过后才写）；`compute_deploy_digest.py` 是否与控制面同 checkout 现算；旧 playbook（< #1997）不写身份文件 |
 | 校验 / schema 不一致 | 热更新是否带上 `pipeline_schema.json`（见 2026-07 host-update 修复） |
 
 环境变量细节：[../development/environment-variables.md](../development/environment-variables.md)。

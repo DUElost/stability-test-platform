@@ -36,15 +36,19 @@ agent_install_excludes:
   - "stp_schemas/"
   - ".deps_installed_sha"
 
-# 主机本地资源（不在 Git，由主机侧手工布放；如 MTBF APK 三件套）。
-# 升级同步策略 = 不传输 + 不删除，与 host_updater.py 热更新的
-# `--exclude='resources/mtbf/'` 语义一致（#1248）。
+# 主机本地路径：升级同步策略 = 不传输 + 不删除（#1248）。
+#
+# ADR-0040 D8 R2：`resources/` **整树**归主机本地——host-resources 层已退役
+# （flashtool / AIMonkey 改由 ADR-0051 D7 工具包承接），Ansible 不再下发它，也不得删它：
+# 主机上的存量副本与 `resources/mtbf/`（手工布放的 MTBF APK 三件套）原样保留，退役不做
+# 主机清理。副作用正是 #2166 想要的安全性：从**任何**源树（含没有 resources 的 git
+# worktree）同步都不会再清空主机资源面（#2133 事故形态），源树断言随之撤除。
 #
 # 两个 flag 必须成对出现：`--exclude` 单独用会被 `--delete-excluded`
-# 当作「可删的排除项」清掉（本 issue 根因）；只发 protect 则挡不住
-# 源目录同名文件覆盖主机本地布放版本。
+# 当作「可删的排除项」清掉（#1248 根因）；只发 protect 则挡不住
+# 源目录同名文件覆盖主机本地版本。
 agent_host_local_paths:
-  - "resources/mtbf/"
+  - "resources/"
   # ADR-0040 D2（#1997）：部署身份文件——host 级状态，rsync --delete 不得
   # 清掉（清掉即心跳丢 current → 控制面误判 drift 多做一次全量）。写入由
   # 本 playbook 在 health 通过后显式完成。

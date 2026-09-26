@@ -28,69 +28,9 @@
           AGENT_SECRET（至少 16 字符），或通过环境变量 AGENT_SECRET /
           vault_agent_secret 覆盖后重试。
 
-    # #2166（#2133 实测事故防复发）：playbook 以 rsync --delete 同步 agent 树，
-    # 而 backend/agent/resources/（230MB）**不在 git**——任何 worktree 都没有它；
-    # 源树缺 resources 时会把主机侧 agent/resources/ 当"已删除"清空
-    # （2026-09-15 实测：.82 被削到 9.3M、flashtool 全失，canary 失败）。
-    # 前置断言：源树必须有 resources/ 且含 flashtool 入口；确要清空资源面时
-    # 用 -e agent_allow_empty_resources=true 显式放行（会打警告并在 summary 标注）。
-    - name: Stat source-tree resources dir (#2166)
-      delegate_to: localhost
-      become: false
-      run_once: true
-      ansible.builtin.stat:
-        path: "{{ agent_source_dir }}/resources"
-        follow: true          # 2.19 起 stat.follow 默认 no：软链入树的合规做法需显式 follow
-      register: agent_source_resources_dir
-      failed_when: false
-
-    # 用 find(follow=true) 而非 fileglob：fileglob 不跟随目录软链，
-    # 会把"resources 软链进 worktree"的合规做法误判为缺失（实测）。
-    - name: Locate flashtool entry in source-tree resources (#2166)
-      delegate_to: localhost
-      become: false
-      run_once: true
-      ansible.builtin.find:
-        paths: "{{ agent_source_dir }}/resources"
-        patterns: "flash_tool"
-        recurse: true
-        file_type: file
-        follow: true
-      register: agent_source_flash_tool_find
-      failed_when: false
-
-    - name: Assert source tree carries agent resources (#2166)
-      delegate_to: localhost
-      become: false
-      run_once: true
-      ansible.builtin.assert:
-        that:
-          - agent_allow_empty_resources | default(false) | bool
-            or (agent_source_resources_dir.stat.exists | default(false)
-                and agent_source_resources_dir.stat.isdir | default(false)
-                and agent_source_flash_tool_find.matched | default(0) | int > 0)
-        fail_msg: >-
-          源树缺可分发 resources（{{ agent_source_dir }}）：
-          resources 目录 exists={{ agent_source_resources_dir.stat.exists | default(false) }}、
-          flashtool 入口 {{ agent_source_flash_tool_find.matched | default(0) }} 个。
-          本 playbook 以 rsync --delete 同步，缺 resources 会把主机侧
-          agent/resources/ 清空（#2133 实测事故：flashtool 全失）。
-          规避：① 从主 checkout 跑（该树有 resources）；② 或把 resources
-          拷入/软链入当前树（软链亦可，断言按 find follow 判定）；
-          ③ 确要清空主机资源面才用 -e agent_allow_empty_resources=true。
-        success_msg: >-
-          源树 resources 就绪：flashtool 入口 {{ agent_source_flash_tool_find.matched }} 个。
-
-    - name: Warn when syncing from a source tree without resources (#2166)
-      delegate_to: localhost
-      become: false
-      run_once: true
-      ansible.builtin.debug:
-        msg: >-
-          WARNING: agent_allow_empty_resources=true —— 本次从无 resources 的源树同步，
-          主机侧 agent/resources/ 将被清空（与 #2133 事故同款）；仅应在确要清理资源面时使用。
-      when: agent_allow_empty_resources | default(false) | bool
-
+    # ADR-0040 D8 R2：原 #2166 源树 resources 前置断言已撤——`resources/` 整树改为 host-local
+    # （exclude + protect，见 roles/agent_deploy/defaults），从任何源树（含没有 resources 的 git
+    # worktree）同步都不会再清空主机资源面（#2133 事故形态），也不再向主机下发资源。
     - name: Load agent rsync policy from role defaults
       ansible.builtin.include_vars:
         file: "{{ playbook_dir }}/../roles/agent_deploy/defaults/main.yml"
@@ -648,7 +588,6 @@
             # `["sha256:…"]` → agent 校验（^sha256:[0-9a-f]{64}$）拒绝、按缺失处理。
             # 改用语义确定的 regex_findall（捕获组列表）取首元素，空匹配兜底空串。
             agent_code_artifact_digest: "{{ (agent_deploy_digests.stdout | regex_findall('(?m)^CODE_DIGEST=(\\S+)$') or ['']) | first }}"
-            agent_resources_artifact_digest: "{{ (agent_deploy_digests.stdout | regex_findall('(?m)^RESOURCES_DIGEST=(\\S+)$') or ['']) | first }}"
           when: agent_deploy_digests.stdout is defined
 
         - name: Write agent ARTIFACT_DIGEST (ADR-0040 D2)
@@ -663,18 +602,6 @@
             - agent_code_change_lines | length > 0
             - agent_code_artifact_digest | length > 0
 
-        - name: Write agent ARTIFACT_DIGEST_RESOURCES (ADR-0040 P2)
-          become: true
-          ansible.builtin.copy:
-            content: "{{ agent_resources_artifact_digest }}\n"
-            dest: "{{ agent_install_dir }}/agent/ARTIFACT_DIGEST_RESOURCES"
-            owner: "{{ agent_user }}"
-            group: "{{ agent_group }}"
-            mode: "0644"
-          when:
-            - agent_code_change_lines | length > 0
-            - agent_resources_artifact_digest | length > 0
-
         # #2112 ②：写完即验（fail-closed）——回读 marker 并断言「形态 + 取值」。
         # 本缺陷（列表形态）在修复前会静默通过写入任务，只有回读断言能当场拦住。
         - name: Read back deployed artifact digests (#2112)
@@ -684,7 +611,6 @@
           register: agent_digest_readback
           loop:
             - { file: "ARTIFACT_DIGEST", want: "{{ agent_code_artifact_digest }}" }
-            - { file: "ARTIFACT_DIGEST_RESOURCES", want: "{{ agent_resources_artifact_digest }}" }
           loop_control:
             label: "{{ item.file }}"
           when:
@@ -800,7 +726,6 @@
           code_version: "{{ agent_code_version | default('') }}"
           deps_refreshed: "{{ agent_deps_refreshed | default(false) }}"
           restart_required: "{{ agent_update_requires_restart | default(false) }}"
-          allow_empty_resources: "{{ agent_allow_empty_resources | default(false) }}"
           backup_dir: "{{ agent_backup_dir if (agent_code_change_lines | default([]) | length > 0) else 'skipped' }}"
           agentctl_backup: "{{ agent_agentctl_backup_path if (agentctl_change_lines | default([]) | length > 0) else 'skipped' }}"
           service_unit_backup: "{{ agent_service_backup_path if (agent_service_change_lines | default([]) | length > 0) else 'skipped' }}"
@@ -828,7 +753,8 @@
     # ── 刷机前置归位（#2133 / ADR-0037 D5，opt-in）────────────────────────
     # 运行期不再装包/加组/写规则（wrapper 窄面只提供固定 udev 自愈）；本段由
     # 运维显式开启（-e agent_ensure_flash_prereqs=true）给刷机主机补齐：
-    #   dialout 成员 + MTK ttyACM 规则（0660+dialout，非成员才 0666）+ Qt/X 运行库五件。
+    #   dialout 成员 + MTK ttyACM 规则（0660+dialout，非成员才 0666）+ ModemManager 忽略规则
+    #   + Qt/X 运行库五件。
     # 默认关闭：常规更新不触碰系统包面。刻意放在门禁释放之后——本段失败不得
     # 让升级门禁悬挂（#1249 教训）；缺失项由 flash_preflight 如实报出。
     - name: Check dialout group exists (#2133)
@@ -894,6 +820,20 @@
         - agent_ensure_flash_prereqs | default(false) | bool
         - agent_flash_dialout_member.rc | default(1) != 0
 
+    # ADR-0040 D8 R2：ModemManager 忽略 MTK 设备——资源层退役前只由安装链从 resources/flashtool
+    # 拷入厂商规则；现为固定形态（与 install_agent.sh §4b / ensure_flash_prereqs.yml 逐字一致）。
+    - name: Ensure ModemManager ignores MTK devices — 99-ttyacms.rules (ADR-0040 D8)
+      become: true
+      ansible.builtin.copy:
+        dest: /etc/udev/rules.d/99-ttyacms.rules
+        content: "ATTRS{idVendor}==\"0e8d\", ENV{ID_MM_DEVICE_IGNORE}=\"1\"\n"
+        owner: root
+        group: root
+        mode: "0644"
+      register: agent_flash_udev_mm_rule
+      failed_when: false
+      when: agent_ensure_flash_prereqs | default(false) | bool
+
     - name: Reload udev rules after rule change (#2133)
       become: true
       ansible.builtin.command: udevadm control --reload
@@ -901,9 +841,10 @@
       failed_when: false
       when:
         - agent_ensure_flash_prereqs | default(false) | bool
-        # 两个 copy 任务互补触发，故取并集（register 各自独立，避免被 skip 覆盖）
+        # copy 任务各自独立 register（避免被 skip 覆盖），任一变更即重载
         - (agent_flash_udev_rule_0660.changed | default(false))
           or (agent_flash_udev_rule_0666.changed | default(false))
+          or (agent_flash_udev_mm_rule.changed | default(false))
 
     - name: Ensure flash prerequisite packages (#2133)
       become: true

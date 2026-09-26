@@ -1,6 +1,6 @@
 # 刷机前置归位（主机页入口 / #2133 / ADR-0037 D5）
 #
-# 与 update_agent.yml 的 opt-in 段同源：dialout + MTK ttyACM 规则 + Qt/X 五库。
+# 与 update_agent.yml 的 opt-in 段同源：dialout + MTK ttyACM 规则 + ModemManager 忽略规则 + Qt/X 五库。
 # 本 playbook **强制**执行（不依赖 agent_ensure_flash_prereqs 开关），供控制面
 # POST /hosts/{id}/flash-prereqs/ensure 调用；常规热更新仍不触碰系统包面。
 #
@@ -63,6 +63,20 @@
       failed_when: false
       when: agent_flash_dialout_member.rc | default(1) != 0
 
+    # ADR-0040 D8 R2：ModemManager 忽略 MTK 设备（刷机期间防 MM 抢占 preloader/BROM 串口）——此前只由
+    # 安装链从 agent/resources/flashtool 拷入厂商规则；资源层退役后改固定形态，与 install_agent.sh §4b
+    # 及厂商原件（flashtool@1.2444.00.100 包根 99-ttyacms.rules）逐字一致。
+    - name: Ensure ModemManager ignores MTK devices — 99-ttyacms.rules (ADR-0040 D8)
+      become: true
+      ansible.builtin.copy:
+        dest: /etc/udev/rules.d/99-ttyacms.rules
+        content: "ATTRS{idVendor}==\"0e8d\", ENV{ID_MM_DEVICE_IGNORE}=\"1\"\n"
+        owner: root
+        group: root
+        mode: "0644"
+      register: agent_flash_udev_mm_rule
+      failed_when: false
+
     - name: Reload udev rules after rule change (#2133)
       become: true
       ansible.builtin.command: udevadm control --reload
@@ -71,6 +85,7 @@
       when: >-
         (agent_flash_udev_rule_0660.changed | default(false))
         or (agent_flash_udev_rule_0666.changed | default(false))
+        or (agent_flash_udev_mm_rule.changed | default(false))
 
     - name: Ensure flash prerequisite packages (#2133)
       become: true
@@ -116,6 +131,7 @@
           dialout_usermod_failed={{ agent_flash_dialout.failed | default(false) }}
           udev_rule_changed={{ (agent_flash_udev_rule_0660.changed | default(false))
           or (agent_flash_udev_rule_0666.changed | default(false)) }}
+          mm_ignore_rule_changed={{ agent_flash_udev_mm_rule.changed | default(false) }}
           packages_rc={{ agent_flash_prereq_pkgs.rc | default('n/a') }}
           packages_out={{ agent_flash_prereq_pkgs.stdout_lines | default([]) | join(' | ') }}
           agent_restarted={{ agent_flash_restart.rc is defined }}

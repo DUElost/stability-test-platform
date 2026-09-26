@@ -161,3 +161,22 @@ def test_api_url_refresh_never_writes_empty_override():
         why="#1250：未注入的 agent_api_url 默认空，无条件回写会把心跳 URL 打成空",
     )
     assert "Resolve upgrade gate target (explicit vars win, else deployed .env)" in text
+
+
+def test_touched_agent_playbooks_pass_ansible_syntax_check():
+    """ansible-playbook --syntax-check（原挂在已撤的 #2166 守卫文件里，ADR-0040 D8 R2 移至此处并
+    扩到安装与刷机前置两份 playbook——三份都随资源层退役改过）。"""
+    import shutil
+    import subprocess
+
+    import pytest
+
+    if shutil.which("ansible-playbook") is None:
+        pytest.skip("ansible 不可用")
+    repo_root = Path(__file__).resolve().parents[1]
+    for name in ("update_agent.yml", "install_agent.yml", "ensure_flash_prereqs.yml"):
+        proc = subprocess.run(
+            ["ansible-playbook", "--syntax-check", str(repo_root / "tools/ansible/playbooks" / name)],
+            capture_output=True, text=True, cwd=str(repo_root / "tools/ansible"),
+        )
+        assert proc.returncode == 0, f"{name}:\n{proc.stdout}{proc.stderr}"

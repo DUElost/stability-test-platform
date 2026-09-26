@@ -196,8 +196,8 @@
       delay: 5
       until: agent_health_after_install.rc == 0
 
-    # ── ADR-0040 D2/P2：全新安装也要落部署身份 ────────────────────────────
-    # 热更新通道在健康收敛后写 ARTIFACT_DIGEST(_RESOURCES)；安装通道此前不写，
+    # ── ADR-0040 D2：全新安装也要落部署身份 ─────────────────────────────────
+    # 热更新通道在健康收敛后写 ARTIFACT_DIGEST；安装通道此前不写，
     # 于是站点侧只能看到空摘要——内容一致性无法断言（S5 会如实报
     # agent_digest_missing，而不是静默通过）。摘要按与热更新相同基准在控制机
     # 计算（源码树 + schema arcname），保证两种通道身份可直接比较。
@@ -219,7 +219,6 @@
         # 缺失处理）。改用语义确定的 regex_findall（捕获组列表）取首元素，空匹配兜底空串；
         # 升级路径（update_agent.yml）已在 #2112 硬化，装机路径此前漏改。
         agent_code_artifact_digest: "{{ (agent_deploy_digests.stdout | regex_findall('(?m)^CODE_DIGEST=(\\S+)$') or ['']) | first }}"
-        agent_resources_artifact_digest: "{{ (agent_deploy_digests.stdout | regex_findall('(?m)^RESOURCES_DIGEST=(\\S+)$') or ['']) | first }}"
 
     - name: Write agent ARTIFACT_DIGEST (ADR-0040 D2)
       become: true
@@ -231,16 +230,6 @@
         mode: "0644"
       when: agent_code_artifact_digest | length > 0
 
-    - name: Write agent ARTIFACT_DIGEST_RESOURCES (ADR-0040 P2)
-      become: true
-      ansible.builtin.copy:
-        content: "{{ agent_resources_artifact_digest }}\n"
-        dest: "{{ agent_install_dir }}/agent/ARTIFACT_DIGEST_RESOURCES"
-        owner: "{{ agent_user }}"
-        group: "{{ agent_group }}"
-        mode: "0644"
-      when: agent_resources_artifact_digest | length > 0
-
     # #2275：装机路径此前只写不验——回读 marker 并断言「形态 + 取值」，与升级路径
     # （#2112 ②）同一对；列表形态这类缺陷只有回读断言能当场拦住。
     - name: Read back deployed artifact digests (#2275)
@@ -250,7 +239,6 @@
       register: agent_digest_readback
       loop:
         - { file: "ARTIFACT_DIGEST", want: "{{ agent_code_artifact_digest }}" }
-        - { file: "ARTIFACT_DIGEST_RESOURCES", want: "{{ agent_resources_artifact_digest }}" }
       loop_control:
         label: "{{ item.file }}"
       when: item.want | length > 0

@@ -441,11 +441,12 @@ class TestInstallPlaybookContract:
         # ARTIFACT_DIGEST，Agent 校验失败即上报空摘要（I4 实验室实测）。
         extract = self._task("Extract deployment digests")
         facts = extract["ansible.builtin.set_fact"]
-        for key in ("agent_code_artifact_digest", "agent_resources_artifact_digest"):
+        # ADR-0040 D8 R2：host-resources 层退役，安装只落 agent-code 身份
+        assert set(facts) == {"agent_code_artifact_digest"}, facts
+        for key in ("agent_code_artifact_digest",):
             assert facts[key].rstrip('"').endswith("| first") or "| first }}" in facts[key], facts[key]
         for name, digest in (
             ("Write agent ARTIFACT_DIGEST (ADR-0040 D2)", "agent_code_artifact_digest"),
-            ("Write agent ARTIFACT_DIGEST_RESOURCES (ADR-0040 P2)", "agent_resources_artifact_digest"),
         ):
             task = self._task(name)
             options = task["ansible.builtin.copy"]

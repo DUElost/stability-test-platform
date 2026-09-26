@@ -86,6 +86,18 @@ resolve_pipeline_schema() {
     return 1
 }
 
+# Agent 代码落盘（ADR-0040 D8 R2）：源树 resources/ 不随安装下发——host-resources 层已退役
+# （flashtool / AIMonkey 改由 ADR-0051 D7 工具包承接）。目标侧已有的 resources/（重装的存量
+# 主机、手工布放的 mtbf/ 等）不碰：退役不做主机清理。点文件不复制（与原 `cp -r src/*` 同）。
+copy_agent_tree() {
+    local src="$1" dest="$2" entry
+    for entry in "$src"/*; do
+        [ -e "$entry" ] || continue
+        [ "$(basename "$entry")" = "resources" ] && continue
+        cp -r "$entry" "$dest/" 2>/dev/null || true
+    done
+}
+
 # 版本标识：优先取调用方注入（Ansible 传控制面仓库 HEAD），
 # 其次从脚本所在 git 仓库派生；都不可得时留空（不阻断安装）。
 resolve_code_version() {
@@ -207,7 +219,7 @@ echo_info "sudo 权限已配置: /etc/sudoers.d/${SERVICE_NAME}（wrapper 模式
 echo_info "复制 Agent 代码..."
 # 只复制 agent 目录（Agent 运行时不依赖 backend/ 其他模块）；
 # 但 backend/schemas/pipeline_schema.json 是运行时工件，单独安装（3.1）
-cp -r "$SCRIPT_DIR"/* "$INSTALL_DIR/agent/" 2>/dev/null || true
+copy_agent_tree "$SCRIPT_DIR" "$INSTALL_DIR/agent"
 # 清理测试文件和安装辅助文件
 rm -f "$INSTALL_DIR/agent/test_agent"*.py 2>/dev/null || true
 rm -f "$INSTALL_DIR/agent/test_aimonkey"*.py 2>/dev/null || true
@@ -246,21 +258,21 @@ chown -R "$USER:$GROUP" "$INSTALL_DIR"
 chmod 750 "$INSTALL_DIR"
 chmod 640 "$INSTALL_DIR/agent/"*.py 2>/dev/null || true
 
-# 4b. flashtool 二进制可执行 + udev 规则（自动刷机功能依赖）
-FLASHTOOL_DIR="$INSTALL_DIR/agent/resources/flashtool"
-if [ -d "$FLASHTOOL_DIR" ]; then
-    echo_info "配置 flash_tool 可执行权限..."
-    find "$FLASHTOOL_DIR" -maxdepth 3 -type f \( -name "flash_tool" -o -name "flash_tool.sh" -o -name "modemmanagercmd.sh" \) -exec chmod +x {} \; 2>/dev/null || true
-
-    # 部署 udev 规则：MTK preloader / ttyACM 设备权限
-    UDEV_SRC=$(find "$FLASHTOOL_DIR" -maxdepth 3 -name "99-ttyacms.rules" -type f 2>/dev/null | head -n 1)
-    if [ -n "$UDEV_SRC" ] && [ -d /etc/udev/rules.d ]; then
-        cp "$UDEV_SRC" /etc/udev/rules.d/99-ttyacms.rules 2>/dev/null && \
-            udevadm control --reload-rules 2>/dev/null && \
-            udevadm trigger 2>/dev/null && \
-            echo_info "udev 规则已部署: 99-ttyacms.rules" || \
-            echo_warn "udev 规则部署失败，刷机可能需要 sudo 才能访问 USB"
-    fi
+# 4b. ModemManager 忽略 MTK 设备（99-ttyacms.rules：刷机期间防 MM 抢占 preloader/BROM 串口）
+# ADR-0040 D8 R2：此前从 agent/resources/flashtool 拷 SP Flash Tool 自带的规则文件——资源层退役后
+# 安装链不再下发 resources/，改写**固定形态**：与厂商原件逐字一致（flashtool@1.2444.00.100 包根的
+# 99-ttyacms.rules），ensure_flash_prereqs.yml 与 update_agent.yml opt-in 段同源，由
+# tests/test_flash_provisioning_prereqs_2133.py 锁定。flash_tool 的可执行位随 D7 工具包 tar 成员
+# 携带，安装链不再 chmod。
+UDEV_MM_RULE="/etc/udev/rules.d/99-ttyacms.rules"
+UDEV_MM_LINE='ATTRS{idVendor}=="0e8d", ENV{ID_MM_DEVICE_IGNORE}="1"'
+if [ -d /etc/udev/rules.d ]; then
+    printf '%s\n' "$UDEV_MM_LINE" > "$UDEV_MM_RULE" 2>/dev/null && \
+        chmod 0644 "$UDEV_MM_RULE" && \
+        udevadm control --reload-rules 2>/dev/null && \
+        udevadm trigger 2>/dev/null && \
+        echo_info "udev 规则已部署: 99-ttyacms.rules（ModemManager 忽略 MTK 设备）" || \
+        echo_warn "99-ttyacms.rules 部署失败：刷机期间 ModemManager 可能抢占 MTK 串口"
 fi
 
 # 4c. 刷机前置归位（#2133 / ADR-0037 D5；#2284 最小权限；#2353 判据改成员资格）

@@ -213,3 +213,38 @@ def test_install_script_configures_agent_log_rotation():
     assert "size 50M" in script
     assert "rotate 5" in script
     assert "copytruncate" in script
+
+
+def test_copy_agent_tree_skips_resources_and_keeps_host_copy(tmp_path):
+    """ADR-0040 D8 R2：安装不再下发 resources/；目标侧已有的 resources/ 原样保留（退役不清理主机）。
+
+    反例（R2 前的 `cp -r src/*`）：源树里的 resources/aimonkey 会被拷进安装目录。
+    """
+    src = tmp_path / "src"
+    dest = tmp_path / "dest"
+    (src / "pkg").mkdir(parents=True)
+    (src / "main.py").write_text("code\n", encoding="utf-8")
+    (src / "pkg" / "mod.py").write_text("mod\n", encoding="utf-8")
+    (src / "resources" / "aimonkey").mkdir(parents=True)
+    (src / "resources" / "aimonkey" / "monkey.bin").write_text("control-plane\n", encoding="utf-8")
+    (dest / "resources" / "mtbf").mkdir(parents=True)
+    (dest / "resources" / "mtbf" / "apk.bin").write_text("host\n", encoding="utf-8")
+
+    script = f"{_function_source('copy_agent_tree')}\n" 'copy_agent_tree "$1" "$2"\n'
+    completed = subprocess.run(
+        ["bash", "-c", script, "copier", str(src), str(dest)],
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert (dest / "main.py").read_text(encoding="utf-8") == "code\n"
+    assert (dest / "pkg" / "mod.py").is_file()
+    assert not (dest / "resources" / "aimonkey").exists(), "源树 resources 不得随安装下发"
+    assert (dest / "resources" / "mtbf" / "apk.bin").read_text(encoding="utf-8") == "host\n"
+
+
+def test_install_script_copies_agent_code_via_resource_skipping_copier():
+    """安装步骤 3 必须经 `copy_agent_tree`（跳过 resources/）落盘 Agent 代码。"""
+    text = INSTALL_SCRIPT.read_text(encoding="utf-8")
+    assert 'copy_agent_tree "$SCRIPT_DIR" "$INSTALL_DIR/agent"' in text
