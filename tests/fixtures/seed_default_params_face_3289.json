@@ -1,0 +1,19 @@
+{
+  "_meta": {
+    "caliber": "仅键名快照（不含值）。seed_face = 隔离空库 alembic head + scan 后的 active 面；与纯 head 面的换算：head 行 ∩ is_active ∩ 非 manifest-retired（scan 对 default_params 零写入，retired 既有行被显式退役——守卫测试按此口径从 tool_manifest.json 复现，不依赖站点包源）。empty_active_versions 仅 2026-09-26 全量面参考，不参与断言",
+    "empty_active_versions": 106,
+    "generated": "2026-09-26",
+    "note_20260926": "基线初版在 db7fe0c3（D7 第 4 片 retired 批）前生成、含 flash_preflight@1.0.1 三键；该批把它翻 retired 后 active 面合法变空——棘轮按新口径重生成",
+    "source": "alembic head + sync_scripts_from_manifest 于隔离空库（stp_3389_probe），生产只读比对 #3289"
+  },
+  "registered_exceptions": {
+    "install_apk@1.0.1": {
+      "exit": "owner 在 a（回灌 Git 侧 seed/登记面，按 #3203 拆分口径）/ b（受控导出物 + agent-host-onboard SOP）间裁决；裁前保持登记态",
+      "missing_vs_production": [
+        "apk_path"
+      ],
+      "reason": "生产长期运营修正值，从未进 Git 侧 seed；唯一生产消费 Plan #14 已于 2026-09-25 受控迁移把值固化进 step.params（step.params 优先，运行时不依赖 default_params 兜底）"
+    }
+  },
+  "seed_face": {}
+}
