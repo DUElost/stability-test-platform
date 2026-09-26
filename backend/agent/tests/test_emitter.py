@@ -16,7 +16,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from backend.agent.registry.local_db import LocalDB
-from backend.agent.watcher.contracts import ContractViolation
+from backend.agent.contracts.watcher_contracts import ContractViolation
 from backend.agent.watcher.emitter import OutboxDrainer, SignalEmitter
 
 

@@ -81,6 +81,9 @@ def test_aee_reconciler_imports_when_only_agent_package_is_deployed(tmp_path):
         "import agent.aee.db_history",
         "import agent.aee.processor",
         "import agent.aee.reconciler",
+        # ADR-0054：主机布局下 AEE 元数据必须走包内契约（相对导入解析为
+        # agent.contracts.aee_metadata）；旧 core 壳已删，也不得再被需要。
+        "assert 'agent.contracts.aee_metadata' in sys.modules",
         "assert 'backend.core.aee_metadata' not in sys.modules",
     ])
     env = os.environ.copy()

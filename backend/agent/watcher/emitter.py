@@ -10,7 +10,7 @@
                      后端 (job_id, seq_no) ON CONFLICT DO NOTHING 兜底幂等。
 
 契约：
-    envelope 字段形态见 backend/agent/watcher/contracts.py::LogSignalEnvelope
+    envelope 字段形态见 backend/agent/contracts/watcher_contracts.py::LogSignalEnvelope
     后端端点 shape 见 backend/api/routes/agent_api.py::LogSignalBatchIn
     幂等键 (job_id, seq_no) 在 LocalDB UNIQUE 约束 + 后端 DB 约束双重保证。
 
@@ -31,7 +31,7 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
-from .contracts import validate_log_signal
+from ..contracts.watcher_contracts import validate_log_signal
 
 logger = logging.getLogger(__name__)
 

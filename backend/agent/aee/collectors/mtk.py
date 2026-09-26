@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ..collector import EventMetadata
-from ..metadata import (
+from ...contracts.aee_metadata import (
     infer_aee_subtype_from_paths,
     normalize_package_name,
     parse_exp_main_summary,
