@@ -2,7 +2,7 @@
 
 舱壁的判据不是「限流了多少」，而是三条形态：
 
-1. 同时持有名额 ≤ `STP_TERMINAL_BULKHEAD_CONCURRENCY`（默认 16）；
+1. 同时持有名额 ≤ `STP_TERMINAL_BULKHEAD_CONCURRENCY`（默认 8，#3403）；
 2. 等待超过 `STP_TERMINAL_BULKHEAD_WAIT_MS`（默认 500ms）**立即拒绝**，不占着等；
 3. 拒绝路径**不漏名额**——`wait_for` 取消 `semaphore.acquire()` 后计数必须还回去，
    否则一次过载波会把舱壁永久缩容（这正是 R523 里最贵的形态：故障自己放大自己）。
@@ -36,7 +36,7 @@ def _get(name: str, labels: dict | None = None) -> float:
 def test_limits_default_and_env(monkeypatch):
     monkeypatch.delenv("STP_TERMINAL_BULKHEAD_CONCURRENCY", raising=False)
     monkeypatch.delenv("STP_TERMINAL_BULKHEAD_WAIT_MS", raising=False)
-    assert tb.limits() == (16, 0.5)
+    assert tb.limits() == (8, 0.5)
 
     monkeypatch.setenv("STP_TERMINAL_BULKHEAD_CONCURRENCY", "3")
     monkeypatch.setenv("STP_TERMINAL_BULKHEAD_WAIT_MS", "250")
@@ -48,7 +48,7 @@ def test_limits_fall_back_on_bad_env(monkeypatch, raw):
     """误配不得退化成「零闸门」或「无限等待」。"""
     monkeypatch.setenv("STP_TERMINAL_BULKHEAD_CONCURRENCY", raw)
     monkeypatch.setenv("STP_TERMINAL_BULKHEAD_WAIT_MS", raw)
-    assert tb.limits() == (16, 0.5)
+    assert tb.limits() == (8, 0.5)
 
 
 async def test_admits_at_most_concurrency_at_a_time(monkeypatch):

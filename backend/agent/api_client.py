@@ -54,7 +54,7 @@ def _get_post_retry_base_delay() -> float:
 # 三项旋钮（均可 env 覆盖）：
 # - `AGENT_TERMINAL_UPLOAD_CONCURRENCY`（默认 2）：同刻在飞的终态 POST 上限。
 #   单机设备多（R523 现场 max 23），abort/收尾会让它们同时收尾——上限把单机的
-#   瞬时连接需求压到中心舱壁（16）以内；
+#   瞬时连接需求压到中心舱壁（默认 8）以内；
 # - `AGENT_TERMINAL_ABORT_JITTER_SECONDS`（默认 5）：**abort 产生的终态**在首发前
 #   随机等 0–5s，削掉「同一瞬间几十台设备一起回传」的相位；
 # - `AGENT_POST_RETRIES`：仅在**outbox 入队也失败**时才回退到线程内重试
