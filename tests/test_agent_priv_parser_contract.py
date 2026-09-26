@@ -212,6 +212,14 @@ def test_wrapper_sync_env_emits_control_plane_sentinels(wrapper):
     assert hu._parse_env_synced("STP_ENV_SYNCED=A,B\nSTP_ENV_PATH_MISSING=\nOK") == ["A", "B"]
     assert hu._parse_env_paths_missing("STP_ENV_SYNCED=\nSTP_ENV_PATH_MISSING=\nOK") == {}
 
+    # #3356：退役键哨兵同款跨边界锁定（wrapper 发射、控制面解析）
+    assert 'print("STP_ENV_RETIRED_REMOVED=' in source
+    assert hu._parse_env_retired_removed(
+        "STP_ENV_SYNCED=\nSTP_ENV_RETIRED_REMOVED=A,B\nSTP_ENV_PATH_MISSING=\nOK"
+    ) == ["A", "B"]
+    assert hu._parse_env_retired_removed("STP_ENV_RETIRED_REMOVED=\nOK") == []
+    assert hu._parse_env_retired_removed("no sentinel") == []
+
     # 发射面唯一：远端脚本不再自带哨兵字面量
     script = hu._build_remote_script(
         install_dir="/opt/stability-test-agent",
@@ -223,3 +231,4 @@ def test_wrapper_sync_env_emits_control_plane_sentinels(wrapper):
     )
     assert "STP_ENV_SYNCED=" not in script
     assert "STP_ENV_PATH_MISSING=" not in script
+    assert "STP_ENV_RETIRED_REMOVED=" not in script

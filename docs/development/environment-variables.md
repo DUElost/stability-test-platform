@@ -188,6 +188,14 @@
 > 代价是两处维护：§6 每新增一行须同步把键加进 `tests/test_removed_env_keys.py` 的
 > `MIN_LEDGER_KEYS`，否则删掉该行**不会**红（〔#3099〕：此前这句写作「删掉一行则守卫红
 > （表内键是判据的下界）」，对非下界行不成立）。
+>
+> **本表同时是 hot-update 主机侧删键的登记源（#3356 候选 2）**：`backend/services/agent_env_sync.py`
+> 的 `RETIRED_ENV_KEYS` 经测试与本表**逐键相等**（双向红：这里加行/删行而运行时表不同步 ⇒ 红），
+> 每次热更新经特权 wrapper `sync-env --retired-keys-b64` 从主机 `.env` 删除这些行，实际删到的键
+> 回传哨兵 `STP_ENV_RETIRED_REMOVED`（API 响应 `env_keys_retired`，可审计）。退役一个**渲染键**的
+> 顺序：先从渲染面移除（`_install_dir_env_overrides` / fleet / agent-scoped 各表），再在本表加行并
+> 同步 `RETIRED_ENV_KEYS`——两步颠倒会被「退役键 ∩ 渲染面 = ∅」判据拦下（wrapper 收到相交集载荷
+> 直接 fail-closed，渲染面被静默删空）。
 
 | 键 | 状态 | 真实读取点 | 现状 / 落点 |
 |---|---|---|---|

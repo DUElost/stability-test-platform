@@ -264,3 +264,24 @@ def test_scan_universe_covers_the_faces_that_actually_drifted() -> None:
         assert path.is_file(), f"样例文件消失：{rel}"
         assert path in scanned, f"扫描面漏掉 #2661 漂移面：{rel}"
     assert len(scanned) > 500, f"扫描面过小（{len(scanned)}），判据已退化"
+
+
+def test_retired_env_keys_mirror_the_ledger() -> None:
+    """#3356 候选 2：运行时退役键表与 §6 台账**逐键相等**（双向钉死）。
+
+    - 运行时多出：主机侧会删一个未登记的键（登记面不再是唯一事实源）；
+    - 台账多出：登记了「已移除」却永远不从主机 `.env` 清理（删键永不下发的
+      原缺口以另一形态回归）。`RETIRED_ENV_KEYS` 是 §6 的主机侧执行面，
+      不另立第二份可漂移清单。
+    """
+    from backend.services.agent_env_sync import RETIRED_ENV_KEYS
+
+    ledger = set(ledger_keys(LEDGER.read_text(encoding="utf-8")))
+    unregistered = sorted(RETIRED_ENV_KEYS - ledger)
+    uncleaned = sorted(ledger - RETIRED_ENV_KEYS)
+    assert not unregistered and not uncleaned, (
+        "RETIRED_ENV_KEYS 与 environment-variables.md §6 失同步：\n"
+        f"  运行时多出（未登记就删主机行）：{unregistered}\n"
+        f"  台账多出（已登记却永不清理）：{uncleaned}\n"
+        "§6 加行/删行时同步更新 backend/services/agent_env_sync.py 的 RETIRED_ENV_KEYS"
+    )
