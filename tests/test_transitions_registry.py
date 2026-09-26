@@ -51,6 +51,9 @@ def test_checker_rejects_expired_active_on_real_ledger(checker, tmp_path):
     import datetime as dt
     doc = json.loads((ROOT / "docs/governance/transitions.json").read_text(encoding="utf-8"))
     assert doc["transitions"], "台账不得清空（清空即绕过）"
-    doc["transitions"][0]["due"] = "2020-01-01"
+    # 取「任一 active」而非 [0]：条目结项转 done 后 [0] 可能不再 active（done 条目过期不判红），
+    # 硬取下标会让本守卫随台账演进静默失效（2026-09-26 flash-tool-dir-env-injection 结项即此形态）
+    active = next(t for t in doc["transitions"] if t["status"] == "active")
+    active["due"] = "2020-01-01"
     errs = checker.check_ledger(doc, dt.date(2026, 9, 24), ROOT)
     assert any("已到期" in e for e in errs), errs

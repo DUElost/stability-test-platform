@@ -168,7 +168,7 @@ _INTERNAL_ONLY: dict[str, str] = {
     "STP_SCRIPT_SOURCE": "只写给脚本子进程的观测变量（package|tree），Agent 自身不读（非配置项）",
     # ADR-0051 v1.7 D7：脚本包 requires_tools 声明的工具目录键由引擎按步注入子进程（包根路径）；
     # 读点在 backend/agent/scripts/**（本清单不扫），清单可见的是 D7 端到端测试的子进程夹具。
-    "STP_FLASH_TOOL_DIR": "工具目录注入键：引擎按脚本包 requires_tools 声明逐步注入（ADR-0051 v1.7 D7）；过渡期另由 hot-update 按安装布局渲染（台账 flash-tool-dir-env-injection），运维不配置",
+    "STP_FLASH_TOOL_DIR": "工具目录注入键：引擎按脚本包 requires_tools 声明逐步注入（ADR-0051 v1.7 D7）；hot-update 渲染已撤（D7 第 4 片，台账结项），运维不配置",
     # #2026：以下 8 条随「`backend/scripts/**` 不再被误跳」首次进入清单——均为一次性
     # 诊断/引导脚本的 CLI 等价入参（各自有 `--backend` / `--host-id` / `--env-file`
     # 或本机默认值），不属部署环境配置，故声明内部而非登记进运维模板。

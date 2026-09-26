@@ -116,7 +116,6 @@ AGENT_PATH_ENV_KEYS: frozenset[str] = frozenset(
         "STP_UNISOC_SCAN_RESULT_SCRIPT",
         "STP_NFS_ROOT",
         "STP_FLASH_FIRMWARE_ROOT",
-        "STP_FLASH_TOOL_DIR",
     }
 )
 
@@ -145,14 +144,11 @@ def _install_dir_env_overrides(install_dir: str) -> dict[str, str]:
     return {
         "AGENT_INSTALL_DIR": root,
         "AIMONKEY_RESOURCE_DIR": f"{root}/agent/resources/aimonkey",
-        # ADR-0051 Phase 3 过渡止血：flash_firmware 的回退按 script_dir 数相对深度
-        # （`script_dir/../../../resources/flashtool/…`）——脚本改从 tools_cache 执行后该
-        # 深度指向不存在路径，刷机链断裂。**过渡**：与脚本 fallback 等值显式注入。
-        # 终态出口（ADR-0051 Phase 4）：flashtool 入包 + 脚本族新版本按 STP_AGENT_INSTALL_DIR
-        # 解析，落地后删除本键注入（回滚 = 恢复本行）。
-        "STP_FLASH_TOOL_DIR": (
-            f"{root}/agent/resources/flashtool/SP_Flash_Tool_Selector_exe_Linux_v1.2444.00.100"
-        ),
+        # STP_FLASH_TOOL_DIR 的 hot-update 渲染已撤（ADR-0051 v1.7 D7 第 4 片，台账
+        # flash-tool-dir-env-injection 结项）：flash 族在用版本在包内声明 requires_tools，由引擎
+        # 按步把 tools_cache/flashtool/<ver> 注入本步 env（fail-closed，不读主机值）。存量主机 .env
+        # 旧行惰性——被步骤注入覆盖，读主机值的旧版本已 retired；它仍是步骤级注入键，
+        # 不属 §6「已移除（无读取点）」语义，故不进 RETIRED_ENV_KEYS。
         "LOG_DIR": f"{root}/logs",
         "PYTHONPATH": root,
     }
