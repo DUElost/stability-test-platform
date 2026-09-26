@@ -170,11 +170,9 @@ def test_remote_script_priv_calls_are_accepted_by_wrapper_parser(wrapper):
         install_dir="/opt/stability-test-agent",
         service_name="stability-test-agent",
         code_tar_path="/tmp/code.tar.gz",
-        resources_tar_path="/tmp/resources.tar.gz",
         user="android",
         group="android",
         artifact_digest=DIGEST,
-        resources_digest=DIGEST,
     )
     calls = _extract_priv_calls(script)
     assert len(calls) >= 10, f"抽取器失效：只找到 {calls}"
@@ -225,7 +223,6 @@ def test_wrapper_sync_env_emits_control_plane_sentinels(wrapper):
         install_dir="/opt/stability-test-agent",
         service_name="stability-test-agent",
         code_tar_path="/tmp/code.tar.gz",
-        resources_tar_path="/tmp/resources.tar.gz",
         user="android",
         group="android",
     )

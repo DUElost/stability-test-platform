@@ -108,9 +108,7 @@ def sandbox(tmp_path):
     pip.chmod(0o755)
 
     code_tar = tmp_path / "code.tar.gz"
-    res_tar = tmp_path / "resources.tar.gz"
     _make_tarball(code_tar, {"agent/main.py": "print(1)\n", "agent/requirements.txt": "x"})
-    _make_tarball(res_tar, {"resources/keep.txt": "keep\n"})
 
     shim = tmp_path / "shim"
     shim.mkdir()
@@ -125,11 +123,9 @@ def sandbox(tmp_path):
             install_dir=str(install),
             service_name=SERVICE,
             code_tar_path=str(code_tar),
-            resources_tar_path=str(res_tar),
             user="android",
             group="android",
             artifact_digest="sha256:" + "a" * 64,
-            resources_digest="sha256:" + "b" * 64,
         ),
         encoding="utf-8",
     )
@@ -202,16 +198,35 @@ def test_healthy_wrapper_runs_to_completion_via_wrapper_only(sandbox):
     result = _run(sandbox)
     assert result.returncode == 0, f"健康 wrapper 必须全绿：\n{result.stdout[-800:]}"
     assert "STP_PRIV_MODE=wrapper" in result.stdout
-    assert "STP_RESOURCES_APPLIED=1" in result.stdout
     assert not _broad_sudo_calls(sandbox), (
         f"所有提权调用必须经 wrapper：{_broad_sudo_calls(sandbox)}"
     )
     calls = sandbox["log"].read_text()
-    for sub in ("selftest", "apply-code", "fix-ownership", "restart",
-                "write-digest", "apply-resources"):
+    for sub in ("selftest", "apply-code", "fix-ownership", "restart", "write-digest"):
         assert re.search(rf"^{re.escape(PRIV)} {sub}\b", calls, re.M), (
             f"wrapper 子命令 {sub} 未被调用：\n{calls}"
         )
+    # ADR-0040 D8 R1：host-resources 层退役——资源同步与资源身份写入都不再发生
+    assert not re.search(rf"^{re.escape(PRIV)} apply-resources\b", calls, re.M), calls
+    assert not re.search(r"write-digest .*--kind resources", calls), calls
+    assert "STP_RESOURCES_APPLIED" not in result.stdout
+
+
+def test_wrapper_without_apply_resources_still_converges(sandbox):
+    """ADR-0040 D8 R1 → R4 的衔接：R4 会从 wrapper 删 `apply-resources`，届时装了新 wrapper
+    的主机必须仍能热更新——远端脚本的能力判据不得再要求这个子命令。
+
+    反例（R1 前）：判据列表含 `apply-resources`，这里会在任何写动作之前 fail-closed。
+    """
+    caps = (
+        "apply-code install-schema write-version write-digest sync-env "
+        "fix-ownership deps-marker restart sync-env/retired-keys"
+    )
+    result = _run(sandbox, STUB_WRAPPER_CAPS=caps)
+    assert result.returncode == 0, (
+        f"缺 apply-resources 的 wrapper 必须能完成热更新：\n{(result.stdout + result.stderr)[-800:]}"
+    )
+    assert "STP_PRIV_MODE=wrapper" in result.stdout
 
 
 # ── 静态契约：指引在场；legacy 回退面已退役 ─────────────────────────────────
@@ -251,7 +266,7 @@ def test_old_but_self_consistent_wrapper_fails_before_any_write(sandbox):
 
     output = result.stdout + result.stderr
     assert result.returncode != 0
-    assert "apply-resources" in output, "缺失的子命令要被点名"
+    assert "lacks 'install-schema'" in output, "缺失的子命令要被点名"
     assert "update_agent.yml" in output, "必须带可执行指引"
     log = sandbox["log"].read_text(encoding="utf-8")
     assert "apply-code" not in log and "restart" not in log and "sync-env" not in log, (

@@ -94,11 +94,9 @@ def test_remote_script_has_no_self_owned_rsync_face():
         install_dir="/opt/stability-test-agent",
         service_name="stability-test-agent",
         code_tar_path="/tmp/code.tar.gz",
-        resources_tar_path="/tmp/resources.tar.gz",
         user="android",
         group="android",
         artifact_digest="sha256:" + "0" * 64,
-        resources_digest="sha256:" + "0" * 64,
     )
     assert "sudo rsync" not in script
     assert "--exclude=" not in script

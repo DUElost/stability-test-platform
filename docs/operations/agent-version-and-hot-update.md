@@ -81,6 +81,13 @@ Host UI（`ExpandableHostTable`）展示协议版本、部署摘要、code sync 
 通道本切片不变（P2 归位）。`--force`（API `?force=true` / CLI `--force`）跳过
 判定强制全量。`resources/mtbf/` 永属主机本地，不进载荷与身份。
 
+**单层收敛（ADR-0040 D8 R1）**：三入口只收敛 `agent-code`——`host-resources` 层已退役
+（flashtool / AIMonkey 改由 ADR-0051 D7 工具包承接，消费时按包 sha 核验），控制面不再判定、
+构建、传输资源层，也不再写 `ARTIFACT_DIGEST_RESOURCES`；`--force` 只强制 `agent-code` 全量。
+主机上的 `resources/` 由 wrapper 的 protect-only 原样保留（退役不做主机清理）；
+`host.agent_resources_digest` 仍随心跳入库、不参与任何判定（R4 停报停写）。下段 Ansible
+通道的资源推送随 R2 撤除。
+
 **顺序（#218，避免 Wave 3 竞态）**：
 
 1. 远端脚本**先**行级合并 `$INSTALL_DIR/.env`，**再** `systemctl restart` —— 一次成功的 hot-update 重启后进程已读到新 flag，无需再 `reload_config`。  
