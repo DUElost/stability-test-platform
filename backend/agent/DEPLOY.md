@@ -32,7 +32,10 @@
 │   │   └── script_registry.py          # script:<name> 解析
 │   ├── contracts/                      # 控制面/Agent 共享契约（ADR-0054，随包下发）
 │   │   ├── pipeline_validator.py       # pipeline_def 校验（schema 按下方 schemas/ 解析）
-│   │   └── legacy_aee.py               # legacy AEE 常量表
+│   │   ├── legacy_aee.py               # legacy AEE 常量表
+│   │   ├── aee_metadata.py             # AEE 事件类型/包名归一与 exp_main 解析
+│   │   ├── aee_event_dirs.py           # 事件目录命名识别（DLE/scan 匹配键）
+│   │   └── watcher_contracts.py        # watcher payload shape + fail-fast 校验
 │   ├── watcher/                        # ADR-0018 设备日志监控
 │   │   └── ...
 │   └── scripts/                        # 可执行脚本（扁平布局）

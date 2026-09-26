@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set
 from uuid import uuid4
 
-from ..watcher.contracts import ContractViolation
+from ..contracts.watcher_contracts import ContractViolation
 from .collector import CollectorError
 from .collectors.unisoc import UNIVIEW_INFO_FILENAME, UNIVIEW_ROOT
 from .emit_intent import MAX_REPLAY_ATTEMPTS, load_intents, save_intents

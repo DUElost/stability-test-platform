@@ -2,6 +2,12 @@
 
 Supports ISO-style (``2026-06-23_14-30-00_db.01``) and compact MTK-style
 (``2026_0629_174940_206_db.74.ANR``) basenames.
+
+契约模块（ADR-0054 D1/D2）：控制面与 Agent 共用**同一实现**——Agent 侧经
+``from ..contracts.aee_event_dirs import …`` 相对导入，控制面（dedup/extract 链）
+经 ``backend.agent.contracts.aee_event_dirs``。目录命名识别规则是双方的匹配键
+（DLE 上送标记、scan xls Path 列、watcher 落地路径），两侧判定不得漂移。
+模块体只依赖标准库、import 期无 I/O。
 """
 
 from __future__ import annotations

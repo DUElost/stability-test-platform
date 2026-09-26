@@ -29,7 +29,7 @@ from backend.agent.aee.reconciler import (
     is_reconciler_enabled,
 )
 from backend.agent.aee.processor import ProcessResult
-from backend.agent.watcher.contracts import ContractViolation
+from backend.agent.contracts.watcher_contracts import ContractViolation
 
 
 # ----------------------------------------------------------------------

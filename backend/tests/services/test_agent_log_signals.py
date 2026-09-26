@@ -42,7 +42,7 @@ class TestColumnWidthGuard:
         VARCHAR(16) 列宽脱节——本测试在「再放行一个超宽 source」时当场爆红，
         而不是等生产 INSERT 整批失败。
         """
-        from backend.agent.watcher.contracts import (
+        from backend.agent.contracts.watcher_contracts import (
             validate_log_signal,
         )
 
