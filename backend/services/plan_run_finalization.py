@@ -26,7 +26,8 @@ Job 终态事务只写 pending 标记（``job_terminalization``），不再锁/�
 ``plan_chain_trigger``（链触发/恢复）与五模块之外的服务；五模块中只有
 ``plan_run_abort``（notify 缝）、``post_completion``（恢复入口/RISK_HIGH）、
 ``job_terminalization``（终态编排）与 ``backend/scheduler`` 的补偿路径可以指向本模块。
-顶层 import 只取 models 纯定义（enums/列映射），其余带副作用的依赖
+顶层 import 只取 models 纯定义（enums/列映射）与 ``plan_run_events``（模块体仅 stdlib，
+realtime 在函数内懒取），其余带副作用的依赖
 （sqlalchemy 会话、notification_service、chain_trigger、dedup_scan、thread_pool）一律
 函数体内取，使 ``plan_run_abort`` 的 clean-env 契约（#2372：
 ``tests/test_plan_run_abort_import_contract.py``）不因本模块而变。
@@ -42,6 +43,7 @@ from typing import Any
 
 from backend.models.enums import PlanRunStatus
 from backend.models.job import JobInstance
+from backend.services.plan_run_events import emit_plan_run_status
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +133,16 @@ def announce_parent_terminal(run: Any, *, no_jobs: bool = False) -> None:
 # ── 终态后的完整编排（原 job_terminalization._post_aggregation_side_effects_*）──
 
 
+def _emit_parent_terminal_status(run: Any) -> None:
+    """父终态**提交后**推送 ``plan_run_status``（前端立即失效 detail/chain/timeline 等）。
+
+    ADR-0052 D1 后父终态由聚合者异步判定，``/complete`` 处的推送不再命中；
+    必须在 commit 之后发，否则前端据此刷新可能读到未提交的旧状态。
+    """
+    status = getattr(run, "status", None)
+    emit_plan_run_status(int(run.id), str(getattr(status, "value", status)))
+
+
 async def finalize_parent_run_async(
     run: Any,
     db: Any,
@@ -155,6 +167,7 @@ async def finalize_parent_run_async(
 
     announce_parent_terminal(run, no_jobs=no_jobs)
     await db.commit()
+    _emit_parent_terminal_status(run)
     await trigger_next_plan(run, db, respect_settle=True)
     if should_trigger_dedup(run.status):
         await enqueue_dedup_terminal_async(run.id)
@@ -183,6 +196,7 @@ def finalize_parent_run_sync(
 
     announce_parent_terminal(run, no_jobs=no_jobs)
     db.commit()
+    _emit_parent_terminal_status(run)
     trigger_next_plan_sync(run, db, respect_settle=True)
     if should_trigger_dedup(run.status):
         enqueue_dedup_terminal_sync(run.id)
@@ -203,7 +217,9 @@ def finalize_parent_run_sync(
 # 排空循环（§7-1 必需项）：SAQ 按 ``agg:{plan_run_id}`` 去重，任务运行期间到达
 # 的唤醒会被合并掉——只处理一批就退出会把余下 pending 押给 300s 修复扫描，破坏
 # §5-③ 的 120s 收敛。故循环到某轮**取不到标记**才退出（退出前的空查轮覆盖
-# 「标记提交于入队之前」的全部交错；其后再提交的标记必然在唤醒者那边入队成功）。
+# 「标记提交于入队之前」的全部交错）。空查之后、SAQ ``_finish`` 之前任务仍在
+# incomplete 集合里，此间同 key 唤醒会被去重——该窗口由 ``aggregate_plan_run_task``
+# 结束时补的尾随任务（``agg-tail:{id}:{秒}``）覆盖，见 ``backend/tasks/saq_tasks.py``。
 #
 # 幂等（D3 at-least-once）：计数是**重算**非增量；删除与重算同事务；父终态有
 # ``_TERMINAL_PLAN_RUN_STATUSES`` 守卫；副作用块有 'pending'/'done' 标记守卫。

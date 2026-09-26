@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from fastapi import HTTPException
+from backend.services.errors import NotFound
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -21,7 +21,7 @@ def list_plan_run_job_artifacts(
 ) -> list[PlanRunJobArtifactOut]:
     job = db.get(JobInstance, job_id)
     if job is None or job.plan_run_id != run_id:
-        raise HTTPException(status_code=404, detail="job not found in this plan run")
+        raise NotFound("job not found in this plan run")
 
     artifacts = db.execute(
         select(JobArtifact).where(JobArtifact.job_id == job_id)

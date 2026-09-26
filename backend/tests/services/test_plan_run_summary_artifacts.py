@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from fastapi import HTTPException
+from backend.services.errors import ServiceError
 from unittest.mock import MagicMock
 
 from backend.services.plan_run_job_artifacts import list_plan_run_job_artifacts
@@ -13,9 +13,9 @@ from backend.services.plan_run_summary import build_plan_run_summary
 def test_summary_not_found_404():
     db = MagicMock()
     db.get = MagicMock(return_value=None)
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ServiceError) as exc:
         build_plan_run_summary(db, 1)
-    assert exc.value.status_code == 404
+    assert exc.value.status == 404
 
 
 def test_summary_empty_jobs():
@@ -45,9 +45,9 @@ def test_list_artifacts_job_mismatch_404():
     job.plan_run_id = 2
     db = MagicMock()
     db.get = MagicMock(return_value=job)
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ServiceError) as exc:
         list_plan_run_job_artifacts(db, run_id=1, job_id=5)
-    assert exc.value.status_code == 404
+    assert exc.value.status == 404
 
 
 def test_list_artifacts_maps_filename():
