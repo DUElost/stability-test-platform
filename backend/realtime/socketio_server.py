@@ -494,6 +494,19 @@ def get_agent_namespace() -> "AgentNamespace":
     return _agent_ns
 
 
+def agent_rpc_ready() -> bool:
+    """本进程是否已初始化 SocketIO server 与 Agent 命名空间（可发起 agent RPC）。
+
+    #3333：全量 sweep（`services.script_presence.run_sweep`）靠它 fail-closed。
+    CLI/独立进程里 ``_sio`` / ``_agent_ns`` 都是 None：既没有本进程的 host→sid
+    映射，也没有跨实例 sid registry（``socketio_redis_adapter=false`` 时）——
+    `call_agent_rpc` 对每台 host 只会得到 ``agent_offline``，输出形似成功却把
+    ``host.script_packages_mode`` 与账本 ``checked_at`` 打脏（还会把新鲜度告警
+    喂成「新鲜」，见 #3315 / #3333）。
+    """
+    return _sio is not None and _agent_ns is not None
+
+
 async def call_agent_rpc(
     host_id: str,
     event: str,

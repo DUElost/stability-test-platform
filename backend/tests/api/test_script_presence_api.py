@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from backend.models.host import Host
 from backend.models.plan import Plan, PlanStep
 from backend.models.script import Script
@@ -170,3 +172,92 @@ def test_refresh_retired_host_is_404(client, db_session, admin_headers):
                     headers=admin_headers)
     assert r.status_code == 404
     assert "retired" in r.json()["detail"]
+
+
+# ── #3333①：POST /refresh-all（全量按需重采，admin + 节流）──────────────────
+
+def _reset_refresh_all_throttle(monkeypatch):
+    """节流是进程内模块态——逐用例复位，避免用例间互相 429。"""
+    from backend.api.routes import script_presence as routes
+
+    monkeypatch.setattr(routes, "_last_refresh_all_monotonic", None)
+    return routes
+
+
+def test_refresh_all_requires_admin(client, db_session, auth_headers, monkeypatch):
+    """非管理员触发全量重采必须 403（写端点：48 台 verify RPC + 整轮 upsert）。"""
+    _reset_refresh_all_throttle(monkeypatch)
+    r = client.post("/api/v1/script-presence/refresh-all", headers=auth_headers)
+    assert r.status_code == 403
+
+
+def test_refresh_all_runs_full_sweep_and_returns_summary(
+    client, db_session, admin_headers, monkeypatch
+):
+    """admin 触发 → 在 backend 进程内跑**全量** run_sweep 并回汇总（不是单机）。"""
+    _reset_refresh_all_throttle(monkeypatch)
+    calls: list[dict] = []
+
+    async def fake_run_sweep(**kwargs):
+        calls.append(kwargs)
+        return {
+            "sweep_id": "sw-full-1", "hosts": 48, "hosts_verified": 48,
+            "full_versions": 51, "uncovered_active_versions": 47,
+            "rows": 2496, "orphans_removed": 0,
+            "counts": {state: (1 if state == sp.STATE_PRESENT else 0)
+                       for state in sp.PRESENCE_STATES},
+        }
+
+    monkeypatch.setattr(sp, "run_sweep", fake_run_sweep)
+    r = client.post("/api/v1/script-presence/refresh-all", headers=admin_headers)
+    assert r.status_code == 200, r.text
+    data = r.json()["data"]
+    assert data["sweep_id"] == "sw-full-1"
+    assert data["hosts"] == 48 and data["rows"] == 2496
+    assert data["counts"]["present"] == 1
+    assert data["counts"]["missing"] == 0
+    # 全量语义：调用不带 host_ids（= 全 scope）；days 取历史窗口默认值
+    assert calls and "host_ids" not in calls[0]
+    assert calls[0]["days"] >= 1
+
+
+def test_refresh_all_is_throttled(client, db_session, admin_headers, monkeypatch):
+    """节流：60s 内的第二次发起 → 429（全量 sweep 不能连点叠加）。"""
+    routes = _reset_refresh_all_throttle(monkeypatch)
+
+    async def fake_run_sweep(**kwargs):
+        return {"sweep_id": "sw-t", "hosts": 0, "rows": 0,
+                "counts": {state: 0 for state in sp.PRESENCE_STATES}}
+
+    monkeypatch.setattr(sp, "run_sweep", fake_run_sweep)
+    first = client.post("/api/v1/script-presence/refresh-all", headers=admin_headers)
+    assert first.status_code == 200
+    second = client.post("/api/v1/script-presence/refresh-all", headers=admin_headers)
+    assert second.status_code == 429
+    assert "节流" in second.json()["detail"]
+
+    # 节流窗过去后放行（时间戳回拨到窗口外模拟）
+    monkeypatch.setattr(
+        routes, "_last_refresh_all_monotonic",
+        routes._last_refresh_all_monotonic - routes.REFRESH_ALL_MIN_INTERVAL_SECONDS - 1,
+    )
+    third = client.post("/api/v1/script-presence/refresh-all", headers=admin_headers)
+    assert third.status_code == 200
+
+
+def test_run_sweep_refusal_is_not_swallowed_into_a_200(
+    client, db_session, admin_headers, monkeypatch
+):
+    """#3333② 的 API 侧形状：就绪面失效时 `SweepNotReadyError` **穿透**，不得被吞成静默 200。
+
+    （正常路径不会发生——backend 进程 `create_sio_server` 已就绪；这条防的是以后有人
+    给它包一层 try/except 把拒跑做成「形似成功」，那正是本单要消除的形态。）
+    """
+    _reset_refresh_all_throttle(monkeypatch)
+
+    async def refusing_run_sweep(**kwargs):
+        raise sp.SweepNotReadyError("not a backend process")
+
+    monkeypatch.setattr(sp, "run_sweep", refusing_run_sweep)
+    with pytest.raises(sp.SweepNotReadyError):
+        client.post("/api/v1/script-presence/refresh-all", headers=admin_headers)
