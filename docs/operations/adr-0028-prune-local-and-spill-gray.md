@@ -1,7 +1,9 @@
 # #217 — PRUNE_LOCAL 与 HddSpill 灰度备忘
 
-> **最后更新**：2026-08-12  
-> **Issue**：[#217](https://github.com/DUElost/stability-test-platform/issues/217)
+> **最后更新**：2026-09-26（灰度**已结束**：原灰度 host 143 已不在册，实际持有 `=1` 的
+> `172-21-15-83` 已回退为 0 —— 见文末「2026-09-26 回退执行」）
+> **Issue**：[#217](https://github.com/DUElost/stability-test-platform/issues/217)、
+> [#3348](https://github.com/DUElost/stability-test-platform/issues/3348)（回退收口）
 
 ## 不变量
 
@@ -29,3 +31,25 @@
 ## 2026-08-12 已执行（合入前预跑）
 
 见 [#217 评论](https://github.com/DUElost/stability-test-platform/issues/217#issuecomment-5265170834)：spill→`unassigned/…`；PlanRun **#203** `PRUNED`×10 + extract OK；host 143 当时保持 prune=1 观察。合入后按上面清单补做控制面 `main` 重启对齐。
+
+## 2026-09-26 回退执行（#3348；灰度结束）
+
+**原目标已不在机队**：`192-0-2-143`（真身 `172-21-8-143`）不在 `~/hosts.ini` / ansible
+inventory / 平台库（host·device·plan_run_host 三表 0 行），旧地址 `172.21.8.143:22` 连接被拒；
+审计最后痕迹为 2026-07-10 `install_agent` ⇒ 随 2026-08-15 网段迁移离开机队。
+
+**实际仍在 `=1` 的是另一台**：全 48 台只读普查后**仅 `172-21-15-83`** 的 Agent `.env`
+（`/opt/stability-test-agent/.env`，第 33 行）为 `STP_EVENT_UPLOADER_PRUNE_LOCAL=1`，其余 47 台
+无该键（默认 0）——灰机角色迁到了 .83。已按本文件第 7 步执行：
+
+1. `.83` `.env` 该行 `=1` → `=0`（前后 md5 前缀 `0d091797a305` → `b7a236427baa`，权限不变）；
+2. `POST /api/v1/plan-runs/hosts/172-21-15-83/reload-config` → `status=sent`；agent 日志
+   `control_reload_config_env_loaded ... loaded=True` / `control_reload_config_done env_reloaded=True`；
+3. 行为抽验：reload（22:54:36）之后 .83 的新事件不得出现 `PRUNED`，应停在 `REMOTE`/`ARCHIVED`；
+   执行记录与抽验结果见 [#3348 评论](https://github.com/DUElost/stability-test-platform/issues/3348#issuecomment-5847247223)。
+
+**不变式复核**：该键仍不在 fleet 同步白名单（`hot_update_env_overrides()`），控制面
+`.env.backend` 也不含它——本文件的「禁止写入 fleet 同步 / hot-update 下发」仍然成立。
+
+**后续**：灰度到此结束，本备忘的 §7「回滚验证」不再有待办；若将来需要再开灰度，
+按本文件第 2 步在**目标机** `.env` 显式置 1 并同步更新本节的「当前灰度 host」。
