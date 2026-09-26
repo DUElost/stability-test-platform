@@ -3,6 +3,7 @@
 背景（#2011）：`apply-resources` 的 argparse 接线错误——`add_parser` 返回值被丢弃、
 `--digest` 被挂到 `write-digest`——使该子命令**从落地起不可用**，而 `--help` 形态的
 能力探针照常 exit 0，真实调用 exit 2，配合远端脚本 `set -e` 中止整段热更新。
+（`apply-resources` 本身已随 ADR-0040 D8 R4 的 host-resources 层退役删除。）
 
 本文件锁定三件事：
 
@@ -41,27 +42,34 @@ def wrapper(monkeypatch):
 # ── ① 接线契约：真实 argv parse ────────────────────────────────────────────
 
 
-def test_apply_resources_accepts_staged(wrapper):
-    parser = wrapper._build_parser()
-    ns = parser.parse_args(["apply-resources", "--staged", "/tmp/staged"])
-    assert ns.command == "apply-resources"
-    assert ns.staged == "/tmp/staged"
-
-
-def test_apply_resources_without_staged_is_rejected_with_reason(wrapper, capsys):
+def test_apply_code_without_staged_is_rejected_with_reason(wrapper, capsys):
     """缺 --staged 必须报「required」——这正是 --help 探针看不出来的失败面。"""
     parser = wrapper._build_parser()
     with pytest.raises(SystemExit) as exc:
-        parser.parse_args(["apply-resources"])
+        parser.parse_args(["apply-code"])
     assert exc.value.code == 2
     err = capsys.readouterr().err
     assert "--staged" in err and "required" in err
 
 
-def test_write_digest_wires_kind_and_digest(wrapper):
+def test_write_digest_wires_digest(wrapper):
     parser = wrapper._build_parser()
-    ns = parser.parse_args(["write-digest", "--kind", "resources", "--digest", DIGEST])
-    assert (ns.command, ns.kind, ns.digest) == ("write-digest", "resources", DIGEST)
+    ns = parser.parse_args(["write-digest", "--digest", DIGEST])
+    assert (ns.command, ns.digest) == ("write-digest", DIGEST)
+
+
+def test_retired_resources_surface_is_rejected(wrapper, capsys):
+    """ADR-0040 D8 R4：host-resources 层退役——`apply-resources` 子命令与 `write-digest --kind`
+    一并删除，提权面随之收窄（不能再往 agent/resources/ 同步，也不能写第二身份文件）。"""
+    parser = wrapper._build_parser()
+    for argv in (
+        ["apply-resources", "--staged", "/tmp/staged"],
+        ["write-digest", "--kind", "resources", "--digest", DIGEST],
+    ):
+        with pytest.raises(SystemExit) as exc:
+            parser.parse_args(argv)
+        assert exc.value.code == 2, argv
+    assert "apply-resources" not in wrapper._SUBCOMMAND_CONTRACT
 
 
 def test_usb_authorized_wires_port_and_value(wrapper):
@@ -99,13 +107,13 @@ def test_full_contract_passes_on_current_wiring(wrapper):
 
 
 def test_contract_detects_the_2011_miswiring(wrapper):
-    """复刻 #2011 形态（apply-resources 未接线 --staged）→ 校验器必须报出该子命令。"""
+    """复刻 #2011 形态（子命令 add_parser 了、却没接线 --staged）→ 校验器必须报出该子命令。"""
     broken = argparse.ArgumentParser(prog="stp-agent-priv")
     broken.add_subparsers(dest="command").add_parser(
-        "apply-resources", help="sync staged resources/",
+        "apply-code", help="sync staged agent tree",
     )
     problems = wrapper._validate_parser_contract(broken)
-    assert any("apply-resources rejected contract argv" in p for p in problems), problems
+    assert any("apply-code rejected contract argv" in p for p in problems), problems
 
 
 def test_selftest_surfaces_contract_problems(wrapper, monkeypatch, tmp_path, capsys):

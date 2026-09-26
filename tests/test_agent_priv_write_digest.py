@@ -59,29 +59,13 @@ def test_write_digest_rejects_bad_format(wrapper, conf):
             wrapper.cmd_write_digest(_args(bad), conf)
 
 
-# ── #1963 P2 切片①：write-digest --kind（resources → 第二文件） ─────────────
+# ── ADR-0040 D8 R4：只剩 agent-code 一个身份文件 ─────────────────────────────
 
 
-def _args2(digest, kind):
-    return SimpleNamespace(digest=digest, kind=kind)
-
-
-def test_write_digest_kind_resources_writes_second_file(wrapper, conf, tmp_path):
-    rc = wrapper.cmd_write_digest(_args2(DIGEST, "resources"), conf)
+def test_write_digest_writes_only_the_code_identity(wrapper, conf, tmp_path):
+    """#1963 的 `--kind resources`（第二身份文件）已随 host-resources 层退役删除：
+    即便调用方仍带着 kind 属性，也只落 ARTIFACT_DIGEST，绝不再写 ARTIFACT_DIGEST_RESOURCES。"""
+    rc = wrapper.cmd_write_digest(SimpleNamespace(digest=DIGEST, kind="resources"), conf)
     assert rc == 0
-    written = tmp_path / "agent" / "ARTIFACT_DIGEST_RESOURCES"
-    assert written.read_text() == DIGEST + "\n"
-    # code 文件不受影响
-    assert not (tmp_path / "agent" / "ARTIFACT_DIGEST").exists()
-
-
-def test_write_digest_default_kind_is_code(wrapper, conf):
-    wrapper.cmd_write_digest(_args2(DIGEST, None), conf)
-    assert (conf["INSTALL_DIR"] + "/agent/ARTIFACT_DIGEST").replace("/", "/") and (
-        Path(conf["INSTALL_DIR"]) / "agent" / "ARTIFACT_DIGEST"
-    ).read_text() == DIGEST + "\n"
-
-
-def test_write_digest_rejects_unknown_kind(wrapper, conf):
-    with pytest.raises(wrapper.PrivError):
-        wrapper.cmd_write_digest(_args2(DIGEST, "whole-tree"), conf)
+    assert (tmp_path / "agent" / "ARTIFACT_DIGEST").read_text() == DIGEST + "\n"
+    assert not (tmp_path / "agent" / "ARTIFACT_DIGEST_RESOURCES").exists()
