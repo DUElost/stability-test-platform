@@ -169,4 +169,30 @@ if /usr/local/sbin/stp-agent-priv usb-authorized --port 1-1 --value 2 2>/dev/nul
 fi
 echo "USB_VALUE_REFUSED"
 
+echo "== 10) read-kernel-log 只读窄面（#2957 / ADR-0037 D7）=="
+# 参数面：窗口互斥必选、future/负数/超界一律拒绝（解析层或执行层，均 exit 2）
+if /usr/local/sbin/stp-agent-priv read-kernel-log 2>/dev/null; then
+  echo "BAD: missing window accepted"; exit 1
+fi
+if /usr/local/sbin/stp-agent-priv read-kernel-log --boot --since-epoch 1 2>/dev/null; then
+  echo "BAD: both windows accepted"; exit 1
+fi
+if /usr/local/sbin/stp-agent-priv read-kernel-log --grep password 2>/dev/null; then
+  echo "BAD: journalctl --grep accepted"; exit 1
+fi
+for bad in "--since-epoch 99999999999" "--since-epoch -5" "--boot --lines 0" "--boot --lines 5001"; do
+  if /usr/local/sbin/stp-agent-priv read-kernel-log $bad 2>/tmp/klog_err; then
+    echo "BAD: accepted $bad"; exit 1
+  fi
+done
+grep -q 'STP_AGENT_PRIV_ERROR' /tmp/klog_err && echo "KERNEL_LOG_ARGS_REFUSED"
+# 读取失败面：容器无 journalctl ⇒ 非零 + 标记（不部分投递；真读形态由单测桩覆盖）
+set +e
+/usr/local/sbin/stp-agent-priv read-kernel-log --boot >/tmp/klog_out 2>/tmp/klog_err
+rc=$?
+set -e
+test "$rc" -eq 3 || { echo "BAD: expected exit 3, got $rc"; exit 1; }
+test ! -s /tmp/klog_out || { echo "BAD: partial output delivered"; exit 1; }
+grep -q 'STP_READ_KERNEL_LOG_FAILED' /tmp/klog_err && echo "KERNEL_LOG_FAILURE_MARKED"
+
 echo "ALL_OK"

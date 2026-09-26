@@ -65,10 +65,17 @@ cat /sys/bus/usb/devices/<dev>:1.0/interface      # "MIDI function" = MIDI-only
 
 - `USB n` 徽标（`capacity.usb_device_count`，`frontend/src/components/network/ExpandableHostTable.tsx`）——L4 曾长期是页面上**唯一**可见的信号，#3046 起不再是（下方有 reason）；
 - `adb_multiple_servers`（warning 级 reason → DEGRADED，`backend/agent/capacity_reporter.py::_compute_health`），配套自愈 `ensure_single_adb_server()`（`backend/agent/device_discovery.py::ensure_single_adb_server`，需 `STP_ADB_AUTO_REPAIR=1` 且无在跑任务）；
-- **L1 的两个内核判据已落地（#2900）**：`usb_host_controller_dead`（内核报 `HC died` / `xHCI … not responding` **且此刻 USB 一台都看不到** ⇒ DEGRADED；设备回树自动回落）与 `usb_link_degraded`（窗口内 `error -71/-110` 或「cable is bad」超阈）。实现：解析与词表在 `backend/agent/contracts/kernel_usb_faults.py`（两侧共用），采集在 `backend/agent/kernel_usb_faults.py`（低频读 `journalctl -k`，首扫读整段 boot，读不到按「未知」不报）。
+- **L1 的两个内核判据已落地（#2900）**：`usb_host_controller_dead`（内核报 `HC died` / `xHCI … not responding` **且此刻 USB 一台都看不到** ⇒ DEGRADED；设备回树自动回落）与 `usb_link_degraded`（窗口内 `error -71/-110` 或「cable is bad」超阈）。实现：解析与词表在 `backend/agent/contracts/kernel_usb_faults.py`（两侧共用），采集在 `backend/agent/kernel_usb_faults.py`（低频读 `journalctl -k`；**首扫读最近 1 小时**，#2957 起不再读整段 boot——实测某主机 `--boot` 373,600 行，截断样本会冒充完整结果；读不到按「未知」不报）。
   ⚠ **这两条的前提是 agent 能读到内核日志**（现网实测：不满足）。Agent 服务 `User=android`（`backend/agent/stability-test-agent.service:9` 与 `install_agent.sh` 两条路径同写死），安装脚本只加过 `dialout`，从未加 `adm`/`systemd-journal`；`kernel.dmesg_restrict=1` 又堵死 dmesg//`dev/kmsg` 备用路（实测非特权 `open()` 报 `EPERM`）。
   **失效形状（#2957，2026-09-21 由本仓自己的指标证实，不再是推断）**：本模块使用的 argv `journalctl -k --no-pager -o cat --boot` 在非特权下返回 **rc=0 / stdout 空 / stderr 空**——**连权限提示都不打印**（提示只出现在 `-n 3`、`--since -1h` 之类的别的形状里），所以「未知 ≠ 干净」那道守卫在这条路径上不生效，36/36 台已升级 host 一度上报 `usb_kernel_log=ok`（同机 `sudo` 对照：真读到时是 373,600 行）。现在的判据是**正向可读性探针**（`--boot --lines=1` 取不到一行即判未知），并把子进程钉 `LC_ALL=C`/`LANG=C`（systemd 提示串是翻译过的，按文本匹配不能依赖语言环境）。
-  ⇒ 现网这类 host 上两条 reason **恒不出现**；通道态由 `capacity.usb_kernel_log` 上报（`ok`/`unavailable`/`unknown`），覆盖缺口自身有 fleet 级告警 `StabilityUsbKernelLogChannelDark`；授权与三条路线见 #2957。**在通道被授权之前，L1 的人肉判据仍是上机 `journalctl -k | grep -E 'xhci|HC died'`（§2）**——注意先 `sudo`，非特权下你会拿到同一个空结果。
+  ⇒ **读权限已由 #2957 裁决 C 收口**（ADR-0037 v0.6 D7）：wrapper 新增只读子命令
+  `stp-agent-priv read-kernel-log`（`--boot|--since-epoch` + `--lines`，固定 argv、环境清空、
+  30s 超时、8 MiB 上限，截断即非零退出），Agent 在 `capabilities` 含该子命令时经
+  `sudo -n` 调用。**它是逐台 `update_agent.yml` 下发的**（不随热更新）：未更新的主机维持
+  「不可用」，`capacity.usb_kernel_log` 仍报 `unavailable`，与现状一致。灰度 1 → 5 → 全量，
+  判据 = 该 gauge 从 `unavailable` 回落 + fleet 级告警 `StabilityUsbKernelLogChannelDark`
+  回落。**在主机完成 wrapper 更新之前，L1 的人肉判据仍是上机
+  `journalctl -k | grep -E 'xhci|HC died'`（§2）**——注意先 `sudo`，非特权下你会拿到同一个空结果。
 - 刷机链路的同类记录：[`firmware-requests/2026-08-26-persist-sys-usb-config-adb.md`](./firmware-requests/2026-08-26-persist-sys-usb-config-adb.md)（刷完 userdata 清空 → adbd 不启动 → `adb devices` 连 unauthorized 都不显示 → 需人工开一次 USB 调试）。
 
 **#2902 起（2026-09-20）：L2/L3/L4 在平台侧可直接判别**（全部为观测面，不参与槽位/门禁计算）：

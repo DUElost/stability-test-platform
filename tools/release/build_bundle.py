@@ -251,6 +251,12 @@ def build_bundle(
     revision = revision or _revision(repo_root)
     short = revision[:8]
     version = version or f"{DEFAULT_VERSION_PREFIX}-{datetime.now(timezone.utc):%Y%m%d}-{short}"
+    # 溯源文本落盘：控制面自 bundle 布局运行（#2958，**不是 git 仓库**）时
+    # `host_updater.get_agent_code_version()` 的 git 探测落空 → 热更新 `code_version`
+    # 为空、远端 write-version 被跳过 → 主机 VERSION 停在上一代（2026-09-26 实测）。
+    # 这里把短 sha 写进 agent 源树（与部署到主机的同名文件同语义）；VERSION 属载荷
+    # 元数据排除集（ADR-0040 D1），不进 agent-code / control-plane 任何摘要面。
+    (out / "backend" / "agent" / "VERSION").write_text(short + "\n", encoding="utf-8")
     digests = _digests(out)
 
     # #2269 fail-closed 自检：即便 ignore 被误改/新增目录绕过，构建也不得产出含
