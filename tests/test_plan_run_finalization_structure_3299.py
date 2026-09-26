@@ -92,3 +92,22 @@ def test_side_effect_entries_only_live_in_finalization():
         assert not hasattr(job_term, name), f"job_terminalization 仍持有 {name}"
     for name in ("finalize_parent_run_async", "finalize_parent_run_sync", "recover_chain_trigger"):
         assert callable(getattr(fin, name))
+
+
+def test_recount_counters_has_a_single_home():
+    """#3376 项 3：`recount_plan_run_counters` 的唯一家在聚合器；终态编排者不得留再导出壳。
+
+    该符号随 ADR-0052 #3244 迁入 ``plan_run_aggregation``，但 ``job_terminalization``
+    末尾留了「兼容再导入」壳（注释自称旧导入路径）。壳会让调用方与 patch 目标分叉
+    （#3292 / #3307 / ADR-0054 D5 同一纪律），故删除并在此钉住：旧家不得再持有，
+    调用方（finalization / counter_reconciler / 测试）一律直接 import 新家。
+    """
+    import importlib
+
+    aggregation = importlib.import_module("backend.services.plan_run_aggregation")
+    job_term = importlib.import_module("backend.services.job_terminalization")
+
+    assert callable(aggregation.recount_plan_run_counters)
+    assert not hasattr(job_term, "recount_plan_run_counters"), (
+        "job_terminalization 又长出了 recount_plan_run_counters 再导出壳（单一所有权，见 #3376）"
+    )
