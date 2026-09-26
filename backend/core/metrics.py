@@ -232,6 +232,18 @@ host_kernel_log_channel = Gauge(
     ['host_id', 'state'],  # state: ok | unavailable | unknown
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
+# ADR-0038 v0.3 D9.3：设备面意图位（#3159）。置位 = 人为声明「该 host 的设备面
+# 已被人工处置（移机 / 清空 / 关机）」，UsbBlind / AdbOfflineConcentration 两条
+# 设备面规则据此豁免（规则侧 unless，不隐藏原始数据）；D9.8 陈旧告警也读它。
+# 词表**封闭**（本期 ("emptied",)，见 api/routes/metrics.py 的 _DEVICE_INTENTS，
+# 双向绑测试）：只落值置位 host（value=1），未置位 host 无 series——unless 的
+# 语义是「无 series = 不豁免」，与逐 host 落 0 等价且基数只随置位数增长。
+host_device_intent = Gauge(
+    'stability_host_device_intent',
+    'Human-asserted device-face intent per host (1 = asserted)',
+    ['host_id', 'intent'],  # intent: emptied（封闭词表，扩展须同 PR 改规则选择器）
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
 # ============================================================================
 # Script Presence Metrics（#2958 第五道闸）
 # ============================================================================

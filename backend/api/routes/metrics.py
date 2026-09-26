@@ -24,6 +24,7 @@ from backend.core.metrics import (
     device_online,
     get_metrics_response,
     host_device_adb_state,
+    host_device_intent,
     host_health_reason,
     host_kernel_log_channel,
     host_online,
@@ -168,6 +169,54 @@ def _refresh_host_device_adb_gauges(db: Session) -> None:
     except SQLAlchemyError:
         # 与舰队 gauge 同一失败姿势：DB 抖动时跳过本组，不拖垮整次抓取。
         logger.warning("metrics_host_adb_gauge_refresh_failed", exc_info=True)
+
+
+#: ADR-0038 v0.3 D9.3：设备面意图的**封闭词表**（#3159）。本期只有一种意图；
+#: 扩展（检修 / 外借，§7.5-1）必须同 PR 改告警选择器并双向绑测试——选择器漏一个
+#: 词表值，该意图的豁免就静默失效（#1257 同族）。
+_DEVICE_INTENTS = ("emptied",)
+
+#: #2791 同款：本进程已暴露过 intent series 的 host_id。清除意图 / 置位被撤销的
+#: host 其 label child 必须 remove，否则故障（陈旧豁免）值冻结在 registry。
+_device_intent_exposed_hosts: set[str] = set()
+
+
+def _refresh_host_device_intent_gauges(db: Session) -> None:
+    """#3159（ADR-0038 v0.3 D9.3）：per-host 设备面意图位，拉取期现算。
+
+    口径三条，均与 `_refresh_host_device_adb_gauges` 对齐但有一步刻意放宽：
+
+    - **退役 host 不进指标**（ADR-0038 D5 同款）；置位与退役互斥（D9.2），
+      retired 过滤只是纵深防御；
+    - **不过滤 host.status**：意图是人工断言，OFFLINE / 关机 host 正是它的
+      主场景（.20/.65 形态）——消费方（unless 豁免、D9.8 陈旧告警）第一子句
+      都要 adb series（只对 ONLINE host 存在），`and`/`unless on(host_id)`
+      天然把作用域收窄回 ONLINE，这里多暴露不产生误豁免；
+    - **只落值置位 host（1）**：未置位 host 无 series——`unless` 语义下
+      「无 series = 不豁免」，与逐 host 落 0 等价，基数只随置位数增长。
+    """
+    if not is_prometheus_available():
+        return
+    try:
+        intent_hosts = [
+            host_id
+            for (host_id,) in db.query(Host.id).filter(
+                Host.retired_at.is_(None),
+                Host.emptied_at.is_not(None),
+            ).all()
+        ]
+        for host_id in intent_hosts:
+            for intent in _DEVICE_INTENTS:
+                host_device_intent.labels(host_id=host_id, intent=intent).set(1)
+        # #2791 同款差集清理：清除意图后 label child 必须 remove。
+        live_set = set(intent_hosts)
+        for host_id in _device_intent_exposed_hosts - live_set:
+            for intent in _DEVICE_INTENTS:
+                host_device_intent.remove(host_id, intent)
+        _device_intent_exposed_hosts.clear()
+        _device_intent_exposed_hosts.update(live_set)
+    except SQLAlchemyError:
+        logger.warning("metrics_host_device_intent_refresh_failed", exc_info=True)
 
 
 #: #2900/#2957：host 健康 reason 的**封闭分桶词表**。逐字取自 agent 侧的产出点
@@ -515,6 +564,7 @@ async def metrics(
     """
     _refresh_fleet_gauges(db)
     _refresh_host_device_adb_gauges(db)
+    _refresh_host_device_intent_gauges(db)
     _refresh_host_health_gauges(db)
     _refresh_host_health_probe_strike_gauges(db)
     _refresh_script_presence_gauges(db)

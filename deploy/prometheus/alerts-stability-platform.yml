@@ -549,20 +549,27 @@ groups:
             stability_chain_coverage_devices 三元组 + #2909 评论的定案 SQL 形态；
             处置在 #2909 问题②的裁决（动态派生或清单再生成），不是调高本阈值。
       - alert: StabilityHostAdbOfflineConcentration
+        # ADR-0038 v0.3 D9.3/A2（#3159）：外层 unless 豁免——host 已被人工声明
+        # 「设备面已处置（emptied）」时本规则静默；#2754 的原始误报形态（空置机
+        # 上账面 offline 行占多数）即豁免对象。原始数据不隐藏：adb_state 照常
+        # 上报，豁免只发生在规则侧；清除意图（DELETE /device-intent）即恢复。
         expr: >-
           (
-            sum by (host_id) (stability_host_device_adb_state{state="offline"}) >= 5
+            (
+              sum by (host_id) (stability_host_device_adb_state{state="offline"}) >= 5
+            )
+            and
+            (
+              sum by (host_id) (stability_host_device_adb_state{state="offline"})
+              /
+              sum by (host_id) (stability_host_device_adb_state) >= 0.5
+            )
+            and
+            (
+              sum by (host_id) (stability_host_device_adb_state) >= 5
+            )
           )
-          and
-          (
-            sum by (host_id) (stability_host_device_adb_state{state="offline"})
-            /
-            sum by (host_id) (stability_host_device_adb_state) >= 0.5
-          )
-          and
-          (
-            sum by (host_id) (stability_host_device_adb_state) >= 5
-          )
+          unless on (host_id) (stability_host_device_intent{intent="emptied"} == 1)
         for: 15m
         labels:
           severity: warning
@@ -667,9 +674,17 @@ groups:
       # （ghost 该被清账而不是被静音，#2754）；锚点**不设新鲜度窗**——设 7d 窗会让
       # .63 型 11 天长失明在第 7 天自我静音，恰是 #2900 付过学费的形态。
       - alert: StabilityHostUsbBlind
+        # ADR-0038 v0.3 D9.3/A2（#3159）：外层 unless 豁免——空置/清空机上的
+        # 「树空 ∧ 账有行」合取是账实不符（人为意图），非硬件故障。原始数据
+        # 不隐藏；置位/清除走 /device-intent 端点（审计留痕）。注意本豁免**不**
+        # 扩到 ControllerDead / LinkDegraded（内核证据类，A2 裁决：空置机上
+        # 出现也是真硬件故障）。
         expr: >-
-          stability_host_health_reason{reason="usb_tree_empty"} >= 1
-          and on (host_id) (sum by (host_id) (stability_host_device_adb_state) > 0)
+          (
+            stability_host_health_reason{reason="usb_tree_empty"} >= 1
+            and on (host_id) (sum by (host_id) (stability_host_device_adb_state) > 0)
+          )
+          unless on (host_id) (stability_host_device_intent{intent="emptied"} == 1)
         for: 15m
         labels:
           severity: critical
@@ -686,6 +701,26 @@ groups:
             .63 实测 20s/23-23、.102 实测 20s/11-11），reboot 兜底。**不要自动
             rebind**（门控自愈见 #2972，勿在告警处置里顺手做）。若确认该机柜已撤线
             （设备行全是 ghost），清账关闭本告警，而不是给本规则加静音条件。
+      # ADR-0038 v0.3 D9.8（#3159）：意图陈旧告警。置位是人维护的断言「设备面已被
+      # 人工处置」；当该 host 账上重新出现 adb_state=device 的设备（设备回场 /
+      # 机柜重新上线），断言与事实相反，必须由人清除意图。只提示、不自动清除
+      # （自动清除 = 系统替人改写人工意图，D9.8 明文否决）。for: 1h 吸收回场
+      # 瞬态；warning 级——它报的是「意图待复核」，不是故障。
+      - alert: StabilityHostDeviceIntentStale
+        expr: >-
+          (sum by (host_id) (stability_host_device_adb_state{state="device"}) > 0)
+          and on (host_id) (stability_host_device_intent{intent="emptied"} == 1)
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: Devices are back on a host whose device-face intent says "emptied"
+          description: >-
+            该 host 被人工置位了设备面意图（emptied），但账上重新出现 adb_state=device
+            的设备——设备回场 / 机柜重新上线，置位断言已陈旧（ADR-0038 v0.3 D9.8）。
+            请人工核实后清除意图（DELETE /api/v1/hosts/{id}/device-intent）；在清除前，
+            UsbBlind / AdbOfflineConcentration 对该 host 的豁免仍然生效，真故障会被
+            静默——这正是本告警要兜住的路径。**不要**自动清除：意图由人维护。
       # #3046 / #3068：L4 paging。reason `adb_interfaces_missing` 已由 #3049 产出
       # （`usb_device_count > 0 ∧ adb_interface_count == 0`）；本条只负责响铃。
       # **不合物取设备账**：`usb > 0` 本身就是「本来有设备」的证据（#3046 选型）。

@@ -925,6 +925,69 @@ tests:
         exp_annotations:
           summary: Host USB is blind while the platform ledger still has devices on it
           description: "结果层判据（#2967：#2957 权限僵局期间的失明 paging）：agent 报 USB 树空 （lsusb 只剩 root hub ∧ 一台设备都没发现），但该 host 的 `device` 账上 仍有设备行——xHCI 主控死亡（`HC died`，不自愈）或 hub 供电/链路整体掉线 的形状。SSH 与心跳照常、产能静默归零（fleet 实测失明窗 7~11 天： 8.87 / .102 / .63）。处置：按 triage.md L1 取证——agent 通道恒 UNKNOWN （#2957），需 `sudo journalctl -k | grep -E 'xhci|HC died'`；空闲窗 （active_jobs=0）后用 xHCI unbind/rebind 救回（8.87 文档 §3.1； .63 实测 20s/23-23、.102 实测 20s/11-11），reboot 兜底。**不要自动 rebind**（门控自愈见 #2972，勿在告警处置里顺手做）。若确认该机柜已撤线 （设备行全是 ghost），清账关闭本告警，而不是给本规则加静音条件。"
+  # ---- ADR-0038 v0.3 D9（#3159）：设备面意图豁免（unless）+ 意图陈旧（D9.8）----
+  # host-emptied（192-0-2-31）：全信号与对照机相同，仅多一条 intent series ⇒
+  #   unless 豁免生效，UsbBlind / OfflineConcentration 均不火；device=0 ⇒
+  #   D9.8 也不火（意图与事实一致）。
+  # host-live（192-0-2-32）：无 intent series ⇒ unless 不命中，两规则照常火
+  #   ——豁免只在置位时存在（清除 = series 消失 = 回到本形态）。
+  # host-stale（192-0-2-33）：intent 置位 ∧ 账上回场 device>0 ⇒ D9.8 在
+  #   for:1h 后火（eval 70m）；20m 时仍在 for 窗内不火。
+  - interval: 1m
+    input_series:
+    - series: stability_host_health_reason{host_id="192-0-2-31", reason="usb_tree_empty"}
+      values: 1x80
+    - series: stability_host_device_adb_state{host_id="192-0-2-31", state="offline"}
+      values: 10x80
+    - series: stability_host_device_intent{host_id="192-0-2-31", intent="emptied"}
+      values: 1x80
+    - series: stability_host_health_reason{host_id="192-0-2-32", reason="usb_tree_empty"}
+      values: 1x80
+    - series: stability_host_device_adb_state{host_id="192-0-2-32", state="offline"}
+      values: 10x80
+    - series: stability_host_device_intent{host_id="192-0-2-33", intent="emptied"}
+      values: 1x80
+    - series: stability_host_device_adb_state{host_id="192-0-2-33", state="device"}
+      values: 3x80
+    alert_rule_test:
+    - eval_time: 20m
+      alertname: StabilityHostUsbBlind
+      exp_alerts:
+      - exp_labels:
+          severity: critical
+          host_id: 192-0-2-32
+          reason: usb_tree_empty
+        exp_annotations:
+          summary: Host USB is blind while the platform ledger still has devices on it
+          description: "结果层判据（#2967：#2957 权限僵局期间的失明 paging）：agent 报 USB 树空 （lsusb 只剩 root hub ∧ 一台设备都没发现），但该 host 的 `device` 账上 仍有设备行——xHCI 主控死亡（`HC died`，不自愈）或 hub 供电/链路整体掉线 的形状。SSH 与心跳照常、产能静默归零（fleet 实测失明窗 7~11 天： 8.87 / .102 / .63）。处置：按 triage.md L1 取证——agent 通道恒 UNKNOWN （#2957），需 `sudo journalctl -k | grep -E 'xhci|HC died'`；空闲窗 （active_jobs=0）后用 xHCI unbind/rebind 救回（8.87 文档 §3.1； .63 实测 20s/23-23、.102 实测 20s/11-11），reboot 兜底。**不要自动 rebind**（门控自愈见 #2972，勿在告警处置里顺手做）。若确认该机柜已撤线 （设备行全是 ghost），清账关闭本告警，而不是给本规则加静音条件。"
+    - eval_time: 20m
+      alertname: StabilityHostAdbOfflineConcentration
+      exp_alerts:
+      - exp_labels:
+          host_id: 192-0-2-32
+          severity: warning
+        exp_annotations:
+          summary: Devices on one host are bulk adb-offline
+          description: >-
+            该 host 上 adb_state=offline 的设备已成多数（≥5 台且占比 ≥50%，持续 15m）。
+            先按 docs/operations/production-diagnostics.md 的只读口径分清是哪一层：
+            lsusb 设备在位 + adb server 存活 + `adb reconnect offline` 立即恢复 ⇒ adbd
+            会话陈旧（#2754 的事故形态，非硬件）；lsusb 查无设备 ⇒ USB 枚举层，
+            对照 docs/operations/incident-2026-07-29-host-8-87-xhci-death-and-adb-outage.md
+            判据树。注意本告警**只观测**：平台侧自动 reconnect 未实现（会打断在跑的 job，
+            需裁决，见 #2754 / #722）。
+    - eval_time: 20m
+      alertname: StabilityHostDeviceIntentStale
+      exp_alerts: []
+    - eval_time: 70m
+      alertname: StabilityHostDeviceIntentStale
+      exp_alerts:
+      - exp_labels:
+          host_id: 192-0-2-33
+          severity: warning
+        exp_annotations:
+          summary: Devices are back on a host whose device-face intent says "emptied"
+          description: "该 host 被人工置位了设备面意图（emptied），但账上重新出现 adb_state=device 的设备——设备回场 / 机柜重新上线，置位断言已陈旧（ADR-0038 v0.3 D9.8）。 请人工核实后清除意图（DELETE /api/v1/hosts/{id}/device-intent）；在清除前， UsbBlind / AdbOfflineConcentration 对该 host 的豁免仍然生效，真故障会被 静默——这正是本告警要兜住的路径。**不要**自动清除：意图由人维护。"
   # ---- #3046/#3068 StabilityHostAdbInterfacesMissing：L4 paging 两态 ----
   # fire：.65 同源——reason 持续 ≥30m（#3068 选型 2，短 for 会常亮）；
   # not-fire：短窗瞬态在 30m 前清除；eval 15m 仍在 for 内不火。

@@ -31,6 +31,14 @@ export const hosts = {
   /** ADR-0038 D2：解除退役（admin；reason 必填）。 */
   unretire: (id: number | string, reason: string) =>
     apiClient.post<Host>(`/hosts/${id}/unretire`, { retire_reason: reason }).then(r => r.data),
+  /** ADR-0038 v0.3 D9.4：置位设备面意图（admin；reason 必填，豁免设备面告警）。 */
+  setDeviceIntent: (id: number | string, reason: string) =>
+    apiClient.post<Host>(`/hosts/${id}/device-intent`, { reason }).then(r => r.data),
+  /** ADR-0038 v0.3 D9.4：清除设备面意图（admin；清除即解除豁免）。 */
+  clearDeviceIntent: (id: number | string, reason?: string) =>
+    apiClient.delete<Host>(`/hosts/${id}/device-intent`, {
+      params: reason ? { reason } : undefined,
+    }).then(r => r.data),
   get: (id: number | string) => apiClient.get<Host>(`/hosts/${id}`).then(r => r.data),
   getDetail: (id: number | string) =>
     apiClient.get<Host>(`/hosts/${id}`).then(r => r.data),

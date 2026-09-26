@@ -60,6 +60,10 @@ export interface HostTableData {
   retired_at?: string | null;
   retired_by?: string | null;
   retire_reason?: string | null;
+  /** ADR-0038 v0.3 D9：设备面意图（空置 / 人工清空）——非空即豁免中 */
+  emptied_at?: string | null;
+  emptied_by?: string | null;
+  emptied_reason?: string | null;
   /** 与 status 正交：曾安装成功 / 有过心跳 */
   agent_installed?: boolean;
   agent_protocol_version?: string | null;
@@ -678,6 +682,17 @@ export function ExpandableHostTable({
                                 data-testid={`host-retired-badge-${host.id}`}
                               >
                                 {host.status === 'ONLINE' ? '已退役但仍在心跳' : '已退役'}
+                              </span>
+                            )}
+                            {host.emptied_at && (
+                              <span
+                                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-medium cursor-help bg-muted text-muted-foreground"
+                                title={`设备面已由人工处置${host.emptied_by ? `（${host.emptied_by}）` : ''}${
+                                  host.emptied_reason ? `：${host.emptied_reason}` : ''
+                                }——设备面告警（UsbBlind / 批量 offline）豁免中（ADR-0038 D9）`}
+                                data-testid={`host-emptied-badge-${host.id}`}
+                              >
+                                设备面已处置
                               </span>
                             )}
                             {host.health_status && host.health_status !== 'HEALTHY' && (

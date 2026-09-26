@@ -27,6 +27,7 @@ from backend.services.plan_run_context import abort_pending_job_ids
 from backend.api.schemas import (
     HostActiveJob,
     HostCreate,
+    HostDeviceIntentIn,
     HostInstallIn,
     HostRetireIn,
     HostUnretireIn,
@@ -49,7 +50,12 @@ from backend.services.flash_prereqs import (
     start_ensure_flash_prereqs_runconsole,
 )
 from backend.services.host_maintenance import HostMaintenanceConflict
-from backend.services.host_retirement import retire_host, unretire_host
+from backend.services.host_retirement import (
+    clear_device_intent,
+    retire_host,
+    set_device_intent,
+    unretire_host,
+)
 from backend.services.host_upgrade_gate import (
     ABORT_POLL_TIMEOUT_SECONDS,
     ACTIVE_JOB_STATUSES as _ACTIVE_JOB_STATUSES,
@@ -677,6 +683,69 @@ def unretire_host_endpoint(
         actor_username=current_user.username,
         request=request,
     )
+    return _host_to_out(host, db=db)
+
+
+@router.post("/{host_id}/device-intent", response_model=HostOut)
+def set_device_intent_endpoint(
+    host_id: str,
+    payload: HostDeviceIntentIn,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """ADR-0038 v0.3 D9.4：置位设备面意图「已由人工处置」（admin + 审计）。
+
+    置位后设备面告警（StabilityHostUsbBlind / StabilityHostAdbOfflineConcentration）
+    由规则侧 unless 豁免（D9.3）；原始 reason/设备行照常上报，不隐藏数据。
+    互斥（D9.2）：退役机 409；不挡派发/认领（D9.6）。幂等：重复置位原样返回。
+    """
+    host = set_device_intent(
+        db,
+        host_id=host_id,
+        reason=payload.reason,
+        actor_id=current_user.id,
+        actor_username=current_user.username,
+        request=request,
+    )
+    return _host_to_out(host, db=db)
+
+
+@router.delete("/{host_id}/device-intent", response_model=HostOut)
+def clear_device_intent_endpoint(
+    host_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+    reason: str = Query(default="", max_length=512),
+):
+    """ADR-0038 v0.3 D9.4：清除设备面意图（admin + 审计；清除即解除豁免）。
+
+    写回语义：清 ``emptied_at``；``emptied_by``/``emptied_reason`` 保留为最近
+    一次置位痕迹（与 unretire 同惯例，历史在 audit_logs）。幂等：无意图主机
+    调用原样返回。可选 ``?reason=`` 记入审计。
+    """
+    host = clear_device_intent(
+        db,
+        host_id=host_id,
+        actor_id=current_user.id,
+        actor_username=current_user.username,
+        request=request,
+    )
+    if reason:
+        # 清除原因是审计增强项：单独补一条审计（清除动作本体已在服务层留痕）。
+        record_audit(
+            db,
+            action="clear_device_intent",
+            resource_type="host",
+            resource_id=host.id,
+            details={"clear_reason": reason},
+            user_id=current_user.id,
+            username=current_user.username,
+            request=request,
+            strict=True,
+        )
+        db.commit()
     return _host_to_out(host, db=db)
 
 
