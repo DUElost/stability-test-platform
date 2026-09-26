@@ -4,14 +4,14 @@
 1. **parity**：`tools/ansible/compute_deploy_digest.py`（playbook 控制机
    侧计算，stdlib-only 按路径加载契约实现
    `backend/agent/contracts/artifact_digest.py`）的输出与控制面 services digest
-   字节级等价（两 kind）——算法已同源（ADR-0054 第 3 步），本判据守的是
-   **两侧输入集枚举**仍一致；
+   字节级等价（agent-code；ADR-0040 D8 R2 起 Ansible 只算这一个身份）——算法已同源
+   （ADR-0054 第 3 步），本判据守的是**两侧输入集枚举**仍一致；
 2. **排除集契约**：排除集的**单一源 = 契约包**（`backend/agent/contracts/artifact_digest.py::PAYLOAD_EXCLUDES`）——
    tar/digest 直接引用它，wrapper `FIXED_EXCLUDES` 与
    `agent_deploy/defaults/main.yml` 的 rsync 策略因「单文件脚本 / YAML 数据」
    无法 import Python、仍是拷贝；本文件对三处逐项锁定（test_*.py 宽模式、
-   venv//logs/、scripts/、mtbf/ 与双身份文件 exclude+protect）；
-3. **playbook 簿记**：`update_agent.yml` 含 compute + 双写入任务，且位于
+   venv//logs/、scripts/、`resources/` 整树与身份文件 exclude+protect）；
+3. **playbook 簿记**：`update_agent.yml` 含 compute + 写入任务，且位于
    health 验证之后（失败/回滚路径天然不写）。
 """
 
@@ -71,9 +71,9 @@ def _run_script(*args: str) -> dict[str, str]:
 
 
 class TestComputeScriptParity:
-    """compute 脚本输出 == 控制面 services digest（字节级，两 kind）。"""
+    """compute 脚本输出 == 控制面 services digest（字节级，agent-code）。"""
 
-    def test_parity_code_and_resources(self, tmp_path, monkeypatch):
+    def test_parity_code(self, tmp_path, monkeypatch):
         import backend.services.artifact_digest as ad
         import backend.services.host_updater as hu
 
@@ -84,17 +84,15 @@ class TestComputeScriptParity:
         monkeypatch.setattr(hu, "_AGENT_SOURCE_DIR", tree)
         monkeypatch.setattr(hu, "_PIPELINE_SCHEMA_FILE", schema)
         code_expected = ad.compute_desired_artifact_digest(kind="code")
-        res_expected = ad.compute_desired_artifact_digest(kind="resources")
 
         out = _run_script("--source-dir", str(tree), "--schema-file", str(schema))
         assert out["CODE_DIGEST"] == code_expected
-        assert out["RESOURCES_DIGEST"] == res_expected
 
-    def test_empty_resources_reports_empty(self, tmp_path):
-        tree = tmp_path / "agent"
-        _write(tree / "main.py", "x\n")
+    def test_reports_only_agent_code_identity(self, tmp_path):
+        """ADR-0040 D8 R2：源树带 resources/ 也只打印 agent-code 身份（资源层退役）。"""
+        tree = _build_tree(tmp_path / "agent")
         out = _run_script("--source-dir", str(tree))
-        assert out["RESOURCES_DIGEST"] == ""
+        assert set(out) == {"CODE_DIGEST"}, out
         assert out["CODE_DIGEST"].startswith("sha256:")
 
 
@@ -124,8 +122,9 @@ class TestRsyncPolicyContract:
         for stale in ("test_agent*.py", "test_aimonkey*.py", "test_main*.py"):
             assert stale not in excludes
 
-        # 主机本地身份：mtbf 资源 + 双 digest 文件（exclude+protect，防 --delete）
-        assert "resources/mtbf/" in host_local
+        # 主机本地：resources/ 整树（ADR-0040 D8 R2，含 mtbf/）+ 部署身份文件（exclude+protect，
+        # 防 --delete）。ARTIFACT_DIGEST_RESOURCES 不再写入，但主机上的存量文件仍受保护（R4 处置）
+        assert "resources/" in host_local
         assert "ARTIFACT_DIGEST" in host_local
         assert "ARTIFACT_DIGEST_RESOURCES" in host_local
 
@@ -187,25 +186,21 @@ class TestRsyncPolicyContract:
 
 
 class TestPlaybookBookkeeping:
-    """playbook 含 compute + 双写入任务，且位于 health 之后（失败不写）。"""
+    """playbook 含 compute + 写入任务，且位于 health 之后（失败不写）。"""
 
     def test_digest_tasks_after_health(self):
         text = _PLAYBOOK.read_text(encoding="utf-8")
         compute_at = text.index("Compute deployment artifact digests")
         write_code_at = text.index("Write agent ARTIFACT_DIGEST (ADR-0040 D2)")
-        write_res_at = text.index("Write agent ARTIFACT_DIGEST_RESOURCES")
         health_at = text.index("Run agentctl health after restart")
         rescue_at = text.index("rescue:")
 
-        assert health_at < compute_at < write_code_at < write_res_at < rescue_at
+        assert health_at < compute_at < write_code_at < rescue_at
 
     def test_write_guards_use_script(self):
         text = _PLAYBOOK.read_text(encoding="utf-8")
         assert "compute_deploy_digest.py" in text
-        # resources 空集不写（#1975 空集守卫的对偶）
-        assert "agent_resources_artifact_digest | length > 0" in text
         # code 层 deploy 时才写（rsync 未跑则无身份可写）
         assert "agent_code_change_lines | length > 0" in text
-        # 写入目标：agent 安装目录下的双身份文件
+        # 写入目标：agent 安装目录下的身份文件（ADR-0040 D8 R2 起只剩 agent-code 一份）
         assert "agent/ARTIFACT_DIGEST" in text
-        assert "agent/ARTIFACT_DIGEST_RESOURCES" in text

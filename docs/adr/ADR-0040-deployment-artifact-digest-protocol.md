@@ -193,7 +193,9 @@ canary 真机刷机 run 575 与 Monkey run 576 实证从 `tools_cache` 取工具
    - **R1 控制面停判停推**：`resources_drift` 恒不产生；hot-update / batch 不再构建、传输资源 tarball；`--force` 收窄为
      `agent-code` 全量；`agent_resources_digest` 仍接收（兼容旧 Agent 心跳）但不参与任何状态判定（§10 判据唯一性不变）。
    - **R2 Ansible 归位**：`update_agent.yml` / `install_agent.yml` 停止资源推送，撤 #2166「源树缺 `resources/flashtool` 即拒绝」
-     前置断言——须在 R1 之后（R1 前 Ansible 仍是资源下发通道之一）。
+     前置断言——须在 R1 之后（R1 前 Ansible 仍是资源下发通道之一）。（R2 实施勘误：上文「已无消费方」漏了一个安装期消费——
+     安装脚本从 `resources/flashtool` 拷 ModemManager 忽略规则 `99-ttyacms.rules`；R2 改为安装脚本 / `ensure_flash_prereqs.yml`
+     写与厂商原件逐字一致的固定形态，停推后新装主机不缺该规则。）
    - **R3 发布清单**：`release-manifest` 去 `host-resources` 分量（`build_bundle` 与 `tools/site_config` 的 install / plan /
      checks / manifest 同批）；安装器对**旧** bundle（仍带该分量）照常接受、对新 bundle 不再要求。bundle 从此不依赖
      `backend/agent/resources/` 外部物料——ADR-0051 D8「`check-deploy-source.sh` 由结构替代（从提交构建）」的前置随之解除。

@@ -11,8 +11,8 @@ digest——**多行 stdout 下返回 list**，`copy content` 因此把 marker �
 守三件事（PR 路径执行，纯离线）：
 1. 提取表达式必须语义确定（`regex_findall` 取首元素），不得回退到 `regex_search`
    的替换形态；
-2. 两个写入任务之后必须有**回读 + 断言**（写完即验，fail-closed），且断言同时校验
-   「形态」与「取值」；
+2. 写入任务之后必须有**回读 + 断言**（写完即验，fail-closed），且断言同时校验
+   「形态」与「取值」（ADR-0040 D8 R2 起只剩 `ARTIFACT_DIGEST` 一个身份文件）；
 3. 断言所用的形态正则与 agent 侧校验一致。
 """
 
@@ -64,7 +64,9 @@ def test_extract_uses_findall_not_replacing_regex_search(playbook):
     assert len(tasks) == 1, "Extract deployment digests 任务应唯一存在"
     facts = tasks[0]["ansible.builtin.set_fact"]
 
-    for key in ("agent_code_artifact_digest", "agent_resources_artifact_digest"):
+    # ADR-0040 D8 R2：host-resources 层退役，只提取 agent-code 身份
+    assert set(facts) == {"agent_code_artifact_digest"}, facts
+    for key in ("agent_code_artifact_digest",):
         expr = str(facts[key])
         assert "regex_findall" in expr, f"{key} 必须用 regex_findall（#2112/#2275）: {expr}"
         assert "regex_search" not in expr, f"{key} 不得回退到 regex_search 替换形态: {expr}"
@@ -76,15 +78,20 @@ def test_extract_uses_findall_not_replacing_regex_search(playbook):
 def test_write_then_verify_pair_exists_after_writes(playbook):
     names = [t["name"] for t in _tasks(playbook)]
     write_code = names.index("Write agent ARTIFACT_DIGEST (ADR-0040 D2)")
-    write_res = names.index("Write agent ARTIFACT_DIGEST_RESOURCES (ADR-0040 P2)")
     readback = next(i for i, n in enumerate(names) if n.startswith("Read back deployed artifact digests"))
-    assert readback > max(write_code, write_res), "回读任务必须在两个写入任务之后（#2112 ②）"
+    assert readback > write_code, "回读任务必须在写入任务之后（#2112 ②）"
+    # ADR-0040 D8 R2：Ansible 不再写 host-resources 身份（任何任务都不得以它为写入目标）
+    copy_dests = [
+        str(t["ansible.builtin.copy"].get("dest", ""))
+        for t in _tasks(playbook) if "ansible.builtin.copy" in t
+    ]
+    assert not [d for d in copy_dests if d.endswith("ARTIFACT_DIGEST_RESOURCES")], copy_dests
 
     tasks = _tasks(playbook)
     slurp = tasks[readback]["ansible.builtin.slurp"]
     assert "{{ item.file }}" in str(slurp["src"]), slurp
     loop_files = [item["file"] for item in tasks[readback]["loop"]]
-    assert loop_files == ["ARTIFACT_DIGEST", "ARTIFACT_DIGEST_RESOURCES"], loop_files
+    assert loop_files == ["ARTIFACT_DIGEST"], loop_files
 
     assert_task = next(
         t for t in tasks if t["name"].startswith("Assert deployed digests are well-formed")

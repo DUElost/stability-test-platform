@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compute deployment artifact digests for the Ansible track (ADR-0040 P2, #1997).
+"""Compute the deployment artifact digest for the Ansible track (ADR-0040 D2, #1997).
 
 Usage (from the playbook checkout, control machine):
 
@@ -10,16 +10,18 @@ Usage (from the playbook checkout, control machine):
 Prints::
 
     CODE_DIGEST=sha256:<hex>
-    RESOURCES_DIGEST=sha256:<hex>      # empty value when the source has no resources/
+
+Only the ``agent-code`` identity: the ``host-resources`` layer is retired
+(ADR-0040 D8 R2) — Ansible no longer ships ``resources/`` nor writes
+``ARTIFACT_DIGEST_RESOURCES``.
 
 stdlib-only by design: loads ``backend/agent/contracts/artifact_digest.py``
 （ADR-0054 D1 唯一实现；控制面 services 引用同一算法，故两侧不会各自演化）
 via importlib — never imports the ``backend.*`` package chain (no DATABASE_URL /
-settings deps). The digests are computed on the SAME basis as the control
-plane's desired identity (code tree + pipeline schema arcname; resources/**
-minus mtbf/), so a host updated by Ansible reports digests the next
-control-plane convergence recognizes (no-op steady state; #1943 class lag
-avoided).
+settings deps). The digest is computed on the SAME basis as the control
+plane's desired identity (code tree + pipeline schema arcname), so a host
+updated by Ansible reports a digest the next control-plane convergence
+recognizes (no-op steady state; #1943 class lag avoided).
 """
 
 from __future__ import annotations
@@ -55,9 +57,6 @@ def main(argv: list[str] | None = None) -> int:
         help="pipeline schema path; included in the code identity as "
              "stp_schemas/pipeline_schema.json when present",
     )
-    parser.add_argument(
-        "--kind", choices=("code", "resources", "both"), default="both",
-    )
     args = parser.parse_args(argv)
 
     mod = _load_agent_digest_module()
@@ -71,20 +70,11 @@ def main(argv: list[str] | None = None) -> int:
     if schema_file is not None and schema_file.is_file():
         extra_files = {"stp_schemas/pipeline_schema.json": str(schema_file)}
 
-    kinds = ("code", "resources") if args.kind == "both" else (args.kind,)
-    for kind in kinds:
-        entries = mod.collect_artifact_entries(
-            str(source_dir), extra_files=extra_files, kind=kind,
-        )
-        # 空集守卫的对偶（#1975）：控制面 resources 分区为空（大件不入 git）
-        # 时打印空值——playbook 据此跳过写入，绝不下发空载荷身份。
-        if not entries:
-            digest = ""
-        else:
-            digest = mod.digest_entries(entries)
-        # 空集守卫的对偶：控制面 resources 分区为空（大件不入 git）时打印
-        # 空值——playbook 据此跳过写入（不下发空载荷身份）。
-        print(f"{'CODE' if kind == 'code' else 'RESOURCES'}_DIGEST={digest}")
+    entries = mod.collect_artifact_entries(
+        str(source_dir), extra_files=extra_files, kind=mod.ARTIFACT_KIND_CODE,
+    )
+    # 空集打印空值：playbook 据此跳过写入（误指向空树时不落一个「空载荷」身份）
+    print(f"CODE_DIGEST={mod.digest_entries(entries) if entries else ''}")
     return 0
 
 

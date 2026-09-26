@@ -12,6 +12,11 @@ Ansible 升级都会把 MTBF APK 三件套删掉，后续 MTBF 直接失败。AP
    源码删除仍照常同步、原有排除清理不被破坏；
 3. 反例见证：只发 `--exclude` 时文件确实被 `--delete-excluded` 清掉。
 
+ADR-0040 D8 R2：host-resources 层退役后 `resources/` **整树**归主机本地——Ansible 既不下发
+（源树里的 resources 不传）也不删除（主机存量原样保留）。由此从**任何**源树同步都安全：
+源树没有 resources（git worktree 的常态）时不再把主机资源面当「已删除」清空——这正是 #2133
+事故形态，原 #2166 的「源树必须带 resources」前置断言随之撤除（本文件的真跑用例接替它的职责）。
+
 rsync 缺失（如精简容器）时行为类用例 skip，静态用例仍生效。
 """
 
@@ -29,6 +34,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 ROLE_DEFAULTS = REPO_ROOT / "tools/ansible/roles/agent_deploy/defaults/main.yml"
 UPDATE_PLAYBOOK = REPO_ROOT / "tools/ansible/playbooks/update_agent.yml"
 MTBF_PATH = "resources/mtbf/"
+RESOURCES_PATH = "resources/"
 
 requires_rsync = pytest.mark.skipif(
     shutil.which("rsync") is None, reason="rsync not available"
@@ -89,8 +95,68 @@ def _seed_layouts(tmp_path: Path) -> tuple[Path, Path]:
     return src, dest
 
 
-def test_role_defaults_declare_host_local_mtbf_path():
-    assert MTBF_PATH in _defaults()["agent_host_local_paths"]
+def test_role_defaults_declare_whole_resources_tree_host_local():
+    """ADR-0040 D8 R2：`resources/` 整树归主机本地（覆盖 mtbf/，也覆盖退役前下发的 aimonkey/flashtool）。"""
+    assert RESOURCES_PATH in _defaults()["agent_host_local_paths"]
+
+
+def _seed_resources_layout(tmp_path: Path, *, src_resources: bool) -> tuple[Path, Path]:
+    """主机侧带退役前下发的资源副本 + mtbf；源树有/无 resources 两种形态。"""
+    src = tmp_path / "src"
+    dest = tmp_path / "dest"
+    (src / "agent").mkdir(parents=True)
+    (src / "agent/main.py").write_text("new-code\n", encoding="utf-8")
+    if src_resources:
+        (src / "resources/aimonkey").mkdir(parents=True)
+        (src / "resources/aimonkey/monkey.bin").write_text("control-plane-copy\n", encoding="utf-8")
+        (src / "resources/new-only.bin").write_text("never-shipped\n", encoding="utf-8")
+    for rel, content in (
+        ("resources/aimonkey/monkey.bin", "host-copy\n"),
+        ("resources/flashtool/SP/flash_tool", "host-flash\n"),
+        ("resources/mtbf/apk.bin", "host-mtbf\n"),
+        ("agent/removed.py", "stale\n"),
+    ):
+        (dest / rel).parent.mkdir(parents=True, exist_ok=True)
+        (dest / rel).write_text(content, encoding="utf-8")
+    return src, dest
+
+
+@requires_rsync
+def test_host_resources_survive_sync_from_tree_without_resources(tmp_path):
+    """#2133 事故形态（源树无 resources）→ 主机资源面整树存活；代码同步照常。"""
+    src, dest = _seed_resources_layout(tmp_path, src_resources=False)
+
+    completed = _run_update(src, dest, _host_local_flags())
+
+    assert completed.returncode == 0, completed.stderr
+    assert (dest / "resources/aimonkey/monkey.bin").read_text(encoding="utf-8") == "host-copy\n"
+    assert (dest / "resources/flashtool/SP/flash_tool").exists()
+    assert (dest / "resources/mtbf/apk.bin").exists()
+    assert (dest / "agent/main.py").read_text(encoding="utf-8") == "new-code\n"
+    assert not (dest / "agent/removed.py").exists(), "源码删除仍须同步（--delete 未被削弱）"
+
+
+@requires_rsync
+def test_source_tree_resources_are_not_shipped(tmp_path):
+    """源树带（不同内容的）resources → 不传输、不覆盖：Ansible 不再是资源下发通道。"""
+    src, dest = _seed_resources_layout(tmp_path, src_resources=True)
+
+    completed = _run_update(src, dest, _host_local_flags())
+
+    assert completed.returncode == 0, completed.stderr
+    assert (dest / "resources/aimonkey/monkey.bin").read_text(encoding="utf-8") == "host-copy\n"
+    assert not (dest / "resources/new-only.bin").exists()
+
+
+@requires_rsync
+def test_exclude_without_protect_wipes_host_resources(tmp_path):
+    """反例见证：`resources/` 只发 `--exclude`（不配 protect）时整树被 `--delete-excluded` 清掉。"""
+    src, dest = _seed_resources_layout(tmp_path, src_resources=False)
+
+    completed = _run_update(src, dest, [f"--exclude={RESOURCES_PATH}"])
+
+    assert completed.returncode == 0, completed.stderr
+    assert not (dest / "resources").exists()
 
 
 def test_playbook_guards_host_local_paths_in_dry_run_and_sync():
