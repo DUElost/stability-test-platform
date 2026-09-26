@@ -22,7 +22,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Sequence
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
@@ -57,34 +57,30 @@ _GAP_TRAVERSAL_MAX_DEPTH = 20
 def _chain_missing_segments(db: Session, plan_run: PlanRun) -> int:
     """Count downstream plan-chain segments not yet materialized as PlanRuns.
 
-    #3066 A半：从当前 run 的 plan 沿 ``next_plan_id`` 数剩余环数（快照优先、
-    live Plan 兜底，与触发路径同源），子段已存在即 0。只读。
+    #3066 A半：期望段数（从当前 run 的 plan 沿 ``next_plan_id`` 数剩余环，
+    快照优先、live Plan 兜底，与触发路径同源）减去本链已落库的后续 run 数
+    （同 root、chain_index 更大）。子段已建但更深层缺口仍在时同样计数。
+    只读。
     """
-    next_plan_id = _resolve_next_plan_id_sync(plan_run, db)
-    if next_plan_id is None:
-        return 0
-    child_exists = db.execute(
-        select(PlanRun.id)
-        .where(
-            PlanRun.parent_plan_run_id == plan_run.id,
-            PlanRun.plan_id == next_plan_id,
-        )
-        .limit(1)
-    ).first() is not None
-    if child_exists:
-        return 0
-    missing = 0
-    cursor = db.get(Plan, next_plan_id)
+    expected_after = 0
+    cursor_id = _resolve_next_plan_id_sync(plan_run, db)
     seen: set[int] = set()
-    while cursor is not None and missing < _GAP_TRAVERSAL_MAX_DEPTH:
-        if cursor.id in seen:
+    while cursor_id is not None and expected_after < _GAP_TRAVERSAL_MAX_DEPTH:
+        if cursor_id in seen:
             break
-        seen.add(cursor.id)
-        missing += 1
-        if cursor.next_plan_id is None:
-            break
-        cursor = db.get(Plan, cursor.next_plan_id)
-    return missing
+        seen.add(cursor_id)
+        expected_after += 1
+        cursor = db.get(Plan, cursor_id)
+        cursor_id = cursor.next_plan_id if cursor is not None else None
+    if expected_after == 0:
+        return 0
+    created_after = db.execute(
+        select(func.count(PlanRun.id)).where(
+            PlanRun.root_plan_run_id == (plan_run.root_plan_run_id or plan_run.id),
+            PlanRun.chain_index > (plan_run.chain_index or 0),
+        )
+    ).scalar() or 0
+    return max(0, expected_after - int(created_after))
 
 
 def _mark_chain_gap_signaled(plan_run: PlanRun, *, missing: int, reason: str) -> bool:

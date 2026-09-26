@@ -35,6 +35,7 @@ from backend.core.metrics import (
     device_lease_released,
     task_run_state_changes,
     task_run_total,
+    post_completion_cutoff_jobs,
 )
 from backend.models.enums import JobStatus, LeaseType
 from backend.models.job import JobInstance, StepTrace
