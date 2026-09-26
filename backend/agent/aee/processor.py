@@ -15,6 +15,7 @@ from ..contracts.aee_metadata import (
     normalize_package_name,
     parse_exp_main_summary,
 )
+from ..contracts.aee_state_migration import WATCHER_AEE_STATE_PREFIX
 
 from .bugreport import export_bugreport_for_timestamp
 from .db_history import (
@@ -57,7 +58,7 @@ class ProcessConfig:
     bugreport_cooldown_seconds: int = 300
     bugreport_cooldown_event_types: Optional[set[str]] = None
     bugreport_timeout_seconds: int = 600
-    state_key_prefix: str = "watcher:aee"
+    state_key_prefix: str = WATCHER_AEE_STATE_PREFIX
     pull_timeout_seconds: int = 300
     pull_retry_limit: int = 10
     max_entries_per_run: Optional[int] = None

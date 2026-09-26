@@ -81,13 +81,12 @@ ignore_imports =
 # 随 agent 包与控制面同时发布）。控制面对契约包的 import 由下方通配忽略行放行，
 # import agent 其他模块仍然失败。
 #
-# ADR-0054 第 1–4 步已把 pipeline_validator / legacy_aee / aee_metadata /
-# aee_event_dirs / watcher_contracts / artifact_digest / kernel_usb_faults（解析+词表）
-# 搬入 contracts/。剩余 1 条基线 = `aee/state_migration`（第 4 步的另一候选项）：
-# 该模块 stdlib-only（sqlite3/json），内容以**状态键格式 + 合并语义**为主（采集/迁移
-# 入口本就是控制面脚本），终态出口 = 按同一模式整体搬入 contracts/ 后删除本行；
-# 搬迁前保留基线，不是永久豁免。
-# `unmatched_ignore_imports_alerting = error` 强制「搬走即删行」。
+# ADR-0054 第 1–4 步已**全部落地**：pipeline_validator / legacy_aee / aee_metadata /
+# aee_event_dirs / watcher_contracts / artifact_digest / kernel_usb_faults（解析+词表）/
+# aee_state_migration 均在 `backend/agent/contracts/`。**C3 基线已清零**——此后控制面
+# 新增任何对 `backend.agent`（契约包以外）的直接 import 一律红，无豁免；契约包本身
+# 由下方通配行放行（ADR-0054 D4 的常驻条款）。
+# `unmatched_ignore_imports_alerting = error` 保证本段不留僵尸豁免行。
 # ---------------------------------------------------------------------------
 [importlinter:contract:c3-cp-not-into-agent]
 name = C3 控制面不直接 import backend.agent
@@ -110,7 +109,6 @@ ignore_imports =
     # ADR-0054 D4：共享契约包放行（零匹配会因 unmatched_ignore_imports_alerting=error
     # 报错，故本行与第一次搬迁同 PR 引入）。
     backend.** -> backend.agent.contracts.**
-    backend.scripts.migrate_watcher_aee_state_keys -> backend.agent.aee.state_migration
 
 # ---------------------------------------------------------------------------
 # C4 core 是最底层：不依赖 web 框架（只查直接 import）

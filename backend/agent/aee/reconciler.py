@@ -70,7 +70,7 @@ from .emit_intent import (
 from .paths import PathOutsideRootError, get_aee_local_root, resolve_path_under_aee_local
 from ..contracts.aee_metadata import resolve_device_log_event_type
 from .processor import ProcessConfig, process_device_logs
-from .state_migration import WATCHER_AEE_STATE_PREFIX
+from ..contracts.aee_state_migration import WATCHER_AEE_STATE_PREFIX
 from .timestamp import parse_timestamp, to_utc
 
 logger = logging.getLogger(__name__)

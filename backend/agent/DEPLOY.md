@@ -37,7 +37,8 @@
 │   │   ├── aee_event_dirs.py           # 事件目录命名识别（DLE/scan 匹配键）
 │   │   ├── watcher_contracts.py        # watcher payload shape + fail-fast 校验
 │   │   ├── artifact_digest.py          # 部署载荷摘要算法（ADR-0040；发布/安装/Ansible 按路径加载）
-│   │   └── kernel_usb_faults.py        # 内核 USB 故障解析/词表/判定（采集在 agent/kernel_usb_faults.py）
+│   │   ├── kernel_usb_faults.py        # 内核 USB 故障解析/词表/判定（采集在 agent/kernel_usb_faults.py）
+│   │   └── aee_state_migration.py      # AEE state 键命名空间/合并语义/迁移（agent 启动守卫与运维脚本共用）
 │   ├── watcher/                        # ADR-0018 设备日志监控
 │   │   └── ...
 │   └── scripts/                        # 可执行脚本（扁平布局）

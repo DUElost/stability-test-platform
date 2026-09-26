@@ -11,7 +11,7 @@ import argparse
 import json
 import os
 
-from backend.agent.aee.state_migration import migrate_legacy_aee_state_keys
+from backend.agent.contracts.aee_state_migration import migrate_legacy_aee_state_keys
 
 
 def parse_args() -> argparse.Namespace:
