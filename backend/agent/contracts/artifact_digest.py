@@ -1,14 +1,19 @@
-"""Deployment artifact digest（ADR-0040 D1）——Agent 侧镜像实现。
+"""Deployment artifact digest 契约（ADR-0040 D1/D3，ADR-0054 D1）——唯一实现。
 
-与 ``backend/services/artifact_digest.py`` 构成双侧镜像：**字节级等价**由
-``backend/tests/services/test_artifact_digest.py`` 对照测试锁定（先例：
-``script_catalog_version`` 双侧实现 + parity test）。
+ADR-0054 第 3 步后，摘要算法与载荷规范化序列只有这一份实现：
 
-信任模型（ADR-0040 D2）：Agent **不**重算自身树 digest（心跳全树重算被
-§7-3 显式否决）——current digest 读部署流程受控写入的 ``ARTIFACT_DIGEST``
-文件（``version_info.read_artifact_digest``）。本模块的存在是算法契约的
-第二只锚：输入集/序列化若在任一侧漂移，parity test 即红；P2 分层
-（``agent-code`` / ``host-resources`` 双 artifact）将复用同一算法。
+- **算法面**：规范化序列 ``(relpath, 可执行位, content sha256)`` →
+  ``digest_entries`` → ``sha256:<hex>``。控制面 ``backend/services/artifact_digest.py``
+  直接 import 本模块；控制面自己的输入集枚举（``host_updater._iter_payload_files``）
+  按 ADR-0054 §5 第 3 步**留在 services**。
+- **枚举面**：``collect_artifact_entries``（agent 载荷树，含排除集）与
+  ``collect_control_plane_entries``（控制面 bundle 的 ``backend/**`` 除 agent）是
+  本契约对「载荷输入集」的定义，供发布 / 站点安装 / Ansible 工具**按文件路径加载**
+  （stdlib-only，不触发 ``backend.*`` 包链，故可在无 DB / 无配置的机器上跑）。
+
+信任模型（ADR-0040 D2）：Agent **不**重算自身树 digest（心跳全树重算被 §7-3
+显式否决）——current digest 读部署流程受控写入的 ``ARTIFACT_DIGEST`` 文件
+（``version_info.read_artifact_digest``）。
 """
 
 from __future__ import annotations
