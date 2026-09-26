@@ -35,7 +35,8 @@
 │   │   ├── legacy_aee.py               # legacy AEE 常量表
 │   │   ├── aee_metadata.py             # AEE 事件类型/包名归一与 exp_main 解析
 │   │   ├── aee_event_dirs.py           # 事件目录命名识别（DLE/scan 匹配键）
-│   │   └── watcher_contracts.py        # watcher payload shape + fail-fast 校验
+│   │   ├── watcher_contracts.py        # watcher payload shape + fail-fast 校验
+│   │   └── artifact_digest.py          # 部署载荷摘要算法（ADR-0040；发布/安装/Ansible 按路径加载）
 │   ├── watcher/                        # ADR-0018 设备日志监控
 │   │   └── ...
 │   └── scripts/                        # 可执行脚本（扁平布局）

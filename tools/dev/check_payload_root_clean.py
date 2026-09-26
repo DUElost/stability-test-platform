@@ -3,7 +3,7 @@
 
 The hot-update tarball and the ``desired`` artifact digest share one enumeration
 (``backend/services/host_updater.py::_iter_payload_files`` /
-``backend/agent/artifact_digest.py::collect_artifact_entries``; "digest 输入集 =
+``backend/agent/contracts/artifact_digest.py::collect_artifact_entries``; "digest 输入集 =
 部署输入集" 由同一份代码保证，ADR-0040 D1), and that enumeration walks the
 **working tree** rooted at ``backend/agent/``. Two consequences make an untracked
 file there different from an untracked file anywhere else:

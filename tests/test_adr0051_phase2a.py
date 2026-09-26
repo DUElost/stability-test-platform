@@ -153,10 +153,46 @@ class TestCheckerSemantics:
         _tree(root, "fam")
         doc, _ = _registered(root, {"fam": "1.0.0"})
         out = tmp_path / "packages"
-        checker.rebuild_all(root, packer, out_dir=out, versions={"fam": "1.0.0"})
+        build = tmp_path / "build"
+        build.mkdir()
+        rebuilt = checker.rebuild_all(root, packer, build_dir=build)
+        done, errs = checker.publish_latest(rebuilt, doc, out)
+        assert errs == [] and done["published"] == ["fam@1.0.0"]
         assert (out / "fam" / "1.0.0.tar.gz").is_file()
         packer.write_site_manifest_copy(doc, out)
         assert json.loads((out / "manifest.json").read_text(encoding="utf-8")) == doc
+
+    def test_publish_is_append_only_and_never_rewrites(self, tmp_path):
+        """2026-09-26：--publish 曾把包边压缩边写进站点路径（非原子、先于等价判定、全量重写）。"""
+        root = tmp_path / "scripts"
+        _tree(root, "fam")
+        doc, _ = _registered(root, {"fam": "1.0.0"})
+        out, build = tmp_path / "packages", tmp_path / "build"
+        build.mkdir()
+        rebuilt = checker.rebuild_all(root, packer, build_dir=build)
+        checker.publish_latest(rebuilt, doc, out)
+        dest = out / "fam" / "1.0.0.tar.gz"
+        before = dest.stat().st_mtime_ns
+        done, errs = checker.publish_latest(rebuilt, doc, out)          # 同字节：跳过，不重写
+        assert errs == [] and done == {"published": [], "identical": ["fam@1.0.0"]}
+        assert dest.stat().st_mtime_ns == before
+        dest.write_bytes(b"other bytes")                                 # 站点被改成别的字节：拒绝覆写
+        _done, errs = checker.publish_latest(rebuilt, doc, out)
+        assert any("拒绝覆写" in e for e in errs) and dest.read_bytes() == b"other bytes"
+        assert not [p for p in out.rglob(".*")], "原子落位不应残留临时文件"
+
+    def test_publish_refuses_when_tree_differs_from_registration(self, tmp_path):
+        """改树未发版时构建 sha ≠ 登记：不得以已登记版本号的文件名落站点。"""
+        root = tmp_path / "scripts"
+        _tree(root, "fam")
+        doc, _ = _registered(root, {"fam": "1.0.0"})
+        (root / "fam" / "fam.py").write_text("print('changed')\n", encoding="utf-8")
+        build = tmp_path / "build"
+        build.mkdir()
+        rebuilt = checker.rebuild_all(root, packer, build_dir=build)
+        _done, errs = checker.publish_latest(rebuilt, doc, tmp_path / "packages")
+        assert any("构建 sha" in e for e in errs)
+        assert not (tmp_path / "packages" / "fam" / "1.0.0.tar.gz").exists()
 
 
 class TestBundleCarriesManifest:
