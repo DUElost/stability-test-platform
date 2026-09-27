@@ -120,7 +120,7 @@ def test_step_push_default_remote_dir_passes(monkeypatch, tmp_path):
     )
     assert result["success"] is True, result
     assert result.get("skipped") is True
-    assert issued == [f"cat /sdcard/test_resources/.stp_bundle_sha256 2>/dev/null"], issued
+    assert issued == ["cat /sdcard/test_resources/.stp_bundle_sha256 2>/dev/null"], issued
 
 
 def test_step_push_valid_remote_dir_flows_through(monkeypatch, tmp_path):
@@ -133,7 +133,7 @@ def test_step_push_valid_remote_dir_flows_through(monkeypatch, tmp_path):
         {"bundle": str(bundle), "manifest": str(manifest), "remote_dir": "/sdcard/myres"},
     )
     assert result["success"] is True, result
-    assert issued == [f"cat /sdcard/myres/.stp_bundle_sha256 2>/dev/null"], issued
+    assert issued == ["cat /sdcard/myres/.stp_bundle_sha256 2>/dev/null"], issued
 
 
 # ── ② install.pkg_name：cfg 入口统一校验一次 ─────────────────────────────
