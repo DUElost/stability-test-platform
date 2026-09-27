@@ -136,14 +136,32 @@ def progress_stamp(payload: dict) -> None:
 # ADB 封装
 # ---------------------------------------------------------------------------
 
+def decode_device_output(raw: bytes | None) -> str:
+    """设备 / adb 输出解码：**宽容 UTF-8**（v1.0.8，#3175；同 #3069 形态）。
+
+    设备侧输出（instrument 日志、force-stop/pkill 回显）可能是任意字节。``text=True``
+    按 locale 严格解码，遇到一个非 UTF-8 字节就抛 ``UnicodeDecodeError``——它不是
+    ``OSError``，调用点无从兜住；``stop_stress()`` 内抛会把 teardown 中断在
+    ``pkill`` 之前，压测循环留在设备上继续跑（#3069 实测 462/487 台倒在 ``0xf9`` 上）。
+    坏字节替换成 U+FFFD 不影响调用方对 rc / 输出的判定。
+    """
+    return (raw or b"").decode("utf-8", errors="replace")
+
+
 def adb(*args: str, timeout: int = 60) -> tuple[int, str, str]:
     """adb -s <serial> <args...>，返回 (returncode, stdout, stderr)。"""
     cmd = [adb_path(), "-s", device_serial()] + list(args)
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        # v1.0.8（#3175）：显式收字节再解宽容码，不用 ``text=True``——后者严格解码，
+        # 一个坏字节即 UnicodeDecodeError，且无法从调用点兜住。
+        result = subprocess.run(cmd, capture_output=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         return -1, "", "timeout"
-    return result.returncode, result.stdout or "", result.stderr or ""
+    return (
+        result.returncode,
+        decode_device_output(result.stdout),
+        decode_device_output(result.stderr),
+    )
 
 
 def adb_shell(command: str, timeout: int = 60) -> str:

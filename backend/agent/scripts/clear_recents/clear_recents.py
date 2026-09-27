@@ -35,6 +35,17 @@ v1.0.5（#3107）：**`dump_path` 校验**。该值来自计划参数（`STP_STE
 命令。现要求它匹配 `^/data/local/tmp/[A-Za-z0-9._-]+$`，非法值整步转红（宁可红也
 不把破坏性命令的执行面交给参数）；空值按既有语义回落默认路径。
 
+v1.0.6（#3171 / #3463 G5）：**三处「假绿」收口**。①`already_clear` 前须有「站在
+Overview」的正面证据——锁屏 / 桌面 dump 同样是 0 卡、无清除按钮，只凭 `app==0`
+判成功是「什么都没测就绿」；正面证据 = raw 任务卡 > 0 或概览容器 id（recents /
+overview / task_view）在场，否则按瞬时读失败消耗尝试、绝不落绿。②快照计数路径
+信任判据与过滤判据不一致：AOSP / Launcher3 的 content-desc 常挂卡片节点而非
+snapshot ImageView，desc 全为空时旧代码在有卡屏上数出 0 ⇒ 假绿；现在 desc 全空
+回落节点计数。③`_open_overview` 的 `input keyevent 187` 改走 `adb_shell_quiet`，
+rc≠0（adb 层失败，区别于被系统静默吞掉的按键）按读失败处理消耗尝试。另
+`_adb.py` 的设备输出改 bytes 采集 + 宽松 UTF-8 解码（#3069 同形，坏字节替换为
+U+FFFD，不再炸 UnicodeDecodeError）。
+
 Environment:
     STP_DEVICE_SERIAL   (required)
     STP_ADB_PATH        (default: adb)
@@ -138,8 +149,24 @@ def _wake_unlock_home() -> None:
     time.sleep(0.4)
 
 
-def _open_overview() -> None:
-    adb_shell(f"input keyevent {_KEYCODE_APP_SWITCH}", timeout=15)
+def _open_overview() -> Optional[str]:
+    """APP_SWITCH 注入；返回失败原因（None=成功）。
+
+    #3171：旧实现走只回 stdout 的 `adb_shell`，rc 被丢弃——设备重启窗 / adb 断开
+    时 `input` 失败无感知，只能靠后续 dump 的失败间接暴露。现在 rc≠0 显式报告；
+    按键被系统静默丢弃仍无 rc 可见（锁屏吞 187 不报错），由 already_clear 的
+    正面证据兜底（`_has_overview_evidence`）。
+    """
+    try:
+        proc = adb_shell_quiet(f"input keyevent {_KEYCODE_APP_SWITCH}", timeout=15)
+    except Exception as exc:  # 子进程超时 / adb 不可用
+        return f"input keyevent {_KEYCODE_APP_SWITCH} 异常: {exc}"
+    if proc.returncode != 0:
+        detail = ((proc.stderr or "") or (proc.stdout or "")).strip()[:120]
+        return f"input keyevent {_KEYCODE_APP_SWITCH} rc={proc.returncode}" + (
+            f"：{detail}" if detail else ""
+        )
+    return None
 
 
 def _dump_ui(path: str) -> tuple[Optional[str], str]:
@@ -186,11 +213,14 @@ def _count_app_tasks(xml: str) -> int:
     ``task_view_single`` then falsely fails a successful clear (v1.0.0/#462).
     """
     # Prefer snapshot content-desc under task cards.
+    # #3171：信任判据（snaps 非空）与过滤判据（desc 非空）此前不一致——AOSP /
+    # Launcher3 的 desc 常挂卡片节点而非 snapshot ImageView，desc 全为空时旧代码
+    # 在有卡屏上数出 0 ⇒ 假绿。desc 全空时信任判据失效，回落节点计数。
     snaps = re.findall(
         r'resource-id="[^"]*snapshot[^"]*"[^>]*content-desc="([^"]*)"',
         xml,
     )
-    if snaps:
+    if snaps and any(desc.strip() for desc in snaps):
         return sum(1 for desc in snaps if desc.strip() and not _HOME_LABEL.match(desc.strip()))
     # Fallback: task_view nodes whose own content-desc is not home.
     count = 0
@@ -273,11 +303,22 @@ def _tap(x: int, y: int) -> None:
     adb_shell(f"input tap {x} {y}", timeout=15)
 
 
-def _already_clear(xml: str) -> bool:
-    """No remaining *app* tasks (ZTE may still show a 主屏幕 card)."""
-    if _count_app_tasks(xml) == 0:
+_OVERVIEW_EVIDENCE_RE = re.compile(
+    r'resource-id="[^"]*(?:recents|overview|task_view)[^"]*"'
+)
+
+
+def _has_overview_evidence(xml: str, raw_task_count: int) -> bool:
+    """「确实站在 Overview」的正面证据（v1.0.6，#3171）。
+
+    锁屏 / 桌面 dump 同样是 0 卡、无清除按钮——只凭 `app==0` 判 already_clear
+    是「什么都没测就绿」。正面证据任一即可：raw 任务卡 > 0；或概览容器 id
+    （launchers 的 recents 容器、SystemUI 的 recents_view / overview_panel）
+    在场——空概览也有容器，而锁屏 / 桌面 dump 没有。
+    """
+    if raw_task_count > 0:
         return True
-    return False
+    return bool(_OVERVIEW_EVIDENCE_RE.search(xml or ""))
 
 
 def _task_view_centers(xml: str) -> list[tuple[int, int, str]]:
@@ -377,7 +418,11 @@ def main() -> None:
 
         for attempt in range(1, max_attempts + 1):
             metrics["attempts"] = attempt
-            _open_overview()
+            open_err = _open_overview()
+            if open_err is not None:
+                if _retry_read(f"attempt {attempt}: {open_err}", attempt):
+                    return
+                continue
             time.sleep(open_settle)
             xml, dump_err = _dump_ui(dump_path)
             if xml is None:
@@ -398,8 +443,19 @@ def main() -> None:
 
             target = _find_clear_target(xml)
             if target is None:
-                if app_before == 0 or _already_clear(xml):
-                    # 走到这里 dump 必已成功：tasks_after=0 是**测出来的**。
+                if app_before == 0:
+                    if not _has_overview_evidence(xml, raw_before):
+                        # v1.0.6 #3171：0 卡 + 无按钮 + 无概览容器 = 没有「站在
+                        # Overview」的正面证据（锁屏 / 桌面 dump 同形）——绝不落
+                        # already_clear，按瞬时读失败消耗尝试。
+                        if _retry_read(
+                            f"attempt {attempt}: dump 无 Overview 正面证据"
+                            "（0 任务卡、无清除按钮、无概览容器 id）",
+                            attempt,
+                        ):
+                            return
+                        continue
+                    # 走到这里 dump 必已成功且有正面证据：tasks_after=0 是测出来的。
                     metrics["already_clear"] = True
                     metrics["tasks_after"] = app_before
                     metrics["task_cards_raw_after"] = raw_before
@@ -411,7 +467,11 @@ def main() -> None:
                 metrics["swipes"] = int(metrics["swipes"] or 0) + swipes
                 if swipes:
                     time.sleep(after_tap)
-                    _open_overview()
+                    open_err = _open_overview()
+                    if open_err is not None:
+                        if _retry_read(f"swipe 复核 attempt {attempt}: {open_err}", attempt):
+                            return
+                        continue
                     time.sleep(open_settle)
                     verify_xml, verify_err = _dump_ui(dump_path)
                     if verify_xml is None:
@@ -439,7 +499,11 @@ def main() -> None:
             time.sleep(after_tap)
 
             # Re-open overview to verify app task cards are gone.
-            _open_overview()
+            open_err = _open_overview()
+            if open_err is not None:
+                if _retry_read(f"tap 复核 attempt {attempt}: {open_err}", attempt):
+                    return
+                continue
             time.sleep(open_settle)
             verify_xml, verify_err = _dump_ui(dump_path)
             if verify_xml is None:
