@@ -739,6 +739,14 @@
           "retired": false,
           "script": "gpu_finish.py",
           "version": "1.0.7"
+        },
+        {
+          "artifact": "packages/gpu_finish/1.0.8.tar.gz",
+          "package_sha256": "17fdfde215cb85c647ca370b99184733af2bd9a9d3b1909d480b865d6c915eb7",
+          "python": null,
+          "retired": false,
+          "script": "gpu_finish.py",
+          "version": "1.0.8"
         }
       ]
     },
