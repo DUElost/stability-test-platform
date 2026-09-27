@@ -236,7 +236,14 @@ def retire_devices_batch(
     """
     results: list[dict] = []
     seen: set[int] = set()
-    for raw_id in device_ids:
+    # 锁序家族（#2635/#2787/#2796/#2871/#2901/#2974）：批量取行锁前对集合定全序
+    def _lock_order_key(raw_id):
+        try:
+            return (0, int(raw_id))
+        except (TypeError, ValueError):
+            return (1, str(raw_id))
+
+    for raw_id in sorted(device_ids, key=_lock_order_key):
         try:
             device_id = int(raw_id)
         except (TypeError, ValueError):
