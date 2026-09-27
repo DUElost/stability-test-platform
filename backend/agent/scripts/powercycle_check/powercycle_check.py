@@ -1,6 +1,15 @@
 # -*- coding: utf-8 -*-
 """PowerCycle 轮询（patrol 阶段，issue #462 P0b；G15 对齐 §3.2）。
 
+v1.0.10（#3463 §9 G1-pc-2，2026-09-27）：prefs 读路径 kind 区分收口（F1「六族内
+所有 prefs 读路径」，#3471 复核 B1/B3 退回项）。**收取窗口步骤语义不变**（§9.1
+裁定：失败记 `collect_error`、下周期重试、补偿 resume、`success` 仍为 true）：
+- `get_prefs_xml`（_lib）port root 优先形态（setup 1.2.3+ 同构）——巡检进度读
+  与窗口 pause/resume 链路在 root 下不再恒空；
+- `set_prefs(reset_count=false)`（_lib）：kind 区分，读不到不以 0 整写；
+- `resume_task` / `start_task`（_lib）：prefs 不可读（非 `ok`）时 raise，交给
+  窗口既有的补偿/重试语义承接。
+
 v1.0.9（#3463 G1，2026-09-27）：F1 + F2 双收口（batch B1，方案见 #3463 §3 G1）。
 - F1 port powercycle_setup 参照：`_root_read_prefs` 单调用同源证据 +
   收紧后的 `repair_prefs_ownership`（只有「存在 + 读成功 + 内容空」才删——
