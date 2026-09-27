@@ -1116,6 +1116,41 @@ async def test_claim_skipped_when_host_retired_and_online(caplog):
 
 
 @pytest.mark.asyncio(loop_scope="module")
+async def test_claim_skips_retired_device():
+    """ADR-0057 D4 第 2 面（#2962 B）：退役设备不参与认领。
+
+    与 host_retired 同款关键分支：退役**不改写** `device.status`，设备可能仍是
+    ONLINE——只靠 `status != OFFLINE` 的既有过滤会漏判，必须显式读 `retired_at`。
+    """
+    seed = _seed_job_with_policy(watcher_policy=DEFAULT_WATCHER_POLICY)
+    try:
+        db = SessionLocal()
+        try:
+            device = db.get(Device, seed["device_id"])
+            assert device is not None
+            assert device.status == "ONLINE"  # 关键：保持 ONLINE，只置 retired_at
+            device.retired_at = datetime.now(timezone.utc)
+            device.retired_by = "tester"
+            device.retire_reason = "test"
+            db.commit()
+        finally:
+            db.close()
+
+        async with AsyncSessionLocal() as async_db:
+            result = await claim_jobs(
+                payload=ClaimRequest(
+                    host_id=seed["host_id"], capacity=5, agent_version="2.0.0",
+                ),
+                db=async_db,
+                _=None,
+            )
+        assert result.error is None
+        assert result.data == [], "退役设备不得被认领（须显式读 retired_at）"
+    finally:
+        _cleanup_seed(seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
 async def test_claim_skipped_when_host_retired_and_offline(caplog):
     """退役 + 离线：也应记为「因退役跳过」，而非被 status 分支抢先短路。
 

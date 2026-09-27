@@ -30,6 +30,7 @@ class TestDashboardSummary:
             "idle": 0,
             "testing": 0,
             "offline": 0,
+            "offline_stale": 0,
             "error": 0,
             "low_battery": 0,
             "high_temp": 0,
@@ -73,8 +74,20 @@ class TestDashboardSummary:
             host_id=sample_host.id,
             battery_level=15,
             temperature=50,
+            # #2962 A：近期掉线（7 天内有上报）→ 进 `offline` 桶
+            last_seen=datetime.now(timezone.utc) - timedelta(hours=1),
         )
-        db_session.add_all([device_idle, device_busy, device_offline])
+        # #2962 A：陈旧库存（>7 天未见）→ 单独的 `offline_stale` 桶；不参与
+        # 低电量/高温告警计数（读数是数周前快照）
+        device_stale = Device(
+            serial="DEV-STALE-1",
+            status="OFFLINE",
+            host_id=sample_host.id,
+            battery_level=5,
+            temperature=52,
+            last_seen=datetime.now(timezone.utc) - timedelta(days=10),
+        )
+        db_session.add_all([device_idle, device_busy, device_offline, device_stale])
         db_session.commit()
 
         response = client.get("/api/v1/stats/dashboard-summary", headers=auth_headers)
@@ -86,10 +99,11 @@ class TestDashboardSummary:
         assert data["hosts"]["avg_cpu_load"] == 12.5
         assert data["hosts"]["avg_disk_usage"] == 77.7
         assert data["host_resources"][0]["disk_usage"] == 77.7
-        assert data["devices"]["total"] == 3
+        assert data["devices"]["total"] == 4
         assert data["devices"]["idle"] == 1
         assert data["devices"]["testing"] == 1
         assert data["devices"]["offline"] == 1
+        assert data["devices"]["offline_stale"] == 1
         assert data["devices"]["low_battery"] == 2
         assert data["devices"]["high_temp"] == 2
         assert data["alerts"]["total"] == 4

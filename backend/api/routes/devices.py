@@ -21,8 +21,19 @@ from backend.api.schemas.device import (
     BulkProjectAssignIn,
     BulkSwipeTrailIn,
     BulkSwipeTrailOut,
+    DeviceRetireBatchIn,
+    DeviceRetireBatchOut,
+    DeviceRetireBatchResult,
+    DeviceRetireIn,
+    DeviceUnretireIn,
 )
 from backend.api.routes.auth import get_current_active_user, require_admin, User
+from backend.services.device_lifecycle import not_stale_condition
+from backend.services.device_retirement import (
+    retire_device,
+    retire_devices_batch,
+    unretire_device,
+)
 from backend.services.device_swipe_trail import bulk_set_swipe_trail
 
 # 与 backend/api/routes/projects.py 的库存口径一致（ADR-0029 v2.5）：
@@ -172,6 +183,18 @@ def bulk_assign_project(
     if len(devices) != len(set(payload.device_ids)):
         raise HTTPException(status_code=404, detail="one or more devices not found")
 
+    # ADR-0057 D4 第 8 面：退役设备不接受归属改写（整批 fail-closed，不做部分成功）。
+    retired = [d for d in devices if d.retired_at is not None]
+    if retired:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "retired devices cannot be re-assigned; unretire them first",
+                "device_ids": [d.id for d in retired],
+                "serial_numbers": [d.serial for d in retired],
+            },
+        )
+
     no_model = [d for d in devices if _blank_to_none(d.model) is None]
     if no_model:
         raise HTTPException(
@@ -185,8 +208,6 @@ def bulk_assign_project(
 
     # ADR-0029 v2.5 D10 M3：批量归入 = 为选中设备的型号添加成员行
     # （归属唯一事实源；同型号全部设备随之归入，无逐设备钉住）。
-    from backend.models.project_model import ProjectModel
-
     models = sorted({_blank_to_none(d.model) for d in devices if d.model})
     added = []
     for model in models:
@@ -328,6 +349,19 @@ def _attribution_source(model: Optional[str], mapped: bool) -> str:
     return "mapped"
 
 
+def _assert_device_writable(device: Device) -> None:
+    """ADR-0057 D4 第 8 面：退役设备的管理写路径（标签/项目归属）拒绝写入。
+
+    与主机侧同惯例（`hosts.py` 对退役主机的写路径 409）：退役是账面上的
+    「不再使用」，继续改写标签/归属会让退役事实与派生口径漂移；要改先 unretire。
+    """
+    if device.retired_at is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="device is retired; unretire it before modifying",
+        )
+
+
 def _fill_project_key(device: Device, out, model_to_project: dict[str, int]) -> None:
     """ADR-0029 v2.5：DeviceOut.project_key 派生（F2 口径）+ 归属来源两态。
 
@@ -349,7 +383,18 @@ def list_devices(
     project_key: Optional[str] = Query(None, description="ADR-0029: filter by project key"),
     unassigned: bool = Query(False, description="ADR-0029 P0: only devices with no project (project_id IS NULL)"),
     include_retired: bool = Query(
-        False, description="ADR-0038 D5：默认隐藏退役主机上的设备，显式置 true 才显示",
+        False,
+        description=(
+            "ADR-0038 D5 / ADR-0057 D4：默认隐藏退役主机上的设备**与已退役设备**，"
+            "显式置 true 才显示"
+        ),
+    ),
+    include_stale: bool = Query(
+        False,
+        description=(
+            "#2962 A：默认隐藏陈旧设备（OFFLINE 且 last_seen 早于 7 天或为空），"
+            "显式置 true 才显示"
+        ),
     ),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=_DEVICE_LIST_MAX_LIMIT),
@@ -383,7 +428,16 @@ def list_devices(
     if not include_retired:
         query = query.outerjoin(Host, Device.host_id == Host.id).filter(
             Host.retired_at.is_(None),
+            # ADR-0057 D4 第 4 面：与主机退役同一开关——设备退役同样是
+            # 「不再是容量」，默认列表不再显示（`include_retired=true` 显式查看）。
+            Device.retired_at.is_(None),
         )
+
+    # #2962 A：陈旧度默认隐藏（与退役同一读侧惯例：默认隐藏 + 显式开关）。
+    # 陈旧是现算的派生事实（device_lifecycle），不做任何写回；容量/链选/指标
+    # 各面共用同一判据函数，避免各拼谓词。
+    if not include_stale:
+        query = query.filter(not_stale_condition())
 
     # ADR-0029 P0：未归属筛选——与 project_key 互斥（「某项目里未归属」无意义）；
     # 参数组合错误优先于 key 存在性校验
@@ -480,6 +534,7 @@ def update_device_tags(
     device = db.get(Device, device_id)
     if not device:
         raise HTTPException(status_code=404, detail="device not found")
+    _assert_device_writable(device)
     device.tags = tags
     record_audit(
         db,
@@ -494,3 +549,89 @@ def update_device_tags(
     db.commit()
     db.refresh(device)
     return device
+
+
+def _device_out(device: Device, db: Session) -> DeviceOut:
+    out = DeviceOut.model_validate(device)
+    _fill_project_key(device, out, _model_to_project_map(db))
+    return out
+
+
+@router.post("/{device_id}/retire", response_model=DeviceOut)
+def retire_device_endpoint(
+    device_id: int,
+    payload: DeviceRetireIn,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """ADR-0057 D2：设备退役（admin + 审计；幂等）。
+
+    前置（E2）：设备**无活跃 Job、无 ACTIVE 租约**，否则 409——退役是账面动作，
+    不顺带中止在跑的测试。退役不改写 `status`（心跳所有）、不删历史行；要恢复
+    走 `POST /devices/{id}/unretire`。重复调用返回当前退役态（不重复审计）。
+    """
+    device = retire_device(
+        db,
+        device_id=device_id,
+        reason=payload.retire_reason,
+        actor_id=current_user.id,
+        actor_username=current_user.username,
+        request=request,
+    )
+    return _device_out(device, db)
+
+
+@router.post("/{device_id}/unretire", response_model=DeviceOut)
+def unretire_device_endpoint(
+    device_id: int,
+    payload: DeviceUnretireIn,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """ADR-0057 D2：解除退役（admin + 审计；无前置；幂等）。
+
+    写回语义：清 `retired_at`（八面收口随之恢复）；`retired_by`/`retire_reason`
+    保留为最近一次退役痕迹。重复调用返回当前在役态。
+    """
+    device = unretire_device(
+        db,
+        device_id=device_id,
+        reason=payload.retire_reason,
+        actor_id=current_user.id,
+        actor_username=current_user.username,
+        request=request,
+    )
+    return _device_out(device, db)
+
+
+@router.post("/retire", response_model=ApiResponse[DeviceRetireBatchOut])
+def retire_devices_endpoint(
+    payload: DeviceRetireBatchIn,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """ADR-0057 D2/E3：批量退役（admin + 逐台审计）。
+
+    逐台独立事务，**任一台失败不影响其他台**（E2 前置不满足的那台记 `conflict`）；
+    返回逐台结果与计数。E3：清单由陈旧度视图导出，人工确认后走本入口。
+    """
+    if not payload.device_ids:
+        raise HTTPException(status_code=422, detail="device_ids must not be empty")
+    results = retire_devices_batch(
+        db,
+        device_ids=payload.device_ids,
+        reason=payload.retire_reason,
+        actor_id=current_user.id,
+        actor_username=current_user.username,
+        request=request,
+    )
+    counts = {"retired": 0, "already_retired": 0, "conflict": 0, "not_found": 0, "failed": 0}
+    for item in results:
+        counts[item["status"]] = counts.get(item["status"], 0) + 1
+    return ok(DeviceRetireBatchOut(
+        results=[DeviceRetireBatchResult(**item) for item in results],
+        **counts,
+    ))

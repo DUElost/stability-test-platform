@@ -195,7 +195,9 @@ def _settle_ready_decision(
     device_ids, excluded = _select_chain_devices(rows, now=now)
     if not device_ids or excluded:
         return False
-    status_by_id = {int(d): str(st or "") for d, _job_status, st, _last_seen in rows}
+    status_by_id = {
+        int(d): str(st or "") for d, _job_status, st, _last_seen, _retired_at in rows
+    }
     if any(status_by_id[d] != "ONLINE" for d in device_ids):
         return False
     return not (active_lease_ids & set(device_ids))
@@ -204,7 +206,14 @@ def _settle_ready_decision(
 def _chain_settle_ready_sync(db: Session, parent_id: int, now: datetime) -> bool:
     """窗内就绪探测：父段 job×设备状态 + ACTIVE 租约，两次索引查询。"""
     rows = db.execute(
-        select(JobInstance.device_id, JobInstance.status, Device.status, Device.last_seen)
+        select(
+            JobInstance.device_id,
+            JobInstance.status,
+            Device.status,
+            Device.last_seen,
+            # ADR-0057 D4 第 3 面（#2962 B）：退役事实参与链选排除
+            Device.retired_at,
+        )
         .join(Device, Device.id == JobInstance.device_id)
         .where(JobInstance.plan_run_id == parent_id)
     ).all()
@@ -227,7 +236,14 @@ async def _chain_settle_ready_async(
 ) -> bool:
     """#3082：async 路径同判据（即时触发路径与 sync 补偿路径对称）。"""
     rows = (await db.execute(
-        select(JobInstance.device_id, JobInstance.status, Device.status, Device.last_seen)
+        select(
+            JobInstance.device_id,
+            JobInstance.status,
+            Device.status,
+            Device.last_seen,
+            # ADR-0057 D4 第 3 面（#2962 B）：退役事实参与链选排除
+            Device.retired_at,
+        )
         .join(Device, Device.id == JobInstance.device_id)
         .where(JobInstance.plan_run_id == parent_id)
     )).all()
@@ -255,6 +271,9 @@ def _select_chain_devices(
 
     判定主依据是**父段 JobInstance 终态**，而非触发瞬间的 device.status：
 
+    - 设备**已退役**（ADR-0057 D4 第 3 面，#2962 B）→ 一律排除并记
+      `device_retired`——退役是人工确认的终态，与父段 job 是否 COMPLETED 无关
+      （`retired_at` 优先于其余判定，避免已退役设备借 COMPLETED 无条件路径混回链）；
     - 父段 job ``COMPLETED`` → **无条件入列**。#2648 根因：链触发在父 run
       终态化后数秒即执行，teardown 后 device BUSY→ONLINE 的状态回写滞后于
       job 终态，按瞬时 status 排除 BUSY 会把健康设备永久踢出链且不可回补。
@@ -275,11 +294,22 @@ def _select_chain_devices(
     cutoff = (now or datetime.now(timezone.utc)) - timedelta(seconds=grace)
     device_ids: list[int] = []
     excluded: list[dict[str, Any]] = []
-    for device_id, job_status, status, last_seen in rows:
+    for device_id, job_status, status, last_seen, retired_at in rows:
+        st = str(status or "")
+        if retired_at is not None:
+            entry: dict[str, Any] = {
+                "device_id": int(device_id),
+                "status": st,
+                "job_status": str(job_status or ""),
+                "reason": "device_retired",
+            }
+            if isinstance(last_seen, datetime):
+                entry["last_seen"] = _aware_utc(last_seen).isoformat()
+            excluded.append(entry)
+            continue
         if str(job_status or "") == "COMPLETED":
             device_ids.append(int(device_id))
             continue
-        st = str(status or "")
         if st == "ONLINE":
             device_ids.append(int(device_id))
             continue
@@ -521,7 +551,14 @@ async def trigger_next_plan(
     # #2648：以父段 job 终态为主判据（COMPLETED 无条件入列），瞬时 device.status
     # 仅对非 COMPLETED job 兜底——teardown 后 BUSY→ONLINE 回写滞后不再踢出健康设备。
     rows = (await db.execute(
-        select(JobInstance.device_id, JobInstance.status, Device.status, Device.last_seen)
+        select(
+            JobInstance.device_id,
+            JobInstance.status,
+            Device.status,
+            Device.last_seen,
+            # ADR-0057 D4 第 3 面（#2962 B）：退役事实参与链选排除
+            Device.retired_at,
+        )
         .join(Device, Device.id == JobInstance.device_id)
         .where(JobInstance.plan_run_id == parent.id)
     )).all()
@@ -648,7 +685,14 @@ def trigger_next_plan_sync(
 
     # #2648：同 async 路径——父段 job 终态为主判据
     rows = db.execute(
-        select(JobInstance.device_id, JobInstance.status, Device.status, Device.last_seen)
+        select(
+            JobInstance.device_id,
+            JobInstance.status,
+            Device.status,
+            Device.last_seen,
+            # ADR-0057 D4 第 3 面（#2962 B）：退役事实参与链选排除
+            Device.retired_at,
+        )
         .join(Device, Device.id == JobInstance.device_id)
         .where(JobInstance.plan_run_id == parent.id)
     ).all()

@@ -29,6 +29,11 @@ from backend.api.schemas import HeartbeatIn
 from backend.api.routes.auth import verify_agent_secret
 from backend.services.script_catalog_version import compute_script_catalog_version
 
+from backend.services.device_retirement import (
+    retired_heartbeat_context as device_retired_heartbeat_context,
+    should_alert_retired_device_heartbeat,
+)
+
 router = APIRouter(prefix="/api/v1", tags=["heartbeat"])
 logger = logging.getLogger(__name__)
 
@@ -164,6 +169,11 @@ def _mark_missing_devices_offline(
             device.adb_connected = False
             device.adb_state = "offline"
             changed_devices.append(device)
+            # ADR-0057 D4 第 6 面（#2962 B）：退役设备的 adb_state 恒为 offline，
+            # 继续派 DEVICE_OFFLINE 通知会让「已退役」长期刷运维面（与 E5 同旨）；
+            # OFFLINE 事实照记（上面三行），只是不发通知。
+            if device.retired_at is not None:
+                continue
             # Dispatch DEVICE_OFFLINE notification
             from backend.services.notification_service import dispatch_notification_async
             dispatch_notification_async("DEVICE_OFFLINE", {
@@ -429,6 +439,20 @@ def _process_heartbeat_with_db(
             prev_battery_level = device.battery_level
             prev_temperature = device.temperature
 
+            # ADR-0057 D3/E1（#2962 B）：已退役设备重新出现在心跳里——**如实记录**
+            # 事实列（下方 status/adb/遥测照常更新，本函数从不触碰 retired_at =
+            # 不自动解除退役），但只发**一次**「已退役但仍在心跳」告警（去重载体
+            # `retire_alerted_at`，与恢复拍重计轮；判据在 device_retirement）。
+            if should_alert_retired_device_heartbeat(
+                device, prev_status=prev_status, now=now
+            ):
+                from backend.services.notification_service import dispatch_notification_async
+
+                dispatch_notification_async(
+                    "DEVICE_RETIRED_HEARTBEAT",
+                    device_retired_heartbeat_context(device, host_id=host.id),
+                )
+
             lease_host = active_lease_host_by_device.get(device.id)
             if lease_host is not None and lease_host != host.id:
                 logger.warning(
@@ -479,7 +503,10 @@ def _process_heartbeat_with_db(
             device.adb_connected = bool(dev_data.get("adb_connected", False))
 
             # ADR-0019 Phase 1: count online healthy devices
+            # ADR-0057 D4 第 5 面（#2962 B）：退役设备不算容量——它不再参与派发，
+            # 计进 online_healthy_devices 会让心跳建议间隔/容量口径虚高。
             if (device.adb_connected is True
+                    and device.retired_at is None
                     and device.adb_state not in ("offline", "unknown", "")):
                 online_healthy_count += 1
 

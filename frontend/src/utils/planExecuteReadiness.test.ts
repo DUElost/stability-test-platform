@@ -41,6 +41,26 @@ describe('evaluateDeviceReadiness', () => {
     expect(result.warnings).toContain('部分设备缺少版本信息');
   });
 
+  it('#2962：退役设备给出可区分的「设备已退役」原因（ADR-0057 D4）', () => {
+    const result = evaluateDeviceReadiness(
+      [
+        { id: 1, serial: 'A', host_id: 'h1', status: 'ONLINE', retired_at: '2026-09-26T00:00:00Z' },
+      ],
+      [{ id: 'h1', status: 'ONLINE' }],
+    );
+    expect(result.rows[0].ready).toBe(false);
+    expect(result.rows[0].reasons).toContain('设备已退役');
+  });
+
+  it('#2962：陈旧设备（OFFLINE 且 7 天未见）标注陈旧原因', () => {
+    const result = evaluateDeviceReadiness(
+      [{ id: 1, serial: 'A', host_id: 'h1', status: 'OFFLINE', is_stale: true }],
+      [{ id: 'h1', status: 'ONLINE' }],
+    );
+    expect(result.rows[0].reasons).toContain('设备不可调度');
+    expect(result.rows[0].reasons).toContain('设备陈旧（>7 天未见）');
+  });
+
   it('reuses precomputed rows for subset summaries', () => {
     const devices = [
       { id: 1, serial: 'A', host_id: 'h1', status: 'ONLINE', adb_connected: true, adb_state: 'device', build_display_id: 'v1' },
