@@ -68,6 +68,17 @@ G2 #3464 后）实际运行：
 - `python scripts/run_gates.py check:quick` → OK（16 gates；worktree 需软链主树
   `frontend/node_modules`，本机环境补齐非仓库变更）。
 
+**返修（CI `pr-agent-tests`，#3463 规划者修订 v1.1 指认）**：`test_clear_recents_v106.py`
+的 `_run` 把 `time.sleep` 打成 no-op 未推进时钟，触发
+`tests/test_agent_clock_stub_guard_3202.py` 两条（#3202 忙等形态守卫）。按指认改用
+`_patch_advancing_clock(monkeypatch, mod)`（同构自 `test_powercycle_scripts.py`，
+测试文件内自带）。修后实测：
+
+- `python -m pytest tests/test_agent_clock_stub_guard_3202.py -q` → **4 passed**；
+- `python -m pytest backend/agent/tests/ -q -k clear_recents` → **27 passed**（行为面不变）；
+- `python -m pytest tests/ -q`（v1.1 §4 新增通用门禁）→ **1928 passed / 18 skipped**；
+- `python scripts/run_gates.py check:quick` → OK（16 gates）。
+
 ## Revisit
 
 - **生效链未走（Owner 统一安排）**：本 PR 只落「源码树 + 登记 + 测试」；部署、

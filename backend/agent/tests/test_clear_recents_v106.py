@@ -121,6 +121,25 @@ _AOSP_EMPTY_DESC_CARDS = (
 _EMPTY_HIERARCHY = '<hierarchy rotation="0"></hierarchy>'
 
 
+def _patch_advancing_clock(monkeypatch, mod, *, start: float = 1_000_000.0):
+    """Replace mod.time.sleep/time so sleep advances a fake clock (no wall wait).
+
+    同构自 `test_powercycle_scripts.py`（#3202 守卫：sleep 换 no-op 却不推进时钟
+    = 等待环靠真墙钟判 deadline 的忙等形态）。
+    """
+    state = {"now": start}
+
+    def fake_time() -> float:
+        return state["now"]
+
+    def fake_sleep(seconds: float) -> None:
+        state["now"] += float(seconds)
+
+    monkeypatch.setattr(mod.time, "time", fake_time)
+    monkeypatch.setattr(mod.time, "sleep", fake_sleep)
+    return state
+
+
 def _run(monkeypatch, capsys, mod, *, cats: list[str], keyevent_rc: int = 0,
          keyevent_stderr: str = "", step_params: dict | None = None):
     """`cat` 按顺序消费 `cats`（耗尽后回空层级）；`uiautomator dump` 恒 rc=0；
@@ -146,7 +165,7 @@ def _run(monkeypatch, capsys, mod, *, cats: list[str], keyevent_rc: int = 0,
 
     monkeypatch.setattr(mod, "adb_shell", fake_shell)
     monkeypatch.setattr(mod, "adb_shell_quiet", fake_quiet)
-    monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+    _patch_advancing_clock(monkeypatch, mod)
     monkeypatch.setenv("STP_DEVICE_SERIAL", "TESTSERIAL")
     if step_params is not None:
         monkeypatch.setenv("STP_STEP_PARAMS", json.dumps(step_params))
