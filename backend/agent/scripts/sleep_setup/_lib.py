@@ -449,11 +449,17 @@ def build_prefs_xml(
 def set_prefs(cfg: dict) -> int:
     """deploy/run 语义合并：repair → 读 current_count（reset_count=false 续跑）→ 整写，返回 current_count。
 
-    #3463 G1-sleep-2 ②：``reset_count=false`` 时按**同源读取证据** kind 分流——
-    ``ok`` 解析 current_count；``absent`` 取 0（真的没有 prefs，正常部署形态）；
-    ``transient`` / ``denied`` / ``empty``（内容空）**raise**——「读不到」不是
-    「没有」，不得以 current_count=0 整写完整 prefs 覆盖续跑计数（#2979 同形态，
-    只是写的是 full map 而非最小 map）。
+    #3463 G1-sleep-2 ②（§9 裁定钉死行为，仅修文档）：``reset_count=false`` 时按
+    **同源读取证据** kind 分流——
+
+    - ``ok``：解析 current_count；
+    - ``absent``：取 0——要么真的没有 prefs（正常部署形态），要么是 **root** 下的
+      ``empty``（存在 + 读取成功 + 内容空 = 确定性损坏，没有可保留的续跑计数）被
+      ``repair_prefs_ownership`` 作为**唯一可删证据**删除后、重探为 ``absent``，据此
+      以 0 重建完整 prefs——与 ``set_stop_flags`` 的「empty→删→重建」既有语义一致；
+    - ``transient`` / ``denied``（未知态），以及**非 root** 下不可修复的读空
+      （repair 无删除权限，``empty`` 无法转 ``absent``）**raise**——「读不到」不是
+      「没有」，不得以 current_count=0 整写覆盖续跑计数（#2979 形态）。
     """
     repair_prefs_ownership()
     current_count = 0

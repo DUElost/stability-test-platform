@@ -1896,7 +1896,7 @@
         },
         {
           "artifact": "packages/sleep_check/1.0.6.tar.gz",
-          "package_sha256": "500bb0eecdca11a1343be7420c5d20b3d6aedc8b73175df513ce29b24d03590d",
+          "package_sha256": "8930898e1afe3032a0b9c1c2cfccfafab0044c4e74b9cc3f499b609f6593b38d",
           "python": null,
           "retired": false,
           "script": "sleep_check.py",
@@ -1957,7 +1957,7 @@
         },
         {
           "artifact": "packages/sleep_finish/1.0.6.tar.gz",
-          "package_sha256": "58b7dabdd29a96ad7558136ab43f5f7f7607248a6ab92f2ffe7864268964b317",
+          "package_sha256": "d93334334174f616a5c4a7f65698d3e673deefa07dbe860d3557d52e13e9cc24",
           "python": null,
           "retired": false,
           "script": "sleep_finish.py",
@@ -2010,7 +2010,7 @@
         },
         {
           "artifact": "packages/sleep_setup/1.0.5.tar.gz",
-          "package_sha256": "1e3f7efd7e759f289c430c6431b1773ac8a5c1017ece7a0b1abd6fb898710e43",
+          "package_sha256": "d18776d362de0f315b284112495a70b9d52f4418beed7030b65a2e646839dedc",
           "python": null,
           "retired": false,
           "script": "sleep_setup.py",

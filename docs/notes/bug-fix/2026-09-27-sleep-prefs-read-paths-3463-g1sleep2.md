@@ -12,10 +12,13 @@ powercycle 半边由姊妹单 G1-pc-2 交付）。三族（`sleep_setup`/`sleep_
 （#3466 已合入的形态）：
 
 1. **② `set_prefs(reset_count=false)`**：旧形态 `get_prefs_xml()` 把
-   `transient/denied/empty/absent` 全折叠成空串，读空即 `current_count=0` 整写
-   full map——重启窗的瞬时失败会覆盖续跑计数（与 #2979 误删同判据，只是写的是
-   full map）。改为 `read_prefs_evidence()` 分流：`ok` 解析、`absent` 取 0（合法
-   部署形态）、其余 raise（可重试文案）；raise 前不产生任何写。
+   `transient/denied/empty/absent` 全折叠成空串，未知态读空即 `current_count=0` 整写
+   full map——重启窗的瞬时失败会覆盖续跑计数（F1 要防的「未知当作不存在」）。改为
+   `read_prefs_evidence()` 分流：`ok` 解析；`absent` 取 0；`transient` / `denied` 及
+   非 root 下不可修复的读空 raise（可重试）。**root 下 `empty` 是确定性损坏而非
+   「读不到」**：repair 以其为唯一可删证据先删、重探转 `absent` 后以 0 重建完整
+   prefs——与 `set_stop_flags` 的既有语义一致（v1.2 §9 裁定钉死该行为，本条 docstring
+   已按裁定改写、控制流未动）。
 2. **③ `start_task()`**：旧形态「读空跳过置 running=true、照常启动服务」让服务
    带 stop flags 起跑、设备重启后 boot receiver 不再续跑（表面启动、断链）。改为
    证据非 `ok` 即 raise，不启动服务。sleep 三族无 `resume_task`（那是
@@ -36,6 +39,9 @@ powercycle 半边由姊妹单 G1-pc-2 交付）。三族（`sleep_setup`/`sleep_
 版本登记（§A）：`sleep_setup@1.0.5`、`sleep_check@1.0.6`、`sleep_finish@1.0.6`
 （均 = head+1，无占位顺延）；`backend/schemas/pipeline_templates/sleep.json` 三个
 step pin 同批追平（#2865/#2998 守卫，`--register` 后必红，教训见 #3466 返修）。
+§9 裁定轮：docstring 修改改变族树 sha，本 PR 自加的三条 manifest 条目（未进 main）
+已删除并**用同一版本号重新登记**（sha 更新，版本链不变），`check_tool_manifest
+--base origin/main` 复绿，模板 pin 无需变动。
 
 ## Alternatives
 
@@ -52,9 +58,10 @@ step pin 同批追平（#2865/#2998 守卫，`--register` 后必红，教训见 
 
 - `python tools/dev/check_script_packages.py` → OK（35 族树与最新登记等价）
 - `python tools/dev/check_tool_manifest.py --base origin/main` → OK（40 族 / 232 条目，append-only）
-- `python -m pytest backend/agent/tests/ -q -k "sleep"` → **119 passed**
-  （91 既有 + `test_sleep_read_paths_3463_g1sleep2.py` 28 条：② transient/denied/
-  run-as 恒拒 raise 且无 push、absent 取 0、ok 保计数 ×3 族；③ 非 ok raise 且未发
+- `python -m pytest backend/agent/tests/ -q -k "sleep"` → **122 passed**
+  （91 既有 + `test_sleep_read_paths_3463_g1sleep2.py` 31 条：② transient/denied/
+  run-as 恒拒 raise 且无 push、absent 取 0、ok 保计数、**root empty→rm→absent→0 重建
+  的有状态反例 ×3 族（§9 裁定轮补）**；③ 非 ok raise 且未发
   `start-foreground-service` ×3 族、ok 绿锚 ×3 族；④ root 写成功+run-as 拒不误判、
   恒不可读仍 raise、⑦ SourceGuard 只出现一次）；`test_sleep_scripts.py` 两条
   set_prefs 旧测改桩 `read_prefs_evidence`（新读路径的直接后果）

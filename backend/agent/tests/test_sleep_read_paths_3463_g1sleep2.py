@@ -156,6 +156,43 @@ class TestSetPrefsKindBranch:
 
         assert pushed == []
 
+    def test_root_empty_repaired_then_absent_rebuilds_zero(self, fam, monkeypatch):
+        """#3463 §9 裁定的有状态反例：root 下 empty = 确定性损坏，不是「读不到」——
+        首次探测 empty → repair 以唯一可删证据 rm → 第二次探测 absent →
+        本次 set_prefs 以 current_count=0 重建**完整** prefs（与 set_stop_flags 的
+        empty→删→重建既有语义一致）。固定桩（每次探测都返回同一结果）钉不住这条
+        状态转换，必须用会随 rm 改变应答的有状态 fake。"""
+        mod = _lib(fam)
+        monkeypatch.setattr(mod, "is_root", lambda: True)
+        calls: list[list] = []
+        state = {"file_present": True}
+
+        def fake_adb(*args, timeout=60):
+            calls.append([str(a) for a in args])
+            cmd = str(args[1]) if len(args) > 1 else ""
+            if cmd.startswith("rm -f"):
+                state["file_present"] = False
+                return (0, "", "")
+            if _PROBE_PREFIX in cmd:
+                # 探测 #1（repair 内）：存在 + 读成功 + 内容空 = empty
+                # 探测 #2（set_prefs 内）：刚被 rm ⇒ 哨兵 absent
+                if state["file_present"]:
+                    return (0, "", "")
+                return (0, "__STP_PREFS_ABSENT__", "")
+            return (0, "", "")
+
+        monkeypatch.setattr(mod, "adb", fake_adb)
+        pushed = _pusher(monkeypatch, mod)
+
+        assert mod.set_prefs(_CFG_RESUME) == 0
+        assert any(c[1].startswith("rm -f") and _PREFS_PATH in " ".join(c) for c in calls), \
+            "empty 未被 repair 作为唯一可删证据删除"
+        probes = [c for c in calls if len(c) > 1 and _PROBE_PREFIX in c[1]]
+        assert len(probes) == 2, f"empty→rm→absent 需要恰好两次同源探测：{len(probes)}"
+        assert len(pushed) == 1
+        assert 'name="current_count" value="0"' in pushed[0]
+        assert "test_times" in pushed[0]      # 完整 prefs（full map 重建），非最小 map
+
     def test_absent_takes_zero_and_writes(self, fam, monkeypatch):
         """绿锚：absent 是合法整写输入（正常部署形态），current_count=0。"""
         mod = _lib(fam)
