@@ -37,6 +37,7 @@ Scenarios covered
    - Parses detail dict, handles missing fields, survives malformed body.
 """
 
+import json
 import os
 import signal
 import sqlite3
@@ -370,13 +371,13 @@ class TestDeferredPostCompletion:
         os.getenv("TESTING") != "1" and not os.getenv("DATABASE_URL"),
         reason="Requires database connection",
     )
-    def test_defer_cutoff_stops_reenqueue_for_ancient_orphan(self):
+    def test_defer_cutoff_stops_reenqueue_for_ancient_orphan(self, tmp_path):
         """#1175: 超过 POST_COMPLETION_MAX_DEFER_SECONDS 的孤儿终态 job
         停止重入队（detail 长期未到，报告已被反复回滚）——不再无限重算。"""
         from backend.core.database import SessionLocal
         from backend.models.enums import HostStatus, JobStatus
         from backend.models.host import Device, Host
-        from backend.models.job import JobInstance
+        from backend.models.job import JobInstance, StepTrace
         from backend.models.plan import Plan, PlanStep
         from backend.models.plan_run import PlanRun
 
@@ -431,8 +432,22 @@ class TestDeferredPostCompletion:
                 post_processed_at=None,
             )
             db.add(job)
+            db.flush()
+            db.add(StepTrace(
+                job_id=job.id,
+                step_id="mtbf_finish",
+                stage="execute",
+                status="COMPLETED",
+                event_type="COMPLETED",
+                output=json.dumps({"detail_uri": str(tmp_path / "late-detail.json")}),
+                original_ts=now,
+            ))
             db.commit()
             job_id = job.id
+
+            from backend.services.case_result_ingest import case_result_ingest_pending
+
+            assert case_result_ingest_pending(db, job_id)
 
             with patch("backend.core.task_queue.enqueue_sync") as mock_enqueue:
                 recycler_mod._defer_cutoff_alerted.discard(job_id)
@@ -445,8 +460,6 @@ class TestDeferredPostCompletion:
             ]
             assert pc_calls == [], "post_completion_task must not fire for cut-off job"
         finally:
-            from backend.models.job import StepTrace
-
             db.query(StepTrace).filter(StepTrace.job_id == job_id).delete()
             db.query(JobInstance).filter(JobInstance.id == job_id).delete()
             db.query(PlanRun).filter(PlanRun.id == run.id).delete()
