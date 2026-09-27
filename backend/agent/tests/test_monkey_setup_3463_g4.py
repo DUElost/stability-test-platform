@@ -103,7 +103,7 @@ def test_main_step_stamps_are_globally_monotonic(fake_adb, monkeypatch, capsys):
     err = capsys.readouterr().err
     seqs = [s["seq"] for s in _stderr_stamps(err)]
     assert len(seqs) >= 3, seqs  # init + step:start + step:end 至少三枚
-    assert all(b > a for a, b in zip(seqs, seqs[1:])), seqs
+    assert all(b > a for a, b in zip(seqs, seqs[1:], strict=False)), seqs
 
 
 # ── F3：fill_path（port clear_recents validated_dump_path 判据） ─────────

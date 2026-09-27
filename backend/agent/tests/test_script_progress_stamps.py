@@ -196,7 +196,7 @@ class TestProgressStampFormat:
             assert payload["step"] == "push"
             seqs.append(payload["seq"])
         # #3173 起 seq 是进程级计数器（不再 per-closure 从 1 起），断言改为严格递增
-        assert all(b > a for a, b in zip(seqs, seqs[1:])), f"seq 必须严格递增: {seqs}"
+        assert all(b > a for a, b in zip(seqs, seqs[1:], strict=False)), f"seq 必须严格递增: {seqs}"
         # 打戳走 stderr——stdout 是结果契约
         assert capsys.readouterr().out == ""
 
@@ -216,7 +216,7 @@ class TestMakeProgressCompatibility:
         assert stamps[1]["written_bytes"] == 100
         seqs = [s["seq"] for s in stamps]
         # #3173 起 seq 是进程级计数器，断言改为严格递增
-        assert all(b > a for a, b in zip(seqs, seqs[1:])), f"seq 必须严格递增: {seqs}"
+        assert all(b > a for a, b in zip(seqs, seqs[1:], strict=False)), f"seq 必须严格递增: {seqs}"
 
 
 
@@ -313,7 +313,7 @@ class TestRealWiringAndIsolation:
         assert len(stamps) == 3, err
         seqs = [s["seq"] for s in stamps]
         # #3173 起 seq 是进程级计数器，断言改为严格递增
-        assert all(b > a for a, b in zip(seqs, seqs[1:])), f"seq 必须严格递增: {seqs}"
+        assert all(b > a for a, b in zip(seqs, seqs[1:], strict=False)), f"seq 必须严格递增: {seqs}"
         assert stamps[-1]["written_bytes"] == 3 * 1024 * 1024
 
     def test_staging_replaces_old_file_atomically(self, fake_adb, monkeypatch, tmp_path):
