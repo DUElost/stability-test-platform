@@ -222,6 +222,15 @@ device_online = Gauge(
     ['status']  # online, offline, busy
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
+# #2962 A：OFFLINE 计数此前把「当天掉线」与「数周没见过的沉积库存」混在一起
+# （2026-09-20 实测 202 台里 188 台陈旧，93%），运维指标失真。`device_online{status="offline"}`
+# 现只计**近期掉线**（7 天内有上报）；陈旧设备单独进本 gauge——两个数并排看，
+# 「掉线」与「库存陈旧」才是可区分的两件事。退役设备两边都不计（ADR-0057 D4 第 5/6 面）。
+device_stale = Gauge(
+    'stability_device_stale',
+    'Devices that are OFFLINE and unseen for more than 7 days (retired excluded)',
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
 # #2754：fleet 级 device_online{status} 只有总数，**看不见「单台 host 的设备批量掉线」**——
 # 2026-09-18 host .81 的实测形态正是这样：host 状态 ONLINE、心跳新鲜、mount ok，
 # 而它 16 台里 15 台 adb offline，平台上零告警。这里按 host 暴露 adb_state 分桶计数，

@@ -22,6 +22,7 @@ from backend.core.database import get_db
 from backend.core.metrics import (
     chain_coverage_devices,
     device_online,
+    device_stale,
     get_metrics_response,
     host_device_adb_state,
     host_device_intent,
@@ -40,6 +41,7 @@ from backend.models.enums import DeviceStatus, HostStatus
 from backend.models.host import Device, Host
 from backend.models.schedule import TaskSchedule
 from backend.services.auth_session import authenticate_token
+from backend.services.device_lifecycle import not_stale_condition, stale_condition
 from backend.services.host_health_probe import HEALTH_PROBE_EXTRA_KEY
 from backend.services.script_presence import (
     PRESENCE_STATES as _PRESENCE_STATES,
@@ -63,7 +65,16 @@ router = APIRouter()
 # 会正常触发「规模下降」而非误报。
 _FLEET_GAUGES = (
     (Host, host_online, HostStatus, Host.retired_at.is_(None)),
-    (Device, device_online, DeviceStatus, None),
+    (
+        Device,
+        device_online,
+        DeviceStatus,
+        # ADR-0057 D4 第 5 面（#2962 B）：退役设备不再是容量；
+        # #2962 A：陈旧设备同样按新鲜度剔除——`status="offline"` 桶因此只剩
+        # 「近期掉线」，沉积库存单独落 `stability_device_stale`。
+        # 容量口径 = `retired_at IS NULL` ∧ 非陈旧（服务层单一真源）。
+        Device.retired_at.is_(None) & not_stale_condition(),
+    ),
 )
 
 
@@ -78,6 +89,14 @@ def _refresh_fleet_gauges(db: Session) -> None:
             counts = dict(query.all())
             for member in status_enum:
                 gauge.labels(status=member.value.lower()).set(counts.get(member.value, 0))
+        # #2962 A：陈旧库存单列（退役设备不计，与 device_online 同容量口径）。
+        stale_count = (
+            db.query(func.count())
+            .select_from(Device)
+            .filter(Device.retired_at.is_(None), stale_condition())
+            .scalar()
+        )
+        device_stale.set(int(stale_count or 0))
     except SQLAlchemyError:
         # 观测面不因 DB 抖动整体 500：保留其余指标输出，仅跳过舰队计数。
         logger.warning("metrics_fleet_gauge_refresh_failed", exc_info=True)
@@ -133,6 +152,11 @@ def _refresh_host_device_adb_gauges(db: Session) -> None:
             .filter(
                 Host.retired_at.is_(None),
                 Host.status == HostStatus.ONLINE.value,
+                # ADR-0057 D4 第 6 面 + #2962 A：退役与陈旧设备都不进设备面告警
+                # 计数——退役机的 adb_state 恒为 offline（E5），陈旧设备的最后一次
+                # 状态是数周前的快照，计入会让「单台 host 批量掉线」长期误报。
+                Device.retired_at.is_(None),
+                not_stale_condition(),
             )
             .group_by(Device.host_id, Device.adb_state)
             .all()
@@ -634,6 +658,9 @@ def _refresh_chain_coverage_gauges(db: Session) -> None:
                 .where(
                     Device.status == DeviceStatus.ONLINE.value,
                     Host.retired_at.is_(None),
+                    # ADR-0057 D4 第 5 面（#2962 B）：退役设备不计入链覆盖的
+                    # online_total——退役不改写 status，冻结的 ONLINE 行会把 gap 虚报大。
+                    Device.retired_at.is_(None),
                 )
             ).scalars().all()
         )

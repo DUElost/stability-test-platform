@@ -201,7 +201,10 @@ class DashboardDeviceSummary(BaseModel):
     total: int
     idle: int
     testing: int
+    # #2962 A：OFFLINE 拆两桶——`offline` = 近期掉线（7 天内有上报），
+    # `offline_stale` = 陈旧库存（7 天以上未上报）。退役设备两桶都不计。
     offline: int
+    offline_stale: int = 0
     error: int
     low_battery: int
     high_temp: int

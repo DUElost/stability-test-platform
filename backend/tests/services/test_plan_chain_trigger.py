@@ -361,10 +361,13 @@ def _scalar_result(value):
     return result
 
 
-def _device_result(*device_ids, status="ONLINE", last_seen=None, job_status="COMPLETED"):
-    """#2648/#1686/#1822：JOIN 返回 (id, job_status, status, last_seen) 元组。"""
+def _device_result(*device_ids, status="ONLINE", last_seen=None, job_status="COMPLETED",
+                   retired_at=None):
+    """#2648/#1686/#1822 + ADR-0057：JOIN 返回 (id, job_status, status, last_seen, retired_at)。"""
     result = MagicMock()
-    result.all.return_value = [(d, job_status, status, last_seen) for d in device_ids]
+    result.all.return_value = [
+        (d, job_status, status, last_seen, retired_at) for d in device_ids
+    ]
     result.scalars.return_value.unique.return_value = list(device_ids)
     return result
 
@@ -521,12 +524,12 @@ def test_select_chain_devices_includes_fresh_offline_excludes_stale_and_busy():
     fresh = now - timedelta(seconds=60)
     stale = now - timedelta(seconds=900)
     rows = [
-        (1, "FAILED", "ONLINE", None),
-        (2, "FAILED", "OFFLINE", fresh),
-        (3, "FAILED", "OFFLINE", stale),
-        (4, "FAILED", "BUSY", fresh),
-        (5, "FAILED", "OFFLINE", None),
-        (6, "FAILED", "ERROR", fresh),
+        (1, "FAILED", "ONLINE", None, None),
+        (2, "FAILED", "OFFLINE", fresh, None),
+        (3, "FAILED", "OFFLINE", stale, None),
+        (4, "FAILED", "BUSY", fresh, None),
+        (5, "FAILED", "OFFLINE", None, None),
+        (6, "FAILED", "ERROR", fresh, None),
     ]
     device_ids, excluded = _select_chain_devices(
         rows, now=now, grace_seconds=300,
@@ -553,10 +556,10 @@ def test_select_chain_devices_completed_job_overrides_busy_and_offline():
     now = datetime(2026, 9, 18, 12, 0, 0, tzinfo=timezone.utc)
     stale = now - timedelta(seconds=900)
     rows = [
-        (11, "COMPLETED", "BUSY", stale),
-        (12, "COMPLETED", "OFFLINE", stale),
-        (13, "COMPLETED", "ONLINE", None),
-        (14, "ABORTED", "BUSY", stale),
+        (11, "COMPLETED", "BUSY", stale, None),
+        (12, "COMPLETED", "OFFLINE", stale, None),
+        (13, "COMPLETED", "ONLINE", None, None),
+        (14, "ABORTED", "BUSY", stale, None),
     ]
     device_ids, excluded = _select_chain_devices(
         rows, now=now, grace_seconds=300,
@@ -573,10 +576,39 @@ def test_select_chain_devices_naive_last_seen_treated_as_utc():
     now = datetime(2026, 9, 13, 12, 0, 0, tzinfo=timezone.utc)
     naive_fresh = datetime(2026, 9, 13, 11, 59, 0)  # 60s ago if UTC
     ids, excluded = _select_chain_devices(
-        [(9, "FAILED", "OFFLINE", naive_fresh)], now=now, grace_seconds=300,
+        [(9, "FAILED", "OFFLINE", naive_fresh, None)], now=now, grace_seconds=300,
     )
     assert ids == [9]
     assert excluded == []
+
+
+def test_select_chain_devices_excludes_retired_even_when_completed():
+    """ADR-0057 D4 第 3 面（#2962 B）：退役设备一律排除。
+
+    `retired_at` 优先于 #2648 的「COMPLETED 无条件入列」——否则已退役设备会借
+    过渡态路径混回链，而它永远不会再产出有效结果（准入侧 device_retired 是 fatal，
+    整轮都会失败）。
+    """
+    from backend.services.plan_chain_trigger import _select_chain_devices
+
+    now = datetime(2026, 9, 27, 12, 0, 0, tzinfo=timezone.utc)
+    retired_at = now - timedelta(days=1)
+    rows = [
+        (21, "COMPLETED", "ONLINE", None, retired_at),
+        (22, "FAILED", "OFFLINE", now - timedelta(seconds=60), retired_at),
+        (23, "COMPLETED", "ONLINE", None, None),
+    ]
+    device_ids, excluded = _select_chain_devices(rows, now=now, grace_seconds=300)
+    assert device_ids == [23]
+    by_id = {e["device_id"]: e for e in excluded}
+    assert set(by_id) == {21, 22}
+    assert by_id[21]["reason"] == "device_retired"
+    assert by_id[21]["job_status"] == "COMPLETED"
+
+    # settle 就绪判定同判据：候选集里出现退役设备即不放行（等窗而非提前触发）
+    from backend.services.plan_chain_trigger import _settle_ready_decision
+
+    assert _settle_ready_decision(rows, now=now, active_lease_ids=set()) is False
 
 
 class TestChainTriggerSettleWindow:
@@ -945,7 +977,7 @@ async def test_async_ready_releases_early_within_window(monkeypatch):
         plan_snapshot={"plan": {"id": 10, "next_plan_id": 20}, "steps": []},
         ended_at=datetime(2026, 9, 22, 12, 0, 0, tzinfo=timezone.utc),
     )
-    rows = [(7, "COMPLETED", "ONLINE", None)]
+    rows = [(7, "COMPLETED", "ONLINE", None, None)]
     child_stub = SimpleNamespace(id=99)
     mock_db = MagicMock()
     mock_db.execute = AsyncMock(side_effect=[
@@ -982,7 +1014,7 @@ async def test_async_not_ready_still_skips_within_window(monkeypatch):
         plan_snapshot={"plan": {"id": 10, "next_plan_id": 20}, "steps": []},
         ended_at=datetime(2026, 9, 22, 12, 0, 0, tzinfo=timezone.utc),
     )
-    busy_rows = [(7, "COMPLETED", "BUSY", None)]
+    busy_rows = [(7, "COMPLETED", "BUSY", None, None)]
     mock_db = MagicMock()
     mock_db.execute = AsyncMock(side_effect=[
         _scalar_result(parent),
@@ -1006,23 +1038,23 @@ def test_settle_ready_decision_matrix():
     from backend.services.plan_chain_trigger import _settle_ready_decision
 
     now = datetime(2026, 9, 22, 12, 0, 0, tzinfo=timezone.utc)
-    # rows 形状与设备查询一致：(device_id, job_status, device_status, last_seen)
+    # rows 形状与设备查询一致：(device_id, job_status, device_status, last_seen, retired_at)
     assert _settle_ready_decision([], now=now, active_lease_ids=set()) is False
 
-    rows = [(1, "COMPLETED", "ONLINE", None), (2, "COMPLETED", "ONLINE", None)]
+    rows = [(1, "COMPLETED", "ONLINE", None, None), (2, "COMPLETED", "ONLINE", None, None)]
     assert _settle_ready_decision(rows, now=now, active_lease_ids=set()) is True
     assert _settle_ready_decision(rows, now=now, active_lease_ids={2}) is False
 
     # job COMPLETED 但设备仍 BUSY（#2648 过渡态）：候选集不含它，就绪判定必须不过
-    rows_busy = [(1, "COMPLETED", "ONLINE", None), (2, "COMPLETED", "BUSY", None)]
+    rows_busy = [(1, "COMPLETED", "ONLINE", None, None), (2, "COMPLETED", "BUSY", None, None)]
     assert _settle_ready_decision(rows_busy, now=now, active_lease_ids=set()) is False
 
     # 排除表非空（ABORTED+BUSY）即冲击未落回
-    rows_excluded = [(1, "COMPLETED", "ONLINE", None), (2, "ABORTED", "BUSY", None)]
+    rows_excluded = [(1, "COMPLETED", "ONLINE", None, None), (2, "ABORTED", "BUSY", None, None)]
     assert _settle_ready_decision(rows_excluded, now=now, active_lease_ids=set()) is False
 
     # 心跳窗内瞬时 OFFLINE 属于候选（#1822），但 ONLINE 谓词不满足 → 不放行
-    rows_offline = [(1, "FAILED", "OFFLINE", now - timedelta(seconds=60))]
+    rows_offline = [(1, "FAILED", "OFFLINE", now - timedelta(seconds=60), None)]
     assert _settle_ready_decision(rows_offline, now=now, active_lease_ids=set()) is False
 
 

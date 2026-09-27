@@ -144,7 +144,14 @@ def _q_platform_health(db: Session, args: dict) -> str:
         .group_by(Host.status)
         .all()
     )
-    devices = dict(db.query(Device.status, func.count(Device.id)).group_by(Device.status).all())
+    # ADR-0057 D4 第 7 面（#2962 B）：设备计数同样排除退役设备——与 host 侧
+    # `Host.retired_at.is_(None)` 同口径，避免助手把退役库存报成在役容量。
+    devices = dict(
+        db.query(Device.status, func.count(Device.id))
+        .filter(Device.retired_at.is_(None))
+        .group_by(Device.status)
+        .all()
+    )
     # 状态分布全量 group_by——不枚举具体状态值（plan_run_status 枚举与
     # job_status 枚举值集不同，猜测会 InvalidTextRepresentation，线上实测）
     run_dist = dict(db.query(PlanRun.status, func.count(PlanRun.id)).group_by(PlanRun.status).all())
@@ -406,6 +413,9 @@ def _q_devices(db: Session, args: dict) -> str:
         db.query(Device), Device.status,
         _opt_str(args.get("status"), "status", 32), DeviceStatus, "status",
     )
+    # ADR-0057 D4 第 7 面（#2962 B）：与 GET /devices 同口径——默认不列退役设备
+    # （助手无 include_retired 开关；退役痕迹走详情页/审计，不在遍历读面）。
+    q = q.filter(Device.retired_at.is_(None))
     host_id = _opt_str(args.get("host_id"), "host_id", 64)
     if host_id:
         q = q.filter(Device.host_id == host_id)
