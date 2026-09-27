@@ -184,6 +184,41 @@ def test_set_prefs_absent_writes_fresh_map(lib, monkeypatch):
     assert _rm_calls(calls) == []
 
 
+def test_set_prefs_empty_repaired_then_fresh_write(lib, monkeypatch):
+    """有状态反例（#3463 规划者裁定）：首次 probe=``empty`` ⇒ repair 发 ``rm`` ⇒
+    第二次 probe=``absent`` ⇒ 以 current_count=0 整写完整 prefs。
+
+    ``empty`` 不是「读不到」而是已确定的损坏（rc=0、文件存在、cat 成功、内容空）；
+    损坏文件没有可保留的计数，repair 删除后重建为 0 是唯一结果——与
+    ``set_stop_flags`` 的「empty → rm → absent → 最小 map」同一条既有语义。
+    固定让每次 probe 都返回 empty 的桩抓不到这条转换，必须按调用次数变状态。
+    """
+    monkeypatch.setattr(lib, "is_root", lambda: True)
+    calls: list[list] = []
+    probe_n = {"n": 0}
+
+    def stateful_adb(*args, timeout=60):
+        calls.append([str(a) for a in args])
+        cmd = str(args[1]) if len(args) > 1 else ""
+        if cmd.startswith(_PROBE_PREFIX):
+            probe_n["n"] += 1
+            if probe_n["n"] == 1:
+                return (0, "", "")                  # empty：存在 + 读成功 + 内容空
+            return (0, _ABSENT_SENTINEL, "")        # repair 删除后重探：absent
+        return (0, "", "")
+
+    monkeypatch.setattr(lib, "adb", stateful_adb)
+    pushed = _record_push(monkeypatch, lib)
+
+    assert lib.set_prefs(dict(_RESET_CFG)) == 0
+    rms = _rm_calls(calls)
+    assert len(rms) == 1 and _PREFS_PATH in " ".join(rms[0]), "empty 未触发 repair 删除"
+    assert probe_n["n"] == 2, f"探测次数与 empty→rm→absent 序列不符：{probe_n['n']}"
+    assert len(pushed) == 1, "fresh 重建未整写完整 prefs"
+    assert 'name="current_count" value="0"' in pushed[0]
+    assert 'name="test_times" value="100"' in pushed[0]
+
+
 # ---------------------------------------------------------------------------
 # ③ start_task / resume_task：prefs 不可读即 raise，不启动服务
 # ---------------------------------------------------------------------------

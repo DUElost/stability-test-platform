@@ -453,12 +453,15 @@ def build_prefs_xml(
 def set_prefs(cfg: dict) -> int:
     """deploy/run 语义合并：repair → 读 current_count（reset_count=false 续跑）→ 整写，返回 current_count。
 
-    v1.0.10（#3463 §9 G1-pc-2 ②，F1 同形态）：``reset_count=false`` 的续跑计数
-    读取按 ``_root_read_prefs`` 的 kind 区分——``ok`` 解析 current_count；
-    ``absent`` 取 0（首跑，整写即 fresh）；``transient``/``denied``/内容为空
-    （``empty``）raise——步骤可重试，**不得在读不到时以 0 整写完整 prefs**
-    （重启窗 adb 超时可把健康续跑计数覆盖为 0）。非 root 下 run-as 读空同样
-    不作 absent 证据，raise 暴露可重试失败。
+    v1.0.10（#3463 §9 G1-pc-2 ②，F1 同形态；empty 语义修订见 #3463 规划者裁定）：
+    ``reset_count=false`` 的续跑计数读取按 ``_root_read_prefs`` 的 kind 区分——
+    ``ok`` 解析 current_count；root 下 ``empty`` 不是「读不到」而是**已确定的损坏**
+    （rc=0、文件存在、cat 成功、内容为空），由 repair 先删（empty 是其唯一接受的
+    删除证据），本次探测即落 ``absent`` → 取 0 整写 fresh 完整 prefs（损坏文件没有
+    可保留的计数，与 ``set_stop_flags`` 的既有 G1 语义一致）；``transient``/
+    ``denied`` raise 且不写——F1 防的是「未知当作不存在」，**不得在读不到时以 0
+    整写完整 prefs**（重启窗 adb 超时可把健康续跑计数覆盖为 0）。非 root 下
+    run-as 读空（不可修复）同样不作 absent 证据，raise 暴露可重试失败。
     """
     repair_prefs_ownership()
     current_count = 0
