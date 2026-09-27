@@ -1,6 +1,12 @@
 # -*- coding: utf-8 -*-
 """GPU 停止 + 结果收取（teardown 阶段，issue #462 P0c；G15 对齐 §3.3）。
 
+v1.0.8（#3175，2026-09-27）：`_lib.py` 的 ``adb()`` 原用 ``subprocess.run(text=True)``
+严格 UTF-8 解码，设备侧一个非 UTF-8 字节就抛 ``UnicodeDecodeError``（非 ``OSError``，
+调用点无从兜住）——``stop_stress()`` 内抛会把 teardown 中断在 ``pkill`` 之前，
+压测循环留在设备上继续跑（#3069 已在 gpu_setup 侧修过的同形态）。本版 port
+gpu_setup v1.2.3 形态：收字节 + ``decode_device_output()`` 宽容解码（``errors="replace"``）。
+
 v1.0.7（#2980）：**把 SIGTERM 路径也纳入临时目录回收**。v1.0.6 的 ``finally``
 只覆盖脚本内部异常与 ``SystemExit``——但步骤墙钟到点时引擎是对**进程组**发
 SIGTERM（再升 SIGKILL），CPython 默认不把 SIGTERM 转成异常，``finally`` 根本
