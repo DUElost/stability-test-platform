@@ -15,7 +15,11 @@ Class: bug-fix
    `backend/agent/scripts/gpu_finish/_lib.py`，`adb()` 改「显式收字节再解宽容码」，去掉 `text=True`；
 2. 登记新版本 **gpu_finish 1.0.8**（源树改动用 `--register`，manifest append-only）；
 3. 把 `test_gpu_setup_utf8_decode_3069.py` 的 SourceGuard 判据扩展到 gpu_finish 目录，并补
-   `stop_stress()` 的坏字节反例。
+   `stop_stress()` 的坏字节反例；
+4. 模板 pin 同批追平：`backend/schemas/pipeline_templates/gpu.json` 的 `script:gpu_finish`
+   1.0.7 → 1.0.8（#2865 纪律「合入新版本必须同批钉模板」，`pr-agent-tests` 的
+   `test_pipeline_template_script_pins_2865` 判据；不登记 EXCEPTIONS 滞后项——整批 §5 的
+   publish + scan 紧随部署，滞后窗口由 Owner 窗口消化，与 G4 行「模板 pin 直升」同款）。
 
 原因（#3175 证据）：finish 侧只修了一半——`gpu_finish.py` 的日志读取走 `errors="replace"`，但
 `_lib.py` 的 `adb()` 仍是 `text=True` 严格解码。`stop_stress()` 的 force-stop 回显里一个非 UTF-8
@@ -41,6 +45,7 @@ Class: bug-fix
 - `python tools/dev/check_script_packages.py` → 绿（35 个族树与最新登记等价，gpu_finish@1.0.8
   sha=`17fdfde215cb`）。
 - `python tools/dev/check_tool_manifest.py --base origin/main` → 绿（40 族 / 221 条目，append-only）。
+- `python -m pytest tests/test_pipeline_template_script_pins_2865.py -q` → 7 passed（模板 pin 追平判据）。
 - `python -m pytest backend/agent/tests/ -q -k "gpu"` → 76 passed, 2132 deselected。
 - `python scripts/run_gates.py check:quick` → `[OK] check:quick (16 gates)`。
 
@@ -51,3 +56,7 @@ Class: bug-fix
   若维持现状（C），下次改 gpu_check 时同构 port。
 - **生效未做**：按 #3463 §5 由 Owner 窗口统一 publish + scan + 重指；本单合入不等于设备端已用上
   1.0.8。真机侧无设备可验（本机无 agent 连接），验证到静态守卫 + 打桩反例为止。
+- **模板 pin 先于注册的窗口**：gpu.json 已 pin 1.0.8 而 `script` 表注册（scan）发生在部署窗口内
+  ——该窗口内由模板新建 GPU Plan 会在 prepare 的 `_validate_script_refs` 422。窗口 = 部署后到
+  scan 完成（同一 Owner 窗口内的连续步骤），与 G4 的 monkey pin 直升同一取舍；若窗口需要拉长，
+  应改回「pin 停 1.0.7 + EXCEPTIONS 登记滞后项」的形态。
