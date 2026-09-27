@@ -67,14 +67,11 @@ PINNED_SCRIPTS: dict[str, str] = {
 #:
 #: 随后本 PR 的 #3107 又把 monkey_setup 磁盘 head 推到 v2.3.11（log_dirs 参数校验）
 #: ——尚未 scan 注册，故重开一条例外；pin 停在已注册的 2.3.10。
-EXCEPTIONS: dict[str, tuple[str, str]] = {
-    "script:monkey_setup": (
-        "2.3.10",
-        "#3107：v2.3.11（log_dirs 参数校验）已合但 script 表无行"
-        "（#2975 旧例外已随 scan 收口清空；本条是 #3107 新开的滞后窗口）。"
-        "删除条件：部署 scan 注册激活 v2.3.11 后 pin 追平并移除本条。",
-    ),
-}
+#:
+#: 09-27 #3463 批次 G4（#3173）把 monkey_setup 磁盘 head 推到 v2.3.12 并随本批
+#: `--register` 登记（manifest 有条目 = Phase 3 判据下版本真实存在），两个模板
+#: pin 同批直升 2.3.12——例外按其自书删除条件（pin 追平即删）移除，清单回到空。
+EXCEPTIONS: dict[str, tuple[str, str]] = {}
 
 
 def _exception_lag_reason(version: str, reason: str, head: str) -> str | None:

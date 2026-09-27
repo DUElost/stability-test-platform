@@ -32,25 +32,39 @@ def device_serial() -> str:
     return serial
 
 
+def decode_device_output(raw: bytes | None) -> str:
+    """设备 / adb 输出解码：**宽容 UTF-8**（#3173，port gpu_setup/_lib.py 先例）。
+
+    设备侧输出可能是任意字节。``text=True`` 按 locale 严格解码，遇到一个非
+    UTF-8 字节就抛 ``UnicodeDecodeError``——它不是 ``OSError``，调用点无从兜住，
+    会把整个步骤炸成失败。坏字节替换成 U+FFFD 不影响后续判定。
+    """
+    return (raw or b"").decode("utf-8", errors="replace")
+
+
 def adb_shell(command: str, timeout: int = 30) -> str:
     """Run an ADB shell command on the target device, return stdout."""
+    # #3173：显式收字节再解宽容码，不用 ``text=True``——后者严格解码，一个坏
+    # 字节即 UnicodeDecodeError，且无法从调用点兜住。
     result = subprocess.run(
         [adb_path(), "-s", device_serial(), "shell", command],
         capture_output=True,
-        text=True,
         timeout=timeout,
     )
-    return result.stdout or ""
+    return decode_device_output(result.stdout)
 
 
 def adb_shell_quiet(command: str, timeout: int = 30) -> subprocess.CompletedProcess:
     """Run ADB shell, return full CompletedProcess for exit-code checks."""
-    return subprocess.run(
+    result = subprocess.run(
         [adb_path(), "-s", device_serial(), "shell", command],
         capture_output=True,
-        text=True,
         timeout=timeout,
     )
+    # #3173：返回契约不变（调用方按 str 读 stdout/stderr），字节在此解宽容码。
+    result.stdout = decode_device_output(result.stdout)
+    result.stderr = decode_device_output(result.stderr)
+    return result
 
 
 # adb_shell_progress 的主循环轮询间隔（测试会 monkeypatch 成极小值）。
@@ -80,12 +94,15 @@ def adb_shell_progress(
 
     def _run() -> None:
         try:
-            holder["result"] = subprocess.run(
+            # #3173：收字节再解宽容码（同 adb_shell_quiet）
+            result = subprocess.run(
                 [adb_path(), "-s", device_serial(), "shell", command],
                 capture_output=True,
-                text=True,
                 timeout=timeout,
             )
+            result.stdout = decode_device_output(result.stdout)
+            result.stderr = decode_device_output(result.stderr)
+            holder["result"] = result
         except Exception as exc:
             holder["error"] = exc
 
@@ -112,10 +129,10 @@ def adb_shell_progress(
 
 
 def adb_push(local: str, remote: str, timeout: int = 120) -> None:
+    # #3173：push 输出无 str 消费方，收字节即可（check=True 的异常文本不受影响）
     subprocess.run(
         [adb_path(), "-s", device_serial(), "push", local, remote],
         capture_output=True,
-        text=True,
         timeout=timeout,
         check=True,
     )
@@ -326,6 +343,21 @@ def _quote(path: str) -> str:
     return "'" + path.replace("'", "'\\''") + "'"
 
 
+# 进程级 PROGRESS seq（#3173，port clean_env/v1.1.0 `_adb.py` 的 `_next_progress_seq`）：
+# seq 单调递增是引擎停滞钟的唯一判据（``seq > last_seq``）。此前 `_make_progress`
+# 各闭包自带 ``state={"seq": 0}``，init/push/fill 各自从 1 重启——后阶段心跳被
+# 引擎当乱序戳静默丢弃，sha256/tar/adb-push/dd 这些慢而健康的阶段照旧被杀。
+_progress_seq_lock = threading.Lock()
+_progress_seq = 0
+
+
+def _next_progress_seq() -> int:
+    global _progress_seq
+    with _progress_seq_lock:
+        _progress_seq += 1
+        return _progress_seq
+
+
 def _progress_stamp(seq: int, **fields) -> str:
     """构造 PROGRESS 戳行（#115 阶段 2 协议，stderr 输出）。
 
@@ -339,8 +371,9 @@ def _progress_stamp(seq: int, **fields) -> str:
 
 def adb_install(apk_path: str, flags: list[str] | None = None, timeout: int = 120) -> str:
     cmd = [adb_path(), "-s", device_serial(), "install"] + (flags or []) + [apk_path]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-    return (result.stdout or "").strip()
+    # #3173：收字节再解宽容码（同 adb_shell）
+    result = subprocess.run(cmd, capture_output=True, timeout=timeout)
+    return decode_device_output(result.stdout).strip()
 
 
 def params() -> dict:
