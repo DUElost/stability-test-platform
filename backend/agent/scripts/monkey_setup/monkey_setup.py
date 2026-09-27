@@ -1,5 +1,16 @@
 """复合设备初始化脚本：按序执行 WiFi / Root / 推送 / 安装 / 填充 / 清理。
 
+v2.3.13（#3173，#3463 批次 G4-2）：**残余参数注入面收口**（#3472 复核发现的三处，
+均属 F3；v1.0 扫描按 rm/dd/chmod/pm/setprop 关键字进行，漏掉了 mkdir/cat/cd/tar/
+dumpsys/cmd wifi）。
+  - `push.remote_dir`：插进 `cat {marker}` / `mkdir -p` / `cd ... && tar`（root
+    shell），改在 cfg 入口经 `validated_remote_path` 校验（判据与
+    `push.files[].remote` 一致），非法值整步转红。
+  - `install.pkg_name`：`dumpsys package {pkg_name}` 单字符串设备 shell，cfg 入口
+    经 `validated_pkg_name` 校验一次，所有使用点只用校验后的值。
+  - `wifi.ssid/password`：port connect_wifi #816 做法——按「单个 shell 参数」语义
+    `shlex.quote`（SSID 允许任意字符，不做白名单；双引号挡不住 `$()`/反引号）。
+
 v2.3.12（#3173，#3463 批次 G4）：**心跳 seq 进程级化 + 残余参数注入面收口**。
   - F4：`_make_progress` 的 seq 此前是 per-closure 闭包计数（``state={"seq": 0}``），
     init 已发到 seq N 后，push/fill 各闭包从 1 重启——引擎停滞钟只认进程内单调
@@ -200,7 +211,15 @@ def step_wifi(serial: str, cfg: dict) -> dict:
 
     adb_shell("svc wifi enable", timeout=10)
     time.sleep(1)
-    result = adb_shell(f'cmd -w wifi connect-network "{ssid}" wpa2 "{password}"', timeout=cfg.get("timeout_seconds", 30))
+    # #3173 G4-2（#3463 §9.2③，port connect_wifi #816 做法）：SSID/密码允许任意
+    # 字符，不做字符白名单；双引号挡不住 `$()` / 反引号展开、值含 `"` 还能脱离
+    # 原参数——按「单个 shell 参数」语义 shlex.quote。「已连接」判断的
+    # `ssid in status` 保持原样（纯子串匹配，不经 shell）。
+    result = adb_shell(
+        "cmd -w wifi connect-network "
+        f"{shlex.quote(ssid)} wpa2 {shlex.quote(password)}",
+        timeout=cfg.get("timeout_seconds", 30),
+    )
     if "Error" in (result or ""):
         return {"success": False, "error": f"WiFi connect failed: {result.strip()}"}
     return {"success": True, "ssid": ssid}
@@ -292,7 +311,16 @@ def step_push(serial: str, cfg: dict) -> dict:
     if bundle and manifest_path:
         bundle = _resolve_path(bundle)
         manifest_path = _resolve_path(manifest_path)
-        remote_dir = cfg.get("remote_dir", "/sdcard/test_resources").rstrip("/")
+        # #3173 G4-2（#3463 §9.2①）：remote_dir 被插进设备端 `cat {marker}` /
+        # `mkdir -p` / `cd ... && tar`（流程已 root），先校验再动手——判据复用
+        # `validated_remote_path`（与 push.files[].remote 一致，含 `..` 段拒绝），
+        # 非法值整步转红，不进入任何 shell。空串同样是配置错误，不回退默认值。
+        try:
+            remote_dir = validated_remote_path(
+                cfg.get("remote_dir", "/sdcard/test_resources")
+            ).rstrip("/")
+        except ValueError as exc:
+            return {"success": False, "error": str(exc)}
         skip_if_match = cfg.get("skip_if_match", True)
 
         try:
@@ -413,6 +441,14 @@ def step_install(serial: str, cfg: dict) -> dict:
     apk_path = _resolve_path(apk_path)
 
     pkg_name = cfg.get("pkg_name", "")
+    # #3173 G4-2（#3463 §9.2②）：pkg_name 在 cfg 入口统一校验一次——`dumpsys
+    # package {pkg_name}` 是单字符串设备 shell（默认顺序位于 root 之后），此后
+    # 所有使用点只用校验后的值。
+    if pkg_name:
+        try:
+            pkg_name = validated_pkg_name(pkg_name, "install.pkg_name")
+        except ValueError as exc:
+            return {"success": False, "error": str(exc)}
     required_version = cfg.get("required_version", "")
 
     if pkg_name and required_version:
