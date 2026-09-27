@@ -5,10 +5,15 @@
 （实测 ``0xf9``，位置 1）就抛 ``UnicodeDecodeError``——它不是 ``OSError``，
 调用点无从兜住，于是 462/487 台倒在「读 instrument 日志」这一步，
 整窗 init 全灭（run 496 / 500）。
+
+#3175（B1-G2）：同一形态在 gpu_finish 侧仍在（``stop_stress()`` 抛在
+``pkill`` 之前，压测循环留在设备上继续跑）——本文件把 SourceGuard 判据
+扩展到 gpu_finish 目录，并补 ``stop_stress()`` 的坏字节反例。
 """
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 import sys
 from pathlib import Path
 
@@ -19,9 +24,11 @@ from tools.dev.source_anchor import SourceGuard
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 V123 = SCRIPTS / "gpu_setup"
 V122 = SCRIPTS / "gpu_setup"
+FINISH = SCRIPTS / "gpu_finish"
 
 LIB_REL = "backend/agent/scripts/gpu_setup/_lib.py"
 SETUP_REL = "backend/agent/scripts/gpu_setup/gpu_setup.py"
+FINISH_LIB_REL = "backend/agent/scripts/gpu_finish/_lib.py"
 
 #: v1.2.2 的崩溃入口形态：``subprocess.run(..., text=True, timeout=...)``。
 #: 绑完整形参片段，避开模块 docstring / 注释里对旧写法的正当提及。
@@ -94,3 +101,43 @@ def test_v123_no_longer_decodes_strictly():
 def test_v122_kept_the_old_strict_decode_for_the_record():
     """旧版本按不可变契约保持原样——证明修的是「新版本」，不是原地改。"""
     assert "text=True" in (V122 / "_lib.py").read_text(encoding="utf-8")
+
+
+def test_gpu_finish_adb_no_longer_decodes_strictly():
+    """静态守卫（#3175）：finish 族 adb 路径同判据——不得再出现严格解码。
+
+    #3069 只修了 setup 侧；#3175 实测 ``gpu_finish/_lib.py`` 的 ``adb()`` 仍是
+    ``text=True``——``stop_stress()`` 内抛 decode 错会中断在 ``pkill`` 之前。
+    """
+    lib = SourceGuard.of_repo_path(FINISH_LIB_REL).anchored("def adb(")
+    lib.assert_absent(
+        STRICT_DECODE_SHAPE,
+        why="#3175：严格解码会把坏字节炸成 teardown 中断（pkill 之前）",
+    )
+    lib.assert_present(
+        "decode_device_output(",
+        why="#3175：adb 必须走宽容解码（port gpu_setup v1.2.3 形态）",
+    )
+
+
+def test_gpu_finish_stop_stress_reaches_pkill_with_broken_bytes(monkeypatch):
+    """反例（#3175）：坏字节输入下 ``stop_stress()`` 必须一路执行到 ``pkill``。
+
+    打桩 ``subprocess.run`` 并**复刻 text=True 的严格解码**——若 ``adb()`` 回退到
+    ``text=True``，这里会抛 ``UnicodeDecodeError``（旧形态的失败点：四个
+    force-stop 之后、pkill 之前中断），压测循环留在设备上继续跑。
+    """
+    lib = _load_lib(FINISH, "gpu_finish_lib_v108_stop")
+    monkeypatch.setenv("STP_DEVICE_SERIAL", "SERIAL-TEST")
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        if kwargs.get("text"):
+            BROKEN_DEVICE_OUTPUT.decode("utf-8")   # 复刻严格解码：旧形态必炸
+        calls.append(list(cmd))
+        return subprocess.CompletedProcess(cmd, 0, BROKEN_DEVICE_OUTPUT, b"")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    lib.stop_stress()
+    assert any("pkill" in c[-1] for c in calls), "坏字节把 stop_stress 炸在 pkill 之前"
+    assert len(calls) == len(lib._STOP_PACKAGES) + 1

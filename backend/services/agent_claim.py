@@ -198,9 +198,13 @@ async def claim_jobs_for_host(
     # 4. Get all device IDs for this host (Phase 3c: filter known-unhealthy devices)
     #    - INCLUDE: known-healthy OR never-reported (NULL adb fields → coalesce to safe default)
     #    - EXCLUDE: known-offline (adb_connected=False, bad adb_state, status=OFFLINE)
+    #    - EXCLUDE: 已退役设备（ADR-0057 D4 第 2 面；#2962 B）——退役是人工确认的
+    #      终态，与主机退役同判据（`retired_at IS NULL`），活读不缓存（退役可发生在
+    #      准入与认领之间）。
     device_ids_result = await db.execute(
         select(Device.id).where(
             Device.host_id == host_id,
+            Device.retired_at.is_(None),
             func.coalesce(Device.adb_connected, True) == True,
             func.coalesce(Device.adb_state, "device").notin_(["offline", "unknown"]),
             Device.status != "OFFLINE",

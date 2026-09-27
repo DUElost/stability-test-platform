@@ -125,6 +125,8 @@ async def record_agent_host_heartbeat(
     online_rows = await db.execute(
         select(Device.id).where(
             Device.host_id == payload.host_id,
+            # ADR-0057 D4 第 5 面（#2962 B）：退役设备不算容量（与主心跳同口径）
+            Device.retired_at.is_(None),
             Device.adb_connected == True,
             Device.adb_state.notin_(["offline", "unknown", ""]),
         )

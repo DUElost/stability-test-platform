@@ -84,6 +84,12 @@ export interface DeviceTableData {
   disk_total?: number | null;
   /** /data 分区已用（字节，心跳上报；未上报为 null） */
   disk_used?: number | null;
+  /** ADR-0057 D1（#2962 B）：退役事实（null = 在役） */
+  retired_at?: string | null;
+  /** #2962 A：陈旧（OFFLINE 且 7 天未见；后端现算派生） */
+  is_stale?: boolean;
+  /** ADR-0057 E4：陈旧超过 30 天的退役建议（只提示，不动作） */
+  retire_suggested?: boolean;
 }
 
 interface ExpandableDeviceTableProps {
@@ -537,7 +543,39 @@ export function ExpandableDeviceTable({
                       {device.build_display_id || '-'}
                     </TableCell>
                     <TableCell className="px-3 py-1.5">
-                      <StatusBadge kind="device-ui" status={device.status} size="sm" />
+                      <div className="flex items-center gap-1.5">
+                        <StatusBadge kind="device-ui" status={device.status} size="sm" />
+                        {/* ADR-0057 D4 第 4 面（#2962 B）：退役是人工确认的终态，
+                            与 status 正交（心跳不改写 status），必须独立可见。 */}
+                        {device.retired_at && (
+                          <span
+                            data-testid={`device-retired-badge-${device.id}`}
+                            className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground"
+                            title={`已退役${device.retired_at ? `（${device.retired_at.slice(0, 10)}）` : ''}`}
+                          >
+                            已退役
+                          </span>
+                        )}
+                        {/* #2962 A：陈旧度派生徽标；退役建议（E4）只提示不动作 */}
+                        {!device.retired_at && device.is_stale && (
+                          <span
+                            data-testid={`device-stale-badge-${device.id}`}
+                            className="shrink-0 rounded-full bg-warning/20 px-1.5 py-0.5 text-[11px] text-warning"
+                            title="陈旧：OFFLINE 且超过 7 天未上报，已从默认列表/容量中隐藏"
+                          >
+                            陈旧
+                          </span>
+                        )}
+                        {!device.retired_at && device.retire_suggested && (
+                          <span
+                            data-testid={`device-retire-suggested-${device.id}`}
+                            className="shrink-0 rounded-full bg-destructive/15 px-1.5 py-0.5 text-[11px] text-destructive"
+                            title="超过 30 天未上报：建议人工确认后退役（只提示，不动作）"
+                          >
+                            建议退役
+                          </span>
+                        )}
+                      </div>
                     </TableCell>
                     <TableCell className="px-3 py-1.5">
                       {device.battery_level != null ? (

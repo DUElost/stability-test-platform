@@ -47,9 +47,16 @@ export const jobKeys = {
 } as const;
 
 export const deviceKeys = {
-  /** ADR-0029：projectKey 维度——设备页项目筛选走后端（未知 key 404 语义）。 */
-  list: (projectKey?: string | null, unassigned = false) =>
-    ['devices', { projectKey: projectKey ?? null, unassigned }] as const,
+  /** ADR-0029：projectKey 维度——设备页项目筛选走后端（未知 key 404 语义）。
+   *  #2962：includeStale / includeRetired 是服务端过滤维度，必须进键——否则
+   *  切换「显示陈旧/已退役」会命中旧缓存（REST 返回不同集合、键相同）。 */
+  list: (
+    projectKey?: string | null,
+    unassigned = false,
+    includeStale = false,
+    includeRetired = false,
+  ) =>
+    ['devices', { projectKey: projectKey ?? null, unassigned, includeStale, includeRetired }] as const,
   /** 任意筛选态的设备列表（前缀）——写后失效用；用 list() 的无参形态会因对象深比较
    *  与筛选态键不匹配而失效为空（#823）。 */
   allLists: () => ['devices'] as const,

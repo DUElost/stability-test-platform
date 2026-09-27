@@ -70,7 +70,9 @@ ACTIVE_JOB_STATUSES = (
 # ADR-0038 D-1（fatal）：主机退役是**永久**判据——新目标中任一退役 host
 # 即结构化拒绝（prepare 400），既不重试也不排队；已准入的在飞 Run 由
 # D-2/D5bis 的收敛路径处理（另单）。
-_FATAL_DISPATCH_REASONS = ("not_found", "no_host", "host_retired")
+#
+# ADR-0057 D4 第 1 面（#2962 B）：设备退役同为**永久**判据，与主机退役并列。
+_FATAL_DISPATCH_REASONS = ("not_found", "no_host", "host_retired", "device_retired")
 
 
 def _classify_dispatch_devices_sync(
@@ -81,7 +83,8 @@ def _classify_dispatch_devices_sync(
     Returns ``(unavailable, device_host_map)``:
       - ``unavailable`` keeps the legacy ladder order and entry shape
         (one entry per blocked device, first matching reason wins):
-        not_found / no_host / device_offline / device_error / host_offline /
+        not_found / no_host / host_retired / device_retired / serial_conflict /
+        device_offline / device_error / host_offline / host_maintenance /
         active_lease / active_job
       - ``device_host_map``: ``{device_id: host_id}`` for every device that
         exists (used by the V2 snapshot builder).
@@ -100,6 +103,8 @@ def _classify_dispatch_devices_sync(
             Host.maintenance_until.label("host_maintenance_until"),
             # ADR-0038 D1：退役事实（NULL = 在用）
             Host.retired_at.label("host_retired_at"),
+            # ADR-0057 D1：设备退役事实（NULL = 在役）——永久判据，与主机退役并列
+            Device.retired_at.label("device_retired_at"),
             # #2649：serial 占位值判定（跨 host 可重复 → 归属漂移）
             Device.serial,
         )
@@ -156,6 +161,17 @@ def _classify_dispatch_devices_sync(
             unavailable.append({
                 "id": did, "reason": "host_retired",
                 "host_id": snap.host_id, "host_status": snap.host_status,
+            })
+            continue
+        # ADR-0057 D4 第 1 面：设备退役是**永久**判据，与主机退役并列且同样先于
+        # 设备级暂态（offline/error）判定——否则「设备离线 + 已退役」会短路成可
+        # 重试的 device_offline 并进 QUEUED 等待，永久事实被暂态遮住。
+        if snap.device_retired_at is not None:
+            unavailable.append({
+                "id": did, "reason": "device_retired",
+                "device_status": snap.device_status,
+                "serial": snap.serial,
+                "host_id": snap.host_id,
             })
             continue
         # #2649：占位/重复 serial——多台 host 的 agent 会按同一 serial upsert 同一
