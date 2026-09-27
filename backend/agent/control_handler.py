@@ -27,7 +27,7 @@ from .upload_manager import UploadManager
 logger = logging.getLogger(__name__)
 
 # 设备页批量「滑动留痕」：硬编码两条 settings，不接受任意 shell。
-_SWIPE_TRAIL_SETTINGS = ("show_touches", "pointer_location")
+_SWIPE_TRAIL_SETTINGS = (("system", "show_touches"), ("secure", "pointer_location"))
 _SWIPE_TRAIL_ADB_TIMEOUT_S = 10
 
 
@@ -108,7 +108,7 @@ def _set_device_swipe_trail(
             continue
         serial = raw.strip()
         try:
-            for key in _SWIPE_TRAIL_SETTINGS:
+            for namespace, key in _SWIPE_TRAIL_SETTINGS:
                 completed = subprocess.run(
                     [
                         adb_path,
@@ -117,7 +117,7 @@ def _set_device_swipe_trail(
                         "shell",
                         "settings",
                         "put",
-                        "system",
+                        namespace,
                         key,
                         value,
                     ],
