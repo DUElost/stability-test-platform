@@ -315,10 +315,11 @@ def test_adb_shell_quiet_survives_non_utf8_output(fake_adb, monkeypatch):
     assert proc.returncode == 0
 
 
-# ── 模板 pin = 2.3.12（#3463 §4 G4 验收项；跳过 2.3.11） ─────────────────
+# ── 模板 pin = 2.3.13（#3463 §4 G4 验收项 + §9.2 G4-2 顺延；G4 曾直升
+# 2.3.12 跳过 2.3.11，G4-2 收口残余注入面后顺延 2.3.13） ─────────────────
 
 @pytest.mark.parametrize("template", ["monkey.json", "monkey_watcher_patrol.json"])
-def test_template_pins_monkey_setup_2312(template):
+def test_template_pins_monkey_setup_2313(template):
     data = json.loads((_TEMPLATES / template).read_text(encoding="utf-8"))
     versions = [
         step.get("version")
@@ -326,7 +327,7 @@ def test_template_pins_monkey_setup_2312(template):
         if step.get("action") == "script:monkey_setup"
     ]
     assert versions, template
-    assert versions == ["2.3.12"], versions
+    assert versions == ["2.3.13"], versions
 
 
 def _iter_steps(obj):

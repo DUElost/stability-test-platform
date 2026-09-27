@@ -1241,6 +1241,14 @@
           "retired": false,
           "script": "monkey_setup.py",
           "version": "2.3.12"
+        },
+        {
+          "artifact": "packages/monkey_setup/2.3.13.tar.gz",
+          "package_sha256": "5a120f9fda1719754a286fb46f7e4a0fb234d496357bf7b92740b57a3dd49cc8",
+          "python": null,
+          "retired": false,
+          "script": "monkey_setup.py",
+          "version": "2.3.13"
         }
       ]
     },
