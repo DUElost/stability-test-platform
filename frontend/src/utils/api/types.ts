@@ -181,6 +181,31 @@ export interface Device {
   mem_used?: number | null;
   disk_total?: number | null;
   disk_used?: number | null;
+  /** ADR-0057 D1（#2962 B）：退役事实（null = 在役；心跳不改写，与 status 正交） */
+  retired_at?: string | null;
+  retired_by?: string | null;
+  retire_reason?: string | null;
+  /** #2962 A：陈旧度派生（OFFLINE 且 last_seen 早于 7 天/为空；后端现算不落库） */
+  is_stale?: boolean;
+  /** ADR-0057 E4：陈旧超过 30 天的退役建议（只提示，不动作） */
+  retire_suggested?: boolean;
+}
+
+/** ADR-0057 D2（#2962 B）：批量退役逐台结果。 */
+export interface DeviceRetireBatchResult {
+  device_id: number;
+  serial?: string | null;
+  status: 'retired' | 'already_retired' | 'conflict' | 'not_found' | 'failed';
+  error?: string | null;
+}
+
+export interface DeviceRetireBatchResponse {
+  results: DeviceRetireBatchResult[];
+  retired: number;
+  already_retired: number;
+  conflict: number;
+  not_found: number;
+  failed: number;
 }
 
 /** `POST /devices/bulk-swipe-trail` — 批量开关滑动留痕。 */

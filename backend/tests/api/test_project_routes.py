@@ -922,7 +922,11 @@ class TestListFilters:
         _make_device(db_session, "s-filt-null", None, model=None)
 
         resp = client.get(
-            "/api/v1/devices?project_key=proj-a", headers=auth_headers
+            # #2962：列表默认隐藏陈旧设备（OFFLINE 且 7 天未见/从未上报），
+            # 本用例造的是裸 Device 行（无 status/last_seen）——显式带开关，
+            # 保持断言只针对「项目筛选」这一件事。
+            "/api/v1/devices?project_key=proj-a&include_stale=true",
+            headers=auth_headers,
         )
         assert resp.status_code == 200
         serials = {d["serial"] for d in resp.json()}

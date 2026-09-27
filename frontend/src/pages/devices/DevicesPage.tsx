@@ -8,6 +8,7 @@ import { ExpandableDeviceTable, type DeviceTableData, type DeviceStatus } from '
 import DeviceBulkActionBar from '@/components/device/DeviceBulkActionBar';
 import { AddDeviceModal } from './components/AddDeviceModal';
 import { BatchEditDeviceTagsDialog, type DeviceTagOperation } from './components/BatchEditDeviceTagsDialog';
+import { RetireDevicesDialog, type DeviceRetireMode } from './components/RetireDevicesDialog';
 import { AssignProjectDialog } from './components/AssignProjectDialog';
 import { ProjectFilterSelect, UNASSIGNED_FILTER_VALUE } from '@/components/project/ProjectFilterSelect';
 import { api, assignDevicesToProject, fetchAllDevicePages, fetchAllHosts, toApiError } from '@/utils/api';
@@ -38,6 +39,12 @@ export default function DevicesPage() {
   // 筛选走后端 ?project_key=——未知 key 后端 404，前端按错误态渲染。
   // ADR-0029 P0：「未归属」哨兵值切 ?unassigned=true（与 project_key 互斥）。
   const [projectKey, setProjectKey] = useState<string | undefined>(undefined);
+  // #2962 A / ADR-0057 D4：默认隐藏陈旧与退役设备（服务端口径），显式开关才显示。
+  const [includeStale, setIncludeStale] = useState(false);
+  const [includeRetired, setIncludeRetired] = useState(false);
+  const [retireDialog, setRetireDialog] = useState<{ open: boolean; mode: DeviceRetireMode }>(
+    { open: false, mode: 'retire' },
+  );
   const queryClient = useQueryClient();
   const toast = useToast();
   const sessionQ = useAuthSession();
@@ -53,10 +60,12 @@ export default function DevicesPage() {
   // 单次请求会在扩容后静默少设备。表格「全部设备」卡改用真实 total，差集由表格内
   // 横幅提示，不再拿已加载条数当总数。
   const { data: devicesPage, isLoading, error } = useQuery({
-    queryKey: deviceKeys.list(projectKey, unassignedOnly),
+    queryKey: deviceKeys.list(projectKey, unassignedOnly, includeStale, includeRetired),
     queryFn: () => fetchAllDevicePages({
       projectKey: effectiveProjectKey,
       unassigned: unassignedOnly,
+      includeStale,
+      includeRetired,
     }),
     refetchInterval: 10000,
   });
@@ -112,6 +121,10 @@ export default function DevicesPage() {
         tags: Array.isArray(device.tags) ? device.tags : [],
         project_key: device.project_key ?? null,
         attribution_source: device.attribution_source ?? null,
+        // #2962：生命周期派生（陈旧/退役/退役建议）随行透传，表格徽标用
+        retired_at: device.retired_at ?? null,
+        is_stale: device.is_stale ?? false,
+        retire_suggested: device.retire_suggested ?? false,
       };
     });
   }, [devices, hostMap]);
@@ -316,6 +329,54 @@ export default function DevicesPage() {
     },
   });
 
+  type RetireOutcome =
+    | { kind: 'retire'; batch: Awaited<ReturnType<typeof api.devices.retireBatch>> }
+    | { kind: 'unretire'; ok: number; failed: string[] };
+
+  const retireMutation = useMutation({
+    mutationFn: async ({ mode, reason }: { mode: DeviceRetireMode; reason: string }): Promise<RetireOutcome> => {
+      const ids = Array.from(selectedDeviceIds);
+      if (mode === 'retire') {
+        return { kind: 'retire', batch: await api.devices.retireBatch(ids, reason) };
+      }
+      // D2 只提供批量退役端点；解除退役逐台串行（选择集通常很小）
+      let ok = 0;
+      const failed: string[] = [];
+      for (const id of ids) {
+        try {
+          await api.devices.unretire(id, reason);
+          ok += 1;
+        } catch {
+          failed.push(String(id));
+        }
+      }
+      return { kind: 'unretire', ok, failed };
+    },
+    onSuccess: (outcome) => {
+      queryClient.invalidateQueries({ queryKey: deviceKeys.allLists() });
+      setRetireDialog({ open: false, mode: 'retire' });
+      setSelectedDeviceIds(new Set());
+      if (outcome.kind === 'retire') {
+        const { retired, already_retired, conflict, not_found, failed } = outcome.batch;
+        const summary = `退役完成：改态 ${retired} · 幂等跳过 ${already_retired} · 前置冲突 ${conflict} · 未找到 ${not_found} · 失败 ${failed}`;
+        if (conflict || not_found || failed) toast.error(summary);
+        else toast.success(summary);
+      } else if (outcome.failed.length) {
+        toast.error(`解除退役：成功 ${outcome.ok} 台，失败 ${outcome.failed.length} 台`);
+      } else {
+        toast.success(`已解除退役 ${outcome.ok} 台`);
+      }
+    },
+    onError: (error: unknown) => {
+      toast.error(`退役操作失败: ${toApiError(error).message}`);
+    },
+  });
+
+  const selectedRetiredCount = useMemo(
+    () => selectedDevices.filter((device) => Boolean(device.retired_at)).length,
+    [selectedDevices],
+  );
+
   if (isLoading) {
     return (
       <PageContainer width="wide">
@@ -339,7 +400,7 @@ export default function DevicesPage() {
           description={isProject404
             ? `项目 "${effectiveProjectKey}" 不存在，请清除筛选或核对 key`
             : '请检查后端服务连接'}
-          onRetry={isProject404 ? undefined : () => queryClient.invalidateQueries({ queryKey: deviceKeys.list(projectKey, unassignedOnly) })}
+          onRetry={isProject404 ? undefined : () => queryClient.invalidateQueries({ queryKey: deviceKeys.list(projectKey, unassignedOnly, includeStale, includeRetired) })}
           action={isProject404 ? (
             <Button variant="outline" onClick={() => setProjectKey(undefined)}>
               清除项目筛选
@@ -365,6 +426,25 @@ export default function DevicesPage() {
             </Button>
           ) : undefined}
         />
+        {/* #2962：默认隐藏陈旧/退役设备——空列表可能只是「全被隐藏」，
+            这里给出显式查看入口，避免把沉积库存误读成「从未接入」。 */}
+        {(!includeStale || !includeRetired) && (
+          <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+            <span className={cn('text-xs', TEXT.subtitle)}>默认隐藏了陈旧/已退役设备：</span>
+            {!includeStale && (
+              <Button variant="outline" size="sm" data-testid="device-empty-show-stale"
+                      onClick={() => setIncludeStale(true)}>
+                显示陈旧设备
+              </Button>
+            )}
+            {!includeRetired && (
+              <Button variant="outline" size="sm" data-testid="device-empty-show-retired"
+                      onClick={() => setIncludeRetired(true)}>
+                显示已退役设备
+              </Button>
+            )}
+          </div>
+        )}
         <AddDeviceModal
           isOpen={isModalOpen}
           onClose={() => setIsModalOpen(false)}
@@ -385,6 +465,26 @@ export default function DevicesPage() {
       <div className="flex flex-wrap items-center justify-between gap-2 py-2">
         <span className={cn('text-xs', TEXT.subtitle)}>点击设备行展开详情，勾选后可批量处理</span>
         <div className="flex items-center gap-2">
+          {/* #2962 A / ADR-0057 D4：默认隐藏陈旧与退役设备（服务端口径），
+              这里给出显式查看开关——隐藏是默认，不是不可见。 */}
+          <Button
+            variant={includeStale ? 'default' : 'outline'}
+            size="sm"
+            data-testid="device-toggle-stale"
+            aria-pressed={includeStale}
+            onClick={() => setIncludeStale((value) => !value)}
+          >
+            {includeStale ? '隐藏陈旧设备' : '显示陈旧设备'}
+          </Button>
+          <Button
+            variant={includeRetired ? 'default' : 'outline'}
+            size="sm"
+            data-testid="device-toggle-retired"
+            aria-pressed={includeRetired}
+            onClick={() => setIncludeRetired((value) => !value)}
+          >
+            {includeRetired ? '隐藏已退役' : '显示已退役'}
+          </Button>
           <ProjectFilterSelect
             value={projectKey}
             onChange={setProjectKey}
@@ -422,11 +522,15 @@ export default function DevicesPage() {
         canAssignProject={isAdmin}
         canSwipeTrail={isAdmin}
         swipeTrailPending={swipeTrailMutation.isPending}
+        canRetire={isAdmin}
+        retirePending={retireMutation.isPending}
         onSelectAllFiltered={handleSelectAllFiltered}
         onEditTags={() => setIsTagDialogOpen(true)}
         onAssignProject={() => setIsAssignDialogOpen(true)}
         onSwipeTrailOn={() => swipeTrailMutation.mutate(true)}
         onSwipeTrailOff={() => swipeTrailMutation.mutate(false)}
+        onRetire={() => setRetireDialog({ open: true, mode: 'retire' })}
+        onUnretire={() => setRetireDialog({ open: true, mode: 'unretire' })}
         onCopySerials={handleCopySerials}
         onExport={handleExportSelected}
         onClear={() => setSelectedDeviceIds(new Set())}
@@ -447,6 +551,16 @@ export default function DevicesPage() {
         onSubmit={(operation, tags) => {
           tagUpdateMutation.mutate({ targets: selectedDevices, operation, tags });
         }}
+      />
+
+      <RetireDevicesDialog
+        isOpen={retireDialog.open}
+        mode={retireDialog.mode}
+        selectedCount={selectedDevices.length}
+        alreadyRetiredCount={selectedRetiredCount}
+        isSubmitting={retireMutation.isPending}
+        onClose={() => setRetireDialog((previous) => ({ ...previous, open: false }))}
+        onSubmit={(mode, reason) => retireMutation.mutate({ mode, reason })}
       />
 
       <AssignProjectDialog

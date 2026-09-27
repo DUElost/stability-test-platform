@@ -1,9 +1,24 @@
 import apiClient, { unwrapApiResponse } from './client';
 import { fetchAllPages, type PagedResult } from './paginate';
-import type { ApiResponseEnvelope, BulkSwipeTrailResult, Device, PaginatedResponse } from './types';
+import type {
+  ApiResponseEnvelope,
+  BulkSwipeTrailResult,
+  Device,
+  DeviceRetireBatchResponse,
+  PaginatedResponse,
+} from './types';
 
 export const devices = {
-  list: (skip = 0, limit = 50, status?: string, tags?: string, projectKey?: string, unassigned = false) =>
+  list: (
+    skip = 0,
+    limit = 50,
+    status?: string,
+    tags?: string,
+    projectKey?: string,
+    unassigned = false,
+    includeStale = false,
+    includeRetired = false,
+  ) =>
     apiClient.get<PaginatedResponse<Device>>('/devices', {
       params: {
         skip,
@@ -12,6 +27,9 @@ export const devices = {
         ...(tags ? { tags } : {}),
         ...(projectKey ? { project_key: projectKey } : {}),
         ...(unassigned ? { unassigned: true } : {}),
+        // #2962 A / ADR-0057 D4：默认隐藏陈旧与退役设备，显式置 true 才显示
+        ...(includeStale ? { include_stale: true } : {}),
+        ...(includeRetired ? { include_retired: true } : {}),
       },
     }).then(r => r.data),
   get: (id: number) => apiClient.get<Device>(`/devices/${id}`).then(r => r.data),
@@ -19,6 +37,19 @@ export const devices = {
     apiClient.post<Device>('/devices', data).then(r => r.data),
   updateTags: (id: number, tags: string[]) =>
     apiClient.put<Device>(`/devices/${id}/tags`, tags).then(r => r.data),
+  /** ADR-0057 D2（#2962 B）：退役 / 解除退役（admin；409=E2 前置不满足）。 */
+  retire: (id: number, retireReason: string) =>
+    apiClient.post<Device>(`/devices/${id}/retire`, { retire_reason: retireReason }).then(r => r.data),
+  unretire: (id: number, retireReason: string) =>
+    apiClient.post<Device>(`/devices/${id}/unretire`, { retire_reason: retireReason }).then(r => r.data),
+  /** E3：批量退役（逐台独立事务，逐台结果）；清单由陈旧度视图导出后人工确认。 */
+  retireBatch: (deviceIds: number[], retireReason: string) =>
+    unwrapApiResponse(
+      apiClient.post<ApiResponseEnvelope<DeviceRetireBatchResponse>>('/devices/retire', {
+        device_ids: deviceIds,
+        retire_reason: retireReason,
+      }),
+    ),
   bulkSwipeTrail: (deviceIds: number[], enabled: boolean) =>
     unwrapApiResponse(
       apiClient.post<ApiResponseEnvelope<BulkSwipeTrailResult>>('/devices/bulk-swipe-trail', {
@@ -40,6 +71,10 @@ export interface DeviceListFilters {
   status?: string;
   projectKey?: string;
   unassigned?: boolean;
+  /** #2962 A：默认隐藏陈旧设备（OFFLINE 且 7 天未见）；显式 true 才显示 */
+  includeStale?: boolean;
+  /** ADR-0057 D4：默认隐藏已退役设备（与退役主机同一开关语义） */
+  includeRetired?: boolean;
 }
 
 /**
@@ -61,6 +96,8 @@ export async function fetchAllDevicePages(
         undefined,
         filters.projectKey,
         filters.unassigned ?? false,
+        filters.includeStale ?? false,
+        filters.includeRetired ?? false,
       ),
     DEVICE_PAGE_LIMIT,
   );

@@ -1038,6 +1038,55 @@ class TestHostRetiredDispatchGate:
         assert "host_retired" in _FATAL_DISPATCH_REASONS
 
 
+class TestDeviceRetiredDispatch:
+    """ADR-0057 D4 第 1 面（#2962 B）：设备退役与主机退役同为**永久** fatal 判据。
+
+    与 host_retired 同款判据遮蔽修正：设备退役必须先于 device_offline 等暂态
+    判定，否则离线 + 已退役会短路成可重试的 device_offline 并进 QUEUED 等待。
+    """
+
+    def test_classify_device_retired_beats_device_offline(
+        self, db_session, dispatch_fixture,
+    ):
+        dispatch_fixture["device"].retired_at = datetime.now(timezone.utc)
+        dispatch_fixture["device"].status = DeviceStatus.OFFLINE.value
+        db_session.commit()
+
+        unavailable, _ = _classify_dispatch_devices_sync(
+            db_session, [dispatch_fixture["device"].id]
+        )
+
+        assert unavailable[0]["reason"] == "device_retired", (
+            "设备退役判据不得被较早的暂态 device_offline 遮住"
+        )
+        assert unavailable[0]["serial"] == dispatch_fixture["device"].serial
+
+    def test_prepare_rejects_retired_device_without_queueing(
+        self, db_session, dispatch_fixture,
+    ):
+        """fatal：prepare 结构化拒绝，不产生 QUEUED 行（与 host_retired 同语义）。"""
+        from backend.models.plan_run import PlanRun
+
+        dispatch_fixture["device"].retired_at = datetime.now(timezone.utc)
+        db_session.commit()
+
+        with pytest.raises(PlanDispatchError) as exc:
+            prepare_plan_run(
+                plan_id=dispatch_fixture["plan"].id,
+                device_ids=[dispatch_fixture["device"].id],
+                triggered_by="pytest",
+                db=db_session,
+                run_type="MANUAL",
+            )
+
+        entries = exc.value.detail()["unavailable_devices"]
+        assert entries[0]["reason"] == "device_retired"
+        assert db_session.query(PlanRun).count() == 0
+
+    def test_device_retired_is_registered_fatal(self):
+        assert "device_retired" in _FATAL_DISPATCH_REASONS
+
+
 # ── #2649：serial 冲突按设备拒绝 ──────────────────────────────────────
 
 
