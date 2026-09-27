@@ -147,7 +147,10 @@ def test_set_device_swipe_trail_runs_both_settings(monkeypatch):
     assert calls[0] == [
         "adb", "-s", "SER1", "shell", "settings", "put", "system", "show_touches", "1",
     ]
-    assert calls[1][7] == "pointer_location"
+    # index 6 = settings 命名空间：pointer_location 属 Settings.Secure（#3179）
+    assert calls[0][6] == "system"
+    assert calls[1][6] == "secure"
+    assert calls[1][4:8] == ["settings", "put", "secure", "pointer_location"]
     assert calls[2][2] == "SER2"
     assert all(c[-1] == "1" for c in calls)
 
