@@ -203,6 +203,14 @@
           "retired": false,
           "script": "clear_recents.py",
           "version": "1.0.5"
+        },
+        {
+          "artifact": "packages/clear_recents/1.0.6.tar.gz",
+          "package_sha256": "5e42d15bcc076e94374babc5b5572ae55ced012601dac5480d0e5962bf0e5d2a",
+          "python": null,
+          "retired": false,
+          "script": "clear_recents.py",
+          "version": "1.0.6"
         }
       ]
     },
@@ -731,6 +739,14 @@
           "retired": false,
           "script": "gpu_finish.py",
           "version": "1.0.7"
+        },
+        {
+          "artifact": "packages/gpu_finish/1.0.8.tar.gz",
+          "package_sha256": "17fdfde215cb85c647ca370b99184733af2bd9a9d3b1909d480b865d6c915eb7",
+          "python": null,
+          "retired": false,
+          "script": "gpu_finish.py",
+          "version": "1.0.8"
         }
       ]
     },

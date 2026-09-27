@@ -33,24 +33,41 @@ def device_serial() -> str:
     return serial
 
 
+def decode_device_output(raw: bytes | None) -> str:
+    """设备 / adb 输出解码：**宽容 UTF-8**（v1.0.6，#3463 G5；port 自 gpu_setup #3069）。
+
+    设备侧输出（UI dump、input 服务报错）可能是任意字节。``text=True`` 按 locale
+    严格解码，遇到一个非 UTF-8 字节就抛 ``UnicodeDecodeError``——它不是 ``OSError``，
+    调用点无从兜住，会把整步炸成未捕获异常。坏字节替换成 U+FFFD 不影响本族对
+    resource-id / bounds / content-desc 的正则判定。
+    """
+    return (raw or b"").decode("utf-8", errors="replace")
+
+
 def adb_shell(command: str, timeout: int = 30) -> str:
     """Run an ADB shell command on the target device, return stdout."""
+    # v1.0.6（#3463 G5）：显式收字节再解宽容码，不用 ``text=True``——后者严格解码，
+    # 一个坏字节即 UnicodeDecodeError，且无法从调用点兜住。
     result = subprocess.run(
         [adb_path(), "-s", device_serial(), "shell", command],
         capture_output=True,
-        text=True,
         timeout=timeout,
     )
-    return result.stdout or ""
+    return decode_device_output(result.stdout)
 
 
 def adb_shell_quiet(command: str, timeout: int = 30) -> subprocess.CompletedProcess:
     """Run ADB shell, return full CompletedProcess for exit-code checks."""
-    return subprocess.run(
+    result = subprocess.run(
         [adb_path(), "-s", device_serial(), "shell", command],
         capture_output=True,
-        text=True,
         timeout=timeout,
+    )
+    return subprocess.CompletedProcess(
+        result.args,
+        result.returncode,
+        decode_device_output(result.stdout),
+        decode_device_output(result.stderr),
     )
 
 

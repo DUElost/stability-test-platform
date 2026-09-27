@@ -37,6 +37,7 @@ Scenarios covered
    - Parses detail dict, handles missing fields, survives malformed body.
 """
 
+import json
 import os
 import signal
 import sqlite3
@@ -370,13 +371,13 @@ class TestDeferredPostCompletion:
         os.getenv("TESTING") != "1" and not os.getenv("DATABASE_URL"),
         reason="Requires database connection",
     )
-    def test_defer_cutoff_stops_reenqueue_for_ancient_orphan(self):
+    def test_defer_cutoff_stops_reenqueue_for_ancient_orphan(self, tmp_path):
         """#1175: 超过 POST_COMPLETION_MAX_DEFER_SECONDS 的孤儿终态 job
         停止重入队（detail 长期未到，报告已被反复回滚）——不再无限重算。"""
         from backend.core.database import SessionLocal
         from backend.models.enums import HostStatus, JobStatus
         from backend.models.host import Device, Host
-        from backend.models.job import JobInstance
+        from backend.models.job import JobInstance, StepTrace
         from backend.models.plan import Plan, PlanStep
         from backend.models.plan_run import PlanRun
 
@@ -431,8 +432,22 @@ class TestDeferredPostCompletion:
                 post_processed_at=None,
             )
             db.add(job)
+            db.flush()
+            db.add(StepTrace(
+                job_id=job.id,
+                step_id="mtbf_finish",
+                stage="execute",
+                status="COMPLETED",
+                event_type="COMPLETED",
+                output=json.dumps({"detail_uri": str(tmp_path / "late-detail.json")}),
+                original_ts=now,
+            ))
             db.commit()
             job_id = job.id
+
+            from backend.services.case_result_ingest import case_result_ingest_pending
+
+            assert case_result_ingest_pending(db, job_id)
 
             with patch("backend.core.task_queue.enqueue_sync") as mock_enqueue:
                 recycler_mod._defer_cutoff_alerted.discard(job_id)
@@ -445,8 +460,104 @@ class TestDeferredPostCompletion:
             ]
             assert pc_calls == [], "post_completion_task must not fire for cut-off job"
         finally:
-            from backend.models.job import StepTrace
+            db.query(StepTrace).filter(StepTrace.job_id == job_id).delete()
+            db.query(JobInstance).filter(JobInstance.id == job_id).delete()
+            db.query(PlanRun).filter(PlanRun.id == run.id).delete()
+            db.query(PlanStep).filter(PlanStep.plan_id == plan.id).delete()
+            db.query(Plan).filter(Plan.id == plan.id).delete()
+            db.query(Device).filter(Device.id == device.id).delete()
+            db.query(Host).filter(Host.id == host_id).delete()
+            db.commit()
+            db.close()
 
+    @pytest.mark.skipif(
+        os.getenv("TESTING") != "1" and not os.getenv("DATABASE_URL"),
+        reason="Requires database connection",
+    )
+    def test_defer_cutoff_reenqueues_ancient_orphan_without_detail_uri(self):
+        """#3341 / #3459（owner 2026-09-27 裁定）：远古孤儿**没有** detail URI
+        = 没有待摄入内容 = 主路径漏发 → 照常重入队，不截止。
+
+        与上一条互为正反例：截止只针对「有 URI 但读不出来」。这里不打桩
+        ``case_result_ingest_pending``——#3447 的同类用例都打了桩，真实的
+        「无 URI」分类此前没有任何用例钉住（#3459 即由此漏过）。
+        """
+        from backend.core.database import SessionLocal
+        from backend.models.enums import HostStatus, JobStatus
+        from backend.models.host import Device, Host
+        from backend.models.job import JobInstance, StepTrace
+        from backend.models.plan import Plan, PlanStep
+        from backend.models.plan_run import PlanRun
+        from backend.services.case_result_ingest import case_result_ingest_pending
+
+        from backend.scheduler import recycler as recycler_mod
+        from backend.scheduler.recycler import _fill_deferred_post_completions
+
+        suffix = uuid4().hex[:8]
+        now = datetime.now(timezone.utc)
+        host_id = f"test-ph0-nouri-{suffix}"
+
+        db = SessionLocal()
+        try:
+            host = Host(
+                id=host_id, hostname=f"h-{suffix}",
+                status=HostStatus.ONLINE.value, created_at=now,
+            )
+            device = Device(
+                serial=f"S-nouri-{suffix}", host_id=host_id,
+                status="ONLINE", tags=[], created_at=now,
+            )
+            plan = Plan(
+                name=f"wf-nouri-{suffix}", created_by="pytest",
+            )
+            db.add_all([host, device, plan])
+            db.flush()
+            step = PlanStep(
+                plan_id=plan.id, step_key="default",
+                script_name="dummy", script_version="v1.0.0",
+                stage="init", sort_order=0,
+            )
+            db.add(step)
+            db.flush()
+            run = PlanRun(
+                plan_id=plan.id,
+                status="FAILED",
+                triggered_by="pytest",
+                started_at=now, ended_at=now,
+                plan_snapshot={"name": plan.name, "plan_id": plan.id},
+                run_type="MANUAL",
+            )
+            db.add(run)
+            db.flush()
+            job = JobInstance(
+                plan_run_id=run.id, plan_id=plan.id,
+                device_id=device.id, host_id=host_id,
+                status=JobStatus.FAILED.value,
+                status_reason="test_timeout",
+                pipeline_def={"stages": {"prepare": [], "execute": [], "post_process": []}},
+                created_at=now, updated_at=now,
+                started_at=now,
+                ended_at=now - timedelta(days=7),
+                post_processed_at=None,
+            )
+            db.add(job)
+            db.commit()
+            job_id = job.id
+
+            assert not case_result_ingest_pending(db, job_id), "无 detail URI 应判为无待摄入"
+
+            with patch("backend.core.task_queue.enqueue_sync") as mock_enqueue:
+                recycler_mod._defer_cutoff_alerted.discard(job_id)
+                _fill_deferred_post_completions(db, now)
+
+            pc_calls = [
+                c for c in mock_enqueue.call_args_list
+                if c[0][0] == "post_completion_task" and c[1].get("job_id") == job_id
+            ]
+            assert len(pc_calls) == 1, "无 URI 的远古孤儿应重入队一次（主路径漏发）"
+            assert pc_calls[0][1].get("key") == f"pc:{job_id}"
+            assert job_id not in recycler_mod._defer_cutoff_alerted, "不应走截止分支"
+        finally:
             db.query(StepTrace).filter(StepTrace.job_id == job_id).delete()
             db.query(JobInstance).filter(JobInstance.id == job_id).delete()
             db.query(PlanRun).filter(PlanRun.id == run.id).delete()
