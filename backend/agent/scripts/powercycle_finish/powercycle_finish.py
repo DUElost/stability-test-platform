@@ -1,6 +1,16 @@
 # -*- coding: utf-8 -*-
 """PowerCycle 停止 + 结果收取（teardown 阶段，issue #462 P0b；G15 对齐 §3.2）。
 
+v1.0.8（#3463 §9 G1-pc-2，2026-09-27）：prefs 读路径 kind 区分收口（F1「六族内
+所有 prefs 读路径」，#3471 复核 B3/B4 退回项）：
+- `get_prefs_xml`（_lib）port root 优先形态（setup 1.2.3+ 同构）；
+- `set_prefs(reset_count=false)`（_lib）：kind 区分，读不到不以 0 整写；
+- `start_task`（_lib）：prefs 不可读（非 `ok`）时 raise，不跳过 `running=true`
+  照常启动服务；
+- `_verify_stop_flags`（_lib）：回读改走 root 优先并区分 kind——root 写成功但
+  run-as 被拒不再判失败；真正读不到（transient/denied）按既有语义重写后仍不
+  ok 才 raise。
+
 v1.0.7（#3463 G1，2026-09-27）：F1 + F2 双收口（batch B1，方案见 #3463 §3 G1）。
 - F1 port powercycle_setup 参照：`_root_read_prefs` 单调用同源证据 +
   收紧后的 `repair_prefs_ownership`（只有「存在 + 读成功 + 内容空」才删——

@@ -1,6 +1,14 @@
 # -*- coding: utf-8 -*-
 """PowerCycle 部署 + 启动（init 阶段，issue #462 P0b；G15 对齐 §3.2）。
 
+v1.2.8（#3463 §9 G1-pc-2，2026-09-27）：prefs 读路径 kind 区分收口（F1「六族内
+所有 prefs 读路径」，#3471 复核 B2/B3 退回项）。
+- `set_prefs(reset_count=false)`：续跑计数读取按 `_root_read_prefs` kind 区分——
+  `ok` 解析、`absent` 取 0、`transient`/`denied`/`empty` raise（步骤可重试），
+  不再在读不到时以 0 整写完整 prefs 覆盖健康续跑计数；
+- `start_task`：prefs 不可读（非 `ok`）时 raise，不再跳过 `running=true` 却照常
+  启动服务。
+
 v1.2.7（#3463 G1，2026-09-27）：F1 + F2 双收口（batch B1，方案见 #3463 §3 G1）。
 - F1 `set_stop_flags` 收紧：整写最小 map 只认 `_root_read_prefs` 的 `absent`
   证据——`transient`/`denied`（读空含瞬态/被拒）保留文件并 raise（步骤可重试），

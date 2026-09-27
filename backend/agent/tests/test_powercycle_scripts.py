@@ -258,6 +258,9 @@ class TestPrefsXml:
             pushed["xml"] = content
 
         monkeypatch.setattr(lib, "push_prefs_xml", fake_push)
+        # v1.2.8（#3463 §9 G1-pc-2 ②）起 set_prefs 先判 is_root：root 走
+        # _root_read_prefs、无 root 走 get_prefs_xml——本用例钉后者（run-as 分支）。
+        monkeypatch.setattr(lib, "is_root", lambda: False)
         monkeypatch.setattr(
             lib, "get_prefs_xml",
             lambda: '<?xml version="1.0"?><map><int name="current_count" value="42"/></map>',

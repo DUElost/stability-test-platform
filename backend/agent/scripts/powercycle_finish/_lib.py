@@ -348,11 +348,20 @@ def _root_read_prefs() -> tuple[str, str]:
 
 
 def get_prefs_xml() -> str:
-    """run-as cat prefs（lib.ps1:Get-PowerCyclePrefsXml 同款；无文件/权限不足返回空串）。
+    """读 prefs（#2846/#2979）：**root 优先**——单调用同源探测 ``_root_read_prefs``；
+    无 root 才回落 `run-as`。
 
-    **空串只表示"此刻读不到"，不表示"文件不存在"**——存在性判定见
-    ``_root_read_prefs``（#2846/#2979/#3463 G1）。
+    v1.0.8（#3463 §9 G1-pc-2 ①，F1「六族内所有 prefs 读路径」收口）：port
+    powercycle_setup 1.2.3+ 同构形态。为什么不能只走 run-as：AutoTestTool 是
+    platform 签名 system app（shared uid ``android.uid.system``），AOSP 对
+    non-debuggable / shared-uid 包**恒拒绝 run-as**——run-as-only 读路径恒空，
+    调用方（start/verify）会把「读空」当「不存在」跳过写入或误判写失败。
+    读不到/读空返回空串；**空串只表示"此刻读不到"，不表示"文件不存在"**
+    （存在性判定见 ``_root_read_prefs``）。
     """
+    if is_root():
+        kind, text = _root_read_prefs()
+        return text if kind == "ok" else ""
     _, out, _ = adb("shell", f"run-as {_PKG} cat shared_prefs/{_PREFS_FILE}", timeout=30)
     text = out.strip()
     if text and not any(t in text for t in ("Permission denied", "No such file", "run-as:")):
@@ -442,14 +451,31 @@ def build_prefs_xml(
 
 
 def set_prefs(cfg: dict) -> int:
-    """deploy/run 语义合并：repair → 读 current_count（reset_count=false 续跑）→ 整写，返回 current_count。"""
+    """deploy/run 语义合并：repair → 读 current_count（reset_count=false 续跑）→ 整写，返回 current_count。
+
+    v1.0.8（#3463 §9 G1-pc-2 ②，F1 同形态）：``reset_count=false`` 的续跑计数
+    读取按 ``_root_read_prefs`` 的 kind 区分——``ok`` 解析 current_count；
+    ``absent`` 取 0（首跑，整写即 fresh）；``transient``/``denied``/内容为空
+    （``empty``）raise——步骤可重试，**不得在读不到时以 0 整写完整 prefs**
+    （重启窗 adb 超时可把健康续跑计数覆盖为 0）。非 root 下 run-as 读空同样
+    不作 absent 证据，raise 暴露可重试失败。
+    """
     repair_prefs_ownership()
     current_count = 0
     if not cfg["reset_count"]:
-        existing = get_prefs_xml()
-        match = re.search(r'name="current_count" value="(\d+)"', existing)
-        if match:
-            current_count = int(match.group(1))
+        if is_root():
+            kind, existing = _root_read_prefs()
+        else:
+            existing = get_prefs_xml()
+            kind = "ok" if existing else "unknown-non-root"
+        if kind == "ok":
+            match = re.search(r'name="current_count" value="(\d+)"', existing)
+            if match:
+                current_count = int(match.group(1))
+        elif kind != "absent":
+            raise RuntimeError(
+                f"prefs 读取未知（kind={kind}）：不得以 current_count=0 整写覆盖续跑计数，请重试本步骤"
+            )
     push_prefs_xml(build_prefs_xml(
         int(cfg["test_times"]), str(cfg["mode"]), int(cfg["power_off_minutes"]),
         int(cfg["wait_seconds"]), str(cfg["tester"]), bool(cfg["auto_resume"]), current_count,
@@ -506,11 +532,25 @@ def start_task() -> None:
 
     先拉起 Activity 再起前台服务：部分机型（Z2582）后台 start-foreground-service 会被
     AutoLaunch 拦截（lib.ps1 注释同款）。
+
+    v1.0.8（#3463 §9 G1-pc-2 ③，F1 同形态）：prefs 不可读（非 ``ok``）时
+    raise——不得跳过 ``running=true`` 却照常启动服务（残留 stop flags 会让服务
+    带着旧状态启动、后续 reboot 不再自动续跑）。
     """
     adb_shell(f"am force-stop {_PKG}", timeout=30)
-    xml = get_prefs_xml()
-    if xml:
-        push_prefs_xml(update_prefs_field(xml, "running", "true", "boolean"))
+    if is_root():
+        kind, xml = _root_read_prefs()
+        if kind != "ok":
+            raise RuntimeError(
+                f"prefs 读取未知（kind={kind}）：不启动任务（running=true 未写入），请重试本步骤"
+            )
+    else:
+        xml = get_prefs_xml()
+        if not xml:
+            raise RuntimeError(
+                "prefs run-as 读空（读空≠文件不存在）：不启动任务（running=true 未写入），请重试本步骤"
+            )
+    push_prefs_xml(update_prefs_field(xml, "running", "true", "boolean"))
     adb_shell(f"am start -n {_PKG}/{_ACTIVITY}", timeout=30)
     time.sleep(2)
     adb_shell(
@@ -564,16 +604,27 @@ def set_stop_flags() -> None:
 
 
 def _verify_stop_flags() -> None:
-    """#894：写后回读验证 running=false（防重启窗口 run-as 写失败静默残留）。
+    """#894：写后回读验证 running=false（防重启窗口写失败静默残留）。
 
-    push_prefs_xml 的写入失败（boot 早期 /data 未挂载 run-as 失败等）当前
-    静默——残留 running=true 会在设备 boot 后经 AutoTestTool boot receiver
-    拉起服务。此处回读验证，失败重试一次，仍失败 raise（finish 报错而非
-    假成功）。
+    push_prefs_xml 的写入失败（boot 早期 /data 未挂载等）当前静默——残留
+    running=true 会在设备 boot 后经 AutoTestTool boot receiver 拉起服务。此处
+    回读验证，未验证通过则重写一次，仍失败 raise（finish 报错而非假成功）。
+
+    v1.0.8（#3463 §9 G1-pc-2 ④，F1 同形态）：回读改走 **root 优先**并区分
+    kind——root 下用 ``_root_read_prefs`` 的同源证据：``ok`` 且含
+    ``running=false`` ⇒ 验证通过；root 写已执行但回读被拒/超时/仍为空
+    （``denied``/``transient``/``empty``/``absent``）⇒ 按既有语义重写后再读，
+    仍不 ok 才 raise。run-as 被拒不再承担「写后验证」——root 写成功 +
+    run-as-only 读空 = 假失败（v1.0.7 及以前的真实形态）。
     """
     for _attempt in (1, 2):
-        xml = get_prefs_xml()
-        if 'name="running" value="false"' in xml:
+        if is_root():
+            kind, xml = _root_read_prefs()
+            verified = kind == "ok" and 'name="running" value="false"' in xml
+        else:
+            xml = get_prefs_xml()
+            verified = 'name="running" value="false"' in xml
+        if verified:
             return
         set_stop_flags()
     raise RuntimeError(
