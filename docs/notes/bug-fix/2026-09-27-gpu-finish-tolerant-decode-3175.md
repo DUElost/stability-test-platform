@@ -44,7 +44,7 @@ Class: bug-fix
   `#3069` 既有 5 条仍绿；已恢复修复并复跑 7 passed。
 - `python tools/dev/check_script_packages.py` → 绿（35 个族树与最新登记等价，gpu_finish@1.0.8
   sha=`17fdfde215cb`）。
-- `python tools/dev/check_tool_manifest.py --base origin/main` → 绿（40 族 / 221 条目，append-only）。
+- `python tools/dev/check_tool_manifest.py --base origin/main` → 绿（40 族 / 222 条目，append-only）。
 - `python -m pytest tests/test_pipeline_template_script_pins_2865.py -q` → 7 passed（模板 pin 追平判据）。
 - `python -m pytest backend/agent/tests/ -q -k "gpu"` → 76 passed, 2132 deselected。
 - `python scripts/run_gates.py check:quick` → `[OK] check:quick (16 gates)`。
