@@ -1233,6 +1233,14 @@
           "retired": false,
           "script": "monkey_setup.py",
           "version": "2.3.11"
+        },
+        {
+          "artifact": "packages/monkey_setup/2.3.12.tar.gz",
+          "package_sha256": "23798255cdae5d2a6703f975c4027d1fafafa39a106b32031ab7f204f90fdf37",
+          "python": null,
+          "retired": false,
+          "script": "monkey_setup.py",
+          "version": "2.3.12"
         }
       ]
     },

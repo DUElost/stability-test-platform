@@ -1,5 +1,21 @@
 """复合设备初始化脚本：按序执行 WiFi / Root / 推送 / 安装 / 填充 / 清理。
 
+v2.3.12（#3173，#3463 批次 G4）：**心跳 seq 进程级化 + 残余参数注入面收口**。
+  - F4：`_make_progress` 的 seq 此前是 per-closure 闭包计数（``state={"seq": 0}``），
+    init 已发到 seq N 后，push/fill 各闭包从 1 重启——引擎停滞钟只认进程内单调
+    seq（``seq > last_seq``），后阶段心跳被静默丢弃，sha256/tar/adb-push/dd 这些
+    慢而健康的阶段照旧被杀。现 port clean_env 的 ``_next_progress_seq``
+    （进程级 + 锁），多闭包交替发送也严格单调。
+  - F3（同 #3463 批次 G3 判据）：计划参数插进 root 设备 shell 前逐一校验——
+    `fill_path` 限 `/data/local/tmp/` 下普通文件名（同 clear_recents
+    `validated_dump_path`，空串回落默认值）；`push.files[].remote` 限 `/data/`、
+    `/sdcard/` 下绝对路径（同 `validated_log_dirs`）；`chmod` 限 3-4 位八进制；
+    `pm uninstall` 包名与 `setprop` 键限 `^[A-Za-z0-9._-]+$`，setprop 值经
+    `shlex.quote`。非法值整步转红，不把未校验的值插进 root shell。
+  - F2：`_adb.py` 全部 subprocess 调用改收字节 + `decode_device_output` 宽容
+    UTF-8 解码（port gpu_setup 先例）——设备输出里的一个坏字节不再把步骤炸成
+    `UnicodeDecodeError`。
+
 v2.3.11（#3107）：**`log_dirs` 校验**。`clear_logs` 步骤把 `log_dirs` 的每一项直接
 插进设备端 `rm -rf {d}/*`（流程已 root）。此前无任何校验：`log_dirs: [""]` 展开为
 `rm -rf /*`、`["/"]` 为 `rm -rf //*`，含空格/`;`/`$()` 的值可扩张成任意命令。现由
@@ -112,10 +128,12 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
 from _adb import (
+    _next_progress_seq,
     _progress_stamp,
     adb_path,
     adb_push_progress,
@@ -243,18 +261,20 @@ def _push_or_timeout(local: str, remote: str, timeout: int,
 
 
 def _make_progress(step: str) -> "callable":
-    """返回打戳回调：seq 单调递增，语义字段仅供人读。
+    """返回打戳回调：seq 取**进程级**计数器，语义字段仅供人读。
 
     #138: 兼容两种调用风格——`on_progress(pct)`（位置参数）与
     `on_progress(written_bytes=...)`（关键字参数）。位置参数归一为 `pct`。
+    #3173: seq 此前是 per-closure 闭包计数（``state={"seq": 0}``），init 已发到
+    seq N 后 push/fill 各闭包从 1 重启——引擎停滞钟只认进程内单调 seq
+    （``seq > last_seq``），后阶段心跳被静默丢弃。现取 `_adb._next_progress_seq`
+    （进程级 + 锁），多闭包交替发送也严格单调。
     """
-    state = {"seq": 0}
 
     def _emit(*args, **fields) -> None:
         if args and "pct" not in fields:
             fields["pct"] = args[0]
-        state["seq"] += 1
-        sys.stderr.write(_progress_stamp(state["seq"], step=step, **fields) + "\n")
+        sys.stderr.write(_progress_stamp(_next_progress_seq(), step=step, **fields) + "\n")
         sys.stderr.flush()
 
     return _emit
@@ -357,6 +377,18 @@ def step_push(serial: str, cfg: dict) -> dict:
     files = cfg.get("files", [])
     if not files:
         return {"success": True, "skipped": True, "reason": "No files/bundle configured"}
+    # #3173：先整单校验再动手——任何一项非法整步转红，不把未校验的值插进
+    # root shell（`chmod {mode} {remote}`）。空 remote 沿用既有语义：跳过该项。
+    for f in files:
+        remote = f.get("remote", "")
+        if not remote:
+            continue
+        try:
+            validated_remote_path(remote)
+            if f.get("chmod"):
+                validated_chmod_mode(f["chmod"])
+        except ValueError as exc:
+            return {"success": False, "error": str(exc)}
     push_timeout = cfg.get("push_timeout_seconds", 120)
     progress = _make_progress("push")
     pushed = 0
@@ -369,7 +401,7 @@ def step_push(serial: str, cfg: dict) -> dict:
         if failure:
             return failure
         if f.get("chmod"):
-            adb_shell(f"chmod {f['chmod']} {remote}", timeout=10)
+            adb_shell(f"chmod {validated_chmod_mode(f['chmod'])} {validated_remote_path(remote)}", timeout=10)
         pushed += 1
     return {"success": True, "files_pushed": pushed}
 
@@ -424,7 +456,11 @@ def step_fill(serial: str, cfg: dict) -> dict:
 
     block_size = cfg.get("block_size_kb", 1024)
     blocks = max(need_kb // block_size, 1)
-    fill_path = cfg.get("fill_path", "/data/local/tmp/fill.bin")
+    # #3173：fill_path 被插进设备端 `dd ... >> {fill_path}`（root 执行），先校验。
+    try:
+        fill_path = validated_fill_path(cfg.get("fill_path"))
+    except ValueError as exc:
+        return {"success": False, "error": str(exc)}
     _dd_with_progress(
         serial, fill_path, block_size, blocks,
         timeout=cfg.get("timeout_seconds", 300),
@@ -516,14 +552,85 @@ def validated_log_dirs(raw: object) -> list:
     return out
 
 
+# ── 计划参数注入面校验（#3173，判据同 #3463 批次 G3） ──────────────────
+
+_FILL_PATH_DEFAULT = "/data/local/tmp/fill.bin"
+
+#: `fill_path` 白名单形态（port clear_recents `validated_dump_path`）：该值被插进
+#: 设备端 `dd ... >> {fill_path}` / `stat -c %s`（root 执行），空值 / 含元字符 /
+#: 含空格 / 绝对穿越的值可扩张成任意 root 命令。
+_FILL_PATH_RE = re.compile(r"^/data/local/tmp/[A-Za-z0-9._-]{1,64}$")
+
+#: `push.files[].remote` 白名单形态（与 `_LOG_DIR_RE` 同判据 #3107）：该值被插进
+#: 设备端 `chmod {mode} {remote}`（root 执行），只接受 `/data/` 或 `/sdcard/`
+#: 下的普通绝对路径。
+_REMOTE_PATH_RE = re.compile(r"^/(?:data|sdcard)/[A-Za-z0-9._/-]{1,120}$")
+
+#: `push.files[].chmod` 白名单：只接受 3-4 位八进制模式串。
+_CHMOD_MODE_RE = re.compile(r"^[0-7]{3,4}$")
+
+#: `pm uninstall` 包名与 `setprop` 键白名单（同 G3 判据）：插进 root shell 的
+#: 组件必须是普通标识符。
+_PKG_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def validated_fill_path(raw: object) -> str:
+    """校验计划参数 `fill_path`（#3173，port clear_recents `validated_dump_path`）。
+
+    空值按既有语义回落到默认路径（不是错误）；非法值抛 ValueError，由调用方
+    记红整步——不把未校验的值插进 root shell。
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return _FILL_PATH_DEFAULT
+    if not _FILL_PATH_RE.match(text) or text.rsplit("/", 1)[-1] in (".", ".."):
+        raise ValueError(
+            "fill_path 必须匹配 ^/data/local/tmp/[A-Za-z0-9._-]+$（且非 `.`/`..`）"
+            f"（收到 {text!r}）"
+        )
+    return text
+
+
+def validated_remote_path(raw: object) -> str:
+    """校验计划参数 `push.files[].remote`（#3173，判据同 `validated_log_dirs`）。"""
+    text = str(raw or "").strip()
+    if not _REMOTE_PATH_RE.match(text) or ".." in text.split("/"):
+        raise ValueError(
+            f"push.files[].remote 必须是 /data/ 或 /sdcard/ 下的绝对路径（收到 {text!r}）"
+        )
+    return text
+
+
+def validated_chmod_mode(raw: object) -> str:
+    """校验计划参数 `push.files[].chmod`（#3173）：3-4 位八进制模式串。"""
+    text = str(raw or "").strip()
+    if not _CHMOD_MODE_RE.match(text):
+        raise ValueError(f"push.files[].chmod 必须是 3-4 位八进制（收到 {raw!r}）")
+    return text
+
+
+def validated_pkg_name(raw: object, label: str) -> str:
+    """校验 `pm uninstall` 包名 / `setprop` 键（#3173，判据 `^[A-Za-z0-9._-]+$`）。"""
+    text = str(raw or "").strip()
+    if not _PKG_NAME_RE.match(text):
+        raise ValueError(f"{label} 必须匹配 ^[A-Za-z0-9._-]+$（收到 {raw!r}）")
+    return text
+
+
 def step_clean(serial: str, cfg: dict) -> dict:
     errors = []
     for pkg in cfg.get("uninstall_packages", []):
+        # #3173：包名先校验——非法值记红并跳过，不把未校验的值插进 root shell。
         try:
-            adb_shell(f"pm uninstall {pkg}", timeout=30)
+            name = validated_pkg_name(pkg, "uninstall_packages 包名")
+        except ValueError as exc:
+            errors.append(str(exc))
+            continue
+        try:
+            adb_shell(f"pm uninstall {name}", timeout=30)
         except Exception as exc:
             if "not installed" not in str(exc).lower():
-                errors.append(f"Uninstall {pkg}: {exc}")
+                errors.append(f"Uninstall {name}: {exc}")
 
     if cfg.get("clear_logs", False):
         try:
@@ -540,10 +647,16 @@ def step_clean(serial: str, cfg: dict) -> dict:
                 errors.append(f"Clear {d}: {exc}")
 
     for key, value in cfg.get("set_properties", {}).items():
+        # #3173：键按标识符白名单校验，值经 shlex.quote——非法键记红并跳过。
         try:
-            adb_shell(f"setprop {key} {value}", timeout=10)
+            prop_key = validated_pkg_name(key, "set_properties 键")
+        except ValueError as exc:
+            errors.append(str(exc))
+            continue
+        try:
+            adb_shell(f"setprop {prop_key} {shlex.quote(str(value))}", timeout=10)
         except Exception as exc:
-            errors.append(f"setprop {key}: {exc}")
+            errors.append(f"setprop {prop_key}: {exc}")
 
     if errors:
         return {"success": False, "error": "; ".join(errors)}
