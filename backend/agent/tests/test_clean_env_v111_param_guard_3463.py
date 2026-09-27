@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+from tools.dev.source_anchor import SourceGuard
+
 _SCRIPTS = Path(__file__).resolve().parents[2] / "agent" / "scripts" / "clean_env"
 
 BROKEN_DEVICE_OUTPUT = b"\x02\xf9 mobilelog dump\n"
@@ -238,9 +240,26 @@ def test_adb_helper_tolerates_broken_device_bytes(ce, tmp_path, monkeypatch):
     assert isinstance(res.stdout, str) and "\ufffd" in res.stdout
 
 
-@pytest.mark.parametrize("family", ["clean_env", "fill_storage"])
-def test_adb_helpers_no_longer_decode_strictly(family):
-    """静态守卫：两族 `_adb.py` 不得再出现调用形态的严格解码（#3069 崩溃入口）。"""
-    src = (_SCRIPTS.parent / family / "_adb.py").read_text(encoding="utf-8")
-    assert "text=True," not in src
-    assert "capture_output=True, text=True," not in src
+@pytest.mark.parametrize(
+    "rel",
+    [
+        "backend/agent/scripts/clean_env/_adb.py",
+        "backend/agent/scripts/fill_storage/_adb.py",
+    ],
+)
+def test_adb_helpers_no_longer_decode_strictly(rel):
+    """静态守卫：两族 `_adb.py` 不得再出现调用形态的严格解码（#3069 崩溃入口）。
+
+    走 SourceGuard 锚点助手（#2639 棘轮；#3463 修订 v1.1 复核意见），判据与锚点
+    选择同 `test_fill_storage_v112_param_guard_3172` 的说明——绑调用形参片段
+    `text=True,`，散文提及免疫；锚点保证被扫文件仍是这条 adb 路径的真源。
+    """
+    guard = SourceGuard.of_repo_path(rel).anchored("def adb_shell_quiet(")
+    guard.assert_absent(
+        "text=True,",
+        why="#3463 G3 F2（#3069 形态）：严格解码一个坏字节即炸成调用点无从兜住的 UnicodeDecodeError",
+    )
+    guard.assert_present(
+        "decode_device_output(",
+        why="#3463 G3 F2：adb helper 必须走宽容解码（port gpu_setup 形态）",
+    )

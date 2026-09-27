@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+from tools.dev.source_anchor import SourceGuard
+
 _SCRIPTS = Path(__file__).resolve().parents[2] / "agent" / "scripts" / "fill_storage"
 
 #: 生产实测的坏字节形态（#3069）：0xf9 在 UTF-8 里从不作首字节。
@@ -174,7 +176,22 @@ def test_adb_helper_tolerates_broken_device_bytes(fill, tmp_path, monkeypatch):
     assert "\ufffd" in res.stdout
 
 
-def test_adb_helper_has_no_strict_decode_call_form():
-    src = (_SCRIPTS / "_adb.py").read_text(encoding="utf-8")
-    assert "text=True," not in src
-    assert "text=True)" not in src
+def test_adb_helper_has_no_strict_decode_call_form(fill):
+    """静态守卫：本族 adb 路径不得再出现严格解码调用形态（#3069 崩溃入口）。
+
+    走 SourceGuard 锚点助手（#2639 棘轮；#3463 修订 v1.1 复核意见）——裸
+    `read_text` + `assert ... not in` 在锚点漂移时会静默恒真。判据绑调用形参
+    片段 `text=True,`（旧 4 处 kwargs 与旧 install 单行形态都含该子串；
+    docstring/注释里的散文提及是 ``text=True`` 或 text=True——，天然免疫）；
+    锚点 `def adb_shell_quiet(` 保证否定断言守的仍是这条 adb 路径本体。
+    """
+    _, adb_mod = fill
+    guard = SourceGuard.of_module(adb_mod).anchored("def adb_shell_quiet(")
+    guard.assert_absent(
+        "text=True,",
+        why="#3463 G3 F2（#3069 形态）：严格解码一个坏字节即炸成调用点无从兜住的 UnicodeDecodeError",
+    )
+    guard.assert_present(
+        "decode_device_output(",
+        why="#3463 G3 F2：adb helper 必须走宽容解码（port gpu_setup 形态）",
+    )
