@@ -48,6 +48,19 @@ Class: bug-fix
 - `python scripts/run_gates.py check:quick` → OK（16 gates；worktree 借 symlink node_modules 跑 eslint，
   与 G1/G2 同法）
 
+**CI 返修（同日，按 #3463 修订 v1.1 复核意见，非方案外改动）**：CI `pr-agent-tests` 红在根门禁
+`tests/test_source_scan_anchor_ratchet.py`（#2639 棘轮）——本单元两个测试文件的静态守卫用了裸
+`read_text()` + `assert "text=True," not in src`，锚点漂移时会静默恒真。按意见迁移到
+`tools/dev/source_anchor.py` 的 `SourceGuard`：fill_storage 侧 `of_module(adb_mod)`、clean_env 侧
+对两族 `_adb.py` `of_repo_path` 参数化，均 `.anchored("def adb_shell_quiet(")` 后再
+`assert_absent("text=True,")` 并补 `assert_present("decode_device_output(")` 正向断言
+（同 G2 已合并先例 `test_gpu_setup_utf8_decode_3069.py`）。判据绑调用形参片段 `text=True,`，
+docstring/注释的散文提及（``text=True`` / text=True——）天然免疫。返修后补跑（v1.1 §4）：
+- `python -m pytest backend/agent/tests/ -q -k "fill_storage or clean_env"` → 79 passed
+- `python -m pytest tests/ -q`（cgroup 6G 硬顶 + testcontainers，按 test-env-self-check 红线）
+  → 1928 passed, 18 skipped（rc=0）
+- CI 重跑 → `pr-agent-tests` pass，required checks 全绿（结论见 PR 正文）
+
 ## Revisit
 
 - 生效属 #3463 §5 整批一次（deploy + publish + scan + 重指 plan_step；fill_storage/clean_env 引用面
