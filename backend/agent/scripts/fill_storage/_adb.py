@@ -33,32 +33,43 @@ def device_serial() -> str:
     return serial
 
 
+def decode_device_output(raw: bytes | None) -> str:
+    """设备 / adb 输出宽容 UTF-8 解码（#3463 G3 F2，判据 port 自 #3069 的 gpu_setup._lib）。
+
+    设备侧输出可能是任意字节；``text=True`` 按 locale 严格解码，一个非 UTF-8 字节就抛
+    ``UnicodeDecodeError``——它不是 ``OSError``，调用点无从兜住。坏字节替换成 U+FFFD
+    不影响解析与判定。
+    """
+    return (raw or b"").decode("utf-8", errors="replace")
+
+
 def adb_shell(command: str, timeout: int = 30) -> str:
     """Run an ADB shell command on the target device, return stdout."""
+    # F2（#3069 形态）：显式收字节再宽容解码，不用 text=True——严格解码一个坏字节即炸调用点。
     result = subprocess.run(
         [adb_path(), "-s", device_serial(), "shell", command],
         capture_output=True,
-        text=True,
         timeout=timeout,
     )
-    return result.stdout or ""
+    return decode_device_output(result.stdout)
 
 
 def adb_shell_quiet(command: str, timeout: int = 30) -> subprocess.CompletedProcess:
     """Run ADB shell, return full CompletedProcess for exit-code checks."""
-    return subprocess.run(
+    result = subprocess.run(
         [adb_path(), "-s", device_serial(), "shell", command],
         capture_output=True,
-        text=True,
         timeout=timeout,
     )
+    result.stdout = decode_device_output(result.stdout)
+    result.stderr = decode_device_output(result.stderr)
+    return result
 
 
 def adb_push(local: str, remote: str, timeout: int = 120) -> None:
     subprocess.run(
         [adb_path(), "-s", device_serial(), "push", local, remote],
         capture_output=True,
-        text=True,
         timeout=timeout,
         check=True,
     )
@@ -66,8 +77,8 @@ def adb_push(local: str, remote: str, timeout: int = 120) -> None:
 
 def adb_install(apk_path: str, flags: list[str] | None = None, timeout: int = 120) -> str:
     cmd = [adb_path(), "-s", device_serial(), "install"] + (flags or []) + [apk_path]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-    return (result.stdout or "").strip()
+    result = subprocess.run(cmd, capture_output=True, timeout=timeout)
+    return decode_device_output(result.stdout).strip()
 
 
 

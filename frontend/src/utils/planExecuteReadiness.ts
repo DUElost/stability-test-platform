@@ -11,6 +11,10 @@ export interface ReadinessDevice {
   adb_state?: string | null;
   build_display_id?: string | null;
   tags?: string[] | null;
+  /** ADR-0057 D4 第 4 面：已退役设备不可派发（#2962 B） */
+  retired_at?: string | null;
+  /** #2962 A：陈旧设备（OFFLINE 且 7 天未见）默认不进新目标 */
+  is_stale?: boolean;
 }
 
 export interface ReadinessHost {
@@ -177,6 +181,12 @@ export function buildDeviceReadinessRows(
     // #786：后端 DeviceOut 全仓零产出 `schedulable`，原「后端权威准入」分支恒走 status
     // 兜底；改为直接以 status 判定，不再假装存在后端准入决策。
     if (device.status !== 'ONLINE') reasons.push('设备不可调度');
+    // ADR-0057 D4 第 4 面（#2962 B）：退役是人工确认的终态——与主机退役同口径，
+    // 明确提示「已退役」而不是混进「设备不可调度」。
+    if (device.retired_at) reasons.push('设备已退役');
+    // #2962 A：陈旧（OFFLINE 且 7 天未见）只提示，不改变既有可调度判定
+    // （陈旧本身已由 status 挡下；这里让运维看到「为什么这台不该再选」）。
+    else if (device.is_stale) reasons.push('设备陈旧（>7 天未见）');
     if (device.adb_connected === false || ['offline', 'unknown', 'unauthorized'].includes(device.adb_state ?? '')) reasons.push(`ADB ${device.adb_state || '离线'}`);
     if (host?.retired_at) reasons.push('节点已退役');
     else if (host && host.status !== 'ONLINE') reasons.push('节点离线');

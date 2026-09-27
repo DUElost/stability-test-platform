@@ -124,6 +124,15 @@ class Device(Base):
     lease_generation    = Column(Integer, nullable=False, default=0)   # ADR-0019 Phase 1
     extra               = Column(JSON, default=dict, nullable=True)
 
+    # ADR-0057 D1（#2962 B）：设备退役（人确认的终态）与 status（心跳上报的存活）
+    # 分家——心跳每轮改写 status，复用它会静默撤销退役决定。**非空即退役**，
+    # 真相在 audit_logs；`retire_alerted_at` 是「已退役但仍在心跳」单次告警的
+    # 去重载体（D3）。全部可空、无回填：存量设备默认在役。
+    retired_at        = Column(DateTime(timezone=True), nullable=True)
+    retired_by        = Column(String(128), nullable=True)
+    retire_reason     = Column(Text, nullable=True)
+    retire_alerted_at = Column(DateTime(timezone=True), nullable=True)
+
     host = relationship("backend.models.host.Host", foreign_keys=[host_id])
 
     __table_args__ = (

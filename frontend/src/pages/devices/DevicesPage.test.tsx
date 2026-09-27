@@ -11,6 +11,8 @@ const mockProjectsList = vi.fn();
 const mockAssignDevicesToProject = vi.fn();
 const mockCreateDevice = vi.fn();
 const mockBulkSwipeTrail = vi.fn();
+const mockRetireBatch = vi.fn();
+const mockUnretireDevice = vi.fn();
 const mockUseAuthSession = vi.fn(() => ({ data: { role: 'admin' } }));
 
 vi.mock('@/utils/api', async (importOriginal) => {
@@ -37,6 +39,8 @@ vi.mock('@/utils/api', async (importOriginal) => {
         ...actual.api.devices,
         create: (...args: unknown[]) => mockCreateDevice(...args),
         bulkSwipeTrail: (...args: unknown[]) => mockBulkSwipeTrail(...args),
+        retireBatch: (...args: unknown[]) => mockRetireBatch(...args),
+        unretire: (...args: unknown[]) => mockUnretireDevice(...args),
       },
     },
   };
@@ -70,6 +74,25 @@ vi.mock('./components/AddDeviceModal', () => ({
 
 vi.mock('./components/BatchEditDeviceTagsDialog', () => ({
   BatchEditDeviceTagsDialog: () => null,
+}));
+
+vi.mock('./components/RetireDevicesDialog', () => ({
+  // 打开时提供一个提交按钮，供 page 级用例驱动退役接线（弹窗自身行为由
+  // RetireDevicesDialog 组件测试覆盖）
+  RetireDevicesDialog: ({ isOpen, mode, onSubmit }: {
+    isOpen?: boolean;
+    mode?: 'retire' | 'unretire';
+    onSubmit?: (mode: 'retire' | 'unretire', reason: string) => void;
+  }) =>
+    isOpen ? (
+      <button
+        type="button"
+        data-testid="retire-dialog-submit"
+        onClick={() => onSubmit?.(mode ?? 'retire', 'mock-reason')}
+      >
+        mock-退役提交
+      </button>
+    ) : null,
 }));
 
 // DeviceBulkActionBar 与 AssignProjectDialog 保持真实渲染（归入流程端到端测试）
@@ -318,5 +341,89 @@ describe('DevicesPage', () => {
     await waitFor(() =>
       expect(queryClient.getQueryState(deviceKeys.all())?.isInvalidated).toBe(true),
     );
+  });
+
+  it('#2962：陈旧/退役开关驱动服务端过滤参数', async () => {
+    const DevicesPage = (await import('./DevicesPage')).default;
+    render(<DevicesPage />, { wrapper: createWrapper() });
+
+    await waitFor(() => expect(screen.getByText('TEST-SERIAL')).toBeInTheDocument());
+    // 默认：两个开关都不带（服务端默认隐藏陈旧与退役）
+    expect(mockFetchAllDevicePages).toHaveBeenLastCalledWith(
+      expect.objectContaining({ includeStale: false, includeRetired: false }),
+    );
+
+    fireEvent.click(screen.getByTestId('device-toggle-stale'));
+    await waitFor(() =>
+      expect(mockFetchAllDevicePages).toHaveBeenLastCalledWith(
+        expect.objectContaining({ includeStale: true, includeRetired: false }),
+      ),
+    );
+
+    // 键变化触发重新拉取：loading 期间工具栏不在 DOM，等它回来再点第二个开关
+    fireEvent.click(await screen.findByTestId('device-toggle-retired'));
+    await waitFor(() =>
+      expect(mockFetchAllDevicePages).toHaveBeenLastCalledWith(
+        expect.objectContaining({ includeStale: true, includeRetired: true }),
+      ),
+    );
+  });
+
+  it('#2962：陈旧/退役/退役建议徽标按行渲染', async () => {
+    mockFetchAllDevicePages.mockResolvedValue({
+      items: [
+        { id: 11, serial: 'STALE-DEV', model: 'M', host_id: '198-51-100-123',
+          status: 'OFFLINE', tags: [], last_seen: '2026-09-01T00:00:00Z', is_stale: true },
+        { id: 12, serial: 'RETIRED-DEV', model: 'M', host_id: '198-51-100-123',
+          status: 'ONLINE', tags: [], last_seen: '2026-09-26T00:00:00Z',
+          retired_at: '2026-09-26T08:00:00Z', retired_by: 'admin', retire_reason: '报废' },
+        { id: 13, serial: 'OLD-DEV', model: 'M', host_id: '198-51-100-123',
+          status: 'OFFLINE', tags: [], last_seen: '2026-08-01T00:00:00Z',
+          is_stale: true, retire_suggested: true },
+      ],
+      total: 3,
+    });
+    const DevicesPage = (await import('./DevicesPage')).default;
+    render(<DevicesPage />, { wrapper: createWrapper() });
+
+    expect(await screen.findByTestId('device-stale-badge-11')).toBeInTheDocument();
+    expect(screen.getByTestId('device-retired-badge-12')).toBeInTheDocument();
+    expect(screen.getByTestId('device-retire-suggested-13')).toBeInTheDocument();
+    // 已退役行不再重复陈旧徽标（退役是更强的终态）
+    expect(screen.queryByTestId('device-stale-badge-12')).not.toBeInTheDocument();
+  });
+
+  it('#2962：admin 可走批量入口退役设备（逐台结果回执）', async () => {
+    const user = userEvent.setup();
+    mockUseAuthSession.mockReturnValue({ data: { role: 'admin' } });
+    mockRetireBatch.mockResolvedValue({
+      results: [{ device_id: 1, serial: 'TEST-SERIAL', status: 'retired' }],
+      retired: 1, already_retired: 0, conflict: 0, not_found: 0, failed: 0,
+    });
+    const DevicesPage = (await import('./DevicesPage')).default;
+    render(<DevicesPage />, { wrapper: createWrapper() });
+
+    await waitFor(() => expect(screen.getByText('TEST-SERIAL')).toBeInTheDocument());
+    fireEvent.click(screen.getByLabelText('选择设备 TEST-SERIAL'));
+    await user.click(await screen.findByTestId('device-bulk-retire'));
+    await user.click(await screen.findByTestId('retire-dialog-submit'));
+
+    await waitFor(() =>
+      expect(mockRetireBatch).toHaveBeenCalledWith([1], 'mock-reason'),
+    );
+  });
+
+  it('#2962：非 admin 看不到退役入口', async () => {
+    mockUseAuthSession.mockReturnValue({ data: { role: 'user' } });
+    const DevicesPage = (await import('./DevicesPage')).default;
+    render(<DevicesPage />, { wrapper: createWrapper() });
+
+    await waitFor(() => expect(screen.getByText('TEST-SERIAL')).toBeInTheDocument());
+    fireEvent.click(screen.getByLabelText('选择设备 TEST-SERIAL'));
+    await waitFor(() =>
+      expect(screen.getByTestId('device-bulk-action-bar')).toBeInTheDocument(),
+    );
+    expect(screen.queryByTestId('device-bulk-retire')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('device-bulk-unretire')).not.toBeInTheDocument();
   });
 });

@@ -661,6 +661,20 @@ _MODEL_PAIRS: tuple[tuple[str, str, str, str], ...] = (
         "frontend/src/utils/api/types.ts",
         "BulkSwipeTrailResultItem",
     ),
+    # #2962 B（ADR-0057 D2）：设备退役（单台 DeviceOut 已由上登记覆盖；批量
+    # 端点有独立 Out/结果行，前端 devices.ts 消费，逐名对拍）。
+    (
+        "backend/api/schemas/device.py",
+        "DeviceRetireBatchOut",
+        "frontend/src/utils/api/types.ts",
+        "DeviceRetireBatchResponse",
+    ),
+    (
+        "backend/api/schemas/device.py",
+        "DeviceRetireBatchResult",
+        "frontend/src/utils/api/types.ts",
+        "DeviceRetireBatchResult",
+    ),
     # #2187 opt-in scripts.py：目录行与使用统计双双 MATCH（TS 命名不同源
     # ——ScriptEntry/ScriptUsage 是消费侧原名，键集与后端模型逐名一致）。
     (

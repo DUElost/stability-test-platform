@@ -1,6 +1,6 @@
 # ADR-0057：设备退役语义（Device Retirement Semantics）
 
-- 状态：**Accepted** v1.0（2026-09-26 owner 授权 Claude 裁决：E1–E5 全部采起草取向，见 §7；实施未开始）
+- 状态：**Accepted** v1.1（2026-09-26 owner 授权 Claude 裁决：E1–E5 全部采起草取向，见 §7；2026-09-27 **实施完成**：#2962 B 期落地四列 + API + D4 八面收口 + 陈旧度 A 期同批交付，见 §8）
 - 优先级：P2
 - 目标里程碑：M7
 - 日期：2026-09-26
@@ -10,7 +10,7 @@
 - 关联：[#2962](https://github.com/DUElost/stability-test-platform/issues/2962)（触发：OFFLINE 库存陈旧）、
   [ADR-0038](./ADR-0038-host-retirement-semantics.md)（主机退役；其 D7 明确「不做设备退役，独立议题，需求出现时单独提案」——本 ADR 即该提案）、
   [ADR-0055](./ADR-0055-schedule-device-selector.md)（`selector` 健康门）、#106（device 容量口径）、#3159（主机空置意图）
-- 版本记录：v1.0（2026-09-26）**裁决**：E1–E5 全部采起草取向，转 Accepted，见 §7；v0.1（2026-09-26）首次起草，Proposed
+- 版本记录：v1.1（2026-09-27）#2962 实施完成——迁移 `b2c3d4e5f6a7`（device 四列）、`device_retirement` 服务、retire/unretire/batch API、心跳单次告警、D4 八面收口、陈旧度（A 期）；v1.0（2026-09-26）**裁决**：E1–E5 全部采起草取向，转 Accepted，见 §7；v0.1（2026-09-26）首次起草，Proposed
 
 ## 1. 背景
 
@@ -104,3 +104,30 @@
 | E5 | **设备面告警排除已退役设备** | 已退役设备的 `adb_state` 恒为 offline，计入会让 `StabilityHostAdbOfflineConcentration` 等规则长期误报 |
 
 实施在 #2962 领单：迁移 + API + D4 八面收口 + 陈旧度视图的退役建议与批量退役入口。
+
+## 8. 实施记录（2026-09-27，#2962：A 陈旧度 + B 退役）
+
+**A 期（陈旧度派生）**——与 B 期同批交付，两者互补：
+
+| 项 | 落点 |
+|---|---|
+| 纯函数口径（7 天陈旧 / 30 天建议） | `backend/services/device_lifecycle.py`（`is_stale` / `is_retire_suggested` / SQL 判据） |
+| 设备列表默认隐藏 + 显式开关 | `GET /devices` 新增 `include_stale`（默认 false）；`DeviceOut` 暴露派生 `is_stale` / `retire_suggested` |
+| 容量口径按新鲜度 | `metrics.py` fleet gauge 的 `status="offline"` 桶只计近期掉线，陈旧单列 `stability_device_stale`；per-host adb 分桶同样剔除陈旧；`dashboard_summary` 拆 `offline` / `offline_stale` |
+| 前端 | `DevicesPage` 两个开关（显示陈旧 / 显示已退役）+ 行内「陈旧 / 建议退役」徽标；`planExecuteReadiness` 增「设备已退役 / 设备陈旧」原因 |
+
+**B 期（退役）**：
+
+| 决策点 | 实现 |
+|---|---|
+| D1 单一真源 | 迁移 `b2c3d4e5f6a7`：`device.retired_at / retired_by / retire_reason / retire_alerted_at`（additive nullable，无回填，不新增索引）；退役写路径 `record_audit(strict=True)` fail-closed |
+| D2 入口与前置（E2） | `POST /devices/{id}/retire`、`POST /devices/{id}/unretire`、`POST /devices/retire`（批量，逐台独立事务 + 逐台结果）；admin；无活跃 Job、无 ACTIVE 租约否则 409；幂等；unretire 保留最近一次痕迹 |
+| D3 与心跳（E1） | 主心跳端点：退役设备如实记录事实列、保持退役，`retire_alerted_at` 去重单次告警 `DEVICE_RETIRED_HEARTBEAT`；退役设备不再派 `DEVICE_OFFLINE` 通知 |
+| D4 收口八面 | ① 派发分类增 `device_retired`（与 `host_retired` 并列 **fatal**）② claim 过滤 ③ 链选排除（记 `device_retired`）④ 列表/前端/就绪判定 ⑤ stats/metrics/心跳容量计数 ⑥ 设备面告警（gauge 现算侧剔除）⑦ AI 助手读面 ⑧ 标签与项目归属写路径 409 |
+| D6/E4 退役建议 | 列表徽标「建议退役」（陈旧 > 30 天，只提示不动作）；E3 批量入口 = 列表导出后人工确认走 `POST /devices/retire` |
+| E5 告警排除 | 退役设备不进 per-host adb 分桶（`StabilityHostAdbOfflineConcentration` 的数据源），也不进 fleet 容量 gauge |
+
+**实现取舍（记录在案）**：
+1. `device_retired` 取 **fatal**（与 `host_retired` 同语义）：退役是永久事实，排队等待等于永远占位；静态计划/排程若仍引用退役设备，prepare/准入显式失败（detail 带 `reason=device_retired`），由人修清单而不是静默缩目标。链选在触发侧就剔除退役设备（不 fatal，记排除原因）。
+2. ADR D2 未提供批量 unretire 端点：批量入口只做退役；前端「解除退役」逐台串行（选择集小、且解除本身是低频人工动作）。
+3. 恢复出口：`.83` 式「退役但仍在心跳」告警只响一次（episode 规则与主机侧同款）；要恢复走 `unretire`，不清 `retired_by/retire_reason`。

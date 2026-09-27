@@ -1,4 +1,4 @@
-import { CheckCheck, Copy, Download, FolderKanban, Pointer, Tags, X } from 'lucide-react';
+import { Archive, ArchiveRestore, CheckCheck, Copy, Download, FolderKanban, Pointer, Tags, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { BULK_BAR_INNER_CLASS, BULK_BAR_OUTER_CLASS } from '@/components/ui/bulk-action-bar';
 
@@ -14,11 +14,16 @@ interface DeviceBulkActionBarProps {
   /** admin：批量开关滑动留痕（show_touches + pointer_location） */
   canSwipeTrail?: boolean;
   swipeTrailPending?: boolean;
+  /** ADR-0057 D2（#2962 B）：批量退役 / 解除退役（admin 动作） */
+  canRetire?: boolean;
+  retirePending?: boolean;
   onSelectAllFiltered: () => void;
   onEditTags: () => void;
   onAssignProject?: () => void;
   onSwipeTrailOn?: () => void;
   onSwipeTrailOff?: () => void;
+  onRetire?: () => void;
+  onUnretire?: () => void;
   onCopySerials: () => void;
   onExport: () => void;
   onClear: () => void;
@@ -34,11 +39,15 @@ export default function DeviceBulkActionBar({
   canAssignProject = false,
   canSwipeTrail = false,
   swipeTrailPending = false,
+  canRetire = false,
+  retirePending = false,
   onSelectAllFiltered,
   onEditTags,
   onAssignProject = () => {},
   onSwipeTrailOn = () => {},
   onSwipeTrailOff = () => {},
+  onRetire = () => {},
+  onUnretire = () => {},
   onCopySerials,
   onExport,
   onClear,
@@ -150,6 +159,33 @@ export default function DeviceBulkActionBar({
             <Copy className="h-3.5 w-3.5" />
             复制序列号
           </Button>
+
+          {canRetire && (
+            <>
+              <Button
+                size="sm"
+                variant="outline"
+                data-testid="device-bulk-retire"
+                disabled={retirePending}
+                onClick={onRetire}
+                className="gap-1 text-destructive hover:text-destructive"
+              >
+                <Archive className="h-3.5 w-3.5" />
+                {retirePending ? '退役中…' : '退役'}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                data-testid="device-bulk-unretire"
+                disabled={retirePending}
+                onClick={onUnretire}
+                className="gap-1"
+              >
+                <ArchiveRestore className="h-3.5 w-3.5" />
+                {retirePending ? '处理中…' : '解除退役'}
+              </Button>
+            </>
+          )}
 
           <Button size="sm" variant="outline" onClick={onExport} className="gap-1">
             <Download className="h-3.5 w-3.5" />
