@@ -446,11 +446,30 @@ def build_prefs_xml(
 
 
 def set_prefs(cfg: dict) -> int:
-    """deploy/run 语义合并：repair → 读 current_count（reset_count=false 续跑）→ 整写，返回 current_count。"""
+    """deploy/run 语义合并：repair → 读 current_count（reset_count=false 续跑）→ 整写，返回 current_count。
+
+    #3463 G1-sleep-2 ②（§9 裁定钉死行为，仅修文档）：``reset_count=false`` 时按
+    **同源读取证据** kind 分流——
+
+    - ``ok``：解析 current_count；
+    - ``absent``：取 0——要么真的没有 prefs（正常部署形态），要么是 **root** 下的
+      ``empty``（存在 + 读取成功 + 内容空 = 确定性损坏，没有可保留的续跑计数）被
+      ``repair_prefs_ownership`` 作为**唯一可删证据**删除后、重探为 ``absent``，据此
+      以 0 重建完整 prefs——与 ``set_stop_flags`` 的「empty→删→重建」既有语义一致；
+    - ``transient`` / ``denied``（未知态），以及**非 root** 下不可修复的读空
+      （repair 无删除权限，``empty`` 无法转 ``absent``）**raise**——「读不到」不是
+      「没有」，不得以 current_count=0 整写覆盖续跑计数（#2979 形态）。
+    """
     repair_prefs_ownership()
     current_count = 0
     if not cfg["reset_count"]:
-        existing = get_prefs_xml()
+        kind, existing = read_prefs_evidence()
+        if kind not in ("ok", "absent"):
+            raise RuntimeError(
+                f"prefs 读取证据不可判定（kind={kind}, file={_PREFS_FILE}）——"
+                "拒绝以 current_count=0 整写完整 prefs 覆盖续跑计数（#3463 G1-sleep-2）；"
+                "此为可重试失败，请重试本步骤"
+            )
         match = re.search(r'name="current_count" value="(\d+)"', existing)
         if match:
             current_count = int(match.group(1))
@@ -528,11 +547,22 @@ def service_alive() -> bool:
 
 
 def start_task() -> None:
-    """force-stop → running=true → Activity → 前台服务(START) → KEEPALIVE 广播（lib.ps1:Start-SleepTestTask 同款）。"""
+    """force-stop → running=true → Activity → 前台服务(START) → KEEPALIVE 广播（lib.ps1:Start-SleepTestTask 同款）。
+
+    #3463 G1-sleep-2 ③：prefs 证据非 ``ok`` 时 raise——旧形态「读空即跳过置
+    running=true、照常启动服务」会让服务带着 stop flags 起跑，设备重启后
+    boot receiver 不再续跑（表面启动、实际断链）。瞬时不可读按可重试失败处理，
+    步骤重试时窗口即消失。
+    """
     adb_shell(f"am force-stop {_PKG}", timeout=30)
-    xml = get_prefs_xml()
-    if xml:
-        push_prefs_xml(update_prefs_field(xml, "running", "true", "boolean"))
+    kind, xml = read_prefs_evidence()
+    if kind != "ok":
+        raise RuntimeError(
+            f"prefs 读取证据非 ok（kind={kind}, file={_PREFS_FILE}）——"
+            "拒绝在未置 running=true 的情况下启动服务（#3463 G1-sleep-2）；"
+            "此为可重试失败，请重试本步骤"
+        )
+    push_prefs_xml(update_prefs_field(xml, "running", "true", "boolean"))
     adb_shell(f"am start -n {_PKG}/{_ACTIVITY}", timeout=30)
     time.sleep(2)
     adb_shell(
@@ -581,35 +611,24 @@ def set_stop_flags() -> None:
 
 
 def _verify_stop_flags() -> None:
-    """#894：写后回读验证 running=false（防重启窗口 run-as 写失败静默残留）。
+    """#894：写后回读验证 running=false（#3463 G1-sleep-2 ④ 改走同源证据）。
 
-    push_prefs_xml 的写入失败（boot 早期 /data 未挂载 run-as 失败等）当前
+    push_prefs_xml 的写入失败（boot 早期 /data 未挂载 run-as 失败等）可能
     静默——残留 running=true 会在设备 boot 后经 AutoTestTool boot receiver
-    拉起服务。此处回读验证，失败重试一次，仍失败 raise（finish 报错而非
-    假成功）。
+    拉起服务。回读判据：root 下走 ``read_prefs_evidence`` 的 **root 探测**
+    （旧形态在 get_prefs_xml 尚未 root 优先时按 run-as 回读，shared-uid 包
+    run-as 恒拒 ⇒ root 写已成功也两轮读空 ⇒ 假失败）；``ok`` 且含
+    running=false 才通过。非 ok/未置 false 按既有语义重试一次
+    （set_stop_flags），仍不成立 raise——真正读不到时由 set_stop_flags 内部
+    的同源判据抛可重试失败。
+
+    （本函数曾在 main 上有两个同名定义、首个含 ``_verify_stop_flags()``
+    自递归且被第二个定义整体遮蔽＝死代码；G1-sleep-2 ⑦ 删除首个、在此生效
+    定义上完成 ④，并由反例测试以 SourceGuard 钉住「只出现一次」。）
     """
     for _attempt in (1, 2):
-        xml = get_prefs_xml()
-        if 'name="running" value="false"' in xml:
-            return
-        set_stop_flags()
-    _verify_stop_flags()
-    raise RuntimeError(
-        "prefs running 未置 false（残留会导致 boot 后 AutoTestTool 自启叠加——#894）"
-    )
-
-
-def _verify_stop_flags() -> None:
-    """#894：写后回读验证 running=false（防重启窗口 run-as 写失败静默残留）。
-
-    push_prefs_xml 的写入失败（boot 早期 /data 未挂载 run-as 失败等）当前
-    静默——残留 running=true 会在设备 boot 后经 AutoTestTool boot receiver
-    拉起服务。此处回读验证，失败重试一次，仍失败 raise（finish 报错而非
-    假成功）。
-    """
-    for _attempt in (1, 2):
-        xml = get_prefs_xml()
-        if 'name="running" value="false"' in xml:
+        kind, xml = read_prefs_evidence()
+        if kind == "ok" and 'name="running" value="false"' in xml:
             return
         set_stop_flags()
     raise RuntimeError(
