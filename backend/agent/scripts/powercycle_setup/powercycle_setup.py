@@ -1,6 +1,13 @@
 # -*- coding: utf-8 -*-
 """PowerCycle 部署 + 启动（init 阶段，issue #462 P0b；G15 对齐 §3.2）。
 
+v1.2.7（#3463 G1，2026-09-27）：F1 + F2 双收口（batch B1，方案见 #3463 §3 G1）。
+- F1 `set_stop_flags` 收紧：整写最小 map 只认 `_root_read_prefs` 的 `absent`
+  证据——`transient`/`denied`（读空含瞬态/被拒）保留文件并 raise（步骤可重试），
+  不再把健康 prefs 降成两标志最小图（#3088 同形）；
+- F2 `_lib.adb()` 改 bytes 采集 + `decode_device_output` 宽容 UTF-8（port 自
+  gpu_setup v1.2.3 参照，#3069 形态）——设备侧一个坏字节不再炸掉整个步骤。
+
 v1.2.5（#3140，2026-09-22）：等待预算改**累计等待时间**计账——v1.2.2/v1.2.4 的
 `wait_deadline` 起在循环之前，attempt 1 的 `push`/`pm install`（各 timeout=300）
 与 `dumpsys package`（timeout=30）耗时被计入等待预算 ⇒ 慢安装时 `max_attempts`

@@ -115,14 +115,32 @@ def progress_stamp(payload: dict) -> None:
 # ADB 封装
 # ---------------------------------------------------------------------------
 
+def decode_device_output(raw: bytes | None) -> str:
+    """设备 / adb 输出解码：**宽容 UTF-8**（v1.0.7，#3463 G1/F2；#3069 形态）。
+
+    设备侧输出可能是任意字节。``text=True`` 按 locale 严格解码，遇到一个非
+    UTF-8 字节就抛 ``UnicodeDecodeError``——它不是 ``OSError``，调用点无从兜住。
+    坏字节替换成 U+FFFD 不影响签名匹配与后续判定。port 自 ``gpu_setup/_lib.py``
+    v1.2.3 参照实现（#3175 同批收口）。
+    """
+    return (raw or b"").decode("utf-8", errors="replace")
+
+
 def adb(*args: str, timeout: int = 60) -> tuple[int, str, str]:
     """adb -s <serial> <args...>，返回 (returncode, stdout, stderr)。"""
     cmd = [adb_path(), "-s", device_serial()] + list(args)
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        # v1.0.7（#3463 G1/F2，#3069 形态）：显式收字节再解宽容码，不用
+        # ``text=True``——后者严格解码，一个坏字节即 UnicodeDecodeError，且
+        # 无法从调用点兜住。
+        result = subprocess.run(cmd, capture_output=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         return -1, "", "timeout"
-    return result.returncode, result.stdout or "", result.stderr or ""
+    return (
+        result.returncode,
+        decode_device_output(result.stdout),
+        decode_device_output(result.stderr),
+    )
 
 
 def adb_shell(command: str, timeout: int = 60) -> str:
@@ -288,8 +306,53 @@ def get_app_uid() -> int:
     raise RuntimeError(f"无法解析 {_PKG} 的 uid（dumpsys package 输出无 sharedUser/userId/uid）")
 
 
+_PREFS_ABSENT_SENTINEL = "__STP_PREFS_ABSENT__"
+
+
+def _root_read_prefs() -> tuple[str, str]:
+    """root 下一次探测同时给出**存在性与内容**（#2979），返回 ``(kind, text)``：
+
+    - ``"ok"``       可读且非空——text 即 prefs XML；
+    - ``"empty"``    存在 + 读取成功但内容为空——repair 判据**唯一**接受的损坏证据；
+    - ``"absent"``   明确不存在（无可删）；
+    - ``"denied"``   读取被拒（SELinux / 属主异常等，root 下本不应出现——按未知处理）；
+    - ``"transient"`` adb 超时 / rc 不可归类（未知）。
+
+    为什么必须同源（#2979 对 #2846 判据的收紧）：两次独立 adb 调用（cat 与
+    test -f）在设备重启窗里可以「一败一成」——第一次 cat 撞瞬时失败（超时
+    rc=-1 / 设备下线）被当成「读不到」，紧接着第二次 test -f 成功回 present
+    ⇒ 删除健康 prefs，续跑 current_count 归零、auto_resume 断链。port 自
+    ``powercycle_setup/_lib.py`` 参照实现（#3463 G1/F1）。
+    """
+    probe = (
+        f"if [ ! -f {_PREFS_DIR}/{_PREFS_FILE} ]; then echo {_PREFS_ABSENT_SENTINEL}; "
+        f"else cat {_PREFS_DIR}/{_PREFS_FILE} 2>&1; fi"
+    )
+    rc, out, err = adb("shell", probe, timeout=30)
+    text = (out or "").strip()
+    if rc != 0:
+        if _PREFS_ABSENT_SENTINEL in text or "No such file" in text or "No such file" in (err or ""):
+            return "absent", ""
+        if "Permission denied" in text or "Permission denied" in (err or ""):
+            return "denied", ""
+        return "transient", ""      # adb 超时（rc=-1）与其它不可归类失败
+    if text == _PREFS_ABSENT_SENTINEL:
+        return "absent", ""
+    if not text:
+        return "empty", ""          # 存在 + 读成功 + 内容空 = 真损坏
+    if "Permission denied" in text:
+        return "denied", ""
+    if "No such file" in text:
+        return "absent", ""
+    return "ok", text
+
+
 def get_prefs_xml() -> str:
-    """run-as cat prefs（lib.ps1:Get-PowerCyclePrefsXml 同款；无文件/权限不足返回空串）。"""
+    """run-as cat prefs（lib.ps1:Get-PowerCyclePrefsXml 同款；无文件/权限不足返回空串）。
+
+    **空串只表示"此刻读不到"，不表示"文件不存在"**——存在性判定见
+    ``_root_read_prefs``（#2846/#2979/#3463 G1）。
+    """
     _, out, _ = adb("shell", f"run-as {_PKG} cat shared_prefs/{_PREFS_FILE}", timeout=30)
     text = out.strip()
     if text and not any(t in text for t in ("Permission denied", "No such file", "run-as:")):
@@ -298,12 +361,23 @@ def get_prefs_xml() -> str:
 
 
 def repair_prefs_ownership() -> None:
-    """prefs 读不到且可 root → 删旧文件重建（system uid 迁移坑，lib.ps1:Repair-PowerCyclePrefsOwnership 同款）。"""
-    if get_prefs_xml():
-        return
+    """prefs 读不到时按**同源可读性证据**决定删旧重建（#2846，#2979 收紧）。
+
+    v1.0.7（#3463 G1/F1，#3088）port 自 powercycle_setup v1.2.3 判据（对照旧拷贝的
+    「run-as 读空 + 可 root ⇒ rm -f」——AutoTestTool 是 platform 签名 system app
+    （shared uid ``android.uid.system``），AOSP 对 non-debuggable / shared-uid 包
+    **恒拒绝 run-as**，旧判据因此每轮都删健康 prefs）：
+    - 非 root 一律不动；
+    - 单次探测 ``_root_read_prefs``：``ok`` 不删；``absent`` 无可删；
+      ``denied``/``transient``（rc≠0、超时、被拒）判**未知**——保留文件；
+    - **只有**「文件存在 + 读取成功 + 内容为空」这一种确定性损坏形态才 ``rm -f``
+      （健康 prefs 永不为空；空文件应用自己也读不回，重建是唯一出路）。
+    """
     if not is_root():
         return
-    adb_shell(f"rm -f {_PREFS_DIR}/{_PREFS_FILE}", timeout=30)
+    kind, _ = _root_read_prefs()
+    if kind == "empty":
+        adb_shell(f"rm -f {_PREFS_DIR}/{_PREFS_FILE}", timeout=30)
 
 
 def push_prefs_xml(content: str) -> None:
@@ -451,10 +525,34 @@ def start_task() -> None:
 
 
 def set_stop_flags() -> None:
-    """auto_resume=false + running=false（lib.ps1:Set-PowerCycleStopFlags 同款；prefs 缺失时整写最小 map）。"""
+    """auto_resume=false + running=false（lib.ps1:Set-PowerCycleStopFlags 同款）。
+
+    v1.0.7（#3463 G1/F1 收紧，#3088）：整写最小 map 只认「文件明确不存在」
+    （``absent``）。旧判据把 ``get_prefs_xml()==""`` 当「文件不存在」——而读空
+    同样来自 run-as 被拒 / adb 瞬时失败，把健康 prefs 降成只有两个标志的最小图
+    （current_count / test_times / mode 全丢，auto_resume 断链）。root 下用
+    ``_root_read_prefs`` 的单调用同源证据分类：``transient``/``denied``（含
+    repair 后仍 ``empty``）保留文件并 raise——步骤转红可重试，绝不整写；非 root
+    下 run-as 读空同样不作 absent 证据，raise 暴露可重试失败。
+    """
     repair_prefs_ownership()
-    xml = get_prefs_xml()
-    if not xml:
+    if is_root():
+        kind, xml = _root_read_prefs()
+        if kind == "absent":
+            xml = ""
+        elif kind != "ok":
+            raise RuntimeError(
+                f"prefs 读取未知（kind={kind}）：保留现有文件、不整写最小 map，请重试本步骤"
+            )
+    else:
+        xml = get_prefs_xml()
+        if not xml:
+            raise RuntimeError(
+                "prefs run-as 读空（读空≠文件不存在）：保留现有文件、不整写最小 map，请重试本步骤"
+            )
+    if xml:
+        content = update_prefs_field(update_prefs_field(xml, "auto_resume", "false", "boolean"), "running", "false", "boolean")
+    else:
         content = (
             "<?xml version='1.0' encoding='utf-8' standalone='yes' ?>\n"
             "<map>\n"
@@ -462,8 +560,6 @@ def set_stop_flags() -> None:
             '    <boolean name="running" value="false"/>\n'
             "</map>\n"
         )
-    else:
-        content = update_prefs_field(update_prefs_field(xml, "auto_resume", "false", "boolean"), "running", "false", "boolean")
     push_prefs_xml(content)
 
 

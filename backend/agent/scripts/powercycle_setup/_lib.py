@@ -189,14 +189,32 @@ def progress_tick(phase: str, **extra) -> None:
     """#1690：轮询循环内的单次打戳（seq 与 heartbeat 共用计数器）。"""
     progress_stamp({"seq": _next_progress_seq(), "phase": phase, **extra})
 
+def decode_device_output(raw: bytes | None) -> str:
+    """设备 / adb 输出解码：**宽容 UTF-8**（v1.2.7，#3463 G1/F2；#3069 形态）。
+
+    设备侧输出可能是任意字节。``text=True`` 按 locale 严格解码，遇到一个非
+    UTF-8 字节就抛 ``UnicodeDecodeError``——它不是 ``OSError``，调用点无从兜住。
+    坏字节替换成 U+FFFD 不影响签名匹配与后续判定。port 自 ``gpu_setup/_lib.py``
+    v1.2.3 参照实现（#3175 同批收口）。
+    """
+    return (raw or b"").decode("utf-8", errors="replace")
+
+
 def adb(*args: str, timeout: int = 60) -> tuple[int, str, str]:
     """adb -s <serial> <args...>，返回 (returncode, stdout, stderr)。"""
     cmd = [adb_path(), "-s", device_serial()] + list(args)
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        # v1.2.7（#3463 G1/F2，#3069 形态）：显式收字节再解宽容码，不用
+        # ``text=True``——后者严格解码，一个坏字节即 UnicodeDecodeError，且
+        # 无法从调用点兜住。
+        result = subprocess.run(cmd, capture_output=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         return -1, "", "timeout"
-    return result.returncode, result.stdout or "", result.stderr or ""
+    return (
+        result.returncode,
+        decode_device_output(result.stdout),
+        decode_device_output(result.stderr),
+    )
 
 
 def adb_shell(command: str, timeout: int = 60) -> str:
@@ -865,10 +883,34 @@ def start_task() -> None:
 
 
 def set_stop_flags() -> None:
-    """auto_resume=false + running=false（lib.ps1:Set-PowerCycleStopFlags 同款；prefs 缺失时整写最小 map）。"""
+    """auto_resume=false + running=false（lib.ps1:Set-PowerCycleStopFlags 同款）。
+
+    v1.2.7（#3463 G1/F1 收紧，#3088 同形）：整写最小 map 只认「文件明确不存在」
+    （``absent``）。旧判据把 ``get_prefs_xml()==""`` 当「文件不存在」——而读空
+    同样来自 run-as 被拒 / adb 瞬时失败，把健康 prefs 降成只有两个标志的最小图
+    （current_count / test_times / mode 全丢，auto_resume 断链）。root 下用
+    ``_root_read_prefs`` 的单调用同源证据分类：``transient``/``denied``（含
+    repair 后仍 ``empty``）保留文件并 raise——步骤转红可重试，绝不整写；非 root
+    下 run-as 读空同样不作 absent 证据，raise 暴露可重试失败。
+    """
     repair_prefs_ownership()
-    xml = get_prefs_xml()
-    if not xml:
+    if is_root():
+        kind, xml = _root_read_prefs()
+        if kind == "absent":
+            xml = ""
+        elif kind != "ok":
+            raise RuntimeError(
+                f"prefs 读取未知（kind={kind}）：保留现有文件、不整写最小 map，请重试本步骤"
+            )
+    else:
+        xml = get_prefs_xml()
+        if not xml:
+            raise RuntimeError(
+                "prefs run-as 读空（读空≠文件不存在）：保留现有文件、不整写最小 map，请重试本步骤"
+            )
+    if xml:
+        content = update_prefs_field(update_prefs_field(xml, "auto_resume", "false", "boolean"), "running", "false", "boolean")
+    else:
         content = (
             "<?xml version='1.0' encoding='utf-8' standalone='yes' ?>\n"
             "<map>\n"
@@ -876,8 +918,6 @@ def set_stop_flags() -> None:
             '    <boolean name="running" value="false"/>\n'
             "</map>\n"
         )
-    else:
-        content = update_prefs_field(update_prefs_field(xml, "auto_resume", "false", "boolean"), "running", "false", "boolean")
     push_prefs_xml(content)
 
 

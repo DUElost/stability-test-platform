@@ -1,6 +1,16 @@
 # -*- coding: utf-8 -*-
 """PowerCycle 停止 + 结果收取（teardown 阶段，issue #462 P0b；G15 对齐 §3.2）。
 
+v1.0.7（#3463 G1，2026-09-27）：F1 + F2 双收口（batch B1，方案见 #3463 §3 G1）。
+- F1 port powercycle_setup 参照：`_root_read_prefs` 单调用同源证据 +
+  收紧后的 `repair_prefs_ownership`（只有「存在 + 读成功 + 内容空」才删——
+  旧拷贝「run-as 读空 + 可 root ⇒ rm」对 platform 签名 shared-uid 包每轮删
+  健康 prefs，#3088 主案）；`set_stop_flags` 只认 `absent` 才整写最小 map，
+  `transient`/`denied` 保留文件并 raise（stop_task 步骤转红可重试，
+  `_verify_stop_flags` 语义不变）；
+- F2 `_lib.adb()` 改 bytes 采集 + `decode_device_output` 宽容 UTF-8（port 自
+  gpu_setup v1.2.3 参照，#3069 形态）。
+
 v1.0.6（#2980）：**把 SIGTERM 路径也纳入临时目录回收**。v1.0.5 的 ``finally``
 只覆盖脚本内部异常与 ``SystemExit``——但步骤墙钟到点时引擎是对**进程组**发
 SIGTERM（再升 SIGKILL），CPython 默认不把 SIGTERM 转成异常，``finally`` 根本
