@@ -242,9 +242,11 @@ class TestPrefsXml:
             pushed["xml"] = content
 
         monkeypatch.setattr(lib, "push_prefs_xml", fake_push)
+        # #3463 G1-sleep-2 ②：set_prefs 的续跑读取改走同源证据（kind, text），
+        # 不再消费会把一切非 ok 折叠成空串的 get_prefs_xml。
         monkeypatch.setattr(
-            lib, "get_prefs_xml",
-            lambda: '<?xml version="1.0"?><map><int name="current_count" value="42"/></map>',
+            lib, "read_prefs_evidence",
+            lambda: ("ok", '<?xml version="1.0"?><map><int name="current_count" value="42"/></map>'),
         )
         cfg = {"test_times": 100, "wake_seconds": 60, "sleep_seconds": 300,
                "tester": "tester", "auto_resume": True, "reset_count": False}

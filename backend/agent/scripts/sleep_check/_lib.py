@@ -446,11 +446,24 @@ def build_prefs_xml(
 
 
 def set_prefs(cfg: dict) -> int:
-    """deploy/run 语义合并：repair → 读 current_count（reset_count=false 续跑）→ 整写，返回 current_count。"""
+    """deploy/run 语义合并：repair → 读 current_count（reset_count=false 续跑）→ 整写，返回 current_count。
+
+    #3463 G1-sleep-2 ②：``reset_count=false`` 时按**同源读取证据** kind 分流——
+    ``ok`` 解析 current_count；``absent`` 取 0（真的没有 prefs，正常部署形态）；
+    ``transient`` / ``denied`` / ``empty``（内容空）**raise**——「读不到」不是
+    「没有」，不得以 current_count=0 整写完整 prefs 覆盖续跑计数（#2979 同形态，
+    只是写的是 full map 而非最小 map）。
+    """
     repair_prefs_ownership()
     current_count = 0
     if not cfg["reset_count"]:
-        existing = get_prefs_xml()
+        kind, existing = read_prefs_evidence()
+        if kind not in ("ok", "absent"):
+            raise RuntimeError(
+                f"prefs 读取证据不可判定（kind={kind}, file={_PREFS_FILE}）——"
+                "拒绝以 current_count=0 整写完整 prefs 覆盖续跑计数（#3463 G1-sleep-2）；"
+                "此为可重试失败，请重试本步骤"
+            )
         match = re.search(r'name="current_count" value="(\d+)"', existing)
         if match:
             current_count = int(match.group(1))
@@ -538,11 +551,22 @@ def device_online() -> bool:
 
 
 def start_task() -> None:
-    """force-stop → running=true → Activity → 前台服务(START) → KEEPALIVE 广播（lib.ps1:Start-SleepTestTask 同款）。"""
+    """force-stop → running=true → Activity → 前台服务(START) → KEEPALIVE 广播（lib.ps1:Start-SleepTestTask 同款）。
+
+    #3463 G1-sleep-2 ③：prefs 证据非 ``ok`` 时 raise——旧形态「读空即跳过置
+    running=true、照常启动服务」会让服务带着 stop flags 起跑，设备重启后
+    boot receiver 不再续跑（表面启动、实际断链）。瞬时不可读按可重试失败处理，
+    步骤重试时窗口即消失。
+    """
     adb_shell(f"am force-stop {_PKG}", timeout=30)
-    xml = get_prefs_xml()
-    if xml:
-        push_prefs_xml(update_prefs_field(xml, "running", "true", "boolean"))
+    kind, xml = read_prefs_evidence()
+    if kind != "ok":
+        raise RuntimeError(
+            f"prefs 读取证据非 ok（kind={kind}, file={_PREFS_FILE}）——"
+            "拒绝在未置 running=true 的情况下启动服务（#3463 G1-sleep-2）；"
+            "此为可重试失败，请重试本步骤"
+        )
+    push_prefs_xml(update_prefs_field(xml, "running", "true", "boolean"))
     adb_shell(f"am start -n {_PKG}/{_ACTIVITY}", timeout=30)
     time.sleep(2)
     adb_shell(
