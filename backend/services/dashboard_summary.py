@@ -14,6 +14,8 @@ from typing import Any, Optional
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from backend.core.device_lifecycle import is_stale
+
 # Alert thresholds mirrored by dashboard device/alert buckets.
 LOW_BATTERY_THRESHOLD = 20
 HIGH_TEMP_THRESHOLD = 45
@@ -101,9 +103,13 @@ def device_update_is_material(
 
 
 def compute_dashboard_summary(db: Session) -> dict:
-    """Aggregate host/device/alert buckets for dashboard (excludes retired hosts).
+    """Aggregate host/device/alert buckets for dashboard.
 
-    ADR-0038 D5：仪表板「在线容量」口径排除退役主机。
+    - ADR-0038 D5：仪表板「在线容量」口径排除退役主机；
+    - ADR-0057 D4 第 5 面（#2962 B）：设备计数排除已退役设备；
+    - #2962 A：设备容量按新鲜度计算——OFFLINE 拆成「近期掉线」（7 天内有上报）
+      与「陈旧」（7 天以上/从未上报）；陈旧设备不再进低电量/高温等告警类计数
+      （它们最后一次上报可能是数周前的事实，报了也没人处置）。
     """
     hosts = db.execute(text("""
         SELECT status, extra, ip
@@ -111,8 +117,9 @@ def compute_dashboard_summary(db: Session) -> dict:
         WHERE retired_at IS NULL
     """)).fetchall()
     devices = db.execute(text("""
-        SELECT status, battery_level, temperature
+        SELECT status, last_seen, battery_level, temperature
         FROM device
+        WHERE retired_at IS NULL
     """)).fetchall()
 
     host_total = len(hosts)
@@ -151,14 +158,26 @@ def compute_dashboard_summary(db: Session) -> dict:
 
     idle = sum(1 for row in devices if row.status == "ONLINE")
     testing = sum(1 for row in devices if row.status == "BUSY")
-    offline = sum(1 for row in devices if row.status == "OFFLINE")
-    error = sum(1 for row in devices if row.status == "ERROR")
-    low_battery = sum(
+    offline = sum(
         1 for row in devices
+        if row.status == "OFFLINE" and not is_stale(row.status, row.last_seen)
+    )
+    offline_stale = sum(
+        1 for row in devices
+        if row.status == "OFFLINE" and is_stale(row.status, row.last_seen)
+    )
+    error = sum(1 for row in devices if row.status == "ERROR")
+    # 低电量/高温只看仍在新鲜度窗内的设备——陈旧设备的读数是数周前的快照。
+    fresh_capacity = [
+        row for row in devices
+        if row.status != "OFFLINE" or not is_stale(row.status, row.last_seen)
+    ]
+    low_battery = sum(
+        1 for row in fresh_capacity
         if row.battery_level is not None and row.battery_level < LOW_BATTERY_THRESHOLD
     )
     high_temp = sum(
-        1 for row in devices
+        1 for row in fresh_capacity
         if row.temperature is not None and row.temperature > HIGH_TEMP_THRESHOLD
     )
 
@@ -180,6 +199,7 @@ def compute_dashboard_summary(db: Session) -> dict:
             "idle": idle,
             "testing": testing,
             "offline": offline,
+            "offline_stale": offline_stale,
             "error": error,
             "low_battery": low_battery,
             "high_temp": high_temp,

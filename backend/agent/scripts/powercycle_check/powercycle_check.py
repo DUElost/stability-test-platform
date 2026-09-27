@@ -1,6 +1,15 @@
 # -*- coding: utf-8 -*-
 """PowerCycle 轮询（patrol 阶段，issue #462 P0b；G15 对齐 §3.2）。
 
+v1.0.9（#3463 G1，2026-09-27）：F1 + F2 双收口（batch B1，方案见 #3463 §3 G1）。
+- F1 port powercycle_setup 参照：`_root_read_prefs` 单调用同源证据 +
+  收紧后的 `repair_prefs_ownership`（只有「存在 + 读成功 + 内容空」才删——
+  旧拷贝「run-as 读空 + 可 root ⇒ rm」对 platform 签名 shared-uid 包每轮删
+  健康 prefs）；`set_stop_flags` 只认 `absent` 才整写最小 map，
+  `transient`/`denied` 保留文件并 raise（pause 路径步骤转红可重试）；
+- F2 `_lib.adb()` 改 bytes 采集 + `decode_device_output` 宽容 UTF-8（port 自
+  gpu_setup v1.2.3 参照，#3069 形态）。
+
 v1.0.8（#813，R08-F04）：收取窗口 pause→resume 原子化——pause 前先落
 ``paused_by_collect`` 意图标记；收取/恢复异常时在 except 分支补偿 resume，
 窗口外周期入口也检查该标记补做恢复（进程被杀场景）。补偿成功则本轮不判死并

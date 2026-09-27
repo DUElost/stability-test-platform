@@ -150,6 +150,14 @@
           "retired": false,
           "script": "clean_env.py",
           "version": "1.1.0"
+        },
+        {
+          "artifact": "packages/clean_env/1.1.1.tar.gz",
+          "package_sha256": "9170856f2294da0c62fce5e979aa0e18f792e2ddf5daa856376f1f5a4ab43130",
+          "python": null,
+          "retired": false,
+          "script": "clean_env.py",
+          "version": "1.1.1"
         }
       ]
     },
@@ -203,6 +211,14 @@
           "retired": false,
           "script": "clear_recents.py",
           "version": "1.0.5"
+        },
+        {
+          "artifact": "packages/clear_recents/1.0.6.tar.gz",
+          "package_sha256": "5e42d15bcc076e94374babc5b5572ae55ced012601dac5480d0e5962bf0e5d2a",
+          "python": null,
+          "retired": false,
+          "script": "clear_recents.py",
+          "version": "1.0.6"
         }
       ]
     },
@@ -306,6 +322,14 @@
           "retired": false,
           "script": "fill_storage.py",
           "version": "1.1.1"
+        },
+        {
+          "artifact": "packages/fill_storage/1.1.2.tar.gz",
+          "package_sha256": "436467ab53bb0c5926d0f5937163687c18544de09c61940fd4893f3b26517d96",
+          "python": null,
+          "retired": false,
+          "script": "fill_storage.py",
+          "version": "1.1.2"
         }
       ]
     },
@@ -1601,6 +1625,14 @@
           "retired": false,
           "script": "powercycle_check.py",
           "version": "1.0.8"
+        },
+        {
+          "artifact": "packages/powercycle_check/1.0.9.tar.gz",
+          "package_sha256": "878022ecd96cfa1bec7429d6db441ab3299aef1bbd8a18c977e2d40567a68c27",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_check.py",
+          "version": "1.0.9"
         }
       ]
     },
@@ -1662,6 +1694,14 @@
           "retired": false,
           "script": "powercycle_finish.py",
           "version": "1.0.6"
+        },
+        {
+          "artifact": "packages/powercycle_finish/1.0.7.tar.gz",
+          "package_sha256": "0283ba5a60e4c3a54a2f5040fdd111e69c78017318c077cdf44314176db63ce4",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_finish.py",
+          "version": "1.0.7"
         }
       ]
     },
@@ -1755,6 +1795,14 @@
           "retired": false,
           "script": "powercycle_setup.py",
           "version": "1.2.6"
+        },
+        {
+          "artifact": "packages/powercycle_setup/1.2.7.tar.gz",
+          "package_sha256": "7e748290a596f3c76b051cca24293b24d3ec532c1ef771ecc015d97103a9ccaa",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_setup.py",
+          "version": "1.2.7"
         }
       ]
     },
@@ -1829,6 +1877,14 @@
           "retired": false,
           "script": "sleep_check.py",
           "version": "1.0.4"
+        },
+        {
+          "artifact": "packages/sleep_check/1.0.5.tar.gz",
+          "package_sha256": "3f09145f06c164583f6920871bbf125618440a8e8bc17b8bbdb5ac99cf3f1533",
+          "python": null,
+          "retired": false,
+          "script": "sleep_check.py",
+          "version": "1.0.5"
         }
       ]
     },
@@ -1874,6 +1930,14 @@
           "retired": false,
           "script": "sleep_finish.py",
           "version": "1.0.4"
+        },
+        {
+          "artifact": "packages/sleep_finish/1.0.5.tar.gz",
+          "package_sha256": "05997fa16fe7880988329cb85704d5072b530a9cd6f882bc0ee89a764b42c51c",
+          "python": null,
+          "retired": false,
+          "script": "sleep_finish.py",
+          "version": "1.0.5"
         }
       ]
     },
@@ -1911,6 +1975,14 @@
           "retired": false,
           "script": "sleep_setup.py",
           "version": "1.0.3"
+        },
+        {
+          "artifact": "packages/sleep_setup/1.0.4.tar.gz",
+          "package_sha256": "aca5edc5781217b8908cd74e605eac50cc8af6cf2e01fb598439ac0d0e00d482",
+          "python": null,
+          "retired": false,
+          "script": "sleep_setup.py",
+          "version": "1.0.4"
         }
       ]
     },

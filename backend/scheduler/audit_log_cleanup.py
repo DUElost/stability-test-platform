@@ -131,6 +131,7 @@ BUSINESS_ACTIONS_ALLOWLIST: frozenset[str] = frozenset({
     "promote_seed_project",
     "remove_project_model",
     "rename_project",
+    "retire_device",  # #2962 设备退役；与 retire_host 同族
     "retire_host",
     "scan",
     "scan_rebaseline",
@@ -139,6 +140,7 @@ BUSINESS_ACTIONS_ALLOWLIST: frozenset[str] = frozenset({
     "step_trace_stall_detected",
     "terminal_payload_conflict",
     "unarchive_project",
+    "unretire_device",  # #2962 解除设备退役；与 unretire_host 同族
     "unretire_host",
     "update",
     "update_project",
