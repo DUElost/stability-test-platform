@@ -1,5 +1,13 @@
 """Fill device storage to a target percentage using dd.
 
+v1.1.2（#3172，#3463 G3）：**`fill_path` 白名单校验**。v1.1.1 把 plan 参数原样插进
+设备端 root shell（``rm -f {fill_path}`` / ``dd of={fill_path}`` / ``du -sk {fill_path}``）：
+``/data/local/tmp/*`` 全目录清掉、``" ; rm -rf /system ; "`` 拼任意命令、带空格路径
+静默重定向。port #3107 判据（同 ``clear_recents.validated_dump_path``）：只接受
+``^/data/local/tmp/[A-Za-z0-9._-]{1,64}$``，且尾段不得是 ``.``/``..``；**空串显式回退
+默认路径**（v1.1.1 的 ``args.get`` 在键存在但为空时不回退，``rm -f`` 裸奔、``du -sk``
+探测 shell cwd）；非法值整步转红，且在下发前拦停（宁可红不把破坏性命令执行面交给参数）。
+
 v1.1.1（#3085，2026-09-22）：**按目标百分比双向调节**——v1.0.0–v1.1.0 是单向的：
 ``need = target_used - used_kb``，``need<=0`` 直接 ``skipped+already_met``
 **不缩容、不回收自建文件**；且 ``used_kb`` 是 ``df`` 原值，**包含 fill 文件自身**。
@@ -51,9 +59,35 @@ Output (stdout):
                  "base_pct": int, "actual_pct": int, "already_met": bool}}
 """
 
+import re
 import subprocess
 
 from _adb import adb_shell_quiet, device_serial, output_result, params, progress_heartbeat
+
+
+#: `fill_path` 白名单形态（#3172，判据 port 自 #3107 的 clear_recents.validated_dump_path）：
+#: 该值会被插进设备端 root shell（rm -f / dd of= / du -sk），故只接受 /data/local/tmp/ 下的
+#: 普通文件名——空值回退默认、含元字符/含空格/绝对穿越/超长一律拒绝。
+_FILL_PATH_RE = re.compile(r"^/data/local/tmp/[A-Za-z0-9._-]{1,64}$")
+_FILL_PATH_DEFAULT = "/data/local/tmp/fill.bin"
+
+
+def validated_fill_path(raw: object) -> str:
+    """校验计划参数 `fill_path`（#3172）。
+
+    未校验时 ``fill_path = "/data/local/tmp/*"`` 会让 ``rm -f`` 清掉整个目录；含 `;`/`$()`
+    的值可扩张成任意 root 命令。空值按既有语义回落到默认路径（不是错误，#3172 的
+    「键存在但为空串也要回退」即修复点本身）。
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return _FILL_PATH_DEFAULT
+    if not _FILL_PATH_RE.match(text) or text.rsplit("/", 1)[-1] in (".", ".."):
+        raise ValueError(
+            "fill_path 必须匹配 ^/data/local/tmp/[A-Za-z0-9._-]{1,64}$（且非 `.`/`..`）"
+            f"（收到 {text!r}）"
+        )
+    return text
 
 
 def _parse_df() -> tuple[int, int]:
@@ -100,7 +134,12 @@ def main() -> None:
 
     target_pct = args.get("target_percentage", 60)
     block_size_kb = args.get("block_size_kb", 1024)
-    fill_path = args.get("fill_path", "/data/local/tmp/fill.bin")
+    try:
+        # 参数非法 = 配置错误，直接红；不把未校验的值插进设备端 root shell（#3172/#3107）。
+        fill_path = validated_fill_path(args.get("fill_path"))
+    except ValueError as exc:
+        output_result(False, error_message=str(exc))
+        return
 
     try:
         total_kb, used_kb = _parse_df()

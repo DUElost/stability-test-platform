@@ -150,6 +150,14 @@
           "retired": false,
           "script": "clean_env.py",
           "version": "1.1.0"
+        },
+        {
+          "artifact": "packages/clean_env/1.1.1.tar.gz",
+          "package_sha256": "9170856f2294da0c62fce5e979aa0e18f792e2ddf5daa856376f1f5a4ab43130",
+          "python": null,
+          "retired": false,
+          "script": "clean_env.py",
+          "version": "1.1.1"
         }
       ]
     },
@@ -306,6 +314,14 @@
           "retired": false,
           "script": "fill_storage.py",
           "version": "1.1.1"
+        },
+        {
+          "artifact": "packages/fill_storage/1.1.2.tar.gz",
+          "package_sha256": "436467ab53bb0c5926d0f5937163687c18544de09c61940fd4893f3b26517d96",
+          "python": null,
+          "retired": false,
+          "script": "fill_storage.py",
+          "version": "1.1.2"
         }
       ]
     },
