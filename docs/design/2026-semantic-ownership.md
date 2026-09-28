@@ -140,7 +140,7 @@
 | 可观测 / 通知 | 0011, 0036 | 已填关键行 |
 | 项目 / 套件 / AI | 0029, 0030, 0031 | 已填 |
 | 配置 / 词表 / 站点 | 0042, 0045, 0041 | 已填 |
-| 多 Harness 执行 | 0034；细则 `execution-contract` | 已填 |
+| 多 Harness 执行 | 0034, 0058；细则 `execution-contract` | 已填 |
 | Schema / 审计 / 前端扩展 | 0008, 0015, 0013 | 0008/0015 已填；0013 见 TBD 触发 |
 
 > **不是**全量名词 Inventory：只登记「会影响架构决策或已出现双标风险」的概念/关系。其余 Accepted ADR 以矩阵 **TBD** 占位，增补纪律见 §7。
@@ -178,6 +178,7 @@
 | `terminal-fact-layer` | concept | 平台库长期事实层（签名 / 发生 / DLE 摘要 / 运行时长） | `docs/adr/ADR-0056-terminal-fact-layer.md :: ## 8. 裁决记录（2026-09-26，owner 授权 Claude 裁决）` | 事实行随 run 级联删除；单库事实表超出体量基线 |
 | `notification-delivery` | concept | 通知投递成功/失败语义 | `docs/adr/ADR-0036-notification-delivery-semantics.md :: ### 2.1 投递管道（契约对象）` | 改 ACCEPTED≠DELIVERED |
 | `execution-registry` | concept | 多 Harness Execution Registry / 三维状态 | `docs/adr/ADR-0034-multi-harness-execution-contract.md :: ### 2.3 状态模型：lifecycle × liveness × integration 三维正交 — 细则见契约 §3`；细则 `docs/development/ai/execution-contract.md :: ## 3. 状态模型（三维）与 transition table` | 改 Registry 为调度器 |
+| `batch-delivery` | concept | 批次交付流程：Owner / 规划者 / 实施者 / 复核者 / 集成观察者的职责分层，与 Registry 协调域划界（只登记协调域内实施者） | `docs/adr/ADR-0058-planned-batch-execution.md :: ### D8 职责与工作面` | 复核前合入再次发生；helper 副本模型裁为 A/B；协调域外 PR 与域内实施者反复同文件冲突 |
 | `settings-bare-read` | concept | 配置读取收敛与裸读边界 | `docs/adr/ADR-0042-settings-convergence-and-bare-read-boundary.md :: ## 决策` | 新域绕过分域 settings |
 | `risk-level-vocab` | concept | 风险对外词表 S/A/B | `docs/adr/ADR-0045-risk-level-vocabulary.md :: ## 2. 决策` | 多词表回流 |
 | `project-taxonomy` | concept | TestProject / specialty 分类 | `docs/adr/ADR-0029-project-taxonomy-and-param-layering.md :: ### D2：项目实体 \`test_project\` — 单层身份 + 正交 facet` | 改 facet / 派生归属 |
@@ -292,3 +293,4 @@
 | 2026-09-21 | **#3014 案 1A + 2A（codex）**：S15 增 ④（触发器非空）/ ⑤（ADR 型锚状态须 Accepted）/ ⑦（新建 ADR 必填 `归属域`，cutoff `2026-09-22`，不追溯）；§4.2 记「为什么是 ⑤ 而不是行数卡」；§6.2 改判行数自卡；§7 定强制面。`--self-test` 新增 6 条红/绿样例，`--check` 全绿（零 retroactive 红灯） |
 | 2026-09-26 | **ADR-0054 入表（claude）**：补 `agent-cp-contracts` 行——§7 触发 1（新建 Accepted ADR），且 ADR-0054 §8 的「视需要补 owner 行」随 C3 基线清零一并收口 |
 | 2026-09-26 | **ADR-0054 入表（claude）· 矩阵收口**：§5.1「控制面 / 执行分层」代表 ADR 补 `0054`，覆盖状态列指向 §5.2 的 `agent-cp-contracts` 行（承接上一条登记） |
+| 2026-09-28 | **ADR-0058 入表（claude）**：补 `batch-delivery` 行（新建 Accepted ADR，§7 触发 1）；§5.1「多 Harness 执行」代表 ADR 补 `0058`——`execution-registry` 管实施 Execution 的协调，`batch-delivery` 管其上游的规划 / 复核 / 激活职责与协调域划界 |
