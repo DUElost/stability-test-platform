@@ -96,7 +96,10 @@ export function PlanRunHeroActions({
   };
 
   return (
-    <div className={cn('flex gap-1.5', className)}>
+    // #3484：侧栏行宽 ~229px 容不下三个 nowrap 按钮（min-content 96+124+96+gap=328），
+    // 曾致行尾「中止运行」被 Hero 的 overflow-hidden 裁掉 87px。快照 w-full 独占
+    // 首行，导出+复跑/中止一行（226px）；行宽再涨时 flex-wrap 兜底为换行而非裁剪。
+    <div className={cn('flex flex-wrap gap-1.5', className)}>
       {/* #3350（ADR-0023 D4）：计划快照浏览入口（读 detail 已返回的 plan_snapshot） */}
       {onViewSnapshot && (
         <Button
@@ -105,7 +108,7 @@ export function PlanRunHeroActions({
           data-testid="plan-run-snapshot-btn"
           onClick={onViewSnapshot}
           disabled={!run}
-          className="flex-1 text-[11px] h-7"
+          className="w-full text-[11px] h-7"
         >
           <FileText className="mr-1 h-3 w-3" />
           查看快照
