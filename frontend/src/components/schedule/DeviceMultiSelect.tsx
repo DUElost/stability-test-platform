@@ -99,6 +99,19 @@ export function DeviceMultiSelect({ selectedIds, onChange }: DeviceMultiSelectPr
           <div className="max-h-48 overflow-y-auto p-1">
             {devicesQ.isLoading ? (
               <p className={cn('px-3 py-2 text-xs', TEXT.subtitle)}>设备列表加载中…</p>
+            ) : devicesQ.isError ? (
+              // #3496（B2-G8）：查询失败不得回落成「暂无设备」/「无匹配设备」——
+              // 那是成功空结果的语义，会让人误以为确实没有可选设备。
+              <div className={cn('flex items-center justify-between gap-2 px-3 py-2 text-xs', TEXT.destructive)}>
+                <span>设备列表加载失败，暂无法判断可选设备。</span>
+                <button
+                  type="button"
+                  onClick={() => void devicesQ.refetch()}
+                  className="underline underline-offset-2"
+                >
+                  重试
+                </button>
+              </div>
             ) : filtered.length === 0 ? (
               <p className={cn('px-3 py-2 text-xs', TEXT.subtitle)}>
                 {devices.length === 0 ? '暂无设备' : '无匹配设备'}
