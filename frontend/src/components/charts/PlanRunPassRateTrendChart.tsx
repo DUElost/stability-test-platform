@@ -24,7 +24,8 @@ export function PlanRunPassRateTrendChart({
     return data.map((p) => ({
       ...p,
       label: p.date.slice(5),
-      ratePct: parseFloat((p.avg_pass_rate * 100).toFixed(1)),
+      // #3186：后端零填充日 run_count=0 时分母为 0，avg_pass_rate 无真值——置 null 断线，不得画成 0%（与全失败不可分）。
+      ratePct: p.run_count === 0 ? null : parseFloat((p.avg_pass_rate * 100).toFixed(1)),
     }));
   }, [data]);
 
@@ -87,7 +88,7 @@ export function PlanRunPassRateTrendChart({
               <Tooltip
                 content={({ active, payload }) => {
                   if (active && payload && payload.length) {
-                    const item = payload[0]?.payload as PlanRunPassRateTrendPoint & { label: string; ratePct: number };
+                    const item = payload[0]?.payload as PlanRunPassRateTrendPoint & { label: string; ratePct: number | null };
                     return (
                       <div className="bg-popover border border-border rounded-lg p-2 shadow-md text-xs">
                         <div className="text-muted-foreground mb-1">{item.date}</div>
@@ -97,7 +98,7 @@ export function PlanRunPassRateTrendChart({
                             style={{ backgroundColor: CHART_COLORS.primary }}
                           />
                           <span className="text-muted-foreground">平均通过率:</span>
-                          <span className="font-medium">{item.ratePct}%</span>
+                          <span className="font-medium">{item.ratePct === null ? '—' : `${item.ratePct}%`}</span>
                         </div>
                         <div className="flex items-center gap-2">
                           <span className="text-muted-foreground">终态运行数:</span>
