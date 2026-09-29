@@ -1,4 +1,4 @@
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -402,25 +402,52 @@ describe('ProjectDetailPage', () => {
     confirmSpy.mockRestore();
   });
 
-  // #3134：卡title 用 project 侧真实计数、列表最多渲染 20 条。超限时必须明说，
-  // 否则同屏出现「设备（513）」与 20 行两个互相矛盾的数字且无从解释。
-  it('explains the device list truncation when the project has more than 20 devices', async () => {
-    mocks.getProject.mockResolvedValue(makeDetail({ device_count: 513 }));
+  // #3194：原始计数（含退役/legacy）>20 而过滤后 total ≤20 时，列表其实已全量——
+  // 不得再报截断；标题保留原始计数必须注明口径。
+  it('does not show the truncation banner when the filtered total fits even if the raw count exceeds it (#3194)', async () => {
+    mocks.getProject.mockResolvedValue(makeDetail({ device_count: 25, plan_count: 25 }));
+    mocks.listDevices.mockResolvedValue({
+      items: [
+        { id: 1, serial: 'S-1', model: 'M1', status: 'ONLINE', project_key: 'proj-a' },
+        { id: 2, serial: 'S-2', model: 'M1', status: 'ONLINE', project_key: 'proj-a' },
+      ],
+      total: 18,
+    });
+    mocks.listPlans.mockResolvedValue({
+      items: [{ id: 1, name: 'Plan A', steps: [], project_key: 'proj-a' }],
+      total: 18,
+    });
     renderPage();
 
-    expect(await screen.findByText(/设备（513）/)).toBeInTheDocument();
-    // 提示里的数字与 title 同源（project.device_count），不会自相矛盾
-    expect(screen.getByText(/共 513 台，此处最多显示 20 台/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: '在设备页筛选查看' })).toBeInTheDocument();
+    expect(await screen.findByText(/设备（25）/)).toBeInTheDocument();
+    expect(screen.getByText(/计划（25）/)).toBeInTheDocument();
+    // 过滤后 18 ≤ 20：列表已全量，无截断横幅
+    expect(screen.queryByText(/此处最多显示/)).not.toBeInTheDocument();
+    // 标题原始计数与列表口径不一致 → 注明含未显示部分
+    expect(screen.getByTestId('devices-count-scope')).toHaveTextContent('含退役未显示');
+    expect(screen.getByTestId('plans-count-scope')).toHaveTextContent('含 legacy 未显示');
   });
 
-  it('explains the plan list truncation when the project has more than 20 plans', async () => {
-    mocks.getProject.mockResolvedValue(makeDetail({ plan_count: 25 }));
+  it('shows the truncation banner when the filtered total exceeds the preview limit (#3194)', async () => {
+    mocks.getProject.mockResolvedValue(makeDetail({ device_count: 25, plan_count: 25 }));
+    mocks.listDevices.mockResolvedValue({
+      items: [
+        { id: 1, serial: 'S-1', model: 'M1', status: 'ONLINE', project_key: 'proj-a' },
+      ],
+      total: 25,
+    });
+    mocks.listPlans.mockResolvedValue({
+      items: [{ id: 1, name: 'Plan A', steps: [], project_key: 'proj-a' }],
+      total: 25,
+    });
     renderPage();
 
-    expect(await screen.findByText(/计划（25）/)).toBeInTheDocument();
+    // 横幅数字 = 过滤后 total（与列表同口径）
+    expect(await screen.findByText(/共 25 台，此处最多显示 20 台/)).toBeInTheDocument();
     expect(screen.getByText(/共 25 个，此处最多显示 20 个/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: '在 Plan 管理页筛选查看' })).toBeInTheDocument();
+    // 过滤后与原始一致 → 无口径注
+    expect(screen.queryByTestId('devices-count-scope')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('plans-count-scope')).not.toBeInTheDocument();
   });
 
   it('stays quiet when both lists fit within the preview limit', async () => {
@@ -428,5 +455,90 @@ describe('ProjectDetailPage', () => {
 
     expect(await screen.findByText(/设备（1）/)).toBeInTheDocument();
     expect(screen.queryByText(/此处最多显示/)).not.toBeInTheDocument();
+    // 原始计数与过滤后一致 → 无口径注
+    expect(screen.queryByTestId('devices-count-scope')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('plans-count-scope')).not.toBeInTheDocument();
+  });
+
+  // #3497 F1：查询失败不得读成确定事实——失败态显示失败提示 + 重试，不显示成功空态
+  it('shows a load error with retry when the devices query fails, not the empty copy', async () => {
+    mocks.listDevices.mockRejectedValue(new Error('network down'));
+    renderPage();
+
+    const errorBox = await screen.findByTestId('devices-load-error');
+    expect(errorBox).toHaveTextContent('设备列表加载失败');
+    expect(screen.queryByText('该项目暂无设备')).not.toBeInTheDocument();
+    // 重试恢复：成功后错误态消失、空态按新数据渲染
+    mocks.listDevices.mockResolvedValue({ items: [], total: 0 });
+    fireEvent.click(within(errorBox).getByRole('button', { name: '重试' }));
+    await waitFor(() => {
+      expect(screen.queryByTestId('devices-load-error')).not.toBeInTheDocument();
+    });
+    expect(await screen.findByText('该项目暂无设备')).toBeInTheDocument();
+  });
+
+  it('shows a load error when the plans query fails, not the empty copy', async () => {
+    mocks.listPlans.mockRejectedValue(new Error('network down'));
+    renderPage();
+
+    const errorBox = await screen.findByTestId('plans-load-error');
+    expect(errorBox).toHaveTextContent('计划列表加载失败');
+    expect(screen.queryByText('该项目暂无计划')).not.toBeInTheDocument();
+    expect(within(errorBox).getByRole('button', { name: '重试' })).toBeInTheDocument();
+  });
+
+  it('shows a load error when the models query fails, not the empty copy', async () => {
+    mocks.modelsOf.mockRejectedValue(new Error('network down'));
+    renderPage();
+
+    const errorBox = await screen.findByTestId('models-load-error');
+    expect(errorBox).toHaveTextContent('归属型号加载失败');
+    expect(screen.queryByText('当前没有设备归属此项目')).not.toBeInTheDocument();
+    expect(within(errorBox).getByRole('button', { name: '重试' })).toBeInTheDocument();
+  });
+
+  it('shows a load error when the risk trend query fails, not 0 values', async () => {
+    mocks.riskTrend.mockRejectedValue(new Error('network down'));
+    renderPage();
+
+    const errorBox = await screen.findByTestId('risk-trend-load-error');
+    expect(errorBox).toHaveTextContent('结果数据加载失败');
+    // 不渲染 0 值 KPI，也不渲染成功空态文案
+    expect(screen.queryByTestId('success-rate-kpi')).not.toBeInTheDocument();
+    expect(screen.queryByText('0%')).not.toBeInTheDocument();
+    expect(screen.queryByText(/暂无运行数据/)).not.toBeInTheDocument();
+    expect(within(errorBox).getByRole('button', { name: '重试' })).toBeInTheDocument();
+  });
+
+  // #3497 F3：0 Run 是「无数据」，成功率渲染成 0% 会与「全部失败」不可分 → 显示「—」
+  it('renders an em dash for success rate when total_runs is 0, not 0%', async () => {
+    mocks.riskTrend.mockResolvedValue({
+      project_key: 'proj-a',
+      days: 30,
+      buckets: [],
+      total_runs: 0,
+      success_runs: 0,
+      success_rate: 0,
+      s_runs: [],
+    });
+    renderPage();
+
+    expect(await screen.findByTestId('success-rate-kpi')).toHaveTextContent('—');
+    expect(screen.queryByText('0%')).not.toBeInTheDocument();
+  });
+
+  it('renders the success rate percentage when runs exist', async () => {
+    mocks.riskTrend.mockResolvedValue({
+      project_key: 'proj-a',
+      days: 30,
+      buckets: [],
+      total_runs: 3,
+      success_runs: 2,
+      success_rate: 2 / 3,
+      s_runs: [],
+    });
+    renderPage();
+
+    expect(await screen.findByTestId('success-rate-kpi')).toHaveTextContent('67%');
   });
 });
