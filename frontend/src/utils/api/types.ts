@@ -795,7 +795,7 @@ export interface NotificationChannel {
 export interface AlertRule {
   id: number;
   name: string;
-  event_type: 'RUN_COMPLETED' | 'RUN_FAILED' | 'RISK_HIGH' | 'DEVICE_OFFLINE';
+  event_type: 'RUN_COMPLETED' | 'RUN_FAILED' | 'RISK_HIGH' | 'DEVICE_OFFLINE' | 'CHAIN_INCOMPLETE';
   channel_id: number;
   channel_name?: string;
   filters: Record<string, unknown>;

@@ -145,6 +145,23 @@ describe('DeviceMultiSelect', () => {
     expect(await screen.findByText('暂无设备')).toBeInTheDocument();
   });
 
+  // #3496（B2-G8）：查询失败不得呈现为成功空结果——失败时给失败提示 + 重试，
+  // 不出现「暂无设备」/「无匹配设备」（那是成功空集的语义）。
+  it('查询失败显示加载失败与重试，不显示「暂无设备」', async () => {
+    mockFetchAllDevices.mockRejectedValue(new Error('network down'));
+    renderComponent();
+    await openDropdown();
+
+    expect(await screen.findByText('设备列表加载失败，暂无法判断可选设备。')).toBeInTheDocument();
+    expect(screen.queryByText('暂无设备')).not.toBeInTheDocument();
+    expect(screen.queryByText('无匹配设备')).not.toBeInTheDocument();
+
+    // 重试入口真的重新取数（恢复后渲染设备行）
+    mockFetchAllDevices.mockResolvedValue(DEVICES);
+    fireEvent.click(screen.getByRole('button', { name: '重试' }));
+    expect(await screen.findByText('SN-ALPHA')).toBeInTheDocument();
+  });
+
   it('有已选时触发器文案报台数', async () => {
     mockFetchAllDevices.mockResolvedValue(DEVICES);
     renderComponent({ selectedIds: [1, 2] });
