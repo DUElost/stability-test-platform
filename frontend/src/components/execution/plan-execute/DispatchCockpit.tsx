@@ -16,7 +16,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
-import { STAT, TEXT } from '@/design-system/tokens';
+import { ALERT_BOX, STAT, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { formatDurationSeconds } from '@/utils/format';
 import { DuplicateLaunchBanner } from './DuplicateLaunchBanner';
@@ -42,6 +42,9 @@ interface DispatchCockpitProps {
   recentRuns: PlanRun[];
   recentRunsLoading: boolean;
   duplicateMatch: DuplicateMatch | null;
+  /** 重复检测查询失败（#3495）：失败不得静默——提示不可用，但不阻断发起。 */
+  duplicateCheckError?: boolean;
+  onRetryDuplicateCheck?: () => void;
   /** Active wifi resource pools; empty = nothing configured yet. */
   wifiPools: ResourcePool[];
   /** null = 不连接（默认） */
@@ -86,6 +89,8 @@ export function DispatchCockpit({
   recentRuns,
   recentRunsLoading,
   duplicateMatch,
+  duplicateCheckError,
+  onRetryDuplicateCheck,
   wifiPools,
   wifiPoolId,
   onWifiPoolChange,
@@ -107,7 +112,25 @@ export function DispatchCockpit({
             .map((device) => device.serial)}
         />
 
-        {duplicateMatch ? (
+        {/* #3495 复核修订：TanStack v5 refetch 失败会保留上一次成功的 data（isError=true
+            且 duplicateMatch 仍为旧值）——失败态必须优先于旧命中，否则旧横幅冒充
+            「当前检查结果」，把这次失败读成确定事实。 */}
+        {duplicateCheckError ? (
+          <div
+            data-testid="duplicate-check-unavailable-hint"
+            className={cn(
+              ALERT_BOX.destructive,
+              'flex flex-wrap items-center justify-between gap-2 rounded-lg px-3.5 py-2.5 text-sm',
+            )}
+          >
+            <span>重复发起检查不可用</span>
+            {onRetryDuplicateCheck ? (
+              <button type="button" onClick={onRetryDuplicateCheck} className="underline underline-offset-2">
+                重试
+              </button>
+            ) : null}
+          </div>
+        ) : duplicateMatch ? (
           <DuplicateLaunchBanner match={duplicateMatch} onOpenRun={onOpenRun} />
         ) : null}
 

@@ -911,6 +911,8 @@ export default function HostsPage() {
         selectedIds={visibleSelectedHostIds}
         onSelectionChange={setSelectedHostIds}
         scriptPresenceSummary={scriptPresenceQ.data ?? null}
+        scriptPresenceSummaryError={scriptPresenceQ.isError}
+        onRetryScriptPresenceSummary={() => void scriptPresenceQ.refetch()}
         onLoadHostScriptPresence={loadHostScriptPresence}
         onRefreshHostScriptPresence={refreshHostScriptPresence}
       />

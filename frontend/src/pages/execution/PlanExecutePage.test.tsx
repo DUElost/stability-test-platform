@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
@@ -87,6 +87,7 @@ function renderPage({
   hosts = [],
   hostDetail = { id: 'h1', status: 'ONLINE', active_jobs: [] },
   activeJobs = undefined as any[] | undefined,
+  activeJobsFailure,
   getHost,
   wifiPools = [] as any[],
   wifiPoolsFailure,
@@ -99,6 +100,8 @@ function renderPage({
   hosts?: any[];
   hostDetail?: any;
   activeJobs?: any[];
+  /** #3495：占用查询失败注入（守卫失败路径）。 */
+  activeJobsFailure?: Error;
   getHost?: (id: string) => any | Promise<any>;
   wifiPools?: any[];
   wifiPoolsFailure?: Error;
@@ -126,7 +129,11 @@ function renderPage({
   const derivedActiveJobs =
     activeJobs ??
     (Array.isArray(hostDetail?.active_jobs) ? hostDetail.active_jobs : []);
-  (api.jobs.activeByDevice as any).mockResolvedValue(derivedActiveJobs);
+  if (activeJobsFailure) {
+    (api.jobs.activeByDevice as any).mockRejectedValue(activeJobsFailure);
+  } else {
+    (api.jobs.activeByDevice as any).mockResolvedValue(derivedActiveJobs);
+  }
   (api.planRuns.retryDispatch as any).mockResolvedValue({ plan_run_id: 88, status: 'RUNNING' });
   (api.resourcePools.available as any).mockResolvedValue(wifiPools);
   if (wifiPoolsFailure) {
@@ -474,6 +481,162 @@ describe('PlanExecutePage', () => {
     // 全部节点视图：不钻取节点也应看到占用跳转
     expect(await screen.findByText('执行中 · PlanRun #77')).toBeInTheDocument();
     expect(screen.getByLabelText(/DEV-FREE/)).toBeInTheDocument();
+  });
+
+  // ── #3495：派发前两个守卫查询失败不得被读成「确定事实」─────────────
+  // 占用查询失败 → 不得把「查不到」画成全部空闲；重复检测失败 → 不得静默
+  // （与「没有重复」不可分）。两处都只提示 + 重试，不阻断派发。
+
+  it('占用查询失败时选机界面出现「占用未知」提示，且不阻断派发（#3495）', async () => {
+    renderPage({
+      devices: [{ id: 1, serial: 'DEV-1', host_id: 'h1', status: 'ONLINE' }],
+      activeJobsFailure: new Error('jobs unavailable'),
+    });
+
+    await screen.findByText(/启用步骤/);
+    fireEvent.click(screen.getByRole('button', { name: /进入选机/ }));
+
+    // 矩阵视图（默认）：提示可见，替代「全部设备空闲」的假象
+    expect(await screen.findByTestId('occupancy-unknown-hint')).toHaveTextContent(
+      '设备占用信息加载失败，无法确认是否空闲',
+    );
+
+    // 表格视图同样不得沉默
+    fireEvent.click(await screen.findByRole('button', { name: '表格' }));
+    expect(await screen.findByTestId('occupancy-unknown-hint')).toBeInTheDocument();
+
+    // 只提示、不阻断：仍可选中 → 预览 → 确认发起
+    fireEvent.click(await screen.findByRole('checkbox', { name: /DEV-1/ }));
+    fireEvent.click(screen.getByRole('button', { name: /预览发起/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /生成执行预览/ }));
+    expect(await screen.findByText(/预览已生成并冻结 1 台设备/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /确认发起/ })).toBeEnabled();
+  });
+
+  it('重复检测查询失败时驾驶舱出现「检查不可用」提示，且不阻断派发（#3495）', async () => {
+    const startedAt = new Date().toISOString();
+    (api.planRuns.list as any).mockResolvedValue([
+      {
+        id: 9100,
+        plan_id: 7,
+        status: 'RUNNING',
+        run_type: 'MANUAL',
+        started_at: startedAt,
+        result_summary: { total: 4 },
+      },
+    ]);
+    // 列表缺 dispatch_device_ids → 需要 get 明细；明细失败即重复检测失败
+    (api.planRuns.get as any).mockRejectedValue(new Error('detail unavailable'));
+    renderPage({
+      devices: [
+        { id: 1, serial: 'D1', host_id: 'h1', status: 'ONLINE' },
+        { id: 2, serial: 'D2', host_id: 'h1', status: 'ONLINE' },
+        { id: 3, serial: 'D3', host_id: 'h1', status: 'ONLINE' },
+        { id: 4, serial: 'D4', host_id: 'h1', status: 'ONLINE' },
+      ],
+    });
+
+    await goToDeviceStep();
+    for (const serial of ['D1', 'D2', 'D3', 'D4']) {
+      fireEvent.click(await screen.findByRole('checkbox', { name: new RegExp(serial) }));
+    }
+    fireEvent.click(screen.getByRole('button', { name: /预览发起/ }));
+
+    const hint = await screen.findByTestId('duplicate-check-unavailable-hint');
+    expect(hint).toHaveTextContent('重复发起检查不可用');
+    expect(within(hint).getByRole('button', { name: '重试' })).toBeInTheDocument();
+    // 失败态与「没有重复」可区分：空白成功态（无横幅）不得冒充
+    expect(screen.queryByTestId('duplicate-launch-banner')).not.toBeInTheDocument();
+
+    // 只提示、不阻断
+    fireEvent.click(screen.getByRole('button', { name: /生成执行预览/ }));
+    expect(await screen.findByText(/预览已生成并冻结 4 台设备/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /确认发起/ })).toBeEnabled();
+  });
+
+  it('refetch 失败保留旧重复命中时，失败提示优先于旧横幅（#3495 复核修订）', async () => {
+    const startedAt = new Date().toISOString();
+    (api.planRuns.list as any).mockResolvedValue([
+      {
+        id: 9300,
+        plan_id: 7,
+        status: 'RUNNING',
+        run_type: 'MANUAL',
+        started_at: startedAt,
+        result_summary: { total: 4 }, // 缺 dispatch_device_ids → 每次求值都要 get 明细
+      },
+    ]);
+    (api.planRuns.get as any).mockResolvedValue({
+      id: 9300,
+      plan_id: 7,
+      status: 'RUNNING',
+      run_type: 'MANUAL',
+      started_at: startedAt,
+      run_context: { dispatch_device_ids: [1, 2, 3, 9] },
+    });
+    const { queryClient } = renderPage({
+      devices: [
+        { id: 1, serial: 'D1', host_id: 'h1', status: 'ONLINE' },
+        { id: 2, serial: 'D2', host_id: 'h1', status: 'ONLINE' },
+        { id: 3, serial: 'D3', host_id: 'h1', status: 'ONLINE' },
+        { id: 4, serial: 'D4', host_id: 'h1', status: 'ONLINE' },
+      ],
+    });
+
+    await goToDeviceStep();
+    for (const serial of ['D1', 'D2', 'D3', 'D4']) {
+      fireEvent.click(await screen.findByRole('checkbox', { name: new RegExp(serial) }));
+    }
+    fireEvent.click(screen.getByRole('button', { name: /预览发起/ }));
+
+    // 首次求值成功命中：旧横幅可见（这正是 refetch 后必须让位的 last successful data）
+    expect(await screen.findByTestId('duplicate-launch-banner')).toHaveTextContent('#9300');
+
+    // 同一 query key 的 refetch 失败——TanStack v5 保留上次成功 data 且 isError=true
+    (api.planRuns.get as any).mockRejectedValue(new Error('refetch failed'));
+    await act(async () => {
+      await queryClient.refetchQueries({
+        predicate: (query) => query.queryKey[0] === 'plan-execute-duplicate',
+      });
+    });
+
+    // 失败态优先：出现「检查不可用」+ 重试，旧命中不得冒充当前检查结果
+    const hint = await screen.findByTestId('duplicate-check-unavailable-hint');
+    expect(hint).toHaveTextContent('重复发起检查不可用');
+    expect(within(hint).getByRole('button', { name: '重试' })).toBeInTheDocument();
+    expect(screen.queryByTestId('duplicate-launch-banner')).not.toBeInTheDocument();
+  });
+
+  it('两个守卫查询成功且为空时不出现失败提示（#3495）', async () => {
+    const startedAt = new Date().toISOString();
+    (api.planRuns.list as any).mockResolvedValue([
+      {
+        id: 9200,
+        plan_id: 7,
+        status: 'SUCCESS',
+        run_type: 'MANUAL',
+        started_at: startedAt,
+        run_context: { dispatch_device_ids: [9, 10, 11, 12] },
+      },
+    ]);
+    renderPage({
+      devices: [
+        { id: 1, serial: 'D1', host_id: 'h1', status: 'ONLINE' },
+        { id: 2, serial: 'D2', host_id: 'h1', status: 'ONLINE' },
+      ],
+    });
+
+    await goToDeviceStep();
+    // 占用查询成功且为空（无占用）→ 不出现占用未知提示
+    expect(screen.queryByTestId('occupancy-unknown-hint')).not.toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole('checkbox', { name: /D1/ }));
+    fireEvent.click(screen.getByRole('button', { name: /预览发起/ }));
+    await screen.findByTestId('dispatch-cockpit');
+
+    // 重复检测成功且无匹配 → 既无「不可用」提示，也无重复横幅
+    expect(screen.queryByTestId('duplicate-check-unavailable-hint')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('duplicate-launch-banner')).not.toBeInTheDocument();
   });
 
   it('warns when selected devices exceed host effective_slots', async () => {

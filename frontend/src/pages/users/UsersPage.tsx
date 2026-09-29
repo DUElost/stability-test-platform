@@ -8,6 +8,7 @@ import { useAuthSession } from '@/hooks/useAuthSession';
 import { UserTable } from './components/UserTable';
 import { UserModal } from './components/UserModal';
 import { api, toApiError, type User } from '@/utils/api';
+import { fetchAllPages } from '@/utils/api/paginate';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { EmptyState } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
@@ -26,9 +27,12 @@ export default function UsersPage() {
   // 失效 plans/projects（useCrossClientSync）——本页既无轮询、也不在该域，从后台切回
   // 后不会回追（另一管理员刚建/停用用户时看到陈旧列表）。这里显式 opt-in：focus 与
   // 可见性语义一致，且只重取**活跃**查询（本页挂载中），不会放大限流桶。
+  // #3195（批次 B2 G3，规划单 #3497 §3）：固定单页（0, 200）无截断提示，越过上限即尾部
+  // 静默消失。改为按服务端 `total` 翻页取全量（后端稳定全序：`id ASC`，页大小 = `le` 200）。
   const { data: users, isLoading, error, refetch } = useQuery({
     queryKey: ['users'],
-    queryFn: () => api.users.list(0, 200).then(res => res.items),
+    queryFn: () =>
+      fetchAllPages((skip, limit) => api.users.list(skip, limit), 200).then((res) => res.items),
     refetchOnWindowFocus: true,
   });
 

@@ -17,8 +17,11 @@ interface RetireDevicesDialogProps {
   isOpen: boolean;
   mode: DeviceRetireMode;
   selectedCount: number;
-  /** 选中里已退役 / 未退役的台数——提交前让人看到「其中 N 台是幂等跳过」。 */
-  alreadyRetiredCount?: number;
+  /**
+   * 本次提交会被后端幂等跳过的台数——由父层按 mode 计算：
+   * retire = 选中里已退役的台数；unretire = 选中里未退役的台数。
+   */
+  idempotentSkipCount?: number;
   isSubmitting?: boolean;
   onClose: () => void;
   onSubmit: (mode: DeviceRetireMode, reason: string) => void;
@@ -35,7 +38,7 @@ export function RetireDevicesDialog({
   isOpen,
   mode,
   selectedCount,
-  alreadyRetiredCount = 0,
+  idempotentSkipCount = 0,
   isSubmitting = false,
   onClose,
   onSubmit,
@@ -80,9 +83,9 @@ export function RetireDevicesDialog({
             {isRetire
               ? `将对选中的 ${selectedCount} 台设备执行退役。需无活跃 Job、无 ACTIVE 租约，否则该台返回 409 并跳过（不顺带中止在跑测试）。`
               : `将对选中的 ${selectedCount} 台设备解除退役，全部派发/容量口径随之恢复。`}
-            {alreadyRetiredCount > 0 && (
+            {idempotentSkipCount > 0 && (
               <>
-                {' '}其中 <span className="font-mono">{alreadyRetiredCount}</span> 台
+                {' '}其中 <span className="font-mono">{idempotentSkipCount}</span> 台
                 {isRetire ? '已是退役态（幂等跳过）' : '并未退役（幂等跳过）'}。
               </>
             )}

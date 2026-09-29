@@ -6,7 +6,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
-import { TEXT } from '@/design-system/tokens';
+import { ALERT_BANNER, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import type { HostActiveJob } from '@/utils/api';
 import type { ReadinessDevice } from '@/utils/planExecuteReadiness';
@@ -49,6 +49,9 @@ interface DeviceMatrixProps {
   hostMap: Map<string, { ip?: string | null; name?: string | null }>;
   readinessByDeviceId: Map<number, { ready: boolean; reasons: string[] }>;
   occupancyByDeviceId: Map<number, HostActiveJob>;
+  /** 占用查询失败（#3495）：占用未知时明示，不能把「查不到」画成「空闲」。 */
+  occupancyError?: boolean;
+  onRetryOccupancy?: () => void;
   highlightId?: number | null;
   onToggle: (device: ReadinessDevice, event: { shiftKey: boolean }) => void;
   lastClickedDeviceIdRef: React.MutableRefObject<number | null>;
@@ -95,6 +98,8 @@ export function DeviceMatrix({
   hostMap,
   readinessByDeviceId,
   occupancyByDeviceId,
+  occupancyError,
+  onRetryOccupancy,
   highlightId,
   onToggle,
   lastClickedDeviceIdRef,
@@ -154,6 +159,22 @@ export function DeviceMatrix({
         className={cn('flex h-full min-h-[280px] flex-col', className)}
         data-testid="device-matrix"
       >
+        {occupancyError ? (
+          <div
+            data-testid="occupancy-unknown-hint"
+            className={cn(
+              ALERT_BANNER.destructive,
+              'flex shrink-0 flex-wrap items-center justify-between gap-2 px-3 py-2 text-xs',
+            )}
+          >
+            <span>设备占用信息加载失败，无法确认是否空闲。</span>
+            {onRetryOccupancy ? (
+              <button type="button" onClick={onRetryOccupancy} className="underline underline-offset-2">
+                重试
+              </button>
+            ) : null}
+          </div>
+        ) : null}
         <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto p-3">
           <div
             className="relative w-full"

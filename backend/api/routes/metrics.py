@@ -73,7 +73,11 @@ _FLEET_GAUGES = (
         # #2962 A：陈旧设备同样按新鲜度剔除——`status="offline"` 桶因此只剩
         # 「近期掉线」，沉积库存单独落 `stability_device_stale`。
         # 容量口径 = `retired_at IS NULL` ∧ 非陈旧（服务层单一真源）。
-        Device.retired_at.is_(None) & not_stale_condition(),
+        # #3482：陈旧判据含 7d cutoff，是现算事实——必须保持 callable 惰性、
+        # 每拍在 `_refresh_fleet_gauges` 求值；在模块常量里直接求值会把 cutoff
+        # 冻结在 import 时刻，运行中新转陈旧的设备继续计入 offline 桶、与
+        # stale_count 双计（随 uptime 漂移，重启才自愈）。
+        lambda: Device.retired_at.is_(None) & not_stale_condition(),
     ),
 )
 
@@ -83,6 +87,9 @@ def _refresh_fleet_gauges(db: Session) -> None:
         return
     try:
         for model, gauge, status_enum, extra_filter in _FLEET_GAUGES:
+            # #3482：callable 判据每拍现算（与下方 stale_condition() 同形态）。
+            if callable(extra_filter):
+                extra_filter = extra_filter()
             query = db.query(model.status, func.count()).group_by(model.status)
             if extra_filter is not None:
                 query = query.filter(extra_filter)

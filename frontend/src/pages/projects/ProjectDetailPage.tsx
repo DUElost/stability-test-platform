@@ -88,9 +88,10 @@ export default function ProjectDetailPage() {
     queryFn: () => api.devices.list(0, CARD_PREVIEW_LIMIT, undefined, undefined, projectKey),
   });
 
+  // #3194：保留整个分页响应——截断判据要用过滤后 total（items 会把 legacy 计划算丢）
   const plansQ = useQuery({
     queryKey: projectKeys.plansOf(projectKey),
-    queryFn: () => api.plans.list(0, CARD_PREVIEW_LIMIT, projectKey).then((r) => r.items),
+    queryFn: () => api.plans.list(0, CARD_PREVIEW_LIMIT, projectKey),
   });
 
   // ADR-0029 P2：项目级风险趋势（按天 S/A/B，run 级 DLE 权威聚合）
@@ -260,12 +261,19 @@ export default function ProjectDetailPage() {
   // isLoading / isError 已 return；此处必然有值（TS 无法收窄 useQuery.data）
   const project = detailQ.data!;
   const devices = devicesQ.data?.items ?? [];
-  const plans = plansQ.data ?? [];
-  // #3134：卡title 用的是 project 侧的真实计数，列表却最多渲染 CARD_PREVIEW_LIMIT 条
-  // ——超过时必须在卡内明说，否则同屏两个数字（513 / 20 行）互相矛盾且无从解释。
-  // 判据就用 title 那个计数本身：同一张卡内数字自洽，不会出现"标题 513 / 提示 511"。
-  const devicesTruncated = (project.device_count ?? 0) > CARD_PREVIEW_LIMIT;
-  const plansTruncated = (project.plan_count ?? 0) > CARD_PREVIEW_LIMIT;
+  const plans = plansQ.data?.items ?? [];
+  // #3194：截断判据与卡内列表必须是同一口径——列表端点是过滤后集合（设备默认隐藏
+  // 退役、计划排除 legacy AEE），判据就用其响应里的过滤后 total。原始计数
+  // （project.*_count）含列表点不进去的部分，拿它判截断会「未截断也报截断」。
+  const devicesTotal = devicesQ.data?.total ?? 0;
+  const plansTotal = plansQ.data?.total ?? 0;
+  const devicesTruncated = devicesTotal > CARD_PREVIEW_LIMIT;
+  const plansTruncated = plansTotal > CARD_PREVIEW_LIMIT;
+  // 卡标题保留原始计数时必须注明口径：过滤后 total 小于原始计数，差的部分
+  // （退役设备 / legacy 计划）不在此列表显示，否则同屏两个数字再次互相矛盾。
+  const devicesHiddenByFilter =
+    devicesQ.data != null && devicesTotal < (project.device_count ?? 0);
+  const plansHiddenByFilter = plansQ.data != null && plansTotal < (project.plan_count ?? 0);
 
   return (
     <PageContainer width="content" className={LAYOUT.pageGap}>
@@ -404,6 +412,21 @@ export default function ProjectDetailPage() {
           )}
           {modelsQ.isLoading ? (
             <Skeleton className="mt-2 h-5 w-40" />
+          ) : modelsQ.isError ? (
+            // 查询失败不得读成「当前没有设备归属此项目」——那是成功空结果的语义
+            <div
+              className={cn('mt-2 flex items-center justify-between gap-2 text-xs', TEXT.destructive)}
+              data-testid="models-load-error"
+            >
+              <span>归属型号加载失败，无法确认是否有设备归属此项目。</span>
+              <button
+                type="button"
+                onClick={() => void modelsQ.refetch()}
+                className="underline underline-offset-2"
+              >
+                重试
+              </button>
+            </div>
           ) : modelsQ.data && modelsQ.data.length > 0 ? (
             <p className={cn('mt-2 text-xs', TEXT.subtitle)} data-testid="hanging-models">
               当前归属此项目的设备型号：{coverageSummary(modelsQ.data)}
@@ -462,11 +485,34 @@ export default function ProjectDetailPage() {
             <CardTitle className="flex items-center gap-2 text-sm font-medium">
               <Smartphone size={16} className="text-muted-foreground" />
               设备（{project.device_count}）
+              {devicesHiddenByFilter && (
+                <span
+                  className="text-xs font-normal text-muted-foreground"
+                  data-testid="devices-count-scope"
+                >
+                  含退役未显示
+                </span>
+              )}
             </CardTitle>
           </CardHeader>
           <CardContent className="py-3">
             {devicesQ.isLoading ? (
               <Skeleton className="h-24 w-full" />
+            ) : devicesQ.isError ? (
+              // 查询失败不得读成「该项目暂无设备」——那是成功空结果的语义
+              <div
+                className={cn('flex items-center justify-between gap-2 text-xs', TEXT.destructive)}
+                data-testid="devices-load-error"
+              >
+                <span>设备列表加载失败，无法确认项目设备。</span>
+                <button
+                  type="button"
+                  onClick={() => void devicesQ.refetch()}
+                  className="underline underline-offset-2"
+                >
+                  重试
+                </button>
+              </div>
             ) : devices.length === 0 ? (
               <InlineEmpty>该项目暂无设备</InlineEmpty>
             ) : (
@@ -484,9 +530,9 @@ export default function ProjectDetailPage() {
                 ))}
               </ul>
             )}
-            {!devicesQ.isLoading && devicesTruncated && (
+            {!devicesQ.isLoading && !devicesQ.isError && devicesTruncated && (
               <TruncationNote
-                count={project.device_count}
+                count={devicesTotal}
                 unit="台"
                 to="/devices"
                 label="在设备页筛选查看"
@@ -501,11 +547,34 @@ export default function ProjectDetailPage() {
             <CardTitle className="flex items-center gap-2 text-sm font-medium">
               <FileBox size={16} className="text-muted-foreground" />
               计划（{project.plan_count}）
+              {plansHiddenByFilter && (
+                <span
+                  className="text-xs font-normal text-muted-foreground"
+                  data-testid="plans-count-scope"
+                >
+                  含 legacy 未显示
+                </span>
+              )}
             </CardTitle>
           </CardHeader>
           <CardContent className="py-3">
             {plansQ.isLoading ? (
               <Skeleton className="h-24 w-full" />
+            ) : plansQ.isError ? (
+              // 查询失败不得读成「该项目暂无计划」——那是成功空结果的语义
+              <div
+                className={cn('flex items-center justify-between gap-2 text-xs', TEXT.destructive)}
+                data-testid="plans-load-error"
+              >
+                <span>计划列表加载失败，无法确认项目计划。</span>
+                <button
+                  type="button"
+                  onClick={() => void plansQ.refetch()}
+                  className="underline underline-offset-2"
+                >
+                  重试
+                </button>
+              </div>
             ) : plans.length === 0 ? (
               <InlineEmpty>该项目暂无计划</InlineEmpty>
             ) : (
@@ -520,9 +589,9 @@ export default function ProjectDetailPage() {
                 ))}
               </ul>
             )}
-            {!plansQ.isLoading && plansTruncated && (
+            {!plansQ.isLoading && !plansQ.isError && plansTruncated && (
               <TruncationNote
-                count={project.plan_count}
+                count={plansTotal}
                 unit="个"
                 to="/orchestration/plans"
                 label="在 Plan 管理页筛选查看"
@@ -542,6 +611,21 @@ export default function ProjectDetailPage() {
           <CardContent>
             {riskTrendQ.isLoading ? (
               <Skeleton className="h-24 w-full" />
+            ) : riskTrendQ.isError ? (
+              // 查询失败不得画成 0 Run / 0%——那是「全部失败 / 无数据」的语义
+              <div
+                className={cn('flex items-center justify-between gap-2 text-xs', TEXT.destructive)}
+                data-testid="risk-trend-load-error"
+              >
+                <span>结果数据加载失败，暂无法确认近 30 天运行情况。</span>
+                <button
+                  type="button"
+                  onClick={() => void riskTrendQ.refetch()}
+                  className="underline underline-offset-2"
+                >
+                  重试
+                </button>
+              </div>
             ) : (
               <div className="space-y-4">
                 {/* KPI 行：run 数 / 成功率 / S 级事件数 */}
@@ -553,8 +637,14 @@ export default function ProjectDetailPage() {
                     <p className={cn('mt-1 text-[11px]', TEXT.subtitle)}>Run</p>
                   </div>
                   <div className="px-4 text-center">
-                    <p className="text-lg font-bold leading-none text-foreground">
-                      {((riskTrendQ.data?.success_rate ?? 0) * 100).toFixed(0)}%
+                    {/* 无 Run 时成功率为 0/0——渲染成 0% 会与「全部失败」不可分，显示「—」 */}
+                    <p
+                      className="text-lg font-bold leading-none text-foreground"
+                      data-testid="success-rate-kpi"
+                    >
+                      {riskTrendQ.data?.total_runs === 0
+                        ? '—'
+                        : `${((riskTrendQ.data?.success_rate ?? 0) * 100).toFixed(0)}%`}
                     </p>
                     <p className={cn('mt-1 text-[11px]', TEXT.subtitle)}>成功率</p>
                   </div>

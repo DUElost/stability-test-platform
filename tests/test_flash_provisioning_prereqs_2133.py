@@ -362,3 +362,32 @@ def test_ensure_flash_prereqs_playbook_covers_adb_usb_rule():
         t for t in tasks if t.get("name", "").startswith("Restart agent after group membership change")
     )
     assert "agent_flash_plugdev.changed" in str(restart_task.get("when")), restart_task
+
+
+def test_both_playbooks_trigger_udev_after_rule_change():
+    """#3493 勘误（.58 实测 2026-09-29，两轮）：`udevadm control --reload` 只重载
+    规则库，**已插设备的节点不会重算**；且 trigger 若按「本轮规则 changed」门控，
+    会在「规则文件已在（首轮落盘）而设备仍是旧节点」的复查场景被 skip——那恰是
+    本通道最要修的状态。因此：reload 仍按变更门控；trigger **不按 changed 门控**
+    （ensure 链无条件跑；update 链只受 opt-in 开关门控）。"""
+    for playbook in (ENSURE_PLAYBOOK, UPDATE_PLAYBOOK):
+        tasks = yaml.safe_load(playbook.read_text(encoding="utf-8"))[0]["tasks"]
+        names = [t.get("name", "") for t in tasks]
+        reload_idx = next(i for i, n in enumerate(names) if n == "Reload udev rules after rule change (#2133)")
+        trigger_idx = next(
+            i for i, n in enumerate(names)
+            if n.startswith("Trigger udev to re-apply rules")
+        )
+        assert trigger_idx == reload_idx + 1, (
+            f"{playbook.name}: trigger 必须紧跟 reload（位置 {trigger_idx} vs reload {reload_idx}）"
+        )
+        trigger = tasks[trigger_idx]
+        assert trigger["ansible.builtin.command"] == "udevadm trigger", trigger
+        when = str(trigger.get("when", ""))
+        assert "changed" not in when, (
+            f"{playbook.name}: trigger 不得按本轮 changed 门控（会 skip 掉复查场景）：{when}"
+        )
+        if playbook == UPDATE_PLAYBOOK:
+            assert "agent_ensure_flash_prereqs" in when, (
+                "update 链的 trigger 任务必须受 opt-in 开关门控"
+            )

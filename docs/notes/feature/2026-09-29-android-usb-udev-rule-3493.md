@@ -80,6 +80,17 @@ adb 本身报出（不新增脚本版本）。
 
 ## Revisit
 
+- **勘误（2026-09-29 当日两轮实测，.58 首台走正规通道发现）**：① playbook 的
+  `udevadm control --reload` 只重载规则库，**已插设备的节点不会重算**——.58 上
+  规则落盘后 `/dev/bus/usb/*` 仍 `root:root 0664`、adb 仍 no permissions。ttyACM
+  时代靠设备重枚举/装机时序掩盖了这一点；本规则的目的恰是修「已插着」的设备。
+  ② trigger 若按「本轮规则 changed」门控，会在「规则文件已在（首轮落盘、copy
+  全 no-op）而设备仍是旧节点」的复查场景被 skip——那恰是本通道最要修的状态。
+  故 trigger **不按 changed 门控**（ensure 链无条件跑；update 链只受 opt-in
+  开关门控），uevent 重放幂等、不复位设备、不断开连接。android 用户的免密
+  sudo 只有 wrapper + 固定 systemctl（ADR-0037），该步骤必须由 playbook
+  （become）承担，无法在主机上手工补。parity 测试钉「trigger 紧跟 reload、
+  不含 changed 条件」。
 - **存量机收敛是部署侧动作（pending）**：PR 合入后对 47 台走刷机前置通道
   （`POST /hosts/{id}/flash-prereqs/ensure` 或 `ensure_flash_prereqs.yml`），
   验收 = 节点 `root:plugdev 0660` + `adb devices` 出 `device`；.87 收口时用

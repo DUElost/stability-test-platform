@@ -129,6 +129,7 @@ vi.mock('../../components/network/ExpandableHostTable', () => ({
     onWatcherAdminStateChange,
     onRetire,
     onUnretire,
+    scriptPresenceSummaryError,
   }: {
     hosts: any[];
     selectedIds?: Set<string | number>;
@@ -136,8 +137,12 @@ vi.mock('../../components/network/ExpandableHostTable', () => ({
     onWatcherAdminStateChange?: (hostId: string | number, nextActive: boolean) => void;
     onRetire?: (host: any) => void;
     onUnretire?: (host: any) => void;
+    scriptPresenceSummaryError?: boolean;
   }) => (
     <div data-testid="host-table">
+      <span data-testid="host-table-summary-error">
+        {scriptPresenceSummaryError ? 'error' : 'ok'}
+      </span>
       {onSelectionChange && (
         <button
           type="button"
@@ -335,6 +340,24 @@ describe('HostsPage', () => {
     await screen.findByText('Worker-01');
     expect(screen.getByText('Worker-02')).toBeInTheDocument();
     expect(screen.getByTestId('host-table')).toBeInTheDocument();
+  });
+
+  it('passes summary query isError down to the table（#3497 B2-G1 接线）', async () => {
+    const { api } = await import('../../utils/api');
+    mockHostsList.mockResolvedValue({
+      items: [{ id: 1, name: 'Worker-01', ip: '192.0.2.10', status: 'ONLINE', extra: {}, mount_status: {} }],
+      total: 1,
+    });
+    (api.scriptPresence.summary as any).mockRejectedValueOnce(new Error('summary down'));
+
+    const HostsPage = (await import('./HostsPage')).default;
+    render(<HostsPage />, { wrapper: createWrapper() });
+
+    await screen.findByText('Worker-01');
+    // 失败 → isError 传入表格（表格据此渲染失败提示，不再折叠成「未提供汇总」）
+    await waitFor(() => {
+      expect(screen.getByTestId('host-table-summary-error')).toHaveTextContent('error');
+    });
   });
 
   it('does not query plan runs to compute host active task counts', async () => {

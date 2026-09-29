@@ -143,6 +143,19 @@
         or (agent_flash_adb_rule_0660.changed | default(false))
         or (agent_flash_adb_rule_0666.changed | default(false))
 
+    # #3493 勘误：reload 只重载规则库，**已插设备的节点不会重算**——.58 实测
+    # （2026-09-29）规则落盘后 /dev/bus/usb/* 仍 root:root 0664、adb 仍 no
+    # permissions。ttyACM 时代靠设备重枚举掩盖了这一点；本规则的目的恰是修
+    # 「已插着」的设备。trigger 因此**无条件执行**（不门控在本轮 changed 上）：
+    # 二轮实测发现规则文件已在（首轮落盘、copy 全 no-op）而设备仍是旧节点时，
+    # 按 changed 门控会把 trigger skip 掉——那正是本 playbook 最要修的状态。
+    # uevent 重放只重应用规则（幂等），不复位设备、不断开连接。
+    - name: Trigger udev to re-apply rules on plugged devices (#3493)
+      become: true
+      ansible.builtin.command: udevadm trigger
+      changed_when: false
+      failed_when: false
+
     - name: Ensure flash prerequisite packages (#2133)
       become: true
       ansible.builtin.shell: |
