@@ -249,7 +249,11 @@ export default function PlanExecutePage() {
   );
 
   // B1b：一次拉取全平台占用（独立 /jobs 路由，避免 hosts/{id} N+1）
-  const { data: activeJobsByDevice } = useQuery({
+  const {
+    data: activeJobsByDevice,
+    isError: activeJobsError,
+    refetch: refetchActiveJobs,
+  } = useQuery({
     queryKey: jobKeys.activeByDevice(),
     queryFn: () => api.jobs.activeByDevice(),
     refetchInterval: 20_000,
@@ -328,7 +332,12 @@ export default function PlanExecutePage() {
     previewGenerationRef.current += 1;
   }, [previewResetKey]);
 
-  const { data: duplicateMatch = null } = useQuery({
+  // #3495：失败不得读成「没有重复」——isError 单独交给驾驶舱提示（不阻断发起）。
+  const {
+    data: duplicateMatch = null,
+    isError: duplicateCheckError,
+    refetch: refetchDuplicateCheck,
+  } = useQuery({
     queryKey: [
       'plan-execute-duplicate',
       selectedPlanId,
@@ -1310,6 +1319,8 @@ export default function PlanExecutePage() {
                           hostMap={hostMap}
                           readinessByDeviceId={poolReadinessByDeviceId}
                           occupancyByDeviceId={occupancyByDeviceId}
+                          occupancyError={activeJobsError}
+                          onRetryOccupancy={() => void refetchActiveJobs()}
                           highlightId={highlightId}
                           onToggle={handleMatrixToggle}
                           lastClickedDeviceIdRef={lastClickedDeviceIdRef}
@@ -1322,6 +1333,8 @@ export default function PlanExecutePage() {
                           readinessByDeviceId={deviceReadinessByDeviceId}
                           pageReadinessByDeviceId={pageReadinessByDeviceId}
                           occupancyByDeviceId={occupancyByDeviceId}
+                          occupancyError={activeJobsError}
+                          onRetryOccupancy={() => void refetchActiveJobs()}
                           highlightId={highlightId}
                           tableSort={tableSort}
                           onTableSortChange={setTableSort}
@@ -1417,6 +1430,8 @@ export default function PlanExecutePage() {
             recentRuns={recentPlanRuns}
             recentRunsLoading={recentPlanRunsLoading}
             duplicateMatch={duplicateMatch}
+            duplicateCheckError={duplicateCheckError}
+            onRetryDuplicateCheck={() => void refetchDuplicateCheck()}
             wifiPools={wifiPools}
             wifiPoolId={wifiPoolId}
             onWifiPoolChange={setWifiPoolId}

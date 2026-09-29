@@ -15,7 +15,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
-import { TEXT } from '@/design-system/tokens';
+import { ALERT_BANNER, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import type { HostActiveJob } from '@/utils/api';
 import type { ReadinessDevice } from '@/utils/planExecuteReadiness';
@@ -33,6 +33,9 @@ interface DeviceTablePanelProps {
   readinessByDeviceId: Map<number, { ready: boolean; reasons: string[] }>;
   pageReadinessByDeviceId: Map<number, { ready: boolean; reasons: string[] }>;
   occupancyByDeviceId: Map<number, HostActiveJob>;
+  /** 占用查询失败（#3495）：占用未知时明示，不能把「查不到」画成「空闲」。 */
+  occupancyError?: boolean;
+  onRetryOccupancy?: () => void;
   highlightId?: number | null;
   tableSort: DeviceTableSort | null;
   onTableSortChange: (next: DeviceTableSort | null) => void;
@@ -57,6 +60,8 @@ export function DeviceTablePanel({
   readinessByDeviceId,
   pageReadinessByDeviceId,
   occupancyByDeviceId,
+  occupancyError,
+  onRetryOccupancy,
   highlightId,
   tableSort,
   onTableSortChange,
@@ -75,6 +80,22 @@ export function DeviceTablePanel({
 }: DeviceTablePanelProps) {
   return (
     <div className="flex h-full min-h-0 flex-col p-3" data-testid="device-table-panel">
+      {occupancyError ? (
+        <div
+          data-testid="occupancy-unknown-hint"
+          className={cn(
+            ALERT_BANNER.destructive,
+            'flex shrink-0 flex-wrap items-center justify-between gap-2 px-3 py-2 text-xs',
+          )}
+        >
+          <span>设备占用信息加载失败，无法确认是否空闲。</span>
+          {onRetryOccupancy ? (
+            <button type="button" onClick={onRetryOccupancy} className="underline underline-offset-2">
+              重试
+            </button>
+          ) : null}
+        </div>
+      ) : null}
       <div className="min-h-0 flex-1 overflow-auto">
         <Table className="w-full min-w-[800px] text-sm">
           {/* bg-muted/95 是 sticky 表头的必要条件：行要从表头下面滚过去，
