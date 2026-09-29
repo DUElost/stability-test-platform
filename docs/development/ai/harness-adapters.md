@@ -79,7 +79,7 @@ Execution 串行修改。并行执行语义的权威源是
 ## Registry CLI 手动入口（v1.15：非 Adapter 义务，非路由）
 
 会话由开发者选择启动（选择权原则）。Registry CLI：`tools/dev/ai_work.py`（规范见
-[`execution-contract.md`](execution-contract.md) §2–§5）。**Role 非 Adapter 义务（ADR-0034 v1.7）**：`role` 仅为 Registry 元数据与未来扩展点（默认 `implementation`，空串即缺省；特殊 Role deferred）。**v1.15（Owner 2026-09-29，#3516）**：原「启动自动 `whoami` / wrapper 定时 heartbeat」的 P2 接线承诺退役——仅部分 Harness 有脚本通道，部分接线得到混合信号，而 liveness 不参与 risk 判定；以下动作供**协调域内实施者手动**使用，Adapter 无启动注入、Role 等价或心跳义务。
+[`execution-contract.md`](execution-contract.md) §2–§5）。**Role 非 Adapter 义务（ADR-0034 v1.7）**：`role` 仅为 Registry 元数据与未来扩展点（默认 `implementation`，空串即缺省；特殊 Role deferred）。**v1.15（Owner 2026-09-29，#3516）**：原「启动自动 `whoami` / wrapper 定时 heartbeat」的 P2 接线承诺退役——不存在所有目标 Harness 都具备的统一生命周期 hook / wrapper 接线点，部分接线只得到混合信号，而 liveness 不参与 risk 判定；以下动作供**协调域内实施者手动**使用，Adapter 无启动注入、Role 等价或心跳义务。
 
 | 时机 | 动作 | 说明 |
 |---|---|---|

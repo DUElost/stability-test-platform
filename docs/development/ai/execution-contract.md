@@ -1,6 +1,6 @@
 # AI Execution Contract（执行契约）
 
-- **状态**：Living v1.15（v1.15 变更：§4 收窄——P2「Harness wrapper 定时 heartbeat → `last_seen` 升格为可靠 liveness」承诺退役（Owner 2026-09-29 裁决，#3516）：`last_seen` 只表示最近一次 Registry 写动作 / 手动 heartbeat 的时间，`STALE` 仅提示「久未写」，不是在线判断；`whoami` / `heartbeat` CLI 保留为手动 / 兼容入口，不再是 Adapter 交付项；v1.14 起的变更明细迁入附录 A.4。本文是 Execution Contract 的**唯一权威源**；方向裁决与理由见 [`ADR-0034`](../../adr/ADR-0034-multi-harness-execution-contract.md)（Accepted），两者冲突时以本文为准并回溯修订 ADR；v1.1–v1.14 变更明细见[附录 A.4](execution-contract-annex.md#a4-变更历史v11v114自正文头部迁出)）
+- **状态**：Living v1.15（v1.15 变更：§4 收窄——P2「Harness wrapper 定时 heartbeat → `last_seen` 升格为可靠 liveness」承诺退役（Owner 2026-09-29 裁决，#3516）：`last_seen` 只表示最近一次 Registry 写动作 / 手动 heartbeat 的时间，`STALE` 仅提示「久未写」，不是在线判断；`whoami` / `heartbeat` CLI 保留为手动 / 兼容入口；v1.14 起的变更明细迁入附录 A.4。本文是 Execution Contract 的**唯一权威源**；方向裁决与理由见 [`ADR-0034`](../../adr/ADR-0034-multi-harness-execution-contract.md)（Accepted），两者冲突时以本文为准并回溯修订 ADR；v1.1–v1.14 变更明细见[附录 A.4](execution-contract-annex.md#a4-变更历史v11v114自正文头部迁出)）
 - **日期**：2026-09-28
 - **适用**：Registry 协调域内的实施 Execution（现阶段即宿主机同一克隆内的本地 Harness 会话，§3.6）；**用哪个 Harness 承接哪个 Requirement 始终由开发者决定**（选择权原则，ADR §2.1）——本文只约束已被选择的 Execution 如何登记与协同可见，不定义任何路由或自动下发
 - **上游评审**：两轮八源审查综合 [`REVIEW_ADR0034_MULTI_HARNESS_2026-09-06_synthesis.md`](../../reviews/REVIEW_ADR0034_MULTI_HARNESS_2026-09-06_synthesis.md)（R1–R30 权威映射）
@@ -132,8 +132,8 @@ risk = integration ∈ {PR_OPEN, READY}                                ← 开�
 ## 4. TTL 与 last_seen 语义（v1.15：P2 心跳不实施）
 
 - TTL 仅 advisory：超时只在 status 提示「可能陈旧」并列僵尸候选，不自动改写任何持久字段、不剔除、不降级；
-- `last_seen` 只由带 identity 的写命令（`declare/update/finish`）或手动 `heartbeat` 刷新，**不是 liveness 权威**。原 P2「各 Harness wrapper 定时 heartbeat / 启动自动 `whoami`」不实施：仅部分 Harness 有脚本通道，部分接线得到混合信号，而 liveness 不参与 risk 判定（§3.2）；`whoami`（只读）与 `heartbeat` / 无参 `update` 保留为手动 / 兼容入口，长期无真实消费者再按退役扫描删除；
-- 协调域外工作面（含云端）的可见性由开放 PR 承担（§3.6），不依赖 Registry 心跳。
+- `last_seen` 只由带 identity 的写命令（`declare/update/finish`）或手动 `heartbeat` 刷新，**不是 liveness 权威**。原 P2「wrapper 定时 heartbeat / 启动自动 `whoami`」不实施：不存在所有目标 Harness 都具备的统一生命周期 hook / wrapper 接线点，部分接线只得到混合信号，而 liveness 不参与 risk 判定（§3.2）；`whoami`（只读）与 `heartbeat` / 无参 `update` 保留为手动 / 兼容入口，无真实消费者再退役；
+- 协调域外仓库写入（D10-3 当前允许者）的可见性按 §3.6 走开放 PR，不依赖 Registry 心跳；本条不扩展实施者范围。
 
 ## 5. effective scope 与 overlap 谓词
 

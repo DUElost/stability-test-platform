@@ -10,7 +10,7 @@ Owner 于 2026-09-29 在 #3516 裁决：**退役 `whoami` / `heartbeat` 作为 P
 
 - `execution-contract.md` → Living v1.15：§4 由「TTL 与心跳分期」改为「TTL 与 last_seen 语义」；§1.2 `last_seen` 与 §3.1
   `STALE` 措辞收窄为「最近一次 Registry 写动作 / 手动 heartbeat 时间」「只表示久未写」；v1.14 头部明细迁入附录 A.4，
-  正文字节数由 24053 增至 24454（预算 24500），未抬预算；
+  正文字节数由 24053 增至 24486（预算 24500），未抬预算；
 - `harness-adapters.md`：「P2 Adapter：会话启动动作」改为「Registry CLI 手动入口（非 Adapter 义务）」，`whoami` /
   `heartbeat` 行不再写「启动 / wrapper 定时调用」「升格为可靠 liveness」，「所有 Harness 通用」一列改为「说明」；
 - ADR-0034 → v1.14：修订记录、§2.5 决策要点、分期表 P2 行、Alternatives 与 Verification 中的 P2 心跳条款；
@@ -22,9 +22,9 @@ Owner 于 2026-09-29 在 #3516 裁决：**退役 `whoami` / `heartbeat` 作为 P
 
 ## Alternatives
 
-- **接线**（Claude / Codex hook 调用，GUI Harness 缺位）：否。仅部分 Harness 有脚本通道（`harness-adapters.md` 已记录
-  Zcode、CodeBuddy IDE、Antigravity 的限制），部分接线得到混合信号，比明确「没有统一 liveness」更容易误判；
+- **接线**（Claude / Codex hook 调用，其余 Harness 缺位）：否。**不存在所有目标 Harness 都具备的统一生命周期 hook / wrapper 接线点**（Registry CLI 本身在 Zcode / CodeBuddy CLI / dsh web 等处可手动执行，`harness-adapters.md` 已记录 dogfood；缺的是可依赖的自动接线点，Zcode、CodeBuddy IDE 等 GUI 形态尤其没有），部分接线得到混合信号，比明确「没有统一 liveness」更容易误判；
   且 liveness 不参与 risk 判定，价值不足以支撑一套跨 Harness 常驻机制（ADR-0058 D6：无复发证据不预建机制）。
+  （更正：本 PR 初版曾写「仅 Claude / Codex 有脚本通道」，与仓库自己的 dogfood 记录不符，按复核意见改为上述口径。）
 - **立即删除 CLI 命令**：否。`whoami` 仍是有用的手动只读诊断，`heartbeat` / 无参 `update` 有兼容用途；
   长期无真实消费者再按退役扫描删除，届时另走契约版本化。
 - **把 `last_seen` 从 Registry 字段中移除**：否。字段集封闭（§3.6），且僵尸候选判据依赖 STALE；本次只收窄语义。
@@ -34,7 +34,7 @@ Owner 于 2026-09-29 在 #3516 裁决：**退役 `whoami` / `heartbeat` 作为 P
 - `python tools/dev/check_governance_surface.py --check --base origin/main` 与 `--self-test`：通过（含 S12 ADR 索引、S13 契约版本
   一致、S15 归属表）；
 - `python tools/dev/ai_work.py --self-test`、`py_compile`：通过（仅注释 / docstring 变更）；
-- 契约正文 198 行 / 24454 字节（预算 210 / 24500），`harness-adapters.md` 99 行（预算 100）；
+- 契约正文 198 行 / 24486 字节（预算 210 / 24500），`harness-adapters.md` 99 行（预算 100）；
 - 残留扫描：`grep` 「可靠 liveness」「wrapper.*heartbeat」「P2 Adapter」在现行文档中无剩余承诺性表述
   （历史记录与归档不回改）；
 - 未验证：`check:quick`（云端容器无 `psycopg`，交给 CI）；`ai_work.py` 的 pytest 用例（系统解释器无 pytest）。
@@ -44,4 +44,4 @@ Owner 于 2026-09-29 在 #3516 裁决：**退役 `whoami` / `heartbeat` 作为 P
 - `whoami` / `heartbeat` 长期无真实消费者时，纳入 #3516 G4 的退役扫描，届时另出契约版本；
 - 若日后需要「在线状态」，先证明有真实需求（某机制需按存活区分行为），再以契约新版本 + ADR 增补重新设计，
   不恢复本次退役的 wrapper 模型；
-- 云端实施者的可见性由 #3516 待落地的 ADR-0058 / ADR-0034 修订另行裁决，本 note 不涉及。
+- 云端实施者的可见性由 #3516 待落地的 ADR-0058 / ADR-0034 修订另行裁决，本 note 与契约 §4 均不扩展实施者范围。
