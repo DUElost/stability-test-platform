@@ -1018,9 +1018,9 @@ def cmd_drift(args) -> int:
 
 
 def cmd_whoami(args) -> int:
-    """P2 Adapter 基元：按 worktree 定位自身 Execution（上下文供给，非路由）。
+    """手动只读诊断（v1.15 起非 Adapter 义务）：按 worktree 定位自身 Execution（上下文供给，非路由）。
 
-    各 Harness 会话启动时由 agent 执行（薄适配层指引见 harness-adapters.md）：
+    需要时由 agent 手动执行（说明见 harness-adapters.md「Registry CLI 手动入口」）：
     输出自身状态 + 其他在窗 Execution 对本 worktree scope 的 overlap 提示。
     严格只读（同 status）。"""
     path, _ = registry_paths()
@@ -1740,7 +1740,7 @@ def main() -> int:
     p.set_defaults(fn=cmd_whoami)
 
     # update 即 heartbeat：无 --scope/--pr 的 update = 纯心跳（刷 last_seen）+ reconcile
-    # （契约 §2.5 的 identity 写命令语义；P2 wrapper 按此定时调用）
+    # （契约 §2.5 的 identity 写命令语义；v1.15 起手动 / 兼容入口，不再有 wrapper 定时调用）
     p = sub.add_parser("update", aliases=["heartbeat"])
     p.add_argument("--id")
     p.add_argument("--all", action="store_true",
