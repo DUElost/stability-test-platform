@@ -1,6 +1,9 @@
 .ace-tool/
 # OpenCode provider/model/credential config is machine-local and must never be committed.
 opencode.json
+# ZCode CLI 的本机 harness 忽略清单（provider/凭据/会话态），与 .cursor/*、
+# opencode.json 同类：机器本地态，不入库，防 git add -A 误提交。
+.zcodeignore
 .cursor/*
 !.cursor/rules/
 !.cursor/rules/**
