@@ -295,3 +295,4 @@
 | 2026-09-26 | **ADR-0054 入表（claude）· 矩阵收口**：§5.1「控制面 / 执行分层」代表 ADR 补 `0054`，覆盖状态列指向 §5.2 的 `agent-cp-contracts` 行（承接上一条登记） |
 | 2026-09-28 | §0 Registry 行「谁正在决定」改为「谁正在实施 / 哪些 Execution 在协调窗口」（ADR-0058 D10：决策归 Owner / 规划者，不进 Registry） |
 | 2026-09-28 | **ADR-0058 入表（claude）**：补 `batch-delivery` 行（新建 Accepted ADR，§7 触发 1）；§5.1「多 Harness 执行」代表 ADR 补 `0058`——`execution-registry` 管实施 Execution 的协调，`batch-delivery` 管其上游的规划 / 复核 / 激活职责与协调域划界 |
+| 2026-09-29 | ADR-0058 v1.1（落地记录勘误，决策无改动）：`batch-delivery` 行锚点（D8）与分层不变，仅登记版本变化 |

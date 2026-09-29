@@ -12,7 +12,7 @@
 **v1.10 本版：附录 A 增补 dsh web 实测（2026-09-08，DeepSeek Harness `dsh` 0.1.1-rc.2，headless 阳性对照 + 浏览器自动化驱动 web UI）——根级 `AGENTS.md` 基线注入 ✅、scoped `AGENTS.md` 触碰后动态注入 ✅（会话 typed source `kind=agent-instructions` 实证；web 会话 cwd=工作区根，「cwd 深度」验收形态不适用）；⚠️ 静态 `--dump-config`/patch 层显示该插件 `disabled: true` 与运行时行为矛盾——加载判定只认行为探针；调用前提=工作区经原生目录选择器注册（GUI 无脚本通道）；Registry CLI 未 dogfood，转正以首个真实单为准**
 **v1.11 本版：dsh web 转正回填——Registry CLI 全周期 dogfood 通过（#1256：declare→worktree 修复→gates→PR #1291→update→finish，2026-09-10 合入；0.1.5-rc.1 加载复测与 v1.10 结论一致），附录 A 行与 harness-adapters.md 行同步更新**
 **v1.12 本版：CodeBuddy CLI/IDE 分立——附录 A 原单行「CodeBuddy」实为 CLI 结论却被读作覆盖整个产品线（IDE 从未探针）；2026-09-11 人工补测 IDE 得 Q1=否/Q2=是/Q3=一次（Zcode 同形态，与 CLI 相反），故照 Cursor CLI/IDE 分列先例拆为两行、CLI 版本按实测校正为 2.149.0，harness-adapters.md 与 harness_probe.py 同步（IDE 入人工形态）；**IDE 版本 4.11.3 经人工读取补入本版**（探针时未能从磁盘读出）**
-**v1.13 本版：执行模型收窄（[ADR-0058](./ADR-0058-planned-batch-execution.md) D10，Owner 2026-09-28 裁决）——契约 §3.6 退役 Mode A/B/C 词汇，生产实施 `1 Requirement → 1 Harness → 1 PR` 为唯一执行模型；Registry 只登记其协调域内的实施者（现阶段即宿主机同一克隆内的本地 Harness），规划 / 复核 / 集成观察工作面不 declare，协调域外仓库写入以开放 PR 检查与共享元文件串行补可见性；Registry 字段、三维状态、overlap 谓词、transition table 与 §2.1 选择权原则均不变。批次规划、复核与激活的交付流程由 ADR-0058 管辖，本 ADR 只管实施 Execution 的协调**
+**v1.13 本版：执行模型收窄（[ADR-0058](./ADR-0058-planned-batch-execution.md) D10，Owner 2026-09-28 裁决）——契约 §3.6 退役 Mode A/B/C 词汇，生产实施 `1 Requirement → 1 Harness → 1 PR` 为唯一执行模型；Registry 只登记其协调域内的实施者（现阶段即宿主机同一克隆内的本地 Harness），规划 / 复核 / 集成观察工作面不 declare，协调域外仓库写入以开放 PR 检查与共享元文件串行补可见性；Registry 字段、三维状态、overlap 谓词、transition table 与 §2.1 选择权原则均不变。批次规划、复核与激活的交付流程由 ADR-0058 管辖，本 ADR 只管实施 Execution 的协调；§2.6 第 4 条「评审 / scratch 会话同样 declare」随本版同步收窄（2026-09-29 补漏：v1.13 首次落地的 #3490 漏改此句）**
 - 优先级：P1
 - 目标里程碑：M7（延续）
 - 日期：2026-09-06
@@ -77,7 +77,7 @@ Registry 声明与实际 diff 不一致时**以 diff 为准**；派生视图（�
 - **瓶颈模型（校准）**：瓶颈在**集成收尾侧**——人的审阅吞吐 + 外部平台可靠性（GitHub checks / auto-close 故障窗、gh 串行化），**不在 agent 并行侧**。Registry 不提升审阅吞吐，提升的是审计面的**信息完备性**（谁在做什么、集成窗口在哪）；
 - **守的对象重锚**：真实约束的可观测代理 = **在窗 Execution（§3.2 risk 集合）规模 + 集成收尾负载**（合入后核销、reconcile、冲突返工），由开发者按批次调度——上限由实测数据表达而非文档数字；数据恶化时按 §6 重议；
 - **「任务排队」仍是主策略**：FIFO auto-merge 串行集成、同文件显式串行排程不变；无 PR 的评审 / scratch 会话不计入约束；
-- 会话数 ≠ worktree 数 ≠ 在窗 Execution 数：registry 只统计已 declare 的 Execution（评审/scratch 会话按 #919 指引同样 declare），三者以 registry + `git worktree list` 组合观测。
+- 会话数 ≠ worktree 数 ≠ 在窗 Execution 数：registry 只统计已 declare 的 Execution——v1.13 起只登记协调域内的实施者（本地 Harness 中修改仓库文档并开 PR 的会话仍 declare；纯评审 / issue 评论 / scratch 会话不登记，原 #919 指引随之失效，见契约 §3.6、`harness-adapters.md`），三者以 registry + `git worktree list` 组合观测。
 
 ### 2.7 分期
 
