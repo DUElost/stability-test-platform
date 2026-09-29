@@ -44,12 +44,15 @@ import { cn } from '@/lib/utils';
 
 type TabKey = 'channels' | 'rules' | 'logs';
 
-const EVENT_LABELS: Record<string, string> = {
+// #3458：键集由类型系统对 AlertRule['event_type'] 做穷尽约束——后端枚举新增而这里漏配时
+// `npm run type-check` 判红（后端侧单向断言见 tests/test_frontend_api_types_sync.py）。
+const EVENT_LABELS = {
   RUN_COMPLETED: '任务完成',
   RUN_FAILED: '任务失败',
   RISK_HIGH: '高风险告警',
   DEVICE_OFFLINE: '设备离线',
-};
+  CHAIN_INCOMPLETE: '链断',
+} satisfies Record<AlertRule['event_type'], string>;
 
 const CHANNEL_TYPE_LABELS: Record<string, string> = {
   WEBHOOK: 'Webhook',
