@@ -39,7 +39,13 @@ _ACTIVE_LEASE = "ACTIVE"
 
 
 def _locked_device(db: Session, device_id: int) -> Device:
-    """取设备并持行锁（与 claim / 租约检查同事务，杜绝「复检→写入」窗口）。"""
+    """取设备并持行锁（与 claim / 租约检查同事务，杜绝「复检→写入」窗口）。
+
+    该锁 + 锁内复检只闭合**退役事务自身**的「复检→写入」窗口；claim 侧
+    「快照读清单→落租约」的窗口由 `lease_manager.acquire_lease` 的
+    generation CAS（`retired_at IS NULL`，#3481）闭合——两侧合起来才
+    保证「退役时无 ACTIVE 租约」的事后态不被 claim 交错打破。
+    """
     device = (
         db.execute(select(Device).where(Device.id == device_id).with_for_update())
     ).scalars().first()

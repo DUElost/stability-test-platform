@@ -45,10 +45,14 @@ async def acquire_lease(
     """Acquire a device lease with fencing-token semantics (ADR-0019 Phase 1).
 
     Within a savepoint:
-      1. Read the current lease_generation snapshot from device.
-      2. UPDATE device SET lease_generation = lease_generation + 1 RETURNING ...
-      3. SELECT ... FOR UPDATE to check for a remaining ACTIVE lease.
-      4. INSERT the new lease row with the incremented generation.
+      1. UPDATE device SET lease_generation = lease_generation + 1
+         WHERE id = :id AND retired_at IS NULL RETURNING ...
+         — a CAS on the retirement flag (#3481): the caller's device
+         list is an unlocked snapshot, so a retirement committing
+         between that read and this UPDATE must win.  0 rows ⇒ the
+         device is retired (or vanished) and must not get a new lease.
+      2. SELECT ... FOR UPDATE to check for a remaining ACTIVE lease.
+      3. INSERT the new lease row with the incremented generation.
 
     The savepoint protects against partial-unique-index races: if the index
     on (device_id WHERE status='ACTIVE') triggers an IntegrityError, the
@@ -59,7 +63,7 @@ async def acquire_lease(
     handler with ``db: AsyncSession = Depends(get_async_db)``).
 
     Returns the created DeviceLease, or None if the device already has
-    an active lease (conflict) or the device does not exist.
+    an active lease (conflict), is retired, or does not exist.
 
     Raises ValueError if the lease_type / required-fields contract is
     violated (JOB/SCRIPT requires job_id, MAINTENANCE requires reason+holder).
@@ -81,22 +85,29 @@ async def acquire_lease(
         logger.warning("lease_acquire_device_not_found device=%s", device_id)
         return None
 
-    # Step ①: snapshot current generation
-    old_gen = device.lease_generation
-
-    # Steps ②-④ inside a savepoint so a concurrent insert conflict
+    # Steps ①-③ inside a savepoint so a concurrent insert conflict
     # doesn't poison the outer transaction.
     try:
         async with db.begin_nested():
-            # Step ②: atomically increment lease_generation on device
+            # Step ①: CAS — atomically increment lease_generation only
+            # while the device is not retired (#3481).  Under READ
+            # COMMITTED the UPDATE re-evaluates the predicate on the
+            # latest committed row after any lock wait, so a retirement
+            # committing in the claim's snapshot→lease window yields
+            # 0 rows here instead of a lease on a retired device.
             result = await db.execute(
                 update(Device)
-                .where(Device.id == device_id)
+                .where(
+                    Device.id == device_id,
+                    Device.retired_at.is_(None),
+                )
                 .values(lease_generation=Device.lease_generation + 1)
                 .returning(Device.lease_generation)
             )
             row = result.fetchone()
-            new_gen: int = row[0] if row is not None else old_gen + 1
+            if row is None:
+                raise _DeviceRetired()
+            new_gen: int = row[0]
 
             now = datetime.now(timezone.utc)
             expires_at = now + timedelta(seconds=lease_seconds)
@@ -106,7 +117,7 @@ async def acquire_lease(
             # Grace-held (expired) leases block the device until
             # Reconciler releases them.
 
-            # Step ③: check for remaining ACTIVE lease (FOR UPDATE
+            # Step ②: check for remaining ACTIVE lease (FOR UPDATE
             # protects against concurrent claim of the same device)
             existing = await db.execute(
                 select(DeviceLease)
@@ -122,7 +133,7 @@ async def acquire_lease(
                 )
                 raise _LeaseConflict()
 
-            # Step ④: insert
+            # Step ③: insert
             lease = DeviceLease(
                 device_id=device_id,
                 job_id=job_id,
@@ -143,6 +154,9 @@ async def acquire_lease(
 
     except _LeaseConflict:
         logger.debug("lease_acquire_aborted device=%s reason=conflict", device_id)
+        return None
+    except _DeviceRetired:
+        logger.info("lease_acquire_aborted device=%s reason=retired", device_id)
         return None
     except IntegrityError:
         # Another concurrent acquire won the partial-unique-index race.
@@ -262,4 +276,11 @@ def release_lease_sync(
 class _LeaseConflict(Exception):
     """Internal sentinel raised inside a savepoint when an ACTIVE lease
     already exists for the device."""
+    pass
+
+
+class _DeviceRetired(Exception):
+    """Internal sentinel raised inside a savepoint when the generation
+    CAS matched 0 rows — the device is retired (or vanished), so no
+    lease may be created (#3481)."""
     pass
