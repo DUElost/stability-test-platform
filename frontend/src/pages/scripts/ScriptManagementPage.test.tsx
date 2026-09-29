@@ -1,9 +1,10 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, expect, it, vi } from 'vitest';
 import ScriptManagementPage from './ScriptManagementPage';
-import type { ScriptEntry } from '@/utils/api';
+import { api, type ScriptEntry } from '@/utils/api';
+import type { ScriptUsage } from '@/utils/api/types';
 
 /** #3350（ADR-0023 D3）：`?name=&version=` 深链定位脚本版本并展开参数详情。 */
 
@@ -74,5 +75,39 @@ describe('ScriptManagementPage 深链（#3350）', () => {
     );
     await waitFor(() => expect(screen.getByText('1.2.3')).toBeInTheDocument());
     expect(screen.queryByText('默认参数:')).not.toBeInTheDocument();
+  });
+});
+
+/** 展开脚本行（第一行 = monkey_test）触发懒加载的 UsageSection。 */
+async function expandFirstUsage() {
+  await waitFor(() => expect(screen.getByText('monkey_test')).toBeInTheDocument());
+  fireEvent.click(screen.getAllByLabelText('参数详情')[0]);
+}
+
+const usageResponse = (): ScriptUsage => ({ script_id: 1, days: 30, projects: [], versions: [] });
+
+// #3496（B2-G8）：用量是版本退役的判断依据，失败不得呈现为「近 30 天无 Plan 使用记录」。
+describe('ScriptManagementPage 用量空态（#3496）', () => {
+  it('用量查询失败显示加载失败与重试，不显示「近 30 天无 Plan 使用记录」', async () => {
+    vi.mocked(api.scripts.usage).mockRejectedValueOnce(new Error('usage down'));
+    renderAt('/script-management');
+    await expandFirstUsage();
+
+    expect(
+      await screen.findByText('使用统计加载失败，暂无法判断近 30 天使用记录。'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('近 30 天无 Plan 使用记录')).not.toBeInTheDocument();
+
+    // 重试入口真的重新取数（恢复后可见成功空态）
+    vi.mocked(api.scripts.usage).mockResolvedValueOnce(usageResponse());
+    fireEvent.click(screen.getByRole('button', { name: '重试' }));
+    expect(await screen.findByText('近 30 天无 Plan 使用记录')).toBeInTheDocument();
+  });
+
+  it('用量查询成功且为空显示「近 30 天无 Plan 使用记录」（原空态语义不变）', async () => {
+    renderAt('/script-management');
+    await expandFirstUsage();
+
+    expect(await screen.findByText('近 30 天无 Plan 使用记录')).toBeInTheDocument();
   });
 });

@@ -376,6 +376,10 @@ export default function DevicesPage() {
     () => selectedDevices.filter((device) => Boolean(device.retired_at)).length,
     [selectedDevices],
   );
+  // #3483：幂等跳过的是本次不会改态的台——retire 跳过已退役的，unretire 跳过在役的。
+  const idempotentSkipCount = retireDialog.mode === 'retire'
+    ? selectedRetiredCount
+    : selectedDevices.length - selectedRetiredCount;
 
   if (isLoading) {
     return (
@@ -557,7 +561,7 @@ export default function DevicesPage() {
         isOpen={retireDialog.open}
         mode={retireDialog.mode}
         selectedCount={selectedDevices.length}
-        alreadyRetiredCount={selectedRetiredCount}
+        idempotentSkipCount={idempotentSkipCount}
         isSubmitting={retireMutation.isPending}
         onClose={() => setRetireDialog((previous) => ({ ...previous, open: false }))}
         onSubmit={(mode, reason) => retireMutation.mutate({ mode, reason })}

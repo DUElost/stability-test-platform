@@ -114,6 +114,13 @@ interface ExpandableHostTableProps {
    * 汇总只有计数、**没有逐台名单**，故逐台明细只能走下面两个逐台回调。
    */
   scriptPresenceSummary?: ScriptPresenceSummary | null;
+  /**
+   * #3090：fleet 汇总查询失败（失败 ≠ 无缺口，不得折叠成与「未提供汇总」同值）。
+   * 置位时汇总条位置渲染失败提示；逐台区块的账本陈旧读作「未知」，不得按 fresh 读。
+   */
+  scriptPresenceSummaryError?: boolean;
+  /** 重试 fleet 汇总查询（缺省则失败提示不带重试入口）。 */
+  onRetryScriptPresenceSummary?: () => void;
   /** 展开某台主机时按需拉该机矩阵（缺省则展开行内不出现「脚本在位」区块）。 */
   onLoadHostScriptPresence?: (hostId: string | number) => Promise<HostScriptPresence>;
   /** 单机按需重核；成功后组件会重新拉一次该机矩阵。 */
@@ -271,6 +278,8 @@ export function ExpandableHostTable({
   selectedIds,
   onSelectionChange,
   scriptPresenceSummary,
+  scriptPresenceSummaryError,
+  onRetryScriptPresenceSummary,
   onLoadHostScriptPresence,
   onRefreshHostScriptPresence,
 }: ExpandableHostTableProps) {
@@ -490,7 +499,25 @@ export function ExpandableHostTable({
         </div>
 
         {/* #2958 第五道闸：脚本在位 fleet 汇总（逐台明细在展开行内，汇总接口不含名单） */}
-        {scriptPresenceSummary && presenceCounts && (
+        {scriptPresenceSummaryError ? (
+          // #3090 / #1195：查询失败不得读成成功空结果——汇总不可得 ≠ 没有缺口；
+          // 失败时账本陈旧同样不可得（逐台区块按本标记读作「未知」，不折叠成 false）。
+          <div
+            data-testid="script-presence-summary-error"
+            className="flex items-center justify-between gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive"
+          >
+            <span>脚本在位汇总加载失败，暂无法判断缺口与账本陈旧。</span>
+            {onRetryScriptPresenceSummary && (
+              <button
+                type="button"
+                onClick={onRetryScriptPresenceSummary}
+                className="underline underline-offset-2"
+              >
+                重试
+              </button>
+            )}
+          </div>
+        ) : scriptPresenceSummary && presenceCounts && (
           <div
             data-testid="script-presence-summary"
             className={cn(
@@ -520,8 +547,10 @@ export function ExpandableHostTable({
                 缺口 {scriptPresenceSummary.hosts_with_gap} 台
                 {presenceGapCount > 0 && `（${presenceGapCount} 项）`}
               </span>
-              <span className="text-muted-foreground">未知 {presenceCounts.unknown} 台</span>
-              <span className="text-muted-foreground">维护窗 {presenceCounts.maintenance} 台</span>
+              {/* #3090：counts.* 是 host × name@version 的项数（只有 hosts_* 是台数），
+                  与「缺口 N 台（N 项）」并排时不得再标成「台」。 */}
+              <span className="text-muted-foreground">未知 {presenceCounts.unknown} 项</span>
+              <span className="text-muted-foreground">维护窗 {presenceCounts.maintenance} 项</span>
               {presenceStale && (
                 <span
                   className="inline-flex items-center gap-1 font-medium text-warning"
@@ -1279,7 +1308,16 @@ export function ExpandableHostTable({
                                   </button>
                                 )}
                               </div>
-                              {presenceStale && (
+                              {scriptPresenceSummaryError ? (
+                                // #3090：fleet 汇总失败时陈旧不可得——不得静默按 fresh 读
+                                //（原实现里 `?.stale === true` 会把失败折叠成「不陈旧」）。
+                                <p
+                                  data-testid={`host-script-presence-stale-unknown-${host.id}`}
+                                  className="mb-2 rounded-md bg-muted/50 px-2 py-1 text-[11px] text-muted-foreground"
+                                >
+                                  fleet 汇总加载失败，账本是否陈旧未知
+                                </p>
+                              ) : presenceStale && (
                                 <p
                                   data-testid={`host-script-presence-stale-${host.id}`}
                                   className="mb-2 rounded-md bg-warning/10 px-2 py-1 text-[11px] text-warning"
@@ -1326,9 +1364,17 @@ export function ExpandableHostTable({
                                     <span>维护窗 {presence.data.counts.maintenance}</span>
                                   </div>
                                   {presenceItems.length === 0 ? (
-                                    <p className="text-xs text-muted-foreground">
-                                      暂无条目——该主机尚未跑过 sweep，可点「重新核验」。
-                                    </p>
+                                    presence.data.counts.n_a > 0 ? (
+                                      // #3090：n_a 被 items 有意剔除——「全部 n_a」是已 sweep
+                                      // 的健康态（可达集与目标版本不相交），不得再提示重新核验。
+                                      <p className="text-xs text-muted-foreground">
+                                        本轮已 sweep，全部 {presence.data.counts.n_a} 项均「不适用」（可达集与目标版本不相交）。
+                                      </p>
+                                    ) : (
+                                      <p className="text-xs text-muted-foreground">
+                                        暂无条目——该主机尚未跑过 sweep，可点「重新核验」。
+                                      </p>
+                                    )
                                   ) : (
                                     <ul className="divide-y divide-border/60">
                                       {presenceItems.map((item) => (
