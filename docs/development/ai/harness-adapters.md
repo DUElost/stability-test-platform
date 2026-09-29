@@ -76,16 +76,15 @@ Execution 串行修改。并行执行语义的权威源是
 已被取代，其元文件串行化实践继续有效，派生视图保留为 ground truth 交叉验证
 手段（契约 §5.1/§9）。
 
-## P2 Adapter：会话启动动作（上下文供给，非路由）
+## Registry CLI 手动入口（v1.15：非 Adapter 义务，非路由）
 
-会话由开发者选择启动（选择权原则）；Adapter 只负责让该会话**知晓自身 Execution
-与集成窗口**。Registry CLI：`tools/dev/ai_work.py`（规范见
-[`execution-contract.md`](execution-contract.md) §2–§5）。**Role 非 Adapter 义务（ADR-0034 v1.7）**：`role` 仅为 Registry 元数据与未来扩展点（默认 `implementation`，空串即缺省；特殊 Role deferred）——本节供给不含 Role：无启动注入要求，无各 Role 等价支持要求。
+会话由开发者选择启动（选择权原则）。Registry CLI：`tools/dev/ai_work.py`（规范见
+[`execution-contract.md`](execution-contract.md) §2–§5）。**Role 非 Adapter 义务（ADR-0034 v1.7）**：`role` 仅为 Registry 元数据与未来扩展点（默认 `implementation`，空串即缺省；特殊 Role deferred）。**v1.15（Owner 2026-09-29，#3516）**：原「启动自动 `whoami` / wrapper 定时 heartbeat」的 P2 接线承诺退役——不存在所有目标 Harness 都具备的统一生命周期 hook / wrapper 接线点，部分接线只得到混合信号，而 liveness 不参与 risk 判定；以下动作供**协调域内实施者手动**使用，Adapter 无启动注入、Role 等价或心跳义务。
 
-| 时机 | 动作 | 所有 Harness 通用 |
+| 时机 | 动作 | 说明 |
 |---|---|---|
-| 会话启动（在 worktree 内） | `python tools/dev/ai_work.py whoami` | 输出自身 Execution 状态与**入向 overlap**（他人在窗记录覆盖本 worktree scope）；无记录则提示 declare |
-| 编码中（长会话） | `python tools/dev/ai_work.py heartbeat --id <R>` | 纯心跳（= 无参 `update`）：刷自身 `last_seen` + GitHub reconcile；P2 起由 wrapper 定时调用，`last_seen` 据此升格为可靠 liveness 信号 |
+| 需要时（在 worktree 内，手动） | `python tools/dev/ai_work.py whoami` | 只读诊断：自身 Execution 状态与**入向 overlap**；无记录只表示尚未 declare，规划 / 复核工作面无记录属正常 |
+| 需要时（手动 / 兼容） | `python tools/dev/ai_work.py heartbeat --id <R>` | 等价无参 `update`：刷自身 `last_seen` + GitHub reconcile；`last_seen` 只是最近写动作时间，**不代表在线状态** |
 | 开 PR / scope 变化 | `python tools/dev/ai_work.py update --id <R> --pr <N> [--scope ...]` | 登记 PR、派生 integration、覆写声明 |
 | 编码停止 | `finish --id <R> --pr <N>` / `finish --id <R> --abandon` | 语义见契约 §3.3 transition table |
 | 文档实施类会话（本地 Harness 中修改仓库文档并开 PR） | 同样 declare（scope=将产出的文档目录）；纯 issue 评论 / PR 评审属复核职责，不登记（契约 §3.6，ADR-0058 D10） | diff 产生前派生视图无信号，declare 让文档修改意图可见；评审结论见 PR 评论 |
