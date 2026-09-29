@@ -910,6 +910,21 @@
           or (agent_flash_adb_rule_0660.changed | default(false))
           or (agent_flash_adb_rule_0666.changed | default(false))
 
+    # #3493 勘误（与 ensure_flash_prereqs.yml 同源）：reload 只重载规则库，
+    # 已插设备的节点不会重算——需显式 trigger 重放 uevent（幂等、不复位设备）。
+    - name: Trigger udev to re-apply rules on plugged devices (#3493)
+      become: true
+      ansible.builtin.command: udevadm trigger
+      changed_when: false
+      failed_when: false
+      when:
+        - agent_ensure_flash_prereqs | default(false) | bool
+        - (agent_flash_udev_rule_0660.changed | default(false))
+          or (agent_flash_udev_rule_0666.changed | default(false))
+          or (agent_flash_udev_mm_rule.changed | default(false))
+          or (agent_flash_adb_rule_0660.changed | default(false))
+          or (agent_flash_adb_rule_0666.changed | default(false))
+
     - name: Ensure flash prerequisite packages (#2133)
       become: true
       ansible.builtin.shell: |
