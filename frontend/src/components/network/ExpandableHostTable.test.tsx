@@ -432,13 +432,14 @@ describe('脚本在位（#2958 第五道闸）', () => {
     ],
   };
 
-  it('fleet 汇总行报缺口台数与未知/维护台数，明细面板给六态分解', () => {
+  it('fleet 汇总行报缺口台数与未知/维护项数，明细面板给六态分解', () => {
     render(<ExpandableHostTable hosts={[host]} scriptPresenceSummary={summary} />);
 
     const bar = screen.getByTestId('script-presence-summary');
     expect(within(bar).getByText(/缺口 2 台/)).toBeInTheDocument();
-    expect(within(bar).getByText(/^未知 3 台$/)).toBeInTheDocument();
-    expect(within(bar).getByText(/^维护窗 1 台$/)).toBeInTheDocument();
+    // #3090：counts.* 是「项」（host × name@version），只有 hosts_with_gap 是「台」
+    expect(within(bar).getByText(/^未知 3 项$/)).toBeInTheDocument();
+    expect(within(bar).getByText(/^维护窗 1 项$/)).toBeInTheDocument();
     // 非陈旧时不得出现陈旧提示，缺口按红读
     expect(screen.queryByTestId('script-presence-stale')).not.toBeInTheDocument();
     expect(within(bar).getByText(/缺口 2 台/).className).toContain('text-destructive');
@@ -553,6 +554,75 @@ describe('脚本在位（#2958 第五道闸）', () => {
 
     expect(await screen.findByText(/核验数据加载失败：网络不可达/)).toBeInTheDocument();
     expect(screen.queryByText(/暂无条目/)).not.toBeInTheDocument();
+  });
+
+  it('fleet 汇总查询失败：出现失败提示与重试，不出现「缺口/未知」汇总条（#3497 B2-G1）', () => {
+    const onRetry = vi.fn();
+    render(
+      <ExpandableHostTable
+        hosts={[host]}
+        scriptPresenceSummary={null}
+        scriptPresenceSummaryError
+        onRetryScriptPresenceSummary={onRetry}
+      />,
+    );
+
+    expect(screen.getByTestId('script-presence-summary-error')).toHaveTextContent(
+      '脚本在位汇总加载失败',
+    );
+    expect(screen.queryByTestId('script-presence-summary')).not.toBeInTheDocument();
+    expect(screen.queryByText(/缺口 2 台/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '重试' }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it('fleet 汇总失败时逐台陈旧读作「未知」，不得静默按 fresh 渲染（#3497 B2-G1）', async () => {
+    const onLoad = vi.fn().mockResolvedValue(hostPresence);
+    render(
+      <ExpandableHostTable
+        hosts={[host]}
+        scriptPresenceSummary={null}
+        scriptPresenceSummaryError
+        onLoadHostScriptPresence={onLoad}
+      />,
+    );
+
+    fireEvent.click(screen.getByText(host.name));
+
+    const note = await screen.findByTestId(`host-script-presence-stale-unknown-${host.id}`);
+    expect(note).toHaveTextContent('账本是否陈旧未知');
+    expect(screen.queryByTestId(`host-script-presence-stale-${host.id}`)).not.toBeInTheDocument();
+  });
+
+  it('逐台空态：全部 n_a 显示 n_a 项数，不误报「尚未跑过 sweep」（#3497 B2-G1）', async () => {
+    const onLoad = vi.fn().mockResolvedValue({
+      ...hostPresence,
+      counts: { present: 0, missing: 0, mismatch: 0, unknown: 0, n_a: 5, maintenance: 0 },
+      items: [],
+    });
+    render(<ExpandableHostTable hosts={[host]} onLoadHostScriptPresence={onLoad} />);
+
+    fireEvent.click(screen.getByText(host.name));
+
+    const block = await screen.findByTestId(`host-script-presence-${host.id}`);
+    expect(within(block).getByText(/全部 5 项均「不适用」/)).toBeInTheDocument();
+    expect(within(block).queryByText(/尚未跑过 sweep/)).not.toBeInTheDocument();
+    expect(within(block).queryByText(/可点「重新核验」/)).not.toBeInTheDocument();
+  });
+
+  it('逐台空态：本轮无行（未 sweep）保持「尚未跑过 sweep」原文案', async () => {
+    const onLoad = vi.fn().mockResolvedValue({
+      ...hostPresence,
+      counts: { present: 0, missing: 0, mismatch: 0, unknown: 0, n_a: 0, maintenance: 0 },
+      items: [],
+    });
+    render(<ExpandableHostTable hosts={[host]} onLoadHostScriptPresence={onLoad} />);
+
+    fireEvent.click(screen.getByText(host.name));
+
+    const block = await screen.findByTestId(`host-script-presence-${host.id}`);
+    expect(within(block).getByText(/尚未跑过 sweep，可点「重新核验」/)).toBeInTheDocument();
   });
 
   it('未提供逐台 fetcher 时不出现「脚本在位」区块（既有调用方零回归）', () => {
