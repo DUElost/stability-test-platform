@@ -12,6 +12,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { planKeys } from '@/utils/api/queryKeys';
+import { fetchAllPages } from '@/utils/api/paginate';
 import { useToast } from '@/hooks/useToast';
 import { useConfirm } from '@/hooks/useConfirm';
 import { api, toApiError, type Plan } from '@/utils/api';
@@ -66,15 +67,23 @@ export default function PlanListPage() {
   const [projectKey, setProjectKey] = useState<string | undefined>(undefined);
   const [specialtyKey, setSpecialtyKey] = useState<string | undefined>(undefined);
 
+  // #3195（批次 B2 G3，规划单 #3497 §3）：固定单页取数（`list(0, 100)`）把「已取到的
+  // 子集」当全集渲染，计划数越过上限后尾部静默消失。改为按服务端 `total` 翻页取全量，
+  // 页大小取后端 `le` 上限 200；筛选参数（projectKey/specialtyKey）必须随每一页透传。
+  // 无筛选态与选择器的 `fetchAllPlans` 查询同键同形状（都是全量 `Plan[]`），共享缓存。
   const {
-    data: plansPage,
+    data: plans,
     isLoading,
     isError,
     error,
     refetch,
   } = useQuery({
-    queryKey: planKeys.list(100, projectKey, specialtyKey),
-    queryFn: () => api.plans.list(0, 100, projectKey, specialtyKey),
+    queryKey: planKeys.list(200, projectKey, specialtyKey),
+    queryFn: () =>
+      fetchAllPages(
+        (skip, limit) => api.plans.list(skip, limit, projectKey, specialtyKey),
+        200,
+      ).then((res) => res.items),
   });
 
   const isProject404 = isError && toApiError(error).status === 404;
@@ -100,10 +109,6 @@ export default function PlanListPage() {
     onError: (err: unknown) => toast.error(toApiError(err).message),
   });
 
-  // #3147：列表响应是 {items, total, skip, limit}——KPI 的 total 必须用**服务端 total**，
-  // 用 `plans.length` 会在计划数越过请求上限时把"已加载条数"当成总数（同屏自相矛盾）。
-  const plans = plansPage?.items;
-
   const filtered = useMemo(() => {
     if (!plans) return [];
     const q = search.toLowerCase();
@@ -122,10 +127,12 @@ export default function PlanListPage() {
   };
 
   const stats = useMemo(() => ({
-    total: plansPage?.total ?? plans?.length ?? 0,
+    // #3195：翻页取全量后，全集计数 = `plans.length`——#3147 担心的
+    // 「单页上限把已加载条数当总数」已不存在（拿全量本身就由 total 驱动）。
+    total: plans?.length ?? 0,
     withSteps: plans?.filter(p => p.steps?.length > 0).length ?? 0,
     chained: plans?.filter(p => p.next_plan_id != null).length ?? 0,
-  }), [plans, plansPage?.total]);
+  }), [plans]);
 
   // ADR-0029 D6（#448）：项目×专项二维分组——按 project_key 保序分组。
   const grouped = useMemo(() => {

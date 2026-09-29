@@ -161,6 +161,35 @@ describe('SchedulesPage', () => {
     await waitFor(() => expect(mocks.schedulesRunNow).toHaveBeenCalledTimes(1));
   });
 
+  // #3195（批次 B2 G3，#3497 §4）：旧行为＝固定单页 `list(0, 200)`，服务端 total 越过
+  // 页大小时尾部行静默消失、且无任何提示。修复＝按服务端 total 翻页取全量。
+  // 260 条 > 页大小 200 ⇒ 两页取全，最后一条必须出现。
+  it('fetches all schedules across pages when the server total exceeds one page', async () => {
+    const rows = Array.from({ length: 260 }, (_, i) => ({
+      id: i + 1,
+      name: `sched-${i}`,
+      cron_expr: '0 2 * * *',
+      plan_id: 1,
+      device_ids: [1],
+      enabled: true,
+      created_at: '2026-08-14T00:00:00Z',
+    }));
+    mocks.schedulesList.mockImplementation(async (skip = 0, limit = 50) => ({
+      items: rows.slice(skip, skip + limit),
+      total: rows.length,
+      skip,
+      limit,
+    }));
+
+    renderPage();
+
+    expect(await screen.findByText('sched-0')).toBeInTheDocument();
+    expect(screen.getByText('sched-259')).toBeInTheDocument();
+    // 页大小 = 后端 `le` 上限 200；第二页偏移由已取条数驱动
+    expect(mocks.schedulesList).toHaveBeenCalledWith(0, 200);
+    expect(mocks.schedulesList).toHaveBeenCalledWith(200, 200);
+  });
+
   it('新建表单的 Plan 选择器可搜索并回填（#627）', async () => {
     mocks.plansList.mockResolvedValue(
       Array.from({ length: 100 }, (_, i) => ({
