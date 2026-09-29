@@ -112,9 +112,10 @@ export function DispatchCockpit({
             .map((device) => device.serial)}
         />
 
-        {duplicateMatch ? (
-          <DuplicateLaunchBanner match={duplicateMatch} onOpenRun={onOpenRun} />
-        ) : duplicateCheckError ? (
+        {/* #3495 复核修订：TanStack v5 refetch 失败会保留上一次成功的 data（isError=true
+            且 duplicateMatch 仍为旧值）——失败态必须优先于旧命中，否则旧横幅冒充
+            「当前检查结果」，把这次失败读成确定事实。 */}
+        {duplicateCheckError ? (
           <div
             data-testid="duplicate-check-unavailable-hint"
             className={cn(
@@ -129,6 +130,8 @@ export function DispatchCockpit({
               </button>
             ) : null}
           </div>
+        ) : duplicateMatch ? (
+          <DuplicateLaunchBanner match={duplicateMatch} onOpenRun={onOpenRun} />
         ) : null}
 
         {preview ? (

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
@@ -552,6 +552,59 @@ describe('PlanExecutePage', () => {
     fireEvent.click(screen.getByRole('button', { name: /生成执行预览/ }));
     expect(await screen.findByText(/预览已生成并冻结 4 台设备/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /确认发起/ })).toBeEnabled();
+  });
+
+  it('refetch 失败保留旧重复命中时，失败提示优先于旧横幅（#3495 复核修订）', async () => {
+    const startedAt = new Date().toISOString();
+    (api.planRuns.list as any).mockResolvedValue([
+      {
+        id: 9300,
+        plan_id: 7,
+        status: 'RUNNING',
+        run_type: 'MANUAL',
+        started_at: startedAt,
+        result_summary: { total: 4 }, // 缺 dispatch_device_ids → 每次求值都要 get 明细
+      },
+    ]);
+    (api.planRuns.get as any).mockResolvedValue({
+      id: 9300,
+      plan_id: 7,
+      status: 'RUNNING',
+      run_type: 'MANUAL',
+      started_at: startedAt,
+      run_context: { dispatch_device_ids: [1, 2, 3, 9] },
+    });
+    const { queryClient } = renderPage({
+      devices: [
+        { id: 1, serial: 'D1', host_id: 'h1', status: 'ONLINE' },
+        { id: 2, serial: 'D2', host_id: 'h1', status: 'ONLINE' },
+        { id: 3, serial: 'D3', host_id: 'h1', status: 'ONLINE' },
+        { id: 4, serial: 'D4', host_id: 'h1', status: 'ONLINE' },
+      ],
+    });
+
+    await goToDeviceStep();
+    for (const serial of ['D1', 'D2', 'D3', 'D4']) {
+      fireEvent.click(await screen.findByRole('checkbox', { name: new RegExp(serial) }));
+    }
+    fireEvent.click(screen.getByRole('button', { name: /预览发起/ }));
+
+    // 首次求值成功命中：旧横幅可见（这正是 refetch 后必须让位的 last successful data）
+    expect(await screen.findByTestId('duplicate-launch-banner')).toHaveTextContent('#9300');
+
+    // 同一 query key 的 refetch 失败——TanStack v5 保留上次成功 data 且 isError=true
+    (api.planRuns.get as any).mockRejectedValue(new Error('refetch failed'));
+    await act(async () => {
+      await queryClient.refetchQueries({
+        predicate: (query) => query.queryKey[0] === 'plan-execute-duplicate',
+      });
+    });
+
+    // 失败态优先：出现「检查不可用」+ 重试，旧命中不得冒充当前检查结果
+    const hint = await screen.findByTestId('duplicate-check-unavailable-hint');
+    expect(hint).toHaveTextContent('重复发起检查不可用');
+    expect(within(hint).getByRole('button', { name: '重试' })).toBeInTheDocument();
+    expect(screen.queryByTestId('duplicate-launch-banner')).not.toBeInTheDocument();
   });
 
   it('两个守卫查询成功且为空时不出现失败提示（#3495）', async () => {
