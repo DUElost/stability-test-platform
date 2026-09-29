@@ -17,8 +17,11 @@ Batch: B2 / G5（#3497 §3 G5 行，缺陷形态 F1）
    「设备占用信息加载失败，无法确认是否空闲。」+「重试」（两视图各自可见，不再只靠
    用户自己察觉）。
 2. **重复发起检测**：`duplicateMatch` 查询原先失败时取默认 `null`，与「没有重复」不可分。
-   现在接出 `isError` / `refetch` 并传给 `DispatchCockpit`；查询失败且无匹配时驾驶舱
-   显示「重复发起检查不可用」+「重试」（有匹配时仍优先显示既有 `DuplicateLaunchBanner`）。
+   现在接出 `isError` / `refetch` 并传给 `DispatchCockpit`；查询失败时驾驶舱显示
+   「重复发起检查不可用」+「重试」。**失败态优先于缓存中的旧匹配**——TanStack v5 的
+   refetch 失败会保留上一次成功的 `data` 且 `isError=true`（#3506 复核 A.2），若先判
+   `duplicateMatch`，旧重复横幅会冒充「当前检查结果」；`DispatchCockpit` 的分支顺序
+   为 `duplicateCheckError` → `duplicateMatch` → null。
 
 边界（#3497 §3 G5 / §6）：**只提示，不阻断**。不改派发逻辑、不在失败时禁用任何按钮；
 后端 `plan_dispatcher_sync` 仍独立检查 `active_lease` / `active_job`，本单修的是前端
@@ -40,17 +43,22 @@ Batch: B2 / G5（#3497 §3 G5 行，缺陷形态 F1）
 
 - `npx vitest run src/pages/execution/PlanExecutePage.test.tsx
   src/components/execution/plan-execute/DeviceMatrix.test.tsx
-  src/components/execution/plan-execute/DeviceMatrix.virtual.test.ts` → 3 files / 66 passed。
-  新增 3 条反例（#3497 §4 G5）：
+  src/components/execution/plan-execute/DeviceMatrix.virtual.test.ts` → 3 files / 67 passed。
+  新增 4 条反例（#3497 §4 G5 + #3506 复核 A.5）：
   1. 占用查询失败 → 矩阵与表格视图均出现「占用未知」提示；仍可选中 → 预览 → 确认发起
      （按钮可用性与改动前一致）。
   2. 重复检测失败 → 驾驶舱出现「重复发起检查不可用」+ 重试；不出现重复横幅；预览 /
      确认发起仍可用。
-  3. 两个查询成功且为空（无占用、无重复匹配）→ 两个提示均不出现。
+  3. **refetch 失败保留旧命中**（复核 A.2/A.5）：先成功命中（横幅可见）→ 同一 query key
+     强制 refetch 失败（v5 保留 last successful data + `isError=true`）→ 「检查不可用」+
+     重试出现、旧重复横幅消失。
+  4. 两个查询成功且为空（无占用、无重复匹配）→ 两个提示均不出现。
 - 变异自证（临时改回后复跑，随后 `git checkout` 恢复）：
   - 去掉占用提示渲染（`occupancyError ?` → `false ?`）→ 用例 1 转红；
   - 去掉重复提示渲染（`duplicateCheckError ?` → `false ?`）→ 用例 2 转红；
-  - 提示改为无条件渲染（条件 → `true ?`）→ 用例 3 转红（证明成功空态守卫有判别力）。
+  - 提示改为无条件渲染（条件 → `true ?`）→ 用例 4 转红（证明成功空态守卫有判别力）；
+  - **`DispatchCockpit` 分支换回旧顺序（`duplicateMatch` 优先）→ 用例 3 转红**（复核
+    修订的定向变异）。
 - 通用门禁：`npm run lint -- --max-warnings 0`、`npm run type-check`、`npm run knip`、
   `python scripts/run_gates.py check:quick`、`python -m pytest tests/ -q` 全绿（逐条结果
   见 PR 正文）。
