@@ -29,7 +29,8 @@ reconcile；派生视图不再是主操作规范，降为 ground truth 交叉验
 
 - 冲突靠开工前 Registry 前检与实际 diff 交叉验证避免，不依赖手写 WIP 状态；
 - 分片只用于冲突规避，不形成目录所有权；
-- `AGENTS.md`、`CLAUDE.md` 及 Harness 共享规则同一时间只由一个 Execution 修改；
+- `AGENTS.md`、`CLAUDE.md` 及 Harness 共享规则同一时间只由一个工作面修改（协调域内经 Registry、
+  协调域外查开放 PR 串行）；
 - Registry 只登记其协调域内的实施者（现阶段即本机同一克隆内的 Harness 会话）；协调域外的
   规划 / 复核工作面不 declare，改仓库文件前查开放 PR 是否已改目标文件，共享元文件重叠时串行
   （契约 §3.6，ADR-0058 D10）；

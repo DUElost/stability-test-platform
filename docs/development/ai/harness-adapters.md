@@ -88,7 +88,7 @@ Execution 串行修改。并行执行语义的权威源是
 | 编码中（长会话） | `python tools/dev/ai_work.py heartbeat --id <R>` | 纯心跳（= 无参 `update`）：刷自身 `last_seen` + GitHub reconcile；P2 起由 wrapper 定时调用，`last_seen` 据此升格为可靠 liveness 信号 |
 | 开 PR / scope 变化 | `python tools/dev/ai_work.py update --id <R> --pr <N> [--scope ...]` | 登记 PR、派生 integration、覆写声明 |
 | 编码停止 | `finish --id <R> --pr <N>` / `finish --id <R> --abandon` | 语义见契约 §3.3 transition table |
-| 文档/评审类会话（本地 Harness 中改 docs/reviews、issue 评论、PR 评审） | 同样 declare（scope=将产出的 docs/reviews 或 issue 意图目录）；协调域外的规划 / 复核工作面不 declare，改仓库文件前查开放 PR（契约 §3.6，ADR-0058 D10） | 本地纯评审会话不 declare 即「两头不可见」——diff 未产生时派生视图无信号，GitHub 只见产出不见意图 |
+| 文档实施类会话（本地 Harness 中修改仓库文档并开 PR） | 同样 declare（scope=将产出的文档目录）；纯 issue 评论 / PR 评审属复核职责，不登记（契约 §3.6，ADR-0058 D10） | diff 产生前派生视图无信号，declare 让文档修改意图可见；评审结论见 PR 评论 |
 
 - `whoami`/`status` 严格只读（观察不改变被观察状态）；只有带 identity 的写命令（declare/update/finish）刷新自身 `last_seen`；
 - 各 Harness 的自动加载差异（Codex/Cursor/OpenCode 读 scoped `AGENTS.md`；

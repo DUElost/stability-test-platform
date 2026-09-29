@@ -12,7 +12,7 @@
 
 | 层 | 回答什么 | 本仓落点 |
 |---|---|---|
-| Registry | 谁正在决定 | `execution-contract` / `ai_work.py` |
+| Registry | 谁正在实施 / 哪些 Execution 在协调窗口（决策归 Owner / 规划者，不进 Registry，ADR-0058 D10） | `execution-contract` / `ai_work.py` |
 | **Semantic Ownership（本文）** | **谁拥有定义权（owner）** | 本文件表行 |
 | Domain Authority | 事实/概念是什么 | 被指向的域内 ADR / design / 契约 |
 | ADR | 采用什么方案 | `docs/adr/` |
@@ -293,4 +293,5 @@
 | 2026-09-21 | **#3014 案 1A + 2A（codex）**：S15 增 ④（触发器非空）/ ⑤（ADR 型锚状态须 Accepted）/ ⑦（新建 ADR 必填 `归属域`，cutoff `2026-09-22`，不追溯）；§4.2 记「为什么是 ⑤ 而不是行数卡」；§6.2 改判行数自卡；§7 定强制面。`--self-test` 新增 6 条红/绿样例，`--check` 全绿（零 retroactive 红灯） |
 | 2026-09-26 | **ADR-0054 入表（claude）**：补 `agent-cp-contracts` 行——§7 触发 1（新建 Accepted ADR），且 ADR-0054 §8 的「视需要补 owner 行」随 C3 基线清零一并收口 |
 | 2026-09-26 | **ADR-0054 入表（claude）· 矩阵收口**：§5.1「控制面 / 执行分层」代表 ADR 补 `0054`，覆盖状态列指向 §5.2 的 `agent-cp-contracts` 行（承接上一条登记） |
+| 2026-09-28 | §0 Registry 行「谁正在决定」改为「谁正在实施 / 哪些 Execution 在协调窗口」（ADR-0058 D10：决策归 Owner / 规划者，不进 Registry） |
 | 2026-09-28 | **ADR-0058 入表（claude）**：补 `batch-delivery` 行（新建 Accepted ADR，§7 触发 1）；§5.1「多 Harness 执行」代表 ADR 补 `0058`——`execution-registry` 管实施 Execution 的协调，`batch-delivery` 管其上游的规划 / 复核 / 激活职责与协调域划界 |
