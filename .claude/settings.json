@@ -14,7 +14,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/tools/dev/check_destructive_git.py"
+            "command": "g=\"$CLAUDE_PROJECT_DIR\"/tools/dev/check_destructive_git.py; if [ -f \"$g\" ]; then python3 \"$g\"; else echo \"[WARN] destructive-git guard script missing, guard NOT active: $g\" >&2; exit 1; fi"
           }
         ]
       }
