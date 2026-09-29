@@ -1,8 +1,8 @@
 # AI Execution Contract（执行契约）
 
-- **状态**：Living v1.13（v1.13 变更：§3.4 增「空 issue 集必须显性」（advisory `[WARN]`，替代实测被忽略的行尾 hint；#2729，2026-09-18）。v1.12（本文是 Execution Contract 的**唯一权威源**；方向裁决与理由见 [`ADR-0034`](../../adr/ADR-0034-multi-harness-execution-contract.md)（Accepted），两者冲突时以本文为准并回溯修订 ADR。v1.12 变更：**契约分层**——实现级细则与历史留档迁入[规范附录](execution-contract-annex.md)（A.1 写入协议 / A.2 drift 豁免 / A.3 已满足的启动判据与过渡条款 / A.4 v1.1–v1.8 明细），正文只留语义面；S6 预算随之下调（#1238，2026-09-10 用户裁决）。v1.11 变更：§2.1 命令清单改以 `--help` 为准；§3.3 增 `update --all`（只刷终态、不刷 `last_seen`）（#1234）。v1.10 变更：§3.2/§3.3 **integration 缓存失效**（`risk = 真值表 ∧ ¬landed`，fail-safe、不写字段）+ 僵尸候选两类对齐；§5.2 增 derived 归属前提；§3.5/§3.6 决策类判据机械化、模式词汇表与字段封闭性（#1232；2026-09-10 用户裁决）。v1.9 变更：§3.2 增僵尸候选第二类 `closed-unmerged`——PR CLOSED 未合且未放弃、失联、diff 为空的记录显式提示（仍在风险窗口并占 issue 槽位，唯一出口 `finish --abandon` 只能人工触发，来源 #1147 记录静默占位；2026-09-09 用户裁决）；（v1.1–v1.8 变更明细见[附录 A.4](execution-contract-annex.md#a4-变更历史v11v18自正文头部迁出)））
-- **日期**：2026-09-10
-- **适用**：所有在本仓库参与 Execution Registry 的 AI Coding Harness 会话；**用哪个 Harness 承接哪个 Requirement 始终由开发者决定**（选择权原则，ADR §2.1）——本文只约束已被选择的 Execution 如何登记与协同可见，不定义任何路由或自动下发
+- **状态**：Living v1.14（v1.14 变更：§3.6 执行模型收窄（ADR-0058 D10，Owner 2026-09-28 裁决）——退役 Mode A/B/C 词汇，生产实施为唯一执行模型；Registry 只登记其协调域内的实施者，协调域外工作面不 declare、其仓库写入以开放 PR 检查与共享元文件串行补可见性；§3.5 改为协调域内 Registry / 协调域外开放 PR 的可见性双通道（事故实录迁附录 A.6）；v1.9–v1.13 变更明细迁入附录 A.4。本文是 Execution Contract 的**唯一权威源**；方向裁决与理由见 [`ADR-0034`](../../adr/ADR-0034-multi-harness-execution-contract.md)（Accepted），两者冲突时以本文为准并回溯修订 ADR；v1.1–v1.13 变更明细见[附录 A.4](execution-contract-annex.md#a4-变更历史v11v113自正文头部迁出)）
+- **日期**：2026-09-28
+- **适用**：Registry 协调域内的实施 Execution（现阶段即宿主机同一克隆内的本地 Harness 会话，§3.6）；**用哪个 Harness 承接哪个 Requirement 始终由开发者决定**（选择权原则，ADR §2.1）——本文只约束已被选择的 Execution 如何登记与协同可见，不定义任何路由或自动下发
 - **上游评审**：两轮八源审查综合 [`REVIEW_ADR0034_MULTI_HARNESS_2026-09-06_synthesis.md`](../../reviews/REVIEW_ADR0034_MULTI_HARNESS_2026-09-06_synthesis.md)（R1–R30 权威映射）
 - **本文演进**：版本化演进于本文（含其[规范附录](execution-contract-annex.md)，两者同版本）；细则不再回填 ADR 正文（ADR-0034 升 v1.1 收缩为决策要点 + 指针）。正文承载语义面、附录承载实现级细则与历史留档，冲突时以正文为准（v1.12）
 
@@ -105,27 +105,29 @@ risk = integration ∈ {PR_OPEN, READY}                                ← 开�
 - **空 issue 集必须显性（v1.13 增，#2729）**：issue 集为空时 declare 输出独立一行 `[WARN]`（写明查重对它不生效 + 两种补齐写法），**advisory、不阻断**；行尾 hint 撤除（同一事实只留一处）。实录与取舍见[附录 A.5](execution-contract-annex.md#a5-空-issue-集边界与-2706-撞车实录2729)。
 - **定位**：查重是**工作项去重，不是文件上锁**（§2.3 边界不变）——scope overlap（§5.4）管「同一处代码」，issue 查重管「同一件事」，两者互补且都尊重选择权原则（§适用）：冲突由人裁决，工具只保证可见与默认拒绝。
 
-### 3.5 竞争提案可见性与决策实体唯一性（v1.8 增，#906）
+### 3.5 决策实体唯一性与可见性双通道（v1.8 增，#906；v1.14 改双通道）
 
-**事故来源（2026-09-08，#906 / R02-R01）**：同一 Requirement 上两个独立 Execution 各自把结论落成**同一编号 ADR-0035**的两份文件——#1147（当前状态：接受共享 `AGENT_SECRET` + 升级触发）与 #1163/#1170（目标形态：A 每主机凭据 + C 注册质询），两份正文均自称权威。二者并非结论对立，而是**决策层级不同**（当前状态 vs 目标形态）被写进了同一个权威位。用户裁决（2026-09-09）：合并为单一 ADR-0035 并四段化，不保留第二份。
+**事故来源**（#906，2026-09-08）：同一 Requirement 的两个独立 Execution 把结论落成同一编号 ADR-0035 的两份文件，两份均自称权威；实录与裁决见[附录 A.6](execution-contract-annex.md#a6-adr-0035-双权威事故实录906)。
 
-**分层原则**：`N Harness ─▶ N Proposals ─▶ 1 Human Decision ─▶ 1 ADR`。**Execution ≠ Artifact ≠ Decision**——同一 Requirement 可以有多个独立 implementation / review / adr-proposal Execution（竞争本身有价值，§适用）；但**一个架构主题在同一时刻只能有一个权威 Decision Artifact**，ADR 是 Decision 的持久化记录、不是 Proposal 的落点，多个 Proposal 必须在人类裁决后汇聚成一份 ADR；竞争 Proposal 之间**不设 Decision Lock**（Registry 只给可见性，不阻断、不预定编号、不宣告所有权）。
+**分层原则**：**Execution ≠ Artifact ≠ Decision**——**一个架构主题在同一时刻只能有一个权威 Decision Artifact**；ADR 是 Decision 的持久化记录、不是 Proposal 的落点。多份独立提案或审计（v1.14 起由协调域外的规划 / 复核工作面组织，§3.6）须经人类裁决后汇聚成一份 ADR。
+
+**可见性双通道**（均只给可见性，不阻断、不预定编号、不宣告所有权）：协调域内修改决策文档的实施 Execution 走 **Registry + §3.4 issue 查重**（纪律 1）；协调域外的规划者 / 复核者走**开放 PR 查重**（纪律 2）；两条通道同受纪律 3 约束。
 
 **强制纪律**：
 
-1. **决策类 Execution 必须显式 `declare --issue <n>`**（决策类 = 产物为 ADR / 裁决文档 / 设计方向文档）。issue 集是 §3.4 查重的唯一数据源，缺 `--issue` 会让同一 Requirement 的两个 Execution 完全互不感知——本次事故中第二个 Execution 未声明 issue，§3.4 因此静默通过、只剩 hint 级 overlap。声明后同一 issue 的第二次 declare 会被 §3.4 **默认拒绝**，人工确认竞争边界才可 `--force` 放行（放行即留痕）。**v1.10 机械化（#1232）**：scope 声明具体 ADR 文件（`docs/adr/ADR-*`，目录 `docs/adr` 不算）即判为决策类，未带 `--issue` 时 declare **默认拒绝**，人工确认后 `--force` 放行并输出 `[WARN]` 留痕。
-2. **落笔前必须扫竞争提案**：未合入的 ADR 提案只在 PR 里可见（`main` 上不存在），故除 `status` 前检外，动手写 ADR 前必须检查开放 PR 是否已有**同编号或同主题**的 ADR 文件，并确认目标编号未被占用。
-3. **同一主题的第二份权威 ADR 不得合入**：发现同主题已存在 Accepted/Proposed ADR 时，第二份不得以新编号自行落地为权威，应作为 Proposal 交人类裁决、裁决后合并进既有 ADR（本 ADR-0035 即此形态）。
+1. **协调域内的决策类 Execution 必须显式 `declare --issue <n>`**（决策类 = 产物为 ADR / 裁决文档 / 设计方向文档）。issue 集是 §3.4 查重的唯一数据源，缺 `--issue` 会让同一 Requirement 的两个 Execution 完全互不感知——本次事故中第二个 Execution 未声明 issue，§3.4 因此静默通过、只剩 hint 级 overlap。声明后同一 issue 的第二次 declare 会被 §3.4 **默认拒绝**，人工确认竞争边界才可 `--force` 放行（放行即留痕）。**v1.10 机械化（#1232）**：scope 声明具体 ADR 文件（`docs/adr/ADR-*`，目录 `docs/adr` 不算）即判为决策类，未带 `--issue` 时 declare **默认拒绝**，人工确认后 `--force` 放行并输出 `[WARN]` 留痕。
+2. **落笔前必须扫竞争提案**：未合入的 ADR 提案只在 PR 里可见（`main` 上不存在），故动手写 ADR 前必须检查开放 PR 是否已有**同编号或同主题**的 ADR 文件，并确认目标编号未被占用。协调域内这是 `status` 前检之外的补充；协调域外这是唯一的查重通道。
+3. **同一主题的第二份权威 ADR 不得合入**：发现同主题已存在 Accepted/Proposed ADR 时，第二份不得以新编号自行落地为权威，应作为 Proposal 交人类裁决、裁决后合并进既有 ADR（ADR-0035 即此形态）。
 
-**边界**：本条是**可见性与汇聚纪律**，不是调度或上锁——不新增持久字段、不引入 Decision Registry、不改 overlap 谓词（§5.4 仍为 hint 级、从不禁止修改），也不推翻 §2.3「Registry 不对业务上锁」；只要求决策类 Execution 在声明面说清「我正在形成哪件事的决策」，让 §3.4 的既有查重真正生效。
+**边界**：本条是**可见性与汇聚纪律**，不是调度或上锁——不新增持久字段、不引入 Decision Registry、不改 overlap 谓词（§5.4 仍为 hint 级），也不推翻 §2.3「Registry 不对业务上锁」。协调域内要求决策类 Execution 在声明面说清「我正在形成哪件事的决策」，让 §3.4 查重生效；协调域外由开放 PR 承担同一可见性。
 
-### 3.6 执行模式词汇表与字段封闭性（v1.10）
+### 3.6 执行模型、协调域与字段封闭性（v1.14，ADR-0058 D10）
 
-- **Mode A 生产执行**：`1 Requirement → 1 Harness → 1 PR`（默认）；
-- **Mode B 竞争探索**：`1 Requirement → N Harness → N 独立 Proposal`，Proposal 完成前**互不可见**，汇聚后由人裁决落成一份 ADR（§3.5）；
-- **Mode C 并行审计**：`1 审计 Requirement → N 独立评审 → N Findings → 去重汇聚 → 新 Requirement`。
+- **唯一执行模型**：生产实施 `1 Requirement → 1 Harness → 1 PR`；原 Mode A/B/C 词汇退役（按 Mode C 完成的历史评审不回改）。
+- **协调域**：Registry 只登记属于其协调域的实施 Execution——现阶段即宿主机同一克隆的本地 Registry（§2.1）内的 Harness 会话。判据是能否参与该协调域，不是进程在本机还是云端。规划者、复核者、集成观察者（ADR-0058 D8）不属于协调域，不 declare。
+- **协调域外的仓库写入**：写冲突可见性由开放 PR 承担——改仓库文件前查开放 PR 是否已改目标文件；共享元文件重叠时串行；§3.5 纪律 2、3 同样适用。本条不把这些工作面定义为 Execution。
 
-共性 = **先独立、后汇聚**。故 **Registry 是 execution coordination metadata，不是 reasoning memory**——§1.2 字段集**封闭**，不得新增 `notes`/`plan`/`reasoning` 类自由文本字段。
+**Registry 是 execution coordination metadata，不是 reasoning memory**——§1.2 字段集**封闭**，不得新增 `notes`/`plan`/`reasoning` 类自由文本字段。
 
 ## 4. TTL 与心跳分期
 

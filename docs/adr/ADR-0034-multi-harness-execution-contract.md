@@ -1,6 +1,6 @@
 # ADR-0034：多 Harness 并行执行契约与执行登记（Multi-Harness Execution Contract）
 
-- 状态：**Accepted（v1.12）**
+- 状态：**Accepted（v1.13）**
 - 版本记录：v0.1 #858 / v0.2 #859（选择权原则）/ v0.3 #860（Contract hardening）/ #861（索引同步）/ v0.4 #862（八源 synthesis）+ #863（R6/R18 裁决）/ v0.5 #864（第二轮复审）/ v1.0 #865（**Accepted**，2026-09-06 用户人工终审批准）/ v1.1 #866（§2 细则迁出至 `execution-contract.md`，本文保留决策要点 + 指针）/ **v1.2 #877：P1 启动判据修订——增补「已计划的多 Harness 批次启动前预置就绪」（2026-09-07 用户裁决：本 ADR 立项背景即即将开展的多 Issue 集中修复与新需求开发，工具须先于场景就绪；判据全文见契约 §9 v1.1）**
 **v1.3 本版：附录 A 增补 Antigravity CLI 实测（2026-09-07，`agy 1.1.26 -p`：无仓库规则自动发现——根/嵌套 AGENTS.md、CLAUDE.md symlink、GEMINI.md 均不加载，引文诊断确认；供给=调用方前置 `tools/dev/agy_with_rules.sh`；P2 加载矩阵终验随之扩展为五家结论）**
 **v1.4 本版：附录 A 补机制层根因（规则装载=声明式配置 `user_rules` 节空被 skip——装载清单无约定文件通道）与官方迁移文档冲突记录（迁移文档声称解析 active directory 的 GEMINI/AGENTS.md，但 `-p` 非交互实测不符——待上游确认，澄清前 agy 供给一律走前置脚本）**
@@ -12,6 +12,7 @@
 **v1.10 本版：附录 A 增补 dsh web 实测（2026-09-08，DeepSeek Harness `dsh` 0.1.1-rc.2，headless 阳性对照 + 浏览器自动化驱动 web UI）——根级 `AGENTS.md` 基线注入 ✅、scoped `AGENTS.md` 触碰后动态注入 ✅（会话 typed source `kind=agent-instructions` 实证；web 会话 cwd=工作区根，「cwd 深度」验收形态不适用）；⚠️ 静态 `--dump-config`/patch 层显示该插件 `disabled: true` 与运行时行为矛盾——加载判定只认行为探针；调用前提=工作区经原生目录选择器注册（GUI 无脚本通道）；Registry CLI 未 dogfood，转正以首个真实单为准**
 **v1.11 本版：dsh web 转正回填——Registry CLI 全周期 dogfood 通过（#1256：declare→worktree 修复→gates→PR #1291→update→finish，2026-09-10 合入；0.1.5-rc.1 加载复测与 v1.10 结论一致），附录 A 行与 harness-adapters.md 行同步更新**
 **v1.12 本版：CodeBuddy CLI/IDE 分立——附录 A 原单行「CodeBuddy」实为 CLI 结论却被读作覆盖整个产品线（IDE 从未探针）；2026-09-11 人工补测 IDE 得 Q1=否/Q2=是/Q3=一次（Zcode 同形态，与 CLI 相反），故照 Cursor CLI/IDE 分列先例拆为两行、CLI 版本按实测校正为 2.149.0，harness-adapters.md 与 harness_probe.py 同步（IDE 入人工形态）；**IDE 版本 4.11.3 经人工读取补入本版**（探针时未能从磁盘读出）**
+**v1.13 本版：执行模型收窄（[ADR-0058](./ADR-0058-planned-batch-execution.md) D10，Owner 2026-09-28 裁决）——契约 §3.6 退役 Mode A/B/C 词汇，生产实施 `1 Requirement → 1 Harness → 1 PR` 为唯一执行模型；Registry 只登记其协调域内的实施者（现阶段即宿主机同一克隆内的本地 Harness），规划 / 复核 / 集成观察工作面不 declare，协调域外仓库写入以开放 PR 检查与共享元文件串行补可见性；Registry 字段、三维状态、overlap 谓词、transition table 与 §2.1 选择权原则均不变。批次规划、复核与激活的交付流程由 ADR-0058 管辖，本 ADR 只管实施 Execution 的协调**
 - 优先级：P1
 - 目标里程碑：M7（延续）
 - 日期：2026-09-06
@@ -148,7 +149,7 @@ AGENTS.md / CLAUDE.md / .cursor/rules / .codex    ← 各入口只保留最小�
 - **审计吞吐实测恶化**（集成冲突/返工率、合入后核销与 reconcile 负载、登记交互成本上升）：重议 §2.6 并发姿态与收尾自动化（如 post-merge 自动 reconcile）——触发器是实测数据，非会话数；
 - **AGENTS.md 逼近 80 行/8KB ceiling**：预算扩容须独立裁决，不随功能顺手放宽；
 - **#857 上游修复**：根层 import 形态与 G2 形态优先级随之复评；
-- **Competition mode**（显式、受审计的开发者批准竞争）：**已裁决（2026-09-06）**——冻结版 Contract v1 不含此条款，评审建议降级为非阻断追溯项，不入 Contract；现文本 overlap=hint + 不上锁已隐含允许并行，真实竞争需求出现再议。
+- **Competition mode**（显式、受审计的开发者批准竞争）：**已裁决（2026-09-06；v1.13 起多份独立提案 / 审计改由 ADR-0058 的协调域外工作面组织，不再作为执行模式）**——冻结版 Contract v1 不含此条款，评审建议降级为非阻断追溯项，不入 Contract；现文本 overlap=hint + 不上锁已隐含允许并行，真实竞争需求出现再议。
 
 ## 附录 A：2026-09-06 Harness 摄取实测矩阵
 

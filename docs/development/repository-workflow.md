@@ -29,7 +29,11 @@ reconcile；派生视图不再是主操作规范，降为 ground truth 交叉验
 
 - 冲突靠开工前 Registry 前检与实际 diff 交叉验证避免，不依赖手写 WIP 状态；
 - 分片只用于冲突规避，不形成目录所有权；
-- `AGENTS.md`、`CLAUDE.md` 及 Harness 共享规则同一时间只由一个 Execution 修改；
+- `AGENTS.md`、`CLAUDE.md` 及 Harness 共享规则同一时间只由一个工作面修改（协调域内经 Registry、
+  协调域外查开放 PR 串行）；
+- Registry 只登记其协调域内的实施者（现阶段即本机同一克隆内的 Harness 会话）；协调域外的
+  规划 / 复核工作面不 declare，改仓库文件前查开放 PR 是否已改目标文件，共享元文件重叠时串行
+  （契约 §3.6，ADR-0058 D10）；
 - 并发不设会话数上限（ADR-0034 §2.6 v1.8）；瓶颈在集成收尾侧（审阅吞吐 + 平台可靠性），在窗 Execution 规模与 reconcile 负载为实测代理，恶化时重议。
 
 派生视图（交叉验证；`effective_scope = declared ∪ derived` 中 derived 是 Git
@@ -288,6 +292,31 @@ GitHub Actions 生态更新需要人工评审。全量 CI 失败由 backstop 使
 - [`2026-09-16-retire-pr-agent-advisory.md`](../notes/process/2026-09-16-retire-pr-agent-advisory.md)
 - [`2026-09-12-pr-gate-promotion-rule-1525.md`](../notes/process/2026-09-12-pr-gate-promotion-rule-1525.md)
 
+## 批次交付流程（ADR-0058）
+
+多个 issue 属同一缺陷形态、需要一次协调激活、或涉及数据丢失 / 安全 / 难回退语义时，走批次：
+Owner 批准批次与 Appetite → 规划者出方案（批次 issue 正文）→ 各实施单元按普通实施领单 →
+独立复核 → 激活 → 分层验收。职责与闸门以 ADR-0058 为准；做法与模板见
+[`batch-planning.md`](ai/batch-planning.md)、[`batch-review.md`](ai/batch-review.md)。
+
+- **待复核单元保持 draft**：FIFO 队列跳过 draft。复核者在 PR 下评论「通过」后由 Owner 转 ready；
+  实施者修完 CI 也保持 draft。复核前合入是可恢复的流程违规，复核改到激活前补做；
+- **激活闸门**：部署、`--publish`、scan、重指 plan_step 之前，所有「必须复核」单元已通过；
+  重指单独请 Owner 确认；
+- **集成观察者只报告**：「队列里没有 ready 的 PR」是集成状态，不是复核状态，不构成把任何
+  draft 转为 ready 的理由；观察者无 ready、合入、方案或复核结论的决定权；
+- **关单**：需要激活才生效的改动用 `Refs`，激活并贴出生效证据后再关 issue。
+
+现行承载（更换工具只改本表，不改 ADR）：
+
+| 职责 | 现行承载 | 进入 Registry |
+|---|---|---|
+| 规划者 | Claude Code（云端 Web） | 否 |
+| 实施者 | 开发者选择的本地 Harness | 是 |
+| 复核者 | ChatGPT Codex（云端 Web） | 否 |
+| 集成观察者 | Grok Bot | 否 |
+| Owner | 开发者本人 | 否 |
+
 ## 冲刺期的结构护栏
 
 临近节点时按 ADR-0034 多 Harness 并行消解积压，合入量会成倍上升；不为此设合入上限
@@ -296,9 +325,10 @@ CI 兜底与每日审计原本只覆盖**行为**（修复是否落地），以�
 
 - **CI 结构门禁**：`lint` job 的「分层检查」跑仓库根 `.importlinter`（C1–C5），分层退化
   由 CI 拦下，不依赖人读 diff；已知违规是只减不增的基线；
-- **领单前分流**：需要方案取舍的 issue 打 `needs-decision` 标签，由开发者在 issue 里写一行
-  选定方案后再放行领单；方案已定的直接并行消解。当前是标签约定，若要在
-  `ai_work declare` 中机械拦截，属于改变执行语义，须先修订 ADR-0034；
+- **领单前分流**：按 [ADR-0058](../adr/ADR-0058-planned-batch-execution.md) D7 分流——满足强判据的
+  走批次（见下节），其余单点问题直接领单实施；`needs-decision` 是辅助信号，由开发者在 issue 里
+  写一行选定方案，或交规划者判断是否升级为批次。当前是标签约定，若要在 `ai_work declare`
+  中机械拦截，属于改变执行语义，须先修订 ADR-0034；
 - **结构日报**：每日审计时运行 `python tools/dev/structure_digest.py`（默认近 1 天合入、
   7 天热点窗口），一页看合入构成、合约基线变化、三次法则热点（7 天内被 ≥3 个 fix PR
   改过的生产文件）、新增门禁、过渡登记与兜底标记的变化；

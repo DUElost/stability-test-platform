@@ -37,10 +37,11 @@
 
 1. 从 [`docs/DOC-MAP.md`](docs/DOC-MAP.md) 和下表定位当前 Requirement 的权威文档；
 2. 检查目标代码、测试和相邻目录内的 scoped `AGENTS.md`（Claude 侧为其 `CLAUDE.md` symlink 薄壳）；
-3. 并行前检与领单：`python tools/dev/ai_work.py status` 查在窗 Execution 后
+3. 并行前检与领单（本地 Harness 实施者）：`python tools/dev/ai_work.py status` 查在窗 Execution 后
    `declare`；实际 diff 作 ground truth 交叉验证，避免同时修改同一批文件。
+   云端规划 / 复核工作面不 declare，改仓库文件前查开放 PR（ADR-0058 D10）。
    契约见 [`execution-contract.md`](docs/development/ai/execution-contract.md)；
-4. 共享元文件（本文件、`CLAUDE.md`、Harness rules）同一时间只由一个 Execution 修改。
+4. 共享元文件（本文件、`CLAUDE.md`、Harness rules）同一时间只由一个工作面修改（协调域内经 Registry、协调域外查开放 PR 串行）。
 
 当前并行约定见
 [`repository-workflow.md`](docs/development/repository-workflow.md)；改变现行执行语义前
@@ -60,6 +61,7 @@
 | 生产只读诊断 | [`production-diagnostics.md`](docs/operations/production-diagnostics.md) |
 | Harness 适配与本地配置 | [`harness-adapters.md`](docs/development/ai/harness-adapters.md) |
 | 并行 Execution 契约 | [`execution-contract.md`](docs/development/ai/execution-contract.md) |
+| 批次规划与复核（ADR-0058） | [`batch-planning.md`](docs/development/ai/batch-planning.md)、[`batch-review.md`](docs/development/ai/batch-review.md) |
 | 执行状态机与 Agent 终态协议 | [`07-execution-protocol.md`](docs/design/07-execution-protocol.md) |
 | 存储角色与路径 | [`2026-storage-roles-and-aliases.md`](docs/design/2026-storage-roles-and-aliases.md) |
 | 环境变量清单 | [`environment-variables.md`](docs/development/environment-variables.md) |
