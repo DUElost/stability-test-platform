@@ -14,7 +14,7 @@
 - 不得把密码、token、私钥、连接串或主机清单内容写入代码、文档、日志或 PR diff；
 - 不得用生产数据库代替测试数据库；
 - 不得在生产数据库上试跑迁移；
-- `.env.backend`、`backend/.env` 和 Agent `.env` 的职责不同，不得互相代用。
+- 站点生产 env、仓根 `.env.backend`、`backend/.env` 和 Agent `.env` 的职责不同，不得互相代用。
 - **手工查询不得用 `postgres` 超级用户或应用共享凭据 `stp`**：前者的误操作半径最大，
   后者与业务进程共用同一身份、事件无法归属（#2632 缺口②）。临时诊断一律用专用只读角色
   **`stp_ro`**，连接带 `application_name`（见 §凭据来源）。
@@ -34,20 +34,24 @@
   loopback/本机 socket 会被 conftest 拒载（#2632 缺口③，语义见
   [`../development/testing.md`](../development/testing.md) §3）。
 - **`backend/.env` 里的 `AGENT_SECRET` 是陈旧值**：控制面与全部 Agent 实际使用的
-  都是 `.env.backend` 的生产值，`backend/.env` 的旧值签发的 token 一律不被认——
-  诊断 auth 问题时以 `.env.backend` 为准，不要被 `backend/.env` 的残留值误导。
+  都是站点生产 env 的值，`backend/.env` 的旧值签发的 token 一律不被认——
+  诊断 auth 问题时以站点配置为准，不要被 `backend/.env` 的残留值误导。
+- **生产目标取自站点当前权威配置，不取自开发仓库根 `.env.backend`**（ADR-0051 D6：生产 env
+  真身是站点文件，仓根 `.env.backend` 已降级为纯 dev 配置，两者可漂移；位置与取数方式见
+  [`control-plane-deploy` skill](../../.claude/skills/control-plane-deploy/SKILL.md) §1）。
+  **目标或 `stp_ro` 任一不可确认即停止诊断**，不回退 `stp` / `postgres` / 仓根 env。
 
 ## 凭据来源
 
 | 用途 | 来源 | 约束 |
 |---|---|---|
 | Agent fleet SSH | `/home/debian13/hosts.ini` 的 `[android]` 与 `[android:vars]` | 清单是本地敏感文件；规模以当前内容为准 |
-| Backend 数据库 | 仓库根 `.env.backend` 的 `DATABASE_URL` | 本机 PostgreSQL 可能就是生产 `stp`；只读 SELECT 优先 |
-| 临时手工诊断 | 只读角色 `stp_ro`（`deploy/postgres/diag-readonly.sql` 创建，口令只在库侧） | 不得复用 `.env.backend` 的 `stp` 口令，也不得用 `postgres`；角色缺失即停（#2632 缺口②） |
-| 控制面管理员 | 仓库根 `.env.backend` 的 `STP_ADMIN_USER`、`STP_ADMIN_PASSWORD`、`AGENT_SECRET` | `backend/.env` 不是生产凭据源 |
+| Backend 数据库（目标） | 站点生产 env 的 `DATABASE_URL`（ADR-0051 D6），仅用于确认目标（库地址 / 库名） | 不取其中 `stp` 的账号口令；本机 PostgreSQL 可能就是生产 `stp`；目标不可确认即停 |
+| 临时手工诊断（读库） | 只读角色 `stp_ro`（`deploy/postgres/diag-readonly.sql` 创建，口令只在库侧，由操作者显式提供） | 不得复用站点 env 里的 `stp` 口令，也不得用 `postgres`；角色缺失即停（#2632 缺口②） |
+| 控制面管理员 | 站点生产 env 的 `STP_ADMIN_USER`、`STP_ADMIN_PASSWORD`、`AGENT_SECRET` | 仓根 `.env.backend` 与 `backend/.env` 都不是生产凭据源 |
 
 控制面本机使用仓库 `venv/bin/python` 和 psycopg 3。需要调用管理 API 时，先从
-`/api/v1/auth/token` 获取 token，并使用同一生产 env 源中的 `AGENT_SECRET`；
+`/api/v1/auth/token` 获取 token，并使用同一站点生产 env 中的 `AGENT_SECRET`；
 不要把解析出的值打印或持久化。
 
 **临时 psycopg 连接请带 `application_name`**（如
@@ -71,7 +75,7 @@ Claude Code 的项目设置只禁止修改部分凭据文件；允许读取是�
 ## 状态机一致性核对（可复跑）
 
 > 来源：2026-09-17 一次完整只读核对（**当次 10 项全 0**——这是日期快照，以当次现查为准）。
-> 全 `SELECT`；连接串只从仓库根 `.env.backend` 的 `DATABASE_URL` 取、经环境变量传入脚本，
+> 全 `SELECT`；目标取自站点配置、以 `stp_ro` 连接（带 `application_name`），经环境变量传入脚本，
 > **不打印不落盘**；用仓库 `venv/bin/python` + psycopg 3。建议连接开 `autocommit=True`：
 > 一条查询报错会污染事务，后续查询会连带报 `InFailedSqlTransaction`（实测踩过）。
 

@@ -33,8 +33,9 @@
 ## 1. 前置检查
 
 1. **选机**（控制面 DB 只读；连接姿势见
-   `docs/operations/production-diagnostics.md`，连接串取 `.env.backend`
-   的 `DATABASE_URL`，剥 `+asyncpg` 前缀）：
+   `docs/operations/production-diagnostics.md`：目标取自站点生产 env 的 `DATABASE_URL`
+   （剥 `+asyncpg` 前缀，不取其中账号口令），以只读角色 `stp_ro` 连接、带 `application_name`；
+   目标或 `stp_ro` 不可确认即停）：
 
    ```sql
    SELECT h.id, h.name, count(*) FILTER (WHERE d.platform='MTK' AND d.status='ONLINE') AS mtk_online
