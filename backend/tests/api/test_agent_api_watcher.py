@@ -41,6 +41,7 @@ from backend.api.routes.agent_api import (
 )
 from backend.services.agent_log_signals import LogSignalIn
 from backend.services.agent_recovery import _build_recovery_job_payload
+from backend.services.device_retirement import retire_device
 from backend.core.database import AsyncSessionLocal, SessionLocal
 from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType
 from backend.models.device_lease import DeviceLease
@@ -1148,6 +1149,248 @@ async def test_claim_skips_retired_device():
         assert result.data == [], "退役设备不得被认领（须显式读 retired_at）"
     finally:
         _cleanup_seed(seed)
+
+
+# ----------------------------------------------------------------------
+# #3481：claim 快照读 → 落租约之间退役提交的交错反例
+# ----------------------------------------------------------------------
+
+def _seed_retire_race_host(*, device_count: int) -> dict:
+    """#3481 交错种子：1 host + N 台未退役设备 + 1 plan + 1 RUNNING plan_run。
+
+    刻意**不落 Job**：退役前置 `_assert_no_active_work` 把 PENDING 计为活跃，
+    Job 若先于退役存在，retire_device 会 409——生产里的合法交错是
+    「claim 快照读 → 退役提交 → dispatcher 才为该设备落下 PENDING Job →
+    claim 续行拿到该 Job」，Job 由用例在交错钩子里创建。
+    """
+    suffix = uuid4().hex[:8]
+    host_id = f"race-host-{suffix}"
+    now = datetime.now(timezone.utc)
+
+    db = SessionLocal()
+    try:
+        host = Host(
+            id=host_id,
+            hostname=f"rh-{suffix}",
+            status=HostStatus.ONLINE.value,
+            created_at=now,
+        )
+        devices = [
+            Device(
+                serial=f"SN-{suffix}-{i}",
+                host_id=host_id,
+                status="ONLINE",
+                tags=[],
+                created_at=now,
+                adb_connected=True,
+                adb_state="device",
+            )
+            for i in range(device_count)
+        ]
+        plan = Plan(
+            name=f"race-plan-{suffix}",
+            description="retire-claim-race",
+            created_by="pytest",
+        )
+        db.add_all([host, *devices, plan])
+        db.flush()
+
+        plan_run = PlanRun(
+            plan_id=plan.id,
+            status="RUNNING",
+            plan_snapshot={"plan": {"id": plan.id, "name": plan.name}},
+            run_type="MANUAL",
+            triggered_by="pytest",
+        )
+        db.add(plan_run)
+        db.commit()
+        return {
+            "host_id": host_id,
+            "device_ids": [d.id for d in devices],
+            "plan_id": plan.id,
+            "plan_run_id": plan_run.id,
+            "job_ids": [],
+        }
+    finally:
+        db.close()
+
+
+def _create_race_job(seed: dict, *, device_index: int, host_id: str | None = "seed") -> int:
+    """以 dispatcher 视角为 seed 的第 device_index 台设备落一条 PENDING Job。
+
+    ``host_id="seed"`` 用 seed 的 host；交错钩子里必须传 ``None``：claim
+    事务持有 host 行 ``FOR UPDATE``，此窗口内 INSERT 带 host_id 的 Job 会
+    在 host 外键检查上等该锁、与「claim 等钩子返回」成环（生产 dispatcher
+    是独立事务，无此环）。claim 认领时本就会回填 ``job.host_id``。
+    """
+    now = datetime.now(timezone.utc)
+    db = SessionLocal()
+    try:
+        job = JobInstance(
+            plan_run_id=seed["plan_run_id"],
+            plan_id=seed["plan_id"],
+            device_id=seed["device_ids"][device_index],
+            host_id=seed["host_id"] if host_id == "seed" else host_id,
+            status=JobStatus.PENDING.value,
+            pipeline_def=PIPELINE_DEF,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(job)
+        db.commit()
+        seed["job_ids"].append(job.id)
+        return job.id
+    finally:
+        db.close()
+
+
+def _cleanup_retire_race_seed(seed: dict) -> None:
+    db = SessionLocal()
+    try:
+        for job_id in seed["job_ids"]:
+            db.query(DeviceLease).filter(DeviceLease.job_id == job_id).delete()
+            db.query(JobInstance).filter(JobInstance.id == job_id).delete()
+        db.query(PlanRun).filter(PlanRun.id == seed["plan_run_id"]).delete()
+        db.query(Plan).filter(Plan.id == seed["plan_id"]).delete()
+        for device_id in seed["device_ids"]:
+            db.query(Device).filter(Device.id == device_id).delete()
+        db.query(Host).filter(Host.id == seed["host_id"]).delete()
+        db.commit()
+    finally:
+        db.close()
+
+
+def _install_retire_interceptor(
+    async_db,
+    *,
+    retire_device_id: int,
+    seed: dict,
+    job_device_index: int,
+) -> None:
+    """把 claim 会话的 ``execute`` 包一层，在设备清单快照读之后、PENDING Job
+    排名之前（第一条 device_leases 语句＝busy 预过滤）插入交错：走生产
+    ``retire_device`` 路径提交退役，再以 dispatcher 视角落下该设备的
+    PENDING Job。
+
+    时序即 #3481 竞态：claim 已读到「未退役」快照 → 退役提交（此刻该设备
+    无活跃 Job/ACTIVE 租约，前置通过）→ PENDING Job 可见 → claim 续行走
+    到 acquire_lease。
+    """
+    fired: list[bool] = []
+    original_execute = async_db.execute
+
+    async def intercepted(statement, *args, **kwargs):
+        if not fired and "device_leases" in str(statement):
+            fired.append(True)
+            sync_db = SessionLocal()
+            try:
+                retire_device(
+                    sync_db,
+                    device_id=retire_device_id,
+                    reason="#3481 interleaving race",
+                    actor_id=None,
+                    actor_username="tester",
+                )
+            finally:
+                sync_db.close()
+            _create_race_job(seed, device_index=job_device_index, host_id=None)
+        return await original_execute(statement, *args, **kwargs)
+
+    async_db.execute = intercepted
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_claim_race_retire_after_snapshot_no_lease_no_claim():
+    """#3481 交错反例：claim 快照读后退役提交 → 该设备不落租约、Job 不被误 claim。
+
+    4. acquire_lease 的 generation CAS（`retired_at IS NULL`）0 行 →
+       回滚 savepoint、跳过该设备：Job 保持 PENDING、无租约落库。
+    """
+    seed = _seed_retire_race_host(device_count=1)
+    try:
+        async with AsyncSessionLocal() as async_db:
+            _install_retire_interceptor(
+                async_db,
+                retire_device_id=seed["device_ids"][0],
+                seed=seed,
+                job_device_index=0,
+            )
+            result = await claim_jobs(
+                payload=ClaimRequest(
+                    host_id=seed["host_id"], capacity=5, agent_version="2.0.0",
+                ),
+                db=async_db,
+                _=None,
+            )
+        assert result.error is None
+        assert result.data == [], "退役设备的 Job 不得被误 claim"
+
+        db = SessionLocal()
+        try:
+            job = db.get(JobInstance, seed["job_ids"][0])
+            assert job is not None
+            assert job.status == JobStatus.PENDING.value, (
+                "误 claim 会把 Job 推到 RUNNING"
+            )
+            leases = db.query(DeviceLease).filter(
+                DeviceLease.device_id == seed["device_ids"][0]
+            ).all()
+            assert leases == [], "退役设备不得落任何租约"
+            device = db.get(Device, seed["device_ids"][0])
+            assert device.retired_at is not None
+        finally:
+            db.close()
+    finally:
+        _cleanup_retire_race_seed(seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_claim_race_retire_skips_device_but_claims_others():
+    """#3481：CAS 0 行只跳过退役设备，同 host 其余设备的认领必须继续。"""
+    seed = _seed_retire_race_host(device_count=2)
+    try:
+        # D2 在 claim 开始前就有一条 PENDING Job（健康路径对照）。
+        healthy_job_id = _create_race_job(seed, device_index=1)
+        async with AsyncSessionLocal() as async_db:
+            _install_retire_interceptor(
+                async_db,
+                retire_device_id=seed["device_ids"][0],
+                seed=seed,
+                job_device_index=0,
+            )
+            result = await claim_jobs(
+                payload=ClaimRequest(
+                    host_id=seed["host_id"], capacity=5, agent_version="2.0.0",
+                ),
+                db=async_db,
+                _=None,
+            )
+        assert result.error is None
+        assert [j.id for j in result.data] == [healthy_job_id], (
+            "只有健康设备被认领；退役设备的 Job 不得混入"
+        )
+
+        # job_ids[0]＝claim 前创建的健康 Job；[1]＝交错钩子（拦截器）创建的竞态 Job。
+        race_job_id = seed["job_ids"][1]
+        db = SessionLocal()
+        try:
+            race_job = db.get(JobInstance, race_job_id)
+            assert race_job.status == JobStatus.PENDING.value
+            healthy_job = db.get(JobInstance, healthy_job_id)
+            assert healthy_job.status == JobStatus.RUNNING.value
+            race_leases = db.query(DeviceLease).filter(
+                DeviceLease.device_id == seed["device_ids"][0]
+            ).all()
+            assert race_leases == [], "退役设备不得落任何租约"
+            healthy_leases = db.query(DeviceLease).filter(
+                DeviceLease.device_id == seed["device_ids"][1],
+                DeviceLease.status == LeaseStatus.ACTIVE.value,
+            ).all()
+            assert len(healthy_leases) == 1, "健康设备应正常落 ACTIVE 租约"
+        finally:
+            db.close()
+    finally:
+        _cleanup_retire_race_seed(seed)
 
 
 @pytest.mark.asyncio(loop_scope="module")

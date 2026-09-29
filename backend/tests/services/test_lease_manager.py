@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import select
 
 from backend.core.database import AsyncSessionLocal, SessionLocal
 from backend.models.device_lease import DeviceLease
@@ -130,6 +131,40 @@ class TestAcquireLeaseMain:
                     lease_type=LeaseType.JOB, agent_instance_id=host.id, job_id=jid2,
                 )
                 assert lease2 is None, "acquire_lease should return None on conflict"
+
+            await db.rollback()
+
+    @pytest.mark.asyncio(loop_scope="module")
+    async def test_acquire_lease_rejects_retired_device(self):
+        """#3481：generation 步进是带 `retired_at IS NULL` 条件的 CAS。
+
+        退役↔claim TOCTOU 的最后一道闸：设备快照读之后、UPDATE 落行之前
+        提交的退役必须赢——0 行即放弃本设备，不得落新租约、不得步进
+        `lease_generation`（fencing token 不空转）。
+        """
+        suffix = uuid4().hex[:8]
+        async with AsyncSessionLocal() as db:
+            host, device, job = await _create_seed(db, suffix)
+            did, jid = device.id, job.id
+            gen_before = device.lease_generation
+
+            device.retired_at = datetime.now(timezone.utc)
+            device.retired_by = "tester"
+            device.retire_reason = "#3481 race"
+            await db.commit()
+
+            lease = await acquire_lease(
+                db, device_id=did, host_id=host.id,
+                lease_type=LeaseType.JOB, agent_instance_id=host.id, job_id=jid,
+            )
+            assert lease is None, "退役设备不得获取新租约"
+
+            rows = (await db.execute(
+                select(DeviceLease).where(DeviceLease.device_id == did)
+            )).scalars().all()
+            assert rows == [], "退役设备不得落任何租约行"
+            await db.refresh(device)
+            assert device.lease_generation == gen_before, "CAS 0 行不得步进 generation"
 
             await db.rollback()
 

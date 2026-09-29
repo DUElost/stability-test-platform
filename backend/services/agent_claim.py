@@ -201,6 +201,11 @@ async def claim_jobs_for_host(
     #    - EXCLUDE: 已退役设备（ADR-0057 D4 第 2 面；#2962 B）——退役是人工确认的
     #      终态，与主机退役同判据（`retired_at IS NULL`），活读不缓存（退役可发生在
     #      准入与认领之间）。
+    #
+    #      该过滤只是准入快照，不是不变量的执行点：本读（无锁）到落租约之间
+    #      的退役由 acquire_lease 的 generation CAS（`retired_at IS NULL`，
+    #      #3481）拦截——0 行即回滚 savepoint、跳过该设备，继续 claim 其余
+    #      设备。两道判据合起来才覆盖 E2 的事后态。
     device_ids_result = await db.execute(
         select(Device.id).where(
             Device.host_id == host_id,
