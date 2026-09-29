@@ -378,6 +378,16 @@ describe('NotificationsPage', () => {
       expect(within(cardOf('失败即通知')).getByText('→ 渠道 #7')).toBeInTheDocument();
     });
 
+    it('事件类型下拉包含链断事件（CHAIN_INCOMPLETE，#3458）', async () => {
+      setData({ channels: [CHANNEL_WEBHOOK] });
+      renderPage('/notifications?tab=rules');
+      fireEvent.click(await screen.findByText('添加规则'));
+
+      const select = screen.getByLabelText('事件类型') as HTMLSelectElement;
+      expect(within(select).getByRole('option', { name: '链断' })).toBeInTheDocument();
+      expect(Array.from(select.options).map((o) => o.value)).toContain('CHAIN_INCOMPLETE');
+    });
+
     it('新建规则默认挂在第一个渠道上', async () => {
       setData({ channels: [CHANNEL_WEBHOOK, CHANNEL_EMAIL] });
       renderPage('/notifications?tab=rules');
