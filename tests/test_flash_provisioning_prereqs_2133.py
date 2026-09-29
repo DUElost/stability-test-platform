@@ -1,18 +1,21 @@
-"""刷机前置归位守卫（#2133 / #2284 / ADR-0037 D5）：install / update 链保证。
+"""刷机前置归位守卫（#2133 / #2284 / #3493 / ADR-0037 D5）：install / update 链保证。
 
 运行期不再装包/加组/写规则（`flash_preflight` 只检不修、wrapper 只做固定 udev
-自愈），因此「provisioning 链确实保证 dialout + ttyACM 规则 + 依赖包」必须由门禁
-守住：
+自愈），因此「provisioning 链确实保证 dialout + plugdev + ttyACM 规则 + Android
+USB 规则 + 依赖包」必须由门禁守住：
 
-1. `install_agent.sh`：dialout 成员、ttyACM 规则（#2284 起按本机 dialout 组二选一：
-   0660 + GROUP=dialout / 0666 退化）、包集合（含 t64 兜底与跳过开关）；
+1. `install_agent.sh`：dialout 与 plugdev 成员（§1.2/§1.3）、ttyACM 规则（§4c，
+   #2284 起按成员资格二选一：0660 + GROUP=dialout / 0666 退化）、Android USB
+   规则（§4d，#3493，0660 + GROUP=plugdev / 0666 退化）、包集合（含 t64 兜底与
+   跳过开关）；
 2. `update_agent.yml`：opt-in provisioning 段——每个任务都受
    `agent_ensure_flash_prereqs` 门控，且**位于升级门禁释放之后**（失败不得
    让门禁悬挂，#1249 教训）；
 3. `group_vars/linux_hosts.yml`：包集合与 `flash_preflight._DEFAULT_PACKAGES`
    逐项一致；
 4. 四个面的规则文本与 `flash_preflight` **最新版本**的两个形态常量逐字一致
-   （#2284：0660+dialout 与 0666 并存，车队升级渐进不破链）。
+   （#2284：0660+dialout 与 0666 并存，车队升级渐进不破链）；Android USB 规则
+   的两个形态由本文件常量锁定（#3493 无 preflight 判据面）。
 """
 
 from __future__ import annotations
@@ -82,6 +85,40 @@ def test_install_script_writes_dual_form_udev_rule():
     )
 
 
+#: Android USB（adb/fastboot）usbfs 节点全集规则（#3493）。fleet 为 MTK + 展锐混编、
+#: agent host 上插上即测试终端，故取全集而非 VID:PID 白名单；0660+plugdev 仍把
+#: 非 plugdev 用户挡在外面。Agent 用户不属 plugdev（无该组/加组失败）时退化 0666
+#: （#2353 同法）。收窄出口：host 出现不可信本地用户/多租户时按 #2284 同法收窄。
+_ADB_USB_RULE_PATH = "/etc/udev/rules.d/90-android.rules"
+_ADB_USB_RULE_LINE = 'SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", MODE="0660", GROUP="plugdev"'
+_ADB_USB_RULE_LINE_FALLBACK = 'SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", MODE="0666"'
+
+
+def test_install_script_adds_agent_user_to_plugdev():
+    """#3493：§1.3 在安装期保证 plugdev 成员资格（运行期不 usermod），组缺失跳过。"""
+    text = _install_text()
+    assert re.search(r'usermod -aG plugdev "\$USER"', text), \
+        "install_agent.sh 必须把 Agent 用户加入 plugdev（adb usbfs 节点 0660 面它可写）"
+    assert "getent group plugdev" in text, "plugdev 组缺失须跳过而非失败"
+
+
+def test_install_script_writes_adb_usb_rule():
+    """#3493：§4d 写 90-android.rules，形态按「Agent 用户是否属于 plugdev」二选一。"""
+    text = _install_text()
+    assert f'UDEV_ADB_RULE="{_ADB_USB_RULE_PATH}"' in text
+    assert "UDEV_ADB_LINE_0660='%s'" % _ADB_USB_RULE_LINE in text
+    assert "UDEV_ADB_LINE_0666='%s'" % _ADB_USB_RULE_LINE_FALLBACK in text
+    assert "udevadm control --reload-rules" in text
+
+    # 形态判据 = 成员资格（#2353 同法），不能看「组是否存在」。
+    rule_block = text[text.index("UDEV_ADB_RULE="):]
+    rule_block = rule_block[:rule_block.index("udevadm control --reload-rules")]
+    assert re.search(r'id -nG "\$USER"[^\n]*grep -qx plugdev', rule_block), rule_block
+    assert "getent group plugdev" not in rule_block, (
+        "§4d 的形态选择不得再看「组是否存在」（#2353 同法）"
+    )
+
+
 def test_install_script_package_list_matches_preflight():
     pf = _load_preflight()
     text = _install_text()
@@ -107,7 +144,10 @@ def _task_names(tasks) -> list:
 
 def test_update_playbook_has_gated_flash_prereq_section():
     tasks = _playbook_tasks()
-    section = [t for t in tasks if "#2133" in t.get("name", "")]
+    section = [
+        t for t in tasks
+        if "#2133" in t.get("name", "") or "#3493" in t.get("name", "")
+    ]
     assert len(section) >= 4, f"provisioning 段任务数异常：{_task_names(tasks)}"
     for task in section:
         when = task.get("when")
@@ -124,7 +164,9 @@ def test_update_playbook_flash_prereq_section_is_after_gate_release():
     release_idx = next(
         i for i, n in enumerate(names) if "Release control-plane upgrade gate" in n
     )
-    section_idx = next(i for i, n in enumerate(names) if "#2133" in n)
+    section_idx = next(
+        i for i, n in enumerate(names) if "#2133" in n or "#3493" in n
+    )
     assert section_idx > release_idx, (
         "刷机前置段必须位于升级门禁释放之后（否则失败会悬挂门禁）"
     )
@@ -257,3 +299,66 @@ def test_update_playbook_mm_rule_is_opt_in_and_reloads_udev():
     ensure_tasks = yaml.safe_load(ENSURE_PLAYBOOK.read_text(encoding="utf-8"))[0]["tasks"]
     ensure_reload = next(t for t in ensure_tasks if t.get("name") == "Reload udev rules after rule change (#2133)")
     assert "agent_flash_udev_mm_rule.changed" in str(ensure_reload.get("when")), ensure_reload
+
+
+def _adb_rule_tasks(playbook: Path) -> list[dict]:
+    tasks = yaml.safe_load(playbook.read_text(encoding="utf-8"))[0]["tasks"]
+    return [
+        t for t in tasks
+        if t.get("ansible.builtin.copy", {}).get("dest") == _ADB_USB_RULE_PATH
+    ]
+
+
+def test_update_playbook_covers_adb_usb_rule():
+    """#3493：update 链 opt-in 段写两种形态（0660+plugdev / 0666），按成员资格互补门控，
+    变更并入 udev 重载条件。"""
+    tasks = _playbook_tasks()
+    rule_tasks = _adb_rule_tasks(UPDATE_PLAYBOOK)
+    contents = {t["ansible.builtin.copy"]["content"].strip() for t in rule_tasks}
+    assert contents == {_ADB_USB_RULE_LINE, _ADB_USB_RULE_LINE_FALLBACK}, (
+        f"update playbook 必须写两种形态且逐字一致，实际 {contents}"
+    )
+    whens = [str(t.get("when")) for t in rule_tasks]
+    assert all("agent_ensure_flash_prereqs" in w for w in whens), whens
+    assert all("agent_flash_plugdev_member" in w for w in whens), whens
+    assert any("== 0" in w for w in whens), whens
+    assert any("!= 0" in w for w in whens), whens
+    assert all("agent_flash_plugdev_group" not in w for w in whens), (
+        "规则形态不得按「组是否存在」门控（#2353 同法）"
+    )
+    member_tasks = [
+        t for t in tasks
+        if "plugdev member" in t.get("name", "") and "ansible.builtin.shell" in t
+    ]
+    assert member_tasks, "playbook 需要「Agent 用户是否属于 plugdev」的显式检查任务"
+    assert "id -nG {{ agent_user }}" in str(
+        member_tasks[0]["ansible.builtin.shell"]
+    ) and "plugdev" in str(member_tasks[0]["ansible.builtin.shell"]), member_tasks[0]
+    reload_task = next(
+        t for t in tasks if t.get("name") == "Reload udev rules after rule change (#2133)"
+    )
+    assert "agent_flash_adb_rule_0660.changed" in str(reload_task.get("when")), reload_task
+
+
+def test_ensure_flash_prereqs_playbook_covers_adb_usb_rule():
+    """#3493：主机页入口 playbook 与 install 链的 Android USB 规则逐字同源；
+    plugdev 变更同样触发 Agent 重启（进程组集合刷新）。"""
+    rule_tasks = _adb_rule_tasks(ENSURE_PLAYBOOK)
+    contents = {t["ansible.builtin.copy"]["content"].strip() for t in rule_tasks}
+    assert contents == {_ADB_USB_RULE_LINE, _ADB_USB_RULE_LINE_FALLBACK}, (
+        f"ensure playbook 必须写两种形态且逐字一致，实际 {contents}"
+    )
+    whens = [str(t.get("when")) for t in rule_tasks]
+    assert all("agent_flash_plugdev_member" in w for w in whens), whens
+    assert any("== 0" in w for w in whens) and any("!= 0" in w for w in whens), whens
+    tasks = yaml.safe_load(ENSURE_PLAYBOOK.read_text(encoding="utf-8"))[0]["tasks"]
+    reload_task = next(
+        t for t in tasks if t.get("name") == "Reload udev rules after rule change (#2133)"
+    )
+    assert "agent_flash_adb_rule_0660.changed" in str(reload_task.get("when")), reload_task
+    text = ENSURE_PLAYBOOK.read_text(encoding="utf-8")
+    assert re.search(r"groups: plugdev", text), "需要 plugdev 加组任务"
+    restart_task = next(
+        t for t in tasks if t.get("name", "").startswith("Restart agent after group membership change")
+    )
+    assert "agent_flash_plugdev.changed" in str(restart_task.get("when")), restart_task
