@@ -188,6 +188,22 @@ else
     echo_warn "系统无 dialout 组，跳过（§4c 会写 udev 0666 规则）"
 fi
 
+# 1.3 环境前置：Agent 用户加入 plugdev（#3493）
+# adb/fastboot 经 usbfs 节点（/dev/bus/usb）访问测试终端；§4d 的规则把这些节点
+# 给 plugdev 组，成员资格与 dialout 同样在安装期保证（运行期不 usermod）。
+# plugdev 属 Debian 基线组表（base-passwd），缺失时 §4d 退化 0666。
+if getent group plugdev >/dev/null 2>&1; then
+    if id -nG "$USER" 2>/dev/null | tr ' ' '\n' | grep -qx plugdev; then
+        echo_info "用户 $USER 已在 plugdev 组"
+    elif usermod -aG plugdev "$USER"; then
+        echo_info "用户 $USER 已加入 plugdev 组（服务启动时生效）"
+    else
+        echo_warn "加入 plugdev 组失败；§4d 会退化为 udev 0666 规则（任何本地用户可访问测试终端）"
+    fi
+else
+    echo_warn "系统无 plugdev 组，跳过（§4d 会写 udev 0666 规则）"
+fi
+
 # 2. 创建目录结构
 echo_info "创建目录结构..."
 mkdir -p "$INSTALL_DIR"/{agent,logs,tmp,venv,resources/aimonkey}
@@ -307,6 +323,38 @@ if [ -d /etc/udev/rules.d ]; then
         echo_warn "MTK ttyACM 规则部署失败，刷机将依赖 wrapper ensure-udev-rule"
     if [ "$UDEV_MTK_LINE" = "$UDEV_MTK_LINE_0666" ]; then
         echo_warn "Agent 用户 $USER 不属 dialout（无该组 / 加组失败）→ ttyACM 规则为 0666（任何本地用户可写该串口）；建议 provisioning 补组后重跑安装链"
+    fi
+fi
+
+# 4d. Android USB 设备节点权限（#3493）
+# adb/fastboot 经 usbfs 节点（/dev/bus/usb/BUS/DEV）访问测试终端；系统包
+# 51-android.rules 只覆盖部分厂商 VID，MLD 等刷机流程形态（0e8d:2026 等）未覆盖
+# → 节点落 Debian 兜底 root:root 0664，adb 报 no permissions（存量机 .58 实测，见 #3493；
+# 47/48 台裸奔，.87 的手工规则 99-mediatek-adb.rules 是唯一例外）。
+# 全集形态是部署约定的忠实表达：agent host 上插上即测试终端（MTK 380 + 展锐 188
+# 混编，VID 白名单会在新机型/新模式上复发同类故障）；0660+plugdev 仍把非 plugdev
+# 用户挡在外面。若 host 未来出现不可信本地用户/多租户，按 #2284 同法收窄为
+# VID:PID 白名单（出口同步写在规则文件注释里）。ensure_flash_prereqs.yml 与
+# update_agent.yml opt-in 段同源，由 tests/test_flash_provisioning_prereqs_2133.py 锁定。
+UDEV_ADB_RULE="/etc/udev/rules.d/90-android.rules"
+UDEV_ADB_LINE_0660='SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", MODE="0660", GROUP="plugdev"'
+UDEV_ADB_LINE_0666='SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", MODE="0666"'
+if id -nG "$USER" 2>/dev/null | tr ' ' '\n' | grep -qx plugdev; then
+    UDEV_ADB_LINE="$UDEV_ADB_LINE_0660"
+    UDEV_ADB_REASON="# Android USB 0660+plugdev：Agent 用户 $USER 属该组可访问；插上本机的 USB 设备即测试终端（#3493）。收窄出口：出现不可信本地用户时改按 VID:PID 白名单（#2284 同法）"
+else
+    UDEV_ADB_LINE="$UDEV_ADB_LINE_0666"
+    UDEV_ADB_REASON="# Android USB 0666：Agent 用户 $USER 不属 plugdev（无该组或加组未生效），退化为 0666（否则 adb 不可用）（#2353 同法）"
+fi
+if [ -d /etc/udev/rules.d ]; then
+    printf '%s\n%s\n' "$UDEV_ADB_REASON" "$UDEV_ADB_LINE" > "$UDEV_ADB_RULE" 2>/dev/null && \
+        chmod 0644 "$UDEV_ADB_RULE" && \
+        udevadm control --reload-rules 2>/dev/null && \
+        udevadm trigger 2>/dev/null && \
+        echo_info "Android USB 规则已部署: 90-android.rules（$UDEV_ADB_LINE）" || \
+        echo_warn "Android USB 规则部署失败，adb 可能报 no permissions（#3493）"
+    if [ "$UDEV_ADB_LINE" = "$UDEV_ADB_LINE_0666" ]; then
+        echo_warn "Agent 用户 $USER 不属 plugdev（无该组 / 加组失败）→ Android USB 节点为 0666（任何本地用户可访问测试终端）；建议 provisioning 补组后重跑安装链"
     fi
 fi
 

@@ -294,6 +294,7 @@ curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8000/api/v1/stats/fil
 | `STP_AEE_LOCAL_ROOT` 未配 / 不可写 | Agent 启动 WARN；AEE Reconciler 不工作 → 补 §5 env + restart ✅ |
 | storage 中心存储「未上报」 | 补 `MOUNT_POINTS=/mnt/stp-aee`（NFS 已 mount 也会未上报） ✅ |
 | 双 ADB server → DEGRADED | `adb kill-server`；统一 5037；勿留 `ANDROID_ADB_SERVER_PORT=5039` ✅ |
+| adb `no permissions` | 装机链 §4d 应已写 `90-android.rules`（0660+plugdev）；缺规则走「刷机前置」（#3493）；修后 `udevadm trigger` + 以 agent 用户 `adb kill-server` |
 | `HOST_ID` 与 DB 不一致 | 心跳正常但拉不到任务 → 改 `.env` 对齐 DB `hosts.id` |
 | `AGENT_SECRET` 取自 `backend/.env` | 集体 SocketIO 认证失败 → 只用 `.env.backend` |
 | 热更新后 schema 不生效 | 须 `systemctl restart`（`reload_config` 不重载 schema 缓存）；脚本不随热更新走（ADR-0051 Phase 3 起从 `tools_cache` 包执行，到位看 `verify_scripts` 预热） |

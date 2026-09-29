@@ -754,6 +754,7 @@
     # 运行期不再装包/加组/写规则（wrapper 窄面只提供固定 udev 自愈）；本段由
     # 运维显式开启（-e agent_ensure_flash_prereqs=true）给刷机主机补齐：
     #   dialout 成员 + MTK ttyACM 规则（0660+dialout，非成员才 0666）+ ModemManager 忽略规则
+    #   + Android USB（adb/fastboot）节点规则（#3493，0660+plugdev，非成员才 0666）
     #   + Qt/X 运行库五件。
     # 默认关闭：常规更新不触碰系统包面。刻意放在门禁释放之后——本段失败不得
     # 让升级门禁悬挂（#1249 教训）；缺失项由 flash_preflight 如实报出。
@@ -785,6 +786,36 @@
       become: true
       ansible.builtin.shell: id -nG {{ agent_user }} | tr ' ' '\n' | grep -qx dialout
       register: agent_flash_dialout_member
+      changed_when: false
+      failed_when: false
+      when: agent_ensure_flash_prereqs | default(false) | bool
+
+    # #3493：adb/fastboot 的 usbfs 节点全集规则（插上本机即测试终端）；
+    # 与 install_agent.sh §1.3/§4d 同源，形态判据同样是「是否已持久属于 plugdev」。
+    - name: Check plugdev group exists (#3493)
+      become: true
+      ansible.builtin.command: getent group plugdev
+      register: agent_flash_plugdev_group
+      changed_when: false
+      failed_when: false
+      when: agent_ensure_flash_prereqs | default(false) | bool
+
+    - name: Ensure agent user is in plugdev group (#3493)
+      become: true
+      ansible.builtin.user:
+        name: "{{ agent_user }}"
+        groups: plugdev
+        append: true
+      register: agent_flash_plugdev
+      failed_when: false
+      when:
+        - agent_ensure_flash_prereqs | default(false) | bool
+        - agent_flash_plugdev_group.rc | default(1) == 0
+
+    - name: Check agent user is a plugdev member (#3493)
+      become: true
+      ansible.builtin.shell: id -nG {{ agent_user }} | tr ' ' '\n' | grep -qx plugdev
+      register: agent_flash_plugdev_member
       changed_when: false
       failed_when: false
       when: agent_ensure_flash_prereqs | default(false) | bool
@@ -834,6 +865,37 @@
       failed_when: false
       when: agent_ensure_flash_prereqs | default(false) | bool
 
+    # #3493：Android USB（adb/fastboot）节点全集规则。0660+plugdev 为标准形态，
+    # **只有成员**才写它；非成员退化为 0666。收窄出口（出现不可信本地用户时改
+    # VID:PID 白名单）写在 install_agent.sh §4d 的规则文件注释里。
+    - name: Ensure Android USB udev rule — 0660 + plugdev (#3493)
+      become: true
+      ansible.builtin.copy:
+        dest: /etc/udev/rules.d/90-android.rules
+        content: "SUBSYSTEM==\"usb\", ENV{DEVTYPE}==\"usb_device\", MODE=\"0660\", GROUP=\"plugdev\"\n"
+        owner: root
+        group: root
+        mode: "0644"
+      register: agent_flash_adb_rule_0660
+      failed_when: false
+      when:
+        - agent_ensure_flash_prereqs | default(false) | bool
+        - agent_flash_plugdev_member.rc | default(1) == 0
+
+    - name: Ensure Android USB udev rule — 0666 fallback, not a plugdev member (#3493)
+      become: true
+      ansible.builtin.copy:
+        dest: /etc/udev/rules.d/90-android.rules
+        content: "SUBSYSTEM==\"usb\", ENV{DEVTYPE}==\"usb_device\", MODE=\"0666\"\n"
+        owner: root
+        group: root
+        mode: "0644"
+      register: agent_flash_adb_rule_0666
+      failed_when: false
+      when:
+        - agent_ensure_flash_prereqs | default(false) | bool
+        - agent_flash_plugdev_member.rc | default(1) != 0
+
     - name: Reload udev rules after rule change (#2133)
       become: true
       ansible.builtin.command: udevadm control --reload
@@ -845,6 +907,8 @@
         - (agent_flash_udev_rule_0660.changed | default(false))
           or (agent_flash_udev_rule_0666.changed | default(false))
           or (agent_flash_udev_mm_rule.changed | default(false))
+          or (agent_flash_adb_rule_0660.changed | default(false))
+          or (agent_flash_adb_rule_0666.changed | default(false))
 
     - name: Ensure flash prerequisite packages (#2133)
       become: true
@@ -876,14 +940,18 @@
       failed_when: false
       when: agent_ensure_flash_prereqs | default(false) | bool
 
-    - name: Report flash prerequisite provisioning result (#2133/#2353)
+    - name: Report flash prerequisite provisioning result (#2133/#2353/#3493)
       ansible.builtin.debug:
         msg: >-
           flash prereqs: dialout_member_rc={{ agent_flash_dialout_member.rc | default('skipped') }}
           (0=member) dialout_changed={{ agent_flash_dialout.changed | default('skipped') }}
           dialout_usermod_failed={{ agent_flash_dialout.failed | default(false) }}
+          plugdev_member_rc={{ agent_flash_plugdev_member.rc | default('skipped') }}
+          (0=member) plugdev_changed={{ agent_flash_plugdev.changed | default('skipped') }}
           udev_rule_changed={{ (agent_flash_udev_rule_0660.changed | default(false))
           or (agent_flash_udev_rule_0666.changed | default(false)) }}
+          adb_rule_changed={{ (agent_flash_adb_rule_0660.changed | default(false))
+          or (agent_flash_adb_rule_0666.changed | default(false)) }}
           packages_rc={{ agent_flash_prereq_pkgs.rc | default('skipped') }}
           packages_out={{ agent_flash_prereq_pkgs.stdout_lines | default([]) | join(' | ') }}
       when: agent_ensure_flash_prereqs | default(false) | bool
