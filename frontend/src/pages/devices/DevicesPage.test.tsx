@@ -76,25 +76,7 @@ vi.mock('./components/BatchEditDeviceTagsDialog', () => ({
   BatchEditDeviceTagsDialog: () => null,
 }));
 
-vi.mock('./components/RetireDevicesDialog', () => ({
-  // 打开时提供一个提交按钮，供 page 级用例驱动退役接线（弹窗自身行为由
-  // RetireDevicesDialog 组件测试覆盖）
-  RetireDevicesDialog: ({ isOpen, mode, onSubmit }: {
-    isOpen?: boolean;
-    mode?: 'retire' | 'unretire';
-    onSubmit?: (mode: 'retire' | 'unretire', reason: string) => void;
-  }) =>
-    isOpen ? (
-      <button
-        type="button"
-        data-testid="retire-dialog-submit"
-        onClick={() => onSubmit?.(mode ?? 'retire', 'mock-reason')}
-      >
-        mock-退役提交
-      </button>
-    ) : null,
-}));
-
+// RetireDevicesDialog 保持真实渲染（#3497 G6：页面级用例断言弹窗计数文案）
 // DeviceBulkActionBar 与 AssignProjectDialog 保持真实渲染（归入流程端到端测试）
 
 function createWrapper() {
@@ -406,11 +388,93 @@ describe('DevicesPage', () => {
     await waitFor(() => expect(screen.getByText('TEST-SERIAL')).toBeInTheDocument());
     fireEvent.click(screen.getByLabelText('选择设备 TEST-SERIAL'));
     await user.click(await screen.findByTestId('device-bulk-retire'));
-    await user.click(await screen.findByTestId('retire-dialog-submit'));
+    await user.type(await screen.findByLabelText('退役原因'), '库存报废');
+    await user.click(screen.getByTestId('device-retire-submit'));
 
     await waitFor(() =>
-      expect(mockRetireBatch).toHaveBeenCalledWith([1], 'mock-reason'),
+      expect(mockRetireBatch).toHaveBeenCalledWith([1], '库存报废'),
     );
+  });
+
+  // #3483：unretire 的幂等跳过数是「选中里未退役的台」——修复前无条件传已退役数，
+  // 全选已退役（解除退役的正常形态）会被误报「全部 N 台将跳过」。
+  it('#3483：解除退役全选已退役，不出现「并未退役（幂等跳过）」', async () => {
+    const user = userEvent.setup();
+    mockUseAuthSession.mockReturnValue({ data: { role: 'admin' } });
+    mockFetchAllDevicePages.mockResolvedValue({
+      items: [
+        { id: 21, serial: 'RET-A', model: 'M', host_id: '198-51-100-123', status: 'ONLINE',
+          tags: [], last_seen: '2026-09-26T00:00:00Z', retired_at: '2026-09-26T08:00:00Z' },
+        { id: 22, serial: 'RET-B', model: 'M', host_id: '198-51-100-123', status: 'ONLINE',
+          tags: [], last_seen: '2026-09-26T00:00:00Z', retired_at: '2026-09-26T09:00:00Z' },
+      ],
+      total: 2,
+    });
+    const DevicesPage = (await import('./DevicesPage')).default;
+    render(<DevicesPage />, { wrapper: createWrapper() });
+
+    await waitFor(() => expect(screen.getByText('RET-A')).toBeInTheDocument());
+    fireEvent.click(screen.getByLabelText('选择设备 RET-A'));
+    fireEvent.click(screen.getByLabelText('选择设备 RET-B'));
+    await user.click(await screen.findByTestId('device-bulk-unretire'));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveTextContent('将对选中的 2 台设备解除退役');
+    expect(dialog).not.toHaveTextContent('并未退役（幂等跳过）');
+  });
+
+  it('#3483：解除退役混入在役设备时提示实际幂等跳过台数', async () => {
+    const user = userEvent.setup();
+    mockUseAuthSession.mockReturnValue({ data: { role: 'admin' } });
+    mockFetchAllDevicePages.mockResolvedValue({
+      items: [
+        { id: 21, serial: 'RET-A', model: 'M', host_id: '198-51-100-123', status: 'ONLINE',
+          tags: [], last_seen: '2026-09-26T00:00:00Z', retired_at: '2026-09-26T08:00:00Z' },
+        { id: 22, serial: 'RET-B', model: 'M', host_id: '198-51-100-123', status: 'ONLINE',
+          tags: [], last_seen: '2026-09-26T00:00:00Z', retired_at: '2026-09-26T09:00:00Z' },
+        { id: 23, serial: 'ACTIVE-C', model: 'M', host_id: '198-51-100-123', status: 'ONLINE',
+          tags: [], last_seen: '2026-09-26T00:00:00Z' },
+      ],
+      total: 3,
+    });
+    const DevicesPage = (await import('./DevicesPage')).default;
+    render(<DevicesPage />, { wrapper: createWrapper() });
+
+    await waitFor(() => expect(screen.getByText('ACTIVE-C')).toBeInTheDocument());
+    fireEvent.click(screen.getByLabelText('选择设备 RET-A'));
+    fireEvent.click(screen.getByLabelText('选择设备 RET-B'));
+    fireEvent.click(screen.getByLabelText('选择设备 ACTIVE-C'));
+    await user.click(await screen.findByTestId('device-bulk-unretire'));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveTextContent('其中 1 台并未退役（幂等跳过）。');
+  });
+
+  it('#3483：退役模式读数不变（提示已退役台数）', async () => {
+    const user = userEvent.setup();
+    mockUseAuthSession.mockReturnValue({ data: { role: 'admin' } });
+    mockFetchAllDevicePages.mockResolvedValue({
+      items: [
+        { id: 21, serial: 'RET-A', model: 'M', host_id: '198-51-100-123', status: 'ONLINE',
+          tags: [], last_seen: '2026-09-26T00:00:00Z', retired_at: '2026-09-26T08:00:00Z' },
+        { id: 22, serial: 'RET-B', model: 'M', host_id: '198-51-100-123', status: 'ONLINE',
+          tags: [], last_seen: '2026-09-26T00:00:00Z', retired_at: '2026-09-26T09:00:00Z' },
+        { id: 23, serial: 'ACTIVE-C', model: 'M', host_id: '198-51-100-123', status: 'ONLINE',
+          tags: [], last_seen: '2026-09-26T00:00:00Z' },
+      ],
+      total: 3,
+    });
+    const DevicesPage = (await import('./DevicesPage')).default;
+    render(<DevicesPage />, { wrapper: createWrapper() });
+
+    await waitFor(() => expect(screen.getByText('ACTIVE-C')).toBeInTheDocument());
+    fireEvent.click(screen.getByLabelText('选择设备 RET-A'));
+    fireEvent.click(screen.getByLabelText('选择设备 RET-B'));
+    fireEvent.click(screen.getByLabelText('选择设备 ACTIVE-C'));
+    await user.click(await screen.findByTestId('device-bulk-retire'));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveTextContent('其中 2 台已是退役态（幂等跳过）。');
   });
 
   it('#2962：非 admin 看不到退役入口', async () => {
