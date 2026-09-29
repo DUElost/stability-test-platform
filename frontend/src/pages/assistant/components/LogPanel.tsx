@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/utils/api';
 import { aiAssistantKeys } from '@/utils/api/queryKeys';
+import { TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 
 interface LogPanelProps {
@@ -41,7 +42,19 @@ export function LogPanel({ actionId, active, className }: LogPanelProps) {
       )}
       aria-label="执行日志"
     >
-      {lines.length === 0 ? (
+      {logQ.isError ? (
+        // #3496（B2-G8）：拉取失败不得显示成「暂无输出」——失败不等于命令没有输出。
+        <div className={cn('flex items-center justify-between gap-2', TEXT.destructive)}>
+          <span>执行日志加载失败，暂无法判断输出。</span>
+          <button
+            type="button"
+            onClick={() => void logQ.refetch()}
+            className="underline underline-offset-2"
+          >
+            重试
+          </button>
+        </div>
+      ) : lines.length === 0 ? (
         <span className="text-muted-foreground">
           {active ? '暂无输出，等待执行…' : '暂无输出'}
         </span>
