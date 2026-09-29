@@ -1,6 +1,6 @@
 # ADR-0058 有效性验证记录：B1 / B2 证据盘点与 B3 验证方案
 
-Status: proposed
+Status: implemented
 Class: process
 
 ## Decision
@@ -13,9 +13,9 @@ Class: process
 | 实验层（§Verification） | **仅适用于 B3 这一次实验及其追踪期**的记录要求与假设 | 不是对后续批次的义务；**不改变任何批次的关单条件**（ADR-0058 D9：L0–L3 满足即可关单，长期数据不作前置） |
 | 规则层 | ADR-0058、`batch-planning.md`、`batch-review.md` | 由正式修订 PR 变更；实验结果若支持推广，另行提出修订，不在本 note 内生效 |
 
-**确认状态：待 Owner 确认。** Owner 曾对本 note 的旧版本口头表示同意登记，但没有留下仓库内可追溯的记录，
-且 H1–H5 在 Codex 复核（#3533）后已被实质重写（拆分、降级、改判据）。因此旧的口头确认不适用于本版；
-请 Owner 在 #3533 上确认本版后，本 note 才转 `implemented`。
+**确认状态：Owner 已确认。** Owner 于 2026-09-29 在 #3533 上按 head `d3c3eccd` 的版本确认登记 B3 验证方案：[确认记录](https://github.com/DUElost/stability-test-platform/pull/3533#issuecomment-5890447469)。较早的口头同意不适用于本版（H1–H5 在 Codex 复核后已被实质重写），以上述书面记录为准。
+
+确认的范围仅限于：接受本 note 作为后续验证实验的登记方案。它**不**表示 ADR-0058 已被验证或任何假设成立；阈值仍没有经验依据；不自动授权 B3 之后的任何实验批次；B3 的载体 issue、范围与 Appetite 另行裁决。
 
 ### 1. 结论
 
@@ -153,7 +153,7 @@ ADR-0058 D9 不受影响：L0–L3 满足即可关批次 issue。若实验结果
 - 派单与复核提示词在每次方案修订后重新生成（`batch-planning.md` §4 已要求提示词引用方案节号、不转述规则；
   B2 的失效是修订后没有重新生成，这里只是在 B3 里显式隔离这个失效模式）。
 
-### 预先登记的假设与判据（待 Owner 确认；阈值没有经验依据）
+### 预先登记的假设与判据（Owner 已确认登记；阈值没有经验依据）
 
 | 假设 | 判据 | 结果处置 |
 |---|---|---|
@@ -207,4 +207,4 @@ for f, l, n, h in un:
 - 任一「结果处置」条件触发，按 ADR-0058 §6 的复议流程或另行提案处理，**不在本 note 里直接改 ADR 或指引**；
 - 阈值（≥ 1 处、≥ 3 处、一半以上等）**没有经验依据**；B3 之后应据实际数据重新校准，
   校准时保留原阈值与新阈值，不得只留新值；
-- 若 Owner 确认本版，把 Status 转 `implemented`，并在此处补上指向确认记录的链接。
+- Owner 已于 2026-09-29 确认本版：[确认记录](https://github.com/DUElost/stability-test-platform/pull/3533#issuecomment-5890447469)；Status 已转 `implemented`。
