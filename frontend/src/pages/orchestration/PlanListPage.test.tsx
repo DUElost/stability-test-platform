@@ -109,16 +109,48 @@ describe('PlanListPage', () => {
 
     renderPage();
     expect(await screen.findByText('MLD-MTBF')).toBeInTheDocument();
-    // 初始不传 specialty_key
-    expect(mocks.listPlans).toHaveBeenLastCalledWith(0, 100, undefined, undefined);
+    // 初始不传 specialty_key（#3195：页大小 = 后端 `le` 上限 200）
+    expect(mocks.listPlans).toHaveBeenLastCalledWith(0, 200, undefined, undefined);
 
     fireEvent.change(screen.getByTestId('plan-specialty-filter'), {
       target: { value: 'mtbf' },
     });
 
     await waitFor(() =>
-      expect(mocks.listPlans).toHaveBeenLastCalledWith(0, 100, undefined, 'mtbf'),
+      expect(mocks.listPlans).toHaveBeenLastCalledWith(0, 200, undefined, 'mtbf'),
     );
+  });
+
+  // #3195（批次 B2 G3，#3497 §4）：带专项筛选后服务端 total 超一页时，翻页请求必须
+  // 仍携带筛选参数——丢筛选参数的第二页会按「未过滤集偏移」取行，混入其他专项的计划。
+  it('carries the specialty filter on every page when the filtered set spans multiple pages (#3195)', async () => {
+    const rows = Array.from({ length: 260 }, (_, i) => ({
+      id: i + 1,
+      name: `PAGED-MTBF-${i}`,
+      steps: [],
+      specialty_key: 'mtbf',
+      created_at: '2026-08-26T00:00:00Z',
+      updated_at: '2026-08-26T00:00:00Z',
+    }));
+    mocks.listPlans.mockImplementation(async (skip = 0, limit = 50) => ({
+      items: rows.slice(skip, skip + limit),
+      total: rows.length,
+      skip,
+      limit,
+    }));
+
+    renderPage();
+    await screen.findByText('PAGED-MTBF-0');
+
+    fireEvent.change(screen.getByTestId('plan-specialty-filter'), {
+      target: { value: 'mtbf' },
+    });
+
+    // 筛选生效后的第二页：页大小 200 + 偏移 200 + 原样透传的 specialty_key
+    await waitFor(() =>
+      expect(mocks.listPlans).toHaveBeenLastCalledWith(200, 200, undefined, 'mtbf'),
+    );
+    expect(await screen.findByText('PAGED-MTBF-259')).toBeInTheDocument();
   });
 
   // #748：表格化（606b4350）丢掉了卡片态的「创建者」信息行，数据一直在 Plan.created_by。
@@ -162,29 +194,35 @@ describe('PlanListPage grouping', () => {
     expect(within(groupA).getByText('Ops-C')).toBeInTheDocument();
   });
 
-  // #3147：此前 KPI 用 `plans.length`（已加载条数）当总数，请求上限一被越过就少报，
-  // 且同屏与列表行数互相印证，看不出错。总数只能取服务端 total。
-  it('shows the server total on the KPI, not the loaded row count', async () => {
-    // 刻意让 total（130）> 行数（2）：请求上限被越过时 KPI 必须仍报真实总数。
-    // 传对象而非数组 ⇒ 上面的 mock 包装原样放行（不被 rows.length 覆盖）。
-    mocks.listPlans.mockResolvedValue({
-      items: [
-        { id: 1, name: 'PLAN-A', steps: [], created_at: '2026-08-26T00:00:00Z', updated_at: '2026-08-26T00:00:00Z' },
-        { id: 2, name: 'PLAN-B', steps: [], created_at: '2026-08-26T00:00:00Z', updated_at: '2026-08-26T00:00:00Z' },
-      ],
-      total: 130,
-      skip: 0,
-      limit: 100,
-    });
+  // #3195（批次 B2 G3，#3497 §4）：旧行为＝固定单页 `list(0, 100)` 把已取子集当全集——
+  // total 越过页大小时尾部行静默消失、KPI 跟着少报（#3147 当时的解法是 KPI 单独读服务端
+  // total）。修复＝按服务端 total 翻页取全量后，「已加载条数 ≡ 总数」由翻页本身保证。
+  // 260 条 > 页大小 200：两页取全，第 260 条必须出现，KPI 报 260。
+  it('fetches every page when the server total exceeds one page, rendering all rows', async () => {
+    const rows = Array.from({ length: 260 }, (_, i) => ({
+      id: i + 1,
+      name: `PLAN-${i}`,
+      steps: [],
+      created_at: '2026-08-26T00:00:00Z',
+      updated_at: '2026-08-26T00:00:00Z',
+    }));
+    mocks.listPlans.mockImplementation(async (skip = 0, limit = 50) => ({
+      items: rows.slice(skip, skip + limit),
+      total: rows.length,
+      skip,
+      limit,
+    }));
 
     renderPage();
 
-    expect(await screen.findByText('PLAN-A')).toBeInTheDocument();
-    // 两行都渲染（列表行数 = 2），但 KPI 必须报服务端 total
-    expect(screen.getByText('PLAN-B')).toBeInTheDocument();
+    expect(await screen.findByText('PLAN-0')).toBeInTheDocument();
+    expect(screen.getByText('PLAN-259')).toBeInTheDocument();
+    expect(mocks.listPlans).toHaveBeenCalledWith(0, 200, undefined, undefined);
+    expect(mocks.listPlans).toHaveBeenCalledWith(200, 200, undefined, undefined);
+
     // label 与数值在卡片内是兄弟节点，故定位到 KPI 栅格再断言（不是 label 的直接父级）
     const kpiGrid = screen.getByText('Plan 总数').closest('div.grid');
     expect(kpiGrid).not.toBeNull();
-    expect(within(kpiGrid as HTMLElement).getByText('130')).toBeInTheDocument();
+    expect(within(kpiGrid as HTMLElement).getByText('260')).toBeInTheDocument();
   });
 });

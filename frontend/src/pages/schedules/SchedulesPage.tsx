@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, fetchAllPlans, toApiError, type TaskSchedule, type TaskScheduleCreatePayload } from '@/utils/api';
+import { fetchAllPages } from '@/utils/api/paginate';
 import { planKeys, scheduleKeys } from '@/utils/api/queryKeys';
 import { useToast } from '@/hooks/useToast';
 import { useConfirm } from '@/hooks/useConfirm';
@@ -66,12 +67,12 @@ export default function SchedulesPage() {
   };
 
   // C1：数据获取迁移 react-query（缓存/重试/去重与全站一致）
+  // #3195（批次 B2 G3，规划单 #3497 §3）：固定单页（0, 200）无截断提示，越过上限即尾部
+  // 静默消失。改为按服务端 `total` 翻页取全量（后端稳定全序：`id DESC`，页大小 = `le` 200）。
   const schedulesQ = useQuery({
     queryKey: scheduleKeys.list(),
-    queryFn: async () => {
-      const res = await api.schedules.list(0, 200);
-      return res.items || [];
-    },
+    queryFn: () =>
+      fetchAllPages((skip, limit) => api.schedules.list(skip, limit), 200).then((res) => res.items),
   });
   const plansQ = useQuery({
     queryKey: planKeys.list(200),
