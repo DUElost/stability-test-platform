@@ -37,6 +37,18 @@ function UsageSection({ script }: { script: ScriptEntry }) {
       </span>
       {usageQ.isLoading ? (
         <p className={TEXT.subtitle}>加载中…</p>
+      ) : usageQ.isError ? (
+        // #3496（B2-G8）：用量是版本退役的判断依据，失败被读成「无人使用」会误导决策。
+        <div className={cn('flex items-center justify-between gap-2', TEXT.destructive)}>
+          <span>使用统计加载失败，暂无法判断近 30 天使用记录。</span>
+          <button
+            type="button"
+            onClick={() => void usageQ.refetch()}
+            className="underline underline-offset-2"
+          >
+            重试
+          </button>
+        </div>
       ) : projects.length === 0 ? (
         <p className={TEXT.subtitle}>近 30 天无 Plan 使用记录</p>
       ) : (
