@@ -1,5 +1,8 @@
 # pytest 默认入口内存硬顶（#3547 / #3516 G1）
 
+Status: proposed
+Class: process
+
 ## Decision
 
 gate runner 的六个 pytest 调用与 shell wrapper 共用 `scripts/run_pytest.py`。
