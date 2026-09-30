@@ -1179,9 +1179,22 @@ export function ExpandableHostTable({
                                         'rounded-full px-1.5 py-0.5 text-[11px] font-medium',
                                         agentSyncBadgeClass(host.agent_code_sync_status),
                                       )}
+                                      // #3550：matched 但修订三列分叉是 ADR-0040 v1.1（判据=digest）
+                                      // 的正常形态，只在会误导的组合上给归因，正常形态不打扰。
+                                      title={
+                                        host.agent_code_sync_status === 'matched'
+                                        && host.expected_code_revision
+                                        && host.agent_code_revision
+                                        && host.expected_code_revision !== host.agent_code_revision
+                                          ? '期望修订随每次合入前进；载荷摘要未变则无需重推——对齐判据是「部署摘要」，不是修订文本'
+                                          : undefined
+                                      }
                                     >
                                       {AGENT_SYNC_LABELS[host.agent_code_sync_status ?? 'unknown']}
                                     </span>
+                                  </div>
+                                  <div className="text-[10px] leading-snug text-muted-foreground">
+                                    对齐以「部署摘要」判定；修订文本仅作溯源，期望修订随每次合入前进
                                   </div>
                                 </div>
                               ) : (
