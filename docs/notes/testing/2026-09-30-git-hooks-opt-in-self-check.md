@@ -8,6 +8,7 @@ Class: testing
 按 Owner 已裁决的 opt-in 实施，不自动配置宿主。`check_git_hooks.py` 默认只读：
 由 Git 解析 hooks 目录，核对本仓库真实 `.githooks` 路径、文件与执行位。
 DISABLED 是查询成功，不是防线通过；CONFIGURED 仅为结构证据。
+其他路径中已有可执行 hooks 为 UNVERIFIED，不冒充“未启用”，也不读取/执行外部脚本。
 
 显式 --self-test 要求已配置，否则 UNVERIFIED / 非零。行为验收复制当前 hook
 到临时隔离 Git 仓库，实际 commit 验证污染阻断、update-ref refs/stash 验证
@@ -34,7 +35,7 @@ AI hook 接线或 CI gate。Git 路径与执行位依据见 [官方 githooks](ht
 - fixture 将 reference-transaction 改回旧读取顺序或让 pre-commit 放行污染，
   自检分别 FAIL；原逻辑从真实 Git 同时验证提交阻断与 ref 告警。
 - 首次运行 1 failed / 18 passed：真实 Git 将 hook 输出转到 stderr，自检只查 stdout。
-  修正为同时检查两者；不把初次失败当通过。最终相关测试 20 passed，quick gates
+  修正为同时检查两者；不把初次失败当通过。最终相关测试 22 passed，quick gates
   16 项通过；schema-at-head 未配置而跳过。Ruff 与最终 diff 治理检查通过。
 
 ## Revisit

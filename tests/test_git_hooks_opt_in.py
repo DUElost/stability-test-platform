@@ -46,6 +46,24 @@ def test_unset_and_other_hooks_paths_do_not_claim_repository_activation(reposito
     assert hooks.status(repository)["state"] == "DISABLED"
 
 
+def test_external_executable_hooks_are_unverified_without_running_them(repository, tmp_path):
+    external = tmp_path / "external-hooks"
+    shutil.copytree(repository / ".githooks", external)
+    hooks.output(repository, "config", "core.hooksPath", str(external))
+    report = hooks.status(repository)
+    assert report["state"] == "UNVERIFIED"
+    assert report["hooks_path"] == str(external)
+    assert "outside" in report["reason"]
+
+
+def test_repository_hook_directory_symlink_outside_root_is_unverified(repository, tmp_path):
+    external = tmp_path / "external-hooks"
+    (repository / ".githooks").rename(external)
+    (repository / ".githooks").symlink_to(external, target_is_directory=True)
+    enable(repository)
+    assert hooks.status(repository)["state"] == "UNVERIFIED"
+
+
 @pytest.mark.parametrize("absolute", [False, True])
 def test_configured_real_path_is_resolved_from_deep_cwd(repository, absolute):
     path = str(repository / ".githooks") if absolute else ".githooks"

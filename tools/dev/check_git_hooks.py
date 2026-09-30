@@ -36,7 +36,9 @@ def status(repo: Path) -> dict:
     effective = Path(output(root, "rev-parse", "--path-format=absolute", "--git-path", "hooks")).resolve()
     expected = (root / ".githooks").resolve()
     report = {"root": str(root), "hooks_path": str(effective), "state": "DISABLED"}
-    if effective != expected:
+    if effective != expected or not expected.is_relative_to(root):
+        if any((effective / name).is_file() and os.access(effective / name, os.X_OK) for name in HOOKS):
+            report.update(state="UNVERIFIED", reason="hooks outside this worktree's .githooks")
         return report
     missing = [name for name in HOOKS if not (effective / name).is_file()
                or not os.access(effective / name, os.X_OK)]

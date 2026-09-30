@@ -129,9 +129,9 @@ python tools/dev/collapse-blank-pollution.py [--check] <file.py>
 存在不代表当前 Git 已启用。开发者选择启用后显式配置并自检：
 
 ```bash
-python tools/dev/check_git_hooks.py
+.venv/bin/python tools/dev/check_git_hooks.py
 git config --local core.hooksPath .githooks
-python tools/dev/check_git_hooks.py --self-test
+.venv/bin/python tools/dev/check_git_hooks.py --self-test
 ```
 
 状态与自检的权威语义见 [repository-workflow](./repository-workflow.md#git-hooks-的-opt-in-状态与自检)；

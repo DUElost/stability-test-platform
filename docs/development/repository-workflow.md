@@ -399,16 +399,18 @@ CI 兜底与每日审计原本只覆盖**行为**（修复是否落地），以�
 `.githooks/pre-commit` 与 `reference-transaction` 是可选的本地辅助；文件存在
 不代表已启用，也不替代 PR/CI 或 Claude PreToolUse。Git 按当前配置解析 hooks
 目录，并忽略没有执行位的 hook（[Git 官方说明](https://git-scm.com/docs/githooks)）。
-本轮不默认修改宿主配置；是否启用由开发者选择：
+本轮不默认修改宿主配置；是否启用由开发者选择。以下从仓库根运行，项目解释器
+先按 local-development 准备；脚本定位后，内部支持深层 cwd：
 
 ```bash
-python tools/dev/check_git_hooks.py          # 只读状态，支持从深层 cwd 启动
+.venv/bin/python tools/dev/check_git_hooks.py # 只读状态
 git config --local core.hooksPath .githooks  # 选择 opt-in 后显式执行（同克隆共享）
-python tools/dev/check_git_hooks.py --self-test
+.venv/bin/python tools/dev/check_git_hooks.py --self-test
 ```
 
 状态 `DISABLED` 表示本仓库 hooks 未启用，退出 0 只是只读查询成功；`CONFIGURED`
-只证明实际路径和执行位可用。显式自检要求已配置，否则为 `UNVERIFIED` / 非零。
+只证明实际路径和执行位可用。若实际使用本 worktree 之外的可执行 hooks，仅报告路径与
+`UNVERIFIED`，不读取/执行它们或断言未启用。显式自检要求已配置，否则为 `UNVERIFIED` / 非零。
 自检只在临时隔离仓库复制当前 hook，从真实 Git 验证污染提交被阻断、`refs/stash`
 事务告警且不阻断；不改调用者的 config/index/refs，不执行 `git stash` 或 reset。
 `PASS / FAIL / UNVERIFIED` 分别表示行为匹配、已复现不匹配、无法验证；仅 PASS
