@@ -307,15 +307,21 @@ Owner 批准批次与 Appetite → 规划者出方案（批次 issue 正文）�
   draft 转为 ready 的理由；观察者无 ready、合入、方案或复核结论的决定权；
 - **关单**：需要激活才生效的改动用 `Refs`，激活并贴出生效证据后再关 issue。
 
-现行承载（更换工具只改本表，不改 ADR）：
+现行承载（角色语义由 ADR-0058 定义；具体 Web 工具由 Owner 选择，不作为契约固定项）：
 
 | 职责 | 现行承载 | 进入 Registry |
 |---|---|---|
-| 规划者 | Claude Code（云端 Web） | 否 |
+| 规划者 | Owner 每批选择的独立 Web 工作面（如 ChatGPT Web / Claude Code Web） | 否 |
 | 实施者 | 开发者选择的本地 Harness | 是 |
-| 复核者 | ChatGPT Codex（云端 Web） | 否 |
+| 复核者 | Owner 按复核对象选择的独立 Web 工作面；高风险 / 治理实验优先与被复核面使用不同 Web/Harness | 否 |
 | 集成观察者 | Grok Bot | 否 |
 | Owner | 开发者本人 | 否 |
+
+Planner / Reviewer 可以位于 STP Project 中，但 Project 内历史聊天属于**共享背景**，不是事实源或裁决源：
+每个新会话都必须从当前 `main`、当前 issue / PR、Accepted ADR 与现行治理文档重新取证；不得把旧会话中的
+修法、判断或模型结论直接当作本批既定答案。普通复核允许「同 Project + 独立新会话 + 独立取证」；
+安全、数据丢失、难回退、架构 / 治理实验和 Planner 质量验证优先使用不同 Web/Harness。该选择不进入 Registry，
+也不新增标签或门禁；仅在批次实验或复盘需要统计时，在批次 issue / 复核记录中留实际工作面事实。
 
 ## 冲刺期的结构护栏
 
