@@ -239,19 +239,19 @@ sudo systemctl restart stability-test-agent
 
 ## 6. Fleet 代码对齐（热更新）
 
-新机安装后 `agent_code_revision` 可能落后于 fleet。对齐到控制面当前 revision：
+新机安装后 `agent_code_revision` 可能落后于 fleet。**只对目标 host 对齐**到控制面当前 revision：
 
 ```bash
 # 单机：UI「热更新」或
 curl -s -X POST "http://127.0.0.1:8000/api/v1/hosts/<host_id>/hot-update" \
   -H "Authorization: Bearer $TOKEN"
-
-# 全 fleet 对齐（无 --limit；会扫全部 ONLINE host）
-cd /home/debian13/stability-test-platform
-PYTHONPATH=. venv/bin/python backend/scripts/batch_hot_update.py --direct
-# 或 API 路径（需 STP_ADMIN_PASSWORD）：backend/scripts/batch_hot_update.py
 ```
 
+- 单机 API 只作用于路径里的那台 host，载荷取自控制面进程所在代码树（生产上即已核验的发布
+  bundle）；**接入新机的 SOP 到此为止，不含任何 fleet 级步骤**。
+- fleet 级批量更新是**显式的另一件事**：须明确以「对齐整个 fleet」为意图，先按
+  `control-plane-deploy` §3 做单机 canary，并从已核验的发布根运行；命令与路径以该节为准，
+  本 SOP 不复制。**禁止**从开发检出运行批量脚本（载荷会取自开发树）。
 - 期望：新机 `agent_code_revision` == 控制面 `get_agent_code_version()` 短 SHA。
 - 详细门控顺序见 `control-plane-deploy` §4 与 `agent-version-and-hot-update.md` §2。
 

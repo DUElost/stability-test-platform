@@ -1,6 +1,6 @@
 ---
 name: workspace-hygiene
-description: 本地工作区与远程仓库的卫生治理 SOP——已合并 worktree/分支回收、孤儿 worktree 识别、远端残留分支清理、Execution registry 收口、/tmp 会话产物与僵尸容器盘点。触发时机：用户问「工作区/仓库有哪些需要处理」「卫生治理/清理/回收 worktree」「磁盘占用异常」「worktree 或分支堆积」，或在一轮批量交付（多 PR 合入、多会话并行）后做收尾盘点时。清理前先只读盘点、按「无价值/有价值」归类待用户裁决，不擅自删不可逆内容。
+description: 本地工作区与远程仓库的卫生治理 SOP——已合并 worktree/分支回收、孤儿 worktree 识别、远端残留分支清理、Execution registry 收口（含无 scope 记录的证据分级核验）、/tmp 会话产物与僵尸容器盘点。触发时机：用户问「工作区/仓库有哪些需要处理」「卫生治理/清理/回收 worktree」「registry 里的僵尸记录怎么收口」「磁盘占用异常」「worktree 或分支堆积」，或在一轮批量交付（多 PR 合入、多会话并行）后做收尾盘点时。清理前先只读盘点、按「无价值/有价值」归类待用户裁决，不擅自删不可逆内容。
 ---
 
 # 工作区与远程仓库卫生治理
@@ -99,9 +99,59 @@ while read -r id; do python3 tools/dev/ai_work.py finish --id "$id"; done < /tmp
 
 收口判据与红线：
 
-- **只 finish `integration=MERGED` 的**。`NO_PR` 的记录无法机械验证工作是否进了 main，需逐条核对其 scope，不能批量处理。
+- **只 finish `integration=MERGED` 的**。`NO_PR` 的记录没有机械判据，须走 §3.1 逐条核验。
 - **绝不手工删除记录**。registry 是 §3.4 并行撞单查重的依据面，删记录会破坏在窗判定；`finish` 只把生命周期推到终态，误收了可以用 `resume` 退回 CODING 返工。
 - `last_seen` 是本机 liveness，会滞后**且不能单独作为「有人在用」的判据**。真实判据是 worktree 的实际 dirty 状态与内容是否已合入（§2.2）。反过来，**近期 last_seen 不代表不能收口**——核实 PR 确已合入后照收。
+
+### 3.1 核验 `NO_PR` 记录：先看它有没有 scope
+
+**多数历史 `NO_PR` 记录的 `effective_scope` 是空的**（declare 时没带 `--scope`），所以「核对 scope」这条路常常根本走不通。先确认：
+
+```bash
+python3 - <<'EOF'
+import yaml
+d = yaml.safe_load(open('.git/ai-work/registry.yaml', encoding='utf-8'))
+for k, v in d.items():
+    if isinstance(v, dict) and str(v.get('lifecycle')) == 'CODING':
+        sc = v.get('effective_scope') or []
+        print(len(sc), v.get('issues'), k[:50])
+EOF
+```
+
+scope 非空 → 直接按路径比对 main，工作落地与否一眼可判。
+**scope 为空 → 退到证据链核验**，顺序是「issue 状态 → 提交历史 → 产物在场」，且**必须分级取证**（见下）。
+
+### 3.2 证据分级：`--grep` 匹配的是消息体，不是标题
+
+`git log --grep` 默认匹配**完整 commit message**。别的单在正文里顺带提一句你的单号，就算命中——直接用它当「已落地」证据会把无关提交算进来。
+
+```bash
+# 弱证据：消息体任意位置提及（会误命中）
+git log origin/main --oneline --grep="#2047\b"
+
+# 强证据：仅提交标题含单号，且是实施类前缀
+git log origin/main --no-merges --format='%s' > /tmp/.subjects.txt
+grep -E '#2047\b' /tmp/.subjects.txt | grep -cE '^(fix|feat|test|refactor|chore|perf)'
+```
+
+**强证据为 0 不等于未落地**。两种常见漏检形态，都要回落到消息体级再确认：
+
+- **批量提交用连字符区间**：如 `fix(ui/notify): #2051–#2054 审计批`，标题里的 `–` 使 `#2052` / `#2053` 的正则匹配不到，但那批单其实都在这个提交里修好了。
+- **修复随 PR 走、标题不带本单号**：如 #2299 由 PR #2300 交付，标题只有 `fix(2265-...)`。
+- **修复提交被后续单号覆盖**：`gh issue view <n>` 显示的单号与实际交付的 PR 号不一定相同（#2628 的修复是 PR #2630，提交 `a00864e8`，正文不含 #2628）。
+
+所以判定顺序是：**标题级 → 消息体级 → 抽样读提交标题确认是修复而非指针文档**。抽样时看 `fix(api): #2047 …写入后立即提交` 这类实施提交；`docs(note): …` 这类只是补记录的，不算落地证据。
+
+### 3.3 核验结论的处置
+
+| 结论 | 处置 |
+|---|---|
+| 强证据或消息体级证据成立，抽样确认是修复提交 | 可 `finish` |
+| issue CLOSED + 修复在 main，但形态特殊（批量/随 PR/换号） | 可 `finish`，在台账注明证据形态 |
+| 盘点类、运维记录类，无代码产物可验 | **交人工裁决**，不要勉强 finish |
+| 无法证实 | 保留 CODING，或 `finish --abandon` 并写明理由 |
+
+**收口后务必抽样回读**：`python3 tools/dev/ai_work.py status \| grep 'lifecycle=CODING'`，确认矛盾态归零、没有误伤近期在飞记录。
 
 ## 4. /tmp 会话产物
 
@@ -193,6 +243,9 @@ git commit && git push -u origin <branch>
 | `git worktree remove` 找不到某个目录 | 孤儿 worktree：gitdir 元数据已失联 | 扫 `.wt/` 与 `/tmp`，按 §2.3 判据确认后 `rm -rf` |
 | `rm -rf` 中途失败留下空壳 | 目录内有 root 属主文件（如 `.docker/`） | 主体先删，剩余空壳如实上报，等 sudo 授权 |
 | registry 收口后 CODING 计数没降 | 只跑了 `update --all`，它不改 lifecycle | 补第二步：筛 `CODING+MERGED` 逐条 `finish` |
+| 「核对其 scope」无从下手 | 历史记录 declare 时没带 `--scope`，`effective_scope` 是空的 | 改走 §3.1 证据链：issue 状态 → 提交历史 → 产物在场 |
+| 把无关提交当成了落地证据 | `git log --grep` 匹配**消息体**，别的单顺带提及也命中 | 用 §3.2 的标题级判据，强证据为 0 时再回落并排除连字符区间形态 |
+| 「单已关单」被当作「修复已进 main」 | 关闭单可能由钉指针的 docs PR 触发 | 抽样读提交标题，区分实施提交与记录提交 |
 | `git check-ignore` 给出意外结果 | shell cwd 卡在已删除目录，路径解析到了别处 | 显式 `cd` 到仓库根再执行 |
 | registry 记录「刚刚还在动」 | `last_seen` 是本机 liveness，会滞后 | 以实际 dirty 状态与合入情况为准 |
 | 删了 `/tmp` 大目录后应用崩 | AppImage fuse 挂载点正在使用 | 先 `mount` + 进程年龄判定，见 §4.1 |
