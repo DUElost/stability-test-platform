@@ -29,8 +29,10 @@ status --risk，可能重叠默认不并发，无重叠可并行，共享元文�
 
 - 前检：origin/main 为 5bbe4228，#3540 已合入；唯一开放实现 PR #3548 不碰本单文件。
 - Registry declare 使用单元 #3549；ai_work 的字段、状态机、Git 派生与本地落点未修改。
-- 检查各入口与 ADR 的原子一致、预算与版本索引；治理自测 / PR base 检查与
-  check:quick pending，完成后更新。
+- 治理 self-test 通过；针对 origin/main 的 S1–S15 / S5x 全绿；check:quick 16 项通过。
+  schema-at-head 无 DATABASE_URL 明确跳过，未作数据库验证。
+- 常驻预算：根 AGENTS 79 行 / 6535 字节；契约 200 行 / 24357 字节；adapter
+  88 行 / 8271 字节，均未提高预算。8 条根不变量和 S11 锚点保持不变。
 
 ## Revisit
 
