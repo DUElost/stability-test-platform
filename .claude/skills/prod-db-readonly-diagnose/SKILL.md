@@ -12,7 +12,15 @@ description: 生产 / 本机业务库只读诊断 SOP（凭据来源、直连姿
 
 - [ ] 确认问题必须查库（先看 UI / API / 日志能否回答）
 - [ ] 使用仓库 `venv/bin/python`（本机无裸 `python` 可依赖）
-- [ ] 连接串只从仓库根 `.env.backend` 的 `DATABASE_URL` 取——**不打印、不持久化**
+- [ ] **先确认生产目标**：库地址 / 库名等目标信息取自**站点当前权威配置**（生产 env 站点文件，
+      ADR-0051 D6；位置与取数方式以 `control-plane-deploy` skill §1 为准，此处不复述路径）；
+      只取目标，**不取其中应用账号的用户名 / 口令**。
+      **不得**从开发仓库根 `.env.backend` 推断——它已降级为纯 dev 配置，可与站点文件漂移
+- [ ] **身份只用只读角色 `stp_ro`**（口令由操作者在库侧显式提供，连接带 `application_name`，
+      如 `diag-<用途>`）；应用账号 `stp` 与 `postgres` 一律不用
+- [ ] 目标无法从站点配置确认、或 `stp_ro` 不存在 / 无法登录 → **停止诊断并报缺**
+      （fail-closed），不回退应用账号、不回退 `postgres`、不回退仓根 env
+- [ ] 连接串与口令**不打印、不持久化**
 
 ## 标准作业流程（SOP）
 
@@ -22,10 +30,11 @@ description: 生产 / 本机业务库只读诊断 SOP（凭据来源、直连姿
    都猜错：`job` vs `job_instance`、`device_lease` vs `device_leases`；枚举用了大写而库内
    是小写；引用了当时尚未落地的列）
 2. 只读观测优先：`SELECT` + `LIMIT`；写操作与 DDL 一律不走本路径
-3. `venv/bin/python` + psycopg 3 直连：连接串经环境变量传入脚本，勿写入命令行参数或
+3. `venv/bin/python` + psycopg 3 以 `stp_ro` 直连（`application_name="diag-<用途>"`）：
+   目标取自站点配置，口令由操作者显式提供，均经环境变量传入脚本，勿写入命令行参数或
    临时文件
-4. 需要管理 API 时：`/api/v1/auth/token` 取 token（`AGENT_SECRET` 用 `.env.backend`
-   的生产值），带着同一环境源
+4. 需要管理 API 时：`/api/v1/auth/token` 取 token，`AGENT_SECRET` 与管理员凭据同样取自
+   站点配置（不是仓根 `.env.backend`），全程同一来源
 5. 结论只回填「事实 + 建议」；修复动作走代码 / 迁移 / PR 流程
 
 ## 后置验证
@@ -36,12 +45,16 @@ description: 生产 / 本机业务库只读诊断 SOP（凭据来源、直连姿
 ## 踩坑守卫（负向约束）
 
 - **`backend/.env` 不含生产 `DATABASE_URL`**：从那里找会指向不存在的库；且其
-  `AGENT_SECRET` 是陈旧值——诊断 auth 问题一律以 `.env.backend` 为准；
+  `AGENT_SECRET` 是陈旧值——诊断 auth 问题一律以站点配置为准（ADR-0051 D6）；
+- **仓库根 `.env.backend` 不是生产真源**：D6 起它是纯 dev 配置，用它取数会读到与生产
+  漂移的值，诊断到的可能是另一个库；
+- **目标或 `stp_ro` 不可确认即停**：不因「先查一下」回退 `stp` / `postgres`——共享凭据
+  手查正是 #2632 要消灭的形态；
 - 本机 PostgreSQL 可能就是生产 `stp`：**禁止**用生产库代替测试库、**禁止**在生产库
   试跑迁移（`alembic upgrade` 等）；
 - **禁止猜 schema**（#2632）：`关系 "X" 不存在` / `字段 "X" 不存在` / `枚举 … 输入值
   无效` 这类错误会被 `StabilityPgSchemaGuessing` 告警捕获（生产者
   `tools/dev/pg_error_guard.py`）。它们不是「查询没成功」的小事——它意味着你在没有
   事实依据地写 SQL；猜对的那次会是一次不留审计痕迹的生产读写；
-- `.env.backend` / `backend/.env` / Agent `.env` 职责不同，不得互相代用；
+- 站点 env / 仓根 `.env.backend` / `backend/.env` / Agent `.env` 职责不同，不得互相代用；
 - 凭据不得进入代码、文档、日志与 PR diff。

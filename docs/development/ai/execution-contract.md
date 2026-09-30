@@ -1,6 +1,6 @@
 # AI Execution Contract（执行契约）
 
-- **状态**：Living v1.14（v1.14 变更：§3.6 执行模型收窄（ADR-0058 D10，Owner 2026-09-28 裁决）——退役 Mode A/B/C 词汇，生产实施为唯一执行模型；Registry 只登记其协调域内的实施者，协调域外工作面不 declare、其仓库写入以开放 PR 检查与共享元文件串行补可见性；§3.5 改为协调域内 Registry / 协调域外开放 PR 的可见性双通道（事故实录迁附录 A.6）；v1.9–v1.13 变更明细迁入附录 A.4。本文是 Execution Contract 的**唯一权威源**；方向裁决与理由见 [`ADR-0034`](../../adr/ADR-0034-multi-harness-execution-contract.md)（Accepted），两者冲突时以本文为准并回溯修订 ADR；v1.1–v1.13 变更明细见[附录 A.4](execution-contract-annex.md#a4-变更历史v11v113自正文头部迁出)）
+- **状态**：Living v1.15（v1.15 变更：§4 收窄——P2「Harness wrapper 定时 heartbeat → `last_seen` 升格为可靠 liveness」承诺退役（Owner 2026-09-29 裁决，#3516）：`last_seen` 只表示最近一次 Registry 写动作 / 手动 heartbeat 的时间，`STALE` 仅提示「久未写」，不是在线判断；`whoami` / `heartbeat` CLI 保留为手动 / 兼容入口；v1.14 起的变更明细迁入附录 A.4。本文是 Execution Contract 的**唯一权威源**；方向裁决与理由见 [`ADR-0034`](../../adr/ADR-0034-multi-harness-execution-contract.md)（Accepted），两者冲突时以本文为准并回溯修订 ADR；v1.1–v1.14 变更明细见[附录 A.4](execution-contract-annex.md#a4-变更历史v11v114自正文头部迁出)）
 - **日期**：2026-09-28
 - **适用**：Registry 协调域内的实施 Execution（现阶段即宿主机同一克隆内的本地 Harness 会话，§3.6）；**用哪个 Harness 承接哪个 Requirement 始终由开发者决定**（选择权原则，ADR §2.1）——本文只约束已被选择的 Execution 如何登记与协同可见，不定义任何路由或自动下发
 - **上游评审**：两轮八源审查综合 [`REVIEW_ADR0034_MULTI_HARNESS_2026-09-06_synthesis.md`](../../reviews/REVIEW_ADR0034_MULTI_HARNESS_2026-09-06_synthesis.md)（R1–R30 权威映射）
@@ -27,7 +27,7 @@
 | `scope` | declared scope（见 §5 语法） |
 | `pr_number` | 登记的 PR 号（可空） |
 | `lifecycle` | `CODING / FINISHED / ABANDONED`（§3） |
-| `last_seen` | 最近写命令时间（liveness 派生源；**liveness 本身不持久化**） |
+| `last_seen` | 最近一次 Registry 写动作 / 手动 heartbeat 时间（STALE 的派生源；**不承诺在线状态**，liveness 本身不持久化） |
 | `created_at` / `updated_at` | 时间戳 |
 
 **不在持久层的**：liveness 值（`LIVE/STALE` 为查询时派生，ADR §2.3）、integration 事实（由 GitHub 权威派生刷新，§3.3——实现可选择缓存最近观测值，但必须带 `observed_at` 且不得作为权威）。
@@ -58,7 +58,7 @@ Registry **不对业务文件/scope 上锁**；`registry.lock` 仅保护 registr
 ### 3.1 三维定义（平移 ADR §2.3）
 
 - **`lifecycle ∈ {CODING, FINISHED, ABANDONED}`**（执行侧自声明）：`CODING`=编码中；`FINISHED`=执行者已停止编码（`finish` 写入，**只写本字段**——与 PR 先后无关；非终态：`resume` 可回退 CODING，T9/#946）；`ABANDONED`=**仅显式人工动作**（`finish --abandon`），永不因超时/命令自动产生，且不可 resume（恢复 = 新 Execution 重新 `declare`）；
-- **`liveness ∈ {LIVE, STALE}`**（**永远 advisory、查询时派生、不持久化**）：`STALE` = `now − last_seen > TTL`（TTL 24h 量级）。STALE ≠ 死、≠ 可回收、**不退出集成风险窗口**、不影响任何业务语义；
+- **`liveness ∈ {LIVE, STALE}`**（**永远 advisory、查询时派生、不持久化**）：`STALE` = `now − last_seen > TTL`（TTL 24h 量级），只表示「久未写」。STALE ≠ 死、≠ 可回收、**不退出集成风险窗口**、不影响任何业务语义；
 - **`integration ∈ {NO_PR, PR_OPEN, READY, MERGED, CLOSED}`**（GitHub 权威）：`NO_PR`=未登记 PR；`PR_OPEN`=已登记 PR；`READY`=required checks 全绿（`update` 依 GitHub checks **派生刷新**，非人工宣称；主干推进致 checks 重跑则回退 `PR_OPEN`；不区分 FIFO 队首位置）；`MERGED`/`CLOSED`=终态（合入 / PR 关闭未合），只能由 GitHub PR 状态确认。
 
 ### 3.2 overlap（集成风险）真值表
@@ -129,10 +129,11 @@ risk = integration ∈ {PR_OPEN, READY}                                ← 开�
 
 **Registry 是 execution coordination metadata，不是 reasoning memory**——§1.2 字段集**封闭**，不得新增 `notes`/`plan`/`reasoning` 类自由文本字段。
 
-## 4. TTL 与心跳分期
+## 4. TTL 与 last_seen 语义（v1.15：P2 心跳不实施）
 
-- **P1（无 heartbeat daemon）**：TTL 仅 advisory——超时只在 status 提示「可能陈旧」并列僵尸候选，不自动改写任何持久字段、不剔除、不降级。声明式 CLI 之间没有可靠心跳源，此期 `last_seen` 不是 liveness 权威；
-- **P2（Harness wrapper/adapter 提供 heartbeat）**：`last_seen` 升格为可靠 liveness 信号；STALE 仍为派生展示，advisory 语义不变。
+- TTL 仅 advisory：超时只在 status 提示「可能陈旧」并列僵尸候选，不自动改写任何持久字段、不剔除、不降级；
+- `last_seen` 只由带 identity 的写命令（`declare/update/finish`）或手动 `heartbeat` 刷新，**不是 liveness 权威**。原 P2「wrapper 定时 heartbeat / 启动自动 `whoami`」不实施：不存在所有目标 Harness 都具备的统一生命周期 hook / wrapper 接线点，部分接线只得到混合信号，而 liveness 不参与 risk 判定（§3.2）；`whoami`（只读）与 `heartbeat` / 无参 `update` 保留为手动 / 兼容入口，无真实消费者再退役；
+- 协调域外仓库写入（D10-3 当前允许者）的可见性按 §3.6 走开放 PR，不依赖 Registry 心跳；本条不扩展实施者范围。
 
 ## 5. effective scope 与 overlap 谓词
 

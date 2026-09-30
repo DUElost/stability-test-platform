@@ -1,6 +1,6 @@
 # ADR-0034：多 Harness 并行执行契约与执行登记（Multi-Harness Execution Contract）
 
-- 状态：**Accepted（v1.13）**
+- 状态：**Accepted（v1.14）**
 - 版本记录：v0.1 #858 / v0.2 #859（选择权原则）/ v0.3 #860（Contract hardening）/ #861（索引同步）/ v0.4 #862（八源 synthesis）+ #863（R6/R18 裁决）/ v0.5 #864（第二轮复审）/ v1.0 #865（**Accepted**，2026-09-06 用户人工终审批准）/ v1.1 #866（§2 细则迁出至 `execution-contract.md`，本文保留决策要点 + 指针）/ **v1.2 #877：P1 启动判据修订——增补「已计划的多 Harness 批次启动前预置就绪」（2026-09-07 用户裁决：本 ADR 立项背景即即将开展的多 Issue 集中修复与新需求开发，工具须先于场景就绪；判据全文见契约 §9 v1.1）**
 **v1.3 本版：附录 A 增补 Antigravity CLI 实测（2026-09-07，`agy 1.1.26 -p`：无仓库规则自动发现——根/嵌套 AGENTS.md、CLAUDE.md symlink、GEMINI.md 均不加载，引文诊断确认；供给=调用方前置 `tools/dev/agy_with_rules.sh`；P2 加载矩阵终验随之扩展为五家结论）**
 **v1.4 本版：附录 A 补机制层根因（规则装载=声明式配置 `user_rules` 节空被 skip——装载清单无约定文件通道）与官方迁移文档冲突记录（迁移文档声称解析 active directory 的 GEMINI/AGENTS.md，但 `-p` 非交互实测不符——待上游确认，澄清前 agy 供给一律走前置脚本）**
@@ -13,6 +13,7 @@
 **v1.11 本版：dsh web 转正回填——Registry CLI 全周期 dogfood 通过（#1256：declare→worktree 修复→gates→PR #1291→update→finish，2026-09-10 合入；0.1.5-rc.1 加载复测与 v1.10 结论一致），附录 A 行与 harness-adapters.md 行同步更新**
 **v1.12 本版：CodeBuddy CLI/IDE 分立——附录 A 原单行「CodeBuddy」实为 CLI 结论却被读作覆盖整个产品线（IDE 从未探针）；2026-09-11 人工补测 IDE 得 Q1=否/Q2=是/Q3=一次（Zcode 同形态，与 CLI 相反），故照 Cursor CLI/IDE 分列先例拆为两行、CLI 版本按实测校正为 2.149.0，harness-adapters.md 与 harness_probe.py 同步（IDE 入人工形态）；**IDE 版本 4.11.3 经人工读取补入本版**（探针时未能从磁盘读出）**
 **v1.13 本版：执行模型收窄（[ADR-0058](./ADR-0058-planned-batch-execution.md) D10，Owner 2026-09-28 裁决）——契约 §3.6 退役 Mode A/B/C 词汇，生产实施 `1 Requirement → 1 Harness → 1 PR` 为唯一执行模型；Registry 只登记其协调域内的实施者（现阶段即宿主机同一克隆内的本地 Harness），规划 / 复核 / 集成观察工作面不 declare，协调域外仓库写入以开放 PR 检查与共享元文件串行补可见性；Registry 字段、三维状态、overlap 谓词、transition table 与 §2.1 选择权原则均不变。批次规划、复核与激活的交付流程由 ADR-0058 管辖，本 ADR 只管实施 Execution 的协调；§2.6 第 4 条「评审 / scratch 会话同样 declare」随本版同步收窄（2026-09-29 补漏：v1.13 首次落地的 #3490 漏改此句）**
+**v1.14 本版：P2 心跳承诺退役（Owner 2026-09-29 裁决，#3516）——原「Harness Adapter 提供 heartbeat / 启动自动 `whoami`，`last_seen` 因此升格为可靠 liveness」不实施：不存在所有目标 Harness 都具备的统一生命周期 hook / wrapper 接线点（Registry CLI 本身在 Zcode / CodeBuddy CLI / dsh web 等处可手动执行，已 dogfood；缺的是可依赖的自动接线点，GUI 形态尤其没有），部分接线只会得到混合信号；`liveness` 本就不参与 §2.3 risk 判定，无足够价值支撑跨 Harness 常驻心跳机制。契约 §4 改为「TTL 与 last_seen 语义」（v1.15）：`last_seen` 只表示最近一次 Registry 写动作 / 手动 heartbeat 时间，STALE 仅提示「久未写」；`whoami`（只读）与 `heartbeat` / 无参 `update` CLI 保留为手动 / 兼容入口，长期无消费者再按退役扫描删除。P2 的另一半——cwd 深度 × Harness 加载矩阵验收——不变（#3516 G2 承接）；Registry 字段、三维状态、overlap 谓词、transition table 与 §2.1 选择权原则均不变。**
 - 优先级：P1
 - 目标里程碑：M7（延续）
 - 日期：2026-09-06
@@ -68,7 +69,7 @@ Registry 声明与实际 diff 不一致时**以 diff 为准**；派生视图（�
 
 ### 2.5 TTL 与心跳（分期）— 细则见契约 §4
 
-**决策要点**：`status` 严格只读（观察不改变被观察状态）；写命令刷自身 `last_seen`；P1 无 heartbeat daemon 故 TTL 仅 advisory（不改字段/不剔除/不降级），P2 有 heartbeat 后 `last_seen` 方可升格。分期语义见 [`execution-contract.md` §4](../development/ai/execution-contract.md)。
+**决策要点**：`status` 严格只读（观察不改变被观察状态）；写命令刷自身 `last_seen`；TTL 仅 advisory（不改字段/不剔除/不降级）；v1.14 起 P2 心跳不实施，`last_seen` 只是最近写动作时间、不升格为 liveness 权威。分期语义见 [`execution-contract.md` §4](../development/ai/execution-contract.md)。
 
 ### 2.6 并发与审计吞吐（v1.9 反转）
 
@@ -85,7 +86,7 @@ Registry 声明与实际 diff 不一致时**以 diff 为准**；派生视图（�
 |---|---|---|
 | P0 | **P0a（本版已交付）**：`execution-contract.md` 建立、细则一次性平移、本 ADR 收缩升 v1.1。**P0b（独立 docs PR）**：AGENTS.md/CLAUDE.md 改写（元文件串行化）；单一 canonical Contract + 薄入口接线（AGENTS.md/CLAUDE.md/`.cursor/rules`/`.codex`）；`harness-adapters.md`、`repository-workflow.md` 与 Phase -1 基线 note 的指针接到本文；`execution-contract.md` 入治理门禁（S2 `link_files` + S6 `RESIDENT_BUDGETS`）；supersede 2026-09-04 note（含 §9 过渡条款保留） | P0b 合入后接 G2 试点（§3） |
 | P1 | Registry MVP（ai_work.py 按 [`execution-contract.md`](../development/ai/execution-contract.md) §2–§5 实现 + `test_impact` 入 schema（允许缺省）+ 自测红绿样例） | **启动判据**见契约 §9 v1.1（v1.2 增补第一触发：已计划的多 Harness 批次启动前预置就绪）；就绪并采用前维持派生视图用法（过渡条款） |
-| P2 | Harness Adapter：提供 heartbeat（§2.5 升格条件）；**验收含 cwd 深度 × Harness 加载矩阵**（附录 A 协议扩展）。**v1.7 修订：Role Runtime（会话启动时知晓/注入自身 Role）从本行必交付降级为 deferred capability**——Role 现阶段定位=元数据+扩展点（§2.1；契约 §1.2 v1.5，默认 `implementation`），不要求 Harness 启动时自动注入、不要求所有 Harness 对所有 Role 等价支持 | |
+| P2 | Harness Adapter：~~提供 heartbeat（§2.5 升格条件）~~（**v1.14 退役**，见 §2.5）；**验收为 cwd 深度 × Harness 加载矩阵**（附录 A 协议扩展）。**v1.7 修订：Role Runtime（会话启动时知晓/注入自身 Role）从本行必交付降级为 deferred capability**——Role 现阶段定位=元数据+扩展点（§2.1；契约 §1.2 v1.5，默认 `implementation`），不要求 Harness 启动时自动注入、不要求所有 Harness 对所有 Role 等价支持 | |
 | P3 | 真增量 = **Drift / Freshness gate**：先 advisory（本地 run_gates / 夜间全量），overlap 粒度用顶层目录作 hint 而非硬门禁；含 `coverage-mismatch` advisory（契约 §6） | **不建 merge queue**——主干机制已存在（FIFO enable-auto-merge + update-branch + strict 分支保护） |
 | P4 | Integration Planner：仅在「人已难判集成顺序」真实积累后启用 | 观察项 |
 
@@ -131,13 +132,13 @@ AGENTS.md / CLAUDE.md / .cursor/rules / .codex    ← 各入口只保留最小�
 | 维持 ≈2-3 会话数上限（v1.0–v1.7 原裁决） | **v1.9 反转**：数字未实测、被多批次 5+ 常态超出而无机械强制，且与本 ADR 立项目的矛盾；守对象重锚见 §2.6 |
 | auto mode 默认化 | 08-26 synthesis 裁决前提（治理面写者 >1 常态化、auto mode）仍未满足；与人驱动多会话并行为正交两轴，不随 v1.8 并发放开而松动 |
 | overlap 仅看 liveness（当时术语 ACTIVE，即现 LIVE） | finish 后 STALE 的在途变更仍是集成风险窗口（§2.3 反例）；集成窗口与执行者活性是两个正交维度 |
-| P1 即引入 heartbeat daemon / TTL 硬语义 | 声明式 CLI 之间无可靠心跳源，硬 TTL 会把「上午 declare、全天编码」的长任务误判（§2.5 分期：P1 advisory，P2 有 heartbeat 后再升格） |
+| P1 即引入 heartbeat daemon / TTL 硬语义 | 声明式 CLI 之间无可靠心跳源，硬 TTL 会把「上午 declare、全天编码」的长任务误判（§2.5 分期：P1 advisory；v1.14 起 P2 心跳不实施，`last_seen` 不升格） |
 
 ## 5. Verification
 
 - **P0**：建立 `execution-contract.md`（细则一次性平移，ADR §2 收缩为决策要点+指针）并完成薄入口接线（AGENTS.md/CLAUDE.md/`.cursor/rules`/`.codex` + `harness-adapters.md` + `repository-workflow.md` + 基线 note）；AGENTS.md 在 80 行/8KB 预算内完成 supersede 改写；`execution-contract.md` 入 S2/S6 门禁；治理门禁 S1–S11 全绿；2026-09-04 note 标注 superseded 并交叉链接本文。
 - **P1**：`ai_work.py` 自测红绿样例（含 STALE 派生 advisory、三维状态、overlap 集合分支、**「声明 scope ≠ 实际 diff」fixture**（复刻 2026-09-04 反例）、scope 拒绝规则）；registry root 实测——主 checkout 根 / 主 checkout 子目录 / linked worktree 三处经 `--path-format=absolute` 解析到同一绝对路径；`test_impact` 字段入 schema（缺省=indirect）；`check:quick` 全绿。
-- **P2**：cwd 深度 × Harness 加载矩阵（附录 A 协议，含根 bootstrap + scoped 双边可见）全部通过后，Adapter 方可视为就绪；heartbeat 就位后 `last_seen` 升格。
+- **P2**：cwd 深度 × Harness 加载矩阵（附录 A 协议，含根 bootstrap + scoped 双边可见）全部通过后，Adapter 方可视为就绪（v1.14：心跳升格条款退役）。
 - **P3**：drift gate（含 `coverage-mismatch`，证据口径=夜间全量/合并后记录）以 advisory 上线，夜间全量含其自测；转 required 须独立裁决。
 - **G2 试点**：四 Harness 探针验收（scoped 真身 + 根契约同时可见）+ S6/S2 扩展后门禁绿。
 - **#855 收口（三段触发）**：Git merge（已完成）= 草案可被引用；**ADR Accepted = 方向生效**；**P0 完成 = #855 补全工作可开工**。三选一方向（引擎可插拔行为 eval / 每 Harness 确定性摄取自检 / 并入 drift gate 邻接验收）在 P1 实施期裁决——**#857 正是其防范故障类的现实实例**（L0 全绿下的语义传导断裂，仅行为层探针能发现）。
