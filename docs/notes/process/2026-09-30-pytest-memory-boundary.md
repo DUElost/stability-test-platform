@@ -1,5 +1,8 @@
 # pytest 默认入口内存硬顶（#3547 / #3516 G1）
 
+Status: proposed
+Class: process
+
 ## Decision
 
 gate runner 的六个 pytest 调用与 shell wrapper 共用 `scripts/run_pytest.py`。
@@ -22,10 +25,12 @@ systemd user scope，子进程再次确认后以当前解释器 `-m pytest` 执�
 ## Verification
 
 - 实际入口创建 scope 后读到 memory.max=6442450944、memory.swap.max=0。
-- 边界/负向路径、参数与退出码、真实入口、Agent 环境与离线子集测试初轮 30 项通过；
-  补充信号退出测试后将重跑。
+- 边界/负向路径、参数与退出码、真实入口、Agent 环境与离线子集测试 31 项通过。
+- 恢复 gate 裸跑：1 failed / 19 passed；取消边界核验：10 failed / 10 passed。
+  恢复实现后相关 31 项再次通过。缺少 systemd-run 的真实入口退出 2、未启动 pytest。
 - 真实入口测试在 CI 没有已验证 cgroup 时明确 skip，不把 mock 单测当作实际 cgroup 验收。
-- check:quick、调用点变异与完整 Agent gate 验证 pending，完成后更新本文。
+- check:quick 首轮因本文缺少 Status / Class 头失败，补齐后重跑 pending；
+  完整 Agent gate 验证 pending，完成后更新本文。
 
 ## Revisit
 
