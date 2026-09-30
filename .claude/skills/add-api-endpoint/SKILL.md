@@ -34,7 +34,7 @@ description: 新增或变更后端 API 端点的全链路 SOP（Schema → 路�
 ## 后置验证
 
 ```bash
-python -m pytest backend/tests/api/ -q
+python scripts/run_pytest.py backend/tests/api/ -q
 npm --prefix frontend run type-check
 python scripts/run_gates.py check:quick
 ```

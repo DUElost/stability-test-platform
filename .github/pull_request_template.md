@@ -5,7 +5,7 @@
 
 ## 测试
 
-- [ ] Agent tests（`python -m pytest backend/agent/tests/ -q`）
+- [ ] Agent tests（`python scripts/run_pytest.py backend/agent/tests/ -q`）
 - [ ] 前端 type-check / vitest / build（如涉及前端）
 - [ ] Backend tests（PG 可用时；跑容器/testcontainers，不连生产库）
 - [ ] 根目录 `tests/`（如涉及仓库级契约）
