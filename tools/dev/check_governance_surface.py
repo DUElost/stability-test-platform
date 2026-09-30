@@ -138,16 +138,22 @@ def check_resident_imports(text: str) -> list[str]:
     return []
 
 
-def check_claude_entry_form(text: str, is_symlink: bool, link_target: str = "") -> list[str]:
+def check_claude_entry_form(
+    text: str, is_symlink: bool, link_target: str = "", entry_path: str | None = None,
+) -> list[str]:
     """S8 双形态（#857 根契约绕过，G2 真身+薄壳上移到根）：
 
     - symlink 形态：CLAUDE.md → AGENTS.md，内容直读零 @import——子目录会话
       经 ancestor 加载即送达根契约（@import 仅 cwd 级生效的上游缺陷无法命中）；
     - 经典形态：恰含 `@AGENTS.md` 单条 import（根 cwd 启动时展开）。"""
     if is_symlink:
-        if os.path.basename(link_target) != "AGENTS.md":
+        entry_dir = os.path.dirname(entry_path or os.path.join(ROOT, "CLAUDE.md"))
+        canonical = os.path.abspath(os.path.join(entry_dir, "AGENTS.md"))
+        target = os.path.realpath(os.path.join(entry_dir, link_target))
+        if target != canonical or not os.path.isfile(target):
             return [
-                f"S8 CLAUDE.md: symlink 形态必须指向 AGENTS.md（实际 {link_target!r}）"
+                f"S8 {entry_path or 'CLAUDE.md'}: symlink 必须解析到同目录 AGENTS.md 真身"
+                f"（实际 {link_target!r}）"
             ]
         return []
     return check_resident_imports(text)
@@ -1656,12 +1662,27 @@ def run_check(base: str | None = None) -> int:
     issues: list[str] = []
 
     claude_md_path = os.path.join(ROOT, "CLAUDE.md")
-    claude_md = open(claude_md_path, encoding="utf-8").read()
     claude_is_link = os.path.islink(claude_md_path)
     claude_link = os.readlink(claude_md_path) if claude_is_link else ""
+    form_issues = check_claude_entry_form("", True, claude_link, claude_md_path) if claude_is_link else []
+    claude_md = ""
+    if not form_issues:
+        try:
+            claude_md = open(claude_md_path, encoding="utf-8").read()
+        except OSError:
+            issues.append("S8 CLAUDE.md: 无法读取入口（断链/循环/缺失）")
     resolve_from_root = lambda rel: os.path.join(ROOT, rel)  # noqa: E731
     issues += check_imports(claude_md, resolve_from_root)
-    issues += check_claude_entry_form(claude_md, claude_is_link, claude_link)
+    issues += form_issues or check_claude_entry_form(claude_md, claude_is_link, claude_link, claude_md_path)
+    for scoped in ("backend/agent", "backend/agent/aee"):
+        entry = os.path.join(ROOT, scoped, "CLAUDE.md")
+        is_link = os.path.islink(entry)
+        target = os.readlink(entry) if is_link else ""
+        # scoped thin shells have no independent text/import policy.
+        if not is_link:
+            issues.append(f"S8 {scoped}/CLAUDE.md: 必须是 scoped AGENTS.md 的 symlink 薄壳")
+        else:
+            issues += check_claude_entry_form("", True, target, entry)
 
     link_files = [
         ("CLAUDE.md", ROOT),
@@ -1719,7 +1740,7 @@ def run_check(base: str | None = None) -> int:
         ),
     ]
     for rel, basedir in link_files:
-        text = open(os.path.join(ROOT, rel), encoding="utf-8").read()
+        text = claude_md if rel == "CLAUDE.md" else open(os.path.join(ROOT, rel), encoding="utf-8").read()
         issues += check_links(text, basedir, rel)
 
     # #2042：按需留档面（reviews/notes）全量纳入断链检查——此前无任何门禁覆盖。

@@ -1,6 +1,7 @@
 # AEE crash detection chain (初筛选)
 
-> 仅在改动 `backend/agent/aee/` 时加载。
+> 本文件仅叠加 AEE 领域细节；**任何任务开始前**，若祖先契约尚未加载，依次读取
+> [仓库根 `AGENTS.md`](../../../AGENTS.md)、[Agent 契约](../AGENTS.md)，再使用本文件。
 > **风险评级 S/A/B 的实现在控制面** `backend/services/log_observation.py:aggregate_risk_summary`（DLE 权威 + 未链接 signal），
 > 规则表见 `docs/design/2026-scan-upload-merge-contract.md` —— 本文只写 Agent 侧的采集与上报。
 
