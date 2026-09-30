@@ -64,6 +64,19 @@ self-test 保留原有全部用例，新增漏拦 / 误拦 / 复合 / 管道后�
 - 新增两个测试文件在临时安装于会话草稿目录的 pytest 下 `36 passed`；`tests/test_offline_subset_guard.py` 7 passed；
   `ruff check` 新增 / 改动 py 通过（临时装的 PyPI 最新版，与仓库 lock 版本可能有差异，以 CI `lint` 为准）；
 - `python3 tools/dev/check_governance_surface.py --check --base origin/main` 与 `--self-test`：通过；`py_compile` 通过；
+- **复核返修（#3545，Owner 复核 e1d8b62）**：复核用 mock git + 真实 bash 证明两处漏拦，本版已修并补回归：
+  (1) `_GIT_VALUE_OPTS` 补齐 git.c 全局选项封闭集里带独立值的 `--config-env`、`--attr-source`，并加兜底——
+  子命令名不含 `=`，位于子命令前的 `name=value` token 一律当作某个带值全局选项的值；
+  (2) `_body_subs` 不再吞 `_ParseError`：未加引号 heredoc 里命令替换深度超限（合法 Bash，内层会执行）与
+  「失衡」（可能是本扫描器误判）一律向上抛，走 `_analyze` 的保守回退；
+  (3) 差分验证另外发现保守回退自身认不出 `$'…'` 与行续接，已在回退里还原这两种写法；
+- **差分验证（返修时新增，抓住了首版自测没覆盖的形态）**：以「真实 bash + 只记录 argv 的 mock git」为事实来源，
+  24 种危险参数形态 × 7 种引号写法 × 约 50 种 shell 宿主结构（10,329 次真实执行）对比守卫判断。
+  返修前该验证对 e1d8b62 报出上千条漏拦（含复核的两类反例），返修后非已知缺口宿主的漏拦 = 0；
+  已知缺口宿主（管道喂 shell、`source <(…)`、脚本文件、`find -exec`、`bash -c "$(…)"`、变量 / 花括号展开）
+  的漏拦是预期内的，已如实写进模块 docstring。该脚本未入库（依赖真实 bash、约 70 秒，不适合进 CI）；
+- 新增回归对 e1d8b62 会变红（7 项失败），修复后 `tests/test_check_destructive_git_3516.py` 40 passed，
+  连同 `test_reference_transaction_hook_3516.py`、`test_offline_subset_guard.py` 共 55 passed；
 - 未验证：`check:quick`（云端容器无 `psycopg`，交给 CI）；真实 Claude 会话内的 hook 触发（云端会话的 hook
   仍是旧脚本，合入后由本地会话验证）。
 
@@ -75,3 +88,5 @@ self-test 保留原有全部用例，新增漏拦 / 误拦 / 复合 / 管道后�
 - 同族破坏性命令（`clean` / `restore` / `checkout -- .` / `push --force` / `branch -D`）出现事故时按棘轮入清单；
 - 「已知边界」里的间接执行（管道喂 shell、`find -exec`、变量 / 别名间接、脚本文件）若出现真实绕过事故，
   再评估是否补齐；届时优先补宿主表而不是放宽保守回退。
+- 差分验证脚本是否入库为 dev 探针（同 `harness_probe.py` 先例）由 Owner 决定；不入库时，以后改动本守卫的
+  解析逻辑须重跑同类验证，不能只靠 `--self-test`（首版自测全绿仍有两处漏拦，即为教训）。

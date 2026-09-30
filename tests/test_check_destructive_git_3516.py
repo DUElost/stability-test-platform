@@ -57,6 +57,14 @@ def test_self_test_passes() -> None:
         "echo $(git reset --hard)",
         "(git reset --hard)",
         "echo x | xargs git stash drop",
+        # #3545 复核返修
+        "git --config-env core.abbrev=STP_ENV reset --hard",
+        "git --config-env=core.abbrev=STP_ENV reset --hard",
+        "git --attr-source HEAD reset --hard",
+        "git --future-opt k=v reset --hard",
+        "cat <<EOF\n" + "$(" * 26 + "git reset --hard" + ")" * 26 + "\nEOF\n",
+        "cat <<EOF\n" + "$(" * 26 + "git $'reset' $'--hard'" + ")" * 26 + "\nEOF\n",
+        "cat <<EOF\n" + "$(" * 26 + "git stash" + ")" * 26 + "\nEOF\n",
     ],
 )
 def test_hook_blocks_with_exit_2(command: str) -> None:
@@ -74,6 +82,11 @@ def test_hook_blocks_with_exit_2(command: str) -> None:
         "grep -E 'a|git stash|b' file",
         "cat <<EOF\ngit stash\nEOF\n",
         'git log --grep "x; git stash push"',
+        # #3545 复核返修：合法读侧 / 数据不得因新增选项与回退而误拦
+        "git --config-env core.abbrev=STP_ENV status",
+        "git --config-env core.abbrev=STP_ENV stash list",
+        "cat <<'EOF'\n" + "$(" * 26 + "git reset --hard" + ")" * 26 + "\nEOF\n",
+        "cat <<EOF\n" + "$(" * 26 + "echo hi" + ")" * 26 + "\nEOF\n",
     ],
 )
 def test_hook_allows_with_exit_0(command: str) -> None:
@@ -84,6 +97,14 @@ def test_hook_allows_with_exit_0(command: str) -> None:
 
 def test_unparsable_with_danger_signal_blocks_and_says_so() -> None:
     result = _hook('git reset --hard "unterminated')
+    assert result.returncode == 2
+    assert "无法解析" in result.stderr
+
+
+def test_heredoc_substitution_over_depth_falls_back_and_blocks() -> None:
+    """#3545 复核反例 2：深度超限是合法 Bash（内层 git 会执行），不得被静默当成「没有命令替换」。"""
+    command = "cat <<EOF\n" + "$(" * 26 + "git reset --hard" + ")" * 26 + "\nEOF\n"
+    result = _hook(command)
     assert result.returncode == 2
     assert "无法解析" in result.stderr
 

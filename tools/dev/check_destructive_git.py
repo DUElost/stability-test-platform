@@ -48,10 +48,15 @@ command），任一简单命令命中下列「禁止语义集合」即 exit 2（
 
 - 不覆盖：变量 / 别名 / 函数间接（`$GIT reset --hard`、`git -c alias.x='reset --hard' x`、
   `f() { git stash; }; f` 只在定义处命中）；管道喂给 shell（`echo 'git stash' | bash`）；
-  执行脚本文件（`bash x.sh`、`source x.sh`）；`find -exec` / `watch` / `parallel` /
+  命令串由替换动态产生（`bash -c "$(echo '…')"`）；花括号展开（`git {reset,--hard}`）；
+  执行脚本文件（`bash x.sh`、`source x.sh`、`source <(…)`）；`find -exec` / `watch` / `parallel` /
   `ssh` / `python -c` / `awk system()` 等其它「把字符串当命令」的宿主；ANSI-C 引号里的
   十六进制 / 八进制转义（`$'\\x67it'`）；`--hard` 之外的 git 选项缩写；
   `case … in a) … ;; esac` 出现在 `$(…)` 内时的 `)` 歧义。
+- 验证方式（#3545 复核后补）：除 `--self-test` 与 tests 外，用「真实 bash + 只记录 argv 的 mock git」
+  作差分事实来源——把危险参数形态 × 7 种引号写法 × 约 50 种 shell 宿主结构（列表 / 管道 / 子 shell /
+  控制流 / 各类包装器 / heredoc / here-string / eval / 命令替换 …）逐条真实执行，与守卫判断对比；
+  修复后一万余次执行中，非上述已知缺口的宿主漏拦为 0。已知缺口宿主的漏拦是预期内的。
 - 有意不禁（无事故证据，D6 棘轮）：`git clean` / `git restore` / `git checkout -- .` /
   `git push --force` / `git branch -D` 等同族破坏性命令。
 - git 级对 reset --hard 无干净拦截点（ref 事务无法与普通提交区分）——阻断层只在
@@ -73,8 +78,10 @@ import shlex
 import sys
 
 # git 自身全局选项中「带独立值」的：判定子命令时须连值一起跳过（#1045）
+# 取自 git.c handle_options 的封闭集合：以下全局选项都接受「选项 SP 值」写法（另有 `=` 连写写法，
+# 由下面 startswith("-") 分支覆盖）。漏一个就会把它的值误当子命令而放行（#3545 复核：--config-env）。
 _GIT_VALUE_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace",
-                   "--super-prefix"}
+                   "--super-prefix", "--config-env", "--attr-source"}
 # stash 读侧/恢复侧子命令（其余 stash 子命令与裸 stash 一律阻断）
 _STASH_READONLY = {"list", "show", "pop", "apply", "branch"}
 
@@ -350,28 +357,30 @@ class _Scanner:
 
 
 def _body_subs(body: str, depth: int) -> list[_Cmd]:
-    """未加引号定界符的 heredoc 正文里会被执行的 `$(…)` / 反引号。正文本身是数据；
-    正文里的括号 / 反引号失衡时 shell 自己也会报错不执行，故忽略而不当作解析失败。"""
+    """未加引号定界符的 heredoc 正文里会被执行的 `$(…)` / 反引号。正文本身是数据。
+
+    **解析失败一律向上抛**（由 _analyze 走保守回退），不在此吞掉：深度超限是合法 Bash（内层
+    命令会执行），不是语法错误（#3545 复核：26 层 `$(` 被静默放行）；括号 / 反引号「失衡」也
+    可能只是本扫描器的误判（如 `$( case … esac )` 的 `)` 歧义，见 docstring 已知边界），
+    不能当作「shell 自己会报错所以不执行」。代价：未加引号的 heredoc 数据里含失衡的 `$(` 时，
+    只有正文同时出现 `git reset --hard` / `git stash` 才会被保守回退拦下，其余照常放行。"""
     subs: list[_Cmd] = []
     j = 0
-    try:
-        while j < len(body):
-            c = body[j]
-            if c == "\\":
-                j += 2
-            elif c == "$" and body[j + 1:j + 2] == "(":
-                sub = _Scanner(body, j + 2, nested=True, depth=depth)
-                subs.extend(sub.run())
-                j = sub.i
-            elif c == "`":
-                end = _find_backtick(body, j + 1)
-                subs.extend(_Scanner(body[j + 1:end].replace("\\`", "`"),
-                                     depth=depth).run())
-                j = end + 1
-            else:
-                j += 1
-    except _ParseError:
-        pass
+    while j < len(body):
+        c = body[j]
+        if c == "\\":
+            j += 2
+        elif c == "$" and body[j + 1:j + 2] == "(":
+            sub = _Scanner(body, j + 2, nested=True, depth=depth)
+            subs.extend(sub.run())
+            j = sub.i
+        elif c == "`":
+            end = _find_backtick(body, j + 1)
+            subs.extend(_Scanner(body[j + 1:end].replace("\\`", "`"),
+                                 depth=depth).run())
+            j = end + 1
+        else:
+            j += 1
     return subs
 
 
@@ -384,6 +393,10 @@ def _subcommand(words: list[str], i: int) -> tuple[str | None, list[str]]:
         if w in _GIT_VALUE_OPTS:
             i += 2
         elif w.startswith("-"):
+            i += 1
+        elif "=" in w:
+            # 兜底：子命令名不含 `=`。未来 git 新增的「选项 SP name=value」全局选项，其值必含 `=`，
+            # 在此吞掉而不是误当子命令放行（宁可对罕见的含 `=` 别名多拦，也不漏拦）
             i += 1
         else:
             return w, words[i + 1:]
@@ -502,8 +515,13 @@ def _check_words(words: list[str], stdin: list[str], depth: int) -> str | None:
 
 
 def _conservative_hit(text: str) -> str | None:
-    """解析失败时的保守回退：去引号 / 反斜杠后，对每个 `git` 出现处检查同一段。"""
-    clean = re.sub(r"['\"\\]", "", text)
+    """解析失败时的保守回退：去引号 / 反斜杠后，对每个 `git` 出现处检查同一段。
+
+    先还原两种「看着不像、shell 里等价」的写法（#3545 复核后差分验证发现回退路径认不出）：
+    行续接（`\\` 换行）与 `$'…'` / `$"…"` 的 `$` 前缀（其 `\\xNN` 类转义仍不覆盖，见已知边界）。"""
+    clean = text.replace("\\\n", "")
+    clean = re.sub(r"\$(?=['\"])", "", clean)
+    clean = re.sub(r"['\"\\]", "", clean)
     for m in re.finditer(r"(?<![\w.-])git(?![\w-])", clean):
         seg = re.split(r"[;&|\n()`]", clean[m.start():], maxsplit=1)[0]
         words = seg.split()
@@ -649,6 +667,23 @@ def run_self_test() -> int:
     expect("括号不平衡 + stash", "echo $(git stash", True)
     expect("反引号不平衡 + stash", "echo `git stash", True)
     expect("嵌套过深回退", "$(" * 40 + "git stash", True)
+
+    # ── #3545 复核返修：全局选项封闭集 + heredoc 命令替换深度超限走保守回退 ─────────
+    expect("--config-env 独立值", "git --config-env core.abbrev=STP_ENV reset --hard", True)
+    expect("--config-env= 连写", "git --config-env=core.abbrev=STP_ENV reset --hard", True)
+    expect("--attr-source 独立值", "git --attr-source HEAD reset --hard", True)
+    expect("--config-env 后 stash 创建", "git --config-env a.b=X stash", True)
+    expect("含 = 的未知带值全局选项兜底", "git --future-opt k=v reset --hard", True)
+    expect("--config-env 后 stash list 放行", "git --config-env a.b=X stash list", False)
+    expect("--config-env 后 status 放行", "git --config-env a.b=X status", False)
+    _deep = lambda inner: "cat <<EOF\n" + "$(" * 26 + inner + ")" * 26 + "\nEOF\n"
+    expect("未加引号 heredoc 26 层命令替换", _deep("git reset --hard"), True)
+    expect("heredoc 深度超限 + ANSI-C 引号", _deep("git $'reset' $'--hard'"), True)
+    expect("heredoc 深度超限 + 行续接", _deep("git \\\n reset \\\n --hard"), True)
+    expect("heredoc 深度超限 + stash", _deep("git stash"), True)
+    expect("嵌套过深回退 + ANSI-C 引号", "$(" * 40 + "git $'stash' $'drop'", True)
+    expect("带引号 heredoc 26 层是数据", _deep("git reset --hard").replace("<<EOF", "<<'EOF'"), False)
+    expect("未加引号 heredoc 深度超限但无危险信号", _deep("echo hi"), False)
 
     # ── #3516 G1：shell 感知——原误拦（应放行）────────────────────────────
     expect("commit -m 内分号+禁令词", 'git commit -m "docs; git stash is forbidden"', False)
