@@ -1,10 +1,10 @@
 # AI Execution Contract（执行契约）
 
-- **状态**：Living v1.15（v1.15 变更：§4 收窄——P2「Harness wrapper 定时 heartbeat → `last_seen` 升格为可靠 liveness」承诺退役（Owner 2026-09-29 裁决，#3516）：`last_seen` 只表示最近一次 Registry 写动作 / 手动 heartbeat 的时间，`STALE` 仅提示「久未写」，不是在线判断；`whoami` / `heartbeat` CLI 保留为手动 / 兼容入口；v1.14 起的变更明细迁入附录 A.4。本文是 Execution Contract 的**唯一权威源**；方向裁决与理由见 [`ADR-0034`](../../adr/ADR-0034-multi-harness-execution-contract.md)（Accepted），两者冲突时以本文为准并回溯修订 ADR；v1.1–v1.14 变更明细见[附录 A.4](execution-contract-annex.md#a4-变更历史v11v114自正文头部迁出)）
-- **日期**：2026-09-28
-- **适用**：Registry 协调域内的实施 Execution（现阶段即宿主机同一克隆内的本地 Harness 会话，§3.6）；**用哪个 Harness 承接哪个 Requirement 始终由开发者决定**（选择权原则，ADR §2.1）——本文只约束已被选择的 Execution 如何登记与协同可见，不定义任何路由或自动下发
+- **状态**：Living v1.16（§3.6 落地 M2 云端实施与对称 PR 前检，Owner 裁决见 #3516）。本文是 Execution Contract 的**唯一权威源**；方向与理由见 [`ADR-0034`](../../adr/ADR-0034-multi-harness-execution-contract.md)，冲突时以本文为准并回溯修订 ADR；历史见[附录 A.4](execution-contract-annex.md#a4-变更历史v11v115自正文头部迁出)。
+- **日期**：2026-09-30
+- **适用**：协调域内实施者的 Registry 协议与协调域外实施者的 PR 可见性纪律（§3.6）；**Harness 由开发者选择**，不定义路由。
 - **上游评审**：两轮八源审查综合 [`REVIEW_ADR0034_MULTI_HARNESS_2026-09-06_synthesis.md`](../../reviews/REVIEW_ADR0034_MULTI_HARNESS_2026-09-06_synthesis.md)（R1–R30 权威映射）
-- **本文演进**：版本化演进于本文（含其[规范附录](execution-contract-annex.md)，两者同版本）；细则不再回填 ADR 正文（ADR-0034 升 v1.1 收缩为决策要点 + 指针）。正文承载语义面、附录承载实现级细则与历史留档，冲突时以正文为准（v1.12）
+- **本文演进**：正文承载语义，[规范附录](execution-contract-annex.md)承载实现与历史，两者同版本；冲突以正文为准，细则不回填 ADR。
 
 ---
 
@@ -111,7 +111,7 @@ risk = integration ∈ {PR_OPEN, READY}                                ← 开�
 
 **分层原则**：**Execution ≠ Artifact ≠ Decision**——**一个架构主题在同一时刻只能有一个权威 Decision Artifact**；ADR 是 Decision 的持久化记录、不是 Proposal 的落点。多份独立提案或审计（v1.14 起由协调域外的规划 / 复核工作面组织，§3.6）须经人类裁决后汇聚成一份 ADR。
 
-**可见性双通道**（均只给可见性，不阻断、不预定编号、不宣告所有权）：协调域内修改决策文档的实施 Execution 走 **Registry + §3.4 issue 查重**（纪律 1）；协调域外的规划者 / 复核者走**开放 PR 查重**（纪律 2）；两条通道同受纪律 3 约束。
+**可见性双通道**（均只给可见性，不阻断、不预定编号、不宣告所有权）：协调域内修改决策文档的实施 Execution 走 **Registry + §3.4 issue 查重**（纪律 1）；协调域外实施者 / 规划者 / 复核者走**开放 PR 查重**（纪律 2）；两条通道同受纪律 3 约束。
 
 **强制纪律**：
 
@@ -121,18 +121,20 @@ risk = integration ∈ {PR_OPEN, READY}                                ← 开�
 
 **边界**：本条是**可见性与汇聚纪律**，不是调度或上锁——不新增持久字段、不引入 Decision Registry、不改 overlap 谓词（§5.4 仍为 hint 级），也不推翻 §2.3「Registry 不对业务上锁」。协调域内要求决策类 Execution 在声明面说清「我正在形成哪件事的决策」，让 §3.4 查重生效；协调域外由开放 PR 承担同一可见性。
 
-### 3.6 执行模型、协调域与字段封闭性（v1.14，ADR-0058 D10）
+### 3.6 执行模型、协调域与字段封闭性（v1.16，ADR-0058 D10）
 
 - **唯一执行模型**：生产实施 `1 Requirement → 1 Harness → 1 PR`；原 Mode A/B/C 词汇退役（按 Mode C 完成的历史评审不回改）。
 - **协调域**：Registry 只登记属于其协调域的实施 Execution——现阶段即宿主机同一克隆的本地 Registry（§2.1）内的 Harness 会话。判据是能否参与该协调域，不是进程在本机还是云端。规划者、复核者、集成观察者（ADR-0058 D8）不属于协调域，不 declare。
-- **协调域外的仓库写入**：写冲突可见性由开放 PR 承担——改仓库文件前查开放 PR 是否已改目标文件；共享元文件重叠时串行；§3.5 纪律 2、3 同样适用。本条不把这些工作面定义为 Execution。
+- **对称前检**：所有实施者开工前查开放 PR 的目标文件与远端分支；协调域内再 `status --risk` / `declare`。实际 diff 为准，scope 不是 ownership。规划 / 复核工作面写仓库前同样查开放 PR；§3.5 纪律 2、3 同样适用。
+- **协调域外实施（M2）**：云端实施者不 declare、不代登记不存在的 worktree；首个可提交的有效改动形成后立即开 draft PR，不制造空提交或伪实现。Owner 对照本地 `status --risk`；可能重叠的本地在窗 Execution 默认不并发，无重叠可并行，共享元文件串行。冲突可见性由开放 PR + Git 承担，PR ready / 复核 / 激活仍遵守 ADR-0058 D8–D9；不是按代码类型划界，也不授予生产写权限。
+- **不扩建机制**：不新增 Registry 字段、远程 Registry、标签、CI gate 或自动路由。M2 不把规划 / 复核工作面变成实施者，也不把协调域外实施写入本地 Registry。
 
 **Registry 是 execution coordination metadata，不是 reasoning memory**——§1.2 字段集**封闭**，不得新增 `notes`/`plan`/`reasoning` 类自由文本字段。
 
 ## 4. TTL 与 last_seen 语义（v1.15：P2 心跳不实施）
 
 - TTL 仅 advisory：超时只在 status 提示「可能陈旧」并列僵尸候选，不自动改写任何持久字段、不剔除、不降级；
-- `last_seen` 只由带 identity 的写命令（`declare/update/finish`）或手动 `heartbeat` 刷新，**不是 liveness 权威**。原 P2「wrapper 定时 heartbeat / 启动自动 `whoami`」不实施：不存在所有目标 Harness 都具备的统一生命周期 hook / wrapper 接线点，部分接线只得到混合信号，而 liveness 不参与 risk 判定（§3.2）；`whoami`（只读）与 `heartbeat` / 无参 `update` 保留为手动 / 兼容入口，无真实消费者再退役；
+- `last_seen` 只由带 identity 的写命令（`declare/update/finish`）或手动 `heartbeat` 刷新，**不是 liveness 权威**。Adapter 无自动 `whoami` / 定时 heartbeat 义务（退役理由见附录 A.4 v1.15）；`whoami`（只读）与 `heartbeat` / 无参 `update` 保留为手动 / 兼容入口，无真实消费者再退役；
 - 协调域外仓库写入（D10-3 当前允许者）的可见性按 §3.6 走开放 PR，不依赖 Registry 心跳；本条不扩展实施者范围。
 
 ## 5. effective scope 与 overlap 谓词

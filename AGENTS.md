@@ -43,10 +43,10 @@
    （同形态跨多 issue/族、需协调激活、数据丢失/安全/难回退），不按普通单点领单——先读
    「批次交付流程」与载体 issue 的**当前方案**（不得以派单提示词转述替代）；实施者不重新设计，
    需复核单元保持 draft，ready 与激活遵守 D8–D9，合入不等于生效；
-4. 并行前检与领单（协调域内的实施者，现阶段即本地 Harness）：`python tools/dev/ai_work.py status --risk`
-   查在窗 Execution 后 `declare`，编码结束 `finish` / `update --pr`；实际 diff 作 ground truth 交叉验证，
-   避免同时修改同一批文件；契约见 [`execution-contract.md`](docs/development/ai/execution-contract.md)。
-   协调域外的规划 / 复核工作面不 declare，改仓库文件前查开放 PR（ADR-0058 D10）；
+4. 并行前检与领单：实施者先查开放 PR；协调域内再用 `python tools/dev/ai_work.py status --risk`
+   查在窗 Execution 后 `declare`，编码结束 `finish` / `update --pr`；实际 diff 作 ground truth 交叉验证。
+   协调域外实施者不 declare，按 [执行契约](docs/development/ai/execution-contract.md) §3.6
+   做 PR 可见性与冲突前检；规划 / 复核工作面改仓库文件前同样查开放 PR（ADR-0058 D10）；
 5. 共享元文件（本文件、`CLAUDE.md`、Harness rules）同一时间只由一个工作面修改（协调域内经 Registry、协调域外查开放 PR 串行）；改变现行执行语义前必须先由 ADR 正式裁决。
 
 ## 按需入口
