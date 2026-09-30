@@ -68,6 +68,8 @@ command），任一简单命令命中下列「禁止语义集合」即 exit 2（
     echo '{"tool_name":"Bash","tool_input":{"command":"git reset --hard"}}' \\
         | python3 tools/dev/check_destructive_git.py     # → exit 2
     python3 tools/dev/check_destructive_git.py --self-test
+    # 手动差分探针（真实 Bash + 临时 mock git，不进 CI 默认门禁）：
+    python3 tools/dev/destructive_git_probe.py --json /tmp/git-shell-probe.json
 """
 from __future__ import annotations
 
