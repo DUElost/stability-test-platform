@@ -40,7 +40,11 @@ UNVERIFIED，不当 PASS；守卫只负责判断，不能给事实来源代判�
   首次变异调用误用了系统 Python（无 pytest），不计验证；以上结果为项目解释器实跑。
 - 真实 settings.json command：相同反例在已合入脚本返回 0，本单脚本返回 2；这里只
   调用 hook 的 JSON 检查，没有执行输入中的 Git 命令。真实 Claude 会话触发仍 pending。
-- check:quick 初轮 16 项通过；修复后完整差分与 quick 重跑 pending。
+- 修复后 7174 次矩阵：7154 PASS / 14 CONSERVATIVE_BLOCK / 6 KNOWN_GAP，
+  其余 MISS / FALSE_POSITIVE / UNVERIFIED 为 0；修复后 quick 重跑 16 项通过。
+  schema-at-head 因无 DATABASE_URL 明确跳过，未作数据库验收。
+- 完整矩阵期间不得同时做 checker 变异；一次与变异时间重叠的运行已取消，不计证据。
+  探针记录启动时的源码 hash，结束时源码变化则 UNVERIFIED，避免错贴版本。
 
 ## Revisit
 
