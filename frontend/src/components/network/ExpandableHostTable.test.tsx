@@ -111,6 +111,31 @@ describe('ExpandableHostTable', () => {
     expect(onWatcherAdminStateChange).toHaveBeenCalledWith(host.id, false);
   });
 
+  it('#3550 explains the digest-based alignment when expected revision diverges from reported', () => {
+    const diverged: HostTableData = { ...host, expected_code_revision: 'def5678' };
+    render(<ExpandableHostTable hosts={[diverged]} />);
+
+    fireEvent.click(screen.getByText(diverged.name));
+
+    // 常显判据行：把「对齐以摘要为准、修订仅溯源」说在明处
+    expect(screen.getByText(/对齐以「部署摘要」判定/)).toBeInTheDocument();
+    // 条件化归因只挂在展开面板的徽章上（收起行徽章已有自己的 digest 提示）
+    const card = screen.getByText('Agent 版本').closest('.bg-card') as HTMLElement;
+    const badge = within(card).getByText('已对齐');
+    expect(badge.getAttribute('title')).toContain('载荷摘要未变');
+    expect(badge.getAttribute('title')).toContain('期望修订随每次合入前进');
+  });
+
+  it('#3550 omits the divergence hint when revisions agree', () => {
+    render(<ExpandableHostTable hosts={[host]} />);
+
+    fireEvent.click(screen.getByText(host.name));
+
+    const card = screen.getByText('Agent 版本').closest('.bg-card') as HTMLElement;
+    const badge = within(card).getByText('已对齐');
+    expect(badge.getAttribute('title')).toBeNull();
+  });
+
   it('does not expand the row when the primary operation is clicked', () => {
     const onHotUpdate = vi.fn();
     render(<ExpandableHostTable hosts={[host]} onHotUpdate={onHotUpdate} />);

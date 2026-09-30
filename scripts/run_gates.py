@@ -19,20 +19,22 @@
   未配置则 WARN 跳过——他机/工作树/CI 恒绿，本机（=生产控制面）不对齐即红。
   一次只读 SELECT、秒级，故进 quick/pr；与 #1882 的
   systemd 硬门禁、`check-deploy-source.sh` 构成同族三守卫。
-- 用 `python -m` 形式调用（ruff/pytest），保证落到当前解释器的工具链，
-  规避「裸 pytest 落到另一套解释器」的历史坑。
+- ruff 用当前解释器的 `python -m`，pytest 经 run_pytest.py 核实硬顶后内部
+  使用当前解释器的 `-m pytest`，禁止在 gate 中直接裸跑 pytest。
 - CI 侧尚未调用本脚本（接入见 docs/notes/process/2026-08-14-repo-gate-runner.md）；
   脚本不可变门禁的 base 由环境变量 STP_GATE_BASE_REF 覆盖（CI 用 PR base）。
 """
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FRONTEND = os.path.join(ROOT, "frontend")
 PY = sys.executable  # 用当前解释器跑 -m，规避 PATH 落到别的 python
+PYTEST = f"{shlex.quote(PY)} {shlex.quote(os.path.join(ROOT, 'scripts/run_pytest.py'))}"
 BASE_REF = os.environ.get("STP_GATE_BASE_REF", "origin/main")
 
 # PG 门禁（backend-tests / integration）不传 env：本地由 conftest 走
@@ -236,7 +238,7 @@ GATES = {
     # 注册表逐条比对——未知指标/标签、直方图裸用基础名即红；promtool 可用时
     # 追加场景触发测试（无 promtool 的机器该子项 skip，结构层恒跑）。
     "prom-alerts": (
-        f"{PY} -m pytest tests/test_prometheus_alerts_contract.py -q",
+        f"{PYTEST} tests/test_prometheus_alerts_contract.py -q",
         ROOT,
         None,
     ),
@@ -267,7 +269,7 @@ GATES = {
     # 终态守卫见 tests/test_agent_test_import_ratchet.py），见 backend/agent/AGENTS.md。
     # CI 对应物=ci.yml pr-agent-tests job「Collect agent tests in clean env」step。
     "agent-tests-collect": (
-        f'env -i PATH="$PATH" PYTHONPATH=. {PY} -m pytest '
+        f'env -i PATH="$PATH" PYTHONPATH=. {PYTEST} '
         "backend/agent/tests/ --collect-only -q",
         ROOT,
         None,
@@ -279,18 +281,18 @@ GATES = {
     # pr-agent-tests 的「Run agent tests」step，二者一致性由
     # tests/test_agent_env_selfsufficiency.py 守。
     "agent-tests": (
-        f'env -i PATH="$PATH" PYTHONPATH=. {PY} -m pytest backend/agent/tests/ -q',
+        f'env -i PATH="$PATH" PYTHONPATH=. {PYTEST} backend/agent/tests/ -q',
         ROOT,
         None,
     ),
     # ── 以下仅 check:full ──
     "backend-tests": (
-        f"{PY} -m pytest backend/tests/ -v",
+        f"{PYTEST} backend/tests/ -v",
         ROOT,
         None,
     ),
     "integration": (
-        f"{PY} -m pytest "
+        f"{PYTEST} "
         "backend/tests/integration/test_main_chain_happy_path.py "
         "backend/tests/integration/test_pending_timeout_socketio.py "
         "backend/tests/integration/test_plan_chain_e2e.py "
@@ -306,7 +308,7 @@ GATES = {
     # 口径漂移造成的「本地绿、CI 红」。名单与 ci.yml 的对应关系由
     # tests/test_offline_subset_guard.py 守（#1707）。
     "repo-tests": (
-        f"{PY} -m pytest tests/ -q "
+        f"{PYTEST} tests/ -q "
         "--ignore=tests/test_alembic_upgrade.py "
         "--ignore=tests/test_script_seed_governance.py "
         "--ignore=tests/test_diag_readonly_role_pg.py "
