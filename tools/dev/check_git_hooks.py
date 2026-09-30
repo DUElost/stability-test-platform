@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -42,24 +43,54 @@ def status(repo: Path) -> dict:
         return report
     missing = [name for name in HOOKS if not (effective / name).is_file()
                or not os.access(effective / name, os.X_OK)]
+    outside = [name for name in HOOKS if not (effective / name).resolve().is_relative_to(expected)]
+    if outside:
+        report.update(state="UNVERIFIED", reason="hook target outside trusted .githooks", outside=outside)
+        return report
     report.update(state="UNVERIFIED" if missing else "CONFIGURED", unavailable=missing)
     return report
+
+
+def copy_trusted(root: Path, source: Path, destination: Path, boundary: Path) -> None:
+    """Resolve before reading; pin directories and reject symlink swaps at open."""
+    target = source.resolve(strict=True)
+    if not boundary.is_relative_to(root) or not target.is_relative_to(boundary):
+        raise RuntimeError("source outside trusted worktree boundary")
+    relative = target.relative_to(root)
+    directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for part in relative.parts[:-1]:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+            os.close(directory)
+            directory = child
+        source_fd = os.open(relative.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+        with os.fdopen(source_fd, "rb") as reader:
+            metadata = os.fstat(reader.fileno())
+            if not stat.S_ISREG(metadata.st_mode):
+                raise RuntimeError("source is not a regular file")
+            with destination.open("wb") as writer:
+                shutil.copyfileobj(reader, writer)
+                os.fchmod(writer.fileno(), stat.S_IMODE(metadata.st_mode))
+    finally:
+        os.close(directory)
 
 
 def self_check(root: Path) -> dict:
     """Only write to a disposable Git repo; no stash/reset or caller Git writes."""
     if os.name != "posix":
         raise RuntimeError("behavior self-check requires POSIX")
+    root = root.resolve()
+    trusted_hooks = (root / ".githooks").resolve(strict=True)
     with tempfile.TemporaryDirectory(prefix="stp-git-hooks-") as temporary:
         repo = Path(temporary)
         hooks = repo / ".githooks"
         hooks.mkdir()
         for name in HOOKS:
-            shutil.copy2(root / ".githooks" / name, hooks / name)
+            copy_trusted(root, root / ".githooks" / name, hooks / name, trusted_hooks)
         tools = repo / "tools" / "dev"
         tools.mkdir(parents=True)
-        shutil.copy2(root / "tools/dev/check-internal-ip-leak.py", tools)
-        shutil.copy2(root / ".gitattributes", repo)
+        copy_trusted(root, root / "tools/dev/check-internal-ip-leak.py", tools / "check-internal-ip-leak.py", root)
+        copy_trusted(root, root / ".gitattributes", repo / ".gitattributes", root)
         template = repo / "empty-template"
         template.mkdir()
         # No inherited Git config, GIT_DIR/INDEX_FILE, signing, credentials or hooks.

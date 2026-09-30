@@ -9,6 +9,10 @@ Class: testing
 由 Git 解析 hooks 目录，核对本仓库真实 `.githooks` 路径、文件与执行位。
 DISABLED 是查询成功，不是防线通过；CONFIGURED 仅为结构证据。
 其他路径中已有可执行 hooks 为 UNVERIFIED，不冒充“未启用”，也不读取/执行外部脚本。
+目录与逐 hook 文件均核实真实目标；单文件外指同样为 UNVERIFIED。复制前重新验证，
+用 pinned directory fd + O_NOFOLLOW 开源文件，拒绝解析后目录/文件 symlink 替换与非普通文件；
+同样保护辅助 checker 和 .gitattributes，禁止因复制这两个输入读取 worktree 外内容。
+内部 symlink 仍可用，行为检查复制其已验证真身，不复制未检查的原 symlink 路径。
 
 显式 --self-test 要求已配置，否则 UNVERIFIED / 非零。行为验收复制当前 hook
 到临时隔离 Git 仓库，实际 commit 验证污染阻断、update-ref refs/stash 验证
@@ -37,6 +41,12 @@ AI hook 接线或 CI gate。Git 路径与执行位依据见 [官方 githooks](ht
 - 首次运行 1 failed / 18 passed：真实 Git 将 hook 输出转到 stderr，自检只查 stdout。
   修正为同时检查两者；不把初次失败当通过。最终相关测试 22 passed，quick gates
   16 项通过；schema-at-head 未配置而跳过。Ruff 与最终 diff 治理检查通过。
+
+- 独立复核指出 b99f5fd5 的单 hook 文件 symlink 外指可被误判 CONFIGURED；已修正，
+  参数化覆盖 pre-commit / reference-transaction，真实 CLI --self-test 返回 UNVERIFIED，
+  复制函数不得被调用，外部脚本的执行 marker 不产生；直接调用 self_check 也重新校验。
+- 本轮相关测试 33 passed；原 b99f5fd5 status/self_check 变异 6 failed / 19 deselected。
+  新增内部 hook symlink 正向、解析后 leaf/parent 替换、FIFO 不等待、其他复制输入外指回归。
 
 ## Revisit
 

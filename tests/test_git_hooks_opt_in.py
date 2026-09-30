@@ -160,3 +160,111 @@ def test_tool_errors_are_unverified(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(hooks, "git", timed_out)
     assert hooks.main() == 1
     assert json.loads(capsys.readouterr().out) == {"state": "UNVERIFIED", "error": "TimeoutExpired"}
+
+
+@pytest.mark.parametrize('name', hooks.HOOKS)
+def test_individual_hook_symlink_outside_is_unverified_and_never_read(repository, tmp_path, monkeypatch, capsys, name):
+    enable(repository)
+    marker = tmp_path / 'EXTERNAL-HOOK-RAN'
+    external = tmp_path / 'outside-hook'
+    external.write_text(f'#!/bin/sh\ntouch "{marker}"\nexit 1\n')
+    external.chmod(0o755)
+    target = repository / '.githooks' / name
+    target.unlink()
+    target.symlink_to(external)
+    report = hooks.status(repository)
+    assert report['state'] == 'UNVERIFIED'
+    assert report['outside'] == [name]
+    assert not marker.exists()
+    monkeypatch.setattr(sys, 'argv', [hooks.__file__, '--repo', str(repository), '--self-test'])
+    def forbid_read(*args, **kwargs):
+        raise AssertionError('external source must never reach copy/read')
+    monkeypatch.setattr(hooks, 'copy_trusted', forbid_read)
+    assert hooks.main() == 1
+    assert json.loads(capsys.readouterr().out)['state'] == 'UNVERIFIED'
+    result = subprocess.run([sys.executable, hooks.__file__, '--repo', str(repository), '--self-test'],
+                            capture_output=True, text=True, timeout=15)
+    assert result.returncode == 1
+    assert json.loads(result.stdout)['state'] == 'UNVERIFIED'
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize('name', hooks.HOOKS)
+def test_direct_self_check_revalidates_hook_before_read_or_git_execution(repository, tmp_path, monkeypatch, name):
+    enable(repository)
+    assert hooks.status(repository)['state'] == 'CONFIGURED'
+    external = tmp_path / 'outside-hook'
+    external.write_text('#!/bin/sh\nexit 0\n')
+    external.chmod(0o755)
+    target = repository / '.githooks' / name
+    target.unlink()
+    target.symlink_to(external)
+    original_open = hooks.os.open
+    def safe_open(path, *args, **kwargs):
+        assert str(path) != str(external), 'external file was opened'
+        return original_open(path, *args, **kwargs)
+    monkeypatch.setattr(hooks.os, 'open', safe_open)
+    with pytest.raises(RuntimeError, match='outside trusted'):
+        hooks.self_check(repository)
+
+
+@pytest.mark.parametrize('name', hooks.HOOKS)
+def test_internal_hook_symlink_still_checks_real_behavior(repository, name):
+    enable(repository)
+    original = repository / '.githooks' / name
+    actual = original.with_name(name + '.implementation')
+    original.rename(actual)
+    original.symlink_to(actual.name)
+    assert hooks.status(repository)['state'] == 'CONFIGURED'
+    assert hooks.self_check(repository)['state'] == 'PASS'
+
+
+def test_copy_rejects_leaf_symlink_swapped_after_resolution(repository, tmp_path, monkeypatch):
+    source = repository / '.githooks/pre-commit'
+    outside = tmp_path / 'outside-hook'
+    outside.write_text('outside data\n')
+    original_open = hooks.os.open
+    def swapped_open(path, flags, *args, **kwargs):
+        if str(path) == 'pre-commit':
+            source.unlink()
+            source.symlink_to(outside)
+        return original_open(path, flags, *args, **kwargs)
+    monkeypatch.setattr(hooks.os, 'open', swapped_open)
+    with pytest.raises(OSError):
+        hooks.copy_trusted(repository, source, tmp_path / 'copy', repository / '.githooks')
+    assert not (tmp_path / 'copy').exists()
+
+
+@pytest.mark.parametrize('relative', ['tools/dev/check-internal-ip-leak.py', '.gitattributes'])
+def test_other_copied_inputs_cannot_read_outside_worktree(repository, tmp_path, relative):
+    outside = tmp_path / 'outside-input'
+    outside.write_text('external input\n')
+    source = repository / relative
+    source.unlink()
+    source.symlink_to(outside)
+    with pytest.raises(RuntimeError, match='outside trusted'):
+        hooks.self_check(repository)
+
+
+def test_copy_rejects_parent_directory_swap(repository, tmp_path, monkeypatch):
+    source = repository / '.githooks/pre-commit'
+    original_open = hooks.os.open
+    def swapped_open(path, flags, *args, **kwargs):
+        if str(path) == '.githooks':
+            external = tmp_path / 'moved-hooks'
+            (repository / '.githooks').rename(external)
+            (repository / '.githooks').symlink_to(external, target_is_directory=True)
+        return original_open(path, flags, *args, **kwargs)
+    monkeypatch.setattr(hooks.os, 'open', swapped_open)
+    with pytest.raises(OSError):
+        hooks.copy_trusted(repository, source, tmp_path / 'copy', repository / '.githooks')
+    assert not (tmp_path / 'copy').exists()
+
+
+def test_copy_rejects_fifo_without_waiting_for_a_writer(repository, tmp_path):
+    source = repository / '.githooks/pre-commit'
+    source.unlink()
+    os.mkfifo(source)
+    with pytest.raises(RuntimeError, match='not a regular file'):
+        hooks.copy_trusted(repository, source, tmp_path / 'copy', repository / '.githooks')
+    assert not (tmp_path / 'copy').exists()
