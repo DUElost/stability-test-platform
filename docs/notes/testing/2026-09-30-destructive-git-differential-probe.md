@@ -19,6 +19,9 @@ UNVERIFIED，不当 PASS；守卫只负责判断，不能给事实来源代判�
 所有实际 git 均为临时 mock，绝对路径案例也指向它；无真实破坏性 Git 命令。
 隔离 cwd 与环境，禁用 profile，不读取 BASH_ENV / 凭据 / 生产配置。mock 只记录 argv。
 `--checker` 可指定可信的历史版本文件作变异验证；报告保存 checker 路径与 SHA256。
+checker 读取、模块导入、函数取得失败统一生成一条 UNVERIFIED 报告并非零退出，
+读取失败时 SHA256 为 null；导入中的 SystemExit 也不能提前成功退出。异常只记录类型，
+不输出任意异常消息。结束时源码不可读或已改变同样为 UNVERIFIED。
 
 动态宿主的已知漏拦单列 KNOWN_GAP；超深回退对包含禁令字面数据的合法提交消息可能
 保守拦截，单列 CONSERVATIVE_BLOCK，不把它描述成零不一致。其他漏拦/误拦/无法执行
@@ -45,6 +48,13 @@ UNVERIFIED，不当 PASS；守卫只负责判断，不能给事实来源代判�
   schema-at-head 因无 DATABASE_URL 明确跳过，未作数据库验收。
 - 完整矩阵期间不得同时做 checker 变异；一次与变异时间重叠的运行已取消，不计证据。
   探针记录启动时的源码 hash，结束时源码变化则 UNVERIFIED，避免错贴版本。
+- 独立复核返修：补齐 loader/source 异常报告；新增文件缺失、权限错误、语法错误、
+  导入异常/退出、缺函数/不可调用/无 loader，以及结束时源码删除/改写的回归。
+  相关测试与守卫回归 84 passed；将 probe 恢复为返修前版本，9 failed / 35 deselected。
+  守卫 docstring 改为当前 32 参数 × 7 引号 × 32 宿主 + 6 动态缺口口径，删除
+  未入库历史脚本的“一万余次”现行证据叙述。
+  返修后完整矩阵再次为 7154 PASS / 14 CONSERVATIVE_BLOCK / 6 KNOWN_GAP，
+  总计 7174 次，其余状态为 0；check:quick 16 项通过，schema 探针未配置而跳过。
 
 ## Revisit
 

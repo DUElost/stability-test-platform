@@ -206,17 +206,33 @@ def main() -> int:
     parser.add_argument("--json", type=Path, help="write full mismatch/gap evidence")
     parser.add_argument("--self-test", action="store_true", help="36 real Bash cases, no LLM/CI gate")
     args = parser.parse_args()
-    checksum = hashlib.sha256(args.checker.read_bytes()).hexdigest()
-    spec = importlib.util.spec_from_file_location("git_checker_probe_target", args.checker)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    report = run(module.find_blocked, args.self_test)
-    report["checker"] = str(args.checker.resolve())
+    checksum = None
+    try:
+        checksum = hashlib.sha256(args.checker.read_bytes()).hexdigest()
+        spec = importlib.util.spec_from_file_location("git_checker_probe_target", args.checker)
+        if spec is None or spec.loader is None:
+            raise ImportError("checker has no module loader")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        checker = module.find_blocked
+        if not callable(checker):
+            raise TypeError("find_blocked is not callable")
+    except (Exception, SystemExit) as exc:
+        report = {"counts": {"UNVERIFIED": 1}, "details": [
+            {"state": "UNVERIFIED", "stage": "checker-load", "error": type(exc).__name__},
+        ]}
+    else:
+        report = run(checker, args.self_test)
+        try:
+            if hashlib.sha256(args.checker.read_bytes()).hexdigest() != checksum:
+                raise ValueError("checker changed during probe")
+        except Exception as exc:
+            report["counts"]["UNVERIFIED"] = report["counts"].get("UNVERIFIED", 0) + 1
+            report["details"].append({"state": "UNVERIFIED", "stage": "checker-source",
+                                      "error": type(exc).__name__})
+    report["checker"] = str(args.checker.absolute())
     report["sha256"] = checksum
-    if hashlib.sha256(args.checker.read_bytes()).hexdigest() != checksum:
-        report["counts"]["UNVERIFIED"] = report["counts"].get("UNVERIFIED", 0) + 1
-        report["details"].append({"state": "UNVERIFIED", "error": "checker changed during probe"})
     if args.json:
         args.json.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
     print(json.dumps({key: value for key, value in report.items() if key != "details"}, ensure_ascii=False))

@@ -53,10 +53,11 @@ command），任一简单命令命中下列「禁止语义集合」即 exit 2（
   `ssh` / `python -c` / `awk system()` 等其它「把字符串当命令」的宿主；ANSI-C 引号里的
   十六进制 / 八进制转义（`$'\\x67it'`）；`--hard` 之外的 git 选项缩写；
   `case … in a) … ;; esac` 出现在 `$(…)` 内时的 `)` 歧义。
-- 验证方式（#3545 复核后补）：除 `--self-test` 与 tests 外，用「真实 bash + 只记录 argv 的 mock git」
-  作差分事实来源——把危险参数形态 × 7 种引号写法 × 约 50 种 shell 宿主结构（列表 / 管道 / 子 shell /
-  控制流 / 各类包装器 / heredoc / here-string / eval / 命令替换 …）逐条真实执行，与守卫判断对比；
-  修复后一万余次执行中，非上述已知缺口的宿主漏拦为 0。已知缺口宿主的漏拦是预期内的。
+- 验证方式（#3553）：除 `--self-test` 与 tests 外，用入库的 `destructive_git_probe.py`
+  以「真实 Bash + 只记录 argv 的 mock git」作差分事实来源。当前矩阵为 32 组参数 ×
+  7 种引号 × 32 个宿主 + 6 个已知动态缺口 = 7174 次；本轮证据见
+  `docs/notes/testing/2026-09-30-destructive-git-differential-probe.md`。KNOWN_GAP 与
+  CONSERVATIVE_BLOCK 单列，执行或 checker 不可验证为 UNVERIFIED；不沿用未入库历史脚本的次数。
 - 有意不禁（无事故证据，D6 棘轮）：`git clean` / `git restore` / `git checkout -- .` /
   `git push --force` / `git branch -D` 等同族破坏性命令。
 - git 级对 reset --hard 无干净拦截点（ref 事务无法与普通提交区分）——阻断层只在

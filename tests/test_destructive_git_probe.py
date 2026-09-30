@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 import sys
 
 import pytest
@@ -64,6 +65,82 @@ def test_checker_exception_is_unverified(oracle):
 
     case = probe.Case("checker-error", "git reset --hard", ["reset", "--hard"], True)
     assert probe.compare(case, *oracle, broken)["state"] == "UNVERIFIED"
+
+
+@pytest.mark.parametrize("source,suffix,error", [
+    (None, ".py", "FileNotFoundError"),
+    ("def broken(\n", ".py", "SyntaxError"),
+    ("raise ImportError('private-error-text')\n", ".py", "ImportError"),
+    ("raise SystemExit(0)\n", ".py", "SystemExit"),
+    ("raise SystemExit(1)\n", ".py", "SystemExit"),
+    ("name = 1\n", ".py", "AttributeError"),
+    ("find_blocked = None\n", ".py", "TypeError"),
+    ("find_blocked = None\n", ".txt", "ImportError"),
+])
+def test_checker_load_failure_emits_unverified_report(tmp_path, source, suffix, error):
+    checker = tmp_path / ("checker" + suffix)
+    if source is not None:
+        checker.write_text(source)
+    evidence = tmp_path / "evidence.json"
+    result = subprocess.run(
+        [sys.executable, probe.__file__, "--checker", str(checker),
+         "--self-test", "--json", str(evidence)],
+        cwd=tmp_path, capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == 1
+    assert result.stderr == ""
+    assert "private-error-text" not in result.stdout
+    report = json.loads(evidence.read_text())
+    assert report["counts"] == {"UNVERIFIED": 1}
+    assert report["details"] == [
+        {"state": "UNVERIFIED", "stage": "checker-load", "error": error},
+    ]
+    assert json.loads(result.stdout.splitlines()[0])["counts"] == report["counts"]
+    assert report["checker"] == str(checker)
+    assert (report["sha256"] is None) == (source is None)
+
+
+def test_checker_read_permission_error_is_unverified(monkeypatch, tmp_path, capsys):
+    checker = tmp_path / "checker.py"
+    monkeypatch.setattr(sys, "argv", [probe.__file__, "--checker", str(checker)])
+
+    def denied(path):
+        raise PermissionError("private-error-text")
+
+    def must_not_run(*args):
+        pytest.fail("loader failure must not run Bash cases")
+
+    monkeypatch.setattr(probe.Path, "read_bytes", denied)
+    monkeypatch.setattr(probe, "run", must_not_run)
+    assert probe.main() == 1
+    output = capsys.readouterr()
+    assert output.err == ""
+    assert "private-error-text" not in output.out
+    assert json.loads(output.out.splitlines()[0])["counts"] == {"UNVERIFIED": 1}
+    detail = json.loads(output.out.splitlines()[1])
+    assert detail == {"state": "UNVERIFIED", "stage": "checker-load", "error": "PermissionError"}
+
+
+@pytest.mark.parametrize("change,error", [("remove", "FileNotFoundError"), ("rewrite", "ValueError")])
+def test_checker_source_failure_after_probe_is_unverified(monkeypatch, tmp_path, capsys, change, error):
+    checker = tmp_path / "checker.py"
+    checker.write_text("def find_blocked(command): return False\n")
+    monkeypatch.setattr(sys, "argv", [probe.__file__, "--checker", str(checker)])
+
+    def change_source(*args):
+        if change == "remove":
+            checker.unlink()
+        else:
+            checker.write_text("def find_blocked(command): return True\n")
+        return {"counts": {"PASS": 1}, "details": []}
+
+    monkeypatch.setattr(probe, "run", change_source)
+    assert probe.main() == 1
+    output = capsys.readouterr()
+    assert json.loads(output.out.splitlines()[0])["counts"] == {"PASS": 1, "UNVERIFIED": 1}
+    assert json.loads(output.out.splitlines()[1]) == {
+        "state": "UNVERIFIED", "stage": "checker-source", "error": error,
+    }
 
 
 @pytest.mark.parametrize("inner,argv,dangerous", [
