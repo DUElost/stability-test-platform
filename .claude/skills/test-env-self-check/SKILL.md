@@ -15,7 +15,8 @@ description: 在本仓库运行后端/前端测试或排查环境异常前的自
 which python || echo "本机无 python 裸名——统一用 venv 的解释器"
 ```
 
-- 所有测试/ruff 一律 `python -m` 形式调用（裸 `pytest` 会落到另一套解释器）。
+- pytest 必须由当前项目解释器运行 `scripts/run_pytest.py`（见 §3）；ruff 等模块用
+  同一解释器的 `python -m` 形式，不直接调用 `pytest` 或 `python -m pytest`。
 
 ## 2. 测试库指向（生产机红线）
 
@@ -40,11 +41,12 @@ unset TEST_DATABASE_URL   # 让 conftest 走 Docker testcontainers（推荐）
 
 ```bash
 # 任何 pytest 都套 cgroup 硬顶：超限只损失这一次运行，不再冻结整机
-systemd-run --user --scope -p MemoryMax=6G -p MemorySwapMax=0 -- \
-  env -i PATH="$PATH" HOME="$HOME" PYTHONPATH=. \
-  venv/bin/python -m pytest backend/agent/tests/ -q
+env -i PATH="$PATH" PYTHONPATH=. \
+  .venv/bin/python scripts/run_pytest.py backend/agent/tests/ -q
 ```
 
+- `run_pytest.py` 与 gate / shell wrapper 共用：先核实 cgroup v2 的实际限制；未受保护时
+  建立 systemd user scope，子进程复核。保护不可用即拒绝启动，不能改回裸跑。入口不加载 env 文件。
 - `MemorySwapMax=0` 是**故意**的：不许逃逸到 swap（换页风暴正是失速的形态）。
 - 被顶杀死（rc=137 / `Memory cgroup out of memory`）是**结论不是障碍**：说明有失控循环，
   去定位它，别靠加大 `MemoryMax` 续跑。
@@ -56,12 +58,10 @@ systemd-run --user --scope -p MemoryMax=6G -p MemorySwapMax=0 -- \
 
 ```bash
 # Agent 侧自足套件（套顶，见 §3）
-systemd-run --user --scope -p MemoryMax=6G -p MemorySwapMax=0 -- \
-  python -m pytest backend/agent/tests/ -q
+python scripts/run_pytest.py backend/agent/tests/ -q
 # 控制面单文件需 PG
 TESTING=1 JWT_SECRET_KEY=test-secret \
-  systemd-run --user --scope -p MemoryMax=6G -p MemorySwapMax=0 -- \
-  python -m pytest backend/tests/api/<目标文件> -q
+  python scripts/run_pytest.py backend/tests/api/<目标文件> -q
 ```
 
 ## 5. WSL Agent 环境（仅涉及 Agent 联调时）
@@ -90,7 +90,8 @@ python scripts/run_gates.py check:gov      # 治理面专项
 
 - `TEST_DATABASE_URL` 一律不得指向 `stp`（生产）或 `stp_dev`（compose 容器库名）——
   §2 的短路检查不过就停；
-- 测试与 ruff 一律 `python -m` 形式（裸 `pytest` 会落到另一套解释器，报错信号滞后）；
+- pytest 一律经 `scripts/run_pytest.py`（§3），不得直接调用 `pytest` 或 `python -m pytest`；
+  ruff 等模块用当前项目解释器的 `python -m` 形式；
 - **裸跑 `pytest` 不带 cgroup 内存硬顶**（§3）是本机最贵的一次教训：本机就是生产控制面
   宿主，一条失控循环即可整机冻结并只能人肉按电源（#123 三次 / #3200 一次）。被顶杀死时去
   定位失控循环，**不要**靠加大 `MemoryMax` 续跑；

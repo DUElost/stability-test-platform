@@ -1,6 +1,6 @@
 # 测试指南
 
-> **最后更新**：2026-09-05
+> **最后更新**：2026-09-30
 > 本文是测试命令、隔离数据库要求、fixture 陷阱和已知限制的权威位置。
 
 ---
@@ -14,9 +14,9 @@
 | `frontend/**/*.test.tsx` | 组件 / 页面 | vitest + jsdom |
 | `tests/`（根） | 脚本、Ansible、迁移契约 | 按文件而定 |
 
-**不要混跑** agent 与控制面 fixture。一律 `python -m pytest`（裸 `pytest` 可能落到错误解释器）。
+**不要混跑** agent 与控制面 fixture。统一用 `python scripts/run_pytest.py`；入口以当前解释器执行 `python -m pytest`，不会切换工具环境。
 
-包装脚本（可选加载 `.env.test`）：
+保护入口不加载 env 文件；包装脚本另可选加载 `.env.test`：
 
 ```bash
 cp .env.test.example .env.test   # 首次
@@ -33,7 +33,7 @@ cp .env.test.example .env.test   # 首次
 
 | 场景 | 做法 |
 |------|------|
-| 日常验证 | 优先 `pytest backend/agent/tests/` |
+| 日常验证 | 优先 `python scripts/run_pytest.py backend/agent/tests/` |
 | 任何 `pytest` / 构建命令 | **套 cgroup 内存硬顶**（本机可能同时是生产控制面宿主，见下「测试执行内存硬顶」） |
 | 必须跑 `backend/tests/` | **Docker testcontainers**（`conftest` 在未设 `TEST_DATABASE_URL` 时拉起临时 `postgres:16`） |
 | 迁移试验 | 禁止对业务库试跑 `alembic upgrade`；在 CI / 容器 / 开发机验证 |
@@ -52,11 +52,14 @@ cp .env.test.example .env.test   # 首次
 （wtmp 标 `crash`）。所以缺省姿势是套硬顶，而不是裸跑：
 
 ```bash
-systemd-run --user --scope -p MemoryMax=6G -p MemorySwapMax=0 -- \
-  env -i PATH="$PATH" HOME="$HOME" PYTHONPATH=. \
-  venv/bin/python -m pytest backend/agent/tests/ -q
+env -i PATH="$PATH" PYTHONPATH=. \
+  .venv/bin/python scripts/run_pytest.py backend/agent/tests/ -q
 ```
 
+- `run_gates.py` 的所有 pytest gate、`run_pytest.sh` 共用此入口。入口验证当前 cgroup v2
+  与祖先的有效上限（≤6 GiB、swap=0）；未受保护则用 systemd user scope 建立硬顶，
+  子进程再次验证后才启动 pytest。缺少 systemd / user bus / 可读限制时拒绝执行，不回退裸跑。
+  已受更严格限制的容器或外层 scope 可直接复用；其他平台须在受保护的 Linux 环境运行。
 - `MemorySwapMax=0` 是**故意**禁止逃逸到 swap——换页风暴正是失速的形态；
 - 被顶杀死（rc=137 / `Memory cgroup out of memory`）是**结论不是障碍**：有失控循环，去定位它，
   别靠加大上限续跑；
@@ -106,7 +109,7 @@ systemd-run --user --scope -p MemoryMax=6G -p MemorySwapMax=0 -- \
 
 ```bash
 unset TEST_DATABASE_URL
-JWT_SECRET_KEY=test-secret python -m pytest backend/tests/path/to/test.py -q
+JWT_SECRET_KEY=test-secret python scripts/run_pytest.py backend/tests/path/to/test.py -q
 ```
 
 协议 / abort / 链相关用例映射见 [`../design/07-execution-protocol.md`](../design/07-execution-protocol.md) §8。
