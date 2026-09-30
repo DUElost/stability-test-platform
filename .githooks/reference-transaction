@@ -6,8 +6,11 @@
 # 阻断层在 Claude PreToolUse（tools/dev/check_destructive_git.py）；
 # 本钩子只做观测——如需硬拦截，在 prepared 阶段 exit 非零（会中止事务），
 # 属独立裁决事项。
+# stdin 协议（githooks(5) reference-transaction）：每行
+#   <old-value> SP <new-value> SP <ref-name> LF
+# 读取顺序必须是 old new ref（曾误写为 ref old new，refs/stash 永不命中）。
 state=$1
-while read -r ref old new; do
+while read -r old new ref; do
     case "$ref" in
         refs/stash)
             echo "[warn] refs/stash ${state}: ${old} -> ${new}" \
