@@ -31,8 +31,12 @@ status --risk，可能重叠默认不并发，无重叠可并行，共享元文�
 - Registry declare 使用单元 #3549；ai_work 的字段、状态机、Git 派生与本地落点未修改。
 - 治理 self-test 通过；针对 origin/main 的 S1–S15 / S5x 全绿；check:quick 16 项通过。
   schema-at-head 无 DATABASE_URL 明确跳过，未作数据库验证。
-- 常驻预算：根 AGENTS 79 行 / 6535 字节；契约 200 行 / 24357 字节；adapter
+- 常驻预算：根 AGENTS 79 行 / 6535 字节；契约 200 行 / 24366 字节；adapter
   88 行 / 8271 字节，均未提高预算。8 条根不变量和 S11 锚点保持不变。
+- 独立复核返修：工作流顶部明确仅域内 status/declare/finish，ADR-0034 §2.1
+  限定域内自行 declare；契约 §3.5 与 ADR-0058 D10-4 将域外实施者纳入开放 PR
+  决策文档查重通道。全改动范围的现行正文对账未发现其余同类全员登记残留；
+  历史实录不回改。返修后受限 scope 中 check:quick 16 项通过，schema 探针跳过。
 
 ## Revisit
 

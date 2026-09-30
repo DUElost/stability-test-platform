@@ -21,8 +21,9 @@ ADR。模板与判定见 [`docs/notes/README.md`](../notes/README.md)。
 [`execution-contract.md`](ai/execution-contract.md)。Execution Registry（P1，
 `tools/dev/ai_work.py`）已落地并被采用——契约 §9 启动判据第 1 条（已计划的
 多 Harness 批次启动前预置就绪）已触发，**现行操作规范为契约正文协议**：
-开工 `ai_work.py status` 前检 + `declare` 领单，收尾 `finish` 与 GitHub
-reconcile；派生视图不再是主操作规范，降为 ground truth 交叉验证手段（契约 §9）。
+所有实施者开工先查开放 PR / 远端分支；仅协调域内再 `ai_work.py status --risk`
+前检 + `declare`，收尾 `finish` 与 GitHub reconcile。域外 M2 不写 Registry（契约 §3.6）；
+派生视图降为 ground truth 交叉验证手段（契约 §9）。
 下列规则（源自
 [`2026-09-04-multi-agent-parallel-convention.md`](../notes/process/2026-09-04-multi-agent-parallel-convention.md)，
 其并行语义已被 ADR-0034 取代）继续有效：

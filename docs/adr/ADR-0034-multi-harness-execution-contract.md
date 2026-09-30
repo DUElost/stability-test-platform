@@ -52,7 +52,7 @@
 Role Context 当前形态即 Registry `role` 元数据（默认 `implementation`；运行时供给为 deferred capability，v1.7）——不是路由、不是 ownership 边界。
 Agent 间**不通信、不共享上下文、不实时协调**——Parallel Execution + Asynchronous Visibility + **Repository-Mediated Integration**（仓库是唯一媒介）。
 
-**选择权原则**：用哪个 Harness 承接哪个 Requirement，**始终由开发者决定**（延续 2026-09-04 约定与现行实践——开发者亲自启动并驱动各 Harness）。本契约**不定义任何需求路由或自动下发机制**：上述箭头链只描述**溯源**（哪个 Requirement 由哪个 Harness 的哪个 Execution 承接），不描述**指派**（谁该做什么）；Registry 记录由执行侧自行 `declare`（visibility-only，供可见性与审计），不是调度器。
+**选择权原则**：用哪个 Harness 承接哪个 Requirement，**始终由开发者决定**（延续 2026-09-04 约定与现行实践——开发者亲自启动并驱动各 Harness）。本契约**不定义任何需求路由或自动下发机制**：上述箭头链只描述**溯源**（哪个 Requirement 由哪个 Harness 的哪个 Execution 承接），不描述**指派**（谁该做什么）；协调域内 Registry 记录由域内实施者自行 `declare`（visibility-only，供可见性与审计），不是调度器。
 
 ### 2.2 Execution Registry（P1 落地）— 细则见契约 §2
 
