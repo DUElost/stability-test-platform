@@ -34,22 +34,8 @@ Harness 适配层不得复制易变化的项目事实。根入口也不得重新
 Harness 的自动发现规则会随版本变化（各 harness 的**记忆目录**约定——不在仓库内——单点权威在 [`tools/dev/memory_lint.py`](../../../tools/dev/memory_lint.py) 的 `memory_dir_candidates()`；多个 harness 同时用时须以 `--harness` 指定，不静默取第一个——变更时必须同步，#2065）。新增专用适配前必须用对应版本实测加载行为；
 不能仅凭文件名推断规则已经生效。
 
-**Antigravity CLI 实测汇总（2026-09-07，`agy 1.1.26 -p`）——当前为「只读顾问」型可用**：
-
-- **规则供给**：`agy_with_rules.sh` 注入根契约实测生效；**全局层**（`~/.gemini/GEMINI.md`
-  与 `~/.gemini/AGENTS.md`，可逆探针证实）在 `-p` 下装载；**workspace 层**（active
-  directory 的 `AGENTS.md`/`GEMINI.md`/`CLAUDE.md` symlink）全部不装载——与[官方迁移
-  文档](https://antigravity.google/docs/cli/gcli-migration/)冲突，待上游确认。机制层：
-  规则装载走声明式配置 `user_rules` 节（`~/.gemini/antigravity-cli/settings.json` 无
-  此字段，空被 skip）；
-- **工具执行不可用**：headless 下凡批准工具执行（skip-permissions、`permissions.allow`
-  两种语法共三条路径）一律 `Agent execution terminated`——崩点在执行循环（实验后
-  settings.json 已恢复原状）；故 agy 会话不能读写文件/执行命令，**无法独立完成
-  declare→工作→finish 的 Execution 周期**；交互 TUI 未验证（PTY 不稳定）；
-- **批次角色（2026-09-07 用户裁决）**：**定性为「带规则的高级顾问」——不纳入
-  可承接 Requirement 的 Harness 名单**，仅承担注入规则的问答/分析/评审；上游
-  修复 headless 工具循环并复测通过后，重跑附录 A 协议可升格（Registry 的
-  `--harness` 参数刻意不做名单硬校验，升格无需改代码）；全局层属本机个人配置，不放仓库规则。
+Antigravity 的历史规则供给、工具循环失败与顾问定位证据见
+[ADR-0034 附录 A](../../adr/ADR-0034-multi-harness-execution-contract.md#附录-a2026-09-06-harness-摄取实测矩阵)；当前职责以上表为准。
 
 ## 本地配置边界
 
@@ -76,10 +62,13 @@ Execution 串行修改。并行执行语义的权威源是
 已被取代，其元文件串行化实践继续有效，派生视图保留为 ground truth 交叉验证
 手段（契约 §5.1/§9）。
 
-## Registry CLI 手动入口（v1.15：非 Adapter 义务，非路由）
+## Registry CLI 手动入口（非 Adapter 义务，非路由）
 
-会话由开发者选择启动（选择权原则）。Registry CLI：`tools/dev/ai_work.py`（规范见
-[`execution-contract.md`](execution-contract.md) §2–§5）。**Role 非 Adapter 义务（ADR-0034 v1.7）**：`role` 仅为 Registry 元数据与未来扩展点（默认 `implementation`，空串即缺省；特殊 Role deferred）。**v1.15（Owner 2026-09-29，#3516）**：原「启动自动 `whoami` / wrapper 定时 heartbeat」的 P2 接线承诺退役——不存在所有目标 Harness 都具备的统一生命周期 hook / wrapper 接线点，部分接线只得到混合信号，而 liveness 不参与 risk 判定；以下动作供**协调域内实施者手动**使用，Adapter 无启动注入、Role 等价或心跳义务。
+会话由开发者选择启动；Registry CLI 仅供协调域内实施者手动使用（[契约](execution-contract.md) §2–§5）。
+Role 是元数据，运行时供给 deferred；Adapter 无自动 whoami / 心跳义务，last_seen 不代表在线。
+协调域外 M2 云端实施不 declare：开工前查开放 PR / 远端分支，Owner 对照本地 status --risk；
+可能重叠默认不并发，无重叠可并行，共享元文件串行；首个有效改动立即开 draft，不伪造 worktree。
+本地实施者对称查开放 PR 后再 status --risk / declare；M2 不授予生产写权限。完整约束见契约 §3.6。
 
 | 时机 | 动作 | 说明 |
 |---|---|---|

@@ -1,6 +1,6 @@
 # ADR-0034：多 Harness 并行执行契约与执行登记（Multi-Harness Execution Contract）
 
-- 状态：**Accepted（v1.14）**
+- 状态：**Accepted（v1.15）**
 - 版本记录：v0.1 #858 / v0.2 #859（选择权原则）/ v0.3 #860（Contract hardening）/ #861（索引同步）/ v0.4 #862（八源 synthesis）+ #863（R6/R18 裁决）/ v0.5 #864（第二轮复审）/ v1.0 #865（**Accepted**，2026-09-06 用户人工终审批准）/ v1.1 #866（§2 细则迁出至 `execution-contract.md`，本文保留决策要点 + 指针）/ **v1.2 #877：P1 启动判据修订——增补「已计划的多 Harness 批次启动前预置就绪」（2026-09-07 用户裁决：本 ADR 立项背景即即将开展的多 Issue 集中修复与新需求开发，工具须先于场景就绪；判据全文见契约 §9 v1.1）**
 **v1.3 本版：附录 A 增补 Antigravity CLI 实测（2026-09-07，`agy 1.1.26 -p`：无仓库规则自动发现——根/嵌套 AGENTS.md、CLAUDE.md symlink、GEMINI.md 均不加载，引文诊断确认；供给=调用方前置 `tools/dev/agy_with_rules.sh`；P2 加载矩阵终验随之扩展为五家结论）**
 **v1.4 本版：附录 A 补机制层根因（规则装载=声明式配置 `user_rules` 节空被 skip——装载清单无约定文件通道）与官方迁移文档冲突记录（迁移文档声称解析 active directory 的 GEMINI/AGENTS.md，但 `-p` 非交互实测不符——待上游确认，澄清前 agy 供给一律走前置脚本）**
@@ -14,6 +14,7 @@
 **v1.12 本版：CodeBuddy CLI/IDE 分立——附录 A 原单行「CodeBuddy」实为 CLI 结论却被读作覆盖整个产品线（IDE 从未探针）；2026-09-11 人工补测 IDE 得 Q1=否/Q2=是/Q3=一次（Zcode 同形态，与 CLI 相反），故照 Cursor CLI/IDE 分列先例拆为两行、CLI 版本按实测校正为 2.149.0，harness-adapters.md 与 harness_probe.py 同步（IDE 入人工形态）；**IDE 版本 4.11.3 经人工读取补入本版**（探针时未能从磁盘读出）**
 **v1.13 本版：执行模型收窄（[ADR-0058](./ADR-0058-planned-batch-execution.md) D10，Owner 2026-09-28 裁决）——契约 §3.6 退役 Mode A/B/C 词汇，生产实施 `1 Requirement → 1 Harness → 1 PR` 为唯一执行模型；Registry 只登记其协调域内的实施者（现阶段即宿主机同一克隆内的本地 Harness），规划 / 复核 / 集成观察工作面不 declare，协调域外仓库写入以开放 PR 检查与共享元文件串行补可见性；Registry 字段、三维状态、overlap 谓词、transition table 与 §2.1 选择权原则均不变。批次规划、复核与激活的交付流程由 ADR-0058 管辖，本 ADR 只管实施 Execution 的协调；§2.6 第 4 条「评审 / scratch 会话同样 declare」随本版同步收窄（2026-09-29 补漏：v1.13 首次落地的 #3490 漏改此句）**
 **v1.14 本版：P2 心跳承诺退役（Owner 2026-09-29 裁决，#3516）——原「Harness Adapter 提供 heartbeat / 启动自动 `whoami`，`last_seen` 因此升格为可靠 liveness」不实施：不存在所有目标 Harness 都具备的统一生命周期 hook / wrapper 接线点（Registry CLI 本身在 Zcode / CodeBuddy CLI / dsh web 等处可手动执行，已 dogfood；缺的是可依赖的自动接线点，GUI 形态尤其没有），部分接线只会得到混合信号；`liveness` 本就不参与 §2.3 risk 判定，无足够价值支撑跨 Harness 常驻心跳机制。契约 §4 改为「TTL 与 last_seen 语义」（v1.15）：`last_seen` 只表示最近一次 Registry 写动作 / 手动 heartbeat 时间，STALE 仅提示「久未写」；`whoami`（只读）与 `heartbeat` / 无参 `update` CLI 保留为手动 / 兼容入口，长期无消费者再按退役扫描删除。P2 的另一半——cwd 深度 × Harness 加载矩阵验收——不变（#3516 G2 承接）；Registry 字段、三维状态、overlap 谓词、transition table 与 §2.1 选择权原则均不变。**
+**v1.15 本版：M2 云端实施（Owner 2026-09-29 裁决，#3516；正式落地 2026-09-30）**——协调域外实施仍为 1 Requirement → 1 Harness → 1 PR，开放 PR 承担可见性，不代登记虚构 worktree；本地实施者对称查开放 PR 后再 Registry 前检。具体约束见 ADR-0058 D8/D10 与契约 §3.6 v1.16；字段、状态机、scope/overlap 与选择权不变，不扩展生产写权限。
 - 优先级：P1
 - 目标里程碑：M7（延续）
 - 日期：2026-09-06
@@ -45,7 +46,9 @@
 
 ### 2.1 核心模型
 
-`Requirement → Harness → Execution（= Worktree + Role Context + Registry 记录）`。
+协调域内：`Requirement → Harness → Execution（= Worktree + Role Context + Registry 记录）`。
+协调域外 M2：同样 `1 Requirement → 1 Harness → 1 PR`，由开放 PR + Git 提供可见性，
+不写本地 Registry；前检与冲突纪律见 ADR-0058 D10 / 契约 §3.6。
 Role Context 当前形态即 Registry `role` 元数据（默认 `implementation`；运行时供给为 deferred capability，v1.7）——不是路由、不是 ownership 边界。
 Agent 间**不通信、不共享上下文、不实时协调**——Parallel Execution + Asynchronous Visibility + **Repository-Mediated Integration**（仓库是唯一媒介）。
 

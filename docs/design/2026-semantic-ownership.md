@@ -1,7 +1,7 @@
 # 跨域语义归属索引（Ownership Authority）
 
 - **状态**：Living（#2546 Closed 后升格；Ownership Authority + S15 已在 `main` 生效；非内容宪法）
-- **日期**：2026-09-25
+- **日期**：2026-09-30
 - **目的**：回答「这个概念/关系的定义权归谁」——**只做归属索引，不做内容宪法**
 - **范围**：现行 **Accepted**（及同等生效）ADR 均可纳入索引；非仅 ADR-0033/0020
 - **关联**：[#2546](https://github.com/DUElost/stability-test-platform/issues/2546)（Closed）；评审 `docs/reviews/REVIEW_SEMANTIC_OWNERSHIP_*`；[`adr/README.md`](../adr/README.md)
@@ -178,7 +178,7 @@
 | `terminal-fact-layer` | concept | 平台库长期事实层（签名 / 发生 / DLE 摘要 / 运行时长） | `docs/adr/ADR-0056-terminal-fact-layer.md :: ## 8. 裁决记录（2026-09-26，owner 授权 Claude 裁决）` | 事实行随 run 级联删除；单库事实表超出体量基线 |
 | `notification-delivery` | concept | 通知投递成功/失败语义 | `docs/adr/ADR-0036-notification-delivery-semantics.md :: ### 2.1 投递管道（契约对象）` | 改 ACCEPTED≠DELIVERED |
 | `execution-registry` | concept | 多 Harness Execution Registry / 三维状态 | `docs/adr/ADR-0034-multi-harness-execution-contract.md :: ### 2.3 状态模型：lifecycle × liveness × integration 三维正交 — 细则见契约 §3`；细则 `docs/development/ai/execution-contract.md :: ## 3. 状态模型（三维）与 transition table` | 改 Registry 为调度器 |
-| `batch-delivery` | concept | 批次交付流程：Owner / 规划者 / 实施者 / 复核者 / 集成观察者的职责分层，与 Registry 协调域划界（只登记协调域内实施者） | `docs/adr/ADR-0058-planned-batch-execution.md :: ### D8 职责与工作面` | 复核前合入再次发生；helper 副本模型裁为 A/B；协调域外 PR 与域内实施者反复同文件冲突 |
+| `batch-delivery` | concept | 批次交付流程：Owner / 规划者 / 实施者 / 复核者 / 集成观察者的职责分层，与 Registry 协调域划界（只登记协调域内实施者；M2 域外实施走 PR 可见性） | `docs/adr/ADR-0058-planned-batch-execution.md :: ### D8 职责与工作面` | 复核前合入再次发生；helper 副本模型裁为 A/B；协调域外 PR 与域内实施者反复同文件冲突 |
 | `settings-bare-read` | concept | 配置读取收敛与裸读边界 | `docs/adr/ADR-0042-settings-convergence-and-bare-read-boundary.md :: ## 决策` | 新域绕过分域 settings |
 | `risk-level-vocab` | concept | 风险对外词表 S/A/B | `docs/adr/ADR-0045-risk-level-vocabulary.md :: ## 2. 决策` | 多词表回流 |
 | `project-taxonomy` | concept | TestProject / specialty 分类 | `docs/adr/ADR-0029-project-taxonomy-and-param-layering.md :: ### D2：项目实体 \`test_project\` — 单层身份 + 正交 facet` | 改 facet / 派生归属 |
@@ -297,3 +297,4 @@
 | 2026-09-28 | **ADR-0058 入表（claude）**：补 `batch-delivery` 行（新建 Accepted ADR，§7 触发 1）；§5.1「多 Harness 执行」代表 ADR 补 `0058`——`execution-registry` 管实施 Execution 的协调，`batch-delivery` 管其上游的规划 / 复核 / 激活职责与协调域划界 |
 | 2026-09-29 | ADR-0058 v1.1（落地记录勘误，决策无改动）：`batch-delivery` 行锚点（D8）与分层不变，仅登记版本变化 |
 | 2026-09-29 | ADR-0058 v1.2（D2 增补规划者「设计权 ≠ 裁决权」：模型级问题先设计目标模型、既有 ADR 是证据与迁移约束；裁决权划分不变）：`batch-delivery` 行锚点（D8）与分层不变，仅登记版本变化 |
+| 2026-09-30 | ADR-0058 v1.3 / ADR-0034 v1.15（M2）：`batch-delivery` D8 定实施职责，D10 定域内登记/域外 PR 可见性与对称前检；`execution-registry` 的字段与状态机归属不变，云端实施不写本地 Registry |

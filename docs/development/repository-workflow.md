@@ -27,13 +27,14 @@ reconcile；派生视图不再是主操作规范，降为 ground truth 交叉验
 [`2026-09-04-multi-agent-parallel-convention.md`](../notes/process/2026-09-04-multi-agent-parallel-convention.md)，
 其并行语义已被 ADR-0034 取代）继续有效：
 
-- 冲突靠开工前 Registry 前检与实际 diff 交叉验证避免，不依赖手写 WIP 状态；
+- 冲突靠开工前开放 PR / 远端分支检查、协调域内 Registry 前检与实际 diff 交叉验证避免，不依赖手写 WIP 状态；
 - 分片只用于冲突规避，不形成目录所有权；
 - `AGENTS.md`、`CLAUDE.md` 及 Harness 共享规则同一时间只由一个工作面修改（协调域内经 Registry、
   协调域外查开放 PR 串行）；
-- Registry 只登记其协调域内的实施者（现阶段即本机同一克隆内的 Harness 会话）；协调域外的
-  规划 / 复核工作面不 declare，改仓库文件前查开放 PR 是否已改目标文件，共享元文件重叠时串行
-  （契约 §3.6，ADR-0058 D10）；
+- Registry 只登记其协调域内的实施者（现阶段即本机同一克隆内的 Harness 会话）；本地领单前
+  先查开放 PR，再 `status --risk` / `declare`。协调域外实施、规划 / 复核工作面不 declare，
+  写仓库前查开放 PR / 远端分支；M2 云端实施与本地在窗 Execution 可能重叠时默认不并发，
+  Owner 对照本地 `status --risk`，无重叠可并行，共享元文件串行（契约 §3.6，ADR-0058 D10）；
 - 并发不设会话数上限（ADR-0034 §2.6 v1.8）；瓶颈在集成收尾侧（审阅吞吐 + 平台可靠性），在窗 Execution 规模与 reconcile 负载为实测代理，恶化时重议。
 
 派生视图（交叉验证；`effective_scope = declared ∪ derived` 中 derived 是 Git
@@ -312,10 +313,14 @@ Owner 批准批次与 Appetite → 规划者出方案（批次 issue 正文）�
 | 职责 | 现行承载 | 进入 Registry |
 |---|---|---|
 | 规划者 | Owner 每批选择的独立 Web 工作面（如 ChatGPT Web / Claude Code Web） | 否 |
-| 实施者 | 开发者选择的本地 Harness | 是 |
+| 实施者 | 开发者选择的本地 / 云端 Harness（M2） | 仅协调域内 |
 | 复核者 | Owner 按复核对象选择的独立 Web 工作面；高风险 / 治理实验优先与被复核面使用不同 Web/Harness | 否 |
 | 集成观察者 | Grok Bot | 否 |
 | Owner | 开发者本人 | 否 |
+
+云端实施者形成首个可提交的有效改动后立即开 draft PR，不制造空提交或伪实现；不代登记
+不存在的 worktree，不新增 Registry 字段或远程 Registry，不因实施资格获得生产写授权。
+复核、ready 与激活闸门对本地 / 云端实施相同；职责不按代码类型划界。
 
 Planner / Reviewer 可以位于 STP Project 中，但 Project 内历史聊天属于**共享背景**，不是事实源或裁决源：
 每个新会话都必须从当前 `main`、当前 issue / PR、Accepted ADR 与现行治理文档重新取证；不得把旧会话中的
