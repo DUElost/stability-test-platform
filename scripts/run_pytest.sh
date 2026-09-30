@@ -13,4 +13,4 @@ elif [[ -z "${TEST_DATABASE_URL:-}" ]]; then
   echo "hint: copy .env.test.example to .env.test or export TEST_DATABASE_URL" >&2
 fi
 
-exec "$ROOT/.venv/bin/python" -m pytest "$@"
+exec "$ROOT/.venv/bin/python" "$ROOT/scripts/run_pytest.py" "$@"

@@ -40,11 +40,12 @@ unset TEST_DATABASE_URL   # 让 conftest 走 Docker testcontainers（推荐）
 
 ```bash
 # 任何 pytest 都套 cgroup 硬顶：超限只损失这一次运行，不再冻结整机
-systemd-run --user --scope -p MemoryMax=6G -p MemorySwapMax=0 -- \
-  env -i PATH="$PATH" HOME="$HOME" PYTHONPATH=. \
-  venv/bin/python -m pytest backend/agent/tests/ -q
+env -i PATH="$PATH" PYTHONPATH=. \
+  .venv/bin/python scripts/run_pytest.py backend/agent/tests/ -q
 ```
 
+- `run_pytest.py` 与 gate / shell wrapper 共用：先核实 cgroup v2 的实际限制；未受保护时
+  建立 systemd user scope，子进程复核。保护不可用即拒绝启动，不能改回裸跑。入口不加载 env 文件。
 - `MemorySwapMax=0` 是**故意**的：不许逃逸到 swap（换页风暴正是失速的形态）。
 - 被顶杀死（rc=137 / `Memory cgroup out of memory`）是**结论不是障碍**：说明有失控循环，
   去定位它，别靠加大 `MemoryMax` 续跑。
@@ -56,12 +57,10 @@ systemd-run --user --scope -p MemoryMax=6G -p MemorySwapMax=0 -- \
 
 ```bash
 # Agent 侧自足套件（套顶，见 §3）
-systemd-run --user --scope -p MemoryMax=6G -p MemorySwapMax=0 -- \
-  python -m pytest backend/agent/tests/ -q
+python scripts/run_pytest.py backend/agent/tests/ -q
 # 控制面单文件需 PG
 TESTING=1 JWT_SECRET_KEY=test-secret \
-  systemd-run --user --scope -p MemoryMax=6G -p MemorySwapMax=0 -- \
-  python -m pytest backend/tests/api/<目标文件> -q
+  python scripts/run_pytest.py backend/tests/api/<目标文件> -q
 ```
 
 ## 5. WSL Agent 环境（仅涉及 Agent 联调时）
