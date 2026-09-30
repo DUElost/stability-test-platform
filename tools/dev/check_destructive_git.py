@@ -53,10 +53,11 @@ command），任一简单命令命中下列「禁止语义集合」即 exit 2（
   `ssh` / `python -c` / `awk system()` 等其它「把字符串当命令」的宿主；ANSI-C 引号里的
   十六进制 / 八进制转义（`$'\\x67it'`）；`--hard` 之外的 git 选项缩写；
   `case … in a) … ;; esac` 出现在 `$(…)` 内时的 `)` 歧义。
-- 验证方式（#3545 复核后补）：除 `--self-test` 与 tests 外，用「真实 bash + 只记录 argv 的 mock git」
-  作差分事实来源——把危险参数形态 × 7 种引号写法 × 约 50 种 shell 宿主结构（列表 / 管道 / 子 shell /
-  控制流 / 各类包装器 / heredoc / here-string / eval / 命令替换 …）逐条真实执行，与守卫判断对比；
-  修复后一万余次执行中，非上述已知缺口的宿主漏拦为 0。已知缺口宿主的漏拦是预期内的。
+- 验证方式（#3553）：除 `--self-test` 与 tests 外，用入库的 `destructive_git_probe.py`
+  以「真实 Bash + 只记录 argv 的 mock git」作差分事实来源。当前矩阵为 32 组参数 ×
+  7 种引号 × 32 个宿主 + 6 个已知动态缺口 = 7174 次；本轮证据见
+  `docs/notes/testing/2026-09-30-destructive-git-differential-probe.md`。KNOWN_GAP 与
+  CONSERVATIVE_BLOCK 单列，执行或 checker 不可验证为 UNVERIFIED；不沿用未入库历史脚本的次数。
 - 有意不禁（无事故证据，D6 棘轮）：`git clean` / `git restore` / `git checkout -- .` /
   `git push --force` / `git branch -D` 等同族破坏性命令。
 - git 级对 reset --hard 无干净拦截点（ref 事务无法与普通提交区分）——阻断层只在
@@ -68,6 +69,8 @@ command），任一简单命令命中下列「禁止语义集合」即 exit 2（
     echo '{"tool_name":"Bash","tool_input":{"command":"git reset --hard"}}' \\
         | python3 tools/dev/check_destructive_git.py     # → exit 2
     python3 tools/dev/check_destructive_git.py --self-test
+    # 手动差分探针（真实 Bash + 临时 mock git，不进 CI 默认门禁）：
+    python3 tools/dev/destructive_git_probe.py --json /tmp/git-shell-probe.json
 """
 from __future__ import annotations
 
@@ -140,6 +143,27 @@ def _find_backtick(text: str, i: int) -> int:
     raise _ParseError("反引号未闭合")
 
 
+def _backtick_text(text: str) -> str:
+    """Decode backquote substitution's first escape layer before parsing code.
+
+    Bash removes backslashes before $, backtick, backslash and newline here;
+    other backslashes remain for the inner shell parser. Treating raw backquote
+    text as ordinary code misses double-escaped command names/line continuations.
+    This layer is shared by ordinary, double-quoted and heredoc substitutions.
+    """
+    decoded: list[str] = []
+    i = 0
+    while i < len(text):
+        if text[i] == "\\" and i + 1 < len(text) and text[i + 1] in "$`\\\n":
+            if text[i + 1] != "\n":
+                decoded.append(text[i + 1])
+            i += 2
+        else:
+            decoded.append(text[i])
+            i += 1
+    return "".join(decoded)
+
+
 class _Scanner:
     """POSIX shell 子集的一遍扫描：尊重单/双引号与反斜杠，识别 `; | & 换行 ( )`，
     跳过 heredoc 正文（含 `<<-` 与带引号定界符），把重定向目标从 words 中剔除，
@@ -199,7 +223,7 @@ class _Scanner:
 
     def _backtick(self, start: int) -> int:
         end = _find_backtick(self.t, start)
-        inner = self.t[start:end].replace("\\`", "`")
+        inner = _backtick_text(self.t[start:end])
         self.cmd.subs.extend(_Scanner(inner, depth=self.depth + 1).run())
         return end + 1
 
@@ -376,7 +400,7 @@ def _body_subs(body: str, depth: int) -> list[_Cmd]:
             j = sub.i
         elif c == "`":
             end = _find_backtick(body, j + 1)
-            subs.extend(_Scanner(body[j + 1:end].replace("\\`", "`"),
+            subs.extend(_Scanner(_backtick_text(body[j + 1:end]),
                                  depth=depth).run())
             j = end + 1
         else:
