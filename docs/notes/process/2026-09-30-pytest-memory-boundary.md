@@ -29,8 +29,12 @@ systemd user scope，子进程再次确认后以当前解释器 `-m pytest` 执�
 - 恢复 gate 裸跑：1 failed / 19 passed；取消边界核验：10 failed / 10 passed。
   恢复实现后相关 31 项再次通过。缺少 systemd-run 的真实入口退出 2、未启动 pytest。
 - 真实入口测试在 CI 没有已验证 cgroup 时明确 skip，不把 mock 单测当作实际 cgroup 验收。
-- check:quick 首轮因本文缺少 Status / Class 头失败，补齐后重跑 pending；
-  完整 Agent gate 验证 pending，完成后更新本文。
+- check:quick 首轮因本文缺少 Status / Class 头失败；补齐后 16 项通过。schema-at-head
+  因无 DATABASE_URL 明确跳过，未作数据库验收。
+- 真实 Agent gate：2469 collected / 2469 passed（259.11s）；repo-tests 的 CI 离线
+  子集：1986 passed / 18 skipped（380.48s）。两者均通过共同入口核实 cgroup。
+- 64 MiB 外层 scope 内分配 128 MiB 的小规模探针被 SIGKILL（原始返回 -9），
+  证明硬顶执行，不为测试耗尽 6 GiB；生产配置与数据库未参与。
 
 ## Revisit
 
