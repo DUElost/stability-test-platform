@@ -1,6 +1,6 @@
 # 批次规划指引（规划者）
 
-- **状态**：Living v1.1（2026-09-29，§2 / §3 同步 ADR-0058 v1.2 D2 的规划者设计权；v1.0 2026-09-28 随 [ADR-0058](../../adr/ADR-0058-planned-batch-execution.md) Accepted 建立）
+- **状态**：Living v1.2（2026-09-29，§2 增补 Owner 逐批选择 Web 工作面与 Project 上下文去锚定；v1.1 同步 ADR-0058 v1.2 D2 的规划者设计权；v1.0 2026-09-28 随 [ADR-0058](../../adr/ADR-0058-planned-batch-execution.md) Accepted 建立）
 - **读者**：批次交付流程中的规划者；实施者只需读「派单提示词模板」产出的提示词与批次方案本身
 - **权威**：职责、闸门与判据以 ADR-0058 为准；本文只给做法与模板。复核做法见 [`batch-review.md`](batch-review.md)
 - **来源**：批次 B1（[#3463](https://github.com/DUElost/stability-test-platform/issues/3463)）实际使用的方案 v1.2 与派单提示词
@@ -21,6 +21,9 @@
 - 规划者不在 Registry 协调域内，不 declare。提交文档类 PR 前查开放 PR 是否已改目标文件；
   共享元文件（AGENTS.md、CLAUDE.md、Harness rules）重叠时串行；写 ADR 前查开放 PR 中的同编号、同主题 ADR。
 - 引用部署点、提交数、迁移数等现场数据前现查，不沿用记忆值。
+- **Planner 不绑定具体产品**：每个批次由 Owner 人工选择一个新的独立 Web 工作面承载规划（如 ChatGPT Web、Claude Code Web 或其他满足能力要求的工作面）；更换承载不改变 ADR-0058 的角色语义，也不新增 Registry 字段。
+- **同一 Project 不是事实源**：Planner 可以位于 STP Project 中，项目内历史聊天只用于理解背景和定位资料，不能作为代码事实、既有裁决或方案依据。每批必须从当前 `main`、当前 issue / PR、Accepted ADR 与现行治理文档重新取证；历史聊天与权威源冲突时，以权威源为准。
+- **新会话去锚定**：不得因为同 Project 的旧会话曾提出某个修法、分组或结论，就把它当成已接受方案。需要复用历史结论时，必须先在当前权威源中找到可追溯依据，或重新推导并在本批方案中说明。
 
 ### 模型级问题：目标状态优先
 

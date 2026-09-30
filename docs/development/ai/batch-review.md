@@ -1,13 +1,17 @@
 # 批次复核指引（复核者）
 
-- **状态**：Living v1.0（2026-09-28，随 [ADR-0058](../../adr/ADR-0058-planned-batch-execution.md) Accepted 建立）
+- **状态**：Living v1.1（2026-09-29，增补 Owner 选择复核工作面、Project 上下文去锚定与按风险选择隔离强度；v1.0 2026-09-28 随 [ADR-0058](../../adr/ADR-0058-planned-batch-execution.md) Accepted 建立）
 - **读者**：批次交付流程中的复核者
 - **权威**：职责与闸门以 ADR-0058 D8 / D9 为准；规划做法见 [`batch-planning.md`](batch-planning.md)
 - **来源**：批次 B1（[#3463](https://github.com/DUElost/stability-test-platform/issues/3463)）实际使用的两轮复核提示词
 
 ## 1. 复核者须满足的条件
 
-- 与实施者处于**不同工作面、不同上下文**；不得是实施该单元的会话。
+- 与实施者处于**不同工作面、不同上下文**；不得是实施该单元的会话。同一会话里换 prompt / 角色不构成独立复核。
+- **Reviewer 不绑定具体产品**：由 Owner 按批次 / 复核对象人工选择独立 Web 工作面；具体 Harness / 模型不是治理契约的一部分。
+- 若 Reviewer 位于 STP Project 中，项目内历史聊天只可用于背景和资料定位，**不得替代当前 GitHub / `main` / ADR 的独立取证**；历史聊天里的结论不得直接作为“已验证事实”。
+- 普通复核可使用同一 STP Project 中的**独立新会话 + 独立取证**；数据丢失、安全、难回退、架构 / 治理实验以及“复核 Planner 本身质量”的场景，优先使用与被复核工作面不同的 Web/Harness，以降低共享上下文带来的锚定。
+- 上述隔离强度是工作面选择原则，不新增 Registry 状态、标签或机械门禁；是否需要更强隔离按风险由 Owner 决定。
 - 不在 Registry 协调域内，不 declare；复核结论写在 PR 评论里，不改仓库文件。
 - 不改实现代码，不改 PR 状态（draft → ready 由 Owner 在看到「通过」后翻转），不操作 auto-merge 或合并。
 - 不把方案以外的改进建议作为通过条件；方案以外的发现可以写，但标明「不作为通过条件」。
