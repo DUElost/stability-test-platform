@@ -10,6 +10,12 @@ Class: testing
 记录 argv，必须精确等于生成器的预期才能用于比对。执行失败/缺事实/argv 不符为
 UNVERIFIED，不当 PASS；守卫只负责判断，不能给事实来源代判子命令。
 
+完整探针发现已合入守卫仍漏掉反引号的双层转义：原始内容只替换了转义反引号，
+没有先解码 Bash backquote 的第一层反斜杠，再送入内部 shell 解析器。本单共用
+`_backtick_text` 修复普通 / 双引号 / heredoc 三个调用面，不增加新的禁止语义。
+语义依据见 [GNU Bash command substitution](https://www.gnu.org/s/bash/manual/html_node/Command-Substitution.html)，
+行续接再以真实 Bash argv 验证。没有执行输入内容的解析代码。
+
 所有实际 git 均为临时 mock，绝对路径案例也指向它；无真实破坏性 Git 命令。
 隔离 cwd 与环境，禁用 profile，不读取 BASH_ENV / 凭据 / 生产配置。mock 只记录 argv。
 `--checker` 可指定可信的历史版本文件作变异验证；报告保存 checker 路径与 SHA256。
@@ -28,7 +34,13 @@ UNVERIFIED，不当 PASS；守卫只负责判断，不能给事实来源代判�
 ## Verification
 
 - 36 次小矩阵：33 PASS / 3 CONSERVATIVE_BLOCK，无无法执行或受支持宿主漏拦。
-- 完整当前/历史 checker 矩阵、探针负向单测与 check:quick pending。
+- 初始 6726 次：已合入版本 44 MISS；e1d8b62 为 586 MISS；均无 UNVERIFIED。
+  扩展普通/双引号/heredoc 反引号后，修复前的已合入版本 7174 次报告 132 MISS。
+- 修复后相关单测与原守卫回归 73 passed；把共用解码恢复到旧语义为 9 failed / 64 passed。
+  首次变异调用误用了系统 Python（无 pytest），不计验证；以上结果为项目解释器实跑。
+- 真实 settings.json command：相同反例在已合入脚本返回 0，本单脚本返回 2；这里只
+  调用 hook 的 JSON 检查，没有执行输入中的 Git 命令。真实 Claude 会话触发仍 pending。
+- check:quick 初轮 16 项通过；修复后完整差分与 quick 重跑 pending。
 
 ## Revisit
 

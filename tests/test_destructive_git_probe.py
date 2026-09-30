@@ -9,6 +9,7 @@ import sys
 import pytest
 
 from tools.dev import destructive_git_probe as probe
+from tools.dev import check_destructive_git as guard
 
 
 @pytest.fixture
@@ -55,6 +56,32 @@ def test_only_declared_boundaries_are_exempt_from_failure(oracle):
 def test_missing_bash_is_unverified(monkeypatch):
     monkeypatch.setattr(probe.shutil, "which", lambda name: None)
     assert probe.run(lambda c: False)["counts"] == {"UNVERIFIED": 1}
+
+
+def test_checker_exception_is_unverified(oracle):
+    def broken(command):
+        raise RuntimeError("checker unavailable")
+
+    case = probe.Case("checker-error", "git reset --hard", ["reset", "--hard"], True)
+    assert probe.compare(case, *oracle, broken)["state"] == "UNVERIFIED"
+
+
+@pytest.mark.parametrize("inner,argv,dangerous", [
+    (r"\\g\\i\\t \\r\\e\\s\\e\\t \\-\\-\\h\\a\\r\\d", ["reset", "--hard"], True),
+    ("git\\\\\n reset\\\\\n --hard", ["reset", "--hard"], True),
+    (r"\\g\\i\\t \\s\\t\\a\\s\\h \\d\\r\\o\\p", ["stash", "drop"], True),
+    (r"\\g\\i\\t \\s\\t\\a\\s\\h \\l\\i\\s\\t", ["stash", "list"], False),
+    ("git commit -m 'data; git stash'", ["commit", "-m", "data; git stash"], False),
+])
+@pytest.mark.parametrize("host", ["plain", "double-quoted", "heredoc"])
+def test_backquote_escape_layers_follow_actual_bash(oracle, inner, argv, dangerous, host):
+    command = {
+        "plain": "printf '%s' `" + inner + "`",
+        "double-quoted": "printf '%s' \"`" + inner + "`\"",
+        "heredoc": "cat <<EOF\n`" + inner + "`\nEOF\n",
+    }[host]
+    case = probe.Case(host, command, argv, dangerous)
+    assert probe.compare(case, *oracle, guard.find_blocked)["state"] == "PASS"
 
 
 def test_probe_ignores_ambient_shell_startup(monkeypatch, tmp_path):

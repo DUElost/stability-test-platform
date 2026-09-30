@@ -103,6 +103,8 @@ HOSTS = {
     "nested": lambda c: "env PROBE_NESTED=1 bash -c " + shlex.quote("command " + c),
     "substitution": lambda c: 'printf "%s" "$(' + c + ')"',
     "backticks": lambda c: 'printf "%s" `' + c.replace("\\", "\\\\").replace("`", "\\`") + '`',
+    "double-backticks": lambda c: 'printf "%s" "`' + c.replace("\\", "\\\\").replace("`", "\\`") + '`"',
+    "backtick-heredoc": lambda c: "cat <<EOF\n`" + c.replace("\\", "\\\\").replace("`", "\\`") + "`\nEOF\n",
     "process-substitution": lambda c: "cat <(" + c + ")",
     "heredoc-substitution": lambda c: "cat <<EOF\n$(" + c + ")\nEOF\n",
     "overflow-heredoc": lambda c: "cat <<EOF\n" + "$(" * 26 + c + ")" * 26 + "\nEOF\n",
@@ -158,7 +160,7 @@ def compare(case: Case, bash: str, env: dict, directory: Path, trace: Path, chec
         if result.returncode != 0 or observed != expected:
             return {"state": "UNVERIFIED", "name": case.name, "code": result.returncode, "argv": observed}
         blocked = bool(checker(case.command))
-    except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+    except Exception as exc:
         return {"state": "UNVERIFIED", "name": case.name, "error": type(exc).__name__}
     if blocked == case.dangerous:
         state = "PASS"
@@ -204,13 +206,17 @@ def main() -> int:
     parser.add_argument("--json", type=Path, help="write full mismatch/gap evidence")
     parser.add_argument("--self-test", action="store_true", help="36 real Bash cases, no LLM/CI gate")
     args = parser.parse_args()
+    checksum = hashlib.sha256(args.checker.read_bytes()).hexdigest()
     spec = importlib.util.spec_from_file_location("git_checker_probe_target", args.checker)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     report = run(module.find_blocked, args.self_test)
     report["checker"] = str(args.checker.resolve())
-    report["sha256"] = hashlib.sha256(args.checker.read_bytes()).hexdigest()
+    report["sha256"] = checksum
+    if hashlib.sha256(args.checker.read_bytes()).hexdigest() != checksum:
+        report["counts"]["UNVERIFIED"] = report["counts"].get("UNVERIFIED", 0) + 1
+        report["details"].append({"state": "UNVERIFIED", "error": "checker changed during probe"})
     if args.json:
         args.json.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
     print(json.dumps({key: value for key, value in report.items() if key != "details"}, ensure_ascii=False))

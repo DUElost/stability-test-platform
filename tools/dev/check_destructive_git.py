@@ -142,6 +142,27 @@ def _find_backtick(text: str, i: int) -> int:
     raise _ParseError("反引号未闭合")
 
 
+def _backtick_text(text: str) -> str:
+    """Decode backquote substitution's first escape layer before parsing code.
+
+    Bash removes backslashes before $, backtick, backslash and newline here;
+    other backslashes remain for the inner shell parser. Treating raw backquote
+    text as ordinary code misses double-escaped command names/line continuations.
+    This layer is shared by ordinary, double-quoted and heredoc substitutions.
+    """
+    decoded: list[str] = []
+    i = 0
+    while i < len(text):
+        if text[i] == "\\" and i + 1 < len(text) and text[i + 1] in "$`\\\n":
+            if text[i + 1] != "\n":
+                decoded.append(text[i + 1])
+            i += 2
+        else:
+            decoded.append(text[i])
+            i += 1
+    return "".join(decoded)
+
+
 class _Scanner:
     """POSIX shell 子集的一遍扫描：尊重单/双引号与反斜杠，识别 `; | & 换行 ( )`，
     跳过 heredoc 正文（含 `<<-` 与带引号定界符），把重定向目标从 words 中剔除，
@@ -201,7 +222,7 @@ class _Scanner:
 
     def _backtick(self, start: int) -> int:
         end = _find_backtick(self.t, start)
-        inner = self.t[start:end].replace("\\`", "`")
+        inner = _backtick_text(self.t[start:end])
         self.cmd.subs.extend(_Scanner(inner, depth=self.depth + 1).run())
         return end + 1
 
@@ -378,7 +399,7 @@ def _body_subs(body: str, depth: int) -> list[_Cmd]:
             j = sub.i
         elif c == "`":
             end = _find_backtick(body, j + 1)
-            subs.extend(_Scanner(body[j + 1:end].replace("\\`", "`"),
+            subs.extend(_Scanner(_backtick_text(body[j + 1:end]),
                                  depth=depth).run())
             j = end + 1
         else:
