@@ -15,7 +15,8 @@ description: 在本仓库运行后端/前端测试或排查环境异常前的自
 which python || echo "本机无 python 裸名——统一用 venv 的解释器"
 ```
 
-- 所有测试/ruff 一律 `python -m` 形式调用（裸 `pytest` 会落到另一套解释器）。
+- pytest 必须由当前项目解释器运行 `scripts/run_pytest.py`（见 §3）；ruff 等模块用
+  同一解释器的 `python -m` 形式，不直接调用 `pytest` 或 `python -m pytest`。
 
 ## 2. 测试库指向（生产机红线）
 
@@ -89,7 +90,8 @@ python scripts/run_gates.py check:gov      # 治理面专项
 
 - `TEST_DATABASE_URL` 一律不得指向 `stp`（生产）或 `stp_dev`（compose 容器库名）——
   §2 的短路检查不过就停；
-- 测试与 ruff 一律 `python -m` 形式（裸 `pytest` 会落到另一套解释器，报错信号滞后）；
+- pytest 一律经 `scripts/run_pytest.py`（§3），不得直接调用 `pytest` 或 `python -m pytest`；
+  ruff 等模块用当前项目解释器的 `python -m` 形式；
 - **裸跑 `pytest` 不带 cgroup 内存硬顶**（§3）是本机最贵的一次教训：本机就是生产控制面
   宿主，一条失控循环即可整机冻结并只能人肉按电源（#123 三次 / #3200 一次）。被顶杀死时去
   定位失控循环，**不要**靠加大 `MemoryMax` 续跑；

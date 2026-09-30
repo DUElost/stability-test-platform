@@ -19,8 +19,8 @@
   未配置则 WARN 跳过——他机/工作树/CI 恒绿，本机（=生产控制面）不对齐即红。
   一次只读 SELECT、秒级，故进 quick/pr；与 #1882 的
   systemd 硬门禁、`check-deploy-source.sh` 构成同族三守卫。
-- 用 `python -m` 形式调用（ruff/pytest），保证落到当前解释器的工具链，
-  规避「裸 pytest 落到另一套解释器」的历史坑。
+- ruff 用当前解释器的 `python -m`，pytest 经 run_pytest.py 核实硬顶后内部
+  使用当前解释器的 `-m pytest`，禁止在 gate 中直接裸跑 pytest。
 - CI 侧尚未调用本脚本（接入见 docs/notes/process/2026-08-14-repo-gate-runner.md）；
   脚本不可变门禁的 base 由环境变量 STP_GATE_BASE_REF 覆盖（CI 用 PR base）。
 """

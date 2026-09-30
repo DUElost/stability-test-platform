@@ -35,6 +35,9 @@ systemd user scope，子进程再次确认后以当前解释器 `-m pytest` 执�
   子集：1986 passed / 18 skipped（380.48s）。两者均通过共同入口核实 cgroup。
 - 64 MiB 外层 scope 内分配 128 MiB 的小规模探针被 SIGKILL（原始返回 -9），
   证明硬顶执行，不为测试耗尽 6 GiB；生产配置与数据库未参与。
+- 独立复核指出自检 skill 两处“测试一律 python -m”仍可能引向裸跑；返修将 pytest
+  明确收口到保护入口，并同步 gate runner 头部说明。仅文字变化，未改 runner 行为；
+  返修后受限 scope 中 check:quick 16 项通过，schema 探针未配置而跳过。
 
 ## Revisit
 
