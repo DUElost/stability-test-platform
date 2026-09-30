@@ -2010,6 +2010,16 @@ def run_self_test() -> int:
         lambda: check_claude_entry_form("无任何 import 行\n", True, "AGENTS.md"),
         False,
     )
+    expect(
+        "S8 同名但不同真身",
+        lambda: check_claude_entry_form("", True, "backend/agent/AGENTS.md"),
+        True,
+    )
+    expect(
+        "S8 scoped 同目录真身",
+        lambda: check_claude_entry_form("", True, "AGENTS.md", os.path.join(ROOT, "backend/agent/CLAUDE.md")),
+        False,
+    )
 
     expect("S2 好 (目指本文件所在目录)", lambda: check_links("见 [本文件](check_governance_surface.py)", os.path.dirname(os.path.abspath(__file__)), "t"), False)
     expect("S2 断链", lambda: check_links("见 [无](no-such-file.md)", os.path.dirname(os.path.abspath(__file__)), "t"), True)

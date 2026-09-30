@@ -42,7 +42,7 @@ def run_check(kind: str) -> tuple[str, str]:
                 command[1:1] = ["-X", f"pycache_prefix={cache}"]
             proc = subprocess.run(command, cwd=cwd, capture_output=True, text=True,
                                   timeout=TIMEOUT, env=os.environ.copy())
-    except (OSError, subprocess.TimeoutExpired) as exc:
+    except (OSError, UnicodeError, subprocess.TimeoutExpired) as exc:
         return "UNVERIFIED", type(exc).__name__
     if proc.returncode:
         detail = (proc.stdout + proc.stderr).strip()[-4000:]

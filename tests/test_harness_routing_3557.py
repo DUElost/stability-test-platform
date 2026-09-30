@@ -77,12 +77,12 @@ def test_existing_red_is_feedback_after_edit_not_patch_veto(repo, kind):
     assert proc.returncode == 0 and '[PASS]' in json.loads(proc.stdout)['systemMessage']
 
 
-@pytest.mark.parametrize('missing', ['.venv/bin/python', 'backend', 'frontend/node_modules/typescript/bin/tsc'])
+@pytest.mark.parametrize('missing', ['.venv/bin/python', 'tools/dev/codex_stop_check.py', 'backend', 'frontend/node_modules/typescript/bin/tsc'])
 def test_missing_target_never_silently_passes(repo, missing):
     target = repo / missing
     shutil.rmtree(target) if target.is_dir() else target.unlink()
     kind = 'typecheck' if missing.startswith('frontend') else 'compileall'
-    proc = invoke(repo, kind)
+    proc = invoke(repo, kind, '' if missing == 'backend' else 'backend/agent/aee')
     assert proc.returncode == 1 and '[UNVERIFIED]' in proc.stderr
 
 
@@ -142,3 +142,27 @@ def test_canonical_itself_must_not_resolve_outside(tmp_path):
     outside.write_text('# impostor\n')
     (tmp_path / 'AGENTS.md').symlink_to(outside)
     assert governance.check_claude_entry_form('', True, 'AGENTS.md', str(tmp_path / 'CLAUDE.md'))
+
+
+def test_linked_worktree_uses_its_own_root(repo, tmp_path):
+    if not shutil.which('node'):
+        pytest.skip('real Node unavailable')
+    subprocess.run(['git', '-C', str(repo), 'add', 'tools', 'backend', 'frontend'], check=True)
+    subprocess.run(['git', '-C', str(repo), '-c', 'user.name=Probe', '-c',
+                    'user.email=probe@example.invalid', '-c', 'core.hooksPath=/dev/null',
+                    'commit', '-qm', 'fixture'], check=True)
+    linked = tmp_path / 'linked tree with spaces'
+    subprocess.run(['git', '-C', str(repo), 'worktree', 'add', '-q', '--detach', str(linked)], check=True)
+    (linked / '.venv/bin').mkdir(parents=True)
+    (linked / '.venv/bin/python').symlink_to(sys.executable)
+    (linked / 'backend/agent/aee').mkdir(parents=True)
+    proc = invoke(linked, 'typecheck')
+    assert proc.returncode == 0, proc.stderr
+    assert (linked / 'frontend/observed-cwd').read_text() == str(linked / 'frontend')
+    assert not (repo / 'frontend/observed-cwd').exists()
+
+
+def test_missing_node_is_unverified(repo, monkeypatch):
+    monkeypatch.setattr(stop, 'ROOT', repo)
+    monkeypatch.setattr(stop.shutil, 'which', lambda _: None)
+    assert stop.run_check('typecheck')[0] == 'UNVERIFIED'

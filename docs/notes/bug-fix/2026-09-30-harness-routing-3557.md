@@ -1,7 +1,7 @@
 # G2：Codex Stop 路径、质量反馈与 scoped 根继承
 
-- **Status**: Living
-- **Class**: bug-fix
+Status: proposed
+Class: bug-fix
 - **Requirement**: [#3557](https://github.com/DUElost/stability-test-platform/issues/3557)，父载体 [#3516](https://github.com/DUElost/stability-test-platform/issues/3516)
 
 ## Decision
@@ -30,8 +30,14 @@ S8 解析完整 symlink 链，必须命中入口同目录的 AGENTS.md 实体，
 
 ## Verification
 
-- Ruff、原治理 self-test、治理结构检查已通过。
-- 隔离 command / symlink 行为回归与 quick 尚在执行，最终结果在提交前更新。
+- 隔离行为回归 23 passed（6GiB / swap0 cgroup）；root、两层 cwd、含空格路径与 linked worktree，
+  检查报红后编辑修复、解释器/脚本/源码/TypeScript 缺失、超时、symlink 外部目标/循环均覆盖。
+- 从 AEE 深层 cwd 执行本 PR 两条真实 command：实际项目 TypeScript 与 compileall 均 exit 0，
+  输出有效 Stop JSON；不把此结果当作真实 Codex 事件触发。
+- 以 f6c389d9 的旧 S8 实现替换函数（保持新版调用适配）：4 failed / 19 deselected；新版 23 全绿。
+- Ruff、治理 self-test、治理结构检查、quick 16 项通过；未提供隔离 DATABASE_URL 的 schema 探针明确跳过。
+- 首轮测试 1 failed / 21 passed，原因是删除 backend 后夹具仍从不存在的 cwd 启动；修正夹具后通过。
+  首轮 quick 因 Note 头部不合 S10 失败；修正为规定的 Status/Class 纯文本后通过。
 - Windows PowerShell command、Codex 真实已信任 hook、Claude hook 与 CLI/IDE × cwd 验收 pending。
 - 不读取个人配置/凭据，不改 hook trust/core.hooksPath/permissions，不连接业务库。
 
