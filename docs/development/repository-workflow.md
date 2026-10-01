@@ -282,8 +282,11 @@ Docker build 由手工 full workflow 或 `main-ci-backstop.yml` 夜间兜底，�
   （#2628/#2970/#3060/#3247），但**不转 required**：#2333 事实 3 明确 `backend-test` 类
   红灯混有 flake，其边界第三条同时写明 flake 占比**至今无法断言**；让 flake 率未知的
   检查阻塞合入＝把 flakiness 引进合入路径，正是本节当初驳回全量前移的同一条理由。
-  另实测墙钟 **16~60 min**，会成为 PR 关键路径上唯一超过 30min 的检查（现有 required
-  均 ≤30min）。
+  另实测 job 合计 **33~39 min**（step 级：`Run backend tests` **16~23 min**、`Run agent
+  tests` ~4.5 min、`Run repo-level tests` 10~15 min），会成为 PR 关键路径上唯一超过 30min
+  的检查（现有 required 均 ≤30min）。
+  （口径更正：初稿记作「16~60 min」是 job 级口径——60min 来自 job `timeout-minutes`
+  被撞而非测试跑满；step 级复测见 #3576 与评估 note。）
   实现后观察期取**两个自然月或 ≥60 PR**（先到者），届期按预注册判据落结论：flake 率 <1%
   且墙钟 ≤30min → 转 required；flake 率 ≥1% → 不转，转入「去 flake」队列；墙钟压不进
   30min → 保持信息性并记录「成本不可接受」。**届期必须落结论，不允许静默续期。**
