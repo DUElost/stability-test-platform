@@ -79,8 +79,8 @@ Role 是元数据，运行时供给 deferred；Adapter 无自动 whoami / 心跳
 | 文档实施类会话（本地 Harness 中修改仓库文档并开 PR） | 同样 declare（scope=将产出的文档目录）；纯 issue 评论 / PR 评审属复核职责，不登记（契约 §3.6，ADR-0058 D10） | diff 产生前派生视图无信号，declare 让文档修改意图可见；评审结论见 PR 评论 |
 
 - `whoami`/`status` 严格只读（观察不改变被观察状态）；只有带 identity 的写命令（declare/update/finish）刷新自身 `last_seen`；
-- 两层 scoped `AGENTS.md` 无条件要求先获得根契约（AEE 还叠加 Agent 层）；文件指针仅是加载协议，
-  真实 CLI/IDE × cwd 验收未完成前为 UNVERIFIED，不能以文件存在代替根契约可见。
+- 两层 scoped `AGENTS.md` 无条件要求先获得 root（AEE 还叠加 Agent）；指针不是实际加载证据。
+  [CLI/IDE × cwd 三态探针与人工入口](harness-probes.md)区分 autoload / contract；缺证据为 UNVERIFIED。
 - Claude 的根与 scoped `CLAUDE.md` 是同目录 `AGENTS.md` 的 symlink 薄壳；S8 校验解析后真身。
 
 ## Codex 质量反馈（G2）
