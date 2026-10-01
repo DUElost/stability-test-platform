@@ -12,6 +12,7 @@ import { cn } from '@/lib/utils';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useToast } from '@/hooks/useToast';
 import { usePlanRunHeaderSlot } from '@/hooks/plan-run/usePlanRunHeaderSlot';
+import { neutralizeSpreadsheetCellText } from '@/utils/spreadsheet';
 
 const PAGE_SIZE = 50;
 const SLOW_REFETCH_MS = 30_000;
@@ -27,7 +28,14 @@ const TERMINAL: ReadonlyArray<PlanRunStatus> = [
 ];
 
 function csvCell(value: string | number | null | undefined): string {
-  const s = value == null ? '' : String(value);
+  // #3237：事件字段（title / description / device_serial 等）是多源合成的外部投影，
+  // 一律按 string 走公式中和——不按字段来源的可信度挑选豁免。number 保留数值语义
+  // （不得先 String() 再中和，否则 number -5 会变成文本 '-5）。原双引号 framing 不变。
+  const s = value == null
+    ? ''
+    : typeof value === 'string'
+      ? neutralizeSpreadsheetCellText(value)
+      : String(value);
   return `"${s.replace(/"/g, '""')}"`;
 }
 
