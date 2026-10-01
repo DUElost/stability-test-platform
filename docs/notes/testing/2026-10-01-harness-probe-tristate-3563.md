@@ -35,6 +35,13 @@ CodeBuddy **CLI** 行不受影响。Zcode **3.14.4** contract 三格人工取证
 操作者，故不宜作完全独立证据，独立复核宜在未读预期值前提下重跑。autoload 三格与
 Hook 激活仍 UNVERIFIED。
 
+追加三（2026-10-01，独立复核返修）：复核发现 `harness-adapters.md` 把 2026-09-07
+**属于 Zcode 3.11.2 的 autoload 实证**贴在 3.14.4 行头，而 3.14.4 当前只有 contract
+三格证据、且 contract 口径明确不能证明 autoload。返修为分版本证据标注（3.11.2
+autoload / 3.14.4 contract 各归各版本），行头不再带单一版本号，并写明「版本证据不可
+跨版本搬运、3.14.4 的 autoload 结论目前不存在」。ADR-0034 附录 A 的 3.11.2 行按
+「历史不动」原则保留。纯文档返修，不退 Planner，PR 保持 draft。
+
 ## Verification
 
 离线回归 52 passed（统一 runner 实测 cgroup memory.max=6 GiB、swap=0）。
