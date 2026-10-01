@@ -125,11 +125,17 @@ Python 3.11 下重新生成对应 lock。日常重生成沿用已有 pin；只�
 python tools/dev/collapse-blank-pollution.py [--check] <file.py>
 ```
 
-脚本只处理空行并用 AST 比对语义。CI 已阻塞检查；本地钩子需一次性启用：
+脚本只处理空行并用 AST 比对语义。CI 已阻塞检查；本地钩子为 **opt-in**，文件
+存在不代表当前 Git 已启用。开发者选择启用后显式配置并自检：
 
 ```bash
-git config core.hooksPath .githooks
+.venv/bin/python tools/dev/check_git_hooks.py
+git config --local core.hooksPath .githooks
+.venv/bin/python tools/dev/check_git_hooks.py --self-test
 ```
+
+状态与自检的权威语义见 [repository-workflow](./repository-workflow.md#git-hooks-的-opt-in-状态与自检)；
+自检只写临时隔离仓库，不默认启用宿主 hooks，也不替代 CI。
 
 事故背景见
 [`2026-08-14-blank-line-pollution.md`](../notes/bug-fix/2026-08-14-blank-line-pollution.md)。
