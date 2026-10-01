@@ -25,7 +25,7 @@ curl -s http://127.0.0.1:8000/health      # health 路由（非 /api/v1/health�
   用户名/口令变量是 `$STP_ADMIN_USER`（= `stp-admin`）与 `$STP_ADMIN_PASSWORD`——**不是 `admin`**。
 - admin token（2026-09-15 实测校准）：`/api/v1/auth/token` 回**扁平** OAuth2 体，取 `.access_token`（不是 `.data.access_token`）；
   请求体是 `application/x-www-form-urlencoded`（用 `--data-urlencode`，不是 `-F`），且 `/api/v1/*` 非安全方法要过
-  CSRF 中间件（`backend/core/csrf.py`：无 Bearer / `X-Agent-Secret` 时要求 `Origin`/`Referer` 在 `CORS_ORIGINS` 白名单）——
+  CSRF 中间件（`backend/api/middleware/csrf.py`：无 Bearer / `X-Agent-Secret` 时要求 `Origin`/`Referer` 在 `CORS_ORIGINS` 白名单）——
   取 token 这一步必须带 `-H 'Origin: http://127.0.0.1'`，否则 403 `CSRF check failed`；拿到 token 后其余调用用 `Authorization: Bearer` 即可：
 
   ```bash

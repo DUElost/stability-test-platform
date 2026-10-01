@@ -1,6 +1,6 @@
 # 技术设计：治理面防护两层方案（C-G1 落地）
 
-- **状态**：Living（2026-08-26 初版，随 L1 case 校准演进）
+- **状态**：Living（2026-08-26 初版；2026-10-01 按 #3516 校准权威指针与强制力覆盖）
 - **日期**：2026-08-26
 - **上游**：[`reviews/AI_NATIVE_SDLC_PLAYBOOK_COMPARISON_2026-08-26_synthesis.md`](../reviews/AI_NATIVE_SDLC_PLAYBOOK_COMPARISON_2026-08-26_synthesis.md) C-G1 / D1–D5 + 逐项审计裁决（同日四项用户裁决见 §8）
 - **Agent Note**：[`../notes/process/2026-08-26-governance-surface-protection.md`](../notes/process/2026-08-26-governance-surface-protection.md)
@@ -26,13 +26,26 @@ CLAUDE.md `@import` 写在中文行内静默失效（人肉 `/context` 才发现
 
 | 层 | 形态 | 挂载 | 依据类型 |
 |----|------|------|----------|
-| **L0 结构门禁** | 确定性文本检查 S1–S14 | 阻塞：ci.yml lint job + run_gates `check:quick/pr` | 〔证〕真实事故/实测断链/常驻上下文回膨胀 |
-| 本地护栏 | git pre-commit 已发布脚本 M/D 拦截 + Claude settings 凭据写保护 | 提交现场/会话现场秒级反馈 | 〔证〕ef8808e 事故 |
+| **L0 结构门禁** | 确定性文本检查，当前成员以 `check_governance_surface.py` 为准 | 阻塞：ci.yml lint job + run_gates `check:quick/pr` | 〔证〕真实事故/实测断链/常驻上下文回膨胀 |
+| 本地护栏 | opt-in Git hooks + Claude settings 凭据写保护/破坏性 Git 检测 | Git hooks 必须显式启用；Harness 触发需独立取证 | 〔证〕离线/真实 command 测试不等于会话接线 |
 | backstop 机械摘要 | 失败 issue 附红灯 job+step / 日志链接 / compare 区间 | 事件驱动 | 〔证〕现有 body 无定位要素 |
 | **L1 行为 evals** | **已移除（2026-09-06）**：不变量保全由 L0 新增 S11 承接；语义传导/标准化分诊/多 Harness 摄取验证残余缺口见 #855；恢复锚点与决策见移除 note | — | 〔证〕能力分解评估（08-27 曾 12/12 全绿当瘦身安全网；09-05 后唯一环境 CLI 故障不可用） |
 
 L1 重议触发条件：治理面写者 >1 人，或 auto mode 成为默认工作态。
 （2026-09-06 已裁决移除而非升格；重开条件与补全方向见 #855。）
+
+### 2.1 权威与传导（#3516 v1.2）
+
+根 `AGENTS.md` 是共享 Safety / Workflow Kernel 的唯一启动源；scoped 文件只叠加领域
+约束，任何任务均先获得 root，AEE 再叠加 Agent。当前八条硬不变量/S11 是迁移状态，
+不是永久 always-on 架构承诺；本单不迁出或复制它们。方法归 skill/runbook，领域事实
+归代码/权威文档；adapter 只传导，hook/gate/test 只执行有明示 scope 的机器检查。
+host-local 凭据与权限不入库，只按已授权范围做 preflight，不由本模型授予生产写权限。
+
+规范与强制状态分开：同职责/同 scope 要求语义等价，不要求每个 Harness 使用同一种
+hook。不可验证的安全检查不能静默当 PASS；质量红灯不能阻止修复该红灯的编辑，未完成
+验证仍为 pending / UNVERIFIED。scoped 指针、配置文件和 S8 只证明结构，继承/事件触发须真实
+Harness × cwd 证据；低频探针与确定性反例回归不恢复已退役的常驻 L1 eval 门禁。
 
 ## 3. L0 规则明细（`tools/dev/check_governance_surface.py`）
 
@@ -45,7 +58,7 @@ L1 重议触发条件：治理面写者 >1 人，或 auto mode 成为默认工�
 | S5 | ci.yml 的 PR 门禁 job id 与 AGENTS.md 六项记载互检（CodeQL 无 workflow 文件，只查文档侧） | BLOCK | 五稿评审均人工核对过的事实固化 |
 | S6 | AGENTS ≤80 行/8KB、CLAUDE ≤60 行/6KB、每个 Cursor rule ≤30 行/3KB；Harness 总索引、执行契约与 scoped CLAUDE 各有独立预算（v1.12 契约分层后：正文 execution-contract.md 210 行/24500、规范附录 200 行/20000——语义面收紧、细则进附录） | BLOCK | Requirement 无关细节曾让常驻链超过 50KB；超预算必须迁往按需文档 |
 | S7 | `.claude/skills/*/SKILL.md` frontmatter 的 name 与目录一致且 description 非空 | BLOCK | 错误 frontmatter 会让技能静默不可见 |
-| S8 | CLAUDE.md 双形态（#857）：指向 `AGENTS.md` 的 symlink（内容直读），或缺省恰含 `@AGENTS.md` 单条 import | BLOCK | 导入 DOC-MAP 会把完整索引无条件带入每次会话 |
+| S8 | scoped `CLAUDE.md` 必须解析到同目录普通 `AGENTS.md` 真身，拒绝外指/断链/自循环；根仍兼容恰含 `@AGENTS.md` 的旧 import 形态（当前根为 symlink） | BLOCK | #3558 校验实际 canonical target；结构通过不证明 Harness 已加载 |
 | S9 | AGENTS/CLAUDE 只允许固定启动级二级章节，禁止三级章节 | BLOCK | 体量预算只能限制总量，章节白名单进一步阻止领域知识重新常驻 |
 | S10 | class 目录内 Agent Note 必须日期命名 `yyyy-mm-dd-<主题>.md`（#854）；2026-09-05 起新增 Agent Note 的 Status/Class 头部与 class 目录一致，且四节（Decision/Alternatives/Verification/Revisit）齐备 | BLOCK | 197 份存量中 78 份格式不统一；新门禁只阻止继续新增，不批量改写历史；非日期命名改名即可绕过头部校验 |
 | S11 | AGENTS.md 硬不变量 + 总原则「已发布脚本不可删改」锚点（12 条锚串）逐条在场 | BLOCK | 2026-09-06 随 L1 移除引入：L0 此前对不变量整条删除/改写全盲（S9 只查章节名、S6 只查体量）；S4 锚点同模式；2026-09-20 补第 12 锚（#2546 / e82515 F5：该句在 `## 总原则`、此前无覆盖；ADR-0039 Accepted 同 PR 改写） |
@@ -76,18 +89,19 @@ L1 重议触发条件：治理面写者 >1 人，或 auto mode 成为默认工�
 
 ## 5. 本地护栏
 
-1. **git pre-commit 第 4 项**：暂存集中命中 `backend/agent/scripts/*/v*/*`
+1. **opt-in git pre-commit 第 4 项（启用后）**：暂存集中命中 `backend/agent/scripts/*/v*/*`
    且 diff-filter=MD（修改/删除 HEAD 中已存在文件）即 BLOCK；新建版本目录(A)
    放行。git 层对全部引擎中立，补上 ruff exclude 只护 lint 工具、CI 分钟级才兜
-   底的现场空白。
-2. **`.claude/settings.json`**（首次入库）：permissions.deny 凭据文件
-   Write/Edit（`.env.backend`、`**/.env`、`**/*.pem`、`//home/debian13/hosts.ini`）。
-   **只禁写不禁读**——`docs/operations/production-diagnostics.md` 定义经授权的只读
+   底的现场空白。激活状态与临时仓库自检见 [Git hooks 的 opt-in 状态](../development/repository-workflow.md#git-hooks-的-opt-in-状态与自检)；未配置 hooksPath 不能声称当前提交已被检查。
+2. **`.claude/settings.json`**：当前 permissions.deny 列出四个凭据路径的
+   `Edit`（`.env.backend`、`**/.env`、`**/*.pem`、`//home/debian13/hosts.ini`），未列 `Write` 或 `Read`。
+   不把这些条目泛化为完整凭据写保护——`docs/operations/production-diagnostics.md` 定义经授权的只读
    诊断边界，禁读会砍掉合法运维工作流；误改风险由 deny + gitignore 双层覆盖。`.gitignore` 由整目录
    忽略改为选择性放行 `settings.json` 与 `skills/`。
 3. **skill 试点 `.claude/skills/test-env-self-check/`**：测试与环境自检分步清单
    （解释器/测试库红线/快速短路/WSL ADB）。D4 薄适配约束：只列操作与命令，
-   权威理由留在按需开发文档；局限——仅 Claude Code 会话可见。
+   权威理由留在按需开发文档；各 Harness 的发现/触发边界见 [适配基线](../development/ai/harness-adapters.md)。
+   `.agents/skills` 是兼容发现入口，不是第二份内容，也不以文件存在证明真实消费。
 
 ## 6. backstop 机械摘要
 
@@ -133,29 +147,42 @@ job 结论，重跑后重查在转绿时直接变空）；并**新增「归因�
 
 ### 7.1 后继形态：强制力覆盖图（#855 收口，2026-09-07）
 
-L1 移除后的残余缺口**不重建任何行为验证层**。第一原理：行为测量的
-actionable 终点永远是「加确定性 gate 或加结构性防线」——测量是中间品不是
-资产；且其结果随引擎/模型版本作废（负复利），与确定性 gate（引擎无关、
-零边际成本、随 PR 复利）相反。真正要管理的是下面这个差集：
+不恢复常驻 L1/连续金丝雀。#3516 v1.2 要求低频真实 Harness 探针证明传导与触发，
+并把已复现反例转为确定性回归；测量本身不产生强制力。下面区分有明示 scope 的
+机械拒绝（enforced）、部分覆盖（partial）、仅结构/契约（structural）和无已知
+机械覆盖的差集（residual）。字段不是新 Registry 状态，未取得真实触发证据仍为 UNVERIFIED。
 
 **AGENTS.md 硬不变量的强制力来源分类**（证据见行内引用；「差集」= 只依赖
 模型读了 AGENTS.md 并自觉遵守的部分）：
 
 | 不变量 | 强制力 | 证据 | 处置 |
 |---|---|---|---|
-| ASGI 入口 `socketio.ASGIApp` | 结构自证（装配错=服务起不来；无专项测试） | `backend/main.py` | residual |
-| Pipeline 顶层 lifecycle；action 唯一 `script:<name>` | **运行时拒绝** | `pipeline_engine.py:793` / `:1325` | 已强制 |
-| Plan 不存 lifecycle（dispatcher 组装） | 结构自证（schema 无列可存） | plan schema | 已强制 |
+| ASGI 入口 `socketio.ASGIApp` | 当前装配可核实；错误装配不一定导致启动失败，不能代替专项行为证据 | `backend/main.py` 的 `app` 装配 | structural；其它装配形态的拒绝仍 residual |
+| Pipeline 顶层 lifecycle；action 唯一 `script:<name>` | 执行入口拒绝 stages/phases/缺 lifecycle 与不支持的 action | `backend/agent/pipeline_engine.py` 的 `execute` / `_execute_step` | enforced（该执行入口） |
+| Plan 不存 lifecycle（dispatcher 组装） | 当前 schema 未定义生命周期存储字段，不是任意写入口的拒绝器 | plan schema / dispatcher | structural |
 | Redis 只承载队列与瞬时通信 | 无 | — | **residual**（review 兜底） |
-| 生产 secure cookie / 受限 SameSite / CSRF | **运行时强制** | `backend/core/security.py:83` | 已强制 |
-| Pydantic v2 only | 差异面新增行检查（backend 现存 `.dict(` 仅 `patch.dict` 惯用法，负向后顾豁免） | `tools/dev/check_invariant_diff.py` | **已强制**（BLOCK，2026-09-07 升格） |
-| 业务表名单数 | 差异面新增行检查（`pr-migrate-empty-db` 拦迁移失败，不拦复数表名） | 同上 | **已强制**（BLOCK，2026-09-07 升格） |
-| 已发布脚本 `default_params` 不可变 | **gate + 运行时 422** | `tools/dev/check-script-version-immutability.py` | 已强制 |
-| 前端 `types.ts` 与后端 schema 同步 | 部分：**登记的 Pydantic 响应模型 ↔ TS 接口**双向对拍（`tests/test_api_response_shape_contract.py` 轴线 C；2026-09-15 起 5 对：watcher-summary 3 + log-events 2）。`ok({...})` 手搓 dict 端点与未登记模型仍无强制力 | `frontend/package.json` 无生成器 | **部分已强制 / 其余 residual**（review 兜底） |
-| Python 用 `python -m` 形式（总原则） | 无 | — | residual（scripts 内裸调用可入差异面清单） |
+| 生产类环境 cookie / SameSite / CSRF（internal Secure 例外） | 启动校验拒绝不安全配置，CSRF 中间件保护 cookie 写请求 | `backend/core/security.py` 的 `validate_production_auth_cookie_settings`；`backend/api/middleware/csrf.py` | enforced（校验/中间件适用 scope） |
+| Pydantic v2 only | PR 新增行中策展的 v1 API 模式 BLOCK，不声称穷尽所有写法 | `tools/dev/check_invariant_diff.py` | partial；未登记形态/存量范围 residual |
+| 新建业务表名单数（历史表例外） | 新增迁移行的策展模式；空库迁移不拦表名复数 | 同上 | partial（新增行范围）；历史例外见数据模型 |
+| 已存在版本 `default_params` 不可变 | `update_script` 拒绝改变为 422；发布包另由 manifest append-only/包一致性保护 | `backend/api/routes/scripts.py`；`check_tool_manifest.py` / `check_script_packages.py` | enforced（该 API）；其它写入口不能由此推断已覆盖 |
+| 前端 `types.ts` 与后端 schema 同步 | 部分：**登记的 Pydantic 响应模型 ↔ TS 接口**双向对拍（`tests/test_api_response_shape_contract.py` 轴线 C；覆盖范围＝该文件 `_MODEL_PAIRS` 显式登记的配对——**数量随登记变化，不在此复制**）。`ok({...})` 手搓 dict 端点与未登记模型仍无强制力 | `frontend/package.json` 无生成器 | **部分已强制 / 其余 residual**（review 兜底） |
+| 项目 Python / pytest 内存保护 | G1 gate/shell wrapper 共用 `scripts/run_pytest.py`；缺 cgroup 限制即拒绝；稳定解释器入口由 #3566 / draft #3567 承接 | `scripts/run_pytest.py` / `scripts/run_gates.py` | enforced（保护 runner scope）；绕过 runner 的直接调用仍 residual |
+| 凭据读取与生产诊断边界 | 根禁止无关凭据访问；诊断按 `production-diagnostics.md` 与只读 skill。Claude versioned deny 只列四个路径的 Edit，不能证明所有写入被拦或每次读取获授权 | `.claude/settings.json`；诊断权威文档 | partial（Edit 条目）；读取授权仅 structural，无关/未授权读取 residual |
+| 共享工作树的破坏性 Git | Claude PreToolUse 接 shell-aware 守卫，已知间接执行缺口明示；opt-in reference-transaction 只观测 stash，不替代前置拦截 | `check_destructive_git.py`；`.claude/settings.json`；`.githooks/reference-transaction` | partial（解析覆盖已离线验证，真实 Claude 触发 UNVERIFIED）；其它 Harness 仅 structural |
+| FIFO / 不由实施者自行启用 auto-merge | 队列 workflow/script 跳过 draft、按队首维护 auto-merge；规范禁止人工 merge/enable/nudge 他人 PR | `.github/workflows/enable-auto-merge.yml`；`scripts/ci/pr-automerge-queue.sh` | partial（队列执行器）；操作者角色限制/独立复核真实性仍 structural/residual |
+| main 只经 PR、required checks | GitHub branch protection 的 PR 要求、管理员适用与 strict status checks；不是模型记忆或本地 hook | 服务器只读策略核实见下 | enforced（当前服务器配置）；不是对任意未来策略的承诺 |
 
-**原三缺口的归宿**：①语义传导——消解（测量不产生约束力；违规的终局是
-收缩差集或记 residual，见 `repository-workflow.md` §不变量违规处置）；
+服务器事实快照（2026-10-01，只读 API）：`required_pull_request_reviews` 已配置，
+`enforce_admins=true`，`required_status_checks.strict=true` 且六项绑定 GitHub Actions/CodeQL
+来源；禁止 force push，PR bypass allowances 为空，分支 rules API 无额外规则。
+**required_approving_review_count=0**：不要求 GitHub approving review，不能把服务器 PR 保护
+说成已经机械执行 ADR-0058 的“独立工作面复核→Owner ready”。这一步仍由 Owner 工作流承担。
+依据 [GitHub protected branches](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)
+和 [REST review-count 契约](https://docs.github.com/en/rest/branches/branch-protection)；策略变化时须重新
+读回，不用真实直推/破坏性操作试探保护。
+
+**原三缺口的归宿**：①语义传导——#3516 以真实低频探针取证；未取得证据为 UNVERIFIED，
+不能以文件/结构检查替代（违规的终局仍是收缩差集或记 residual）；
 ②标准化分诊——降为三步决策树（同上），不建独立协议；③多 Harness 摄取
 验证——维持 ADR-0034 附录 A 手工验收矩阵（低频事件按需探针 + 结果固化
 进 ADR），连续金丝雀**否决**（负复利 + 为低频事件建常驻设施）。
@@ -167,6 +194,14 @@ advisory 观察期被**全库枚举**替代——差异面 gate 在 main 上 dif
 观察期收不到样本；枚举实证 3/4 规则零命中、`.dict(` 唯一命中为
 `patch.dict`/`monkeypatch.dict` 惯用法（负向后顾豁免），精度可静态验证
 即无需等待（2026-09-07 升格，`GATE_TO_CI_ANCHOR` 已改 CI 映射）。
+
+### 7.2 退役归属与出口
+
+无消费者/重复治理面的周审计由既有 [#3534 Unit 4.2](https://github.com/DUElost/stability-test-platform/issues/3534)
+单一承接，当前机制尚待该单实施，本文不声明已有自动退役扫描。删除候选须同时核实
+Replacement、No Consumers、Exit Satisfied；零引用只是一项证据。历史/Removed 描述
+可留档，Living 指针须修正；不复制新 gate registry，也不自动删除兼容面。
+G2/G3 在途适配/环境文档的版本叙述与预算历史迁移等待串行收口，仍由 #3516 承载。
 
 ## 8. 同日用户裁决记录（审计收口）
 | 待决点 | 裁决 |
@@ -181,6 +216,7 @@ advisory 观察期被**全库枚举**替代——差异面 gate 在 main 上 dif
 
 | 日期 | 变更 |
 |------|------|
+| 2026-10-01 | #3516：权威/继承原则成文，S8 实际真身/opt-in 语义校准；退役 checker 指针替换为当前 API/发布检查；覆盖图显式标注凭据读取、共享工作树、FIFO/main 的强制范围与真实触发 UNVERIFIED，周退役仍由 #3534 承接 |
 | 2026-08-26 | 初版：L0+护栏+backstop 摘要落地；L1 十二条 case 首轮全绿（两轮校准，教训二条记档） |
 | 2026-08-27 | S7 skill frontmatter 校验入 L0（自测 7 条规则全绿）+ skill_usage_report 用量探针上线（HOLLOW=≥14 天零调用，strict 进 check:gov）；常驻瘦身 A/B1 依 RESIDENT_CONTEXT_AUDIT 执行完毕（−31.7%）另行留档 |
 | 2026-09-05 | S6 从观测升级为常驻入口行数/字节阻塞预算，新增 S8/S9 限制 CLAUDE import 与根章节，S10 守住新 Agent Note 头部；L1 收敛为 10 条启动契约，领域知识改走按需文档 |

@@ -7,7 +7,7 @@ alwaysApply: true
 # stability-test-platform
 
 - 共享总原则、硬不变量、安全边界与按需入口：`AGENTS.md`
-- Claude 导入与领域路由：`CLAUDE.md`
+- Claude 入口：`CLAUDE.md` 是同目录 `AGENTS.md` 的 symlink，无独立规则
 - 完整设计与文档权威关系：`docs/DOC-MAP.md`
 - Harness 适配边界：`docs/development/ai/harness-adapters.md`
 - 并行 Execution（Registry 登记、scope、集成窗口）：`docs/development/ai/execution-contract.md`
