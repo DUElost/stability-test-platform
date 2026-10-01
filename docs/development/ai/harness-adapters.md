@@ -9,7 +9,7 @@ Role、Scope 或 Registry 语义。跨 Harness 执行契约须由后续 ADR 与�
 |---|---|---|
 | 代码与测试 | 实际行为 | 仓库源码与测试 |
 | 共享启动契约 | 总原则、跨模块硬不变量、安全红线、按需入口 | [`AGENTS.md`](../../../AGENTS.md) |
-| Claude 入口 | 导入共享契约并提供按需路由 | [`CLAUDE.md`](../../../CLAUDE.md) |
+| Claude 入口 | symlink 薄壳直读共享契约 | [`CLAUDE.md`](../../../CLAUDE.md) |
 | 完整设计 | 模块、协议、开发与运维细节 | [`docs/DOC-MAP.md`](../../DOC-MAP.md) |
 | Harness 适配 | 加载路由、权限、钩子和工具特有格式 | 下表 |
 
@@ -22,7 +22,7 @@ Harness 适配层不得复制易变化的项目事实。根入口也不得重新
 |---|---|---|
 | Cursor | [`.cursor/rules/*.mdc`](../../../.cursor/rules/)；skills 兼容读 [`.agents/skills/`](../../../.agents/skills)（symlink）与 [`.claude/skills/`](../../../.claude/skills/) | 常驻入口和按路径引导；格式见 [`cursor-rules.md`](../cursor-rules.md)；项目 SOP skills 经 `.agents/skills` → `.claude/skills` 发现 |
 | Claude Code | 根及目录内 `CLAUDE.md`、`.claude/settings.json`、`.claude/skills/` | 架构入口、领域上下文、权限和显式技能；**skills 真身**在 `.claude/skills/*/SKILL.md`（仅本 harness 自动加载该目录） |
-| Codex | `AGENTS.md`、`.codex/hooks.json`、[`.agents/skills/`](../../../.agents/skills)（symlink → `.claude/skills/`） | 共享约定入口、确定性检查钩子；官方扫 `.agents/skills`，本仓以 symlink 指向 Claude 真身（非第二份拷贝） |
+| Codex | `AGENTS.md`、`.codex/hooks.json`（见下方质量反馈）、[`.agents/skills/`](../../../.agents/skills)（symlink → `.claude/skills/`） | 共享约定入口、确定性检查钩子；官方扫 `.agents/skills`，本仓以 symlink 指向 Claude 真身（非第二份拷贝） |
 | OpenCode | `AGENTS.md`；本地 `opencode.json` 不入库 | 共享约定入口；provider、模型和凭据属于本机配置 |
 | Antigravity CLI | 无（实测不自动发现仓库规则文件） | **不承接 Requirement/Execution**（2026-09-07 定性：带规则的高级顾问——问答/分析/评审）；规则经 `tools/dev/agy_with_rules.sh` 前置 |
 | Zcode（3.11.2，GUI） | `AGENTS.md`（仓库根注入=本会话实证；子目录**只装载 workspace 的 AGENTS.md**，根不注入——2026-09-07 人工探针） | 共享约定入口；Registry CLI 与 P2 动作表全程可用（三单 dogfood 即 Zcode 会话） |
@@ -79,10 +79,16 @@ Role 是元数据，运行时供给 deferred；Adapter 无自动 whoami / 心跳
 | 文档实施类会话（本地 Harness 中修改仓库文档并开 PR） | 同样 declare（scope=将产出的文档目录）；纯 issue 评论 / PR 评审属复核职责，不登记（契约 §3.6，ADR-0058 D10） | diff 产生前派生视图无信号，declare 让文档修改意图可见；评审结论见 PR 评论 |
 
 - `whoami`/`status` 严格只读（观察不改变被观察状态）；只有带 identity 的写命令（declare/update/finish）刷新自身 `last_seen`；
-- 各 Harness 的自动加载差异（Codex/Cursor/OpenCode 读 scoped `AGENTS.md`；
-  Claude 经 `CLAUDE.md` symlink 薄壳；dsh web 根级基线+scoped 触碰动态）见上方表与 ADR 附录 A；
-- **#857 已绕过并关闭（2026-09-08）**：根 `CLAUDE.md` 转 `AGENTS.md`
-  symlink（G2 上移到根）——@import 通道消失，子目录会话经 ancestor 加载
-  直读完整契约（实测 `claude -p` 复述硬不变量 ✓）；`claude_with_root.sh`
-  降后备。上游缺陷（claude-code #79046/#87020）不在我方行动面，波及
-  symlink 时另立新单。
+- 两层 scoped `AGENTS.md` 无条件要求先获得根契约（AEE 还叠加 Agent 层）；文件指针仅是加载协议，
+  真实 CLI/IDE × cwd 验收未完成前为 UNVERIFIED，不能以文件存在代替根契约可见。
+- Claude 的根与 scoped `CLAUDE.md` 是同目录 `AGENTS.md` 的 symlink 薄壳；S8 校验解析后真身。
+
+## Codex 质量反馈（G2）
+
+- `.codex/hooks.json` 仅在 **Stop** 检查落地后的树，不在 `apply_patch` 前跑 tsc；已有红灯不拦修复编辑。
+- command 从当前 Git root 找 `.venv` 和脚本；worktree 须初始化项目解释器与 frontend 依赖（[本地开发](../local-development.md)）。
+- 使用项目 Python 做 syntax compile、已安装的 TypeScript 做 typecheck；不安装依赖、不运行 pytest、不访问数据库。
+- PASS 返回 Stop JSON；检查报红为 FAIL，缺依赖/超时/检查器故障为 UNVERIFIED，均 exit 1 可见告警，
+  不以 exit 2 触发续跑循环。这是质量反馈，不能替代 required CI 或证明 CI Python 版本兼容。
+- [官方 Hook 契约](https://learn.chatgpt.com/docs/hooks)：项目须受信任，且 `/hooks` 审阅并信任当前 hook hash；
+  内容修改会重新等待信任。配置/本地 command 测试不代表实际激活；Windows command 未实跑时为 UNVERIFIED。
