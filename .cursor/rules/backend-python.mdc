@@ -9,7 +9,7 @@ alwaysApply: false
 修改后端 Python 前按需读取：
 
 - `AGENTS.md`：Pydantic、表名和跨层硬不变量；
-- `CLAUDE.md`：状态机与领域文档路由；
+- `CLAUDE.md`：同目录 `AGENTS.md` 的 symlink；领域语义按下方设计文档读取；
 - `docs/development/testing.md`：当前测试命令与隔离数据库要求；
 - `docs/design/2026-scan-upload-merge-contract.md`：跨进程归档契约；
 - 对应 `docs/design/` 文档：模块和协议细节。

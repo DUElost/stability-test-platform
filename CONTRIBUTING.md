@@ -10,7 +10,7 @@
 | [`README.md`](./README.md) | 产品概述、快速启动 |
 | [`docs/README.md`](./docs/README.md) | 文档中心与维护约定 |
 | [`AGENTS.md`](./AGENTS.md) | 最小启动契约、跨模块硬不变量与按需文档入口 |
-| [`CLAUDE.md`](./CLAUDE.md) | Claude 导入与按需路由 |
+| [`CLAUDE.md`](./CLAUDE.md) | Claude 入口：symlink → 同目录 `AGENTS.md`，无独立规则 |
 
 ## 改动流程
 

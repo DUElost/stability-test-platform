@@ -1,6 +1,6 @@
 # Stability Test Platform — 稳定性测试管理平台
 
-**版本**：1.0 · **文档更新**：2026-09-05
+**版本**：1.0 · **文档更新**：2026-10-01
 
 中心化 Android 设备稳定性测试管理平台：Linux-first 控制平面（FastAPI + React）编排执行，Linux Agent 经 ADB 驱动设备跑 Plan；支持实时监控、Watcher/AEE 采集、去重归档与通知。
 
@@ -8,7 +8,7 @@
 |------|------|
 | [`docs/README.md`](./docs/README.md) | **文档中心**（分层索引） |
 | [`AGENTS.md`](./AGENTS.md) | 最小 AI/开发启动契约、硬不变量与按需入口 |
-| [`CLAUDE.md`](./CLAUDE.md) | Claude 导入与按需路由 |
+| [`CLAUDE.md`](./CLAUDE.md) | Claude 入口：symlink → 同目录 `AGENTS.md`，无独立规则 |
 
 ---
 

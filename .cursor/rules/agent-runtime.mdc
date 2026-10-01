@@ -13,7 +13,7 @@ alwaysApply: false
 - `docs/design/2026-scan-upload-merge-contract.md`：控制面跨进程归档契约；
 - `docs/development/testing.md`：生产机测试安全边界；
 - `AGENTS.md`：脚本执行与跨层硬不变量；
-- `CLAUDE.md`：存储角色和领域文档路由；
+- `CLAUDE.md`：同目录 `AGENTS.md` 的 symlink；存储角色按领域文档读取；
 - `docs/design/04-agent.md`：Agent 模块设计。
 
 环境变量的完整现状以 `backend/agent/.env.example` 和开发文档为准。本规则不复制默认值、

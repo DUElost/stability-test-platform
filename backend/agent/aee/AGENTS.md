@@ -31,7 +31,9 @@ Collector 同样按平台分发（`collector.get_collector_for_platform`）：MT
 
 ## Reconciler（主路径，默认开）
 
-每 60s 基线周期（`STP_WATCHER_AEE_RECONCILE_ENABLED=true`，默认开启）：
+启用判定、baseline/burst 节奏与配置优先级以 [`reconciler.py`](./reconciler.py) 的
+`is_reconciler_enabled` / `AeeDbHistoryReconciler.__init__` 和 [Agent 配置示例](../.env.example)
+为准；本入口不复制周期默认值。单次采集流程：
 1. `adb shell cat /data/aee_exp/db_history` + `/data/vendor/aee_exp/db_history` → sha256 对比判断是否变化
 2. 新行 → `adb pull` 整目录到 Agent HDD
 3. 读 **`ZZ_INTERNAL`** 优先解析（CSV：parts[0]=exp_class, parts[7]=cur_process）

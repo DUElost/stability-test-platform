@@ -9,7 +9,7 @@ alwaysApply: false
 修改前端 TypeScript/React 前按需读取：
 
 - `AGENTS.md`：前后端 schema 同步等跨层不变量；
-- `CLAUDE.md`：领域文档路由；
+- `CLAUDE.md`：同目录 `AGENTS.md` 的 symlink，无独立规则；
 - `docs/development/testing.md`：前端测试 quirks 与验证命令；
 - `docs/development/repository-workflow.md`：CI 与集成约定；
 - `frontend/package.json`：当前可执行脚本；
