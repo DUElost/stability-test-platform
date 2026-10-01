@@ -633,6 +633,54 @@ describe('DevicesPage — CSV 公式前缀中和（S1 / #3237）', () => {
     expect(csv).toContain("'＋x");
   });
 
+  // #3561 §4.2：S1 的 Host 列来自管理员输入的 host.name（经 hostMap 取 name > ip），
+  // 与 serial/model/build 是**不同的来源链**，必须有独立的 sink-level 观察，不能靠
+  // 「统一 csvCell 看起来会处理」推定。本 suite 的 beforeEach 默认把 host 列表设为空，
+  // 所以这条链必须显式把 host 桩喂进来，否则该列恒为空、测试是假绿。
+  it('危险 host.name（管理员输入）进入 Host 列时被中和', async () => {
+    mockFetchHostList.mockResolvedValue([
+      {
+        id: '198-51-100-123',
+        name: '=HACK()',
+        ip: '198.51.100.123',
+        ssh_user: 'android',
+        status: 'ONLINE',
+        extra: {},
+        mount_status: {},
+        last_heartbeat: null,
+      },
+    ]);
+    mockFetchAllDevicePages.mockResolvedValue({
+      items: [dangerousDevice({ serial: 'S1', model: 'M', build_display_id: null, tags: [] })],
+      total: 1,
+    });
+    const csv = await exportCsvText();
+    // name 优先于 ip（hostLabel 口径未变），故 Host 列取的就是这个危险 name
+    expect(csv).toContain(`"'=HACK()"`);
+  });
+
+  it('正常 host.name 不误伤（无前缀时不加 apostrophe）', async () => {
+    mockFetchHostList.mockResolvedValue([
+      {
+        id: '198-51-100-123',
+        name: 'node-a',
+        ip: '198.51.100.123',
+        ssh_user: 'android',
+        status: 'ONLINE',
+        extra: {},
+        mount_status: {},
+        last_heartbeat: null,
+      },
+    ]);
+    mockFetchAllDevicePages.mockResolvedValue({
+      items: [dangerousDevice({ serial: 'S1', model: 'M', build_display_id: null, tags: [] })],
+      total: 1,
+    });
+    const csv = await exportCsvText();
+    expect(csv).toContain('"node-a"');
+    expect(csv).not.toContain("'node-a");
+  });
+
   it('正常设备与 number ID 不误伤：中间位置的 - / + / @ 保持原样', async () => {
     mockFetchAllDevicePages.mockResolvedValue({
       items: [
@@ -711,17 +759,36 @@ describe('DevicesPage — clipboard 结构与公式中和（S4 / #3237）', () =
     expect(text.split('\n')).toHaveLength(2);
   });
 
-  it('内嵌 TAB / CR / LF / NUL 不制造额外 clipboard cell/row', async () => {
+  // #3561 §4.1/§4.3：结构-only 样例必须独立于公式样例。上面那条把结构风险和公式风险
+  // 绑在一起了——如果引号分支被误改成「只在后面跟着 = 时才生效」，上条仍会绿。这条
+  // 的首字符是纯结构引号、不含任何公式字符，用来单独证明「行首 " 不会吞并下一条记录」。
+  it('结构-only：行首引号（无公式前缀）同样被中和，不吞并下一条记录', async () => {
     mockFetchAllDevicePages.mockResolvedValue({
-      items: [
-        { ...dangerousDevice({ id: 1, serial: 'a\tb' }) },
-        { ...dangerousDevice({ id: 2, serial: 'c\nd' }) },
-      ],
+      items: [{ ...dangerousDevice({ id: 1, serial: '"a' }) }, { ...dangerousDevice({ id: 2, serial: 'B' }) }],
       total: 2,
     });
     const text = await copySerialsText();
-    expect(text).toBe('a\\tb\nc\\nd');
+    expect(text).toBe('\'"a\nB');
     expect(text.split('\n')).toHaveLength(2);
+  });
+
+  // #3561 §4.2：S4 要求通过实际 writeText 观察 TAB/CR/LF/NUL 四种，原用例只喂了
+  // TAB 与 LF，CR/NUL 没被 sink 钉死。四种全部接入，且断言输出不含任何裸控制字符。
+  it('内嵌 TAB / CR / LF / NUL 四种都不制造额外 clipboard cell/row', async () => {
+    mockFetchAllDevicePages.mockResolvedValue({
+      items: [
+        { ...dangerousDevice({ id: 1, serial: 'a\tb' }) },
+        { ...dangerousDevice({ id: 2, serial: 'c\rd' }) },
+        { ...dangerousDevice({ id: 3, serial: 'e\nf' }) },
+        { ...dangerousDevice({ id: 4, serial: 'g\0h' }) },
+      ],
+      total: 4,
+    });
+    const text = await copySerialsText();
+    expect(text).toBe('a\\tb\nc\\rd\ne\\nf\ng\\0h');
+    // 4 条记录 = 4 行：唯一的裸换行只能是记录分隔的那三个
+    expect(text.split('\n')).toHaveLength(4);
+    expect(text).not.toMatch(/[\t\r\0]/);
   });
 
   it('普通 serial 原样复制', async () => {

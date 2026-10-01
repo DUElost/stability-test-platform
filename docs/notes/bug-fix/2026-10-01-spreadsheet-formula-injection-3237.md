@@ -77,6 +77,32 @@ CSV 的 apostrophe 可见性是**已接受的输出契约**：危险值中和后
 - 「先 `String()` 再中和」的错误实现在 S1、S2 上分别被抓住（S1 需要一个 **负数 id**
   才能判别：正数首字符不在触发集里，用正数 id 的测试抓不住这个 bug）。
 
+## 独立复核与返修
+
+首轮复核结论为**需修改**（复核 head `d05883d8`），但**不是生产实现方案错误、不退回 Planner**：
+主 contract、S1–S5 接入、scope、CI、客户端证据口径均核对通过，也未发现第 6 个同形态 sink。
+阻塞点集中在 §4.2 的 sink-level 验收测试未闭合，本轮已在**现有测试 scope 内**补齐，
+**生产代码零改动**：
+
+1. **S1 缺危险 `host.name` 的调用点反例。** 本 suite 的 `beforeEach` 把 host 列表设为空，
+   Host 列恒为空——原用例实际只覆盖 serial/model/build/tags，host.name 这条**管理员输入来源链**
+   属于「靠统一 csvCell 看起来会处理」的推定而非观察。已补危险 name（`=HACK()`）与正常 name
+   （`node-a`，断言不加 apostrophe）两条，用例内显式喂 host 桩。
+2. **R1 的结构-only `"a` + 下一条 `B` 未进 sink-level。** 原 S4/S5 用例用的是 `"=1+1`，
+   把结构风险与公式风险绑在一个样例里——若引号分支被改成「只在后面跟着 `=` 时才生效」，
+   原用例仍会绿。已为 S4、S5 各补一条纯结构样例（首字符是 `"`、不含任何公式字符）。
+3. **S4/S5 的 sink-level 控制字符只覆盖 TAB + LF，缺 CR + NUL。** 已把四种控制字符全部接入
+   两条 sink 用例，并加 `not.toMatch(/[\t\r\0]/)` 与「4 条记录 = 4 行」两条结构断言。
+
+补齐后针对这三项的定向变异 **6/6 全部 RED**（host.name 链 csvCell 旁路、行首 `"` 分支移除、
+clipboard 结构转义表逐字符移除 TAB/CR/LF/NUL）；原 12 项触发集变异与 8 项 sink 变异重跑，
+仍全部 RED，无存活项。**其中 clipboard 结构转义表是一条此前未被单独变异过的代码路径**
+（它与首字符触发集是两个独立的表），本轮补上。
+
+返修后门禁：定向 73 passed ｜ 全量 `npx vitest run` 138 files / **1220 tests** passed ｜
+type-check 通过 ｜ lint `--max-warnings 0` 通过 ｜ build 通过 ｜ `check:quick` 16 gates OK ｜
+`run_pytest.py tests/ -q` 2094 passed / 18 skipped。
+
 **真实客户端（§4.4）**：本机有 LibreOffice Calc，已实测；**Excel 与 WPS 未验证**
 （环境不存在，未以推测代替结果）。
 

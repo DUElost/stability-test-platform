@@ -112,11 +112,26 @@ describe('planExecuteExport — clipboard 结构与公式中和（S5 / #3237）'
       .toBe('\'"=1+1\nB');
   });
 
-  it('内嵌 TAB / CR / LF / NUL 不制造额外 cell/row', () => {
-    const text = formatSerialsClipboard([{ serial: 'a\tb' }, { serial: 'c\nd' }]);
-    expect(text).toBe('a\\tb\nc\\nd');
-    // 唯一的换行是记录分隔的那一个
-    expect(text.split('\n')).toHaveLength(2);
+  // #3561 §4.1/§4.3：结构-only 样例独立于公式样例。上一条把结构风险与公式风险绑在
+  // 一起，若引号分支被改成「只在后面跟着 = 时才生效」它仍会绿；这条不含任何公式
+  // 字符，单独证明「行首 " 不会吞并下一条记录」。
+  it('结构-only：行首引号（无公式前缀）同样被中和，不吞并下一条记录', () => {
+    expect(formatSerialsClipboard([{ serial: '"a' }, { serial: 'B' }]))
+      .toBe('\'"a\nB');
+  });
+
+  // #3561 §4.2：S5 覆盖与 S4 同一 contract，四种控制字符全部接入（原用例只有 TAB/LF）。
+  it('内嵌 TAB / CR / LF / NUL 四种都不制造额外 cell/row', () => {
+    const text = formatSerialsClipboard([
+      { serial: 'a\tb' },
+      { serial: 'c\rd' },
+      { serial: 'e\nf' },
+      { serial: 'g\0h' },
+    ]);
+    expect(text).toBe('a\\tb\nc\\rd\ne\\nf\ng\\0h');
+    // 4 条记录 = 4 行：唯一的裸换行只能是记录分隔的那三个
+    expect(text.split('\n')).toHaveLength(4);
+    expect(text).not.toMatch(/[\t\r\0]/);
   });
 
   it('普通 serial 原样保留，记录之间的换行不变', () => {
