@@ -103,25 +103,49 @@ while read -r id; do python3 tools/dev/ai_work.py finish --id "$id"; done < /tmp
 - **绝不手工删除记录**。registry 是 §3.4 并行撞单查重的依据面，删记录会破坏在窗判定；`finish` 只把生命周期推到终态，误收了可以用 `resume` 退回 CODING 返工。
 - `last_seen` 是本机 liveness，会滞后**且不能单独作为「有人在用」的判据**。真实判据是 worktree 的实际 dirty 状态与内容是否已合入（§2.2）。反过来，**近期 last_seen 不代表不能收口**——核实 PR 确已合入后照收。
 
-### 3.1 核验 `NO_PR` 记录：先看它有没有 scope
+### 3.1 核验 `NO_PR` 记录：先按 scope 做路径比对
 
-**多数历史 `NO_PR` 记录的 `effective_scope` 是空的**（declare 时没带 `--scope`），所以「核对 scope」这条路常常根本走不通。先确认：
+**`scope` 是权威存储字段，几乎每条记录都有值**（实测 1324/1324）。它是核验 `NO_PR` 记录的**首选**手段——路径比对最直接，不用绕。
+
+> **不要直接读原始 YAML 里的 `effective_scope`**。那个键**不存在于文件里**：`ai_work.py` 在
+> `status` 显示时才算 `effective = sorted(set(rec.get("scope", [])) | derived)`
+> （`tools/dev/ai_work.py:844`），它是 declared scope 与 worktree diff 的并集，**从不持久化**。
+> 直接 `yaml.safe_load(...)['effective_scope']` 必然取到空——**据此断言「记录没有 scope」是错的**，
+> 会把本可路径核验的记录误判成「无 ground truth」。
+
+正确读法：
 
 ```bash
 python3 - <<'EOF'
 import yaml
 d = yaml.safe_load(open('.git/ai-work/registry.yaml', encoding='utf-8'))
 for k, v in d.items():
-    if isinstance(v, dict) and str(v.get('lifecycle')) == 'CODING':
-        sc = v.get('effective_scope') or []
-        print(len(sc), v.get('issues'), k[:50])
+    if isinstance(v, dict) and str(v.get('lifecycle')) == 'CODING' and not v.get('pr_number'):
+        s = v.get('scope') or []
+        print(len(s), v.get('branch'), k[:50])
 EOF
 ```
 
-scope 非空 → 直接按路径比对 main，工作落地与否一眼可判。
-**scope 为空 → 退到证据链核验**，顺序是「issue 状态 → 提交历史 → 产物在场」，且**必须分级取证**（见下）。
+拿到 scope 后按路径核验，三种落法：
 
-### 3.2 证据分级：`--grep` 匹配的是消息体，不是标题
+```bash
+# 产物是否在 main
+git ls-tree origin/main --name-only <scope 里的路径>
+# 该路径在记录创建前后的改动史（判断是不是这条记录动的）
+git log origin/main --format='%h %ad %s' --date=short --since=<created_at> -- <scope 路径>
+# scope 指向目录时，找出该窗口内动过它的提交
+git log origin/main --format='%h %ad %s' --date=short --since=<created_at> -- <scope 目录>
+```
+
+**scope 比对的三种结果**：
+
+- 路径在 main + 该窗口内有对应改动 → 已交付，可 `finish`（能用 PR 号就带 `--pr`）
+- 路径在 main + 窗口内**无**改动 → 该文件早于记录就存在，**这份 scope 不是它的产出**，不能据此收口，转 §3.2
+- 路径不在 main → 未交付或已改名/删除，转 §3.2 或按 §3.3 放弃
+
+### 3.2 退路：证据分级，`--grep` 匹配的是消息体不是标题
+
+scope 比不出来时（scope 指向已消失的路径、或产出是纯文档/结论），走证据链：issue 状态 → 提交历史 → 产物在场。
 
 `git log --grep` 默认匹配**完整 commit message**。别的单在正文里顺带提一句你的单号，就算命中——直接用它当「已落地」证据会把无关提交算进来。
 
@@ -129,29 +153,31 @@ scope 非空 → 直接按路径比对 main，工作落地与否一眼可判。
 # 弱证据：消息体任意位置提及（会误命中）
 git log origin/main --oneline --grep="#2047\b"
 
-# 强证据：仅提交标题含单号，且是实施类前缀
+# 强证据：仅提交标题含单号，且为实施类前缀
 git log origin/main --no-merges --format='%s' > /tmp/.subjects.txt
 grep -E '#2047\b' /tmp/.subjects.txt | grep -cE '^(fix|feat|test|refactor|chore|perf)'
 ```
 
-**强证据为 0 不等于未落地**。两种常见漏检形态，都要回落到消息体级再确认：
+**强证据为 0 不等于未落地**。三种常见漏检形态，都要回落到消息体级再确认：
 
 - **批量提交用连字符区间**：如 `fix(ui/notify): #2051–#2054 审计批`，标题里的 `–` 使 `#2052` / `#2053` 的正则匹配不到，但那批单其实都在这个提交里修好了。
 - **修复随 PR 走、标题不带本单号**：如 #2299 由 PR #2300 交付，标题只有 `fix(2265-...)`。
-- **修复提交被后续单号覆盖**：`gh issue view <n>` 显示的单号与实际交付的 PR 号不一定相同（#2628 的修复是 PR #2630，提交 `a00864e8`，正文不含 #2628）。
+- **交付 PR 的单号与 issue 号不同**：#2628 的修复是 PR #2630，提交 `a00864e8`，正文不含 #2628。
 
-所以判定顺序是：**标题级 → 消息体级 → 抽样读提交标题确认是修复而非指针文档**。抽样时看 `fix(api): #2047 …写入后立即提交` 这类实施提交；`docs(note): …` 这类只是补记录的，不算落地证据。
+判定顺序：**标题级 → 消息体级 → 抽样读提交标题确认是修复而非指针文档**。`fix(api): #2047 …写入后立即提交` 是实施提交；`docs(note): …` 只补记录，不算落地证据。
+
+还有一条更直接的路：scope 里若含 `docs/notes/**`，按标题关键词去 main 里找对应笔记（`git ls-tree -r origin/main --name-only docs/notes/`）。实测一条 `Main CI 墙钟盘点` 记录正是靠这条命中——它的 scope 是 `.github/workflows` + `docs/notes/process`，据此查到 PR #2567 的改动文件与 scope 逐字对上。
 
 ### 3.3 核验结论的处置
 
 | 结论 | 处置 |
 |---|---|
-| 强证据或消息体级证据成立，抽样确认是修复提交 | 可 `finish` |
-| issue CLOSED + 修复在 main，但形态特殊（批量/随 PR/换号） | 可 `finish`，在台账注明证据形态 |
-| 盘点类、运维记录类，无代码产物可验 | **交人工裁决**，不要勉强 finish |
-| 无法证实 | 保留 CODING，或 `finish --abandon` 并写明理由 |
+| scope 路径在 main 且窗口内有对应改动 | 可 `finish`，有 PR 号就带 `--pr` |
+| 证据链成立，但形态特殊（批量/随 PR/换号） | 可 `finish`，在台账注明证据形态 |
+| 路径在 main 但窗口内无改动，或纯盘点/结论类无产物 | **交人工裁决**，不要勉强 finish |
+| 查无交付、无载体（连 open issue 都没有） | `finish --abandon`，并在台账写明「声明未交付」及查证方式 |
 
-**收口后务必抽样回读**：`python3 tools/dev/ai_work.py status \| grep 'lifecycle=CODING'`，确认矛盾态归零、没有误伤近期在飞记录。
+**收口后务必抽样回读**：`python3 tools/dev/ai_work.py status | grep 'lifecycle=CODING'`，确认矛盾态归零、没有误伤近期在飞记录。
 
 ## 4. /tmp 会话产物
 
@@ -243,7 +269,8 @@ git commit && git push -u origin <branch>
 | `git worktree remove` 找不到某个目录 | 孤儿 worktree：gitdir 元数据已失联 | 扫 `.wt/` 与 `/tmp`，按 §2.3 判据确认后 `rm -rf` |
 | `rm -rf` 中途失败留下空壳 | 目录内有 root 属主文件（如 `.docker/`） | 主体先删，剩余空壳如实上报，等 sudo 授权 |
 | registry 收口后 CODING 计数没降 | 只跑了 `update --all`，它不改 lifecycle | 补第二步：筛 `CODING+MERGED` 逐条 `finish` |
-| 「核对其 scope」无从下手 | 历史记录 declare 时没带 `--scope`，`effective_scope` 是空的 | 改走 §3.1 证据链：issue 状态 → 提交历史 → 产物在场 |
+| 读原始 YAML 的 `effective_scope` 得到空，误判「记录没有 scope」 | `effective_scope` 是 `status` 显示时派生的（`scope ∪ worktree diff`），**从不写进文件** | 读 `scope` 字段；它是权威存储值，见 §3.1 |
+| 拿「文件在 main 里」当作已交付 | 该文件可能早于记录就存在，scope 里的路径不等于这条记录的产出 | 查该路径在 `created_at` 窗口内有没有改动，见 §3.1 三种落法 |
 | 把无关提交当成了落地证据 | `git log --grep` 匹配**消息体**，别的单顺带提及也命中 | 用 §3.2 的标题级判据，强证据为 0 时再回落并排除连字符区间形态 |
 | 「单已关单」被当作「修复已进 main」 | 关闭单可能由钉指针的 docs PR 触发 | 抽样读提交标题，区分实施提交与记录提交 |
 | `git check-ignore` 给出意外结果 | shell cwd 卡在已删除目录，路径解析到了别处 | 显式 `cd` 到仓库根再执行 |
