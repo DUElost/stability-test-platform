@@ -17,7 +17,7 @@
 - 已发布的发布单元不可原地修改（ADR-0051）：`tool_manifest.json` 条目与站点 `packages/`
   只增不改；`backend/agent/scripts/<name>/` 是可演进的族源码树，改了树必须登记新版本；
   删除按 ADR-0051 D5。
-- Python 工具和测试使用当前解释器的 `python -m ...` 形式，避免命中另一套环境。
+- 工具与测试使用[项目 Python 入口](docs/development/local-development.md#项目-python-入口)；模块用 `-m`，pytest 经内存保护 runner。
 - 非平凡变更必须附 Agent Note；方向级决策使用 ADR。
 - `main` 只通过 PR 合入；不要直推或手动 Merge，现有 FIFO auto-merge 负责串行集成；
   也不得自行启用/维持 auto-merge（`gh pr merge --auto`、GraphQL 同义调用，含
@@ -43,7 +43,7 @@
    （同形态跨多 issue/族、需协调激活、数据丢失/安全/难回退），不按普通单点领单——先读
    「批次交付流程」与载体 issue 的**当前方案**（不得以派单提示词转述替代）；实施者不重新设计，
    需复核单元保持 draft，ready 与激活遵守 D8–D9，合入不等于生效；
-4. 并行前检与领单：实施者先查开放 PR；协调域内再用 `python tools/dev/ai_work.py status --risk`
+4. 并行前检与领单：实施者先查开放 PR；协调域内再用项目入口运行 `tools/dev/ai_work.py status --risk`
    查在窗 Execution 后 `declare`，编码结束 `finish` / `update --pr`；实际 diff 作 ground truth 交叉验证。
    协调域外实施者不 declare，按 [执行契约](docs/development/ai/execution-contract.md) §3.6
    做 PR 可见性与冲突前检；规划 / 复核工作面改仓库文件前同样查开放 PR（ADR-0058 D10）；
@@ -70,7 +70,7 @@
 
 ## 提交前
 
-- 运行与改动范围匹配的测试，再运行 `python scripts/run_gates.py check:quick`；
+- 运行匹配范围的测试，再按[门禁覆盖关系](docs/development/dependencies-and-quality.md#本地检查与-required-ci)运行 `check:quick`；本地成功不替代 required CI。
 - 只报告实际运行过的命令与结果；未完成的检查标为 pending，命令成功不等于验证通过，调用失败或超时不算通过；
 - 检查 diff 不含凭据、无关格式化或本地 Harness 状态；
 - 改前端交互/布局：jsdom 测不了几何/命中/autofill/下载，走静态守卫或真实浏览器（[`testing.md`](docs/development/testing.md) §4）；
