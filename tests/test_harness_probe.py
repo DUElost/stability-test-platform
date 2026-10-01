@@ -147,7 +147,7 @@ def test_three_state_verdict_error_beats_answer():
 
 def test_modes_and_ide_baselines_are_separate():
     ids = {f["id"] for f in probe.FORMS}
-    assert {"cursor", "cursor-ide", "codebuddy", "codebuddy-ide", "zcode"} <= ids
+    assert {"cursor", "codebuddy", "zcode"} <= ids
     for form in probe.FORMS:
         for cwd in probe.CWD_PATHS:
             assert probe.expected_for(form, cwd, "contract")["q1"] is True
@@ -158,11 +158,29 @@ def test_modes_and_ide_baselines_are_separate():
     assert "祖先继承" in probe.make_prompt("aee", "contract")
 
 
+def test_retired_ide_forms_are_gone_from_the_matrix():
+    """Owner 2026-10-01: Cursor IDE / CodeBuddy IDE leave the acceptance matrix."""
+    ids = {f["id"] for f in probe.FORMS}
+    assert not {"cursor-ide", "codebuddy-ide"} & ids
+    assert [f["id"] for f in probe.FORMS if f.get("manual")] == ["zcode"]
+    with pytest.raises(ValueError):
+        probe.load_manual(_evidence_file([{"id": "cursor-ide", "cwd": "agent", "mode": "contract"}]))
+    template = probe.manual_template(probe.FORMS, list(probe.CWD_PATHS), "contract")
+    assert {r["id"] for r in template["records"]} == {"zcode"}
+
+
+def _evidence_file(rows):
+    import tempfile
+    path = Path(tempfile.mkdtemp()) / "evidence.json"
+    path.write_text(json.dumps({"root_version": "abc", "records": rows}))
+    return str(path)
+
+
 def test_manual_missing_evidence_has_no_actual(tmp_path):
     out = tmp_path / "report.json"
-    assert probe.run_matrix("cursor-ide,codebuddy-ide,zcode", 1, str(out)) == 1
+    assert probe.run_matrix("zcode", 1, str(out)) == 1
     rows = json.loads(out.read_text())["results"]
-    assert len(rows) == 9
+    assert len(rows) == 3
     assert {r["cwd"] for r in rows} == {"root", "agent", "aee"}
     assert all(r["status"] == "UNVERIFIED" and r["actual"] is None for r in rows)
     assert all(r["expected"]["q1"] for r in rows)
@@ -206,7 +224,7 @@ def test_manual_duplicate_and_wrong_surface_rejected(tmp_path, rows):
 
 def test_blank_template_does_not_invent_evidence():
     template = probe.manual_template(probe.FORMS, list(probe.CWD_PATHS), "contract")
-    assert len(template["records"]) == 9
+    assert len(template["records"]) == 3
     assert all(r["response"] is None and r["version"] is None and not r["fresh_session"]
                for r in template["records"])
 

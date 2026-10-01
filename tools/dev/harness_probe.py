@@ -71,16 +71,16 @@ FORMS = [
     {"id": "codebuddy", "desc": "CodeBuddy CLI",
      "command": "codebuddy -p {prompt}",
      "version_command": ["codebuddy", "--version"], "protocol": "plain"},
-    {"id": "cursor-ide", "desc": "Cursor IDE", "manual": True, "command": None},
-    {"id": "codebuddy-ide", "desc": "CodeBuddy IDE", "manual": True, "command": None},
+    # Cursor IDE / CodeBuddy IDE retired 2026-10-01 (Owner): out of the acceptance matrix.
+    # Historical measurements stay in ADR-0034 Appendix A; they are not re-probed.
     {"id": "zcode", "desc": "Zcode IDE", "manual": True, "command": None},
 ]
 
 
 def expected_for(form: dict, cwd: str, mode: str) -> dict:
-    # Historical workspace-only IDE observations are diagnostic baselines, NOT acceptance.
+    # Historical workspace-only observations are diagnostic baselines, NOT acceptance.
     root_visible = not (mode == "autoload" and form.get("manual") and cwd != "root"
-                        and form["id"] in {"codebuddy-ide", "zcode"})
+                        and form["id"] == "zcode")
     return {"q1": root_visible, "q2": cwd != "root"}
 
 

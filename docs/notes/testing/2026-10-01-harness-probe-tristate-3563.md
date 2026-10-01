@@ -26,6 +26,15 @@ UNVERIFIED 都把原始 stderr 落到本地 gitignore 目录 `.probe-evidence/`�
 `codex`（本机 stderr 恒有两行）两形态的 UNVERIFIED 记为**接受的终态**，写进操作
 手册「已知不可跑形态」，不以参数绕过换绿。
 
+追加二（2026-10-01，Owner 裁决 IDE 退役 + 首轮人工取证）：`cursor-ide` /
+`codebuddy-ide` 退出验收矩阵，人工形态收敛为 Zcode 三格（contract 与 autoload 各
+一轮）；ADR-0034 附录 A 的历史实测行保留不动，Cursor 的 `.cursor/rules/` 适配面与
+CodeBuddy **CLI** 行不受影响。Zcode **3.14.4** contract 三格人工取证已判 **3 PASS**
+（root `Q1=是 Q2=否`、agent 与 aee 均 `Q1=是 Q2=是`，`evidence_source` ＝ #3563
+评论）；该组数据带已知利益冲突——预期值在取证前已由本 harness 工作面算出并告知
+操作者，故不宜作完全独立证据，独立复核宜在未读预期值前提下重跑。autoload 三格与
+Hook 激活仍 UNVERIFIED。
+
 ## Verification
 
 离线回归 52 passed（统一 runner 实测 cgroup memory.max=6 GiB、swap=0）。
@@ -40,7 +49,8 @@ quick 的 schema-at-head 未配置隔离数据库而跳过，不代表生产数�
 `cursor --cwd agent --mode autoload` UNVERIFIED（`exit=1`）。即正文「Claude 三 cwd
 超时」是实施会话当时的现场、非稳定结论。追加改动后离线回归 57 passed（新增 5 项：
 两类 UNVERIFIED 均落盘、无目录不落盘、报表只记路径不记正文、目录不可写不抛错、
-rc≠0 仍保留 stderr 落盘）。
+rc≠0 仍保留 stderr 落盘）。追加二后 58 passed（新增退役断言：两 IDE 不在矩阵、
+人工形态仅 Zcode、旧 id 判为未知矩阵格、模板 3 行）。
 
 ## Revisit
 

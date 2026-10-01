@@ -52,8 +52,8 @@ stderr 一律判 UNVERIFIED，但判定必须可复核，因此原文落盘到**
 ### 已知不可跑形态（Owner 2026-10-01 裁决）
 
 - `cursor` CLI：命令不含 `--trust`，宿主无预置工作区信任时非交互直接 `exit=1`
-  → 该格恒 UNVERIFIED。**这是接受的终态**，不为此加信任绕过参数；Cursor 的真实
-  证据取 `cursor-ide` 人工行。
+  → 该格恒 UNVERIFIED。**这是接受的终态**，不为此加信任绕过参数；Cursor CLI 的
+  真实证据需在有预置工作区信任的宿主上复跑。
 - `codex` CLI：本机 stderr 恒有两行（`Reading additional input from stdin...` 与
   `failed to refresh available models: request timed out`）→ 整列 UNVERIFIED。答复
   本身有效也不改判；宿主网络恢复后复跑，或由 Owner 另行裁决 stderr 噪声豁免口径。
@@ -62,12 +62,16 @@ stdout/stderr 正文或私有配置。
 
 ## IDE 人工入口
 
+人工形态只剩 **Zcode**（Owner 2026-10-01 裁决：`cursor-ide` / `codebuddy-ide`
+退役，不参与后续实施者的验收矩阵；两者的历史实测记录保留在 ADR-0034 附录 A，
+不删除、不再复测）。
+
 ```bash
 .venv/bin/python tools/dev/harness_probe.py --manual-template /tmp/ide-evidence.json
 ```
 
-该命令只生成 3 IDE × 3 cwd 的空白模板并返回 1（UNVERIFIED），没有执行会话。
-分别用 Cursor、Zcode、CodeBuddy IDE 打开当前 worktree 的 root / Agent / AEE 目录：
+该命令只生成 Zcode × 3 cwd 的空白模板并返回 1（UNVERIFIED），没有执行会话。
+用 Zcode 打开当前 worktree 的 root / Agent / AEE 目录：
 
 1. 确认实际 workspace/cwd、当前 HEAD 与产品版本；开**独立新会话**，不用旧上下文或 CLI 答案。
 2. 取当前 cell 的提示词（只打印提示词，不供给契约正文）：
@@ -80,8 +84,10 @@ stdout/stderr 正文或私有配置。
    结果是人工提供的证据，脚本不能验证操作者声明真实性，独立复核需打开来源核对。
 
 ```bash
-.venv/bin/python tools/dev/harness_probe.py --only cursor-ide,zcode,codebuddy-ide --manual-input /tmp/ide-evidence.json --json /tmp/ide-contract.json
+.venv/bin/python tools/dev/harness_probe.py --only zcode --manual-input /tmp/ide-evidence.json --json /tmp/ide-contract.json
 ```
+
+`--only` 必带：省略它会把 6 个 CLI 形态一并选中并真的起外部 LLM 会话。
 
 另测 autoload 时用 `--mode autoload` 生成新模板与新会话；不能把两个实验的数据混用。
 未补响应时每行 `actual=null`、UNVERIFIED。无需为取证清理已有会话、修改个人权限或复制凭据。
