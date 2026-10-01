@@ -147,10 +147,15 @@ def test_set_device_swipe_trail_runs_both_settings(monkeypatch):
     assert calls[0] == [
         "adb", "-s", "SER1", "shell", "settings", "put", "system", "show_touches", "1",
     ]
-    # index 6 = settings 命名空间：pointer_location 属 Settings.Secure（#3179）
-    assert calls[0][6] == "system"
-    assert calls[1][6] == "secure"
-    assert calls[1][4:8] == ["settings", "put", "secure", "pointer_location"]
+    # index 6 = settings 命名空间：两条同属 Settings.System。框架读点是
+    # InputSettingsObserver（android15-release services/core/java/com/android/server/input/
+    # InputSettingsObserver.java:182/:187 经 getBoolean(Settings.System.*) 取值），
+    # Settings.Secure 下无此键。SettingsProvider 对任意 namespace 的任意 key 都接受写入，
+    # 写错表不报错、叠加不生效却上报 ok——故此处断言整条 argv，把命名空间锁死在框架读点上。
+    # #3578 回归 #3179 把 pointer_location 误判为 Settings.Secure 的改动。
+    assert calls[1] == [
+        "adb", "-s", "SER1", "shell", "settings", "put", "system", "pointer_location", "1",
+    ]
     assert calls[2][2] == "SER2"
     assert all(c[-1] == "1" for c in calls)
 

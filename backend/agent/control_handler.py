@@ -27,7 +27,12 @@ from .upload_manager import UploadManager
 logger = logging.getLogger(__name__)
 
 # 设备页批量「滑动留痕」：硬编码两条 settings，不接受任意 shell。
-_SWIPE_TRAIL_SETTINGS = (("system", "show_touches"), ("secure", "pointer_location"))
+# 两条都在 Settings.System：框架读点是 InputSettingsObserver（android15-release
+# services/core/java/com/android/server/input/InputSettingsObserver.java:75/77 注册
+# Settings.System.getUriFor(...)，:182/:187 经 getBoolean(Settings.System.*) 取值）。
+# SettingsProvider 对任意 namespace 的任意 key 都接受写入，写错表不会报错只会静默不生效，
+# 所以这里必须与框架读点一致，不能凭 Settings.Secure 的直觉分表（#3578 回归 #3179）。
+_SWIPE_TRAIL_SETTINGS = (("system", "show_touches"), ("system", "pointer_location"))
 _SWIPE_TRAIL_ADB_TIMEOUT_S = 10
 
 

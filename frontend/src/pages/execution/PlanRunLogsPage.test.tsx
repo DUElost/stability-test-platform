@@ -472,3 +472,74 @@ describe('PlanRunLogsPage 载荷来源（#2623）', () => {
     expect(mocks.getRun).not.toHaveBeenCalled();
   });
 });
+
+// ── #3237 / 批次 B3 G1（S2）：PlanRun CSV 的公式前缀中和 ──
+// 事件字段是多源合成的外部投影（step error / log signal / audit details / device_serial），
+// 全部按 string 中和，不按字段可信度挑选豁免。
+
+describe('PlanRunLogsPage — CSV 公式前缀中和（S2 / #3237）', () => {
+  it('title / description / device_serial 的危险首字符在 raw CSV 里带可见 apostrophe', async () => {
+    mocks.getEvents.mockResolvedValue(pagePayload([
+      makeEvent(0, {
+        title: '=1+1',
+        description: '@SUM(1,1)',
+        device_serial: '-DEV-1',
+      }),
+    ], 1));
+    const lines = await renderAndExport();
+    // CSV framing（外层双引号）与公式中和是两层：危险内容在引号内带可见 ' 前缀
+    expect(lines[1]).toContain('"\'=1+1"');
+    expect(lines[1]).toContain('"\'@SUM(1,1)"');
+    expect(lines[1]).toContain('"\'-DEV-1"');
+  });
+
+  it('TAB / NUL 作首字符也中和', async () => {
+    mocks.getEvents.mockResolvedValue(pagePayload([
+      makeEvent(0, { title: '\t=1+1', description: '\0=1+1' }),
+    ], 1));
+    const lines = await renderAndExport();
+    expect(lines[1]).toContain('"\'\t=1+1"');
+    expect(lines[1]).toContain('"\'\0=1+1"');
+  });
+
+  it('全角触发前缀也中和（locale 相关保守覆盖）', async () => {
+    mocks.getEvents.mockResolvedValue(pagePayload([
+      makeEvent(0, { title: '＝1+1', description: '＠SUM(1,1)' }),
+    ], 1));
+    const lines = await renderAndExport();
+    expect(lines[1]).toContain('"\'＝1+1"');
+    expect(lines[1]).toContain('"\'＠SUM(1,1)"');
+  });
+
+  it('普通事件字段不误伤：中间位置的 - / + / @ 保持原样', async () => {
+    mocks.getEvents.mockResolvedValue(pagePayload([
+      makeEvent(0, { title: 'ABC-123', description: 'foo@bar', device_serial: 'A+B' }),
+    ], 1));
+    const lines = await renderAndExport();
+    expect(lines[1]).toContain('"ABC-123"');
+    expect(lines[1]).toContain('"foo@bar"');
+    expect(lines[1]).toContain('"A+B"');
+    expect(lines[1]).not.toContain('"\'ABC-123"');
+  });
+
+  it('#2028 既有 framing 回归：引号翻倍、逗号/换行不破坏列仍成立', async () => {
+    mocks.getEvents.mockResolvedValue(pagePayload([
+      makeEvent(0, { title: 'a"b,c', description: '多行\n说明', device_serial: null, job_id: null }),
+    ], 1));
+    const lines = await renderAndExport();
+    // 中和不改写内容本身，只在首字符命中时加前缀——上例首字符都不命中，行必须逐字不变
+    expect(lines[1]).toBe(
+      '"2026-05-08T12:00:00Z","patrol","err","step","a""b,c","多行\n说明","",""',
+    );
+  });
+
+  it('number 字段保持数值语义：job_id 不得被加 apostrophe 变成文本', async () => {
+    mocks.getEvents.mockResolvedValue(pagePayload([
+      makeEvent(0, { title: 'ok', job_id: -5 }),
+    ], 1));
+    const lines = await renderAndExport();
+    // -5 是 number：先 String() 再中和的实现会产出 "'-5"，这里必须仍是 "-5
+    expect(lines[1]).toContain('"-5"');
+    expect(lines[1]).not.toContain('"\'-5"');
+  });
+});
