@@ -313,6 +313,27 @@ WSL 跨机：另设 `STP_SCRIPT_RUNTIME_ROOT=/opt/stability-test-agent/scripts`�
 
 ## 6. 专属 worktree 里跑门禁（并行执行）
 
+### 项目 Python 入口
+
+已初始化 `.venv` 后，从 root 使用 `./scripts/project_python.sh`；任意深 cwd 使用：
+
+```bash
+stp_python="$(git rev-parse --show-toplevel)/scripts/project_python.sh"
+"$stp_python" tools/dev/ai_work.py status --risk
+"$stp_python" -m ruff check tools/ scripts/ tests/
+"$stp_python" scripts/run_pytest.py tests/<目标文件>.py -q
+"$stp_python" scripts/run_gates.py check:quick
+```
+
+入口定位**脚本所属 checkout**，切到其根目录，再执行该 checkout 的 `.venv/bin/python`；
+原样转发参数、stdin 和退出码，模块用 `-m`。相对文件参数按 checkout 根解释；需要调用方
+目录中的数据时先传绝对路径。不会回退系统 `python/python3`、ambient `VIRTUAL_ENV` 或另一
+worktree 的解释器，不读取 env 文件、不安装依赖；缺环境则 UNVERIFIED/exit 1，先按下方初始化。
+pytest 必须传 `scripts/run_pytest.py`，保持既有硬内存保护，不能改为裸 `-m pytest`。
+门禁范围/跳过与 required CI 的区别见 [覆盖关系](dependencies-and-quality.md#本地检查与-required-ci)。
+
+### Worktree 初始化前提
+
 并行 Execution 用专属 worktree（约定位置 `<repo>/.wt/<name>`，见
 [`repository-workflow.md`](./repository-workflow.md)）。**新建的 worktree 既没有依赖、
 也没有本地配置**，而 `scripts/run_gates.py check:quick` 会跑到前端门禁，缺依赖时停在
@@ -333,7 +354,7 @@ ln -s ../../.env.test .env.test
 | 缺 | 表现 |
 |---|---|
 | `node_modules` | `check:quick` 立即红（`eslint: command not found`） |
-| `.venv` | `run_pytest.sh` 报「没有那个文件或目录」 |
+| `.venv` | 项目 Python 入口可见 UNVERIFIED/exit 1；不会猜测或回退另一套环境 |
 | `.env.test` | `check:quick` 仍全绿；只有走 `run_pytest.sh` 才提示 `hint: copy .env.test.example ...` |
 
 若确实要独立安装依赖，按 [`dependencies-and-quality.md`](./dependencies-and-quality.md) 走。
