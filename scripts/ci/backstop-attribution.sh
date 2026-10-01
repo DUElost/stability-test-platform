@@ -15,7 +15,12 @@
 #   REPO=owner/name CI_RUN_ID=123 FIRST_CONCLUSION=failure \
 #     bash scripts/ci/backstop-attribution.sh
 # 输出：写 $GITHUB_OUTPUT（在场时，字段 failed_jobs_md / attribution_md / classification /
-# rerun_conclusion）；stdout 打人类可读摘要（日志留痕）。
+# rerun_conclusion / wait_budget）；stdout 打人类可读摘要（日志留痕）。
+#
+# wait_budget = 本次实际采用的重跑等待窗口（秒）。命中 SLOW_JOBS（默认 frontend-check）
+# 时为 WAIT_MAX_SLOW × WAIT_INTERVAL，否则 WAIT_MAX × WAIT_INTERVAL —— 把它作为
+# output 暴露，是为了让「预算是否按 job 分级生效」可被测试断言、也可在兜底单正文里
+# 直接看到这次等了多少（#3573）。
 #
 # 测试用 dry-run：DRY_RUN=1 时不触网，取数由 fixture 提供
 # （DRY_RUN_JOBS_JSON / DRY_RUN_LOG_FILE / DRY_RUN_ATTEMPT / DRY_RUN_RERUN_CONCLUSION /
@@ -27,9 +32,17 @@ CI_RUN_ID="${CI_RUN_ID:?CI_RUN_ID is required}"
 FIRST_CONCLUSION="${FIRST_CONCLUSION:-failure}"
 DRY_RUN="${DRY_RUN:-0}"
 
-# 重跑后等待完成的预算（30s × 120 = 1h；全量 CI 含 backend/frontend/docker）
+# 重跑后等待完成的预算。**按失败 job 分级**（#3573）：`wait_conclusion` 轮询的是
+# **run 级**状态，原先单一预算对所有 job 共用，而 vitest 全套（`frontend-check`）
+# 远慢于 backend/agent/docker —— 共用 1h 窗口时它必然跑不完，于是重跑结论为空、
+# 分类为「未能分类」，该类红灯**永远进不了** #1525 的前移评估（#2441 实测：
+# 「重跑未在预算内完成（120 × 30s），无法分类」，单内自述不得作为评估样本）。
+# 现按「失败集合里有没有慢 job」取更大的窗口，其余情况维持原预算不变。
 WAIT_INTERVAL="${WAIT_INTERVAL:-30}"
 WAIT_MAX="${WAIT_MAX:-120}"
+WAIT_MAX_SLOW="${WAIT_MAX_SLOW:-360}"
+# 逗号分隔的 job 名白名单；命中任一即走 WAIT_MAX_SLOW
+SLOW_JOBS="${SLOW_JOBS:-frontend-check}"
 # 机械摘要不是日志倾倒：红灯 job 与失败用例名各设上限，够定位即可
 MAX_JOBS="${MAX_JOBS:-20}"
 MAX_CASES="${MAX_CASES:-20}"
@@ -106,13 +119,13 @@ rerun_failed_jobs() {
   gh run rerun "$CI_RUN_ID" --repo "$REPO" --failed
 }
 
-wait_conclusion() { # 重跑后的 run 结论；未在预算内完成则非零退出
+wait_conclusion() { # <wait_max> → 重跑后的 run 结论；未在预算内完成则非零退出
   if [ "$DRY_RUN" = "1" ]; then
     printf '%s\n' "${DRY_RUN_RERUN_CONCLUSION:-}"
     return 0
   fi
-  local status="" conclusion="" line=""
-  for _ in $(seq 1 "$WAIT_MAX"); do
+  local budget="$1" status="" conclusion="" line=""
+  for _ in $(seq 1 "$budget"); do
     line="$(gh api "repos/$REPO/actions/runs/$CI_RUN_ID" | jq -r '"\(.status) \(.conclusion // "")"')" \
       || return 1
     status="${line%% *}"
@@ -122,6 +135,25 @@ wait_conclusion() { # 重跑后的 run 结论；未在预算内完成则非零�
   done
   [ "$status" = "completed" ] || return 1
   printf '%s\n' "$conclusion"
+}
+
+# 按失败 job 集合选预算（#3573）：命中 SLOW_JOBS 任一即用 WAIT_MAX_SLOW。
+# 输入是 snapshot 落盘的 jobs_tsv（`id<TAB>name<TAB>steps`），故重跑**之前**即可定，
+# 不与「证据必须先于重跑」的硬约束冲突。
+pick_wait_max() { # → 打印选中的 WAIT_MAX
+  local name slow
+  while IFS=$'\t' read -r _ name _; do
+    [ -n "${name:-}" ] || continue
+    IFS=',' read -r -a _slows <<< "$SLOW_JOBS"
+    for slow in "${_slows[@]}"; do
+      [ -z "$slow" ] && continue
+      if [ "$name" = "$slow" ]; then
+        printf '%s\n' "$WAIT_MAX_SLOW"
+        return 0
+      fi
+    done
+  done < "$WORK/jobs_tsv"
+  printf '%s\n' "$WAIT_MAX"
 }
 
 # ── 重跑前的证据快照 ──────────────────────────────────────────────────────
@@ -172,7 +204,7 @@ verdict_line() { # <classification> → 处置去向（与 #1525 前移规则同
 }
 
 main() {
-  local attempt rerun_conclusion classification note=""
+  local attempt rerun_conclusion classification note="" wait_max
 
   attempt="$(run_attempt)"
   case "$attempt" in *[!0-9]* | '') attempt=1 ;; esac
@@ -180,6 +212,8 @@ main() {
   # 证据先落盘，再动重跑（否则重跑会重置 job 结论、日志端点也改指新尝试）。
   snapshot_failed_jobs
   collect_cases
+  # 预算同样在重跑前定：只取决于「哪些 job 红了」，与重跑结果无关。
+  wait_max="$(pick_wait_max)"
 
   if [ "$attempt" -gt 1 ]; then
     # 该 run 已被重跑过（本 workflow 重入或人工重跑）：观测到的红灯就是重跑后的结论，
@@ -188,7 +222,7 @@ main() {
     classification="deterministic"
     note="该 run 已是第 ${attempt} 次尝试（此前已重跑），不再自动重跑。"
   elif rerun_failed_jobs 2> "$WORK/rerun_err"; then
-    if rerun_conclusion="$(wait_conclusion)"; then
+    if rerun_conclusion="$(wait_conclusion "$wait_max")"; then
       case "$rerun_conclusion" in
         success) classification="flake" ;;
         failure | timed_out | startup_failure) classification="deterministic" ;;
@@ -197,7 +231,7 @@ main() {
     else
       rerun_conclusion=""
       classification="unknown"
-      note="重跑未在预算内完成（${WAIT_MAX} × ${WAIT_INTERVAL}s），无法分类。"
+      note="重跑未在预算内完成（${wait_max} × ${WAIT_INTERVAL}s = $((wait_max * WAIT_INTERVAL))s），无法分类。"
     fi
   else
     rerun_conclusion=""
@@ -234,11 +268,12 @@ main() {
 
   output classification "$classification"
   output rerun_conclusion "$rerun_conclusion"
+  output wait_budget "$((wait_max * WAIT_INTERVAL))"
   output_multi failed_jobs_md "$WORK/failed_jobs_md"
   output_multi attribution_md "$WORK/attribution_md"
 
-  printf 'backstop_attribution attempt=%s classification=%s rerun_conclusion=%s\n' \
-    "$attempt" "$classification" "${rerun_conclusion:-none}"
+  printf 'backstop_attribution attempt=%s classification=%s rerun_conclusion=%s wait_budget=%ss\n' \
+    "$attempt" "$classification" "${rerun_conclusion:-none}" "$((wait_max * WAIT_INTERVAL))"
   cat "$WORK/attribution_md"
 }
 
