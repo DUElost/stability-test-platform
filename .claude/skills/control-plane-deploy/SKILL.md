@@ -61,10 +61,29 @@ curl -s http://127.0.0.1:8000/health      # health 路由（非 /api/v1/health�
    `release-manifest.json` 的 `product.version` / 分量摘要（`agent-code` + `control-plane`；`host-resources`
    自 ADR-0040 D8 R3 退役，bundle 不再携带也不再要求 `backend/agent/resources/`）即部署内容地址；构建机本地态由
    `find_forbidden_bundle_entries` fail-closed（#2269/#3112 在 bundle 形态的替身）。
-3. **物料与 venv**（首建/新 rev）：发布根需 `venv/`（`python3 -m venv venv && venv/bin/pip install -r backend/requirements.txt`）、
-   `logs/`、`.env.backend`（**symlink 指树内 `../env.backend`**——站点真身，`ln -sfn ../env.backend <rev>/.env.backend`；
+3. **物料与 venv**（首建/新 rev）：发布根需 `venv/`、`logs/`、`.env.backend`
+   （**symlink 指树内 `../env.backend`**——站点真身，`ln -sfn ../env.backend <rev>/.env.backend`；
    **不得指仓根**，D6 已闭合：运行时不许触开发检出）；`tools/ansible/inventory.ini` 随 bundle 携带
    （gitignored，构建机没有它 → 热更新 SSH 凭据回退会静默消失）。
+
+   venv **按 lock 装、不按区间装**（#3569；与根 `Dockerfile.backend` 同源口径）：
+
+   ```bash
+   python3 -m venv venv
+   venv/bin/pip install --no-cache-dir --require-hashes -r backend/requirements.lock
+   ```
+
+   装完**逐项核对**版本集与 lock 一致（`requirements.txt` 全文件仅 1 处 `==`，按它装每次都会解析到当时最新）：
+
+   ```bash
+   venv/bin/pip list --format=freeze | sort > /tmp/.venv_new.txt
+   # 与 lock 解析出的版本集 diff 必须为空
+   diff <(sort /tmp/.venv_new.txt) <(sort <lock 版本集>) && echo "版本集与 lock 一致"
+   ```
+
+   `requirements.lock` 有自动维护（`regenerate-locks.yml` 在每个碰 requirements 的 PR 上重生成、
+   `tests/test_requirements_lock.py` 离线守卫同步），**不需要人工记得更新**；需要升级依赖时改
+   `requirements.txt` 让 workflow 重生成，别手改 lock。
 4. **切 current 并重启**（回滚 = 把 current 指回旧 rev 或仓根 unit 备份 `*.bak-20260923-phase1`）：
    ```bash
    ln -sfn /home/debian13/stp-releases/<rev> /home/debian13/stp-releases/current.tmp && mv -Tf /home/debian13/stp-releases/current.tmp /home/debian13/stp-releases/current
