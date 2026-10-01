@@ -276,8 +276,25 @@ Docker build 由手工 full workflow 或 `main-ci-backstop.yml` 夜间兜底，�
 
 - **PR 侧 required**：`lint`、`CodeQL`、`pr-typecheck`、`pr-compileall`、
   `pr-agent-tests`、`pr-migrate-empty-db`；
-- **PR 排除**（main push / 手工 dispatch / 夜间兜底跑）：`backend-test`、
-  `frontend-check`、`docker-build`；
+- **PR 侧信息性（已裁决·待实现）**：`backend-test` —— 2026-10-01 评估（#3572）结论。
+  ⚠️ **CI 改动尚未落地**：`ci.yml` 目前仍把 `backend-test` 排除在 PR 路径外，以下是裁决
+  内容而非当前生效状态。触发条件已响 4 次且全部经重跑判定为**确定性缺陷**
+  （#2628/#2970/#3060/#3247），但**不转 required**：#2333 事实 3 明确 `backend-test` 类
+  红灯混有 flake，其边界第三条同时写明 flake 占比**至今无法断言**；让 flake 率未知的
+  检查阻塞合入＝把 flakiness 引进合入路径，正是本节当初驳回全量前移的同一条理由。
+  另实测墙钟 **16~60 min**，会成为 PR 关键路径上唯一超过 30min 的检查（现有 required
+  均 ≤30min）。
+  实现后观察期取**两个自然月或 ≥60 PR**（先到者），届期按预注册判据落结论：flake 率 <1%
+  且墙钟 ≤30min → 转 required；flake 率 ≥1% → 不转，转入「去 flake」队列；墙钟压不进
+  30min → 保持信息性并记录「成本不可接受」。**届期必须落结论，不允许静默续期。**
+  依据与实测数据见
+  [`2026-10-01-backend-test-promotion-eval-3572.md`](../notes/process/2026-10-01-backend-test-promotion-eval-3572.md)。
+- **PR 排除**（main push / 手工 dispatch / 夜间兜底跑）：`frontend-check`、
+  `docker-build`；
+  - `frontend-check` 类曾两次红灯（#1935、#2441）但**均未取得 flake 分类**——#2441
+    单内自述「重跑未在预算内完成……不得作为前移评估的样本」。根因（脚本轮询 run 级
+    状态而非目标 job 自身结论）已由 #3573 修复；该类的前移评估**独立于 backend-test**，
+    待重新积累分类样本后另行评估。
 - 决策量化依据（近 30 次 backstop：9 红夜 ≈ 每 3 天/每 33 PR 一次；`backend-test`
   类占 5/6、前端/docker 零次）：见
   [`2026-09-12-pr-gate-promotion-rule-1525.md`](../notes/process/2026-09-12-pr-gate-promotion-rule-1525.md)。
