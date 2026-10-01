@@ -136,6 +136,76 @@ jobs:
           PROMTOOL_REQUIRED: "1"
         run: python -m pytest tests/ -q
 
+  # #3572：`backend-test` 的**信息性** PR 侧副本。2026-10-01 评估结论——触发条件已响 4 次
+  # 且全部经重跑判定为确定性缺陷（#2628/#2970/#3060/#3247），但**不转 required**：
+  #   ① #2333 事实 3 明确 backend-test 类红灯混有 flake，其边界第三条同时写明 flake
+  #      占比**至今无法断言**——让 flake 率未知的检查阻塞合入＝把 flakiness 引进合入
+  #      路径，正是 #1525 当初驳回全量前移的同一条理由；
+  #   ② 实测 job 合计 33~39 min，会成为 PR 关键路径上唯一超 30min 的检查。
+  #
+  # 本 job 的目的是**采集 PR 路径上的 flake 率**——这是转 required 的必要输入，现在没有。
+  # 因此它**必须跑满**且**必须自证跑满**：超时不等于「无数据」，等于「本轮无结论」，
+  # 故用 `if: always()` 独立于主结论判定，并把墙钟写成 step output 供后续统计。
+  #
+  # **不设 continue-on-error**：本 job 红了就是红了（信息性体现在它不在 required 集合里，
+  # 不体现为把红吞掉）。吞掉会让「PR 路径上到底红过几次」这个核心指标失真。
+  pr-backend-tests-informational:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    # 90 而非 60：#3576 实测存在 3.2 倍环境抖动（09-26 backend tests 50m32s vs 常态
+    # 16m00s，测试数基本相同），60 会把 job 顶穿并让后续步骤静默不跑。
+    timeout-minutes: 90
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: stability_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d stability_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TESTING: "1"
+      JWT_SECRET_KEY: "ci-test-secret-key"
+      # 与 backend-test 同口径：job 级**不设** DATABASE_URL（#1547 的 db_url_guard 会在
+      # 导入期拒绝「与运行时配置同库」），需要它的步骤各自注入。
+      TEST_DATABASE_URL: "postgresql+psycopg://postgres:postgres@localhost:5432/stability_test"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.lock
+      - name: Install dependencies
+        run: pip install --require-hashes -r backend/requirements-dev.lock
+      - name: Migrate empty PostgreSQL database
+        working-directory: backend
+        env:
+          DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
+        run: python -m alembic upgrade head
+      - name: Record wall clock
+        id: clock
+        if: ${{ !cancelled() }}
+        run: echo "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+      - name: Run backend tests
+        run: python -m pytest backend/tests/ -q
+      # 超时/取消时本 job 已被 90min 掐断，走不到这里——所以「无结论」这一形态由 job
+      # 的 cancelled 结论本身表达，不靠这里补一条假的绿。此步只负责在正常跑完时
+      # 把实际墙钟落成可统计字段。
+      - name: Record result
+        if: ${{ !cancelled() }}
+        run: |
+          echo "finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          echo "outcome=${{ job.status }}" >> "$GITHUB_OUTPUT"
+
   frontend-check:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
