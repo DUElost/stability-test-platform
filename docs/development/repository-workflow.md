@@ -382,12 +382,37 @@ CI 兜底与每日审计原本只覆盖**行为**（修复是否落地），以�
 **强制层**：
 
 1. Claude 会话：PreToolUse hook（`.claude/settings.json` →
-   `tools/dev/check_destructive_git.py`）对 Bash 命令按 shell 段解析，
-   段首为 git 且命中上表禁止项即 exit 2 阻断；脚本 `--self-test` 红绿自证，
-   自身异常 fail-open（不阻断）；
+   `tools/dev/check_destructive_git.py`）按引号/转义与简单命令语义解析，递归检查
+   静态 shell 包装器、命令替换与可执行 heredoc；命中上表禁止项即 exit 2。
+   解析失败走保守回退，疑似命中仍 exit 2；检查器异常/脚本缺失 exit 1，
+   可见告警、不阻断。已知动态缺口与边界以脚本 docstring 为准；
+   `--self-test` 与手动 `destructive_git_probe.py` 验证脚本，不替代真实会话触发验收；
 2. git 级观测：`.githooks/reference-transaction` 对 `refs/stash` 更新留痕
-   告警（opt-in：`git config core.hooksPath .githooks`）——`reset --hard`
+   告警（opt-in：`git config --local core.hooksPath .githooks`）——`reset --hard`
    的 worktree 破坏没有 git 级拦截点（ref 事务无法与普通提交区分），该命令
    依赖第 1 层 + 纪律；
 3. 棘轮：同族命令（`git restore .` / `git clean -f` / `git checkout -- .`）
    暂未入拦截清单，出现事故按不变量违规处置流程扩展。
+
+### Git hooks 的 opt-in 状态与自检
+
+`.githooks/pre-commit` 与 `reference-transaction` 是可选的本地辅助；文件存在
+不代表已启用，也不替代 PR/CI 或 Claude PreToolUse。Git 按当前配置解析 hooks
+目录，并忽略没有执行位的 hook（[Git 官方说明](https://git-scm.com/docs/githooks)）。
+本轮不默认修改宿主配置；是否启用由开发者选择。以下从仓库根运行，项目解释器
+先按 local-development 准备；脚本定位后，内部支持深层 cwd：
+
+```bash
+.venv/bin/python tools/dev/check_git_hooks.py # 只读状态
+git config --local core.hooksPath .githooks  # 选择 opt-in 后显式执行（同克隆共享）
+.venv/bin/python tools/dev/check_git_hooks.py --self-test
+```
+
+状态 `DISABLED` 表示本仓库 hooks 未启用，退出 0 只是只读查询成功；`CONFIGURED`
+只证明实际路径和执行位可用。若实际使用本 worktree 之外的可执行 hooks，仅报告路径与
+`UNVERIFIED`，不读取/执行它们或断言未启用。显式自检要求已配置，否则为 `UNVERIFIED` / 非零。
+自检只在临时隔离仓库复制当前 hook，从真实 Git 验证污染提交被阻断、`refs/stash`
+事务告警且不阻断；不改调用者的 config/index/refs，不执行 `git stash` 或 reset。
+`PASS / FAIL / UNVERIFIED` 分别表示行为匹配、已复现不匹配、无法验证；仅 PASS
+可作自检通过证据。linked worktree 各自解析其 `.githooks` 文件，须分别检查。
+使用当前项目解释器，入口准备见 local-development；Python 稳定导航由 #3516 G3 收口。

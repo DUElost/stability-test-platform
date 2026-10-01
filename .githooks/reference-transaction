@@ -1,7 +1,8 @@
 #!/bin/sh
 # stash 观测（非阻塞，#930）：refs/stash 更新在此留痕告警。
-# 仅对声明 core.hooksPath=.githooks 的机器生效（一次性：
-#   git config core.hooksPath .githooks）。
+# opt-in，仅在 Git 实际使用本仓库 hooks 目录且 hook 可执行时生效：
+#   git config --local core.hooksPath .githooks
+# 状态 / 启用后隔离自检：<项目Python> tools/dev/check_git_hooks.py [--self-test]
 # git 对 reset --hard 无干净拦截点（ref 事务无法与普通提交区分），
 # 阻断层在 Claude PreToolUse（tools/dev/check_destructive_git.py）；
 # 本钩子只做观测——如需硬拦截，在 prepared 阶段 exit 非零（会中止事务），

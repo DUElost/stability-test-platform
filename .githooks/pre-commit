@@ -8,8 +8,10 @@
 # 此类污染撞坏 diff,详见根目录 .gitattributes 注释与 README 的
 # "EOL 与污染防御" 章节。
 #
-# 启用方式(每个开发者执行一次):
-#   git config core.hooksPath .githooks
+# opt-in(不会自动启用；同克隆共享配置):
+#   git config --local core.hooksPath .githooks
+# 状态 / 启用后隔离自检:
+#   <项目Python> tools/dev/check_git_hooks.py [--self-test]
 # 紧急绕过(只在确认 diff 合规时):
 #   git commit --no-verify
 
