@@ -21,6 +21,7 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { TEXT } from '@/design-system';
 import { PageSkeleton } from '@/components/ui/loading-skeleton';
 import { cn } from '@/lib/utils';
+import { escapeSpreadsheetClipboardCell, neutralizeSpreadsheetCellText } from '@/utils/spreadsheet';
 
 const deviceStatusMap: Record<string, DeviceStatus> = {
   'ONLINE': 'idle',
@@ -241,7 +242,11 @@ export default function DevicesPage() {
   };
 
   const handleCopySerials = async () => {
-    const text = selectedDevices.map((device) => device.serial).join('\n');
+    // #3237：serial 是 ADB/API 的外部可控值。粘贴进 spreadsheet 时既要守公式前缀，
+    // 也要守内嵌 TAB/CR/LF/NUL 与行首 `"`，否则「一条 serial = 一个 cell」当场失效。
+    const text = selectedDevices
+      .map((device) => escapeSpreadsheetClipboardCell(device.serial))
+      .join('\n');
     try {
       if (navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(text);
@@ -262,7 +267,13 @@ export default function DevicesPage() {
   };
 
   const handleExportSelected = () => {
-    const csvCell = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+    // #3237：先对**原始 string** 做公式中和，再做原有的双引号 framing——两者分层，
+    // 外层有引号不等于没有公式前缀。number 原样保留数值语义（不得先 String() 再中和，
+    // 否则 number -5 会被加 apostrophe 变成文本）。tags 是 join 好的整格字符串，判定一次。
+    const csvCell = (value: unknown) => {
+      const raw = typeof value === 'string' ? neutralizeSpreadsheetCellText(value) : (value ?? '');
+      return `"${String(raw).replace(/"/g, '""')}"`;
+    };
     const rows = selectedDevices.map((device) => [
       device.id,
       device.serial,

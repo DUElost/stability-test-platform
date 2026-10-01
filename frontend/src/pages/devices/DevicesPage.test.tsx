@@ -491,3 +491,314 @@ describe('DevicesPage', () => {
     expect(screen.queryByTestId('device-bulk-unretire')).not.toBeInTheDocument();
   });
 });
+
+// ── #3237 / 批次 B3 G1（S1 / S4）：设备 CSV 与 clipboard 的 spreadsheet 安全语义 ──
+// S1 的外部可控面：serial / model / build_display_id 来自 ADB、tags 来自管理员/API、
+// host.name 来自管理员；S4 的 serial 粘贴进 spreadsheet 必须保持一条 serial = 一个 cell。
+
+/**
+ * 勾选当前筛选结果里的全部设备。
+ *
+ * 不用 `device-select-all-filtered` 入口：它在「已全选」时按设计隐藏（canSelectAllFiltered），
+ * 单设备 fixture 下永远点不到，直接逐行勾更稳。
+ */
+async function selectAllDevices() {
+  await waitFor(() => expect(screen.getAllByLabelText(/^选择设备 /)[0]).toBeInTheDocument());
+  for (const checkbox of screen.getAllByLabelText(/^选择设备 /)) {
+    fireEvent.click(checkbox);
+  }
+  await waitFor(() => expect(screen.getByTestId('device-bulk-action-bar')).toBeInTheDocument());
+}
+
+/** 拦住 blob URL，拿到导出 CSV 的 raw 文本（未剥 BOM 前）。 */
+function stubBlobUrl() {
+  const captured: Blob[] = [];
+  const originalCreate = Object.getOwnPropertyDescriptor(URL, 'createObjectURL');
+  const originalRevoke = Object.getOwnPropertyDescriptor(URL, 'revokeObjectURL');
+  Object.defineProperty(URL, 'createObjectURL', {
+    configurable: true, writable: true,
+    value: (blob: Blob) => { captured.push(blob); return `blob:mock-${captured.length}`; },
+  });
+  Object.defineProperty(URL, 'revokeObjectURL', {
+    configurable: true, writable: true, value: vi.fn(),
+  });
+  return {
+    captured,
+    restore: () => {
+      for (const [name, desc] of [
+        ['createObjectURL', originalCreate] as const,
+        ['revokeObjectURL', originalRevoke] as const,
+      ]) {
+        if (desc) Object.defineProperty(URL, name, desc);
+        else delete (URL as unknown as Record<string, unknown>)[name];
+      }
+    },
+  };
+}
+
+async function exportCsvText(): Promise<string> {
+  const stub = stubBlobUrl();
+  try {
+    const user = userEvent.setup();
+    mockUseAuthSession.mockReturnValue({ data: { role: 'admin' } });
+    const DevicesPage = (await import('./DevicesPage')).default;
+    render(<DevicesPage />, { wrapper: createWrapper() });
+    await selectAllDevices();
+    await user.click(await screen.findByText('导出 CSV'));
+    expect(stub.captured).toHaveLength(1);
+    return await stub.captured[0].text();
+  } finally {
+    stub.restore();
+  }
+}
+
+/** 跑一次复制 serials，返回实际写进 clipboard 的文本（writeText 与 fallback 两条路径都收）。 */
+async function copySerialsText(): Promise<string> {
+  const writes: string[] = [];
+  const execCalls: string[] = [];
+  const writeText = vi.fn(async (text: string) => { writes.push(text); });
+  const originalExec = document.execCommand?.bind(document);
+  Object.defineProperty(document, 'execCommand', {
+    configurable: true, writable: true,
+    value: vi.fn((cmd: string) => {
+      execCalls.push(cmd);
+      const ta = document.querySelector('textarea');
+      if (ta) writes.push(ta.value);
+      return true;
+    }),
+  });
+  try {
+    const user = userEvent.setup();
+    // 必须在 setup() 之后装桩：userEvent.setup() 会用自带的 clipboard stub 覆盖
+    // navigator.clipboard，先装桩会被它无声顶掉（本单第一版就踩了这个静默失真）。
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true, writable: true, value: { writeText },
+    });
+    mockUseAuthSession.mockReturnValue({ data: { role: 'admin' } });
+    const DevicesPage = (await import('./DevicesPage')).default;
+    render(<DevicesPage />, { wrapper: createWrapper() });
+    await selectAllDevices();
+    await user.click(await screen.findByText('复制序列号'));
+    // writeText 优先；缺失时才走 textarea + execCommand fallback
+    expect(writes.length + execCalls.length).toBeGreaterThan(0);
+    return writes[0] ?? '';
+  } finally {
+    if (originalExec) Object.defineProperty(document, 'execCommand', { configurable: true, writable: true, value: originalExec });
+    else delete (document as unknown as Record<string, unknown>).execCommand;
+  }
+}
+
+function dangerousDevice(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 1,
+    serial: '=1+1',
+    model: '@SUM(1,1)',
+    host_id: '198-51-100-123',
+    status: 'ONLINE',
+    tags: ['=cmd', 'x'],
+    build_display_id: '-V1',
+    last_seen: '2026-08-05T18:00:00+08:00',
+    ...overrides,
+  };
+}
+
+describe('DevicesPage — CSV 公式前缀中和（S1 / #3237）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFetchHostList.mockResolvedValue([]);
+    mockProjectsList.mockResolvedValue([]);
+  });
+
+  it('危险 serial / model / build / tags 在 raw CSV 里带可见 apostrophe', async () => {
+    mockFetchAllDevicePages.mockResolvedValue({ items: [dangerousDevice()], total: 1 });
+    const csv = await exportCsvText();
+    expect(csv).toContain("'=1+1"); // serial
+    expect(csv).toContain("'@SUM(1,1)"); // model
+    expect(csv).toContain("'-V1"); // build_display_id
+    expect(csv).toContain("'=cmd|x"); // tags 整格 join 后判定一次
+  });
+
+  it('TAB / NUL / 全角触发前缀也中和', async () => {
+    mockFetchAllDevicePages.mockResolvedValue({
+      items: [
+        dangerousDevice({ serial: '\t=1+1', model: '\0=1+1' }),
+        dangerousDevice({ id: 2, serial: '＝1+1', model: '＋x' }),
+      ],
+      total: 2,
+    });
+    const csv = await exportCsvText();
+    expect(csv).toContain("'\t=1+1");
+    expect(csv).toContain("'\0=1+1");
+    expect(csv).toContain("'＝1+1");
+    expect(csv).toContain("'＋x");
+  });
+
+  // #3561 §4.2：S1 的 Host 列来自管理员输入的 host.name（经 hostMap 取 name > ip），
+  // 与 serial/model/build 是**不同的来源链**，必须有独立的 sink-level 观察，不能靠
+  // 「统一 csvCell 看起来会处理」推定。本 suite 的 beforeEach 默认把 host 列表设为空，
+  // 所以这条链必须显式把 host 桩喂进来，否则该列恒为空、测试是假绿。
+  it('危险 host.name（管理员输入）进入 Host 列时被中和', async () => {
+    mockFetchHostList.mockResolvedValue([
+      {
+        id: '198-51-100-123',
+        name: '=HACK()',
+        ip: '198.51.100.123',
+        ssh_user: 'android',
+        status: 'ONLINE',
+        extra: {},
+        mount_status: {},
+        last_heartbeat: null,
+      },
+    ]);
+    mockFetchAllDevicePages.mockResolvedValue({
+      items: [dangerousDevice({ serial: 'S1', model: 'M', build_display_id: null, tags: [] })],
+      total: 1,
+    });
+    const csv = await exportCsvText();
+    // name 优先于 ip（hostLabel 口径未变），故 Host 列取的就是这个危险 name
+    expect(csv).toContain(`"'=HACK()"`);
+  });
+
+  it('正常 host.name 不误伤（无前缀时不加 apostrophe）', async () => {
+    mockFetchHostList.mockResolvedValue([
+      {
+        id: '198-51-100-123',
+        name: 'node-a',
+        ip: '198.51.100.123',
+        ssh_user: 'android',
+        status: 'ONLINE',
+        extra: {},
+        mount_status: {},
+        last_heartbeat: null,
+      },
+    ]);
+    mockFetchAllDevicePages.mockResolvedValue({
+      items: [dangerousDevice({ serial: 'S1', model: 'M', build_display_id: null, tags: [] })],
+      total: 1,
+    });
+    const csv = await exportCsvText();
+    expect(csv).toContain('"node-a"');
+    expect(csv).not.toContain("'node-a");
+  });
+
+  it('正常设备与 number ID 不误伤：中间位置的 - / + / @ 保持原样', async () => {
+    mockFetchAllDevicePages.mockResolvedValue({
+      items: [
+        { id: 7, serial: 'ABC-123', model: 'A+B', host_id: '198-51-100-123',
+          status: 'ONLINE', tags: ['smoke', 'regression'],
+          build_display_id: 'V1', last_seen: '2026-08-05T18:00:00+08:00' },
+      ],
+      total: 1,
+    });
+    const csv = await exportCsvText();
+    expect(csv).toContain('ABC-123');
+    expect(csv).toContain('A+B');
+    expect(csv).toContain('smoke|regression');
+    // number ID 保持数值语义，且不得给普通标签格加 apostrophe
+    expect(csv).not.toContain("'ABC-123");
+    expect(csv).not.toContain("'A+B");
+    expect(csv).not.toContain("'smoke|regression");
+    // number ID 保持数值语义：先 String() 再中和的实现会产出 "'7"
+    expect(csv).toContain('"7","ABC-123"');
+    expect(csv).not.toContain("'7");
+  });
+
+  it('number ID 保持数值语义：负数 id 不得被加 apostrophe 变成文本', async () => {
+    // §4.3 R4 的判别点：先 String() 再中和的错误实现会把 number -5 变成文本 '-5。
+    // 只用正数 id 抓不住（正数首字符不在触发集里），必须有一个负数。
+    mockFetchAllDevicePages.mockResolvedValue({
+      items: [
+        { id: -5, serial: 'NEG-ID', model: 'M', host_id: null, status: 'ONLINE',
+          tags: [], build_display_id: null, last_seen: '2026-08-05T18:00:00+08:00' },
+      ],
+      total: 1,
+    });
+    const csv = await exportCsvText();
+    expect(csv).toContain('"-5","NEG-ID"');
+    expect(csv).not.toContain("'-5");
+  });
+
+  it('CSV 原有逗号 / 双引号 / CR/LF framing 回归不因中和而回退', async () => {
+    mockFetchAllDevicePages.mockResolvedValue({
+      items: [
+        { id: 1, serial: 'a,b', model: 'say "hi"', host_id: null, status: 'ONLINE',
+          tags: [], build_display_id: null, last_seen: '2026-08-05T18:00:00+08:00' },
+      ],
+      total: 1,
+    });
+    const csv = await exportCsvText();
+    expect(csv).toContain('"a,b"');
+    expect(csv).toContain('"say ""hi"""');
+    // 表头与列数不变：8 列
+    expect(csv).toContain('"ID","Serial","Model","Status","Host","Build","Tags","Last Seen"');
+  });
+});
+
+describe('DevicesPage — clipboard 结构与公式中和（S4 / #3237）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFetchHostList.mockResolvedValue([]);
+    mockProjectsList.mockResolvedValue([]);
+  });
+
+  it('公式前缀被中和', async () => {
+    mockFetchAllDevicePages.mockResolvedValue({
+      items: [dangerousDevice({ id: 1, serial: '=1+1' }), dangerousDevice({ id: 2, serial: '@x' })],
+      total: 2,
+    });
+    expect(await copySerialsText()).toBe("'=1+1\n'@x");
+  });
+
+  it('行首双引号被中和，不把下一条记录吞进同一 cell', async () => {
+    mockFetchAllDevicePages.mockResolvedValue({
+      items: [{ ...dangerousDevice({ id: 1, serial: '"=1+1' }) }, { ...dangerousDevice({ id: 2, serial: 'B' }) }],
+      total: 2,
+    });
+    const text = await copySerialsText();
+    expect(text).toBe('\'"=1+1\nB');
+    expect(text.split('\n')).toHaveLength(2);
+  });
+
+  // #3561 §4.1/§4.3：结构-only 样例必须独立于公式样例。上面那条把结构风险和公式风险
+  // 绑在一起了——如果引号分支被误改成「只在后面跟着 = 时才生效」，上条仍会绿。这条
+  // 的首字符是纯结构引号、不含任何公式字符，用来单独证明「行首 " 不会吞并下一条记录」。
+  it('结构-only：行首引号（无公式前缀）同样被中和，不吞并下一条记录', async () => {
+    mockFetchAllDevicePages.mockResolvedValue({
+      items: [{ ...dangerousDevice({ id: 1, serial: '"a' }) }, { ...dangerousDevice({ id: 2, serial: 'B' }) }],
+      total: 2,
+    });
+    const text = await copySerialsText();
+    expect(text).toBe('\'"a\nB');
+    expect(text.split('\n')).toHaveLength(2);
+  });
+
+  // #3561 §4.2：S4 要求通过实际 writeText 观察 TAB/CR/LF/NUL 四种，原用例只喂了
+  // TAB 与 LF，CR/NUL 没被 sink 钉死。四种全部接入，且断言输出不含任何裸控制字符。
+  it('内嵌 TAB / CR / LF / NUL 四种都不制造额外 clipboard cell/row', async () => {
+    mockFetchAllDevicePages.mockResolvedValue({
+      items: [
+        { ...dangerousDevice({ id: 1, serial: 'a\tb' }) },
+        { ...dangerousDevice({ id: 2, serial: 'c\rd' }) },
+        { ...dangerousDevice({ id: 3, serial: 'e\nf' }) },
+        { ...dangerousDevice({ id: 4, serial: 'g\0h' }) },
+      ],
+      total: 4,
+    });
+    const text = await copySerialsText();
+    expect(text).toBe('a\\tb\nc\\rd\ne\\nf\ng\\0h');
+    // 4 条记录 = 4 行：唯一的裸换行只能是记录分隔的那三个
+    expect(text.split('\n')).toHaveLength(4);
+    expect(text).not.toMatch(/[\t\r\0]/);
+  });
+
+  it('普通 serial 原样复制', async () => {
+    mockFetchAllDevicePages.mockResolvedValue({
+      items: [
+        { ...dangerousDevice({ id: 1, serial: 'ABC-123' }) },
+        { ...dangerousDevice({ id: 2, serial: 'foo@bar' }) },
+      ],
+      total: 2,
+    });
+    expect(await copySerialsText()).toBe('ABC-123\nfoo@bar');
+  });
+});
