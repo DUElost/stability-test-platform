@@ -21,6 +21,8 @@ CWD_PATHS = {"root": "", "agent": "backend/agent", "aee": "backend/agent/aee"}
 SCOPED_MARK = "Agent 侧 scan / upload"
 ROOT_MARKS = ("## 总原则", "## 提交前")
 AEE_MARK = "AEE crash detection chain"
+# Operator-local stderr evidence; gitignored and never referenced from the report body.
+STDERR_DIR = str(Path(ROOT) / ".probe-evidence")
 
 
 def make_prompt(cwd: str, mode: str) -> str:
@@ -137,8 +139,23 @@ def get_version(form: dict) -> str | None:
     return None
 
 
-def run_form(form: dict, timeout_s: int = 180, cwd: str = "agent", mode: str = "contract") -> dict:
-    result = {"graded": False, "q1": None, "q2": None, "error": None, "version": None}
+def keep_stderr(stderr_dir: str | None, form_id: str, cwd: str, mode: str, text: str) -> str | None:
+    """Persist raw stderr locally so the operator can inspect it; never into the report."""
+    if not stderr_dir:
+        return None
+    try:
+        path = Path(stderr_dir) / f"{form_id}_{cwd}_{mode}.stderr"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        return str(path)
+    except OSError:
+        return None
+
+
+def run_form(form: dict, timeout_s: int = 180, cwd: str = "agent", mode: str = "contract",
+             stderr_dir: str | None = None) -> dict:
+    result = {"graded": False, "q1": None, "q2": None, "error": None, "version": None,
+              "stderr_file": None}
     if not form.get("command"):
         return {**result, "error": "manual evidence missing"}
     version = get_version(form)
@@ -151,6 +168,8 @@ def run_form(form: dict, timeout_s: int = 180, cwd: str = "agent", mode: str = "
         proc = subprocess.run(argv, cwd=os.path.join(ROOT, CWD_PATHS[cwd]), capture_output=True,
                               text=True, encoding="utf-8", errors="strict", timeout=timeout_s)
         # stderr is never an answer; unknown diagnostics require inspection.
+        if proc.stderr.strip():
+            result["stderr_file"] = keep_stderr(stderr_dir, form["id"], cwd, mode, proc.stderr)
         if proc.returncode != 0:
             result["error"] = f"exit={proc.returncode}"
         elif proc.stderr.strip():
@@ -232,7 +251,8 @@ def grade_manual(row: dict | None, source_version: str, head: str) -> dict:
 
 
 def run_matrix(only: str | None, timeout_s: int, json_out: str | None,
-               cwds: list[str] | None = None, mode: str = "contract", manual_path: str | None = None) -> int:
+               cwds: list[str] | None = None, mode: str = "contract", manual_path: str | None = None,
+               stderr_dir: str | None = None) -> int:
     forms = [f for f in FORMS if not only or f["id"] in only.split(",")]
     if only and set(only.split(",")) - {f["id"] for f in FORMS}:
         print("[UNVERIFIED] unknown form", file=sys.stderr)
@@ -254,7 +274,7 @@ def run_matrix(only: str | None, timeout_s: int, json_out: str | None,
         for cwd in cwds:
             expected = expected_for(form, cwd, mode)
             actual = (grade_manual(manual.get((form["id"], cwd, mode)), source_version, head)
-                      if form.get("manual") else run_form(form, timeout_s, cwd, mode))
+                      if form.get("manual") else run_form(form, timeout_s, cwd, mode, stderr_dir))
             status = verdict(actual, expected)
             if head == "unknown" or _git_head() != head:
                 status, actual["error"] = "UNVERIFIED", "source revision unavailable or changed"
@@ -262,10 +282,11 @@ def run_matrix(only: str | None, timeout_s: int, json_out: str | None,
                    "expected": expected,
                    "actual": {k: actual[k] for k in expected} if status != "UNVERIFIED" else None,
                    "error": actual.get("error"), "version": actual.get("version"),
-                   "seconds": actual.get("seconds"), "evidence_source": actual.get("evidence_source")}
+                   "seconds": actual.get("seconds"), "evidence_source": actual.get("evidence_source"),
+                   "stderr_file": actual.get("stderr_file")}
             results.append(row)
             print(f"[{status}] {form['id']} cwd={cwd} mode={mode} actual={row['actual']} "
-                  f"error={row['error']}", flush=True)
+                  f"error={row['error']} stderr_file={row['stderr_file']}", flush=True)
     counts = {s: sum(r["status"] == s for r in results) for s in ("PASS", "FAIL", "UNVERIFIED")}
     print(f"Matrix ({'inheritance acceptance' if mode == 'contract' else 'autoload diagnostic'}): {counts}")
     if json_out:
@@ -305,6 +326,8 @@ def main() -> int:
     ap.add_argument("--json", dest="json_out")
     ap.add_argument("--manual-input", help="reviewed GUI evidence JSON")
     ap.add_argument("--manual-template", help="write blank GUI evidence JSON; do not run sessions")
+    ap.add_argument("--stderr-dir", default=STDERR_DIR,
+                    help="local gitignored directory for raw stderr; '' disables persistence")
     ap.add_argument("--self-test", action="store_true")
     args = ap.parse_args()
     if args.self_test:
@@ -320,7 +343,8 @@ def main() -> int:
                                                         ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         print("[UNVERIFIED] blank manual template; no acceptance performed")
         return 1
-    return run_matrix(args.only, args.timeout, args.json_out, cwds, args.mode, args.manual_input)
+    return run_matrix(args.only, args.timeout, args.json_out, cwds, args.mode, args.manual_input,
+                      args.stderr_dir or None)
 
 
 if __name__ == "__main__":

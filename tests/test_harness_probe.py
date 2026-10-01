@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -48,6 +49,41 @@ def test_cli_exceptions_unverified(cli, monkeypatch, exc):
     actual = probe.run_form(cli, 1)
     assert probe.verdict(actual, {"q1": True, "q2": True}) == "UNVERIFIED"
     assert actual["error"] and not actual["graded"]
+
+
+@pytest.mark.parametrize("rc,stderr", [(1, "not trusted"), (0, "Reading additional input from stdin...")])
+def test_stderr_is_persisted_locally_and_kept_out_of_the_report(cli, monkeypatch, rc, stderr):
+    """A stderr line must stay inspectable without becoming gradeable evidence."""
+    monkeypatch.setattr(probe.subprocess, "run", lambda *a, **k:
+                        subprocess.CompletedProcess(a[0], rc, "Q1=是 Q2=是", stderr))
+    actual = probe.run_form(cli, 1, cwd="agent", mode="contract", stderr_dir="/tmp/probe-stderr-case")
+    assert not actual["graded"] and probe.verdict(actual, {"q1": True, "q2": True}) == "UNVERIFIED"
+    saved = Path(actual["stderr_file"])
+    assert saved.name == "codebuddy_agent_contract.stderr" and saved.read_text() == stderr
+
+
+def test_stderr_persistence_is_off_without_a_directory(cli, monkeypatch):
+    monkeypatch.setattr(probe.subprocess, "run", lambda *a, **k:
+                        subprocess.CompletedProcess(a[0], 1, "", "not trusted"))
+    actual = probe.run_form(cli, 1)
+    assert actual["stderr_file"] is None and actual["error"] == "exit=1"
+
+
+def test_report_rows_carry_the_path_but_never_the_stderr_text(tmp_path, monkeypatch):
+    monkeypatch.setattr(probe, "run_form", lambda *a, **k:
+                        {**probe.grade("Q1=是 Q2=是"), "error": "stderr diagnostics",
+                         "stderr_file": str(tmp_path / "x.stderr")})
+    out = tmp_path / "report.json"
+    probe.run_matrix("codex", 1, str(out), ["agent"], stderr_dir=str(tmp_path))
+    row = json.loads(out.read_text())["results"][0]
+    assert row["status"] == "UNVERIFIED" and row["stderr_file"] == str(tmp_path / "x.stderr")
+    assert "stderr diagnostics" in out.read_text() and "Q1=是" not in out.read_text()
+
+
+def test_keep_stderr_never_raises_when_the_directory_is_unusable(tmp_path):
+    blocker = tmp_path / "blocked"
+    blocker.write_text("not a directory")
+    assert probe.keep_stderr(str(blocker), "codex", "root", "contract", "boom") is None
 
 
 def test_cli_uses_argv_and_selected_cwd(cli, monkeypatch):

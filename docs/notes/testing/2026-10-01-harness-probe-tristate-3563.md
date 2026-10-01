@@ -3,6 +3,8 @@
 Status: proposed
 Class: testing
 
+<!-- 2026-10-01 追加（Owner 裁决后）：stderr 证据落盘 + 两形态不可跑处置 -->
+
 ## Decision
 
 严格判定有效最终两题答案；删除从未判定的 Q3，不再声称检查重复加载。
@@ -17,6 +19,13 @@ root/Agent/AEE 独立矩阵，contract 继承验收与 autoload 诊断分开；�
 Q3 重复次数随 Harness 注入机制变化，非本轮根继承最小验收必要项；按父单裁决删除。
 未增加 CI、Registry 或全仓通用前置门禁；未改个人配置、信任或生产环境。
 
+追加（2026-10-01，Owner 接受实跑发现后的两条处置）：非零退出与 stderr 两类
+UNVERIFIED 都把原始 stderr 落到本地 gitignore 目录 `.probe-evidence/`，报表只记
+路径不记正文；不加「良性 stderr 豁免」开关——豁免是人工裁决并记 issue，工具自查
+自免会毁掉本单三态的全部判别力。`cursor`（无 `--trust` 宿主上恒 exit=1）与
+`codex`（本机 stderr 恒有两行）两形态的 UNVERIFIED 记为**接受的终态**，写进操作
+手册「已知不可跑形态」，不以参数绕过换绿。
+
 ## Verification
 
 离线回归 52 passed（统一 runner 实测 cgroup memory.max=6 GiB、swap=0）。
@@ -25,9 +34,19 @@ Q3 重复次数随 Harness 注入机制变化，非本轮根继承最小验收�
 quick 的 schema-at-head 未配置隔离数据库而跳过，不代表生产数据库验证。
 真实 CLI/IDE × cwd 与 hook 触发独立取证；实现测试通过不替代真实激活/继承验收。
 
+追加实测（2026-10-01，zcode 工作面临时 worktree @639a73d9，跑完已删）：
+`claude-subdir-plain --cwd agent --mode contract` PASS（约 100s，Q1/Q2 双是）；
+`codex --cwd root --mode contract` UNVERIFIED（`stderr diagnostics`，答复本身有效）；
+`cursor --cwd agent --mode autoload` UNVERIFIED（`exit=1`）。即正文「Claude 三 cwd
+超时」是实施会话当时的现场、非稳定结论。追加改动后离线回归 57 passed（新增 5 项：
+两类 UNVERIFIED 均落盘、无目录不落盘、报表只记路径不记正文、目录不可写不抛错、
+rc≠0 仍保留 stderr 落盘）。
+
 ## Revisit
 
 新 CLI 输出 schema 必须先取证再支持；未知协议、版本缺失、工具错误继续 UNVERIFIED。
 标题自报告仅是最小黑盒可见性证据，不能证明所有硬规则已执行；人工证据真实性需独立复核。
 IDE 与 CLI 不合并，历史 autoload 漂移由实际版本证据解释，不放宽 contract 的 root 可见性。
 G3/G4 与父单终态覆盖图后续实施；本单不关闭 #3516，不启用宿主 hooks。
+`.probe-evidence/` 只在本地判读，任何时候不入库；宿主 stderr 噪声基线变化时重取基线
+而不是放宽规则；`cursor`/`codex` 两形态若日后可跑，须以新证据改手册而非改判定。

@@ -110,3 +110,6 @@ frontend/node_modules
 .workbuddy/
 deliverables/
 .git.broken-backup-*/
+
+# Harness 探针本地 stderr 证据（操作者判读用，非仓库内容，勿入库）
+.probe-evidence/

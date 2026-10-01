@@ -34,10 +34,31 @@ Agent 标题，在 AEE 检查 Agent 与 AEE 两个标题；Q3 已删除，不再
 - 退出码：完整所选矩阵 PASS 为 0；有 FAIL 为 2；否则有 UNVERIFIED 为 1。
   FAIL 与 UNVERIFIED 混合时返回 2，逐行状态仍保留；没有“不可验证但 exit 0”的默认路径。
 
+### stderr 证据
+
+stderr 一律判 UNVERIFIED，但判定必须可复核，因此原文落盘到**操作者本地**的
+`.probe-evidence/<form>_<cwd>_<mode>.stderr`（该目录已 gitignore）。报表每行只记
+`stderr_file` 路径，**不含 stderr 正文，也不含 stdout**。`--stderr-dir ''` 关闭落盘，
+`--stderr-dir DIR` 改位置。落盘只是取证，不改变判定：判 UNVERIFIED 的格不会因为
+「文件已保存」而变 PASS，良性噪声的豁免是人工裁决并记在 issue 上，工具不提供
+豁免开关（避免自查自免）。仅在 `.stderr` 里出现、且各宿主稳定复现的启动噪声
+（例如 `codex exec` 恒写的 `Reading additional input from stdin...`）属于宿主基线，
+记录后仍按 UNVERIFIED 处理。
+
 `--cwd root,agent,aee` 为三个独立启动目录；每个调用是新 CLI 进程。Claude wrapper 是
 后备供给形态，不能代替裸 Claude CLI。Cursor/CodeBuddy CLI 与对应 IDE 不共享结果。
 不添加信任绕过参数，不默认激活宿主 hooks；正常工作区信任与服务可用性由操作者确认。
-报表保留完整 HEAD、版本、模式、cwd、判定和耗时，不保存原始 CLI stdout/stderr 或私有配置。
+
+### 已知不可跑形态（Owner 2026-10-01 裁决）
+
+- `cursor` CLI：命令不含 `--trust`，宿主无预置工作区信任时非交互直接 `exit=1`
+  → 该格恒 UNVERIFIED。**这是接受的终态**，不为此加信任绕过参数；Cursor 的真实
+  证据取 `cursor-ide` 人工行。
+- `codex` CLI：本机 stderr 恒有两行（`Reading additional input from stdin...` 与
+  `failed to refresh available models: request timed out`）→ 整列 UNVERIFIED。答复
+  本身有效也不改判；宿主网络恢复后复跑，或由 Owner 另行裁决 stderr 噪声豁免口径。
+报表保留完整 HEAD、版本、模式、cwd、判定、耗时与 stderr 文件路径，不保存原始 CLI
+stdout/stderr 正文或私有配置。
 
 ## IDE 人工入口
 
