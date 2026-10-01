@@ -41,14 +41,23 @@ note 状态为 `proposed`；实现（加 informational job + 采集 flake 率的
 
 | 项 | 实测值 | 取法 |
 |---|---|---|
-| `backend-test` 墙钟 | **16~60 min**（自身 `timeout-minutes: 60`） | run 35273011416 / 36781232110 的 job 时间线 |
-| `frontend-check` 墙钟 | **≈2 min** | 同上（含 09-17 两次：2m09s / 2m14s） |
+| `Run backend tests` 步骤墙钟 | **16~23 min**（6/7 样本）；单点离群 50m37s | 7 次全量 run 的 step 时间线 |
+| `Run agent tests` 步骤 | 恒定 **4~4.5 min** | 同上 |
+| `Run repo-level tests` 步骤 | **10~15 min** | 同上 |
+| **job 合计**（受 `timeout-minutes: 60` 约束） | 正常 **33~39 min**；离群时撞 60min 被 cancelled | 同上 |
 | PR 吞吐 | ≥200 PR / 7 天（`gh pr list` 上限截断，实际更高） | `gh pr list --state merged` |
 | PR 侧现有 required 超时上限 | 30 min（`pr-agent-tests` / `pr-typecheck` / `pr-compileall`） | `.github/workflows/ci.yml` |
 
 **关键推论**：`backend-test` 若直接进 required，会成为 PR 关键路径上**唯一超过 30 分钟**
-的检查——现有 required 全部 ≤30min，它单独把形态拉高一倍以上。且 PR 吞吐 ≥28/天，
-按 40 min 计约 18.7 runner-小时/天。
+的检查——现有 required 全部 ≤30min，它单独把形态拉高一倍以上。且 PR 吞吐 ≥28/天。
+
+> **口径更正（2026-10-01 晚，PR #3575 合入后复测）**：本 note 初稿把 backend-test 墙钟记作
+> 「16~60 min」，那是 **job 级**口径（60min 来自 job `timeout-minutes` 被撞，而非测试本身
+> 跑满）。按 **step 级**重测，`Run backend tests` 正常只要 **16~23 min**，job 合计
+> **33~39 min**。job 级 60min 预算需覆盖三个步骤（backend 16~23 + agent ~4.5 + repo-level
+> 10~15 ≈ 33~39 min），常规余量 21~27 min；但 09-26 出现过 backend 单步 50m37s 的离群
+> （约 3 倍），随即把 job 顶到 60min 上限、在 `Run repo-level tests` 步骤被 kill——即
+> **repo-level tests 静默未跑完**。该离群与超时成因的排查见 **#3576**。
 
 ## 为什么是「信息性」而不是别的
 
