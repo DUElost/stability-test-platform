@@ -53,7 +53,7 @@ Python 3.11 下重新生成对应 lock。日常重生成沿用已有 pin；只�
 - Ruff 与 ESLint 都是阻塞门禁，ESLint 使用 `--max-warnings 0`；
 - Ruff 规则取向见 `ruff.toml`，实际 CI 参数见 workflow；
 - 前端脚本以 `frontend/package.json` 为准；
-- 本地门禁入口：`python scripts/run_gates.py check:quick|pr|full`；
+- 本地使用[项目 Python 入口](local-development.md#项目-python-入口)运行 `scripts/run_gates.py check:quick|pr|full`；
 - **新增门禁要写明它合并或替代了哪一条**（门禁预算，2026-09-25）：门禁多数是针对单次事故的
   正确回应，但总量只增不减时，治理面本身会变成没人能完整掌握的负担。新增门禁的 PR 描述回答
   「这条与哪条既有门禁同类、能否并入」；能用结构性规则覆盖的（如 `.importlinter` 的一条合约）
@@ -116,6 +116,31 @@ Python 3.11 下重新生成对应 lock。日常重生成沿用已有 pin；只�
   `.gitignore` 命中项，避免读进 `.venv`/`node_modules`/`.wt` 并行 worktree）」。
   同一条不对称也可能出现在别的 `ls-files` 型检查上：**新文件的红线要在 `git add`
   之后本地复跑一次**，或直接把 CI 的调用姿势抄过来跑。
+
+## 本地检查与 required CI
+
+本节定义覆盖关系；成员与实际参数分别以 [`run_gates.py`](../../scripts/run_gates.py) 的
+`PROFILES/GATES`、[CI workflow](../../.github/workflows/ci.yml) 和
+[GitHub 托管的 CodeQL workflow](https://github.com/DUElost/stability-test-platform/actions/workflows/github-code-scanning/codeql)
+为准，不用本地命令的 exit 0 推断服务器状态。
+
+- `check:quick` 是快速反馈：静态/前端类型/语法/治理等检查；不运行 Agent 测试、
+  空库迁移或 CodeQL，不能作为合入验收的充分条件。
+- `check:pr` 是更完整的本地预检：叠加 Agent 测试与收集、迁移等检查；pytest 共用
+  `scripts/run_pytest.py` 的内存保护。仍不是六项 required CI 的等价重放。
+- required CI 是当前 PR head 的 `lint`、`CodeQL`、`pr-typecheck`、`pr-compileall`、
+  `pr-agent-tests`、`pr-migrate-empty-db`。只有对应 head 的最终成功状态才算通过；
+  排队、进行中、超时、调用失败、被跳过均不能写成通过。
+
+本地 profile 对 lint/类型/语法有部分对应；CI 按 job 的锁定环境执行，项目 Python 入口
+不会把本机解释器变成 CI 版本。`check:pr` 不包含 `repo-tests`，而 `pr-agent-tests` 还运行
+根 `tests/` 离线子集；`pr-migrate-empty-db` 还有 PG 并发回归，本地 `pr-migrate` 不涵盖该部分。
+CodeQL 由独立 workflow 承担，没有本地 profile 等价项；frontend build/vitest/全量 backend
+也不因这六项成功而自动算已验收，按改动范围另跑。
+
+`schema-at-head` 未配置隔离数据库、`pr-migrate` 无 Docker 时会明确跳过；这只说明当前
+检查不可用，不证明库状态或迁移正确。不得为消除跳过而加载生产连接串。报告实际命令、
+profile 和每项跳过/未跑原因，再读回当前 head 的 required checks；本文不新增 gate 或 profile。
 
 ## 空行污染
 
