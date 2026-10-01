@@ -165,7 +165,7 @@ job 结论，重跑后重查在转绿时直接变空）；并**新增「归因�
 | Pydantic v2 only | PR 新增行中策展的 v1 API 模式 BLOCK，不声称穷尽所有写法 | `tools/dev/check_invariant_diff.py` | partial；未登记形态/存量范围 residual |
 | 新建业务表名单数（历史表例外） | 新增迁移行的策展模式；空库迁移不拦表名复数 | 同上 | partial（新增行范围）；历史例外见数据模型 |
 | 已存在版本 `default_params` 不可变 | `update_script` 拒绝改变为 422；发布包另由 manifest append-only/包一致性保护 | `backend/api/routes/scripts.py`；`check_tool_manifest.py` / `check_script_packages.py` | enforced（该 API）；其它写入口不能由此推断已覆盖 |
-| 前端 `types.ts` 与后端 schema 同步 | 部分：**登记的 Pydantic 响应模型 ↔ TS 接口**双向对拍（`tests/test_api_response_shape_contract.py` 轴线 C；2026-09-15 起 5 对：watcher-summary 3 + log-events 2）。`ok({...})` 手搓 dict 端点与未登记模型仍无强制力 | `frontend/package.json` 无生成器 | **部分已强制 / 其余 residual**（review 兜底） |
+| 前端 `types.ts` 与后端 schema 同步 | 部分：**登记的 Pydantic 响应模型 ↔ TS 接口**双向对拍（`tests/test_api_response_shape_contract.py` 轴线 C；覆盖范围＝该文件 `_MODEL_PAIRS` 显式登记的配对——**数量随登记变化，不在此复制**）。`ok({...})` 手搓 dict 端点与未登记模型仍无强制力 | `frontend/package.json` 无生成器 | **部分已强制 / 其余 residual**（review 兜底） |
 | 项目 Python / pytest 内存保护 | G1 gate/shell wrapper 共用 `scripts/run_pytest.py`；缺 cgroup 限制即拒绝；稳定解释器入口由 #3566 / draft #3567 承接 | `scripts/run_pytest.py` / `scripts/run_gates.py` | enforced（保护 runner scope）；绕过 runner 的直接调用仍 residual |
 | 凭据读取与生产诊断边界 | 根禁止无关凭据访问；诊断按 `production-diagnostics.md` 与只读 skill。Claude versioned deny 只列四个路径的 Edit，不能证明所有写入被拦或每次读取获授权 | `.claude/settings.json`；诊断权威文档 | partial（Edit 条目）；读取授权仅 structural，无关/未授权读取 residual |
 | 共享工作树的破坏性 Git | Claude PreToolUse 接 shell-aware 守卫，已知间接执行缺口明示；opt-in reference-transaction 只观测 stash，不替代前置拦截 | `check_destructive_git.py`；`.claude/settings.json`；`.githooks/reference-transaction` | partial（解析覆盖已离线验证，真实 Claude 触发 UNVERIFIED）；其它 Harness 仅 structural |
