@@ -21,6 +21,13 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import select
 
+# #3576 形态 B：并发编排的**统一上界**。实测本文件有一个 gather 因一侧在
+# 到达 barrier 前抛异常而挂死 48 分钟（2026-09-16 run 35148237108；挂死窗口内
+# 0 条 DB 语句 ⇒ 非数据库死锁，是 barrier 饿死）。本文件所有 gather 一律加界，
+# 理由是代价不对称：真死锁应该让测试**红**并给出锁序，而不是静默吃掉一整轮 CI
+# 还会连带把 backstop 归因拖到超时（#2441）。正常完成是秒级，60s 足够宽松。
+_CONCURRENCY_TIMEOUT = 60
+
 pytestmark = pytest.mark.skipif(
     os.getenv("DATABASE_URL", "").startswith("sqlite"),
     reason="死锁回归测试需要 PostgreSQL 行锁(FOR KEY SHARE / FOR NO KEY UPDATE)",
@@ -179,10 +186,13 @@ async def test_concurrent_complete_job_no_deadlock():
                     db=db, _=None,
                 )
 
-        results = await asyncio.gather(
-            _complete(seed["job_ids"][0], seed["tokens"][0]),
-            _complete(seed["job_ids"][1], seed["tokens"][1]),
-            return_exceptions=True,
+        results = await asyncio.wait_for(
+            asyncio.gather(
+                _complete(seed["job_ids"][0], seed["tokens"][0]),
+                _complete(seed["job_ids"][1], seed["tokens"][1]),
+                return_exceptions=True,
+            ),
+            timeout=_CONCURRENCY_TIMEOUT,
         )
 
         # 两个 complete 都应成功,不抛 DeadlockDetectedError
@@ -242,7 +252,10 @@ async def test_concurrent_complete_job_four_way_no_deadlock():
             _complete(jid, tok)
             for jid, tok in zip(seed["job_ids"], seed["tokens"], strict=True)
         ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        results = await asyncio.wait_for(
+            asyncio.gather(*tasks, return_exceptions=True),
+            timeout=_CONCURRENCY_TIMEOUT,
+        )
 
         errors = [r for r in results if isinstance(r, Exception)]
         assert not errors, (
@@ -298,10 +311,13 @@ async def test_concurrent_on_job_terminal_no_deadlock():
                 assert job is not None
                 return await PlanAggregator.on_job_terminal(job, db)
 
-        results = await asyncio.gather(
-            _aggregate(seed["job_ids"][0]),
-            _aggregate(seed["job_ids"][1]),
-            return_exceptions=True,
+        results = await asyncio.wait_for(
+            asyncio.gather(
+                _aggregate(seed["job_ids"][0]),
+                _aggregate(seed["job_ids"][1]),
+                return_exceptions=True,
+            ),
+            timeout=_CONCURRENCY_TIMEOUT,
         )
 
         errors = [r for r in results if isinstance(r, Exception)]
@@ -457,9 +473,29 @@ async def test_complete_and_extend_batch_same_job_no_deadlock():
                     db=db, _=None,
                 )
 
-        results = await asyncio.gather(
-            _complete(), _extend(), return_exceptions=True,
-        )
+        # #3576 形态 B：`asyncio.Barrier(2)` + `gather` 双重无界 ⇒ 任何「一侧在到达
+        # barrier 之前抛异常」的情形都会让另一侧**永久等待**，而 `gather` 不设超时、
+        # 仓库也未装 pytest-timeout（`pytest.ini` 亦无 timeout）——没有任何机制能中断它。
+        # 实测代价：2026-09-16 run 35148237108 的 backend-test 在本文件
+        # `test_no_key_update_still_serializes_writers` 通过后（21:56:23）挂死 **48 分钟**，
+        # 直到 job 级 `timeout-minutes`（当时 60）把整个 job 掐掉；挂死窗口内日志仅 2 行、
+        # **0 条 DB 语句** ⇒ DB 全程空闲，可排除「真实 DB 死锁」，是 barrier 饿死。
+        #
+        # 代价不对称：真死锁应该让本测试**红**并给出锁序信息，而不是静默吃掉一整轮 CI
+        # 还会连带把 backstop 归因拖到超时（见 #2441）。故这里给 gather 加上界——
+        # 超时即失败，信息是「本测试的并发编排挂住了」而不是「数据库锁住了」。
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(_complete(), _extend(), return_exceptions=True),
+                timeout=_CONCURRENCY_TIMEOUT,
+            )
+        except (asyncio.TimeoutError, TimeoutError):
+            pytest.fail(
+                "complete × extend-batch 的并发编排挂死（60s 未完成）——通常是"
+                "一侧在到达 barrier 前抛异常导致另一侧永久等待；这**不是**数据库死锁，"
+                "排查方向是本测试的 barrier 编排，不是锁序",
+                pytrace=False,
+            )
         errors = [r for r in results if isinstance(r, Exception)]
         assert not errors, (
             f"complete × extend-batch 不应死锁; got: {errors}"
