@@ -81,3 +81,15 @@ workspace 那份，正确答案本就是「否」。Owner 裁决走改题不改�
 守卫若挡不住它要防的那个变异，等于没写。**
 
 修复合入后 aee 三格须重跑：`root_version` 锚定 HEAD，探针一改整表作废。
+
+追加五（2026-10-02，CI `pr-agent-tests` 红返修）：新守卫里的两条
+「读契约文件断言某标记不存在」属源扫描型否定断言，被
+`test_source_scan_anchor_ratchet.py` 判为新 offender——这类断言在锚点漂移时会恒真
+（#2639 病）。改走 `SourceGuard.of_repo_path(...).anchored(...)` +
+`assert_absent/assert_present`：锚点漂移报「用例已过期」、锚点在位而形态不符报
+「防线回归」，两者在红侧第一行即可区分。
+
+变异自证：把 `Agent 侧 scan / upload` 塞进 `backend/agent/aee/AGENTS.md` → 守卫以
+`FormRegression` 变红（1 failed / 58 passed），恢复后 59 passed。
+**本地 `check:quick` 未捕获此红——quick 16 gates 不含 `pr-agent-tests` 的
+ratchet 集合，须以 required CI 为准。**

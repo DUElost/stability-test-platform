@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from tools.dev import harness_probe as probe
+from tools.dev.source_anchor import SourceGuard
 
 
 @pytest.mark.parametrize("text", [probe.PROBE_PROMPT, "Q1=是/否 Q2=是/否",
@@ -157,12 +158,16 @@ def test_each_cwd_is_asked_only_about_a_marker_its_own_contract_carries():
             foreign = probe.AEE_MARK if mark == probe.SCOPED_MARK else probe.SCOPED_MARK
             assert foreign not in prompt, f"{cwd}/{mode} leaks another layer's marker"
         if owner[cwd] is not None:
-            assert mark in Path(probe.ROOT, owner[cwd]).read_text(encoding="utf-8")
+            guard = SourceGuard.of_repo_path(owner[cwd]).anchored(mark)
+            guard.assert_present(mark, why="该标记必须真在它自己那层契约里")
         else:
             # root is the negative control: it must not carry any scoped heading.
-            assert mark not in Path(probe.ROOT, "AGENTS.md").read_text(encoding="utf-8")
+            root_guard = SourceGuard.of_repo_path("AGENTS.md").anchored(probe.ROOT_MARKS[0])
+            root_guard.assert_absent(mark, why="#3563：root 契约不得出现 scoped 层标题")
     # The two markers live in different files — that is exactly why aee asks for one.
-    assert probe.SCOPED_MARK not in Path(probe.ROOT, "backend/agent/aee/AGENTS.md").read_text()
+    aee_guard = SourceGuard.of_repo_path("backend/agent/aee/AGENTS.md").anchored(probe.AEE_MARK)
+    aee_guard.assert_absent(probe.SCOPED_MARK,
+                            why="#3563：AEE 层契约不得携带 Agent 层标题，否则 aee 格又变成跨层提问")
 
 
 def test_modes_and_ide_baselines_are_separate():
