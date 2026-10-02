@@ -101,6 +101,16 @@ GATES = {
         ROOT,
         None,
     ),
+    # env **键集**漂移：真身 vs 入库模板（只读键名，不读值）。补的是「生产 env 真身
+    # 无备份、丢失后无从判断缺什么」这个可观测性缺口——本门禁不要求真值可恢复，只要求
+    # 缺键这件事本身是机器可判的事实。self-test 先行（同 env-inventory 的形状）。
+    # 定位不到真身时脚本自身返回 0（CI runner / 开发机没有生产 env，属正常形态）。
+    "env-key-drift": (
+        f"{PY} tools/dev/check_env_key_drift.py --self-test && "
+        f"{PY} tools/dev/check_env_key_drift.py --check",
+        ROOT,
+        None,
+    ),
     # 扫描集含根 tests/（#2535 之后的同批收口）：此前只在 backend/tools/scripts 上跑，
     # 根 tests/ 的语法错误在 check:quick 里看不见（实测：注入语法错误后旧命令仍绿）。
     "compileall": (
