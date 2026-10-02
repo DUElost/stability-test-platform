@@ -93,7 +93,8 @@ Role 是元数据，运行时供给 deferred；Adapter 无自动 whoami / 心跳
 - `.codex/hooks.json` 仅在 **Stop** 检查落地后的树，不在 `apply_patch` 前跑 tsc；已有红灯不拦修复编辑。
 - command 从当前 Git root 找 `.venv` 和脚本；worktree 须初始化项目解释器与 frontend 依赖（[本地开发](../local-development.md)）。
 - 使用项目 Python 做 syntax compile、已安装的 TypeScript 做 typecheck；不安装依赖、不运行 pytest、不访问数据库。
-- PASS 返回 Stop JSON；检查报红为 FAIL，缺依赖/超时/检查器故障为 UNVERIFIED，均 exit 1 可见告警，
-  不以 exit 2 触发续跑循环。这是质量反馈，不能替代 required CI 或证明 CI Python 版本兼容。
+- checker 将 PASS / FAIL / UNVERIFIED 都通过 Stop JSON `systemMessage` 投递；缺依赖/超时/检查器故障为 UNVERIFIED。
+- exit 0 / hook `completed` 仅表示反馈投递完成，**质量结论看消息前缀**；非 PASS 明示「not a quality PASS」。
+  不返回续跑/停止控制字段或 exit 2；启动前故障仍为 hook 执行失败，不能推导质量 PASS。反馈不替代 required CI 或 CI Python 版本验收。
 - [官方 Hook 契约](https://learn.chatgpt.com/docs/hooks)：项目须受信任，且 `/hooks` 审阅并信任当前 hook hash；
   内容修改会重新等待信任。配置/本地 command 测试不代表实际激活；Windows command 未实跑时为 UNVERIFIED。
