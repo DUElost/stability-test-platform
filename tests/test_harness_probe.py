@@ -145,6 +145,26 @@ def test_three_state_verdict_error_beats_answer():
     assert probe.verdict(actual, {"q1": True, "q2": True}) == "UNVERIFIED"
 
 
+def test_each_cwd_is_asked_only_about_a_marker_its_own_contract_carries():
+    """Guards the #3563 aee regression: a cell must not ask for a foreign layer's heading."""
+    owner = {"root": None, "agent": "backend/agent/AGENTS.md",
+             "aee": "backend/agent/aee/AGENTS.md"}
+    for cwd, mark in probe.CWD_MARK.items():
+        for mode in ("autoload", "contract"):
+            prompt = probe.make_prompt(cwd, mode)
+            assert mark in prompt
+            # Exclusivity, not mere presence: asking for both markers is the regression.
+            foreign = probe.AEE_MARK if mark == probe.SCOPED_MARK else probe.SCOPED_MARK
+            assert foreign not in prompt, f"{cwd}/{mode} leaks another layer's marker"
+        if owner[cwd] is not None:
+            assert mark in Path(probe.ROOT, owner[cwd]).read_text(encoding="utf-8")
+        else:
+            # root is the negative control: it must not carry any scoped heading.
+            assert mark not in Path(probe.ROOT, "AGENTS.md").read_text(encoding="utf-8")
+    # The two markers live in different files — that is exactly why aee asks for one.
+    assert probe.SCOPED_MARK not in Path(probe.ROOT, "backend/agent/aee/AGENTS.md").read_text()
+
+
 def test_modes_and_ide_baselines_are_separate():
     ids = {f["id"] for f in probe.FORMS}
     assert {"cursor", "codebuddy", "zcode"} <= ids

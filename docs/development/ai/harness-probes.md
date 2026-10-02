@@ -12,8 +12,12 @@
   CodeBuddy IDE/Zcode 深 cwd 的历史 root=false 仅是诊断基线，不是 contract 验收标准；
   其他尚无历史证据的单元是显式目标预期，不能当作已观测值。版本变化导致偏离时需人工解释。
 
-Q1 检查根契约的两处标题，Q2 在 root 检查 Agent 标题（预期不存在），在 Agent 检查
-Agent 标题，在 AEE 检查 Agent 与 AEE 两个标题；Q3 已删除，不再声称检测重复加载。
+Q1 检查根契约的两处标题，Q2 检查**该目录自己那份契约**的标题：root 问 Agent 层标题
+（预期不存在，构成阴性对照）、Agent 问 Agent 层标题、AEE 问 AEE 层标题。**每格只问
+一个标记**——两个标记分属不同文件（`Agent 侧 scan / upload` 在 `backend/agent/AGENTS.md`、
+`AEE crash detection chain` 在 `backend/agent/aee/AGENTS.md`），让 AEE 格同时问两个会使
+Q2 对 workspace-only IDE 不可满足（它只注入 workspace 那份），该格便无法区分形态漂移与
+题目缺陷（#3563 实测 autoload Q2=否 即属此类）。Q3 已删除，不再声称检测重复加载。
 每个最终答复必须完整匹配两行 `Q1=是/否`、`Q2=是/否` 的实际选择值；不能带选项斜线、
 题目、角色前缀、解释或日志。Claude/Codex 只从支持的最终事件取答复，其他 CLI 的 stdout
 必须整体匹配；未知输出协议为 UNVERIFIED，不猜测。标题自报告只是最小黑盒可见性证据，

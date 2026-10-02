@@ -21,12 +21,19 @@ CWD_PATHS = {"root": "", "agent": "backend/agent", "aee": "backend/agent/aee"}
 SCOPED_MARK = "Agent 侧 scan / upload"
 ROOT_MARKS = ("## 总原则", "## 提交前")
 AEE_MARK = "AEE crash detection chain"
+# Each cwd is asked only about the marker its OWN contract file carries: SCOPED_MARK
+# lives in backend/agent/AGENTS.md, AEE_MARK in backend/agent/aee/AGENTS.md. Asking aee
+# for both makes Q2 unsatisfiable for workspace-only IDEs (they inject the workspace file
+# alone), so the cell could never distinguish drift from a broken question. root keeps
+# SCOPED_MARK as the negative control: the root contract has no scoped heading.
+CWD_MARK = {"root": SCOPED_MARK, "agent": SCOPED_MARK, "aee": AEE_MARK}
 # Operator-local stderr evidence; gitignored and never referenced from the report body.
 STDERR_DIR = str(Path(ROOT) / ".probe-evidence")
 
 
 def make_prompt(cwd: str, mode: str) -> str:
-    scope = f"『{SCOPED_MARK}』和『{AEE_MARK}』" if cwd == "aee" else f"『{SCOPED_MARK}』"
+    mark = CWD_MARK[cwd]
+    scope = f"『{mark}』"
     instruction = (
         "不要读取任何文件，不要使用任何工具。仅凭当前已加载的指令上下文回答。"
         if mode == "autoload" else

@@ -67,3 +67,17 @@ IDE 与 CLI 不合并，历史 autoload 漂移由实际版本证据解释，不�
 G3/G4 与父单终态覆盖图后续实施；本单不关闭 #3516，不启用宿主 hooks。
 `.probe-evidence/` 只在本地判读，任何时候不入库；宿主 stderr 噪声基线变化时重取基线
 而不是放宽规则；`cursor`/`codex` 两形态若日后可跑，须以新证据改手册而非改判定。
+
+追加四（2026-10-01，Zcode autoload 三格实测后修题）：Zcode 3.14.4 autoload 实测
+root / agent PASS、**aee FAIL**。根因不是形态漂移而是题目缺陷——aee 格 Q2 要求
+`Agent 侧 scan / upload`（在 `backend/agent/AGENTS.md`）与 `AEE crash detection chain`
+（在 `backend/agent/aee/AGENTS.md`）**同时**可见，而 workspace-only IDE 只注入
+workspace 那份，正确答案本就是「否」。Owner 裁决走改题不改编望（方案 A）：每格只问
+自己那份契约的标记，root 保留为阴性对照。
+
+守卫测试首版**无判别力**——变异（aee 恢复问两个标记）后仍 59 passed，因为断言写成
+`mark in prompt` 的单向包含。已改为互斥断言（外来标记不得出现在该格提示词中），
+复测变异下 `1 failed / 58 passed`、恢复后 59 passed。**这是本轮唯一的实质教训：
+守卫若挡不住它要防的那个变异，等于没写。**
+
+修复合入后 aee 三格须重跑：`root_version` 锚定 HEAD，探针一改整表作废。
