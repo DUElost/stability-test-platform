@@ -24,7 +24,16 @@ jobs:
     # pr-typecheck / pr-compileall）。
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # 90 而非 60（#3576）：job 级预算要覆盖**三个步骤之和**——
+    # `Run backend tests` 常态 16~23 min、`Run agent tests` ~4.5 min、
+    # `Run repo-level tests` 10~15 min，合计 33~39 min，60 尚有余量。但实测出现过
+    # backend 单步 50m37s 的离群（09-26，测试数与常态基本相同 3805/3845，是环境争用
+    # 而非代码回归，见该 run 日志里成片的 `skipping analyze of "..." --- lock not
+    # available`），随即把 job 顶到 60min 上限、在 `Run repo-level tests` 步骤被 kill
+    # ——**后果不只是这个 job 红：那批测试静默未跑完，当夜没有任何结论**。
+    # 60 挡不住这类 3 倍抖动，90 才有余量。形态 B（backend 单步挂死）延长无用，
+    # 那是独立排查项，不在本行解决。
+    timeout-minutes: 90
     services:
       postgres:
         image: postgres:16
