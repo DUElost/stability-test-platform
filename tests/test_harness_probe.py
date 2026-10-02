@@ -146,28 +146,53 @@ def test_three_state_verdict_error_beats_answer():
     assert probe.verdict(actual, {"q1": True, "q2": True}) == "UNVERIFIED"
 
 
-def test_each_cwd_is_asked_only_about_a_marker_its_own_contract_carries():
-    """Guards the #3563 aee regression: a cell must not ask for a foreign layer's heading."""
+def test_autoload_aee_asks_only_its_own_layer_but_contract_aee_asks_the_whole_chain():
+    """autoload 诊断本层注入；contract 验收完整祖先链——两者不得共用同一套题。"""
+    assert probe.q2_marks("aee", "autoload") == (probe.AEE_MARK,)
+    assert probe.q2_marks("aee", "contract") == (probe.SCOPED_MARK, probe.AEE_MARK)
+    # root/agent 两格两种模式一致；root 恒为阴性对照。
+    for cwd in ("root", "agent"):
+        assert probe.q2_marks(cwd, "autoload") == probe.q2_marks(cwd, "contract") == (probe.SCOPED_MARK,)
+    for cwd in probe.CWD_PATHS:
+        for mode in ("autoload", "contract"):
+            prompt = probe.make_prompt(cwd, mode)
+            for mark in probe.q2_marks(cwd, mode):
+                assert mark in prompt
+            for mark in (probe.SCOPED_MARK, probe.AEE_MARK):
+                if mark not in probe.q2_marks(cwd, mode):
+                    assert mark not in prompt, f"{cwd}/{mode} 问了不属于本格的标记"
+
+
+def test_contract_aee_cannot_pass_when_the_middle_agent_layer_is_missing():
+    """#3585 复核反例：root + AEE 可见但漏掉 Agent 层，contract 必须判 FAIL。"""
+    form = next(f for f in probe.FORMS if f["id"] == "zcode")
+    expected = probe.expected_for(form, "aee", "contract")
+    # 断链会话能看到 root（AEE 契约自称叠加在 root 之上）也能看到 AEE，
+    # 但没拿到 backend/agent/AGENTS.md → 对「两层都在？」只能答否。
+    broken_chain = probe.grade("Q1=是 Q2=否")
+    assert probe.verdict(broken_chain, expected) == "FAIL"
+    # 完整链（root + Agent + AEE 都在）才是 PASS。
+    assert probe.verdict(probe.grade("Q1=是 Q2=是"), expected) == "PASS"
+    # 两种模式对同一份证据必须给出相反判定，否则它们退化成一个判据。
+    # workspace-only 的真实 autoload 观察（根不注入、本层在）= Q1=否 Q2=是：
+    workspace_only = probe.grade("Q1=否 Q2=是")
+    assert probe.verdict(workspace_only, probe.expected_for(form, "aee", "autoload")) == "PASS"
+    assert probe.verdict(workspace_only, expected) == "FAIL"
+
+
+def test_markers_live_in_the_contract_file_of_their_own_layer():
     owner = {"root": None, "agent": "backend/agent/AGENTS.md",
              "aee": "backend/agent/aee/AGENTS.md"}
     for cwd, mark in probe.CWD_MARK.items():
-        for mode in ("autoload", "contract"):
-            prompt = probe.make_prompt(cwd, mode)
-            assert mark in prompt
-            # Exclusivity, not mere presence: asking for both markers is the regression.
-            foreign = probe.AEE_MARK if mark == probe.SCOPED_MARK else probe.SCOPED_MARK
-            assert foreign not in prompt, f"{cwd}/{mode} leaks another layer's marker"
         if owner[cwd] is not None:
             guard = SourceGuard.of_repo_path(owner[cwd]).anchored(mark)
             guard.assert_present(mark, why="该标记必须真在它自己那层契约里")
         else:
-            # root is the negative control: it must not carry any scoped heading.
             root_guard = SourceGuard.of_repo_path("AGENTS.md").anchored(probe.ROOT_MARKS[0])
             root_guard.assert_absent(mark, why="#3563：root 契约不得出现 scoped 层标题")
-    # The two markers live in different files — that is exactly why aee asks for one.
     aee_guard = SourceGuard.of_repo_path("backend/agent/aee/AGENTS.md").anchored(probe.AEE_MARK)
     aee_guard.assert_absent(probe.SCOPED_MARK,
-                            why="#3563：AEE 层契约不得携带 Agent 层标题，否则 aee 格又变成跨层提问")
+                            why="#3563：AEE 层契约不得携带 Agent 层标题，否则 autoload 又变成跨层提问")
 
 
 def test_modes_and_ide_baselines_are_separate():

@@ -93,3 +93,22 @@ workspace 那份，正确答案本就是「否」。Owner 裁决走改题不改�
 `FormRegression` 变红（1 failed / 58 passed），恢复后 59 passed。
 **本地 `check:quick` 未捕获此红——quick 16 gates 不含 `pr-agent-tests` 的
 ratchet 集合，须以 required CI 为准。**
+
+追加六（2026-10-02，#3585 独立复核返修）：复核指出 #3585 首版把「每格只问本层标记」
+**同时套用到两种模式**，制造了一个比原缺陷更严重的假 PASS 反例——`aee/AGENTS.md`
+自身要求 root → Agent → AEE 逐层加载，而 contract/aee 只问 AEE 标记时，「root + AEE
+可见、漏掉中间 Agent 层」的会话会答 `Q1=是 Q2=是` 并被判 PASS，探针反而看不见它要抓的
+继承断链。这与 #3563 明确分开的两种实验相悖：autoload 是初始上下文诊断，contract 才是
+祖先继承验收。
+
+返修：`q2_marks(cwd, mode)` 让 Q2 按模式取标记——autoload/aee 只问 AEE 层，contract/aee
+同时问 Agent + AEE 两层；root/agent 两格两模式不变。两种模式对同一份证据给出相反判定
+（workspace-only 观察 `Q1=否 Q2=是` 在 autoload 下 PASS、在 contract 下 FAIL）。
+
+**本轮教训（比代码本身重要）**：修「题目不可满足」时若把新规则无差别套用到所有模式，
+会把一个可诊断的 FAIL 换成一个静默的假 PASS——**信号从「响亮的错」退化成「看不见的错」**。
+题目按模式分叉不是过度设计，是两种实验语义不同的必然结果。
+
+变异自证：(1) contract 退回单标记 → `1 failed / 60 passed`；(2) 再叠加放宽期望值
+（模拟「缺 Agent 也 PASS」的判据）→ `3 failed / 58 passed`。61 passed（探针）+
+ratchet 全绿。

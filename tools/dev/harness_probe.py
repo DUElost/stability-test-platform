@@ -21,19 +21,29 @@ CWD_PATHS = {"root": "", "agent": "backend/agent", "aee": "backend/agent/aee"}
 SCOPED_MARK = "Agent 侧 scan / upload"
 ROOT_MARKS = ("## 总原则", "## 提交前")
 AEE_MARK = "AEE crash detection chain"
-# Each cwd is asked only about the marker its OWN contract file carries: SCOPED_MARK
-# lives in backend/agent/AGENTS.md, AEE_MARK in backend/agent/aee/AGENTS.md. Asking aee
-# for both makes Q2 unsatisfiable for workspace-only IDEs (they inject the workspace file
-# alone), so the cell could never distinguish drift from a broken question. root keeps
-# SCOPED_MARK as the negative control: the root contract has no scoped heading.
+# Q2 asks different things per mode, because the two experiments test different things.
+#
+# autoload = 初始上下文诊断：workspace-only 形态只注入 workspace 那一份契约，问该层
+#   自己的标题即可；同时问两层会让该格对 workspace-only IDE 不可满足（#3563）。
+# contract = 祖先继承验收：aee 契约自身要求 root → Agent → AEE 逐层加载，漏掉中间
+#   Agent 层就是断链。问 AEE 单个标题会让「root + AEE、缺 Agent」也判 PASS——
+#   探针反而看不见它要抓的缺陷（#3585 复核）。故该模式必须同时问两层。
+#
+# root 在两种模式下都用 SCOPED_MARK 作阴性对照：根契约不含任何 scoped 标题。
 CWD_MARK = {"root": SCOPED_MARK, "agent": SCOPED_MARK, "aee": AEE_MARK}
+CONTRACT_CHAIN_MARKS = ("aee", (SCOPED_MARK, AEE_MARK))
 # Operator-local stderr evidence; gitignored and never referenced from the report body.
 STDERR_DIR = str(Path(ROOT) / ".probe-evidence")
 
 
+def q2_marks(cwd: str, mode: str) -> tuple[str, ...]:
+    """Which headings Q2 asks about — the two modes must not share one answer key."""
+    chain = CONTRACT_CHAIN_MARKS[1] if mode == "contract" and cwd == CONTRACT_CHAIN_MARKS[0] else None
+    return chain or (CWD_MARK[cwd],)
+
+
 def make_prompt(cwd: str, mode: str) -> str:
-    mark = CWD_MARK[cwd]
-    scope = f"『{mark}』"
+    scope = "和".join(f"『{m}』" for m in q2_marks(cwd, mode))
     instruction = (
         "不要读取任何文件，不要使用任何工具。仅凭当前已加载的指令上下文回答。"
         if mode == "autoload" else
