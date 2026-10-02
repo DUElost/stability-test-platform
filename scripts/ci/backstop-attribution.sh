@@ -32,17 +32,24 @@ CI_RUN_ID="${CI_RUN_ID:?CI_RUN_ID is required}"
 FIRST_CONCLUSION="${FIRST_CONCLUSION:-failure}"
 DRY_RUN="${DRY_RUN:-0}"
 
-# 重跑后等待完成的预算。**按失败 job 分级**（#3573）：`wait_conclusion` 轮询的是
-# **run 级**状态，原先单一预算对所有 job 共用，而 vitest 全套（`frontend-check`）
-# 远慢于 backend/agent/docker —— 共用 1h 窗口时它必然跑不完，于是重跑结论为空、
-# 分类为「未能分类」，该类红灯**永远进不了** #1525 的前移评估（#2441 实测：
-# 「重跑未在预算内完成（120 × 30s），无法分类」，单内自述不得作为评估样本）。
-# 现按「失败集合里有没有慢 job」取更大的窗口，其余情况维持原预算不变。
+# 重跑后等待完成的预算。**只看目标红灯 job，不再等整个 run**（#3573 根因）。
+#
+# 原来的 `wait_conclusion` 轮询 run 的 `status/conclusion`，而 run 的 completed 要等
+# **所有** job 落定，于是同批次里一个不相干的慢/超时 job 就能把分类吃掉。#2441 实测
+# （run 35148237108 attempt 2）：目标 `frontend-check` **2m20s** 就出结论（failure），
+# 但同批次 `backend-test` 撞上自身 `timeout-minutes: 60` 被 cancelled，run 直到
+# 60 分钟后才 completed ⇒ 1h 预算在边界上被这个兄弟 job 吃掉，该类红灯永远拿不到分类。
+#
+# 现改为：① 轮询**目标 job 自身**的结论（全部落定即返回，见 target_jobs_conclusion）；
+# ② 预算按**目标集合里最慢的那个**分级——实测墙钟 backend-test 16~60min、
+# frontend-check ≈2min，故 SLOW_JOBS 默认列 backend-test（曾按直觉写成
+# frontend-check，见 #3573 演进记录）。
 WAIT_INTERVAL="${WAIT_INTERVAL:-30}"
 WAIT_MAX="${WAIT_MAX:-120}"
-WAIT_MAX_SLOW="${WAIT_MAX_SLOW:-360}"
+# 240×30s=2h，覆盖 backend-test 自身 60min timeout 的余量
+WAIT_MAX_SLOW="${WAIT_MAX_SLOW:-240}"
 # 逗号分隔的 job 名白名单；命中任一即走 WAIT_MAX_SLOW
-SLOW_JOBS="${SLOW_JOBS:-frontend-check}"
+SLOW_JOBS="${SLOW_JOBS:-backend-test}"
 # 机械摘要不是日志倾倒：红灯 job 与失败用例名各设上限，够定位即可
 MAX_JOBS="${MAX_JOBS:-20}"
 MAX_CASES="${MAX_CASES:-20}"
@@ -119,22 +126,43 @@ rerun_failed_jobs() {
   gh run rerun "$CI_RUN_ID" --repo "$REPO" --failed
 }
 
-wait_conclusion() { # <wait_max> → 重跑后的 run 结论；未在预算内完成则非零退出
+# 目标 job 自身的结论（**不是** run 的）→ success / failure / mixed / ""（未定）
+#
+# run 级结论在这里是错的：run 的 completed 要等**所有** job 落定，同批次一个不相干的
+# 慢/超时 job 就能把分类吃掉（#2441 实测见文件头预算段注释）。
+target_jobs_conclusion() {
   if [ "$DRY_RUN" = "1" ]; then
     printf '%s\n' "${DRY_RUN_RERUN_CONCLUSION:-}"
     return 0
   fi
-  local budget="$1" status="" conclusion="" line=""
+  local ids
+  ids="$(cut -f1 "$WORK/jobs_tsv" | jq -Rsc 'split("\n") | map(select(length > 0))')"
+  [ "$ids" != "[]" ] || return 1
+  gh api "repos/$REPO/actions/runs/$CI_RUN_ID/jobs?per_page=100" \
+    | jq -r --argjson ids "$ids" '
+        [.jobs[] | select(.id as $i | $ids | index($i))] as $t
+        | if ($t | length) == 0 then ""
+          elif ($t | all(.conclusion == "success")) then "success"
+          elif ($t | all(.conclusion != null
+                          and (.conclusion == "failure"
+                            or .conclusion == "timed_out"
+                            or .conclusion == "startup_failure"))) then "failure"
+          else "mixed" end'
+}
+
+wait_conclusion() { # <wait_max> → 目标 job 的聚合结论；未在预算内落定则非零退出
+  local budget="$1" line
+  # dry-run 不做真实等待：夹具给不出结论即视为「预算内未落定」，立刻非零退出。
+  # 否则夹具缺 conclusion 时会真的 sleep 满预算（测试进程被挂住）。
   for _ in $(seq 1 "$budget"); do
-    line="$(gh api "repos/$REPO/actions/runs/$CI_RUN_ID" | jq -r '"\(.status) \(.conclusion // "")"')" \
-      || return 1
-    status="${line%% *}"
-    conclusion="${line#* }"
-    [ "$status" = "completed" ] && break
+    line="$(target_jobs_conclusion)" || return 1
+    case "$line" in
+      success | failure | mixed) printf '%s\n' "$line"; return 0 ;;
+    esac
+    [ "$DRY_RUN" = "1" ] && return 1
     sleep "$WAIT_INTERVAL"
   done
-  [ "$status" = "completed" ] || return 1
-  printf '%s\n' "$conclusion"
+  return 1
 }
 
 # 按失败 job 集合选预算（#3573）：命中 SLOW_JOBS 任一即用 WAIT_MAX_SLOW。
@@ -225,9 +253,14 @@ main() {
     if rerun_conclusion="$(wait_conclusion "$wait_max")"; then
       case "$rerun_conclusion" in
         success) classification="flake" ;;
-        failure | timed_out | startup_failure) classification="deterministic" ;;
+        # mixed＝目标 job 有转绿有仍红；仍红的那几个已构成确定性缺陷，按 deterministic
+        # 处置，但要在备注里讲清，不能让读者误读成「全红」。
+        failure | mixed | timed_out | startup_failure) classification="deterministic" ;;
         *) classification="unknown" ;;
       esac
+      if [ "$rerun_conclusion" = "mixed" ]; then
+        note="重跑后目标 job 结论不一致（部分转绿、部分仍红）——按确定性缺陷处置。"
+      fi
     else
       rerun_conclusion=""
       classification="unknown"
