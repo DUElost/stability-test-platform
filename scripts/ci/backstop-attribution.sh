@@ -58,10 +58,18 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 # GHA 原始 job 日志每行形如 `2026-08-25T18:28:58.8735367Z <内容>`。用「Z + 空格 + 摘要词」
-# 锚定 pytest 的 short summary（`FAILED path::test`）与 vitest 的 `FAIL path`，避免命中正文里
-# 出现的同名词；只取测试标识符，不带后面的错误文案（换行会破坏 issue 正文）。
+# 锚定失败摘要行，避免命中正文里出现的同名词；只取测试标识符，不带后面的错误文案
+# （换行会破坏 issue 正文）。
+#
+# 摘要词两侧都是**一个或多个空格**（#3573 判据 3）——两个框架的实际形态不同：
+#   pytest short summary：`…Z FAILED backend/tests/x.py::TestC::test_y`  ← Z 后单空格
+#   vitest 失败清单：     `…Z  FAIL  src/x.test.ts > suite > name`     ← Z 后**双**空格
+# 原先写死「Z + 恰好一个空格 + token + 恰好一个空格」，于是 vitest 侧**恒空**——
+# 「未取到失败用例名」而日志里其实有。该缺失不是装饰性的：#2441 那一夜前端红灯就因取不到
+# 用例名，在归因块里自述「不得作为前移评估的样本」。
 # `[]...` 是 POSIX 字符类里「把 ] 放首位即字面量」的写法，故测试 id 的方括号可被吃下。
-_SUMMARY_TOKEN_RE='Z (FAIL|FAILED|ERROR) [][A-Za-z0-9_./:-]+'
+# vitest 用 ` > ` 分隔层级，不是标识符的一部分，故只取首段文件名。
+_SUMMARY_TOKEN_RE='Z +(FAIL|FAILED|ERROR) +[][A-Za-z0-9_./:-]+'
 
 # 先剥 ANSI CSI 色码再 grep：日志里 `FAILED` 可能被自身着色包住（`ESC[31mFAILED`），
 # 不剥则锚点 `Z FAIL` 匹配不上——那会静默变成「未取到失败用例名」，而日志其实在。
