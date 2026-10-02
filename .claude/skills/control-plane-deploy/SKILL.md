@@ -73,13 +73,42 @@ curl -s http://127.0.0.1:8000/health      # health 路由（非 /api/v1/health�
    venv/bin/pip install --no-cache-dir --require-hashes -r backend/requirements.lock
    ```
 
-   装完**逐项核对**版本集与 lock 一致（`requirements.txt` 全文件仅 1 处 `==`，按它装每次都会解析到当时最新）：
+   装完**逐项核对**版本集与 lock 一致（`requirements.txt` 全文件仅 1 处 `==`，按它装每次都会解析到当时最新）。
+   包名在 lock 与 `pip list` 里大小写/下划线不一致（`APScheduler` vs `apscheduler`），
+   **须归一化后再比**，否则会报出一堆假「缺装」：
 
    ```bash
-   venv/bin/pip list --format=freeze | sort > /tmp/.venv_new.txt
-   # 与 lock 解析出的版本集 diff 必须为空
-   diff <(sort /tmp/.venv_new.txt) <(sort <lock 版本集>) && echo "版本集与 lock 一致"
+   venv/bin/python - <<'PY'
+   import re, subprocess
+   norm = lambda n: re.sub(r'[-_.]+', '-', n).lower()
+   lock = dict(re.findall(r'^([A-Za-z0-9_.\-]+)==([^\s\\]+)',
+                          open('backend/requirements.lock', encoding='utf-8').read(), re.M))
+   lock = {norm(k): v for k, v in lock.items()}
+   out = subprocess.run(['venv/bin/pip', 'list', '--format=freeze'],
+                        capture_output=True, text=True).stdout
+   inst = {norm(l.split('==', 1)[0]): l.split('==', 1)[1]
+           for l in out.split() if '==' in l}
+   miss = sorted(set(lock) - set(inst))
+   bad = sorted(f'{k}: lock={lock[k]} venv={inst[k]}' for k in set(lock) & set(inst) if lock[k] != inst[k])
+   extra = sorted(set(inst) - set(lock))
+   print(f'lock={len(lock)} venv={len(inst)} 缺装={miss or "无"} 版本不一致={bad or "无"}')
+   print(f'lock 外的包={extra or "无"}  # pip 是 venv 种子包，不在 lock 中属正常')
+   raise SystemExit(1 if (miss or bad) else 0)
+   PY
    ```
+
+   **venv 丢失时的恢复**：整个 `venv/` 可**完全重建**，无需备份——重建输入只有两项，
+   都在 git 里（`backend/requirements.lock` + bundle 树），按上面两条命令重跑即可，
+   再用这段核对确认。唯一不可重建的是 `env.backend`（见下）。
+
+   `env.backend`（**站点真身，600、未跟踪、不在 git 里**）是唯一的不可再生项：
+   丢了要重签 JWT secret / 数据库口令 / admin 口令并同步 48 台 Agent。保持一份
+   同目录备份（同样 600，**不进版本库**）：
+   ```bash
+   cd /home/debian13/stp-releases && cp -p env.backend env.backend.bak
+   ```
+   键集层面的漂移（真身缺了哪些配置）由 `tools/dev/check_env_key_drift.py` 判定——
+   它**只读键名不读值**，所以丢了 env 也能靠它告诉你要重建哪些键。
 
    `requirements.lock` 有自动维护（`regenerate-locks.yml` 在每个碰 requirements 的 PR 上重生成、
    `tests/test_requirements_lock.py` 离线守卫同步），**不需要人工记得更新**；需要升级依赖时改
