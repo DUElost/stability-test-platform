@@ -1415,6 +1415,11 @@ GATE_TO_CI_ANCHOR = {
     # tests/test_env_inventory.py::test_repo_doc_inventory_is_in_sync 直接执行
     # `--check`，随 pr-agent-tests job 的该 step 一起跑。
     "env-inventory": ("ci.yml", "Run repo-level tests"),
+    # env **键集**漂移门禁：真身 vs 入库模板（只读键名，不读值）。补的是「生产 env
+    # 真身无备份、丢失后无从判断缺什么」这个可观测性缺口。判红边界为「缺键 ∧ 无代码
+    # 默认值兜底」——实跑发现的三条缺键均有兜底且行为正确，按「缺键就红」会在第一次
+    # 接触现实时误报。与 env-inventory 同形态接入（含 --self-test 自证），同锚点。
+    "env-key-drift": ("ci.yml", "Run repo-level tests"),
     "gov-surface": ("ci.yml", "治理面结构检查"),
     "ai-work": ("ci.yml", "Execution Registry 自测"),
     "pr-migrate": ("ci.yml", "Migrate empty PostgreSQL database"),
