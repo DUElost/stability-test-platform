@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Codex Stop quality feedback; no edit veto, imports of application code, or installs.
 
-Exit 0 emits Stop's JSON protocol only after the requested check passes.
-Exit 1 reports FAIL / UNVERIFIED on stderr; never exit 2 (continuation loop).
+All classified results emit Stop JSON and exit 0 for feedback delivery.
+Quality status is the explicit PASS / FAIL / UNVERIFIED message, not the hook's
+completed status or transport exit code. Never request a continuation or stop.
 Project .venv launches this file; Python syntax here is not CI-version acceptance.
 """
 from __future__ import annotations
@@ -60,8 +61,10 @@ def main() -> int:
         state, detail = "UNVERIFIED", type(exc).__name__
     message = f"[{state}] Codex Stop {args.kind}: {detail}"
     if state != "PASS":
-        print(message, file=sys.stderr)
-        return 1
+        message += (
+            f"\nQuality status: {state} (not a quality PASS). "
+            "Hook completion only confirms feedback delivery."
+        )
     print(json.dumps({"systemMessage": message}))
     return 0
 

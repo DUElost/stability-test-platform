@@ -57,7 +57,8 @@ def test_real_command_resolves_root_in_space_named_tree(repo, depth, kind):
 
 
 @pytest.mark.parametrize('kind', ['typecheck', 'compileall'])
-def test_existing_red_is_feedback_after_edit_not_patch_veto(repo, kind):
+@pytest.mark.parametrize('depth', ['', 'backend/agent/aee'])
+def test_existing_red_is_feedback_after_edit_not_patch_veto(repo, kind, depth):
     assert 'PreToolUse' not in HOOKS
     if kind == 'typecheck':
         if not shutil.which('node'):
@@ -69,11 +70,17 @@ def test_existing_red_is_feedback_after_edit_not_patch_veto(repo, kind):
         source = repo / 'backend/good.py'
         source.write_text('if broken\n')
         repaired = 'answer = 42\n'
-    proc = invoke(repo, kind)
-    assert proc.returncode == 1 and '[FAIL]' in proc.stderr
+    proc = invoke(repo, kind, depth)
+    assert proc.returncode == 0 and not proc.stderr
+    payload = json.loads(proc.stdout)
+    assert '[FAIL]' in payload['systemMessage']
+    assert '[PASS]' not in payload['systemMessage']
+    assert 'not a quality PASS' in payload['systemMessage']
+    assert 'exit=1' in payload['systemMessage']
+    assert not {'decision', 'continue', 'stopReason'} & payload.keys()
     # No pre-edit quality hook: the correction can be applied while the tree is red.
     source.write_text(repaired)
-    proc = invoke(repo, kind)
+    proc = invoke(repo, kind, depth)
     assert proc.returncode == 0 and '[PASS]' in json.loads(proc.stdout)['systemMessage']
 
 
@@ -83,7 +90,50 @@ def test_missing_target_never_silently_passes(repo, missing):
     shutil.rmtree(target) if target.is_dir() else target.unlink()
     kind = 'typecheck' if missing.startswith('frontend') else 'compileall'
     proc = invoke(repo, kind, '' if missing == 'backend' else 'backend/agent/aee')
-    assert proc.returncode == 1 and '[UNVERIFIED]' in proc.stderr
+    if missing in ('.venv/bin/python', 'tools/dev/codex_stop_check.py'):
+        # Bootstrap failures occur before the checker can deliver Stop JSON.
+        assert proc.returncode == 1 and '[UNVERIFIED]' in proc.stderr
+    else:
+        assert proc.returncode == 0 and not proc.stderr
+        assert '[UNVERIFIED]' in json.loads(proc.stdout)['systemMessage']
+
+
+@pytest.mark.parametrize('depth', ['', 'backend/agent/aee'])
+def test_missing_compiler_delivers_unverified_reason_without_continuation(repo, depth):
+    (repo / 'frontend/node_modules/typescript/bin/tsc').unlink()
+    proc = invoke(repo, 'typecheck', depth)
+    assert proc.returncode == 0 and not proc.stderr
+    payload = json.loads(proc.stdout)
+    message = payload['systemMessage']
+    assert '[UNVERIFIED]' in message and 'TypeScript' in message
+    assert '[PASS]' not in message and 'not a quality PASS' in message
+    assert not {'decision', 'continue', 'stopReason'} & payload.keys()
+
+
+def test_quality_error_details_survive_json_transport(repo):
+    if not shutil.which('node'):
+        pytest.skip('real Node unavailable')
+    (repo / 'frontend/node_modules/typescript/bin/tsc').write_text(
+        "console.error('TS2322: \\\"quoted\\\" \\\\ path 雪'); process.exit(1);\n"
+    )
+    proc = invoke(repo, 'typecheck')
+    assert proc.returncode == 0 and not proc.stderr
+    message = json.loads(proc.stdout)['systemMessage']
+    assert '[FAIL]' in message and 'TS2322: "quoted" \\ path 雪' in message
+
+
+def test_checker_timeout_is_visible_unverified_json(repo, monkeypatch, capsys):
+    monkeypatch.setattr(stop, 'ROOT', repo)
+    monkeypatch.setattr(stop.sys, 'argv', ['codex_stop_check.py', 'compileall'])
+    def timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired(args[0], 45)
+    monkeypatch.setattr(stop.subprocess, 'run', timeout)
+    assert stop.main() == 0
+    captured = capsys.readouterr()
+    assert not captured.err
+    message = json.loads(captured.out)['systemMessage']
+    assert '[UNVERIFIED]' in message and 'TimeoutExpired' in message
+    assert '[PASS]' not in message
 
 
 def test_no_git_root_never_passes(tmp_path):
