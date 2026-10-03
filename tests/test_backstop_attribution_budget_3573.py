@@ -18,6 +18,10 @@
 
 与 test_backstop_attribution.py 的分工：那个守分类语义（flake / 确定性 / 未能分类），
 本文件守「等谁」与「等多久」。
+
+范围边界（#3573 审计更正）：本文件用 `DRY_RUN=1` 且结论由 `DRY_RUN_RERUN_CONCLUSION`
+预置，**不覆盖**真实路径的 job 选择 / 跨 attempt 身份匹配 / 分页 / 落定判定；
+那段调用程序由 `test_backstop_attribution_real_path_3573.py` 以 `DRY_RUN=0` + gh 桩覆盖。
 """
 from __future__ import annotations
 
