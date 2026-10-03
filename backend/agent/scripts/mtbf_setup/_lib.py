@@ -115,16 +115,34 @@ def suite_dir(project: str) -> Path:
 
 
 def _default_resources_root() -> Path:
-    """默认 resources 根：相对 Agent 目录解析（aimonkey_paths 先例同构）。
+    """默认 resources 根 = 既有 Agent 代码根 authority（#3601 G1a / C1）。
 
-    部署布局 /opt/stability-test-agent/agent/resources/mtbf；本文件位于
-    .../agent/scripts/{script}/v{version}/_lib.py → parents[3] = .../agent。
+    ``config.AGENT_DIR/resources/mtbf``：开发态 ``<repo>/backend/agent/resources/mtbf``、
+    部署态 ``<install>/agent/resources/mtbf``。引擎已把 Agent 代码根注入脚本
+    PYTHONPATH，本函数**惰性**导入 ``config``；不从本文件位置（旧版 ``parents[3]``
+    在包布局 ``<cache>/<family>/<version>/_lib.py`` 下落向 cache 祖先）、cwd 或
+    STP_AGENT_INSTALL_DIR 的目录深度推导。override（param/env）分支不调用本函数、
+    不依赖该导入；authority 不可得时显式失败，不另猜路径。
     """
-    return Path(__file__).resolve().parents[3] / "resources" / "mtbf"
+    try:
+        from config import AGENT_DIR
+    except ImportError as exc:
+        raise RuntimeError(
+            "无法取得 Agent 代码根 authority（config.AGENT_DIR）：请经 Agent 引擎运行，"
+            "或显式提供 mtbf_resources_dir / STP_MTBF_RESOURCES_DIR"
+        ) from exc
+    return Path(AGENT_DIR) / "resources" / "mtbf"
 
 
 def resources_dir(cfg: dict) -> Path:
-    base = cfg.get("mtbf_resources_dir") or env("STP_MTBF_RESOURCES_DIR", str(_default_resources_root()))
+    """APK 资源根：非空 param > 非空 env > Agent 代码根默认（#3601 G1a / C1）。
+
+    空字符串视为未提供；显式 override 按原有 Path 语义消费（含中心存储），
+    目录不存在也不切换到另一 authority。
+    """
+    base = cfg.get("mtbf_resources_dir") or env("STP_MTBF_RESOURCES_DIR", "")
+    if not base:
+        base = _default_resources_root()
     project = cfg.get("project") or env("STP_MTBF_PROJECT", "legacy")
     return Path(base) / project
 

@@ -1,6 +1,12 @@
 # -*- coding: utf-8 -*-
 """MTBF 部署 + 启动（init 阶段，ADR-0030 D6 P0 / P0 设计 §3.3）。
 
+v1.4.2（#3601 G1a，2026-10-03）：APK 默认资源根改取既有 Agent 代码根 authority
+（``config.AGENT_DIR/resources/mtbf``，开发态 ``backend/agent/resources/mtbf``、
+部署态 ``<install>/agent/resources/mtbf``），不再用脚本包内 ``parents[3]`` 推导
+（包布局 ``<cache>/<family>/<version>/`` 下会落向 cache 祖先）。param/env 显式
+override 语义不变（含中心存储），空值进入默认，取不到 authority 显式失败。
+
 v1.4.1（#1715）：run_dir 新鲜度判据改为**步骤起点快照对比**——触发启动前
 快照既有目录名与设备端 mtime，_wait_run_dir 只接受「不在快照中」或「快照内
 但 mtime 相对快照值增大」的目录。v1.4.0 用宿主 time.time() 比对设备端

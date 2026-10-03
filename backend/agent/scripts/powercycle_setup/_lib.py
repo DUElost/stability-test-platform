@@ -254,12 +254,35 @@ def results_dir(project: str) -> Path:
 
 
 def _default_resources_root() -> Path:
-    """默认 resources 根：相对 Agent 目录解析（aimonkey/mtbf/sleep 先例同构）。"""
-    return Path(__file__).resolve().parents[3] / "resources" / "power-cycle"
+    """默认 resources 根 = 既有 Agent 代码根 authority（#3601 G1a / C1）。
+
+    ``config.AGENT_DIR/resources/power-cycle``：开发态
+    ``<repo>/backend/agent/resources/power-cycle``、部署态
+    ``<install>/agent/resources/power-cycle``。引擎已把 Agent 代码根注入脚本
+    PYTHONPATH，本函数**惰性**导入 ``config``；不从本文件位置（旧版 ``parents[3]``
+    在包布局 ``<cache>/<family>/<version>/_lib.py`` 下落向 cache 祖先）、cwd 或
+    STP_AGENT_INSTALL_DIR 的目录深度推导。override（param/env）分支不调用本函数、
+    不依赖该导入；authority 不可得时显式失败，不另猜路径。
+    """
+    try:
+        from config import AGENT_DIR
+    except ImportError as exc:
+        raise RuntimeError(
+            "无法取得 Agent 代码根 authority（config.AGENT_DIR）：请经 Agent 引擎运行，"
+            "或显式提供 powercycle_resources_dir / STP_POWER_CYCLE_RESOURCES_DIR"
+        ) from exc
+    return Path(AGENT_DIR) / "resources" / "power-cycle"
 
 
 def resources_dir(cfg: dict) -> Path:
-    base = cfg.get("powercycle_resources_dir") or env("STP_POWER_CYCLE_RESOURCES_DIR", str(_default_resources_root()))
+    """APK 资源根：非空 param > 非空 env > Agent 代码根默认（#3601 G1a / C1）。
+
+    空字符串视为未提供；显式 override 按原有 Path 语义消费（含中心存储），
+    目录不存在也不切换到另一 authority。
+    """
+    base = cfg.get("powercycle_resources_dir") or env("STP_POWER_CYCLE_RESOURCES_DIR", "")
+    if not base:
+        base = _default_resources_root()
     return Path(base) / project_name(cfg)
 
 

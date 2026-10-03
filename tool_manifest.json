@@ -888,6 +888,14 @@
           "retired": false,
           "script": "gpu_setup.py",
           "version": "1.2.3"
+        },
+        {
+          "artifact": "packages/gpu_setup/1.2.4.tar.gz",
+          "package_sha256": "6d76a8ab6f4314a52e2be06b298ea8646de2c83252c8f796696ce2a9a993e92e",
+          "python": null,
+          "retired": false,
+          "script": "gpu_setup.py",
+          "version": "1.2.4"
         }
       ]
     },
@@ -1506,6 +1514,14 @@
           "retired": false,
           "script": "mtbf_setup.py",
           "version": "1.4.1"
+        },
+        {
+          "artifact": "packages/mtbf_setup/1.4.2.tar.gz",
+          "package_sha256": "9178e442f045dc466628dfe4caefadf1827e36210e89223dbd8505292e446a0d",
+          "python": null,
+          "retired": false,
+          "script": "mtbf_setup.py",
+          "version": "1.4.2"
         }
       ]
     },
@@ -1835,6 +1851,14 @@
           "retired": false,
           "script": "powercycle_setup.py",
           "version": "1.2.8"
+        },
+        {
+          "artifact": "packages/powercycle_setup/1.2.9.tar.gz",
+          "package_sha256": "3a64f086c56594ee0a5b858ad8c1f1c033dfdb899f667663a4e3a182e24f2709",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_setup.py",
+          "version": "1.2.9"
         }
       ]
     },
@@ -2039,6 +2063,14 @@
           "retired": false,
           "script": "sleep_setup.py",
           "version": "1.0.5"
+        },
+        {
+          "artifact": "packages/sleep_setup/1.0.6.tar.gz",
+          "package_sha256": "1890a545b22af40fbb1f86c1db2487e85dc351ba447c96af01a72f00c5adb926",
+          "python": null,
+          "retired": false,
+          "script": "sleep_setup.py",
+          "version": "1.0.6"
         }
       ]
     },
