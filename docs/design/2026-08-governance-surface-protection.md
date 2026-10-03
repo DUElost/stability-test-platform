@@ -1,6 +1,6 @@
 # 技术设计：治理面防护两层方案（C-G1 落地）
 
-- **状态**：Living（2026-08-26 初版；2026-10-01 按 #3516 校准权威指针与强制力覆盖）
+- **状态**：Living（2026-08-26 初版；2026-10-02 补 #3516 Claude scoped hook 接线与覆盖边界）
 - **日期**：2026-08-26
 - **上游**：[`reviews/AI_NATIVE_SDLC_PLAYBOOK_COMPARISON_2026-08-26_synthesis.md`](../reviews/AI_NATIVE_SDLC_PLAYBOOK_COMPARISON_2026-08-26_synthesis.md) C-G1 / D1–D5 + 逐项审计裁决（同日四项用户裁决见 §8）
 - **Agent Note**：[`../notes/process/2026-08-26-governance-surface-protection.md`](../notes/process/2026-08-26-governance-surface-protection.md)
@@ -168,7 +168,7 @@ job 结论，重跑后重查在转绿时直接变空）；并**新增「归因�
 | 前端 `types.ts` 与后端 schema 同步 | 部分：**登记的 Pydantic 响应模型 ↔ TS 接口**双向对拍（`tests/test_api_response_shape_contract.py` 轴线 C；覆盖范围＝该文件 `_MODEL_PAIRS` 显式登记的配对——**数量随登记变化，不在此复制**）。`ok({...})` 手搓 dict 端点与未登记模型仍无强制力 | `frontend/package.json` 无生成器 | **部分已强制 / 其余 residual**（review 兜底） |
 | 项目 Python / pytest 内存保护 | G1 gate/shell wrapper 共用 `scripts/run_pytest.py`；缺 cgroup 限制即拒绝；稳定解释器入口由 #3566 / draft #3567 承接 | `scripts/run_pytest.py` / `scripts/run_gates.py` | enforced（保护 runner scope）；绕过 runner 的直接调用仍 residual |
 | 凭据读取与生产诊断边界 | 根禁止无关凭据访问；诊断按 `production-diagnostics.md` 与只读 skill。Claude versioned deny 只列四个路径的 Edit，不能证明所有写入被拦或每次读取获授权 | `.claude/settings.json`；诊断权威文档 | partial（Edit 条目）；读取授权仅 structural，无关/未授权读取 residual |
-| 共享工作树的破坏性 Git | Claude PreToolUse 接 shell-aware 守卫，已知间接执行缺口明示；opt-in reference-transaction 只观测 stash，不替代前置拦截 | `check_destructive_git.py`；`.claude/settings.json`；`.githooks/reference-transaction` | partial（解析覆盖已离线验证，真实 Claude 触发 UNVERIFIED）；其它 Harness 仅 structural |
+| 共享工作树的破坏性 Git | Claude PreToolUse 接 shell-aware 守卫；root/Agent/AEE 三个启动入口以 symlink 共用根设置，command 从会话所在 Git 根定位检查器；opt-in reference-transaction 只观测 stash | `check_destructive_git.py`；`.claude/settings.json`；[scoped 接线与真实实验](../notes/bug-fix/2026-10-02-claude-deep-hook-3516.md) | partial（三入口真实触发按实验版本取证）；其它 cwd 直接启动、已知间接执行缺口及未验证平台仍 residual；其它 Harness 仅 structural |
 | FIFO / 不由实施者自行启用 auto-merge | 队列 workflow/script 跳过 draft、按队首维护 auto-merge；规范禁止人工 merge/enable/nudge 他人 PR | `.github/workflows/enable-auto-merge.yml`；`scripts/ci/pr-automerge-queue.sh` | partial（队列执行器）；操作者角色限制/独立复核真实性仍 structural/residual |
 | main 只经 PR、required checks | GitHub branch protection 的 PR 要求、管理员适用与 strict status checks；不是模型记忆或本地 hook | 服务器只读策略核实见下 | enforced（当前服务器配置）；不是对任意未来策略的承诺 |
 
