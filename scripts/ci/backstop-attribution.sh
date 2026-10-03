@@ -319,8 +319,11 @@ poll_once() {
 }
 
 wait_conclusion() { # <target_attempt> <budget> → 落定结论；非零 = 未能分类
-  local target_attempt="$1" budget="$2" line
-  for _ in $(seq 1 "$budget"); do
+  local target_attempt="$1" budget="$2" line poll_index
+  # 计数器必须是**显式局部变量**：`_` 是 Bash 特殊变量，会被后续任意命令覆盖
+  # （#3573 v1.1 实测：`line="$(poll_once ...)"` 后 `$_` 变空），曾导致整数比较
+  # 报错并跳过 sleep——名义预算不生效，待定目标以 API 调用速度烧完全部轮数。
+  for poll_index in $(seq 1 "$budget"); do
     # dry-run 不触网、不真实等待：夹具给什么取什么，给不出即视为未落定。
     if [ "$DRY_RUN" = "1" ]; then
       line="${DRY_RUN_RERUN_CONCLUSION:-}"
@@ -339,7 +342,8 @@ wait_conclusion() { # <target_attempt> <budget> → 落定结论；非零 = 未�
           return 0
           ;;
       esac
-      [ "$_" -lt "$budget" ] && sleep "$WAIT_INTERVAL"
+      # 未落定且仍有下一轮才等待；落定 / 致命 unknown / 预算末轮都不额外 sleep。
+      [ "$poll_index" -lt "$budget" ] && sleep "$WAIT_INTERVAL"
     else
       return 1
     fi
