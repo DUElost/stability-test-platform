@@ -120,9 +120,22 @@ PASS/FAIL/UNVERIFIED 改经 Stop JSON `systemMessage` 投递（stderr + exit 1 �
 丢弃）。此前「Claude hook 仍 UNVERIFIED（本轮模型 API 503）」是 503 那轮的现场表述，随
 #3595 合入不再成立。
 
-据此把 `harness-adapters.md` 的 Zcode 行从「contract 三格 3 PASS、autoload 仍 UNVERIFIED」
-刷新为**六格实测**（2026-10-02，`bb1f34d9`，contract 与 autoload 各 3 PASS，两轮 Q1 读数
-相反）。S6 预算内收敛（100 行 / 9972 B），靠压缩重复表述而非删内容。
+据此刷新 `harness-adapters.md` 的 Zcode 3.14.4 六格报告（2026-10-02）：
+[六个独立会话的实际取证 revision](https://github.com/DUElost/stability-test-platform/issues/3563#issuecomment-5948001601)
+为 `af4edf99`。判卷时 main 已到 `bb1f34d9`，`root_version` 不一致使工具先将六格判为
+UNVERIFIED；经 Owner 批准核实两 revision 仅两份 deadlock 测试变化、root/Agent/AEE
+契约与 `harness_probe.py` 未变后，沿用原答复、不重跑，通过
+[人工等价性判断](https://github.com/DUElost/stability-test-platform/issues/3563#issuecomment-5948070189)
+将 `bb1f34d9` 作为最终判卷 HEAD，contract 与 autoload 各 3 PASS。agent/aee 两轮 Q1
+读数相反（是/否），支持 workspace-only；contract PASS 不等于自动注入。
 
-**遗留**：`root_version` 等价性判断那次的更正已在 #3563 留档；hook 实测的原始日志
+**独立性边界**：操作者取证前已知 `q2_marks` / `expected_for` 判据，存在已披露利益冲突；
+[#3516](https://github.com/DUElost/stability-test-platform/issues/3516) 的独立核实/重验仍 pending。
+
+S6 历史核算更正：`4e55ee24` 的 adapter Git blob 为 **100 行 / 9950 B**，原记 9972 B 有误。
+本次返修 adapter 为 **100 行 / 9999 B**，仍在 100 行 / 10000 B 预算内；仅压缩 Zcode 重复表述。
+返修验证：Git blob 字节/换行数、两 revision 差异核算、治理结构检查（`--base origin/main`）、
+`check:quick` 16 gates 与 diff whitespace 均通过；未配置数据库，schema 对齐跳过。本轮未重跑 Zcode。
+
+**遗留**：hook 实测的原始日志
 （`/tmp/stp3516-claude-fixed-8oaw56ny/`）在提交前已不存在，note 如实声明不声称可下载。
