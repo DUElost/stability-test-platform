@@ -2,18 +2,21 @@
 
 背景：本单 10-03 审查实测证伪了「dry-run 全绿 = 修复可用」——原有守卫文件全部
 DRY_RUN=1，重跑结论由 `DRY_RUN_RERUN_CONCLUSION` 预置，真实路径的 jq 选择程序零覆盖；
-三条独立缺陷（快照字符串 id 与 API 数字 id 不匹配 / 重跑后同名 job 换新 id 致旧 id
-失效 / conclusion=null 落 else mixed）并存时任何一条都让非 dry-run 路径恒空。
+三条独立缺陷中，前两项（快照字符串 id 与 API 数字 id 不匹配 / 重跑后同名 job 换新 id 致
+旧 id 失效）导致空结论，第三项（conclusion=null 落 else mixed）导致提前错误分类。
 
-做法（正文 §3）：
+做法（正文 §3，另见 §3.1）：
 - `DRY_RUN=0` 执行**生产脚本**（不复制 jq 算法、不预置结论、不在测试里短路）；
 - 临时 PATH 里放 `gh` 桩：按 scenario 返回真实 API 形态（数字 id、name、status、
   conclusion、run_attempt，快照/轮询分页），记录端点、顺序与轮询次数；
 - 桩遇未知调用立即失败（exit 97）；latest 端点与「重跑后的旧 attempt」端点显式禁止，
   绝无触网路径；
-- `WAIT_INTERVAL=0` / `WAIT_MAX` 小值，无真实等待。
+- 临时 PATH 里放 `sleep` 桩：只记录参数、不真实等待；`WAIT_INTERVAL=0`（快速回归）
+  或正值 30（轮询节奏断言，见 sleep 相关用例）；
+- `WAIT_MAX` / `WAIT_MAX_SLOW` 用小值，无长等待。
 
-`STP_BACKSTOP_SCRIPT` 可指向临时脚本副本，供 §3 三类变异自证使用；共享 checkout 不变异。
+`STP_BACKSTOP_SCRIPT` 可指向临时脚本副本，供 §3 三类变异与 §3.1 `_` 计数器变异自证使用；
+共享 checkout 不变异。
 """
 from __future__ import annotations
 
@@ -159,6 +162,15 @@ if endpoint == "%s/actions/runs/%s/jobs" % (prefix, run_id):
 crash("unrecognized endpoint: %s?%s" % (endpoint, query))
 '''
 
+# sleep 桩（#3573 §3.1）：只把参数追加到 $SLEEP_CALLS、不真实等待。
+# 生产脚本只在 wait_conclusion 的「pending 且仍有下一轮」分支调用 sleep。
+_SLEEP_STUB = """#!/usr/bin/env bash
+if [ -n "${SLEEP_CALLS:-}" ]; then
+  printf '%s\\n' "$*" >> "$SLEEP_CALLS"
+fi
+exit 0
+"""
+
 
 # ── scenario 构造 ─────────────────────────────────────────────────────────
 
@@ -259,10 +271,11 @@ def _parse_outputs(path: Path) -> dict[str, str]:
 
 class RealPathRun:
     def __init__(self, proc: subprocess.CompletedProcess, outputs: dict[str, str],
-                 calls: list[list[str]]):
+                 calls: list[list[str]], sleep_calls: list[str]):
         self.proc = proc
         self.outputs = outputs
         self.calls = calls
+        self.sleep_calls = sleep_calls
 
     @property
     def endpoints(self) -> list[str]:
@@ -300,11 +313,16 @@ def _run(tmp_path: Path, scenario: dict, *, env: dict[str, str] | None = None,
     stub = bin_dir / "gh"
     stub.write_text(f"#!{sys.executable}\n" + _STUB, encoding="utf-8")
     stub.chmod(0o755)
+    # sleep 桩：记录每次调用的参数、不真实等待（#3573 §3.1 轮询节奏断言）。
+    sleep_stub = bin_dir / "sleep"
+    sleep_stub.write_text(_SLEEP_STUB, encoding="utf-8")
+    sleep_stub.chmod(0o755)
 
     scenario_file = tmp_path / "scenario.json"
     scenario_file.write_text(json.dumps(scenario), encoding="utf-8")
     state_file = tmp_path / "stub_state.json"
     calls_file = tmp_path / "calls.jsonl"
+    sleep_calls_file = tmp_path / "sleep_calls.txt"
     out_file = tmp_path / "gh_output"
     out_file.write_text("", encoding="utf-8")
 
@@ -320,6 +338,7 @@ def _run(tmp_path: Path, scenario: dict, *, env: dict[str, str] | None = None,
         "GH_STUB_SCENARIO": str(scenario_file),
         "GH_STUB_STATE": str(state_file),
         "GH_STUB_CALLS": str(calls_file),
+        "SLEEP_CALLS": str(sleep_calls_file),
         "HOME": str(tmp_path),
     }
     env_vars.update(env or {})
@@ -330,10 +349,13 @@ def _run(tmp_path: Path, scenario: dict, *, env: dict[str, str] | None = None,
     calls = []
     if calls_file.exists():
         calls = [json.loads(line)["argv"] for line in calls_file.read_text(encoding="utf-8").splitlines() if line.strip()]
-    return RealPathRun(proc, _parse_outputs(out_file), calls)
+    sleep_calls = []
+    if sleep_calls_file.exists():
+        sleep_calls = [line for line in sleep_calls_file.read_text(encoding="utf-8").splitlines() if line]
+    return RealPathRun(proc, _parse_outputs(out_file), calls, sleep_calls)
 
 
-# ── §3.1 跨 attempt：新 id + 相同 name ────────────────────────────────────
+# ── §3 覆盖1 跨 attempt：新 id + 相同 name ────────────────────────────────────
 
 def test_new_attempt_new_ids_same_name_green_is_flake(tmp_path: Path):
     """旧/新 attempt 数字 id 不同、name 相同；新 attempt 成功 → flake。
@@ -371,7 +393,7 @@ def test_new_attempt_new_ids_same_name_red_is_deterministic(tmp_path: Path):
     assert run.field("rerun_conclusion") == "failure"
 
 
-# ── §3.2 新 attempt 暂时 404/空集 ─────────────────────────────────────────
+# ── §3 覆盖2 新 attempt 暂时 404/空集 ─────────────────────────────────────────
 
 def test_new_attempt_404_then_appears_polls_fixed_attempt_only(tmp_path: Path):
     """首次 404、随后空集，均继续等；桩禁止 latest 与重跑后的旧 attempt 轮询。"""
@@ -423,7 +445,7 @@ def test_new_attempt_not_created_yet_waits_then_settles(tmp_path: Path):
     assert len(run.jobs_calls(2)) == 1, "attempt 未出现时不该去查它的 jobs"
 
 
-# ── §3.3 未完成 / null 落定 ───────────────────────────────────────────────
+# ── §3 覆盖3 未完成 / null 落定 ───────────────────────────────────────────────
 
 def test_success_plus_null_keeps_waiting_then_settles(tmp_path: Path):
     scenario = _scenario(
@@ -485,7 +507,7 @@ def test_queued_and_in_progress_keep_waiting_then_settle(tmp_path: Path):
     assert len(run.jobs_calls(2)) == 3, "queued/in_progress 不得被当作落定"
 
 
-# ── §3.4 部分目标 / 缺目标 / 预算耗尽 ─────────────────────────────────────
+# ── §3 覆盖4 部分目标 / 缺目标 / 预算耗尽 ─────────────────────────────────────
 
 def test_partial_targets_wait_then_settle(tmp_path: Path):
     """初次只出现部分目标继续等；随后齐全才分类，子集不得判 success。"""
@@ -559,7 +581,7 @@ def test_empty_new_attempt_set_is_not_success(tmp_path: Path):
     assert run.field("classification") == "unknown"
 
 
-# ── §3.5 三个分类出口（含真实 mixed）──────────────────────────────────────
+# ── §3 覆盖5 三个分类出口（含真实 mixed）──────────────────────────────────────
 
 def test_all_red_conclusions_is_deterministic(tmp_path: Path):
     """failure + timed_out 都属红结论集合 → deterministic。"""
@@ -594,7 +616,7 @@ def test_real_mixed_success_and_failure_is_deterministic_with_note(tmp_path: Pat
     assert "部分转绿、部分仍红" in md
 
 
-# ── §3.6 无关兄弟 job 与预算分级 ─────────────────────────────────────────
+# ── §3 覆盖6 无关兄弟 job 与预算分级 ─────────────────────────────────────────
 
 def test_unrelated_pending_sibling_does_not_block_targets(tmp_path: Path):
     """兄弟 job 永久 queued 不阻塞目标落定。"""
@@ -635,7 +657,7 @@ def test_budget_grading_unchanged_in_real_path(tmp_path: Path):
     assert budget([fast, slow], fast_new) == "7200"
 
 
-# ── §3.7 证据不足一律 unknown（原因准确、无无限循环）──────────────────────
+# ── §3 覆盖7 证据不足一律 unknown（原因准确、无无限循环）──────────────────────
 
 def test_empty_snapshot_targets_unknown_without_rerun(tmp_path: Path):
     scenario = _scenario(
@@ -748,7 +770,7 @@ def test_completed_uncategorizable_conclusion_unknown(tmp_path: Path):
         assert "预算内未完成" not in md
 
 
-# ── §3.8 分页：第二页才有目标 / 部分目标 ─────────────────────────────────
+# ── §3 覆盖8 分页：第二页才有目标 / 部分目标 ─────────────────────────────────
 
 def test_pagination_collects_second_page_before_classifying(tmp_path: Path):
     """快照两页凑齐两个目标；轮询首轮第二页缺目标 → 等，收齐后才分类。"""
@@ -781,7 +803,7 @@ def test_pagination_collects_second_page_before_classifying(tmp_path: Path):
     assert "backend-test" in md_snapshot and "frontend-check" in md_snapshot
 
 
-# ── §3.9 顺序 / 单次重跑 / 回归 ───────────────────────────────────────────
+# ── §3 覆盖9 顺序 / 单次重跑 / 回归 ───────────────────────────────────────────
 
 def test_evidence_before_rerun_and_exactly_one_rerun(tmp_path: Path):
     scenario = _scenario(
@@ -864,3 +886,65 @@ def test_vitest_case_name_extracted_in_real_path(tmp_path: Path):
     run = _run(tmp_path, scenario)
     assert run.proc.returncode == 0, run.proc.stderr
     assert "tmpRedTimingProbe.test.ts" in run.outputs["attribution_md"]
+
+
+# ── §3.1 轮询节奏：sleep 次数 / 参数 / stderr（v1.1 返修新增验收）────────────
+# 缺陷形态：wait_conclusion 曾用 Bash 特殊变量 `_` 当循环计数器，被
+# `line="$(poll_once ...)"` 覆盖为空 → 整数比较报错并**跳过全部 sleep**，
+# 待定目标以 API 调用速度烧完名义预算。以下用正 WAIT_INTERVAL + sleep 桩钉住节奏。
+
+def test_pending_three_rounds_sleeps_exactly_twice_with_interval(tmp_path: Path):
+    """连续 3 轮 pending → 预算耗尽：恰 2 次 sleep(30)，不提前退出、无整数比较错误。"""
+    in_progress = _snapshot(_page([_new_backend("failure", status="in_progress")]))
+    scenario = _scenario(
+        attempt1=[_snapshot(_backend_failure_page())],
+        attempt2=[in_progress],  # 复读最后一帧：三轮都 pending
+        run_attempt_sequence=[1, 1, 2, 2, 2],
+    )
+    run = _run(tmp_path, scenario, wait_interval="30", env={"WAIT_MAX_SLOW": "3"})
+    assert run.proc.returncode == 0, run.proc.stderr
+    assert run.field("classification") == "unknown"
+    assert "未在预算内完成" in run.outputs["attribution_md"]
+    assert len(run.jobs_calls(2)) == 3, "预算 3 轮必须跑满，不得提前退出"
+    assert "integer expression expected" not in run.proc.stderr, run.proc.stderr
+    assert run.sleep_calls == ["30", "30"], f"应恰两次 sleep(30)：{run.sleep_calls!r}"
+
+
+def test_pending_then_success_sleeps_once_then_flake(tmp_path: Path):
+    """首轮 pending → 次轮 success：恰 1 次 sleep(30)，随后 flake（落定后不补 sleep）。"""
+    scenario = _scenario(
+        attempt1=[_snapshot(_backend_failure_page())],
+        attempt2=[
+            _snapshot(_page([_new_backend("failure", status="in_progress")])),
+            _snapshot(_page([_new_backend("success")])),
+        ],
+        run_attempt_sequence=[1, 1, 2, 2],
+    )
+    run = _run(tmp_path, scenario, wait_interval="30", env={"WAIT_MAX_SLOW": "5"})
+    assert run.proc.returncode == 0, run.proc.stderr
+    assert run.field("classification") == "flake"
+    assert len(run.jobs_calls(2)) == 2
+    assert "integer expression expected" not in run.proc.stderr, run.proc.stderr
+    assert run.sleep_calls == ["30"], f"应恰一次 sleep(30)：{run.sleep_calls!r}"
+
+
+def test_immediate_settle_and_fatal_unknown_do_not_sleep(tmp_path: Path):
+    """即时 success 与致命 unknown（非 404 API 错误）均 0 次 sleep。"""
+    immediate = _scenario(
+        attempt1=[_snapshot(_backend_failure_page())],
+        attempt2=[_snapshot(_page([_new_backend("success")]))],
+        run_attempt_sequence=[1, 1, 2],
+    )
+    run = _run(tmp_path / "ok", immediate, wait_interval="30")
+    assert run.field("classification") == "flake"
+    assert run.sleep_calls == [], f"落定即返回，不应 sleep：{run.sleep_calls!r}"
+
+    fatal = _scenario(
+        attempt1=[_snapshot(_backend_failure_page())],
+        attempt2=[{"http_error": {"status": 500, "message": "Internal Server Error"}}],
+        run_attempt_sequence=[1, 1, 2],
+    )
+    run2 = _run(tmp_path / "fatal", fatal, wait_interval="30")
+    assert run2.field("classification") == "unknown"
+    assert run2.sleep_calls == [], f"致命 unknown 不应 sleep：{run2.sleep_calls!r}"
+    assert "integer expression expected" not in run2.proc.stderr, run2.proc.stderr
