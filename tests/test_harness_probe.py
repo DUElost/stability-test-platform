@@ -219,6 +219,22 @@ def test_retired_ide_forms_are_gone_from_the_matrix():
     assert {r["id"] for r in template["records"]} == {"zcode"}
 
 
+def test_retired_opencode_cli_is_gone_and_rejected(monkeypatch):
+    """Owner 2026-10-03: OpenCode CLI leaves the acceptance matrix.
+
+    Its host default model changed per call onto unusable models, so the form could never reach PASS
+    and is outside the v1.3 acceptance of Codex/Cursor CLI UNVERIFIED. A request for it must be
+    rejected as an unknown form *before* any external session starts.
+    """
+    assert "opencode" not in {f["id"] for f in probe.FORMS}
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("a retired form must not start any external session")
+
+    monkeypatch.setattr(probe.subprocess, "run", forbidden)
+    assert probe.run_matrix("opencode", 1, None) == 1
+
+
 def _evidence_file(rows):
     import tempfile
     path = Path(tempfile.mkdtemp()) / "evidence.json"

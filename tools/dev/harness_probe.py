@@ -82,14 +82,15 @@ FORMS = [
     {"id": "cursor", "desc": "Cursor Agent CLI",
      "command": "cursor-agent -p {prompt}",
      "version_command": ["cursor-agent", "--version"], "protocol": "plain"},
-    {"id": "opencode", "desc": "OpenCode CLI",
-     "command": "opencode run {prompt}",
-     "version_command": ["opencode", "--version"], "protocol": "plain"},
     {"id": "codebuddy", "desc": "CodeBuddy CLI",
      "command": "codebuddy -p {prompt}",
      "version_command": ["codebuddy", "--version"], "protocol": "plain"},
     # Cursor IDE / CodeBuddy IDE retired 2026-10-01 (Owner): out of the acceptance matrix.
     # Historical measurements stay in ADR-0034 Appendix A; they are not re-probed.
+    # OpenCode CLI retired 2026-10-03 (Owner): out of the acceptance matrix. Its host default model
+    # changed per call and landed on unavailable models (no valid answer in 12/12 attempts), so it
+    # could never reach PASS and is not covered by the v1.3 acceptance of Codex/Cursor CLI UNVERIFIED.
+    # The AGENTS.md adapter row stays; evidence is kept in the #3563 report, not re-probed.
     {"id": "zcode", "desc": "Zcode IDE", "manual": True, "command": None},
 ]
 
