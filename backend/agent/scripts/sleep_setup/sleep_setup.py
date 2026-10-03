@@ -1,6 +1,12 @@
 # -*- coding: utf-8 -*-
 """Sleep 部署 + 启动（init 阶段，issue #462 P0a；G15 对齐 §3.1）。
 
+v1.0.6（#3601 G1a，2026-10-03）：APK 默认资源根改取既有 Agent 代码根 authority
+（``config.AGENT_DIR/resources/sleep``，开发态 ``backend/agent/resources/sleep``、
+部署态 ``<install>/agent/resources/sleep``），不再用脚本包内 ``parents[3]`` 推导
+（包布局 ``<cache>/<family>/<version>/`` 下会落向 cache 祖先）。param/env 显式
+override 语义不变（含中心存储），空值进入默认，取不到 authority 显式失败。
+
 v1.0.3（#2756，2026-09-19）：install_apk 保留 push/pm 失败输出 + 重试前
 wait-for-device 与短退避（STP_ATT_INSTALL_RETRY_BACKOFF_SECONDS，默认 10s）
 ——链交接瞬时 adb 风暴吸收（run 428：15 台安装失败同族取证）。

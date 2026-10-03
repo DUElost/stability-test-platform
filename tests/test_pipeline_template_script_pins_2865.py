@@ -71,7 +71,32 @@ PINNED_SCRIPTS: dict[str, str] = {
 #: 09-27 #3463 批次 G4（#3173）把 monkey_setup 磁盘 head 推到 v2.3.12 并随本批
 #: `--register` 登记（manifest 有条目 = Phase 3 判据下版本真实存在），两个模板
 #: pin 同批直升 2.3.12——例外按其自书删除条件（pin 追平即删）移除，清单回到空。
-EXCEPTIONS: dict[str, tuple[str, str]] = {}
+#:
+#: 10-03 #3601 批次 B4/G1a：mtbf_setup@1.4.2、gpu_setup@1.2.4、powercycle_setup@1.2.9、
+#: sleep_setup@1.0.6 以 `--register` 登记（改树发版本），但新 head 尚未经阶段A
+#: scan 注册/激活；三个模板按 script-versioning「磁盘最新版无 active 行不可 pin」
+#: 保留旧 active pin，故登记三条**临时**待激活例外（tuple 的 version = 保留的旧 pin）。
+#: MTBF 无 pipeline template，不登记例外。三项的最终残留必须为 0。
+EXCEPTIONS: dict[str, tuple[str, str]] = {
+    "script:gpu_setup": (
+        "1.2.3",
+        "#3601 G1a：新 head 1.2.4 已在 manifest 登记但尚未 scan 注册/激活，"
+        "保留旧 active pin 1.2.3；阶段A目标 active、包身份与 --pending-activation "
+        "清账证据齐全后，由 G1b/#3603 在追 pin 到 1.2.4 的同一 PR 中删除本条",
+    ),
+    "script:powercycle_setup": (
+        "1.2.8",
+        "#3601 G1a：新 head 1.2.9 已在 manifest 登记但尚未 scan 注册/激活，"
+        "保留旧 active pin 1.2.8；阶段A目标 active、包身份与 --pending-activation "
+        "清账证据齐全后，由 G1b/#3603 在追 pin 到 1.2.9 的同一 PR 中删除本条",
+    ),
+    "script:sleep_setup": (
+        "1.0.5",
+        "#3601 G1a：新 head 1.0.6 已在 manifest 登记但尚未 scan 注册/激活，"
+        "保留旧 active pin 1.0.5；阶段A目标 active、包身份与 --pending-activation "
+        "清账证据齐全后，由 G1b/#3603 在追 pin 到 1.0.6 的同一 PR 中删除本条",
+    ),
+}
 
 
 def _exception_lag_reason(version: str, reason: str, head: str) -> str | None:
@@ -197,6 +222,72 @@ def test_exception_shape_predicate_has_teeth() -> None:
     future = ".".join(str(int(part) + 9) for part in head.split("."))
     assert _exception_lag_reason(future, "#2998：示例理由", head), "超过 head 的例外被放行了"
     assert _exception_lag_reason("0.0.1", "#2998：示例理由", head) is None, "真滞后被误杀"
+
+
+def _template_pin_mismatches(exceptions: dict[str, tuple[str, str]]) -> list[str]:
+    """按守卫同一 expected 逻辑对拍全部模板 pin（供缺例外/错例外的负向变异）。
+
+    只复用真实的 `_latest_on_disk` / `_iter_script_steps` 与 EXCEPTIONS 语义，
+    不重写第二套 resolver。
+    """
+    expected = {
+        action: exceptions[action][0] if action in exceptions
+        else _latest_on_disk(name)
+        for action, name in PINNED_SCRIPTS.items()
+    }
+    mismatches: list[str] = []
+    for path in sorted(TEMPLATES_DIR.glob("*.json")):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        for action, version in _iter_script_steps(data):
+            want = expected[action]
+            if version != want:
+                mismatches.append(f"{path.name}: {action} pin={version!r} latest={want!r}")
+    return mismatches
+
+
+def test_b4_g1a_pending_activation_exceptions_have_teeth() -> None:
+    """#3601 G1a 三条待激活例外：#4.4 的正向绿与四类负向红。
+
+    正向：EXCEPTIONS 恰为批准三项、版本为保留旧 active pin、理由引用 #3601/写明
+    pending head 与 G1b/#3603 删除条件；当前模板 pin 与守卫 expected 全一致。
+    负向：删任一条例外即对拍红（无例外提前 pin 新 head 不可接受）；例外版本等于
+    新 head、虚构版本、空理由/无引用、超 head 残留均被拒。
+    """
+    expected_actions = {"script:gpu_setup", "script:powercycle_setup", "script:sleep_setup"}
+    assert set(EXCEPTIONS) == expected_actions, (
+        f"#3601 G1a 例外恰为三项，实际 {sorted(EXCEPTIONS)}"
+    )
+    for action, (version, reason) in EXCEPTIONS.items():
+        head = _latest_on_disk(PINNED_SCRIPTS[action])
+        assert version != head, f"{action} 例外不能等于新 head {head}"
+        assert "#3601" in reason, f"{action} 例外理由必须引用 #3601"
+        assert head in reason, f"{action} 例外理由必须写明 pending head {head}"
+        assert "G1b" in reason and "#3603" in reason, (
+            f"{action} 例外理由必须写明 G1b/#3603 删除条件"
+        )
+    # 三个模板 JSON 与基线一致：当前 pin == 旧 active pin == 例外版本（全绿）。
+    assert _template_pin_mismatches(EXCEPTIONS) == [], (
+        "当前例外下模板 pin 仍与守卫 expected 不一致：\n  "
+        + "\n  ".join(_template_pin_mismatches(EXCEPTIONS))
+    )
+    # 负向 1：删任一条例外 → 模板仍钉旧 pin，对拍必须红（新 head 未 active 不可提前 pin）。
+    for action in sorted(expected_actions):
+        without = {k: v for k, v in EXCEPTIONS.items() if k != action}
+        assert _template_pin_mismatches(without), (
+            f"删掉 {action} 例外后守卫未变红——例外缺失形态漏判"
+        )
+    # 负向 2：例外版本等于新 head（= 滞后已消除）与超过 head 均红。
+    for action, (_version, reason) in EXCEPTIONS.items():
+        head = _latest_on_disk(PINNED_SCRIPTS[action])
+        assert _exception_lag_reason(head, reason, head), f"{action} 等于 head 的残留例外被放行"
+        future = ".".join(str(int(part) + 1) for part in head.split("."))
+        assert _exception_lag_reason(future, reason, head), f"{action} 超过 head 的例外被放行"
+    # 负向 3：虚构版本（磁盘/manifest 不存在）与无引用/空理由均红。
+    assert not _version_dir_exists("gpu_setup", "99.99.99"), "虚构版本被放行"
+    for action, (version, _reason) in EXCEPTIONS.items():
+        head = _latest_on_disk(PINNED_SCRIPTS[action])
+        assert _exception_lag_reason(version, "本条没有引用记号", head), "无引用例外被放行"
+        assert _exception_lag_reason(version, "   ", head), "空理由例外被放行"
 
 
 def _version_dir_exists(script_name: str, version: str) -> bool:

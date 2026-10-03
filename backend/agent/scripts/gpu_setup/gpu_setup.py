@@ -1,6 +1,12 @@
 # -*- coding: utf-8 -*-
 """GPU 部署 + 启动（init 阶段，issue #462 P0c；G15 对齐 §3.3）。
 
+v1.2.4（#3601 G1a，2026-10-03）：APK 默认资源根改取既有 Agent 代码根 authority
+（``config.AGENT_DIR/resources/gpu``，开发态 ``backend/agent/resources/gpu``、
+部署态 ``<install>/agent/resources/gpu``），不再用脚本包内 ``parents[3]`` 推导
+（包布局 ``<cache>/<family>/<version>/`` 下会落向 cache 祖先）。param/env 显式
+override 语义不变（含中心存储），空值进入默认，取不到 authority 显式失败。
+
 v1.2.3（#3069，2026-09-22）：修 v1.2.2 的**崩溃式回归**——adb / 设备输出原先经
 ``subprocess.run(text=True)`` 严格 UTF-8 解码，设备侧一个非 UTF-8 字节（实测
 ``0xf9``）就抛 ``UnicodeDecodeError``（非 ``OSError``，调用点无从兜住），

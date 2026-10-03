@@ -1,6 +1,13 @@
 # -*- coding: utf-8 -*-
 """PowerCycle 部署 + 启动（init 阶段，issue #462 P0b；G15 对齐 §3.2）。
 
+v1.2.9（#3601 G1a，2026-10-03）：APK 默认资源根改取既有 Agent 代码根 authority
+（``config.AGENT_DIR/resources/power-cycle``，开发态
+``backend/agent/resources/power-cycle``、部署态 ``<install>/agent/resources/power-cycle``），
+不再用脚本包内 ``parents[3]`` 推导（包布局 ``<cache>/<family>/<version>/`` 下会落向
+cache 祖先）。param/env 显式 override 语义不变（含中心存储），空值进入默认，取不到
+authority 显式失败。
+
 v1.2.8（#3463 §9 G1-pc-2，2026-09-27）：prefs 读路径 kind 区分收口（F1「六族内
 所有 prefs 读路径」，#3471 复核 B2/B3 退回项）。
 - `set_prefs(reset_count=false)`：续跑计数读取按 `_root_read_prefs` kind 区分——
