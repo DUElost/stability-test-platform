@@ -21,7 +21,7 @@ Harness 适配层不得复制易变化的项目事实。根入口也不得重新
 | Harness | 受版本控制的入口 | 当前职责 |
 |---|---|---|
 | Cursor | [`.cursor/rules/*.mdc`](../../../.cursor/rules/)；skills 兼容读 [`.agents/skills/`](../../../.agents/skills)（symlink）与 [`.claude/skills/`](../../../.claude/skills/) | 常驻入口和按路径引导；格式见 [`cursor-rules.md`](../cursor-rules.md)；项目 SOP skills 经 `.agents/skills` → `.claude/skills` 发现 |
-| Claude Code | 根及目录内 `CLAUDE.md`、`.claude/settings.json`、`.claude/skills/` | 架构入口、领域上下文、权限和显式技能；**skills 真身**在 `.claude/skills/*/SKILL.md`（仅本 harness 自动加载该目录） |
+| Claude Code | 根及目录内 `CLAUDE.md`、根 `.claude/settings.json`（Agent/AEE 同名文件为 symlink）、`.claude/skills/` | 架构入口、领域上下文、权限、PreToolUse 和显式技能；**skills 真身**在 `.claude/skills/*/SKILL.md`（仅本 harness 自动加载该目录） |
 | Codex | `AGENTS.md`、`.codex/hooks.json`（见下方质量反馈）、[`.agents/skills/`](../../../.agents/skills)（symlink → `.claude/skills/`） | 共享约定入口、确定性检查钩子；官方扫 `.agents/skills`，本仓以 symlink 指向 Claude 真身（非第二份拷贝） |
 | OpenCode | `AGENTS.md`；本地 `opencode.json` 不入库 | 共享约定入口；provider、模型和凭据属于本机配置 |
 | Antigravity CLI | 无（实测不自动发现仓库规则文件） | **不承接 Requirement/Execution**（2026-09-07 定性：带规则的高级顾问——问答/分析/评审）；规则经 `tools/dev/agy_with_rules.sh` 前置 |
@@ -86,7 +86,7 @@ Role 是元数据，运行时供给 deferred；Adapter 无自动 whoami / 心跳
 - `whoami`/`status` 严格只读（观察不改变被观察状态）；只有带 identity 的写命令（declare/update/finish）刷新自身 `last_seen`；
 - 两层 scoped `AGENTS.md` 无条件要求先获得 root（AEE 还叠加 Agent）；指针不是实际加载证据。
   [CLI/IDE × cwd 三态探针与人工入口](harness-probes.md)区分 autoload / contract；缺证据为 UNVERIFIED。
-- Claude 的根与 scoped `CLAUDE.md` 是同目录 `AGENTS.md` 的 symlink 薄壳；S8 校验解析后真身。
+- Claude 的 `CLAUDE.md` 指向同目录 `AGENTS.md`（S8）。设置按启动目录加载：root/Agent/AEE 用 symlink 共用根设置，hook 从 Git 根定位。其它 cwd 与 `/cd` 不承诺继承；新会话激活、权限边界和实证见[接线说明](../../notes/bug-fix/2026-10-02-claude-deep-hook-3516.md)。
 
 ## Codex 质量反馈（G2）
 
