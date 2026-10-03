@@ -25,16 +25,16 @@ Harness 适配层不得复制易变化的项目事实。根入口也不得重新
 | Codex | `AGENTS.md`、`.codex/hooks.json`（见下方质量反馈）、[`.agents/skills/`](../../../.agents/skills)（symlink → `.claude/skills/`） | 共享约定入口、确定性检查钩子；官方扫 `.agents/skills`，本仓以 symlink 指向 Claude 真身（非第二份拷贝） |
 | OpenCode | `AGENTS.md`；本地 `opencode.json` 不入库 | 共享约定入口；provider、模型和凭据属于本机配置 |
 | Antigravity CLI | 无（实测不自动发现仓库规则文件） | **不承接 Requirement/Execution**（2026-09-07 定性：带规则的高级顾问——问答/分析/评审）；规则经 `tools/dev/agy_with_rules.sh` 前置 |
-| Zcode（GUI） | `AGENTS.md`（仓库根注入=本会话实证）。**分版本证据**：3.11.2 autoload 人工探针（2026-09-07）子目录**只装载 workspace 的 AGENTS.md、根不注入**；3.14.4（2026-10-01）contract 人工探针 root/agent/aee 三格双是——**contract 口径只证明遵循启动契约后可只读获取祖先，不证明自动注入** | 共享约定入口；Registry CLI 与 P2 动作表全程可用（三单 dogfood 即 Zcode 会话）；**唯一在册的人工验收形态**（[`harness-probes.md`](harness-probes.md)） |
+| Zcode（GUI） | `AGENTS.md`（仓库根注入=本会话实证）。**分版本证据**：3.11.2 autoload 人工探针（2026-09-07）子目录**只装载 workspace 的 AGENTS.md、根不注入**；3.14.4 六格实测见下 | 共享约定入口；Registry CLI 与 P2 动作表全程可用（三单 dogfood 即 Zcode 会话）；**唯一在册的人工验收形态**（[`harness-probes.md`](harness-probes.md)） |
 | CodeBuddy **CLI**（2.149.0） | `AGENTS.md`（根+嵌套均自动装载——2026-09-07 探针 + 2026-09-11 复测：子目录 cwd 根+scoped 双边可见、单份加载） | 共享约定入口；`codebuddy -p` 非交互可用、零配置；Registry CLI 与 P2 动作表全程可用 |
 | dsh web（0.1.5-rc.1，DeepSeek Harness 浏览器 UI） | `AGENTS.md`（根级基线注入 ✅；scoped 触碰后动态注入 ✅——0.1.1-rc.2/0.1.5-rc.1 双版本探针一致，形态详见 ADR-0034 附录 A v1.11） | 共享约定入口；工作区经原生目录选择器注册（GUI 无脚本通道）；**Registry CLI 全周期 dogfood 通过（#1256/PR #1291，已转正）** |
 | 其他 Harness | `AGENTS.md` | 没有专用适配时，从共享约定和文档地图进入 |
 
-**Cursor IDE 与 CodeBuddy IDE 已于 2026-10-01 退役**（Owner 裁决）：不再参与 #3516
-G2 的验收矩阵，人工通道收敛为 Zcode 三格。Cursor 的 `.cursor/rules/` 适配面与
-CodeBuddy **CLI** 行不受影响；两者的历史实测保留在 ADR-0034 附录 A，不删除、不再复测。
-**Zcode 行的版本证据不可跨版本搬运**：换版本后不得沿用上一版本的 autoload 结论——
-3.14.4 的 autoload 结论**目前不存在**（contract 三格已判 3 PASS，autoload 三格仍 UNVERIFIED）。
+**Cursor IDE / CodeBuddy IDE 已于 2026-10-01 退役**（Owner 裁决）：不再参与 #3516 G2 的
+验收矩阵，人工通道收敛为 Zcode 三格；Cursor 的 `.cursor/rules/` 适配面与 CodeBuddy **CLI**
+行不受影响，历史实测保留在 ADR-0034 附录 A 不再复测。**Zcode 行的版本证据不可跨版本搬运**——
+3.14.4 已有**六格**实测（2026-10-02，`bb1f34d9`）：contract 与 autoload 各 3 PASS，两轮在
+agent/aee 的 Q1 上读数相反（是/否）→ workspace-only，contract PASS ≠ 自动注入（[证据](https://github.com/DUElost/stability-test-platform/issues/3563#issuecomment-5948001601)）。
 
 Harness 的自动发现规则会随版本变化（各 harness 的**记忆目录**约定——不在仓库内——单点权威在 [`tools/dev/memory_lint.py`](../../../tools/dev/memory_lint.py) 的 `memory_dir_candidates()`；多个 harness 同时用时须以 `--harness` 指定，不静默取第一个——变更时必须同步，#2065）。新增专用适配前必须用对应版本实测加载行为；
 不能仅凭文件名推断规则已经生效。

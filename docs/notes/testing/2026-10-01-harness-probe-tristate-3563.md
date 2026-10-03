@@ -112,3 +112,17 @@ ratchet 集合，须以 required CI 为准。**
 变异自证：(1) contract 退回单标记 → `1 failed / 60 passed`；(2) 再叠加放宽期望值
 （模拟「缺 Agent 也 PASS」的判据）→ `3 failed / 58 passed`。61 passed（探针）+
 ratchet 全绿。
+
+追加七（2026-10-03，hook 激活确认后的文档收口）：Owner 确认 Claude hook 与 Codex Stop
+均已真实验证并合入——Claude PreToolUse 由 #3595（`7da0c543`）接线 root/Agent/AEE 三入口，
+真实 `claude -p` 2.1.284 自然触发 18/18 PASS；Codex Stop 由 #3591（`8d1e4a96`）把
+PASS/FAIL/UNVERIFIED 改经 Stop JSON `systemMessage` 投递（stderr + exit 1 会被真实 runtime
+丢弃）。此前「Claude hook 仍 UNVERIFIED（本轮模型 API 503）」是 503 那轮的现场表述，随
+#3595 合入不再成立。
+
+据此把 `harness-adapters.md` 的 Zcode 行从「contract 三格 3 PASS、autoload 仍 UNVERIFIED」
+刷新为**六格实测**（2026-10-02，`bb1f34d9`，contract 与 autoload 各 3 PASS，两轮 Q1 读数
+相反）。S6 预算内收敛（100 行 / 9972 B），靠压缩重复表述而非删内容。
+
+**遗留**：`root_version` 等价性判断那次的更正已在 #3563 留档；hook 实测的原始日志
+（`/tmp/stp3516-claude-fixed-8oaw56ny/`）在提交前已不存在，note 如实声明不声称可下载。
