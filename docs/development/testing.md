@@ -131,7 +131,11 @@ npx tsc --noEmit
 npx vitest run src/pages/execution/PlanRunDetailPage.test.tsx
 ```
 
-- `@/` → `src/`  
+- `@/` → `src/`
+- jest-dom：setup 使用 `import '@testing-library/jest-dom/vitest'`；Vitest 5 的 matcher
+  类型走 `src/test/vitest-jest-dom.d.ts` 对 `Matchers<R, T>` 的增强，不要改回
+  `import '@testing-library/jest-dom'`（不再读取 `jest.Matchers`）。详见
+  [`docs/notes/testing/2026-10-04-vitest5-jest-dom-matchers.md`](../notes/testing/2026-10-04-vitest5-jest-dom-matchers.md)。  
 - PlanRun capabilities（如 `final_archive`）由后端权威控制；测试须显式 mock，勿依赖「缺省为 true」。  
 - Watcher 信号防抖 2s：断言 refetch 用 `waitFor({ timeout: 4000 })`。
 
