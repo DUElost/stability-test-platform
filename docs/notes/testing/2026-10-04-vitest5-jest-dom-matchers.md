@@ -46,7 +46,10 @@ received），自定义 matcher 必须增强 `declare module 'vitest' { interfac
   （与 CI `pr-typecheck` run 37151295485 同源）。
 - 修复后：`cd frontend && npm run type-check` → 退出码 0
   （`tsc --noEmit` + `tsc --noEmit -p tsconfig.node.json`）。
-- `cd frontend && npx eslint src/test/setup.ts --max-warnings 0` → 通过。
+- 空 `interface Matchers` 合并会触发 `@typescript-eslint/no-empty-object-type`，
+  未使用的第二型参会触发 `no-unused-vars`。保留 merge 形状，把型参改成 `_T`，
+  并在该 interface 上加 scoped `eslint-disable-next-line`（不关仓库规则）。
+- `cd frontend && npm run lint -- --max-warnings 0` → 退出码 0。
 - `cd frontend && npm run knip` → 通过。
 - `cd frontend && npx vitest run src/components/ErrorBoundary.test.tsx src/components/device/DeviceBulkActionBar.test.tsx`
   → 2 files / 11 tests passed（确认 `/vitest` 运行时入口仍挂 matcher）。
