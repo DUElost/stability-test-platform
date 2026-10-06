@@ -56,15 +56,16 @@ Q3 已删除，不再声称检测重复加载。
 ### UNVERIFIED 原因码
 
 探针拒绝一个答复时，报告里的 `error` 在固定前缀 `no valid final answer or protocol/tool error`
-之后附一个方括号原因码；JSON 协议形态（Claude / Codex）非零退出时，原因码附在 `exit=N` 之后
-（纯文本形态仍恰为 `exit=N`）。原因码**只解释为什么不可判，不改变任何判定**，也不含原始输出
-（探针本身不保存 stdout）。判定与原因出自同一段读取代码，不会漂移。其它 UNVERIFIED 来源（`timeout`、
-`stderr diagnostics; inspect locally`、`version unavailable`、`not-runnable: …`、人工证据类）的
-`error` 文本不变，也不带原因码。
+之后附一个方括号原因码。JSON 协议形态（Claude / Codex）进程非零退出时先写 `exit=N`；**仅当 stdout
+还能读出流级拒绝原因**才在其后附原因码——stdout 是协议有效的最终答复、没有流级原因时仍只写 `exit=N`，
+纯文本形态恒为 `exit=N`。非零退出本身就足以解释 UNVERIFIED，`exit=N` 后没有方括号码不是诊断缺失。
+原因码**只解释为什么不可判，不改变任何判定**，也不含原始输出（探针本身不保存 stdout）。判定与原因出自
+同一段读取代码，不会漂移。其它 UNVERIFIED 来源（`timeout`、`stderr diagnostics; inspect locally`、
+`version unavailable`、`not-runnable: …`、人工证据类）的 `error` 文本不变，也不带原因码。
 
 | 原因码 | 含义 |
 |---|---|
-| `transport-retry(api_retry xN)` | 流里有 N 次 CLI 对上游 API 的**瞬时重试**事件。单独出现且流仍以 success 的 `result` 结尾：CLI 已自行恢复、答案本身没问题，但按现行严格口径仍是 UNVERIFIED；与 `result-error` 同现：重试已耗尽 |
+| `transport-retry(api_retry xN)` | 流里出现了 N 个 `system/api_retry` 事件，**仅此而已**：不证明答案有效，不证明故障是瞬时的，也不证明重试已恢复或已耗尽。该事件自带非空 `error` 字段，探针据此把有它的流判为出错，因此其它缺陷（缺最终 `result`、`result` 非 success、答案格式不对、多个 `result`）不再单独列出，401 这类持续性错误也记同一个码；与 `result-error` 同现只说明最终 `result` 同时带错误。要下结论须手动重放同一命令查看事件流（探针不保存 stdout） |
 | `result-error` | 最终 `result` 事件自身带错误 |
 | `tool-or-protocol-error` | 流里其它节点带错误：工具结果出错、命令非零退出、`error` / `turn.failed` 事件等 |
 | `unparseable-stream` | 输出为空、含非 JSON 行、非对象事件或嵌套过深 |
@@ -80,12 +81,13 @@ Q3 已删除，不再声称检测重复加载。
 
 上游不稳、限流、模型渠道临时不可用等宿主 / 服务的瞬时故障会让格子 UNVERIFIED。允许重试，但：
 
-1. 只重试因**宿主 / 服务瞬时原因**而 UNVERIFIED 的格；已得出 PASS 或 FAIL 的格**一律不重试**，
-   否则就是在挑结果；
+1. 只重试因**宿主 / 服务瞬时原因**而 UNVERIFIED 的格——这由操作者依据证据判断，不能只凭原因码；
+   已得出 PASS 或 FAIL 的格**一律不重试**，否则就是在挑结果；
 2. 命令行、提示词与判卷不变；不得靠改参数、加信任绕过或指定模型来换结果；
 3. **每次尝试都留档**（revision、版本、状态、原因码、耗时）；报告同时写首轮结果和最终结果，不把
    重试后的结果写成首轮；设次数上限，上限内仍不可判就如实报告 UNVERIFIED；
-4. 原因码是辅助线索：`transport-retry` 说明是上游瞬时问题，但**不构成豁免**，判定仍以探针为准。
+4. 原因码是辅助线索：`transport-retry` 只说明流里有重试事件，**不说明**是上游瞬时问题（401 这类持续性
+   错误也记同一个码），更**不构成豁免**；判定仍以探针为准。
 
 ### 宿主环境提示
 

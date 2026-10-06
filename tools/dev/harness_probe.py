@@ -119,16 +119,22 @@ def _has_error(value) -> bool:
 
 
 def _is_api_retry(event: dict) -> bool:
-    """Claude Code's own transient transport retry: the CLI recovers by itself or gives up in `result`."""
+    """Claude Code's `system/api_retry` event: the CLI retried an upstream request.
+
+    It says nothing about whether the failure was transient or whether the run recovered.
+    """
     return event.get("type") == "system" and event.get("subtype") == "api_retry"
 
 
 def _error_reason(events: list[dict]) -> str:
     """Why `_has_error` flagged a stream, as fixed-vocabulary codes; never raw content.
 
-    This only *explains* an UNVERIFIED cell. It tells "upstream flaked" (`transport-retry`) apart from
-    "the tool/protocol failed" so an operator need not replay the stream — it is not a waiver, and the
-    verdict is untouched. A retry together with `result-error` means the retries were exhausted.
+    This only *explains* an UNVERIFIED cell; it is not a waiver and the verdict is untouched.
+    `transport-retry` means only that `api_retry` events were present. They carry a non-empty `error`
+    field, so such a stream is always flagged: its other defects (no final result, wrong subtype, bad
+    answer format) are not listed separately, and a persistent error such as 401 gets the same code. It
+    proves neither that the failure was transient nor that the retries were exhausted; that takes
+    replaying the command and reading the stream.
     """
     retries = sum(1 for e in events if _is_api_retry(e))
     flagged = [e for e in events if not _is_api_retry(e) and _has_error(e)]
@@ -230,7 +236,8 @@ def run_form(form: dict, timeout_s: int = 180, cwd: str = "agent", mode: str = "
         if proc.returncode != 0:
             result["error"] = f"exit={proc.returncode}"
             if form["protocol"] != "plain":
-                # Explains the UNVERIFIED cell only (stdout is not kept); e.g. retries exhausted.
+                # Explains the UNVERIFIED cell only (stdout is not kept). A valid final answer has no
+                # reason: the non-zero exit itself is the cause, so the error stays a bare `exit=N`.
                 reason = _read_final_response(proc.stdout, form["protocol"])[1]
                 if reason:
                     result["error"] += f" [{reason}]"
