@@ -66,6 +66,19 @@ def _run_checker(*args: str) -> subprocess.CompletedProcess:
     )
 
 
+def _base_ref() -> str:
+    """可选基线：优先 origin/main；CI 的 pr-agent-tests job 是浅克隆（fetch-depth 默认 1）
+    时回退 HEAD——gate/CI 侧在 lint job（fetch-depth: 0）取 PR base，本测试只要求
+    「同一入口 + 同一参数形状」在两种 checkout 下都可执行。"""
+    proc = subprocess.run(
+        ["git", "-C", str(ROOT), "rev-parse", "--verify", "--quiet", "origin/main"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return "origin/main" if proc.returncode == 0 else "HEAD"
+
+
 def _copy_repo_subset(dest: Path) -> Path:
     shutil.copytree(
         ROOT / "backend" / "agent" / "scripts",
@@ -126,8 +139,8 @@ class TestCheckerBehavior:
         assert "legacy 豁免 10" in proc.stdout, proc.stdout
         assert "未解析 0" in proc.stdout, proc.stdout
 
-    def test_base_origin_main_green(self):
-        proc = _run_checker("--base", "origin/main")
+    def test_base_existing_ref_green(self):
+        proc = _run_checker("--base", _base_ref())
         assert proc.returncode == 0, f"--base 红：{proc.stderr}"
 
     def test_base_unresolvable_is_unverifiable_not_empty_diff(self):
@@ -229,7 +242,7 @@ class TestGateWiring:
         assert "github.base_ref" in block, "CI 侧应与 tool_manifest 同模式取 PR base"
 
     def test_gate_entry_commands_pass_on_real_repo(self):
-        """与 gate 同一命令（self-test + --base origin/main）在真实仓库可执行且为绿。"""
-        for args in (("--self-test",), ("--base", "origin/main")):
+        """与 gate 同一命令形状（self-test + --base）在真实 checkout 可执行且为绿。"""
+        for args in (("--self-test",), ("--base", _base_ref())):
             proc = _run_checker(*args)
             assert proc.returncode == 0, f"gate 同款命令 {args} 红：{proc.stderr}"
