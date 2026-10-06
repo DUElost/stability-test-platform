@@ -1,5 +1,8 @@
 # Agent 安装必须提供 Scan-Result-GT 的实际解释器依赖
 
+Status: implemented
+Class: bug-fix
+
 ## Decision
 
 将 `xlwt==1.3.0` 加入 Agent runtime requirements，并让安装自检在验证 Pipeline schema 后，使用同一解释器导入 xlwt、初始化 Workbook。缺失或无法初始化时返回非零状态及明确的 `INSTALL_SELFCHECK_FAIL`，避免一台能够执行任务却不能导出归档报表的主机被判为安装成功。
