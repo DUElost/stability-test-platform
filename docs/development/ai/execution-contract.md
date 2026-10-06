@@ -107,7 +107,7 @@ risk = integration ∈ {PR_OPEN, READY}                                ← 开�
 
 ### 3.5 决策实体唯一性与可见性双通道（v1.8 增，#906；v1.14 改双通道）
 
-**事故来源**（#906，2026-09-08）：同一 Requirement 的两个独立 Execution 把结论落成同一编号 ADR-0035 的两份文件，两份均自称权威；实录与裁决见[附录 A.6](execution-contract-annex.md#a6-adr-0035-双权威事故实录906)。
+**事故来源**（#906，2026-09-08）：实录与裁决见[附录 A.6](execution-contract-annex.md#a6-adr-0035-双权威事故实录906)。
 
 **分层原则**：**Execution ≠ Artifact ≠ Decision**——**一个架构主题在同一时刻只能有一个权威 Decision Artifact**；ADR 是 Decision 的持久化记录、不是 Proposal 的落点。多份独立提案或审计（v1.14 起由协调域外的规划 / 复核工作面组织，§3.6）须经人类裁决后汇聚成一份 ADR。
 
@@ -115,7 +115,7 @@ risk = integration ∈ {PR_OPEN, READY}                                ← 开�
 
 **强制纪律**：
 
-1. **协调域内的决策类 Execution 必须显式 `declare --issue <n>`**（决策类 = 产物为 ADR / 裁决文档 / 设计方向文档）。issue 集是 §3.4 查重的唯一数据源，缺 `--issue` 会让同一 Requirement 的两个 Execution 完全互不感知——本次事故中第二个 Execution 未声明 issue，§3.4 因此静默通过、只剩 hint 级 overlap。声明后同一 issue 的第二次 declare 会被 §3.4 **默认拒绝**，人工确认竞争边界才可 `--force` 放行（放行即留痕）。**v1.10 机械化（#1232）**：scope 声明具体 ADR 文件（`docs/adr/ADR-*`，目录 `docs/adr` 不算）即判为决策类，未带 `--issue` 时 declare **默认拒绝**，人工确认后 `--force` 放行并输出 `[WARN]` 留痕。
+1. **协调域内的决策类 Execution 必须显式 `declare --issue <n>`**（决策类 = 产物为 ADR / 裁决文档 / 设计方向文档）。issue 集是 §3.4 查重的唯一数据源，缺 `--issue` 会让同一 Requirement 的两个 Execution 完全互不感知（附录 A.6 的事故即此形态）。声明后同一 issue 的第二次 declare 会被 §3.4 **默认拒绝**，人工确认竞争边界才可 `--force` 放行（放行即留痕）。**v1.10 机械化（#1232）**：scope 声明具体 ADR 文件（`docs/adr/ADR-*`，目录 `docs/adr` 不算）即判为决策类，未带 `--issue` 时 declare **默认拒绝**，人工确认后 `--force` 放行并输出 `[WARN]` 留痕。
 2. **落笔前必须扫竞争提案**：未合入的 ADR 提案只在 PR 里可见（`main` 上不存在），故动手写 ADR 前必须检查开放 PR 是否已有**同编号或同主题**的 ADR 文件，并确认目标编号未被占用。协调域内这是 `status` 前检之外的补充；协调域外这是唯一的查重通道。
 3. **同一主题的第二份权威 ADR 不得合入**：发现同主题已存在 Accepted/Proposed ADR 时，第二份不得以新编号自行落地为权威，应作为 Proposal 交人类裁决、裁决后合并进既有 ADR（ADR-0035 即此形态）。
 
@@ -155,7 +155,7 @@ effective_scope = normalized(declared) ∪ derived(diff)
 2. worktree 已删除（finish 后常见）→ **branch diff**：`git diff $(git merge-base origin/main <branch>) <branch>`（finish 后本不应有未提交改动，此档不损失信号）；
 3. 两者皆不可得（worktree 与分支均不存在）→ 回落到 `declared` 单独生效。
 
-实测反例（为何 drift 提示必须存在）：2026-09-04 `docs/drift-sync-*` 声明 `docs`、实际 diff 触及 `backend/` 与 `.github/`——并集 + drift 提示使两个方向都可见。
+实测反例（为何 drift 提示必须存在）见[附录 A.7](execution-contract-annex.md#a7-drift-提示的实测反例正文-52)。
 
 ### 5.3 scope 语法（MVP，P1 Contract 即约束）
 
@@ -183,7 +183,7 @@ effective_scope = normalized(declared) ∪ derived(diff)
 
 ## 8. 并发与审计吞吐（v1.7 反转，随 ADR-0034 v1.9）
 
-**会话数不设上限**——原「≈2-3 显式上限」自 2026-09-04 约定未实测继承、被多 Harness 批次 5+ 会话常态超出（含单 Harness 多开），于本版移除（理由与守对象重锚见 ADR §2.6 v1.9）。真实约束在**集成收尾侧**（人的审阅吞吐 + 外部平台可靠性），可观测代理为在窗 Execution（§3.2 risk 集合）规模与 reconcile 负载；「任务排队」仍是主策略（FIFO auto-merge 串行集成、同文件显式串行排程）。Registry 提升的是审计面信息完备性，不是审阅吞吐。
+**会话数不设上限**（原「≈2-3 显式上限」的移除经过见[附录 A.4](execution-contract-annex.md#a4-变更历史v11v115自正文头部迁出) v1.7 与 ADR §2.6 v1.9）。真实约束在**集成收尾侧**（人的审阅吞吐 + 外部平台可靠性），可观测代理为在窗 Execution（§3.2 risk 集合）规模与 reconcile 负载；「任务排队」仍是主策略（FIFO auto-merge 串行集成、同文件显式串行排程）。Registry 提升的是审计面信息完备性，不是审阅吞吐。
 
 ## 9. P1 启动判据与过渡条款（v1.12 起见附录 A.3）
 
