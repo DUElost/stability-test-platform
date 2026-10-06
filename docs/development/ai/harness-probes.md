@@ -79,6 +79,15 @@ stderr 一律判 UNVERIFIED，但判定必须可复核，因此原文落盘到**
 报表保留完整 HEAD、版本、模式、cwd、判定、耗时与 stderr 文件路径，不保存原始 CLI
 stdout/stderr 正文或私有配置。
 
+### 已退役形态（退出验收矩阵）
+
+- `opencode` CLI（Owner 2026-10-03 裁决）：探针不再登记该形态，`--only opencode` 与任何未知形态
+  一样被拒绝（返回 1，不启动会话）。原因：宿主默认模型每次调用不同，并落在不可用模型上
+  （无可用渠道 / 需订阅），12 次探针调用无一取得有效答复——它**没有走向 PASS 的路径**，
+  也不在 v1.3 对 Codex / Cursor CLI 的接受范围内，故按退役处理，而不是再加一条 UNVERIFIED
+  豁免。`harness-adapters.md` 的 `AGENTS.md` 适配行与 `opencode.json` 本地态约定不变；历史证据
+  保留（[#3563 报告](https://github.com/DUElost/stability-test-platform/issues/3563#issuecomment-5966758919)），不再复测。
+
 ## IDE 人工入口
 
 人工形态只剩 **Zcode**（Owner 2026-10-01 裁决：`cursor-ide` / `codebuddy-ide`
@@ -106,7 +115,7 @@ stdout/stderr 正文或私有配置。
 .venv/bin/python tools/dev/harness_probe.py --only zcode --manual-input /tmp/ide-evidence.json --json /tmp/ide-contract.json
 ```
 
-`--only` 必带：省略它会把 6 个 CLI 形态一并选中并真的起外部 LLM 会话。
+`--only` 必带：省略它会把 5 个 CLI 形态一并选中并真的起外部 LLM 会话。
 
 另测 autoload 时用 `--mode autoload` 生成新模板与新会话；不能把两个实验的数据混用。
 未补响应时每行 `actual=null`、UNVERIFIED。无需为取证清理已有会话、修改个人权限或复制凭据。
