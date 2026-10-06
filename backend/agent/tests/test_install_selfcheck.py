@@ -9,8 +9,9 @@
 
 from __future__ import annotations
 
-from backend.agent.install_selfcheck import SAMPLE_PIPELINE_DEF, main
+import backend.agent.install_selfcheck as selfcheck
 from backend.agent.contracts.pipeline_validator import validate_pipeline_def
+from backend.agent.install_selfcheck import SAMPLE_PIPELINE_DEF, main
 
 
 def test_sample_pipeline_is_valid_against_repo_schema():
@@ -38,3 +39,29 @@ def test_main_fails_when_schema_unavailable(monkeypatch, capsys):
     err = capsys.readouterr().err
     assert "INSTALL_SELFCHECK_FAIL" in err
     assert "pipeline_schema.json" in err
+
+
+def test_main_rejects_agent_interpreter_missing_xlwt(monkeypatch, capsys):
+    def missing_dependency(name):
+        assert name == "xlwt"
+        raise ModuleNotFoundError("No module named 'xlwt'", name="xlwt")
+
+    monkeypatch.setattr(selfcheck, "import_module", missing_dependency)
+
+    assert main() == 1
+    output = capsys.readouterr()
+    assert "INSTALL_SELFCHECK_FAIL: scan export dependency xlwt" in output.err
+    assert "ModuleNotFoundError" in output.err
+    assert "INSTALL_SELFCHECK_OK" not in output.out
+
+
+def test_main_rejects_unusable_xlwt_workbook(monkeypatch, capsys):
+    class BrokenExporter:
+        @staticmethod
+        def Workbook():
+            raise RuntimeError("exporter initialization failed")
+
+    monkeypatch.setattr(selfcheck, "import_module", lambda _name: BrokenExporter)
+
+    assert main() == 1
+    assert "RuntimeError" in capsys.readouterr().err
