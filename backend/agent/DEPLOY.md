@@ -41,12 +41,17 @@
 │   │   └── aee_state_migration.py      # AEE state 键命名空间/合并语义/迁移（agent 启动守卫与运维脚本共用）
 │   ├── watcher/                        # ADR-0018 设备日志监控
 │   │   └── ...
-│   └── scripts/                        # 可执行脚本（扁平布局）
-│       └── <name>/v<version>/<entry>.py
+│   ├── scripts/                        # 平台脚本族源码树（构建期；执行单元是 manifest 登记的不可变包）
+│   │   └── <name>/<entry>.py           # 包按 tools_cache/<name>/<version>/ 拉取执行（ADR-0051 Phase 3，无 v<version>/ 目录）
+│   └── resources/                      # host-local 测试资源 authority（带外供应，不随发布/热更新分发）
+│       ├── aimonkey/                   # AIMONKEY 二进制与配置
+│       ├── mtbf/                       # MTBF APK（{project}/ 下三个精确 APK）
+│       ├── gpu/                        # GPU APK（{project}/{variant}/）
+│       ├── power-cycle/                # PowerCycle AutoTestTool.apk（{project}/）
+│       └── sleep/                      # Sleep AutoTestTool.apk（{project}/）
 ├── schemas/                            # 运行时工件：Pipeline JSON Schema
 │   └── pipeline_schema.json            # contracts/pipeline_validator 按 agent 包父目录解析
-├── resources/                          # 测试资源文件
-│   └── aimonkey/                       # AIMONKEY 二进制与配置
+├── resources/                          # 遗留目录（install_agent.sh 旧落点，config.py RESOURCE_DIR）；专项资源以 agent/resources/ 为准
 ├── logs/                               # 所有日志统一目录
 │   ├── agent.log                       # systemd stdout
 │   ├── agent_error.log                 # systemd stderr
