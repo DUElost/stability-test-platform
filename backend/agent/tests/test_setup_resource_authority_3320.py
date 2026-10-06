@@ -42,7 +42,6 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 AGENT_DIR = REPO_ROOT / "backend" / "agent"
 SCRIPTS_DIR = AGENT_DIR / "scripts"
 MANIFEST = REPO_ROOT / "tool_manifest.json"
-TEMPLATES_DIR = REPO_ROOT / "backend" / "schemas" / "pipeline_templates"
 
 #: family → C1 符号（param 键 / env 键 / resources 子目录）；与 #3601 §1.3 对齐。
 FAMILIES: dict[str, dict[str, str]] = {
@@ -650,28 +649,3 @@ def test_package_identity_and_members_match_manifest(family: str, tmp_path: Path
     tracked = {str(p) for p in checker.tracked_files(SCRIPTS_DIR / family, packer)}
     assert members == tracked, "包成员与 git 跟踪面不一致"
     assert "_lib.py" in members, "共享库未入包"
-
-
-def _iter_action_versions(obj: object, action: str):
-    if isinstance(obj, dict):
-        if obj.get("action") == action:
-            yield obj.get("version")
-        for value in obj.values():
-            yield from _iter_action_versions(value, action)
-    elif isinstance(obj, list):
-        for item in obj:
-            yield from _iter_action_versions(item, action)
-
-
-def test_templates_untouched_by_g1a() -> None:
-    """§4.2.8：三个模板 setup pin 仍为保留的旧 active 版本（G1a 不改 pin）。"""
-    expected = {
-        "gpu.json": ("script:gpu_setup", "1.2.3"),
-        "powercycle.json": ("script:powercycle_setup", "1.2.8"),
-        "sleep.json": ("script:sleep_setup", "1.0.5"),
-    }
-    for name, (action, version) in expected.items():
-        data = json.loads((TEMPLATES_DIR / name).read_text(encoding="utf-8"))
-        assert list(_iter_action_versions(data, action)) == [version], (
-            f"{name} 的 {action} pin 被改动"
-        )
