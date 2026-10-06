@@ -11,6 +11,8 @@ Class: bug-fix
 
 本变更保持 ADR-0051 已发布包和 manifest 不可变，不修改任何既有工具版本。系统 Python 的安装状态不能替代 Agent venv 验证。
 
+部分接续[GT-SPRD CLI 对齐记录](2026-08-31-unisoc-scan-runner-toolkit-cli.md)：原有 CLI 与系统 Python legacy 路径的验证仍保留，本次修正包面借用 Agent 解释器后的依赖边界。
+
 ## Alternatives
 
 - 继续只安装系统 `python3-xlwt`：Agent venv 默认隔离，样本已证明系统有库仍失败。
