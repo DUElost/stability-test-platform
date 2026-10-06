@@ -149,11 +149,16 @@ GATES = {
     # append-only（退役仅 retired 单向翻转；artifact 布局=C4；契约字段禁混装=C5）。
     # ADR-0051 Phase 2a：平台脚本版本目录 ⇄ 包登记的等价检查并入本门禁（重建 sha ==
     # 登记 sha；未登记 / 幽灵条目红），不另立 gate（D8 治理面做减法）。
+    # B4/G2（#3321 / #3601 v1.1 C1）：资源 authority 离线守卫并入本门禁——四专项
+    # APK 默认根、工具包根、包内伴随文件与 import/schema/部署源的有限 AST 溯源；
+    # --base 只做增量防新增与 legacy 例外防扩张，全量 census 恒定执行。
     "tool-manifest": (
         f"{PY} tools/dev/check_tool_manifest.py --self-test && "
         f"{PY} tools/dev/check_tool_manifest.py --base {BASE_REF} && "
         f"{PY} tools/dev/check_script_packages.py --self-test && "
-        f"{PY} tools/dev/check_script_packages.py",
+        f"{PY} tools/dev/check_script_packages.py && "
+        f"{PY} tools/dev/check_resource_anchors.py --self-test && "
+        f"{PY} tools/dev/check_resource_anchors.py --base {BASE_REF}",
         ROOT,
         None,
     ),
