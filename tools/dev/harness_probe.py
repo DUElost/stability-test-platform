@@ -118,30 +118,69 @@ def _has_error(value) -> bool:
             or any(_has_error(v) for v in value.values()))
 
 
-def final_response(stdout: str, protocol: str) -> str | None:
-    """Recognize supported final-response protocols; tool errors invalidate answers."""
+def _is_api_retry(event: dict) -> bool:
+    """Claude Code's own transient transport retry: the CLI recovers by itself or gives up in `result`."""
+    return event.get("type") == "system" and event.get("subtype") == "api_retry"
+
+
+def _error_reason(events: list[dict]) -> str:
+    """Why `_has_error` flagged a stream, as fixed-vocabulary codes; never raw content.
+
+    This only *explains* an UNVERIFIED cell. It tells "upstream flaked" (`transport-retry`) apart from
+    "the tool/protocol failed" so an operator need not replay the stream — it is not a waiver, and the
+    verdict is untouched. A retry together with `result-error` means the retries were exhausted.
+    """
+    retries = sum(1 for e in events if _is_api_retry(e))
+    flagged = [e for e in events if not _is_api_retry(e) and _has_error(e)]
+    codes = []
+    if retries:
+        codes.append(f"transport-retry(api_retry x{retries})")
+    if any(e.get("type") == "result" for e in flagged):
+        codes.append("result-error")
+    if any(e.get("type") != "result" for e in flagged):
+        codes.append("tool-or-protocol-error")
+    return "+".join(codes) or "tool-or-protocol-error"
+
+
+def _read_final_response(stdout: str, protocol: str) -> tuple[str | None, str]:
+    """`(answer, reason)`: the answer a protocol reader accepts, else why there is none.
+
+    `reason` is "" exactly when an answer is returned. The verdict has a single source: `final_response`
+    wraps this, so the diagnosis cannot drift from the grading. Reasons are a fixed vocabulary
+    (docs/development/ai/harness-probes.md) and never carry raw CLI output.
+    """
     if protocol == "plain":
-        return stdout if grade(stdout)["graded"] else None
+        return (stdout, "") if grade(stdout)["graded"] else (None, "answer-format")
     try:
         events = [json.loads(line) for line in stdout.splitlines() if line.strip()]
-        if not events or not all(isinstance(e, dict) for e in events) or _has_error(events):
-            return None
+        if not events or not all(isinstance(e, dict) for e in events):
+            return None, "unparseable-stream"
+        # `_has_error` stops at the first flagged event, `_error_reason` walks them all: keep both in the
+        # same guard, or an event too deep to walk after a flagged one would crash instead of reject.
+        if _has_error(events):
+            return None, _error_reason(events)
     except (ValueError, TypeError, RecursionError):
-        return None
+        return None, "unparseable-stream"
     if protocol == "claude":
         finals = [e for e in events if e.get("type") == "result"]
-        if (len(finals) != 1 or events[-1] is not finals[0]
-                or finals[0].get("subtype") != "success" or finals[0].get("is_error") is not False):
-            return None
+        if len(finals) != 1 or events[-1] is not finals[0]:
+            return None, "no-single-final-result"
+        if finals[0].get("subtype") != "success" or finals[0].get("is_error") is not False:
+            return None, "result-not-success"
         result = finals[0].get("result")
-        return result if isinstance(result, str) else None
+        return (result, "") if isinstance(result, str) else (None, "result-not-text")
     if protocol == "codex":
         if events[-1].get("type") != "turn.completed":
-            return None
+            return None, "turn-not-completed"
         answers = [e["item"].get("text") for e in events if e.get("type") == "item.completed"
                    and isinstance(e.get("item"), dict) and e["item"].get("type") == "agent_message"]
-        return answers[-1] if answers and isinstance(answers[-1], str) else None
-    return None
+        return (answers[-1], "") if answers and isinstance(answers[-1], str) else (None, "no-agent-message")
+    return None, "unsupported-protocol"
+
+
+def final_response(stdout: str, protocol: str) -> str | None:
+    """Recognize supported final-response protocols; tool errors invalidate answers."""
+    return _read_final_response(stdout, protocol)[0]
 
 
 def get_version(form: dict) -> str | None:
@@ -190,13 +229,18 @@ def run_form(form: dict, timeout_s: int = 180, cwd: str = "agent", mode: str = "
             result["stderr_file"] = keep_stderr(stderr_dir, form["id"], cwd, mode, proc.stderr)
         if proc.returncode != 0:
             result["error"] = f"exit={proc.returncode}"
+            if form["protocol"] != "plain":
+                # Explains the UNVERIFIED cell only (stdout is not kept); e.g. retries exhausted.
+                reason = _read_final_response(proc.stdout, form["protocol"])[1]
+                if reason:
+                    result["error"] += f" [{reason}]"
         elif proc.stderr.strip():
             result["error"] = "stderr diagnostics; inspect locally"
         else:
-            answer = final_response(proc.stdout, form["protocol"])
+            answer, reason = _read_final_response(proc.stdout, form["protocol"])
             result.update(grade(answer))
             if not result["graded"]:
-                result["error"] = "no valid final answer or protocol/tool error"
+                result["error"] = f"no valid final answer or protocol/tool error [{reason or 'answer-format'}]"
     except subprocess.TimeoutExpired:
         result["error"] = "timeout"
     except (OSError, UnicodeError) as exc:

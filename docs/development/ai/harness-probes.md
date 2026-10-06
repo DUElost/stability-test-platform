@@ -53,6 +53,46 @@ Q3 已删除，不再声称检测重复加载。
 - 退出码：完整所选矩阵 PASS 为 0；有 FAIL 为 2；否则有 UNVERIFIED 为 1。
   FAIL 与 UNVERIFIED 混合时返回 2，逐行状态仍保留；没有“不可验证但 exit 0”的默认路径。
 
+### UNVERIFIED 原因码
+
+探针拒绝一个答复时，报告里的 `error` 在固定前缀 `no valid final answer or protocol/tool error`
+之后附一个方括号原因码；JSON 协议形态（Claude / Codex）非零退出时，原因码附在 `exit=N` 之后
+（纯文本形态仍恰为 `exit=N`）。原因码**只解释为什么不可判，不改变任何判定**，也不含原始输出
+（探针本身不保存 stdout）。判定与原因出自同一段读取代码，不会漂移。其它 UNVERIFIED 来源（`timeout`、
+`stderr diagnostics; inspect locally`、`version unavailable`、`not-runnable: …`、人工证据类）的
+`error` 文本不变，也不带原因码。
+
+| 原因码 | 含义 |
+|---|---|
+| `transport-retry(api_retry xN)` | 流里有 N 次 CLI 对上游 API 的**瞬时重试**事件。单独出现且流仍以 success 的 `result` 结尾：CLI 已自行恢复、答案本身没问题，但按现行严格口径仍是 UNVERIFIED；与 `result-error` 同现：重试已耗尽 |
+| `result-error` | 最终 `result` 事件自身带错误 |
+| `tool-or-protocol-error` | 流里其它节点带错误：工具结果出错、命令非零退出、`error` / `turn.failed` 事件等 |
+| `unparseable-stream` | 输出为空、含非 JSON 行、非对象事件或嵌套过深 |
+| `no-single-final-result` | Claude：不是恰好一个 `result`，或它不是最后一个事件 |
+| `result-not-success` / `result-not-text` | Claude：`result` 不是 success / 不是文本 |
+| `turn-not-completed` / `no-agent-message` | Codex：回合未完成 / 没有 agent 消息 |
+| `answer-format` | 取到了答复，但不是完整的两行 `Q1=…` / `Q2=…` |
+| `unsupported-protocol` | 形态登记了未知输出协议 |
+
+多个原因用 `+` 连接，顺序固定：`transport-retry`、`result-error`、`tool-or-protocol-error`。
+
+### 重试纪律
+
+上游不稳、限流、模型渠道临时不可用等宿主 / 服务的瞬时故障会让格子 UNVERIFIED。允许重试，但：
+
+1. 只重试因**宿主 / 服务瞬时原因**而 UNVERIFIED 的格；已得出 PASS 或 FAIL 的格**一律不重试**，
+   否则就是在挑结果；
+2. 命令行、提示词与判卷不变；不得靠改参数、加信任绕过或指定模型来换结果；
+3. **每次尝试都留档**（revision、版本、状态、原因码、耗时）；报告同时写首轮结果和最终结果，不把
+   重试后的结果写成首轮；设次数上限，上限内仍不可判就如实报告 UNVERIFIED；
+4. 原因码是辅助线索：`transport-retry` 说明是上游瞬时问题，但**不构成豁免**，判定仍以探针为准。
+
+### 宿主环境提示
+
+从 Claude Code 会话里运行探针，子进程会继承该会话的 `CLAUDE_CODE_EFFORT_LEVEL`。曾实测：`max` 下一次
+极简的 `claude -p` 在 90 秒内都没有返回，`low` 下 6 秒返回。可在**探针进程环境**里设为 `low`（推理强度
+不影响上下文装载）并把它记进证据；探针命令行本身不因此改变。
+
 ### stderr 证据
 
 stderr 一律判 UNVERIFIED，但判定必须可复核，因此原文落盘到**操作者本地**的
