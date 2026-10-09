@@ -41,9 +41,11 @@
    1 条 ACTIVE 租约）。记下租约 `id`。
 5. 如果第 4 步返回 0 行，停止本流程：该设备的占用不来自租约。改按
    [`production-diagnostics.md`](./production-diagnostics.md)「状态机一致性核对」第 ⑤ 项排查。
-6. 如果第 4 步的 `job_status` 为 `COMPLETED`、`FAILED` 或 `ABORTED`，这条租约属于
-   `device_lease_reconciler` 的回收范围（「状态机一致性核对」第 ① 项）。确认回收器不可用后，才继续
-   下一步（缺口 G1）。
+6. 确认 PlanRun 的正常释放路径（`device_lease_reconciler` 回收）不可用。本步对所有 `lease_type`
+   生效，不论第 4 步的 `job_status` 取什么值（`backend/agent/DEPLOY.md`：紧急手动释放仅当
+   Reconciler 不可用时使用）。查法见缺口 G1；G1 补齐前，执行者必须在本步停下并报告缺口 G1。
+   参考：`job_status` 为 `COMPLETED`、`FAILED` 或 `ABORTED` 的租约属于回收器回收范围
+   （「状态机一致性核对」第 ① 项）。
 7. 如果该设备有在途 PlanRun，停止本流程，改走 PlanRun 的正常释放路径（在途判据：缺口 G2）。
 
 ## 释放
@@ -82,7 +84,7 @@
 
 | 编号 | 位置 | 缺什么 |
 |---|---|---|
-| G1 | 第 6 步 | 判断 `device_lease_reconciler` 不可用的查法，以及需要等多久 |
+| G1 | 第 6 步 | 判断 `device_lease_reconciler` 不可用的查法，以及需要等多久；适用于所有租约类型 |
 | G2 | 第 7 步 | 「在途 PlanRun」的判据：第 4 步的 `job_status`、`plan_run_status` 取哪些值算在途；`lease_type` 为 `SCRIPT` 或 `MAINTENANCE`（`job_id` 为空）时怎么判断 |
 | G3 | 第 8 步 | 执行 UPDATE 的数据库身份：`stp_ro` 会拒绝写入；`production-diagnostics.md` 不允许手工查询使用 `stp` 或 `postgres`，并要求写操作走代码、迁移和 PR 流程 |
 | G4 | 第 10 步 | 释放后设备仍显示占用时的查法（改写前原文为「检查 Agent heartbeat 是否仍在续租，以及设备在线状态」，没有给出命令或页面） |
