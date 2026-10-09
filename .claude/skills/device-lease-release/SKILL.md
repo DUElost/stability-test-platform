@@ -1,17 +1,20 @@
 ---
 name: device-lease-release
-description: 设备租约紧急释放——设备卡在 ACTIVE 无法重新租用、或平台设备页长期被占用需要立即让出时执行。触发时机：设备租约异常/紧急释放、PlanRun 卡住需强制让出设备、设备复用前清理租约。
+description: 设备租约紧急释放——设备的 ACTIVE 租约（device_leases）没有被释放、设备无法重新租用，或平台设备页长期显示占用、必须立即让出设备时执行。触发时机：设备租约异常 / 紧急释放、PlanRun 卡住需强制让出设备、设备复用前清理租约。
 type: event  # 低频事件场景（#2785 分型：HOLLOW 观察窗 60 天）
 ---
 
 # 设备租约紧急释放
 
-读取并严格执行
-`docs/operations/device-lease-emergency-release.md`。
+按顺序执行以下步骤：
+
+1. 读取 `docs/operations/device-lease-emergency-release.md` 全文。
+2. 按该文档的步骤顺序执行，不跳步。
 
 ## 踩坑守卫（负向约束）
 
-- 这是**生产业务库写操作**：先做只读查询，确认没有可用的 PlanRun 正常释放路径，并在
-  当前请求明确授权写入后才能执行 UPDATE；
-- 完成后必须按文档回查；
-- 不得修改 `device` 表或 Agent 文件。
+- 本流程是**生产业务库写操作**。Agent 必须先完成文档的只读前置检查，再执行 UPDATE。
+- 当前 Requirement 没有明确授权写入生产业务库时，Agent 不得执行 UPDATE。
+- Agent 必须在 UPDATE 后按文档「后置验证」回查。
+- Agent 不得修改 `device` 表或 Agent 文件。
+- 文档中标为「缺口」的步骤没有查法。Agent 遇到缺口时必须停下并向用户报告缺口编号，不得自行编写查法。
