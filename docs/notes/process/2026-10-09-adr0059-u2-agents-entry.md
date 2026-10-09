@@ -19,8 +19,8 @@ Claude Code / Codex / Cursor 另有 U1 的 `contract-sop-writing` skill。
 ## Verification
 
 - `AGENTS.md`：79 行不变，6695 → 6841 字节（S6 预算 80 行 / 8000 字节）；硬不变量节与 S11 锚定原文未动。
-- `./scripts/project_python.sh scripts/run_gates.py check:quick`：退出码 0，16 个门禁通过（本容器的隔离 `.venv`）；
-  `schema-at-head` 因未设置 `DATABASE_URL` 按门禁设计跳过，未连接任何数据库。
+- `./scripts/project_python.sh scripts/run_gates.py check:quick`：退出码 0；16 个成员中 15 项通过，
+  `schema-at-head` 因未设置 `DATABASE_URL` 按门禁设计跳过（本容器的隔离 `.venv`，未连接任何数据库）。
 - 只读 `AGENTS.md` 的 Harness 是否在写契约 / SOP 时读取约定：UNVERIFIED（本容器只有 Claude Code CLI）。
 
 ## Revisit
