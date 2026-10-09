@@ -421,6 +421,50 @@ class TestIsolationMutations:
         lib.write_text(original, encoding="utf-8")
         assert _errors_of(copy) == [], "恢复后应绿"
 
+    def test_unproven_conditional_not_greenlit_by_other_point(self, tmp_path):
+        """复审 U1：守卫点正确 param-first 不得放行另一消费点的 env-first 条件表达式。"""
+        copy = self._copy(tmp_path)
+        lib = copy / "backend/agent/scripts/mtbf_setup/_lib.py"
+        original = lib.read_text(encoding="utf-8")
+        guard = "    if not base:\n        base = _default_resources_root()"
+        mutated = original.replace(
+            guard,
+            guard
+            + "\n"
+            + '    base = env("STP_MTBF_RESOURCES_DIR", "") if env("STP_MTBF_RESOURCES_DIR", "") '
+            + 'else cfg.get("mtbf_resources_dir")',
+        )
+        assert mutated != original, "变异未生效（测试锚点漂移）"
+        lib.write_text(mutated, encoding="utf-8")
+        errors = _errors_of(copy)
+        assert any("env 先于 param" in e for e in errors), f"条件表达式 env 优先应红，实际 {errors}"
+        lib.write_text(original, encoding="utf-8")
+        assert _errors_of(copy) == [], "恢复后应绿"
+
+    def test_fallback_guard_direction_must_be_empty_override(self, tmp_path):
+        """复审 U2：``if base: default()`` 不得当作惰性守卫；``if not base`` / else 空分支保持绿。"""
+        copy = self._copy(tmp_path)
+        lib = copy / "backend/agent/scripts/mtbf_setup/_lib.py"
+        original = lib.read_text(encoding="utf-8")
+        reversed_guard = original.replace(
+            "    if not base:\n        base = _default_resources_root()",
+            "    if base:\n        base = _default_resources_root()",
+        )
+        assert reversed_guard != original, "变异未生效（测试锚点漂移）"
+        lib.write_text(reversed_guard, encoding="utf-8")
+        assert any("急切求值" in e for e in _errors_of(copy)), "守卫方向反转应红"
+        else_form = original.replace(
+            "    if not base:\n        base = _default_resources_root()",
+            "    if base:\n"
+            "        pass\n"
+            "    else:\n"
+            "        base = _default_resources_root()",
+        )
+        lib.write_text(else_form, encoding="utf-8")
+        assert _errors_of(copy) == [], "if/else 空分支等价写法应绿"
+        lib.write_text(original, encoding="utf-8")
+        assert _errors_of(copy) == [], "恢复后应绿"
+
     def test_declaration_hole_is_red(self, tmp_path):
         copy = self._copy(tmp_path)
         contract_path = copy / "tools/dev/resource_anchor_contract.json"

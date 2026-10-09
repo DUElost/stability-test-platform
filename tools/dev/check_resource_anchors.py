@@ -952,32 +952,64 @@ def _call_name(node: ast.Call) -> str | None:
     return None
 
 
-def _is_lazy_guarded(call: ast.Call, fn: ast.FunctionDef, fa: FileAnalysis, key_read_vars: set[str]) -> bool:
-    """默认锚调用是否惰性：位于「override 变量非空」守卫内 / Or 右操作数 / 条件表达式分支。
+def _empty_override_if_branch(test: ast.AST, key_read_vars: set[str]) -> str | None:
+    """简单 ``if`` 守卫下，override 为空时执行的分支：``body`` / ``orelse`` / ``None``（无法证明）。
 
-    嵌在其它调用参数里的默认锚调用（如 ``env(KEY, str(_default_resources_root()))``）
-    一律视为急切——override 分支不得依赖默认锚导入（C1 第 3 条）。
+    支持：
+    - ``if not X:``（X 为 override 变量）→ 空分支在 body；
+    - ``if X:`` → 空分支在 orelse。
+    复合条件不猜方向（复审 U2）。
+    """
+    if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+        if isinstance(test.operand, ast.Name) and test.operand.id in key_read_vars:
+            return "body"
+        return None
+    if isinstance(test, ast.Name) and test.id in key_read_vars:
+        return "orelse"
+    return None
+
+
+def _lazy_guard_verdict(
+    call: ast.Call, fn: ast.FunctionDef, fa: FileAnalysis, key_read_vars: set[str]
+) -> str:
+    """默认锚调用的惰性判定：``lazy`` / ``eager`` / ``unproven``。
+
+    - ``lazy``：位于 override 为空的分支 / Or 右操作数 / 条件表达式分支；
+    - ``eager``：嵌在其它调用参数里，或位于 override 非空分支（``if base: default()``，复审 U2）；
+    - ``unproven``：命中 override 变量守卫但条件方向无法证明——需人工分类，不得静默放行。
     """
     cur: ast.AST = call
     while id(cur) in fa.parents:
         parent = fa.parents[id(cur)]
         if isinstance(parent, ast.Call) and parent is not call:
-            return False
+            return "eager"
         if isinstance(parent, ast.BoolOp) and isinstance(parent.op, ast.Or) and any(cur is v for v in parent.values[1:]):
-            return True
+            return "lazy"
         if isinstance(parent, ast.IfExp) and (cur is parent.body or cur is parent.orelse):
-            return True
+            return "lazy"
         if isinstance(parent, ast.If):
             test_names = {n.id for n in ast.walk(parent.test) if isinstance(n, ast.Name)}
             if test_names & key_read_vars:
                 in_body = any(cur is sub or _is_descendant(cur, sub) for sub in parent.body)
                 in_else = any(cur is sub or _is_descendant(cur, sub) for sub in parent.orelse)
+                empty = _empty_override_if_branch(parent.test, key_read_vars)
+                if empty is None:
+                    return "unproven"
+                if empty == "body" and in_body:
+                    return "lazy"
+                if empty == "orelse" and in_else:
+                    return "lazy"
                 if in_body or in_else:
-                    return True
+                    return "eager"
         if isinstance(parent, (ast.FunctionDef, ast.Module)):
             break
         cur = parent
-    return False
+    return "eager"
+
+
+def _is_lazy_guarded(call: ast.Call, fn: ast.FunctionDef, fa: FileAnalysis, key_read_vars: set[str]) -> bool:
+    """兼容旧调用点：仅在明确惰性时为 True。"""
+    return _lazy_guard_verdict(call, fn, fa, key_read_vars) == "lazy"
 
 
 def _is_descendant(node: ast.AST, candidate: ast.AST) -> bool:
@@ -1232,28 +1264,37 @@ def _validate_host_local_root(anchor: dict, contract: dict, repo: Path, discover
         if fn is None:
             continue
         # 先在**实际消费点**上验证选择值（守卫变量/return 值的 reaching def）：
-        # 被同名覆盖而从未被消费的旧链不构成证明（复审 T1）。
+        # 被同名覆盖而从未被消费的旧链不构成证明（复审 T1）；
+        # 每个消费点各自证明——他点的正确链不得放行本点的双键/no-chain（复审 U1）。
         effective_violations: list[str] = []
-        effective_ok = False
+        proven_points = 0
         for node, desc in _effective_override_nodes(fn, roots, module_scope):
             status, detail = _classify_effective(fn, node, param_key, env_key, module_scope)
-            if status == "env-first":
+            if status == "none":
+                continue
+            if status == "param-first":
+                proven_points += 1
+            elif status == "env-first":
                 effective_violations.append(f"{desc} 的消费值选择链 env 先于 param（{detail}）")
-            elif status == "param-first":
-                effective_ok = True
             elif status == "env-only":
                 effective_violations.append(f"{desc} 的消费值只读取 env——param 未参与实际选择（被覆盖/未消费）")
             elif status == "param-only":
                 effective_violations.append(f"{desc} 的消费值只读取 param——env override 通道未参与")
             elif status == "ambiguous":
                 effective_violations.append(f"{desc} 存在多条候选链（{detail}），无法关联消费值")
-            elif status == "no-chain" and _has_param_or_env_call(fn, param_key, env_key):
-                effective_ok = True
+            elif status == "no-chain":
+                if _node_has_param_or_env_call(node, param_key, env_key):
+                    proven_points += 1
+                else:
+                    suffix = f"（{detail}）" if detail else ""
+                    effective_violations.append(
+                        f"{desc} 含双键但无法证明选择顺序{suffix}——需人工分类"
+                    )
         if effective_violations:
             for violation in effective_violations:
                 errors.append(f"{anchor['id']}: {anchor['file']}:{consumer} {violation}")
             continue
-        if effective_ok:
+        if proven_points:
             continue
         status, detail = _override_order(fn, param_key, env_key, module_scope)
         if status == "env-first":
@@ -1300,10 +1341,16 @@ def _validate_host_local_root(anchor: dict, contract: dict, repo: Path, discover
             name = _call_name(call)
             if name not in roots:
                 continue
-            if _is_lazy_guarded(call, fn, fa, key_vars):
+            verdict = _lazy_guard_verdict(call, fn, fa, key_vars)
+            if verdict == "lazy":
                 lazy_root_calls += 1
                 if _calls_project_component(fn, fam):
                     project_ok = True
+            elif verdict == "unproven":
+                errors.append(
+                    f"{anchor['id']}: {anchor['file']}:{consumer} 对默认锚 {name}() 的守卫条件"
+                    "无法证明「仅在 override 为空时调用」——需人工分类"
+                )
             else:
                 errors.append(
                     f"{anchor['id']}: {anchor['file']}:{consumer} 对默认锚 {name}() 的调用被急切求值——"
@@ -1510,6 +1557,27 @@ def _classify_effective(
         if param_idx is None or env_idx is None:
             return "no-chain", f"L{chain.lineno}"
         return ("param-first" if param_idx < env_idx else "env-first"), f"L{chain.lineno}"
+    # 简单条件表达式：``X if X else Y``（truthy 取 body）——覆盖复审 U1 的 env/param 三元反转。
+    dual_ifexps: list[ast.IfExp] = []
+    for sub in ast.walk(node):
+        if not isinstance(sub, ast.IfExp):
+            continue
+        keys = _key_markers(fn, sub, module_scope)
+        if param_key in keys and env_key in keys:
+            dual_ifexps.append(sub)
+    if dual_ifexps:
+        if len(dual_ifexps) > 1:
+            return "ambiguous", f"L{[c.lineno for c in dual_ifexps]}"
+        ie = dual_ifexps[0]
+        body_keys = _key_markers(fn, ie.body, module_scope)
+        else_keys = _key_markers(fn, ie.orelse, module_scope)
+        test_keys = _key_markers(fn, ie.test, module_scope)
+        if test_keys & body_keys:
+            if env_key in body_keys and param_key in else_keys:
+                return "env-first", f"L{ie.lineno}"
+            if param_key in body_keys and env_key in else_keys:
+                return "param-first", f"L{ie.lineno}"
+        return "no-chain", f"L{ie.lineno}"
     keys = _key_markers(fn, node, module_scope)
     if param_key in keys and env_key in keys:
         return "no-chain", ""
@@ -1557,13 +1625,18 @@ def _override_order(
     return candidates[0][1], f"L{candidates[0][0]}"
 
 
-def _has_param_or_env_call(fn: ast.FunctionDef, param_key: str | None, env_key: str | None) -> bool:
-    """``param_or_env(cfg, param_key, env_key, …)`` 形态——该 helper 语义即 param > env。"""
-    for node in ast.walk(fn):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "param_or_env":
-            if len(node.args) >= 3 and _str_const(node.args[1]) == param_key and _str_const(node.args[2]) == env_key:
+def _node_has_param_or_env_call(node: ast.AST, param_key: str | None, env_key: str | None) -> bool:
+    """表达式子树内是否调用 ``param_or_env(cfg, param_key, env_key, …)``（该点自身证明）。"""
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name) and sub.func.id == "param_or_env":
+            if len(sub.args) >= 3 and _str_const(sub.args[1]) == param_key and _str_const(sub.args[2]) == env_key:
                 return True
     return False
+
+
+def _has_param_or_env_call(fn: ast.FunctionDef, param_key: str | None, env_key: str | None) -> bool:
+    """``param_or_env(cfg, param_key, env_key, …)`` 形态——该 helper 语义即 param > env。"""
+    return _node_has_param_or_env_call(fn, param_key, env_key)
 
 
 def _function_uses_agent_dir_symbol(fn: ast.FunctionDef, fa: FileAnalysis) -> bool:
@@ -2781,6 +2854,36 @@ def run_self_test() -> int:
         )
         expect(_errors_of(_write_fixture(Path(tmp) / "r31", alpha_lib=lib)), "经局部变量返回硬编码路径", "R31 变量返回 literal")
 
+        # --- 红 R32：未证明顺序的条件表达式被他点正确链放行（复审 U1） ---
+        lib = AGENT_SETUP_LIB.format(subdir="alpha", param="alpha_resources_dir", envkey="STP_ALPHA_RESOURCES_DIR")
+        lib = lib.replace(
+            "    if not base:\n        base = _default_resources_root()\n",
+            "    if not base:\n"
+            "        base = _default_resources_root()\n"
+            '    base = env("STP_ALPHA_RESOURCES_DIR", "") if env("STP_ALPHA_RESOURCES_DIR", "") '
+            'else cfg.get("alpha_resources_dir")\n',
+        )
+        expect(_errors_of(_write_fixture(Path(tmp) / "r32", alpha_lib=lib)), "env 先于 param", "R32 条件表达式 env 优先")
+
+        # --- 红 R33：fallback 守卫方向反转 ``if base:``（复审 U2） ---
+        lib = AGENT_SETUP_LIB.format(subdir="alpha", param="alpha_resources_dir", envkey="STP_ALPHA_RESOURCES_DIR")
+        lib = lib.replace(
+            "    if not base:\n        base = _default_resources_root()\n",
+            "    if base:\n        base = _default_resources_root()\n",
+        )
+        expect(_errors_of(_write_fixture(Path(tmp) / "r33", alpha_lib=lib)), "急切求值", "R33 守卫方向反转")
+
+        # --- 绿 G5：``if base: ... else: default()`` 等价空分支（不得误报） ---
+        lib = AGENT_SETUP_LIB.format(subdir="alpha", param="alpha_resources_dir", envkey="STP_ALPHA_RESOURCES_DIR")
+        lib = lib.replace(
+            "    if not base:\n        base = _default_resources_root()\n",
+            "    if base:\n"
+            "        pass\n"
+            "    else:\n"
+            "        base = _default_resources_root()\n",
+        )
+        expect_clean(_errors_of(_write_fixture(Path(tmp) / "g5", alpha_lib=lib)), "G5 else 空分支惰性")
+
         # --- 红 R16：base ref 不可解析 = 不可验证 ---
         git_root = Path(tmp) / "gitrepo"
         _write_fixture(git_root)
@@ -2817,9 +2920,9 @@ def run_self_test() -> int:
         "cache 祖先 / dead 接入 / 别名导入接入 / 函数内别名导入 / import * 接入 / getattr 接入 / 导出 / "
         "绑定缺失 / 错误 env / 成员缺失 / 未声明候选 / 未解析表达式 / 零候选 / 急切默认锚 / 错误返回根 / "
         "额外错误目录 / 多余后缀 / 片段错序 / 前缀多余片段 / 别名复用（多来源）/ 未使用链掩盖 / "
-        "同名覆盖 / 变量返回 literal / 删 param override / env 先于 param / 变量 env 优先 / "
-        "例外扩张 / base 不可验证 → 红；agent-dir 形态 / 显式 override / 变量 param 先行 / "
-        "parents 与 tools_cache 字样不误报 → 绿）"
+        "同名覆盖 / 变量返回 literal / 条件表达式 env 优先 / 守卫方向反转 / 删 param override / "
+        "env 先于 param / 变量 env 优先 / 例外扩张 / base 不可验证 → 红；agent-dir 形态 / "
+        "显式 override / 变量 param 先行 / else 空分支惰性 / parents 与 tools_cache 字样不误报 → 绿）"
     )
     return 0
 
