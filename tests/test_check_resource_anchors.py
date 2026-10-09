@@ -466,7 +466,7 @@ class TestIsolationMutations:
         assert _errors_of(copy) == [], "恢复后应绿"
 
     def test_negated_ifexp_not_treated_as_body_first(self, tmp_path):
-        """复审 V1：``X if not X else Y`` 不得冒充 X 优先；truthy 取 orelse。"""
+        """复审 V1/W1：``X if not X else Y`` 空值时仍返回空 X——不得标 Y 优先，应人工分类。"""
         copy = self._copy(tmp_path)
         lib = copy / "backend/agent/scripts/mtbf_setup/_lib.py"
         original = lib.read_text(encoding="utf-8")
@@ -481,7 +481,18 @@ class TestIsolationMutations:
         assert mutated != original, "变异未生效（测试锚点漂移）"
         lib.write_text(mutated, encoding="utf-8")
         errors = _errors_of(copy)
-        assert any("env 先于 param" in e for e in errors), f"否定 IfExp 应红，实际 {errors}"
+        assert any("无法证明选择顺序" in e for e in errors), f"否定 IfExp 应红，实际 {errors}"
+        # 正确否定等价 ``Y if not X else X``（X=param）保持绿
+        correct = original.replace(
+            "    return Path(base) / project",
+            '    return Path(\n'
+            '        env("STP_MTBF_RESOURCES_DIR", "")\n'
+            '        if not cfg.get("mtbf_resources_dir")\n'
+            '        else cfg.get("mtbf_resources_dir")\n'
+            "    ) / project",
+        )
+        lib.write_text(correct, encoding="utf-8")
+        assert _errors_of(copy) == [], "正确否定等价式应绿"
         lib.write_text(original, encoding="utf-8")
         assert _errors_of(copy) == [], "恢复后应绿"
 
@@ -504,6 +515,50 @@ class TestIsolationMutations:
         )
         lib.write_text(lazy_ifexp, encoding="utf-8")
         assert _errors_of(copy) == [], "IfExp 空分支等价写法应绿"
+        lib.write_text(original, encoding="utf-8")
+        assert _errors_of(copy) == [], "恢复后应绿"
+
+    def test_named_dual_ifexp_not_skipped_as_none(self, tmp_path):
+        """复审 W2：变量形式未证明双键 IfExp 不得因 none 跳过而被他点放行。"""
+        copy = self._copy(tmp_path)
+        lib = copy / "backend/agent/scripts/mtbf_setup/_lib.py"
+        original = lib.read_text(encoding="utf-8")
+        guard = "    if not base:\n        base = _default_resources_root()"
+        mutated = original.replace(
+            guard,
+            guard
+            + "\n"
+            + '    param_value = cfg.get("mtbf_resources_dir")\n'
+            + '    env_value = env("STP_MTBF_RESOURCES_DIR", "")\n'
+            + "    combined = param_value or env_value\n"
+            + "    base = env_value if env_value else combined",
+        )
+        assert mutated != original, "变异未生效（测试锚点漂移）"
+        lib.write_text(mutated, encoding="utf-8")
+        errors = _errors_of(copy)
+        assert any("无法证明选择顺序" in e for e in errors), f"变量双键 IfExp 应红，实际 {errors}"
+        lib.write_text(original, encoding="utf-8")
+        assert _errors_of(copy) == [], "恢复后应绿"
+
+    def test_lazy_guard_binds_current_override_value(self, tmp_path):
+        """复审 W3：清空 override 后的 ``if not base`` / ``"" or default()`` 不得凭历史名惰性放行。"""
+        copy = self._copy(tmp_path)
+        lib = copy / "backend/agent/scripts/mtbf_setup/_lib.py"
+        original = lib.read_text(encoding="utf-8")
+        guard = "    if not base:\n        base = _default_resources_root()"
+        stale = original.replace(
+            guard,
+            guard + '\n    base = ""\n    base = _default_resources_root() if not base else base',
+        )
+        assert stale != original, "变异未生效（测试锚点漂移）"
+        lib.write_text(stale, encoding="utf-8")
+        assert any("急切求值" in e for e in _errors_of(copy)), "失效变量名守卫应红"
+        unrelated_or = original.replace(
+            guard,
+            guard + '\n    base = "" or _default_resources_root()',
+        )
+        lib.write_text(unrelated_or, encoding="utf-8")
+        assert any("急切求值" in e for e in _errors_of(copy)), "非 override 左侧 Or 应红"
         lib.write_text(original, encoding="utf-8")
         assert _errors_of(copy) == [], "恢复后应绿"
 
