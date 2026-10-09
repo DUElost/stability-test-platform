@@ -31,12 +31,16 @@ ADR-0033 tool_manifest step（不新增 gate profile / required job）。
   函数与真实调用关系登记，引用 #3320 并写明删除/重新判定条件；新增入口调用（**含别名
   导入、`import *`、`getattr` 动态引用**）、导入路径、`__all__` 导出或资源消费使其可达
   即红；禁止文件/族目录级白名单；
-- **authority 判据（#3615 复核 P2 返修，2026-10-07）**：
-  - 资源根必须出现在**返回位置**且每个被返回的路径值都符合声明 authority——「保留正确
-    赋值却返回错误路径」「增加错误目录返回」不再放行；authority 定位点不得返回字面量根；
-  - 显式 override 必须**双通道**：同一消费者同时读取 param 与 env，且同一 `or` 链里
-    param 先于 env（删除 param 或反转优先级即红）；
-  - 可达性解析保留**原始符号名**（别名导入不再从调用图中消失）；
+- **authority 判据（#3615 复核 P2 + 复审 R1–R3 返修，2026-10-07/09）**：
+  - 资源根必须落在**返回位置**、以**完整有序后缀** `("resources", <族子目录>)` 结尾，且
+    该锚每个被返回的路径值都符合声明 authority——多余/错序片段（`…/mtbf/unexpected`）、
+    「保留正确赋值却返回错误路径」「增加错误目录返回」均不放行；authority 定位点不得返回
+    字面量根；root 与 consumer 的 project/variant/bundle 层分开；
+  - 显式 override 必须**双通道**（同一消费者同时读取 param 与 env），且选择顺序必须可
+    **静态证明**为 param 先行——经局部变量的写法按赋值行序回溯实际来源；env-first 或
+    无法证明 → 红/要求人工分类（不得按 param-first 放行）；
+  - 同族导入索引覆盖**函数体内** Import/ImportFrom 并保留原始符号名——函数内别名导入
+    不再从调用图消失；`import *` / `getattr` 动态引用一并判红；
 - `--base` 只做增量防新增与 legacy 例外防扩张（head 例外集必须是 base 子集），不替代
   全量 census；base ref 不可解析或 base 契约坏 JSON → 退出 2「不可验证」，不当空 diff 成功；
 - 顺序：`--self-test` → 全量 → `--base`；退出 1 = 判据违例、2 = 不可验证。
@@ -65,20 +69,28 @@ ADR-0033 tool_manifest step（不新增 gate profile / required job）。
 
 - `python tools/dev/check_resource_anchors.py --self-test`：红绿双向自证（隔离 fixture）——
   旧深度 fallback / 别名 / join / relative tuple / cache 祖先 / dead 接入 / 别名导入接入 /
-  `import *` 接入 / `getattr` 接入 / `__all__` 导出 / 绑定缺失 / 错误 env / 成员缺失 /
-  未声明候选 / 未解析表达式 / 零候选 / 急切默认锚 / 错误返回根 / 额外错误目录 /
-  删 param override / env 先于 param / 例外扩张 / base 不可验证 → 红；agent-dir 形态 /
-  显式 override / `parents` 与 tools_cache 字样不误报 → 绿。
+  函数内别名导入 / `import *` 接入 / `getattr` 接入 / `__all__` 导出 / 绑定缺失 / 错误 env /
+  成员缺失 / 未声明候选 / 未解析表达式 / 零候选 / 急切默认锚 / 错误返回根 / 额外错误目录 /
+  多余后缀 / 片段错序 / 删 param override / env 先于 param / 变量 env 优先 / 例外扩张 /
+  base 不可验证 → 红；agent-dir 形态 / 显式 override / 变量 param 先行 / `parents` 与
+  tools_cache 字样不误报 → 绿。
 - **#3615 复核三项 P2 的返修证据**（隔离副本，修复前全绿→修复后全红）：
   ① `from _lib import resources_dir as rd` + `rd({})` → A02 可达 + 别名导入路径；
   ② `_good = ...; return Path("/tmp/incorrect")` → 「未出现在返回位置 + 返回值不符合
   authority」；③ 删 param 只留 env → 「显式参数 override 通道被删除」；另加固
   env 先于 param → 「显式参数优先语义被反转」。
+- **复审 R1–R3 的返修证据**（逐字反例，修复前 `errors=0`）：
+  R1 `return Path(AGENT_DIR)/"resources"/"mtbf"/"unexpected"` → 「尾部有多余/错序片段」
+  （root + 继承消费者 + 返回位置三处归因）；
+  R2 `def main(): from _lib import resources_dir as rd; rd({})` → 「现可从族入口到达」+
+  「以别名导入 legacy helper」；R3 `base = env(...); param_value = cfg.get(...); base = base or
+  param_value` → 「override 选择链 env 先于 param」；等价变量 param-first 写法保持绿。
 - `python tools/dev/check_resource_anchors.py`：真实仓库绿（69 文件 / 35 族；候选 49；
   26 锚 / 50 定位点；legacy 10；未解析 0），离线 <1s。
 - `python tools/dev/check_resource_anchors.py --base origin/main`：绿（首次引入契约，NOTE）。
-- `python scripts/run_pytest.py tests/test_check_resource_anchors.py -q`：22 passed
-  （含别名导入 / 通配+getattr / 错误返回根 / 删 param / env 优先五项隔离变异，恢复后转绿）。
+- `python scripts/run_pytest.py tests/test_check_resource_anchors.py -q`：25 passed
+  （含别名导入 / 函数内别名导入 / 通配+getattr / 错误返回根 / 多余后缀 / 删 param /
+  env 优先 / 变量优先（红绿双侧）等隔离变异，均含恢复后转绿）。
   隔离副本变异证明 checker 有牙齿（恢复 G1a 错根 / 撤工具绑定 / 删包内伴随文件 /
   接入 dead helper / 抽掉声明条目 → 红；恢复 → 绿）；接线用例读 `run_gates.GATES`
   结构断言 tool-manifest 项含 `--self-test` 与 `--base`，CI 同 step 同命令。
