@@ -261,7 +261,7 @@ def _self_test() -> int:
         ("backend/agent/tests/test_aee.py", "serial = '0000NX2622000670'", 0),
         ("frontend/src/x/__fixtures__/a.json", '{"serial": "0000NX2622000514"}', 0),
         ("frontend/src/a/b.test.tsx", "const ip = '10.0.0.50';", 0),
-        # 放行：npm package-lock.json 的 integrity base64 可误伤 SERIAL_LIKE
+        # 放行：npm package-lock.json 的 integrity base64 可误伤 SERIAL_LIKE（#3620）
         (
             "frontend/package-lock.json",
             '"integrity": "sha512-qQoPDZUFV0bh9xA09XydmkjMBpgc1ukJuhMvzQ9QeVmFaHTS9W5TE5CoLmSl3QQyUP9OuHO3x/WPZTIIZPWR3Q=="',
