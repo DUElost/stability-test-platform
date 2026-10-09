@@ -70,9 +70,13 @@ stderr 一律判 UNVERIFIED，但判定必须可复核，因此原文落盘到**
 
 ### 已知不可跑形态（Owner 2026-10-01 裁决）
 
-- `cursor` CLI：命令不含 `--trust`，宿主无预置工作区信任时非交互直接 `exit=1`
-  → 该格恒 UNVERIFIED。**这是接受的终态**，不为此加信任绕过参数；Cursor CLI 的
-  真实证据需在有预置工作区信任的宿主上复跑。
+- `cursor` CLI：**结果随宿主条件变化，不再是恒 UNVERIFIED**。命令不含 `--trust`，探针不为此加信任
+  绕过参数；宿主无预置工作区信任或服务拒绝时非交互直接 `exit=1` → 该格 UNVERIFIED（Owner
+  2026-10-01 裁决接受这类结果，不改判）。2026-10-03 旧账号团队额度拒绝，contract / autoload 六格全部
+  UNVERIFIED（[证据](https://github.com/DUElost/stability-test-platform/issues/3563#issuecomment-5965465667)）；
+  同日换账号后同命令六格 PASS（`2026.09.18-9a7762b`，
+  [证据](https://github.com/DUElost/stability-test-platform/issues/3563#issuecomment-5965565067)）。
+  PASS 只代表该宿主 / 日期 / CLI 版本；额度或信任条件再变时按本节重新取证，如实标 UNVERIFIED。
 - `codex` CLI：本机 stderr 恒有两行（`Reading additional input from stdin...` 与
   `failed to refresh available models: request timed out`）→ 整列 UNVERIFIED。答复
   本身有效也不改判；宿主网络恢复后复跑，或由 Owner 另行裁决 stderr 噪声豁免口径。
