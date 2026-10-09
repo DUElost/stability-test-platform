@@ -27,11 +27,17 @@ pin 依据及函数级 legacy 分类为输入；工具版本真源仍是 ``tool_
 - **函数级 legacy**：10 个无消费者 helper 只按函数登记；新增调用（含**别名导入**、
   ``import *``、``getattr`` 动态引用）、导入路径、``__all__`` 导出使其可达即红；
   禁止整文件/族目录豁免；
-- **authority 判据**（#3615 复核 P2 后加固）：
+- **authority 判据**（#3615 复核 P2 + 复审 R1–R3 后加固）：
+  - 资源根必须是**完整有序后缀** ``("resources", <族子目录>)`` 结尾——多余/错序片段
+    （``…/resources/mtbf/unexpected``）判红；root 与 consumer 的 project/variant/bundle
+    层分开；
   - 资源根必须出现在**返回位置**且每个返回值都符合声明 authority——「保留正确赋值
     却返回错误路径」「增加错误目录返回」不得通过；authority 定位点不得返回字面量根；
-  - 显式 override 必须**双通道**（同一消费者同时读取 param 与 env，且同一 ``or`` 链里
-    param 先于 env）——删掉 param 或反转优先级即红；
+  - 显式 override 必须**双通道**（同一消费者同时读取 param 与 env），且选择顺序必须可
+    **静态证明**为 param 先行——经局部变量的写法按赋值行序回溯实际来源；识别不出顺序
+    （env-first 或无法证明）即红/要求人工分类，不得按 param-first 放行；
+  - 同族导入索引覆盖**函数体内**的 Import/ImportFrom（保留原始符号名）——函数内别名
+    导入、``import *``、``getattr`` 动态引用都不得让调用从可达性图消失；
 - **--base**：增量防新增与例外防扩张（head 的 legacy 集合必须是 base 的子集）；
   不替代全量 census；base ref 不可解析或 base 契约坏 JSON = 不可验证（退出 2），
   不得当空 diff 成功。
@@ -525,25 +531,28 @@ def _analyze_file(repo: Path, rel: str) -> FileAnalysis:
     module_aliases: dict[str, str] = {}
     wildcard: list[str] = []
     for node in ast.walk(tree):
-        # config.AGENT_DIR 的惰性导入可能出现在函数体内——全树收集
-        if isinstance(node, ast.ImportFrom) and node.module == "config":
+        # 全树收集（含函数体内）：config.AGENT_DIR 惰性导入，以及同族 Import/ImportFrom。
+        # 函数内 `from _lib import x as rd` 若不进索引，调用将整个从可达性图消失（复审 R2）；
+        # 文件级并集是**保守超集**——只可能多报可达，不会把真实调用判死。
+        if isinstance(node, ast.ImportFrom):
+            if node.module == "config":
+                for alias in node.names:
+                    if alias.name == "AGENT_DIR":
+                        agent_dir_names.add(alias.asname or alias.name)
+            elif node.module in local_stems:
+                for alias in node.names:
+                    if alias.name == "*":
+                        wildcard.append(node.module)
+                    else:
+                        # 保留原始符号名：`from _lib import resources_dir as rd` 仍须解析到 resources_dir
+                        imports_from_local[alias.asname or alias.name] = (node.module, alias.name)
+        elif isinstance(node, ast.Import):
             for alias in node.names:
-                if alias.name == "AGENT_DIR":
-                    agent_dir_names.add(alias.asname or alias.name)
+                if alias.name.split(".")[0] in local_stems:
+                    module_aliases[alias.asname or alias.name.split(".")[0]] = alias.name.split(".")[0]
     for stmt in tree.body:
         if isinstance(stmt, ast.FunctionDef):
             funcs[stmt.name] = stmt
-        elif isinstance(stmt, ast.ImportFrom) and stmt.module in local_stems:
-            for alias in stmt.names:
-                if alias.name == "*":
-                    wildcard.append(stmt.module)
-                else:
-                    # 保留原始符号名：`from _lib import resources_dir as rd` 仍须解析到 resources_dir
-                    imports_from_local[alias.asname or alias.name] = (stmt.module, alias.name)
-        elif isinstance(stmt, ast.Import):
-            for alias in stmt.names:
-                if alias.name.split(".")[0] in local_stems:
-                    module_aliases[alias.asname or alias.name.split(".")[0]] = alias.name.split(".")[0]
         elif isinstance(stmt, (ast.Assign, ast.AnnAssign)):
             targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
             value = stmt.value
@@ -1096,6 +1105,17 @@ def _locator_info(discovery: Discovery, file_rel: str, name: str) -> LocatorInfo
     return discovery.locators.get((file_rel, name))
 
 
+def _tail_matches(val: PathVal, subdir: str) -> bool:
+    """资源根必须是完整有序后缀 ``("resources", subdir)``——多余/错序片段不得判绿。"""
+    return len(val.segments) >= 2 and val.segments[-2:] == ("resources", subdir)
+
+
+def _contains_ordered_pair(val: PathVal, subdir: str) -> bool:
+    """``("resources", subdir)`` 以相邻有序对出现（root 可作为更长路径的前缀）。"""
+    segments = val.segments
+    return any(segments[i] == "resources" and segments[i + 1] == subdir for i in range(len(segments) - 1))
+
+
 def _host_root_shape_ok(anchor: dict, contract: dict, discovery: Discovery) -> tuple[list[str], list[str]]:
     """返回 (errors, root_locators)：复核默认资源根表达式的形态。"""
     fam_name = anchor.get("family")
@@ -1117,6 +1137,7 @@ def _host_root_shape_ok(anchor: dict, contract: dict, discovery: Discovery) -> t
         roots.append(sym["name"])
         file_vals = [v for v in shaped if v.file_derived]
         agent_vals = [v for v in shaped if v.kind == "agent_dir"]
+        bad_suffix = sorted({v.segments for v in shaped if not _tail_matches(v, subdir)})
         if anchor.get("authority") == AUTHORITY_AGENT_DIR:
             if file_vals:
                 errors.append(
@@ -1126,6 +1147,11 @@ def _host_root_shape_ok(anchor: dict, contract: dict, discovery: Discovery) -> t
             if not agent_vals:
                 errors.append(
                     f"{anchor['id']}: {anchor['file']}:{sym['name']} 未复现 config.AGENT_DIR/resources/{subdir} 形态"
+                )
+            if bad_suffix:
+                errors.append(
+                    f"{anchor['id']}: {anchor['file']}:{sym['name']} 资源根尾部有多余/错序片段：{bad_suffix}"
+                    f"——应为 ('resources', {subdir!r}) 结尾（root 与 consumer 的 project/variant 层分开）"
                 )
         elif not file_vals:
             errors.append(
@@ -1166,8 +1192,11 @@ def _validate_host_local_root(anchor: dict, contract: dict, repo: Path, discover
         errors.append(f"{anchor['id']}: 未发现读取 {fam_name} 资源键的消费者函数（override 通道缺失）")
     param_key, env_key = fam.get("param_key"), fam.get("env_key")
     # 双通道 + 优先级：显式 param 与 env 必须成对出现（否则删掉 param 会静默丢 override），
-    # 同一 Or 链里 param 必须先于 env（param > env 的现行语义）。
+    # 且选择顺序必须可静态证明是 param 先行（含经局部变量转写的形态）；
+    # 证明不了就要求人工分类（复审 R3：不得把「未识别出 env-first」当作已证明 param-first）。
+    module_scope = _module_scope(fa)
     channel_ok = False
+    unproven: list[str] = []
     for consumer in consumers:
         info = _locator_info(discovery, anchor["file"], consumer)
         fam_keys = {k for f, k in (info.family_keys if info else set()) if f == fam_name}
@@ -1175,15 +1204,27 @@ def _validate_host_local_root(anchor: dict, contract: dict, repo: Path, discover
             continue
         channel_ok = True
         fn = fa.funcs.get(consumer)
-        if fn is not None and _or_chain_env_first(fn, param_key, env_key):
+        if fn is None:
+            continue
+        order = _or_chain_order(fn, param_key, env_key, module_scope)
+        if order == "env-first":
             errors.append(
-                f"{anchor['id']}: {anchor['file']}:{consumer} 的 override 链 env 先于 param——"
+                f"{anchor['id']}: {anchor['file']}:{consumer} 的 override 选择链 env 先于 param——"
                 "显式参数优先语义被反转"
             )
+        elif order == "param-first" or _has_param_or_env_call(fn, param_key, env_key):
+            continue
+        else:
+            unproven.append(consumer)
     if not channel_ok:
         errors.append(
             f"{anchor['id']}: 无消费者同时读取 param {param_key!r} 与 env {env_key!r}——"
             "显式参数 override 通道被删除（C1 第 3 条）"
+        )
+    for consumer in unproven:
+        errors.append(
+            f"{anchor['id']}: {anchor['file']}:{consumer} 的 override 选择顺序无法静态证明——"
+            "需人工分类（不得按 param-first 放行）"
         )
     lazy_root_calls = 0
     project_ok = False
@@ -1232,15 +1273,26 @@ def _validate_host_local_root(anchor: dict, contract: dict, repo: Path, discover
             returned_shaped = [
                 (line, v)
                 for line, v, _direct in info.returns
-                if v.kind == "agent_dir" and "resources" in v.segments and subdir in v.segments
+                if v.kind == "agent_dir" and _tail_matches(v, subdir)
             ]
             if not returned_shaped:
-                errors.append(
-                    f"{anchor['id']}: {anchor['file']}:{sym['name']} 的资源根只出现在赋值、未出现在返回位置——"
-                    "authority 必须以返回值提供"
-                )
+                contains = [
+                    (line, v)
+                    for line, v, _direct in info.returns
+                    if v.kind == "agent_dir" and "resources" in v.segments and subdir in v.segments
+                ]
+                if contains:
+                    errors.append(
+                        f"{anchor['id']}: {anchor['file']}:{sym['name']} 返回位置的资源根尾部多余/错序："
+                        f"{[(line, v.segments) for line, v in contains]}——应为 ('resources', {subdir!r}) 结尾"
+                    )
+                else:
+                    errors.append(
+                        f"{anchor['id']}: {anchor['file']}:{sym['name']} 的资源根只出现在赋值、未出现在返回位置——"
+                        "authority 必须以返回值提供"
+                    )
             for line, val, _direct in info.returns:
-                if val.kind == "agent_dir" and "resources" in val.segments and subdir in val.segments:
+                if val.kind == "agent_dir" and _tail_matches(val, subdir):
                     continue
                 errors.append(
                     f"{anchor['id']}: {anchor['file']}:{sym['name']} L{line} 的返回值不符合 authority"
@@ -1269,23 +1321,73 @@ def _return_has_direct_literal_path(node: ast.AST) -> bool:
     return False
 
 
-def _or_chain_env_first(fn: ast.FunctionDef, param_key: str | None, env_key: str | None) -> bool:
-    """同一 ``or`` 链内 env 出现在 param 之前 → True（显式参数优先被反转）。"""
+def _name_value_at(fn: ast.FunctionDef, name: str, lineno: int) -> ast.AST | None:
+    """函数内 ``lineno`` 之前对该名字的**最近一次**赋值右值（按行序，非 walk 序）。
+
+    ``base = env(...); base = base or param`` 这类经局部变量反转优先级的写法，
+    必须按赋值顺序还原引用点的实际来源，不能用「最后一次赋值」近似（复审 R3）。
+    """
+    best: tuple[int, ast.AST] | None = None
+    for sub in ast.walk(fn):
+        if isinstance(sub, ast.Assign) and sub.value is not None:
+            for target in sub.targets:
+                if isinstance(target, ast.Name) and target.id == name and sub.lineno < lineno:
+                    if best is None or sub.lineno > best[0]:
+                        best = (sub.lineno, sub.value)
+        elif isinstance(sub, ast.AnnAssign) and sub.value is not None and isinstance(sub.target, ast.Name):
+            if sub.target.id == name and sub.lineno < lineno and (best is None or sub.lineno > best[0]):
+                best = (sub.lineno, sub.value)
+    return best[1] if best is not None else None
+
+
+def _key_markers(
+    fn: ast.FunctionDef,
+    node: ast.AST,
+    module_scope: dict[str, ast.AST],
+    seen: frozenset[str] = frozenset(),
+) -> set[str]:
+    """表达式里出现的键字面量（经局部变量/模块变量有限回溯；不解释任意调用）。"""
+    keys: set[str] = set()
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
+            keys.add(sub.value)
+        elif isinstance(sub, ast.Name) and sub.id not in seen:
+            src = _name_value_at(fn, sub.id, sub.lineno) or module_scope.get(sub.id)
+            if src is not None:
+                keys |= _key_markers(fn, src, module_scope, seen | {sub.id})
+    return keys
+
+
+def _or_chain_order(
+    fn: ast.FunctionDef,
+    param_key: str | None,
+    env_key: str | None,
+    module_scope: dict[str, ast.AST],
+) -> str | None:
+    """同时含 param 与 env 的 ``or`` 链 → 'param-first' | 'env-first'；无可判定链 → None。"""
     if not param_key or not env_key:
-        return False
+        return None
     for node in ast.walk(fn):
         if not (isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or)):
             continue
         param_idx = env_idx = None
         for index, value in enumerate(node.values):
-            for sub in ast.walk(value):
-                if isinstance(sub, ast.Constant):
-                    if sub.value == param_key and param_idx is None:
-                        param_idx = index
-                    if sub.value == env_key and env_idx is None:
-                        env_idx = index
-        if param_idx is not None and env_idx is not None and env_idx < param_idx:
-            return True
+            keys = _key_markers(fn, value, module_scope)
+            if param_key in keys and param_idx is None:
+                param_idx = index
+            if env_key in keys and env_idx is None:
+                env_idx = index
+        if param_idx is not None and env_idx is not None:
+            return "param-first" if param_idx < env_idx else "env-first"
+    return None
+
+
+def _has_param_or_env_call(fn: ast.FunctionDef, param_key: str | None, env_key: str | None) -> bool:
+    """``param_or_env(cfg, param_key, env_key, …)`` 形态——该 helper 语义即 param > env。"""
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "param_or_env":
+            if len(node.args) >= 3 and _str_const(node.args[1]) == param_key and _str_const(node.args[2]) == env_key:
+                return True
     return False
 
 
@@ -1424,6 +1526,7 @@ def _validate_agent_module(anchor: dict, contract: dict, repo: Path, discovery: 
     if Path(file_rel).parent.as_posix() != "backend/agent":
         errors.append(f"{anchor['id']}: agent module authority 必须直接位于 backend/agent/：{file_rel}")
     subdir = anchor.get("subdir")
+    exact_root_seen = False
     for sym in anchor["locators"]:
         info = _locator_info(discovery, file_rel, sym["name"])
         if info is None:
@@ -1435,14 +1538,26 @@ def _validate_agent_module(anchor: dict, contract: dict, repo: Path, discovery: 
             else:
                 errors.append(f"{anchor['id']}: {file_rel}:{sym['name']} 未复现 Path(__file__).resolve().parent（depth=1）")
         else:
-            shaped = [v for v in info.vals if v.file_derived and v.depth == 1 and subdir in v.segments]
+            shaped = [v for v in info.vals if v.file_derived and v.depth == 1 and _contains_ordered_pair(v, subdir)]
             if not shaped:
                 errors.append(
-                    f"{anchor['id']}: {file_rel}:{sym['name']} 未复现 Agent module 资源根（depth=1 + {subdir}）"
+                    f"{anchor['id']}: {file_rel}:{sym['name']} 未复现 Agent module 资源根（depth=1 + 有序 ('resources', {subdir!r})）"
                 )
+            if any(v.file_derived and v.depth == 1 and _tail_matches(v, subdir) for v in info.vals):
+                exact_root_seen = True
+            for val in info.vals:
+                if val.file_derived and "resources" in val.segments and subdir in val.segments and not _contains_ordered_pair(val, subdir):
+                    errors.append(
+                        f"{anchor['id']}: {file_rel}:{sym['name']} 资源根片段错序：{val.segments}"
+                        f"——须含相邻有序 ('resources', {subdir!r})"
+                    )
             deep = [v for v in info.vals if v.file_derived and (v.depth or 0) > 1]
             if deep:
                 errors.append(f"{anchor['id']}: {file_rel}:{sym['name']} 出现祖先深度推导——agent module 只允许 .parent")
+    if not exact_root_seen:
+        errors.append(
+            f"{anchor['id']}: {file_rel} 未出现以 ('resources', {subdir!r}) 结尾的资源根构造（root 不得带多余后缀）"
+        )
     env_key = anchor.get("env_key")
     if env_key and not _file_reads_env(repo, file_rel, env_key):
         errors.append(f"{anchor['id']}: {file_rel} 未读取 override 键 {env_key}（显式路径通道缺失）")
@@ -2391,6 +2506,53 @@ def run_self_test() -> int:
         )
         expect(_errors_of(_write_fixture(Path(tmp) / "r23", alpha_lib=lib)), "env 先于 param", "R23 env 优先")
 
+        # --- 红 R24：资源根尾部多余片段（复审 R1 原始反例） ---
+        lib = AGENT_SETUP_LIB.format(subdir="alpha", param="alpha_resources_dir", envkey="STP_ALPHA_RESOURCES_DIR")
+        lib = lib.replace(
+            '    return Path(AGENT_DIR) / "resources" / "alpha"',
+            '    return Path(AGENT_DIR) / "resources" / "alpha" / "unexpected"',
+        )
+        expect(_errors_of(_write_fixture(Path(tmp) / "r24", alpha_lib=lib)), "尾部有多余/错序片段", "R24 多余后缀")
+
+        # --- 红 R24b：资源根片段错序（resources 与族目录颠倒） ---
+        lib = AGENT_SETUP_LIB.format(subdir="alpha", param="alpha_resources_dir", envkey="STP_ALPHA_RESOURCES_DIR")
+        lib = lib.replace(
+            '    return Path(AGENT_DIR) / "resources" / "alpha"',
+            '    return Path(AGENT_DIR) / "alpha" / "resources"',
+        )
+        expect(_errors_of(_write_fixture(Path(tmp) / "r24b", alpha_lib=lib)), "尾部有多余/错序片段", "R24b 片段错序")
+
+        # --- 红 R25：legacy helper 在函数体内别名导入并调用（复审 R2） ---
+        root = _write_fixture(Path(tmp) / "r25")
+        (root / "backend/agent/scripts/beta_check/beta_check.py").write_text(
+            "def main():\n"
+            "    from _lib import resources_dir as rd\n"
+            "    print(rd({}))\n\n"
+            'if __name__ == "__main__":\n'
+            "    main()\n",
+            encoding="utf-8",
+        )
+        expect(_errors_of(root), "现可从族入口到达", "R25 函数内别名导入")
+
+        # --- 红 R26：经局部变量反转优先级（复审 R3） ---
+        lib = AGENT_SETUP_LIB.format(subdir="alpha", param="alpha_resources_dir", envkey="STP_ALPHA_RESOURCES_DIR")
+        lib = lib.replace(
+            '    base = cfg.get("alpha_resources_dir") or env("STP_ALPHA_RESOURCES_DIR", "")',
+            '    base = env("STP_ALPHA_RESOURCES_DIR", "")\n'
+            '    param_value = cfg.get("alpha_resources_dir")\n'
+            "    base = base or param_value",
+        )
+        expect(_errors_of(_write_fixture(Path(tmp) / "r26", alpha_lib=lib)), "env 先于 param", "R26 变量 env 优先")
+
+        # --- 绿 G4：经局部变量的 param 先行（等价写法不得误报） ---
+        lib = AGENT_SETUP_LIB.format(subdir="alpha", param="alpha_resources_dir", envkey="STP_ALPHA_RESOURCES_DIR")
+        lib = lib.replace(
+            '    base = cfg.get("alpha_resources_dir") or env("STP_ALPHA_RESOURCES_DIR", "")',
+            '    param_value = cfg.get("alpha_resources_dir")\n'
+            '    base = param_value or env("STP_ALPHA_RESOURCES_DIR", "")',
+        )
+        expect_clean(_errors_of(_write_fixture(Path(tmp) / "g4", alpha_lib=lib)), "G4 变量 param 先行")
+
         # --- 红 R16：base ref 不可解析 = 不可验证 ---
         git_root = Path(tmp) / "gitrepo"
         _write_fixture(git_root)
@@ -2424,10 +2586,11 @@ def run_self_test() -> int:
         return 1
     print(
         "[OK] check_resource_anchors self-test 红绿双向（旧深度 fallback / 别名 / join / relative tuple / "
-        "cache 祖先 / dead 接入 / 别名导入接入 / import * 接入 / getattr 接入 / 导出 / 绑定缺失 / 错误 env / "
-        "成员缺失 / 未声明候选 / 未解析表达式 / 零候选 / 急切默认锚 / 错误返回根 / 额外错误目录 / "
-        "删 param override / env 先于 param / 例外扩张 / base 不可验证 → 红；agent-dir 形态 / "
-        "显式 override / parents 与 tools_cache 字样不误报 → 绿）"
+        "cache 祖先 / dead 接入 / 别名导入接入 / 函数内别名导入 / import * 接入 / getattr 接入 / 导出 / "
+        "绑定缺失 / 错误 env / 成员缺失 / 未声明候选 / 未解析表达式 / 零候选 / 急切默认锚 / 错误返回根 / "
+        "额外错误目录 / 多余后缀 / 片段错序 / 删 param override / env 先于 param / 变量 env 优先 / "
+        "例外扩张 / base 不可验证 → 红；agent-dir 形态 / 显式 override / 变量 param 先行 / "
+        "parents 与 tools_cache 字样不误报 → 绿）"
     )
     return 0
 

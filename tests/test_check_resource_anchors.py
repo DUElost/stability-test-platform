@@ -279,6 +279,63 @@ class TestIsolationMutations:
         lib.write_text(original, encoding="utf-8")
         assert _errors_of(copy) == [], "恢复后应绿"
 
+    def test_extra_suffix_root_is_red_then_green(self, tmp_path):
+        """复审 R1：资源根尾部多余片段（root 必须是 ('resources', subdir) 结尾）必须红。"""
+        copy = self._copy(tmp_path)
+        lib = copy / "backend/agent/scripts/mtbf_setup/_lib.py"
+        original = lib.read_text(encoding="utf-8")
+        mutated = original.replace(
+            '    return Path(AGENT_DIR) / "resources" / "mtbf"',
+            '    return Path(AGENT_DIR) / "resources" / "mtbf" / "unexpected"',
+        )
+        assert mutated != original, "变异未生效（测试锚点漂移）"
+        lib.write_text(mutated, encoding="utf-8")
+        assert any("尾部有多余/错序片段" in e for e in _errors_of(copy)), "多余后缀应红"
+        lib.write_text(original, encoding="utf-8")
+        assert _errors_of(copy) == [], "恢复后应绿"
+
+    def test_function_level_alias_import_is_red_then_green(self, tmp_path):
+        """复审 R2：函数体内 `from _lib import x as rd` 不得让调用从可达性图消失。"""
+        copy = self._copy(tmp_path)
+        entry = copy / "backend/agent/scripts/mtbf_check/mtbf_check.py"
+        original = entry.read_text(encoding="utf-8")
+        entry.write_text(
+            "def main():\n"
+            "    from _lib import resources_dir as rd\n"
+            "    print(rd({}))\n\n"
+            'if __name__ == "__main__":\n'
+            "    main()\n",
+            encoding="utf-8",
+        )
+        errors = _errors_of(copy)
+        assert any("现可从族入口到达" in e for e in errors), f"函数内别名导入应红，实际 {errors}"
+        entry.write_text(original, encoding="utf-8")
+        assert _errors_of(copy) == [], "恢复后应绿"
+
+    def test_variable_env_first_is_red_and_param_first_green(self, tmp_path):
+        """复审 R3：经局部变量反转优先级必须红；等价 param 先行写法必须保持绿。"""
+        copy = self._copy(tmp_path)
+        lib = copy / "backend/agent/scripts/mtbf_setup/_lib.py"
+        original = lib.read_text(encoding="utf-8")
+        env_first = original.replace(
+            '    base = cfg.get("mtbf_resources_dir") or env("STP_MTBF_RESOURCES_DIR", "")',
+            '    base = env("STP_MTBF_RESOURCES_DIR", "")\n'
+            '    param_value = cfg.get("mtbf_resources_dir")\n'
+            "    base = base or param_value",
+        )
+        assert env_first != original, "变异未生效（测试锚点漂移）"
+        lib.write_text(env_first, encoding="utf-8")
+        assert any("env 先于 param" in e for e in _errors_of(copy)), "变量 env 优先应红"
+        param_first = original.replace(
+            '    base = cfg.get("mtbf_resources_dir") or env("STP_MTBF_RESOURCES_DIR", "")',
+            '    param_value = cfg.get("mtbf_resources_dir")\n'
+            '    base = param_value or env("STP_MTBF_RESOURCES_DIR", "")',
+        )
+        lib.write_text(param_first, encoding="utf-8")
+        assert _errors_of(copy) == [], "变量 param 先行应保持绿"
+        lib.write_text(original, encoding="utf-8")
+        assert _errors_of(copy) == [], "恢复后应绿"
+
     def test_declaration_hole_is_red(self, tmp_path):
         copy = self._copy(tmp_path)
         contract_path = copy / "tools/dev/resource_anchor_contract.json"
