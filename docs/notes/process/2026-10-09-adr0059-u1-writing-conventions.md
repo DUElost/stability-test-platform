@@ -23,7 +23,13 @@ Class: process
 - `check_governance_surface.py --check --base origin/main`：S1–S15、S5x 全绿（系统 Python 3.11；本容器无 `.venv`）。
 - `tests/test_skill_type_registry.py`、`tests/test_skill_usage_report.py`、`tests/test_memory_lint.py`、
   `tests/test_governance_m7_board_3205.py`：73 passed（临时 venv 只装 pytest，`--noconftest`）。
-- `check:quick` 未完成：首个门禁 `schema-at-head` 缺 `psycopg`，后续门禁未运行。
+- `check:quick`（复核返修后，项目入口 `./scripts/project_python.sh scripts/run_gates.py check:quick`）：
+  退出码 0，16 个门禁通过。环境是本容器内新建的 `.venv`（`--require-hashes` 安装 `backend/requirements-dev.lock`）
+  加 `frontend/` 下 `npm ci`。`schema-at-head` 因未设置 `DATABASE_URL` 按门禁设计跳过（WARN）；
+  本次未连接任何数据库，也未使用生产连接串。
+- 复核返修（PR #3628 Owner 复核）：skill 的步骤按 D4 拆成「核对适用范围」与「不适用即停止」两步、
+  「自查」与「PR 勾选」两步，勾选步骤补「预期：」；步骤外两条禁止分写并写出执行者「作者」。
+  `05-data-model.md` 的对照列改为「通知页事件名称中的「任务」（指 PlanRun）」，完整事件名作为证据保留。
 - 生效验收（ADR-0059 D5-6），2026-10-09，在本分支提交的临时 worktree 中运行，探针会话只给
   Read / Glob / Grep / Skill 工具：
 

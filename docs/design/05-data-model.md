@@ -60,7 +60,7 @@
 
 | 推荐名 | 合法别称 | 不要当成 |
 |---|---|---|
-| PlanRun | 通知页事件名「任务完成 / 任务失败」（`RUN_COMPLETED` / `RUN_FAILED`，由 `plan_run_finalization` 发出；`frontend/src/pages/notifications/NotificationsPage.tsx`） | SAQ 任务、定时任务（`task_schedules`）、systemd timer、JobInstance |
+| PlanRun | 通知页事件名称中的「任务」（指 PlanRun；证据：`RUN_COMPLETED` / `RUN_FAILED` 在 `frontend/src/pages/notifications/NotificationsPage.tsx` 显示为「任务完成 / 任务失败」，事件由 `plan_run_finalization` 发出） | SAQ 任务、定时任务（`task_schedules`）、systemd timer、JobInstance |
 
 ### JobInstance
 
