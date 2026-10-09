@@ -340,4 +340,28 @@ describe('AnomalyDashboard', () => {
     expect(screen.getByText('平台未支持')).toBeTruthy();
     expect(screen.getByText(/信号 2/)).toBeTruthy();
   });
+  // watcher_capability 是本次运行各 Job 中「最降级」的一档（plan_run_watcher_summary._aggregate_watcher_capability）。
+  // 降级提示曾在 WatcherSummaryCard 里，08-21 随死组件删除（a58e45e3）而丢失。
+  describe('异常采集降级提示', () => {
+    it('watcher_capability=unavailable 时提示「无异常」不等于没有崩溃', () => {
+      render_(<AnomalyDashboard {...({ data: makeData({ watcher_capability: 'unavailable' }), timeScope: 'all' } as any)} />);
+      const banner = screen.getByTestId('watcher-capability-degraded');
+      expect(banner).toHaveAttribute('role', 'status');
+      expect(banner).toHaveTextContent('异常采集降级');
+      expect(banner).toHaveTextContent('「无异常」不等于没有崩溃');
+    });
+
+    it.each([['polling'], ['inotifyd_realtime'], ['skipped'], [null]])(
+      'watcher_capability=%s 时不提示',
+      (capability) => {
+        render_(<AnomalyDashboard {...({ data: makeData({ watcher_capability: capability }), timeScope: 'all' } as any)} />);
+        expect(screen.queryByTestId('watcher-capability-degraded')).toBeNull();
+      },
+    );
+
+    it('加载失败时不提示（没有数据就没有结论）', () => {
+      render_(<AnomalyDashboard runId={1} isError data={makeData({ watcher_capability: 'unavailable' })} />);
+      expect(screen.queryByTestId('watcher-capability-degraded')).toBeNull();
+    });
+  });
 });
