@@ -31,7 +31,7 @@ ADR-0033 tool_manifest step（不新增 gate profile / required job）。
   函数与真实调用关系登记，引用 #3320 并写明删除/重新判定条件；新增入口调用（**含别名
   导入、`import *`、`getattr` 动态引用**）、导入路径、`__all__` 导出或资源消费使其可达
   即红；禁止文件/族目录级白名单；
-- **authority 判据（#3615 复核 P2 + 复审 R1–R3/S1–S3/T1–T2/U1–U2/V1–V2 返修，2026-10-07/09）**：
+- **authority 判据（#3615 复核 P2 + 复审 R1–R3/S1–S3/T1–T2/U1–U2/V1–V2/W1–W3 返修，2026-10-07/09）**：
   - 资源根相对 Agent authority 的**全部片段**必须恰为 `("resources", <族子目录>)`——
     前/后缀均不允许；必须出现在**返回位置**且每个被返回路径值都符合 authority；
     「经局部变量返回错误 literal 根」与直接返回同判红；root 与 consumer 的
@@ -39,11 +39,14 @@ ADR-0033 tool_manifest step（不新增 gate profile / required job）。
   - 显式 override 必须**双通道**（同一消费者同时读取 param 与 env），且证明必须关联到
     **实际消费值**：守卫变量在该行的 reaching def 与 return 值来源逐一分类；被同名覆盖
     或未被使用的旧链不作证明；**每个消费点各自证明**（他点正确链不得放行本点的双键/
-    条件表达式）；IfExp 仅对结构可证明形态分类——`X if X else Y`（truthy→body）与
-    `X if not X else Y`（truthy→orelse）；键交集不得代替条件等价性；无法证明 → 人工分类；
-  - fallback 惰性守卫校验**空/非空方向**（`if` 与 `IfExp` 同判）：仅 `not X`→body 或
-    `X`→orelse 等可证明形态放行；`if X: default()` / `default() if X else X` 反转方向判急切；
-    复合条件无法证明 → 人工分类；
+    条件表达式）；IfExp 仅对**完整空/非空选择语义**可证明形态分类——`X if X else Y`
+    （preferred=body）与 `Y if not X else X`（preferred=orelse）；`X if not X else Y`
+    空值时仍返回空 X → 拒绝（人工分类），不得标 Y 优先；两侧都带 override 键的非透明
+    IfExp（含通道重叠）不得因 Name 回溯判 `none` 而跳过；键交集不得代替条件等价性；
+  - fallback 惰性守卫校验**空/非空方向**且绑定**当前** override 值（`if` / `IfExp` /
+    Or 左侧同判）：历史变量名在被清空后失效；`"" or default()` 左侧非当前 override →
+    急切；仅 `not X`→body 或 `X`→orelse 等可证明形态放行；`if X: default()` /
+    `default() if X else X` 反转方向判急切；复合条件无法证明 → 人工分类；
   - 同族导入索引覆盖**函数体内** Import/ImportFrom 并保留原始符号名；同一别名多来源
     保留**全部**候选并显式报人工分类（禁止 last-write-wins）；`import *` / `getattr`
     动态引用一并判红；
@@ -107,17 +110,25 @@ ADR-0033 tool_manifest step（不新增 gate profile / required job）。
   （他点正确证明不得放行）；U2 仅改 `if not base:` → `if base:` → 「急切求值」；
   等价 `if base: pass else: default()` 保持绿。
 - **第六轮 V1–V2 的返修证据**（逐字反例，修复前 `errors=0`）：
-  V1 `return Path(param if not param else env) / project` → 「消费值选择链 env 先于 param」
-  （否定条件不得用键交集冒充 body 优先）；V2 在正确 fallback 后追加
+  V1 `return Path(param if not param else env) / project` → 「含双键但无法证明选择顺序」
+  （`X if not X else Y` 完整选择语义不成立）；V2 在正确 fallback 后追加
   `base = default() if base else base` → 「急切求值」；等价
   `default() if not base else base` 保持绿。
+- **第七轮 W1–W3 的返修证据**（逐字反例，修复前 `errors=0`）：
+  W1 `return Path(env if not env else param) / project` → 「无法证明选择顺序」；正确否定
+  等价 `env if not param else param` 保持绿；W2 在正确 fallback 后追加
+  `combined = param or env; base = env if env else combined` → 「无法证明选择顺序」
+  （对齐包 SHA 后三项守卫仍只资源 checker 红）；W3
+  `base = ""; base = default() if not base else base` 与 `base = "" or default()` →
+  「急切求值」（惰性证明绑定当前 override）。
 - `python tools/dev/check_resource_anchors.py`：真实仓库绿（69 文件 / 35 族；候选 49；
   26 锚 / 50 定位点；legacy 10；未解析 0），离线 <1s。
 - `python tools/dev/check_resource_anchors.py --base origin/main`：绿（首次引入契约，NOTE）。
-- `python scripts/run_pytest.py tests/test_check_resource_anchors.py -q`：34 passed
+- `python scripts/run_pytest.py tests/test_check_resource_anchors.py -q`：聚焦测试
   （含别名导入 / 函数内别名导入 / 别名复用多来源 / 通配+getattr / 错误返回根 / 前/后缀
   多余片段 / 同名覆盖 / 变量返回 literal / 条件表达式 env 优先 / 守卫方向反转 /
-  否定 IfExp / IfExp 非空分支 / 删 param / env 优先 / 变量优先 / 未使用链掩盖
+  否定 IfExp 无法证明 / 正确否定等价 / IfExp 非空分支 / 变量双键 IfExp /
+  失效变量名守卫 / 删 param / env 优先 / 变量优先 / 未使用链掩盖
   （红绿双侧）等隔离变异，均含恢复后转绿）。
   隔离副本变异证明 checker 有牙齿（恢复 G1a 错根 / 撤工具绑定 / 删包内伴随文件 /
   接入 dead helper / 抽掉声明条目 → 红；恢复 → 绿）；接线用例读 `run_gates.GATES`
