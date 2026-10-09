@@ -625,6 +625,25 @@ export default function AnomalyDashboard({
 
       {!isLoading && !isError && (
         <div className="space-y-3">
+          {/* watcher_capability = 本次运行各 Job 中最降级的一档（后端聚合）。unavailable =
+              探测全失败、补采也可能未运行：此时下面的「0」可能是没采到而不是没崩溃。
+              该提示曾在 WatcherSummaryCard 里，随 08-21 死组件清理（a58e45e3）丢失。 */}
+          {data?.watcher_capability === 'unavailable' && (
+            <div
+              role="status"
+              data-testid="watcher-capability-degraded"
+              title="watcher_capability=unavailable（取本次运行各 Job 中最降级的一档）"
+              className={cn('flex items-start gap-2 rounded-lg px-3 py-2 text-xs', ALERT_BANNER.warning)}
+            >
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>
+                <strong className="font-semibold">异常采集降级：</strong>
+                {'本次运行中有设备的 Watcher 未能正常启动，后台补采也可能没有运行。'
+                  + '对这些设备来说，「无异常」不等于没有崩溃，请以已上报的信号为准。'}
+              </span>
+            </div>
+          )}
+
           {supportsOriginSplit && (
             <StateTabs
               variant="underline"

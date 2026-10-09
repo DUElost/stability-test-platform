@@ -74,6 +74,6 @@
 - 只报告实际运行过的命令与结果；未完成的检查标为 pending，命令成功不等于验证通过，调用失败或超时不算通过；
 - 检查 diff 不含凭据、无关格式化或本地 Harness 状态；
 - 改前端交互/布局：jsdom 测不了几何/命中/autofill/下载，走静态守卫或真实浏览器（[`testing.md`](docs/development/testing.md) §4）；
-- Agent Note 使用 Decision、Alternatives、Verification、Revisit 四节；
+- Agent Note 使用 Decision、Alternatives、Verification、Revisit 四节；契约类文档与 SOP 中新写或改动的句子，作者必须按[写作约定](docs/development/writing-conventions.md)书写（ADR-0059）；
 - required checks 为 `lint`、`CodeQL`、`pr-typecheck`、`pr-compileall`、
   `pr-agent-tests`、`pr-migrate-empty-db`。
