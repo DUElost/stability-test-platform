@@ -11,6 +11,8 @@ Class: bug-fix
 
 本变更保持 ADR-0051 已发布包和 manifest 不可变，不修改任何既有工具版本。系统 Python 的安装状态不能替代 Agent venv 验证。
 
+安装自检的 xlwt 使用同步登记到生产依赖 inventory 与[依赖收敛规划](../process/2026-09-20-dependency-convergence-739.md)。它检查已有 `.xls` 导出契约；openpyxl 不能替代该格式的写侧，未来格式迁移或工具独立解释器落地时同步退役这项 Agent 耦合。
+
 部分接续[GT-SPRD CLI 对齐记录](2026-08-31-unisoc-scan-runner-toolkit-cli.md)：原有 CLI 与系统 Python legacy 路径的验证仍保留，本次修正包面借用 Agent 解释器后的依赖边界。
 
 ## Alternatives
@@ -27,6 +29,7 @@ Class: bug-fix
 - `check:quick`：16 个 gate 通过。未配置 DATABASE_URL，schema-at-head 按入口约定提示跳过；没有连接生产数据库。required CI 另行核验，不能以本地结果替代。
 - 现场单机离线日志解析/去重/导出已通过（原始 3 行、去重 2 行），48/48 实际解释器导入和版本复核通过；这证明手动补齐，不是本 PR 已部署。
 - 原生新轮次的完整 scan/upload/merge/extract 另行验收；不能用安装自检冒充全部平台证据完整。
+- 2026-10-09 CI 返修：head `e2725932` 的依赖 inventory 用例指出安装自检未登记，本次同步补齐台账和迁移说明。经内存保护 runner 重跑该 inventory、自检及 host identity 三个测试文件：10 passed（6 GiB / swap=0）；返修后的 required CI 另行核验。
 
 ## Revisit
 
