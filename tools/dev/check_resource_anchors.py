@@ -1341,6 +1341,884 @@ def _contains_ordered_pair(val: PathVal, subdir: str) -> bool:
     return any(segments[i] == "resources" and segments[i + 1] == subdir for i in range(len(segments) - 1))
 
 
+# ---------------------------------------------------------------------------
+# 四专项非 legacy 资源值：统一有限值分析（B4-G2-r9 / Y1–Y3）
+#
+# 只分析资源值，不 exec / eval / import 被扫描源码。选择值、默认根调用效果、
+# 每个实际返回/消费点走同一过程。键标记、proven_points、「任一 return」只可诊断，
+# 不能单独放行。
+# ---------------------------------------------------------------------------
+
+_MAX_EXPR_DEPTH = 64
+_MAX_HELPER_DEPTH = 8
+_MAX_PATHS = 32
+_RESOURCE_KINDS = frozenset({"P", "E", "D", "EMPTY", "UNKNOWN", "REL", "LITERAL"})
+
+
+class _ProofLimit(Exception):
+    """预算、循环、递归等无法证明的资源流。必须人工分类，不能截断后判绿。"""
+
+    def __init__(self, reason: str, line: int = 0) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.line = line
+
+
+@dataclass(frozen=True)
+class _Fact:
+    kind: str
+    truth: bool | None = None
+    line: int = 0
+    reason: str = ""
+    resource: bool = False
+    file: str = ""
+    func: str = ""
+    fields: tuple[tuple[str, "_Fact"], ...] = ()
+
+
+@dataclass
+class _Pst:
+    bind: dict[str, _Fact]
+    called: bool = False
+    called_unprovable: bool = False
+    ret: _Fact | None = None
+    stopped: bool = False
+
+
+@dataclass(frozen=True)
+class _Cell:
+    label: str
+    param_full: bool
+    env_full: bool
+    expected_path: str
+    expected_config: str
+
+
+@dataclass(frozen=True)
+class _Ctx:
+    cell: _Cell
+    param_key: str
+    env_key: str
+    roots: frozenset[str]
+    funcs: dict[str, ast.FunctionDef]
+    stack: tuple[str, ...]
+    hdepth: int
+    arg_names: frozenset[str]
+    file: str
+    func: str
+    fn_node: ast.FunctionDef
+    mode: str
+
+
+_CELLS: tuple[_Cell, ...] = (
+    _Cell("param+env", True, True, "P", "P"),
+    _Cell("param", True, False, "P", "P"),
+    _Cell("env", False, True, "E", "E"),
+    _Cell("empty", False, False, "D", "EMPTY"),
+)
+
+
+def _copy_st(st: _Pst) -> _Pst:
+    return _Pst(
+        bind=dict(st.bind),
+        called=st.called,
+        called_unprovable=st.called_unprovable,
+        ret=st.ret,
+        stopped=st.stopped,
+    )
+
+
+def _unk(ctx: _Ctx, node: ast.AST | None, reason: str, *, resource: bool = True) -> _Fact:
+    return _Fact(
+        kind="UNKNOWN",
+        truth=None,
+        line=getattr(node, "lineno", 0) if node is not None else 0,
+        reason=reason,
+        resource=resource,
+        file=ctx.file,
+        func=ctx.func,
+    )
+
+
+def _is_doc(stmt: ast.stmt) -> bool:
+    return isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant) and isinstance(stmt.value.value, str)
+
+
+def _binding_at_reference(st: _Pst, name: str, ctx: _Ctx) -> _Fact | None:
+    """PROOF-INVARIANT name-at-reference：只读本路径已经执行的赋值。"""
+    del ctx
+    return st.bind.get(name)
+
+
+def _propagate_name(fact: _Fact) -> _Fact:
+    """PROOF-INVARIANT transform-on-name：UNKNOWN 经 Name 保持 UNKNOWN，不降级为键标记。"""
+    return fact
+
+
+def _name_fact(node: ast.Name, st: _Pst, ctx: _Ctx) -> _Fact:
+    fact = _binding_at_reference(st, node.id, ctx)
+    if fact is None and node.id in ctx.arg_names:
+        return _Fact(kind="OTHER", truth=None, line=node.lineno, resource=False)
+    if fact is None:
+        return _unk(ctx, node, "引用时点未见赋值")
+    return _propagate_name(fact)
+
+
+def _const_fact(node: ast.Constant) -> _Fact:
+    value = node.value
+    if value is None or value == "":
+        return _Fact(kind="EMPTY", truth=False, line=node.lineno, resource=False)
+    if isinstance(value, str) and (value.startswith("/") or value.startswith("./") or value.startswith("../")):
+        return _Fact(kind="LITERAL", truth=True, line=node.lineno, resource=True, reason="字面量路径")
+    if isinstance(value, str):
+        return _Fact(kind="OTHER", truth=True, line=node.lineno, resource=False)
+    if isinstance(value, bool):
+        return _Fact(kind="OTHER", truth=value, line=node.lineno, resource=False)
+    if isinstance(value, (int, float)):
+        return _Fact(kind="OTHER", truth=value != 0, line=node.lineno, resource=False)
+    return _Fact(kind="OTHER", truth=None, line=node.lineno, resource=False)
+
+
+def _mentions_root(node: ast.AST, roots: frozenset[str]) -> bool:
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Call) and _call_name(sub) in roots:
+            return True
+    return False
+
+
+def _unsupported_flow(fn: ast.FunctionDef) -> str | None:
+    """循环 / try / with 影响本函数资源流时无法证明。不进入嵌套函数。"""
+
+    def walk(nodes: list[ast.stmt]) -> str | None:
+        for stmt in nodes:
+            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue
+            if isinstance(stmt, (ast.For, ast.AsyncFor, ast.While)):
+                return "循环"
+            if isinstance(stmt, ast.Try):
+                return "try"
+            if isinstance(stmt, (ast.With, ast.AsyncWith)):
+                return "with"
+            for child in ast.iter_child_nodes(stmt):
+                if isinstance(child, (ast.For, ast.AsyncFor, ast.While)):
+                    return "循环"
+                if isinstance(child, ast.Try):
+                    return "try"
+                if isinstance(child, (ast.With, ast.AsyncWith)):
+                    return "with"
+                if isinstance(child, (list, tuple)):
+                    continue
+            found = _unsupported_in(stmt)
+            if found:
+                return found
+        return None
+
+    return walk(fn.body)
+
+
+def _unsupported_in(node: ast.AST) -> str | None:
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        if isinstance(child, (ast.For, ast.AsyncFor, ast.While)):
+            return "循环"
+        if isinstance(child, ast.Try):
+            return "try"
+        if isinstance(child, (ast.With, ast.AsyncWith)):
+            return "with"
+        found = _unsupported_in(child)
+        if found:
+            return found
+    return None
+
+
+def _verified_env(fn: ast.FunctionDef) -> bool:
+    stmts = [s for s in fn.body if not _is_doc(s)]
+    if len(stmts) != 1 or not isinstance(stmts[0], ast.Return) or not isinstance(stmts[0].value, ast.Call):
+        return False
+    call = stmts[0].value
+    func = call.func
+    if not isinstance(func, ast.Attribute) or func.attr != "get":
+        return False
+    base = func.value
+    return (
+        isinstance(base, ast.Attribute)
+        and base.attr == "environ"
+        and isinstance(base.value, ast.Name)
+        and base.value.id == "os"
+    )
+
+
+def _verified_param_or_env(fn: ast.FunctionDef) -> bool:
+    """已核对的 param > env > default 摘要，不能只凭函数名授信。"""
+    stmts = [s for s in fn.body if not _is_doc(s)]
+    if len(stmts) != 5:
+        return False
+    if not all(isinstance(stmts[i], ast.Assign) for i in (0, 2)):
+        return False
+    if not all(isinstance(stmts[i], ast.If) for i in (1, 3)):
+        return False
+    if not isinstance(stmts[4], ast.Return):
+        return False
+    first, third = stmts[0].value, stmts[2].value
+    if not (isinstance(first, ast.Call) and isinstance(first.func, ast.Attribute) and first.func.attr == "get"):
+        return False
+    if not (isinstance(third, ast.Call) and isinstance(third.func, ast.Name) and third.func.id == "env"):
+        return False
+    if not any(isinstance(s, ast.Return) for s in stmts[1].body):
+        return False
+    return any(isinstance(s, ast.Return) for s in stmts[3].body)
+
+
+def _callee_touches_resource(fn: ast.FunctionDef, ctx: _Ctx) -> bool:
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Constant) and node.value in (ctx.param_key, ctx.env_key):
+            return True
+        if isinstance(node, ast.Call) and _call_name(node) in ctx.roots:
+            return True
+    return False
+
+
+def _returns_resource_dict(fn: ast.FunctionDef, param_key: str) -> bool:
+    for node in ast.walk(fn):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node is not fn:
+            continue
+        if isinstance(node, ast.Return) and isinstance(node.value, ast.Dict):
+            for key in node.value.keys:
+                if isinstance(key, ast.Constant) and key.value == param_key:
+                    return True
+    return False
+
+
+def _eval_expr(node: ast.AST, st: _Pst, ctx: _Ctx, depth: int) -> list[tuple[_Fact, _Pst]]:
+    if depth > _MAX_EXPR_DEPTH:
+        raise _ProofLimit("表达式/Name 深度超过 64", getattr(node, "lineno", 0))
+    if isinstance(node, ast.Constant):
+        return [(_const_fact(node), st)]
+    if isinstance(node, ast.Name):
+        return [(_name_fact(node, st, ctx), st)]
+    if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or):
+        return _eval_or(node.values, st, ctx, depth)
+    if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.And):
+        return _eval_and(node, st, ctx, depth)
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        return _eval_not(node, st, ctx, depth)
+    if isinstance(node, ast.IfExp):
+        return _eval_ifexp(node, st, ctx, depth)
+    if isinstance(node, ast.Compare):
+        return _eval_compare(node, st, ctx, depth)
+    if isinstance(node, ast.Call):
+        return _eval_call(node, st, ctx, depth)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        return _eval_div(node, st, ctx, depth)
+    if isinstance(node, ast.Dict):
+        return _eval_dict(node, st, ctx, depth)
+    if isinstance(node, ast.Subscript):
+        return _eval_subscript(node, st, ctx, depth)
+    if isinstance(node, ast.Attribute):
+        branches = _eval_expr(node.value, st, ctx, depth + 1)
+        return [(_unk(ctx, node, f"属性 {node.attr}"), bst) for _fact, bst in branches]
+    st2 = _copy_st(st)
+    if _mentions_root(node, ctx.roots):
+        st2.called_unprovable = True
+    return [(_unk(ctx, node, f"未支持的表达式 {type(node).__name__}"), st2)]
+
+
+def _eval_or(values: list[ast.expr], st: _Pst, ctx: _Ctx, depth: int) -> list[tuple[_Fact, _Pst]]:
+    if not values:
+        return [(_Fact(kind="EMPTY", truth=False, line=0, resource=False), st)]
+    head, *tail = values
+    out: list[tuple[_Fact, _Pst]] = []
+    for fact, st1 in _eval_expr(head, st, ctx, depth + 1):
+        if fact.truth is True or not tail:
+            out.append((fact, st1))
+        elif fact.truth is False:
+            out.extend(_eval_or(tail, st1, ctx, depth + 1))
+        else:
+            out.append((fact, st1))
+            if tail:
+                out.extend(_eval_or(tail, _copy_st(st1), ctx, depth + 1))
+        if len(out) > _MAX_PATHS:
+            raise _ProofLimit("路径状态超过 32", getattr(head, "lineno", 0))
+    return out
+
+
+def _eval_and(node: ast.BoolOp, st: _Pst, ctx: _Ctx, depth: int) -> list[tuple[_Fact, _Pst]]:
+    """And 一律 UNKNOWN。操作数仍求值，以便记录可能发生的默认根调用。"""
+    states = [st]
+    resource = False
+    for value in node.values:
+        nxt: list[_Pst] = []
+        for cur in states:
+            for fact, st1 in _eval_expr(value, cur, ctx, depth + 1):
+                resource = resource or fact.resource or fact.kind in _RESOURCE_KINDS and fact.kind != "EMPTY"
+                if fact.kind in ("P", "E", "D", "UNKNOWN", "REL", "LITERAL"):
+                    resource = True
+                nxt.append(st1)
+        states = nxt
+        if len(states) > _MAX_PATHS:
+            raise _ProofLimit("路径状态超过 32", node.lineno)
+    return [(_unk(ctx, node, "And 变换", resource=resource), st1) for st1 in states]
+
+
+def _eval_not(node: ast.UnaryOp, st: _Pst, ctx: _Ctx, depth: int) -> list[tuple[_Fact, _Pst]]:
+    out: list[tuple[_Fact, _Pst]] = []
+    for fact, st1 in _eval_expr(node.operand, st, ctx, depth + 1):
+        if fact.truth is True:
+            truth: bool | None = False
+        elif fact.truth is False:
+            truth = True
+        else:
+            truth = None
+        out.append((_Fact(kind="OTHER", truth=truth, line=node.lineno, resource=False), st1))
+    return out
+
+
+def _eval_ifexp(node: ast.IfExp, st: _Pst, ctx: _Ctx, depth: int) -> list[tuple[_Fact, _Pst]]:
+    out: list[tuple[_Fact, _Pst]] = []
+    for fact, st1 in _eval_expr(node.test, st, ctx, depth + 1):
+        if fact.truth is True:
+            out.extend(_eval_expr(node.body, st1, ctx, depth + 1))
+        elif fact.truth is False:
+            out.extend(_eval_expr(node.orelse, st1, ctx, depth + 1))
+        else:
+            out.extend(_eval_expr(node.body, _copy_st(st1), ctx, depth + 1))
+            out.extend(_eval_expr(node.orelse, _copy_st(st1), ctx, depth + 1))
+        if len(out) > _MAX_PATHS:
+            raise _ProofLimit("路径状态超过 32", node.lineno)
+    return out
+
+
+def _eval_compare(node: ast.Compare, st: _Pst, ctx: _Ctx, depth: int) -> list[tuple[_Fact, _Pst]]:
+    resource = False
+    states = [st]
+    for part in (node.left, *node.comparators):
+        nxt: list[_Pst] = []
+        for cur in states:
+            for fact, st1 in _eval_expr(part, cur, ctx, depth + 1):
+                if fact.resource or fact.kind in ("P", "E", "D", "UNKNOWN", "REL", "LITERAL"):
+                    resource = True
+                nxt.append(st1)
+        states = nxt
+        if len(states) > _MAX_PATHS:
+            raise _ProofLimit("路径状态超过 32", node.lineno)
+    reason = "Compare 变换" if resource else "非资源比较"
+    return [(_unk(ctx, node, reason, resource=resource), st1) for st1 in states]
+
+
+def _eval_div(node: ast.BinOp, st: _Pst, ctx: _Ctx, depth: int) -> list[tuple[_Fact, _Pst]]:
+    out: list[tuple[_Fact, _Pst]] = []
+    for left, st1 in _eval_expr(node.left, st, ctx, depth + 1):
+        for right, st2 in _eval_expr(node.right, st1, ctx, depth + 1):
+            if right.kind in ("UNKNOWN", "P", "E", "D"):
+                out.append((_unk(ctx, node, "路径后缀不是 project/variant"), st2))
+            elif left.kind == "UNKNOWN":
+                # project/variant 后缀不吞掉左侧已经证明不了的变换。
+                out.append((left, st2))
+            elif left.kind in ("P", "E", "D", "EMPTY", "REL", "LITERAL"):
+                kind = "REL" if left.kind == "EMPTY" else left.kind
+                out.append((
+                    _Fact(
+                        kind=kind,
+                        truth=True if kind != "EMPTY" else False,
+                        line=node.lineno,
+                        reason=left.reason,
+                        resource=True,
+                        file=left.file,
+                        func=left.func,
+                    ),
+                    st2,
+                ))
+            else:
+                out.append((_unk(ctx, node, "路径除法"), st2))
+    return out
+
+
+def _eval_subscript(node: ast.Subscript, st: _Pst, ctx: _Ctx, depth: int) -> list[tuple[_Fact, _Pst]]:
+    out: list[tuple[_Fact, _Pst]] = []
+    for fact, st1 in _eval_expr(node.value, st, ctx, depth + 1):
+        if fact.resource or fact.kind in ("P", "E", "D", "EMPTY", "UNKNOWN", "REL", "LITERAL"):
+            out.append((_unk(ctx, node, "下标/切片"), st1))
+        else:
+            out.append((_Fact(kind="OTHER", truth=None, line=node.lineno, resource=False), st1))
+    return out
+
+
+def _eval_dict(node: ast.Dict, st: _Pst, ctx: _Ctx, depth: int) -> list[tuple[_Fact, _Pst]]:
+    """只投影资源键。其它 flag / 数值 / Compare 不进入资源值。"""
+    states = [st]
+    field_facts: list[tuple[str, _Fact]] = []
+    for key, value in zip(node.keys, node.values, strict=False):
+        if not isinstance(key, ast.Constant) or not isinstance(key.value, str):
+            if value is not None and _mentions_root(value, ctx.roots):
+                for cur in states:
+                    cur.called_unprovable = True
+            continue
+        if key.value != ctx.param_key:
+            if value is not None and _mentions_root(value, ctx.roots):
+                for cur in states:
+                    cur.called_unprovable = True
+            continue
+        nxt: list[_Pst] = []
+        collected: list[_Fact] = []
+        for cur in states:
+            for fact, st1 in _eval_expr(value, cur, ctx, depth + 1):
+                collected.append(fact)
+                nxt.append(st1)
+        states = nxt or states
+        if len(collected) == 1:
+            field_facts = [(key.value, collected[0])]
+        elif collected:
+            return [(_unk(ctx, node, "资源字段分支无法合并"), st1) for st1 in states]
+        if len(states) > _MAX_PATHS:
+            raise _ProofLimit("路径状态超过 32", node.lineno)
+    fact = _Fact(kind="DICT", truth=True, line=node.lineno, resource=False, fields=tuple(field_facts))
+    return [(fact, st1) for st1 in states]
+
+
+def _mark_root_call(st: _Pst, node: ast.AST, ctx: _Ctx) -> tuple[_Fact, _Pst]:
+    st2 = _copy_st(st)
+    st2.called = True
+    return (
+        _Fact(kind="D", truth=True, line=node.lineno, resource=True, file=ctx.file, func=ctx.func, reason="默认根"),
+        st2,
+    )
+
+
+def _eval_args(args: list[ast.expr], st: _Pst, ctx: _Ctx, depth: int) -> list[tuple[list[_Fact], _Pst]]:
+    packs: list[tuple[list[_Fact], _Pst]] = [([], st)]
+    for arg in args:
+        nxt: list[tuple[list[_Fact], _Pst]] = []
+        for got, cur in packs:
+            for fact, st1 in _eval_expr(arg, cur, ctx, depth + 1):
+                nxt.append(([*got, fact], st1))
+                if len(nxt) > _MAX_PATHS:
+                    raise _ProofLimit("路径状态超过 32", getattr(arg, "lineno", 0))
+        packs = nxt
+    return packs
+
+
+def _eval_call(node: ast.Call, st: _Pst, ctx: _Ctx, depth: int) -> list[tuple[_Fact, _Pst]]:
+    name = _call_name(node)
+    if isinstance(node.func, ast.Attribute) and node.func.attr == "get":
+        return _eval_get(node, st, ctx, depth)
+    if name in ctx.roots and isinstance(node.func, ast.Name):
+        return [_mark_root_call(st, node, ctx)]
+    packs = _eval_args(list(node.args), st, ctx, depth)
+    out: list[tuple[_Fact, _Pst]] = []
+    for arg_facts, st1 in packs:
+        out.extend(_call_target(node, name, arg_facts, st1, ctx, depth))
+        if len(out) > _MAX_PATHS:
+            raise _ProofLimit("路径状态超过 32", node.lineno)
+    return out
+
+
+def _eval_get(node: ast.Call, st: _Pst, ctx: _Ctx, depth: int) -> list[tuple[_Fact, _Pst]]:
+    recv = node.func.value if isinstance(node.func, ast.Attribute) else None
+    branches = _eval_expr(recv, st, ctx, depth + 1) if recv is not None else [(None, st)]
+    out: list[tuple[_Fact, _Pst]] = []
+    key = _str_const(node.args[0]) if node.args else None
+    for _recv_fact, st1 in branches:
+        if not isinstance(recv, ast.Name) or recv.id not in ctx.arg_names:
+            st2 = _copy_st(st1)
+            if _mentions_root(node, ctx.roots):
+                st2.called_unprovable = True
+            out.append((_unk(ctx, node, "无法核对的 .get"), st2))
+            continue
+        if key == ctx.param_key:
+            if len(node.args) > 1:
+                default = _const_fact(node.args[1]) if isinstance(node.args[1], ast.Constant) else None
+                if default is not None and default.kind not in ("EMPTY",):
+                    out.append((_unk(ctx, node, "资源 get 的非空默认值"), st1))
+                    continue
+            if ctx.cell.param_full:
+                out.append((_Fact(kind="P", truth=True, line=node.lineno, resource=True, file=ctx.file, func=ctx.func), st1))
+            else:
+                out.append((_Fact(kind="EMPTY", truth=False, line=node.lineno, resource=True), st1))
+            continue
+        out.append((_Fact(kind="OTHER", truth=None, line=node.lineno, resource=False), st1))
+    return out
+
+
+def _call_target(
+    node: ast.Call,
+    name: str | None,
+    arg_facts: list[_Fact],
+    st: _Pst,
+    ctx: _Ctx,
+    depth: int,
+) -> list[tuple[_Fact, _Pst]]:
+    if name == "Path" and isinstance(node.func, ast.Name) and "Path" not in st.bind and len(arg_facts) == 1:
+        return [_wrap_path(node, arg_facts[0], st, ctx)]
+    callee = ctx.funcs.get(name) if name else None
+    if name == "env" and callee is not None and _verified_env(callee):
+        return [(_env_fact(node, callee, arg_facts, ctx), st)]
+    if name == "param_or_env" and callee is not None and _verified_param_or_env(callee):
+        return _param_or_env_fact(node, arg_facts, st, ctx, depth)
+    resource_arg = any(f.resource or f.kind in ("P", "E", "D", "UNKNOWN", "REL", "LITERAL") for f in arg_facts)
+    if callee is not None and name in ctx.stack:
+        return [(_unk(ctx, node, "递归"), st)]
+    if callee is not None and not resource_arg and not _callee_touches_resource(callee, ctx):
+        return [(_Fact(kind="OTHER", truth=None, line=node.lineno, resource=False), st)]
+    if callee is not None:
+        return _inline(node, callee, arg_facts, st, ctx)
+    st2 = _copy_st(st)
+    if _mentions_root(node, ctx.roots):
+        st2.called_unprovable = True
+    if resource_arg or (name and _mentions_root(node, ctx.roots)):
+        return [(_unk(ctx, node, f"未支持的调用 {name or '?'}"), st2)]
+    return [(_Fact(kind="OTHER", truth=None, line=node.lineno, resource=False), st2)]
+
+
+def _wrap_path(node: ast.Call, arg: _Fact, st: _Pst, ctx: _Ctx) -> tuple[_Fact, _Pst]:
+    if arg.kind in ("P", "E", "D"):
+        return (replace(arg, line=node.lineno, truth=True), st)
+    if arg.kind == "EMPTY":
+        return (_Fact(kind="REL", truth=True, line=node.lineno, resource=True, reason="Path(空)是相对目录，不是默认根"), st)
+    if arg.kind == "REL":
+        return (replace(arg, line=node.lineno, truth=True), st)
+    if arg.kind == "LITERAL":
+        return (replace(arg, line=node.lineno, truth=True, resource=True), st)
+    if arg.kind == "UNKNOWN":
+        return (replace(arg, line=arg.line or node.lineno), st)
+    return (_unk(ctx, node, "Path 包装的值无法证明"), st)
+
+
+def _env_fact(node: ast.Call, fn: ast.FunctionDef, arg_facts: list[_Fact], ctx: _Ctx) -> _Fact:
+    key = _str_const(node.args[0]) if node.args else None
+    if key != ctx.env_key:
+        return _Fact(kind="OTHER", truth=None, line=node.lineno, resource=False)
+    if ctx.cell.env_full:
+        return _Fact(kind="E", truth=True, line=node.lineno, resource=True, file=ctx.file, func=ctx.func)
+    if len(node.args) >= 2 and isinstance(node.args[1], ast.Constant):
+        empty = node.args[1].value in ("", None)
+        return _Fact(
+            kind="EMPTY" if empty else "OTHER",
+            truth=False if empty else True,
+            line=node.lineno,
+            resource=empty,
+        )
+    defaults = fn.args.defaults
+    if defaults and isinstance(defaults[-1], ast.Constant) and defaults[-1].value in ("", None):
+        return _Fact(kind="EMPTY", truth=False, line=node.lineno, resource=True)
+    return _unk(ctx, node, "env 空值默认无法证明")
+
+
+def _param_or_env_fact(
+    node: ast.Call, arg_facts: list[_Fact], st: _Pst, ctx: _Ctx, depth: int
+) -> list[tuple[_Fact, _Pst]]:
+    del arg_facts
+    pkey = _str_const(node.args[1]) if len(node.args) >= 2 else None
+    ekey = _str_const(node.args[2]) if len(node.args) >= 3 else None
+    if pkey != ctx.param_key or ekey != ctx.env_key:
+        return [(_Fact(kind="OTHER", truth=None, line=node.lineno, resource=False), st)]
+    if ctx.cell.param_full:
+        return [(_Fact(kind="P", truth=True, line=node.lineno, resource=True, file=ctx.file, func=ctx.func), st)]
+    if ctx.cell.env_full:
+        return [(_Fact(kind="E", truth=True, line=node.lineno, resource=True, file=ctx.file, func=ctx.func), st)]
+    if len(node.args) >= 4:
+        return _eval_expr(node.args[3], st, ctx, depth + 1)
+    return [(_Fact(kind="EMPTY", truth=False, line=node.lineno, resource=True), st)]
+
+
+def _inline(
+    node: ast.Call, callee: ast.FunctionDef, arg_facts: list[_Fact], st: _Pst, ctx: _Ctx
+) -> list[tuple[_Fact, _Pst]]:
+    if ctx.hdepth + 1 > _MAX_HELPER_DEPTH:
+        raise _ProofLimit("同文件 helper 调用深度超过 8", node.lineno)
+    names = [a.arg for a in callee.args.args]
+    bind: dict[str, _Fact] = {}
+    for index, arg_name in enumerate(names):
+        if index < len(arg_facts):
+            bind[arg_name] = arg_facts[index]
+    child = _Ctx(
+        cell=ctx.cell,
+        param_key=ctx.param_key,
+        env_key=ctx.env_key,
+        roots=ctx.roots,
+        funcs=ctx.funcs,
+        stack=ctx.stack + (callee.name,),
+        hdepth=ctx.hdepth + 1,
+        arg_names=frozenset(names),
+        file=ctx.file,
+        func=callee.name,
+        fn_node=callee,
+        mode=ctx.mode,
+    )
+    entered = _Pst(bind=bind, called=st.called, called_unprovable=st.called_unprovable)
+    paths = _run_block(callee.body, entered, child)
+    out: list[tuple[_Fact, _Pst]] = []
+    for path in paths:
+        st2 = _copy_st(st)
+        st2.called = path.called
+        st2.called_unprovable = path.called_unprovable or st.called_unprovable
+        fact = path.ret if path.ret is not None else _unk(ctx, node, f"{callee.name} 无返回")
+        out.append((fact, st2))
+    return out
+
+
+def _run_stmt(stmt: ast.stmt, st: _Pst, ctx: _Ctx) -> list[_Pst]:
+    if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return [st]
+    if isinstance(stmt, ast.Pass) or isinstance(stmt, (ast.Import, ast.ImportFrom, ast.Global, ast.Nonlocal)):
+        return [st]
+    if isinstance(stmt, ast.Expr) and _is_doc(stmt):
+        return [st]
+    if isinstance(stmt, ast.Raise):
+        st2 = _copy_st(st)
+        st2.stopped = True
+        return [st2]
+    if isinstance(stmt, ast.Return):
+        if stmt.value is None:
+            st2 = _copy_st(st)
+            st2.stopped = True
+            st2.ret = _Fact(kind="EMPTY", truth=False, line=stmt.lineno, resource=False)
+            return [st2]
+        out: list[_Pst] = []
+        for fact, st1 in _eval_expr(stmt.value, st, ctx, 0):
+            st2 = _copy_st(st1)
+            st2.stopped = True
+            st2.ret = fact
+            out.append(st2)
+        return out
+    if isinstance(stmt, ast.Assign):
+        return _run_assign(stmt.targets, stmt.value, stmt.lineno, st, ctx)
+    if isinstance(stmt, ast.AnnAssign) and stmt.value is not None:
+        return _run_assign([stmt.target], stmt.value, stmt.lineno, st, ctx)
+    if isinstance(stmt, ast.AugAssign) and isinstance(stmt.target, ast.Name):
+        st2 = _copy_st(st)
+        st2.bind[stmt.target.id] = _unk(ctx, stmt, "增量赋值")
+        return [st2]
+    if isinstance(stmt, ast.If):
+        return _run_if(stmt, st, ctx)
+    if isinstance(stmt, ast.Expr):
+        return [st1 for _fact, st1 in _eval_expr(stmt.value, st, ctx, 0)]
+    if isinstance(stmt, (ast.For, ast.While, ast.Try, ast.With)):
+        raise _ProofLimit(f"无法证明的语句 {type(stmt).__name__}", getattr(stmt, "lineno", 0))
+    st2 = _copy_st(st)
+    if _mentions_root(stmt, ctx.roots):
+        st2.called_unprovable = True
+    return [st2]
+
+
+def _run_assign(
+    targets: list[ast.expr], value: ast.expr, lineno: int, st: _Pst, ctx: _Ctx
+) -> list[_Pst]:
+    del lineno
+    out: list[_Pst] = []
+    simple = [t for t in targets if isinstance(t, ast.Name)]
+    for fact, st1 in _eval_expr(value, st, ctx, 0):
+        st2 = _copy_st(st1)
+        if len(simple) == len(targets) and simple:
+            for target in simple:
+                st2.bind[target.id] = fact
+        else:
+            for target in simple:
+                st2.bind[target.id] = _unk(ctx, target, "不支持的赋值目标")
+        out.append(st2)
+    return out
+
+
+def _run_if(stmt: ast.If, st: _Pst, ctx: _Ctx) -> list[_Pst]:
+    out: list[_Pst] = []
+    for fact, st1 in _eval_expr(stmt.test, st, ctx, 0):
+        if fact.truth is True:
+            out.extend(_run_block(stmt.body, st1, ctx))
+        elif fact.truth is False:
+            out.extend(_run_block(stmt.orelse, st1, ctx))
+        else:
+            out.extend(_run_block(stmt.body, _copy_st(st1), ctx))
+            out.extend(_run_block(stmt.orelse, _copy_st(st1), ctx))
+        if len(out) > _MAX_PATHS:
+            raise _ProofLimit("路径状态超过 32", stmt.lineno)
+    return out
+
+
+def _run_block(stmts: list[ast.stmt], st: _Pst, ctx: _Ctx) -> list[_Pst]:
+    states = [st]
+    for stmt in stmts:
+        nxt: list[_Pst] = []
+        for cur in states:
+            if cur.stopped:
+                nxt.append(cur)
+                continue
+            nxt.extend(_run_stmt(stmt, cur, ctx))
+            if len(nxt) > _MAX_PATHS:
+                raise _ProofLimit("路径状态超过 32", getattr(stmt, "lineno", 0))
+        states = nxt
+    return states
+
+
+def _observed_kind(path: _Pst, ctx: _Ctx) -> str | None:
+    ret = path.ret
+    if ret is None:
+        return None
+    if ctx.mode == "config":
+        if ret.kind != "DICT":
+            return ret.kind
+        for key, fact in ret.fields:
+            if key == ctx.param_key:
+                return fact.kind
+        return "MISSING"
+    return ret.kind
+
+
+def _observed_fact(path: _Pst, ctx: _Ctx) -> _Fact | None:
+    ret = path.ret
+    if ret is None:
+        return None
+    if ctx.mode == "config" and ret.kind == "DICT":
+        for key, fact in ret.fields:
+            if key == ctx.param_key:
+                return fact
+        return None
+    return ret
+
+
+def _cell_detail(paths: list[_Pst], expected: str, forbid_call: bool, ctx: _Ctx) -> str | None:
+    """PROOF-INVARIANT returns：每条可达资源返回都要满足，禁止用其它返回点的 any() 放行。"""
+    reasons: list[str] = []
+    saw_return = False
+    for index, path in enumerate(paths):
+        if path.called_unprovable:
+            reasons.append(f"路径{index} 默认根调用效果无法证明")
+        kind = _observed_kind(path, ctx)
+        if kind is None:
+            if forbid_call and path.called:
+                reasons.append(f"路径{index} 未消费资源值但执行了默认根")
+            continue
+        saw_return = True
+        if forbid_call and path.called:
+            reasons.append(f"路径{index} 非空 override 仍执行了默认根（返回 {kind}）")
+        if kind != expected:
+            fact = _observed_fact(path, ctx)
+            extra = ""
+            if fact is not None and (fact.kind == "UNKNOWN" or kind == "UNKNOWN"):
+                extra = f"；UNKNOWN {fact.file}:{fact.func}:L{fact.line} {fact.reason}"
+            reasons.append(f"路径{index} 返回 {kind}，期望 {expected}{extra}")
+    if not saw_return:
+        reasons.append("没有实际资源消费点")
+    if not reasons:
+        return None
+    return "；".join(dict.fromkeys(reasons))
+
+
+def _analyze_consumer(fn: ast.FunctionDef, ctx_base: _Ctx) -> list[tuple[str, str, str]]:
+    """返回 (cell, status, detail)。status 为期望种类或 RED。"""
+    blocked = _unsupported_flow(fn)
+    rows: list[tuple[str, str, str]] = []
+    for cell in _CELLS:
+        expected = cell.expected_config if ctx_base.mode == "config" else cell.expected_path
+        forbid = expected != "D"
+        if blocked:
+            rows.append((cell.label, "RED", f"无法证明：{blocked}（人工分类）"))
+            continue
+        ctx = _Ctx(
+            cell=cell,
+            param_key=ctx_base.param_key,
+            env_key=ctx_base.env_key,
+            roots=ctx_base.roots,
+            funcs=ctx_base.funcs,
+            stack=(fn.name,),
+            hdepth=1,
+            arg_names=frozenset(a.arg for a in fn.args.args),
+            file=ctx_base.file,
+            func=fn.name,
+            fn_node=fn,
+            mode=ctx_base.mode,
+        )
+        try:
+            paths = _run_block(fn.body, _Pst(bind={}), ctx)
+        except _ProofLimit as exc:
+            rows.append((cell.label, "RED", f"无法证明：{exc.reason}（L{exc.line}，人工分类）"))
+            continue
+        detail = _cell_detail(paths, expected, forbid, ctx)
+        if detail is None:
+            rows.append((cell.label, expected, ""))
+        else:
+            rows.append((cell.label, "RED", detail))
+    return rows
+
+
+def finite_resource_report(
+    source: str,
+    *,
+    param_key: str,
+    env_key: str,
+    consumer: str,
+    root: str,
+) -> list[tuple[str, str, str]]:
+    """四格 (label, status, detail)。status 为 P/E/D/EMPTY 或 RED。期望由调用方独立给出。"""
+    tree = ast.parse(source)
+    funcs = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+    fn = funcs[consumer]
+    mode = "config" if _returns_resource_dict(fn, param_key) else "path"
+    base = _Ctx(
+        cell=_CELLS[0],
+        param_key=param_key,
+        env_key=env_key,
+        roots=frozenset({root}),
+        funcs=funcs,
+        stack=(),
+        hdepth=0,
+        arg_names=frozenset(),
+        file="<snippet>",
+        func=consumer,
+        fn_node=fn,
+        mode=mode,
+    )
+    return _analyze_consumer(fn, base)
+
+
+def finite_resource_cells(
+    source: str,
+    *,
+    param_key: str,
+    env_key: str,
+    consumer: str,
+    root: str,
+) -> tuple[str, str, str, str]:
+    """四格状态。期望由调用方独立给出，这里只返回分析器观察值。"""
+    return tuple(
+        status
+        for _label, status, _detail in finite_resource_report(
+            source, param_key=param_key, env_key=env_key, consumer=consumer, root=root
+        )
+    )  # type: ignore[return-value]
+
+
+def _finite_host_issues(
+    fn: ast.FunctionDef,
+    *,
+    anchor_id: str,
+    file_rel: str,
+    param_key: str,
+    env_key: str,
+    roots: set[str],
+    funcs: dict[str, ast.FunctionDef],
+) -> list[str]:
+    mode = "config" if _returns_resource_dict(fn, param_key) else "path"
+    base = _Ctx(
+        cell=_CELLS[0],
+        param_key=param_key,
+        env_key=env_key,
+        roots=frozenset(roots),
+        funcs=funcs,
+        stack=(),
+        hdepth=0,
+        arg_names=frozenset(),
+        file=file_rel,
+        func=fn.name,
+        fn_node=fn,
+        mode=mode,
+    )
+    issues: list[str] = []
+    for label, status, detail in _analyze_consumer(fn, base):
+        if status == "RED":
+            issues.append(f"{anchor_id}: {file_rel}:{fn.name} 有限值证明[{label}] {detail}")
+    return issues
+
+
 def _host_root_shape_ok(anchor: dict, contract: dict, discovery: Discovery) -> tuple[list[str], list[str]]:
     """返回 (errors, root_locators)：复核默认资源根表达式的形态。"""
     fam_name = anchor.get("family")
@@ -1491,6 +2369,32 @@ def _validate_host_local_root(anchor: dict, contract: dict, repo: Path, discover
             f"{anchor['id']}: {anchor['file']}:{consumer} 的 override 选择顺序无法静态证明——"
             "需人工分类（不得按 param-first 放行）"
         )
+    finite_issues: list[str] = []
+    if param_key and env_key:
+        proved: set[str] = set()
+        for consumer in consumers:
+            info = _locator_info(discovery, anchor["file"], consumer)
+            fam_keys = {k for f, k in (info.family_keys if info else set()) if f == fam_name}
+            if param_key not in fam_keys or env_key not in fam_keys:
+                continue
+            fn = fa.funcs.get(consumer)
+            if fn is None or consumer in proved:
+                continue
+            proved.add(consumer)
+            finite_issues.extend(
+                _finite_host_issues(
+                    fn,
+                    anchor_id=anchor["id"],
+                    file_rel=anchor["file"],
+                    param_key=param_key,
+                    env_key=env_key,
+                    roots=set(roots),
+                    funcs=fa.funcs,
+                )
+            )
+    # 有限值证明已通过时，不再用「任一 return / 句法惰性」追加放行或误伤
+    # （提前返回、Or fallback 的调用效果以有限值路径为准）。证明失败时保留
+    # 旧诊断文案，供既有反例归因；那些文案不能把有限值失败清成绿。
     lazy_root_calls = 0
     project_ok = False
     for consumer in consumers:
@@ -1504,6 +2408,12 @@ def _validate_host_local_root(anchor: dict, contract: dict, repo: Path, discover
                 errors.append(
                     f"{anchor['id']}: 消费者 {anchor['file']}:{consumer} 内出现 __file__ 深度资源路径——C1 违例"
                 )
+        if _calls_project_component(fn, fam) and not (
+            param_key and _returns_resource_dict(fn, param_key)
+        ):
+            project_ok = True
+        if not finite_issues:
+            continue
         key_vars = _key_read_vars(fn, {k for k in (param_key, env_key) if k}, fa, set(), set())
         consumer_lazy = 0
         for call in _find_call_nodes(fn):
@@ -1516,8 +2426,6 @@ def _validate_host_local_root(anchor: dict, contract: dict, repo: Path, discover
             if verdict == "lazy":
                 consumer_lazy += 1
                 lazy_root_calls += 1
-                if _calls_project_component(fn, fam):
-                    project_ok = True
             elif verdict == "unproven":
                 errors.append(
                     f"{anchor['id']}: {anchor['file']}:{consumer} 对默认锚 {name}() 的守卫条件"
@@ -1528,14 +2436,17 @@ def _validate_host_local_root(anchor: dict, contract: dict, repo: Path, discover
                     f"{anchor['id']}: {anchor['file']}:{consumer} 对默认锚 {name}() 的调用被急切求值——"
                     "override 分支不得依赖默认锚导入"
                 )
-        # 有惰性 fallback 但其结果未进入最终返回——空 override 时丢弃默认根（复审 X1）
         if consumer_lazy > 0 and not _returns_consume_default_root(fn, roots):
             errors.append(
                 f"{anchor['id']}: {anchor['file']}:{consumer} 最终返回未关联默认根 fallback——"
                 "空 override 时会丢弃默认 authority（需人工分类）"
             )
-    if roots and lazy_root_calls == 0:
-        errors.append(f"{anchor['id']}: 默认锚 {roots} 未被任何消费者惰性消费")
+    if finite_issues:
+        if roots and lazy_root_calls == 0:
+            errors.append(f"{anchor['id']}: 默认锚 {roots} 未被任何消费者惰性消费")
+        elif roots and not project_ok:
+            errors.append(f"{anchor['id']}: 资源根消费者缺少 project 后缀读取（{fam_name}）")
+        errors.extend(finite_issues)
     elif roots and not project_ok:
         errors.append(f"{anchor['id']}: 资源根消费者缺少 project 后缀读取（{fam_name}）")
     # 返回值一致性（#3615 复核 P2-2）：默认资源根必须出现在**返回位置**且返回值全部符合
@@ -3243,6 +4154,58 @@ def run_self_test() -> int:
             "R40 And 清零冒充活值",
         )
 
+        # --- 红 R41：未知条件的坏 return 不能被另一个正确 return 放行（Y1） ---
+        lib = AGENT_SETUP_LIB.format(subdir="alpha", param="alpha_resources_dir", envkey="STP_ALPHA_RESOURCES_DIR")
+        lib = lib.replace(
+            '    return Path(base) / (cfg.get("project") or "legacy")',
+            '    if cfg.get("use_alternate"):\n'
+            '        return Path(cfg.get("alpha_resources_dir") or env("STP_ALPHA_RESOURCES_DIR", ""))'
+            ' / (cfg.get("project") or "legacy")\n'
+            '    return Path(base) / (cfg.get("project") or "legacy")',
+        )
+        expect(
+            _errors_of(_write_fixture(Path(tmp) / "r41", alpha_lib=lib)),
+            "有限值证明",
+            "R41 双 return 不能互相放行",
+        )
+
+        # --- 红 R42：fallback 前的快照不能读到之后的默认根（Y2） ---
+        lib = AGENT_SETUP_LIB.format(subdir="alpha", param="alpha_resources_dir", envkey="STP_ALPHA_RESOURCES_DIR")
+        lib = lib.replace(
+            '    base = cfg.get("alpha_resources_dir") or env("STP_ALPHA_RESOURCES_DIR", "")\n'
+            "    if not base:\n"
+            "        base = _default_resources_root()\n",
+            '    base = cfg.get("alpha_resources_dir") or env("STP_ALPHA_RESOURCES_DIR", "")\n'
+            "    selected = base\n"
+            "    if not base:\n"
+            "        base = _default_resources_root()\n",
+        )
+        lib = lib.replace(
+            '    return Path(base) / (cfg.get("project") or "legacy")',
+            '    return Path(selected) / (cfg.get("project") or "legacy")',
+        )
+        expect(
+            _errors_of(_write_fixture(Path(tmp) / "r42", alpha_lib=lib)),
+            "有限值证明[empty]",
+            "R42 fallback 前快照",
+        )
+
+        # --- 红 R43：And 清零经 Name 传递后仍是 UNKNOWN（Y3） ---
+        lib = AGENT_SETUP_LIB.format(subdir="alpha", param="alpha_resources_dir", envkey="STP_ALPHA_RESOURCES_DIR")
+        lib = lib.replace(
+            "    if not base:\n        base = _default_resources_root()\n",
+            "    if not base:\n"
+            "        base = _default_resources_root()\n"
+            '    cleared = (cfg.get("alpha_resources_dir") or env("STP_ALPHA_RESOURCES_DIR", "")) and ""\n'
+            "    base = cleared\n"
+            "    base = _default_resources_root() if not base else base\n",
+        )
+        expect(
+            _errors_of(_write_fixture(Path(tmp) / "r43", alpha_lib=lib)),
+            "UNKNOWN",
+            "R43 And 经 Name 仍 UNKNOWN",
+        )
+
         # --- 红 R16：base ref 不可解析 = 不可验证 ---
         git_root = Path(tmp) / "gitrepo"
         _write_fixture(git_root)
@@ -3282,6 +4245,7 @@ def run_self_test() -> int:
         "同名覆盖 / 变量返回 literal / 条件表达式 env 优先 / 守卫方向反转 / 否定 IfExp 无法证明 / "
         "IfExp 非空分支默认锚 / 变量双键 IfExp / 失效变量名守卫 / 非 override Or 左侧 / "
         "最终 return 丢弃默认根 / And 清零冒充活值 / "
+        "双 return 不能互相放行 / fallback 前快照 / And 经 Name 仍 UNKNOWN / "
         "删 param override / env 先于 param / 变量 env 优先 / "
         "例外扩张 / base 不可验证 → 红；agent-dir 形态 / 显式 override / 变量 param 先行 / "
         "else 空分支惰性 / IfExp 空分支惰性 / 正确否定等价 / parents 与 tools_cache 字样不误报 → 绿）"

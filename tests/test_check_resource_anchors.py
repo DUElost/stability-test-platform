@@ -15,12 +15,16 @@
 """
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import shutil
 import subprocess
 import sys
+import types
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 CHECKER = ROOT / "tools" / "dev" / "check_resource_anchors.py"
@@ -642,3 +646,430 @@ class TestGateWiring:
         for args in (("--self-test",), ("--base", _base_ref())):
             proc = _run_checker(*args)
             assert proc.returncode == 0, f"gate 同款命令 {args} 红：{proc.stderr}"
+
+
+# ---------------------------------------------------------------------------
+# B4-G2-r9：固定组合矩阵。期望字面量来自四格契约，不调用分析器推期望。
+# 格顺序：param+env、param、env、empty。
+# ---------------------------------------------------------------------------
+
+_PK = "mtbf_resources_dir"
+_EK = "STP_MTBF_RESOURCES_DIR"
+_GREEN = ("P", "P", "E", "D")
+_CONFIG = ("P", "P", "E", "EMPTY")
+
+
+def _finite_source(body: str, *, consumer: str = "resources_dir", extra: str = "") -> str:
+    indented = "\n".join(("    " + line) if line else "" for line in body.strip("\n").splitlines())
+    return (
+        "import os\n"
+        "from pathlib import Path\n\n"
+        "def env(key, default=\"\"):\n"
+        "    return os.environ.get(key, default)\n\n"
+        "def _default_resources_root():\n"
+        "    from config import AGENT_DIR\n"
+        "    return Path(AGENT_DIR) / \"resources\" / \"mtbf\"\n\n"
+        f"{extra}"
+        f"def {consumer}(cfg):\n"
+        f"{indented}\n"
+    )
+
+
+def _matrix_cases() -> list[dict]:
+    """只拼接固定模板。每条 expect 是手写字面量。"""
+    get_or = 'cfg.get("mtbf_resources_dir") or env("STP_MTBF_RESOURCES_DIR", "")'
+    rows = [
+        {"id": "direct-or", "body": f"base = {get_or}\nif not base:\n    base = _default_resources_root()\nreturn Path(base) / \"legacy\"", "expect": _GREEN},
+        {"id": "name-1", "body": f"base = {get_or}\na = base\nif not a:\n    a = _default_resources_root()\nreturn Path(a) / \"legacy\"", "expect": _GREEN},
+        {"id": "name-2", "body": f"base = {get_or}\na = base\nb = a\nif not b:\n    b = _default_resources_root()\nreturn Path(b) / \"legacy\"", "expect": _GREEN},
+        {"id": "snapshot-after", "body": f"base = {get_or}\nif not base:\n    base = _default_resources_root()\nselected = base\nreturn Path(selected) / \"legacy\"", "expect": _GREEN},
+        {"id": "snapshot-before", "body": f"base = {get_or}\nselected = base\nif not base:\n    base = _default_resources_root()\nreturn Path(selected) / \"legacy\"", "expect": ("P", "P", "E", "RED")},
+        {"id": "overwrite-env", "body": f"base = {get_or}\nbase = env(\"STP_MTBF_RESOURCES_DIR\", \"\")\nif not base:\n    base = _default_resources_root()\nreturn Path(base) / \"legacy\"", "expect": ("RED", "RED", "E", "D")},
+        {"id": "unused-then-env-first", "body": f"unused = {get_or}\nbase = env(\"STP_MTBF_RESOURCES_DIR\", \"\") or cfg.get(\"mtbf_resources_dir\")\nif not base:\n    base = _default_resources_root()\nreturn Path(base) / \"legacy\"", "expect": ("RED", "P", "E", "D")},
+        {"id": "single-return", "body": f"base = {get_or}\nif not base:\n    base = _default_resources_root()\nreturn Path(base) / \"legacy\"", "expect": _GREEN},
+        {"id": "dual-good-good", "body": f"base = {get_or}\nif not base:\n    base = _default_resources_root()\nif cfg.get(\"flag\"):\n    return Path(base) / \"legacy\"\nreturn Path(base) / \"legacy\"", "expect": _GREEN},
+        {"id": "dual-good-bad", "body": f"base = {get_or}\nif not base:\n    base = _default_resources_root()\nif cfg.get(\"use_alternate\"):\n    return Path({get_or}) / \"legacy\"\nreturn Path(base) / \"legacy\"", "expect": ("P", "P", "E", "RED")},
+        {"id": "dual-bad-good", "body": f"base = {get_or}\nif not base:\n    base = _default_resources_root()\nif cfg.get(\"use_alternate\"):\n    return Path(base) / \"legacy\"\nreturn Path({get_or}) / \"legacy\"", "expect": ("P", "P", "E", "RED")},
+        {"id": "early-nonempty-return", "body": f"base = {get_or}\nif base:\n    return Path(base) / \"legacy\"\nbase = _default_resources_root()\nreturn Path(base) / \"legacy\"", "expect": _GREEN},
+        {"id": "unreachable-return-not-proof", "body": f"base = {get_or}\nreturn Path(base) / \"legacy\"\nbase = _default_resources_root()\nreturn Path(base) / \"legacy\"", "expect": ("P", "P", "E", "RED")},
+        {"id": "ifexp-positive", "body": "base = cfg.get(\"mtbf_resources_dir\") if cfg.get(\"mtbf_resources_dir\") else env(\"STP_MTBF_RESOURCES_DIR\", \"\")\nif not base:\n    base = _default_resources_root()\nreturn Path(base) / \"legacy\"", "expect": _GREEN},
+        {"id": "ifexp-negation-ok", "body": "base = env(\"STP_MTBF_RESOURCES_DIR\", \"\") if not cfg.get(\"mtbf_resources_dir\") else cfg.get(\"mtbf_resources_dir\")\nif not base:\n    base = _default_resources_root()\nreturn Path(base) / \"legacy\"", "expect": _GREEN},
+        {"id": "if-not-base", "body": f"base = {get_or}\nif not base:\n    base = _default_resources_root()\nreturn Path(base) / \"legacy\"", "expect": _GREEN},
+        {"id": "if-base-else", "body": f"base = {get_or}\nif base:\n    pass\nelse:\n    base = _default_resources_root()\nreturn Path(base) / \"legacy\"", "expect": _GREEN},
+        {"id": "or-fallback", "body": f"base = {get_or} or _default_resources_root()\nreturn Path(base) / \"legacy\"", "expect": _GREEN},
+        {"id": "env-first", "body": "base = env(\"STP_MTBF_RESOURCES_DIR\", \"\") or cfg.get(\"mtbf_resources_dir\")\nif not base:\n    base = _default_resources_root()\nreturn Path(base) / \"legacy\"", "expect": ("RED", "P", "E", "D")},
+        {"id": "reverse-guard", "body": f"base = {get_or}\nif base:\n    base = _default_resources_root()\nreturn Path(base) / \"legacy\"", "expect": ("RED", "RED", "RED", "RED")},
+        {"id": "discard-fallback", "body": f"base = {get_or}\nif not base:\n    base = _default_resources_root()\nreturn Path(cfg.get(\"mtbf_resources_dir\") if not cfg.get(\"mtbf_resources_dir\") else env(\"STP_MTBF_RESOURCES_DIR\", \"\")) / \"legacy\"", "expect": ("RED", "RED", "RED", "RED")},
+        {"id": "and-direct", "body": f"base = ({get_or}) and \"\"\nif not base:\n    base = _default_resources_root()\nreturn Path(base) / \"legacy\"", "expect": ("RED", "RED", "RED", "RED")},
+        {"id": "and-name-1", "body": f"cleared = ({get_or}) and \"\"\nbase = cleared\nbase = _default_resources_root() if not base else base\nreturn Path(base) / \"legacy\"", "expect": ("RED", "RED", "RED", "RED")},
+        {"id": "and-name-2", "body": f"cleared = ({get_or}) and \"\"\nmid = cleared\nbase = mid\nbase = _default_resources_root() if not base else base\nreturn Path(base) / \"legacy\"", "expect": ("RED", "RED", "RED", "RED")},
+        {"id": "compare-direct", "body": f"base = ({get_or}) == \"\"\nif not base:\n    base = _default_resources_root()\nreturn Path(base) / \"legacy\"", "expect": ("RED", "RED", "RED", "RED")},
+        {"id": "compare-name-2", "body": f"raw = ({get_or}) == \"\"\nmid = raw\nbase = mid\nif not base:\n    base = _default_resources_root()\nreturn Path(base) / \"legacy\"", "expect": ("RED", "RED", "RED", "RED")},
+        {"id": "unsupported-call", "body": f"base = helper({get_or})\nif not base:\n    base = _default_resources_root()\nreturn Path(base) / \"legacy\"", "expect": ("RED", "RED", "RED", "RED")},
+        {"id": "subscript", "body": f"base = ({get_or})[0]\nif not base:\n    base = _default_resources_root()\nreturn Path(base) / \"legacy\"", "expect": ("RED", "RED", "RED", "RED")},
+        {"id": "loop", "body": f"base = {get_or}\nfor _i in (1,):\n    base = base\nreturn Path(base) / \"legacy\"", "expect": ("RED", "RED", "RED", "RED")},
+        {"id": "recursion", "body": "return resources_dir(cfg)", "expect": ("RED", "RED", "RED", "RED")},
+        {"id": "discarded-default-call", "body": f"base = {get_or}\n_sink = _default_resources_root()\nif not base:\n    base = _default_resources_root()\nreturn Path(base) / \"legacy\"", "expect": ("RED", "RED", "RED", "D")},
+        {
+            "id": "budget",
+            "body": "\n".join(
+                [f"base = {get_or}", "if not base:", "    base = _default_resources_root()"]
+                + [f'if cfg.get("f{i}"):\n    base = base' for i in range(6)]
+                + ['return Path(base) / "legacy"']
+            ),
+            "expect": ("RED", "RED", "RED", "RED"),
+        },
+        {
+            "id": "config-flag-compare",
+            "consumer": "gpu_config",
+            "extra": "def project_name(cfg):\n    return \"legacy\"\n\n",
+            "body": (
+                "project = project_name(cfg)\n"
+                "return {\n"
+                "    \"project\": project,\n"
+                "    \"mtbf_resources_dir\": cfg.get(\"mtbf_resources_dir\") or env(\"STP_MTBF_RESOURCES_DIR\", \"\"),\n"
+                "    \"install_apks\": str(flag).lower() == \"true\",\n"
+                "    \"rounds\": 1,\n"
+                "}"
+            ),
+            "expect": _CONFIG,
+        },
+    ]
+    return rows
+
+
+class TestFiniteValueMatrix:
+    @pytest.mark.parametrize("case", _matrix_cases(), ids=lambda case: case["id"])
+    def test_fixed_combinations(self, case):
+        src = _finite_source(case["body"], consumer=case.get("consumer", "resources_dir"), extra=case.get("extra", ""))
+        got = _load_checker().finite_resource_cells(
+            src, param_key=_PK, env_key=_EK, consumer=case.get("consumer", "resources_dir"), root="_default_resources_root"
+        )
+        assert got == case["expect"]
+
+    def test_unknown_keeps_file_function_line_and_and_reason(self):
+        body = (
+            'cleared = (cfg.get("mtbf_resources_dir") or env("STP_MTBF_RESOURCES_DIR", "")) and ""\n'
+            "base = cleared\n"
+            "return Path(base) / \"legacy\""
+        )
+        report = _load_checker().finite_resource_report(
+            _finite_source(body), param_key=_PK, env_key=_EK, consumer="resources_dir", root="_default_resources_root"
+        )
+        details = " ".join(detail for _label, status, detail in report if status == "RED")
+        assert "UNKNOWN" in details
+        assert "And 变换" in details
+        assert "<snippet>:resources_dir:L" in details
+
+
+class TestReturnProofScanner:
+    """Y1–Y3 逐字形态走完整 checker。修改前这三式 exit 0，现在必须非零。"""
+
+    def _scan(self, tmp_path: Path, text: str) -> subprocess.CompletedProcess:
+        copy = _copy_repo_subset(tmp_path / "repo")
+        lib = copy / "backend/agent/scripts/mtbf_setup/_lib.py"
+        lib.write_text(text, encoding="utf-8")
+        return subprocess.run(
+            [sys.executable, str(CHECKER), "--repo-root", str(copy)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def test_y1_bad_return_not_covered_by_good_return(self, tmp_path):
+        lib = ROOT / "backend/agent/scripts/mtbf_setup/_lib.py"
+        original = lib.read_text(encoding="utf-8")
+        mutated = original.replace(
+            "    return Path(base) / project\n",
+            "    if cfg.get(\"use_alternate\"):\n"
+            "        return Path(cfg.get(\"mtbf_resources_dir\") or env(\"STP_MTBF_RESOURCES_DIR\", \"\")) / project\n"
+            "    return Path(base) / project\n",
+        )
+        assert mutated != original
+        proc = self._scan(tmp_path, mutated)
+        assert proc.returncode != 0
+        assert "有限值证明" in proc.stderr
+
+    def test_y2_snapshot_before_fallback_is_red_and_after_is_green(self, tmp_path):
+        lib = (ROOT / "backend/agent/scripts/mtbf_setup/_lib.py").read_text(encoding="utf-8")
+        before = lib.replace(
+            "    base = cfg.get(\"mtbf_resources_dir\") or env(\"STP_MTBF_RESOURCES_DIR\", \"\")\n"
+            "    if not base:\n"
+            "        base = _default_resources_root()\n"
+            "    project = cfg.get(\"project\") or env(\"STP_MTBF_PROJECT\", \"legacy\")\n"
+            "    return Path(base) / project\n",
+            "    base = cfg.get(\"mtbf_resources_dir\") or env(\"STP_MTBF_RESOURCES_DIR\", \"\")\n"
+            "    selected = base\n"
+            "    if not base:\n"
+            "        base = _default_resources_root()\n"
+            "    project = cfg.get(\"project\") or env(\"STP_MTBF_PROJECT\", \"legacy\")\n"
+            "    return Path(selected) / project\n",
+        )
+        after = lib.replace(
+            "    if not base:\n"
+            "        base = _default_resources_root()\n"
+            "    project = cfg.get(\"project\") or env(\"STP_MTBF_PROJECT\", \"legacy\")\n"
+            "    return Path(base) / project\n",
+            "    if not base:\n"
+            "        base = _default_resources_root()\n"
+            "    selected = base\n"
+            "    project = cfg.get(\"project\") or env(\"STP_MTBF_PROJECT\", \"legacy\")\n"
+            "    return Path(selected) / project\n",
+        )
+        assert before != lib and after != lib
+        red = self._scan(tmp_path / "red", before)
+        assert red.returncode != 0 and "有限值证明[empty]" in red.stderr
+        green = self._scan(tmp_path / "green", after)
+        assert green.returncode == 0, green.stderr
+
+    def test_y3_and_through_name_is_red(self, tmp_path):
+        lib = (ROOT / "backend/agent/scripts/mtbf_setup/_lib.py").read_text(encoding="utf-8")
+        mutated = lib.replace(
+            "    if not base:\n"
+            "        base = _default_resources_root()\n",
+            "    if not base:\n"
+            "        base = _default_resources_root()\n"
+            "    cleared = (cfg.get(\"mtbf_resources_dir\") or env(\"STP_MTBF_RESOURCES_DIR\", \"\")) and \"\"\n"
+            "    base = cleared\n"
+            "    base = _default_resources_root() if not base else base\n",
+        )
+        assert mutated != lib
+        proc = self._scan(tmp_path, mutated)
+        assert proc.returncode != 0
+        assert "UNKNOWN" in proc.stderr and "And 变换" in proc.stderr
+
+
+_PARAM = "/mnt/stp-aee/from-param"
+_ENV = "/mnt/stp-aee/from-env"
+_AGENT = Path("/fixture/install/agent")
+
+
+def _extract_oracle(lib_rel: str, names: set[str]) -> str:
+    path = ROOT / lib_rel
+    text = path.read_text(encoding="utf-8")
+    tree = ast.parse(text)
+    parts: list[str] = []
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant):
+            seg = ast.get_source_segment(text, node)
+            if seg:
+                parts.append(seg)
+        elif isinstance(node, ast.FunctionDef) and node.name in names and node.name != "env":
+            seg = ast.get_source_segment(text, node)
+            if seg:
+                parts.append(seg)
+    return "\n\n".join(parts)
+
+
+def _run_oracle(lib_rel: str, names: set[str], agent: Path = _AGENT) -> dict:
+    """执行抽取出的真实函数。不 import 设备入口，不经过 checker 的有限值实现。"""
+    source = _extract_oracle(lib_rel, names)
+    ns: dict = {"ENV": {}}
+    prelude = (
+        "import os\nimport re\nfrom pathlib import Path\n"
+        "def env(key, default=''):\n"
+        "    value = ENV.get(key, default)\n"
+        "    return default if value is None else value\n"
+    )
+    saved = sys.modules.get("config")
+    config = types.ModuleType("config")
+    config.AGENT_DIR = agent
+    sys.modules["config"] = config
+    try:
+        exec(prelude + "\n" + source, ns)  # noqa: S102 — 独立运行 oracle，不是 checker
+    except Exception:
+        if saved is None:
+            sys.modules.pop("config", None)
+        else:
+            sys.modules["config"] = saved
+        raise
+    calls: list[int] = []
+    real = ns["_default_resources_root"]
+
+    def _wrapped():
+        calls.append(1)
+        return real()
+
+    ns["_default_resources_root"] = _wrapped
+    ns["_calls"] = calls
+    ns["_saved_config"] = saved
+    return ns
+
+
+def _close_oracle(ns: dict) -> None:
+    saved = ns.get("_saved_config")
+    if saved is None:
+        sys.modules.pop("config", None)
+    else:
+        sys.modules["config"] = saved
+
+
+class TestRuntimeOracle:
+    def test_four_families_resources_dir_cells_and_empty_forms(self):
+        families = (
+            ("backend/agent/scripts/mtbf_setup/_lib.py", "mtbf", "mtbf_resources_dir", "STP_MTBF_RESOURCES_DIR", {"_default_resources_root", "resources_dir"}),
+            ("backend/agent/scripts/gpu_setup/_lib.py", "gpu", "gpu_resources_dir", "STP_GPU_RESOURCES_DIR", {"_default_resources_root", "param_or_env", "project_name", "resources_dir"}),
+            ("backend/agent/scripts/powercycle_setup/_lib.py", "power-cycle", "powercycle_resources_dir", "STP_POWER_CYCLE_RESOURCES_DIR", {"_default_resources_root", "param_or_env", "project_name", "resources_dir"}),
+            ("backend/agent/scripts/sleep_setup/_lib.py", "sleep", "sleep_resources_dir", "STP_SLEEP_RESOURCES_DIR", {"_default_resources_root", "param_or_env", "project_name", "resources_dir"}),
+        )
+        for lib, subdir, param, env_key, names in families:
+            ns = _run_oracle(lib, names)
+            try:
+                root = _AGENT / "resources" / subdir / "legacy"
+                both = {"cfg": {param: _PARAM}, "env": {env_key: _ENV}, "path": Path(_PARAM) / "legacy", "calls": 0}
+                param_only = {"cfg": {param: _PARAM}, "env": {}, "path": Path(_PARAM) / "legacy", "calls": 0}
+                env_only = {"cfg": {}, "env": {env_key: _ENV}, "path": Path(_ENV) / "legacy", "calls": 0}
+                empty = {"cfg": {}, "env": {}, "path": root, "calls": 1}
+                for spec in (both, param_only, env_only, empty):
+                    ns["ENV"].clear()
+                    ns["ENV"].update(spec["env"])
+                    ns["_calls"].clear()
+                    got = ns["resources_dir"](spec["cfg"])
+                    assert got == spec["path"], (lib, spec, got)
+                    assert len(ns["_calls"]) == spec["calls"], (lib, spec, ns["_calls"])
+                for cfg in ({}, {param: None}, {param: ""}):
+                    for env_map in ({}, {env_key: None}, {env_key: ""}):
+                        ns["ENV"].clear()
+                        ns["ENV"].update(env_map)
+                        ns["_calls"].clear()
+                        assert ns["resources_dir"](cfg) == root
+                        assert len(ns["_calls"]) == 1
+            finally:
+                _close_oracle(ns)
+
+    def test_config_resource_field_does_not_require_default_root(self):
+        specs = (
+            ("backend/agent/scripts/gpu_setup/_lib.py", "gpu_config", "gpu_resources_dir", "STP_GPU_RESOURCES_DIR", {"project_name", "param_or_env", "parse_ini", "read_ini", "gpu_config", "_default_resources_root"}),
+            ("backend/agent/scripts/powercycle_setup/_lib.py", "powercycle_config", "powercycle_resources_dir", "STP_POWER_CYCLE_RESOURCES_DIR", {"project_name", "param_or_env", "parse_properties", "read_properties", "powercycle_config", "_default_resources_root"}),
+            ("backend/agent/scripts/sleep_setup/_lib.py", "sleep_config", "sleep_resources_dir", "STP_SLEEP_RESOURCES_DIR", {"project_name", "param_or_env", "parse_properties", "read_properties", "sleep_config", "_default_resources_root"}),
+        )
+        for lib, fn, field, env_key, names in specs:
+            ns = _run_oracle(lib, names)
+            try:
+                samples = (
+                    ({field: _PARAM}, {env_key: _ENV}, _PARAM),
+                    ({field: _PARAM}, {}, _PARAM),
+                    ({}, {env_key: _ENV}, _ENV),
+                    ({}, {}, ""),
+                )
+                for cfg, env_map, expect in samples:
+                    ns["ENV"].clear()
+                    ns["ENV"].update(env_map)
+                    ns["_calls"].clear()
+                    got = ns[fn](cfg)
+                    assert got[field] == expect, (fn, cfg, env_map, got[field])
+                    assert ns["_calls"] == []
+                    assert any(not isinstance(value, str) or key != field for key, value in got.items())
+            finally:
+                _close_oracle(ns)
+
+    def test_y1_y2_y3_runtime_matches_verbatim_counterexamples(self):
+        lib = ROOT / "backend/agent/scripts/mtbf_setup/_lib.py"
+        original = lib.read_text(encoding="utf-8")
+        y1 = original.replace(
+            "    return Path(base) / project\n",
+            "    if cfg.get(\"use_alternate\"):\n"
+            "        return Path(cfg.get(\"mtbf_resources_dir\") or env(\"STP_MTBF_RESOURCES_DIR\", \"\")) / project\n"
+            "    return Path(base) / project\n",
+        )
+        y2 = original.replace(
+            "    base = cfg.get(\"mtbf_resources_dir\") or env(\"STP_MTBF_RESOURCES_DIR\", \"\")\n"
+            "    if not base:\n"
+            "        base = _default_resources_root()\n",
+            "    base = cfg.get(\"mtbf_resources_dir\") or env(\"STP_MTBF_RESOURCES_DIR\", \"\")\n"
+            "    selected = base\n"
+            "    if not base:\n"
+            "        base = _default_resources_root()\n",
+        ).replace("    return Path(base) / project\n", "    return Path(selected) / project\n")
+        y2_ok = original.replace(
+            "    if not base:\n"
+            "        base = _default_resources_root()\n"
+            "    project = cfg.get(\"project\") or env(\"STP_MTBF_PROJECT\", \"legacy\")\n"
+            "    return Path(base) / project\n",
+            "    if not base:\n"
+            "        base = _default_resources_root()\n"
+            "    selected = base\n"
+            "    project = cfg.get(\"project\") or env(\"STP_MTBF_PROJECT\", \"legacy\")\n"
+            "    return Path(selected) / project\n",
+        )
+        y3 = original.replace(
+            "    if not base:\n"
+            "        base = _default_resources_root()\n",
+            "    if not base:\n"
+            "        base = _default_resources_root()\n"
+            "    cleared = (cfg.get(\"mtbf_resources_dir\") or env(\"STP_MTBF_RESOURCES_DIR\", \"\")) and \"\"\n"
+            "    base = cleared\n"
+            "    base = _default_resources_root() if not base else base\n",
+        )
+        neg = original.replace(
+            '    base = cfg.get("mtbf_resources_dir") or env("STP_MTBF_RESOURCES_DIR", "")\n',
+            '    base = env("STP_MTBF_RESOURCES_DIR", "") if not cfg.get("mtbf_resources_dir") else cfg.get("mtbf_resources_dir")\n',
+        )
+        early = original.replace(
+            "    if not base:\n"
+            "        base = _default_resources_root()\n"
+            "    project = cfg.get(\"project\") or env(\"STP_MTBF_PROJECT\", \"legacy\")\n"
+            "    return Path(base) / project\n",
+            "    project = cfg.get(\"project\") or env(\"STP_MTBF_PROJECT\", \"legacy\")\n"
+            "    if base:\n"
+            "        return Path(base) / project\n"
+            "    base = _default_resources_root()\n"
+            "    return Path(base) / project\n",
+        )
+        root = _AGENT / "resources" / "mtbf" / "demo"
+
+        def run_text(text: str, cfg: dict, env_map: dict):
+            ns: dict = {"ENV": dict(env_map)}
+            prelude = (
+                "import os\nimport re\nfrom pathlib import Path\n"
+                "def env(key, default=''):\n"
+                "    value = ENV.get(key, default)\n"
+                "    return default if value is None else value\n"
+            )
+            tree = ast.parse(text)
+            parts = []
+            for node in tree.body:
+                if isinstance(node, ast.FunctionDef) and node.name in {"_default_resources_root", "resources_dir"}:
+                    seg = ast.get_source_segment(text, node)
+                    if seg:
+                        parts.append(seg)
+            saved = sys.modules.get("config")
+            config = types.ModuleType("config")
+            config.AGENT_DIR = _AGENT
+            sys.modules["config"] = config
+            try:
+                exec(prelude + "\n" + "\n\n".join(parts), ns)  # noqa: S102
+                calls: list[int] = []
+                real = ns["_default_resources_root"]
+
+                def _wrapped():
+                    calls.append(1)
+                    return real()
+
+                ns["_default_resources_root"] = _wrapped
+                return ns["resources_dir"](cfg), calls
+            finally:
+                if saved is None:
+                    sys.modules.pop("config", None)
+                else:
+                    sys.modules["config"] = saved
+
+        got, calls = run_text(y1, {"use_alternate": True, "project": "demo"}, {})
+        assert got == Path("demo")
+        assert got != root
+        got, calls = run_text(y2, {"project": "demo"}, {})
+        assert got == Path("demo") and calls  # 默认根被调用但返回值丢掉
+        got, calls = run_text(y2_ok, {"project": "demo"}, {})
+        assert got == root and len(calls) == 1
+        got, _calls = run_text(y2_ok, {"mtbf_resources_dir": _PARAM, "project": "demo"}, {})
+        assert got == Path(_PARAM) / "demo" and _calls == []
+        got, calls = run_text(y3, {"mtbf_resources_dir": _PARAM, "project": "demo"}, {})
+        assert got == root  # 非空 param 仍落到默认根
+        got, calls = run_text(neg, {"project": "demo"}, { "STP_MTBF_RESOURCES_DIR": _ENV})
+        assert got == Path(_ENV) / "demo" and calls == []
+        got, calls = run_text(neg, {"mtbf_resources_dir": _PARAM, "project": "demo"}, {"STP_MTBF_RESOURCES_DIR": _ENV})
+        assert got == Path(_PARAM) / "demo"
+        got, calls = run_text(early, {"mtbf_resources_dir": _PARAM, "project": "demo"}, {})
+        assert got == Path(_PARAM) / "demo" and calls == []
+        got, calls = run_text(early, {"project": "demo"}, {})
+        assert got == root and len(calls) == 1

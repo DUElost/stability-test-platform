@@ -57,7 +57,36 @@ ADR-0033 tool_manifest step（不新增 gate profile / required job）。
   全量 census；base ref 不可解析或 base 契约坏 JSON → 退出 2「不可验证」，不当空 diff 成功；
 - 顺序：`--self-test` → 全量 → `--base`；退出 1 = 判据违例、2 = 不可验证。
 
-**影响面**：`tools/dev/check_resource_anchors.py`、`tools/dev/resource_anchor_contract.json`、
+**B4-G2-r9（2026-10-09，draft，待独立复核）**：在同一 checker 内对四专项非 legacy
+host-local 资源值做统一有限值分析。本轮不是 G2 验收，也不推进 B4 激活。
+
+- 值域：P（非空 param 路径）、E（非空且不同于 P 的族 env 路径）、D（形状校验过的默认根）、
+  EMPTY、UNKNOWN。UNKNOWN 带文件、函数、行和不可证明节点/原因；
+- 四格在每个实际消费点分别证明：param+env → P；仅 param → P；仅 env → E；双空时
+  `resources_dir` 的实际消费路径 → D，config 资源字段 → EMPTY。非空 override 的每条
+  可达路径都不得调用默认根，即使结果被丢掉；某处调用了 D 不能代替「被消费的那条路径是 D」；
+- 支持集：简单资源赋值/传播、已验证的 param/env 读取、Or 短路、简单真值与 `not` 的
+  If/IfExp、Return、校验过的默认根 helper、最终 Path 包装、既有 project/variant 后缀。
+  正确否定 `Y if not X else X` 与正向 `X if X else Y` 按真实值语义。`Path("")` 是相对目录，
+  不是 D。读取与 helper 必须落到真实定义或已验证的有限摘要，不按名字信任 env /
+  param_or_env / 默认根。D 只来自校验过的 authority 构造 helper；
+- config 归一化（gpu/powercycle/sleep config）只证明资源字段 P > E > EMPTY。其它 dict
+  标志、数字、Compare 不进入资源投影，避免误报。四个 `resources_dir` 才证明最终路径
+  P > E > D；
+- 预算：表达式/Name 深度 64，同文件 helper 深度 8，每函数每输入格同时路径状态至多 32。
+  超预算、递归、影响资源流的循环必须人工分类且非零，禁止截断成绿。checker 不
+  exec/eval/import 被扫描源码；
+- 三项证明不变量集中闭合：每个可达返回/消费点都要满足（禁止 `any()` 用另一返回点放行）；
+  先求值 RHS 再绑定名字，Name 只读引用时点已经执行的赋值（`selected = base` 定格当时的值）；
+  变换与 UNKNOWN 沿透明 Name 传播，不得降级成键标记。`_key_markers`、`proven_points`、
+  「任一 return 命中默认根」只可诊断。有限值已通过时不再用句法惰性追加放行或误伤；
+  证明失败时保留历史选择顺序与惰性诊断。And、Compare、未知调用、对资源值的下标保持
+  UNKNOWN，并穿过 Name 仍是 UNKNOWN。
+
+**影响面（r9 只改这三个文件）**：`tools/dev/check_resource_anchors.py`、
+`tests/test_check_resource_anchors.py`、本 Note。不改契约、`run_gates`、CI、族树、
+manifest、template、AGENTS 或生产配置。历史影响面（契约与 gate 接线，本轮未改）：
+`tools/dev/check_resource_anchors.py`、`tools/dev/resource_anchor_contract.json`、
 `tests/test_check_resource_anchors.py`、`scripts/run_gates.py`（tool-manifest 项内追加两命令）、
 `.github/workflows/ci.yml`（同一 step 追加两命令）。不新增 script 版本、不改 template/Plan、
 不动四个 setup 与 check/finish 族树、不修改 G1a 三条临时 EXCEPTIONS。
@@ -76,6 +105,14 @@ ADR-0033 tool_manifest step（不新增 gate profile / required job）。
   形态复用 `tool_requirements.py` 按路径加载（与 `check_script_packages` 同单源）。
 - **`--base` 缺契约时判红**：弃。本 PR 首次引入契约，base 无文件是「无先前状态」而非
   解析失败（与 `check_tool_manifest` 对首次登记的同判据）；ref 不可解析/JSON 坏才红。
+- **继续用键标记、任一 return、按最终 return 行号回溯赋值（r9）**：弃。Y1 用正确返回
+  放行错误返回，Y2 把 fallback 前的快照看成最终 `base`，Y3 在 Name 边上丢掉 And。
+  这三处都会把错误值或非法默认根调用判绿。
+- **按族或函数名白名单，或把 UNKNOWN 降级后放行（r9）**：弃。支持集内的错值与非法
+  默认根调用不能绿；支持集外且影响资源的输入保持人工分类 / 非零。
+- **另写运行时解释器替换 AST checker（r9）**：弃。方案是同一 checker 内的一个有限值
+  过程。测试里的真实函数 oracle 独立 exec 抽出的函数，不与 checker 共享实现，也不
+  import 设备入口。
 
 ## Verification
 
@@ -149,6 +186,35 @@ ADR-0033 tool_manifest step（不新增 gate profile / required job）。
   （`git status` 空）。红不是来自前置 package sha 检查。
 - 通用门禁：`check_script_packages.py`、`check_tool_manifest.py --base origin/main`、
   `run_gates.py check:quick`、`run_pytest.py tests/ -q`，以及 PR head 六项 required CI。
+- **r9 验证（baseline `origin/main` @ `61b51819780b1ed3ec0ee9ec430ec2b16e4fe10f`，
+  本工作树项目入口，2026-10-09）**：
+  - 修复前 Y1/Y2/Y3 逐字变异的完整 checker 均为 exit 0（69/35/26/legacy 10/未解析 0）。
+    修复后同一形态非零，归因是「有限值证明」，不是族源码改写；
+  - 现行四个 `resources_dir` 四格均为 `(P, P, E, D)`；`gpu_config` /
+    `powercycle_config` / `sleep_config` 的资源字段均为 `(P, P, E, EMPTY)`；
+  - 固定组合矩阵与独立 oracle 在 `tests/test_check_resource_anchors.py`：
+    期望字面量不由分析器计算；oracle exec 抽出的真实函数，不 import 设备入口，
+    不与 checker 共享实现。Y1 空 override + `use_alternate` 运行时得到相对 `demo`；
+    Y2 fallback 前快照得到相对 `demo` 且默认根仍被调用；Y3 非空 param 仍落到默认根。
+    fallback 后快照、正确否定、非空提前返回在 oracle 与 checker 均为绿；
+  - 三项规则回退后对应测试变红，再按 SHA-256 恢复 checker：
+    `any()` 放行使 `dual-good-bad` 变成 `(P, P, E, D)` 且 Y1 scanner exit 0（pytest exit 1）；
+    未来赋值使 `snapshot-before` 的 empty 格变成 `D` 而不再报 `有限值证明[empty]`（pytest exit 1）；
+    UNKNOWN 经 Name 降级成 P 后 `and-name-1` 变成 `(P, P, RED, RED)`，报告不再含 UNKNOWN
+    （pytest exit 1）；
+  - Y3 隔离副本：变异后 `check_script_packages` 与资源 checker 都红；
+    `--register mtbf_setup 99.0.0`（sha `1e88ce0ba1c3`）之后
+    `check_tool_manifest --base origin/main` exit 0、`check_script_packages` exit 0、
+    资源 checker 仍 exit 1（A01 四格，含 `And 变换` / UNKNOWN / 非空 override 仍执行默认根）。
+    恢复 `_lib.py` 与 manifest 后三项都 exit 0。登记只发生在该副本；
+  - 同一次命令序列：`--self-test`、全量 census、`--base origin/main` 均为 exit 0，
+    census 仍是 69 文件 / 35 族 / 26 锚 / legacy 10 / 未解析 0；
+    `run_pytest.py tests/test_check_resource_anchors.py -q` 77 passed；
+    ruff 通过；`check:quick` 16 gates OK；`run_pytest.py tests/ -q`
+    2406 passed / 18 skipped；`check_script_packages` 与
+    `check_tool_manifest --base origin/main` exit 0。
+    六项 required CI 在最终 head 上另核，未绿之前不算 CI 完成。
+    本记录不是 G2 验收。
 
 ## Revisit
 
@@ -159,3 +225,8 @@ ADR-0033 tool_manifest step（不新增 gate profile / required job）。
 - 若 checker 出现误报/漏报（例如未来出现动态表达式导致「需人工分类」频繁），先修
   有限契约与分类，不引入通用静态分析框架（方案 §7.9 退回条件）；
 - #3498 若推进到改变脚本包/authority 分层，本 checker 的扫描面与契约需随之重审。
+- **r9 未验证边界**：任意 Python、新的 authority 类型、新运行时、支持集外且影响资源值的
+  形态。这些必须显式人工分类 / 非零，不要求判绿。若当前真实合理形态无法被支持集覆盖，
+  交最小反例并退回，不按族/函数名放行，也不放宽 UNKNOWN。
+- r9 停在独立复核。Reviewer 通过之前，仓库交付不等于 G2 验收，不发布、不部署、不 scan、
+  不重指 Plan。
