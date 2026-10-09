@@ -603,11 +603,21 @@ describe('PlanStepInspector', () => {
   });
 
   describe('跳转链接', () => {
-    it('有脚本名时给出脚本库页深链', () => {
+    it('有脚本名时给出脚本库页深链（定位到当前版本）', () => {
       render(<Harness />);
+      // 路由注册的是 `/script-management`（router/index.tsx）；`/scripts` 不存在、会落 404。
+      // `&version=` 与快照抽屉同形（#3350）：脚本库页据此展开该版本的参数详情。
       expect(screen.getByText('在脚本库中编辑参数').closest('a')).toHaveAttribute(
         'href',
-        '/scripts?name=install_apk',
+        '/script-management?name=install_apk&version=2.0',
+      );
+    });
+
+    it('步骤未选版本时只带脚本名', () => {
+      render(<Harness step={makeStep({ version: '' })} />);
+      expect(screen.getByText('在脚本库中编辑参数').closest('a')).toHaveAttribute(
+        'href',
+        '/script-management?name=install_apk',
       );
     });
 
