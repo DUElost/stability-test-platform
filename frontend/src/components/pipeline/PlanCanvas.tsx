@@ -1,3 +1,4 @@
+import { useId } from 'react';
 import type { PipelineDef, PipelinePhase, PipelineStep, ScriptEntry, ProjectSummary, Specialty, TestSuiteSummary } from '@/utils/api/types';
 import { ArrowDown, ArrowUp, Copy, Trash2 } from 'lucide-react';
 import {
@@ -8,6 +9,7 @@ import {
 } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { formatStepTimeout, stepTimeoutHint } from './stepTiming';
+import { PATROL_DURATION_HINT, PATROL_DURATION_LABEL, patrolDurationSummary } from './planTiming';
 
 const PHASE_LABELS: Record<PipelinePhase, string> = {
   init: 'Init',
@@ -182,6 +184,7 @@ export default function PlanCanvas({
           onPatrolIntervalChange={onPatrolIntervalChange}
           timeoutSeconds={timeoutSeconds}
           onTimeoutChange={onTimeoutChange}
+          hasPatrolSteps={(lifecycle.lifecycle.patrol?.steps ?? []).some(s => s.enabled !== false)}
           totalSteps={totalSteps}
           nextPlanName={nextPlanName}
           isCurrentEditing={isCurrentEditing}
@@ -229,6 +232,8 @@ interface PlanHeaderProps {
   onPatrolIntervalChange: (next: number | null) => void;
   timeoutSeconds: number | null;
   onTimeoutChange: (next: number | null) => void;
+  /** 是否有启用的巡检步骤——没有时巡检时长不生效，说明行据此换口径。 */
+  hasPatrolSteps: boolean;
   totalSteps: number;
   nextPlanName: string | null;
   isCurrentEditing: boolean;
@@ -253,6 +258,7 @@ function PlanHeader({
   onPatrolIntervalChange,
   timeoutSeconds,
   onTimeoutChange,
+  hasPatrolSteps,
   totalSteps,
   nextPlanName,
   isCurrentEditing,
@@ -268,6 +274,7 @@ function PlanHeader({
   readOnly,
 }: PlanHeaderProps) {
   const metaInputCls = cn('h-6 px-2 text-xs', PIPELINE_EDITOR.inputInline);
+  const patrolDurationSummaryId = useId();
   const suiteOptions = suites ?? [];
   // 当前绑定若不在活跃列表（已归档），仍展示一项以免下拉空白。
   const suiteOptionsWithCurrent =
@@ -390,17 +397,21 @@ function PlanHeader({
         </MetaItem>
 
 
-        <MetaItem label="全局超时">
+        <MetaItem label={PATROL_DURATION_LABEL}>
           <input
             type="number"
-            min={0}
+            min={1}
             value={timeoutSeconds ?? ''}
             placeholder="不限"
             disabled={readOnly}
+            title={PATROL_DURATION_HINT}
+            aria-label={PATROL_DURATION_LABEL}
+            aria-describedby={patrolDurationSummaryId}
             onChange={e => {
-              const raw = e.target.value;
-              if (raw === '') onTimeoutChange(null);
-              else onTimeoutChange(Math.max(0, parseInt(raw, 10) || 0));
+              const n = parseInt(e.target.value, 10);
+              // 后端写入边界 ge=1：空、0、负数都按「不限」处理——此前 0 能填进来，
+              // 保存时才收到一条 422；而 0 的直觉含义（同步骤级超时）本来就是不限。
+              onTimeoutChange(Number.isFinite(n) && n > 0 ? n : null);
             }}
             className={cn('w-24', metaInputCls)}
           />
@@ -411,6 +422,15 @@ function PlanHeader({
           <span className={cn('text-[12px] font-semibold', TEXT.body)}>{totalSteps}</span>
         </MetaItem>
       </div>
+
+      {/* 字段名叫 timeout，引擎里是巡检时长预算：自各设备 init 完成起计、到点算成功（planTiming.ts） */}
+      <p
+        id={patrolDurationSummaryId}
+        data-testid="plan-patrol-duration-summary"
+        className={cn('text-[11px] leading-snug', TEXT.subtitle)}
+      >
+        {patrolDurationSummary(timeoutSeconds, hasPatrolSteps)}
+      </p>
 
       {nextPlanName && (
         <div className={cn('flex items-center gap-1.5 text-[11px] px-2.5 py-1.5 rounded-md', STATUS_CHIP.primary)}>
