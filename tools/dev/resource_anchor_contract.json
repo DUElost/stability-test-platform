@@ -1,0 +1,405 @@
+{
+  "contract_version": 1,
+  "description": "B4/G2（#3321，#3601 v1.1 §1.2 C1 / §1.4）资源 authority 最小契约输入：只作离线 checker 数据，不进入运行时，不复制 tool_manifest.json / tool_requirements 的版本真源。",
+  "authority": {
+    "file": "backend/agent/config.py",
+    "symbol": "AGENT_DIR",
+    "expect_depth": 1,
+    "note": "C1 §1.2 第 2 条：默认锚 = 既有 Agent 代码根（Path(config.__file__).resolve().parent）；开发态 <repo>/backend/agent、部署态 <install>/agent，由引擎注入的 Agent PYTHONPATH 提供。"
+  },
+  "families": {
+    "mtbf": {
+      "subdir": "mtbf",
+      "param_key": "mtbf_resources_dir",
+      "env_key": "STP_MTBF_RESOURCES_DIR",
+      "project_key": "project",
+      "project_env_key": "STP_MTBF_PROJECT",
+      "project_default": "legacy",
+      "variant_suffix": false
+    },
+    "gpu": {
+      "subdir": "gpu",
+      "param_key": "gpu_resources_dir",
+      "env_key": "STP_GPU_RESOURCES_DIR",
+      "project_key": "project",
+      "project_env_key": "STP_GPU_PROJECT",
+      "project_default": "legacy",
+      "variant_suffix": true
+    },
+    "power-cycle": {
+      "subdir": "power-cycle",
+      "param_key": "powercycle_resources_dir",
+      "env_key": "STP_POWER_CYCLE_RESOURCES_DIR",
+      "project_key": "project",
+      "project_env_key": "STP_POWER_CYCLE_PROJECT",
+      "project_default": "legacy",
+      "variant_suffix": false
+    },
+    "sleep": {
+      "subdir": "sleep",
+      "param_key": "sleep_resources_dir",
+      "env_key": "STP_SLEEP_RESOURCES_DIR",
+      "project_key": "project",
+      "project_env_key": "STP_SLEEP_PROJECT",
+      "project_default": "legacy",
+      "variant_suffix": false
+    }
+  },
+  "tool_bindings": [
+    {
+      "tool_family": "flashtool",
+      "env_key": "STP_FLASH_TOOL_DIR",
+      "consumer_families": ["flash_firmware", "flash_preflight"],
+      "note": "ADR-0051 D7：消费族新版本 capabilities.json 声明 requires_tools；工具包根合法落在 tools_cache，工具版本真源见 tool_manifest.json（本契约不复制版本）。"
+    }
+  ],
+  "extra_scan_files": [
+    {"path": "backend/agent/config.py", "why": "Agent 代码根/base-dir authority 定义（A22 + authority）"},
+    {"path": "backend/agent/aimonkey_paths.py", "why": "Agent module 资源根（A21）"},
+    {"path": "backend/agent/contracts/pipeline_validator.py", "why": "runtime schema 布局锚（A23）"},
+    {"path": "backend/agent/tool_cache.py", "why": "tools_cache/packages 根（A24）"},
+    {"path": "backend/agent/install_agent.sh", "why": "安装根与遗留 resources 目录契约（A25，shell 只核对存在性）", "language": "shell"},
+    {"path": "backend/services/host_updater.py", "why": "控制面部署源定位（A26）"}
+  ],
+  "anchors": [
+    {
+      "id": "A01",
+      "role": "MTBF setup 四专项 APK 默认根",
+      "file": "backend/agent/scripts/mtbf_setup/_lib.py",
+      "locators": [
+        {"type": "function", "name": "_default_resources_root"},
+        {"type": "function", "name": "resources_dir"}
+      ],
+      "kind": "host_local_resource_root",
+      "family": "mtbf",
+      "authority": "agent_dir",
+      "history": "本批修：G1a PR #3605 把旧 parents[3] 深度错根改为 config.AGENT_DIR/resources/mtbf（#3320 生产 CONFIRMED 链路）"
+    },
+    {
+      "id": "A02",
+      "role": "MTBF check 同形资源 helper",
+      "file": "backend/agent/scripts/mtbf_check/_lib.py",
+      "locators": [
+        {"type": "function", "name": "_default_resources_root"},
+        {"type": "function", "name": "resources_dir"}
+      ],
+      "kind": "host_local_resource_root",
+      "family": "mtbf",
+      "authority": "depth_guess",
+      "legacy": {
+        "issue": "#3320",
+        "reason": "check 入口及其 _lib 调用图不消费 resources_dir，当前生产源码入口调用图无消费者；两态仍错但不进入执行路径",
+        "removal_condition": "该族因真实需求升版本时清理/收敛；一旦出现入口调用、导出或资源消费使其可达，撤销豁免并按 C1 修复（#3601 §7.3）"
+      }
+    },
+    {
+      "id": "A03",
+      "role": "MTBF finish 同形资源 helper",
+      "file": "backend/agent/scripts/mtbf_finish/_lib.py",
+      "locators": [
+        {"type": "function", "name": "_default_resources_root"},
+        {"type": "function", "name": "resources_dir"}
+      ],
+      "kind": "host_local_resource_root",
+      "family": "mtbf",
+      "authority": "depth_guess",
+      "legacy": {
+        "issue": "#3320",
+        "reason": "finish 的拉取/归档走设备结果与 suite/results，不消费 resources_dir",
+        "removal_condition": "同 A02"
+      }
+    },
+    {
+      "id": "A04",
+      "role": "GPU setup 四专项 APK 默认根",
+      "file": "backend/agent/scripts/gpu_setup/_lib.py",
+      "locators": [
+        {"type": "function", "name": "_default_resources_root"},
+        {"type": "function", "name": "resources_dir"},
+        {"type": "function", "name": "gpu_config"}
+      ],
+      "kind": "host_local_resource_root",
+      "family": "gpu",
+      "authority": "agent_dir",
+      "history": "本批修：G1a PR #3605 改为 config.AGENT_DIR/resources/gpu；消费链 gpu_config → resources_dir → variant/APK（生产影响未完整验证）"
+    },
+    {
+      "id": "A05",
+      "role": "GPU check 同形资源 helper",
+      "file": "backend/agent/scripts/gpu_check/_lib.py",
+      "locators": [
+        {"type": "function", "name": "_default_resources_root"},
+        {"type": "function", "name": "resources_dir"}
+      ],
+      "kind": "host_local_resource_root",
+      "family": "gpu",
+      "authority": "depth_guess",
+      "legacy": {
+        "issue": "#3320",
+        "reason": "check 入口及 _lib 调用图无 resources_dir 消费；模板/Plan 引用不激活该 helper",
+        "removal_condition": "同 A02"
+      }
+    },
+    {
+      "id": "A06",
+      "role": "GPU finish 同形资源 helper",
+      "file": "backend/agent/scripts/gpu_finish/_lib.py",
+      "locators": [
+        {"type": "function", "name": "_default_resources_root"},
+        {"type": "function", "name": "resources_dir"}
+      ],
+      "kind": "host_local_resource_root",
+      "family": "gpu",
+      "authority": "depth_guess",
+      "legacy": {
+        "issue": "#3320",
+        "reason": "finish 入口及 _lib 调用图无 resources_dir 消费",
+        "removal_condition": "同 A02"
+      }
+    },
+    {
+      "id": "A07",
+      "role": "PowerCycle setup 四专项 APK 默认根",
+      "file": "backend/agent/scripts/powercycle_setup/_lib.py",
+      "locators": [
+        {"type": "function", "name": "_default_resources_root"},
+        {"type": "function", "name": "resources_dir"},
+        {"type": "function", "name": "powercycle_config"}
+      ],
+      "kind": "host_local_resource_root",
+      "family": "power-cycle",
+      "authority": "agent_dir",
+      "history": "本批修：G1a PR #3605 改为 config.AGENT_DIR/resources/power-cycle；消费链 powercycle_config → resources_dir → AutoTestTool.apk"
+    },
+    {
+      "id": "A08",
+      "role": "PowerCycle check 同形资源 helper",
+      "file": "backend/agent/scripts/powercycle_check/_lib.py",
+      "locators": [
+        {"type": "function", "name": "_default_resources_root"},
+        {"type": "function", "name": "resources_dir"}
+      ],
+      "kind": "host_local_resource_root",
+      "family": "power-cycle",
+      "authority": "depth_guess",
+      "legacy": {
+        "issue": "#3320",
+        "reason": "check 入口及 _lib 调用图无 resources_dir 消费",
+        "removal_condition": "同 A02"
+      }
+    },
+    {
+      "id": "A09",
+      "role": "PowerCycle finish 同形资源 helper",
+      "file": "backend/agent/scripts/powercycle_finish/_lib.py",
+      "locators": [
+        {"type": "function", "name": "_default_resources_root"},
+        {"type": "function", "name": "resources_dir"}
+      ],
+      "kind": "host_local_resource_root",
+      "family": "power-cycle",
+      "authority": "depth_guess",
+      "legacy": {
+        "issue": "#3320",
+        "reason": "finish 入口及 _lib 调用图无 resources_dir 消费",
+        "removal_condition": "同 A02"
+      }
+    },
+    {
+      "id": "A10",
+      "role": "Sleep setup 四专项 APK 默认根",
+      "file": "backend/agent/scripts/sleep_setup/_lib.py",
+      "locators": [
+        {"type": "function", "name": "_default_resources_root"},
+        {"type": "function", "name": "resources_dir"},
+        {"type": "function", "name": "sleep_config"}
+      ],
+      "kind": "host_local_resource_root",
+      "family": "sleep",
+      "authority": "agent_dir",
+      "history": "本批修：G1a PR #3605 改为 config.AGENT_DIR/resources/sleep；消费链 sleep_config → resources_dir → AutoTestTool.apk"
+    },
+    {
+      "id": "A11",
+      "role": "Sleep check 同形资源 helper",
+      "file": "backend/agent/scripts/sleep_check/_lib.py",
+      "locators": [
+        {"type": "function", "name": "_default_resources_root"},
+        {"type": "function", "name": "resources_dir"}
+      ],
+      "kind": "host_local_resource_root",
+      "family": "sleep",
+      "authority": "depth_guess",
+      "legacy": {
+        "issue": "#3320",
+        "reason": "check 入口及 _lib 调用图无 resources_dir 消费",
+        "removal_condition": "同 A02"
+      }
+    },
+    {
+      "id": "A12",
+      "role": "Sleep finish 同形资源 helper",
+      "file": "backend/agent/scripts/sleep_finish/_lib.py",
+      "locators": [
+        {"type": "function", "name": "_default_resources_root"},
+        {"type": "function", "name": "resources_dir"}
+      ],
+      "kind": "host_local_resource_root",
+      "family": "sleep",
+      "authority": "depth_guess",
+      "legacy": {
+        "issue": "#3320",
+        "reason": "finish 入口及 _lib 调用图无 resources_dir 消费",
+        "removal_condition": "同 A02"
+      }
+    },
+    {
+      "id": "A13",
+      "role": "AEE signal trigger 的 __file__ import bootstrap",
+      "file": "backend/agent/scripts/aee_signal_trigger/aee_signal_trigger.py",
+      "locators": [{"type": "symbol", "name": "_AGENT_ROOT"}],
+      "kind": "import_bootstrap",
+      "note": "仅 sys.path.insert；真正 import 经引擎 Agent PYTHONPATH。非资源形态，不因它改脚本。"
+    },
+    {
+      "id": "A14",
+      "role": "Monkey resource push 的 __file__ import bootstrap",
+      "file": "backend/agent/scripts/monkey_resource_push/monkey_resource_push.py",
+      "locators": [{"type": "symbol", "name": "_AGENT_ROOT"}],
+      "kind": "import_bootstrap",
+      "note": "资源实际经 A21 resolve_aimonkey_bundle_dir；本锚只做 import 兜底。"
+    },
+    {
+      "id": "A15",
+      "role": "Monkey test 的 __file__ import bootstrap",
+      "file": "backend/agent/scripts/monkey_test/monkey_test.py",
+      "locators": [{"type": "symbol", "name": "_AGENT_ROOT"}],
+      "kind": "import_bootstrap",
+      "note": "同 A14；不是 APK root。"
+    },
+    {
+      "id": "A16",
+      "role": "GPU setup 包内设备端伴随脚本",
+      "file": "backend/agent/scripts/gpu_setup/_lib.py",
+      "locators": [{"type": "function", "name": "push_device_script"}],
+      "kind": "package_member",
+      "member": "_gpu_stress_loop.sh",
+      "note": "同级包根定位、真实入包（git ls-files 成员）；dev/pkg 两态均正确。"
+    },
+    {
+      "id": "A17",
+      "role": "GPU check 未消费的伴随脚本 helper",
+      "file": "backend/agent/scripts/gpu_check/_lib.py",
+      "locators": [{"type": "function", "name": "push_device_script"}],
+      "kind": "package_member",
+      "member": "_gpu_stress_loop.sh",
+      "legacy": {
+        "issue": "#3320",
+        "reason": "当前生产入口无该 helper 调用；族树与该族包内无 _gpu_stress_loop.sh，若未来被调用将缺文件",
+        "removal_condition": "该族因真实需求升版本时补文件或收敛 helper；一旦可达即红并按 #3601 §7.3 退回"
+      }
+    },
+    {
+      "id": "A18",
+      "role": "GPU finish 未消费的伴随脚本 helper",
+      "file": "backend/agent/scripts/gpu_finish/_lib.py",
+      "locators": [{"type": "function", "name": "push_device_script"}],
+      "kind": "package_member",
+      "member": "_gpu_stress_loop.sh",
+      "legacy": {
+        "issue": "#3320",
+        "reason": "同 A17",
+        "removal_condition": "同 A17"
+      }
+    },
+    {
+      "id": "A19",
+      "role": "Flash 执行族工具根定位",
+      "file": "backend/agent/scripts/flash_firmware/flash_firmware.py",
+      "locators": [{"type": "function", "name": "_locate_flash_tool_dir"}],
+      "kind": "tool_root",
+      "family": "flash_firmware",
+      "tool_family": "flashtool",
+      "env_key": "STP_FLASH_TOOL_DIR",
+      "note": "param flash_tool_dir > STP_FLASH_TOOL_DIR > 旧相对 fallback；当前版本 requires_tools 注入 pin 的 flashtool 包根（fail-closed），旧 fallback 保留但被工具 authority 覆盖。"
+    },
+    {
+      "id": "A20",
+      "role": "Flash 前置族工具根候选序列",
+      "file": "backend/agent/scripts/flash_preflight/flash_preflight.py",
+      "locators": [{"type": "function", "name": "_flashtool_candidates"}],
+      "kind": "tool_root",
+      "family": "flash_preflight",
+      "tool_family": "flashtool",
+      "env_key": "STP_FLASH_TOOL_DIR",
+      "note": "STP_FLASH_TOOL_DIR > STP_AGENT_INSTALL_DIR 派生 > 旧相对 fallback；当前 1.0.6 同样 requires_tools 注入，正常引擎路径 fail-closed。"
+    },
+    {
+      "id": "A21",
+      "role": "AIMonkey Agent module 资源根",
+      "file": "backend/agent/aimonkey_paths.py",
+      "locators": [
+        {"type": "symbol", "name": "AGENT_DIR"},
+        {"type": "function", "name": "get_aimonkey_resource_root"},
+        {"type": "function", "name": "resolve_aimonkey_bundle_dir"}
+      ],
+      "kind": "agent_module_authority",
+      "subdir": "aimonkey",
+      "env_key": "AIMONKEY_RESOURCE_DIR",
+      "param_keys": ["aimonkey_dir"],
+      "note": "Agent module 直接位于 backend/agent/，其 .parent 即 Agent 代码根（dev/pkg 同构）；不是脚本包 _lib。"
+    },
+    {
+      "id": "A22",
+      "role": "Agent base-dir 与遗留顶层 RESOURCE_DIR",
+      "file": "backend/agent/config.py",
+      "locators": [
+        {"type": "function", "name": "_resolve_base_dir"},
+        {"type": "symbol", "name": "BASE_DIR"},
+        {"type": "symbol", "name": "LOG_DIR"},
+        {"type": "symbol", "name": "RUN_LOG_DIR"},
+        {"type": "symbol", "name": "RESOURCE_DIR"}
+      ],
+      "kind": "agent_base_dir",
+      "env_keys": ["AGENT_INSTALL_DIR"],
+      "note": "AGENT_INSTALL_DIR > config 文件布局识别；遗留顶层 resources 不是四专项默认根，不得误用作 C1 authority。"
+    },
+    {
+      "id": "A23",
+      "role": "runtime pipeline schema 路径",
+      "file": "backend/agent/contracts/pipeline_validator.py",
+      "locators": [{"type": "function", "name": "resolve_pipeline_schema_path"}],
+      "kind": "schema_path",
+      "note": "agent 包父目录 /schemas/pipeline_schema.json（dev=backend/schemas、deploy=install/schemas）；非资源锚。"
+    },
+    {
+      "id": "A24",
+      "role": "工具包缓存根",
+      "file": "backend/agent/tool_cache.py",
+      "locators": [{"type": "function", "name": "_cache_root"}],
+      "kind": "tool_cache_authority",
+      "env_keys": ["STP_TOOLS_CACHE_ROOT", "AGENT_INSTALL_DIR"],
+      "note": "STP_TOOLS_CACHE_ROOT > AGENT_INSTALL_DIR/tools_cache，缺 authority 返回不可用；不靠脚本 __file__，不等于 APK authority。"
+    },
+    {
+      "id": "A25",
+      "role": "安装根与遗留 resources 目录契约",
+      "file": "backend/agent/install_agent.sh",
+      "locators": [{"type": "function", "name": "copy_agent_tree"}],
+      "kind": "install_layout",
+      "note": "AGENT_INSTALL_DIR > 固定默认安装根；源树 resources 不下发（ADR-0040 D8 R2），目标侧已有 resources 不清理；shell 只核对文件存在，不做 AST 分析。"
+    },
+    {
+      "id": "A26",
+      "role": "控制面部署源与清单定位",
+      "file": "backend/services/host_updater.py",
+      "locators": [
+        {"type": "symbol", "name": "_AGENT_SOURCE_DIR"},
+        {"type": "symbol", "name": "_PIPELINE_SCHEMA_FILE"},
+        {"type": "symbol", "name": "_INVENTORY_PATH"}
+      ],
+      "kind": "deploy_source",
+      "note": "code tarball 以本部署 backend 下 agent 为源（排除 resources/scripts）；bundle=release/backend/agent，不是远端 APK 根。"
+    }
+  ]
+}

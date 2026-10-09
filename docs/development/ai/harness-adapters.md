@@ -32,9 +32,11 @@ Harness 适配层不得复制易变化的项目事实。根入口也不得重新
 
 **Cursor IDE / CodeBuddy IDE 已于 2026-10-01 退役**（Owner 裁决）：不再参与 #3516 G2 的
 验收矩阵，人工通道收敛为 Zcode 三格；Cursor 的 `.cursor/rules/` 适配面与 CodeBuddy **CLI**
-行不受影响，历史实测保留在 ADR-0034 附录 A 不再复测。**Zcode 行的版本证据不可跨版本搬运**——
-3.14.4 六格报告（2026-10-02）：实际取证 `af4edf99`；判卷 HEAD `bb1f34d9`，root_version 不一致先判 UNVERIFIED；
-Owner 批准核实仅两份无关测试变化，契约/探针未变，人工等价判卷（[更正](https://github.com/DUElost/stability-test-platform/issues/3563#issuecomment-5948070189)） contract/autoload 各 3 PASS。agent/aee Q1 是/否 → workspace-only，contract PASS ≠ 自动注入；**已知利益冲突，独立核实/重验 pending**。
+行不受影响，历史实测保留在 ADR-0034 附录 A 不再复测。**Zcode 行的版本证据不可跨版本搬运**：
+3.14.4（2026-10-02）contract/autoload 各 3 PASS；agent/aee Q1 是/否 → workspace-only，contract PASS ≠
+自动注入。该报告有**已知利益冲突，已披露**，Owner 2026-10-03 裁决无需独立重验（披露保留，不当作独立证据）；
+取证 / 判卷 HEAD 不一致的人工等价判卷等过程记录见
+[迁出记录](../../notes/process/2026-10-06-resident-doc-history-migration-3568.md)。
 
 Harness 的自动发现规则会随版本变化（各 harness 的**记忆目录**约定——不在仓库内——单点权威在 [`tools/dev/memory_lint.py`](../../../tools/dev/memory_lint.py) 的 `memory_dir_candidates()`；多个 harness 同时用时须以 `--harness` 指定，不静默取第一个——变更时必须同步，#2065）。新增专用适配前必须用对应版本实测加载行为；
 不能仅凭文件名推断规则已经生效。
@@ -62,10 +64,7 @@ Antigravity 的历史规则供给、工具循环失败与顾问定位证据见
 `AGENTS.md`、`CLAUDE.md` 与 Harness 适配文件属于共享元文件，同一时间只由一个
 Execution 串行修改。并行执行语义的权威源是
 [`ADR-0034`](../../adr/ADR-0034-multi-harness-execution-contract.md)
-（Accepted）与 [`execution-contract.md`](execution-contract.md)；
-[`2026-09-04-multi-agent-parallel-convention.md`](../../notes/process/2026-09-04-multi-agent-parallel-convention.md)
-已被取代，其元文件串行化实践继续有效，派生视图保留为 ground truth 交叉验证
-手段（契约 §5.1/§9）。
+（Accepted）与 [`execution-contract.md`](execution-contract.md)。
 
 ## Registry CLI 手动入口（非 Adapter 义务，非路由）
 
