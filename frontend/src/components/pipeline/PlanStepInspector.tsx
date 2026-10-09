@@ -1,4 +1,4 @@
-import { useMemo, useCallback, useState } from 'react';
+import { useMemo, useCallback, useId, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowUpRight, AlertTriangle } from 'lucide-react';
 import type { PipelinePhase, PipelineStep, ScriptEntry } from '@/utils/api/types';
@@ -535,90 +535,123 @@ function ParamFieldRow({ fieldKey, field, value, onChange, disabled }: ParamFiel
   const isRequired = !!field.required;
   const displayLabel = isRequired ? `${label} *` : label;
   const inputCls = cn('max-w-[60%] h-7 px-2 text-[12px]', PIPELINE_EDITOR.inputInline);
+  // 说明常显在字段下方：此前只当字符串输入框的 placeholder，字段一有值（通常来自
+  // default_params）就看不见，数字/枚举/布尔字段则从不显示。
+  const descriptionId = useId();
+  const description = typeof field.description === 'string' ? field.description.trim() : '';
+  const describedBy = description ? descriptionId : undefined;
+  const shell = (control: React.ReactNode) => (
+    <ParamFieldShell label={displayLabel} description={description} descriptionId={descriptionId}>
+      {control}
+    </ParamFieldShell>
+  );
 
   // string with enum → <select>
   if (field.type === 'string' && field.enum && field.enum.length > 0) {
-    return (
-      <Row label={displayLabel}>
-        <select
-          disabled={disabled}
-          value={String(value ?? '')}
-          onChange={e => onChange(e.target.value || undefined)}
-          className={inputCls}
-        >
-          <option value="">—</option>
-          {field.enum.map(opt => (
-            <option key={opt} value={opt}>{opt}</option>
-          ))}
-        </select>
-      </Row>
+    return shell(
+      <select
+        disabled={disabled}
+        value={String(value ?? '')}
+        onChange={e => onChange(e.target.value || undefined)}
+        className={inputCls}
+        aria-describedby={describedBy}
+      >
+        <option value="">—</option>
+        {field.enum.map(opt => (
+          <option key={opt} value={opt}>{opt}</option>
+        ))}
+      </select>,
     );
   }
 
   // boolean → toggle switch
   if (field.type === 'boolean') {
     const checked = value === true || value === 'true';
-    return (
-      <Row label={displayLabel}>
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={() => onChange(!checked)}
+    return shell(
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => onChange(!checked)}
+        className={cn(
+          'relative w-8 h-[18px] rounded-full transition',
+          checked ? 'bg-success' : 'bg-muted-foreground/40',
+          disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer',
+        )}
+        aria-pressed={checked}
+        aria-label={`${label}: ${checked ? '是' : '否'}`}
+        aria-describedby={describedBy}
+      >
+        <span
           className={cn(
-            'relative w-8 h-[18px] rounded-full transition',
-            checked ? 'bg-success' : 'bg-muted-foreground/40',
-            disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer',
+            'absolute top-0.5 left-0.5 w-3.5 h-3.5 rounded-full bg-background shadow transition-transform',
+            checked ? 'translate-x-[14px]' : 'translate-x-0',
           )}
-          aria-pressed={checked}
-          aria-label={`${label}: ${checked ? '是' : '否'}`}
-        >
-          <span
-            className={cn(
-              'absolute top-0.5 left-0.5 w-3.5 h-3.5 rounded-full bg-background shadow transition-transform',
-              checked ? 'translate-x-[14px]' : 'translate-x-0',
-            )}
-          />
-        </button>
-      </Row>
+        />
+      </button>,
     );
   }
 
   // integer / number → numeric input
   if (field.type === 'integer' || field.type === 'number') {
-    return (
-      <Row label={displayLabel}>
-        <input
-          type="number"
-          min={field.minimum}
-          value={value != null ? Number(value) : ''}
-          placeholder={String(field.default ?? '')}
-          disabled={disabled}
-          onChange={e => {
-            const raw = e.target.value;
-            if (raw === '') { onChange(undefined); return; }
-            const num = field.type === 'integer'
-              ? parseInt(raw, 10)
-              : parseFloat(raw);
-            if (!isNaN(num)) onChange(num);
-          }}
-          className={inputCls}
-        />
-      </Row>
+    return shell(
+      <input
+        type="number"
+        min={field.minimum}
+        value={value != null ? Number(value) : ''}
+        placeholder={String(field.default ?? '')}
+        disabled={disabled}
+        onChange={e => {
+          const raw = e.target.value;
+          if (raw === '') { onChange(undefined); return; }
+          const num = field.type === 'integer'
+            ? parseInt(raw, 10)
+            : parseFloat(raw);
+          if (!isNaN(num)) onChange(num);
+        }}
+        className={inputCls}
+        aria-describedby={describedBy}
+      />,
     );
   }
 
-  // string (no enum) → text input
+  // string (no enum) → text input；placeholder 与数字字段同口径取 schema 默认（说明已常显）
+  return shell(
+    <input
+      type="text"
+      value={String(value ?? '')}
+      placeholder={String(field.default ?? '')}
+      disabled={disabled}
+      onChange={e => onChange(e.target.value || undefined)}
+      className={cn(inputCls, 'min-w-[50%]')}
+      aria-describedby={describedBy}
+    />,
+  );
+}
+
+/** 参数行 + 其下方常显的说明（无说明时只渲染参数行，不留空段落）。 */
+function ParamFieldShell({
+  label,
+  description,
+  descriptionId,
+  children,
+}: {
+  label: string;
+  description: string;
+  descriptionId: string;
+  children: React.ReactNode;
+}) {
   return (
-    <Row label={displayLabel}>
-      <input
-        type="text"
-        value={String(value ?? '')}
-        placeholder={field.description || ''}
-        disabled={disabled}
-        onChange={e => onChange(e.target.value || undefined)}
-        className={cn(inputCls, 'min-w-[50%]')}
-      />
-    </Row>
+    <div className="grid gap-0.5">
+      <Row label={label}>{children}</Row>
+      {description && (
+        <p
+          id={descriptionId}
+          className={cn('text-[11px] leading-snug whitespace-pre-wrap break-words', TEXT.subtitle)}
+        >
+          {description}
+        </p>
+      )}
+    </div>
   );
 }
 
