@@ -107,7 +107,11 @@ export default function PlanStepInspector({
 
             {scriptName && (
               <Link
-                to={`/scripts?name=${encodeURIComponent(scriptName)}`}
+                // 路由是 `/script-management`（`/scripts` 不存在，曾落 404）；带 `version` 与
+                // 快照抽屉的深链同形（#3350），脚本库页据此展开该版本。
+                to={`/script-management?name=${encodeURIComponent(scriptName)}${
+                  step.version ? `&version=${encodeURIComponent(step.version)}` : ''
+                }`}
                 className={cn(
                   'inline-flex items-center justify-center gap-1.5 px-2.5 py-2 text-[11px] font-bold rounded-md transition',
                   PIPELINE_EDITOR.linkBtn,
