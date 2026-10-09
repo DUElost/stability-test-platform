@@ -952,13 +952,18 @@ def _call_name(node: ast.Call) -> str | None:
     return None
 
 
+def _ast_equal(a: ast.AST, b: ast.AST) -> bool:
+    """结构相等（忽略行号/列号），用于条件与分支表达式对拍。"""
+    return ast.dump(a, include_attributes=False) == ast.dump(b, include_attributes=False)
+
+
 def _empty_override_if_branch(test: ast.AST, key_read_vars: set[str]) -> str | None:
-    """简单 ``if`` 守卫下，override 为空时执行的分支：``body`` / ``orelse`` / ``None``（无法证明）。
+    """简单 ``if`` / ``IfExp`` 守卫下，override 为空时执行的分支：``body`` / ``orelse`` / ``None``。
 
     支持：
-    - ``if not X:``（X 为 override 变量）→ 空分支在 body；
-    - ``if X:`` → 空分支在 orelse。
-    复合条件不猜方向（复审 U2）。
+    - ``if not X:`` / ``… if not X else …``（X 为 override 变量）→ 空分支在 body；
+    - ``if X:`` / ``… if X else …`` → 空分支在 orelse。
+    复合条件不猜方向（复审 U2 / V2）。
     """
     if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
         if isinstance(test.operand, ast.Name) and test.operand.id in key_read_vars:
@@ -974,8 +979,9 @@ def _lazy_guard_verdict(
 ) -> str:
     """默认锚调用的惰性判定：``lazy`` / ``eager`` / ``unproven``。
 
-    - ``lazy``：位于 override 为空的分支 / Or 右操作数 / 条件表达式分支；
-    - ``eager``：嵌在其它调用参数里，或位于 override 非空分支（``if base: default()``，复审 U2）；
+    - ``lazy``：位于 override 为空的分支 / Or 右操作数；
+    - ``eager``：嵌在其它调用参数里，或位于 override 非空分支
+      （``if base: default()`` / ``default() if base else base``，复审 U2/V2）；
     - ``unproven``：命中 override 变量守卫但条件方向无法证明——需人工分类，不得静默放行。
     """
     cur: ast.AST = call
@@ -986,7 +992,19 @@ def _lazy_guard_verdict(
         if isinstance(parent, ast.BoolOp) and isinstance(parent.op, ast.Or) and any(cur is v for v in parent.values[1:]):
             return "lazy"
         if isinstance(parent, ast.IfExp) and (cur is parent.body or cur is parent.orelse):
-            return "lazy"
+            test_names = {n.id for n in ast.walk(parent.test) if isinstance(n, ast.Name)}
+            if test_names & key_read_vars:
+                empty = _empty_override_if_branch(parent.test, key_read_vars)
+                in_body = cur is parent.body or _is_descendant(cur, parent.body)
+                in_else = cur is parent.orelse or _is_descendant(cur, parent.orelse)
+                if empty is None:
+                    return "unproven"
+                if empty == "body" and in_body:
+                    return "lazy"
+                if empty == "orelse" and in_else:
+                    return "lazy"
+                return "eager"
+            # 条件未关联 override 变量——不能默认当惰性（继续向上查找）
         if isinstance(parent, ast.If):
             test_names = {n.id for n in ast.walk(parent.test) if isinstance(n, ast.Name)}
             if test_names & key_read_vars:
@@ -1521,14 +1539,20 @@ def _effective_override_nodes(
             if isinstance(sub, ast.Name):
                 add(_name_value_at(fn, sub.id, ret.lineno), f"L{ret.lineno} return 变量 {sub.id}")
     for node in ast.walk(fn):
-        if not isinstance(node, ast.If):
+        if isinstance(node, ast.If):
+            test = node.test
+        elif isinstance(node, ast.IfExp):
+            # IfExp fallback（``default() if not base else base``）的保留值来自 test 中
+            # override 变量在该行的 reaching def（复审 V2 绿例）——与 ``if`` 守卫同判。
+            test = node.test
+        else:
             continue
         guards_root = any(
             isinstance(c, ast.Call) and _call_name(c) in roots for c in ast.walk(node) if isinstance(c, ast.Call)
         )
         if not guards_root:
             continue
-        for name_node in (n for n in ast.walk(node.test) if isinstance(n, ast.Name)):
+        for name_node in (n for n in ast.walk(test) if isinstance(n, ast.Name)):
             add(_name_value_at(fn, name_node.id, node.lineno), f"L{node.lineno} 守卫变量 {name_node.id}")
     return nodes
 
@@ -1557,30 +1581,60 @@ def _classify_effective(
         if param_idx is None or env_idx is None:
             return "no-chain", f"L{chain.lineno}"
         return ("param-first" if param_idx < env_idx else "env-first"), f"L{chain.lineno}"
-    # 简单条件表达式：``X if X else Y``（truthy 取 body）——覆盖复审 U1 的 env/param 三元反转。
+    # 简单条件表达式——仅对可证明方向的形态给出顺序（复审 U1 / V1）：
+    # - ``X if X else Y``：truthy 取 body；
+    # - ``X if not X else Y``：truthy 取 orelse（否定不得用键交集冒充正向）。
+    # 要求两分支各自恰含一个通道键（干净 X/Y 分裂）；fallback
+    # ``default() if … else base`` 不是 override 选择链（由惰性守卫单独处理，复审 V2）。
     dual_ifexps: list[ast.IfExp] = []
     for sub in ast.walk(node):
         if not isinstance(sub, ast.IfExp):
             continue
-        keys = _key_markers(fn, sub, module_scope)
-        if param_key in keys and env_key in keys:
-            dual_ifexps.append(sub)
+        body_ch = {k for k in (param_key, env_key) if k in _key_markers(fn, sub.body, module_scope)}
+        else_ch = {k for k in (param_key, env_key) if k in _key_markers(fn, sub.orelse, module_scope)}
+        if body_ch | else_ch != {param_key, env_key}:
+            continue
+        if body_ch & else_ch or len(body_ch) != 1 or len(else_ch) != 1:
+            continue
+        dual_ifexps.append(sub)
     if dual_ifexps:
         if len(dual_ifexps) > 1:
             return "ambiguous", f"L{[c.lineno for c in dual_ifexps]}"
         ie = dual_ifexps[0]
         body_keys = _key_markers(fn, ie.body, module_scope)
         else_keys = _key_markers(fn, ie.orelse, module_scope)
-        test_keys = _key_markers(fn, ie.test, module_scope)
-        if test_keys & body_keys:
+        preferred: str | None = None
+        if _ast_equal(ie.test, ie.body):
+            preferred = "body"
+        elif (
+            isinstance(ie.test, ast.UnaryOp)
+            and isinstance(ie.test.op, ast.Not)
+            and _ast_equal(ie.test.operand, ie.body)
+        ):
+            preferred = "orelse"
+        if preferred == "body":
             if env_key in body_keys and param_key in else_keys:
                 return "env-first", f"L{ie.lineno}"
             if param_key in body_keys and env_key in else_keys:
                 return "param-first", f"L{ie.lineno}"
+        elif preferred == "orelse":
+            if env_key in else_keys and param_key in body_keys:
+                return "env-first", f"L{ie.lineno}"
+            if param_key in else_keys and env_key in body_keys:
+                return "param-first", f"L{ie.lineno}"
         return "no-chain", f"L{ie.lineno}"
+    # 字面量直接共现双键且无已识别结构 → 人工分类；仅经 Name 回溯得到的双键
+    # 交给该 Name 的 reaching def（同属 effective 消费点）证明，避免 Path(base) 重复误报。
+    direct_keys = {
+        sub.value
+        for sub in ast.walk(node)
+        if isinstance(sub, ast.Constant) and isinstance(sub.value, str)
+    }
     keys = _key_markers(fn, node, module_scope)
     if param_key in keys and env_key in keys:
-        return "no-chain", ""
+        if param_key in direct_keys and env_key in direct_keys:
+            return "no-chain", ""
+        return "none", ""
     if env_key in keys:
         return "env-only", ""
     if param_key in keys:
@@ -2884,6 +2938,44 @@ def run_self_test() -> int:
         )
         expect_clean(_errors_of(_write_fixture(Path(tmp) / "g5", alpha_lib=lib)), "G5 else 空分支惰性")
 
+        # --- 红 R34：``X if not X else Y`` 否定条件不得冒充 X 优先（复审 V1） ---
+        lib = AGENT_SETUP_LIB.format(subdir="alpha", param="alpha_resources_dir", envkey="STP_ALPHA_RESOURCES_DIR")
+        lib = lib.replace(
+            "    return Path(base) / (cfg.get(\"project\") or \"legacy\")",
+            '    return Path(\n'
+            '        cfg.get("alpha_resources_dir")\n'
+            '        if not cfg.get("alpha_resources_dir")\n'
+            '        else env("STP_ALPHA_RESOURCES_DIR", "")\n'
+            '    ) / (cfg.get("project") or "legacy")',
+        )
+        expect(
+            _errors_of(_write_fixture(Path(tmp) / "r34", alpha_lib=lib)),
+            "env 先于 param",
+            "R34 否定 IfExp env 优先",
+        )
+
+        # --- 红 R35：``default() if base else base`` 非空分支调用默认锚（复审 V2） ---
+        lib = AGENT_SETUP_LIB.format(subdir="alpha", param="alpha_resources_dir", envkey="STP_ALPHA_RESOURCES_DIR")
+        lib = lib.replace(
+            "    if not base:\n        base = _default_resources_root()\n",
+            "    if not base:\n"
+            "        base = _default_resources_root()\n"
+            "    base = _default_resources_root() if base else base\n",
+        )
+        expect(
+            _errors_of(_write_fixture(Path(tmp) / "r35", alpha_lib=lib)),
+            "急切求值",
+            "R35 IfExp 非空分支默认锚",
+        )
+
+        # --- 绿 G6：``default() if not base else base`` 合法空分支（不得误报） ---
+        lib = AGENT_SETUP_LIB.format(subdir="alpha", param="alpha_resources_dir", envkey="STP_ALPHA_RESOURCES_DIR")
+        lib = lib.replace(
+            "    if not base:\n        base = _default_resources_root()\n",
+            "    base = _default_resources_root() if not base else base\n",
+        )
+        expect_clean(_errors_of(_write_fixture(Path(tmp) / "g6", alpha_lib=lib)), "G6 IfExp 空分支惰性")
+
         # --- 红 R16：base ref 不可解析 = 不可验证 ---
         git_root = Path(tmp) / "gitrepo"
         _write_fixture(git_root)
@@ -2920,9 +3012,10 @@ def run_self_test() -> int:
         "cache 祖先 / dead 接入 / 别名导入接入 / 函数内别名导入 / import * 接入 / getattr 接入 / 导出 / "
         "绑定缺失 / 错误 env / 成员缺失 / 未声明候选 / 未解析表达式 / 零候选 / 急切默认锚 / 错误返回根 / "
         "额外错误目录 / 多余后缀 / 片段错序 / 前缀多余片段 / 别名复用（多来源）/ 未使用链掩盖 / "
-        "同名覆盖 / 变量返回 literal / 条件表达式 env 优先 / 守卫方向反转 / 删 param override / "
-        "env 先于 param / 变量 env 优先 / 例外扩张 / base 不可验证 → 红；agent-dir 形态 / "
-        "显式 override / 变量 param 先行 / else 空分支惰性 / parents 与 tools_cache 字样不误报 → 绿）"
+        "同名覆盖 / 变量返回 literal / 条件表达式 env 优先 / 守卫方向反转 / 否定 IfExp / "
+        "IfExp 非空分支默认锚 / 删 param override / env 先于 param / 变量 env 优先 / "
+        "例外扩张 / base 不可验证 → 红；agent-dir 形态 / 显式 override / 变量 param 先行 / "
+        "else 空分支惰性 / IfExp 空分支惰性 / parents 与 tools_cache 字样不误报 → 绿）"
     )
     return 0
 

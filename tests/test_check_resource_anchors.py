@@ -465,6 +465,48 @@ class TestIsolationMutations:
         lib.write_text(original, encoding="utf-8")
         assert _errors_of(copy) == [], "恢复后应绿"
 
+    def test_negated_ifexp_not_treated_as_body_first(self, tmp_path):
+        """复审 V1：``X if not X else Y`` 不得冒充 X 优先；truthy 取 orelse。"""
+        copy = self._copy(tmp_path)
+        lib = copy / "backend/agent/scripts/mtbf_setup/_lib.py"
+        original = lib.read_text(encoding="utf-8")
+        mutated = original.replace(
+            "    return Path(base) / project",
+            '    return Path(\n'
+            '        cfg.get("mtbf_resources_dir")\n'
+            '        if not cfg.get("mtbf_resources_dir")\n'
+            '        else env("STP_MTBF_RESOURCES_DIR", "")\n'
+            "    ) / project",
+        )
+        assert mutated != original, "变异未生效（测试锚点漂移）"
+        lib.write_text(mutated, encoding="utf-8")
+        errors = _errors_of(copy)
+        assert any("env 先于 param" in e for e in errors), f"否定 IfExp 应红，实际 {errors}"
+        lib.write_text(original, encoding="utf-8")
+        assert _errors_of(copy) == [], "恢复后应绿"
+
+    def test_ifexp_fallback_direction_must_be_empty_override(self, tmp_path):
+        """复审 V2：``default() if base else base`` 急切；``default() if not base else base`` 绿。"""
+        copy = self._copy(tmp_path)
+        lib = copy / "backend/agent/scripts/mtbf_setup/_lib.py"
+        original = lib.read_text(encoding="utf-8")
+        guard = "    if not base:\n        base = _default_resources_root()"
+        reversed_ifexp = original.replace(
+            guard,
+            guard + "\n    base = _default_resources_root() if base else base",
+        )
+        assert reversed_ifexp != original, "变异未生效（测试锚点漂移）"
+        lib.write_text(reversed_ifexp, encoding="utf-8")
+        assert any("急切求值" in e for e in _errors_of(copy)), "IfExp 非空分支应红"
+        lazy_ifexp = original.replace(
+            guard,
+            "    base = _default_resources_root() if not base else base",
+        )
+        lib.write_text(lazy_ifexp, encoding="utf-8")
+        assert _errors_of(copy) == [], "IfExp 空分支等价写法应绿"
+        lib.write_text(original, encoding="utf-8")
+        assert _errors_of(copy) == [], "恢复后应绿"
+
     def test_declaration_hole_is_red(self, tmp_path):
         copy = self._copy(tmp_path)
         contract_path = copy / "tools/dev/resource_anchor_contract.json"
