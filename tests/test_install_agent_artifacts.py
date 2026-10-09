@@ -142,7 +142,7 @@ def test_install_script_installs_schema_and_version_to_runtime_paths():
 def test_agent_requirements_pin_scan_export_dependency():
     # CI 的控制面/dev 环境已有 xlwt；import 成功不能证明 Agent 安装清单含该依赖。
     requirements = {
-        re.sub(r"\s+", "", line.partition("#")[0]).lower()
+        re.sub(r"\s*==\s*", "==", line.partition("#")[0].strip()).lower()
         for line in AGENT_REQUIREMENTS.read_text(encoding="utf-8").splitlines()
     }
 
