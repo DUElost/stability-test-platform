@@ -15,6 +15,7 @@
 - [ ] 涉及协议 / 状态机变更时更新 `docs/design/07-execution-protocol.md`
 - [ ] 涉及 env / 部署 / 验收时同步对应文档
 - [ ] 新功能按 `PRD/Epic → ADR → design/ → acceptance/` 更新对应验收矩阵（如适用；不适用时说明原因）
+- [ ] 改动契约类文档或 SOP 时，新写或改动的句子已按 `docs/development/writing-conventions.md` §5 自查（术语 / 强度词 / SOP 步骤；不适用时留空）
 
 ## 注意事项
 

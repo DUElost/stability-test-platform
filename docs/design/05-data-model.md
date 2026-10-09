@@ -56,6 +56,12 @@
 | `run_type` | MANUAL / SCHEDULE / CHAIN |
 | `run_context` | 含 `precheck` 等 |
 
+**界面名对照**（[ADR-0059](../adr/ADR-0059-contract-and-sop-writing-conventions.md) D2-3：界面文案跨边界使用）：
+
+| 推荐名 | 合法别称 | 不要当成 |
+|---|---|---|
+| PlanRun | 通知页事件名称中的「任务」（指 PlanRun；证据：`RUN_COMPLETED` / `RUN_FAILED` 在 `frontend/src/pages/notifications/NotificationsPage.tsx` 显示为「任务完成 / 任务失败」，事件由 `plan_run_finalization` 发出） | SAQ 任务、定时任务（`task_schedules`）、systemd timer、JobInstance |
+
 ### JobInstance
 
 | 字段 | 说明 |
