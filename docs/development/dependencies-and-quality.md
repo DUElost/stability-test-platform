@@ -90,11 +90,14 @@ Python 3.11 下重新生成对应 lock。日常重生成沿用已有 pin；只�
     （`--collect-only`），捕获「只在被污染的 ambient 环境里能 import」的收集期回归
     （#739 §1.1 的干净环境自闭环）；
 - 验证顺序：Agent tests → TypeScript check → frontend build → 必要时 backend tests。
-- **本机解释器比 CI 新，语法子集不对称**：CI 各 job 统一 Python 3.11（`lint` /
-  `pr-compileall` / `pr-agent-tests` / `pr-typecheck` 同版，`ruff.toml` 亦
-  `target-version = "py311"`），而本机 venv 是 3.13。3.12+ 才允许的写法（PEP 701 的
-  同类型引号嵌套，如 `f"{item["k"]}"`）在 3.11 直接是 `SyntaxError`——本机
-  `check:quick` 的 `compileall` 全绿、推上去必红。提交前用 CI 同版自查：
+- **本机解释器比 CI 新，语法子集不对称**：CI 的 Python job（`lint` /
+  `pr-compileall` / `pr-agent-tests` / `pr-migrate-empty-db` 与后端测试 job）统一用
+  Python 3.11，`ruff.toml` 亦 `target-version = "py311"`；`pr-agent-tests` 另有一步
+  在 3.10 下限解释器上导入安装器闭包（版本与 `tools/site_config/preflight.MIN_PYTHON`
+  一致，由 `tests/test_site_installer_python_floor.py` 钉住，#2268）；`pr-typecheck` 是
+  前端 TypeScript 检查，不涉及 Python。本机 venv 是 3.13。3.12+ 才允许的写法（PEP 701 的同类型引号嵌套，如 `f"{item["k"]}"`）在 3.11
+  直接是 `SyntaxError`——本机 `check:quick` 的 `compileall` 全绿、推上去必红。
+  提交前用 CI 同版自查：
 
   ```bash
   docker run --rm --user "$(id -u):$(id -g)" -v "$PWD":/w -w /w python:3.11-slim \

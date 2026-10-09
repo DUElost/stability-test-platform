@@ -53,6 +53,48 @@ Q3 已删除，不再声称检测重复加载。
 - 退出码：完整所选矩阵 PASS 为 0；有 FAIL 为 2；否则有 UNVERIFIED 为 1。
   FAIL 与 UNVERIFIED 混合时返回 2，逐行状态仍保留；没有“不可验证但 exit 0”的默认路径。
 
+### UNVERIFIED 原因码
+
+探针拒绝一个答复时，报告里的 `error` 在固定前缀 `no valid final answer or protocol/tool error`
+之后附一个方括号原因码。JSON 协议形态（Claude / Codex）进程非零退出时先写 `exit=N`；**仅当 stdout
+还能读出流级拒绝原因**才在其后附原因码——stdout 是协议有效的最终答复、没有流级原因时仍只写 `exit=N`，
+纯文本形态恒为 `exit=N`。非零退出本身就足以解释 UNVERIFIED，`exit=N` 后没有方括号码不是诊断缺失。
+原因码**只解释为什么不可判，不改变任何判定**，也不含原始输出（探针本身不保存 stdout）。判定与原因出自
+同一段读取代码，不会漂移。其它 UNVERIFIED 来源（`timeout`、`stderr diagnostics; inspect locally`、
+`version unavailable`、`not-runnable: …`、人工证据类）的 `error` 文本不变，也不带原因码。
+
+| 原因码 | 含义 |
+|---|---|
+| `transport-retry(api_retry xN)` | 流里出现了 N 个 `system/api_retry` 事件，**仅此而已**：不证明答案有效，不证明故障是瞬时的，也不证明重试已恢复或已耗尽。该事件自带非空 `error` 字段，探针据此把有它的流判为出错，因此其它缺陷（缺最终 `result`、`result` 非 success、答案格式不对、多个 `result`）不再单独列出，401 这类持续性错误也记同一个码；与 `result-error` 同现只说明最终 `result` 同时带错误。要下结论须手动重放同一命令查看事件流（探针不保存 stdout） |
+| `result-error` | 最终 `result` 事件自身带错误 |
+| `tool-or-protocol-error` | 流里其它节点带错误：工具结果出错、命令非零退出、`error` / `turn.failed` 事件等 |
+| `unparseable-stream` | 输出为空、含非 JSON 行、非对象事件或嵌套过深 |
+| `no-single-final-result` | Claude：不是恰好一个 `result`，或它不是最后一个事件 |
+| `result-not-success` / `result-not-text` | Claude：`result` 不是 success / 不是文本 |
+| `turn-not-completed` / `no-agent-message` | Codex：回合未完成 / 没有 agent 消息 |
+| `answer-format` | 取到了答复，但不是完整的两行 `Q1=…` / `Q2=…` |
+| `unsupported-protocol` | 形态登记了未知输出协议 |
+
+多个原因用 `+` 连接，顺序固定：`transport-retry`、`result-error`、`tool-or-protocol-error`。
+
+### 重试纪律
+
+上游不稳、限流、模型渠道临时不可用等宿主 / 服务的瞬时故障会让格子 UNVERIFIED。允许重试，但：
+
+1. 只重试因**宿主 / 服务瞬时原因**而 UNVERIFIED 的格——这由操作者依据证据判断，不能只凭原因码；
+   已得出 PASS 或 FAIL 的格**一律不重试**，否则就是在挑结果；
+2. 命令行、提示词与判卷不变；不得靠改参数、加信任绕过或指定模型来换结果；
+3. **每次尝试都留档**（revision、版本、状态、原因码、耗时）；报告同时写首轮结果和最终结果，不把
+   重试后的结果写成首轮；设次数上限，上限内仍不可判就如实报告 UNVERIFIED；
+4. 原因码是辅助线索：`transport-retry` 只说明流里有重试事件，**不说明**是上游瞬时问题（401 这类持续性
+   错误也记同一个码），更**不构成豁免**；判定仍以探针为准。
+
+### 宿主环境提示
+
+从 Claude Code 会话里运行探针，子进程会继承该会话的 `CLAUDE_CODE_EFFORT_LEVEL`。曾实测：`max` 下一次
+极简的 `claude -p` 在 90 秒内都没有返回，`low` 下 6 秒返回。可在**探针进程环境**里设为 `low`（推理强度
+不影响上下文装载）并把它记进证据；探针命令行本身不因此改变。
+
 ### stderr 证据
 
 stderr 一律判 UNVERIFIED，但判定必须可复核，因此原文落盘到**操作者本地**的
@@ -70,9 +112,13 @@ stderr 一律判 UNVERIFIED，但判定必须可复核，因此原文落盘到**
 
 ### 已知不可跑形态（Owner 2026-10-01 裁决）
 
-- `cursor` CLI：命令不含 `--trust`，宿主无预置工作区信任时非交互直接 `exit=1`
-  → 该格恒 UNVERIFIED。**这是接受的终态**，不为此加信任绕过参数；Cursor CLI 的
-  真实证据需在有预置工作区信任的宿主上复跑。
+- `cursor` CLI：**结果随宿主条件变化，不再是恒 UNVERIFIED**。命令不含 `--trust`，探针不为此加信任
+  绕过参数；宿主无预置工作区信任或服务拒绝时非交互直接 `exit=1` → 该格 UNVERIFIED（Owner
+  2026-10-01 裁决接受这类结果，不改判）。2026-10-03 旧账号团队额度拒绝，contract / autoload 六格全部
+  UNVERIFIED（[证据](https://github.com/DUElost/stability-test-platform/issues/3563#issuecomment-5965465667)）；
+  同日换账号后同命令六格 PASS（`2026.09.18-9a7762b`，
+  [证据](https://github.com/DUElost/stability-test-platform/issues/3563#issuecomment-5965565067)）。
+  PASS 只代表该宿主 / 日期 / CLI 版本；额度或信任条件再变时按本节重新取证，如实标 UNVERIFIED。
 - `codex` CLI：本机 stderr 恒有两行（`Reading additional input from stdin...` 与
   `failed to refresh available models: request timed out`）→ 整列 UNVERIFIED。答复
   本身有效也不改判；宿主网络恢复后复跑，或由 Owner 另行裁决 stderr 噪声豁免口径。

@@ -24,8 +24,22 @@ pin 依据及函数级 legacy 分类为输入；工具版本真源仍是 ``tool_
 - **全量 census**（默认，与 --base 无关）：独立发现 ``__file__`` / AGENT_DIR 派生的
   路径锚与 family 资源键消费者，与声明集双向对拍——未声明候选、声明条目无法在
   源码复现、无法解析的被消费表达式、缺失源文件、零候选/零覆盖均非零退出；
-- **函数级 legacy**：10 个无消费者 helper 只按函数登记；新增调用/导出/引用使其
-  可达即红，禁止整文件/族目录豁免；
+- **函数级 legacy**：10 个无消费者 helper 只按函数登记；新增调用（含**别名导入**、
+  ``import *``、``getattr`` 动态引用）、导入路径、``__all__`` 导出使其可达即红；
+  禁止整文件/族目录豁免；
+- **authority 判据**（#3615 复核 P2 + 复审 R1–R3/S1–S3/T1–T2 后加固）：
+  - 资源根相对 Agent authority 的**全部片段**必须恰为 ``("resources", <族子目录>)``——
+    前/后缀均不允许；root 与 consumer 的 project/variant/bundle 层分开；
+  - 资源根必须出现在**返回位置**且每个返回值都符合声明 authority——「保留正确赋值
+    却返回错误路径」「增加错误目录返回」「经局部变量返回错误 literal 根」均不得通过；
+    authority 定位点不得返回字面量根；
+  - 显式 override 必须**双通道**（同一消费者同时读取 param 与 env），且证明必须关联到
+    **实际消费值**：守卫变量在该行的 reaching def 与 return 值的来源被逐一分类；
+    被同名覆盖而消费不到、或未被使用的旧链不作证明；实际值只读 env / 顺序反转 /
+    多条候选链无法关联 → 红或要求人工分类；
+  - 同族导入索引覆盖**函数体内** Import/ImportFrom 并保留原始符号名；同一别名多来源时
+    保留**全部**候选并显式报人工分类（禁止 last-write-wins）；``import *``、``getattr``
+    动态引用同样不得让调用从可达性图消失；
 - **--base**：增量防新增与例外防扩张（head 的 legacy 集合必须是 base 的子集）；
   不替代全量 census；base ref 不可解析或 base 契约坏 JSON = 不可验证（退出 2），
   不得当空 diff 成功。
@@ -460,8 +474,15 @@ class FileAnalysis:
     funcs: dict[str, ast.FunctionDef]
     module_assigns: dict[str, ast.AST]
     agent_dir_names: set[str]
-    imports_from_local: dict[str, str]  # 本地名 → 本地模块 stem（family 内）
-    module_aliases: dict[str, str]  # 别名 → 本地模块 stem
+    #: 本地名 → **全部**候选 (本地模块 stem, 原始符号名)——多值映射，禁止 last-write-wins
+    #: （两个函数复用同一别名时，覆盖会隐藏真实调用，复审 S2）
+    imports_from_local: dict[str, tuple[tuple[str, str], ...]]
+    #: 别名 → 本地模块 stem 候选（同样多值）
+    module_aliases: dict[str, tuple[str, ...]]
+    #: 从本地模块 ``import *`` 的模块 stem——调用面无法静态追踪，出现即报人工分类
+    wildcard_local_imports: tuple[str, ...] = ()
+    #: 同一本地名映射到多个不同来源的别名（需人工分类；不得静默取最后一个）
+    multi_source_aliases: tuple[str, ...] = ()
 
 
 @dataclass
@@ -470,6 +491,8 @@ class LocatorInfo:
     locator: str
     in_script_tree: bool = False
     vals: list[PathVal] = field(default_factory=list)
+    #: 返回值位置上的路径事实 (行号, 值, 是否在本函数 return 表达式里直接写死路径)
+    returns: list[tuple[int, PathVal, bool]] = field(default_factory=list)
     family_keys: set[tuple[str, str]] = field(default_factory=set)  # (family, 资源 param/env 键)
     tool_env_keys: set[str] = field(default_factory=set)
     anchor_keys: set[str] = field(default_factory=set)  # 契约锚显式登记的 param/env 键
@@ -510,25 +533,37 @@ def _analyze_file(repo: Path, rel: str) -> FileAnalysis:
     module_assigns: dict[str, ast.AST] = {}
     agent_dir_names: set[str] = set()
     local_stems = {p.stem for p in path.parent.glob("*.py")}
-    imports_from_local: dict[str, str] = {}
-    module_aliases: dict[str, str] = {}
+    collect_from: dict[str, set[tuple[str, str]]] = {}
+    collect_aliases: dict[str, set[str]] = {}
+    wildcard: list[str] = []
     for node in ast.walk(tree):
-        # config.AGENT_DIR 的惰性导入可能出现在函数体内——全树收集
-        if isinstance(node, ast.ImportFrom) and node.module == "config":
+        # 全树收集（含函数体内）：config.AGENT_DIR 惰性导入，以及同族 Import/ImportFrom。
+        # 函数内 `from _lib import x as rd` 若不进索引，调用将整个从可达性图消失（复审 R2）；
+        # 同名多来源必须保留**全部**候选（复审 S2）——单值覆盖会把真实调用隐藏。
+        if isinstance(node, ast.ImportFrom):
+            if node.module == "config":
+                for alias in node.names:
+                    if alias.name == "AGENT_DIR":
+                        agent_dir_names.add(alias.asname or alias.name)
+            elif node.module in local_stems:
+                for alias in node.names:
+                    if alias.name == "*":
+                        wildcard.append(node.module)
+                    else:
+                        # 保留原始符号名：`from _lib import resources_dir as rd` 仍须解析到 resources_dir
+                        collect_from.setdefault(alias.asname or alias.name, set()).add((node.module, alias.name))
+        elif isinstance(node, ast.Import):
             for alias in node.names:
-                if alias.name == "AGENT_DIR":
-                    agent_dir_names.add(alias.asname or alias.name)
+                if alias.name.split(".")[0] in local_stems:
+                    collect_aliases.setdefault(alias.asname or alias.name.split(".")[0], set()).add(
+                        alias.name.split(".")[0]
+                    )
+    imports_from_local = {name: tuple(sorted(cands)) for name, cands in collect_from.items()}
+    module_aliases = {name: tuple(sorted(cands)) for name, cands in collect_aliases.items()}
+    multi_source = tuple(sorted(name for name, cands in collect_from.items() if len(cands) > 1))
     for stmt in tree.body:
         if isinstance(stmt, ast.FunctionDef):
             funcs[stmt.name] = stmt
-        elif isinstance(stmt, ast.ImportFrom) and stmt.module in local_stems:
-            for alias in stmt.names:
-                if alias.name != "*":
-                    imports_from_local[alias.asname or alias.name] = stmt.module
-        elif isinstance(stmt, ast.Import):
-            for alias in stmt.names:
-                if alias.name.split(".")[0] in local_stems:
-                    module_aliases[alias.asname or alias.name.split(".")[0]] = alias.name.split(".")[0]
         elif isinstance(stmt, (ast.Assign, ast.AnnAssign)):
             targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
             value = stmt.value
@@ -544,6 +579,8 @@ def _analyze_file(repo: Path, rel: str) -> FileAnalysis:
         agent_dir_names=agent_dir_names,
         imports_from_local=imports_from_local,
         module_aliases=module_aliases,
+        wildcard_local_imports=tuple(wildcard),
+        multi_source_aliases=multi_source,
     )
 
 
@@ -627,6 +664,8 @@ class Discovery:
     families: set[str]
     locators: dict[tuple[str, str], LocatorInfo]
     unresolved: list[str]
+    #: 文件级静态风险（如同一别名多来源）——出现即人工分类，不得静默放行
+    hazards: list[str] = field(default_factory=list)
 
     @property
     def candidates(self) -> dict[tuple[str, str], LocatorInfo]:
@@ -680,6 +719,7 @@ def _analyze_locators(fa: FileAnalysis, contract: dict, param_keys: set[str], en
 
     def walk_locator_body(locator: str, scope: dict[str, ast.AST], body: list[ast.stmt]) -> None:
         values: list[ast.AST] = []
+        returns: list[ast.Return] = []
         for sub in ast.walk(ast.Module(body=body, type_ignores=[])):
             if isinstance(sub, ast.Assign) and sub.value is not None:
                 values.append(sub.value)
@@ -687,7 +727,13 @@ def _analyze_locators(fa: FileAnalysis, contract: dict, param_keys: set[str], en
                 values.append(sub.value)
             elif isinstance(sub, ast.Return) and sub.value is not None:
                 values.append(sub.value)
+                returns.append(sub)
         evaluate_into(locator, values, scope)
+        target = info(locator)
+        for ret in returns:
+            val = evaluator.eval(ret.value, scope)
+            if val is not None:
+                target.returns.append((ret.lineno, val, _return_has_direct_literal_path(ret.value)))
 
     for name, fn in fa.funcs.items():
         walk_locator_body(name, _scope_of(fn), fn.body)
@@ -759,8 +805,14 @@ def discover(repo: Path, contract: dict) -> Discovery:
     param_keys, env_keys = _declared_keys(contract)
     locators: dict[tuple[str, str], LocatorInfo] = {}
     unresolved: list[str] = []
+    hazards: list[str] = []
     for rel in files:
         fa = _analyze_file(repo, rel)
+        if fa.multi_source_aliases:
+            hazards.append(
+                f"{rel}: 同一别名多来源 {list(fa.multi_source_aliases)}——需人工分类"
+                "（不得 last-write-wins 静默取最后一个）"
+            )
         for info in _analyze_locators(fa, contract, param_keys, env_keys):
             locators[(rel, info.locator)] = info
             if info.file_name_lines and not info.file_vals():
@@ -769,7 +821,7 @@ def discover(repo: Path, contract: dict) -> Discovery:
                     f"{info.fmt()}（__file__ @L{lines}）——表达式无法解析为已知形态，需人工分类，"
                     "不得静默判绿或判 dead"
                 )
-    return Discovery(files=files, families=families, locators=locators, unresolved=unresolved)
+    return Discovery(files=files, families=families, locators=locators, unresolved=unresolved, hazards=hazards)
 
 
 # ---------------------------------------------------------------------------
@@ -788,27 +840,30 @@ def _module_level_calls(tree: ast.Module) -> list[ast.Call]:
     return calls
 
 
-def _callee(node: ast.Call, fa: FileAnalysis, file_set: dict[str, FileAnalysis]) -> tuple[str, str] | None:
-    """把一次调用解析为 (file, func)；跨文件仅限同族本地模块与显式 import 名。"""
+def _callee(node: ast.Call, fa: FileAnalysis, file_set: dict[str, FileAnalysis]) -> list[tuple[str, str]]:
+    """把一次调用解析为**全部**可解析的 (file, func) 候选；跨文件仅限同族本地模块。
+
+    - ``from _lib import x as alias`` 解析到原始符号名（别名不得让调用消失）；
+    - 同名多来源时返回全部候选（保守超集），不取最后一个（复审 S2）。
+    """
+    out: list[tuple[str, str]] = []
     func = node.func
     if isinstance(func, ast.Name):
         name = func.id
         if name in fa.funcs:
-            return (fa.rel, name)
-        if name in fa.imports_from_local:
-            stem = fa.imports_from_local[name]
+            out.append((fa.rel, name))
+        for stem, original in fa.imports_from_local.get(name, ()):
             mod_rel = f"{Path(fa.rel).parent.as_posix()}/{stem}.py"
-            if mod_rel in file_set and name in file_set[mod_rel].funcs:
-                return (mod_rel, name)
-        return None
+            if mod_rel in file_set and original in file_set[mod_rel].funcs:
+                out.append((mod_rel, original))
+        return out
     if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
         alias = func.value.id
-        if alias in fa.module_aliases:
-            stem = fa.module_aliases[alias]
+        for stem in fa.module_aliases.get(alias, ()):
             mod_rel = f"{Path(fa.rel).parent.as_posix()}/{stem}.py"
             if mod_rel in file_set and func.attr in file_set[mod_rel].funcs:
-                return (mod_rel, func.attr)
-    return None
+                out.append((mod_rel, func.attr))
+    return out
 
 
 def build_reachable(repo: Path, family: str) -> set[tuple[str, str]]:
@@ -825,9 +880,7 @@ def build_reachable(repo: Path, family: str) -> set[tuple[str, str]]:
     work: list[tuple[str, str]] = []
     reachable: set[tuple[str, str]] = set()
     for call in _module_level_calls(file_set[entry].tree):
-        resolved = _callee(call, file_set[entry], file_set)
-        if resolved:
-            work.append(resolved)
+        work.extend(_callee(call, file_set[entry], file_set))
     while work:
         item = work.pop()
         if item in reachable:
@@ -841,9 +894,9 @@ def build_reachable(repo: Path, family: str) -> set[tuple[str, str]]:
         if fn is None:
             continue
         for call in (c for c in ast.walk(fn) if isinstance(c, ast.Call)):
-            resolved = _callee(call, fa, file_set)
-            if resolved and resolved not in reachable:
-                work.append(resolved)
+            for resolved in _callee(call, fa, file_set):
+                if resolved not in reachable:
+                    work.append(resolved)
     return reachable
 
 
@@ -899,32 +952,82 @@ def _call_name(node: ast.Call) -> str | None:
     return None
 
 
-def _is_lazy_guarded(call: ast.Call, fn: ast.FunctionDef, fa: FileAnalysis, key_read_vars: set[str]) -> bool:
-    """默认锚调用是否惰性：位于「override 变量非空」守卫内 / Or 右操作数 / 条件表达式分支。
+def _ast_equal(a: ast.AST, b: ast.AST) -> bool:
+    """结构相等（忽略行号/列号），用于条件与分支表达式对拍。"""
+    return ast.dump(a, include_attributes=False) == ast.dump(b, include_attributes=False)
 
-    嵌在其它调用参数里的默认锚调用（如 ``env(KEY, str(_default_resources_root()))``）
-    一律视为急切——override 分支不得依赖默认锚导入（C1 第 3 条）。
+
+def _empty_override_if_branch(test: ast.AST, key_read_vars: set[str]) -> str | None:
+    """简单 ``if`` / ``IfExp`` 守卫下，override 为空时执行的分支：``body`` / ``orelse`` / ``None``。
+
+    支持：
+    - ``if not X:`` / ``… if not X else …``（X 为 override 变量）→ 空分支在 body；
+    - ``if X:`` / ``… if X else …`` → 空分支在 orelse。
+    复合条件不猜方向（复审 U2 / V2）。
+    """
+    if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+        if isinstance(test.operand, ast.Name) and test.operand.id in key_read_vars:
+            return "body"
+        return None
+    if isinstance(test, ast.Name) and test.id in key_read_vars:
+        return "orelse"
+    return None
+
+
+def _lazy_guard_verdict(
+    call: ast.Call, fn: ast.FunctionDef, fa: FileAnalysis, key_read_vars: set[str]
+) -> str:
+    """默认锚调用的惰性判定：``lazy`` / ``eager`` / ``unproven``。
+
+    - ``lazy``：位于 override 为空的分支 / Or 右操作数；
+    - ``eager``：嵌在其它调用参数里，或位于 override 非空分支
+      （``if base: default()`` / ``default() if base else base``，复审 U2/V2）；
+    - ``unproven``：命中 override 变量守卫但条件方向无法证明——需人工分类，不得静默放行。
     """
     cur: ast.AST = call
     while id(cur) in fa.parents:
         parent = fa.parents[id(cur)]
         if isinstance(parent, ast.Call) and parent is not call:
-            return False
+            return "eager"
         if isinstance(parent, ast.BoolOp) and isinstance(parent.op, ast.Or) and any(cur is v for v in parent.values[1:]):
-            return True
+            return "lazy"
         if isinstance(parent, ast.IfExp) and (cur is parent.body or cur is parent.orelse):
-            return True
+            test_names = {n.id for n in ast.walk(parent.test) if isinstance(n, ast.Name)}
+            if test_names & key_read_vars:
+                empty = _empty_override_if_branch(parent.test, key_read_vars)
+                in_body = cur is parent.body or _is_descendant(cur, parent.body)
+                in_else = cur is parent.orelse or _is_descendant(cur, parent.orelse)
+                if empty is None:
+                    return "unproven"
+                if empty == "body" and in_body:
+                    return "lazy"
+                if empty == "orelse" and in_else:
+                    return "lazy"
+                return "eager"
+            # 条件未关联 override 变量——不能默认当惰性（继续向上查找）
         if isinstance(parent, ast.If):
             test_names = {n.id for n in ast.walk(parent.test) if isinstance(n, ast.Name)}
             if test_names & key_read_vars:
                 in_body = any(cur is sub or _is_descendant(cur, sub) for sub in parent.body)
                 in_else = any(cur is sub or _is_descendant(cur, sub) for sub in parent.orelse)
+                empty = _empty_override_if_branch(parent.test, key_read_vars)
+                if empty is None:
+                    return "unproven"
+                if empty == "body" and in_body:
+                    return "lazy"
+                if empty == "orelse" and in_else:
+                    return "lazy"
                 if in_body or in_else:
-                    return True
+                    return "eager"
         if isinstance(parent, (ast.FunctionDef, ast.Module)):
             break
         cur = parent
-    return False
+    return "eager"
+
+
+def _is_lazy_guarded(call: ast.Call, fn: ast.FunctionDef, fa: FileAnalysis, key_read_vars: set[str]) -> bool:
+    """兼容旧调用点：仅在明确惰性时为 True。"""
+    return _lazy_guard_verdict(call, fn, fa, key_read_vars) == "lazy"
 
 
 def _is_descendant(node: ast.AST, candidate: ast.AST) -> bool:
@@ -978,6 +1081,59 @@ def _validate_reachability(anchor: dict, repo: Path, discovery: Discovery, error
                         f"{anchor['id']}: 族入口 {entry_rel} 引用 legacy helper {sym['name']}——"
                         "调用路径已存在，豁免作废"
                     )
+                # 别名导入路径同样作废豁免（`from _lib import x as y`）
+                if _entry_imports_symbol(entry, Path(file_rel).stem, sym["name"]):
+                    errors.append(
+                        f"{anchor['id']}: 族入口 {entry_rel} 以别名导入 legacy helper {sym['name']}——"
+                        "导入路径已存在，豁免作废"
+                    )
+            if any(stem == Path(file_rel).stem for stem in entry.wildcard_local_imports):
+                errors.append(
+                    f"{anchor['id']}: 族入口 {entry_rel} 对 {Path(file_rel).stem} 使用 import *——"
+                    "调用面无法静态追踪，需人工分类/禁止（不得静默判 green）"
+                )
+        # getattr 动态引用（跨族文件扫描）
+        for other_rel in _family_py_files(repo, family):
+            try:
+                other = _analyze_file(repo, other_rel)
+            except (OSError, SyntaxError):
+                continue
+            for node in ast.walk(other.tree):
+                hit = _getattr_local_symbol(other, node)
+                if hit and hit[0] in {s["name"] for s in anchor["locators"]}:
+                    errors.append(
+                        f"{anchor['id']}: {other_rel}:{hit[0]} 被 getattr 动态引用（L{node.lineno}）——"
+                        "调用路径无法静态追踪，豁免作废"
+                    )
+
+
+def _entry_imports_symbol(entry: FileAnalysis, module_stem: str, symbol: str) -> bool:
+    """入口是否以任意本地名（含别名）导入了目标符号。"""
+    return any(
+        stem == module_stem and original == symbol
+        for cands in entry.imports_from_local.values()
+        for stem, original in cands
+    )
+
+
+def _getattr_local_symbol(fa: FileAnalysis, node: ast.AST) -> tuple[str, str] | None:
+    """``getattr(<本地模块别名>, "<符号>")`` → (符号, 模块别名)。"""
+    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "getattr"):
+        return None
+    if len(node.args) < 2 or not isinstance(node.args[0], ast.Name):
+        return None
+    alias = node.args[0].id
+    if alias not in fa.module_aliases:
+        return None
+    literal = _str_const(node.args[1])
+    if literal is None:
+        return None
+    return (literal, alias)
+
+
+def _family_py_files(repo: Path, family: str) -> list[str]:
+    tree_rel = f"{SCRIPTS_ROOT_REL}/{family}"
+    return [f"{tree_rel}/{name}" for name in sorted(tracked_files(repo, tree_rel)) if name.endswith(".py")]
 
 
 def _family_of(file_rel: str) -> str | None:
@@ -1020,6 +1176,21 @@ def _locator_info(discovery: Discovery, file_rel: str, name: str) -> LocatorInfo
     return discovery.locators.get((file_rel, name))
 
 
+def _root_exact(val: PathVal, subdir: str) -> bool:
+    """C1 默认根：相对 Agent authority 的**全部**片段恰为 ``("resources", subdir)``。
+
+    前缀（``AGENT_DIR/unexpected/resources/mtbf``）与后缀（``…/mtbf/unexpected``）
+    都不允许——只在最后两段上比对会把根位置判错（复审 S1）。
+    """
+    return val.segments == ("resources", subdir)
+
+
+def _contains_ordered_pair(val: PathVal, subdir: str) -> bool:
+    """``("resources", subdir)`` 以相邻有序对出现（root 可作为更长路径的前缀）。"""
+    segments = val.segments
+    return any(segments[i] == "resources" and segments[i + 1] == subdir for i in range(len(segments) - 1))
+
+
 def _host_root_shape_ok(anchor: dict, contract: dict, discovery: Discovery) -> tuple[list[str], list[str]]:
     """返回 (errors, root_locators)：复核默认资源根表达式的形态。"""
     fam_name = anchor.get("family")
@@ -1041,6 +1212,7 @@ def _host_root_shape_ok(anchor: dict, contract: dict, discovery: Discovery) -> t
         roots.append(sym["name"])
         file_vals = [v for v in shaped if v.file_derived]
         agent_vals = [v for v in shaped if v.kind == "agent_dir"]
+        bad_suffix = sorted({v.segments for v in shaped if not _root_exact(v, subdir)})
         if anchor.get("authority") == AUTHORITY_AGENT_DIR:
             if file_vals:
                 errors.append(
@@ -1050,6 +1222,11 @@ def _host_root_shape_ok(anchor: dict, contract: dict, discovery: Discovery) -> t
             if not agent_vals:
                 errors.append(
                     f"{anchor['id']}: {anchor['file']}:{sym['name']} 未复现 config.AGENT_DIR/resources/{subdir} 形态"
+                )
+            if bad_suffix:
+                errors.append(
+                    f"{anchor['id']}: {anchor['file']}:{sym['name']} 资源根片段必须恰为 "
+                    f"('resources', {subdir!r})（前/后缀均不允许）：{bad_suffix}"
                 )
         elif not file_vals:
             errors.append(
@@ -1089,6 +1266,81 @@ def _validate_host_local_root(anchor: dict, contract: dict, repo: Path, discover
     if not consumers:
         errors.append(f"{anchor['id']}: 未发现读取 {fam_name} 资源键的消费者函数（override 通道缺失）")
     param_key, env_key = fam.get("param_key"), fam.get("env_key")
+    # 双通道 + 优先级：显式 param 与 env 必须成对出现（否则删掉 param 会静默丢 override），
+    # 且选择顺序必须可静态证明是 param 先行（含经局部变量转写的形态）；
+    # 证明不了就要求人工分类（复审 R3：不得把「未识别出 env-first」当作已证明 param-first）。
+    module_scope = _module_scope(fa)
+    channel_ok = False
+    unproven: list[str] = []
+    for consumer in consumers:
+        info = _locator_info(discovery, anchor["file"], consumer)
+        fam_keys = {k for f, k in (info.family_keys if info else set()) if f == fam_name}
+        if param_key not in fam_keys or env_key not in fam_keys:
+            continue
+        channel_ok = True
+        fn = fa.funcs.get(consumer)
+        if fn is None:
+            continue
+        # 先在**实际消费点**上验证选择值（守卫变量/return 值的 reaching def）：
+        # 被同名覆盖而从未被消费的旧链不构成证明（复审 T1）；
+        # 每个消费点各自证明——他点的正确链不得放行本点的双键/no-chain（复审 U1）。
+        effective_violations: list[str] = []
+        proven_points = 0
+        for node, desc in _effective_override_nodes(fn, roots, module_scope):
+            status, detail = _classify_effective(fn, node, param_key, env_key, module_scope)
+            if status == "none":
+                continue
+            if status == "param-first":
+                proven_points += 1
+            elif status == "env-first":
+                effective_violations.append(f"{desc} 的消费值选择链 env 先于 param（{detail}）")
+            elif status == "env-only":
+                effective_violations.append(f"{desc} 的消费值只读取 env——param 未参与实际选择（被覆盖/未消费）")
+            elif status == "param-only":
+                effective_violations.append(f"{desc} 的消费值只读取 param——env override 通道未参与")
+            elif status == "ambiguous":
+                effective_violations.append(f"{desc} 存在多条候选链（{detail}），无法关联消费值")
+            elif status == "no-chain":
+                if _node_has_param_or_env_call(node, param_key, env_key):
+                    proven_points += 1
+                else:
+                    suffix = f"（{detail}）" if detail else ""
+                    effective_violations.append(
+                        f"{desc} 含双键但无法证明选择顺序{suffix}——需人工分类"
+                    )
+        if effective_violations:
+            for violation in effective_violations:
+                errors.append(f"{anchor['id']}: {anchor['file']}:{consumer} {violation}")
+            continue
+        if proven_points:
+            continue
+        status, detail = _override_order(fn, param_key, env_key, module_scope)
+        if status == "env-first":
+            errors.append(
+                f"{anchor['id']}: {anchor['file']}:{consumer} 的 override 选择链 env 先于 param"
+                f"（{detail}）——显式参数优先语义被反转"
+            )
+        elif status == "param-first":
+            continue
+        elif _has_param_or_env_call(fn, param_key, env_key):
+            continue
+        elif status == "ambiguous":
+            errors.append(
+                f"{anchor['id']}: {anchor['file']}:{consumer} 存在多条候选 override 链（{detail}），"
+                "无法关联实际消费值——需人工分类"
+            )
+        else:
+            unproven.append(consumer)
+    if not channel_ok:
+        errors.append(
+            f"{anchor['id']}: 无消费者同时读取 param {param_key!r} 与 env {env_key!r}——"
+            "显式参数 override 通道被删除（C1 第 3 条）"
+        )
+    for consumer in unproven:
+        errors.append(
+            f"{anchor['id']}: {anchor['file']}:{consumer} 的 override 选择顺序无法静态证明——"
+            "需人工分类（不得按 param-first 放行）"
+        )
     lazy_root_calls = 0
     project_ok = False
     for consumer in consumers:
@@ -1107,10 +1359,16 @@ def _validate_host_local_root(anchor: dict, contract: dict, repo: Path, discover
             name = _call_name(call)
             if name not in roots:
                 continue
-            if _is_lazy_guarded(call, fn, fa, key_vars):
+            verdict = _lazy_guard_verdict(call, fn, fa, key_vars)
+            if verdict == "lazy":
                 lazy_root_calls += 1
                 if _calls_project_component(fn, fam):
                     project_ok = True
+            elif verdict == "unproven":
+                errors.append(
+                    f"{anchor['id']}: {anchor['file']}:{consumer} 对默认锚 {name}() 的守卫条件"
+                    "无法证明「仅在 override 为空时调用」——需人工分类"
+                )
             else:
                 errors.append(
                     f"{anchor['id']}: {anchor['file']}:{consumer} 对默认锚 {name}() 的调用被急切求值——"
@@ -1120,6 +1378,319 @@ def _validate_host_local_root(anchor: dict, contract: dict, repo: Path, discover
         errors.append(f"{anchor['id']}: 默认锚 {roots} 未被任何消费者惰性消费")
     elif roots and not project_ok:
         errors.append(f"{anchor['id']}: 资源根消费者缺少 project 后缀读取（{fam_name}）")
+    # 返回值一致性（#3615 复核 P2-2）：默认资源根必须出现在**返回位置**且返回值全部符合
+    # authority——「保留正确赋值却返回错误路径」「增加错误目录返回」不得静默通过；
+    # 非 root 定位点（消费者）也不得返回硬编码路径。
+    subdir = fam.get("subdir")
+    for sym in anchor["locators"]:
+        if sym.get("type", "function") != "function":
+            continue
+        info = _locator_info(discovery, anchor["file"], sym["name"])
+        if info is None:
+            continue
+        fn = fa.funcs.get(sym["name"])
+        constructing = sym["name"] in roots and fn is not None and _function_uses_agent_dir_symbol(fn, fa)
+        if constructing:
+            returned_shaped = [
+                (line, v)
+                for line, v, _direct in info.returns
+                if v.kind == "agent_dir" and _root_exact(v, subdir)
+            ]
+            if not returned_shaped:
+                contains = [
+                    (line, v)
+                    for line, v, _direct in info.returns
+                    if v.kind == "agent_dir" and "resources" in v.segments and subdir in v.segments
+                ]
+                if contains:
+                    errors.append(
+                        f"{anchor['id']}: {anchor['file']}:{sym['name']} 返回位置的资源根不是 "
+                        f"('resources', {subdir!r}) 精确形态：{[(line, v.segments) for line, v in contains]}"
+                    )
+                else:
+                    errors.append(
+                        f"{anchor['id']}: {anchor['file']}:{sym['name']} 的资源根只出现在赋值、未出现在返回位置——"
+                        "authority 必须以返回值提供"
+                    )
+            for line, val, _direct in info.returns:
+                if val.kind == "agent_dir" and _root_exact(val, subdir):
+                    continue
+                errors.append(
+                    f"{anchor['id']}: {anchor['file']}:{sym['name']} L{line} 的返回值不符合 authority"
+                    f"（{val.kind}/{val.segments}）——默认资源根不得返回其它路径"
+                )
+        else:
+            for line, val, direct in info.returns:
+                if val.kind == "literal":
+                    # 经局部变量传播的已知错误 literal 根同样必须红（复审 T2）——
+                    # 归因去重（direct 标记）只影响文案，不构成放行理由。
+                    how = "直接返回" if direct else "经局部变量返回"
+                    errors.append(
+                        f"{anchor['id']}: {anchor['file']}:{sym['name']} L{line} {how}硬编码路径"
+                        f"{val.segments!r}——authority 消费链不得返回字面量根"
+                    )
+
+
+def _return_has_direct_literal_path(node: ast.AST) -> bool:
+    """return 表达式里是否直接写死路径字面量（``Path("/tmp/x")`` / ``"/opt/x"``）。
+
+    仅用于文案（「直接返回」vs「经局部变量返回」）——两种形态都必须判红（复审 T2）。
+    """
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
+            value = sub.value
+            if value.startswith("/") or value.startswith("./") or value.startswith("../"):
+                return True
+    return False
+
+
+def _name_value_at(fn: ast.FunctionDef, name: str, lineno: int) -> ast.AST | None:
+    """函数内 ``lineno`` 之前对该名字的**最近一次**赋值右值（按行序，非 walk 序）。
+
+    ``base = env(...); base = base or param`` 这类经局部变量反转优先级的写法，
+    必须按赋值顺序还原引用点的实际来源，不能用「最后一次赋值」近似（复审 R3）。
+    """
+    best: tuple[int, ast.AST] | None = None
+    for sub in ast.walk(fn):
+        if isinstance(sub, ast.Assign) and sub.value is not None:
+            for target in sub.targets:
+                if isinstance(target, ast.Name) and target.id == name and sub.lineno < lineno:
+                    if best is None or sub.lineno > best[0]:
+                        best = (sub.lineno, sub.value)
+        elif isinstance(sub, ast.AnnAssign) and sub.value is not None and isinstance(sub.target, ast.Name):
+            if sub.target.id == name and sub.lineno < lineno and (best is None or sub.lineno > best[0]):
+                best = (sub.lineno, sub.value)
+    return best[1] if best is not None else None
+
+
+def _key_markers(
+    fn: ast.FunctionDef,
+    node: ast.AST,
+    module_scope: dict[str, ast.AST],
+    seen: frozenset[str] = frozenset(),
+) -> set[str]:
+    """表达式里出现的键字面量（经局部变量/模块变量有限回溯；不解释任意调用）。"""
+    keys: set[str] = set()
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
+            keys.add(sub.value)
+        elif isinstance(sub, ast.Name) and sub.id not in seen:
+            src = _name_value_at(fn, sub.id, sub.lineno) or module_scope.get(sub.id)
+            if src is not None:
+                keys |= _key_markers(fn, src, module_scope, seen | {sub.id})
+    return keys
+
+
+def _live_assignment_value_ids(fn: ast.FunctionDef) -> set[int]:
+    """「其值会先于下一次同名赋值被读取」的赋值右值节点 id。
+
+    同名覆盖必须让旧值失效：``base = p or e; base = e`` 的第一行即使后面有
+    ``if not base`` 也不构成消费证明（复审 T1）。
+    """
+    assigns: list[tuple[int, str, ast.AST]] = []
+    loads: list[tuple[int, str]] = []
+    for sub in ast.walk(fn):
+        if isinstance(sub, ast.Assign) and sub.value is not None:
+            for target in sub.targets:
+                if isinstance(target, ast.Name):
+                    assigns.append((sub.lineno, target.id, sub.value))
+        elif isinstance(sub, ast.AnnAssign) and sub.value is not None and isinstance(sub.target, ast.Name):
+            assigns.append((sub.lineno, sub.target.id, sub.value))
+        elif isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load):
+            loads.append((sub.lineno, sub.id))
+    live: set[int] = set()
+    for line, name, value in assigns:
+        next_line = min(
+            (other for other, other_name, _ in assigns if other_name == name and other > line),
+            default=None,
+        )
+        consumed = any(
+            other_name == name and other > line and (next_line is None or other < next_line)
+            for other, other_name in loads
+        )
+        if consumed:
+            live.add(id(value))
+    return live
+
+
+def _effective_override_nodes(
+    fn: ast.FunctionDef, roots: list[str], module_scope: dict[str, ast.AST]
+) -> list[tuple[ast.AST, str]]:
+    """实际消费点上的 override 选择表达式（复审 T1：证明必须关联到消费值）。
+
+    消费点三类：
+    1. return 表达式里直接写出的选择链（如 dict 值）；
+    2. 守卫默认锚回退的 ``if`` 变量在该行的 reaching def（``if not base:`` 的 base）；
+    3. return 表达式引用的变量的 reaching def（守卫后的再次覆盖）。
+    """
+    nodes: list[tuple[ast.AST, str]] = []
+    seen: set[int] = set()
+
+    def add(node: ast.AST | None, desc: str) -> None:
+        if node is None or id(node) in seen:
+            return
+        seen.add(id(node))
+        nodes.append((node, desc))
+
+    returns = [n for n in ast.walk(fn) if isinstance(n, ast.Return) and n.value is not None]
+    for ret in returns:
+        add(ret.value, f"L{ret.lineno} return 表达式")
+        for sub in ast.walk(ret.value):
+            if isinstance(sub, ast.Name):
+                add(_name_value_at(fn, sub.id, ret.lineno), f"L{ret.lineno} return 变量 {sub.id}")
+    for node in ast.walk(fn):
+        if isinstance(node, ast.If):
+            test = node.test
+        elif isinstance(node, ast.IfExp):
+            # IfExp fallback（``default() if not base else base``）的保留值来自 test 中
+            # override 变量在该行的 reaching def（复审 V2 绿例）——与 ``if`` 守卫同判。
+            test = node.test
+        else:
+            continue
+        guards_root = any(
+            isinstance(c, ast.Call) and _call_name(c) in roots for c in ast.walk(node) if isinstance(c, ast.Call)
+        )
+        if not guards_root:
+            continue
+        for name_node in (n for n in ast.walk(test) if isinstance(n, ast.Name)):
+            add(_name_value_at(fn, name_node.id, node.lineno), f"L{node.lineno} 守卫变量 {name_node.id}")
+    return nodes
+
+
+def _classify_effective(
+    fn: ast.FunctionDef, node: ast.AST, param_key: str, env_key: str, module_scope: dict[str, ast.AST]
+) -> tuple[str, str]:
+    """对单个消费点表达式分类：param-first / env-first / env-only / param-only / ambiguous / no-chain。"""
+    chains: list[ast.BoolOp] = []
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.BoolOp) and isinstance(sub.op, ast.Or):
+            keys = _key_markers(fn, sub, module_scope)
+            if param_key in keys and env_key in keys:
+                chains.append(sub)
+    if chains:
+        if len(chains) > 1:
+            return "ambiguous", f"L{[c.lineno for c in chains]}"
+        chain = chains[0]
+        param_idx = env_idx = None
+        for index, value in enumerate(chain.values):
+            keys = _key_markers(fn, value, module_scope)
+            if param_key in keys and param_idx is None:
+                param_idx = index
+            if env_key in keys and env_idx is None:
+                env_idx = index
+        if param_idx is None or env_idx is None:
+            return "no-chain", f"L{chain.lineno}"
+        return ("param-first" if param_idx < env_idx else "env-first"), f"L{chain.lineno}"
+    # 简单条件表达式——仅对可证明方向的形态给出顺序（复审 U1 / V1）：
+    # - ``X if X else Y``：truthy 取 body；
+    # - ``X if not X else Y``：truthy 取 orelse（否定不得用键交集冒充正向）。
+    # 要求两分支各自恰含一个通道键（干净 X/Y 分裂）；fallback
+    # ``default() if … else base`` 不是 override 选择链（由惰性守卫单独处理，复审 V2）。
+    dual_ifexps: list[ast.IfExp] = []
+    for sub in ast.walk(node):
+        if not isinstance(sub, ast.IfExp):
+            continue
+        body_ch = {k for k in (param_key, env_key) if k in _key_markers(fn, sub.body, module_scope)}
+        else_ch = {k for k in (param_key, env_key) if k in _key_markers(fn, sub.orelse, module_scope)}
+        if body_ch | else_ch != {param_key, env_key}:
+            continue
+        if body_ch & else_ch or len(body_ch) != 1 or len(else_ch) != 1:
+            continue
+        dual_ifexps.append(sub)
+    if dual_ifexps:
+        if len(dual_ifexps) > 1:
+            return "ambiguous", f"L{[c.lineno for c in dual_ifexps]}"
+        ie = dual_ifexps[0]
+        body_keys = _key_markers(fn, ie.body, module_scope)
+        else_keys = _key_markers(fn, ie.orelse, module_scope)
+        preferred: str | None = None
+        if _ast_equal(ie.test, ie.body):
+            preferred = "body"
+        elif (
+            isinstance(ie.test, ast.UnaryOp)
+            and isinstance(ie.test.op, ast.Not)
+            and _ast_equal(ie.test.operand, ie.body)
+        ):
+            preferred = "orelse"
+        if preferred == "body":
+            if env_key in body_keys and param_key in else_keys:
+                return "env-first", f"L{ie.lineno}"
+            if param_key in body_keys and env_key in else_keys:
+                return "param-first", f"L{ie.lineno}"
+        elif preferred == "orelse":
+            if env_key in else_keys and param_key in body_keys:
+                return "env-first", f"L{ie.lineno}"
+            if param_key in else_keys and env_key in body_keys:
+                return "param-first", f"L{ie.lineno}"
+        return "no-chain", f"L{ie.lineno}"
+    # 字面量直接共现双键且无已识别结构 → 人工分类；仅经 Name 回溯得到的双键
+    # 交给该 Name 的 reaching def（同属 effective 消费点）证明，避免 Path(base) 重复误报。
+    direct_keys = {
+        sub.value
+        for sub in ast.walk(node)
+        if isinstance(sub, ast.Constant) and isinstance(sub.value, str)
+    }
+    keys = _key_markers(fn, node, module_scope)
+    if param_key in keys and env_key in keys:
+        if param_key in direct_keys and env_key in direct_keys:
+            return "no-chain", ""
+        return "none", ""
+    if env_key in keys:
+        return "env-only", ""
+    if param_key in keys:
+        return "param-only", ""
+    return "none", ""
+
+
+def _override_order(
+    fn: ast.FunctionDef,
+    param_key: str | None,
+    env_key: str | None,
+    module_scope: dict[str, ast.AST],
+) -> tuple[str, str]:
+    """实际被消费的 override 选择链顺序。
+
+    返回 ``(status, detail)``：``param-first`` / ``env-first`` / ``ambiguous``（多条候选
+    链无法关联实际消费）/ ``none``（没有含双键的链，或被完全未使用）。未使用的链不得
+    作为 param-first 的证明（复审 S3）。
+    """
+    if not param_key or not env_key:
+        return "none", ""
+    live = _live_assignment_value_ids(fn)
+    candidates: list[tuple[int, str]] = []
+    for node in ast.walk(fn):
+        if not (isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or)):
+            continue
+        if id(node) not in live:
+            continue  # 未被消费（未使用，或被同名覆盖）——不作证明（复审 S3/T1）
+        param_idx = env_idx = None
+        for index, value in enumerate(node.values):
+            keys = _key_markers(fn, value, module_scope)
+            if param_key in keys and param_idx is None:
+                param_idx = index
+            if env_key in keys and env_idx is None:
+                env_idx = index
+        if param_idx is not None and env_idx is not None:
+            candidates.append((node.lineno, "param-first" if param_idx < env_idx else "env-first"))
+    if not candidates:
+        return "none", ""
+    if len(candidates) > 1:
+        return "ambiguous", f"L{[line for line, _ in candidates]}"
+    return candidates[0][1], f"L{candidates[0][0]}"
+
+
+def _node_has_param_or_env_call(node: ast.AST, param_key: str | None, env_key: str | None) -> bool:
+    """表达式子树内是否调用 ``param_or_env(cfg, param_key, env_key, …)``（该点自身证明）。"""
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name) and sub.func.id == "param_or_env":
+            if len(sub.args) >= 3 and _str_const(sub.args[1]) == param_key and _str_const(sub.args[2]) == env_key:
+                return True
+    return False
+
+
+def _has_param_or_env_call(fn: ast.FunctionDef, param_key: str | None, env_key: str | None) -> bool:
+    """``param_or_env(cfg, param_key, env_key, …)`` 形态——该 helper 语义即 param > env。"""
+    return _node_has_param_or_env_call(fn, param_key, env_key)
 
 
 def _function_uses_agent_dir_symbol(fn: ast.FunctionDef, fa: FileAnalysis) -> bool:
@@ -1257,6 +1828,7 @@ def _validate_agent_module(anchor: dict, contract: dict, repo: Path, discovery: 
     if Path(file_rel).parent.as_posix() != "backend/agent":
         errors.append(f"{anchor['id']}: agent module authority 必须直接位于 backend/agent/：{file_rel}")
     subdir = anchor.get("subdir")
+    exact_root_seen = False
     for sym in anchor["locators"]:
         info = _locator_info(discovery, file_rel, sym["name"])
         if info is None:
@@ -1268,14 +1840,26 @@ def _validate_agent_module(anchor: dict, contract: dict, repo: Path, discovery: 
             else:
                 errors.append(f"{anchor['id']}: {file_rel}:{sym['name']} 未复现 Path(__file__).resolve().parent（depth=1）")
         else:
-            shaped = [v for v in info.vals if v.file_derived and v.depth == 1 and subdir in v.segments]
+            shaped = [v for v in info.vals if v.file_derived and v.depth == 1 and _contains_ordered_pair(v, subdir)]
             if not shaped:
                 errors.append(
-                    f"{anchor['id']}: {file_rel}:{sym['name']} 未复现 Agent module 资源根（depth=1 + {subdir}）"
+                    f"{anchor['id']}: {file_rel}:{sym['name']} 未复现 Agent module 资源根（depth=1 + 有序 ('resources', {subdir!r})）"
                 )
+            if any(v.file_derived and v.depth == 1 and _root_exact(v, subdir) for v in info.vals):
+                exact_root_seen = True
+            for val in info.vals:
+                if val.file_derived and "resources" in val.segments and subdir in val.segments and not _contains_ordered_pair(val, subdir):
+                    errors.append(
+                        f"{anchor['id']}: {file_rel}:{sym['name']} 资源根片段错序：{val.segments}"
+                        f"——须含相邻有序 ('resources', {subdir!r})"
+                    )
             deep = [v for v in info.vals if v.file_derived and (v.depth or 0) > 1]
             if deep:
                 errors.append(f"{anchor['id']}: {file_rel}:{sym['name']} 出现祖先深度推导——agent module 只允许 .parent")
+    if not exact_root_seen:
+        errors.append(
+            f"{anchor['id']}: {file_rel} 未出现 ('resources', {subdir!r}) 精确形态的资源根构造（前后缀均不允许）"
+        )
     env_key = anchor.get("env_key")
     if env_key and not _file_reads_env(repo, file_rel, env_key):
         errors.append(f"{anchor['id']}: {file_rel} 未读取 override 键 {env_key}（显式路径通道缺失）")
@@ -1286,6 +1870,55 @@ def _file_reads_env(repo: Path, file_rel: str, env_key: str) -> bool:
     return any(
         isinstance(node, ast.Constant) and node.value == env_key for node in ast.walk(fa.tree)
     )
+
+
+def _validate_return_authority(anchor: dict, contract: dict, discovery: Discovery, errors: list[str]) -> None:
+    """kind 级返回值一致性（#3615 复核 P2-2）：被返回的路径必须符合声明 authority。
+
+    - 任何 authority 定位点不得返回硬编码字面量根；
+    - agent module / base-dir / 工具根 / schema 的每个**被返回**的路径值都必须落在
+      该 kind 允许的通道（显式 env/param override 或声明的文件/Agent 形态）内。
+    """
+    kind = anchor.get("kind")
+    file_rel = anchor["file"]
+    fam = (contract.get("families") or {}).get(anchor.get("family")) or {}
+    subdir = anchor.get("subdir") or fam.get("subdir")
+    for sym in anchor["locators"]:
+        if sym.get("type", "function") != "function":
+            continue
+        info = _locator_info(discovery, file_rel, sym["name"])
+        if info is None:
+            continue
+        for line, val, _direct in info.returns:
+            if val.kind in ("env", "param", "override"):
+                continue  # 显式 override 通道
+            if val.kind == "literal":
+                errors.append(
+                    f"{anchor['id']}: {file_rel}:{sym['name']} L{line} 返回硬编码路径 {val.segments!r}——"
+                    "authority 不得返回字面量根"
+                )
+                continue
+            if kind == KIND_AGENT_BASE:
+                if not val.file_derived:
+                    errors.append(
+                        f"{anchor['id']}: {file_rel}:{sym['name']} L{line} 返回值不符合 base-dir 形态（{val.kind}）"
+                    )
+            elif kind == KIND_TOOL_ROOT:
+                if not val.file_derived:
+                    errors.append(
+                        f"{anchor['id']}: {file_rel}:{sym['name']} L{line} 返回值不符合工具根形态（{val.kind}）"
+                    )
+            elif kind == KIND_AGENT_MODULE:
+                if not (val.file_derived and val.depth == 1 and subdir in val.segments):
+                    errors.append(
+                        f"{anchor['id']}: {file_rel}:{sym['name']} L{line} 返回值不符合 agent module 形态"
+                        f"（{val.kind}/{val.depth}/{val.segments}）"
+                    )
+            elif kind == KIND_SCHEMA:
+                if not (val.file_derived and "schemas" in val.segments):
+                    errors.append(
+                        f"{anchor['id']}: {file_rel}:{sym['name']} L{line} 返回值不符合 schema 布局（{val.kind}/{val.segments}）"
+                    )
 
 
 def _validate_non_resource_shape(anchor: dict, repo: Path, errors: list[str], *, forbid_resources: bool = True) -> None:
@@ -1446,6 +2079,15 @@ def validate_anchor(anchor: dict, contract: dict, repo: Path, discovery: Discove
                 )
         if not override_reads:
             errors.append(f"{anchor['id']}: 显式 override 锚未发现参数/env 读取")
+    if kind in (
+        KIND_TOOL_ROOT,
+        KIND_TOOL_CACHE,
+        KIND_AGENT_MODULE,
+        KIND_AGENT_BASE,
+        KIND_SCHEMA,
+        KIND_PACKAGE_MEMBER,
+    ):
+        _validate_return_authority(anchor, contract, discovery, errors)
 
 
 def _declared_coverage(contract: dict) -> dict[tuple[str, str], str]:
@@ -1527,6 +2169,7 @@ def analyze(repo: Path, contract: dict | None = None) -> Analysis:
             errors.append(f"{anchor['id']}: 声明条目在源码中无法复现——缺失源文件或形态不符")
         validate_anchor(anchor, contract, repo, discovery, errors)
     errors.extend(discovery.unresolved)
+    errors.extend(discovery.hazards)
 
     stats = {
         "files": len(discovery.files),
@@ -2104,6 +2747,235 @@ def run_self_test() -> int:
         errs, _notes = compare_base(base_contract, head_contract)
         expect(errs, "例外扩张", "R15 例外扩张")
 
+        # --- 红 R17：legacy helper 经**别名导入**接入（#3615 复核 P2-1） ---
+        root = _write_fixture(Path(tmp) / "r17")
+        (root / "backend/agent/scripts/beta_check/beta_check.py").write_text(
+            "from _lib import resources_dir as rd\n\n\ndef main() -> None:\n    rd({})\n\n\n"
+            'if __name__ == "__main__":\n    main()\n',
+            encoding="utf-8",
+        )
+        expect(_errors_of(root), "现可从族入口到达", "R17 别名导入接入")
+
+        # --- 红 R18：legacy helper 经 import * 接入（调用面不可静态追踪） ---
+        root = _write_fixture(Path(tmp) / "r18")
+        (root / "backend/agent/scripts/beta_check/beta_check.py").write_text(
+            "from _lib import *\n\n\ndef main() -> None:\n    resources_dir({})\n\n\n"
+            'if __name__ == "__main__":\n    main()\n',
+            encoding="utf-8",
+        )
+        expect(_errors_of(root), "import *", "R18 通配导入接入")
+
+        # --- 红 R19：legacy helper 经 getattr 动态引用 ---
+        root = _write_fixture(Path(tmp) / "r19")
+        (root / "backend/agent/scripts/beta_check/beta_check.py").write_text(
+            "import _lib\n\n\ndef main() -> None:\n    getattr(_lib, \"resources_dir\")({})\n\n\n"
+            'if __name__ == "__main__":\n    main()\n',
+            encoding="utf-8",
+        )
+        expect(_errors_of(root), "getattr 动态引用", "R19 getattr 接入")
+
+        # --- 红 R20：默认资源根「保留正确赋值却返回错误路径」（#3615 复核 P2-2） ---
+        lib = AGENT_SETUP_LIB.format(subdir="alpha", param="alpha_resources_dir", envkey="STP_ALPHA_RESOURCES_DIR")
+        lib = lib.replace(
+            '    from config import AGENT_DIR\n    return Path(AGENT_DIR) / "resources" / "alpha"',
+            '    from config import AGENT_DIR\n    _good = Path(AGENT_DIR) / "resources" / "alpha"\n'
+            '    return Path("/tmp/incorrect")',
+        )
+        expect(_errors_of(_write_fixture(Path(tmp) / "r20", alpha_lib=lib)), "未出现在返回位置", "R20 错误返回根")
+
+        # --- 红 R21：额外错误目录返回分支 ---
+        lib = AGENT_SETUP_LIB.format(subdir="alpha", param="alpha_resources_dir", envkey="STP_ALPHA_RESOURCES_DIR")
+        lib = lib.replace(
+            '    return Path(AGENT_DIR) / "resources" / "alpha"',
+            '    if os.environ.get("STP_ALPHA_ALT"):\n'
+            '        return Path("/opt/other/resources/alpha")\n'
+            '    return Path(AGENT_DIR) / "resources" / "alpha"',
+        )
+        expect(_errors_of(_write_fixture(Path(tmp) / "r21", alpha_lib=lib)), "不符合 authority", "R21 额外错误目录")
+
+        # --- 红 R22：删除 param override（只留 env）（#3615 复核 P2-3） ---
+        lib = AGENT_SETUP_LIB.format(subdir="alpha", param="alpha_resources_dir", envkey="STP_ALPHA_RESOURCES_DIR")
+        lib = lib.replace(
+            '    base = cfg.get("alpha_resources_dir") or env("STP_ALPHA_RESOURCES_DIR", "")',
+            '    base = env("STP_ALPHA_RESOURCES_DIR", "")',
+        )
+        expect(_errors_of(_write_fixture(Path(tmp) / "r22", alpha_lib=lib)), "显式参数 override 通道被删除", "R22 删 param")
+
+        # --- 红 R23：环境链 env 先于 param（显式参数优先被反转） ---
+        lib = AGENT_SETUP_LIB.format(subdir="alpha", param="alpha_resources_dir", envkey="STP_ALPHA_RESOURCES_DIR")
+        lib = lib.replace(
+            '    base = cfg.get("alpha_resources_dir") or env("STP_ALPHA_RESOURCES_DIR", "")',
+            '    base = env("STP_ALPHA_RESOURCES_DIR", "") or cfg.get("alpha_resources_dir")',
+        )
+        expect(_errors_of(_write_fixture(Path(tmp) / "r23", alpha_lib=lib)), "env 先于 param", "R23 env 优先")
+
+        # --- 红 R24：资源根尾部多余片段（复审 R1 原始反例） ---
+        lib = AGENT_SETUP_LIB.format(subdir="alpha", param="alpha_resources_dir", envkey="STP_ALPHA_RESOURCES_DIR")
+        lib = lib.replace(
+            '    return Path(AGENT_DIR) / "resources" / "alpha"',
+            '    return Path(AGENT_DIR) / "resources" / "alpha" / "unexpected"',
+        )
+        expect(_errors_of(_write_fixture(Path(tmp) / "r24", alpha_lib=lib)), "片段必须恰为", "R24 多余后缀")
+
+        # --- 红 R24b：资源根片段错序（resources 与族目录颠倒） ---
+        lib = AGENT_SETUP_LIB.format(subdir="alpha", param="alpha_resources_dir", envkey="STP_ALPHA_RESOURCES_DIR")
+        lib = lib.replace(
+            '    return Path(AGENT_DIR) / "resources" / "alpha"',
+            '    return Path(AGENT_DIR) / "alpha" / "resources"',
+        )
+        expect(_errors_of(_write_fixture(Path(tmp) / "r24b", alpha_lib=lib)), "片段必须恰为", "R24b 片段错序")
+
+        # --- 红 R25：legacy helper 在函数体内别名导入并调用（复审 R2） ---
+        root = _write_fixture(Path(tmp) / "r25")
+        (root / "backend/agent/scripts/beta_check/beta_check.py").write_text(
+            "def main():\n"
+            "    from _lib import resources_dir as rd\n"
+            "    print(rd({}))\n\n"
+            'if __name__ == "__main__":\n'
+            "    main()\n",
+            encoding="utf-8",
+        )
+        expect(_errors_of(root), "现可从族入口到达", "R25 函数内别名导入")
+
+        # --- 红 R26：经局部变量反转优先级（复审 R3） ---
+        lib = AGENT_SETUP_LIB.format(subdir="alpha", param="alpha_resources_dir", envkey="STP_ALPHA_RESOURCES_DIR")
+        lib = lib.replace(
+            '    base = cfg.get("alpha_resources_dir") or env("STP_ALPHA_RESOURCES_DIR", "")',
+            '    base = env("STP_ALPHA_RESOURCES_DIR", "")\n'
+            '    param_value = cfg.get("alpha_resources_dir")\n'
+            "    base = base or param_value",
+        )
+        expect(_errors_of(_write_fixture(Path(tmp) / "r26", alpha_lib=lib)), "env 先于 param", "R26 变量 env 优先")
+
+        # --- 绿 G4：经局部变量的 param 先行（等价写法不得误报） ---
+        lib = AGENT_SETUP_LIB.format(subdir="alpha", param="alpha_resources_dir", envkey="STP_ALPHA_RESOURCES_DIR")
+        lib = lib.replace(
+            '    base = cfg.get("alpha_resources_dir") or env("STP_ALPHA_RESOURCES_DIR", "")',
+            '    param_value = cfg.get("alpha_resources_dir")\n'
+            '    base = param_value or env("STP_ALPHA_RESOURCES_DIR", "")',
+        )
+        expect_clean(_errors_of(_write_fixture(Path(tmp) / "g4", alpha_lib=lib)), "G4 变量 param 先行")
+
+        # --- 红 R27：资源根**前置**多余片段（复审 S1） ---
+        lib = AGENT_SETUP_LIB.format(subdir="alpha", param="alpha_resources_dir", envkey="STP_ALPHA_RESOURCES_DIR")
+        lib = lib.replace(
+            '    return Path(AGENT_DIR) / "resources" / "alpha"',
+            '    return Path(AGENT_DIR) / "unexpected" / "resources" / "alpha"',
+        )
+        expect(_errors_of(_write_fixture(Path(tmp) / "r27", alpha_lib=lib)), "片段必须恰为", "R27 前缀多余片段")
+
+        # --- 红 R28：两个函数复用同一别名（后一个导入不得覆盖前一个，复审 S2） ---
+        root = _write_fixture(Path(tmp) / "r28")
+        (root / "backend/agent/scripts/beta_check/beta_check.py").write_text(
+            "def main():\n"
+            "    from _lib import resources_dir as rd\n"
+            "    print(rd({}))\n\n"
+            "def unused():\n"
+            "    from _lib import sha256_file as rd\n"
+            '    return rd("unused")\n\n'
+            'if __name__ == "__main__":\n'
+            "    main()\n",
+            encoding="utf-8",
+        )
+        errs = _errors_of(root)
+        expect(errs, "现可从族入口到达", "R28 别名复用可达")
+        expect(errs, "同一别名多来源", "R28 别名多来源")
+
+        # --- 红 R29：未使用的 param-first 链掩盖实际 env-first（复审 S3） ---
+        lib = AGENT_SETUP_LIB.format(subdir="alpha", param="alpha_resources_dir", envkey="STP_ALPHA_RESOURCES_DIR")
+        lib = lib.replace(
+            '    base = cfg.get("alpha_resources_dir") or env("STP_ALPHA_RESOURCES_DIR", "")',
+            '    unused = cfg.get("alpha_resources_dir") or env("STP_ALPHA_RESOURCES_DIR", "")\n'
+            '    base = env("STP_ALPHA_RESOURCES_DIR", "") or cfg.get("alpha_resources_dir")',
+        )
+        expect(_errors_of(_write_fixture(Path(tmp) / "r29", alpha_lib=lib)), "env 先于 param", "R29 未使用链掩盖")
+
+        # --- 红 R30：正确 param-first 赋值被同名覆盖（复审 T1） ---
+        lib = AGENT_SETUP_LIB.format(subdir="alpha", param="alpha_resources_dir", envkey="STP_ALPHA_RESOURCES_DIR")
+        lib = lib.replace(
+            '    base = cfg.get("alpha_resources_dir") or env("STP_ALPHA_RESOURCES_DIR", "")',
+            '    base = cfg.get("alpha_resources_dir") or env("STP_ALPHA_RESOURCES_DIR", "")\n'
+            '    base = env("STP_ALPHA_RESOURCES_DIR", "")',
+        )
+        expect(_errors_of(_write_fixture(Path(tmp) / "r30", alpha_lib=lib)), "消费值只读取 env", "R30 同名覆盖")
+
+        # --- 红 R31：经局部变量返回错误 literal 根（复审 T2） ---
+        lib = AGENT_SETUP_LIB.format(subdir="alpha", param="alpha_resources_dir", envkey="STP_ALPHA_RESOURCES_DIR")
+        lib = lib.replace(
+            "    return Path(base) / (cfg.get(\"project\") or \"legacy\")",
+            '    wrong = Path("/tmp/incorrect")\n'
+            '    return wrong / (cfg.get("project") or "legacy")',
+        )
+        expect(_errors_of(_write_fixture(Path(tmp) / "r31", alpha_lib=lib)), "经局部变量返回硬编码路径", "R31 变量返回 literal")
+
+        # --- 红 R32：未证明顺序的条件表达式被他点正确链放行（复审 U1） ---
+        lib = AGENT_SETUP_LIB.format(subdir="alpha", param="alpha_resources_dir", envkey="STP_ALPHA_RESOURCES_DIR")
+        lib = lib.replace(
+            "    if not base:\n        base = _default_resources_root()\n",
+            "    if not base:\n"
+            "        base = _default_resources_root()\n"
+            '    base = env("STP_ALPHA_RESOURCES_DIR", "") if env("STP_ALPHA_RESOURCES_DIR", "") '
+            'else cfg.get("alpha_resources_dir")\n',
+        )
+        expect(_errors_of(_write_fixture(Path(tmp) / "r32", alpha_lib=lib)), "env 先于 param", "R32 条件表达式 env 优先")
+
+        # --- 红 R33：fallback 守卫方向反转 ``if base:``（复审 U2） ---
+        lib = AGENT_SETUP_LIB.format(subdir="alpha", param="alpha_resources_dir", envkey="STP_ALPHA_RESOURCES_DIR")
+        lib = lib.replace(
+            "    if not base:\n        base = _default_resources_root()\n",
+            "    if base:\n        base = _default_resources_root()\n",
+        )
+        expect(_errors_of(_write_fixture(Path(tmp) / "r33", alpha_lib=lib)), "急切求值", "R33 守卫方向反转")
+
+        # --- 绿 G5：``if base: ... else: default()`` 等价空分支（不得误报） ---
+        lib = AGENT_SETUP_LIB.format(subdir="alpha", param="alpha_resources_dir", envkey="STP_ALPHA_RESOURCES_DIR")
+        lib = lib.replace(
+            "    if not base:\n        base = _default_resources_root()\n",
+            "    if base:\n"
+            "        pass\n"
+            "    else:\n"
+            "        base = _default_resources_root()\n",
+        )
+        expect_clean(_errors_of(_write_fixture(Path(tmp) / "g5", alpha_lib=lib)), "G5 else 空分支惰性")
+
+        # --- 红 R34：``X if not X else Y`` 否定条件不得冒充 X 优先（复审 V1） ---
+        lib = AGENT_SETUP_LIB.format(subdir="alpha", param="alpha_resources_dir", envkey="STP_ALPHA_RESOURCES_DIR")
+        lib = lib.replace(
+            "    return Path(base) / (cfg.get(\"project\") or \"legacy\")",
+            '    return Path(\n'
+            '        cfg.get("alpha_resources_dir")\n'
+            '        if not cfg.get("alpha_resources_dir")\n'
+            '        else env("STP_ALPHA_RESOURCES_DIR", "")\n'
+            '    ) / (cfg.get("project") or "legacy")',
+        )
+        expect(
+            _errors_of(_write_fixture(Path(tmp) / "r34", alpha_lib=lib)),
+            "env 先于 param",
+            "R34 否定 IfExp env 优先",
+        )
+
+        # --- 红 R35：``default() if base else base`` 非空分支调用默认锚（复审 V2） ---
+        lib = AGENT_SETUP_LIB.format(subdir="alpha", param="alpha_resources_dir", envkey="STP_ALPHA_RESOURCES_DIR")
+        lib = lib.replace(
+            "    if not base:\n        base = _default_resources_root()\n",
+            "    if not base:\n"
+            "        base = _default_resources_root()\n"
+            "    base = _default_resources_root() if base else base\n",
+        )
+        expect(
+            _errors_of(_write_fixture(Path(tmp) / "r35", alpha_lib=lib)),
+            "急切求值",
+            "R35 IfExp 非空分支默认锚",
+        )
+
+        # --- 绿 G6：``default() if not base else base`` 合法空分支（不得误报） ---
+        lib = AGENT_SETUP_LIB.format(subdir="alpha", param="alpha_resources_dir", envkey="STP_ALPHA_RESOURCES_DIR")
+        lib = lib.replace(
+            "    if not base:\n        base = _default_resources_root()\n",
+            "    base = _default_resources_root() if not base else base\n",
+        )
+        expect_clean(_errors_of(_write_fixture(Path(tmp) / "g6", alpha_lib=lib)), "G6 IfExp 空分支惰性")
+
         # --- 红 R16：base ref 不可解析 = 不可验证 ---
         git_root = Path(tmp) / "gitrepo"
         _write_fixture(git_root)
@@ -2137,9 +3009,13 @@ def run_self_test() -> int:
         return 1
     print(
         "[OK] check_resource_anchors self-test 红绿双向（旧深度 fallback / 别名 / join / relative tuple / "
-        "cache 祖先 / dead 接入 / 导出 / 绑定缺失 / 错误 env / 成员缺失 / 未声明候选 / 未解析表达式 / "
-        "零候选 / 急切默认锚 / 例外扩张 / base 不可验证 → 红；agent-dir 形态 / 显式 override / "
-        "parents 与 tools_cache 字样不误报 → 绿）"
+        "cache 祖先 / dead 接入 / 别名导入接入 / 函数内别名导入 / import * 接入 / getattr 接入 / 导出 / "
+        "绑定缺失 / 错误 env / 成员缺失 / 未声明候选 / 未解析表达式 / 零候选 / 急切默认锚 / 错误返回根 / "
+        "额外错误目录 / 多余后缀 / 片段错序 / 前缀多余片段 / 别名复用（多来源）/ 未使用链掩盖 / "
+        "同名覆盖 / 变量返回 literal / 条件表达式 env 优先 / 守卫方向反转 / 否定 IfExp / "
+        "IfExp 非空分支默认锚 / 删 param override / env 先于 param / 变量 env 优先 / "
+        "例外扩张 / base 不可验证 → 红；agent-dir 形态 / 显式 override / 变量 param 先行 / "
+        "else 空分支惰性 / IfExp 空分支惰性 / parents 与 tools_cache 字样不误报 → 绿）"
     )
     return 0
 
