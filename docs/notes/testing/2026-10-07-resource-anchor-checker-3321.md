@@ -28,8 +28,15 @@ ADR-0033 tool_manifest step（不新增 gate profile / required job）。
   tuple → helper → 消费者），不做任意 Python 数据流；无法确认的表达式报「需人工分类」；
 - §1.4 的 26 项按 id 落进契约：4 项本批修（G1a 已修、保留历史追溯）、5 项当前安全、
   7 项非本形态、10 项函数级 legacy（A02/03/05/06/08/09/11/12/17/18）。legacy 只按
-  函数与真实调用关系登记，引用 #3320 并写明删除/重新判定条件；新增入口调用、`__all__`
-  导出或资源消费使其可达即红；禁止文件/族目录级白名单；
+  函数与真实调用关系登记，引用 #3320 并写明删除/重新判定条件；新增入口调用（**含别名
+  导入、`import *`、`getattr` 动态引用**）、导入路径、`__all__` 导出或资源消费使其可达
+  即红；禁止文件/族目录级白名单；
+- **authority 判据（#3615 复核 P2 返修，2026-10-07）**：
+  - 资源根必须出现在**返回位置**且每个被返回的路径值都符合声明 authority——「保留正确
+    赋值却返回错误路径」「增加错误目录返回」不再放行；authority 定位点不得返回字面量根；
+  - 显式 override 必须**双通道**：同一消费者同时读取 param 与 env，且同一 `or` 链里
+    param 先于 env（删除 param 或反转优先级即红）；
+  - 可达性解析保留**原始符号名**（别名导入不再从调用图中消失）；
 - `--base` 只做增量防新增与 legacy 例外防扩张（head 例外集必须是 base 子集），不替代
   全量 census；base ref 不可解析或 base 契约坏 JSON → 退出 2「不可验证」，不当空 diff 成功；
 - 顺序：`--self-test` → 全量 → `--base`；退出 1 = 判据违例、2 = 不可验证。
@@ -57,14 +64,21 @@ ADR-0033 tool_manifest step（不新增 gate profile / required job）。
 ## Verification
 
 - `python tools/dev/check_resource_anchors.py --self-test`：红绿双向自证（隔离 fixture）——
-  旧深度 fallback / 别名 / join / relative tuple / cache 祖先 / dead 接入 / `__all__` 导出 /
-  绑定缺失 / 错误 env / 成员缺失 / 未声明候选 / 未解析表达式 / 零候选 / 急切默认锚 /
-  例外扩张 / base 不可验证 → 红；agent-dir 形态 / 显式 override / `parents` 与 tools_cache
-  字样不误报 → 绿。
+  旧深度 fallback / 别名 / join / relative tuple / cache 祖先 / dead 接入 / 别名导入接入 /
+  `import *` 接入 / `getattr` 接入 / `__all__` 导出 / 绑定缺失 / 错误 env / 成员缺失 /
+  未声明候选 / 未解析表达式 / 零候选 / 急切默认锚 / 错误返回根 / 额外错误目录 /
+  删 param override / env 先于 param / 例外扩张 / base 不可验证 → 红；agent-dir 形态 /
+  显式 override / `parents` 与 tools_cache 字样不误报 → 绿。
+- **#3615 复核三项 P2 的返修证据**（隔离副本，修复前全绿→修复后全红）：
+  ① `from _lib import resources_dir as rd` + `rd({})` → A02 可达 + 别名导入路径；
+  ② `_good = ...; return Path("/tmp/incorrect")` → 「未出现在返回位置 + 返回值不符合
+  authority」；③ 删 param 只留 env → 「显式参数 override 通道被删除」；另加固
+  env 先于 param → 「显式参数优先语义被反转」。
 - `python tools/dev/check_resource_anchors.py`：真实仓库绿（69 文件 / 35 族；候选 49；
   26 锚 / 50 定位点；legacy 10；未解析 0），离线 <1s。
 - `python tools/dev/check_resource_anchors.py --base origin/main`：绿（首次引入契约，NOTE）。
-- `python scripts/run_pytest.py tests/test_check_resource_anchors.py -q`：17 passed。
+- `python scripts/run_pytest.py tests/test_check_resource_anchors.py -q`：22 passed
+  （含别名导入 / 通配+getattr / 错误返回根 / 删 param / env 优先五项隔离变异，恢复后转绿）。
   隔离副本变异证明 checker 有牙齿（恢复 G1a 错根 / 撤工具绑定 / 删包内伴随文件 /
   接入 dead helper / 抽掉声明条目 → 红；恢复 → 绿）；接线用例读 `run_gates.GATES`
   结构断言 tool-manifest 项含 `--self-test` 与 `--base`，CI 同 step 同命令。
