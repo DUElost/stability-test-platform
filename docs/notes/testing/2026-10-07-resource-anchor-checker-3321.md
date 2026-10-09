@@ -215,6 +215,16 @@ manifest、template、AGENTS 或生产配置。历史影响面（契约与 gate 
     `check_tool_manifest --base origin/main` exit 0。
     六项 required CI 在最终 head 上另核，未绿之前不算 CI 完成。
     本记录不是 G2 验收。
+- **r9 复核返修（Z1–Z4，仍 draft，不是 G2 验收）**：摘要必须对上签名、参数映射、
+  选择条件和返回；对调的 `os.environ.get`、`if False` 的 `param_or_env` 不再发 P/E。
+  关键字实参按求值顺序先记录调用效果，未纳入摘要的关键字是 UNKNOWN，不能忽略后判绿。
+  资源 `.get` 只相信当前仍是原始 cfg 的映射；重绑定丢键为 UNKNOWN，透明别名和
+  helper 参数继续传递该事实。D 只来自函数体直接读取 `AGENT_DIR` 的构造 helper，
+  消费者即使被发现阶段并进候选集也不能当成默认根；递归仍是 UNKNOWN。
+  五个逐字变体的完整扫描非零。Z1 的真实 `env` 在 env-only 下得到相对路径
+  `STP_MTBF_RESOURCES_DIR/demo`；`param_or_env` 的假条件在 param+env 下得到 env 路径，
+  param-only 下调用默认根。Z2 在 env 非空时路径仍是 env，但默认根被调用一次。
+  Z3 在 param+env 下得到 env 路径，param-only 下调用默认根。Z4 双空抛 `RecursionError`。
 
 ## Revisit
 

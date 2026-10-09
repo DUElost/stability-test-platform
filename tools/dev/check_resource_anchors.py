@@ -1374,6 +1374,10 @@ class _Fact:
     file: str = ""
     func: str = ""
     fields: tuple[tuple[str, "_Fact"], ...] = ()
+    #: 当前值仍是消费者最初的 cfg 映射。重绑定后的 dict 不再携带。
+    cfg_source: bool = False
+    #: 字符串常量的原文。None 表示这个事实不是字符串常量。
+    literal: str | None = None
 
 
 @dataclass
@@ -1467,11 +1471,11 @@ def _name_fact(node: ast.Name, st: _Pst, ctx: _Ctx) -> _Fact:
 def _const_fact(node: ast.Constant) -> _Fact:
     value = node.value
     if value is None or value == "":
-        return _Fact(kind="EMPTY", truth=False, line=node.lineno, resource=False)
+        return _Fact(kind="EMPTY", truth=False, line=node.lineno, resource=False, literal="" if value == "" else None)
     if isinstance(value, str) and (value.startswith("/") or value.startswith("./") or value.startswith("../")):
-        return _Fact(kind="LITERAL", truth=True, line=node.lineno, resource=True, reason="字面量路径")
+        return _Fact(kind="LITERAL", truth=True, line=node.lineno, resource=True, reason="字面量路径", literal=value)
     if isinstance(value, str):
-        return _Fact(kind="OTHER", truth=True, line=node.lineno, resource=False)
+        return _Fact(kind="OTHER", truth=True, line=node.lineno, resource=False, literal=value)
     if isinstance(value, bool):
         return _Fact(kind="OTHER", truth=value, line=node.lineno, resource=False)
     if isinstance(value, (int, float)):
@@ -1532,42 +1536,147 @@ def _unsupported_in(node: ast.AST) -> str | None:
     return None
 
 
+def _is_name(node: ast.AST | None, name: str) -> bool:
+    return isinstance(node, ast.Name) and node.id == name
+
+
+def _body_reads_agent_dir(fn: ast.FunctionDef) -> bool:
+    """函数体自己读取 AGENT_DIR。调用其它 helper 得到的路径不算构造。"""
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Name) and node.id == "AGENT_DIR" and isinstance(node.ctx, ast.Load):
+            return True
+        if isinstance(node, ast.Attribute) and node.attr == "AGENT_DIR":
+            return True
+    return False
+
+
+def _finite_d_roots(funcs: dict[str, ast.FunctionDef], candidates: set[str] | list[str]) -> set[str]:
+    """有限过程的 D 集合只含直接构造 authority 的 helper。
+
+    发现阶段会把构造结果并进调用它的消费者；消费者名字不能因此变成 D。
+    """
+    return {name for name in candidates if (fn := funcs.get(name)) is not None and _body_reads_agent_dir(fn)}
+
+
 def _verified_env(fn: ast.FunctionDef) -> bool:
-    stmts = [s for s in fn.body if not _is_doc(s)]
-    if len(stmts) != 1 or not isinstance(stmts[0], ast.Return) or not isinstance(stmts[0].value, ast.Call):
+    """摘要必须对上签名和参数映射：``return os.environ.get(key, default)``。
+
+    只看见 ``os.environ.get`` 不够。实参对调后不能再发 E/EMPTY。
+    """
+    params = [arg.arg for arg in fn.args.args]
+    stmts = [stmt for stmt in fn.body if not _is_doc(stmt)]
+    if len(params) < 2 or len(stmts) != 1 or not isinstance(stmts[0], ast.Return):
         return False
     call = stmts[0].value
+    if not isinstance(call, ast.Call) or call.keywords or len(call.args) != 2:
+        return False
     func = call.func
     if not isinstance(func, ast.Attribute) or func.attr != "get":
         return False
     base = func.value
-    return (
+    if not (
         isinstance(base, ast.Attribute)
         and base.attr == "environ"
         and isinstance(base.value, ast.Name)
         and base.value.id == "os"
+    ):
+        return False
+    if not _is_name(call.args[0], params[0]) or not _is_name(call.args[1], params[1]):
+        return False
+    defaults = fn.args.defaults
+    if not defaults or not isinstance(defaults[-1], ast.Constant) or defaults[-1].value not in ("", None):
+        return False
+    return True
+
+
+def _is_cfg_get(node: ast.AST | None, cfg_name: str, key_name: str) -> bool:
+    if not isinstance(node, ast.Call) or node.keywords or len(node.args) != 1:
+        return False
+    func = node.func
+    return (
+        isinstance(func, ast.Attribute)
+        and func.attr == "get"
+        and _is_name(func.value, cfg_name)
+        and _is_name(node.args[0], key_name)
+    )
+
+
+def _returns_name(stmts: list[ast.stmt], name: str) -> bool:
+    body = [stmt for stmt in stmts if not _is_doc(stmt)]
+    return len(body) == 1 and isinstance(body[0], ast.Return) and _is_name(body[0].value, name)
+
+
+def _is_value_nonempty_guard(test: ast.AST, name: str) -> bool:
+    """``value is not None and str(value) != ""``。``if False`` 不是这个条件。"""
+    if not isinstance(test, ast.BoolOp) or not isinstance(test.op, ast.And) or len(test.values) != 2:
+        return False
+    left, right = test.values
+    if not isinstance(left, ast.Compare) or len(left.ops) != 1 or not isinstance(left.ops[0], ast.IsNot):
+        return False
+    if not _is_name(left.left, name) or len(left.comparators) != 1 or not isinstance(left.comparators[0], ast.Constant):
+        return False
+    if left.comparators[0].value is not None:
+        return False
+    if not isinstance(right, ast.Compare) or len(right.ops) != 1 or not isinstance(right.ops[0], ast.NotEq):
+        return False
+    if len(right.comparators) != 1 or not isinstance(right.comparators[0], ast.Constant) or right.comparators[0].value != "":
+        return False
+    call = right.left
+    return (
+        isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Name)
+        and call.func.id == "str"
+        and len(call.args) == 1
+        and _is_name(call.args[0], name)
+        and not call.keywords
+    )
+
+
+def _is_raw_nonempty_guard(test: ast.AST, name: str) -> bool:
+    if not isinstance(test, ast.Compare) or len(test.ops) != 1 or not isinstance(test.ops[0], ast.NotEq):
+        return False
+    return (
+        _is_name(test.left, name)
+        and len(test.comparators) == 1
+        and isinstance(test.comparators[0], ast.Constant)
+        and test.comparators[0].value == ""
     )
 
 
 def _verified_param_or_env(fn: ast.FunctionDef) -> bool:
-    """已核对的 param > env > default 摘要，不能只凭函数名授信。"""
-    stmts = [s for s in fn.body if not _is_doc(s)]
+    """核对 param > env > default 的签名、接收者、条件和返回，不能只数五条语句。"""
+    params = [arg.arg for arg in fn.args.args]
+    if len(params) < 4:
+        return False
+    cfg_name, key_name, env_name, default_name = params[:4]
+    stmts = [stmt for stmt in fn.body if not _is_doc(stmt)]
     if len(stmts) != 5:
         return False
-    if not all(isinstance(stmts[i], ast.Assign) for i in (0, 2)):
+    first, guard, third, raw_guard, last = stmts
+    if not isinstance(first, ast.Assign) or len(first.targets) != 1 or not isinstance(first.targets[0], ast.Name):
         return False
-    if not all(isinstance(stmts[i], ast.If) for i in (1, 3)):
+    value_name = first.targets[0].id
+    if not _is_cfg_get(first.value, cfg_name, key_name):
         return False
-    if not isinstance(stmts[4], ast.Return):
+    if not isinstance(guard, ast.If) or guard.orelse or not _is_value_nonempty_guard(guard.test, value_name):
         return False
-    first, third = stmts[0].value, stmts[2].value
-    if not (isinstance(first, ast.Call) and isinstance(first.func, ast.Attribute) and first.func.attr == "get"):
+    if not _returns_name(guard.body, value_name):
         return False
-    if not (isinstance(third, ast.Call) and isinstance(third.func, ast.Name) and third.func.id == "env"):
+    if not isinstance(third, ast.Assign) or len(third.targets) != 1 or not isinstance(third.targets[0], ast.Name):
         return False
-    if not any(isinstance(s, ast.Return) for s in stmts[1].body):
+    raw_name = third.targets[0].id
+    env_call = third.value
+    if not isinstance(env_call, ast.Call) or not isinstance(env_call.func, ast.Name) or env_call.func.id != "env":
         return False
-    return any(isinstance(s, ast.Return) for s in stmts[3].body)
+    if env_call.keywords or len(env_call.args) != 2 or not _is_name(env_call.args[0], env_name):
+        return False
+    if not isinstance(env_call.args[1], ast.Constant) or env_call.args[1].value != "":
+        return False
+    if not isinstance(raw_guard, ast.If) or raw_guard.orelse or not _is_raw_nonempty_guard(raw_guard.test, raw_name):
+        return False
+    if not _returns_name(raw_guard.body, raw_name):
+        return False
+    return isinstance(last, ast.Return) and _is_name(last.value, default_name)
 
 
 def _callee_touches_resource(fn: ast.FunctionDef, ctx: _Ctx) -> bool:
@@ -1785,58 +1894,99 @@ def _mark_root_call(st: _Pst, node: ast.AST, ctx: _Ctx) -> tuple[_Fact, _Pst]:
     )
 
 
-def _eval_args(args: list[ast.expr], st: _Pst, ctx: _Ctx, depth: int) -> list[tuple[list[_Fact], _Pst]]:
-    packs: list[tuple[list[_Fact], _Pst]] = [([], st)]
-    for arg in args:
-        nxt: list[tuple[list[_Fact], _Pst]] = []
-        for got, cur in packs:
+def _eval_invocation(
+    node: ast.Call, st: _Pst, ctx: _Ctx, depth: int
+) -> list[tuple[list[_Fact], dict[str, _Fact], _Pst]]:
+    """位置参数从左到右，然后关键字参数从左到右。关键字里的调用不能跳过。"""
+    packs: list[tuple[list[_Fact], dict[str, _Fact], _Pst]] = [([], {}, st)]
+    for arg in node.args:
+        nxt: list[tuple[list[_Fact], dict[str, _Fact], _Pst]] = []
+        for got, kws, cur in packs:
             for fact, st1 in _eval_expr(arg, cur, ctx, depth + 1):
-                nxt.append(([*got, fact], st1))
+                nxt.append(([*got, fact], kws, st1))
                 if len(nxt) > _MAX_PATHS:
                     raise _ProofLimit("路径状态超过 32", getattr(arg, "lineno", 0))
         packs = nxt
+    for keyword in node.keywords:
+        nxt = []
+        for got, kws, cur in packs:
+            for fact, st1 in _eval_expr(keyword.value, cur, ctx, depth + 1):
+                if keyword.arg is None:
+                    st2 = _copy_st(st1)
+                    st2.called_unprovable = True
+                    nxt.append((got, kws, st2))
+                else:
+                    merged = dict(kws)
+                    merged[keyword.arg] = fact
+                    nxt.append((got, merged, st1))
+                if len(nxt) > _MAX_PATHS:
+                    raise _ProofLimit("路径状态超过 32", getattr(keyword.value, "lineno", 0))
+        packs = nxt
     return packs
+
+
+def _family_key_in_call(node: ast.Call, ctx: _Ctx) -> bool:
+    keys = {ctx.param_key, ctx.env_key}
+    for arg in node.args:
+        if _str_const(arg) in keys:
+            return True
+    for keyword in node.keywords:
+        if _str_const(keyword.value) in keys:
+            return True
+    return False
 
 
 def _eval_call(node: ast.Call, st: _Pst, ctx: _Ctx, depth: int) -> list[tuple[_Fact, _Pst]]:
     name = _call_name(node)
     if isinstance(node.func, ast.Attribute) and node.func.attr == "get":
         return _eval_get(node, st, ctx, depth)
-    if name in ctx.roots and isinstance(node.func, ast.Name):
-        return [_mark_root_call(st, node, ctx)]
-    packs = _eval_args(list(node.args), st, ctx, depth)
     out: list[tuple[_Fact, _Pst]] = []
-    for arg_facts, st1 in packs:
-        out.extend(_call_target(node, name, arg_facts, st1, ctx, depth))
+    for arg_facts, _keywords, st1 in _eval_invocation(node, st, ctx, depth):
+        if name and name in ctx.stack:
+            out.append((_unk(ctx, node, "递归"), st1))
+        elif (
+            name in ctx.roots
+            and isinstance(node.func, ast.Name)
+            and (callee := ctx.funcs.get(name)) is not None
+            and _body_reads_agent_dir(callee)
+        ):
+            out.append(_mark_root_call(st1, node, ctx))
+        else:
+            out.extend(_call_target(node, name, arg_facts, st1, ctx, depth))
         if len(out) > _MAX_PATHS:
             raise _ProofLimit("路径状态超过 32", node.lineno)
     return out
 
 
 def _eval_get(node: ast.Call, st: _Pst, ctx: _Ctx, depth: int) -> list[tuple[_Fact, _Pst]]:
+    """资源键的 .get 只相信当前仍是原始 cfg 映射的接收者。"""
     recv = node.func.value if isinstance(node.func, ast.Attribute) else None
-    branches = _eval_expr(recv, st, ctx, depth + 1) if recv is not None else [(None, st)]
+    branches = _eval_expr(recv, st, ctx, depth + 1) if recv is not None else [(_Fact(kind="OTHER"), st)]
     out: list[tuple[_Fact, _Pst]] = []
-    key = _str_const(node.args[0]) if node.args else None
-    for _recv_fact, st1 in branches:
-        if not isinstance(recv, ast.Name) or recv.id not in ctx.arg_names:
-            st2 = _copy_st(st1)
-            if _mentions_root(node, ctx.roots):
-                st2.called_unprovable = True
-            out.append((_unk(ctx, node, "无法核对的 .get"), st2))
-            continue
-        if key == ctx.param_key:
-            if len(node.args) > 1:
-                default = _const_fact(node.args[1]) if isinstance(node.args[1], ast.Constant) else None
-                if default is not None and default.kind not in ("EMPTY",):
-                    out.append((_unk(ctx, node, "资源 get 的非空默认值"), st1))
-                    continue
-            if ctx.cell.param_full:
-                out.append((_Fact(kind="P", truth=True, line=node.lineno, resource=True, file=ctx.file, func=ctx.func), st1))
-            else:
-                out.append((_Fact(kind="EMPTY", truth=False, line=node.lineno, resource=True), st1))
-            continue
-        out.append((_Fact(kind="OTHER", truth=None, line=node.lineno, resource=False), st1))
+    for recv_fact, st_recv in branches:
+        for arg_facts, _keywords, st1 in _eval_invocation(node, st_recv, ctx, depth):
+            key = arg_facts[0].literal if arg_facts and arg_facts[0].literal is not None else None
+            source = bool(recv_fact is not None and recv_fact.cfg_source and isinstance(recv, ast.Name))
+            extra_default = len(node.args) > 1 and not (
+                isinstance(node.args[1], ast.Constant) and node.args[1].value in ("", None)
+            )
+            if key == ctx.param_key and (node.keywords or extra_default or not source):
+                reason = "重绑定后无法证明 mapping 来源" if not source else "资源 get 的默认值或关键字无法证明"
+                out.append((_unk(ctx, node, reason), st1))
+                continue
+            if not source:
+                st2 = _copy_st(st1)
+                if _mentions_root(node, ctx.roots):
+                    st2.called_unprovable = True
+                out.append((_unk(ctx, node, "无法核对的 .get"), st2))
+                continue
+            if key == ctx.param_key:
+                if ctx.cell.param_full:
+                    out.append((_Fact(kind="P", truth=True, line=node.lineno, resource=True, file=ctx.file, func=ctx.func), st1))
+                else:
+                    out.append((_Fact(kind="EMPTY", truth=False, line=node.lineno, resource=True), st1))
+                continue
+            out.append((_Fact(kind="OTHER", truth=None, line=node.lineno, resource=False), st1))
     return out
 
 
@@ -1851,10 +2001,20 @@ def _call_target(
     if name == "Path" and isinstance(node.func, ast.Name) and "Path" not in st.bind and len(arg_facts) == 1:
         return [_wrap_path(node, arg_facts[0], st, ctx)]
     callee = ctx.funcs.get(name) if name else None
-    if name == "env" and callee is not None and _verified_env(callee):
-        return [(_env_fact(node, callee, arg_facts, ctx), st)]
-    if name == "param_or_env" and callee is not None and _verified_param_or_env(callee):
-        return _param_or_env_fact(node, arg_facts, st, ctx, depth)
+    if name == "env" and callee is not None:
+        if node.keywords:
+            return [(_unk(ctx, node, "env 关键字实参未纳入摘要"), st)]
+        if _verified_env(callee):
+            return [(_env_fact(node, callee, arg_facts, ctx), st)]
+        if _family_key_in_call(node, ctx):
+            return [(_unk(ctx, node, "env 摘要无法验证"), st)]
+    if name == "param_or_env" and callee is not None:
+        if node.keywords:
+            return [(_unk(ctx, node, "param_or_env 关键字实参未纳入摘要"), st)]
+        if _verified_param_or_env(callee):
+            return _param_or_env_fact(node, arg_facts, st, ctx, depth)
+        if _family_key_in_call(node, ctx):
+            return [(_unk(ctx, node, "param_or_env 摘要无法验证"), st)]
     resource_arg = any(f.resource or f.kind in ("P", "E", "D", "UNKNOWN", "REL", "LITERAL") for f in arg_facts)
     if callee is not None and name in ctx.stack:
         return [(_unk(ctx, node, "递归"), st)]
@@ -2128,7 +2288,12 @@ def _analyze_consumer(fn: ast.FunctionDef, ctx_base: _Ctx) -> list[tuple[str, st
             mode=ctx_base.mode,
         )
         try:
-            paths = _run_block(fn.body, _Pst(bind={}), ctx)
+            bind: dict[str, _Fact] = {}
+            if fn.args.args:
+                bind[fn.args.args[0].arg] = _Fact(
+                    kind="OTHER", truth=None, line=fn.lineno, resource=False, cfg_source=True,
+                )
+            paths = _run_block(fn.body, _Pst(bind=bind), ctx)
         except _ProofLimit as exc:
             rows.append((cell.label, "RED", f"无法证明：{exc.reason}（L{exc.line}，人工分类）"))
             continue
@@ -2388,7 +2553,7 @@ def _validate_host_local_root(anchor: dict, contract: dict, repo: Path, discover
                     file_rel=anchor["file"],
                     param_key=param_key,
                     env_key=env_key,
-                    roots=set(roots),
+                    roots=_finite_d_roots(fa.funcs, roots),
                     funcs=fa.funcs,
                 )
             )

@@ -734,6 +734,100 @@ def _matrix_cases() -> list[dict]:
             ),
             "expect": _CONFIG,
         },
+        {
+            "id": "alias-cfg",
+            "body": (
+                "mapping = cfg\n"
+                'base = mapping.get("mtbf_resources_dir") or env("STP_MTBF_RESOURCES_DIR", "")\n'
+                "if not base:\n"
+                "    base = _default_resources_root()\n"
+                'return Path(base) / "legacy"'
+            ),
+            "expect": _GREEN,
+        },
+        {
+            "id": "helper-cfg",
+            "extra": (
+                "def _from_cfg(cfg):\n"
+                '    return cfg.get("mtbf_resources_dir") or env("STP_MTBF_RESOURCES_DIR", "")\n\n'
+            ),
+            "body": (
+                "base = _from_cfg(cfg)\n"
+                "if not base:\n"
+                "    base = _default_resources_root()\n"
+                'return Path(base) / "legacy"'
+            ),
+            "expect": _GREEN,
+        },
+        {
+            "id": "z1-swapped-env",
+            "extra": (
+                "def env(key, default=\"\"):\n"
+                "    return os.environ.get(default, key)\n\n"
+            ),
+            "body": (
+                f"base = {get_or}\n"
+                "if not base:\n"
+                "    base = _default_resources_root()\n"
+                'return Path(base) / "legacy"'
+            ),
+            "expect": ("P", "P", "RED", "RED"),
+        },
+        {
+            "id": "z1-false-param-or-env",
+            "extra": (
+                "def param_or_env(cfg, key, env_key, default):\n"
+                "    value = cfg.get(key)\n"
+                "    if False:\n"
+                "        return value\n"
+                "    raw = env(env_key, \"\")\n"
+                "    if raw != \"\":\n"
+                "        return raw\n"
+                "    return default\n\n"
+            ),
+            "body": (
+                'base = param_or_env(cfg, "mtbf_resources_dir", "STP_MTBF_RESOURCES_DIR", "")\n'
+                "if not base:\n"
+                "    base = _default_resources_root()\n"
+                'return Path(base) / "legacy"'
+            ),
+            "expect": ("RED", "RED", "RED", "RED"),
+        },
+        {
+            "id": "z2-keyword-eager",
+            "body": (
+                'base = cfg.get("mtbf_resources_dir") or env(\n'
+                '    "STP_MTBF_RESOURCES_DIR", default=_default_resources_root()\n'
+                ")\n"
+                "if not base:\n"
+                "    base = _default_resources_root()\n"
+                'return Path(base) / "legacy"'
+            ),
+            "expect": ("P", "P", "RED", "RED"),
+        },
+        {
+            "id": "z3-rebind-cfg",
+            "body": (
+                'cfg = {"project": cfg.get("project")}\n'
+                f"base = {get_or}\n"
+                "if not base:\n"
+                "    base = _default_resources_root()\n"
+                'return Path(base) / "legacy"'
+            ),
+            "expect": ("RED", "RED", "RED", "RED"),
+        },
+        {
+            "id": "z4-recursive-consumer",
+            "body": (
+                f"base = {get_or}\n"
+                "if not base:\n"
+                "    base = _default_resources_root()\n"
+                'if not (cfg.get("mtbf_resources_dir") or env("STP_MTBF_RESOURCES_DIR", "")):\n'
+                "    return resources_dir(cfg)\n"
+                'return Path(base) / "legacy"'
+            ),
+            "expect": ("P", "P", "E", "RED"),
+        },
     ]
     return rows
 
@@ -1073,3 +1167,193 @@ class TestRuntimeOracle:
         assert got == Path(_PARAM) / "demo" and calls == []
         got, calls = run_text(early, {"project": "demo"}, {})
         assert got == root and len(calls) == 1
+
+
+_FIX_PARAM = "/fixture/param"
+_FIX_ENV = "/fixture/env"
+_FIX_ROOT = Path("/fixture/install/agent/resources/mtbf/demo")
+_MTBF_CHOICE = '    base = cfg.get("mtbf_resources_dir") or env("STP_MTBF_RESOURCES_DIR", "")'
+_MTBF_RETURN = "    return Path(base) / project"
+
+
+def _boundary_sources(original: str) -> dict[str, str]:
+    """评审评论里的五个逐字变体。期望不由分析器计算。"""
+    return {
+        "z1-env": original.replace(
+            "return os.environ.get(key, default)",
+            "return os.environ.get(default, key)",
+            1,
+        ),
+        "z1-param-or-env": original.replace(
+            'if value is not None and str(value) != "":',
+            "if False:",
+            1,
+        ).replace(
+            _MTBF_CHOICE,
+            '    base = param_or_env(cfg, "mtbf_resources_dir", "STP_MTBF_RESOURCES_DIR", "")',
+        ),
+        "z2-keyword": original.replace(
+            _MTBF_CHOICE,
+            '    base = cfg.get("mtbf_resources_dir") or env(\n'
+            '        "STP_MTBF_RESOURCES_DIR", default=_default_resources_root()\n'
+            "    )",
+        ),
+        "z3-rebind": original.replace(
+            _MTBF_CHOICE,
+            '    cfg = {"project": cfg.get("project")}\n' + _MTBF_CHOICE,
+        ),
+        "z4-recursion": original.replace(
+            _MTBF_RETURN,
+            "    if not (cfg.get(\"mtbf_resources_dir\") or env(\"STP_MTBF_RESOURCES_DIR\", \"\")):\n"
+            "        return resources_dir(cfg)\n"
+            + _MTBF_RETURN,
+        ),
+    }
+
+
+def _exec_real_helpers(text: str, cfg: dict, environ: dict):
+    """执行源码里的真实 env/param_or_env/resources_dir。只 stub os.environ 和 config.AGENT_DIR。"""
+    names = {"resources_dir", "_default_resources_root", "env", "param_or_env"}
+    tree = ast.parse(text)
+    parts: list[str] = []
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name in names:
+            segment = ast.get_source_segment(text, node)
+            if segment:
+                parts.append(segment)
+    ns: dict = {"os": types.SimpleNamespace(environ=dict(environ)), "Path": Path}
+    saved = sys.modules.get("config")
+    config = types.ModuleType("config")
+    config.AGENT_DIR = _AGENT
+    sys.modules["config"] = config
+    try:
+        exec("\n\n".join(parts), ns)  # noqa: S102
+        calls: list[int] = []
+        real = ns["_default_resources_root"]
+
+        def _wrapped():
+            calls.append(1)
+            return real()
+
+        ns["_default_resources_root"] = _wrapped
+        try:
+            return ns["resources_dir"](cfg), calls, None
+        except Exception as exc:  # noqa: BLE001 — 反例的真实异常类型就是观察值
+            return None, calls, type(exc).__name__
+    finally:
+        if saved is None:
+            sys.modules.pop("config", None)
+        else:
+            sys.modules["config"] = saved
+
+
+class TestInputTrustBoundary:
+    """Z1–Z4。完整扫描必须非零；运行时期望是手写字面量。"""
+
+    def _scan(self, tmp_path: Path, text: str) -> subprocess.CompletedProcess:
+        copy = _copy_repo_subset(tmp_path / "repo")
+        lib = copy / "backend/agent/scripts/mtbf_setup/_lib.py"
+        lib.write_text(text, encoding="utf-8")
+        return subprocess.run(
+            [sys.executable, str(CHECKER), "--repo-root", str(copy)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def test_five_verbatim_scans_are_red_and_runtime_matches(self, tmp_path: Path):
+        original = (ROOT / "backend/agent/scripts/mtbf_setup/_lib.py").read_text(encoding="utf-8")
+        sources = _boundary_sources(original)
+        assert all(text != original for text in sources.values())
+        observations = {
+            "z1-env": (
+                {"project": "demo"},
+                {"STP_MTBF_RESOURCES_DIR": _FIX_ENV},
+                Path("STP_MTBF_RESOURCES_DIR") / "demo",
+                0,
+                None,
+            ),
+            "z1-param-or-env": (
+                {"mtbf_resources_dir": _FIX_PARAM, "project": "demo"},
+                {"STP_MTBF_RESOURCES_DIR": _FIX_ENV},
+                Path(_FIX_ENV) / "demo",
+                0,
+                None,
+            ),
+            "z2-keyword": (
+                {"project": "demo"},
+                {"STP_MTBF_RESOURCES_DIR": _FIX_ENV},
+                Path(_FIX_ENV) / "demo",
+                1,
+                None,
+            ),
+            "z3-rebind": (
+                {"mtbf_resources_dir": _FIX_PARAM, "project": "demo"},
+                {"STP_MTBF_RESOURCES_DIR": _FIX_ENV},
+                Path(_FIX_ENV) / "demo",
+                0,
+                None,
+            ),
+            "z4-recursion": (
+                {"project": "demo"},
+                {},
+                None,
+                None,
+                "RecursionError",
+            ),
+        }
+        for label, text in sources.items():
+            proc = self._scan(tmp_path / label, text)
+            assert proc.returncode != 0, label
+            assert "有限值证明" in proc.stderr, label
+            cfg, environ, path, calls, error = observations[label]
+            got, seen, raised = _exec_real_helpers(text, cfg, environ)
+            assert raised == error, (label, raised)
+            if path is not None:
+                assert got == path, (label, got)
+                assert got != _FIX_ROOT
+            if calls is not None:
+                assert len(seen) == calls, (label, seen)
+
+        param_only, seen, raised = _exec_real_helpers(
+            sources["z1-param-or-env"],
+            {"mtbf_resources_dir": _FIX_PARAM, "project": "demo"},
+            {},
+        )
+        assert raised is None and param_only == _FIX_ROOT and len(seen) == 1
+        rebound_param, seen, raised = _exec_real_helpers(
+            sources["z3-rebind"],
+            {"mtbf_resources_dir": _FIX_PARAM, "project": "demo"},
+            {},
+        )
+        assert raised is None and rebound_param == _FIX_ROOT and len(seen) == 1
+
+    def test_consumer_is_not_a_d_constructor_even_if_named_in_roots(self):
+        original = (ROOT / "backend/agent/scripts/mtbf_setup/_lib.py").read_text(encoding="utf-8")
+        text = _boundary_sources(original)["z4-recursion"]
+        mod = _load_checker()
+        tree = ast.parse(text)
+        funcs = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+        classified = mod._finite_d_roots(funcs, {"_default_resources_root", "resources_dir"})
+        assert classified == {"_default_resources_root"}
+        issues = mod._finite_host_issues(
+            funcs["resources_dir"],
+            anchor_id="A01",
+            file_rel="backend/agent/scripts/mtbf_setup/_lib.py",
+            param_key="mtbf_resources_dir",
+            env_key="STP_MTBF_RESOURCES_DIR",
+            roots=classified,
+            funcs=funcs,
+        )
+        assert any("有限值证明[empty]" in item and "递归" in item for item in issues)
+        polluted = mod._finite_host_issues(
+            funcs["resources_dir"],
+            anchor_id="A01",
+            file_rel="backend/agent/scripts/mtbf_setup/_lib.py",
+            param_key="mtbf_resources_dir",
+            env_key="STP_MTBF_RESOURCES_DIR",
+            roots={"_default_resources_root", "resources_dir"},
+            funcs=funcs,
+        )
+        assert any("递归" in item for item in polluted)
+        assert all("返回 D，期望 D" not in item for item in polluted)
