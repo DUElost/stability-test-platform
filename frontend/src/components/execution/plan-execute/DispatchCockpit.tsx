@@ -19,6 +19,7 @@ import {
 import { ALERT_BOX, STAT, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { formatDurationSeconds } from '@/utils/format';
+import { PATROL_DURATION_HINT, PATROL_DURATION_LABEL, formatPatrolDuration } from '@/components/pipeline/planTiming';
 import { DuplicateLaunchBanner } from './DuplicateLaunchBanner';
 import { SerialConflictBanner } from './SerialConflictBanner';
 import type { DuplicateMatch } from './planExecuteDuplicate';
@@ -248,8 +249,9 @@ export function DispatchCockpit({
                   <strong>{formatDurationSeconds(patrolIntervalSeconds, 'precise', '未设置')}</strong>
                 </div>
                 <div className="flex items-center justify-between gap-3">
-                  <ParameterInfo label="超时" tip="整个 PlanRun 超时后中止；已完成步骤的结果会保留。" />
-                  <strong>{formatDurationSeconds(timeoutSeconds, 'precise', '未设置')}</strong>
+                  {/* 字段名叫 timeout，引擎里是巡检时长预算（planTiming.ts）；此前解释成「整个 PlanRun 超时后中止」 */}
+                  <ParameterInfo label={PATROL_DURATION_LABEL} tip={PATROL_DURATION_HINT} />
+                  <strong>{formatPatrolDuration(timeoutSeconds, patrolIntervalSeconds, 'precise')}</strong>
                 </div>
                 <div className="border-t pt-3">
                   <div className="font-medium">{planName}</div>
