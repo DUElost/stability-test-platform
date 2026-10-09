@@ -138,6 +138,135 @@ def test_structured_final_answers():
         claude_answer()), "claude") == "Q1=是 Q2=是"
 
 
+def api_retry(attempt=1):
+    """Claude Code's own transient transport retry event, in the shape seen in real streams."""
+    return {"type": "system", "subtype": "api_retry", "attempt": attempt, "max_retries": 10,
+            "retry_delay_ms": 587, "error_status": None, "error": "unknown"}
+
+
+def tool_error():
+    return {"type": "user", "message": {"content": [{"type": "tool_result", "is_error": True,
+                                                       "content": "tool failed"}]}}
+
+
+def failed_result(subtype="success"):
+    return {"type": "result", "subtype": subtype, "is_error": True, "result": "API Error"}
+
+
+def too_deep_to_walk():
+    """One event line `json.loads` accepts but `_has_error` cannot walk (it spends more frames per level).
+
+    Probed rather than hard-coded, so the premise holds under any interpreter limit and the test that uses
+    it cannot pass vacuously.
+    """
+    for depth in range(300, 1500, 100):
+        line = '{"type": "assistant", "message": ' + "[" * depth + "]" * depth + "}"
+        try:
+            event = json.loads(line)
+        except RecursionError:
+            break
+        try:
+            probe._has_error(event)
+        except RecursionError:
+            return line
+    pytest.fail("premise lost: no event that json parses but _has_error cannot walk")
+
+
+@pytest.mark.parametrize("protocol,output,reason", [
+    # a recovered transport retry is told apart from a real error, and counted
+    ("claude", events(api_retry(1), api_retry(2), api_retry(3), claude_answer()),
+     "transport-retry(api_retry x3)"),
+    # retries exhausted: the final result itself carries the error
+    ("claude", events(api_retry(1), api_retry(2), failed_result()),
+     "transport-retry(api_retry x2)+result-error"),
+    ("claude", events(api_retry(), tool_error(), claude_answer()),
+     "transport-retry(api_retry x1)+tool-or-protocol-error"),
+    ("claude", events(tool_error(), claude_answer()), "tool-or-protocol-error"),
+    ("codex", events(codex_answer(), {"type": "turn.failed", "error": {"message": "failed"}}),
+     "tool-or-protocol-error"),
+    # shape problems: one code per branch
+    ("claude", "not JSON", "unparseable-stream"),
+    ("claude", "[]", "unparseable-stream"),
+    ("claude", "", "unparseable-stream"),
+    ("claude", events({"type": "assistant", "message": {"content": "Q1=是 Q2=是"}}),
+     "no-single-final-result"),
+    ("claude", events(claude_answer(), claude_answer()), "no-single-final-result"),
+    ("claude", events(claude_answer(), {"type": "user", "message": "later output"}),
+     "no-single-final-result"),
+    ("claude", events({"type": "result", "subtype": "error_max_turns", "is_error": False,
+                       "result": "x"}), "result-not-success"),
+    ("claude", events({"type": "result", "subtype": "success", "is_error": False, "result": None}),
+     "result-not-text"),
+    ("codex", events(codex_answer()), "turn-not-completed"),
+    ("codex", events({"type": "turn.completed"}), "no-agent-message"),
+    ("plain", "收到", "answer-format"),
+    ("other", events({"type": "x"}), "unsupported-protocol"),
+])
+def test_a_rejection_carries_a_fixed_vocabulary_reason(protocol, output, reason):
+    assert probe._read_final_response(output, protocol) == (None, reason)
+
+
+@pytest.mark.parametrize("protocol,output", [
+    ("claude", events(claude_answer())),
+    ("claude", events(api_retry(), claude_answer())),
+    ("claude", events(tool_error(), claude_answer())),
+    ("codex", events(codex_answer(), {"type": "turn.completed"})),
+    ("codex", events(codex_answer())),
+    ("plain", "Q1=是 Q2=是"),
+    ("plain", "收到"),
+    ("claude", "not JSON"),
+])
+def test_answer_and_reason_are_two_views_of_one_decision(protocol, output):
+    answer, reason = probe._read_final_response(output, protocol)
+    assert (answer is None) == bool(reason)
+    assert probe.final_response(output, protocol) == answer
+
+
+@pytest.fixture
+def claude_cli(monkeypatch):
+    monkeypatch.setattr(probe, "get_version", lambda form: "test CLI 1.2.3", raising=False)
+    return next(f for f in probe.FORMS if f["id"] == "claude-subdir-plain")
+
+
+def _run(monkeypatch, form, rc, stdout):
+    monkeypatch.setattr(probe.subprocess, "run", lambda *a, **k:
+                        subprocess.CompletedProcess(a[0], rc, stdout, ""))
+    return probe.run_form(form, cwd="agent")
+
+
+def test_a_recovered_transport_retry_is_explained_but_never_forgiven(claude_cli, monkeypatch):
+    """Judge unchanged: a correct answer after api_retry is still UNVERIFIED; only the reason is visible."""
+    expected = {"q1": True, "q2": True}
+    actual = _run(monkeypatch, claude_cli, 0, events(api_retry(1), api_retry(2), claude_answer()))
+    assert probe.verdict(actual, expected) == "UNVERIFIED" and not actual["graded"]
+    assert actual["error"] == ("no valid final answer or protocol/tool error "
+                               "[transport-retry(api_retry x2)]")
+    # the very same answer without the retries passes: the reason code did not move the line
+    assert probe.verdict(_run(monkeypatch, claude_cli, 0, events(claude_answer())), expected) == "PASS"
+
+
+def test_nonzero_exit_of_a_json_cli_gains_the_stream_reason(claude_cli, cli, monkeypatch):
+    exhausted = events(api_retry(1), api_retry(2), failed_result("error_during_execution"))
+    assert _run(monkeypatch, claude_cli, 1, exhausted)["error"] == (
+        "exit=1 [transport-retry(api_retry x2)+result-error]")
+    assert _run(monkeypatch, claude_cli, 1, "")["error"] == "exit=1 [unparseable-stream]"
+    # a valid stream with a non-zero exit has nothing to add; a plain-text CLI keeps exactly `exit=N`
+    assert _run(monkeypatch, claude_cli, 1, events(claude_answer()))["error"] == "exit=1"
+    assert _run(monkeypatch, cli, 1, "")["error"] == "exit=1"
+
+
+def test_an_event_too_deep_to_walk_is_rejected_not_a_crash(claude_cli, monkeypatch):
+    """`_has_error` stops at the first flagged event, so a deep event after it is only reached when the
+    reason is derived. That must still be a rejection, as the verdict path was before reason codes."""
+    deep = too_deep_to_walk()
+    for stream in (deep, json.dumps(failed_result()) + "\n" + deep):
+        assert probe._read_final_response(stream, "claude") == (None, "unparseable-stream")
+        assert probe.final_response(stream, "claude") is None
+        assert _run(monkeypatch, claude_cli, 1, stream)["error"] == "exit=1 [unparseable-stream]"
+        assert _run(monkeypatch, claude_cli, 0, stream)["error"] == (
+            "no valid final answer or protocol/tool error [unparseable-stream]")
+
+
 def test_three_state_verdict_error_beats_answer():
     actual = probe.grade("Q1=是 Q2=是")
     assert probe.verdict(actual, {"q1": True, "q2": True}) == "PASS"
