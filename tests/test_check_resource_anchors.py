@@ -482,8 +482,8 @@ class TestIsolationMutations:
         lib.write_text(mutated, encoding="utf-8")
         errors = _errors_of(copy)
         assert any("无法证明选择顺序" in e for e in errors), f"否定 IfExp 应红，实际 {errors}"
-        # 正确否定等价 ``Y if not X else X``（X=param）保持绿
-        correct = original.replace(
+        # 正确否定等价写在最终 return 会丢弃默认根（复审 X1）——应红
+        discarded = original.replace(
             "    return Path(base) / project",
             '    return Path(\n'
             '        env("STP_MTBF_RESOURCES_DIR", "")\n'
@@ -491,8 +491,16 @@ class TestIsolationMutations:
             '        else cfg.get("mtbf_resources_dir")\n'
             "    ) / project",
         )
+        lib.write_text(discarded, encoding="utf-8")
+        assert any("未关联默认根" in e for e in _errors_of(copy)), "最终 return 否定选择式应红"
+        # 正确位置：fallback 之前的 base 赋值（与 self-test G7 一致）保持绿
+        correct = original.replace(
+            '    base = cfg.get("mtbf_resources_dir") or env("STP_MTBF_RESOURCES_DIR", "")',
+            '    base = env("STP_MTBF_RESOURCES_DIR", "") if not cfg.get("mtbf_resources_dir") '
+            'else cfg.get("mtbf_resources_dir")',
+        )
         lib.write_text(correct, encoding="utf-8")
-        assert _errors_of(copy) == [], "正确否定等价式应绿"
+        assert _errors_of(copy) == [], "选择位置的正确否定等价式应绿"
         lib.write_text(original, encoding="utf-8")
         assert _errors_of(copy) == [], "恢复后应绿"
 
@@ -559,6 +567,28 @@ class TestIsolationMutations:
         )
         lib.write_text(unrelated_or, encoding="utf-8")
         assert any("急切求值" in e for e in _errors_of(copy)), "非 override 左侧 Or 应红"
+        lib.write_text(original, encoding="utf-8")
+        assert _errors_of(copy) == [], "恢复后应绿"
+
+    def test_and_cleared_override_not_live(self, tmp_path):
+        """复审 X2：``(param or env) and ""`` 清空值后不得凭键标记当作当前 override。"""
+        copy = self._copy(tmp_path)
+        lib = copy / "backend/agent/scripts/mtbf_setup/_lib.py"
+        original = lib.read_text(encoding="utf-8")
+        guard = "    if not base:\n        base = _default_resources_root()"
+        mutated = original.replace(
+            guard,
+            guard
+            + "\n"
+            + '    base = (cfg.get("mtbf_resources_dir") or env("STP_MTBF_RESOURCES_DIR", "")) and ""\n'
+            + "    base = _default_resources_root() if not base else base",
+        )
+        assert mutated != original, "变异未生效（测试锚点漂移）"
+        lib.write_text(mutated, encoding="utf-8")
+        errors = _errors_of(copy)
+        assert any(
+            "急切求值" in e or "无法证明选择顺序" in e for e in errors
+        ), f"And 清零后仍作活值应红，实际 {errors}"
         lib.write_text(original, encoding="utf-8")
         assert _errors_of(copy) == [], "恢复后应绿"
 
