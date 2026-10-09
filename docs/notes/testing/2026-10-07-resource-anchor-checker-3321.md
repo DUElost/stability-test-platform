@@ -31,13 +31,14 @@ ADR-0033 tool_manifest step（不新增 gate profile / required job）。
   函数与真实调用关系登记，引用 #3320 并写明删除/重新判定条件；新增入口调用（**含别名
   导入、`import *`、`getattr` 动态引用**）、导入路径、`__all__` 导出或资源消费使其可达
   即红；禁止文件/族目录级白名单；
-- **authority 判据（#3615 复核 P2 + 复审 R1–R3/S1–S3 返修，2026-10-07/09）**：
+- **authority 判据（#3615 复核 P2 + 复审 R1–R3/S1–S3/T1–T2 返修，2026-10-07/09）**：
   - 资源根相对 Agent authority 的**全部片段**必须恰为 `("resources", <族子目录>)`——
-    前/后缀均不允许（`AGENT_DIR/unexpected/resources/mtbf` 与 `…/mtbf/unexpected` 同判红）；
-    必须出现在**返回位置**且每个被返回路径值都符合 authority；authority 定位点不得返回
-    字面量根；root 与 consumer 的 project/variant/bundle 层分开；
-  - 显式 override 必须**双通道**（同一消费者同时读取 param 与 env），且**实际被消费**的
-    选择链必须证明 param 先行——未被使用的链不作证明；多条候选链无法关联消费 → 人工分类；
+    前/后缀均不允许；必须出现在**返回位置**且每个被返回路径值都符合 authority；
+    「经局部变量返回错误 literal 根」与直接返回同判红；root 与 consumer 的
+    project/variant/bundle 层分开；
+  - 显式 override 必须**双通道**（同一消费者同时读取 param 与 env），且证明必须关联到
+    **实际消费值**：守卫变量在该行的 reaching def 与 return 值来源逐一分类；被同名覆盖
+    或未被使用的旧链不作证明；实际值只读 env / 顺序反转 / 多条候选 → 红或人工分类；
   - 同族导入索引覆盖**函数体内** Import/ImportFrom 并保留原始符号名；同一别名多来源
     保留**全部**候选并显式报人工分类（禁止 last-write-wins）；`import *` / `getattr`
     动态引用一并判红；
@@ -91,13 +92,17 @@ ADR-0033 tool_manifest step（不新增 gate profile / required job）。
   「现可从族入口到达」+「同一别名多来源（需人工分类）」；S3
   `unused = param or env; base = env or param` → 「override 选择链 env 先于 param（L144）」
   （未使用链不再作为证明）。
+- **第四轮 T1–T2 的返修证据**（逐字反例，修复前 `errors=0`）：
+  T1 `base = param or env; base = env`（正确链被同名覆盖）→ 「消费值只读取 env——param 未
+  参与实际选择（被覆盖/未消费）」；T2 `wrong = Path("/tmp/incorrect"); return wrong / project`
+  → 「经局部变量返回硬编码路径」；对照保留正确 param-first 的写法保持绿。
 - `python tools/dev/check_resource_anchors.py`：真实仓库绿（69 文件 / 35 族；候选 49；
   26 锚 / 50 定位点；legacy 10；未解析 0），离线 <1s。
 - `python tools/dev/check_resource_anchors.py --base origin/main`：绿（首次引入契约，NOTE）。
-- `python scripts/run_pytest.py tests/test_check_resource_anchors.py -q`：28 passed
+- `python scripts/run_pytest.py tests/test_check_resource_anchors.py -q`：30 passed
   （含别名导入 / 函数内别名导入 / 别名复用多来源 / 通配+getattr / 错误返回根 / 前/后缀
-  多余片段 / 删 param / env 优先 / 变量优先 / 未使用链掩盖（红绿双侧）等隔离变异，
-  均含恢复后转绿）。
+  多余片段 / 同名覆盖 / 变量返回 literal / 删 param / env 优先 / 变量优先 / 未使用链
+  掩盖（红绿双侧）等隔离变异，均含恢复后转绿）。
   隔离副本变异证明 checker 有牙齿（恢复 G1a 错根 / 撤工具绑定 / 删包内伴随文件 /
   接入 dead helper / 抽掉声明条目 → 红；恢复 → 绿）；接线用例读 `run_gates.GATES`
   结构断言 tool-manifest 项含 `--self-test` 与 `--base`，CI 同 step 同命令。

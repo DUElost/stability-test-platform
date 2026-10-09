@@ -27,14 +27,16 @@ pin 依据及函数级 legacy 分类为输入；工具版本真源仍是 ``tool_
 - **函数级 legacy**：10 个无消费者 helper 只按函数登记；新增调用（含**别名导入**、
   ``import *``、``getattr`` 动态引用）、导入路径、``__all__`` 导出使其可达即红；
   禁止整文件/族目录豁免；
-- **authority 判据**（#3615 复核 P2 + 复审 R1–R3/S1–S3 后加固）：
+- **authority 判据**（#3615 复核 P2 + 复审 R1–R3/S1–S3/T1–T2 后加固）：
   - 资源根相对 Agent authority 的**全部片段**必须恰为 ``("resources", <族子目录>)``——
     前/后缀均不允许；root 与 consumer 的 project/variant/bundle 层分开；
   - 资源根必须出现在**返回位置**且每个返回值都符合声明 authority——「保留正确赋值
-    却返回错误路径」「增加错误目录返回」不得通过；authority 定位点不得返回字面量根；
-  - 显式 override 必须**双通道**（同一消费者同时读取 param 与 env），且**实际被消费**的
-    选择链必须证明 param 先行——未被使用的链不作证明；多条候选链无法关联消费时要求
-    人工分类（不得按 param-first 放行）；
+    却返回错误路径」「增加错误目录返回」「经局部变量返回错误 literal 根」均不得通过；
+    authority 定位点不得返回字面量根；
+  - 显式 override 必须**双通道**（同一消费者同时读取 param 与 env），且证明必须关联到
+    **实际消费值**：守卫变量在该行的 reaching def 与 return 值的来源被逐一分类；
+    被同名覆盖而消费不到、或未被使用的旧链不作证明；实际值只读 env / 顺序反转 /
+    多条候选链无法关联 → 红或要求人工分类；
   - 同族导入索引覆盖**函数体内** Import/ImportFrom 并保留原始符号名；同一别名多来源时
     保留**全部**候选并显式报人工分类（禁止 last-write-wins）；``import *``、``getattr``
     动态引用同样不得让调用从可达性图消失；
@@ -1229,6 +1231,30 @@ def _validate_host_local_root(anchor: dict, contract: dict, repo: Path, discover
         fn = fa.funcs.get(consumer)
         if fn is None:
             continue
+        # 先在**实际消费点**上验证选择值（守卫变量/return 值的 reaching def）：
+        # 被同名覆盖而从未被消费的旧链不构成证明（复审 T1）。
+        effective_violations: list[str] = []
+        effective_ok = False
+        for node, desc in _effective_override_nodes(fn, roots, module_scope):
+            status, detail = _classify_effective(fn, node, param_key, env_key, module_scope)
+            if status == "env-first":
+                effective_violations.append(f"{desc} 的消费值选择链 env 先于 param（{detail}）")
+            elif status == "param-first":
+                effective_ok = True
+            elif status == "env-only":
+                effective_violations.append(f"{desc} 的消费值只读取 env——param 未参与实际选择（被覆盖/未消费）")
+            elif status == "param-only":
+                effective_violations.append(f"{desc} 的消费值只读取 param——env override 通道未参与")
+            elif status == "ambiguous":
+                effective_violations.append(f"{desc} 存在多条候选链（{detail}），无法关联消费值")
+            elif status == "no-chain" and _has_param_or_env_call(fn, param_key, env_key):
+                effective_ok = True
+        if effective_violations:
+            for violation in effective_violations:
+                errors.append(f"{anchor['id']}: {anchor['file']}:{consumer} {violation}")
+            continue
+        if effective_ok:
+            continue
         status, detail = _override_order(fn, param_key, env_key, module_scope)
         if status == "env-first":
             errors.append(
@@ -1330,9 +1356,12 @@ def _validate_host_local_root(anchor: dict, contract: dict, repo: Path, discover
                 )
         else:
             for line, val, direct in info.returns:
-                if val.kind == "literal" and direct:
+                if val.kind == "literal":
+                    # 经局部变量传播的已知错误 literal 根同样必须红（复审 T2）——
+                    # 归因去重（direct 标记）只影响文案，不构成放行理由。
+                    how = "直接返回" if direct else "经局部变量返回"
                     errors.append(
-                        f"{anchor['id']}: {anchor['file']}:{sym['name']} L{line} 返回硬编码路径"
+                        f"{anchor['id']}: {anchor['file']}:{sym['name']} L{line} {how}硬编码路径"
                         f"{val.segments!r}——authority 消费链不得返回字面量根"
                     )
 
@@ -1340,8 +1369,7 @@ def _validate_host_local_root(anchor: dict, contract: dict, repo: Path, discover
 def _return_has_direct_literal_path(node: ast.AST) -> bool:
     """return 表达式里是否直接写死路径字面量（``Path("/tmp/x")`` / ``"/opt/x"``）。
 
-    用于区分「本函数自己返回字面量」（红）与「字面量经 helper 返回值流入」（由 helper
-    的返回值一致性负责报出，不重复归因给消费者）。
+    仅用于文案（「直接返回」vs「经局部变量返回」）——两种形态都必须判红（复审 T2）。
     """
     for sub in ast.walk(node):
         if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
@@ -1388,10 +1416,11 @@ def _key_markers(
     return keys
 
 
-def _dead_assignment_value_ids(fn: ast.FunctionDef) -> set[int]:
-    """被赋给「此后从未被读取」的局部变量的右值节点 id。
+def _live_assignment_value_ids(fn: ast.FunctionDef) -> set[int]:
+    """「其值会先于下一次同名赋值被读取」的赋值右值节点 id。
 
-    ``unused = cfg.get(P) or env(E, "")`` 这类未使用链不得参与选择顺序证明（复审 S3）。
+    同名覆盖必须让旧值失效：``base = p or e; base = e`` 的第一行即使后面有
+    ``if not base`` 也不构成消费证明（复审 T1）。
     """
     assigns: list[tuple[int, str, ast.AST]] = []
     loads: list[tuple[int, str]] = []
@@ -1404,11 +1433,91 @@ def _dead_assignment_value_ids(fn: ast.FunctionDef) -> set[int]:
             assigns.append((sub.lineno, sub.target.id, sub.value))
         elif isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load):
             loads.append((sub.lineno, sub.id))
-    dead: set[int] = set()
+    live: set[int] = set()
     for line, name, value in assigns:
-        if not any(other_line > line and other_name == name for other_line, other_name in loads):
-            dead.add(id(value))
-    return dead
+        next_line = min(
+            (other for other, other_name, _ in assigns if other_name == name and other > line),
+            default=None,
+        )
+        consumed = any(
+            other_name == name and other > line and (next_line is None or other < next_line)
+            for other, other_name in loads
+        )
+        if consumed:
+            live.add(id(value))
+    return live
+
+
+def _effective_override_nodes(
+    fn: ast.FunctionDef, roots: list[str], module_scope: dict[str, ast.AST]
+) -> list[tuple[ast.AST, str]]:
+    """实际消费点上的 override 选择表达式（复审 T1：证明必须关联到消费值）。
+
+    消费点三类：
+    1. return 表达式里直接写出的选择链（如 dict 值）；
+    2. 守卫默认锚回退的 ``if`` 变量在该行的 reaching def（``if not base:`` 的 base）；
+    3. return 表达式引用的变量的 reaching def（守卫后的再次覆盖）。
+    """
+    nodes: list[tuple[ast.AST, str]] = []
+    seen: set[int] = set()
+
+    def add(node: ast.AST | None, desc: str) -> None:
+        if node is None or id(node) in seen:
+            return
+        seen.add(id(node))
+        nodes.append((node, desc))
+
+    returns = [n for n in ast.walk(fn) if isinstance(n, ast.Return) and n.value is not None]
+    for ret in returns:
+        add(ret.value, f"L{ret.lineno} return 表达式")
+        for sub in ast.walk(ret.value):
+            if isinstance(sub, ast.Name):
+                add(_name_value_at(fn, sub.id, ret.lineno), f"L{ret.lineno} return 变量 {sub.id}")
+    for node in ast.walk(fn):
+        if not isinstance(node, ast.If):
+            continue
+        guards_root = any(
+            isinstance(c, ast.Call) and _call_name(c) in roots for c in ast.walk(node) if isinstance(c, ast.Call)
+        )
+        if not guards_root:
+            continue
+        for name_node in (n for n in ast.walk(node.test) if isinstance(n, ast.Name)):
+            add(_name_value_at(fn, name_node.id, node.lineno), f"L{node.lineno} 守卫变量 {name_node.id}")
+    return nodes
+
+
+def _classify_effective(
+    fn: ast.FunctionDef, node: ast.AST, param_key: str, env_key: str, module_scope: dict[str, ast.AST]
+) -> tuple[str, str]:
+    """对单个消费点表达式分类：param-first / env-first / env-only / param-only / ambiguous / no-chain。"""
+    chains: list[ast.BoolOp] = []
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.BoolOp) and isinstance(sub.op, ast.Or):
+            keys = _key_markers(fn, sub, module_scope)
+            if param_key in keys and env_key in keys:
+                chains.append(sub)
+    if chains:
+        if len(chains) > 1:
+            return "ambiguous", f"L{[c.lineno for c in chains]}"
+        chain = chains[0]
+        param_idx = env_idx = None
+        for index, value in enumerate(chain.values):
+            keys = _key_markers(fn, value, module_scope)
+            if param_key in keys and param_idx is None:
+                param_idx = index
+            if env_key in keys and env_idx is None:
+                env_idx = index
+        if param_idx is None or env_idx is None:
+            return "no-chain", f"L{chain.lineno}"
+        return ("param-first" if param_idx < env_idx else "env-first"), f"L{chain.lineno}"
+    keys = _key_markers(fn, node, module_scope)
+    if param_key in keys and env_key in keys:
+        return "no-chain", ""
+    if env_key in keys:
+        return "env-only", ""
+    if param_key in keys:
+        return "param-only", ""
+    return "none", ""
 
 
 def _override_order(
@@ -1425,13 +1534,13 @@ def _override_order(
     """
     if not param_key or not env_key:
         return "none", ""
-    dead = _dead_assignment_value_ids(fn)
+    live = _live_assignment_value_ids(fn)
     candidates: list[tuple[int, str]] = []
     for node in ast.walk(fn):
         if not (isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or)):
             continue
-        if id(node) in dead:
-            continue
+        if id(node) not in live:
+            continue  # 未被消费（未使用，或被同名覆盖）——不作证明（复审 S3/T1）
         param_idx = env_idx = None
         for index, value in enumerate(node.values):
             keys = _key_markers(fn, value, module_scope)
@@ -2654,6 +2763,24 @@ def run_self_test() -> int:
         )
         expect(_errors_of(_write_fixture(Path(tmp) / "r29", alpha_lib=lib)), "env 先于 param", "R29 未使用链掩盖")
 
+        # --- 红 R30：正确 param-first 赋值被同名覆盖（复审 T1） ---
+        lib = AGENT_SETUP_LIB.format(subdir="alpha", param="alpha_resources_dir", envkey="STP_ALPHA_RESOURCES_DIR")
+        lib = lib.replace(
+            '    base = cfg.get("alpha_resources_dir") or env("STP_ALPHA_RESOURCES_DIR", "")',
+            '    base = cfg.get("alpha_resources_dir") or env("STP_ALPHA_RESOURCES_DIR", "")\n'
+            '    base = env("STP_ALPHA_RESOURCES_DIR", "")',
+        )
+        expect(_errors_of(_write_fixture(Path(tmp) / "r30", alpha_lib=lib)), "消费值只读取 env", "R30 同名覆盖")
+
+        # --- 红 R31：经局部变量返回错误 literal 根（复审 T2） ---
+        lib = AGENT_SETUP_LIB.format(subdir="alpha", param="alpha_resources_dir", envkey="STP_ALPHA_RESOURCES_DIR")
+        lib = lib.replace(
+            "    return Path(base) / (cfg.get(\"project\") or \"legacy\")",
+            '    wrong = Path("/tmp/incorrect")\n'
+            '    return wrong / (cfg.get("project") or "legacy")',
+        )
+        expect(_errors_of(_write_fixture(Path(tmp) / "r31", alpha_lib=lib)), "经局部变量返回硬编码路径", "R31 变量返回 literal")
+
         # --- 红 R16：base ref 不可解析 = 不可验证 ---
         git_root = Path(tmp) / "gitrepo"
         _write_fixture(git_root)
@@ -2690,8 +2817,9 @@ def run_self_test() -> int:
         "cache 祖先 / dead 接入 / 别名导入接入 / 函数内别名导入 / import * 接入 / getattr 接入 / 导出 / "
         "绑定缺失 / 错误 env / 成员缺失 / 未声明候选 / 未解析表达式 / 零候选 / 急切默认锚 / 错误返回根 / "
         "额外错误目录 / 多余后缀 / 片段错序 / 前缀多余片段 / 别名复用（多来源）/ 未使用链掩盖 / "
-        "删 param override / env 先于 param / 变量 env 优先 / 例外扩张 / base 不可验证 → 红；"
-        "agent-dir 形态 / 显式 override / 变量 param 先行 / parents 与 tools_cache 字样不误报 → 绿）"
+        "同名覆盖 / 变量返回 literal / 删 param override / env 先于 param / 变量 env 优先 / "
+        "例外扩张 / base 不可验证 → 红；agent-dir 形态 / 显式 override / 变量 param 先行 / "
+        "parents 与 tools_cache 字样不误报 → 绿）"
     )
     return 0
 

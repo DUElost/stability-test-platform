@@ -389,6 +389,38 @@ class TestIsolationMutations:
         lib.write_text(original, encoding="utf-8")
         assert _errors_of(copy) == [], "恢复后应绿"
 
+    def test_overwritten_param_first_assignment_is_red_then_green(self, tmp_path):
+        """复审 T1：正确 param-first 赋值被同名 env 覆盖后不得再作消费证明。"""
+        copy = self._copy(tmp_path)
+        lib = copy / "backend/agent/scripts/mtbf_setup/_lib.py"
+        original = lib.read_text(encoding="utf-8")
+        mutated = original.replace(
+            '    base = cfg.get("mtbf_resources_dir") or env("STP_MTBF_RESOURCES_DIR", "")',
+            '    base = cfg.get("mtbf_resources_dir") or env("STP_MTBF_RESOURCES_DIR", "")\n'
+            '    base = env("STP_MTBF_RESOURCES_DIR", "")',
+        )
+        assert mutated != original, "变异未生效（测试锚点漂移）"
+        lib.write_text(mutated, encoding="utf-8")
+        assert any("消费值只读取 env" in e for e in _errors_of(copy)), "同名覆盖应红"
+        lib.write_text(original, encoding="utf-8")
+        assert _errors_of(copy) == [], "恢复后应绿"
+
+    def test_variable_propagated_literal_return_is_red_then_green(self, tmp_path):
+        """复审 T2：错误 literal 根经局部变量返回与直接返回同判。"""
+        copy = self._copy(tmp_path)
+        lib = copy / "backend/agent/scripts/mtbf_setup/_lib.py"
+        original = lib.read_text(encoding="utf-8")
+        mutated = original.replace(
+            "    return Path(base) / project",
+            '    wrong = Path("/tmp/incorrect")\n'
+            "    return wrong / project",
+        )
+        assert mutated != original, "变异未生效（测试锚点漂移）"
+        lib.write_text(mutated, encoding="utf-8")
+        assert any("经局部变量返回硬编码路径" in e for e in _errors_of(copy)), "变量传播字面量应红"
+        lib.write_text(original, encoding="utf-8")
+        assert _errors_of(copy) == [], "恢复后应绿"
+
     def test_declaration_hole_is_red(self, tmp_path):
         copy = self._copy(tmp_path)
         contract_path = copy / "tools/dev/resource_anchor_contract.json"
