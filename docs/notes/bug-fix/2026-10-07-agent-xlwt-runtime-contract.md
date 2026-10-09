@@ -13,6 +13,8 @@ Class: bug-fix
 
 安装自检的 xlwt 使用同步登记到生产依赖 inventory 与[依赖收敛规划](../process/2026-09-20-dependency-convergence-739.md)。它检查已有 `.xls` 导出契约；openpyxl 不能替代该格式的写侧，未来格式迁移或工具独立解释器落地时同步退役这项 Agent 耦合。
 
+安装工件契约测试直接读取 Agent requirements，去掉注释并规范化空白后要求精确 pin `xlwt==1.3.0`，并断言同一安装 venv 的依赖安装先于 `agent.install_selfcheck`。这两项并入现有 `tests/test_install_agent_artifacts.py`，不增加独立门禁。
+
 部分接续[GT-SPRD CLI 对齐记录](2026-08-31-unisoc-scan-runner-toolkit-cli.md)：原有 CLI 与系统 Python legacy 路径的验证仍保留，本次修正包面借用 Agent 解释器后的依赖边界。
 
 ## Alternatives
@@ -21,6 +23,7 @@ Class: bug-fix
 - 修改已发布工具的 `python` 字段或其包内内容：违反发布不可变边界，需另发工具版本。
 - 只在现场手动 pip 安装：本轮止血有效，但新主机或重装仍会复发。
 - 只加 requirements、不加自检：实际安装环境漂移或依赖不可用时，仍会把问题推迟到真实归档阶段。
+- 只测试自检的 xlwt import：CI 安装控制面/dev lock，本身已有 xlwt，会掩盖 Agent requirements 删除依赖的回归；需直接守住 Agent 安装输入与顺序。
 
 ## Verification
 
@@ -30,6 +33,7 @@ Class: bug-fix
 - 现场单机离线日志解析/去重/导出已通过（原始 3 行、去重 2 行），48/48 实际解释器导入和版本复核通过；这证明手动补齐，不是本 PR 已部署。
 - 原生新轮次的完整 scan/upload/merge/extract 另行验收；不能用安装自检冒充全部平台证据完整。
 - 2026-10-09 CI 返修：head `e2725932` 的依赖 inventory 用例指出安装自检未登记，本次同步补齐台账和迁移说明。经内存保护 runner 重跑该 inventory、自检及 host identity 三个测试文件：10 passed（6 GiB / swap=0）；返修后的 required CI 另行核验。
+- 2026-10-09 R1 评审返修：安装工件、Excel inventory、自检与 host identity 四个测试文件合跑 26 passed（保护 runner，6 GiB / swap=0）。删除 Agent xlwt pin、放宽为 `>=1.3.0`、把自检块移到依赖安装之前三项反向变异均让对应契约用例单独失败；顺序变异后的 shell 语法仍有效。每次变异后按 SHA-256 确认原文件字节恢复。没有执行生产安装脚本或改变生产运行环境。
 
 ## Revisit
 

@@ -9,6 +9,7 @@ Ansible 只同步 ``backend/agent/`` 源码目录——干净安装/升级后合
 - ``resolve_pipeline_schema`` 对「仓库同构布局」「Ansible 暂存布局」的解析；
 - ``resolve_code_version`` 的注入/派生/缺省分支；
 - 安装脚本确实把两个工件装到运行时解析路径，并以自检收口。
+- Agent 安装清单精确 pin 既有扫描导出依赖，并在同一 venv 中先安装、后自检。
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 INSTALL_SCRIPT = REPO_ROOT / "backend/agent/install_agent.sh"
+AGENT_REQUIREMENTS = REPO_ROOT / "backend/agent/requirements.txt"
 INSTALL_PLAYBOOK = REPO_ROOT / "tools/ansible/playbooks/install_agent.yml"
 
 
@@ -137,6 +139,16 @@ def test_install_script_installs_schema_and_version_to_runtime_paths():
     )
 
 
+def test_agent_requirements_pin_scan_export_dependency():
+    # CI 的控制面/dev 环境已有 xlwt；import 成功不能证明 Agent 安装清单含该依赖。
+    requirements = {
+        re.sub(r"\s+", "", line.partition("#")[0]).lower()
+        for line in AGENT_REQUIREMENTS.read_text(encoding="utf-8").splitlines()
+    }
+
+    assert "xlwt==1.3.0" in requirements, "Agent requirements must pin xlwt==1.3.0"
+
+
 def test_install_script_runs_selfcheck_from_installed_tree():
     text = INSTALL_SCRIPT.read_text(encoding="utf-8")
 
@@ -145,6 +157,26 @@ def test_install_script_runs_selfcheck_from_installed_tree():
     # 沿用调用方 cwd（Ansible 暂存源码树）会导入开发布局而非安装产物
     assert re.search(
         r'\(cd "\$INSTALL_DIR" && .*agent\.install_selfcheck', text, re.DOTALL
+    )
+
+
+def test_install_script_installs_agent_requirements_before_selfcheck():
+    text = INSTALL_SCRIPT.read_text(encoding="utf-8")
+    dependency_install = re.search(
+        r'(?m)^\s*"\$INSTALL_DIR/venv/bin/pip"\s+install\s+-r\s+'
+        r'"\$INSTALL_DIR/agent/requirements\.txt"(?:\s|$)',
+        text,
+    )
+    selfcheck = re.search(
+        r'(?m)^\s*"\$INSTALL_DIR/venv/bin/python"\s+-m\s+'
+        r'agent\.install_selfcheck(?:\s|\)|$)',
+        text,
+    )
+
+    assert dependency_install is not None, "Install Agent requirements in the Agent venv"
+    assert selfcheck is not None, "Run installation self-check in the same Agent venv"
+    assert dependency_install.start() < selfcheck.start(), (
+        "Install Agent requirements before running installation self-check"
     )
 
 
