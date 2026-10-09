@@ -116,10 +116,14 @@ ALLOWLIST_PREFIXES = (
 # 路径中含这些目录名 → 测试夹具，放行（形态与真实 serial 无法区分）
 ALLOWLIST_PATH_PARTS = ("__fixtures__", "__mocks__", "__snapshots__")
 
-# 前端测试文件（按后缀放行，路径不定）
+# 前端测试文件（按后缀放行，路径不定）+ 生成类 lockfile basename
 ALLOWLIST_SUFFIXES = (
     ".test.ts", ".test.tsx", ".test.js", ".test.jsx",
     ".spec.ts", ".spec.tsx", ".spec.js", ".spec.jsx",
+    # npm lockfile：`integrity` 为 sha512- + base64，可偶然含子串命中
+    # SERIAL_LIKE（#3620：WPZTIIZPWR3Q）；改 hash 会破坏 npm，故按 basename
+    # 放行（endswith），不逐 token、不剥 hash。
+    "package-lock.json",
 )
 
 # 本地开发栈：写的是标准网段常量而非资产
@@ -257,6 +261,12 @@ def _self_test() -> int:
         ("backend/agent/tests/test_aee.py", "serial = '0000NX2622000670'", 0),
         ("frontend/src/x/__fixtures__/a.json", '{"serial": "0000NX2622000514"}', 0),
         ("frontend/src/a/b.test.tsx", "const ip = '10.0.0.50';", 0),
+        # 放行：npm package-lock.json 的 integrity base64 可误伤 SERIAL_LIKE（#3620）
+        (
+            "frontend/package-lock.json",
+            '"integrity": "sha512-qQoPDZUFV0bh9xA09XydmkjMBpgc1ukJuhMvzQ9QeVmFaHTS9W5TE5CoLmSl3QQyUP9OuHO3x/WPZTIIZPWR3Q=="',
+            0,
+        ),
         # 设备序列号（升级后纳入）
         ("docs/acceptance/x.md", "设备 serial：395 AYCGNX6730000054 (MLD_LX2)。", 1),
         ("docs/acceptance/x.md", "设备 serial：395 AYCGNX67****0054 (MLD_LX2)。", 0),
@@ -266,6 +276,8 @@ def _self_test() -> int:
         # 放行：版本号 / 更长的点分串不该被误判
         ("docs/tmp/x.md", "升级到 1.2.3.4.5 版本。", 0),
         ("docs/tmp/x.md", "sha 10.0.31558 无关。", 0),
+        # 对照：同形态 token 在非 lockfile 路径仍应命中（#3620）
+        ("docs/tmp/x.md", "WPZTIIZPWR3Q", 1),
     ]
     bad = 0
     for rel, text, want in cases:

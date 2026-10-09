@@ -17,6 +17,10 @@ Class: bug-fix
 
 **运行依赖**：`scan_result.py` 导出 xls 需系统包 `python3-xlwt`（`apt install python3-xlwt`），已写入 `agent-host-onboard` §4.4。
 
+上述依赖处置保留为当时系统 Python 路径的记录。包面 `python=null` 使用 Agent
+venv 的依赖与安装自检契约见[同解释器依赖修复](2026-10-07-agent-xlwt-runtime-contract.md)；
+系统 Python 有 xlwt 不代表 Agent venv 可用，现行 onboard §4.4 按实际解释器核验。
+
 涉及：`backend/agent/unisoc_scan_runner.py`、`backend/agent/tests/test_unisoc_scan_runner.py`、`.claude/skills/agent-host-onboard/SKILL.md`。
 
 ## Alternatives

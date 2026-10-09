@@ -173,22 +173,20 @@ ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/check_agent.yml --limit 
 
 ### 4.4 UNISOC 归档工具依赖（ADR-0032，Z258 / SPRD 机型）
 
-`scan_result.py`（`STP_UNISOC_SCAN_RESULT_SCRIPT`）导出 `.xls` 依赖 **`python3-xlwt`**。
-未安装时 Agent 日志为 `unisoc_scan_result_failed ... ModuleNotFoundError: xlwt`。
+`scan_result.py` 导出 `.xls` 依赖 **`xlwt==1.3.0`**。包面 `python=null` 使用
+Agent 自身解释器 `/opt/stability-test-agent/venv/bin/python`，系统安装的
+`python3-xlwt` 不保证该 venv 可见。Agent `requirements.txt` 安装此依赖，
+安装自检用同一解释器验证 Workbook 初始化；失败时停止安装。
+
+先验证**实际运行解释器**，不能仅验证 `/usr/bin/python3`：
 
 ```bash
-# 单机（android 用户可 sudo -n）
-ssh android@<ip> 'sudo DEBIAN_FRONTEND=noninteractive apt-get install -y python3-xlwt'
-
-# 批量（172.21.15.x 段示例；并行度按需调低）
-grep -E '^172\.21\.15\.' /home/debian13/hosts.ini | while read -r ip; do
-  ssh -o ConnectTimeout=5 "android@${ip}" \
-    'sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-xlwt' &
-done
-wait
+ssh android@<ip> '/opt/stability-test-agent/venv/bin/python -c "import xlwt; xlwt.Workbook()"'
 ```
 
-验证：`ssh android@<ip> '/usr/bin/python3 -c "import xlwt"'`
+已有主机缺依赖时，按已授权窗口先单机、验收后再扩大，用实际解释器安装
+固定版本；离线环境使用已校验 SHA-256 的 wheel。只有 legacy 路径明确使用
+系统 Python 时，才以 `python3-xlwt` 的系统安装作为对应解释器的补齐。
 
 ## 5. `.env` 对齐（装后必查）
 
@@ -299,7 +297,7 @@ curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8000/api/v1/stats/fil
 | `AGENT_SECRET` 取自 `backend/.env` | 集体 SocketIO 认证失败 → 只用 `.env.backend` |
 | 热更新后 schema 不生效 | 须 `systemctl restart`（`reload_config` 不重载 schema 缓存）；脚本不随热更新走（ADR-0051 Phase 3 起从 `tools_cache` 包执行，到位看 `verify_scripts` 预热） |
 | NFS server 地址变更 | `batch_hot_update` 不改 fstab；须逐台 remount（`2026-storage-roles-and-aliases.md` §6） |
-| UNISOC `scan_result` 缺 xlwt | `apt install python3-xlwt`（§4.4）；勿指望 Agent venv pip（镜像/离线常失败） ✅ |
+| UNISOC `scan_result` 缺 xlwt | 核对实际解释器；包面须在 Agent venv 补齐 `xlwt==1.3.0`，离线用已校验 wheel（§4.4） ✅ |
 
 ## 10. 与相关 skill / 文档的边界
 

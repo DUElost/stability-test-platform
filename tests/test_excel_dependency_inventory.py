@@ -28,6 +28,7 @@ _LIBS = ("xlrd", "xlwt")
 #: 台账：相对路径 → 允许的库集合。**新增/删除都必须同步这里与规划文档**
 #: （`docs/notes/process/2026-09-20-dependency-convergence-739.md`）。
 _INVENTORY: dict[str, set[str]] = {
+    "backend/agent/install_selfcheck.py": {"xlwt"},
     "backend/services/dedup_extract.py": {"xlrd"},
     "backend/services/dedup_scan.py": {"xlrd", "xlwt"},
 }
