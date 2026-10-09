@@ -283,11 +283,15 @@ describe('PlanStepInspector', () => {
       expect(within(fieldOf('retries')).getByRole('spinbutton')).toHaveValue(5);
     });
 
-    it('三层都没值时留空，用 description 当 placeholder', () => {
+    it('三层都没值时留空；说明常显在字段下方并经 aria-describedby 关联', () => {
       render(<Harness />);
       const input = within(fieldOf('目标包名 *')).getByRole('textbox');
       expect(input).toHaveValue('');
-      expect(input).toHaveAttribute('placeholder', 'com.example');
+      // 说明不再塞进 placeholder（字段一有值就被遮住），placeholder 与数字字段同口径取 schema 默认
+      expect(input).toHaveAttribute('placeholder', '');
+      const description = screen.getByText('com.example');
+      expect(description.tagName).toBe('P');
+      expect(input).toHaveAttribute('aria-describedby', description.id);
     });
 
     it('改成与 default_params 相同的值会把键删掉，保持 payload 最小', () => {
@@ -624,6 +628,50 @@ describe('PlanStepInspector', () => {
     it('没有脚本名时不渲染链接', () => {
       render(<Harness step={makeStep({ action: 'script:', version: '' })} />);
       expect(screen.queryByText('在脚本库中编辑参数')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('参数说明', () => {
+    // 形如生产 flash_firmware 的种子 param_schema：label + description 写的是含义，不是示例值
+    const DESCRIBED = makeScript({
+      id: 4,
+      name: 'flash_firmware',
+      version: '1.3',
+      param_schema: {
+        firmware_dir: { type: 'string', label: '固件目录', description: 'NFS 相对或绝对路径。缺省走指纹路由' },
+        retries: { type: 'integer', label: '刷机重试上限', description: '刷机失败后最多重试几次' },
+        family: { type: 'string', label: '机型族', enum: ['MLD', 'ELA'], description: '缺省按设备指纹判定' },
+        wipe: { type: 'boolean', label: '清除数据', description: '刷机前清除 userdata' },
+        channel: { type: 'string', label: '通道' },
+      },
+      default_params: { firmware_dir: '/nfs/fw', retries: 2 },
+    });
+    const flashStep = () => makeStep({ action: 'script:flash_firmware', version: '1.3' });
+
+    it('字段已有值时说明仍可见（不依赖 placeholder）', () => {
+      render(<Harness step={flashStep()} scripts={[DESCRIBED]} />);
+      expect(within(fieldOf('固件目录')).getByRole('textbox')).toHaveValue('/nfs/fw');
+      expect(screen.getByText('NFS 相对或绝对路径。缺省走指纹路由')).toBeVisible();
+    });
+
+    it('数字、枚举、布尔字段同样显示说明并关联到控件', () => {
+      render(<Harness step={flashStep()} scripts={[DESCRIBED]} />);
+      const cases: Array<[HTMLElement, string]> = [
+        [within(fieldOf('刷机重试上限')).getByRole('spinbutton'), '刷机失败后最多重试几次'],
+        [within(fieldOf('机型族')).getByRole('combobox'), '缺省按设备指纹判定'],
+        [within(fieldOf('清除数据')).getByRole('button'), '刷机前清除 userdata'],
+      ];
+      for (const [control, text] of cases) {
+        const description = screen.getByText(text);
+        expect(description.id).not.toBe('');
+        expect(control).toHaveAttribute('aria-describedby', description.id);
+      }
+    });
+
+    it('没有说明的字段不渲染空段落、不挂 aria-describedby', () => {
+      render(<Harness step={flashStep()} scripts={[DESCRIBED]} />);
+      expect(within(fieldOf('通道')).getByRole('textbox')).not.toHaveAttribute('aria-describedby');
+      expect(fieldOf('通道').nextElementSibling).toBeNull();
     });
   });
 

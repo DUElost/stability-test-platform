@@ -584,15 +584,50 @@ describe('PlanCanvas', () => {
 
 
 
-    it('全局超时留空视为不限、负数夹到 0', () => {
+    it('巡检时长：留空、0、负数都按「不限」（null）提交，正数原样提交', () => {
+      // 后端写入边界 ge=1：此前 0 / 负数夹到 0 会在保存时收到 422
       const onTimeoutChange = vi.fn();
       render(<Harness onTimeoutChange={onTimeoutChange} />);
+      const input = screen.getByLabelText('巡检时长');
+      expect(input).toHaveValue(3600);
+      expect(input).toHaveAttribute('min', '1');
 
-      fireEvent.change(screen.getByDisplayValue('3600'), { target: { value: '-5' } });
-      expect(onTimeoutChange).toHaveBeenLastCalledWith(0);
-
-      fireEvent.change(screen.getByPlaceholderText('不限'), { target: { value: '' } });
+      fireEvent.change(input, { target: { value: '-5' } });
       expect(onTimeoutChange).toHaveBeenLastCalledWith(null);
+
+      fireEvent.change(input, { target: { value: '7200' } });
+      expect(onTimeoutChange).toHaveBeenLastCalledWith(7200);
+
+      fireEvent.change(input, { target: { value: '0' } });
+      expect(onTimeoutChange).toHaveBeenLastCalledWith(null);
+
+      fireEvent.change(input, { target: { value: '' } });
+      expect(onTimeoutChange).toHaveBeenLastCalledWith(null);
+    });
+
+    it('巡检时长不再叫「全局超时」，说明行写明自 init 完成起计、到点算成功', () => {
+      render(<Harness />);
+      expect(screen.queryByText('全局超时')).not.toBeInTheDocument();
+      const summary = screen.getByTestId('plan-patrol-duration-summary');
+      expect(summary).toHaveTextContent('每台设备完成初始化后开始计时，巡检满 1h 0m 后在下一轮巡检前正常结束（算成功）');
+      expect(screen.getByLabelText('巡检时长')).toHaveAttribute('aria-describedby', summary.id);
+
+      fireEvent.change(screen.getByLabelText('巡检时长'), { target: { value: '' } });
+      expect(summary).toHaveTextContent('巡检时长不限：巡检会一直进行，直到手动退出或中止。');
+    });
+
+    it('没有启用的巡检步骤时说明巡检时长不生效', () => {
+      const noPatrol: PipelineDef = {
+        lifecycle: {
+          init: [makeStep({ step_id: 'init_a' })],
+          patrol: { interval_seconds: 60, steps: [makeStep({ step_id: 'patrol_off', enabled: false })] },
+          teardown: [],
+        },
+      };
+      render(<Harness lifecycle={noPatrol} />);
+      expect(screen.getByTestId('plan-patrol-duration-summary')).toHaveTextContent(
+        '当前没有巡检步骤，巡检时长不生效。',
+      );
     });
   });
 

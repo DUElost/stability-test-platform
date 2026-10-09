@@ -298,7 +298,8 @@ def invoke(tmp_path, *, dry_run=False, ops=None, probe=None, confirm_target="con
 
 @pytest.fixture(autouse=True)
 def _stub_entry_probe(monkeypatch):
-    """S4 会探测站点入口（`/` 200）；单测不联网，统一 stub 为通过。"""
+    """S4 会探测 /health 与站点入口（`/` 200）；单测不联网，统一 stub 为通过。"""
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
     monkeypatch.setattr(stages, "await_frontend", lambda *a, **k: True)
 
 

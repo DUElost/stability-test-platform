@@ -974,6 +974,44 @@ def _empty_override_if_branch(test: ast.AST, key_read_vars: set[str]) -> str | N
     return None
 
 
+def _override_under_clearing_transform(
+    fn: ast.FunctionDef,
+    node: ast.AST,
+    param_key: str | None,
+    env_key: str | None,
+    module_scope: dict[str, ast.AST],
+) -> bool:
+    """override 键是否落在 And/Compare **操作数**内（复审 X2）。
+
+    仅当变换包裹 override 本身时拒绝——Dict 里无关的 ``flag == "true"`` 不得误伤。
+    """
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.BoolOp) and isinstance(sub.op, ast.And):
+            for val in sub.values:
+                keys = _key_markers(fn, val, module_scope)
+                if (param_key and param_key in keys) or (env_key and env_key in keys):
+                    return True
+        elif isinstance(sub, ast.Compare):
+            keys = _key_markers(fn, sub, module_scope)
+            if (param_key and param_key in keys) or (env_key and env_key in keys):
+                return True
+    return False
+
+
+def _node_is_proven_override_value(
+    fn: ast.FunctionDef,
+    node: ast.AST,
+    param_key: str | None,
+    env_key: str | None,
+    module_scope: dict[str, ast.AST],
+) -> bool:
+    """节点是否为已证明保留 override 值/空值语义的有限形态（复审 W3/X2）。"""
+    if _override_under_clearing_transform(fn, node, param_key, env_key, module_scope):
+        return False
+    keys = _key_markers(fn, node, module_scope)
+    return bool((param_key and param_key in keys) or (env_key and env_key in keys))
+
+
 def _expr_is_live_override(
     fn: ast.FunctionDef,
     expr: ast.AST,
@@ -982,18 +1020,16 @@ def _expr_is_live_override(
     env_key: str | None,
     module_scope: dict[str, ast.AST],
 ) -> bool:
-    """表达式在 ``lineno`` 处是否仍承载当前 param/env override（复审 W3）。
+    """表达式在 ``lineno`` 处是否仍承载当前 param/env override（复审 W3/X2）。
 
-    Name 走 reaching def；字面量空串 / 默认锚调用等不得凭历史变量名冒充空值守卫。
+    Name 走 reaching def；仅对值语义可证明的有限形态放行——键标记本身不够。
     """
     if isinstance(expr, ast.Name):
         src = _name_value_at(fn, expr.id, lineno)
         if src is None:
             return False
-        keys = _key_markers(fn, src, module_scope)
-    else:
-        keys = _key_markers(fn, expr, module_scope)
-    return bool((param_key and param_key in keys) or (env_key and env_key in keys))
+        return _node_is_proven_override_value(fn, src, param_key, env_key, module_scope)
+    return _node_is_proven_override_value(fn, expr, param_key, env_key, module_scope)
 
 
 def _live_override_names_at(
@@ -1008,12 +1044,37 @@ def _live_override_names_at(
     live: set[str] = set()
     for name in names:
         src = _name_value_at(fn, name, lineno)
-        if src is None:
-            continue
-        keys = _key_markers(fn, src, module_scope)
-        if (param_key and param_key in keys) or (env_key and env_key in keys):
+        if src is not None and _node_is_proven_override_value(
+            fn, src, param_key, env_key, module_scope
+        ):
             live.add(name)
     return live
+
+
+def _expr_reaches_root_call(
+    fn: ast.FunctionDef, expr: ast.AST, lineno: int, roots: list[str], *, _seen: set[int] | None = None
+) -> bool:
+    """表达式是否经有限 Name 回溯到达默认锚调用（复审 X1）。"""
+    seen = _seen if _seen is not None else set()
+    if id(expr) in seen:
+        return False
+    seen.add(id(expr))
+    for sub in ast.walk(expr):
+        if isinstance(sub, ast.Call) and _call_name(sub) in roots:
+            return True
+        if isinstance(sub, ast.Name):
+            src = _name_value_at(fn, sub.id, lineno)
+            if src is not None and _expr_reaches_root_call(fn, src, lineno, roots, _seen=seen):
+                return True
+    return False
+
+
+def _returns_consume_default_root(fn: ast.FunctionDef, roots: list[str]) -> bool:
+    """任一 return 是否关联到默认锚结果——有 fallback 却丢弃则 False（复审 X1）。"""
+    for ret in (n for n in ast.walk(fn) if isinstance(n, ast.Return) and n.value is not None):
+        if _expr_reaches_root_call(fn, ret.value, ret.lineno, roots):
+            return True
+    return False
 
 
 def _lazy_guard_verdict(
@@ -1444,6 +1505,7 @@ def _validate_host_local_root(anchor: dict, contract: dict, repo: Path, discover
                     f"{anchor['id']}: 消费者 {anchor['file']}:{consumer} 内出现 __file__ 深度资源路径——C1 违例"
                 )
         key_vars = _key_read_vars(fn, {k for k in (param_key, env_key) if k}, fa, set(), set())
+        consumer_lazy = 0
         for call in _find_call_nodes(fn):
             name = _call_name(call)
             if name not in roots:
@@ -1452,6 +1514,7 @@ def _validate_host_local_root(anchor: dict, contract: dict, repo: Path, discover
                 call, fn, fa, key_vars, param_key=param_key, env_key=env_key, module_scope=module_scope
             )
             if verdict == "lazy":
+                consumer_lazy += 1
                 lazy_root_calls += 1
                 if _calls_project_component(fn, fam):
                     project_ok = True
@@ -1465,6 +1528,12 @@ def _validate_host_local_root(anchor: dict, contract: dict, repo: Path, discover
                     f"{anchor['id']}: {anchor['file']}:{consumer} 对默认锚 {name}() 的调用被急切求值——"
                     "override 分支不得依赖默认锚导入"
                 )
+        # 有惰性 fallback 但其结果未进入最终返回——空 override 时丢弃默认根（复审 X1）
+        if consumer_lazy > 0 and not _returns_consume_default_root(fn, roots):
+            errors.append(
+                f"{anchor['id']}: {anchor['file']}:{consumer} 最终返回未关联默认根 fallback——"
+                "空 override 时会丢弃默认 authority（需人工分类）"
+            )
     if roots and lazy_root_calls == 0:
         errors.append(f"{anchor['id']}: 默认锚 {roots} 未被任何消费者惰性消费")
     elif roots and not project_ok:
@@ -1652,6 +1721,9 @@ def _classify_effective(
     fn: ast.FunctionDef, node: ast.AST, param_key: str, env_key: str, module_scope: dict[str, ast.AST]
 ) -> tuple[str, str]:
     """对单个消费点表达式分类：param-first / env-first / env-only / param-only / ambiguous / no-chain。"""
+    # 非透明变换：And/Compare 包裹 override 时不得因子树 Or/键标记放行（复审 X2）
+    if _override_under_clearing_transform(fn, node, param_key, env_key, module_scope):
+        return "no-chain", f"L{getattr(node, 'lineno', '?')}"
     chains: list[ast.BoolOp] = []
     for sub in ast.walk(node):
         if isinstance(sub, ast.BoolOp) and isinstance(sub.op, ast.Or):
@@ -3140,6 +3212,37 @@ def run_self_test() -> int:
             "R38 非 override Or 左侧",
         )
 
+        # --- 红 R39：最终 return 用否定选择式丢弃已算默认根（复审 X1） ---
+        lib = AGENT_SETUP_LIB.format(subdir="alpha", param="alpha_resources_dir", envkey="STP_ALPHA_RESOURCES_DIR")
+        lib = lib.replace(
+            "    return Path(base) / (cfg.get(\"project\") or \"legacy\")",
+            '    return Path(\n'
+            '        env("STP_ALPHA_RESOURCES_DIR", "")\n'
+            '        if not cfg.get("alpha_resources_dir")\n'
+            '        else cfg.get("alpha_resources_dir")\n'
+            '    ) / (cfg.get("project") or "legacy")',
+        )
+        expect(
+            _errors_of(_write_fixture(Path(tmp) / "r39", alpha_lib=lib)),
+            "未关联默认根",
+            "R39 最终 return 丢弃默认根",
+        )
+
+        # --- 红 R40：``(param or env) and ""`` 清零后仍冒充活值（复审 X2） ---
+        lib = AGENT_SETUP_LIB.format(subdir="alpha", param="alpha_resources_dir", envkey="STP_ALPHA_RESOURCES_DIR")
+        lib = lib.replace(
+            "    if not base:\n        base = _default_resources_root()\n",
+            "    if not base:\n"
+            "        base = _default_resources_root()\n"
+            '    base = (cfg.get("alpha_resources_dir") or env("STP_ALPHA_RESOURCES_DIR", "")) and ""\n'
+            "    base = _default_resources_root() if not base else base\n",
+        )
+        expect(
+            _errors_of(_write_fixture(Path(tmp) / "r40", alpha_lib=lib)),
+            "急切求值",
+            "R40 And 清零冒充活值",
+        )
+
         # --- 红 R16：base ref 不可解析 = 不可验证 ---
         git_root = Path(tmp) / "gitrepo"
         _write_fixture(git_root)
@@ -3178,6 +3281,7 @@ def run_self_test() -> int:
         "额外错误目录 / 多余后缀 / 片段错序 / 前缀多余片段 / 别名复用（多来源）/ 未使用链掩盖 / "
         "同名覆盖 / 变量返回 literal / 条件表达式 env 优先 / 守卫方向反转 / 否定 IfExp 无法证明 / "
         "IfExp 非空分支默认锚 / 变量双键 IfExp / 失效变量名守卫 / 非 override Or 左侧 / "
+        "最终 return 丢弃默认根 / And 清零冒充活值 / "
         "删 param override / env 先于 param / 变量 env 优先 / "
         "例外扩张 / base 不可验证 → 红；agent-dir 形态 / 显式 override / 变量 param 先行 / "
         "else 空分支惰性 / IfExp 空分支惰性 / 正确否定等价 / parents 与 tools_cache 字样不误报 → 绿）"

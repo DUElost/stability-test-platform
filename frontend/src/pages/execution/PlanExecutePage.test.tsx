@@ -725,7 +725,8 @@ describe('PlanExecutePage', () => {
     });
 
     expect(await screen.findByText(/巡检周期：1h 0m/)).toBeInTheDocument();
-    expect(screen.getByText(/超时：2m 5s/)).toBeInTheDocument();
+    // 字段名叫 timeout，展示口径是「巡检时长」（planTiming.ts）
+    expect(screen.getByText(/巡检时长：2m 5s/)).toBeInTheDocument();
 
     await goToDeviceStep();
     fireEvent.click(await screen.findByRole('checkbox', { name: /DEV-1/ }));
@@ -735,7 +736,7 @@ describe('PlanExecutePage', () => {
     expect(screen.getByText('1h 0m')).toBeInTheDocument();
     expect(screen.getByText('2m 5s')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '巡检周期说明' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '超时说明' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '巡检时长说明' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '编辑 Plan' }));
     expect(mocks.navigate).toHaveBeenCalledWith('/orchestration/plans/7');
