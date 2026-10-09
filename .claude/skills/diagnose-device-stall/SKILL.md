@@ -29,9 +29,9 @@ description: 设备离线 / PlanRun 卡死（界面上称「任务」卡死）�
 6. 如果出现 USB 层异常（`lsusb` 不识别、Hosts 页「在线 vs USB」差值异常或设备数为 0），先问 L0
    意图 / 作业层：向现场负责人确认这批设备是否被有意断开、关机或搬迁。平台侧没有 L0 判据，
    见 `docs/operations/host-device-visibility-triage.md` §1 L0 行。
-7. 如果 L0 成立，停止本流程，不执行第 8–12 步，也不按 L1–L4 定成因。
+7. 如果 L0 成立，停止本流程，不执行第 8–13 步，也不按 L1–L4 定成因。
 8. 按 triage 文档 §1 判别表与 §2 只读采集命令，定位 L1 内核、L2 adb server、L3 设备 adbd 或
-   L4 设备 USB 功能集。定位前不得执行第 9–12 步。
+   L4 设备 USB 功能集。定位前不得执行第 9–13 步。
 9. 如果 L1 或 L2 判据成立，确认主机空闲：主机详情接口 `GET /api/v1/hosts/{id}` 返回的
    `active_jobs` 为空列表。如果不为空，等主机空闲后再执行第 10–11 步。
 
@@ -52,9 +52,9 @@ description: 设备离线 / PlanRun 卡死（界面上称「任务」卡死）�
 11. 如果 L2 判据成立（triage 文档 §2：ADB 接口 `ff:42` 的设备集合 ⊋ `adb devices` 列表），且第 2 步
     只看到一个 adb server 实例，运行 `adb kill-server && adb start-server`。
     预期：`adb devices` 列表与 ADB 接口设备集合相等。
-    如果第 2 步看到多个 adb server 实例，不重启 server，按 triage 文档 §1 L2 行处理
+12. 如果 L2 判据成立，且第 2 步看到多个 adb server 实例，不重启 server，按 triage 文档 §1 L2 行处理
     （Agent 自检，可选自愈，#160）。
-12. 如果 L4 判据成立（设备在 USB 上有枚举，但没有 ADB 接口 `ff:42`；例如 MediaTek 机型的 MIDI 态
+13. 如果 L4 判据成立（设备在 USB 上有枚举，但没有 ADB 接口 `ff:42`；例如 MediaTek 机型的 MIDI 态
     `0e8d:2046`），在设备屏幕上把 USB 配置切回 MTP / 文件传输并开启 USB 调试。
     预期：triage 文档 §2 的 `ff:42` 探针列出该设备，`adb devices` 中该设备的 state 为 `device`。
     如果 state 为 `unauthorized` 或 `offline`，该设备转为 L3，按 triage 文档 §1 L3 行处理。
