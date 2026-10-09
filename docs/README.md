@@ -1,6 +1,6 @@
 # 稳定性测试平台 — 文档中心
 
-> **最后更新**：2026-09-21  
+> **最后更新**：2026-10-09  
 > 本目录为项目**权威文档**入口。冲突时以**代码与测试**为准，并回写此处。  
 > 根目录 [`README.md`](../README.md) 只保留产品概述与快速入口；细则在本树子文档。
 
@@ -16,6 +16,7 @@
 | 查测试怎么跑 / 生产机禁区 | [`development/testing.md`](./development/testing.md) |
 | 查依赖、lock 与本地门禁 | [`development/dependencies-and-quality.md`](./development/dependencies-and-quality.md) |
 | 查 PR、CI、Agent Note 与并行 worktree | [`development/repository-workflow.md`](./development/repository-workflow.md) |
+| 写或改契约类文档、SOP（术语 / 强度词 / 步骤写法） | [`development/writing-conventions.md`](./development/writing-conventions.md) |
 | 查收口判据速查（registry 记录 / worktree / 本地与远端分支） | [`development/closure-cheatsheet.md`](./development/closure-cheatsheet.md) |
 | 理解系统架构 | [`design/00-system-overview.md`](./design/00-system-overview.md) |
 | 查存储角色 / CIFS / NFS / 文件服务器页别称 | [`design/2026-storage-roles-and-aliases.md`](./design/2026-storage-roles-and-aliases.md) |
