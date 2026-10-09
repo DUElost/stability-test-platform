@@ -129,6 +129,11 @@ ALLOWLIST_SUFFIXES = (
 ALLOWLIST_FILES = {
     "docker-compose.yml",
     "docker-compose.override.yml",
+    # npm lockfile 的 integrity（sha512-… base64）片段常落在 SERIAL_LIKE
+    # 形态（12–24 位 A-Z/0-9 混合），不是设备资产；逐 token 放行会随
+    # dependabot  bump 反复误伤（#3620：WPZTIIZPWR3Q）。整文件放行：
+    # lockfile 不是业务/文档资产载体，不含需门禁覆盖的真实 serial/内网主机。
+    "frontend/package-lock.json",
 }
 
 SCAN_SUFFIXES = {
@@ -275,6 +280,14 @@ def _self_test() -> int:
         # 放行：版本号 / 更长的点分串不该被误判
         ("docs/tmp/x.md", "升级到 1.2.3.4.5 版本。", 0),
         ("docs/tmp/x.md", "sha 10.0.31558 无关。", 0),
+        # 放行：npm lockfile integrity base64 片段（#3620）
+        (
+            "frontend/package-lock.json",
+            '"integrity": "sha512-qQoPDZUFV0bh9xA09XydmkjMBpgc1ukJuhMvzQ9QeVmFaHTS9W5TE5CoLmSl3QQyUP9OuHO3x/WPZTIIZPWR3Q=="',
+            0,
+        ),
+        # 对照：同形态 serial 在普通文档仍应命中
+        ("docs/tmp/x.md", "WPZTIIZPWR3Q", 1),
     ]
     bad = 0
     for rel, text, want in cases:
