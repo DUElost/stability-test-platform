@@ -56,6 +56,7 @@
 from __future__ import annotations
 
 import ast
+import functools
 from pathlib import Path
 from textwrap import dedent
 
@@ -353,17 +354,51 @@ def iter_candidates(roots: list[Path]) -> list[Path]:
     return found
 
 
-def scan_offenders(roots: list[Path]) -> dict[str, list[tuple[str, list[int]]]]:
-    """返回 `{repo 相对路径: [(函数名, [行号…])…]}`，只含未使用助手的 offender。"""
-    offenders: dict[str, list[tuple[str, list[int]]]] = {}
+def _default_roots() -> list[Path]:
+    roots = [REPO_ROOT / d for d in SCAN_DIRS]
+    missing = [str(r.relative_to(REPO_ROOT)) for r in roots if not r.is_dir()]
+    assert not missing, f"扫描目录消失（判据会静默零命中）：{missing}"
+    return roots
+
+
+def _roots_are_default(roots: list[Path]) -> bool:
+    want = [(REPO_ROOT / d).resolve() for d in SCAN_DIRS]
+    got = [r.resolve() for r in roots]
+    return got == want
+
+
+@functools.lru_cache(maxsize=1)
+def _default_corpus() -> tuple[tuple[str, ast.AST], ...]:
+    """Parse SCAN_DIRS once per process. Repo files are immutable for this module."""
+    items: list[tuple[str, ast.AST]] = []
+    for path in iter_candidates(_default_roots()):
+        rel = path.relative_to(REPO_ROOT).as_posix()
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        items.append((rel, tree))
+    return tuple(items)
+
+
+def _iter_trees(roots: list[Path]) -> list[tuple[str, ast.AST]]:
+    if _roots_are_default(roots):
+        return list(_default_corpus())
+    out: list[tuple[str, ast.AST]] = []
     for path in iter_candidates(roots):
         try:
             rel = path.relative_to(REPO_ROOT).as_posix()
         except ValueError:
             rel = path.as_posix()  # 判别力自证的临时目录不在仓库内
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        out.append((rel, tree))
+    return out
+
+
+def _scan_offenders_from_trees(
+    trees: list[tuple[str, ast.AST]] | tuple[tuple[str, ast.AST], ...],
+) -> dict[str, list[tuple[str, list[int]]]]:
+    offenders: dict[str, list[tuple[str, list[int]]]] = {}
+    for rel, tree in trees:
         if rel in EXEMPT:
             continue
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         per_fn: list[tuple[str, list[int]]] = []
         for fn in (n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)):
             scope = _TmpScope(fn)
@@ -375,11 +410,24 @@ def scan_offenders(roots: list[Path]) -> dict[str, list[tuple[str, list[int]]]]:
     return offenders
 
 
-def _default_roots() -> list[Path]:
-    roots = [REPO_ROOT / d for d in SCAN_DIRS]
-    missing = [str(r.relative_to(REPO_ROOT)) for r in roots if not r.is_dir()]
-    assert not missing, f"扫描目录消失（判据会静默零命中）：{missing}"
-    return roots
+@functools.lru_cache(maxsize=1)
+def _cached_default_offenders() -> tuple[tuple[str, tuple[tuple[str, tuple[int, ...]], ...]], ...]:
+    """Immutable snapshot so multiple tests share one default-root scan."""
+    raw = _scan_offenders_from_trees(_default_corpus())
+    return tuple(
+        (rel, tuple((name, tuple(lines)) for name, lines in per_fn))
+        for rel, per_fn in sorted(raw.items())
+    )
+
+
+def scan_offenders(roots: list[Path]) -> dict[str, list[tuple[str, list[int]]]]:
+    """返回 `{repo 相对路径: [(函数名, [行号…])…]}`，只含未使用助手的 offender。"""
+    if _roots_are_default(roots):
+        return {
+            rel: [(name, list(lines)) for name, lines in per_fn]
+            for rel, per_fn in _cached_default_offenders()
+        }
+    return _scan_offenders_from_trees(_iter_trees(roots))
 
 
 def test_offenders_equal_baseline_no_growth_no_staleness() -> None:
@@ -655,13 +703,17 @@ def test_detector_discriminates(tmp_path: Path) -> None:
 def _callee_keys_in(roots: list[Path]) -> set[str]:
     """语料里真实出现过的调用者名字（含末段方法名，便于按 `json.loads` 这类点号名比对）。"""
     keys: set[str] = set()
-    for path in iter_candidates(roots):
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    for _rel, tree in _iter_trees(roots):
         for call in (n for n in ast.walk(tree) if isinstance(n, ast.Call)):
             key = _callee_key(call)
             keys.add(key)
             keys.add(key.rsplit(".", 1)[-1])
     return keys
+
+
+@functools.lru_cache(maxsize=1)
+def _cached_default_callee_keys() -> frozenset[str]:
+    return frozenset(_callee_keys_in(_default_roots()))
 
 
 def test_product_consumers_are_load_bearing() -> None:
@@ -670,7 +722,7 @@ def test_product_consumers_are_load_bearing() -> None:
     登记一个不再被任何代码使用的「产物消费者」，等于给未来留一个静默放过位：
     以后同名函数读源码再判禁词会被直接判成产物而不再受检。故此处强制「要么在场，要么删掉」。
     """
-    keys = _callee_keys_in(_default_roots())
+    keys = _cached_default_callee_keys()
     dead = sorted(k for k in _PRODUCT_CONSUMERS if k not in keys)
     assert not dead, f"这些产物消费者已不在扫描面里，请删除（留着就是未来的漏判位）：{dead}"
     no_reason = sorted(k for k, v in _PRODUCT_CONSUMERS.items() if not v.strip())
@@ -694,12 +746,10 @@ def test_tightening_only_subtracts_never_adds() -> None:
         return names
 
     lost: list[str] = []
-    for path in iter_candidates(_default_roots()):
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    for rel, tree in _iter_trees(_default_roots()):
         for fn in (n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)):
             old, new = legacy_bound_names(fn), _source_bound_names(fn)
             if not new <= old:
-                rel = path.relative_to(REPO_ROOT).as_posix() if path.is_relative_to(REPO_ROOT) else path.name
                 lost.append(f"{rel}:{fn.name} 新增绑定 {sorted(new - old)}")
     assert not lost, "判据出现了旧口径没有的绑定（本收紧只做减法）：\n" + "\n".join(lost)
 
@@ -723,16 +773,12 @@ def _sites_without_axis2(tree: ast.AST) -> dict[tuple[str, int], list[int]]:
     return out
 
 
-def test_axis2_only_subtracts_sites_never_adds() -> None:
-    """轴二必须是旧口径的**逐位点子集**：只允许少判，不允许多判。
-
-    与 `test_tightening_only_subtracts_never_adds` 同一手法，但下沉到**断言级**——
-    名字级比对抓不到「同一函数里放过了一条、又新命中另一条」这种互相掩盖的改动。
-    """
+@functools.lru_cache(maxsize=1)
+def _default_axis2_diff() -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Shared old-vs-new axis2 site walk for default corpus (two tests share this)."""
     lost: list[str] = []
-    for path in iter_candidates(_default_roots()):
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        rel = path.relative_to(REPO_ROOT).as_posix() if path.is_relative_to(REPO_ROOT) else path.name
+    released: list[str] = []
+    for rel, tree in _default_corpus():
         if rel in EXEMPT:
             continue
         new: dict[tuple[str, int], list[int]] = {}
@@ -745,6 +791,18 @@ def test_axis2_only_subtracts_sites_never_adds() -> None:
             extra = sorted(set(new.get(key, [])) - set(lines))
             if extra:
                 lost.append(f"{rel}:{key[0]} 出现旧口径没有的位点 {extra}")
+            for ln in sorted(set(lines) - set(new.get(key, []))):
+                released.append(f"{rel}:{ln}({key[0]})")
+    return tuple(lost), tuple(released)
+
+
+def test_axis2_only_subtracts_sites_never_adds() -> None:
+    """轴二必须是旧口径的**逐位点子集**：只允许少判，不允许多判。
+
+    与 `test_tightening_only_subtracts_never_adds` 同一手法，但下沉到**断言级**——
+    名字级比对抓不到「同一函数里放过了一条、又新命中另一条」这种互相掩盖的改动。
+    """
+    lost, _released = _default_axis2_diff()
     assert not lost, "轴二新增了旧口径未命中的位点（本收紧只做减法）：\n" + "\n".join(lost)
 
 
@@ -754,21 +812,7 @@ def test_product_path_axis_is_load_bearing() -> None:
     一条从未命中过的放过规则就是未来的黑洞：它会静默吞掉同形态的真源扫描。
     （#2639 第三批用 `test_product_consumers_are_load_bearing` 钉同类问题。）
     """
-    released: list[str] = []
-    for path in iter_candidates(_default_roots()):
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        rel = path.relative_to(REPO_ROOT).as_posix() if path.is_relative_to(REPO_ROOT) else path.name
-        if rel in EXEMPT:
-            continue
-        new: dict[tuple[str, int], list[int]] = {}
-        for fn in (n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)):
-            scope = _TmpScope(fn)
-            lines = _negations_on_source(fn, _source_bound_names(fn, scope), scope)
-            if lines:
-                new[(fn.name, fn.lineno)] = lines
-        for (fname, flineno), lines in _sites_without_axis2(tree).items():
-            for ln in sorted(set(lines) - set(new.get((fname, flineno), []))):
-                released.append(f"{rel}:{ln}({fname})")
+    _lost, released = _default_axis2_diff()
     assert released, (
         "轴二在真语料里零放过：要么这条路径规则已经是死条目，要么存量产物读取已被动过——"
         "两者都要求重新核对本判据，不要留一条没人验证的放过路径"
@@ -780,7 +824,7 @@ def test_tmp_factories_are_load_bearing() -> None:
 
     登记的是一条**放过**路径：留一条死条目＝给未来某个同名调用预留的静默漏判位。
     """
-    keys = _callee_keys_in(_default_roots())
+    keys = _cached_default_callee_keys()
     dead = sorted(k for k in _TMP_FACTORIES if k not in keys)
     assert not dead, f"这些临时工厂已不在扫描面里，请删除（留着就是未来的漏判位）：{dead}"
     no_reason = sorted(k for k, v in _TMP_FACTORIES.items() if not v.strip())

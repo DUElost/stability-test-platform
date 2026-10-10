@@ -15,11 +15,13 @@
 """
 from __future__ import annotations
 
+import atexit
 import importlib.util
 import json
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -38,6 +40,9 @@ COPY_PATHS = (
     "tool_manifest.json",
     "tools/dev/resource_anchor_contract.json",
 )
+
+#: Session-scoped pristine subset — IsolationMutations copy from here, not the live tree.
+_SUBSET_TEMPLATE: Path | None = None
 
 
 def _load_checker():
@@ -79,17 +84,32 @@ def _base_ref() -> str:
     return "origin/main" if proc.returncode == 0 else "HEAD"
 
 
-def _copy_repo_subset(dest: Path) -> Path:
+def _build_repo_subset(dest: Path, *, source_root: Path) -> Path:
     shutil.copytree(
-        ROOT / "backend" / "agent" / "scripts",
+        source_root / "backend" / "agent" / "scripts",
         dest / "backend" / "agent" / "scripts",
         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
     )
     for rel in COPY_PATHS:
         target = dest / rel
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT / rel, target)
+        shutil.copy2(source_root / rel, target)
     return dest
+
+
+def _subset_template() -> Path:
+    """Build the isolation subset once; per-test copies stay mutation-isolated."""
+    global _SUBSET_TEMPLATE
+    if _SUBSET_TEMPLATE is None:
+        dest = Path(tempfile.mkdtemp(prefix="resource_anchor_subset_"))
+        _build_repo_subset(dest, source_root=ROOT)
+        _SUBSET_TEMPLATE = dest
+        atexit.register(shutil.rmtree, dest, True)
+    return _SUBSET_TEMPLATE
+
+
+def _copy_repo_subset(dest: Path) -> Path:
+    return _build_repo_subset(dest, source_root=_subset_template())
 
 
 def _errors_of(copy: Path) -> list[str]:
