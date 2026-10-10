@@ -42,7 +42,12 @@ from backend.core.metrics import (
 )
 from backend.core.settings.scheduler import get_scheduler_settings
 from backend.models.device_lease import DeviceLease
-from backend.models.enums import JobStatus, LeaseStatus, LeaseType
+from backend.models.enums import (
+    TERMINAL_JOB_STATUSES,
+    JobStatus,
+    LeaseStatus,
+    LeaseType,
+)
 from backend.models.job import JobInstance
 from backend.models.plan_run import PlanRun
 from backend.services.aggregator import PlanAggregator
@@ -58,11 +63,8 @@ from backend.core.job_timeout_config import (
 
 # ── Phase 4b: terminal statuses for D5 cleanup.  Does NOT include UNKNOWN —
 #    UNKNOWN must go through the grace-period branch.
-_FINAL_STATUSES: set[str] = {
-    JobStatus.COMPLETED.value,
-    JobStatus.FAILED.value,
-    JobStatus.ABORTED.value,
-}
+#    Single source is ``TERMINAL_JOB_STATUSES`` (#3646 emergency release uses it too).
+_FINAL_STATUSES = TERMINAL_JOB_STATUSES
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
