@@ -147,3 +147,75 @@ def test_nested_sensitive_path_clears_enum_const_and_examples():
     assert schema["wifi"]["const"]["psk"] == SENTINEL_B
     assert schema["wifi"]["examples"][0]["password"] == SENTINEL_B
     assert schema["wifi"]["properties"]["password"]["enum"] == [SENTINEL_A]
+
+
+def test_integer_path_segment_is_applied_inside_schema_slots():
+    """整数路径段必须参与槽位清除。
+
+    修复前：``_redact_schema_slot`` 递归列表时丢掉下标，``("servers", 0, "psk")``
+    对不上，default/const/enum/examples 里的明文仍在。
+    修复后：值内部的下标保留；只清除下标 0 的 psk，下标 1 保留。
+    ``enum`` / ``examples`` 最外层仍是候选值列表，每个候选都按同一路径清除。
+    """
+    schema = {
+        "servers": {
+            "type": "array",
+            "default": [
+                {"name": "a", "psk": SENTINEL_A},
+                {"name": "b", "psk": "keep-default"},
+            ],
+            "const": [
+                {"name": "a", "psk": SENTINEL_B},
+                {"name": "b", "psk": "keep-const"},
+            ],
+            "enum": [
+                [
+                    {"name": "a", "psk": SENTINEL_A},
+                    {"name": "b", "psk": "keep-enum"},
+                ],
+                [
+                    {"name": "a", "psk": SENTINEL_B},
+                    {"name": "b", "psk": "keep-enum-2"},
+                ],
+            ],
+            "examples": [
+                [
+                    {"name": "a", "psk": SENTINEL_A},
+                    {"name": "b", "psk": "keep-examples"},
+                ],
+            ],
+        }
+    }
+    redacted = redact_schema(schema, {("servers", 0, "psk")})
+    dumped = json.dumps(redacted, ensure_ascii=False)
+    assert SENTINEL_A not in dumped and SENTINEL_B not in dumped
+
+    servers = redacted["servers"]
+    assert servers["default"] == [
+        {"name": "a", "psk": None},
+        {"name": "b", "psk": "keep-default"},
+    ]
+    assert servers["const"] == [
+        {"name": "a", "psk": None},
+        {"name": "b", "psk": "keep-const"},
+    ]
+    assert servers["enum"] == [
+        [
+            {"name": "a", "psk": None},
+            {"name": "b", "psk": "keep-enum"},
+        ],
+        [
+            {"name": "a", "psk": None},
+            {"name": "b", "psk": "keep-enum-2"},
+        ],
+    ]
+    assert servers["examples"] == [
+        [
+            {"name": "a", "psk": None},
+            {"name": "b", "psk": "keep-examples"},
+        ],
+    ]
+    assert schema["servers"]["default"][0]["psk"] == SENTINEL_A
+    assert schema["servers"]["const"][0]["psk"] == SENTINEL_B
+    assert schema["servers"]["enum"][1][0]["psk"] == SENTINEL_B
+    assert schema["servers"]["examples"][0][0]["psk"] == SENTINEL_A

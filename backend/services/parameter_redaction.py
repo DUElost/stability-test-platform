@@ -68,7 +68,11 @@ def _redact_field(field: Any, path: tuple, paths: set[tuple]) -> Any:
             cleaned[key] = None
         elif key in _SCHEMA_SECRET_SLOTS:
             # 当前节点本身不敏感时，default/enum/const/examples 仍可能嵌着子路径明文。
-            cleaned[key] = _redact_schema_slot(value, relative)
+            cleaned[key] = _redact_schema_slot(
+                value,
+                relative,
+                unwrap_candidates=key in ("enum", "examples"),
+            )
         elif key == "properties" and isinstance(value, dict):
             cleaned[key] = {
                 name: _redact_field(child, path + (name,), paths)
@@ -79,14 +83,23 @@ def _redact_field(field: Any, path: tuple, paths: set[tuple]) -> Any:
     return cleaned
 
 
-def _redact_schema_slot(value: Any, relative: set[tuple]) -> Any:
-    """按与 default 相同的参数路径清除槽位值。
+def _redact_schema_slot(
+    value: Any,
+    relative: set[tuple],
+    *,
+    unwrap_candidates: bool = False,
+) -> Any:
+    """按参数路径清除槽位值。
 
-    ``enum`` / ``examples`` 是同一路径上的候选值列表。列表下标不是参数路径，
-    逐项清除后才能盖住只靠路径登记、键名本身不敏感的嵌套项。
+    ``enum`` / ``examples`` 最外层是同一字段的候选值，这一层下标不是参数路径。
+    候选值内部以及 ``default`` / ``const`` 的列表下标属于参数路径
+    （例如 ``("servers", 0, "psk")``），交给 ``redact_params`` 保留。
     """
-    if isinstance(value, list):
-        return [_redact_schema_slot(item, relative) for item in value]
+    if unwrap_candidates and isinstance(value, list):
+        return [
+            _redact_schema_slot(item, relative, unwrap_candidates=False)
+            for item in value
+        ]
     return redact_params(value, relative)
 
 
