@@ -185,6 +185,7 @@ export default function PlanExecutePage() {
   const { draftConsumedRef, clearDraft } = usePlanExecuteDraftWriter({ draft: draftSnapshot });
 
   const [preview, setPreview] = useState<PlanRunPreview | null>(null);
+  const [confirmationStale, setConfirmationStale] = useState(false);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [previewing, setPreviewing] = useState(false);
@@ -282,19 +283,16 @@ export default function PlanExecutePage() {
   const executableStepCount =
     selectedPlan?.steps?.filter((step) => step.enabled !== false).length ?? 0;
 
-  const { data: scriptsList, isError: scriptsError, refetch: refetchScripts } = useQuery({
-    queryKey: ['scripts', 'active'],
-    queryFn: () => api.scripts.list(true),
-    enabled: phase === 'plan' && selectedPlanId != null,
-    staleTime: 60_000,
+  const {
+    data: savedProjection,
+    isError: projectionError,
+    refetch: refetchProjection,
+  } = useQuery({
+    queryKey: planKeys.parameterProjection(selectedPlanId ?? 0),
+    queryFn: () => api.plans.parameterProjection(selectedPlanId!),
+    enabled: selectedPlanId != null,
+    staleTime: 15_000,
   });
-  const scriptParamsByKey = useMemo(() => {
-    const map = new Map<string, Record<string, unknown>>();
-    for (const script of scriptsList ?? []) {
-      map.set(`${script.name}@${script.version}`, script.default_params ?? {});
-    }
-    return map;
-  }, [scriptsList]);
 
   const {
     data: recentPlanRuns = [],
@@ -320,7 +318,7 @@ export default function PlanExecutePage() {
   );
 
   // React 官方"adjust state when prop changes"模式：previewResetKey 为稳定字符串比较。
-  const previewResetKey = `${selectedPlanId}|${selectedDeviceIdsKey}`;
+  const previewResetKey = `${selectedPlanId}|${selectedDeviceIdsKey}|${wifiPoolId ?? ''}`;
   const [prevPreviewResetKey, setPrevPreviewResetKey] = useState(previewResetKey);
   // #819：预览请求代次——重置（改 Plan/改选）与重新发起预览都会使在途响应作废。
   const previewGenerationRef = useRef(0);
@@ -710,6 +708,7 @@ export default function PlanExecutePage() {
         ...p,
         device_ids: frozenDeviceIds,
       });
+      setConfirmationStale(false);
       setDispatchFailure(null);
       toast.info('预览已生成，请核对驾驶舱后再次确认发起');
     } catch (err: unknown) {
@@ -722,6 +721,11 @@ export default function PlanExecutePage() {
 
   const handleConfirm = async () => {
     if (!selectedPlanId || !preview || preview.total_steps === 0) return;
+    const fingerprint = preview.confirmation_fingerprint;
+    if (!fingerprint) {
+      toast.error('本次预览没有确认指纹，请重新预览');
+      return;
+    }
     setSubmitting(true);
     try {
       const trimmedNote = runNote.trim();
@@ -729,13 +733,18 @@ export default function PlanExecutePage() {
         device_ids: [...preview.device_ids],
         ...(trimmedNote ? { note: trimmedNote } : {}),
         ...(wifiPoolId != null ? { wifi_pool_id: wifiPoolId } : {}),
+        confirmation_fingerprint: fingerprint,
       });
       toast.success('Plan 已发起执行');
       clearDraft();
       navigate(`/execution/plan-runs/${run.id}`);
     } catch (err: unknown) {
       const apiError = err instanceof ApiError ? err : null;
-      if (apiError?.status === 503 && apiError.planRunId != null) {
+      if (apiError?.code === 'PLAN_CONFIRMATION_CHANGED') {
+        setPreview(null);
+        setConfirmationStale(true);
+        toast.error(apiError.message || '计划配置已变化，请重新预览并确认');
+      } else if (apiError?.status === 503 && apiError.planRunId != null) {
         setDispatchFailure({
           planRunId: apiError.planRunId,
           message: apiError.message,
@@ -1040,7 +1049,7 @@ export default function PlanExecutePage() {
         />
       )}
 
-      {(hostsError || scriptsError || recentRunsError || wifiPoolsError) && (
+      {(hostsError || projectionError || recentRunsError || wifiPoolsError) && (
         <div className="space-y-1">
           {wifiPoolsError && (
             <div className={cn(ALERT_BANNER.destructive, 'flex items-center justify-between px-4 py-2 text-xs')}>
@@ -1059,10 +1068,10 @@ export default function PlanExecutePage() {
               </button>
             </div>
           )}
-          {scriptsError && (
+          {projectionError && (
             <div className={cn(ALERT_BANNER.destructive, 'flex items-center justify-between px-4 py-2 text-xs')}>
-              <span>脚本列表加载失败：脚本参数默认值可能不显示。</span>
-              <button type="button" onClick={() => void refetchScripts()} className="underline underline-offset-2">
+              <span>参数清单加载失败。没有安全投影时不展示原始参数。</span>
+              <button type="button" onClick={() => void refetchProjection()} className="underline underline-offset-2">
                 重试
               </button>
             </div>
@@ -1229,7 +1238,8 @@ export default function PlanExecutePage() {
             }}
             selectedPlan={selectedPlan}
             executableStepCount={executableStepCount}
-            scriptParamsByKey={scriptParamsByKey}
+            projection={savedProjection}
+            projectionUnavailable={projectionError}
             recentPlanRuns={recentPlanRuns}
             recentPlanRunsLoading={recentPlanRunsLoading}
             onOpenRun={(runId) => navigate(`/execution/plan-runs/${runId}`)}
@@ -1422,8 +1432,9 @@ export default function PlanExecutePage() {
             blockedCount={readinessResult.blockedCount}
             warnings={readinessResult.warnings}
             selectedHostActiveJobs={selectedHostActiveJobs}
-            patrolIntervalSeconds={selectedPlan?.patrol_interval_seconds}
-            timeoutSeconds={selectedPlan?.timeout_seconds}
+            projection={preview ? preview.parameter_projection ?? null : savedProjection}
+            projectionUnavailable={preview ? preview.parameter_projection == null : projectionError}
+            confirmationStale={confirmationStale}
             note={runNote}
             preview={preview}
             wallClock={wallClockEstimate}
