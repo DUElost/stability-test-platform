@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from backend.api.response import ApiResponse, ok
 from backend.api.routes.auth import get_current_active_user, User
 from backend.api.schemas.case_result import TestCaseResultsPayload
+from backend.api.schemas.plan_parameter_projection import ParameterProjection
 from backend.api.schemas.plan_run import (
     JobInstanceOut,
     JobManualActionIn,
@@ -37,10 +38,7 @@ from backend.core.metrics import record_plan_run_devices_query_duration
 from backend.models.enums import PlanRunStatus
 from backend.models.job import JobInstance
 from backend.services.job_artifact_download import build_artifact_download_response
-from backend.services.plan_precheck import (
-    PlanRunDispatchRetryError,
-    retry_plan_run_dispatch,
-)
+from backend.services.plan_precheck import PlanRunDispatchRetryError, retry_plan_run_dispatch
 from backend.services.plan_run_abort import PlanRunAbortError, abort_plan_run
 from backend.services.plan_run_archive import archive_plan_run_logs
 from backend.services.plan_parameter_projection import (
@@ -61,8 +59,7 @@ from backend.services.plan_run_export import (
 )
 from backend.services.plan_run_job_artifacts import list_plan_run_job_artifacts
 from backend.services.plan_run_manual import manual_exit_job_sync, manual_retry_job_sync
-from backend.services.plan_run_read_common import iso as _iso
-from backend.services.plan_run_read_common import require_plan_run as _require_plan_run
+from backend.services.plan_run_read_common import iso as _iso, require_plan_run as _require_plan_run
 from backend.services.plan_run_result_views import (
     build_plan_run_log_events,
     build_plan_run_test_case_results,
@@ -162,7 +159,10 @@ def list_plan_run_jobs(
     return ok(build_plan_run_jobs(db, run_id))
 
 
-@router.get("/plan-runs/{run_id}/jobs/{job_id}/parameter-projection")
+@router.get(
+    "/plan-runs/{run_id}/jobs/{job_id}/parameter-projection",
+    response_model=ApiResponse[ParameterProjection],
+)
 async def get_job_parameter_projection(
     run_id: int, job_id: int, db=Depends(get_async_db),
     _current_user: User = Depends(get_current_active_user),

@@ -711,6 +711,14 @@ _MODEL_PAIRS: tuple[tuple[str, str, str, str], ...] = (
         "frontend/src/utils/api/types.ts",
         "PlanRunTriggerResult",
     ),
+    # U1 follow-up：三条 parameter-projection 端点声明 ApiResponse[ParameterProjection]。
+    # 顶层字段与 types.ts 同名 interface 对齐；嵌套类型不在这条对拍面里。
+    (
+        "backend/api/schemas/plan_parameter_projection.py",
+        "ParameterProjection",
+        "frontend/src/utils/api/types.ts",
+        "ParameterProjection",
+    ),
     # #1520 收官：解析器支持同仓库跨文件基类后，ORMBaseModel 系模型转正
     (
         "backend/api/schemas/jira_run.py",
