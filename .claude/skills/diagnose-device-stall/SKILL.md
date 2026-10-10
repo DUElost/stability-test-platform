@@ -19,13 +19,13 @@ description: 设备离线 / PlanRun 卡死（界面上称「任务」卡死）�
    （只读）。
 2. 在 host 上运行 `pgrep -af 'fork-server server'`（经授权的 SSH，只读），查看 adb server 的实例数、
    端口和属主。
-   正常结果：Linux 生产 host 只有一个实例，端口为默认 5037；WSL 联调环境端口为 5039
-   （`ANDROID_ADB_SERVER_PORT=5039`）。端口配错的表现是「心跳正常但设备数为 0」；
+   正常结果：只有一个实例，端口为默认 5037。端口配错的表现是「心跳正常但设备数为 0」；
    有两个 adb server 时主机变为 DEGRADED。
 3. 在平台的设备页和主机页查看心跳更新时间。
 4. 在 host 上运行 `agentctl health`（默认安装路径 `/opt/stability-test-agent/agentctl`）。
-5. 如果第 1 步查到 ACTIVE 租约，且设备没有在途 PlanRun，改走 **`device-lease-release`**
-   （生产写操作）。在途判据见该 SOP 文档的缺口 G2。
+5. 如果第 1 步查到 ACTIVE 租约，且关联 job 已终态（`COMPLETED`、`FAILED` 或 `ABORTED`），改走
+   **`device-lease-release`**（生产写操作）。`PENDING`、`RUNNING`、`UNKNOWN` 属在途 PlanRun，
+   判据见该 SOP 文档「前置检查」第 6–7 步。
 6. 如果出现 USB 层异常（`lsusb` 不识别、Hosts 页「在线 vs USB」差值异常或设备数为 0），先问 L0
    意图 / 作业层：向现场负责人确认这批设备是否被有意断开、关机或搬迁。平台侧没有 L0 判据，
    见 `docs/operations/host-device-visibility-triage.md` §1 L0 行。
@@ -75,5 +75,3 @@ description: 设备离线 / PlanRun 卡死（界面上称「任务」卡死）�
 - 「在线 n」远小于「USB n」时，多数是刷机后的 **L4 MIDI 存量**（`0e8d:2046`、无 ADB 接口，
   2026-09-14 台账在案）。此时主机侧 rebind 和 kill-server 都无效，执行者不得操作主机；
   出路是在设备侧首次开启 USB 调试。
-- 执行者不得在 Linux 生产 host 上设置 `ANDROID_ADB_SERVER_PORT=5039`：该端口只用于 WSL 联调环境，
-  误配会导致 DEGRADED 或设备数为 0。
