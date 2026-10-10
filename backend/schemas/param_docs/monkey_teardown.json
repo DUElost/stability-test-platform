@@ -3,81 +3,60 @@
   "script_name": "monkey_teardown",
   "entries": [
     {
-      "path": [
-        "process_names"
-      ],
+      "path": ["process_names"],
       "label": "停测进程清单",
-      "meaning": "步骤结束时要在设备侧逐个 force-stop / kill 的进程名或脚本路径清单（monkey 主进程、厂商 monkey、MonkeyTest.sh 看门狗、aimwd 守护等），先停进程再回收与删除文件。",
+      "meaning": "步骤结束时在设备侧逐个 ps 匹配并 kill -9 的进程名或脚本路径清单（厂商 monkey、公开版 monkey、MonkeyTest.sh、aimwd 守护、offlinemonkey、MkWatchdog 等）。此外只要清单里出现 monkey 字样，脚本还固定 force-stop com.android.commands.monkey 与 com.transsion.MkWatchdog，并 setprop sys.audio.monkeycontrl 0。",
       "unit": "字符串列表",
-      "cautions": "清单里没有的进程不会被停；删除看门狗脚本前必须先停其进程，否则残留进程会把脚本再拉起来。",
+      "cautions": "固定的那两条 force-stop 不受本清单控制：换一个自定义清单也不会停止对这两个包的处理。删除看门狗脚本前必须先停其进程，否则残留进程会把脚本再拉起来（#894）。",
       "sensitive": false
     },
     {
-      "path": [
-        "pull_paths"
-      ],
+      "path": ["pull_paths"],
       "label": "产物回收清单",
-      "meaning": "从设备拉回本地产物目录的条目列表，每项形如 {device: 设备端路径（必填）, local_name: 落地文件名（留空取设备路径的文件名）, is_dir: 是否按目录拉取（默认为是）, optional: 允许缺失（默认为否）}。",
+      "meaning": "从设备拉回本地产物目录的条目列表，每项形如 {device: 设备端路径（必填，缺失即取不到落点名）, local_name: 落地文件名（省略该键才取设备路径的文件名，显式传空串不会回落）, is_dir: 是否按目录拉取（默认为是）, optional: 拉取返回失败时是否豁免（默认为否）}。",
       "unit": "对象列表",
-      "cautions": "拉回的文件落在主机 STP_LOG_DIR 下按本次运行归档；不在清单里的设备文件不会被回收，拉取失败（rc≠0 或异常）会让该步判失败，只有 optional 为真的缺失项除外。",
+      "cautions": "回收范围比本清单更宽：无论本清单是否为空，脚本都会再 best-effort 追拉 /data/aee_exp 与 /data/vendor/mtklog/aee_exp 两处 AEE 目录（失败静默忽略）。optional 的豁免只看拉取函数的返回值，它无法区分「路径不存在」与其它拉取失败；拉取过程中抛异常一律计入错误，optional 也豁免不了。产物落在主机 STP_LOG_DIR 下按本次运行归档。",
       "sensitive": false
     },
     {
-      "path": [
-        "clear_aee"
-      ],
+      "path": ["clear_aee"],
       "label": "关闭 AEE 采集",
-      "meaning": "停测后把设备的 AEE core dump/direct 上报属性设为 disable（setprop persist.aee.core.dump/direct disable），避免回收阶段继续产生 AEE 事件。",
+      "meaning": "停测后把设备的 AEE core dump 与 direct 上报属性设为 disable（setprop persist.aee.core.dump/direct disable），避免回收阶段继续产生 AEE 事件。",
       "unit": "布尔",
       "sensitive": false
     },
     {
-      "path": [
-        "cleanup"
-      ],
+      "path": ["cleanup"],
       "label": "清理设备端资源",
-      "meaning": "是否删除本次专项推到设备上的脚本与二进制（MonkeyTest.sh、aim、aimwd、aim.jar、monkey.apk、架构库、blacklist 等），默认执行；显式关闭才保留现场。",
+      "meaning": "是否删除本次专项推到设备上的脚本与二进制（MonkeyTest.sh、offlinemonkey.sh、aim、aimwd、aim.jar、monkey.apk、架构库目录、blacklist 等），默认执行；显式关闭才保留现场。",
       "unit": "布尔",
-      "cautions": "不清理会把残留留给下一专项：设备重启后残留物可能被自启拉起，与当前专项叠加（#894）。",
+      "cautions": "不清理会把残留留给下一专项：设备重启后残留物可能被自启拉起，与当前专项叠加（#894）。/sdcard/Monkeylog.txt、/sdcard/systeminfo 是结果产物、/sdcard/resource 是大体量媒体资源，均不在默认清理范围。",
       "sensitive": false
     },
     {
-      "path": [
-        "cleanup_paths"
-      ],
+      "path": ["cleanup_paths"],
       "label": "清理路径清单",
-      "meaning": "cleanup 打开时要逐项删除的设备端绝对路径列表；不传则用脚本内置的 monkey 资源清单。",
+      "meaning": "cleanup 打开时要逐项删除的设备端路径列表；不传则用脚本内置的 monkey 资源清单。",
       "unit": "路径列表",
       "sensitive": false,
-      "version_range": {
-        "min_inclusive": "1.0.2",
-        "max_exclusive": "1.0.3"
-      }
+      "version_range": {"min_inclusive": "1.0.2", "max_exclusive": "1.0.3"}
     },
     {
-      "path": [
-        "cleanup_paths"
-      ],
+      "path": ["cleanup_paths"],
       "label": "清理路径清单",
-      "meaning": "cleanup 打开时要逐项删除的设备端绝对路径列表；不传则用脚本内置的 monkey 资源清单。每项按单个 shell 参数转义后进入设备侧 rm 与回读探针。",
+      "meaning": "cleanup 打开时要逐项删除的设备端路径列表；不传则用脚本内置的 monkey 资源清单。本版本对每一项按单个 shell 参数转义后再进入设备侧删除与回读探针。",
       "unit": "路径列表",
-      "cautions": "1.0.3 起逐项 shlex.quote：含空格的路径不再拆坏命令列表，含分号/命令替换/反引号的值不再成为设备侧命令执行面。",
+      "cautions": "1.0.3 起逐项 shlex.quote：含空格的路径不再拆坏命令列表，也不再成为设备侧命令执行面；但转义只保证不被执行，不做路径合法性校验，写错路径就是真的删那台设备上的那个路径。",
       "sensitive": false,
-      "version_range": {
-        "min_inclusive": "1.0.3"
-      }
+      "version_range": {"min_inclusive": "1.0.3"}
     },
     {
-      "path": [
-        "verify_cleanup"
-      ],
+      "path": ["verify_cleanup"],
       "label": "清理后回读验证",
       "meaning": "删除后逐项回读设备路径确认已消失，仍存在即记错并让该步失败，不静默残留。",
       "unit": "布尔",
       "sensitive": false,
-      "version_range": {
-        "min_inclusive": "1.0.2"
-      }
+      "version_range": {"min_inclusive": "1.0.2"}
     }
   ]
 }

@@ -3,73 +3,55 @@
   "script_name": "connect_wifi",
   "entries": [
     {
-      "path": [
-        "ssid"
-      ],
+      "path": ["ssid"],
       "label": "WiFi 名称",
-      "meaning": "要让设备连上的无线网络名。留空则回落到主机环境变量 STP_WIFI_SSID——平台在派发期把 WiFi 资源池分配结果注入本步骤，所以它通常不是计划作者手填的值。",
+      "meaning": "要让设备连上的无线网络名。取值优先级是步骤参数里的 ssid，为空才回落主机环境变量 STP_WIFI_SSID——平台在派发期把 WiFi 资源池分配结果写进**步骤参数**（不是写环境变量），两者都不给时本步直接判失败并提示未指定 SSID。",
       "unit": "字符串",
-      "cautions": "派发期才定的值在确认前不是确定值；「已连接」判定在 1.0.2 前是状态输出的子串匹配。",
+      "cautions": "1.0.0 把值以双引号拼接进设备命令（引号、美元符、反引号会把命令拆坏），并且只看命令 stdout 有无 Error 即判成功、不做连接后复验；「是否已连接」的前置判断用状态输出子串匹配。派发期才定的值在确认前不是确定值。",
       "sensitive": false
     },
     {
-      "path": [
-        "password"
-      ],
+      "path": ["ssid"],
+      "label": "WiFi 名称",
+      "meaning": "要让设备连上的无线网络名。取值优先级是步骤参数里的 ssid，为空才回落主机环境变量 STP_WIFI_SSID（派发期注入的是步骤参数）。本版本起 SSID 与口令按「单个 shell 参数」语义转义后进入设备命令，命令 rc 与 stdout/stderr 联合判读，并在连接后回读状态复验。",
+      "unit": "字符串",
+      "cautions": "复验用的仍是状态输出的子串匹配：请求连 Test 而设备实际连在 Test-5G 时会被当成已连接。",
+      "sensitive": false,
+      "version_range": {"min_inclusive": "1.0.1", "max_exclusive": "1.0.2"}
+    },
+    {
+      "path": ["ssid"],
+      "label": "WiFi 名称",
+      "meaning": "要让设备连上的无线网络名。取值优先级是步骤参数里的 ssid，为空才回落主机环境变量 STP_WIFI_SSID（派发期注入的是步骤参数）。本版本把「是否已连接」改为两条**全等**判据：状态输出里带 SSID 标签的值与目标全等，或目标以带引号的完整形态出现；刻意不做「裸 token 全等」兜底。",
+      "unit": "字符串",
+      "cautions": "不兜底是有意为之：裸 token 全等会让目标 My 命中设备上的 My Network，只是把子串假成功换成词级假成功。代价是设备若以既无标签又无引号的形态输出该名字，会一直判未连接——本步在复验窗口耗尽后报「未验证到连接」而失败，不会自动纠正成成功。",
+      "sensitive": false,
+      "version_range": {"min_inclusive": "1.0.2"}
+    },
+    {
+      "path": ["password"],
       "label": "WiFi 密码",
-      "meaning": "连接该网络所用的口令。留空则回落到主机环境变量 STP_WIFI_PASSWORD——平台在派发期把资源池分配的口令注入本步骤，因此它通常不是计划作者手填的值。",
+      "meaning": "连接该网络所用的口令。取值优先级是步骤参数里的 password，为空才回落主机环境变量 STP_WIFI_PASSWORD——平台在派发期把资源池口令写进**步骤参数**。",
       "unit": "字符串",
       "cautions": "属凭据：任何展示面只显示「已设置/未设置」，不得输出明文或部分字符。",
       "sensitive": true
     },
     {
-      "path": [
-        "timeout_seconds"
-      ],
-      "label": "连接等待上限",
-      "meaning": "发起连接后等待设备报告连上该网络的最长时间，超时即判本步失败。",
-      "unit": "秒",
-      "sensitive": false
-    },
-    {
-      "path": [
-        "ssid"
-      ],
-      "label": "WiFi 名称",
-      "meaning": "要让设备连上的无线网络名。留空则回落到派发期注入的 STP_WIFI_SSID。本版本起按「单个 shell 参数」语义转义后进入设备命令（此前是字符串拼接，引号/美元符/反引号会把命令拆坏）。",
-      "unit": "字符串",
-      "cautions": "「是否已连接」仍用状态输出的子串匹配，该缺陷在 1.0.2 才修掉。",
-      "sensitive": false,
-      "version_range": {
-        "min_inclusive": "1.0.1",
-        "max_exclusive": "1.0.2"
-      }
-    },
-    {
-      "path": [
-        "ssid"
-      ],
-      "label": "WiFi 名称",
-      "meaning": "要让设备连上的无线网络名。留空则回落到派发期注入的 STP_WIFI_SSID。本版本按「单个 shell 参数」语义转义后进入设备命令，并把「是否已连接」改为把状态输出按分隔符切开后做整词全等比较（含带引号全等路径），不再用子串匹配。",
-      "unit": "字符串",
-      "cautions": "1.0.2 前的子串匹配会让「要连 Test、设备实际连在 Test-5G」被当成已连接并以 skipped 报成功、根本不发起连接；本版本的代价是极端格式下判为未连接，只会多连一次并在复验窗口内纠正，不会假成功。",
-      "sensitive": false,
-      "version_range": {
-        "min_inclusive": "1.0.2"
-      }
-    },
-    {
-      "path": [
-        "password"
-      ],
+      "path": ["password"],
       "label": "WiFi 密码",
-      "meaning": "连接该网络所用的口令。留空则回落到派发期注入的 STP_WIFI_PASSWORD（资源池按设备分配）。本版本起按「单个 shell 参数」语义转义后进入设备命令。",
+      "meaning": "连接该网络所用的口令。取值优先级是步骤参数里的 password，为空才回落主机环境变量 STP_WIFI_PASSWORD（派发期注入的是步骤参数）。本版本起按「单个 shell 参数」语义转义后进入设备命令。",
       "unit": "字符串",
-      "cautions": "属凭据：任何展示面只显示「已设置/未设置」，不得输出明文或部分字符。",
+      "cautions": "属凭据：任何展示面只显示「已设置/未设置」。1.0.1 前用双引号包裹拼接，双引号挡不住命令替换与反引号展开，值含引号时还能脱离原参数。",
       "sensitive": true,
-      "version_range": {
-        "min_inclusive": "1.0.1"
-      }
+      "version_range": {"min_inclusive": "1.0.1"}
+    },
+    {
+      "path": ["timeout_seconds"],
+      "label": "连接命令超时",
+      "meaning": "把 connect-network 命令发给设备后，等这条命令自己返回的超时（命令级 subprocess 超时），不是「连上该网络」的总等待时长。",
+      "unit": "秒",
+      "cautions": "1.0.1 起连接后的状态复验另用**固定 10 秒**窗口轮询，调大本键不会延长复验窗口；1.0.0 没有复验，命令未报错即判成功。",
+      "sensitive": false
     }
   ]
 }

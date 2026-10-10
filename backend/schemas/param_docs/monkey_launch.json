@@ -4,34 +4,36 @@
   "entries": [
     {
       "path": ["need_nohup"],
-      "label": "后台方式启动",
-      "meaning": "是否用 nohup 把看门狗放到后台脱离本次 adb shell 会话；关闭时前台启动，adb 断开即连带结束。",
+      "label": "启动前是否先切目录",
+      "meaning": "名字容易误导：关掉它并不会改成前台启动。两个分支最终发出的都是 nohup … MonkeyTest.sh 后台命令，差别仅在打开时前面多一段 cd /data/local/tmp。",
       "unit": "布尔",
+      "cautions": "5.0.0 与 5.2.0 实测同形：本参数不是「后台/前台」开关，不要靠它改变启动方式或让进程随本次 adb 会话结束。",
       "sensitive": false
     },
     {
       "path": ["watchdog_script"],
-      "label": "看门狗脚本名",
-      "meaning": "本步要启动并在设备上确认存在的 MonkeyTest.sh 看门狗标识；资源推送由 monkey_resource_push 负责，本脚本只启动与验证进程。",
+      "label": "看门狗匹配名",
+      "meaning": "只用于「是否已在运行」的预判与启动后在设备 ps 里的匹配名；实际启动路径固定是 /data/local/tmp/MonkeyTest.sh，本键不改变它，也不改变随后固定拉起的 aimwd 守护。",
       "unit": "字符串",
+      "cautions": "不要通过改这个键来替换本步启动的脚本——它只会让匹配落空并把健康的启动判成失败。",
       "sensitive": false,
       "version_range": {"min_inclusive": "2.0.0"}
     },
     {
       "path": ["max_wait_seconds"],
       "label": "启动后确认等待上限",
-      "meaning": "启动后轮询设备 ps，等待看门狗进程出现的最长时间；到点仍看不到即判失败。",
+      "meaning": "启动命令发出后，等待在设备 ps 里匹配到看门狗的时间上限；到点仍匹配不到即判本步失败。5.0.0 只有 MonkeyTest.sh 一个窗口。",
       "unit": "秒",
-      "cautions": "2.0.0 起才有该参数；等待期间必须逐次打 PROGRESS 戳，否则引擎停滞钟会把「慢但健康」的等待误判为停滞（#1690）。",
+      "cautions": "5.0.0 的这段轮询**不打 PROGRESS 戳**（5.1.0 起才逐次打戳），把它拉长会让「慢但健康」的等待被引擎停滞钟误判成停滞。nohup 的 shell rc 恒 0，不能当启动成功证据。",
       "sensitive": false,
       "version_range": {"min_inclusive": "2.0.0", "max_exclusive": "5.2.0"}
     },
     {
       "path": ["max_wait_seconds"],
       "label": "启动后确认等待上限",
-      "meaning": "启动后为每个待确认进程（MonkeyTest.sh 看门狗、aimwd 守护）各自等待其出现的时间上限——两个窗口相互独立，一个迟到不消耗另一个的预算。",
+      "meaning": "启动命令发出后，等待在设备 ps 里匹配到看门狗的时间上限。5.2.0 起 MonkeyTest.sh 与 aimwd 各用一个**独立**的同值窗口：一个迟到不消耗另一个的预算。",
       "unit": "秒",
-      "cautions": "5.2.0 修回 #1711：5.0.1/5.1.0 曾让两者共用同一 deadline，MonkeyTest.sh 迟到时 aimwd 预算已耗尽，会把「双看门狗只剩单层」误报成 aimwd 未运行。nohup 退出码恒 0，必须以后台进程实际出现为成功判据。",
+      "cautions": "5.0.1/5.1.0 曾让两者共用同一 deadline，MonkeyTest.sh 迟到时 aimwd 预算已耗尽，会把「双看门狗只剩单层」误报成 aimwd 未运行（#2048 修回 #1711）。轮询会逐次打 PROGRESS 戳。",
       "sensitive": false,
       "version_range": {"min_inclusive": "5.2.0"}
     }

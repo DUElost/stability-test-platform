@@ -5,18 +5,38 @@
     {
       "path": ["process_names"],
       "label": "存活判定的进程名",
-      "meaning": "巡检时判断 monkey 是否还活着所用的进程名（在设备 ps 输出里匹配）；都不在但设备可达时，脚本会自动重启看门狗而不是判失败。",
+      "meaning": "巡检时用来判断 monkey 是否还活着的进程匹配名（逐个在设备 ps 输出里 grep）。只有在 monkey 与看门狗都不在时本步才发起重启；monkey 不在而看门狗仍在时不干预，交给看门狗自己拉起。",
       "unit": "字符串列表",
-      "cautions": "看门狗进程的 cmdline 也含 monkey 名，匹配时必须排除它，否则「monkey 与看门狗双亡」永远触发不了重启分支（2.0.3 修正）。",
-      "sensitive": false
+      "cautions": "2.0.2 匹配 monkey 时不排除 MonkeyWatchdog——它的 cmdline 也含 monkey 名，于是「monkey 死了但只剩看门狗」与「双亡」在该版本不好区分，重启分支可能因此触发不了。",
+      "sensitive": false,
+      "version_range": {"min_inclusive": "2.0.2", "max_exclusive": "2.0.3"}
+    },
+    {
+      "path": ["process_names"],
+      "label": "存活判定的进程名",
+      "meaning": "巡检时用来判断 monkey 是否还活着的进程匹配名（逐个在设备 ps 输出里 grep）。只有在 monkey 与看门狗都不在时本步才发起重启；monkey 不在而看门狗仍在时不干预。",
+      "unit": "字符串列表",
+      "cautions": "2.0.3 起匹配 monkey 时显式排除 MonkeyWatchdog（#809），否则看门狗自身会让「双亡」永远判不出来、每个巡检周期都报绿。",
+      "sensitive": false,
+      "version_range": {"min_inclusive": "2.0.3"}
     },
     {
       "path": ["watchdog_script"],
-      "label": "看门狗脚本名",
-      "meaning": "设备上负责拉起 monkey 的看门狗脚本标识，用于「是否还在跑」的匹配与重启后的确认对象。",
+      "label": "看门狗匹配名",
+      "meaning": "判断 MonkeyTest.sh 看门狗是否在跑所用的 ps 匹配名。2.0.2 的重启只看设备是否接受了启动命令（shell rc 为 0 即算重启成功），不复查进程，所以 restarted 为真不等于 monkey 已恢复。",
       "unit": "字符串",
-      "cautions": "本脚本只做单次瞬时判断并按需重启，不重新推送资源；重启是否成功以窗口内轮询 ps 见到看门狗为准，nohup 的退出码恒 0 不能当证据。",
-      "sensitive": false
+      "cautions": "本键不控制重启时实际启动的脚本路径（重启命令固定启动 MonkeyTest.sh 与 aimwd），也不参与任何复验。nohup 的 shell rc 恒 0：脚本缺失、存储未解锁、fork 失败都照样返回 0。",
+      "sensitive": false,
+      "version_range": {"min_inclusive": "2.0.2", "max_exclusive": "2.0.3"}
+    },
+    {
+      "path": ["watchdog_script"],
+      "label": "看门狗匹配名",
+      "meaning": "判断 MonkeyTest.sh 看门狗是否在跑所用的 ps 匹配名（初始存活判定用）。2.0.3 起重启后在共享的不超过 60 秒窗口内轮询 ps，必须同时看到 MonkeyTest.sh 与 MonkeyWatchdog 两个**固定**模式才算重启成功，超时判失败。",
+      "unit": "字符串",
+      "cautions": "本键不控制重启路径，也不控制上述两个复验模式——改它不会让复验跟着改。nohup 的 shell rc 恒 0，只有 ps 复查才能证明真的起来了。",
+      "sensitive": false,
+      "version_range": {"min_inclusive": "2.0.3"}
     }
   ]
 }

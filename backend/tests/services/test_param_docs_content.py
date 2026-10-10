@@ -361,6 +361,104 @@ def test_only_credential_paths_are_marked_sensitive() -> None:
     }
 
 
+#: #3675 逐族内容复核（R1–R7）确认的语义钉：说明文字必须包含的事实与不得回潮的错误说法。
+#: 每条都对应发布源码里的实际动作，复核者可在同一位点复验；它不是结构校验的替代。
+_SEMANTIC_PINS: list[tuple[str, list, str, tuple[str, ...], tuple[str, ...]]] = [
+    # R1：读了键不等于旋钮生效。
+    ("monkey_setup", ["fill", "timeout_seconds"], "2.3.13",
+     ("没有使用这个入参", "不控制填盘耗时"), ("有效内层等待上限", "填盘的等待上限")),
+    ("monkey_setup", ["fill", "block_size_kb"], "2.3.13",
+     ("取整",), ("每次 dd",)),
+    ("monkey_setup", ["push", "bundle"], "2.3.13",
+     ("归档文件",), ("资源目录", "主机侧目录路径")),
+    ("monkey_setup", ["install", "apk_path"], "2.3.13",
+     ("APK **文件**路径",), ("或目录",)),
+    ("monkey_setup", ["install", "pkg_name"], "2.3.13",
+     ("安装前",), ("安装后要核对", "安装后核对")),
+    ("monkey_setup", ["install", "required_version"], "2.3.13",
+     ("子串命中",), ("完全一致",)),
+    ("monkey_setup", ["wifi", "ssid"], "2.3.13",
+     ("转义", "不做连接后复验"), ("填了却连不上仍是硬失败",)),
+    # R2：命令级超时、固定复验窗口、1.0.2 谓词、注入写进步骤参数。
+    ("connect_wifi", ["timeout_seconds"], "1.0.2",
+     ("命令级", "固定 10 秒"), ("连接等待上限",)),
+    ("connect_wifi", ["ssid"], "1.0.2",
+     ("裸 token",), ("按分隔符切开",)),
+    ("connect_wifi", ["ssid"], "1.0.0",
+     ("步骤参数",), ("派发期注入的 STP_WIFI_SSID",)),
+    ("connect_wifi", ["password"], "1.0.2",
+     ("步骤参数",), ("派发期注入的 STP_WIFI_PASSWORD",)),
+    # R3：false 仍后台启动；参数只改变匹配；旧版本轮询不打戳。
+    ("monkey_launch", ["need_nohup"], "5.0.0",
+     ("两个分支最终发出的都是 nohup",), ("断开即连带结束", "前台执行")),
+    ("monkey_launch", ["watchdog_script"], "5.0.0",
+     ("不改变",), ("本步要启动",)),
+    ("monkey_launch", ["max_wait_seconds"], "5.0.0",
+     ("不打 PROGRESS 戳",), ("必须逐次打 PROGRESS 戳",)),
+    # R4：不能把 2.0.3 的重启复验写成通用保证。
+    ("monkey_check", ["watchdog_script"], "2.0.2",
+     ("rc 为 0",), ("MonkeyWatchdog 两个",)),
+    ("monkey_check", ["watchdog_script"], "2.0.3",
+     ("固定",), ()),
+    ("monkey_check", ["process_names"], "2.0.2",
+     ("不排除 MonkeyWatchdog",), ("2.0.3 起",)),
+    ("monkey_check", ["process_names"], "2.0.3",
+     ("显式排除 MonkeyWatchdog",), ("不排除 MonkeyWatchdog",)),
+    # R5：刷机时序、核验前提、strict 覆盖面、真实回落链名称。
+    ("flash_firmware", ["reboot_to_flash"], "1.3.15",
+     ("回调里才发 reboot",), ("启动刷机工具前先 adb reboot",),),
+    ("flash_firmware", ["verify_version"], "1.3.18",
+     ("skipped", "目标版本"), ()),
+    ("flash_firmware", ["strict_env_check"], "1.3.18",
+     ("全部", "推断"), ("只把 ttyACM",),),
+    ("flash_firmware", ["firmware_root"], "1.3.18",
+     ("STP_FLASH_FIRMWARE_ROOT",), ("同名环境变量",),),
+    ("flash_firmware", ["da_file"], "1.3.18",
+     ("显式指定 firmware_dir",), ()),
+    # R6：回收与停测边界比清单更宽；optional 不是万能豁免。
+    ("monkey_teardown", ["pull_paths"], "1.0.3",
+     ("追拉", "无法区分"), ("不会被回收",)),
+    ("monkey_teardown", ["process_names"], "1.0.2",
+     ("固定 force-stop",), ("不会被停",)),
+    # R7：设计意图不是参数安全保证。
+    ("unisoc_probe", ["extra_paths"], "1.0.1",
+     ("原样拼进",), ("只能增加被 ls 的路径",)),
+    # 非阻塞澄清：ensure_root 不主动重启设备。
+    ("ensure_root", ["max_attempts"], "1.0.2",
+     ("不主动重启设备",), ("重启后再试",)),
+]
+
+
+@pytest.mark.parametrize(
+    ("family", "path", "version", "must_contain", "must_not_contain"),
+    _SEMANTIC_PINS,
+    ids=[f"{f}:{'.'.join(map(str, pa))}@{v}" for f, pa, v, _, _ in _SEMANTIC_PINS],
+)
+def test_content_review_pins_hold(
+    family: str,
+    path: list,
+    version: str,
+    must_contain: tuple[str, ...],
+    must_not_contain: tuple[str, ...],
+) -> None:
+    """#3675 内容复核 R1–R7 的纠正不得回潮。
+
+    断言对象是 ``resolve_doc`` 在该版本**实际选中**的那一条目——也就是人在界面上会读到的
+    文字；不拼整份 JSON，否则范围条目与通用条目的文字会互相污染判定。
+    """
+    resolved = resolve_doc(load_param_docs(family).entries, path, version, None)
+    assert resolved.from_registry, f"{family}@{version} 的 {path} 未命中登记表"
+    prose = "\n".join(
+        str(value or "")
+        for value in (resolved.label, resolved.meaning, resolved.unit, resolved.cautions)
+    )
+    for needle in must_not_contain:
+        assert needle not in prose, f"{family} {path}@{version} 回潮了错误说法 {needle!r}"
+    assert any(needle in prose for needle in must_contain), (
+        f"{family} {path}@{version} 的说明缺少复核确认的事实之一：{must_contain}"
+    )
+
+
 @pytest.mark.parametrize("family", sorted(FIRST_BATCH))
 def test_documentation_carries_no_credentials(family: str) -> None:
     """§3.3：说明只写含义，不得带实际凭据或口令值。"""

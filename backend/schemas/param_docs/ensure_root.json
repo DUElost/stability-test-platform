@@ -3,35 +3,49 @@
   "script_name": "ensure_root",
   "entries": [
     {
-      "path": ["max_attempts"],
+      "path": [
+        "max_attempts"
+      ],
       "label": "提权尝试次数",
-      "meaning": "把设备拉到 root（adb root / 重启后再试）最多尝试几次，每次尝试后回读 id -u 判定是否已 root。",
+      "meaning": "把设备拉到 root 最多尝试几次：每次发 adb root 后回读 uid 判定是否已拿到 root。adb root 本身会让设备侧 adbd 重启，脚本**不主动重启设备**。",
       "unit": "次",
-      "sensitive": false
+      "sensitive": false,
+      "cautions": "非 root 固件（user build）上 adb root 会被设备拒绝，再多尝试也拿不到 root；该族不发出 adb reboot。"
     },
     {
-      "path": ["retry_delay_seconds"],
+      "path": [
+        "retry_delay_seconds"
+      ],
       "label": "重试间隔",
-      "meaning": "两次提权尝试之间固定等待的时间，给 adbd 重启留窗口。",
+      "meaning": "尝试之间等待的时间，给 adb root 引发的 adbd 重启留恢复窗口。",
       "unit": "秒",
-      "sensitive": false
+      "sensitive": false,
+      "cautions": "1.0.0 是每轮 root 之后固定等一段时间；1.0.2 起在判定失败的轮次还可能因等待系统就绪再等一次，所以它不等于「相邻两次尝试之间的唯一间隔」。"
     },
     {
-      "path": ["wait_ready_seconds"],
+      "path": [
+        "wait_ready_seconds"
+      ],
       "label": "单次就绪等待上限",
-      "meaning": "每次重试前等设备系统就绪（get-state 为 device 且 sys.boot_completed 为 1）的最长时间。1.0.2 起 port check_device 的「撞峰吸收」做法。",
+      "meaning": "每次重试前等设备系统就绪（get-state 为 device 且 sys.boot_completed 为 1）的最长时间。设备正处于外部重启（如同机 PowerCycle 循环）时，本窗口就是用来等它回来的。",
       "unit": "秒",
       "sensitive": false,
-      "version_range": {"min_inclusive": "1.0.2"}
+      "version_range": {
+        "min_inclusive": "1.0.2"
+      }
     },
     {
-      "path": ["total_budget_seconds"],
+      "path": [
+        "total_budget_seconds"
+      ],
       "label": "全步总预算",
-      "meaning": "本步可用于「多次提权尝试 + 等待就绪 + 间隔」的整体时间上限，耗尽即停止并报错。",
+      "meaning": "本步的总时间预算：预算耗尽即停止后续尝试并报错，等待就绪与重试间隔都在预算内计算。",
       "unit": "秒",
-      "cautions": "必须被步骤超时容纳；把步骤 timeout 调到该值以下会让重试永远跑不完，而元数据里看不到这条内置预算。",
+      "cautions": "必须被步骤超时容纳；把步骤 timeout 调到该值以下会让重试永远跑不完，而这条内置预算在库侧参数元数据里查不出来（#2981）。预算约束的是「还继续不再试」，不会打断已在执行的那条 adb 命令。",
       "sensitive": false,
-      "version_range": {"min_inclusive": "1.0.2"}
+      "version_range": {
+        "min_inclusive": "1.0.2"
+      }
     }
   ]
 }
