@@ -42,7 +42,9 @@ class Plan(Base):
     # 而 init 受 permit cap 串行化 ⇒ 约 (ceil(N/C)−1)×T。含长耗时前置步骤
     # （自动刷机等）的 Plan 必须显式抬高，否则先做完的设备会被慢同伴连坐。
     barrier_timeout_seconds = Column(Integer, nullable=True)
-    # #174: progress-aware barrier 绝对硬顶（从首次等待起算，NULL = 不设上限）。
+    # #174 / #872 / #3652: progress-aware barrier 绝对硬顶（从首次等待起算）。
+    # 正整数 = Plan 显式硬顶；NULL = 继承主机 STP_BARRIER_MAX_WAIT_SECONDS → 1800s
+    # （非法 env 回落 1800s；非正值 env = 无硬顶）。NULL 不是「确定无硬顶」。
     # 滑动窗 barrier_timeout_seconds 管「全体停滞」，本字段管「总等待时长」。
     barrier_max_wait_seconds = Column(Integer, nullable=True)
     auto_archive_interval_seconds = Column(Integer, nullable=True)
