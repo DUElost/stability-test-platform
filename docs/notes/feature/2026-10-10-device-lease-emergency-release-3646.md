@@ -11,6 +11,8 @@ Class: feature
 
 加锁顺序是 job → lease：先无锁读出 `job_id`，再锁 job，再锁租约。持有租约行锁后如果 `job_id` 变了，返回 409 `LEASE_JOB_CHANGED`，不再去锁另一条 job。新加锁点登记在 `docs/notes/architecture/2026-09-14-shared-row-lock-table.md` 的 I1 表。
 
+审计 action `emergency_release_lease` 登记在 `BUSINESS_ACTIONS_ALLOWLIST`，保留 90 天，与 `retire_device` 同族。
+
 本单元没有设备页按钮。前端只同步了 `types.ts` 和 `devices.releaseLease`，供以后的入口调用。告警不在本单元（#3660）。
 
 ## Alternatives
@@ -18,12 +20,13 @@ Class: feature
 - 在设备路由上改用异步 `release_lease`：测试客户端只覆盖同步 `get_db`，异步会话看不见同一条测试事务。放弃。
 - 继续手工 `UPDATE`，或加只写 `device_leases` 两列的数据库角色：Planner 裁决已否决（#3646 评论）。
 - 另写一份终态字面量：与「不得另写一份」冲突。放弃。
+- 把 `emergency_release_lease` 放进 `SECURITY_ACTIONS`（180 天）：放弃。ADR-0049 的 security 层是账号与凭据事件。这条是设备租约的管理端写操作，和 `abort_plan_run`、`retire_device` 一样留在 90 天桶。
 
 ## Verification
 
 `backend/tests/api/test_device_lease_emergency_release.py`：终态释放并写审计、`RUNNING` / `PENDING` / `UNKNOWN` 为 409、非 `JOB` 为 409、已 `RELEASED` 为 409、设备不符为 404、非管理员为 403、空白 `reason` 为 422、同设备上另一个 job 的新 ACTIVE 租约不被释放。
 
-`emergency_release_lease` 登记进 `SECURITY_ACTIONS`（ADR-0049 D2）；`DeviceLeaseReleaseOut` ↔ `DeviceLeaseReleaseResult` 登记进 `_MODEL_PAIRS`。
+`emergency_release_lease` 登记在 `BUSINESS_ACTIONS_ALLOWLIST`（90 天）。`DeviceLeaseReleaseOut` ↔ `DeviceLeaseReleaseResult` 登记进 `_MODEL_PAIRS`。
 
 ## Revisit
 
