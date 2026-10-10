@@ -46,7 +46,8 @@ Class: process
 - 写作约定：改动的 skill 句子按 `writing-conventions.md` §5 自查；「不需要」保留为 Owner
   裁决用词（表示无必要，非禁止）。Agent Note / 09-23 Note 指针不在约定适用范围。
 - 未改代码；未连接任何数据库；生产 SQL 复核未做（可选、不交付）。
-- `check:quick`：见 PR 正文「验证」节。
+- `./scripts/project_python.sh scripts/run_gates.py check:quick` →
+  `[OK] check:quick (16 gates)`（本会话实测；`schema-at-head` 因无 `DATABASE_URL` WARN 跳过）。
 
 ## Revisit
 
