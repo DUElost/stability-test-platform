@@ -52,18 +52,19 @@
 9. 如果 `ended_ago` 小于 5 分钟，停止本流程，5 分钟后从第 4 步重查。回收器每
    `reconciler_interval_seconds`（默认 15 秒）一轮，会释放「job 已终态、租约仍为 ACTIVE」的租约
    （「状态机一致性核对」第 ① 项）。
-10. 在控制面宿主的 Prometheus 中查询回收器最近 5 分钟的运行情况：
+10. 在控制面宿主的 Prometheus 中查询回收器最近 5 分钟内成功运行的次数：
 
     ```promql
-    sum(increase(stability_reconciler_runs_total{check="terminal_job_active_lease"}[5m]))
-    sum(increase(stability_reconciler_runs_total{check="terminal_job_active_lease",outcome="error"}[5m]))
+    sum(increase(stability_reconciler_runs_total{check="terminal_job_active_lease",outcome="success"}[5m]))
     ```
 
-    第一条为 0 表示回收器没有运行；第二条大于 0 表示该项检查在报错。两者任一成立，即判定回收器
-    不可用。查询无结果时，先在同一页面查询其他控制面指标；其他指标有值时，按 0 处理。
-    该计数只在当选调度主节点的进程中增长，`sum` 已汇总所有控制面进程。
-11. 如果第 10 步判定回收器可用，停止本流程并报告：回收器在运行却没有释放这条租约，属回收器缺陷，
-    执行者不得手工绕过。
+    结果为 0 表示该序列在这 5 分钟内有采样、但回收器没有成功运行过一次，判定回收器不可用。
+    该计数只在当选调度主节点的进程中、检查成功执行时增长，`sum` 已汇总所有控制面进程。
+    只看成功次数，不看 `outcome="error"`：窗口内的历史报错不能说明回收器当前不可用。
+11. 如果第 10 步的结果不是 0，停止本流程并报告：
+    - 结果大于 0：回收器在运行却没有释放这条租约，属回收器缺陷，执行者不得手工绕过；
+    - 无结果：该序列在这 5 分钟内没有采样（从未出现、采集中断或控制面进程不在），无法判定回收器状态。
+      执行者不得把「无结果」当作 0，也不得用其他指标有值来代替本项判定。
 
 ## 释放
 
