@@ -374,6 +374,16 @@ reconciler_runs = Counter(
     ['check', 'outcome']  # check: expired_leases/stale_unknown/terminal_job_active_lease, outcome: success/error
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
+# #3660（关联 #3500）：告警与 SOP G1 只读本检查的 success 子序列。带标签 Counter
+# 要到首次 .labels(...).inc() 才建子序列；不预置时进程重启后「明确停转」只能落入
+# absent/无数据，且「出生即为 N」会让 increase() 漏掉首个窗口。此处只预置本单信号面
+# 的 success/error；其余带标签 Counter 的系统预置归 #3500，冲突时以 #3500 为准。
+if PROMETHEUS_AVAILABLE:
+    for _outcome in ("success", "error"):
+        reconciler_runs.labels(
+            check="terminal_job_active_lease", outcome=_outcome
+        )
+
 reconciler_actions = Counter(
     'stability_reconciler_actions_total',
     'Total number of actions taken by reconciler',
