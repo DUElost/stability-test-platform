@@ -61,12 +61,14 @@ def _redact_field(field: Any, path: tuple, paths: set[tuple]) -> Any:
     if not isinstance(field, dict):
         return None if path_is_sensitive(path, paths) else deepcopy(field)
     sensitive = path_is_sensitive(path, paths)
+    relative = _relative_paths(paths, path)
     cleaned: dict[str, Any] = {}
     for key, value in field.items():
         if key in _SCHEMA_SECRET_SLOTS and sensitive:
             cleaned[key] = None
-        elif key == "default":
-            cleaned[key] = redact_params(value, _relative_paths(paths, path))
+        elif key in _SCHEMA_SECRET_SLOTS:
+            # 当前节点本身不敏感时，default/enum/const/examples 仍可能嵌着子路径明文。
+            cleaned[key] = _redact_schema_slot(value, relative)
         elif key == "properties" and isinstance(value, dict):
             cleaned[key] = {
                 name: _redact_field(child, path + (name,), paths)
@@ -75,6 +77,17 @@ def _redact_field(field: Any, path: tuple, paths: set[tuple]) -> Any:
         else:
             cleaned[key] = deepcopy(value)
     return cleaned
+
+
+def _redact_schema_slot(value: Any, relative: set[tuple]) -> Any:
+    """按与 default 相同的参数路径清除槽位值。
+
+    ``enum`` / ``examples`` 是同一路径上的候选值列表。列表下标不是参数路径，
+    逐项清除后才能盖住只靠路径登记、键名本身不敏感的嵌套项。
+    """
+    if isinstance(value, list):
+        return [_redact_schema_slot(item, relative) for item in value]
+    return redact_params(value, relative)
 
 
 def _relative_paths(paths: set[tuple], prefix: tuple) -> set[tuple]:

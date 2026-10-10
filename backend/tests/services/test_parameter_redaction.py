@@ -71,3 +71,79 @@ def test_case_and_nested_list_and_schema_slots():
     assert redacted["password"]["examples"] is None
     assert redacted["password"]["label"] == "密码"
     assert schema["password"]["default"] == SENTINEL_A
+
+
+def test_nested_sensitive_path_clears_enum_const_and_examples():
+    """嵌套路径必须连 enum/const/examples 一起按路径清除。
+
+    修复前：父字段只递归 default，enum/const/examples 原样深拷贝，哨兵仍在。
+    修复后：四个槽位都按相对路径清除；非敏感兄弟值保留；输入对象不变。
+    ``psk`` 不在敏感键名表里，只靠路径 ``("wifi","psk")``，用来区分「按键名碰巧掩掉」
+    和「按参数路径掩掉」。
+    """
+    schema = {
+        "wifi": {
+            "type": "object",
+            "label": "Wi-Fi",
+            "default": {"ssid": "lab", "password": SENTINEL_A, "psk": SENTINEL_B},
+            "enum": [{"ssid": "lab", "password": SENTINEL_A, "psk": SENTINEL_B}],
+            "const": {"ssid": "lab", "password": SENTINEL_A, "psk": SENTINEL_B},
+            "examples": [{"ssid": "lab", "password": SENTINEL_B, "psk": SENTINEL_A}],
+            "properties": {
+                "ssid": {
+                    "type": "string",
+                    "default": "lab",
+                    "enum": ["lab"],
+                    "const": "lab",
+                    "examples": ["lab"],
+                },
+                "password": {
+                    "type": "string",
+                    "label": "密码",
+                    "default": SENTINEL_A,
+                    "enum": [SENTINEL_A],
+                    "const": SENTINEL_A,
+                    "examples": [SENTINEL_B],
+                },
+                "psk": {
+                    "type": "string",
+                    "default": SENTINEL_B,
+                    "enum": [SENTINEL_B],
+                    "const": SENTINEL_B,
+                    "examples": [SENTINEL_A],
+                },
+            },
+        }
+    }
+    redacted = redact_schema(schema, {("wifi", "password"), ("wifi", "psk")})
+    dumped = json.dumps(redacted, ensure_ascii=False)
+    assert SENTINEL_A not in dumped and SENTINEL_B not in dumped
+
+    wifi = redacted["wifi"]
+    assert wifi["label"] == "Wi-Fi"
+    assert wifi["default"] == {"ssid": "lab", "password": None, "psk": None}
+    assert wifi["enum"] == [{"ssid": "lab", "password": None, "psk": None}]
+    assert wifi["const"] == {"ssid": "lab", "password": None, "psk": None}
+    assert wifi["examples"] == [{"ssid": "lab", "password": None, "psk": None}]
+
+    password = wifi["properties"]["password"]
+    assert password["default"] is None
+    assert password["enum"] is None
+    assert password["const"] is None
+    assert password["examples"] is None
+    assert password["label"] == "密码"
+    psk = wifi["properties"]["psk"]
+    assert psk["default"] is None
+    assert psk["enum"] is None
+    assert psk["const"] is None
+    assert psk["examples"] is None
+    ssid = wifi["properties"]["ssid"]
+    assert ssid["default"] == "lab"
+    assert ssid["enum"] == ["lab"]
+    assert ssid["const"] == "lab"
+    assert ssid["examples"] == ["lab"]
+
+    assert schema["wifi"]["enum"][0]["password"] == SENTINEL_A
+    assert schema["wifi"]["const"]["psk"] == SENTINEL_B
+    assert schema["wifi"]["examples"][0]["password"] == SENTINEL_B
+    assert schema["wifi"]["properties"]["password"]["enum"] == [SENTINEL_A]
