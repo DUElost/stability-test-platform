@@ -46,6 +46,11 @@ from backend.services.plan_dispatcher_core import (
     script_defaults as _script_defaults,
     snapshot_dispatch_host_watcher_admin_states,
 )
+from backend.services.plan_confirmation import (
+    assert_confirmation_matches,
+    confirmation_fingerprint as fingerprint_for,
+    load_plan_graph_for_confirmation,
+)
 from backend.services.plan_parameter_projection import project_saved_plan
 from backend.services.suite_binding import (
     SuiteMaterializationConflict,
@@ -458,15 +463,9 @@ def preview_plan_dispatch_sync(
     device_ids: list[int],
     db: Session,
 ) -> dict[str, Any]:
-    plan = db.get(Plan, plan_id)
+    plan, steps = load_plan_graph_for_confirmation(db, plan_id)
     if plan is None:
         raise PlanDispatchError(f"Plan {plan_id} not found")
-
-    steps = db.execute(
-        select(PlanStep)
-        .where(PlanStep.plan_id == plan_id)
-        .order_by(PlanStep.stage, PlanStep.sort_order)
-    ).scalars().all()
 
     if not steps:
         raise PlanDispatchError(f"Plan {plan_id} has no steps")
@@ -510,6 +509,9 @@ def preview_plan_dispatch_sync(
         metadata,
         authority="与 preview 同一次读取的 Plan、步骤与脚本元数据",
     ).model_dump(mode="json")
+    preview["confirmation_fingerprint"] = fingerprint_for(
+        plan, list(steps), metadata,
+    )
     return preview
 
 
@@ -538,6 +540,7 @@ def prepare_plan_run(
     root_plan_run_id: int | None = None,
     chain_index: int | None = None,
     commit: bool = True,
+    confirmation_fingerprint: str | None = None,
 ) -> PlanRun:
     """ADR-0026 — Stage 1 of dispatch: create QUEUED PlanRun + snapshot rows.
 
@@ -561,7 +564,7 @@ def prepare_plan_run(
             "/health reports admission_queue_pump_ready=true",
         )
 
-    plan = db.get(Plan, plan_id)
+    plan, steps = load_plan_graph_for_confirmation(db, plan_id)
     if plan is None:
         raise PlanDispatchError(f"Plan {plan_id} not found")
 
@@ -600,11 +603,6 @@ def prepare_plan_run(
         and e["reason"] != "serial_conflict"
     ]
 
-    steps = db.execute(
-        select(PlanStep)
-        .where(PlanStep.plan_id == plan_id)
-        .order_by(PlanStep.stage, PlanStep.sort_order)
-    ).scalars().all()
     if not steps:
         raise PlanDispatchError(f"Plan {plan_id} has no steps")
 
@@ -645,6 +643,9 @@ def prepare_plan_run(
             f"Plan {plan_id} generated invalid lifecycle: {'; '.join(errors)}"
         )
 
+    assert_confirmation_matches(
+        plan, list(steps), metadata, confirmation_fingerprint,
+    )
     plan_snapshot = _build_plan_snapshot(plan, steps, metadata)
 
     return _prepare_queued_plan_run(
