@@ -132,7 +132,7 @@
 |---|---|---|
 | 控制面 / 执行分层 | 0001, 0006, 0014, 0016, 0017, 0018, 0054 | 已填关键行（ADR-0054 契约包边界 = §5.2 的 `agent-cp-contracts`）；其余见 TBD |
 | 状态机 / 租约 / 调度 | 0003, 0019, 0022, 0026, 0027, 0048 | 已填关键行 |
-| Plan / 脚本 / 工具接入 | 0020, 0021, 0023, 0033, 0039→Proposed 不强制 | 已填 X1 相关 + flash；**不可变契约范围**此前无 owner（0020 正文 0 命中「不可变」）→ 本轮补 `script-version-immutability` |
+| Plan / 脚本 / 工具接入 | 0020, 0021, 0023, 0033, 0060, 0039→Proposed 不强制 | 已填 X1 相关 + flash；**不可变契约范围**此前无 owner（0020 正文 0 命中「不可变」）→ 本轮补 `script-version-immutability` |
 | 日志 / 存储 / merge | 0025, 0028, 0032 + design 契约；全链地图 [`2026-device-log-chain-contract.md`](./2026-device-log-chain-contract.md) | 已填 X2/X3；Contract = 路由入口 |
 | 后处理 / Jira | 0012 | 已填（深嵌口径见 §3） |
 | 会话 / 安全 | 0024 | 已填 |
@@ -161,6 +161,7 @@
 | `script-runtime-catalog` | concept | 可派发 `(name, version)` 运行时权威（仅 `kind=script`；`kind=tool` 外部工具不入 catalog，ADR-0033 v1.15 / ADR-0051 v1.3） | `docs/adr/ADR-0033-tool-kit-ecosystem-integration.md :: ### D3：代码仓与工具资产包物理解耦（Manifest + Package Store）` | 第二套版本体系 |
 | `script-meta-freeze` | concept | `plan_snapshot` 步骤身份冻结面；非独立权威（**无** `script_meta` 键；inventory key 名保留） | `docs/adr/ADR-0021-script-content-alignment-gate.md :: ## 引用 / 关联` | 再称「唯一权威」或把假键写成第三权威 |
 | `script-version-immutability` | concept | 已发布**发布单元**「不可原地修改 / 删除」契约的**范围**（ADR-0051 D1：不可变性属于内容寻址包——脚本包与 `kind=tool` 工具包同一口径（D7），站点 `packages/` 只增不改由发布守卫执法（#3369 打包器 / #3379 `--publish`）；删除按 D5 继承 ADR-0039 D2/D3） | `docs/adr/ADR-0051-release-unit-and-content-addressing.md :: ### D1（核心）：发布单元 = 内容寻址包` | 多站点交付（ADR-0041）引入站点间包复制或 Package Store 迁出中心存储 → 复核「只增不改」执法点是否随迁（发布守卫只守本站点写入）（前两条触发器 Phase 2a / Phase 3 已兑现：script-versioning 改包口径、immutability 门禁退役、2026-09-26 去过渡句） |
+| `plan-param-projection` | concept | 计划参数的生效值分层投影（L1 计划基线 / L2 冻结设计 / L3 逐 Job 下发 / L4 运行期解析）、显示状态与服务端安全投影，以及参数说明与 Plan 级设置登记表；参数值的分层本身仍归 `project-taxonomy`（ADR-0029） | `docs/adr/ADR-0060-plan-parameter-meaning-and-effective-values.md :: ## 2. 决策` | 说明需由非开发人员高频编辑（重议 ADR-0060 方案丙）；出现新的派发期决定类型；新增 Agent 回报运行期取值的通路 |
 | `dle-record` | concept | 设备日志事件终态台账 | `docs/adr/ADR-0028-device-log-event-and-continuous-upload.md :: 唯一权威记录` | 改唯一记录主张 |
 | `log-signal-stream` | concept | 异常事件权威流 | `docs/adr/ADR-0018-infrastructure-layer-framework-adoption.md :: \`log_signal\` 是异常事件权威流` | 旁路上报 |
 | `dedup-pipeline-behavior` | concept | 并列 dedup/merge 行为与分区 | `docs/adr/ADR-0032-unisoc-mtk-parallel-dedup-pipelines.md :: ### D1：两条并列流水线，禁止交叉混用` | 混流水线 |
@@ -178,7 +179,7 @@
 | `terminal-fact-layer` | concept | 平台库长期事实层（签名 / 发生 / DLE 摘要 / 运行时长） | `docs/adr/ADR-0056-terminal-fact-layer.md :: ## 8. 裁决记录（2026-09-26，owner 授权 Claude 裁决）` | 事实行随 run 级联删除；单库事实表超出体量基线 |
 | `notification-delivery` | concept | 通知投递成功/失败语义 | `docs/adr/ADR-0036-notification-delivery-semantics.md :: ### 2.1 投递管道（契约对象）` | 改 ACCEPTED≠DELIVERED |
 | `execution-registry` | concept | 多 Harness Execution Registry / 三维状态 | `docs/adr/ADR-0034-multi-harness-execution-contract.md :: ### 2.3 状态模型：lifecycle × liveness × integration 三维正交 — 细则见契约 §3`；细则 `docs/development/ai/execution-contract.md :: ## 3. 状态模型（三维）与 transition table` | 改 Registry 为调度器 |
-| `batch-delivery` | concept | 批次交付流程：Owner / 规划者 / 实施者 / 复核者 / 集成观察者的职责分层，与 Registry 协调域划界（只登记协调域内实施者；M2 域外实施走 PR 可见性） | `docs/adr/ADR-0058-planned-batch-execution.md :: ### D8 职责与工作面` | 复核前合入再次发生；helper 副本模型裁为 A/B；协调域外 PR 与域内实施者反复同文件冲突 |
+| `batch-delivery` | concept | 批次交付流程：Owner / 规划者 / 实施者 / 复核者 / 集成观察者的职责分层，与 Registry 协调域划界（只登记协调域内实施者；M2 域外实施走 PR 可见性） | `docs/adr/ADR-0058-planned-batch-execution.md :: ### D8 职责与工作面` | 复核前合入再次发生；helper 副本模型裁为 A/B；协调域外 PR 与域内实施者反复同文件冲突；D11 生效后同一单元复核超三轮未闭合 |
 | `settings-bare-read` | concept | 配置读取收敛与裸读边界 | `docs/adr/ADR-0042-settings-convergence-and-bare-read-boundary.md :: ## 决策` | 新域绕过分域 settings |
 | `risk-level-vocab` | concept | 风险对外词表 S/A/B | `docs/adr/ADR-0045-risk-level-vocabulary.md :: ## 2. 决策` | 多词表回流 |
 | `project-taxonomy` | concept | TestProject / specialty 分类 | `docs/adr/ADR-0029-project-taxonomy-and-param-layering.md :: ### D2：项目实体 \`test_project\` — 单层身份 + 正交 facet` | 改 facet / 派生归属 |
@@ -298,3 +299,4 @@
 | 2026-09-29 | ADR-0058 v1.1（落地记录勘误，决策无改动）：`batch-delivery` 行锚点（D8）与分层不变，仅登记版本变化 |
 | 2026-09-29 | ADR-0058 v1.2（D2 增补规划者「设计权 ≠ 裁决权」：模型级问题先设计目标模型、既有 ADR 是证据与迁移约束；裁决权划分不变）：`batch-delivery` 行锚点（D8）与分层不变，仅登记版本变化 |
 | 2026-09-30 | ADR-0058 v1.3 / ADR-0034 v1.15（M2）：`batch-delivery` D8 定实施职责，D10 定域内登记/域外 PR 可见性与对称前检；`execution-registry` 的字段与状态机归属不变，云端实施不写本地 Registry |
+| 2026-10-10 | ADR-0058 v1.4（D11 有界验收与复核收敛，#3649）：`batch-delivery` 行锚点（D8）与分层不变；复议触发补「D11 生效后同一单元复核超三轮未闭合」 |
