@@ -76,7 +76,7 @@
         "reboot_to_flash"
       ],
       "label": "刷机前是否重启设备",
-      "meaning": "是否在本次尝试里向设备发 adb reboot，让它经完整上电流进入 BROM 窗口被刷机工具抓到。注意 1.3.3 起的真实时序：先启动刷机工具进入 USB 扫描，在工具与读线程就绪的回调里才发 reboot——不是「先重启再起工具」（先重启的顺序真机证伪：工具只能看到窗口过后的普通态枚举）。",
+      "meaning": "是否在本次尝试里向设备发 adb reboot，让它经完整上电流进入 BROM 窗口被刷机工具抓到。注意 1.3.3 起的真实时序：先启动刷机工具（Popen）进入 USB 扫描，在工具就绪回调里才发 reboot——不是「先重启再起工具」（先重启的顺序真机证伪：工具只能看到窗口过后的普通态枚举）。",
       "unit": "布尔",
       "sensitive": false,
       "cautions": "重试轮（第 2 次起）即使把本开关关掉也会发 reboot：此时设备多半已在 BROM/DA 态，adb 调用通常 no-op。关掉它只对首次尝试有意义。"
@@ -134,13 +134,13 @@
         "version"
       ],
       "label": "目标固件版本",
-      "meaning": "指纹路由时要选定的固件版本目录名；留空时先回落环境变量 STP_FLASH_FIRMWARE_VERSION，再读固件族目录下的 latest.json 指针（指针可按机型键给出各自的版本）。",
+      "meaning": "指纹路由时要选定的固件版本目录名；留空时先回落环境变量 STP_FLASH_FIRMWARE_VERSION，再读固件族目录下的 latest.json 指针（指针可按机型键给出各自的版本）。本键只在指纹路由分支读取，显式 firmware_dir 路由不读它。",
       "unit": "版本字符串",
       "sensitive": false,
       "version_range": {
         "min_inclusive": "1.2.0"
       },
-      "cautions": "路由最终拿不到目标版本时，版本比对与刷后核验都会被跳过（见 skip_if_current 与 verify_version），本键也因此决定「这次是否真会核验」。"
+      "cautions": "步骤参数、STP_FLASH_FIRMWARE_VERSION 与 latest 指针都拿不到版本时，指纹路由直接失败（success=False，刷机工具不启动），不是跳过比对或核验后成功收场。指纹路由还必须能加载该版本目录的有效 manifest；缺 manifest 同样路由失败，到不了刷后核验跳过。刷后核验的 skipped 只发生在显式 firmware_dir 路由已成功但 route 无目标版本的情形（见 verify_version）。"
     },
     {
       "path": [
@@ -191,20 +191,20 @@
       "version_range": {
         "min_inclusive": "1.2.0"
       },
-      "cautions": "同样以「路由有目标版本」为前提：manifest 或 latest.json 没给出目标版本时，核验直接以 skipped 返回成功，既不等设备回 adb 也不读版本——开着本开关不等于一定做了核验。"
+      "cautions": "跳过版本核验的前提是**路由已成功但 route 没有目标版本**（典型是显式指定 firmware_dir、DA/scatter 已齐、目录无 manifest 因而无 version）：此时核验函数以 skipped 返回成功，该函数本身不再等 adb、也不读版本。指纹路由缺 latest/版本会在路由阶段直接失败（success=False），不会走到 skipped。开着本开关不等于一定做了核验。刷成功后 main 仍会先做固定 60 秒重新枚举观察（见 verify_wait_seconds），与本核验是否跳过无关。"
     },
     {
       "path": [
         "verify_wait_seconds"
       ],
-      "label": "刷后回 adb 等待上限",
-      "meaning": "刷后等待设备重新回到 adb 可访问状态的上限，到点仍不可达则版本核验判失败。",
+      "label": "版本核验内 adb-ready 上限",
+      "meaning": "版本核验开启且 route 有目标版本时，核验函数内部等待设备回到 adb 可访问状态的上限；到点仍不可达则版本核验判失败。",
       "unit": "秒",
       "sensitive": false,
       "version_range": {
         "min_inclusive": "1.2.0"
       },
-      "cautions": "它只在真的要核验时生效：路由没有目标版本时核验被整体跳过，本值不会被用到，设备是否回到 adb 也不由本步判定。"
+      "cautions": "本键只控制版本核验函数内部的 adb-ready 等待：核验因无目标版本被跳过时不消费本键。这不等于整步不观察 adb——刷机工具成功退出后，main 仍先以固定 60 秒窗口做重新枚举观察并记录 reenumerated（观察不到不单独判失败），然后再进入版本核验；核验通过后还会做 boot 稳定等待。"
     },
     {
       "path": [
@@ -274,9 +274,9 @@
         "strict_env_check"
       ],
       "label": "严格环境检查",
-      "meaning": "打开后把刷机前环境预检里的**全部** WARNING 升级为硬失败——不止 ttyACM 写入路径不明确，也包括「设备侧 adb 缺失」这类在不需要 adb 的流程里原本可忽略的项；可用环境变量 STP_FLASH_STRICT_ENV_CHECK 兜底。",
+      "meaning": "打开后把刷机前环境预检里的**全部** WARNING 升级为硬失败——不止 ttyACM 写入路径不明确，也包括「Agent 主机上的 adb 可执行文件缺失」这类在不需要 adb 的流程里原本可忽略的项；可用环境变量 STP_FLASH_STRICT_ENV_CHECK 兜底。",
       "unit": "布尔",
-      "cautions": "关闭时 ttyACM 可写性是按 udev 规则形态与本进程组归属**推断**的（0666 放行；0660+dialout 仅对成员放行；没有可用节点时结果标注为未实测），推断在位不等于实测可写。误开会让权限配置略有告警的主机整批判红。",
+      "cautions": "ttyACM 可写性：有可用节点时按当前进程实测；无节点时才按 udev 规则形态与本进程组归属推断（0666 放行；0660+dialout 仅对成员放行，并标注未实测）。strict 只决定 WARNING 是否升为失败，不改变可写性证据来源。误开会让权限配置略有告警的主机整批判红。",
       "sensitive": false,
       "version_range": {
         "min_inclusive": "1.3.0"

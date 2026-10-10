@@ -361,8 +361,9 @@ def test_only_credential_paths_are_marked_sensitive() -> None:
     }
 
 
-#: #3675 逐族内容复核（R1–R7）确认的语义钉：说明文字必须包含的事实与不得回潮的错误说法。
-#: 每条都对应发布源码里的实际动作，复核者可在同一位点复验；它不是结构校验的替代。
+#: #3675 逐族内容复核确认的语义钉（第 1 轮 R1–R7 + 第 2 轮 flash_firmware R2-1/R2-2）：
+#: 说明文字必须包含的事实与不得回潮的错误说法。每条都对应发布源码里的实际动作，
+#: 复核者可在同一位点复验；它不是结构校验的替代。
 _SEMANTIC_PINS: list[tuple[str, list, str, tuple[str, ...], tuple[str, ...]]] = [
     # R1：读了键不等于旋钮生效。
     ("monkey_setup", ["fill", "timeout_seconds"], "2.3.13",
@@ -407,14 +408,26 @@ _SEMANTIC_PINS: list[tuple[str, list, str, tuple[str, ...], tuple[str, ...]]] = 
     # R5：刷机时序、核验前提、strict 覆盖面、真实回落链名称。
     ("flash_firmware", ["reboot_to_flash"], "1.3.15",
      ("回调里才发 reboot",), ("启动刷机工具前先 adb reboot",),),
-    ("flash_firmware", ["verify_version"], "1.3.18",
-     ("skipped", "目标版本"), ()),
     ("flash_firmware", ["strict_env_check"], "1.3.18",
-     ("全部", "推断"), ("只把 ttyACM",),),
+     ("全部", "Agent 主机"), ("设备侧 adb", "只把 ttyACM",),),
     ("flash_firmware", ["firmware_root"], "1.3.18",
      ("STP_FLASH_FIRMWARE_ROOT",), ("同名环境变量",),),
     ("flash_firmware", ["da_file"], "1.3.18",
      ("显式指定 firmware_dir",), ()),
+    # 第 2 轮 R2-1：指纹缺版本硬失败；核验 skipped 仅限路由成功但无目标版本。
+    ("flash_firmware", ["version"], "1.3.15",
+     ("直接失败", "success=False"), ("都会被跳过",),),
+    ("flash_firmware", ["version"], "1.3.18",
+     ("直接失败", "success=False"), ("都会被跳过",),),
+    ("flash_firmware", ["verify_version"], "1.3.15",
+     ("路由已成功", "skipped"), ("或 latest.json",),),
+    ("flash_firmware", ["verify_version"], "1.3.18",
+     ("路由已成功", "skipped"), ("或 latest.json",),),
+    # 第 2 轮 R2-2：跳过版本核验 ≠ 整步不观察 adb。
+    ("flash_firmware", ["verify_wait_seconds"], "1.3.15",
+     ("固定 60", "版本核验"), ("也不由本步判定",),),
+    ("flash_firmware", ["verify_wait_seconds"], "1.3.18",
+     ("固定 60", "版本核验"), ("也不由本步判定",),),
     # R6：回收与停测边界比清单更宽；optional 不是万能豁免。
     ("monkey_teardown", ["pull_paths"], "1.0.3",
      ("追拉", "无法区分"), ("不会被回收",)),
@@ -441,7 +454,7 @@ def test_content_review_pins_hold(
     must_contain: tuple[str, ...],
     must_not_contain: tuple[str, ...],
 ) -> None:
-    """#3675 内容复核 R1–R7 的纠正不得回潮。
+    """#3675 内容复核纠正不得回潮（含第 1 轮 R1–R7 与第 2 轮 flash_firmware R2-1/R2-2）。
 
     断言对象是 ``resolve_doc`` 在该版本**实际选中**的那一条目——也就是人在界面上会读到的
     文字；不拼整份 JSON，否则范围条目与通用条目的文字会互相污染判定。
