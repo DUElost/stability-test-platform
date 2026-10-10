@@ -1,0 +1,386 @@
+{
+  "schema_version": 1,
+  "script_name": "monkey_setup",
+  "entries": [
+    {
+      "path": [
+        "steps"
+      ],
+      "label": "执行的子步骤清单",
+      "meaning": "本步按顺序跑哪些准备动作（wifi 连网、root 提权、push 推资源、install 装包、clean 清理、att_clean 清 AutoTestTool 残留），每个子步骤的参数写在与之同名的对象里。",
+      "unit": "字符串列表",
+      "cautions": "默认不含 fill（填盘）：填到 60% 需写约 19.5GB，adb shell dd 达不到，历史上它是 init 失败与整窗卡 BARRIER_WAIT 的主因；要存储压力必须显式把 fill 加回来并同时放宽其超时。清单里出现未知步骤名会整步判失败。",
+      "sensitive": false
+    },
+    {
+      "path": [
+        "wifi",
+        "ssid"
+      ],
+      "label": "WiFi 名称",
+      "meaning": "wifi 子步骤要让设备连上的无线网络名。留空即视为本次执行没勾选「连 WiFi」，该子步骤跳过并按成功收场；填了却连不上仍是硬失败。",
+      "unit": "字符串",
+      "cautions": "值优先取步骤参数（平台在派发期把 WiFi 资源池分配结果写进本步骤的 wifi 配置），其次回落主机环境变量 STP_WIFI_SSID；派发期才定的值在确认前不是确定值。",
+      "sensitive": false
+    },
+    {
+      "path": [
+        "wifi",
+        "ssid"
+      ],
+      "label": "WiFi 名称",
+      "meaning": "wifi 子步骤要让设备连上的无线网络名。留空即视为本次执行没勾选「连 WiFi」，该子步骤跳过并按成功收场；填了却连不上仍是硬失败。本版本按「单个 shell 参数」语义转义后进入设备命令。",
+      "unit": "字符串",
+      "cautions": "转义只保证值不被拆坏或被执行，SSID 本身不做字符白名单；「已连接」判定仍是状态输出的子串匹配，请求 Test 而设备连在 Test-5G 时会被当成已连接而跳过连接（connect_wifi 1.0.2 才改的那个判据，本脚本未改）。",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "2.3.13"
+      }
+    },
+    {
+      "path": [
+        "wifi",
+        "password"
+      ],
+      "label": "WiFi 密码",
+      "meaning": "wifi 子步骤连接该网络所用的口令。留空回落主机环境变量 STP_WIFI_PASSWORD；平台在派发期把资源池口令写进本步骤时以注入值为准。",
+      "unit": "字符串",
+      "cautions": "属凭据：任何展示面只显示「已设置/未设置」，不得输出明文或部分字符。",
+      "sensitive": true
+    },
+    {
+      "path": [
+        "wifi",
+        "password"
+      ],
+      "label": "WiFi 密码",
+      "meaning": "wifi 子步骤连接该网络所用的口令。留空回落主机环境变量 STP_WIFI_PASSWORD；平台在派发期把资源池口令写进本步骤时以注入值为准。本版本按「单个 shell 参数」语义转义后进入设备命令。",
+      "unit": "字符串",
+      "cautions": "属凭据：任何展示面只显示「已设置/未设置」；双引号包裹挡不住命令替换与反引号，必须走转义而不是拼接。",
+      "sensitive": true,
+      "version_range": {
+        "min_inclusive": "2.3.13"
+      }
+    },
+    {
+      "path": [
+        "wifi",
+        "timeout_seconds"
+      ],
+      "label": "连网命令超时",
+      "meaning": "wifi 子步骤发起连接后等待设备返回结果的最长时间，超时即该子步骤失败。",
+      "unit": "秒",
+      "sensitive": false
+    },
+    {
+      "path": [
+        "root",
+        "max_attempts"
+      ],
+      "label": "提权尝试次数",
+      "meaning": "root 子步骤把设备拉到 root 最多尝试几次，每次尝试后回读判定。",
+      "unit": "次",
+      "sensitive": false
+    },
+    {
+      "path": [
+        "push",
+        "bundle"
+      ],
+      "label": "资源包目录",
+      "meaning": "push 子步骤要整包推到设备的资源目录（与 manifest 配对使用）：先在主机算整包 sha256，再解包到设备并由 marker 回读校验。",
+      "unit": "主机侧目录路径",
+      "cautions": "必须与 manifest 同时给出才会走整包分支；只给 files 列表时本键无效。主机上算 sha256 与解包是长耗时静默段，靠 PROGRESS 戳维持心跳。",
+      "sensitive": false
+    },
+    {
+      "path": [
+        "push",
+        "manifest"
+      ],
+      "label": "资源清单文件",
+      "meaning": "bundle 对应的清单文件（记录期望 sha256 与内容），push 子步骤据此判定设备端资源是否已一致、并在解包后校验 marker。",
+      "unit": "主机侧文件路径",
+      "sensitive": false
+    },
+    {
+      "path": [
+        "push",
+        "remote_dir"
+      ],
+      "label": "设备端资源目录",
+      "meaning": "bundle 解压/落地到设备上的目标目录。",
+      "unit": "设备端路径",
+      "sensitive": false
+    },
+    {
+      "path": [
+        "push",
+        "remote_dir"
+      ],
+      "label": "设备端资源目录",
+      "meaning": "bundle 解压/落地到设备上的目标目录。本版本在参数入口按设备路径白名单校验，非法值整步判失败，不进入任何 shell。",
+      "unit": "设备端路径",
+      "cautions": "空串也是配置错误，不会静默回退默认目录；含上级目录段或元字符的值会被直接判失败。",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "2.3.13"
+      }
+    },
+    {
+      "path": [
+        "push",
+        "skip_if_match"
+      ],
+      "label": "资源已一致则跳过推送",
+      "meaning": "设备端 marker 记录的整包 sha256 与清单期望一致时跳过重推，省掉慢 NFS 上的重复传输。",
+      "unit": "布尔",
+      "sensitive": false
+    },
+    {
+      "path": [
+        "push",
+        "push_timeout_seconds"
+      ],
+      "label": "单文件推送超时",
+      "meaning": "push 子步骤里逐个 adb push 单个文件时每次传输的等待上限。",
+      "unit": "秒",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "2.2.0"
+      }
+    },
+    {
+      "path": [
+        "push",
+        "timeout_seconds"
+      ],
+      "label": "解包命令超时",
+      "meaning": "push 子步骤在设备端执行解包（tar）这条长命令的等待上限，超时该子步骤失败。",
+      "unit": "秒",
+      "cautions": "这是脚本内层超时，与引擎的步骤超时是嵌套关系：内层先到期时外层根本不会触发，调大外层步骤超时救不了内层。",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "2.2.0"
+      }
+    },
+    {
+      "path": [
+        "push",
+        "tar_progress_interval_s"
+      ],
+      "label": "解包心跳间隔",
+      "meaning": "设备端解包期间每隔多久打一枚 PROGRESS 心跳戳，避免「慢但健康」的解包被引擎停滞钟误杀。",
+      "unit": "秒",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "2.3.2"
+      }
+    },
+    {
+      "path": [
+        "push",
+        "files"
+      ],
+      "label": "逐文件推送清单",
+      "meaning": "push 子步骤要逐个推到设备的文件列表，每项形如 {local: 主机侧路径, remote: 设备端路径, chmod: 推送后要设的权限模式}；remote 为空的项跳过。",
+      "unit": "对象列表",
+      "sensitive": false
+    },
+    {
+      "path": [
+        "push",
+        "files"
+      ],
+      "label": "逐文件推送清单",
+      "meaning": "push 子步骤要逐个推到设备的文件列表，每项形如 {local, remote, chmod}。本版本先整单校验再动手：remote 必须是允许的设备绝对路径，chmod 必须是 3-4 位八进制。",
+      "unit": "对象列表",
+      "cautions": "任一项非法即整步判失败并列出原因，不把未校验的值插进 root shell（chmod 与 push 目标都会被拼进设备命令）。",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "2.3.12"
+      }
+    },
+    {
+      "path": [
+        "install",
+        "apk_path"
+      ],
+      "label": "安装包路径",
+      "meaning": "install 子步骤要推到设备并安装的 APK 路径（主机侧文件或目录），留空则本子步骤跳过安装。",
+      "unit": "主机侧路径",
+      "sensitive": false
+    },
+    {
+      "path": [
+        "install",
+        "pkg_name"
+      ],
+      "label": "包名",
+      "meaning": "install 子步骤的目标应用包名，只与 required_version 配对使用：用它在设备上查已装版本号（dumpsys package 取 versionName）。留空则不做已装判定，直接安装。",
+      "unit": "字符串",
+      "sensitive": false,
+      "cautions": "包名本身不是安装动作的参数（安装按 apk_path 走），它决定的是「要不要跳过这次安装」的前置判定。"
+    },
+    {
+      "path": [
+        "install",
+        "pkg_name"
+      ],
+      "label": "包名",
+      "meaning": "安装后要核对/查询的目标应用包名。本版本在参数入口按标识符白名单校验一次，所有使用点只用校验后的值。",
+      "unit": "字符串",
+      "cautions": "该值会进入设备侧 shell 查询命令，非法字符必须判失败而不是原样拼接。",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "2.3.13"
+      }
+    },
+    {
+      "path": [
+        "install",
+        "required_version"
+      ],
+      "label": "要求的版本",
+      "meaning": "install 子步骤「已装到该版本就不重装」的判据：pkg_name 与本键都给出时，先查设备 versionName，命中即该子步骤按 skipped 成功收场；不命中照常安装。",
+      "unit": "版本字符串",
+      "cautions": "它是安装前的短路条件，不是安装后的强校验：装完的版本号是否等于它，本脚本不复核。要确认最终版本得靠后续步骤或产物侧核对。",
+      "sensitive": false
+    },
+    {
+      "path": [
+        "install",
+        "reinstall"
+      ],
+      "label": "覆盖安装",
+      "meaning": "是否带 -r 覆盖安装（保留数据重装）；关闭时走全新安装语义。",
+      "unit": "布尔",
+      "sensitive": false
+    },
+    {
+      "path": [
+        "install",
+        "timeout_seconds"
+      ],
+      "label": "安装命令超时",
+      "meaning": "install 子步骤等待安装命令返回的最长时间，超时该子步骤失败。",
+      "unit": "秒",
+      "sensitive": false
+    },
+    {
+      "path": [
+        "fill",
+        "target_percentage"
+      ],
+      "label": "目标占用百分比",
+      "meaning": "fill 子步骤把 /data 填到的使用率目标；按 df 的总量与已用算出还差多少 KB，已经达标就跳过（不写盘）。",
+      "unit": "百分比",
+      "cautions": "这是存储压力旋钮，代价极高：大容量 /data 上填到 60% 要写十几 GB，默认步骤清单里不带 fill，加回来必须同时放宽超时。",
+      "sensitive": false
+    },
+    {
+      "path": [
+        "fill",
+        "block_size_kb"
+      ],
+      "label": "写入块大小",
+      "meaning": "fill 子步骤每次 dd 写入的块大小（KB），总需写入量除以它得到块数。",
+      "unit": "KB",
+      "sensitive": false
+    },
+    {
+      "path": [
+        "fill",
+        "fill_path"
+      ],
+      "label": "填盘文件路径",
+      "meaning": "fill 子步骤在设备端写入的占位文件路径。",
+      "unit": "设备端路径",
+      "sensitive": false
+    },
+    {
+      "path": [
+        "fill",
+        "fill_path"
+      ],
+      "label": "填盘文件路径",
+      "meaning": "fill 子步骤在设备端写入的占位文件路径。本版本限定必须是 /data/local/tmp/ 下的普通文件名，空值才回退默认；非法值整步判失败。",
+      "unit": "设备端路径",
+      "cautions": "该值被插进设备端 dd 追加写与 stat 命令（root 执行），含空格/元字符/上级目录段会把删除或写入面扩张成任意 root 命令。",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "2.3.12"
+      }
+    },
+    {
+      "path": [
+        "fill",
+        "timeout_seconds"
+      ],
+      "label": "填盘等待上限",
+      "meaning": "fill 子步骤填盘写入的等待上限。",
+      "unit": "秒",
+      "cautions": "2.2.0 起才有该独立超时；更早版本填盘沿用推送传输的等待上限。该值是脚本内层限制，调外层步骤超时不会解除它。",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "2.2.0"
+      }
+    },
+    {
+      "path": [
+        "clean",
+        "uninstall_packages"
+      ],
+      "label": "卸载包清单",
+      "meaning": "clean 子步骤要在设备上 pm uninstall 掉的包名列表，用于起跑前清掉会干扰 monkey 的应用。",
+      "unit": "包名列表",
+      "cautions": "包名不存在的「not installed」不算失败；非法包名会被拒绝而不是拼进 root shell。",
+      "sensitive": false
+    },
+    {
+      "path": [
+        "clean",
+        "clear_logs"
+      ],
+      "label": "清理日志目录",
+      "meaning": "是否在 clean 子步骤里清空日志/AEE 采集目录（默认不清洁），打开时清理范围由 log_dirs 决定。",
+      "unit": "布尔",
+      "sensitive": false
+    },
+    {
+      "path": [
+        "clean",
+        "log_dirs"
+      ],
+      "label": "清理目录列表",
+      "meaning": "clear_logs 打开时要逐个清空（删掉目录下内容后重建目录）的设备端目录。",
+      "unit": "路径列表",
+      "sensitive": false
+    },
+    {
+      "path": [
+        "clean",
+        "log_dirs"
+      ],
+      "label": "清理目录列表",
+      "meaning": "clear_logs 打开时要逐个清空的设备端目录。本版本必须每一项都是 /data/ 或 /sdcard/ 下的绝对路径，不传才用内置默认清单。",
+      "unit": "路径列表",
+      "cautions": "非法项直接判该步失败而不是静默跳过——否则「清理没做」会以成功收场；空串或根路径会把删除面扩张到整机。",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "2.3.11"
+      }
+    },
+    {
+      "path": [
+        "clean",
+        "set_properties"
+      ],
+      "label": "属性设置表",
+      "meaning": "clean 子步骤要在设备上 setprop 的键值对象（键为属性名、值为目标字符串），用于把采集/上报类开关调到专项要求的状态。",
+      "unit": "字符串到字符串的对象",
+      "cautions": "键必须是标识符形态、值按单个 shell 参数转义；非法键记错并跳过，不进入 root shell。",
+      "sensitive": false
+    }
+  ]
+}

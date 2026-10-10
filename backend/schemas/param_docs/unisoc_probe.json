@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "script_name": "unisoc_probe",
+  "entries": [
+    {
+      "path": ["extra_paths"],
+      "label": "追加探查目录",
+      "meaning": "在代码内置的展锐异常通道目录清单之外，额外逐个 ls/统计条目的设备端绝对路径；结果只进 metrics，用于定位 uniview 事件真源。",
+      "unit": "路径列表",
+      "cautions": "该脚本刻意不执行任意命令：能做的只有列目录、统计条数与读固定属性，本参数只能增加被 ls 的路径。",
+      "sensitive": false
+    }
+  ]
+}

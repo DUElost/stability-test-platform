@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "script_name": "monkey_check",
+  "entries": [
+    {
+      "path": ["process_names"],
+      "label": "存活判定的进程名",
+      "meaning": "巡检时判断 monkey 是否还活着所用的进程名（在设备 ps 输出里匹配）；都不在但设备可达时，脚本会自动重启看门狗而不是判失败。",
+      "unit": "字符串列表",
+      "cautions": "看门狗进程的 cmdline 也含 monkey 名，匹配时必须排除它，否则「monkey 与看门狗双亡」永远触发不了重启分支（2.0.3 修正）。",
+      "sensitive": false
+    },
+    {
+      "path": ["watchdog_script"],
+      "label": "看门狗脚本名",
+      "meaning": "设备上负责拉起 monkey 的看门狗脚本标识，用于「是否还在跑」的匹配与重启后的确认对象。",
+      "unit": "字符串",
+      "cautions": "本脚本只做单次瞬时判断并按需重启，不重新推送资源；重启是否成功以窗口内轮询 ps 见到看门狗为准，nohup 的退出码恒 0 不能当证据。",
+      "sensitive": false
+    }
+  ]
+}

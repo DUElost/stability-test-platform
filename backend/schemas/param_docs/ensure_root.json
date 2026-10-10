@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "script_name": "ensure_root",
+  "entries": [
+    {
+      "path": ["max_attempts"],
+      "label": "提权尝试次数",
+      "meaning": "把设备拉到 root（adb root / 重启后再试）最多尝试几次，每次尝试后回读 id -u 判定是否已 root。",
+      "unit": "次",
+      "sensitive": false
+    },
+    {
+      "path": ["retry_delay_seconds"],
+      "label": "重试间隔",
+      "meaning": "两次提权尝试之间固定等待的时间，给 adbd 重启留窗口。",
+      "unit": "秒",
+      "sensitive": false
+    },
+    {
+      "path": ["wait_ready_seconds"],
+      "label": "单次就绪等待上限",
+      "meaning": "每次重试前等设备系统就绪（get-state 为 device 且 sys.boot_completed 为 1）的最长时间。1.0.2 起 port check_device 的「撞峰吸收」做法。",
+      "unit": "秒",
+      "sensitive": false,
+      "version_range": {"min_inclusive": "1.0.2"}
+    },
+    {
+      "path": ["total_budget_seconds"],
+      "label": "全步总预算",
+      "meaning": "本步可用于「多次提权尝试 + 等待就绪 + 间隔」的整体时间上限，耗尽即停止并报错。",
+      "unit": "秒",
+      "cautions": "必须被步骤超时容纳；把步骤 timeout 调到该值以下会让重试永远跑不完，而元数据里看不到这条内置预算。",
+      "sensitive": false,
+      "version_range": {"min_inclusive": "1.0.2"}
+    }
+  ]
+}

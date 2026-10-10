@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "script_name": "monkey_teardown",
+  "entries": [
+    {
+      "path": [
+        "process_names"
+      ],
+      "label": "停测进程清单",
+      "meaning": "步骤结束时要在设备侧逐个 force-stop / kill 的进程名或脚本路径清单（monkey 主进程、厂商 monkey、MonkeyTest.sh 看门狗、aimwd 守护等），先停进程再回收与删除文件。",
+      "unit": "字符串列表",
+      "cautions": "清单里没有的进程不会被停；删除看门狗脚本前必须先停其进程，否则残留进程会把脚本再拉起来。",
+      "sensitive": false
+    },
+    {
+      "path": [
+        "pull_paths"
+      ],
+      "label": "产物回收清单",
+      "meaning": "从设备拉回本地产物目录的条目列表，每项形如 {device: 设备端路径（必填）, local_name: 落地文件名（留空取设备路径的文件名）, is_dir: 是否按目录拉取（默认为是）, optional: 允许缺失（默认为否）}。",
+      "unit": "对象列表",
+      "cautions": "拉回的文件落在主机 STP_LOG_DIR 下按本次运行归档；不在清单里的设备文件不会被回收，拉取失败（rc≠0 或异常）会让该步判失败，只有 optional 为真的缺失项除外。",
+      "sensitive": false
+    },
+    {
+      "path": [
+        "clear_aee"
+      ],
+      "label": "关闭 AEE 采集",
+      "meaning": "停测后把设备的 AEE core dump/direct 上报属性设为 disable（setprop persist.aee.core.dump/direct disable），避免回收阶段继续产生 AEE 事件。",
+      "unit": "布尔",
+      "sensitive": false
+    },
+    {
+      "path": [
+        "cleanup"
+      ],
+      "label": "清理设备端资源",
+      "meaning": "是否删除本次专项推到设备上的脚本与二进制（MonkeyTest.sh、aim、aimwd、aim.jar、monkey.apk、架构库、blacklist 等），默认执行；显式关闭才保留现场。",
+      "unit": "布尔",
+      "cautions": "不清理会把残留留给下一专项：设备重启后残留物可能被自启拉起，与当前专项叠加（#894）。",
+      "sensitive": false
+    },
+    {
+      "path": [
+        "cleanup_paths"
+      ],
+      "label": "清理路径清单",
+      "meaning": "cleanup 打开时要逐项删除的设备端绝对路径列表；不传则用脚本内置的 monkey 资源清单。",
+      "unit": "路径列表",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "1.0.2",
+        "max_exclusive": "1.0.3"
+      }
+    },
+    {
+      "path": [
+        "cleanup_paths"
+      ],
+      "label": "清理路径清单",
+      "meaning": "cleanup 打开时要逐项删除的设备端绝对路径列表；不传则用脚本内置的 monkey 资源清单。每项按单个 shell 参数转义后进入设备侧 rm 与回读探针。",
+      "unit": "路径列表",
+      "cautions": "1.0.3 起逐项 shlex.quote：含空格的路径不再拆坏命令列表，含分号/命令替换/反引号的值不再成为设备侧命令执行面。",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "1.0.3"
+      }
+    },
+    {
+      "path": [
+        "verify_cleanup"
+      ],
+      "label": "清理后回读验证",
+      "meaning": "删除后逐项回读设备路径确认已消失，仍存在即记错并让该步失败，不静默残留。",
+      "unit": "布尔",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "1.0.2"
+      }
+    }
+  ]
+}
