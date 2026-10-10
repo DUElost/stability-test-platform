@@ -1,5 +1,5 @@
 # ADR-0060: 计划参数的含义与生效值——分层投影与说明登记表
-- 状态：Accepted v1.0（2026-10-10 Owner 裁决接受 v0.2 全文，决策无改动；落地按 §5 走 ADR-0058 批次）
+- 状态：Accepted v1.1（2026-10-10 #3652 Owner 裁决修订 D3 hard-max 示例与 §5 对应边界反例；其余决策相对 v1.0 不变；落地仍按 §5 走 ADR-0058 批次）
 - 版本记录：
   - v0.1 2026-10-09 起草（[#3637](https://github.com/DUElost/stability-test-platform/issues/3637)）。
   - v0.2 2026-10-10 按 #3638 独立复核修订：
@@ -9,6 +9,7 @@
     - R1-4：新增 D5，执行前确认携带配置指纹；
     - R2：不改 D2 语义，记入 §5 的批次测试边界。
   - v1.0 2026-10-10 定向复核通过（#3638），Owner 裁决接受 v0.2 全文，决策无改动；归属域登记为语义归属索引的 `plan-param-projection`。
+  - v1.1 2026-10-10 [#3652](https://github.com/DUElost/stability-test-platform/issues/3652) Owner 裁决：`barrier_max_wait_seconds=NULL` 表示继承主机安全策略（`env_fallback`），不是 `unset_definite`「无硬顶」。修订 D3-1 / D3-2 示例与 §5 对应边界反例；对齐现行 `pipeline_engine._default_barrier_max_wait_seconds`（`STP_BARRIER_MAX_WAIT_SECONDS` → 1800s；非法环境变量回落 1800s；非正值环境变量表示无硬顶）。不改 Agent 执行、env、状态、数据库、回报协议或 B5 Appetite。
 - 优先级：P1
 - 目标里程碑：M7
 - 日期：2026-10-09
@@ -147,13 +148,15 @@ ADR-0023 的 2026-09-25 裁决已撤销 `run_context.wifi_assignments` 冗余副
    | 状态 | 含义 | 展示 |
    |---|---|---|
    | `explicit` | Plan / 步骤显式配置了值 | 显示该值 |
-   | `unset_definite` | 未配置，平台语义确定，与运行环境无关 | 显示语义本身。例：巡检时长未设 = 不限；`barrier_max_wait_seconds` 未设 = 无硬顶；`auto_archive_interval_seconds` 未设 = 不自动归档 |
-   | `env_fallback` | 未配置，运行期由 Agent 按主机环境回落 | 必须显示回落链，不得显示为确定数值。例：步骤墙钟「由主机 `STP_STEP_WALL_CLOCK_SECONDS` 决定，未设则 300s」；barrier「由主机 `STP_BARRIER_TIMEOUT_SECONDS` 决定，未设则 600s，并按进度续期」；watcher 未配置的子键 |
+   | `unset_definite` | 未配置，平台语义确定，与运行环境无关 | 显示语义本身。例：巡检时长未设 = 不限；`auto_archive_interval_seconds` 未设 = 不自动归档 |
+   | `env_fallback` | 未配置，运行期由 Agent 按主机环境回落 | 实施者必须显示回落链，不得显示为确定数值。例：步骤墙钟「由主机 `STP_STEP_WALL_CLOCK_SECONDS` 决定，未设则 300s」；barrier 滑动窗「由主机 `STP_BARRIER_TIMEOUT_SECONDS` 决定，未设则 600s，并按进度续期」；barrier 绝对硬顶「由主机 `STP_BARRIER_MAX_WAIT_SECONDS` 决定，未设则 1800s；非法环境变量回落 1800s；环境变量非正值表示无硬顶」；watcher 未配置的子键。L1 / L2 不得把回落链上的默认秒数显示为已确认的运行期实际值 |
    | `pending_dispatch` | 派发或物化时才确定 | 显示决定因素，见 D1-3 |
    | `actual` | 已确认的实际值 | 只在存在权威取值通路时使用，必须注明通路、取值时点与所属 job / host |
 
-2. 投影不得把不同字段的回落混为一谈。例如 `barrier_timeout_seconds` 未设是 `env_fallback`，
-   `barrier_max_wait_seconds` 未设是 `unset_definite`（无硬顶）。
+2. 投影不得把不同字段的回落混为一谈。例如 `barrier_timeout_seconds` 未设是 `env_fallback`；
+   `barrier_max_wait_seconds` 未设也是 `env_fallback`（继承主机
+   `STP_BARRIER_MAX_WAIT_SECONDS` → 1800s 链；非法环境变量回落 1800s；环境变量非正值表示无硬顶）。
+   实施者不得把 `barrier_max_wait_seconds` 未设写成 `unset_definite`（无硬顶）。
 3. 以下字段必须在后端「Plan 级设置登记表」登记：`patrol_interval_seconds`、`timeout_seconds`（展示名「巡检时长」）、
    `barrier_timeout_seconds`、`barrier_max_wait_seconds`、`auto_archive_interval_seconds`、`watcher_policy`
    （含 `enabled` / `paths` / `required_categories` / `on_unavailable` 等子键），以及步骤级的
@@ -265,7 +268,9 @@ ADR-0023 的 2026-09-25 裁决已撤销 `run_context.wifi_assignments` 冗余副
   - 步骤显式填了 `ssid`，注入不覆盖，来源保持 `step_override`；
   - 某 host 的 watcher 管控为 inactive，该 host 的 Job 下发 `enabled=false`，其他 host 不变；
   - 步骤墙钟未设：L1 / L2 显示 `env_fallback` 回落链，不显示 300；
-  - `barrier_max_wait_seconds` 未设显示「无硬顶」（`unset_definite`）；
+  - `barrier_max_wait_seconds` 未设：L1 / L2 显示 `env_fallback` 与回落链（Plan →
+    `STP_BARRIER_MAX_WAIT_SECONDS` → 1800s；非法环境变量回落 1800s；环境变量非正值表示无硬顶），
+    实施者不得显示为「无硬顶」，也不得把 1800s 显示为已确认的运行期实际值；
   - 预览后、派发前 Plan 被修改：派发被拒，要求重新确认；
   - `monkey_setup` 的 `wifi.password` 在参数清单与折叠 JSON 中都被掩码。
 - **R2（非阻塞，交批次）**：嵌套参数的路径表达、跨版本同名参数的版本范围匹配与冲突兜底，
@@ -281,6 +286,7 @@ ADR-0023 的 2026-09-25 裁决已撤销 `run_context.wifi_assignments` 冗余副
 
 - 审查稿：`docs/reviews/UI_HUMAN_OBSERVABILITY_REVIEW_2026-10-09_89b9dc8_claude.md`（A3 / A4 / A5 / A6 / A7、§8）
 - 载体 issue：#3637；独立复核：#3638 评论（v0.1 → v0.2）
+- hard-max 模型修订：#3652（[Owner 裁决评论](https://github.com/DUElost/stability-test-platform/issues/3652#issuecomment-6095035247)；保留 #872 兜底，不改 Agent 执行）
 - 已完成的单点修复：
   - #3630（脚本库死链）；
   - #3634（参数说明常显）；
@@ -298,7 +304,7 @@ ADR-0023 的 2026-09-25 裁决已撤销 `run_context.wifi_assignments` 冗余副
   - `backend/services/plan_dispatcher_core.py`；
   - `backend/services/plan_dispatcher_sync.py`（`prepare_plan_run`、`materialize_jobs_and_allocations`、`_sync_allocate_devices`）；
   - `backend/services/agent_claim.py`（`enrich_job_metadata`）；
-  - `backend/agent/pipeline_engine.py`（`_resolve_step_wall_clock`、`_resolve_barrier_timeout`）；
+  - `backend/agent/pipeline_engine.py`（`_resolve_step_wall_clock`、`_resolve_barrier_timeout`、`_default_barrier_max_wait_seconds`）；
   - `backend/agent/watcher/policy.py`；
   - `backend/core/redaction.py`；
   - `backend/api/routes/runs.py`（`list_run_steps`）；
