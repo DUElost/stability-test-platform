@@ -300,3 +300,4 @@
 | 2026-09-29 | ADR-0058 v1.2（D2 增补规划者「设计权 ≠ 裁决权」：模型级问题先设计目标模型、既有 ADR 是证据与迁移约束；裁决权划分不变）：`batch-delivery` 行锚点（D8）与分层不变，仅登记版本变化 |
 | 2026-09-30 | ADR-0058 v1.3 / ADR-0034 v1.15（M2）：`batch-delivery` D8 定实施职责，D10 定域内登记/域外 PR 可见性与对称前检；`execution-registry` 的字段与状态机归属不变，云端实施不写本地 Registry |
 | 2026-10-10 | ADR-0058 v1.4（D11 有界验收与复核收敛，#3649）：`batch-delivery` 行锚点（D8）与分层不变；复议触发补「D11 生效后同一单元复核超三轮未闭合」 |
+| 2026-10-10 | ADR-0060 v1.1（#3652 Owner 裁决：`barrier_max_wait_seconds` 未设为 `env_fallback` 继承主机策略，不是 `unset_definite`「无硬顶」）：`plan-param-projection` 行锚点（`## 2. 决策`）与分层不变，仅登记版本变化 |

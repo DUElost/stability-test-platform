@@ -8,7 +8,8 @@ Class: process
 按 [#3652 Owner 裁决](https://github.com/DUElost/stability-test-platform/issues/3652#issuecomment-6095035247) 只改文档与注释，不改 Agent / env / DB / 状态 / 回报协议 / B5 Appetite。
 
 - ADR-0060 升 v1.1：D3-1 / D3-2 与 §5 边界反例把 `barrier_max_wait_seconds` 未设从 `unset_definite`（无硬顶）改为 `env_fallback`（Plan → `STP_BARRIER_MAX_WAIT_SECONDS` → 1800s；非法 env 回落 1800s；非正值 env = 无硬顶）。L1 / L2 不得把 1800s 写成已确认运行期实际值。
-- 同步 `docs/adr/README.md` 索引行。
+- 同步 `docs/adr/README.md` 主表与 M7 看板行（S12）。
+- 同 PR 触碰 `docs/design/2026-semantic-ownership.md` 变更日志，登记 `plan-param-projection` 版本变化（S15③）。
 - 对齐仍写「NULL = 不设上限」的 Plan 相关注释：`backend/models/plan.py`、`frontend/src/utils/api/types.ts`（Plan / PlanCreate / PlanUpdate）。
 - 事实依据（只读证据，不授权改 Agent）：`pipeline_engine._default_barrier_max_wait_seconds`（#872）；B5-U1 登记表已按现行代码投影 `env_fallback`（`backend/schemas/plan_settings.json`）。
 - 避开开放 draft #3667（`plans.py` / `plan_runs.py` 等）；`plans.py` 内仍写「None = 不设上限」的 Field 注释本 PR 不碰，留待不冲突时另改。
