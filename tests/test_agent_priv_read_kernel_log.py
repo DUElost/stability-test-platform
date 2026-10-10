@@ -227,7 +227,8 @@ def test_truncated_output_is_rejected_not_partially_delivered(wrapper, monkeypat
 
 
 def test_timeout_is_rejected_with_marker(wrapper, monkeypatch, tmp_path, capsys):
-    stub = _stub_journalctl(tmp_path, "sleep 5\n")
+    # exec sleep：Popen PID 即 sleep，kill 后立即收尸；墙钟≈ timeout(0.3)，勿付 sleep 5
+    stub = _stub_journalctl(tmp_path, "exec sleep 60\n")
     monkeypatch.setattr(wrapper, "JOURNALCTL_BIN", str(stub))
     monkeypatch.setattr(wrapper, "KERNEL_LOG_TIMEOUT_SECONDS", 0.3)
 

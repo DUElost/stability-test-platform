@@ -57,6 +57,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import importlib.util
 import json
 import os
@@ -525,14 +526,25 @@ def _build_parents(tree: ast.AST) -> dict[int, ast.AST]:
     return parents
 
 
+# Content-addressed parse cache: same rel + bytes + sibling stems → same FileAnalysis.
+# Isolation copies share content for untouched files; mutations change the digest and miss.
+# Sibling stems matter because import indexing depends on neighboring ``*.py`` names.
+_ANALYZE_FILE_CACHE: dict[tuple[str, str, frozenset[str]], FileAnalysis] = {}
+
+
 def _analyze_file(repo: Path, rel: str) -> FileAnalysis:
     path = repo / rel
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=rel)
+    raw = path.read_text(encoding="utf-8")
+    local_stems = {p.stem for p in path.parent.glob("*.py")}
+    cache_key = (rel, hashlib.sha256(raw.encode("utf-8")).hexdigest(), frozenset(local_stems))
+    cached = _ANALYZE_FILE_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    tree = ast.parse(raw, filename=rel)
     parents = _build_parents(tree)
     funcs: dict[str, ast.FunctionDef] = {}
     module_assigns: dict[str, ast.AST] = {}
     agent_dir_names: set[str] = set()
-    local_stems = {p.stem for p in path.parent.glob("*.py")}
     collect_from: dict[str, set[tuple[str, str]]] = {}
     collect_aliases: dict[str, set[str]] = {}
     wildcard: list[str] = []
@@ -570,7 +582,7 @@ def _analyze_file(repo: Path, rel: str) -> FileAnalysis:
             for target in targets:
                 if isinstance(target, ast.Name) and value is not None:
                     module_assigns[target.id] = value
-    return FileAnalysis(
+    fa = FileAnalysis(
         rel=rel,
         tree=tree,
         parents=parents,
@@ -582,6 +594,8 @@ def _analyze_file(repo: Path, rel: str) -> FileAnalysis:
         wildcard_local_imports=tuple(wildcard),
         multi_source_aliases=multi_source,
     )
+    _ANALYZE_FILE_CACHE[cache_key] = fa
+    return fa
 
 
 def _enclosing_locator(node: ast.AST, fa: FileAnalysis) -> str:

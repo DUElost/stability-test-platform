@@ -116,7 +116,8 @@ class TestFingerprintRouting:
     def test_adb_unreachable_fail_fast(self, fw_root, monkeypatch):
         monkeypatch.setattr(ff, "_adb_getprop",
                             lambda prop, adb, serial, timeout=10: None)
-        route, err = _route(root=fw_root)
+        # model_ready_wait_seconds=0：失败模式已 stub（getprop 恒 None），勿付生产 90s 轮询预算
+        route, err = _route({"model_ready_wait_seconds": 0}, root=fw_root)
         assert route is None
         assert "fingerprint routing failed" in err
 
