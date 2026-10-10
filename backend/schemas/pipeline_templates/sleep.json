@@ -15,7 +15,7 @@
       {
         "step_id": "sleep_setup",
         "action": "script:sleep_setup",
-        "version": "1.0.5",
+        "version": "1.0.6",
         "timeout_seconds": 900,
         "retry": 1,
         "params": {}
