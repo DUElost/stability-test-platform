@@ -94,6 +94,7 @@ function renderPage({
   getHost,
   wifiPools = [] as any[],
   wifiPoolsFailure,
+  projection,
 }: {
   plans?: any[];
   devices?: any[];
@@ -108,6 +109,7 @@ function renderPage({
   getHost?: (id: string) => any | Promise<any>;
   wifiPools?: any[];
   wifiPoolsFailure?: Error;
+  projection?: any;
 } = {}) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
@@ -132,7 +134,7 @@ function renderPage({
       safe_debug: { steps: [], plan_settings: {}, watcher_policy: {} },
     },
   });
-  (api.plans.parameterProjection as any).mockResolvedValue({
+  (api.plans.parameterProjection as any).mockResolvedValue(projection ?? {
     layer: 'L1',
     context: { read_at: '2026-10-10T00:00:00.000000Z', authority: 'test' },
     steps: [],
@@ -1471,6 +1473,18 @@ describe('PlanExecutePage', () => {
   });
 
   it('groups plan steps by stage with colored badges', async () => {
+    const step = (stage: string, script: string) => ({
+      step_key: script,
+      script_name: script,
+      script_version: '1.0.0',
+      stage,
+      sort_order: 1,
+      enabled: true,
+      executes: true,
+      metadata_missing: false,
+      params: [],
+      settings: [],
+    });
     renderPage({
       plans: [{
         id: 7,
@@ -1482,6 +1496,15 @@ describe('PlanExecutePage', () => {
           { id: 3, step_key: 'c', script_name: 'tear_c', script_version: '1.0.0', stage: 'teardown', enabled: true, sort_order: 1 },
         ],
       }],
+      projection: {
+        layer: 'L1',
+        context: { read_at: '2026-10-10T00:00:00.000000Z', authority: 'test' },
+        steps: [step('init', 'init_a'), step('patrol', 'patrol_b'), step('teardown', 'tear_c')],
+        plan_settings: [],
+        watcher_policy: { note: '独立策略', items: [] },
+        dispatch_decisions: [],
+        safe_debug: { steps: [], plan_settings: {}, watcher_policy: {} },
+      },
       initialEntry: '/execution/plan-execute?plan=7',
     });
 
@@ -1707,17 +1730,20 @@ describe('PlanExecutePage', () => {
     fireEvent.click(screen.getByRole('button', { name: /生成执行预览/ }));
     fireEvent.click(await screen.findByLabelText(/lab-test/));
 
-    resolvePreview({
-      plan_name: 'Smoke Plan',
-      device_count: 1,
-      job_count: 1,
-      total_steps: 1,
-      device_ids: [1],
-      confirmation_fingerprint: staleFingerprint,
+    await act(async () => {
+      resolvePreview({
+        plan_name: 'Smoke Plan',
+        device_count: 1,
+        job_count: 1,
+        total_steps: 1,
+        device_ids: [1],
+        confirmation_fingerprint: staleFingerprint,
+      });
     });
 
     expect(screen.queryByText(/预览已生成并冻结/)).not.toBeInTheDocument();
     expect(mocks.toast.info).not.toHaveBeenCalledWith(expect.stringContaining('预览已生成'));
+    expect(screen.queryByRole('button', { name: /预览中/ })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /生成执行预览/ }));
     expect(await screen.findByText(/预览已生成并冻结 1 台设备/)).toBeInTheDocument();

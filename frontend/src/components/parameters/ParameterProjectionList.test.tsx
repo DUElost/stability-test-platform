@@ -108,12 +108,12 @@ describe('ParameterProjectionList', () => {
       expect(view.getByTestId('parameter-value')).toHaveTextContent(
         state === 'explicit' ? '确定值' : labels[state],
       );
-      expect(view.getByText(labels[state])).toBeInTheDocument();
+      expect(view.getAllByText(labels[state]).length).toBeGreaterThan(0);
       expect(view.getByText('L1')).toBeInTheDocument();
     }
-    expect(screen.getByText('模式默认')).toBeInTheDocument();
-    expect(screen.getByText('脚本默认')).toBeInTheDocument();
-    expect(screen.getByText('派发填入')).toBeInTheDocument();
+    expect(screen.getAllByText('模式默认').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('脚本默认').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('派发填入').length).toBeGreaterThan(0);
     expect(screen.getAllByText('来源不可追溯').length).toBeGreaterThan(0);
   });
 

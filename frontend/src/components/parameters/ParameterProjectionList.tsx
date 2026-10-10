@@ -128,7 +128,10 @@ export function ParameterProjectionList({
           return (
             <section key={`${step.step_key ?? title}-${index}`} className="border-t">
               <div className="flex items-center justify-between gap-2 px-3 py-2 text-xs">
-                <span>{title}</span>
+                <span className="flex items-center gap-2">
+                  {step.stage ? <span>{step.stage}</span> : null}
+                  <span>{title}</span>
+                </span>
                 <span>{step.executes ? '执行' : '不执行'}</span>
               </div>
               {step.metadata_missing ? (

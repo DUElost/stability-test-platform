@@ -509,7 +509,9 @@ class TestPrepareConfirmation:
                     "JOIN pg_class c ON c.oid = l.relation "
                     "WHERE c.relname = 'plan' AND l.granted"
                 )).scalars().all()
-            assert "ForShare" in modes, modes
+            # FOR SHARE 的表锁是 RowShareLock。已授予的行锁写在元组头里，
+            # pg_locks 通常不列出 ForShare；下面的 FOR UPDATE 超时才是行锁证据。
+            assert "RowShareLock" in modes, modes
             with Session() as blocker:
                 blocker.execute(text("SET LOCAL lock_timeout = '300ms'"))
                 with pytest.raises(OperationalError):
