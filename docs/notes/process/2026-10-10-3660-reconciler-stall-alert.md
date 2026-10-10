@@ -42,8 +42,11 @@ Class: process
 - 七场景：持续无运行、持续报错、先报错后恢复、序列从未出现、采集中断、全程成功、序列出生即为 N
   （另含从 0 起步增长的修复后对照）。
 - 「序列出生即为 N」：`_ _ 2 2…` 上 `increase()>0` 为 0（修复前失明）；`0 0 2 4…` 上为 1（预置后可见）。
-- pytest：`scripts/run_pytest.py tests/test_reconciler_runs_precreate_3660.py` 断言 import 后两条子序列存在。
-- `check:quick`：见 PR 验证报告。
+- pytest：`scripts/run_pytest.py tests/test_reconciler_runs_precreate_3660.py tests/test_prometheus_alerts_contract.py -q`
+  → 11 passed, 48 skipped（promtool 相关用例在本机有 promtool 时另由全量场景覆盖）。
+- 「序列出生即为 N」负向：对 `_ _ 2 2…` 期望 `increase()>0 == 1` → promtool FAILED（got 0）；
+  对 `0 0 2 4…` 期望 `increase()>0 == 1` → SUCCESS。
+- `check:quick`：16 gates 通过；`schema-at-head` 因无 `DATABASE_URL` 按设计跳过。
 
 ## Revisit
 
