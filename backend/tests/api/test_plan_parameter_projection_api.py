@@ -133,3 +133,43 @@ def test_script_keeps_raw_fields_and_masks_projection(client, auth_headers, db_s
     projected = json.dumps(row["parameter_projection"], ensure_ascii=False)
     assert SENTINEL not in projected
     assert row["parameter_projection"]["params"]
+
+
+_PROJECTION_OPENAPI_ROUTES = (
+    ("/api/v1/plans/{plan_id}/parameter-projection", "get"),
+    ("/api/v1/plans/parameter-projection", "post"),
+    ("/api/v1/plan-runs/{run_id}/jobs/{job_id}/parameter-projection", "get"),
+)
+_PROJECTION_RESPONSE_SCHEMA = "ApiResponse_ParameterProjection_"
+_PROJECTION_FIELDS = {
+    "layer",
+    "context",
+    "steps",
+    "plan_settings",
+    "watcher_policy",
+    "dispatch_decisions",
+    "safe_debug",
+}
+
+
+def test_parameter_projection_openapi_declares_concrete_response_model():
+    """三条 200 响应都挂具体的 ApiResponse[ParameterProjection]，而不是裸 object。"""
+    from backend.main import fastapi_app
+
+    schema = fastapi_app.openapi()
+    components = schema["components"]["schemas"]
+    wrapper = components[_PROJECTION_RESPONSE_SCHEMA]
+    assert wrapper["title"] == "ApiResponse[ParameterProjection]"
+    data_refs = {
+        item.get("$ref")
+        for item in wrapper["properties"]["data"]["anyOf"]
+        if "$ref" in item
+    }
+    assert "#/components/schemas/ParameterProjection" in data_refs
+    assert _PROJECTION_FIELDS <= set(components["ParameterProjection"]["properties"])
+
+    for path, method in _PROJECTION_OPENAPI_ROUTES:
+        content = schema["paths"][path][method]["responses"]["200"]["content"]
+        assert content["application/json"]["schema"] == {
+            "$ref": f"#/components/schemas/{_PROJECTION_RESPONSE_SCHEMA}",
+        }

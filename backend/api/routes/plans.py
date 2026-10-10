@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from backend.api.response import ApiResponse, ok
 from backend.api.schemas import PaginatedResponse
+from backend.api.schemas.plan_parameter_projection import ParameterProjection
 from backend.api.routes.auth import get_current_active_user, User
 from backend.services.audit_writer import record_audit
 from backend.core.settings.scheduler import get_scheduler_settings
@@ -1002,7 +1003,10 @@ def _projection_plan_not_found() -> None:
     )
 
 
-@router.get("/plans/{plan_id}/parameter-projection")
+@router.get(
+    "/plans/{plan_id}/parameter-projection",
+    response_model=ApiResponse[ParameterProjection],
+)
 def get_plan_parameter_projection(
     plan_id: int,
     db: Session = Depends(get_db),
@@ -1020,7 +1024,10 @@ def get_plan_parameter_projection(
     ))
 
 
-@router.post("/plans/parameter-projection")
+@router.post(
+    "/plans/parameter-projection",
+    response_model=ApiResponse[ParameterProjection],
+)
 def draft_parameter_projection(
     payload: DraftParameterProjectionIn,
     db: Session = Depends(get_db),
