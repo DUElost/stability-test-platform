@@ -45,4 +45,5 @@ Class: process
 - plan_run 518 结束后重跑批量命令补齐 37 台；全 fleet `fallback=0` 后改 `strict`（需 `--force`）；
   之后才可进入 ADR-0051 Phase 3。
 - `job_instance.host_id` 为空的成因与是否回填，另立单。
+- 已由 #3669 结案：原结论不成立，见新 Note。
 
