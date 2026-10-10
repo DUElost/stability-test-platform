@@ -128,6 +128,40 @@ groups:
             reports were never persisted and need manual inspection. Readable
             cutoff rows are re-enqueued and will drain on their own.
 
+  # #3660：设备租约回收器 D5（terminal_job_active_lease）停转面。
+  # 信号只用 stability_reconciler_runs_total{check="terminal_job_active_lease",outcome="success"}
+  # ——不得用 stability_apscheduler_job_runs_total{job_name="device_lease_reconciler"}
+  # （_with_leadership 在非主节点跳过执行时仍记 success）。
+  # 「明确停转」与「无数据/UNKNOWN」必须拆开（#3532：缺 no-data ⇒ 抓取停时告警转绿）。
+  # 子序列由 backend/core/metrics.py 在 import 时预置 0（#3500 形态）；其余 Counter 预置归 #3500。
+  - name: stability-platform-device-lease-reconciler
+    rules:
+      - alert: StabilityDeviceLeaseReconcilerStalled
+        expr: >-
+          sum(increase(stability_reconciler_runs_total{check="terminal_job_active_lease",outcome="success"}[15m])) == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Device lease reconciler D5 check has not succeeded
+          description: >-
+            stability_reconciler_runs_total{check="terminal_job_active_lease",outcome="success"}
+            在 15 分钟窗口内有采样但成功增量为 0，并已持续 10 分钟。回收器是「job 已终态、
+            租约仍 ACTIVE」的唯一自动兜底。对照 docs/operations/device-lease-emergency-release.md
+            第 8–11 步做只读判定；回收器仍可能在工作时，执行者不得手工绕过。
+
+      - alert: StabilityDeviceLeaseReconcilerNoData
+        expr: absent(stability_reconciler_runs_total{check="terminal_job_active_lease",outcome="success"})
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Device lease reconciler D5 success series is missing
+          description: >-
+            控制面未暴露 stability_reconciler_runs_total{check="terminal_job_active_lease",outcome="success"}
+            （从未出现、采集中断或进程不在），已持续 15 分钟。不得把无数据当成回收器正常。
+            对照 docs/operations/device-lease-emergency-release.md 第 8–11 步，按「无法判定」停止。
+
   - name: stability-platform-security
     rules:
       - alert: StabilityCsrfOriginRejected
