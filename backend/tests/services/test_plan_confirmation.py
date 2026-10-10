@@ -387,6 +387,13 @@ class TestPrepareConfirmation:
 
     def test_valid_token_snapshots_the_prepare_read(self, db_session, confirmable):
         plan, device = confirmable
+        script = (
+            db_session.query(Script)
+            .filter_by(name="check_device", version="v1.0.0")
+            .one()
+        )
+        script.default_params = {"marker": "from-prepare-read"}
+        db_session.commit()
         token = _issued_token(db_session, plan.id)
         original_name = plan.name
         fetches = {"n": 0}
@@ -394,10 +401,7 @@ class TestPrepareConfirmation:
 
         def once(db, steps):
             fetches["n"] += 1
-            meta = real_fetch(db, steps)
-            for row in meta.values():
-                row["default_params"] = {"marker": "from-prepare-read"}
-            return meta
+            return real_fetch(db, steps)
 
         loads = {"n": 0}
         real_load = load_plan_graph_for_confirmation
