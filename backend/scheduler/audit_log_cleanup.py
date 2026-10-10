@@ -99,6 +99,7 @@ BUSINESS_ACTIONS_ALLOWLIST: frozenset[str] = frozenset({
     "deactivate",
     "dead_letter_replay",
     "delete",
+    "emergency_release_lease",  # #3646 管理员紧急释放终态 job 租约；与 retire_device 同族，90d
     "ensure_flash_prereqs",
     "ensure_flash_prereqs_request",
     "export",

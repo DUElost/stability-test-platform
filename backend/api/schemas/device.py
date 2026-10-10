@@ -43,6 +43,27 @@ class BulkSwipeTrailOut(BaseModel):
     results: List[BulkSwipeTrailDeviceResult] = Field(default_factory=list)
 
 
+class DeviceLeaseReleaseIn(BaseModel):
+    """#3646：管理员紧急释放一条终态 job 租约。原因写入审计，不得为空。"""
+
+    reason: str = Field(min_length=1)
+
+    @field_validator("reason")
+    @classmethod
+    def _reason_not_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("reason must not be blank")
+        return stripped
+
+
+class DeviceLeaseReleaseOut(BaseModel):
+    lease_id: int
+    device_id: int
+    job_id: int
+    status: str
+
+
 class DeviceRetireIn(BaseModel):
     """ADR-0057 D2：设备退役请求体——原因必填（审计 who/when/reason 的 reason）。"""
 

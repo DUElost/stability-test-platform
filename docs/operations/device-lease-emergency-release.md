@@ -3,12 +3,11 @@
 适用条件：设备的 ACTIVE 租约（`device_leases.status = 'ACTIVE'`）没有被释放，关联 job 已终态，
 租约回收器（`device_lease_reconciler`）不可用，且必须立即复用该设备。
 
-> 警告：本流程直接写生产业务库的 `device_leases` 表。执行者必须先确认当前 Requirement 明确授权本次
-> 写入。执行者不得修改 `device` 表或 Agent 文件。数据库凭据与生产写操作边界见
+> 警告：第 12 步通过管理端接口写入生产业务库的 `device_leases`。执行者必须先确认当前 Requirement 明确授权本次
+> 写入。执行者不得手工 `UPDATE` `device_leases`，也不得修改 `device` 表或 Agent 文件。数据库凭据与生产写操作边界见
 > [`production-diagnostics.md`](./production-diagnostics.md)。
 
 本文的「设备 id」指 `device.id`（整数主键），不是设备序列号 `device.serial`。
-标有「缺口」的步骤还没有查法，见文末「待补缺口」；执行者遇到缺口时必须停下并报告缺口编号，不得自行编写查法。
 
 ## 前置检查
 
@@ -68,18 +67,34 @@
 
 ## 释放
 
-> 警告：下一步只改 `device_leases` 中该设备的 ACTIVE 行。不得修改 `device` 表或 Agent 文件。
-> 设备 id 写错会释放另一台设备的租约。
+> 警告：下一步只释放路径中的那一条 JOB 租约。执行者不得手工 `UPDATE` `device_leases`。
+> 执行者不得修改 `device` 表、`job_instance` 行、PlanRun 或 Agent 文件。
+> 路径中的设备 id 与租约不一致时，接口返回 404，不会释放其他设备的租约。
 
-12. 执行释放（执行身份：缺口 G3）：
+执行者必须把 `<原因>` 写成非空字符串。
 
-    ```sql
-    UPDATE device_leases
-    SET status = 'RELEASED', released_at = now()
-    WHERE device_id = <设备 id> AND status = 'ACTIVE';
+12. 以管理员身份调用释放接口。`$AUTH` 的取法见 [`honor-flash-runbook.md`](./honor-flash-runbook.md)「鉴权（运维 curl 模式）」。把 `<设备 id>`、`<租约 id>` 换成第 4 步记下的值：
+
+    ```bash
+    curl -sS -X POST "http://127.0.0.1:8000/api/v1/devices/<设备 id>/leases/<租约 id>/release" \
+      -H "$AUTH" -H "Content-Type: application/json" \
+      -d '{"reason":"<原因>"}'
     ```
 
-    预期：影响 1 行（psql 显示 `UPDATE 1`）。
+    预期：HTTP 200，且 `audit_logs` 新增 1 行。响应 JSON 的 `data.status` 为 `RELEASED`，`data.lease_id` 等于 `<租约 id>`。
+    审计行的查法（只读角色 `stp_ro`）：
+
+    ```sql
+    SELECT action, resource_type, resource_id, username, details
+    FROM audit_logs
+    WHERE resource_type = 'device'
+      AND resource_id = '<设备 id>'
+      AND action = 'emergency_release_lease'
+    ORDER BY id DESC
+    LIMIT 1;
+    ```
+
+    预期：1 行。`details` 含 `lease_id`、`job_id`、`job_status`、`reason`、`operator`。
 
 ## 后置验证
 
@@ -112,11 +127,3 @@
     心跳没有上报，设备状态不会刷新，改按 `diagnose-device-stall` skill 排查该主机。如果心跳正常，
     停止本流程并报告：无 ACTIVE 租约、心跳正常而设备仍为 `BUSY`，属状态不一致
     （「状态机一致性核对」第 ⑤ 项）。
-
-## 待补缺口
-
-以下事项待补；补齐后删除对应条目和正文中的缺口标记。
-
-| 编号 | 位置 | 缺什么 | 跟踪 |
-|---|---|---|---|
-| G3 | 第 12 步 | 执行释放的身份：`stp_ro` 会拒绝写入；`production-diagnostics.md` 不允许手工查询使用 `stp` 或 `postgres`，并要求写操作走代码、迁移和 PR 流程 | [#3646](https://github.com/DUElost/stability-test-platform/issues/3646)（方案：改为管理端 API） |

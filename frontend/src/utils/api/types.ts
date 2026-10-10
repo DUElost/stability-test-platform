@@ -150,6 +150,18 @@ export interface ScriptPresenceRefreshResult {
   counts: ScriptPresenceCounts;
 }
 
+/** `POST /devices/{deviceId}/leases/{leaseId}/release`（#3646，仅管理员；本单元无页面按钮）。 */
+export interface DeviceLeaseReleaseRequest {
+  reason: string;
+}
+
+export interface DeviceLeaseReleaseResult {
+  lease_id: number;
+  device_id: number;
+  job_id: number;
+  status: 'RELEASED';
+}
+
 export interface Device {
   id: number;
   serial: string;

@@ -17,7 +17,7 @@ Class: architecture
 
 | ID | 不变量 | 主要承载路径 |
 |---|---|---|
-| **I1** | `job_instance` → `device_leases` | `complete_job`、`extend_leases_batch`、`_reconcile_expired_leases`、`extend_job_lock` |
+| **I1** | `job_instance` → `device_leases` | `complete_job`、`extend_leases_batch`、`_reconcile_expired_leases`、`extend_job_lock`、`release_terminal_job_lease` |
 | **I2** | `job_instance` → `plan_run` | 同上（终态化时）、recycler 超时路径 |
 | **I3** | `job_instance` → `plan_run_host` | 终态化 `_bump_host_counters`、`coordinator_heartbeat`、`_bulk_abort_pending_jobs` |
 | **I4** | `plan_run` → `plan_run_host` | `on_job_terminal(_sync)`、`admission_transaction`、`_bulk_abort_pending_jobs`、`prepare_plan_run` |
@@ -44,6 +44,7 @@ Class: architecture
 | `recycler` PENDING/RUNNING 超时 | Job → Lease | 逐 job savepoint → `release_lease` |
 | `recovery_sync`（`#2015` 修正） | Job → Lease → Device | 原为 `Lease → Job → Device`——09-15 生产死锁复现 60 次的环侧（Agent 重启落在续租 tick 内），见下 |
 | `acquire_lease` / `claim` | Job → Host → Lease | 不取 plan_run |
+| `release_terminal_job_lease`（`#3646`） | Job → Lease | 先无锁读出租约的 `job_id`，再 Job `FOR UPDATE`，再 Lease `FOR UPDATE`，然后 `release_lease_sync`。持有租约行锁后不再锁另一条 job |
 | `run_retention_cleanup`（`#2022` 修正） | Job → Lease → plan_run | 原为 `plan_run → Lease/Job`，见下 |
 
 **`plan_run` × `job_instance`（I2）**

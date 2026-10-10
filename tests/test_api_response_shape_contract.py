@@ -675,6 +675,13 @@ _MODEL_PAIRS: tuple[tuple[str, str, str, str], ...] = (
         "frontend/src/utils/api/types.ts",
         "DeviceRetireBatchResult",
     ),
+    # #3646：管理员紧急释放终态 job 租约（TS 用 Result 后缀；键集与后端 Out 逐名一致）。
+    (
+        "backend/api/schemas/device.py",
+        "DeviceLeaseReleaseOut",
+        "frontend/src/utils/api/types.ts",
+        "DeviceLeaseReleaseResult",
+    ),
     # #2187 opt-in scripts.py：目录行与使用统计双双 MATCH（TS 命名不同源
     # ——ScriptEntry/ScriptUsage 是消费侧原名，键集与后端模型逐名一致）。
     (
