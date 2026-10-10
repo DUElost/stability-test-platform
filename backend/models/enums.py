@@ -10,6 +10,15 @@ class JobStatus(str, Enum):
     UNKNOWN      = "UNKNOWN"
 
 
+#: D5 回收与紧急释放共用的 job 终态。不含 UNKNOWN：UNKNOWN 必须走回收器宽限分支，
+#: 不得在这里另写一份字面量。
+TERMINAL_JOB_STATUSES: frozenset[str] = frozenset({
+    JobStatus.COMPLETED.value,
+    JobStatus.FAILED.value,
+    JobStatus.ABORTED.value,
+})
+
+
 class PlanRunStatus(str, Enum):
     RUNNING         = "RUNNING"
     SUCCESS         = "SUCCESS"

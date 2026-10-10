@@ -4,6 +4,7 @@ import type {
   ApiResponseEnvelope,
   BulkSwipeTrailResult,
   Device,
+  DeviceLeaseReleaseResult,
   DeviceRetireBatchResponse,
   PaginatedResponse,
 } from './types';
@@ -37,6 +38,14 @@ export const devices = {
     apiClient.post<Device>('/devices', data).then(r => r.data),
   updateTags: (id: number, tags: string[]) =>
     apiClient.put<Device>(`/devices/${id}/tags`, tags).then(r => r.data),
+  /** #3646：释放一条终态 job 的 ACTIVE JOB 租约（admin）。无页面入口。 */
+  releaseLease: (deviceId: number, leaseId: number, reason: string) =>
+    unwrapApiResponse(
+      apiClient.post<ApiResponseEnvelope<DeviceLeaseReleaseResult>>(
+        `/devices/${deviceId}/leases/${leaseId}/release`,
+        { reason },
+      ),
+    ),
   /** ADR-0057 D2（#2962 B）：退役 / 解除退役（admin；409=E2 前置不满足）。 */
   retire: (id: number, retireReason: string) =>
     apiClient.post<Device>(`/devices/${id}/retire`, { retire_reason: retireReason }).then(r => r.data),

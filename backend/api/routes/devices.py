@@ -21,6 +21,8 @@ from backend.api.schemas.device import (
     BulkProjectAssignIn,
     BulkSwipeTrailIn,
     BulkSwipeTrailOut,
+    DeviceLeaseReleaseIn,
+    DeviceLeaseReleaseOut,
     DeviceRetireBatchIn,
     DeviceRetireBatchOut,
     DeviceRetireBatchResult,
@@ -28,6 +30,7 @@ from backend.api.schemas.device import (
     DeviceUnretireIn,
 )
 from backend.api.routes.auth import get_current_active_user, require_admin, User
+from backend.services.device_lease_emergency_release import release_terminal_job_lease
 from backend.services.device_lifecycle import not_stale_condition
 from backend.services.device_retirement import (
     retire_device,
@@ -555,6 +558,36 @@ def _device_out(device: Device, db: Session) -> DeviceOut:
     out = DeviceOut.model_validate(device)
     _fill_project_key(device, out, _model_to_project_map(db))
     return out
+
+
+@router.post(
+    "/{device_id}/leases/{lease_id}/release",
+    response_model=ApiResponse[DeviceLeaseReleaseOut],
+)
+def release_device_lease_endpoint(
+    device_id: int,
+    lease_id: int,
+    payload: DeviceLeaseReleaseIn,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """#3646：释放一条终态 job 的 ACTIVE JOB 租约（admin）。不改 job / PlanRun。"""
+    released = release_terminal_job_lease(
+        db,
+        device_id=device_id,
+        lease_id=lease_id,
+        reason=payload.reason,
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
+    return ok(DeviceLeaseReleaseOut(
+        lease_id=released.lease_id,
+        device_id=released.device_id,
+        job_id=released.job_id,
+        status=released.status,
+    ))
 
 
 @router.post("/{device_id}/retire", response_model=DeviceOut)
