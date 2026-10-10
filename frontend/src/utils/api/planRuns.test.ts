@@ -16,6 +16,7 @@ vi.mock('./client', async (importOriginal) => {
 
 import apiClient from './client';
 import { planRuns } from './planRuns';
+import { planRunKeys } from './queryKeys';
 
 /**
  * #2085：`cleanParams` 的 `all` 规则只对**枚举**参数成立。
@@ -67,5 +68,14 @@ describe('planRuns.cleanParams（#2085）', () => {
     expect(apiClient.get).toHaveBeenCalledWith('/plan-runs/12/events', {
       params: { limit: 50 },
     });
+  });
+
+  it('按 run 与 job 读取下发投影', async () => {
+    vi.mocked(apiClient.get).mockResolvedValue({ data: { data: { layer: 'L3' } } } as never);
+    await expect(planRuns.jobParameterProjection(4, 9)).resolves.toEqual({ layer: 'L3' });
+    expect(apiClient.get).toHaveBeenCalledWith('/plan-runs/4/jobs/9/parameter-projection');
+    expect(planRunKeys.jobParameterProjection(4, 9)).toEqual([
+      'plan-run', 4, 'job-parameter-projection', 9,
+    ]);
   });
 });

@@ -16,6 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.api.response import ApiResponse, ok
+from backend.api.schemas.plan_parameter_projection import ScriptParameterProjection
 from backend.api.error_helpers import raise_api_http_error
 from backend.api.routes.auth import get_current_active_user, get_current_user, require_admin, User
 from backend.core.agent_secret import AgentSecretNotConfiguredError, require_agent_secret
@@ -26,6 +27,7 @@ from backend.models.enums import PASSING_PLAN_RUN_STATUSES, PlanRunStatus
 from backend.models.plan import PlanStep
 from backend.models.plan_run import PlanRun
 from backend.models.script import Script
+from backend.services.plan_parameter_projection import project_script
 from backend.services.script_catalog import default_packages_root, sync_scripts_from_manifest
 from backend.services.script_catalog_version import invalidate_script_catalog_version_cache
 
@@ -145,6 +147,7 @@ class ScriptOut(BaseModel):
     description: Optional[str]
     created_at: datetime
     updated_at: datetime
+    parameter_projection: Optional[ScriptParameterProjection] = None
 
 
 class ScriptScanRetireBlocked(BaseModel):
@@ -192,6 +195,12 @@ def _script_runtime_root() -> str | None:
 
 
 def _script_out(script: Script) -> ScriptOut:
+    projection = project_script(
+        script_name=script.name,
+        script_version=script.version,
+        param_schema=script.param_schema or {},
+        default_params=script.default_params or {},
+    )
     return ScriptOut(
         id=script.id,
         name=script.name,
@@ -209,6 +218,7 @@ def _script_out(script: Script) -> ScriptOut:
         description=script.description,
         created_at=script.created_at,
         updated_at=script.updated_at,
+        parameter_projection=projection,
     )
 
 

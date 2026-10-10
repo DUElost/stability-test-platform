@@ -1,7 +1,7 @@
 import apiClient from './client';
 import { unwrapApiResponse } from './client';
 import { fetchAllPages, type PagedResult } from './paginate';
-import type { Plan, PlanChainTailCreate, PlanCreate, PlanUpdate, PlanRunCreate, PlanRunPreview, PlanRunTriggerResult, PaginatedResponse, Specialty } from './types';
+import type { Plan, PlanChainTailCreate, PlanCreate, PlanUpdate, PlanRunCreate, PlanRunPreview, PlanRunTriggerResult, PaginatedResponse, Specialty, ParameterProjection, DraftParameterProjectionRequest } from './types';
 
 export const plans = {
   /** ADR-0029 D6（#405）：专项字典，Plan 编辑器下拉数据源。 */
@@ -49,6 +49,12 @@ export const plans = {
 
   previewRun: (id: number, data: PlanRunCreate) =>
     unwrapApiResponse<PlanRunPreview>(apiClient.post(`/plans/${id}/run/preview`, data)),
+
+  parameterProjection: (id: number) =>
+    unwrapApiResponse<ParameterProjection>(apiClient.get(`/plans/${id}/parameter-projection`)),
+
+  draftParameterProjection: (data: DraftParameterProjectionRequest) =>
+    unwrapApiResponse<ParameterProjection>(apiClient.post('/plans/parameter-projection', data)),
 
   run: (id: number, data: PlanRunCreate) =>
     unwrapApiResponse<PlanRunTriggerResult>(apiClient.post(`/plans/${id}/run`, data)),

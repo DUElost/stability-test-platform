@@ -46,6 +46,7 @@ from backend.services.plan_dispatcher_core import (
     script_defaults as _script_defaults,
     snapshot_dispatch_host_watcher_admin_states,
 )
+from backend.services.plan_parameter_projection import project_saved_plan
 from backend.services.suite_binding import (
     SuiteMaterializationConflict,
     freeze_dispatch_suite,
@@ -502,7 +503,14 @@ def preview_plan_dispatch_sync(
         raise PlanDispatchError(
             f"Plan {plan_id} generated invalid lifecycle: {'; '.join(errors)}"
         )
-    return _build_preview(plan, lifecycle, device_ids)
+    preview = _build_preview(plan, lifecycle, device_ids)
+    preview["parameter_projection"] = project_saved_plan(
+        plan,
+        list(steps),
+        metadata,
+        authority="与 preview 同一次读取的 Plan、步骤与脚本元数据",
+    ).model_dump(mode="json")
+    return preview
 
 
 def initial_dispatch_state() -> dict:

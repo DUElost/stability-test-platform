@@ -45,6 +45,15 @@ _AUTH_HEADER_RE = re.compile(
 _REDACTED = "***"
 
 
+def sensitive_query_keys() -> frozenset[str]:
+    """只读暴露 URL 脱敏使用的敏感键名集合。
+
+    参数投影必须复用这一份集合，不得另抄第二份名单。返回值是 frozenset，
+    调用方不能修改原集合，也不能改变 ``redact_secrets`` 的字符串脱敏行为。
+    """
+    return _SENSITIVE_QUERY_KEYS
+
+
 def _redact_url(url: str) -> str:
     """Strip userinfo and sensitive query values, preserving the rest."""
     try:

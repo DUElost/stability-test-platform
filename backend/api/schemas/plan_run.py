@@ -23,6 +23,8 @@ from __future__ import annotations
 
 from typing import Optional
 
+from backend.api.schemas.plan_parameter_projection import ParameterProjection
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.api.schemas.dedup import DedupSkippedHostOut
@@ -96,6 +98,8 @@ class PlanRunDetailOut(BaseModel):
     enqueued_at: Optional[str] = None
     next_admission_at: Optional[str] = None
     priority: int = 0
+    # #3653 U1：详情带 L2 投影；列表保持 null，不在列表路径上计算。
+    parameter_projection: Optional[ParameterProjection] = None
 
 
 class PlanRunListStatsOut(BaseModel):

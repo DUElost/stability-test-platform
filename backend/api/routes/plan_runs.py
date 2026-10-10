@@ -32,7 +32,7 @@ from backend.api.schemas.plan_run import (
     PlanRunTimelineOut,
     WatcherSummaryOut,
 )
-from backend.core.database import get_db
+from backend.core.database import get_async_db, get_db
 from backend.core.metrics import record_plan_run_devices_query_duration
 from backend.models.enums import PlanRunStatus
 from backend.models.job import JobInstance
@@ -43,6 +43,10 @@ from backend.services.plan_precheck import (
 )
 from backend.services.plan_run_abort import PlanRunAbortError, abort_plan_run
 from backend.services.plan_run_archive import archive_plan_run_logs
+from backend.services.plan_parameter_projection import (
+    ProjectionLookupError,
+    load_job_parameter_projection,
+)
 from backend.services.plan_run_catalog import (
     build_plan_run_detail,
     build_plan_run_jobs,
@@ -156,6 +160,20 @@ def list_plan_run_jobs(
 ):
     """薄壳：``plan_run_catalog.build_plan_run_jobs``。"""
     return ok(build_plan_run_jobs(db, run_id))
+
+
+@router.get("/plan-runs/{run_id}/jobs/{job_id}/parameter-projection")
+async def get_job_parameter_projection(
+    run_id: int, job_id: int, db=Depends(get_async_db),
+    _current_user: User = Depends(get_current_active_user),
+):
+    try:
+        return ok(await load_job_parameter_projection(db, run_id, job_id))
+    except ProjectionLookupError as exc:
+        raise HTTPException(
+            status_code=exc.status,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
 
 
 @router.post(

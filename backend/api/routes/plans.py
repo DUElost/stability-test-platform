@@ -37,10 +37,12 @@ from backend.services.plan_wifi import (
 )
 from backend.services.plan_dispatcher_sync import (
     PlanDispatchError,
+    _fetch_script_metadata,
     initial_dispatch_state,
     prepare_plan_run,
     preview_plan_dispatch_sync,
 )
+from backend.services.plan_parameter_projection import project_draft, project_saved_plan
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["plans"])
@@ -202,6 +204,20 @@ class PlanOut(BaseModel):
     created_at: datetime
     updated_at: datetime
     steps: List[PlanStepOut] = []
+
+
+class DraftParameterProjectionIn(BaseModel):
+    """未保存草稿的只读投影。不要求专项或项目，也不写入数据库。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    patrol_interval_seconds: Optional[int] = Field(default=None, ge=1)
+    timeout_seconds: Optional[int] = Field(default=None, ge=1)
+    barrier_timeout_seconds: Optional[int] = Field(default=None, ge=1)
+    barrier_max_wait_seconds: Optional[int] = Field(default=None, ge=1)
+    auto_archive_interval_seconds: Optional[int] = Field(default=None, ge=1)
+    watcher_policy: Optional[dict] = None
+    steps: List[PlanStepIn] = Field(default_factory=list)
 
 
 class PlanRunTrigger(BaseModel):
@@ -977,6 +993,41 @@ def get_plan(
         .order_by(PlanStep.stage, PlanStep.sort_order).all()
     _raise_if_hidden_legacy_aee_plan(plan, steps)
     return ok(_plan_out(plan, steps))
+
+
+def _projection_plan_not_found() -> None:
+    raise HTTPException(
+        status_code=404,
+        detail={"code": "PLAN_NOT_FOUND", "message": "plan not found"},
+    )
+
+
+@router.get("/plans/{plan_id}/parameter-projection")
+def get_plan_parameter_projection(
+    plan_id: int,
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
+    plan = db.get(Plan, plan_id)
+    steps = db.query(PlanStep).filter(PlanStep.plan_id == plan_id)\
+        .order_by(PlanStep.stage, PlanStep.sort_order).all()
+    if plan is None or _plan_steps_include_legacy_aee_scripts(steps):
+        _projection_plan_not_found()
+    metadata = _fetch_script_metadata(db, steps)
+    return ok(project_saved_plan(
+        plan, steps, metadata,
+        authority="当前已保存 Plan 与步骤；未创建 PlanRun",
+    ))
+
+
+@router.post("/plans/parameter-projection")
+def draft_parameter_projection(
+    payload: DraftParameterProjectionIn,
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
+    metadata = _fetch_script_metadata(db, payload.steps)
+    return ok(project_draft(payload.model_dump(), payload.steps, metadata))
 
 
 @router.put("/plans/{plan_id}", response_model=ApiResponse[PlanOut])
