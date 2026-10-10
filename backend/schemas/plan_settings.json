@@ -1,0 +1,360 @@
+{
+  "schema_version": 1,
+  "entries": [
+    {
+      "scope": "plan",
+      "path": ["patrol_interval_seconds"],
+      "label": "巡检间隔",
+      "meaning": "轮间等待。没有启用的 patrol 步骤时不适用；有启用的 patrol 步骤时必须填写。",
+      "unit": "秒",
+      "unset_state": "unset_definite",
+      "fallback_chain": "未设：无巡检。没有独立环境变量回落。",
+      "write_boundary": "null 或 int≥1；与启用的 patrol 步骤互相约束",
+      "ui_editable": true,
+      "semantic_anchors": [
+        "backend/services/plan_dispatcher_core.py:build_lifecycle_from_steps",
+        "backend/agent/pipeline_engine.py:patrol"
+      ]
+    },
+    {
+      "scope": "plan",
+      "path": ["timeout_seconds"],
+      "label": "巡检时长",
+      "meaning": "各设备 init 完成后开始计时，轮前到点则正常完成，然后再 teardown。没有 patrol 时不适用。",
+      "unit": "秒",
+      "unset_state": "unset_definite",
+      "fallback_chain": "未设：不限。没有环境变量回落。",
+      "write_boundary": "null 或 int≥1；不得写 0",
+      "ui_editable": true,
+      "semantic_anchors": [
+        "backend/services/plan_dispatcher_core.py:build_lifecycle_from_steps",
+        "backend/api/routes/plans.py:PlanCreate"
+      ]
+    },
+    {
+      "scope": "plan",
+      "path": ["barrier_timeout_seconds"],
+      "label": "初始化同步等待预算",
+      "meaning": "只对先到的设备等待；同伴有推进则续期。",
+      "unit": "秒",
+      "unset_state": "env_fallback",
+      "fallback_chain": "Plan 值 → 主机 STP_BARRIER_TIMEOUT_SECONDS → 600；非法或非正的环境变量回到 600",
+      "write_boundary": "null 或 int≥1；既有 hard max 与预算比较校验保留",
+      "ui_editable": true,
+      "semantic_anchors": [
+        "backend/services/plan_dispatcher_core.py:build_lifecycle_from_steps",
+        "backend/agent/pipeline_engine.py:_resolve_barrier_timeout"
+      ]
+    },
+    {
+      "scope": "plan",
+      "path": ["barrier_max_wait_seconds"],
+      "label": "初始化同步累计等待硬顶",
+      "meaning": "从首次等待开始计时。未设时继承主机环境，不是关闭硬顶。与 ADR-0060 原文「无硬顶」冲突，见 #3652，本批按现行代码展示。",
+      "unit": "秒",
+      "unset_state": "env_fallback",
+      "fallback_chain": "Plan 值 → 主机 STP_BARRIER_MAX_WAIT_SECONDS → 1800；非法环境变量回到 1800；环境变量 ≤0 才表示无硬顶",
+      "write_boundary": "null 或 int≥1；清空的含义是继承主机，不是关闭",
+      "ui_editable": true,
+      "semantic_anchors": [
+        "backend/agent/pipeline_engine.py:_default_barrier_max_wait_seconds",
+        "backend/services/plan_dispatcher_core.py:build_lifecycle_from_steps"
+      ]
+    },
+    {
+      "scope": "plan",
+      "path": ["auto_archive_interval_seconds"],
+      "label": "自动归档间隔",
+      "meaning": "调度器按当前 Plan 的间隔触发在跑增量归档和终态归档。快照里只是冻结的设计值，不能说调度器使用这份冻结值。",
+      "unit": "秒",
+      "unset_state": "unset_definite",
+      "fallback_chain": "未设：不自动归档。没有环境变量回落。",
+      "write_boundary": "null 或 int≥1",
+      "ui_editable": true,
+      "semantic_anchors": [
+        "backend/scheduler/cron_scheduler.py:auto_archive_sweep"
+      ]
+    },
+    {
+      "scope": "plan",
+      "path": ["watcher_policy"],
+      "label": "异常采集策略",
+      "meaning": "独立的采集策略，不是脚本参数。子键分别分类；主机覆盖在派发时才确定；运行期最终策略本批不可知。",
+      "unit": "",
+      "unset_state": "unset_definite",
+      "fallback_chain": "未设：各子键按各自登记回落。API 只接受对象或 null；更新时 null 原本不生效；清空用空对象。",
+      "write_boundary": "API 原边界 Optional[dict]；界面只编辑 enabled、on_unavailable、paths、required_categories",
+      "ui_editable": true,
+      "semantic_anchors": [
+        "backend/agent/watcher/policy.py:WatcherPolicy.from_job",
+        "backend/services/agent_claim.py:enrich_job_metadata"
+      ]
+    },
+    {
+      "scope": "step",
+      "path": ["timeout_seconds"],
+      "label": "步骤墙钟上限",
+      "meaning": "步骤允许运行的最长时间。0 表示不限，并且必须同时配置停滞上限至少 1 秒且脚本支持 PROGRESS。",
+      "unit": "秒",
+      "unset_state": "env_fallback",
+      "fallback_chain": "步骤值 → 主机 STP_STEP_WALL_CLOCK_SECONDS → 300；负值或非法值回落 300。未设时不要把 300 写成已确定的值。",
+      "write_boundary": "API Optional[int]；组合 schema 实际 int≥0",
+      "ui_editable": true,
+      "semantic_anchors": [
+        "backend/services/plan_dispatcher_core.py:apply_step_timing_fields",
+        "backend/agent/pipeline_engine.py:_resolve_step_wall_clock"
+      ]
+    },
+    {
+      "scope": "step",
+      "path": ["stall_seconds"],
+      "label": "步骤停滞上限",
+      "meaning": "没有新增 PROGRESS 序号持续这么久则视为停滞。0、非正或非法表示关闭。正值要求脚本支持 PROGRESS。",
+      "unit": "秒",
+      "unset_state": "env_fallback",
+      "fallback_chain": "步骤值 → 主机 STP_STEP_STALL_SECONDS → 0；0 或非正或非法表示关闭。未设时不要把 0 写成已确定的值。",
+      "write_boundary": "null 或 int≥0",
+      "ui_editable": true,
+      "semantic_anchors": [
+        "backend/agent/pipeline_engine.py:_resolve_step_stall",
+        "backend/api/routes/plans.py:_validate_stall_seconds_capability"
+      ]
+    },
+    {
+      "scope": "step",
+      "path": ["retry"],
+      "label": "失败后重试次数",
+      "meaning": "失败后再试几次。未设等于 0。这不是总尝试次数，总次数等于 retry+1。",
+      "unit": "次",
+      "unset_state": "unset_definite",
+      "fallback_chain": "未设：0。写入入口上限是 5；流水线 schema 上限 10 不是这个写入口的边界。",
+      "write_boundary": "PlanStepIn int 0..5",
+      "ui_editable": true,
+      "semantic_anchors": [
+        "backend/api/routes/plans.py:PlanStepIn",
+        "backend/agent/pipeline_engine.py:retry"
+      ]
+    },
+    {
+      "scope": "step",
+      "path": ["enabled"],
+      "label": "步骤是否参加",
+      "meaning": "这个步骤是否参加生命周期。未设等于参加。禁用的步骤不组装进执行。",
+      "unit": "",
+      "unset_state": "unset_definite",
+      "fallback_chain": "未设：参加（true）。",
+      "write_boundary": "bool",
+      "ui_editable": true,
+      "semantic_anchors": [
+        "backend/services/plan_dispatcher_core.py:build_lifecycle_from_steps"
+      ]
+    },
+    {
+      "scope": "watcher",
+      "path": ["enabled"],
+      "label": "异常采集开关",
+      "meaning": "是否希望本计划采集异常。主机 STP_WATCHER_ENABLED 与 STP_WATCHER_PLAN_DEFAULT 决定全局和计划默认。下发 false（含冻结的主机 inactive）强制关闭；true 不能强行打开已被全局关闭的子系统。",
+      "unit": "",
+      "unset_state": "env_fallback",
+      "fallback_chain": "计划值 → 主机 STP_WATCHER_ENABLED / STP_WATCHER_PLAN_DEFAULT。主机覆盖在 L1/L2 另标待派发，不把默认值写成确定值。",
+      "write_boundary": "bool；可编辑",
+      "ui_editable": true,
+      "semantic_anchors": [
+        "backend/agent/watcher/enable.py:watcher_subsystem_enabled",
+        "backend/agent/watcher/enable.py:job_wants_watcher"
+      ]
+    },
+    {
+      "scope": "watcher",
+      "path": ["on_unavailable"],
+      "label": "采集不可用时",
+      "meaning": "异常采集能力不可用时如何处理本次执行。只接受 fail、degraded、skip。",
+      "unit": "",
+      "unset_state": "env_fallback",
+      "fallback_chain": "计划值 → 主机 WATCHER_ON_UNAVAILABLE → degraded；非法环境变量忽略",
+      "write_boundary": "fail、degraded、skip；可编辑",
+      "ui_editable": true,
+      "semantic_anchors": ["backend/agent/watcher/policy.py:OnUnavailableAction"]
+    },
+    {
+      "scope": "watcher",
+      "path": ["paths"],
+      "label": "采集路径",
+      "meaning": "按分类配置设备上的日志路径。每个已给出的分类覆盖该分类，其余分类保留代码默认。",
+      "unit": "",
+      "unset_state": "unset_definite",
+      "fallback_chain": "代码默认 AEE、VENDOR_AEE、MOBILELOG。没有对应的环境变量。",
+      "write_boundary": "分类到路径字符串数组；可编辑",
+      "ui_editable": true,
+      "semantic_anchors": ["backend/agent/watcher/policy.py:DEFAULT_PATHS"]
+    },
+    {
+      "scope": "watcher",
+      "path": ["required_categories"],
+      "label": "必需日志分类",
+      "meaning": "必须能采集到的日志分类。",
+      "unit": "",
+      "unset_state": "unset_definite",
+      "fallback_chain": "代码默认 AEE、VENDOR_AEE。没有对应的环境变量。",
+      "write_boundary": "字符串数组；可编辑",
+      "ui_editable": true,
+      "semantic_anchors": ["backend/agent/watcher/policy.py:WatcherPolicy.required_categories"]
+    },
+    {
+      "scope": "watcher",
+      "path": ["batch_interval_seconds"],
+      "label": "采集批间隔",
+      "meaning": "异常事件攒批发送的间隔。界面只读。",
+      "unit": "秒",
+      "unset_state": "env_fallback",
+      "fallback_chain": "计划值 → 主机 WATCHER_BATCH_INTERVAL_SECONDS → 5.0。默认数字只出现在回落链里。",
+      "write_boundary": "只读",
+      "ui_editable": false,
+      "semantic_anchors": ["backend/agent/watcher/policy.py:_load_default_from_env"]
+    },
+    {
+      "scope": "watcher",
+      "path": ["nfs_quota_mb"],
+      "label": "采集写入配额",
+      "meaning": "单次执行写到中心存储的配额。界面只读。",
+      "unit": "MB",
+      "unset_state": "env_fallback",
+      "fallback_chain": "计划值 → 主机 WATCHER_NFS_QUOTA_MB → 2048",
+      "write_boundary": "只读",
+      "ui_editable": false,
+      "semantic_anchors": ["backend/agent/watcher/policy.py:_load_default_from_env"]
+    },
+    {
+      "scope": "watcher",
+      "path": ["pull_timeout_seconds"],
+      "label": "采集拉取超时",
+      "meaning": "从设备拉取异常文件的超时。界面只读。",
+      "unit": "秒",
+      "unset_state": "env_fallback",
+      "fallback_chain": "计划值 → 主机 WATCHER_PULL_TIMEOUT_SECONDS → 300.0",
+      "write_boundary": "只读",
+      "ui_editable": false,
+      "semantic_anchors": ["backend/agent/watcher/policy.py:_load_default_from_env"]
+    },
+    {
+      "scope": "watcher",
+      "path": ["log_level"],
+      "label": "采集日志等级",
+      "meaning": "异常采集组件自己的日志等级。界面只读。",
+      "unit": "",
+      "unset_state": "env_fallback",
+      "fallback_chain": "计划值 → 主机 WATCHER_LOG_LEVEL → INFO",
+      "write_boundary": "只读",
+      "ui_editable": false,
+      "semantic_anchors": ["backend/agent/watcher/policy.py:_load_default_from_env"]
+    },
+    {
+      "scope": "watcher",
+      "path": ["exit_drain_timeout_seconds"],
+      "label": "采集退出排空超时",
+      "meaning": "执行结束时等待异常采集排空的最长时间。界面只读。",
+      "unit": "秒",
+      "unset_state": "env_fallback",
+      "fallback_chain": "计划值 → 主机 WATCHER_EXIT_DRAIN_TIMEOUT_SECONDS → 5.0",
+      "write_boundary": "只读",
+      "ui_editable": false,
+      "semantic_anchors": ["backend/agent/watcher/policy.py:_load_default_from_env"]
+    },
+    {
+      "scope": "watcher",
+      "path": ["batch_max_events"],
+      "label": "每批事件上限",
+      "meaning": "每一批最多发送多少条事件。当前只有代码默认，没有环境变量。界面只读。",
+      "unit": "条",
+      "unset_state": "unset_definite",
+      "fallback_chain": "代码默认 20。没有环境变量。",
+      "write_boundary": "只读",
+      "ui_editable": false,
+      "semantic_anchors": ["backend/agent/watcher/policy.py:WatcherPolicy.batch_max_events"]
+    },
+    {
+      "scope": "watcher",
+      "path": ["event_queue_maxsize"],
+      "label": "事件队列上限",
+      "meaning": "每台设备的事件队列长度上限。当前只有代码默认，没有环境变量。界面只读。",
+      "unit": "条",
+      "unset_state": "unset_definite",
+      "fallback_chain": "代码默认 1000。没有环境变量。",
+      "write_boundary": "只读",
+      "ui_editable": false,
+      "semantic_anchors": ["backend/agent/watcher/policy.py:WatcherPolicy.event_queue_maxsize"]
+    },
+    {
+      "scope": "watcher",
+      "path": ["pull_max_file_mb"],
+      "label": "单文件拉取上限",
+      "meaning": "单个异常文件超过该大小时只记元数据。当前只有代码默认，没有环境变量。界面只读。",
+      "unit": "MB",
+      "unset_state": "unset_definite",
+      "fallback_chain": "代码默认 500。没有环境变量。",
+      "write_boundary": "只读",
+      "ui_editable": false,
+      "semantic_anchors": ["backend/agent/watcher/policy.py:WatcherPolicy.pull_max_file_mb"]
+    },
+    {
+      "scope": "watcher",
+      "path": ["inotifyd_reconnect_delay"],
+      "label": "监听重连间隔",
+      "meaning": "设备目录监听断开后再次连接前的等待。当前只有代码默认，没有环境变量。界面只读。",
+      "unit": "秒",
+      "unset_state": "unset_definite",
+      "fallback_chain": "代码默认 5.0。没有环境变量。",
+      "write_boundary": "只读",
+      "ui_editable": false,
+      "semantic_anchors": ["backend/agent/watcher/policy.py:WatcherPolicy.inotifyd_reconnect_delay"]
+    },
+    {
+      "scope": "watcher",
+      "path": ["polling_interval_seconds"],
+      "label": "轮询间隔",
+      "meaning": "不能用监听时改为轮询的间隔。当前只有代码默认，没有环境变量。界面只读。",
+      "unit": "秒",
+      "unset_state": "unset_definite",
+      "fallback_chain": "代码默认 2.0。没有环境变量。",
+      "write_boundary": "只读",
+      "ui_editable": false,
+      "semantic_anchors": ["backend/agent/watcher/policy.py:WatcherPolicy.polling_interval_seconds"]
+    },
+    {
+      "scope": "watcher",
+      "path": ["probe_timeout_seconds"],
+      "label": "能力探测超时",
+      "meaning": "探测设备是否具备异常采集能力的超时。当前只有代码默认，没有环境变量。界面只读。",
+      "unit": "秒",
+      "unset_state": "unset_definite",
+      "fallback_chain": "代码默认 5.0。没有环境变量。",
+      "write_boundary": "只读",
+      "ui_editable": false,
+      "semantic_anchors": ["backend/agent/watcher/policy.py:WatcherPolicy.probe_timeout_seconds"]
+    },
+    {
+      "scope": "watcher",
+      "path": ["emit_via_socketio"],
+      "label": "经实时通道发送",
+      "meaning": "是否经实时通道发出采集事件。当前只有代码默认，没有环境变量。界面只读。",
+      "unit": "",
+      "unset_state": "unset_definite",
+      "fallback_chain": "代码默认 true。没有环境变量。",
+      "write_boundary": "只读",
+      "ui_editable": false,
+      "semantic_anchors": ["backend/agent/watcher/policy.py:WatcherPolicy.emit_via_socketio"]
+    },
+    {
+      "scope": "watcher",
+      "path": ["emit_via_http_outbox"],
+      "label": "经出站队列发送",
+      "meaning": "是否经 HTTP 出站队列发出采集事件。当前只有代码默认，没有环境变量。界面只读。",
+      "unit": "",
+      "unset_state": "unset_definite",
+      "fallback_chain": "代码默认 true。没有环境变量。",
+      "write_boundary": "只读",
+      "ui_editable": false,
+      "semantic_anchors": ["backend/agent/watcher/policy.py:WatcherPolicy.emit_via_http_outbox"]
+    }
+  ]
+}

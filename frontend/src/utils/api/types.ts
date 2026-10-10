@@ -1024,6 +1024,8 @@ export interface ScriptEntry {
   package_sha256?: string | null;
   param_schema: Record<string, unknown>;
   default_params: Record<string, unknown>;
+  /** #3653 U1：掩码后的脚本参数投影。原始 default_params / param_schema 仍保留。 */
+  parameter_projection?: ScriptParameterProjection;
   is_active: boolean;
   capabilities?: string[];
   description?: string | null;
@@ -1256,6 +1258,108 @@ export interface WatcherPolicy {
   emit_via_socketio?: boolean;
   emit_via_http_outbox?: boolean;
   log_level?: string;
+  /** #3653：claim 口径下的总开关。缺省不是关闭。 */
+  enabled?: boolean;
+  pull_timeout_seconds?: number;
+}
+
+export type ParameterLayer = 'L1' | 'L2' | 'L3' | 'L4';
+export type ParameterSource =
+  | 'schema_default'
+  | 'script_default'
+  | 'step_override'
+  | 'dispatch_injection';
+export type ParameterState =
+  | 'explicit'
+  | 'unset_definite'
+  | 'env_fallback'
+  | 'pending_dispatch'
+  | 'actual';
+
+export interface ParameterItem {
+  path: Array<string | number>;
+  label: string;
+  meaning: string;
+  unit?: string | null;
+  cautions?: string | null;
+  source?: ParameterSource | null;
+  state: ParameterState;
+  value?: unknown;
+  sensitive: boolean;
+  is_set: boolean;
+  fallback_chain?: string | null;
+  authority?: string | null;
+  base_value?: unknown;
+  decision_factors?: string[];
+  diagnostic?: string | null;
+  ui_editable?: boolean | null;
+  write_boundary?: string | null;
+}
+
+export interface ParameterProjectionStep {
+  step_key?: string | null;
+  script_name?: string | null;
+  script_version?: string | null;
+  stage?: string | null;
+  sort_order: number;
+  enabled: boolean;
+  executes: boolean;
+  metadata_missing: boolean;
+  missing_reason?: string | null;
+  params: ParameterItem[];
+  settings: ParameterItem[];
+}
+
+export interface ParameterProjection {
+  layer: ParameterLayer;
+  context: {
+    plan_id?: number | null;
+    plan_run_id?: number | null;
+    job_id?: number | null;
+    device_id?: number | null;
+    host_id?: string | null;
+    read_at: string;
+    authority: string;
+  };
+  steps: ParameterProjectionStep[];
+  plan_settings: ParameterItem[];
+  watcher_policy: {
+    note: string;
+    items: ParameterItem[];
+    effective_policy?: Record<string, unknown> | null;
+    frozen_host_admin?: Record<string, boolean> | null;
+  };
+  dispatch_decisions: Array<{
+    kind: string;
+    state: ParameterState;
+    factors?: string[];
+    job_id?: number | null;
+    device_id?: number | null;
+    host_id?: string | null;
+  }>;
+  safe_debug: {
+    steps: Array<Record<string, unknown>>;
+    plan_settings: Record<string, unknown>;
+    watcher_policy: Record<string, unknown>;
+  };
+}
+
+export interface ScriptParameterProjection {
+  script_name: string;
+  script_version: string;
+  params: ParameterItem[];
+  safe_debug: ParameterProjection['safe_debug'];
+}
+
+/** POST /plans/parameter-projection：未保存草稿，不要求专项或项目。 */
+export interface DraftParameterProjectionRequest {
+  patrol_interval_seconds?: number | null;
+  timeout_seconds?: number | null;
+  barrier_timeout_seconds?: number | null;
+  barrier_max_wait_seconds?: number | null;
+  auto_archive_interval_seconds?: number | null;
+  watcher_policy?: Record<string, unknown> | null;
+  steps?: PlanStepCreate[];
 }
 
 // ADR-0020 §2 唯一事实源：Plan 不再包含 lifecycle JSON，前端按 PlanStep 行 + 直列字段交互。
@@ -1575,6 +1679,8 @@ export interface PlanRun {
   enqueued_at?: string | null;
   next_admission_at?: string | null;
   priority?: number;
+  /** #3653 U1：详情为 L2 投影；列表为 null。 */
+  parameter_projection?: ParameterProjection | null;
 }
 
 /** GET /plan-runs 分页响应（ApiResponse.data）。 */
@@ -1602,6 +1708,11 @@ export interface PlanRunCreate {
    * inline — pick a pre-configured wifi ResourcePool instead.
    */
   wifi_pool_id?: number | null;
+  /**
+   * #3653 U2 才会在后端比对。本批只声明类型；当前 trigger 仍 extra=forbid，
+   * 发送该字段会被 422。
+   */
+  confirmation_fingerprint?: string | null;
 }
 
 export interface PlanRunPreview {
@@ -1612,6 +1723,9 @@ export interface PlanRunPreview {
   job_count: number;
   total_steps: number;
   lifecycle: PipelineLifecycle;
+  parameter_projection?: ParameterProjection;
+  /** U2 指纹。U1 的 preview 响应可以没有这一键。 */
+  confirmation_fingerprint?: string | null;
 }
 
 /** ADR-0026 §3: RUNNING job sub-state for permit/barrier/patrol observability. */

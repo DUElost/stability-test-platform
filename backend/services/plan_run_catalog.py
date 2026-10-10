@@ -12,9 +12,10 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from backend.services.errors import NotFound
+from backend.services.plan_parameter_projection import project_snapshot
 from sqlalchemy import String, cast, func, or_, select
 from sqlalchemy.orm import Session, joinedload
 
@@ -112,6 +113,7 @@ def _plan_run_out(
     jobs: list[JobInstanceOut] | None = None,
     plan_name: str | None = None,
     device_count: int | None = None,
+    parameter_projection: Any | None = None,
 ) -> PlanRunDetailOut:
     return PlanRunDetailOut(
         id=pr.id,
@@ -143,6 +145,7 @@ def _plan_run_out(
         enqueued_at=_iso(pr.enqueued_at),
         next_admission_at=_iso(pr.next_admission_at),
         priority=pr.priority or 0,
+        parameter_projection=parameter_projection,
     )
 
 
@@ -340,9 +343,17 @@ def build_plan_run_detail(
             .distinct()
         ).all())
     # #2623：plan_name 的解析提进 `resolve_plan_name`，与 summary 共用同一口径
+    projection = project_snapshot(
+        pr.plan_snapshot,
+        pr.run_context,
+        plan_id=pr.plan_id,
+        plan_run_id=pr.id,
+        read_at=pr.started_at,
+    )
     return (_plan_run_out(pr, jobs=[_job_out(j, []) for j in jobs],
                           plan_name=resolve_plan_name(db, pr),
-                          device_count=device_count))
+                          device_count=device_count,
+                          parameter_projection=projection))
 
 
 

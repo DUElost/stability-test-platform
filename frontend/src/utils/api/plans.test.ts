@@ -1,17 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('./client', () => ({
-  default: {
-    get: vi.fn(),
-    post: vi.fn(),
-    put: vi.fn(),
-    delete: vi.fn(),
-    patch: vi.fn(),
-  },
-}));
+vi.mock('./client', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./client')>();
+  return {
+    ...actual,
+    default: {
+      get: vi.fn(),
+      post: vi.fn(),
+      put: vi.fn(),
+      delete: vi.fn(),
+      patch: vi.fn(),
+    },
+  };
+});
 
 import apiClient from './client';
-import { fetchAllPlans } from './plans';
+import { fetchAllPlans, plans } from './plans';
+import { planKeys } from './queryKeys';
 
 const plan = (id: number) => ({ id, name: `Plan ${id}` });
 
@@ -57,5 +62,24 @@ describe('fetchAllPlans', () => {
 
     await expect(fetchAllPlans()).resolves.toEqual([]);
     expect(apiClient.get).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('plans parameter projection', () => {
+  beforeEach(() => {
+    vi.mocked(apiClient.get).mockReset();
+    vi.mocked(apiClient.post).mockReset();
+  });
+
+  it('reads the saved projection and the unsaved draft', async () => {
+    vi.mocked(apiClient.get).mockResolvedValue({ data: { data: { layer: 'L1' } } });
+    vi.mocked(apiClient.post).mockResolvedValue({ data: { data: { layer: 'L1' } } });
+
+    await expect(plans.parameterProjection(7)).resolves.toEqual({ layer: 'L1' });
+    await expect(plans.draftParameterProjection({ steps: [] })).resolves.toEqual({ layer: 'L1' });
+
+    expect(apiClient.get).toHaveBeenCalledWith('/plans/7/parameter-projection');
+    expect(apiClient.post).toHaveBeenCalledWith('/plans/parameter-projection', { steps: [] });
+    expect(planKeys.parameterProjection(7)).toEqual(['plan', 7, 'parameter-projection']);
   });
 });

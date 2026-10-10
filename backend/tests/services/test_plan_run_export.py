@@ -99,3 +99,30 @@ def test_export_summary_reports_failed_devices_2847(
     markdown = export_mod.plan_run_export_to_markdown(data)
     assert "- Failed devices: 3" in markdown
     assert "- ABORTED: 1" in markdown  # 合计之外仍逐状态可见，不藏数
+
+
+def test_export_does_not_include_step_param_sentinels(
+    db_session, sample_plan, sample_plan_run, sample_host, sample_device,
+):
+    from backend.models.plan import PlanStep
+
+    sentinel = "SENTINEL_PASSWORD"
+    step = db_session.query(PlanStep).filter(PlanStep.plan_id == sample_plan.id).one()
+    step.params = {"password": sentinel}
+    job = JobInstance(
+        plan_run_id=sample_plan_run.id,
+        plan_id=sample_plan.id,
+        device_id=sample_device.id,
+        host_id=sample_host.id,
+        status=JobStatus.COMPLETED.value,
+        pipeline_def={"lifecycle": {"init": [{
+            "step_id": "check_device",
+            "params": {"password": sentinel},
+        }]}},
+    )
+    db_session.add(job)
+    db_session.commit()
+    data = export_mod.build_plan_run_export(db_session, sample_plan_run)
+    rendered = export_mod.plan_run_export_to_markdown(data)
+    blob = str(data) + rendered
+    assert sentinel not in blob

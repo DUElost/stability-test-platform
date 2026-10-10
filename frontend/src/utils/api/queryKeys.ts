@@ -20,6 +20,7 @@ export const planKeys = {
    */
   allLists: () => ['plans'] as const,
   detail: (id: number) => ['plan', id] as const,
+  parameterProjection: (id: number) => ['plan', id, 'parameter-projection'] as const,
 } as const;
 
 export const hostKeys = {
@@ -71,6 +72,9 @@ export const deviceKeys = {
 
 export const planRunKeys = {
   detail: (id: number) => ['plan-run', id] as const,
+  parameterProjection: (id: number) => ['plan-run', id, 'parameter-projection'] as const,
+  jobParameterProjection: (runId: number, jobId: number) =>
+    ['plan-run', runId, 'job-parameter-projection', jobId] as const,
   /** #2623：轻量聚合端点（不含 jobs）。刻意用独立键——与 detail 同键会让两个
    *  形状不同的响应互相覆盖缓存。 */
   summary: (id: number) => ['plan-run-summary', id] as const,

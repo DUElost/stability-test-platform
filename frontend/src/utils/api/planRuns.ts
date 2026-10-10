@@ -18,6 +18,7 @@ import type {
   TestCaseResultsPayload,
   JobManualActionResult,
   PlanRunAbortResult,
+  ParameterProjection,
   PlanRunDispatchRetryResult,
   EventStage,
   EventSeverity,
@@ -114,6 +115,11 @@ export const planRuns = {
 
   listJobs: (runId: number) =>
     unwrapApiResponse<PlanJobInstance[]>(apiClient.get(`/plan-runs/${runId}/jobs`)),
+
+  jobParameterProjection: (runId: number, jobId: number) =>
+    unwrapApiResponse<ParameterProjection>(
+      apiClient.get(`/plan-runs/${runId}/jobs/${jobId}/parameter-projection`),
+    ),
 
   getSummary: (runId: number) =>
     unwrapApiResponse<PlanRunSummary>(apiClient.get(`/plan-runs/${runId}/summary`)),

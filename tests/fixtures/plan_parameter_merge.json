@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "id": "priority",
+      "param_schema": {
+        "timeout": {"type": "integer", "default": 1},
+        "mode": {"type": "string", "default": "schema"}
+      },
+      "default_params": {"timeout": 2, "retries": 3},
+      "step_params": {"timeout": 4},
+      "expected": {"timeout": 4, "mode": "schema", "retries": 3}
+    },
+    {
+      "id": "false-zero-null-empty",
+      "param_schema": {
+        "flag": {"type": "boolean", "default": true},
+        "count": {"type": "integer", "default": 5},
+        "note": {"type": "string", "default": "x"},
+        "missing": {"type": "string", "default": "keep"}
+      },
+      "default_params": {"flag": false, "count": 0, "note": ""},
+      "step_params": {"flag": false, "count": 0, "note": null},
+      "expected": {"flag": false, "count": 0, "note": null, "missing": "keep"}
+    },
+    {
+      "id": "free-key",
+      "param_schema": {},
+      "default_params": null,
+      "step_params": {"custom": "free"},
+      "expected": {"custom": "free"}
+    },
+    {
+      "id": "missing-schema",
+      "param_schema": null,
+      "default_params": {"a": 1},
+      "step_params": {"b": 2},
+      "expected": {"a": 1, "b": 2}
+    },
+    {
+      "id": "nested-whole-replace",
+      "param_schema": {},
+      "default_params": {"wifi": {"ssid": "a", "password": "SENTINEL_PASSWORD"}},
+      "step_params": {"wifi": {"ssid": "b"}},
+      "expected": {"wifi": {"ssid": "b"}}
+    },
+    {
+      "id": "deep-copy",
+      "param_schema": {},
+      "default_params": {"wifi": {"password": "SENTINEL_PASSWORD"}},
+      "step_params": null,
+      "expected": {"wifi": {"password": "SENTINEL_PASSWORD"}}
+    }
+  ]
+}

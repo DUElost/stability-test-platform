@@ -1876,3 +1876,31 @@ class TestTurnEnqueueAsyncFailure:
             .count()
             == 1
         )
+
+
+def test_plan_summaries_do_not_echo_step_param_sentinels(
+    db_session, sample_plan, sample_plan_run, sample_script, sample_device,
+):
+    """导出与摘要都不新增参数面：步骤口令不得出现在现有 AI 只读摘要里。"""
+    from backend.models.plan import PlanStep
+    from backend.models.script import Script
+    from backend.services.ai_assistant.tools import (
+        _q_get_plan_detail,
+        _q_plan_run_detail,
+        _q_preview_plan_dispatch,
+    )
+
+    sentinel = "SENTINEL_PASSWORD"
+    step = db_session.query(PlanStep).filter(PlanStep.plan_id == sample_plan.id).one()
+    step.params = {"password": sentinel}
+    script = db_session.query(Script).filter_by(name="check_device", version="v1.0.0").one()
+    script.default_params = {"password": sentinel}
+    db_session.commit()
+    detail = _q_get_plan_detail(db_session, {"plan_id": sample_plan.id})
+    run_detail = _q_plan_run_detail(db_session, {"run_id": sample_plan_run.id})
+    preview = _q_preview_plan_dispatch(
+        db_session, {"plan_id": sample_plan.id, "device_ids": [sample_device.id]},
+    )
+    assert sentinel not in detail
+    assert sentinel not in run_detail
+    assert sentinel not in preview
