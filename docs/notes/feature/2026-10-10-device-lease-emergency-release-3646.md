@@ -23,6 +23,8 @@ Class: feature
 
 `backend/tests/api/test_device_lease_emergency_release.py`：终态释放并写审计、`RUNNING` / `PENDING` / `UNKNOWN` 为 409、非 `JOB` 为 409、已 `RELEASED` 为 409、设备不符为 404、非管理员为 403、空白 `reason` 为 422、同设备上另一个 job 的新 ACTIVE 租约不被释放。
 
+`emergency_release_lease` 登记进 `SECURITY_ACTIONS`（ADR-0049 D2）；`DeviceLeaseReleaseOut` ↔ `DeviceLeaseReleaseResult` 登记进 `_MODEL_PAIRS`。
+
 ## Revisit
 
 设备详情页要加「释放租约」按钮时，复用 `devices.releaseLease`，不要再开一条写路径。回收器停转告警走 #3660，不并进本接口。
