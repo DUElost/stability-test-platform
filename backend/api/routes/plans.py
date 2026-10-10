@@ -36,6 +36,10 @@ from backend.services.plan_wifi import (
     require_active_wifi_pool,
     require_wifi_pool_matches_plan,
 )
+from backend.services.plan_confirmation import (
+    PlanConfirmationChanged,
+    fingerprint_format_ok,
+)
 from backend.services.plan_dispatcher_sync import (
     PlanDispatchError,
     _fetch_script_metadata,
@@ -232,6 +236,19 @@ class PlanRunTrigger(BaseModel):
     # ``resource_pool`` (resource_type='wifi'), so ssid/password live in exactly
     # one place instead of being copied into every run's stored payload.
     wifi_pool_id: Optional[int] = Field(default=None, gt=0)
+    # #3653 §3.2：可选。缺省/NULL 不比较；空串或格式错误为 422。
+    confirmation_fingerprint: Optional[str] = None
+
+    @field_validator("confirmation_fingerprint")
+    @classmethod
+    def validate_confirmation_fingerprint(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        if not fingerprint_format_ok(value):
+            raise ValueError(
+                "confirmation_fingerprint must be stp-l1-v1:<64 lowercase hex>"
+            )
+        return value
 
     @field_validator("device_ids")
     @classmethod
@@ -1375,7 +1392,16 @@ def run_plan(
             db=db,
             run_type="MANUAL",
             run_context=run_context,
+            confirmation_fingerprint=payload.confirmation_fingerprint,
         )
+    except PlanConfirmationChanged:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "PLAN_CONFIRMATION_CHANGED",
+                "message": "计划配置已变化，请重新预览并确认",
+            },
+        ) from None
     except PlanDispatchError as e:
         raise HTTPException(status_code=400, detail=e.detail()) from e
 

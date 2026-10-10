@@ -1,5 +1,7 @@
-import { CheckCircle2, Clock3, Info, Trash2 } from 'lucide-react';
+import { CheckCircle2, Clock3, Trash2 } from 'lucide-react';
+import { ParameterProjectionList } from '@/components/parameters/ParameterProjectionList';
 import type { PlanRun, PlanRunPreview, ResourcePool } from '@/utils/api';
+import type { ParameterProjection } from '@/utils/api/types';
 import type { CapacityPlanRow, ReadinessDevice } from '@/utils/planExecuteReadiness';
 import { Button } from '@/components/ui/button';
 import {
@@ -10,16 +12,9 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from '@/components/ui/tooltip';
 import { ALERT_BOX, STAT, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { formatDurationSeconds } from '@/utils/format';
-import { PATROL_DURATION_HINT, PATROL_DURATION_LABEL, formatPatrolDuration } from '@/components/pipeline/planTiming';
 import { DuplicateLaunchBanner } from './DuplicateLaunchBanner';
 import { SerialConflictBanner } from './SerialConflictBanner';
 import type { DuplicateMatch } from './planExecuteDuplicate';
@@ -35,8 +30,9 @@ interface DispatchCockpitProps {
   blockedCount: number;
   warnings: string[];
   selectedHostActiveJobs: number;
-  patrolIntervalSeconds?: number | null;
-  timeoutSeconds?: number | null;
+  projection: ParameterProjection | null | undefined;
+  projectionUnavailable?: boolean;
+  confirmationStale?: boolean;
   note: string;
   preview: PlanRunPreview | null;
   wallClock: WallClockEstimate;
@@ -57,22 +53,6 @@ interface DispatchCockpitProps {
   onRemoveBlocked: () => void;
 }
 
-function ParameterInfo({ label, tip }: { label: string; tip: string }) {
-  return (
-    <span className="inline-flex items-center gap-1">
-      {label}
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button type="button" aria-label={`${label}说明`} className="text-muted-foreground hover:text-foreground">
-            <Info className="h-3.5 w-3.5" />
-          </button>
-        </TooltipTrigger>
-        <TooltipContent className="max-w-xs">{tip}</TooltipContent>
-      </Tooltip>
-    </span>
-  );
-}
-
 export function DispatchCockpit({
   planName,
   executableStepCount,
@@ -82,8 +62,9 @@ export function DispatchCockpit({
   blockedCount,
   warnings,
   selectedHostActiveJobs,
-  patrolIntervalSeconds,
-  timeoutSeconds,
+  projection,
+  projectionUnavailable = false,
+  confirmationStale = false,
   note,
   preview,
   wallClock,
@@ -105,7 +86,6 @@ export function DispatchCockpit({
   const unknownCapacityCount = capacityRows.filter((row) => row.effectiveSlots == null).length;
 
   return (
-    <TooltipProvider>
       <div className="space-y-4" data-testid="dispatch-cockpit">
         <SerialConflictBanner
           serials={devices
@@ -135,7 +115,24 @@ export function DispatchCockpit({
           <DuplicateLaunchBanner match={duplicateMatch} onOpenRun={onOpenRun} />
         ) : null}
 
-        {preview ? (
+        {confirmationStale ? (
+          <div
+            data-testid="plan-confirmation-changed"
+            className={cn(ALERT_BOX.destructive, 'rounded-lg px-3 py-2 text-sm')}
+          >
+            计划配置已变化，请重新预览并确认
+          </div>
+        ) : null}
+
+        {preview?.confirmation_fingerprint ? (
+          <div
+            data-testid="dispatch-fingerprint-ready"
+            className="flex items-center gap-2 rounded-lg border border-success/40 bg-success/10 px-3 py-2 text-sm text-success"
+          >
+            <CheckCircle2 className="h-4 w-4" />
+            预览已生成并冻结 {preview.device_ids.length || preview.device_count || devices.length} 台设备，已绑定本次预览的确认指纹。请再次确认发起
+          </div>
+        ) : preview ? (
           <div className="flex items-center gap-2 rounded-lg border border-success/40 bg-success/10 px-3 py-2 text-sm text-success">
             <CheckCircle2 className="h-4 w-4" />
             预览已生成并冻结 {preview.device_ids.length || preview.device_count || devices.length} 台设备；请再次确认发起
@@ -244,14 +241,11 @@ export function DispatchCockpit({
                   <Button type="button" variant="outline" size="sm" onClick={onEditPlan}>编辑 Plan</Button>
               </div>
               <div className="space-y-3 px-3 py-2.5 text-sm">
-                <div className="flex items-center justify-between gap-3">
-                  <ParameterInfo label="巡检周期" tip="到达周期后触发下一轮巡检脚本；过短可能持续占用 Agent 执行槽位。" />
-                  <strong>{formatDurationSeconds(patrolIntervalSeconds, 'precise', '未设置')}</strong>
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  {/* 字段名叫 timeout，引擎里是巡检时长预算（planTiming.ts）；此前解释成「整个 PlanRun 超时后中止」 */}
-                  <ParameterInfo label={PATROL_DURATION_LABEL} tip={PATROL_DURATION_HINT} />
-                  <strong>{formatPatrolDuration(timeoutSeconds, patrolIntervalSeconds, 'precise')}</strong>
+                <div className="overflow-hidden rounded-lg border" data-testid="dispatch-parameter-list">
+                  <ParameterProjectionList
+                    projection={projection}
+                    unavailable={projectionUnavailable}
+                  />
                 </div>
                 <div className="border-t pt-3">
                   <div className="font-medium">{planName}</div>
@@ -341,6 +335,5 @@ export function DispatchCockpit({
             <div className={cn('mt-1 text-right text-[11px]', TEXT.subtitle)}>{note.length}/500</div>
         </div>
       </div>
-    </TooltipProvider>
   );
 }

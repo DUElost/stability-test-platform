@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils';
 import { formatDurationSeconds } from '@/utils/format';
 import { PATROL_DURATION_HINT, PATROL_DURATION_LABEL, formatPatrolDuration } from '@/components/pipeline/planTiming';
 import type { Plan, PlanRun } from '@/utils/api';
+import type { ParameterProjection } from '@/utils/api/types';
 import { AlertCircle } from 'lucide-react';
 import { groupPlansForSelect } from './planExecutePlanOptions';
 import { PlanStepList } from './PlanStepList';
@@ -26,7 +27,8 @@ interface PlanSelectPhaseProps {
   onSelectPlan: (planId: number) => void;
   selectedPlan: Plan | null | undefined;
   executableStepCount: number;
-  scriptParamsByKey: Map<string, Record<string, unknown>>;
+  projection: ParameterProjection | null | undefined;
+  projectionUnavailable?: boolean;
   recentPlanRuns: PlanRun[];
   recentPlanRunsLoading: boolean;
   onOpenRun: (runId: number) => void;
@@ -84,7 +86,8 @@ export function PlanSelectPhase({
   onSelectPlan,
   selectedPlan,
   executableStepCount,
-  scriptParamsByKey,
+  projection,
+  projectionUnavailable = false,
   recentPlanRuns,
   recentPlanRunsLoading,
   onOpenRun,
@@ -216,7 +219,7 @@ export function PlanSelectPhase({
                 </div>
               )}
               <div className="overflow-hidden rounded-lg border">
-                <PlanStepList steps={selectedPlan.steps} scriptParamsByKey={scriptParamsByKey} />
+                <PlanStepList projection={projection} unavailable={projectionUnavailable} />
               </div>
             </>
           )}

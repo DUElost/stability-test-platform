@@ -347,6 +347,9 @@ class TestDispatchPlan:
         assert preview["device_count"] == 1
         assert preview["job_count"] == 1
         assert "lifecycle" in preview
+        token = preview["confirmation_fingerprint"]
+        assert token.startswith("stp-l1-v1:")
+        assert len(token) == len("stp-l1-v1:") + 64
 
 
 # ── ADR-0029 project/build snapshot at prepare (#401) ───────────────────

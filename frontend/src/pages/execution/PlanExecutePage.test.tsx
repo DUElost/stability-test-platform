@@ -7,6 +7,8 @@ import PlanExecutePage from './PlanExecutePage';
 import { api, ApiError, fetchAllDevices, fetchAllHosts, fetchAllPlans } from '@/utils/api';
 import { hostKeys } from '@/utils/api/queryKeys';
 
+const PREVIEW_FINGERPRINT = `stp-l1-v1:${'ab'.repeat(32)}`;
+
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   toast: {
@@ -42,6 +44,7 @@ vi.mock('@/utils/api', async (importOriginal) => {
         list: vi.fn(),
         previewRun: vi.fn(),
         run: vi.fn(),
+        parameterProjection: vi.fn(),
       },
       planRuns: {
         list: vi.fn().mockResolvedValue([]),
@@ -91,6 +94,7 @@ function renderPage({
   getHost,
   wifiPools = [] as any[],
   wifiPoolsFailure,
+  projection,
 }: {
   plans?: any[];
   devices?: any[];
@@ -105,6 +109,7 @@ function renderPage({
   getHost?: (id: string) => any | Promise<any>;
   wifiPools?: any[];
   wifiPoolsFailure?: Error;
+  projection?: any;
 } = {}) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
@@ -118,6 +123,25 @@ function renderPage({
     device_count: 1,
     job_count: 1,
     total_steps: 1,
+    confirmation_fingerprint: PREVIEW_FINGERPRINT,
+    parameter_projection: {
+      layer: 'L1',
+      context: { read_at: '2026-10-10T00:00:00.000000Z', authority: 'preview' },
+      steps: [],
+      plan_settings: [],
+      watcher_policy: { note: '独立策略', items: [] },
+      dispatch_decisions: [],
+      safe_debug: { steps: [], plan_settings: {}, watcher_policy: {} },
+    },
+  });
+  (api.plans.parameterProjection as any).mockResolvedValue(projection ?? {
+    layer: 'L1',
+    context: { read_at: '2026-10-10T00:00:00.000000Z', authority: 'test' },
+    steps: [],
+    plan_settings: [],
+    watcher_policy: { note: '独立策略', items: [] },
+    dispatch_decisions: [],
+    safe_debug: { steps: [], plan_settings: {}, watcher_policy: {} },
   });
   (api.plans.run as any).mockResolvedValue({ id: 88 });
   (fetchAllHosts as any).mockResolvedValue(hosts);
@@ -363,7 +387,10 @@ describe('PlanExecutePage', () => {
     fireEvent.click(screen.getByRole('button', { name: /确认发起/ }));
 
     await waitFor(() => {
-      expect(api.plans.run).toHaveBeenCalledWith(7, { device_ids: [1] });
+      expect(api.plans.run).toHaveBeenCalledWith(7, {
+        device_ids: [1],
+        confirmation_fingerprint: PREVIEW_FINGERPRINT,
+      });
     });
   });
 
@@ -733,10 +760,9 @@ describe('PlanExecutePage', () => {
     fireEvent.click(screen.getByRole('button', { name: /预览发起/ }));
 
     expect(await screen.findByRole('button', { name: '编辑 Plan' })).toBeInTheDocument();
-    expect(screen.getByText('1h 0m')).toBeInTheDocument();
-    expect(screen.getByText('2m 5s')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '巡检周期说明' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '巡检时长说明' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '巡检周期说明' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '巡检时长说明' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('dispatch-parameter-list')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '编辑 Plan' }));
     expect(mocks.navigate).toHaveBeenCalledWith('/orchestration/plans/7');
@@ -1196,6 +1222,7 @@ describe('PlanExecutePage', () => {
       expect(api.plans.run).toHaveBeenCalledWith(7, {
         device_ids: [1],
         note: 'sprint4 smoke',
+        confirmation_fingerprint: PREVIEW_FINGERPRINT,
       });
     });
   });
@@ -1272,43 +1299,67 @@ describe('PlanExecutePage', () => {
     fireEvent.click(previewButton);
     fireEvent.click(await screen.findByRole('button', { name: /确认发起/ }));
     await waitFor(() => {
-      expect(api.plans.run).toHaveBeenCalledWith(7, { device_ids: [1] });
+      expect(api.plans.run).toHaveBeenCalledWith(7, {
+        device_ids: [1],
+        confirmation_fingerprint: PREVIEW_FINGERPRINT,
+      });
     });
   });
 
-  it('expands step rows to show script default_params', async () => {
-    (api.scripts.list as any).mockResolvedValueOnce([
-      {
-        name: 'check_device',
-        version: '1.0.0',
-        default_params: { timeout: 30, retries: 1 },
-      },
-    ]);
+  it('shows the saved projection instead of script default_params', async () => {
+    (api.plans.parameterProjection as any).mockResolvedValueOnce({
+      layer: 'L1',
+      context: { read_at: '2026-10-10T00:00:00.000000Z', authority: 'test' },
+      steps: [{
+        step_key: 'check_device',
+        script_name: 'check_device',
+        script_version: '1.0.0',
+        stage: 'init',
+        sort_order: 0,
+        enabled: true,
+        executes: true,
+        metadata_missing: false,
+        params: [{
+          path: ['timeout'],
+          label: '超时',
+          meaning: '步骤墙钟上限',
+          source: 'script_default',
+          state: 'explicit',
+          value: 30,
+          sensitive: false,
+          is_set: true,
+        }],
+        settings: [],
+      }],
+      plan_settings: [],
+      watcher_policy: { note: '独立策略', items: [] },
+      dispatch_decisions: [],
+      safe_debug: { steps: [], plan_settings: {}, watcher_policy: {} },
+    });
     renderPage({
-      plans: [
-        {
-          id: 7,
-          name: 'Smoke Plan',
-          description: null,
-          steps: [
-            {
-              id: 1,
-              step_key: 'check_device',
-              script_name: 'check_device',
-              script_version: '1.0.0',
-              stage: 'init',
-              enabled: true,
-            },
-          ],
-        },
-      ],
+      plans: [{
+        id: 7,
+        name: 'Smoke Plan',
+        description: null,
+        steps: [{
+          id: 1,
+          step_key: 'check_device',
+          script_name: 'check_device',
+          script_version: '1.0.0',
+          stage: 'init',
+          enabled: true,
+          params: { password: 'SENTINEL_PASSWORD' },
+        }],
+      }],
       initialEntry: '/execution/plan-execute?plan=7',
     });
 
     expect(await screen.findByText(/check_device · 1\.0\.0/)).toBeInTheDocument();
-    fireEvent.click(screen.getByText(/check_device · 1\.0\.0/));
-    expect(await screen.findByText(/"timeout": 30/)).toBeInTheDocument();
-    expect(screen.getByText(/"retries": 1/)).toBeInTheDocument();
+    expect(screen.getByText('步骤墙钟上限')).toBeInTheDocument();
+    expect(screen.getByText('30')).toBeInTheDocument();
+    expect(screen.queryByText(/default_params/)).not.toBeInTheDocument();
+    expect(screen.queryByText('SENTINEL_PASSWORD')).not.toBeInTheDocument();
+    expect(api.scripts.list).not.toHaveBeenCalled();
   });
 
   it('shows recent plan runs after selecting a plan', async () => {
@@ -1422,6 +1473,18 @@ describe('PlanExecutePage', () => {
   });
 
   it('groups plan steps by stage with colored badges', async () => {
+    const step = (stage: string, script: string) => ({
+      step_key: script,
+      script_name: script,
+      script_version: '1.0.0',
+      stage,
+      sort_order: 1,
+      enabled: true,
+      executes: true,
+      metadata_missing: false,
+      params: [],
+      settings: [],
+    });
     renderPage({
       plans: [{
         id: 7,
@@ -1433,6 +1496,15 @@ describe('PlanExecutePage', () => {
           { id: 3, step_key: 'c', script_name: 'tear_c', script_version: '1.0.0', stage: 'teardown', enabled: true, sort_order: 1 },
         ],
       }],
+      projection: {
+        layer: 'L1',
+        context: { read_at: '2026-10-10T00:00:00.000000Z', authority: 'test' },
+        steps: [step('init', 'init_a'), step('patrol', 'patrol_b'), step('teardown', 'tear_c')],
+        plan_settings: [],
+        watcher_policy: { note: '独立策略', items: [] },
+        dispatch_decisions: [],
+        safe_debug: { steps: [], plan_settings: {}, watcher_policy: {} },
+      },
       initialEntry: '/execution/plan-execute?plan=7',
     });
 
@@ -1607,6 +1679,101 @@ describe('PlanExecutePage', () => {
       expect(smokeIdx).toBeGreaterThanOrEqual(0);
       expect(nightlyIdx).toBeLessThan(smokeIdx);
     });
+  });
+
+  it('clears the preview on 409 and keeps device, wifi, and note until two explicit actions', async () => {
+    await goToDispatchWithWifi(WIFI_POOLS);
+    fireEvent.click(await screen.findByLabelText(/lab-test/));
+    const note = await screen.findByLabelText(/执行备注/);
+    fireEvent.change(note, { target: { value: 'keep me' } });
+    fireEvent.click(screen.getByRole('button', { name: /生成执行预览/ }));
+    expect(await screen.findByText(/预览已生成并冻结 1 台设备/)).toBeInTheDocument();
+
+    (api.plans.run as any).mockRejectedValueOnce(new ApiError(
+      'PLAN_CONFIRMATION_CHANGED',
+      '计划配置已变化，请重新预览并确认',
+      { status: 409 },
+    ));
+    fireEvent.click(screen.getByRole('button', { name: /确认发起/ }));
+
+    expect(await screen.findByTestId('plan-confirmation-changed')).toHaveTextContent(
+      '计划配置已变化，请重新预览并确认',
+    );
+    expect(screen.queryByText(/预览已生成并冻结/)).not.toBeInTheDocument();
+    expect(note).toHaveValue('keep me');
+    expect(screen.getByLabelText(/lab-test/)).toBeChecked();
+    expect(api.plans.run).toHaveBeenCalledTimes(1);
+    expect(api.plans.previewRun).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', { name: /生成执行预览/ })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: /返回修改/ }));
+    expect(await screen.findByRole('checkbox', { name: /DEV-1/ })).toBeChecked();
+
+    fireEvent.click(screen.getByRole('button', { name: /预览发起/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /生成执行预览/ }));
+    expect(await screen.findByText(/预览已生成并冻结 1 台设备/)).toBeInTheDocument();
+    expect(screen.queryByTestId('plan-confirmation-changed')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /确认发起/ }));
+    await waitFor(() => expect(api.plans.run).toHaveBeenCalledTimes(2));
+    expect(api.plans.previewRun).toHaveBeenCalledTimes(2);
+  });
+
+  it('discards an in-flight preview token when the WiFi selection changes', async () => {
+    const staleFingerprint = `stp-l1-v1:${'cd'.repeat(32)}`;
+    let resolvePreview!: (value: unknown) => void;
+    (api.plans.previewRun as any).mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolvePreview = resolve;
+      }),
+    );
+    await goToDispatchWithWifi(WIFI_POOLS);
+    fireEvent.click(screen.getByRole('button', { name: /生成执行预览/ }));
+    fireEvent.click(await screen.findByLabelText(/lab-test/));
+
+    await act(async () => {
+      resolvePreview({
+        plan_name: 'Smoke Plan',
+        device_count: 1,
+        job_count: 1,
+        total_steps: 1,
+        device_ids: [1],
+        confirmation_fingerprint: staleFingerprint,
+      });
+    });
+
+    expect(screen.queryByText(/预览已生成并冻结/)).not.toBeInTheDocument();
+    expect(mocks.toast.info).not.toHaveBeenCalledWith(expect.stringContaining('预览已生成'));
+    expect(screen.queryByRole('button', { name: /预览中/ })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /生成执行预览/ }));
+    expect(await screen.findByText(/预览已生成并冻结 1 台设备/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /确认发起/ }));
+    await waitFor(() => expect(api.plans.run).toHaveBeenCalled());
+    expect((api.plans.run as any).mock.calls[0][1].confirmation_fingerprint).toBe(PREVIEW_FINGERPRINT);
+    expect((api.plans.run as any).mock.calls[0][1].confirmation_fingerprint).not.toBe(staleFingerprint);
+  });
+
+  it('keeps the preview token when only the note changes', async () => {
+    renderPage({
+      devices: [{ id: 1, serial: 'DEV-1', host_id: 'h1', status: 'ONLINE' }],
+    });
+    await goToDeviceStep();
+    fireEvent.click(await screen.findByRole('checkbox', { name: /DEV-1/ }));
+    fireEvent.click(screen.getByRole('button', { name: /预览发起/ }));
+    fireEvent.click(screen.getByRole('button', { name: /生成执行预览/ }));
+    expect(await screen.findByText(/预览已生成并冻结 1 台设备/)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText(/执行备注/), { target: { value: 'after preview' } });
+    expect(screen.getByText(/预览已生成并冻结 1 台设备/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /确认发起/ }));
+    await waitFor(() => {
+      expect(api.plans.run).toHaveBeenCalledWith(7, {
+        device_ids: [1],
+        note: 'after preview',
+        confirmation_fingerprint: PREVIEW_FINGERPRINT,
+      });
+    });
+    expect(api.plans.previewRun).toHaveBeenCalledTimes(1);
   });
 });
 
