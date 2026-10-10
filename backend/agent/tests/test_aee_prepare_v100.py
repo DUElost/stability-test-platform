@@ -47,6 +47,9 @@ def _wire(monkeypatch, *, mode_after: str = "3", setprop_rc: int = 0,
 
     def fake_shell(serial, command, timeout=30):
         calls.append(f"shell:{command}")
+        # adb root 后的 _wait_adbd_ready 轮询 get-state；立即就绪，避免付生产 15s 预算
+        if "get-state" in command:
+            return 0, "device\n"
         if "getprop" in command and "aee.mode" in command:
             if "before" in calls[-1] or len([c for c in calls if "getprop" in c]) == 1:
                 return 0, "4\n"

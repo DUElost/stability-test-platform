@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import ast
+import functools
 import re
 from pathlib import Path
 
@@ -89,12 +90,14 @@ def offending_functions(path: Path) -> list[str]:
     return found
 
 
-def current_debt() -> set[str]:
-    return {
+@functools.lru_cache(maxsize=1)
+def current_debt() -> frozenset[str]:
+    """Suite files are immutable for this module's tests — parse once per process."""
+    return frozenset(
         f"{f.name}::{name}"
         for f in sorted(SUITE.glob("test_*.py"))
         for name in offending_functions(f)
-    }
+    )
 
 
 def test_anchor_is_present_before_judging_shape() -> None:
@@ -102,8 +105,13 @@ def test_anchor_is_present_before_judging_shape() -> None:
     assert SUITE.is_dir(), f"{SUITE} 不在了：扫面要跟着改，别让它静默失效"
     files = sorted(SUITE.glob("test_*.py"))
     assert len(files) > 100, f"扫面只剩 {len(files)} 个文件：目录或命名变了，判据已退化"
-    scanned = "".join(f.read_text(encoding="utf-8", errors="replace") for f in files)
-    assert ".time, " in scanned and '"sleep"' in scanned, "扫面里已无任何 sleep stub：请把判据退役，别留恒绿测试"
+    # Short-circuit: any file with a sleep stub proves the surface is live (avoid
+    # joining the whole suite text on every run — current_debt already parses once).
+    assert any(
+        ".time, " in (text := f.read_text(encoding="utf-8", errors="replace"))
+        and '"sleep"' in text
+        for f in files
+    ), "扫面里已无任何 sleep stub：请把判据退役，别留恒绿测试"
     assert current_debt() or _ADVANCING_CLOCK_DEBT, "扫面与登记同时为空：判据已空转"
 
 

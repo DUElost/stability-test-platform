@@ -358,6 +358,8 @@ def test_gpu_setup_retry_uninstall_only_failed_apk(version, monkeypatch, tmp_pat
         return 0, "", ""
 
     monkeypatch.setattr(lib, "adb", fake_adb)
+    # 失败重试路径已 stub；缩短退避，勿付生产默认 10s（不改生产默认值）
+    monkeypatch.setenv("STP_GPU_INSTALL_RETRY_BACKOFF_SECONDS", "0")
     rc, out = lib._install_apk_stable(apk)
     assert rc == 0 and "Success" in out
     uninstalls = [c[1] for c in calls if c[0] == "shell" and c[1].startswith("pm uninstall")]
