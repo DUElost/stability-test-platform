@@ -23,8 +23,8 @@ Class: process
 ## Verification
 
 - 前检：开放 PR 仅 #3667；本 PR 文件集与其无交集。
-- `rg 'barrier_max_wait_seconds 未设 = 无硬顶|unset_definite.*barrier_max|NULL = 不设上限' docs/adr backend/models frontend/src/utils/api/types.ts`：无命中（对齐后）。
-- `./scripts/project_python.sh scripts/run_gates.py check:quick`：见 PR 正文实测结果。
+- 对齐范围 `rg`：`docs/adr/ADR-0060…` / `backend/models/plan.py` / `frontend/src/utils/api/types.ts` 中 D3/模型注释不再把未设写成「无硬顶」或「NULL = 不设上限」（版本记录句仍可出现对照用语）。
+- `./scripts/project_python.sh scripts/run_gates.py check:quick`：exit 0，`[OK] check:quick (16 gates)`。`schema-at-head` WARN（`DATABASE_URL` 未配置，跳过），其余门禁 OK，含 `gov-surface`（S12/S15 修复后）。
 
 ## Revisit
 
