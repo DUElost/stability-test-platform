@@ -1214,3 +1214,161 @@ tests:
             exp_annotations:
               summary: "Terminal jobs cut off past the post-completion defer window"
               description: "Terminal jobs whose finish detail is still unreadable beyond the post-completion defer cutoff stopped being re-enqueued (#3341); their reports were never persisted and need manual inspection. Readable cutoff rows are re-enqueued and will drain on their own."
+
+  # ── #3660：设备租约回收器 D5 停转（明确停转 vs 无数据）────────────────────
+  # 时间线复用 #3651 G1 离线场景；窗口 15m、for 10m/15m（比 SOP 5m 更抗抖）。
+  # S1 持续无运行 → Stalled 火；NoData 不火
+  - interval: 1m
+    input_series:
+      - series: 'stability_reconciler_runs_total{check="terminal_job_active_lease",outcome="success"}'
+        values: '40x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: StabilityDeviceLeaseReconcilerStalled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Device lease reconciler D5 check has not succeeded
+              description: "stability_reconciler_runs_total{check=\"terminal_job_active_lease\",outcome=\"success\"} 在 15 分钟窗口内有采样但成功增量为 0，并已持续 10 分钟。回收器是「job 已终态、 租约仍 ACTIVE」的唯一自动兜底。对照 docs/operations/device-lease-emergency-release.md 第 8–11 步做只读判定；回收器仍可能在工作时，执行者不得手工绕过。"
+      - eval_time: 30m
+        alertname: StabilityDeviceLeaseReconcilerNoData
+        exp_alerts: []
+
+  # S2 持续报错（success 不增长、error 增长）→ Stalled 火
+  - interval: 1m
+    input_series:
+      - series: 'stability_reconciler_runs_total{check="terminal_job_active_lease",outcome="success"}'
+        values: '40x40'
+      - series: 'stability_reconciler_runs_total{check="terminal_job_active_lease",outcome="error"}'
+        values: '0+4x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: StabilityDeviceLeaseReconcilerStalled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Device lease reconciler D5 check has not succeeded
+              description: "stability_reconciler_runs_total{check=\"terminal_job_active_lease\",outcome=\"success\"} 在 15 分钟窗口内有采样但成功增量为 0，并已持续 10 分钟。回收器是「job 已终态、 租约仍 ACTIVE」的唯一自动兜底。对照 docs/operations/device-lease-emergency-release.md 第 8–11 步做只读判定；回收器仍可能在工作时，执行者不得手工绕过。"
+      - eval_time: 30m
+        alertname: StabilityDeviceLeaseReconcilerNoData
+        exp_alerts: []
+
+  # S3 先报错后恢复成功 → 两者都不火（与 SOP G1「大于 0 → 停止」一致）
+  # values 尾部必须是 xN 形态，供结构层 _sample_count 读窗口（见 #2970）。
+  - interval: 1m
+    input_series:
+      - series: 'stability_reconciler_runs_total{check="terminal_job_active_lease",outcome="success"}'
+        values: '40x20 44+4x40'
+      - series: 'stability_reconciler_runs_total{check="terminal_job_active_lease",outcome="error"}'
+        values: '0x20 1x40'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: StabilityDeviceLeaseReconcilerStalled
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: StabilityDeviceLeaseReconcilerNoData
+        exp_alerts: []
+
+  # S4 序列从未出现 → NoData 火；Stalled 不火（不得把无数据当成停转）
+  # 旁路序列用已注册指标，证明「其他控制面指标有值」不能代替本项。
+  - interval: 1m
+    input_series:
+      - series: 'stability_claim_lease_failed_total'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: StabilityDeviceLeaseReconcilerNoData
+        exp_alerts:
+          - exp_labels:
+              check: terminal_job_active_lease
+              outcome: success
+              severity: warning
+            exp_annotations:
+              summary: Device lease reconciler D5 success series is missing
+              description: "控制面未暴露 stability_reconciler_runs_total{check=\"terminal_job_active_lease\",outcome=\"success\"} （从未出现、采集中断或进程不在），已持续 15 分钟。不得把无数据当成回收器正常。 对照 docs/operations/device-lease-emergency-release.md 第 8–11 步，按「无法判定」停止。"
+      - eval_time: 30m
+        alertname: StabilityDeviceLeaseReconcilerStalled
+        exp_alerts: []
+
+  # S5 采集中断（该序列 t=3m 后无样本，其他指标在线）→ NoData 火；Stalled 不火
+  - interval: 1m
+    input_series:
+      - series: 'stability_reconciler_runs_total{check="terminal_job_active_lease",outcome="success"}'
+        values: '0+4x3 _x37'
+      - series: 'stability_claim_lease_failed_total'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: StabilityDeviceLeaseReconcilerNoData
+        exp_alerts:
+          - exp_labels:
+              check: terminal_job_active_lease
+              outcome: success
+              severity: warning
+            exp_annotations:
+              summary: Device lease reconciler D5 success series is missing
+              description: "控制面未暴露 stability_reconciler_runs_total{check=\"terminal_job_active_lease\",outcome=\"success\"} （从未出现、采集中断或进程不在），已持续 15 分钟。不得把无数据当成回收器正常。 对照 docs/operations/device-lease-emergency-release.md 第 8–11 步，按「无法判定」停止。"
+      - eval_time: 30m
+        alertname: StabilityDeviceLeaseReconcilerStalled
+        exp_alerts: []
+
+  # S6 全程成功 → 两者都不火
+  - interval: 1m
+    input_series:
+      - series: 'stability_reconciler_runs_total{check="terminal_job_active_lease",outcome="success"}'
+        values: '0+4x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: StabilityDeviceLeaseReconcilerStalled
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: StabilityDeviceLeaseReconcilerNoData
+        exp_alerts: []
+
+  # S7 序列出生即为 N（#3500 形态）：出生后停转 → Stalled 火
+  # 另用 promql_expr_test 钉「出生增量对 increase()>0 失明 / 从 0 起步可见」——
+  # 修复前（无预置、出生即 N）红；修复后（代码侧预置从 0）绿。
+  - interval: 1m
+    input_series:
+      - series: 'stability_reconciler_runs_total{check="terminal_job_active_lease",outcome="success"}'
+        values: '_ _ 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: StabilityDeviceLeaseReconcilerStalled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Device lease reconciler D5 check has not succeeded
+              description: "stability_reconciler_runs_total{check=\"terminal_job_active_lease\",outcome=\"success\"} 在 15 分钟窗口内有采样但成功增量为 0，并已持续 10 分钟。回收器是「job 已终态、 租约仍 ACTIVE」的唯一自动兜底。对照 docs/operations/device-lease-emergency-release.md 第 8–11 步做只读判定；回收器仍可能在工作时，执行者不得手工绕过。"
+      - eval_time: 30m
+        alertname: StabilityDeviceLeaseReconcilerNoData
+        exp_alerts: []
+    promql_expr_test:
+      # 出生即为 2 且此后平坦：increase()>0 看不见出生增量（修复前形态 → 本断言要求为 0）
+      - expr: 'sum(increase(stability_reconciler_runs_total{check="terminal_job_active_lease",outcome="success"}[15m])) > bool 0'
+        eval_time: 10m
+        exp_samples:
+          - labels: '{}'
+            value: 0
+
+  # S7b 代码侧预置后的形态：从 0 起步再增长 → increase()>0 可见（修复后绿）
+  - interval: 1m
+    input_series:
+      - series: 'stability_reconciler_runs_total{check="terminal_job_active_lease",outcome="success"}'
+        values: '0 0 2 4 6 8 10 12 14 16 18'
+    promql_expr_test:
+      - expr: 'sum(increase(stability_reconciler_runs_total{check="terminal_job_active_lease",outcome="success"}[15m])) > bool 0'
+        eval_time: 10m
+        exp_samples:
+          - labels: '{}'
+            value: 1
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: StabilityDeviceLeaseReconcilerStalled
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: StabilityDeviceLeaseReconcilerNoData
+        exp_alerts: []
