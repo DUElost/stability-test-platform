@@ -21,7 +21,13 @@ Class: bug-fix
 
 ## Verification
 
-（实跑结果见同 PR 后续提交更新。）
+开工 `origin/main` SHA：`43dfc764a8881fabfed7979b3a40e6662f3c6120`。隔离库：`TEST_DATABASE_URL=postgresql+psycopg://stp_test:***@127.0.0.1:5432/stp_u7_test`（库名含 test；本环境无 `.env.backend`）。本环境无 Docker 守护进程；pytest 前在 workload cgroup 写入 `memory.max=6G`、`memory.swap.max=0` 以满足 `run_pytest.py` 边界。
+
+- `./scripts/project_python.sh scripts/run_gates.py check:quick`：exit 0，`[OK] check:quick (16 gates)`。
+- `./scripts/project_python.sh scripts/run_pytest.py backend/tests/api/test_plan_barrier_invariant_2948.py backend/tests/services/test_plan_settings_registry.py -q`：exit 0，**7 passed**，1 warning。
+- `npm --prefix frontend run type-check`：exit 0。
+- `./scripts/project_python.sh scripts/run_pytest.py tests/ -q`：汇总 **2292 passed，78 skipped，5 failed，11 errors**（约 193s）；失败与错误均为 `docker.errors.DockerException`（无 Docker socket）：`tests/test_alembic_upgrade.py`、`tests/test_seed_default_params_face_3289.py`、`tests/test_diag_readonly_role_pg.py`、`tests/test_script_seed_governance.py`。同入口单测 `tests/test_alembic_upgrade.py::test_alembic_upgrade_head_from_empty_on_postgres_17` 确认 **EXIT:1**。**不能写成通过**（与 #3653 §8.3 U2 根 tests 欠项同类）。
+- 对账：相对 main 仅三文件；`plans.py` 仅注释/422 message；登记表仅 meaning；旧句「不设硬顶」「null 才是无上限」「与 ADR…冲突 / 见 #3652 / 本批按现行代码展示」已撤除；`unset_state=env_fallback` 与回落链含 1800 未改。受影响前端 vitest：不适用。
 
 ## Revisit
 
