@@ -1,0 +1,286 @@
+{
+  "schema_version": 1,
+  "script_name": "flash_firmware",
+  "entries": [
+    {
+      "path": [
+        "firmware_dir"
+      ],
+      "label": "固件目录",
+      "meaning": "显式指定本次要刷的固件所在目录（含 scatter/DA 等下载文件）。填了就绕过按机型指纹自动选固件。",
+      "unit": "主机侧目录路径",
+      "cautions": "路径在 Agent 主机上解析，必须存在于该机可见的固件库挂载中。",
+      "sensitive": false
+    },
+    {
+      "path": [
+        "da_file"
+      ],
+      "label": "DA 文件",
+      "meaning": "刷机工具的 Download Agent 文件名。仅在显式指定 firmware_dir 的路由分支里取用：给了就用它，没给则取该目录 manifest.json 里的 da_file。",
+      "unit": "文件名",
+      "sensitive": false,
+      "cautions": "走机型指纹路由时本参数不参与，DA 由固件目录的 manifest 决定。两处都没有时路由直接失败（da_file is required）。"
+    },
+    {
+      "path": [
+        "scatter_file"
+      ],
+      "label": "scatter 文件",
+      "meaning": "刷机工具的分区散列表（scatter.xml）文件名。仅在显式指定 firmware_dir 的路由分支里取用：给了就用它，没给则取该目录 manifest.json 里的 scatter_file。",
+      "unit": "文件名",
+      "sensitive": false,
+      "cautions": "走机型指纹路由时本参数不参与，scatter 由固件目录的 manifest 决定。两处都没有时路由直接失败。"
+    },
+    {
+      "path": [
+        "command"
+      ],
+      "label": "刷机工具命令",
+      "meaning": "传给刷机工具的执行类型（以 -c 传入），默认 firmware-upgrade，即整包固件升级。",
+      "unit": "字符串",
+      "cautions": "取值域由刷机工具自身定义，平台不校验；写错会让工具直接报错退出。",
+      "sensitive": false
+    },
+    {
+      "path": [
+        "boot_mode"
+      ],
+      "label": "下载启动模式",
+      "meaning": "传给刷机工具的下载启动方式（以 -b 传入），默认 auto，由工具自行决定从哪种模式接管设备。",
+      "unit": "字符串",
+      "cautions": "取值域由刷机工具自身定义，平台不校验。",
+      "sensitive": false
+    },
+    {
+      "path": [
+        "timeout_seconds"
+      ],
+      "label": "单次刷机等待上限",
+      "meaning": "启动刷机工具后等待它跑完并返回结果的最长时间，超时按本次尝试失败处理（仍可能再重试）。",
+      "unit": "秒",
+      "cautions": "必须小于该步骤的超时，否则先看步骤超时，重试预算永远用不上。",
+      "sensitive": false
+    },
+    {
+      "path": [
+        "flash_tool_dir"
+      ],
+      "label": "刷机工具目录",
+      "meaning": "刷机工具可执行文件所在目录，优先级高于主机环境变量 STP_FLASH_TOOL_DIR 与工具依赖包注入。",
+      "unit": "主机侧目录路径",
+      "sensitive": false
+    },
+    {
+      "path": [
+        "reboot_to_flash"
+      ],
+      "label": "刷机前是否重启设备",
+      "meaning": "是否在本次尝试里向设备发 adb reboot，让它经完整上电流进入 BROM 窗口被刷机工具抓到。注意 1.3.3 起的真实时序：先启动刷机工具（Popen）进入 USB 扫描，在工具就绪回调里才发 reboot——不是「先重启再起工具」（先重启的顺序真机证伪：工具只能看到窗口过后的普通态枚举）。",
+      "unit": "布尔",
+      "sensitive": false,
+      "cautions": "重试轮（第 2 次起）即使把本开关关掉也会发 reboot：此时设备多半已在 BROM/DA 态，adb 调用通常 no-op。关掉它只对首次尝试有意义。"
+    },
+    {
+      "path": [
+        "reboot_target"
+      ],
+      "label": "重启目标模式",
+      "meaning": "刷机前那次 adb reboot 的目标：留空或 normal 发不带 target 的重启（完整上电流、经 BROM 窗口，工具才抓得中）；bootloader / fastboot 为显式直达专用模式。",
+      "unit": "字符串",
+      "cautions": "热重启直达 bootloader/fastboot 会跳过 BROM 捕获窗口，真机实证抓不住设备导致刷机失败（v1.3.2 观察），一般不要改离默认值。",
+      "sensitive": false
+    },
+    {
+      "path": [
+        "pre_reboot_wait_seconds"
+      ],
+      "label": "重启前提前量",
+      "meaning": "刷机工具已进入 USB 扫描、脚本在就绪回调里发出 adb reboot 之前先等待的时间，让工具的扫描先站稳。该等待发生在工具启动之后（时序见 reboot_to_flash）。",
+      "unit": "秒",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "1.3.3"
+      }
+    },
+    {
+      "path": [
+        "pre_reboot_wait_seconds"
+      ],
+      "label": "重启后等待",
+      "meaning": "发出 adb reboot 之后脚本再等待的时间（该版本语义：重启后 sleep），给设备离开系统留出窗口。",
+      "unit": "秒",
+      "cautions": "1.3.3 起该键语义改为「发重启前的提前量」，同名不同义，跨版本比对预算时不能按同一含义换算。",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "1.0.0",
+        "max_exclusive": "1.3.3"
+      }
+    },
+    {
+      "path": [
+        "firmware_root"
+      ],
+      "label": "固件库根目录",
+      "meaning": "按指纹路由固件时的库根；取值顺序是步骤参数 firmware_root，其次环境变量 STP_FLASH_FIRMWARE_ROOT，最后代码默认取主机 {STP_NFS_ROOT}/firmware。",
+      "unit": "主机侧目录路径",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "1.2.0"
+      }
+    },
+    {
+      "path": [
+        "version"
+      ],
+      "label": "目标固件版本",
+      "meaning": "指纹路由时要选定的固件版本目录名；留空时先回落环境变量 STP_FLASH_FIRMWARE_VERSION，再读固件族目录下的 latest.json 指针（指针可按机型键给出各自的版本）。本键只在指纹路由分支读取，显式 firmware_dir 路由不读它。",
+      "unit": "版本字符串",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "1.2.0"
+      },
+      "cautions": "步骤参数、STP_FLASH_FIRMWARE_VERSION 与 latest 指针都拿不到版本时，指纹路由直接失败（success=False，刷机工具不启动），不是跳过比对或核验后成功收场。指纹路由还必须能加载该版本目录的有效 manifest；缺 manifest 同样路由失败，到不了刷后核验跳过。刷后核验的 skipped 只发生在显式 firmware_dir 路由已成功但 route 无目标版本的情形（见 verify_version）。"
+    },
+    {
+      "path": [
+        "family"
+      ],
+      "label": "机型族",
+      "meaning": "显式指定固件族（固件库下的一级目录）；不填时按设备 ro.product.model 经机型→族映射自动路由。",
+      "unit": "字符串",
+      "cautions": "路由不到族（型号未在映射表内）会直接判失败，此时要么显式填族，要么显式填固件目录。",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "1.2.0"
+      }
+    },
+    {
+      "path": [
+        "model_ready_wait_seconds"
+      ],
+      "label": "型号可读等待上限",
+      "meaning": "指纹路由时设备还没回到 Android、读不到 ro.product.model 情况下等待其可读的上限，读不到则路由失败并提示改显式指定固件目录。",
+      "unit": "秒",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "1.3.14"
+      }
+    },
+    {
+      "path": [
+        "skip_if_current"
+      ],
+      "label": "已是目标版本则跳过",
+      "meaning": "刷机前用 getprop 把设备当前版本与**路由给出的目标版本**比对，一致就以 skipped 收场、不重复刷；可用环境变量 STP_FLASH_SKIP_IF_CURRENT 兜底。",
+      "unit": "布尔",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "1.2.0"
+      },
+      "cautions": "前提是路由能拿到目标版本：显式指定 firmware_dir 且该目录没有 manifest.json 时没有目标版本，此时比对直接记为未执行（既不比也不跳），本开关打开也不产生任何短路效果。"
+    },
+    {
+      "path": [
+        "verify_version"
+      ],
+      "label": "刷后回读版本核验",
+      "meaning": "刷机完成后回读设备版本与路由给出的目标版本比对，不一致判失败；可用环境变量 STP_FLASH_VERIFY_VERSION 兜底。",
+      "unit": "布尔",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "1.2.0"
+      },
+      "cautions": "跳过版本核验的前提是**路由已成功但 route 没有目标版本**（典型是显式指定 firmware_dir、DA/scatter 已齐、目录无 manifest 因而无 version）：此时核验函数以 skipped 返回成功，该函数本身不再等 adb、也不读版本。指纹路由缺 latest/版本会在路由阶段直接失败（success=False），不会走到 skipped。开着本开关不等于一定做了核验。刷成功后 main 仍会先做固定 60 秒重新枚举观察（见 verify_wait_seconds），与本核验是否跳过无关。"
+    },
+    {
+      "path": [
+        "verify_wait_seconds"
+      ],
+      "label": "版本核验内 adb-ready 上限",
+      "meaning": "版本核验开启且 route 有目标版本时，核验函数内部等待设备回到 adb 可访问状态的上限；到点仍不可达则版本核验判失败。",
+      "unit": "秒",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "1.2.0"
+      },
+      "cautions": "本键只控制版本核验函数内部的 adb-ready 等待：核验因无目标版本被跳过时不消费本键。这不等于整步不观察 adb——刷机工具成功退出后，main 仍先以固定 60 秒窗口做重新枚举观察并记录 reenumerated（观察不到不单独判失败），然后再进入版本核验；核验通过后还会做 boot 稳定等待。"
+    },
+    {
+      "path": [
+        "boot_stabilize_seconds"
+      ],
+      "label": "开机稳定持续窗口",
+      "meaning": "刷后判定「设备已稳定」所需的持续时长：既要求 sys.boot_completed 为 1，又要求本机的 MTK USB 拓扑在该窗口内不再变化。",
+      "unit": "秒",
+      "cautions": "稳定指纹只看 MTK 口（vid 0e8d）：hub、串口适配器、邻机非 MTK 设备插拔不应重置该窗口，否则每台首刷都要空耗到上限。",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "1.3.7"
+      }
+    },
+    {
+      "path": [
+        "boot_stabilize_max_wait"
+      ],
+      "label": "开机稳定等待上限",
+      "meaning": "等待上述稳定窗口的总上限；超过上限按「设备确认卡死」语义放行继续，不判本步失败。",
+      "unit": "秒",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "1.3.7"
+      }
+    },
+    {
+      "path": [
+        "gate_other_mtk"
+      ],
+      "label": "门控同机其它 MTK 口",
+      "meaning": "刷机期间把同一主机上其它处于刷机态的 MTK USB 口置为 authorized=0 隐藏起来，刷完恢复；只动非目标口，普通态手机不受影响。",
+      "unit": "布尔",
+      "cautions": "同机多口并刷时这是防互抢的手段。脚本被取消/超时以信号死亡时，必须靠信号处理器把门控恢复回来，否则邻机在被人工干预前一直不可用（#1025）。",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "1.3.0"
+      }
+    },
+    {
+      "path": [
+        "max_attempts"
+      ],
+      "label": "整链路尝试次数",
+      "meaning": "一次尝试等于「启动刷机工具（并在工具就绪后按需重启设备）+ 等结果」，本参数是最多尝试几轮；可用环境变量 STP_FLASH_MAX_ATTEMPTS 兜底。",
+      "unit": "次",
+      "cautions": "取值 1..4。整体耗时约为本值乘以 timeout_seconds 再加相邻尝试的间隔，步骤超时与停滞判定必须容纳；每一轮都会按 reboot_to_flash 的时序重启设备，失败重试不是无害操作。",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "1.3.0"
+      }
+    },
+    {
+      "path": [
+        "retry_backoff_seconds"
+      ],
+      "label": "重试间隔",
+      "meaning": "相邻两轮整链路尝试之间的等待，给 USB 重枚举与设备离开刷机态留窗口；可用环境变量 STP_FLASH_RETRY_BACKOFF 兜底。",
+      "unit": "秒",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "1.3.0"
+      }
+    },
+    {
+      "path": [
+        "strict_env_check"
+      ],
+      "label": "严格环境检查",
+      "meaning": "打开后把刷机前环境预检里的**全部** WARNING 升级为硬失败——不止 ttyACM 写入路径不明确，也包括「Agent 主机上的 adb 可执行文件缺失」这类在不需要 adb 的流程里原本可忽略的项；可用环境变量 STP_FLASH_STRICT_ENV_CHECK 兜底。",
+      "unit": "布尔",
+      "cautions": "ttyACM 可写性：有可用节点时按当前进程实测；无节点时才按 udev 规则形态与本进程组归属推断（0666 放行；0660+dialout 仅对成员放行，并标注未实测）。strict 只决定 WARNING 是否升为失败，不改变可写性证据来源。误开会让权限配置略有告警的主机整批判红。",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "1.3.0"
+      }
+    }
+  ]
+}

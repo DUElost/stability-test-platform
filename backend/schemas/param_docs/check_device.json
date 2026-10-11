@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "script_name": "check_device",
+  "entries": [
+    {
+      "path": ["expect_root"],
+      "label": "要求 root 权限",
+      "meaning": "设备可达判定的附加条件：打开后除了 adb shell 回显 test，还要读 id -u 必须为 0，否则该步骤判失败。用于「必须已拿到 root」的init 首步。",
+      "unit": "布尔",
+      "cautions": "关闭时只证明设备可达，不证明已 root；root 由后续 ensure_root 步骤负责。",
+      "sensitive": false
+    },
+    {
+      "path": ["max_attempts"],
+      "label": "探测尝试次数",
+      "meaning": "本次可达判定最多尝试几次（含首次）。失败后先等设备系统就绪再重试，用来吸收同机 PowerCycle/重启窗口造成的「设备 not found」。",
+      "unit": "次",
+      "cautions": "1.0.2 起才有该参数；更早版本失败即返回，不重试。",
+      "sensitive": false,
+      "version_range": {"min_inclusive": "1.0.2"}
+    },
+    {
+      "path": ["wait_ready_seconds"],
+      "label": "单次就绪等待上限",
+      "meaning": "每次重试前等设备「系统就绪」（get-state 为 device 且 sys.boot_completed 为 1）的最长时间，等不到就判定不可恢复并结束。",
+      "unit": "秒",
+      "cautions": "首次尝试走快速路径，不等待就绪；该值只作用于重试前。",
+      "sensitive": false,
+      "version_range": {"min_inclusive": "1.0.2"}
+    },
+    {
+      "path": ["total_budget_seconds"],
+      "label": "全步总预算",
+      "meaning": "从进入本步起可用于「多次尝试 + 等待就绪 + 重试间隔」的整体时间上限，预算耗尽即停止后续尝试并报错。",
+      "unit": "秒",
+      "cautions": "必须被步骤超时容纳：默认内置 150s，步骤 timeout 小于它时会在预算用满前被引擎判停滞/超时（#2981 实测教训——该内置预算在数据库参数元数据里查不出来，不能靠元数据判定兼容）。",
+      "sensitive": false,
+      "version_range": {"min_inclusive": "1.0.2"}
+    },
+    {
+      "path": ["retry_delay_seconds"],
+      "label": "重试间隔",
+      "meaning": "两次尝试之间固定等待的时间，等待后仍会先检查总预算是否够用。",
+      "unit": "秒",
+      "sensitive": false,
+      "version_range": {"min_inclusive": "1.0.2"}
+    }
+  ]
+}
