@@ -10,7 +10,8 @@ Class: testing
 本单是 [B5 #3653](https://github.com/DUElost/stability-test-platform/issues/3653) 的外部验收依赖，
 不是 U3/U4/U7 单元；只修改本 Note 和 `tests/test_prometheus_alerts_contract.py`。
 
-既有 `_CMP_THRESHOLD_RE` / `_HUGE_THRESHOLD` 数值阈值变异路径保持原样。
+既有 `_CMP_THRESHOLD_RE` / `_HUGE_THRESHOLD` 数值阈值变异路径及双参数调用保持兼容。
+可选第三参数只服务 absent 轴；absent 未显式提供目标切片时失败，不使用默认时长。
 对于没有比较阈值的单一 `absent(selector)`，只在临时副本中延长目标规则的 `for`：
 复用 `_duration_minutes`，取原 `for` 与全部目标切片 `eval_time` 的最大值，向上取整后加一分钟。
 当前 NoData 原值为 `15m`，最大评估时刻为 `40m`，故副本为 `41m`。
@@ -53,16 +54,24 @@ promtool 为当前 CI pinned `3.13.3`，下载归档 SHA256 与 ci.yml 一致：
 目标用例 exit 1，`1 failed in 0.10s`，原第 707 行 `assert hits` / `assert 0`。
 同 SHA 的基线复现按 v1.1 直接引用。
 
-修复后的有限清单实跑 `32 passed, 57 deselected`，exit 0，无 skip：
+有限清单及既有调用兼容性实跑 `36 passed, 60 deselected`，exit 0，无 skip
+（33 条本单用例及 #3233 的 3 条既有数值规则用例）：
 
 - NoData 真实切片：control=0、mutation=1，目标 `exp/got` 失配；原 15m→临时 41m。
 - 数值规则仍抬到 1e12；absent 只改 for；非目标告警、录制规则及其它字段值保持一致。
-  原 for 大于 eval_time 及秒数非整分钟的向上取整边界均通过。
+  原 for 大于 eval_time 及秒数非整分钟的向上取整边界均通过；
+  absent 缺少显式切片拒绝，既有 host-storage 数值规则的双参数调用仍通过。
 - 六种无阈值不支持形态、四种无效 for、三种无效 eval_time、缺失/重复目标、
   无场景/仅不触发场景均捕获预期断言失败，反例测试通过。
 - 控制组失败、变异仍绿、无 FAILED、其它告警失败、仅目标名的语法报错使用受控返回值
   检验拒绝路径；缺二进制且 REQUIRED 时捕获 pytest.fail，均通过。
 - 路径、YAML、PromQL 三种错误另用真实 promtool 实跑，均被控制组断言拒绝。
+
+首个 PR head `f043235b` 的专项全量 `89 passed`、exit 0；该 head 的 required
+`pr-agent-tests` 日志同时暴露新增必需第三参数导致 #3233 三条既有调用失败
+（Agent 套件 2505 passed，根离线子集 3 failed / 2327 passed / 71 skipped）。
+这一回归已在本单文件内修复并以原调用用例实跑验证；未修改其它测试文件。
+最终 head 重新执行下列专项、完整根套件与 quick，不沿用旧 head CI。
 
 交付验证使用下列命令，精确 head、退出码、完整汇总与 skip 明细由本单 Draft PR
 及 #3679 / #3653 的交付评论记录；PR 的六项 required CI 另查 GitHub 最终状态。

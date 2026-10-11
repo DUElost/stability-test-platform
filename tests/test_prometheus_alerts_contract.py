@@ -537,12 +537,13 @@ _SINGLE_ABSENT_RE = re.compile(
 
 
 def _raise_rule_threshold(
-    alerts_text: str, alert: str, scenarios_text: str,
+    alerts_text: str, alert: str, scenarios_text: str | None = None,
 ) -> tuple[str, int]:
     """只变异目标规则：数值阈值抬至 1e12，单一 absent 则延长 for。
 
     absent 的 for 严格大于原值和全部切片 eval_time；不支持的无阈值形态
     显式失败，交人工分类。返回 (副本文本, 变异处数)，原输入保持不变。
+    数值规则保留既有双参数调用；absent 必须显式提供场景切片，不猜测时长。
     """
     data = yaml.safe_load(alerts_text)
     targets = [
@@ -568,6 +569,7 @@ def _raise_rule_threshold(
         assert original_for is not None and math.isfinite(original_for) and original_for > 0, (
             f"{alert}: absent 变异需要可解析的正 for，实际 {rule.get('for')!r}"
         )
+        assert scenarios_text is not None, f"{alert}: absent 变异必须提供目标场景切片"
         scenarios = yaml.safe_load(scenarios_text)
         cases = [
             case
@@ -809,6 +811,9 @@ def test_per_rule_mutation_changes_only_target(per_rule_mutation_inputs, expr, f
     expected = yaml.safe_load(original)
     expected["groups"][0]["rules"][0][field] = value
     assert yaml.safe_load(mutated) == expected
+    if field == "expr":
+        # #3233 的已有调用只传两参数；数值路径不能因新增 absent 轴而回归。
+        assert _raise_rule_threshold(original, "FixtureAlert") == (mutated, hits)
     assert yaml.safe_load(original) == rules
     assert yaml.safe_load(scenarios_text) == scenarios
 
@@ -957,6 +962,12 @@ def test_per_rule_guard_requires_binary_when_required(tmp_path, monkeypatch):
         test_promtool_gate_detects_per_rule_threshold_drift(
             tmp_path, "StabilityDeviceLeaseReconcilerNoData",
         )
+
+
+def test_per_rule_absent_requires_explicit_slice(per_rule_mutation_inputs):
+    rules, _scenarios = per_rule_mutation_inputs
+    with pytest.raises(AssertionError, match="必须提供目标场景切片"):
+        _raise_rule_threshold(yaml.safe_dump(rules), "FixtureAlert")
 
 
 @pytest.mark.parametrize("broken_kind", ["path", "yaml", "promql"])
