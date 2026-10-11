@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ScriptManagementPage from './ScriptManagementPage';
 import { api, type ScriptEntry } from '@/utils/api';
 import type { ScriptUsage } from '@/utils/api/types';
@@ -14,6 +14,8 @@ const SCRIPTS: ScriptEntry[] = [
     script_type: 'python', nfs_path: '/nfs/monkey_test', display_name: null,
     content_sha256: 'a'.repeat(64), is_active: true,
     default_params: { cycles: 10 }, param_schema: {},
+    parameter_projection: { script_name: 'monkey_test', script_version: '5.2.0', params: [],
+      safe_debug: { steps: [{ params: { cycles: 10 } }], plan_settings: {}, watcher_policy: {} } },
   },
   {
     id: 2, name: 'device_prepare', version: '1.2.3', category: 'device',
@@ -63,7 +65,7 @@ describe('ScriptManagementPage 深链（#3350）', () => {
     expect(screen.queryByText('device_prepare')).not.toBeInTheDocument();
 
     // 目标版本行自动展开（参数详情可见）
-    await waitFor(() => expect(screen.getByText('默认参数:')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('安全参数 JSON')).toBeInTheDocument());
     expect(screen.getByText('cycles', { exact: false })).toBeInTheDocument();
   });
 
@@ -74,7 +76,7 @@ describe('ScriptManagementPage 深链（#3350）', () => {
       expect(screen.getByTestId('script-search')).toHaveValue('device_prepare'),
     );
     await waitFor(() => expect(screen.getByText('1.2.3')).toBeInTheDocument());
-    expect(screen.queryByText('默认参数:')).not.toBeInTheDocument();
+    expect(screen.queryByText('安全参数 JSON')).not.toBeInTheDocument();
   });
 });
 
@@ -110,4 +112,40 @@ describe('ScriptManagementPage 用量空态（#3496）', () => {
 
     expect(await screen.findByText('近 30 天无 Plan 使用记录')).toBeInTheDocument();
   });
+});
+
+const secret = 'SYNTHETIC_SCRIPT_LIBRARY_SECRET_3656';
+const script: ScriptEntry = { id: 1, name: 'connect_wifi', version: '1.0.2', script_type: 'python', is_active: true,
+  nfs_path: '/synthetic/connect_wifi/v1.0.2', content_sha256: 'sha',
+  default_params: { password: secret }, param_schema: { password: { default: secret, examples: [secret] } },
+  parameter_projection: { script_name: 'connect_wifi', script_version: '1.0.2', params: [],
+    safe_debug: { steps: [{ params: { password: null }, marker: 'SAFE_SERVER_LIBRARY' }], plan_settings: {}, watcher_policy: {} } },
+};
+const renderPage = (path = '/script-management') => renderAt(path);
+
+describe('B5 U3 安全脚本元数据', () => {
+beforeEach(() => { vi.clearAllMocks(); vi.mocked(api.scripts.list).mockResolvedValue([script]); vi.mocked(api.scripts.usage).mockResolvedValue({ projects: [] } as never); });
+it('展开只显示 safe_debug；保持 name/version 深链', async () => {
+  renderPage('/script-management?name=connect_wifi&version=1.0.2');
+  await screen.findByText('安全参数 JSON');
+  expect(document.querySelector('pre')).toHaveTextContent('SAFE_SERVER_LIBRARY');
+  expect(document.body.innerHTML).not.toContain(secret);
+  expect(screen.getByRole('button', { name: '参数详情' })).toHaveAttribute('aria-expanded', 'true');
+});
+it('缺少安全投影时不回退 raw schema/default', async () => {
+  vi.mocked(api.scripts.list).mockResolvedValue([{ ...script, parameter_projection: undefined }]);
+  renderPage();
+  fireEvent.click(await screen.findByRole('button', { name: '参数详情' }));
+  expect(await screen.findByText('安全投影不可用')).toBeVisible();
+  expect(document.querySelector('pre')).toBeNull();
+  expect(document.body.innerHTML).not.toContain(secret);
+});
+it('新版本对话框不预填旧敏感参数', async () => {
+  renderPage();
+  fireEvent.click(await screen.findByRole('button', { name: '新建版本' }));
+  expect(screen.getByLabelText(/default_params/)).toHaveValue('');
+  expect(screen.getByLabelText(/param_schema/)).toHaveValue('');
+  expect(document.body.innerHTML).not.toContain(secret);
+});
+
 });

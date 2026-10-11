@@ -123,7 +123,7 @@ export default function PlanEditPage() {
         </div>
       )}
 
-      <div className="flex-1 min-h-0 grid grid-cols-1 grid-rows-1 lg:grid-cols-[260px_minmax(0,1fr)_320px] overflow-y-auto lg:overflow-hidden">
+      <div className="flex-1 min-h-0 grid grid-cols-1 auto-rows-max lg:grid-rows-1 lg:grid-cols-[260px_minmax(0,1fr)_320px] overflow-y-auto lg:overflow-hidden">
         <PlanChainPanel
           plans={form.allPlans || []}
           currentPlanId={planId}
@@ -134,6 +134,10 @@ export default function PlanEditPage() {
         />
 
         <PlanCanvas
+          settingsMetadata={form.editableProjection}
+          projection={form.projection}
+          projectionUnavailable={form.projectionUnavailable}
+          projectionIsDraft={form.projectionIsDraft}
           planName={form.name}
           onPlanNameChange={form.setName}
           description={form.description}
@@ -163,6 +167,10 @@ export default function PlanEditPage() {
         />
 
         <PlanStepInspector
+          editableProjection={form.editableProjection}
+          projection={form.projection}
+          projectionUnavailable={form.projectionUnavailable}
+          projectionIsDraft={form.projectionIsDraft}
           step={form.selectedStep}
           phase={form.selectedRef.phase}
           index={form.selectedRef.index >= 0 ? form.selectedRef.index : null}
@@ -174,9 +182,9 @@ export default function PlanEditPage() {
       <AlertDialog open={form.showJson} onOpenChange={form.setShowJson}>
         <AlertDialogContent className="max-w-3xl">
           <AlertDialogHeader>
-            <AlertDialogTitle>Plan Lifecycle JSON</AlertDialogTitle>
+            <AlertDialogTitle>Plan 安全参数 JSON</AlertDialogTitle>
             <AlertDialogDescription>
-              当前 Plan 的 lifecycle 是从 PlanStep 行 + Plan 直列字段实时装配的，仅供 pipeline_engine 校验视图。
+              {form.projectionIsDraft ? 'L1草稿，未保存' : 'L1 已保存计划基线'}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <pre
@@ -185,7 +193,7 @@ export default function PlanEditPage() {
               SURFACE.subtle,
             )}
           >
-            {JSON.stringify(form.lifecycle, null, 2)}
+            {form.projection ? JSON.stringify(form.projection.safe_debug, null, 2) : (form.projectionUnavailable ? '安全投影不可用' : '正在读取安全投影')}
           </pre>
           <AlertDialogFooter>
             <AlertDialogAction onClick={() => form.setShowJson(false)}>关闭</AlertDialogAction>

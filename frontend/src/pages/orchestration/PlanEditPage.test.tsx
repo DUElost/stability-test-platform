@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import PlanEditPage from './PlanEditPage';
 import { HeaderSlotProvider, useHeaderSlot } from '@/contexts/HeaderSlotContext';
 import { api } from '@/utils/api';
+import type { ParameterProjection } from '@/utils/api/types';
 import { planKeys } from '@/utils/api/queryKeys';
 
 const mocks = vi.hoisted(() => ({
@@ -30,8 +31,11 @@ vi.mock('@/components/pipeline/PlanCanvas', () => ({
     description: string;
     onDescriptionChange: (description: string) => void;
     onSpecialtyKeyChange: (key: string) => void;
+    onTimeoutChange: (value: number | null) => void;
   }) => (
     <div data-testid="plan-canvas">
+      <button onClick={() => props.onTimeoutChange(11)}>草稿时长11</button>
+      <button onClick={() => props.onTimeoutChange(22)}>草稿时长22</button>
       <input
         data-testid="plan-name-input"
         aria-label="Plan 名称"
@@ -64,6 +68,8 @@ vi.mock('@/utils/api', () => ({
   api: {
     plans: {
       get: vi.fn(),
+      parameterProjection: vi.fn().mockResolvedValue(undefined),
+      draftParameterProjection: vi.fn().mockResolvedValue(undefined),
       list: vi.fn(),
       create: vi.fn(),
       update: vi.fn(),
@@ -118,9 +124,17 @@ function renderPage(path: string) {
   return { queryClient };
 }
 
+const safeProjection = (marker = 'step_init_1'): ParameterProjection => ({
+  layer: 'L1', context: { read_at: '', authority: 'server' }, steps: [], plan_settings: [],
+  watcher_policy: { note: '', items: [] }, dispatch_decisions: [],
+  safe_debug: { steps: [{ step_key: marker, script_name: 'check_device' }], plan_settings: {}, watcher_policy: {} },
+});
+
 describe('PlanEditPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(api.plans.parameterProjection).mockReset().mockResolvedValue(safeProjection());
+    vi.mocked(api.plans.draftParameterProjection).mockReset().mockResolvedValue(safeProjection());
     (api.plans.list as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     (api.plans.listSpecialties as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     (api.projects.list as ReturnType<typeof vi.fn>).mockResolvedValue([]);
@@ -196,10 +210,10 @@ describe('PlanEditPage', () => {
     await screen.findByText('新建 Plan');
     fireEvent.click(screen.getByRole('button', { name: /查看 JSON/ }));
 
-    expect(await screen.findByText('Plan Lifecycle JSON')).toBeInTheDocument();
+    expect(await screen.findByText('Plan 安全参数 JSON')).toBeInTheDocument();
     const jsonPre = document.querySelector('pre');
     expect(jsonPre?.textContent).toContain('step_init_1');
-    expect(jsonPre?.textContent).toContain('script:check_device');
+    expect(jsonPre?.textContent).toContain('check_device');
   });
 
   it('hydrates existing plan name and shows save label', async () => {
@@ -457,5 +471,70 @@ describe('PlanEditPage', () => {
       const payload = (api.plans.create as ReturnType<typeof vi.fn>).mock.calls[0][0] as Record<string, unknown>;
       expect(payload.description).toBeUndefined();
     });
+  });
+});
+
+describe('B5 U3 编辑器投影代次与安全保存', () => {
+  const secret = 'SYNTHETIC_PLAN_EDIT_SECRET_3656';
+  const plan = {
+    id: 42, name: '安全计划', description: '', specialty_key: 'GENERIC', updated_at: '2026-10-11T00:00:00Z',
+    steps: [{ id: 1, plan_id: 42, step_key: 'init_1', script_name: 'connect_wifi', script_version: '1.0.2',
+      stage: 'init', sort_order: 0, timeout_seconds: 30, retry: 0, enabled: true,
+      params: { password: secret, nested: { token: secret, untouched: 0 } } }],
+  };
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.plans.get).mockResolvedValue(plan as never);
+    vi.mocked(api.plans.parameterProjection).mockReset().mockResolvedValue(safeProjection('SAVED_SERVER'));
+    vi.mocked(api.plans.draftParameterProjection).mockReset().mockResolvedValue(safeProjection('DRAFT_SERVER'));
+    vi.mocked(api.plans.update).mockResolvedValue(plan as never);
+    vi.mocked(api.plans.list).mockResolvedValue([] as never);
+    vi.mocked(api.plans.listSpecialties).mockResolvedValue([]);
+    vi.mocked(api.scripts.list).mockResolvedValue([]);
+    vi.mocked(api.suites.list).mockResolvedValue([] as never);
+  });
+  it('已保存 JSON 读 L1；错误不回退内部 raw；保存其它字段不改变 secret', async () => {
+    renderPage('/orchestration/plans/42');
+    await screen.findByText('安全计划');
+    await waitFor(() => expect(api.plans.parameterProjection).toHaveBeenCalledWith(42));
+    fireEvent.click(screen.getByRole('button', { name: /查看 JSON/ }));
+    await waitFor(() => expect(document.querySelector('pre')).toHaveTextContent('SAVED_SERVER'));
+    expect(document.body.innerHTML).not.toContain(secret);
+    fireEvent.click(screen.getByRole('button', { name: '关闭' }));
+    vi.mocked(api.plans.draftParameterProjection).mockRejectedValueOnce(new Error('synthetic projection failure'));
+    fireEvent.change(screen.getByTestId('plan-description-input'), { target: { value: '新说明' } });
+    await waitFor(() => expect(api.plans.draftParameterProjection).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: /查看 JSON/ }));
+    await waitFor(() => expect(document.querySelector('pre')).toHaveTextContent('安全投影不可用'));
+    expect(document.body.innerHTML).not.toContain(secret);
+    expect(document.querySelector('pre')).not.toHaveTextContent('SAVED_SERVER');
+    fireEvent.click(screen.getByRole('button', { name: '关闭' }));
+    fireEvent.click(screen.getByRole('button', { name: /保存/ }));
+    await waitFor(() => expect(api.plans.update).toHaveBeenCalled());
+    const payload = vi.mocked(api.plans.update).mock.calls[0][1];
+    expect(payload.steps?.[0].params).toEqual(plan.steps[0].params);
+    expect(payload.expected_updated_at).toBe(plan.updated_at);
+  });
+  it('较旧 draft 响应不覆盖新草稿，等待期间也不显示旧 JSON', async () => {
+    let resolveOld!: (value: ParameterProjection) => void;
+    let resolveNew!: (value: ParameterProjection) => void;
+    renderPage('/orchestration/plans/42');
+    await screen.findByText('安全计划');
+    await waitFor(() => expect(api.plans.parameterProjection).toHaveBeenCalled());
+    vi.mocked(api.plans.draftParameterProjection)
+      .mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve; }))
+      .mockImplementationOnce(() => new Promise(resolve => { resolveNew = resolve; }));
+    fireEvent.click(screen.getByText('草稿时长11'));
+    await waitFor(() => expect(api.plans.draftParameterProjection).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByText('草稿时长22'));
+    await waitFor(() => expect(api.plans.draftParameterProjection).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole('button', { name: /查看 JSON/ }));
+    expect(document.querySelector('pre')).toHaveTextContent('正在读取安全投影');
+    resolveNew(safeProjection('NEW_GENERATION'));
+    await waitFor(() => expect(document.querySelector('pre')).toHaveTextContent('NEW_GENERATION'));
+    resolveOld(safeProjection('OLD_GENERATION'));
+    await waitFor(() => expect(document.querySelector('pre')).not.toHaveTextContent('OLD_GENERATION'));
+    expect(document.querySelector('pre')).toHaveTextContent('NEW_GENERATION');
+    expect(screen.getByText('L1草稿，未保存')).toBeVisible();
   });
 });

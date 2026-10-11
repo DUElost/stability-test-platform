@@ -5,8 +5,6 @@ import { ErrorState } from '@/components/ui/error-state';
 import { STATUS_CHIP } from '@/design-system/tokens';
 import { TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
-import { formatDurationSeconds } from '@/utils/format';
-import { PATROL_DURATION_HINT, PATROL_DURATION_LABEL, formatPatrolDuration } from '@/components/pipeline/planTiming';
 import type { Plan, PlanRun } from '@/utils/api';
 import type { ParameterProjection } from '@/utils/api/types';
 import { AlertCircle } from 'lucide-react';
@@ -58,15 +56,7 @@ function PlanListButton({
         <span className={cn('shrink-0 text-xs', TEXT.subtitle)}>#{plan.id}</span>
       </div>
       <div className={cn('mt-1 text-xs', TEXT.subtitle)}>
-        {steps} 步 · {plan.patrol_interval_seconds == null ? (
-          '无巡检'
-        ) : (
-          <>
-            巡检周期 {formatDurationSeconds(plan.patrol_interval_seconds, 'compact', '—')}
-            {` · ${PATROL_DURATION_LABEL} `}
-            {formatPatrolDuration(plan.timeout_seconds, plan.patrol_interval_seconds, 'compact')}
-          </>
-        )}
+        {steps} 步
       </div>
     </button>
   );
@@ -194,16 +184,7 @@ export function PlanSelectPhase({
                   </div>
                 </div>
               </div>
-              <div className={cn('flex flex-wrap gap-x-5 gap-y-1 text-xs', TEXT.subtitle)}>
-                <span>
-                  巡检周期：
-                  {formatDurationSeconds(selectedPlan.patrol_interval_seconds, 'precise', '未设置')}
-                </span>
-                <span title={PATROL_DURATION_HINT}>
-                  {PATROL_DURATION_LABEL}：
-                  {formatPatrolDuration(selectedPlan.timeout_seconds, selectedPlan.patrol_interval_seconds, 'precise')}
-                </span>
-              </div>
+
               <div className="rounded-lg border p-3">
                 <RecentPlanRunsInline
                   runs={recentPlanRuns}

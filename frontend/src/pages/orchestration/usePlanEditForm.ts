@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
 import { useNavigate, useBeforeUnload } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useToast } from '@/hooks/useToast';
@@ -12,6 +12,7 @@ import {
   type PipelineDef,
   type PipelineStep,
 } from '@/utils/api';
+import type { ParameterProjection, DraftParameterProjectionRequest } from '@/utils/api/types';
 import { projectKeys } from '@/utils/api/queryKeys';
 import { planKeys } from '@/utils/api/queryKeys';
 import {
@@ -60,6 +61,7 @@ export function usePlanEditForm(planId: number | null) {
   const [confirmLeave, setConfirmLeave] = useState<ConfirmLeaveState>(null);
   const [chainAppendDialog, setChainAppendDialog] = useState<'confirm-save' | 'name' | null>(null);
   const [chainAppendName, setChainAppendName] = useState('');
+  const [basePlan, setBasePlan] = useState<Plan | null>(null);
   const [origSnapshot, setOrigSnapshot] = useState(EMPTY_DRAFT_SNAPSHOT);
 
   const {
@@ -132,6 +134,7 @@ export function usePlanEditForm(planId: number | null) {
   const isDirty = currentSnapshot !== origSnapshot;
 
   const applyPlanToForm = (next: Plan) => {
+    setBasePlan(next);
     setName(next.name);
     setDescription(next.description || '');
     setNextPlanId(next.next_plan_id ?? null);
@@ -260,6 +263,36 @@ export function usePlanEditForm(planId: number | null) {
     });
   };
 
+  const projectionRequest = useMemo<DraftParameterProjectionRequest>(() => ({
+    patrol_interval_seconds: lifecycle.lifecycle.patrol?.interval_seconds ?? null,
+    timeout_seconds: lifecycle.lifecycle.timeout_seconds ?? null,
+    barrier_timeout_seconds: basePlan?.barrier_timeout_seconds ?? null,
+    barrier_max_wait_seconds: basePlan?.barrier_max_wait_seconds ?? null,
+    auto_archive_interval_seconds: basePlan?.auto_archive_interval_seconds ?? null,
+    watcher_policy: basePlan?.watcher_policy ? { ...basePlan.watcher_policy } : null,
+    steps: buildStepsForApi(lifecycle),
+  }), [lifecycle, basePlan]);
+  const projectionIsDraft = isNew || isDirty;
+  // Identity is internal only: never put raw parameters in a query key or DOM.
+  const projectionIdentity = useMemo(() => ({ projectionRequest, projectionIsDraft, planId, baseUpdatedAt }), [projectionRequest, projectionIsDraft, planId, baseUpdatedAt]);
+  const [projectionResult, setProjectionResult] = useState<{
+    identity: object; planId: number | null; data?: ParameterProjection; unavailable: boolean;
+  } | null>(null);
+  useEffect(() => {
+    let current = true;
+    if (!isNew && (planLoading || !basePlan)) return;
+    const request = projectionIsDraft
+      ? api.plans.draftParameterProjection(projectionRequest)
+      : api.plans.parameterProjection(planId!);
+    void request.then(
+      data => { if (current) setProjectionResult({ identity: projectionIdentity, planId, data, unavailable: false }); },
+      () => { if (current) setProjectionResult({ identity: projectionIdentity, planId, unavailable: true }); },
+    );
+    return () => { current = false; };
+  }, [projectionIdentity, projectionIsDraft, projectionRequest, planId, isNew, planLoading, basePlan]);
+  const projection = projectionResult?.identity === projectionIdentity ? projectionResult.data : undefined;
+  const projectionUnavailable = projectionResult?.identity === projectionIdentity && projectionResult.unavailable;
+
   const handleSave = async (): Promise<Plan | null> => {
     if (!name.trim()) {
       toast.error('请输入 Plan 名称');
@@ -321,6 +354,7 @@ export function usePlanEditForm(planId: number | null) {
       queryClient.invalidateQueries({ queryKey: planKeys.allLists() });
       queryClient.setQueryData(planKeys.detail(saved.id), saved);
       setOrigSnapshot(currentSnapshot);
+      setBasePlan(saved);
       setBaseUpdatedAt(saved.updated_at);
       setDismissedRemote(null);
       if (isNew) {
@@ -461,6 +495,10 @@ export function usePlanEditForm(planId: number | null) {
 
   return {
     isNew,
+    projection,
+    editableProjection: projectionResult?.planId === planId ? projectionResult.data : undefined,
+    projectionUnavailable,
+    projectionIsDraft,
     planId,
     planLoading,
     planIsError,

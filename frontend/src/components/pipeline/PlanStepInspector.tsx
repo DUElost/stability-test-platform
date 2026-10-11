@@ -1,9 +1,11 @@
-import { useMemo, useCallback, useId, useState } from 'react';
+import { useMemo, useId, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowUpRight, AlertTriangle } from 'lucide-react';
-import type { PipelinePhase, PipelineStep, ScriptEntry } from '@/utils/api/types';
+import type { PipelinePhase, PipelineStep, ScriptEntry, ParameterProjection, ParameterItem } from '@/utils/api/types';
 import { ALERT_BANNER, PIPELINE_EDITOR, STATUS_CHIP, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
+import { mergeDraftParameters } from '@/components/parameters/draftParameterMerge';
+import { ParameterProjectionList } from '@/components/parameters/ParameterProjectionList';
 import { formatStepTimeout, stepTimeoutHint } from './stepTiming';
 
 /* ── param_schema field descriptor ───────────────────────────────────────── */
@@ -19,6 +21,10 @@ interface ParamFieldSchema {
 }
 
 interface PlanStepInspectorProps {
+  projection?: ParameterProjection;
+  editableProjection?: ParameterProjection;
+  projectionUnavailable?: boolean;
+  projectionIsDraft?: boolean;
   step: PipelineStep | null;
   phase: PipelinePhase | null;
   index: number | null;
@@ -28,6 +34,10 @@ interface PlanStepInspectorProps {
 }
 
 export default function PlanStepInspector({
+  projection,
+  editableProjection,
+  projectionUnavailable = false,
+  projectionIsDraft = false,
   step,
   phase,
   index,
@@ -97,8 +107,13 @@ export default function PlanStepInspector({
             />
 
             <ParamFormCard
+              key={`${step.step_id}:${step.action}:${step.version}`}
               step={step}
+              projection={projection}
+              editableProjection={editableProjection}
               matchedScript={matchedScript}
+              projectionUnavailable={projectionUnavailable}
+              projectionIsDraft={projectionIsDraft}
               onUpdateStep={onUpdateStep}
               readOnly={readOnly}
             />
@@ -255,146 +270,119 @@ function ScriptInfoCard({
 /* ── ParamFormCard: structured parameter form driven by param_schema ─────── */
 
 interface ParamFormCardProps {
-  step: PipelineStep;
   matchedScript: ScriptEntry | null;
+  step: PipelineStep;
+  projection?: ParameterProjection;
+  editableProjection?: ParameterProjection;
+  projectionUnavailable: boolean;
+  projectionIsDraft: boolean;
   onUpdateStep: (next: PipelineStep) => void;
   readOnly?: boolean;
 }
 
-function ParamFormCard({ step, matchedScript, onUpdateStep, readOnly }: ParamFormCardProps) {
-  const schema = matchedScript?.param_schema ?? {};
-  const schemaKeys = Object.keys(schema);
-  const defaultParams = useMemo(
-    () => matchedScript?.default_params ?? {},
-    [matchedScript?.default_params],
-  );
-  const stepParams = useMemo(() => step.params ?? {}, [step.params]);
-
-  /** Merge: step.params overrides default_params overrides schema.default */
-  const resolvedValue = useCallback(
-    (key: string, field: ParamFieldSchema): unknown => {
-      if (key in stepParams) return stepParams[key];
-      if (key in defaultParams) return defaultParams[key];
-      return field.default;
-    },
-    [stepParams, defaultParams],
-  );
-
-  const setParam = useCallback(
-    (key: string, value: unknown) => {
-      const next = { ...stepParams, [key]: value };
-      // Remove entry if it equals the default — keep payload minimal
-      if (value === defaultParams[key] || (value === undefined && !(key in defaultParams))) {
-        delete next[key];
-      }
-      onUpdateStep({ ...step, params: next });
-    },
-    [step, stepParams, defaultParams, onUpdateStep],
-  );
-
-  if (schemaKeys.length === 0) {
-    // #508 自由键模式：无 param_schema 的脚本（如 install_apk），把 default_params
-    // 与已保存的 step.params 按键名渲染为**可编辑**输入，并支持新增自由键。
-    const editableKeys = Array.from(
-      new Set([...Object.keys(defaultParams), ...Object.keys(stepParams)]),
-    );
-    return (
-      <Card>
-        <CardHead>
-          <span>脚本参数</span>
-          <span className={cn('inline-flex items-center px-1.5 py-px rounded-full text-[11px] font-bold', STATUS_CHIP.muted)}>
-            自由键值
-          </span>
-        </CardHead>
-        <CardBody>
-          {editableKeys.length === 0 ? (
-            <p className={cn('text-[11px]', TEXT.subtitle)}>
-              该脚本未声明参数 schema，可手动添加自定义参数（如 apk_path）。
-            </p>
-          ) : (
-            <div className="space-y-1.5">
-              {editableKeys.map(key => (
-                <FreeformParamRow
-                  key={key}
-                  paramKey={key}
-                  value={resolvedFreeformValue(key, defaultParams, stepParams)}
-                  onChange={v => setParam(key, v)}
-                  onRemove={() => onUpdateStep({ ...step, params: removeKey(stepParams, key) })}
-                  disabled={!!readOnly}
-                />
-              ))}
-            </div>
-          )}
-          {!readOnly && (
-            <FreeformParamAdder
-              existingKeys={new Set([...editableKeys])}
-              onAdd={key => onUpdateStep({ ...step, params: { ...stepParams, [key]: '' } })}
-            />
-          )}
-        </CardBody>
-      </Card>
-    );
+function schemaAtPath(schema: Record<string, unknown>, path: ParameterItem['path']): ParamFieldSchema | undefined {
+  let field: unknown = schema[path[0]];
+  for (const segment of path.slice(1)) {
+    if (!field || typeof field !== 'object') return undefined;
+    const object = field as Record<string, unknown>;
+    field = typeof segment === 'number'
+      ? object.items
+      : (object.properties as Record<string, unknown> | undefined)?.[segment];
   }
+  return field && typeof field === 'object' ? field as ParamFieldSchema : undefined;
+}
 
-  // Sort: required first, then optional
-  const sortedKeys = [...schemaKeys].sort((a, b) => {
-    const aField = schema[a] as ParamFieldSchema | undefined;
-    const bField = schema[b] as ParamFieldSchema | undefined;
-    const aReq = aField?.required ? 0 : 1;
-    const bReq = bField?.required ? 0 : 1;
-    return aReq - bReq;
-  });
+/** Clone only the edited path. Untouched siblings retain their original save facts. */
+function updateParamPath(original: Record<string, unknown>, path: ParameterItem['path'], value: unknown): Record<string, unknown> {
+  const next = { ...original };
+  let target: Record<string | number, unknown> = next;
+  let source: unknown = original;
+  for (let i = 0; i < path.length - 1; i++) {
+    const key = path[i];
+    const old = source && typeof source === 'object' ? (source as Record<string | number, unknown>)[key] : undefined;
+    const child = Array.isArray(old) ? [...old] : old && typeof old === 'object' ? { ...old } : {};
+    Object.defineProperty(target, key, { value: child, enumerable: true, writable: true, configurable: true });
+    target = child as Record<string | number, unknown>;
+    source = old;
+  }
+  Object.defineProperty(target, path[path.length - 1], { value, enumerable: true, writable: true, configurable: true });
+  return next;
+}
+
+function ParamFormCard({ step, projection, editableProjection, matchedScript, projectionUnavailable, projectionIsDraft, onUpdateStep, readOnly }: ParamFormCardProps) {
+  const projectedStep = projection?.steps.find(s => s.step_key === step.step_id
+    && s.script_name === step.action.replace(/^script:/, '') && s.script_version === step.version);
+  const controlsProjection = projection ?? editableProjection;
+  const controlStep = controlsProjection?.steps.find(s => s.step_key === step.step_id
+    && s.script_name === step.action.replace(/^script:/, '') && s.script_version === step.version);
+  const debug = controlsProjection?.safe_debug.steps.find(s => s.step_key === step.step_id);
+  const schema = (debug?.param_schema ?? {}) as Record<string, unknown>;
+  const single = projectedStep && projection ? {
+    ...projection, steps: [projectedStep], plan_settings: [],
+    watcher_policy: { note: '', items: [] }, dispatch_decisions: [],
+  } : undefined;
+  const params = step.params ?? {};
+  const editableItems = controlStep?.params ?? [];
+  const setParam = (item: ParameterItem, value: unknown) => {
+    if (readOnly || item.sensitive || !controlStep) return;
+    // Only an explicit edit may copy an inherited object into the internal
+    // write facts. Safe projection nulls never enter the write payload.
+    const internal = item.path.length > 1 && !Object.prototype.hasOwnProperty.call(params, item.path[0])
+      ? { ...params, [item.path[0]]: mergeDraftParameters(matchedScript?.param_schema,
+        matchedScript?.default_params, params)[item.path[0]] }
+      : params;
+    let next = updateParamPath(internal, item.path, value);
+    const defaults = (debug?.default_params ?? {}) as Record<string, unknown>;
+    if (item.path.length === 1 && (value === undefined || value === defaults[item.path[0]])) {
+      next = { ...params };
+      delete next[item.path[0]];
+    }
+    onUpdateStep({ ...step, params: next });
+  };
+  const canEdit = (item: ParameterItem) => !item.sensitive && !readOnly;
 
   return (
     <Card>
-      <CardHead>
-        <span>脚本参数</span>
-        {matchedScript && (
-          <span className={cn('inline-flex items-center px-1.5 py-px rounded-full text-[11px] font-bold', STATUS_CHIP.primary)}>
-            {schemaKeys.length} 项
-          </span>
-        )}
-      </CardHead>
+      <CardHead><span>脚本参数</span><span>{projectionIsDraft ? 'L1草稿，未保存' : 'L1 已保存计划基线'}</span></CardHead>
       <CardBody>
-        {sortedKeys.map(key => {
-          const field = schema[key] as ParamFieldSchema | undefined;
-          if (!field) return null;
-          return (
-            <ParamFieldRow
-              key={key}
-              fieldKey={key}
-              field={field}
-              value={resolvedValue(key, field)}
-              onChange={v => setParam(key, v)}
-              disabled={!!readOnly}
-            />
+        {controlStep && !readOnly && Object.keys(schema).filter(key =>
+          !editableItems.some(item => item.path[0] === key)).map(key => (
+          <button key={key} type="button" className={cn('px-2 py-1 text-xs rounded', PIPELINE_EDITOR.linkBtn)}
+            onClick={() => onUpdateStep({ ...step, params: updateParamPath(params, [key], '') })}>
+            添加未设置参数 {key}
+          </button>
+        ))}
+        {controlStep && Object.keys(schema).length === 0 && <p className={TEXT.subtitle}>自由键值：可手动添加自定义参数。</p>}
+        <div className="[&_[data-testid=parameter-watcher]]:hidden [&_[data-testid=parameter-dispatch-decisions]]:hidden">
+          <ParameterProjectionList projection={single} unavailable={projectionUnavailable || (!!projection && !projectedStep)} />
+        </div>
+        {!projection && controlStep && <p className={TEXT.subtitle}>正在更新参数清单，可继续编辑。</p>}
+        {controlStep && editableItems.map(item => {
+          if (item.sensitive) return null;
+          const field = schemaAtPath(schema, item.path);
+          const key = JSON.stringify(item.path);
+          const name = item.path.join('.');
+          if (field) return (
+            <ParamFieldRow key={key} fieldKey={name}
+              field={{ ...field, label: item.label, description: item.meaning }}
+              value={item.value} onChange={value => setParam(item, value)} disabled={!canEdit(item)} />
           );
+          return <FreeformParamRow key={key} paramKey={item.label} value={item.value}
+            onChange={value => setParam(item, value)}
+            onRemove={() => {
+              if (!canEdit(item) || item.path.length !== 1) return;
+              const next = { ...params };
+              delete next[item.path[0]];
+              onUpdateStep({ ...step, params: next });
+            }} disabled={!canEdit(item) || item.path.length !== 1} />;
         })}
+        {controlStep && !readOnly && (
+          <FreeformParamAdder existingKeys={new Set(editableItems.map(item => String(item.path[0])))}
+            onAdd={key => onUpdateStep({ ...step, params: updateParamPath(params, [key], '') })} />
+        )}
       </CardBody>
     </Card>
   );
-}
-
-/* ── Freeform key-value editor (#508, no param_schema) ───────────────────── */
-
-function resolvedFreeformValue(
-  key: string,
-  defaults: Record<string, unknown>,
-  overrides: Record<string, unknown>,
-): unknown {
-  if (key in overrides) return overrides[key];
-  return defaults[key];
-}
-
-/** 删除自由键覆盖：从 step.params 移除该键，执行时回落 default_params。 */
-function removeKey(
-  params: Record<string, unknown>,
-  key: string,
-): Record<string, unknown> {
-  if (!(key in params)) return params;
-  const next = { ...params };
-  delete next[key];
-  return next;
 }
 
 interface FreeformParamRowProps {
@@ -405,7 +393,14 @@ interface FreeformParamRowProps {
   disabled: boolean;
 }
 
-function FreeformParamRow({ paramKey, value, onChange, onRemove, disabled }: FreeformParamRowProps) {
+function FreeformParamRow({ paramKey, value: projectedValue, onChange: commit, onRemove, disabled }: FreeformParamRowProps) {
+  const [value, setValue] = useState(projectedValue);
+  const [previousValue, setPreviousValue] = useState(projectedValue);
+  if (previousValue !== projectedValue) {
+    setPreviousValue(projectedValue);
+    setValue(projectedValue);
+  }
+  const onChange = (next: unknown) => { setValue(next); commit(next); };
   const inputCls = cn('max-w-[60%] h-7 px-2 text-[12px] font-mono', PIPELINE_EDITOR.inputInline);
   // 无 schema 无法声明类型：按当前值推断输入控件，新增键默认字符串。
   if (typeof value === 'boolean') {
@@ -530,7 +525,14 @@ interface ParamFieldRowProps {
   disabled: boolean;
 }
 
-function ParamFieldRow({ fieldKey, field, value, onChange, disabled }: ParamFieldRowProps) {
+function ParamFieldRow({ fieldKey, field, value: projectedValue, onChange: commit, disabled }: ParamFieldRowProps) {
+  const [value, setValue] = useState(projectedValue);
+  const [previousValue, setPreviousValue] = useState(projectedValue);
+  if (previousValue !== projectedValue) {
+    setPreviousValue(projectedValue);
+    setValue(projectedValue);
+  }
+  const onChange = (next: unknown) => { setValue(next); commit(next); };
   const label = field.label || fieldKey;
   const isRequired = !!field.required;
   const displayLabel = isRequired ? `${label} *` : label;
@@ -554,7 +556,8 @@ function ParamFieldRow({ fieldKey, field, value, onChange, disabled }: ParamFiel
         value={String(value ?? '')}
         onChange={e => onChange(e.target.value || undefined)}
         className={inputCls}
-        aria-describedby={describedBy}
+        aria-label={label}
+      aria-describedby={describedBy}
       >
         <option value="">—</option>
         {field.enum.map(opt => (
@@ -579,7 +582,7 @@ function ParamFieldRow({ fieldKey, field, value, onChange, disabled }: ParamFiel
         )}
         aria-pressed={checked}
         aria-label={`${label}: ${checked ? '是' : '否'}`}
-        aria-describedby={describedBy}
+      aria-describedby={describedBy}
       >
         <span
           className={cn(
@@ -609,7 +612,8 @@ function ParamFieldRow({ fieldKey, field, value, onChange, disabled }: ParamFiel
           if (!isNaN(num)) onChange(num);
         }}
         className={inputCls}
-        aria-describedby={describedBy}
+        aria-label={label}
+      aria-describedby={describedBy}
       />,
     );
   }
@@ -623,6 +627,7 @@ function ParamFieldRow({ fieldKey, field, value, onChange, disabled }: ParamFiel
       disabled={disabled}
       onChange={e => onChange(e.target.value || undefined)}
       className={cn(inputCls, 'min-w-[50%]')}
+      aria-label={label}
       aria-describedby={describedBy}
     />,
   );

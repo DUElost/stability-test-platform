@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import PlanCanvas from './PlanCanvas';
-import type { PipelineDef, PipelineStep, ScriptEntry } from '@/utils/api/types';
+import type { PipelineDef, PipelineStep, ScriptEntry, ParameterProjection } from '@/utils/api/types';
 
 // PlanCanvas 是纯受控组件：所有编辑都以「新 lifecycle 对象」回吐给父级。
 // 断言因此打在 onLifecycleChange 的入参上，而不是 DOM 顺序 —— DOM 只能证明
@@ -99,6 +99,11 @@ function Harness({
 
   return (
     <PlanCanvas
+      projection={{ layer: 'L1', context: { read_at: '', authority: '测试服务端' }, steps: [],
+        plan_settings: [{ path: ['timeout_seconds'], label: '巡检时长', meaning: '各设备 init 完成后开始计时，轮前到点则正常完成，然后再 teardown。没有 patrol 时不适用。', fallback_chain: '未设：不限。没有环境变量回落。', value: timeout, state: 'explicit', sensitive: false, is_set: true },
+          { path: ['patrol_interval_seconds'], label: '巡检间隔', meaning: '轮间等待', state: 'explicit', value: patrolInterval, sensitive: false, is_set: true }],
+        watcher_policy: { note: '', items: [] }, dispatch_decisions: [], safe_debug: { steps: [], plan_settings: {}, watcher_policy: {} },
+      } as ParameterProjection}
       planName={planName}
       onPlanNameChange={setPlanName}
       description={description}
@@ -609,11 +614,11 @@ describe('PlanCanvas', () => {
       render(<Harness />);
       expect(screen.queryByText('全局超时')).not.toBeInTheDocument();
       const summary = screen.getByTestId('plan-patrol-duration-summary');
-      expect(summary).toHaveTextContent('每台设备完成初始化后开始计时，巡检满 1h 0m 后在下一轮巡检前正常结束（算成功）');
+      expect(summary).toHaveTextContent('各设备 init 完成后开始计时，轮前到点则正常完成，然后再 teardown。');
       expect(screen.getByLabelText('巡检时长')).toHaveAttribute('aria-describedby', summary.id);
 
       fireEvent.change(screen.getByLabelText('巡检时长'), { target: { value: '' } });
-      expect(summary).toHaveTextContent('巡检时长不限：巡检会一直进行，直到手动退出或中止。');
+      expect(summary).toHaveTextContent('未设：不限。没有环境变量回落。');
     });
 
     it('没有启用的巡检步骤时说明巡检时长不生效', () => {
@@ -626,7 +631,7 @@ describe('PlanCanvas', () => {
       };
       render(<Harness lifecycle={noPatrol} />);
       expect(screen.getByTestId('plan-patrol-duration-summary')).toHaveTextContent(
-        '当前没有巡检步骤，巡检时长不生效。',
+        '没有 patrol 时不适用。',
       );
     });
   });
