@@ -109,12 +109,36 @@
 3. NX2 固件上架与 Plan 建立/重指，见 [刷机 Runbook §5](../operations/honor-flash-runbook.md)。
 4. 真机取证（下表四项，任一与本文不符即回到代码侧修版本，不得靠改文档放行）。
 
-## 6. 未验证项与风险
+## 6. 取证结果与遗留风险
 
-| 项 | 现状 | 取证方式 |
+2026-10-12 取证（只读，控制面 + `172.21.15.83`，设备 `ATHTNX6930000085`）：
+
+| 项 | 结论 | 依据 |
 |---|---|---|
-| NX2 的 `ro.product.model` 字面值 | 路由表按 `MLD_NX2`/`MLD-NX2` 双拼写登记（同 LX2/LX3 的历史教训）；现场若返回第三种写法，本步 fail-fast 并列出已知集合 | 单台 `adb shell getprop ro.product.model` |
-| 目标版本的 `ro.build.version.incremental` | 决定版本目录名 / `latest.json` 值 / `manifest.version` 三处一致；上传包目录名带 `_FLASH` 后缀，未必等于设备读数 | 单台 `adb shell getprop ro.build.version.incremental` |
-| Linux 侧 `-b auto` 位置参数 | Windows 侧同代工具实测可用；Linux 构建若判非法参数，改传裸 `-b` 即可（一个脚本版本的面） | 单台真机刷机 |
-| NX2 的 DA 态 USB pid | 门控压制集合 `_FLASH_STAGE_PIDS` 取自在用 MTK 机型实测（0003/2000/2001/201c/2026/3000）；V6 日志只见到 PreLoader `2000`。若 NX2 的 DA 态 pid 不在集合内，同 host 邻机的刷机态口不会被隐藏，可能重演抓错设备 | 刷机窗口内 `lsusb` 采样同 host 全部 `0e8d` pid |
-| 首次刷机耗时与 `timeout_seconds`（默认 1200s） | V6 日志显示 `super` 分区 4.67G；552 的同名分区实测在 1200s 内完成，NX2 未测 | 首台观察 `step_trace` 的 percent 戳与 exit_code |
+| ① NX2 的 `ro.product.model` | **`MLD-NX2`**（连字符）；平台设备表记为 `MLD_NX2`（下划线，来源 `adb devices`）——两个拼写都已在路由表 | `adb shell getprop ro.product.model` + `GET /api/v1/devices?project_key=P535AA` |
+| ② 目标版本口径 | `ro.build.version.incremental` = **`P535AA-HONOR-NX2-16-260928V9`**；`ro.build.display.id` = `MLD-NX2-16-260928V9`（≠ incremental，别照抄界面/目录名） | 同上；上架目录名与 `manifest.version` 均取 incremental 值 |
+| ③ Linux 侧 V6 的 `-b auto` | **接受**：`Command line arguments parse pass!`，随后完成 `validating XML schema / XML schema validation passed!` 并进入 `scan device START, timeout set as 120000 ms`；无设备时以 `scan device com port failed, error code: -1` + rc=1 收场 | Debian 13 上对 `SP_Flash_Tool_V6 v6.2444.00`（Build Nov 4 2024）实跑 |
+| ④ NX2 刷机态 USB pid | **未取证**（需要一次真实刷写窗口）。已知正常态：`0e8d:201c`（LX2/LX3/NX2 在 adb 在线时都是它），`0e8d:2046` 亦见于在线设备 | 4 台 NX2 host + `.63`（LX2）的 sysfs 枚举 |
+
+遗留风险（④ 之外）：
+
+- **NX2 host 目前跑不起 V6**：`172.21.15.83` 上 `ldd SPFlashToolV6` 报
+  `libGL.so.1 => not found`，`SPFlashToolV6 -h` 直接 `error while loading shared
+  libraries: libGL.so.1`。控制面（Debian 13，已装 `libgl1/libglx0/libglvnd0`）无此问题。
+  → 刷机前必须按 §5 的 provisioning 面补包（`qt-libs-v6` 只给 warning，真正拦下它的是
+  `flash_firmware` 的 `shared-libs` 预检——它会在拿锁之前硬失败并列出缺库名）。
+- **中心存储上 V6 工具包已发布**：`packages/flashtool_v6/1.2444.00.100.tar.gz`
+  （sha 与 Git 登记一致，发布守卫核验）；**NX2 固件已上架**
+  `firmware/MLD/P535AA-HONOR-NX2-16-260928V9/`（59 文件 / 6.2G，与 `apk-incoming` 源逐项
+  等量，`super.img` sha 前缀一致）+ v6 `manifest.json` + `latest.json` 增 `MLD_NX2` 键。
+  在用 1.3.18 对该目录**两条路都拒绝**（无 NX2 路由；v6 manifest 无 scatter/da）——
+  上架本身不会让 552 计划误刷 NX2 包。
+- **脚本版本尚未注册**：`flash_firmware@1.3.19` / `flash_preflight@1.0.7` 随 PR 未合入，
+  控制面 `tool_manifest.json` 里还没有这两条 → scan 看不见它们，也就无从派发。
+  **合入 + 控制面发布 + scan 是真机刷机的前置**。
+- `super` 分区 4.67G 的首刷耗时未测（默认 `timeout_seconds=1200`）。
+- **门控判据的历史问题（本单实测暴露，另立 #3690 裁决）**：`_FLASH_STAGE_PIDS` 含
+  `201c`，而 `201c` 实为 MLD-LX2/LX3/NX2 的**正常 adb 态**。v1.3.9 只把 `201c` 从
+  「保持阶段」移除，**初始门控仍会把它隐藏** → 在同 host 还有其它测试在跑时，一次刷机会
+  把邻机的 adb 一起摘掉（`authorized=0`，刷机结束才恢复）。这不是 V6 引入的，但 535 批次
+  把刷机与 Monkey/开关机混在同一批 host 上时会被放大。

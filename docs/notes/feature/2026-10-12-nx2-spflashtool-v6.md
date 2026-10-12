@@ -103,17 +103,56 @@ MLD_NX2（项目 535，板级 P535AA / MT6835）的刷机包由 **SP Flash Tool 
   既有候选改判，不是新增候选的显式声明」），本地该文件 37 passed。
   **漏检根因：首跑只跑了选中的根文件，没跑根 `tests/` 全量**——CI 的根套件才是覆盖面。
 
-未验证（不得当成已完成）：
+真机**只读**取证（2026-10-12，控制面 + `172.21.15.83`，设备 `ATHTNX6930000085`；**未刷任何设备**）：
 
-- **Linux 侧 V6 从未真机跑过**。用户提供的成功日志来自 Windows 侧同代工具
-  （`D:\WebTool\…`、`COM93`）；V6 的 `-b auto` 位置参数、退出码、stdout/stderr 分流、
-  DA 态 USB pid 都只有 Windows 证据。
-- NX2 的 `ro.product.model` 与 `ro.build.version.incremental` 字面值未取——路由键、版本目录名、
-  `manifest.version` 三处一致性必须由真机读数钉死。
-- 站点未发布 `flashtool_v6` 包，未 `--publish` 脚本包，未 scan，未建/重指 Plan。
-  **顺序红线**：先发 `flashtool_v6` 包，再 scan/重指；两个新脚本版本都声明该工具，
-  包未就位时声明它的版本整步 exit 2（含 552 的刷机计划）。
-- `super` 分区 4.67G 的首刷耗时未测（`timeout_seconds` 默认 1200s 沿用 552 口径）。
+- ① `ro.product.model` = **`MLD-NX2`**；平台设备表记作 `MLD_NX2`（取自 `adb devices`）——
+  两个拼写都已在 `_MODEL_FAMILY_ROUTES` 里。用真机读数跑 1.3.19 的指纹路由：
+  `family=MLD / version=P535AA-HONOR-NX2-16-260928V9 / tool_generation=v6`，
+  argv = `[SPFlashToolV6, -c, firmware-upgrade, -f, <…>/download_agent/flash.xml, -b, auto]`
+  （不含 `-d/-s`），da/scatter 为 `null`。
+- ② `ro.build.version.incremental` = **`P535AA-HONOR-NX2-16-260928V9`**，而
+  `ro.build.display.id` = `MLD-NX2-16-260928V9`——**两者不同形**。上架目录名与
+  `manifest.version` 一律取 incremental；照抄界面/文件名会让 `verify_version` 永远判不一致。
+- ③ Linux 侧 `-b auto` **被接受**（不再是 Windows-only 证据）：Debian 13 上
+  `SPFlashToolV6 -c firmware-upgrade -f <真包 flash.xml> -b auto` 先打
+  `Command line arguments parse pass!`，再两次 `XML schema validation passed!`，随后
+  `scan device START, timeout set as 120000 ms`；无设备在场时以
+  `scan device com port failed, error code: -1` + rc=1 收场 → 既有 PASS 判据不命中即判失败，
+  语义正确（工具版本横幅：`MediaTek Smart Phone Flash Tool V6 v6.2444.00`）。
+- 阻断项（新发现）：NX2 四台 host（`172.21.15.83–86`，Debian 13）**没有 V6 运行库**——
+  `ldd SPFlashToolV6` 报 `libGL.so.1 => not found`，连 `-h` 都起不来（控制面装了
+  `libgl1/libglx0/libglvnd0` 才可跑）；KRB5 面四台已具备。真机刷 V6 前必须按
+  `agent_flash_prereq_packages_v6` 补包；不补时刷机步会在拿锁之前以
+  `environment precheck failed: shared-libs: missing: libGL.so.1` 硬失败。
+- 判据问题（实测暴露，另立 #3690）：初始门控集合含 `201c`，而 `0e8d:201c` 实为
+  MLD-LX2/LX3/NX2 的**正常 adb 在线态**（`.63` 23 台全 201c 且 adb 可见；`.85` 另有 1 台 2046）
+  → 在混跑 host 上刷一台会把同 host 邻机一起 `authorized=0`。v1.3.x 既有判据问题，不是 V6
+  引入，但 535 批次把刷机与开关机/Monkey 放同批 host 会放大它。本单只记录，不改判据。
+- 反例核对（只读，用**站点在用包 1.3.18** 的字节）：面对 v6 目录两条路都拒绝——
+  `no firmware family route for model MLD-NX2; known models: …`（不含 NX2）与
+  `manifest.json must define scatter_file and da_file` → 固件先上架不会让 552 计划在用版本
+  误刷 NX2 包。
+- 仍**未取证**：④ NX2 的 DA 态 USB pid；⑤ `super` 4.67G 的首刷耗时（`timeout_seconds=1200`
+  沿用 552 口径）。两者都需要一次真实刷写窗口。
+
+站点侧实际写操作（本单做过，全部只增不改）：
+
+- 发布 `packages/flashtool_v6/1.2444.00.100.tar.gz`（55,677,853 字节；发布守卫核对
+  sha == Git 登记 `3e3bc805a637…`；复跑幂等「站点已有同字节包」）。派生副本
+  `packages/manifest.json` 重写为「`origin/main` 登记面 + `flashtool_v6`」——**不含**
+  尚未发布的 `flash_firmware@1.3.19` / `flash_preflight@1.0.7`，避免站点 advertise 不存在的
+  字节；核对：副本里每个最新未退役条目都能在站点找到包。
+- 上架 NX2 固件 `firmware/MLD/P535AA-HONOR-NX2-16-260928V9/`（59 文件 / 6.2G，与
+  `apk-incoming` 源同量；`super.img`/`boot.img`/`flash.xml`/`DA_BR.bin`/scatter 逐项等字节，
+  `super.img` sha256 前缀一致）+ v6 `manifest.json`；`MLD/latest.json` 新增 `MLD_NX2` 键并
+  保留 `MLD_LX2`/`MLD_LX3`（原文件备份在会话产物里）。**踩坑**：第一次用
+  `tempfile.NamedTemporaryFile` 落盘得到 0600，CIFS 上 Agent 用户读不到指针 → 改为
+  显式 `chmod 0644` + `os.replace`（Runbook §7 第 5 步已写死这条）。
+- **没有**：`--publish` 脚本包、`POST /scripts/scan`、建/重指 Plan、刷任何设备、改中心存储
+  既有目录。所有 NX2 设备当前被 run 906（plan 78「MLD_NX2-开关机专项-18H」，18:09 起）以
+  `active_lease` 占住，且真机刷机还额外要求 ③ 的合入前置：控制面部署树的
+  `tool_manifest.json` 没有 1.3.19/1.0.7 条目时 scan 看不见它们 → **合入 + 控制面发布是
+  真机 canary 的前置**；顺序红线不变（`flashtool_v6` 包必须先于 scan/重指就位，现已就位）。
 
 ## Revisit
 
@@ -126,5 +165,11 @@ MLD_NX2（项目 535，板级 P535AA / MT6835）的刷机包由 **SP Flash Tool 
   落在现有路由键之外，需发新版本补键（参数面已有显式 `firmware_dir` + `tool_generation` 逃生档）。
 - 552 若整体迁 V6：`flashtool@1.2444.00.100` 退役要先确认没有 active 脚本版本仍声明它
   （ADR-0051 D7 门禁判据），退役面按 ADR-0051 D5 / #735。
+- #3690（门控把正常态 `201c` 当刷机态）裁决后，`_FLASH_STAGE_PIDS` 可能按 model/family
+  参数化——那会再动一次 `flash_firmware` 的门控判据，需要独立真机窗口取证。
+- `apk-incoming` 里的 `P535AA_EVT_16.0_NX3…` / `NX3Carrier…` 两包同为 V6 形态：若其 model 落在
+  `MLD_NX3` 一类新串，需发版本补路由键（显式 `firmware_dir` + `tool_generation` 参数档可先救急）。
+- NX2 host 的 `libgl1/libglx0/libglvnd0` 补齐后，`qt-libs-v6` 应从 warning 转回正常判定；
+  若 fleet 里出现「装了 GL 却仍被别项阻断」，回到本单取证方法（两代 `ldd` 差集）复核。
 - 若出现「同一 host 并刷 V5 与 V6 机型」的场景，host 级 flock 仍保证每 host 同时 1 台，
   但门控 pid 集合需按机型合并——现在是一份全局集合，无代际维度。

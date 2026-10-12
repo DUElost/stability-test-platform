@@ -173,6 +173,16 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/plans/<PLAN_ID>/run -H "$AUTH" \
 例如 MLD_NX2（板级 P535AA / MT6835）。本节替换 §1 的上架动作；§2–§5 的建计划、单台验证
 与放量流程不变。
 
+> 警告（刷机窗口前必查，2026-10-12 实测）：NX2 所在 host（`172.21.15.83–86`，Debian 13）
+> **未装 V6 的运行库**——`ldd SPFlashToolV6` 报 `libGL.so.1 => not found`，工具连 `-h` 都跑不起来。
+> 补包属 provisioning：`apt-get install -y --no-install-recommends libgl1 libglx0 libglvnd0`
+> （即 `agent_flash_prereq_packages_v6`，KRB5 面这 4 台已具备）。不补包时刷机步会在拿锁之前
+> 以 `environment precheck failed: shared-libs: missing: libGL.so.1` 硬失败。
+
+> 警告（混跑风险）：`flash_firmware` 的初始门控把 `0e8d:201c` 当刷机态隐藏，而实测
+> `201c` 是 MLD-LX2/LX3/NX2 的**正常 adb 态** → 同 host 有其他测试在跑时，一次刷机会把邻机
+> 一起摘线（判据问题见 #3690）。V6 单台验证请选择**无其他在跑作业**的 host 与时间窗。
+
 > 警告：`flash_firmware@1.3.19` 与 `flash_preflight@1.0.7` 在包内声明了 `flashtool_v6` 工具
 > 依赖（ADR-0051 D7）。任何人不得在 `flashtool_v6` 包发布之前 scan 注册或把 Plan 重指到这两个
 > 版本——包未就位时**所有**刷机步骤（含 552 的 V5 计划）会在派发前 exit 2。
@@ -199,16 +209,19 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/plans/<PLAN_ID>/run -H "$AUTH" \
 
    预期：文件存在。V6 的 DA 与 scatter 由 `flash.xml` 内部引用（`<dagent>` /
    `<scatter>`，按 flash.xml 所在目录相对解析），上架时**不得**把它们拆成命令行参数。
-3. 在真机上取代际相关的三个值（放量前必做一次，每台补新机型时重做）。
+3. 在真机上取代际相关的两个值（补新机型时必做；`MLD_NX2` 已于 2026-10-12 实取代证）。
 
    ```bash
    adb -s <serial> shell getprop ro.product.model
    adb -s <serial> shell getprop ro.build.version.incremental
    ```
 
-   预期：model 值等于 `MLD_NX2` 或 `MLD-NX2`；不等于二者时停止本流程，按设计文档 §6 补
-   路由表并发新版本。incremental 值即下一步 `version` 字段的唯一口径（目录名带 `_FLASH`
-   等打包后缀时不要照抄目录名）。
+   预期（NX2 实测值，设备 `ATHTNX6930000085` @ `172.21.15.83`）：model = `MLD-NX2`
+   （平台设备表记作 `MLD_NX2`，来源不同，路由表两个拼写都收）；
+   incremental = `P535AA-HONOR-NX2-16-260928V9`。model 不在路由表已知集合时本步 fail-fast
+   并列出已知集合，此时停止本流程按设计文档补路由键。
+   **`ro.build.display.id` 不是比对口径**（NX2 上它是 `MLD-NX2-16-260928V9`，与
+   incremental 不同形），上架目录名与 `manifest.version` 一律取 incremental。
 4. 把固件包放入 `{STP_FLASH_FIRMWARE_ROOT}/MLD/<version>/`（`<version>` = 第 3 步读到的
    incremental 值），并写 manifest.json：
 
@@ -240,6 +253,8 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/plans/<PLAN_ID>/run -H "$AUTH" \
 
    预期：改后仍保留 `MLD_LX2` / `MLD_LX3` 键，并新增
    `"MLD_NX2": "<version>"`（`MLD-NX2` 连字符拼写由脚本自动互转，二选一即可）。
+   写入方式必须「临时文件 + `os.replace`」并 `chmod 0644`——CIFS 上以 0600 落盘的指针文件
+   会让 Agent 侧读不到 `latest.json`（本手册 2026-10-12 踩过一次）。
 6. scan 注册脚本新版本，再重指或新建 Plan（顺序不可颠倒，见上方警告）。
 
    ```bash
@@ -254,12 +269,13 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/plans/<PLAN_ID>/run -H "$AUTH" \
    - `metrics.command_argv` 是 `[... , "-c", "firmware-upgrade", "-f", "<...>/download_agent/flash.xml", "-b", "auto"]`，
      且不含 `-d` / `-s`；
    - `metrics.post_flash_verify` 的版本回读与 manifest 一致；
-   - 刷机窗口内该机型的 DA 态 USB pid 落在门控集合
-     （`flash_firmware._FLASH_STAGE_PIDS`）里：
+   - 刷机窗口内出现过的 MTK pid（判据是 `_FLASH_STAGE_PIDS` 是否覆盖该机型）：
 
      ```bash
      lsusb -d 0e8d: | awk '{print $6}'
      ```
 
-   预期：pid 属于 `0003/2000/2001/201c/2026/3000`。出现新 pid 时同 host 邻机的刷机态口
-   不会被隐藏，必须先把该 pid 加进集合并发新版本，再放量。
+   预期：窗口内出现的 pid 全在 `0003/2000/2001/201c/2026/3000` 内。出现新 pid 时必须先发
+   新版本补集合再放量——集合外的刷机态口不会被门控压制，工具可能抓到邻机。
+   **别把这条读成「`201c` 该被隐藏」**：2026-10-12 实测 `201c` 是 MLD-LX2/LX3/NX2 的正常
+   adb 在线态（正常态另有 `2046`），初始门控连它一起隐藏正是 #3690 要裁决的判据问题。
