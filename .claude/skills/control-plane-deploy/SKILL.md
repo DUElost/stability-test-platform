@@ -88,8 +88,9 @@ curl -s http://127.0.0.1:8000/health      # health 路由（非 /api/v1/health�
     `git diff --name-only "$BASE" HEAD -- backend/agent/scripts/ tool_manifest.json backend/services/agent_env_sync.py`
     （判据见 §2「何时需要」与 §3 的 `--force` 条）。
 
-> 警告：下一步的两个工具在环境变量缺失时回落到仓根 `.env.backend`（D6 起是 dev 配置）。
-> 执行者不得在未导出站点 env 的 shell 中运行它们，否则得到的是 dev 库的通过结论。
+> 警告：下一步的两个工具在环境变量缺失时回落到仓根 `.env.backend`。D6 起它是 dev 配置，可与站点 env 漂移，
+> 检查目标因此不受站点配置约束（#3693；2026-10-12 核对时两者的 `DATABASE_URL` 恰好相同）。
+> 执行者不得在未导出站点 env 的 shell 中运行它们，否则结论不能代表生产库。
 
 11. 导出站点 env 后运行部署源守卫与就绪检查：
 
@@ -190,10 +191,11 @@ curl -s http://127.0.0.1:8000/health      # health 路由（非 /api/v1/health�
      构建者必须换用新目录名（例如 `<rev>-<yyyymmdd>`）。
    - 如果构建者按 Owner 裁决暂不切换某个 rev，构建者必须在该 rev 根目录写 `DO-NOT-SWITCH.txt`，
      写明原因与裁决出处。rev 根的文件不在任何摘要面内（control-plane 摘要只覆盖 `backend/` 中 `agent/` 以外的部分）。
-   - bundle 内的 `frontend/dist-prod` 复制自构建源当时的同名目录，即共享检出中正在服务的前端，nginx 不读它。
+   - bundle 内的 `frontend/dist-prod` 复制自构建源当时的同名目录，即共享检出中正在服务的前端。
+     本机 nginx 不读它；站点安装会把它落到部署根并由站点 nginx 服务（#3694）。
      执行者不得用它判断前端版本或回滚前端，前端的发布与回滚必须按 §1.5 执行。
      2026-10-12 核对：`fbb5ec61`、`43dfc764` 两个 rev 携带的都是构建当时的线上前端。
-   - 本步守卫的 schema 检查在环境变量缺失时回落到仓根 `.env.backend`（dev 配置）；
+   - 本步守卫的 schema 检查在环境变量缺失时回落到仓根 `.env.backend`（D6 起是 dev 配置，#3693）；
      对准生产库的运行方式见 §0.5 阶段 A 第 11 步。
 3. **物料与 venv**（首建/新 rev）：发布根需 `venv/`、`logs/`、`.env.backend`
    （**symlink 指树内 `../env.backend`**——站点真身，`ln -sfn ../env.backend <rev>/.env.backend`；
@@ -418,6 +420,7 @@ PYTHONPATH=. venv/bin/python -m backend.scripts.batch_hot_update --direct
 | 2026-09-26 | **#3333 落地**：§6 行改为「CLI 全量 = 被拒」——`run_sweep` 加 `agent_rpc_ready()` fail-closed（不写任何行）+ 新增 `POST /script-presence/refresh-all`（admin + 60s 进程内节流）作为立即全量重采入口；单机 `POST /refresh` 语义不变 | #3333 实施 PR |
 | 2026-10-10 | **修正 §3 忙碌判定**（上表 09-23 的「经 `device.host_id` join」）：同日 `--direct` 已按 `job_instance.host_id` 跳过 37 台，原结论不成立；以平台判定为准。依据 #3669 | #3669 静态复核（`git show 28e24185`） |
 | 2026-10-12 | **新增 §0.5 端到端编排**（阶段 A 只读检查与构建 → 停顿点 → 阶段 B 先后端后前端 → 阶段 C 热更新 → 报告项）；§1 步 2 补「`--out` 必须是新目录」「`DO-NOT-SWITCH.txt` 约定」「bundle 内前端是构建时线上副本」「守卫 schema 检查回落 dev env」；§1.5 补「共享检出不得跑 `build:prod`」警告，依赖安装改 `npm ci`。阶段 A 第 1、5、7、9、10、11 步已只读实跑（`BASE=fbb5ec61`、目标 `bb4f2340`：批次查询得 `#3653 OPEN`，标记查询得 `43dfc764` 一条，无新增迁移、无 scan/`--force` 判据文件；守卫与就绪检查导出站点 env 后均 exit 0）。其余条目 ⚠️待校对，下次真实部署按 §0.5 跑通后解除 | 代码核对（`build_bundle.py`、`check-deploy-readiness.py`、`check_alembic_at_head.py`、`routes/hosts.py`）+ 本次只读实跑 + Agent Note `docs/notes/process/2026-10-12-control-plane-deploy-orchestration.md` |
+| 2026-10-12 | **更正同日新增条目的两处表述**：① §0.5 阶段 A 第 11 步前的警告原写「否则得到的是 dev 库的通过结论」。核对时仓根与站点 env 的 `DATABASE_URL` 相同，不导出时查的仍是生产库；问题在于检查目标不受站点配置约束，改为「结论不能代表生产库」（#3693）。② §1 步 2 补充原写「nginx 不读它」，只对本机成立：站点安装 S2 会把 bundle 前端落到部署根并由站点 nginx 服务，改为限定本机并引 #3694 | 两份 env 只比较 `DATABASE_URL` 是否相等（未打印取值）+ `tools/site_config/stages.py` 的 `stage_s2_release_env` 与 `deploy/control-plane/nginx/stability-platform.conf` |
 
 ## 踩坑守卫（负向约束）
 
