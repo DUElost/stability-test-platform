@@ -90,9 +90,15 @@ MLD_NX2（项目 535，板级 P535AA / MT6835）的刷机包由 **SP Flash Tool 
 - `scripts/run_gates.py check:quick` → **16 gates OK**；`scripts/run_gates.py check:pr` →
   **23 gates OK**（rc=0；含 tool-manifest / resource-anchors / gov-surface / agent-tests /
   pr-migrate）。
+- 根 `tests/` 全量补跑与 CI 复跑结论记在 PR 评论（不以「命令跑过」代替结果）。
 - 为签名变化同步的既有桩：`test_flash_firmware_v1310/v1311` 的 `_pick_flash_tool_exe` 桩改为
   带默认值的两参 lambda；`test_flash_preflight_v102` 的条目名集合加
   `qt-libs-v6` / `flashtool-v6`（两项确为本版新增）。
+- CI 首跑（PR #3689 `pr-agent-tests`）红在 **census 计数钉**：`tests/test_check_resource_anchors.py`
+  把声明面钉成 26 锚 / `A01..A26`，本单新增 A27/A28 后真实输出是 28 锚。已同步该守卫
+  （28 锚 / `A01..A28`，类 docstring 写明「新增锚须在此同步计数；`--base` 的防扩张面抓的是把
+  既有候选改判，不是新增候选的显式声明」），本地该文件 37 passed。
+  **漏检根因：首跑只跑了选中的根文件，没跑根 `tests/` 全量**——CI 的根套件才是覆盖面。
 
 未验证（不得当成已完成）：
 

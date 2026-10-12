@@ -4,7 +4,8 @@
 背景：#3320/#3321 的 F1 形态（脚本发布位置被当成宿主资源 authority）已有四个 setup
 真实消费者被 G1a（PR #3605）修复；本文件守住 **checker 本身与门禁接线** 有牙齿：
 
-- 全量 census 在真实仓库为绿，且声明面覆盖 §1.4 的 26 项（10 项函数级 legacy）；
+- 全量 census 在真实仓库为绿，且声明面覆盖 §1.4 的 26 项 + 后续新增锚
+  （#3688 V6 代际 A27/A28 = 28 项；10 项函数级 legacy 不变）；
 - 隔离副本里恢复一个 G1a 错根 / 拆工具绑定 / 删包内伴随文件 / 让 dead helper 可达 /
   抽掉声明条目 → 从 checker 入口必须变红，恢复后转绿；
 - `--base` 不可解析必须报不可验证（退出 2），不是空 diff 成功；
@@ -118,13 +119,18 @@ def _errors_of(copy: Path) -> list[str]:
 
 
 class TestContractCensus:
-    """声明面必须覆盖 §1.4 的 26 项逻辑定位点（10 项函数级 legacy，不得文件级豁免）。"""
+    """声明面必须覆盖 §1.4 的 26 项逻辑定位点 + 后续新增锚（10 项函数级 legacy，不得文件级豁免）。
+
+    新增锚要在此同步计数：A27/A28 是 #3688 引入的 SP Flash Tool V6 工具根
+    （`flashtool_v6` 绑定 + 两个消费族的根解析函数），属新增候选的显式声明，
+    不是把既有候选改判（`--base` 的防扩张面会抓后者）。
+    """
 
     def test_ids_unique_and_cover_declared_census(self):
         doc = json.loads(CONTRACT.read_text(encoding="utf-8"))
         ids = [a["id"] for a in doc["anchors"]]
         assert len(ids) == len(set(ids)), f"锚 id 重复：{ids}"
-        assert set(ids) == {f"A{i:02d}" for i in range(1, 27)}, f"§1.4 26 项未全覆盖：{sorted(ids)}"
+        assert set(ids) == {f"A{i:02d}" for i in range(1, 29)}, f"§1.4 26 项 + 新增锚未全覆盖：{sorted(ids)}"
 
     def test_legacy_entries_are_function_level_with_reason_and_exit(self):
         doc = json.loads(CONTRACT.read_text(encoding="utf-8"))
@@ -155,7 +161,7 @@ class TestCheckerBehavior:
     def test_full_census_green_with_counts(self):
         proc = _run_checker()
         assert proc.returncode == 0, f"真实仓库 census 红：{proc.stderr}"
-        assert "26 锚" in proc.stdout, proc.stdout
+        assert "28 锚" in proc.stdout, proc.stdout
         assert "legacy 豁免 10" in proc.stdout, proc.stdout
         assert "未解析 0" in proc.stdout, proc.stdout
 
