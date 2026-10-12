@@ -50,7 +50,7 @@
       "scope": "plan",
       "path": ["barrier_max_wait_seconds"],
       "label": "初始化同步累计等待硬顶",
-      "meaning": "从首次等待开始计时。未设时继承主机环境，不是关闭硬顶。与 ADR-0060 原文「无硬顶」冲突，见 #3652，本批按现行代码展示。",
+      "meaning": "从首次等待开始计时。正整数为计划显式硬顶；未设时继承主机安全策略，不是关闭硬顶。",
       "unit": "秒",
       "unset_state": "env_fallback",
       "fallback_chain": "Plan 值 → 主机 STP_BARRIER_MAX_WAIT_SECONDS → 1800；非法环境变量回到 1800；环境变量 ≤0 才表示无硬顶",
