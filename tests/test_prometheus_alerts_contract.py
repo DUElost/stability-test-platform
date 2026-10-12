@@ -20,7 +20,8 @@
    存量缺口（#2151 建账、#2236 清零）已清空，清单已空但**判据保留**：以后新增告警不补场景即红。
    条数不在此处写死（#2663）——要读现状口径看 ``_SCENARIO_COVERAGE_DEBT`` 与棘轮本体。
 4. **逐条判别力（promtool 可用时）**：``test_promtool_gate_detects_per_rule_threshold_drift``
-   每次只抬一条规则的阈值，要求场景层红**且失败可归因到该告警**。整批式变异做不到
+   每次只变异一条规则：数值规则抬阈值，单一 ``absent(selector)`` 规则延长 ``for``。
+   先证明原切片绿，再要求变异切片红**且失败可归因到该告警**。整批式变异做不到
    这件事——任何一条失配都能让整批红，于是「某条用例断言了一个永不出现的形状」
    （假覆盖）在其中完全不可见（#2236 验收判据 2）。
 
@@ -30,10 +31,12 @@
 """
 from __future__ import annotations
 
+import math
 import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -525,24 +528,65 @@ def _raise_all_thresholds(alerts_text: str) -> tuple[str, int]:
     return yaml.safe_dump(data, allow_unicode=True, width=10000), hits
 
 
-def _raise_rule_threshold(alerts_text: str, alert: str) -> tuple[str, int]:
-    """只抬**指定那一条**告警的比较阈值（#2236 逐条判别力自证用）。
+# 仅分类单一 absent 的外形；selector 的 PromQL 合法性由未变异控制组验证。
+# 不支持 range selector、嵌套函数或外部运算；新形态必须人工分类。
+_SINGLE_ABSENT_RE = re.compile(
+    r"\s*absent\s*\(\s*[a-zA-Z_:][a-zA-Z0-9_:]*"
+    r"(?:\s*\{[^{}]*\})?\s*\)\s*"
+)
 
-    与 ``_raise_all_thresholds`` 同一单向口径（只收紧不放宽），差别在隔离性：
-    整批式变异无法区分「哪条用例真的有牙」。
+
+def _raise_rule_threshold(
+    alerts_text: str, alert: str, scenarios_text: str | None = None,
+) -> tuple[str, int]:
+    """只变异目标规则：数值阈值抬至 1e12，单一 absent 则延长 for。
+
+    absent 的 for 严格大于原值和全部切片 eval_time；不支持的无阈值形态
+    显式失败，交人工分类。返回 (副本文本, 变异处数)，原输入保持不变。
+    数值规则保留既有双参数调用；absent 必须显式提供场景切片，不猜测时长。
     """
     data = yaml.safe_load(alerts_text)
-    hits = 0
-    for group in data.get("groups", []):
-        for rule in group.get("rules", []):
-            if rule.get("alert") != alert or not isinstance(rule.get("expr"), str):
-                continue
-            mutated, n = _CMP_THRESHOLD_RE.subn(
-                lambda m: f"{m.group('op')} {_HUGE_THRESHOLD}", rule["expr"]
-            )
-            if n:
-                rule["expr"] = mutated
-                hits += n
+    targets = [
+        rule
+        for group in data.get("groups", [])
+        for rule in group.get("rules", [])
+        if rule.get("alert") == alert
+    ]
+    assert len(targets) == 1, f"{alert}: 目标规则必须唯一，实际 {len(targets)} 条"
+    rule = targets[0]
+    expr = rule.get("expr")
+    assert isinstance(expr, str), f"{alert}: expr 无效，必须人工分类"
+    mutated, hits = _CMP_THRESHOLD_RE.subn(
+        lambda m: f"{m.group('op')} {_HUGE_THRESHOLD}", expr
+    )
+    if hits:
+        rule["expr"] = mutated
+    else:
+        assert _SINGLE_ABSENT_RE.fullmatch(expr), (
+            f"{alert}: 无比较阈值且非支持的单一 absent(selector)，必须人工分类"
+        )
+        original_for = _duration_minutes(rule.get("for"))
+        assert original_for is not None and math.isfinite(original_for) and original_for > 0, (
+            f"{alert}: absent 变异需要可解析的正 for，实际 {rule.get('for')!r}"
+        )
+        assert scenarios_text is not None, f"{alert}: absent 变异必须提供目标场景切片"
+        scenarios = yaml.safe_load(scenarios_text)
+        cases = [
+            case
+            for group in scenarios.get("tests") or []
+            for case in group.get("alert_rule_test") or []
+            if case.get("alertname") == alert
+        ]
+        assert cases, f"{alert}: 没有目标场景，无法确定 for 变异边界"
+        assert any(case.get("exp_alerts") for case in cases), (
+            f"{alert}: 全部目标场景 exp_alerts 为空，无法证明逐条判别力"
+        )
+        eval_times = [_duration_minutes(case.get("eval_time")) for case in cases]
+        assert all(value is not None and math.isfinite(value) for value in eval_times), (
+            f"{alert}: 目标场景 eval_time 无法解析，不能确定 for 变异边界"
+        )
+        rule["for"] = f"{math.ceil(max(original_for, *eval_times)) + 1}m"
+        hits = 1
     return yaml.safe_dump(data, allow_unicode=True, width=10000), hits
 
 
@@ -572,6 +616,11 @@ def _scenarios_for_alert(alert: str) -> str:
         f"{alert}: 场景文件没有该 alertname 的用例——与 "
         "test_every_alert_rule_has_scenario_case 棘轮冲突"
     )
+    assert any(
+        case.get("exp_alerts")
+        for group in filtered_tests
+        for case in group["alert_rule_test"]
+    ), f"{alert}: 全部目标场景 exp_alerts 为空，无法证明逐条判别力"
     return yaml.safe_dump(
         {
             "rule_files": data.get("rule_files"),
@@ -691,37 +740,262 @@ def test_alert_names_are_collected_for_per_rule_drift():
 
 @pytest.mark.parametrize("alert", _ALERT_NAMES)
 def test_promtool_gate_detects_per_rule_threshold_drift(tmp_path, alert: str) -> None:
-    """**逐条**判别力自证（#2236 验收判据 2）：只抬这一条的阈值 → 场景层必须红。
+    """逐条判别力（#2236 / #3679）：控制组绿，目标规则变异后场景失配。
 
-    为什么整批式的 ``test_promtool_gate_detects_threshold_drift`` 不够：它把全部阈值
-    一起抬到 1e12，任何一条失配都能让整批红——「某条用例其实断言了一个永不出现的
-    形状」（假覆盖）在其中完全不可见。逐条变异并要求失败输出**点名该告警**，才证明
-    每条场景用例各自有牙。
-
-    场景文件按告警切片（``_scenarios_for_alert``）：避免每条都重放 145h 级全文件
-    模拟；正/负向整文件覆盖仍由同模块的其它用例承担。
+    数值规则抬比较阈值，支持的单一 absent 规则延长 for。整批式变异无法
+    证明每条规则各自有牙，故保留全部规则参数化、场景切片和目标告警归因。
+    完整场景的正/负向覆盖仍由本模块的整文件用例承担。
     """
     promtool = _promtool_path()
     original = ALERTS.read_text(encoding="utf-8")
-    mutated, hits = _raise_rule_threshold(original, alert)
-    assert hits, (
-        f"{alert}: 表达式里没有可抬高的比较阈值——本判据对它已失效，"
-        "请更新 _CMP_THRESHOLD_RE（不要删除本用例）"
+    scenarios = _scenarios_for_alert(alert)
+    (tmp_path / SCENARIOS.name).write_text(scenarios, encoding="utf-8")
+
+    def _run(alerts_text: str) -> subprocess.CompletedProcess[str]:
+        (tmp_path / ALERTS.name).write_text(alerts_text, encoding="utf-8")
+        return subprocess.run(
+            [promtool, "test", "rules", SCENARIOS.name],
+            cwd=tmp_path, capture_output=True, text=True, check=False,
+        )
+
+    control = _run(original)
+    assert control.returncode == 0, (
+        f"{alert}: 控制组（未变异规则 + 原场景切片）必须通过，不能把接线/语法错误"
+        f"当成有效变异：\n{control.stdout}{control.stderr}"
     )
-    (tmp_path / ALERTS.name).write_text(mutated, encoding="utf-8")
-    (tmp_path / SCENARIOS.name).write_text(
-        _scenarios_for_alert(alert), encoding="utf-8"
+    mutated, hits = _raise_rule_threshold(original, alert, scenarios)
+    assert hits, f"{alert}: 阈值/for 未产生变异，逐条判别力失效"
+    drift = _run(mutated)
+    out = drift.stdout + drift.stderr
+    assert drift.returncode != 0, (
+        f"{alert}: 单条阈值/for 变异后场景层仍通过 → 该条场景没有判别力\n{out}"
     )
-    res = subprocess.run(
-        [promtool, "test", "rules", SCENARIOS.name],
-        cwd=tmp_path, capture_output=True, text=True, check=False,
+    assert "FAILED" in out, f"{alert}: 变异组输出没有 FAILED，不能证明场景失配\n{out}"
+    # promtool 的告警预期失配块；只有 FAILED 或规则名的语法/路径报错不能作证。
+    assert re.search(
+        rf"(?m)^\s+alertname: {re.escape(alert)}, time: .+\n"
+        r"\s+exp:\[[\s\S]*?\n\s+got:\[", out,
+    ), f"{alert}: 失败不可归因到目标告警的 exp/got 失配（可能是接线/语法错误）\n{out}"
+    print(f"[promtool] {alert}: control=0, mutation={drift.returncode}, target exp/got mismatch")
+
+
+@pytest.fixture
+def per_rule_mutation_inputs():
+    """仅供有限形态反例，不替代真实 promtool 场景。"""
+    rules = {"groups": [{"name": "fixture", "rules": [
+        {"alert": "FixtureAlert", "expr": 'absent(fixture_metric{kind="ok"})',
+         "for": "15m", "labels": {"severity": "warning"},
+         "annotations": {"summary": "fixture"}},
+        {"alert": "OtherAlert", "expr": "other_metric > 1", "for": "5m"},
+        {"record": "recorded_metric", "expr": "other_metric > 2"},
+    ]}]}
+    scenarios = {"tests": [{"alert_rule_test": [
+        {"alertname": "FixtureAlert", "eval_time": "40m", "exp_alerts": [{}]},
+        {"alertname": "FixtureAlert", "eval_time": "10m", "exp_alerts": []},
+    ]}]}
+    return rules, scenarios
+
+
+@pytest.mark.parametrize("expr,field,value", [
+    ("fixture_metric > 2", "expr", f"fixture_metric > {_HUGE_THRESHOLD}"),
+    ('absent(fixture_metric{kind="ok"})', "for", "41m"),
+])
+def test_per_rule_mutation_changes_only_target(per_rule_mutation_inputs, expr, field, value):
+    rules, scenarios = per_rule_mutation_inputs
+    target = rules["groups"][0]["rules"][0]
+    target["expr"] = expr
+    original = yaml.safe_dump(rules)
+    scenarios_text = yaml.safe_dump(scenarios)
+    mutated, hits = _raise_rule_threshold(original, "FixtureAlert", scenarios_text)
+    assert hits == 1
+    expected = yaml.safe_load(original)
+    expected["groups"][0]["rules"][0][field] = value
+    assert yaml.safe_load(mutated) == expected
+    if field == "expr":
+        # #3233 的已有调用只传两参数；数值路径不能因新增 absent 轴而回归。
+        assert _raise_rule_threshold(original, "FixtureAlert") == (mutated, hits)
+    assert yaml.safe_load(original) == rules
+    assert yaml.safe_load(scenarios_text) == scenarios
+
+
+@pytest.mark.parametrize("original_for,eval_time,expected_for", [
+    ("100m", "40m", "101m"),
+    ("15m", "2401s", "42m"),
+])
+def test_per_rule_absent_for_exceeds_both_bounds(
+    per_rule_mutation_inputs, original_for, eval_time, expected_for,
+):
+    rules, scenarios = per_rule_mutation_inputs
+    rules["groups"][0]["rules"][0]["for"] = original_for
+    scenarios["tests"][0]["alert_rule_test"][0]["eval_time"] = eval_time
+    mutated, _ = _raise_rule_threshold(
+        yaml.safe_dump(rules), "FixtureAlert", yaml.safe_dump(scenarios),
     )
-    out = res.stdout + res.stderr
-    assert res.returncode != 0, (
-        f"{alert}: 单独把阈值抬到 {_HUGE_THRESHOLD} 后场景层仍通过 → 该条场景用例"
-        f"没有判别力（假覆盖）\n{out}"
+    assert yaml.safe_load(mutated)["groups"][0]["rules"][0]["for"] == expected_for
+
+
+def test_per_rule_current_nodata_for_is_41_minutes():
+    alert = "StabilityDeviceLeaseReconcilerNoData"
+    original = ALERTS.read_text(encoding="utf-8")
+    scenarios = _scenarios_for_alert(alert)
+    mutated, hits = _raise_rule_threshold(original, alert, scenarios)
+    expected = yaml.safe_load(original)
+    target = next(
+        rule for group in expected["groups"] for rule in group["rules"]
+        if rule.get("alert") == alert
     )
-    assert alert in out, (
-        f"{alert}: 场景层变红但输出未点名该告警 → 失败不可归因，该条断言可能在"
-        f"断言别的形状\n{out}"
-    )
+    assert target["for"] == "15m"
+    target["for"] = "41m"
+    assert hits == 1
+    assert yaml.safe_load(mutated) == expected
+    assert ALERTS.read_text(encoding="utf-8") == original
+
+
+@pytest.mark.parametrize("expr", [
+    "fixture_metric", "vector(1)", "absent(a) or absent(b)",
+    "sum(absent(a))", "absent_over_time(a[5m])", "absent(a[5m])",
+])
+def test_per_rule_mutation_rejects_unsupported_shape(per_rule_mutation_inputs, expr):
+    rules, scenarios = per_rule_mutation_inputs
+    rules["groups"][0]["rules"][0]["expr"] = expr
+    with pytest.raises(AssertionError, match="必须人工分类"):
+        _raise_rule_threshold(yaml.safe_dump(rules), "FixtureAlert", yaml.safe_dump(scenarios))
+
+
+@pytest.mark.parametrize("duration", [None, "0m", "invalid", "-1m"])
+def test_per_rule_mutation_rejects_invalid_for(per_rule_mutation_inputs, duration):
+    rules, scenarios = per_rule_mutation_inputs
+    target = rules["groups"][0]["rules"][0]
+    if duration is None:
+        del target["for"]
+    else:
+        target["for"] = duration
+    with pytest.raises(AssertionError, match="可解析的正 for"):
+        _raise_rule_threshold(yaml.safe_dump(rules), "FixtureAlert", yaml.safe_dump(scenarios))
+
+
+@pytest.mark.parametrize("eval_time", [None, "invalid", "1h30m"])
+def test_per_rule_mutation_rejects_invalid_eval_time(per_rule_mutation_inputs, eval_time):
+    rules, scenarios = per_rule_mutation_inputs
+    case = scenarios["tests"][0]["alert_rule_test"][1]
+    if eval_time is None:
+        del case["eval_time"]
+    else:
+        case["eval_time"] = eval_time
+    with pytest.raises(AssertionError, match="eval_time 无法解析"):
+        _raise_rule_threshold(yaml.safe_dump(rules), "FixtureAlert", yaml.safe_dump(scenarios))
+
+
+@pytest.mark.parametrize("target_count", [0, 2])
+def test_per_rule_mutation_rejects_missing_or_duplicate_target(
+    per_rule_mutation_inputs, target_count,
+):
+    rules, scenarios = per_rule_mutation_inputs
+    entries = rules["groups"][0]["rules"]
+    entries[:] = [entries[0]] * target_count + entries[1:]
+    with pytest.raises(AssertionError, match="目标规则必须唯一"):
+        _raise_rule_threshold(yaml.safe_dump(rules), "FixtureAlert", yaml.safe_dump(scenarios))
+
+
+@pytest.mark.parametrize("empty_kind,message", [
+    ("missing", "没有该 alertname|没有目标场景"),
+    ("no_firing", "全部目标场景 exp_alerts 为空"),
+])
+def test_per_rule_mutation_rejects_unprovable_scenarios(
+    tmp_path, monkeypatch, per_rule_mutation_inputs, empty_kind, message,
+):
+    rules, scenarios = per_rule_mutation_inputs
+    cases = scenarios["tests"][0]["alert_rule_test"]
+    if empty_kind == "missing":
+        cases.clear()
+    else:
+        for case in cases:
+            case["exp_alerts"] = []
+    text = yaml.safe_dump(scenarios)
+    path = tmp_path / "unprovable.yml"
+    path.write_text(text, encoding="utf-8")
+    monkeypatch.setattr(sys.modules[__name__], "SCENARIOS", path)
+    with pytest.raises(AssertionError, match=message):
+        _scenarios_for_alert("FixtureAlert")
+    with pytest.raises(AssertionError, match=message):
+        _raise_rule_threshold(yaml.safe_dump(rules), "FixtureAlert", text)
+
+
+@pytest.mark.parametrize("control_rc,drift_rc,output,message", [
+    (1, 1, "FAILED: original invalid", "控制组"),
+    (0, 0, "SUCCESS", "场景层仍通过"),
+    (0, 1, "No such file", "没有 FAILED"),
+    (0, 1, "FAILED: other alert", "失败不可归因"),
+    (0, 1, "FAILED: StabilityDeviceLeaseReconcilerNoData parse error", "失败不可归因"),
+])
+def test_per_rule_guard_rejects_invalid_evidence(
+    tmp_path, monkeypatch, control_rc, drift_rc, output, message,
+):
+    module = sys.modules[__name__]
+    monkeypatch.setattr(module, "_promtool_path", lambda: "fixture-promtool")
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((
+            (tmp_path / ALERTS.name).read_text(encoding="utf-8"),
+            (tmp_path / SCENARIOS.name).read_text(encoding="utf-8"),
+        ))
+        rc = control_rc if len(calls) == 1 else drift_rc
+        return subprocess.CompletedProcess(command, rc, stdout=output, stderr="")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    with pytest.raises(AssertionError, match=message):
+        test_promtool_gate_detects_per_rule_threshold_drift(
+            tmp_path, "StabilityDeviceLeaseReconcilerNoData",
+        )
+    assert len(calls) == (1 if control_rc else 2)
+    assert calls[0][0] == ALERTS.read_text(encoding="utf-8")
+    if len(calls) == 2:
+        assert calls[0][1] == calls[1][1]
+        assert calls[0][0] != calls[1][0]
+
+
+def test_per_rule_guard_requires_binary_when_required(tmp_path, monkeypatch):
+    monkeypatch.setenv("PROMTOOL_REQUIRED", "1")
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+    with pytest.raises(pytest.fail.Exception, match="PATH 中没有"):
+        test_promtool_gate_detects_per_rule_threshold_drift(
+            tmp_path, "StabilityDeviceLeaseReconcilerNoData",
+        )
+
+
+def test_per_rule_absent_requires_explicit_slice(per_rule_mutation_inputs):
+    rules, _scenarios = per_rule_mutation_inputs
+    with pytest.raises(AssertionError, match="必须提供目标场景切片"):
+        _raise_rule_threshold(yaml.safe_dump(rules), "FixtureAlert")
+
+
+@pytest.mark.parametrize("broken_kind", ["path", "yaml", "promql"])
+def test_per_rule_guard_rejects_real_control_errors(tmp_path, monkeypatch, broken_kind):
+    """真实 promtool 的接线/语法红灯不能冒充变异后的目标场景失配。"""
+    _promtool_path()
+    module = sys.modules[__name__]
+    source = tmp_path / "source"
+    source.mkdir()
+    if broken_kind == "path":
+        data = yaml.safe_load(SCENARIOS.read_text(encoding="utf-8"))
+        data["rule_files"] = ["missing-rule-file.yml"]
+        path = source / SCENARIOS.name
+        path.write_text(yaml.safe_dump(data), encoding="utf-8")
+        monkeypatch.setattr(module, "SCENARIOS", path)
+    else:
+        text = "groups: ["
+        if broken_kind == "promql":
+            data = yaml.safe_load(ALERTS.read_text(encoding="utf-8"))
+            for group in data["groups"]:
+                for rule in group["rules"]:
+                    if rule.get("alert") == "StabilityDeviceLeaseReconcilerNoData":
+                        rule["expr"] = "absent("
+            text = yaml.safe_dump(data)
+        path = source / ALERTS.name
+        path.write_text(text, encoding="utf-8")
+        monkeypatch.setattr(module, "ALERTS", path)
+    with pytest.raises(AssertionError, match="控制组"):
+        test_promtool_gate_detects_per_rule_threshold_drift(
+            tmp_path, "StabilityDeviceLeaseReconcilerNoData",
+        )
