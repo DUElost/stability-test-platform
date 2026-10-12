@@ -65,8 +65,9 @@ const basePlan: Plan = {
     enabled: true,
     on_unavailable: 'degraded',
     batch_interval_seconds: 5,
-    custom_keep: 'KEEP_ME',
-  },
+    // 未知子键保留：运行时允许，类型上用断言承载合成哨兵
+    ...({ custom_keep: 'KEEP_ME' } as Record<string, unknown>),
+  } as Plan['watcher_policy'],
   next_plan_id: null,
   created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-01T00:00:00Z',

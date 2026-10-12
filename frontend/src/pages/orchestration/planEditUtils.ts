@@ -4,9 +4,8 @@ import type {
   PipelinePhase,
   PipelineStep,
   PlanStepCreate,
-  WatcherPolicy,
-  WatcherUnavailableAction,
 } from '@/utils/api';
+import type { WatcherPolicy, WatcherUnavailableAction } from '@/utils/api/types';
 
 export const EMPTY_LIFECYCLE: PipelineDef = {
   lifecycle: {

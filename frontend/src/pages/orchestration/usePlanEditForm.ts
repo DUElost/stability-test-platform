@@ -373,7 +373,7 @@ export function usePlanEditForm(planId: number | null) {
     barrier_timeout_seconds: barrierTimeoutSeconds,
     barrier_max_wait_seconds: barrierMaxWaitSeconds,
     auto_archive_interval_seconds: autoArchiveIntervalSeconds,
-    watcher_policy: watcherPolicy ? { ...watcherPolicy } : null,
+    watcher_policy: watcherPolicy ? { ...watcherPolicy } : undefined,
     steps: buildStepsForApi(lifecycle),
   }), [
     lifecycle,
@@ -435,7 +435,7 @@ export function usePlanEditForm(planId: number | null) {
         step_id: step.step_key,
         action: `script:${step.script_name}`,
         version: step.script_version,
-        params: step.params,
+        params: step.params ?? undefined,
         timeout_seconds: step.timeout_seconds ?? undefined,
         stall_seconds: step.stall_seconds ?? undefined,
         retry: step.retry,

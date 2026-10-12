@@ -143,7 +143,7 @@ describe('PlanSettingsEditor', () => {
     expect(screen.getByTestId('plan-watcher-unknown-keys')).toHaveTextContent('batch_interval_seconds');
     expect(screen.getByTestId('plan-watcher-unknown-keys')).toHaveTextContent('nfs_quota_mb');
     fireEvent.click(screen.getByTestId('plan-watcher-enabled'));
-    const next = onChange.mock.calls.at(-1)?.[0] as PlanSettingsValues;
+    const next = onChange.mock.calls[onChange.mock.calls.length - 1]?.[0] as PlanSettingsValues;
     expect(next.watcherPolicy).toMatchObject({
       enabled: false,
       batch_interval_seconds: 5,
@@ -163,7 +163,7 @@ describe('PlanSettingsEditor', () => {
       />,
     );
     fireEvent.change(screen.getByLabelText('AEE 路径'), { target: { value: '' } });
-    const next = onChange.mock.calls.at(-1)?.[0] as PlanSettingsValues;
+    const next = onChange.mock.calls[onChange.mock.calls.length - 1]?.[0] as PlanSettingsValues;
     expect(next.watcherPolicy?.paths).toBeUndefined();
   });
 
