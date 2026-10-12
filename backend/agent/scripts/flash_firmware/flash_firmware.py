@@ -1,5 +1,28 @@
 """Flash firmware via SP Flash Tool (MTK platform).
 
+v1.3.19（MLD_NX2 / 535 项目）：支持 SP Flash Tool **V6** 代际——
+`SPFlashToolV6 -c firmware-upgrade -f download_agent/flash.xml -b auto`。
+V5 与 V6 的差别不是「多一个参数」，而是**下载入口物**不同：
+  - V5 `flash_tool -d <DA.bin> -s <scatter.txt>`：DA 与 scatter 由命令行给；
+  - V6 `SPFlashToolV6 -f <flash.xml>`：`download_agent/flash.xml` 内部自带
+    `<dagent>` 与 `<scatter>`（按 flash.xml 所在目录相对解析；实测
+    `DA_BR.bin` + `../MT6835_Android_scatter.xml`），命令行不再给 DA/scatter。
+代际由**固件版本目录的 manifest.json** 决定（`tool_generation`，缺省 v5）——
+刷机代际是固件包的属性而不是计划的属性，与 ADR-0029 v2「执行差异归脚本路由」
+一致；调用方不需要按机型传参。指纹路由 / host 锁 / 门控 / 重试 / 版本核验 /
+boot 稳定两代共用；**V5 分支的参数拼接与判据逐字不变**（在用 552 刷机计划零
+行为变化）。
+代际取值是闭集：`tool_generation` 非 v5/v6 → fail-fast，不猜、不回落 v5。
+证据（2026-10-12，本机 flashtool 1.2444.00.100 包内两代二进制各跑 `-h`）：
+  - `SPFlashToolV6 -h`：`-f, --flash_xml`（无 config.xml 时必填）、
+    `-c, --operation` 支持 `firmware-upgrade`、`-b, --reboot`；
+  - V5 `flash_tool -h`：`-s, --scatter` / `-d, --da_agent` / `-c, --operation`，
+    `-b, --reboot` **同为布尔**——现行 `-b auto` 里的 `auto` 是工具忽略的位置
+    参数（552 生产形态一直如此）。本版不改 V5 拼接，V6 沿用同形以对齐现场已
+    验证的手工命令；把 `boot_mode` 改名为真实语义属行为中性重构，另单处理；
+  - 现场成功日志以 `All command exec done!` 收场（`_PASS_TOKENS` 已覆盖），
+    进度行 `N% of [part [i/n]] data has been sent` 命中既有百分比解析。
+
 v1.3.17（#2353）：ttyACM 写入路径判据改按**规则形态 × 本进程组集合**——
 `_udev_has_mtk_0666_rule()`（只认 0666 文本）换成 `_udev_rule_form()`
 （`0660+dialout` / `0666` / 无）。此前在已升 0660 的宿主上会误报
@@ -34,6 +57,7 @@ Environment:
                           取 {STP_NFS_ROOT}/firmware)
     STP_STEP_PARAMS      (required JSON)
     STP_FLASH_TOOL_DIR   (optional override for flash_tool location)
+    STP_FLASH_TOOL_V6_DIR(optional; 引擎按 requires_tools 注入的 V6 包根)
     STP_JOB_ID           (used to tag metrics)
     STP_DEVICE_SERIAL    (fingerprint 路由与刷前/刷后版本比对用)
     STP_ADB_PATH         (default adb)
@@ -42,10 +66,16 @@ STP_STEP_PARAMS schema:
     firmware_dir            : str  (显式固件目录；缺省走指纹路由，见下)
     da_file                 : str  (显式 DA 文件；可由 manifest.json 提供)
     scatter_file            : str  (显式 scatter 文件；可由 manifest.json 提供)
+    tool_generation         : str  (optional; 缺省取 manifest.json 的 tool_generation，
+                          两处都没有则 "v5"。"v5"=flash_tool -d/-s，
+                          "v6"=SPFlashToolV6 -f；其余取值 fail-fast)
+    flash_xml_file          : str  (optional; V6 下载入口 download_agent/flash.xml，
+                          相对 firmware_dir；可由 manifest.json 提供)
     command                 : str  (optional, default firmware-upgrade)
     boot_mode               : str  (optional, default auto)
     timeout_seconds         : int  (optional, default 1200)
     flash_tool_dir          : str  (optional; overrides STP_FLASH_TOOL_DIR)
+    flash_tool_v6_dir       : str  (optional; overrides STP_FLASH_TOOL_V6_DIR)
     reboot_to_flash         : bool (optional, default true; adb reboot before flash_tool)
     reboot_target           : str  (optional, default "normal"; "normal" 发不带 target 的
                           adb reboot——完整上电流经 BROM 窗口，工具才能抓中；
@@ -671,6 +701,11 @@ def _shutil_which(cmd: str) -> "str | None":
 _MODEL_FAMILY_ROUTES = {
     "MLD_LX2": "MLD",
     "MLD_LX3": "MLD",
+    # v1.3.19（535 / MLD_NX2）：同族不同代际——NX2 固件包的 manifest 写
+    # tool_generation=v6，LX2/LX3 的包没有该键即 v5。族目录仍是 MLD，
+    # 版本靠 latest.json 的 per-model 映射分流（v1.3.6 能力）。
+    "MLD_NX2": "MLD",
+    "MLD-NX2": "MLD",
     "ELA_LX2": "ELA",
     "ELA_LX3": "ELA",
     # 真机实测（2026-08-25 .66 回归）：getprop 返回连字符拼写；
@@ -707,6 +742,14 @@ _PHASE_TOKENS = (
     "RECOVERY",
     "PRELOADER",
     "BOOTING",
+    # v1.3.19：V6 控制台输出的阶段词（实测日志「scan device START」
+    # 「connect brom successed」「enter 1st DA mode successed」
+    # 「CMD:FLASH-UPDATE command execute successed」）。V5 输出命中时同样
+    # 只是多打一个阶段戳，语义仍是「进入该阶段」。
+    "SCAN DEVICE",
+    "CONNECT BROM",
+    "DA MODE",
+    "FLASH-UPDATE",
 )
 _PROGRESS_PREFIX = "PROGRESS "
 
@@ -870,6 +913,32 @@ _DEFAULT_REL_FLASH_TOOL = (
 )
 
 
+# ── v1.3.19 SP Flash Tool 代际（V5 / V6）──────────────────────────────
+#
+# 代际是**固件包**的属性（版本目录 manifest.json 的 tool_generation）：
+# V5 用 `-d <DA> -s <scatter>`，V6 用 `-f <download_agent/flash.xml>`。
+# 闭集判据，未知取值 fail-fast——把 v6 静默回落成 v5 只会拼出一条工具直接
+# 报错的命令行，失败点后移到刷机窗口里（真机时间不可回收）。
+GENERATION_V5 = "v5"
+GENERATION_V6 = "v6"
+_TOOL_GENERATIONS = (GENERATION_V5, GENERATION_V6)
+
+_V5_EXE_NAMES = ("flash_tool", "flash_tool.exe")
+_V6_EXE_NAMES = ("SPFlashToolV6", "SPFlashToolV6.exe")
+#: 各代际在工具根下的子目录名。工具根既可能是「代际内容平铺」（现行
+#: flashtool@1.2444.00.100 的包根＝V5 内容），也可能是原厂 selector 原样解压
+#: 布局 `…/SP_Flash_Tool_Selector_…/SP_Flash_Tool_V{5,6}`（资源目录、中心存储
+#: 过渡目录都是这个形状）。两代并存于同一根时靠这个子目录区分。
+_GENERATION_SUBDIR = {
+    GENERATION_V5: "SP_Flash_Tool_V5",
+    GENERATION_V6: "SP_Flash_Tool_V6",
+}
+#: selector 布局下 V6 相对族树的回退（与 _DEFAULT_REL_FLASH_TOOL 同根）
+_DEFAULT_REL_FLASH_TOOL_V6 = _DEFAULT_REL_FLASH_TOOL + (
+    _GENERATION_SUBDIR[GENERATION_V6],
+)
+
+
 def _step_params() -> dict:
     raw = os.environ.get("STP_STEP_PARAMS", "{}")
     try:
@@ -908,15 +977,69 @@ def _locate_flash_tool_dir(params_override) -> str:
     return os.path.normpath(os.path.join(script_dir, *_DEFAULT_REL_FLASH_TOOL))
 
 
-def _pick_flash_tool_exe(tool_dir: str):
-    names = ("flash_tool", "flash_tool.exe")
-    search_roots = [tool_dir, os.path.join(tool_dir, "SP_Flash_Tool_V5")]
+def _locate_flash_tool_v6_dir(params_override, v5_tool_dir: str = "") -> str:
+    """V6 工具根解析：参数 > 引擎注入 env > V5 根的 selector 布局兄弟。
+
+    `STP_FLASH_TOOL_V6_DIR` 由引擎按 capabilities 的 `requires_tools` 注入
+    （ADR-0051 v1.7 D7：整包核验拉取后注入包根，fail-closed，**不回退**主机
+    `.env` 同名键）。后两档是「同一份 selector 解压物里 V5/V6 并存」的既有
+    磁盘布局（资源目录、中心存储过渡目录），不要求运维再放一份。
+
+    与 `_locate_flash_tool_dir` 同语义：本函数只**选根**，是否存在由调用方
+    判（错误信息直指根路径），不在这里静默换根。
+    """
+    if params_override:
+        return str(params_override)
+    env_override = os.environ.get("STP_FLASH_TOOL_V6_DIR", "")
+    if env_override:
+        return env_override
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = [os.path.normpath(os.path.join(script_dir, *_DEFAULT_REL_FLASH_TOOL_V6))]
+    if v5_tool_dir:
+        candidates.append(os.path.join(v5_tool_dir, _GENERATION_SUBDIR[GENERATION_V6]))
+        candidates.append(os.path.join(
+            os.path.dirname(v5_tool_dir.rstrip("/")),
+            _GENERATION_SUBDIR[GENERATION_V6],
+        ))
+    for cand in candidates:
+        if _pick_flash_tool_exe(cand, GENERATION_V6):
+            return cand
+    return candidates[0]
+
+
+def _pick_flash_tool_exe(tool_dir: str, generation: str = GENERATION_V5):
+    names = _V6_EXE_NAMES if generation == GENERATION_V6 else _V5_EXE_NAMES
+    search_roots = [tool_dir]
+    subdir = _GENERATION_SUBDIR.get(generation)
+    if subdir:
+        search_roots.append(os.path.join(tool_dir, subdir))
     for root in search_roots:
         for name in names:
             path = os.path.join(root, name)
             if os.path.isfile(path):
                 return path
     return None
+
+
+def _build_flash_argv(
+    exe: str, generation: str, command: str, boot_mode: str, *,
+    da_file: "str | None" = None,
+    scatter_file: "str | None" = None,
+    flash_xml_file: "str | None" = None,
+) -> list:
+    """按代际拼命令行（v1.3.19）。
+
+    V5 分支的 token 顺序与内容**与 1.3.18 逐字一致**（在用 552 刷机计划零变化）。
+    两代 `-h` 实测 `-b` 都是 `--reboot` 布尔，`auto` 是被工具忽略的位置参数；
+    本版沿用现场已验证的手工命令形态，不改任何一侧。
+    """
+    if generation == GENERATION_V6:
+        if not flash_xml_file:
+            raise ValueError("flash_xml_file is required for tool_generation v6")
+        return [exe, "-c", command, "-f", flash_xml_file, "-b", boot_mode]
+    if not da_file or not scatter_file:
+        raise ValueError("da_file and scatter_file are required for tool_generation v5")
+    return [exe, "-c", command, "-d", da_file, "-s", scatter_file, "-b", boot_mode]
 
 
 def _scan_output_for_verdict(stdout: str, stderr: str):
@@ -1150,14 +1273,66 @@ def _load_json_file(path: str):
     return data if isinstance(data, dict) else None
 
 
+def _manifest_generation(manifest: dict) -> "tuple[str | None, str | None]":
+    """manifest 声明的刷机代际（v1.3.19）。缺省 v5；未知取值返回错误。
+
+    旧 manifest（552/553 在用的全部版本目录）没有 `tool_generation` 键，
+    缺省判 v5 即与 v1.3.18 行为逐字一致；写了别的值不能猜——v6 固件用
+    v5 命令行跑必定在刷机窗口里失败。
+    """
+    raw = manifest.get("tool_generation")
+    if raw is None or str(raw).strip() == "":
+        return GENERATION_V5, None
+    generation = str(raw).strip().lower()
+    if generation not in _TOOL_GENERATIONS:
+        return None, (
+            f"manifest.json tool_generation {raw!r} is not supported; "
+            f"known generations: {', '.join(_TOOL_GENERATIONS)}"
+        )
+    return generation, None
+
+
+def _resolve_generation(args: dict, manifest: "dict | None") -> "tuple[str | None, str | None]":
+    """代际优先级：step 参数 > manifest > v5（v1.3.19）。
+
+    参数档只给显式 `firmware_dir` 分支救急用（现场先拿到一包没有 manifest 的
+    V6 固件时，不必等运维补文件）；常规路径是 manifest——代际属于固件包。
+    """
+    raw = str(args.get("tool_generation") or "").strip()
+    if raw:
+        generation = raw.lower()
+        if generation not in _TOOL_GENERATIONS:
+            return None, (
+                f"param tool_generation {raw!r} is not supported; "
+                f"known generations: {', '.join(_TOOL_GENERATIONS)}"
+            )
+        return generation, None
+    return _manifest_generation(manifest or {})
+
+
 def _load_manifest(firmware_dir: str) -> "tuple[dict | None, str | None]":
-    """读版本目录的 manifest.json；(manifest, error) 二选一。"""
+    """读版本目录的 manifest.json；(manifest, error) 二选一。
+
+    v1.3.19：按代际校验必备的下载入口物——v5 必须给 scatter+DA，v6 必须给
+    `flash_xml_file`（DA 与 scatter 由 flash.xml 内部引用，命令行不再给）。
+    v6 的 manifest 里再写 scatter_file/da_file 不参与命令行拼接，不算错误。
+    """
     path = os.path.join(firmware_dir, _MANIFEST_NAME)
     if not os.path.isfile(path):
         return None, None
     data = _load_json_file(path)
     if data is None:
         return None, f"manifest.json is missing or malformed: {path}"
+    generation, err = _manifest_generation(data)
+    if err:
+        return None, err
+    if generation == GENERATION_V6:
+        if not (data.get("flash_xml_file") or ""):
+            return None, (
+                "manifest.json must define flash_xml_file for tool_generation "
+                f"v6: {path}"
+            )
+        return data, None
     scatter = data.get("scatter_file") or ""
     da = data.get("da_file") or ""
     if not scatter or not da:
@@ -1172,8 +1347,9 @@ def _resolve_route(args: dict) -> "tuple[dict | None, str | None]":
 
     返回 (route, error)。route 字段：
       decided_by: "params"（显式 firmware_dir）| "fingerprint"（指纹路由）
-      model / family / version / version_prop / firmware_dir / da_file /
-      scatter_file / manifest_path
+      model / family / version / version_prop / firmware_dir /
+      tool_generation / da_file / scatter_file / flash_xml_file / manifest_path
+      （v6 的 da_file/scatter_file 为 None，入口物是 flash_xml_file；v5 反之）
     version 为 None 表示无比对基准（显式目录且无 manifest）。
     """
     serial = os.environ.get("STP_DEVICE_SERIAL", "")
@@ -1194,17 +1370,34 @@ def _resolve_explicit_dir(args: dict, firmware_dir_raw: str) -> "tuple[dict | No
     if err:
         return None, err
 
-    da_raw = str(args.get("da_file") or "").strip()
-    scatter_raw = str(args.get("scatter_file") or "").strip()
-    da_name = da_raw or (manifest or {}).get("da_file") or ""
-    scatter_name = scatter_raw or (manifest or {}).get("scatter_file") or ""
-    if not da_name:
-        return None, "da_file is required (param or manifest.json)"
-    if not scatter_name:
-        return None, "scatter_file is required (param or manifest.json)"
+    generation, err = _resolve_generation(args, manifest)
+    if err:
+        return None, err
 
-    da_file = _resolve_under(firmware_dir, da_name)
-    scatter_file = _resolve_under(firmware_dir, scatter_name)
+    da_file = scatter_file = flash_xml_file = None
+    if generation == GENERATION_V6:
+        xml_name = (
+            str(args.get("flash_xml_file") or "").strip()
+            or (manifest or {}).get("flash_xml_file") or ""
+        )
+        if not xml_name:
+            return None, (
+                "flash_xml_file is required (param or manifest.json) for "
+                "tool_generation v6"
+            )
+        flash_xml_file = _resolve_under(firmware_dir, xml_name)
+    else:
+        da_raw = str(args.get("da_file") or "").strip()
+        scatter_raw = str(args.get("scatter_file") or "").strip()
+        da_name = da_raw or (manifest or {}).get("da_file") or ""
+        scatter_name = scatter_raw or (manifest or {}).get("scatter_file") or ""
+        if not da_name:
+            return None, "da_file is required (param or manifest.json)"
+        if not scatter_name:
+            return None, "scatter_file is required (param or manifest.json)"
+
+        da_file = _resolve_under(firmware_dir, da_name)
+        scatter_file = _resolve_under(firmware_dir, scatter_name)
     version = (manifest or {}).get("version")
     version_prop = (manifest or {}).get("version_prop") or _DEFAULT_VERSION_PROP
 
@@ -1215,8 +1408,10 @@ def _resolve_explicit_dir(args: dict, firmware_dir_raw: str) -> "tuple[dict | No
         "version": version,
         "version_prop": version_prop,
         "firmware_dir": firmware_dir,
+        "tool_generation": generation,
         "da_file": da_file,
         "scatter_file": scatter_file,
+        "flash_xml_file": flash_xml_file,
         "manifest_path": (
             os.path.join(firmware_dir, _MANIFEST_NAME) if manifest else None
         ),
@@ -1364,6 +1559,19 @@ def _resolve_by_fingerprint(
             f"{version} under {firmware_dir}"
         )
 
+    # 路由模式下一代际**只认 manifest**：代际属于固件包，不接受计划参数按机型
+    # 传参（ADR-0029 v2「执行差异归脚本路由」+ 新脚本评审 checklist 第 1 条）。
+    generation, err = _manifest_generation(manifest)
+    if err:
+        return None, err
+    if generation == GENERATION_V6:
+        da_file = scatter_file = None
+        flash_xml_file = _resolve_under(firmware_dir, manifest["flash_xml_file"])
+    else:
+        da_file = _resolve_under(firmware_dir, manifest["da_file"])
+        scatter_file = _resolve_under(firmware_dir, manifest["scatter_file"])
+        flash_xml_file = None
+
     route = {
         "decided_by": "fingerprint",
         "model": model,
@@ -1371,8 +1579,10 @@ def _resolve_by_fingerprint(
         "version": manifest_version,
         "version_prop": manifest.get("version_prop") or _DEFAULT_VERSION_PROP,
         "firmware_dir": firmware_dir,
-        "da_file": _resolve_under(firmware_dir, manifest["da_file"]),
-        "scatter_file": _resolve_under(firmware_dir, manifest["scatter_file"]),
+        "tool_generation": generation,
+        "da_file": da_file,
+        "scatter_file": scatter_file,
+        "flash_xml_file": flash_xml_file,
         "manifest_path": os.path.join(firmware_dir, _MANIFEST_NAME),
     }
     return route, None
@@ -1573,27 +1783,54 @@ def main() -> None:
         })
         return
 
+    generation = route.get("tool_generation") or GENERATION_V5
     da_file = route["da_file"]
     scatter_file = route["scatter_file"]
+    flash_xml_file = route.get("flash_xml_file")
     firmware_dir = route["firmware_dir"]
-    if not os.path.isfile(da_file):
-        _output(False, error_message=f"da_file not found: {da_file}",
+    if generation == GENERATION_V6:
+        # V6 的入口物只有一件事：flash.xml（DA 与 scatter 由它内部引用）。
+        # 校验对象与命令行实际传的东西保持一致，不去查 flash.xml 里引用的文件
+        # 是否存在——那是工具的 XML schema 校验职责（现场日志：「XML schema
+        # validation passed!」），脚本重复一遍只会把失败点后挪、不改变结果。
+        if not flash_xml_file:
+            _output(False, error_message=(
+                f"flash_xml_file missing for tool_generation {generation}"),
                 metrics={"route": route, "version_check": version_check})
-        return
-    if not os.path.isfile(scatter_file):
-        _output(False, error_message=f"scatter_file not found: {scatter_file}",
-                metrics={"route": route, "version_check": version_check})
-        return
+            return
+        if not os.path.isfile(flash_xml_file):
+            _output(False, error_message=f"flash_xml_file not found: {flash_xml_file}",
+                    metrics={"route": route, "version_check": version_check})
+            return
+    else:
+        if not os.path.isfile(da_file):
+            _output(False, error_message=f"da_file not found: {da_file}",
+                    metrics={"route": route, "version_check": version_check})
+            return
+        if not os.path.isfile(scatter_file):
+            _output(False, error_message=f"scatter_file not found: {scatter_file}",
+                    metrics={"route": route, "version_check": version_check})
+            return
 
-    tool_dir = _locate_flash_tool_dir(args.get("flash_tool_dir"))
+    if generation == GENERATION_V6:
+        tool_dir = _locate_flash_tool_v6_dir(
+            args.get("flash_tool_v6_dir"),
+            _locate_flash_tool_dir(args.get("flash_tool_dir")),
+        )
+        dir_error = f"flash_tool_v6_dir not found: {tool_dir}"
+    else:
+        tool_dir = _locate_flash_tool_dir(args.get("flash_tool_dir"))
+        dir_error = f"flash_tool_dir not found: {tool_dir}"
     if not os.path.isdir(tool_dir):
-        _output(False, error_message=f"flash_tool_dir not found: {tool_dir}",
+        _output(False, error_message=dir_error,
                 metrics={"route": route, "version_check": version_check})
         return
-    flash_tool_exe = _pick_flash_tool_exe(tool_dir)
+    flash_tool_exe = _pick_flash_tool_exe(tool_dir, generation)
     if not flash_tool_exe:
-        _output(False, error_message=f"flash_tool executable not found under {tool_dir}",
-                metrics={"route": route, "version_check": version_check})
+        _output(False, error_message=(
+            f"flash_tool executable not found under {tool_dir} "
+            f"(tool_generation {generation})"),
+            metrics={"route": route, "version_check": version_check})
         return
 
     command = args.get("command") or "firmware-upgrade"
@@ -1644,7 +1881,10 @@ def main() -> None:
     # "bootloader"/"fastboot" 显式选择热重启直达模式。
     reboot_target = str(args.get("reboot_target") or "").strip().lower() or "normal"
 
-    cmd = [flash_tool_exe, "-c", command, "-d", da_file, "-s", scatter_file, "-b", boot_mode]
+    cmd = _build_flash_argv(
+        flash_tool_exe, generation, command, boot_mode,
+        da_file=da_file, scatter_file=scatter_file, flash_xml_file=flash_xml_file,
+    )
     subprocess_env = _build_subprocess_env(os.path.dirname(flash_tool_exe))
 
     # ── v1.3.0：环境预检（拿锁前短路，硬失败信息直指修复动作）────────
@@ -1946,8 +2186,10 @@ def main() -> None:
         "device_reenumerated": reenumerated,
         "exit_code": final_rc,
         "command_argv": cmd,
+        "tool_generation": generation,
         "da_file": da_file,
         "scatter_file": scatter_file,
+        "flash_xml_file": flash_xml_file,
         "firmware_dir": firmware_dir,
         "route": route,
         "version_check": version_check,

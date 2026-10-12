@@ -67,7 +67,8 @@
 | `STP_AGENT_SCRIPT_PACKAGES` | **仅控制面**：上述开关的源键，hot-update 写成无前缀键（空值不推）。切 `on` 前先 `python tools/dev/check_script_packages.py --publish --packages-root <STP_AEE_NFS_ROOT>/packages` |
 | `STP_PACKAGES_ROOT` | **可选（Agent + 控制面）**：站点包源覆盖；缺省派生自 `{STP_AEE_NFS_ROOT}/packages`（#3075 C4：每站中心存储，与过渡 `tools/` 物理分开）。ADR-0051 Phase 3 起控制面 `POST /scripts/scan` 也从这里读包注册 `script` 行 |
 | `STP_TOOL_MANIFEST` | **可选（控制面）**：Git 唯一事实源 `tool_manifest.json` 路径覆盖（测试 / 非仓根部署树）；缺省仓根或 bundle 根。scan、零引用巡检、模板 pin 测试的「版本 head」都从它读 |
-| `STP_FLASH_TOOL_DIR` | **引擎按步注入（Agent 步骤子进程）**：SP Flash Tool 包根。flash 族在用版本（flash_firmware 1.3.18 / flash_preflight 1.0.6）在包内 `requires_tools` 声明 `flashtool@1.2444.00.100`，引擎经 `tools_cache` 核验后注入本步 env（fail-closed，不回退主机值；ADR-0051 v1.7 D7）。**hot-update 渲染已撤**（2026-09-26，D7 第 4 片，台账 `flash-tool-dir-env-injection` 结项）；存量主机 `.env` 旧行惰性（被步骤注入覆盖，读主机值的旧版本已 retired）。运维不配置 |
+| `STP_FLASH_TOOL_DIR` | **引擎按步注入（Agent 步骤子进程）**：SP Flash Tool **V5** 包根。flash 族在用版本（flash_firmware 1.3.18 / flash_preflight 1.0.6；1.3.19 / 1.0.7 起两代并存）在包内 `requires_tools` 声明 `flashtool@1.2444.00.100`，引擎经 `tools_cache` 核验后注入本步 env（fail-closed，不回退主机值；ADR-0051 v1.7 D7）。**hot-update 渲染已撤**（2026-09-26，D7 第 4 片，台账 `flash-tool-dir-env-injection` 结项）；存量主机 `.env` 旧行惰性（被步骤注入覆盖，读主机值的旧版本已 retired）。运维不配置 |
+| `STP_FLASH_TOOL_V6_DIR` | **引擎按步注入（Agent 步骤子进程）**：SP Flash Tool **V6** 包根（入口 `SPFlashToolV6`）。`flash_firmware@1.3.19` / `flash_preflight@1.0.7` 声明 `flashtool_v6@1.2444.00.100` 后由引擎整包核验注入，语义与 `STP_FLASH_TOOL_DIR` 同（fail-closed，不回退主机值；ADR-0051 v1.7 D7）。535 / MLD_NX2 等 V6 代际机型用这一代工具；V5 机型不读这个键。**包未发布时声明它的脚本版本整步 exit 2**——发布顺序见 [刷机 Runbook §7](../operations/honor-flash-runbook.md)。运维不配置 |
 | `STP_TOOLS_CACHE_ROOT` | **可选（Agent）**：本机解包缓存根覆盖；缺省派生自 `{AGENT_INSTALL_DIR}/tools_cache` |
 | `STP_JIRA_BASE_URL` / `STP_JIRA_TOKEN` | **可选**：JIRA REST 基址与 Bearer token（#710）。配置后 dedup 提单前对 `jira_project_key` 做一次存在性探测（`GET /rest/api/2/project/{key}`），404 记 WARNING 不阻断；未配置则跳过探测（保持 best-effort） |
 | `STP_AGENT_UNISOC_LOG_SCAN_PYTHON` / `_SCRIPT` | **仅控制面**：展锐采集工具（`Monkey-Log-Scan-GT-SPRD`）路径的源键，hot-update 写成 `STP_UNISOC_LOG_SCAN_*`（ADR-0032） |
@@ -522,6 +523,7 @@
 | `STP_DEVICE_SERIAL` | 脚本运行时注入：Agent 为脚本进程注入设备序列号 |
 | `STP_EXTRACT_BACKEND` | 一次性提取脚本（jira_extract_run52）的 `--backend` 等价项，无内置默认地址 |
 | `STP_FLASH_TOOL_DIR` | 工具目录注入键：引擎按脚本包 requires_tools 声明逐步注入（ADR-0051 v1.7 D7）；hot-update 渲染已撤（D7 第 4 片，台账结项），运维不配置 |
+| `STP_FLASH_TOOL_V6_DIR` | 同 `STP_FLASH_TOOL_DIR`，指向 SP Flash Tool V6 包（`flashtool_v6@1.2444.00.100`，535/MLD_NX2 代际）；同样由引擎按声明注入，运维不配置 |
 | `STP_INITIAL_ADMIN_PASSWORD` | 站点安装链 S3 受控首管理员引导的一次性入参（tools/site_config 以子进程环境注入，密码只经环境）；刻意不进 .env 模板，避免凭据落盘 |
 | `STP_INITIAL_ADMIN_USER` | 同 STP_INITIAL_ADMIN_PASSWORD（受控首管理员引导的用户名入参） |
 | `STP_NOTIFY_SAQ_RETRIES` | 读取点仅存在于测试（断言 _int_env 行为） |

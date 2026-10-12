@@ -215,8 +215,10 @@ def _wire_happy_path(monkeypatch, fw_ver: Path, *, boot_stable_ok: bool):
     monkeypatch.setattr(ff, "_precheck_environment",
                         lambda exe, adb, need_adb, strict:
                         (True, {"items": [], "warnings": []}))
+    # v1.3.19 起 _pick_flash_tool_exe 多一个代际参数（默认仍是 v5）
     monkeypatch.setattr(ff, "_pick_flash_tool_exe",
-                        lambda tool_dir: str(fw_ver / "flash_tool"))
+                        lambda tool_dir, generation=ff.GENERATION_V5:
+                        str(fw_ver / "flash_tool"))
     monkeypatch.setattr(ff, "_is_linux", lambda: True)
     monkeypatch.setattr(ff, "_port_for_serial",
                         lambda serial, base=ff._SYSFS_USB_BASE: "1-7.3.3")

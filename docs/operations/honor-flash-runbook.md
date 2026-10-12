@@ -1,6 +1,7 @@
 # Honor 刷机 Runbook（MLD 先行）
 
-> 配套设计：[`docs/design/2026-08-honor-flash-firmware-routing.md`](../design/2026-08-honor-flash-firmware-routing.md)。
+> 配套设计：[`docs/design/2026-08-honor-flash-firmware-routing.md`](../design/2026-08-honor-flash-firmware-routing.md)；
+> V6 代际（535 / MLD_NX2）见 [`docs/design/2026-10-mtk-spflashtool-v6-generation.md`](../design/2026-10-mtk-spflashtool-v6-generation.md) 与本文 §7。
 > 本文是操作手册：固件上架 → 建计划 → 单台验证 → 放量。
 
 ## 0. 前置条件
@@ -10,6 +11,8 @@
   文内出现的版本号是 **2026-09-15 复核值 `v1.3.16`**。
 - 当前目标 Agent fleet 已 hot-update / restart 到含 v1.3.x 的 code revision。
 - 目标固件刷机包已从研发渠道拿到（解压后含 scatter 与 DA 文件）。
+- 目标机型走 V6 代际时（§7）：`flashtool_v6` 工具包**必须**先发布到站点 `packages/`，
+  再 scan 注册 `flash_firmware@1.3.19` / `flash_preflight@1.0.7`。
 - 串行刷多台**首刷**设备时，脚本会在每台刷完后多等一段「boot 稳定窗口」
   （默认 20s，`boot_stabilize_seconds`，v1.3.7 起）；指纹只取 MTK 口（v1.3.10 起收窄），
   邻机非 MTK USB 抖动不会重置窗口
@@ -163,3 +166,100 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/plans/<PLAN_ID>/run -H "$AUTH" \
 - **UNISOC（Z258）不适用**：SP Flash Tool 只覆盖 MTK；Z258 刷机另行立项。
 - **吞吐上限 = 每 host 同时 1 台**：需要并行时按 USB 控制器分片锁是后续课题
   （设计文档 §8 重议触发）。
+
+## 7. V6 代际机型（535 / MLD_NX2）
+
+适用条件：目标机型的固件包由 SP Flash Tool **V6** 驱动（`download_agent/flash.xml` 形态），
+例如 MLD_NX2（板级 P535AA / MT6835）。本节替换 §1 的上架动作；§2–§5 的建计划、单台验证
+与放量流程不变。
+
+> 警告：`flash_firmware@1.3.19` 与 `flash_preflight@1.0.7` 在包内声明了 `flashtool_v6` 工具
+> 依赖（ADR-0051 D7）。任何人不得在 `flashtool_v6` 包发布之前 scan 注册或把 Plan 重指到这两个
+> 版本——包未就位时**所有**刷机步骤（含 552 的 V5 计划）会在派发前 exit 2。
+
+1. 发布 V6 工具包（源 = 中心存储 selector 解压物里的 `SP_Flash_Tool_V6`，包根取该目录内容）。
+
+   ```bash
+   python tools/dev/package_tool_asset.py \
+     --src <中心存储>/SP_Flash_Tool_Selector_exe_Linux_v1.2444.00.100/SP_Flash_Tool_V6 \
+     --name flashtool_v6 --version 1.2444.00.100 --kind tool --python-absent \
+     --script-relative SPFlashToolV6 --write-manifest \
+     --packages-root /mnt/stp-aee/packages
+   ```
+
+   预期：`packages/flashtool_v6/1.2444.00.100.tar.gz` 存在，且
+   `sha256sum` 等于 `tool_manifest.json` 里 `flashtool_v6@1.2444.00.100` 的
+   `package_sha256`（2026-10-12 登记值
+   `3e3bc805a6376a989a3e3113b92ae259549bcef45dd219a556a5c2b72181e53e`）。
+2. 读一遍目标机型的固件目录，确认入口物在位。
+
+   ```bash
+   ls <firmware>/<P535AA_...>/download_agent/flash.xml
+   ```
+
+   预期：文件存在。V6 的 DA 与 scatter 由 `flash.xml` 内部引用（`<dagent>` /
+   `<scatter>`，按 flash.xml 所在目录相对解析），上架时**不得**把它们拆成命令行参数。
+3. 在真机上取代际相关的三个值（放量前必做一次，每台补新机型时重做）。
+
+   ```bash
+   adb -s <serial> shell getprop ro.product.model
+   adb -s <serial> shell getprop ro.build.version.incremental
+   ```
+
+   预期：model 值等于 `MLD_NX2` 或 `MLD-NX2`；不等于二者时停止本流程，按设计文档 §6 补
+   路由表并发新版本。incremental 值即下一步 `version` 字段的唯一口径（目录名带 `_FLASH`
+   等打包后缀时不要照抄目录名）。
+4. 把固件包放入 `{STP_FLASH_FIRMWARE_ROOT}/MLD/<version>/`（`<version>` = 第 3 步读到的
+   incremental 值），并写 manifest.json：
+
+   ```bash
+   ROOT=/mnt/stp-aee/firmware
+   VER=<第 3 步的 incremental 值>
+   mkdir -p "$ROOT/MLD/$VER"
+   # 固件包内容放进 $ROOT/MLD/$VER/（含 download_agent/flash.xml）
+   cat > "$ROOT/MLD/$VER/manifest.json" <<'EOF'
+   {
+     "family": "MLD",
+     "version": "<同一个 incremental 值>",
+     "version_prop": "ro.build.version.incremental",
+     "tool_generation": "v6",
+     "flash_xml_file": "download_agent/flash.xml",
+     "models": ["MLD_NX2", "MLD-NX2"]
+   }
+   EOF
+   ```
+
+   预期：`cat "$ROOT/MLD/$VER/manifest.json"` 里 `version` 与目录名一致——不一致时
+   `flash_firmware` 会 fail-fast（防放错目录）。v6 的 manifest **不需要** `scatter_file`
+   与 `da_file`；写了也不参与 V6 命令行拼接。
+5. 更新族级版本指针（同族多机型并存，per-model 映射；不要整体覆盖别人的键）：
+
+   ```bash
+   cat /mnt/stp-aee/firmware/MLD/latest.json
+   ```
+
+   预期：改后仍保留 `MLD_LX2` / `MLD_LX3` 键，并新增
+   `"MLD_NX2": "<version>"`（`MLD-NX2` 连字符拼写由脚本自动互转，二选一即可）。
+6. scan 注册脚本新版本，再重指或新建 Plan（顺序不可颠倒，见上方警告）。
+
+   ```bash
+   curl -s -X POST "$BASE/api/v1/scripts/scan" -H "Authorization: Bearer $TOKEN"
+   ```
+
+   预期：响应 `created` 含 `flash_firmware@1.3.19` / `flash_preflight@1.0.7`，
+   `conflicts` 为空。随后按 §3 建计划（`script:flash_preflight` + `script:flash_firmware`
+   两步都指向新版本），并按 §4 单台验证。
+7. 单台验证时核对四个 V6 判据（任一不符即回到设计文档 §6，不得放量）：
+   - `step_trace` 的 `metrics.route.tool_generation` 为 `v6`；
+   - `metrics.command_argv` 是 `[... , "-c", "firmware-upgrade", "-f", "<...>/download_agent/flash.xml", "-b", "auto"]`，
+     且不含 `-d` / `-s`；
+   - `metrics.post_flash_verify` 的版本回读与 manifest 一致；
+   - 刷机窗口内该机型的 DA 态 USB pid 落在门控集合
+     （`flash_firmware._FLASH_STAGE_PIDS`）里：
+
+     ```bash
+     lsusb -d 0e8d: | awk '{print $6}'
+     ```
+
+   预期：pid 属于 `0003/2000/2001/201c/2026/3000`。出现新 pid 时同 host 邻机的刷机态口
+   不会被隐藏，必须先把该 pid 加进集合并发新版本，再放量。

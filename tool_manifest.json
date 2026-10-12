@@ -519,6 +519,14 @@
           "retired": false,
           "script": "flash_firmware.py",
           "version": "1.3.18"
+        },
+        {
+          "artifact": "packages/flash_firmware/1.3.19.tar.gz",
+          "package_sha256": "2beb8b253e14f11c62171b087a0e0dedec49b43a2a7553c1832430c3a5165429",
+          "python": null,
+          "retired": false,
+          "script": "flash_firmware.py",
+          "version": "1.3.19"
         }
       ]
     },
@@ -580,6 +588,14 @@
           "retired": false,
           "script": "flash_preflight.py",
           "version": "1.0.6"
+        },
+        {
+          "artifact": "packages/flash_preflight/1.0.7.tar.gz",
+          "package_sha256": "82f98e18224b70b1919b33f7cfa2adbc9009b465762dfe20ba155db3c5902710",
+          "python": null,
+          "retired": false,
+          "script": "flash_preflight.py",
+          "version": "1.0.7"
         }
       ]
     },
@@ -592,6 +608,19 @@
           "python": null,
           "retired": false,
           "script": "flash_tool",
+          "version": "1.2444.00.100"
+        }
+      ]
+    },
+    "flashtool_v6": {
+      "kind": "tool",
+      "versions": [
+        {
+          "artifact": "packages/flashtool_v6/1.2444.00.100.tar.gz",
+          "package_sha256": "3e3bc805a6376a989a3e3113b92ae259549bcef45dd219a556a5c2b72181e53e",
+          "python": null,
+          "retired": false,
+          "script": "SPFlashToolV6",
           "version": "1.2444.00.100"
         }
       ]

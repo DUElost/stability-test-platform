@@ -4,12 +4,21 @@
 同 host 并发由 /tmp flock 去重）。一次性运维型步骤：修完即过，host 层
 系统状态在两次派发之间不会自行变化。
 
-逐项检查（v1.0.4：dialout 项改判「该用户能不能写」；v1.0.3：udev 规则判据改
-**语义双形态**；v1.0.2：不再用 `sudo -n sh -c`）：
+逐项检查（v1.0.7：V6 代际两面；v1.0.4：dialout 项改判「该用户能不能写」；
+v1.0.3：udev 规则判据改**语义双形态**；v1.0.2：不再用 `sudo -n sh -c`）：
     qt-libs      Debian 包 ×5（dpkg 断言）。缺包 → 明确失败 + 指引
                  （apt 安装归 provisioning/install 链，运行期不装包）
+    qt-libs-v6   SP Flash Tool **V6** 的运行库（GL/KRB5 面 ×7，v1.0.7）。
+                 **warning-only**：这组包只在跑 v6 固件时才必要，
+                 做成硬门会让 552-only 主机被无关包名阻断；真正需要它时
+                 `flash_firmware` 的 `shared-libs` 预检会硬失败并列出缺库名。
+                 缺位处置仍归 provisioning（`agent_flash_prereq_packages_v6`）
     flashtool    资源目录入口存在且可执行（缺执行位则 chmod；属主即 agent
                  用户，无需提权）
+    flashtool-v6 V6 代际入口（`SPFlashToolV6`）存在且可执行（v1.0.7）。
+                 工具包由引擎按 `requires_tools` 注入并整包核验（ADR-0051
+                 v1.7 D7），所以本项失败=站点包未发布/未就位——**判失败**，
+                 别把断链留到刷机窗口里才发现
     dialout      当前用户在**本次运行时**能否写 ttyACM = 进程组集合含 dialout
                  （`/etc/group` 的持久成员只用于给建议），或规则是旧形态 0666
                  （对任何本地用户放行，记 warning）。0660 规则只对 dialout
@@ -37,6 +46,18 @@ STP_STEP_PARAMS schema:
                            host 跳过包类检查，改记 warning)
     dialout_user           : str  (optional, default "android")
     locales                : 预留，无副作用（与 oobe_skip 对齐命名习惯）
+v1.0.7 相对 v1.0.6（535 / MLD_NX2：SP Flash Tool V6 代际）：
+  - 新增 `flashtool-v6`（硬门）与 `qt-libs-v6`（warning-only）两项，判据来自
+    本机对 `SP_Flash_Tool_V6/SPFlashToolV6` 的 `ldd` 实测：V6 比 V5 多需要
+    GL 面（libGL/libGLX/libGLdispatch）与 KRB5 面（libgssapi_krb5 及其依赖），
+    而 V5 的 Qt4 X 面（libICE/libSM/libXrender）V6 不再需要——两代**不互相
+    替代**，所以是「加一项」而不是「换包名」。
+  - V6 入口解析走引擎注入的 `STP_FLASH_TOOL_V6_DIR`（本族 `requires_tools` 已
+    声明 `flashtool_v6`），并保留 selector 原样解压布局（V5 根的兄弟目录）作
+    回退，与 `flash_firmware` 同判据；解析不到即判失败并指名路径。
+  - 既有六项（qt-libs / flashtool / udev-rule / dialout-group / priv-face /
+    nfs-firmware-pointer）的判据与条目名**一字不改**——在用 552 刷机计划的
+    step_trace 消费面不变。
 v1.0.4 相对 v1.0.3（#2353：可写性判据与「规则在位」解耦）：
   - 新增 `_udev_rule_form()` 返回在位形态（`0666` / `0660` / 无），
     `_udev_rule_ok()` 改由它派生——udev-rule 项与 wrapper 修复流语义不变。
@@ -94,6 +115,15 @@ _DEFAULT_PACKAGES = (
 _DEFAULT_FLASHTOOL_REL = (
     "..", "..", "..", "resources", "flashtool",
     "SP_Flash_Tool_Selector_exe_Linux_v1.2444.00.100",
+)
+#: V6 代际入口名与 selector 原样解压布局的子目录名（与 flash_firmware 同判据）。
+_V6_EXE_NAMES = ("SPFlashToolV6", "SPFlashToolV6.exe")
+_V6_SUBDIR = "SP_Flash_Tool_V6"
+#: V6 运行库（`ldd SPFlashToolV6` 相对 V5 多出的系统依赖面；Qt5 本体在包内
+#: `lib/`，不是系统前置）。装包归 provisioning：`agent_flash_prereq_packages_v6`。
+_V6_PACKAGES = (
+    "libgl1", "libglx0", "libglvnd0",
+    "libgssapi-krb5-2", "libkrb5-3", "libcom-err2", "libkeyutils1",
 )
 
 
@@ -299,6 +329,44 @@ def _locate_flashtool() -> "str | None":
     return None
 
 
+def _flashtool_v6_candidates() -> "list[str]":
+    """V6 工具根候选：注入 env > V5 根内/兄弟的 selector 布局 > 族树相对。
+
+    与 `flash_firmware._locate_flash_tool_v6_dir` 同一优先级，两侧判据不得分叉
+    （preflight 说「在位」而刷机步找不到，等于假通过）。
+    """
+    candidates: "list[str]" = []
+    env_dir = (os.environ.get("STP_FLASH_TOOL_V6_DIR") or "").strip()
+    if env_dir:
+        candidates.append(env_dir)
+    for v5_root in _flashtool_candidates():
+        candidates.append(os.path.join(v5_root, _V6_SUBDIR))
+        candidates.append(os.path.join(
+            os.path.dirname(v5_root.rstrip("/")), _V6_SUBDIR))
+    base = os.path.dirname(os.path.abspath(__file__))
+    candidates.append(os.path.normpath(os.path.join(
+        base, *_DEFAULT_FLASHTOOL_REL, _V6_SUBDIR)))
+    return candidates
+
+
+def _locate_flashtool_v6() -> "tuple[str | None, str | None]":
+    """返回 (exe, 在位根)。一个在位根都没有时返回 (None, None)＝无从检查。
+
+    「无从检查」不是失败：V6 工具包由引擎按 ``requires_tools`` 整包核验后注入，
+    包未发布/未拉到时**本步根本不会启动**（派发前 exit 2）。到得了这里的
+    「无根」只剩裸环境与开发态，判失败只会把它伪装成主机问题。
+    """
+    for candidate in _flashtool_v6_candidates():
+        if not os.path.isdir(candidate):
+            continue
+        for name in _V6_EXE_NAMES:
+            exe = os.path.join(candidate, name)
+            if os.path.isfile(exe):
+                return exe, candidate
+        return None, candidate
+    return None, None
+
+
 def _acquire_lock(seq: "list[int]", timeout: int = 60) -> int:
     """O_NOFOLLOW 打开锁文件——防本地用户预建 symlink 指向可写文件被截断
     （PR-Agent #468 安全评审发现）。返回裸 fd，调用方负责 UNLOCK+close。
@@ -370,6 +438,23 @@ def main() -> None:
             f"missing: {','.join(missing)}；运行期不再安装（ADR-0037 D5，"
             "apt 归 provisioning/install 链）——补包后重跑本步"))
 
+    # ── ①b SP Flash Tool V6 运行库（warning-only，见 docstring 判据）────
+    v6_exe, v6_root = _locate_flashtool_v6()
+    v6_missing = [pkg for pkg in _V6_PACKAGES
+                  if _check_dpkg_installed(pkg) is False]
+    if v6_missing:
+        detail = (f"missing: {','.join(v6_missing)} —— V6 代际（535/NX2 等）刷机"
+                  "需要；provisioning 补包"
+                  "（agent_flash_prereq_packages_v6 / ensure_flash_prereqs）。"
+                  "本项不判失败：跑 v5 固件不需要这些包，真正跑 v6 时"
+                  "flash_firmware 的 shared-libs 预检会硬失败并列出缺库名")
+        metrics["warnings"].append(detail)
+        item("qt-libs-v6", True, detail=detail)
+    else:
+        item("qt-libs-v6", True,
+             detail="V6 运行库齐备" if v6_root else
+                    "V6 运行库齐备（本机未见 V6 工具根，包面由刷机步核验）")
+
     # ── ② flash_tool 在位 + 执行位 ───────────────────────────────────
     exe = _locate_flashtool()
     if exe is None:
@@ -388,6 +473,34 @@ def main() -> None:
                  detail="chmod +x applied")
     else:
         item("flashtool", False, detail="not executable (fix=false)")
+
+    # ── ②b SP Flash Tool V6 入口在位 + 执行位（v1.0.7，硬门）──────────
+    # 工具包由引擎按 requires_tools 注入并整包核验：解析不到入口 = 站点包
+    # 未发布/未就位（ADR-0051 D7），必须现在判失败并把断链说清楚，而不是等
+    # 刷机窗口里报 "flash_tool executable not found"。
+    if v6_root is None:
+        rec = item("flashtool-v6", True, detail=(
+            "未注入 STP_FLASH_TOOL_V6_DIR 且本机无 V6 工具根——本项无从检查"
+            "（工具包由引擎按 requires_tools 核验注入，未就位时派发前即 exit 2）"))
+        rec["skipped"] = True
+    elif v6_exe is None:
+        item("flashtool-v6", False, detail=(
+            f"SPFlashToolV6 not found under {v6_root} "
+            "(检查站点 packages/flashtool_v6/<version>.tar.gz 是否已发布、"
+            "包内布局是否以 SPFlashToolV6 为入口)"))
+    elif os.access(v6_exe, os.X_OK):
+        item("flashtool-v6", True, detail=v6_root or "")
+    elif fix_mode:
+        try:
+            os.chmod(v6_exe, 0o755)
+        except OSError as exc:
+            item("flashtool-v6", False, detail=f"chmod failed: {exc}")
+        else:
+            item("flashtool-v6", os.access(v6_exe, os.X_OK), fixed=True,
+                 detail="chmod +x applied")
+    else:
+        item("flashtool-v6", False,
+             detail=f"{v6_exe} not executable (fix=false)")
 
     # ── ③ udev 规则（缺则经 wrapper 窄面修复；先于 dialout——dialout 的
     #     降级判定要读修复后的状态）────────────────────────────────────

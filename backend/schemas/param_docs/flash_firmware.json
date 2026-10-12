@@ -47,9 +47,9 @@
         "boot_mode"
       ],
       "label": "下载启动模式",
-      "meaning": "传给刷机工具的下载启动方式（以 -b 传入），默认 auto，由工具自行决定从哪种模式接管设备。",
+      "meaning": "传给刷机工具的 `-b` 参数（以 `-b <本值>` 拼接）。两代工具的 `-h` 都把 `-b` 定义为 `--reboot`（布尔：刷完重启设备），所以本值 `auto` 实际是被工具忽略的位置参数；脚本沿用现场已验证的手工命令形态，不在本参数上做取值校验。",
       "unit": "字符串",
-      "cautions": "取值域由刷机工具自身定义，平台不校验。",
+      "cautions": "留空或空串按默认 `auto` 传，不会让 `-b` 消失。取值域由刷机工具自身定义，平台不校验。",
       "sensitive": false
     },
     {
@@ -280,6 +280,83 @@
       "sensitive": false,
       "version_range": {
         "min_inclusive": "1.3.0"
+      }
+    },
+    {
+      "path": [
+        "tool_generation"
+      ],
+      "label": "刷机工具代际",
+      "meaning": "本次用哪一代 SP Flash Tool：v5 走 `flash_tool -d <DA> -s <scatter>`，v6 走 `SPFlashToolV6 -f <flash.xml>`。缺省取固件版本目录 manifest.json 的 tool_generation；manifest 没写这个键时按 v5，与 1.3.18 及更早版本的行为一致。",
+      "unit": "字符串（v5 或 v6）",
+      "cautions": "取值必须是 v5 或 v6，其它取值本步直接失败，不回落到 v5。走机型指纹路由时本参数不参与，代际只认 manifest.json：代际属于固件包，不得由计划按机型传参分化。",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "1.3.19"
+      }
+    },
+    {
+      "path": [
+        "flash_xml_file"
+      ],
+      "label": "V6 下载入口 flash.xml",
+      "meaning": "SP Flash Tool V6 的下载入口文件（以 `-f` 传入），通常是固件目录里的 `download_agent/flash.xml`。DA 与 scatter 由这个 XML 内部引用并按 XML 所在目录相对解析，命令行不再单独给 DA/scatter。仅在显式指定 firmware_dir 的路由分支里可由参数补缺；指纹路由时由 manifest.json 的 flash_xml_file 决定。",
+      "unit": "文件名（相对 firmware_dir）",
+      "cautions": "代际为 v6 时参数与 manifest 两处至少有一处给出本键，否则路由直接失败。本步只校验该文件存在，不校验它内部引用的 DA/scatter，那由工具的 XML schema 校验负责。",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "1.3.19"
+      }
+    },
+    {
+      "path": [
+        "flash_tool_v6_dir"
+      ],
+      "label": "V6 刷机工具目录",
+      "meaning": "SPFlashToolV6 可执行文件所在目录，优先级高于引擎按工具依赖声明注入的 STP_FLASH_TOOL_V6_DIR；只在代际为 v6 时参与解析。",
+      "unit": "主机侧目录路径",
+      "cautions": "建议留空：正常由 flashtool_v6 工具包注入包根（ADR-0051 D7 整包核验）。填了会绕过包面，指向不含 SPFlashToolV6 的目录时本步直接失败并在错误里指名该目录。",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "1.3.19"
+      }
+    },
+    {
+      "path": [
+        "flash_tool_dir"
+      ],
+      "label": "刷机工具目录（仅 V5 代际）",
+      "meaning": "V5 刷机工具可执行文件所在目录，优先级高于主机环境变量 STP_FLASH_TOOL_DIR 与工具依赖包注入。代际为 v6 时本键不参与 V6 入口解析（V6 用 flash_tool_v6_dir）。",
+      "unit": "主机侧目录路径",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "1.3.19"
+      }
+    },
+    {
+      "path": [
+        "da_file"
+      ],
+      "label": "DA 文件",
+      "meaning": "刷机工具的 Download Agent 文件名。仅在显式指定 firmware_dir 且代际为 v5 的路由分支里取用：给了就用它，没给则取该目录 manifest.json 里的 da_file。",
+      "unit": "文件名",
+      "sensitive": false,
+      "cautions": "走机型指纹路由时本参数不参与，DA 由固件目录的 manifest 决定；代际为 v6 时 DA 写在 flash.xml 内部，本键不参与命令行拼接。两处都没有时路由直接失败（da_file is required）。",
+      "version_range": {
+        "min_inclusive": "1.3.19"
+      }
+    },
+    {
+      "path": [
+        "scatter_file"
+      ],
+      "label": "scatter 文件",
+      "meaning": "刷机工具的分区散列表文件名。仅在显式指定 firmware_dir 且代际为 v5 的路由分支里取用：给了就用它，没给则取该目录 manifest.json 里的 scatter_file。",
+      "unit": "文件名",
+      "sensitive": false,
+      "cautions": "走机型指纹路由时本参数不参与，scatter 由固件目录的 manifest 决定；代际为 v6 时 scatter 写在 flash.xml 内部，本键不参与命令行拼接。两处都没有时路由直接失败。",
+      "version_range": {
+        "min_inclusive": "1.3.19"
       }
     }
   ]
