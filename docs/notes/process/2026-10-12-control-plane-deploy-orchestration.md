@@ -15,7 +15,7 @@ Class: process
   - 授权不写进 skill：授权由 Owner 在每次部署请求中给出；skill 只规定「没有授权就停在阶段 A 第 14 步」，
     以及 Harness 拦截时不得换工具重试。
   - §1 步 2 补四条：`--out` 必须是新目录；`DO-NOT-SWITCH.txt` 约定；bundle 内前端是构建时线上副本；
-    守卫 schema 检查回落 dev env。
+    守卫 schema 检查回落仓根 `.env.backend`。
   - §1.5 补「共享检出不得跑 `build:prod`」警告，依赖安装由软链共享检出的 `node_modules` 改为 `npm ci`。
   - 头部状态句与 §7 追加行：新增条目标 `⚠️待校对`，按「校准来自实跑」的规矩等真实部署跑通后解除。
 - `docs/operations/2026-08-29-post-review-deploy-runbook.md` 头部加过期指针：§1.3 的手动
@@ -24,13 +24,14 @@ Class: process
 本次核对出的事实（均附查法，见 Verification）：
 
 1. bundle 的 `frontend/dist-prod` 不是按目标提交构建的，而是复制构建源当时的同名目录，即共享检出里
-   正在服务的前端；nginx 不读 bundle 里这份。
+   正在服务的前端。本机 nginx 不读 bundle 里这份，但站点安装 S2 会把它落到部署根并由站点 nginx 服务（#3694）。
 2. 共享检出的 `frontend/dist-prod` 就是 nginx root；`build_bundle` 缺该目录时提示的
    `npm run build:prod` 在共享检出执行会清空线上目录。
 3. `build_bundle` 用 `copytree(dirs_exist_ok=True)` 合并复制：往已存在的 rev 目录构建会留下上游已删除的文件，
    并计入摘要。
-4. `check-deploy-readiness.py` 与 `check_alembic_at_head.py` 在环境变量缺失时回落到仓根 `.env.backend`，
-   D6 之后那是 dev 配置；不导出站点 env 就是对 dev 库给出通过结论。
+4. `check-deploy-readiness.py` 与 `check_alembic_at_head.py` 在环境变量缺失时回落到仓根 `.env.backend`。
+   D6 之后那是 dev 配置，可与站点 env 漂移，检查目标因此不受站点配置约束。2026-10-12 核对时两份文件的
+   `DATABASE_URL` 恰好相同，不导出时查的仍是生产库（#3693）。
 5. unit 的 `ExecStartPre` 精确校验 alembic 在 head（不带 `--allow-behind`）：迁移执行后把 `current`
    指回旧 rev 会启动失败，跨迁移回滚不能只靠重指 `current`。
 6. `GET /api/v1/hosts` 不带分页参数时仍按默认 `limit=50` 截断；fleet 超过 50 台时裸数组会漏主机。
@@ -47,7 +48,7 @@ Class: process
   `backend/services/script_retirement.py`（60 天冷却、最新活跃版本豁免），改用通用的阶段 A 第 9 步
   （列出新增迁移并逐个读 docstring）。
 - **在本 PR 修工具的 env 回落与 bundle 的前端语义**：不做，超出本次范围；SOP 给出正确的运行方式，
-  工具层的修正另行立项。
+  工具层的修正另行立项（#3693、#3694）。
 
 ## Verification
 
@@ -69,13 +70,17 @@ Class: process
   （`--allow-behind` 语义）、`systemctl cat stability-backend`（`ExecStartPre` 不带 `--allow-behind`）、
   `backend/api/routes/hosts.py`（`list_hosts` 默认 `limit=50`）、`backend/api/schemas/base.py`（`PaginatedResponse`）。
 - 阶段 B、C 未实跑（会改变生产状态），相关条目标 `⚠️待校对`。
+- 同日更正：首版把事实 1、4 写成「nginx 不读」「不导出就是对 dev 库给出通过结论」。随后只比较两份 env 的
+  `DATABASE_URL` 是否相等（未打印取值），结果相同；`tools/site_config/stages.py` 的 `stage_s2_release_env`
+  与 `deploy/control-plane/nginx/stability-platform.conf` 表明站点安装会服务 bundle 前端。两处已在后续 PR 中按实更正，
+  skill §7 追加了更正行。
 - 写作约定：新写与改动的句子按 `writing-conventions.md` §5 自查。
 - 测试与门禁结果见 PR 描述。
 
 ## Revisit
 
 - 下一次真实部署按 §0.5 跑通后，在 skill §7 追加校准行并解除 `⚠️待校对`；与现场不符处同 PR 修正。
-- 如果 `build_bundle` 改为按目标提交构建前端，或 nginx root 改指发布根，修订 §1 步 2 补充与 §1.5。
-- 如果两个检查工具不再回落到仓根 `.env.backend`，简化阶段 A 第 11 步前的警告。
+- 如果 `build_bundle` 改为按目标提交构建前端，或 nginx root 改指发布根（#3694），修订 §1 步 2 补充与 §1.5。
+- 如果两个检查工具不再回落到仓根 `.env.backend`（#3693），简化阶段 A 第 11 步前的警告。
 - 如果批次 issue 标题前缀（「批次 B」）或单元 PR 的 `Refs #` 约定变化，同步修订阶段 A 第 5 步。
 - fleet 超过 200 台时，阶段 C 第 6 步的分布统计改为分页累加。
