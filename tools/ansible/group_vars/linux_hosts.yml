@@ -105,12 +105,12 @@ agent_flash_prereq_packages:
 # V5 多出的 GL 面与 KRB5 面（Qt5 本体在包内 lib/，不是系统前置）。与
 # flash_preflight._V6_PACKAGES 同源；V5 五件不得被这组替代（两代并存期都要装）。
 agent_flash_prereq_packages_v6:
-  - libgl1
-  - libglx0
-  - libglvnd0
-  - libgssapi-krb5-2
-  - libkrb5-3
   - libcom-err2
+  - libgl1
+  - libglvnd0
+  - libglx0
+  - libgssapi-krb5-2
   - libkeyutils1
+  - libkrb5-3
 
 # 进程日志轮转（#2205）变量已移至 group_vars/all.yml（#2218：两面共享）。

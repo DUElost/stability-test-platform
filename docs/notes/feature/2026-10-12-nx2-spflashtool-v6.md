@@ -31,9 +31,9 @@ MLD_NX2（项目 535，板级 P535AA / MT6835）的刷机包由 **SP Flash Tool 
    参数覆盖（ADR-0029 v2「执行差异归脚本路由」）。
 6. `flash_preflight@1.0.7` 增两项：`flashtool-v6`（硬门，V6 工具根在位却找不到入口即失败；
    一个根都没有时记 `skipped` 不判失败——包未发布/未拉到时本步根本不会启动）与
-   `qt-libs-v6`（**warning-only**）。V6 包做成硬门会让只刷 552 的主机被无关包名阻断；真正跑
+   `v6-shared-libs`（**warning-only**）。V6 包做成硬门会让只刷 552 的主机被无关包名阻断；真正跑
    v6 时 `flash_firmware` 的 `shared-libs` 预检会硬失败并列出缺库名。既有六项条目名与判据不变。
-7. `qt-libs-v6` 在非 dpkg 系统只能说「无法判定」（`non-dpkg system, skipped:`），
+7. `v6-shared-libs` 在非 dpkg 系统只能说「无法判定」（`non-dpkg system, skipped:`），
    不得写成「V6 运行库齐备」——与 `qt-libs` 同判据，避免 warning-only 项造假绿。
 8. provisioning 补 V6 运行库（`ldd SPFlashToolV6` 相对 V5 多出的 GL 面与 KRB5 面，Qt5 本体在
    包内 `lib/`）：`agent_flash_prereq_packages_v6` + `install_agent.sh` 同一循环；#2133 同源
@@ -54,7 +54,7 @@ MLD_NX2（项目 535，板级 P535AA / MT6835）的刷机包由 **SP Flash Tool 
 - **由 Plan 参数选代际**：弃——违反 ADR-0029 v2；5 组在用刷机计划都要按机型加分支。
 - **V6 直接读中心存储 `tools/` 或 CIFS 路径**：弃——绕开 D7 的内容寻址与整包核验，回到
   主机 env 路径黑盒（#3288 第 4 片刚删掉这类键）。
-- **`qt-libs-v6` 做成硬门**：弃——552-only 主机被无关包名阻断，见 Decision 第 6 条。
+- **`v6-shared-libs` 做成硬门**：弃——552-only 主机被无关包名阻断，见 Decision 第 6 条。
 - **顺手把 `boot_mode` 改成裸 `-b`**：弃——对 552 生产是纯风险且不属于本 Requirement。
 
 ## Verification
@@ -96,7 +96,7 @@ MLD_NX2（项目 535，板级 P535AA / MT6835）的刷机包由 **SP Flash Tool 
 - 根 `tests/` 全量补跑与 CI 复跑结论记在 PR 评论（不以「命令跑过」代替结果）。
 - 为签名变化同步的既有桩：`test_flash_firmware_v1310/v1311` 的 `_pick_flash_tool_exe` 桩改为
   带默认值的两参 lambda；`test_flash_preflight_v102` 的条目名集合加
-  `qt-libs-v6` / `flashtool-v6`（两项确为本版新增）。
+  `v6-shared-libs` / `flashtool-v6`（两项确为本版新增）。
 - CI 首跑（PR #3689 `pr-agent-tests`）红在 **census 计数钉**：`tests/test_check_resource_anchors.py`
   把声明面钉成 26 锚 / `A01..A26`，本单新增 A27/A28 后真实输出是 28 锚。已同步该守卫
   （28 锚 / `A01..A28`，类 docstring 写明「新增锚须在此同步计数；`--base` 的防扩张面抓的是把
@@ -129,6 +129,20 @@ MLD_NX2（项目 535，板级 P535AA / MT6835）的刷机包由 **SP Flash Tool 
   MLD-LX2/LX3/NX2 的**正常 adb 在线态**（`.63` 23 台全 201c 且 adb 可见；`.85` 另有 1 台 2046）
   → 在混跑 host 上刷一台会把同 host 邻机一起 `authorized=0`。v1.3.x 既有判据问题，不是 V6
   引入，但 535 批次把刷机与开关机/Monkey 放同批 host 会放大它。本单只记录，不改判据。
+- 新脚本在真机上的**只读执行核验**（把族树文件与已发布工具包放到 host 的 `/tmp` 下，
+  `fix=false` 跑 `flash_preflight@1.0.7`；两台机器各证一条分支）：
+  - 缺库那台（NX2 host，`172.21.x.x` 末段 `.83`）：`v6-shared-libs` =
+    `missing libs: libGL.so.1 —— 补包（provisioning）：libgl1`，`flashtool-v6` = ok，
+    `nfs-firmware-pointer` = ok（证明我上架的 `latest.json` 对 Agent 用户可读），整步 success=True；
+  - 有库那台（控制面 Debian 13）：`v6-shared-libs` = `ldd 无缺库（…/SPFlashToolV6）`，
+    `udev-rule`/`dialout-group` 按本机实况判 False（这台不是刷机 host）——
+    说明 warning-only 与硬门两条路径都按判据走，没把「没测」写成「齐备」。
+  - **本轮实跑抓到自己写的假绿**：第一版 `v6-shared-libs` 用 dpkg 包名判定，而这台
+    host 上 `libgl1` 从未安装 → `dpkg-query` 返回「无法判定」，代码把「无从判定」渲染成
+    `non-dpkg system, skipped`（措辞也错，那是 dpkg 系统）。已改为**对入口跑 `ldd`**
+    （与刷机步同一 `LD_LIBRARY_PATH` 口径），缺失 soname 才报缺失，并按
+    `_V6_PACKAGE_HINTS` 指回包名；新增 `test_dpkg_blindness_never_becomes_false_ready`
+    与 `_ldd_missing_libs` 的两条形态用例（缺库→warning+包名、无法探测→空表不判失败）。
 - D7 两工具声明的**真包拉取核验**（站点包源只读、缓存写临时目录）：
   `inject_required_tools(flash_firmware 族树, env)` → 返回 None；
   `STP_FLASH_TOOL_DIR` → `…/flashtool/1.2444.00.100`（根内 `flash_tool`），
@@ -178,7 +192,7 @@ MLD_NX2（项目 535，板级 P535AA / MT6835）的刷机包由 **SP Flash Tool 
   参数化——那会再动一次 `flash_firmware` 的门控判据，需要独立真机窗口取证。
 - `apk-incoming` 里的 `P535AA_EVT_16.0_NX3…` / `NX3Carrier…` 两包同为 V6 形态：若其 model 落在
   `MLD_NX3` 一类新串，需发版本补路由键（显式 `firmware_dir` + `tool_generation` 参数档可先救急）。
-- NX2 host 的 `libgl1/libglx0/libglvnd0` 补齐后，`qt-libs-v6` 应从 warning 转回正常判定；
+- NX2 host 的 `libgl1/libglx0/libglvnd0` 补齐后，`v6-shared-libs` 应从 warning 转回正常判定；
   若 fleet 里出现「装了 GL 却仍被别项阻断」，回到本单取证方法（两代 `ldd` 差集）复核。
 - 若出现「同一 host 并刷 V5 与 V6 机型」的场景，host 级 flock 仍保证每 host 同时 1 台，
   但门控 pid 集合需按机型合并——现在是一份全局集合，无代际维度。

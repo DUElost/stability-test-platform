@@ -59,8 +59,13 @@
   per-model 映射（1.3.6 能力）分流；代际由该版本的 manifest 决定。同族不同代际并存，
   不新建族目录——`flash_preflight` 的 `nfs-firmware-pointer` 项硬编码读 `MLD/latest.json`，
   新族目录会让这项检查失明。
-- **D5 V6 运行库归 provisioning**：`flash_preflight` 增两项——`flashtool-v6`（硬门：
-  V6 工具根在位却找不到入口即判失败）与 `qt-libs-v6`（**warning-only**）。V6 包做成硬门
+- **D5 V6 运行库归 provisioning，且 preflight 的判据是 `ldd` 而不是 dpkg 包名**：
+  未安装过的包名在 dpkg 数据库里查不到（只能返回「无法判定」），按包名判定会把
+  「缺库」渲染成「齐备/跳过」——2026-10-12 在 NX2 host 上实跑 `flash_preflight@1.0.7`
+  正是这样暴露的（那台机器 `libGL.so.1` 确实缺失）。改成对入口跑 `ldd`（与刷机步
+  同一 `LD_LIBRARY_PATH`）后，报的是缺哪个 soname、并指回应补的包名。
+`flash_preflight` 增两项——`flashtool-v6`（硬门：
+  V6 工具根在位却找不到入口即判失败）与 `v6-shared-libs`（**warning-only**）。V6 包做成硬门
   会让只刷 552 的主机被无关包名阻断；真正跑 v6 时 `flash_firmware` 的 `shared-libs`
   预检会硬失败并列出缺库名。provisioning 两面（`install_agent.sh`、
   `agent_flash_prereq_packages_v6`）与 preflight 常量由守卫逐项一致（#2133 同源守卫）。
@@ -126,7 +131,7 @@
 - **NX2 host 目前跑不起 V6**：`172.21.x.x`（末段 `.83`）上 `ldd SPFlashToolV6` 报
   `libGL.so.1 => not found`，`SPFlashToolV6 -h` 直接 `error while loading shared
   libraries: libGL.so.1`。控制面（Debian 13，已装 `libgl1/libglx0/libglvnd0`）无此问题。
-  → 刷机前必须按 §5 的 provisioning 面补包（`qt-libs-v6` 只给 warning，真正拦下它的是
+  → 刷机前必须按 §5 的 provisioning 面补包（`v6-shared-libs` 只给 warning，真正拦下它的是
   `flash_firmware` 的 `shared-libs` 预检——它会在拿锁之前硬失败并列出缺库名）。
 - **中心存储上 V6 工具包已发布**：`packages/flashtool_v6/1.2444.00.100.tar.gz`
   （sha 与 Git 登记一致，发布守卫核验）；**NX2 固件已上架**

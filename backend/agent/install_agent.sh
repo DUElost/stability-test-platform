@@ -363,7 +363,7 @@ pkg_installed() {
 }
 if [ "${AGENT_SKIP_FLASH_PREREQ_PKGS:-0}" != "1" ] && command -v dpkg-query >/dev/null 2>&1; then
     FLASH_MISSING=""
-    for pkg in libice6 libsm6 libxrender1 libfontconfig1 libglib2.0-0 libgl1 libglx0 libglvnd0 libgssapi-krb5-2 libkrb5-3 libcom-err2 libkeyutils1; do
+    for pkg in libice6 libsm6 libxrender1 libfontconfig1 libglib2.0-0 libcom-err2 libgl1 libglvnd0 libglx0 libgssapi-krb5-2 libkeyutils1 libkrb5-3; do
         if ! pkg_installed "$pkg"; then
             case "$pkg" in
                 *-0) pkg_installed "${pkg}t64" || FLASH_MISSING="$FLASH_MISSING $pkg" ;;
