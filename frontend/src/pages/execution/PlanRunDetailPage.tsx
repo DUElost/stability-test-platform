@@ -87,8 +87,9 @@ export default function PlanRunDetailPage() {
   const [diagOpen, setDiagOpen] = useState(false);
   const [leftPanelOpen, setLeftPanelOpen] = useState(false);
   const [finalArchiveOpen, setFinalArchiveOpen] = useState(false);
-  // #3350（ADR-0023 D4）：计划快照抽屉（数据 = runQ.data.plan_snapshot）
+  // #3350（ADR-0023 D4）+ #3653 U4：计划快照抽屉（身份 = plan_snapshot；参数 = L2/L3 投影）
   const [snapshotOpen, setSnapshotOpen] = useState(false);
+  const [snapshotJobId, setSnapshotJobId] = useState<number | null>(null);
 
   const {
     runQ,
@@ -96,6 +97,7 @@ export default function PlanRunDetailPage() {
     devicesQ,
     watcherQ,
     chainQ,
+    jobProjectionQ,
     isTerminal,
     isAnyFetching,
     refreshAll,
@@ -112,6 +114,7 @@ export default function PlanRunDetailPage() {
     deviceLinkFilter,
     deviceHostFilter,
     watcherTimeScope,
+    projectionJobId: snapshotJobId,
   });
 
   const selectedDevice = useMemo(
@@ -421,11 +424,24 @@ export default function PlanRunDetailPage() {
         isExitPending={exitMut.isPending}
       />
 
-      {/* #3350（ADR-0023 D4）：快照浏览面；直接读 detail 已返回的 plan_snapshot */}
+      {/* #3350 + #3653 U4：快照身份仍来自 detail.plan_snapshot；参数只消费 L2/L3 投影 */}
       <PlanSnapshotDrawer
         open={snapshotOpen}
-        onClose={() => setSnapshotOpen(false)}
+        onClose={() => {
+          setSnapshotOpen(false);
+          setSnapshotJobId(null);
+        }}
         snapshot={runQ.data?.plan_snapshot ?? null}
+        l2Projection={runQ.data?.parameter_projection ?? null}
+        l2Unavailable={Boolean(runQ.isSuccess && runQ.data?.parameter_projection == null)}
+        devices={devicesQ.data?.devices ?? []}
+        selectedJobId={snapshotJobId}
+        onSelectJobId={setSnapshotJobId}
+        l3Projection={jobProjectionQ.data ?? null}
+        l3Loading={snapshotJobId != null && jobProjectionQ.isFetching && !jobProjectionQ.data}
+        l3Unavailable={Boolean(
+          snapshotJobId != null && jobProjectionQ.isError,
+        )}
       />
 
       <AlertDialog open={finalArchiveOpen} onOpenChange={setFinalArchiveOpen}>

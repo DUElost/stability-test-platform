@@ -28,6 +28,8 @@ interface Filters {
   deviceLinkFilter: DeviceLinkStatus | 'all';
   deviceHostFilter: string;
   watcherTimeScope: WatcherTimeScope;
+  /** #3653 U4：快照抽屉选中的 Job，用于读取 L3 投影；null = 只看 L2 */
+  projectionJobId?: number | null;
 }
 
 export function usePlanRunDetailData(id: number, filters: Filters) {
@@ -36,6 +38,7 @@ export function usePlanRunDetailData(id: number, filters: Filters) {
     deviceLinkFilter,
     deviceHostFilter,
     watcherTimeScope,
+    projectionJobId = null,
   } = filters;
   const qc = useQueryClient();
   const toast = useToast();
@@ -102,12 +105,20 @@ export function usePlanRunDetailData(id: number, filters: Filters) {
     refetchInterval: isTerminal ? false : refetchInterval,
   });
 
+  // #3653 U4：按具体 Job 读 L3；键含 jobId，切换设备不会串缓存值。
+  const jobProjectionQ = useQuery({
+    queryKey: planRunKeys.jobParameterProjection(id, projectionJobId ?? 0),
+    queryFn: () => api.planRuns.jobParameterProjection(id, projectionJobId as number),
+    enabled: !!id && projectionJobId != null,
+  });
+
   const isAnyFetching =
     runQ.isFetching ||
     timelineQ.isFetching ||
     devicesQ.isFetching ||
     watcherQ.isFetching ||
-    chainQ.isFetching;
+    chainQ.isFetching ||
+    jobProjectionQ.isFetching;
 
   const refreshAll = useCallback(() => {
     // #1193：手动刷新覆盖去重状态与逐条用例结果等后处理产物（键表见 utils）。
@@ -251,6 +262,7 @@ export function usePlanRunDetailData(id: number, filters: Filters) {
     devicesQ,
     watcherQ,
     chainQ,
+    jobProjectionQ,
     isTerminal,
     isAnyFetching,
     refreshAll,
