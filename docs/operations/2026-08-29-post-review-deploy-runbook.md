@@ -1,5 +1,9 @@
 # 2026-08-29 审查收口后部署 Runbook
 
+> **已过期（2026-10-12）**：本文记录 checkout 部署形态，§1.3 的手动 `alembic upgrade head` 与现行红线冲突。
+> 执行者不得按本文部署生产控制面，必须改按 `control-plane-deploy` skill
+> （[`.claude/skills/control-plane-deploy/SKILL.md`](../../.claude/skills/control-plane-deploy/SKILL.md)）执行；本文只作历史记录。
+
 > 适用窗口：#404 套件绑定、#514 双轨收口、#527 日志观测层、ADR-0031 AI 助手、
 > `k8l9` host.id 对齐、flash v1.3.5/v1.3.6 等已合 main 后的**生产/预发布**一次升级。
 > **自 2026-09-01 起**：若目标 tip 含 ADR-0029 v2.5 D10、ADR-0030 P2 #429、G15 脚本、
