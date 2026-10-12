@@ -591,7 +591,7 @@
         },
         {
           "artifact": "packages/flash_preflight/1.0.7.tar.gz",
-          "package_sha256": "82f98e18224b70b1919b33f7cfa2adbc9009b465762dfe20ba155db3c5902710",
+          "package_sha256": "33f433ef2e3a1863ad1252ebb714117c40c6de5c9d39a53f546ae851c8669d7a",
           "python": null,
           "retired": false,
           "script": "flash_preflight.py",

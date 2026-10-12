@@ -169,6 +169,21 @@ def test_v6_libs_missing_is_warning_only(monkeypatch, capsys, tmp_path) -> None:
     assert _item(payload, "qt-libs")["ok"] is True
 
 
+def test_non_dpkg_system_is_not_reported_as_ready(monkeypatch, capsys, tmp_path) -> None:
+    """非 dpkg 系统只能说「无法判定」，不得写成「V6 运行库齐备」（与 qt-libs 同判据）。"""
+    _prepare_env(monkeypatch, tmp_path)
+    real = pf._check_dpkg_installed
+    monkeypatch.setattr(pf, "_check_dpkg_installed",
+                        lambda pkg: None if pkg in pf._V6_PACKAGES else real(pkg))
+    pf.main()
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    item = _item(payload, "qt-libs-v6")
+    assert item["ok"] is True
+    assert item["detail"].startswith("non-dpkg system, skipped:")
+    assert "齐备" not in item["detail"]
+    assert payload["success"] is True, payload
+
+
 def test_v5_hard_items_untouched(monkeypatch, capsys, tmp_path) -> None:
     """回归面：V5 的 flashtool 缺失仍然判失败，与 v1.0.6 同语义。"""
     _prepare_env(monkeypatch, tmp_path)

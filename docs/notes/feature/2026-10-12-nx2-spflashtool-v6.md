@@ -33,10 +33,12 @@ MLD_NX2（项目 535，板级 P535AA / MT6835）的刷机包由 **SP Flash Tool 
    一个根都没有时记 `skipped` 不判失败——包未发布/未拉到时本步根本不会启动）与
    `qt-libs-v6`（**warning-only**）。V6 包做成硬门会让只刷 552 的主机被无关包名阻断；真正跑
    v6 时 `flash_firmware` 的 `shared-libs` 预检会硬失败并列出缺库名。既有六项条目名与判据不变。
-7. provisioning 补 V6 运行库（`ldd SPFlashToolV6` 相对 V5 多出的 GL 面与 KRB5 面，Qt5 本体在
+7. `qt-libs-v6` 在非 dpkg 系统只能说「无法判定」（`non-dpkg system, skipped:`），
+   不得写成「V6 运行库齐备」——与 `qt-libs` 同判据，避免 warning-only 项造假绿。
+8. provisioning 补 V6 运行库（`ldd SPFlashToolV6` 相对 V5 多出的 GL 面与 KRB5 面，Qt5 本体在
    包内 `lib/`）：`agent_flash_prereq_packages_v6` + `install_agent.sh` 同一循环；#2133 同源
    守卫扩到 V6 那一组（四面逐项一致，防止「preflight 检查的」与「安装链装的」再分叉）。
-8. `-b` 语义勘误入文档：两代 `-h` 都把 `-b` 定义为 `--reboot` 布尔，`auto` 是被工具忽略的
+9. `-b` 语义勘误入文档：两代 `-h` 都把 `-b` 定义为 `--reboot` 布尔，`auto` 是被工具忽略的
    位置参数；552 生产一直以此形态运行且刷机有效，本版不改任何一侧拼接（改名属行为中性
    重构，另单）。
 
@@ -77,10 +79,11 @@ MLD_NX2（项目 535，板级 P535AA / MT6835）的刷机包由 **SP Flash Tool 
   绑定声明，28 锚，防扩张通过）；`env_inventory --check` 271 读取名一致。
 - 测试（均经 `scripts/run_pytest.py` 的 cgroup 硬顶入口）：
   `backend/agent/tests/test_flash_firmware_v1319.py` 31 passed；
-  `backend/agent/tests/test_flash_preflight_v107.py` 8 passed；
+  `backend/agent/tests/test_flash_preflight_v107.py` 9 passed（两个新文件合跑 40 passed）；
+  `-k flash_preflight` 44 passed、`-k flash` 198 passed；
   `backend/agent/tests -k "flash or required_tools or tool_cache or tool_asset or script_packages"`
   264 passed（含 v102–v105 preflight 套件与 v1310/v1311 main 流程套件）；
-  **Agent 全套 `backend/agent/tests` 2544 passed**（102s，无失败）；
+  **Agent 全套 `backend/agent/tests` 2545 passed**（103s，无失败）；
   `tests/test_flash_provisioning_prereqs_2133.py` 16 passed；
   `tests/test_script_seed_governance.py` + `tests/test_pipeline_template_script_pins_2865.py` +
   `backend/tests/test_pending_activation_view_2931.py` 14 passed；

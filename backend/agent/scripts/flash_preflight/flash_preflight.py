@@ -442,6 +442,8 @@ def main() -> None:
     v6_exe, v6_root = _locate_flashtool_v6()
     v6_missing = [pkg for pkg in _V6_PACKAGES
                   if _check_dpkg_installed(pkg) is False]
+    v6_unknown = [pkg for pkg in _V6_PACKAGES
+                  if _check_dpkg_installed(pkg) is None]
     if v6_missing:
         detail = (f"missing: {','.join(v6_missing)} —— V6 代际（535/NX2 等）刷机"
                   "需要；provisioning 补包"
@@ -450,6 +452,10 @@ def main() -> None:
                   "flash_firmware 的 shared-libs 预检会硬失败并列出缺库名")
         metrics["warnings"].append(detail)
         item("qt-libs-v6", True, detail=detail)
+    elif v6_unknown:
+        # 与 qt-libs 同判据：非 dpkg 系统只能「无法判定」，不得写成「齐备」
+        item("qt-libs-v6", True, detail=(
+            "non-dpkg system, skipped: " + ",".join(v6_unknown)))
     else:
         item("qt-libs-v6", True,
              detail="V6 运行库齐备" if v6_root else
