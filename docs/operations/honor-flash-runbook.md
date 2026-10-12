@@ -255,7 +255,11 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/plans/<PLAN_ID>/run -H "$AUTH" \
    `"MLD_NX2": "<version>"`（`MLD-NX2` 连字符拼写由脚本自动互转，二选一即可）。
    写入方式必须「临时文件 + `os.replace`」并 `chmod 0644`——CIFS 上以 0600 落盘的指针文件
    会让 Agent 侧读不到 `latest.json`（本手册 2026-10-12 踩过一次）。
-6. scan 注册脚本新版本，再重指或新建 Plan（顺序不可颠倒，见上方警告）。
+6. canary 前确认批次现网版本：NX2 设备若已在目标 incremental 上（2026-10-12 现网 50 台
+   均为 `P535AA-HONOR-NX2-16-260928V9`），`skip_if_current` 默认值会让本步以
+   `skipped:true` 收场——那是判据正确的表现，**不会碰刷机工具**，也就验不到 V6。
+   单台取证必须在步骤参数里显式写 `"skip_if_current": false`（在用 552 刷机计划不受影响）。
+7. scan 注册脚本新版本，再重指或新建 Plan（顺序不可颠倒，见上方警告）。
 
    ```bash
    curl -s -X POST "$BASE/api/v1/scripts/scan" -H "Authorization: Bearer $TOKEN"
@@ -264,7 +268,7 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/plans/<PLAN_ID>/run -H "$AUTH" \
    预期：响应 `created` 含 `flash_firmware@1.3.19` / `flash_preflight@1.0.7`，
    `conflicts` 为空。随后按 §3 建计划（`script:flash_preflight` + `script:flash_firmware`
    两步都指向新版本），并按 §4 单台验证。
-7. 单台验证时核对四个 V6 判据（任一不符即回到设计文档 §6，不得放量）：
+8. 单台验证时核对四个 V6 判据（任一不符即回到设计文档 §6，不得放量）：
    - `step_trace` 的 `metrics.route.tool_generation` 为 `v6`；
    - `metrics.command_argv` 是 `[... , "-c", "firmware-upgrade", "-f", "<...>/download_agent/flash.xml", "-b", "auto"]`，
      且不含 `-d` / `-s`；
