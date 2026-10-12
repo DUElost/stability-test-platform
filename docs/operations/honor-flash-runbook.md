@@ -269,6 +269,33 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/plans/<PLAN_ID>/run -H "$AUTH" \
    预期：响应 `created` 含 `flash_firmware@1.3.19` / `flash_preflight@1.0.7`，
    `conflicts` 为空。随后按 §3 建计划（`script:flash_preflight` + `script:flash_firmware`
    两步都指向新版本），并按 §4 单台验证。
+   单台 canary 的建计划载荷（**只挂一台空闲 NX2**；`skip_if_current` 必须显式给
+   `false`，否则设备已在目标版本时本步以 `skipped` 收场、根本碰不到 V6）：
+
+   ```bash
+   curl -s -X POST http://127.0.0.1:8000/api/v1/plans -H "$AUTH" \
+     -H "Content-Type: application/json" -d '{
+     "name": "NX2-刷机-V6-单台canary-260928V9",
+     "description": "535/MLD_NX2 SP Flash Tool V6 单机验证（flash_firmware 1.3.19）",
+     "steps": [
+       {"step_key": "precheck", "script_name": "flash_preflight",
+        "script_version": "1.0.7", "stage": "init", "sort_order": 5,
+        "timeout_seconds": 300},
+       {"step_key": "flash", "script_name": "flash_firmware",
+        "script_version": "1.3.19", "stage": "init", "sort_order": 10,
+        "timeout_seconds": 3600, "stall_seconds": 900, "retry": 0,
+        "params": {"skip_if_current": false, "verify_version": true}},
+       {"step_key": "check", "script_name": "check_device",
+        "script_version": "1.0.2", "stage": "init", "sort_order": 20},
+       {"step_key": "root", "script_name": "ensure_root",
+        "script_version": "1.0.2", "stage": "init", "sort_order": 30}
+     ]}'
+   ```
+
+   预期：`id` 返回后，用 `POST /api/v1/plan-runs`（或设备页派发）**只选一台设备**跑；
+   `retry=0` 是刻意的——首刷取证阶段不要让重试把两次真机窗口叠在一起。
+   派发前先确认该 host 没有别的在跑作业（§7 顶部两条警告）。
+
 8. 单台验证时核对四个 V6 判据（任一不符即回到设计文档 §6，不得放量）：
    - `step_trace` 的 `metrics.route.tool_generation` 为 `v6`；
    - `metrics.command_argv` 是 `[... , "-c", "firmware-upgrade", "-f", "<...>/download_agent/flash.xml", "-b", "auto"]`，
