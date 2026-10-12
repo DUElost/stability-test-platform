@@ -103,7 +103,8 @@ MLD_NX2（项目 535，板级 P535AA / MT6835）的刷机包由 **SP Flash Tool 
   既有候选改判，不是新增候选的显式声明」），本地该文件 37 passed。
   **漏检根因：首跑只跑了选中的根文件，没跑根 `tests/` 全量**——CI 的根套件才是覆盖面。
 
-真机**只读**取证（2026-10-12，控制面 + `172.21.15.83`，设备 `ATHTNX6930000085`；**未刷任何设备**）：
+真机**只读**取证（2026-10-12，控制面 + 一台 NX2 host（`172.21.x.x`，末段 `.83`），
+设备 `ATHTNX69****0085`；**未刷任何设备**）：
 
 - ① `ro.product.model` = **`MLD-NX2`**；平台设备表记作 `MLD_NX2`（取自 `adb devices`）——
   两个拼写都已在 `_MODEL_FAMILY_ROUTES` 里。用真机读数跑 1.3.19 的指纹路由：
@@ -119,7 +120,7 @@ MLD_NX2（项目 535，板级 P535AA / MT6835）的刷机包由 **SP Flash Tool 
   `scan device START, timeout set as 120000 ms`；无设备在场时以
   `scan device com port failed, error code: -1` + rc=1 收场 → 既有 PASS 判据不命中即判失败，
   语义正确（工具版本横幅：`MediaTek Smart Phone Flash Tool V6 v6.2444.00`）。
-- 阻断项（新发现）：NX2 四台 host（`172.21.15.83–86`，Debian 13）**没有 V6 运行库**——
+- 阻断项（新发现）：NX2 四台 host（`172.21.x.x`，末段 `.83–.86`，Debian 13）**没有 V6 运行库**——
   `ldd SPFlashToolV6` 报 `libGL.so.1 => not found`，连 `-h` 都起不来（控制面装了
   `libgl1/libglx0/libglvnd0` 才可跑）；KRB5 面四台已具备。真机刷 V6 前必须按
   `agent_flash_prereq_packages_v6` 补包；不补时刷机步会在拿锁之前以

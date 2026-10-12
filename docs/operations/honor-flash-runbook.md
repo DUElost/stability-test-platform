@@ -173,7 +173,8 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/plans/<PLAN_ID>/run -H "$AUTH" \
 例如 MLD_NX2（板级 P535AA / MT6835）。本节替换 §1 的上架动作；§2–§5 的建计划、单台验证
 与放量流程不变。
 
-> 警告（刷机窗口前必查，2026-10-12 实测）：NX2 所在 host（`172.21.15.83–86`，Debian 13）
+> 警告（刷机窗口前必查，2026-10-12 实测）：NX2 所在四台 host（`172.21.x.x`，末段
+> `.83–.86`，Debian 13）
 > **未装 V6 的运行库**——`ldd SPFlashToolV6` 报 `libGL.so.1 => not found`，工具连 `-h` 都跑不起来。
 > 补包属 provisioning：`apt-get install -y --no-install-recommends libgl1 libglx0 libglvnd0`
 > （即 `agent_flash_prereq_packages_v6`，KRB5 面这 4 台已具备）。不补包时刷机步会在拿锁之前
@@ -216,7 +217,7 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/plans/<PLAN_ID>/run -H "$AUTH" \
    adb -s <serial> shell getprop ro.build.version.incremental
    ```
 
-   预期（NX2 实测值，设备 `ATHTNX6930000085` @ `172.21.15.83`）：model = `MLD-NX2`
+   预期（NX2 实测值，设备 `ATHTNX69****0085` @ 末段 `.83` 那台 host）：model = `MLD-NX2`
    （平台设备表记作 `MLD_NX2`，来源不同，路由表两个拼写都收）；
    incremental = `P535AA-HONOR-NX2-16-260928V9`。model 不在路由表已知集合时本步 fail-fast
    并列出已知集合，此时停止本流程按设计文档补路由键。

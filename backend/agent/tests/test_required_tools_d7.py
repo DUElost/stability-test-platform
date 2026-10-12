@@ -24,6 +24,8 @@ from backend.agent.tool_requirements import (
     parse_requirements,
 )
 
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
 _FLASH = {"version": "1.2444.00.100", "env": "STP_FLASH_TOOL_DIR"}
 
 
@@ -138,6 +140,60 @@ def test_inject_sets_env_to_verified_tool_root(tmp_path):
     assert root == site.cache / "flashtool" / "1.2444.00.100"
     assert (root / "flash_tool").read_bytes() == b"\x7fELF"
     assert (root / ".stp-verified").is_file()
+
+
+_FLASH_V6 = {"version": "1.2444.00.100", "env": "STP_FLASH_TOOL_V6_DIR"}
+
+
+def test_two_tools_inject_two_independent_roots(tmp_path):
+    """两工具声明（#3688 起 flash_firmware 同时依赖 V5/V6 两代工具包）。
+
+    每个 env 键必须指向**自己那一代**的已核验包根：把两代混进同一个根，等于让
+    `-f flash.xml` 的调用打到 V5 可执行文件上（或反之），而这种错配在脚本侧只能
+    靠刷机窗口才发现。
+    """
+    site = _Site(tmp_path)
+    site.add("flashtool", "1.2444.00.100", {"flash_tool": b"V5"}, script="flash_tool")
+    site.add("flashtool_v6", "1.2444.00.100", {"SPFlashToolV6": b"V6"}, script="SPFlashToolV6")
+    pkg = _declare(tmp_path / "script_pkg", {"flashtool": _FLASH, "flashtool_v6": _FLASH_V6})
+    env = site.env()
+
+    assert inject_required_tools(pkg, env) is None
+    v5_root = Path(env["STP_FLASH_TOOL_DIR"])
+    v6_root = Path(env["STP_FLASH_TOOL_V6_DIR"])
+    assert v5_root == site.cache / "flashtool" / "1.2444.00.100"
+    assert v6_root == site.cache / "flashtool_v6" / "1.2444.00.100"
+    assert (v5_root / "flash_tool").read_bytes() == b"V5"
+    assert (v6_root / "SPFlashToolV6").read_bytes() == b"V6"
+    assert not (v5_root / "SPFlashToolV6").exists() and not (v6_root / "flash_tool").exists()
+
+
+def test_second_tool_missing_fails_closed(tmp_path):
+    """第二个工具缺失同样 fail-closed：不得只注入 V5 根后让步骤带着半套工具开跑。"""
+    site = _Site(tmp_path)
+    site.add("flashtool", "1.2444.00.100", {"flash_tool": b"V5"}, script="flash_tool")
+    decoy = tmp_path / "host_v6_dir"
+    decoy.mkdir()
+    pkg = _declare(tmp_path / "script_pkg", {"flashtool": _FLASH, "flashtool_v6": _FLASH_V6})
+    env = site.env(STP_FLASH_TOOL_V6_DIR=str(decoy))
+
+    err = inject_required_tools(pkg, env)
+
+    assert err == "required_tool_unavailable: flashtool_v6@1.2444.00.100"
+    assert env["STP_FLASH_TOOL_V6_DIR"] == str(decoy)   # 未改写；但步骤已判失败，用不到它
+
+
+def test_flash_family_tree_declares_both_generations():
+    """族树 capabilities：两代工具必须同时在声明里（漏一代 = 那一代的机型整步 exit 2）。"""
+    caps = json.loads((_REPO_ROOT / "backend" / "agent" / "scripts" / "flash_firmware"
+                       / "capabilities.json").read_text(encoding="utf-8"))
+    reqs = {r.name: r.env for r in parse_requirements(caps)}
+    assert reqs == {"flashtool": "STP_FLASH_TOOL_DIR", "flashtool_v6": "STP_FLASH_TOOL_V6_DIR"}
+    manifest = json.loads((_REPO_ROOT / "tool_manifest.json").read_text(encoding="utf-8"))
+    for name in reqs:
+        fam = manifest["tools"][name]
+        assert fam["kind"] == "tool", f"{name} 必须是 kind=tool 族"
+        assert any(not v["retired"] for v in fam["versions"]), f"{name} 全退役会让刷机步判不动"
 
 
 @pytest.mark.parametrize("case", ["missing_entry", "sha_mismatch", "retired"])

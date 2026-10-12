@@ -111,7 +111,8 @@
 
 ## 6. 取证结果与遗留风险
 
-2026-10-12 取证（只读，控制面 + `172.21.15.83`，设备 `ATHTNX6930000085`）：
+2026-10-12 取证（只读，控制面 + 一台 NX2 host（`172.21.x.x`，末段 `.83`），
+设备 `ATHTNX69****0085`）：
 
 | 项 | 结论 | 依据 |
 |---|---|---|
@@ -122,7 +123,7 @@
 
 遗留风险（④ 之外）：
 
-- **NX2 host 目前跑不起 V6**：`172.21.15.83` 上 `ldd SPFlashToolV6` 报
+- **NX2 host 目前跑不起 V6**：`172.21.x.x`（末段 `.83`）上 `ldd SPFlashToolV6` 报
   `libGL.so.1 => not found`，`SPFlashToolV6 -h` 直接 `error while loading shared
   libraries: libGL.so.1`。控制面（Debian 13，已装 `libgl1/libglx0/libglvnd0`）无此问题。
   → 刷机前必须按 §5 的 provisioning 面补包（`qt-libs-v6` 只给 warning，真正拦下它的是
