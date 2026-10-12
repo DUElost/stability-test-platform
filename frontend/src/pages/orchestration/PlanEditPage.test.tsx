@@ -32,10 +32,37 @@ vi.mock('@/components/pipeline/PlanCanvas', () => ({
     onDescriptionChange: (description: string) => void;
     onSpecialtyKeyChange: (key: string) => void;
     onTimeoutChange: (value: number | null) => void;
+    planSettings?: {
+      barrierMaxWaitSeconds: number | null;
+    };
+    onPlanSettingsChange?: (next: {
+      patrolIntervalSeconds: number | null;
+      timeoutSeconds: number | null;
+      barrierTimeoutSeconds: number | null;
+      barrierMaxWaitSeconds: number | null;
+      autoArchiveIntervalSeconds: number | null;
+      watcherPolicy: Record<string, unknown> | null;
+    }) => void;
   }) => (
     <div data-testid="plan-canvas">
       <button onClick={() => props.onTimeoutChange(11)}>草稿时长11</button>
       <button onClick={() => props.onTimeoutChange(22)}>草稿时长22</button>
+      <button
+        type="button"
+        data-testid="edit-barrier-max-wait"
+        onClick={() =>
+          props.onPlanSettingsChange?.({
+            patrolIntervalSeconds: null,
+            timeoutSeconds: 22,
+            barrierTimeoutSeconds: null,
+            barrierMaxWaitSeconds: 900,
+            autoArchiveIntervalSeconds: null,
+            watcherPolicy: {},
+          })
+        }
+      >
+        草稿硬顶900
+      </button>
       <input
         data-testid="plan-name-input"
         aria-label="Plan 名称"
@@ -77,6 +104,7 @@ vi.mock('@/utils/api', () => ({
     },
     projects: {
       list: vi.fn(),
+      listActive: vi.fn(),
     },
     suites: {
       list: vi.fn(),
@@ -138,6 +166,7 @@ describe('PlanEditPage', () => {
     (api.plans.list as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     (api.plans.listSpecialties as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     (api.projects.list as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (api.projects.listActive as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     (api.suites.list as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     (api.scripts.list as ReturnType<typeof vi.fn>).mockResolvedValue([]);
   });
@@ -492,6 +521,7 @@ describe('B5 U3 编辑器投影代次与安全保存', () => {
     vi.mocked(api.plans.listSpecialties).mockResolvedValue([]);
     vi.mocked(api.scripts.list).mockResolvedValue([]);
     vi.mocked(api.suites.list).mockResolvedValue([] as never);
+    vi.mocked(api.projects.listActive).mockResolvedValue([]);
   });
   it('已保存 JSON 读 L1；错误不回退内部 raw；保存其它字段不改变 secret', async () => {
     renderPage('/orchestration/plans/42');
@@ -512,8 +542,11 @@ describe('B5 U3 编辑器投影代次与安全保存', () => {
     fireEvent.click(screen.getByRole('button', { name: /保存/ }));
     await waitFor(() => expect(api.plans.update).toHaveBeenCalled());
     const payload = vi.mocked(api.plans.update).mock.calls[0][1];
-    expect(payload.steps?.[0].params).toEqual(plan.steps[0].params);
+    // U6：只改说明时省略 steps，避免全量重建；未编辑的 secret 事实由后端保留。
+    expect(payload).not.toHaveProperty('steps');
+    expect(payload.description).toBe('新说明');
     expect(payload.expected_updated_at).toBe(plan.updated_at);
+    expect(document.body.innerHTML).not.toContain(secret);
   });
   it('较旧 draft 响应不覆盖新草稿，等待期间也不显示旧 JSON', async () => {
     let resolveOld!: (value: ParameterProjection) => void;

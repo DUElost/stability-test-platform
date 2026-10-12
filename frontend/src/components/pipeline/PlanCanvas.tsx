@@ -9,7 +9,10 @@ import {
 } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { formatStepTimeout, stepTimeoutHint } from './stepTiming';
-import { PlanSettingsReadonly } from '@/components/parameters/PlanSettingsReadonly';
+import {
+  PlanSettingsEditor,
+  type PlanSettingsValues,
+} from '@/components/parameters/PlanSettingsEditor';
 
 const PHASE_LABELS: Record<PipelinePhase, string> = {
   init: 'Init',
@@ -30,6 +33,8 @@ interface PlanCanvasProps {
   onPatrolIntervalChange: (next: number | null) => void;
   timeoutSeconds: number | null;
   onTimeoutChange: (next: number | null) => void;
+  planSettings?: PlanSettingsValues;
+  onPlanSettingsChange?: (next: PlanSettingsValues) => void;
   nextPlanName: string | null;
   isCurrentEditing: boolean;
   lifecycle: PipelineDef;
@@ -101,6 +106,8 @@ export default function PlanCanvas({
   onPatrolIntervalChange,
   timeoutSeconds,
   onTimeoutChange,
+  planSettings,
+  onPlanSettingsChange,
   nextPlanName,
   isCurrentEditing,
   lifecycle,
@@ -208,7 +215,16 @@ export default function PlanCanvas({
           readOnly={readOnly}
         />
 
-        <PlanSettingsReadonly projection={projection} unavailable={projectionUnavailable} isDraft={projectionIsDraft} />
+        {planSettings && onPlanSettingsChange ? (
+          <PlanSettingsEditor
+            values={planSettings}
+            onChange={onPlanSettingsChange}
+            projection={projection ?? settingsMetadata}
+            unavailable={projectionUnavailable}
+            isDraft={projectionIsDraft}
+            readOnly={readOnly}
+          />
+        ) : null}
         {(['init', 'patrol', 'teardown'] as PipelinePhase[]).map(phase => {
           const steps = getPhaseSteps(lifecycle, phase);
           return (
@@ -392,14 +408,17 @@ function PlanHeader({
         <MetaItem label={interval?.label ?? "patrol_interval_seconds"}>
           <input
             type="number"
-            min={5}
+            min={1}
             value={patrolIntervalSeconds ?? ''}
             placeholder="不开启"
             disabled={readOnly}
             onChange={e => {
               const raw = e.target.value;
               if (raw === '') onPatrolIntervalChange(null);
-              else onPatrolIntervalChange(Math.max(5, parseInt(raw, 10) || 60));
+              else {
+                const n = parseInt(raw, 10);
+                onPatrolIntervalChange(Number.isFinite(n) && n >= 1 ? n : null);
+              }
             }}
             className={cn('w-24', metaInputCls)}
           />

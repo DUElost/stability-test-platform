@@ -11,6 +11,7 @@ import {
   type PlanUpdate,
   type PipelineDef,
   type PipelineStep,
+  type ScriptEntry,
 } from '@/utils/api';
 import type { ParameterProjection, DraftParameterProjectionRequest } from '@/utils/api/types';
 import { projectKeys } from '@/utils/api/queryKeys';
@@ -18,10 +19,14 @@ import { planKeys } from '@/utils/api/queryKeys';
 import {
   EMPTY_LIFECYCLE,
   buildStepsForApi,
+  cloneWatcherPolicy,
   draftSnapshot,
   findStepInLifecycle,
+  lifecycleStepsOnlySnapshot,
   planDraftSnapshot,
   rebuildLifecycleFromPlan,
+  validatePlanSettingsDraft,
+  validateStepRuntimeDraft,
 } from './planEditUtils';
 
 export type ConfirmLeaveState = null | { type: 'switch' | 'execute'; targetPlanId?: number };
@@ -35,7 +40,22 @@ const EMPTY_DRAFT_SNAPSHOT = draftSnapshot({
   specialtyKey: '',
   suiteName: '',
   lifecycle: EMPTY_LIFECYCLE,
+  patrolIntervalSeconds: null,
+  timeoutSeconds: null,
+  barrierTimeoutSeconds: null,
+  barrierMaxWaitSeconds: null,
+  autoArchiveIntervalSeconds: null,
+  watcherPolicy: null,
 });
+
+function scriptCapabilitiesForStep(
+  step: PipelineStep,
+  scripts: ScriptEntry[] | undefined,
+): string[] | undefined {
+  const scriptName = step.action?.startsWith('script:') ? step.action.slice(7) : step.action;
+  const matched = scripts?.find((s) => s.name === scriptName && s.version === step.version);
+  return matched?.capabilities;
+}
 
 export function usePlanEditForm(planId: number | null) {
   const isNew = planId == null;
@@ -55,6 +75,12 @@ export function usePlanEditForm(planId: number | null) {
   const [suiteName, setSuiteName] = useState('');
   const [origSuiteName, setOrigSuiteName] = useState('');
   const [lifecycle, setLifecycle] = useState<PipelineDef>(EMPTY_LIFECYCLE);
+  const [patrolIntervalSeconds, setPatrolIntervalSeconds] = useState<number | null>(null);
+  const [timeoutSeconds, setTimeoutSeconds] = useState<number | null>(null);
+  const [barrierTimeoutSeconds, setBarrierTimeoutSeconds] = useState<number | null>(null);
+  const [barrierMaxWaitSeconds, setBarrierMaxWaitSeconds] = useState<number | null>(null);
+  const [autoArchiveIntervalSeconds, setAutoArchiveIntervalSeconds] = useState<number | null>(null);
+  const [watcherPolicy, setWatcherPolicy] = useState<Record<string, unknown> | null>(null);
   const [selectedStepKey, setSelectedStepKey] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [showJson, setShowJson] = useState(false);
@@ -63,6 +89,7 @@ export function usePlanEditForm(planId: number | null) {
   const [chainAppendName, setChainAppendName] = useState('');
   const [basePlan, setBasePlan] = useState<Plan | null>(null);
   const [origSnapshot, setOrigSnapshot] = useState(EMPTY_DRAFT_SNAPSHOT);
+  const [origStepsSnapshot, setOrigStepsSnapshot] = useState(lifecycleStepsOnlySnapshot(EMPTY_LIFECYCLE));
 
   const {
     data: plan,
@@ -126,10 +153,39 @@ export function usePlanEditForm(planId: number | null) {
   // 保存仍以旧版本提交，由后端 409 拒绝互相覆盖（#967 验收）。
   const [baseUpdatedAt, setBaseUpdatedAt] = useState<string | undefined>(undefined);
 
-  // #966：脏状态覆盖全部可编辑业务字段（含归属项目/专项/套件）。
+  // #966/#3653 U6：脏状态覆盖全部可编辑业务字段（含计划设置与 watcher）。
   const currentSnapshot = useMemo(
-    () => draftSnapshot({ name, description, nextPlanId, projectKey, specialtyKey, suiteName, lifecycle }),
-    [name, description, nextPlanId, projectKey, specialtyKey, suiteName, lifecycle],
+    () =>
+      draftSnapshot({
+        name,
+        description,
+        nextPlanId,
+        projectKey,
+        specialtyKey,
+        suiteName,
+        lifecycle,
+        patrolIntervalSeconds,
+        timeoutSeconds,
+        barrierTimeoutSeconds,
+        barrierMaxWaitSeconds,
+        autoArchiveIntervalSeconds,
+        watcherPolicy,
+      }),
+    [
+      name,
+      description,
+      nextPlanId,
+      projectKey,
+      specialtyKey,
+      suiteName,
+      lifecycle,
+      patrolIntervalSeconds,
+      timeoutSeconds,
+      barrierTimeoutSeconds,
+      barrierMaxWaitSeconds,
+      autoArchiveIntervalSeconds,
+      watcherPolicy,
+    ],
   );
   const isDirty = currentSnapshot !== origSnapshot;
 
@@ -144,9 +200,18 @@ export function usePlanEditForm(planId: number | null) {
     setOrigProjectKey(next.project_key || '');
     setOrigSpecialtyKey(next.specialty_key || '');
     setOrigSuiteName(next.suite_name || '');
-    setLifecycle(rebuildLifecycleFromPlan(next));
+    const lc = rebuildLifecycleFromPlan(next);
+    setLifecycle(lc);
+    // 计划级设置从真实 Plan 加载，不用登记默认数字回填（#3653 §3.5 U6）。
+    setPatrolIntervalSeconds(next.patrol_interval_seconds ?? null);
+    setTimeoutSeconds(next.timeout_seconds ?? null);
+    setBarrierTimeoutSeconds(next.barrier_timeout_seconds ?? null);
+    setBarrierMaxWaitSeconds(next.barrier_max_wait_seconds ?? null);
+    setAutoArchiveIntervalSeconds(next.auto_archive_interval_seconds ?? null);
+    setWatcherPolicy(cloneWatcherPolicy(next.watcher_policy));
     setSelectedStepKey(null);
     setOrigSnapshot(planDraftSnapshot(next));
+    setOrigStepsSnapshot(lifecycleStepsOnlySnapshot(lc));
     setBaseUpdatedAt(next.updated_at);
   };
 
@@ -159,6 +224,7 @@ export function usePlanEditForm(planId: number | null) {
     }
     if (isNew) {
       setOrigSnapshot(EMPTY_DRAFT_SNAPSHOT);
+      setOrigStepsSnapshot(lifecycleStepsOnlySnapshot(EMPTY_LIFECYCLE));
       setBaseUpdatedAt(undefined);
       setDismissedRemote(null);
     }
@@ -231,7 +297,10 @@ export function usePlanEditForm(planId: number | null) {
       if (phase === 'patrol') {
         const steps = [...(lc.patrol?.steps ?? [])];
         steps[selectedRef.index] = next;
-        lc.patrol = { interval_seconds: lc.patrol?.interval_seconds ?? 60, steps };
+        lc.patrol = {
+          interval_seconds: patrolIntervalSeconds ?? lc.patrol?.interval_seconds ?? 60,
+          steps,
+        };
       } else {
         const phaseKey = phase as 'init' | 'teardown';
         const steps = [...(lc[phaseKey] ?? [])];
@@ -241,20 +310,24 @@ export function usePlanEditForm(planId: number | null) {
       setLifecycle({ lifecycle: lc });
       if (next.step_id !== selectedStep.step_id) setSelectedStepKey(next.step_id);
     },
-    [selectedRef, selectedStep, lifecycle],
+    [selectedRef, selectedStep, lifecycle, patrolIntervalSeconds],
   );
 
   const handlePatrolIntervalChange = (seconds: number | null) => {
+    setPatrolIntervalSeconds(seconds);
     const lc = { ...lifecycle.lifecycle };
-    if (seconds == null) {
-      if (lc.patrol) lc.patrol = { ...lc.patrol, interval_seconds: 60 };
-    } else if (lc.patrol) {
-      lc.patrol = { ...lc.patrol, interval_seconds: Math.max(5, seconds) };
+    if (lc.patrol) {
+      lc.patrol = {
+        ...lc.patrol,
+        // 结构占位：真正 PUT 用 patrolIntervalSeconds；null 时不把回落默认写成显式值
+        interval_seconds: seconds ?? lc.patrol.interval_seconds,
+      };
+      setLifecycle({ lifecycle: lc });
     }
-    setLifecycle({ lifecycle: lc });
   };
 
   const handleTimeoutChange = (seconds: number | null) => {
+    setTimeoutSeconds(seconds);
     setLifecycle({
       lifecycle: {
         ...lifecycle.lifecycle,
@@ -263,15 +336,54 @@ export function usePlanEditForm(planId: number | null) {
     });
   };
 
+  const handlePlanSettingsChange = (next: {
+    patrolIntervalSeconds: number | null;
+    timeoutSeconds: number | null;
+    barrierTimeoutSeconds: number | null;
+    barrierMaxWaitSeconds: number | null;
+    autoArchiveIntervalSeconds: number | null;
+    watcherPolicy: Record<string, unknown> | null;
+  }) => {
+    setPatrolIntervalSeconds(next.patrolIntervalSeconds);
+    setTimeoutSeconds(next.timeoutSeconds);
+    setBarrierTimeoutSeconds(next.barrierTimeoutSeconds);
+    setBarrierMaxWaitSeconds(next.barrierMaxWaitSeconds);
+    setAutoArchiveIntervalSeconds(next.autoArchiveIntervalSeconds);
+    setWatcherPolicy(next.watcherPolicy);
+    setLifecycle({
+      lifecycle: {
+        ...lifecycle.lifecycle,
+        timeout_seconds: next.timeoutSeconds ?? undefined,
+        ...(lifecycle.lifecycle.patrol
+          ? {
+              patrol: {
+                ...lifecycle.lifecycle.patrol,
+                interval_seconds:
+                  next.patrolIntervalSeconds ?? lifecycle.lifecycle.patrol.interval_seconds,
+              },
+            }
+          : {}),
+      },
+    });
+  };
+
   const projectionRequest = useMemo<DraftParameterProjectionRequest>(() => ({
-    patrol_interval_seconds: lifecycle.lifecycle.patrol?.interval_seconds ?? null,
-    timeout_seconds: lifecycle.lifecycle.timeout_seconds ?? null,
-    barrier_timeout_seconds: basePlan?.barrier_timeout_seconds ?? null,
-    barrier_max_wait_seconds: basePlan?.barrier_max_wait_seconds ?? null,
-    auto_archive_interval_seconds: basePlan?.auto_archive_interval_seconds ?? null,
-    watcher_policy: basePlan?.watcher_policy ? { ...basePlan.watcher_policy } : null,
+    patrol_interval_seconds: patrolIntervalSeconds,
+    timeout_seconds: timeoutSeconds,
+    barrier_timeout_seconds: barrierTimeoutSeconds,
+    barrier_max_wait_seconds: barrierMaxWaitSeconds,
+    auto_archive_interval_seconds: autoArchiveIntervalSeconds,
+    watcher_policy: watcherPolicy ? { ...watcherPolicy } : null,
     steps: buildStepsForApi(lifecycle),
-  }), [lifecycle, basePlan]);
+  }), [
+    lifecycle,
+    patrolIntervalSeconds,
+    timeoutSeconds,
+    barrierTimeoutSeconds,
+    barrierMaxWaitSeconds,
+    autoArchiveIntervalSeconds,
+    watcherPolicy,
+  ]);
   const projectionIsDraft = isNew || isDirty;
   // Identity is internal only: never put raw parameters in a query key or DOM.
   const projectionIdentity = useMemo(() => ({ projectionRequest, projectionIsDraft, planId, baseUpdatedAt }), [projectionRequest, projectionIsDraft, planId, baseUpdatedAt]);
@@ -303,19 +415,92 @@ export function usePlanEditForm(planId: number | null) {
       toast.error('请选择专项');
       return null;
     }
+
+    const settingsError = validatePlanSettingsDraft({
+      patrolIntervalSeconds,
+      timeoutSeconds,
+      barrierTimeoutSeconds,
+      barrierMaxWaitSeconds,
+      autoArchiveIntervalSeconds,
+      watcherPolicy,
+      lifecycle,
+    });
+    if (settingsError) {
+      toast.error(settingsError);
+      return null;
+    }
+
+    for (const step of buildStepsForApi(lifecycle)) {
+      const pipelineStep: PipelineStep = {
+        step_id: step.step_key,
+        action: `script:${step.script_name}`,
+        version: step.script_version,
+        params: step.params,
+        timeout_seconds: step.timeout_seconds ?? undefined,
+        stall_seconds: step.stall_seconds ?? undefined,
+        retry: step.retry,
+        enabled: step.enabled,
+      };
+      const stepError = validateStepRuntimeDraft(
+        pipelineStep,
+        scriptCapabilitiesForStep(pipelineStep, scripts),
+      );
+      if (stepError) {
+        toast.error(`${step.step_key}: ${stepError}`);
+        return null;
+      }
+    }
+
     setSaving(true);
     try {
       const payload: PlanUpdate = {
         name: name.trim(),
-        patrol_interval_seconds: lifecycle.lifecycle.patrol?.interval_seconds ?? null,
-        timeout_seconds: lifecycle.lifecycle.timeout_seconds ?? null,
         next_plan_id: nextPlanId,
-        steps: buildStepsForApi(lifecycle),
         // 乐观锁令牌:后端据此拒绝"基于旧版本的保存"(409),防跨端互相覆盖。
         // #967：用草稿基准版本而非最新 plan.updated_at——远端变更被挂起后继续
         // 编辑时仍以旧基准提交，锁必须照常生效。
         expected_updated_at: baseUpdatedAt,
       };
+
+      const sameNumber = (a: number | null | undefined, b: number | null | undefined) =>
+        (a ?? null) === (b ?? null);
+
+      if (isNew) {
+        payload.patrol_interval_seconds = patrolIntervalSeconds;
+        payload.timeout_seconds = timeoutSeconds;
+        payload.barrier_timeout_seconds = barrierTimeoutSeconds;
+        payload.barrier_max_wait_seconds = barrierMaxWaitSeconds;
+        payload.auto_archive_interval_seconds = autoArchiveIntervalSeconds;
+        if (watcherPolicy != null) payload.watcher_policy = watcherPolicy;
+        payload.steps = buildStepsForApi(lifecycle);
+      } else {
+        const base = basePlan;
+        if (!sameNumber(patrolIntervalSeconds, base?.patrol_interval_seconds)) {
+          payload.patrol_interval_seconds = patrolIntervalSeconds;
+        }
+        if (!sameNumber(timeoutSeconds, base?.timeout_seconds)) {
+          payload.timeout_seconds = timeoutSeconds;
+        }
+        if (!sameNumber(barrierTimeoutSeconds, base?.barrier_timeout_seconds)) {
+          payload.barrier_timeout_seconds = barrierTimeoutSeconds;
+        }
+        if (!sameNumber(barrierMaxWaitSeconds, base?.barrier_max_wait_seconds)) {
+          payload.barrier_max_wait_seconds = barrierMaxWaitSeconds;
+        }
+        if (!sameNumber(autoArchiveIntervalSeconds, base?.auto_archive_interval_seconds)) {
+          payload.auto_archive_interval_seconds = autoArchiveIntervalSeconds;
+        }
+        const baseWatcher = cloneWatcherPolicy(base?.watcher_policy);
+        if (JSON.stringify(watcherPolicy) !== JSON.stringify(baseWatcher)) {
+          // 清空发 {}；未改省略；改动则发送完整对象（含未知子键保留）
+          payload.watcher_policy = watcherPolicy ?? {};
+        }
+        // 只改 Plan 设置时省略 steps，避免不必要的全量 DELETE+INSERT
+        if (lifecycleStepsOnlySnapshot(lifecycle) !== origStepsSnapshot) {
+          payload.steps = buildStepsForApi(lifecycle);
+        }
+      }
+
       // #1198：描述区分「未修改」（省略——不写、也不 trim 掉原值空白）与「明确清空」
       // （提交空串：后端 `if payload.description is not None` 只跳过 None，空串才会落库）。
       const trimmedDescription = description.trim();
@@ -353,9 +538,8 @@ export function usePlanEditForm(planId: number | null) {
       }
       queryClient.invalidateQueries({ queryKey: planKeys.allLists() });
       queryClient.setQueryData(planKeys.detail(saved.id), saved);
-      setOrigSnapshot(currentSnapshot);
-      setBasePlan(saved);
-      setBaseUpdatedAt(saved.updated_at);
+      // 回读以服务端保存结果为基准，避免把草稿中的安全投影写回事实
+      applyPlanToForm(saved);
       setDismissedRemote(null);
       if (isNew) {
         navigate(`/orchestration/plans/${saved.id}`, { replace: true });
@@ -366,12 +550,23 @@ export function usePlanEditForm(planId: number | null) {
       const detail = err instanceof ApiError
         ? err.details
         : ax.response?.data?.detail;
+      // 422/409：保留草稿并展示错误（#3653 §3.5）
+      if (err instanceof ApiError && err.status === 409) {
+        toast.error(
+          typeof detail === 'object' && detail && 'message' in detail
+            ? String((detail as { message: string }).message)
+            : '保存冲突：远端已更新，本地草稿已保留',
+        );
+        return null;
+      }
       if (Array.isArray(detail)) {
         toast.error(
           detail.map((d: { loc?: unknown[]; msg?: string }) => `${(d.loc || []).join('.')} ${d.msg}`).join('; '),
         );
       } else if (typeof detail === 'string') {
         toast.error(detail);
+      } else if (detail && typeof detail === 'object' && 'message' in detail) {
+        toast.error(String((detail as { message: string }).message));
       } else if (detail && typeof detail === 'object' && 'errors' in detail) {
         toast.error(`校验失败: ${(detail as { errors: string[] }).errors.join('; ')}`);
       } else {
@@ -525,6 +720,13 @@ export function usePlanEditForm(planId: number | null) {
     suites,
     lifecycle,
     setLifecycle,
+    patrolIntervalSeconds,
+    timeoutSeconds,
+    barrierTimeoutSeconds,
+    barrierMaxWaitSeconds,
+    autoArchiveIntervalSeconds,
+    watcherPolicy,
+    handlePlanSettingsChange,
     selectedStepKey,
     setSelectedStepKey,
     saving,

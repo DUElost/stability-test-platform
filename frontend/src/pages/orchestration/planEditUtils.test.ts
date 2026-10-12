@@ -5,8 +5,13 @@ import {
   buildStepsForApi,
   draftSnapshot,
   findStepInLifecycle,
+  lifecycleStepsOnlySnapshot,
+  parsePlanPositiveIntInput,
   planDraftSnapshot,
   rebuildLifecycleFromPlan,
+  validatePlanSettingsDraft,
+  validateStepRuntimeDraft,
+  watcherUnknownKeys,
   type PlanFormDraft,
 } from './planEditUtils';
 
@@ -216,7 +221,7 @@ describe('planEditUtils', () => {
     });
   });
 
-  describe('draftSnapshot / planDraftSnapshot（#966/#967）', () => {
+  describe('draftSnapshot / planDraftSnapshot（#966/#967/#3653 U6）', () => {
     const draft = (over: Partial<PlanFormDraft> = {}): PlanFormDraft => ({
       name: 'Smoke',
       description: 'desc',
@@ -225,6 +230,12 @@ describe('planEditUtils', () => {
       specialtyKey: 'S1',
       suiteName: '',
       lifecycle: EMPTY_LIFECYCLE,
+      patrolIntervalSeconds: null,
+      timeoutSeconds: null,
+      barrierTimeoutSeconds: null,
+      barrierMaxWaitSeconds: null,
+      autoArchiveIntervalSeconds: null,
+      watcherPolicy: null,
       ...over,
     });
 
@@ -234,6 +245,30 @@ describe('planEditUtils', () => {
       expect(draftSnapshot(draft({ specialtyKey: 'S2' }))).not.toBe(base);
       expect(draftSnapshot(draft({ suiteName: 'SUITE-A' }))).not.toBe(base);
       expect(draftSnapshot(draft())).toBe(base);
+    });
+
+    it('计划设置与 watcher 变更进入脏快照；步骤图与设置分离', () => {
+      const base = draftSnapshot(draft());
+      expect(draftSnapshot(draft({ barrierMaxWaitSeconds: 1800 }))).not.toBe(base);
+      expect(draftSnapshot(draft({ watcherPolicy: {} }))).not.toBe(base);
+      const stepsOnly = lifecycleStepsOnlySnapshot(rebuildLifecycleFromPlan(basePlan));
+      const settingsDirtySameSteps = draftSnapshot(
+        draft({
+          lifecycle: rebuildLifecycleFromPlan(basePlan),
+          barrierMaxWaitSeconds: 1,
+          patrolIntervalSeconds: basePlan.patrol_interval_seconds ?? null,
+          timeoutSeconds: basePlan.timeout_seconds ?? null,
+        }),
+      );
+      const settingsCleanSameSteps = draftSnapshot(
+        draft({
+          lifecycle: rebuildLifecycleFromPlan(basePlan),
+          patrolIntervalSeconds: basePlan.patrol_interval_seconds ?? null,
+          timeoutSeconds: basePlan.timeout_seconds ?? null,
+        }),
+      );
+      expect(settingsDirtySameSteps).not.toBe(settingsCleanSameSteps);
+      expect(lifecycleStepsOnlySnapshot(rebuildLifecycleFromPlan(basePlan))).toBe(stepsOnly);
     });
 
     it('planDraftSnapshot 与同值草稿快照一致（#967 远端比对键序稳定）', () => {
@@ -246,8 +281,82 @@ describe('planEditUtils', () => {
           specialtyKey: basePlan.specialty_key || '',
           suiteName: basePlan.suite_name || '',
           lifecycle: rebuildLifecycleFromPlan(basePlan),
+          patrolIntervalSeconds: basePlan.patrol_interval_seconds ?? null,
+          timeoutSeconds: basePlan.timeout_seconds ?? null,
+          barrierTimeoutSeconds: basePlan.barrier_timeout_seconds ?? null,
+          barrierMaxWaitSeconds: basePlan.barrier_max_wait_seconds ?? null,
+          autoArchiveIntervalSeconds: basePlan.auto_archive_interval_seconds ?? null,
+          watcherPolicy: basePlan.watcher_policy ? { ...basePlan.watcher_policy } : null,
         }),
       );
+    });
+
+    it('barrier 硬顶 null 不预填默认数字', () => {
+      const plan = { ...basePlan, barrier_max_wait_seconds: null };
+      expect(planDraftSnapshot(plan)).toContain('"barrierMaxWaitSeconds":null');
+    });
+  });
+
+  describe('U6 边界校验', () => {
+    it('parsePlanPositiveIntInput 拒绝 0/小数/负值，空为 null', () => {
+      expect(parsePlanPositiveIntInput('')).toBeNull();
+      expect(parsePlanPositiveIntInput('12')).toBe(12);
+      expect(parsePlanPositiveIntInput('0')).toBe('invalid');
+      expect(parsePlanPositiveIntInput('1.5')).toBe('invalid');
+      expect(parsePlanPositiveIntInput('-2')).toBe('invalid');
+    });
+
+    it('validatePlanSettingsDraft：启用 patrol 时间隔必填；watcher enum/paths 拒非法', () => {
+      const withPatrol = rebuildLifecycleFromPlan(basePlan);
+      expect(
+        validatePlanSettingsDraft({
+          patrolIntervalSeconds: null,
+          timeoutSeconds: 3600,
+          barrierTimeoutSeconds: null,
+          barrierMaxWaitSeconds: null,
+          autoArchiveIntervalSeconds: null,
+          watcherPolicy: null,
+          lifecycle: withPatrol,
+        }),
+      ).toMatch(/巡检间隔/);
+      expect(
+        validatePlanSettingsDraft({
+          patrolIntervalSeconds: 60,
+          timeoutSeconds: 3600,
+          barrierTimeoutSeconds: null,
+          barrierMaxWaitSeconds: null,
+          autoArchiveIntervalSeconds: null,
+          watcherPolicy: { on_unavailable: 'nope' },
+          lifecycle: withPatrol,
+        }),
+      ).toMatch(/fail/);
+    });
+
+    it('validateStepRuntimeDraft：timeout0 需 stall+progress；retry 上限 5', () => {
+      expect(
+        validateStepRuntimeDraft(
+          { step_id: 's', action: 'script:x', timeout_seconds: 0, stall_seconds: 0, retry: 0 },
+          ['progress_stamps'],
+        ),
+      ).toMatch(/停滞/);
+      expect(
+        validateStepRuntimeDraft(
+          { step_id: 's', action: 'script:x', timeout_seconds: 0, stall_seconds: 10, retry: 0 },
+          [],
+        ),
+      ).toMatch(/progress_stamps/);
+      expect(
+        validateStepRuntimeDraft(
+          { step_id: 's', action: 'script:x', timeout_seconds: 0, stall_seconds: 10, retry: 6 },
+          ['progress_stamps'],
+        ),
+      ).toMatch(/0\.\.5/);
+    });
+
+    it('watcherUnknownKeys 保留未登记子键名', () => {
+      expect(watcherUnknownKeys({ enabled: true, batch_interval_seconds: 5 })).toEqual([
+        'batch_interval_seconds',
+      ]);
     });
   });
 });

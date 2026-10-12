@@ -142,11 +142,18 @@ export default function PlanEditPage() {
           onPlanNameChange={form.setName}
           description={form.description}
           onDescriptionChange={form.setDescription}
-
-
-          patrolIntervalSeconds={form.lifecycle.lifecycle.patrol?.interval_seconds ?? null}
+          planSettings={{
+            patrolIntervalSeconds: form.patrolIntervalSeconds,
+            timeoutSeconds: form.timeoutSeconds,
+            barrierTimeoutSeconds: form.barrierTimeoutSeconds,
+            barrierMaxWaitSeconds: form.barrierMaxWaitSeconds,
+            autoArchiveIntervalSeconds: form.autoArchiveIntervalSeconds,
+            watcherPolicy: form.watcherPolicy,
+          }}
+          onPlanSettingsChange={form.handlePlanSettingsChange}
+          patrolIntervalSeconds={form.patrolIntervalSeconds}
           onPatrolIntervalChange={form.handlePatrolIntervalChange}
-          timeoutSeconds={form.lifecycle.lifecycle.timeout_seconds ?? null}
+          timeoutSeconds={form.timeoutSeconds}
           onTimeoutChange={form.handleTimeoutChange}
           nextPlanName={form.nextPlanName}
           isCurrentEditing

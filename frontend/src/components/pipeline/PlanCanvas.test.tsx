@@ -568,23 +568,22 @@ describe('PlanCanvas', () => {
       expect(onPatrolIntervalChange).toHaveBeenCalledWith(null);
     });
 
-    it('patrol 间隔下限 5 秒', () => {
+    it('patrol 间隔允许 ≥1 的整数（#3653 §3.4）', () => {
       const onPatrolIntervalChange = vi.fn();
       render(<Harness onPatrolIntervalChange={onPatrolIntervalChange} />);
 
       fireEvent.change(screen.getByPlaceholderText('不开启'), { target: { value: '3' } });
 
-      expect(onPatrolIntervalChange).toHaveBeenCalledWith(5);
+      expect(onPatrolIntervalChange).toHaveBeenCalledWith(3);
     });
 
-    it('patrol 间隔填 0 落回默认 60 秒', () => {
+    it('patrol 间隔填 0 视为清空（null），不预填默认秒数', () => {
       const onPatrolIntervalChange = vi.fn();
       render(<Harness onPatrolIntervalChange={onPatrolIntervalChange} />);
 
-      // parseInt('0') 为 falsy，走 || 60 的默认分支——不是 clamp 到 5
       fireEvent.change(screen.getByPlaceholderText('不开启'), { target: { value: '0' } });
 
-      expect(onPatrolIntervalChange).toHaveBeenCalledWith(60);
+      expect(onPatrolIntervalChange).toHaveBeenCalledWith(null);
     });
 
 
