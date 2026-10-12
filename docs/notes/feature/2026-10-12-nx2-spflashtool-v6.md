@@ -159,6 +159,23 @@ MLD_NX2（项目 535，板级 P535AA / MT6835）的刷机包由 **SP Flash Tool 
 - 仍**未取证**：④ NX2 的 DA 态 USB pid；⑤ `super` 4.67G 的首刷耗时（`timeout_seconds=1200`
   沿用 552 口径）。两者都需要一次真实刷写窗口。
 
+真机 V6 成功刷机一次（Owner 授权：先停 `.85` 的 13 个开关机作业并清环境）：
+
+- 停线：13 个 job（12 RUNNING + 1 已 ABORTED）经 `manual-exit` 收口为 ABORTED；
+  **实测 ADR-0022 BO4 的缺口**——abort 后 12 台的 `boot_count` 仍从 98 涨到 99/109
+  （设备侧 `PowerCycleService` 在自动重启），于是用平台自有收尾步建 Plan 79
+  （`powercycle_finish@1.0.8`，`project=chain`）派发 run 911，12/12 COMPLETED；
+  之后两次采样 `boot_count` 完全冻结、`svc=0`、主机无残留进程 → 环境才算清干净。
+  （934/`0226` 与 `0172` 当时 adb 不可达，收尾步下发不了，已记录为现场待确认项。）
+- 刷机：`1.3.19` 的**已登记包字节**（sha 一致）在 `.85` 上手动执行（PR 未合入 →
+  控制面部署树里没有该版本，scan 无从注册，这是结构限制不是选择）。
+  结果 `success=true / exit_code=0 / duration 357.6s`，
+  argv `SPFlashToolV6 -c firmware-upgrade -f <staged>/download_agent/flash.xml -b auto`，
+  目标口 pid 轨迹 `201c→2000→201c`（**接管态在既有集合内，没有新 pid**），
+  版本回读与 `manifest.version` 一致。
+- 由这次实跑修掉 `caught_brom` 的 V5-only 措辞判据（真机留下 `caught_brom=false` 的假诊断）；
+  并留下 #3690 的量化证据（门控隐藏 11 个 `201c` 正常态邻机口、`regate=22`）。
+
 站点侧实际写操作（本单做过，全部只增不改）：
 
 - 发布 `packages/flashtool_v6/1.2444.00.100.tar.gz`（55,677,853 字节；发布守卫核对

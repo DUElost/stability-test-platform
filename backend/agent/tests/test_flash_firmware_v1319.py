@@ -402,6 +402,13 @@ def fake_v6_tool(tmp_path: Path) -> Path:
     return exe
 
 
+def test_caught_brom_matches_both_generation_wordings() -> None:
+    """`caught_brom` 两代措辞都得认（v6 真机日志是 `connect brom successed.`）。"""
+    assert ff._output_caught_brom(_V6_LOG) is True          # 真机 V6 日志
+    assert ff._output_caught_brom("BROM connected\nDownload started") is True
+    assert ff._output_caught_brom("scan device com port failed, error code: -1") is False
+
+
 def test_v6_log_passes_verdict() -> None:
     ok, reason = ff._scan_output_for_verdict(_V6_LOG, "")
     assert ok is True, reason

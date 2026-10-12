@@ -1042,6 +1042,13 @@ def _build_flash_argv(
     return [exe, "-c", command, "-d", da_file, "-s", scatter_file, "-b", boot_mode]
 
 
+def _output_caught_brom(output: str) -> bool:
+    """工具是否真的接管到 BROM/preloader（两代措辞各自匹配）。"""
+    if "BROM connected" in output:
+        return True
+    return "connect brom successed" in output.lower()
+
+
 def _scan_output_for_verdict(stdout: str, stderr: str):
     combined = "\n".join(s for s in (stdout, stderr) if s)
     upper = combined.upper()
@@ -2089,7 +2096,11 @@ def main() -> None:
             attempt_record.update({
                 "outcome": "ok" if v_ok else "verdict-failed",
                 "exit_code": flash_rc,
-                "caught_brom": "BROM connected" in output,
+                # 两代措辞不同：V5 打「BROM connected」，V6 打「connect brom
+                # successed.」（2026-10-12 真机日志与本机实测一致）。只认 V5 字样
+                # 会让 v6 的每次成功刷机都在 attempts 里留下 caught_brom=false 的
+                # 假诊断——排查时会被引向「没抓到 BROM」这个错误方向。
+                "caught_brom": _output_caught_brom(output),
                 "verdict": v_evidence,
             })
             attempts_report.append(attempt_record)
