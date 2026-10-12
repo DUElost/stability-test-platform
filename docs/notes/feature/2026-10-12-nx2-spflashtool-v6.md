@@ -79,11 +79,12 @@ MLD_NX2（项目 535，板级 P535AA / MT6835）的刷机包由 **SP Flash Tool 
   绑定声明，28 锚，防扩张通过）；`env_inventory --check` 271 读取名一致。
 - 测试（均经 `scripts/run_pytest.py` 的 cgroup 硬顶入口）：
   `backend/agent/tests/test_flash_firmware_v1319.py` 31 passed；
-  `backend/agent/tests/test_flash_preflight_v107.py` 9 passed（两个新文件合跑 40 passed）；
-  `-k flash_preflight` 44 passed、`-k flash` 198 passed；
+  `backend/agent/tests/test_flash_preflight_v107.py`（判据改 ldd 后）12 passed；
+  `-k flash_preflight` 47 passed、`-k flash` 202 passed；
   `backend/agent/tests -k "flash or required_tools or tool_cache or tool_asset or script_packages"`
   264 passed（含 v102–v105 preflight 套件与 v1310/v1311 main 流程套件）；
-  **Agent 全套 `backend/agent/tests` 2545 passed**（103s，无失败）；
+  **Agent 全套 `backend/agent/tests` 2551 passed**（105s，无失败）；
+  **根 `tests/` 全量 2400 passed / 18 skipped**（11m07s，无失败）；
   `tests/test_flash_provisioning_prereqs_2133.py` 16 passed；
   `tests/test_script_seed_governance.py` + `tests/test_pipeline_template_script_pins_2865.py` +
   `backend/tests/test_pending_activation_view_2931.py` 14 passed；
@@ -93,7 +94,7 @@ MLD_NX2（项目 535，板级 P535AA / MT6835）的刷机包由 **SP Flash Tool 
 - `scripts/run_gates.py check:quick` → **16 gates OK**；`scripts/run_gates.py check:pr` →
   **23 gates OK**（rc=0；含 tool-manifest / resource-anchors / gov-surface / agent-tests /
   pr-migrate）。
-- 根 `tests/` 全量补跑与 CI 复跑结论记在 PR 评论（不以「命令跑过」代替结果）。
+- CI 复跑结论记在 PR 评论（不以「命令跑过」代替结果）。
 - 为签名变化同步的既有桩：`test_flash_firmware_v1310/v1311` 的 `_pick_flash_tool_exe` 桩改为
   带默认值的两参 lambda；`test_flash_preflight_v102` 的条目名集合加
   `v6-shared-libs` / `flashtool-v6`（两项确为本版新增）。
