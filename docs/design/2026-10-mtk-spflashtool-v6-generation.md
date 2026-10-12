@@ -124,9 +124,17 @@
 | ① NX2 的 `ro.product.model` | **`MLD-NX2`**（连字符）；平台设备表记为 `MLD_NX2`（下划线，来源 `adb devices`）——两个拼写都已在路由表 | `adb shell getprop ro.product.model` + `GET /api/v1/devices?project_key=P535AA` |
 | ② 目标版本口径 | `ro.build.version.incremental` = **`P535AA-HONOR-NX2-16-260928V9`**；`ro.build.display.id` = `MLD-NX2-16-260928V9`（≠ incremental，别照抄界面/目录名） | 同上；上架目录名与 `manifest.version` 均取 incremental 值 |
 | ③ Linux 侧 V6 的 `-b auto` | **接受**：`Command line arguments parse pass!`，随后完成 `validating XML schema / XML schema validation passed!` 并进入 `scan device START, timeout set as 120000 ms`；无设备时以 `scan device com port failed, error code: -1` + rc=1 收场 | Debian 13 上对 `SP_Flash_Tool_V6 v6.2444.00`（Build Nov 4 2024）实跑 |
-| ④ NX2 刷机态 USB pid | **未取证**（需要一次真实刷写窗口）。已知正常态：`0e8d:201c`（LX2/LX3/NX2 在 adb 在线时都是它），`0e8d:2046` 亦见于在线设备 | 4 台 NX2 host + `.63`（LX2）的 sysfs 枚举 |
+| ④ NX2 刷机态 USB pid | **已取证**：真机目标口轨迹 `201c → 0e8d:2000 → 201c`，接管态 `2000` **在既有集合内**（`_BROM_STAGE_PIDS` 也含它），未出现集合外的新 pid；正常态实测为 `201c`（`2046` 亦见于在线设备） | 刷机窗口内 1.5s 采样 sysfs（`172.21.x.x` 末段 `.85`） |
+| ⑤ 首刷耗时 | **357.6s** 走完 `firmware-upgrade`（含 `super` 4.67G）+ 版本回读一致 → 默认 `timeout_seconds=1200` 够用 | `metrics.duration_seconds` / `attempts[0].verdict` |
 
-遗留风险（④ 之外）：
+**刷机成功后又观察到一件事（重要）**：设备在 `success=true`、版本回读一致之后约 10–30 分钟，
+从「adb 可见」掉成 `0e8d:2046`——有 USB serial、**没有 adb 接口**，与该 host 上长期 OFFLINE 的
+`…0172` / `…0226` 同形；非 root 无法写 `authorized` 复位。两条结论：
+① V6 首刷的 Plan 链必须让 `oobe_skip` + `ensure_root` **紧跟**刷机步，别等 adb 窗口关掉；
+② **`success=true` 不等于「设备回到可测状态」**，收口判据要再加一条平台侧
+`ONLINE + adb_state=device` 复查（本次因无 Plan 载体没做到，故记在这里而不是记成完成）。
+
+遗留风险（④⑤ 之外）：
 
 - **NX2 host 目前跑不起 V6**：`172.21.x.x`（末段 `.83`）上 `ldd SPFlashToolV6` 报
   `libGL.so.1 => not found`，`SPFlashToolV6 -h` 直接 `error while loading shared

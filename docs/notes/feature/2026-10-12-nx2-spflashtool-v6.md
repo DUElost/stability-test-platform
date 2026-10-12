@@ -156,8 +156,7 @@ MLD_NX2（项目 535，板级 P535AA / MT6835）的刷机包由 **SP Flash Tool 
   `no firmware family route for model MLD-NX2; known models: …`（不含 NX2）与
   `manifest.json must define scatter_file and da_file` → 固件先上架不会让 552 计划在用版本
   误刷 NX2 包。
-- 仍**未取证**：④ NX2 的 DA 态 USB pid；⑤ `super` 4.67G 的首刷耗时（`timeout_seconds=1200`
-  沿用 552 口径）。两者都需要一次真实刷写窗口。
+- ④⑤（接管态 USB pid、`super` 4.67G 首刷耗时）已在下面的真机刷机里取到，不再列为未知。
 
 真机 V6 成功刷机一次（Owner 授权：先停 `.85` 的 13 个开关机作业并清环境）：
 
