@@ -1,5 +1,5 @@
 import { useId } from 'react';
-import type { PipelineDef, PipelinePhase, PipelineStep, ScriptEntry, ProjectSummary, Specialty, TestSuiteSummary } from '@/utils/api/types';
+import type { PipelineDef, PipelinePhase, PipelineStep, ScriptEntry, ProjectSummary, Specialty, TestSuiteSummary, ParameterProjection } from '@/utils/api/types';
 import { ArrowDown, ArrowUp, Copy, Trash2 } from 'lucide-react';
 import {
   PIPELINE_EDITOR,
@@ -9,7 +9,7 @@ import {
 } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { formatStepTimeout, stepTimeoutHint } from './stepTiming';
-import { PATROL_DURATION_HINT, PATROL_DURATION_LABEL, patrolDurationSummary } from './planTiming';
+import { PlanSettingsReadonly } from '@/components/parameters/PlanSettingsReadonly';
 
 const PHASE_LABELS: Record<PipelinePhase, string> = {
   init: 'Init',
@@ -18,6 +18,10 @@ const PHASE_LABELS: Record<PipelinePhase, string> = {
 };
 
 interface PlanCanvasProps {
+  settingsMetadata?: ParameterProjection;
+  projection?: ParameterProjection;
+  projectionUnavailable?: boolean;
+  projectionIsDraft?: boolean;
   planName: string;
   onPlanNameChange: (next: string) => void;
   description: string;
@@ -85,6 +89,10 @@ function setPhaseSteps(lifecycle: PipelineDef, phase: PipelinePhase, steps: Pipe
 }
 
 export default function PlanCanvas({
+  settingsMetadata,
+  projection,
+  projectionUnavailable,
+  projectionIsDraft,
   planName,
   onPlanNameChange,
   description,
@@ -176,6 +184,7 @@ export default function PlanCanvas({
     <section className={cn('flex-1 min-h-0 min-w-0 overflow-y-auto custom-scrollbar', PIPELINE_EDITOR.canvasBg)}>
       <div className="p-3.5 grid gap-3">
         <PlanHeader
+          projection={projection ?? settingsMetadata}
           planName={planName}
           onPlanNameChange={onPlanNameChange}
           description={description}
@@ -184,7 +193,6 @@ export default function PlanCanvas({
           onPatrolIntervalChange={onPatrolIntervalChange}
           timeoutSeconds={timeoutSeconds}
           onTimeoutChange={onTimeoutChange}
-          hasPatrolSteps={(lifecycle.lifecycle.patrol?.steps ?? []).some(s => s.enabled !== false)}
           totalSteps={totalSteps}
           nextPlanName={nextPlanName}
           isCurrentEditing={isCurrentEditing}
@@ -200,6 +208,7 @@ export default function PlanCanvas({
           readOnly={readOnly}
         />
 
+        <PlanSettingsReadonly projection={projection} unavailable={projectionUnavailable} isDraft={projectionIsDraft} />
         {(['init', 'patrol', 'teardown'] as PipelinePhase[]).map(phase => {
           const steps = getPhaseSteps(lifecycle, phase);
           return (
@@ -224,6 +233,7 @@ export default function PlanCanvas({
 }
 
 interface PlanHeaderProps {
+  projection?: ParameterProjection;
   planName: string;
   onPlanNameChange: (next: string) => void;
   description: string;
@@ -232,8 +242,6 @@ interface PlanHeaderProps {
   onPatrolIntervalChange: (next: number | null) => void;
   timeoutSeconds: number | null;
   onTimeoutChange: (next: number | null) => void;
-  /** 是否有启用的巡检步骤——没有时巡检时长不生效，说明行据此换口径。 */
-  hasPatrolSteps: boolean;
   totalSteps: number;
   nextPlanName: string | null;
   isCurrentEditing: boolean;
@@ -250,6 +258,7 @@ interface PlanHeaderProps {
 }
 
 function PlanHeader({
+  projection,
   planName,
   onPlanNameChange,
   description,
@@ -258,7 +267,6 @@ function PlanHeader({
   onPatrolIntervalChange,
   timeoutSeconds,
   onTimeoutChange,
-  hasPatrolSteps,
   totalSteps,
   nextPlanName,
   isCurrentEditing,
@@ -275,6 +283,8 @@ function PlanHeader({
 }: PlanHeaderProps) {
   const metaInputCls = cn('h-6 px-2 text-xs', PIPELINE_EDITOR.inputInline);
   const patrolDurationSummaryId = useId();
+  const duration = projection?.plan_settings.find(item => item.path.length === 1 && item.path[0] === 'timeout_seconds');
+  const interval = projection?.plan_settings.find(item => item.path.length === 1 && item.path[0] === 'patrol_interval_seconds');
   const suiteOptions = suites ?? [];
   // 当前绑定若不在活跃列表（已归档），仍展示一项以免下拉空白。
   const suiteOptionsWithCurrent =
@@ -379,7 +389,7 @@ function PlanHeader({
       )}
 
       <div className={cn('flex flex-wrap items-center gap-x-4 gap-y-2 text-xs', TEXT.subtitle)}>
-        <MetaItem label="Patrol 间隔">
+        <MetaItem label={interval?.label ?? "patrol_interval_seconds"}>
           <input
             type="number"
             min={5}
@@ -397,15 +407,15 @@ function PlanHeader({
         </MetaItem>
 
 
-        <MetaItem label={PATROL_DURATION_LABEL}>
+        <MetaItem label={duration?.label ?? "timeout_seconds"}>
           <input
             type="number"
             min={1}
             value={timeoutSeconds ?? ''}
             placeholder="不限"
             disabled={readOnly}
-            title={PATROL_DURATION_HINT}
-            aria-label={PATROL_DURATION_LABEL}
+            title={duration?.meaning}
+            aria-label={duration?.label ?? "timeout_seconds"}
             aria-describedby={patrolDurationSummaryId}
             onChange={e => {
               const n = parseInt(e.target.value, 10);
@@ -423,13 +433,12 @@ function PlanHeader({
         </MetaItem>
       </div>
 
-      {/* 字段名叫 timeout，引擎里是巡检时长预算：自各设备 init 完成起计、到点算成功（planTiming.ts） */}
       <p
         id={patrolDurationSummaryId}
         data-testid="plan-patrol-duration-summary"
         className={cn('text-[11px] leading-snug', TEXT.subtitle)}
       >
-        {patrolDurationSummary(timeoutSeconds, hasPatrolSteps)}
+        {duration ? `${duration.meaning} ${duration.fallback_chain ?? ''}` : '正在读取设置说明'}
       </p>
 
       {nextPlanName && (

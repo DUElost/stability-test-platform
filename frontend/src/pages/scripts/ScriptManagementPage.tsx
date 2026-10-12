@@ -282,26 +282,14 @@ export default function ScriptManagementPage() {
                         <TableCell colSpan={6} className="px-3 py-3">
                           <div className="space-y-3">
                             <div className="space-y-2 text-xs">
-                              {script.default_params && Object.keys(script.default_params).length > 0 && (
+                              {script.parameter_projection ? (
                                 <div>
-                                  <span className={cn('font-medium', TEXT.subtitle)}>默认参数: </span>
-                                  <pre className={cn('mt-1 overflow-x-auto rounded bg-muted p-2', TEXT.body)}>
-                                    {JSON.stringify(script.default_params, null, 2)}
+                                  <span className={cn('font-medium', TEXT.subtitle)}>安全参数 JSON</span>
+                                  <pre className={cn('mt-1 max-w-[calc(100vw-4rem)] overflow-x-auto rounded bg-muted p-2', TEXT.body)}>
+                                    {JSON.stringify(script.parameter_projection.safe_debug, null, 2)}
                                   </pre>
                                 </div>
-                              )}
-                              {script.param_schema && Object.keys(script.param_schema).length > 0 && (
-                                <div>
-                                  <span className={cn('font-medium', TEXT.subtitle)}>参数 Schema: </span>
-                                  <pre className={cn('mt-1 overflow-x-auto rounded bg-muted p-2', TEXT.body)}>
-                                    {JSON.stringify(script.param_schema, null, 2)}
-                                  </pre>
-                                </div>
-                              )}
-                              {(!script.default_params || Object.keys(script.default_params).length === 0) &&
-                               (!script.param_schema || Object.keys(script.param_schema).length === 0) && (
-                                <p className={TEXT.subtitle}>无参数定义</p>
-                              )}
+                              ) : <p className={TEXT.subtitle}>安全投影不可用</p>}
                             </div>
                             <UsageSection script={script} />
                           </div>

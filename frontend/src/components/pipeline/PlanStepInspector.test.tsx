@@ -2,8 +2,9 @@ import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
+import { mergeDraftParameters } from '@/components/parameters/draftParameterMerge';
 import PlanStepInspector from './PlanStepInspector';
-import type { PipelinePhase, PipelineStep, ScriptEntry } from '@/utils/api/types';
+import type { PipelinePhase, PipelineStep, ScriptEntry, ParameterProjection } from '@/utils/api/types';
 
 // Inspector 是受控组件：每次编辑都整体回吐 PipelineStep。
 // 断言主要打在 onUpdateStep 的入参上——参数表单的核心语义（三层取值、等于
@@ -71,6 +72,24 @@ const REBOOT = makeScript({
 
 const SCRIPTS: ScriptEntry[] = [INSTALL_V2, INSTALL_V1, REBOOT];
 
+function fakeProjection(step: PipelineStep | null, scripts: ScriptEntry[]): ParameterProjection {
+  const script = scripts.find(s => s.name === step?.action.slice(7) && s.version === step?.version);
+  const schema = script?.param_schema ?? {};
+  const merged = mergeDraftParameters(schema, script?.default_params, step?.params);
+  const keys = [...new Set([...Object.keys(schema), ...Object.keys(merged)])].sort((a, b) =>
+    Number(!!(schema[b] as { required?: boolean })?.required) - Number(!!(schema[a] as { required?: boolean })?.required));
+  return {
+    layer: 'L1', context: { read_at: '2026-10-11T00:00:00Z', authority: '测试服务端' },
+    steps: step ? [{ step_key: step.step_id, script_name: step.action.slice(7), script_version: step.version,
+      sort_order: 0, enabled: true, executes: true, metadata_missing: false, settings: [],
+      params: keys.map(key => ({ path: [key], label: (schema[key] as { label?: string })?.label || key,
+        meaning: (schema[key] as { description?: string })?.description || '', value: merged[key],
+        state: 'explicit', source: 'step_override', sensitive: false, is_set: merged[key] != null })) }]: [],
+    plan_settings: [], watcher_policy: { note: '', items: [] }, dispatch_decisions: [],
+    safe_debug: { steps: [{ step_key: step?.step_id, param_schema: schema, default_params: script?.default_params }], plan_settings: {}, watcher_policy: {} },
+  };
+}
+
 interface HarnessProps {
   step?: PipelineStep | null;
   phase?: PipelinePhase | null;
@@ -92,6 +111,7 @@ function Harness({
   return (
     <MemoryRouter>
       <PlanStepInspector
+        projection={fakeProjection(step, scripts)}
         step={step}
         phase={phase}
         index={index}
@@ -108,7 +128,9 @@ function Harness({
 
 /** Row / FieldGroup 都是「label span + 控件」的兄弟结构，没有 htmlFor。 */
 function fieldOf(label: string): HTMLElement {
-  const el = screen.getByText(label).parentElement;
+  const candidates = screen.getAllByText(label);
+  const match = candidates.find(el => el.parentElement?.querySelector('input,select,button'));
+  const el = (match ?? candidates[0])?.parentElement;
   if (!el) throw new Error(`field not found: ${label}`);
   return el;
 }
@@ -269,6 +291,7 @@ describe('PlanStepInspector', () => {
       render(<Harness />);
       const labels = screen
         .getAllByText(/^(目标包名|retries|mode|verbose)( \*)?$/)
+        .filter(el => el.parentElement?.querySelector('input,select,button'))
         .map((el) => el.textContent);
       expect(labels[0]).toBe('目标包名 *');
     });
@@ -289,7 +312,7 @@ describe('PlanStepInspector', () => {
       expect(input).toHaveValue('');
       // 说明不再塞进 placeholder（字段一有值就被遮住），placeholder 与数字字段同口径取 schema 默认
       expect(input).toHaveAttribute('placeholder', '');
-      const description = screen.getByText('com.example');
+      const description = screen.getAllByText('com.example').find(el => el.id)!;
       expect(description.tagName).toBe('P');
       expect(input).toHaveAttribute('aria-describedby', description.id);
     });
@@ -363,7 +386,7 @@ describe('PlanStepInspector', () => {
           onUpdateStep={onUpdateStep}
         />,
       );
-      expect(screen.getByText('自由键值')).toBeInTheDocument();
+      expect(screen.getByText(/自由键值/)).toBeInTheDocument();
       // default_params 键渲染为可编辑输入（字符串 → textbox，数字 → spinbutton）
       expect(within(fieldOf('host')).getByRole('textbox')).toHaveValue('x');
       expect(within(fieldOf('port')).getByRole('spinbutton')).toHaveValue(22);
@@ -383,7 +406,7 @@ describe('PlanStepInspector', () => {
           onUpdateStep={onUpdateStep}
         />,
       );
-      expect(screen.getByText('自由键值')).toBeInTheDocument();
+      expect(screen.getByText(/自由键值/)).toBeInTheDocument();
       expect(screen.getByText(/可手动添加自定义参数/)).toBeInTheDocument();
 
       fireEvent.change(screen.getByLabelText('新参数名'), {
@@ -651,7 +674,7 @@ describe('PlanStepInspector', () => {
     it('字段已有值时说明仍可见（不依赖 placeholder）', () => {
       render(<Harness step={flashStep()} scripts={[DESCRIBED]} />);
       expect(within(fieldOf('固件目录')).getByRole('textbox')).toHaveValue('/nfs/fw');
-      expect(screen.getByText('NFS 相对或绝对路径。缺省走指纹路由')).toBeVisible();
+      expect(screen.getAllByText('NFS 相对或绝对路径。缺省走指纹路由')[0]).toBeVisible();
     });
 
     it('数字、枚举、布尔字段同样显示说明并关联到控件', () => {
@@ -662,7 +685,7 @@ describe('PlanStepInspector', () => {
         [within(fieldOf('清除数据')).getByRole('button'), '刷机前清除 userdata'],
       ];
       for (const [control, text] of cases) {
-        const description = screen.getByText(text);
+        const description = screen.getAllByText(text).find(el => el.id)!;
         expect(description.id).not.toBe('');
         expect(control).toHaveAttribute('aria-describedby', description.id);
       }
@@ -686,4 +709,95 @@ describe('PlanStepInspector', () => {
       expect(screen.getByLabelText('禁用步骤')).toBeDisabled();
     });
   });
+});
+
+describe('B5 U3 服务端投影边界', () => {
+  const rawSecret = 'SYNTHETIC_RAW_PASSWORD_3656';
+  const script = makeScript({ name: 'connect_wifi', version: '1.0.2',
+    default_params: { password: rawSecret, ssid: 'RAW_DEFAULT' },
+    param_schema: { password: { type: 'string', default: rawSecret, enum: [rawSecret] }, ssid: { type: 'string' } },
+  });
+  function savedProjection(): ParameterProjection {
+    const projection = fakeProjection(makeStep({ action: 'script:connect_wifi', version: '1.0.2' }), [script]);
+    projection.steps[0].params = [
+      { path: ['password'], label: '密码', meaning: '连接凭据', value: null, sensitive: true, is_set: true, state: 'explicit' },
+      { path: ['ssid'], label: '网络名称', meaning: '服务端说明', value: 'SERVER_VALUE', sensitive: false, is_set: true, state: 'explicit', source: 'script_default' },
+    ];
+    projection.safe_debug.steps = [{ step_key: 'init_1', params: { password: null, ssid: 'SERVER_VALUE' },
+      param_schema: { password: { type: 'string', default: null }, ssid: { type: 'string' } } }];
+    return projection;
+  }
+  it('保存态和控件只读服务端值；raw schema/default/step 哨兵不进 DOM 或 placeholder', () => {
+    const spy = vi.fn();
+    const step = makeStep({ action: 'script:connect_wifi', version: '1.0.2', params: { password: rawSecret, ssid: 'RAW_STEP' } });
+    const { container } = render(<MemoryRouter><PlanStepInspector step={step} phase="init" index={0} scripts={[script]}
+      projection={savedProjection()} onUpdateStep={spy} /></MemoryRouter>);
+    expect(screen.getByLabelText('网络名称')).toHaveValue('SERVER_VALUE');
+    expect(container.innerHTML).not.toContain(rawSecret);
+    expect(container.innerHTML).not.toContain('RAW_STEP');
+    expect(container.innerHTML).not.toContain('RAW_DEFAULT');
+    expect(screen.getByText('已设置')).toBeVisible();
+    expect(screen.queryByRole('textbox', { name: '密码' })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('网络名称'), { target: { value: 'NEW_SSID' } });
+    expect(spy.mock.calls[0][0].params).toEqual({ password: rawSecret, ssid: 'NEW_SSID' });
+    expect(step.params?.ssid).toBe('RAW_STEP');
+  });
+  it('投影失败时不回退 raw 或展示新自由键', () => {
+    const { container } = render(<MemoryRouter><PlanStepInspector step={makeStep({ params: { token: rawSecret, extra: 'RAW_EXTRA' } })}
+      phase="init" index={0} scripts={SCRIPTS} onUpdateStep={vi.fn()} projectionUnavailable /></MemoryRouter>);
+    expect(screen.getByTestId('parameter-projection-unavailable')).toHaveTextContent('不可用');
+    expect(container.innerHTML).not.toContain(rawSecret);
+    expect(container.innerHTML).not.toContain('RAW_EXTRA');
+  });
+  it('新自由键只有经过安全投影才展示值', () => {
+    const step = makeStep({ params: { free_key: 'RAW_NEW_FREE' } });
+    const projection = fakeProjection(step, SCRIPTS);
+    projection.steps[0].params = [];
+    const { rerender } = render(<MemoryRouter><PlanStepInspector step={step} phase="init" index={0}
+      scripts={SCRIPTS} projection={projection} onUpdateStep={vi.fn()} /></MemoryRouter>);
+    expect(document.body.innerHTML).not.toContain('RAW_NEW_FREE');
+    projection.steps[0].params = [{ path: ['free_key'], label: 'free_key', meaning: '投影返回', value: 'SAFE_SERVER_FREE', state: 'explicit', sensitive: false, is_set: true }];
+    rerender(<MemoryRouter><PlanStepInspector step={step} phase="init" index={0}
+      scripts={SCRIPTS} projection={projection} projectionIsDraft onUpdateStep={vi.fn()} /></MemoryRouter>);
+    expect(screen.getByText('L1草稿，未保存')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('SAFE_SERVER_FREE')).toBeInTheDocument();
+  });
+  it('嵌套非敏感编辑保留内部 secret，不回写安全 null', () => {
+    const step = makeStep({ params: { wifi: { ssid: 'old', password: rawSecret }, keep: false } });
+    const projection = fakeProjection(step, SCRIPTS);
+    projection.steps[0].params = [
+      { path: ['wifi','ssid'], label: '网络', meaning: '', value: 'old', state: 'explicit', sensitive: false, is_set: true },
+      { path: ['wifi','password'], label: '密码', meaning: '', value: null, state: 'explicit', sensitive: true, is_set: true },
+    ];
+    projection.safe_debug.steps[0].param_schema = { wifi: { type: 'object', properties: { ssid: { type: 'string' }, password: { type: 'string' } } } };
+    const spy = vi.fn();
+    render(<MemoryRouter><PlanStepInspector step={step} phase="init" index={0} scripts={SCRIPTS}
+      projection={projection} onUpdateStep={spy} /></MemoryRouter>);
+    fireEvent.change(screen.getByLabelText('网络'), { target: { value: 'new' } });
+    expect(spy.mock.calls[0][0].params).toEqual({ wifi: { ssid: 'new', password: rawSecret }, keep: false });
+    expect(step.params?.wifi).toEqual({ ssid: 'old', password: rawSecret });
+  });
+});
+
+it('嵌套默认对象进入编辑草稿时复制内部事实，敏感兄弟保持原值', () => {
+  const secret = 'SYNTHETIC_DEFAULT_SECRET_3656';
+  const script = makeScript({ name: 'monkey_setup', version: '2.3.13',
+    default_params: { wifi: { ssid: 'default-ssid', password: secret } },
+    param_schema: { wifi: { type: 'object', properties: { ssid: { type: 'string' } } } },
+  });
+  const step = makeStep({ action: 'script:monkey_setup', version: '2.3.13', params: { untouched: 0 } });
+  const projection = fakeProjection(step, [script]);
+  projection.steps[0].params = [
+    { path: ['wifi','ssid'], label: '网络', meaning: '', value: 'default-ssid', state: 'explicit', sensitive: false, is_set: true },
+    { path: ['wifi','password'], label: '密码', meaning: '', value: null, state: 'explicit', sensitive: true, is_set: true },
+  ];
+  projection.safe_debug.steps[0].default_params = { wifi: { ssid: 'default-ssid', password: null } };
+  const spy = vi.fn();
+  render(<MemoryRouter><PlanStepInspector step={step} phase="init" index={0} scripts={[script]}
+    projection={projection} onUpdateStep={spy} /></MemoryRouter>);
+  expect(document.body.innerHTML).not.toContain(secret);
+  fireEvent.change(screen.getByLabelText('网络'), { target: { value: 'new-ssid' } });
+  expect(spy.mock.calls[0][0].params).toEqual({ untouched: 0, wifi: { ssid: 'new-ssid', password: secret } });
+  expect(step.params).toEqual({ untouched: 0 });
+  expect(script.default_params?.wifi).toEqual({ ssid: 'default-ssid', password: secret });
 });
