@@ -129,6 +129,14 @@ MLD_NX2（项目 535，板级 P535AA / MT6835）的刷机包由 **SP Flash Tool 
   MLD-LX2/LX3/NX2 的**正常 adb 在线态**（`.63` 23 台全 201c 且 adb 可见；`.85` 另有 1 台 2046）
   → 在混跑 host 上刷一台会把同 host 邻机一起 `authorized=0`。v1.3.x 既有判据问题，不是 V6
   引入，但 535 批次把刷机与开关机/Monkey 放同批 host 会放大它。本单只记录，不改判据。
+- D7 两工具声明的**真包拉取核验**（站点包源只读、缓存写临时目录）：
+  `inject_required_tools(flash_firmware 族树, env)` → 返回 None；
+  `STP_FLASH_TOOL_DIR` → `…/flashtool/1.2444.00.100`（根内 `flash_tool`），
+  `STP_FLASH_TOOL_V6_DIR` → `…/flashtool_v6/1.2444.00.100`（根内 `SPFlashToolV6`），
+  两个根各自带 `.stp-verified` → 「一版脚本依赖两代工具包」在拉包/核验/注入面成立。
+- 现网设备状态核对（只读）：NX2 共 50 台，45 台被 run 906（plan 78「MLD_NX2-开关机专项-18H」，
+  18:09 起、timeout 64800s）以 `active_lease` 占住，4 台 `adb_excluded`（离线）、1 台不在该 run 且
+  OFFLINE → **此刻没有可用于破坏性刷新的空闲 NX2 设备**。
 - 反例核对（只读，用**站点在用包 1.3.18** 的字节）：面对 v6 目录两条路都拒绝——
   `no firmware family route for model MLD-NX2; known models: …`（不含 NX2）与
   `manifest.json must define scatter_file and da_file` → 固件先上架不会让 552 计划在用版本
