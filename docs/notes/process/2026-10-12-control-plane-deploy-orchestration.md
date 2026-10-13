@@ -53,6 +53,14 @@ Class: process
 - §0.5 引言：agy 每条命令是新 shell，`TOK` 不跨命令保留（首次 canary 因此 `Authentication required`），
   补「每条命令重设变量」规则。
 
+### 2026-10-14 第二次实跑校准
+
+本会话按 §0.5 部署 `fb08e34f`（#3700 生效，`42e09d25-20261013` → `stp-releases/fb08e34f`）。阶段 A 第 6 步因 B5（#3653）
+OPEN 停下，Owner 确认 B5 已过 D9 后继续；前端源码与线上 B5 前端相同，Owner 决定跳过换包。skill 据此校准两处（§7 有对应行）：
+
+- 阶段 C 第 1 步按单台详情 `active_job_count` 选机实跑有效，解除待校对。
+- `digest-matched` 的 canary 不重启 Agent，调用后立即查询时心跳早于调用时刻；第 4 步补「等一个心跳周期再判定」。
+
 ## Alternatives
 
 - **新建「一条龙部署」skill**：弃。与 `control-plane-deploy` 抢同一批触发词，调用被分流后容易出现零调用的空壳
@@ -104,10 +112,16 @@ Class: process
   - `backend/api/routes/hosts.py`：单台详情传入 db 才填 `active_job_count`，列表接口不传；
   - `42e09d25-20261013` 携带的前端为 `CuUVyo6q`（14:48 构建，早于 15:03 换包），与事实 1 一致。
 - 未独立重查：DB 中 1.3.20 的注册行与 48 台分布（需登录生产 API），以 agy 的 scan 响应与 15:05 查询为据。
+- 2026-10-14 实跑证据（本会话执行）：
+  - 选机：单台详情返回 `172-21-x-x`、`.101` 的 `active_job_count` 各为 13，`.102` 为 0；
+  - canary `.102`：`{"ok":true,"converged":true,"reason":"digest-matched","code_version":"fb08e34f"}`；调用时刻 00:18:19，
+    立即查询 `last_heartbeat` 为 00:18:04，40 秒后再查为 00:19:04；
+  - 批量 `SUMMARY ok=14 converged=14 fail=0 skipped=34`，分布 `total=48 matched=48`；
+  - #3700 生效证据见 #3700 评论（job 166760 落库、50 行、告警解除），B5 协调说明见 #3653 评论。
 
 ## Revisit
 
-- 新写的两条（阶段 C 第 1 步选机查询、§1.5 回滚命令）在下一次真实部署或真实回滚中跑通后，在 skill §7 追加行并解除 `⚠️待校对`。
+- §1.5 前端回滚命令在真实回滚中跑通后，在 skill §7 追加行并解除 `⚠️待校对`（阶段 C 第 1 步选机查询已于 2026-10-14 实跑校准）。
 - #3661 关闭后（补发或退役），把阶段 B 第 4–7 步的判据改回「`package_missing` 为空」。
 - 如果 `build_bundle` 改为按目标提交构建前端，或 nginx root 改指发布根（#3694），修订 §1 步 2 补充与 §1.5。
 - 如果两个检查工具不再回落到仓根 `.env.backend`（#3693），简化阶段 A 第 11 步前的警告。

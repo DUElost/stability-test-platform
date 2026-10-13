@@ -5,7 +5,7 @@ description: 生产控制面部署与 Agent 热更新操作 SOP。触发时机�
 
 # 控制面部署与 Agent 热更新 SOP
 
-> **状态：除标 `⚠️待校对` 的两条（§0.5 阶段 C 第 1 步的选机查询、§1.5 的前端回滚命令）外，全文已真机校准**（最近一次端到端：2026-10-13，首次按 §0.5 实跑；2026-09-22 的两处历史遗留
+> **状态：除标 `⚠️待校对` 的一条（§1.5 的前端回滚命令）外，全文已真机校准**（最近一次端到端：2026-10-14，第二次按 §0.5 实跑；2026-09-22 的两处历史遗留
 > 待校对项——§6 的 SP Flash Tool 依赖行与 §3 的带外资源身份——已于当日实机验证并收口，逐条见
 > §7 校准记录）。**校准有保质期**：任何一条若与现场不符，请按「实跑→改文→同 PR 追加 §7 行」
 > 的顺序更新——校准来自实跑，不来自推演。
@@ -41,12 +41,12 @@ curl -s http://127.0.0.1:8000/health      # health 路由（非 /api/v1/health�
   会让 `jq '.data.ok'` 恒为 null）；`/scripts/scan`、`/script-presence/*` 这些才是 `{data: …}`。
   可参考已跑通的抽验脚本（token → 目标 host → force 热更新 → 断言 `priv_mode`）：`/tmp/stp-acc/verifyD_sample.sh`（临时产物，机器重建即失）。
 
-## 0.5 端到端编排（✅ 2026-10-13 首次实跑校准）
+## 0.5 端到端编排（✅ 2026-10-13、2026-10-14 两次实跑校准）
 
 适用条件：一次部署同时包含共享检出（`/home/debian13/stability-test-platform`，多会话共用的 git 检出）
 同步到 main、前后端换版、服务重启、DB 迁移与 Agent fleet 热更新。
-本节规定顺序、闸门、停顿点与报告项；各段命令见 §1–§3。2026-10-13 首次按本节完成一次端到端部署
-（`80c446fc`→`42e09d25`），校准结果见 §7；仍标 `⚠️待校对` 的步骤是那次之后新写的。
+本节规定顺序、闸门、停顿点与报告项；各段命令见 §1–§3。2026-10-13（`80c446fc`→`42e09d25`）与
+2026-10-14（`42e09d25`→`fb08e34f`）两次按本节完成端到端部署，校准结果见 §7。
 
 发起示例（授权由 Owner 在每次部署请求中给出）：
 `/control-plane-deploy 部署 origin/main；授权本次切换 current、重启、reload nginx 与热更新；阶段 A 后停`。
@@ -147,7 +147,7 @@ curl -s http://127.0.0.1:8000/health      # health 路由（非 /api/v1/health�
 
 按顺序执行以下步骤：
 
-1. 选一台没有活跃 job 的 ONLINE 主机（⚠️待校对）：
+1. 选一台没有活跃 job 的 ONLINE 主机：
    `curl -s -H "$AUTH" http://127.0.0.1:8000/api/v1/hosts/<host_id> | jq '{status, active_job_count}'`。
    列表接口 `GET /api/v1/hosts` 不填充 `active_jobs`（恒为空列表），执行者不得用它判断主机忙闲。
    预期：`status` 为 `ONLINE`，`active_job_count` 为 0。
@@ -158,6 +158,8 @@ curl -s http://127.0.0.1:8000/health      # health 路由（非 /api/v1/health�
 4. 查询 canary 主机：
    `curl -s -H "$AUTH" http://127.0.0.1:8000/api/v1/hosts/<host_id> | jq -r '[.status, .agent_code_sync_status, .last_heartbeat] | @tsv'`。
    预期：`ONLINE`、`matched`，`last_heartbeat` 晚于热更新完成时间。
+   如果第 2 步返回 `digest-matched`，Agent 没有重启，心跳要到下一个周期（约 60 秒）才会晚于调用时刻
+   （2026-10-14 实跑）；执行者必须等一个心跳周期后再判定本步是否达到预期。
 5. 如果第 4 步未达预期，停止本流程并报告 Owner。
 6. 按 §3 代码块注释 2) 运行 `batch_hot_update --direct`。如果阶段 A 第 10 步列出了
    `backend/services/agent_env_sync.py`，或本次部署改了站点 `env.backend` 中同步到 Agent 的键，加 `--force`（§3）。
@@ -448,6 +450,7 @@ PYTHONPATH=. venv/bin/python -m backend.scripts.batch_hot_update --direct
 | 2026-10-12 | **新增 §0.5 端到端编排**（阶段 A 只读检查与构建 → 停顿点 → 阶段 B 先后端后前端 → 阶段 C 热更新 → 报告项）；§1 步 2 补「`--out` 必须是新目录」「`DO-NOT-SWITCH.txt` 约定」「bundle 内前端是构建时线上副本」「守卫 schema 检查回落 dev env」；§1.5 补「共享检出不得跑 `build:prod`」警告，依赖安装改 `npm ci`。阶段 A 第 1、5、7、9、10、11 步已只读实跑（`BASE=fbb5ec61`、目标 `bb4f2340`：批次查询得 `#3653 OPEN`，标记查询得 `43dfc764` 一条，无新增迁移、无 scan/`--force` 判据文件；守卫与就绪检查导出站点 env 后均 exit 0）。其余条目 ⚠️待校对，下次真实部署按 §0.5 跑通后解除 | 代码核对（`build_bundle.py`、`check-deploy-readiness.py`、`check_alembic_at_head.py`、`routes/hosts.py`）+ 本次只读实跑 + Agent Note `docs/notes/process/2026-10-12-control-plane-deploy-orchestration.md` |
 | 2026-10-12 | **更正同日新增条目的两处表述**：① §0.5 阶段 A 第 11 步前的警告原写「否则得到的是 dev 库的通过结论」。核对时仓根与站点 env 的 `DATABASE_URL` 相同，不导出时查的仍是生产库；问题在于检查目标不受站点配置约束，改为「结论不能代表生产库」（#3693）。② §1 步 2 补充原写「nginx 不读它」，只对本机成立：站点安装 S2 会把 bundle 前端落到部署根并由站点 nginx 服务，改为限定本机并引 #3694 | 两份 env 只比较 `DATABASE_URL` 是否相等（未打印取值）+ `tools/site_config/stages.py` 的 `stage_s2_release_env` 与 `deploy/control-plane/nginx/stability-platform.conf` |
 | 2026-10-13 | **§0.5 首次端到端实跑**（agy 会话 `e88117d0`，`80c446fc`→`42e09d25`；Owner 两次确认：阶段 A 后「继续」、scan 缺包后「同意发包」）：后端切到 `42e09d25-20261013`，发布并注册 `flash_firmware@1.3.20`，前端 `CuUVyo6q`→`D7Kfzdo6`，批量 `SUMMARY ok=16 converged=12 fail=0 skipped=32`，分布 48/48 `matched`。据此校准：① 重启后紧接的单次 `curl` 退出码 7，阶段 B 第 1 步改为 30 秒轮询；② scan 的 `package_missing` 含 #3661 的存量 7 条，`--publish` 只落各族最新版本、补不齐它们，判据改为「只含 #3661 存量」，并补「同意发包后重跑 scan」一步；③ 列表接口不填充 `active_jobs`（agy 据此选中的 canary 实有 13 个活跃 job，因摘要未变成了空操作），阶段 C 新增按单台详情选机一步；④ 部署报告给出的前端回滚命令是单个 `mv`，会把备份套进 `dist-prod`，§1.5 补双 rename 回滚命令与警告；⑤ agy 每条命令是新 shell，补「重设变量」规则；报告项补「`package_missing` 原样列出」。§0.5 与 §1 步 2 补充解除待校对；新写的选机查询与回滚命令仍标 ⚠️待校对 | agy 会话转录与 `tasks/task-110.log`（只读）+ 部署后只读核对（`current`、`/health`、前端入口、包 sha）+ 轮询命令对线上 `/health` 实测 + 回滚命令的临时目录模拟 + `routes/hosts.py`（单台详情才填 `active_job_count`） |
+| 2026-10-14 | **§0.5 第二次端到端实跑**（`42e09d25-20261013`→`fb08e34f`，#3700 生效；Owner 授权「闸门全过不停顿」）：阶段 A 第 6 步因 B5（#3653）OPEN 停下，Owner 确认 B5 已过 D9 后继续；前端源码与线上 B5 前端（`cb5c5233` 构建）相同，按 Owner 决定跳过换包；后端 00:17:34 重启后健康，无迁移、无 scan；canary `172-21-x-x` 返回 `digest-matched`；批量 `SUMMARY ok=14 converged=14 fail=0 skipped=34`，分布 48/48 `matched`。据此校准：① 阶段 C 第 1 步按单台详情的 `active_job_count` 选机实跑有效（`.100`、`.101` 各 13 个活跃 job，`.102` 为 0），解除待校对；② `digest-matched` 的 canary 不重启 Agent，调用后立即查询时 `last_heartbeat`（00:18:04）早于调用时刻（00:18:19），下一周期（00:19:04）才满足，第 4 步补「等一个心跳周期再判定」。§1.5 前端回滚命令仍未在生产执行，保留待校对 | 本次部署实跑 + #3700 生效证据评论 + #3653 后端身份协调评论 |
 
 ## 踩坑守卫（负向约束）
 
