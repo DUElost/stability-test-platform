@@ -166,10 +166,12 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/plans/<PLAN_ID>/run -H "$AUTH" \
 - **UNISOC（Z258）不适用**：SP Flash Tool 只覆盖 MTK；Z258 刷机另行立项。
 - **吞吐上限 = 每 host 同时 1 台**：需要并行时按 USB 控制器分片锁是后续课题
   （设计文档 §8 重议触发）。
-- **刷机后 30 分钟内 `battery_level` / `temperature` 可能是 0**：设备回总线的首拍慢指标采样
-  落在首启未稳窗口，读到 0 后按 `_slow_sample_interval`（默认 1800s）保持整个窗口。
+- **刷机后 30 分钟内 `battery_level` / `temperature` 可能是 0**（跟踪 #3702）：设备回总线的
+  首拍慢指标采样落在首启未稳窗口，读到 0 后按 `_slow_sample_interval`（默认 1800s）保持整个
+  窗口——2026-10-13 run 929 实测：20:07 刷机步收场即记 0，20:12/20:14/20:16 三次查询恒为 0
+  （同期设备侧 `dumpsys battery` 实为 `level: 100` / `temperature: 320`），20:40 恢复 100/29。
   判据：拿 `adb shell dumpsys battery` 的实际 `level:` / `temperature:` 与设备页读数对照。
-  **不得**用刷机后半小时内的电量/温度做阈值判定或告警收敛。
+  **不得**用刷机后半小时内的电量/温度做阈值判定或告警收敛；要立即确认就以 adb 读数为据。
 
 ## 7. V6 代际机型（535 / MLD_NX2）
 

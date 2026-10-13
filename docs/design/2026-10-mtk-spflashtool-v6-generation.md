@@ -225,7 +225,7 @@
 匹配形态；② 混跑窗口（同 host 有其它作业在跑）下的 V6 表现——本轮 `.86` 派发时全平台
 `RUNNING` 作业数为 0。
 
-**顺带发现（另立跟踪）**：刷机后设备回到总线的**首拍**慢指标落在首启未稳窗口里，
+**顺带发现（已开 [#3702](https://github.com/DUElost/stability-test-platform/issues/3702)）**：刷机后设备回到总线的**首拍**慢指标落在首启未稳窗口里，
 `battery_level` / `temperature` 被记成 `0`，而 `_slow_sample_interval` 默认 `1800s`
 把这两个 0 值保持了约半小时（同 host 其它 V9 设备读数正常，设备侧 `dumpsys battery`
 实测 `level: 100 / temperature: 320`）。这不是 V6 引入的（`_absorb_slow_metrics`
