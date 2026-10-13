@@ -9,7 +9,11 @@ import {
 } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { formatStepTimeout, stepTimeoutHint } from './stepTiming';
-import { PlanSettingsReadonly } from '@/components/parameters/PlanSettingsReadonly';
+import {
+  PlanSettingsEditor,
+  type PlanSettingsValues,
+} from '@/components/parameters/PlanSettingsEditor';
+import { parsePlanPositiveIntInput } from '@/pages/orchestration/planEditUtils';
 
 const PHASE_LABELS: Record<PipelinePhase, string> = {
   init: 'Init',
@@ -30,6 +34,8 @@ interface PlanCanvasProps {
   onPatrolIntervalChange: (next: number | null) => void;
   timeoutSeconds: number | null;
   onTimeoutChange: (next: number | null) => void;
+  planSettings?: PlanSettingsValues;
+  onPlanSettingsChange?: (next: PlanSettingsValues) => void;
   nextPlanName: string | null;
   isCurrentEditing: boolean;
   lifecycle: PipelineDef;
@@ -101,6 +107,8 @@ export default function PlanCanvas({
   onPatrolIntervalChange,
   timeoutSeconds,
   onTimeoutChange,
+  planSettings,
+  onPlanSettingsChange,
   nextPlanName,
   isCurrentEditing,
   lifecycle,
@@ -208,7 +216,16 @@ export default function PlanCanvas({
           readOnly={readOnly}
         />
 
-        <PlanSettingsReadonly projection={projection} unavailable={projectionUnavailable} isDraft={projectionIsDraft} />
+        {planSettings && onPlanSettingsChange ? (
+          <PlanSettingsEditor
+            values={planSettings}
+            onChange={onPlanSettingsChange}
+            projection={projection ?? settingsMetadata}
+            unavailable={projectionUnavailable}
+            isDraft={projectionIsDraft}
+            readOnly={readOnly}
+          />
+        ) : null}
         {(['init', 'patrol', 'teardown'] as PipelinePhase[]).map(phase => {
           const steps = getPhaseSteps(lifecycle, phase);
           return (
@@ -391,15 +408,19 @@ function PlanHeader({
       <div className={cn('flex flex-wrap items-center gap-x-4 gap-y-2 text-xs', TEXT.subtitle)}>
         <MetaItem label={interval?.label ?? "patrol_interval_seconds"}>
           <input
-            type="number"
-            min={5}
+            type="text"
+            inputMode="numeric"
+            data-testid="plan-header-patrol-interval"
             value={patrolIntervalSeconds ?? ''}
             placeholder="不开启"
             disabled={readOnly}
+            aria-label={interval?.label ?? '巡检间隔'}
             onChange={e => {
               const raw = e.target.value;
-              if (raw === '') onPatrolIntervalChange(null);
-              else onPatrolIntervalChange(Math.max(5, parseInt(raw, 10) || 60));
+              const parsed = parsePlanPositiveIntInput(raw);
+              // 与 PlanSettingsEditor 一致：空→null；非法小数/0/负值拒绝截断，不提交。
+              if (parsed === 'invalid') return;
+              onPatrolIntervalChange(parsed);
             }}
             className={cn('w-24', metaInputCls)}
           />
@@ -409,8 +430,9 @@ function PlanHeader({
 
         <MetaItem label={duration?.label ?? "timeout_seconds"}>
           <input
-            type="number"
-            min={1}
+            type="text"
+            inputMode="numeric"
+            data-testid="plan-header-timeout"
             value={timeoutSeconds ?? ''}
             placeholder="不限"
             disabled={readOnly}
@@ -418,10 +440,10 @@ function PlanHeader({
             aria-label={duration?.label ?? "timeout_seconds"}
             aria-describedby={patrolDurationSummaryId}
             onChange={e => {
-              const n = parseInt(e.target.value, 10);
-              // 后端写入边界 ge=1：空、0、负数都按「不限」处理——此前 0 能填进来，
-              // 保存时才收到一条 422；而 0 的直觉含义（同步骤级超时）本来就是不限。
-              onTimeoutChange(Number.isFinite(n) && n > 0 ? n : null);
+              const parsed = parsePlanPositiveIntInput(e.target.value);
+              // 与 Editor 同解析：空→null（不限）；0/小数/负值拒绝，不得 parseInt 截断。
+              if (parsed === 'invalid') return;
+              onTimeoutChange(parsed);
             }}
             className={cn('w-24', metaInputCls)}
           />

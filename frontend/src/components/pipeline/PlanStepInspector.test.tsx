@@ -448,14 +448,14 @@ describe('PlanStepInspector', () => {
   });
 
   describe('执行配置', () => {
-    it('超时留空记 0（不限），其余按下限 1 夹取', () => {
+    it('超时负数不提交', () => {
       const onUpdateStep = vi.fn();
       render(<Harness onUpdateStep={onUpdateStep} />);
 
       fireEvent.change(within(fieldOf('超时 (秒)')).getByRole('spinbutton'), {
         target: { value: '-5' },
       });
-      expect(lastStep(onUpdateStep).timeout_seconds).toBe(1);
+      expect(onUpdateStep).not.toHaveBeenCalled();
     });
 
     it('清空超时 = 回到「未配置」并提交（#2513）', () => {
@@ -496,7 +496,7 @@ describe('PlanStepInspector', () => {
       expect(input).toHaveAttribute('placeholder', '默认');
     });
 
-    it('超时填 0 夹到 1，不再静默落 30', () => {
+    it('超时填 0 表示不限，并要求配套停滞钟（#3653 §3.4）', () => {
       const onUpdateStep = vi.fn();
       render(<Harness onUpdateStep={onUpdateStep} />);
 
@@ -504,7 +504,25 @@ describe('PlanStepInspector', () => {
         target: { value: '0' },
       });
 
-      expect(lastStep(onUpdateStep).timeout_seconds).toBe(1);
+      expect(lastStep(onUpdateStep).timeout_seconds).toBe(0);
+      expect(screen.getByTestId('step-runtime-validation')).toHaveTextContent('停滞上限');
+    });
+
+    it('停滞上限可编辑并提交', () => {
+      const onUpdateStep = vi.fn();
+      render(<Harness onUpdateStep={onUpdateStep} />);
+      fireEvent.change(screen.getByTestId('step-stall-input'), { target: { value: '120' } });
+      expect(lastStep(onUpdateStep).stall_seconds).toBe(120);
+    });
+
+    it('超时=0 且 stall≥1 且脚本具备 progress_stamps 时无校验条', () => {
+      render(
+        <Harness
+          step={makeStep({ timeout_seconds: 0, stall_seconds: 30 })}
+          scripts={[makeScript({ id: 9, name: 'install_apk', version: '2.0', capabilities: ['progress_stamps'] })]}
+        />,
+      );
+      expect(screen.queryByTestId('step-runtime-validation')).not.toBeInTheDocument();
     });
 
     it('小数点开头的输入（如 .5）parseInt 为 NaN，不提交、失焦回落原值', () => {
@@ -610,12 +628,12 @@ describe('PlanStepInspector', () => {
       expect(screen.queryByTestId('step-timeout-hint')).not.toBeInTheDocument();
     });
 
-    it('0 提示为不限，并说明本编辑器存不下去', () => {
+    it('0 提示为不限，并说明需配套停滞钟与 progress_stamps', () => {
       render(<Harness step={makeStep({ timeout_seconds: 0 })} />);
       const hint = screen.getByTestId('step-timeout-hint');
       expect(within(hint).getByText('∞')).toBeInTheDocument();
       expect(hint).toHaveTextContent('不限');
-      expect(hint).toHaveTextContent('本编辑器不提供停滞钟字段');
+      expect(hint).toHaveTextContent('progress_stamps');
     });
 
     it('缺省提示为回落默认，而不是不限', () => {
@@ -625,7 +643,7 @@ describe('PlanStepInspector', () => {
       const hint = screen.getByTestId('step-timeout-hint');
       expect(within(hint).getByText('默认')).toBeInTheDocument();
       expect(hint).toHaveTextContent('STP_STEP_WALL_CLOCK_SECONDS');
-      expect(hint).not.toHaveTextContent('本编辑器不提供停滞钟字段');
+      expect(hint).not.toHaveTextContent('progress_stamps');
     });
   });
 

@@ -118,7 +118,12 @@ export default function PlanStepInspector({
               readOnly={readOnly}
             />
 
-            <RuntimeConfigCard step={step} onUpdateStep={onUpdateStep} readOnly={readOnly} />
+            <RuntimeConfigCard
+              step={step}
+              onUpdateStep={onUpdateStep}
+              readOnly={readOnly}
+              scriptSupportsProgress={matchedScript?.capabilities?.includes('progress_stamps')}
+            />
 
             {scriptName && (
               <Link
@@ -661,17 +666,13 @@ function ParamFieldShell({
 }
 
 /**
- * 超时输入框：编辑期允许「空」，但**不把空落库**。
+ * 超时输入框：编辑期允许「空」与「0（不限）」。
  *
- * 从编辑器存得下去的取值只有 `>= 1` 的整数——`0` 要求同时配 `stall_seconds >= 1`
- * （本面板不暴露该字段），`null` 会被 `_assemble_lifecycle_for_validation` 原样
- * 传给 schema 的 `type: integer` 拒掉。此前清空输入框会静默写入 `0`，用户直到
- * 保存才收到一条原始 jsonschema 报错。
+ * - 空 → 未配置（省略键，回落 STP_STEP_WALL_CLOCK_SECONDS → 300s）
+ * - 0 → 不限，必须同时配 stall_seconds ≥ 1 且脚本声明 progress_stamps（#3653 §3.4）
+ * - ≥1 → 显式墙钟
  *
- * 用 draft 承接编辑中的原始文本，是为了让「清空再重输」这套动作正常：直接把空
- * 折算成某个默认值会让输入框立刻跳成 `30`，接着输入就变成 `306` / `3060`。
- * 空值只是不提交，失焦后回落到最后一次提交的值。
- * 非数字输入同样不提交（`|| 1` 会把一次手滑改写成 1 秒超时），失焦一并回落。
+ * 用 draft 承接编辑中的原始文本，避免清空后立刻被默认值回填导致连输错位。
  */
 function TimeoutInput({
   step,
@@ -689,7 +690,7 @@ function TimeoutInput({
   return (
     <input
       type="number"
-      min={1}
+      min={0}
       value={draft ?? step.timeout_seconds ?? ''}
       placeholder="默认"
       disabled={readOnly}
@@ -698,17 +699,55 @@ function TimeoutInput({
         setDraft(raw);
         if (raw === '') {
           // #2513：清空 = 回到「未配置」并**提交**（不是只清本地草稿）。
-          // #2382 之后「未配置」是可落库的：组装侧对 None 省略键 → Agent 回落
-          // STP_STEP_WALL_CLOCK_SECONDS → 300s；#2454 已让读回不再把它折成 30。
-          // 旧行为（只 setDraft、失焦弹回旧值）使「未配置」在 UI 上不可达。
           onUpdateStep({ ...step, timeout_seconds: undefined });
           return;
         }
-        const n = parseInt(raw, 10);
-        if (Number.isNaN(n)) return;
-        // 0（不限）仍不放开：契约要求与 stall_seconds ≥ 1 配对，而本 Inspector
-        // 没有停滞钟输入框——放开会造出必然 422 的组合。
-        onUpdateStep({ ...step, timeout_seconds: Math.max(1, n) });
+        if (!/^\d+$/.test(raw.trim())) return;
+        const n = Number(raw.trim());
+        if (!Number.isInteger(n) || n < 0) return;
+        onUpdateStep({ ...step, timeout_seconds: n });
+      }}
+      onBlur={() => setDraft(null)}
+      className={className}
+    />
+  );
+}
+
+function StallInput({
+  step,
+  onUpdateStep,
+  readOnly,
+  className,
+}: {
+  step: PipelineStep;
+  onUpdateStep: (next: PipelineStep) => void;
+  readOnly?: boolean;
+  className?: string;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+
+  return (
+    <input
+      type="number"
+      min={0}
+      value={draft ?? step.stall_seconds ?? ''}
+      placeholder="关闭"
+      disabled={readOnly}
+      aria-label="停滞上限 (秒)"
+      data-testid="step-stall-input"
+      onChange={e => {
+        const raw = e.target.value;
+        setDraft(raw);
+        if (raw === '') {
+          const next = { ...step };
+          delete next.stall_seconds;
+          onUpdateStep(next);
+          return;
+        }
+        if (!/^\d+$/.test(raw.trim())) return;
+        const n = Number(raw.trim());
+        if (!Number.isInteger(n) || n < 0) return;
+        onUpdateStep({ ...step, stall_seconds: n });
       }}
       onBlur={() => setDraft(null)}
       className={className}
@@ -720,13 +759,22 @@ interface RuntimeConfigCardProps {
   step: PipelineStep;
   onUpdateStep: (next: PipelineStep) => void;
   readOnly?: boolean;
+  scriptSupportsProgress?: boolean;
 }
 
-function RuntimeConfigCard({ step, onUpdateStep, readOnly }: RuntimeConfigCardProps) {
+function RuntimeConfigCard({
+  step,
+  onUpdateStep,
+  readOnly,
+  scriptSupportsProgress,
+}: RuntimeConfigCardProps) {
   const inputCls = cn('h-7 px-2 text-[12px]', PIPELINE_EDITOR.inputInline);
   // 0 与 null 两个非常规取值光看输入框读不出语义（0 像"零秒"，空像"没设"），
   // 各自的实际行为差 300 秒起步，所以显式把结论写在字段下面。
   const timeoutIsSpecial = step.timeout_seconds === 0 || step.timeout_seconds == null;
+  const stall = step.stall_seconds;
+  const timeoutZeroNeedsStall = step.timeout_seconds === 0 && (stall == null || stall < 1);
+  const stallNeedsProgress = stall != null && stall > 0 && !scriptSupportsProgress;
 
   return (
     <Card>
@@ -737,7 +785,16 @@ function RuntimeConfigCard({ step, onUpdateStep, readOnly }: RuntimeConfigCardPr
         <div className="grid grid-cols-2 gap-1.5">
           <FieldGroup label="超时 (秒)">
             <TimeoutInput
-              key={step.step_id}
+              key={`timeout-${step.step_id}`}
+              step={step}
+              onUpdateStep={onUpdateStep}
+              readOnly={readOnly}
+              className={inputCls}
+            />
+          </FieldGroup>
+          <FieldGroup label="停滞上限 (秒)">
+            <StallInput
+              key={`stall-${step.step_id}`}
               step={step}
               onUpdateStep={onUpdateStep}
               readOnly={readOnly}
@@ -752,7 +809,10 @@ function RuntimeConfigCard({ step, onUpdateStep, readOnly }: RuntimeConfigCardPr
               value={step.retry ?? 0}
               disabled={readOnly}
               onChange={e => {
-                const next = Math.min(5, Math.max(0, parseInt(e.target.value, 10) || 0));
+                const raw = e.target.value;
+                const n = parseInt(raw, 10);
+                if (Number.isNaN(n)) return;
+                const next = Math.min(5, Math.max(0, n));
                 onUpdateStep({ ...step, retry: next });
               }}
               className={inputCls}
@@ -773,8 +833,25 @@ function RuntimeConfigCard({ step, onUpdateStep, readOnly }: RuntimeConfigCardPr
               超时 = <strong className="font-mono">{formatStepTimeout(step.timeout_seconds)}</strong>
               ：{stepTimeoutHint(step.timeout_seconds)}
               {step.timeout_seconds === 0 && (
-                <>。本编辑器不提供停滞钟字段，该值需经 API 配置后才存得下来。</>
+                <>。必须同时配置停滞上限 ≥1 秒，且脚本声明 progress_stamps。</>
               )}
+            </span>
+          </div>
+        )}
+
+        {(timeoutZeroNeedsStall || stallNeedsProgress) && (
+          <div
+            data-testid="step-runtime-validation"
+            className={cn(
+              'flex items-start gap-1.5 px-2 py-1.5 rounded-md text-[11px]',
+              ALERT_BANNER.warning,
+            )}
+          >
+            <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+            <span>
+              {timeoutZeroNeedsStall
+                ? '超时=0（不限）时必须配置停滞上限 ≥1 秒。'
+                : '停滞上限 >0 要求当前脚本版本已接入 PROGRESS（progress_stamps）。'}
             </span>
           </div>
         )}
