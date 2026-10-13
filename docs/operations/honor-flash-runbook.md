@@ -1,6 +1,7 @@
 # Honor 刷机 Runbook（MLD 先行）
 
-> 配套设计：[`docs/design/2026-08-honor-flash-firmware-routing.md`](../design/2026-08-honor-flash-firmware-routing.md)。
+> 配套设计：[`docs/design/2026-08-honor-flash-firmware-routing.md`](../design/2026-08-honor-flash-firmware-routing.md)；
+> V6 代际（535 / MLD_NX2）见 [`docs/design/2026-10-mtk-spflashtool-v6-generation.md`](../design/2026-10-mtk-spflashtool-v6-generation.md) 与本文 §7。
 > 本文是操作手册：固件上架 → 建计划 → 单台验证 → 放量。
 
 ## 0. 前置条件
@@ -10,6 +11,8 @@
   文内出现的版本号是 **2026-09-15 复核值 `v1.3.16`**。
 - 当前目标 Agent fleet 已 hot-update / restart 到含 v1.3.x 的 code revision。
 - 目标固件刷机包已从研发渠道拿到（解压后含 scatter 与 DA 文件）。
+- 目标机型走 V6 代际时（§7）：`flashtool_v6` 工具包**必须**先发布到站点 `packages/`，
+  再 scan 注册 `flash_firmware@1.3.19` / `flash_preflight@1.0.7`。
 - 串行刷多台**首刷**设备时，脚本会在每台刷完后多等一段「boot 稳定窗口」
   （默认 20s，`boot_stabilize_seconds`，v1.3.7 起）；指纹只取 MTK 口（v1.3.10 起收窄），
   邻机非 MTK USB 抖动不会重置窗口
@@ -163,3 +166,155 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/plans/<PLAN_ID>/run -H "$AUTH" \
 - **UNISOC（Z258）不适用**：SP Flash Tool 只覆盖 MTK；Z258 刷机另行立项。
 - **吞吐上限 = 每 host 同时 1 台**：需要并行时按 USB 控制器分片锁是后续课题
   （设计文档 §8 重议触发）。
+
+## 7. V6 代际机型（535 / MLD_NX2）
+
+适用条件：目标机型的固件包由 SP Flash Tool **V6** 驱动（`download_agent/flash.xml` 形态），
+例如 MLD_NX2（板级 P535AA / MT6835）。本节替换 §1 的上架动作；§2–§5 的建计划、单台验证
+与放量流程不变。
+
+> 警告（刷机窗口前必查，2026-10-12 实测）：NX2 所在四台 host（`172.21.x.x`，末段
+> `.83–.86`，Debian 13）
+> **未装 V6 的运行库**——`ldd SPFlashToolV6` 报 `libGL.so.1 => not found`，工具连 `-h` 都跑不起来。
+> 补包属 provisioning：`apt-get install -y --no-install-recommends libgl1 libglx0 libglvnd0`
+> （即 `agent_flash_prereq_packages_v6`，KRB5 面这 4 台已具备）。不补包时刷机步会在拿锁之前
+> 以 `environment precheck failed: shared-libs: missing: libGL.so.1` 硬失败。
+
+> 警告（混跑风险）：`flash_firmware` 的初始门控把 `0e8d:201c` 当刷机态隐藏，而实测
+> `201c` 是 MLD-LX2/LX3/NX2 的**正常 adb 态** → 同 host 有其他测试在跑时，一次刷机会把邻机
+> 一起摘线（判据问题见 #3690）。V6 单台验证请选择**无其他在跑作业**的 host 与时间窗。
+
+> 警告：`flash_firmware@1.3.19` 与 `flash_preflight@1.0.7` 在包内声明了 `flashtool_v6` 工具
+> 依赖（ADR-0051 D7）。任何人不得在 `flashtool_v6` 包发布之前 scan 注册或把 Plan 重指到这两个
+> 版本——包未就位时**所有**刷机步骤（含 552 的 V5 计划）会在派发前 exit 2。
+
+1. 发布 V6 工具包（源 = 中心存储 selector 解压物里的 `SP_Flash_Tool_V6`，包根取该目录内容）。
+
+   ```bash
+   python tools/dev/package_tool_asset.py \
+     --src <中心存储>/SP_Flash_Tool_Selector_exe_Linux_v1.2444.00.100/SP_Flash_Tool_V6 \
+     --name flashtool_v6 --version 1.2444.00.100 --kind tool --python-absent \
+     --script-relative SPFlashToolV6 --write-manifest \
+     --packages-root /mnt/stp-aee/packages
+   ```
+
+   预期：`packages/flashtool_v6/1.2444.00.100.tar.gz` 存在，且
+   `sha256sum` 等于 `tool_manifest.json` 里 `flashtool_v6@1.2444.00.100` 的
+   `package_sha256`（2026-10-12 登记值
+   `3e3bc805a6376a989a3e3113b92ae259549bcef45dd219a556a5c2b72181e53e`）。
+2. 读一遍目标机型的固件目录，确认入口物在位。
+
+   ```bash
+   ls <firmware>/<P535AA_...>/download_agent/flash.xml
+   ```
+
+   预期：文件存在。V6 的 DA 与 scatter 由 `flash.xml` 内部引用（`<dagent>` /
+   `<scatter>`，按 flash.xml 所在目录相对解析），上架时**不得**把它们拆成命令行参数。
+3. 在真机上取代际相关的两个值（补新机型时必做；`MLD_NX2` 已于 2026-10-12 实取代证）。
+
+   ```bash
+   adb -s <serial> shell getprop ro.product.model
+   adb -s <serial> shell getprop ro.build.version.incremental
+   ```
+
+   预期（NX2 实测值，设备 `ATHTNX69****0085` @ 末段 `.83` 那台 host）：model = `MLD-NX2`
+   （平台设备表记作 `MLD_NX2`，来源不同，路由表两个拼写都收）；
+   incremental = `P535AA-HONOR-NX2-16-260928V9`。model 不在路由表已知集合时本步 fail-fast
+   并列出已知集合，此时停止本流程按设计文档补路由键。
+   **`ro.build.display.id` 不是比对口径**（NX2 上它是 `MLD-NX2-16-260928V9`，与
+   incremental 不同形），上架目录名与 `manifest.version` 一律取 incremental。
+4. 把固件包放入 `{STP_FLASH_FIRMWARE_ROOT}/MLD/<version>/`（`<version>` = 第 3 步读到的
+   incremental 值），并写 manifest.json：
+
+   ```bash
+   ROOT=/mnt/stp-aee/firmware
+   VER=<第 3 步的 incremental 值>
+   mkdir -p "$ROOT/MLD/$VER"
+   # 固件包内容放进 $ROOT/MLD/$VER/（含 download_agent/flash.xml）
+   cat > "$ROOT/MLD/$VER/manifest.json" <<'EOF'
+   {
+     "family": "MLD",
+     "version": "<同一个 incremental 值>",
+     "version_prop": "ro.build.version.incremental",
+     "tool_generation": "v6",
+     "flash_xml_file": "download_agent/flash.xml",
+     "models": ["MLD_NX2", "MLD-NX2"]
+   }
+   EOF
+   ```
+
+   预期：`cat "$ROOT/MLD/$VER/manifest.json"` 里 `version` 与目录名一致——不一致时
+   `flash_firmware` 会 fail-fast（防放错目录）。v6 的 manifest **不需要** `scatter_file`
+   与 `da_file`；写了也不参与 V6 命令行拼接。
+5. 更新族级版本指针（同族多机型并存，per-model 映射；不要整体覆盖别人的键）：
+
+   ```bash
+   cat /mnt/stp-aee/firmware/MLD/latest.json
+   ```
+
+   预期：改后仍保留 `MLD_LX2` / `MLD_LX3` 键，并新增
+   `"MLD_NX2": "<version>"`（`MLD-NX2` 连字符拼写由脚本自动互转，二选一即可）。
+   写入方式必须「临时文件 + `os.replace`」并 `chmod 0644`——CIFS 上以 0600 落盘的指针文件
+   会让 Agent 侧读不到 `latest.json`（本手册 2026-10-12 踩过一次）。
+6. canary 前确认批次现网版本：NX2 设备若已在目标 incremental 上（2026-10-12 现网 50 台
+   均为 `P535AA-HONOR-NX2-16-260928V9`），`skip_if_current` 默认值会让本步以
+   `skipped:true` 收场——那是判据正确的表现，**不会碰刷机工具**，也就验不到 V6。
+   单台取证必须在步骤参数里显式写 `"skip_if_current": false`（在用 552 刷机计划不受影响）。
+7. scan 注册脚本新版本，再重指或新建 Plan（顺序不可颠倒，见上方警告）。
+
+   ```bash
+   curl -s -X POST "$BASE/api/v1/scripts/scan" -H "Authorization: Bearer $TOKEN"
+   ```
+
+   预期：响应 `created` 含 `flash_firmware@1.3.19` / `flash_preflight@1.0.7`，
+   `conflicts` 为空。随后按 §3 建计划（`script:flash_preflight` + `script:flash_firmware`
+   两步都指向新版本），并按 §4 单台验证。
+   单台 canary 的建计划载荷（**只挂一台空闲 NX2**；`skip_if_current` 必须显式给
+   `false`，否则设备已在目标版本时本步以 `skipped` 收场、根本碰不到 V6）：
+
+   ```bash
+   curl -s -X POST http://127.0.0.1:8000/api/v1/plans -H "$AUTH" \
+     -H "Content-Type: application/json" -d '{
+     "name": "NX2-刷机-V6-单台canary-260928V9",
+     "description": "535/MLD_NX2 SP Flash Tool V6 单机验证（flash_firmware 1.3.19）",
+     "steps": [
+       {"step_key": "precheck", "script_name": "flash_preflight",
+        "script_version": "1.0.7", "stage": "init", "sort_order": 5,
+        "timeout_seconds": 300},
+       {"step_key": "flash", "script_name": "flash_firmware",
+        "script_version": "1.3.19", "stage": "init", "sort_order": 10,
+        "timeout_seconds": 3600, "stall_seconds": 900, "retry": 0,
+        "params": {"skip_if_current": false, "verify_version": true}},
+       {"step_key": "check", "script_name": "check_device",
+        "script_version": "1.0.2", "stage": "init", "sort_order": 20},
+       {"step_key": "root", "script_name": "ensure_root",
+        "script_version": "1.0.2", "stage": "init", "sort_order": 30}
+     ]}'
+   ```
+
+   预期：`id` 返回后，用 `POST /api/v1/plan-runs`（或设备页派发）**只选一台设备**跑；
+   `retry=0` 是刻意的——首刷取证阶段不要让重试把两次真机窗口叠在一起。
+   派发前先确认该 host 没有别的在跑作业（§7 顶部两条警告）。
+
+8. 单台验证时核对四个 V6 判据（任一不符即回到设计文档 §6，不得放量）：
+   - `step_trace` 的 `metrics.route.tool_generation` 为 `v6`；
+   - `metrics.command_argv` 是 `[... , "-c", "firmware-upgrade", "-f", "<...>/download_agent/flash.xml", "-b", "auto"]`，
+     且不含 `-d` / `-s`；
+   - `metrics.post_flash_verify` 的版本回读与 manifest 一致；
+   - 刷机窗口内出现过的 MTK pid（判据是 `_FLASH_STAGE_PIDS` 是否覆盖该机型）：
+
+     ```bash
+     lsusb -d 0e8d: | awk '{print $6}'
+     ```
+
+   预期：窗口内出现的 pid 全在 `0003/2000/2001/201c/2026/3000` 内。出现新 pid 时必须先发
+   新版本补集合再放量——集合外的刷机态口不会被门控压制，工具可能抓到邻机。
+   **别把这条读成「`201c` 该被隐藏」**：2026-10-12 实测 `201c` 是 MLD-LX2/LX3/NX2 的正常
+   adb 在线态（正常态另有 `2046`），初始门控连它一起隐藏正是 #3690 要裁决的判据问题。
+
+   > **2026-10-12 实测（NX2 V6 首刷）**：接管态是 `0e8d:2000`（在既有集合内，无新 pid）；
+   > 但**刷机成功后 10–30 分钟**，设备会从「adb 可见、版本已回读一致」掉成
+   > `0e8d:2046`——有 USB serial、**没有 adb 接口**，与本机位上长期 OFFLINE 的 `…0172` /
+   > `…0226` 同形。此形态下远程无法复位（`authorized` 需 root，`stp-agent-priv
+   > usb-authorized` 只接受提权调用），所以要**把 `oobe_skip` / `ensure_root` 紧跟在刷机步之后**
+   > （别拖到 adb 窗口关掉），并把「现场按电源/重插」当作已知兜底动作写进放量前检查。

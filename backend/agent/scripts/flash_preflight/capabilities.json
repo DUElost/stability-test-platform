@@ -6,6 +6,10 @@
     "flashtool": {
       "version": "1.2444.00.100",
       "env": "STP_FLASH_TOOL_DIR"
+    },
+    "flashtool_v6": {
+      "version": "1.2444.00.100",
+      "env": "STP_FLASH_TOOL_V6_DIR"
     }
   }
 }
