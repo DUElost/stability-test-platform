@@ -6,8 +6,45 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import PlanExecutePage from './PlanExecutePage';
 import { api, ApiError, fetchAllDevices, fetchAllHosts, fetchAllPlans } from '@/utils/api';
 import { hostKeys } from '@/utils/api/queryKeys';
+import type { ParameterProjection } from '@/utils/api/types';
 
 const PREVIEW_FINGERPRINT = `stp-l1-v1:${'ab'.repeat(32)}`;
+
+// 合成服务端 L1 DTO；展示事实独立于列表返回的 raw Plan。
+const SETTINGS_PROJECTION: ParameterProjection = {
+  layer: 'L1',
+  context: { plan_id: 7, read_at: '2026-10-10T00:00:00.000000Z', authority: 'test' },
+  steps: [],
+  plan_settings: [
+    {
+      path: ['patrol_interval_seconds'],
+      label: '巡检间隔',
+      meaning: '轮间等待。没有启用的 patrol 步骤时不适用；有启用的 patrol 步骤时必须填写。',
+      unit: '秒',
+      state: 'explicit',
+      value: 60,
+      sensitive: false,
+      is_set: true,
+    },
+    {
+      path: ['timeout_seconds'],
+      label: '巡检时长',
+      meaning: '各设备 init 完成后开始计时，轮前到点则正常完成，然后再 teardown。没有 patrol 时不适用。',
+      unit: '秒',
+      state: 'explicit',
+      value: 90,
+      sensitive: false,
+      is_set: true,
+    },
+  ],
+  watcher_policy: { note: '独立策略', items: [] },
+  dispatch_decisions: [],
+  safe_debug: {
+    steps: [],
+    plan_settings: { patrol_interval_seconds: 60, timeout_seconds: 90 },
+    watcher_policy: {},
+  },
+};
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
@@ -95,6 +132,7 @@ function renderPage({
   wifiPools = [] as any[],
   wifiPoolsFailure,
   projection,
+  projectionFailure,
 }: {
   plans?: any[];
   devices?: any[];
@@ -110,6 +148,7 @@ function renderPage({
   wifiPools?: any[];
   wifiPoolsFailure?: Error;
   projection?: any;
+  projectionFailure?: Error;
 } = {}) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
@@ -143,6 +182,7 @@ function renderPage({
     dispatch_decisions: [],
     safe_debug: { steps: [], plan_settings: {}, watcher_policy: {} },
   });
+  if (projectionFailure) (api.plans.parameterProjection as any).mockRejectedValue(projectionFailure);
   (api.plans.run as any).mockResolvedValue({ id: 88 });
   (fetchAllHosts as any).mockResolvedValue(hosts);
   if (getHost) {
@@ -738,7 +778,7 @@ describe('PlanExecutePage', () => {
     expect(screen.getByRole('checkbox', { name: /B-1/ })).toBeChecked();
   });
 
-  it('formats duration on the plan step (ADR-0048: threshold display removed)', async () => {
+  it('shows registered L1 setting labels, meanings and values even when raw Plan differs', async () => {
     renderPage({
       plans: [{
         id: 7,
@@ -749,11 +789,22 @@ describe('PlanExecutePage', () => {
         timeout_seconds: 125,
       }],
       devices: [{ id: 1, serial: 'DEV-1', host_id: 'h1', status: 'ONLINE' }],
+      projection: SETTINGS_PROJECTION,
     });
 
-    expect(await screen.findByText(/巡检周期：1h 0m/)).toBeInTheDocument();
-    // 字段名叫 timeout，展示口径是「巡检时长」（planTiming.ts）
-    expect(screen.getByText(/巡检时长：2m 5s/)).toBeInTheDocument();
+    const settings = within(await screen.findByTestId('parameter-plan-settings'));
+    const rows = settings.getAllByTestId('parameter-item');
+    expect(rows).toHaveLength(2);
+    expect(within(rows[0]).getByText('巡检间隔')).toBeInTheDocument();
+    expect(within(rows[0]).getByText('轮间等待。没有启用的 patrol 步骤时不适用；有启用的 patrol 步骤时必须填写。')).toBeInTheDocument();
+    expect(within(rows[0]).getByTestId('parameter-value')).toHaveTextContent(/^60$/);
+    expect(within(rows[1]).getByText('巡检时长')).toBeInTheDocument();
+    expect(within(rows[1]).getByText('各设备 init 完成后开始计时，轮前到点则正常完成，然后再 teardown。没有 patrol 时不适用。')).toBeInTheDocument();
+    expect(within(rows[1]).getByTestId('parameter-value')).toHaveTextContent(/^90$/);
+    expect(settings.queryByText('3600')).not.toBeInTheDocument();
+    expect(settings.queryByText('125')).not.toBeInTheDocument();
+    expect(screen.queryByText(/巡检周期：1h 0m/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/巡检时长：2m 5s/)).not.toBeInTheDocument();
 
     await goToDeviceStep();
     fireEvent.click(await screen.findByRole('checkbox', { name: /DEV-1/ }));
@@ -766,6 +817,32 @@ describe('PlanExecutePage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '编辑 Plan' }));
     expect(mocks.navigate).toHaveBeenCalledWith('/orchestration/plans/7');
+  });
+
+  it.each(['empty', 'failed'] as const)('does not rebuild local timing summaries when L1 projection is %s', async (state) => {
+    renderPage({
+      plans: [{
+        id: 7,
+        name: 'Smoke Plan',
+        description: null,
+        steps: [{ step_key: 'check_device' }],
+        patrol_interval_seconds: 3600,
+        timeout_seconds: 125,
+      }],
+      projectionFailure: state === 'failed' ? new Error('projection unavailable') : undefined,
+    });
+
+    await screen.findByText(/启用步骤/);
+    if (state === 'failed') {
+      expect(await screen.findByTestId('parameter-projection-unavailable')).toHaveTextContent('参数清单不可用');
+      expect(screen.queryByTestId('parameter-plan-settings')).not.toBeInTheDocument();
+    } else {
+      expect(await screen.findByTestId('parameter-plan-settings')).toBeEmptyDOMElement();
+    }
+    expect(screen.queryByText(/巡检周期：1h 0m/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/巡检时长：2m 5s/)).not.toBeInTheDocument();
+    expect(screen.queryByText('巡检间隔')).not.toBeInTheDocument();
+    expect(screen.queryByText('巡检时长')).not.toBeInTheDocument();
   });
 
   it('falls back to device step when selection is cleared on later steps', async () => {

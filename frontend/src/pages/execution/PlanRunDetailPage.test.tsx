@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
     plan_run_id: 12, data_authority: 'device_log_event', total: 0, items: [],
   }),
   getChain: vi.fn(),
+  jobParameterProjection: vi.fn(),
   abort: vi.fn(),
   manualRetryJob: vi.fn(),
   manualExitJob: vi.fn(),
@@ -65,6 +66,7 @@ vi.mock('@/utils/api', () => ({
       getWatcherSummary: mocks.getWatcherSummary,
       getLogEvents: mocks.getLogEvents,
       getChain: mocks.getChain,
+      jobParameterProjection: mocks.jobParameterProjection,
       abort: mocks.abort,
       manualRetryJob: mocks.manualRetryJob,
       manualExitJob: mocks.manualExitJob,
@@ -125,6 +127,43 @@ function renderPage() {
 beforeEach(() => {
   vi.clearAllMocks();
   sessionStorage.clear();
+  mocks.jobParameterProjection.mockResolvedValue({
+    layer: 'L3',
+    context: {
+      plan_id: 7,
+      plan_run_id: 12,
+      job_id: 3001,
+      device_id: 1,
+      host_id: 'host-101',
+      read_at: '2026-10-11T00:00:00.000000Z',
+      authority: 'job pipeline_def',
+    },
+    steps: [{
+      step_key: 'monkey_check',
+      script_name: 'monkey_check',
+      script_version: '1.0.0',
+      stage: 'patrol',
+      sort_order: 0,
+      enabled: true,
+      executes: true,
+      metadata_missing: false,
+      params: [{
+        path: ['ssid'],
+        label: 'SSID',
+        meaning: 'WiFi',
+        state: 'actual',
+        source: 'dispatch_injection',
+        value: 'ssid-device-1',
+        sensitive: false,
+        is_set: true,
+      }],
+      settings: [],
+    }],
+    plan_settings: [],
+    watcher_policy: { note: '独立策略', items: [] },
+    dispatch_decisions: [],
+    safe_debug: { steps: [], plan_settings: {}, watcher_policy: {} },
+  });
   mocks.getRun.mockResolvedValue({
     id: 12,
     plan_id: 7,
@@ -134,6 +173,79 @@ beforeEach(() => {
     project_key: 'MLD',
     started_at: new Date(Date.now() - 90_000).toISOString(),
     ended_at: null,
+    plan_snapshot: {
+      schema_version: 1,
+      plan: {
+        id: 7,
+        name: '24h 烧机',
+        patrol_interval_seconds: 60,
+        timeout_seconds: 86400,
+        watcher_policy: { enabled: true, password: 'RAW_WATCHER' },
+      },
+      steps: [{
+        stage: 'patrol',
+        step_key: 'monkey_check',
+        script_name: 'monkey_check',
+        script_version: '1.0.0',
+        nfs_path: '/nfs/monkey_check',
+        param_schema: { type: 'object' },
+        default_params: { password: 'RAW_DEFAULT' },
+        timeout_seconds: 300,
+        retry: 0,
+        enabled: true,
+        sort_order: 0,
+      }],
+    },
+    parameter_projection: {
+      layer: 'L2',
+      context: {
+        plan_id: 7,
+        plan_run_id: 12,
+        read_at: '2026-10-11T00:00:00.000000Z',
+        authority: 'plan_snapshot 冻结；未回读当前 PlanStep 或 Script',
+      },
+      steps: [{
+        step_key: 'monkey_check',
+        script_name: 'monkey_check',
+        script_version: '1.0.0',
+        stage: 'patrol',
+        sort_order: 0,
+        enabled: true,
+        executes: true,
+        metadata_missing: false,
+        params: [{
+          path: ['password'],
+          label: '密码',
+          meaning: '敏感',
+          state: 'explicit',
+          source: 'step_override',
+          value: 'SHOULD_NOT_RENDER',
+          sensitive: true,
+          is_set: true,
+        }],
+        settings: [],
+      }],
+      plan_settings: [],
+      watcher_policy: {
+        note: '异常采集策略独立于步骤参数',
+        items: [{
+          path: ['watcher', 'enabled'],
+          label: '采集开关',
+          meaning: '开关',
+          state: 'explicit',
+          source: 'schema_default',
+          value: true,
+          sensitive: false,
+          is_set: true,
+        }],
+      },
+      dispatch_decisions: [],
+      safe_debug: {
+        steps: [{ params: { password: '***' } }],
+        plan_settings: {},
+        watcher_policy: { enabled: true },
+      },
+    },
     run_context: {
       precheck: {
         phase: 'syncing',
@@ -1124,5 +1236,103 @@ describe('PlanRunDetailPage', () => {
     expect(createObjectURL).toHaveBeenCalledWith(blob);
     clickSpy.mockRestore();
     vi.unstubAllGlobals();
+  });
+
+  it('#3653 U4: 查看快照消费 L2，切设备读 L3，不渲染原始参数', async () => {
+    renderPage();
+    await waitFor(() => screen.getByTestId('plan-run-snapshot-btn'));
+    expect(mocks.jobParameterProjection).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('plan-run-snapshot-btn'));
+    expect(await screen.findByTestId('plan-snapshot-drawer')).toBeInTheDocument();
+    expect(screen.getByTestId('parameter-layer')).toHaveTextContent('L2');
+    expect(screen.queryByText('RAW_DEFAULT')).not.toBeInTheDocument();
+    expect(screen.queryByText('RAW_WATCHER')).not.toBeInTheDocument();
+    expect(screen.queryByText('SHOULD_NOT_RENDER')).not.toBeInTheDocument();
+    expect(screen.getByText('异常采集策略独立于步骤参数')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByTestId('snapshot-job-select'), { target: { value: '3001' } });
+    await waitFor(() => expect(mocks.jobParameterProjection).toHaveBeenCalledWith(12, 3001));
+    expect(await screen.findByTestId('snapshot-context-job')).toHaveTextContent('3001');
+    expect(screen.getByTestId('snapshot-context-device')).toHaveTextContent('1');
+    expect(screen.getByText('ssid-device-1')).toBeInTheDocument();
+
+    mocks.jobParameterProjection.mockResolvedValueOnce({
+      layer: 'L3',
+      context: {
+        plan_id: 7,
+        plan_run_id: 12,
+        job_id: 3002,
+        device_id: 2,
+        host_id: 'host-101',
+        read_at: '2026-10-11T00:05:00.000000Z',
+        authority: 'job pipeline_def',
+      },
+      steps: [{
+        step_key: 'monkey_check',
+        script_name: 'monkey_check',
+        script_version: '1.0.0',
+        stage: 'patrol',
+        sort_order: 0,
+        enabled: true,
+        executes: true,
+        metadata_missing: false,
+        params: [{
+          path: ['ssid'],
+          label: 'SSID',
+          meaning: 'WiFi',
+          state: 'actual',
+          source: 'dispatch_injection',
+          value: 'ssid-device-2',
+          sensitive: false,
+          is_set: true,
+        }],
+        settings: [],
+      }],
+      plan_settings: [],
+      watcher_policy: { note: '独立策略', items: [] },
+      dispatch_decisions: [],
+      safe_debug: { steps: [], plan_settings: {}, watcher_policy: {} },
+    });
+    fireEvent.change(screen.getByTestId('snapshot-job-select'), { target: { value: '3002' } });
+    await waitFor(() => expect(mocks.jobParameterProjection).toHaveBeenCalledWith(12, 3002));
+    expect(await screen.findByText('ssid-device-2')).toBeInTheDocument();
+    expect(screen.queryByText('ssid-device-1')).not.toBeInTheDocument();
+    expect(screen.queryByText('RAW_DEFAULT')).not.toBeInTheDocument();
+  });
+
+  it('#3653 U4: detail 缺少 parameter_projection 时抽屉不回退原始 JSON', async () => {
+    mocks.getRun.mockResolvedValueOnce({
+      id: 12,
+      plan_id: 7,
+      status: 'RUNNING',
+      run_type: 'MANUAL',
+      triggered_by: 'tester@local',
+      started_at: new Date(Date.now() - 90_000).toISOString(),
+      ended_at: null,
+      parameter_projection: null,
+      plan_snapshot: {
+        schema_version: 1,
+        plan: { id: 7, name: 'legacy', watcher_policy: { password: 'LEGACY_SECRET' } },
+        steps: [{
+          stage: 'init',
+          step_key: 'prepare',
+          script_name: 'device_prepare',
+          script_version: '1.0.0',
+          default_params: { password: 'LEGACY_SECRET' },
+          param_schema: { type: 'object' },
+          timeout_seconds: 60,
+          retry: 0,
+          enabled: true,
+          sort_order: 0,
+        }],
+      },
+      run_context: null,
+    });
+    renderPage();
+    fireEvent.click(await screen.findByTestId('plan-run-snapshot-btn'));
+    expect(await screen.findByTestId('parameter-projection-unavailable')).toBeInTheDocument();
+    expect(screen.queryByText('LEGACY_SECRET')).not.toBeInTheDocument();
+    expect(screen.queryByText('default_params')).not.toBeInTheDocument();
   });
 });

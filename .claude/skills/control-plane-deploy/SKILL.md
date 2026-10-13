@@ -5,7 +5,7 @@ description: 生产控制面部署与 Agent 热更新操作 SOP。触发时机�
 
 # 控制面部署与 Agent 热更新 SOP
 
-> **状态：全文已真机校准，无 `⚠️待校对` 条目**（最近一次端到端：2026-09-22；两处历史遗留的
+> **状态：除 2026-10-12 新增并标 `⚠️待校对` 的条目（§0.5、§1 步 2 补充、§1.5 警告与依赖安装）外，全文已真机校准**（最近一次端到端：2026-09-22；两处历史遗留的
 > 待校对项——§6 的 SP Flash Tool 依赖行与 §3 的带外资源身份——已于同日实机验证并收口，逐条见
 > §7 校准记录）。**校准有保质期**：任何一条若与现场不符，请按「实跑→改文→同 PR 追加 §7 行」
 > 的顺序更新——校准来自实跑，不来自推演。
@@ -41,6 +41,128 @@ curl -s http://127.0.0.1:8000/health      # health 路由（非 /api/v1/health�
   会让 `jq '.data.ok'` 恒为 null）；`/scripts/scan`、`/script-presence/*` 这些才是 `{data: …}`。
   可参考已跑通的抽验脚本（token → 目标 host → force 热更新 → 断言 `priv_mode`）：`/tmp/stp-acc/verifyD_sample.sh`（临时产物，机器重建即失）。
 
+## 0.5 端到端编排（⚠️待校对）
+
+适用条件：一次部署同时包含共享检出（`/home/debian13/stability-test-platform`，多会话共用的 git 检出）
+同步到 main、前后端换版、服务重启、DB 迁移与 Agent fleet 热更新。
+本节规定顺序、闸门、停顿点与报告项；各段命令见 §1–§3。阶段 A 第 1、5、7、9、10、11 步的命令已于
+2026-10-12 只读实跑；其余步骤按代码核对写成，下次真实部署按本节跑通后在 §7 追加行并解除本标记。
+
+发起示例（授权由 Owner 在每次部署请求中给出）：
+`/control-plane-deploy 部署 origin/main；授权本次切换 current、重启、reload nginx 与热更新；阶段 A 后停`。
+
+> 警告：阶段 B、C 改变生产状态。执行者必须先确认 Owner 在本次部署请求中明确授权了切换 `current`、
+> 重启 `stability-backend`、reload nginx 与 Agent 热更新；执行者不得沿用其他对话或其他部署中的授权。
+> 没有授权时，执行者必须停在阶段 A 第 14 步，把切换命令和回滚命令交给 Owner。
+> Harness 拦截阶段 B、C 的命令时，执行者不得换工具、拆分命令或换路径重试，必须把命令交给 Owner 执行。
+
+### 阶段 A：只读检查与构建
+
+本阶段不改生产状态。按顺序执行以下步骤：
+
+1. 读取部署基线：`BASE=$(jq -r .source.revision /home/debian13/stp-releases/current/release-manifest.json)`。
+2. 查看共享检出的分支与改动：`git -C /home/debian13/stability-test-platform status --short --branch`。
+3. 如果共享检出不在 `main`，或有未提交的 tracked 改动，停止本流程并报告 Owner。
+   执行者不得用 checkout、reset 或 stash 处理别的会话的改动。
+4. 在共享检出拉取目标：`git pull --ff-only origin main`。
+   预期：`git rev-parse HEAD` 与 `git rev-parse origin/main` 输出相同。
+5. 列出 `BASE..HEAD` 内合入的 PR 引用的批次 issue：
+
+   ```bash
+   for pr in $(git log --first-parent --format=%s "$BASE"..HEAD | grep -oP 'Merge pull request #\K[0-9]+'); do
+     gh pr view "$pr" --json body --jq .body | grep -oP 'Refs #\K[0-9]+'
+   done | sort -u | while read -r n; do
+     gh issue view "$n" --json number,title,state \
+       --jq 'select(.title | startswith("批次 B")) | "#\(.number) \(.state) \(.title)"'
+   done
+   ```
+
+6. 如果第 5 步输出了状态为 `OPEN` 的批次 issue，停止本流程，请 Owner 确认该批次已通过 ADR-0058 D9
+   激活闸门（`docs/development/repository-workflow.md`「批次交付流程」）。
+7. 列出未激活标记并逐个读取：
+   `for f in /home/debian13/stp-releases/*/DO-NOT-SWITCH.txt; do [ -e "$f" ] && { echo "== $f"; cat "$f"; }; done`。
+8. 如果第 7 步有输出，且标记写明的条件尚未满足，停止本流程，请 Owner 裁决。
+9. 列出新增迁移：`git diff --name-only --diff-filter=A "$BASE" HEAD -- backend/alembic/versions/`。
+   逐个读文件头 docstring，记下数据改写、脚本版本停用、长时间锁表三类影响。
+10. 列出 scan 与 `--force` 的判据文件：
+    `git diff --name-only "$BASE" HEAD -- backend/agent/scripts/ tool_manifest.json backend/services/agent_env_sync.py`
+    （判据见 §2「何时需要」与 §3 的 `--force` 条）。
+
+> 警告：下一步的两个工具在环境变量缺失时回落到仓根 `.env.backend`。D6 起它是 dev 配置，可与站点 env 漂移，
+> 检查目标因此不受站点配置约束（#3693；2026-10-12 核对时两者的 `DATABASE_URL` 恰好相同）。
+> 执行者不得在未导出站点 env 的 shell 中运行它们，否则结论不能代表生产库。
+
+11. 导出站点 env 后运行部署源守卫与就绪检查：
+
+    ```bash
+    ( cd /home/debian13/stp-releases/current && set -a && . ./.env.backend && set +a \
+      && cd /home/debian13/stability-test-platform \
+      && ./tools/dev/check-deploy-source.sh \
+      && ./scripts/project_python.sh tools/dev/check-deploy-readiness.py --diff-base "$BASE" )
+    ```
+
+    预期：退出码为 0；输出含 `check_alembic_at_head: OK` 与 `[OK] automated checks passed`。
+12. 在共享检出创建前端构建 worktree：`git worktree add --detach /tmp/stp-deploy HEAD`，
+    再按 §1.5 代码块第 2–3 行安装依赖并构建。
+    预期：`git -C /tmp/stp-deploy rev-parse HEAD` 与共享检出的 `HEAD` 相同；
+    `/tmp/stp-deploy/frontend/dist/index.html` 存在。
+13. 按 §1 步 2–3 构建 bundle 并补齐物料与 venv（`--out` 的要求见 §1 步 2 补充）。
+    预期：新 rev 的 `release-manifest.json` 中 `source.revision` 等于共享检出的 `HEAD`；
+    §1 步 3 的 venv 核对脚本退出码为 0。
+14. 向 Owner 汇报：`BASE` 与目标提交、第 5–11 步的结论与 WARN、新 rev 目录、切换命令、回滚命令。
+    如果第 9 步列出了新增迁移，回滚命令必须注明：迁移执行后旧 rev 的 `ExecStartPre` 不认识新修订，
+    把 `current` 指回旧 rev 会启动失败，回滚方案由 Owner 裁决。
+15. 等待 Owner 回复后进入阶段 B。如果 Owner 在本次部署请求中已授权阶段 B、C 并要求不停顿，
+    执行者可以在第 3、6、8 步均未停止时直接进入阶段 B。
+
+### 阶段 B：切换（先后端、后前端）
+
+> 警告：本阶段改变生产状态。后端重启失败时，执行者不得继续换前端，必须先执行回滚命令并报告 Owner。
+
+按顺序执行以下步骤：
+
+1. 按 §1 步 4 切换 `current` 并重启 `stability-backend`。
+   预期：`systemctl is-active stability-backend` 输出 `active`；`curl -s http://127.0.0.1:8000/health`
+   返回健康状态。unit 启动成功即表示 `ExecStartPre` 已执行迁移，且 alembic 精确位于 head。
+2. 如果第 1 步未达预期，停止本流程，执行回滚命令并报告 Owner。
+3. 按 §0 取 admin token，并设 `AUTH="Authorization: Bearer $TOK"`。
+4. 如果阶段 A 第 10 步列出了 `backend/agent/scripts/` 或 `tool_manifest.json`，按 §2 运行 scan。
+   预期：响应中 `conflicts` 与 `package_missing` 均为空。
+5. 如果 scan 响应的 `package_missing` 非空，停止本流程，请 Owner 决定是否 `--publish`。
+6. 按 §1.5 代码块中 `cd $REPO/frontend` 起的各行换前端包并 reload nginx。
+   预期：`curl -s http://127.0.0.1/ | grep -o 'assets/index-[^"]*\.js'` 与
+   `/tmp/stp-deploy/frontend/dist/index.html` 中的入口文件名相同。
+
+### 阶段 C：Agent fleet 热更新
+
+按顺序执行以下步骤：
+
+1. 按 §3 代码块注释 1) 对一台 ONLINE 主机做 canary 热更新。
+   预期：响应顶层 `"ok": true`。
+2. 如果响应是 `HOST_HAS_ACTIVE_JOBS`，换一台主机重做第 1 步；执行者不得加 `abort_running_jobs`（§3）。
+3. 查询 canary 主机：
+   `curl -s -H "$AUTH" http://127.0.0.1:8000/api/v1/hosts/<host_id> | jq -r '[.status, .agent_code_sync_status, .last_heartbeat] | @tsv'`。
+   预期：`ONLINE`、`matched`，`last_heartbeat` 晚于热更新完成时间。
+4. 如果第 3 步未达预期，停止本流程并报告 Owner。
+5. 按 §3 代码块注释 2) 运行 `batch_hot_update --direct`。如果阶段 A 第 10 步列出了
+   `backend/services/agent_env_sync.py`，或本次部署改了站点 `env.backend` 中同步到 Agent 的键，加 `--force`（§3）。
+   预期：`SUMMARY` 行 `fail=0`。
+6. 统计同步状态分布（显式带 `limit`：不带分页参数时列表最多返回 50 台）：
+   `curl -s -H "$AUTH" 'http://127.0.0.1:8000/api/v1/hosts?limit=200' | jq -r '"total=\(.total) " + (.items | group_by(.agent_code_sync_status) | map("\(.[0].agent_code_sync_status)=\(length)") | join(" "))'`。
+   预期：`total` 不超过 200；除第 5 步跳过的忙碌主机外均为 `matched`。
+
+### 报告
+
+执行者必须在部署结束时向 Owner 报告以下各项，并且只报告实际运行过的命令：
+
+- `BASE`、目标提交与新 rev 目录；
+- 阶段 A 各闸门的结论与 WARN；
+- 后端重启结果与 scan 响应摘要；
+- 前端入口文件名（换包前、换包后）；
+- 热更新 `SUMMARY` 行、同步状态分布，以及被跳过的忙碌主机清单（PlanRun 结束后重跑同一命令补齐）；
+- 未完成项（标为 pending）与回滚命令；
+- 本节与现场不符之处（按本文头部要求在 §7 追加行）。
+
 ## 1. 控制面后端更新与 DB 迁移（本机即生产控制面，**bundle 发布根形态**）
 
 > 本机（127.0.0.1:8000）即是生产控制面。ADR-0051 Phase 1（2026-09-23 实切）起：unit 的
@@ -61,6 +183,20 @@ curl -s http://127.0.0.1:8000/health      # health 路由（非 /api/v1/health�
    `release-manifest.json` 的 `product.version` / 分量摘要（`agent-code` + `control-plane`；`host-resources`
    自 ADR-0040 D8 R3 退役，bundle 不再携带也不再要求 `backend/agent/resources/`）即部署内容地址；构建机本地态由
    `find_forbidden_bundle_entries` fail-closed（#2269/#3112 在 bundle 形态的替身）。
+
+   以下四条为 2026-10-12 按代码核对的补充（⚠️待校对）：
+
+   - 构建者必须让 `--out` 指向不存在的目录：`build_bundle` 以合并方式复制（`copytree(dirs_exist_ok=True)`），
+     目标目录里上游已删除的文件会留在 bundle 中并进入摘要。如果 `stp-releases/<rev>` 已存在，
+     构建者必须换用新目录名（例如 `<rev>-<yyyymmdd>`）。
+   - 如果构建者按 Owner 裁决暂不切换某个 rev，构建者必须在该 rev 根目录写 `DO-NOT-SWITCH.txt`，
+     写明原因与裁决出处。rev 根的文件不在任何摘要面内（control-plane 摘要只覆盖 `backend/` 中 `agent/` 以外的部分）。
+   - bundle 内的 `frontend/dist-prod` 复制自构建源当时的同名目录，即共享检出中正在服务的前端。
+     本机 nginx 不读它；站点安装会把它落到部署根并由站点 nginx 服务（#3694）。
+     执行者不得用它判断前端版本或回滚前端，前端的发布与回滚必须按 §1.5 执行。
+     2026-10-12 核对：`fbb5ec61`、`43dfc764` 两个 rev 携带的都是构建当时的线上前端。
+   - 本步守卫的 schema 检查在环境变量缺失时回落到仓根 `.env.backend`（D6 起是 dev 配置，#3693）；
+     对准生产库的运行方式见 §0.5 阶段 A 第 11 步。
 3. **物料与 venv**（首建/新 rev）：发布根需 `venv/`、`logs/`、`.env.backend`
    （**symlink 指树内 `../env.backend`**——站点真身，`ln -sfn ../env.backend <rev>/.env.backend`；
    **不得指仓根**，D6 已闭合：运行时不许触开发检出）；`tools/ansible/inventory.ini` 随 bundle 携带
@@ -130,15 +266,20 @@ curl -s http://127.0.0.1:8000/health      # health 路由（非 /api/v1/health�
 `10-0-15-{ip末段}`，等价变换验证过 6 FK 表 + 2 快照列，详见 Agent Note
 `docs/notes/bug-fix/2026-08-28-align-host-id-with-ip.md`）。
 
-## 1.5 前端静态资源部署（✅ 2026-08-27 真机校准）
+## 1.5 前端静态资源部署（✅ 2026-08-27 真机校准；下方警告与依赖安装行 ⚠️待校对）
 
 nginx 站点 `stability-platform` root 指向仓库内 `frontend/dist-prod`
 （gitignore 排除、无 CI 自动发布）——部署 = 干净 worktree 构建 + 目录原子替换：
 
+> 警告：nginx 的 root 就是共享检出里的 `frontend/dist-prod`。任何人不得在共享检出里运行
+> `npm run build:prod`：它带 `--emptyOutDir`，写出阶段先清空线上目录再写入，期间页面不可用，
+> 中途失败则目录残缺，也不会留下 `dist-prod.bak-*` 回滚点。`build_bundle` 缺少 `frontend/dist-prod`
+> 时提示的就是这条命令，任何人不得照该提示在共享检出执行。
+
 ```bash
 git fetch origin && git worktree add /tmp/stp-deploy origin/main   # 必先 fetch！
-ln -sfn $PWD/frontend/node_modules /tmp/stp-deploy/frontend/node_modules
-cd /tmp/stp-deploy/frontend && npm run build                        # 产物 → dist/
+cd /tmp/stp-deploy/frontend && npm ci                               # 按 lock 安装；共享检出的 node_modules 可能落后于 lock
+npm run build                                                       # 产物 → dist/
 cd $REPO/frontend
 cp -a /tmp/stp-deploy/frontend/dist ./dist-new                      # 先落到同一文件系统
 mv dist-prod dist-prod.bak-$(date +%Y%m%d-%H%M)                     # bak 目录留原地回滚
@@ -278,6 +419,8 @@ PYTHONPATH=. venv/bin/python -m backend.scripts.batch_hot_update --direct
 | 2026-09-26 | **更正 09-25「CLI 跑 run_sweep」行的告警结论**：原写「alert 不受影响（吃进程内 gauge）」是**错的**——`stability_script_presence_sweep_timestamp` 在 `/metrics` 拉取期从库现算（`routes/metrics.py:_refresh_script_presence_gauges`），CLI 垃圾轮推进 `checked_at` 即把 `StabilityScriptPresenceSweepStale` 喂成新鲜；§6 行已改。同批：包模式 gauge 改为拉取期从 `host.script_packages_mode` 列现算（原在 sweep 内按切片 set，重启后缺席到下次 cron），部署后无需等 cron 即可核验 | 代码核对（错误断言未先读 gauge 写点）+ `docs/notes/bug-fix/2026-09-26-3315-packages-gauge-scrape-time.md` |
 | 2026-09-26 | **#3333 落地**：§6 行改为「CLI 全量 = 被拒」——`run_sweep` 加 `agent_rpc_ready()` fail-closed（不写任何行）+ 新增 `POST /script-presence/refresh-all`（admin + 60s 进程内节流）作为立即全量重采入口；单机 `POST /refresh` 语义不变 | #3333 实施 PR |
 | 2026-10-10 | **修正 §3 忙碌判定**（上表 09-23 的「经 `device.host_id` join」）：同日 `--direct` 已按 `job_instance.host_id` 跳过 37 台，原结论不成立；以平台判定为准。依据 #3669 | #3669 静态复核（`git show 28e24185`） |
+| 2026-10-12 | **新增 §0.5 端到端编排**（阶段 A 只读检查与构建 → 停顿点 → 阶段 B 先后端后前端 → 阶段 C 热更新 → 报告项）；§1 步 2 补「`--out` 必须是新目录」「`DO-NOT-SWITCH.txt` 约定」「bundle 内前端是构建时线上副本」「守卫 schema 检查回落 dev env」；§1.5 补「共享检出不得跑 `build:prod`」警告，依赖安装改 `npm ci`。阶段 A 第 1、5、7、9、10、11 步已只读实跑（`BASE=fbb5ec61`、目标 `bb4f2340`：批次查询得 `#3653 OPEN`，标记查询得 `43dfc764` 一条，无新增迁移、无 scan/`--force` 判据文件；守卫与就绪检查导出站点 env 后均 exit 0）。其余条目 ⚠️待校对，下次真实部署按 §0.5 跑通后解除 | 代码核对（`build_bundle.py`、`check-deploy-readiness.py`、`check_alembic_at_head.py`、`routes/hosts.py`）+ 本次只读实跑 + Agent Note `docs/notes/process/2026-10-12-control-plane-deploy-orchestration.md` |
+| 2026-10-12 | **更正同日新增条目的两处表述**：① §0.5 阶段 A 第 11 步前的警告原写「否则得到的是 dev 库的通过结论」。核对时仓根与站点 env 的 `DATABASE_URL` 相同，不导出时查的仍是生产库；问题在于检查目标不受站点配置约束，改为「结论不能代表生产库」（#3693）。② §1 步 2 补充原写「nginx 不读它」，只对本机成立：站点安装 S2 会把 bundle 前端落到部署根并由站点 nginx 服务，改为限定本机并引 #3694 | 两份 env 只比较 `DATABASE_URL` 是否相等（未打印取值）+ `tools/site_config/stages.py` 的 `stage_s2_release_env` 与 `deploy/control-plane/nginx/stability-platform.conf` |
 
 ## 踩坑守卫（负向约束）
 

@@ -105,7 +105,9 @@ class PlanCreate(BaseModel):
     # 含长耗时前置步骤的计划必须抬高：只有先到者在等，预算要覆盖同 host 的
     # init 落差 ≈ (ceil(设备数/permit_cap) − 1) × 单设备 init 耗时。
     barrier_timeout_seconds: Optional[int] = Field(default=None, ge=1)
-    # #174: barrier 绝对硬顶（从首次等待起算；None = 不设上限，保持 #117 行为）
+    # #174: barrier 绝对硬顶（从首次等待起算）。正整数 = 显式硬顶；
+    # None = 继承主机 STP_BARRIER_MAX_WAIT_SECONDS（未设/非法回落 1800s；
+    # 环境变量非正值才表示无硬顶）。
     barrier_max_wait_seconds: Optional[int] = Field(default=None, ge=1)
     auto_archive_interval_seconds: Optional[int] = Field(default=None, ge=1)
     next_plan_id: Optional[int] = None
@@ -532,7 +534,7 @@ def _validate_assembled_lifecycle(
     # dispatcher 原样进 lifecycle 后同样支配运行期行为（#872/#174 误杀前科），
     # 但 PUT/POST 畅通（实测 barrier=5 被 200 接受）。比较基准取 `_sched()` 的
     # 协调器存活窗——与 recycler 判死、env 校验同一真值源，不造第二套默认。
-    # barrier_max_wait 非空=绝对硬顶（#117：null 才是无上限）：硬顶短于存活窗
+    # barrier_max_wait 非空=绝对硬顶：硬顶短于存活窗
     # 与不设 barrier 同效（host 一有迟滞即放弃同步），故同判。
     coord_timeout = get_scheduler_settings().coordinator_heartbeat_timeout_seconds
     for field, value in (
@@ -549,7 +551,9 @@ def _validate_assembled_lifecycle(
                         f"={coord_timeout}s：host 级 barrier 必须活得过协调器判死窗，"
                         "否则批次将在正常迟滞处放弃同步（#872/#174 型误杀）。"
                         "调大该值或删除本字段（barrier_timeout 留空=Agent 侧 env 默认；"
-                        "barrier_max_wait 留空=不设硬顶）。"
+                        "barrier_max_wait 留空=继承主机安全策略"
+                        "（STP_BARRIER_MAX_WAIT_SECONDS → 1800s；"
+                        "环境变量非正值才表示无硬顶））。"
                     ),
                     "field": field,
                     "coordinator_heartbeat_timeout_seconds": coord_timeout,
