@@ -166,6 +166,10 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/plans/<PLAN_ID>/run -H "$AUTH" \
 - **UNISOC（Z258）不适用**：SP Flash Tool 只覆盖 MTK；Z258 刷机另行立项。
 - **吞吐上限 = 每 host 同时 1 台**：需要并行时按 USB 控制器分片锁是后续课题
   （设计文档 §8 重议触发）。
+- **刷机后 30 分钟内 `battery_level` / `temperature` 可能是 0**：设备回总线的首拍慢指标采样
+  落在首启未稳窗口，读到 0 后按 `_slow_sample_interval`（默认 1800s）保持整个窗口。
+  判据：拿 `adb shell dumpsys battery` 的实际 `level:` / `temperature:` 与设备页读数对照。
+  **不得**用刷机后半小时内的电量/温度做阈值判定或告警收敛。
 
 ## 7. V6 代际机型（535 / MLD_NX2）
 
@@ -254,6 +258,19 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/plans/<PLAN_ID>/run -H "$AUTH" \
    预期：`cat "$ROOT/MLD/$VER/manifest.json"` 里 `version` 与目录名一致——不一致时
    `flash_firmware` 会 fail-fast（防放错目录）。v6 的 manifest **不需要** `scatter_file`
    与 `da_file`；写了也不参与 V6 命令行拼接。
+
+   `version` 这个值必须等于设备里 `ro.build.version.incremental` 的**实际字符串**——它是刷后
+   核验与 `skip_if_current` 的唯一判据，写错会把成功的刷机报成失败、或让该刷的设备被跳过。
+   **不得凭目录名类推**：上架前先从包里取证（`super.img` 是 erofs 压缩、扫不出，用这三个）：
+
+   ```bash
+   for f in vbmeta.img boot.img vbmeta_vendor.img; do
+     LC_ALL=C grep -aoE "[A-Za-z0-9._-]{0,28}<日期版本段>[A-Za-z0-9._-]{0,14}" "$SRC/$f" | sort -u
+   done
+   ```
+
+   预期：三处给出同一个串（本次 `P535AA-HONOR-NX2-16-261013V21`），拿它当 `version`；
+   三处不一致或取不到时停下来找固件团队，不要先刷再猜。
 5. 更新族级版本指针（同族多机型并存，per-model 映射；不要整体覆盖别人的键）：
 
    ```bash
@@ -307,8 +324,15 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/plans/<PLAN_ID>/run -H "$AUTH" \
 8. 单台验证时核对四个 V6 判据（任一不符即回到设计文档 §6，不得放量）：
    - `step_trace` 的 `metrics.route.tool_generation` 为 `v6`；
    - `metrics.command_argv` 是 `[... , "-c", "firmware-upgrade", "-f", "<...>/download_agent/flash.xml", "-b", "auto"]`，
-     且不含 `-d` / `-s`；
+     且不含 `-d` / `-s`；**`flash_firmware@1.3.20` 起 V6 结尾还必须带 `-p <sysfs 目标口>`**——
+     看不到 `-p` 就说明这一步跑的是 1.3.19 或更早（那版会把 DA 下发进任意一台邻机），立即停止；
    - `metrics.post_flash_verify` 的版本回读与 manifest 一致；
+   - `metrics.port_binding.bound_port` 等于 `metrics.target_port`，且 `metrics.aborted` 为 `null`
+     （`aborted` 非空 = 工具自报绑到了别的口、被脚本当场杀掉，属**止损成功**，必须查拓扑而不是重跑）；
+   - `metrics.identity` 里 `port_source` 是 `serial`、`adb_state` 是 `device`；只有救砖才允许
+     `explicit_param`（运维手填 `flash_port`），常规刷机看到它说明设备已脱离 adb，先查设备；
+   - `metrics.gating.hidden`（V6 口径 `gate_pid_scope=brom`）里**不得出现正常 adb 态邻机的口**：
+     拿派发前后的设备态对照，被隐藏的应当只有 `0003/2000/2001/2026/3000` 这些可刷态口；
    - 刷机窗口内出现过的 MTK pid（判据是 `_FLASH_STAGE_PIDS` 是否覆盖该机型）：
 
      ```bash
@@ -319,6 +343,15 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/plans/<PLAN_ID>/run -H "$AUTH" \
    新版本补集合再放量——集合外的刷机态口不会被门控压制，工具可能抓到邻机。
    **别把这条读成「`201c` 该被隐藏」**：2026-10-12 实测 `201c` 是 MLD-LX2/LX3/NX2 的正常
    adb 在线态（正常态另有 `2046`），初始门控连它一起隐藏正是 #3690 要裁决的判据问题。
+
+   > **2026-10-13 实测（V6 平台链路 canary 通过）**：plan 80 / run 929 / job 188321，
+   > 设备 id 953（`AHFFNX69****0170`）在 `.86` 的**直连口 `1-6`**，目标版本
+   > `P535AA-HONOR-NX2-16-261013V21`。`command_argv` 带 `-p 1-6`、`gating.hidden` 只有
+   > `1-5.2.2`（那台 `0e8d:0003` 异常机）、同 host 9 台 `201c` 邻机未被压制、
+   > `aborted=null`、`attempts=1` `outcome=ok`、`post_flash_verify.current == target`、
+   > 五步链（preflight→flash→oobe_skip→ensure_root→check_device）全 `success=true`，
+   > 刷机步耗时 **302.46s**。hub 嵌套口（`1-5.x.y`）上的 `-p` 形态**仍未取证**——
+   > 放量前若要选 hub 后的设备，先按本节判据盯一次 `aborted`/`identity` 再扩量。
 
    > **2026-10-12 实测（NX2 V6 首刷）**：接管态是 `0e8d:2000`（在既有集合内，无新 pid）；
    > 但**刷机成功后 10–30 分钟**，设备会从「adb 可见、版本已回读一致」掉成
