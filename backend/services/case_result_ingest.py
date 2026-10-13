@@ -78,6 +78,75 @@ def _case_detail_message(testpoint: dict[str, Any]) -> Optional[str]:
     return None
 
 
+def _normalize_testpoint_status(raw: Any) -> str:
+    status = str(raw or "").upper()
+    return status if status in _VALID_STATUSES else "ERROR"
+
+
+def _merge_status_from_attempts(statuses: list[str]) -> str:
+    """任一次非 PASS → 取最后一次非 PASS；全 PASS → PASS（#3700）。"""
+    adopted = "PASS"
+    for status in statuses:
+        if status != "PASS":
+            adopted = status
+    return adopted
+
+
+def _merged_detail_for_duplicates(
+    attempts: list[dict[str, Any]],
+    statuses: list[str],
+    adopted_status: str,
+) -> str:
+    """有重名时 detail 以「执行 N 次：S1 → S2 …」开头，再接被采用那次的失败信息。"""
+    prefix = f"执行 {len(attempts)} 次：{' → '.join(statuses)}"
+    adopted_tp: Optional[dict[str, Any]] = None
+    if adopted_status == "PASS":
+        adopted_tp = attempts[-1]
+    else:
+        for tp, status in zip(
+            reversed(attempts), reversed(statuses), strict=True,
+        ):
+            if status == adopted_status:
+                adopted_tp = tp
+                break
+    failure_info = _case_detail_message(adopted_tp) if adopted_tp is not None else None
+    if failure_info:
+        detail = f"{prefix}\n{failure_info}"
+    else:
+        detail = prefix
+    return detail[:2000]
+
+
+def _iter_merged_testpoints(
+    testpoints: list[Any],
+) -> list[tuple[str, str, Optional[str]]]:
+    """按去首尾空白后的用例名合并同名 testpoint；无重名时 detail 与单条路径一致。"""
+    groups: dict[str, list[dict[str, Any]]] = {}
+    order: list[str] = []
+    for tp in testpoints:
+        if not isinstance(tp, dict):
+            continue
+        case_name = str(tp.get("name") or "").strip()
+        if not case_name:
+            continue
+        if case_name not in groups:
+            groups[case_name] = []
+            order.append(case_name)
+        groups[case_name].append(tp)
+
+    merged: list[tuple[str, str, Optional[str]]] = []
+    for case_name in order:
+        attempts = groups[case_name]
+        statuses = [_normalize_testpoint_status(tp.get("status")) for tp in attempts]
+        if len(attempts) == 1:
+            merged.append((case_name, statuses[0], _case_detail_message(attempts[0])))
+            continue
+        adopted_status = _merge_status_from_attempts(statuses)
+        detail = _merged_detail_for_duplicates(attempts, statuses, adopted_status)
+        merged.append((case_name, adopted_status, detail))
+    return merged
+
+
 def _match_case_id(db: Session, suite_id: Optional[int], case_name: str) -> Optional[int]:
     if suite_id is None or not case_name:
         return None
@@ -150,15 +219,7 @@ def ingest_test_case_results_for_job(db: Session, job_id: int) -> int:
             run_dir = str(metrics["run_dir"])
 
     inserted = 0
-    for tp in testpoints:
-        if not isinstance(tp, dict):
-            continue
-        case_name = str(tp.get("name") or "").strip()
-        if not case_name:
-            continue
-        status = str(tp.get("status") or "").upper()
-        if status not in _VALID_STATUSES:
-            status = "ERROR"
+    for case_name, status, detail in _iter_merged_testpoints(testpoints):
         row = TestCaseResult(
             plan_run_id=job.plan_run_id,
             job_id=job.id,
@@ -166,7 +227,7 @@ def ingest_test_case_results_for_job(db: Session, job_id: int) -> int:
             case_id=_match_case_id(db, suite_id, case_name),
             case_name=case_name,
             status=status,
-            detail=_case_detail_message(tp),
+            detail=detail,
             artifact_uri=detail_uri,
             run_dir=run_dir,
         )

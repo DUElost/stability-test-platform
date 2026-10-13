@@ -1746,10 +1746,22 @@ def _seed_deferred_orphans(db_session, *, now, cutoff_count):
     return cutoff_ids, fresh_id
 
 
+def _reset_readable_cutoff_state():
+    """Clear #3341/#3700 in-process cutoff dedupe so tests do not leak across cases."""
+    from backend.services.post_completion import (
+        reset_post_completion_persist_failure_state_for_tests,
+    )
+
+    recycler._defer_cutoff_alerted.clear()
+    recycler._defer_cutoff_readable_exhausted.clear()
+    reset_post_completion_persist_failure_state_for_tests()
+
+
 def test_deferred_fill_cutoff_rows_excluded_and_gauged_3341(db_session, monkeypatch):
     """10 截止行 + 1 新孤儿：新孤儿仍入队、截止行不占名额不重入队，gauge=10。"""
     now = datetime.now(timezone.utc)
     monkeypatch.setattr(recycler, "_sched", lambda: _DeferredFillCfg())
+    _reset_readable_cutoff_state()
     cutoff_ids, fresh_id = _seed_deferred_orphans(db_session, now=now, cutoff_count=10)
 
     enqueued = []
@@ -1776,6 +1788,7 @@ def test_deferred_fill_readable_cutoff_row_reenqueued_3341(db_session, monkeypat
     """截止行 detail 已可读＝主路径漏发：照常重入队不截止。"""
     now = datetime.now(timezone.utc)
     monkeypatch.setattr(recycler, "_sched", lambda: _DeferredFillCfg())
+    _reset_readable_cutoff_state()
     cutoff_ids, fresh_id = _seed_deferred_orphans(db_session, now=now, cutoff_count=1)
 
     enqueued = []
@@ -1796,3 +1809,311 @@ def test_deferred_fill_readable_cutoff_row_reenqueued_3341(db_session, monkeypat
     from backend.core.metrics import post_completion_cutoff_jobs
 
     assert post_completion_cutoff_jobs._value.get() == 1
+
+
+def test_deferred_fill_readable_cutoff_cap_3700(db_session, monkeypatch, caplog):
+    """B1: post_completion 实际未落库累计 3 次后，下一周期不再重入队；ERROR 一次。"""
+    import logging
+
+    from backend.services.post_completion import (
+        get_post_completion_persist_failure_count,
+        record_post_completion_persist_outcome,
+    )
+
+    now = datetime.now(timezone.utc)
+    monkeypatch.setattr(recycler, "_sched", lambda: _DeferredFillCfg())
+    _reset_readable_cutoff_state()
+    cutoff_ids, _fresh_id = _seed_deferred_orphans(db_session, now=now, cutoff_count=1)
+    job_id = cutoff_ids[0]
+
+    monkeypatch.setattr(
+        "backend.services.case_result_ingest.case_result_ingest_pending",
+        lambda db, jid: False,
+    )
+
+    pc_counts = []
+    with caplog.at_level(logging.ERROR, logger="backend.scheduler.recycler"):
+        for cycle in range(4):
+            enqueued: list[str] = []
+
+            def _capture(task, _bucket=enqueued, **kw):
+                _bucket.append(kw.get("key") or task)
+
+            monkeypatch.setattr(
+                "backend.core.task_queue.enqueue_sync",
+                _capture,
+            )
+            recycler._fill_deferred_post_completions(db_session, now)
+            pc_counts.append(sum(1 for k in enqueued if k == f"pc:{job_id}"))
+            # 模拟 SAQ 实际跑了 post_completion 且未落库（前 3 个周期）。
+            if cycle < 3:
+                record_post_completion_persist_outcome(job_id, False)
+
+    assert pc_counts[:3] == [1, 1, 1]
+    assert pc_counts[3] == 0
+    assert get_post_completion_persist_failure_count(job_id) == 3
+    exhausted_logs = [
+        r for r in caplog.records
+        if "post_completion_cutoff_readable_exhausted" in r.getMessage()
+    ]
+    assert len(exhausted_logs) == 1
+    msg = exhausted_logs[0].getMessage()
+    assert str(job_id) in msg
+    assert "failure_count=3" in msg
+    assert job_id in recycler._defer_cutoff_readable_exhausted
+
+
+def test_deferred_fill_exhausted_readable_do_not_starve_3700(db_session, monkeypatch):
+    """B2: 10+ 已达上限的截止行不占 LIMIT 名额，更新的可读截止行仍重入队。"""
+    from backend.services.post_completion import record_post_completion_persist_outcome
+
+    now = datetime.now(timezone.utc)
+    monkeypatch.setattr(recycler, "_sched", lambda: _DeferredFillCfg())
+    _reset_readable_cutoff_state()
+    grace = _DeferredFillCfg.post_completion_grace_seconds
+    max_defer = _DeferredFillCfg.post_completion_max_defer_seconds
+    suffix = uuid4().hex[:8]
+    host = Host(
+        id=f"rc-cap-{suffix}", hostname=f"rc-cap-{suffix}",
+        status=HostStatus.ONLINE.value, last_heartbeat=now, created_at=now,
+    )
+    plan = Plan(name=f"rc-cap-{suffix}")
+    db_session.add_all([host, plan])
+    db_session.flush()
+    run = PlanRun(
+        plan_id=plan.id, status="FAILED",
+        plan_snapshot={"name": plan.name, "plan_id": plan.id},
+        triggered_by="pytest", started_at=now, run_type="MANUAL",
+    )
+    db_session.add(run)
+    db_session.flush()
+
+    exhausted_ids = []
+    for i in range(11):
+        device = Device(
+            serial=f"RCCAP-{suffix}-{i}", host_id=f"rc-cap-{suffix}",
+            status="IDLE", tags=[], created_at=now,
+        )
+        db_session.add(device)
+        db_session.flush()
+        ended = now - timedelta(seconds=grace + max_defer + 7200 - i)
+        job = JobInstance(
+            plan_run_id=run.id, plan_id=plan.id, device_id=device.id,
+            host_id=f"rc-cap-{suffix}", status=JobStatus.COMPLETED.value,
+            pipeline_def=PIPELINE_DEF, created_at=now, updated_at=now,
+            started_at=now, ended_at=ended, post_processed_at=None,
+        )
+        db_session.add(job)
+        db_session.flush()
+        exhausted_ids.append(job.id)
+
+    # Newer readable cutoff row (still past cutoff, but more recent ended_at).
+    device = Device(
+        serial=f"RCCAP-{suffix}-new", host_id=f"rc-cap-{suffix}",
+        status="IDLE", tags=[], created_at=now,
+    )
+    db_session.add(device)
+    db_session.flush()
+    newer = JobInstance(
+        plan_run_id=run.id, plan_id=plan.id, device_id=device.id,
+        host_id=f"rc-cap-{suffix}", status=JobStatus.COMPLETED.value,
+        pipeline_def=PIPELINE_DEF, created_at=now, updated_at=now,
+        started_at=now,
+        ended_at=now - timedelta(seconds=grace + max_defer + 60),
+        post_processed_at=None,
+    )
+    db_session.add(newer)
+    db_session.flush()
+    db_session.commit()
+
+    for jid in exhausted_ids:
+        for _ in range(3):
+            record_post_completion_persist_outcome(jid, False)
+        recycler._defer_cutoff_readable_exhausted.add(jid)
+
+    monkeypatch.setattr(
+        "backend.services.case_result_ingest.case_result_ingest_pending",
+        lambda db, jid: False,
+    )
+    enqueued = []
+    monkeypatch.setattr(
+        "backend.core.task_queue.enqueue_sync",
+        lambda task, **kw: enqueued.append(kw.get("key") or task),
+    )
+
+    filled = recycler._fill_deferred_post_completions(db_session, now)
+
+    assert f"pc:{newer.id}" in enqueued
+    assert not any(f"pc:{jid}" in enqueued for jid in exhausted_ids)
+    assert filled >= 1
+    from backend.core.metrics import post_completion_cutoff_jobs
+
+    # B3 口径：gauge 仍计入已达上限的行（11 exhausted + 1 newer）。
+    assert post_completion_cutoff_jobs._value.get() == 12
+
+
+@pytest.mark.parametrize(
+    "enqueue_mode",
+    ["return_false", "raise"],
+    ids=["false", "raise"],
+)
+def test_review3701_enqueue_failure_recovers(
+    db_session, monkeypatch, enqueue_mode,
+):
+    """B4: 入队连续 3 周期失败后恢复，第 4 周期仍被入队（不消耗额度）。"""
+    now = datetime.now(timezone.utc)
+    monkeypatch.setattr(recycler, "_sched", lambda: _DeferredFillCfg())
+    _reset_readable_cutoff_state()
+    cutoff_ids, _fresh_id = _seed_deferred_orphans(db_session, now=now, cutoff_count=1)
+    job_id = cutoff_ids[0]
+
+    monkeypatch.setattr(
+        "backend.services.case_result_ingest.case_result_ingest_pending",
+        lambda db, jid: False,
+    )
+
+    accepted: list[str] = []
+    pc_rounds = {"v": 0}
+
+    def _enqueue(task, **kw):
+        if task == "post_completion_task" and kw.get("job_id") == job_id:
+            pc_rounds["v"] += 1
+            if pc_rounds["v"] <= 3:
+                if enqueue_mode == "return_false":
+                    return False
+                raise RuntimeError("enqueue boom")
+            accepted.append(kw.get("key") or task)
+            return True
+        return True
+
+    monkeypatch.setattr("backend.core.task_queue.enqueue_sync", _enqueue)
+
+    for _ in range(3):
+        recycler._fill_deferred_post_completions(db_session, now)
+    assert f"pc:{job_id}" not in accepted
+    assert pc_rounds["v"] == 3
+
+    recycler._fill_deferred_post_completions(db_session, now)
+    assert f"pc:{job_id}" in accepted
+    assert pc_rounds["v"] == 4
+    assert job_id not in recycler._defer_cutoff_readable_exhausted
+
+
+def test_deferred_fill_scheduled_but_unexecuted_does_not_consume_3700(
+    db_session, monkeypatch,
+):
+    """B5: 入队已安排但 post_completion 未执行，连续 4+ 周期仍被入队。"""
+    now = datetime.now(timezone.utc)
+    monkeypatch.setattr(recycler, "_sched", lambda: _DeferredFillCfg())
+    _reset_readable_cutoff_state()
+    cutoff_ids, _fresh_id = _seed_deferred_orphans(db_session, now=now, cutoff_count=1)
+    job_id = cutoff_ids[0]
+
+    monkeypatch.setattr(
+        "backend.services.case_result_ingest.case_result_ingest_pending",
+        lambda db, jid: False,
+    )
+
+    pc_counts = []
+    for _ in range(5):
+        enqueued: list[str] = []
+
+        def _capture(task, _bucket=enqueued, **kw):
+            _bucket.append(kw.get("key") or task)
+            return True
+
+        monkeypatch.setattr("backend.core.task_queue.enqueue_sync", _capture)
+        recycler._fill_deferred_post_completions(db_session, now)
+        # 故意不调用 record_post_completion_persist_outcome —— 模拟异步未执行/去重。
+        pc_counts.append(sum(1 for k in enqueued if k == f"pc:{job_id}"))
+
+    assert pc_counts == [1, 1, 1, 1, 1]
+    assert job_id not in recycler._defer_cutoff_readable_exhausted
+
+
+def test_post_completion_persist_success_clears_failure_count_3700():
+    """B6: post_completion 成功落库后，该 job 的失败计数清零。"""
+    from backend.services import post_completion as pc
+
+    pc.reset_post_completion_persist_failure_state_for_tests()
+    job_id = 424242
+    pc.record_post_completion_persist_outcome(job_id, False)
+    pc.record_post_completion_persist_outcome(job_id, False)
+    assert pc.get_post_completion_persist_failure_count(job_id) == 2
+    pc.record_post_completion_persist_outcome(job_id, True)
+    assert pc.get_post_completion_persist_failure_count(job_id) == 0
+
+
+def test_run_post_completion_async_records_persist_outcome_3700(monkeypatch):
+    """执行侧入口：非推迟 False +1，True 清零。"""
+    from backend.services import post_completion as pc
+
+    pc.reset_post_completion_persist_failure_state_for_tests()
+    job_id = 777001
+    outcomes = iter([False, False, True])
+
+    class _DB:
+        def close(self):
+            return None
+
+    monkeypatch.setattr("backend.core.database.SessionLocal", lambda: _DB())
+    monkeypatch.setattr(
+        pc, "run_post_completion", lambda jid, db: next(outcomes),
+    )
+    # 非推迟失败：pending=False 才计入额度（v1.2）。
+    monkeypatch.setattr(
+        "backend.services.case_result_ingest.case_result_ingest_pending",
+        lambda db, jid: False,
+    )
+
+    pc.run_post_completion_async(job_id)
+    assert pc.get_post_completion_persist_failure_count(job_id) == 1
+    pc.run_post_completion_async(job_id)
+    assert pc.get_post_completion_persist_failure_count(job_id) == 2
+    pc.run_post_completion_async(job_id)
+    assert pc.get_post_completion_persist_failure_count(job_id) == 0
+
+
+def test_deferred_unread_false_does_not_consume_cutoff_budget_3700(
+    db_session, monkeypatch,
+):
+    """B7: 不可读推迟的 False 不计入额度；截止后变为可读仍可补偿入队。"""
+    from backend.services import post_completion as pc
+
+    now = datetime.now(timezone.utc)
+    monkeypatch.setattr(recycler, "_sched", lambda: _DeferredFillCfg())
+    _reset_readable_cutoff_state()
+    cutoff_ids, _fresh_id = _seed_deferred_orphans(db_session, now=now, cutoff_count=1)
+    job_id = cutoff_ids[0]
+
+    class _DB:
+        def close(self):
+            return None
+
+    monkeypatch.setattr("backend.core.database.SessionLocal", lambda: _DB())
+    monkeypatch.setattr(pc, "run_post_completion", lambda jid, db: False)
+
+    # 截止前多次「不可读 → 推迟」：不得消耗可读截止额度。
+    monkeypatch.setattr(
+        "backend.services.case_result_ingest.case_result_ingest_pending",
+        lambda db, jid: True,
+    )
+    for _ in range(5):
+        pc.run_post_completion_async(job_id)
+    assert pc.get_post_completion_persist_failure_count(job_id) == 0
+
+    # 截止后变为可读：第一个周期仍应被入队。
+    monkeypatch.setattr(
+        "backend.services.case_result_ingest.case_result_ingest_pending",
+        lambda db, jid: False,
+    )
+    enqueued: list[str] = []
+
+    def _capture(task, **kw):
+        enqueued.append(kw.get("key") or task)
+        return True
+
+    monkeypatch.setattr("backend.core.task_queue.enqueue_sync", _capture)
+    recycler._fill_deferred_post_completions(db_session, now)
+    assert f"pc:{job_id}" in enqueued
+    assert job_id not in recycler._defer_cutoff_readable_exhausted

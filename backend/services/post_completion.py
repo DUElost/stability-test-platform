@@ -13,13 +13,39 @@ instantly by the API without recomputation.
 """
 
 import logging
+import threading
 from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
 from backend.models.job import JobInstance
+from backend.services import case_result_ingest
 
 logger = logging.getLogger(__name__)
+
+# #3700 v1.2：post_completion 实际执行且未落库、且非「明细不可读推迟」的次数
+# （进程内、线程安全）。recycler 只读取；入队失败/去重/异步未执行/推迟不计入。
+_persist_failure_lock = threading.Lock()
+_persist_failures: dict[int, int] = {}
+
+
+def record_post_completion_persist_outcome(job_id: int, persisted: bool) -> None:
+    """Record one non-deferred post_completion persist outcome for the cutoff cap."""
+    with _persist_failure_lock:
+        if persisted:
+            _persist_failures.pop(job_id, None)
+        else:
+            _persist_failures[job_id] = _persist_failures.get(job_id, 0) + 1
+
+
+def get_post_completion_persist_failure_count(job_id: int) -> int:
+    with _persist_failure_lock:
+        return int(_persist_failures.get(job_id, 0))
+
+
+def reset_post_completion_persist_failure_state_for_tests() -> None:
+    with _persist_failure_lock:
+        _persist_failures.clear()
 
 
 def _retry_stuck_case_ingest(job_id: int, db: Session) -> bool:
@@ -146,12 +172,20 @@ def run_post_completion(job_id: int, db: Session) -> bool:
 
 
 def run_post_completion_async(job_id: int) -> None:
-    """Fire-and-forget wrapper that opens its own DB session."""
+    """Fire-and-forget wrapper that opens its own DB session.
+
+    #3700 v1.2：True 清零；False 仅在非推迟（``case_result_ingest_pending`` 为假）
+    时 +1。明细不可读导致的推迟不消耗可读截止额度，以免阻断 #3341 恢复路径。
+    """
     from backend.core.database import SessionLocal
 
     db = SessionLocal()
     try:
-        run_post_completion(job_id, db)
+        persisted = run_post_completion(job_id, db)
+        if persisted:
+            record_post_completion_persist_outcome(job_id, True)
+        elif not case_result_ingest.case_result_ingest_pending(db, job_id):
+            record_post_completion_persist_outcome(job_id, False)
     finally:
         db.close()
 

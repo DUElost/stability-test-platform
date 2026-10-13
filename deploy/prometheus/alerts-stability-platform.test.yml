@@ -1213,7 +1213,7 @@ tests:
               severity: warning
             exp_annotations:
               summary: "Terminal jobs cut off past the post-completion defer window"
-              description: "Terminal jobs whose finish detail is still unreadable beyond the post-completion defer cutoff stopped being re-enqueued (#3341); their reports were never persisted and need manual inspection. Readable cutoff rows are re-enqueued and will drain on their own."
+              description: "Terminal jobs past the post-completion defer cutoff that are not draining: finish detail still unreadable (#3341), or detail readable but post_completion keeps failing after the in-process re-enqueue cap so re-enqueue stopped (#3700). Reports were never persisted and need manual inspection; the gauge stays elevated until those jobs are resolved."
 
   # ── #3660：设备租约回收器 D5 停转（明确停转 vs 无数据）────────────────────
   # 时间线复用 #3651 G1 离线场景；窗口 15m、for 10m/15m（比 SOP 5m 更抗抖）。
