@@ -13,6 +13,7 @@ instantly by the API without recomputation.
 """
 
 import logging
+import threading
 from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
@@ -20,6 +21,30 @@ from sqlalchemy.orm import Session
 from backend.models.job import JobInstance
 
 logger = logging.getLogger(__name__)
+
+# #3700 v1.1：post_completion 实际执行且未落库的次数（进程内、线程安全）。
+# recycler 只读取；入队失败/去重/异步未执行不计入。
+_persist_failure_lock = threading.Lock()
+_persist_failures: dict[int, int] = {}
+
+
+def record_post_completion_persist_outcome(job_id: int, persisted: bool) -> None:
+    """Record one actual post_completion run outcome for the readable-cutoff cap."""
+    with _persist_failure_lock:
+        if persisted:
+            _persist_failures.pop(job_id, None)
+        else:
+            _persist_failures[job_id] = _persist_failures.get(job_id, 0) + 1
+
+
+def get_post_completion_persist_failure_count(job_id: int) -> int:
+    with _persist_failure_lock:
+        return int(_persist_failures.get(job_id, 0))
+
+
+def reset_post_completion_persist_failure_state_for_tests() -> None:
+    with _persist_failure_lock:
+        _persist_failures.clear()
 
 
 def _retry_stuck_case_ingest(job_id: int, db: Session) -> bool:
@@ -146,12 +171,16 @@ def run_post_completion(job_id: int, db: Session) -> bool:
 
 
 def run_post_completion_async(job_id: int) -> None:
-    """Fire-and-forget wrapper that opens its own DB session."""
+    """Fire-and-forget wrapper that opens its own DB session.
+
+    #3700 v1.1：按 ``run_post_completion`` 返回值记录未落库次数（False +1 / True 清零）。
+    """
     from backend.core.database import SessionLocal
 
     db = SessionLocal()
     try:
-        run_post_completion(job_id, db)
+        persisted = run_post_completion(job_id, db)
+        record_post_completion_persist_outcome(job_id, persisted)
     finally:
         db.close()
 

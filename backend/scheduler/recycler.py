@@ -40,6 +40,7 @@ from backend.core.metrics import (
 from backend.models.enums import JobStatus, LeaseType
 from backend.models.job import JobInstance, StepTrace
 from backend.services.lease_manager import release_lease_sync
+from backend.services.post_completion import get_post_completion_persist_failure_count
 
 from backend.core.settings.scheduler import get_scheduler_settings
 
@@ -910,7 +911,13 @@ def _mark_step_trace_stall(
 # 重置内存去重集，重新各告警一次（可接受）。
 # #3341: 截止行不再占查询名额（SQL 层排除），且截止前经 case_result_ingest_pending
 # 复核——detail 已可读的照常重入队（主路径漏发），确实不可读才真正截止。
+# #3700 v1.1: 可读截止行上限按「post_completion 实际执行且未落库」累计 3 次；
+# 计数在执行侧（run_post_completion_async）记录，本处只读取；达上限后停止重入队
+# 并 ERROR 一次，SQL 排除已耗尽 id，不再占 LIMIT 10（过渡：进程重启后再给 3 次；
+# 终态出口见 #3700 规划方案 §2 持久化处理状态）。
 _defer_cutoff_alerted: set[int] = set()
+_defer_cutoff_readable_exhausted: set[int] = set()
+_READABLE_CUTOFF_PERSIST_FAILURE_CAP = 3
 
 
 def _fill_deferred_post_completions(db, now: datetime) -> int:
@@ -924,6 +931,7 @@ def _fill_deferred_post_completions(db, now: datetime) -> int:
     辅以 ORDER BY ended_at 取最老优先。截止行先经 case_result_ingest_pending
     复核：detail 已可读说明只是主路径漏发，照常重入队不截止；确实不可读才
     截止（行数导 gauge + ERROR 留痕，日志只写已核实的原因）。
+    #3700 v1.1：可读截止行按执行侧未落库次数设上限；耗尽后 SQL 排除，gauge 仍计入。
     """
     from backend.core.task_queue import enqueue_sync
     from backend.services.case_result_ingest import case_result_ingest_pending
@@ -954,9 +962,16 @@ def _fill_deferred_post_completions(db, now: datetime) -> int:
         .all()
     )
 
-    cutoff_jobs = (
+    cutoff_q = (
         db.query(JobInstance)
         .filter(*unresolved, JobInstance.ended_at < defer_cutoff)
+    )
+    if _defer_cutoff_readable_exhausted:
+        cutoff_q = cutoff_q.filter(
+            ~JobInstance.id.in_(list(_defer_cutoff_readable_exhausted)),
+        )
+    cutoff_jobs = (
+        cutoff_q
         .order_by(JobInstance.ended_at.asc())
         .limit(10)
         .all()
@@ -971,7 +986,19 @@ def _fill_deferred_post_completions(db, now: datetime) -> int:
 
     for job in cutoff_jobs:
         if not case_result_ingest_pending(db, job.id):
-            # detail 已可读 = 主路径漏发，照常重入队（enqueue key 同键去重兜住）。
+            # detail 已可读 = 主路径漏发；#3700 v1.1 只读执行侧未落库次数。
+            failures = get_post_completion_persist_failure_count(job.id)
+            if failures >= _READABLE_CUTOFF_PERSIST_FAILURE_CAP:
+                if job.id not in _defer_cutoff_readable_exhausted:
+                    logger.error(
+                        "post_completion_cutoff_readable_exhausted job=%d "
+                        "plan_run=%s failure_count=%d "
+                        "— 明细可读但 post_completion 持续失败，停止重入队"
+                        "（报告未持久化，需人工核查）",
+                        job.id, job.plan_run_id, failures,
+                    )
+                    _defer_cutoff_readable_exhausted.add(job.id)
+                continue
             orphan_jobs.append(job)
             continue
         if job.id not in _defer_cutoff_alerted:

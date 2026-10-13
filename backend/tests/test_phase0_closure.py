@@ -450,7 +450,13 @@ class TestDeferredPostCompletion:
             assert case_result_ingest_pending(db, job_id)
 
             with patch("backend.core.task_queue.enqueue_sync") as mock_enqueue:
+                # TRUNCATE RESTART IDENTITY 会复用 job id；清掉进程内截止去重，避免撞上前序用例。
+                from backend.services.post_completion import (
+                    reset_post_completion_persist_failure_state_for_tests,
+                )
                 recycler_mod._defer_cutoff_alerted.discard(job_id)
+                recycler_mod._defer_cutoff_readable_exhausted.discard(job_id)
+                reset_post_completion_persist_failure_state_for_tests()
                 filled = _fill_deferred_post_completions(db, now)
 
             assert filled == 0, "ancient orphan must not be re-enqueued"
@@ -547,7 +553,13 @@ class TestDeferredPostCompletion:
             assert not case_result_ingest_pending(db, job_id), "无 detail URI 应判为无待摄入"
 
             with patch("backend.core.task_queue.enqueue_sync") as mock_enqueue:
+                # TRUNCATE RESTART IDENTITY 会复用 job id；清掉进程内截止去重，避免撞上前序用例。
+                from backend.services.post_completion import (
+                    reset_post_completion_persist_failure_state_for_tests,
+                )
                 recycler_mod._defer_cutoff_alerted.discard(job_id)
+                recycler_mod._defer_cutoff_readable_exhausted.discard(job_id)
+                reset_post_completion_persist_failure_state_for_tests()
                 _fill_deferred_post_completions(db, now)
 
             pc_calls = [

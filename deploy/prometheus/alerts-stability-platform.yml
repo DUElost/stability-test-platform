@@ -113,8 +113,8 @@ groups:
             makes the missing segments visible; see
             run_context.chain_visibility_gap_signaled for the stopped run.
 
-      # #3341：post_completion 截止窗行——detail 长期不可读被停止重入队的积压面
-      # （原实现仅一次性 ERROR 日志，无指标无告警）。
+      # #3341 / #3700：post_completion 截止窗行——不可读停止重入队，或可读但持续
+      # 失败达进程内上限后停止重入队；gauge 仍计入，告警保持可见。
       - alert: StabilityPostCompletionCutoffJobs
         expr: stability_post_completion_cutoff_jobs > 0
         for: 15m
@@ -123,10 +123,12 @@ groups:
         annotations:
           summary: Terminal jobs cut off past the post-completion defer window
           description: >-
-            Terminal jobs whose finish detail is still unreadable beyond the
-            post-completion defer cutoff stopped being re-enqueued (#3341); their
-            reports were never persisted and need manual inspection. Readable
-            cutoff rows are re-enqueued and will drain on their own.
+            Terminal jobs past the post-completion defer cutoff that are not
+            draining: finish detail still unreadable (#3341), or detail readable
+            but post_completion keeps failing after the in-process re-enqueue
+            cap so re-enqueue stopped (#3700). Reports were never persisted and
+            need manual inspection; the gauge stays elevated until those jobs
+            are resolved.
 
   # #3660：设备租约回收器 D5（terminal_job_active_lease）停转面。
   # 信号只用 stability_reconciler_runs_total{check="terminal_job_active_lease",outcome="success"}
