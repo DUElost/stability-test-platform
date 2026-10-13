@@ -27,6 +27,16 @@ const projection: ParameterProjection = {
       sensitive: false,
       is_set: false,
     },
+    {
+      path: ['device_lease_ttl_seconds'],
+      label: '设备租约 TTL',
+      meaning: '只读登记项',
+      fallback_chain: '主机默认',
+      state: 'env_fallback',
+      value: 3600,
+      sensitive: false,
+      is_set: false,
+    },
   ],
   watcher_policy: {
     note: '独立策略',
@@ -36,13 +46,37 @@ const projection: ParameterProjection = {
         label: '异常采集开关',
         meaning: '是否希望本计划采集异常',
         state: 'env_fallback',
+        fallback_chain: '代码默认 true',
+        sensitive: false,
+        is_set: false,
+      },
+      {
+        path: ['required_categories'],
+        label: '必需日志分类',
+        meaning: '派发前必须具备的日志分类',
+        state: 'unset_definite',
+        fallback_chain: '代码默认空',
+        sensitive: false,
+        is_set: false,
+      },
+      {
+        path: ['batch_interval_seconds'],
+        label: '批量上报间隔',
+        meaning: '只读登记项',
+        state: 'env_fallback',
+        value: 5,
+        fallback_chain: '代码默认 5',
         sensitive: false,
         is_set: false,
       },
     ],
   },
   dispatch_decisions: [],
-  safe_debug: { steps: [], plan_settings: {}, watcher_policy: {} },
+  safe_debug: {
+    steps: [],
+    plan_settings: { raw: 'RAW_PLAN_SENTINEL' },
+    watcher_policy: { secret: 'RAW_WATCHER_SENTINEL' },
+  },
 };
 
 function baseValues(over: Partial<PlanSettingsValues> = {}): PlanSettingsValues {
@@ -129,7 +163,7 @@ describe('PlanSettingsEditor', () => {
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ watcherPolicy: {} }));
   });
 
-  it('未知 watcher 子键只读展示并在编辑四键时保留', () => {
+  it('编辑四键时保留未知 watcher 子键；只读项经安全投影展示', () => {
     const onChange = vi.fn();
     render(
       <PlanSettingsEditor
@@ -140,8 +174,10 @@ describe('PlanSettingsEditor', () => {
         projection={projection}
       />,
     );
-    expect(screen.getByTestId('plan-watcher-unknown-keys')).toHaveTextContent('batch_interval_seconds');
-    expect(screen.getByTestId('plan-watcher-unknown-keys')).toHaveTextContent('nfs_quota_mb');
+    // 只读登记项走投影清单（值/状态/含义），不再只列原始 key。
+    expect(screen.getByTestId('plan-settings-readonly-projection')).toHaveTextContent('批量上报间隔');
+    expect(screen.getByTestId('plan-settings-readonly-projection')).toHaveTextContent('沿回落链');
+    expect(screen.getByTestId('plan-settings-readonly-projection')).toHaveTextContent('设备租约 TTL');
     fireEvent.click(screen.getByTestId('plan-watcher-enabled'));
     const next = onChange.mock.calls[onChange.mock.calls.length - 1]?.[0] as PlanSettingsValues;
     expect(next.watcherPolicy).toMatchObject({
@@ -151,12 +187,12 @@ describe('PlanSettingsEditor', () => {
     });
   });
 
-  it('路径分类清空时提示按分类回落默认', () => {
+  it('路径分类清空时保留未知 CUSTOM；已知分类可单独清空', () => {
     const onChange = vi.fn();
     render(
       <PlanSettingsEditor
         values={baseValues({
-          watcherPolicy: { paths: { AEE: ['/data/aee_exp'] } },
+          watcherPolicy: { paths: { AEE: ['/data/aee_exp'], CUSTOM: ['/legacy'] } },
         })}
         onChange={onChange}
         projection={projection}
@@ -164,7 +200,66 @@ describe('PlanSettingsEditor', () => {
     );
     fireEvent.change(screen.getByLabelText('AEE 路径'), { target: { value: '' } });
     const next = onChange.mock.calls[onChange.mock.calls.length - 1]?.[0] as PlanSettingsValues;
-    expect(next.watcherPolicy?.paths).toBeUndefined();
+    expect(next.watcherPolicy?.paths).toEqual({ CUSTOM: ['/legacy'] });
+  });
+
+  it('切换已知必需分类时保留 CUSTOM；取消最后已知且无未知时发 []', () => {
+    const onChange = vi.fn();
+    const { rerender } = render(
+      <PlanSettingsEditor
+        values={baseValues({
+          watcherPolicy: { required_categories: ['CUSTOM', 'AEE'] },
+        })}
+        onChange={onChange}
+        projection={projection}
+      />,
+    );
+    expect(screen.getByTestId('plan-watcher-required-unknown')).toHaveTextContent('CUSTOM');
+    fireEvent.click(screen.getByLabelText('必需分类 AEE'));
+    let next = onChange.mock.calls[onChange.mock.calls.length - 1]?.[0] as PlanSettingsValues;
+    expect(next.watcherPolicy?.required_categories).toEqual(['CUSTOM']);
+
+    onChange.mockClear();
+    rerender(
+      <PlanSettingsEditor
+        values={baseValues({
+          watcherPolicy: { required_categories: ['AEE'] },
+        })}
+        onChange={onChange}
+        projection={projection}
+      />,
+    );
+    fireEvent.click(screen.getByLabelText('必需分类 AEE'));
+    next = onChange.mock.calls[onChange.mock.calls.length - 1]?.[0] as PlanSettingsValues;
+    expect(next.watcherPolicy).toHaveProperty('required_categories');
+    expect(next.watcherPolicy?.required_categories).toEqual([]);
+  });
+
+  it('未设 enabled/required 时展示投影状态，不把控件显示成确定关/全未选', () => {
+    render(
+      <PlanSettingsEditor values={baseValues({ watcherPolicy: null })} onChange={() => {}} projection={projection} />,
+    );
+    expect(screen.getByTestId('projection-state-enabled')).toHaveTextContent('沿回落链');
+    expect(screen.getByTestId('plan-watcher-enabled')).toHaveAttribute('data-explicit', '0');
+    expect(screen.getByTestId('plan-watcher-required-unset')).toBeInTheDocument();
+    expect(screen.getByTestId('projection-state-required_categories')).toHaveTextContent('未设置');
+  });
+
+  it('投影失败时不回退原始 JSON/敏感值', () => {
+    const { container } = render(
+      <PlanSettingsEditor
+        values={baseValues({
+          watcherPolicy: { enabled: true, password: 'RAW_SECRET', batch_interval_seconds: 5 },
+        })}
+        onChange={() => {}}
+        unavailable
+      />,
+    );
+    expect(screen.getByTestId('plan-settings-projection-unavailable')).toBeInTheDocument();
+    expect(container.textContent).not.toContain('RAW_SECRET');
+    expect(container.textContent).not.toContain('RAW_WATCHER_SENTINEL');
+    expect(container.textContent).not.toContain('RAW_PLAN_SENTINEL');
+    expect(container.querySelector('textarea[name=json]')).toBeNull();
   });
 
   it('不渲染原始敏感对象或 free-form JSON', () => {
@@ -178,6 +273,7 @@ describe('PlanSettingsEditor', () => {
       />,
     );
     expect(container.textContent).not.toContain('RAW_SECRET');
+    expect(container.textContent).not.toContain('RAW_WATCHER_SENTINEL');
     expect(container.querySelector('textarea[name=json]')).toBeNull();
   });
 });

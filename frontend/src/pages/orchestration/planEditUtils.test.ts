@@ -332,6 +332,46 @@ describe('planEditUtils', () => {
       ).toMatch(/fail/);
     });
 
+    it('validatePlanSettingsDraft：未知 paths/required 分类不拒存；仅校验三类获准项', () => {
+      const withPatrol = rebuildLifecycleFromPlan(basePlan);
+      expect(
+        validatePlanSettingsDraft({
+          patrolIntervalSeconds: 60,
+          timeoutSeconds: 3600,
+          barrierTimeoutSeconds: null,
+          barrierMaxWaitSeconds: 900,
+          autoArchiveIntervalSeconds: null,
+          watcherPolicy: {
+            paths: { CUSTOM: ['/legacy'], AEE: ['/data/aee'] },
+            required_categories: ['CUSTOM', 'AEE'],
+          },
+          lifecycle: withPatrol,
+        }),
+      ).toBeNull();
+      expect(
+        validatePlanSettingsDraft({
+          patrolIntervalSeconds: 60,
+          timeoutSeconds: 3600,
+          barrierTimeoutSeconds: null,
+          barrierMaxWaitSeconds: null,
+          autoArchiveIntervalSeconds: null,
+          watcherPolicy: { paths: { AEE: [1 as unknown as string] } },
+          lifecycle: withPatrol,
+        }),
+      ).toMatch(/AEE/);
+      expect(
+        validatePlanSettingsDraft({
+          patrolIntervalSeconds: 60,
+          timeoutSeconds: 3600,
+          barrierTimeoutSeconds: null,
+          barrierMaxWaitSeconds: null,
+          autoArchiveIntervalSeconds: null,
+          watcherPolicy: { required_categories: [1 as unknown as string] },
+          lifecycle: withPatrol,
+        }),
+      ).toMatch(/字符串数组/);
+    });
+
     it('validateStepRuntimeDraft：timeout0 需 stall+progress；retry 上限 5', () => {
       expect(
         validateStepRuntimeDraft(

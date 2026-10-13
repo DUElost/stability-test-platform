@@ -315,23 +315,22 @@ export function validatePlanSettingsDraft(draft: {
       if (typeof wp.paths !== 'object' || Array.isArray(wp.paths)) {
         return '采集路径必须是分类到路径数组的对象';
       }
+      // 只校验三类获准编辑分类；未知分类原样保留，不得因存量 CUSTOM 等拒存。
       for (const [cat, paths] of Object.entries(wp.paths as Record<string, unknown>)) {
-        if (!(WATCHER_PATH_CATEGORIES as readonly string[]).includes(cat)) {
-          return `采集路径分类只接受 ${WATCHER_PATH_CATEGORIES.join(' / ')}`;
-        }
+        if (!(WATCHER_PATH_CATEGORIES as readonly string[]).includes(cat)) continue;
         if (!Array.isArray(paths) || paths.some((p) => typeof p !== 'string')) {
           return `${cat} 路径必须是字符串数组`;
         }
       }
     }
     if ('required_categories' in wp && wp.required_categories != null) {
-      if (
-        !Array.isArray(wp.required_categories) ||
-        wp.required_categories.some(
-          (c) => typeof c !== 'string' || !(WATCHER_PATH_CATEGORIES as readonly string[]).includes(c),
-        )
-      ) {
-        return `必需日志分类只接受 ${WATCHER_PATH_CATEGORIES.join(' / ')}`;
+      if (!Array.isArray(wp.required_categories)) {
+        return '必需日志分类必须是字符串数组';
+      }
+      // 只要求元素为字符串；未知分类（如 CUSTOM）原样保留，不按三分类白名单拒存。
+      // 获准编辑的三类若出现，仍须是字符串（已由上式覆盖）。
+      if (wp.required_categories.some((c) => typeof c !== 'string')) {
+        return '必需日志分类必须是字符串数组';
       }
     }
   }

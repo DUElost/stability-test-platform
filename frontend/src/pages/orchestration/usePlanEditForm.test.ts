@@ -116,6 +116,120 @@ describe('usePlanEditForm U6', () => {
     });
   });
 
+  it('CUSTOM 旧 Plan 只改硬顶可存，且保留未知 paths/required', async () => {
+    const customPlan: Plan = {
+      ...basePlan,
+      barrier_max_wait_seconds: null,
+      watcher_policy: {
+        enabled: true,
+        paths: { CUSTOM: ['/legacy/path'], AEE: ['/data/aee'] },
+        required_categories: ['CUSTOM', 'AEE'],
+        batch_interval_seconds: 5,
+      } as Plan['watcher_policy'],
+    };
+    vi.mocked(api.plans.get).mockResolvedValue(customPlan);
+    vi.mocked(api.plans.update).mockResolvedValue({
+      ...customPlan,
+      updated_at: '2026-01-01T01:00:00Z',
+      barrier_max_wait_seconds: 900,
+    });
+    const { result } = await readyHook();
+    await waitFor(() =>
+      expect(result.current.watcherPolicy).toMatchObject({
+        paths: { CUSTOM: ['/legacy/path'], AEE: ['/data/aee'] },
+        required_categories: ['CUSTOM', 'AEE'],
+      }),
+    );
+    act(() => {
+      result.current.handlePlanSettingsChange({
+        patrolIntervalSeconds: 120,
+        timeoutSeconds: 3600,
+        barrierTimeoutSeconds: 600,
+        barrierMaxWaitSeconds: 900,
+        autoArchiveIntervalSeconds: null,
+        watcherPolicy: result.current.watcherPolicy,
+      });
+    });
+    await act(async () => {
+      await result.current.handleSave();
+    });
+    expect(api.plans.update).toHaveBeenCalledTimes(1);
+    const payload = vi.mocked(api.plans.update).mock.calls[0][1];
+    expect(payload.barrier_max_wait_seconds).toBe(900);
+    // 未改 watcher：省略字段；本地草稿仍保留 CUSTOM。
+    expect(payload.watcher_policy).toBeUndefined();
+    expect(result.current.watcherPolicy).toMatchObject({
+      paths: { CUSTOM: ['/legacy/path'], AEE: ['/data/aee'] },
+      required_categories: ['CUSTOM', 'AEE'],
+    });
+  });
+
+  it('切 AEE 后 CUSTOM required 保留；显式 [] 与省略/{}/区分', async () => {
+    vi.mocked(api.plans.get).mockResolvedValue({
+      ...basePlan,
+      watcher_policy: {
+        required_categories: ['CUSTOM', 'AEE'],
+      } as Plan['watcher_policy'],
+    });
+    const { result } = await readyHook();
+    act(() => {
+      result.current.handlePlanSettingsChange({
+        patrolIntervalSeconds: 120,
+        timeoutSeconds: 3600,
+        barrierTimeoutSeconds: 600,
+        barrierMaxWaitSeconds: null,
+        autoArchiveIntervalSeconds: null,
+        watcherPolicy: {
+          ...(result.current.watcherPolicy ?? {}),
+          required_categories: ['CUSTOM'],
+        },
+      });
+    });
+    await act(async () => {
+      await result.current.handleSave();
+    });
+    let payload = vi.mocked(api.plans.update).mock.calls[0][1];
+    expect(payload.watcher_policy).toMatchObject({ required_categories: ['CUSTOM'] });
+
+    vi.mocked(api.plans.update).mockClear();
+    act(() => {
+      result.current.handlePlanSettingsChange({
+        patrolIntervalSeconds: 120,
+        timeoutSeconds: 3600,
+        barrierTimeoutSeconds: 600,
+        barrierMaxWaitSeconds: null,
+        autoArchiveIntervalSeconds: null,
+        watcherPolicy: {
+          ...(result.current.watcherPolicy ?? {}),
+          required_categories: [],
+        },
+      });
+    });
+    await act(async () => {
+      await result.current.handleSave();
+    });
+    payload = vi.mocked(api.plans.update).mock.calls[0][1];
+    expect(payload.watcher_policy).toMatchObject({ required_categories: [] });
+    expect(Array.isArray(payload.watcher_policy?.required_categories)).toBe(true);
+
+    vi.mocked(api.plans.update).mockClear();
+    act(() => {
+      result.current.handlePlanSettingsChange({
+        patrolIntervalSeconds: 120,
+        timeoutSeconds: 3600,
+        barrierTimeoutSeconds: 600,
+        barrierMaxWaitSeconds: null,
+        autoArchiveIntervalSeconds: null,
+        watcherPolicy: {},
+      });
+    });
+    await act(async () => {
+      await result.current.handleSave();
+    });
+    payload = vi.mocked(api.plans.update).mock.calls[0][1];
+    expect(payload.watcher_policy).toEqual({});
+  });
+
   it('只改 Plan 设置时省略 steps，并发送 null/{} 与 expected_updated_at', async () => {
     const { result } = await readyHook();
     act(() => {

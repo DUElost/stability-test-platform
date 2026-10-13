@@ -151,6 +151,51 @@ function lastLifecycle(spy: ReturnType<typeof vi.fn>): PipelineDef {
 }
 
 describe('PlanCanvas', () => {
+  describe('页眉巡检间隔/时长整数校验（#3653 U6 C2）', () => {
+    it('接受正整数 1；空清空为 null；拒绝 0/小数/负值且不截断', () => {
+      const onPatrol = vi.fn();
+      const onTimeout = vi.fn();
+      render(
+        <Harness onPatrolIntervalChange={onPatrol} onTimeoutChange={onTimeout} />,
+      );
+      const patrolInput = screen.getByTestId('plan-header-patrol-interval');
+      const timeoutInput = screen.getByTestId('plan-header-timeout');
+
+      fireEvent.change(patrolInput, { target: { value: '1' } });
+      expect(onPatrol).toHaveBeenLastCalledWith(1);
+
+      onPatrol.mockClear();
+      fireEvent.change(patrolInput, { target: { value: '' } });
+      expect(onPatrol).toHaveBeenLastCalledWith(null);
+
+      onPatrol.mockClear();
+      fireEvent.change(patrolInput, { target: { value: '0' } });
+      expect(onPatrol).not.toHaveBeenCalled();
+
+      fireEvent.change(patrolInput, { target: { value: '1.5' } });
+      expect(onPatrol).not.toHaveBeenCalled();
+
+      fireEvent.change(patrolInput, { target: { value: '-2' } });
+      expect(onPatrol).not.toHaveBeenCalled();
+
+      onTimeout.mockClear();
+      fireEvent.change(timeoutInput, { target: { value: '1' } });
+      expect(onTimeout).toHaveBeenLastCalledWith(1);
+
+      onTimeout.mockClear();
+      fireEvent.change(timeoutInput, { target: { value: '' } });
+      expect(onTimeout).toHaveBeenLastCalledWith(null);
+
+      onTimeout.mockClear();
+      fireEvent.change(timeoutInput, { target: { value: '0' } });
+      expect(onTimeout).not.toHaveBeenCalled();
+      fireEvent.change(timeoutInput, { target: { value: '2.5' } });
+      expect(onTimeout).not.toHaveBeenCalled();
+      fireEvent.change(timeoutInput, { target: { value: '-1' } });
+      expect(onTimeout).not.toHaveBeenCalled();
+    });
+  });
+
   describe('归属 / 套件元数据（#405 / #430）', () => {
     it('渲染套件下拉并用 suite_name 回写', () => {
       const onSuiteNameChange = vi.fn();
@@ -577,33 +622,38 @@ describe('PlanCanvas', () => {
       expect(onPatrolIntervalChange).toHaveBeenCalledWith(3);
     });
 
-    it('patrol 间隔填 0 视为清空（null），不预填默认秒数', () => {
+    it('patrol 间隔填 0/小数拒绝截断；仅空串清空为 null（#3653 U6 C2）', () => {
       const onPatrolIntervalChange = vi.fn();
       render(<Harness onPatrolIntervalChange={onPatrolIntervalChange} />);
 
       fireEvent.change(screen.getByPlaceholderText('不开启'), { target: { value: '0' } });
+      expect(onPatrolIntervalChange).not.toHaveBeenCalled();
 
+      fireEvent.change(screen.getByPlaceholderText('不开启'), { target: { value: '1.5' } });
+      expect(onPatrolIntervalChange).not.toHaveBeenCalled();
+
+      fireEvent.change(screen.getByPlaceholderText('不开启'), { target: { value: '' } });
       expect(onPatrolIntervalChange).toHaveBeenCalledWith(null);
     });
 
-
-
-    it('巡检时长：留空、0、负数都按「不限」（null）提交，正数原样提交', () => {
-      // 后端写入边界 ge=1：此前 0 / 负数夹到 0 会在保存时收到 422
+    it('巡检时长：正数原样；空→null；0/小数/负值拒绝截断（与 Editor 一致）', () => {
       const onTimeoutChange = vi.fn();
       render(<Harness onTimeoutChange={onTimeoutChange} />);
       const input = screen.getByLabelText('巡检时长');
-      expect(input).toHaveValue(3600);
-      expect(input).toHaveAttribute('min', '1');
+      expect(input).toHaveValue('3600');
 
       fireEvent.change(input, { target: { value: '-5' } });
-      expect(onTimeoutChange).toHaveBeenLastCalledWith(null);
+      expect(onTimeoutChange).not.toHaveBeenCalled();
 
       fireEvent.change(input, { target: { value: '7200' } });
       expect(onTimeoutChange).toHaveBeenLastCalledWith(7200);
 
+      onTimeoutChange.mockClear();
       fireEvent.change(input, { target: { value: '0' } });
-      expect(onTimeoutChange).toHaveBeenLastCalledWith(null);
+      expect(onTimeoutChange).not.toHaveBeenCalled();
+
+      fireEvent.change(input, { target: { value: '2.5' } });
+      expect(onTimeoutChange).not.toHaveBeenCalled();
 
       fireEvent.change(input, { target: { value: '' } });
       expect(onTimeoutChange).toHaveBeenLastCalledWith(null);
