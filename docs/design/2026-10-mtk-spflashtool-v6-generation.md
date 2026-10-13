@@ -152,7 +152,10 @@
   四台 NX2 host `script-presence/refresh` 全部 missing=0 / mismatch=0。
   结构结论沿用：**scan 的可见性 = 部署树里的 `tool_manifest.json`**，所以「合入 + 控制面发布」
   是真机链路的硬前置，publish 只是把字节放到站点。
-- `super` 分区 4.67G 的首刷耗时未测（默认 `timeout_seconds=1200`）。
+- **`super` 分区 4.67G 的首刷耗时已实测**（2026-10-13 run 929，V9→V21 全量刷）：
+  刷机步 `duration_seconds=302.46`（含 adb reboot、DA、26 个分区下载、verify、锁内 boot 稳定），
+  `lock_wait_seconds=0.06`。Plan 侧给的预算是 `timeout_seconds=3600` + `stall_seconds=900`，
+  余量充足——**不得**把默认 1200s 当 V6 的预算基线（552 的 V5 包更小，两者不可比）。
 - **门控判据的历史问题（本单实测暴露，另立 #3690 裁决）**：`_FLASH_STAGE_PIDS` 含
   `201c`，而 `201c` 实为 MLD-LX2/LX3/NX2 的**正常 adb 态**。v1.3.9 只把 `201c` 从
   「保持阶段」移除，**初始门控仍会把它隐藏** → 在同 host 还有其它测试在跑时，一次刷机会
@@ -201,3 +204,30 @@
   不得把它当常规入口——指定错口就是把固件刷进另一台手机。
 - 一次失败可能同时留下**两台**滞留 preloader 的设备（目标 + 被绑的邻机）：现场处置前
   必须按口名对照 `lsusb` 与设备表，不要只看作业里的那个 device_id。
+
+## 8. v1.3.20 的 canary 已通过（2026-10-13 20:02–20:08）
+
+| 项 | 实测值 |
+|---|---|
+| 载体 | plan 80 / **run 929** / job 188321 / 设备 id 953 = `AHFFNX69****0170`，host `172.21.x.x` 末段 `.86`，**直连口 `1-6`** |
+| 目标版本 | `P535AA-HONOR-NX2-16-261013V21`（源 `apk-incoming/firmware/P535AA_EVT_16.0_NX2_USERROOT_261013V21_FLASH`，59 文件 / 6,614,161,665 B；`super.img`/`boot.img` 与源逐文件 sha 一致） |
+| 版本号的取证方式 | 不猜：`vbmeta.img`/`boot.img`/`vbmeta_vendor.img` 里嵌的字符串就是 `ro.build.version.incremental` 的值 `P535AA-HONOR-NX2-16-261013V21`，与 `post_flash_verify.current` 逐字相等 |
+| 身份判定 | `identity.adb_state=device`、`port_by_serial=1-6`、`port_source=serial`、`gate_pid_scope=brom` |
+| 命令行 | `… SPFlashToolV6 -c firmware-upgrade -f …/261013V21/download_agent/flash.xml -b auto` **+ `-p 1-6`** |
+| 门控口径 | `gating.hidden=["1-5.2.2"]`（那台 `0e8d:0003` 异常机）——**同 host 9 台 `201c` 邻机一台都没被压制**，与 run 921 的 10 口形成直接对照 |
+| 绑口核验 | `aborted=null`（没触杀），`1-6` 在 DA 期为 `2000`、完成后回 `201c`；目标口即被绑口 |
+| 结果 | `success=true`、`exit_code=0`、`attempts=1`（`outcome=ok`）、`caught_brom=true`、`verdict=pass token hit: All command exec done` |
+| 刷后核验 | `post_flash_verify.current == target == P535AA-HONOR-NX2-16-261013V21`、`boot_stable.ok=true`（`boot_completed=1`，稳定 20.2s）、`device_reenumerated=true` |
+| 全链 | `flash_preflight → flash_firmware → oobe_skip → ensure_root → check_device` 五步全 `success=true`，run 929 `SUCCESS` |
+
+**结论分层**：V6 平台链路刷机 = **已跑通（1 台）**。这不再只是手动取证；`preflight` 也确认
+`nfs-firmware-pointer` 指向 V21。仍未取证的两项：① hub 嵌套口（`1-5.x.y` 形态）上 `-p` 的
+匹配形态；② 混跑窗口（同 host 有其它作业在跑）下的 V6 表现——本轮 `.86` 派发时全平台
+`RUNNING` 作业数为 0。
+
+**顺带发现（已开 [#3702](https://github.com/DUElost/stability-test-platform/issues/3702)）**：刷机后设备回到总线的**首拍**慢指标落在首启未稳窗口里，
+`battery_level` / `temperature` 被记成 `0`，而 `_slow_sample_interval` 默认 `1800s`
+把这两个 0 值保持了约半小时（同 host 其它 V9 设备读数正常，设备侧 `dumpsys battery`
+实测 `level: 100 / temperature: 320`）。这不是 V6 引入的（`_absorb_slow_metrics`
+的「回线首拍必重采」在 V5 刷机上同样成立），但刷机天然会造成一次「断线→回线」，
+所以会被刷机流程放大——按电量/温度设阈值的判据在刷机后 30 分钟内不可信。

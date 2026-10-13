@@ -217,8 +217,11 @@ MLD_NX2（项目 535，板级 P535AA / MT6835）的刷机包由 **SP Flash Tool 
   `flash_firmware 1.3.18 → 1.3.19`、`flash_preflight 1.0.6 → 1.0.7`。重指会让这些 host 也去拉
   `flashtool_v6`（+55.7MB 下载 / +139MB 盘）——「一版脚本同时声明两代工具」的代价；
   是否追平归 Owner，追平前按 #3030 过参数/预算契约核对。
-- **平台侧 V6 首刷 canary（刷机 → `oobe_skip` → `ensure_root` 紧跟）仍未跑**：
-  928 停在 `0e8d:2046` 无 adb，需现场恢复后才能验「首刷后设备能否回到可测态」。
+- **平台侧 V6 首刷 canary 已跑通**（2026-10-13 run 929，`flash_firmware@1.3.20`，
+  `.86` 直连口单台，V9→`P535AA-HONOR-NX2-16-261013V21`，刷机步 302.46s，五步链全绿）。
+  「首刷后设备能否回到可测态」= **能**：设备回 ONLINE/adb=device，档案版本已是 V21。
+  唯一未收口的是电量/温度慢指标在首拍被记成 0（另立 #3702，与本单的 V6 判据无关）。
+  928 停在 `0e8d:2046` 无 adb，仍需现场恢复后才能验它那一台。
 - `--pending-activation` 把 `flashtool` / `flashtool_v6` / `aimonkey` 记为 `unregistered`：
   该视图按 `script` 行对账，`kind=tool` 族本就没有 script 行（V5 的 `flashtool` 同样被列出），
   属既有口径，不在本单顺手改判据。
