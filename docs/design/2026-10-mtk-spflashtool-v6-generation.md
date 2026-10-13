@@ -147,9 +147,11 @@
   等量，`super.img` sha 前缀一致）+ v6 `manifest.json` + `latest.json` 增 `MLD_NX2` 键。
   在用 1.3.18 对该目录**两条路都拒绝**（无 NX2 路由；v6 manifest 无 scatter/da）——
   上架本身不会让 552 计划误刷 NX2 包。
-- **脚本版本尚未注册**：`flash_firmware@1.3.19` / `flash_preflight@1.0.7` 随 PR 未合入，
-  控制面 `tool_manifest.json` 里还没有这两条 → scan 看不见它们，也就无从派发。
-  **合入 + 控制面发布 + scan 是真机刷机的前置**。
+- **脚本版本注册**：合入（`80c446fc`）→ `--publish` 两包 → 控制面发布 rev `80c446fc`
+  → `POST /scripts/scan` **created=2 / conflicts=0**，两版本 `is_active=true`；
+  四台 NX2 host `script-presence/refresh` 全部 missing=0 / mismatch=0。
+  结构结论沿用：**scan 的可见性 = 部署树里的 `tool_manifest.json`**，所以「合入 + 控制面发布」
+  是真机链路的硬前置，publish 只是把字节放到站点。
 - `super` 分区 4.67G 的首刷耗时未测（默认 `timeout_seconds=1200`）。
 - **门控判据的历史问题（本单实测暴露，另立 #3690 裁决）**：`_FLASH_STAGE_PIDS` 含
   `201c`，而 `201c` 实为 MLD-LX2/LX3/NX2 的**正常 adb 态**。v1.3.9 只把 `201c` 从
