@@ -18,7 +18,7 @@ Owner 在 B5 U6 激活后的 Plan #16 L0 反馈：设置区长释义常显灰字
 - `ParameterProjectionList`：同义 glossary / 只读投影 / 执行预览清单；
 - `PlanStepInspector`：步骤参数 schema `description` / 投影 `meaning`。
 
-不重开已合入 PR #3692；新 Draft PR Refs #3659 与 #3653。
+不重开已合入 PR #3692；Draft PR #3705 Refs #3659 与 #3653。
 
 ## Alternatives
 
