@@ -1,6 +1,11 @@
 # flash_firmware v1.3.20：V6 刷机必须绑定并核验目标 USB 口（run 921）
 
-关联：#3688（535 / MLD_NX2 V6 适配）、#3690（`201c` 门控判据）、run 921 / job 185452 / plan 80。
+Status: proposed
+Class: bug-fix
+- **Requirement**: [#3688](https://github.com/DUElost/stability-test-platform/issues/3688)
+  （535 / MLD_NX2 V6 适配）；关联
+  [#3690](https://github.com/DUElost/stability-test-platform/issues/3690)
+  （`201c` 门控判据）、run 921 / job 185452 / plan 80
 
 ## Decision
 

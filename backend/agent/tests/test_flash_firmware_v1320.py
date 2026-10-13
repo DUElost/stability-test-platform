@@ -102,7 +102,7 @@ def _make_hanging_tool(tmp_path: Path, line: str) -> Path:
         "sys.stdout.flush()\n"
         "time.sleep(120)\n",
         encoding="utf-8",
-    )
+    )  # line 本身是普通字符串常量，f-string 表达式里没有转义序列
     exe.chmod(0o755)
     return exe
 
@@ -128,10 +128,11 @@ def test_abort_check_kills_tool_and_raises(tmp_path: Path) -> None:
 def test_abort_check_absent_keeps_legacy_behaviour(tmp_path: Path) -> None:
     """不传 abort_check（= V5 路径）时，同样的输出仍按原有 verdict 流程收场。"""
     exe = tmp_path / "flash_tool_legacy"
+    blob = _LINE_BOUND_1_8 + "All command exec done!\n"
     exe.write_text(
         "#!/usr/bin/env python3\n"
         "import sys\n"
-        f"sys.stdout.write({(_LINE_BOUND_1_8 + 'All command exec done!\\n')!r})\n",
+        f"sys.stdout.write({blob!r})\n",
         encoding="utf-8",
     )
     exe.chmod(0o755)
@@ -452,7 +453,6 @@ def test_main_v5_path_unchanged_no_port_no_identity(
 
     def _fake_launch(cmd, *a, **k):
         launched.append(cmd)
-        rep = a and None
         return "BROM connected\nDownload started\nAll command exec done!\n", 0
 
     monkeypatch.setattr(ff, "_run_flash_tool_with_progress", _fake_launch)
