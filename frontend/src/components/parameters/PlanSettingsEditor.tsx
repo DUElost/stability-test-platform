@@ -188,7 +188,8 @@ export function PlanSettingsEditor({
   const requiredExplicit =
     values.watcherPolicy != null && 'required_categories' in values.watcherPolicy;
 
-  const knownRequired = new Set<string>(WATCHER_PATH_CATEGORIES);
+  const knownRequired = useMemo(() => new Set<string>(WATCHER_PATH_CATEGORIES), []);
+  // 内部事实：从真实 Plan 派生，供编辑合成与保存保留未知类别（不得为消展示而删除）。
   const requiredAll = useMemo(() => {
     if (!Array.isArray(values.watcherPolicy?.required_categories)) return [] as string[];
     return (values.watcherPolicy!.required_categories as unknown[]).filter(
@@ -196,6 +197,24 @@ export function PlanSettingsEditor({
     );
   }, [values.watcherPolicy]);
   const unknownRequired = requiredAll.filter((c) => !knownRequired.has(c));
+  const hasUnknownRequired = unknownRequired.length > 0;
+
+  /**
+   * 只读展示用的未知必需分类标签：只取安全投影 value，不回退 Plan 原始数组。
+   * null = 无可用投影（调用方应显示通用缺口提示）；[] = 投影未给出可展示未知标签。
+   */
+  const projectedUnknownRequiredLabels = useMemo((): string[] | null => {
+    if (unavailable || !projection) return null;
+    const item = projection.watcher_policy.items.find(
+      (it) => it.path.length === 1 && it.path[0] === 'required_categories',
+    );
+    if (!item || item.value == null) return [];
+    if (item.sensitive) return [];
+    if (!Array.isArray(item.value)) return [];
+    return item.value.filter(
+      (c): c is string => typeof c === 'string' && !knownRequired.has(c),
+    );
+  }, [unavailable, projection, knownRequired]);
 
   const readonlyProjection = useMemo((): ParameterProjection | undefined => {
     if (!projection) return undefined;
@@ -484,13 +503,29 @@ export function PlanSettingsEditor({
               );
             })}
           </div>
-          {unknownRequired.length > 0 ? (
-            <div
-              data-testid="plan-watcher-required-unknown"
-              className={cn('text-[11px] font-mono', TEXT.subtitle)}
-            >
-              未登记必需分类（只读保留）：{unknownRequired.join(', ')}
-            </div>
+          {hasUnknownRequired ? (
+            projectedUnknownRequiredLabels == null ? (
+              <div
+                data-testid="plan-watcher-required-unknown-gap"
+                className={cn('text-[11px]', TEXT.subtitle)}
+              >
+                未知分类已保留
+              </div>
+            ) : projectedUnknownRequiredLabels.length > 0 ? (
+              <div
+                data-testid="plan-watcher-required-unknown"
+                className={cn('text-[11px] font-mono', TEXT.subtitle)}
+              >
+                未登记必需分类（只读保留）：{projectedUnknownRequiredLabels.join(', ')}
+              </div>
+            ) : (
+              <div
+                data-testid="plan-watcher-required-unknown-gap"
+                className={cn('text-[11px]', TEXT.subtitle)}
+              >
+                未知分类已保留
+              </div>
+            )
           ) : null}
         </div>
       </div>

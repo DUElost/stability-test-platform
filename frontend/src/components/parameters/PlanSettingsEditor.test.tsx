@@ -203,21 +203,45 @@ describe('PlanSettingsEditor', () => {
     expect(next.watcherPolicy?.paths).toEqual({ CUSTOM: ['/legacy'] });
   });
 
-  it('切换已知必需分类时保留 CUSTOM；取消最后已知且无未知时发 []', () => {
+  it('切换已知必需分类时保留原始未知项；取消最后已知且无未知时发 []', () => {
     const onChange = vi.fn();
+    const safeProjection: ParameterProjection = {
+      ...projection,
+      watcher_policy: {
+        ...projection.watcher_policy,
+        items: projection.watcher_policy.items.map((item) =>
+          item.path[0] === 'required_categories'
+            ? {
+                ...item,
+                state: 'explicit',
+                is_set: true,
+                // 安全投影值与 Plan 原始哨兵不同
+                value: ['SAFE_REQUIRED_DISPLAY', 'AEE'],
+              }
+            : item,
+        ),
+      },
+    };
     const { rerender } = render(
       <PlanSettingsEditor
         values={baseValues({
-          watcherPolicy: { required_categories: ['CUSTOM', 'AEE'] },
+          watcherPolicy: { required_categories: ['RAW_REQUIRED_SENTINEL', 'AEE'] },
         })}
         onChange={onChange}
-        projection={projection}
+        projection={safeProjection}
       />,
     );
-    expect(screen.getByTestId('plan-watcher-required-unknown')).toHaveTextContent('CUSTOM');
+    // 只读展示取安全投影，不列原始哨兵
+    expect(screen.getByTestId('plan-watcher-required-unknown')).toHaveTextContent(
+      'SAFE_REQUIRED_DISPLAY',
+    );
+    expect(screen.getByTestId('plan-watcher-required-unknown').textContent).not.toContain(
+      'RAW_REQUIRED_SENTINEL',
+    );
     fireEvent.click(screen.getByLabelText('必需分类 AEE'));
     let next = onChange.mock.calls[onChange.mock.calls.length - 1]?.[0] as PlanSettingsValues;
-    expect(next.watcherPolicy?.required_categories).toEqual(['CUSTOM']);
+    // 保存/编辑事实仍保留原始未知类别
+    expect(next.watcherPolicy?.required_categories).toEqual(['RAW_REQUIRED_SENTINEL']);
 
     onChange.mockClear();
     rerender(
@@ -226,13 +250,56 @@ describe('PlanSettingsEditor', () => {
           watcherPolicy: { required_categories: ['AEE'] },
         })}
         onChange={onChange}
-        projection={projection}
+        projection={safeProjection}
       />,
     );
     fireEvent.click(screen.getByLabelText('必需分类 AEE'));
     next = onChange.mock.calls[onChange.mock.calls.length - 1]?.[0] as PlanSettingsValues;
     expect(next.watcherPolicy).toHaveProperty('required_categories');
     expect(next.watcherPolicy?.required_categories).toEqual([]);
+  });
+
+  it('C3 只读出口：投影可用时只展示安全值；缺失/unavailable 不列原始哨兵', () => {
+    const RAW = 'RAW_REQUIRED_SENTINEL';
+    const SAFE = 'SAFE_REQUIRED_DISPLAY';
+    const safeProjection: ParameterProjection = {
+      ...projection,
+      watcher_policy: {
+        ...projection.watcher_policy,
+        items: projection.watcher_policy.items.map((item) =>
+          item.path[0] === 'required_categories'
+            ? {
+                ...item,
+                state: 'explicit',
+                is_set: true,
+                value: [SAFE, 'AEE'],
+              }
+            : item,
+        ),
+      },
+    };
+    const values = baseValues({
+      watcherPolicy: { required_categories: [RAW, 'AEE'] },
+    });
+
+    const { rerender, container } = render(
+      <PlanSettingsEditor values={values} onChange={() => {}} projection={safeProjection} />,
+    );
+    expect(screen.getByTestId('plan-watcher-required-unknown')).toHaveTextContent(SAFE);
+    expect(container.textContent).not.toContain(RAW);
+
+    rerender(<PlanSettingsEditor values={values} onChange={() => {}} unavailable />);
+    expect(screen.getByTestId('plan-watcher-required-unknown-gap')).toHaveTextContent(
+      '未知分类已保留',
+    );
+    expect(container.textContent).not.toContain(RAW);
+    expect(screen.queryByTestId('plan-watcher-required-unknown')).not.toBeInTheDocument();
+
+    rerender(<PlanSettingsEditor values={values} onChange={() => {}} />);
+    expect(screen.getByTestId('plan-watcher-required-unknown-gap')).toHaveTextContent(
+      '未知分类已保留',
+    );
+    expect(container.textContent).not.toContain(RAW);
   });
 
   it('未设 enabled/required 时展示投影状态，不把控件显示成确定关/全未选', () => {
@@ -249,14 +316,23 @@ describe('PlanSettingsEditor', () => {
     const { container } = render(
       <PlanSettingsEditor
         values={baseValues({
-          watcherPolicy: { enabled: true, password: 'RAW_SECRET', batch_interval_seconds: 5 },
+          watcherPolicy: {
+            enabled: true,
+            password: 'RAW_SECRET',
+            batch_interval_seconds: 5,
+            required_categories: ['RAW_REQUIRED_SENTINEL', 'AEE'],
+          },
         })}
         onChange={() => {}}
         unavailable
       />,
     );
     expect(screen.getByTestId('plan-settings-projection-unavailable')).toBeInTheDocument();
+    expect(screen.getByTestId('plan-watcher-required-unknown-gap')).toHaveTextContent(
+      '未知分类已保留',
+    );
     expect(container.textContent).not.toContain('RAW_SECRET');
+    expect(container.textContent).not.toContain('RAW_REQUIRED_SENTINEL');
     expect(container.textContent).not.toContain('RAW_WATCHER_SENTINEL');
     expect(container.textContent).not.toContain('RAW_PLAN_SENTINEL');
     expect(container.querySelector('textarea[name=json]')).toBeNull();
