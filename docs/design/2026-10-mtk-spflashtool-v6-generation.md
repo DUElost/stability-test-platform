@@ -158,3 +158,46 @@
   「保持阶段」移除，**初始门控仍会把它隐藏** → 在同 host 还有其它测试在跑时，一次刷机会
   把邻机的 adb 一起摘掉（`authorized=0`，刷机结束才恢复）。这不是 V6 引入的，但 535 批次
   把刷机与 Monkey/开关机混在同一批 host 上时会被放大。
+
+## 7. run 921 事故与 v1.3.20（2026-10-13）
+
+上面那条「历史问题」在平台链路首刷当天变成了实物事故，判据与结论以本节为准。
+
+**事故链**（run 921 / job 185452 / plan 80，目标设备 id 939 = `AHFFNX69****0169`，口 `1-10`）：
+
+1. 派发时目标 adb 已不可用（`pre_reboot.pre_state = no-device`）——1.3.19 的设计是
+   「记一条 skip_reason，让工具自己等 USB」；
+2. 初始门控把 10 个处于 `201c` 的邻机口压到 `authorized=0`，其中 `1-8`
+   （id 943 = `AHFFNX69****0224`，派发前 ONLINE）重枚举成 `0e8d:2000` preloader；
+3. 不带 `-p` 的 V6 扫的是全部 MTK 口，于是绑了 `1-8`：日志
+   `scan device succeed, symbolic_link: COM:///dev/ttyACM1@/dev/ttyACM1@1-8` →
+   `connect brom successed.` → `enter 1st DA mode failed ... checksum mismatched`；
+4. 结果：目标与邻机**双双**滞留 preloader，需现场长按电源/重插才恢复；作业判
+   `flash failed after 2 attempt(s): fail token hit: FAIL`。
+
+**取证（本机 `.85` 包内二进制，两次零写入探针）**：
+
+| 探针 | 命令行 | 回显 | 结论 |
+|---|---|---|---|
+| A2 | `-p 1-99`（不存在的口），现场另有 2 个可捕获 preloader 口 | `com port clue: COM://1-99.`，`scan device START` 后 45s 内不绑任何设备 | `-p` **真按端口过滤**，不是收下参数却照旧全盘扫描 |
+| B | 不给 `-p` | `com port clue: COM://.`（空线索）→ 立刻绑到当时的一个可捕获口 | 不给 `-p` 时绑谁是**当时谁在 preloader** 决定的 |
+
+**v1.3.20 的四条判据**（只在 `tool_generation=v6` 且 Linux 默认生效；V5 分支逐字不变）：
+
+1. **目标身份 fail-closed**：`serial` 反查不到 sysfs 口、adb 又不是 `device`、该口当前
+   也不在可刷态 → 判失败并**在抢 host 刷机锁之前**返回。不得让工具对不可控的手机盲等。
+2. **命令行钉口**：V6 追加 `-p <sysfs 口>`（形态同 `symbolic_link` 末段，含 hub 嵌套
+   `1-5.2.3`）。
+3. **逐行核验绑定口**：以工具自己回显的 `symbolic_link` 为准，`≠ 目标口` 立即
+   SIGTERM→SIGKILL 整棵工具树并终止尝试环（不重试）。这是 `-p` 之外的独立第二道闸——
+   `-p` 是否生效、口名是否与 sysfs 一致，都不作为假设。
+4. **门控口径按代际分档**：V6 初始门控与重试重画都只用 `_BROM_GATE_PIDS`
+   （`0003/2000/2001/3000/2026`），**不再压制 `201c`**；V5 保持历史全量口径，
+   `201c` 是否从 V5 移除仍由 #3690 裁决。
+
+**运维侧的连带结论**：
+
+- 救砖（设备已卡在 BROM/preloader、sysfs 读不到 serial）必须显式传 `flash_port=<口>`；
+  不得把它当常规入口——指定错口就是把固件刷进另一台手机。
+- 一次失败可能同时留下**两台**滞留 preloader 的设备（目标 + 被绑的邻机）：现场处置前
+  必须按口名对照 `lsusb` 与设备表，不要只看作业里的那个 device_id。

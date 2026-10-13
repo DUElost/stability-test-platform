@@ -1,5 +1,25 @@
 """Flash firmware via SP Flash Tool (MTK platform).
 
+⚠ v1.3.20（#3688 / run 921 事故）：**V6 刷机必须先确定"操作的是哪个物理 USB 口"**。
+三处收紧，全部只在 `tool_generation=v6` 且 Linux 上默认生效，**V5 分支零变化**：
+  1. 目标身份 fail-closed：按 serial 反查 sysfs 端口查不到、且 adb 状态不是
+     `device`、且该口当前也不处于可刷态 → 直接判失败，**不得**起工具"等 USB"。
+     （1.3.19 在这种情况下只往 `pre_reboot.skip_reason` 记一句话就照常起工具。）
+  2. V6 命令行带 `-p <sysfs 端口>`，把工具钉在目标口（实测：给 `-p 1-99` 时现场
+     有 2 个可捕获 preloader 口也绑不到任何设备；不给时回显空线索并全盘扫描）。
+  3. 逐行核工具回显的 `symbolic_link` 绑定口：≠ 目标口 → 立刻 SIGTERM/SIGKILL
+     整棵工具树并终止尝试环（不再重试）。这道闸不依赖 `-p` 是否生效——工具自己
+     说绑到哪，就以它为准。
+  4. V6 的门控口径改为「只压制工具真会去绑的态」(`_BROM_GATE_PIDS`)，**不再**
+     压制邻机的 `0e8d:201c`（正常 adb 态）。压制它非但挡不住工具，反而把邻机
+     推进 preloader，当场制造出一个可被绑定的错目标——这就是 run 921 的根因。
+事故链（run 921 / job 185452，plan 80，目标设备 id 939）：目标派发时 adb 已
+不可用（`pre_state=no-device`）→ 工具照起 → 初始门控把 10 个 201c 邻机口压到
+`authorized=0` → 其中 1-8（设备 943）重枚举逃逸成 `0e8d:2000` → 工具绑 1-8 并
+下发 DA，失败于 `enter 1st DA mode ... checksum mismatched` → 943 与 939 双双
+滞留 preloader，需现场长按电源/重插才恢复。**合入不等于生效**：必须走完
+「发包 → /scripts/scan → script-presence 预热」链才算落到主机。
+
 v1.3.19（MLD_NX2 / 535 项目）：支持 SP Flash Tool **V6** 代际——
 `SPFlashToolV6 -c firmware-upgrade -f download_agent/flash.xml -b auto`。
 V5 与 V6 的差别不是「多一个参数」，而是**下载入口物**不同：
@@ -107,6 +127,22 @@ STP_STEP_PARAMS schema:
                           相邻两次尝试之间的间隔)
     strict_env_check        : bool (optional, default false; env STP_FLASH_STRICT_ENV_CHECK；
                           true 时把 ttyACM 写入路径不明确从 WARNING 升级为失败)
+    require_port_binding    : bool (optional; env STP_FLASH_REQUIRE_PORT_BINDING。
+                          默认：v6 且 Linux = true，v5/非 Linux = false。true 时
+                          目标口必须在 sysfs 里查得到（否则 fail-closed），且
+                          V6 命令行带 `-p <口>`，并逐行校验工具回显的绑定口)
+    require_adb_ready       : bool (optional; env STP_FLASH_REQUIRE_ADB_READY。
+                          默认同 require_port_binding。true 时 adb 状态非 `device`
+                          的目标，只有其口当前已处于可刷态才放行——不得让工具
+                          对着一台不可控的手机盲等)
+    gate_pid_scope          : str  (optional; "brom"=只压制可刷态口（v6 默认），
+                          "full"=沿用历史全量集合（v5 默认，含 201c）；
+                          env STP_FLASH_GATE_PID_SCOPE)
+    flash_port              : str  (optional; env STP_FLASH_PORT。运维显式指定
+                          sysfs 目标口（如 `1-8` / `1-5.2.3`），用于设备已卡在
+                          BROM/preloader、sysfs 读不到 serial 的救砖路径。
+                          **不得**用作常规入口：常规刷机按 serial 反查，指定错
+                          口会把固件刷进另一台手机)
 
 v1.3.6 相对 v1.3.5（per-model 版本映射）：
   - 族级指针 latest.json 支持机型级版本：{"versions": {"MLD_LX2": "...",
@@ -327,6 +363,118 @@ _FLASH_STAGE_PIDS = {"0003", "2000", "2001", "201c", "2026", "3000"}
 # 工具的 BROM 扫描目标内，周期 toggle 只会制造 udev 风暴干扰目标捕获
 # （run 261 实证：v1.3.8 每 10s toggle 14 个 201c 口 → 工具 120s S_TIMEOUT）。
 _BROM_STAGE_PIDS = {"0003", "2000", "2001", "3000"}
+# v1.3.20（#3688 run 921）：V6 的**初始**门控同样收到"只压制工具真会去绑的态"
+# 这个口径。`201c` 不得再被压制——它是 MLD-LX2/LX3/NX2 的正常 adb 态（#3690），
+# 压制它既挡不住工具，又会把邻机推进 preloader，当场制造出一个"合法的"错刷机
+# 目标（run 921：1-8 被压制后重枚举成 0e8d:2000，工具转而绑它）。
+# `2026` 仍是 download-mode，保留在可刷态集合里。V5 沿用历史集合，行为零变化。
+_BROM_GATE_PIDS = _BROM_STAGE_PIDS | {"2026"}
+
+# V6 `-p/--com_port` 在 Linux 上就是 sysfs 端口名（`1-8` / `1-10` / hub 嵌套
+# `1-5.2.3`），与 symbolic_link 回显的末段同形态。
+_PORT_PATH_RE = re.compile(r"^\d+-(?:\d+\.)*\d+$")
+_SYMBOLIC_LINK_RE = re.compile(r"symbolic_link:\s*(\S+)")
+
+
+class FlashToolAborted(RuntimeError):
+    """脚本判定工具正在操作非目标设备，主动杀进程后上抛（#3688）。
+
+    与普通刷机失败分开记账：这是**止损成功**，不得进入下一次尝试——重试等于
+    再去抢一次别人的手机。
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+def _parse_bound_port(line: str) -> "str | None":
+    """从 V6 回显取「工具实际绑到的物理 USB 口」；取不到返回 None。
+
+    实测形态（Linux，run 921 与本机探针一致）::
+
+        scan device succeed, symbolic_link: COM:///dev/ttyACM1@/dev/ttyACM1@1-8
+
+    末段才是端口。Windows 形态（`COM://\\?\\usb#vid_...`）不匹配端口正则 → None，
+    因此不会在 Windows 侧产生跨形态误判。
+    """
+    m = _SYMBOLIC_LINK_RE.search(line)
+    if not m:
+        return None
+    tail = m.group(1).rstrip(".").split("@")[-1]
+    return tail if _PORT_PATH_RE.match(tail) else None
+
+
+def _port_mismatch_reason(line: str, target_port: str, serial: str) -> "str | None":
+    """工具这一行输出是否声明"我绑到了非目标口"。是 → 返回止损理由。
+
+    只认工具自己的 `symbolic_link` 回显：`-p` 是否真生效、拓扑口名与 sysfs 是否
+    一致，都不能靠假设。取不到端口形态（Windows 形态、别的行）一律 None。
+    """
+    bound = _parse_bound_port(line)
+    if bound is not None and target_port and bound != target_port:
+        return (
+            f"tool bound USB port {bound!r} != target port {target_port!r} "
+            f"(serial={serial}): 已终止工具，未继续下发")
+    return None
+
+
+def _resolve_target_identity(
+    *, serial: str, adb_path: str, explicit_port: str,
+    require_binding: bool, require_adb_ready: bool,
+    base: str = _SYSFS_USB_BASE,
+) -> "tuple[str | None, dict]":
+    """确定"这次刷机操作的是哪个物理 USB 口"，判不出即返回 error（fail-closed）。
+
+    为什么必须有（#3688 run 921）：不带 `-p` 的 V6 扫的是**所有** MTK 口，抓到
+    第一个 preloader 就下 DA。目标机 adb 不可用时，1.3.19 只在 `pre_reboot`
+    记一条 skip_reason 就照样起工具，于是把 3.5G 固件的 DA 发进了邻机。
+
+    判据（`report["error"]` 非空 = 不得起工具）：
+      - require_binding：端口必须查得到（按 serial 反查 sysfs，或运维显式
+        `flash_port`——后者是设备已卡在 BROM/preloader、sysfs 读不到 serial
+        时的救砖通道）；查不到 → 拒绝。
+      - require_adb_ready：adb 状态非 `device` 时，只有该口**当前**就处于可刷态
+        （pid ∈ `_BROM_GATE_PIDS`）才放行——即"已经在 preloader 里等刷"；
+        否则视为设备不可控 → 拒绝，不得让工具盲等。
+    """
+    report: dict = {
+        "checked": True,
+        "require_port_binding": require_binding,
+        "require_adb_ready": require_adb_ready,
+        "explicit_port": explicit_port or None,
+    }
+    adb_state = _adb_device_state(serial, adb_path)
+    ports = _list_mtk_ports(base)
+    port_by_serial = _port_for_serial(serial, base)
+    port = port_by_serial or (explicit_port or None)
+    info = ports.get(port) if port else None
+    report.update({
+        "adb_state": adb_state,
+        "port_by_serial": port_by_serial,
+        "port": port,
+        "port_source": ("serial" if port_by_serial
+                        else ("explicit_param" if port else None)),
+        "port_pid": (info or {}).get("pid"),
+        "port_authorized": (info or {}).get("authorized"),
+    })
+
+    errors: list[str] = []
+    if require_binding and not port:
+        errors.append(
+            f"无法确定目标 USB 口：sysfs 里按 serial={serial or '(空)'} 查不到设备，"
+            "且未显式给 flash_port；拒绝让工具去绑任意一个进入 preloader 的口")
+    if require_adb_ready and adb_state != "device":
+        catchable = bool(info) and info.get("pid") in _BROM_GATE_PIDS
+        report["port_catchable"] = catchable
+        if not catchable:
+            errors.append(
+                f"目标不可控：adb 状态={adb_state}，端口 {port or '(未定)'} 当前 "
+                f"pid={report.get('port_pid') or '(不可读)'} 不在可刷态 "
+                f"{sorted(_BROM_GATE_PIDS)}；拒绝起刷")
+    if errors:
+        report["error"] = "；".join(errors)
+    return port, report
 
 _PRIV_WRAPPER = "/usr/local/sbin/stp-agent-priv"
 _priv_wrapper_cache: "list[bool | None]" = [None]
@@ -773,6 +921,7 @@ def _run_flash_tool_with_progress(
     on_stage: "callable",
     on_percent: "callable",
     on_running: "callable | None" = None,
+    abort_check: "callable | None" = None,
 ) -> "tuple[str, int]":
     """Popen + 双 reader 线程跑 flash_tool，逐行喂给阶段/进度解析。
 
@@ -783,6 +932,13 @@ def _run_flash_tool_with_progress(
     on_running：进程与 reader 线程就绪后、进入轮询前回调一次——v1.3.3 起
     调用方在此发 adb reboot（工具须先于 reboot 进入 USB 扫描，BROM 窗口
     才有观测者；顺序颠倒则窗口空过，真机实证见模块 docstring v1.3.3 节）。
+
+    abort_check（v1.3.20 / #3688）：逐行调用，返回**非空字符串就是止损指令**——
+    立即杀掉整棵工具进程树并以 FlashToolAborted 上抛。为什么必须边读边判：不带
+    `-p` 的 V6 从 `scan device succeed`（绑到别人的口）到 `enter 1st DA mode` 只有
+    几秒，等进程退出后再看 stdout 判失败，DA 已经发进邻机了（run 921 实况）。
+    回调必须无副作用且快；判据自身异常一律按「不中止」处理——解析缺陷不得放大
+    成刷机中断。
     """
     proc = subprocess.Popen(
         cmd,
@@ -800,11 +956,54 @@ def _run_flash_tool_with_progress(
             pass
     collected: list[str] = []
     seen_phases: set[str] = set()
+    aborted: "dict[str, str]" = {}
+
+    def _stop_tree() -> None:
+        # 止损停机：SIGTERM 整树 → 3s 宽限 → SIGKILL。不复用 #811 超时路径的
+        # 「未死则拒绝下一尝试」判据：那条上抛语义属于超时，混用会让排查者把
+        # 「绑错口被杀」读成「工具卡死」。
+        if "_killed" in aborted:
+            return
+        aborted["_killed"] = "1"
+        try:
+            os.killpg(os.getpgid(proc.pid), 15)
+        except ProcessLookupError:
+            return
+        except Exception:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(os.getpgid(proc.pid), 9)
+            except ProcessLookupError:
+                return
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                pass
 
     def _reader(stream) -> None:
         try:
             for line in stream:
                 collected.append(line)
+                if abort_check is not None and "reason" not in aborted:
+                    try:
+                        reason = abort_check(line)
+                    except Exception:
+                        reason = None
+                    if reason:
+                        aborted["reason"] = str(reason)
+                        _stop_tree()
+                        break
                 upper = line.upper()
                 matched = False
                 for tok in _PHASE_TOKENS:
@@ -882,6 +1081,10 @@ def _run_flash_tool_with_progress(
     finally:
         for th in threads:
             th.join(timeout=2)
+    if "reason" in aborted:
+        # 工具已被杀掉，绝不能按「正常退出」往下判 verdict：绑错口的实例可能
+        # 已经收到 DA，而 stdout 里未必有 FAIL 字样。
+        raise FlashToolAborted(aborted["reason"])
     return "".join(collected), proc.returncode
 
 
@@ -1026,17 +1229,33 @@ def _build_flash_argv(
     da_file: "str | None" = None,
     scatter_file: "str | None" = None,
     flash_xml_file: "str | None" = None,
+    port: "str | None" = None,
 ) -> list:
     """按代际拼命令行（v1.3.19）。
 
     V5 分支的 token 顺序与内容**与 1.3.18 逐字一致**（在用 552 刷机计划零变化）。
     两代 `-h` 实测 `-b` 都是 `--reboot` 布尔，`auto` 是被工具忽略的位置参数；
     本版沿用现场已验证的手工命令形态，不改任何一侧。
+
+    v1.3.20（#3688）：V6 可选 `-p <sysfs 端口>`，把工具**钉在目标口**上。判据来自
+    本机实测（`.85` 包内二进制 `-h` + 两次探针）：
+      - `-p, --com_port` 在 Linux 上的形态就是 sysfs 端口名（help 原文
+        `5-2+1-6`(BROM download) / `5-1`(preloader download)），与成功回显
+        `symbolic_link: COM:///dev/ttyACM0@/dev/ttyACM0@1-9` 的末段同形态；
+      - 给 `-p 1-99` 时回显 `com port clue: COM://1-99.`，且现场存在 2 个可捕获
+        preloader 口时仍然绑不到任何设备（探针 A2）——说明它真按端口过滤，不是
+        收下参数却照旧全盘扫描；
+      - 不给 `-p` 时回显 `com port clue: COM://.`（空线索）→ 全盘扫描；run 921
+        就是这样抓到了被自家门控推进 preloader 的邻机。
+    V5 一侧不得带 `-p`：`flash_tool` 的端口参数形态不同，552 零变化是红线。
     """
     if generation == GENERATION_V6:
         if not flash_xml_file:
             raise ValueError("flash_xml_file is required for tool_generation v6")
-        return [exe, "-c", command, "-f", flash_xml_file, "-b", boot_mode]
+        argv = [exe, "-c", command, "-f", flash_xml_file, "-b", boot_mode]
+        if port:
+            argv += ["-p", port]
+        return argv
     if not da_file or not scatter_file:
         raise ValueError("da_file and scatter_file are required for tool_generation v5")
     return [exe, "-c", command, "-d", da_file, "-s", scatter_file, "-b", boot_mode]
@@ -1888,10 +2107,30 @@ def main() -> None:
     # "bootloader"/"fastboot" 显式选择热重启直达模式。
     reboot_target = str(args.get("reboot_target") or "").strip().lower() or "normal"
 
-    cmd = _build_flash_argv(
-        flash_tool_exe, generation, command, boot_mode,
-        da_file=da_file, scatter_file=scatter_file, flash_xml_file=flash_xml_file,
+    # ── v1.3.20（#3688 run 921）：V6 的三档收紧，V5 一律保持历史行为 ─────
+    # 事故：run 921（plan 80 / job 185452）目标 939 在派发时 adb 已不可用
+    # （pre_state=no-device），1.3.19 只记一条 skip_reason 就照样起工具"等 USB"；
+    # 工具不带 `-p` 时扫的是**所有** MTK 口，而自家初始门控又把 10 个 201c
+    # （= 正常 adb 态）邻机口压制到 authorized=0，其中 1-8 重枚举逃逸成
+    # 0e8d:2000 preloader —— 工具于是绑了 1-8 并下发 DA（checksum mismatch 而止）。
+    # 结论：三处都必须 fail-closed，而不是"让工具自己挑一个"。
+    v6_native = generation == GENERATION_V6 and _is_linux()
+    require_binding = _as_bool(
+        _param_or_env(args, "require_port_binding",
+                      "STP_FLASH_REQUIRE_PORT_BINDING", ""),
+        default=v6_native,
     )
+    require_adb_ready = _as_bool(
+        _param_or_env(args, "require_adb_ready",
+                      "STP_FLASH_REQUIRE_ADB_READY", ""),
+        default=v6_native,
+    )
+    gate_pid_scope = str(
+        args.get("gate_pid_scope") or os.environ.get("STP_FLASH_GATE_PID_SCOPE") or ""
+    ).strip().lower() or ("brom" if v6_native else "full")
+    explicit_port = str(
+        args.get("flash_port") or os.environ.get("STP_FLASH_PORT") or ""
+    ).strip()
     subprocess_env = _build_subprocess_env(os.path.dirname(flash_tool_exe))
 
     # ── v1.3.0：环境预检（拿锁前短路，硬失败信息直指修复动作）────────
@@ -1914,6 +2153,43 @@ def main() -> None:
                          "env_precheck": env_precheck})
         return
 
+    # ── v1.3.20：起刷前必须知道"这次操作的是哪个物理口、设备可不可控" ──
+    # 放在抢锁之前：判不出目标就没有理由去占用整台 host 的刷机锁。
+    identity: dict = {
+        "checked": False,
+        "require_port_binding": require_binding,
+        "require_adb_ready": require_adb_ready,
+        "gate_pid_scope": gate_pid_scope,
+        "explicit_port": explicit_port or None,
+    }
+    identity_port: "str | None" = None
+    if require_binding or require_adb_ready:
+        if explicit_port and not _PORT_PATH_RE.match(explicit_port):
+            identity["error"] = (
+                f"flash_port 形态非法：{explicit_port!r}；必须是 sysfs 端口名"
+                "（如 1-8 / 1-10 / 1-5.2.3）")
+        else:
+            identity_port, identity = _resolve_target_identity(
+                serial=serial, adb_path=adb_path, explicit_port=explicit_port,
+                require_binding=require_binding,
+                require_adb_ready=require_adb_ready,
+                base=_SYSFS_USB_BASE,
+            )
+            identity.setdefault("require_port_binding", require_binding)
+            identity.setdefault("require_adb_ready", require_adb_ready)
+            identity["gate_pid_scope"] = gate_pid_scope
+        _emit_progress(seq, stage="target-identity",
+                       result=json.dumps(identity, ensure_ascii=False))
+        if identity.get("error"):
+            _output(False, error_message=identity["error"],
+                    metrics={"route": route, "version_check": version_check,
+                             "env_precheck": env_precheck,
+                             "identity": identity,
+                             "tool_generation": generation,
+                             "duration_seconds":
+                                 round(time.time() - started_at, 2)})
+            return
+
     # #1591：上次 abort/SIGKILL 可能打断 settle——先恢复孤儿门控再抢锁
     orphan_gates = _restore_orphaned_gates()
     if orphan_gates.get("restored") or orphan_gates.get("errors"):
@@ -1935,11 +2211,16 @@ def main() -> None:
     lock_acquired_at = time.time()
 
     # ── v1.3.0：门控（必须在 adb reboot 之前反查目标口——BROM 态无 serial）
-    target_port = None
-    if gate_other_mtk and _is_linux():
-        target_port = _port_for_serial(serial)
+    # v1.3.20：目标口优先取身份判定结果；判定已跑过（V6）时不再二次反查，
+    # 避免"判定用一个口、门控用另一个口"的两条真相。
+    target_port = identity_port
+    if target_port is None and _is_linux():
+        # 显式传 base：默认参数在定义时绑定，不传就吃不到运行期的基址
+        target_port = _port_for_serial(serial, _SYSFS_USB_BASE)
+    initial_gate_pids = _BROM_GATE_PIDS if gate_pid_scope == "brom" else None
     if gate_other_mtk:
-        gating = _gate_other_mtk(target_port)
+        gating = _gate_other_mtk(target_port, base=_SYSFS_USB_BASE,
+                                 hold_pids=initial_gate_pids)
     else:
         gating = {"hidden": [], "errors": {},
                   "skipped_reason": "disabled by params",
@@ -1953,7 +2234,17 @@ def main() -> None:
     if hidden_ports:
         _persist_gated_ports(hidden_ports)
 
+    # require_binding ⇒ 目标口非空：这一点在**抢锁之前**的身份判定里已经是硬
+    # 判据（判不出即 fail-closed），这里不再重复检查——在锁内 return 会漏结算。
+    bound_port = target_port if require_binding else None
+    cmd = _build_flash_argv(
+        flash_tool_exe, generation, command, boot_mode,
+        da_file=da_file, scatter_file=scatter_file, flash_xml_file=flash_xml_file,
+        port=bound_port,
+    )
+
     attempts_report: list = []
+    aborted_report: "dict | None" = None
     final_output, final_rc = "", None
     final_error: "tuple[str, str] | None" = ("exhausted", "no attempt made")
     verdict_ok = False
@@ -1973,7 +2264,8 @@ def main() -> None:
         if lock_settled:
             return
         lock_settled = True
-        gating["restore"] = _restore_gated({"hidden": hidden_ports})
+        gating["restore"] = _restore_gated({"hidden": hidden_ports},
+                                            _SYSFS_USB_BASE)
         _clear_gated_state()
         _release_host_lock(lock_fd)
         _emit_progress(seq, stage="lock-released")
@@ -1994,7 +2286,10 @@ def main() -> None:
                     time.sleep(retry_backoff)
                 # 防御性重画门控：上次尝试期间可能有别的手机重启进刷机态
                 # （authorized=0 只对当前实例生效，见 note §Decision.3）
-                regate = _gate_other_mtk(target_port)
+                # v1.3.20：口径与初始门控一致——V6 不得在这里把邻机的正常 adb 态
+                # (201c) 再压制一遍，那正是 run 921 制造出错刷目标的机制。
+                regate = _gate_other_mtk(target_port, base=_SYSFS_USB_BASE,
+                                         hold_pids=initial_gate_pids)
                 for name in regate.get("hidden", []):
                     if name not in hidden_ports:
                         hidden_ports.append(name)
@@ -2033,7 +2328,7 @@ def main() -> None:
                 # v1.3.9：保持阶段只压制 BROM/preloader 态口——201c 正常
                 # 态设备周期 toggle 会制造 udev 风暴,干扰工具捕获目标的
                 # 3 秒 BROM 窗口（run 261 实证:120s S_TIMEOUT）。
-                regate = _gate_other_mtk(target_port,
+                regate = _gate_other_mtk(target_port, base=_SYSFS_USB_BASE,
                                          hold_pids=_BROM_STAGE_PIDS)
                 for name in regate.get("hidden", []):
                     if name not in hidden_ports:
@@ -2041,6 +2336,15 @@ def main() -> None:
                 if hidden_ports:
                     _persist_gated_ports(hidden_ports)
                 regate_count += 1
+
+            def _abort_on_wrong_port(line: str) -> "str | None":
+                # 第二道闸（`-p` 之外的独立判据）：逐行核工具回显的绑定口。
+                # 只在 require_binding 时才接进工具循环——V5 不经过这条新路径。
+                return _port_mismatch_reason(line, target_port, serial)
+
+            run_kwargs: dict = {}
+            if require_binding:
+                run_kwargs["abort_check"] = _abort_on_wrong_port
 
             def _fire_reboot_when_tool_ready() -> None:
                 nonlocal pre_reboot
@@ -2071,7 +2375,17 @@ def main() -> None:
                         _regate(),
                     ),
                     on_running=_fire_reboot_when_tool_ready,
+                    **run_kwargs,
                 )
+            except FlashToolAborted as exc:
+                # 止损成功：记 attempt 后**立即终止尝试环**——重试只会让工具
+                # 再去找一个非目标口。门控与锁由统一结算路径恢复。
+                attempt_record.update({"outcome": "aborted-port-mismatch",
+                                       "reason": exc.reason})
+                attempts_report.append(attempt_record)
+                aborted_report = {"attempt": attempt, "reason": exc.reason}
+                final_error = ("port-mismatch", exc.reason)
+                break
             except subprocess.TimeoutExpired:
                 attempt_record.update({"outcome": "timeout",
                                        "timeout_seconds": timeout})
@@ -2129,6 +2443,11 @@ def main() -> None:
                          "env_precheck": env_precheck,
                          "gating": gating,
                          "target_port": target_port,
+                         # v1.3.20：排查"绑错口/目标不可控"必须一眼看到这三项
+                         "identity": identity,
+                         "port_binding": {"required": require_binding,
+                                          "bound_port": bound_port},
+                         "aborted": aborted_report,
                          "attempts": attempts_report,
                          "attempt_count": len(attempts_report),
                          "recovery": recovery,
@@ -2212,6 +2531,10 @@ def main() -> None:
         "env_precheck": env_precheck,
         "gating": gating,
         "target_port": target_port,
+        # v1.3.20：每次刷机都要留下"身份如何确定、工具绑在哪个口"的账
+        "identity": identity,
+        "port_binding": {"required": require_binding, "bound_port": bound_port},
+        "aborted": aborted_report,
         "attempts": attempts_report,
         "attempt_count": len(attempts_report),
         # ── v1.3.7 ──
