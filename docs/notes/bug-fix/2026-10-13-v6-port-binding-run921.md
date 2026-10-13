@@ -1,6 +1,6 @@
 # flash_firmware v1.3.20：V6 刷机必须绑定并核验目标 USB 口（run 921）
 
-Status: proposed
+Status: implemented
 Class: bug-fix
 - **Requirement**: [#3688](https://github.com/DUElost/stability-test-platform/issues/3688)
   （535 / MLD_NX2 V6 适配）；关联
@@ -49,8 +49,17 @@ V6（`SPFlashToolV6`）在 Linux 上默认启用四道判据，V5 分支逐字�
 - `scripts/run_pytest.py backend/agent/tests`：2570 passed（含 v1.3.10/11/13/19 既有回归）。
 - `check_script_packages`（族树 sha == 1.3.20 登记）与 `check_tool_manifest --base origin/main`
   （append-only）通过。
-- **未做的验证**：本 PR 合入与发包后尚未在真机跑过一次 V6 成功链路——被绑错的
-  `AHFFNX69****0224` 与目标 `AHFFNX69****0169` 仍滞留 preloader，需现场长按电源/重插。
+- **真机已验证（2026-10-13 20:02–20:08）**：plan 80 / run 929 / job 188321，设备 id 953
+  （`AHFFNX69****0170`）在 host 末段 `.86` 的直连口 `1-6`，目标 `P535AA-HONOR-NX2-16-261013V21`。
+  `command_argv` 带 `-p 1-6`；`identity` 为 `adb_state=device` / `port_source=serial` /
+  `gate_pid_scope=brom`；`gating.hidden=["1-5.2.2"]`（唯一那台 `0e8d:0003` 异常机），
+  **同 host 9 台 `201c` 邻机未被压制**；`aborted=null`；`attempts=1` `outcome=ok`
+  `exit_code=0`；`post_flash_verify.current == target`；`boot_stable.ok=true`；
+  刷机步 302.46s；五步链 `preflight→flash→oobe_skip→ensure_root→check_device` 全绿，run `SUCCESS`。
+- **仍未做的验证**：① hub 嵌套口（`1-5.x.y` 形态）上 `-p` 的匹配形态未取证——canary 刻意选
+  直连口；② 混跑窗口（同 host 有其它作业在跑）下的 V6 表现，派发时全平台 RUNNING 作业数为 0；
+  ③ run 921 受害的两台 `AHFFNX69****0169` / `****0224` 仍滞留 `0e8d:2000`，等现场长按电源/重插
+  （本轮无新增伤害：这次邻机没有被压制）。
 
 ## Revisit
 
