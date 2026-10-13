@@ -796,10 +796,20 @@ describe('PlanExecutePage', () => {
     const rows = settings.getAllByTestId('parameter-item');
     expect(rows).toHaveLength(2);
     expect(within(rows[0]).getByText('巡检间隔')).toBeInTheDocument();
-    expect(within(rows[0]).getByText('轮间等待。没有启用的 patrol 步骤时不适用；有启用的 patrol 步骤时必须填写。')).toBeInTheDocument();
+    expect(
+      within(rows[0]).queryByText(
+        '轮间等待。没有启用的 patrol 步骤时不适用；有启用的 patrol 步骤时必须填写。',
+      ),
+    ).not.toBeInTheDocument();
+    expect(within(rows[0]).getByRole('button', { name: '巡检间隔的说明' })).toBeInTheDocument();
     expect(within(rows[0]).getByTestId('parameter-value')).toHaveTextContent(/^60$/);
     expect(within(rows[1]).getByText('巡检时长')).toBeInTheDocument();
-    expect(within(rows[1]).getByText('各设备 init 完成后开始计时，轮前到点则正常完成，然后再 teardown。没有 patrol 时不适用。')).toBeInTheDocument();
+    expect(
+      within(rows[1]).queryByText(
+        '各设备 init 完成后开始计时，轮前到点则正常完成，然后再 teardown。没有 patrol 时不适用。',
+      ),
+    ).not.toBeInTheDocument();
+    expect(within(rows[1]).getByRole('button', { name: '巡检时长的说明' })).toBeInTheDocument();
     expect(within(rows[1]).getByTestId('parameter-value')).toHaveTextContent(/^90$/);
     expect(settings.queryByText('3600')).not.toBeInTheDocument();
     expect(settings.queryByText('125')).not.toBeInTheDocument();
@@ -1432,7 +1442,9 @@ describe('PlanExecutePage', () => {
     });
 
     expect(await screen.findByText(/check_device · 1\.0\.0/)).toBeInTheDocument();
-    expect(screen.getByText('步骤墙钟上限')).toBeInTheDocument();
+    expect(screen.getByText('超时')).toBeInTheDocument();
+    expect(screen.queryByText('步骤墙钟上限')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '超时的说明' })).toBeInTheDocument();
     expect(screen.getByText('30')).toBeInTheDocument();
     expect(screen.queryByText(/default_params/)).not.toBeInTheDocument();
     expect(screen.queryByText('SENTINEL_PASSWORD')).not.toBeInTheDocument();

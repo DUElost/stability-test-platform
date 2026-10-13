@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { mergeDraftParameters } from '@/components/parameters/draftParameterMerge';
 import PlanStepInspector from './PlanStepInspector';
@@ -127,10 +128,29 @@ function Harness({
 }
 
 /** Row / FieldGroup 都是「label span + 控件」的兄弟结构，没有 htmlFor。 */
+function rowHasEditableControl(row: Element | null | undefined): boolean {
+  if (!row) return false;
+  if (row.querySelector('input,select,textarea')) return true;
+  return [...row.querySelectorAll('button')].some(
+    (b) => b.getAttribute('data-testid') !== 'meaning-help',
+  );
+}
+
+/** 投影清单标签行：仅有释义帮助图标，无编辑控件。 */
+function isGlossaryHelpOnlyRow(row: Element | null | undefined): boolean {
+  if (!row) return true;
+  if (row.querySelector('input,select,textarea')) return false;
+  const buttons = [...row.querySelectorAll('button')];
+  return buttons.length > 0 && buttons.every((b) => b.getAttribute('data-testid') === 'meaning-help');
+}
+
 function fieldOf(label: string): HTMLElement {
   const candidates = screen.getAllByText(label);
-  const match = candidates.find(el => el.parentElement?.querySelector('input,select,button'));
-  const el = (match ?? candidates[0])?.parentElement;
+  // 优先编辑行；否则接受只读展示行；跳过投影清单的帮助图标行。
+  const match =
+    candidates.find((el) => rowHasEditableControl(el.parentElement)) ??
+    candidates.find((el) => !isGlossaryHelpOnlyRow(el.parentElement));
+  const el = match?.parentElement;
   if (!el) throw new Error(`field not found: ${label}`);
   return el;
 }
@@ -291,8 +311,8 @@ describe('PlanStepInspector', () => {
       render(<Harness />);
       const labels = screen
         .getAllByText(/^(目标包名|retries|mode|verbose)( \*)?$/)
-        .filter(el => el.parentElement?.querySelector('input,select,button'))
-        .map((el) => el.textContent);
+        .filter((el) => rowHasEditableControl(el.parentElement))
+        .map((el) => el.textContent?.replace(/\s+/g, ' ').trim());
       expect(labels[0]).toBe('目标包名 *');
     });
 
@@ -306,15 +326,16 @@ describe('PlanStepInspector', () => {
       expect(within(fieldOf('retries')).getByRole('spinbutton')).toHaveValue(5);
     });
 
-    it('三层都没值时留空；说明常显在字段下方并经 aria-describedby 关联', () => {
+    it('三层都没值时留空；说明挂标签旁帮助图标，不常显为段落', () => {
       render(<Harness />);
-      const input = within(fieldOf('目标包名 *')).getByRole('textbox');
+      const row = fieldOf('目标包名 *');
+      const input = within(row).getByRole('textbox');
       expect(input).toHaveValue('');
       // 说明不再塞进 placeholder（字段一有值就被遮住），placeholder 与数字字段同口径取 schema 默认
       expect(input).toHaveAttribute('placeholder', '');
-      const description = screen.getAllByText('com.example').find(el => el.id)!;
-      expect(description.tagName).toBe('P');
-      expect(input).toHaveAttribute('aria-describedby', description.id);
+      expect(input).not.toHaveAttribute('aria-describedby');
+      expect(within(row).queryByText('com.example')).not.toBeInTheDocument();
+      expect(within(row).getByRole('button', { name: '目标包名的说明' })).toBeInTheDocument();
     });
 
     it('改成与 default_params 相同的值会把键删掉，保持 payload 最小', () => {
@@ -689,30 +710,42 @@ describe('PlanStepInspector', () => {
     });
     const flashStep = () => makeStep({ action: 'script:flash_firmware', version: '1.3' });
 
-    it('字段已有值时说明仍可见（不依赖 placeholder）', () => {
+    it('字段已有值时说明仍可通过帮助图标到达（不依赖 placeholder）', async () => {
+      const user = userEvent.setup();
       render(<Harness step={flashStep()} scripts={[DESCRIBED]} />);
-      expect(within(fieldOf('固件目录')).getByRole('textbox')).toHaveValue('/nfs/fw');
-      expect(screen.getAllByText('NFS 相对或绝对路径。缺省走指纹路由')[0]).toBeVisible();
+      const row = fieldOf('固件目录');
+      expect(within(row).getByRole('textbox')).toHaveValue('/nfs/fw');
+      const meaning = 'NFS 相对或绝对路径。缺省走指纹路由';
+      expect(within(row).queryByText(meaning)).not.toBeInTheDocument();
+      await user.hover(within(row).getByRole('button', { name: '固件目录的说明' }));
+      expect(await screen.findByRole('tooltip')).toHaveTextContent(meaning);
     });
 
-    it('数字、枚举、布尔字段同样显示说明并关联到控件', () => {
+    it('数字、枚举、布尔字段同样提供帮助图标释义', () => {
       render(<Harness step={flashStep()} scripts={[DESCRIBED]} />);
-      const cases: Array<[HTMLElement, string]> = [
-        [within(fieldOf('刷机重试上限')).getByRole('spinbutton'), '刷机失败后最多重试几次'],
-        [within(fieldOf('机型族')).getByRole('combobox'), '缺省按设备指纹判定'],
-        [within(fieldOf('清除数据')).getByRole('button'), '刷机前清除 userdata'],
+      const cases: Array<[string, 'spinbutton' | 'combobox' | 'button', string]> = [
+        ['刷机重试上限', 'spinbutton', '刷机失败后最多重试几次'],
+        ['机型族', 'combobox', '缺省按设备指纹判定'],
+        ['清除数据', 'button', '刷机前清除 userdata'],
       ];
-      for (const [control, text] of cases) {
-        const description = screen.getAllByText(text).find(el => el.id)!;
-        expect(description.id).not.toBe('');
-        expect(control).toHaveAttribute('aria-describedby', description.id);
+      for (const [label, role, text] of cases) {
+        const row = fieldOf(label);
+        const control =
+          role === 'button'
+            ? within(row).getByRole('button', { name: new RegExp(`^${label}:`) })
+            : within(row).getByRole(role);
+        expect(control).not.toHaveAttribute('aria-describedby');
+        expect(within(row).queryByText(text)).not.toBeInTheDocument();
+        expect(within(row).getByRole('button', { name: `${label}的说明` })).toBeInTheDocument();
       }
     });
 
-    it('没有说明的字段不渲染空段落、不挂 aria-describedby', () => {
+    it('没有说明的字段不渲染帮助图标、不挂 aria-describedby', () => {
       render(<Harness step={flashStep()} scripts={[DESCRIBED]} />);
-      expect(within(fieldOf('通道')).getByRole('textbox')).not.toHaveAttribute('aria-describedby');
-      expect(fieldOf('通道').nextElementSibling).toBeNull();
+      const row = fieldOf('通道');
+      expect(within(row).getByRole('textbox')).not.toHaveAttribute('aria-describedby');
+      expect(within(row).queryByTestId('meaning-help')).not.toBeInTheDocument();
+      expect(row.nextElementSibling).toBeNull();
     });
   });
 

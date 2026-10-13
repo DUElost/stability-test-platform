@@ -1,10 +1,11 @@
-import { useMemo, useId, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowUpRight, AlertTriangle } from 'lucide-react';
 import type { PipelinePhase, PipelineStep, ScriptEntry, ParameterProjection, ParameterItem } from '@/utils/api/types';
 import { ALERT_BANNER, PIPELINE_EDITOR, STATUS_CHIP, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { mergeDraftParameters } from '@/components/parameters/draftParameterMerge';
+import { MeaningHelpTooltip } from '@/components/parameters/MeaningHelpTooltip';
 import { ParameterProjectionList } from '@/components/parameters/ParameterProjectionList';
 import { formatStepTimeout, stepTimeoutHint } from './stepTiming';
 
@@ -542,13 +543,10 @@ function ParamFieldRow({ fieldKey, field, value: projectedValue, onChange: commi
   const isRequired = !!field.required;
   const displayLabel = isRequired ? `${label} *` : label;
   const inputCls = cn('max-w-[60%] h-7 px-2 text-[12px]', PIPELINE_EDITOR.inputInline);
-  // 说明常显在字段下方：此前只当字符串输入框的 placeholder，字段一有值（通常来自
-  // default_params）就看不见，数字/枚举/布尔字段则从不显示。
-  const descriptionId = useId();
+  // 长释义挂标签旁帮助图标；控件不再依赖常显段落 / aria-describedby。
   const description = typeof field.description === 'string' ? field.description.trim() : '';
-  const describedBy = description ? descriptionId : undefined;
   const shell = (control: React.ReactNode) => (
-    <ParamFieldShell label={displayLabel} description={description} descriptionId={descriptionId}>
+    <ParamFieldShell label={displayLabel} helpLabel={label} description={description}>
       {control}
     </ParamFieldShell>
   );
@@ -562,7 +560,6 @@ function ParamFieldRow({ fieldKey, field, value: projectedValue, onChange: commi
         onChange={e => onChange(e.target.value || undefined)}
         className={inputCls}
         aria-label={label}
-      aria-describedby={describedBy}
       >
         <option value="">—</option>
         {field.enum.map(opt => (
@@ -587,7 +584,6 @@ function ParamFieldRow({ fieldKey, field, value: projectedValue, onChange: commi
         )}
         aria-pressed={checked}
         aria-label={`${label}: ${checked ? '是' : '否'}`}
-      aria-describedby={describedBy}
       >
         <span
           className={cn(
@@ -618,12 +614,11 @@ function ParamFieldRow({ fieldKey, field, value: projectedValue, onChange: commi
         }}
         className={inputCls}
         aria-label={label}
-      aria-describedby={describedBy}
       />,
     );
   }
 
-  // string (no enum) → text input；placeholder 与数字字段同口径取 schema 默认（说明已常显）
+  // string (no enum) → text input；placeholder 取 schema 默认
   return shell(
     <input
       type="text"
@@ -633,34 +628,25 @@ function ParamFieldRow({ fieldKey, field, value: projectedValue, onChange: commi
       onChange={e => onChange(e.target.value || undefined)}
       className={cn(inputCls, 'min-w-[50%]')}
       aria-label={label}
-      aria-describedby={describedBy}
     />,
   );
 }
 
-/** 参数行 + 其下方常显的说明（无说明时只渲染参数行，不留空段落）。 */
+/** 参数行；长释义挂在标签旁帮助图标 Tooltip 中（无说明时不渲染图标）。 */
 function ParamFieldShell({
   label,
+  helpLabel,
   description,
-  descriptionId,
   children,
 }: {
   label: string;
+  helpLabel?: string;
   description: string;
-  descriptionId: string;
   children: React.ReactNode;
 }) {
   return (
     <div className="grid gap-0.5">
-      <Row label={label}>{children}</Row>
-      {description && (
-        <p
-          id={descriptionId}
-          className={cn('text-[11px] leading-snug whitespace-pre-wrap break-words', TEXT.subtitle)}
-        >
-          {description}
-        </p>
-      )}
+      <Row label={label} helpLabel={helpLabel} meaning={description}>{children}</Row>
     </div>
   );
 }
@@ -907,10 +893,14 @@ function CardBody({ children }: { children: React.ReactNode }) {
 
 function Row({
   label,
+  helpLabel,
+  meaning,
   children,
   align,
 }: {
   label: string;
+  helpLabel?: string;
+  meaning?: string;
   children: React.ReactNode;
   align?: 'start';
 }) {
@@ -921,7 +911,10 @@ function Row({
         align === 'start' ? 'items-start' : 'items-center',
       )}
     >
-      <span className={cn('whitespace-nowrap', TEXT.subtitle)}>{label}</span>
+      <span className={cn('inline-flex items-center gap-1 whitespace-nowrap', TEXT.subtitle)}>
+        {label}
+        {meaning ? <MeaningHelpTooltip label={helpLabel ?? label} meaning={meaning} /> : null}
+      </span>
       <div className={cn('text-right text-[12px] font-medium flex-1 flex justify-end items-center gap-1.5', TEXT.body)}>
         {children}
       </div>

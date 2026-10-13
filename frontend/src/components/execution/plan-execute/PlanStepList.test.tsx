@@ -27,7 +27,9 @@ describe('PlanStepList', () => {
     render(<PlanStepList projection={projection} />);
     expect(screen.getByTestId('plan-step-list')).toBeInTheDocument();
     expect(screen.getByTestId('parameter-projection-list')).toBeInTheDocument();
-    expect(screen.getByText('整次执行墙钟')).toBeInTheDocument();
+    expect(screen.getByText('巡检时长')).toBeInTheDocument();
+    expect(screen.queryByText('整次执行墙钟')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '巡检时长的说明' })).toBeInTheDocument();
     expect(screen.queryByText(/default_params/)).not.toBeInTheDocument();
     expect(screen.queryByText('RAW_JSON_SENTINEL')).not.toBeInTheDocument();
   });
@@ -38,5 +40,6 @@ describe('PlanStepList', () => {
       '没有安全投影时不展示原始参数',
     );
     expect(screen.queryByText('整次执行墙钟')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '巡检时长的说明' })).not.toBeInTheDocument();
   });
 });
