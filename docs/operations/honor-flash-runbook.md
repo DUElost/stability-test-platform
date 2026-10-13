@@ -184,6 +184,14 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/plans/<PLAN_ID>/run -H "$AUTH" \
 > `201c` 是 MLD-LX2/LX3/NX2 的**正常 adb 态** → 同 host 有其他测试在跑时，一次刷机会把邻机
 > 一起摘线（判据问题见 #3690）。V6 单台验证请选择**无其他在跑作业**的 host 与时间窗。
 
+> 警告（V6 刷机前必查目标可刷性，run 921 事故）：目标 adb 不可用（`no-device`）时**不得**
+> 指望工具"等 USB"——不带 `-p` 的 V6 会去绑现场任何一个 preloader 口。`flash_firmware@1.3.20`
+> 起 V6 默认三处 fail-closed：①按 serial 反查不到目标口 / 目标不可控 → 抢锁前判失败；
+> ②命令行带 `-p <sysfs 口>`；③逐行核 `symbolic_link` 回显，绑错口立即杀工具并终止尝试环。
+> 判据落在 metrics 的 `identity` / `port_binding` / `aborted` 三个字段，排查时先看它们。
+> 救砖（设备已卡在 BROM/preloader、sysfs 读不到 serial）必须显式传 `flash_port=<口>`；
+> 该参数只用于此场景，指定错口就是把固件刷进另一台手机。
+
 > 警告：`flash_firmware@1.3.19` 与 `flash_preflight@1.0.7` 在包内声明了 `flashtool_v6` 工具
 > 依赖（ADR-0051 D7）。任何人不得在 `flashtool_v6` 包发布之前 scan 注册或把 Plan 重指到这两个
 > 版本——包未就位时**所有**刷机步骤（含 552 的 V5 计划）会在派发前 exit 2。

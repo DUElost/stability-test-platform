@@ -79,7 +79,7 @@ SPFT Linux console 版 `-p <port>` 打开层损坏（扫描层能匹配、打开
 
 | 参数 | 默认 | 行为 |
 |------|------|------|
-| `gate_other_mtk` | true | adb reboot **前**按 `STP_DEVICE_SERIAL` 经 sysfs 反查目标口（BROM 态无 serial，必须趁早）；把其它处于刷机态（pid ∈ {0003,2000,2001,201c,2026,3000}）的 MTK 口 `authorized=0`，普通态(2046)手机不受影响；刷完 try/finally 恢复。无 serial / 无写权限 / 非 Linux 时跳过并记录原因 |
+| `gate_other_mtk` | true | adb reboot **前**按 `STP_DEVICE_SERIAL` 经 sysfs 反查目标口（BROM 态无 serial，必须趁早）；把其它处于刷机态的 MTK 口 `authorized=0`，普通态(2046)手机不受影响；刷完 try/finally 恢复。口径按代际分档（v1.3.20）：V5 = {0003,2000,2001,201c,2026,3000}（历史全量），V6 = {0003,2000,2001,2026,3000}（`201c` 是正常 adb 态，压制它只会把邻机推进 preloader，见 #3690 与 run 921）。无 serial / 无写权限 / 非 Linux 时跳过并记录原因 |
 | `max_attempts` | 2（cap 4) | 整链路重试环（每次 = 重启 + flash_tool + 等结果）；launch 类环境错误立即终止不重试；attempt>1 先退避再重画门控（authorized 只对当前设备实例生效） |
 | `retry_backoff_seconds` | 10 | 相邻尝试间隔，负值钳 0 |
 | `strict_env_check` | false | 启动前置检：可执行位 / ldd 缺库 / adb（流程需要时）/ ttyACM 写入路径（规则形态：`MODE="0660"` + `GROUP="dialout"` 为新形态，legacy `0666` 接受但告警；并判 Agent 用户是否属 dialout）。前三者硬失败在拿锁前短路；ttyACM 不明默认仅 WARNING，strict 升级为失败 |
