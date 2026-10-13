@@ -2045,7 +2045,7 @@ def test_post_completion_persist_success_clears_failure_count_3700():
 
 
 def test_run_post_completion_async_records_persist_outcome_3700(monkeypatch):
-    """执行侧入口按返回值记数：False +1，True 清零。"""
+    """执行侧入口：非推迟 False +1，True 清零。"""
     from backend.services import post_completion as pc
 
     pc.reset_post_completion_persist_failure_state_for_tests()
@@ -2060,6 +2060,11 @@ def test_run_post_completion_async_records_persist_outcome_3700(monkeypatch):
     monkeypatch.setattr(
         pc, "run_post_completion", lambda jid, db: next(outcomes),
     )
+    # 非推迟失败：pending=False 才计入额度（v1.2）。
+    monkeypatch.setattr(
+        "backend.services.case_result_ingest.case_result_ingest_pending",
+        lambda db, jid: False,
+    )
 
     pc.run_post_completion_async(job_id)
     assert pc.get_post_completion_persist_failure_count(job_id) == 1
@@ -2067,3 +2072,48 @@ def test_run_post_completion_async_records_persist_outcome_3700(monkeypatch):
     assert pc.get_post_completion_persist_failure_count(job_id) == 2
     pc.run_post_completion_async(job_id)
     assert pc.get_post_completion_persist_failure_count(job_id) == 0
+
+
+def test_deferred_unread_false_does_not_consume_cutoff_budget_3700(
+    db_session, monkeypatch,
+):
+    """B7: 不可读推迟的 False 不计入额度；截止后变为可读仍可补偿入队。"""
+    from backend.services import post_completion as pc
+
+    now = datetime.now(timezone.utc)
+    monkeypatch.setattr(recycler, "_sched", lambda: _DeferredFillCfg())
+    _reset_readable_cutoff_state()
+    cutoff_ids, _fresh_id = _seed_deferred_orphans(db_session, now=now, cutoff_count=1)
+    job_id = cutoff_ids[0]
+
+    class _DB:
+        def close(self):
+            return None
+
+    monkeypatch.setattr("backend.core.database.SessionLocal", lambda: _DB())
+    monkeypatch.setattr(pc, "run_post_completion", lambda jid, db: False)
+
+    # 截止前多次「不可读 → 推迟」：不得消耗可读截止额度。
+    monkeypatch.setattr(
+        "backend.services.case_result_ingest.case_result_ingest_pending",
+        lambda db, jid: True,
+    )
+    for _ in range(5):
+        pc.run_post_completion_async(job_id)
+    assert pc.get_post_completion_persist_failure_count(job_id) == 0
+
+    # 截止后变为可读：第一个周期仍应被入队。
+    monkeypatch.setattr(
+        "backend.services.case_result_ingest.case_result_ingest_pending",
+        lambda db, jid: False,
+    )
+    enqueued: list[str] = []
+
+    def _capture(task, **kw):
+        enqueued.append(kw.get("key") or task)
+        return True
+
+    monkeypatch.setattr("backend.core.task_queue.enqueue_sync", _capture)
+    recycler._fill_deferred_post_completions(db_session, now)
+    assert f"pc:{job_id}" in enqueued
+    assert job_id not in recycler._defer_cutoff_readable_exhausted
