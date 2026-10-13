@@ -220,10 +220,25 @@
 | 刷后核验 | `post_flash_verify.current == target == P535AA-HONOR-NX2-16-261013V21`、`boot_stable.ok=true`（`boot_completed=1`，稳定 20.2s）、`device_reenumerated=true` |
 | 全链 | `flash_preflight → flash_firmware → oobe_skip → ensure_root → check_device` 五步全 `success=true`，run 929 `SUCCESS` |
 
-**结论分层**：V6 平台链路刷机 = **已跑通（1 台）**。这不再只是手动取证；`preflight` 也确认
-`nfs-firmware-pointer` 指向 V21。仍未取证的两项：① hub 嵌套口（`1-5.x.y` 形态）上 `-p` 的
-匹配形态；② 混跑窗口（同 host 有其它作业在跑）下的 V6 表现——本轮 `.86` 派发时全平台
-`RUNNING` 作业数为 0。
+**结论分层**：V6 平台链路刷机 = **已跑通并已批量验证**。这不再只是手动取证；`preflight` 也确认
+`nfs-firmware-pointer` 指向 V21。
+
+**批量实测（同 host 9 台，run 932 / plan 81，2026-10-13 21:38–22:19）**：`SUCCESS`，
+9 job 全 `COMPLETED`（8 台真刷 + 1 台 `skipped` 走 `skip_if_current`），整批 **41 分 22 秒**
+——刷机锁同 host 串行，均摊 ~4.6 分钟/台。逐台判据：
+
+| 目标口 | 口位形态 | 结果 |
+|---|---|---|
+| `1-7` / `1-12` / `1-10` / `1-13` | 直连 | 全 `success`，`bound_port == 目标口` |
+| `1-5.1.2`(run 931) / `1-5.3.3` / `1-5.2.4` / `1-5.1.4` / `1-5.4.1` | **hub 嵌套** | 全 `success`，`bound_port == 目标口` |
+
+⇒ **上面①「hub 嵌套口的 `-p` 形态」已取证关闭**（5 台实测，含 `1-5.x.y` 两级 hub 口）。
+门控在 9 个 job 里全部是 `gate_pid_scope=brom`：7 个 `hidden=[]`（正常态邻机一台没压），
+另 2 个各压了现场那台异常机（`1-5.2.2`、`1-8`），**9 个 job 全 `aborted=null`**，批量结束后
+该 host 10 个 MTK 口全部回到 `201c auth=1` 且 serial 可读——零残留、零邻机伤害。
+
+仍未取证的一项：**混跑窗口**（同 host 同时有其它专项在跑）下的 V6 表现——这两轮 `.86`
+派发时该 host 上没有其它作业（全平台仅一个开关机专项在跑，且经 job 逐台比对不落在 `.86`）。
 
 **顺带发现（已开 [#3702](https://github.com/DUElost/stability-test-platform/issues/3702)）**：刷机后设备回到总线的**首拍**慢指标落在首启未稳窗口里，
 `battery_level` / `temperature` 被记成 `0`，而 `_slow_sample_interval` 默认 `1800s`
