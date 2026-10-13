@@ -113,7 +113,7 @@ OPEN 停下，Owner 确认 B5 已过 D9 后继续；前端源码与线上 B5 前
   - `42e09d25-20261013` 携带的前端为 `CuUVyo6q`（14:48 构建，早于 15:03 换包），与事实 1 一致。
 - 未独立重查：DB 中 1.3.20 的注册行与 48 台分布（需登录生产 API），以 agy 的 scan 响应与 15:05 查询为据。
 - 2026-10-14 实跑证据（本会话执行）：
-  - 选机：单台详情返回 `172-21-15-100`、`.101` 的 `active_job_count` 各为 13，`.102` 为 0；
+  - 选机：单台详情返回 `172-21-x-x`、`.101` 的 `active_job_count` 各为 13，`.102` 为 0；
   - canary `.102`：`{"ok":true,"converged":true,"reason":"digest-matched","code_version":"fb08e34f"}`；调用时刻 00:18:19，
     立即查询 `last_heartbeat` 为 00:18:04，40 秒后再查为 00:19:04；
   - 批量 `SUMMARY ok=14 converged=14 fail=0 skipped=34`，分布 `total=48 matched=48`；
