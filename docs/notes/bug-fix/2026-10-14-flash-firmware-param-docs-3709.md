@@ -60,8 +60,9 @@ runner 实测 `memory.max=6442450944`、`memory.swap.max=0`。
   `./scripts/project_python.sh scripts/run_pytest.py backend/tests/services/test_param_docs_content.py backend/tests/services/test_param_docs_registry.py -q`。
 - `./scripts/project_python.sh -m ruff check backend/tests/services/test_param_docs_content.py`：通过。
 - 确定性包身份核对：两文件重建 SHA 与 manifest 登记相等，未修改发布单元。
-- `./scripts/project_python.sh scripts/run_gates.py check:quick`：pending。
-- 精确 PR head 的六项 required CI 与完整后端信息性 CI：pending。
+- `./scripts/project_python.sh scripts/run_gates.py check:quick`：**16 gates / exit 0**，含新增 Note 后补验。
+- 精确 PR head 的六项 required CI 与完整后端信息性 CI：提交时 pending，
+  最终 head 的结果另回填本单 PR 与 issue。
 - 熟悉刷机脚本者独立内容复核：pending，PR 保持 Draft。
 - 合入与线上说明生效：pending，生产未修改。
 
