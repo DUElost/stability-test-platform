@@ -318,3 +318,70 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/plans/<PLAN_ID>/run -H "$AUTH" \
    > `…0226` 同形。此形态下远程无法复位（`authorized` 需 root，`stp-agent-priv
    > usb-authorized` 只接受提权调用），所以要**把 `oobe_skip` / `ensure_root` 紧跟在刷机步之后**
    > （别拖到 adb 窗口关掉），并把「现场按电源/重插」当作已知兜底动作写进放量前检查。
+
+
+## 8. 发布后核验（新版本是否真的生效，四步全过才算）
+
+适用条件：§7 的第 7 步（publish 脚本包 + scan）做完之后。**合入 / scan 都不算生效**——
+判据是下面四条都绿（2026-10-13 本族 1.3.19/1.0.7 就是按这四条收口的）。
+
+1. 站点包源与 Git 登记逐包对账（缺包/字节不符都会在这里露出来）。
+
+   ```bash
+   python - <<'PY'
+   import hashlib, json
+   from pathlib import Path
+   g = json.loads(Path("tool_manifest.json").read_text(encoding="utf-8"))
+   root = Path("/mnt/stp-aee/packages")
+   for fam in ("flash_firmware", "flash_preflight", "flashtool", "flashtool_v6"):
+       latest = [v for v in g["tools"][fam]["versions"] if not v["retired"]][-1]
+       p = root / fam / f"{latest['version']}.tar.gz"
+       ok = p.exists() and hashlib.sha256(p.read_bytes()).hexdigest() == latest["package_sha256"]
+       print(f"{fam}@{latest['version']} sha相符={ok}")
+   PY
+   ```
+
+   预期：四行全部 `sha相符=True`。
+2. 注册面对账：head 版本没有「待激活」项。
+
+   ```bash
+   python -m backend.scripts.check_unreferenced_script_versions --pending-activation
+   ```
+
+   预期：不再列出 `flash_firmware@1.3.19` / `flash_preflight@1.0.7`。
+   注：`kind=tool` 族（`flashtool*` / `aimonkey`）会被记成 `unregistered`——该视图按 `script`
+   行对账，工具族本就没有 script 行，别把它当成本族的滞后账。
+3. 库内激活态确认（`is_active` 才是派发依据）。
+
+   ```bash
+   curl -s -H "$AUTH" "http://127.0.0.1:8000/api/v1/scripts" \
+     | jq -r '.data[] | select(.name|startswith("flash")) | "\(.name)@\(.version) active=\(.is_active)"'
+   ```
+
+   预期：`flash_firmware@1.3.19`、`flash_preflight@1.0.7` 均 `active=true`。
+4. 刷机 host 侧可核验拉取（逐台重采，覆盖工具包预热）。
+
+   ```bash
+   for H in <NX2 host 列表>; do
+     curl -s -X POST -H "$AUTH" "http://127.0.0.1:8000/api/v1/script-presence/refresh?host_id=$H" \
+       | jq -r '.data | "\(.host_id) \(.counts)"'
+   done
+   ```
+
+   预期：每台 `missing=0`、`mismatch=0`。`present/n_a` 计数只覆盖被 Plan 引用的版本，
+   所以第 2/3 步不能省。
+
+## 9. 重指存量计划的代价（V5/V6 同版本共存带来的一笔）
+
+`flash_firmware@1.3.19` 与 `flash_preflight@1.0.7` 同时声明 `flashtool`（V5）与
+`flashtool_v6`（V6），而 D7 是**声明即必达**：任一刷机步骤派发前，两代工具包都要在该 host
+核验拉取。于是把 552 在用计划从 1.3.18/1.0.6 重指到新版，等于让那些 host 多拉
+55.7MB（解包 139MB）。
+
+- 追平账目：`python -m backend.scripts.check_unreferenced_script_versions --plan-step-drift`
+  会列出仍钉旧版的活跃 Plan 步骤（2026-10-13 实测：plan 39/40/59/61/62/68 等）。
+- 重指前按 #3030 口径过参数/预算契约核对（`metadata_compatible` ≠ 安全）；
+- 不追平的代价：552 计划继续用 1.3.18，**拿不到 v6 分支的任何修复**（本单的
+  `caught_brom` 代际判据、后续门控修正同理）。
+- 想拆掉这笔耦合：只让 `flash_firmware` 声明 `flashtool_v6`、`flash_preflight` 退回
+  warning-only（代价是 V6 断链只能在刷机步暴露，而不是 preflight）。

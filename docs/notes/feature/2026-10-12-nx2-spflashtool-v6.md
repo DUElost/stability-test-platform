@@ -188,11 +188,40 @@ MLD_NX2（项目 535，板级 P535AA / MT6835）的刷机包由 **SP Flash Tool 
   保留 `MLD_LX2`/`MLD_LX3`（原文件备份在会话产物里）。**踩坑**：第一次用
   `tempfile.NamedTemporaryFile` 落盘得到 0600，CIFS 上 Agent 用户读不到指针 → 改为
   显式 `chmod 0644` + `os.replace`（Runbook §7 第 5 步已写死这条）。
-- **没有**：`--publish` 脚本包、`POST /scripts/scan`、建/重指 Plan、刷任何设备、改中心存储
-  既有目录。所有 NX2 设备当前被 run 906（plan 78「MLD_NX2-开关机专项-18H」，18:09 起）以
-  `active_lease` 占住，且真机刷机还额外要求 ③ 的合入前置：控制面部署树的
-  `tool_manifest.json` 没有 1.3.19/1.0.7 条目时 scan 看不见它们 → **合入 + 控制面发布是
-  真机 canary 的前置**；顺序红线不变（`flashtool_v6` 包必须先于 scan/重指就位，现已就位）。
+- **当时没有**：`--publish` 脚本包、`POST /scripts/scan`、建/重指 Plan、刷任何设备、改中心存储
+  既有目录。（当时控制面部署树的 `tool_manifest.json` 里没有 1.3.19/1.0.7，scan 结构上看不见
+  它们 → 合入 + 控制面发布是真机链路的前置；顺序红线：`flashtool_v6` 包必须先于 scan 就位。）
+
+合入之后（2026-10-13，Owner 授权「合入 / 重挂 18H / 三台待现场排查」之后做的事）：
+
+- `--publish`：落 `flash_firmware@1.3.19`、`flash_preflight@1.0.7`（其余 33 族同字节跳过）；
+  三包逐包 `sha256sum` == Git 登记，派生副本 `packages/manifest.json` 随发布同步；
+- 控制面发布：`build_bundle.py` 出 rev `80c446fc`（`schema_target=b2c3d4e5f6a7` 与库内 head
+  相同 → 无迁移）；新 rev `venv/` 按 `--require-hashes -r backend/requirements.lock` 装，
+  归一化比对 **lock=77 缺装=无 版本不一致=无**（多的只有 `pip` 种子包）；`.env.backend` 指
+  树内 `../env.backend`，`logs/`、`tools/ansible/inventory.ini` 到位；`current` 原子切换 +
+  `systemctl restart stability-backend` → `/health` healthy / unit `active`（回滚位 `fbb5ec61`）；
+- `POST /api/v1/scripts/scan`：**created=2、conflicts=0**，`package_missing` 不含本次三包；
+  库内 `flash_firmware@1.3.19` / `flash_preflight@1.0.7` 均 `is_active=true`；参数元数据与
+  在用 1.3.15/1.3.18 同形（scan 建行为空 schema——本族一直靠 `default_params`/param_docs
+  承载，不在本单改这个形态）；
+- 四台 NX2 host 各一轮 `POST /script-presence/refresh`：**missing=0 / mismatch=0**
+  （present 17–22，其余 n/a）→ 新脚本版本与工具包在这些 host 上可核验拉取；
+- 重挂 18H：run 920（plan 78，11 台 ONLINE 设备）init 11/11 → patrol，抽验 `…0138`
+  `boot_count 92→94`、`ServiceRecord=1` → 循环确实恢复；排除待现场的三台
+  （`…0235`/928、`…0226`/934、`…0172`）。
+
+仍未做（各有理由，别记成已完成）：
+
+- **552 在用刷机计划没有重指**：`--plan-step-drift` 仍列 plan 39/40/59/61/62/68 等
+  `flash_firmware 1.3.18 → 1.3.19`、`flash_preflight 1.0.6 → 1.0.7`。重指会让这些 host 也去拉
+  `flashtool_v6`（+55.7MB 下载 / +139MB 盘）——「一版脚本同时声明两代工具」的代价；
+  是否追平归 Owner，追平前按 #3030 过参数/预算契约核对。
+- **平台侧 V6 首刷 canary（刷机 → `oobe_skip` → `ensure_root` 紧跟）仍未跑**：
+  928 停在 `0e8d:2046` 无 adb，需现场恢复后才能验「首刷后设备能否回到可测态」。
+- `--pending-activation` 把 `flashtool` / `flashtool_v6` / `aimonkey` 记为 `unregistered`：
+  该视图按 `script` 行对账，`kind=tool` 族本就没有 script 行（V5 的 `flashtool` 同样被列出），
+  属既有口径，不在本单顺手改判据。
 
 ## Revisit
 
