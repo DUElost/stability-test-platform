@@ -56,8 +56,13 @@ V6（`SPFlashToolV6`）在 Linux 上默认启用四道判据，V5 分支逐字�
   **同 host 9 台 `201c` 邻机未被压制**；`aborted=null`；`attempts=1` `outcome=ok`
   `exit_code=0`；`post_flash_verify.current == target`；`boot_stable.ok=true`；
   刷机步 302.46s；五步链 `preflight→flash→oobe_skip→ensure_root→check_device` 全绿，run `SUCCESS`。
-- **仍未做的验证**：① hub 嵌套口（`1-5.x.y` 形态）上 `-p` 的匹配形态未取证——canary 刻意选
-  直连口；② 混跑窗口（同 host 有其它作业在跑）下的 V6 表现，派发时全平台 RUNNING 作业数为 0；
+- **批量已验证（run 932 / plan 81，同 host 9 台，41m22s 全绿）**：8 台真刷 + 1 台 `skipped`；
+  其中 **5 台是 hub 嵌套口（`1-5.x.y`）**，逐台 `bound_port == 目标口`、`aborted=null`；9 个 job
+  的门控都是 `gate_pid_scope=brom`，7 个 `hidden=[]`，另 2 个只压了现场异常机
+  （`1-5.2.2` / `1-8`）；批量后该 host 10 个 MTK 口全部 `201c auth=1` 且 serial 可读。
+  ⇒ 原先记在这里的「hub 形态未取证」一项**已关闭**。
+- **仍未做的验证**：① 混跑窗口（同 host 有其它专项在跑）下的 V6 表现，两轮派发时该 host 上
+  都没有其它作业；
   ③ run 921 受害的两台 `AHFFNX69****0169` / `****0224` 仍滞留 `0e8d:2000`，等现场长按电源/重插
   （本轮无新增伤害：这次邻机没有被压制）。
 
