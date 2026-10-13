@@ -11,8 +11,8 @@ USB 规则 + 依赖包」必须由门禁守住：
 2. `update_agent.yml`：opt-in provisioning 段——每个任务都受
    `agent_ensure_flash_prereqs` 门控，且**位于升级门禁释放之后**（失败不得
    让门禁悬挂，#1249 教训）；
-3. `group_vars/linux_hosts.yml`：包集合与 `flash_preflight._DEFAULT_PACKAGES`
-   逐项一致；
+3. `group_vars/linux_hosts.yml`：V5 包集合与 `flash_preflight._DEFAULT_PACKAGES`
+   逐项一致，V6 包集合与 `flash_preflight._V6_PACKAGES` 逐项一致（535/NX2 代际）；
 4. 四个面的规则文本与 `flash_preflight` **最新版本**的两个形态常量逐字一致
    （#2284：0660+dialout 与 0666 并存，车队升级渐进不破链）；Android USB 规则
    的两个形态由本文件常量锁定（#3493 无 preflight 判据面）。
@@ -125,9 +125,10 @@ def test_install_script_package_list_matches_preflight():
     match = re.search(r"for pkg in ([^;]+); do", text)
     assert match, "install_agent.sh 未找到包循环"
     packages = match.group(1).split()
-    assert packages == list(pf._DEFAULT_PACKAGES), (
-        "install 链包集合必须与 flash_preflight._DEFAULT_PACKAGES 同源："
-        f"{packages} vs {list(pf._DEFAULT_PACKAGES)}"
+    expected = list(pf._DEFAULT_PACKAGES) + list(pf._V6_PACKAGES)
+    assert packages == expected, (
+        "install 链包集合必须与 flash_preflight 的 V5+V6 包集合同源："
+        f"{packages} vs {expected}"
     )
     assert "AGENT_SKIP_FLASH_PREREQ_PKGS" in text, "需提供离线精装跳过开关"
     assert "${pkg}t64" in text, "Debian 13 t64 改名需要兜底（同 preflight）"
@@ -177,7 +178,7 @@ def test_update_playbook_covers_dialout_rule_packages():
     pf = _load_preflight()
     text = UPDATE_PLAYBOOK.read_text(encoding="utf-8")
     assert re.search(r"groups: dialout", text)
-    assert "agent_flash_prereq_packages | join(' ')" in text
+    assert "(agent_flash_prereq_packages + agent_flash_prereq_packages_v6) | join(' ')" in text
 
     rule_tasks = [
         t for t in tasks
@@ -236,6 +237,9 @@ def test_group_vars_package_list_matches_preflight():
     pf = _load_preflight()
     data = yaml.safe_load(GROUP_VARS.read_text(encoding="utf-8"))
     assert data["agent_flash_prereq_packages"] == list(pf._DEFAULT_PACKAGES)
+    assert data["agent_flash_prereq_packages_v6"] == list(pf._V6_PACKAGES), (
+        "V6 代际包集合必须与 flash_preflight._V6_PACKAGES 逐项一致"
+    )
     assert data["agent_ensure_flash_prereqs"] is False, "默认必须关闭（opt-in）"
 
 
@@ -256,7 +260,7 @@ def test_ensure_flash_prereqs_playbook_matches_preflight_udev():
     }
     text = ENSURE_PLAYBOOK.read_text(encoding="utf-8")
     assert "groups: dialout" in text
-    assert "agent_flash_prereq_packages | join(' ')" in text
+    assert "(agent_flash_prereq_packages + agent_flash_prereq_packages_v6) | join(' ')" in text
     assert "stp-agent-priv restart" in text
 
 

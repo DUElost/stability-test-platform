@@ -51,6 +51,12 @@
       "env_key": "STP_FLASH_TOOL_DIR",
       "consumer_families": ["flash_firmware", "flash_preflight"],
       "note": "ADR-0051 D7：消费族新版本 capabilities.json 声明 requires_tools；工具包根合法落在 tools_cache，工具版本真源见 tool_manifest.json（本契约不复制版本）。"
+    },
+    {
+      "tool_family": "flashtool_v6",
+      "env_key": "STP_FLASH_TOOL_V6_DIR",
+      "consumer_families": ["flash_firmware", "flash_preflight"],
+      "note": "535 / MLD_NX2 代际（2026-10）：SP Flash Tool V6 包根（入口 SPFlashToolV6）。与 flashtool@V5 同一 D7 机制，工具版本真源同样只在 tool_manifest.json。"
     }
   ],
   "extra_scan_files": [
@@ -400,6 +406,28 @@
       ],
       "kind": "deploy_source",
       "note": "code tarball 以本部署 backend 下 agent 为源（排除 resources/scripts）；bundle=release/backend/agent，不是远端 APK 根。"
+    },
+    {
+      "id": "A27",
+      "role": "Flash 执行族 V6 工具根定位",
+      "file": "backend/agent/scripts/flash_firmware/flash_firmware.py",
+      "locators": [{"type": "function", "name": "_locate_flash_tool_v6_dir"}],
+      "kind": "tool_root",
+      "family": "flash_firmware",
+      "tool_family": "flashtool_v6",
+      "env_key": "STP_FLASH_TOOL_V6_DIR",
+      "note": "param flash_tool_v6_dir > STP_FLASH_TOOL_V6_DIR（requires_tools 注入的包根）> selector 原样解压布局（V5 根内/兄弟的 SP_Flash_Tool_V6）> 族树相对 fallback。代际由固件版本目录 manifest.json 的 tool_generation 决定，v5 仍走 A19。"
+    },
+    {
+      "id": "A28",
+      "role": "Flash 前置族 V6 工具根候选序列",
+      "file": "backend/agent/scripts/flash_preflight/flash_preflight.py",
+      "locators": [{"type": "function", "name": "_flashtool_v6_candidates"}],
+      "kind": "tool_root",
+      "family": "flash_preflight",
+      "tool_family": "flashtool_v6",
+      "env_key": "STP_FLASH_TOOL_V6_DIR",
+      "note": "STP_FLASH_TOOL_V6_DIR > A20 各 V5 候选的 selector 布局兄弟 > 族树相对 fallback；与 flash_firmware 的 A27 同优先级，两侧判据不得分叉（preflight 说在位而刷机步找不到＝假通过）。"
     }
   ]
 }

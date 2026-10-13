@@ -93,7 +93,7 @@ agent_secret: >-
 # 或控制面主机页「刷机前置」→ ensure_flash_prereqs.yml（强制执行，不依赖本开关）。
 agent_ensure_flash_prereqs: false
 
-# flash_tool 依赖的 Qt/X 运行库（与 flash_preflight._DEFAULT_PACKAGES 同源，
+# flash_tool V5 依赖的 Qt/X 运行库（与 flash_preflight._DEFAULT_PACKAGES 同源，
 # 由 tests/test_flash_provisioning_prereqs_2133.py 锁定一致性）。
 agent_flash_prereq_packages:
   - libice6
@@ -101,5 +101,16 @@ agent_flash_prereq_packages:
   - libxrender1
   - libfontconfig1
   - libglib2.0-0
+# SP Flash Tool **V6** 代际（535/MLD_NX2 等）的运行库：`ldd SPFlashToolV6` 相对
+# V5 多出的 GL 面与 KRB5 面（Qt5 本体在包内 lib/，不是系统前置）。与
+# flash_preflight._V6_PACKAGES 同源；V5 五件不得被这组替代（两代并存期都要装）。
+agent_flash_prereq_packages_v6:
+  - libcom-err2
+  - libgl1
+  - libglvnd0
+  - libglx0
+  - libgssapi-krb5-2
+  - libkeyutils1
+  - libkrb5-3
 
 # 进程日志轮转（#2205）变量已移至 group_vars/all.yml（#2218：两面共享）。

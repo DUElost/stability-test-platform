@@ -284,7 +284,9 @@ def test_sudo_nopasswd_item_is_gone(monkeypatch, capsys, tmp_path):
     payload = _run(capsys)
     names = {i["check"] for i in payload["metrics"]["items"]}
     assert "sudo-nopasswd" not in names
-    assert names == {"qt-libs", "flashtool", "udev-rule", "dialout-group",
+    # v1.0.7 加 flashtool-v6 / v6-shared-libs 两项（535 V6 代际），其余条目名不变
+    assert names == {"qt-libs", "v6-shared-libs", "flashtool", "flashtool-v6",
+                     "udev-rule", "dialout-group",
                      "priv-face", "nfs-firmware-pointer"}
 
 

@@ -932,7 +932,7 @@
           echo "SKIP: non-dpkg host"; exit 0
         fi
         missing=""
-        for pkg in {{ agent_flash_prereq_packages | join(' ') }}; do
+        for pkg in {{ (agent_flash_prereq_packages + agent_flash_prereq_packages_v6) | join(' ') }}; do
           if ! pkg_installed "$pkg"; then
             case "$pkg" in
               *-0) pkg_installed "${pkg}t64" || missing="$missing $pkg" ;;
