@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MeaningHelpTooltip } from './MeaningHelpTooltip';
 
@@ -30,5 +30,28 @@ describe('MeaningHelpTooltip', () => {
     await user.tab();
     expect(screen.getByRole('button', { name: '硬顶的说明' })).toHaveFocus();
     expect(await screen.findByRole('tooltip')).toHaveTextContent(meaning);
+  });
+
+  it('触屏点按可打开完整释义，再次点按可关闭', async () => {
+    const user = userEvent.setup();
+    const meaning = '触屏可读的完整释义。';
+    render(<MeaningHelpTooltip label="等待秒数" meaning={meaning} />);
+
+    const trigger = screen.getByRole('button', { name: '等待秒数的说明' });
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+
+    await user.pointer([
+      { keys: '[TouchA>]', target: trigger },
+      { keys: '[/TouchA]' },
+    ]);
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(meaning);
+
+    await user.pointer([
+      { keys: '[TouchA>]', target: trigger },
+      { keys: '[/TouchA]' },
+    ]);
+    await waitFor(() => {
+      expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+    });
   });
 });
