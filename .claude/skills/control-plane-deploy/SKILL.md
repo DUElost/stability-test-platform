@@ -5,8 +5,8 @@ description: 生产控制面部署与 Agent 热更新操作 SOP。触发时机�
 
 # 控制面部署与 Agent 热更新 SOP
 
-> **状态：除 2026-10-12 新增并标 `⚠️待校对` 的条目（§0.5、§1 步 2 补充、§1.5 警告与依赖安装）外，全文已真机校准**（最近一次端到端：2026-09-22；两处历史遗留的
-> 待校对项——§6 的 SP Flash Tool 依赖行与 §3 的带外资源身份——已于同日实机验证并收口，逐条见
+> **状态：除标 `⚠️待校对` 的两条（§0.5 阶段 C 第 1 步的选机查询、§1.5 的前端回滚命令）外，全文已真机校准**（最近一次端到端：2026-10-13，首次按 §0.5 实跑；2026-09-22 的两处历史遗留
+> 待校对项——§6 的 SP Flash Tool 依赖行与 §3 的带外资源身份——已于当日实机验证并收口，逐条见
 > §7 校准记录）。**校准有保质期**：任何一条若与现场不符，请按「实跑→改文→同 PR 追加 §7 行」
 > 的顺序更新——校准来自实跑，不来自推演。
 > 权威细节：`docs/operations/agent-version-and-hot-update.md`、
@@ -41,12 +41,12 @@ curl -s http://127.0.0.1:8000/health      # health 路由（非 /api/v1/health�
   会让 `jq '.data.ok'` 恒为 null）；`/scripts/scan`、`/script-presence/*` 这些才是 `{data: …}`。
   可参考已跑通的抽验脚本（token → 目标 host → force 热更新 → 断言 `priv_mode`）：`/tmp/stp-acc/verifyD_sample.sh`（临时产物，机器重建即失）。
 
-## 0.5 端到端编排（⚠️待校对）
+## 0.5 端到端编排（✅ 2026-10-13 首次实跑校准）
 
 适用条件：一次部署同时包含共享检出（`/home/debian13/stability-test-platform`，多会话共用的 git 检出）
 同步到 main、前后端换版、服务重启、DB 迁移与 Agent fleet 热更新。
-本节规定顺序、闸门、停顿点与报告项；各段命令见 §1–§3。阶段 A 第 1、5、7、9、10、11 步的命令已于
-2026-10-12 只读实跑；其余步骤按代码核对写成，下次真实部署按本节跑通后在 §7 追加行并解除本标记。
+本节规定顺序、闸门、停顿点与报告项；各段命令见 §1–§3。2026-10-13 首次按本节完成一次端到端部署
+（`80c446fc`→`42e09d25`），校准结果见 §7；仍标 `⚠️待校对` 的步骤是那次之后新写的。
 
 发起示例（授权由 Owner 在每次部署请求中给出）：
 `/control-plane-deploy 部署 origin/main；授权本次切换 current、重启、reload nginx 与热更新；阶段 A 后停`。
@@ -55,6 +55,9 @@ curl -s http://127.0.0.1:8000/health      # health 路由（非 /api/v1/health�
 > 重启 `stability-backend`、reload nginx 与 Agent 热更新；执行者不得沿用其他对话或其他部署中的授权。
 > 没有授权时，执行者必须停在阶段 A 第 14 步，把切换命令和回滚命令交给 Owner。
 > Harness 拦截阶段 B、C 的命令时，执行者不得换工具、拆分命令或换路径重试，必须把命令交给 Owner 执行。
+
+如果 Harness 的每条命令都在新 shell 中执行（2026-10-13 的 agy 实跑即如此），执行者必须在每条命令里
+重新设置用到的变量（`BASE`、`TOK`、`AUTH`）。
 
 ### 阶段 A：只读检查与构建
 
@@ -122,14 +125,21 @@ curl -s http://127.0.0.1:8000/health      # health 路由（非 /api/v1/health�
 按顺序执行以下步骤：
 
 1. 按 §1 步 4 切换 `current` 并重启 `stability-backend`。
-   预期：`systemctl is-active stability-backend` 输出 `active`；`curl -s http://127.0.0.1:8000/health`
-   返回健康状态。unit 启动成功即表示 `ExecStartPre` 已执行迁移，且 alembic 精确位于 head。
+   预期：`systemctl is-active stability-backend` 输出 `active`；
+   `timeout 30 sh -c 'until curl -sf http://127.0.0.1:8000/health; do sleep 1; done'` 退出码为 0 并输出健康状态。
+   重启后端口要过几秒才开始监听，紧接着的单次 `curl` 会以退出码 7 失败（2026-10-13 实跑），因此本步用轮询判定。
+   unit 启动成功即表示 `ExecStartPre` 已执行迁移，且 alembic 精确位于 head。
 2. 如果第 1 步未达预期，停止本流程，执行回滚命令并报告 Owner。
 3. 按 §0 取 admin token，并设 `AUTH="Authorization: Bearer $TOK"`。
 4. 如果阶段 A 第 10 步列出了 `backend/agent/scripts/` 或 `tool_manifest.json`，按 §2 运行 scan。
-   预期：响应中 `conflicts` 与 `package_missing` 均为空。
-5. 如果 scan 响应的 `package_missing` 非空，停止本流程，请 Owner 决定是否 `--publish`。
-6. 按 §1.5 代码块中 `cd $REPO/frontend` 起的各行换前端包并 reload nginx。
+   预期：`conflicts` 为空；`package_missing` 只含 #3661 登记的存量条目（#3661 关闭后应为空）。
+5. 如果 `package_missing` 含 #3661 以外的条目，停止本流程，请 Owner 决定是否 `--publish`。
+6. 如果 Owner 同意发包，按 §2 运行 `--publish`。
+   `--publish` 只为每个族落最新登记版本，补不齐 #3661 的历史版本（2026-10-13 实跑：新落位 1、同字节跳过 34）。
+   预期：输出的「新落位」含本次新增的版本。
+7. 如果第 6 步发了包，重跑第 4 步的 scan。
+   预期：本次新增的版本计入 `created`；`package_missing` 回到 #3661 的存量条目。
+8. 按 §1.5 代码块中 `cd $REPO/frontend` 起的各行换前端包并 reload nginx。
    预期：`curl -s http://127.0.0.1/ | grep -o 'assets/index-[^"]*\.js'` 与
    `/tmp/stp-deploy/frontend/dist/index.html` 中的入口文件名相同。
 
@@ -137,19 +147,24 @@ curl -s http://127.0.0.1:8000/health      # health 路由（非 /api/v1/health�
 
 按顺序执行以下步骤：
 
-1. 按 §3 代码块注释 1) 对一台 ONLINE 主机做 canary 热更新。
-   预期：响应顶层 `"ok": true`。
-2. 如果响应是 `HOST_HAS_ACTIVE_JOBS`，换一台主机重做第 1 步；执行者不得加 `abort_running_jobs`（§3）。
-3. 查询 canary 主机：
+1. 选一台没有活跃 job 的 ONLINE 主机（⚠️待校对）：
+   `curl -s -H "$AUTH" http://127.0.0.1:8000/api/v1/hosts/<host_id> | jq '{status, active_job_count}'`。
+   列表接口 `GET /api/v1/hosts` 不填充 `active_jobs`（恒为空列表），执行者不得用它判断主机忙闲。
+   预期：`status` 为 `ONLINE`，`active_job_count` 为 0。
+2. 按 §3 代码块注释 1) 对第 1 步选出的主机做 canary 热更新。
+   预期：响应顶层 `"ok": true`。新 rev 与基线的 `agent-code` 摘要相同时，响应是 `digest-matched`，
+   canary 不改变主机（2026-10-13 实跑）。
+3. 如果响应是 `HOST_HAS_ACTIVE_JOBS`，回到第 1 步换一台主机；执行者不得加 `abort_running_jobs`（§3）。
+4. 查询 canary 主机：
    `curl -s -H "$AUTH" http://127.0.0.1:8000/api/v1/hosts/<host_id> | jq -r '[.status, .agent_code_sync_status, .last_heartbeat] | @tsv'`。
    预期：`ONLINE`、`matched`，`last_heartbeat` 晚于热更新完成时间。
-4. 如果第 3 步未达预期，停止本流程并报告 Owner。
-5. 按 §3 代码块注释 2) 运行 `batch_hot_update --direct`。如果阶段 A 第 10 步列出了
+5. 如果第 4 步未达预期，停止本流程并报告 Owner。
+6. 按 §3 代码块注释 2) 运行 `batch_hot_update --direct`。如果阶段 A 第 10 步列出了
    `backend/services/agent_env_sync.py`，或本次部署改了站点 `env.backend` 中同步到 Agent 的键，加 `--force`（§3）。
    预期：`SUMMARY` 行 `fail=0`。
-6. 统计同步状态分布（显式带 `limit`：不带分页参数时列表最多返回 50 台）：
+7. 统计同步状态分布（显式带 `limit`：不带分页参数时列表最多返回 50 台）：
    `curl -s -H "$AUTH" 'http://127.0.0.1:8000/api/v1/hosts?limit=200' | jq -r '"total=\(.total) " + (.items | group_by(.agent_code_sync_status) | map("\(.[0].agent_code_sync_status)=\(length)") | join(" "))'`。
-   预期：`total` 不超过 200；除第 5 步跳过的忙碌主机外均为 `matched`。
+   预期：`total` 不超过 200；除第 6 步跳过的忙碌主机外均为 `matched`。
 
 ### 报告
 
@@ -157,10 +172,10 @@ curl -s http://127.0.0.1:8000/health      # health 路由（非 /api/v1/health�
 
 - `BASE`、目标提交与新 rev 目录；
 - 阶段 A 各闸门的结论与 WARN；
-- 后端重启结果与 scan 响应摘要；
+- 后端重启结果与 scan 响应摘要（`package_missing` 必须原样列出，并注明哪些属于 #3661 的存量条目）；
 - 前端入口文件名（换包前、换包后）；
 - 热更新 `SUMMARY` 行、同步状态分布，以及被跳过的忙碌主机清单（PlanRun 结束后重跑同一命令补齐）；
-- 未完成项（标为 pending）与回滚命令；
+- 未完成项（标为 pending）与回滚命令（前端回滚必须用 §1.5 的双 rename 命令）；
 - 本节与现场不符之处（按本文头部要求在 §7 追加行）。
 
 ## 1. 控制面后端更新与 DB 迁移（本机即生产控制面，**bundle 发布根形态**）
@@ -184,7 +199,7 @@ curl -s http://127.0.0.1:8000/health      # health 路由（非 /api/v1/health�
    自 ADR-0040 D8 R3 退役，bundle 不再携带也不再要求 `backend/agent/resources/`）即部署内容地址；构建机本地态由
    `find_forbidden_bundle_entries` fail-closed（#2269/#3112 在 bundle 形态的替身）。
 
-   以下四条为 2026-10-12 按代码核对的补充（⚠️待校对）：
+   以下四条为 2026-10-12 按代码核对的补充（2026-10-13 实跑校准）：
 
    - 构建者必须让 `--out` 指向不存在的目录：`build_bundle` 以合并方式复制（`copytree(dirs_exist_ok=True)`），
      目标目录里上游已删除的文件会留在 bundle 中并进入摘要。如果 `stp-releases/<rev>` 已存在，
@@ -266,7 +281,7 @@ curl -s http://127.0.0.1:8000/health      # health 路由（非 /api/v1/health�
 `10-0-15-{ip末段}`，等价变换验证过 6 FK 表 + 2 快照列，详见 Agent Note
 `docs/notes/bug-fix/2026-08-28-align-host-id-with-ip.md`）。
 
-## 1.5 前端静态资源部署（✅ 2026-08-27 真机校准；下方警告与依赖安装行 ⚠️待校对）
+## 1.5 前端静态资源部署（✅ 2026-08-27 真机校准；`npm ci` 行 2026-10-13 实跑校准；回滚命令 ⚠️待校对）
 
 nginx 站点 `stability-platform` root 指向仓库内 `frontend/dist-prod`
 （gitignore 排除、无 CI 自动发布）——部署 = 干净 worktree 构建 + 目录原子替换：
@@ -291,6 +306,17 @@ sudo systemctl reload nginx
 **`/tmp` 是 tmpfs**：直接 `mv /tmp/stp-deploy/frontend/dist dist-prod` 是**跨文件系统
 拷贝而非 rename**，会给 nginx 留一段「目录已就位但文件没拷完」的窗口。必须先
 `cp -a` 到仓库同盘再做双 rename（`df --output=source /tmp <repo>` 一眼可辨）。
+
+> 警告：执行者不得用单个 `mv dist-prod.bak-<时间戳> dist-prod` 回滚前端。`dist-prod` 已存在时，`mv` 会把备份移进它里面，
+> 线上前端不变，回滚静默失败（2026-10-13 的部署报告给出过这条命令，临时目录模拟已复现）。
+
+回滚前端用与换包同形的双 rename（⚠️待校对：命令语义已在临时目录验证，尚未在生产执行）：
+
+```bash
+cd $REPO/frontend
+mv dist-prod dist-prod.rollback-$(date +%Y%m%d-%H%M) && mv dist-prod.bak-<时间戳> dist-prod
+sudo systemctl reload nginx
+```
 
 构建 env：仓库无 `.env.production`，`client.ts` 里 `baseURL` 硬编码 `/api/v1`，
 所以裸 `npm run build` 即同源包，不需要设 `VITE_API_BASE_URL`。
@@ -421,6 +447,7 @@ PYTHONPATH=. venv/bin/python -m backend.scripts.batch_hot_update --direct
 | 2026-10-10 | **修正 §3 忙碌判定**（上表 09-23 的「经 `device.host_id` join」）：同日 `--direct` 已按 `job_instance.host_id` 跳过 37 台，原结论不成立；以平台判定为准。依据 #3669 | #3669 静态复核（`git show 28e24185`） |
 | 2026-10-12 | **新增 §0.5 端到端编排**（阶段 A 只读检查与构建 → 停顿点 → 阶段 B 先后端后前端 → 阶段 C 热更新 → 报告项）；§1 步 2 补「`--out` 必须是新目录」「`DO-NOT-SWITCH.txt` 约定」「bundle 内前端是构建时线上副本」「守卫 schema 检查回落 dev env」；§1.5 补「共享检出不得跑 `build:prod`」警告，依赖安装改 `npm ci`。阶段 A 第 1、5、7、9、10、11 步已只读实跑（`BASE=fbb5ec61`、目标 `bb4f2340`：批次查询得 `#3653 OPEN`，标记查询得 `43dfc764` 一条，无新增迁移、无 scan/`--force` 判据文件；守卫与就绪检查导出站点 env 后均 exit 0）。其余条目 ⚠️待校对，下次真实部署按 §0.5 跑通后解除 | 代码核对（`build_bundle.py`、`check-deploy-readiness.py`、`check_alembic_at_head.py`、`routes/hosts.py`）+ 本次只读实跑 + Agent Note `docs/notes/process/2026-10-12-control-plane-deploy-orchestration.md` |
 | 2026-10-12 | **更正同日新增条目的两处表述**：① §0.5 阶段 A 第 11 步前的警告原写「否则得到的是 dev 库的通过结论」。核对时仓根与站点 env 的 `DATABASE_URL` 相同，不导出时查的仍是生产库；问题在于检查目标不受站点配置约束，改为「结论不能代表生产库」（#3693）。② §1 步 2 补充原写「nginx 不读它」，只对本机成立：站点安装 S2 会把 bundle 前端落到部署根并由站点 nginx 服务，改为限定本机并引 #3694 | 两份 env 只比较 `DATABASE_URL` 是否相等（未打印取值）+ `tools/site_config/stages.py` 的 `stage_s2_release_env` 与 `deploy/control-plane/nginx/stability-platform.conf` |
+| 2026-10-13 | **§0.5 首次端到端实跑**（agy 会话 `e88117d0`，`80c446fc`→`42e09d25`；Owner 两次确认：阶段 A 后「继续」、scan 缺包后「同意发包」）：后端切到 `42e09d25-20261013`，发布并注册 `flash_firmware@1.3.20`，前端 `CuUVyo6q`→`D7Kfzdo6`，批量 `SUMMARY ok=16 converged=12 fail=0 skipped=32`，分布 48/48 `matched`。据此校准：① 重启后紧接的单次 `curl` 退出码 7，阶段 B 第 1 步改为 30 秒轮询；② scan 的 `package_missing` 含 #3661 的存量 7 条，`--publish` 只落各族最新版本、补不齐它们，判据改为「只含 #3661 存量」，并补「同意发包后重跑 scan」一步；③ 列表接口不填充 `active_jobs`（agy 据此选中的 canary 实有 13 个活跃 job，因摘要未变成了空操作），阶段 C 新增按单台详情选机一步；④ 部署报告给出的前端回滚命令是单个 `mv`，会把备份套进 `dist-prod`，§1.5 补双 rename 回滚命令与警告；⑤ agy 每条命令是新 shell，补「重设变量」规则；报告项补「`package_missing` 原样列出」。§0.5 与 §1 步 2 补充解除待校对；新写的选机查询与回滚命令仍标 ⚠️待校对 | agy 会话转录与 `tasks/task-110.log`（只读）+ 部署后只读核对（`current`、`/health`、前端入口、包 sha）+ 轮询命令对线上 `/health` 实测 + 回滚命令的临时目录模拟 + `routes/hosts.py`（单台详情才填 `active_job_count`） |
 
 ## 踩坑守卫（负向约束）
 

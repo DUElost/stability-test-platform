@@ -36,6 +36,23 @@ Class: process
    指回旧 rev 会启动失败，跨迁移回滚不能只靠重指 `current`。
 6. `GET /api/v1/hosts` 不带分页参数时仍按默认 `limit=50` 截断；fleet 超过 50 台时裸数组会漏主机。
 
+### 2026-10-13 首次实跑校准
+
+§0.5 第一次真实运行由 agy 会话 `e88117d0` 完成（`80c446fc`→`42e09d25`，Owner 在阶段 A 后回复「继续」、
+在 scan 缺包后回复「同意发包」）。部署结果正确；按实跑与事后核对，skill 做了以下校准（§7 有对应行）：
+
+- 阶段 B 第 1 步：重启后紧接的单次 `curl` 以退出码 7 失败，改为 30 秒轮询 `/health`。
+- 阶段 B 第 4–7 步：scan 的 `package_missing` 恒含 #3661 的存量 7 条（未退役、无 Plan 引用的历史版本），
+  `--publish` 只落各族最新版本、补不齐它们。判据改为「只含 #3661 存量」，并补「同意发包后重跑 scan」。
+  agy 当时把这 7 条说成「已退役」（它的 jq 路径写错、查询为空，等于没验证），最终报告还删掉了这个字段；
+  报告项因此补了「`package_missing` 原样列出」。
+- 阶段 C 第 1 步（新增，⚠️待校对）：列表接口不填充 `active_jobs`，agy 按它选中的 canary 实有 13 个活跃 job；
+  因为 `agent-code` 摘要未变，热更新返回 `digest-matched`，成了空操作。改为按单台详情的 `active_job_count` 选机。
+- §1.5（新增回滚命令，⚠️待校对）：agy 报告给出的前端回滚命令是单个 `mv dist-prod.bak-… dist-prod`，
+  `dist-prod` 已存在时会把备份套进去、线上不变。补了双 rename 回滚命令与警告。
+- §0.5 引言：agy 每条命令是新 shell，`TOK` 不跨命令保留（首次 canary 因此 `Authentication required`），
+  补「每条命令重设变量」规则。
+
 ## Alternatives
 
 - **新建「一条龙部署」skill**：弃。与 `control-plane-deploy` 抢同一批触发词，调用被分流后容易出现零调用的空壳
@@ -69,18 +86,30 @@ Class: process
   `tools/dev/check-deploy-readiness.py`（`_database_url`）、`tools/dev/check_alembic_at_head.py`
   （`--allow-behind` 语义）、`systemctl cat stability-backend`（`ExecStartPre` 不带 `--allow-behind`）、
   `backend/api/routes/hosts.py`（`list_hosts` 默认 `limit=50`）、`backend/api/schemas/base.py`（`PaginatedResponse`）。
-- 阶段 B、C 未实跑（会改变生产状态），相关条目标 `⚠️待校对`。
+- 阶段 B、C 在 2026-10-12 未实跑（会改变生产状态），当时标 `⚠️待校对`；2026-10-13 的实跑证据见本节末尾。
 - 同日更正：首版把事实 1、4 写成「nginx 不读」「不导出就是对 dev 库给出通过结论」。随后只比较两份 env 的
   `DATABASE_URL` 是否相等（未打印取值），结果相同；`tools/site_config/stages.py` 的 `stage_s2_release_env`
   与 `deploy/control-plane/nginx/stability-platform.conf` 表明站点安装会服务 bundle 前端。两处已在后续 PR 中按实更正，
   skill §7 追加了更正行。
 - 写作约定：新写与改动的句子按 `writing-conventions.md` §5 自查。
 - 测试与门禁结果见 PR 描述。
+- 2026-10-13 实跑校准的证据：
+  - agy 会话转录与 `tasks/task-110.log`（只读）：批量日志含 `SUMMARY ok=16 converged=12 fail=0 skipped=32`，
+    实际部署的 4 台为 `.83`–`.86`，其余处理过的主机为 `digest-matched`；
+  - 部署后只读核对：`current` → `42e09d25-20261013`，后端 14:55:42 起 active、`NRestarts=0`，`/health` 正常，
+    线上与磁盘前端入口均为 `D7Kfzdo6`，`flash_firmware/1.3.20.tar.gz` 的 sha256 与 manifest 一致；
+  - manifest 中 #3661 的 7 个版本均为 `retired=false`；
+  - 轮询命令对线上 `/health` 实测退出码 0，对不通端口 30 秒后退出码 124；
+  - 回滚命令在临时目录模拟：单个 `mv` 把备份套进 `dist-prod/`、内容不变，双 rename 换回旧内容并保留新版本；
+  - `backend/api/routes/hosts.py`：单台详情传入 db 才填 `active_job_count`，列表接口不传；
+  - `42e09d25-20261013` 携带的前端为 `CuUVyo6q`（14:48 构建，早于 15:03 换包），与事实 1 一致。
+- 未独立重查：DB 中 1.3.20 的注册行与 48 台分布（需登录生产 API），以 agy 的 scan 响应与 15:05 查询为据。
 
 ## Revisit
 
-- 下一次真实部署按 §0.5 跑通后，在 skill §7 追加校准行并解除 `⚠️待校对`；与现场不符处同 PR 修正。
+- 新写的两条（阶段 C 第 1 步选机查询、§1.5 回滚命令）在下一次真实部署或真实回滚中跑通后，在 skill §7 追加行并解除 `⚠️待校对`。
+- #3661 关闭后（补发或退役），把阶段 B 第 4–7 步的判据改回「`package_missing` 为空」。
 - 如果 `build_bundle` 改为按目标提交构建前端，或 nginx root 改指发布根（#3694），修订 §1 步 2 补充与 §1.5。
 - 如果两个检查工具不再回落到仓根 `.env.backend`（#3693），简化阶段 A 第 11 步前的警告。
 - 如果批次 issue 标题前缀（「批次 B」）或单元 PR 的 `Refs #` 约定变化，同步修订阶段 A 第 5 步。
-- fleet 超过 200 台时，阶段 C 第 6 步的分布统计改为分页累加。
+- fleet 超过 200 台时，阶段 C 第 7 步的分布统计改为分页累加。
