@@ -222,6 +222,12 @@ MLD_NX2（项目 535，板级 P535AA / MT6835）的刷机包由 **SP Flash Tool 
   「首刷后设备能否回到可测态」= **能**：设备回 ONLINE/adb=device，档案版本已是 V21。
   唯一未收口的是电量/温度慢指标在首拍被记成 0（另立 #3702，与本单的 V6 判据无关）。
   928 停在 `0e8d:2046` 无 adb，仍需现场恢复后才能验它那一台。
+- **V6 批量已跨 host 完成（2026-10-13/14）**：`.86` 9 台（run 932，41m22s）+ `.83` 11 台 /
+  `.84` 10 台（plan 82 下 run 934、935 并行，54m14s / 57m58s），**21 台逐台
+  `bound_port == 目标口`、`aborted=null`**，收场后各 host MTK 口全回 `201c auth=1`、
+  `0e8d:2000` 归零。车队累计 31 台 V21 / 19 台 V9（`.85` 14 台未动，其中 2 台仍滞留
+  preloader 等现场）。批量暴露的预算规则见设计文档 §9：`flash` 步 `timeout_seconds`
+  必须按「单台房时间 × 该 host 设备数 × 2」重算（实测尾部设备等锁后达 3440s）。
 - `--pending-activation` 把 `flashtool` / `flashtool_v6` / `aimonkey` 记为 `unregistered`：
   该视图按 `script` 行对账，`kind=tool` 族本就没有 script 行（V5 的 `flashtool` 同样被列出），
   属既有口径，不在本单顺手改判据。
