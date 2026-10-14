@@ -1,0 +1,20 @@
+{
+  "collected_at_utc": "2026-10-14T09:11:23Z",
+  "method": "sudo mkdir /sys/fs/cgroup/stp-r1-hardcap; echo 3221225472 > memory.max; echo 0 > memory.swap.max; move pid into cgroup.procs",
+  "cgroup_path": "/sys/fs/cgroup/stp-r1-hardcap",
+  "memory_max_bytes": 3221225472,
+  "memory_max_human": "3GiB",
+  "memory_swap_max_bytes": 0,
+  "memory_high": "max",
+  "memory_current_after_all_bytes": 99438592,
+  "memory_peak_bytes": 1182744576,
+  "verified_finite": true,
+  "alternatives_failed": {
+    "systemd_user": "Failed to connect to bus: No medium found / systemctl --user offline",
+    "systemd_system": "System has not been booted with systemd as init system (PID 1)",
+    "docker": "docker: command not found",
+    "nested_under_workload_cgroup": "Permission denied writing memory.max (nsdelegate; subtree memory not writable for child under workload)"
+  },
+  "NODE_OPTIONS_also_used": "--max-old-space-size=2048",
+  "note": "Primary hard cap is cgroup v2 memory.max=3221225472 (finite). NODE_OPTIONS is additional V8 heap cap, not a substitute."
+}

@@ -1,0 +1,10 @@
+=== hardcap_after_browser_utc ===
+2026-10-14T09:09:57Z
+memory.max=3221225472
+
+memory.swap.max=0
+
+memory.current=82857984
+
+memory.peak=1182744576
+

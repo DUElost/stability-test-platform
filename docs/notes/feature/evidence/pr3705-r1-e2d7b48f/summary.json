@@ -1,0 +1,48 @@
+{
+  "evidence_dir": "docs/notes/feature/evidence/pr3705-r1-e2d7b48f",
+  "verification_tip": "e2d7b48fca6743e6c0f633758069874617591480",
+  "product_tree": "265461eec77e7da0d59ddec2e4e7ad8ffc02d61b",
+  "tip_product_relation": "tip e2d7b48f is docs/evidence-only ahead of product fix 265461ee; frontend/ identical to 265461ee",
+  "hardcap": {
+    "memory_max_bytes": 3221225472,
+    "memory_swap_max_bytes": 0,
+    "memory_peak_bytes": 1182744576,
+    "cgroup_path": "/sys/fs/cgroup/stp-r1-hardcap"
+  },
+  "browser": {
+    "touchPass": true,
+    "desktopPass": true,
+    "report_head": "e2d7b48fca6743e6c0f633758069874617591480",
+    "pageerrors": [],
+    "entries": {
+      "editor": {
+        "open": true,
+        "close": true,
+        "reopen": true
+      },
+      "list": {
+        "open": true,
+        "close": true,
+        "reopen": true
+      },
+      "inspector": {
+        "open": true,
+        "close": true,
+        "reopen": true
+      }
+    },
+    "businessWrites": []
+  },
+  "vitest": {
+    "files": 11,
+    "passed": 208,
+    "exit": 0,
+    "maxWorkers": 2
+  },
+  "typecheck_exit": 0,
+  "check_quick": {
+    "gates": 16,
+    "exit": 0
+  },
+  "draft": true
+}

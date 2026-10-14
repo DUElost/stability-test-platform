@@ -1,0 +1,14 @@
+=== hardcap_before_utc ===
+2026-10-14T09:09:30Z
+path=/sys/fs/cgroup/stp-r1-hardcap
+memory.max=3221225472
+
+memory.swap.max=0
+
+memory.high=max
+
+memory.current=4096
+
+memory.peak=3158016
+
+cgroup.procs:
