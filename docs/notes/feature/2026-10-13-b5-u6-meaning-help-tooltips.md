@@ -37,8 +37,8 @@ Tooltip 上受控开合即可，否决扩大面。
 
 ## Verification
 
-绑定最终 head `b68835049b91522dc7683c783843abeda0d8a762`（产品修复
-`265461eec77e7da0d59ddec2e4e7ad8ffc02d61b`；浏览器/vitest/quick 对着该产品树实跑后落文档）。
+产品修复 head `265461eec77e7da0d59ddec2e4e7ad8ffc02d61b`（浏览器 / vitest / type-check /
+check:quick 对着该产品树实跑）。PR tip 以 GitHub 当前 head 为准（其后仅文档 SHA 回填）。
 证据目录（本机，不入库）：`/tmp/pr3705-r1-verify/`；关键截图副本
 `/opt/cursor/artifacts/pr3705-r1/`。
 
