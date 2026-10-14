@@ -1,0 +1,66 @@
+{
+  "head": "e2d7b48fca6743e6c0f633758069874617591480",
+  "touchPass": true,
+  "desktopPass": true,
+  "touchResults": [
+    {
+      "entry": "editor",
+      "open": true,
+      "closed": true,
+      "reopen": true,
+      "box": {
+        "x": 39,
+        "y": 226,
+        "width": 320,
+        "height": 60
+      }
+    },
+    {
+      "entry": "list",
+      "open": true,
+      "closed": true,
+      "reopen": true,
+      "box": {
+        "x": 24,
+        "y": 307,
+        "width": 168,
+        "height": 28
+      }
+    },
+    {
+      "entry": "inspector",
+      "open": true,
+      "closed": true,
+      "reopen": true,
+      "box": {
+        "x": 0,
+        "y": 418,
+        "width": 312,
+        "height": 28
+      }
+    }
+  ],
+  "desktopResults": [
+    {
+      "entry": "editor",
+      "hover": true,
+      "focus": true,
+      "esc": true
+    },
+    {
+      "entry": "list",
+      "hover": true,
+      "focus": true,
+      "esc": true
+    },
+    {
+      "entry": "inspector",
+      "hover": true,
+      "focus": true,
+      "esc": true
+    }
+  ],
+  "pageerrors": [],
+  "businessWrites": [],
+  "valueUnchanged": true
+}

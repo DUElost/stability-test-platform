@@ -1,0 +1,4 @@
+
+> stability-test-platform@1.0.0 type-check
+> tsc --noEmit && tsc --noEmit -p tsconfig.node.json
+
