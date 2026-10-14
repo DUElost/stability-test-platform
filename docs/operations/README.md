@@ -29,7 +29,7 @@
 | [`device-log-event-recovery.md`](./device-log-event-recovery.md) | 无 DLE 行的存量事件目录补录与重提取 |
 | [`host-device-visibility-triage.md`](./host-device-visibility-triage.md) | 设备从 adb 消失 / 页面上「在线 vs USB」差值的四层判别（内核 · adb server · adbd · USB 功能集），含只读命令与 2026-09-14 实证 |
 | [`honor-flash-runbook.md`](./honor-flash-runbook.md) | Honor 刷机：固件上架（manifest/latest.json）、MLD 刷机 Plan、单台验证与放量 |
-| [`powercycle-chain-disarm-runbook.md`](./powercycle-chain-disarm-runbook.md) | 开关机专项：中止后「链路是否真解除」的核验与处置（可达/不可达设备、一台一 run、交付前拦截）；过渡措施，出口为 ADR-0061 D5 生效 |
+| [`powercycle-chain-disarm-runbook.md`](./powercycle-chain-disarm-runbook.md) | 开关机专项：中止后「链路是否真解除」的核验与处置（可达/不可达设备、一台一 run、交付前拦截）；过渡措施，出口为 ADR-0061 阶段 B 生效 |
 | [`linux-agent-ansible-runbook.md`](../linux-agent-ansible-runbook.md) | Ansible 批量 |
 | [`wsl-linux-agent-setup.md`](../wsl-linux-agent-setup.md) | WSL 联调 |
 | [`tools/ansible/README.md`](../../tools/ansible/README.md) | Playbook 说明 |
