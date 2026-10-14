@@ -8,6 +8,7 @@ import type {
 import { PIPELINE_EDITOR, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { ParameterProjectionList } from '@/components/parameters/ParameterProjectionList';
+import { MeaningHelpTooltip } from '@/components/parameters/MeaningHelpTooltip';
 import {
   WATCHER_EDITABLE_KEYS,
   WATCHER_ON_UNAVAILABLE_VALUES,
@@ -106,12 +107,18 @@ function NumberSettingField({
   const hintId = useId();
   const [draft, setDraft] = useState<string | null>(null);
   const [invalid, setInvalid] = useState(false);
+  const tooltipBody = [meaning || '正在读取设置说明', fallback].filter(Boolean).join(' ');
+  const showClearHint = !invalid && value == null && !!clearHint;
+  const describedBy = invalid || showClearHint ? hintId : undefined;
   return (
     <div className="grid gap-1" data-testid={testId}>
-      <label className={cn('text-[11px] font-bold uppercase tracking-wide', TEXT.subtitle)}>
-        {label}
-        {unit ? <span className="ml-1 font-normal normal-case">（{unit}）</span> : null}
-      </label>
+      <div className={cn('flex items-center gap-1 text-[11px] font-bold uppercase tracking-wide', TEXT.subtitle)}>
+        <label className="min-w-0">
+          {label}
+          {unit ? <span className="ml-1 font-normal normal-case">（{unit}）</span> : null}
+        </label>
+        <MeaningHelpTooltip label={label} meaning={tooltipBody} />
+      </div>
       <input
         type="text"
         inputMode="numeric"
@@ -119,7 +126,7 @@ function NumberSettingField({
         placeholder={placeholder}
         disabled={readOnly}
         aria-label={label}
-        aria-describedby={hintId}
+        aria-describedby={describedBy}
         aria-invalid={invalid || undefined}
         onChange={(e) => {
           const raw = e.target.value;
@@ -138,13 +145,27 @@ function NumberSettingField({
         }}
         className={cn('h-7 px-2 text-[12px]', PIPELINE_EDITOR.inputInline)}
       />
-      <p id={hintId} className={cn('text-[11px] leading-snug', TEXT.subtitle)}>
-        {invalid ? '请输入 ≥1 的整数，或留空。' : null}
-        {!invalid && (meaning || '正在读取设置说明')}
-        {!invalid && fallback ? ` ${fallback}` : ''}
-        {!invalid && value == null && clearHint ? ` ${clearHint}` : ''}
-      </p>
+      {invalid || showClearHint ? (
+        <p id={hintId} className={cn('text-[11px] leading-snug', TEXT.subtitle)}>
+          {invalid ? '请输入 ≥1 的整数，或留空。' : clearHint}
+        </p>
+      ) : null}
       {!invalid ? <ProjectionStateHint item={stateItem} /> : null}
+    </div>
+  );
+}
+
+function SettingLabelWithHelp({
+  label,
+  meaning,
+}: {
+  label: string;
+  meaning?: string;
+}) {
+  return (
+    <div className={cn('flex items-center gap-1 text-[11px] font-bold uppercase tracking-wide', TEXT.subtitle)}>
+      <span>{label}</span>
+      {meaning ? <MeaningHelpTooltip label={label} meaning={meaning} /> : null}
     </div>
   );
 }
@@ -329,10 +350,10 @@ export function PlanSettingsEditor({
 
         <div className="flex items-center justify-between py-1">
           <div>
-            <div className={cn('text-[11px] font-bold uppercase tracking-wide', TEXT.subtitle)}>
-              {enabledMeta?.label ?? '异常采集开关'}
-            </div>
-            <p className={cn('text-[11px]', TEXT.subtitle)}>{enabledMeta?.meaning}</p>
+            <SettingLabelWithHelp
+              label={enabledMeta?.label ?? '异常采集开关'}
+              meaning={enabledMeta?.meaning}
+            />
             <ProjectionStateHint
               item={enabledMeta}
               unsetHint="控件未按下不等于确定关闭；写入只反映计划显式事实"
@@ -372,9 +393,10 @@ export function PlanSettingsEditor({
         </div>
 
         <label className="grid gap-1">
-          <span className={cn('text-[11px] font-bold uppercase tracking-wide', TEXT.subtitle)}>
-            {onUnavailMeta?.label ?? '采集不可用时'}
-          </span>
+          <SettingLabelWithHelp
+            label={onUnavailMeta?.label ?? '采集不可用时'}
+            meaning={onUnavailMeta?.meaning}
+          />
           <select
             value={editable.on_unavailable ?? ''}
             disabled={readOnly}
@@ -401,15 +423,14 @@ export function PlanSettingsEditor({
               </option>
             ))}
           </select>
-          <span className={cn('text-[11px]', TEXT.subtitle)}>{onUnavailMeta?.meaning}</span>
           <ProjectionStateHint item={onUnavailMeta} />
         </label>
 
         <div className="grid gap-2" data-testid="plan-watcher-paths">
-          <div className={cn('text-[11px] font-bold uppercase tracking-wide', TEXT.subtitle)}>
-            {pathsMeta?.label ?? '采集路径'}
-          </div>
-          <p className={cn('text-[11px]', TEXT.subtitle)}>{pathsMeta?.meaning}</p>
+          <SettingLabelWithHelp
+            label={pathsMeta?.label ?? '采集路径'}
+            meaning={pathsMeta?.meaning}
+          />
           <ProjectionStateHint item={pathsMeta} />
           {WATCHER_PATH_CATEGORIES.map((cat) => {
             const paths = editable.paths?.[cat] ?? [];
@@ -455,10 +476,10 @@ export function PlanSettingsEditor({
         </div>
 
         <div className="grid gap-1" data-testid="plan-watcher-required-categories">
-          <div className={cn('text-[11px] font-bold uppercase tracking-wide', TEXT.subtitle)}>
-            {requiredMeta?.label ?? '必需日志分类'}
-          </div>
-          <p className={cn('text-[11px]', TEXT.subtitle)}>{requiredMeta?.meaning}</p>
+          <SettingLabelWithHelp
+            label={requiredMeta?.label ?? '必需日志分类'}
+            meaning={requiredMeta?.meaning}
+          />
           <ProjectionStateHint
             item={requiredMeta}
             unsetHint="全未勾选不等于确定无必需分类；未显式设置时沿投影回落"

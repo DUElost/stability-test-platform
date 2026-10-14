@@ -1,0 +1,49 @@
+{
+  "evidence_dir": "docs/notes/feature/evidence/pr3705-r1-f796d8ba",
+  "tip_before_evidence_commit": "f796d8ba699a150ec5d5c7a4a0ec61ff11322c0a",
+  "product_fix": "265461eec77e7da0d59ddec2e4e7ad8ffc02d61b",
+  "browser_report_recorded_head": "5f7b389689d5e1c4c7210591c7888fe69831b11d",
+  "browser": {
+    "touchPass": true,
+    "desktopPass": true,
+    "pageerrors": [],
+    "viewport": { "width": 390, "height": 844 },
+    "isMobile": true,
+    "hasTouch": true,
+    "entries": {
+      "editor": { "open": true, "close": true, "reopen": true },
+      "list": { "open": true, "close": true, "reopen": true },
+      "inspector": { "open": true, "close": true, "reopen": true }
+    },
+    "businessWrites": [],
+    "valueUnchanged": true
+  },
+  "mutation": {
+    "red_exit": 1,
+    "red_tests": "1 failed | 3 passed (4)",
+    "green_exit": 0,
+    "green_tests": "4 passed (4)",
+    "restored": true
+  },
+  "vitest": { "files": 11, "passed": 208, "exit": 0, "maxWorkers": 2 },
+  "typecheck_exit": 0,
+  "check_quick": { "gates": 16, "exit": 0 },
+  "memory": {
+    "cgroup": "/system.slice/pod-…/cursor-agent/workload",
+    "memory_max_ancestors": "all max (unlimited)",
+    "memory_current_workload_bytes": 2717982720,
+    "systemd_user_bus": "unavailable (Failed to connect to bus: No medium found)",
+    "MemTotal_kB": 16387416,
+    "SwapTotal_kB": 0,
+    "NODE_OPTIONS_used": "--max-old-space-size=2048",
+    "v8_heap_size_limit_with_cap_bytes": 2197815296,
+    "v8_heap_size_limit_baseline_bytes": 4345298944,
+    "note": "NODE_OPTIONS caps V8 heap only; not a cgroup RSS MemoryMax"
+  },
+  "backend_informational_5f7b3896": {
+    "conclusion": "success",
+    "passed": 4074,
+    "skipped": 1
+  },
+  "draft": true
+}

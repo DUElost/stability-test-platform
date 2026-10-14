@@ -1,4 +1,5 @@
 import { render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { ParameterProjectionList } from './ParameterProjectionList';
 import type { ParameterItem, ParameterProjection, ParameterState } from '@/utils/api/types';
@@ -90,7 +91,8 @@ function projection(overrides: Partial<ParameterProjection> = {}): ParameterProj
 }
 
 describe('ParameterProjectionList', () => {
-  it('shows value or state, source, layer, and meaning for each of the five states', () => {
+  it('shows value or state, source, layer, and meaning help for each of the five states', async () => {
+    const user = userEvent.setup();
     render(<ParameterProjectionList projection={projection()} />);
     expect(screen.getByTestId('parameter-layer')).toHaveTextContent('L1');
     const labels: Record<ParameterState, string> = {
@@ -104,13 +106,18 @@ describe('ParameterProjectionList', () => {
       const row = screen.getByText(`状态-${state}`).closest('[data-testid="parameter-item"]');
       expect(row).not.toBeNull();
       const view = within(row as HTMLElement);
-      expect(view.getByText(`${`状态-${state}`}的含义`)).toBeInTheDocument();
+      const meaning = `${`状态-${state}`}的含义`;
+      expect(view.queryByText(meaning)).not.toBeInTheDocument();
+      expect(view.getByRole('button', { name: `状态-${state}的说明` })).toBeInTheDocument();
       expect(view.getByTestId('parameter-value')).toHaveTextContent(
         state === 'explicit' ? '确定值' : labels[state],
       );
       expect(view.getAllByText(labels[state]).length).toBeGreaterThan(0);
       expect(view.getByText('L1')).toBeInTheDocument();
     }
+    const firstHelp = screen.getByRole('button', { name: '状态-explicit的说明' });
+    await user.hover(firstHelp);
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('状态-explicit的含义');
     expect(screen.getAllByText('模式默认').length).toBeGreaterThan(0);
     expect(screen.getAllByText('脚本默认').length).toBeGreaterThan(0);
     expect(screen.getAllByText('派发填入').length).toBeGreaterThan(0);

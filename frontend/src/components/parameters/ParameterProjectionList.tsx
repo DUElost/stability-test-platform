@@ -1,5 +1,6 @@
 import { TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
+import { MeaningHelpTooltip } from '@/components/parameters/MeaningHelpTooltip';
 import type {
   ParameterItem,
   ParameterProjection,
@@ -43,8 +44,10 @@ function ItemRow({ item, layer }: { item: ParameterItem; layer: string }) {
   const source = item.source ? SOURCE_LABEL[item.source] : '来源不可追溯';
   return (
     <div className="border-t px-3 py-2 text-xs" data-testid="parameter-item">
-      <div className="font-medium">{item.label}</div>
-      <p className={cn('mt-0.5', TEXT.subtitle)}>{item.meaning}</p>
+      <div className="flex items-center gap-1 font-medium">
+        <span>{item.label}</span>
+        <MeaningHelpTooltip label={item.label} meaning={item.meaning} />
+      </div>
       <dl className="mt-1 grid gap-1 sm:grid-cols-2">
         <div>
           <dt className={TEXT.subtitle}>值 / 状态</dt>

@@ -1,0 +1,36 @@
+
+> stability-test-platform@1.0.0 test
+> vitest --run --maxWorkers=2 src/components/parameters/MeaningHelpTooltip.test.tsx src/components/parameters/PlanSettingsEditor.test.tsx src/components/parameters/ParameterProjectionList.test.tsx src/components/parameters/PlanSettingsReadonly.test.tsx src/components/pipeline/PlanStepInspector.test.tsx src/pages/execution/PlanExecutePage.test.tsx src/components/execution/plan-execute/DispatchCockpit.test.tsx src/components/execution/plan-execute/PlanStepList.test.tsx src/components/pipeline/PlanCanvas.test.tsx src/pages/orchestration/PlanEditPage.test.tsx src/components/plan-run/PlanSnapshotDrawer.test.tsx
+
+
+ RUN  v5.0.0 /workspace/frontend
+
+ ✓ src/components/pipeline/PlanStepInspector.test.tsx (53 tests) 1262ms
+ ✓ src/components/parameters/PlanSettingsEditor.test.tsx (12 tests) 712ms
+ ✓ src/pages/orchestration/PlanEditPage.test.tsx (16 tests) 746ms
+ ✓ src/components/pipeline/PlanCanvas.test.tsx (37 tests) 625ms
+ ✓ src/components/parameters/ParameterProjectionList.test.tsx (5 tests) 500ms
+   ✓ ParameterProjectionList (5)
+     ✓ shows value or state, source, layer, and meaning help for each of the five states 430ms
+ ✓ src/components/parameters/MeaningHelpTooltip.test.tsx (4 tests) 461ms
+   ✓ MeaningHelpTooltip (4)
+     ✓ 渲染带 aria-label 的帮助图标；释义默认不常显为静态段落 337ms
+ ✓ src/pages/execution/PlanExecutePage.test.tsx (67 tests) 8380ms
+   ✓ PlanExecutePage host 维度新鲜度（#2599） (2)
+     ✓ host 记录缺失的节点判为「未知」而不是在线（fail-closed），且容量未知可见 332ms
+   ✓ PlanExecutePage (64)
+     ✓ restores draft selection and step after a remount 455ms
+     ✓ keeps the draft when dispatch fails with 503 466ms
+ ✓ src/components/plan-run/PlanSnapshotDrawer.test.tsx (8 tests) 266ms
+ ✓ src/components/execution/plan-execute/DispatchCockpit.test.tsx (2 tests) 159ms
+ ✓ src/components/parameters/PlanSettingsReadonly.test.tsx (2 tests) 129ms
+ ✓ src/components/execution/plan-execute/PlanStepList.test.tsx (2 tests) 111ms
+
+ Test Files  11 passed (11)
+      Tests  208 passed (208)
+   Start at  09:10:04
+   Duration  11.46s (tests 63%, environment 22%, import 7%, transform 5%, setup 3%)
+
+    Isolate  11 workers spawned · ~516ms startup each (spawn + environment, per file)
+             at least ~2.32s faster with isolate: false — reuses workers across files instead of one per file
+
