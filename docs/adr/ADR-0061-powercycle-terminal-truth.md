@@ -1,6 +1,7 @@
 # ADR-0061: 开关机链路的"已解除"必须是设备侧事实——teardown 结果不得被"跑完了"替代
 
 - 状态：Proposed
+- 归属域：n/a（Proposed 终态语义尚未登记归属表；Owner 接受 D1–D5 后再补 semantic-ownership 键）
 - 版本记录：
   - v0.1 2026-10-14 起草（[#3714](https://github.com/DUElost/stability-test-platform/issues/3714)：
     `MLD_NX2-开关机专项-18H`（plan 78）两次中止后，5 台设备在 23 小时后仍在自主开关机，
