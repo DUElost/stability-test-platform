@@ -379,7 +379,7 @@
       "label": "初始 USB 门控范围",
       "meaning": "选择初始门控及每次失败重试前重新门控时隐藏的非目标 MTK 口：brom 使用 PID 集合 0003/2000/2001/3000/2026，不含 201c；full 使用历史集合，额外包含 201c。优先取步骤参数，再取 STP_FLASH_GATE_PID_SCOPE；去空白并转小写后为空时，V6 且 Linux 默认 brom，其它情况默认 full。",
       "unit": "字符串（brom 或 full）",
-      "cautions": "未知非空字符串未被拒绝，而是按 full 处理；full 可能压制处于正常 ADB 态的 201c 邻机。只在 Linux、gate_other_mtk 开启且目标口已确定时门控生效；后续门控保持使用固定的 0003/2000/2001/3000 集合，本参数不控制全流程所有 USB 门控。",
+      "cautions": "未知非空字符串未被拒绝，而是按 full 处理；full 可能压制处于正常 ADB 态的 201c 邻机。门控函数只在 Linux 且目标口已确定时工作；只有初始门控受 gate_other_mtk 控制，失败重试前和保持阶段不检查该开关，关闭它不保证完全停止门控。后续门控保持使用固定的 0003/2000/2001/3000 集合，本参数不控制全流程所有 USB 门控。",
       "sensitive": false,
       "version_range": {
         "min_inclusive": "1.3.20"

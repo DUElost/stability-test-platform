@@ -29,6 +29,8 @@ Class: bug-fix
 - `gate_pid_scope`：`main:2128–2130/2220–2223/2291–2292/2331–2332`、
   `_gate_other_mtk:592–602`、PID 集合 `357–371`。
   初始门控和重试前门控消费它；门控保持仍固定使用 `_BROM_STAGE_PIDS`。
+  `gate_other_mtk` 只控制初始门控调用；重试前与保持阶段不检查该开关。
+  关闭它不保证完全停止门控。这是 1.3.20 的发布行为，不在说明维护单中修改实现。
   V6 且 Linux 缺省 `brom`，其它情况 `full`；未知非空值实际走 `full`，不虚构取值校验。
 - `require_port_binding`：`main:2117–2122/2239–2244/2341–2347`、
   `_resolve_target_identity:463–466`、`_build_flash_argv:1252–1263`。
@@ -56,19 +58,44 @@ runner 实测 `memory.max=6442450944`、`memory.swap.max=0`。
 
 - 基线选择器 `test_head_version_documents_every_key_the_script_reads[flash_firmware]`：
   **1 failed / exit 1**，错误恰为四项未登记路径。
-- 内容与登记表套件：**132 passed / 1 skipped / exit 0**，命令为
+- 首版内容与登记表套件：**132 passed / 1 skipped / exit 0**，命令为
   `./scripts/project_python.sh scripts/run_pytest.py backend/tests/services/test_param_docs_content.py backend/tests/services/test_param_docs_registry.py -q`。
 - `./scripts/project_python.sh -m ruff check backend/tests/services/test_param_docs_content.py`：通过。
 - 确定性包身份核对：两文件重建 SHA 与 manifest 登记相等，未修改发布单元。
 - `./scripts/project_python.sh scripts/run_gates.py check:quick`：**16 gates / exit 0**，含新增 Note 后补验。
 - 精确 PR head 的六项 required CI 与完整后端信息性 CI：提交时 pending，
   最终 head 的结果另回填本单 PR 与 issue。
-- 熟悉刷机脚本者独立内容复核：pending，PR 保持 Draft。
+- 熟悉刷机脚本者独立内容复核：首轮绑定 `8ad679f3` 结论为需修改，仅 R1 门控开关前提错误；
+  三项其它说明、版本范围、包身份与发版要求已签署。R1 返修待新 head 复核，PR 保持 Draft。
 - 合入与线上说明生效：pending，生产未修改。
 
 新增版本用例检查四项在 `1.3.20` 实际选中，在 `1.3.19/1.3.18` 回落键名；
 语义用例逐条检查 serial 优先、初始/重试门控与固定保持集合、V5 不带 `-p`、ADB 独立缺省。
 这些断言帮助防回退，不能替代独立内容复核。
+
+### R1 返修（2026-10-14）
+
+[首轮复核 R1](https://github.com/DUElost/stability-test-platform/pull/3711#issuecomment-6159329503)
+指出新增注意事项将 `gate_other_mtk` 误写为全部门控的启用前提。
+本轮仅修正 `gate_pid_scope.cautions`，补充该参数语义断言要求初始/重试/保持阶段的真实条件，
+并拒绝旧的全局前提说法，更新本 Note；脚本实现与发版文档不变。
+
+- 增强语义断言对旧文案：**1 failed / exit 1**，命令为
+  `scripts/run_pytest.py backend/tests/services/test_param_docs_content.py -k 'preserve_source_conditions and gate_pid_scope' -q --tb=short`。
+- 修正文案后，内容/登记表套件加两项 R1 隔离探针：**134 passed / 1 skipped / exit 0**，命令为
+  `scripts/run_pytest.py /tmp/stp-3709-r1-implementation/test_probe.py backend/tests/services/test_param_docs_content.py backend/tests/services/test_param_docs_registry.py -q`。
+  探针取本 worktree 发布源码，复用 Reviewer 已审计的临时 sysfs/stub 夹具；
+  外部 Popen/run 被禁止，ADB/锁/持久化/恢复/重启均 stub，不操作真实 USB。
+  两项分别确认关闭开关后初始报告 disabled，但重试仍按 full 隐藏 201c 邻口、
+  首次尝试保持仍按固定四 PID 隐藏 2000 邻口。Reviewer 原证据目录未修改。
+- 在临时 JSON 副本保留正确事实、分别追加旧前提/关闭后无门控/全部受开关控制三种错误说法：
+  **3 failed / exit 1**；不变异控制 **3 passed / exit 0**。
+  命令为 `scripts/run_pytest.py -p backend.tests.conftest /tmp/stp-3709-r1-implementation/test_mutation_{red,control}.py -k selected_gate_doc -q --tb=short`。
+  测试调用仓库里实际选中说明的语义断言，未修改仓库 JSON；探针、变异夹具和日志均留本轮临时目录。
+- 本轮 `check:quick`：**16 gates / exit 0**；Ruff 与 diff --check 通过。
+- 首次组合运行同时显式加载及自动发现 backend conftest，重复注册导致收集失败；
+  移除多余 `-p` 后取得上述 134/1 最终结果。收集失败不计作负向成功。
+- 原 head 完整后端 CI 4074/1 是历史证据，不能代替新 head CI；新 head 结果待回填 PR 与 issue。
 
 ## Revisit
 
