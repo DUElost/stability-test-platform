@@ -320,6 +320,57 @@ def test_same_key_different_meaning_across_versions() -> None:
     assert "转义" in after.meaning and "转义" not in before.meaning
 
 
+@pytest.mark.parametrize(
+    "key", ("flash_port", "gate_pid_scope", "require_adb_ready", "require_port_binding"),
+)
+@pytest.mark.parametrize("version", ("1.3.18", "1.3.19", "1.3.20"))
+def test_flash_target_safety_docs_start_at_1_3_20(key: str, version: str) -> None:
+    """#3698 新增四键只在 1.3.20 起适用，不向旧发布单元借用新含义。"""
+    resolved = resolve_doc(load_param_docs("flash_firmware").entries, [key], version, None)
+    assert resolved.from_registry == (version == "1.3.20")
+    if version != "1.3.20":
+        assert resolved.label == key
+        assert resolved.meaning == key
+
+
+@pytest.mark.parametrize(
+    ("key", "facts", "misstatements"),
+    [
+        ("flash_port",
+         ("sysfs", "STP_FLASH_PORT", "本值只在反查不到时回落", "两者都关闭", "指定错口"),
+         ("覆盖 serial",)),
+        ("gate_pid_scope",
+         ("失败重试前", "V6 且 Linux", "未知非空字符串", "固定的", "不控制全流程",
+          "只有初始门控受 gate_other_mtk 控制", "失败重试前和保持阶段不检查该开关",
+          "关闭它不保证完全停止门控"),
+         ("未知值直接失败", "只在 Linux、gate_other_mtk 开启且目标口已确定时门控生效",
+          "关闭 gate_other_mtk 后不再门控", "所有门控均受 gate_other_mtk 控制")),
+        ("require_port_binding",
+         ("V6 且 Linux", "symbolic_link", "不再重试", "V5 命令不增加 -p"),
+         ("两代命令都增加 -p",)),
+        ("require_adb_ready",
+         ("不是 device", "当前 PID", "缺省独立按 V6 且 Linux", "不跟随用户配置后的 require_port_binding"),
+         ("默认同 require_port_binding", "默认跟随 require_port_binding", "无条件必须 ADB 在线")),
+    ],
+)
+def test_flash_target_safety_docs_preserve_source_conditions(
+    key: str, facts: tuple[str, ...], misstatements: tuple[str, ...],
+) -> None:
+    """钉住 #3709 逐项源码核对的条件，不执行刷机或 USB 门控。
+
+    1.3.20 发布源码：_resolve_target_identity、main 中 default=v6_native、
+    initial_gate_pids/_regate、_build_flash_argv 与 _abort_on_wrong_port。
+    每项事实都检查该版本实际选中的说明，结构测试不能替代独立内容复核。
+    """
+    resolved = resolve_doc(load_param_docs("flash_firmware").entries, [key], "1.3.20", None)
+    assert resolved.from_registry
+    prose = "\n".join(str(value or "") for value in (resolved.meaning, resolved.cautions))
+    for fact in facts:
+        assert fact in prose, f"{key} 缺少源码条件 {fact!r}"
+    for misstatement in misstatements:
+        assert misstatement not in prose, f"{key} 出现错误说法 {misstatement!r}"
+
+
 def test_range_misfit_falls_back_to_universal_entry() -> None:
     """通用与一条范围并存是合法兜底：范围不命中时用通用条目。"""
     entries = load_param_docs("monkey_setup").entries
