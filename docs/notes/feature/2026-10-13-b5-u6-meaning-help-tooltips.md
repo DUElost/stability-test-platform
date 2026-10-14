@@ -37,8 +37,10 @@ Tooltip 上受控开合即可，否决扩大面。
 
 ## Verification
 
-绑定最终 head （见 PR 正文）。证据目录（本机，不入库）：
-`/tmp/pr3705-r1-verify/`；关键截图副本 `/opt/cursor/artifacts/pr3705-r1/`。
+绑定最终 head `b68835049b91522dc7683c783843abeda0d8a762`（产品修复
+`265461eec77e7da0d59ddec2e4e7ad8ffc02d61b`；浏览器/vitest/quick 对着该产品树实跑后落文档）。
+证据目录（本机，不入库）：`/tmp/pr3705-r1-verify/`；关键截图副本
+`/opt/cursor/artifacts/pr3705-r1/`。
 
 - 真实 Chromium（390×844、`isMobile`/`hasTouch`，合成安全 DTO，业务网络拦截）：
   `PlanSettingsEditor` / `ParameterProjectionList` / `PlanStepInspector` 三入口各自
@@ -51,7 +53,7 @@ Tooltip 上受控开合即可，否决扩大面。
 - 相关 vitest（`--run --maxWorkers=2`，11 文件 **208 passed**，exit 0）。
 - `./scripts/project_python.sh scripts/run_gates.py check:quick`：**16 gates OK**，exit 0
   （无 `DATABASE_URL`；schema-at-head WARN/skip 不作部署库对齐证据）。
-- 历史：旧 head `8e2f13c5` 上 jsdom 曾记 208 passed；不得替代本轮最新 head 浏览器证据。
+- 历史：旧 head `8e2f13c5` / `5f7b3896` 的 jsdom 208 或旧正文不得替代本轮浏览器证据。
 
 ## Revisit
 
