@@ -78,7 +78,9 @@ describe('DispatchCockpit', () => {
   it('shows the projection, the fingerprint binding, and no planTiming copy', () => {
     renderCockpit();
     expect(screen.getByTestId('dispatch-parameter-list')).toBeInTheDocument();
-    expect(screen.getByText('未设置时沿环境变量回落')).toBeInTheDocument();
+    expect(screen.getByText('屏障硬顶')).toBeInTheDocument();
+    expect(screen.queryByText('未设置时沿环境变量回落')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '屏障硬顶的说明' })).toBeInTheDocument();
     expect(screen.getByTestId('parameter-value')).not.toHaveTextContent('1800');
     expect(screen.getByTestId('dispatch-fingerprint-ready')).toHaveTextContent('已绑定本次预览的确认指纹');
     expect(screen.getByTestId('dispatch-fingerprint-ready')).toHaveTextContent('预览已生成并冻结 1 台设备');

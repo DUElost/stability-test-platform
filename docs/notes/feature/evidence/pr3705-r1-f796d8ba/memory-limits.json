@@ -1,0 +1,100 @@
+{
+  "collected_at_utc": "2026-10-14T07:21:13Z",
+  "host_pid": 30777,
+  "cgroup": {
+    "relative": "/system.slice/pod-qrjeplcp65ezjhikvyfyegrgri-842d542b/cursor-agent/workload",
+    "absolute": "/sys/fs/cgroup/system.slice/pod-qrjeplcp65ezjhikvyfyegrgri-842d542b/cursor-agent/workload",
+    "ancestors": [
+      {
+        "path": "/sys/fs/cgroup/system.slice/pod-qrjeplcp65ezjhikvyfyegrgri-842d542b/cursor-agent/workload",
+        "memory.max": "max",
+        "memory.high": "max",
+        "memory.current": "2721964032",
+        "memory.swap.max": "max",
+        "memory.swap.current": "0"
+      },
+      {
+        "path": "/sys/fs/cgroup/system.slice/pod-qrjeplcp65ezjhikvyfyegrgri-842d542b/cursor-agent",
+        "memory.max": "max",
+        "memory.high": "max",
+        "memory.current": "2966863872",
+        "memory.swap.max": "max",
+        "memory.swap.current": "0"
+      },
+      {
+        "path": "/sys/fs/cgroup/system.slice/pod-qrjeplcp65ezjhikvyfyegrgri-842d542b",
+        "memory.max": "max",
+        "memory.high": "max",
+        "memory.current": "3403399168",
+        "memory.swap.max": "max",
+        "memory.swap.current": "0"
+      },
+      {
+        "path": "/sys/fs/cgroup/system.slice",
+        "memory.max": "max",
+        "memory.high": "max",
+        "memory.current": "3654959104",
+        "memory.swap.max": "max",
+        "memory.swap.current": "0"
+      },
+      {
+        "path": "/sys/fs/cgroup",
+        "memory.max": null,
+        "memory.high": null,
+        "memory.current": null,
+        "memory.swap.max": null,
+        "memory.swap.current": null
+      }
+    ]
+  },
+  "bounded_memory_max_ancestors": [],
+  "systemd_user_scope": {
+    "exit": 1,
+    "stderr": "Failed to connect to bus: No medium found",
+    "stdout": "",
+    "DBUS_SESSION_BUS_ADDRESS": null,
+    "user_bus_path_exists": false
+  },
+  "meminfo": {
+    "MemTotal": "16387416 kB",
+    "MemFree": "2109684 kB",
+    "MemAvailable": "5051088 kB",
+    "SwapTotal": "0 kB",
+    "SwapFree": "0 kB"
+  },
+  "free_h": "               total        used        free      shared  buff/cache   available\nMem:            15Gi        10Gi       2.0Gi       9.2Mi       3.1Gi       4.8Gi\nSwap:             0B          0B          0B\n",
+  "node_with_max_old_space_2048": {
+    "memoryUsage": {
+      "rss": 46096384,
+      "heapTotal": 5537792,
+      "heapUsed": 4287376,
+      "external": 1524401,
+      "arrayBuffers": 10691
+    },
+    "heap_size_limit": 2197815296,
+    "execArgv": [
+      "-e",
+      "const v8=require(\"v8\"); const h=v8.getHeapStatistics(); process.stdout.write(JSON.stringify({memoryUsage:process.memoryUsage(),heap_size_limit:h.heap_size_limit,execArgv:process.execArgv}))"
+    ]
+  },
+  "node_baseline": {
+    "memoryUsage": {
+      "rss": 46055424,
+      "heapTotal": 5537792,
+      "heapUsed": 4323272,
+      "external": 1524401,
+      "arrayBuffers": 10691
+    },
+    "heap_size_limit": 4345298944,
+    "execArgv": [
+      "-e",
+      "const v8=require(\"v8\"); const h=v8.getHeapStatistics(); process.stdout.write(JSON.stringify({memoryUsage:process.memoryUsage(),heap_size_limit:h.heap_size_limit,execArgv:process.execArgv}))"
+    ]
+  },
+  "notes": [
+    "cgroup v2 memory.max=max means unlimited at that node",
+    "systemd --user bus unavailable in this Cloud Agent pod; cannot establish MemoryMax=3G scope here",
+    "NODE_OPTIONS=--max-old-space-size=2048 only caps V8 heap, not cgroup RSS",
+    "Browser/vitest runs used NODE_OPTIONS=--max-old-space-size=2048; vitest --maxWorkers=2"
+  ]
+}

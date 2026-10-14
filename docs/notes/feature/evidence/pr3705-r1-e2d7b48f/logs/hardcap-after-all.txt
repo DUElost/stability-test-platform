@@ -1,0 +1,13 @@
+=== hardcap_after_all_utc ===
+2026-10-14T09:11:04Z
+memory.max=3221225472
+
+memory.swap.max=0
+
+memory.high=max
+
+memory.current=99770368
+
+memory.peak=1182744576
+
+creation_method=sudo mkdir /sys/fs/cgroup/stp-r1-hardcap + echo finite memory.max

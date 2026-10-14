@@ -13,10 +13,15 @@ const projection: ParameterProjection = {
 it('设置与采集策略只读、env 回落不当作确定数字', () => {
   const { container } = render(<PlanSettingsReadonly projection={projection} isDraft />);
   expect(screen.getByLabelText('计划设置只读区')).toHaveTextContent('L1草稿，未保存');
-  expect(screen.getByText('留空继承主机策略')).toBeVisible();
+  expect(screen.queryByText('留空继承主机策略')).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '绝对硬顶的说明' })).toBeInTheDocument();
   expect(screen.getByText(/STP_BARRIER_MAX_WAIT_SECONDS/)).toBeVisible();
   expect(screen.getByTestId('parameter-value')).toHaveTextContent('沿回落链');
-  expect(container.querySelector('input,select,textarea,button')).toBeNull();
+  // 只读：无编辑控件；允许释义帮助图标 button
+  expect(container.querySelector('input,select,textarea')).toBeNull();
+  expect(
+    [...container.querySelectorAll('button')].every((b) => b.getAttribute('data-testid') === 'meaning-help'),
+  ).toBe(true);
 });
 describe('投影空态', () => {
   it('不显示猜测默认值', () => {

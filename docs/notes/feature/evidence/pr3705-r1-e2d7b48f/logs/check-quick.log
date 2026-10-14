@@ -1,0 +1,94 @@
+
+== schema-at-head ==
+
+== env-inventory ==
+[OK] env_inventory self-test 通过（扫描/默认值/类别/渲染/替换）
+[OK] 环境变量清单一致（271 个读取名）
+
+== ruff ==
+All checks passed!
+
+== eslint ==
+
+> stability-test-platform@1.0.0 lint
+> eslint src --max-warnings 0
+
+
+== tsc ==
+
+> stability-test-platform@1.0.0 type-check
+> tsc --noEmit && tsc --noEmit -p tsconfig.node.json
+
+
+== knip ==
+
+> stability-test-platform@1.0.0 knip
+> knip --include files --dependencies
+
+
+== compileall ==
+
+== layering ==
+
+╔══╗─────────▶╔╗ ╔╗      ╔╗◀───┐
+╚╣╠╝◀─────┐  ╔╝╚╗║║────▶╔╝╚╗   │
+ ║║   ╔══╦══╦╩╗╔╝║║  ╔╦═╩╗╔╝╔═╦══╗
+ ║║╔══╣╔╗║╔╗║╔╣║ ║║ ╔╬╣╔╗║║ ║│║╔═╝
+╔╣╠╣║║║╚╝║╚╝║║║╚╗║╚═╝║║║║║╚╗║═╣║
+╚══╩╩╩╣╔═╩══╩╝╚═╝╚═══╩╩╝╚╩═╩╩═╩╝
+  └──▶║║                    ▲ 
+      ╚╝────────────────────┘
+
+
+---------
+Contracts
+---------
+
+Analyzed 893 files, 6103 dependencies.
+--------------------------------------
+
+C1 控制面分层 KEPT (1 ignored import)
+C2 services 不直接依赖 HTTP 层 KEPT (5 ignored imports)
+C3 控制面不直接 import backend.agent KEPT (48 ignored imports)
+C4 core 不直接依赖 web 框架 KEPT
+C5 services 子模块无环 KEPT (4 ignored imports)
+
+Contracts: 5 kept, 0 broken.
+
+== orphan-models ==
+[OK] 孤立模型门禁：无零消费方模型
+
+== gov-surface ==
+[OK] 治理面结构检查通过（阻塞项全绿：S1–S15、S5x）
+
+== ai-work ==
+[OK] ai_work self-test 通过（scope/overlap/真值表/liveness/codec/原子写/issue 查重/required-checks 红绿双向）
+
+== god-files ==
+[OK] check_god_files_ceiling self-test 通过（超限/过期/未超限三态可判）
+[OK] backend/agent/main.py: 33 / 34 行
+[OK] backend/api/routes/agent_api.py: 408 / 411 行
+[OK] backend/api/routes/plan_runs.py: 507 / 507 行
+[OK] backend/api/routes/projects.py: 360 / 378 行
+
+== inner-imports ==
+[OK] check_inner_imports self-test 通过（函数体内/顶层/条件/类体四态可判）
+[OK] 函数体内 import 610 处 ≤ 基线 610（121 个文件）
+
+== tool-contract-fixture ==
+[OK] verify_tool_contract self-test 红绿双向（fixture 绿 / 裸脚本红）
+OK: Tool Contract 通过 (/workspace/tools/dev/fixtures/tool_contract_sample/run_tool.py)
+
+== tool-manifest ==
+[OK] check_tool_manifest self-test 红绿双向
+OK: tool_manifest 绿（41 族 / 247 版本条目；相对 origin/main append-only）
+[OK] check_script_packages self-test 红绿双向（族树/重建/登记/改树未发版/版本复用/退役回落/残留 v 目录/kind 归类（tool 豁免、script ghost 红、全退役绿）/requires_tools 引用（未登记/非 tool/缺版本/退役/坏声明）/publish（只落最新、同字节不重写、不同字节拒覆写、原子落位））
+[OK] check_script_packages：35 个族树与 tool_manifest.json 最新登记等价
+[OK] check_resource_anchors self-test 红绿双向（旧深度 fallback / 别名 / join / relative tuple / cache 祖先 / dead 接入 / 别名导入接入 / 函数内别名导入 / import * 接入 / getattr 接入 / 导出 / 绑定缺失 / 错误 env / 成员缺失 / 未声明候选 / 未解析表达式 / 零候选 / 急切默认锚 / 错误返回根 / 额外错误目录 / 多余后缀 / 片段错序 / 前缀多余片段 / 别名复用（多来源）/ 未使用链掩盖 / 同名覆盖 / 变量返回 literal / 条件表达式 env 优先 / 守卫方向反转 / 否定 IfExp 无法证明 / IfExp 非空分支默认锚 / 变量双键 IfExp / 失效变量名守卫 / 非 override Or 左侧 / 最终 return 丢弃默认根 / And 清零冒充活值 / 删 param override / env 先于 param / 变量 env 优先 / 例外扩张 / base 不可验证 → 红；agent-dir 形态 / 显式 override / 变量 param 先行 / else 空分支惰性 / IfExp 空分支惰性 / 正确否定等价 / parents 与 tools_cache 字样不误报 → 绿）
+[OK] check_resource_anchors 绿：扫描 69 文件 / 35 族；候选 51；声明 52 定位点 / 28 锚（agent_base_dir=1, agent_module_authority=1, deploy_source=1, host_local_resource_root=12, import_bootstrap=3, install_layout=1, package_member=3, schema_path=1, tool_cache_authority=1, tool_root=4）；legacy 豁免 10（函数级）；未解析 0；base=origin/main 防新增/防扩张通过
+
+== transitions ==
+[OK] check_transitions self-test 红绿双向（schema/词表/到期/续期绿/exit 锚三类/evidence）
+[OK] 过渡登记簿一致（10 条 / 5 在途）
+
+[OK] check:quick (16 gates)
