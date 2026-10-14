@@ -30,16 +30,30 @@ export function MeaningHelpTooltip({
 }: MeaningHelpTooltipProps) {
   const text = meaning.trim();
   const [open, setOpen] = useState(false);
+  /** 与 open 同步；触屏 toggle 不用 functional update，避免 StrictMode 双调用抵消。 */
+  const openRef = useRef(false);
   /** 触屏 toggle 后若仍合成 click，阻止 Radix Trigger 的 onClick→onClose。 */
   const suppressClickCloseRef = useRef(false);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
 
   if (!text) return null;
 
+  const setOpenBoth = (next: boolean) => {
+    openRef.current = next;
+    setOpen(next);
+  };
+
   return (
     <TooltipProvider delayDuration={200}>
-      <Tooltip open={open} onOpenChange={setOpen}>
+      <Tooltip
+        open={open}
+        onOpenChange={(next) => {
+          setOpenBoth(next);
+        }}
+      >
         <TooltipTrigger asChild>
           <button
+            ref={triggerRef}
             type="button"
             className={cn(
               'inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-sm',
@@ -57,7 +71,12 @@ export function MeaningHelpTooltip({
               // 跳过 Radix 默认触屏路径，由本组件切换受控 open。
               event.preventDefault();
               suppressClickCloseRef.current = true;
-              setOpen((current) => !current);
+              const next = !openRef.current;
+              setOpenBoth(next);
+              // 触屏关闭后若浏览器仍聚焦触发器，Radix 会走 focus-open 立刻重开。
+              if (!next) {
+                triggerRef.current?.blur();
+              }
             }}
             onClick={(event) => {
               if (!suppressClickCloseRef.current) return;
@@ -71,6 +90,13 @@ export function MeaningHelpTooltip({
         <TooltipContent
           side={side}
           className="max-w-xs whitespace-pre-wrap break-words bg-popover text-popover-foreground"
+          onPointerDown={(event) => {
+            // 触屏下浮层可能盖住问号；点按浮层本身也应关闭，便于再次点按重开。
+            if (event.pointerType !== 'touch') return;
+            event.preventDefault();
+            setOpenBoth(false);
+            triggerRef.current?.blur();
+          }}
         >
           {text}
         </TooltipContent>
