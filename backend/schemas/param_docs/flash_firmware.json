@@ -358,6 +358,58 @@
       "version_range": {
         "min_inclusive": "1.3.19"
       }
+    },
+    {
+      "path": [
+        "flash_port"
+      ],
+      "label": "救援目标 USB 口",
+      "meaning": "显式提供 Agent 主机上的 sysfs USB 端口名（如 1-8、1-5.2.3），用于设备已在 BROM/preloader 等可刷态、无法按 serial 反查端口的救援场景。优先取步骤参数，再取环境变量 STP_FLASH_PORT。目标身份解析仍优先按 serial 找口，本值只在反查不到时回落使用。",
+      "unit": "sysfs USB 端口名",
+      "cautions": "仅在 require_port_binding 或 require_adb_ready 开启时参与身份解析与端口形态校验；两者都关闭时本值不指定刷机目标。它不是 ADB serial、ttyACM 节点或固件目录；形态合法不证明该口属于目标设备，指定错口可能刷到另一台手机。",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "1.3.20"
+      }
+    },
+    {
+      "path": [
+        "gate_pid_scope"
+      ],
+      "label": "初始 USB 门控范围",
+      "meaning": "选择初始门控及每次失败重试前重新门控时隐藏的非目标 MTK 口：brom 使用 PID 集合 0003/2000/2001/3000/2026，不含 201c；full 使用历史集合，额外包含 201c。优先取步骤参数，再取 STP_FLASH_GATE_PID_SCOPE；去空白并转小写后为空时，V6 且 Linux 默认 brom，其它情况默认 full。",
+      "unit": "字符串（brom 或 full）",
+      "cautions": "未知非空字符串未被拒绝，而是按 full 处理；full 可能压制处于正常 ADB 态的 201c 邻机。门控函数只在 Linux 且目标口已确定时工作；只有初始门控受 gate_other_mtk 控制，失败重试前和保持阶段不检查该开关，关闭它不保证完全停止门控。后续门控保持使用固定的 0003/2000/2001/3000 集合，本参数不控制全流程所有 USB 门控。",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "1.3.20"
+      }
+    },
+    {
+      "path": [
+        "require_port_binding"
+      ],
+      "label": "要求绑定目标 USB 口",
+      "meaning": "起刷前要求能确定目标 USB 口：优先按 serial 反查 sysfs，找不到时取 flash_port，仍无法确定就拒绝启动工具。优先取步骤参数，再取 STP_FLASH_REQUIRE_PORT_BINDING；缺省时 V6 且 Linux 为 true，其它情况为 false。开启后，V6 命令增加 -p <目标口>，并对工具输出中可解析的 symbolic_link 端口逐行核对，发现非目标口就终止工具且不再重试。",
+      "unit": "布尔",
+      "cautions": "V5 命令不增加 -p，即使显式开启也不改变这一命令形态；没有可解析端口的输出不能证明绑定正确。关闭会取消本开关的端口要求与回显检查，V6 也不再带 -p；它不关闭 require_adb_ready 的独立检查。",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "1.3.20"
+      }
+    },
+    {
+      "path": [
+        "require_adb_ready"
+      ],
+      "label": "要求目标设备可控或已在可刷态",
+      "meaning": "起刷前检查目标 ADB 状态；不是 device 时，只有已确定的目标 MTK 口当前 PID 属于 0003/2000/2001/3000/2026 才放行，否则拒绝启动工具。优先取步骤参数，再取 STP_FLASH_REQUIRE_ADB_READY；缺省独立按 V6 且 Linux 为 true、其它情况为 false 计算，不跟随用户配置后的 require_port_binding。",
+      "unit": "布尔",
+      "cautions": "这不是无条件要求 ADB 在线：设备已经处于可刷态也能放行。关闭只取消本项起刷前状态检查，不取消 require_port_binding、环境预检或刷后核验；目标不可控时关闭本项可能让工具盲等。",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "1.3.20"
+      }
     }
   ]
 }

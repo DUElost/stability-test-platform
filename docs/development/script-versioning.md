@@ -126,6 +126,29 @@ tool_manifest.json                                # Git 唯一事实源：<name>
    `--pending-activation` 视图清账；例外版本追平磁盘 head 后守卫会**拒绝保留**
    该豁免（强制删条目并追 pin）。
 
+### 已登记族参数说明维护（ADR-0060 D2）
+
+适用范围：已有 `backend/schemas/param_docs/<name>.json` 的脚本族。未登记的新族不在本段的补说明范围内。
+
+- 发布者登记这类族的新版本时，必须在同一 PR 补齐新增参数与含义变化的参数说明。
+- 发布者必须为说明设置与发布源码一致的路径和版本范围，保留旧版本的适用含义。
+- 发布者必须通过项目 Python 入口运行下列既有测试，核对登记头版本实际读取面及版本解析：
+
+  ```bash
+  ./scripts/project_python.sh scripts/run_pytest.py \
+    backend/tests/services/test_param_docs_content.py \
+    backend/tests/services/test_param_docs_registry.py -q
+  ```
+
+- 复核者必须对照该版本发布源码检查含义、单位、缺省、作用条件、风险与版本范围。
+- 复核者不得用结构测试通过代替内容复核，也不得将信息性 CI 的继承红灯当作无人负责的欠项。
+- 发布者不得为补说明原地修改已发布包、manifest 条目或该版本的 `default_params` / `param_schema`。
+
+说明登记表位于脚本族树之外；只补说明不涉及脚本新版本、发包、scan 或 PlanStep 重指。
+本段沿用现有测试，不改变 required CI 集合；门禁范围调整另由 Owner 裁定。
+
+### 控制面生效
+
 控制面侧（运维授权写操作，不进 PR）：
 
 3. `python tools/dev/check_script_packages.py --publish --packages-root
