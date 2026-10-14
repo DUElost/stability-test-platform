@@ -1,0 +1,14 @@
+{
+  "red": {
+    "exit": 1,
+    "tests": "1 failed | 3 passed (4)",
+    "log": "/tmp/pr3705-r1-verify/mutations/vitest-red.log"
+  },
+  "green": {
+    "exit": 0,
+    "tests": "4 passed (4)",
+    "log": "/tmp/pr3705-r1-verify/mutations/vitest-green.log"
+  },
+  "restored": true,
+  "mutation": "removed controlled open + touch pointerDown toggle from MeaningHelpTooltip"
+}

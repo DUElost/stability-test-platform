@@ -38,22 +38,28 @@ Tooltip 上受控开合即可，否决扩大面。
 ## Verification
 
 产品修复 head `265461eec77e7da0d59ddec2e4e7ad8ffc02d61b`（浏览器 / vitest / type-check /
-check:quick 对着该产品树实跑）。PR tip 以 GitHub 当前 head 为准（其后仅文档 SHA 回填）。
-证据目录（本机，不入库）：`/tmp/pr3705-r1-verify/`；关键截图副本
-`/opt/cursor/artifacts/pr3705-r1/`。
+check:quick 对着该产品树实跑）。复核者可访问证据（入库）：
+[`docs/notes/feature/evidence/pr3705-r1-f796d8ba/`](./evidence/pr3705-r1-f796d8ba/)
+（目录名锚定证据补交前 tip `f796d8ba`；PR tip 以 GitHub 当前 head 为准）。
 
 - 真实 Chromium（390×844、`isMobile`/`hasTouch`，合成安全 DTO，业务网络拦截）：
   `PlanSettingsEditor` / `ParameterProjectionList` / `PlanStepInspector` 三入口各自
   点按打开完整释义（无裁切）→ 再点按关闭 → 再点按重开；`pageerror=[]`；
   问号交互前后 values/step 不变、无业务 PUT/POST。
   桌面悬停 / 焦点打开 / Escape 关闭通过；校验短提示与投影状态芯片仍常显。
+  报告：`evidence/pr3705-r1-f796d8ba/report.json`；截图：`…/screenshots/`。
+- 内存限制探测（同目录 `memory-probe.txt` / `memory-limits.json`）：cgroup v2 祖先
+  `memory.max=max`（无硬顶）；`systemd-run --user` 无 user bus；主机 MemTotal≈15 GiB、
+  Swap=0；实跑使用 `NODE_OPTIONS=--max-old-space-size=2048`（V8 `heap_size_limit≈2.05 GiB`），
+  不得把 NODE_OPTIONS 误认为 cgroup RSS 上限。
 - C.5 回退：临时去掉触屏处理 → `MeaningHelpTooltip` vitest **1 failed / 3 passed，exit 1**；
-  恢复后 **4 passed，exit 0**；源码已恢复。
+  恢复后 **4 passed，exit 0**；源码已恢复（`mutations/summary.json`）。
 - `npm --prefix frontend run type-check`：exit 0。
 - 相关 vitest（`--run --maxWorkers=2`，11 文件 **208 passed**，exit 0）。
 - `./scripts/project_python.sh scripts/run_gates.py check:quick`：**16 gates OK**，exit 0
   （无 `DATABASE_URL`；schema-at-head WARN/skip 不作部署库对齐证据）。
-- 历史：旧 head `8e2f13c5` / `5f7b3896` 的 jsdom 208 或旧正文不得替代本轮浏览器证据。
+- 历史：旧 head `8e2f13c5` / `5f7b3896` 的 jsdom 208 或仅 `/tmp`/agent artifact 链不得替代
+  本目录入库证据。
 
 ## Revisit
 

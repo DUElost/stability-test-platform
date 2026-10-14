@@ -1,0 +1,138 @@
+=== collected_at_utc ===
+2026-10-14T07:21:13Z
+
+=== /proc/self/cgroup ===
+0::/system.slice/pod-qrjeplcp65ezjhikvyfyegrgri-842d542b/cursor-agent/workload
+
+=== cgroup path resolve ===
+relative=/system.slice/pod-qrjeplcp65ezjhikvyfyegrgri-842d542b/cursor-agent/workload
+absolute=/sys/fs/cgroup/system.slice/pod-qrjeplcp65ezjhikvyfyegrgri-842d542b/cursor-agent/workload
+
+=== walk ancestors memory.* ===
+-- /sys/fs/cgroup/system.slice/pod-qrjeplcp65ezjhikvyfyegrgri-842d542b/cursor-agent/workload
+memory.max=max 
+memory.high=max 
+memory.current=2717982720 
+memory.swap.max=max 
+memory.swap.current=0 
+cgroup.controllers=memory 
+-- /sys/fs/cgroup/system.slice/pod-qrjeplcp65ezjhikvyfyegrgri-842d542b/cursor-agent
+memory.max=max 
+memory.high=max 
+memory.current=2964545536 
+memory.swap.max=max 
+memory.swap.current=0 
+cgroup.controllers=cpuset cpu io memory hugetlb pids 
+-- /sys/fs/cgroup/system.slice/pod-qrjeplcp65ezjhikvyfyegrgri-842d542b
+memory.max=max 
+memory.high=max 
+memory.current=3402567680 
+memory.swap.max=max 
+memory.swap.current=0 
+cgroup.controllers=cpuset cpu io memory hugetlb pids 
+-- /sys/fs/cgroup/system.slice
+memory.max=max 
+memory.high=max 
+memory.current=3652972544 
+memory.swap.max=max 
+memory.swap.current=0 
+cgroup.controllers=cpuset cpu io memory hugetlb pids 
+-- /sys/fs/cgroup
+memory.max=<missing>
+memory.high=<missing>
+memory.current=<missing>
+memory.swap.max=<missing>
+memory.swap.current=<missing>
+cgroup.controllers=cpuset cpu io memory hugetlb pids 
+
+=== systemd-run --user probe ===
+Failed to connect to bus: No medium found
+exit=0
+
+=== systemctl --user is-system-running ===
+offline
+
+=== dbus session ===
+DBUS_SESSION_BUS_ADDRESS=<unset>
+ls: cannot access '/run/user/1000/bus': No such file or directory
+
+=== free -h ===
+               total        used        free      shared  buff/cache   available
+Mem:            15Gi        10Gi       2.0Gi       9.2Mi       3.1Gi       4.8Gi
+Swap:             0B          0B          0B
+
+=== /proc/meminfo (selected) ===
+MemTotal:       16387416 kB
+MemFree:         2100164 kB
+MemAvailable:    5041568 kB
+Buffers:          130432 kB
+Cached:          2983172 kB
+SwapTotal:             0 kB
+SwapFree:              0 kB
+
+=== prlimit self ===
+RESOURCE   DESCRIPTION                             SOFT      HARD UNITS
+AS         address space limit                unlimited unlimited bytes
+CORE       max core file size                         0 unlimited bytes
+CPU        CPU time                           unlimited unlimited seconds
+DATA       max data size                      unlimited unlimited bytes
+FSIZE      max file size                      unlimited unlimited bytes
+LOCKS      max number of file locks held      unlimited unlimited locks
+MEMLOCK    max locked-in-memory address space   8388608   8388608 bytes
+MSGQUEUE   max bytes in POSIX mqueues            819200    819200 bytes
+NICE       max nice prio allowed to raise             0         0 
+NOFILE     max number of open files              524288    524288 files
+NPROC      max number of processes                63994     63994 processes
+RSS        max resident set size              unlimited unlimited bytes
+RTPRIO     max real-time priority                     0         0 
+RTTIME     timeout for real-time tasks        unlimited unlimited microsecs
+SIGPENDING max number of pending signals          63994     63994 signals
+STACK      max stack size                       8388608 unlimited bytes
+
+=== NODE_OPTIONS ambient ===
+NODE_OPTIONS=--max-old-space-size=2048
+
+=== node process.memoryUsage + v8 heap_size_limit (with max-old-space-size=2048) ===
+{
+  "memoryUsage": {
+    "rss": 45621248,
+    "heapTotal": 5537792,
+    "heapUsed": 4103288,
+    "external": 1433547,
+    "arrayBuffers": 10691
+  },
+  "heap_size_limit": 2197815296,
+  "total_available_size": 2194642696,
+  "argv": [
+    "-e",
+    "const v8=require(\"v8\"); const h=v8.getHeapStatistics(); console.log(JSON.stringify({memoryUsage:process.memoryUsage(),heap_size_limit:h.heap_size_limit,total_available_size:h.total_available_size,argv:process.execArgv},null,2))"
+  ]
+}
+
+=== node without max-old-space-size (baseline heap_size_limit) ===
+{
+  "memoryUsage": {
+    "rss": 45531136,
+    "heapTotal": 5537792,
+    "heapUsed": 4132120,
+    "external": 1433547,
+    "arrayBuffers": 10691
+  },
+  "heap_size_limit": 4345298944,
+  "execArgv": [
+    "-e",
+    "const v8=require(\"v8\"); const h=v8.getHeapStatistics(); console.log(JSON.stringify({memoryUsage:process.memoryUsage(),heap_size_limit:h.heap_size_limit,execArgv:process.execArgv},null,2))"
+  ]
+}
+
+=== container/machine MemoryMax hints ===
+cat: /sys/fs/cgroup/memory.max: No such file or directory
+ls: cannot access '/.dockerenv': No such file or directory
+proc1_environ: no MEMORY* keys (or unreadable)
+
+=== ulimit -a (memory related) ===
+data seg size               (kbytes, -d) unlimited
+max locked memory           (kbytes, -l) 8192
+max memory size             (kbytes, -m) unlimited
+stack size                  (kbytes, -s) 8192
+virtual memory              (kbytes, -v) unlimited

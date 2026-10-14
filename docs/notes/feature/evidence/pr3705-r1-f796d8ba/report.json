@@ -1,0 +1,569 @@
+{
+  "head": "5f7b389689d5e1c4c7210591c7888fe69831b11d",
+  "generatedAt": "2026-10-14T05:14:51.375Z",
+  "touchPass": true,
+  "desktopPass": true,
+  "touch": {
+    "mode": "touch",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "isMobile": true,
+    "hasTouch": true,
+    "pageerrors": [],
+    "requestsSample": [
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:5199/"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:5199/@vite/client"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:5199/main.tsx"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:5199/@react-refresh"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:5199/.vite-cache/deps/react.js?v=215cc6ac"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:5199/.vite-cache/deps/react-dom_client.js?v=9a383d6f"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:5199/.vite-cache/deps/react-router-dom.js?v=5ba47e00"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:5199/harness.css"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:5199/@fs/workspace/frontend/src/components/parameters/PlanSettingsEditor.tsx"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:5199/@fs/workspace/frontend/src/components/parameters/ParameterProjectionList.tsx"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:5199/@fs/workspace/frontend/src/components/pipeline/PlanStepInspector.tsx"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:5199/.vite-cache/deps/react_jsx-dev-runtime.js?v=215cc6ac"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:5199/.vite-cache/deps/rolldown-runtime-DC62tzP2.js?v=bf23a45e"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:5199/.vite-cache/deps/react-dom.js?v=215cc6ac"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:5199/@fs/workspace/frontend/src/design-system/tokens.ts"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:5199/@fs/workspace/frontend/src/lib/utils.ts"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:5199/@fs/workspace/frontend/src/components/parameters/MeaningHelpTooltip.tsx"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:5199/@fs/workspace/frontend/src/pages/orchestration/planEditUtils.ts"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:5199/.vite-cache/deps/lucide-react.js?v=b88accc1"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:5199/@fs/workspace/frontend/src/components/parameters/draftParameterMerge.ts"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:5199/@fs/workspace/frontend/src/components/pipeline/stepTiming.ts"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:5199/@fs/workspace/frontend/node_modules/vite/dist/client/env.mjs"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:5199/.vite-cache/deps/clsx.js?v=287eba42"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:5199/.vite-cache/deps/tailwind-merge.js?v=a851613a"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:5199/@fs/workspace/frontend/src/components/ui/tooltip.tsx"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:5199/.vite-cache/deps/@radix-ui_react-tooltip.js?v=e88f7357"
+      },
+      {
+        "method": "GET",
+        "url": "http://127.0.0.1:5199/.vite-cache/deps/react_jsx-runtime.js?v=215cc6ac"
+      }
+    ],
+    "businessWrites": [],
+    "beforeValues": {
+      "patrolIntervalSeconds": null,
+      "timeoutSeconds": null,
+      "barrierTimeoutSeconds": null,
+      "barrierMaxWaitSeconds": null,
+      "autoArchiveIntervalSeconds": null,
+      "watcherPolicy": null
+    },
+    "afterValues": {
+      "patrolIntervalSeconds": null,
+      "timeoutSeconds": null,
+      "barrierTimeoutSeconds": null,
+      "barrierMaxWaitSeconds": null,
+      "autoArchiveIntervalSeconds": null,
+      "watcherPolicy": null
+    },
+    "beforeStep": {
+      "step_id": "init_wait_1",
+      "action": "script:wait_step",
+      "version": "1.0.0",
+      "params": {
+        "wait_seconds": 5
+      },
+      "timeout_seconds": 30,
+      "retry": 0,
+      "enabled": true
+    },
+    "afterStep": {
+      "step_id": "init_wait_1",
+      "action": "script:wait_step",
+      "version": "1.0.0",
+      "params": {
+        "wait_seconds": 5
+      },
+      "timeout_seconds": 30,
+      "retry": 0,
+      "enabled": true
+    },
+    "events": [],
+    "results": [
+      {
+        "entry": "editor",
+        "aria": "初始化同步累计等待硬顶的说明",
+        "helpCount": 1,
+        "hit": {
+          "box": {
+            "x": 190.875,
+            "y": 290,
+            "width": 16,
+            "height": 16
+          },
+          "x": 198.875,
+          "y": 298,
+          "hit": {
+            "tag": "path",
+            "testId": null,
+            "role": null,
+            "aria": "初始化同步累计等待硬顶的说明"
+          }
+        },
+        "open": {
+          "ok": true,
+          "text": "从首次等待开始计时。正整数为计划显式硬顶；未设时继承主机安全策略，不是关闭硬顶。 PLAN 值 → 主机 STP_BARRIER_MAX_WAIT_SECONDS → 1800",
+          "box": {
+            "x": 39,
+            "y": 226,
+            "width": 320,
+            "height": 60
+          },
+          "styles": {
+            "maxWidth": "320px",
+            "color": "rgb(2, 8, 23)",
+            "backgroundColor": "rgb(255, 255, 255)",
+            "visibility": "visible",
+            "opacity": "1"
+          },
+          "clipped": false,
+          "inView": true,
+          "readable": true
+        },
+        "closedCount": 0,
+        "closedRoleCount": 1,
+        "reopen": {
+          "ok": true,
+          "text": "从首次等待开始计时。正整数为计划显式硬顶；未设时继承主机安全策略，不是关闭硬顶。 PLAN 值 → 主机 STP_BARRIER_MAX_WAIT_SECONDS → 1800",
+          "box": {
+            "x": 39,
+            "y": 226,
+            "width": 320,
+            "height": 60
+          },
+          "styles": {
+            "maxWidth": "320px",
+            "color": "rgb(2, 8, 23)",
+            "backgroundColor": "rgb(255, 255, 255)",
+            "visibility": "visible",
+            "opacity": "1"
+          },
+          "clipped": false,
+          "inView": true,
+          "readable": true
+        },
+        "focused": false,
+        "tooltipCountAfterOpen": 1
+      },
+      {
+        "entry": "list",
+        "aria": "投影巡检间隔的说明",
+        "helpCount": 1,
+        "hit": {
+          "box": {
+            "x": 100,
+            "y": 339.125,
+            "width": 16,
+            "height": 16
+          },
+          "x": 108,
+          "y": 347.125,
+          "hit": {
+            "tag": "path",
+            "testId": null,
+            "role": null,
+            "aria": "投影巡检间隔的说明"
+          }
+        },
+        "open": {
+          "ok": true,
+          "text": "轮间等待；未设则无巡检。",
+          "box": {
+            "x": 24,
+            "y": 307,
+            "width": 168,
+            "height": 28
+          },
+          "styles": {
+            "maxWidth": "320px",
+            "color": "rgb(2, 8, 23)",
+            "backgroundColor": "rgb(255, 255, 255)",
+            "visibility": "visible",
+            "opacity": "1"
+          },
+          "clipped": false,
+          "inView": true,
+          "readable": true
+        },
+        "closedCount": 0,
+        "closedRoleCount": 1,
+        "reopen": {
+          "ok": true,
+          "text": "轮间等待；未设则无巡检。",
+          "box": {
+            "x": 24,
+            "y": 307,
+            "width": 168,
+            "height": 28
+          },
+          "styles": {
+            "maxWidth": "320px",
+            "color": "rgb(2, 8, 23)",
+            "backgroundColor": "rgb(255, 255, 255)",
+            "visibility": "visible",
+            "opacity": "1"
+          },
+          "clipped": false,
+          "inView": true,
+          "readable": true
+        },
+        "focused": false,
+        "tooltipCountAfterOpen": 1
+      },
+      {
+        "entry": "inspector",
+        "aria": "等待秒数的说明",
+        "helpCount": 1,
+        "hit": {
+          "box": {
+            "x": 82,
+            "y": 450.125,
+            "width": 16,
+            "height": 16
+          },
+          "x": 90,
+          "y": 458.125,
+          "hit": {
+            "tag": "path",
+            "testId": null,
+            "role": null,
+            "aria": "等待秒数的说明"
+          }
+        },
+        "open": {
+          "ok": true,
+          "text": "步骤内等待秒数；触屏可读完整释义验收用合成说明。",
+          "box": {
+            "x": 0,
+            "y": 418,
+            "width": 312,
+            "height": 28
+          },
+          "styles": {
+            "maxWidth": "320px",
+            "color": "rgb(2, 8, 23)",
+            "backgroundColor": "rgb(255, 255, 255)",
+            "visibility": "visible",
+            "opacity": "1"
+          },
+          "clipped": false,
+          "inView": true,
+          "readable": true
+        },
+        "closedCount": 0,
+        "closedRoleCount": 1,
+        "reopen": {
+          "ok": true,
+          "text": "步骤内等待秒数；触屏可读完整释义验收用合成说明。",
+          "box": {
+            "x": 0,
+            "y": 418,
+            "width": 312,
+            "height": 28
+          },
+          "styles": {
+            "maxWidth": "320px",
+            "color": "rgb(2, 8, 23)",
+            "backgroundColor": "rgb(255, 255, 255)",
+            "visibility": "visible",
+            "opacity": "1"
+          },
+          "clipped": false,
+          "inView": true,
+          "readable": true
+        },
+        "focused": false,
+        "tooltipCountAfterOpen": 1
+      }
+    ]
+  },
+  "desktop": {
+    "mode": "desktop",
+    "pageerrors": [],
+    "businessWrites": [],
+    "beforeValues": {
+      "patrolIntervalSeconds": null,
+      "timeoutSeconds": null,
+      "barrierTimeoutSeconds": null,
+      "barrierMaxWaitSeconds": null,
+      "autoArchiveIntervalSeconds": null,
+      "watcherPolicy": null
+    },
+    "afterValues": {
+      "patrolIntervalSeconds": null,
+      "timeoutSeconds": null,
+      "barrierTimeoutSeconds": null,
+      "barrierMaxWaitSeconds": null,
+      "autoArchiveIntervalSeconds": null,
+      "watcherPolicy": null
+    },
+    "beforeStep": {
+      "step_id": "init_wait_1",
+      "action": "script:wait_step",
+      "version": "1.0.0",
+      "params": {
+        "wait_seconds": 5
+      },
+      "timeout_seconds": 30,
+      "retry": 0,
+      "enabled": true
+    },
+    "afterStep": {
+      "step_id": "init_wait_1",
+      "action": "script:wait_step",
+      "version": "1.0.0",
+      "params": {
+        "wait_seconds": 5
+      },
+      "timeout_seconds": 30,
+      "retry": 0,
+      "enabled": true
+    },
+    "events": [
+      {
+        "t": 1791954891142,
+        "kind": "editor-onChange",
+        "next": {
+          "patrolIntervalSeconds": null,
+          "timeoutSeconds": null,
+          "barrierTimeoutSeconds": null,
+          "barrierMaxWaitSeconds": null,
+          "autoArchiveIntervalSeconds": null,
+          "watcherPolicy": null
+        }
+      }
+    ],
+    "results": [
+      {
+        "entry": "editor",
+        "helpCount": 1,
+        "hoverOpen": {
+          "ok": true,
+          "text": "从首次等待开始计时。正整数为计划显式硬顶；未设时继承主机安全策略，不是关闭硬顶。 PLAN 值 → 主机 STP_BARRIER_MAX_WAIT_SECONDS → 1800",
+          "box": {
+            "x": 660,
+            "y": 86,
+            "width": 320,
+            "height": 60
+          },
+          "styles": {
+            "maxWidth": "320px",
+            "color": "rgb(2, 8, 23)",
+            "backgroundColor": "rgb(255, 255, 255)",
+            "visibility": "visible",
+            "opacity": "1"
+          },
+          "clipped": false,
+          "inView": true,
+          "readable": true
+        },
+        "focused": true,
+        "focusVia": "element.focus",
+        "focusOpen": {
+          "ok": true,
+          "text": "从首次等待开始计时。正整数为计划显式硬顶；未设时继承主机安全策略，不是关闭硬顶。 PLAN 值 → 主机 STP_BARRIER_MAX_WAIT_SECONDS → 1800",
+          "box": {
+            "x": 660,
+            "y": 86,
+            "width": 320,
+            "height": 60
+          },
+          "styles": {
+            "maxWidth": "320px",
+            "color": "rgb(2, 8, 23)",
+            "backgroundColor": "rgb(255, 255, 255)",
+            "visibility": "visible",
+            "opacity": "1"
+          },
+          "clipped": false,
+          "inView": true,
+          "readable": true
+        },
+        "afterEsc": 0
+      },
+      {
+        "entry": "list",
+        "helpCount": 1,
+        "hoverOpen": {
+          "ok": true,
+          "text": "轮间等待；未设则无巡检。",
+          "box": {
+            "x": 24,
+            "y": 312,
+            "width": 168,
+            "height": 28
+          },
+          "styles": {
+            "maxWidth": "320px",
+            "color": "rgb(2, 8, 23)",
+            "backgroundColor": "rgb(255, 255, 255)",
+            "visibility": "visible",
+            "opacity": "1"
+          },
+          "clipped": false,
+          "inView": true,
+          "readable": true
+        },
+        "focused": true,
+        "focusVia": "element.focus",
+        "focusOpen": {
+          "ok": true,
+          "text": "轮间等待；未设则无巡检。",
+          "box": {
+            "x": 24,
+            "y": 312,
+            "width": 168,
+            "height": 28
+          },
+          "styles": {
+            "maxWidth": "320px",
+            "color": "rgb(2, 8, 23)",
+            "backgroundColor": "rgb(255, 255, 255)",
+            "visibility": "visible",
+            "opacity": "1"
+          },
+          "clipped": false,
+          "inView": true,
+          "readable": true
+        },
+        "afterEsc": 0
+      },
+      {
+        "entry": "inspector",
+        "helpCount": 1,
+        "hoverOpen": {
+          "ok": true,
+          "text": "步骤内等待秒数；触屏可读完整释义验收用合成说明。",
+          "box": {
+            "x": 0,
+            "y": 374,
+            "width": 312,
+            "height": 28
+          },
+          "styles": {
+            "maxWidth": "320px",
+            "color": "rgb(2, 8, 23)",
+            "backgroundColor": "rgb(255, 255, 255)",
+            "visibility": "visible",
+            "opacity": "1"
+          },
+          "clipped": false,
+          "inView": true,
+          "readable": true
+        },
+        "focused": true,
+        "focusVia": "element.focus",
+        "focusOpen": {
+          "ok": true,
+          "text": "步骤内等待秒数；触屏可读完整释义验收用合成说明。",
+          "box": {
+            "x": 0,
+            "y": 374,
+            "width": 312,
+            "height": 28
+          },
+          "styles": {
+            "maxWidth": "320px",
+            "color": "rgb(2, 8, 23)",
+            "backgroundColor": "rgb(255, 255, 255)",
+            "visibility": "visible",
+            "opacity": "1"
+          },
+          "clipped": false,
+          "inView": true,
+          "readable": true
+        },
+        "afterEsc": 0
+      }
+    ],
+    "alwaysVisible": {
+      "invalidHint": 1,
+      "clearHintVisible": true,
+      "stateChip": 1
+    }
+  },
+  "viteLogTail": "(!) Your Vite config uses features that are unsupported by `configLoader: 'native'`, which is planned to become the default in a future major version of Vite:\n  - ESM syntax in a file loaded as CommonJS (vite.config.ts:1:1). Use a `.mjs` extension or set `\"type\": \"module\"` in the closest package.json\nSet `VITE_CONFIG_NATIVE_IGNORE_WARNING=true` to suppress this warning.\n5:14:35 AM [vite] (client) Forced re-optimization of dependencies\n\n  VITE v8.3.0  ready in 160 ms\n\n  ➜  Local:   http://127.0.0.1:5199/\n(node:24852) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///tmp/pr3705-r1-verify/harness/postcss.config.js?t=1791954875143 is not specified and it doesn't parse as CommonJS.\nReparsing as ES module because module syntax was detected. This incurs a performance overhead.\nTo eliminate this warning, add \"type\": \"module\" to /tmp/pr3705-r1-verify/package.json.\n(Use `node --trace-warnings ...` to show where the warning was created)\n"
+}
