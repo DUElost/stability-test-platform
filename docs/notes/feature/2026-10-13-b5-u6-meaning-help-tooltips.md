@@ -37,7 +37,7 @@ Tooltip 上受控开合即可，否决扩大面。
 
 ## Verification
 
-绑定实现树与推送后最终 head（见 PR 正文）。证据目录（本机，不入库）：
+绑定最终 head （见 PR 正文）。证据目录（本机，不入库）：
 `/tmp/pr3705-r1-verify/`；关键截图副本 `/opt/cursor/artifacts/pr3705-r1/`。
 
 - 真实 Chromium（390×844、`isMobile`/`hasTouch`，合成安全 DTO，业务网络拦截）：
