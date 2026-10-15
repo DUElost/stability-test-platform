@@ -35,9 +35,9 @@ def test_discover_devices_success(adb_path: str, completed_process_factory):
         devices = device_module.discover_devices(adb_path)
 
     assert devices == [
-        {"serial": "SERIAL-1", "adb_state": "device", "model": "PIXEL_7"},
-        {"serial": "SERIAL-2", "adb_state": "unauthorized", "model": None},
-        {"serial": "SERIAL-3", "adb_state": "device", "model": None},
+        {"serial": "SERIAL-1", "adb_state": "device", "model": "PIXEL_7", "product": "foo"},
+        {"serial": "SERIAL-2", "adb_state": "unauthorized", "model": None, "product": None},
+        {"serial": "SERIAL-3", "adb_state": "device", "model": None, "product": None},
     ]
     mock_run.assert_called_once_with(
         [adb_path, "devices", "-l"],

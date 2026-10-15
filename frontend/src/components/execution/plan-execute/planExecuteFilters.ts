@@ -4,6 +4,7 @@ export interface PlanExecuteFilterState {
   q: string;
   version: string;
   model: string;
+  product?: string;
   host: string;
   tags: string[];
   readyOnly: boolean;
@@ -14,6 +15,7 @@ export type ActiveFilterChipId =
   | 'q'
   | 'version'
   | 'model'
+  | 'product'
   | 'host'
   | 'ready'
   | `tag:${string}`;
@@ -23,7 +25,7 @@ export interface ActiveFilterChip {
   label: string;
 }
 
-const FILTER_KEYS = ['q', 'version', 'model', 'host', 'tags', 'ready'] as const;
+const FILTER_KEYS = ['q', 'version', 'model', 'product', 'host', 'tags', 'ready'] as const;
 
 export function parseViewParam(value: string | null): DeviceViewMode {
   return value === 'table' ? 'table' : 'matrix';
@@ -38,6 +40,7 @@ export function parsePlanExecuteFilterParams(params: URLSearchParams): PlanExecu
     q: params.get('q') ?? '',
     version: params.get('version') || 'all',
     model: params.get('model') || 'all',
+    product: params.get('product') || 'all',
     host: params.get('host') || 'all',
     tags,
     readyOnly: params.get('ready') === '1',
@@ -65,6 +68,9 @@ export function writeFilterParamsToSearch(
   if (state.model && state.model !== 'all') next.set('model', state.model);
   else next.delete('model');
 
+  if (state.product && state.product !== 'all') next.set('product', state.product);
+  else next.delete('product');
+
   if (state.host && state.host !== 'all') next.set('host', state.host);
   else next.delete('host');
 
@@ -79,7 +85,7 @@ export function writeFilterParamsToSearch(
 }
 
 export function buildActiveFilterChips(
-  state: Pick<PlanExecuteFilterState, 'q' | 'version' | 'model' | 'host' | 'tags' | 'readyOnly'>,
+  state: Pick<PlanExecuteFilterState, 'q' | 'version' | 'model' | 'product' | 'host' | 'tags' | 'readyOnly'>,
   opts?: { hostLabel?: string },
 ): ActiveFilterChip[] {
   const chips: ActiveFilterChip[] = [];
@@ -90,6 +96,9 @@ export function buildActiveFilterChips(
   }
   if (state.model && state.model !== 'all') {
     chips.push({ id: 'model', label: `型号:${state.model}` });
+  }
+  if (state.product && state.product !== 'all') {
+    chips.push({ id: 'product', label: `Product:${state.product}` });
   }
   if (state.host && state.host !== 'all') {
     chips.push({ id: 'host', label: `节点:${opts?.hostLabel || state.host}` });
@@ -108,6 +117,7 @@ export function clearActiveFilterChip(
   if (chipId === 'q') return { ...state, q: '' };
   if (chipId === 'version') return { ...state, version: 'all' };
   if (chipId === 'model') return { ...state, model: 'all' };
+  if (chipId === 'product') return { ...state, product: 'all' };
   if (chipId === 'host') return { ...state, host: 'all' };
   if (chipId === 'ready') return { ...state, readyOnly: false };
   if (chipId.startsWith('tag:')) {

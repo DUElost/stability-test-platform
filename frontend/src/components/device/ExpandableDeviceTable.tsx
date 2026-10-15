@@ -1,3 +1,4 @@
+import { deviceProductText } from '@/utils/deviceProduct';
 import { useState, useMemo, useEffect, useRef, Fragment } from 'react';
 import { cn } from '@/lib/utils';
 import { BulkBarSpacer } from '@/components/ui/bulk-action-bar';
@@ -64,6 +65,7 @@ export interface DeviceTableData {
   id: number;
   serial: string;
   model: string;
+  product?: string | null;
   status: DeviceStatus;
   battery_level?: number;
   temperature?: number;
@@ -121,6 +123,7 @@ export function ExpandableDeviceTable({
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [modelFilter, setModelFilter] = useState('all');
+  const [productFilter, setProductFilter] = useState('all');
   const [versionFilter, setVersionFilter] = useState('all');
   const [hostFilter, setHostFilter] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -161,6 +164,11 @@ export function ExpandableDeviceTable({
     [devicesInHostScope],
   );
 
+  const productOptions = useMemo(
+    () => Array.from(new Set(devicesInHostScope.map((device) => device.product).filter((value): value is string => Boolean(value)))).sort(),
+    [devicesInHostScope],
+  );
+
   const versionOptions = useMemo(
     () => Array.from(
       new Set(
@@ -178,6 +186,12 @@ export function ExpandableDeviceTable({
     if (modelFilter !== 'all' && !modelOptions.includes(modelFilter)) {
       setModelFilter('all');
     }
+  }
+
+  const [prevProductOptions, setPrevProductOptions] = useState(productOptions);
+  if (prevProductOptions !== productOptions) {
+    setPrevProductOptions(productOptions);
+    if (productFilter !== 'all' && !productOptions.includes(productFilter)) setProductFilter('all');
   }
 
   const [prevVersionOptions, setPrevVersionOptions] = useState(versionOptions);
@@ -203,11 +217,13 @@ export function ExpandableDeviceTable({
       if (statusFilter !== 'all' && device.status !== statusFilter) return false;
       if (hostFilter !== 'all' && hostFilterKey(device) !== hostFilter) return false;
       if (modelFilter !== 'all' && device.model !== modelFilter) return false;
+      if (productFilter !== 'all' && device.product !== productFilter) return false;
       if (versionFilter !== 'all' && device.build_display_id !== versionFilter) return false;
       if (debouncedSearch) {
         const query = debouncedSearch.toLowerCase();
         return (
           device.model?.toLowerCase().includes(query) ||
+          deviceProductText(device.model, device.product).toLowerCase().includes(query) ||
           device.serial.toLowerCase().includes(query) ||
           device.build_display_id?.toLowerCase().includes(query) ||
           device.host_name?.toLowerCase().includes(query) ||
@@ -216,10 +232,10 @@ export function ExpandableDeviceTable({
       }
       return true;
     });
-  }, [devices, statusFilter, hostFilter, modelFilter, versionFilter, debouncedSearch]);
+  }, [devices, statusFilter, hostFilter, modelFilter, productFilter, versionFilter, debouncedSearch]);
 
   // Reset to page 1 when filter or search changes
-  const pageResetKey = JSON.stringify([statusFilter, hostFilter, modelFilter, versionFilter, debouncedSearch]);
+  const pageResetKey = JSON.stringify([statusFilter, hostFilter, modelFilter, productFilter, versionFilter, debouncedSearch]);
   const [prevPageResetKey, setPrevPageResetKey] = useState(pageResetKey);
   if (prevPageResetKey !== pageResetKey) {
     setPrevPageResetKey(pageResetKey);
@@ -389,7 +405,7 @@ export function ExpandableDeviceTable({
             name="device-search"
             aria-label="搜索设备"
             type="text"
-            placeholder="搜索设备序列号/型号/版本/主机/标签..."
+            placeholder="搜索设备序列号/型号/product/版本/主机/标签..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className={cn('w-full pl-9 h-9', FORM.inputSm)}
@@ -404,6 +420,17 @@ export function ExpandableDeviceTable({
           <option value="all">全部设备</option>
           {modelOptions.map((model) => (
             <option key={model} value={model}>{model}</option>
+          ))}
+        </select>
+        <select
+          value={productFilter}
+          onChange={(e) => setProductFilter(e.target.value)}
+          className={cn(FORM.select, 'h-9 w-full sm:w-56')}
+          aria-label="按 product 筛选"
+        >
+          <option value="all">全部 product</option>
+          {productOptions.map((product) => (
+            <option key={product} value={product}>{product}</option>
           ))}
         </select>
         <select
@@ -537,6 +564,9 @@ export function ExpandableDeviceTable({
                             未映射
                           </span>
                         )}
+                      </div>
+                      <div className="max-w-xs truncate font-mono text-xs text-muted-foreground" title={deviceProductText(device.model, device.product)}>
+                        Product: {deviceProductText(device.model, device.product)}
                       </div>
                     </TableCell>
                     <TableCell className="px-3 py-1.5 font-mono text-xs text-muted-foreground whitespace-nowrap">
@@ -698,6 +728,10 @@ export function ExpandableDeviceTable({
                               <div className="flex justify-between">
                                 <span className="text-muted-foreground">序列号</span>
                                 <span className="font-mono text-foreground">{device.serial}</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-muted-foreground">Product</span>
+                                <span className="max-w-[65%] break-all text-right font-mono text-foreground">{deviceProductText(device.model, device.product)}</span>
                               </div>
                               <div className="flex justify-between">
                                 <span className="text-muted-foreground">型号</span>

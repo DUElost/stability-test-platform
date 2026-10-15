@@ -20,6 +20,9 @@ interface DeviceFilterBarProps {
   deviceVersionFilter: string;
   onVersionChange: (value: string) => void;
   deviceModelFilter: string;
+  deviceProductFilter: string;
+  onProductChange: (value: string) => void;
+  productOptions: string[];
   onModelChange: (value: string) => void;
   deviceTagFilter: string[];
   onTagFilterChange: (value: string[]) => void;
@@ -52,6 +55,9 @@ export function DeviceFilterBar({
   deviceVersionFilter,
   onVersionChange,
   deviceModelFilter,
+  deviceProductFilter,
+  onProductChange,
+  productOptions,
   onModelChange,
   deviceTagFilter,
   onTagFilterChange,
@@ -172,6 +178,15 @@ export function DeviceFilterBar({
                 {value}
               </option>
             ))}
+          </select>
+          <select
+            value={deviceProductFilter}
+            onChange={(e) => onProductChange(e.target.value)}
+            className={`${FORM.selectSm} w-48`}
+            aria-label="Product 筛选"
+          >
+            <option value="all">全部 product</option>
+            {productOptions.map((value) => <option key={value} value={value}>{value}</option>)}
           </select>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>

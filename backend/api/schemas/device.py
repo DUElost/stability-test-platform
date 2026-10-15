@@ -104,6 +104,7 @@ class DeviceOut(ORMBaseModel):
     id: int
     serial: str
     model: Optional[str] = None
+    product: Optional[str] = None
     platform: Optional[str] = None  # #73: MTK / UNISOC / QCOM / UNKNOWN
     host_id: Optional[str] = None
     project_key: Optional[str] = None  # ADR-0029：归属项目（F2 口径，不暴露 project_id）
@@ -171,5 +172,6 @@ class DeviceLiteOut(ORMBaseModel):
     id: int
     serial: str
     model: Optional[str] = None
+    product: Optional[str] = None
     host_id: Optional[str] = None
     status: str
