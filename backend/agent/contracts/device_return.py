@@ -246,6 +246,7 @@ def map_step_outcome_to_disarm_result(
     readback: Optional[str] = None,
     lease_lost: bool = False,
     incomplete: bool = False,
+    skipped: bool = False,
     onboarded_family: bool = False,
     structured_result: Optional[str] = None,
 ) -> str:
@@ -253,15 +254,16 @@ def map_step_outcome_to_disarm_result(
 
     Priority: lease_lost → not_executed; incomplete → incomplete (even when
     the step has not started — SchedulerShutdown / permit-wait cut-off);
-    not started → not_executed; structured_result (from onboarded script JSON)
-    when valid; else success path is confirmed only for onboarded+readback ok,
-    otherwise executed_unverified; failure → failed; readback_failed when marked.
+    skipped / not started → not_executed; structured_result (from onboarded
+    script JSON) when valid; else success path is confirmed only for
+    onboarded+readback ok, otherwise executed_unverified; failure → failed;
+    readback_failed when marked.
     """
     if lease_lost:
         return DISARM_RESULT_NOT_EXECUTED
     if incomplete:
         return DISARM_RESULT_INCOMPLETE
-    if not started:
+    if skipped or not started:
         return DISARM_RESULT_NOT_EXECUTED
     if structured_result in DISARM_RESULTS:
         return structured_result

@@ -11,6 +11,7 @@ import json
 import sqlite3
 import threading
 import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -33,11 +34,16 @@ from backend.agent.contracts.device_return import (
 )
 from backend.agent import api_client
 from backend.agent.graceful_shutdown import shutdown_agent_runtime
+from backend.agent.coordinator import HostRunCoordinator
+from backend.agent.control_handler import build_control_handler
 from backend.agent.job_runner import JobRunnerState
 from backend.agent.registry.local_db import LocalDB
 from backend.agent.operation_scheduler import OperationScheduler
 from backend.agent.pipeline_engine import PipelineEngine, StepResult
-from backend.agent.recovery_executor import execute_recovery_actions_impl
+from backend.agent.recovery_executor import (
+    execute_recovery_actions_impl,
+    handle_lease_lost,
+)
 
 
 # Flip to True only when proving pre-fix redness (documented in Agent Note).
@@ -65,6 +71,15 @@ def _bare_engine(**kwargs):
         "update_state", lambda *_a, **_k: None
     )
     engine._last_step_error = ""
+    engine._log_dir = None
+    engine._adb = None
+    engine._serial = "test-serial"
+    engine._shared = {}
+    engine._local_db = None
+    engine._adb_path = ""
+    engine._nfs_root = ""
+    engine._make_mq_logger = lambda *a, **k: MagicMock()
+    engine._report_step_trace_mq = MagicMock()
     return engine
 
 
@@ -973,3 +988,422 @@ class TestGracefulShutdownIncompleteOutboxDurability:
 
         assert order.index("persist") < order.index("drain") < order.index("close")
         local_db.enqueue_terminal.assert_called()
+
+
+# ── §3.2.1 R1–R4 权威复核探针（仓库回归）─────────────────────────────────────
+
+
+class TestReviewR1PermitCancelledRequeue:
+    def test_repeated_control_abort_must_not_drop_waiting_disarm(self):
+        """真实 abort 链：PermitCancelled 后仍按原截止重排并执行解除。"""
+        scheduler = OperationScheduler(max_concurrent=1)
+        held = scheduler.acquire(99)
+        coord = HostRunCoordinator(
+            api_url="http://example.invalid",
+            host_id="test-host",
+            agent_instance_id="review-instance",
+        )
+        coord.set_scheduler(scheduler)
+        coord.register_job(7)
+        coord.register_job_device(7, 1)
+
+        def update(s, *a, **kw):
+            coord.register_job(7).update(s)
+
+        engine = _bare_engine(
+            scheduler=scheduler, run_id=7, device_id=1, update_state=update
+        )
+        engine._footprint_families = {"power-cycle"}
+        engine._canceled = True
+        ran: list[str] = []
+        engine._execute_step = (
+            lambda *a, **kw: ran.append("disarm") or StepResult(success=True)
+        )
+        state = JobRunnerState(
+            active_jobs_lock=threading.RLock(),
+            active_job_ids={7},
+            active_device_ids={1},
+            active_job_tokens={7: "tok"},
+            running_worker_tokens={7: "tok"},
+            watcher_globally_enabled=False,
+            watcher_plan_default=False,
+            lock_register=MagicMock(),
+            lock_deregister=MagicMock(),
+            device_id_register=MagicMock(),
+            device_id_deregister=MagicMock(),
+        )
+        state.attach_runner(7, "tok", engine)
+        handler = build_control_handler(
+            deps=SimpleNamespace(job_runner_state=state, coordinator=coord),
+            mq_producer=MagicMock(),
+            host_id="test",
+            api_url="http://example.invalid",
+            agent_secret="",
+            adb_path="/nonexistent-adb",
+            local_db=MagicMock(),
+            active_jobs_lock=state.active_jobs_lock,
+            active_job_ids=state.active_job_ids,
+            ensure_adb_server=MagicMock(),
+        )
+        errors: list[str] = []
+
+        def worker():
+            try:
+                engine._execute_teardown_best_effort(
+                    [
+                        {
+                            "step_id": "finish",
+                            "action": "script:powercycle_finish",
+                            "timeout_seconds": 5,
+                        }
+                    ]
+                )
+            except Exception as e:
+                errors.append(repr(e))
+
+        t = threading.Thread(target=worker)
+        t.start()
+        try:
+            deadline = time.monotonic() + 2
+            while scheduler.waiter_count != 1 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert scheduler.waiter_count == 1, errors
+            handler({"command": "abort", "payload": {"job_ids": [7]}})
+            held.release()
+            t.join(2)
+            assert not t.is_alive(), errors
+            assert ran == ["disarm"], {
+                "ran": ran,
+                "results": engine._disarm_results,
+                "errors": errors,
+            }
+        finally:
+            try:
+                held.release()
+            except Exception:
+                pass
+            scheduler.shutdown()
+            t.join(2)
+
+    def test_repeated_cancel_does_not_extend_original_deadline(self):
+        """重复 PermitCancelled 不得重置 teardown 等待截止。"""
+        scheduler = OperationScheduler(max_concurrent=1)
+        held = scheduler.acquire(99)
+        engine = _bare_engine(scheduler=scheduler, device_id=1)
+        engine._footprint_families = {"power-cycle"}
+        engine._canceled = True
+        step = {
+            "step_id": "finish",
+            "action": "script:powercycle_finish",
+            "timeout_seconds": 1,
+        }
+        box: dict = {}
+
+        def worker():
+            t0 = time.monotonic()
+            ok = engine._run_step_with_permit("teardown", step)
+            box["elapsed"] = time.monotonic() - t0
+            box["ok"] = ok
+            box["err"] = engine._last_step_error
+
+        t = threading.Thread(target=worker)
+        t.start()
+        deadline = time.monotonic() + 2
+        while scheduler.waiter_count != 1 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        # Spam cancel; must not restart the 1s budget.
+        for _ in range(5):
+            scheduler.cancel_device(1)
+            time.sleep(0.05)
+        t.join(3)
+        assert not t.is_alive()
+        assert box.get("ok") is False
+        assert box.get("elapsed", 99) < 2.5
+        assert "incomplete" in (box.get("err") or "")
+        held.release()
+        scheduler.shutdown()
+
+    def test_scheduler_shutdown_still_incomplete(self):
+        scheduler = OperationScheduler(max_concurrent=1)
+        engine = _bare_engine(scheduler=scheduler, device_id=1)
+        engine._footprint_families = {"power-cycle"}
+        scheduler.shutdown()
+        ok = engine._run_step_with_permit(
+            "teardown",
+            {
+                "step_id": "finish",
+                "action": "script:powercycle_finish",
+                "timeout_seconds": 5,
+            },
+        )
+        assert ok is False
+        entry = engine._disarm_results.get("power-cycle")
+        assert entry is not None
+        assert entry["result"] == DISARM_RESULT_INCOMPLETE
+
+
+class TestReviewR2SkippedNotExecuted:
+    def test_disabled_disarm_is_not_executed(self):
+        engine = _bare_engine(scheduler=OperationScheduler())
+        engine._footprint_families = {"power-cycle"}
+        engine._report_step_trace_mq = MagicMock()
+        calls = []
+        engine._run_with_timeout = lambda *a, **k: calls.append("run") or StepResult(
+            success=True
+        )
+        r = engine._execute_teardown_best_effort(
+            [
+                {
+                    "step_id": "finish",
+                    "action": "script:powercycle_finish",
+                    "enabled": False,
+                    "timeout_seconds": 5,
+                }
+            ]
+        )
+        assert calls == []
+        assert (
+            r.metadata["disarm_results"]["power-cycle"]["result"]
+            == DISARM_RESULT_NOT_EXECUTED
+        )
+        reason = r.metadata["disarm_results"]["power-cycle"].get("reason") or ""
+        assert "disabled" in reason or "skip" in reason
+
+    def test_disabled_disarm_does_not_report_executing_disarm(self):
+        states = []
+        engine = _bare_engine(
+            scheduler=OperationScheduler(),
+            update_state=lambda s, *a, **k: states.append(s),
+        )
+        engine._footprint_families = {"power-cycle"}
+        engine._report_step_trace_mq = MagicMock()
+        engine._run_step_with_permit(
+            "teardown",
+            {
+                "step_id": "finish",
+                "action": "script:powercycle_finish",
+                "enabled": False,
+                "timeout_seconds": 5,
+            },
+        )
+        assert EXECUTING_DISARM not in states
+
+    def test_enabled_sibling_keeps_real_completion(self):
+        """另一专项真实完成不得被 skipped 分支降级。"""
+        engine = _bare_engine(scheduler=OperationScheduler())
+        engine._footprint_families = {"power-cycle", "sleep"}
+        engine._report_step_trace_mq = MagicMock()
+        engine._run_with_timeout = lambda *a, **k: StepResult(
+            success=True, exit_code=0, output="ok"
+        )
+        # First: disabled power-cycle → not_executed
+        engine._run_step_with_permit(
+            "teardown",
+            {
+                "step_id": "pf",
+                "action": "script:powercycle_finish",
+                "enabled": False,
+                "timeout_seconds": 5,
+            },
+        )
+        # Second: enabled sleep → executed_unverified
+        engine._run_step_with_permit(
+            "teardown",
+            {
+                "step_id": "sf",
+                "action": "script:sleep_finish",
+                "timeout_seconds": 5,
+            },
+        )
+        assert (
+            engine._disarm_results["power-cycle"]["result"]
+            == DISARM_RESULT_NOT_EXECUTED
+        )
+        assert (
+            engine._disarm_results["sleep"]["result"]
+            == DISARM_RESULT_EXECUTED_UNVERIFIED
+        )
+
+
+class TestReviewR3FootprintStartedBoundary:
+    def test_disabled_init_must_not_establish_footprint(self):
+        e = _bare_engine(scheduler=OperationScheduler())
+        e._report_step_trace_mq = MagicMock()
+        e._run_step_with_permit(
+            "init",
+            {
+                "step_id": "setup",
+                "action": "script:powercycle_setup",
+                "enabled": False,
+            },
+        )
+        assert e._footprint_families == set()
+
+    def test_init_never_granted_permit_must_not_establish_footprint(self):
+        s = OperationScheduler()
+        s.shutdown()
+        e = _bare_engine(scheduler=s)
+        e._run_step_with_permit(
+            "init",
+            {"step_id": "setup", "action": "script:powercycle_setup"},
+        )
+        assert e._footprint_families == set()
+
+    def test_enabled_init_keeps_footprint_after_failure(self):
+        """正向对照：真正开始后即使失败，足迹仍保留。"""
+        e = _bare_engine(scheduler=OperationScheduler())
+        e._report_step_trace_mq = MagicMock()
+        e._run_with_timeout = lambda *a, **k: StepResult(
+            success=False, exit_code=1, error_message="boom"
+        )
+        ok = e._run_step_with_permit(
+            "init",
+            {
+                "step_id": "setup",
+                "action": "script:powercycle_setup",
+                "timeout_seconds": 5,
+            },
+        )
+        assert ok is False
+        assert e._footprint_families == {"power-cycle"}
+
+
+class TestReviewR4LeaseLostBlocksRetry:
+    def test_409_during_retry_must_not_start_another_disarm(self):
+        e = _bare_engine(
+            scheduler=OperationScheduler(), api_url="http://example.invalid"
+        )
+        e._footprint_families = {"power-cycle"}
+        calls: list[int] = []
+
+        def step(*args, **kw):
+            calls.append(len(calls) + 1)
+            if len(calls) == 1:
+                assert e._teardown_lease_lost()
+                return StepResult(
+                    success=False, exit_code=1, error_message="lease lost while running"
+                )
+            return StepResult(success=True)
+
+        e._execute_step = step
+        with (
+            patch(
+                "backend.agent.pipeline_engine.requests.post",
+                return_value=SimpleNamespace(status_code=409),
+            ),
+            patch("backend.agent.pipeline_engine.time.sleep"),
+        ):
+            e._run_step_with_retry(
+                "teardown",
+                {
+                    "step_id": "finish",
+                    "action": "script:powercycle_finish",
+                    "retry": 1,
+                    "timeout_seconds": 5,
+                },
+                disarm_step=True,
+            )
+        assert calls == [1], {
+            "calls": calls,
+            "lease_lost": e._lease_lost_for_disarm,
+            "result": e._disarm_results,
+        }
+        assert e._disarm_results["power-cycle"]["result"] == DISARM_RESULT_NOT_EXECUTED
+        assert e._disarm_results["power-cycle"]["reason"] == LEASE_LOST_REASON
+
+    def test_lease_lost_before_first_attempt_runs_zero(self):
+        e = _bare_engine(scheduler=OperationScheduler())
+        e._footprint_families = {"power-cycle"}
+        e._lease_lost_for_disarm = True
+        calls = []
+        e._execute_step = lambda *a, **k: calls.append("x") or StepResult(success=True)
+        e._run_step_with_retry(
+            "teardown",
+            {
+                "step_id": "finish",
+                "action": "script:powercycle_finish",
+                "retry": 1,
+            },
+            disarm_step=True,
+        )
+        assert calls == []
+        assert e._disarm_results["power-cycle"]["reason"] == LEASE_LOST_REASON
+
+    def test_handle_lease_lost_wires_runner_flag_ordinary_abort_does_not(self):
+        engine = _bare_engine()
+        state = JobRunnerState(
+            active_jobs_lock=threading.RLock(),
+            active_job_ids={9},
+            active_device_ids={1},
+            active_job_tokens={9: "tok"},
+            running_worker_tokens={9: "tok"},
+            watcher_globally_enabled=False,
+            watcher_plan_default=False,
+            lock_register=MagicMock(),
+            lock_deregister=MagicMock(),
+            device_id_register=MagicMock(),
+            device_id_deregister=MagicMock(),
+        )
+        state.attach_runner(9, "tok", engine)
+        assert engine._lease_lost_for_disarm is False
+        state.request_abort(9)
+        assert engine._canceled is True
+        assert engine._lease_lost_for_disarm is False
+
+        engine2 = _bare_engine()
+        state2 = JobRunnerState(
+            active_jobs_lock=threading.RLock(),
+            active_job_ids={10},
+            active_device_ids={2},
+            active_job_tokens={10: "tok"},
+            running_worker_tokens={10: "tok"},
+            watcher_globally_enabled=False,
+            watcher_plan_default=False,
+            lock_register=MagicMock(),
+            lock_deregister=MagicMock(),
+            device_id_register=MagicMock(),
+            device_id_deregister=MagicMock(),
+        )
+        state2.attach_runner(10, "tok", engine2)
+        handle_lease_lost(
+            job_id=10,
+            device_id=2,
+            job_runner_state=state2,
+            coordinator=MagicMock(),
+            active_jobs_lock=state2.active_jobs_lock,
+            active_job_ids=state2.active_job_ids,
+            active_device_ids=state2.active_device_ids,
+            active_job_tokens=state2.active_job_tokens,
+            local_db=MagicMock(),
+        )
+        assert engine2._lease_lost_for_disarm is True
+        assert engine2._canceled is True
+
+    def test_ordinary_failure_still_retries_under_valid_lease(self):
+        e = _bare_engine(scheduler=OperationScheduler())
+        e._footprint_families = {"power-cycle"}
+        calls = []
+
+        def step(*a, **k):
+            calls.append(len(calls) + 1)
+            if len(calls) == 1:
+                return StepResult(success=False, exit_code=1, error_message="flaky")
+            return StepResult(success=True, exit_code=0)
+
+        e._execute_step = step
+        with patch("backend.agent.pipeline_engine.time.sleep"):
+            ok = e._run_step_with_retry(
+                "teardown",
+                {
+                    "step_id": "finish",
+                    "action": "script:powercycle_finish",
+                    "retry": 1,
+                },
+                disarm_step=True,
+            )
+        assert ok is True
+        assert calls == [1, 2]
+        assert (
+            e._disarm_results["power-cycle"]["result"]
+            == DISARM_RESULT_EXECUTED_UNVERIFIED
+        )

@@ -81,6 +81,16 @@ def handle_lease_lost(
     """
     abort_dispatched = False
     if job_runner_state is not None:
+        # R4: mark confirmed lease loss on the runner before ordinary abort so
+        # disarm retry boundaries see ``_lease_lost_for_disarm`` (not cancel alone).
+        try:
+            notify = getattr(job_runner_state, "notify_lease_lost_for_disarm", None)
+            if callable(notify):
+                notify(job_id)
+        except Exception:
+            logger.exception(
+                "on_lease_lost_notify_disarm_failed", extra={"job_id": job_id}
+            )
         try:
             abort_dispatched = bool(job_runner_state.request_abort(job_id))
         except Exception:
