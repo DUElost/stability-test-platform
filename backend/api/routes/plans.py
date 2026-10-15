@@ -298,13 +298,14 @@ class PlanRunSummaryOut(BaseModel):
 # U5 合入前 ONBOARDED 为空 → 对现有步骤不生效（预期）。
 
 
+# U1 合入前为空；合入后改为:
+#   from backend.agent.contracts.device_return import ONBOARDED as _ONBOARDED_REGISTRY
+_ONBOARDED_REGISTRY: dict = {}
+
+
 def _load_onboarded_registry() -> dict:
-    """Import ONBOARDED when U1 contract is present; else empty (U5 fills entries)."""
-    try:
-        from backend.agent.contracts.device_return import ONBOARDED as _OB
-        return _OB if isinstance(_OB, dict) else {}
-    except ImportError:
-        return {}
+    """Return ONBOARDED registry (empty until U1/U5 populate device_return)."""
+    return _ONBOARDED_REGISTRY if isinstance(_ONBOARDED_REGISTRY, dict) else {}
 
 
 def _min_wall_clock_for_step(

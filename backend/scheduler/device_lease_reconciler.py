@@ -41,6 +41,7 @@ from backend.core.metrics import (
     reconciler_unknown_backlog,
 )
 from backend.core.settings.scheduler import get_scheduler_settings
+from backend.core.adr0026_params import DEFAULTS as _ADR0026_DEFAULTS
 from backend.models.device_lease import DeviceLease
 from backend.models.enums import (
     TERMINAL_JOB_STATUSES,
@@ -483,11 +484,7 @@ _DISARM_SCRIPT_NAMES: frozenset[str] = frozenset({
 
 def _coordinator_progress_freshness_seconds() -> int:
     """两个协调心跳周期（#3723 §3.0 第 5 条）。"""
-    try:
-        from backend.core.adr0026_params import DEFAULTS
-        return int(DEFAULTS.coordinator_heartbeat_interval_seconds) * 2
-    except Exception:
-        return 60
+    return int(_ADR0026_DEFAULTS.coordinator_heartbeat_interval_seconds) * 2
 
 
 def _disarm_step_timeout_seconds(job: JobInstance) -> int | None:
