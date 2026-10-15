@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import json
+import sqlite3
 import threading
 import time
 from unittest.mock import MagicMock, patch
@@ -29,7 +31,10 @@ from backend.agent.contracts.device_return import (
     note_footprint_started,
     select_disarm_steps,
 )
+from backend.agent import api_client
 from backend.agent.graceful_shutdown import shutdown_agent_runtime
+from backend.agent.job_runner import JobRunnerState
+from backend.agent.registry.local_db import LocalDB
 from backend.agent.operation_scheduler import OperationScheduler
 from backend.agent.pipeline_engine import PipelineEngine, StepResult
 from backend.agent.recovery_executor import execute_recovery_actions_impl
@@ -731,3 +736,240 @@ class TestFootprintHelpers:
             ["power-cycle"],
         )
         assert [s["step_id"] for s in steps] == ["a"]
+
+
+# ── 停机：未完成解除在关库前写入 outbox（§3.2.4 持久化）─────────────────────
+
+
+class TestGracefulShutdownIncompleteOutboxDurability:
+    def test_leftover_disarm_persisted_before_local_db_close(self, tmp_path):
+        """§3.2.4: leftovers after disarm window must hit outbox before close.
+
+        Pre-fix (``wait=False`` only): drain runs, then LocalDB closes while the
+        disarm worker is still running → outbox empty; late ``complete_job`` hits
+        ``LocalDB is closed`` / ``TerminalReportLostError``.
+        Post-fix: shutdown path enqueues ``incomplete`` while DB is open.
+        """
+        db_path = tmp_path / "isolated-agent.db"
+        db = LocalDB()
+        db.initialize(str(db_path))
+        scheduler = OperationScheduler(max_concurrent=1)
+        engine = _bare_engine(scheduler=scheduler, run_id=42, device_id=1)
+        engine._footprint_families = {"power-cycle"}
+        engine._disarm_results = {}
+        state = JobRunnerState(
+            active_jobs_lock=threading.RLock(),
+            active_job_ids={42},
+            active_device_ids={1},
+            active_job_tokens={42: "test-token"},
+            running_worker_tokens={42: "test-token"},
+            watcher_globally_enabled=False,
+            watcher_plan_default=False,
+            lock_register=MagicMock(),
+            lock_deregister=MagicMock(),
+            device_id_register=MagicMock(),
+            device_id_deregister=MagicMock(),
+        )
+        state.attach_runner(42, "test-token", engine)
+
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow_step(*_a, **_kw):
+            started.set()
+            release.wait(timeout=25)
+            return StepResult(success=True, exit_code=0)
+
+        engine._execute_step = slow_step
+        step = {
+            "step_id": "finish",
+            "action": "script:powercycle_finish",
+            "timeout_seconds": 600,
+        }
+
+        def worker():
+            result = engine._execute_teardown_best_effort([step])
+            api_client.complete_job(
+                "http://example.invalid",
+                42,
+                {
+                    "status": "CANCELED",
+                    "exit_code": 0,
+                    "disarm_results": result.metadata["disarm_results"],
+                },
+                fencing_token="test-token",
+                local_db=db,
+            )
+
+        from concurrent.futures import ThreadPoolExecutor
+
+        pool = ThreadPoolExecutor(max_workers=1)
+        worker_error = None
+        durable = []
+        still_running_at_close = None
+
+        def _shutdown_without_persist(**kwargs):
+            # Pre-fix fragment: bounded wait=False + drain + close, no
+            # incomplete enqueue for leftovers still in active_runners.
+            kwargs = dict(kwargs)
+            local_db = kwargs["local_db"]
+            outbox_drain = kwargs["outbox_drain"]
+            executor = kwargs["executor"]
+            kwargs["coordinator"].stop()
+            for jid in list(kwargs["job_runner_state"].active_runners):
+                kwargs["job_runner_state"].request_abort(jid)
+            # Skip real 20s window — leftover remains by construction.
+            kwargs["operation_scheduler"].shutdown()
+            executor.shutdown(wait=False, cancel_futures=False)
+            outbox_drain.drain_sync()
+            outbox_drain.stop()
+            local_db.close()
+
+        with (
+            patch.object(
+                api_client, "_post_with_retry", side_effect=RuntimeError("offline")
+            ),
+            patch.object(api_client, "_terminal_abort_jitter_seconds", return_value=0),
+            patch("backend.agent.graceful_shutdown.LocalDiskMonitor"),
+            patch("backend.agent.graceful_shutdown.LogArchiver"),
+            patch("backend.agent.graceful_shutdown.EventUploader"),
+            patch(
+                "backend.agent.graceful_shutdown._await_started_disarm",
+                lambda *a, **k: None,
+            ),
+        ):
+            task = pool.submit(worker)
+            assert started.wait(timeout=2)
+            try:
+                if _PRE_FIX_BEHAVIOR:
+                    _shutdown_without_persist(
+                        coordinator=MagicMock(),
+                        operation_scheduler=scheduler,
+                        job_runner_state=state,
+                        executor=pool,
+                        step_trace_uploader=MagicMock(),
+                        outbox_drain=MagicMock(),
+                        log_signal_drainer=None,
+                        recovery_sync_stop=MagicMock(),
+                        recovery_sync_thread=MagicMock(),
+                        heartbeat_thread=MagicMock(),
+                        lease_renewer=MagicMock(),
+                        mq_producer=MagicMock(),
+                        local_db=db,
+                        sio_client=MagicMock(),
+                    )
+                else:
+                    shutdown_agent_runtime(
+                        coordinator=MagicMock(),
+                        operation_scheduler=scheduler,
+                        job_runner_state=state,
+                        executor=pool,
+                        step_trace_uploader=MagicMock(),
+                        outbox_drain=MagicMock(),
+                        log_signal_drainer=None,
+                        recovery_sync_stop=MagicMock(),
+                        recovery_sync_thread=MagicMock(),
+                        heartbeat_thread=MagicMock(),
+                        lease_renewer=MagicMock(),
+                        mq_producer=MagicMock(),
+                        local_db=db,
+                        sio_client=MagicMock(),
+                    )
+                still_running_at_close = not task.done()
+                with sqlite3.connect(db_path) as check:
+                    durable = [
+                        json.loads(row[0])
+                        for row in check.execute(
+                            "select payload from job_terminal_outbox where job_id = 42"
+                        )
+                    ]
+            finally:
+                release.set()
+                try:
+                    task.result(timeout=2)
+                except Exception as exc:
+                    worker_error = type(exc).__name__
+                pool.shutdown(wait=True)
+                try:
+                    db.close()
+                except Exception:
+                    pass
+
+        if _PRE_FIX_BEHAVIOR:
+            assert not durable, (
+                "pre-fix must leave outbox empty when worker still running at close"
+            )
+            pytest.fail(
+                "pre-fix empty outbox + late "
+                f"{worker_error} (still_running={still_running_at_close}) — expected red"
+            )
+
+        assert durable, (
+            f"still_running_at_db_close={still_running_at_close}; "
+            f"durable_outbox={durable}; late_completion={worker_error}"
+        )
+        assert (
+            durable[0]["disarm_results"]["power-cycle"]["result"]
+            == DISARM_RESULT_INCOMPLETE
+        )
+
+    def test_persist_runs_before_outbox_drain_and_db_close(self):
+        """Ordering: persist incomplete → drain_sync → local_db.close."""
+        coordinator = MagicMock()
+        scheduler = MagicMock()
+        runner = MagicMock()
+        engine = _bare_engine(run_id=7)
+        engine._footprint_families = {"power-cycle"}
+        engine._disarm_results = {}
+        runner.active_runners = {7: ("tok-7", engine)}
+        runner.active_job_tokens = {7: "tok-7"}
+        runner.request_abort.side_effect = lambda jid: None
+
+        order: list[str] = []
+        local_db = MagicMock()
+
+        def enqueue(job_id, payload):
+            order.append("persist")
+            assert payload["disarm_results"]["power-cycle"]["result"] == (
+                DISARM_RESULT_INCOMPLETE
+            )
+            return 1
+
+        local_db.enqueue_terminal.side_effect = enqueue
+        local_db.close.side_effect = lambda: order.append("close")
+
+        outbox = MagicMock()
+        outbox.drain_sync.side_effect = lambda: order.append("drain") or 0
+
+        with (
+            patch("backend.agent.graceful_shutdown.LocalDiskMonitor"),
+            patch("backend.agent.graceful_shutdown.LogArchiver"),
+            patch("backend.agent.graceful_shutdown.EventUploader"),
+            patch("backend.agent.graceful_shutdown._await_started_disarm"),
+        ):
+            if _PRE_FIX_BEHAVIOR:
+                # Old: no persist hook — drain then close only.
+                outbox.drain_sync()
+                local_db.close()
+                assert order == ["drain", "close"]
+                pytest.fail("pre-fix missing persist-before-close — expected red")
+
+            shutdown_agent_runtime(
+                coordinator=coordinator,
+                operation_scheduler=scheduler,
+                job_runner_state=runner,
+                executor=MagicMock(),
+                step_trace_uploader=MagicMock(),
+                outbox_drain=outbox,
+                log_signal_drainer=None,
+                recovery_sync_stop=MagicMock(),
+                recovery_sync_thread=MagicMock(),
+                heartbeat_thread=MagicMock(),
+                lease_renewer=MagicMock(),
+                mq_producer=MagicMock(),
+                local_db=local_db,
+                sio_client=MagicMock(),
+            )
+
+        assert order.index("persist") < order.index("drain") < order.index("close")
+        local_db.enqueue_terminal.assert_called()

@@ -12,12 +12,34 @@ import time
 from concurrent.futures import Executor
 from typing import Any, Optional
 
+from .api_client import _build_complete_payload
 from .artifact_uploader import ArtifactUploader
+from .contracts.device_return import (
+    DISARM_RESULT_CONFIRMED,
+    DISARM_RESULT_EXECUTED_UNVERIFIED,
+    DISARM_RESULT_FAILED,
+    DISARM_RESULT_INCOMPLETE,
+    DISARM_RESULT_READBACK_FAILED,
+    make_disarm_result,
+)
 from .event_uploader import EventUploader
 from .local_disk_monitor import LocalDiskMonitor
 from .log_archiver import LogArchiver
 
 logger = logging.getLogger(__name__)
+
+# Family results that already finished during the disarm window — keep as-is
+# when persisting leftover jobs at shutdown cut-off (#3723 §3.2.4).
+_FINISHED_DISARM_RESULTS = frozenset(
+    {
+        DISARM_RESULT_CONFIRMED,
+        DISARM_RESULT_EXECUTED_UNVERIFIED,
+        DISARM_RESULT_FAILED,
+        DISARM_RESULT_READBACK_FAILED,
+    }
+)
+
+_SHUTDOWN_INCOMPLETE_REASON = "shutdown_disarm_window_elapsed"
 
 
 
@@ -54,6 +76,112 @@ def _await_started_disarm(
             leftover,
             timeout_seconds,
         )
+
+
+def _iter_leftover_runners(
+    job_runner_state: Any,
+) -> list[tuple[int, str, Any]]:
+    """Snapshot ``active_runners`` entries still present after the disarm window."""
+    try:
+        active = dict(getattr(job_runner_state, "active_runners", None) or {})
+    except Exception:
+        logger.exception("shutdown_incomplete_outbox_inspect_failed")
+        return []
+    out: list[tuple[int, str, Any]] = []
+    for job_id, entry in active.items():
+        worker_token = ""
+        runner: Any = entry
+        if isinstance(entry, tuple) and len(entry) >= 2:
+            worker_token = str(entry[0] or "")
+            runner = entry[1]
+        tokens = getattr(job_runner_state, "active_job_tokens", None) or {}
+        try:
+            fencing = str(tokens.get(job_id) or worker_token or "")
+        except Exception:
+            fencing = worker_token
+        out.append((int(job_id), fencing, runner))
+    return out
+
+
+def _disarm_results_for_shutdown_incomplete(runner: Any) -> dict[str, dict]:
+    """Build per-family disarm_results marking unfinished families incomplete."""
+    families = set(getattr(runner, "_footprint_families", None) or set())
+    existing = dict(getattr(runner, "_disarm_results", None) or {})
+    if not families:
+        families = set(existing.keys())
+    if not families:
+        return {}
+    results: dict[str, dict] = {}
+    for family in families:
+        prior = existing.get(family) or {}
+        prior_result = prior.get("result")
+        if prior_result in _FINISHED_DISARM_RESULTS:
+            results[family] = dict(prior)
+            continue
+        results[family] = make_disarm_result(
+            result=DISARM_RESULT_INCOMPLETE,
+            step_id=str(prior.get("step_id") or ""),
+            exit_code=prior.get("exit_code"),
+            readback_summary=str(prior.get("readback_summary") or ""),
+            reason=_SHUTDOWN_INCOMPLETE_REASON,
+        )
+    return results
+
+
+def _persist_incomplete_disarm_to_outbox(
+    job_runner_state: Optional[Any],
+    local_db: Any,
+) -> int:
+    """Write ``incomplete`` terminal facts for leftover jobs before LocalDB close.
+
+    #3723 §3.2.4: after abort → ≤20s → scheduler.shutdown, unfinished disarm
+    must land in the local outbox while the DB is still open. ``executor.shutdown
+    (wait=False)`` intentionally does not wait for workers, so this path is the
+    durability guarantee — not a late worker callback after ``local_db.close()``.
+    """
+    if job_runner_state is None or local_db is None:
+        return 0
+    enqueue = getattr(local_db, "enqueue_terminal", None)
+    if not callable(enqueue):
+        return 0
+    persisted = 0
+    for job_id, fencing_token, runner in _iter_leftover_runners(job_runner_state):
+        disarm_results = _disarm_results_for_shutdown_incomplete(runner)
+        if not disarm_results:
+            continue
+        if not fencing_token:
+            logger.warning(
+                "shutdown_incomplete_outbox_skip_no_token job=%d", job_id,
+            )
+            continue
+        payload = _build_complete_payload(
+            {
+                "status": "CANCELED",
+                "exit_code": 0,
+                "error_message": _SHUTDOWN_INCOMPLETE_REASON,
+                "disarm_results": disarm_results,
+            },
+            fencing_token,
+        )
+        try:
+            enqueue(job_id, payload)
+            persisted += 1
+            logger.info(
+                "shutdown_incomplete_outbox_enqueued job=%d families=%s",
+                job_id,
+                sorted(disarm_results),
+            )
+        except ValueError as exc:
+            # First terminal fact already durable (worker won the race).
+            logger.info(
+                "shutdown_incomplete_outbox_conflict job=%d: %s", job_id, exc,
+            )
+        except Exception:
+            logger.exception(
+                "shutdown_incomplete_outbox_failed job=%d", job_id,
+            )
+    return persisted
+
 
 
 def shutdown_agent_runtime(
@@ -95,6 +223,16 @@ def shutdown_agent_runtime(
     # wait=False returns immediately; worker threads may still finish
     # enqueueing incomplete while we drain what is already durable.
     executor.shutdown(wait=False, cancel_futures=False)
+    # #3723 §3.2.4: leftovers after the 20s window → incomplete into local
+    # outbox BEFORE drain/close. wait=False leaves workers running; closing
+    # LocalDB first drops late complete_job enqueue (TerminalReportLostError
+    # with empty outbox). Persist here so drain has something durable.
+    try:
+        n = _persist_incomplete_disarm_to_outbox(job_runner_state, local_db)
+        if n:
+            logger.info("shutdown_incomplete_outbox_persisted count=%d", n)
+    except Exception:
+        logger.exception("shutdown_incomplete_outbox_persist_failed")
     # Flush step traces via HTTP before shutdown
     try:
         flushed = step_trace_uploader.drain_sync()
