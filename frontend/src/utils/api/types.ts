@@ -168,6 +168,7 @@ export interface Device {
   /** 疑似占位序列号（后端按 is_placeholder_serial 计算，响应恒带；#2032 补齐） */
   serial_suspect?: boolean;
   model: string | null;
+  product?: string | null;
   /** SoC platform (#73). Gates MTK-only subsystems such as the AEE Reconciler. */
   platform?: 'MTK' | 'UNISOC' | 'QCOM' | 'UNKNOWN' | null;
   host_id: string | number | null;

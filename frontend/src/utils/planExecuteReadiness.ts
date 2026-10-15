@@ -5,6 +5,7 @@ export interface ReadinessDevice {
   /** #2649：serial 为占位/重复值（后端读时派生）——选机侧提示用 */
   serial_suspect?: boolean;
   model?: string | null;
+  product?: string | null;
   host_id?: string | number | null;
   status: string;
   adb_connected?: boolean | null;

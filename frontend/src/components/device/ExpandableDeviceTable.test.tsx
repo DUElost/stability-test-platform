@@ -287,3 +287,22 @@ describe('ExpandableDeviceTable', () => {
   });
 
 });
+
+it('distinguishes NX3Carrier by product and filters same-model devices', async () => {
+  const nxDevices = [
+    { id: 1, serial: 'NX2-A', model: 'MLD_NX2', product: 'MLD-NX2', status: 'idle' as const },
+    { id: 2, serial: 'NX3-A', model: 'MLD_NX3', product: 'MLD-NX3', status: 'idle' as const },
+    { id: 3, serial: 'CARRIER-A', model: 'MLD_NX3', product: 'sys_mssi_64_cn_armv82', status: 'offline' as const },
+    { id: 4, serial: 'LEGACY-A', model: 'MLD_NX3', product: null, status: 'idle' as const },
+  ];
+  render(<ExpandableDeviceTable devices={nxDevices} />);
+  expect(screen.getByText('Product: NX3Carrier · sys_mssi_64_cn_armv82')).toBeInTheDocument();
+  expect(screen.getByText('Product: 未上报')).toBeInTheDocument();
+  fireEvent.change(screen.getByRole('combobox', { name: '按 product 筛选' }), { target: { value: 'sys_mssi_64_cn_armv82' } });
+  expect(screen.getByText('CARRIER-A')).toBeInTheDocument();
+  expect(screen.queryByText('NX3-A')).not.toBeInTheDocument();
+  fireEvent.change(screen.getByRole('combobox', { name: '按 product 筛选' }), { target: { value: 'all' } });
+  fireEvent.change(screen.getByRole('textbox', { name: '搜索设备' }), { target: { value: 'NX3Carrier' } });
+  await waitFor(() => expect(screen.queryByText('NX3-A')).not.toBeInTheDocument());
+  expect(screen.getByText('CARRIER-A')).toBeInTheDocument();
+});

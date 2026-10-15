@@ -397,14 +397,18 @@ def discover_devices(adb_path: str = "adb") -> List[Dict[str, Any]]:
         # 大小写并存会让 model_facts 取首个原值、第二台全等 join 全线 miss
         # （派发/suite_binding/列表过滤共用 Device.model == match_value）。
         model = None
+        product = None
         for part in parts:
             if part.startswith("model:"):
                 model = part.split(":", 1)[1].upper()
+            elif part.startswith("product:"):
+                product = part.split(":", 1)[1] or None
 
         devices.append({
             "serial": serial,
             "adb_state": adb_state,
             "model": model,
+            "product": product,
         })
 
     logger.info(f"discovered_devices: {len(devices)} devices")
