@@ -56,8 +56,9 @@ export const deviceKeys = {
     unassigned = false,
     includeStale = false,
     includeRetired = false,
+    product?: string,
   ) =>
-    ['devices', { projectKey: projectKey ?? null, unassigned, includeStale, includeRetired }] as const,
+    ['devices', { projectKey: projectKey ?? null, unassigned, includeStale, includeRetired, ...(product ? { product } : {}) }] as const,
   /** 任意筛选态的设备列表（前缀）——写后失效用；用 list() 的无参形态会因对象深比较
    *  与筛选态键不匹配而失效为空（#823）。 */
   allLists: () => ['devices'] as const,

@@ -99,6 +99,7 @@ class Device(Base):
     serial     = Column(String(128), nullable=False, unique=True)
     host_id    = Column(String(64), ForeignKey("host.id", ondelete="CASCADE", onupdate="CASCADE"))
     model      = Column(String(128))
+    product    = Column(String(128), nullable=True)
     platform   = Column(String(64))
     tags       = Column(JSONB, nullable=False, default=list)
     status     = Column(String(32), nullable=False, default="OFFLINE")

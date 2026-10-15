@@ -730,7 +730,7 @@ describe('DevicesPage — CSV 公式前缀中和（S1 / #3237）', () => {
     expect(csv).toContain('"a,b"');
     expect(csv).toContain('"say ""hi"""');
     // 表头与列数不变：8 列
-    expect(csv).toContain('"ID","Serial","Model","Status","Host","Build","Tags","Last Seen"');
+    expect(csv).toContain('"ID","Serial","Model","Product","Status","Host","Build","Tags","Last Seen"');
   });
 });
 

@@ -108,6 +108,7 @@ export default function DevicesPage() {
         id: device.id,
         serial: device.serial,
         model: device.model || '未知设备',
+        product: device.product ?? null,
         status: deviceStatusMap[device.status] || 'offline',
         adb_state: device.adb_state,
         battery_level: device.battery_level ?? undefined,
@@ -278,6 +279,7 @@ export default function DevicesPage() {
       device.id,
       device.serial,
       device.model,
+      device.product ?? '',
       device.status,
       device.host_name ?? '',
       device.build_display_id ?? '',
@@ -285,7 +287,7 @@ export default function DevicesPage() {
       device.last_seen ?? '',
     ]);
     const csv = [
-      ['ID', 'Serial', 'Model', 'Status', 'Host', 'Build', 'Tags', 'Last Seen'],
+      ['ID', 'Serial', 'Model', 'Product', 'Status', 'Host', 'Build', 'Tags', 'Last Seen'],
       ...rows,
     ].map((row) => row.map(csvCell).join(',')).join('\r\n');
     const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' });

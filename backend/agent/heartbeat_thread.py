@@ -546,6 +546,7 @@ class HeartbeatThread:
                 device_data = {
                     "serial": dev["serial"],
                     "model": dev.get("model"),
+                    "product": dev.get("product"),
                     "state": dev["adb_state"],
                     "adb_state": info.get("adb_state", dev.get("adb_state", "unknown")),
                     "adb_connected": info.get("adb_connected", False),

@@ -11,6 +11,7 @@ export interface PlanExecuteDraftV2 {
   deviceVersionFilter: string;
   deviceHostFilter: string;
   deviceModelFilter: string;
+  deviceProductFilter?: string;
   deviceTagFilter: string[];
   readyOnly?: boolean;
   /** Serialized `key:dir`, e.g. `serial:asc` */

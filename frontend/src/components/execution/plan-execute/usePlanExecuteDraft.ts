@@ -37,6 +37,7 @@ export function usePlanExecuteDraftWriter({ draft }: UsePlanExecuteDraftWriterOp
     draft.deviceVersionFilter,
     draft.deviceHostFilter,
     draft.deviceModelFilter,
+    draft.deviceProductFilter,
     draft.deviceTagFilter,
     draft.readyOnly,
     draft.tableSort,
