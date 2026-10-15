@@ -1874,3 +1874,23 @@ describe('PlanExecutePage', () => {
 
     expect(await screen.findByText(/WiFi 列表加载失败/)).toBeInTheDocument();
   });
+
+it('selects Carrier devices independently from ordinary NX3 and restores the product URL filter', async () => {
+  renderPage({
+    initialEntry: '/execution/plan-execute?plan=7&view=table&product=sys_mssi_64_cn_armv82',
+    devices: [
+      { id: 801, serial: 'NX3-ORDINARY', model: 'MLD_NX3', product: 'MLD-NX3', host_id: 'h1', status: 'ONLINE', adb_connected: true },
+      { id: 802, serial: 'NX3-CARRIER', model: 'MLD_NX3', product: 'sys_mssi_64_cn_armv82', host_id: 'h1', status: 'ONLINE', adb_connected: true },
+    ],
+    hosts: [{ id: 'h1', ip: '192.0.2.88', status: 'ONLINE' }],
+  });
+  await goToDeviceStep();
+  expect(screen.getByRole('combobox', { name: 'Product 筛选' })).toHaveValue('sys_mssi_64_cn_armv82');
+  const table = screen.getByTestId('device-table-panel');
+  expect(within(table).getByText('NX3-CARRIER')).toBeInTheDocument();
+  expect(within(table).getByText('Product: NX3Carrier · sys_mssi_64_cn_armv82')).toBeInTheDocument();
+  expect(within(table).queryByText('NX3-ORDINARY')).not.toBeInTheDocument();
+  fireEvent.change(screen.getByRole('combobox', { name: 'Product 筛选' }), { target: { value: 'MLD-NX3' } });
+  expect(within(table).getByText('NX3-ORDINARY')).toBeInTheDocument();
+  expect(within(table).queryByText('NX3-CARRIER')).not.toBeInTheDocument();
+});

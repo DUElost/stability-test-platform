@@ -1,3 +1,4 @@
+import { deviceProductText } from '@/utils/deviceProduct';
 import { ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-react';
 import { StatusBadge } from '@/components/ui/status-badge';
 import {
@@ -171,7 +172,12 @@ export function DeviceTablePanel({
                   </TableCell>
                   <TableCell className="px-3 py-2 font-mono text-xs">{device.serial}</TableCell>
                   <TableCell className="px-3 py-2 font-mono text-xs">{label}</TableCell>
-                  <TableCell className="px-3 py-2">{device.model || '—'}</TableCell>
+                  <TableCell className="px-3 py-2">
+                    <div>{device.model || '—'}</div>
+                    <div className="max-w-[16rem] truncate font-mono text-xs text-muted-foreground" title={deviceProductText(device.model, device.product)}>
+                      Product: {deviceProductText(device.model, device.product)}
+                    </div>
+                  </TableCell>
                   <TableCell className="max-w-[10rem] px-3 py-2">
                     <TooltipProvider delayDuration={200}>
                       <Tooltip>

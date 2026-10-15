@@ -4,6 +4,7 @@ export interface ExportDeviceRow {
   serial: string;
   host_id?: string | number | null;
   model?: string | null;
+  product?: string | null;
   build_display_id?: string | null;
 }
 
@@ -36,15 +37,16 @@ export function formatSerialsClipboard(devices: Array<{ serial: string }>): stri
   return devices.map((d) => escapeSpreadsheetClipboardCell(d.serial)).join('\n');
 }
 
-/** CSV with serial, host, model, version. */
+/** CSV with serial, host, model, version and raw product. */
 export function buildDeviceSelectionCsv(devices: ExportDeviceRow[], hostMap: HostLabelLookup): string {
-  const lines = ['serial,host,model,version'];
+  const lines = ['serial,host,model,version,product'];
   for (const device of devices) {
     lines.push([
       csvEscape(device.serial),
       csvEscape(hostLabelFor(device, hostMap)),
       csvEscape(device.model || ''),
       csvEscape(device.build_display_id || ''),
+      csvEscape(device.product || ''),
     ].join(','));
   }
   return `${lines.join('\n')}\n`;

@@ -487,6 +487,9 @@ def _process_heartbeat_with_db(
             device.host_id = host.id
             if dev_data.get("model") is not None:
                 device.model = dev_data.get("model")
+            reported_product = dev_data.get("product")
+            if isinstance(reported_product, str) and 0 < len(reported_product.strip()) <= 128:
+                device.product = reported_product.strip()
             # ADR-0029 v2.5 D10：归属派生（JOIN project_model），心跳不再
             # 维护 device.project_id 副本——热路径少一次写+查询
 

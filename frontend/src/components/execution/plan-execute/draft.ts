@@ -29,6 +29,7 @@ function normalizeDraft(parsed: Partial<PlanExecuteDraftV2> & { currentStep?: nu
     deviceVersionFilter: typeof parsed.deviceVersionFilter === 'string' ? parsed.deviceVersionFilter : 'all',
     deviceHostFilter: typeof parsed.deviceHostFilter === 'string' ? parsed.deviceHostFilter : 'all',
     deviceModelFilter: typeof parsed.deviceModelFilter === 'string' ? parsed.deviceModelFilter : 'all',
+    deviceProductFilter: typeof parsed.deviceProductFilter === 'string' ? parsed.deviceProductFilter : 'all',
     deviceTagFilter: Array.isArray(parsed.deviceTagFilter)
       ? parsed.deviceTagFilter.filter((tag): tag is string => typeof tag === 'string')
       : [],

@@ -10,13 +10,14 @@ import {
 describe('planExecuteFilters', () => {
   it('parses and writes filter query params round-trip', () => {
     const input = new URLSearchParams(
-      'plan=7&devices=1,2&view=table&q=ABC&version=V104&model=ELA&host=h1&tags=回归,pool&ready=1',
+      'plan=7&devices=1,2&view=table&q=ABC&version=V104&model=ELA&product=MLD-NX3&host=h1&tags=回归,pool&ready=1',
     );
     const parsed = parsePlanExecuteFilterParams(input);
     expect(parsed).toEqual({
       q: 'ABC',
       version: 'V104',
       model: 'ELA',
+      product: 'MLD-NX3',
       host: 'h1',
       tags: ['回归', 'pool'],
       readyOnly: true,
@@ -32,6 +33,7 @@ describe('planExecuteFilters', () => {
     expect(written.get('q')).toBe('ABC');
     expect(written.get('version')).toBe('V104');
     expect(written.get('model')).toBe('ELA');
+    expect(written.get('product')).toBe('MLD-NX3');
     expect(written.get('host')).toBe('h1');
     expect(written.get('tags')).toBe('回归,pool');
     expect(written.get('ready')).toBe('1');
@@ -91,6 +93,7 @@ describe('planExecuteFilters', () => {
       readyOnly: true,
       view: 'matrix' as const,
     };
+    expect(clearActiveFilterChip({ ...base, product: 'MLD-NX3' }, 'product').product).toBe('all');
     expect(clearActiveFilterChip(base, 'q').q).toBe('');
     expect(clearActiveFilterChip(base, 'version').version).toBe('all');
     expect(clearActiveFilterChip(base, 'host').host).toBe('all');
