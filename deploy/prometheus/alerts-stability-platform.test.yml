@@ -1411,7 +1411,7 @@ tests:
               severity: warning
             exp_annotations:
               summary: Disarm failed ratio above 5% for a family over 24h
-              description: "专项 {{ $labels.family }} 过去 24 小时解除结果 failed 占比超过 5%（ADR-0061 D7.1 / #3723 §3.0 第 7 条）。查该专项 teardown / 解除脚本与设备侧回读证据。"
+              description: "专项 power-cycle 过去 24 小时解除结果 failed 占比超过 5%（ADR-0061 D7.1 / #3723 §3.0 第 7 条）。查该专项 teardown / 解除脚本与设备侧回读证据。"
       - eval_time: 26h
         alertname: StabilityDisarmNotExecutedOrIncomplete
         exp_alerts: []

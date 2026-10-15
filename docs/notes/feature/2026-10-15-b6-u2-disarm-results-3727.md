@@ -1,9 +1,13 @@
-# Agent Note — B6-U2：控制面解除结果落库、宽限续期与墙钟校验（#3727）
+# B6 U2：控制面解除结果落库、宽限续期与墙钟校验
 
-## Decision
+Status: implemented
+Class: feature
 
 按 [#3723](https://github.com/DUElost/stability-test-platform/issues/3723) v1.2 §3.3
-与 ADR-0061 D3.6/D3.8、D4、D7.1 实施 U2，不重新设计：
+与 ADR-0061 D3.6/D3.8、D4、D7.1 实施 [#3727](https://github.com/DUElost/stability-test-platform/issues/3727)。
+Draft PR 待独立复核；合入不等于生效（控制面部署按 §5 第 3 步，在 Agent 热更新之后）。
+
+## Decision
 
 1. 迁移 `c3d4e5f6a7b8` 仅新增可空 JSONB 列 `job_instance.disarm_results`。
 2. `/complete`（`_RunCompleteIn`）接受 `disarm_results`；缺失时按 §3.0 第 6 条从
@@ -20,7 +24,7 @@
 U1 拥有 `backend/agent/contracts/device_return.py`：本单元**未**创建或修改该文件。
 控制面用与方案一致的字面量（FAMILY_STEPS / EXECUTING_DISARM / 六值），并在
 `agent_completion` / `plans` 标明「U1 合入后改为从 device_return 导入」。
-`plan_run_catalog._job_out` 增补一行映射（§3.3.6 API 面必需，declare scope 未列该文件）。
+`plan_run_catalog._job_out` 增补一行映射（§3.3.6 API 面必需）。
 
 ## Alternatives
 
@@ -30,8 +34,9 @@ U1 拥有 `backend/agent/contracts/device_return.py`：本单元**未**创建或
 
 ## Verification
 
-见本 PR 正文「门禁」：`check:quick`、根 `tests/`、受影响后端测试、promtool（若本机有）、
-前端类型检查；反例测试覆盖迁移链、带/不带 `disarm_results` 的推导表、reaper 续期/
+见本 PR 正文「门禁」：`check:quick`（schema-at-head 对本机生产库 behind 属预期中间态，
+迁移不得在生产库试跑）、根 `tests/`、受影响后端测试、`promtool test rules`、
+前端 `tsc`；反例测试覆盖迁移链、带/不带 `disarm_results` 的推导表、reaper 续期/
 回收、墙钟 422、指标计数、告警场景。
 
 ## Revisit
