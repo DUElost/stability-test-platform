@@ -87,9 +87,14 @@ def shutdown_agent_runtime(
             logger.exception("shutdown_cancel_runners_failed")
     _await_started_disarm(job_runner_state, timeout_seconds=20.0)
     # R07-F12 (#1012): scheduler.shutdown() wakes remaining permit waiters
-    # (teardown waiters record incomplete). Then drain the executor.
+    # (teardown waiters record incomplete → local outbox via complete_job).
     operation_scheduler.shutdown()
-    executor.shutdown(wait=True, cancel_futures=False)
+    # #3723 §3.2.4: after the 20s disarm window, must enter outbox drain
+    # boundedly. Teardown no longer kills children (§3.2.2), so wait=True
+    # can hang past systemd's 30s TimeoutStopSec and skip outbox flush.
+    # wait=False returns immediately; worker threads may still finish
+    # enqueueing incomplete while we drain what is already durable.
+    executor.shutdown(wait=False, cancel_futures=False)
     # Flush step traces via HTTP before shutdown
     try:
         flushed = step_trace_uploader.drain_sync()

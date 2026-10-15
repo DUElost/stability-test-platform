@@ -76,7 +76,7 @@ class TestSixValueMapping:
                 started=False, lease_lost=True
             ),
             DISARM_RESULT_INCOMPLETE: map_step_outcome_to_disarm_result(
-                started=True, incomplete=True
+                started=False, incomplete=True  # SchedulerShutdown shape
             ),
             DISARM_RESULT_EXECUTED_UNVERIFIED: map_step_outcome_to_disarm_result(
                 started=True, success=True, onboarded_family=False
@@ -479,6 +479,182 @@ class TestGracefulShutdownDisarmWindow:
             pytest.fail("pre-fix shut down scheduler before abort — expected red")
 
         assert order.index("abort") < order.index("wait") < order.index("scheduler")
+
+
+
+# ── 停机：20s 后有界进入 outbox（不得无限 wait=True）─────────────────────────
+
+
+class TestGracefulShutdownBoundedOutbox:
+    def test_reaches_outbox_drain_without_unbounded_executor_wait(self):
+        """After disarm window, outbox_drain.drain_sync must run.
+
+        Pre-fix: executor.shutdown(wait=True) with a never-finishing active
+        runner blocks forever → drain_sync never reached (red).
+        Post-fix: wait=False → drain_sync is called even if runners remain.
+        """
+        coordinator = MagicMock()
+        scheduler = MagicMock()
+        runner = MagicMock()
+        # Leftover active runner after the 20s window (started disarm still going).
+        runner.active_runners = {42: object()}
+        runner.request_abort.side_effect = lambda jid: None
+        step = MagicMock()
+        step.drain_sync.return_value = 0
+        outbox = MagicMock()
+        outbox.drain_sync.return_value = 1
+        drain_calls = []
+
+        def record_drain():
+            drain_calls.append("drain")
+            return 1
+
+        outbox.drain_sync.side_effect = record_drain
+
+        hung = {"blocked": False}
+
+        def maybe_hang_shutdown(wait=True, cancel_futures=False):
+            if wait:
+                # Simulate unbounded wait=True: never return to caller.
+                hung["blocked"] = True
+                if _PRE_FIX_BEHAVIOR:
+                    while True:
+                        time.sleep(0.05)
+                        if hung.get("stop"):
+                            return
+                raise AssertionError(
+                    "post-fix must not call executor.shutdown(wait=True)"
+                )
+
+        executor = MagicMock()
+        executor.shutdown.side_effect = maybe_hang_shutdown
+
+        if _PRE_FIX_BEHAVIOR:
+            # Old fragment: wait=True then outbox — hang prevents drain.
+            t = threading.Thread(
+                target=lambda: executor.shutdown(wait=True, cancel_futures=False),
+                daemon=True,
+            )
+            t.start()
+            time.sleep(0.15)
+            assert hung["blocked"] is True
+            assert drain_calls == []
+            hung["stop"] = True
+            t.join(timeout=1.0)
+            pytest.fail(
+                "pre-fix wait=True blocks before outbox drain — expected red"
+            )
+
+        with (
+            patch("backend.agent.graceful_shutdown.LocalDiskMonitor"),
+            patch("backend.agent.graceful_shutdown.LogArchiver"),
+            patch("backend.agent.graceful_shutdown.EventUploader"),
+            patch("backend.agent.graceful_shutdown._await_started_disarm"),
+        ):
+            shutdown_agent_runtime(
+                coordinator=coordinator,
+                operation_scheduler=scheduler,
+                job_runner_state=runner,
+                executor=executor,
+                step_trace_uploader=step,
+                outbox_drain=outbox,
+                log_signal_drainer=None,
+                recovery_sync_stop=MagicMock(),
+                recovery_sync_thread=MagicMock(),
+                heartbeat_thread=MagicMock(),
+                lease_renewer=MagicMock(),
+                mq_producer=MagicMock(),
+                local_db=MagicMock(),
+                sio_client=MagicMock(),
+            )
+
+        executor.shutdown.assert_called_once_with(wait=False, cancel_futures=False)
+        assert hung["blocked"] is False
+        assert drain_calls == ["drain"], "outbox drain must run after bounded shutdown"
+        outbox.drain_sync.assert_called()
+
+
+# ── SchedulerShutdown → incomplete（非 not_executed）─────────────────────────
+
+
+class TestSchedulerShutdownIncomplete:
+    def test_map_incomplete_beats_not_started(self):
+        """§3.2.1: SchedulerShutdown records incomplete even when not started.
+
+        Pre-fix mapping checked ``not started`` before ``incomplete`` →
+        ``not_executed`` (red). lease_lost still wins.
+        """
+        if _PRE_FIX_BEHAVIOR:
+            # Old priority (lease_lost | not started) before incomplete.
+            def old_map(*, started, lease_lost=False, incomplete=False, **_kw):
+                if lease_lost or not started:
+                    return DISARM_RESULT_NOT_EXECUTED
+                if incomplete:
+                    return DISARM_RESULT_INCOMPLETE
+                return DISARM_RESULT_EXECUTED_UNVERIFIED
+
+            assert old_map(started=False, incomplete=True) == DISARM_RESULT_NOT_EXECUTED
+            pytest.fail(
+                "pre-fix maps started=False+incomplete → not_executed — expected red"
+            )
+
+        assert (
+            map_step_outcome_to_disarm_result(started=False, incomplete=True)
+            == DISARM_RESULT_INCOMPLETE
+        )
+        assert (
+            map_step_outcome_to_disarm_result(
+                started=False, incomplete=True, lease_lost=True
+            )
+            == DISARM_RESULT_NOT_EXECUTED
+        )
+
+    def test_permit_wait_scheduler_shutdown_records_incomplete(self):
+        """End-to-end: teardown permit wait + SchedulerShutdown → incomplete."""
+        scheduler = OperationScheduler(max_concurrent=1)
+        held = scheduler.acquire(99)  # occupy the only slot
+        engine = _bare_engine(scheduler=scheduler, device_id=1, run_id=7)
+        engine._footprint_families.add("power-cycle")
+        box: dict = {}
+
+        def run():
+            ok = engine._run_step_with_permit(
+                "teardown",
+                {
+                    "step_id": "td",
+                    "action": "script:powercycle_finish",
+                    "version": "1.0.0",
+                    "timeout_seconds": 30,
+                },
+            )
+            box["ok"] = ok
+            box["disarm"] = dict(engine._disarm_results)
+
+        t = threading.Thread(target=run)
+        t.start()
+        # Wait until the engine is blocked in permit wait.
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            if engine._last_step_error or getattr(engine, "_disarm_results", None):
+                break
+            # Heuristic: acquire has queued — peek scheduler waiters if exposed.
+            waiters = getattr(scheduler, "_waiters", None)
+            if waiters is not None and 1 in waiters:
+                break
+            time.sleep(0.05)
+        scheduler.shutdown()
+        t.join(timeout=3.0)
+        assert not t.is_alive()
+        held.release()
+
+        if _PRE_FIX_BEHAVIOR:
+            # Would have been not_executed under old map; force-red documentation.
+            pytest.fail("pre-fix SchedulerShutdown → not_executed — expected red")
+
+        assert box.get("ok") is False
+        entry = box.get("disarm", {}).get("power-cycle")
+        assert entry is not None, box
+        assert entry["result"] == DISARM_RESULT_INCOMPLETE, entry
 
 
 # ── 租约已失 → not_executed ──────────────────────────────────────────────────

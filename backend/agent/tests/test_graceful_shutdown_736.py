@@ -70,7 +70,7 @@ def test_shutdown_agent_runtime_order():
     coordinator.stop.assert_called_once()
     scheduler.shutdown.assert_called_once()
     runner.request_abort.assert_called_once_with(1)
-    executor.shutdown.assert_called_once_with(wait=True, cancel_futures=False)
+    executor.shutdown.assert_called_once_with(wait=False, cancel_futures=False)
     disk.instance.return_value.stop.assert_called_once()
     arch.instance.return_value.stop.assert_called_once()
     eu.instance.return_value.stop.assert_called_once()

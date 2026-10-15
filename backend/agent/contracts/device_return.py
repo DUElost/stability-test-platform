@@ -251,15 +251,18 @@ def map_step_outcome_to_disarm_result(
 ) -> str:
     """Map a teardown step outcome to one of the six D1.2 machine values.
 
-    Priority: lease_lost / not started → not_executed; incomplete → incomplete;
-    structured_result (from onboarded script JSON) when valid; else success
-    path is confirmed only for onboarded+readback ok, otherwise
-    executed_unverified; failure → failed; readback_failed when marked.
+    Priority: lease_lost → not_executed; incomplete → incomplete (even when
+    the step has not started — SchedulerShutdown / permit-wait cut-off);
+    not started → not_executed; structured_result (from onboarded script JSON)
+    when valid; else success path is confirmed only for onboarded+readback ok,
+    otherwise executed_unverified; failure → failed; readback_failed when marked.
     """
-    if lease_lost or not started:
+    if lease_lost:
         return DISARM_RESULT_NOT_EXECUTED
     if incomplete:
         return DISARM_RESULT_INCOMPLETE
+    if not started:
+        return DISARM_RESULT_NOT_EXECUTED
     if structured_result in DISARM_RESULTS:
         return structured_result
     if readback == "readback_failed":
