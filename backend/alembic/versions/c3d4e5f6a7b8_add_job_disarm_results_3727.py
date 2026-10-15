@@ -1,7 +1,7 @@
 """add job_instance.disarm_results — 解除结果落库（ADR-0061 D4 / #3723 U2）
 
 Revision ID: c3d4e5f6a7b8
-Revises: b2c3d4e5f6a7
+Revises: 9b7e24a6d081
 Create Date: 2026-10-15
 
 ADR-0061 D4 / #3723 §3.3 U2：为每个 job 按专项持久化解除结果六值，
@@ -18,7 +18,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision = "c3d4e5f6a7b8"
-down_revision = "b2c3d4e5f6a7"
+down_revision = "9b7e24a6d081"
 branch_labels = None
 depends_on = None
 
