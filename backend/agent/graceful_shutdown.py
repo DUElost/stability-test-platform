@@ -8,6 +8,7 @@ watcher cannot leave daemons ticking after ``local_db.close()``.
 from __future__ import annotations
 
 import logging
+import time
 from concurrent.futures import Executor
 from typing import Any, Optional
 
@@ -33,8 +34,6 @@ def _await_started_disarm(
     """
     if job_runner_state is None or timeout_seconds <= 0:
         return
-    import time
-
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         try:

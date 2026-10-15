@@ -35,6 +35,8 @@ import time
 
 from pathlib import Path
 
+import requests
+
 from dataclasses import dataclass, field
 
 from datetime import datetime, timedelta, timezone
@@ -2719,8 +2721,6 @@ class PipelineEngine:
         if not api_url or not run_id:
             return False
         try:
-            import requests
-
             url = f"{api_url}/api/v1/agent/jobs/{run_id}/extend_lock"
             headers = {}
             secret = getattr(self, "_agent_secret", None)
