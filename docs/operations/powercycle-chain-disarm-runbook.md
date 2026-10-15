@@ -3,9 +3,14 @@
 > **警告（先读这条）**：`powercycle` 作业的 `COMPLETED` / `ABORTED` **不代表设备侧链路已解除**。
 > 解除的唯一判据是设备侧回读到 `running=false`。账面完成而链路仍武装时，设备会在无监督下继续
 > 自主重启（最长到 `test_times` 上限 1000 轮），并在随时把跑在它上面的其它专项打断。
-> 背景与实证：[ADR-0061](../adr/ADR-0061-powercycle-terminal-truth.md)、
+> 背景与实证：[ADR-0061](../adr/ADR-0061-device-return-contract.md)、
 > [#3714](https://github.com/DUElost/stability-test-platform/issues/3714)、
 > [#3696](https://github.com/DUElost/stability-test-platform/issues/3696)。
+
+> **过渡措施**（ADR-0061 D8 第 6 条）：本手册是 ADR-0061 D5（阶段 B：欠账不交付、自动清偿）生效前的人工替代，
+> 出口为阶段 B 生效。阶段 B 生效后，作者必须把本手册退役，或改为只保留排障内容。
+> 本手册只覆盖开关机专项。休眠、MTBF、GPU、Monkey 专项中止后同样可能留下设备侧执行体（ADR-0061 §1.1），
+> 目前没有对应手册；载体见 [#3718](https://github.com/DUElost/stability-test-platform/issues/3718)。
 
 适用：`specialty_key=power-cycle` 的任何计划（如 `MLD_NX2-开关机专项-18H`、`周期回归-开关机-1h`）。
 主机 IP 一律写作 `172.21.x.x` + 末段；序列号按掩码 `AHFFNX69****0169` 形式记录。
@@ -71,4 +76,4 @@ curl -s -X POST -H "Authorization: Bearer $TOK" -H 'Origin: http://127.0.0.1' \
 ## 4. 交付前的一行拦截（建议）
 
 任何计划派发前，若目标设备满足「近 24h 内被 power-cycle 专项使用过 且 无 §1 的 `running=false` 回读记录」，
-先补一次 §1/§2 再派。在 ADR-0061 D3 落地成平台强制之前，这条只能靠人执行。
+先补一次 §1/§2 再派。在 ADR-0061 D5（阶段 B）落地成平台强制之前，这条只能靠人执行。
