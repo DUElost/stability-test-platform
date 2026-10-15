@@ -223,7 +223,7 @@ class TestCancelDoesNotKillTeardown:
                 engine._canceled = True
                 with engine._process_lock:
                     proc2 = engine._active_process
-                    script_path = getattr(engine, "_active_script_path", None)
+                    getattr(engine, "_active_script_path", None)
                 if proc2 is not None:
                     fake_terminate(proc2)
             else:
