@@ -1,6 +1,6 @@
 # ADR-0058: 规划—实施—复核分离的批次交付流程（既有模型与 Owner 批准的 Appetite 内，由规划者裁定修法）
-- 状态：**Accepted** v1.4（v1.0：2026-09-28 Owner 接受 D1–D10；v1.2：规划者设计权；v1.3：M2 云端实施，2026-09-29 Owner 裁决见 [#3516 评论](https://github.com/DUElost/stability-test-platform/issues/3516#issuecomment-5893263824)，本轮正式落地；v1.4：D11 有界验收与复核收敛，随含本次修订的 PR 由 Owner 合入生效，见 §8）
-- 版本记录：v0.1 2026-09-28 起草 / v0.2 2026-09-28 修订 / v0.3 2026-09-28 收紧（#3489 合入）/ v1.0 2026-09-28 Accepted（#3490）/ v1.1 2026-09-29 落地记录勘误 / v1.2 2026-09-29 D2 设计权增补（见 §8） / v1.3 2026-09-30 M2 与对称前检 / v1.4 2026-10-10 D11 有界验收与复核收敛
+- 状态：**Accepted** v1.5（v1.0：2026-09-28 Owner 接受 D1–D10；v1.2：规划者设计权；v1.3：M2 云端实施，2026-09-29 Owner 裁决见 [#3516 评论](https://github.com/DUElost/stability-test-platform/issues/3516#issuecomment-5893263824)，本轮正式落地；v1.4：D11 有界验收与复核收敛，随含本次修订的 PR 由 Owner 合入生效，见 §8；v1.5：运行记录——验证期以 B5 闭合结束，B6 起为常态运行，决策无改动，见 §5 第 4 条）
+- 版本记录：v0.1 2026-09-28 起草 / v0.2 2026-09-28 修订 / v0.3 2026-09-28 收紧（#3489 合入）/ v1.0 2026-09-28 Accepted（#3490）/ v1.1 2026-09-29 落地记录勘误 / v1.2 2026-09-29 D2 设计权增补（见 §8） / v1.3 2026-09-30 M2 与对称前检 / v1.4 2026-10-10 D11 有界验收与复核收敛 / v1.5 2026-10-15 运行记录（验证期结束，B6 起常态运行）
 - 优先级：P1
 - 目标里程碑：M7
 - 日期：2026-09-28
@@ -374,6 +374,18 @@ ADR-0034 无需知道规划者与复核者的存在。
    - 语义归属表：登记 `batch-delivery`；§0 Registry 行改为「谁正在实施 / 哪些 Execution 在协调窗口」。
 3. 下一批次（B2）按本 ADR 执行，并在关单评论中记录：退回次数及原因归类（方案 / 实现）、
    复核前合入次数、激活到关单的时长。
+4. **运行状态（v1.5，2026-10-15）**：验证期以 B5 闭合结束，自 B6 起本流程为常态运行。
+   - 验证期范围：B1 试运行（#3463）至 B5（[#3653](https://github.com/DUElost/stability-test-platform/issues/3653)）。
+     期间 v1.1–v1.4 按批次实测修订本 ADR，其中 D11 来自 B4（#3649）。
+   - 结束依据：B5 于 2026-10-13 关单，U1–U7 仓库交付、独立复核与 D9 的 L0–L3 生产验收均已闭合
+     （[#3653 收口记录](https://github.com/DUElost/stability-test-platform/issues/3653#issuecomment-6150507694)）。
+     按第 3 条记录的流程统计见 [#3653 §8.8 核定](https://github.com/DUElost/stability-test-platform/issues/3653#issuecomment-6184223034)：
+     正式独立复核退回 7 轮（实现 / 内容 4 轮，通用验收交付 3 轮），实施者退回规划者 1 次（方案范围遗漏），
+     复核前合入 0/8，激活到关单 64 分钟。
+   - 常态运行起点：B6（[#3723](https://github.com/DUElost/stability-test-platform/issues/3723)，ADR-0061 设备归还契约首批）。
+   - 常态运行的含义：后续批次照常按 D1–D11 执行，并继续按第 3 条在关单评论中记录流程统计；
+     流程本身的调整只经 §6 复议触发与新的 ADR 修订进行，不再以「验证期」为由临时变更。
+   - 本条只记录运行状态，D1–D11 均无改动。
 
 ## 6. 复议触发（Revisit）
 
@@ -398,6 +410,8 @@ ADR-0034 无需知道规划者与复核者的存在。
 裁决同时授权按 §4 同步执行契约、Harness 适配、ADR-0034 与仓库工作流文档（D10 改变现行执行语义，本 ADR 即其正式裁决）。
 
 ## 8. 修订记录
+
+- **v1.5（2026-10-15）**：运行记录，决策无改动。§5 新增第 4 条：验证期（B1 试运行至 B5）以 B5 闭合结束，B6（#3723）起为常态运行；记录 B5 关单依据与流程统计（#3653 §8.8）。头部状态与版本记录同步，`docs/adr/README.md` 主表与 M7 看板同步。Owner 于 2026-10-15 确认验证期结束；本条随含本次修订的 PR 由 Owner 合入生效。
 
 - **v1.4（2026-10-10）**：新增 D11「有界验收与复核收敛」：守卫类单元必须写明威胁模型、支持形态、有限红绿清单与运行时语义的行为测试归属，实施者不得为闭合复核发现而扩大支持形态；复核发现分三类流转——清单内失败与本轮回归判「需修改」，清单外且现有门禁拦不住的现实缺口直接「退回规划者」（超出 Appetite 或高风险时按 D5 升级 Owner），其余为非阻塞，判定「拦不住」前必须运行相关 required 测试；同一单元连续两轮同类非回归新发现即退回规划者；每轮一个权威复核，未复现的意见只是候选；复核者不为所复核的单元撰写方案；合入后复核不新增门槛。D8 复核者行与「复核者只回答两问」各补一句引用，§3 补 D11 备选，§6 补复议触发。来源：B4 G2 十轮复核未闭合（[#3649](https://github.com/DUElost/stability-test-platform/issues/3649)；#3601 Owner 裁定；#3642 关闭）。同步 `batch-review.md` Living v1.2、`batch-planning.md` Living v1.3、`repository-workflow.md` 批次交付流程一节、`docs/adr/README.md` 与语义归属表。草稿经独立复核 R1（[#3650 评论](https://github.com/DUElost/stability-test-platform/pull/3650#issuecomment-6092016117)）修订：原稿允许把清单外缺口直接判「需修改」，与 #3601 Owner 裁定第 3 条及 D11 第 1 条冲突，已改为上述三类流转。D1–D10、D6 治理预算与 D9 激活闸门均无改动。本条随含本次修订的 PR 由 Owner 合入生效。
 
@@ -430,6 +444,7 @@ ADR-0034 无需知道规划者与复核者的存在。
 
 - 试运行批次：[#3463](https://github.com/DUElost/stability-test-platform/issues/3463)（方案 v1.2、复核评论、激活与验收记录均在该 issue 下）
 - B1 合入 PR：#3464、#3465、#3466（G1-sleep）、#3468（G3）、#3469、#3471（G1-pc）、#3472（G4）、#3475（G1-sleep-2）、#3476（G4-2）、#3477（G1-pc-2）
+- 验证期最后一批：[#3653](https://github.com/DUElost/stability-test-platform/issues/3653)（B5，2026-10-13 关单）；常态运行首批：[#3723](https://github.com/DUElost/stability-test-platform/issues/3723)（B6）
 - 验收暴露的存量缺陷：[#3488](https://github.com/DUElost/stability-test-platform/issues/3488)
 - 被收窄的契约：[ADR-0034](./ADR-0034-multi-harness-execution-contract.md)、[`execution-contract.md`](../development/ai/execution-contract.md) §3.5 / §3.6、[`harness-adapters.md`](../development/ai/harness-adapters.md)
 - Mode C 历史记录：#1557、[`docs/reviews/`](../reviews/)
