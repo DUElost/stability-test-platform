@@ -16,7 +16,7 @@ describe('planExecuteExport', () => {
     ]);
     const csv = buildDeviceSelectionCsv(
       [
-        { serial: 'S1', host_id: 'h1', model: 'ELA, Pro', build_display_id: 'V104' },
+        { serial: 'S1', host_id: 'h1', model: 'ELA, Pro', build_display_id: 'V104', product: 'MLD-NX3' },
         { serial: 'S2', host_id: null, model: null, build_display_id: null },
         { serial: 'S3', host_id: 'h2', model: null, build_display_id: null },
         { serial: 'S4', host_id: 'h3', model: null, build_display_id: null },
@@ -25,11 +25,11 @@ describe('planExecuteExport', () => {
     );
     expect(csv).toBe(
       [
-        'serial,host,model,version',
-        'S1,node-a,"ELA, Pro",V104',
-        'S2,未分配节点,,',
-        'S3,10.0.0.2,,',
-        'S4,h3,,',
+        'serial,host,model,version,product',
+        'S1,node-a,"ELA, Pro",V104,MLD-NX3',
+        'S2,未分配节点,,,',
+        'S3,10.0.0.2,,,',
+        'S4,h3,,,',
         '',
       ].join('\n'),
     );
@@ -74,16 +74,16 @@ describe('planExecuteExport — 公式前缀中和（S3 / #3237）', () => {
   it('既有 framing 回归：逗号 / 引号 escaping 与 hostLabel 顺序不变（#2601）', () => {
     const csv = buildDeviceSelectionCsv(
       [
-        { serial: 'S1', host_id: 'h1', model: 'ELA, Pro', build_display_id: 'V104' },
+        { serial: 'S1', host_id: 'h1', model: 'ELA, Pro', build_display_id: 'V104', product: 'MLD-NX3' },
         { serial: 'a"b', host_id: 'h2', model: null, build_display_id: null },
       ],
       hostMap,
     );
     expect(csv).toBe(
       [
-        'serial,host,model,version',
-        'S1,node-a,"ELA, Pro",V104',
-        '"a""b",\'=HACK(),,',
+        'serial,host,model,version,product',
+        'S1,node-a,"ELA, Pro",V104,MLD-NX3',
+        '"a""b",\'=HACK(),,,',
         '',
       ].join('\n'),
     );

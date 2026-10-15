@@ -12,6 +12,7 @@ vi.mock('./client', () => ({
 
 import apiClient from './client';
 import { fetchAllDevicePages, fetchAllDevices } from './devices';
+import { deviceKeys } from './queryKeys';
 
 const device = (id: number) => ({ id, serial: `SN-${id}`, status: 'ONLINE' });
 
@@ -117,5 +118,18 @@ describe('fetchAllDevicePages', () => {
     expect(apiClient.get).toHaveBeenCalledWith('/devices', {
       params: { skip: 0, limit: 1200, unassigned: true },
     });
+  });
+});
+
+
+it('carries product filtering across pages without sharing another product cache key', async () => {
+  vi.mocked(apiClient.get).mockResolvedValue({ data: { items: [], total: 0, skip: 0, limit: 1200 } });
+  vi.mocked(apiClient.get).mockClear();
+  expect(deviceKeys.list(null, false, false, false, 'MLD-NX3')).not.toEqual(
+    deviceKeys.list(null, false, false, false, 'sys_mssi_64_cn_armv82'),
+  );
+  await fetchAllDevicePages({ product: 'sys_mssi_64_cn_armv82' });
+  expect(apiClient.get).toHaveBeenCalledWith('/devices', {
+    params: { skip: 0, limit: 1200, product: 'sys_mssi_64_cn_armv82' },
   });
 });
