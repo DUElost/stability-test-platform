@@ -6,6 +6,7 @@ Plan CRUD + run/preview endpoints.
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -343,12 +344,34 @@ def _min_wall_clock_for_step(
     return None
 
 
+def _effective_step_wall_clock_seconds(timeout_seconds: int | None) -> int:
+    """Effective step wall clock for ONBOARDED compare (ADR-0061 D3.6).
+
+    Same default chain as Agent ``pipeline_engine._resolve_step_wall_clock`` when
+    PlanStep omits ``timeout_seconds``: ``STP_STEP_WALL_CLOCK_SECONDS`` else 300.
+    Explicit values (including 0 = unlimited at runtime) are used as-is.
+    """
+    if timeout_seconds is not None:
+        return int(timeout_seconds)
+    env_raw = (os.getenv("STP_STEP_WALL_CLOCK_SECONDS") or "").strip()
+    if env_raw:
+        try:
+            return int(float(env_raw))
+        except ValueError:
+            pass
+    return 300  # pipeline_engine._DEFAULT_STEP_WALL_CLOCK_SECONDS
+
+
 def _validate_onboarded_wall_clock(
     steps: list[PlanStepIn],
     *,
     onboarded: dict | None = None,
 ) -> None:
-    """Reject timeout_seconds below ONBOARDED min_wall_clock_seconds (#3723 §3.3 第 4 条)."""
+    """Reject effective wall clock below ONBOARDED min (#3723 §3.3 第 4 条 / D3.6).
+
+    Omitted ``timeout_seconds`` uses the Agent-effective default (env or 300), not
+    a skip — otherwise Plan save could accept a config that still runs under budget.
+    """
     violations: list[dict] = []
     for step in steps:
         if step.enabled is False:
@@ -358,9 +381,7 @@ def _validate_onboarded_wall_clock(
         )
         if minimum is None:
             continue
-        timeout = step.timeout_seconds
-        if timeout is None:
-            continue  # 未配置墙钟 → 引擎默认；不按 ONBOARDED 拒（仅显式过小才拒）
+        timeout = _effective_step_wall_clock_seconds(step.timeout_seconds)
         if int(timeout) < int(minimum):
             violations.append({
                 "step_key": step.step_key,

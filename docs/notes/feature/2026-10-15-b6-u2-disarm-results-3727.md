@@ -15,7 +15,8 @@ Draft PR 待独立复核；合入不等于生效（控制面部署按 §5 第 3 
 3. `_VALID_EXECUTION_STATES` 增加 `EXECUTING_DISARM`；abort reaper 对
    `EXECUTING_DISARM` 且 `last_progress_at` 在两个协调心跳周期内的 job 续期至
    `abort_at + 解除步骤 timeout_seconds`，超上限或进度中断则按现行规则回收。
-4. Plan 保存时对 ONBOARDED 登记了 `min_wall_clock_seconds` 的步骤做结构化 422；
+4. Plan 保存时对 ONBOARDED 登记了 `min_wall_clock_seconds` 的步骤做结构化 422
+   （有效墙钟：显式 `timeout_seconds`，省略则按 Agent 同口径 env/`300`；不得因省略绕过）；
    U1 未合入 / U5 未登记时 ONBOARDED 为空，现有步骤不拒（预期）。
 5. 指标 `stp_disarm_result_total{family,result}` 与两条 warning 告警（1h
    not_executed|incomplete 增量；单专项 24h failed 占比 > 5%）。
@@ -37,7 +38,7 @@ U1 拥有 `backend/agent/contracts/device_return.py`：本单元**未**创建或
 见本 PR 正文「门禁」：`check:quick`（schema-at-head 对本机生产库 behind 属预期中间态，
 迁移不得在生产库试跑）、根 `tests/`、受影响后端测试、`promtool test rules`、
 前端 `tsc`；反例测试覆盖迁移链、带/不带 `disarm_results` 的推导表、reaper 续期/
-回收、墙钟 422、指标计数、告警场景。
+回收、墙钟 422（含省略 `timeout_seconds`→有效 300）、指标计数、告警场景。
 
 ## Revisit
 
