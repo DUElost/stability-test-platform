@@ -303,3 +303,4 @@
 | 2026-10-10 | ADR-0058 v1.4（D11 有界验收与复核收敛，#3649）：`batch-delivery` 行锚点（D8）与分层不变；复议触发补「D11 生效后同一单元复核超三轮未闭合」 |
 | 2026-10-10 | ADR-0060 v1.1（#3652 Owner 裁决：`barrier_max_wait_seconds` 未设为 `env_fallback` 继承主机策略，不是 `unset_definite`「无硬顶」）：`plan-param-projection` 行锚点（`## 2. 决策`）与分层不变，仅登记版本变化 |
 | 2026-10-14 | **ADR-0061 入表（claude）**：补 `device-return` 行（新建 Accepted ADR，§7 触发 1；与 `device-lease` 分工：租约机制归 ADR-0019，设备归还事实与欠账语义归 ADR-0061）；§5.1「状态机 / 租约 / 调度」代表 ADR 补 `0061` |
+| 2026-10-15 | ADR-0058 v1.5（运行记录，决策无改动）：验证期以 B5（#3653）闭合结束，B6（#3723）起常态运行；`batch-delivery` 行锚点（D8）与分层不变，仅登记版本变化 |
