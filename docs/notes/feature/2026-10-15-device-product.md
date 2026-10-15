@@ -41,7 +41,10 @@ Class: feature
   5 项存量 schema diff，新增 0。未在生产库执行迁移。
 - 当前会话没有可用浏览器；交互由 Vitest 验证，长文本限制由静态布局检查验证，
   未声称通过真实浏览器或真机验收。
-- 完整 API 套件与最终类型/构建检查运行中，完成后补记结果。
+- 完整 Agent 套件（`scripts/run_pytest.py backend/agent/tests/ -q`）：2571 passed。
+- 完整 API 套件（`scripts/run_pytest.py backend/tests/api/ -q`，隔离 testcontainers）：
+  1400 passed。客户端与筛选补验：12 passed；最终类型检查和内存受限的前端构建通过。
+- 代码提交 `a2822f0f4` 的六项 required checks 全部通过；本次后续提交仅更新验证记录。
 
 ## Revisit
 
