@@ -41,7 +41,7 @@ jsonschema>=4.26.0,<5.0
 # ADR-0018: Infrastructure framework adoption
 apscheduler>=4.0.0a6,<5.0
 saq[redis]>=0.26.4,<1.0
-python-socketio>=5.16.4,<6.0
+python-socketio>=5.17.0,<6.0
 # backend/scripts/ 下的冒烟与审计脚本使用(随镜像分发)
 httpx>=0.28.1,<1.0
 # dedup 汇总 xls 解析
