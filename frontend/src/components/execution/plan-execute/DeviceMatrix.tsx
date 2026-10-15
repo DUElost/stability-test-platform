@@ -1,3 +1,4 @@
+import { deviceProductText } from '@/utils/deviceProduct';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
@@ -262,6 +263,7 @@ export function DeviceMatrix({
                               <div className="font-mono text-xs font-medium">{device.serial}</div>
                               <div className="text-[11px]">节点：{label}</div>
                               <div className="text-[11px]">型号：{device.model || '—'}</div>
+                              <div className="break-all text-[11px]">Product：{deviceProductText(device.model, device.product)}</div>
                               <div className="text-[11px]">版本：{device.build_display_id || '—'}</div>
                               <div className="text-[11px]">状态：{status}</div>
                               {status === 'blocked' && readiness?.reasons?.[0] ? (

@@ -19,12 +19,14 @@ export const devices = {
     unassigned = false,
     includeStale = false,
     includeRetired = false,
+    product?: string,
   ) =>
     apiClient.get<PaginatedResponse<Device>>('/devices', {
       params: {
         skip,
         limit,
         ...(status ? { status } : {}),
+        ...(product ? { product } : {}),
         ...(tags ? { tags } : {}),
         ...(projectKey ? { project_key: projectKey } : {}),
         ...(unassigned ? { unassigned: true } : {}),
@@ -77,6 +79,7 @@ const DEVICE_PAGE_LIMIT = 1200;
 
 /** GET /devices 的筛选维度（与 `devices.list` 的查询参数一一对应）。 */
 export interface DeviceListFilters {
+  product?: string;
   status?: string;
   projectKey?: string;
   unassigned?: boolean;
@@ -107,6 +110,7 @@ export async function fetchAllDevicePages(
         filters.unassigned ?? false,
         filters.includeStale ?? false,
         filters.includeRetired ?? false,
+        filters.product,
       ),
     DEVICE_PAGE_LIMIT,
   );

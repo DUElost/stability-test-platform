@@ -383,6 +383,7 @@ def list_devices(
     request: Request,
     tags: Optional[str] = Query(None, description="Comma-separated tag filter"),
     status: Optional[str] = Query(None, description="Filter by device status (ONLINE, OFFLINE, BUSY)"),
+    product: Optional[str] = Query(None, min_length=1, max_length=128, description="Exact ADB product filter"),
     project_key: Optional[str] = Query(None, description="ADR-0029: filter by project key"),
     unassigned: bool = Query(False, description="ADR-0029 P0: only devices with no project (project_id IS NULL)"),
     include_retired: bool = Query(
@@ -481,6 +482,8 @@ def list_devices(
     # Filter by status if provided
     if status:
         query = query.filter(Device.status == status)
+    if product is not None:
+        query = query.filter(Device.product == product)
 
     # Filter by tags using JSONB @> operator
     if tags:

@@ -91,7 +91,7 @@
 | 表 | 说明 |
 |----|------|
 | `host` | 字符串 PK `host-101`；`status`、心跳、`extra` JSON |
-| `device` | `serial` 唯一；`host_id`；电量/温度；`lease_generation` |
+| `device` | `serial` 唯一；`host_id`；`model` 与可空的 ADB `product`；电量/温度；`lease_generation` |
 
 ### device_leases（ADR-0019）
 

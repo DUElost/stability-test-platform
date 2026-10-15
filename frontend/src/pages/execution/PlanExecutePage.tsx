@@ -1,3 +1,4 @@
+import { deviceProductText } from '@/utils/deviceProduct';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -146,6 +147,9 @@ export default function PlanExecutePage() {
   const [deviceModelFilter, setDeviceModelFilter] = useState(() => (
     hasUrlFilters ? urlFilterState.model : (hasUrlDevices ? 'all' : initialDraft?.deviceModelFilter ?? 'all')
   ));
+  const [deviceProductFilter, setDeviceProductFilter] = useState(() => (
+    hasUrlFilters ? urlFilterState.product ?? 'all' : (hasUrlDevices ? 'all' : initialDraft?.deviceProductFilter ?? 'all')
+  ));
   const [deviceTagFilter, setDeviceTagFilter] = useState<string[]>(() => (
     hasUrlFilters ? urlFilterState.tags : (hasUrlDevices ? [] : initialDraft?.deviceTagFilter ?? [])
   ));
@@ -166,6 +170,7 @@ export default function PlanExecutePage() {
     deviceVersionFilter,
     deviceHostFilter,
     deviceModelFilter,
+    deviceProductFilter,
     deviceTagFilter,
     readyOnly,
     tableSort: formatTableSortParam(tableSort),
@@ -178,6 +183,7 @@ export default function PlanExecutePage() {
     deviceVersionFilter,
     deviceHostFilter,
     deviceModelFilter,
+    deviceProductFilter,
     deviceTagFilter,
     readyOnly,
     tableSort,
@@ -391,6 +397,10 @@ export default function PlanExecutePage() {
     () => Array.from(new Set(devicesInHostScope.map((device: DeviceSummary) => device.model).filter(Boolean) as string[])).sort(),
     [devicesInHostScope],
   );
+  const productOptions = useMemo(
+    () => Array.from(new Set(devicesInHostScope.map((device) => device.product).filter((value): value is string => Boolean(value)))).sort(),
+    [devicesInHostScope],
+  );
   // 标签选项与版本/型号一致，随节点范围收窄
   const tagOptions = useMemo(
     () => Array.from(new Set(devicesInHostScope.flatMap((device: DeviceSummary) => device.tags ?? []))).sort(),
@@ -464,11 +474,13 @@ export default function PlanExecutePage() {
   const baseFilteredDevices = allDevices.filter(d =>
     !filterKeyword
     || d.serial.toLowerCase().includes(filterKeyword)
-    || (d.model ?? '').toLowerCase().includes(filterKeyword),
+    || (d.model ?? '').toLowerCase().includes(filterKeyword)
+    || deviceProductText(d.model, d.product).toLowerCase().includes(filterKeyword),
   ).filter((d: DeviceSummary) =>
     (deviceVersionFilter === 'all' || d.build_display_id === deviceVersionFilter)
     && (deviceHostFilter === 'all' || String(d.host_id ?? 'unassigned') === deviceHostFilter)
     && (deviceModelFilter === 'all' || d.model === deviceModelFilter)
+    && (deviceProductFilter === 'all' || d.product === deviceProductFilter)
     && (deviceTagFilter.length === 0 || (d.tags ?? []).some(tag => deviceTagFilter.includes(tag))),
   );
   const poolReadinessByDeviceId = deviceReadinessByDeviceId;
@@ -508,14 +520,14 @@ export default function PlanExecutePage() {
 
   // React 官方"adjust state when prop changes"模式：devicePageResetKey 为稳定字符串
   // 比较（6 个筛选条件序列化），筛选变化时受控回到第 1 页；无引用比较问题。
-  const devicePageResetKey = JSON.stringify([deviceFilter, deviceVersionFilter, deviceHostFilter, deviceModelFilter, deviceTagFilter, readyOnly]);
+  const devicePageResetKey = JSON.stringify([deviceFilter, deviceVersionFilter, deviceHostFilter, deviceModelFilter, deviceProductFilter, deviceTagFilter, readyOnly]);
   const [prevDevicePageResetKey, setPrevDevicePageResetKey] = useState(devicePageResetKey);
   if (prevDevicePageResetKey !== devicePageResetKey) {
     setPrevDevicePageResetKey(devicePageResetKey);
     goToDevicePage(1);
   }
 
-  useEffect(() => { lastClickedDeviceIdRef.current = null; }, [deviceFilter, deviceVersionFilter, deviceHostFilter, deviceModelFilter, deviceTagFilter, readyOnly]);
+  useEffect(() => { lastClickedDeviceIdRef.current = null; }, [deviceFilter, deviceVersionFilter, deviceHostFilter, deviceModelFilter, deviceProductFilter, deviceTagFilter, readyOnly]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- 设备集剪枝 + 用户提示，需在 effect 中做
@@ -608,6 +620,7 @@ export default function PlanExecutePage() {
         q: deviceFilter,
         version: deviceVersionFilter,
         model: deviceModelFilter,
+        product: deviceProductFilter,
         host: deviceHostFilter,
         tags: deviceTagFilter,
         readyOnly,
@@ -618,7 +631,7 @@ export default function PlanExecutePage() {
       else next.delete('sort');
       return next.toString() === prev.toString() ? prev : next;
     }, { replace: true });
-  }, [deviceFilter, deviceVersionFilter, deviceHostFilter, deviceModelFilter, deviceTagFilter, readyOnly, view, tableSort, setSearchParams]);
+  }, [deviceFilter, deviceVersionFilter, deviceHostFilter, deviceModelFilter, deviceProductFilter, deviceTagFilter, readyOnly, view, tableSort, setSearchParams]);
 
   // 步骤 ≥2 时若已无选中样机，退回样机选择
   useEffect(() => {
@@ -853,13 +866,14 @@ export default function PlanExecutePage() {
         q: deviceFilter,
         version: deviceVersionFilter,
         model: deviceModelFilter,
+        product: deviceProductFilter,
         host: deviceHostFilter,
         tags: deviceTagFilter,
         readyOnly,
       },
       { hostLabel: hostFilterLabel },
     ),
-    [deviceFilter, deviceVersionFilter, deviceModelFilter, deviceHostFilter, deviceTagFilter, readyOnly, hostFilterLabel],
+    [deviceFilter, deviceVersionFilter, deviceModelFilter, deviceProductFilter, deviceHostFilter, deviceTagFilter, readyOnly, hostFilterLabel],
   );
 
   const applyFilterChipClear = (chipId: ActiveFilterChipId) => {
@@ -868,6 +882,7 @@ export default function PlanExecutePage() {
         q: deviceFilter,
         version: deviceVersionFilter,
         model: deviceModelFilter,
+        product: deviceProductFilter,
         host: deviceHostFilter,
         tags: deviceTagFilter,
         readyOnly,
@@ -878,6 +893,7 @@ export default function PlanExecutePage() {
     setDeviceFilter(next.q);
     setDeviceVersionFilter(next.version);
     setDeviceModelFilter(next.model);
+    setDeviceProductFilter(next.product ?? 'all');
     setDeviceHostFilter(next.host);
     setDeviceTagFilter(next.tags);
     setReadyOnly(next.readyOnly);
@@ -915,6 +931,7 @@ export default function PlanExecutePage() {
     setReadyOnly(false);
     setDeviceVersionFilter('all');
     setDeviceModelFilter('all');
+    setDeviceProductFilter('all');
     setDeviceTagFilter([]);
     setDeviceFilter('');
     toast.info('已清除筛选以定位该样机');
@@ -1298,6 +1315,9 @@ export default function PlanExecutePage() {
                       onDeviceFilterChange={setDeviceFilter}
                       deviceVersionFilter={deviceVersionFilter}
                       onVersionChange={setDeviceVersionFilter}
+                      deviceProductFilter={deviceProductFilter}
+                      onProductChange={setDeviceProductFilter}
+                      productOptions={productOptions}
                       deviceModelFilter={deviceModelFilter}
                       onModelChange={setDeviceModelFilter}
                       deviceTagFilter={deviceTagFilter}
