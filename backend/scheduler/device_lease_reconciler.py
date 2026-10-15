@@ -469,11 +469,84 @@ async def _reconcile_terminal_job_active_leases(db) -> int:
 # Check 0: abort reaper — RUNNING + abort_requested + grace → UNKNOWN
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
+# ── #3723 §3.0 第 5 条 / ADR-0061 D3.8：EXECUTING_DISARM 宽限续期 ─────────────
+# U1 合入后可改为 from backend.agent.contracts.device_return import EXECUTING_DISARM
+_EXECUTING_DISARM = "EXECUTING_DISARM"
+
+# FAMILY_STEPS 解除脚本名（控制面字面量；与 U1 契约同形，只读用于墙钟上限）
+_DISARM_SCRIPT_NAMES: frozenset[str] = frozenset({
+    "powercycle_finish", "powercycle_disarm",
+    "sleep_finish", "mtbf_finish", "gpu_finish", "monkey_teardown",
+})
+
+
+def _coordinator_progress_freshness_seconds() -> int:
+    """两个协调心跳周期（#3723 §3.0 第 5 条）。"""
+    try:
+        from backend.core.adr0026_params import DEFAULTS
+        return int(DEFAULTS.coordinator_heartbeat_interval_seconds) * 2
+    except Exception:
+        return 60
+
+
+def _disarm_step_timeout_seconds(job: JobInstance) -> int | None:
+    """解除步骤墙钟上限：pipeline_def.teardown 中解除脚本 timeout_seconds 的最大值。"""
+    pipeline = job.pipeline_def if isinstance(job.pipeline_def, dict) else {}
+    lifecycle = pipeline.get("lifecycle") or {}
+    if not isinstance(lifecycle, dict):
+        return None
+    teardown = lifecycle.get("teardown") or []
+    if not isinstance(teardown, list):
+        return None
+    timeouts: list[int] = []
+    for step in teardown:
+        if not isinstance(step, dict):
+            continue
+        action = step.get("action") or ""
+        if not isinstance(action, str) or not action.startswith("script:"):
+            continue
+        script = action.split(":", 1)[1].strip()
+        if script not in _DISARM_SCRIPT_NAMES:
+            continue
+        raw = step.get("timeout_seconds")
+        if raw is None:
+            continue
+        try:
+            timeouts.append(int(raw))
+        except (TypeError, ValueError):
+            continue
+    return max(timeouts) if timeouts else None
+
+
+def _disarm_grace_defers_reap(
+    job: JobInstance, abort_at: datetime, now: datetime,
+) -> bool:
+    """True → 本轮不回收（解除中且进度新鲜，且未超 abort_at+timeout 上限）。"""
+    if job.execution_state != _EXECUTING_DISARM:
+        return False
+    progress = job.last_progress_at
+    if progress is None:
+        return False
+    if progress.tzinfo is None:
+        progress = progress.replace(tzinfo=timezone.utc)
+    age = (now - progress).total_seconds()
+    if age > _coordinator_progress_freshness_seconds():
+        return False  # 进度中断 → 按现行规则回收
+    timeout = _disarm_step_timeout_seconds(job)
+    if timeout is None:
+        return False  # 无墙钟上限可依 → 不续期
+    ceiling = abort_at + timedelta(seconds=timeout)
+    return now < ceiling
+
+
 _ABORT_REAPER_BROADCASTS: dict[str, list[dict]] = {}
 
 
 async def _abort_reaper_recheck_job(
     db, job_id: int, now: datetime, reason: str = "abort_ack_timeout",
+    *,
+    abort_at: datetime | None = None,
 ) -> tuple[bool, dict | None]:
     """Lock-reread one RUNNING+abort-requested candidate and recover it.
 
@@ -496,6 +569,13 @@ async def _abort_reaper_recheck_job(
         .execution_options(populate_existing=True)
     )).scalars().first()
     if job is None or job.status != JobStatus.RUNNING.value:
+        return False, None
+    # #3723 §3.0 第 5 条：EXECUTING_DISARM + 进度新鲜 → 续期至 abort_at+timeout
+    if abort_at is not None and _disarm_grace_defers_reap(job, abort_at, now):
+        logger.info(
+            "abort_reaper_defer_disarm job=%d execution_state=%s last_progress_at=%s",
+            job.id, job.execution_state, job.last_progress_at,
+        )
         return False, None
     try:
         JobStateMachine.transition(
@@ -721,12 +801,12 @@ async def _reconcile_aborted_running_jobs(db) -> tuple[int, list[dict]]:
     # 覆盖语义并入 `_abort_reap_clock`：run 主体看 `requested_job_ids` 名单（#2050），
     # host 主体看该 host 的时钟（含 abort 之后才被 claim 的 job，D3）。无有效时钟
     # （历史 run_context / 异常形态）→ 不回收（宁漏勿杀，#782 同旨）。
-    reap_rows: list[tuple[JobInstance, PlanRun, str]] = []
+    reap_rows: list[tuple[JobInstance, PlanRun, str, datetime]] = []
     for job, plan_run in rows:
         at, subject = _abort_reap_clock(plan_run, job.id, job.host_id)
         if at is None or at >= grace_deadline:
             continue
-        reap_rows.append((job, plan_run, subject or "run"))
+        reap_rows.append((job, plan_run, subject or "run", at))
 
     # 锁序（#2974）：本列表逐个在 `_abort_reaper_recheck_job` 里取 job 行锁，而
     # `begin_nested()` 是 SAVEPOINT、不释放 PG 行锁 ⇒ 一个 tick 在提交前持有整批
@@ -739,7 +819,7 @@ async def _reconcile_aborted_running_jobs(db) -> tuple[int, list[dict]]:
     unknown_count = 0
     broadcast_items: list[dict] = []
 
-    for candidate, _pr, subject in reap_rows:
+    for candidate, _pr, subject, abort_at in reap_rows:
         try:
             async with db.begin_nested():
                 changed, item = await _abort_reaper_recheck_job(
@@ -749,6 +829,7 @@ async def _reconcile_aborted_running_jobs(db) -> tuple[int, list[dict]]:
                         "abort_ack_timeout_host" if subject == "host"
                         else "abort_ack_timeout"
                     ),
+                    abort_at=abort_at,
                 )
                 if not changed:
                     continue

@@ -43,6 +43,9 @@ _VALID_EXECUTION_STATES = {
     "EXECUTING_STEP",
     "PATROL_SLEEP",
     "WAITING_BARRIER",
+    # ADR-0061 D3.8 / #3723 §3.0 第 5 条：解除步骤执行期间。
+    # U1 合入后可改为 from backend.agent.contracts.device_return import EXECUTING_DISARM
+    "EXECUTING_DISARM",
 }
 
 

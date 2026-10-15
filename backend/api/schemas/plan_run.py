@@ -65,6 +65,8 @@ class JobInstanceOut(BaseModel):
     started_at: Optional[str] = None
     ended_at: Optional[str] = None
     created_at: Optional[str] = None
+    # ADR-0061 D4 / #3723 U2：按专项解除结果（六值 + 证据）
+    disarm_results: Optional[dict] = None
     step_traces: list[StepTraceOut] = []
 
 

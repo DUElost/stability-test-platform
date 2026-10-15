@@ -292,6 +292,104 @@ class PlanRunSummaryOut(BaseModel):
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
+
+# ── #3723 §3.3 U2 / ADR-0061 D3.6：ONBOARDED 墙钟下限校验 ─────────────────────
+# U1 合入后改为：from backend.agent.contracts.device_return import ONBOARDED
+# U5 合入前 ONBOARDED 为空 → 对现有步骤不生效（预期）。
+
+
+def _load_onboarded_registry() -> dict:
+    """Import ONBOARDED when U1 contract is present; else empty (U5 fills entries)."""
+    try:
+        from backend.agent.contracts.device_return import ONBOARDED as _OB
+        return _OB if isinstance(_OB, dict) else {}
+    except ImportError:
+        return {}
+
+
+def _min_wall_clock_for_step(
+    script_name: str,
+    params: dict | None,
+    onboarded: dict | None = None,
+) -> int | None:
+    """Return registered min_wall_clock_seconds for script, or None if unregistered.
+
+    Expected ONBOARDED shape (U5 fills power-cycle)::
+
+        {
+          "power-cycle": {
+            "min_wall_clock_seconds": {
+              "powercycle_disarm": callable(params)|int,
+              "powercycle_finish": callable(params)|int,
+            }
+          }
+        }
+    """
+    registry = _load_onboarded_registry() if onboarded is None else onboarded
+    if not script_name or not isinstance(registry, dict):
+        return None
+    for _family, spec in registry.items():
+        if not isinstance(spec, dict):
+            continue
+        by_script = spec.get("min_wall_clock_seconds")
+        if not isinstance(by_script, dict):
+            continue
+        entry = by_script.get(script_name)
+        if entry is None:
+            continue
+        if callable(entry):
+            try:
+                value = entry(params or {})
+            except Exception:
+                return None
+        else:
+            value = entry
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _validate_onboarded_wall_clock(
+    steps: list[PlanStepIn],
+    *,
+    onboarded: dict | None = None,
+) -> None:
+    """Reject timeout_seconds below ONBOARDED min_wall_clock_seconds (#3723 §3.3 第 4 条)."""
+    violations: list[dict] = []
+    for step in steps:
+        if step.enabled is False:
+            continue
+        minimum = _min_wall_clock_for_step(
+            step.script_name, step.params, onboarded=onboarded,
+        )
+        if minimum is None:
+            continue
+        timeout = step.timeout_seconds
+        if timeout is None:
+            continue  # 未配置墙钟 → 引擎默认；不按 ONBOARDED 拒（仅显式过小才拒）
+        if int(timeout) < int(minimum):
+            violations.append({
+                "step_key": step.step_key,
+                "script_name": step.script_name,
+                "timeout_seconds": int(timeout),
+                "min_wall_clock_seconds": int(minimum),
+            })
+    if violations:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "WALL_CLOCK_BELOW_ONBOARDED_BUDGET",
+                "message": (
+                    "步骤墙钟小于 ONBOARDED 登记的最低等待预算"
+                    "（ADR-0061 D3.6 / #3723 U2）"
+                ),
+                "violations": violations,
+            },
+        )
+
+
 def _validate_script_refs(db: Session, steps: list[PlanStepIn]) -> None:
     """Reject PlanStep entries that reference non-existent or inactive Scripts."""
     if not steps:
@@ -713,6 +811,7 @@ def create_plan(
     _validate_script_refs(db, payload.steps)
     _validate_step_param_values(payload.steps, db)
     _validate_stall_seconds_capability(payload.steps, db)
+    _validate_onboarded_wall_clock(payload.steps)
 
     now = datetime.now(timezone.utc)
     plan = Plan(
@@ -863,6 +962,7 @@ def append_chain_tail(
     _validate_script_refs(db, payload.steps)
     _validate_step_param_values(payload.steps, db)
     _validate_stall_seconds_capability(payload.steps, db)
+    _validate_onboarded_wall_clock(payload.steps)
     _validate_assembled_lifecycle(
         payload.steps, None, None, None, None,
     )
@@ -1136,6 +1236,7 @@ def update_plan(
         _validate_script_refs(db, payload.steps)
         _validate_step_param_values(payload.steps, db)
         _validate_stall_seconds_capability(payload.steps, db)
+        _validate_onboarded_wall_clock(payload.steps)
         _validate_assembled_lifecycle(
             payload.steps,
             plan.patrol_interval_seconds,

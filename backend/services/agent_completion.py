@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.services.audit_writer import record_audit_async
 from backend.core.metrics import (
     post_completion_enqueue_failed_total,
+    record_disarm_result,
     record_reconciler_dirs_abandoned,
     record_reconciler_dirs_oversized_skipped,
     record_reconciler_skip_unchanged,
@@ -69,6 +70,212 @@ _RUN_TO_JOB: Dict[str, JobStatus] = {
     "ABORTED":   JobStatus.ABORTED,
 }
 
+
+# ── #3723 U2 / ADR-0061 D4：解除结果落库与兼容推导 ──────────────────────────
+# U1 合入后改为从 backend.agent.contracts.device_return 导入下列常量与 FAMILY_STEPS。
+# 本单元不得创建/修改 device_return.py（§3.1 表后说明）。
+
+_DISARM_RESULT_EXECUTED_UNVERIFIED = "executed_unverified"
+_DISARM_RESULT_FAILED = "failed"
+_DISARM_RESULT_NOT_EXECUTED = "not_executed"
+_DISARM_RESULT_INCOMPLETE = "incomplete"
+
+_SIGNAL_EXIT_CODES = {143, -15, 137, -9}
+
+# §3.0 第 2 条 FAMILY_STEPS（与 U1 契约同形的字面量副本，仅供控制面推导）
+_FAMILY_STEPS: Dict[str, Dict[str, tuple]] = {
+    "power-cycle": {
+        "footprint": ("powercycle_setup",),
+        "disarm": ("powercycle_finish",),
+        "disarm_onboarded": ("powercycle_disarm",),
+    },
+    "sleep": {
+        "footprint": ("sleep_setup",),
+        "disarm": ("sleep_finish",),
+        "disarm_onboarded": ("sleep_finish",),
+    },
+    "mtbf": {
+        "footprint": ("mtbf_setup",),
+        "disarm": ("mtbf_finish",),
+        "disarm_onboarded": ("mtbf_finish",),
+    },
+    "gpu": {
+        "footprint": ("gpu_setup",),
+        "disarm": ("gpu_finish",),
+        "disarm_onboarded": ("gpu_finish",),
+    },
+    "monkey": {
+        "footprint": ("monkey_setup", "monkey_launch", "monkey_test"),
+        "disarm": ("monkey_teardown",),
+        "disarm_onboarded": ("monkey_teardown",),
+    },
+}
+
+
+def _script_name_from_action(action: Any) -> str:
+    if not isinstance(action, str) or not action.startswith("script:"):
+        return ""
+    return action.split(":", 1)[1].strip()
+
+
+def _pipeline_steps_by_stage(pipeline_def: Any, stage: str) -> list[dict]:
+    if not isinstance(pipeline_def, dict):
+        return []
+    lifecycle = pipeline_def.get("lifecycle") or {}
+    if not isinstance(lifecycle, dict):
+        return []
+    steps = lifecycle.get(stage) or []
+    if isinstance(steps, dict):
+        steps = steps.get("steps") or []
+    if not isinstance(steps, list):
+        return []
+    return [s for s in steps if isinstance(s, dict)]
+
+
+def _step_id_to_script(pipeline_def: Any) -> Dict[str, str]:
+    mapping: Dict[str, str] = {}
+    for stage in ("init", "teardown", "patrol"):
+        for step in _pipeline_steps_by_stage(pipeline_def, stage):
+            sid = step.get("step_id") or ""
+            script = _script_name_from_action(step.get("action"))
+            if sid and script:
+                mapping[str(sid)] = script
+    return mapping
+
+
+def _family_for_script(script_name: str, role: str) -> Optional[str]:
+    if not script_name:
+        return None
+    for family, spec in _FAMILY_STEPS.items():
+        names = spec.get(role) or ()
+        if script_name in names:
+            return family
+        if role == "disarm" and script_name in (spec.get("disarm_onboarded") or ()):
+            return family
+    return None
+
+
+def _map_trace_to_disarm_result(status: Any, exit_code: Any) -> str:
+    """§3.0 第 6 条：COMPLETED / FAILED(+signal) / 其它 FAILED / 无 trace。"""
+    st = str(status or "").strip().upper()
+    if st in {"COMPLETED", "FINISHED", "SUCCESS", "OK"}:
+        return _DISARM_RESULT_EXECUTED_UNVERIFIED
+    if st in {"FAILED", "ERROR", "ABORTED", "CANCELLED", "CANCELED"}:
+        try:
+            code = int(exit_code) if exit_code is not None else None
+        except (TypeError, ValueError):
+            code = None
+        if code in _SIGNAL_EXIT_CODES:
+            return _DISARM_RESULT_INCOMPLETE
+        return _DISARM_RESULT_FAILED
+    return _DISARM_RESULT_NOT_EXECUTED
+
+
+def derive_disarm_results_from_traces(
+    pipeline_def: Any,
+    traces: list[Any],
+) -> Dict[str, Dict[str, Any]]:
+    """从 teardown 步骤 trace 按 FAMILY_STEPS 推导 disarm_results（#3723 §3.0 第 6 条）。
+
+    足迹：init 中 FAMILY_STEPS.footprint 步骤一旦出现任意 trace 即视为已建立。
+    解除：该专项 teardown 解除脚本的最新终态 trace；没有 → not_executed。
+    """
+    id_to_script = _step_id_to_script(pipeline_def)
+    footprint: set[str] = set()
+    disarm_traces: Dict[str, Any] = {}  # family -> latest trace-like
+
+    for tr in traces or []:
+        stage = getattr(tr, "stage", None)
+        if stage is None and isinstance(tr, dict):
+            stage = tr.get("stage")
+        step_id = getattr(tr, "step_id", None)
+        if step_id is None and isinstance(tr, dict):
+            step_id = tr.get("step_id")
+        status = getattr(tr, "status", None)
+        if status is None and isinstance(tr, dict):
+            status = tr.get("status")
+        exit_code = getattr(tr, "exit_code", None)
+        if exit_code is None and isinstance(tr, dict):
+            exit_code = tr.get("exit_code")
+        script = id_to_script.get(str(step_id or ""), "")
+        if not script:
+            continue
+        if stage == "init":
+            fam = _family_for_script(script, "footprint")
+            if fam:
+                footprint.add(fam)
+        elif stage == "teardown":
+            fam = _family_for_script(script, "disarm")
+            if fam:
+                disarm_traces[fam] = {
+                    "status": status,
+                    "exit_code": exit_code,
+                    "step_id": step_id,
+                }
+
+    # 若只有 teardown 解除 trace、init 足迹缺失：仍按出现的解除专项记账（兼容缺 init trace）
+    families = set(footprint) | set(disarm_traces)
+    out: Dict[str, Dict[str, Any]] = {}
+    for fam in sorted(families):
+        tr = disarm_traces.get(fam)
+        if tr is None:
+            result = _DISARM_RESULT_NOT_EXECUTED
+            entry: Dict[str, Any] = {
+                "result": result,
+                "step_id": "",
+                "exit_code": None,
+                "readback_summary": "",
+            }
+        else:
+            result = _map_trace_to_disarm_result(tr.get("status"), tr.get("exit_code"))
+            entry = {
+                "result": result,
+                "step_id": str(tr.get("step_id") or ""),
+                "exit_code": tr.get("exit_code"),
+                "readback_summary": "",
+            }
+        out[fam] = entry
+    return out
+
+
+def normalize_disarm_results(raw: Any) -> Optional[Dict[str, Dict[str, Any]]]:
+    """Accept Agent-reported disarm_results; return None when absent/empty/invalid."""
+    if not isinstance(raw, dict) or not raw:
+        return None
+    out: Dict[str, Dict[str, Any]] = {}
+    for family, entry in raw.items():
+        if not isinstance(family, str) or not family:
+            continue
+        if isinstance(entry, str):
+            out[family] = {
+                "result": entry,
+                "step_id": "",
+                "exit_code": None,
+                "readback_summary": "",
+            }
+            continue
+        if not isinstance(entry, dict):
+            continue
+        result = entry.get("result")
+        if not isinstance(result, str) or not result:
+            continue
+        out[family] = {
+            "result": result,
+            "step_id": str(entry.get("step_id") or ""),
+            "exit_code": entry.get("exit_code"),
+            "readback_summary": str(entry.get("readback_summary") or ""),
+            **({"reason": entry["reason"]} if entry.get("reason") else {}),
+        }
+    return out or None
+
+
+def apply_disarm_results(job: JobInstance, results: Dict[str, Dict[str, Any]]) -> None:
+    """Persist disarm_results on the job and count metrics. Never touch status_reason."""
+    job.disarm_results = results
+    for family, entry in results.items():
+        record_disarm_result(family, entry.get("result") or "unknown")
+
+
 class _RunCompleteIn(BaseModel):
     update: Dict[str, Any]
     artifact: Optional[Dict[str, Any]] = None
@@ -76,6 +283,8 @@ class _RunCompleteIn(BaseModel):
     # 字段形态参考 backend/agent/contracts/watcher_contracts.py WatcherSummaryPayload
     # 可选：watcher_id / watcher_started_at / watcher_stopped_at / watcher_capability / log_signal_count / watcher_stats
     watcher_summary: Optional[Dict[str, Any]] = None
+    # ADR-0061 D4 / #3723 §3.3 U2：按专项解除结果；缺失时控制面从 teardown trace 推导
+    disarm_results: Optional[Dict[str, Any]] = None
     fencing_token: str  # ADR-0019 Phase 2b: 必填
 
 
@@ -219,6 +428,7 @@ async def complete_agent_job(
         "update": payload.update,
         "artifact": payload.artifact,
         "watcher_summary": payload.watcher_summary,
+        "disarm_results": payload.disarm_results,
     }
     payload_digest = hashlib.sha256(
         json.dumps(
@@ -421,6 +631,18 @@ async def complete_agent_job(
     # 字段契约见 backend/agent/contracts/watcher_contracts.py WatcherSummaryPayload
     if payload.watcher_summary:
         apply_watcher_summary(job, payload.watcher_summary)
+
+    # ADR-0061 D4 / #3723 §3.3 U2：解除结果落库（不得写入 status_reason）
+    reported = normalize_disarm_results(payload.disarm_results)
+    if reported is None:
+        existing_traces = (
+            await db.execute(
+                select(StepTrace).where(StepTrace.job_id == job_id)
+            )
+        ).scalars().all()
+        reported = derive_disarm_results_from_traces(job.pipeline_def, existing_traces)
+    if reported:
+        apply_disarm_results(job, reported)
 
     # ADR-0052 D5（#3244）：原「ABORTED 分支逐 Job 读改写
     # run_context.abort_requested.acknowledged_job_ids」已删除——ACK 语义由
