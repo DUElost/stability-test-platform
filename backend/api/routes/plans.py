@@ -313,18 +313,9 @@ def _min_wall_clock_for_step(
     params: dict | None,
     onboarded: dict | None = None,
 ) -> int | None:
-    """Return registered min_wall_clock_seconds for script, or None if unregistered.
+    """Return ONBOARDED min_wall_clock_seconds for script, or None if unregistered.
 
-    Expected ONBOARDED shape (U5 fills power-cycle)::
-
-        {
-          "power-cycle": {
-            "min_wall_clock_seconds": {
-              "powercycle_disarm": callable(params)|int,
-              "powercycle_finish": callable(params)|int,
-            }
-          }
-        }
+    U5 将在 ONBOARDED[family]["min_wall_clock_seconds"][script] 登记 callable/int。
     """
     registry = _load_onboarded_registry() if onboarded is None else onboarded
     if not script_name or not isinstance(registry, dict):
