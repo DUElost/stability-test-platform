@@ -10,7 +10,7 @@ MIG = ROOT / "backend" / "alembic" / "versions" / "c3d4e5f6a7b8_add_job_disarm_r
 def test_migration_file_exists_and_revisions():
     text = MIG.read_text(encoding="utf-8")
     assert 'revision = "c3d4e5f6a7b8"' in text
-    assert 'down_revision = "b2c3d4e5f6a7"' in text
+    assert 'down_revision = "9b7e24a6d081"' in text
     assert "disarm_results" in text
     assert "job_instance" in text
     assert "downgrade" in text
