@@ -6,7 +6,6 @@ Plan CRUD + run/preview endpoints.
 from __future__ import annotations
 
 import logging
-import os
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -31,6 +30,7 @@ from backend.models.plan import Plan, PlanStep
 from backend.models.plan_run import PlanRun
 from backend.models.project import Specialty, TestProject
 from backend.models.suite import TestSuite
+from backend.models.script import Script as ScriptModel
 from backend.services.script_progress_capability import script_supports_progress
 from backend.services.plan_dispatcher_core import apply_step_timing_fields
 from backend.services.plan_wifi import (
@@ -317,6 +317,7 @@ def _min_wall_clock_for_step(
     """Return ONBOARDED min_wall_clock_seconds for script, or None if unregistered.
 
     U5 将在 ONBOARDED[family]["min_wall_clock_seconds"][script] 登记 callable/int。
+    ``params`` 必须是 default_params 与步骤 params 合并后的有效参数（#3723 §3.3.1）。
     """
     registry = _load_onboarded_registry() if onboarded is None else onboarded
     if not script_name or not isinstance(registry, dict):
@@ -344,49 +345,86 @@ def _min_wall_clock_for_step(
     return None
 
 
-def _effective_step_wall_clock_seconds(timeout_seconds: int | None) -> int:
-    """Effective step wall clock for ONBOARDED compare (ADR-0061 D3.6).
+def _load_script_default_params(
+    db: Session,
+    steps: list[PlanStepIn],
+) -> dict[tuple[str, str], dict]:
+    """Batch-load Script.default_params for wall-clock budget merge (#3723 §3.3.1)."""
 
-    Same default chain as Agent ``pipeline_engine._resolve_step_wall_clock`` when
-    PlanStep omits ``timeout_seconds``: ``STP_STEP_WALL_CLOCK_SECONDS`` else 300.
-    Explicit values (including 0 = unlimited at runtime) are used as-is.
-    """
-    if timeout_seconds is not None:
-        return int(timeout_seconds)
-    env_raw = (os.getenv("STP_STEP_WALL_CLOCK_SECONDS") or "").strip()
-    if env_raw:
-        try:
-            return int(float(env_raw))
-        except ValueError:
-            pass
-    return 300  # pipeline_engine._DEFAULT_STEP_WALL_CLOCK_SECONDS
+    keys = {(s.script_name, s.script_version) for s in steps}
+    if not keys:
+        return {}
+    rows = db.execute(
+        select(
+            ScriptModel.name, ScriptModel.version, ScriptModel.default_params,
+        ).where(
+            ScriptModel.is_active.is_(True),
+            ScriptModel.name.in_({k[0] for k in keys}),
+        )
+    ).all()
+    out: dict[tuple[str, str], dict] = {}
+    for r in rows:
+        key = (r.name, r.version)
+        if key not in keys:
+            continue
+        raw = r.default_params
+        out[key] = dict(raw) if isinstance(raw, dict) else {}
+    return out
+
+
+def _effective_step_params(
+    step: PlanStepIn,
+    script_defaults: dict[tuple[str, str], dict],
+) -> dict:
+    """Merge Script.default_params with step.params (step overrides; dispatcher-aligned)."""
+    merged = dict(script_defaults.get((step.script_name, step.script_version), {}))
+    if step.params:
+        merged.update(dict(step.params))
+    return merged
 
 
 def _validate_onboarded_wall_clock(
     steps: list[PlanStepIn],
+    db: Session | None = None,
     *,
     onboarded: dict | None = None,
+    script_defaults: dict[tuple[str, str], dict] | None = None,
 ) -> None:
-    """Reject effective wall clock below ONBOARDED min (#3723 §3.3 第 4 条 / D3.6).
+    """Require explicit positive timeout_seconds ≥ ONBOARDED budget (#3723 §3.3.1).
 
-    Omitted ``timeout_seconds`` uses the Agent-effective default (env or 300), not
-    a skip — otherwise Plan save could accept a config that still runs under budget.
+    Registered enabled steps must carry an explicit positive integer wall clock;
+    omit / null / 0 / negative / below budget → 422. Control-plane
+    ``STP_STEP_WALL_CLOCK_SECONDS`` is never consulted.
     """
+    if not steps:
+        return
+    defaults = script_defaults
+    if defaults is None:
+        defaults = _load_script_default_params(db, steps) if db is not None else {}
+
     violations: list[dict] = []
     for step in steps:
         if step.enabled is False:
             continue
+        effective = _effective_step_params(step, defaults)
         minimum = _min_wall_clock_for_step(
-            step.script_name, step.params, onboarded=onboarded,
+            step.script_name, effective, onboarded=onboarded,
         )
         if minimum is None:
             continue
-        timeout = _effective_step_wall_clock_seconds(step.timeout_seconds)
-        if int(timeout) < int(minimum):
+        received = step.timeout_seconds
+        # 省略/null → 记 null；0/负/正整数原样上报，不得冒充 env 推导值
+        reported = None if received is None else int(received)
+        ok = (
+            received is not None
+            and int(received) >= 1
+            and int(received) >= int(minimum)
+        )
+        if not ok:
             violations.append({
                 "step_key": step.step_key,
                 "script_name": step.script_name,
-                "timeout_seconds": int(timeout),
+                "timeout_seconds": reported,
                 "min_wall_clock_seconds": int(minimum),
             })
     if violations:
@@ -395,8 +433,8 @@ def _validate_onboarded_wall_clock(
             detail={
                 "code": "WALL_CLOCK_BELOW_ONBOARDED_BUDGET",
                 "message": (
-                    "步骤墙钟小于 ONBOARDED 登记的最低等待预算"
-                    "（ADR-0061 D3.6 / #3723 U2）"
+                    "已登记步骤必须显式配置正整数墙钟且不低于登记预算"
+                    "（ADR-0061 D3.6 / #3723 §3.3.1）"
                 ),
                 "violations": violations,
             },
@@ -824,7 +862,7 @@ def create_plan(
     _validate_script_refs(db, payload.steps)
     _validate_step_param_values(payload.steps, db)
     _validate_stall_seconds_capability(payload.steps, db)
-    _validate_onboarded_wall_clock(payload.steps)
+    _validate_onboarded_wall_clock(payload.steps, db)
 
     now = datetime.now(timezone.utc)
     plan = Plan(
@@ -975,7 +1013,7 @@ def append_chain_tail(
     _validate_script_refs(db, payload.steps)
     _validate_step_param_values(payload.steps, db)
     _validate_stall_seconds_capability(payload.steps, db)
-    _validate_onboarded_wall_clock(payload.steps)
+    _validate_onboarded_wall_clock(payload.steps, db)
     _validate_assembled_lifecycle(
         payload.steps, None, None, None, None,
     )
@@ -1249,7 +1287,7 @@ def update_plan(
         _validate_script_refs(db, payload.steps)
         _validate_step_param_values(payload.steps, db)
         _validate_stall_seconds_capability(payload.steps, db)
-        _validate_onboarded_wall_clock(payload.steps)
+        _validate_onboarded_wall_clock(payload.steps, db)
         _validate_assembled_lifecycle(
             payload.steps,
             plan.patrol_interval_seconds,
