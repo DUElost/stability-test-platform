@@ -19,6 +19,44 @@ from .log_archiver import LogArchiver
 logger = logging.getLogger(__name__)
 
 
+
+def _await_started_disarm(
+    job_runner_state: Optional[Any],
+    *,
+    timeout_seconds: float = 20.0,
+) -> None:
+    """Wait up to ``timeout_seconds`` for active runners (disarm) to finish.
+
+    Polls ``active_runners``; returns early when empty. Incomplete disarm after
+    the window is marked ``incomplete`` when the scheduler shuts down / workers
+    exit (#3723 §3.2.4).
+    """
+    if job_runner_state is None or timeout_seconds <= 0:
+        return
+    import time
+
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        try:
+            active = getattr(job_runner_state, "active_runners", None) or {}
+            if not active:
+                return
+        except Exception:
+            logger.exception("shutdown_disarm_wait_inspect_failed")
+            return
+        time.sleep(0.2)
+    try:
+        leftover = list(getattr(job_runner_state, "active_runners", {}) or {})
+    except Exception:
+        leftover = []
+    if leftover:
+        logger.warning(
+            "shutdown_disarm_window_elapsed leftover_jobs=%s timeout=%.1fs",
+            leftover,
+            timeout_seconds,
+        )
+
+
 def shutdown_agent_runtime(
     *,
     coordinator: Any,
@@ -39,16 +77,19 @@ def shutdown_agent_runtime(
     """Drain in-flight work and stop background subsystems (SIGTERM/SIGINT)."""
     logger.info("agent_shutting_down, waiting for active tasks to finish...")
     coordinator.stop()
-    operation_scheduler.shutdown()
-    # R07-F12 (#1012): scheduler.shutdown() only wakes permit waiters; also
-    # cancel already-running cruises so the executor drain below is bounded
-    # and SIGTERM actually ends a patrol loop instead of retrying it.
+    # #3723 §3.2.4 / ADR-0061 D3: abort in-flight jobs FIRST so started disarm
+    # steps can finish; wait up to 20s; then shut down the scheduler. Do not
+    # change systemd TimeoutStopSec (unit stays 30s).
     if job_runner_state is not None:
         try:
             for _jid in list(job_runner_state.active_runners):
                 job_runner_state.request_abort(_jid)
         except Exception:
             logger.exception("shutdown_cancel_runners_failed")
+    _await_started_disarm(job_runner_state, timeout_seconds=20.0)
+    # R07-F12 (#1012): scheduler.shutdown() wakes remaining permit waiters
+    # (teardown waiters record incomplete). Then drain the executor.
+    operation_scheduler.shutdown()
     executor.shutdown(wait=True, cancel_futures=False)
     # Flush step traces via HTTP before shutdown
     try:

@@ -416,6 +416,8 @@ def run_task_wrapper(
         }
         if watcher_summary is not None:
             complete_payload["watcher_summary"] = watcher_summary
+        if isinstance(result.get("disarm_results"), dict):
+            complete_payload["disarm_results"] = result["disarm_results"]
 
         if _complete_job_if_current_worker(
             state=state,

@@ -28,6 +28,10 @@ def test_shutdown_agent_runtime_order():
     scheduler = MagicMock()
     runner = MagicMock()
     runner.active_runners = {1: object()}
+    # #3723: disarm wait polls active_runners — clear on abort.
+    def _abort(jid):
+        runner.active_runners = {}
+    runner.request_abort.side_effect = _abort
     executor = MagicMock()
     step = MagicMock()
     step.drain_sync.return_value = 0

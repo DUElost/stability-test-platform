@@ -430,9 +430,10 @@ class HostRunCoordinator:
         """Abort/lease-lost: cancel a job WAITING for the scheduler permit.
 
         Only cancels jobs in WAITING_EXECUTION_SLOT — a job already
-        holding a permit (EXECUTING_STEP) is aborted through the
-        pipeline's signal path, not by releasing its permit (that would
-        corrupt the concurrency cap).
+        holding a permit (EXECUTING_STEP / EXECUTING_DISARM) is aborted
+        through the pipeline's signal path, not by releasing its permit
+        (that would corrupt the concurrency cap). #3723 U1: disarm holds
+        the permit until the step finishes; cancel_device must not touch it.
         """
         scheduler = getattr(self, "_scheduler", None)
         if scheduler is None:

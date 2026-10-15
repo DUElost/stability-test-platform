@@ -38,6 +38,20 @@ def build_cancel_recovery_job(
         if job_runner_slot.value is not None:
             job_runner_slot.value.request_abort(jid)
 
+    def is_worker_alive(jid: int) -> bool:
+        """True when JobRunnerState still has an active runner for ``jid``."""
+        state = job_runner_slot.value
+        if state is None:
+            return False
+        try:
+            runners = getattr(state, "active_runners", None) or {}
+            return int(jid) in runners
+        except Exception:
+            logger.exception("recovery_is_worker_alive_failed job=%d", jid)
+            return False
+
+    # #3723 §3.2.2: ABORT_LOCAL deferred cleanup reads this via cancel handle.
+    cancel_recovery_job.is_worker_alive = is_worker_alive  # type: ignore[attr-defined]
     return cancel_recovery_job
 
 
@@ -53,6 +67,7 @@ def build_execute_recovery_actions(
     """ADR-0019 Phase 3a: Backend recovery actions → local occupancy / resume."""
 
     def execute_recovery_actions(resp: dict, active_jobs_by_id: dict) -> None:
+        alive_fn = getattr(cancel_recovery_job, "is_worker_alive", None)
         execute_recovery_actions_impl(
             resp=resp,
             active_jobs_by_id=active_jobs_by_id,
@@ -62,6 +77,7 @@ def build_execute_recovery_actions(
             register_active_job=register_active_job,
             resume_job=resume_slot.value,
             abort_local_job=cancel_recovery_job,
+            is_worker_alive=alive_fn,
         )
 
     return execute_recovery_actions

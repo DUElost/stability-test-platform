@@ -98,7 +98,7 @@ def execute_pipeline_run(
         if result.metadata.get("termination_reason") in ("abort", "manual_exit"):
             status = "CANCELED"
 
-    return {
+    out = {
         "status": status,
         "exit_code": result.exit_code,
         "error_code": None,
@@ -108,3 +108,8 @@ def execute_pipeline_run(
         # 实时查看：SocketIO → 控制面 log_writer；事后取证：SSH POST /api/v1/agent/logs。
         "artifact": None,
     }
+    # #3723 §3.2.5: forward disarm_results into the job complete payload.
+    meta = getattr(result, "metadata", None)
+    if isinstance(meta, dict) and isinstance(meta.get("disarm_results"), dict):
+        out["disarm_results"] = meta["disarm_results"]
+    return out

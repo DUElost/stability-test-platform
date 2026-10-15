@@ -43,6 +43,20 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .script_packages import PackageUnavailable, inject_required_tools, resolve_script_path
 
+from .contracts.device_return import (
+    EXECUTING_DISARM,
+    LEASE_LOST_REASON,
+    ONBOARDED,
+    default_not_executed_for_families,
+    family_for_disarm_script,
+    is_disarm_script,
+    make_disarm_result,
+    map_step_outcome_to_disarm_result,
+    note_footprint_started,
+    script_name_from_step,
+    select_disarm_steps,
+)
+
 
 logger = logging.getLogger(__name__)
 
@@ -1024,6 +1038,11 @@ class PipelineEngine:
         self._canceled = False
         self._process_lock = threading.Lock()
         self._active_process: Optional[subprocess.Popen] = None
+        # ADR-0061 / #3723 U1: footprint + disarm tracking
+        self._active_phase: Optional[str] = None
+        self._footprint_families: set[str] = set()
+        self._disarm_results: dict[str, dict] = {}
+        self._lease_lost_for_disarm: bool = False
         self._patrol_cycle_index = 0
         self._step_trace_uploader = step_trace_uploader  # #483
 
@@ -1076,12 +1095,17 @@ class PipelineEngine:
                 raise
 
     def cancel(self):
-        """Signal cancellation and terminate the running script process tree."""
+        """Signal cancellation; terminate the running script unless it is teardown.
+
+        ADR-0061 D3 / #3723 §3.2.2 (M2): abort / ABORT_LOCAL / reconnect must not
+        kill an in-flight disarm/teardown subprocess — only set the cancel flag.
+        """
         self._canceled = True
         with self._process_lock:
             proc = self._active_process
             script_path = getattr(self, "_active_script_path", None)
-        if proc is not None:
+            phase = getattr(self, "_active_phase", None)
+        if proc is not None and phase != "teardown":
             _terminate_process_tree(
                 proc, grace_seconds=_script_terminate_grace_seconds(script_path),
             )
@@ -1089,6 +1113,7 @@ class PipelineEngine:
     def _set_active_process(
         self, proc: subprocess.Popen, *, allow_after_cancel: bool = False,
         script_path: str | None = None,
+        phase: str | None = None,
     ) -> None:
         if not hasattr(self, "_process_lock"):
             self._process_lock = threading.Lock()
@@ -1096,6 +1121,8 @@ class PipelineEngine:
         with self._process_lock:
             self._active_process = proc
             self._active_script_path = script_path
+            if phase is not None:
+                self._active_phase = phase
             should_terminate = (
                 getattr(self, "_canceled", False) and not allow_after_cancel
             )
@@ -1111,6 +1138,8 @@ class PipelineEngine:
             if self._active_process is proc:
                 self._active_process = None
                 self._active_script_path = None
+                # Keep _active_phase until the step wrapper clears it — cancel()
+                # races need the phase while the process handle is still set.
 
     def execute(self, pipeline_def: dict) -> StepResult:
         """Execute the full lifecycle pipeline."""
@@ -1300,7 +1329,11 @@ class PipelineEngine:
         coord = getattr(self, "_coordinator", None)
         if coord is None:
             return
-        if progress_ts is None and state in ("EXECUTING_STEP", "PATROL_SLEEP"):
+        if progress_ts is None and state in (
+            "EXECUTING_STEP",
+            "PATROL_SLEEP",
+            EXECUTING_DISARM,
+        ):
             progress_ts = datetime.now(timezone.utc).isoformat()
         jv = coord.register_job(self._run_id, prh_id=self._plan_run_host_id)
         if jv is not None:
@@ -1402,7 +1435,7 @@ class PipelineEngine:
                 state = peer.execution_state
                 if state == "WAITING_EXECUTION_SLOT":
                     return True
-                if state == "EXECUTING_STEP":
+                if state in ("EXECUTING_STEP", EXECUTING_DISARM):
                     if not self._peer_stamp_is_fresh(peer):
                         logger.debug(
                             "peer_executing_stamp_stale job=%s stamp=%s "
@@ -1524,8 +1557,14 @@ class PipelineEngine:
         """ADR-0026 Step 5b: wrap step execution with OperationScheduler permit.
 
         Sets WAITING_EXECUTION_SLOT while waiting for the permit, EXECUTING_STEP
-        after grant, and releases the permit in finally. Step timeout is measured
-        from the moment the permit is granted (not from the wait start)."""
+        (or EXECUTING_DISARM for teardown disarm steps) after grant, and releases
+        the permit in finally. Step timeout is measured from the moment the
+        permit is granted (not from the wait start).
+
+        #3723 §3.2.1: for ``teardown``, do not abandon the wait on ``_canceled``
+        or lease-lost; keep waiting up to the step wall clock. ``SchedulerShutdown``
+        still returns immediately and records ``incomplete``.
+        """
         scheduler = getattr(self, "_scheduler", None)
         if scheduler is None:
             self._last_step_error = "operation_scheduler_required"
@@ -1543,54 +1582,121 @@ class PipelineEngine:
             PermitWaitTimeout,
             SchedulerShutdown,
         )
+
+        # Footprint: init step *start* establishes the family (#3723 §3.0.3).
+        footprint = getattr(self, "_footprint_families", None)
+        if footprint is None:
+            self._footprint_families = set()
+            footprint = self._footprint_families
+        if not hasattr(self, "_disarm_results") or self._disarm_results is None:
+            self._disarm_results = {}
+        if phase == "init":
+            note_footprint_started(footprint, step)
+
+        script_name = script_name_from_step(step)
+        disarm_step = (
+            phase == "teardown"
+            and is_disarm_script(
+                script_name,
+                footprint_families=footprint,
+                onboarded=ONBOARDED,
+            )
+        )
+        # Teardown permit wait budget = step wall clock (None = unbounded).
+        wall = _resolve_step_wall_clock(step) if phase == "teardown" else None
+        wait_deadline = (
+            (time.monotonic() + wall) if (phase == "teardown" and wall is not None) else None
+        )
+
         self._update_execution_state("WAITING_EXECUTION_SLOT")
         permit = None
         try:
-            # Loop with finite timeout so abort/lease-lost can interrupt the
-            # wait (cancel_device wakes the waiter with PermitDenied).
             while True:
                 try:
-                    permit = scheduler.acquire(device_id, timeout=5)
+                    acquire_timeout = 5.0
+                    if wait_deadline is not None:
+                        remaining = wait_deadline - time.monotonic()
+                        if remaining <= 0:
+                            self._last_step_error = "incomplete:permit_wait_exhausted"
+                            if disarm_step:
+                                self._record_disarm_for_step(
+                                    step,
+                                    started=False,
+                                    incomplete=True,
+                                )
+                            return False
+                        acquire_timeout = min(5.0, max(0.05, remaining))
+                    permit = scheduler.acquire(device_id, timeout=acquire_timeout)
                     break
                 except PermitWaitTimeout:
+                    if phase == "teardown":
+                        # Keep waiting — cancel / lease-lost must not drop queued disarm.
+                        continue
                     if self._is_lock_lost() or self._canceled:
                         return False
-                    # timeout — check abort signals and retry
                     if self._is_aborted is not None and self._is_aborted():
                         return False
                 except (SchedulerShutdown, PermitCancelled) as exc:
-                    # R07-F12 (#1012): scheduler shutdown / explicit cancel are
-                    # terminal for the whole worker, not merely one step. Mark
-                    # the run cancelled so a patrol cruise stops and does NOT
-                    # count this as an ordinary step failure / backoff retry.
+                    # Terminal for the worker. Teardown records incomplete.
                     self._canceled = True
-                    logger.info(
-                        "[Lifecycle] run=%s — %s during permit wait, stopping worker",
-                        getattr(self, "_run_id", None),
-                        type(exc).__name__,
-                    )
+                    if phase == "teardown" and disarm_step:
+                        self._last_step_error = f"incomplete:{type(exc).__name__}"
+                        self._record_disarm_for_step(
+                            step,
+                            started=False,
+                            incomplete=True,
+                        )
+                    else:
+                        logger.info(
+                            "[Lifecycle] run=%s — %s during permit wait, stopping worker",
+                            getattr(self, "_run_id", None),
+                            type(exc).__name__,
+                        )
                     return False
                 except PermitDenied:
-                    # Permanent per-device contract errors (already holds,
-                    # duplicate wait) are a local step-level denial, not a
-                    # fleet-wide stop signal.
                     return False
-            self._update_execution_state("EXECUTING_STEP")
-            return self._run_step_with_retry(
-                phase,
-                step,
-                suppress_success_trace=suppress_success_trace,
-            )
+
+            # §3.2.7 / §3.0.4: lease already lost → do not execute disarm.
+            if phase == "teardown" and disarm_step and self._teardown_lease_lost():
+                self._last_step_error = f"not_executed:{LEASE_LOST_REASON}"
+                self._record_disarm_for_step(
+                    step,
+                    started=False,
+                    lease_lost=True,
+                )
+                return False
+
+            exec_state = EXECUTING_DISARM if disarm_step else "EXECUTING_STEP"
+            self._update_execution_state(exec_state)
+            self._active_phase = phase
+            try:
+                ok = self._run_step_with_retry(
+                    phase,
+                    step,
+                    suppress_success_trace=suppress_success_trace,
+                    disarm_step=disarm_step,
+                )
+            finally:
+                if getattr(self, "_active_phase", None) == phase:
+                    # Only clear when no nested active process still owns it.
+                    with self._process_lock:
+                        if self._active_process is None:
+                            self._active_phase = None
+            return ok
         finally:
             if permit is not None:
                 permit.release()
-                self._update_execution_state("PATROL_SLEEP" if phase == "patrol" else None)
+                self._update_execution_state(
+                    "PATROL_SLEEP" if phase == "patrol" else None
+                )
+
     def _run_step_with_retry(
         self,
         phase: str,
         step: dict,
         *,
         suppress_success_trace: bool = False,
+        disarm_step: bool = False,
     ) -> bool:
         """Execute a step with retry logic. Returns True on success."""
         max_retry = step.get("retry", 0)
@@ -1601,16 +1707,35 @@ class PipelineEngine:
                 step,
                 retry_attempt=attempt,
                 suppress_success_trace=suppress_success_trace,
+                disarm_step=disarm_step,
             )
             if result.success:
                 self._last_step_error = ""
+                if disarm_step:
+                    self._record_disarm_for_step(
+                        step,
+                        started=True,
+                        success=True,
+                        exit_code=result.exit_code,
+                        output=result.output,
+                    )
                 return True
             self._last_step_error = (
                 result.error_message
                 or (result.output or "")[:2000]
                 or ""
             )
-            if self._is_lock_lost() or self._canceled:
+            if disarm_step:
+                self._record_disarm_for_step(
+                    step,
+                    started=True,
+                    success=False,
+                    exit_code=result.exit_code,
+                    output=result.output,
+                    error_message=result.error_message,
+                )
+            # #3723 §3.2.1/2: teardown/disarm must not abandon on cancel flag.
+            if phase != "teardown" and (self._is_lock_lost() or self._canceled):
                 return False
             if attempt < max_retry:
                 sleep_remaining = 5.0 * (attempt + 1)
@@ -1618,7 +1743,9 @@ class PipelineEngine:
                     chunk = min(0.5, sleep_remaining)
                     time.sleep(chunk)
                     sleep_remaining -= chunk
-                    if self._is_lock_lost() or self._canceled:
+                    if phase != "teardown" and (
+                        self._is_lock_lost() or self._canceled
+                    ):
                         return False
         return False
 
@@ -1629,6 +1756,7 @@ class PipelineEngine:
         *,
         suppress_success_trace: bool = False,
         retry_attempt: int = 0,
+        disarm_step: bool = False,
     ) -> StepResult:
         """Execute a single lifecycle step. Reports STARTED/COMPLETED/FAILED via MQ.
 
@@ -1645,6 +1773,9 @@ class PipelineEngine:
         action = step.get("action", "")
         params = step.get("params", {})
         timeout = step.get("timeout_seconds", step.get("timeout", 300))
+        self._active_phase = phase
+        if phase == "init":
+            note_footprint_started(self._footprint_families, step)
 
         if step.get("enabled") is False:
             result = StepResult(success=True, skipped=True, skip_reason="step disabled")
@@ -1839,15 +1970,29 @@ class PipelineEngine:
                 proc,
                 allow_after_cancel=(ctx.phase == "teardown"),
                 script_path=script_path,
+                phase=ctx.phase,
             )
             try:
+                _progress_state = (
+                    EXECUTING_DISARM
+                    if (
+                        ctx.phase == "teardown"
+                        and is_disarm_script(
+                            name or "",
+                            footprint_families=self._footprint_families,
+                            onboarded=ONBOARDED,
+                        )
+                    )
+                    else "EXECUTING_STEP"
+                )
                 outcome = _pump_process(
                     proc,
                     wall_clock=timeout_seconds,
                     stall_seconds=stall_seconds,
                     # 每收到一个 PROGRESS 戳就刷 last_progress_at，供 #117 的
                     # progress-aware barrier 判断同 host 的 peer 是否还在推进。
-                    on_progress=lambda: self._update_execution_state("EXECUTING_STEP"),
+                    # 解除步骤改报 EXECUTING_DISARM（#3723 §3.2.6 / §3.0.5）。
+                    on_progress=lambda: self._update_execution_state(_progress_state),
                     log_paths=log_paths,
                     terminate_grace_seconds=_script_terminate_grace_seconds(name),
                 )
@@ -2120,18 +2265,27 @@ class PipelineEngine:
                     )
 
         finally:
-            # ── Phase 3: Teardown (best-effort) ──
-            # ADR-0022 BO4: manual_exit skips teardown entirely; the device
-            # is reclaimed via lease release + the next Plan's init re-checks.
+            # ── Phase 3: Teardown / disarm (best-effort) ──
+            # ADR-0061 D3.4 / #3723 §3.2.3: manual_exit must still run disarm
+            # (may skip collection-only steps when the family is ONBOARDED).
+            self._report_job_status_mq(
+                "TEARDOWN_RUNNING",
+                reason=f"termination_reason={termination_reason}",
+            )
             if termination_reason == "manual_exit":
                 logger.info(
-                    "[Lifecycle] run=%d — manual_exit: skipping teardown (ADR-0022 BO4)",
+                    "[Lifecycle] run=%d — manual_exit: executing disarm "
+                    "(ADR-0061 D3.4; was ADR-0022 BO4 skip)",
                     self._run_id,
                 )
-                teardown_result = None
+                teardown_result = self._execute_teardown_best_effort(
+                    teardown_def, disarm_only=True,
+                )
             else:
-                self._report_job_status_mq("TEARDOWN_RUNNING", reason=f"termination_reason={termination_reason}")
-                logger.info("[Lifecycle] run=%d — executing teardown (reason: %s)", self._run_id, termination_reason)
+                logger.info(
+                    "[Lifecycle] run=%d — executing teardown (reason: %s)",
+                    self._run_id, termination_reason,
+                )
                 teardown_result = self._execute_teardown_best_effort(teardown_def)
 
         # ── Unified exit: terminal MQ + artifact + StepResult ──
@@ -2170,10 +2324,17 @@ class PipelineEngine:
         # Merge teardown metadata into final result
         final_metadata = {"termination_reason": termination_reason}
         if teardown_result is None:
-            # ADR-0022 BO4: manual_exit explicitly skipped teardown
             final_metadata["teardown_status"] = "SKIPPED"
         elif isinstance(teardown_result.metadata, dict):
-            final_metadata["teardown_status"] = teardown_result.metadata.get("teardown_status", "UNKNOWN")
+            final_metadata["teardown_status"] = teardown_result.metadata.get(
+                "teardown_status", "UNKNOWN"
+            )
+        # Always attach disarm_results for footprint families (#3723 §3.2.5).
+        disarm_results = dict(getattr(self, "_disarm_results", {}) or {})
+        if not disarm_results and self._footprint_families:
+            disarm_results = default_not_executed_for_families(self._footprint_families)
+        if disarm_results:
+            final_metadata["disarm_results"] = disarm_results
 
         return StepResult(
             success=success,
@@ -2544,45 +2705,183 @@ class PipelineEngine:
 
         return success, failed, last_failed
 
-    def _execute_teardown_best_effort(self, teardown_def: List[dict]) -> StepResult:
+    def _teardown_lease_lost(self) -> bool:
+        """True when this job's device lease is confirmed lost (extend 409).
+
+        #3723 §3.0.4 / §3.2.7: abort alone must not block disarm; only a real
+        lease loss (another holder / reconciler) skips execution. Uses a
+        single-shot probe (no outage retry budget) so teardown is not delayed.
+        """
+        if getattr(self, "_lease_lost_for_disarm", False):
+            return True
+        api_url = getattr(self, "_api_url", None)
+        run_id = getattr(self, "_run_id", None)
+        if not api_url or not run_id:
+            return False
+        try:
+            import requests
+
+            url = f"{api_url}/api/v1/agent/jobs/{run_id}/extend_lock"
+            headers = {}
+            secret = getattr(self, "_agent_secret", None)
+            if secret:
+                headers["X-Agent-Secret"] = secret
+            resp = requests.post(
+                url,
+                json={"fencing_token": getattr(self, "_fencing_token", "") or ""},
+                headers=headers,
+                timeout=5,
+            )
+            if resp.status_code == 409:
+                self._lease_lost_for_disarm = True
+                return True
+        except Exception:
+            logger.debug("teardown_lease_probe_failed run=%s", run_id, exc_info=True)
+        return False
+
+    def _record_disarm_for_step(
+        self,
+        step: dict,
+        *,
+        started: bool,
+        success: Optional[bool] = None,
+        exit_code: Optional[int] = None,
+        output: Optional[str] = None,
+        error_message: Optional[str] = None,
+        lease_lost: bool = False,
+        incomplete: bool = False,
+    ) -> None:
+        """Accumulate one family's disarm_results entry from a step outcome."""
+        script = script_name_from_step(step)
+        family = family_for_disarm_script(script, onboarded=ONBOARDED)
+        if family is None:
+            return
+        structured = None
+        readback = None
+        if output:
+            raw = (output or "").strip()
+            if raw.startswith("{"):
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, dict):
+                        structured = parsed.get("disarm_result") or parsed.get("result")
+                        readback = parsed.get("readback") or parsed.get("readback_summary")
+                except (json.JSONDecodeError, TypeError):
+                    structured = None
+        onboarded_family = family in ONBOARDED
+        value = map_step_outcome_to_disarm_result(
+            started=started,
+            success=success,
+            exit_code=exit_code,
+            readback=readback if isinstance(readback, str) else None,
+            lease_lost=lease_lost,
+            incomplete=incomplete,
+            onboarded_family=onboarded_family,
+            structured_result=structured if isinstance(structured, str) else None,
+        )
+        reason = ""
+        if lease_lost:
+            reason = LEASE_LOST_REASON
+        summary = ""
+        if isinstance(readback, str):
+            summary = readback
+        elif error_message:
+            summary = str(error_message)[:500]
+        self._disarm_results[family] = make_disarm_result(
+            result=value,
+            step_id=str(step.get("step_id") or script or ""),
+            exit_code=exit_code,
+            readback_summary=summary,
+            reason=reason,
+        )
+
+    def _execute_teardown_best_effort(
+        self,
+        teardown_def: List[dict],
+        *,
+        disarm_only: bool = False,
+    ) -> StepResult:
         """Execute teardown with best-effort semantics: each step runs independently.
 
-
-
         Returns a StepResult with metadata["teardown_status"]:
-
         - "SUCCESS" — all steps passed
-
         - "DEGRADED" — some steps failed but at least one succeeded
-
         - "FAILED" — all steps failed
 
+        ``disarm_only=True`` (manual_exit): run only FAMILY_STEPS disarm steps
+        for families that established a footprint (#3723 §3.2.3).
         """
+        self._active_phase = "teardown"
+        steps: List[dict]
+        if disarm_only:
+            steps = select_disarm_steps(
+                teardown_def or [],
+                self._footprint_families,
+                onboarded=ONBOARDED,
+            )
+        else:
+            steps = list(teardown_def or [])
+
+        # Seed not_executed for every footprint family; successful/failed steps
+        # overwrite. Lease-lost short-circuit marks all as not_executed.
+        if self._footprint_families and not self._disarm_results:
+            self._disarm_results = default_not_executed_for_families(
+                self._footprint_families,
+            )
+
+        if self._footprint_families and self._teardown_lease_lost():
+            self._disarm_results = default_not_executed_for_families(
+                self._footprint_families,
+                reason=LEASE_LOST_REASON,
+            )
+            self._active_phase = None
+            return StepResult(
+                success=False,
+                exit_code=1,
+                error_message=f"teardown: not_executed:{LEASE_LOST_REASON}",
+                metadata={
+                    "teardown_status": "FAILED",
+                    "disarm_results": dict(self._disarm_results),
+                },
+            )
+
         total_steps = 0
         failed_steps = 0
         errors = []
 
-        for step in teardown_def or []:
-            total_steps += 1
-            step_id = step.get("step_id", "unknown")
-            try:
-                # #118:teardown 也走 permit——结果收取要读写 NFS/USB,
-                # 23 路并发会打满带宽;permit 串行保护与 init/patrol 一致。
-                # 无 scheduler 时回落 legacy 路径,行为不变。
-                ok = self._run_step_with_permit(
-                    "teardown", step, suppress_success_trace=False,
-                )
-                if not ok:
-                    failed_steps += 1
-                    error_detail = getattr(self, "_last_step_error", "") or "failed"
-                    errors.append(f"{step_id}: {error_detail}")
-                    logger.warning(
-                        "[Teardown] step '%s' failed: %s", step_id, error_detail,
+        try:
+            for step in steps:
+                total_steps += 1
+                step_id = step.get("step_id", "unknown")
+                try:
+                    ok = self._run_step_with_permit(
+                        "teardown", step, suppress_success_trace=False,
                     )
-            except Exception as e:
-                failed_steps += 1
-                errors.append(f"{step_id}: {e}")
-                logger.warning("[Teardown] step '%s' exception: %s", step_id, e)
+                    if not ok:
+                        failed_steps += 1
+                        error_detail = getattr(self, "_last_step_error", "") or "failed"
+                        errors.append(f"{step_id}: {error_detail}")
+                        logger.warning(
+                            "[Teardown] step '%s' failed: %s", step_id, error_detail,
+                        )
+                except Exception as e:
+                    failed_steps += 1
+                    errors.append(f"{step_id}: {e}")
+                    logger.warning("[Teardown] step '%s' exception: %s", step_id, e)
+                    script = script_name_from_step(step)
+                    if is_disarm_script(
+                        script,
+                        footprint_families=self._footprint_families,
+                        onboarded=ONBOARDED,
+                    ):
+                        self._record_disarm_for_step(
+                            step,
+                            started=True,
+                            success=False,
+                            error_message=str(e),
+                        )
+        finally:
+            self._active_phase = None
 
         if failed_steps > 0:
             logger.warning(
@@ -2590,7 +2889,6 @@ class PipelineEngine:
                 failed_steps, total_steps, "; ".join(errors),
             )
 
-        # Determine teardown status: SUCCESS / DEGRADED / FAILED
         if failed_steps == 0:
             teardown_status = "SUCCESS"
         elif failed_steps < total_steps:
@@ -2599,11 +2897,19 @@ class PipelineEngine:
             teardown_status = "FAILED"
 
         return StepResult(
-            success=(total_steps == 0 or failed_steps < total_steps),  # DEGRADED still counts as success
+            success=(total_steps == 0 or failed_steps < total_steps),
             exit_code=0 if failed_steps == 0 else 1,
-            error_message=f"teardown: {failed_steps}/{total_steps} steps failed" if failed_steps > 0 else "",
-            metadata={"teardown_status": teardown_status},
+            error_message=(
+                f"teardown: {failed_steps}/{total_steps} steps failed"
+                if failed_steps > 0
+                else ""
+            ),
+            metadata={
+                "teardown_status": teardown_status,
+                "disarm_results": dict(self._disarm_results),
+            },
         )
+
 
     def drain_workers(self, grace_seconds: int = 5) -> None:
         """Compatibility no-op: step timeouts now kill the child process inline."""
