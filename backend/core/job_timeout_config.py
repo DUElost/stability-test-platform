@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 import os
 
 from backend.core.adr0026_params import DEFAULTS as _ADR0026_DEFAULTS
+from backend.agent.contracts.device_return import EXECUTING_DISARM, FAMILY_STEPS
 
 
 def _is_non_production_runtime() -> bool:
@@ -179,17 +180,13 @@ def running_heartbeat_timeout_seconds(
 # ── #3723 §3.3.2 A / ADR-0061 D3.8：解除宽限与 abort 主体纯判断 ──────────────
 # abort reaper 与通用 recycler 共用；无 DB / 无副作用。ORM 薄壳保留在
 # device_lease_reconciler（兼容既有测试导入）。
-
-EXECUTING_DISARM = "EXECUTING_DISARM"
-
-DISARM_SCRIPT_NAMES: frozenset[str] = frozenset({
-    "powercycle_finish",
-    "powercycle_disarm",
-    "sleep_finish",
-    "mtbf_finish",
-    "gpu_finish",
-    "monkey_teardown",
-})
+# 权威来源：上方导入的 EXECUTING_DISARM / FAMILY_STEPS（#3723 §3.1 / §3.3.1.6）
+# 历史 finish 与 onboarded disarm 并集；不随当前 ONBOARDED 是否为空而变空
+DISARM_SCRIPT_NAMES: frozenset[str] = frozenset(
+    name
+    for _spec in FAMILY_STEPS.values()
+    for name in (*(_spec.get("disarm") or ()), *(_spec.get("disarm_onboarded") or ()))
+)
 
 
 def coordinator_progress_freshness_seconds(

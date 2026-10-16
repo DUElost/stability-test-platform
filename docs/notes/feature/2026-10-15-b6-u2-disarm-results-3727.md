@@ -34,8 +34,12 @@ Draft PR 待规划确认与独立复核；合入不等于生效（控制面部�
 6. job 详情 schema / `types.ts` 同步暴露 `disarm_results`。
 
 U1 拥有 `backend/agent/contracts/device_return.py`：本单元**未**创建或修改该文件。
-控制面用与方案一致的字面量（FAMILY_STEPS / EXECUTING_DISARM / 六值），并在
-`agent_completion` / `plans` 标明「U1 合入后改为从 device_return 导入」。
+**I1 共享契约集成（§3.1 / §3.3.1.6）**：四处控制面权威来源已改为导入共享契约——
+`plans._load_onboarded_registry` → `device_return.ONBOARDED`（同对象、不复制、无空表回退）；
+`agent_completion` → 共享 `FAMILY_STEPS` / 结果值（内部 as 别名）；
+`job_timeout_config` → 共享 `EXECUTING_DISARM`，`DISARM_SCRIPT_NAMES` 由
+`FAMILY_STEPS` 的 disarm∪disarm_onboarded 生成；`agent_lease_extend` 白名单用共享
+`EXECUTING_DISARM`。coordinator / recycler / reconciler / deadline 经既有导入链指向共享契约。
 `plan_run_catalog._job_out` 增补一行映射（§3.3.6 API 面必需）。
 
 ## Alternatives
@@ -53,14 +57,14 @@ completion / wall / 迁移 / metric 契约；Agent 套件；真实 PG `recycle_o
 （新鲜解除存活、进度陈旧可回收、执行心跳旧但进度新仍保护）；三入口墙钟矩阵（含
 create 的 0/−1）；乱序 helper + `/complete` late_started；`promtool`；前端 `tsc`。
 **R1 最终保护复验**：`test_planner_u2_context_race`（running + trace）修前红→修后绿；
-与既有 recycler 反例同批验证。未跑 #3739 危险 cancel 变异。迁移
-`down_revision=9b7e24a6d081`（本轮未改迁移链）。
+与既有 recycler 反例同批验证。**I1 接线反例**：
+`test_shared_onboarded_registry_i1_u2_3727`（共享 ONBOARDED 标记可见 + 同对象）
+修前红→修后绿；真实 API 夹具改为注入共享 `device_return.ONBOARDED`。
+未跑 #3739 危险 cancel 变异。迁移 `down_revision=9b7e24a6d081`（本轮未改迁移链）。
 
 ## Revisit
 
-- #3723 v1.5：R1 最终保护复验已按规划核验补齐；R2 乱序、R3 创建入口错误契约保留；
-  待规划再确认与独立复核。
-- U1 合入后 rebase，将字面量改为 `from backend.agent.contracts.device_return import …`。
+- #3723 v1.5：R1–R3 行为保留；**I1 共享契约集成已落地**，待原权威复核者签最终 HEAD。
 - U5 写入 ONBOARDED 后，墙钟校验对开关机步骤生效；用真实 `min_wall_clock_seconds`
   公式回归一次。
 - U3 接管 §1.2 租约释放点；本单元未改那些调用点。

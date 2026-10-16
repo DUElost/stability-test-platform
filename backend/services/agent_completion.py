@@ -42,6 +42,13 @@ from backend.services.agent_recovery import resume_expired_lease_for_recovery
 from backend.services.errors import BadRequest, Conflict, NotFound
 from backend.services.lease_manager import release_lease
 from backend.services.state_machine import InvalidTransitionError, JobStateMachine
+from backend.agent.contracts.device_return import (
+    DISARM_RESULT_EXECUTED_UNVERIFIED as _DISARM_RESULT_EXECUTED_UNVERIFIED,
+    DISARM_RESULT_FAILED as _DISARM_RESULT_FAILED,
+    DISARM_RESULT_INCOMPLETE as _DISARM_RESULT_INCOMPLETE,
+    DISARM_RESULT_NOT_EXECUTED as _DISARM_RESULT_NOT_EXECUTED,
+    FAMILY_STEPS as _FAMILY_STEPS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -72,44 +79,9 @@ _RUN_TO_JOB: Dict[str, JobStatus] = {
 
 
 # ── #3723 U2 / ADR-0061 D4：解除结果落库与兼容推导 ──────────────────────────
-# U1 合入后改为从 backend.agent.contracts.device_return 导入下列常量与 FAMILY_STEPS。
-# 本单元不得创建/修改 device_return.py（§3.1 表后说明）。
-
-_DISARM_RESULT_EXECUTED_UNVERIFIED = "executed_unverified"
-_DISARM_RESULT_FAILED = "failed"
-_DISARM_RESULT_NOT_EXECUTED = "not_executed"
-_DISARM_RESULT_INCOMPLETE = "incomplete"
+# 权威来源：device_return 共享契约（上方导入；本单元只消费不修改）
 
 _SIGNAL_EXIT_CODES = {143, -15, 137, -9}
-
-# §3.0 第 2 条 FAMILY_STEPS（与 U1 契约同形的字面量副本，仅供控制面推导）
-_FAMILY_STEPS: Dict[str, Dict[str, tuple]] = {
-    "power-cycle": {
-        "footprint": ("powercycle_setup",),
-        "disarm": ("powercycle_finish",),
-        "disarm_onboarded": ("powercycle_disarm",),
-    },
-    "sleep": {
-        "footprint": ("sleep_setup",),
-        "disarm": ("sleep_finish",),
-        "disarm_onboarded": ("sleep_finish",),
-    },
-    "mtbf": {
-        "footprint": ("mtbf_setup",),
-        "disarm": ("mtbf_finish",),
-        "disarm_onboarded": ("mtbf_finish",),
-    },
-    "gpu": {
-        "footprint": ("gpu_setup",),
-        "disarm": ("gpu_finish",),
-        "disarm_onboarded": ("gpu_finish",),
-    },
-    "monkey": {
-        "footprint": ("monkey_setup", "monkey_launch", "monkey_test"),
-        "disarm": ("monkey_teardown",),
-        "disarm_onboarded": ("monkey_teardown",),
-    },
-}
 
 
 def _script_name_from_action(action: Any) -> str:

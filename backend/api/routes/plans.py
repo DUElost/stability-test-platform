@@ -25,6 +25,7 @@ from backend.agent.contracts.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
 from backend.core.device_serial import is_placeholder_serial
 from backend.core.database import get_db
 from backend.agent.contracts.pipeline_validator import validate_pipeline_def
+from backend.agent.contracts import device_return as _device_return_contract
 from backend.models.host import Device
 from backend.models.plan import Plan, PlanStep
 from backend.models.plan_run import PlanRun
@@ -295,18 +296,15 @@ class PlanRunSummaryOut(BaseModel):
 
 
 # ── #3723 §3.3 U2 / ADR-0061 D3.6：ONBOARDED 墙钟下限校验 ─────────────────────
-# U1 合入后改为：from backend.agent.contracts.device_return import ONBOARDED
-# U5 合入前 ONBOARDED 为空 → 对现有步骤不生效（预期）。
-
-
-# U1 合入前为空；合入后改为:
-#   from backend.agent.contracts.device_return import ONBOARDED as _ONBOARDED_REGISTRY
-_ONBOARDED_REGISTRY: dict = {}
+# 权威来源：_device_return_contract.ONBOARDED（U1 共享契约；U5 接入前为空）
 
 
 def _load_onboarded_registry() -> dict:
-    """Return ONBOARDED registry (empty until U1/U5 populate device_return)."""
-    return _ONBOARDED_REGISTRY if isinstance(_ONBOARDED_REGISTRY, dict) else {}
+    """读取共享 ONBOARDED（#3723 §3.1 / §3.3.1.6）。
+
+    返回模块当前对象本身，不 copy/deepcopy，不加 ImportError→空表回退。
+    """
+    return _device_return_contract.ONBOARDED
 
 
 def _min_wall_clock_for_step(

@@ -77,8 +77,17 @@ def pc_script(db_session):
 
 @pytest.fixture
 def onboarded_registry(monkeypatch):
-    monkeypatch.setattr(plans_mod, "_ONBOARDED_REGISTRY", ONBOARDED)
-    return ONBOARDED
+    """注入共享 device_return.ONBOARDED（#3723 §3.3.1.6 I1）。
+
+    不得再 monkeypatch Plan 本地表 / loader / 预算 helper。
+    """
+    import backend.agent.contracts.device_return as device_return
+
+    monkeypatch.setattr(device_return, "ONBOARDED", dict(ONBOARDED))
+    loaded = plans_mod._load_onboarded_registry()
+    assert loaded is device_return.ONBOARDED
+    assert "power-cycle" in loaded
+    return loaded
 
 
 @pytest.fixture(autouse=True)
