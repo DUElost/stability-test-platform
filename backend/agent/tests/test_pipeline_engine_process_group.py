@@ -7,6 +7,7 @@
   - POSIX: SIGTERM 整组 → wait 成功 → 不再 SIGKILL
   - POSIX: SIGTERM → wait TimeoutExpired → SIGKILL 整组
   - POSIX: getpgid / killpg ProcessLookupError 安全 swallow
+  - POSIX/#3739: 危险 PID/PGID（≤1、非真实 int、MagicMock→1、缓存旁路、自身 pgrp）到达不了真实 killpg
   - Windows: taskkill /T /F /PID
   - Windows: taskkill 失败 fallback proc.kill
 - _run_script_action TimeoutExpired 分支调用 _terminate_process_tree (不再裸 kill)
@@ -29,7 +30,10 @@ from backend.agent.pipeline_engine import (
     _popen_isolation_kwargs,
     _process_group_alive,
     _remember_process_group,
+    _resolve_pgid,
     _terminate_process_tree,
+    _trusted_pgid,
+    _trusted_posix_id,
 )
 
 
@@ -286,6 +290,176 @@ def test_terminate_reaps_orphaned_descendants_after_parent_exit(tmp_path):
             os.killpg(pgid, signal.SIGKILL)
         except Exception:
             pass
+
+
+# ── #3739 信号边界：危险 PID/PGID 不得到达真实 killpg ───────────────────
+
+
+def test_trusted_posix_id_rejects_non_int_and_le_one():
+    assert _trusted_posix_id(4242) == 4242
+    assert _trusted_posix_id(1) is None
+    assert _trusted_posix_id(0) is None
+    assert _trusted_posix_id(-1) is None
+    assert _trusted_posix_id(True) is None  # bool 是 int 子类，必须拒
+    assert _trusted_posix_id("4242") is None
+    assert _trusted_posix_id(MagicMock()) is None
+
+
+def test_trusted_pgid_rejects_own_process_group(monkeypatch):
+    monkeypatch.setattr(pipeline_engine.os, "getpgrp", lambda: 4242)
+    assert _trusted_pgid(4242) is None
+    assert _trusted_pgid(4243) == 4243
+
+
+def test_terminate_refuses_magicmock_pid_that_indexes_to_one(monkeypatch):
+    """事故路径：无显式 PID 的 MagicMock → __index__==1 → getpgid(1)/killpg(1)。
+
+    验证真实 os.killpg / os.getpgid 都不会带着危险参数被调用。
+    """
+    monkeypatch.setattr(pipeline_engine, "_IS_WINDOWS", False)
+    proc = MagicMock()
+    proc.poll.return_value = None
+    # 不设 proc.pid：MagicMock 默认 __index__ → 1（#3739 归因演示）
+    assert int(proc.pid) == 1
+
+    with patch(
+        "backend.agent.pipeline_engine.os.getpgid", create=True,
+    ) as gp, patch(
+        "backend.agent.pipeline_engine.os.killpg", create=True,
+    ) as killpg:
+        _terminate_process_tree(proc, grace_seconds=0.01)
+        gp.assert_not_called()
+        killpg.assert_not_called()
+
+
+@pytest.mark.parametrize("bad_pgid", [1, 0, -1])
+def test_terminate_refuses_cached_dangerous_pgid(monkeypatch, bad_pgid):
+    """真实 int 缓存若不可信：直接放弃，不得回落 getpgid，更不得 killpg。"""
+    monkeypatch.setattr(pipeline_engine, "_IS_WINDOWS", False)
+    proc = MagicMock()
+    proc.poll.return_value = None
+    proc.pid = 424242
+    proc._stp_pgid = bad_pgid
+
+    with patch(
+        "backend.agent.pipeline_engine.os.getpgid", return_value=424242, create=True,
+    ) as gp, patch(
+        "backend.agent.pipeline_engine.os.killpg", create=True,
+    ) as killpg:
+        _terminate_process_tree(proc, grace_seconds=0.01)
+        # 危险缓存不得回落到 getpgid 旁路，更不得 killpg
+        gp.assert_not_called()
+        killpg.assert_not_called()
+
+
+def test_terminate_bool_cached_pgid_ignored_falls_through_to_live(monkeypatch):
+    """bool 不是合法缓存类型：忽略后走现取；现取可信则可 killpg（非事故路径）。"""
+    monkeypatch.setattr(pipeline_engine, "_IS_WINDOWS", False)
+    monkeypatch.setattr(pipeline_engine.os, "getpgrp", lambda: 1)
+    proc = MagicMock()
+    proc.poll.return_value = None
+    proc.pid = 424242
+    proc._stp_pgid = True  # 不可当 int 缓存
+
+    with patch(
+        "backend.agent.pipeline_engine.os.getpgid", return_value=424242, create=True,
+    ) as gp, patch(
+        "backend.agent.pipeline_engine.os.killpg", create=True,
+    ) as killpg, patch(
+        "backend.agent.pipeline_engine._process_group_alive", return_value=True,
+    ):
+        _terminate_process_tree(proc, grace_seconds=0.01)
+        gp.assert_called_with(424242)
+        # 不得把 True/1 当 pgid；可信现取后仍可按契约 SIGTERM→SIGKILL
+        assert all(c.args[0] == 424242 for c in killpg.call_args_list)
+        assert [c.args[1] for c in killpg.call_args_list] == [
+            signal.SIGTERM, pipeline_engine._SIGKILL,
+        ]
+
+
+def test_terminate_refuses_live_resolved_pgid_one(monkeypatch):
+    """实时 getpgid 若返回 1，同样不得 killpg。"""
+    monkeypatch.setattr(pipeline_engine, "_IS_WINDOWS", False)
+    proc = MagicMock()
+    proc.poll.return_value = None
+    proc.pid = 424242
+
+    with patch(
+        "backend.agent.pipeline_engine.os.getpgid", return_value=1, create=True,
+    ), patch(
+        "backend.agent.pipeline_engine.os.killpg", create=True,
+    ) as killpg:
+        _terminate_process_tree(proc, grace_seconds=0.01)
+        killpg.assert_not_called()
+
+
+def test_terminate_refuses_own_process_group_even_if_resolved(monkeypatch):
+    monkeypatch.setattr(pipeline_engine, "_IS_WINDOWS", False)
+    own = 515151
+    monkeypatch.setattr(pipeline_engine.os, "getpgrp", lambda: own)
+    proc = MagicMock()
+    proc.poll.return_value = None
+    proc.pid = own
+    proc._stp_pgid = own
+
+    with patch(
+        "backend.agent.pipeline_engine.os.killpg", create=True,
+    ) as killpg:
+        _terminate_process_tree(proc, grace_seconds=0.01)
+        killpg.assert_not_called()
+
+
+def test_resolve_pgid_rejects_non_int_cached_and_falls_through_safely(monkeypatch):
+    monkeypatch.setattr(pipeline_engine, "_IS_WINDOWS", False)
+    proc = MagicMock()
+    proc.poll.return_value = None
+    proc.pid = 424242
+    proc._stp_pgid = MagicMock()  # 非 int 缓存
+
+    with patch(
+        "backend.agent.pipeline_engine.os.getpgid", return_value=424242, create=True,
+    ):
+        # getpgrp 不等于目标，允许通过
+        monkeypatch.setattr(pipeline_engine.os, "getpgrp", lambda: 1)
+        assert _resolve_pgid(proc) == 424242
+
+
+def test_remember_process_group_skips_untrusted_pid(monkeypatch):
+    monkeypatch.setattr(pipeline_engine, "_IS_WINDOWS", False)
+    proc = MagicMock()
+    # 默认 MagicMock.pid -> 1：不得调用 getpgid
+    with patch(
+        "backend.agent.pipeline_engine.os.getpgid", create=True,
+    ) as gp:
+        _remember_process_group(proc)
+        gp.assert_not_called()
+    proc.poll.return_value = None
+    with patch(
+        "backend.agent.pipeline_engine.os.getpgid", return_value=1, create=True,
+    ), patch(
+        "backend.agent.pipeline_engine.os.killpg", create=True,
+    ) as killpg:
+        _terminate_process_tree(proc, grace_seconds=0.01)
+        killpg.assert_not_called()
+
+
+
+def test_process_group_alive_false_for_dangerous_pgid(monkeypatch):
+    with patch("backend.agent.pipeline_engine.os.killpg", create=True) as killpg:
+        assert _process_group_alive(1) is False
+        assert _process_group_alive(0) is False
+        killpg.assert_not_called()
+
+
+def test_windows_taskkill_refuses_untrusted_pid(monkeypatch):
+    monkeypatch.setattr(pipeline_engine, "_IS_WINDOWS", True)
+    proc = MagicMock()
+    proc.poll.return_value = None
+    # 不设 pid → MagicMock
+    with patch("backend.agent.pipeline_engine.subprocess.run") as srun:
+        _terminate_process_tree(proc)
+        srun.assert_not_called()
+        proc.kill.assert_not_called()
 
 
 # ── _run_script_action 超时分支接到 _terminate_process_tree ─────────────

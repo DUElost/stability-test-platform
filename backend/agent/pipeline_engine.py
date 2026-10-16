@@ -745,52 +745,128 @@ def _popen_isolation_kwargs() -> Dict[str, Any]:
     return {"start_new_session": True}
 
 
+def _trusted_posix_id(value: object) -> Optional[int]:
+    """#3739: 信号目标只接受真实 int，且必须 > 1。
+
+    Why: ``os.killpg(pgrp, sig)`` 在 libc 里变成 ``kill(-pgrp, sig)``。
+         PGID 1 → ``kill(-1, SIGTERM)``，向调用者有权信号的大量进程广播，
+         可强制注销桌面会话（本机事故见 #3739）。``killpg(0, …)`` 则打向
+         调用者自身进程组。MagicMock 等非 int 对象的 ``__index__`` 常隐式
+         变成 1，``isinstance(..., int)`` 拦不住。
+    How to apply: 用 ``type(value) is int``（拒绝 bool / 假 int）；``<= 1``
+                  一律视为不可信。拿不到可信身份就返回 None，由调用方放弃
+                  killpg，而不是降级到危险默认值。
+    """
+    if type(value) is not int:
+        return None
+    if value <= 1:
+        return None
+    return value
+
+
+def _trusted_pgid(pgid: object) -> Optional[int]:
+    """#3739: 在 ``_trusted_posix_id`` 之上再拒绝「当前进程组」。
+
+    子进程经 ``_popen_isolation_kwargs``（``start_new_session=True``）起在
+    独立会话/进程组；合法收敛目标不应等于 Agent 自身 ``os.getpgrp()``。
+    若命中，记录 warning 并返回 None，避免把 cancel/超时清理扩大到宿主会话。
+    """
+    trusted = _trusted_posix_id(pgid)
+    if trusted is None:
+        return None
+    try:
+        own_pgrp = os.getpgrp()
+    except Exception:
+        return trusted
+    if type(own_pgrp) is int and trusted == own_pgrp:
+        logger.warning(
+            "refuse_killpg_own_process_group pgid=%d — cancel must not signal the Agent session",
+            trusted,
+        )
+        return None
+    return trusted
+
+
 def _remember_process_group(proc: subprocess.Popen) -> None:
     """#1003: 在 Popen 之后立刻留存进程组身份（POSIX）。
 
     Why: 父进程一旦被 wait/poll 回收，os.getpgid(pid) 就 ESRCH，pid 还可能已被
          复用 —— 而 _terminate_process_tree 恰恰要在「父已退出」时仍能按组收敛
          残留子孙（R07-F02：父退出 ≠ 整组退出）。组身份只能在父存活时取一次。
-    How to apply: 仅 POSIX 有意义（Windows 无 killpg 组语义）；取不到就静默放弃，
-                 退化到 _resolve_pgid 的现取路径，不改变既有行为。
+    How to apply: 仅 POSIX 有意义（Windows 无 killpg 组语义）；取不到或身份
+                 不可信（#3739）就静默放弃，退化到 _resolve_pgid 的现取路径。
     """
     if _IS_WINDOWS:
         return
+    pid = _trusted_posix_id(getattr(proc, "pid", None))
+    if pid is None:
+        logger.debug(
+            "pgid_capture_skipped_untrusted_pid pid=%r",
+            getattr(proc, "pid", None),
+        )
+        return
     try:
-        proc._stp_pgid = os.getpgid(proc.pid)
+        pgid = os.getpgid(pid)
     except Exception:
-        logger.debug("pgid_capture_failed pid=%s", getattr(proc, "pid", None))
+        logger.debug("pgid_capture_failed pid=%s", pid)
+        return
+    trusted = _trusted_pgid(pgid)
+    if trusted is None:
+        logger.debug("pgid_capture_rejected_untrusted pgid=%r pid=%s", pgid, pid)
+        return
+    proc._stp_pgid = trusted
 
 
 def _resolve_pgid(proc: subprocess.Popen) -> Optional[int]:
-    """#1003: 取进程组身份 —— 优先 spawn 时留存的，否则趁父还活着现取。
+    """#1003 / #3739: 取可信进程组身份 —— 优先 spawn 时留存的，否则趁父还活着现取。
 
     拿不到就返回 None（父已回收且无留存 → 无法可信地识别原组，宁可不动手，
-    也不用可能已复用的 pid 去 killpg 一个陌生进程组）。
+    也不用可能已复用或危险的 pid/pgid 去 killpg）。缓存路径与实时解析路径
+    都经过 ``_trusted_pgid``：拒绝非 int、``<= 1``、以及当前进程组。
     """
     saved = getattr(proc, "_stp_pgid", None)
-    if isinstance(saved, int):
-        return saved
+    # 只有真实 int 缓存才算「已留存」。bool/MagicMock/str 一律忽略，改走现取。
+    # 真实 int 但不可信（≤1 / 自身 pgrp）必须直接放弃，禁止回落 getpgid 旁路。
+    if type(saved) is int:
+        trusted_saved = _trusted_pgid(saved)
+        if trusted_saved is not None:
+            return trusted_saved
+        logger.warning("refuse_cached_untrusted_pgid pgid=%r", saved)
+        return None
     if proc.poll() is not None:
         return None
+    pid = _trusted_posix_id(getattr(proc, "pid", None))
+    if pid is None:
+        logger.warning(
+            "refuse_getpgid_untrusted_pid pid=%r",
+            getattr(proc, "pid", None),
+        )
+        return None
     try:
-        pgid = os.getpgid(proc.pid)
+        pgid = os.getpgid(pid)
     except ProcessLookupError:
         return None
     except Exception:
-        logger.exception("getpgid_failed pid=%s", getattr(proc, "pid", None))
+        logger.exception("getpgid_failed pid=%s", pid)
         return None
-    return pgid if isinstance(pgid, int) else None
+    trusted = _trusted_pgid(pgid)
+    if trusted is None:
+        logger.warning("refuse_resolved_untrusted_pgid pgid=%r pid=%s", pgid, pid)
+    return trusted
 
 
 def _process_group_alive(pgid: int) -> bool:
     """#1003: 进程组内是否还有存活成员（signal 0 探测）。
 
     ESRCH = 整组已散；其余（含 EPERM、探测本身失败）按「仍在」处理 —— 宁可多
-    收敛一次，也不能把残留子孙当成已清理。
+    收敛一次，也不能把残留子孙当成已清理。#3739：不可信 pgid 视为「已散」，
+    避免探测路径本身走到 ``killpg(1, 0)``。
     """
+    trusted = _trusted_pgid(pgid)
+    if trusted is None:
+        return False
     try:
-        os.killpg(pgid, 0)
+        os.killpg(trusted, 0)
     except ProcessLookupError:
         return False
     except Exception:
@@ -840,8 +916,16 @@ def _terminate_process_tree(proc: subprocess.Popen, *, grace_seconds: float = 2.
         if proc.poll() is not None:
             return
         try:
+            # #3739：Windows 同样拒绝不可信 PID（≤1 / 非真实 int），避免误伤系统进程。
+            win_pid = _trusted_posix_id(getattr(proc, "pid", None))
+            if win_pid is None:
+                logger.warning(
+                    "refuse_taskkill_untrusted_pid pid=%r",
+                    getattr(proc, "pid", None),
+                )
+                return
             subprocess.run(
-                ["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                ["taskkill", "/T", "/F", "/PID", str(win_pid)],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 timeout=5,
@@ -856,6 +940,8 @@ def _terminate_process_tree(proc: subprocess.Popen, *, grace_seconds: float = 2.
                 logger.warning("proc_kill_failed pid=%d（进程可能仍存活）", proc.pid)
         return
     pgid = _resolve_pgid(proc)
+    # #3739：killpg 前再闸一次（缓存旁路 / 调用方直传都挡）。
+    pgid = _trusted_pgid(pgid)
     if pgid is None:
         return
     if not _process_group_alive(pgid):
