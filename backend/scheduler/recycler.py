@@ -115,7 +115,7 @@ def _coordinator_heartbeats(db, jobs) -> dict[tuple[int, str], "datetime | None"
 
 
 def _plan_run_contexts(db, jobs) -> dict[int, dict]:
-    """Prefetch PlanRun.run_context for disarm-grace protection checks."""
+    """候选阶段预取 PlanRun.run_context（仅预筛，不作最终写入事实）。"""
     ids = {job.plan_run_id for job in jobs if getattr(job, "plan_run_id", None)}
     if not ids:
         return {}
@@ -129,9 +129,39 @@ def _plan_run_contexts(db, jobs) -> dict[int, dict]:
     return out
 
 
+def _latest_committed_run_context(db, plan_run_id: int | None) -> dict:
+    """最终写入口：列投影读取库中最新已提交 run_context。
+
+    不用 Session.get / 全量 ORM 实体，避免 identity map 返回预取阶段的旧对象；
+    也不在已有 job 行锁之后追加 PlanRun 行锁（保持现行锁序）。
+    """
+    if plan_run_id is None:
+        return {}
+    row = db.execute(
+        select(PlanRun.run_context).where(PlanRun.id == plan_run_id)
+    ).first()
+    if row is None:
+        return {}
+    ctx = row[0]
+    return ctx if isinstance(ctx, dict) else {}
+
+
 def _disarm_grace_blocks_recycle(job, run_context: dict | None, now: datetime) -> bool:
-    """§3.3.2 A：受保护解除中的 job 不得被通用回收写入 UNKNOWN。"""
+    """§3.3.2 A：受保护解除中的 job 不得被通用回收写入 UNKNOWN（候选预筛可用）。"""
     return disarm_grace_protects(job, run_context or {}, now)
+
+
+def _final_disarm_grace_blocks_write(db, job, now: datetime) -> bool:
+    """running-timeout / step-trace-stall 最终写入口共用的保护复验。
+
+    同时使用当前 job 行状态/进度与数据库最新已提交的 PlanRun.run_context；
+    陈旧候选在预取后、写入前转为受保护解除时必须放弃写入（v1.5 §3.3.2 A/E）。
+    """
+    return _disarm_grace_blocks_recycle(
+        job,
+        _latest_committed_run_context(db, getattr(job, "plan_run_id", None)),
+        now,
+    )
 
 def _running_liveness_anchor(job, coord_hb: dict) -> tuple["datetime | None", int]:
     """Select the liveness clock for a RUNNING job per ADR-0026 §3.
@@ -548,6 +578,10 @@ def _mark_running_timeout(
     if job.status != JobStatus.RUNNING.value:
         return False
 
+    # 最终写入口复验：预取 context 不得作为写入事实（§3.3.2 A/E）
+    if _final_disarm_grace_blocks_write(db, job, now):
+        return False
+
     old_status = job.status
 
     conditions = [
@@ -864,6 +898,8 @@ def _mark_step_trace_stall(
     reason: str,
     run_context: dict | None = None,
 ) -> bool:
+    # run_context 保留为候选预筛入参兼容；最终写入必须以库内最新 context 复验。
+    del run_context
     cutoff = _step_trace_stall_cutoff(now)
     if cutoff is None:
         return False
@@ -876,7 +912,7 @@ def _mark_step_trace_stall(
     )
     if locked is None or locked.status != JobStatus.RUNNING.value:
         return False
-    if _disarm_grace_blocks_recycle(locked, run_context, now):
+    if _final_disarm_grace_blocks_write(db, locked, now):
         return False
     updated = db.execute(
         update(JobInstance)
@@ -1267,9 +1303,14 @@ def recycle_once() -> None:
                 break
             last_running_id = batch[-1].id
             coord_hb = _coordinator_heartbeats(db, batch)
+            # 候选预筛：可陈旧；最终写入必须以 _final_disarm_grace_blocks_write 复验
             run_ctxs = _plan_run_contexts(db, batch)
             for job in batch:
-                # §3.3.2 A：行锁复读后复核解除保护，避免陈旧候选写入 UNKNOWN
+                if _disarm_grace_blocks_recycle(
+                    job, run_ctxs.get(job.plan_run_id), now,
+                ):
+                    continue
+                # §3.3.2 A：行锁复读后以最新已提交 context 复核，避免陈旧候选写入 UNKNOWN
                 locked = (
                     db.query(JobInstance)
                     .filter(JobInstance.id == job.id)
@@ -1280,9 +1321,7 @@ def recycle_once() -> None:
                 if locked is None or locked.status != JobStatus.RUNNING.value:
                     continue
                 job = locked
-                if _disarm_grace_blocks_recycle(
-                    job, run_ctxs.get(job.plan_run_id), now,
-                ):
+                if _final_disarm_grace_blocks_write(db, job, now):
                     continue
                 anchor, timeout_seconds = _running_liveness_anchor(job, coord_hb)
                 job_deadline = now - timedelta(seconds=timeout_seconds)

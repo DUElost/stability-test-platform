@@ -20,6 +20,10 @@ Draft PR 待规划确认与独立复核；合入不等于生效（控制面部�
    覆盖且进度在两协调心跳周期内、未到 `abort_at+墙钟` 时两回收器保持 RUNNING；
    候选 SQL / Python 判定 / 行锁复读 / CAS、patrol-stall 与 step-trace-stall、
    `plan_run_devices.running_heartbeat_deadline` 同步承接保护。真实 host/租约失效不永久豁免。
+   **规划核验补齐**：running-timeout 与 step-trace-stall 的最终写入口共用
+   `_final_disarm_grace_blocks_write`，以列投影读取最新已提交 `PlanRun.run_context`
+   （避开 Session identity map），候选预取仅作预筛；陈旧候选在预取后、写入前转为
+   受保护解除时必须放弃写入（不追加反向 PlanRun 行锁）。
 4. Plan 保存时对 ONBOARDED 登记了 `min_wall_clock_seconds` 的启用步骤要求**显式**
    正整数 `timeout_seconds` 且 ≥ 有效参数算出的登记预算（#3723 v1.3/v1.5 §3.3.1）；
    省略/null/0/负数/低于预算 → 422 `WALL_CLOCK_BELOW_ONBOARDED_BUDGET`（省略记 null）；
@@ -48,11 +52,14 @@ U1 拥有 `backend/agent/contracts/device_return.py`：本单元**未**创建或
 completion / wall / 迁移 / metric 契约；Agent 套件；真实 PG `recycle_once` 正反对照
 （新鲜解除存活、进度陈旧可回收、执行心跳旧但进度新仍保护）；三入口墙钟矩阵（含
 create 的 0/−1）；乱序 helper + `/complete` late_started；`promtool`；前端 `tsc`。
-未跑 #3739 危险 cancel 变异。迁移 `down_revision=9b7e24a6d081`（本轮未改迁移链）。
+**R1 最终保护复验**：`test_planner_u2_context_race`（running + trace）修前红→修后绿；
+与既有 recycler 反例同批验证。未跑 #3739 危险 cancel 变异。迁移
+`down_revision=9b7e24a6d081`（本轮未改迁移链）。
 
 ## Revisit
 
-- #3723 v1.5：R1 回收消费者漏扫、R2 乱序、R3 创建入口错误契约；待规划确认与独立复核。
+- #3723 v1.5：R1 最终保护复验已按规划核验补齐；R2 乱序、R3 创建入口错误契约保留；
+  待规划再确认与独立复核。
 - U1 合入后 rebase，将字面量改为 `from backend.agent.contracts.device_return import …`。
 - U5 写入 ONBOARDED 后，墙钟校验对开关机步骤生效；用真实 `min_wall_clock_seconds`
   公式回归一次。
