@@ -39,6 +39,7 @@ from backend.core.metrics import (
 )
 from backend.models.enums import JobStatus, LeaseType
 from backend.models.job import JobInstance, StepTrace
+from backend.models.plan_run import PlanRun
 from backend.services.lease_manager import release_lease_sync
 from backend.services.post_completion import get_post_completion_persist_failure_count
 
@@ -54,10 +55,12 @@ logger = logging.getLogger(__name__)
 
 from backend.core.job_timeout_config import (
     DISPATCHED_TIMEOUT_SECONDS,
+    EXECUTING_DISARM,
     PATROL_STALL_MULTIPLIER,
     PATROL_RUNNING_HEARTBEAT_TIMEOUT_SECONDS,
     RUNNING_HEARTBEAT_TIMEOUT_SECONDS,
     STEP_TRACE_STALL_SECONDS,
+    disarm_grace_protects,
     running_heartbeat_timeout_seconds,
 )
 
@@ -75,7 +78,7 @@ _WAITING_EXECUTION_STATES = {
     "PATROL_SLEEP",
     "WAITING_BARRIER",
 }
-_KNOWN_EXECUTION_STATES = _WAITING_EXECUTION_STATES | {"EXECUTING_STEP"}
+_KNOWN_EXECUTION_STATES = _WAITING_EXECUTION_STATES | {"EXECUTING_STEP", EXECUTING_DISARM}
 
 
 def _coordinator_heartbeats(db, jobs) -> dict[tuple[int, str], "datetime | None"]:
@@ -109,12 +112,34 @@ def _coordinator_heartbeats(db, jobs) -> dict[tuple[int, str], "datetime | None"
     }
 
 
+
+
+def _plan_run_contexts(db, jobs) -> dict[int, dict]:
+    """Prefetch PlanRun.run_context for disarm-grace protection checks."""
+    ids = {job.plan_run_id for job in jobs if getattr(job, "plan_run_id", None)}
+    if not ids:
+        return {}
+    rows = db.execute(
+        select(PlanRun.id, PlanRun.run_context).where(PlanRun.id.in_(list(ids)))
+    ).all()
+    out: dict[int, dict] = {}
+    for row in rows:
+        ctx = row.run_context if isinstance(row.run_context, dict) else {}
+        out[row.id] = ctx
+    return out
+
+
+def _disarm_grace_blocks_recycle(job, run_context: dict | None, now: datetime) -> bool:
+    """§3.3.2 A：受保护解除中的 job 不得被通用回收写入 UNKNOWN。"""
+    return disarm_grace_protects(job, run_context or {}, now)
+
 def _running_liveness_anchor(job, coord_hb: dict) -> tuple["datetime | None", int]:
     """Select the liveness clock for a RUNNING job per ADR-0026 §3.
 
     Returns (anchor_datetime, timeout_seconds):
-      - EXECUTING_STEP + execution heartbeat present → per-job executor clock
-        (graded patrol/non-patrol window, unchanged).
+      - EXECUTING_STEP / EXECUTING_DISARM + execution heartbeat present →
+        per-job executor clock (graded patrol/non-patrol window).
+        Disarm grace protection is applied by callers before recycle.
       - WAITING_EXECUTION_SLOT / PATROL_SLEEP / WAITING_BARRIER + a
         coordinator heartbeat present → per-host coordinator clock (waiting
         is legal, invariant ②; only a dead coordinator counts).
@@ -130,7 +155,7 @@ def _running_liveness_anchor(job, coord_hb: dict) -> tuple["datetime | None", in
         patrol_stall_multiplier=PATROL_STALL_MULTIPLIER,
     )
 
-    if job.execution_state == "EXECUTING_STEP":
+    if job.execution_state in ("EXECUTING_STEP", EXECUTING_DISARM):
         exec_hb = _aware_dt(job.last_execution_heartbeat_at)
         if exec_hb is not None:
             return exec_hb, graded_timeout
@@ -554,7 +579,9 @@ def _mark_running_timeout(
         )
 
     if execution_heartbeat_deadline is not None:
-        conditions.append(JobInstance.execution_state == "EXECUTING_STEP")
+        conditions.append(
+            JobInstance.execution_state.in_(["EXECUTING_STEP", EXECUTING_DISARM])
+        )
         conditions.append(
             or_(
                 JobInstance.last_execution_heartbeat_at.is_(None),
@@ -680,6 +707,10 @@ def _mark_patrol_stall(
         .where(
             JobInstance.id == job.id,
             JobInstance.status == JobStatus.RUNNING.value,
+            or_(
+                JobInstance.execution_state.is_(None),
+                JobInstance.execution_state == "PATROL_SLEEP",
+            ),
             heartbeat_guard,
             retry_guard,
         )
@@ -831,9 +862,21 @@ def _mark_step_trace_stall(
     last_ts: datetime,
     event_type: str,
     reason: str,
+    run_context: dict | None = None,
 ) -> bool:
     cutoff = _step_trace_stall_cutoff(now)
     if cutoff is None:
+        return False
+    locked = (
+        db.query(JobInstance)
+        .filter(JobInstance.id == job.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+        .one_or_none()
+    )
+    if locked is None or locked.status != JobStatus.RUNNING.value:
+        return False
+    if _disarm_grace_blocks_recycle(locked, run_context, now):
         return False
     updated = db.execute(
         update(JobInstance)
@@ -1169,7 +1212,7 @@ def recycle_once() -> None:
     _dispatch_anchor = func.coalesce(
         JobInstance.started_at, JobInstance.created_at
     )
-    _known_states = _WAITING_EXECUTION_STATES | {"EXECUTING_STEP"}
+    _known_states = _WAITING_EXECUTION_STATES | {"EXECUTING_STEP", EXECUTING_DISARM}
     stale_clock_filter = or_(
         # nothing ever reported → one full executor window from dispatch
         and_(
@@ -1179,9 +1222,9 @@ def recycle_once() -> None:
             ),
             _dispatch_anchor < running_prefetch_deadline,
         ),
-        # executor clock
+        # executor clock (EXECUTING_STEP / EXECUTING_DISARM)
         and_(
-            JobInstance.execution_state == "EXECUTING_STEP",
+            JobInstance.execution_state.in_(["EXECUTING_STEP", EXECUTING_DISARM]),
             func.coalesce(
                 JobInstance.last_execution_heartbeat_at, _dispatch_anchor
             ) < running_prefetch_deadline,
@@ -1224,7 +1267,23 @@ def recycle_once() -> None:
                 break
             last_running_id = batch[-1].id
             coord_hb = _coordinator_heartbeats(db, batch)
+            run_ctxs = _plan_run_contexts(db, batch)
             for job in batch:
+                # §3.3.2 A：行锁复读后复核解除保护，避免陈旧候选写入 UNKNOWN
+                locked = (
+                    db.query(JobInstance)
+                    .filter(JobInstance.id == job.id)
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                    .one_or_none()
+                )
+                if locked is None or locked.status != JobStatus.RUNNING.value:
+                    continue
+                job = locked
+                if _disarm_grace_blocks_recycle(
+                    job, run_ctxs.get(job.plan_run_id), now,
+                ):
+                    continue
                 anchor, timeout_seconds = _running_liveness_anchor(job, coord_hb)
                 job_deadline = now - timedelta(seconds=timeout_seconds)
                 if anchor is None or anchor >= job_deadline:
@@ -1234,7 +1293,7 @@ def recycle_once() -> None:
                 coord_deadline: datetime | None = None
                 exec_deadline: datetime | None = None
                 require_unreported = False
-                if job.execution_state == "EXECUTING_STEP":
+                if job.execution_state in ("EXECUTING_STEP", EXECUTING_DISARM):
                     exec_deadline = job_deadline
                 elif job.execution_state in _WAITING_EXECUTION_STATES:
                     coord_deadline = job_deadline
@@ -1272,6 +1331,12 @@ def recycle_once() -> None:
         for job, interval, age in sorted(
             _collect_patrol_stall_candidates(db, now), key=lambda item: item[0].id
         ):
+            if _disarm_grace_blocks_recycle(
+                job,
+                _plan_run_contexts(db, [job]).get(job.plan_run_id),
+                now,
+            ):
+                continue
             reason = (
                 f"patrol_stall: age={int(age)}s > "
                 f"{interval}*{PATROL_STALL_MULTIPLIER}={interval * PATROL_STALL_MULTIPLIER}s"
@@ -1299,6 +1364,9 @@ def recycle_once() -> None:
             _collect_step_trace_stall_candidates(db, now),
             key=lambda item: item[0].id,
         ):
+            run_ctx = _plan_run_contexts(db, [job]).get(job.plan_run_id)
+            if _disarm_grace_blocks_recycle(job, run_ctx, now):
+                continue
             age = (now - last_ts).total_seconds()
             reason = (
                 f"step_trace_stall: last={event_type} age={int(age)}s > "
@@ -1313,6 +1381,7 @@ def recycle_once() -> None:
                         last_ts=last_ts,
                         event_type=event_type,
                         reason=reason,
+                        run_context=run_ctx,
                     ):
                         trace_stall_transitions += 1
             except Exception:

@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -138,3 +139,53 @@ def test_apply_disarm_results_sets_column_and_counts(monkeypatch):
     assert job.disarm_results["power-cycle"]["result"] == "failed"
     assert job.status_reason == "keep-me"
     assert ("power-cycle", "failed") in seen
+
+
+def test_late_started_does_not_override_completed():
+    """§3.3.2 B：更早发生但迟到入库的 STARTED 不得覆盖其后 COMPLETED。"""
+    now = datetime.now(timezone.utc)
+    traces = [
+        SimpleNamespace(
+            stage="init", step_id="pc_setup", status="COMPLETED", exit_code=0,
+            original_ts=now - timedelta(seconds=30),
+        ),
+        SimpleNamespace(
+            stage="teardown", step_id="pc_finish", status="COMPLETED", exit_code=0,
+            original_ts=now,
+        ),
+        SimpleNamespace(
+            stage="teardown", step_id="pc_finish", status="RUNNING", exit_code=None,
+            original_ts=now - timedelta(seconds=10),
+        ),
+    ]
+    # Delivery order puts STARTED last; occurrence order must still prefer COMPLETED.
+    got = derive_disarm_results_from_traces(PIPELINE, traces)
+    assert got["power-cycle"]["result"] == "executed_unverified", got
+
+
+def test_later_failed_overrides_earlier_completed():
+    now = datetime.now(timezone.utc)
+    traces = [
+        SimpleNamespace(
+            stage="teardown", step_id="pc_finish", status="COMPLETED", exit_code=0,
+            original_ts=now - timedelta(seconds=5),
+        ),
+        SimpleNamespace(
+            stage="teardown", step_id="pc_finish", status="FAILED", exit_code=1,
+            original_ts=now,
+        ),
+    ]
+    got = derive_disarm_results_from_traces(PIPELINE, list(reversed(traces)))
+    assert got["power-cycle"]["result"] == "failed", got
+
+
+def test_only_started_is_not_executed():
+    now = datetime.now(timezone.utc)
+    traces = [
+        SimpleNamespace(
+            stage="teardown", step_id="pc_finish", status="RUNNING", exit_code=None,
+            original_ts=now,
+        ),
+    ]
+    got = derive_disarm_results_from_traces(PIPELINE, traces)
+    assert got["power-cycle"]["result"] == "not_executed", got

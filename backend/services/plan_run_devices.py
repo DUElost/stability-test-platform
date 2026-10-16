@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from backend.api.schemas.plan_run import DeviceMatrixItem, PlanRunDevicesOut
 from backend.core.job_timeout_config import (
     DISPATCHED_TIMEOUT_SECONDS,
+    EXECUTING_DISARM,
     PATROL_STALL_MULTIPLIER,
     UNKNOWN_GRACE_SECONDS,
     running_heartbeat_timeout_seconds,
@@ -181,7 +182,7 @@ def running_heartbeat_deadline(
         j, patrol_stall_multiplier=PATROL_STALL_MULTIPLIER,
     )
 
-    if j.execution_state == "EXECUTING_STEP":
+    if j.execution_state in ("EXECUTING_STEP", EXECUTING_DISARM):
         hb = aware(j.last_execution_heartbeat_at)
         if hb is None:
             hb = not_reported_liveness_anchor(j)

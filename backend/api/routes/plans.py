@@ -854,15 +854,16 @@ def create_plan(
     current_user: User = Depends(get_current_active_user),
 ):
     _validate_no_legacy_aee_scripts(payload.steps)
-    _validate_assembled_lifecycle(
-        payload.steps, payload.patrol_interval_seconds, payload.timeout_seconds,
-        payload.barrier_timeout_seconds, payload.barrier_max_wait_seconds,
-    )
     _validate_plan_dag(db, None, payload.next_plan_id)
     _validate_script_refs(db, payload.steps)
     _validate_step_param_values(payload.steps, db)
     _validate_stall_seconds_capability(payload.steps, db)
+    # §3.3.2 C：登记预算须在通用 lifecycle 对 0/负数抢先拦截之前执行
     _validate_onboarded_wall_clock(payload.steps, db)
+    _validate_assembled_lifecycle(
+        payload.steps, payload.patrol_interval_seconds, payload.timeout_seconds,
+        payload.barrier_timeout_seconds, payload.barrier_max_wait_seconds,
+    )
 
     now = datetime.now(timezone.utc)
     plan = Plan(

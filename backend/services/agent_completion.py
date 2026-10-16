@@ -171,6 +171,44 @@ def _map_trace_to_disarm_result(status: Any, exit_code: Any) -> str:
     return _DISARM_RESULT_NOT_EXECUTED
 
 
+def _trace_field(tr: Any, name: str) -> Any:
+    if isinstance(tr, dict):
+        return tr.get(name)
+    return getattr(tr, name, None)
+
+
+def _is_disarm_terminal_status(status: Any) -> bool:
+    st = str(status or "").strip().upper()
+    return st in {
+        "COMPLETED", "FINISHED", "SUCCESS", "OK",
+        "FAILED", "ERROR", "ABORTED", "CANCELLED", "CANCELED",
+    }
+
+
+def _trace_occurrence_key(tr: Any, index: int) -> tuple:
+    """Occurrence order: original_ts first; stable tie-breakers only."""
+    original_ts = _trace_field(tr, "original_ts")
+    if isinstance(original_ts, datetime):
+        ts = original_ts if original_ts.tzinfo is not None else original_ts.replace(tzinfo=timezone.utc)
+        ts_key: tuple = (0, ts.timestamp())
+    elif original_ts is None:
+        ts_key = (1, 0.0)
+    else:
+        ts_key = (1, 0.0)
+    created_at = _trace_field(tr, "created_at")
+    if isinstance(created_at, datetime):
+        ca = created_at if created_at.tzinfo is not None else created_at.replace(tzinfo=timezone.utc)
+        ca_key: tuple = (0, ca.timestamp())
+    else:
+        ca_key = (1, 0.0)
+    trace_id = _trace_field(tr, "id")
+    try:
+        id_key = (0, int(trace_id))
+    except (TypeError, ValueError):
+        id_key = (1, index)
+    return (ts_key, ca_key, id_key, index)
+
+
 def derive_disarm_results_from_traces(
     pipeline_def: Any,
     traces: list[Any],
@@ -178,25 +216,19 @@ def derive_disarm_results_from_traces(
     """从 teardown 步骤 trace 按 FAMILY_STEPS 推导 disarm_results（#3723 §3.0 第 6 条）。
 
     足迹：init 中 FAMILY_STEPS.footprint 步骤一旦出现任意 trace 即视为已建立。
-    解除：该专项 teardown 解除脚本的最新终态 trace；没有 → not_executed。
+    解除：按 original_ts 发生顺序选取该专项 teardown 解除脚本的终态；迟到的
+    STARTED/RUNNING 不得覆盖其后发生的 COMPLETED/FAILED（§3.3.2 B）。
+    无终态证据 → not_executed。
     """
     id_to_script = _step_id_to_script(pipeline_def)
     footprint: set[str] = set()
-    disarm_traces: Dict[str, Any] = {}  # family -> latest trace-like
+    disarm_events: Dict[str, list[tuple[tuple, dict]]] = {}
 
-    for tr in traces or []:
-        stage = getattr(tr, "stage", None)
-        if stage is None and isinstance(tr, dict):
-            stage = tr.get("stage")
-        step_id = getattr(tr, "step_id", None)
-        if step_id is None and isinstance(tr, dict):
-            step_id = tr.get("step_id")
-        status = getattr(tr, "status", None)
-        if status is None and isinstance(tr, dict):
-            status = tr.get("status")
-        exit_code = getattr(tr, "exit_code", None)
-        if exit_code is None and isinstance(tr, dict):
-            exit_code = tr.get("exit_code")
+    for index, tr in enumerate(traces or []):
+        stage = _trace_field(tr, "stage")
+        step_id = _trace_field(tr, "step_id")
+        status = _trace_field(tr, "status")
+        exit_code = _trace_field(tr, "exit_code")
         script = id_to_script.get(str(step_id or ""), "")
         if not script:
             continue
@@ -207,31 +239,37 @@ def derive_disarm_results_from_traces(
         elif stage == "teardown":
             fam = _family_for_script(script, "disarm")
             if fam:
-                disarm_traces[fam] = {
+                event = {
                     "status": status,
                     "exit_code": exit_code,
                     "step_id": step_id,
                 }
+                disarm_events.setdefault(fam, []).append(
+                    (_trace_occurrence_key(tr, index), event)
+                )
 
-    # 若只有 teardown 解除 trace、init 足迹缺失：仍按出现的解除专项记账（兼容缺 init trace）
-    families = set(footprint) | set(disarm_traces)
+    families = set(footprint) | set(disarm_events)
     out: Dict[str, Dict[str, Any]] = {}
     for fam in sorted(families):
-        tr = disarm_traces.get(fam)
-        if tr is None:
-            result = _DISARM_RESULT_NOT_EXECUTED
-            entry: Dict[str, Any] = {
-                "result": result,
+        events = sorted(disarm_events.get(fam) or [], key=lambda item: item[0])
+        terminal: dict | None = None
+        for _key, event in events:
+            if _is_disarm_terminal_status(event.get("status")):
+                terminal = event  # later original_ts wins
+        if terminal is None:
+            entry = {
+                "result": _DISARM_RESULT_NOT_EXECUTED,
                 "step_id": "",
                 "exit_code": None,
                 "readback_summary": "",
             }
         else:
-            result = _map_trace_to_disarm_result(tr.get("status"), tr.get("exit_code"))
             entry = {
-                "result": result,
-                "step_id": str(tr.get("step_id") or ""),
-                "exit_code": tr.get("exit_code"),
+                "result": _map_trace_to_disarm_result(
+                    terminal.get("status"), terminal.get("exit_code"),
+                ),
+                "step_id": str(terminal.get("step_id") or ""),
+                "exit_code": terminal.get("exit_code"),
                 "readback_summary": "",
             }
         out[fam] = entry
@@ -637,7 +675,12 @@ async def complete_agent_job(
     if reported is None:
         existing_traces = (
             await db.execute(
-                select(StepTrace).where(StepTrace.job_id == job_id)
+                select(StepTrace)
+                .where(StepTrace.job_id == job_id)
+                .order_by(
+                    StepTrace.original_ts.asc().nulls_last(),
+                    StepTrace.id.asc(),
+                )
             )
         ).scalars().all()
         reported = derive_disarm_results_from_traces(job.pipeline_def, existing_traces)
