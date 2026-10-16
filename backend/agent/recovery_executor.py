@@ -81,6 +81,16 @@ def handle_lease_lost(
     """
     abort_dispatched = False
     if job_runner_state is not None:
+        # R4: mark confirmed lease loss on the runner before ordinary abort so
+        # disarm retry boundaries see ``_lease_lost_for_disarm`` (not cancel alone).
+        try:
+            notify = getattr(job_runner_state, "notify_lease_lost_for_disarm", None)
+            if callable(notify):
+                notify(job_id)
+        except Exception:
+            logger.exception(
+                "on_lease_lost_notify_disarm_failed", extra={"job_id": job_id}
+            )
         try:
             abort_dispatched = bool(job_runner_state.request_abort(job_id))
         except Exception:
@@ -269,6 +279,7 @@ def execute_recovery_actions_impl(
     register_active_job: Any,
     resume_job: Any = None,
     abort_local_job: Any = None,
+    is_worker_alive: Any = None,
 ) -> None:
     """ADR-0019 Phase 3a: execute recovery actions (module-level for testability).
 
@@ -406,11 +417,35 @@ def execute_recovery_actions_impl(
             lease_renewer.clear_fencing_token(jid)
             logger.warning("recovery_cleanup job=%d reason=%s", jid, a.get("reason"))
         elif action == "ABORT_LOCAL":
+            # #3723 §1.1 / §3.2.2: request abort, but while the worker is still
+            # alive do NOT clear fencing / delete the local active record — that
+            # would stop lease renewal and let reconciler reclaim mid-teardown.
+            # Defer cleanup to worker exit (_cleanup_after_job_exit). CLEANUP
+            # (boot mismatch, worker already gone) keeps immediate cleanup.
             if abort_local_job is not None:
                 abort_local_job(jid)
-            local_db.delete_active_job(jid)
-            lease_renewer.clear_fencing_token(jid)
-            logger.warning("recovery_abort_local job=%d reason=%s", jid, a.get("reason"))
+            worker_alive = False
+            if is_worker_alive is not None:
+                try:
+                    worker_alive = bool(is_worker_alive(jid))
+                except Exception:
+                    logger.exception(
+                        "recovery_abort_local_alive_check_failed job=%d", jid,
+                    )
+                    worker_alive = jid in active_jobs_by_id
+            else:
+                worker_alive = jid in active_jobs_by_id
+            if worker_alive:
+                logger.warning(
+                    "recovery_abort_local_deferred_cleanup job=%d reason=%s",
+                    jid, a.get("reason"),
+                )
+            else:
+                local_db.delete_active_job(jid)
+                lease_renewer.clear_fencing_token(jid)
+                logger.warning(
+                    "recovery_abort_local job=%d reason=%s", jid, a.get("reason"),
+                )
 
 
 def _coerce_recovery_interval(raw: str | None, default: float = 60.0) -> float:

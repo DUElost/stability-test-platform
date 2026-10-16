@@ -28,6 +28,10 @@ def test_shutdown_agent_runtime_order():
     scheduler = MagicMock()
     runner = MagicMock()
     runner.active_runners = {1: object()}
+    # #3723: disarm wait polls active_runners — clear on abort.
+    def _abort(jid):
+        runner.active_runners = {}
+    runner.request_abort.side_effect = _abort
     executor = MagicMock()
     step = MagicMock()
     step.drain_sync.return_value = 0
@@ -66,7 +70,7 @@ def test_shutdown_agent_runtime_order():
     coordinator.stop.assert_called_once()
     scheduler.shutdown.assert_called_once()
     runner.request_abort.assert_called_once_with(1)
-    executor.shutdown.assert_called_once_with(wait=True, cancel_futures=False)
+    executor.shutdown.assert_called_once_with(wait=False, cancel_futures=False)
     disk.instance.return_value.stop.assert_called_once()
     arch.instance.return_value.stop.assert_called_once()
     eu.instance.return_value.stop.assert_called_once()

@@ -92,6 +92,30 @@ class JobRunnerState:
             return False
         return True
 
+    def notify_lease_lost_for_disarm(self, job_id: int) -> bool:
+        """Propagate confirmed lease loss to the attached runner (#3723 §3.2.1 R4).
+
+        Distinct from ``request_abort`` / ``cancel_runner``: ordinary abort must
+        not set the disarm lease-lost flag. Returns True when a runner was notified.
+        """
+        with self.active_jobs_lock:
+            current = self.active_runners.get(job_id)
+        if current is None:
+            return False
+        _worker_token, runner = current
+        try:
+            mark = getattr(runner, "mark_lease_lost_for_disarm", None)
+            if callable(mark):
+                mark()
+                return True
+            if hasattr(runner, "_lease_lost_for_disarm"):
+                runner._lease_lost_for_disarm = True
+                return True
+        except Exception:
+            logger.exception("notify_lease_lost_for_disarm_failed job_id=%d", job_id)
+            return False
+        return False
+
     def request_abort(self, job_id: int) -> bool:
         """Keep worker ownership until it uploads the post-termination ACK."""
         with self.active_jobs_lock:
@@ -416,6 +440,8 @@ def run_task_wrapper(
         }
         if watcher_summary is not None:
             complete_payload["watcher_summary"] = watcher_summary
+        if isinstance(result.get("disarm_results"), dict):
+            complete_payload["disarm_results"] = result["disarm_results"]
 
         if _complete_job_if_current_worker(
             state=state,

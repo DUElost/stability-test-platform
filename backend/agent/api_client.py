@@ -267,6 +267,10 @@ def _build_complete_payload(payload: Dict[str, Any], fencing_token: str) -> Dict
     watcher_summary = payload.get("watcher_summary")
     if isinstance(watcher_summary, dict):
         complete_payload["watcher_summary"] = watcher_summary
+    # #3723 §3.2.5: per-family disarm results (Agent → control plane).
+    disarm_results = payload.get("disarm_results")
+    if isinstance(disarm_results, dict):
+        complete_payload["disarm_results"] = disarm_results
     return complete_payload
 
 
