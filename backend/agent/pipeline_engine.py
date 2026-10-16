@@ -46,7 +46,11 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from .script_packages import PackageUnavailable, inject_required_tools, resolve_script_path
 
 from .contracts.device_return import (
+    DISARM_RESULT_CONFIRMED,
+    DISARM_RESULT_EXECUTED_UNVERIFIED,
+    DISARM_RESULT_FAILED,
     DISARM_RESULT_NOT_EXECUTED,
+    DISARM_RESULT_READBACK_FAILED,
     EXECUTING_DISARM,
     LEASE_LOST_REASON,
     ONBOARDED,
@@ -1296,7 +1300,11 @@ class PipelineEngine:
                     url, json={"fencing_token": self._fencing_token}, headers=headers, timeout=10,
                 )
                 if resp.status_code == 409:
+                    # #3723 §3.2.1 R4 / F1: confirmed engine verify 409 is
+                    # unidirectional — remember so later outage/200 probes
+                    # cannot reopen disarm.
                     logger.error("device_lease_not_held run=%d — aborting pipeline", self._run_id)
+                    self._lease_lost_for_disarm = True
                     return StepResult(
                         success=False,
                         exit_code=1,
@@ -2940,8 +2948,9 @@ class PipelineEngine:
                     exit_code = existing.get("exit_code")
                 if error_message is None and existing.get("readback_summary"):
                     error_message = str(existing.get("readback_summary"))
-        # Confirmed lease-lost / skipped must not be overwritten by a later
-        # unauthorized success (#3723 §3.2.1 R2/R4).
+        # Confirmed lease-lost must not be overwritten by a later unauthorized
+        # success; real completion must not be downgraded by a later SKIPPED
+        # sibling in the same family (#3723 §3.2.1 R2/R4 / F1/F2).
         existing_final = (self._disarm_results or {}).get(family)
         if isinstance(existing_final, dict):
             existing_result = existing_final.get("result")
@@ -2950,6 +2959,13 @@ class PipelineEngine:
                 existing_result == DISARM_RESULT_NOT_EXECUTED
                 and existing_reason == LEASE_LOST_REASON
                 and not lease_lost
+            ):
+                return
+            if skipped and existing_result in (
+                DISARM_RESULT_CONFIRMED,
+                DISARM_RESULT_EXECUTED_UNVERIFIED,
+                DISARM_RESULT_FAILED,
+                DISARM_RESULT_READBACK_FAILED,
             ):
                 return
         structured = None

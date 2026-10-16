@@ -15,6 +15,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from backend.agent.contracts.device_return import (
     DISARM_RESULT_CONFIRMED,
@@ -1407,3 +1408,86 @@ class TestReviewR4LeaseLostBlocksRetry:
             e._disarm_results["power-cycle"]["result"]
             == DISARM_RESULT_EXECUTED_UNVERIFIED
         )
+
+
+class TestReviewF1Verify409RemembersLeaseLost:
+    """F1: engine ``_verify_device_lease`` 409 must set unidirectional flag."""
+
+    @pytest.mark.parametrize("next_reply", ["outage", "success"])
+    def test_confirmed_verify_loss_cannot_be_forgotten(self, next_reply):
+        e = _bare_engine(scheduler=OperationScheduler(), api_url="http://example.invalid")
+        e._footprint_families = {"power-cycle"}
+        actions = []
+        e._execute_step = (
+            lambda *a, **kw: actions.append("started")
+            or StepResult(success=True, exit_code=0)
+        )
+        with patch(
+            "backend.agent.pipeline_engine.requests.post",
+            return_value=SimpleNamespace(status_code=409),
+        ):
+            observed = e._verify_device_lease()
+        assert observed.error_message == "device_lease_not_held"
+        remembered = e._lease_lost_for_disarm
+        reply = (
+            {"side_effect": requests.ConnectionError("isolated outage")}
+            if next_reply == "outage"
+            else {"return_value": SimpleNamespace(status_code=200)}
+        )
+        with patch("backend.agent.pipeline_engine.requests.post", **reply):
+            final = e._execute_teardown_best_effort(
+                [
+                    {
+                        "step_id": "finish",
+                        "action": "script:powercycle_finish",
+                        "timeout_seconds": 5,
+                    }
+                ]
+            )
+        assert not actions, {
+            "remembered_after_409": remembered,
+            "actions": actions,
+            "metadata": final.metadata,
+        }
+        assert remembered is True
+        assert (
+            final.metadata["disarm_results"]["power-cycle"]["reason"]
+            == LEASE_LOST_REASON
+        )
+        assert (
+            final.metadata["disarm_results"]["power-cycle"]["result"]
+            == DISARM_RESULT_NOT_EXECUTED
+        )
+
+
+class TestReviewF2SameFamilySkipPreservesExecution:
+    """F2: same-family SKIPPED must not overwrite a real completion."""
+
+    @pytest.mark.parametrize("disabled_first", [False, True])
+    def test_same_family_skip_preserves_actual_execution(self, disabled_first):
+        e = _bare_engine(scheduler=OperationScheduler())
+        e._footprint_families = {"power-cycle"}
+        actions = []
+        e._run_with_timeout = (
+            lambda *a, **kw: actions.append("started")
+            or StepResult(success=True, exit_code=0)
+        )
+        active = {
+            "step_id": "real-finish",
+            "action": "script:powercycle_finish",
+            "timeout_seconds": 5,
+        }
+        skipped = {
+            "step_id": "disabled-finish",
+            "action": "script:powercycle_finish",
+            "timeout_seconds": 5,
+            "enabled": False,
+        }
+        final = e._execute_teardown_best_effort(
+            [skipped, active] if disabled_first else [active, skipped]
+        )
+        assert actions == ["started"]
+        entry = final.metadata["disarm_results"]["power-cycle"]
+        assert entry["result"] == DISARM_RESULT_EXECUTED_UNVERIFIED, entry
+        assert entry["step_id"] == "real-finish", entry
+        assert entry["exit_code"] == 0, entry
