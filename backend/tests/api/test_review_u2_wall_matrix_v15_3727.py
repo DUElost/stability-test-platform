@@ -3,11 +3,18 @@ import pytest
 from backend.tests.api.test_onboarded_wall_clock_api_u2_3727 import (  # noqa: F401
     _create_ok_plan,
     _init_step,
+    _seed_plan_defaults,
     _teardown_step,
     _uniq,
     onboarded_registry,
     pc_script,
 )
+
+# Cross-module: autouse from source module does not apply here; request it.
+@pytest.fixture(autouse=True)
+def _wall_matrix_seed(_seed_plan_defaults):
+    return _seed_plan_defaults
+
 from backend.models.plan import Plan,PlanStep
 from backend.services.plan_dispatcher_core import build_lifecycle_from_snapshot,build_plan_snapshot
 
