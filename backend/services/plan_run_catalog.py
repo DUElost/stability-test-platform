@@ -172,6 +172,7 @@ def _job_out(job: JobInstance, traces: list, device_serial: str | None = None) -
         started_at=_iso(job.started_at),
         ended_at=_iso(job.ended_at),
         created_at=_iso(job.created_at),
+        disarm_results=getattr(job, "disarm_results", None),
         step_traces=[_step_out(t) for t in traces],
     )
 

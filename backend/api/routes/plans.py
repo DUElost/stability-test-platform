@@ -25,11 +25,13 @@ from backend.agent.contracts.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
 from backend.core.device_serial import is_placeholder_serial
 from backend.core.database import get_db
 from backend.agent.contracts.pipeline_validator import validate_pipeline_def
+from backend.agent.contracts import device_return as _device_return_contract
 from backend.models.host import Device
 from backend.models.plan import Plan, PlanStep
 from backend.models.plan_run import PlanRun
 from backend.models.project import Specialty, TestProject
 from backend.models.suite import TestSuite
+from backend.models.script import Script as ScriptModel
 from backend.services.script_progress_capability import script_supports_progress
 from backend.services.plan_dispatcher_core import apply_step_timing_fields
 from backend.services.plan_wifi import (
@@ -291,6 +293,151 @@ class PlanRunSummaryOut(BaseModel):
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
+
+
+# ── #3723 §3.3 U2 / ADR-0061 D3.6：ONBOARDED 墙钟下限校验 ─────────────────────
+# 权威来源：_device_return_contract.ONBOARDED（U1 共享契约；U5 接入前为空）
+
+
+def _load_onboarded_registry() -> dict:
+    """读取共享 ONBOARDED（#3723 §3.1 / §3.3.1.6）。
+
+    返回模块当前对象本身，不 copy/deepcopy，不加 ImportError→空表回退。
+    """
+    return _device_return_contract.ONBOARDED
+
+
+def _min_wall_clock_for_step(
+    script_name: str,
+    params: dict | None,
+    onboarded: dict | None = None,
+) -> int | None:
+    """Return ONBOARDED min_wall_clock_seconds for script, or None if unregistered.
+
+    U5 将在 ONBOARDED[family]["min_wall_clock_seconds"][script] 登记 callable/int。
+    ``params`` 必须是 default_params 与步骤 params 合并后的有效参数（#3723 §3.3.1）。
+    """
+    registry = _load_onboarded_registry() if onboarded is None else onboarded
+    if not script_name or not isinstance(registry, dict):
+        return None
+    for _family, spec in registry.items():
+        if not isinstance(spec, dict):
+            continue
+        by_script = spec.get("min_wall_clock_seconds")
+        if not isinstance(by_script, dict):
+            continue
+        entry = by_script.get(script_name)
+        if entry is None:
+            continue
+        if callable(entry):
+            try:
+                value = entry(params or {})
+            except Exception:
+                return None
+        else:
+            value = entry
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _load_script_default_params(
+    db: Session,
+    steps: list[PlanStepIn],
+) -> dict[tuple[str, str], dict]:
+    """Batch-load Script.default_params for wall-clock budget merge (#3723 §3.3.1)."""
+
+    keys = {(s.script_name, s.script_version) for s in steps}
+    if not keys:
+        return {}
+    rows = db.execute(
+        select(
+            ScriptModel.name, ScriptModel.version, ScriptModel.default_params,
+        ).where(
+            ScriptModel.is_active.is_(True),
+            ScriptModel.name.in_({k[0] for k in keys}),
+        )
+    ).all()
+    out: dict[tuple[str, str], dict] = {}
+    for r in rows:
+        key = (r.name, r.version)
+        if key not in keys:
+            continue
+        raw = r.default_params
+        out[key] = dict(raw) if isinstance(raw, dict) else {}
+    return out
+
+
+def _effective_step_params(
+    step: PlanStepIn,
+    script_defaults: dict[tuple[str, str], dict],
+) -> dict:
+    """Merge Script.default_params with step.params (step overrides; dispatcher-aligned)."""
+    merged = dict(script_defaults.get((step.script_name, step.script_version), {}))
+    if step.params:
+        merged.update(dict(step.params))
+    return merged
+
+
+def _validate_onboarded_wall_clock(
+    steps: list[PlanStepIn],
+    db: Session | None = None,
+    *,
+    onboarded: dict | None = None,
+    script_defaults: dict[tuple[str, str], dict] | None = None,
+) -> None:
+    """Require explicit positive timeout_seconds ≥ ONBOARDED budget (#3723 §3.3.1).
+
+    Registered enabled steps must carry an explicit positive integer wall clock;
+    omit / null / 0 / negative / below budget → 422. Control-plane
+    ``STP_STEP_WALL_CLOCK_SECONDS`` is never consulted.
+    """
+    if not steps:
+        return
+    defaults = script_defaults
+    if defaults is None:
+        defaults = _load_script_default_params(db, steps) if db is not None else {}
+
+    violations: list[dict] = []
+    for step in steps:
+        if step.enabled is False:
+            continue
+        effective = _effective_step_params(step, defaults)
+        minimum = _min_wall_clock_for_step(
+            step.script_name, effective, onboarded=onboarded,
+        )
+        if minimum is None:
+            continue
+        received = step.timeout_seconds
+        # 省略/null → 记 null；0/负/正整数原样上报，不得冒充 env 推导值
+        reported = None if received is None else int(received)
+        ok = (
+            received is not None
+            and int(received) >= 1
+            and int(received) >= int(minimum)
+        )
+        if not ok:
+            violations.append({
+                "step_key": step.step_key,
+                "script_name": step.script_name,
+                "timeout_seconds": reported,
+                "min_wall_clock_seconds": int(minimum),
+            })
+    if violations:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "WALL_CLOCK_BELOW_ONBOARDED_BUDGET",
+                "message": (
+                    "已登记步骤必须显式配置正整数墙钟且不低于登记预算"
+                    "（ADR-0061 D3.6 / #3723 §3.3.1）"
+                ),
+                "violations": violations,
+            },
+        )
+
 
 def _validate_script_refs(db: Session, steps: list[PlanStepIn]) -> None:
     """Reject PlanStep entries that reference non-existent or inactive Scripts."""
@@ -705,14 +852,16 @@ def create_plan(
     current_user: User = Depends(get_current_active_user),
 ):
     _validate_no_legacy_aee_scripts(payload.steps)
-    _validate_assembled_lifecycle(
-        payload.steps, payload.patrol_interval_seconds, payload.timeout_seconds,
-        payload.barrier_timeout_seconds, payload.barrier_max_wait_seconds,
-    )
     _validate_plan_dag(db, None, payload.next_plan_id)
     _validate_script_refs(db, payload.steps)
     _validate_step_param_values(payload.steps, db)
     _validate_stall_seconds_capability(payload.steps, db)
+    # §3.3.2 C：登记预算须在通用 lifecycle 对 0/负数抢先拦截之前执行
+    _validate_onboarded_wall_clock(payload.steps, db)
+    _validate_assembled_lifecycle(
+        payload.steps, payload.patrol_interval_seconds, payload.timeout_seconds,
+        payload.barrier_timeout_seconds, payload.barrier_max_wait_seconds,
+    )
 
     now = datetime.now(timezone.utc)
     plan = Plan(
@@ -863,6 +1012,7 @@ def append_chain_tail(
     _validate_script_refs(db, payload.steps)
     _validate_step_param_values(payload.steps, db)
     _validate_stall_seconds_capability(payload.steps, db)
+    _validate_onboarded_wall_clock(payload.steps, db)
     _validate_assembled_lifecycle(
         payload.steps, None, None, None, None,
     )
@@ -1136,6 +1286,7 @@ def update_plan(
         _validate_script_refs(db, payload.steps)
         _validate_step_param_values(payload.steps, db)
         _validate_stall_seconds_capability(payload.steps, db)
+        _validate_onboarded_wall_clock(payload.steps, db)
         _validate_assembled_lifecycle(
             payload.steps,
             plan.patrol_interval_seconds,

@@ -92,6 +92,14 @@ device_lease_released = Counter(
     ['reason']  # completed, failed, timeout, canceled
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
+# ADR-0061 D7.1 / #3723 §3.0 第 7 条：解除结果计数（family × result 六值）。
+# 指标名按方案使用 stp_ 前缀（与 device-return 告警族一致）。
+disarm_result_total = Counter(
+    'stp_disarm_result_total',
+    'Device-return disarm outcomes by family and result (ADR-0061 D7.1 / #3723)',
+    ['family', 'result'],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
 claim_lease_failed_total = Counter(
     'stability_claim_lease_failed_total',
     'Total claim attempts where acquire_lease returned None (device already leased)',
@@ -1070,6 +1078,16 @@ def record_api_request(method: str, endpoint: str, status_code: int, duration: f
         method=method,
         endpoint=endpoint
     ).observe(duration)
+
+
+def record_disarm_result(family: str, result: str) -> None:
+    """Count one family disarm outcome (#3723 §3.3 U2 / D7.1)."""
+    fam = (family or "unknown").strip() or "unknown"
+    res = (result or "unknown").strip() or "unknown"
+    try:
+        disarm_result_total.labels(family=fam, result=res).inc()
+    except Exception:
+        pass
 
 
 def record_plan_run_terminal(status: str):

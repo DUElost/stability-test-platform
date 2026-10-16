@@ -41,6 +41,7 @@ from backend.core.metrics import (
     reconciler_unknown_backlog,
 )
 from backend.core.settings.scheduler import get_scheduler_settings
+from backend.core.adr0026_params import DEFAULTS as _ADR0026_DEFAULTS
 from backend.models.device_lease import DeviceLease
 from backend.models.enums import (
     TERMINAL_JOB_STATUSES,
@@ -58,7 +59,16 @@ logger = logging.getLogger(__name__)
 
 from backend.core.job_timeout_config import (
     ABORT_ACK_GRACE_SECONDS as _ABORT_REAPER_GRACE_SECONDS,
+    DISARM_SCRIPT_NAMES as _DISARM_SCRIPT_NAMES,  # noqa: F401  # 测试兼容再导出
+    EXECUTING_DISARM as _EXECUTING_DISARM,  # noqa: F401  # 测试兼容再导出
     UNKNOWN_GRACE_SECONDS as _UNKNOWN_GRACE_SECONDS,
+    abort_reap_clock as _abort_reap_clock_pure,
+    abort_request_covers_job as _abort_request_covers_job_pure,
+    coordinator_progress_freshness_seconds as _coordinator_progress_freshness_seconds_pure,
+    disarm_grace_defers_reap as _disarm_grace_defers_reap_pure,
+    disarm_step_timeout_seconds as _disarm_step_timeout_seconds_pure,
+    host_abort_clock_at as _host_abort_clock_at_pure,
+    parse_abort_at as _parse_abort_at,
 )
 
 # ── Phase 4b: terminal statuses for D5 cleanup.  Does NOT include UNKNOWN —
@@ -469,11 +479,42 @@ async def _reconcile_terminal_job_active_leases(db) -> int:
 # Check 0: abort reaper — RUNNING + abort_requested + grace → UNKNOWN
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
+# ── #3723 §3.0 第 5 条 / ADR-0061 D3.8：EXECUTING_DISARM 宽限续期 ─────────────
+# 纯判断已收敛到 job_timeout_config（§3.3.2 A）；此处保留兼容导出薄壳。
+
+
+def _coordinator_progress_freshness_seconds() -> int:
+    """两个协调心跳周期（#3723 §3.0 第 5 条）。"""
+    return _coordinator_progress_freshness_seconds_pure(
+        int(_ADR0026_DEFAULTS.coordinator_heartbeat_interval_seconds)
+    )
+
+
+def _disarm_step_timeout_seconds(job: JobInstance) -> int | None:
+    """解除步骤墙钟上限：pipeline_def.teardown 中解除脚本 timeout_seconds 的最大值。"""
+    return _disarm_step_timeout_seconds_pure(getattr(job, "pipeline_def", None))
+
+
+def _disarm_grace_defers_reap(
+    job: JobInstance, abort_at: datetime, now: datetime,
+) -> bool:
+    """True → 本轮不回收（解除中且进度新鲜，且未超 abort_at+timeout 上限）。"""
+    return _disarm_grace_defers_reap_pure(
+        job,
+        abort_at,
+        now,
+        progress_freshness_seconds=_coordinator_progress_freshness_seconds(),
+    )
+
+
 _ABORT_REAPER_BROADCASTS: dict[str, list[dict]] = {}
 
 
 async def _abort_reaper_recheck_job(
     db, job_id: int, now: datetime, reason: str = "abort_ack_timeout",
+    *,
+    abort_at: datetime | None = None,
 ) -> tuple[bool, dict | None]:
     """Lock-reread one RUNNING+abort-requested candidate and recover it.
 
@@ -497,6 +538,13 @@ async def _abort_reaper_recheck_job(
     )).scalars().first()
     if job is None or job.status != JobStatus.RUNNING.value:
         return False, None
+    # #3723 §3.0 第 5 条：EXECUTING_DISARM + 进度新鲜 → 续期至 abort_at+timeout
+    if abort_at is not None and _disarm_grace_defers_reap(job, abort_at, now):
+        logger.info(
+            "abort_reaper_defer_disarm job=%d execution_state=%s last_progress_at=%s",
+            job.id, job.execution_state, job.last_progress_at,
+        )
+        return False, None
     try:
         JobStateMachine.transition(
             job, JobStatus.UNKNOWN, reason,
@@ -518,25 +566,6 @@ async def _abort_reaper_recheck_job(
     }
 
 
-def _parse_abort_at(value: object) -> datetime | None:
-    """把 ``run_context.abort_requested.at`` 解析为 aware datetime（#782）。
-
-    容忍实际会出现的三种写法：``…Z`` / ``…+00:00`` / 带或不带小数秒。解析失败返回
-    ``None``，调用方按「不满足回收条件」处理——坏值不触发 UNKNOWN 翻转，避免误杀。
-    """
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    if text.endswith(("Z", "z")):
-        # 3.11 之前 fromisoformat 不认 'Z'，显式归一为 +00:00。
-        text = f"{text[:-1]}+00:00"
-    try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError:
-        return None
-    # 无时区信息按平台约定视为 UTC（全平台时间戳均为 UTC）。
-    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
-
 
 def _abort_at_expired(raw_abort_at: object, deadline: datetime) -> bool:
     """fallback 判据：abort 请求时刻早于 ``deadline``（Python 侧解析后比较）。"""
@@ -545,83 +574,26 @@ def _abort_at_expired(raw_abort_at: object, deadline: datetime) -> bool:
 
 
 def _abort_request_covers_job(plan_run: PlanRun, job_id: int) -> bool:
-    """该 job 是否在 ``abort_requested.requested_job_ids`` 之内（#2050）。
-
-    host 级 abort（#1880 `abort_jobs_for_host` → `abort_plan_run(host_id=…)`）只把
-    **该主机**的 RUNNING job 写进集合，但写的是 **run 级** `abort_requested.at`；
-    本函数存在之前，reaper 的候选判据只有「存在 at + grace 已到」，于是同 run 上
-    其他主机**从未被请求中止**的正常 job 也会在 grace 到期后被打成 UNKNOWN
-    （`state_machine` 只允许 `UNKNOWN → {RUNNING, FAILED}`，迟到的 COMPLETED 也落
-    FAILED，且 UNKNOWN 期间保留 ACTIVE lease 占着设备）——与
-    `plan_run_abort.abort_plan_run` 的 docstring 契约相反。
-
-    兼容性：**键缺失或非列表/空**（历史 run_context、异常形态）时不参与过滤，
-    保持既有行为——否则老数据里未写集合的 run 会永远无人回收。
-    """
+    """该 job 是否在 ``abort_requested.requested_job_ids`` 之内（#2050）。"""
     ctx = plan_run.run_context if isinstance(plan_run.run_context, dict) else {}
-    abort = ctx.get("abort_requested")
-    if not isinstance(abort, dict):
-        return True
-    requested = abort.get("requested_job_ids")
-    if not isinstance(requested, list) or not requested:
-        return True
-    try:
-        return job_id in {int(x) for x in requested}
-    except (TypeError, ValueError):
-        return True
+    return _abort_request_covers_job_pure(ctx, job_id)
+
 
 
 def _host_abort_clock_at(plan_run: PlanRun, host_id: str | None) -> object:
-    """ADR-0043 D1：取 host 主体的 abort 时钟 ``abort_requested_hosts[host_id].at``。
-
-    键缺失（历史 run_context）/ 非 dict / 无 ``at`` → ``None``，调用方按 D4 退化
-    为 run 级时钟——**绝不**变成「无人回收」。
-    """
-    if not host_id:
-        return None
+    """ADR-0043 D1：取 host 主体的 abort 时钟 ``abort_requested_hosts[host_id].at``。"""
     ctx = plan_run.run_context if isinstance(plan_run.run_context, dict) else {}
-    hosts = ctx.get("abort_requested_hosts")
-    if not isinstance(hosts, dict):
-        return None
-    clock = hosts.get(host_id)
-    if not isinstance(clock, dict):
-        return None
-    return clock.get("at")
+    return _host_abort_clock_at_pure(ctx, host_id)
+
 
 
 def _abort_reap_clock(
     plan_run: PlanRun, job_id: int, host_id: str | None,
 ) -> tuple[datetime | None, str | None]:
-    """ADR-0043 D1/D3：按**被请求主体**取该 job 的宽限时钟，并存时取更早者。
-
-    返回 ``(at, subject)``，``subject`` ∈ ``{"run", "host"}``（D6：审计与
-    ``status_reason`` 需能区分回收主体）；无有效时钟 → ``(None, None)``（不回收）。
-
-    覆盖判据（决定哪个主体的时钟对该 job 成立）：
-    - **run 主体**：``requested_job_ids`` 含该 job（名单缺失/空 = 历史形态，视为
-      覆盖 —— 与 #2050 的兼容分支同旨，否则老数据无人回收）；
-    - **host 主体**：该 host 存在 host 级时钟 —— 即 D3 的 late-claim 覆盖：host 级
-      abort **之后**才被 claim 成 RUNNING 的该 host job 不在名单快照内，仍由 host
-      时钟兜底回收（名单快照对本主机没有刷新通道，见 ADR-0043 §1.2-2）。「存在即覆盖」
-      是 ADR-0043 **v1.1** 的裁决口径（§9-4）：**不**要求该时钟仍在窗口内——否则
-      late-claim job 会在 host 时钟过期后永久不被覆盖，反而把 §1.2-2 的残留窗口固化。
-
-    取 ``min`` 即 ADR-0043 D1「两者并存时取更早的 deadline」——更早到期者先兜底，
-    互不覆盖。
-    """
+    """ADR-0043 D1/D3：按被请求主体取该 job 的宽限时钟，并存时取更早者。"""
     ctx = plan_run.run_context if isinstance(plan_run.run_context, dict) else {}
-    clocks: list[tuple[datetime, str]] = []
-    if _abort_request_covers_job(plan_run, job_id):
-        run_at = _parse_abort_at((ctx.get("abort_requested") or {}).get("at"))
-        if run_at is not None:
-            clocks.append((run_at, "run"))
-    host_at = _parse_abort_at(_host_abort_clock_at(plan_run, host_id))
-    if host_at is not None:
-        clocks.append((host_at, "host"))
-    if not clocks:
-        return None, None
-    at, subject = min(clocks, key=lambda item: item[0])
-    return at, subject
+    return _abort_reap_clock_pure(ctx, job_id, host_id)
+
 
 
 async def _reconcile_aborted_running_jobs(db) -> tuple[int, list[dict]]:
@@ -721,12 +693,12 @@ async def _reconcile_aborted_running_jobs(db) -> tuple[int, list[dict]]:
     # 覆盖语义并入 `_abort_reap_clock`：run 主体看 `requested_job_ids` 名单（#2050），
     # host 主体看该 host 的时钟（含 abort 之后才被 claim 的 job，D3）。无有效时钟
     # （历史 run_context / 异常形态）→ 不回收（宁漏勿杀，#782 同旨）。
-    reap_rows: list[tuple[JobInstance, PlanRun, str]] = []
+    reap_rows: list[tuple[JobInstance, PlanRun, str, datetime]] = []
     for job, plan_run in rows:
         at, subject = _abort_reap_clock(plan_run, job.id, job.host_id)
         if at is None or at >= grace_deadline:
             continue
-        reap_rows.append((job, plan_run, subject or "run"))
+        reap_rows.append((job, plan_run, subject or "run", at))
 
     # 锁序（#2974）：本列表逐个在 `_abort_reaper_recheck_job` 里取 job 行锁，而
     # `begin_nested()` 是 SAVEPOINT、不释放 PG 行锁 ⇒ 一个 tick 在提交前持有整批
@@ -739,7 +711,7 @@ async def _reconcile_aborted_running_jobs(db) -> tuple[int, list[dict]]:
     unknown_count = 0
     broadcast_items: list[dict] = []
 
-    for candidate, _pr, subject in reap_rows:
+    for candidate, _pr, subject, abort_at in reap_rows:
         try:
             async with db.begin_nested():
                 changed, item = await _abort_reaper_recheck_job(
@@ -749,6 +721,7 @@ async def _reconcile_aborted_running_jobs(db) -> tuple[int, list[dict]]:
                         "abort_ack_timeout_host" if subject == "host"
                         else "abort_ack_timeout"
                     ),
+                    abort_at=abort_at,
                 )
                 if not changed:
                     continue

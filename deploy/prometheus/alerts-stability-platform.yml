@@ -902,3 +902,21 @@ groups:
             `StabilityHostScriptPresenceGap` 的绿色**不可信**（绿而空，同 #2900/#2984）。
             常见成因：迁移未跑（表不存在）、`SCRIPT_PRESENCE_SWEEP_CRON` 被清空、
             或 sweep 作业连续失败（看 `stability_apscheduler_job_runs_total{job_name="script_presence_sweep",outcome="error"}`）。
+
+  # #3723 U2 / ADR-0061 D7.1：解除结果可观测（阶段 A）
+  - name: stability-platform-device-return-disarm
+    rules:
+      - alert: StabilityDisarmNotExecutedOrIncomplete
+        expr: sum(increase(stp_disarm_result_total{result=~"not_executed|incomplete"}[1h])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: Disarm not_executed or incomplete increased in the last hour
+          description: "过去 1 小时内出现 not_executed 或 incomplete 解除结果增量（ADR-0061 D7.1 / #3723 §3.0 第 7 条）。常见成因：中止路径跳过 teardown、解除被平台终止、或未升级 Agent 无 trace。查 job.disarm_results 与对应 teardown step_trace。"
+      - alert: StabilityDisarmFailedRatioHigh
+        expr: (sum by (family) (increase(stp_disarm_result_total{result="failed"}[24h])) / clamp_min(sum by (family) (increase(stp_disarm_result_total[24h])), 1)) > 0.05
+        labels:
+          severity: warning
+        annotations:
+          summary: Disarm failed ratio above 5% for a family over 24h
+          description: "专项 {{ $labels.family }} 过去 24 小时解除结果 failed 占比超过 5%（ADR-0061 D7.1 / #3723 §3.0 第 7 条）。查该专项 teardown / 解除脚本与设备侧回读证据。"

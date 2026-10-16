@@ -1742,7 +1742,25 @@ export type JobExecutionState =
   | 'WAITING_BARRIER'
   | 'WAITING_EXECUTION_SLOT'
   | 'EXECUTING_STEP'
-  | 'PATROL_SLEEP';
+  | 'PATROL_SLEEP'
+  | 'EXECUTING_DISARM';
+
+/** ADR-0061 D1.2 / #3723：单项解除结果六值 + 证据 */
+export type DisarmResultValue =
+  | 'confirmed'
+  | 'executed_unverified'
+  | 'failed'
+  | 'readback_failed'
+  | 'not_executed'
+  | 'incomplete';
+
+export interface DisarmResultEntry {
+  result: DisarmResultValue | string;
+  step_id?: string;
+  exit_code?: number | null;
+  readback_summary?: string;
+  reason?: string;
+}
 
 export interface PlanJobInstance {
   id: number;
@@ -1759,6 +1777,8 @@ export interface PlanJobInstance {
   started_at?: string | null;
   ended_at?: string | null;
   created_at?: string | null;
+  /** ADR-0061 D4 / #3723 U2：按专项解除结果 */
+  disarm_results?: Record<string, DisarmResultEntry> | null;
   step_traces?: StepTrace[];
 }
 

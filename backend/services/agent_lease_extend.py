@@ -22,6 +22,7 @@ from backend.models.device_lease import DeviceLease
 from backend.models.enums import JobStatus, LeaseStatus, LeaseType
 from backend.models.job import JobInstance
 from backend.services.errors import BatchTooLarge
+from backend.agent.contracts.device_return import EXECUTING_DISARM
 
 _DEVICE_LOCK_LEASE_SECONDS = int(os.getenv("DEVICE_LOCK_LEASE_SECONDS", "600"))
 
@@ -38,11 +39,13 @@ _LEASE_EXTEND_BATCH_MAX = int(os.getenv("AGENT_LEASE_EXTEND_BATCH_MAX", "200"))
 
 # ADR-0026 §3 execution_state sub-states (invariant ③). Anything else reported
 # by an Agent is ignored (column left untouched) — forward/backward tolerant.
+# EXECUTING_DISARM 权威来源：上方导入的 device_return（#3723 §3.1 / §3.3.1.6）
 _VALID_EXECUTION_STATES = {
     "WAITING_EXECUTION_SLOT",
     "EXECUTING_STEP",
     "PATROL_SLEEP",
     "WAITING_BARRIER",
+    EXECUTING_DISARM,
 }
 
 

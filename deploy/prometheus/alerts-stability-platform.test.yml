@@ -1372,3 +1372,46 @@ tests:
       - eval_time: 10m
         alertname: StabilityDeviceLeaseReconcilerNoData
         exp_alerts: []
+
+  # #3723 U2 / ADR-0061 D7.1：解除 not_executed/incomplete 1h 增量
+  - interval: 1m
+    input_series:
+      - series: 'stp_disarm_result_total{family="power-cycle",result="not_executed"}'
+        values: '0+1x70'
+      - series: 'stp_disarm_result_total{family="power-cycle",result="confirmed"}'
+        values: '0x70'
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: StabilityDisarmNotExecutedOrIncomplete
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Disarm not_executed or incomplete increased in the last hour
+              description: "过去 1 小时内出现 not_executed 或 incomplete 解除结果增量（ADR-0061 D7.1 / #3723 §3.0 第 7 条）。常见成因：中止路径跳过 teardown、解除被平台终止、或未升级 Agent 无 trace。查 job.disarm_results 与对应 teardown step_trace。"
+      - eval_time: 65m
+        alertname: StabilityDisarmFailedRatioHigh
+        exp_alerts: []
+
+  # #3723 U2：单专项 24h failed 占比 > 5%
+  - interval: 1h
+    input_series:
+      - series: 'stp_disarm_result_total{family="power-cycle",result="failed"}'
+        values: '0+2x30'
+      - series: 'stp_disarm_result_total{family="power-cycle",result="confirmed"}'
+        values: '0+1x30'
+      - series: 'stp_disarm_result_total{family="sleep",result="confirmed"}'
+        values: '0+10x30'
+    alert_rule_test:
+      - eval_time: 26h
+        alertname: StabilityDisarmFailedRatioHigh
+        exp_alerts:
+          - exp_labels:
+              family: power-cycle
+              severity: warning
+            exp_annotations:
+              summary: Disarm failed ratio above 5% for a family over 24h
+              description: "专项 power-cycle 过去 24 小时解除结果 failed 占比超过 5%（ADR-0061 D7.1 / #3723 §3.0 第 7 条）。查该专项 teardown / 解除脚本与设备侧回读证据。"
+      - eval_time: 26h
+        alertname: StabilityDisarmNotExecutedOrIncomplete
+        exp_alerts: []

@@ -77,6 +77,8 @@ class LogArtifactIn(BaseModel):
 class RunCompleteIn(BaseModel):
     update: RunUpdate
     artifact: Optional[LogArtifactIn] = None
+    # ADR-0061 D4 / #3723 U2：Agent 终态可选携带；实际 /complete 入口见 agent_completion._RunCompleteIn
+    disarm_results: Optional[Dict[str, Any]] = None
 
 
 class RunAgentOut(BaseModel):
