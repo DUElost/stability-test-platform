@@ -8,15 +8,180 @@ watcher cannot leave daemons ticking after ``local_db.close()``.
 from __future__ import annotations
 
 import logging
+import time
 from concurrent.futures import Executor
 from typing import Any, Optional
 
+from .api_client import _build_complete_payload
 from .artifact_uploader import ArtifactUploader
+from .contracts.device_return import (
+    DISARM_RESULT_CONFIRMED,
+    DISARM_RESULT_EXECUTED_UNVERIFIED,
+    DISARM_RESULT_FAILED,
+    DISARM_RESULT_INCOMPLETE,
+    DISARM_RESULT_READBACK_FAILED,
+    make_disarm_result,
+)
 from .event_uploader import EventUploader
 from .local_disk_monitor import LocalDiskMonitor
 from .log_archiver import LogArchiver
 
 logger = logging.getLogger(__name__)
+
+# Family results that already finished during the disarm window — keep as-is
+# when persisting leftover jobs at shutdown cut-off (#3723 §3.2.4).
+_FINISHED_DISARM_RESULTS = frozenset(
+    {
+        DISARM_RESULT_CONFIRMED,
+        DISARM_RESULT_EXECUTED_UNVERIFIED,
+        DISARM_RESULT_FAILED,
+        DISARM_RESULT_READBACK_FAILED,
+    }
+)
+
+_SHUTDOWN_INCOMPLETE_REASON = "shutdown_disarm_window_elapsed"
+
+
+
+def _await_started_disarm(
+    job_runner_state: Optional[Any],
+    *,
+    timeout_seconds: float = 20.0,
+) -> None:
+    """Wait up to ``timeout_seconds`` for active runners (disarm) to finish.
+
+    Polls ``active_runners``; returns early when empty. Incomplete disarm after
+    the window is marked ``incomplete`` when the scheduler shuts down / workers
+    exit (#3723 §3.2.4).
+    """
+    if job_runner_state is None or timeout_seconds <= 0:
+        return
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        try:
+            active = getattr(job_runner_state, "active_runners", None) or {}
+            if not active:
+                return
+        except Exception:
+            logger.exception("shutdown_disarm_wait_inspect_failed")
+            return
+        time.sleep(0.2)
+    try:
+        leftover = list(getattr(job_runner_state, "active_runners", {}) or {})
+    except Exception:
+        leftover = []
+    if leftover:
+        logger.warning(
+            "shutdown_disarm_window_elapsed leftover_jobs=%s timeout=%.1fs",
+            leftover,
+            timeout_seconds,
+        )
+
+
+def _iter_leftover_runners(
+    job_runner_state: Any,
+) -> list[tuple[int, str, Any]]:
+    """Snapshot ``active_runners`` entries still present after the disarm window."""
+    try:
+        active = dict(getattr(job_runner_state, "active_runners", None) or {})
+    except Exception:
+        logger.exception("shutdown_incomplete_outbox_inspect_failed")
+        return []
+    out: list[tuple[int, str, Any]] = []
+    for job_id, entry in active.items():
+        worker_token = ""
+        runner: Any = entry
+        if isinstance(entry, tuple) and len(entry) >= 2:
+            worker_token = str(entry[0] or "")
+            runner = entry[1]
+        tokens = getattr(job_runner_state, "active_job_tokens", None) or {}
+        try:
+            fencing = str(tokens.get(job_id) or worker_token or "")
+        except Exception:
+            fencing = worker_token
+        out.append((int(job_id), fencing, runner))
+    return out
+
+
+def _disarm_results_for_shutdown_incomplete(runner: Any) -> dict[str, dict]:
+    """Build per-family disarm_results marking unfinished families incomplete."""
+    families = set(getattr(runner, "_footprint_families", None) or set())
+    existing = dict(getattr(runner, "_disarm_results", None) or {})
+    if not families:
+        families = set(existing.keys())
+    if not families:
+        return {}
+    results: dict[str, dict] = {}
+    for family in families:
+        prior = existing.get(family) or {}
+        prior_result = prior.get("result")
+        if prior_result in _FINISHED_DISARM_RESULTS:
+            results[family] = dict(prior)
+            continue
+        results[family] = make_disarm_result(
+            result=DISARM_RESULT_INCOMPLETE,
+            step_id=str(prior.get("step_id") or ""),
+            exit_code=prior.get("exit_code"),
+            readback_summary=str(prior.get("readback_summary") or ""),
+            reason=_SHUTDOWN_INCOMPLETE_REASON,
+        )
+    return results
+
+
+def _persist_incomplete_disarm_to_outbox(
+    job_runner_state: Optional[Any],
+    local_db: Any,
+) -> int:
+    """Write ``incomplete`` terminal facts for leftover jobs before LocalDB close.
+
+    #3723 §3.2.4: after abort → ≤20s → scheduler.shutdown, unfinished disarm
+    must land in the local outbox while the DB is still open. ``executor.shutdown
+    (wait=False)`` intentionally does not wait for workers, so this path is the
+    durability guarantee — not a late worker callback after ``local_db.close()``.
+    """
+    if job_runner_state is None or local_db is None:
+        return 0
+    enqueue = getattr(local_db, "enqueue_terminal", None)
+    if not callable(enqueue):
+        return 0
+    persisted = 0
+    for job_id, fencing_token, runner in _iter_leftover_runners(job_runner_state):
+        disarm_results = _disarm_results_for_shutdown_incomplete(runner)
+        if not disarm_results:
+            continue
+        if not fencing_token:
+            logger.warning(
+                "shutdown_incomplete_outbox_skip_no_token job=%d", job_id,
+            )
+            continue
+        payload = _build_complete_payload(
+            {
+                "status": "CANCELED",
+                "exit_code": 0,
+                "error_message": _SHUTDOWN_INCOMPLETE_REASON,
+                "disarm_results": disarm_results,
+            },
+            fencing_token,
+        )
+        try:
+            enqueue(job_id, payload)
+            persisted += 1
+            logger.info(
+                "shutdown_incomplete_outbox_enqueued job=%d families=%s",
+                job_id,
+                sorted(disarm_results),
+            )
+        except ValueError as exc:
+            # First terminal fact already durable (worker won the race).
+            logger.info(
+                "shutdown_incomplete_outbox_conflict job=%d: %s", job_id, exc,
+            )
+        except Exception:
+            logger.exception(
+                "shutdown_incomplete_outbox_failed job=%d", job_id,
+            )
+    return persisted
+
 
 
 def shutdown_agent_runtime(
@@ -39,17 +204,35 @@ def shutdown_agent_runtime(
     """Drain in-flight work and stop background subsystems (SIGTERM/SIGINT)."""
     logger.info("agent_shutting_down, waiting for active tasks to finish...")
     coordinator.stop()
-    operation_scheduler.shutdown()
-    # R07-F12 (#1012): scheduler.shutdown() only wakes permit waiters; also
-    # cancel already-running cruises so the executor drain below is bounded
-    # and SIGTERM actually ends a patrol loop instead of retrying it.
+    # #3723 §3.2.4 / ADR-0061 D3: abort in-flight jobs FIRST so started disarm
+    # steps can finish; wait up to 20s; then shut down the scheduler. Do not
+    # change systemd TimeoutStopSec (unit stays 30s).
     if job_runner_state is not None:
         try:
             for _jid in list(job_runner_state.active_runners):
                 job_runner_state.request_abort(_jid)
         except Exception:
             logger.exception("shutdown_cancel_runners_failed")
-    executor.shutdown(wait=True, cancel_futures=False)
+    _await_started_disarm(job_runner_state, timeout_seconds=20.0)
+    # R07-F12 (#1012): scheduler.shutdown() wakes remaining permit waiters
+    # (teardown waiters record incomplete → local outbox via complete_job).
+    operation_scheduler.shutdown()
+    # #3723 §3.2.4: after the 20s disarm window, must enter outbox drain
+    # boundedly. Teardown no longer kills children (§3.2.2), so wait=True
+    # can hang past systemd's 30s TimeoutStopSec and skip outbox flush.
+    # wait=False returns immediately; worker threads may still finish
+    # enqueueing incomplete while we drain what is already durable.
+    executor.shutdown(wait=False, cancel_futures=False)
+    # #3723 §3.2.4: leftovers after the 20s window → incomplete into local
+    # outbox BEFORE drain/close. wait=False leaves workers running; closing
+    # LocalDB first drops late complete_job enqueue (TerminalReportLostError
+    # with empty outbox). Persist here so drain has something durable.
+    try:
+        n = _persist_incomplete_disarm_to_outbox(job_runner_state, local_db)
+        if n:
+            logger.info("shutdown_incomplete_outbox_persisted count=%d", n)
+    except Exception:
+        logger.exception("shutdown_incomplete_outbox_persist_failed")
     # Flush step traces via HTTP before shutdown
     try:
         flushed = step_trace_uploader.drain_sync()

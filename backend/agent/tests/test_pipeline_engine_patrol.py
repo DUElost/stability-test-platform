@@ -6,7 +6,7 @@ Validates:
   - patrol failed step DOES write step_trace
   - patrol heartbeat uploader is invoked per cycle with correct deltas
   - failure_streak grows monotonically until next clean cycle resets to 0
-  - manual_action=EXIT_REQUESTED in heartbeat ACK exits patrol AND skips teardown
+  - manual_action=EXIT_REQUESTED in heartbeat ACK exits patrol AND runs disarm (#3723)
   - manual_action=RETRY_NOW skips the post-cycle sleep
   - backoff_policy from pipeline_def is honored
 """
@@ -290,44 +290,40 @@ class TestHeartbeatInvocation:
 
 class TestManualActionObservation:
     @patch("backend.agent.pipeline_engine.time.sleep", return_value=None)
-    def test_exit_requested_skips_teardown_and_returns_manual_exit(self, mock_sleep):
-        """ADR-0022 BO4: manual_exit termination_reason → teardown SKIPPED."""
+    def test_exit_requested_runs_disarm_and_returns_manual_exit(self, mock_sleep):
+        """ADR-0061 D3.4 / #3723 §3.2.3: manual_exit still runs disarm."""
         uploader = MagicMock()
-        cycle_count = [0]
-
-        def ack(**kwargs):
-            cycle_count[0] += 1
-            if cycle_count[0] == 1:
-                return {"manual_action": "EXIT_REQUESTED"}
-            return {"manual_action": None}
-
-        uploader.send.side_effect = ack
-        engine, _ = _make_engine_with_patrol_uploader(uploader)
-        engine._execute_step = MagicMock(return_value=StepResult(success=True))
+        uploader.send.return_value = {"manual_action": "EXIT_REQUESTED"}
+        engine, mq = _make_engine_with_patrol_uploader(uploader)
+        engine._footprint_families.add("power-cycle")
 
         teardown_called = [False]
-        def teardown(td):
+        def teardown(td, disarm_only=False):
             teardown_called[0] = True
-            return StepResult(success=True, metadata={"teardown_status": "SUCCESS"})
+            assert disarm_only is True
+            return StepResult(
+                success=True,
+                metadata={
+                    "teardown_status": "SUCCESS",
+                    "disarm_results": {
+                        "power-cycle": {"result": "executed_unverified"}
+                    },
+                },
+            )
         engine._execute_teardown_best_effort = teardown
 
-        # Pipeline includes teardown steps to verify skipping
         pipeline = {
             "lifecycle": {
                 "timeout_seconds": 0,
                 "init": [],
-                "patrol": {
-                    "interval_seconds": 0,
-                    "steps": [{"step_id": "p_a", "action": "script:x"}],
-                },
-                "teardown": [{"step_id": "t_a", "action": "script:y"}],
+                "patrol": {"interval_seconds": 0, "steps": []},
+                "teardown": [{"step_id": "t_a", "action": "script:powercycle_finish"}],
             }
         }
         result = engine._execute_lifecycle(pipeline)
-
         assert result.metadata["termination_reason"] == "manual_exit"
-        assert result.metadata["teardown_status"] == "SKIPPED"
-        assert teardown_called[0] is False, "teardown must be SKIPPED on manual_exit (BO4)"
+        assert teardown_called[0] is True, "disarm must run on manual_exit"
+        assert "disarm_results" in result.metadata
 
     @patch("backend.agent.pipeline_engine.time.sleep", return_value=None)
     def test_retry_now_skips_sleep(self, mock_sleep):
