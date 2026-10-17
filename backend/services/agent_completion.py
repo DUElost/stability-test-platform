@@ -40,7 +40,7 @@ from backend.realtime.socketio_server import broadcast_run_job_update
 from backend.services.aggregator import PlanAggregator
 from backend.services.agent_recovery import resume_expired_lease_for_recovery
 from backend.services.errors import BadRequest, Conflict, NotFound
-from backend.services.lease_manager import release_lease
+from backend.services.device_return import handle_job_lease_release
 from backend.services.state_machine import InvalidTransitionError, JobStateMachine
 from backend.agent.contracts.device_return import (
     DISARM_RESULT_EXECUTED_UNVERIFIED as _DISARM_RESULT_EXECUTED_UNVERIFIED,
@@ -672,11 +672,15 @@ async def complete_agent_job(
             # M4/T4-2: 终态时按 watcher_capability 自增一次(覆盖率监控盘);
             # 与 reconciler 桥接同处 not-already_terminal 守卫内,每 Job 仅计一次。
             record_watcher_capability(job.watcher_capability or "unknown")
-        # Release before aggregation.  Chain dispatch inherits the same devices
-        # and must observe them as free when the terminal transaction commits.
-        released = await release_lease(db, job.device_id, job_id, LeaseType.JOB)
-        if not released:
-            logger.warning("release_lease_miss device=%s job=%s", job.device_id, job_id)
+        # ADR-0061 D5 / #3723 U3：JOB 租约经统一欠账入口处理（可能转换为欠账租约）。
+        lease_outcome = await handle_job_lease_release(
+            db, device_id=job.device_id, job_id=job_id, job=job,
+        )
+        if not lease_outcome.released and not lease_outcome.converted_to_debt:
+            logger.warning(
+                "device_return_lease_miss device=%s job=%s open=%s",
+                job.device_id, job_id, lease_outcome.open_debt_count,
+            )
         await db.flush()
         await record_audit_async(
             db,
@@ -688,7 +692,9 @@ async def complete_agent_job(
                 "from_status": transition_from_status,
                 "to_status": target.value,
                 "payload_digest": payload_digest,
-                "lease_released": bool(released),
+                "lease_released": bool(lease_outcome.released),
+                "lease_converted_to_debt": bool(lease_outcome.converted_to_debt),
+                "open_debt_count": lease_outcome.open_debt_count,
             },
             username="agent",
         )

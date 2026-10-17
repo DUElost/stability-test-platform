@@ -100,6 +100,24 @@ disarm_result_total = Counter(
     ['family', 'result'],
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
+# ADR-0061 D7.2 / #3723 §3.0 第 7 条：欠账可观测（阶段 B）。
+device_return_debt_open = Gauge(
+    'stp_device_return_debt_open',
+    'Open device-return debt entries by family (ADR-0061 D7.2 / #3723)',
+    ['family'],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+device_return_debt_oldest_seconds = Gauge(
+    'stp_device_return_debt_oldest_seconds',
+    'Age in seconds of the oldest open device-return debt entry',
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+device_return_override_total = Counter(
+    'stp_device_return_override_total',
+    'Admin device-return override (manual discharge) count',
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+
 claim_lease_failed_total = Counter(
     'stability_claim_lease_failed_total',
     'Total claim attempts where acquire_lease returned None (device already leased)',
@@ -1078,6 +1096,30 @@ def record_api_request(method: str, endpoint: str, status_code: int, duration: f
         method=method,
         endpoint=endpoint
     ).observe(duration)
+
+
+
+def set_device_return_debt_open(family: str, count: int) -> None:
+    """Set open-debt gauge for one family (#3723 §3.4 U3 / D7.2)."""
+    fam = (family or "unknown").strip() or "unknown"
+    try:
+        device_return_debt_open.labels(family=fam).set(max(0, int(count)))
+    except Exception:
+        pass
+
+
+def set_device_return_debt_oldest_seconds(seconds: float) -> None:
+    try:
+        device_return_debt_oldest_seconds.set(max(0.0, float(seconds)))
+    except Exception:
+        pass
+
+
+def record_device_return_override() -> None:
+    try:
+        device_return_override_total.inc()
+    except Exception:
+        pass
 
 
 def record_disarm_result(family: str, result: str) -> None:
