@@ -27,6 +27,8 @@ Draft PR #3748 待规划确认与独立复核；合入不等于生效（阶段 B
    `refresh_device_return_debt_gauges` 为真实生产者；`init_device_return.py`
    默认 `--dry-run`，`--apply` 才写库，`--release-all-debt-leases` 为回退。
 8. 消费共享 `device_return` 契约机器值；**不**改 `ONBOARDED`（U5）、**不**重做 U1/U2。
+9. 历史 teardown 推导抽出 `backend/services/disarm_derive.py`（叶模块）：
+   `device_return` / `agent_completion` 均顶层依赖它，打破 C5 环并去掉函数体内 import。
 
 ### §3.4.1 补齐（Planner 回派 `7b3d43f09`）
 

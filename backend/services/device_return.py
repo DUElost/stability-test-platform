@@ -58,6 +58,7 @@ from backend.models.device_return_debt import DeviceReturnDebt
 from backend.models.enums import LeaseStatus, LeaseType
 from backend.models.host import Device
 from backend.models.job import JobInstance, StepTrace
+from backend.services.disarm_derive import derive_disarm_results_from_traces
 
 logger = logging.getLogger(__name__)
 
@@ -1261,9 +1262,6 @@ def _history_disarm_results_for_job_sync(
     results = _normalize_disarm_results(getattr(job, "disarm_results", None))
     if results:
         return results
-    # Lazy import avoids import cycles with agent_completion → device_return.
-    from backend.services.agent_completion import derive_disarm_results_from_traces
-
     traces = list(
         db.execute(select(StepTrace).where(StepTrace.job_id == job.id)).scalars().all()
     )
