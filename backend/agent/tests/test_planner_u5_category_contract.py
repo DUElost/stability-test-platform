@@ -7,8 +7,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 from backend.agent.contracts.device_return import (
     DISARM_RESULT_EXECUTED_UNVERIFIED,
     DISARM_RESULT_FAILED,
