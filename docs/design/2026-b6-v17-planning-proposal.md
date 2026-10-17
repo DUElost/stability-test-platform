@@ -86,9 +86,9 @@ v1.5 补充：新执行状态的控制面消费者及通用 recycler 解除终�
 D2.5 选定结构化422拒绝；普通/迟到/清偿/init 统一政策见 §3.8。部署继续冻结；不新增阶段 B 开关。
 Owner 要求持续部署时必须另提开关、迁移与回退裁决，不得由实施者临时实现。
 
-另有一项批次级裁决，不改 ADR 正文，与上述模型项同在 #3751 裁决：旧登记包 `powercycle_disarm` 1.0.0–1.0.2 的处置（§3.6.3）。
-规划者推荐方案 A：退役，并按 git 树对象恢复发布；备选方案 B：退役，保留缺包诊断并改部署 SOP 的预期。
-Owner 必须在两者中选定一个；U5 在选定前不得实现 §3.6.3 第 3 条起的条目。
+另有一项批次级裁决，不改 ADR 正文：旧登记包 `powercycle_disarm` 1.0.0–1.0.2 的处置（§3.6.3）。
+Owner 已于 2026-10-17 选定方案 A：退役，并按 git 树对象恢复发布（[裁决记录](https://github.com/DUElost/stability-test-platform/issues/3751#issuecomment-6234224273)）。
+方案 B（保留缺包诊断并改部署 SOP 预期）未采用。上面的模型项仍 pending。
 
 ## 3. 实施分组、版本与档位
 
@@ -175,7 +175,7 @@ U1 #3733 已合入 `611e777d5a87e1907508fb9be2eebff6adfca2b5`；U2 #3734 已合�
 - U5：`backend/agent/contracts/device_return.py`中实际版本角色helper与登记；`backend/agent/scripts/powercycle_disarm/`的轮询进度；
   必需的Agent调用签名适配；`tool_manifest.json`、powercycle模板/pin、相应测试及原Note。既有finish@1.1.0包内容不变。
   §3.6.5 的保存入口校验：共享契约中的纯函数，`backend/api/routes/plans.py` 三个保存入口的调用，`backend/tests/api/` 下的入口测试。
-  Owner 选定 §3.6.3 方案 A 时，另含 `tools/dev/check_script_packages.py` 的 `--publish-restored` 模式及其自检。
+  另含 `tools/dev/check_script_packages.py` 的 `--publish-restored` 模式及其自检（§3.6.3 方案 A，Owner 2026-10-17 选定）。
   U5 必须把这些路径并入原 Execution 的完整 scope（`ai_work.py update --scope` 会整体替换，必须保留原有路径）。
 - U8：共享契约的guard协议/结果优先级/类别政策；`pipeline_engine.py`、`api_client.py`、`pipeline_runner.py`、`coordinator.py`、`lease_renewer.py`、
   `backend/agent/registry/local_db.py`的持久恢复；`backend/models/job.py`及新增alembic revision；`backend/api/schemas/run.py`、`backend/api/schemas/agent.py`、
@@ -415,9 +415,10 @@ U5 必须在最终 HEAD 运行 `git rev-list --objects <最终HEAD> -- backend/a
   保留缺包而不改 SOP，此后每次部署都会在该步停下。
 - 原稿「保留登记、不退役、不发布」还留下一个隐患：日后若有人补发这些包，scan 会把三个旧版本建成 active 行，带已知缺陷的版本将可被计划选用。
 
-**处置**：Owner 必须在 #3751 选定方案 A 或方案 B；规划者推荐方案 A。U5 选定前只能实现两方案的共同部分。
+**处置**：Owner 已于 2026-10-17 选定方案 A（[裁决记录](https://github.com/DUElost/stability-test-platform/issues/3751#issuecomment-6234224273)）。
+U5 必须实现第 1、3、4 条；激活执行者必须执行第 2、5 条。
 
-两方案的共同部分：
+退役与零引用复核：
 
 1. U5 必须在原 PR 中把 `powercycle_disarm` 1.0.0、1.0.1、1.0.2 三个条目改为 `retired: true`。
    这是 `check_tool_manifest.py` 允许的单向翻转。三者只登记在未合入的 U5 分支、从未发布；激活前的零引用由第 2 条复核。
@@ -425,7 +426,7 @@ U5 必须在最终 HEAD 运行 `git rev-list --objects <最终HEAD> -- backend/a
    `SELECT count(*) FROM plan_step WHERE script_name = 'powercycle_disarm' AND script_version IN ('1.0.0', '1.0.1', '1.0.2');`
    预期：0。如果不为 0，执行者必须停止激活并报告 Owner。
 
-方案 A（推荐）：恢复发布旧包，scan 不新增缺包。
+恢复发布（方案 A）：scan 不新增缺包。
 
 3. U5 必须为 `tools/dev/check_script_packages.py` 增加 `--publish-restored NAME@VERSION --source-tree TREE --packages-root DIR` 模式。
    该模式必须按上面的恢复方法从树对象重建包；重建 SHA 等于 manifest 条目时才写站点，否则必须拒绝。
@@ -438,14 +439,7 @@ U5 必须在最终 HEAD 运行 `git rev-list --objects <最终HEAD> -- backend/a
    `GET /api/v1/scripts?is_active=false` 的 `data` 含三个旧 disarm 版本，`GET /api/v1/scripts?is_active=true` 的 `data` 含 disarm 最终版与 `powercycle_finish@1.1.0`。
    该模式同样可以用于 #3661 的同类缺口；本批不承接 #3661。
 
-方案 B（备选）：保留缺包诊断。
-
-3. 激活执行者不发布三个旧包；此后每次 scan 都会把它们记为 `package_missing`。
-4. U7 必须在部署 SOP 阶段 B 第 4、5 步的预期中加入这三个条目，并另立跟踪 issue 写明出口（日后按方案 A 的恢复方法补发）。
-   SOP 修改合入前，部署执行者必须在该步停下并请 Owner 确认，不得把这三条当作已获准的缺包。
-
-方案 A 比方案 B 多一个工具模式和一次激活步骤，换来 scan 无新增常驻诊断，旧版本在库内也有 inactive 行（与 scan「登记即有身份」的约定一致）。
-方案 B 不改工具，但部署 SOP 的预期清单会长期多出三条。
+未采用的方案 B：不发布三个旧包，保留缺包诊断，并改部署 SOP 的缺包预期。任何人不得按方案 B 实施。
 
 ### 3.6.4 真机与最终包（v1.7）
 
@@ -527,7 +521,7 @@ expected/observed组合及报告引用；不自动归一化，不部分修改，
 | U2 | 迁移在空库 upgrade / downgrade；带与不带 `disarm_results` 的 `/complete`（后者按推导表）；reaper：`EXECUTING_DISARM` 且进度新鲜时不回收、超上限或进度中断时回收；墙钟按 §3.3.1 验收（省略也必须拒绝、显式值原样下发、三入口与有效参数）；指标计数；告警规则 promtool 测试；v1.5 追加回收消费者、乱序 trace 与三入口错误矩阵按 §3.3.2 执行 |
 | U3 | 11 处 SourceGuard；终态转换与 claim 并发由唯一索引仲裁；部分清偿不释放租约；迟到回报只关闭同源条目；重放不产生第二个条目；人工放行记 `unverified`/`override` 且写审计；带欠账退役释放租约、条目保持 `open`，取消退役同一事务重建租约；初始化两款（空闲建租约、被占只写条目）与重复执行幂等；reconciler 与紧急释放不释放欠账租约；准入原因与预览告警 |
 | U4 | 心跳下发欠账 → 重连后清偿并回报令牌；过期令牌被拒；init 检查命中 → 解除 → `confirmed` 后继续；解除失败 → init 失败；控制面未下发字段 → 不动作 |
-| U5 | `probe` / `disarm` 两种模式；读取诊断与类别核验按 §3.6.1/§3.8；`powercycle_finish` 1.1.0 不改 prefs；模板 pin 与 manifest 守卫；Plan 保存入口拒绝不符合接入形态的计划（§3.6.5）；旧条目退役及选定方案的恢复发布（§3.6.3）；真机验证报告 |
+| U5 | `probe` / `disarm` 两种模式；读取诊断与类别核验按 §3.6.1/§3.8；`powercycle_finish` 1.1.0 不改 prefs；模板 pin 与 manifest 守卫；Plan 保存入口拒绝不符合接入形态的计划（§3.6.5）；旧条目退役及按树对象恢复发布（§3.6.3 方案 A）；真机验证报告 |
 | U6 | 组件测试：解除结果、欠账、放行表单必填项、预览告警 |
 | U7 | 文档链接与治理面门禁；写作约定自查 |
 
@@ -547,9 +541,8 @@ expected/observed组合及报告引用；不自动归一化，不部分修改，
   解除版本低于最低版本（`disarm_below_min_version`）、只有旧 `powercycle_finish@1.0.x` 及 disarm 加旧 finish（`finish_below_min_version`）。
   正向对照：`powercycle_disarm` 最终版加 `finish@1.1.0` 保存成功；没有足迹步骤的只收取计划保存成功；步骤未修改的存量旧计划仍能派发。
   同一请求同时违反本节规则与墙钟预算时返回本节错误码。不得只测纯函数。
-- U5（§3.6.3，Owner 选定方案 A 时）：`--publish-restored` 自检五项；在临时站点目录对三个旧版本真实重建并写入，SHA 与 manifest 一致；
+- U5（§3.6.3 方案 A）：`--publish-restored` 自检五项；在临时站点目录对三个旧版本真实重建并写入，SHA 与 manifest 一致；
   对同一目录重跑得到「同字节跳过」；改写一个已落位文件后重跑必须拒绝。三个旧条目为 `retired: true`，`check_tool_manifest.py --base origin/main` 与 `check_script_packages.py` 通过。
-  选定方案 B 时只验后一句。
 - U8：真实隔离PG reaper→extend-batch在abort+61s合法queue下保持RUNNING/renewed；
   同host至少11job/permit=1跨旧60s阈值（有限虚拟时钟推进到61s以上，真实策略/数据库路径，不做长时间裸sleep）；
   Q内都可尝试解除，Q外/整job上限/步骤E耗尽按incomplete交接；至少1条覆盖6600s排队后仍有660s执行窗口。
@@ -596,9 +589,8 @@ lint、CodeQL、pr-typecheck、pr-compileall、pr-agent-tests、pr-migrate-empty
 1. 继续部署冻结。Owner另开激活授权和维护窗口，先确定暂停派发/排空旧job/能力核验/恢复步骤与回退；
    本稿不授权任何production动作。原v1.6“先新Agent后旧控制面”不能证明新协议保证，不能直接照旧执行。
 2. `--publish` 发布 `powercycle_disarm@1.0.3`（实际顺延时三处同步）与 `powercycle_finish@1.1.0`；执行者必须核验最终 manifest 包 SHA。
-   disarm 1.0.0/1.0.1/1.0.2 在 U5 中已改为 `retired: true`。执行者必须先按 §3.6.3 第 2 条复核零引用，再按 Owner 的选择处理：
-   方案 A 时，对三者各运行一次 `--publish-restored`，然后 scan；
-   方案 B 时，不发布三者，scan 的 `package_missing` 按 §3.6.3 方案 B 第 4 条更新后的部署 SOP 判读。
+   disarm 1.0.0/1.0.1/1.0.2 在 U5 中已改为 `retired: true`。执行者必须先按 §3.6.3 第 2 条复核零引用，
+   再按 §3.6.3 第 5 条对三者各运行一次 `--publish-restored`，然后 scan（方案 A，Owner 2026-10-17 选定）。
    publish/scan仍需整批激活授权。
 3. 维护窗口内按ADR修订 §4完成协调升级：先兼容控制面和nullable迁移，再Agent能力核验，全部guard协议可用后恢复派发。
    控制面/Agent交错阶段不开展B6验收，不接管旧在跑job；没有维护窗口授权时保持冻结。
@@ -660,3 +652,4 @@ lint、CodeQL、pr-typecheck、pr-compileall、pr-agent-tests、pr-migrate-empty
   同日补齐（原规划者，回应草案复核的两处缺口，均为规划缺口）：§3.6.3 改为退役三个旧 disarm 条目，
   另按方案 A（按树对象恢复发布）或方案 B（保留缺包诊断并改部署 SOP 预期）交 Owner 裁决，删去「不退役、不发布」；
   §3.0.2 末句的保存入口拒绝规则落到 U5，新增 §3.6.5 与 §4.1 U5 真入口反例，并写明 `plans.py` 与 U3 的集成顺序。
+  同日 Owner 选定 §3.6.3 方案 A（[裁决记录](https://github.com/DUElost/stability-test-platform/issues/3751#issuecomment-6234224273)），正文删去方案 B 分支；ADR 提案 §6 五项仍 pending。

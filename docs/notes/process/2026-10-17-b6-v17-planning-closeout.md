@@ -11,7 +11,7 @@ Class: process
 U3/U5保留原issue/PR；保守集成为U3→U5→U8→U4。部署继续冻结，不临时加入阶段B开关。
 
 第二笔提交（原规划者，回应草案复核）补两处规划缺口：
-- 旧登记包：三个旧 disarm 条目改为 `retired: true`。是否恢复发布交 Owner 在 #3751 选定：方案 A 按 git 树对象恢复发布（推荐）；方案 B 保留缺包诊断并改部署 SOP 预期。
+- 旧登记包：三个旧 disarm 条目改为 `retired: true`，并按 git 树对象恢复发布。Owner 已于 2026-10-17 选定该方案 A（[裁决记录](https://github.com/DUElost/stability-test-platform/issues/3751#issuecomment-6234224273)）；方案 B（保留缺包诊断并改部署 SOP 预期）未采用。
 - 保存入口：§3.0.2「新计划缺解除步骤必须拒绝」落到 U5，新增 v1.7 §3.6.5，写明入口、调用顺序、错误契约 `ONBOARDED_TEARDOWN_INVALID`（四种 reason，含旧合并版 finish）与真入口反例。
 
 ## Alternatives
@@ -40,10 +40,13 @@ U3/U5保留原issue/PR；保守集成为U3→U5→U8→U4。部署继续冻结�
 - 第二笔提交的门禁：`git diff --check` 通过；四份文档本地链接全部可解析；
   `env -i PATH="$PATH" HOME="$HOME" ./scripts/project_python.sh scripts/run_gates.py check:quick` 退出 0（16 gates）；
   `./scripts/project_python.sh scripts/run_pytest.py tests/ -q -x -p no:cacheprovider` 退出 0（2406 passed、18 skipped）。新 PR head 的 required CI 待现查。
+- 第三笔提交只回填 Owner 对 §3.6.3 的选择（方案 A）并删去方案 B 分支：`git diff --check` 通过；本地链接可解析；
+  `check:quick` 退出 0（16 gates）；`tests/test_internal_ip_leak_allowlist.py`、`tests/test_adr_index_status_2989.py`、`tests/test_governance_m7_board_3205.py` 13 passed。
+  `tests/` 根套件未重跑（与第二笔提交相比只改同四份文档的文字）。
 
 ## Revisit
 
 Owner对预算、模型增量、核验策略或部署姿态提出修改时重订正文并复核交叉引用。
 U3/U5新提交、原包恢复失配、共享文件重叠或实际协议落点超出scope时先刷新，再决定修订，不沿用旧快照。
-Owner 选定方案 B 时，U7 的部署 SOP 修改与跟踪 issue 要在激活前落地；#3661 若改用同一恢复工具，需另行核对其历史版本能否按树对象重建。
+#3661 若改用 `--publish-restored` 补包，需另行核对其历史版本能否按树对象重建。
 新增 PlanStep 写入口（如步骤启停接口）时，§3.6.5 的校验必须同时接入。

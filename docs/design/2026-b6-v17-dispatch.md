@@ -6,7 +6,7 @@
 
 ## 1. 规划收口的最后步骤
 
-1. 读取 Owner 在 #3751 或当前会话对提案 §6 五项及批次级旧包处置（v1.7 §3.6.3 方案 A / B）的原始裁决。
+1. 读取 Owner 在 #3751 或当前会话对提案 §6 五项的原始裁决。批次级旧包处置已于 2026-10-17 选定方案 A（[裁决记录](https://github.com/DUElost/stability-test-platform/issues/3751#issuecomment-6234224273)）。
 2. 如果存在退回、参数修改或尚未裁定项，停止派单并修订提案。
 3. 按裁决同步 Accepted ADR-0061；通过文档 PR 处理，保持未裁定部分为 Proposed。
 4. 把裁决链接写进 v1.7 正文 §2。
@@ -41,9 +41,9 @@ Owner 裁决前不得去掉“待裁决”而发布为正式实施规范。当�
 ```text
 你是 B6-U5 原实施者，继续 #3730 / draft PR #3747 / 原 Execution。
 先读 AGENTS.md、Agent scoped AGENTS、#3723全文与评论、Owner对 #3751 的裁决、实际diff与脚本版本SOP。
-硬前置：#3723已是获批v1.7，明确 §3.0.2、§3.6.2–5、§4 U5，且Owner已对 §3.6.3 选定方案A或B。缺少时只读准备，不编码。
+硬前置：#3723已是获批v1.7，明确 §3.0.2、§3.6.2–5、§4 U5。缺少时只读准备，不编码。§3.6.3 已由Owner选定方案A（#3751 裁决记录）。
 刷新origin/main/完整HEAD/开放PR/Registry --risk；保留原领单和全部scope，不重复declare。
-按 §3.1 把 plans.py、backend/tests/api 入口测试（方案A时再加 tools/dev/check_script_packages.py）并入原scope；update --scope 会整体替换，必须带上原有全部路径。
+按 §3.1 把 plans.py、backend/tests/api 入口测试、tools/dev/check_script_packages.py 并入原scope；update --scope 会整体替换，必须带上原有全部路径。
 
 只按 §3.1 U5 范围实施job实际版本角色helper和最小调用适配、等待上线轮询进度、脚本追加版本/pin与历史包处置、保存入口校验。
 旧finish1.0.x仍解除，新finish1.1.0只收取；未知/混合/缺版本必须按正文处理。
@@ -55,7 +55,7 @@ Owner 裁决前不得去掉“待裁决”而发布为正式实施规范。当�
 真实API三入口各跑「只有finish@1.1.0、没有disarm」反例（修前红/修后绿、无部分写入）及 §4.1 列出的拒绝/正向对照。
 plans.py 与U3的_dispatch_warnings同文件不同函数：U3合入后基于最新main集成，重跑入口验收。
 §3.6.3：三个旧disarm条目改 retired:true，不删除、不改SHA；按树对象恢复验SHA并在最终HEAD复核树对象可达。
-方案A：实现 --publish-restored 与自检，只在临时站点目录真实验证；方案B：不改工具。任何方案都不得写真实站点packages/。
+按方案A实现 --publish-restored 与自检，只在临时站点目录真实验证；不得写真实站点packages/。
 真实设备只用Owner指定独立MLD_LX2/LX3/NX2；缺设备时真机pending/空验证表/draft，不虚填。
 按 §4.2检查，最终完整SHA六项required CI、Agent Note与实际pending回告。
 保持draft；不得Ready/auto-merge/merge/publish/scan/热更新/重指/部署/生产设备操作；不得 #3739 危险变异。
