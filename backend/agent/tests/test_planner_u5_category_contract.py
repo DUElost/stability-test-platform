@@ -169,7 +169,50 @@ class TestUnverifiedCategorySemantics:
         assert output["success"] is False
 
 
+    def test_unverified_probe_clear_is_failed_not_executed_unverified(
+        self, monkeypatch
+    ):
+        """§3.6.1.3：未验证 probe + clear → failed / 不通过（不得 executed_unverified）。"""
+        mod = _load("planner_u5_probe_clear", "powercycle_disarm/powercycle_disarm.py")
+        _stub_common(mod, monkeypatch, verified_classes=[])
+        monkeypatch.setattr(
+            mod,
+            "_read_prefs_evidence",
+            lambda: {
+                "readback": "clear",
+                "running": False,
+                "auto_resume": False,
+                "evidence": {"kind": "ok"},
+            },
+        )
+        output = mod._run({"mode": "probe"})
+        assert output["evidence"]["verified_category"] is False
+        assert output["readback"] == "clear"
+        assert output["disarm_result"] == "failed"
+        assert output["success"] is False
+
+    def test_unverified_disarm_clear_keeps_executed_unverified(self, monkeypatch):
+        """已完成 disarm 的未验证 clear 仍保留 executed_unverified。"""
+        mod = _load("planner_u5_disarm_clear", "powercycle_disarm/powercycle_disarm.py")
+        _stub_common(mod, monkeypatch, verified_classes=[])
+        monkeypatch.setattr(
+            mod,
+            "_read_prefs_evidence",
+            lambda: {
+                "readback": "clear",
+                "running": False,
+                "auto_resume": False,
+                "evidence": {"kind": "ok"},
+            },
+        )
+        output = mod._run({"mode": "disarm"})
+        assert output["disarm_result"] == "executed_unverified"
+        assert output["success"] is True
+        assert output["readback"] == "clear"
+
+
 class TestAgentAggregationPath:
+
     def test_structured_executed_unverified_survives_mapper_and_payload(self):
         """脚本 → map_step_outcome（structured）→ 终态条目，不只测 helper。"""
         structured = "executed_unverified"
@@ -233,3 +276,42 @@ class TestAgentAggregationPath:
             )
             == DISARM_RESULT_FAILED
         )
+
+    def test_structured_failed_probe_survives_mapper_and_payload(self):
+        """未验证 probe 正式 failed 经 mapper / 终态载荷保持不通过。"""
+        structured = "failed"
+        mapped = map_step_outcome_to_disarm_result(
+            started=True,
+            success=False,
+            readback="clear",
+            onboarded_family=True,
+            structured_result=structured,
+            category_verified=False,
+        )
+        assert mapped == DISARM_RESULT_FAILED
+
+        payload = {
+            "disarm_result": "failed",
+            "readback": "clear",
+            "evidence": {"verified_category": False, "kind": "ok"},
+            "success": False,
+            "mode": "probe",
+        }
+        loaded = json.loads(json.dumps(payload))
+        assert loaded["disarm_result"] == "failed"
+        assert loaded["success"] is False
+        remapped = map_step_outcome_to_disarm_result(
+            started=True,
+            success=bool(loaded.get("success")),
+            readback=loaded.get("readback"),
+            onboarded_family=True,
+            structured_result=loaded.get("disarm_result"),
+            category_verified=bool(
+                (loaded.get("evidence") or {}).get("verified_category")
+            )
+            if isinstance(loaded.get("evidence"), dict)
+            and "verified_category" in (loaded.get("evidence") or {})
+            else None,
+        )
+        assert remapped == DISARM_RESULT_FAILED
+

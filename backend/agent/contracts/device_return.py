@@ -133,7 +133,7 @@ ONBOARDED: dict[str, Any] = {
         ),
         # 解除脚本与最低版本
         "disarm_script": "powercycle_disarm",
-        "disarm_min_version": "1.0.1",
+        "disarm_min_version": "1.0.2",
         "finish_script": "powercycle_finish",
         "finish_min_version": "1.1.0",
         # 探针模式（脚本参数 mode）

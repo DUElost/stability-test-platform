@@ -43,7 +43,7 @@ def finish_mod():
 
 class TestDisarmModes:
     def test_probe_clear_unverified_category(self, disarm_mod, monkeypatch):
-        """probe + clear + 未验证类别 → executed_unverified（不得假报 confirmed）。"""
+        """probe + clear + 未验证类别 → failed / success=false（§3.6.1.3）。"""
         monkeypatch.setattr(disarm_mod, "device_serial", lambda: "S-PROBE")
         monkeypatch.setattr(disarm_mod, "device_online", lambda: True)
         monkeypatch.setattr(disarm_mod, "_detect_platform", lambda: "MTK")
@@ -60,9 +60,11 @@ class TestDisarmModes:
             },
         )
         out = disarm_mod._run({"mode": "probe"})
-        assert out["disarm_result"] == "executed_unverified"
+        assert out["disarm_result"] == "failed"
         assert out["readback"] == "clear"
-        assert out["success"] is True
+        assert out["success"] is False
+        assert out["disarm_result"] != "confirmed"
+        assert out["disarm_result"] != "executed_unverified"
 
     def test_probe_clear_verified_category(self, disarm_mod, monkeypatch):
         monkeypatch.setattr(disarm_mod, "device_serial", lambda: "S-PROBE")
@@ -255,7 +257,7 @@ class TestOnboardedContract:
 
         spec = ONBOARDED["power-cycle"]
         assert spec["disarm_script"] == "powercycle_disarm"
-        assert spec["disarm_min_version"] == "1.0.1"
+        assert spec["disarm_min_version"] == "1.0.2"
         assert spec["finish_min_version"] == "1.1.0"
         assert "powercycle_disarm" in spec["min_wall_clock_seconds"]
         assert "powercycle_finish" in spec["min_wall_clock_seconds"]

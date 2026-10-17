@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 """开关机解除 / 探针（#3730 / #3723 §3.6 / ADR-0061 D2）。
 
+v1.0.2：§3.6.1.3 —— 未验证 **probe**（含原始 clear）不得 ``success=true`` /
+``executed_unverified`` 当通过；已完成 **disarm** 的未验证结果仍为
+``executed_unverified``。
 v1.0.1：按 #3723 v1.6 §3.6.1 区分类别语义——未验证类别不得输出正式
 ``confirmed`` / ``readback_failed``；解除已完成但无可信回读 → ``executed_unverified``。
 v1.0.0：与结果收取拆分——本脚本只负责足迹解除与回读，不拉结果文件。
@@ -30,9 +33,9 @@ stdout JSON（引擎解析 ``disarm_result`` / ``readback``）::
 
 原始 ``readback`` / evidence 可读失败时仍记 ``readback_failed``（诊断）。
 正式 ``disarm_result`` 依 v1.6 §3.6.1 / D2.5：已验证类别才可记正式
-``readback_failed`` / ``confirmed``；未验证且解除已完成但无可信读数 →
-``executed_unverified``；动作失败/未完成不得冒称已执行；未验证 probe 无可信
-判据不得作为 clear 通过。
+``readback_failed`` / ``confirmed``；未验证且 **disarm 已完成**（无可信读数或
+原始 clear）→ ``executed_unverified``；动作失败/未完成不得冒称已执行；
+未验证 **probe**（含原始 clear）→ ``failed`` / ``success=false``，不得当可信无足迹通过。
 已验证设备类别见共享契约 ``ONBOARDED["power-cycle"]["verified_device_classes"]``。
 """
 from __future__ import annotations
@@ -206,7 +209,9 @@ def _map_result(
     """原始 readback → 正式六值（v1.6 §3.6.1 / ADR-0061 D2.5）。
 
     - footprint → failed
-    - clear + 已验证 → confirmed；clear + 未验证 → executed_unverified
+    - clear + 已验证 → confirmed
+    - clear + 未验证 + disarm 已完成 → executed_unverified（不得 confirmed）
+    - clear + 未验证 + probe / 动作未完成 → failed（§3.6.1.3 不通过）
     - 原始 readback_failed：
         * 已验证 → 正式 readback_failed
         * 未验证 + disarm 已完成 → executed_unverified（保留原始诊断）
@@ -217,7 +222,11 @@ def _map_result(
     if readback == "clear":
         if verified:
             return _RESULT_CONFIRMED
-        return _RESULT_EXECUTED_UNVERIFIED
+        # §3.6.1.3：未验证 clear 仅在 disarm 已完成时报 executed_unverified；
+        # probe 不得把 clear 当可信无足迹通过。
+        if mode == "disarm" and action_completed:
+            return _RESULT_EXECUTED_UNVERIFIED
+        return _RESULT_FAILED
     # readback == "readback_failed"（及其它不可信）
     if verified:
         return _RESULT_READBACK_FAILED
