@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """开关机解除 / 探针（#3730 / #3723 §3.6 / ADR-0061 D2）。
 
+v1.0.1：按 #3723 v1.6 §3.6.1 区分类别语义——未验证类别不得输出正式
+``confirmed`` / ``readback_failed``；解除已完成但无可信回读 → ``executed_unverified``。
 v1.0.0：与结果收取拆分——本脚本只负责足迹解除与回读，不拉结果文件。
 
 参数（STP_STEP_PARAMS）::
@@ -26,9 +28,12 @@ stdout JSON（引擎解析 ``disarm_result`` / ``readback``）::
       "mode": "probe"|"disarm"
     }
 
-读不到时必须为 ``readback_failed``，不得报无足迹（D1.6 / §3.6.1）。
-已验证设备类别见共享契约 ``ONBOARDED["power-cycle"]["verified_device_classes"]``；
-未在清单内的类别即使回读 clear 也只能报 ``executed_unverified``。
+原始 ``readback`` / evidence 可读失败时仍记 ``readback_failed``（诊断）。
+正式 ``disarm_result`` 依 v1.6 §3.6.1 / D2.5：已验证类别才可记正式
+``readback_failed`` / ``confirmed``；未验证且解除已完成但无可信读数 →
+``executed_unverified``；动作失败/未完成不得冒称已执行；未验证 probe 无可信
+判据不得作为 clear 通过。
+已验证设备类别见共享契约 ``ONBOARDED["power-cycle"]["verified_device_classes"]``。
 """
 from __future__ import annotations
 
@@ -62,7 +67,7 @@ _DEFAULT_MODE = "disarm"
 # 已验证设备类别（platform + model）。必须与
 # ``device_return.ONBOARDED["power-cycle"]["verified_device_classes"]`` 保持一致。
 # 脚本包在 tools_cache 隔离执行，不能运行时 import 契约模块。
-# 本批真机验证 pending → 空清单；clear 回读只能报 executed_unverified（D2.5）。
+# 本批真机验证 pending → 空清单；不得虚填（D2.5 / v1.6 §3.6.1）。
 _VERIFIED_DEVICE_CLASSES: tuple[dict[str, str], ...] = ()
 
 
@@ -114,10 +119,24 @@ def _category_verified(platform: str, model: str) -> bool:
     return False
 
 
+def _resolve_category(cfg: dict, *, can_detect: bool) -> tuple[str, str, bool]:
+    """解析 platform/model 与是否已验证；离线时仅用 cfg 覆盖，缺省视为未验证。"""
+    platform = str(cfg.get("device_platform") or "").strip() or None
+    model = str(cfg.get("device_model") or "").strip() or None
+    if can_detect:
+        if platform is None:
+            platform = _detect_platform()
+        if model is None:
+            model = _detect_model()
+    platform = platform or "UNKNOWN"
+    model = model or ""
+    return platform, model, _category_verified(platform, model)
+
+
 def _read_prefs_evidence() -> dict[str, Any]:
     """root 优先回读 prefs，返回 evidence + 归一化 readback 状态。
 
-    readback:
+    readback（原始诊断，可与正式六值分离）:
       - clear: 可读且 running=false（无足迹）
       - footprint: 可读且 running=true 或 auto_resume=true
       - readback_failed: 读不到 / kind 非 ok
@@ -177,15 +196,61 @@ def _read_prefs_evidence() -> dict[str, Any]:
     }
 
 
-def _map_result(readback: str, *, verified: bool) -> str:
-    if readback == "readback_failed":
-        return _RESULT_READBACK_FAILED
+def _map_result(
+    readback: str,
+    *,
+    verified: bool,
+    mode: str,
+    action_completed: bool,
+) -> str:
+    """原始 readback → 正式六值（v1.6 §3.6.1 / ADR-0061 D2.5）。
+
+    - footprint → failed
+    - clear + 已验证 → confirmed；clear + 未验证 → executed_unverified
+    - 原始 readback_failed：
+        * 已验证 → 正式 readback_failed
+        * 未验证 + disarm 已完成 → executed_unverified（保留原始诊断）
+        * 未验证 + 动作未完成 / probe → failed（不得冒称已执行或可信回读失败）
+    """
     if readback == "footprint":
         return _RESULT_FAILED
-    # clear
+    if readback == "clear":
+        if verified:
+            return _RESULT_CONFIRMED
+        return _RESULT_EXECUTED_UNVERIFIED
+    # readback == "readback_failed"（及其它不可信）
     if verified:
-        return _RESULT_CONFIRMED
-    return _RESULT_EXECUTED_UNVERIFIED
+        return _RESULT_READBACK_FAILED
+    if mode == "disarm" and action_completed:
+        return _RESULT_EXECUTED_UNVERIFIED
+    return _RESULT_FAILED
+
+
+def _early_unreadable(
+    *,
+    mode: str,
+    serial: str,
+    summary: str,
+    evidence: dict[str, Any],
+    verified: bool,
+    platform: str,
+    model: str,
+) -> dict:
+    """离线 / 等待失败等：动作未完成，正式结果不得借未验证规则报成已执行。"""
+    formal = _RESULT_READBACK_FAILED if verified else _RESULT_FAILED
+    return {
+        "success": False,
+        "disarm_result": formal,
+        "readback": "readback_failed",
+        "readback_summary": summary,
+        "evidence": {
+            **evidence,
+            "platform": platform,
+            "model": model,
+            "verified_category": verified,
+        },
+        "mode": mode,
+    }
 
 
 def _run(cfg: dict) -> dict:
@@ -198,62 +263,66 @@ def _run(cfg: dict) -> dict:
         _DEFAULT_WAIT_ONLINE,
     )) or _DEFAULT_WAIT_ONLINE)
 
-    platform = str(cfg.get("device_platform") or "").strip() or None
-    model = str(cfg.get("device_model") or "").strip() or None
-
     serial = device_serial()
     progress_stamp({"phase": "powercycle_disarm", "mode": mode, "serial": serial})
 
     if mode == "disarm":
         if not _wait_device_online(wait_online):
-            # 等不到设备 = 本次无法回读，也未证明无足迹
-            return {
-                "success": False,
-                "disarm_result": _RESULT_READBACK_FAILED,
-                "readback": "readback_failed",
-                "readback_summary": f"设备 {serial} 在 {wait_online}s 内未上线，无法解除/回读",
-                "evidence": {"wait_device_online_seconds": wait_online, "online": False},
-                "mode": mode,
-            }
+            platform, model, verified = _resolve_category(cfg, can_detect=False)
+            return _early_unreadable(
+                mode=mode,
+                serial=serial,
+                summary=f"设备 {serial} 在 {wait_online}s 内未上线，无法解除/回读",
+                evidence={"wait_device_online_seconds": wait_online, "online": False},
+                verified=verified,
+                platform=platform,
+                model=model,
+            )
         force = str(param_or_env(cfg, "force_stop", "STP_POWER_CYCLE_FORCE_STOP", "true")).lower() == "true"
         try:
             stop_task(force=force)
         except Exception as exc:  # noqa: BLE001
-            # 解除动作失败仍尝试回读，由回读决定最终六值；读不到则 readback_failed
+            # 解除动作失败仍尝试回读；未取得 clear 时保留失败事实（不得冒称已执行）
             progress_stamp({"phase": "stop_task_error", "error": str(exc)[:200]})
             stop_error = str(exc)
         else:
             stop_error = ""
         time.sleep(1)
     else:
-        # probe：设备需可达才能读；不可达 → readback_failed
+        # probe：设备需可达才能读
         if not device_online():
-            return {
-                "success": False,
-                "disarm_result": _RESULT_READBACK_FAILED,
-                "readback": "readback_failed",
-                "readback_summary": f"设备 {serial} 离线，探针无法回读",
-                "evidence": {"online": False},
-                "mode": mode,
-            }
+            platform, model, verified = _resolve_category(cfg, can_detect=False)
+            return _early_unreadable(
+                mode=mode,
+                serial=serial,
+                summary=f"设备 {serial} 离线，探针无法回读",
+                evidence={"online": False},
+                verified=verified,
+                platform=platform,
+                model=model,
+            )
         stop_error = ""
 
-    if platform is None:
-        platform = _detect_platform()
-    if model is None:
-        model = _detect_model()
-    verified = _category_verified(platform, model)
+    platform, model, verified = _resolve_category(cfg, can_detect=True)
 
     snap = _read_prefs_evidence()
     readback = str(snap["readback"])
-    result = _map_result(readback, verified=verified)
+
     if stop_error and readback == "clear":
         # 停服务报错但回读已 clear：仍以回读为准（解除幂等）
-        pass
-    elif stop_error and readback == "footprint":
+        result = _map_result(
+            "clear", verified=verified, mode=mode, action_completed=True,
+        )
+    elif stop_error:
+        # 动作失败且未取得 clear：依 D1 保留失败事实
         result = _RESULT_FAILED
-    elif stop_error and readback == "readback_failed":
-        result = _RESULT_READBACK_FAILED
+    else:
+        result = _map_result(
+            readback,
+            verified=verified,
+            mode=mode,
+            action_completed=(mode == "disarm"),
+        )
 
     summary_parts = [
         f"mode={mode}",

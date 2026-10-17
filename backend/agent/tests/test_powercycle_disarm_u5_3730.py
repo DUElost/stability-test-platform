@@ -107,13 +107,43 @@ class TestDisarmModes:
         assert out["disarm_result"] == "failed"
         assert out["success"] is False
 
-    def test_read_failure_is_readback_failed_not_clear(self, disarm_mod, monkeypatch):
-        """读不到 → readback_failed，不得报无足迹。"""
+    def test_read_failure_keeps_raw_not_clear(self, disarm_mod, monkeypatch):
+        """原始读不到 → readback=readback_failed，不得报无足迹。
+
+        未验证类别正式结果不得为 readback_failed（v1.6 §3.6.1）；probe 无可信判据 → failed。
+        """
         monkeypatch.setattr(disarm_mod, "device_serial", lambda: "S-PROBE")
         monkeypatch.setattr(disarm_mod, "device_online", lambda: True)
         monkeypatch.setattr(disarm_mod, "_detect_platform", lambda: "MTK")
         monkeypatch.setattr(disarm_mod, "_detect_model", lambda: "MLD_LX3")
         monkeypatch.setattr(disarm_mod, "_load_verified_classes", lambda: [])
+        monkeypatch.setattr(
+            disarm_mod,
+            "_read_prefs_evidence",
+            lambda: {
+                "readback": "readback_failed",
+                "running": None,
+                "auto_resume": None,
+                "evidence": {"kind": "transient"},
+            },
+        )
+        out = disarm_mod._run({"mode": "probe"})
+        assert out["readback"] == "readback_failed"
+        assert out["disarm_result"] not in {"confirmed", "readback_failed", "clear"}
+        assert out["disarm_result"] == "failed"
+        assert out["success"] is False
+
+    def test_verified_read_failure_is_formal_readback_failed(self, disarm_mod, monkeypatch):
+        """已验证类别 + 读取失败 → 正式 readback_failed。"""
+        monkeypatch.setattr(disarm_mod, "device_serial", lambda: "S-PROBE")
+        monkeypatch.setattr(disarm_mod, "device_online", lambda: True)
+        monkeypatch.setattr(disarm_mod, "_detect_platform", lambda: "MTK")
+        monkeypatch.setattr(disarm_mod, "_detect_model", lambda: "MLD_LX3")
+        monkeypatch.setattr(
+            disarm_mod,
+            "_load_verified_classes",
+            lambda: [{"platform": "MTK", "model": "MLD_LX3"}],
+        )
         monkeypatch.setattr(
             disarm_mod,
             "_read_prefs_evidence",
@@ -225,7 +255,7 @@ class TestOnboardedContract:
 
         spec = ONBOARDED["power-cycle"]
         assert spec["disarm_script"] == "powercycle_disarm"
-        assert spec["disarm_min_version"] == "1.0.0"
+        assert spec["disarm_min_version"] == "1.0.1"
         assert spec["finish_min_version"] == "1.1.0"
         assert "powercycle_disarm" in spec["min_wall_clock_seconds"]
         assert "powercycle_finish" in spec["min_wall_clock_seconds"]

@@ -133,7 +133,7 @@ ONBOARDED: dict[str, Any] = {
         ),
         # 解除脚本与最低版本
         "disarm_script": "powercycle_disarm",
-        "disarm_min_version": "1.0.0",
+        "disarm_min_version": "1.0.1",
         "finish_script": "powercycle_finish",
         "finish_min_version": "1.1.0",
         # 探针模式（脚本参数 mode）
@@ -295,6 +295,7 @@ def map_step_outcome_to_disarm_result(
     skipped: bool = False,
     onboarded_family: bool = False,
     structured_result: Optional[str] = None,
+    category_verified: Optional[bool] = None,
 ) -> str:
     """Map a teardown step outcome to one of the six D1.2 machine values.
 
@@ -304,6 +305,10 @@ def map_step_outcome_to_disarm_result(
     script JSON) when valid; else success path is confirmed only for
     onboarded+readback ok, otherwise executed_unverified; failure → failed;
     readback_failed when marked.
+
+    ``category_verified``（v1.6 §3.6.1 最小适配）：仅当显式 ``False`` 时，
+    禁止把原始 readback_failed 提升为正式 readback_failed（成功路径 →
+    executed_unverified；失败路径 → failed）。``None``/``True`` 保持原 U1 语义。
     """
     if lease_lost:
         return DISARM_RESULT_NOT_EXECUTED
@@ -314,6 +319,10 @@ def map_step_outcome_to_disarm_result(
     if structured_result in DISARM_RESULTS:
         return structured_result
     if readback == "readback_failed":
+        if category_verified is False:
+            if success is True:
+                return DISARM_RESULT_EXECUTED_UNVERIFIED
+            return DISARM_RESULT_FAILED
         return DISARM_RESULT_READBACK_FAILED
     if success is True:
         if onboarded_family and readback == "clear":
