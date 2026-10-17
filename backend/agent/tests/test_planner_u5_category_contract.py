@@ -16,12 +16,27 @@ from backend.agent.contracts.device_return import (
 from backend.agent.tests.test_powercycle_disarm_u5_3730 import _load
 
 
+def _patch_advancing_clock(monkeypatch, mod, *, start: float = 1_000_000.0):
+    """sleep 推进假时钟，满足 #3202 守卫（禁止 no-op sleep）。"""
+    state = {"now": start}
+
+    def fake_time() -> float:
+        return state["now"]
+
+    def fake_sleep(seconds: float) -> None:
+        state["now"] += float(seconds)
+
+    monkeypatch.setattr(mod.time, "time", fake_time)
+    monkeypatch.setattr(mod.time, "sleep", fake_sleep)
+    return state
+
+
 def _stub_common(mod, monkeypatch, *, verified_classes):
     monkeypatch.setattr(mod, "device_serial", lambda: "ISOLATED-PLANNER")
     monkeypatch.setattr(mod, "_wait_device_online", lambda seconds: True)
     monkeypatch.setattr(mod, "device_online", lambda: True)
     monkeypatch.setattr(mod, "stop_task", lambda force=True: None)
-    monkeypatch.setattr(mod.time, "sleep", lambda seconds: None)
+    _patch_advancing_clock(monkeypatch, mod)
     monkeypatch.setattr(mod, "_detect_platform", lambda: "MTK")
     monkeypatch.setattr(mod, "_detect_model", lambda: "MLD_LX2")
     monkeypatch.setattr(mod, "_load_verified_classes", lambda: list(verified_classes))
