@@ -1,7 +1,7 @@
 """Device-return contract shared by Agent and control plane (ADR-0061 / #3723).
 
-U1 owns this module: machine values, FAMILY_STEPS, footprint helpers, lease-lost
-conflict handling, and EXECUTING_DISARM. ONBOARDED stays empty until U5.
+U1 owns machine values, FAMILY_STEPS, footprint helpers, lease-lost conflict
+handling, and EXECUTING_DISARM. U5 (#3730) appends power-cycle ONBOARDED only.
 """
 
 from __future__ import annotations
@@ -102,8 +102,54 @@ FAMILY_STEPS: dict[str, dict[str, tuple[str, ...]]] = {
     },
 }
 
-# §3.0 第 6 条 / U5：已接入专项契约。U1 只定义空结构，不登记任何专项。
-ONBOARDED: dict[str, Any] = {}
+# §3.0 第 2 / 6 条 / U5：已接入专项契约（本批仅 power-cycle）。
+# verified_device_classes 与 powercycle_disarm._VERIFIED_DEVICE_CLASSES 必须同步；
+# 真机未验证前保持空——clear 回读不得记 confirmed（ADR-0061 D2.5）。
+
+
+def _pc_disarm_min_wall(params: Mapping[str, Any] | None) -> int:
+    """disarm：wait_device_online_seconds + 60（#3723 §3.6 第 3 条）。"""
+    p = params or {}
+    wait = int(p.get("wait_device_online_seconds", 600) or 600)
+    return wait + 60
+
+
+def _pc_finish_min_wall(params: Mapping[str, Any] | None) -> int:
+    """finish：collect_attempts × collect_retry_wait_seconds + 60（#3723 §3.6 第 3 条）。"""
+    p = params or {}
+    attempts = max(1, int(p.get("collect_attempts", 3) or 3))
+    retry_wait = int(p.get("collect_retry_wait_seconds", 120) or 120)
+    return attempts * retry_wait + 60
+
+
+ONBOARDED: dict[str, Any] = {
+    "power-cycle": {
+        # 足迹清单（D2 第 1 条）
+        "footprints": (
+            "prefs:/data/data/com.tinno.autotesttool/shared_prefs/powercycle_runner.xml"
+            " (running, auto_resume)",
+            "service:com.tinno.autotesttool/"
+            "com.mediatek.schpwronoff.powercycle.PowerCycleService",
+        ),
+        # 解除脚本与最低版本
+        "disarm_script": "powercycle_disarm",
+        "disarm_min_version": "1.0.0",
+        "finish_script": "powercycle_finish",
+        "finish_min_version": "1.1.0",
+        # 探针模式（脚本参数 mode）
+        "probe_modes": ("probe", "disarm"),
+        # 已验证设备类别（device.platform + device.model）；空=尚未真机验证
+        "verified_device_classes": [],
+        # 解除预算秒数（默认参数下的墙钟下限，便于运维阅读）
+        "disarm_budget_seconds": 660,
+        "finish_budget_seconds": 420,
+        # 墙钟下限（Plan API / Agent 消费；callable 吃有效参数）
+        "min_wall_clock_seconds": {
+            "powercycle_disarm": _pc_disarm_min_wall,
+            "powercycle_finish": _pc_finish_min_wall,
+        },
+    },
+}
 
 
 def script_name_from_step(step: Mapping[str, Any]) -> str:
