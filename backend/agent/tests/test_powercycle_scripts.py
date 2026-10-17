@@ -550,13 +550,16 @@ class TestWaitDeviceOnline:
 
 
     def test_run_offline_timeout_raises(self, finish_mod_v101, monkeypatch):
-        """等待超时仍离线 → 明确报错（不静默丢结果）。"""
+        """v1.1.0：收取前等设备超时仍离线 → 明确报错（不静默丢结果）。"""
         monkeypatch.setattr(finish_mod_v101, "device_serial", lambda: "PC-S4")
         monkeypatch.setattr(finish_mod_v101, "device_online", lambda: False)
         _patch_advancing_clock(monkeypatch, finish_mod_v101)
         with pytest.raises(RuntimeError) as ei:
-            finish_mod_v101._run({"wait_device_online_seconds": 10})
-        assert "未上线" in str(ei.value)
+            finish_mod_v101._run({
+                "collect_attempts": 1,
+                "collect_retry_wait_seconds": 10,
+            })
+        assert "收取结果失败" in str(ei.value)
 
 
 
@@ -568,12 +571,13 @@ class TestCollectRetryV104:
         """按次失败的 pull：前 pull_fail_times 次 raise，之后返回本地文件。
 
         返回调用计数。``wait_seq`` 为 ``_wait_device_online`` 的返回序列（缺省恒 True）；
-        注意首个序列值被 pre-stop 就绪等待消费。
+        v1.1.0 起每次收取尝试（含首次）前都会消费一个序列值。
         """
         calls = {"pull": 0, "wait": 0}
         monkeypatch.setattr(mod, "device_serial", lambda: "PC-R1")
         monkeypatch.setattr(mod, "device_online", lambda: True)
-        monkeypatch.setattr(mod, "stop_task", lambda force=True: None)
+        # v1.1.0：finish 不再调用 stop_task；保留空补丁以免旧用例引用
+        monkeypatch.setattr(mod, "stop_task", lambda force=True: None, raising=False)
         _patch_advancing_clock(monkeypatch, mod)
 
         def fake_pull():
@@ -602,7 +606,7 @@ class TestCollectRetryV104:
         out = finish_mod_v104._run({})
         assert out["metrics"]["final_status"] == "PASS"
         assert calls["pull"] == 2
-        # pre-stop 就绪等待 1 次 + 重试前复检 1 次
+        # v1.1.0：每次尝试前等待——首次 1 次 + 重试前 1 次
         assert calls["wait"] == 2
 
     def test_all_attempts_fail_raise_with_history(self, finish_mod_v104, monkeypatch, tmp_path):
@@ -616,7 +620,7 @@ class TestCollectRetryV104:
         assert calls["pull"] == 3
 
     def test_wait_failure_stops_early(self, finish_mod_v104, monkeypatch, tmp_path):
-        """重试前等不回设备 → 早停，不再空拉（pre-stop 等待仍成功）。"""
+        """第二次尝试前等不回设备 → 早停，不再空拉（首次等待仍成功）。"""
         calls = self._patch(
             finish_mod_v104, monkeypatch, tmp_path, pull_fail_times=99,
             wait_seq=[True, False],
