@@ -53,6 +53,10 @@ Draft PR #3748 待规划确认与独立复核；合入不等于生效（阶段 B
 见本 PR 正文「门禁」。本轮补齐后：Planner 四反例 + 负向（PENDING 无足迹 / 错 token 409）
 落于 `backend/tests/services/test_planner_u3_contract_probes.py`；原 U3 行为 9 + SourceGuard 7；
 `test_alert_metric_producers` / `test_api_response_shape_contract` / audit retention guard。
+§3.4.1.2：预阶段 A `disarm_results=NULL` + teardown COMPLETED → unverified/stock（
+`test_planner_legacy_history_success.py`，含后续成功覆盖 / 后续失败不被遮蔽）。
+并发：`test_complete_and_extend_batch_same_job_no_deadlock` 因 U3 改走
+`handle_job_lease_release` 导致 barrier 挂死——已改 patch 点（非 required，但为本 PR 引入）。
 未跑 #3739 危险 cancel 变异。迁移 `down_revision=c3d4e5f6a7b8`（U2 head）。
 
 ## Revisit

@@ -1248,13 +1248,42 @@ def open_debts_for_host_sync(db: Session, host_id: str) -> list[dict[str, Any]]:
 # ── init (D1.7 / D5.11) ───────────────────────────────────────────────────
 
 
+def _history_disarm_results_for_job_sync(
+    db: Session,
+    job: JobInstance,
+) -> dict[str, dict[str, Any]]:
+    """§3.0.6 / §3.4.1.2: prefer stored disarm_results; else derive from StepTraces.
+
+    Pre-stage-A jobs often have NULL ``disarm_results`` (nullable column, no
+    backfill). Successful teardown COMPLETED must map to executed_unverified,
+    not incomplete-from-footprint-only.
+    """
+    results = _normalize_disarm_results(getattr(job, "disarm_results", None))
+    if results:
+        return results
+    # Lazy import avoids import cycles with agent_completion → device_return.
+    from backend.services.agent_completion import derive_disarm_results_from_traces
+
+    traces = list(
+        db.execute(select(StepTrace).where(StepTrace.job_id == job.id)).scalars().all()
+    )
+    derived = derive_disarm_results_from_traces(
+        getattr(job, "pipeline_def", None), traces
+    )
+    return _normalize_disarm_results(derived)
+
+
 def _history_result_for_family_sync(
     db: Session,
     *,
     device_id: int,
     family: str,
 ) -> tuple[JobInstance | None, str | None]:
-    """D1.7: latest ended job that left a footprint or reported disarm for family."""
+    """D1.7: latest ended job that left a footprint or reported/derived disarm for family.
+
+    Jobs are scanned newest-first by ``ended_at``, so a later successful disarm
+    covers older residue, and a later failure is not shadowed by an older success.
+    """
     jobs = list(
         db.execute(
             select(JobInstance)
@@ -1266,11 +1295,12 @@ def _history_result_for_family_sync(
         ).scalars().all()
     )
     for job in jobs:
-        results = _normalize_disarm_results(getattr(job, "disarm_results", None))
+        results = _history_disarm_results_for_job_sync(db, job)
         if family in results:
             return job, str(results[family].get("result") or "") or None
         footprints = _footprint_families_for_job_sync(db, job)
         if family in footprints:
+            # Footprint with neither stored nor derived disarm evidence → incomplete.
             return job, DISARM_RESULT_INCOMPLETE
     return None, None
 

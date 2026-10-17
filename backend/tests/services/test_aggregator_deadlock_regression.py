@@ -428,25 +428,29 @@ async def test_complete_and_extend_batch_same_job_no_deadlock():
 
     from backend.api.routes.agent_api import _ExtendBatchIn, extend_leases_batch
     from backend.services.agent_lease_extend import _ExtendBatchItemIn
-    from backend.services import lease_manager
 
     seed = _seed_plan_run_with_jobs(n_jobs=1)
     try:
         jid = seed["job_ids"][0]
         token = seed["tokens"][0]
         barrier = asyncio.Barrier(2)
-        orig_release = lease_manager.release_lease
+        # U3 (#3728): complete 经统一欠账入口 handle_job_lease_release，不再直接调
+        # lease_manager.release_lease。barrier 必须挂在真实调用点，否则 complete 侧
+        # 永不 wait，extend 侧永久饿死（pr-backend-tests-informational 60s 编排超时）。
+        from backend.services import device_return as device_return_svc
 
-        async def release_synced(db, device_id, job_id, lease_type=LeaseType.JOB):
+        orig_handle = device_return_svc.handle_job_lease_release
+
+        async def handle_synced(db, *, device_id, job_id, job=None):
             # Job 锁已持有；与 extend 同步后再碰 Lease，拉长交错窗口。
             await barrier.wait()
-            return await orig_release(db, device_id, job_id, lease_type)
+            return await orig_handle(db, device_id=device_id, job_id=job_id, job=job)
 
         async def _complete() -> object:
             async with AsyncSessionLocal() as db:
                 with patch(
-                    "backend.services.agent_completion.release_lease",
-                    release_synced,
+                    "backend.services.agent_completion.handle_job_lease_release",
+                    handle_synced,
                 ):
                     return await complete_job(
                         job_id=jid,
