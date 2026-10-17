@@ -7,7 +7,7 @@ from datetime import timedelta
 from backend.models.device_lease import DeviceLease
 from backend.models.device_return_debt import DeviceReturnDebt
 from backend.models.job import JobInstance, StepTrace
-from backend.models.enums import JobStatus, LeaseStatus, LeaseType
+from backend.models.enums import JobStatus
 from backend.services import device_return as dr
 from backend.tests.services.test_device_return_u3_3728 import _seed
 
