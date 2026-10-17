@@ -920,3 +920,28 @@ groups:
         annotations:
           summary: Disarm failed ratio above 5% for a family over 24h
           description: "专项 {{ $labels.family }} 过去 24 小时解除结果 failed 占比超过 5%（ADR-0061 D7.1 / #3723 §3.0 第 7 条）。查该专项 teardown / 解除脚本与设备侧回读证据。"
+
+  # #3723 U3 / ADR-0061 D7.2：欠账可观测（阶段 B）
+  - name: stability-platform-device-return-debt
+    rules:
+      - alert: StabilityDeviceReturnDebtOpenHigh
+        expr: sum(stp_device_return_debt_open) > 50
+        labels:
+          severity: warning
+        annotations:
+          summary: Open device-return debts exceed 50
+          description: "未关闭归还欠账条目总数超过 50（ADR-0061 D7.2 / #3723 §3.0 第 7 条）。查 device_return_debt 与清偿/人工放行路径。"
+      - alert: StabilityDeviceReturnDebtOldestHigh
+        expr: stp_device_return_debt_oldest_seconds > 86400
+        labels:
+          severity: warning
+        annotations:
+          summary: Oldest open device-return debt older than 24h
+          description: "最老未关闭归还欠账存续超过 86400 秒（ADR-0061 D7.2 / #3723 §3.0 第 7 条）。设备可能长期不可达或专项未接入，需现场恢复或人工放行。"
+      - alert: StabilityDeviceReturnOverrideHigh
+        expr: increase(stp_device_return_override_total[24h]) > 10
+        labels:
+          severity: warning
+        annotations:
+          summary: Device-return overrides exceeded 10 in 24h
+          description: "过去 24 小时人工放行次数超过 10（ADR-0061 D7.2 / #3723 §3.0 第 7 条）。探针或自动清偿可能失效。"

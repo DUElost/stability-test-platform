@@ -27,7 +27,7 @@ from backend.models.job import JobInstance
 from backend.models.plan_run import PlanRun
 from backend.services.aggregator import PlanAggregator
 from backend.services.errors import Conflict, NotFound
-from backend.services.lease_manager import release_lease
+from backend.services.device_return import handle_job_lease_release
 from backend.services.plan_dispatcher_core import (
     apply_dispatch_host_watcher_admin_state_to_policy,
     extract_dispatch_host_watcher_admin_states,
@@ -407,7 +407,9 @@ async def sync_agent_recovery(
                 job.ended_at = now
             except InvalidTransitionError:
                 pass
-            await release_lease(db, entry.device_id, entry.job_id, LeaseType.JOB)
+            await handle_job_lease_release(
+                db, device_id=entry.device_id, job_id=entry.job_id, job=job,
+            )
             await db.flush()
             if job.status == JobStatus.FAILED.value:
                 await PlanAggregator.on_job_terminal(job, db)
@@ -472,7 +474,9 @@ async def sync_agent_recovery(
                 ))
             else:
                 # Grace expired or state changed under lock
-                await release_lease(db, entry.device_id, entry.job_id, LeaseType.JOB)
+                await handle_job_lease_release(
+                    db, device_id=entry.device_id, job_id=entry.job_id, job=job,
+                )
                 job_actions.append(_RecoveryAction(
                     job_id=entry.job_id, device_id=entry.device_id,
                     action="CLEANUP", reason="unknown_grace_expired",
@@ -481,7 +485,9 @@ async def sync_agent_recovery(
 
         if job.status in _TERMINAL:
             # D5: terminal job with lingering ACTIVE lease → release, ABORT_LOCAL
-            await release_lease(db, entry.device_id, entry.job_id, LeaseType.JOB)
+            await handle_job_lease_release(
+                db, device_id=entry.device_id, job_id=entry.job_id, job=job,
+            )
             job_actions.append(_RecoveryAction(
                 job_id=entry.job_id, device_id=entry.device_id,
                 action="ABORT_LOCAL", reason="terminal_job_active_lease",

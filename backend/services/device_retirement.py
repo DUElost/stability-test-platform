@@ -31,6 +31,11 @@ from backend.models.job import JobInstance
 from backend.services.audit_writer import record_audit
 from backend.services.errors import Conflict, NotFound
 from backend.services.host_upgrade_gate import ACTIVE_JOB_STATUSES
+from backend.services.device_return import (
+    has_only_debt_lease_sync,
+    release_debt_lease_for_retirement_sync,
+    restore_debt_lease_on_unretire_sync,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -55,9 +60,10 @@ def _locked_device(db: Session, device_id: int) -> Device:
 
 
 def _assert_no_active_work(db: Session, device_id: int) -> None:
-    """E2 前置：活跃 Job 或 ACTIVE 租约即 409。
+    """E2 前置：活跃 Job 或非欠账 ACTIVE 租约即 409。
 
-    刻意**不检查** `status`（离线设备同样允许退役）与历史行（不删不阻断）。
+    ADR-0061 D5.8 / #3723 U3：仅有归还欠账租约时允许退役；退役事务内释放该租约，
+    未关闭欠账条目保持 open。刻意**不检查** `status` 与历史行。
     """
     active_jobs = (
         db.query(JobInstance)
@@ -80,7 +86,7 @@ def _assert_no_active_work(db: Session, device_id: int) -> None:
         )
         .count()
     )
-    if active_leases:
+    if active_leases and not has_only_debt_lease_sync(db, device_id):
         raise Conflict(
             f"设备有 {active_leases} 条 ACTIVE 租约，请等租约释放或按既有流程回收后再退役"
         )
@@ -152,6 +158,9 @@ def retire_device(
 
     _assert_no_active_work(db, device_id)
 
+    # D5.8：仅欠账租约时允许退役；同一事务内释放欠账租约，条目保持 open。
+    debt_lease_released = release_debt_lease_for_retirement_sync(db, device)
+
     before = _snapshot(device)
     device.retired_at = datetime.now(timezone.utc)
     device.retired_by = (actor_username or "").strip()[:128] or None
@@ -164,7 +173,12 @@ def retire_device(
         action="retire_device",
         resource_type="device",
         resource_id=device.id,
-        details={"reason": reason, "before": before, "after": _snapshot(device)},
+        details={
+            "reason": reason,
+            "before": before,
+            "after": _snapshot(device),
+            "debt_lease_released": bool(debt_lease_released),
+        },
         user_id=actor_id,
         username=actor_username,
         request=request,
@@ -200,7 +214,15 @@ def unretire_device(
     device.retired_at = None
     device.retire_alerted_at = None
 
-    details: dict[str, Any] = {"before": before, "after": _snapshot(device)}
+    # D5.8：取消退役时若仍有未关闭欠账，同一事务重建欠账租约。
+    restored = restore_debt_lease_on_unretire_sync(db, device)
+
+    details: dict[str, Any] = {
+        "before": before,
+        "after": _snapshot(device),
+        "debt_lease_restored": bool(restored),
+        "debt_fencing_token": restored.fencing_token if restored else None,
+    }
     if reason:
         details["reason"] = reason
     record_audit(

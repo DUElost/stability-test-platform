@@ -22,7 +22,7 @@ from backend.models.enums import TERMINAL_JOB_STATUSES, LeaseStatus, LeaseType
 from backend.models.job import JobInstance
 from backend.services.audit_writer import record_audit
 from backend.services.errors import Conflict, NotFound
-from backend.services.lease_manager import release_lease_sync
+from backend.services.device_return import handle_job_lease_release_sync, is_debt_lease
 
 
 @dataclass(frozen=True)
@@ -79,13 +79,21 @@ def release_terminal_job_lease(
         })
     if lease.status != LeaseStatus.ACTIVE.value:
         raise Conflict({"code": "LEASE_NOT_ACTIVE", "message": "租约不是 ACTIVE"})
+    if is_debt_lease(lease):
+        raise Conflict({
+            "code": "LEASE_IS_RETURN_DEBT",
+            "message": "不得紧急释放归还欠账租约（ADR-0061 D5.4）",
+        })
     if lease.lease_type != LeaseType.JOB.value:
         raise Conflict({"code": "LEASE_TYPE_NOT_JOB", "message": "租约类型不是 JOB"})
     if job is None or job.status not in TERMINAL_JOB_STATUSES:
         raise Conflict({"code": "JOB_NOT_TERMINAL", "message": "关联 job 不是终态"})
 
-    released = release_lease_sync(db, device_id, job.id, LeaseType.JOB)
-    if not released:
+    # ADR-0061 D5.3：紧急释放 JOB 租约改经统一入口（可能转为欠账租约）。
+    outcome = handle_job_lease_release_sync(
+        db, device_id=device_id, job_id=job.id, job=job,
+    )
+    if not outcome.released and not outcome.converted_to_debt:
         raise Conflict({"code": "LEASE_RELEASE_LOST", "message": "租约未释放"})
 
     record_audit(
@@ -106,9 +114,14 @@ def release_terminal_job_lease(
         strict=True,
     )
     db.commit()
+    status = (
+        LeaseStatus.RELEASED.value
+        if outcome.released
+        else LeaseType.MAINTENANCE.value  # converted in place; still ACTIVE debt
+    )
     return ReleasedLease(
         lease_id=lease.id,
         device_id=device_id,
         job_id=job.id,
-        status=LeaseStatus.RELEASED.value,
+        status=status,
     )

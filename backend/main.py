@@ -54,6 +54,7 @@ from backend.api.routes.pipeline import router as pipeline_router
 from backend.api.routes.scripts import router as scripts_router
 from backend.api.routes.script_presence import router as script_presence_router
 from backend.api.routes.agent_api import router as agent_api_router
+from backend.api.routes.agent_device_return import router as agent_device_return_router
 from backend.api.routes.resource_pools import router as resource_pools_router
 # ADR-0020: Plan-based orchestration
 from backend.api.routes.plans import router as plans_router
@@ -494,6 +495,7 @@ _fastapi_app.include_router(pipeline_router)
 _fastapi_app.include_router(scripts_router)
 _fastapi_app.include_router(script_presence_router)
 _fastapi_app.include_router(agent_api_router)
+_fastapi_app.include_router(agent_device_return_router)
 _fastapi_app.include_router(resource_pools_router)
 # ADR-0020: Plan-based orchestration
 _fastapi_app.include_router(plans_router)
