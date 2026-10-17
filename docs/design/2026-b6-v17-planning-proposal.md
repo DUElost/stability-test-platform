@@ -3,7 +3,7 @@
 > **状态：仅规划，不可编码。** 本稿是 Owner 裁决前的候选完整正文，不是已生效实施规范。当前 GitHub #3723 的有效版本仍为 v1.6。
 > ADR-0061 v1.1 [修订提案](2026-adr0061-v11-proposal.md) 尚未裁决，Owner 引用 pending；裁决后必须更新本稿和 #3723 权威正文，才能派发下述返修。
 > 本轮事实基线：`origin/main@945fcd4406cefa6299caa688376c9a54c2482868`（2026-10-17）；U3 #3748 `46ba633ee5e56afea836d9cb92bc2f16a68f95c4`；U5 #3747 `13a77c7fdd1097c70651a1961b20d0b8a063ded0`。
-> 原 §1 扫描、§3.2.1/§3.3.1/§3.3.2 的历史复核记录保留其原基线；新语义以本稿 §3.0、§3.4.2、§3.6.2–3.6.4、§3.8、§4 与 §5 为准。冲突必须退回，不得拼接旧新规则。
+> 原 §1 扫描、§3.2.1/§3.3.1/§3.3.2 的历史复核记录保留其原基线；新语义以本稿 §3.0、§3.4.2、§3.6.2–3.6.5、§3.8、§4 与 §5 为准。冲突必须退回，不得拼接旧新规则。
 
 > 历史基线：`origin/main@2c4906311`（2026-10-14）；§1 的缺陷与 §1.1–§1.3 的调用点均在该基线直读确认，行号以该基线为准。
 > 派单复查：`origin/main@f1bc61990`（2026-10-15，#3719 合入后）；相对基线只改依赖锁（`backend/requirements*.lock`、`backend/requirements.txt`），本批源码锚点不变。
@@ -86,6 +86,10 @@ v1.5 补充：新执行状态的控制面消费者及通用 recycler 解除终�
 D2.5 选定结构化422拒绝；普通/迟到/清偿/init 统一政策见 §3.8。部署继续冻结；不新增阶段 B 开关。
 Owner 要求持续部署时必须另提开关、迁移与回退裁决，不得由实施者临时实现。
 
+另有一项批次级裁决，不改 ADR 正文，与上述模型项同在 #3751 裁决：旧登记包 `powercycle_disarm` 1.0.0–1.0.2 的处置（§3.6.3）。
+规划者推荐方案 A：退役，并按 git 树对象恢复发布；备选方案 B：退役，保留缺包诊断并改部署 SOP 的预期。
+Owner 必须在两者中选定一个；U5 在选定前不得实现 §3.6.3 第 3 条起的条目。
+
 ## 3. 实施分组、版本与档位
 
 ### 3.0 本批确定的实现约定（ADR-0061 授权方案确定的事项）
@@ -113,9 +117,14 @@ Owner 要求持续部署时必须另提开关、迁移与回退裁决，不得�
      自然结束还执行收取步骤。新 finish 的收取失败不得覆盖已完成的 disarm。
      同专项多次解除按发生顺序取最后真实执行结果；后续 SKIPPED 不覆盖已经完成的结果。
    - **未知/缺版本**：新派发必须先从 manifest 解析并冻结版本/包 SHA；解析不了则拒绝派发并报告，不猜默认最新版本。
+     现有派发已满足本句，不新增派发实现：lifecycle 组装把步骤 `version` 写入 `pipeline_def`（`plan_dispatcher_core.py` 的
+     `build_lifecycle_from_steps` / `build_lifecycle_from_snapshot`）；保存入口 `_validate_script_refs` 与派发取元数据只接受 `is_active` 的版本；
+     包 SHA 由（name, version）在 append-only manifest 中唯一确定；U8 政策必须按此派生，`disarm_guard` 记录的包 SHA 必须等于该派生值。
      历史 job 缺版本或未知版本的 `powercycle_finish` 必须保守保留为潜在解除义务，执行其完整 teardown，记录 `unknown_legacy_version`；
      未知 `powercycle_disarm` 同样保留解除义务。成功最多 executed_unverified，无执行证据则 not_executed/已开始被中断则 incomplete。
-     已知只有 finish@1.1.0 且无解除步骤的有足迹 job 必须记 not_executed，不把收取当解除；新计划该形态必须拒绝。
+     已知只有 finish@1.1.0 且无解除步骤的有足迹 job 必须记 not_executed，不把收取当解除。
+     控制面必须在 Plan 保存入口拒绝不符合接入形态的已接入专项计划（缺登记解除步骤，或仍用旧合并版 finish），由 U5 按 §3.6.5 实施；
+     该校验不得阻断步骤未修改的存量计划派发。
 
 3. **足迹判定**：job 的 `init` 中，`FAMILY_STEPS` 所列步骤一旦开始执行，即视为建立了该专项足迹（保守取「开始」而非「完成」）。
 4. **D3 第 7 条冲突处理**：Agent 在 teardown 前或期间发现本 job 租约已失（`extend_lock` 返回 409）时，不得执行解除，回报 `not_executed`（原因 `lease_lost`）。清偿与 init 检查只在持有对应租约（欠账租约令牌或本 job 租约）时执行。
@@ -165,6 +174,9 @@ U1 #3733 已合入 `611e777d5a87e1907508fb9be2eebff6adfca2b5`；U2 #3734 已合�
   CLI/初始化PG测试和原Agent Note。其余既有PR差异保持原验收，不顺带承接新guard/类别政策。
 - U5：`backend/agent/contracts/device_return.py`中实际版本角色helper与登记；`backend/agent/scripts/powercycle_disarm/`的轮询进度；
   必需的Agent调用签名适配；`tool_manifest.json`、powercycle模板/pin、相应测试及原Note。既有finish@1.1.0包内容不变。
+  §3.6.5 的保存入口校验：共享契约中的纯函数，`backend/api/routes/plans.py` 三个保存入口的调用，`backend/tests/api/` 下的入口测试。
+  Owner 选定 §3.6.3 方案 A 时，另含 `tools/dev/check_script_packages.py` 的 `--publish-restored` 模式及其自检。
+  U5 必须把这些路径并入原 Execution 的完整 scope（`ai_work.py update --scope` 会整体替换，必须保留原有路径）。
 - U8：共享契约的guard协议/结果优先级/类别政策；`pipeline_engine.py`、`api_client.py`、`pipeline_runner.py`、`coordinator.py`、`lease_renewer.py`、
   `backend/agent/registry/local_db.py`的持久恢复；`backend/models/job.py`及新增alembic revision；`backend/api/schemas/run.py`、`backend/api/schemas/agent.py`、
   `backend/api/routes/agent_api.py`与 `backend/services/agent_lease_extend.py`、`agent_coordinator_heartbeat.py` 接收服务；`backend/services/plan_run_abort.py`中最早退出锚点的必要接线；
@@ -177,6 +189,8 @@ U1 #3733 已合入 `611e777d5a87e1907508fb9be2eebff6adfca2b5`；U2 #3734 已合�
 
 保守合入顺序：U3 → U5 → U8 → U4；U6在U3后可独立推进；U7在U8后推进。
 Owner裁决且发布v1.7后，U3与U5仅在实际文件无交叉时可并行返修；U5必要的pipeline_engine适配不得与U8并发。
+U3 与 U5 都修改 `backend/api/routes/plans.py`，但位于不同函数（U3 为 `_dispatch_warnings`，U5 为 §3.6.5 的保存入口校验）。
+两者可以并行开发；U5 必须在 U3 合入后基于最新 origin/main 集成，并重跑 §3.6.5 与 §4.1 U5 的入口验收。
 U8以同时包含U3/U5的当时最新origin/main开独立分支、PR目标main，不采用stacked PR，不复制父分支diff。
 
 ### 3.2 U1 修复内容
@@ -376,17 +390,62 @@ U5必须追加 `powercycle_disarm@1.0.3`，同步ONBOARDED最低版本、模板p
 若1.0.3已被并发登记或登记后内容变化，U5必须顺延下一patch并同步 §3.1、本节、§5发布清单和原PR，报告实际最终版本/包SHA；
 不得用旧包证据代签新包。版本变化是append-only执行规则，不授权改变本稿语义。
 
-以下已冻结条目全部保留，不因未publish删除、改SHA或标记退役。本轮不执行退役；旧disarm版本不进入本批发布清单，
-将来退役必须另按ADR-0051 D5查零引用并授权。2026-10-17规划者已从下列提交本地确定性重建，四项SHA均匹配：
+以下条目全部保留登记。任何人不得删除条目、改 SHA 或复用其版本号。
+2026-10-17 本稿首版作者已在临时目录确定性重建四项，SHA 均与 manifest 一致；原规划者（B6 v1.0 作者）复核时另按树对象重建三个旧 disarm 版本，结果相同（只读，未写站点）：
 
-- `powercycle_disarm@1.0.0`：source `74c3bdd3684457c16f8650b6a89d8d166ed5de2b`；SHA `d51f38397e01374d888e422a574387bb1b7c2f5fc626a815671972e53b37f5f9`。
-- `powercycle_disarm@1.0.1`：source `f906b4e19a918fc04cf0fc8e421b6b8ef0ebea09`；SHA `4fc50d485272d8107e98d778b7fe0c7ce7af7572b54203e23653e708e319b064`。
-- `powercycle_disarm@1.0.2`：source `13a77c7fdd1097c70651a1961b20d0b8a063ded0`；SHA `9c9453ba59fb556e217af319be4212e50766917b6bf95015a2441871f492a9d1`。
-- `powercycle_finish@1.1.0`：source `74c3bdd3684457c16f8650b6a89d8d166ed5de2b`；SHA `76d9883df880d2156f016db6bc8adcf902f978ae87690331181b07c897ec1aff`。
+| 条目 | 源提交（追溯用） | 族树对象（恢复锚点） | package_sha256 |
+|---|---|---|---|
+| `powercycle_disarm@1.0.0` | `74c3bdd3684457c16f8650b6a89d8d166ed5de2b` | `9943ccae94c232151ee7ce826deecd355485a50e` | `d51f38397e01374d888e422a574387bb1b7c2f5fc626a815671972e53b37f5f9` |
+| `powercycle_disarm@1.0.1` | `f906b4e19a918fc04cf0fc8e421b6b8ef0ebea09` | `153c867d9bc2438144506884625b1d66749becd5` | `4fc50d485272d8107e98d778b7fe0c7ce7af7572b54203e23653e708e319b064` |
+| `powercycle_disarm@1.0.2` | `13a77c7fdd1097c70651a1961b20d0b8a063ded0` | `1fdf49a42f9ed3bae7a453302ce147db9909cf03` | `9c9453ba59fb556e217af319be4212e50766917b6bf95015a2441871f492a9d1` |
+| `powercycle_finish@1.1.0`（最新版，由 `--publish` 从当前族树发布） | `74c3bdd3684457c16f8650b6a89d8d166ed5de2b` | `32e4209696cafa15f234492a699ec5655def4272` | `76d9883df880d2156f016db6bc8adcf902f978ae87690331181b07c897ec1aff` |
 
-恢复方法：从对应提交用 `git archive <commit> backend/agent/scripts/<family>` 解到临时目录，按该提交的
-`git ls-tree -r --name-only`列出相对包成员，调用 `tools/dev/package_tool_asset.py::build_deterministic_tar_gz`，
-比较对应manifest的package_sha256；只构建本地临时文件，不写站点packages/。U5提交前必须复核旧项仍可恢复。
+恢复方法：以族树对象为锚点。树对象按内容寻址，rebase 后不变；提交号只用于追溯。
+用 `git archive <树对象>` 解到临时目录，用 `git ls-tree -r --name-only <树对象>` 列出包成员，
+调用 `tools/dev/package_tool_asset.py::build_deterministic_tar_gz`，比较 manifest 的 `package_sha256`。
+U5 必须在最终 HEAD 运行 `git rev-list --objects <最终HEAD> -- backend/agent/scripts/powercycle_disarm`，
+确认三个旧树对象都在输出中，再按树对象重建并核对 SHA。
+
+**缺包事实**（2026-10-17 原规划者核对 main `945fcd440`）：
+
+- `check_script_packages.py --publish` 只发布每族最新的未退役条目（`publish_latest`），三个旧 disarm 版本不会随之发布。
+- scan 对站点缺包的条目记 `package_missing`。`retired: true` 但库内没有对应行的条目，scan 仍会读包建一条 inactive 行，
+  读不到包同样记 `package_missing`（`backend/services/script_catalog.py` 退役分支）。三个旧版本只登记在未合入的 U5 分支、从未发布，库内不会有它们的行，所以只做退役消不掉该诊断。
+- 部署 SOP 把 #3661 存量以外的 `package_missing` 定为停止条件（`.claude/skills/control-plane-deploy/SKILL.md` 阶段 B 第 4、5 步）。
+  保留缺包而不改 SOP，此后每次部署都会在该步停下。
+- 原稿「保留登记、不退役、不发布」还留下一个隐患：日后若有人补发这些包，scan 会把三个旧版本建成 active 行，带已知缺陷的版本将可被计划选用。
+
+**处置**：Owner 必须在 #3751 选定方案 A 或方案 B；规划者推荐方案 A。U5 选定前只能实现两方案的共同部分。
+
+两方案的共同部分：
+
+1. U5 必须在原 PR 中把 `powercycle_disarm` 1.0.0、1.0.1、1.0.2 三个条目改为 `retired: true`。
+   这是 `check_tool_manifest.py` 允许的单向翻转。三者只登记在未合入的 U5 分支、从未发布；激活前的零引用由第 2 条复核。
+2. 激活执行者必须在 scan 前按 [`production-diagnostics.md`](../operations/production-diagnostics.md) 的只读身份运行：
+   `SELECT count(*) FROM plan_step WHERE script_name = 'powercycle_disarm' AND script_version IN ('1.0.0', '1.0.1', '1.0.2');`
+   预期：0。如果不为 0，执行者必须停止激活并报告 Owner。
+
+方案 A（推荐）：恢复发布旧包，scan 不新增缺包。
+
+3. U5 必须为 `tools/dev/check_script_packages.py` 增加 `--publish-restored NAME@VERSION --source-tree TREE --packages-root DIR` 模式。
+   该模式必须按上面的恢复方法从树对象重建包；重建 SHA 等于 manifest 条目时才写站点，否则必须拒绝。
+   站点已有同字节包时必须跳过；已有不同字节时必须拒绝。写入必须沿用 `publish_latest` 的临时文件加 `os.replace`；解包必须使用 `tarfile` 的 `filter="data"`。
+   该模式只能写入 `packages/<NAME>/<VERSION>.tar.gz` 一个文件，不得改写 `tool_manifest.json` 或站点 `packages/manifest.json`。
+4. U5 必须为该模式补自检：SHA 一致时写入、SHA 不一致时拒绝、同字节跳过、异字节拒绝、条目不存在时拒绝。
+   U5 还必须在临时站点目录对三个旧版本各真实运行一次，报告重建 SHA 与写入结果。
+5. 激活执行者必须在 §5 第 2 步先运行 `--publish`，再对三个旧版本各运行一次 `--publish-restored`，然后 scan。
+   预期：scan 响应的 `package_missing` 只含 #3661 的存量条目，不含 `powercycle_disarm` 或 `powercycle_finish`；
+   `GET /api/v1/scripts?is_active=false` 的 `data` 含三个旧 disarm 版本，`GET /api/v1/scripts?is_active=true` 的 `data` 含 disarm 最终版与 `powercycle_finish@1.1.0`。
+   该模式同样可以用于 #3661 的同类缺口；本批不承接 #3661。
+
+方案 B（备选）：保留缺包诊断。
+
+3. 激活执行者不发布三个旧包；此后每次 scan 都会把它们记为 `package_missing`。
+4. U7 必须在部署 SOP 阶段 B 第 4、5 步的预期中加入这三个条目，并另立跟踪 issue 写明出口（日后按方案 A 的恢复方法补发）。
+   SOP 修改合入前，部署执行者必须在该步停下并请 Owner 确认，不得把这三条当作已获准的缺包。
+
+方案 A 比方案 B 多一个工具模式和一次激活步骤，换来 scan 无新增常驻诊断，旧版本在库内也有 inactive 行（与 scan「登记即有身份」的约定一致）。
+方案 B 不改工具，但部署 SOP 的预期清单会长期多出三条。
 
 ### 3.6.4 真机与最终包（v1.7）
 
@@ -394,6 +453,43 @@ MTK MLD_LX2/LX3/NX2的有/无足迹、重启续跑行为和读取失败识别必
 三类当前均pending，verified_device_classes仍为空。Owner未指定独立测试设备时只能代码预审，不能签U5最终通过。
 展锐Z2581/Z2582仍不纳入；不得借用忙设备、扫描生产或虚填已验证类别。
 验证组合必须满足 §3.8，不以修改参数声明类别替代实际事实。
+
+### 3.6.5 Plan 保存入口的接入形态校验（v1.7，U5）
+
+本节落实 §3.0.2 末句，承接单元为 U5。只收取的 `powercycle_finish@1.1.0` 由 U5 拆出；ADR-0061 D2 第 4 条要求同一 PR 更新契约，
+因此不符合接入形态的计划（缺解除步骤，或仍用旧合并版 finish）也由 U5 在同一 PR 封住。U8 不得重复实现本节。
+
+1. U5 必须在共享契约 `backend/agent/contracts/device_return.py` 增加纯函数：输入为 PlanStep 形态的步骤列表与 `ONBOARDED`，输出缺口列表。
+   该函数必须复用 §3.0.2 的 job 级步骤角色 helper，不得另写脚本名或版本判断。
+2. 判定规则：对每个已在 `ONBOARDED` 登记的专项，如果计划含该专项启用的 init 足迹步骤（`FAMILY_STEPS[专项]["footprint"]`），
+   启用的 teardown 必须是拆分后的接入形态：至少有一个该专项登记的解除脚本（`disarm_onboarded`，本批为 `powercycle_disarm`），
+   版本不低于 `disarm_min_version`；启用的 `powercycle_finish` 版本不低于 `finish_min_version`。版本按数字段比较（`1.0.10` 高于 `1.0.3`）。
+   控制面必须按下表拒绝，每个违规项带一个 `reason`：
+
+   | 形态 | `reason` |
+   |---|---|
+   | teardown 只有 `powercycle_finish@1.1.0`，没有解除步骤（主反例）；或 teardown 没有任何开关机步骤 | `disarm_missing` |
+   | 解除步骤存在，但全部 `enabled=false` | `disarm_disabled` |
+   | 启用的解除步骤版本都低于 `disarm_min_version` | `disarm_below_min_version` |
+   | 启用的 `powercycle_finish` 低于 `finish_min_version`（旧合并版 1.0.x，无论是否另有解除步骤） | `finish_below_min_version` |
+
+   旧合并版 finish 被拒有两个原因：§3.0.2 只为已冻结的历史 job 保留它的解除角色；
+   登记的 `min_wall_clock_seconds` 公式只覆盖 1.1.0 的收取预算，套在 1.0.x 上会低估其等待预算，M6 会重现。
+   这一项也让 `ONBOARDED` 中的 `disarm_min_version`、`finish_min_version` 有了生产消费方。
+   计划没有启用的足迹步骤时（例如只收取结果的计划），本节不约束该计划。
+3. U5 必须在 `backend/api/routes/plans.py` 的三个保存入口调用该校验：`POST /plans`；`PUT /plans/{plan_id}`（仅当请求携带 `steps`）；
+   `POST /plans/{plan_id}/append-chain-tail`。调用位置必须在 `_validate_script_refs` 之后、`_validate_onboarded_wall_clock` 之前；
+   同一请求同时违反本节规则与墙钟预算时，控制面必须返回本节错误。
+   `PUT` 携带的 `steps` 与原步骤相同也必须校验（与墙钟校验一致）；存量旧计划因此必须先重指，才能再次携带 `steps` 保存。
+   2026-10-17 核对 main `945fcd440`：除历史 alembic 迁移外，PlanStep 只在这三个入口写入（`plans.py` 三处 `db.add(PlanStep(`）；
+   没有原地改 `plan_step` 的接口，也没有单独的步骤启停接口。
+4. 错误契约：HTTP 422，`detail.code` 为 `ONBOARDED_TEARDOWN_INVALID`，`detail.message` 写明 ADR-0061 D2、D8 第 3 条与 #3723 §3.6.5。
+   `detail.violations` 每项必须包含 `family`、`reason`（第 2 条表中的值）、`footprint_step_keys`、`required_disarm_script`、
+   `disarm_min_version`、`finish_min_version`，以及 `teardown_steps`（该专项相关 teardown 步骤的 `step_key`、`script_name`、`script_version`、`enabled`、`role`）。
+   一个专项命中多条时，控制面必须每条各给一个违规项。控制面拒绝时不得部分写入 Plan / PlanStep；`PUT` 被拒后原步骤必须保持不变。
+5. 本校验只作用于保存入口。控制面不得因本节阻断步骤未修改的存量计划派发：
+   存量计划在运行时按 §3.0.2 的 job 级角色处理，在用计划由 §5 第 4 步经 Owner 确认重指。
+6. U5 必须保持 U2 墙钟矩阵（§3.3.1、§3.3.2 C）原有结论；只有同一请求同时触发两类问题、按第 3 条改为返回本节错误码的用例，才可以调整断言，并必须在 PR 中逐条列出。
 
 ### 3.7 U6、U7 修复内容
 
@@ -431,7 +527,7 @@ expected/observed组合及报告引用；不自动归一化，不部分修改，
 | U2 | 迁移在空库 upgrade / downgrade；带与不带 `disarm_results` 的 `/complete`（后者按推导表）；reaper：`EXECUTING_DISARM` 且进度新鲜时不回收、超上限或进度中断时回收；墙钟按 §3.3.1 验收（省略也必须拒绝、显式值原样下发、三入口与有效参数）；指标计数；告警规则 promtool 测试；v1.5 追加回收消费者、乱序 trace 与三入口错误矩阵按 §3.3.2 执行 |
 | U3 | 11 处 SourceGuard；终态转换与 claim 并发由唯一索引仲裁；部分清偿不释放租约；迟到回报只关闭同源条目；重放不产生第二个条目；人工放行记 `unverified`/`override` 且写审计；带欠账退役释放租约、条目保持 `open`，取消退役同一事务重建租约；初始化两款（空闲建租约、被占只写条目）与重复执行幂等；reconciler 与紧急释放不释放欠账租约；准入原因与预览告警 |
 | U4 | 心跳下发欠账 → 重连后清偿并回报令牌；过期令牌被拒；init 检查命中 → 解除 → `confirmed` 后继续；解除失败 → init 失败；控制面未下发字段 → 不动作 |
-| U5 | `probe` / `disarm` 两种模式；读取诊断与类别核验按 §3.6.1/§3.8；`powercycle_finish` 1.1.0 不改 prefs；模板 pin 与 manifest 守卫；真机验证报告 |
+| U5 | `probe` / `disarm` 两种模式；读取诊断与类别核验按 §3.6.1/§3.8；`powercycle_finish` 1.1.0 不改 prefs；模板 pin 与 manifest 守卫；Plan 保存入口拒绝不符合接入形态的计划（§3.6.5）；旧条目退役及选定方案的恢复发布（§3.6.3）；真机验证报告 |
 | U6 | 组件测试：解除结果、欠账、放行表单必填项、预览告警 |
 | U7 | 文档链接与治理面门禁；写作约定自查 |
 
@@ -443,6 +539,17 @@ expected/observed组合及报告引用；不自动归一化，不部分修改，
   新disarm+finish@1.1.0的manual_exit只解除、自然结束按序二者；混合、未知、缺版本和只有收取步骤反向对照；
   模拟重启离线超过60s后上线，15s以内真实轮询戳可连续推进；600s内部预算/660s外墙到期及失租立即退出；
   probe/disarm类别矩阵保留；真实Engine汇总到runner载荷；最终包三类真机验证；四冻结包可恢复、append-only、最低版本/模板一致。
+- U5（§3.6.5 保存入口）：用真实 API 在 `POST /plans`、`PUT /plans/{plan_id}`、`POST /plans/{plan_id}/append-chain-tail` 三个入口
+  各提交一次「init 含 `powercycle_setup`、teardown 只有 `powercycle_finish@1.1.0`」的计划，墙钟取满足预算的值。
+  当前 U5 HEAD 没有此校验，修复前必须红；修复后必须返回 422 `ONBOARDED_TEARDOWN_INVALID`、`reason=disarm_missing` 与完整 violations，
+  且 Plan / PlanStep 无部分写入，`PUT` 后原步骤不变，append 后没有新增尾计划。
+  拒绝对照（至少走一个真实入口）：teardown 无开关机步骤（`disarm_missing`）、解除步骤禁用（`disarm_disabled`）、
+  解除版本低于最低版本（`disarm_below_min_version`）、只有旧 `powercycle_finish@1.0.x` 及 disarm 加旧 finish（`finish_below_min_version`）。
+  正向对照：`powercycle_disarm` 最终版加 `finish@1.1.0` 保存成功；没有足迹步骤的只收取计划保存成功；步骤未修改的存量旧计划仍能派发。
+  同一请求同时违反本节规则与墙钟预算时返回本节错误码。不得只测纯函数。
+- U5（§3.6.3，Owner 选定方案 A 时）：`--publish-restored` 自检五项；在临时站点目录对三个旧版本真实重建并写入，SHA 与 manifest 一致；
+  对同一目录重跑得到「同字节跳过」；改写一个已落位文件后重跑必须拒绝。三个旧条目为 `retired: true`，`check_tool_manifest.py --base origin/main` 与 `check_script_packages.py` 通过。
+  选定方案 B 时只验后一句。
 - U8：真实隔离PG reaper→extend-batch在abort+61s合法queue下保持RUNNING/renewed；
   同host至少11job/permit=1跨旧60s阈值（有限虚拟时钟推进到61s以上，真实策略/数据库路径，不做长时间裸sleep）；
   Q内都可尝试解除，Q外/整job上限/步骤E耗尽按incomplete交接；至少1条覆盖6600s排队后仍有660s执行窗口。
@@ -488,8 +595,10 @@ lint、CodeQL、pr-typecheck、pr-compileall、pr-agent-tests、pr-migrate-empty
    U1–U8均合入；同一最终集成SHA检查、三类最终包真机证据和required CI完成。历史U1/U2通过不代签U8。
 1. 继续部署冻结。Owner另开激活授权和维护窗口，先确定暂停派发/排空旧job/能力核验/恢复步骤与回退；
    本稿不授权任何production动作。原v1.6“先新Agent后旧控制面”不能证明新协议保证，不能直接照旧执行。
-2. 发布清单候选仅 `powercycle_disarm@1.0.3`（实际顺延时三处同步）与 `powercycle_finish@1.1.0`。
-   执行者必须核验最终manifest包SHA；disarm1.0.0/1.0.1/1.0.2保留登记、可恢复但不进入本批发布，不执行退役。
+2. `--publish` 发布 `powercycle_disarm@1.0.3`（实际顺延时三处同步）与 `powercycle_finish@1.1.0`；执行者必须核验最终 manifest 包 SHA。
+   disarm 1.0.0/1.0.1/1.0.2 在 U5 中已改为 `retired: true`。执行者必须先按 §3.6.3 第 2 条复核零引用，再按 Owner 的选择处理：
+   方案 A 时，对三者各运行一次 `--publish-restored`，然后 scan；
+   方案 B 时，不发布三者，scan 的 `package_missing` 按 §3.6.3 方案 B 第 4 条更新后的部署 SOP 判读。
    publish/scan仍需整批激活授权。
 3. 维护窗口内按ADR修订 §4完成协调升级：先兼容控制面和nullable迁移，再Agent能力核验，全部guard协议可用后恢复派发。
    控制面/Agent交错阶段不开展B6验收，不接管旧在跑job；没有维护窗口授权时保持冻结。
@@ -544,7 +653,10 @@ lint、CodeQL、pr-typecheck、pr-compileall、pr-agent-tests、pr-migrate-empty
 
 - v1.6 2026-10-17 U3/U5 首轮规划核验：新增 §3.4.1，列明无回报、初始化、专项状态与 open 条目一致性、真实迟到入口及 required CI 接线的原清单内实施补齐；新增 §3.6.1，修正原 U5 读取失败句缺少类别限定的规划表述，区分原始读取诊断与 D2.5 验证后的正式结果，并保留真机与最终 HEAD 闸门。无新增模型、单元、env 或激活授权，原 U1/U2 已通过结论与 U3→U4/U6/U7 依赖不变。
 
-- v1.7 **待裁决草案** 2026-10-17：新增ADR D3.8完整模型提案与D2.5统一拒绝策略；修订 §3.0.2/5/6、§3.1、§3.4.2、§3.6.2–4、§3.8、§4、§5。
+- v1.7 **待裁决草案** 2026-10-17：新增ADR D3.8完整模型提案与D2.5统一拒绝策略；修订 §3.0.2/5/6、§3.1、§3.4.2、§3.6.2–5、§3.8、§4、§5。
   新增U8独立单元，U3/U5保留原issue/PR。排队预算/持久化缺项与全局切换/控制面类别核验为规划缺口；
   CLI保存点替代逐设备事务、124/125与等待进度遗漏属原规则未充分落地，新增明确真入口验收；不重置原权威复核轮次。
   Owner裁决前不发布为实施规范，不授权编码、生产或PR状态操作。
+  同日补齐（原规划者，回应草案复核的两处缺口，均为规划缺口）：§3.6.3 改为退役三个旧 disarm 条目，
+  另按方案 A（按树对象恢复发布）或方案 B（保留缺包诊断并改部署 SOP 预期）交 Owner 裁决，删去「不退役、不发布」；
+  §3.0.2 末句的保存入口拒绝规则落到 U5，新增 §3.6.5 与 §4.1 U5 真入口反例，并写明 `plans.py` 与 U3 的集成顺序。
