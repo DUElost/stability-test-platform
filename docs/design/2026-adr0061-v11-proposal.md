@@ -1,10 +1,12 @@
 # ADR-0061 v1.1 修订提案：解除排队、执行与整 job 的有界保护
 
-- 状态：**Proposed，未生效**（2026-10-17）。现行规范仍为 [Accepted v1.0](../adr/ADR-0061-device-return-contract.md)。
-- 决策者：Owner；本次裁决引用：**pending**；独立架构载体 [#3751](https://github.com/DUElost/stability-test-platform/issues/3751)，跟进实施 [U8 #3752](https://github.com/DUElost/stability-test-platform/issues/3752)。
+- 状态：**已裁决**（2026-10-17，Owner 授权规划者裁决）。五项均接受，第 1、2、3 项按修改 M1–M3 落定，正文已并入
+  [ADR-0061 Accepted v1.1](../adr/ADR-0061-device-return-contract.md) 的 D1 第 9 条、D2 第 7–9 条、D3 第 8 条与 D8 第 8 条。
+  实施必须以 ADR-0061 v1.1 与 #3723 v1.7 为准；本文件保留为审议稿，标有「已按裁决修改」的原句不得作为实施依据。
+- 决策者：Owner（授权规划者裁决）；裁决记录：[#3751](https://github.com/DUElost/stability-test-platform/issues/3751#issuecomment-6234602253)；独立架构载体 [#3751](https://github.com/DUElost/stability-test-platform/issues/3751)，跟进实施 [U8 #3752](https://github.com/DUElost/stability-test-platform/issues/3752)。
 - 关联：B6 [#3723](https://github.com/DUElost/stability-test-platform/issues/3723)；实施候选见 [v1.7 规划稿](2026-b6-v17-planning-proposal.md)。
 - 变更范围：替换 D3.8；明确 D2.5 的控制面核验；批准下述持久化与协议增量及其 Appetite 扩展。
-- 作者必须在 Owner 裁决后通过另一笔明确标注的文档修改同步 Accepted 正文。任何人不得把本文件的 Proposed 状态当成实施授权。
+- Accepted 正文已在 PR #3753 的裁决同步提交中更新为 v1.1。任何人不得把本文件当作实施授权；实施授权以 #3723 发布的 v1.7 为准。
 
 ## 1. 当前事实与必要性
 
@@ -41,11 +43,13 @@ confirmed/readback_failed，以及 CLI 跨设备持锁。U5 对应日志记录�
    `min(当前排队起点+剩余Q,D_job,该步骤已存在的执行截止)`，最后一项仅在该步骤重试时适用。
    控制面必须在首次接受取得 permit 的报告时冻结 `D_i=min(服务器接收时刻+E_i,D_job)`。
    Agent 必须先取得该确认再启动解除子进程，并将本地执行窗口限制为返回截止的剩余时间。
+   〔已按裁决修改（M2）：取消同步握手。Agent 取得 permit 后立即启动解除；控制面在首次收到执行阶段证据时冻结 D_i，见 ADR-0061 v1.1 D3 第 8 条第 7、8 项。〕
 6. Agent 必须以 `WAITING_EXECUTION_SLOT + disarm_phase=queue` 表达解除排队，以
    `EXECUTING_DISARM + disarm_phase=execute` 表达执行；普通等待不得附带解除保护。
    控制面必须从冻结 pipeline、已开始的 init 足迹证据、当前步骤和有效 JOB 租约核验阶段身份。
    该增量不得改变 OperationScheduler 的准入算法或绕过 permit。
 7. Agent 必须经现有 extend-batch 上报可选 `disarm_guard` 阶段对象；控制面必须在对应响应项返回权威截止、服务器时间和最后接受序号。
+   〔已按裁决修改（M1）：阶段证据必须经协调心跳送达，extend-batch 可以同时携带；extend-batch 每 60 秒一次，不能单独满足 60 秒新鲜度。见 ADR-0061 v1.1 D3 第 8 条第 4、5 项。〕
    阶段对象必须携带步骤 id、阶段、当前 fencing token、协议版本、持久化递增 seq；执行阶段还必须携带来自实际脚本 PROGRESS 的递增进度序号。
    控制面必须使重复 seq 幂等且不刷新新鲜度；更旧 seq、旧代次和逆向阶段消息不得刷新事实或扩大预算。
 8. 控制面必须在重复 abort、补到更早事件、重试、恢复和重放时只保留或缩短原截止。
@@ -53,6 +57,7 @@ confirmed/readback_failed，以及 CLI 跨设备持锁。U5 对应日志记录�
    控制面必须用数据库 UTC 时间确定事实，并保存最后接受的服务器时间；检测时间回拨时必须拒绝阶段保护并记录 `clock_regressed`，不得重建锚点。
    Agent 必须用服务器返回的剩余时间约束本地 monotonic 等待，服务器时钟回拨或通信重试不得增加本地剩余预算。
 9. Agent 必须至少每 **15s** 报告一次有进展的 permit 等待轮询存活；执行阶段的上线轮询必须至少每 **15s** 产生一次已完成轮询的 PROGRESS。
+   〔已按裁决修改（M1）：15 秒是本地证据的刷新间隔；送达间隔为任一 job 处于解除阶段时至少每 30 秒一次协调心跳，不受该间隔配置放大影响。〕
    控制面必须以固定 **60s** 分别校验 queue 存活和 execute 进度的新鲜度（现行协调心跳默认 30s，60s 相当于两个周期）。
    这两个值为本协议固定值，不随部署环境的协调心跳配置静默改变；实施者不得新增 env。
 10. 控制面必须同时要求 host 心跳有效、JOB 租约未过期且 token/host boot/设备占用一致，才可以给予阶段保护。
@@ -75,6 +80,8 @@ Q=7200s 是有限吞吐容忍度：permit=1、11 个 job、每个解除 E=660s �
 
 1. 控制面对不满足可信类别/工具/探针包组合，却上报正式 confirmed 或 readback_failed 的结果，必须返回结构化
    **422 `UNVERIFIED_PROBE_RESULT`**；该策略为拒绝，控制面不得自动改成 executed_unverified。
+   〔已按裁决修改（M3）：终态回报不得整份拒绝——outbox 会把 409/404 以外的 4xx 转入死信，测试结论会丢失。控制面照常落终态，
+   不可信专项改按 step trace 推导；结构化 422 只用于清偿与 init 检查。见 ADR-0061 v1.1 D2 第 7、8 条。〕
    控制面必须在业务变更之前校验整份结果；拒绝不得关闭欠账、释放租约或部分写入终态。
 2. 控制面必须由一份纯政策实现普通 complete、迟到补偿、清偿和未来 U4 init 确认的核验。
    可信登记必须来自共享 ONBOARDED 中绑定验证报告的 `(platform,model,permission_model,APK SHA,probe package SHA)` 精确组合；
@@ -116,7 +123,7 @@ Q=7200s 是有限吞吐容忍度：permit=1、11 个 job、每个解除 E=660s �
 
 ## 6. Owner 裁决表
 
-以下五项为一个协调方案；Owner 可以整体接受，或逐项退回修改。当前全部 pending。
+以下五项为一个协调方案。2026-10-17 已裁决（Owner 授权规划者，[记录](https://github.com/DUElost/stability-test-platform/issues/3751#issuecomment-6234602253)）：五项均接受，第 1–3 项附修改 M1–M3。
 
 1. D3.8 替换条文，Q=7200s、历史 E=300s、尾段24h上限、15s/60s证据参数。
 2. `disarm_guard` JSONB、可选阶段协议和 LocalDB 字段；明确扩展 ADR-0061 §8 Appetite。

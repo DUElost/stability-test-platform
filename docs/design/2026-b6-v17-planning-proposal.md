@@ -1,7 +1,7 @@
-# 批次 B6：设备归还契约首批（阶段 A + 阶段 B + 开关机接入）——规划方案 v1.7（待裁决草案）
+# 批次 B6：设备归还契约首批（阶段 A + 阶段 B + 开关机接入）——规划方案 v1.7（已裁决，待发布）
 
-> **状态：仅规划，不可编码。** 本稿是 Owner 裁决前的候选完整正文，不是已生效实施规范。当前 GitHub #3723 的有效版本仍为 v1.6。
-> ADR-0061 v1.1 [修订提案](2026-adr0061-v11-proposal.md) 尚未裁决，Owner 引用 pending；裁决后必须更新本稿和 #3723 权威正文，才能派发下述返修。
+> **状态：已裁决，待发布。** Owner 于 2026-10-17 授权规划者裁决（[记录](https://github.com/DUElost/stability-test-platform/issues/3751#issuecomment-6234602253)），裁决结果已并入本稿与 [ADR-0061 v1.1](../adr/ADR-0061-device-return-contract.md)。
+> 本稿必须在 PR #3753 合入后整篇发布到 #3723，才成为实施规范；发布前任何实施者不得据此编码。当前 GitHub #3723 的有效版本仍为 v1.6。
 > 本轮事实基线：`origin/main@945fcd4406cefa6299caa688376c9a54c2482868`（2026-10-17）；U3 #3748 `46ba633ee5e56afea836d9cb92bc2f16a68f95c4`；U5 #3747 `13a77c7fdd1097c70651a1961b20d0b8a063ded0`。
 > 原 §1 扫描、§3.2.1/§3.3.1/§3.3.2 的历史复核记录保留其原基线；新语义以本稿 §3.0、§3.4.2、§3.6.2–3.6.5、§3.8、§4 与 §5 为准。冲突必须退回，不得拼接旧新规则。
 
@@ -76,19 +76,23 @@ v1.5 补充：新执行状态的控制面消费者及通用 recycler 解除终�
 6. **透明接线与状态清理，无需改写语义**：`agent_recovery.py` 冻结恢复载荷直接透传 execution_state；`state_machine.py` 对离开运行态清理子状态；job 模型列是字符串，没有漏加的数据库枚举。实施者必须保留上述行为与现有回归，不得把旧 job 复活或改变终态语义。
 7. **其它回收权威边界保留**：`session_watchdog` 的 host 失联、reconciler 的租约真实过期 / boot 不一致 / UNKNOWN 宽限、PENDING 回收及 §1.2 租约释放链不获得永久豁免。本轮不改其阈值、状态机或 U3 的欠账转换范围；有效解除保护不等于无视真实租约 / host 失效。
 
-## 2. 模型级问题（v1.7 待 Owner 裁决）
+## 2. 模型级问题（v1.7 已裁决）
 
-现行 ADR-0061 Accepted v1.0 继续有效。规划者已提出完整 [v1.1 修订](2026-adr0061-v11-proposal.md)，
-选定 Q=7200s、每步 E、整 job 收尾24h上限、历史缺墙钟300s、15s/60s证据联动，
-并明列 `job_instance.disarm_guard` JSONB、extend-batch 可选阶段请求/响应和 LocalDB 字段。
-这些新增模型超出原 §8 额度，模型裁决载体为 [#3751](https://github.com/DUElost/stability-test-platform/issues/3751)，Owner 裁决引用 **pending**。U8 以及本轮 U3/U5 返修必须等待规格发布，不能自行补设计。
+ADR-0061 已裁决为 Accepted v1.1（Owner 2026-10-17 授权规划者裁决，[记录](https://github.com/DUElost/stability-test-platform/issues/3751#issuecomment-6234602253)），正文随 PR #3753 合入生效。
+裁决接受[修订审议稿](2026-adr0061-v11-proposal.md)的五项：Q=7200s、每步 E、整 job 尾段 24h 上限、历史缺墙钟 300s、15s / 60s 证据；
+`job_instance.disarm_guard` JSONB、可选阶段请求 / 响应与 LocalDB 字段；D2.5 统一核验；平台终止优先与按实际版本判定步骤角色；部署冻结。
+裁决附三处修改，本稿 §3.0.5、§3.8、§4.1 已同步：
+- M1：阶段证据必须经协调心跳以不超过 30 秒的间隔送达，按服务器接收时刻判新鲜；extend-batch（60 秒）不能单独满足 60 秒新鲜度。
+- M2：Agent 取得 permit 后立即启动解除，不得等待控制面确认；控制面在首次收到执行阶段证据时冻结 D_i。
+- M3：终态回报不得因不可信探针结果被整份 422 拒绝（outbox 会转入死信，测试结论丢失）；不可信专项改按 step trace 推导，结构化拒绝只用于清偿与 init 检查。
+新增模型的 Appetite 扩展见 ADR-0061 §8.2。U8 以及本轮 U3/U5 返修必须等 #3723 发布 v1.7 后开工，不能自行补设计。
 
-D2.5 选定结构化422拒绝；普通/迟到/清偿/init 统一政策见 §3.8。部署继续冻结；不新增阶段 B 开关。
+D2.5 的统一核验按 ADR-0061 v1.1 D2 第 7、8 条执行，普通 / 迟到 / 清偿 / init 四入口见 §3.8。部署继续冻结；不新增阶段 B 开关。
 Owner 要求持续部署时必须另提开关、迁移与回退裁决，不得由实施者临时实现。
 
 另有一项批次级裁决，不改 ADR 正文：旧登记包 `powercycle_disarm` 1.0.0–1.0.2 的处置（§3.6.3）。
 Owner 已于 2026-10-17 选定方案 A：退役，并按 git 树对象恢复发布（[裁决记录](https://github.com/DUElost/stability-test-platform/issues/3751#issuecomment-6234224273)）。
-方案 B（保留缺包诊断并改部署 SOP 预期）未采用。上面的模型项仍 pending。
+方案 B（保留缺包诊断并改部署 SOP 预期）未采用。
 
 ## 3. 实施分组、版本与档位
 
@@ -128,12 +132,14 @@ Owner 已于 2026-10-17 选定方案 A：退役，并按 git 树对象恢复发�
 
 3. **足迹判定**：job 的 `init` 中，`FAMILY_STEPS` 所列步骤一旦开始执行，即视为建立了该专项足迹（保守取「开始」而非「完成」）。
 4. **D3 第 7 条冲突处理**：Agent 在 teardown 前或期间发现本 job 租约已失（`extend_lock` 返回 409）时，不得执行解除，回报 `not_executed`（原因 `lease_lost`）。清偿与 init 检查只在持有对应租约（欠账租约令牌或本 job 租约）时执行。
-5. **有界保护**：U8 必须逐项实现 [ADR v1.1 提案 §2](2026-adr0061-v11-proposal.md) 经 Owner 裁决后的全部规则。
+5. **有界保护**：U8 必须逐项实现 [ADR-0061 v1.1](../adr/ADR-0061-device-return-contract.md) D3 第 8 条与 D8 第 8 条；审议稿中标有「已按裁决修改」的原句不得作为依据。
    本稿选定 Q=7200s（全部步骤共用）；E_i=冻结正整数墙钟；历史缺失/非法墙钟固定300s；
    T0=最早有效服务器退出触发；D_job=T0+min(Q+ΣE_i,86400s)，包含本次路径全部 teardown。
-   首次 permit 执行确认固定 D_i=min(server_now+E_i,D_job)，同一步骤重试不重置；排队累计扣 Q。
+   控制面首次收到某步骤执行阶段证据时固定 D_i=min(收到时刻+E_i,D_job)，同一步骤重试不重置；排队累计扣 Q。
+   Agent 取得 permit 后必须立即启动解除，不得等待控制面确认（M2）；本地执行窗口取 E_i 与最近一次返回的 D_job 剩余时间的较小者。
    持久化位置为新 `job_instance.disarm_guard` JSONB 和现有 LocalDB 活跃记录；协议使用现有状态加 queue/execute 阶段，不新增执行状态。
-   queue 的15s轮询存活与 execute 的15s实际 PROGRESS 分开；控制面各自60s新鲜度，执行还要求执行心跳有效。
+   queue 的15s轮询存活与 execute 的15s实际 PROGRESS 分开；控制面各自60s新鲜度（按服务器接收时刻），执行还要求执行心跳有效。
+   阶段证据必须经协调心跳送达；任一 job 处于解除阶段时，Agent 必须至少每30s发一次协调心跳，不受该间隔配置放大影响（M1）。extend-batch 可以同时携带，不能作为唯一通道。
    每次保护还必须验证租约/token/host/boot/设备占用，普通 WAITING 无豁免；updated_at 不作为证据。
    重复 seq 不刷新存活，乱序/重启/重复abort不得延长任一已冻结截止；最终 SQL/CAS 必须复读最新事实。
    自然结束多步默认尾段上限8280s，manual_exit只解除为7860s；达到任一适用截止后停止并记录义务，不能换步骤继续延长 job。
@@ -495,10 +501,13 @@ MTK MLD_LX2/LX3/NX2的有/无足迹、重启续跑行为和读取失败识别必
 U8必须实现ADR修订提案 §2–§4经Owner裁决后的规则，并将policy保留在ADR-0054共享纯契约内；
 控制面层负责取可信持久事实，Agent不得import控制面模块；service叶模块不得回依赖agent_completion造成C5环。
 
-四入口：普通 `/complete`、迟到confirmed补偿、`return-discharge`、U4未来init_check均必须在业务修改前调用同一政策。
-未验证/未知/版本不匹配组合的confirmed/readback_failed一律422 `UNVERIFIED_PROBE_RESULT`，返回family、reason、
-expected/observed组合及报告引用；不自动归一化，不部分修改，不关闭条目。错误token仍先按原409安全规则拒绝。
-拒绝的原始证据通过既有独立诊断审计保存，正式job/设备/欠账事实不写入被拒绝结果。
+四入口：普通 `/complete`、迟到confirmed补偿、`return-discharge`、U4未来init_check均必须在业务修改前调用同一政策（ADR-0061 v1.1 D2 第 7、8 条）。
+未验证/未知/版本不匹配组合的confirmed/readback_failed按入口处理（M3）：
+- 普通 `/complete`：控制面必须照常落终态与测试结论，不得返回 422；该专项丢弃上报的正式值，按 §3.0.6 从 step trace 推导，不得记 confirmed/readback_failed。
+- 迟到 confirmed：控制面不得关闭任何条目，也不得为此返回新的 4xx。
+- `return-discharge` 与 init_check：控制面必须对该专项返回 422 `UNVERIFIED_PROBE_RESULT`（含 family、reason、expected/observed 组合及报告引用），
+  不得关闭条目或改变归还状态；同一回报中合法专项照常处理。
+错误token仍先按原409安全规则拒绝。被替换或被拒的原始值、原因与报告引用必须写入既有独立诊断审计并计数，正式job/设备/欠账事实不写入不可信值。
 
 可信登记必须包含platform、model、权限模型、APK SHA、探针包SHA和真实验证报告；设备类别取控制面device事实，
 包身份取job冻结pipeline+manifest，实际工具/权限证据取当前令牌保护的采集并持久化记录。
@@ -543,7 +552,7 @@ expected/observed组合及报告引用；不自动归一化，不部分修改，
   同一请求同时违反本节规则与墙钟预算时返回本节错误码。不得只测纯函数。
 - U5（§3.6.3 方案 A）：`--publish-restored` 自检五项；在临时站点目录对三个旧版本真实重建并写入，SHA 与 manifest 一致；
   对同一目录重跑得到「同字节跳过」；改写一个已落位文件后重跑必须拒绝。三个旧条目为 `retired: true`，`check_tool_manifest.py --base origin/main` 与 `check_script_packages.py` 通过。
-- U8：真实隔离PG reaper→extend-batch在abort+61s合法queue下保持RUNNING/renewed；
+- U8：真实隔离PG reaper→extend-batch在abort+61s合法queue（证据经协调心跳送达）下保持RUNNING/renewed；
   同host至少11job/permit=1跨旧60s阈值（有限虚拟时钟推进到61s以上，真实策略/数据库路径，不做长时间裸sleep）；
   Q内都可尝试解除，Q外/整job上限/步骤E耗尽按incomplete交接；至少1条覆盖6600s排队后仍有660s执行窗口。
 - U8：重复abort、重复seq、乱序/未来时间/旧token、重新排队、进程恢复、服务器时间回拨不得延长截止；
@@ -552,8 +561,11 @@ expected/observed组合及报告引用；不自动归一化，不部分修改，
   必须用独立事务最新提交复读验证，不只测纯policy。预算/新鲜度失败后真实回收仍发生。
 - U8：受控wall/stall触发→真实Agent终态→控制面/欠账；兼容trace124/125与迟到STARTED；
   未接入专项incomplete→debt，普通失败→unverified对照；现有六值、取消、停机、失租不得回退。
-- U8：四入口×合法验证/未验证/未知/错APK/错包/伪造verified；不合法结果422且业务零写/原始审计保留；
+- U8：四入口×合法验证/未验证/未知/错APK/错包/伪造verified；不合法时普通 `/complete` 返回 200、测试结论与终态照常落库、该专项按 trace 推导且无 confirmed/readback_failed，
+  并对照证明 outbox 不产生死信；迟到入口不关闭条目；清偿与 init 对该专项 422 且零写、同回报合法专项照常处理；原始审计保留。
   合法confirmed可以按各自来源规则闭合，合法readback_failed保持欠账；init共用policy行为测试先交付，真实init接线由U4再验。
+- U8（M1/M2）：协调心跳间隔配置为 60s 时，处于解除阶段的 job 仍至少每 30s 送达证据且保护不中断；只经 extend-batch 送达时不得单独维持保护。
+  控制面不可达期间 Agent 取得 permit 后仍立即启动解除，结果经 outbox 补报；控制面以首次收到执行证据的时刻冻结 D_i。
 - U4：真实init路径必须重用U8政策；没有可信组合不得放行/关闭欠账；原心跳/清偿/旧控制面无字段反对照保持。
 - U6：除组件与类型检查，几何/点击/切换/表单操作按testing.md §4做真实浏览器证据；U7逐链接与最终命令事实对账。
 
@@ -584,7 +596,7 @@ lint、CodeQL、pr-typecheck、pr-compileall、pr-agent-tests、pr-migrate-empty
 
 ## 5. 生效（激活；本轮不执行）
 
-0. 硬前置：Owner完成ADR v1.1裁决并引用；Accepted正文与 #3723已同步v1.7；U1–U5和U8独立复核全部通过；
+0. 硬前置：Owner完成ADR v1.1裁决并引用（2026-10-17 已完成，[记录](https://github.com/DUElost/stability-test-platform/issues/3751#issuecomment-6234602253)）；Accepted正文与 #3723已同步v1.7；U1–U5和U8独立复核全部通过；
    U1–U8均合入；同一最终集成SHA检查、三类最终包真机证据和required CI完成。历史U1/U2通过不代签U8。
 1. 继续部署冻结。Owner另开激活授权和维护窗口，先确定暂停派发/排空旧job/能力核验/恢复步骤与回退；
    本稿不授权任何production动作。原v1.6“先新Agent后旧控制面”不能证明新协议保证，不能直接照旧执行。
@@ -614,8 +626,8 @@ lint、CodeQL、pr-typecheck、pr-compileall、pr-agent-tests、pr-migrate-empty
 
 ## 7. 退回条件（实施者遇到即停，在本 issue 评论「退回：U?」）
 
-本轮新增硬前置：Owner裁决缺失、#3723仍为v1.6、U8共享依赖未合入、实际版本/包无法恢复，实施者必须停止并只读准备。
-§2已明列的新guard模型仅在Owner批准后纳入；未批准前不得据历史段落自行落库。清单外路径/协议/模型仍必须退回。
+本轮新增硬前置：#3723仍为v1.6、U8共享依赖未合入、实际版本/包无法恢复，实施者必须停止并只读准备。
+§2已明列的新guard模型已于2026-10-17批准（ADR-0061 §8.2），只按 ADR-0061 v1.1 落库。清单外路径/协议/模型仍必须退回。
 
 - 发现 §1.1、§1.2 及 v1.5 §1.4 已列范围之外的解除终止路径或 JOB 租约释放路径。§1.4 已纳入的 recycler 路径按 §3.3.2 实施，不再因同一已裁定路径重复触发停工。
 - 实现需要改动准入核心算法（ADR-0026），或需要 §2 之外的数据模型。
@@ -652,4 +664,5 @@ lint、CodeQL、pr-typecheck、pr-compileall、pr-agent-tests、pr-migrate-empty
   同日补齐（原规划者，回应草案复核的两处缺口，均为规划缺口）：§3.6.3 改为退役三个旧 disarm 条目，
   另按方案 A（按树对象恢复发布）或方案 B（保留缺包诊断并改部署 SOP 预期）交 Owner 裁决，删去「不退役、不发布」；
   §3.0.2 末句的保存入口拒绝规则落到 U5，新增 §3.6.5 与 §4.1 U5 真入口反例，并写明 `plans.py` 与 U3 的集成顺序。
-  同日 Owner 选定 §3.6.3 方案 A（[裁决记录](https://github.com/DUElost/stability-test-platform/issues/3751#issuecomment-6234224273)），正文删去方案 B 分支；ADR 提案 §6 五项仍 pending。
+  同日 Owner 选定 §3.6.3 方案 A（[裁决记录](https://github.com/DUElost/stability-test-platform/issues/3751#issuecomment-6234224273)），正文删去方案 B 分支。
+  同日 Owner 授权规划者裁决 ADR 提案 §6 五项（[记录](https://github.com/DUElost/stability-test-platform/issues/3751#issuecomment-6234602253)）：五项接受，附修改 M1–M3，并入 ADR-0061 v1.1；本稿 §2、§3.0.5、§3.8、§4.1、§5、§7 同步，标题改为「已裁决，待发布」。

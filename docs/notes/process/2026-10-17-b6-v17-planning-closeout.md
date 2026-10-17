@@ -1,6 +1,6 @@
 # B6 v1.7 规划收口与裁决前置
 
-Status: proposed
+Status: implemented
 Class: process
 
 ## Decision
@@ -14,6 +14,13 @@ U3/U5保留原issue/PR；保守集成为U3→U5→U8→U4。部署继续冻结�
 - 旧登记包：三个旧 disarm 条目改为 `retired: true`，并按 git 树对象恢复发布。Owner 已于 2026-10-17 选定该方案 A（[裁决记录](https://github.com/DUElost/stability-test-platform/issues/3751#issuecomment-6234224273)）；方案 B（保留缺包诊断并改部署 SOP 预期）未采用。
 - 保存入口：§3.0.2「新计划缺解除步骤必须拒绝」落到 U5，新增 v1.7 §3.6.5，写明入口、调用顺序、错误契约 `ONBOARDED_TEARDOWN_INVALID`（四种 reason，含旧合并版 finish）与真入口反例。
 
+第四笔提交：Owner 于 2026-10-17 授权规划者裁决（原话「授权你进行裁决」，[记录](https://github.com/DUElost/stability-test-platform/issues/3751#issuecomment-6234602253)）。
+五项全部接受，附三处修改，均有代码依据：
+- M1：阶段证据走协调心跳，送达间隔不超过 30 秒。extend-batch 每 60 秒一次，与 60 秒新鲜度窗口相同。
+- M2：取消「取得控制面确认后才启动解除」。原规则下，控制面不可达会阻断解除。
+- M3：终态回报不整份 422。outbox 会把 409、404 以外的 4xx 转入死信，测试结论会丢失；不可信专项改按 trace 推导。
+ADR-0061 升到 Accepted v1.1（D1 第 9 条，D2 第 7–9 条，D3 第 8 条替换，D8 第 8 条，§1.7，§8.2）。README 与 M7 看板、审议稿、v1.7 正文、派单同步。
+
 ## Alternatives
 
 不采用全WAITING豁免、无条件更新时间、忽略失租、把未知confirmed猜成已执行或删除冻结manifest登记。
@@ -22,6 +29,7 @@ U3/U5保留原issue/PR；保守集成为U3→U5→U8→U4。部署继续冻结�
 旧包不采用原稿「保留登记、不退役、不发布」：scan 每次都会报缺包并触发部署 SOP 的停止条件；日后若补发，旧缺陷版本会成为 active。
 只退役不发布也消不掉缺包，因为 scan 对没有库内行的退役条目仍要读包建 inactive 行。
 保存入口校验不放进 U8：U8 依赖模型裁决且排在最后；该形态由 U5 的拆分引入，同一 PR 封堵。
+裁决未照单接受审议稿的三处原文：只走 extend-batch 送达证据；先取得控制面确认再启动解除；对不可信结果整份 422。理由见 M1–M3 与 ADR-0061 §5 新增条目。
 
 ## Verification
 
@@ -43,6 +51,8 @@ U3/U5保留原issue/PR；保守集成为U3→U5→U8→U4。部署继续冻结�
 - 第三笔提交只回填 Owner 对 §3.6.3 的选择（方案 A）并删去方案 B 分支：`git diff --check` 通过；本地链接可解析；
   `check:quick` 退出 0（16 gates）；`tests/test_internal_ip_leak_allowlist.py`、`tests/test_adr_index_status_2989.py`、`tests/test_governance_m7_board_3205.py` 13 passed。
   `tests/` 根套件未重跑（与第二笔提交相比只改同四份文档的文字）。
+- 第四笔提交（裁决同步，含 ADR-0061 v1.1、README/M7 看板、语义归属修订行）：`git diff --check` 通过；六份文档本地链接可解析；
+  `check:quick` 退出 0（16 gates；首跑因 Agent Note `Status: accepted` 非法与 S15③ 缺语义归属修订行两项 BLOCK，修正后通过）；`./scripts/project_python.sh scripts/run_pytest.py tests/ -q -x -p no:cacheprovider` 退出 0（2406 passed、18 skipped）。
 
 ## Revisit
 

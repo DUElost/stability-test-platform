@@ -1,8 +1,8 @@
 # B6 v1.7 条件派单
 
-状态：**仅规划，不可编码**。Owner 尚未裁决 [#3751](https://github.com/DUElost/stability-test-platform/issues/3751)。
-本文件供裁决后的派单使用，不构成已派发、已领单或实施授权。
-完整候选正文见 [v1.7](2026-b6-v17-planning-proposal.md)，模型提案见 [ADR 修订](2026-adr0061-v11-proposal.md)。
+状态：**已裁决，待发布**。Owner 于 2026-10-17 授权规划者裁决 [#3751](https://github.com/DUElost/stability-test-platform/issues/3751#issuecomment-6234602253)，结果并入 [ADR-0061 v1.1](../adr/ADR-0061-device-return-contract.md)。
+本文件的提示词必须在 PR #3753 合入、#3723 发布 v1.7 后才能派发；此前不构成已派发、已领单或实施授权。
+完整正文见 [v1.7](2026-b6-v17-planning-proposal.md)，裁决审议稿见 [ADR 修订](2026-adr0061-v11-proposal.md)。
 
 ## 1. 规划收口的最后步骤
 
@@ -13,6 +13,9 @@
 5. 把完整 v1.7 正文写入 #3723，检查标题、§3.1/§3.6/§5 版本与 U8 #3752 一致。
    预期：`gh issue view 3723 --json title,body` 显示获批 v1.7 与可访问的裁决引用，而非只在评论追加规则。
 6. 复读正文与开放 PR，再派发下面对应提示词。
+
+2026-10-17 进度：第 1、2、4 步已完成（裁决接受五项并附修改 M1–M3，无退回项，[记录](https://github.com/DUElost/stability-test-platform/issues/3751#issuecomment-6234602253)）；
+第 3 步在 PR #3753 内完成（ADR-0061 升到 Accepted v1.1）；第 5、6 步待 PR #3753 合入后执行。
 
 复制候选正文到 GitHub 时，规划者必须把本地相对文档链接转换为已合入的 GitHub 文档链接；
 Owner 裁决前不得去掉“待裁决”而发布为正式实施规范。当前 U1/U2 历史通过不代替本轮裁决。
@@ -67,6 +70,9 @@ plans.py 与U3的_dispatch_warnings同文件不同函数：U3合入后基于最�
 你是 B6-U8 实施者，负责 #3752。读 AGENTS.md、Agent scoped AGENTS、#3752、#3723全文和评论、
 Owner对 #3751 的原始裁决、正式ADR以及U1/U2原独立复核。
 硬前置：获批v1.7已发布，U3/U5均合入，当前main包含它们最终提交。缺任一只读准备，不编码/declare。
+ADR-0061 v1.1 的三处裁决修改必须照做：M1 阶段证据经协调心跳以≤30s间隔送达、按服务器接收时刻判新鲜，extend-batch不作唯一通道；
+M2 取得permit后立即启动解除、不等待控制面确认，控制面首次收到执行证据时冻结D_i；
+M3 普通/complete不得因不可信探针结果整份422，该专项按trace推导，422只用于清偿与init检查。
 刷新开放PR、origin/main和Registry --risk，核对实际diff共享文件已结束编辑。
 
 在独立worktree、分支 feat/3752-device-return-guard 开工，PR目标main，不stack、不复制父分支diff。
