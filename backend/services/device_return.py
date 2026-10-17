@@ -46,12 +46,18 @@ from backend.agent.contracts.device_return import (
     RETURN_SOURCE_JOB,
     RETURN_SOURCE_OVERRIDE,
     RETURN_SOURCE_STOCK,
+    family_for_footprint_script,
+    script_name_from_step,
+)
+from backend.core.metrics import (
+    set_device_return_debt_oldest_seconds,
+    set_device_return_debt_open,
 )
 from backend.models.device_lease import DeviceLease
 from backend.models.device_return_debt import DeviceReturnDebt
 from backend.models.enums import LeaseStatus, LeaseType
 from backend.models.host import Device
-from backend.models.job import JobInstance
+from backend.models.job import JobInstance, StepTrace
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +163,112 @@ def _normalize_disarm_results(raw: Any) -> dict[str, dict[str, Any]]:
         elif isinstance(entry, str):
             out[str(family)] = {"result": entry}
     return out
+
+
+def _pipeline_step_id_to_script(pipeline_def: Any) -> dict[str, str]:
+    """Map step_id → script leaf name from a job pipeline_def."""
+    mapping: dict[str, str] = {}
+    if not isinstance(pipeline_def, Mapping):
+        return mapping
+    lifecycle = pipeline_def.get("lifecycle")
+    stages: Mapping[str, Any]
+    if isinstance(lifecycle, Mapping):
+        stages = lifecycle
+    else:
+        stages = pipeline_def
+    for stage in ("init", "teardown", "patrol"):
+        steps = stages.get(stage) if isinstance(stages, Mapping) else None
+        if isinstance(steps, Mapping):
+            steps = steps.get("steps") or []
+        if not isinstance(steps, list):
+            continue
+        for step in steps:
+            if not isinstance(step, Mapping):
+                continue
+            sid = step.get("step_id") or ""
+            script = script_name_from_step(step)
+            if sid and script:
+                mapping[str(sid)] = script
+    return mapping
+
+
+def _footprint_families_from_traces(
+    pipeline_def: Any,
+    traces: Iterable[Any],
+) -> set[str]:
+    """Families with init footprint evidence (any init-stage trace of a footprint script)."""
+    id_to_script = _pipeline_step_id_to_script(pipeline_def)
+    families: set[str] = set()
+    for tr in traces or []:
+        stage = getattr(tr, "stage", None) if not isinstance(tr, Mapping) else tr.get("stage")
+        if str(stage or "") != "init":
+            continue
+        step_id = getattr(tr, "step_id", None) if not isinstance(tr, Mapping) else tr.get("step_id")
+        script = id_to_script.get(str(step_id or ""), "")
+        family = family_for_footprint_script(script)
+        if family:
+            families.add(family)
+    return families
+
+
+def _footprint_families_for_job_sync(db: Session, job: JobInstance) -> set[str]:
+    traces = list(
+        db.execute(select(StepTrace).where(StepTrace.job_id == job.id)).scalars().all()
+    )
+    return _footprint_families_from_traces(getattr(job, "pipeline_def", None), traces)
+
+
+async def _footprint_families_for_job_async(
+    db: AsyncSession, job: JobInstance
+) -> set[str]:
+    traces = list(
+        (
+            await db.execute(select(StepTrace).where(StepTrace.job_id == job.id))
+        ).scalars().all()
+    )
+    return _footprint_families_from_traces(getattr(job, "pipeline_def", None), traces)
+
+
+def _supplement_incomplete_for_footprints(
+    results: dict[str, dict[str, Any]],
+    footprint_families: set[str],
+) -> dict[str, dict[str, Any]]:
+    """§3.4.1 / D4.2: no terminal report + footprint → incomplete (do not invent for bare PENDING)."""
+    out = dict(results)
+    for family in footprint_families:
+        if family in out:
+            continue
+        out[family] = {
+            "result": DISARM_RESULT_INCOMPLETE,
+            "reason": "no_terminal_report_with_footprint",
+        }
+    return out
+
+
+def _recompute_return_state_from_open_debts(
+    device: Device,
+    open_rows: list[DeviceReturnDebt],
+    *,
+    now: datetime,
+) -> None:
+    """D5.10: family state is debt iff an open entry exists for that family."""
+    open_families = {row.family for row in open_rows}
+    if not open_families and not (device.return_state or {}):
+        return
+    current = dict(device.return_state or {})
+    for family in open_families:
+        entry = dict(current.get(family) or {})
+        entry["state"] = FAMILY_RETURN_DEBT
+        entry["updated_at"] = now.isoformat()
+        if "source" not in entry:
+            row = next(r for r in open_rows if r.family == family)
+            entry["source"] = (
+                RETURN_SOURCE_STOCK
+                if row.source_kind == _SOURCE_KIND_STOCK
+                else RETURN_SOURCE_JOB
+            )
+        current[family] = entry
+    device.return_state = current
 
 
 def _set_family_return_state(
@@ -269,6 +381,8 @@ def _apply_job_disarm_to_debt_sync(
 ) -> int:
     """Write/close debt rows from this job's disarm_results. Returns open count after."""
     results = _normalize_disarm_results(getattr(job, "disarm_results", None))
+    footprints = _footprint_families_for_job_sync(db, job)
+    results = _supplement_incomplete_for_footprints(results, footprints)
     for family, entry in results.items():
         result = str(entry.get("result") or "")
         onboarded = _family_onboarded(family)
@@ -293,7 +407,9 @@ def _apply_job_disarm_to_debt_sync(
                 evidence=entry,
                 now=now,
             )
-    return len(_open_debts_sync(db, device.id))
+    open_rows = _open_debts_sync(db, device.id)
+    _recompute_return_state_from_open_debts(device, open_rows, now=now)
+    return len(open_rows)
 
 
 def _bump_generation_sync(db: Session, device: Device) -> int:
@@ -554,6 +670,8 @@ async def _apply_job_disarm_to_debt_async(
     now: datetime,
 ) -> None:
     results = _normalize_disarm_results(getattr(job, "disarm_results", None))
+    footprints = await _footprint_families_for_job_async(db, job)
+    results = _supplement_incomplete_for_footprints(results, footprints)
     for family, entry in results.items():
         result = str(entry.get("result") or "")
         onboarded = _family_onboarded(family)
@@ -578,6 +696,8 @@ async def _apply_job_disarm_to_debt_async(
                 evidence=entry,
                 now=now,
             )
+    open_rows = await _open_debts_async(db, device.id)
+    _recompute_return_state_from_open_debts(device, open_rows, now=now)
 
 
 async def _bump_generation_async(db: AsyncSession, device: Device) -> int:
@@ -829,7 +949,9 @@ def apply_discharge_sync(
             discharged_families.append(family)
 
     released = _maybe_release_debt_lease_sync(db, device, now=now)
-    open_left = len(_open_debts_sync(db, device_id))
+    open_rows = _open_debts_sync(db, device_id)
+    _recompute_return_state_from_open_debts(device, open_rows, now=now)
+    open_left = len(open_rows)
     return {
         "ok": True,
         "discharged_families": discharged_families,
@@ -875,12 +997,14 @@ def apply_override_sync(
         now=now,
     )
     released = _maybe_release_debt_lease_sync(db, device, now=now)
+    open_rows = _open_debts_sync(db, device_id)
+    _recompute_return_state_from_open_debts(device, open_rows, now=now)
     return {
         "ok": True,
         "families": target,
         "closed_count": closed,
         "debt_lease_released": released,
-        "open_debt_count": len(_open_debts_sync(db, device_id)),
+        "open_debt_count": len(open_rows),
     }
 
 
@@ -898,19 +1022,22 @@ def apply_late_confirmed_sync(
     if device is None:
         return {"ok": False, "code": "DEVICE_NOT_FOUND"}
     closed = 0
+    touched: set[str] = set()
     for family in confirmed_families:
         rows = [
             r for r in _open_debts_sync(db, device_id)
             if r.family == family
             and r.source_kind == _SOURCE_KIND_JOB
             and r.source_job_id == job_id
-            and (not r.source_fencing_token or r.source_fencing_token == fencing_token)
+            and r.source_fencing_token == fencing_token
         ]
         for row in rows:
             row.state = DEBT_STATE_CLOSED
             row.closed_reason = DEBT_CLOSE_DISCHARGED
             row.closed_at = now
             closed += 1
+            touched.add(family)
+        if family in touched:
             _set_family_return_state(
                 device,
                 family,
@@ -920,12 +1047,114 @@ def apply_late_confirmed_sync(
                 extra={"job_id": job_id, "late_confirmed": True},
             )
     released = _maybe_release_debt_lease_sync(db, device, now=now)
+    open_rows = _open_debts_sync(db, device_id)
+    _recompute_return_state_from_open_debts(device, open_rows, now=now)
     return {
         "ok": True,
         "closed_count": closed,
         "debt_lease_released": released,
-        "open_debt_count": len(_open_debts_sync(db, device_id)),
+        "open_debt_count": len(open_rows),
     }
+
+
+async def apply_late_confirmed(
+    db: AsyncSession,
+    *,
+    device_id: int,
+    job_id: int,
+    fencing_token: str,
+    confirmed_families: Iterable[str],
+) -> dict[str, Any]:
+    """Async D5.6 late-confirmed closer (wired from ``/complete``)."""
+    now = _now()
+    device = await _lock_device_async(db, device_id)
+    if device is None:
+        return {"ok": False, "code": "DEVICE_NOT_FOUND"}
+    closed = 0
+    touched: set[str] = set()
+    open_rows = await _open_debts_async(db, device_id)
+    for family in confirmed_families:
+        rows = [
+            r for r in open_rows
+            if r.family == family
+            and r.source_kind == _SOURCE_KIND_JOB
+            and r.source_job_id == job_id
+            and r.source_fencing_token == fencing_token
+        ]
+        for row in rows:
+            row.state = DEBT_STATE_CLOSED
+            row.closed_reason = DEBT_CLOSE_DISCHARGED
+            row.closed_at = now
+            closed += 1
+            touched.add(family)
+        if family in touched:
+            _set_family_return_state(
+                device,
+                family,
+                state=FAMILY_RETURN_RETURNED if _family_onboarded(family) else FAMILY_RETURN_UNVERIFIED,
+                source=RETURN_SOURCE_JOB,
+                now=now,
+                extra={"job_id": job_id, "late_confirmed": True},
+            )
+    # Release debt lease if no open rows remain.
+    open_rows = await _open_debts_async(db, device_id)
+    released = False
+    if not open_rows:
+        lease = await _active_lease_async(db, device_id)
+        if is_debt_lease(lease) and lease is not None:
+            lease.status = LeaseStatus.RELEASED.value
+            lease.released_at = now
+            await db.flush()
+            released = True
+    open_rows = await _open_debts_async(db, device_id)
+    _recompute_return_state_from_open_debts(device, open_rows, now=now)
+    return {
+        "ok": True,
+        "closed_count": closed,
+        "debt_lease_released": released,
+        "open_debt_count": len(open_rows),
+    }
+
+
+async def try_apply_late_confirmed(
+    db: AsyncSession,
+    *,
+    device_id: int,
+    job_id: int,
+    fencing_token: str,
+    disarm_results: Any,
+) -> dict[str, Any] | None:
+    """Return late-confirmed outcome when D5.6 source checks pass; else None.
+
+    Strict: only closes JOB-sourced open rows whose ``source_fencing_token``
+    exactly matches the caller token. Does not relax unrelated stale-token rules.
+    """
+    results = _normalize_disarm_results(disarm_results)
+    confirmed = [
+        family
+        for family, entry in results.items()
+        if str(entry.get("result") or "") == DISARM_RESULT_CONFIRMED
+    ]
+    if not confirmed:
+        return None
+    open_rows = await _open_debts_async(db, device_id)
+    matching = [
+        row
+        for row in open_rows
+        if row.family in confirmed
+        and row.source_kind == _SOURCE_KIND_JOB
+        and row.source_job_id == job_id
+        and row.source_fencing_token == fencing_token
+    ]
+    if not matching:
+        return None
+    return await apply_late_confirmed(
+        db,
+        device_id=device_id,
+        job_id=job_id,
+        fencing_token=fencing_token,
+        confirmed_families=confirmed,
+    )
 
 
 # ── retirement (D5.8) ─────────────────────────────────────────────────────
@@ -1019,13 +1248,40 @@ def open_debts_for_host_sync(db: Session, host_id: str) -> list[dict[str, Any]]:
 # ── init (D1.7 / D5.11) ───────────────────────────────────────────────────
 
 
+def _history_result_for_family_sync(
+    db: Session,
+    *,
+    device_id: int,
+    family: str,
+) -> tuple[JobInstance | None, str | None]:
+    """D1.7: latest ended job that left a footprint or reported disarm for family."""
+    jobs = list(
+        db.execute(
+            select(JobInstance)
+            .where(
+                JobInstance.device_id == device_id,
+                JobInstance.ended_at.is_not(None),
+            )
+            .order_by(JobInstance.ended_at.desc(), JobInstance.id.desc())
+        ).scalars().all()
+    )
+    for job in jobs:
+        results = _normalize_disarm_results(getattr(job, "disarm_results", None))
+        if family in results:
+            return job, str(results[family].get("result") or "") or None
+        footprints = _footprint_families_for_job_sync(db, job)
+        if family in footprints:
+            return job, DISARM_RESULT_INCOMPLETE
+    return None, None
+
+
 def init_device_return_sync(
     db: Session,
     *,
     device_id: int,
     dry_run: bool = True,
 ) -> dict[str, Any]:
-    """One-shot / repeatable stage-B init for a single device."""
+    """One-shot / repeatable stage-B init for a single device (D1.7 / D5.11)."""
     now = _now()
     device = _lock_device_sync(db, device_id)
     if device is None:
@@ -1041,46 +1297,142 @@ def init_device_return_sync(
         "dry_run": dry_run,
     }
 
-    # For each family: find latest job with disarm_results / footprint evidence.
-    # Conservative without full history scan: if return_state already set, keep
-    # idempotent; otherwise mark unverified/stock (ONBOARDED empty ⇒ no confirmed).
     current = dict(device.return_state or {})
     changed = False
     for family in FAMILY_STEPS:
         if family in current and isinstance(current[family], Mapping):
             summary["families"][family] = dict(current[family])
             continue
-        # Default stock unverified — never initialize as returned (D1.7).
+
+        if not _family_onboarded(family):
+            # Non-onboarded: stock unverified only — never returned (D1.7 / D8.7).
+            entry = {
+                "state": FAMILY_RETURN_UNVERIFIED,
+                "source": RETURN_SOURCE_STOCK,
+                "updated_at": now.isoformat(),
+            }
+            summary["families"][family] = entry
+            if not dry_run:
+                current[family] = entry
+                changed = True
+            continue
+
+        hist_job, hist_result = _history_result_for_family_sync(
+            db, device_id=device_id, family=family
+        )
+        if hist_job is None or not hist_result:
+            entry = {
+                "state": FAMILY_RETURN_UNVERIFIED,
+                "source": RETURN_SOURCE_STOCK,
+                "updated_at": now.isoformat(),
+            }
+            summary["families"][family] = entry
+            if not dry_run:
+                current[family] = entry
+                changed = True
+            continue
+
+        family_state = map_disarm_result_to_family_state(hist_result, onboarded=True)
+        # Historical jobs lack verified-probe support → never initialize as returned.
+        if family_state == FAMILY_RETURN_RETURNED:
+            family_state = FAMILY_RETURN_UNVERIFIED
         entry = {
-            "state": FAMILY_RETURN_UNVERIFIED,
+            "state": family_state,
             "source": RETURN_SOURCE_STOCK,
             "updated_at": now.isoformat(),
+            "history_job_id": hist_job.id,
+            "disarm_result": hist_result,
         }
         summary["families"][family] = entry
         if not dry_run:
             current[family] = entry
             changed = True
+            if family_state == FAMILY_RETURN_DEBT:
+                _upsert_open_debt_sync(
+                    db,
+                    device_id=device_id,
+                    family=family,
+                    source_kind=_SOURCE_KIND_STOCK,
+                    source_job_id=hist_job.id,
+                    source_fencing_token=None,
+                    cause=hist_result,
+                    evidence={"history_job_id": hist_job.id, "disarm_result": hist_result},
+                    now=now,
+                )
 
-    open_before = len(_open_debts_sync(db, device_id))
     if not dry_run and changed:
         device.return_state = current
 
+    open_rows = _open_debts_sync(db, device_id)
+    if not dry_run:
+        _recompute_return_state_from_open_debts(device, open_rows, now=now)
+        # Refresh summary families from recomputed state.
+        for family, entry in dict(device.return_state or {}).items():
+            if isinstance(entry, Mapping):
+                summary["families"][family] = dict(entry)
+
     lease = _active_lease_sync(db, device_id)
-    if open_before > 0 or any(
+    needs_debt = bool(open_rows) or any(
         (summary["families"].get(f) or {}).get("state") == FAMILY_RETURN_DEBT
         for f in FAMILY_STEPS
-    ):
+    )
+    if needs_debt:
         if lease is None and not dry_run:
             acquired = _acquire_debt_lease_sync(db, device, now=now)
             summary["acquired_debt_lease"] = bool(acquired)
             if acquired is None:
-                # Claim won the race — caller should retry as occupied path.
                 summary["status"] = "lease_conflict_retry"
                 return summary
         elif lease is not None and not is_debt_lease(lease):
             summary["status"] = "occupied_debt_recorded"
+            summary["open_debt_count"] = len(open_rows)
             return summary
 
     summary["status"] = "ok"
-    summary["open_debt_count"] = len(_open_debts_sync(db, device_id)) if not dry_run else open_before
+    summary["open_debt_count"] = (
+        len(_open_debts_sync(db, device_id)) if not dry_run else len(open_rows)
+    )
     return summary
+
+
+def refresh_device_return_debt_gauges(db: Session) -> None:
+    """Fact producer for ``stp_device_return_debt_*`` (D7.2 / §3.4.1 #5).
+
+    Called from ``/metrics`` scrape — queries open debt rows and writes gauges.
+    """
+    try:
+        rows = list(
+            db.execute(
+                select(DeviceReturnDebt).where(
+                    DeviceReturnDebt.state == DEBT_STATE_OPEN
+                )
+            ).scalars().all()
+        )
+    except Exception:
+        logger.warning("device_return_debt_gauge_refresh_failed", exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return
+
+    counts: dict[str, int] = {family: 0 for family in FAMILY_STEPS}
+    oldest: datetime | None = None
+    for row in rows:
+        fam = row.family if row.family in counts else "unknown"
+        counts[fam] = counts.get(fam, 0) + 1
+        created = row.created_at
+        if created is not None:
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            if oldest is None or created < oldest:
+                oldest = created
+    for family, count in counts.items():
+        set_device_return_debt_open(family, count)
+    if "unknown" in counts:
+        set_device_return_debt_open("unknown", counts["unknown"])
+    if oldest is None:
+        set_device_return_debt_oldest_seconds(0.0)
+    else:
+        age = max(0.0, (_now() - oldest).total_seconds())
+        set_device_return_debt_oldest_seconds(age)

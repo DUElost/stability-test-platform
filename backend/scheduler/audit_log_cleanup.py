@@ -100,6 +100,9 @@ BUSINESS_ACTIONS_ALLOWLIST: frozenset[str] = frozenset({
     "dead_letter_replay",
     "delete",
     "emergency_release_lease",  # #3646 管理员紧急释放终态 job 租约；与 retire_device 同族，90d
+    "device_return_override",  # #3728 U3 人工放行欠账；与 retire_device 同族，90d
+    "release_all_debt_leases",  # #3728 U3 初始化脚本批量释放欠账租约；business 90d
+    "job_late_confirmed_debt_closed",  # #3728 U3 迟到 confirmed 关闭同源欠账；business 90d
     "ensure_flash_prereqs",
     "ensure_flash_prereqs_request",
     "export",

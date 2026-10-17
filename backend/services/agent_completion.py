@@ -40,7 +40,7 @@ from backend.realtime.socketio_server import broadcast_run_job_update
 from backend.services.aggregator import PlanAggregator
 from backend.services.agent_recovery import resume_expired_lease_for_recovery
 from backend.services.errors import BadRequest, Conflict, NotFound
-from backend.services.device_return import handle_job_lease_release
+from backend.services.device_return import handle_job_lease_release, try_apply_late_confirmed
 from backend.services.state_machine import InvalidTransitionError, JobStateMachine
 from backend.agent.contracts.device_return import (
     DISARM_RESULT_EXECUTED_UNVERIFIED as _DISARM_RESULT_EXECUTED_UNVERIFIED,
@@ -466,6 +466,37 @@ async def complete_agent_job(
             historical_lease is None
             or historical_lease.fencing_token != payload.fencing_token
         ):
+            # D5.6 / §3.4.1 #4: after JOB→debt conversion the historical JOB
+            # lease row is gone (in-place type change). Allow late *confirmed*
+            # only when open debt rows store the original fencing token.
+            late = await try_apply_late_confirmed(
+                db,
+                device_id=job.device_id,
+                job_id=job.id,
+                fencing_token=payload.fencing_token,
+                disarm_results=payload.disarm_results,
+            )
+            if late is not None and late.get("ok"):
+                await record_audit_async(
+                    db,
+                    action="job_late_confirmed_debt_closed",
+                    resource_type="job_instance",
+                    resource_id=job.id,
+                    details={
+                        "plan_run_id": job.plan_run_id,
+                        "current_status": job.status,
+                        "closed_count": late.get("closed_count"),
+                        "debt_lease_released": late.get("debt_lease_released"),
+                        "open_debt_count": late.get("open_debt_count"),
+                    },
+                    username="agent",
+                )
+                await db.commit()
+                return {
+                    "job_id": job_id,
+                    "status": job.status,
+                    "late_confirmed": late,
+                }
             current_status = job.status
             await record_audit_async(
                 db,
