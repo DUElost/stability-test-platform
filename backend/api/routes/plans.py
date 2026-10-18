@@ -461,6 +461,50 @@ def _validate_script_refs(db: Session, steps: list[PlanStepIn]) -> None:
         )
 
 
+def _validate_onboarded_teardown(
+    steps: list[PlanStepIn],
+    *,
+    onboarded: dict | None = None,
+) -> None:
+    """Reject onboarded plans missing split teardown shape (#3723 §3.6.5).
+
+    Must run after ``_validate_script_refs`` and before
+    ``_validate_onboarded_wall_clock`` so co-violations return this code.
+    """
+    if not steps:
+        return
+    registry = (
+        _device_return_contract.ONBOARDED if onboarded is None else onboarded
+    )
+    # PlanStepIn → mapping for the pure contract helper
+    shaped = []
+    for s in steps:
+        shaped.append({
+            "step_key": s.step_key,
+            "script_name": s.script_name,
+            "script_version": s.script_version,
+            "stage": s.stage,
+            "enabled": s.enabled,
+        })
+    violations = _device_return_contract.validate_onboarded_teardown_shape(
+        shaped, onboarded=registry,
+    )
+    if not violations:
+        return
+    raise HTTPException(
+        status_code=422,
+        detail={
+            "code": _device_return_contract.ONBOARDED_TEARDOWN_INVALID,
+            "message": (
+                "已接入专项计划必须符合拆分后的接入形态：含登记解除步骤且"
+                "版本不低于最低版本；不得再用旧合并版 finish"
+                "（ADR-0061 D2 / D8.3 / #3723 §3.6.5）"
+            ),
+            "violations": violations,
+        },
+    )
+
+
 def _validate_step_param_values(steps: list[PlanStepIn], db: Session) -> None:
     """#977：有 ``param_schema`` 时，步骤参数的类型/枚举在保存期拒绝（422）。
 
@@ -856,6 +900,8 @@ def create_plan(
     _validate_script_refs(db, payload.steps)
     _validate_step_param_values(payload.steps, db)
     _validate_stall_seconds_capability(payload.steps, db)
+    # §3.6.5：接入形态校验须在墙钟之前（同请违两者时返回本节码）
+    _validate_onboarded_teardown(payload.steps)
     # §3.3.2 C：登记预算须在通用 lifecycle 对 0/负数抢先拦截之前执行
     _validate_onboarded_wall_clock(payload.steps, db)
     _validate_assembled_lifecycle(
@@ -1012,6 +1058,7 @@ def append_chain_tail(
     _validate_script_refs(db, payload.steps)
     _validate_step_param_values(payload.steps, db)
     _validate_stall_seconds_capability(payload.steps, db)
+    _validate_onboarded_teardown(payload.steps)
     _validate_onboarded_wall_clock(payload.steps, db)
     _validate_assembled_lifecycle(
         payload.steps, None, None, None, None,
@@ -1286,6 +1333,7 @@ def update_plan(
         _validate_script_refs(db, payload.steps)
         _validate_step_param_values(payload.steps, db)
         _validate_stall_seconds_capability(payload.steps, db)
+        _validate_onboarded_teardown(payload.steps)
         _validate_onboarded_wall_clock(payload.steps, db)
         _validate_assembled_lifecycle(
             payload.steps,

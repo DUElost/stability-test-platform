@@ -34,12 +34,14 @@ Phase 3 起 ``backend/agent/scripts/<name>/`` 是**每族一棵可演进的源�
     python tools/dev/check_script_packages.py                          # --check
     python tools/dev/check_script_packages.py --register gpu_setup 1.2.4
     python tools/dev/check_script_packages.py --publish --packages-root /mnt/stp-aee/packages
+    python tools/dev/check_script_packages.py --publish-restored NAME@VERSION --source-tree TREE --packages-root DIR
 """
 
 from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import importlib.util
 import json
 import os
@@ -47,6 +49,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 from pathlib import Path
 
@@ -239,6 +242,112 @@ def publish_latest(rebuilt: dict[str, dict], doc: dict, packages_root: Path) -> 
         os.replace(tmp, dest)
         done["published"].append(label)
     return done, errs
+
+
+def find_script_entry(doc: dict, name: str, version: str) -> dict | None:
+    """Return the manifest version entry for ``name@version``, or None."""
+    tool = (doc.get("tools") or {}).get(name)
+    if not isinstance(tool, dict):
+        return None
+    for entry in tool.get("versions") or []:
+        if str(entry.get("version")) == str(version):
+            return entry
+    return None
+
+
+def rebuild_package_from_git_tree(
+    tree_oid: str,
+    packer,
+    out: Path,
+    *,
+    repo_root: Path | None = None,
+) -> dict:
+    """Rebuild a deterministic package from a git tree object (#3723 §3.6.3).
+
+    Uses ``git archive`` + ``git ls-tree``; extract with ``tarfile`` ``filter="data"``.
+    """
+    root = repo_root or REPO_ROOT
+    tree_oid = str(tree_oid).strip()
+    if not tree_oid:
+        raise ValueError("source-tree 为空")
+    arch = subprocess.run(
+        ["git", "archive", tree_oid],
+        cwd=root,
+        capture_output=True,
+        check=False,
+    )
+    if arch.returncode != 0:
+        err = (arch.stderr or b"").decode("utf-8", "replace").strip()
+        raise RuntimeError(f"git archive {tree_oid} 失败：{err or arch.returncode}")
+    ls = subprocess.run(
+        ["git", "ls-tree", "-r", "--name-only", tree_oid],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if ls.returncode != 0:
+        raise RuntimeError(f"git ls-tree {tree_oid} 失败：{(ls.stderr or '').strip()}")
+    members = [Path(line) for line in ls.stdout.splitlines() if line.strip()]
+    with tempfile.TemporaryDirectory(prefix="stp-restore-tree-") as tmp:
+        src = Path(tmp) / "src"
+        src.mkdir()
+        with tarfile.open(fileobj=io.BytesIO(arch.stdout), mode="r:") as tar:
+            tar.extractall(src, filter="data")
+        return packer.build_deterministic_tar_gz(src, out, files=members)
+
+
+def publish_restored(
+    doc: dict,
+    name: str,
+    version: str,
+    source_tree: str,
+    packages_root: Path,
+    packer,
+    *,
+    repo_root: Path | None = None,
+) -> tuple[str, str | None]:
+    """Restore one historical package from a git tree into ``packages_root``.
+
+    Returns ``(status, error)`` where status is ``published`` / ``identical`` /
+    ``rejected``. Only writes ``packages/<NAME>/<VERSION>.tar.gz``; never touches
+    ``tool_manifest.json`` or site ``manifest.json``.
+    """
+    label = f"{name}@{version}"
+    entry = find_script_entry(doc, name, version)
+    if entry is None:
+        return "rejected", f"{label}: 条目不存在于 tool_manifest.json"
+    expected = str(entry.get("package_sha256") or "")
+    if not expected:
+        return "rejected", f"{label}: manifest 缺少 package_sha256"
+    with tempfile.TemporaryDirectory(prefix="stp-publish-restored-") as tmp:
+        built = Path(tmp) / "restored.tar.gz"
+        try:
+            facts = rebuild_package_from_git_tree(
+                source_tree, packer, built, repo_root=repo_root,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return "rejected", f"{label}: 重建失败——{exc}"
+        got = facts["package_sha256"]
+        if got != expected:
+            return (
+                "rejected",
+                f"{label}: 重建 sha {got[:12]} ≠ manifest {expected[:12]}——拒绝写入",
+            )
+        dest = packages_root / name / f"{version}.tar.gz"
+        if dest.exists():
+            existing = hashlib.sha256(dest.read_bytes()).hexdigest()
+            if existing == expected:
+                return "identical", None
+            return (
+                "rejected",
+                f"{label}: 站点已有不同字节（sha {existing[:12]}）——拒绝覆写",
+            )
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp_dest = dest.with_name(f".{dest.name}.tmp-{os.getpid()}")
+        shutil.copyfile(built, tmp_dest)
+        os.replace(tmp_dest, dest)
+        return "published", None
 
 
 def script_families(doc: dict) -> dict[str, list[dict]]:
@@ -507,11 +616,65 @@ def run_self_test() -> int:
                                                           doc, Path(tmp) / "packages2")[1]):
             failures.append("构建 sha ≠ 登记应拒绝发布")
 
+
+        # --publish-restored（#3723 §3.6.3 方案 A）：五项自检
+        restore_root = Path(tmp) / "restore_repo"
+        restore_root.mkdir()
+        subprocess.run(["git", "init"], cwd=restore_root, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=restore_root, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "t"], cwd=restore_root, check=True, capture_output=True)
+        fam = restore_root / "fam"
+        fam.mkdir()
+        (fam / "fam.py").write_text("print('restored')\n", encoding="utf-8")
+        (fam / "capabilities.json").write_text("[]\n", encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=restore_root, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "seed"], cwd=restore_root, check=True, capture_output=True)
+        tree_oid = subprocess.run(
+            ["git", "rev-parse", "HEAD:fam"],
+            cwd=restore_root, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        with tempfile.TemporaryDirectory() as rtmp:
+            built = Path(rtmp) / "x.tar.gz"
+            rfacts = rebuild_package_from_git_tree(tree_oid, packer, built, repo_root=restore_root)
+        restore_doc = {"schema_version": 1, "tools": {
+            "fam": {"kind": "script", "versions": [{
+                "version": "9.9.9",
+                "package_sha256": rfacts["package_sha256"],
+                "artifact": "packages/fam/9.9.9.tar.gz",
+                "python": None, "script": "fam.py", "retired": True,
+            }]},
+        }}
+        site = Path(tmp) / "restore_site"
+        st, err = publish_restored(restore_doc, "fam", "9.9.9", tree_oid, site, packer, repo_root=restore_root)
+        if st != "published" or err or not (site / "fam" / "9.9.9.tar.gz").is_file():
+            failures.append(f"publish-restored SHA 一致应写入：{st} {err}")
+        st2, err2 = publish_restored(restore_doc, "fam", "9.9.9", tree_oid, site, packer, repo_root=restore_root)
+        if st2 != "identical" or err2:
+            failures.append(f"publish-restored 同字节应跳过：{st2} {err2}")
+        (site / "fam" / "9.9.9.tar.gz").write_bytes(b"tampered-restored")
+        st3, err3 = publish_restored(restore_doc, "fam", "9.9.9", tree_oid, site, packer, repo_root=restore_root)
+        if st3 != "rejected" or not err3 or "不同字节" not in err3:
+            failures.append(f"publish-restored 异字节应拒绝：{st3} {err3}")
+        if (site / "fam" / "9.9.9.tar.gz").read_bytes() != b"tampered-restored":
+            failures.append("publish-restored 异字节拒绝不得改动站点文件")
+        bad_doc = json.loads(json.dumps(restore_doc))
+        bad_doc["tools"]["fam"]["versions"][0]["package_sha256"] = "0" * 64
+        site_b = Path(tmp) / "restore_site_badsha"
+        st4, err4 = publish_restored(bad_doc, "fam", "9.9.9", tree_oid, site_b, packer, repo_root=restore_root)
+        if st4 != "rejected" or not err4 or "≠ manifest" not in err4:
+            failures.append(f"publish-restored SHA 不一致应拒绝：{st4} {err4}")
+        if (site_b / "fam" / "9.9.9.tar.gz").exists():
+            failures.append("SHA 不一致时不得写入站点")
+        st5, err5 = publish_restored(restore_doc, "fam", "0.0.0", tree_oid, site, packer, repo_root=restore_root)
+        if st5 != "rejected" or not err5 or "条目不存在" not in err5:
+            failures.append(f"publish-restored 条目不存在应拒绝：{st5} {err5}")
+
+
     if failures:
         for f in failures:
             print(f"[SELFTEST-FAIL] {f}", file=sys.stderr)
         return 1
-    print("[OK] check_script_packages self-test 红绿双向（族树/重建/登记/改树未发版/版本复用/退役回落/残留 v 目录/kind 归类（tool 豁免、script ghost 红、全退役绿）/requires_tools 引用（未登记/非 tool/缺版本/退役/坏声明）/publish（只落最新、同字节不重写、不同字节拒覆写、原子落位））")
+    print("[OK] check_script_packages self-test 红绿双向（族树/重建/登记/改树未发版/版本复用/退役回落/残留 v 目录/kind 归类（tool 豁免、script ghost 红、全退役绿）/requires_tools 引用（未登记/非 tool/缺版本/退役/坏声明）/publish（只落最新、同字节不重写、不同字节拒覆写、原子落位）/publish-restored（写入/同字节跳过/异字节拒/SHA 不一致拒/条目不存在拒））")
     return 0
 
 
@@ -521,6 +684,13 @@ def main() -> int:
     ap.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     ap.add_argument("--register", nargs=2, metavar=("NAME", "VERSION"), help="从族树打包并追加登记（写 manifest）")
     ap.add_argument("--publish", action="store_true", help="把每族最新条目的包写到 --packages-root 并派生 manifest.json 副本")
+    ap.add_argument(
+        "--publish-restored",
+        metavar="NAME@VERSION",
+        default=None,
+        help="按 git 树对象重建历史包并写入 --packages-root（#3723 §3.6.3 方案 A）",
+    )
+    ap.add_argument("--source-tree", default=None, help="与 --publish-restored 配套的族树对象 OID")
     ap.add_argument("--packages-root", type=Path, default=None)
     ap.add_argument("--self-test", action="store_true")
     ap.add_argument("-q", "--quiet", action="store_true")
@@ -530,6 +700,29 @@ def main() -> int:
 
     packer = _load_packer()
     doc = packer.load_manifest(args.manifest)
+
+    if args.publish_restored:
+        if not args.source_tree:
+            print("--publish-restored 需要 --source-tree", file=sys.stderr)
+            return 2
+        if args.packages_root is None:
+            print("--publish-restored 需要 --packages-root", file=sys.stderr)
+            return 2
+        if "@" not in args.publish_restored:
+            print("--publish-restored 须为 NAME@VERSION", file=sys.stderr)
+            return 2
+        rname, rver = args.publish_restored.split("@", 1)
+        status, rerr = publish_restored(
+            doc, rname, rver, args.source_tree, args.packages_root, packer,
+        )
+        if status == "rejected":
+            print(f"[FAIL] publish-restored {rerr}", file=sys.stderr)
+            return 1
+        if status == "identical":
+            print(f"[OK] publish-restored {rname}@{rver}：同字节跳过 → {args.packages_root}")
+        else:
+            print(f"[OK] publish-restored {rname}@{rver}：已写入 → {args.packages_root / rname / (rver + '.tar.gz')}")
+        return 0
 
     if args.register:
         name, version = args.register

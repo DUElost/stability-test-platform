@@ -1,7 +1,8 @@
 """Device-return contract shared by Agent and control plane (ADR-0061 / #3723).
 
 U1 owns machine values, FAMILY_STEPS, footprint helpers, lease-lost conflict
-handling, and EXECUTING_DISARM. U5 (#3730) appends power-cycle ONBOARDED only.
+handling, and EXECUTING_DISARM. U5 (#3730) appends power-cycle ONBOARDED,
+job-level step-role helpers (§3.0.2 / §3.6.2), and Plan save-shape checks (§3.6.5).
 """
 
 from __future__ import annotations
@@ -133,7 +134,7 @@ ONBOARDED: dict[str, Any] = {
         ),
         # 解除脚本与最低版本
         "disarm_script": "powercycle_disarm",
-        "disarm_min_version": "1.0.2",
+        "disarm_min_version": "1.0.3",
         "finish_script": "powercycle_finish",
         "finish_min_version": "1.1.0",
         # 探针模式（脚本参数 mode）
@@ -208,19 +209,146 @@ def disarm_script_names_for_family(
     return spec["disarm"]
 
 
+
+# ── §3.0.2 / §3.6.2：job 级步骤角色（按实际 version / 冻结包 SHA）────────────
+
+STEP_ROLE_DISARM = "disarm"
+STEP_ROLE_COLLECT = "collect"
+STEP_ROLE_UNKNOWN_LEGACY_DISARM = "unknown_legacy_disarm"
+
+REASON_UNKNOWN_LEGACY_VERSION = "unknown_legacy_version"
+
+# Plan 保存入口 §3.6.5 reasons
+TEARDOWN_REASON_DISARM_MISSING = "disarm_missing"
+TEARDOWN_REASON_DISARM_DISABLED = "disarm_disabled"
+TEARDOWN_REASON_DISARM_BELOW_MIN = "disarm_below_min_version"
+TEARDOWN_REASON_FINISH_BELOW_MIN = "finish_below_min_version"
+
+ONBOARDED_TEARDOWN_INVALID = "ONBOARDED_TEARDOWN_INVALID"
+
+
+def version_key(version: str | None) -> tuple[int, ...]:
+    """Numeric-segment version key (``1.0.10`` > ``1.0.3``); empty → ()."""
+    if not version or not isinstance(version, str):
+        return ()
+    parts: list[int] = []
+    for seg in version.strip().split("."):
+        if not seg:
+            return ()
+        if not seg.isdigit():
+            # non-numeric → unparsable
+            return ()
+        parts.append(int(seg))
+    return tuple(parts)
+
+
+def version_at_least(version: str | None, minimum: str) -> bool:
+    """True when ``version`` parses and is >= ``minimum`` by numeric segments."""
+    vk = version_key(version)
+    mk = version_key(minimum)
+    if not vk or not mk:
+        return False
+    # pad shorter
+    n = max(len(vk), len(mk))
+    vk = vk + (0,) * (n - len(vk))
+    mk = mk + (0,) * (n - len(mk))
+    return vk >= mk
+
+
+def step_version_of(step: Mapping[str, Any]) -> str:
+    """PlanStep uses ``script_version``; pipeline steps use ``version``."""
+    for key in ("script_version", "version"):
+        raw = step.get(key)
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip()
+    return ""
+
+
+def _finish_major_minor(version: str) -> tuple[int, int] | None:
+    vk = version_key(version)
+    if len(vk) < 2:
+        return None
+    return int(vk[0]), int(vk[1])
+
+
+def step_teardown_role(
+    script_name: str,
+    version: str | None = None,
+    *,
+    package_sha: str | None = None,
+    onboarded: Mapping[str, Any] | None = None,
+) -> Optional[str]:
+    """Classify a teardown script by actual job version (#3723 §3.0.2).
+
+    Returns one of:
+    - ``disarm``: known disarm obligation (disarm any ver; finish@1.0.x)
+    - ``collect``: finish@1.1.0+ collection only
+    - ``unknown_legacy_disarm``: missing/unparsable version — conservative disarm
+    - ``None``: not a power-cycle teardown script we classify
+
+    ``package_sha`` is accepted for shared-call signature parity (U8 freezes it);
+    role does not currently branch on SHA — identity is (name, version) in manifest.
+    """
+    del package_sha  # reserved for callers that pass frozen SHA
+    if not script_name:
+        return None
+    _ = onboarded  # API parity with shared callers; role table is version-driven
+    ver = (version or "").strip()
+
+    if script_name == "powercycle_disarm":
+        if not ver or not version_key(ver):
+            return STEP_ROLE_UNKNOWN_LEGACY_DISARM
+        return STEP_ROLE_DISARM
+
+    if script_name == "powercycle_finish":
+        if not ver or not version_key(ver):
+            return STEP_ROLE_UNKNOWN_LEGACY_DISARM
+        mm = _finish_major_minor(ver)
+        if mm is None:
+            return STEP_ROLE_UNKNOWN_LEGACY_DISARM
+        major, minor = mm
+        if (major, minor) == (1, 0):
+            return STEP_ROLE_DISARM
+        if (major, minor) >= (1, 1):
+            return STEP_ROLE_COLLECT
+        # 0.x or other — conservative
+        return STEP_ROLE_UNKNOWN_LEGACY_DISARM
+
+    # Non-power-cycle: fall back to FAMILY_STEPS registry lists (no version split).
+    for _family, spec in FAMILY_STEPS.items():
+        if script_name in spec["disarm"] or script_name in spec["disarm_onboarded"]:
+            return STEP_ROLE_DISARM
+    return None
+
+
+def is_disarm_role(role: str | None) -> bool:
+    return role in (STEP_ROLE_DISARM, STEP_ROLE_UNKNOWN_LEGACY_DISARM)
+
+
 def is_disarm_script(
     script_name: str,
     *,
     footprint_families: Iterable[str],
+    version: str | None = None,
+    package_sha: str | None = None,
     onboarded: Mapping[str, Any] | None = None,
 ) -> bool:
-    """True when ``script_name`` is a disarm step for a family with footprint."""
+    """True when the script is a disarm obligation for a footprint family.
+
+    Version-aware for power-cycle (#3723 §3.0.2): finish@1.1.0 is collect-only
+    and must not count as disarm; finish@1.0.x and unknown still do.
+    """
     if not script_name:
         return False
-    for family in footprint_families:
-        if script_name in disarm_script_names_for_family(family, onboarded=onboarded):
-            return True
-    return False
+    role = step_teardown_role(
+        script_name, version, package_sha=package_sha, onboarded=onboarded,
+    )
+    if not is_disarm_role(role):
+        return False
+    family = family_for_teardown_script(script_name, onboarded=onboarded)
+    if family is None:
+        return False
+    return family in set(footprint_families)
 
 
 def select_disarm_steps(
@@ -229,37 +357,176 @@ def select_disarm_steps(
     *,
     onboarded: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Filter teardown steps to disarm steps for families that left a footprint.
+    """Filter teardown to actual disarm-role steps for footprint families.
 
-    Used for manual_exit (#3723 §3.2 第 3 条): onboarded families run only
-    registered disarm steps; others run the family's full teardown step(s).
+    manual_exit / abort must run *all* actual disarm steps in pipeline order
+    (#3723 §3.0.2): legacy finish@1.0.x and powercycle_disarm both qualify;
+    finish@1.1.0 collect-only does not.
     """
-    wanted: set[str] = set()
-    for family in footprint_families:
-        wanted.update(disarm_script_names_for_family(family, onboarded=onboarded))
-    if not wanted:
+    families = set(footprint_families)
+    if not families:
         return []
     selected: list[dict[str, Any]] = []
     for step in teardown_def or []:
         if not isinstance(step, Mapping):
             continue
-        if script_name_from_step(step) in wanted:
-            selected.append(dict(step))
+        name = script_name_from_step(step)
+        ver = step_version_of(step)
+        role = step_teardown_role(name, ver, onboarded=onboarded)
+        if not is_disarm_role(role):
+            continue
+        family = family_for_teardown_script(name, onboarded=onboarded)
+        if family is None or family not in families:
+            continue
+        selected.append(dict(step))
     return selected
+
+
+def family_for_teardown_script(
+    script_name: str,
+    *,
+    onboarded: Mapping[str, Any] | None = None,
+) -> Optional[str]:
+    """Map a teardown script name to its family (ignores ONBOARDED split).
+
+    finish and disarm both map to power-cycle so legacy finish@1.0.x can still
+    attribute disarm_results after ONBOARDED registration.
+    """
+    del onboarded
+    if not script_name:
+        return None
+    for family, spec in FAMILY_STEPS.items():
+        if script_name in spec["disarm"] or script_name in spec["disarm_onboarded"]:
+            return family
+        if script_name in spec.get("footprint", ()):
+            continue
+    return None
 
 
 def family_for_disarm_script(
     script_name: str,
     *,
+    version: str | None = None,
+    package_sha: str | None = None,
     onboarded: Mapping[str, Any] | None = None,
 ) -> Optional[str]:
-    """Inverse of disarm_script_names_for_family (first matching family)."""
-    if not script_name:
+    """Family for a step that carries a disarm obligation at this version."""
+    role = step_teardown_role(
+        script_name, version, package_sha=package_sha, onboarded=onboarded,
+    )
+    if not is_disarm_role(role):
         return None
-    for family in FAMILY_STEPS:
-        if script_name in disarm_script_names_for_family(family, onboarded=onboarded):
-            return family
-    return None
+    return family_for_teardown_script(script_name, onboarded=onboarded)
+
+
+def _step_enabled(step: Mapping[str, Any]) -> bool:
+    enabled = step.get("enabled")
+    if enabled is False:
+        return False
+    return True
+
+
+def _step_stage(step: Mapping[str, Any]) -> str:
+    stage = step.get("stage") or step.get("phase") or ""
+    return str(stage).strip().lower()
+
+
+def validate_onboarded_teardown_shape(
+    steps: Iterable[Mapping[str, Any]],
+    onboarded: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Return §3.6.5 violation dicts for Plan save (empty = ok).
+
+    Pure function: PlanStep-like mappings + ONBOARDED → gap list. Reuses
+    ``step_teardown_role`` / version helpers; does not invent name/version rules.
+    """
+    registry = ONBOARDED if onboarded is None else onboarded
+    step_list = [s for s in steps if isinstance(s, Mapping)]
+    violations: list[dict[str, Any]] = []
+
+    for family, spec in registry.items():
+        if not isinstance(spec, dict):
+            continue
+        fam_steps = FAMILY_STEPS.get(family)
+        if not fam_steps:
+            continue
+        footprint_names = set(fam_steps["footprint"])
+        disarm_script = str(spec.get("disarm_script") or "")
+        disarm_min = str(spec.get("disarm_min_version") or "")
+        finish_script = str(spec.get("finish_script") or "")
+        finish_min = str(spec.get("finish_min_version") or "")
+        if not disarm_script or not disarm_min:
+            continue
+
+        footprint_keys: list[str] = []
+        for s in step_list:
+            name = s.get("script_name") or script_name_from_step(s)
+            if name not in footprint_names:
+                continue
+            if not _step_enabled(s):
+                continue
+            stage = _step_stage(s)
+            # footprint steps live in init; accept missing stage for engine-shaped
+            if stage and stage not in ("init",):
+                continue
+            footprint_keys.append(str(s.get("step_key") or s.get("step_id") or name))
+        if not footprint_keys:
+            # no enabled footprint → only-collect plans unconstrained
+            continue
+
+        related: list[dict[str, Any]] = []
+        disarm_steps: list[Mapping[str, Any]] = []
+        finish_steps: list[Mapping[str, Any]] = []
+        for s in step_list:
+            name = str(s.get("script_name") or script_name_from_step(s) or "")
+            if name not in (disarm_script, finish_script):
+                continue
+            stage = _step_stage(s)
+            if stage and stage not in ("teardown",):
+                continue
+            ver = step_version_of(s)
+            role = step_teardown_role(name, ver, onboarded=registry)
+            entry = {
+                "step_key": str(s.get("step_key") or s.get("step_id") or ""),
+                "script_name": name,
+                "script_version": ver,
+                "enabled": _step_enabled(s),
+                "role": role or "",
+            }
+            related.append(entry)
+            if name == disarm_script:
+                disarm_steps.append(s)
+            if name == finish_script:
+                finish_steps.append(s)
+
+        enabled_disarm = [s for s in disarm_steps if _step_enabled(s)]
+        common = {
+            "family": family,
+            "footprint_step_keys": list(footprint_keys),
+            "required_disarm_script": disarm_script,
+            "disarm_min_version": disarm_min,
+            "finish_min_version": finish_min,
+            "teardown_steps": list(related),
+        }
+        if not disarm_steps:
+            violations.append({**common, "reason": TEARDOWN_REASON_DISARM_MISSING})
+        elif not enabled_disarm:
+            violations.append({**common, "reason": TEARDOWN_REASON_DISARM_DISABLED})
+        else:
+            if not any(
+                version_at_least(step_version_of(s), disarm_min) for s in enabled_disarm
+            ):
+                violations.append({**common, "reason": TEARDOWN_REASON_DISARM_BELOW_MIN})
+
+        enabled_finish = [s for s in finish_steps if _step_enabled(s)]
+        for s in enabled_finish:
+            ver = step_version_of(s)
+            if not version_at_least(ver, finish_min):
+                violations.append({**common, "reason": TEARDOWN_REASON_FINISH_BELOW_MIN})
+                break
+
+    return violations
+
 
 
 def make_disarm_result(

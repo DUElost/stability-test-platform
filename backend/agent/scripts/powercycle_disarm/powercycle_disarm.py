@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """开关机解除 / 探针（#3730 / #3723 §3.6 / ADR-0061 D2）。
 
-v1.0.2：§3.6.1.3 —— 未验证 **probe**（含原始 clear）不得 ``success=true`` /
+v1.0.3：§3.6.1.3 —— 未验证 **probe**（含原始 clear）不得 ``success=true`` /
 ``executed_unverified`` 当通过；已完成 **disarm** 的未验证结果仍为
 ``executed_unverified``。
 v1.0.1：按 #3723 v1.6 §3.6.1 区分类别语义——未验证类别不得输出正式
@@ -78,15 +78,75 @@ def _load_verified_classes() -> list[dict[str, str]]:
     return [dict(x) for x in _VERIFIED_DEVICE_CLASSES]
 
 
-def _wait_device_online(timeout_s: int) -> bool:
-    """轮询 get-state==device 且 boot_completed==1，最长 timeout_s 秒。"""
-    deadline = time.time() + timeout_s
-    while time.time() < deadline:
-        if device_online():
-            booted = adb_shell("getprop sys.boot_completed", timeout=15).strip()
-            if booted == "1":
-                return True
-        time.sleep(10)
+# §3.6.2：同步轮询打戳；相邻 PROGRESS 最多 15s；不扩 660s 外墙。
+_WAIT_POLL_INTERVAL_S = 15
+_WAIT_MAX_ITERATIONS = 10_000  # 假时钟测试独立迭代上界
+
+
+def _wait_device_online(
+    timeout_s: int,
+    *,
+    clock=time.monotonic,
+    sleeper=time.sleep,
+    online_fn=None,
+    boot_prop_fn=None,
+    progress_fn=None,
+) -> bool:
+    """轮询 get-state==device 且 boot_completed==1，最长 timeout_s 秒。
+
+    #3723 §3.6.2：monotonic 总截止；每次真实 device/boot 轮询完成后递增
+    PROGRESS；相邻戳最多 15s；ADB 单次受剩余预算与 15s 周期约束；sleep
+    受剩余截止约束；同步轮询，无后台线程；超时退出不再打戳。
+    """
+    timeout_s = max(0, int(timeout_s or 0))
+    deadline = clock() + timeout_s
+    online_fn = online_fn or device_online
+    boot_prop_fn = boot_prop_fn or (
+        lambda t: adb_shell("getprop sys.boot_completed", timeout=t).strip()
+    )
+    progress_fn = progress_fn or progress_stamp
+    seq = 0
+
+    for _ in range(_WAIT_MAX_ITERATIONS):
+        now = clock()
+        remaining = deadline - now
+        if remaining <= 0:
+            return False
+        # ADB 单次：剩余总预算与 15s 周期取小，至少 1s（若仍有预算）
+        adb_timeout = max(1, min(_WAIT_POLL_INTERVAL_S, int(remaining)))
+        online = False
+        booted = ""
+        try:
+            online = bool(online_fn())
+            if online:
+                booted = str(boot_prop_fn(adb_timeout) or "").strip()
+        except Exception as exc:  # noqa: BLE001 — 轮询诊断入戳，不中断截止
+            progress_fn({
+                "phase": "wait_device_online",
+                "seq": seq + 1,
+                "online": False,
+                "boot_completed": "",
+                "error": str(exc)[:200],
+                "remaining_s": max(0, int(deadline - clock())),
+            })
+            seq += 1
+            online = False
+            booted = ""
+        else:
+            seq += 1
+            progress_fn({
+                "phase": "wait_device_online",
+                "seq": seq,
+                "online": online,
+                "boot_completed": booted,
+                "remaining_s": max(0, int(deadline - clock())),
+            })
+        if online and booted == "1":
+            return True
+        sleep_for = min(_WAIT_POLL_INTERVAL_S, max(0.0, deadline - clock()))
+        if sleep_for <= 0:
+            return False
+        sleeper(sleep_for)
     return False
 
 
