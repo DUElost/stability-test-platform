@@ -3,9 +3,10 @@
 Status: implemented
 Class: feature
 
-按 [#3723](https://github.com/DUElost/stability-test-platform/issues/3723) **v1.6** §1.2 / §3.0 / §3.4 / **§3.4.1** / §4 U3
-与 ADR-0061 D1.3–8、D4.2、D5、D7.2 实施 [#3728](https://github.com/DUElost/stability-test-platform/issues/3728)。
+按 [#3723](https://github.com/DUElost/stability-test-platform/issues/3723) **v1.7** §1.2 / §3.0 / §3.4 / **§3.4.1** / **§3.4.2** / §4 U3 / 4.1 / 4.2
+与 ADR-0061 D1.3–8、D4.2、D5、D7.2（Accepted v1.1）实施 [#3728](https://github.com/DUElost/stability-test-platform/issues/3728)。
 Draft PR #3748 待规划确认与独立复核；合入不等于生效（阶段 B 初始化与控制面部署按 §5）。
+Owner #3751：五项接受 + M1–M3；共享服务类别政策与平台终止消费交 **U8**，U3 **不改** Agent/共享契约/包/模板。
 
 ## Decision
 
@@ -26,7 +27,8 @@ Draft PR #3748 待规划确认与独立复核；合入不等于生效（阶段 B
    `stp_device_return_override_total` 与三条 warning 告警；`/metrics` 刮取时
    `refresh_device_return_debt_gauges` 为真实生产者；`init_device_return.py`
    默认 `--dry-run`，`--apply` 才写库，`--release-all-debt-leases` 为回退。
-8. 消费共享 `device_return` 契约机器值；**不**改 `ONBOARDED`（U5）、**不**重做 U1/U2。
+8. 消费共享 `device_return` 契约机器值；**不**改 `ONBOARDED`（U5）、**不**重做 U1/U2；
+   **不**改 Agent/共享契约/包/模板（U8 边界）。
 9. 历史 teardown 推导抽出 `backend/services/disarm_derive.py`（叶模块）：
    `device_return` / `agent_completion` 均顶层依赖它，打破 C5 环并去掉函数体内 import。
 
@@ -35,12 +37,28 @@ Draft PR #3748 待规划确认与独立复核；合入不等于生效（阶段 B
 1. **无终态回报 + 足迹**：统一入口按 init STARTED 等足迹补 `incomplete` 并建欠账；无足迹
    PENDING 仍释放，不一律造欠账。
 2. **初始化历史（D1.7）**：已接入专项取最近建立足迹/解除的 job 映射存量状态与 stock 条目；
-   成功解除覆盖更早残留；历史不得初始化为 returned。
+   成功解除覆盖更早残留；历史不得初始化为 returned。预阶段 A `disarm_results=NULL` +
+   teardown COMPLETED → 经 StepTrace 推导，落 unverified/stock（非 incomplete/debt）。
 3. **D5.10 重算**：事务完成前按真实 open 条目重算专项状态——有 open 则必须为 debt。
 4. **迟到 `/complete` confirmed（D5.6）**：`try_apply_late_confirmed` 接到真实终态分支；
    严格核验条目保存的原 job / fencing token；只关同源；不改原 job 终态；错误 token 仍 409。
 5. **CI**：审计 action 保留期登记、`DeviceReturnOverrideOut` 双向契约、欠账 Gauge 生产者与
    `stp_device_return_` 告警前缀。
+
+### §3.4.2 CLI 逐设备事务（v1.7）
+
+1. 设备 id **keyset 分页**（每页 100，id ASC，游标最后 id）；分页短读事务，处理前结束；
+   不得 `.all()` 全量 Device ORM，不得全批同一外层事务。
+2. **每台独立 Session/顶层事务**：dry-run 完整 rollback+close；apply 逐台 commit+close；
+   保存点≠跨设备边界；单台失败只回滚本台。
+3. claim 唯一冲突 / 代次 CAS：回滚并结束本台事务，**新 Session** 重取锁与最新占用后重试；
+   每台最多 3 次，退避 0.1s / 0.2s；已有其它占用只记条目不抢占；3 次失败计冲突继续后续。
+   任何失败/重试耗尽 → 退出码 **1**；正常成功/已占用 → **0**；统计区分
+   ok / occupied / skipped / failed / conflict_exhausted。
+4. dry-run 零业务写且实际释放锁；`--limit` 跨页累计；重复运行幂等；历史判定保持 §3.4.1。
+5. **真实 CLI `main(argv)` 测试**（不可用 service helper 代替）：
+   - 第二台入口前独立 PG 连接 **NOWAIT** 锁第一台（dry-run 与 apply 均须成功）；
+   - 第一台已提交、第二台注入真实失败后第一台仍保存、第二台无部分状态。
 
 ## Alternatives
 
@@ -49,21 +67,32 @@ Draft PR #3748 待规划确认与独立复核；合入不等于生效（阶段 B
 - 每个欠账条目一条租约：违反每设备唯一 ACTIVE 索引。
 - 另建独立设备占用表：遗漏任一认领路径即失效；租约承载复用既有互斥。
 - 放宽全部旧 token / 载荷冲突以接受迟到 confirmed：违反 D5.6 严格来源核验，已否决。
+- 全批同一 Session + 保存点：违反 §3.4.2 跨设备事务边界与 dry-run 实际释锁要求，已否决。
+- 仅测 service helper 代替 CLI NOWAIT / 失败隔离：§4.1 明确禁止，已否决。
 
 ## Verification
 
-见本 PR 正文「门禁」。本轮补齐后：Planner 四反例 + 负向（PENDING 无足迹 / 错 token 409）
-落于 `backend/tests/services/test_planner_u3_contract_probes.py`；原 U3 行为 9 + SourceGuard 7；
-`test_alert_metric_producers` / `test_api_response_shape_contract` / audit retention guard。
-§3.4.1.2：预阶段 A `disarm_results=NULL` + teardown COMPLETED → unverified/stock（
-`test_planner_legacy_history_success.py`，含后续成功覆盖 / 后续失败不被遮蔽）。
+见本 PR 正文「门禁」。本轮 §3.4.2 后：
+
+| 项 | 结果 |
+|---|---|
+| 真实 CLI `main(argv)`（`test_init_device_return_cli_3728.py`） | **7 passed**（NOWAIT dry-run/apply、失败隔离、keyset+limit、CAS 重试耗尽、dry-run 零写幂等、apply 幂等无第二条 ACTIVE） |
+| Planner 四反例 + 负向（`test_planner_u3_contract_probes.py`） | **6 passed** |
+| 历史 NULL disarm + COMPLETED teardown（`test_planner_legacy_history_success.py`） | **passed**（含后续成功覆盖 / 后续失败不被遮蔽） |
+| 原 U3 行为 + SourceGuard | **16 passed**（9+7） |
+| `test_alert_metric_producers` + API shape typed | **23 passed**（本轮复跑） |
+| `check:quick` | **OK（16 gates）** |
+| #3739 危险 cancel 变异 | **未跑（禁止）** |
+| required CI（推送后） | **pending（以 PR checks 为准）** |
+
 并发：`test_complete_and_extend_batch_same_job_no_deadlock` 因 U3 改走
 `handle_job_lease_release` 导致 barrier 挂死——已改 patch 点（非 required，但为本 PR 引入）。
-未跑 #3739 危险 cancel 变异。迁移 `down_revision=c3d4e5f6a7b8`（U2 head）。
+迁移 `down_revision=c3d4e5f6a7b8`（U2 head）。
 
 ## Revisit
 
 - U4 消费心跳 `return_debts` 做自动清偿；U5 写入 ONBOARDED 后，失败→欠账映射对开关机生效。
-- 阶段 B 激活时跑 `init_device_return.py --dry-run` → Owner 确认 → `--apply`。
+- U8 承接共享服务类别政策与平台终止消费；U3 不越界改 Agent/契约/包/模板。
+- 阶段 B 激活时跑 `init_device_return.py --dry-run` → Owner 确认 → `--apply`（须为 §3.4.2 逐设备事务）。
 - 回退控制面前必须先 `--release-all-debt-leases`（§5 第 7 步）。
 - year-9999 `expires_at` 仅占位：host 迁移 / 无 host / 全回收路径若需独立证明，另开验收。
