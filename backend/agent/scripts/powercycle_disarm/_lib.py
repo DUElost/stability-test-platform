@@ -136,9 +136,12 @@ def _push_file(local: Path, remote: str) -> None:
         raise RuntimeError(f"push 失败 {local.name} -> {remote}: {err.strip() or 'rc=%d' % rc}")
 
 
-def device_online() -> bool:
-    """adb get-state == device（reboot 周期中设备离线属正常，check 用）。"""
-    rc, out, _ = adb("get-state", timeout=15)
+def device_online(timeout: int = 15) -> bool:
+    """adb get-state == device（reboot 周期中设备离线属正常，check 用）。
+
+    ``timeout`` 受调用方 15s 进度周期与剩余截止约束（#3723 §3.6.2）。
+    """
+    rc, out, _ = adb("get-state", timeout=max(1, int(timeout)))
     return rc == 0 and out.strip() == "device"
 
 
@@ -237,6 +240,32 @@ def parse_size_from_ls(ls: str) -> int:
 
 def is_root() -> bool:
     return adb_shell("id -u", timeout=15).strip() == "0"
+
+
+def permission_model() -> str:
+    """权限模型（是否 root），供解除证据；不做类别可信判定。"""
+    return "root" if is_root() else "non-root"
+
+
+def autotesttool_apk_sha256(timeout: int = 30) -> str | None:
+    """设备上 AutoTestTool APK 的 SHA-256；失败返回 None（保留诊断，不据此判通过）。"""
+    budget = max(1, int(timeout))
+    path_out = adb_shell(f"pm path {_PKG}", timeout=min(15, budget)).strip()
+    apk_path = ""
+    for line in path_out.splitlines():
+        line = line.strip()
+        if line.startswith("package:"):
+            apk_path = line.split(":", 1)[1].strip()
+            break
+    if not apk_path:
+        return None
+    digest_out = adb_shell(f"sha256sum {apk_path}", timeout=budget).strip()
+    if not digest_out:
+        return None
+    token = digest_out.split()[0].strip().lower()
+    if len(token) == 64 and all(c in "0123456789abcdef" for c in token):
+        return token
+    return None
 
 
 def try_adb_root() -> bool:

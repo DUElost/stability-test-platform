@@ -11,7 +11,7 @@ from backend.agent.tests.test_powercycle_disarm_u5_3730 import _load
 
 def test_unverified_probe_raw_clear_is_not_a_trusted_pass(monkeypatch):
     mod = _load("planner_unverified_clear", "powercycle_disarm/powercycle_disarm.py")
-    _stub_common(mod, monkeypatch, verified_classes=[])
+    _stub_common(mod, monkeypatch)
     monkeypatch.setattr(
         mod,
         "_read_prefs_evidence",
@@ -27,3 +27,4 @@ def test_unverified_probe_raw_clear_is_not_a_trusted_pass(monkeypatch):
     assert output["readback"] == "clear"
     assert output["disarm_result"] == "failed", output
     assert output["success"] is False, output
+    assert output["disarm_result"] not in {"confirmed", "readback_failed"}

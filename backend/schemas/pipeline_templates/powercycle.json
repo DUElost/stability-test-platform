@@ -38,7 +38,7 @@
       {
         "step_id": "powercycle_disarm",
         "action": "script:powercycle_disarm",
-        "version": "1.0.3",
+        "version": "1.0.4",
         "timeout_seconds": 660,
         "retry": 1,
         "params": {

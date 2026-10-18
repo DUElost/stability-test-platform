@@ -23,7 +23,7 @@ class TestStepTeardownRole:
 
     def test_disarm_any_known_version(self):
         assert step_teardown_role("powercycle_disarm", "1.0.0") == STEP_ROLE_DISARM
-        assert step_teardown_role("powercycle_disarm", "1.0.3") == STEP_ROLE_DISARM
+        assert step_teardown_role("powercycle_disarm", "1.0.4") == STEP_ROLE_DISARM
 
     def test_missing_or_unknown_version_conservative(self):
         assert step_teardown_role("powercycle_finish", "") == STEP_ROLE_UNKNOWN_LEGACY_DISARM
@@ -35,7 +35,7 @@ class TestSelectDisarmStepsVersionAware:
     def test_manual_exit_runs_legacy_finish_despite_onboarded(self):
         steps = select_disarm_steps(
             [
-                {"step_id": "d", "action": "script:powercycle_disarm", "version": "1.0.3"},
+                {"step_id": "d", "action": "script:powercycle_disarm", "version": "1.0.4"},
                 {"step_id": "f", "action": "script:powercycle_finish", "version": "1.0.8"},
             ],
             {"power-cycle"},
@@ -45,7 +45,7 @@ class TestSelectDisarmStepsVersionAware:
     def test_manual_exit_skips_collect_only_finish(self):
         steps = select_disarm_steps(
             [
-                {"step_id": "d", "action": "script:powercycle_disarm", "version": "1.0.3"},
+                {"step_id": "d", "action": "script:powercycle_disarm", "version": "1.0.4"},
                 {"step_id": "f", "action": "script:powercycle_finish", "version": "1.1.0"},
             ],
             {"power-cycle"},
@@ -94,7 +94,7 @@ class TestValidateOnboardedTeardownShape:
             {
                 "step_key": "td_d",
                 "script_name": "powercycle_disarm",
-                "script_version": "1.0.3",
+                "script_version": "1.0.4",
                 "stage": "teardown",
                 "enabled": False,
             },
@@ -120,7 +120,7 @@ class TestValidateOnboardedTeardownShape:
             {
                 "step_key": "td_d",
                 "script_name": "powercycle_disarm",
-                "script_version": "1.0.3",
+                "script_version": "1.0.4",
                 "stage": "teardown",
                 "enabled": True,
             },
@@ -140,7 +140,7 @@ class TestValidateOnboardedTeardownShape:
             {
                 "step_key": "td_d",
                 "script_name": "powercycle_disarm",
-                "script_version": "1.0.3",
+                "script_version": "1.0.4",
                 "stage": "teardown",
                 "enabled": True,
             },

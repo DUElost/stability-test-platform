@@ -104,8 +104,8 @@ FAMILY_STEPS: dict[str, dict[str, tuple[str, ...]]] = {
 }
 
 # §3.0 第 2 / 6 条 / U5：已接入专项契约（本批仅 power-cycle）。
-# verified_device_classes 与 powercycle_disarm._VERIFIED_DEVICE_CLASSES 必须同步；
-# 真机未验证前保持空——clear 回读不得记 confirmed（ADR-0061 D2.5）。
+# verified_device_classes 仅在本共享契约登记（U8 可信组合政策）；探针包不得内置副本
+# （#3723 v1.7.1 §3.6.1.7）。真机未验证前保持空。
 
 
 def _pc_disarm_min_wall(params: Mapping[str, Any] | None) -> int:
@@ -134,7 +134,7 @@ ONBOARDED: dict[str, Any] = {
         ),
         # 解除脚本与最低版本
         "disarm_script": "powercycle_disarm",
-        "disarm_min_version": "1.0.3",
+        "disarm_min_version": "1.0.4",
         "finish_script": "powercycle_finish",
         "finish_min_version": "1.1.0",
         # 探针模式（脚本参数 mode）

@@ -42,13 +42,19 @@ def finish_mod():
 
 
 class TestDisarmModes:
+    def _stub_identity(self, disarm_mod, monkeypatch):
+        monkeypatch.setattr(
+            disarm_mod, "_device_identity_evidence",
+            lambda: {"permission_model": "root", "autotesttool_apk_sha256": "a" * 64},
+        )
+
     def test_probe_clear_unverified_category(self, disarm_mod, monkeypatch):
-        """probe + clear + 未验证类别 → failed / success=false（§3.6.1.3）。"""
+        """probe + clear → failed / success=false（§3.6.1.3 / 第 7 条）。"""
         monkeypatch.setattr(disarm_mod, "device_serial", lambda: "S-PROBE")
         monkeypatch.setattr(disarm_mod, "device_online", lambda: True)
         monkeypatch.setattr(disarm_mod, "_detect_platform", lambda: "MTK")
         monkeypatch.setattr(disarm_mod, "_detect_model", lambda: "MLD_LX2")
-        monkeypatch.setattr(disarm_mod, "_load_verified_classes", lambda: [])
+        self._stub_identity(disarm_mod, monkeypatch)
         monkeypatch.setattr(
             disarm_mod,
             "_read_prefs_evidence",
@@ -63,19 +69,18 @@ class TestDisarmModes:
         assert out["disarm_result"] == "failed"
         assert out["readback"] == "clear"
         assert out["success"] is False
-        assert out["disarm_result"] != "confirmed"
-        assert out["disarm_result"] != "executed_unverified"
+        assert out["disarm_result"] not in {"confirmed", "readback_failed"}
+        assert out["evidence"]["permission_model"] == "root"
+        assert out["evidence"]["autotesttool_apk_sha256"] == "a" * 64
+        assert out["evidence"]["verified_category"] is False
 
-    def test_probe_clear_verified_category(self, disarm_mod, monkeypatch):
+    def test_probe_clear_never_confirmed_even_with_known_model(self, disarm_mod, monkeypatch):
+        """§3.6.1.7：任何输入下都不输出 confirmed（清单已外置）。"""
         monkeypatch.setattr(disarm_mod, "device_serial", lambda: "S-PROBE")
         monkeypatch.setattr(disarm_mod, "device_online", lambda: True)
         monkeypatch.setattr(disarm_mod, "_detect_platform", lambda: "MTK")
         monkeypatch.setattr(disarm_mod, "_detect_model", lambda: "MLD_LX2")
-        monkeypatch.setattr(
-            disarm_mod,
-            "_load_verified_classes",
-            lambda: [{"platform": "MTK", "model": "MLD_LX2"}],
-        )
+        self._stub_identity(disarm_mod, monkeypatch)
         monkeypatch.setattr(
             disarm_mod,
             "_read_prefs_evidence",
@@ -87,14 +92,15 @@ class TestDisarmModes:
             },
         )
         out = disarm_mod._run({"mode": "probe"})
-        assert out["disarm_result"] == "confirmed"
+        assert out["disarm_result"] == "failed"
+        assert out["disarm_result"] != "confirmed"
 
     def test_probe_footprint(self, disarm_mod, monkeypatch):
         monkeypatch.setattr(disarm_mod, "device_serial", lambda: "S-PROBE")
         monkeypatch.setattr(disarm_mod, "device_online", lambda: True)
         monkeypatch.setattr(disarm_mod, "_detect_platform", lambda: "MTK")
         monkeypatch.setattr(disarm_mod, "_detect_model", lambda: "MLD_LX2")
-        monkeypatch.setattr(disarm_mod, "_load_verified_classes", lambda: [])
+        self._stub_identity(disarm_mod, monkeypatch)
         monkeypatch.setattr(
             disarm_mod,
             "_read_prefs_evidence",
@@ -118,7 +124,7 @@ class TestDisarmModes:
         monkeypatch.setattr(disarm_mod, "device_online", lambda: True)
         monkeypatch.setattr(disarm_mod, "_detect_platform", lambda: "MTK")
         monkeypatch.setattr(disarm_mod, "_detect_model", lambda: "MLD_LX3")
-        monkeypatch.setattr(disarm_mod, "_load_verified_classes", lambda: [])
+        self._stub_identity(disarm_mod, monkeypatch)
         monkeypatch.setattr(
             disarm_mod,
             "_read_prefs_evidence",
@@ -135,17 +141,13 @@ class TestDisarmModes:
         assert out["disarm_result"] == "failed"
         assert out["success"] is False
 
-    def test_verified_read_failure_is_formal_readback_failed(self, disarm_mod, monkeypatch):
-        """已验证类别 + 读取失败 → 正式 readback_failed。"""
+    def test_read_failure_never_formal_readback_failed(self, disarm_mod, monkeypatch):
+        """§3.6.1.7：读取失败正式值不得为 readback_failed（一律未验证规则）。"""
         monkeypatch.setattr(disarm_mod, "device_serial", lambda: "S-PROBE")
         monkeypatch.setattr(disarm_mod, "device_online", lambda: True)
         monkeypatch.setattr(disarm_mod, "_detect_platform", lambda: "MTK")
         monkeypatch.setattr(disarm_mod, "_detect_model", lambda: "MLD_LX3")
-        monkeypatch.setattr(
-            disarm_mod,
-            "_load_verified_classes",
-            lambda: [{"platform": "MTK", "model": "MLD_LX3"}],
-        )
+        self._stub_identity(disarm_mod, monkeypatch)
         monkeypatch.setattr(
             disarm_mod,
             "_read_prefs_evidence",
@@ -157,8 +159,9 @@ class TestDisarmModes:
             },
         )
         out = disarm_mod._run({"mode": "probe"})
-        assert out["disarm_result"] == "readback_failed"
+        assert out["disarm_result"] == "failed"
         assert out["readback"] == "readback_failed"
+        assert out["disarm_result"] not in {"confirmed", "readback_failed"}
         assert out["success"] is False
 
     def test_disarm_calls_stop_then_readback(self, disarm_mod, monkeypatch):
@@ -171,7 +174,7 @@ class TestDisarmModes:
         )
         monkeypatch.setattr(disarm_mod, "_detect_platform", lambda: "MTK")
         monkeypatch.setattr(disarm_mod, "_detect_model", lambda: "MLD_NX2")
-        monkeypatch.setattr(disarm_mod, "_load_verified_classes", lambda: [])
+        self._stub_identity(disarm_mod, monkeypatch)
         monkeypatch.setattr(
             disarm_mod,
             "_read_prefs_evidence",
@@ -196,7 +199,7 @@ class TestDisarmModes:
         )
         monkeypatch.setattr(disarm_mod, "_detect_platform", lambda: "MTK")
         monkeypatch.setattr(disarm_mod, "_detect_model", lambda: "MLD_LX2")
-        monkeypatch.setattr(disarm_mod, "_load_verified_classes", lambda: [])
+        self._stub_identity(disarm_mod, monkeypatch)
         monkeypatch.setattr(
             disarm_mod,
             "_read_prefs_evidence",
@@ -257,7 +260,7 @@ class TestOnboardedContract:
 
         spec = ONBOARDED["power-cycle"]
         assert spec["disarm_script"] == "powercycle_disarm"
-        assert spec["disarm_min_version"] == "1.0.3"
+        assert spec["disarm_min_version"] == "1.0.4"
         assert spec["finish_min_version"] == "1.1.0"
         assert "powercycle_disarm" in spec["min_wall_clock_seconds"]
         assert "powercycle_finish" in spec["min_wall_clock_seconds"]
