@@ -3,7 +3,7 @@
 Status: implemented
 Class: feature
 
-按 [#3723](https://github.com/DUElost/stability-test-platform/issues/3723) **v1.7** §1.2 / §3.0 / §3.4 / **§3.4.1** / **§3.4.2** / §4 U3 / 4.1 / 4.2
+按 [#3723](https://github.com/DUElost/stability-test-platform/issues/3723) **v1.7.1** §1.2 / §3.0 / §3.4 / **§3.4.1** / **§3.4.2** / §4 U3 / 4.1 / 4.2
 与 ADR-0061 D1.3–8、D4.2、D5、D7.2（Accepted v1.1）实施 [#3728](https://github.com/DUElost/stability-test-platform/issues/3728)。
 Draft PR #3748 待规划确认与独立复核；合入不等于生效（阶段 B 初始化与控制面部署按 §5）。
 Owner #3751：五项接受 + M1–M3；共享服务类别政策与平台终止消费交 **U8**，U3 **不改** Agent/共享契约/包/模板。
@@ -60,6 +60,17 @@ Owner #3751：五项接受 + M1–M3；共享服务类别政策与平台终止�
    - 第二台入口前独立 PG 连接 **NOWAIT** 锁第一台（dry-run 与 apply 均须成功）；
    - 第一台已提交、第二台注入真实失败后第一台仍保存、第二台无部分状态。
 
+
+### review-r1 F1/F2（权威复核 `b3bee2809` → 本 tip）
+
+1. **F1（P1）**：生产 `SessionLocal(autoflush=False)` 下，清偿/放行关闭欠账后须 `flush`
+   再查 open / 释租约；否则 `_open_debts_sync` 仍见未刷写行，重算强制 debt、租约不释放。
+   修复：`_close_family_debts_sync` 与迟到 confirmed 关闭后 flush；回归覆盖真实
+   `return-override` / `return-discharge`（仅还原 get_db→SessionLocal）。
+2. **F2（P2）**：`_lock_device_sync` / `_lock_device_async` 在 `FOR UPDATE` 上加
+   `populate_existing=True`，获锁后刷新 identity-map 中的 Device（含 return_state JSONB），
+   串行另一专项已完成事实不被旧缓存覆盖。
+
 ## Alternatives
 
 - 先释放 JOB 再提交后登记欠账：ADR-0061 已否决（claim 窗口）。
@@ -72,22 +83,17 @@ Owner #3751：五项接受 + M1–M3；共享服务类别政策与平台终止�
 
 ## Verification
 
-见本 PR 正文「门禁」。本轮 §3.4.2 后：
+见本 PR 正文「门禁」。本轮 review-r1 返修后：
 
 | 项 | 结果 |
 |---|---|
-| 真实 CLI `main(argv)`（`test_init_device_return_cli_3728.py`） | **7 passed**（NOWAIT dry-run/apply、失败隔离、keyset+limit、CAS 重试耗尽、dry-run 零写幂等、apply 幂等无第二条 ACTIVE） |
-| Planner 四反例 + 负向（`test_planner_u3_contract_probes.py`） | **6 passed** |
-| 历史 NULL disarm + COMPLETED teardown（`test_planner_legacy_history_success.py`） | **passed**（含后续成功覆盖 / 后续失败不被遮蔽） |
-| 原 U3 行为 + SourceGuard | **16 passed**（9+7） |
-| `test_alert_metric_producers` + API shape typed | **23 passed**（本轮复跑） |
+| review-r1 F1/F2（`test_reviewer_u3_r1_f1_f2_3728.py`） | **5 passed**（修前 3 failed：override/discharge/串行 JSON；修后全绿；含真实 keyset CLI 2） |
+| 真实 CLI `main(argv)`（`test_init_device_return_cli_3728.py`） | **7 passed** |
+| Planner 四反例 + 负向 / legacy-history / U3 行为 + SourceGuard | **保留通过** |
+| alert producers + API shape | **保留通过** |
 | `check:quick` | **OK（16 gates）** |
 | #3739 危险 cancel 变异 | **未跑（禁止）** |
 | required CI（推送后） | **pending（以 PR checks 为准）** |
-
-并发：`test_complete_and_extend_batch_same_job_no_deadlock` 因 U3 改走
-`handle_job_lease_release` 导致 barrier 挂死——已改 patch 点（非 required，但为本 PR 引入）。
-迁移 `down_revision=c3d4e5f6a7b8`（U2 head）。
 
 ## Revisit
 

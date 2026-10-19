@@ -297,8 +297,15 @@ def _set_family_return_state(
 
 
 def _lock_device_sync(db: Session, device_id: int) -> Device | None:
+    # populate_existing: callers may already hold a stale Device in the identity
+    # map; FOR UPDATE alone does not refresh JSONB return_state (review-r1 F2).
     return (
-        db.execute(select(Device).where(Device.id == device_id).with_for_update())
+        db.execute(
+            select(Device)
+            .where(Device.id == device_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
     ).scalars().first()
 
 
@@ -591,8 +598,12 @@ def handle_job_lease_release_sync(
 
 
 async def _lock_device_async(db: AsyncSession, device_id: int) -> Device | None:
+    # Same identity-map refresh as sync (review-r1 F2).
     result = await db.execute(
-        select(Device).where(Device.id == device_id).with_for_update()
+        select(Device)
+        .where(Device.id == device_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
     )
     return result.scalars().first()
 
@@ -888,6 +899,10 @@ def _close_family_debts_sync(
         row.closed_reason = closed_reason
         row.closed_at = now
         closed += 1
+    # SessionLocal is autoflush=False: subsequent _open_debts_sync /
+    # _maybe_release_debt_lease_sync must see the closed rows (review-r1 F1).
+    if closed:
+        db.flush()
     return closed
 
 
@@ -1047,6 +1062,8 @@ def apply_late_confirmed_sync(
                 now=now,
                 extra={"job_id": job_id, "late_confirmed": True},
             )
+    if closed:
+        db.flush()
     released = _maybe_release_debt_lease_sync(db, device, now=now)
     open_rows = _open_debts_sync(db, device_id)
     _recompute_return_state_from_open_debts(device, open_rows, now=now)
@@ -1097,6 +1114,8 @@ async def apply_late_confirmed(
                 now=now,
                 extra={"job_id": job_id, "late_confirmed": True},
             )
+    if closed:
+        await db.flush()
     # Release debt lease if no open rows remain.
     open_rows = await _open_debts_async(db, device_id)
     released = False
