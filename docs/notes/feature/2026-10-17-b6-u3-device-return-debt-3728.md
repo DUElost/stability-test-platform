@@ -123,19 +123,38 @@ Owner #3751：五项接受 + M1–M3；共享服务类别政策与平台终止�
 
 ## Verification
 
-见本 PR 正文「门禁」。本轮 §3.4.4（绑定推送 HEAD）：
+见本 PR 正文「门禁」。§3.4.4 的 b/c/d 按规划者核对改用 **NOWAIT 判据**
+（#1959/#1980/#2015 同款）：第三会话 `FOR UPDATE` 锁 Device；后台启动被测入口，
+`pg_locks` 等到未授予的 `transactionid`；第四会话对租约行 `FOR UPDATE NOWAIT`。
+修复后试锁成功，修复前（Lease→Device）试锁失败（55P03）。a 组保持不变。
+
+环境：worktree `.wt/3728-device-return-debt`；testcontainers 隔离 PG；
+`scripts/run_pytest.py` 内存保护（日志确认 `memory.max=6442450944` / `swap.max=0`）；
+`env -i`（无 `TEST_DATABASE_URL`）；未跑 #3739 危险变异或真实宿主信号。变异在临时
+detached worktree `/tmp/u3-mut-3728` 中逐文件撤回，运行后 `git checkout --` 恢复并已移除；
+本 PR 最终只改测试文件。
 
 | 项 | 结果 |
 |---|---|
-| §3.4.4-a 初始化×紧急释放（两种先后） | 修前 F3 强制交错 **40P01**（剥 Device 锁）；修后 **2 passed** |
-| §3.4.4-b reconciler×acquire_lease | 修后 **passed**（无 40P01） |
-| §3.4.4-c recovery×discharge | 修后 **passed** |
-| §3.4.4-d completion UNKNOWN×init | 修后 **passed** |
-| `test_device_return_lock_order_3728.py` + 既有锁序 + 全序/接线守卫 | **40 passed** |
-| U3 定向 + §3.4.3（含 F1/F2/flush/异步预读/I1） | **90 passed** |
-| 共享行锁表 I5 回填 | 已写 |
+| §3.4.4-a 初始化×紧急释放（两种先后） | 未改；全文件基线 **5/5 次均 5 passed** |
+| §3.4.4-b reconciler×过期租约（NOWAIT） | 撤回 reconciler 的 Device 锁 → **5/5 failed**（55P03，命中「锁序仍是 Lease→Device」）；恢复 → **5/5 passed** |
+| §3.4.4-c recovery×清偿（NOWAIT） | 撤回 recovery 的 Device 锁 → **5/5 failed**（55P03）；恢复 → **5/5 passed**；终态 recovery=ABORT_LOCAL/terminal_job_active_lease，清偿 `ok=True`、`debt_lease_released=True`、`open_debt_count=0` |
+| §3.4.4-d completion UNKNOWN（NOWAIT） | 撤回候选 Lease 先于 Device → **5/5 failed**（55P03）；恢复 → **5/5 passed**；终态 job=COMPLETED、JOB 租约 RELEASED |
+| `test_device_return_lock_order_3728.py` + 既有锁序 + 全序/接线守卫 | **42 passed** |
+| U3 定向 + §3.4.3（含 F1/F2/flush/异步预读/I1） | **72 passed** |
+| 紧急释放 / 退役 / 心跳 / retry-exit API | **47 passed** |
+| `check:quick` | **OK（16 gates）** |
+| 共享行锁表 I5 回填 | 已写（未改） |
 | #3739 危险 cancel 变异 | **未跑（禁止）** |
-| required CI + informational（推送后） | **pending（以 PR checks 为准）** |
+| required CI + informational（最终 HEAD） | 见 PR checks / 回告 |
+
+复现命令（b/c/d 每组；`-k` 依次为 `reconciler` / `recovery` / `completion`）：
+
+```sh
+env -i PATH="$PATH" HOME="$HOME" PYTHONPATH=. TESTING=1 JWT_SECRET_KEY=test-secret \
+  /home/debian13/stability-test-platform/.venv/bin/python scripts/run_pytest.py \
+  backend/tests/services/test_device_return_lock_order_3728.py -q -k "<group>"
+```
 
 ## Revisit
 
