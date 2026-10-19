@@ -131,8 +131,13 @@ Owner #3751：五项接受 + M1–M3；共享服务类别政策与平台终止�
 环境：worktree `.wt/3728-device-return-debt`；testcontainers 隔离 PG；
 `scripts/run_pytest.py` 内存保护（日志确认 `memory.max=6442450944` / `swap.max=0`）；
 `env -i`（无 `TEST_DATABASE_URL`）；未跑 #3739 危险变异或真实宿主信号。变异在临时
-detached worktree `/tmp/u3-mut-3728` 中逐文件撤回，运行后 `git checkout --` 恢复并已移除；
-本 PR 最终只改测试文件。
+detached worktree（`/tmp/u3-mut-3728`、`/tmp/u3-mut-3728b`）中逐文件撤回，运行后
+`git checkout --` 恢复并已移除；本 PR 最终只改测试文件。
+
+全量套件复现（与 CI 同 pytest 版本）：首轮 d 失败——`_seed_*` 的 `_NOW` 是模块导入
+时刻，全量套件中 d 约 16 分钟后才执行，UNKNOWN→RUNNING 的 300s 宽限已过，completion
+抛 `INVALID_OR_EXPIRED_FENCING_TOKEN`。已按**测试执行时刻**重锚 `job.ended_at` 与
+`lease.expires_at`；此后全量 **4208 passed / 1 skipped**，原先 76% 处的挂起不再出现。
 
 | 项 | 结果 |
 |---|---|
@@ -140,6 +145,7 @@ detached worktree `/tmp/u3-mut-3728` 中逐文件撤回，运行后 `git checkou
 | §3.4.4-b reconciler×过期租约（NOWAIT） | 撤回 reconciler 的 Device 锁 → **5/5 failed**（55P03，命中「锁序仍是 Lease→Device」）；恢复 → **5/5 passed** |
 | §3.4.4-c recovery×清偿（NOWAIT） | 撤回 recovery 的 Device 锁 → **5/5 failed**（55P03）；恢复 → **5/5 passed**；终态 recovery=ABORT_LOCAL/terminal_job_active_lease，清偿 `ok=True`、`debt_lease_released=True`、`open_debt_count=0` |
 | §3.4.4-d completion UNKNOWN（NOWAIT） | 撤回候选 Lease 先于 Device → **5/5 failed**（55P03）；恢复 → **5/5 passed**；终态 job=COMPLETED、JOB 租约 RELEASED |
+| 全量 `backend/tests/`（pytest 9.1.1 / pytest-asyncio 1.4.0） | **4208 passed / 1 skipped（15m49s）** |
 | `test_device_return_lock_order_3728.py` + 既有锁序 + 全序/接线守卫 | **42 passed** |
 | U3 定向 + §3.4.3（含 F1/F2/flush/异步预读/I1） | **72 passed** |
 | 紧急释放 / 退役 / 心跳 / retry-exit API | **47 passed** |

@@ -460,6 +460,13 @@ async def test_recovery_and_discharge_lock_order(db_session):
 @pytest.mark.asyncio(loop_scope="module")
 async def test_completion_unknown_and_acquire_lock_order(db_session):
     device, job, lease, _host = _seed_running(db_session, unknown=True)
+    # _seed_* 的 _NOW 是模块导入时刻；全量套件里本文件可能在数十分钟后才执行。
+    # UNKNOWN→RUNNING 的恢复宽限只有 300s，必须按测试执行时刻重锚 ended_at，
+    # 否则完成入口会因宽限过期抛 INVALID_OR_EXPIRED_FENCING_TOKEN（CI 60% 处实证）。
+    now = datetime.now(timezone.utc)
+    job.ended_at = now - timedelta(seconds=30)
+    lease.expires_at = now + timedelta(hours=1)
+    db_session.commit()
     did, jid, lid = device.id, job.id, lease.id
     token = lease.fencing_token
 
