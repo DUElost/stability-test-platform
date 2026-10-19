@@ -1,0 +1,232 @@
+"""Regression tests for backend/agent/scripts/flash_firmware_unisoc/.
+
+Loaded via importlib because the script lives outside the backend.agent package.
+No device is touched: adb/fastboot are replaced by fakes.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import subprocess
+from pathlib import Path
+
+import pytest
+
+
+_SCRIPT = (
+    Path(__file__).resolve().parent.parent
+    / "scripts" / "flash_firmware_unisoc" / "flash_firmware_unisoc.py"
+)
+
+
+@pytest.fixture(scope="module")
+def mod():
+    spec = importlib.util.spec_from_file_location("flash_firmware_unisoc_under_test", _SCRIPT)
+    assert spec and spec.loader, f"cannot locate {_SCRIPT}"
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class FakeCmd:
+    """Records argv and answers via a callable."""
+
+    def __init__(self, answer=None):
+        self.calls = []
+        self._answer = answer or (lambda argv: "")
+
+    def run(self, argv, timeout=60, check=False):
+        self.calls.append(argv)
+        out = self._answer(argv) or ""
+        return subprocess.CompletedProcess(args=argv, returncode=0, stdout=out, stderr="")
+
+
+def _write(path: Path, content: bytes = b"x"):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
+
+
+# ---------------------------------------------------------------------------
+# version helpers
+# ---------------------------------------------------------------------------
+
+def test_version_key_reads_trailing_build_number(mod):
+    assert mod.version_key("GEN_NEEA_P615F03V1.0.0B17") == (1, 0, 0, 17)
+    assert mod.version_key("GEN_NEEA_P615F03V1.0.0B19") == (1, 0, 0, 19)
+    assert mod.version_key("GEN_NEEA_P615F03V1.0.0B19") > mod.version_key("GEN_NEEA_P615F03V1.0.0B17")
+    assert mod.version_key("") == ()
+
+
+def test_read_latest_version_accepts_model_variants_and_top_level(mod):
+    assert mod._read_latest_version({"versions": {"Z2581": "V1"}}, "Z2581") == "V1"
+    assert mod._read_latest_version({"versions": {"Z2581_GEN": "V2"}}, "Z2581-GEN") == "V2"
+    assert mod._read_latest_version({"versions": {"Z2581-GEN": "V3"}}, "Z2581_GEN") == "V3"
+    assert mod._read_latest_version({"version": "V4"}, "Z2581") == "V4"
+    # per-model map is authoritative: a miss must not silently fall back
+    assert mod._read_latest_version({"versions": {"OTHER": "V5"}}, "Z2581") == ""
+
+
+# ---------------------------------------------------------------------------
+# routing / manifest validation
+# ---------------------------------------------------------------------------
+
+def test_resolve_explicit_dir_rejects_manifest_version_mismatch(mod, tmp_path, monkeypatch):
+    version_dir = tmp_path / "A57" / "B19"
+    (version_dir).mkdir(parents=True)
+    (version_dir / "manifest.json").write_text(json.dumps({"version": "B17"}), encoding="utf-8")
+    monkeypatch.setenv("STP_NFS_ROOT", str(tmp_path))
+    with pytest.raises(RuntimeError, match="manifest version"):
+        mod.resolve_firmware({"firmware_dir": "A57/B19"}, "", mod.Progress(), [])
+
+
+def test_resolve_by_pointer_rejects_model_outside_manifest(mod, tmp_path, monkeypatch):
+    family = tmp_path / "firmware" / "A57"
+    version_dir = family / "B19"
+    version_dir.mkdir(parents=True)
+    (family / "latest.json").write_text(
+        json.dumps({"versions": {"Z2581": "B19"}}), encoding="utf-8")
+    (version_dir / "manifest.json").write_text(
+        json.dumps({"version": "B19", "models": ["OTHER"]}), encoding="utf-8")
+    monkeypatch.setenv("STP_NFS_ROOT", str(tmp_path))
+    monkeypatch.setattr(mod, "getprop", lambda cmd, name: "Z2581")
+    with pytest.raises(RuntimeError, match="not in manifest models"):
+        mod.resolve_firmware({}, "SERIAL", mod.Progress(), [])
+
+
+# ---------------------------------------------------------------------------
+# fastboot preflight (v1.0.1: fail before rebooting into bootloader)
+# ---------------------------------------------------------------------------
+
+def test_resolve_fastboot_honours_explicit_env(mod, tmp_path, monkeypatch):
+    exe = tmp_path / "fastboot"
+    exe.write_text("#!/bin/sh\n", encoding="utf-8")
+    exe.chmod(0o755)
+    monkeypatch.setenv("STP_FASTBOOT_PATH", str(exe))
+    assert mod.resolve_fastboot() == str(exe)
+
+
+def test_resolve_fastboot_rejects_missing_tool(mod, monkeypatch):
+    monkeypatch.setenv("STP_FASTBOOT_PATH", "/nonexistent/fastboot")
+    with pytest.raises(RuntimeError, match="not executable"):
+        mod.resolve_fastboot()
+
+    monkeypatch.delenv("STP_FASTBOOT_PATH", raising=False)
+    monkeypatch.setattr(mod.shutil, "which", lambda name: None)
+    monkeypatch.setattr(mod, "_FASTBOOT_CANDIDATES", ())
+    with pytest.raises(RuntimeError, match="fastboot not found"):
+        mod.resolve_fastboot()
+
+
+# ---------------------------------------------------------------------------
+# flash ordering / preserve list
+# ---------------------------------------------------------------------------
+
+def test_flash_partitions_orders_super_last_and_skips_preserved(mod, tmp_path, monkeypatch):
+    fw = tmp_path / "fw"
+    for name in ("boot.img", "sml-sign.bin", "super.img", "nv.bin"):
+        _write(fw / "images" / name)
+    entries = [
+        {"id": "Super", "file": "super.img", "partitions": ["super"]},
+        {"id": "BOOT", "file": "boot.img", "partitions": ["boot_a"]},
+        {"id": "SML", "file": "sml-sign.bin", "partitions": ["sml_a"]},
+        {"id": "NV_LTE", "file": "nv.bin", "partitions": ["l_fixnv1_a"], "preserve": True},
+    ]
+    flashed: list = []
+    monkeypatch.setattr(mod, "_flash_stream",
+                        lambda part, path, serial, timeout, progress, idx, total, log:
+                        flashed.append(part))
+
+    mod.flash_partitions(str(fw), entries, "SERIAL", {}, mod.Progress(), [])
+
+    assert flashed == ["sml_a", "boot_a", "super"]
+    assert "l_fixnv1_a" not in flashed
+
+
+def test_flash_partitions_respects_flash_bootloader_false(mod, tmp_path, monkeypatch):
+    fw = tmp_path / "fw"
+    for name in ("boot.img", "lk-sign.bin"):
+        _write(fw / "images" / name)
+    entries = [
+        {"id": "UBOOTLoader", "file": "lk-sign.bin", "partitions": ["uboot_a"]},
+        {"id": "BOOT", "file": "boot.img", "partitions": ["boot_a"]},
+    ]
+    flashed: list = []
+    monkeypatch.setattr(mod, "_flash_stream",
+                        lambda part, path, serial, timeout, progress, idx, total, log:
+                        flashed.append(part))
+
+    mod.flash_partitions(str(fw), entries, "SERIAL", {"flash_bootloader": False},
+                         mod.Progress(), [])
+    assert flashed == ["boot_a"]
+
+
+# ---------------------------------------------------------------------------
+# recovery mode: device parked in fastboot
+# ---------------------------------------------------------------------------
+
+def test_probe_device_prefers_adb(mod, monkeypatch):
+    adb_fake = FakeCmd(lambda argv: "device")
+    fb_fake = FakeCmd(lambda argv: "current-slot: a")
+    monkeypatch.setattr(mod, "adb", lambda serial, progress, log: adb_fake)
+    monkeypatch.setattr(mod, "fastboot", lambda serial, progress, log: fb_fake)
+
+    mode, dev, fb = mod.probe_device("SERIAL", {"adb_probe_seconds": 1}, mod.Progress(), [])
+    assert mode == "adb" and dev is adb_fake and fb is None
+
+
+def test_probe_device_falls_back_to_fastboot(mod, monkeypatch):
+    adb_fake = FakeCmd(lambda argv: "")          # no adb device
+    fb_fake = FakeCmd(lambda argv: "current-slot: a")
+    monkeypatch.setattr(mod, "adb", lambda serial, progress, log: adb_fake)
+    monkeypatch.setattr(mod, "fastboot", lambda serial, progress, log: fb_fake)
+    monkeypatch.setattr(mod.time, "sleep", lambda seconds: None)
+
+    mode, dev, fb = mod.probe_device("SERIAL", {"adb_probe_seconds": 1}, mod.Progress(), [])
+    assert mode == "fastboot" and dev is None and fb is fb_fake
+
+
+# ---------------------------------------------------------------------------
+# SPL decision (auto = compare, never silently rewrite boot0)
+# ---------------------------------------------------------------------------
+
+def test_spl_decision_auto_skips_when_hash_matches(mod, tmp_path, monkeypatch):
+    fw = tmp_path / "fw"
+    image = fw / "images" / "u-boot-spl-16k-emmc-sign.bin"
+    _write(image, b"SPL-B19")
+    entries = [{"id": "SPLLoaderEMMC", "file": image.name, "partitions": ["splloader"]}]
+    digest = __import__("hashlib").sha256(b"SPL-B19").hexdigest()
+    fake = FakeCmd(lambda argv: "sprdboot.flash=emmc" if argv[:2] == ["shell", "cat"]
+                   else f"{digest}  -\n")
+    monkeypatch.setattr(mod, "adb", lambda serial, progress, log: fake)
+
+    decision = mod.spl_decision(str(fw), entries, "SERIAL", {}, mod.Progress(), [])
+    assert decision["action"] == "skip"
+    assert decision["storage"] == "emmc"
+
+
+def test_spl_decision_auto_reports_differ(mod, tmp_path, monkeypatch):
+    fw = tmp_path / "fw"
+    image = fw / "images" / "u-boot-spl-16k-emmc-sign.bin"
+    _write(image, b"SPL-B19")
+    entries = [{"id": "SPLLoaderEMMC", "file": image.name, "partitions": ["splloader"]}]
+    fake = FakeCmd(lambda argv: "sprdboot.flash=emmc" if argv[:2] == ["shell", "cat"]
+                   else "deadbeef  -\n")
+    monkeypatch.setattr(mod, "adb", lambda serial, progress, log: fake)
+
+    decision = mod.spl_decision(str(fw), entries, "SERIAL", {}, mod.Progress(), [])
+    assert decision["action"] == "differ"
+    assert decision["device_sha256"] == "deadbeef"
+
+
+# ---------------------------------------------------------------------------
+# wipe
+# ---------------------------------------------------------------------------
+
+def test_wipe_erases_userdata_metadata_misc(mod, monkeypatch):
+    fake = FakeCmd(lambda argv: "OKAY")
+    monkeypatch.setattr(mod, "fastboot", lambda serial, progress, log: fake)
+
+    mod.wipe("SERIAL", mod.Progress(), [], {})
+    erased = [c[1] for c in fake.calls if c[0] == "erase"]
+    assert erased == ["userdata", "metadata", "misc"]

@@ -538,6 +538,43 @@
         }
       ]
     },
+    "flash_firmware_unisoc": {
+      "kind": "script",
+      "versions": [
+        {
+          "artifact": "packages/flash_firmware_unisoc/1.0.0.tar.gz",
+          "package_sha256": "6f598a18af22ed3a8f113d66a4b387dcabf988a87028584b3b216b6bb8d17b45",
+          "python": null,
+          "retired": false,
+          "script": "flash_firmware_unisoc.py",
+          "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/flash_firmware_unisoc/1.0.1.tar.gz",
+          "package_sha256": "272c6bc6fcfbfdff12c5f254e38e2177decf2c5d3926a913411d0aa4caa8891b",
+          "python": null,
+          "retired": false,
+          "script": "flash_firmware_unisoc.py",
+          "version": "1.0.1"
+        },
+        {
+          "artifact": "packages/flash_firmware_unisoc/1.0.2.tar.gz",
+          "package_sha256": "0a50f1d7e9253a39cb7fc386a2dbf2ced5ed6a259d88450da9080c45afe1cd24",
+          "python": null,
+          "retired": false,
+          "script": "flash_firmware_unisoc.py",
+          "version": "1.0.2"
+        },
+        {
+          "artifact": "packages/flash_firmware_unisoc/1.0.3.tar.gz",
+          "package_sha256": "2b1de2e03d51ba5d0ac68646dbfec2d3c6661f6b8b56696e535284e022421027",
+          "python": null,
+          "retired": false,
+          "script": "flash_firmware_unisoc.py",
+          "version": "1.0.3"
+        }
+      ]
+    },
     "flash_preflight": {
       "kind": "script",
       "versions": [
