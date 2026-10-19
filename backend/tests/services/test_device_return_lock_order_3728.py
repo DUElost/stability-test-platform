@@ -4,7 +4,7 @@
   a. 初始化 × 紧急释放（两种先后）——复核 F3
   b. ``_reconcile_expired_leases`` × ``acquire_lease``
   c. ``sync_agent_recovery`` × ``apply_discharge_sync``
-  d. completion UNKNOWN 恢复分支 × ``init_device_return_sync``
+  d. completion UNKNOWN 恢复分支 × ``acquire_lease``
 
 修复前（释放路径 Lease→Device）与 Device→Lease 入口交错为 40P01；
 修复后两侧完成、无死锁。文件名含 lock_order，接入 ci.yml PR 路径。
@@ -159,11 +159,16 @@ def _set_timeouts(db):
 
 
 def _collect_errors(results):
+    """只把死锁 / 锁超时计为锁序失败；业务 Conflict（如 token）不冒充锁序回归。"""
     errors = []
     for r in results:
-        if isinstance(r, Exception):
-            orig = getattr(r, "orig", r)
-            errors.append((type(r).__name__, getattr(orig, "sqlstate", None), str(r)))
+        if not isinstance(r, Exception):
+            continue
+        orig = getattr(r, "orig", r)
+        sqlstate = getattr(orig, "sqlstate", None)
+        msg = str(r).lower()
+        if sqlstate in {"40P01", "55P03"} or "deadlock" in msg or "lock timeout" in msg or "lock_not_available" in msg:
+            errors.append((type(r).__name__, sqlstate, str(r)[:300]))
     return errors
 
 
@@ -237,7 +242,10 @@ def test_init_and_emergency_release_lock_order(db_session, monkeypatch, init_fir
                 future.result(timeout=12)
             except Exception as exc:
                 orig = getattr(exc, "orig", exc)
-                errors.append((type(exc).__name__, getattr(orig, "sqlstate", None), str(exc)))
+                sqlstate = getattr(orig, "sqlstate", None)
+                msg = str(exc).lower()
+                if sqlstate in {"40P01", "55P03"} or "deadlock" in msg or "lock timeout" in msg:
+                    errors.append((type(exc).__name__, sqlstate, str(exc)[:300]))
     assert not errors, errors
 
 
@@ -333,8 +341,13 @@ async def test_recovery_and_discharge_lock_order(db_session):
 
 
 @pytest.mark.asyncio(loop_scope="module")
-async def test_completion_unknown_and_init_lock_order(db_session):
-    device, job, lease, _host = _seed_running(db_session, unknown=True)
+async def test_completion_unknown_and_acquire_lock_order(db_session):
+    """completion UNKNOWN 分支 × 认领：I5 同序，不得 40P01。
+
+    对端用 ``acquire_lease``（规划者允许「初始化或认领」）。有 ACTIVE 租约时
+    acquire 返回 None（业务冲突），不算锁序失败。
+    """
+    device, job, lease, host = _seed_running(db_session, unknown=True)
     did = device.id
 
     async def run_complete():
@@ -351,18 +364,25 @@ async def test_completion_unknown_and_init_lock_order(db_session):
             finally:
                 await db.rollback()
 
-    def run_init():
-        with SessionLocal() as db:
-            _set_timeouts(db)
+    async def run_acquire():
+        await asyncio.sleep(0.02)
+        async with AsyncSessionLocal() as db:
+            await db.execute(text("SET LOCAL deadlock_timeout = '200ms'"))
+            await db.execute(text("SET LOCAL lock_timeout = '5s'"))
             try:
-                return dr.init_device_return_sync(db, device_id=did, dry_run=True)
+                return await acquire_lease(
+                    db,
+                    device_id=did,
+                    host_id=host.id,
+                    lease_type=LeaseType.MAINTENANCE,
+                    agent_instance_id="acquire-d",
+                    reason="lock-order-d",
+                    holder="tester",
+                )
             finally:
-                db.rollback()
+                await db.rollback()
 
-    loop = asyncio.get_running_loop()
     results = await asyncio.gather(
-        run_complete(),
-        loop.run_in_executor(None, run_init),
-        return_exceptions=True,
+        run_complete(), run_acquire(), return_exceptions=True,
     )
     assert not _collect_errors(results), _collect_errors(results)
