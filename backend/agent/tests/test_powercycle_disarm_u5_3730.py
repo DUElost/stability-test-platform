@@ -175,7 +175,7 @@ class TestDisarmModes:
         monkeypatch.setattr(disarm_mod, "device_serial", lambda: "S-DISARM")
         monkeypatch.setattr(disarm_mod, "_wait_device_online", lambda t: True)
         monkeypatch.setattr(
-            disarm_mod, "stop_task", lambda force=True: calls.__setitem__("stop", calls["stop"] + 1)
+            disarm_mod, "stop_task", lambda force=True, **kwargs: calls.__setitem__("stop", calls["stop"] + 1)
         )
         monkeypatch.setattr(disarm_mod, "_detect_platform", lambda: "MTK")
         monkeypatch.setattr(disarm_mod, "_detect_model", lambda: "MLD_NX2")
@@ -200,7 +200,7 @@ class TestDisarmModes:
         monkeypatch.setattr(disarm_mod, "device_serial", lambda: "S-PROBE")
         monkeypatch.setattr(disarm_mod, "device_online", lambda: True)
         monkeypatch.setattr(
-            disarm_mod, "stop_task", lambda force=True: calls.__setitem__("stop", calls["stop"] + 1)
+            disarm_mod, "stop_task", lambda force=True, **kwargs: calls.__setitem__("stop", calls["stop"] + 1)
         )
         monkeypatch.setattr(disarm_mod, "_detect_platform", lambda: "MTK")
         monkeypatch.setattr(disarm_mod, "_detect_model", lambda: "MLD_LX2")
@@ -265,7 +265,7 @@ class TestOnboardedContract:
 
         spec = ONBOARDED["power-cycle"]
         assert spec["disarm_script"] == "powercycle_disarm"
-        assert spec["disarm_min_version"] == "1.0.5"
+        assert spec["disarm_min_version"] == "1.0.6"
         assert spec["finish_min_version"] == "1.1.0"
         assert "powercycle_disarm" in spec["min_wall_clock_seconds"]
         assert "powercycle_finish" in spec["min_wall_clock_seconds"]

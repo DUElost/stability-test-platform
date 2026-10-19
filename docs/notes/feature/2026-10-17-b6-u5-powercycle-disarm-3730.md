@@ -1,4 +1,4 @@
-# B6-U5：开关机接入 powercycle_disarm 1.0.4 与 powercycle_finish 1.1.0
+# B6-U5：开关机接入 powercycle_disarm 1.0.6 与 powercycle_finish 1.1.0
 
 Status: implemented
 Class: feature
@@ -58,3 +58,28 @@ Draft PR 待 Planner 确认与独立复核；合入不等于生效（发包/scan
 - `permission_model`：id -u → root/non-root/unknown；离线/开机未完成不取证
 - probe 读 `sys.boot_completed`；evidence 记 `boot_completed`
 - 追加 `powercycle_disarm@1.0.5`；1.0.4 `retired:true`；finish@1.1.0 未改
+
+
+## v1.7.6 / 1.0.6（2026-10-20）
+
+Diagnosis D1/D2（PR #3747 comment 6268508491）确认：AutoTestTool 收到
+`POWER_CYCLE_STOP` 后在进程存活期间把 `auto_resume` 改回 true；1.0.5 先写
+标志、再 STOP，服务运行中的解除 7/7 失败。另 `run-as` 的 `unknown package` /
+`No such file or directory` / `Permission denied` 被 1.0.5 统一当作读空。
+
+- `stop_task`：先 STOP + force-stop，确认服务已停后才写 `running=false` /
+  `auto_resume=false`；`_verify_stop_flags` 同时验证两项，不一致重写一次。
+- 非 root 读取按 `run-as` 的 rc + stdout/stderr 分 `ok` / `not_installed` /
+  `absent` / `denied` / `transient`；`pm path` 记
+  `autotesttool_installed` true/false/null；非 root 不用 `test -f`。
+- 原始 readback 增加 `not_installed` / `absent`；未安装 disarm 不写设备、
+  正式 `executed_unverified`；已安装但 prefs 不存在时停服务后写最小 prefs
+  （非 root 先 `run-as mkdir -p shared_prefs`）；被拒/未知不整写、正式
+  `failed`；probe 正式值一律 `failed`。
+- 追加 `powercycle_disarm@1.0.6`（树与包 SHA 见 manifest）；1.0.5
+  `retired:true`；ONBOARDED 最低版本、模板 pin、API/Worker 测试同步 1.0.6。
+- 新增 `test_powercycle_disarm_v176_3730.py`：STOP 回写替身、顺序回退必红、
+  四种读取分类、未安装零写入、absent 最小 prefs、完整 disarm 打戳。
+
+真机 A–H + I/J/K 待规划者确认 1.0.6 包 SHA 后执行；1.0.5 的 12 台 E–H 与
+D1/D2 仅作对照，不代签 1.0.6。

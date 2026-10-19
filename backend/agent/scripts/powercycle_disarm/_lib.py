@@ -296,6 +296,27 @@ def autotesttool_apk_sha256(timeout: int = 30) -> str | None:
     return None
 
 
+def autotesttool_installed(timeout: int = 15) -> bool | None:
+    """AutoTestTool 是否已安装（§3.6.6 第 2 条）：true / false / null。
+
+    - rc=0 且至少一行以 package: 开头 → true；
+    - rc=1 且无 package: 行 → false；
+    - 其它（rc=0 但无 package 行、rc 其它、超时）→ null。
+
+    pm path 的 rc 必须与输出一起看；仅看输出会把 rc=1 的瞬态失败误判成
+    未安装。本函数只读，不写设备。
+    """
+    rc, out, _err = adb("shell", f"pm path {_PKG}", timeout=max(1, int(timeout)))
+    has_package = any(
+        line.strip().startswith("package:") for line in (out or "").splitlines()
+    )
+    if rc == 0 and has_package:
+        return True
+    if rc == 1 and not has_package:
+        return False
+    return None
+
+
 def try_adb_root() -> bool:
     """尽力 adb root（prefs 写入 run-as 兜底；lib.ps1 同款不阻断）。"""
     adb("root", timeout=15)
@@ -381,6 +402,55 @@ def get_prefs_xml() -> str:
     if text and not any(t in text for t in ("Permission denied", "No such file", "run-as:")):
         return text
     return ""
+
+
+def read_prefs_classified() -> tuple[str, str, bool | None]:
+    """读取 prefs 并分类（§3.6.6 第 2 条）：(kind, xml, installed)。
+
+    kind 取 ok / not_installed / absent / denied / transient。root 使用
+    _root_read_prefs 的同源探测；非 root 只按 run-as 的 rc 与 stdout/stderr
+    分类，**不使用 test -f**——/data/data 对 shell 不可遍历，其「不存在」
+    是假信号。
+
+    installed 取 autotesttool_installed() 的 true/false/null；两者矛盾时按
+    未知（transient）处理，调用方不得据此写 prefs。
+    """
+    installed = autotesttool_installed()
+    if is_root():
+        kind, xml = _root_read_prefs()
+        if kind == "empty":
+            kind = "transient"
+        if kind == "absent" and installed is False:
+            kind = "not_installed"
+        if kind in ("ok", "denied") and installed is False:
+            kind = "transient"
+        return kind, xml if kind == "ok" else "", installed
+
+    rc, out, err = adb(
+        "shell",
+        f"run-as {_PKG} cat shared_prefs/{_PREFS_FILE}",
+        timeout=30,
+    )
+    text = (out or "").strip()
+    blob = (out or "") + "\n" + (err or "")
+    if "unknown package" in blob:
+        kind = "not_installed"
+    elif "No such file or directory" in blob:
+        kind = "absent"
+    elif "Permission denied" in blob:
+        kind = "denied"
+    elif rc == 0 and text:
+        kind = "ok"
+    else:
+        kind = "transient"
+
+    if kind == "not_installed" and installed is True:
+        kind = "transient"
+    elif kind == "absent" and installed is False:
+        kind = "not_installed"
+    elif kind in ("ok", "denied") and installed is False:
+        kind = "transient"
+    return kind, text if kind == "ok" else "", installed
 
 
 def repair_prefs_ownership() -> None:
@@ -625,52 +695,90 @@ def set_stop_flags() -> None:
     push_prefs_xml(content)
 
 
-def _verify_stop_flags() -> None:
-    """#894：写后回读验证 running=false（防重启窗口写失败静默残留）。
-
-    push_prefs_xml 的写入失败（boot 早期 /data 未挂载等）当前静默——残留
-    running=true 会在设备 boot 后经 AutoTestTool boot receiver 拉起服务。此处
-    回读验证，未验证通过则重写一次，仍失败 raise（finish 报错而非假成功）。
-
-    v1.0.8（#3463 §9 G1-pc-2 ④，F1 同形态）：回读改走 **root 优先**并区分
-    kind——root 下用 ``_root_read_prefs`` 的同源证据：``ok`` 且含
-    ``running=false`` ⇒ 验证通过；root 写已执行但回读被拒/超时/仍为空
-    （``denied``/``transient``/``empty``/``absent``）⇒ 按既有语义重写后再读，
-    仍不 ok 才 raise。run-as 被拒不再承担「写后验证」——root 写成功 +
-    run-as-only 读空 = 假失败（v1.0.7 及以前的真实形态）。
-    """
-    for _attempt in (1, 2):
-        if is_root():
-            kind, xml = _root_read_prefs()
-            verified = kind == "ok" and 'name="running" value="false"' in xml
-        else:
-            xml = get_prefs_xml()
-            verified = 'name="running" value="false"' in xml
-        if verified:
-            return
-        set_stop_flags()
-    raise RuntimeError(
-        "prefs running 未置 false（残留会导致 boot 后 AutoTestTool 自启叠加——#894）"
+def build_minimal_stop_prefs() -> str:
+    """最小停止 prefs（§3.6.6 第 5 条）：只含 running=false 与 auto_resume=false。"""
+    return (
+        "<?xml version='1.0' encoding='utf-8' standalone='yes' ?>\n"
+        "<map>\n"
+        '    <boolean name="auto_resume" value="false"/>\n'
+        '    <boolean name="running" value="false"/>\n'
+        "</map>\n"
     )
 
 
-def stop_task(force: bool) -> None:
-    """set_stop_flags → 优雅 STOP → force-stop 兜底（lib.ps1:Stop-PowerCycleTask 同款）。
+def write_minimal_stop_flags() -> None:
+    """写最小停止 prefs；非 root 先建 shared_prefs 目录（§3.6.6 第 5 条）。"""
+    if not is_root():
+        rc, _out, err = adb(
+            "shell", f"run-as {_PKG} mkdir -p shared_prefs", timeout=30
+        )
+        if rc != 0:
+            raise RuntimeError(
+                "run-as 建 shared_prefs 目录失败: "
+                + ((err or "").strip() or "rc=%d" % rc)
+            )
+    push_prefs_xml(build_minimal_stop_prefs())
 
-    PC pc-watchdog 不移植（G15 决策：设备离线由平台心跳 UNKNOWN/恢复链路兜底）。
-    """
-    set_stop_flags()
-    _verify_stop_flags()
+
+def stop_service(force: bool) -> None:
+    """先 STOP、再 force-stop，确认服务已停；未停则不得写停止标志（§3.6.6 第 1 条）。"""
     if service_alive():
         adb_shell(
-            f"am startservice -n {_PKG}/{_SERVICE} -a com.tinno.autotesttool.action.POWER_CYCLE_STOP",
+            f"am startservice -n {_PKG}/{_SERVICE} -a "
+            "com.tinno.autotesttool.action.POWER_CYCLE_STOP",
             timeout=30,
         )
         time.sleep(3)
     adb_shell(f"am force-stop {_PKG}", timeout=30)
     time.sleep(1)
-    if force and service_alive():
-        raise RuntimeError("停止 PowerCycleService 失败（优雅停止 + force-stop 均未生效）")
+    if service_alive():
+        raise RuntimeError("停止 PowerCycleService 失败：服务仍在运行，不写停止标志")
+
+
+def _verify_stop_flags(kind: str = "ok") -> None:
+    """写后回读：running 与 auto_resume 必须同时为 false（§3.6.6 第 1 条）。
+
+    不一致时按同一 kind 重写一次并再验证；仍不一致 raise。kind=absent
+    走最小 prefs 写入，其余走 set_stop_flags。
+    """
+    for _attempt in (1, 2):
+        xml = get_prefs_xml()
+        if (
+            'name="running" value="false"' in xml
+            and 'name="auto_resume" value="false"' in xml
+        ):
+            return
+        if kind == "absent":
+            write_minimal_stop_flags()
+        else:
+            set_stop_flags()
+    raise RuntimeError(
+        "prefs running/auto_resume 未同时置 false（残留会导致 boot 后 "
+        "AutoTestTool 自启叠加——#894 / #3723 §3.6.6）"
+    )
+
+
+def stop_task(force: bool, kind: str = "ok", installed: bool | None = True) -> None:
+    """停服务 → 写停止标志 → 同时验证两项（§3.6.6 第 1、5 条）。
+
+    顺序不可交换：AutoTestTool 收到 STOP 时会把 auto_resume 改回 true；
+    只有先 STOP + force-stop、确认服务已停后再写，写入值才是最终状态。
+    kind 为 not_installed 时由调用方直接跳过；denied/transient 不写。
+    """
+    stop_service(force)
+    if kind == "not_installed":
+        return
+    if kind in ("denied", "transient", "empty"):
+        raise RuntimeError("prefs 读取被拒/未知：不写停止标志")
+    if kind not in ("ok", "absent"):
+        raise RuntimeError(f"未知的 prefs 状态 {kind!r}：不写停止标志")
+    if installed is not True:
+        raise RuntimeError("无法确认 AutoTestTool 已安装：不写停止标志")
+    if kind == "absent":
+        write_minimal_stop_flags()
+    else:
+        set_stop_flags()
+    _verify_stop_flags(kind)
 
 
 def result_paths() -> tuple[str, ...]:

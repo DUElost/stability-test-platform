@@ -140,7 +140,7 @@ class TestValidateOnboardedTeardownShape:
             {
                 "step_key": "td_d",
                 "script_name": "powercycle_disarm",
-                "script_version": "1.0.5",
+                "script_version": "1.0.6",
                 "stage": "teardown",
                 "enabled": True,
             },

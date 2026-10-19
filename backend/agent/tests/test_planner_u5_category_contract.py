@@ -34,7 +34,7 @@ def _stub_common(mod, monkeypatch):
     monkeypatch.setattr(mod, "device_serial", lambda: "ISOLATED-PLANNER")
     monkeypatch.setattr(mod, "_wait_device_online", lambda seconds: True)
     monkeypatch.setattr(mod, "device_online", lambda: True)
-    monkeypatch.setattr(mod, "stop_task", lambda force=True: None)
+    monkeypatch.setattr(mod, "stop_task", lambda force=True, **kwargs: None)
     _patch_advancing_clock(monkeypatch, mod)
     monkeypatch.setattr(mod, "_detect_platform", lambda: "MTK")
     monkeypatch.setattr(mod, "_detect_model", lambda: "MLD_LX2")
@@ -54,8 +54,8 @@ def _stub_common(mod, monkeypatch):
 
 
 class TestUnverifiedCategorySemantics:
-    def test_disarm_completed_read_fail_is_executed_unverified(self, monkeypatch):
-        """解除成功 + 原始读取失败 → executed_unverified，不得正式 readback_failed。"""
+    def test_disarm_read_fail_is_failed_after_v176(self, monkeypatch):
+        """§3.6.6 第 5 条：读取被拒/未知时 disarm 正式值为 failed。"""
         mod = _load("planner_u5_category", "powercycle_disarm/powercycle_disarm.py")
         _stub_common(mod, monkeypatch)
         monkeypatch.setattr(
@@ -74,8 +74,8 @@ class TestUnverifiedCategorySemantics:
         assert output["evidence"]["autotesttool_apk_sha256"] == "b" * 64
         assert output["readback"] == "readback_failed"
         assert output["disarm_result"] not in {"confirmed", "readback_failed"}, output
-        assert output["disarm_result"] == "executed_unverified"
-        assert output["success"] is True
+        assert output["disarm_result"] == "failed"
+        assert output["success"] is False
 
     def test_probe_read_fail_is_not_formal_readback_failed(self, monkeypatch):
         mod = _load("planner_u5_probe_fail", "powercycle_disarm/powercycle_disarm.py")
@@ -138,7 +138,7 @@ class TestUnverifiedCategorySemantics:
         mod = _load("planner_u5_stop_err", "powercycle_disarm/powercycle_disarm.py")
         _stub_common(mod, monkeypatch)
 
-        def boom_stop(force=True):
+        def boom_stop(force=True, **kwargs):
             raise RuntimeError("stop exploded")
 
         monkeypatch.setattr(mod, "stop_task", boom_stop)

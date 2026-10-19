@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
 """开关机解除 / 探针（#3730 / #3723 §3.6 / ADR-0061 D2）。
 
+v1.0.6（#3723 §3.6.6）：先 STOP/force-stop 再写停止标志，同时验证
+running/auto_resume；非 root 按 run-as 输出分为 not_installed/absent/
+denied/transient；未安装不写设备；prefs 不存在写最小 prefs；读取被拒或
+未知不整写。
 v1.0.5：§3.6.2 v1.7.2–v1.7.3 —— 轮询间隔 ≥10s、单次 adb 超时之和 ≤5s；
 上线后每次 adb 结束打 PROGRESS。§3.6.1.7 v1.7.3–v1.7.4 —— permission_model
 按 id -u 记 root/non-root/unknown；离线/开机未完成不取证；probe 读
@@ -62,6 +66,7 @@ from _lib import (
     params,
     permission_model,
     progress_stamp,
+    read_prefs_classified,
     stop_task,
     _root_read_prefs,
 )
@@ -180,36 +185,40 @@ def _resolve_category(cfg: dict, *, can_detect: bool) -> tuple[str, str]:
 
 
 def _read_prefs_evidence() -> dict[str, Any]:
-    """root 优先回读 prefs，返回 evidence + 归一化 readback 状态。
+    """读取 prefs 并按 §3.6.6 第 2、3 条给出原始 readback 与 evidence。
 
-    readback（原始诊断，可与正式六值分离）:
-      - clear: 可读且 running=false（无足迹）
-      - footprint: 可读且 running=true 或 auto_resume=true
-      - readback_failed: 读不到 / kind 非 ok
+    kind: ok / not_installed / absent / denied / transient。
+    readback: footprint / clear / absent / not_installed / readback_failed。
     """
-    evidence: dict[str, Any] = {"root": bool(is_root())}
-    if is_root():
-        kind, xml = _root_read_prefs()
-        evidence["kind"] = kind
-        evidence["prefs_len"] = len(xml or "")
-        if kind != "ok":
-            return {
-                "readback": "readback_failed",
-                "running": None,
-                "auto_resume": None,
-                "evidence": evidence,
-            }
-    else:
-        xml = get_prefs_xml()
-        evidence["kind"] = "ok" if xml else "non-root-empty"
-        evidence["prefs_len"] = len(xml or "")
-        if not xml:
-            return {
-                "readback": "readback_failed",
-                "running": None,
-                "auto_resume": None,
-                "evidence": evidence,
-            }
+    kind, xml, installed = read_prefs_classified()
+    evidence: dict[str, Any] = {
+        "root": bool(is_root()),
+        "kind": kind,
+        "autotesttool_installed": installed,
+        "prefs_len": len(xml or ""),
+    }
+    if kind == "not_installed":
+        return {
+            "readback": "not_installed",
+            "running": None,
+            "auto_resume": None,
+            "evidence": evidence,
+        }
+    if kind == "absent":
+        return {
+            "readback": "absent",
+            "running": None,
+            "auto_resume": None,
+            "evidence": evidence,
+        }
+    if kind != "ok":
+        # 被拒 / 未知 / 超时 / 空文件：原始读取失败，不据此判无足迹
+        return {
+            "readback": "readback_failed",
+            "running": None,
+            "auto_resume": None,
+            "evidence": evidence,
+        }
 
     running_true = 'name="running" value="true"' in xml
     running_false = 'name="running" value="false"' in xml
@@ -248,24 +257,18 @@ def _map_result(
     mode: str,
     action_completed: bool,
 ) -> str:
-    """原始 readback → 正式六值（v1.7.1 §3.6.1 第 7 条：一律未验证规则）。
+    """原始 readback → 正式六值（#3723 §3.6.6 第 3、4、5 条）。
 
-    - footprint → failed
-    - clear + disarm 已完成 → executed_unverified（不得 confirmed）
-    - clear + probe / 动作未完成 → failed
-    - 原始 readback_failed：
-        * disarm 已完成 → executed_unverified（保留原始诊断；不得正式 readback_failed）
-        * 动作未完成 / probe → failed
+    - clear / absent / not_installed + disarm 已完成 → executed_unverified；
+    - footprint → failed；
+    - readback_failed（被拒/未知/超时/缺 running）→ failed，即使 disarm
+      已经停过服务也不得升级为 executed_unverified（§3.6.6 第 5 条）。
+    - probe 一律不得通过（可信组合待 U8 登记）。
     """
-    if readback == "footprint":
-        return _RESULT_FAILED
-    if readback == "clear":
+    if readback in ("clear", "absent", "not_installed"):
         if mode == "disarm" and action_completed:
             return _RESULT_EXECUTED_UNVERIFIED
         return _RESULT_FAILED
-    # readback == "readback_failed"（及其它不可信）
-    if mode == "disarm" and action_completed:
-        return _RESULT_EXECUTED_UNVERIFIED
     return _RESULT_FAILED
 
 
@@ -306,6 +309,7 @@ def _early_unreadable(
             "model": model,
             "verified_category": False,
             "permission_model": "unknown",
+            "autotesttool_installed": None,
             "autotesttool_apk_sha256": None,
         },
         "mode": mode,
@@ -313,19 +317,30 @@ def _early_unreadable(
 
 
 def _run(cfg: dict) -> dict:
-    mode = str(param_or_env(cfg, "mode", "STP_POWER_CYCLE_DISARM_MODE", _DEFAULT_MODE)).strip().lower()
+    mode = str(
+        param_or_env(cfg, "mode", "STP_POWER_CYCLE_DISARM_MODE", _DEFAULT_MODE)
+    ).strip().lower()
     if mode not in ("probe", "disarm"):
         raise RuntimeError(f"mode 必须是 probe 或 disarm，收到: {mode!r}")
 
-    wait_online = int(str(param_or_env(
-        cfg, "wait_device_online_seconds", "STP_POWER_CYCLE_WAIT_ONLINE_SECONDS",
-        _DEFAULT_WAIT_ONLINE,
-    )) or _DEFAULT_WAIT_ONLINE)
+    wait_online = int(
+        str(
+            param_or_env(
+                cfg,
+                "wait_device_online_seconds",
+                "STP_POWER_CYCLE_WAIT_ONLINE_SECONDS",
+                _DEFAULT_WAIT_ONLINE,
+            )
+        )
+        or _DEFAULT_WAIT_ONLINE
+    )
 
     serial = device_serial()
     progress_stamp({"phase": "powercycle_disarm", "mode": mode, "serial": serial})
 
     boot_completed: str | None = None
+    stop_error = ""
+    action_completed = False
     if mode == "disarm":
         if not _wait_device_online(wait_online):
             platform, model = _resolve_category(cfg, can_detect=False)
@@ -340,16 +355,32 @@ def _run(cfg: dict) -> dict:
         # 等待成功即 boot_completed==1；开启上线后打戳
         boot_completed = "1"
         enable_exec_progress()
-        force = str(param_or_env(cfg, "force_stop", "STP_POWER_CYCLE_FORCE_STOP", "true")).lower() == "true"
-        try:
-            stop_task(force=force)
-        except Exception as exc:  # noqa: BLE001
-            # 解除动作失败仍尝试回读；未取得 clear 时保留失败事实（不得冒称已执行）
-            progress_stamp({"phase": "stop_task_error", "error": str(exc)[:200]})
-            stop_error = str(exc)
+        force = (
+            str(param_or_env(cfg, "force_stop", "STP_POWER_CYCLE_FORCE_STOP", "true"))
+            .lower()
+            == "true"
+        )
+        # 先只读分类，再决定是否需要停服务/写标志（§3.6.6 第 4、5 条）。
+        pre = _read_prefs_evidence()
+        pre_evidence = pre.get("evidence") or {}
+        kind = str(pre_evidence.get("kind") or "")
+        installed = pre_evidence.get("autotesttool_installed")
+        if installed is None and kind == "ok":
+            # 兼容旧测试桩；真实读取路径总会给出 true/false/null。
+            installed = True
+        if kind == "not_installed" or installed is False:
+            # 没有可停止的服务和可写的 prefs：不写设备，视为解除完成。
+            action_completed = True
         else:
-            stop_error = ""
-        time.sleep(1)
+            try:
+                stop_task(force=force, kind=kind, installed=installed)
+                action_completed = True
+            except Exception as exc:  # noqa: BLE001
+                # 解除动作失败（服务未停 / 读取被拒 / 无法确认安装）仍尝试回读，
+                # 但不得把未完成动作报成已执行。
+                progress_stamp({"phase": "stop_task_error", "error": str(exc)[:200]})
+                stop_error = str(exc)
+            time.sleep(1)
     else:
         # probe：在线检查 + boot_completed（§3.6.1.7 v1.7.4）
         if not device_online():
@@ -382,28 +413,19 @@ def _run(cfg: dict) -> dict:
     snap = _read_prefs_evidence()
     readback = str(snap["readback"])
 
-    if stop_error and readback == "clear":
-        # 停服务报错但回读已 clear：仍以回读为准（解除幂等）
-        result = _map_result(
-            "clear", mode=mode, action_completed=True,
-        )
-    elif stop_error:
-        # 动作失败且未取得 clear：依 D1 保留失败事实
+    if stop_error:
+        # 服务未停 / 读取被拒 / 无法确认安装：保留失败事实。
         result = _RESULT_FAILED
     else:
         result = _map_result(
             readback,
             mode=mode,
-            action_completed=(mode == "disarm"),
+            action_completed=action_completed,
         )
 
     # §3.6.1.7：任何输入下正式值不得为 confirmed / readback_failed
     if result in (_RESULT_CONFIRMED, _RESULT_READBACK_FAILED):
-        result = (
-            _RESULT_EXECUTED_UNVERIFIED
-            if mode == "disarm" and not stop_error
-            else _RESULT_FAILED
-        )
+        result = _RESULT_FAILED
 
     summary_parts = [
         f"mode={mode}",
