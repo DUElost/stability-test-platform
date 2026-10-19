@@ -3,7 +3,7 @@
 Status: implemented
 Class: feature
 
-按 [#3723](https://github.com/DUElost/stability-test-platform/issues/3723) **v1.7.1** §1.2 / §3.0 / §3.4 / **§3.4.1** / **§3.4.2** / §4 U3 / 4.1 / 4.2
+按 [#3723](https://github.com/DUElost/stability-test-platform/issues/3723) **v1.7.4**（U3 同 v1.7.3）§1.2 / §3.0 / §3.4 / **§3.4.1** / **§3.4.2** / **§3.4.3** / §4 U3 / 4.1 / 4.2
 与 ADR-0061 D1.3–8、D4.2、D5、D7.2（Accepted v1.1）实施 [#3728](https://github.com/DUElost/stability-test-platform/issues/3728)。
 Draft PR #3748 待规划确认与独立复核；合入不等于生效（阶段 B 初始化与控制面部署按 §5）。
 Owner #3751：五项接受 + M1–M3；共享服务类别政策与平台终止消费交 **U8**，U3 **不改** Agent/共享契约/包/模板。
@@ -71,6 +71,20 @@ Owner #3751：五项接受 + M1–M3；共享服务类别政策与平台终止�
    `populate_existing=True`，获锁后刷新 identity-map 中的 Device（含 return_state JSONB），
    串行另一专项已完成事实不被旧缓存覆盖。
 
+### §3.4.3 规划补充（复核第 1 轮返修后，v1.7.3 / v1.7.4）
+
+1. **加锁前 flush**：`populate_existing` 会丢弃未 flush 的 Device 改动；生产
+   `SessionLocal(autoflush=False)` 下，统一入口加锁前必须先 `db.flush()` /
+   `await db.flush()`，再保留 `populate_existing`。回归：调用方改 `status=OFFLINE`
+   经统一入口后仍保存。
+2. **异步预读回归**：异步 Session 预读 Device 后，另一事务放行专项；去掉异步
+   `populate_existing` 须红，恢复后绿。
+3. **I1 断言迁移**：`_FAMILY_STEPS` 已迁入 `disarm_derive`；
+   `test_shared_onboarded_registry_i1_u2_3727.py` 断言改到
+   `disarm_derive.FAMILY_STEPS is device_return.FAMILY_STEPS` 且
+   `agent_completion` 无本地副本；本地 `dict(FAMILY_STEPS)` 变异须红。
+4. **全量 backend/tests/**：最终 HEAD 须跑完整套件或同 HEAD informational SUCCESS。
+
 ## Alternatives
 
 - 先释放 JOB 再提交后登记欠账：ADR-0061 已否决（claim 窗口）。
@@ -83,15 +97,17 @@ Owner #3751：五项接受 + M1–M3；共享服务类别政策与平台终止�
 
 ## Verification
 
-见本 PR 正文「门禁」。本轮 review-r1 返修后：
+见本 PR 正文「门禁」。本轮 §3.4.3 四条返修后（绑定推送 HEAD）：
 
 | 项 | 结果 |
 |---|---|
-| review-r1 F1/F2（`test_reviewer_u3_r1_f1_f2_3728.py`） | **5 passed**（修前 3 failed：override/discharge/串行 JSON；修后全绿；含真实 keyset CLI 2） |
-| 真实 CLI `main(argv)`（`test_init_device_return_cli_3728.py`） | **7 passed** |
-| Planner 四反例 + 负向 / legacy-history / U3 行为 + SourceGuard | **保留通过** |
-| alert producers + API shape | **保留通过** |
-| `check:quick` | **OK（16 gates）** |
+| §3.4.3-1 调用方未 flush Device 改动 | 修前红（OFFLINE→ONLINE）；加锁前 flush 后绿 |
+| §3.4.3-2 异步预读 + populate_existing | 去掉异步 populate_existing 红（debt←unverified）；恢复后绿 |
+| §3.4.3-3 I1 FAMILY_STEPS 断言迁移 | 修前 AttributeError；迁到 disarm_derive 后绿；本地副本变异红 |
+| review-r1 F1/F2 + §3.4.3 新探针（`test_reviewer_u3_r1_f1_f2_3728.py`） | **7 passed**（原 5 + 新 2） |
+| I1 全文件（`test_shared_onboarded_registry_i1_u2_3727.py`） | **4 passed** |
+| 定向保留（CLI/U3/SourceGuard/alert/shape/deadlock/I1） | **90 passed** |
+| 完整 `backend/tests/`（信号桩） | **4197 passed / 1 skipped / 6 failed**（`test_run_console`×5 + `test_phase0_closure`×1，均为信号桩拦截；非 U3 改动；以同 HEAD informational 为准） |
 | #3739 危险 cancel 变异 | **未跑（禁止）** |
 | required CI（推送后） | **pending（以 PR checks 为准）** |
 

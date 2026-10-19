@@ -5,14 +5,18 @@ Authoritative probe from review comment 6253538954; assertions must not be weake
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from backend.core.database import SessionLocal, get_db
+from backend.core.database import AsyncSessionLocal, SessionLocal, get_db
 from backend.main import fastapi_app
 from backend.models.device_lease import DeviceLease
+from backend.models.enums import JobStatus
+from backend.models.job import JobInstance
+from backend.models.plan_run import PlanRun
 from backend.models.device_return_debt import DeviceReturnDebt
 from backend.models.host import Device
 from backend.scripts import init_device_return as cli
@@ -146,3 +150,71 @@ def test_cli_actual_keyset_reader_and_cross_device_nowait(db_session, monkeypatc
         for did in ids:
             state = db.get(Device, did).return_state
             assert bool(state) is apply
+
+
+def test_unified_entry_keeps_caller_pending_device_change(db_session):
+    """#3723 §3.4.3-1: populate_existing must not drop caller unflushed Device edits."""
+    device, job, lease, _ = _seed(db_session, disarm_results={"power-cycle": {"result": "confirmed"}})
+    device_id, job_id = device.id, job.id
+    with SessionLocal() as db:
+        assert db.autoflush is False
+        db.get(Device, device_id).status = "OFFLINE"  # 调用方未 flush 的改动
+        dr.handle_job_lease_release_sync(db, device_id=device_id, job_id=job_id)
+        db.commit()
+    with SessionLocal() as db:
+        assert db.get(Device, device_id).status == "OFFLINE"
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_async_entry_rereads_device_after_preload(db_session):
+    """#3723 §3.4.3-2: async lock must refresh preloaded Device after peer override."""
+    device, job, lease, _ = _seed(
+        db_session,
+        disarm_results={
+            "power-cycle": {"result": "not_executed"},
+            "sleep": {"result": "incomplete"},
+        },
+    )
+    device_id = device.id
+    plan_id = job.plan_id
+    host_id = job.host_id
+    with SessionLocal() as db:
+        dr.handle_job_lease_release_sync(db, device_id=device_id, job_id=job.id)
+        db.commit()
+    run2 = PlanRun(
+        plan_id=plan_id,
+        status="RUNNING",
+        plan_snapshot={"name": "r2"},
+        run_type="MANUAL",
+        triggered_by="test",
+    )
+    db_session.add(run2)
+    db_session.commit()
+    async with AsyncSessionLocal() as adb:
+        held = await adb.get(Device, device_id)  # 预读：power-cycle 为 debt
+        assert held.return_state["power-cycle"]["state"] == "debt"
+        with SessionLocal() as other:  # 另一事务放行 power-cycle
+            dr.apply_override_sync(
+                other,
+                device_id=device_id,
+                families=["power-cycle"],
+                reason_category="flashed",
+                evidence_ref="r2-async",
+            )
+            other.commit()
+        job2 = JobInstance(
+            plan_run_id=run2.id,
+            plan_id=plan_id,
+            device_id=device_id,
+            host_id=host_id,
+            status=JobStatus.COMPLETED.value,
+            pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+            ended_at=datetime.now(timezone.utc),
+            disarm_results={"sleep": {"result": "incomplete"}},
+        )
+        adb.add(job2)
+        await adb.flush()
+        await dr.handle_job_lease_release(adb, device_id=device_id, job_id=job2.id, job=job2)
+        await adb.commit()
+    with SessionLocal() as db:
+        assert db.get(Device, device_id).return_state["power-cycle"]["state"] == "unverified"

@@ -299,6 +299,9 @@ def _set_family_return_state(
 def _lock_device_sync(db: Session, device_id: int) -> Device | None:
     # populate_existing: callers may already hold a stale Device in the identity
     # map; FOR UPDATE alone does not refresh JSONB return_state (review-r1 F2).
+    # Flush first: populate_existing discards unflushed Device edits, and
+    # SessionLocal is autoflush=False (#3723 §3.4.3).
+    db.flush()
     return (
         db.execute(
             select(Device)
@@ -599,6 +602,8 @@ def handle_job_lease_release_sync(
 
 async def _lock_device_async(db: AsyncSession, device_id: int) -> Device | None:
     # Same identity-map refresh as sync (review-r1 F2).
+    # Flush first for parity with sync / autoflush=False callers (#3723 §3.4.3).
+    await db.flush()
     result = await db.execute(
         select(Device)
         .where(Device.id == device_id)
