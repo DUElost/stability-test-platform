@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
 """开关机解除 / 探针（#3730 / #3723 §3.6 / ADR-0061 D2）。
 
+v1.0.5：§3.6.2 v1.7.2–v1.7.3 —— 轮询间隔 ≥10s、单次 adb 超时之和 ≤5s；
+上线后每次 adb 结束打 PROGRESS。§3.6.1.7 v1.7.3–v1.7.4 —— permission_model
+按 id -u 记 root/non-root/unknown；离线/开机未完成不取证；probe 读
+sys.boot_completed，evidence 记 boot_completed。
 v1.0.4：§3.6.1 第 7 条 —— 脚本不内置已验证类别清单，正式值一律按未验证规则；
-evidence 增加权限模型与 AutoTestTool APK SHA-256。§3.6.2 —— 进度戳 sleep
-从上一次周期原点起算，单次轮询 adb 超时受 15s 周期与剩余截止约束。
+evidence 增加权限模型与 AutoTestTool APK SHA-256。
 v1.0.3：§3.6.1.3 —— 未验证 **probe**（含原始 clear）不得 ``success=true`` /
 ``executed_unverified`` 当通过；已完成 **disarm** 的未验证结果仍为
 ``executed_unverified``。
@@ -44,13 +47,14 @@ from __future__ import annotations
 
 import sys
 import time
-from typing import Any, Callable
+from typing import Any
 
 from _lib import (
     adb_shell,
     autotesttool_apk_sha256,
     device_online,
     device_serial,
+    enable_exec_progress,
     get_prefs_xml,
     is_root,
     output_result,
@@ -71,17 +75,10 @@ _RESULT_READBACK_FAILED = "readback_failed"  # 仅作原始 readback 诊断值
 _DEFAULT_WAIT_ONLINE = 600
 _DEFAULT_MODE = "disarm"
 
-# §3.6.2：同步轮询打戳；相邻 PROGRESS 最多 15s；不扩 660s 外墙。
-_WAIT_POLL_INTERVAL_S = 15
-_WAIT_MAX_ITERATIONS = 10_000  # 假时钟测试独立迭代上界
-
-
-def _call_online(online_fn: Callable[..., bool], timeout: int) -> bool:
-    """兼容 ``online_fn(timeout)`` 与旧式无参替身。"""
-    try:
-        return bool(online_fn(timeout))
-    except TypeError:
-        return bool(online_fn())
+# §3.6.2（v1.7.2）：相邻两次轮询开始间隔 ≥10s；单次轮询 adb 超时之和 ≤5s。
+_POLL_PERIOD_S = 10
+_STATE_TIMEOUT_S = 2
+_BOOT_TIMEOUT_S = 3
 
 
 def _wait_device_online(
@@ -95,12 +92,11 @@ def _wait_device_online(
 ) -> bool:
     """轮询 get-state==device 且 boot_completed==1，最长 timeout_s 秒。
 
-    #3723 §3.6.2 / v1.7.1：monotonic 总截止；每次真实 device/boot 轮询完成后
-    递增 PROGRESS；相邻戳按真实时间最多 15s（含 adb 耗时）。
-    单次轮询全部 adb（含 get-state）超时之和受「距上一次打戳的 15s 窗口」与
-    剩余截止约束。sleep 从上一次打戳起算，并预留下一轮完整 15s adb 预算
-    （因此可 sleep 量为 0），避免「先睡满 15s 再跑慢 get-state」撑破间隔。
-    同步轮询无后台线程；超时退出不再打戳。
+    #3723 §3.6.2 / v1.7.2：monotonic 总截止；相邻轮询开始间隔 ≥10s；
+    单次轮询 get-state 2s + getprop 3s（之和 ≤5s，并受剩余截止约束）；
+    每次真实 device/boot 轮询完成后递增 PROGRESS；相邻戳按真实时间最多 15s。
+    sleep 到 min(本轮开始+10s, 截止)。同步轮询无后台线程；超时退出不再打戳。
+    迭代上界 ``timeout//10+2`` 仅作假时钟安全网，真实等待不得在截止前结束。
     """
     timeout_s = max(0, int(timeout_s or 0))
     deadline = clock() + timeout_s
@@ -110,55 +106,25 @@ def _wait_device_online(
     )
     progress_fn = progress_fn or progress_stamp
     seq = 0
-    last_stamp_at: float | None = None
-
-    for _ in range(_WAIT_MAX_ITERATIONS):
-        now = clock()
-        remaining = deadline - now
-        if remaining <= 0:
+    # 安全网：真实时钟下每轮至少 10s，截止前到不了这个上界。
+    for _ in range(timeout_s // _POLL_PERIOD_S + 2):
+        poll_start = clock()
+        state_timeout = min(_STATE_TIMEOUT_S, int(deadline - poll_start))
+        if state_timeout < 1:  # 剩余不足 1s：不再调 adb，睡到截止
+            remaining = deadline - clock()
+            if remaining > 0:
+                sleeper(remaining)
             return False
-
-        if last_stamp_at is None:
-            window_left = min(float(_WAIT_POLL_INTERVAL_S), remaining)
-            window_origin = now
-        else:
-            window_left = min(
-                _WAIT_POLL_INTERVAL_S - (now - last_stamp_at),
-                remaining,
-            )
-            window_origin = last_stamp_at
-
-        if window_left < 1:
-            return False
-
-        online = False
-        booted = ""
-        err_text = ""
+        online, booted, err_text = False, "", ""
         try:
-            budget_int = max(1, int(window_left))
-            if budget_int >= 2:
-                state_timeout = budget_int - 1
-                boot_timeout_cap = budget_int - state_timeout
-            else:
-                state_timeout = 1
-                boot_timeout_cap = 0
-
-            online = _call_online(online_fn, state_timeout)
-            if online and boot_timeout_cap >= 1:
-                wall_left = min(
-                    _WAIT_POLL_INTERVAL_S - (clock() - window_origin)
-                    if last_stamp_at is not None
-                    else (window_left - (clock() - now)),
-                    deadline - clock(),
-                )
-                boot_timeout = min(boot_timeout_cap, max(0, int(wall_left)))
+            online = bool(online_fn(state_timeout))
+            if online:
+                boot_timeout = min(_BOOT_TIMEOUT_S, int(deadline - clock()))
                 if boot_timeout >= 1:
                     booted = str(boot_prop_fn(boot_timeout) or "").strip()
-        except Exception as exc:  # noqa: BLE001 — 轮询诊断入戳，不中断截止
+        except Exception as exc:  # noqa: BLE001 — 诊断入戳，不中断截止
             err_text = str(exc)[:200]
-            online = False
-            booted = ""
-
+            online, booted = False, ""
         seq += 1
         payload: dict[str, Any] = {
             "phase": "wait_device_online",
@@ -170,17 +136,12 @@ def _wait_device_online(
         if err_text:
             payload["error"] = err_text
         progress_fn(payload)
-        last_stamp_at = clock()
-
         if online and booted == "1":
             return True
-
-        if deadline - clock() <= 0:
-            return False
-        # 预留下一轮完整 15s adb 预算 ⇒ 可 sleep 量 = 0（仍调用 sleeper 便于测试）
-        sleeper(0)
+        delay = min(poll_start + _POLL_PERIOD_S, deadline) - clock()
+        if delay > 0:
+            sleeper(delay)
     return False
-
 
 
 def _detect_platform() -> str:
@@ -333,7 +294,7 @@ def _early_unreadable(
     platform: str,
     model: str,
 ) -> dict:
-    """离线 / 等待失败等：动作未完成，正式结果不得借未验证规则报成已执行。"""
+    """离线 / 等待失败 / 开机未完成：动作未完成；不得再 adb 取证（§3.6.1.7）。"""
     return {
         "success": False,
         "disarm_result": _RESULT_FAILED,
@@ -344,7 +305,8 @@ def _early_unreadable(
             "platform": platform,
             "model": model,
             "verified_category": False,
-            **_device_identity_evidence(),
+            "permission_model": "unknown",
+            "autotesttool_apk_sha256": None,
         },
         "mode": mode,
     }
@@ -363,6 +325,7 @@ def _run(cfg: dict) -> dict:
     serial = device_serial()
     progress_stamp({"phase": "powercycle_disarm", "mode": mode, "serial": serial})
 
+    boot_completed: str | None = None
     if mode == "disarm":
         if not _wait_device_online(wait_online):
             platform, model = _resolve_category(cfg, can_detect=False)
@@ -374,6 +337,9 @@ def _run(cfg: dict) -> dict:
                 platform=platform,
                 model=model,
             )
+        # 等待成功即 boot_completed==1；开启上线后打戳
+        boot_completed = "1"
+        enable_exec_progress()
         force = str(param_or_env(cfg, "force_stop", "STP_POWER_CYCLE_FORCE_STOP", "true")).lower() == "true"
         try:
             stop_task(force=force)
@@ -385,7 +351,7 @@ def _run(cfg: dict) -> dict:
             stop_error = ""
         time.sleep(1)
     else:
-        # probe：设备需可达才能读
+        # probe：在线检查 + boot_completed（§3.6.1.7 v1.7.4）
         if not device_online():
             platform, model = _resolve_category(cfg, can_detect=False)
             return _early_unreadable(
@@ -396,6 +362,18 @@ def _run(cfg: dict) -> dict:
                 platform=platform,
                 model=model,
             )
+        boot_completed = adb_shell("getprop sys.boot_completed", timeout=3).strip()
+        if boot_completed != "1":
+            platform, model = _resolve_category(cfg, can_detect=False)
+            return _early_unreadable(
+                mode=mode,
+                serial=serial,
+                summary=f"设备 {serial} 开机未完成（boot_completed={boot_completed!r}），探针不读 prefs",
+                evidence={"online": True, "boot_completed": boot_completed},
+                platform=platform,
+                model=model,
+            )
+        enable_exec_progress()
         stop_error = ""
 
     platform, model = _resolve_category(cfg, can_detect=True)
@@ -452,6 +430,7 @@ def _run(cfg: dict) -> dict:
             "running": snap.get("running"),
             "auto_resume": snap.get("auto_resume"),
             "stop_error": stop_error or None,
+            "boot_completed": boot_completed,
             **identity,
         },
         "mode": mode,

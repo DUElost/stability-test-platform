@@ -48,7 +48,7 @@ def _bare_engine(**kwargs):
 class TestEngineVersionRoles:
     def test_manual_exit_selects_legacy_finish_1_0_8(self):
         teardown = [
-            {"step_id": "d", "action": "script:powercycle_disarm", "version": "1.0.4"},
+            {"step_id": "d", "action": "script:powercycle_disarm", "version": "1.0.5"},
             {"step_id": "f", "action": "script:powercycle_finish", "version": "1.0.8"},
         ]
         selected = select_disarm_steps(teardown, {"power-cycle"})
@@ -56,7 +56,7 @@ class TestEngineVersionRoles:
 
     def test_manual_exit_skips_finish_1_1_0(self):
         teardown = [
-            {"step_id": "d", "action": "script:powercycle_disarm", "version": "1.0.4"},
+            {"step_id": "d", "action": "script:powercycle_disarm", "version": "1.0.5"},
             {"step_id": "f", "action": "script:powercycle_finish", "version": "1.1.0"},
         ]
         selected = select_disarm_steps(teardown, {"power-cycle"})

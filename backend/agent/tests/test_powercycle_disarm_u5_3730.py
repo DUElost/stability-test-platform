@@ -47,6 +47,11 @@ class TestDisarmModes:
             disarm_mod, "_device_identity_evidence",
             lambda: {"permission_model": "root", "autotesttool_apk_sha256": "a" * 64},
         )
+        monkeypatch.setattr(
+            disarm_mod,
+            "adb_shell",
+            lambda cmd, timeout=60: "1" if "boot_completed" in str(cmd) else "",
+        )
 
     def test_probe_clear_unverified_category(self, disarm_mod, monkeypatch):
         """probe + clear → failed / success=false（§3.6.1.3 / 第 7 条）。"""
@@ -260,7 +265,7 @@ class TestOnboardedContract:
 
         spec = ONBOARDED["power-cycle"]
         assert spec["disarm_script"] == "powercycle_disarm"
-        assert spec["disarm_min_version"] == "1.0.4"
+        assert spec["disarm_min_version"] == "1.0.5"
         assert spec["finish_min_version"] == "1.1.0"
         assert "powercycle_disarm" in spec["min_wall_clock_seconds"]
         assert "powercycle_finish" in spec["min_wall_clock_seconds"]

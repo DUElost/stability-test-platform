@@ -50,3 +50,11 @@ Draft PR 待 Planner 确认与独立复核；合入不等于生效（发包/scan
 - 真机资源到位后按 D2.5 补三类验证并追加版本登记。
 - U3 合入后基于最新 main 再集成并重跑入口验收。
 - 激活按 #3723 §5；不得因本单元单独发包/scan/热更新/重指。
+
+## v1.7.4 / 1.0.5（阶段一）
+
+- `_wait_device_online`：轮询间隔 10s；get-state 2s + getprop 3s；迭代上界 timeout//10+2
+- 上线后每次 adb 结束打 PROGRESS（含超时与 push_prefs_xml 直接子进程）
+- `permission_model`：id -u → root/non-root/unknown；离线/开机未完成不取证
+- probe 读 `sys.boot_completed`；evidence 记 `boot_completed`
+- 追加 `powercycle_disarm@1.0.5`；1.0.4 `retired:true`；finish@1.1.0 未改

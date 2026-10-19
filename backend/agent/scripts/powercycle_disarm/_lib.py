@@ -93,6 +93,27 @@ def progress_stamp(payload: dict) -> None:
     sys.stderr.flush()
 
 
+# §3.6.2（v1.7.3）：上线后每次 adb 调用结束打一次 PROGRESS；等待期不加戳。
+_EXEC_PROGRESS = {"on": False, "n": 0}
+
+
+def enable_exec_progress() -> None:
+    """开启上线后执行期进度戳（disarm 等待成功 / probe 在线且开机完成后）。"""
+    _EXEC_PROGRESS["on"] = True
+
+
+def reset_exec_progress() -> None:
+    """测试用：关闭并清零执行期进度计数。"""
+    _EXEC_PROGRESS["on"] = False
+    _EXEC_PROGRESS["n"] = 0
+
+
+def exec_progress_tick() -> None:
+    if _EXEC_PROGRESS["on"]:
+        _EXEC_PROGRESS["n"] += 1
+        progress_stamp({"phase": "disarm_exec", "adb_calls": _EXEC_PROGRESS["n"]})
+
+
 # ---------------------------------------------------------------------------
 # ADB 封装
 # ---------------------------------------------------------------------------
@@ -117,7 +138,9 @@ def adb(*args: str, timeout: int = 60) -> tuple[int, str, str]:
         # 无法从调用点兜住。
         result = subprocess.run(cmd, capture_output=True, timeout=timeout)
     except subprocess.TimeoutExpired:
+        exec_progress_tick()
         return -1, "", "timeout"
+    exec_progress_tick()
     return (
         result.returncode,
         decode_device_output(result.stdout),
@@ -243,8 +266,13 @@ def is_root() -> bool:
 
 
 def permission_model() -> str:
-    """权限模型（是否 root），供解除证据；不做类别可信判定。"""
-    return "root" if is_root() else "non-root"
+    """权限模型（§3.6.1.7 v1.7.3）：按 ``id -u`` 实际输出记 root/non-root/unknown。"""
+    out = adb_shell("id -u", timeout=15).strip()
+    if out == "0":
+        return "root"
+    if out.isdigit():
+        return "non-root"
+    return "unknown"
 
 
 def autotesttool_apk_sha256(timeout: int = 30) -> str | None:
@@ -390,7 +418,12 @@ def push_prefs_xml(content: str) -> None:
         adb_shell(f"chown {uid}:{uid} {_PREFS_DIR}/{_PREFS_FILE} && chmod 660 {_PREFS_DIR}/{_PREFS_FILE}", timeout=30)
         return
     cmd = [adb_path(), "-s", device_serial(), "shell", f"run-as {_PKG} sh -c 'cat > shared_prefs/{_PREFS_FILE}'"]
-    result = subprocess.run(cmd, input=content.encode("utf-8"), capture_output=True, timeout=60)
+    try:
+        result = subprocess.run(cmd, input=content.encode("utf-8"), capture_output=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        exec_progress_tick()
+        raise
+    exec_progress_tick()
     if result.returncode != 0:
         raise RuntimeError(f"run-as 写 prefs 失败: {result.stderr.strip() or 'rc=%d' % result.returncode}")
 

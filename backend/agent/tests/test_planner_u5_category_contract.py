@@ -40,6 +40,11 @@ def _stub_common(mod, monkeypatch):
     monkeypatch.setattr(mod, "_detect_model", lambda: "MLD_LX2")
     monkeypatch.setattr(
         mod,
+        "adb_shell",
+        lambda cmd, timeout=60: "1" if "boot_completed" in str(cmd) else "",
+    )
+    monkeypatch.setattr(
+        mod,
         "_device_identity_evidence",
         lambda: {
             "permission_model": "root",
@@ -157,13 +162,16 @@ class TestUnverifiedCategorySemantics:
         mod = _load("planner_u5_offline", "powercycle_disarm/powercycle_disarm.py")
         monkeypatch.setattr(mod, "device_serial", lambda: "ISOLATED-OFFLINE")
         monkeypatch.setattr(mod, "_wait_device_online", lambda seconds: False)
+        # 离线路径不得再 adb 取证（§3.6.1.7）；identity stub 若被调用即失败
         monkeypatch.setattr(
             mod,
             "_device_identity_evidence",
-            lambda: {"permission_model": "unknown", "autotesttool_apk_sha256": None},
+            lambda: (_ for _ in ()).throw(AssertionError("offline must not probe identity")),
         )
         output = mod._run({"mode": "disarm", "wait_device_online_seconds": 30})
         assert output["evidence"]["verified_category"] is False
+        assert output["evidence"]["permission_model"] == "unknown"
+        assert output["evidence"]["autotesttool_apk_sha256"] is None
         assert output["disarm_result"] == "failed"
         assert output["disarm_result"] not in {"confirmed", "readback_failed"}
         assert output["readback"] == "readback_failed"
