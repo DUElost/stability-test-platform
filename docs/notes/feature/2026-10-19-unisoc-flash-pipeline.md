@@ -24,8 +24,10 @@ Class: feature
    modem/DSP/PM/logo + boot/init_boot/vendor_boot/dtbo/vbmeta* + super/cache/blackbox，
    共 24 个分区；SPL（eMMC boot0）走 `adb dd`，写前比对、写后回读 sha256。
 4. **出厂态** = `erase userdata + metadata + misc`，保留
-   ProdNV/Persist/NV_LTE/DELTANV/UserData（IMEI/校准），设备停在开机向导；
-   `oobe_skip` 不放进模板（要落主界面时由调用方追加）。
+   ProdNV/Persist/NV_LTE/DELTANV/UserData（IMEI/校准）。**刷完必须接
+   `oobe_skip`**：新擦除的设备停在开机向导，静置一段时间会自行关机
+   （与 MTK 原生流程一致），模板 `flash_unisoc.json` 已固定
+   `flash → oobe_skip → check_device` 三步。
 5. **只升级**：`version_key` 比对目标/当前版本，降级默认拒绝（`allow_downgrade` 可放开）；
    同版本默认 skipped，`force=true` 可重刷（幂等已实测）。
 
@@ -62,6 +64,7 @@ Class: feature
 | 1031 | FAILED | super 阶段 600s 零打戳被 stall 杀掉 → 设备停在 fastboot；由此补 1.0.2 恢复模式 + 1.0.3 字符流进度 |
 | 1032 | FAILED（queued） | 设备 OFFLINE，dispatcher 按 fail-closed 拒发；改用 host 侧跑 1.0.2 包恢复（冷刷 2519s） |
 | 1033 | **SUCCESS** | 24 分区、flash 726.6s、wipe、boot、`version=B19`/`green`/`setup_complete=0`，check_device 通过 |
+| 1036 | **SUCCESS** | 模板接入 `oobe_skip` 后 B17→B19：SPL 实写、24 分区、flash 573.8s；oobe 步 `setup_complete=1`/`device_provisioned=1`，焦点离开 SetupWizard |
 
 - 冷刷（super 首次从 NFS 读）约 42 分钟，热刷约 15 分钟；步骤 `timeout_seconds`
   按 3600 配，模板已同步。

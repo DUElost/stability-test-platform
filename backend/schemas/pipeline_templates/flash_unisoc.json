@@ -1,6 +1,6 @@
 {
-  "version": 1,
-  "description": "Unisoc/SPRD full firmware switch: check device, then flash every partition from the NFS PAC artifact and wipe userdata/metadata/misc. Leaves the unit at the setup wizard (factory-fresh); append script:oobe_skip when the device must land on the home screen for testing.",
+  "version": 2,
+  "description": "Unisoc/SPRD full firmware switch: check device, flash every partition from the NFS PAC artifact, wipe userdata/metadata/misc, then skip OOBE and verify the unit is usable. OOBE is skipped because a freshly wiped unit left at the setup wizard powers itself off after a while.",
   "lifecycle": {
     "timeout_seconds": 3600,
     "init": [
@@ -23,6 +23,16 @@
           "verify_version": true,
           "verify_wait_seconds": 420,
           "flash_spl": "auto"
+        }
+      },
+      {
+        "step_id": "oobe_skip",
+        "action": "script:oobe_skip",
+        "version": "1.1.2",
+        "timeout_seconds": 900,
+        "retry": 0,
+        "params": {
+          "wait_for_device_seconds": 600
         }
       }
     ],
