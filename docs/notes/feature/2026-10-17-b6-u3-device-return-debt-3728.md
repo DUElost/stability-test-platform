@@ -3,7 +3,7 @@
 Status: implemented
 Class: feature
 
-按 [#3723](https://github.com/DUElost/stability-test-platform/issues/3723) **v1.7.4**（U3 同 v1.7.3）§1.2 / §3.0 / §3.4 / **§3.4.1** / **§3.4.2** / **§3.4.3** / §4 U3 / 4.1 / 4.2
+按 [#3723](https://github.com/DUElost/stability-test-platform/issues/3723) **v1.7.5** §1.2 / §3.0 / §3.4 / **§3.4.1** / **§3.4.2** / **§3.4.3** / **§3.4.4** / §4 U3 / 4.1 / 4.2
 与 ADR-0061 D1.3–8、D4.2、D5、D7.2（Accepted v1.1）实施 [#3728](https://github.com/DUElost/stability-test-platform/issues/3728)。
 Draft PR #3748 待规划确认与独立复核；合入不等于生效（阶段 B 初始化与控制面部署按 §5）。
 Owner #3751：五项接受 + M1–M3；共享服务类别政策与平台终止消费交 **U8**，U3 **不改** Agent/共享契约/包/模板。
@@ -85,6 +85,31 @@ Owner #3751：五项接受 + M1–M3；共享服务类别政策与平台终止�
    `agent_completion` 无本地副本；本地 `dict(FAMILY_STEPS)` 变异须红。
 4. **全量 backend/tests/**：最终 HEAD 须跑完整套件或同 HEAD informational SUCCESS。
 
+### §3.4.4 加锁全序 I5（复核第 2 轮 F3，v1.7.5）
+
+不变量 **I5**：`job_instance` → `device` → `device_leases` → `device_return_debt`。
+不得改 `acquire_lease` / 准入 / 心跳；不新增重试语义。
+
+**4 处调用方改序（Job 之后、Lease 之前锁 Device）：**
+
+| 入口 | 实际顺序（文件:行，本 tip） |
+|---|---|
+| 紧急释放 | Job `:62` → Device `:69` → Lease `:75` → 统一入口（`device_lease_emergency_release.py`） |
+| `_reconcile_expired_leases` | Job `:149` → Device `:163` → Lease `:169` → 统一入口（`device_lease_reconciler.py`） |
+| `sync_agent_recovery` | Job `:326` → Device `:332` → Lease `:337`（`agent_recovery.py`） |
+| completion UNKNOWN 分支 | Job `:246` → Device `:420` → Lease `:425`（`agent_completion.py`） |
+
+**U3 自有入口与其它释放点（保持 / 已符合 I5）：**
+
+| 事务 | 顺序 |
+|---|---|
+| 初始化 / 清偿 / 放行 / 退役 / `_acquire_debt_lease_*` | Device → Lease → debt（`device_return.py`） |
+| 统一入口 `handle_job_lease_release[_sync]` | Device → Lease → debt |
+| normal completion / recycler PENDING / stale UNKNOWN / terminal ACTIVE | Job →（入口内）Device → Lease |
+| 认领 `acquire_lease`（未改） | Device 代次 CAS → Lease（`lease_manager.py:99/:128`） |
+
+共享行锁表已回填 I5 与 `device` × `device_leases` 全表；`on_job_terminal` 新边与准入不成环依据见该表。
+
 ## Alternatives
 
 - 先释放 JOB 再提交后登记欠账：ADR-0061 已否决（claim 窗口）。
@@ -94,25 +119,27 @@ Owner #3751：五项接受 + M1–M3；共享服务类别政策与平台终止�
 - 放宽全部旧 token / 载荷冲突以接受迟到 confirmed：违反 D5.6 严格来源核验，已否决。
 - 全批同一 Session + 保存点：违反 §3.4.2 跨设备事务边界与 dry-run 实际释锁要求，已否决。
 - 仅测 service helper 代替 CLI NOWAIT / 失败隔离：§4.1 明确禁止，已否决。
+- 反方向统一为 Lease → Device（改认领与 U3 全部入口）：范围更大，规划者否决，采用 I5。
 
 ## Verification
 
-见本 PR 正文「门禁」。本轮 §3.4.3 四条返修后（绑定推送 HEAD）：
+见本 PR 正文「门禁」。本轮 §3.4.4（绑定推送 HEAD）：
 
 | 项 | 结果 |
 |---|---|
-| §3.4.3-1 调用方未 flush Device 改动 | 修前红（OFFLINE→ONLINE）；加锁前 flush 后绿 |
-| §3.4.3-2 异步预读 + populate_existing | 去掉异步 populate_existing 红（debt←unverified）；恢复后绿 |
-| §3.4.3-3 I1 FAMILY_STEPS 断言迁移 | 修前 AttributeError；迁到 disarm_derive 后绿；本地副本变异红 |
-| review-r1 F1/F2 + §3.4.3 新探针（`test_reviewer_u3_r1_f1_f2_3728.py`） | **7 passed**（原 5 + 新 2） |
-| I1 全文件（`test_shared_onboarded_registry_i1_u2_3727.py`） | **4 passed** |
-| 定向保留（CLI/U3/SourceGuard/alert/shape/deadlock/I1） | **90 passed** |
-| 完整 `backend/tests/`（信号桩） | **4197 passed / 1 skipped / 6 failed**（`test_run_console`×5 + `test_phase0_closure`×1，均为信号桩拦截；非 U3 改动；以同 HEAD informational 为准） |
+| §3.4.4-a 初始化×紧急释放（两种先后） | 修前 F3 强制交错 **40P01**（剥 Device 锁）；修后 **2 passed** |
+| §3.4.4-b reconciler×acquire_lease | 修后 **passed**（无 40P01） |
+| §3.4.4-c recovery×discharge | 修后 **passed** |
+| §3.4.4-d completion UNKNOWN×init | 修后 **passed** |
+| `test_device_return_lock_order_3728.py` + 既有锁序 + 全序/接线守卫 | **40 passed** |
+| U3 定向 + §3.4.3（含 F1/F2/flush/异步预读/I1） | **90 passed** |
+| 共享行锁表 I5 回填 | 已写 |
 | #3739 危险 cancel 变异 | **未跑（禁止）** |
-| required CI（推送后） | **pending（以 PR checks 为准）** |
+| required CI + informational（推送后） | **pending（以 PR checks 为准）** |
 
 ## Revisit
 
+- §3.4.4 交规划者核对后由原复核面做第 3 轮（绑定新 HEAD）。
 - U4 消费心跳 `return_debts` 做自动清偿；U5 写入 ONBOARDED 后，失败→欠账映射对开关机生效。
 - U8 承接共享服务类别政策与平台终止消费；U3 不越界改 Agent/契约/包/模板。
 - 阶段 B 激活时跑 `init_device_return.py --dry-run` → Owner 确认 → `--apply`（须为 §3.4.2 逐设备事务）。

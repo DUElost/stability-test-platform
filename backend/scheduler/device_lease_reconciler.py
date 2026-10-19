@@ -43,6 +43,7 @@ from backend.core.metrics import (
 from backend.core.settings.scheduler import get_scheduler_settings
 from backend.core.adr0026_params import DEFAULTS as _ADR0026_DEFAULTS
 from backend.models.device_lease import DeviceLease
+from backend.models.host import Device
 from backend.models.enums import (
     TERMINAL_JOB_STATUSES,
     JobStatus,
@@ -100,7 +101,7 @@ async def _reconcile_expired_leases(db) -> tuple[int, int, int]:
         )
     )).scalars().all()
 
-    # #1959 / #992: 全局一致锁序 —— 先 Job 再 Lease。
+    # #1959 / #992: 全局一致锁序 —— 先 Job 再 Lease；#3723 §3.4.4 I5 再在其间插入 Device。
     # complete（``complete_job``）与 ``extend_leases_batch`` 都是 Job → Lease；
     # 本检查原先相反（先 ``FOR UPDATE`` DeviceLease，再 ``FOR UPDATE`` JobInstance），
     # 于是「批量续租 × 过期回收」在同一 (job, lease) 两行上形成环路等待，
@@ -137,10 +138,10 @@ async def _reconcile_expired_leases(db) -> tuple[int, int, int]:
         terminalize: JobInstance | None = None
         try:
             async with db.begin_nested():
-                # 锁序：Job → Lease（见上方 #1959 说明）。candidate 来自预扫描，
-                # 其 job_id 即该行的真实归属——``acquire_lease`` 只 INSERT 新行
-                # （``lease_manager.py:126`` 起），租约行的 job_id 不会换绑，
-                # 因此可以据此在锁 Lease 之前先锁 Job。
+                # 锁序：Job → Device → Lease（#1959 I1 + #3723 §3.4.4 I5）。
+                # candidate 来自预扫描，其 job_id 即该行的真实归属——``acquire_lease``
+                # 只 INSERT 新行（``lease_manager.py:126`` 起），租约行的 job_id 不会换绑，
+                # 因此可以据此在锁 Lease 之前先锁 Job，再锁 Device（与认领代次 CAS 同序）。
                 job = None
                 if candidate.job_id is not None:
                     try:
@@ -156,6 +157,13 @@ async def _reconcile_expired_leases(db) -> tuple[int, int, int]:
                             exc_info=True,
                         )
                         continue
+
+                # I5 / #3723 §3.4.4：在 Lease 之前锁 Device
+                await db.execute(
+                    select(Device)
+                    .where(Device.id == candidate.device_id)
+                    .with_for_update()
+                )
 
                 lease = (await db.execute(
                     select(DeviceLease)

@@ -5,8 +5,9 @@
 ``device_id + job_id + lease_type + ACTIVE``，所以同一设备上属于其他 job
 的新 ACTIVE 租约不会被这条语句碰到。
 
-锁序（I1）：先读出租约的 ``job_id``（不加锁），再 ``job_instance FOR UPDATE``，
-再 ``device_leases FOR UPDATE``。持有租约行锁之后不得再去锁另一条 job 行。
+锁序（I5 / #3723 §3.4.4）：先读出租约的 ``job_id``（不加锁），再
+``job_instance FOR UPDATE``，再 ``device FOR UPDATE``，再 ``device_leases FOR UPDATE``。
+持有租约行锁之后不得再去锁另一条 job 行。
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from backend.models.device_lease import DeviceLease
 from backend.models.enums import TERMINAL_JOB_STATUSES, LeaseStatus, LeaseType
+from backend.models.host import Device
 from backend.models.job import JobInstance
 from backend.services.audit_writer import record_audit
 from backend.services.errors import Conflict, NotFound
@@ -61,6 +63,13 @@ def release_terminal_job_lease(
             .where(JobInstance.id == locked_job_id)
             .with_for_update()
         ).scalar_one_or_none()
+
+    # I5 / #3723 §3.4.4：Job → Device → Lease（与 init / acquire_lease 同序）
+    db.execute(
+        select(Device)
+        .where(Device.id == device_id)
+        .with_for_update()
+    ).scalars().first()
 
     lease = db.execute(
         select(DeviceLease)

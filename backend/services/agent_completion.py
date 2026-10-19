@@ -35,6 +35,7 @@ from backend.core.metrics import (
 )
 from backend.models.device_lease import DeviceLease
 from backend.models.enums import JobStatus, LeaseStatus, LeaseType
+from backend.models.host import Device
 from backend.models.job import JobInstance, StepTrace
 from backend.realtime.socketio_server import broadcast_run_job_update
 from backend.services.aggregator import PlanAggregator
@@ -414,6 +415,12 @@ async def complete_agent_job(
             # token may atomically restore UNKNOWN→RUNNING before completion.
             # This preserves the terminal outbox fact without adding the
             # forbidden UNKNOWN→COMPLETED edge to the state machine.
+            # I5 / #3723 §3.4.4：Job（函数入口已锁）→ Device → Lease
+            await db.execute(
+                select(Device)
+                .where(Device.id == job.device_id)
+                .with_for_update()
+            )
             candidate = (await db.execute(
                 select(DeviceLease)
                 .where(

@@ -309,13 +309,11 @@ async def sync_agent_recovery(
         # Lock the complete ownership tuple.  Shared AGENT_SECRET authenticates
         # an Agent process, not a host/job relationship; the fencing token and
         # relational checks below establish that relationship.
-        # #2015（I1 共享行加锁全序）：先锁 job 行、再锁 lease 行——与
-        # complete_job / extend_leases_batch / reconciler 的 Job → Lease 同序。
-        # 原先先锁 lease 再锁 job，与续租 tick（Job 锁内 CAS device_leases）在
-        # 同一 (job, lease) 对上反向：Agent 重启的 recovery 恰落在续租窗口内
-        # 即可成环（09-15 生产死锁 60 次的环，PG 服务端日志定位）。本路由只
-        # 交换两条 SELECT 的次序；下方全部校验（ownership/fencing/boot）与
-        # 动作判定不变——job 不存在时 ownership 检查的结论与原先一致。
+        # #2015（I1）：先锁 job 行、再锁 lease 行；#3723 §3.4.4（I5）在其间插入
+        # device 行，与认领代次 CAS / U3 初始化同序（Job → Device → Lease）。
+        # 原先先锁 lease 再锁 job，与续租 tick 反向成环（#2015）；U3 统一入口
+        # 又加 Device 后若仍 Lease→Device 则与 init/acquire 成环（复核 F3）。
+        # 下方全部校验（ownership/fencing/boot）与动作判定不变。
         # #3426（死锁家族第五处）：job 行锁用 FOR NO KEY UPDATE（`key_share=True`，
         # #1473 先例），**不得**用 FOR UPDATE。step_trace 的 INSERT 会对所属
         # `job_instance` 行取 FK KEY SHARE，而 FOR UPDATE 与 KEY SHARE 冲突：
@@ -328,6 +326,12 @@ async def sync_agent_recovery(
             select(JobInstance)
             .where(JobInstance.id == entry.job_id)
             .with_for_update(key_share=True)  # SQLAlchemy key_share → PG FOR NO KEY UPDATE
+        )).scalars().first()
+        # I5 / #3723 §3.4.4：Job → Device → Lease（原为 Job → Lease → Device）
+        device = (await db.execute(
+            select(Device)
+            .where(Device.id == entry.device_id)
+            .with_for_update()
         )).scalars().first()
         lease = (await db.execute(
             select(DeviceLease).where(
@@ -358,12 +362,6 @@ async def sync_agent_recovery(
                     action="ABORT_LOCAL", reason="lease_not_active",
                 ))
             continue
-
-        device = (await db.execute(
-            select(Device)
-            .where(Device.id == entry.device_id)
-            .with_for_update()
-        )).scalars().first()
         actual_serial = ((device.serial or "").strip() if device is not None else "")
         reported_serial = (entry.device_serial or "").strip()
         ownership_valid = (

@@ -647,6 +647,7 @@ jobs:
             backend/tests/scheduler/test_reconciler_drain_lock_order_2635.py \
             backend/tests/scheduler/test_reconciler_stale_unknown_lock_order_2787.py \
             backend/tests/scheduler/test_retention_lock_order_2022.py \
+            backend/tests/services/test_device_return_lock_order_3728.py \
             backend/tests/api/test_metrics_lock_wait_gauges.py
 
       # 后端静态守卫（2026-09-26 PR 审计后续，owner 裁决「只跑静态守卫」）。
