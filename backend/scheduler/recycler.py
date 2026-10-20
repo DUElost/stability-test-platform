@@ -37,10 +37,10 @@ from backend.core.metrics import (
     task_run_total,
     post_completion_cutoff_jobs,
 )
-from backend.models.enums import JobStatus, LeaseType
+from backend.models.enums import JobStatus
 from backend.models.job import JobInstance, StepTrace
 from backend.models.plan_run import PlanRun
-from backend.services.lease_manager import release_lease_sync
+from backend.services.device_return import handle_job_lease_release_sync
 from backend.services.post_completion import get_post_completion_persist_failure_count
 
 from backend.core.settings.scheduler import get_scheduler_settings
@@ -478,9 +478,8 @@ def _mark_pending_timeout(
     job = db.get(JobInstance, job.id)
     if job is None:
         return False
-    # Phase 6d: release_lease_sync is now a single UPDATE — no projection,
-    # no LeaseProjectionError fallback needed.
-    release_lease_sync(db, job.device_id, job.id, LeaseType.JOB)
+    # ADR-0061 D5 / #3723 U3：PENDING 超时亦经统一欠账入口（通常无足迹 → 直接释放）。
+    handle_job_lease_release_sync(db, device_id=job.device_id, job_id=job.id, job=job)
 
     if not defer_aggregation:
         try:

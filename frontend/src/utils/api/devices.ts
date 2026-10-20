@@ -5,6 +5,8 @@ import type {
   BulkSwipeTrailResult,
   Device,
   DeviceLeaseReleaseResult,
+  DeviceReturnOverrideRequest,
+  DeviceReturnOverrideResult,
   DeviceRetireBatchResponse,
   PaginatedResponse,
 } from './types';
@@ -49,6 +51,14 @@ export const devices = {
       ),
     ),
   /** ADR-0057 D2（#2962 B）：退役 / 解除退役（admin；409=E2 前置不满足）。 */
+  /** ADR-0061 D5.7 / #3723 U3：人工放行归还欠账（admin）。 */
+  returnOverride: (deviceId: number, body: DeviceReturnOverrideRequest) =>
+    unwrapApiResponse(
+      apiClient.post<ApiResponseEnvelope<DeviceReturnOverrideResult>>(
+        `/devices/${deviceId}/return-override`,
+        body,
+      ),
+    ),
   retire: (id: number, retireReason: string) =>
     apiClient.post<Device>(`/devices/${id}/retire`, { retire_reason: retireReason }).then(r => r.data),
   unretire: (id: number, retireReason: string) =>

@@ -15,11 +15,11 @@ import pytest
 from backend.core import metrics as metrics_mod
 from backend.services.agent_completion import (
     _RunCompleteIn,
-    _map_trace_to_disarm_result,
     apply_disarm_results,
     derive_disarm_results_from_traces,
     normalize_disarm_results,
 )
+from backend.services.disarm_derive import _map_trace_to_disarm_result
 
 
 PIPELINE = {

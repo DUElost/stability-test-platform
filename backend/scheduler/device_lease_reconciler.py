@@ -43,6 +43,7 @@ from backend.core.metrics import (
 from backend.core.settings.scheduler import get_scheduler_settings
 from backend.core.adr0026_params import DEFAULTS as _ADR0026_DEFAULTS
 from backend.models.device_lease import DeviceLease
+from backend.models.host import Device
 from backend.models.enums import (
     TERMINAL_JOB_STATUSES,
     JobStatus,
@@ -52,7 +53,7 @@ from backend.models.enums import (
 from backend.models.job import JobInstance
 from backend.models.plan_run import PlanRun
 from backend.services.aggregator import PlanAggregator
-from backend.services.lease_manager import release_lease
+from backend.services.device_return import handle_job_lease_release
 from backend.services.state_machine import InvalidTransitionError, JobStateMachine
 
 logger = logging.getLogger(__name__)
@@ -100,7 +101,7 @@ async def _reconcile_expired_leases(db) -> tuple[int, int, int]:
         )
     )).scalars().all()
 
-    # #1959 / #992: 全局一致锁序 —— 先 Job 再 Lease。
+    # #1959 / #992: 全局一致锁序 —— 先 Job 再 Lease；#3723 §3.4.4 I5 再在其间插入 Device。
     # complete（``complete_job``）与 ``extend_leases_batch`` 都是 Job → Lease；
     # 本检查原先相反（先 ``FOR UPDATE`` DeviceLease，再 ``FOR UPDATE`` JobInstance），
     # 于是「批量续租 × 过期回收」在同一 (job, lease) 两行上形成环路等待，
@@ -137,10 +138,10 @@ async def _reconcile_expired_leases(db) -> tuple[int, int, int]:
         terminalize: JobInstance | None = None
         try:
             async with db.begin_nested():
-                # 锁序：Job → Lease（见上方 #1959 说明）。candidate 来自预扫描，
-                # 其 job_id 即该行的真实归属——``acquire_lease`` 只 INSERT 新行
-                # （``lease_manager.py:126`` 起），租约行的 job_id 不会换绑，
-                # 因此可以据此在锁 Lease 之前先锁 Job。
+                # 锁序：Job → Device → Lease（#1959 I1 + #3723 §3.4.4 I5）。
+                # candidate 来自预扫描，其 job_id 即该行的真实归属——``acquire_lease``
+                # 只 INSERT 新行（``lease_manager.py:126`` 起），租约行的 job_id 不会换绑，
+                # 因此可以据此在锁 Lease 之前先锁 Job，再锁 Device（与认领代次 CAS 同序）。
                 job = None
                 if candidate.job_id is not None:
                     try:
@@ -156,6 +157,13 @@ async def _reconcile_expired_leases(db) -> tuple[int, int, int]:
                             exc_info=True,
                         )
                         continue
+
+                # I5 / #3723 §3.4.4：在 Lease 之前锁 Device
+                await db.execute(
+                    select(Device)
+                    .where(Device.id == candidate.device_id)
+                    .with_for_update()
+                )
 
                 lease = (await db.execute(
                     select(DeviceLease)
@@ -195,7 +203,9 @@ async def _reconcile_expired_leases(db) -> tuple[int, int, int]:
                 if job is None:
                     # Orphan lease (job deleted, but FK should prevent this) — release it.
                     # 没有 Job 行可取锁，故不触及锁序不变量。
-                    await release_lease(db, device_id, job_id, LeaseType.JOB)
+                    await handle_job_lease_release(
+                        db, device_id=device_id, job_id=job_id, job=job,
+                    )
                     logger.warning(
                         "reconciler_orphan_lease_released device=%s job=%s", device_id, job_id,
                     )
@@ -204,7 +214,9 @@ async def _reconcile_expired_leases(db) -> tuple[int, int, int]:
 
                 if job.status in _FINAL_STATUSES:
                     # D5: terminal job with lingering ACTIVE lease
-                    await release_lease(db, device_id, job_id, LeaseType.JOB)
+                    await handle_job_lease_release(
+                        db, device_id=device_id, job_id=job_id, job=job,
+                    )
                     logger.warning(
                         "reconciler_terminal_job_active_lease device=%s job=%s status=%s",
                         device_id, job_id, job.status,
@@ -234,7 +246,9 @@ async def _reconcile_expired_leases(db) -> tuple[int, int, int]:
                     # Phase 2: UNKNOWN + grace expired → release + FAILED
                     grace_deadline = now - timedelta(seconds=_UNKNOWN_GRACE_SECONDS)
                     if job.ended_at and job.ended_at < grace_deadline:
-                        await release_lease(db, device_id, job_id, LeaseType.JOB)
+                        await handle_job_lease_release(
+                            db, device_id=device_id, job_id=job_id, job=job,
+                        )
 
                         try:
                             JobStateMachine.transition(
@@ -375,7 +389,9 @@ async def _reconcile_stale_unknown_jobs(db) -> int:
                 )).scalars().first()
 
                 if active_lease is not None:
-                    await release_lease(db, job.device_id, job.id, LeaseType.JOB)
+                    await handle_job_lease_release(
+                        db, device_id=job.device_id, job_id=job.id, job=job,
+                    )
 
                 try:
                     JobStateMachine.transition(
@@ -459,7 +475,9 @@ async def _reconcile_terminal_job_active_leases(db) -> int:
     for lease, _job_status in rows:
         try:
             async with db.begin_nested():
-                await release_lease(db, lease.device_id, lease.job_id, LeaseType.JOB)
+                await handle_job_lease_release(
+                    db, device_id=lease.device_id, job_id=lease.job_id, job=None,
+                )
 
                 logger.warning(
                     "reconciler_terminal_job_active_lease_released device=%s job=%s status=%s",
