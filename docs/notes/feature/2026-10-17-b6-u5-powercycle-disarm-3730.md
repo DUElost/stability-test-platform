@@ -1,4 +1,4 @@
-# B6-U5：开关机接入 powercycle_disarm 1.0.6 与 powercycle_finish 1.1.0
+# B6-U5：开关机接入 powercycle_disarm 1.0.7 与 powercycle_finish 1.1.0
 
 Status: implemented
 Class: feature
@@ -83,3 +83,24 @@ Diagnosis D1/D2（PR #3747 comment 6268508491）确认：AutoTestTool 收到
 
 真机 A–H + I/J/K 待规划者确认 1.0.6 包 SHA 后执行；1.0.5 的 12 台 E–H 与
 D1/D2 仅作对照，不代签 1.0.6。
+
+
+## v1.7.7 / 1.0.7（2026-10-20）
+
+规划者核验 1.0.6 后指出两处读取规则与两项测试缺口（PR #3747，2026-10-20；
+见 #3723 v1.7.7 §3.6.6 第 2 条与第 7 条 e、f）：
+
+- 读取改为 **返回码优先**：rc=0 且输出含 `<map` 即判 `ok`，错误字样只在
+  rc≠0 或无 prefs 内容时用于分类；`_root_read_prefs`、非 root
+  `read_prefs_classified` 与 `get_prefs_xml` 同步。
+- root 下空文件沿用 #2979：disarm 先停服务、删除空文件、写最小 prefs 并
+  验证两项；probe 原始 `readback_failed`、`kind=empty`。
+- 测试 e：写入后回写一次被验证发现并重写、持续回写以 failed 结束；
+  “只验 running”的变异会漏掉回写。
+- 测试 f：可读 prefs 的 string 值含错误字样仍判 `ok` 且不整写；root 空文件
+  删除重建，probe `kind=empty`。
+- 追加 `powercycle_disarm@1.0.7`；1.0.6 `retired:true`（SHA 不变）；
+  ONBOARDED、模板 pin、API/Worker 测试同步 1.0.7；setup 与 finish@1.1.0 未改。
+
+真机 A–H + I/J/K 待规划者确认 1.0.7 包 SHA 后执行；只做 MLD_LX2、MLD_LX3，
+MLD_NX2 转 #3761。1.0.5/1.0.6 的真机与诊断结果仅作对照。

@@ -365,6 +365,10 @@ def _root_read_prefs() -> tuple[str, str]:
     )
     rc, out, err = adb("shell", probe, timeout=30)
     text = (out or "").strip()
+    # v1.7.7：rc=0 且输出含 <map 根元素即为可读；不得再按字符串值里的
+    # 错误字样改判（prefs 的某个 string 值可能就写着这些字样）。
+    if rc == 0 and "<map" in text:
+        return "ok", text
     if rc != 0:
         if _PREFS_ABSENT_SENTINEL in text or "No such file" in text or "No such file" in (err or ""):
             return "absent", ""
@@ -379,7 +383,7 @@ def _root_read_prefs() -> tuple[str, str]:
         return "denied", ""
     if "No such file" in text:
         return "absent", ""
-    return "ok", text
+    return "transient", ""
 
 
 def get_prefs_xml() -> str:
@@ -397,9 +401,10 @@ def get_prefs_xml() -> str:
     if is_root():
         kind, text = _root_read_prefs()
         return text if kind == "ok" else ""
-    _, out, _ = adb("shell", f"run-as {_PKG} cat shared_prefs/{_PREFS_FILE}", timeout=30)
-    text = out.strip()
-    if text and not any(t in text for t in ("Permission denied", "No such file", "run-as:")):
+    rc, out, _ = adb("shell", f"run-as {_PKG} cat shared_prefs/{_PREFS_FILE}", timeout=30)
+    text = (out or "").strip()
+    # v1.7.7：rc=0 且含 <map 即返回；prefs 的 string 值可能含错误字样。
+    if rc == 0 and "<map" in text:
         return text
     return ""
 
@@ -418,8 +423,6 @@ def read_prefs_classified() -> tuple[str, str, bool | None]:
     installed = autotesttool_installed()
     if is_root():
         kind, xml = _root_read_prefs()
-        if kind == "empty":
-            kind = "transient"
         if kind == "absent" and installed is False:
             kind = "not_installed"
         if kind in ("ok", "denied") and installed is False:
@@ -432,17 +435,20 @@ def read_prefs_classified() -> tuple[str, str, bool | None]:
         timeout=30,
     )
     text = (out or "").strip()
-    blob = (out or "") + "\n" + (err or "")
-    if "unknown package" in blob:
-        kind = "not_installed"
-    elif "No such file or directory" in blob:
-        kind = "absent"
-    elif "Permission denied" in blob:
-        kind = "denied"
-    elif rc == 0 and text:
+    # v1.7.7：先看返回码与 <map 根元素；错误字样只在 rc!=0 或没有
+    # prefs 内容时用于分类。
+    if rc == 0 and "<map" in text:
         kind = "ok"
     else:
-        kind = "transient"
+        blob = (out or "") + "\n" + (err or "")
+        if "unknown package" in blob:
+            kind = "not_installed"
+        elif "No such file or directory" in blob:
+            kind = "absent"
+        elif "Permission denied" in blob:
+            kind = "denied"
+        else:
+            kind = "transient"
 
     if kind == "not_installed" and installed is True:
         kind = "transient"
@@ -695,6 +701,19 @@ def set_stop_flags() -> None:
     push_prefs_xml(content)
 
 
+def remove_empty_prefs() -> None:
+    """root 空文件是 #2979 的唯一确定性损坏：删除后重建最小 prefs。"""
+    if not is_root():
+        raise RuntimeError("非 root 空文件不整写")
+    rc, _out, err = adb(
+        "shell", f"rm -f {_PREFS_DIR}/{_PREFS_FILE}", timeout=30
+    )
+    if rc != 0:
+        raise RuntimeError(
+            "删除空 prefs 失败: " + ((err or "").strip() or "rc=%d" % rc)
+        )
+
+
 def build_minimal_stop_prefs() -> str:
     """最小停止 prefs（§3.6.6 第 5 条）：只含 running=false 与 auto_resume=false。"""
     return (
@@ -748,7 +767,7 @@ def _verify_stop_flags(kind: str = "ok") -> None:
             and 'name="auto_resume" value="false"' in xml
         ):
             return
-        if kind == "absent":
+        if kind in ("absent", "empty"):
             write_minimal_stop_flags()
         else:
             set_stop_flags()
@@ -768,13 +787,16 @@ def stop_task(force: bool, kind: str = "ok", installed: bool | None = True) -> N
     stop_service(force)
     if kind == "not_installed":
         return
-    if kind in ("denied", "transient", "empty"):
+    if kind in ("denied", "transient"):
         raise RuntimeError("prefs 读取被拒/未知：不写停止标志")
-    if kind not in ("ok", "absent"):
+    if kind not in ("ok", "absent", "empty"):
         raise RuntimeError(f"未知的 prefs 状态 {kind!r}：不写停止标志")
     if installed is not True:
         raise RuntimeError("无法确认 AutoTestTool 已安装：不写停止标志")
-    if kind == "absent":
+    if kind == "empty":
+        remove_empty_prefs()
+        write_minimal_stop_flags()
+    elif kind == "absent":
         write_minimal_stop_flags()
     else:
         set_stop_flags()

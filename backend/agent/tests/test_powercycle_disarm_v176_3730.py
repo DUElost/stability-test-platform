@@ -1,4 +1,4 @@
-"""#3730 / #3723 §3.6.6 v1.7.6：1.0.6 顺序、读取分类与最小 prefs 回归。"""
+"""#3730 / #3723 §3.6.6 v1.7.6/v1.7.7：1.0.6–1.0.7 顺序、读取分类与最小 prefs 回归。"""
 from __future__ import annotations
 
 import importlib.util
@@ -50,6 +50,7 @@ class FakeDevice:
         stop_rewrites: bool = True,
         uid: str = "2000",
         adb_cost: float = 0.0,
+        post_write_rewrites: int = 0,
     ):
         self.installed = installed
         self.prefs = prefs
@@ -58,6 +59,7 @@ class FakeDevice:
         self.stop_rewrites = stop_rewrites
         self.uid = uid
         self.adb_cost = adb_cost
+        self.post_write_rewrites = post_write_rewrites
         self.clock = 0.0
         self.events: list[dict] = []
         self.progress: list[tuple[float, dict]] = []
@@ -70,6 +72,16 @@ class FakeDevice:
 
     def _event(self, kind: str, cmd: str = "") -> None:
         self.events.append({"kind": kind, "clock": self.clock, "cmd": cmd})
+
+    def _after_write(self) -> None:
+        if self.post_write_rewrites == 0 or not self.prefs:
+            return
+        self.prefs = self.prefs.replace(
+            'name="auto_resume" value="false"',
+            'name="auto_resume" value="true"',
+        )
+        if self.post_write_rewrites > 0:
+            self.post_write_rewrites -= 1
 
     def _read(self) -> tuple[int, str, str]:
         if not self.installed:
@@ -97,6 +109,7 @@ class FakeDevice:
                     self.prefs_state = "ok"
                 except OSError:
                     pass
+            self._after_write()
             return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
         if len(args) < 5 or args[3] != "shell":
             return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
@@ -190,6 +203,7 @@ class FakeDevice:
             else:
                 self.prefs = str(input or "")
             self.prefs_state = "ok"
+            self._after_write()
             return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
 
         if "run-as com.tinno.autotesttool cat" in shell_cmd:
@@ -198,6 +212,12 @@ class FakeDevice:
             return SimpleNamespace(
                 returncode=rc, stdout=out.encode(), stderr=err.encode()
             )
+
+        if "rm -f /data/data/com.tinno.autotesttool/shared_prefs" in shell_cmd:
+            self._event("rm", shell_cmd)
+            self.prefs = None
+            self.prefs_state = "ok"
+            return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
 
         if "if [ ! -f /data/data/com.tinno.autotesttool" in shell_cmd:
             self._event("prefs_read", shell_cmd)
@@ -254,7 +274,7 @@ def _writes(fake: FakeDevice) -> list[str]:
     return [
         e["kind"]
         for e in fake.events
-        if e["kind"] in ("stop", "force_stop", "prefs_write", "mkdir", "push")
+        if e["kind"] in ("stop", "force_stop", "prefs_write", "mkdir", "push", "rm")
     ]
 
 
@@ -411,6 +431,125 @@ def test_denied_disarm_does_not_write_prefs(env):
     assert out["readback"] == "readback_failed"
     assert out["disarm_result"] == "failed"
     assert "prefs_write" not in _writes(fake)
+
+
+ERROR_WORD_PREFS = (
+    "<?xml version='1.0' encoding='utf-8' standalone='yes' ?>\n"
+    "<map>\n"
+    '    <boolean name="running" value="false" />\n'
+    '    <boolean name="auto_resume" value="false" />\n'
+    '    <string name="note">No such file or directory</string>\n'
+    "</map>\n"
+)
+
+
+def test_post_write_rewrite_once_is_detected_and_rewritten(env):
+    mod, lib, fake = env
+    fake.prefs = PREFS_TRUE
+    fake.service_running = True
+    fake.stop_rewrites = True
+    fake.post_write_rewrites = 1
+    out = mod._run({"mode": "disarm", "wait_device_online_seconds": 30})
+    assert out["readback"] == "clear"
+    assert out["disarm_result"] == "executed_unverified"
+    assert out["success"] is True
+    assert 'name="auto_resume" value="false"' in fake.prefs
+    writes = [e for e in fake.events if e["kind"] == "prefs_write"]
+    assert len(writes) >= 2
+
+
+def test_persistent_post_write_rewrite_ends_failed(env):
+    mod, lib, fake = env
+    fake.prefs = PREFS_TRUE
+    fake.service_running = True
+    fake.stop_rewrites = True
+    fake.post_write_rewrites = -1
+    out = mod._run({"mode": "disarm", "wait_device_online_seconds": 30})
+    assert out["readback"] == "footprint"
+    assert out["disarm_result"] == "failed"
+    assert out["success"] is False
+    assert 'name="auto_resume" value="true"' in fake.prefs
+    writes = [e for e in fake.events if e["kind"] == "prefs_write"]
+    assert len(writes) >= 2
+
+
+def test_only_running_verification_would_miss_writeback(env, monkeypatch):
+    mod, lib, fake = env
+    fake.prefs = PREFS_TRUE
+    fake.service_running = True
+    fake.stop_rewrites = True
+    fake.post_write_rewrites = 1
+
+    def only_running(kind="ok"):
+        for _attempt in (1, 2):
+            xml = lib.get_prefs_xml()
+            if 'name="running" value="false"' in xml:
+                return
+            lib.set_stop_flags()
+        raise RuntimeError("running 未置 false")
+
+    monkeypatch.setattr(lib, "_verify_stop_flags", only_running)
+    out = mod._run({"mode": "disarm", "wait_device_online_seconds": 30})
+    assert out["readback"] == "footprint"
+    assert out["disarm_result"] == "failed"
+
+
+def test_readable_prefs_with_error_word_is_ok_and_preserved(env):
+    mod, lib, fake = env
+    fake.prefs = ERROR_WORD_PREFS
+    fake.service_running = True
+    fake.stop_rewrites = True
+    kind, _xml, installed = lib.read_prefs_classified()
+    assert kind == "ok"
+    assert installed is True
+    out = mod._run({"mode": "disarm", "wait_device_online_seconds": 30})
+    assert out["readback"] == "clear"
+    assert out["disarm_result"] == "executed_unverified"
+    assert "No such file or directory" in fake.prefs
+    assert "note" in fake.prefs
+
+
+def test_root_readable_prefs_with_error_word_is_ok(env):
+    mod, lib, fake = env
+    fake.uid = "0"
+    fake.prefs = ERROR_WORD_PREFS
+    fake.service_running = False
+    kind, _xml, installed = lib.read_prefs_classified()
+    assert kind == "ok"
+    assert installed is True
+
+
+def test_root_empty_disarm_deletes_and_rebuilds(env):
+    mod, lib, fake = env
+    fake.uid = "0"
+    fake.installed = True
+    fake.prefs = ""
+    fake.service_running = True
+    fake.stop_rewrites = True
+    kind, _xml, installed = lib.read_prefs_classified()
+    assert kind == "empty"
+    assert installed is True
+    out = mod._run({"mode": "disarm", "wait_device_online_seconds": 30})
+    assert out["readback"] == "clear"
+    assert out["disarm_result"] == "executed_unverified"
+    assert fake.prefs is not None
+    assert 'name="running" value="false"' in fake.prefs
+    assert 'name="auto_resume" value="false"' in fake.prefs
+    kinds = _writes(fake)
+    assert "rm" in kinds and "stop" in kinds and "prefs_write" in kinds
+    assert kinds.index("stop") < kinds.index("rm") < kinds.index("prefs_write")
+
+
+def test_root_empty_probe_is_readback_failed_kind_empty(env):
+    mod, lib, fake = env
+    fake.uid = "0"
+    fake.installed = True
+    fake.prefs = ""
+    fake.service_running = False
+    out = mod._run({"mode": "probe"})
+    assert out["readback"] == "readback_failed"
+    assert out["evidence"]["kind"] == "empty"
+    assert out["disarm_result"] == "failed"
 
 
 def test_full_disarm_progress_adjacent_le_15(env):

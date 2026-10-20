@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """开关机解除 / 探针（#3730 / #3723 §3.6 / ADR-0061 D2）。
 
+v1.0.7（#3723 §3.6.6 v1.7.7）：读取先看 rc=0 且含 <map 根元素；root 空文件
+删除后重建最小 prefs；错误字样只在 rc!=0 或无 prefs 内容时用于分类。
 v1.0.6（#3723 §3.6.6）：先 STOP/force-stop 再写停止标志，同时验证
 running/auto_resume；非 root 按 run-as 输出分为 not_installed/absent/
 denied/transient；未安装不写设备；prefs 不存在写最小 prefs；读取被拒或
@@ -187,7 +189,7 @@ def _resolve_category(cfg: dict, *, can_detect: bool) -> tuple[str, str]:
 def _read_prefs_evidence() -> dict[str, Any]:
     """读取 prefs 并按 §3.6.6 第 2、3 条给出原始 readback 与 evidence。
 
-    kind: ok / not_installed / absent / denied / transient。
+    kind: ok / not_installed / absent / denied / empty / transient。
     readback: footprint / clear / absent / not_installed / readback_failed。
     """
     kind, xml, installed = read_prefs_classified()
