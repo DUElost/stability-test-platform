@@ -21,6 +21,22 @@ class TestStepTeardownRole:
     def test_finish_1_1_0_collect_only(self):
         assert step_teardown_role("powercycle_finish", "1.1.0") == STEP_ROLE_COLLECT
 
+    def test_unregistered_numeric_finish_is_unknown_legacy_disarm(self):
+        """v1.7.8 F2：数字上 >=1.1 但未登记的版本不得判 collect。"""
+        assert (
+            step_teardown_role("powercycle_finish", "1.1.1")
+            == STEP_ROLE_UNKNOWN_LEGACY_DISARM
+        )
+        assert (
+            step_teardown_role("powercycle_finish", "2.0.0")
+            == STEP_ROLE_UNKNOWN_LEGACY_DISARM
+        )
+        assert (
+            step_teardown_role("powercycle_finish", "1.2.0")
+            == STEP_ROLE_UNKNOWN_LEGACY_DISARM
+        )
+        assert step_teardown_role("powercycle_finish", "1.1.0") == STEP_ROLE_COLLECT
+
     def test_disarm_any_known_version(self):
         assert step_teardown_role("powercycle_disarm", "1.0.0") == STEP_ROLE_DISARM
         assert step_teardown_role("powercycle_disarm", "1.0.5") == STEP_ROLE_DISARM
@@ -140,7 +156,7 @@ class TestValidateOnboardedTeardownShape:
             {
                 "step_key": "td_d",
                 "script_name": "powercycle_disarm",
-                "script_version": "1.0.7",
+                "script_version": "1.0.8",
                 "stage": "teardown",
                 "enabled": True,
             },

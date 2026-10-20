@@ -1,4 +1,4 @@
-# B6-U5：开关机接入 powercycle_disarm 1.0.7 与 powercycle_finish 1.1.0
+# B6-U5：开关机接入 powercycle_disarm 1.0.8 与 powercycle_finish 1.1.0
 
 Status: implemented
 Class: feature
@@ -18,16 +18,17 @@ Draft PR 待 Planner 确认与独立复核；合入不等于生效（发包/scan
 
 ## Decision
 
-1. 新族 `powercycle_disarm`：**1.0.4**（承接 1.0.3 的 §3.6.1.3；追加 §3.6.2 等待上线 15s
-   PROGRESS 轮询）。参数 `mode`（`probe`/`disarm`）、`wait_device_online_seconds`。
-2. job 级步骤角色 helper（§3.0.2）：`powercycle_finish@1.0.x` 仍解除；`@1.1.0` 只收取；
-   未知/缺版本保守保留解除义务（`unknown_legacy_version`）；收取失败不得覆盖已完成 disarm。
+1. 新族 `powercycle_disarm`：**1.0.8**（经 1.0.4–1.0.7 按 §3.6.1–§3.6.6 逐轮返修；
+   当前实现见文末 v1.7.8 段）。参数 `mode`（`probe`/`disarm`）、`wait_device_online_seconds`。
+2. job 级步骤角色 helper（§3.0.2）：`powercycle_finish@1.0.x` 仍解除；只有**登记为只收取**
+   的 `@1.1.0` 判 collect；缺版本、无法解析与未登记的数字版本（1.1.1、2.0.0 等）一律
+   `unknown_legacy_disarm` 并记 `unknown_legacy_version`；收取失败不得覆盖已完成 disarm。
 3. Plan 保存入口 §3.6.5：三入口 422 `ONBOARDED_TEARDOWN_INVALID` + 四种 reason。
 4. 旧条目 1.0.0/1.0.1/1.0.2 → `retired: true`（不删、不改 SHA）；
    `check_script_packages.py --publish-restored`（方案 A，仅临时站点目录验证）。
-5. `ONBOARDED.disarm_min_version=1.0.3`；模板 pin
-   `[powercycle_disarm 1.0.4 @660s, powercycle_finish 1.1.0 @420s]`；
-   `verified_device_classes=[]`（真机 pending）。
+5. `ONBOARDED.disarm_min_version=1.0.8`；模板 pin
+   `[powercycle_disarm 1.0.8 @660s, powercycle_finish 1.1.0 @420s]`；
+   `verified_device_classes=[]`（真机 pending；只验 MLD_LX2、MLD_LX3，NX2 转 #3761）。
 6. `powercycle_finish@1.1.0` **保持原包**。不改 U8 reaper/guard/类别政策；不 Ready/merge/publish/scan。
 
 ## Alternatives
@@ -104,3 +105,26 @@ D1/D2 仅作对照，不代签 1.0.6。
 
 真机 A–H + I/J/K 待规划者确认 1.0.7 包 SHA 后执行；只做 MLD_LX2、MLD_LX3，
 MLD_NX2 转 #3761。1.0.5/1.0.6 的真机与诊断结果仅作对照。
+
+
+## v1.7.8 / 1.0.8（2026-10-20）
+
+U5 独立复核第 1 轮（PR #3747 comment 6291379603）判定 **需修改**；规划者回应确认
+F1、F2 属清单内实施遗漏，F3 为真机材料欠项，F4 非阻塞。按 #3723 v1.7.8 §3.6.6
+第 1、7 条与 §4.1 实施：
+
+- **F1 服务停止按返回码确认**：`service_state` 返回 `alive`/`stopped`/`unknown`
+  与 rc；查询 rc≠0（含超时）一律 `unknown`，不再当作已停。服务存活时 STOP、
+  force-stop 的 rc 都必须为 0，且最后一次查询 rc=0 并无服务记录，才允许写停止标志。
+  任一条件不满足抛 `StopNotConfirmed`（携带各步 rc），disarm 对 prefs 零写入、正式
+  `failed`，evidence 的 `stop_steps` 记录各步返回码。
+- **F2 finish 角色按登记表**：新增 `FINISH_COLLECT_ONLY_VERSIONS={"1.1.0"}`；只有登记
+  版本判 collect，1.0.x 判 disarm，缺版本/不可解析/未登记数字版本（1.1.1、2.0.0）
+  一律 `unknown_legacy_disarm` 并记 `unknown_legacy_version`。
+- **测试**：g 项覆盖状态查询失败、STOP/force-stop 失败、STOP rc 非 0、末次仍存活
+  四种组合（对 prefs 零写入、正式 failed、evidence 含 rc），并含「unknown 改回已停」
+  的变异自证；F2 经真实 `_execute_teardown_best_effort(disarm_only=True)` 验证
+  1.1.1/2.0.0 被执行且记 `unknown_legacy_version`，并含回退「≥1.1 即收取」的变异自证。
+- 追加 `powercycle_disarm@1.0.8`；1.0.7 `retired:true`（SHA 不变）；ONBOARDED
+  最低版本、模板 pin、API/Worker 测试同步 1.0.8；setup 与 finish@1.1.0 未改。
+- 真机阶段二暂停；1.0.7 上如已跑真机只作对照，最终证据绑定 1.0.8 包 SHA。

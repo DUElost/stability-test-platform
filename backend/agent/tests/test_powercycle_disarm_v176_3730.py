@@ -1,4 +1,4 @@
-"""#3730 / #3723 §3.6.6 v1.7.6/v1.7.7：1.0.6–1.0.7 顺序、读取分类与最小 prefs 回归。"""
+"""#3730 / #3723 §3.6.6 v1.7.6–v1.7.8：1.0.6–1.0.8 顺序、读取分类与最小 prefs 回归。"""
 from __future__ import annotations
 
 import importlib.util
@@ -51,6 +51,12 @@ class FakeDevice:
         uid: str = "2000",
         adb_cost: float = 0.0,
         post_write_rewrites: int = 0,
+        state_query_rc: int = 0,
+        state_query_rcs: list[int] | None = None,
+        stop_rc: int = 0,
+        stop_effective: bool = True,
+        force_stop_rc: int = 0,
+        force_stop_effective: bool = True,
     ):
         self.installed = installed
         self.prefs = prefs
@@ -60,6 +66,12 @@ class FakeDevice:
         self.uid = uid
         self.adb_cost = adb_cost
         self.post_write_rewrites = post_write_rewrites
+        self.state_query_rc = state_query_rc
+        self.state_query_rcs = list(state_query_rcs or [])
+        self.stop_rc = stop_rc
+        self.stop_effective = stop_effective
+        self.force_stop_rc = force_stop_rc
+        self.force_stop_effective = force_stop_effective
         self.clock = 0.0
         self.events: list[dict] = []
         self.progress: list[tuple[float, dict]] = []
@@ -157,6 +169,15 @@ class FakeDevice:
             return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
 
         if "dumpsys activity services com.tinno.autotesttool" in shell_cmd:
+            rc = (
+                self.state_query_rcs.pop(0)
+                if self.state_query_rcs
+                else self.state_query_rc
+            )
+            if rc != 0:
+                return SimpleNamespace(
+                    returncode=rc, stdout=b"", stderr=b"dumpsys failed\n"
+                )
             if self.service_running:
                 return SimpleNamespace(
                     returncode=0,
@@ -173,6 +194,10 @@ class FakeDevice:
 
         if "POWER_CYCLE_STOP" in shell_cmd:
             self._event("stop", shell_cmd)
+            if self.stop_rc != 0:
+                return SimpleNamespace(
+                    returncode=self.stop_rc, stdout=b"", stderr=b"stop failed\n"
+                )
             if self.service_running and self.stop_rewrites and self.prefs:
                 self.prefs = self.prefs.replace(
                     'name="auto_resume" value="false"',
@@ -184,13 +209,19 @@ class FakeDevice:
                 )
                 if 'name="auto_resume"' not in self.prefs:
                     pass
-            self.service_running = False
+            if self.stop_effective:
+                self.service_running = False
             return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
 
         if "am force-stop com.tinno.autotesttool" in shell_cmd:
             self._event("force_stop", shell_cmd)
-            self.service_running = False
-            return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+            if self.force_stop_rc == 0 and self.force_stop_effective:
+                self.service_running = False
+            return SimpleNamespace(
+                returncode=self.force_stop_rc,
+                stdout=b"",
+                stderr=b"force-stop failed\n" if self.force_stop_rc else b"",
+            )
 
         if "run-as com.tinno.autotesttool mkdir -p shared_prefs" in shell_cmd:
             self._event("mkdir", shell_cmd)
@@ -550,6 +581,111 @@ def test_root_empty_probe_is_readback_failed_kind_empty(env):
     assert out["readback"] == "readback_failed"
     assert out["evidence"]["kind"] == "empty"
     assert out["disarm_result"] == "failed"
+
+
+def _prefs_writes(fake: FakeDevice) -> list[str]:
+    return [
+        e["kind"]
+        for e in fake.events
+        if e["kind"] in ("prefs_write", "mkdir", "rm", "push")
+    ]
+
+
+def test_state_query_failure_never_writes(env):
+    """g：状态查询 rc!=0 视为 unknown，不得当作已停（复核第 1 轮 F1 变体 1）。"""
+    mod, lib, fake = env
+    fake.prefs = PREFS_TRUE
+    fake.service_running = True
+    fake.state_query_rc = 1
+    fake.force_stop_rc = 1
+    out = mod._run({"mode": "disarm", "wait_device_online_seconds": 30})
+    assert out["disarm_result"] == "failed"
+    assert out["success"] is False
+    assert _prefs_writes(fake) == []
+    steps = out["evidence"]["stop_steps"]
+    assert steps["state_before"] == "unknown"
+    assert steps["state_before_rc"] == 1
+    assert "stop_rc" not in steps
+    assert steps["force_stop_rc"] == 1
+    assert steps["state_after"] == "unknown"
+    assert steps["state_after_rc"] == 1
+
+
+def test_stop_and_force_stop_rc_failure_never_writes(env):
+    """g：STOP 与 force-stop 均非 0、最后一次查询失败（复核第 1 轮 F1 变体 2）。"""
+    mod, lib, fake = env
+    fake.prefs = PREFS_TRUE
+    fake.service_running = True
+    fake.state_query_rcs = [0, 1]
+    fake.stop_rc = 1
+    fake.force_stop_rc = 1
+    out = mod._run({"mode": "disarm", "wait_device_online_seconds": 30})
+    assert out["disarm_result"] == "failed"
+    assert out["success"] is False
+    assert _prefs_writes(fake) == []
+    steps = out["evidence"]["stop_steps"]
+    assert steps["state_before"] == "alive"
+    assert steps["state_before_rc"] == 0
+    assert steps["stop_rc"] == 1
+    assert steps["force_stop_rc"] == 1
+    assert steps["state_after"] == "unknown"
+    assert steps["state_after_rc"] == 1
+
+
+def test_stop_rc_nonzero_blocks_write_even_if_final_state_stopped(env):
+    """g：STOP 返回码非 0 即未确认，即使 force-stop 成功且最终无服务记录。"""
+    mod, lib, fake = env
+    fake.prefs = PREFS_TRUE
+    fake.service_running = True
+    fake.stop_rc = 1
+    fake.force_stop_rc = 0
+    out = mod._run({"mode": "disarm", "wait_device_online_seconds": 30})
+    assert out["disarm_result"] == "failed"
+    assert out["success"] is False
+    assert _prefs_writes(fake) == []
+    steps = out["evidence"]["stop_steps"]
+    assert steps["stop_rc"] == 1
+    assert steps["force_stop_rc"] == 0
+    assert steps["state_after"] == "stopped"
+    assert steps["state_after_rc"] == 0
+
+
+def test_final_state_alive_blocks_write(env):
+    """g：最后一次查询仍看到服务记录时不得写 prefs。"""
+    mod, lib, fake = env
+    fake.prefs = PREFS_TRUE
+    fake.service_running = True
+    fake.stop_effective = False
+    fake.force_stop_rc = 0
+    fake.force_stop_effective = False
+    out = mod._run({"mode": "disarm", "wait_device_online_seconds": 30})
+    assert out["disarm_result"] == "failed"
+    assert out["success"] is False
+    assert _prefs_writes(fake) == []
+    steps = out["evidence"]["stop_steps"]
+    assert steps["state_after"] == "alive"
+    assert steps["state_after_rc"] == 0
+
+
+def test_state_query_failure_blind_would_write(env, monkeypatch):
+    """g 变异自证：把 unknown 改回「已停」时同场景会写 prefs 并误报成功。"""
+    mod, lib, fake = env
+    fake.prefs = PREFS_TRUE
+    fake.service_running = True
+    fake.state_query_rc = 1
+    fake.force_stop_rc = 0
+
+    def blind_service_state(timeout: int = 30):
+        _rc, out, _err = lib.adb(
+            "shell", f"dumpsys activity services {lib._PKG}", timeout=timeout
+        )
+        state = "alive" if "PowerCycleService" in (out or "") else "stopped"
+        return state, 0
+
+    monkeypatch.setattr(lib, "service_state", blind_service_state)
+    out = mod._run({"mode": "disarm", "wait_device_online_seconds": 30})
+    assert out["disarm_result"] == "executed_unverified"
+    assert "prefs_write" in _prefs_writes(fake)
 
 
 def test_full_disarm_progress_adjacent_le_15(env):

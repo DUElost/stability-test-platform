@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 """开关机解除 / 探针（#3730 / #3723 §3.6 / ADR-0061 D2）。
 
+v1.0.8（#3723 §3.6.6 v1.7.8）：服务状态按返回码分 alive/stopped/unknown；
+STOP、force-stop 与最后一次状态查询的返回码任一不满足即不写并报 failed；
+evidence 记录各步返回码。
 v1.0.7（#3723 §3.6.6 v1.7.7）：读取先看 rc=0 且含 <map 根元素；root 空文件
 删除后重建最小 prefs；错误字样只在 rc!=0 或无 prefs 内容时用于分类。
 v1.0.6（#3723 §3.6.6）：先 STOP/force-stop 再写停止标志，同时验证
@@ -56,6 +59,7 @@ import time
 from typing import Any
 
 from _lib import (
+    StopNotConfirmed,
     adb_shell,
     autotesttool_apk_sha256,
     device_online,
@@ -342,6 +346,7 @@ def _run(cfg: dict) -> dict:
 
     boot_completed: str | None = None
     stop_error = ""
+    stop_steps: dict[str, Any] | None = None
     action_completed = False
     if mode == "disarm":
         if not _wait_device_online(wait_online):
@@ -375,10 +380,16 @@ def _run(cfg: dict) -> dict:
             action_completed = True
         else:
             try:
-                stop_task(force=force, kind=kind, installed=installed)
+                stop_steps = stop_task(force=force, kind=kind, installed=installed)
                 action_completed = True
+            except StopNotConfirmed as exc:
+                # §3.6.6 第 1 条 v1.7.8：查询/STOP/force-stop 任一失败即未确认
+                # 停止；本分支发生在任何写 prefs 之前，evidence 保留各步返回码。
+                stop_steps = dict(exc.steps)
+                progress_stamp({"phase": "stop_task_error", "error": str(exc)[:200]})
+                stop_error = str(exc)
             except Exception as exc:  # noqa: BLE001
-                # 解除动作失败（服务未停 / 读取被拒 / 无法确认安装）仍尝试回读，
+                # 解除动作失败（读取被拒 / 无法确认安装）仍尝试回读，
                 # 但不得把未完成动作报成已执行。
                 progress_stamp({"phase": "stop_task_error", "error": str(exc)[:200]})
                 stop_error = str(exc)
@@ -454,6 +465,7 @@ def _run(cfg: dict) -> dict:
             "running": snap.get("running"),
             "auto_resume": snap.get("auto_resume"),
             "stop_error": stop_error or None,
+            "stop_steps": stop_steps,
             "boot_completed": boot_completed,
             **identity,
         },

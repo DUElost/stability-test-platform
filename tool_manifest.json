@@ -1768,9 +1768,17 @@
           "artifact": "packages/powercycle_disarm/1.0.7.tar.gz",
           "package_sha256": "87a1cbf65266c7ae0fb80a36b07dcee27a32d287eb60f1b9ed3874564ba764d9",
           "python": null,
-          "retired": false,
+          "retired": true,
           "script": "powercycle_disarm.py",
           "version": "1.0.7"
+        },
+        {
+          "artifact": "packages/powercycle_disarm/1.0.8.tar.gz",
+          "package_sha256": "98cc16f82fa6c56fe24f37151958f4ad3efd2f5983b1bba36f9340d95cd4a557",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_disarm.py",
+          "version": "1.0.8"
         }
       ]
     },

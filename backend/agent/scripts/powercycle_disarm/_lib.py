@@ -621,8 +621,30 @@ def install_apk(apk: Path) -> None:
         raise RuntimeError(f"安装失败: {apk.name}: {out.strip() or 'rc=%d' % rc}")
 
 
-def service_alive() -> bool:
-    return "PowerCycleService" in adb_shell(f"dumpsys activity services {_PKG}", timeout=30)
+class StopNotConfirmed(RuntimeError):
+    """服务未确认停止（#3723 §3.6.6 第 1 条 v1.7.8）：携带各步返回码。"""
+
+    def __init__(self, steps: dict[str, Any]):
+        self.steps = dict(steps)
+        super().__init__(
+            "停止 PowerCycleService 失败：不写停止标志（%s）"
+            % ", ".join(f"{k}={v}" for k, v in self.steps.items())
+        )
+
+
+def service_state(timeout: int = 30) -> tuple[str, int]:
+    """服务状态三态 + 返回码（#3723 §3.6.6 第 1 条 v1.7.8）。
+
+    返回 ``(alive|stopped|unknown, rc)``。``rc != 0``（含 adb 超时 -1）一律
+    ``unknown``——查询失败不能当作「已停」，否则服务仍在运行时会照样写停止
+    标志并报执行完成。
+    """
+    rc, out, _err = adb(
+        "shell", f"dumpsys activity services {_PKG}", timeout=max(1, int(timeout))
+    )
+    if rc != 0:
+        return "unknown", rc
+    return ("alive" if "PowerCycleService" in (out or "") else "stopped"), rc
 
 
 def start_task() -> None:
@@ -739,19 +761,42 @@ def write_minimal_stop_flags() -> None:
     push_prefs_xml(build_minimal_stop_prefs())
 
 
-def stop_service(force: bool) -> None:
-    """先 STOP、再 force-stop，确认服务已停；未停则不得写停止标志（§3.6.6 第 1 条）。"""
-    if service_alive():
-        adb_shell(
+def stop_service(force: bool) -> dict[str, Any]:
+    """先 STOP、再 force-stop，按返回码确认服务已停（§3.6.6 第 1 条 v1.7.8）。
+
+    - 状态查询：``rc != 0`` 即 ``unknown``；``unknown`` 时不发 STOP。
+    - 服务存活时，STOP 与 force-stop 的返回码都必须为 0。
+    - 最后一次状态查询必须 ``rc == 0`` 且无服务记录，才算确认停止。
+    任一条件不满足 raise ``StopNotConfirmed``；调用方不得写 prefs。
+    """
+    del force  # 兼容旧签名；停止语义不随参数放宽（v1.7.8）
+    steps: dict[str, Any] = {}
+    state_before, rc_before = service_state()
+    steps["state_before"] = state_before
+    steps["state_before_rc"] = rc_before
+    if state_before == "alive":
+        rc, _out, _err = adb(
+            "shell",
             f"am startservice -n {_PKG}/{_SERVICE} -a "
             "com.tinno.autotesttool.action.POWER_CYCLE_STOP",
             timeout=30,
         )
+        steps["stop_rc"] = rc
         time.sleep(3)
-    adb_shell(f"am force-stop {_PKG}", timeout=30)
+    rc, _out, _err = adb("shell", f"am force-stop {_PKG}", timeout=30)
+    steps["force_stop_rc"] = rc
     time.sleep(1)
-    if service_alive():
-        raise RuntimeError("停止 PowerCycleService 失败：服务仍在运行，不写停止标志")
+    state_after, rc_after = service_state()
+    steps["state_after"] = state_after
+    steps["state_after_rc"] = rc_after
+    if (
+        steps.get("stop_rc", 0) != 0
+        or steps["force_stop_rc"] != 0
+        or rc_after != 0
+        or state_after != "stopped"
+    ):
+        raise StopNotConfirmed(steps)
+    return steps
 
 
 def _verify_stop_flags(kind: str = "ok") -> None:
@@ -777,16 +822,17 @@ def _verify_stop_flags(kind: str = "ok") -> None:
     )
 
 
-def stop_task(force: bool, kind: str = "ok", installed: bool | None = True) -> None:
+def stop_task(force: bool, kind: str = "ok", installed: bool | None = True) -> dict[str, Any]:
     """停服务 → 写停止标志 → 同时验证两项（§3.6.6 第 1、5 条）。
 
     顺序不可交换：AutoTestTool 收到 STOP 时会把 auto_resume 改回 true；
-    只有先 STOP + force-stop、确认服务已停后再写，写入值才是最终状态。
+    只有先 STOP + force-stop、按返回码确认服务已停后再写，写入值才是最终
+    状态。``StopNotConfirmed`` 在任何写入之前抛出，调用方据此报 failed。
     kind 为 not_installed 时由调用方直接跳过；denied/transient 不写。
     """
-    stop_service(force)
+    steps = stop_service(force)
     if kind == "not_installed":
-        return
+        return steps
     if kind in ("denied", "transient"):
         raise RuntimeError("prefs 读取被拒/未知：不写停止标志")
     if kind not in ("ok", "absent", "empty"):
@@ -801,6 +847,7 @@ def stop_task(force: bool, kind: str = "ok", installed: bool | None = True) -> N
     else:
         set_stop_flags()
     _verify_stop_flags(kind)
+    return steps
 
 
 def result_paths() -> tuple[str, ...]:

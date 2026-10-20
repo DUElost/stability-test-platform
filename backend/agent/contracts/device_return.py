@@ -134,7 +134,7 @@ ONBOARDED: dict[str, Any] = {
         ),
         # 解除脚本与最低版本
         "disarm_script": "powercycle_disarm",
-        "disarm_min_version": "1.0.7",
+        "disarm_min_version": "1.0.8",
         "finish_script": "powercycle_finish",
         "finish_min_version": "1.1.0",
         # 探针模式（脚本参数 mode）
@@ -264,6 +264,12 @@ def step_version_of(step: Mapping[str, Any]) -> str:
     return ""
 
 
+#: finish 版本中已登记为「只收取」的集合（#3723 §3.0.2 v1.7.8）。
+#: 数字上「大于等于 1.1」不等于 manifest 已知——未登记的数字版本一律按
+#: 承担解除处理并记 unknown_legacy_version。新增只收取版本时在此登记。
+FINISH_COLLECT_ONLY_VERSIONS = frozenset({"1.1.0"})
+
+
 def _finish_major_minor(version: str) -> tuple[int, int] | None:
     vk = version_key(version)
     if len(vk) < 2:
@@ -282,8 +288,9 @@ def step_teardown_role(
 
     Returns one of:
     - ``disarm``: known disarm obligation (disarm any ver; finish@1.0.x)
-    - ``collect``: finish@1.1.0+ collection only
-    - ``unknown_legacy_disarm``: missing/unparsable version — conservative disarm
+    - ``collect``: registered collect-only finish version (currently 1.1.0)
+    - ``unknown_legacy_disarm``: missing/unparsable/unregistered numeric finish
+      version — conservative disarm
     - ``None``: not a power-cycle teardown script we classify
 
     ``package_sha`` is accepted for shared-call signature parity (U8 freezes it);
@@ -303,15 +310,12 @@ def step_teardown_role(
     if script_name == "powercycle_finish":
         if not ver or not version_key(ver):
             return STEP_ROLE_UNKNOWN_LEGACY_DISARM
-        mm = _finish_major_minor(ver)
-        if mm is None:
-            return STEP_ROLE_UNKNOWN_LEGACY_DISARM
-        major, minor = mm
-        if (major, minor) == (1, 0):
-            return STEP_ROLE_DISARM
-        if (major, minor) >= (1, 1):
+        # v1.7.8（复核第 1 轮 F2）：只有显式登记为只收取的版本才判 collect；
+        # 能解析成数字不等于 manifest 已知（1.1.1、2.0.0 从未登记）。
+        if ver in FINISH_COLLECT_ONLY_VERSIONS:
             return STEP_ROLE_COLLECT
-        # 0.x or other — conservative
+        if _finish_major_minor(ver) == (1, 0):
+            return STEP_ROLE_DISARM
         return STEP_ROLE_UNKNOWN_LEGACY_DISARM
 
     # Non-power-cycle: fall back to FAMILY_STEPS registry lists (no version split).

@@ -31,7 +31,7 @@ def scripts(db_session):
     rows = []
     for name, ver, defaults in (
         ("check_device", "1.0.0", {}),
-        ("powercycle_disarm", "1.0.7", {
+        ("powercycle_disarm", "1.0.8", {
             "mode": "disarm", "wait_device_online_seconds": 600,
         }),
         ("powercycle_finish", "1.1.0", {
@@ -72,7 +72,7 @@ def _steps(*, disarm_timeout, finish_timeout, disarm_params=None, finish_params=
         {
             "step_key": "teardown_disarm",
             "script_name": "powercycle_disarm",
-            "script_version": "1.0.7",
+            "script_version": "1.0.8",
             "stage": "teardown",
             "sort_order": 0,
             "timeout_seconds": disarm_timeout,
