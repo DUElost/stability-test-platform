@@ -142,6 +142,12 @@ PROTECTED_READ_ENDPOINTS: tuple[ReadEndpointCase, ...] = (
         "GET",
         "/api/v1/pipeline/templates/smoke",
     ),
+    # devices（#3723 U6：欠账条目只读面，登录可读）
+    ReadEndpointCase(
+        "device_return_debts",
+        "GET",
+        "/api/v1/devices/1/return-debts",
+    ),
 )
 
 

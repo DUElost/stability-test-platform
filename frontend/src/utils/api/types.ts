@@ -162,9 +162,16 @@ export interface DeviceLeaseReleaseResult {
   status: 'RELEASED';
 }
 
+/** ADR-0061 D5.7 / #3723 U6：人工放行原因类别（下拉固定四值）。 */
+export type DeviceReturnOverrideReason =
+  | 'flashed'
+  | 'factory_reset'
+  | 'manual_verified'
+  | 'other';
+
 export interface DeviceReturnOverrideRequest {
   families?: string[] | null;
-  reason_category: string;
+  reason_category: DeviceReturnOverrideReason;
   evidence_ref: string;
 }
 
@@ -174,6 +181,16 @@ export interface DeviceReturnOverrideResult {
   closed_count: number;
   debt_lease_released: boolean;
   open_debt_count: number;
+}
+
+/** ADR-0061 D5.9 / #3723 U6：设备未关闭欠账条目（只读，后端不返回 evidence）。 */
+export interface DeviceReturnDebtItem {
+  id: number;
+  family: string;
+  source_kind: string;
+  source_job_id?: number | null;
+  cause: string;
+  created_at: string;
 }
 
 export interface AgentReturnDischargeRequest {
@@ -1777,6 +1794,18 @@ export interface PlanRunPreview {
   parameter_projection?: ParameterProjection;
   /** U2 指纹。U1 的 preview 响应可以没有这一键。 */
   confirmation_fingerprint?: string | null;
+  /** #1356 / #3723 U6：派发前可疑设备提示（device_return_debt 等，不阻断）。 */
+  warnings?: DispatchWarning[];
+}
+
+/** `POST /plans/{id}/run/preview` 的 warnings 行。 */
+export interface DispatchWarning {
+  device_id: number;
+  serial: string;
+  host_id?: string | null;
+  code: string;
+  message: string;
+  status?: string;
 }
 
 /** ADR-0026 §3: RUNNING job sub-state for permit/barrier/patrol observability. */
@@ -2170,6 +2199,8 @@ export interface DeviceMatrixItem {
   heartbeat_deadline_at?: string | null;
   /** Authoritative backend projection; avoids duplicating timeout policy. */
   is_stuck?: boolean;
+  /** ADR-0061 D4.4 / #3723 U6：按专项解除结果（六值 + 证据）。 */
+  disarm_results?: Record<string, DisarmResultEntry> | null;
   /** Why device is BUSY / blocked: active_lease | device_offline | host_offline */
   busy_reason?: string | null;
   /** Job ID holding the active lease when busy_reason=active_lease. */
