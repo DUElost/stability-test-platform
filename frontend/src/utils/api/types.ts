@@ -162,6 +162,41 @@ export interface DeviceLeaseReleaseResult {
   status: 'RELEASED';
 }
 
+export interface DeviceReturnOverrideRequest {
+  families?: string[] | null;
+  reason_category: string;
+  evidence_ref: string;
+}
+
+export interface DeviceReturnOverrideResult {
+  device_id: number;
+  families: string[];
+  closed_count: number;
+  debt_lease_released: boolean;
+  open_debt_count: number;
+}
+
+export interface AgentReturnDischargeRequest {
+  fencing_token: string;
+  family_results: Record<string, Record<string, unknown>>;
+}
+
+export interface AgentReturnDischargeResult {
+  device_id: number;
+  discharged_families: string[];
+  debt_lease_released: boolean;
+  open_debt_count: number;
+  fencing_token?: string | null;
+}
+
+export interface HeartbeatReturnDebt {
+  device_id: number;
+  serial: string;
+  fencing_token: string;
+  families: string[];
+}
+
+
 export interface Device {
   id: number;
   serial: string;
@@ -202,6 +237,13 @@ export interface Device {
   is_stale?: boolean;
   /** ADR-0057 E4：陈旧超过 30 天的退役建议（只提示，不动作） */
   retire_suggested?: boolean;
+  /** ADR-0061 / #3723 U3: per-family return state */
+  return_state?: Record<string, {
+    state: string;
+    source?: string;
+    updated_at?: string;
+    [key: string]: unknown;
+  }> | null;
 }
 
 /** ADR-0057 D2（#2962 B）：批量退役逐台结果。 */

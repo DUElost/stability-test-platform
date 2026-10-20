@@ -8,7 +8,7 @@ from __future__ import annotations
 import backend.agent.contracts.device_return as device_return
 import backend.api.routes.plans as plans_mod
 from backend.core.job_timeout_config import DISARM_SCRIPT_NAMES, EXECUTING_DISARM
-from backend.services import agent_completion
+from backend.services import agent_completion, disarm_derive
 from backend.services.agent_lease_extend import _VALID_EXECUTION_STATES
 
 
@@ -22,7 +22,13 @@ def test_plan_loader_reads_shared_onboarded_same_object(monkeypatch):
 
 
 def test_completion_uses_shared_family_steps_object():
-    assert agent_completion._FAMILY_STEPS is device_return.FAMILY_STEPS
+    """#3723 §3.4.3-3: FAMILY_STEPS lives in disarm_derive; no local agent_completion copy."""
+    assert disarm_derive.FAMILY_STEPS is device_return.FAMILY_STEPS
+    assert (
+        agent_completion.derive_disarm_results_from_traces
+        is disarm_derive.derive_disarm_results_from_traces
+    )
+    assert not hasattr(agent_completion, "_FAMILY_STEPS")
 
 
 def test_disarm_script_names_is_union_of_both_roles():

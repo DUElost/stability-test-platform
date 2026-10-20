@@ -50,6 +50,7 @@ from backend.services.plan_dispatcher_sync import (
     preview_plan_dispatch_sync,
 )
 from backend.services.plan_parameter_projection import project_draft, project_saved_plan
+from backend.services.device_return import devices_with_open_debt_sync
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["plans"])
@@ -1514,7 +1515,14 @@ def _dispatch_warnings(db: Session, device_ids: list[int]) -> list[dict]:
         .all()
     )
     warnings: list[dict] = []
+    debt_ids = devices_with_open_debt_sync(db, device_ids)
     for dev_id, serial, host_id, status in rows:
+        if dev_id in debt_ids:
+            warnings.append({
+                "device_id": dev_id, "serial": serial, "host_id": host_id,
+                "code": "device_return_debt",
+                "message": "设备有未关闭的归还欠账——不可派发，直至清偿或人工放行（ADR-0061 D5）",
+            })
         if is_placeholder_serial(serial):
             warnings.append({
                 "device_id": dev_id, "serial": serial, "host_id": host_id,

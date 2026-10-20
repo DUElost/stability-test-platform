@@ -35,20 +35,15 @@ from backend.core.metrics import (
 )
 from backend.models.device_lease import DeviceLease
 from backend.models.enums import JobStatus, LeaseStatus, LeaseType
+from backend.models.host import Device
 from backend.models.job import JobInstance, StepTrace
 from backend.realtime.socketio_server import broadcast_run_job_update
 from backend.services.aggregator import PlanAggregator
 from backend.services.agent_recovery import resume_expired_lease_for_recovery
 from backend.services.errors import BadRequest, Conflict, NotFound
-from backend.services.lease_manager import release_lease
+from backend.services.device_return import handle_job_lease_release, try_apply_late_confirmed
+from backend.services.disarm_derive import derive_disarm_results_from_traces
 from backend.services.state_machine import InvalidTransitionError, JobStateMachine
-from backend.agent.contracts.device_return import (
-    DISARM_RESULT_EXECUTED_UNVERIFIED as _DISARM_RESULT_EXECUTED_UNVERIFIED,
-    DISARM_RESULT_FAILED as _DISARM_RESULT_FAILED,
-    DISARM_RESULT_INCOMPLETE as _DISARM_RESULT_INCOMPLETE,
-    DISARM_RESULT_NOT_EXECUTED as _DISARM_RESULT_NOT_EXECUTED,
-    FAMILY_STEPS as _FAMILY_STEPS,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -79,173 +74,8 @@ _RUN_TO_JOB: Dict[str, JobStatus] = {
 
 
 # ── #3723 U2 / ADR-0061 D4：解除结果落库与兼容推导 ──────────────────────────
-# 权威来源：device_return 共享契约（上方导入；本单元只消费不修改）
-
-_SIGNAL_EXIT_CODES = {143, -15, 137, -9}
-
-
-def _script_name_from_action(action: Any) -> str:
-    if not isinstance(action, str) or not action.startswith("script:"):
-        return ""
-    return action.split(":", 1)[1].strip()
-
-
-def _pipeline_steps_by_stage(pipeline_def: Any, stage: str) -> list[dict]:
-    if not isinstance(pipeline_def, dict):
-        return []
-    lifecycle = pipeline_def.get("lifecycle") or {}
-    if not isinstance(lifecycle, dict):
-        return []
-    steps = lifecycle.get(stage) or []
-    if isinstance(steps, dict):
-        steps = steps.get("steps") or []
-    if not isinstance(steps, list):
-        return []
-    return [s for s in steps if isinstance(s, dict)]
-
-
-def _step_id_to_script(pipeline_def: Any) -> Dict[str, str]:
-    mapping: Dict[str, str] = {}
-    for stage in ("init", "teardown", "patrol"):
-        for step in _pipeline_steps_by_stage(pipeline_def, stage):
-            sid = step.get("step_id") or ""
-            script = _script_name_from_action(step.get("action"))
-            if sid and script:
-                mapping[str(sid)] = script
-    return mapping
-
-
-def _family_for_script(script_name: str, role: str) -> Optional[str]:
-    if not script_name:
-        return None
-    for family, spec in _FAMILY_STEPS.items():
-        names = spec.get(role) or ()
-        if script_name in names:
-            return family
-        if role == "disarm" and script_name in (spec.get("disarm_onboarded") or ()):
-            return family
-    return None
-
-
-def _map_trace_to_disarm_result(status: Any, exit_code: Any) -> str:
-    """§3.0 第 6 条：COMPLETED / FAILED(+signal) / 其它 FAILED / 无 trace。"""
-    st = str(status or "").strip().upper()
-    if st in {"COMPLETED", "FINISHED", "SUCCESS", "OK"}:
-        return _DISARM_RESULT_EXECUTED_UNVERIFIED
-    if st in {"FAILED", "ERROR", "ABORTED", "CANCELLED", "CANCELED"}:
-        try:
-            code = int(exit_code) if exit_code is not None else None
-        except (TypeError, ValueError):
-            code = None
-        if code in _SIGNAL_EXIT_CODES:
-            return _DISARM_RESULT_INCOMPLETE
-        return _DISARM_RESULT_FAILED
-    return _DISARM_RESULT_NOT_EXECUTED
-
-
-def _trace_field(tr: Any, name: str) -> Any:
-    if isinstance(tr, dict):
-        return tr.get(name)
-    return getattr(tr, name, None)
-
-
-def _is_disarm_terminal_status(status: Any) -> bool:
-    st = str(status or "").strip().upper()
-    return st in {
-        "COMPLETED", "FINISHED", "SUCCESS", "OK",
-        "FAILED", "ERROR", "ABORTED", "CANCELLED", "CANCELED",
-    }
-
-
-def _trace_occurrence_key(tr: Any, index: int) -> tuple:
-    """Occurrence order: original_ts first; stable tie-breakers only."""
-    original_ts = _trace_field(tr, "original_ts")
-    if isinstance(original_ts, datetime):
-        ts = original_ts if original_ts.tzinfo is not None else original_ts.replace(tzinfo=timezone.utc)
-        ts_key: tuple = (0, ts.timestamp())
-    elif original_ts is None:
-        ts_key = (1, 0.0)
-    else:
-        ts_key = (1, 0.0)
-    created_at = _trace_field(tr, "created_at")
-    if isinstance(created_at, datetime):
-        ca = created_at if created_at.tzinfo is not None else created_at.replace(tzinfo=timezone.utc)
-        ca_key: tuple = (0, ca.timestamp())
-    else:
-        ca_key = (1, 0.0)
-    trace_id = _trace_field(tr, "id")
-    try:
-        id_key = (0, int(trace_id))
-    except (TypeError, ValueError):
-        id_key = (1, index)
-    return (ts_key, ca_key, id_key, index)
-
-
-def derive_disarm_results_from_traces(
-    pipeline_def: Any,
-    traces: list[Any],
-) -> Dict[str, Dict[str, Any]]:
-    """从 teardown 步骤 trace 按 FAMILY_STEPS 推导 disarm_results（#3723 §3.0 第 6 条）。
-
-    足迹：init 中 FAMILY_STEPS.footprint 步骤一旦出现任意 trace 即视为已建立。
-    解除：按 original_ts 发生顺序选取该专项 teardown 解除脚本的终态；迟到的
-    STARTED/RUNNING 不得覆盖其后发生的 COMPLETED/FAILED（§3.3.2 B）。
-    无终态证据 → not_executed。
-    """
-    id_to_script = _step_id_to_script(pipeline_def)
-    footprint: set[str] = set()
-    disarm_events: Dict[str, list[tuple[tuple, dict]]] = {}
-
-    for index, tr in enumerate(traces or []):
-        stage = _trace_field(tr, "stage")
-        step_id = _trace_field(tr, "step_id")
-        status = _trace_field(tr, "status")
-        exit_code = _trace_field(tr, "exit_code")
-        script = id_to_script.get(str(step_id or ""), "")
-        if not script:
-            continue
-        if stage == "init":
-            fam = _family_for_script(script, "footprint")
-            if fam:
-                footprint.add(fam)
-        elif stage == "teardown":
-            fam = _family_for_script(script, "disarm")
-            if fam:
-                event = {
-                    "status": status,
-                    "exit_code": exit_code,
-                    "step_id": step_id,
-                }
-                disarm_events.setdefault(fam, []).append(
-                    (_trace_occurrence_key(tr, index), event)
-                )
-
-    families = set(footprint) | set(disarm_events)
-    out: Dict[str, Dict[str, Any]] = {}
-    for fam in sorted(families):
-        events = sorted(disarm_events.get(fam) or [], key=lambda item: item[0])
-        terminal: dict | None = None
-        for _key, event in events:
-            if _is_disarm_terminal_status(event.get("status")):
-                terminal = event  # later original_ts wins
-        if terminal is None:
-            entry = {
-                "result": _DISARM_RESULT_NOT_EXECUTED,
-                "step_id": "",
-                "exit_code": None,
-                "readback_summary": "",
-            }
-        else:
-            entry = {
-                "result": _map_trace_to_disarm_result(
-                    terminal.get("status"), terminal.get("exit_code"),
-                ),
-                "step_id": str(terminal.get("step_id") or ""),
-                "exit_code": terminal.get("exit_code"),
-                "readback_summary": "",
-            }
-        out[fam] = entry
-    return out
+# 推导实现见 disarm_derive（与 device_return 共享，避免 C5 环依赖）。
+# derive_disarm_results_from_traces 由此模块再导出，保持既有导入路径稳定。
 
 
 def normalize_disarm_results(raw: Any) -> Optional[Dict[str, Dict[str, Any]]]:
@@ -466,6 +296,37 @@ async def complete_agent_job(
             historical_lease is None
             or historical_lease.fencing_token != payload.fencing_token
         ):
+            # D5.6 / §3.4.1 #4: after JOB→debt conversion the historical JOB
+            # lease row is gone (in-place type change). Allow late *confirmed*
+            # only when open debt rows store the original fencing token.
+            late = await try_apply_late_confirmed(
+                db,
+                device_id=job.device_id,
+                job_id=job.id,
+                fencing_token=payload.fencing_token,
+                disarm_results=payload.disarm_results,
+            )
+            if late is not None and late.get("ok"):
+                await record_audit_async(
+                    db,
+                    action="job_late_confirmed_debt_closed",
+                    resource_type="job_instance",
+                    resource_id=job.id,
+                    details={
+                        "plan_run_id": job.plan_run_id,
+                        "current_status": job.status,
+                        "closed_count": late.get("closed_count"),
+                        "debt_lease_released": late.get("debt_lease_released"),
+                        "open_debt_count": late.get("open_debt_count"),
+                    },
+                    username="agent",
+                )
+                await db.commit()
+                return {
+                    "job_id": job_id,
+                    "status": job.status,
+                    "late_confirmed": late,
+                }
             current_status = job.status
             await record_audit_async(
                 db,
@@ -554,6 +415,12 @@ async def complete_agent_job(
             # token may atomically restore UNKNOWN→RUNNING before completion.
             # This preserves the terminal outbox fact without adding the
             # forbidden UNKNOWN→COMPLETED edge to the state machine.
+            # I5 / #3723 §3.4.4：Job（函数入口已锁）→ Device → Lease
+            await db.execute(
+                select(Device)
+                .where(Device.id == job.device_id)
+                .with_for_update()
+            )
             candidate = (await db.execute(
                 select(DeviceLease)
                 .where(
@@ -672,11 +539,15 @@ async def complete_agent_job(
             # M4/T4-2: 终态时按 watcher_capability 自增一次(覆盖率监控盘);
             # 与 reconciler 桥接同处 not-already_terminal 守卫内,每 Job 仅计一次。
             record_watcher_capability(job.watcher_capability or "unknown")
-        # Release before aggregation.  Chain dispatch inherits the same devices
-        # and must observe them as free when the terminal transaction commits.
-        released = await release_lease(db, job.device_id, job_id, LeaseType.JOB)
-        if not released:
-            logger.warning("release_lease_miss device=%s job=%s", job.device_id, job_id)
+        # ADR-0061 D5 / #3723 U3：JOB 租约经统一欠账入口处理（可能转换为欠账租约）。
+        lease_outcome = await handle_job_lease_release(
+            db, device_id=job.device_id, job_id=job_id, job=job,
+        )
+        if not lease_outcome.released and not lease_outcome.converted_to_debt:
+            logger.warning(
+                "device_return_lease_miss device=%s job=%s open=%s",
+                job.device_id, job_id, lease_outcome.open_debt_count,
+            )
         await db.flush()
         await record_audit_async(
             db,
@@ -688,7 +559,9 @@ async def complete_agent_job(
                 "from_status": transition_from_status,
                 "to_status": target.value,
                 "payload_digest": payload_digest,
-                "lease_released": bool(released),
+                "lease_released": bool(lease_outcome.released),
+                "lease_converted_to_debt": bool(lease_outcome.converted_to_debt),
+                "open_debt_count": lease_outcome.open_debt_count,
             },
             username="agent",
         )

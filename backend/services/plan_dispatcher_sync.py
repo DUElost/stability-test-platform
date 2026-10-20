@@ -58,6 +58,7 @@ from backend.services.suite_binding import (
     step_params_for_dispatch,
 )
 from backend.services.state_machine import PlanRunStateMachine
+from backend.services.device_return import devices_with_open_debt_sync
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +132,7 @@ def _classify_dispatch_devices_sync(
         )
     ).all()
     active_lease_by_device = {row.device_id: row.job_id for row in lease_rows}
+    debt_device_ids = devices_with_open_debt_sync(db, device_ids)
 
     # B4: the partial unique index ``uq_job_active_per_device`` (job.py) forbids a
     # second job on a device while one is PENDING/RUNNING/UNKNOWN. The ACTIVE-lease
@@ -216,6 +218,12 @@ def _classify_dispatch_devices_sync(
             unavailable.append({
                 "id": did, "reason": "host_maintenance",
                 "host_id": snap.host_id,
+            })
+            continue
+        # ADR-0061 D5.1 / #3723 U3：欠账优先于 active_lease 原因展示。
+        if did in debt_device_ids:
+            unavailable.append({
+                "id": did, "reason": "device_return_debt",
             })
             continue
         if did in active_lease_by_device:

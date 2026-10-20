@@ -77,6 +77,7 @@ class Host(Base):
     retire_reason     = Column(Text, nullable=True)
     retire_alerted_at = Column(DateTime(timezone=True), nullable=True)
 
+
     # ADR-0038 v0.3 D9.1：设备面意图（空置 / 人工清空）——生命周期第三维度，
     # 与 status（心跳所有）、retired_at（人工终态）正交，可逆（清除即解除）。
     # 真源只在此三列，禁 Host.extra 裸键（D4：主心跳每拍重建 extra）。
@@ -133,6 +134,10 @@ class Device(Base):
     retired_by        = Column(String(128), nullable=True)
     retire_reason     = Column(Text, nullable=True)
     retire_alerted_at = Column(DateTime(timezone=True), nullable=True)
+
+    # ADR-0061 D1.3 / #3723 U3：按专项归还状态（JSONB）。
+    # 形如 {family: {state, source, updated_at, ...}}；可空=尚未初始化。
+    return_state = Column(JSONB, nullable=True)
 
     host = relationship("backend.models.host.Host", foreign_keys=[host_id])
 

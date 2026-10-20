@@ -40,6 +40,7 @@ logger = logging.getLogger(__name__)
 # 心跳快照降采样间隔（秒）：减少硬件字段数据库写入压力
 SNAPSHOT_INTERVAL_SECONDS = int(os.getenv("DEVICE_SNAPSHOT_INTERVAL", "30"))
 # 建议 Agent 心跳周期 / 日志速率：真源在 agent_host_heartbeat（#1520）。
+from backend.services.device_return import open_debts_for_host_sync
 from backend.services.agent_host_heartbeat import (  # noqa: F401
     HEARTBEAT_INTERVAL_BASE,
     HEARTBEAT_INTERVAL_MAX,
@@ -675,6 +676,9 @@ def _process_heartbeat_with_db(
 
     suggested_interval = _suggested_heartbeat_interval(online_healthy_count)
     suggested_log_rate = _suggested_log_rate_limit(online_healthy_count)
+    # ADR-0061 D5.5 / #3723 §3.0 第 8 条：下发该 host 在线设备的未关闭欠账。
+    return_debts = open_debts_for_host_sync(db, host.id)
+
     return {
         "ok": True,
         "host_id": host.id,
@@ -691,4 +695,5 @@ def _process_heartbeat_with_db(
             "heartbeat_interval_seconds": suggested_interval,
         },
         "heartbeat_interval_seconds": suggested_interval,
+        "return_debts": return_debts,
     }, ws_device_updates
