@@ -3,7 +3,7 @@
 Status: implemented
 Class: feature
 
-按 [#3723](https://github.com/DUElost/stability-test-platform/issues/3723) **v1.7.5** §1.2 / §3.0 / §3.4 / **§3.4.1** / **§3.4.2** / **§3.4.3** / **§3.4.4** / §4 U3 / 4.1 / 4.2
+按 [#3723](https://github.com/DUElost/stability-test-platform/issues/3723) **v1.7.5**（§3.4.4 文档事实按 **v1.7.7** 修正）§1.2 / §3.0 / §3.4 / **§3.4.1** / **§3.4.2** / **§3.4.3** / **§3.4.4** / §4 U3 / 4.1 / 4.2
 与 ADR-0061 D1.3–8、D4.2、D5、D7.2（Accepted v1.1）实施 [#3728](https://github.com/DUElost/stability-test-platform/issues/3728)。
 Draft PR #3748 待规划确认与独立复核；合入不等于生效（阶段 B 初始化与控制面部署按 §5）。
 Owner #3751：五项接受 + M1–M3；共享服务类别政策与平台终止消费交 **U8**，U3 **不改** Agent/共享契约/包/模板。
@@ -85,30 +85,66 @@ Owner #3751：五项接受 + M1–M3；共享服务类别政策与平台终止�
    `agent_completion` 无本地副本；本地 `dict(FAMILY_STEPS)` 变异须红。
 4. **全量 backend/tests/**：最终 HEAD 须跑完整套件或同 HEAD informational SUCCESS。
 
-### §3.4.4 加锁全序 I5（复核第 2 轮 F3，v1.7.5）
+### §3.4.4 加锁全序 I5（复核第 2 轮 F3；v1.7.7 文档事实修正）
 
-不变量 **I5**：`job_instance` → `device` → `device_leases` → `device_return_debt`。
+不变量 **I5**（v1.7.7）：`job_instance` → `device` → `device_leases`；`device_return_debt`
+只在持有该设备 `device` 行锁时写入/加锁，持锁期间与该设备租约行的先后不限。
 不得改 `acquire_lease` / 准入 / 心跳；不新增重试语义。
 
 **4 处调用方改序（Job 之后、Lease 之前锁 Device）：**
 
 | 入口 | 实际顺序（文件:行，本 tip） |
 |---|---|
-| 紧急释放 | Job `:62` → Device `:69` → Lease `:75` → 统一入口（`device_lease_emergency_release.py`） |
-| `_reconcile_expired_leases` | Job `:149` → Device `:163` → Lease `:169` → 统一入口（`device_lease_reconciler.py`） |
-| `sync_agent_recovery` | Job `:326` → Device `:332` → Lease `:337`（`agent_recovery.py`） |
-| completion UNKNOWN 分支 | Job `:246` → Device `:420` → Lease `:425`（`agent_completion.py`） |
+| 紧急释放 | Job `:61-65` → Device `:68-72` → Lease `:74-79` → 统一入口 `:102`（`device_lease_emergency_release.py`） |
+| `_reconcile_expired_leases` | Job `:148-153` → Device `:162-166` → Lease `:168-173` → 统一入口 `:206/:217/:249`（`device_lease_reconciler.py`） |
+| `sync_agent_recovery` | Job `:325-329` → Device `:331-335` → Lease `:336-343` → 统一入口 `:408/:475/:486`（`agent_recovery.py`） |
+| completion UNKNOWN 分支 | Job `:245-249` → Device `:419-423` → Lease `:424-433` → 统一入口 `:543`（`agent_completion.py`） |
 
-**U3 自有入口与其它释放点（保持 / 已符合 I5）：**
+**U3 自有入口：按每个事务的实际顺序分行（不得并称同一完整序列）**
 
-| 事务 | 顺序 |
-|---|---|
-| 初始化 / 清偿 / 放行 / 退役 / `_acquire_debt_lease_*` | Device → Lease → debt（`device_return.py`） |
-| 统一入口 `handle_job_lease_release[_sync]` | Device → Lease → debt |
-| normal completion / recycler PENDING / stale UNKNOWN / terminal ACTIVE | Job →（入口内）Device → Lease |
-| 认领 `acquire_lease`（未改） | Device 代次 CAS → Lease（`lease_manager.py:99/:128`） |
+| 事务 | 实际顺序（本 tip） | 位置 |
+|---|---|---|
+| 统一入口 `handle_job_lease_release_sync` | Device → Lease → debt | `device_return.py:532` → `:539` → `:547` |
+| 统一入口 `handle_job_lease_release`（async） | Device → Lease → debt | `:819` → `:826` → `:832` |
+| 人工放行 `apply_override_sync` | Device → 欠账条目（关闭 + flush）→ Lease | `:995` → `:1013`（`_close_family_debts_sync:900/:910`）→ `:1020`（`_active_lease_sync:917`） |
+| 存量初始化 `init_device_return_sync` | Device → 欠账条目（INSERT）→ Lease | `:1338` → `:1403`（`_upsert_open_debt_sync` flush `:380-381`）→ `:1426`；无 ACTIVE 租约时 `:1433` → `_acquire_debt_lease_sync:474/:475` |
+| 清偿 `apply_discharge_sync` | Device → Lease → 欠账条目（关闭 + flush） | `:936` → `:939` → `:963`（`_close_family_debts_sync:900/:910`） |
+| 迟到 confirmed `apply_late_confirmed_sync` | Device → 欠账条目（关闭 + flush）→ Lease | `:1042` → `:1049-1071` → `:1072`（`_active_lease_sync:917`） |
+| 退役 `release_debt_lease_for_retirement_sync` | Device（调用方）→ Lease | `device_retirement.py:154` → `device_return.py:1191`；不写欠账条目 |
+| 取消退役 `restore_debt_lease_on_unretire_sync` | Device（调用方）→ 欠账条目普通读 → Lease | `device_retirement.py:209` → `device_return.py:1203`（普通 SELECT）→ `:1205` → `:474/:475` |
+| 认领 `acquire_lease`（未改） | Device 代次 CAS → Lease | `lease_manager.py:98-106` → `:122-129` |
 
-共享行锁表已回填 I5 与 `device` × `device_leases` 全表；`on_job_terminal` 新边与准入不成环依据见该表。
+无欠账条目可写时，相应事务不产生 debt 步骤；Device 锁与 Lease 的相对顺序不变。
+
+**11 处统一入口释放点（每个事务的实际顺序）**
+
+| # | 释放点 | 实际顺序（文件:行，本 tip） |
+|---|---|---|
+| 1 | normal completion | Job `:245-249` → 入口 `:543` → Device `device_return.py:819` → Lease `:826`（`agent_completion.py`） |
+| 2 | recovery boot mismatch | Job `:325-329` → Device `:331-335` → Lease `:336-343` → 入口 `:408`（`agent_recovery.py`） |
+| 3 | recovery UNKNOWN grace | 同上 → 入口 `:475`（`agent_recovery.py`） |
+| 4 | recovery terminal ACTIVE | 同上 → 入口 `:486`（`agent_recovery.py`） |
+| 5 | reconciler orphan（job 行缺失） | Job（有 `job_id` 时）`:148-153` → Device `:162-166` → Lease `:168-173` → 入口 `:206`；`job_id` 为空时 `:195-196` 直接释放，不经入口（`device_lease_reconciler.py`） |
+| 6 | reconciler terminal/expired | Job `:148-153` → Device `:162-166` → Lease `:168-173` → 入口 `:217`（`device_lease_reconciler.py`） |
+| 7 | reconciler UNKNOWN grace | 同上 → 入口 `:249`（`device_lease_reconciler.py`） |
+| 8 | reconciler stale UNKNOWN | Job `:368-373` → 入口 `:392`（入口内 Device → Lease）；`:382-389` 的 Lease 为普通 SELECT（`device_lease_reconciler.py`） |
+| 9 | reconciler terminal ACTIVE | 普通读 `:464-472` → 入口 `:478`（Device → Lease，无 Job 行锁；`device_lease_reconciler.py`） |
+| 10 | recycler PENDING timeout | Job CAS `recycler.py:455-474` → 入口 `:482`（Device → Lease） |
+| 11 | 紧急释放 | Job `:61-65` → Device `:68-72` → Lease `:74-79` → 入口 `:102`（`device_lease_emergency_release.py`） |
+
+**父聚合 / 准入不成环（v1.7.7）**
+
+`on_job_terminal` 在 `job_terminalization.py:153` 只插入 `plan_run_pending_aggregation`，`:155`
+提交后才 `:156` 唤醒父聚合；父 Run/PRH 的更新在之后的聚合事务中，Device/Lease 锁在
+`:155` 提交时释放。pending 插入经 `plan_run.py:243-245` 的外键对 `plan_run` 取 **KEY SHARE**，
+该 KEY SHARE 与 Device/Lease 锁同处 `:153-:155` 的短事务，但父 Run/PRH 的更新不在其中。
+
+准入先在 `admission_pump.py:711` 调 `_lock_admission_resources`（`:82-105`，Host/Device 按 id
+升序 `FOR UPDATE`），`:714` 才做忙闲分类。不成环依据：准入泵只对 **QUEUED** run 取
+`FOR UPDATE SKIP LOCKED`（`:156-168`），job 在准入事务中才物化（`:796` →
+`plan_dispatcher_sync.py:1097`），`retry_plan_run_dispatch` 拒绝已有 job 的 run 重新准入
+（`precheck/runner.py:386-394`）；释放路径只对已有 job 的 run 取 KEY SHARE，两侧不会落在同一
+`plan_run` 行上。详见共享行锁表。
 
 ## Alternatives
 
@@ -132,7 +168,7 @@ Owner #3751：五项接受 + M1–M3；共享服务类别政策与平台终止�
 `scripts/run_pytest.py` 内存保护（日志确认 `memory.max=6442450944` / `swap.max=0`）；
 `env -i`（无 `TEST_DATABASE_URL`）；未跑 #3739 危险变异或真实宿主信号。变异在临时
 detached worktree（`/tmp/u3-mut-3728`、`/tmp/u3-mut-3728b`）中逐文件撤回，运行后
-`git checkout --` 恢复并已移除；本 PR 最终只改测试文件。
+`git checkout --` 恢复并已移除；本 PR 的代码改动仅为测试文件（本轮 F4 只改两份文档）。
 
 全量套件复现（与 CI 同 pytest 版本）：首轮 d 失败——`_seed_*` 的 `_NOW` 是模块导入
 时刻，全量套件中 d 约 16 分钟后才执行，UNKNOWN→RUNNING 的 300s 宽限已过，completion
@@ -150,7 +186,8 @@ detached worktree（`/tmp/u3-mut-3728`、`/tmp/u3-mut-3728b`）中逐文件撤�
 | U3 定向 + §3.4.3（含 F1/F2/flush/异步预读/I1） | **72 passed** |
 | 紧急释放 / 退役 / 心跳 / retry-exit API | **47 passed** |
 | `check:quick` | **OK（16 gates）** |
-| 共享行锁表 I5 回填 | 已写（未改） |
+| 共享行锁表 I5 回填 | 已按 v1.7.7 修正：I5 定义、父聚合/准入依据、自有入口逐事务顺序 |
+| 本轮 F4 文档事实修正 | `check:quick` **OK（16 gates）**；`tests/` 文档/锁序守卫 **68 passed**；未改代码与测试 |
 | #3739 危险 cancel 变异 | **未跑（禁止）** |
 | required CI + informational（最终 HEAD） | 见 PR checks / 回告 |
 

@@ -13,7 +13,7 @@ Class: architecture
 时，每条路径在自己的区里都自洽）。这是 2026-09 那轮 R01–R15 全面审查漏掉
 `job_instance` / `device_leases` 锁序环的方法层原因（另见 #1960）。
 
-### 四条已接受的不变量
+### 五条已接受的不变量
 
 | ID | 不变量 | 主要承载路径 |
 |---|---|---|
@@ -21,7 +21,13 @@ Class: architecture
 | **I2** | `job_instance` → `plan_run` | 同上（终态化时）、recycler 超时路径 |
 | **I3** | `job_instance` → `plan_run_host` | 终态化 `_bump_host_counters`、`coordinator_heartbeat`、`_bulk_abort_pending_jobs` |
 | **I4** | `plan_run` → `plan_run_host` | `on_job_terminal(_sync)`、`admission_transaction`、`_bulk_abort_pending_jobs`、`prepare_plan_run` |
-| **I5** | `job_instance` → `device` → `device_leases` → `device_return_debt` | 设备返还相关事务（#3723 §3.4.4 / ADR-0061 D5.10）：U3 统一入口与 4 处释放调用方、初始化/清偿/放行/退役、认领 `acquire_lease`（代次 CAS 先于 ACTIVE 租约锁） |
+| **I5** | `job_instance` → `device` → `device_leases`；`device_return_debt` 只在持有该设备 `device` 行锁时写入/加锁，持锁期间与 `device_leases` 的先后不限（v1.7.7） | 设备返还相关事务（#3723 §3.4.4 / ADR-0061 D5.10）：U3 统一入口与 4 处释放调用方、初始化/清偿/放行/退役、认领 `acquire_lease`（代次 CAS 先于 ACTIVE 租约锁） |
+
+（v1.7.7，复核第 3 轮 F4）I5 的必须顺序只约束 `job_instance` → `device` → `device_leases`。
+`device_return_debt` 行只能在持有该设备 `device` 行锁时写入或加锁；持锁期间它与该设备租约行的先后不受限制。
+全仓写 `DeviceReturnDebt` 的代码都在 `backend/services/device_return.py`（`_upsert_open_debt_sync` `:369`、
+`_upsert_open_debt_async` `:665`、`_close_family_debts_sync` `:903`、`apply_late_confirmed_sync` `:1056`、
+`apply_late_confirmed` `:1108`），均在 `_lock_device_*`（`:299` / `:603`）之后；同一设备上的欠账写入由 Device 锁串行。
 
 **豁免**（形式相反但不构成反序）：
 
@@ -41,7 +47,7 @@ Class: architecture
 | `complete_job` | Job → Lease | `agent_api.py`：Job `FOR UPDATE` → `release_lease` |
 | `extend_leases_batch` → `_cas_renew_leases` | Job → Lease | Job `ORDER BY id FOR UPDATE` → CAS `UPDATE device_leases` |
 | `extend_job_lock` | Job → Lease | `#1980` 修正为 Job `FOR UPDATE` → `extend_lease` |
-| `_reconcile_expired_leases`（`#1959`；`#3723` §3.4.4 I5） / `_reconcile_stale_unknown_jobs` | Job → Device → Lease / Job → Lease | 过期回收在 Job 与 Lease 之间插入 Device；stale UNKNOWN 等进入统一入口前未持 Lease，由入口内 Device→Lease |
+| `_reconcile_expired_leases`（`#1959`；`#3723` §3.4.4 I5） / `_reconcile_stale_unknown_jobs` | Job → Device → Lease | 过期回收在 Job 与 Lease 之间插入 Device；stale UNKNOWN 进入统一入口前 Lease 仅普通 SELECT（`:382-389`），由入口内 Device → Lease |
 | `recycler` PENDING/RUNNING 超时 | Job → Lease | 逐 job savepoint → `release_lease` |
 | `recovery_sync`（`#2015` 修正；`#3723` §3.4.4 I5） | Job → Device → Lease | `#2015` 原为 `Lease → Job → Device`；U3 统一入口加 Device 后若仍 Lease→Device 则与 init/acquire 成环（复核 F3），改为 Job → Device → Lease |
 | `acquire_lease` / `claim` | Job → Host → Lease | 不取 plan_run |
@@ -50,22 +56,51 @@ Class: architecture
 
 **`device` × `device_leases`（I5 子集）**
 
-| 路径 | 顺序 | 位置 |
+| 路径 | 实际顺序 | 位置（本 tip） |
 |---|---|---|
-| `acquire_lease` / claim | Device（代次 CAS `UPDATE`）→ Lease `FOR UPDATE` | `lease_manager.py`：`:99` → `:128` |
-| `init_device_return_sync` / 清偿 / 人工放行 / 退役 | Device → Lease（→ debt） | `device_return.py`：`_lock_device_*` → `_active_lease_*` / `_acquire_debt_lease_*` |
-| `handle_job_lease_release[_sync]`（统一入口） | Device → Lease → debt | 11 处 JOB 释放点经此入口；入口内 `_lock_device_*` 再锁/处理租约 |
-| `release_terminal_job_lease` | Job → Device → Lease | `device_lease_emergency_release.py`：Job `:62` → Device `:69` → Lease `:75` |
-| `_reconcile_expired_leases` | Job → Device → Lease | `device_lease_reconciler.py`：Job `:149` → Device `:163` → Lease `:169` |
-| `sync_agent_recovery` | Job → Device → Lease | `agent_recovery.py`：Job `:326` → Device `:332` → Lease `:337` |
-| `complete_agent_job` UNKNOWN 恢复分支 | Job → Device → Lease | `agent_completion.py`：Job `:246` → Device `:420` → Lease `:425` |
-| normal completion / recycler / stale UNKNOWN / terminal ACTIVE | Job →（入口内）Device → Lease | 进入统一入口前不持 Lease |
+| `acquire_lease` / claim | Device（代次 CAS `UPDATE`）→ Lease `FOR UPDATE` | `lease_manager.py:98-106` → `:122-129` |
+| 统一入口 `handle_job_lease_release_sync` | Device → Lease → debt | `device_return.py:532` → `:539` → `:547` |
+| 统一入口 `handle_job_lease_release`（async） | Device → Lease → debt | `device_return.py:819` → `:826` → `:832` |
+| 人工放行 `apply_override_sync` | Device → 欠账条目（关闭 + flush）→ Lease | `:995` → `:1013`（`_close_family_debts_sync:900/:910`）→ `:1020`（`_active_lease_sync:917`） |
+| 存量初始化 `init_device_return_sync` | Device → 欠账条目（INSERT）→ Lease | `:1338` → `:1403`（`_upsert_open_debt_sync` flush `:380-381`）→ `:1426`；无 ACTIVE 租约时 `:1433` → `_acquire_debt_lease_sync:474/:475` |
+| 清偿 `apply_discharge_sync` | Device → Lease → 欠账条目（关闭 + flush） | `:936` → `:939` → `:963`（`_close_family_debts_sync:900/:910`） |
+| 迟到 confirmed `apply_late_confirmed_sync` | Device → 欠账条目（关闭 + flush）→ Lease | `:1042` → `:1049-1071` → `:1072`（`_active_lease_sync:917`） |
+| 退役 `release_debt_lease_for_retirement_sync` | Device（调用方）→ Lease | `device_retirement.py:154` → `device_return.py:1191`；不写欠账条目 |
+| 取消退役 `restore_debt_lease_on_unretire_sync` | Device（调用方）→ 欠账条目普通读 → Lease | `device_retirement.py:209` → `device_return.py:1203`（普通 SELECT）→ `:1205` → `:474/:475` |
+| `release_terminal_job_lease` | Job → Device → Lease | `device_lease_emergency_release.py`：Job `:61-65` → Device `:68-72` → Lease `:74-79` |
+| `_reconcile_expired_leases` | Job → Device → Lease | `device_lease_reconciler.py`：Job `:148-153` → Device `:162-166` → Lease `:168-173` |
+| `sync_agent_recovery` | Job → Device → Lease | `agent_recovery.py`：Job `:325-329` → Device `:331-335` → Lease `:336-343` |
+| `complete_agent_job` UNKNOWN 分支 | Job → Device → Lease | `agent_completion.py`：Job `:245-249` → Device `:419-423` → Lease `:424-433` |
+| stale UNKNOWN `_reconcile_stale_unknown_jobs` | Job → Device → Lease（入口前 Lease 仅普通 SELECT） | `device_lease_reconciler.py:368-373` → `:392`；`:382-389` 无 `FOR UPDATE` |
+| terminal ACTIVE `_reconcile_terminal_job_active_leases` | Device → Lease（无 Job 行锁） | `device_lease_reconciler.py:464-472` 普通读 → `:478` 入口 |
+| normal completion / recycler PENDING | Job →（入口内）Device → Lease | `agent_completion.py:245` → `:543`；`recycler.py:455-474` → `:482` |
 
-**I5 与准入不成环（`on_job_terminal` 新边）**：completion / reconciler / recovery 在持有 Device 锁后仍可能进入 `on_job_terminal`（`plan_run` → `plan_run_host`，I2/I4）。准入为 `plan_run` → … → `device`。不成环依据：
+无欠账条目可写时，相应事务不产生 debt 步骤；Device 锁与 Lease 的相对顺序不变。
 
-1. 准入的 `admission_transaction` 只服务 **PRECHECK** 运行；正在终态化的 job 属于 **RUNNING**（或已终态）PlanRun，同一 `plan_run` 行不会同时走准入与 `on_job_terminal`。
-2. 释放事务提交前租约对其他会话仍为 **ACTIVE**；`_classify_dispatch_devices_sync` 将带 ACTIVE 租约/欠账的设备标为 `active_lease` / `device_return_debt`，准入随即 `DEVICE_BUSY` 回滚或收缩，**不会**在持有该设备行锁的同时继续持有并与释放路径争用同一 `plan_run`。
-3. 跨不同 PlanRun 时：释放持 Device、等本 job 的 plan_run；准入持另一 plan_run、等 Device——两侧等待的 plan_run 不是同一行，不构成环。
+**I5 与父聚合 / 准入不成环（v1.7.7 修正）**
+
+`on_job_terminal` 不在释放事务的持锁窗口里更新父 Run/PRH：`job_terminalization.py:153` 只插入
+`plan_run_pending_aggregation`，`:155` 提交，`:156` 才唤醒父聚合；父 Run 与 PRH 的计数/终态在
+之后的聚合事务中处理。插入待聚合记录经 `plan_run_id` 外键（`plan_run.py:243-245`）对该 job 的
+`plan_run` 取 **KEY SHARE**；该 KEY SHARE 与被释放的 Device/Lease 锁同处 `:153-:155` 的短事务，
+但父 Run/PRH 的更新不在其中。
+
+准入先在 `admission_pump.py:711` 调 `_lock_admission_resources`（`:82-105`：Host 按 id 升序
+`FOR UPDATE`，Device 按 id 升序 `FOR UPDATE`），`:714` 才调用 `_classify_dispatch_devices_sync`。
+因此不能把 busy 分类当作「准入不等待释放中 Device」的依据。
+
+不成环的实际依据：
+
+1. 准入泵只对 **QUEUED** 的 run 取 `FOR UPDATE SKIP LOCKED`（`admission_pump.py:156-168`），并在
+   同一事务内转 PRECHECK（`:173`）；job 在准入事务中才物化（`admission_pump.py:796` →
+   `plan_dispatcher_sync.py:1097`，INSERT 在 `:1163-1174`）。正在释放的 run 已有 job，不是 QUEUED，
+   泵不会选中它。
+2. `retry_plan_run_dispatch` 拒绝已有 job 的 run 重新准入（`precheck/runner.py:386-394`），因此
+   已有 job 的 run 不会回到 QUEUED/PRECHECK。
+3. 释放路径只对已有 job 的 `plan_run` 取 KEY SHARE（上面的 pending INSERT 外键）；准入对同一 run
+   若要取 `FOR UPDATE`，只能在 run 尚无 job 的 QUEUED/PRECHECK 阶段（`admission_pump.py:676-678`
+   的所有权 CAS）。两侧不会在同一 `plan_run` 行上以 `FOR UPDATE` ↔ KEY SHARE 交错成环。
+4. 跨不同 PlanRun 时两侧等待的是不同 `plan_run` 行，不构成环。
 
 **`plan_run` × `job_instance`（I2）**
 
@@ -279,6 +314,6 @@ Class: architecture
 | #2089 | 删除 `released_leases` 死字段（后端返回体/审计/日志 + 前端 `types.ts` 两侧） |
 | #2104 | 补锁等待观测面（等待 gauge + 持锁窗口 histogram + 告警），使「死锁改等待」可见 |
 | #2113 | 保留清理批大小设为可调旋钮（压窗口的杠杆）；否决「把 purge 移出事务」 |
-| #3723 §3.4.4 / #3728 | U3 统一入口加 Device 后补齐 I5（Job→Device→Lease→debt）；4 处释放调用方改序；回填本表；`test_device_return_lock_order_3728.py` |
+| #3723 §3.4.4 / #3728 | U3 统一入口加 Device 后补齐 I5（Job→Device→Lease；debt 在 Device 锁下，与 Lease 先后不限）；4 处释放调用方改序；回填本表；`test_device_return_lock_order_3728.py`。v1.7.7 按复核第 3 轮 F4 重写父聚合/准入依据与自有入口逐事务顺序 |
 | #1960 | 把「以共享行为单位枚举」写进审查总纲 §3 第 7 条 |
 | #1958 | 死锁指标与告警（本表的观测入口） |
