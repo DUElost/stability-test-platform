@@ -97,7 +97,7 @@ env -i PATH="$PATH" PYTHONPATH=. TESTING=1 JWT_SECRET_KEY=b6-isolated-test-only 
 
 真实浏览器（testing.md §4；隔离环境）：
 
-- 隔离 PG：`docker run postgres:16`，库名 `stp_u6_test`，地址 `172.17.0.2:5432`；
+- 隔离 PG：`docker run postgres:16`，库名 `stp_u6_test`，地址 `172.17.x.x:5432`；
   用 `backend/scripts/init_dev_db.py` 迁移建库并建 admin，seed 脚本写入 1 台设备、
   1 个 Plan、1 个 PlanRun/Job 与 2 条未关闭欠账。
 - 后端 `127.0.0.1:18080`（`ENV=dev`，显式 DATABASE_URL；未读 `.env.backend`），
