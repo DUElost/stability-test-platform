@@ -34,12 +34,35 @@ class FakeCmd:
 
     def __init__(self, answer=None):
         self.calls = []
+        self.timeouts = []
         self._answer = answer or (lambda argv: "")
 
     def run(self, argv, timeout=60, check=False):
         self.calls.append(argv)
+        self.timeouts.append(timeout)
         out = self._answer(argv) or ""
         return subprocess.CompletedProcess(args=argv, returncode=0, stdout=out, stderr="")
+
+
+class FakeFlakyCmd(FakeCmd):
+    """Raises RuntimeError on the first ``fail_first`` run() calls.
+
+    Mirrors ``Cmd.run`` translating subprocess.TimeoutExpired into
+    RuntimeError("timeout after Ns: ...") -- the 1.0.3 failure mode on
+    slow-enumeration hosts (first getvar answer 11-22s on 172.21.15.75).
+    """
+
+    def __init__(self, answer=None, fail_first=1):
+        super().__init__(answer)
+        self._fail_first = fail_first
+
+    def run(self, argv, timeout=60, check=False):
+        if self._fail_first > 0:
+            self._fail_first -= 1
+            self.calls.append(argv)
+            self.timeouts.append(timeout)
+            raise RuntimeError(f"timeout after {timeout}s: fastboot -s SERIAL {' '.join(argv)}")
+        return super().run(argv, timeout=timeout, check=check)
 
 
 def _write(path: Path, content: bytes = b"x"):
@@ -184,6 +207,44 @@ def test_probe_device_falls_back_to_fastboot(mod, monkeypatch):
 
     mode, dev, fb = mod.probe_device("SERIAL", {"adb_probe_seconds": 1}, mod.Progress(), [])
     assert mode == "fastboot" and dev is None and fb is fb_fake
+
+
+# ---------------------------------------------------------------------------
+# slow fastboot enumeration (1.0.4: first getvar answer can take 11-22s; the
+# 10s budget used to raise through the wait loops and strand the device in
+# fastboot -- runs 1043/1044/1045 on 172.21.15.75).
+# ---------------------------------------------------------------------------
+
+def test_probe_device_survives_slow_getvar(mod, monkeypatch):
+    adb_fake = FakeCmd(lambda argv: "")
+    fb_fake = FakeFlakyCmd(lambda argv: "current-slot: a", fail_first=1)
+    monkeypatch.setattr(mod, "adb", lambda serial, progress, log: adb_fake)
+    monkeypatch.setattr(mod, "fastboot", lambda serial, progress, log: fb_fake)
+    monkeypatch.setattr(mod.time, "sleep", lambda seconds: None)
+
+    mode, dev, fb = mod.probe_device("SERIAL", {"adb_probe_seconds": 1}, mod.Progress(), [])
+    assert mode == "fastboot" and fb is fb_fake
+    getvars = [t for c, t in zip(fb_fake.calls, fb_fake.timeouts) if c[:1] == ["getvar"]]
+    assert len(getvars) == 2, "one slow probe must be retried, not fatal"
+    assert all(t > 10 for t in getvars), "readiness probe must budget above slow-host latency"
+
+
+def test_wait_fastboot_survives_getvar_timeout(mod, monkeypatch):
+    fb_fake = FakeFlakyCmd(lambda argv: "current-slot: a", fail_first=2)
+    monkeypatch.setattr(mod, "fastboot", lambda serial, progress, log: fb_fake)
+    monkeypatch.setattr(mod.time, "sleep", lambda seconds: None)
+
+    fb = mod.wait_fastboot("SERIAL", mod.Progress(), [], 90)
+    assert fb is fb_fake
+    assert sum(1 for c in fb_fake.calls if c[:1] == ["getvar"]) == 3
+
+
+def test_boot_slot_probe_budget_above_slow_latency(mod, monkeypatch):
+    fb_fake = FakeCmd(lambda argv: "current-slot: a")
+    monkeypatch.setattr(mod, "fastboot", lambda serial, progress, log: fb_fake)
+
+    assert mod.boot_slot("SERIAL", mod.Progress(), []) == "a"
+    assert fb_fake.timeouts and all(t > 10 for t in fb_fake.timeouts)
 
 
 # ---------------------------------------------------------------------------

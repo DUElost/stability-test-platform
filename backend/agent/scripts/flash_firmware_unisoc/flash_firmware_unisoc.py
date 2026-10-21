@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 """Flash one Unisoc (SPRD) device to a firmware version prepared from a .pac.
 
+v1.0.4（2026-10-21）：fastboot `getvar current-slot` 的探测改为**非致命**——
+部分 host 上 fastboot 首次应答要 11–22s（172.21.15.75 实测，12+ 设备共用 USB
+hub 枚举慢），1.0.0–1.0.3 的 10s 单调用超时会把「枚举慢」变成抛异常：
+wait_fastboot/probe_device 的等待窗口形同虚设，run 1043/1044/1045 与 host 侧
+CLI 恢复都因此在刷写开始前中断、设备停在 fastboot。现在单调用超时 30s，且
+超时按「还没就绪」继续等，真实的预算由外层等待窗口决定（probe 的 fastboot
+窗口同步放宽到 90s）。
+
 v1.0.3（2026-10-19）：进度读取改为**字符流**。fastboot 的 "Sending sparse 'super'
 k/77" 是用 \r 覆盖同一行的，按行读只在进程退出时才拿到——v1.0.2 在 15.75 实测
 super 阶段 600s 内零打戳，仍会被 stall 误杀。改为 os.read 后按缓冲区最后一个
@@ -150,6 +158,20 @@ def adb(serial: str, progress: Progress, log: list) -> Cmd:
 
 def fastboot(serial: str, progress: Progress, log: list) -> Cmd:
     return Cmd(_FASTBOOT_BIN or _env("STP_FASTBOOT_PATH", "fastboot"), serial, progress, log)
+
+
+# Per-call budget for the readiness probe. 10s (1.0.0–1.0.3) is below the
+# observed first-answer latency on slow-enumeration hosts (11–22s on
+# 172.21.15.75), which turned "slow" into an exception instead of a retry.
+_GETVAR_TIMEOUT = 30
+
+
+def fastboot_getvar_ok(fb: Cmd) -> bool:
+    """One non-fatal ``getvar current-slot`` probe: True only if it answered 0."""
+    try:
+        return fb.run(["getvar", "current-slot"], timeout=_GETVAR_TIMEOUT).returncode == 0
+    except RuntimeError:
+        return False
 
 
 def resolve_fastboot() -> str:
@@ -302,8 +324,7 @@ def wait_fastboot(serial: str, progress: Progress, log: list, timeout: int) -> C
     fb = fastboot(serial, progress, log)
     deadline = time.time() + timeout
     while time.time() < deadline:
-        p = fb.run(["getvar", "current-slot"], timeout=10)
-        if p.returncode == 0:
+        if fastboot_getvar_ok(fb):
             return fb
         time.sleep(2)
     raise RuntimeError(f"fastboot device {serial} not available within {timeout}s")
@@ -340,9 +361,9 @@ def probe_device(serial: str, args: dict, progress: Progress, log: list):
             return "adb", dev, None
         time.sleep(3)
     fb = fastboot(serial, progress, log)
-    deadline = time.time() + 30
+    deadline = time.time() + 90
     while time.time() < deadline:
-        if fb.run(["getvar", "current-slot"], timeout=10).returncode == 0:
+        if fastboot_getvar_ok(fb):
             return "fastboot", None, fb
         time.sleep(2)
     raise RuntimeError(f"device {serial} is neither adb-reachable nor visible to fastboot")
@@ -350,7 +371,7 @@ def probe_device(serial: str, args: dict, progress: Progress, log: list):
 
 def boot_slot(serial: str, progress: Progress, log: list) -> str:
     fb = fastboot(serial, progress, log)
-    p = fb.run(["getvar", "current-slot"], timeout=10)
+    p = fb.run(["getvar", "current-slot"], timeout=_GETVAR_TIMEOUT)
     text = (p.stdout or "") + (p.stderr or "")
     m = re.search(r"current-slot:\s*(\S+)", text)
     return m.group(1) if m else ""
