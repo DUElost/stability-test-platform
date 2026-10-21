@@ -128,3 +128,32 @@ F1、F2 属清单内实施遗漏，F3 为真机材料欠项，F4 非阻塞。按
 - 追加 `powercycle_disarm@1.0.8`；1.0.7 `retired:true`（SHA 不变）；ONBOARDED
   最低版本、模板 pin、API/Worker 测试同步 1.0.8；setup 与 finish@1.1.0 未改。
 - 真机阶段二暂停；1.0.7 上如已跑真机只作对照，最终证据绑定 1.0.8 包 SHA。
+
+
+## v1.7.10 / 欠账转换后的完成重放（2026-10-21，§3.6.7）
+
+独立复核第 1 轮判定「需修改」，规划者把 backend 全量的 1 个失败分流为 U3×U5
+叠加出的集成缺口，本轮只做 §3.6.7，**不改脚本包**（1.0.8 的包 SHA
+`98cc16f8…` 已确认，`backend/agent/scripts/powercycle_disarm/` 未改动）：
+
+- **§3.6.7 第 1 条（只读重放）**：`agent_completion.complete_agent_job` 的已终态
+  分支里，历史 JOB 租约行不存在（U3 原地转换把租约改成 MAINTENANCE 且清空
+  `job_id`）时，改用「已接受终态载荷的摘要」识别重放：
+  `job.terminal_payload_digest` 与本次载荷摘要一致 → 按只读重放返回 200
+  （`idempotent=true`），不改任何事实、不记 `stale_job_completion_rejected`；
+  摘要不一致 → 沿用现行规则（先迟到 confirmed，不满足再 409）；历史租约存在但
+  令牌不符 → 仍 409。摘要为空（历史 job 未留摘要）时同样按现行规则处理。
+- **§3.6.7 第 2 条（测试清理）**：`test_review_u2_recycler_disarm_v15_3727.py` 的
+  清理改为先按**设备**删除租约再走共用清理，覆盖已转换、`job_id` 为空的欠账
+  租约行（原来按 `job_id` 删会漏掉它，随后删 device 触发
+  `device_leases_device_id_fkey`）。断言未删、未放宽。
+- **§3.6.7 第 3 条（回归）**：新增
+  `backend/tests/services/test_agent_completion_replay_u5_3730.py`（5 例，真实
+  `/api/v1/agent/jobs/{id}/complete` 入口）：同载荷重放 200 且无新增审计、事实
+  未变；不同载荷仍 409 `STALE_COMPLETION_TOKEN`；欠账转换后令牌不符但载荷相同
+  的重放同样只读放行且不改事实、不记审计；历史租约仍在时令牌不符仍 409；
+  迟到 confirmed 仍能关掉同源欠账。
+- **变异自证**：撤回第 1 条 → 上述回归与 U2 用例共 3 failed；撤回第 2 条（清理）→
+  U2 用例 1 failed（IntegrityError）；恢复后 15 passed。
+
+真机阶段二仍暂停；本轮不产出真机证据。
