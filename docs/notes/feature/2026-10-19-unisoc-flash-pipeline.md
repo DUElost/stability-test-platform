@@ -7,9 +7,9 @@ Class: feature
 
 新增展锐平台整包刷机能力，形态对齐既有 MTK `flash_firmware`：
 
-1. **脚本族** `backend/agent/scripts/flash_firmware_unisoc/`（登记到 v1.0.4）。
+1. **脚本族** `backend/agent/scripts/flash_firmware_unisoc/`（登记到 v1.0.5）。
    传输走 `fastboot -s <serial>`，不依赖 `sprd_usb` 内核模块，也不需要按键进 BSL；
-   同 host 多台天然可并行。四处运行期加固都来自真机：
+   同 host 多台天然可并行。五处运行期加固都来自真机：
    - **fastboot 预检**（1.0.1）：进 bootloader 前先定位 fastboot，找不到就失败，
      避免把设备留在 fastboot 而 agent 无法自救；
    - **恢复模式**（1.0.2）：启动时 adb 不可见但 fastboot 能看到 serial → 用显式
@@ -23,6 +23,11 @@ Class: feature
     run 1043/1044/1045 与 host 侧 CLI 恢复都在刷写开始前中断、设备滞留 fastboot
     （#3758 真机证据）。超时现在只算「还没就绪」，预算交给外层等待窗口
     （probe 的 fastboot 窗口 30s→90s）。
+  - **reboot 幂等收尾**（1.0.5）：全部写入完成后 `fastboot reboot` 在慢枚举
+    host 上要等设备离开总线才返回，旧 20s 预算把「已写完」判成失败、批量整盘
+    重刷（15.75 实测 12:37：super/wipe 全部落盘后 `timeout after 20s: reboot`）。
+    现在 reboot 超时先探一次设备是否还停在 fastboot：离开总线＝reboot 已生效，
+    继续 adb 回读核验；仍在＝显式重试一次，再失败才致命。
 2. **固件产物** 由 `tools/dev/prepare_unisoc_firmware.py` 从 PAC 生成，落
    `{NFS}/firmware/<family>/<version>/`（manifest.json + images/plan.json +
    raw 镜像），族级 `latest.json` 按 `ro.product.model` 分流，与 MTK 固件同一套指针约定。
@@ -61,10 +66,11 @@ Class: feature
   latest.json 变体、manifest 校验、fastboot 预检、adb/fastboot 探测、刷写顺序、
   preserve 过滤、SPL 判定、wipe）、`tests/test_prepare_unisoc_firmware.py`（3 例，
   钉住 sparse FILL/DONT_CARE/RAW 语义）、既有模板校验全绿。
-- v1.0.4 回归（2026-10-21）：套件扩到 16 例——`FakeFlakyCmd` 复刻
+- v1.0.4/1.0.5 回归（2026-10-21）：套件扩到 18 例——`FakeFlakyCmd` 复刻
   `Cmd.run` 超时抛 `RuntimeError` 的真实形态，钉住 ① `probe_device` 首次
   getvar 超时后仍能在窗口内落回 fastboot 模式；② `wait_fastboot` 连续两次
-  超时不致命；③ `boot_slot` 单调用预算必须高于 10s。模板 pin 同步 1.0.4，
+  超时不致命；③ `boot_slot` 单调用预算必须高于 10s；④ reboot 超时 + 设备已
+  离开总线＝不重发；⑤ reboot 超时 + 设备仍在 fastboot＝重试一次。模板 pin 同步 head，
   `test_pipeline_template_script_pins_2865`（7 例）与 `check_script_packages`
   / `check_tool_manifest --base origin/main` 全绿。
 

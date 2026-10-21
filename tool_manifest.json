@@ -580,6 +580,14 @@
           "retired": false,
           "script": "flash_firmware_unisoc.py",
           "version": "1.0.4"
+        },
+        {
+          "artifact": "packages/flash_firmware_unisoc/1.0.5.tar.gz",
+          "package_sha256": "38be5388e3355b8ca07b58728b05c4c17c749bb20ebb0577f310e7d41353381c",
+          "python": null,
+          "retired": false,
+          "script": "flash_firmware_unisoc.py",
+          "version": "1.0.5"
         }
       ]
     },

@@ -248,6 +248,45 @@ def test_boot_slot_probe_budget_above_slow_latency(mod, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# reboot handover (1.0.5: 'fastboot reboot' can time out on slow hosts AFTER
+# every partition is written -- the teardown, not the flash, eats the budget;
+# the 20s budget turned a complete flash into a retried whole re-flash).
+# ---------------------------------------------------------------------------
+
+def test_reboot_landed_when_device_left_bus(mod, monkeypatch):
+    calls = []
+
+    class GoneAfterReboot:
+        def run(self, argv, timeout=60, check=False):
+            calls.append((argv[0], timeout))
+            if argv[0] == "reboot":
+                raise RuntimeError("timeout after %ds: fastboot reboot" % timeout)
+            return subprocess.CompletedProcess(args=argv, returncode=1,
+                                               stdout="", stderr="no fastboot device")
+
+    monkeypatch.setattr(mod, "fastboot", lambda serial, progress, log: GoneAfterReboot())
+    mod.reboot_out_of_fastboot(GoneAfterReboot(), mod.Progress(), [])
+    assert [c[0] for c in calls] == ["reboot", "getvar"]
+    assert calls[0][1] >= 30 and calls[1][1] > 10
+
+
+def test_reboot_retried_when_still_resident(mod, monkeypatch):
+    calls = []
+
+    class StillResident:
+        def run(self, argv, timeout=60, check=False):
+            calls.append((argv[0], timeout))
+            if argv[0] == "reboot" and sum(1 for a, _ in calls if a == "reboot") == 1:
+                raise RuntimeError("timeout after %ds: fastboot reboot" % timeout)
+            return subprocess.CompletedProcess(args=argv, returncode=0,
+                                               stdout="current-slot: a", stderr="")
+
+    monkeypatch.setattr(mod, "fastboot", lambda serial, progress, log: StillResident())
+    mod.reboot_out_of_fastboot(StillResident(), mod.Progress(), [])
+    assert [c[0] for c in calls] == ["reboot", "getvar", "reboot"]
+
+
+# ---------------------------------------------------------------------------
 # SPL decision (auto = compare, never silently rewrite boot0)
 # ---------------------------------------------------------------------------
 

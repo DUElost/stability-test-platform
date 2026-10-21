@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 """Flash one Unisoc (SPRD) device to a firmware version prepared from a .pac.
 
+v1.0.5（2026-10-21）：`fastboot reboot` 按「幂等收尾」处理——写满 24 分区并
+擦除后，reboot 命令在慢枚举 host 上要等设备从总线消失才返回，单调用超时
+（1.0.0–1.0.4 的 20s）会把**已经写完**的刷写判成失败，批量重试就整盘重刷
+（15.75 实测：12:37 super/wipe 全部落盘后 `timeout after 20s: ... reboot`）。
+现在 reboot 超时先探一次设备是否还停在 fastboot：已离开总线＝reboot 已生效，
+继续走 adb 回读核验；仍在 fastboot＝显式重试一次，再失败才致命。
+
 v1.0.4（2026-10-21）：fastboot `getvar current-slot` 的探测改为**非致命**——
 部分 host 上 fastboot 首次应答要 11–22s（172.21.15.75 实测，12+ 设备共用 USB
 hub 枚举慢），1.0.0–1.0.3 的 10s 单调用超时会把「枚举慢」变成抛异常：
@@ -172,6 +179,23 @@ def fastboot_getvar_ok(fb: Cmd) -> bool:
         return fb.run(["getvar", "current-slot"], timeout=_GETVAR_TIMEOUT).returncode == 0
     except RuntimeError:
         return False
+
+
+def reboot_out_of_fastboot(fb: Cmd, progress: Progress, log: list) -> None:
+    """Leave fastboot for boot, tolerating hosts whose USB teardown outlasts
+    the command budget: a reboot that timed out may still have landed (the
+    device dropped off the bus). Probe once; retry the reboot only when the
+    device is verifiably still resident. A second failure stays fatal."""
+    try:
+        fb.run(["reboot"], timeout=60)
+        return
+    except RuntimeError as exc:
+        progress.stamp(stage="reboot_slow", note=str(exc)[:160])
+    if fastboot_getvar_ok(fb):
+        # still resident -> the reboot did not land; retry once, now fatal on error
+        fb.run(["reboot"], timeout=60)
+    else:
+        log.append({"note": "reboot timed out but device left fastboot; assuming rebooted"})
 
 
 def resolve_fastboot() -> str:
@@ -661,7 +685,7 @@ def run(args: dict, serial: str, progress: Progress, log: list) -> dict:
         metrics.update(wipe(serial, progress, log, args))
 
     progress.stamp(stage="reboot")
-    fb.run(["reboot"], timeout=20)
+    reboot_out_of_fastboot(fb, progress, log)
     boot = wait_boot(serial, progress, log, int(args.get("verify_wait_seconds", 300)))
     metrics["boot"] = boot
 
