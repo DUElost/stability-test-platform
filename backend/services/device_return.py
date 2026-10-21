@@ -16,6 +16,18 @@ Debt leases do **not** auto-expire: protection is ``lease_type=MAINTENANCE`` +
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+from sqlalchemy.orm.attributes import flag_modified
+from backend.models.host import Host
+from backend.models.plan_run import PlanRun
+from backend.models.audit import AuditLog
+from backend.core.job_timeout_config import HOST_HEARTBEAT_TIMEOUT_SECONDS, running_heartbeat_timeout_seconds, abort_reap_clock
+from backend.agent.contracts.device_return import (
+    disarm_guard_deadline, freeze_disarm_guard, receive_disarm_evidence, select_disarm_steps,
+    probe_result_policy, step_version_of, PLATFORM_INTERRUPTED_EXIT_CODES,
+)
+
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -47,6 +59,7 @@ from backend.agent.contracts.device_return import (
     RETURN_SOURCE_OVERRIDE,
     RETURN_SOURCE_STOCK,
     family_for_footprint_script,
+    probe_entry_response,
     script_name_from_step,
 )
 from backend.core.metrics import (
@@ -960,17 +973,20 @@ def apply_discharge_sync(
 
     discharged_families: list[str] = []
     rejected_families: list[dict] = []
+    accepted_count = 0
     for family, entry in family_results.items():
         if family not in FAMILY_STEPS:
             continue
         result = str(entry.get("result") or "")
         policy = evaluate_probe_entry(device, family, entry, token_valid=True)
-        if result in (DISARM_RESULT_CONFIRMED, DISARM_RESULT_READBACK_FAILED) and not policy["trusted"]:
+        decision = probe_entry_response(family, entry, policy, entry_point="discharge")
+        if decision["status_code"] == 422:
             audit_unverified_probe(db, resource_id=device_id, family=family, entry=entry, policy=policy)
-            rejected_families.append({"code": "UNVERIFIED_PROBE_RESULT", "family": family, **policy})
+            rejected_families.append(decision)
             continue
         if policy["trusted"]:
             result = policy["result"]
+        accepted_count += 1
         onboarded = _family_onboarded(family)
         family_state = map_disarm_result_to_family_state(result, onboarded=onboarded)
         _set_family_return_state(
@@ -992,6 +1008,10 @@ def apply_discharge_sync(
             )
             discharged_families.append(family)
 
+    if rejected_families and not accepted_count:
+        return {"ok": True, "discharged_families": [], "debt_lease_released": False,
+                "open_debt_count": len(_open_debts_sync(db, device_id)),
+                "fencing_token": lease.fencing_token, "rejected_families": rejected_families}
     released = _maybe_release_debt_lease_sync(db, device, now=now)
     open_rows = _open_debts_sync(db, device_id)
     _recompute_return_state_from_open_debts(device, open_rows, now=now)
@@ -1204,11 +1224,12 @@ async def try_apply_late_confirmed(
     verified = []
     for family in confirmed:
         policy = evaluate_probe_entry(device, family, results[family], token_valid=True, job=job)
-        if policy["trusted"] and policy["result"] == DISARM_RESULT_CONFIRMED:
+        decision = probe_entry_response(family, results[family], policy, entry_point="late")
+        if not decision["ignore"] and policy["trusted"] and policy["result"] == DISARM_RESULT_CONFIRMED:
             verified.append(family)
         else:
             await db.run_sync(lambda sync_db, family=family, policy=policy: audit_unverified_probe(
-                sync_db, resource_id=job_id, family=family, entry=results[family], policy=policy,
+                sync_db, resource_id=job_id, family=family, entry=results[family], policy=policy, resource_type="job_instance",
             ))
     if not verified:
         return {"ok": True, "closed_count": 0, "debt_lease_released": False,
@@ -1534,8 +1555,6 @@ def refresh_device_return_debt_gauges(db: Session) -> None:
 # agent_completion (C5); AsyncSession callers use run_sync for identical reads.
 def manifest_package_sha(script_name: str, version: str) -> str | None:
     """Resolve append-only identity, including retired historical versions."""
-    import json
-    from pathlib import Path
 
     try:
         doc = json.loads((Path(__file__).resolve().parents[2] / "tool_manifest.json").read_text())
@@ -1552,8 +1571,6 @@ def _u8_timestamp(value: Any) -> float | None:
 
 
 def guard_owner_valid(db: Session, job: JobInstance, now: datetime, guard: Mapping[str, Any]) -> bool:
-    from backend.models.host import Host
-    from backend.core.job_timeout_config import HOST_HEARTBEAT_TIMEOUT_SECONDS
 
     # Columns bypass the ORM identity map: each invocation sees latest committed
     # facts under READ COMMITTED after acquiring the job row lock.
@@ -1568,7 +1585,8 @@ def guard_owner_valid(db: Session, job: JobInstance, now: datetime, guard: Mappi
         DeviceLease.status == LeaseStatus.ACTIVE.value,
     )).first()
     stamp = now.timestamp()
-    return bool(row and row.job_id == job.id and row.lease_type == LeaseType.JOB.value
+    return bool(row and row.boot_id and row.last_agent_instance_id
+                and row.job_id == job.id and row.lease_type == LeaseType.JOB.value
                 and row.host_id == job.host_id == row.device_host_id
                 and row.fencing_token == guard.get("fencing_token")
                 and row.agent_instance_id == guard.get("agent_instance_id") == row.last_agent_instance_id
@@ -1579,8 +1597,9 @@ def guard_owner_valid(db: Session, job: JobInstance, now: datetime, guard: Mappi
 
 
 def job_guard_deadline(db: Session, job: JobInstance, now: datetime) -> datetime | None:
-    from backend.agent.contracts.device_return import disarm_guard_deadline
 
+    if job.status != "RUNNING":
+        return None
     guard = job.disarm_guard
     if not isinstance(guard, Mapping):
         return None
@@ -1590,6 +1609,7 @@ def job_guard_deadline(db: Session, job: JobInstance, now: datetime) -> datetime
     stamp = disarm_guard_deadline(
         guard, now=now.timestamp(), owner_valid=guard_owner_valid(db, job, now, guard),
         execution_heartbeat_at=_u8_timestamp(job.last_execution_heartbeat_at),
+        execution_heartbeat_timeout_seconds=running_heartbeat_timeout_seconds(job),
     )
     return datetime.fromtimestamp(stamp, timezone.utc) if stamp is not None else None
 
@@ -1598,14 +1618,12 @@ def accept_job_disarm_evidence(
     db: Session, job: JobInstance, evidence: Mapping[str, Any], *,
     host_id: str, agent_instance_id: str, now: datetime, via_coordinator: bool,
 ) -> dict | None:
-    from backend.agent.contracts.device_return import (
-        freeze_disarm_guard, receive_disarm_evidence, select_disarm_steps,
-    )
-    from backend.core.job_timeout_config import abort_reap_clock
-    from backend.models.host import Host
-    from backend.models.plan_run import PlanRun
 
     if job.status != "RUNNING" or job.host_id != host_id:
+        return None
+    if evidence.get("protocol") != 1 or evidence.get("phase") not in ("queue", "execute"):
+        return None
+    if type(evidence.get("seq")) is not int or evidence["seq"] < 0:
         return None
     guard = job.disarm_guard
     if guard is None:
@@ -1637,7 +1655,15 @@ def accept_job_disarm_evidence(
     guard = rebound
     # No protection budget can be recreated after restart or token rotation.
     guard = receive_disarm_evidence(guard, evidence, now=now.timestamp(), via_coordinator=via_coordinator)
+    if guard.get("phase") is None:
+        return None
     job.disarm_guard = guard
+    flag_modified(job, "updated_at")  # stage evidence is not business progress
+    if guard.get("phase") == "execute" and guard.get("progress_seen_at") == now.timestamp():
+        # A newly accepted real script PROGRESS also proves the executor is
+        # alive. A coordinator heartbeat carrying only an old marker does not.
+        job.last_execution_heartbeat_at = now
+        job.last_progress_at = now
     return guard
 
 
@@ -1645,7 +1671,6 @@ def evaluate_probe_entry(
     device: Device, family: str, entry: Mapping[str, Any], *,
     token_valid: bool, job: JobInstance | None = None,
 ) -> dict[str, Any]:
-    from backend.agent.contracts.device_return import probe_result_policy, step_version_of
 
     evidence = entry.get("evidence")
     evidence = evidence if isinstance(evidence, Mapping) else {}
@@ -1666,25 +1691,23 @@ def evaluate_probe_entry(
     )
 
 
-def audit_unverified_probe(db: Session, *, resource_id: int, family: str, entry: Mapping, policy: Mapping) -> None:
+def audit_unverified_probe(db: Session, *, resource_id: int, family: str, entry: Mapping, policy: Mapping, resource_type: str = "device") -> None:
     """Independent diagnostic audit survives a 422 business rollback."""
-    from backend.models.audit import AuditLog
-    from backend.core.metrics import record_disarm_result
 
     with Session(bind=db.get_bind()) as diagnostic:
         diagnostic.add(AuditLog(
-            action="unverified_probe_result", resource_type="device_return", resource_id=str(resource_id),
+            action="unverified_probe_result", resource_type=resource_type, resource_id=str(resource_id),
             username="agent", details={"family": family, "raw": dict(entry), **dict(policy)},
         ))
         diagnostic.commit()
-    record_disarm_result(family, "unverified_probe_result")
+    # Diagnostic counter wiring is pending Planner scope clarification:
+    # stp_disarm_result_total is reserved for the six formal outcomes.
 
 
 def verify_job_results(
     db: Session, job: JobInstance, reported: Mapping[str, Mapping[str, Any]],
     derived: Mapping[str, Mapping[str, Any]], *, token_valid: bool,
 ) -> dict[str, dict]:
-    from backend.agent.contracts.device_return import PLATFORM_INTERRUPTED_EXIT_CODES
 
     device = db.execute(select(Device).where(Device.id == job.device_id)
                         .execution_options(populate_existing=True)).scalars().one()
@@ -1695,13 +1718,13 @@ def verify_job_results(
         current = dict(entry)
         if current.get("exit_code") in PLATFORM_INTERRUPTED_EXIT_CODES:
             current["result"] = DISARM_RESULT_INCOMPLETE
-        elif family in ONBOARDED:
+        else:
             policy = evaluate_probe_entry(device, family, current, token_valid=token_valid, job=job)
-            if policy["trusted"]:
-                current["result"] = policy["result"]
-            elif current.get("result") in (DISARM_RESULT_CONFIRMED, DISARM_RESULT_READBACK_FAILED):
-                audit_unverified_probe(db, resource_id=job.id, family=family, entry=current, policy=policy)
+            if probe_entry_response(family, current, policy, entry_point="complete")["use_trace"]:
+                audit_unverified_probe(db, resource_id=job.id, family=family, entry=current, policy=policy, resource_type="job_instance")
                 current = dict(derived.get(family) or {"result": DISARM_RESULT_NOT_EXECUTED})
+            elif policy["trusted"]:
+                current["result"] = policy["result"]
             # Non-privileged values carry evidence but do not close a debt.
         results[family] = current
     return results

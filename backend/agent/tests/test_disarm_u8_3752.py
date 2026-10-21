@@ -120,3 +120,267 @@ def test_extend_only_and_execute_heartbeat_without_progress_do_not_protect():
     assert disarm_guard_deadline(g, now=1, owner_valid=True, execution_heartbeat_at=1) is None
     g = receive_disarm_evidence(guard(), evidence(1, "execute"), now=0, via_coordinator=True)
     assert disarm_guard_deadline(g, now=1, owner_valid=True, execution_heartbeat_at=1) is None
+
+
+def test_coordinator_60s_configuration_still_delivers_every_30s(monkeypatch):
+    from backend.agent.coordinator import HostRunCoordinator
+    from backend.agent import coordinator as module
+    from types import SimpleNamespace
+
+    clock = [0.0]
+    received = []
+    coordinator = HostRunCoordinator("http://test-only", "test-host", "test-instance")
+    coordinator._interval = 60
+    coordinator.register_plan_run_host(1, 1)
+    coordinator.publish_disarm_evidence(1, {"phase": "queue", "seq": 1})
+
+    class FiniteWait:
+        def wait(self, duration):
+            clock[0] += duration
+        def clear(self):
+            pass
+    coordinator._wake_event = FiniteWait()
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+    def post(*args, **kwargs):
+        assert kwargs["json"]["jobs"][0]["disarm_evidence"]["phase"] == "queue"
+        received.append(clock[0])
+        clock[0] += 10  # simulated HTTP duration, included in the pacing budget
+        if len(received) == 4:
+            coordinator._stop_event.set()
+        return SimpleNamespace(raise_for_status=lambda: None, json=lambda: {"data": {"disarm_protocol": 1}})
+    monkeypatch.setattr(module.requests, "post", post)
+    coordinator._loop()
+    assert len(received) == 4
+    assert all(b-a <= 30 for a, b in zip(received, received[1:], strict=False))
+
+
+def interrupted_engine_payload(monkeypatch, tmp_path, kind, family="sleep"):
+    """Real lifecycle→script action→pump→runner; only process/IO is replaced."""
+    import io
+    from types import SimpleNamespace
+    from backend.agent import pipeline_engine as module, pipeline_runner
+    from backend.agent.operation_scheduler import OperationScheduler
+
+    setup, finish = ("sleep_setup", "sleep_finish") if family == "sleep" else ("powercycle_setup", "powercycle_disarm")
+    pipeline = {"lifecycle": {"init": [{"step_id": "setup", "action": f"script:{setup}"}],
+        "teardown": [{"step_id": "disarm", "action": f"script:{finish}", "version": "1.0.8",
+                      "timeout_seconds": 1 if kind == "wall_clock" else 660, "stall_seconds": 1}]}}
+    entry = SimpleNamespace(script_type="python", package_sha256="b"*64)
+    registry = SimpleNamespace(resolve=lambda *a: entry)
+    engine = module.PipelineEngine(SimpleNamespace(adb_path="stub-adb"), "test-serial", 1,
+        log_dir=str(tmp_path), script_registry=registry, nfs_root="", operation_scheduler=OperationScheduler(max_concurrent=1), device_id=1)
+    monkeypatch.setattr(engine, "_verify_device_lease", lambda: None)
+    original_action = engine._run_script_action
+    monkeypatch.setattr(engine, "_run_script_action", lambda ctx, step:
+        module.StepResult(success=True, exit_code=0) if ctx.phase == "init" else original_action(ctx, step))
+    monkeypatch.setattr(module, "resolve_script_path", lambda e: SimpleNamespace(path="test-only.py", cwd=str(tmp_path), source="package"))
+    monkeypatch.setattr(module, "inject_required_tools", lambda *a: None)
+    monkeypatch.setattr(module, "_remember_process_group", lambda proc: None)
+    monkeypatch.setattr(module, "_popen_isolation_kwargs", lambda: {})
+    monkeypatch.setattr(module, "_IS_WINDOWS", True)  # StringIO has no OS pipe descriptor
+    class Process:
+        pid = 99999999
+        returncode = 1 if kind == "script_fail" else None
+        stdout = io.StringIO('{"success":true,"disarm_result":"confirmed","readback":"clear"}')
+        stderr = io.StringIO("")
+        def poll(self):
+            return self.returncode
+        def wait(self, timeout=None):
+            if self.returncode is None:
+                self.returncode = -15
+            return self.returncode
+    monkeypatch.setattr(module.subprocess, "Popen", lambda *a, **k: Process())
+    monkeypatch.setattr(module, "_terminate_process_tree", lambda proc, **k: setattr(proc, "returncode", -15))
+    real_pump = module._pump_process
+    clock = iter(range(0, 20, 2))  # finite virtual clock, no host signals or long sleep
+    monkeypatch.setattr(module, "_pump_process", lambda *a, **k: real_pump(*a, **k, now=lambda: next(clock)))
+    monkeypatch.setattr(pipeline_runner, "PipelineEngine", lambda **kwargs: engine)
+    monkeypatch.setattr(pipeline_runner, "get_run_log_dir", lambda _: str(tmp_path))
+    result = pipeline_runner.execute_pipeline_run(pipeline, 1, "test-serial", engine._adb,
+        "http://test-only", "test-host", operation_scheduler=engine._scheduler, device_id=1)
+    return pipeline, result
+
+
+@pytest.mark.parametrize("kind,code", [("wall_clock", 124), ("stall", 125)])
+def test_controlled_pump_interruption_survives_real_engine_and_runner(monkeypatch, tmp_path, kind, code):
+    _, result = interrupted_engine_payload(monkeypatch, tmp_path, kind)
+    assert result["status"] == "FINISHED"
+    assert result["disarm_results"]["sleep"]["result"] == "incomplete"
+    assert result["disarm_results"]["sleep"]["exit_code"] == code
+
+
+@pytest.mark.parametrize("entry_point,status,use_trace,ignore", [
+    ("complete", 200, True, False), ("late", 200, False, True),
+    ("discharge", 422, False, False), ("init_check", 422, False, False),
+])
+def test_four_entry_shared_policy_including_future_init(entry_point, status, use_trace, ignore):
+    from backend.agent.contracts.device_return import probe_entry_response
+    item = entry(permission_model="unknown")
+    decision = probe_entry_response("power-cycle", item, policy(item), entry_point=entry_point)
+    assert decision["status_code"] == status
+    assert decision["use_trace"] is use_trace
+    assert decision["ignore"] is ignore
+    assert decision["code"] == "UNVERIFIED_PROBE_RESULT"
+    assert decision["family"] == "power-cycle"
+    assert decision["expected"] and decision["observed"]
+
+
+@pytest.mark.parametrize("changed", [None, "platform", "model", "permission_model", "autotesttool_apk_sha256", "package_sha256", "boot_completed"])
+def test_agent_aggregation_recomputes_raw_output_from_test_combination(monkeypatch, changed):
+    import json
+    from types import SimpleNamespace
+    from backend.agent.contracts.device_return import ONBOARDED
+    from backend.agent.tests.test_device_return_u1_3726 import _bare_engine
+
+    combination = dict(COMBO)
+    monkeypatch.setitem(ONBOARDED, "power-cycle", {**ONBOARDED["power-cycle"], "verified_device_classes": [combination]})
+    engine = _bare_engine()
+    engine._script_registry = SimpleNamespace(resolve=lambda *a: SimpleNamespace(package_sha256="b"*64))
+    platform = "OTHER" if changed == "platform" else COMBO["platform"]
+    model = "TEST-MODEL" if changed == "model" else COMBO["model"]
+    monkeypatch.setattr(engine, "_disarm_device_identity", lambda: (platform, model))
+    evidence = {"kind": "ok", "boot_completed": "1", "permission_model": "root", "autotesttool_apk_sha256": "a"*64}
+    if changed in evidence:
+        evidence[changed] = "unknown" if changed == "permission_model" else "different"
+    if changed == "package_sha256":
+        engine._script_registry = SimpleNamespace(resolve=lambda *a: SimpleNamespace(package_sha256="c"*64))
+    engine._record_disarm_for_step(STEP, started=True, success=True, exit_code=0,
+        output=json.dumps({"success": True, "disarm_result": "confirmed", "mode": "disarm", "readback": "clear", "evidence": evidence}))
+    reported = engine._disarm_results["power-cycle"]
+    assert reported["result"] == ("confirmed" if changed is None else "executed_unverified")
+    assert reported["evidence"]["script_name"] == "powercycle_disarm"
+    assert reported["evidence"]["script_version"] == "1.0.8"
+
+
+@pytest.mark.parametrize("queued_seconds", [61, 6600, 7201])
+def test_eleven_real_scheduler_waiters_share_one_permit_and_keep_execution_window(monkeypatch, queued_seconds):
+    import threading
+    from types import SimpleNamespace
+    from backend.agent import pipeline_engine as module
+    from backend.agent.operation_scheduler import OperationScheduler
+    from backend.agent.coordinator import HostRunCoordinator
+
+    clock = [0.0]
+    scheduler = OperationScheduler(max_concurrent=1)
+    holder = scheduler.acquire(999)
+    ready = threading.Event()
+    lock = threading.Lock()
+    waiting = set()
+    windows = []
+    errors = []
+    results = []
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+
+    class SharedScheduler:
+        def acquire(self, device_id, timeout):
+            with lock:
+                waiting.add(device_id)
+                if len(waiting) == 11:
+                    clock[0] = queued_seconds
+                    holder.release()
+                    ready.set()
+            assert ready.wait(2), "finite barrier: all eleven workers must reach permit wait"
+            return scheduler.acquire(device_id, timeout=timeout)
+    coord = HostRunCoordinator("http://unused-test-only", "test-host", "test-instance")
+    engines = []
+    for n in range(11):
+        engine = module.PipelineEngine(SimpleNamespace(adb_path="stub"), f"test-{n}", n+1,
+            nfs_root="", operation_scheduler=SharedScheduler(), coordinator=coord, device_id=n+1)
+        engine._footprint_families = {"sleep"}
+        def action(ctx, step):
+            with lock:
+                windows.append(step["timeout_seconds"])
+            return module.StepResult(success=True, exit_code=0)
+        monkeypatch.setattr(engine, "_run_script_action", action)
+        engines.append(engine)
+    def worker(engine):
+        try:
+            result = engine._execute_teardown_best_effort([
+                {"step_id": "sleep-finish", "action": "script:sleep_finish", "timeout_seconds": 660}])
+            with lock:
+                results.append(result.metadata["disarm_results"]["sleep"]["result"])
+        except Exception as error:
+            with lock:
+                errors.append(error)
+    threads = [threading.Thread(target=worker, args=(engine,)) for engine in engines]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(3)
+    assert all(not thread.is_alive() for thread in threads)
+    assert not errors, errors
+    assert len(results) == 11
+    if queued_seconds <= 7200:
+        assert len(windows) == 11
+        assert all(659 < window <= 660 for window in windows)
+        assert set(results) == {"executed_unverified"}
+    else:
+        assert not windows
+        assert set(results) == {"incomplete"}
+
+
+def test_permit_starts_without_control_plane_ack_and_terminal_is_durable(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from backend.agent.pipeline_engine import PipelineEngine, StepResult
+    from backend.agent.operation_scheduler import OperationScheduler
+    from backend.agent import api_client
+    from backend.agent.registry.local_db import LocalDB
+    import requests
+
+    store = LocalDB()
+    store.initialize(str(tmp_path / "agent.sqlite"))
+    store.save_active_job(1, 1, "test-token", "test-serial")
+    engine = PipelineEngine(SimpleNamespace(adb_path="stub"), "test-serial", 1, nfs_root="",
+        api_url="http://unreachable-test-only", fencing_token="test-token", local_db=store,
+        operation_scheduler=OperationScheduler(max_concurrent=1), device_id=1)
+    engine._footprint_families = {"sleep"}
+    calls = []
+    def unavailable(*args, **kwargs):
+        calls.append("http")
+        raise requests.ConnectionError("test-only unreachable")
+    monkeypatch.setattr(api_client, "_post_with_retry", unavailable)
+    # Any synchronous lease/permit acknowledgement would fail this assertion.
+    monkeypatch.setattr(requests, "post", unavailable)
+    def action(ctx, step):
+        assert not calls
+        calls.append("disarm")
+        return StepResult(success=True, exit_code=0)
+    monkeypatch.setattr(engine, "_run_script_action", action)
+    result = engine._execute_teardown_best_effort([{"step_id": "finish", "action": "script:sleep_finish", "timeout_seconds": 660}])
+    api_client.complete_job("http://unreachable-test-only", 1,
+        {"status": "FINISHED", "disarm_results": result.metadata["disarm_results"]}, "test-token", local_db=store)
+    assert calls == ["disarm", "http"]
+    assert store.get_pending_terminals()[0]["payload"]["disarm_results"]["sleep"]["result"] == "executed_unverified"
+    store.close()
+
+
+def test_localdb_preserves_deadlines_and_sequences_across_re_registration_and_restart(tmp_path):
+    from backend.agent.registry.local_db import LocalDB
+    path = str(tmp_path / "agent.sqlite")
+    first = LocalDB()
+    first.initialize(path)
+    first.save_active_job(1, 1, "old-test-token")
+    state = {"seq": 7, "guard": guard(), "evidence": evidence(7)}
+    first.save_disarm_state(1, state)
+    first.save_active_job(1, 1, "rotated-test-token")
+    first.close()
+    second = LocalDB()
+    second.initialize(path)
+    assert second.load_disarm_state(1) == state
+    second.close()
+
+
+def test_old_controller_uses_v10_without_inventing_queue_protection(monkeypatch):
+    from types import SimpleNamespace
+    from backend.agent.pipeline_engine import PipelineEngine, StepResult
+    from backend.agent.coordinator import HostRunCoordinator
+    from backend.agent.operation_scheduler import OperationScheduler
+    coordinator = HostRunCoordinator("http://test-only", "test-host", "test-instance")
+    coordinator.disarm_protocol = 0
+    engine = PipelineEngine(SimpleNamespace(adb_path="stub"), "test-serial", 1, nfs_root="",
+        coordinator=coordinator, operation_scheduler=OperationScheduler(max_concurrent=1), device_id=1)
+    engine._footprint_families = {"sleep"}
+    monkeypatch.setattr(engine, "_run_script_action", lambda *a: StepResult(success=True, exit_code=0))
+    engine._execute_teardown_best_effort([{"step_id": "finish", "action": "script:sleep_finish", "timeout_seconds": 660}])
+    assert engine._disarm_tail is None
+    assert coordinator.register_job(1).disarm_evidence is None

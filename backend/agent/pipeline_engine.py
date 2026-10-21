@@ -9,6 +9,12 @@ init -> patrol loop -> teardown.
 """
 
 
+from .device_discovery import discover_devices
+from .device_platform import detect_device_platform
+from .contracts.device_return import (
+    disarm_execution_budget, probe_result_policy, PLATFORM_INTERRUPTED_EXIT_CODES,
+    DISARM_QUEUE_SECONDS, DISARM_JOB_MAX_SECONDS,
+)
 import codecs
 
 import hashlib
@@ -519,6 +525,7 @@ def _pump_process(
     stall_seconds: Optional[float],
     on_progress: Optional[Callable[[], None]] = None,
     on_progress_seq: Optional[Callable[[int], None]] = None,
+    absolute_deadline: Optional[Callable[[], float]] = None,
     log_paths: Optional[Tuple[str, str]] = None,
     terminate_grace_seconds: float = 2.0,
     now: Callable[[], float] = time.monotonic,
@@ -677,6 +684,9 @@ def _pump_process(
     reason: Optional[str] = None
     while proc.poll() is None:
         tick = now()
+        if absolute_deadline is not None and tick >= absolute_deadline():
+            reason = "wall_clock"
+            break
         if wall_clock is not None and (tick - started) >= wall_clock:
             reason = "wall_clock"
             break
@@ -1819,6 +1829,11 @@ class PipelineEngine:
                 tail["queue_remaining"] = max(0, tail["queue_remaining"] - (time.monotonic() - queue_started))
                 tail.pop("queue_started_monotonic", None)
                 self._refresh_disarm_guard()
+                if time.monotonic() >= min(wait_deadline, tail["deadline"]):
+                    self._last_step_error = "incomplete:permit_wait_exhausted"
+                    if disarm_step:
+                        self._record_disarm_for_step(step, started=False, incomplete=True)
+                    return False
                 if disarm_step:
                     self._publish_disarm_phase(step, "execute")
             if phase == "teardown" and disarm_step and (
@@ -1985,7 +2000,6 @@ class PipelineEngine:
         params = step.get("params", {})
         timeout = step.get("timeout_seconds", step.get("timeout", 300))
         if phase == "teardown" and getattr(self, "_disarm_tail", None) is not None:
-            from .contracts.device_return import disarm_execution_budget
             tail = self._disarm_tail
             key = str(step.get("step_id") or script_name_from_step(step))
             self._refresh_disarm_guard()
@@ -2169,6 +2183,12 @@ class PipelineEngine:
             return StepResult(success=False, exit_code=2, error_message=tool_error)
 
         timeout_seconds = _resolve_step_wall_clock(step)
+        if ctx.phase == "teardown" and getattr(self, "_disarm_tail", None) is not None:
+            self._refresh_disarm_guard()
+            remaining = self._current_disarm_deadline(step) - time.monotonic()
+            if remaining <= 0:
+                return StepResult(success=False, exit_code=124, error_message="disarm_budget_exhausted")
+            timeout_seconds = remaining
         stall_seconds = _resolve_step_stall_seconds(step)
         # 2026-08-31：运行日志唯一副本（SSD logs/runs/{job_id}/）——
         # 脚本 stdout/stderr 全量落盘（含 PROGRESS），与 ctx.log_dir 对齐。
@@ -2224,6 +2244,8 @@ class PipelineEngine:
                     on_progress_seq=(
                         lambda seq: self._publish_disarm_phase(step, "execute", progress_seq=seq)
                     ) if _progress_state == EXECUTING_DISARM else None,
+                    absolute_deadline=(lambda: self._current_disarm_deadline(step))
+                    if ctx.phase == "teardown" and getattr(self, "_disarm_tail", None) is not None else None,
                     log_paths=log_paths,
                     terminate_grace_seconds=_script_terminate_grace_seconds(name),
                 )
@@ -3053,8 +3075,9 @@ class PipelineEngine:
             structured_result=structured if isinstance(structured, str) else None,
         )
         evidence = {}
+        if not onboarded_family and value in (DISARM_RESULT_CONFIRMED, DISARM_RESULT_READBACK_FAILED):
+            value = DISARM_RESULT_EXECUTED_UNVERIFIED if success is True else DISARM_RESULT_FAILED
         if onboarded_family and started and not skipped and not lease_lost and not incomplete:
-            from .contracts.device_return import probe_result_policy, PLATFORM_INTERRUPTED_EXIT_CODES
             if exit_code not in PLATFORM_INTERRUPTED_EXIT_CODES:
                 evidence = dict(parsed.get("evidence") or {})
                 package_sha = None
@@ -3103,14 +3126,11 @@ class PipelineEngine:
             self._disarm_results[family]["evidence"] = evidence
 
     def _disarm_device_identity(self) -> tuple[Optional[str], Optional[str]]:
-        from .device_discovery import discover_devices
-        from .device_platform import detect_device_platform
 
         facts = next((d for d in discover_devices(self._adb_path) if d.get("serial") == self._serial), {})
         return detect_device_platform(self._adb_path, self._serial), facts.get("model")
 
     def _begin_disarm_tail(self, steps: list[dict], *, disarm_only: bool) -> None:
-        from .contracts.device_return import DISARM_QUEUE_SECONDS, DISARM_JOB_MAX_SECONDS, disarm_execution_budget
 
         coord = getattr(self, "_coordinator", None)
         store = getattr(self, "_local_db", None)
@@ -3130,7 +3150,9 @@ class PipelineEngine:
         }
         if saved:
             if coord is not None and saved.get("evidence"):
-                coord.publish_disarm_evidence(self._run_id, saved["evidence"])
+                coord.publish_disarm_evidence(self._run_id, {
+                    **saved["evidence"], "fencing_token": self._fencing_token,
+                })
                 coord._tick()
             if coord is None or not coord.guard_for_job(self._run_id):
                 self._disarm_tail["deadline"] = time.monotonic()
@@ -3143,8 +3165,10 @@ class PipelineEngine:
         if coord is None or tail is None:
             return
         guard = coord.guard_for_job(self._run_id)
-        if not guard:
+        if not isinstance(guard, dict) or not guard:
             return
+        self._disarm_seq = max(self._disarm_seq, guard.get("seq", 0))
+        self._disarm_progress_seq = max(self._disarm_progress_seq, guard.get("progress_seq", 0))
         received = guard.pop("local_received_at", time.monotonic())
         elapsed = time.monotonic() - received
         remaining = max(0, guard["job_deadline"] - guard["last_server_at"] - elapsed)
@@ -3185,6 +3209,12 @@ class PipelineEngine:
             store.save_disarm_state(self._run_id, {"seq": self._disarm_seq,
                 "progress_seq": self._disarm_progress_seq, "evidence": evidence})
         coord.publish_disarm_evidence(self._run_id, evidence)
+
+    def _current_disarm_deadline(self, step: dict) -> float:
+        self._refresh_disarm_guard()
+        key = str(step.get("step_id") or script_name_from_step(step))
+        tail = self._disarm_tail
+        return min(tail["deadline"], tail["step_deadlines"].get(key, tail["deadline"]))
 
     def _execute_teardown_best_effort(
         self,

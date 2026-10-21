@@ -7,6 +7,8 @@ job-level step-role helpers (§3.0.2 / §3.6.2), and Plan save-shape checks (§3
 
 from __future__ import annotations
 
+from copy import deepcopy
+
 from typing import Any, Iterable, Mapping, MutableMapping, Optional
 
 # ── §3.0 第 1 条：机器值 ─────────────────────────────────────────────────────
@@ -597,6 +599,8 @@ def map_step_outcome_to_disarm_result(
         return DISARM_RESULT_INCOMPLETE
     if skipped or not started:
         return DISARM_RESULT_NOT_EXECUTED
+    if success is False and structured_result in (DISARM_RESULT_CONFIRMED, DISARM_RESULT_EXECUTED_UNVERIFIED):
+        return DISARM_RESULT_FAILED
     if structured_result in DISARM_RESULTS:
         return structured_result
     if readback == "readback_failed":
@@ -745,6 +749,7 @@ def freeze_disarm_guard(
         "job_deadline": t0 + min(DISARM_QUEUE_SECONDS + sum(s["seconds"] for s in budgets.values()), DISARM_JOB_MAX_SECONDS),
         "queue_remaining": float(DISARM_QUEUE_SECONDS),
         "step_budgets": budgets, "step_deadlines": {},
+        "step_started_at": {}, "first_server_at": now,
         "seq": -1, "progress_seq": -1,
         "fencing_token": fencing_token, "agent_instance_id": agent_instance_id,
         "last_server_at": now,
@@ -756,7 +761,6 @@ def receive_disarm_evidence(
     via_coordinator: bool,
 ) -> dict[str, Any]:
     """Advance only strictly increasing sequences at server receipt time."""
-    from copy import deepcopy
 
     out = deepcopy(dict(guard))
     if now < out["last_server_at"]:
@@ -784,6 +788,8 @@ def receive_disarm_evidence(
     if out.get("phase") == "queue":
         elapsed = max(0, now - out["queue_accounted_at"])
         out["queue_remaining"] = max(0, out["queue_remaining"] - elapsed)
+    if key != out.get("step_id"):
+        out.pop("progress_seen_at", None)
     out.update(seq=seq, phase=phase, step_id=key)
     if via_coordinator:
         out["coordinator_seen_at"] = now
@@ -795,6 +801,7 @@ def receive_disarm_evidence(
     else:
         deadlines = out["step_deadlines"]
         deadlines.setdefault(key, min(now + step["seconds"], out["job_deadline"]))
+        out.setdefault("step_started_at", {}).setdefault(key, now)
         progress = evidence.get("progress_seq")
         if type(progress) is int and progress > 0 and progress > out["progress_seq"]:
             out["progress_seq"] = progress
@@ -805,6 +812,7 @@ def receive_disarm_evidence(
 def disarm_guard_deadline(
     guard: Mapping[str, Any] | None, *, now: float, owner_valid: bool,
     execution_heartbeat_at: float | None,
+    execution_heartbeat_timeout_seconds: int = 60,
 ) -> float | None:
     """One protection rule for reaper/recycler/projection; no DB or clocks."""
     if not guard or not owner_valid or guard.get("reason") == "clock_regressed":
@@ -827,7 +835,7 @@ def disarm_guard_deadline(
         seen = guard.get("progress_seen_at")
         if execution_heartbeat_at is None:
             return None
-        deadline = min(deadline, execution_heartbeat_at + DISARM_EVIDENCE_FRESH_SECONDS)
+        deadline = min(deadline, execution_heartbeat_at + execution_heartbeat_timeout_seconds)
     else:
         return None
     if seen is None:
@@ -835,3 +843,35 @@ def disarm_guard_deadline(
     deadline = min(deadline, seen + DISARM_EVIDENCE_FRESH_SECONDS,
                    coord + DISARM_EVIDENCE_FRESH_SECONDS)
     return deadline if now < deadline else None
+
+
+def probe_entry_response(family: str, entry: Mapping[str, Any], policy: Mapping[str, Any], *, entry_point: str) -> dict[str, Any]:
+    """Shared four-entry refusal contract, including U4's future init wiring."""
+    privileged = entry.get("result") in (DISARM_RESULT_CONFIRMED, DISARM_RESULT_READBACK_FAILED)
+    if (policy.get("trusted") and (not privileged or policy.get("result") == entry.get("result"))) or (not privileged and entry_point != "init_check"):
+        return {"status_code": 200, "use_trace": False, "ignore": False}
+    diagnostic = {"code": "UNVERIFIED_PROBE_RESULT", "family": family,
+                  "reason": policy.get("reason") or "raw_result_mismatch", "expected": policy.get("expected"),
+                  "observed": policy.get("observed"), "report_ref": policy.get("report_ref")}
+    return {**diagnostic, "status_code": 422 if entry_point in ("discharge", "init_check") else 200,
+            "use_trace": entry_point == "complete", "ignore": entry_point == "late"}
+
+
+def disarm_guard_expiry(guard: Mapping[str, Any], *, execution_heartbeat_deadline: float | None = None) -> float:
+    """Absolute next applicable phase limit, also used by candidate selection."""
+    deadline = guard["job_deadline"]
+    key = guard.get("step_id")
+    deadline = min(deadline, guard.get("step_deadlines", {}).get(key, deadline))
+    phase = guard.get("phase")
+    if phase == "queue":
+        deadline = min(deadline, guard.get("queue_deadline", deadline),
+                       guard.get("queue_seen_at", guard["last_server_at"]) + DISARM_EVIDENCE_FRESH_SECONDS)
+    elif phase == "execute":
+        started = guard.get("step_started_at", {}).get(key, guard["t0"])
+        deadline = min(deadline, guard.get("progress_seen_at", started) + DISARM_EVIDENCE_FRESH_SECONDS)
+        if execution_heartbeat_deadline is not None:
+            deadline = min(deadline, execution_heartbeat_deadline)
+    deadline = min(deadline, guard.get("coordinator_seen_at", guard.get("first_server_at", guard["t0"])) + DISARM_EVIDENCE_FRESH_SECONDS)
+    if guard.get("reason") == "clock_regressed":
+        return guard["t0"]
+    return deadline

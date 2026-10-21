@@ -179,7 +179,7 @@ def test_later_failed_overrides_earlier_completed():
     assert got["power-cycle"]["result"] == "failed", got
 
 
-def test_only_started_is_not_executed():
+def test_only_started_is_incomplete():
     now = datetime.now(timezone.utc)
     traces = [
         SimpleNamespace(
@@ -188,4 +188,4 @@ def test_only_started_is_not_executed():
         ),
     ]
     got = derive_disarm_results_from_traces(PIPELINE, traces)
-    assert got["power-cycle"]["result"] == "not_executed", got
+    assert got["power-cycle"]["result"] == "incomplete", got

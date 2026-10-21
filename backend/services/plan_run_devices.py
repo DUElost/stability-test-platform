@@ -9,6 +9,9 @@
 
 from __future__ import annotations
 
+from backend.services.device_return import job_guard_deadline
+from backend.agent.contracts.device_return import disarm_guard_expiry
+
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -180,12 +183,12 @@ def running_heartbeat_deadline(
     if j.status != JobStatus.RUNNING.value:
         return None
     if db is not None and getattr(j, "disarm_guard", None) is not None:
-        from backend.services.device_return import job_guard_deadline
         fresh = db.execute(select(JobInstance).where(JobInstance.id == j.id)
                            .execution_options(populate_existing=True)).scalars().one()
         protected_until = job_guard_deadline(db, fresh, now or datetime.now(timezone.utc))
         if protected_until is not None:
             return protected_until
+        return datetime.fromtimestamp(disarm_guard_expiry(fresh.disarm_guard), timezone.utc)
     graded_timeout = running_heartbeat_timeout_seconds(
         j, patrol_stall_multiplier=PATROL_STALL_MULTIPLIER,
     )

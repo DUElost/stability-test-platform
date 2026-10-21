@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from backend.tests.disarm_probe_evidence import trust_test_probe
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -153,7 +154,7 @@ class TestDeviceReturnU3:
             .count()
         ) == 1
 
-    def test_partial_discharge_keeps_debt_lease(self, db_session):
+    def test_partial_discharge_keeps_debt_lease(self, db_session, monkeypatch):
         device, job, lease, _ = _seed(
             db_session,
             disarm_results={
@@ -167,11 +168,12 @@ class TestDeviceReturnU3:
         db_session.commit()
         assert outcome.open_debt_count == 2
         lease = db_session.get(DeviceLease, lease.id)
+        trusted = trust_test_probe(db_session, monkeypatch, device.id)
         result = apply_discharge_sync(
             db_session,
             device_id=device.id,
             fencing_token=lease.fencing_token,
-            family_results={"power-cycle": {"result": "executed_unverified"}},
+            family_results={"power-cycle": trusted},
         )
         db_session.commit()
         assert result["ok"] is True

@@ -5,6 +5,7 @@ Authoritative probe from review comment 6253538954; assertions must not be weake
 from __future__ import annotations
 
 import os
+from backend.tests.disarm_probe_evidence import trust_test_probe
 from datetime import datetime, timezone
 
 import pytest
@@ -53,6 +54,7 @@ def test_real_sync_routes_close_last_debt_with_runtime_session(
     client, db_session, admin_headers, monkeypatch, entry
 ):
     device_id, job_id, lease_id, token = _create_debt(db_session)
+    trusted = trust_test_probe(db_session, monkeypatch, device_id)
     monkeypatch.setitem(fastapi_app.dependency_overrides, get_db, _runtime_sync_dependency)
     if entry == "override":
         response = client.post(
@@ -69,7 +71,7 @@ def test_real_sync_routes_close_last_debt_with_runtime_session(
             f"/api/v1/agent/devices/{device_id}/return-discharge",
             json={
                 "fencing_token": token,
-                "family_results": {"power-cycle": {"result": "executed_unverified"}},
+                "family_results": {"power-cycle": trusted},
             },
         )
     assert response.status_code == 200, response.text
@@ -85,7 +87,7 @@ def test_real_sync_routes_close_last_debt_with_runtime_session(
         }
         assert opened == 0, facts
         assert lease.status == "RELEASED", facts
-        assert device.return_state["power-cycle"]["state"] == "unverified", facts
+        assert device.return_state["power-cycle"]["state"] == ("unverified" if entry == "override" else "returned"), facts
         assert response.json()["data"]["open_debt_count"] == 0, facts
 
 

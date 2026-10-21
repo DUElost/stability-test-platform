@@ -1831,6 +1831,19 @@ export interface DisarmResultEntry {
   exit_code?: number | null;
   readback_summary?: string;
   reason?: string;
+  evidence?: {
+    readback?: string | null;
+    kind?: string | null;
+    boot_completed?: string | null;
+    permission_model?: string | null;
+    autotesttool_apk_sha256?: string | null;
+    script_name?: string;
+    script_version?: string;
+    package_sha256?: string | null;
+    mode?: string | null;
+    success?: boolean;
+    [key: string]: unknown;
+  };
 }
 
 export interface PlanJobInstance {
