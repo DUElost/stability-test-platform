@@ -287,6 +287,47 @@ def test_reboot_retried_when_still_resident(mod, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# host lock (1.0.6: same flock as MTK; serial within host, parallel across)
+# ---------------------------------------------------------------------------
+
+def test_acquire_host_lock_stamps_wait_until_free(mod, tmp_path, monkeypatch):
+    lockfile = tmp_path / "stp-flash-firmware.lock"
+    monkeypatch.setattr(mod, "_HOST_LOCK_PATH", str(lockfile))
+    sleeps = []
+    monkeypatch.setattr(mod.time, "sleep", lambda sec: sleeps.append(sec))
+
+    acquired = []
+
+    class FakeProgress:
+        seq = 0
+        def stamp(self, **f):
+            self.seq += 1
+            acquired.append(f.get("stage"))
+
+    import os as _os
+    blocker_fd = _os.open(str(lockfile), _os.O_WRONLY | _os.O_CREAT, 0o600)
+    import fcntl as _fcntl
+    _fcntl.flock(blocker_fd, _fcntl.LOCK_EX)
+
+    def unlock_after_two_waits(_sec):
+        nonlocal blocker_fd
+        sleeps.append(_sec)
+        if len(sleeps) >= 2 and blocker_fd != -1:
+            _fcntl.flock(blocker_fd, _fcntl.LOCK_UN)
+            _os.close(blocker_fd)
+            blocker_fd = -1
+
+    monkeypatch.setattr(mod.time, "sleep", unlock_after_two_waits)
+    fd = mod.acquire_host_lock(FakeProgress())
+    assert fd >= 0
+    assert acquired[:2] == ["lock-wait", "lock-wait"]
+    assert acquired[-1] == "lock-held"
+    import fcntl, os as _os2
+    fcntl.flock(fd, fcntl.LOCK_UN)
+    _os2.close(fd)
+
+
+# ---------------------------------------------------------------------------
 # SPL decision (auto = compare, never silently rewrite boot0)
 # ---------------------------------------------------------------------------
 

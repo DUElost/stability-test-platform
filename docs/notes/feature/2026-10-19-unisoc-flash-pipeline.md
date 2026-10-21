@@ -7,9 +7,9 @@ Class: feature
 
 新增展锐平台整包刷机能力，形态对齐既有 MTK `flash_firmware`：
 
-1. **脚本族** `backend/agent/scripts/flash_firmware_unisoc/`（登记到 v1.0.5）。
+1. **脚本族** `backend/agent/scripts/flash_firmware_unisoc/`（登记到 v1.0.6）。
    传输走 `fastboot -s <serial>`，不依赖 `sprd_usb` 内核模块，也不需要按键进 BSL；
-   同 host 多台天然可并行。五处运行期加固都来自真机：
+   同 host 串行由 host 锁保证（见 1.0.6）。六处运行期加固都来自真机：
    - **fastboot 预检**（1.0.1）：进 bootloader 前先定位 fastboot，找不到就失败，
      避免把设备留在 fastboot 而 agent 无法自救；
    - **恢复模式**（1.0.2）：启动时 adb 不可见但 fastboot 能看到 serial → 用显式
@@ -28,6 +28,11 @@ Class: feature
     重刷（15.75 实测 12:37：super/wipe 全部落盘后 `timeout after 20s: reboot`）。
     现在 reboot 超时先探一次设备是否还停在 fastboot：离开总线＝reboot 已生效，
     继续 adb 回读核验；仍在＝显式重试一次，再失败才致命。
+  - **host 锁**（1.0.6）：与 MTK `flash_firmware` 共用 `/tmp/stp-flash-firmware.lock`
+    （flock，O_NOFOLLOW，LOCK_NB 轮询每 5s 打 `lock-wait` 戳，等待对 stall 钟可见）。
+    Owner 裁定（2026-10-21）：展锐 fastboot 没有 flash_tool 式 USB 口绑定能力
+    （SN→COM 经 adb devices/lsusb 映射不可靠），**同 host 并发禁止**——单 host 串行、
+    多 host 并行由锁内建，不再依赖外置编排。锁随进程退出由内核释放。
 2. **固件产物** 由 `tools/dev/prepare_unisoc_firmware.py` 从 PAC 生成，落
    `{NFS}/firmware/<family>/<version>/`（manifest.json + images/plan.json +
    raw 镜像），族级 `latest.json` 按 `ro.product.model` 分流，与 MTK 固件同一套指针约定。
@@ -41,6 +46,23 @@ Class: feature
    `flash → oobe_skip → check_device` 三步。
 5. **只升级**：`version_key` 比对目标/当前版本，降级默认拒绝（`allow_downgrade` 可放开）；
    同版本默认 skipped，`force=true` 可重刷（幂等已实测）。
+
+## 刷机前置并轨（2026-10-21，#3758 采纳）
+
+- Hosts 页「刷机前置」按钮（`ensure_flash_prereqs.yml`，RunConsole，可批量）此前只装
+  MTK 面（SP Flash Tool Qt/GL 库 + 0e8d ttyACM + Android USB 节点规则）；fastboot 二进制
+  不在包集，是 .76/.77「刷机即挂」的根因（run 1030 型）。本批把 **`fastboot` 纳入刷机
+  前置包集**：`flash_preflight._UNISOC_PACKAGES` 为事实源，group_vars
+  `agent_flash_prereq_packages_unisoc`、两 playbook 循环、install_agent.sh 链、守卫测试
+  四路同源对拍（`flash_preflight@1.0.8`）。合入 main 并重部署站点前，站点侧按钮暂不含
+  展锐包集——新 host 接入时仍需按本 note 补装或等合入。
+- Plan 编排位并轨 MTK 流程：新族 **`flash_preflight_unisoc@1.0.0`**（fastboot 解析 / adb
+  就绪 / **identity 硬匹配**（防 A57 Pro/A77 互刷，序列号形态不可信）/ 电量闸门（默认 ≥5%，
+  Owner 裁定排除电量 0）/ latest.json+manifest models 可读；host 锁占用只报告不等待，
+  排队交给 flash 步的锁）。模板 `flash_unisoc.json` 变为
+  **preflight → check_device → flash(1.0.6) → oobe → check**（pin 守卫名单已同步）。
+- 批量战役（31 台 B17→0818，2026-10-21 发起）：多 host 并行、host 内串行、canary 先行、
+  失败即停该 host 队列。外置驱动 `~/a57_fleet.py` 与结果 `~/a57_fleet_results.json`。
 
 ## Alternatives
 

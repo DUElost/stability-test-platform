@@ -36,6 +36,7 @@ PINNED_SCRIPTS: dict[str, str] = {
     "script:check_device": "check_device",
     "script:ensure_root": "ensure_root",
     "script:flash_firmware_unisoc": "flash_firmware_unisoc",
+    "script:flash_preflight_unisoc": "flash_preflight_unisoc",
     "script:oobe_skip": "oobe_skip",
     "script:gpu_check": "gpu_check",
     "script:gpu_finish": "gpu_finish",

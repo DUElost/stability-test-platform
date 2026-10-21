@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 """Flash one Unisoc (SPRD) device to a firmware version prepared from a .pac.
 
+v1.0.6（2026-10-21）：host 串行锁——与 MTK `flash_firmware` 共用
+/tmp/stp-flash-firmware.lock（flock，O_NOFOLLOW）。展锐 fastboot 没有 flash_tool
+那样的 USB 口绑定能力（SN→端口映射经 adb/lsusb 不可靠，Owner 已裁定同 host 并发
+禁止），run 1043 实测两路 fastboot 并发即互抢枚举。加锁后单 host 内由锁天然串行、
+多 host 并行安全，一次下发多设备 PlanRun 不再依赖外置编排。等待每 5s 打
+stage=lock-wait 戳（stall 钟不误杀等待者，对齐 MTK #142 结论）；锁随进程退出由
+内核释放，正常/异常路径都不需要显式解锁。
+
 v1.0.5（2026-10-21）：`fastboot reboot` 按「幂等收尾」处理——写满 24 分区并
 擦除后，reboot 命令在慢枚举 host 上要等设备从总线消失才返回，单调用超时
 （1.0.0–1.0.4 的 20s）会把**已经写完**的刷写判成失败，批量重试就整盘重刷
@@ -215,6 +223,30 @@ def resolve_fastboot() -> str:
         "fastboot not found on this agent host (PATH + "
         + ", ".join(_FASTBOOT_CANDIDATES)
         + "); install android-sdk-platform-tools before flashing")
+
+
+# 与 MTK flash_firmware 同一把 host 锁（互斥跨两族：同 host 上 MTK 与展锐也不会
+# 同时写 USB）。锁文件由内核在进程退出时自动释放。
+_HOST_LOCK_PATH = "/tmp/stp-flash-firmware.lock"
+
+
+def acquire_host_lock(progress: "Progress") -> int:
+    """Blocking flock(LOCK_EX) with visible waiting (lock-wait stamps every 5s)."""
+    import platform as _platform
+    if _platform.system() != "Linux":
+        return -1
+    import fcntl
+    fd = os.open(_HOST_LOCK_PATH, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    waited = 0
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            progress.stamp(stage="lock-held", waited_seconds=waited)
+            return fd
+        except OSError:
+            waited += 5
+            progress.stamp(stage="lock-wait", waited_seconds=waited)
+            time.sleep(5)
 
 
 # ── routing ────────────────────────────────────────────────────────────────
@@ -645,6 +677,11 @@ def run(args: dict, serial: str, progress: Progress, log: list) -> dict:
         raise RuntimeError(f"downgrade not allowed: {cur_version} -> {target} "
                            f"(set allow_downgrade=true to override)")
 
+    lock_fd = -1
+    if not _bool(args.get("dry_run"), False):
+        # host 锁覆盖一切破坏性面：SPL boot0 写、进 bootloader、逐分区刷写。
+        lock_fd = acquire_host_lock(progress)
+
     if mode == "adb":
         spl = spl_decision(fw_dir, entries, serial, args, progress, log)
     else:
@@ -679,7 +716,8 @@ def run(args: dict, serial: str, progress: Progress, log: list) -> dict:
     progress.stamp(stage="fastboot", slot=slot)
 
     metrics = {"firmware_dir": fw_dir, "target": target, "previous": cur_version,
-               "spl": spl, "root_uid": root_uid, "fastboot": _FASTBOOT_BIN}
+               "spl": spl, "root_uid": root_uid, "fastboot": _FASTBOOT_BIN,
+               "host_lock_fd": lock_fd}
     metrics.update(flash_partitions(fw_dir, entries, serial, args, progress, log))
     if _bool(args.get("wipe"), True):
         metrics.update(wipe(serial, progress, log, args))

@@ -5,6 +5,16 @@
     "timeout_seconds": 3600,
     "init": [
       {
+        "step_id": "flash_preflight_unisoc",
+        "action": "script:flash_preflight_unisoc",
+        "version": "1.0.0",
+        "timeout_seconds": 180,
+        "retry": 1,
+        "params": {
+          "family": "A57"
+        }
+      },
+      {
         "step_id": "check_device",
         "action": "script:check_device",
         "version": "1.0.2",
@@ -15,7 +25,7 @@
       {
         "step_id": "flash_firmware_unisoc",
         "action": "script:flash_firmware_unisoc",
-        "version": "1.0.5",
+        "version": "1.0.6",
         "timeout_seconds": 3600,
         "retry": 0,
         "params": {
