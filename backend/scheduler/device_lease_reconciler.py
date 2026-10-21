@@ -557,7 +557,13 @@ async def _abort_reaper_recheck_job(
     if job is None or job.status != JobStatus.RUNNING.value:
         return False, None
     # #3723 §3.0 第 5 条：EXECUTING_DISARM + 进度新鲜 → 续期至 abort_at+timeout
-    if abort_at is not None and _disarm_grace_defers_reap(job, abort_at, now):
+    from backend.services.device_return import job_guard_deadline
+    guarded = (
+        await db.run_sync(lambda sync_db: job_guard_deadline(sync_db, job, now)) is not None
+        if job.disarm_guard is not None else
+        abort_at is not None and _disarm_grace_defers_reap(job, abort_at, now)
+    )
+    if guarded:
         logger.info(
             "abort_reaper_defer_disarm job=%d execution_state=%s last_progress_at=%s",
             job.id, job.execution_state, job.last_progress_at,

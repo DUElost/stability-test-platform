@@ -959,10 +959,18 @@ def apply_discharge_sync(
         return {"ok": False, "code": "DEBT_TOKEN_INVALID"}
 
     discharged_families: list[str] = []
+    rejected_families: list[dict] = []
     for family, entry in family_results.items():
         if family not in FAMILY_STEPS:
             continue
         result = str(entry.get("result") or "")
+        policy = evaluate_probe_entry(device, family, entry, token_valid=True)
+        if result in (DISARM_RESULT_CONFIRMED, DISARM_RESULT_READBACK_FAILED) and not policy["trusted"]:
+            audit_unverified_probe(db, resource_id=device_id, family=family, entry=entry, policy=policy)
+            rejected_families.append({"code": "UNVERIFIED_PROBE_RESULT", "family": family, **policy})
+            continue
+        if policy["trusted"]:
+            result = policy["result"]
         onboarded = _family_onboarded(family)
         family_state = map_disarm_result_to_family_state(result, onboarded=onboarded)
         _set_family_return_state(
@@ -974,10 +982,7 @@ def apply_discharge_sync(
             extra={"disarm_result": result},
         )
         # Successful discharge for a family closes ALL open debts of that family.
-        if family_state in (FAMILY_RETURN_RETURNED, FAMILY_RETURN_UNVERIFIED) and result in (
-            DISARM_RESULT_CONFIRMED,
-            DISARM_RESULT_EXECUTED_UNVERIFIED,
-        ):
+        if policy["trusted"] and result == DISARM_RESULT_CONFIRMED:
             _close_family_debts_sync(
                 db,
                 device_id=device_id,
@@ -997,6 +1002,7 @@ def apply_discharge_sync(
         "debt_lease_released": released,
         "open_debt_count": open_left,
         "fencing_token": None if released else lease.fencing_token,
+        "rejected_families": rejected_families,
     }
 
 
@@ -1191,12 +1197,28 @@ async def try_apply_late_confirmed(
     ]
     if not matching:
         return None
+    device = await _lock_device_async(db, device_id)
+    job = await db.get(JobInstance, job_id)
+    if device is None or job is None:
+        return None
+    verified = []
+    for family in confirmed:
+        policy = evaluate_probe_entry(device, family, results[family], token_valid=True, job=job)
+        if policy["trusted"] and policy["result"] == DISARM_RESULT_CONFIRMED:
+            verified.append(family)
+        else:
+            await db.run_sync(lambda sync_db, family=family, policy=policy: audit_unverified_probe(
+                sync_db, resource_id=job_id, family=family, entry=results[family], policy=policy,
+            ))
+    if not verified:
+        return {"ok": True, "closed_count": 0, "debt_lease_released": False,
+                "open_debt_count": len(open_rows)}
     return await apply_late_confirmed(
         db,
         device_id=device_id,
         job_id=job_id,
         fencing_token=fencing_token,
-        confirmed_families=confirmed,
+        confirmed_families=verified,
     )
 
 
@@ -1506,3 +1528,180 @@ def refresh_device_return_debt_gauges(db: Session) -> None:
     else:
         age = max(0.0, (_now() - oldest).total_seconds())
         set_device_return_debt_oldest_seconds(age)
+
+
+# B6 U8: DB adapters for the shared pure policies. No consumer imports
+# agent_completion (C5); AsyncSession callers use run_sync for identical reads.
+def manifest_package_sha(script_name: str, version: str) -> str | None:
+    """Resolve append-only identity, including retired historical versions."""
+    import json
+    from pathlib import Path
+
+    try:
+        doc = json.loads((Path(__file__).resolve().parents[2] / "tool_manifest.json").read_text())
+        versions = doc["tools"][script_name]["versions"]
+        return next((v.get("package_sha256") for v in versions if v.get("version") == version), None)
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _u8_timestamp(value: Any) -> float | None:
+    if not isinstance(value, datetime):
+        return None
+    return (value if value.tzinfo else value.replace(tzinfo=timezone.utc)).timestamp()
+
+
+def guard_owner_valid(db: Session, job: JobInstance, now: datetime, guard: Mapping[str, Any]) -> bool:
+    from backend.models.host import Host
+    from backend.core.job_timeout_config import HOST_HEARTBEAT_TIMEOUT_SECONDS
+
+    # Columns bypass the ORM identity map: each invocation sees latest committed
+    # facts under READ COMMITTED after acquiring the job row lock.
+    row = db.execute(select(
+        DeviceLease.job_id, DeviceLease.fencing_token, DeviceLease.agent_instance_id,
+        DeviceLease.host_id, DeviceLease.lease_type, DeviceLease.expires_at,
+        Host.last_heartbeat, Host.boot_id, Host.last_agent_instance_id,
+        Device.host_id.label("device_host_id"),
+    ).select_from(DeviceLease).join(Host, Host.id == DeviceLease.host_id)
+      .join(Device, Device.id == DeviceLease.device_id).where(
+        DeviceLease.device_id == job.device_id,
+        DeviceLease.status == LeaseStatus.ACTIVE.value,
+    )).first()
+    stamp = now.timestamp()
+    return bool(row and row.job_id == job.id and row.lease_type == LeaseType.JOB.value
+                and row.host_id == job.host_id == row.device_host_id
+                and row.fencing_token == guard.get("fencing_token")
+                and row.agent_instance_id == guard.get("agent_instance_id") == row.last_agent_instance_id
+                and row.boot_id == guard.get("boot_id")
+                and _u8_timestamp(row.expires_at) is not None and _u8_timestamp(row.expires_at) > stamp
+                and _u8_timestamp(row.last_heartbeat) is not None
+                and 0 <= stamp - _u8_timestamp(row.last_heartbeat) < HOST_HEARTBEAT_TIMEOUT_SECONDS)
+
+
+def job_guard_deadline(db: Session, job: JobInstance, now: datetime) -> datetime | None:
+    from backend.agent.contracts.device_return import disarm_guard_deadline
+
+    guard = job.disarm_guard
+    if not isinstance(guard, Mapping):
+        return None
+    if now.timestamp() < guard.get("last_server_at", now.timestamp()):
+        job.disarm_guard = {**guard, "reason": "clock_regressed"}
+        return None
+    stamp = disarm_guard_deadline(
+        guard, now=now.timestamp(), owner_valid=guard_owner_valid(db, job, now, guard),
+        execution_heartbeat_at=_u8_timestamp(job.last_execution_heartbeat_at),
+    )
+    return datetime.fromtimestamp(stamp, timezone.utc) if stamp is not None else None
+
+
+def accept_job_disarm_evidence(
+    db: Session, job: JobInstance, evidence: Mapping[str, Any], *,
+    host_id: str, agent_instance_id: str, now: datetime, via_coordinator: bool,
+) -> dict | None:
+    from backend.agent.contracts.device_return import (
+        freeze_disarm_guard, receive_disarm_evidence, select_disarm_steps,
+    )
+    from backend.core.job_timeout_config import abort_reap_clock
+    from backend.models.host import Host
+    from backend.models.plan_run import PlanRun
+
+    if job.status != "RUNNING" or job.host_id != host_id:
+        return None
+    guard = job.disarm_guard
+    if guard is None:
+        host_row = db.execute(select(Host.boot_id).where(Host.id == host_id)).first()
+        context = db.execute(select(PlanRun.run_context).where(PlanRun.id == job.plan_run_id)).scalar_one_or_none()
+        abort_at, _ = abort_reap_clock(context, job.id, host_id)
+        lifecycle = (job.pipeline_def or {}).get("lifecycle") or {}
+        steps = lifecycle.get("teardown") or []
+        if isinstance(steps, dict):
+            steps = steps.get("steps") or []
+        if evidence.get("disarm_only") is True:
+            # manual_exit path: selected obligations are frozen as a whole.
+            footprint = [family_for_footprint_script(script_name_from_step(s))
+                         for s in lifecycle.get("init", []) if isinstance(s, dict)]
+            steps = select_disarm_steps(steps, [f for f in footprint if f])
+        resolved = [{**s, "package_sha256": manifest_package_sha(
+            script_name_from_step(s), str(s.get("version") or ""))} for s in steps if isinstance(s, dict)]
+        guard = freeze_disarm_guard(
+            resolved, now=now.timestamp(), abort_at=_u8_timestamp(abort_at),
+            fencing_token=str(evidence.get("fencing_token") or ""), agent_instance_id=agent_instance_id,
+        )
+        guard["boot_id"] = host_row[0] if host_row else None
+    # A same-boot recovery may rotate the valid lease token. Rebind ownership,
+    # retaining every frozen deadline, consumed queue second and sequence.
+    rebound = {**guard, "fencing_token": str(evidence.get("fencing_token") or ""),
+               "agent_instance_id": agent_instance_id}
+    if not guard_owner_valid(db, job, now, rebound):
+        return None
+    guard = rebound
+    # No protection budget can be recreated after restart or token rotation.
+    guard = receive_disarm_evidence(guard, evidence, now=now.timestamp(), via_coordinator=via_coordinator)
+    job.disarm_guard = guard
+    return guard
+
+
+def evaluate_probe_entry(
+    device: Device, family: str, entry: Mapping[str, Any], *,
+    token_valid: bool, job: JobInstance | None = None,
+) -> dict[str, Any]:
+    from backend.agent.contracts.device_return import probe_result_policy, step_version_of
+
+    evidence = entry.get("evidence")
+    evidence = evidence if isinstance(evidence, Mapping) else {}
+    script = str(evidence.get("script_name") or "")
+    version = str(evidence.get("script_version") or "")
+    if job is not None:
+        stages = (job.pipeline_def or {}).get("lifecycle") or {}
+        steps = stages.get("teardown") or []
+        if isinstance(steps, dict):
+            steps = steps.get("steps") or []
+        step = next((s for s in steps if isinstance(s, dict)
+                     and str(s.get("step_id") or script_name_from_step(s)) == entry.get("step_id")), {})
+        script, version = script_name_from_step(step), step_version_of(step)
+    return probe_result_policy(
+        family, entry, platform=device.platform, model=device.model,
+        script_name=script, script_version=version,
+        package_sha256=manifest_package_sha(script, version), token_valid=token_valid,
+    )
+
+
+def audit_unverified_probe(db: Session, *, resource_id: int, family: str, entry: Mapping, policy: Mapping) -> None:
+    """Independent diagnostic audit survives a 422 business rollback."""
+    from backend.models.audit import AuditLog
+    from backend.core.metrics import record_disarm_result
+
+    with Session(bind=db.get_bind()) as diagnostic:
+        diagnostic.add(AuditLog(
+            action="unverified_probe_result", resource_type="device_return", resource_id=str(resource_id),
+            username="agent", details={"family": family, "raw": dict(entry), **dict(policy)},
+        ))
+        diagnostic.commit()
+    record_disarm_result(family, "unverified_probe_result")
+
+
+def verify_job_results(
+    db: Session, job: JobInstance, reported: Mapping[str, Mapping[str, Any]],
+    derived: Mapping[str, Mapping[str, Any]], *, token_valid: bool,
+) -> dict[str, dict]:
+    from backend.agent.contracts.device_return import PLATFORM_INTERRUPTED_EXIT_CODES
+
+    device = db.execute(select(Device).where(Device.id == job.device_id)
+                        .execution_options(populate_existing=True)).scalars().one()
+    results = {f: dict(e) for f, e in derived.items()}
+    for family, entry in reported.items():
+        if family not in FAMILY_STEPS:
+            continue
+        current = dict(entry)
+        if current.get("exit_code") in PLATFORM_INTERRUPTED_EXIT_CODES:
+            current["result"] = DISARM_RESULT_INCOMPLETE
+        elif family in ONBOARDED:
+            policy = evaluate_probe_entry(device, family, current, token_valid=token_valid, job=job)
+            if policy["trusted"]:
+                current["result"] = policy["result"]
+            elif current.get("result") in (DISARM_RESULT_CONFIRMED, DISARM_RESULT_READBACK_FAILED):
+                audit_unverified_probe(db, resource_id=job.id, family=family, entry=current, policy=policy)
+                current = dict(derived.get(family) or {"result": DISARM_RESULT_NOT_EXECUTED})
+            # Non-privileged values carry evidence but do not close a debt.
+        results[family] = current
+    return results

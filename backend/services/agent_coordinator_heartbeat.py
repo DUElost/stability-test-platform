@@ -13,13 +13,14 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models.enums import JobStatus
 from backend.models.host import Host
 from backend.models.job import JobInstance
 from backend.models.plan_run import PlanRunHost
+from backend.services.device_return import accept_job_disarm_evidence
 from backend.services.agent_lease_extend import (
     _VALID_EXECUTION_STATES,
     _parse_progress_ts,
@@ -32,6 +33,7 @@ class _CoordinatorHeartbeatJob(BaseModel):
     job_id: int
     execution_state: Optional[str] = None
     last_progress_at: Optional[str] = None  # ISO8601
+    disarm_evidence: Optional[dict[str, Any]] = None
 
 
 class _CoordinatorHeartbeatIn(BaseModel):
@@ -48,6 +50,8 @@ class _CoordinatorHeartbeatOut(BaseModel):
     stale_plan_run_host_ids: List[int] = []  # epoch was already higher → Agent must reconcile
     agent_instance_stale: bool = False  # host already bound to a newer agent instance
     current_coordinator_epochs: Dict[int, int] = {}  # prh_id → control-plane epoch
+    disarm_protocol: int = 1
+    disarm_guards: Dict[int, dict[str, Any]] = {}
 
 
 _VALID_COORDINATOR_PHASES = {
@@ -84,6 +88,7 @@ async def record_agent_coordinator_heartbeat(
     now = datetime.now(timezone.utc)
     stale_host_ids: list[int] = []
     current_epochs: dict[int, int] = {}
+    disarm_guards: dict[int, dict] = {}
 
     # Agent-instance fencing: a restarted Agent claims a new instance id via
     # host heartbeat; an old Coordinator process must not rewrite projections.
@@ -129,6 +134,23 @@ async def record_agent_coordinator_heartbeat(
     # extend_leases_batch 的 `ORDER BY id`（#992 全序约定）交错仍可成环，故按
     # job_id 升序取锁。
     for j in sorted(payload.jobs, key=lambda item: item.job_id):
+        if j.disarm_evidence is not None:
+            job = (await db.execute(select(JobInstance).where(
+                JobInstance.id == j.job_id,
+            ).with_for_update().execution_options(populate_existing=True))).scalars().first()
+            if job is None:
+                continue
+            guard = await db.run_sync(lambda sync_db, job=job, j=j: accept_job_disarm_evidence(
+                sync_db, job, j.disarm_evidence, host_id=payload.host_id,
+                agent_instance_id=payload.agent_instance_id, now=now, via_coordinator=True,
+            ))
+            if guard is None:
+                continue
+            disarm_guards[j.job_id] = guard
+            job.execution_state = "WAITING_EXECUTION_SLOT" if guard.get("phase") == "queue" else "EXECUTING_DISARM"
+            # queue evidence is never a business progress marker.
+            await db.flush()
+            continue
         reported = j.execution_state
         state_val = reported if reported in _VALID_EXECUTION_STATES else None
         # ADR-0026 §3 clock discipline (#288):
@@ -196,6 +218,7 @@ async def record_agent_coordinator_heartbeat(
         accepted=len(stale_host_ids) == 0,
         stale_plan_run_host_ids=stale_host_ids,
         current_coordinator_epochs=current_epochs,
+        disarm_guards=disarm_guards,
     )
 
 

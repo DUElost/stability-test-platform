@@ -16,6 +16,9 @@ from backend.agent.contracts.device_return import (
     DISARM_RESULT_INCOMPLETE,
     DISARM_RESULT_NOT_EXECUTED,
     FAMILY_STEPS,
+    PLATFORM_INTERRUPTED_EXIT_CODES,
+    family_for_disarm_script,
+    step_version_of,
 )
 
 _SIGNAL_EXIT_CODES = {143, -15, 137, -9}
@@ -67,6 +70,12 @@ def _family_for_script(script_name: str, role: str) -> Optional[str]:
 def _map_trace_to_disarm_result(status: Any, exit_code: Any) -> str:
     """§3.0 第 6 条：COMPLETED / FAILED(+signal) / 其它 FAILED / 无 trace。"""
     st = str(status or "").strip().upper()
+    try:
+        code = int(exit_code) if exit_code is not None else None
+    except (TypeError, ValueError):
+        code = None
+    if code in PLATFORM_INTERRUPTED_EXIT_CODES:
+        return DISARM_RESULT_INCOMPLETE
     if st in {"COMPLETED", "FINISHED", "SUCCESS", "OK"}:
         return DISARM_RESULT_EXECUTED_UNVERIFIED
     if st in {"FAILED", "ERROR", "ABORTED", "CANCELLED", "CANCELED"}:
@@ -130,6 +139,7 @@ def derive_disarm_results_from_traces(
     无终态证据 → not_executed。
     """
     id_to_script = _step_id_to_script(pipeline_def)
+    teardown_steps = {str(s.get("step_id") or ""): s for s in _pipeline_steps_by_stage(pipeline_def, "teardown")}
     footprint: set[str] = set()
     disarm_events: Dict[str, list[tuple[tuple, dict]]] = {}
 
@@ -146,7 +156,8 @@ def derive_disarm_results_from_traces(
             if fam:
                 footprint.add(fam)
         elif stage == "teardown":
-            fam = _family_for_script(script, "disarm")
+            step = teardown_steps.get(str(step_id or ""), {})
+            fam = family_for_disarm_script(script, version=step_version_of(step))
             if fam:
                 event = {
                     "status": status,
@@ -165,6 +176,8 @@ def derive_disarm_results_from_traces(
         for _key, event in events:
             if _is_disarm_terminal_status(event.get("status")):
                 terminal = event  # later original_ts wins
+            elif str(event.get("status") or "").upper() in ("STARTED", "RUNNING"):
+                terminal = {**event, "result": DISARM_RESULT_INCOMPLETE}
         if terminal is None:
             entry = {
                 "result": DISARM_RESULT_NOT_EXECUTED,
@@ -174,12 +187,14 @@ def derive_disarm_results_from_traces(
             }
         else:
             entry = {
-                "result": _map_trace_to_disarm_result(
+                "result": terminal.get("result") or _map_trace_to_disarm_result(
                     terminal.get("status"), terminal.get("exit_code"),
                 ),
                 "step_id": str(terminal.get("step_id") or ""),
                 "exit_code": terminal.get("exit_code"),
                 "readback_summary": "",
             }
+            if terminal.get("exit_code") in (124, 125):
+                entry["reason"] = "legacy_reserved_exit"
         out[fam] = entry
     return out

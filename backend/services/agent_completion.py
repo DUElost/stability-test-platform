@@ -41,7 +41,7 @@ from backend.realtime.socketio_server import broadcast_run_job_update
 from backend.services.aggregator import PlanAggregator
 from backend.services.agent_recovery import resume_expired_lease_for_recovery
 from backend.services.errors import BadRequest, Conflict, NotFound
-from backend.services.device_return import handle_job_lease_release, try_apply_late_confirmed
+from backend.services.device_return import handle_job_lease_release, try_apply_late_confirmed, verify_job_results
 from backend.services.disarm_derive import derive_disarm_results_from_traces
 from backend.services.state_machine import InvalidTransitionError, JobStateMachine
 
@@ -105,6 +105,7 @@ def normalize_disarm_results(raw: Any) -> Optional[Dict[str, Dict[str, Any]]]:
             "exit_code": entry.get("exit_code"),
             "readback_summary": str(entry.get("readback_summary") or ""),
             **({"reason": entry["reason"]} if entry.get("reason") else {}),
+            **({"evidence": entry["evidence"]} if isinstance(entry.get("evidence"), dict) else {}),
         }
     return out or None
 
@@ -529,7 +530,7 @@ async def complete_agent_job(
 
     # ADR-0061 D4 / #3723 §3.3 U2：解除结果落库（不得写入 status_reason）
     reported = normalize_disarm_results(payload.disarm_results)
-    if reported is None:
+    if reported is None or reported:
         existing_traces = (
             await db.execute(
                 select(StepTrace)
@@ -540,7 +541,10 @@ async def complete_agent_job(
                 )
             )
         ).scalars().all()
-        reported = derive_disarm_results_from_traces(job.pipeline_def, existing_traces)
+        derived = derive_disarm_results_from_traces(job.pipeline_def, existing_traces)
+        reported = await db.run_sync(lambda sync_db: verify_job_results(
+            sync_db, job, reported or {}, derived, token_valid=True,
+        ))
     if reported:
         apply_disarm_results(job, reported)
 

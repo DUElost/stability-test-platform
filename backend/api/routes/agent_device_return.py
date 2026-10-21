@@ -46,6 +46,12 @@ def agent_return_discharge(
             detail={"code": code, "message": "清偿被拒绝"},
         )
     db.commit()
+    if result.get("rejected_families"):
+        raise HTTPException(status_code=422, detail={
+            "code": "UNVERIFIED_PROBE_RESULT", "message": "部分专项的探针组合未经验证",
+            "violations": result["rejected_families"],
+            "discharged_families": result.get("discharged_families") or [],
+        })
     return ok(AgentReturnDischargeOut(
         device_id=device_id,
         discharged_families=result.get("discharged_families") or [],

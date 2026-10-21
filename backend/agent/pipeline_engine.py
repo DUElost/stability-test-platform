@@ -518,6 +518,7 @@ def _pump_process(
     wall_clock: Optional[float],
     stall_seconds: Optional[float],
     on_progress: Optional[Callable[[], None]] = None,
+    on_progress_seq: Optional[Callable[[int], None]] = None,
     log_paths: Optional[Tuple[str, str]] = None,
     terminate_grace_seconds: float = 2.0,
     now: Callable[[], float] = time.monotonic,
@@ -591,6 +592,8 @@ def _pump_process(
                 if seq is not None:
                     state["last_progress_seq"] = seq
                 state["last_progress"] = now()
+                if seq is not None and on_progress_seq is not None:
+                    on_progress_seq(seq)
             if on_progress is not None:
                 try:
                     on_progress()
@@ -1734,15 +1737,28 @@ class PipelineEngine:
 
         # Teardown permit wait budget = step wall clock (None = unbounded).
         # Deadline is fixed at step entry; repeated cancel must not reset it (R1).
+        tail = getattr(self, "_disarm_tail", None) if phase == "teardown" else None
+        if tail is not None and disarm_step:
+            self._publish_disarm_phase(step, "queue")
         wall = _resolve_step_wall_clock(step) if phase == "teardown" else None
         wait_deadline = (
             (time.monotonic() + wall) if (phase == "teardown" and wall is not None) else None
         )
+        if tail is not None:
+            wait_deadline = min(time.monotonic() + tail["queue_remaining"], tail["deadline"])
+        queue_started = time.monotonic()
+        if tail is not None:
+            tail["queue_started_monotonic"] = queue_started
 
         self._update_execution_state("WAITING_EXECUTION_SLOT")
         permit = None
         try:
             while True:
+                if tail is not None:
+                    self._refresh_disarm_guard()
+                    wait_deadline = min(wait_deadline, tail["deadline"])
+                    if disarm_step:
+                        self._publish_disarm_phase(step, "queue")
                 try:
                     acquire_timeout = 5.0
                     if wait_deadline is not None:
@@ -1799,7 +1815,16 @@ class PipelineEngine:
                     return False
 
             # §3.2.7 / §3.0.4: lease already lost → do not execute disarm.
-            if phase == "teardown" and disarm_step and self._teardown_lease_lost():
+            if tail is not None:
+                tail["queue_remaining"] = max(0, tail["queue_remaining"] - (time.monotonic() - queue_started))
+                tail.pop("queue_started_monotonic", None)
+                self._refresh_disarm_guard()
+                if disarm_step:
+                    self._publish_disarm_phase(step, "execute")
+            if phase == "teardown" and disarm_step and (
+                getattr(self, "_lease_lost_for_disarm", False) if tail is not None
+                else self._teardown_lease_lost()
+            ):
                 self._last_step_error = f"not_executed:{LEASE_LOST_REASON}"
                 self._record_disarm_for_step(
                     step,
@@ -1959,6 +1984,19 @@ class PipelineEngine:
         action = step.get("action", "")
         params = step.get("params", {})
         timeout = step.get("timeout_seconds", step.get("timeout", 300))
+        if phase == "teardown" and getattr(self, "_disarm_tail", None) is not None:
+            from .contracts.device_return import disarm_execution_budget
+            tail = self._disarm_tail
+            key = str(step.get("step_id") or script_name_from_step(step))
+            self._refresh_disarm_guard()
+            budget, _ = disarm_execution_budget(step)
+            deadlines = tail.setdefault("step_deadlines", {})
+            deadlines.setdefault(key, min(time.monotonic() + budget, tail["deadline"]))
+            remaining = min(deadlines[key], tail["deadline"]) - time.monotonic()
+            if remaining <= 0:
+                return StepResult(success=False, exit_code=124, error_message="disarm_budget_exhausted")
+            step = {**step, "timeout_seconds": remaining}
+            timeout = remaining
         self._active_phase = phase
 
         if step.get("enabled") is False:
@@ -2183,6 +2221,9 @@ class PipelineEngine:
                     # progress-aware barrier 判断同 host 的 peer 是否还在推进。
                     # 解除步骤改报 EXECUTING_DISARM（#3723 §3.2.6 / §3.0.5）。
                     on_progress=lambda: self._update_execution_state(_progress_state),
+                    on_progress_seq=(
+                        lambda seq: self._publish_disarm_phase(step, "execute", progress_seq=seq)
+                    ) if _progress_state == EXECUTING_DISARM else None,
                     log_paths=log_paths,
                     terminate_grace_seconds=_script_terminate_grace_seconds(name),
                 )
@@ -2904,6 +2945,10 @@ class PipelineEngine:
         """
         if getattr(self, "_lease_lost_for_disarm", False):
             return True
+        if getattr(self, "_disarm_tail", None) is not None:
+            # M2: the current worker's confirmed-loss flag is fed by the
+            # renewer/recovery paths; do not block permit→spawn on an HTTP ACK.
+            return False
         api_url = getattr(self, "_api_url", None)
         run_id = getattr(self, "_run_id", None)
         if not api_url or not run_id:
@@ -2984,6 +3029,7 @@ class PipelineEngine:
                 return
         structured = None
         readback = None
+        parsed = {}
         if output:
             raw = (output or "").strip()
             if raw.startswith("{"):
@@ -3006,6 +3052,29 @@ class PipelineEngine:
             onboarded_family=onboarded_family,
             structured_result=structured if isinstance(structured, str) else None,
         )
+        evidence = {}
+        if onboarded_family and started and not skipped and not lease_lost and not incomplete:
+            from .contracts.device_return import probe_result_policy, PLATFORM_INTERRUPTED_EXIT_CODES
+            if exit_code not in PLATFORM_INTERRUPTED_EXIT_CODES:
+                evidence = dict(parsed.get("evidence") or {})
+                package_sha = None
+                registry = getattr(self, "_script_registry", None)
+                if registry is not None:
+                    try:
+                        package_sha = registry.resolve(script, ver).package_sha256
+                    except Exception:
+                        pass
+                evidence.update({"readback": parsed.get("readback"), "mode": parsed.get("mode"),
+                    "success": parsed.get("success") is True and success is True,
+                    "script_name": script, "script_version": ver, "package_sha256": package_sha})
+                platform, model = None, None
+                if ONBOARDED[family].get("verified_device_classes"):
+                    platform, model = self._disarm_device_identity()
+                policy = probe_result_policy(family, {"evidence": evidence, "exit_code": exit_code},
+                    platform=platform, model=model, script_name=script, script_version=ver,
+                    package_sha256=package_sha, token_valid=not self._lease_lost_for_disarm)
+                value = policy["result"] if parsed.get("evidence") else (
+                    DISARM_RESULT_EXECUTED_UNVERIFIED if success is True else DISARM_RESULT_FAILED)
         reason = ""
         if lease_lost:
             reason = LEASE_LOST_REASON
@@ -3030,6 +3099,92 @@ class PipelineEngine:
             readback_summary=summary,
             reason=reason,
         )
+        if evidence:
+            self._disarm_results[family]["evidence"] = evidence
+
+    def _disarm_device_identity(self) -> tuple[Optional[str], Optional[str]]:
+        from .device_discovery import discover_devices
+        from .device_platform import detect_device_platform
+
+        facts = next((d for d in discover_devices(self._adb_path) if d.get("serial") == self._serial), {})
+        return detect_device_platform(self._adb_path, self._serial), facts.get("model")
+
+    def _begin_disarm_tail(self, steps: list[dict], *, disarm_only: bool) -> None:
+        from .contracts.device_return import DISARM_QUEUE_SECONDS, DISARM_JOB_MAX_SECONDS, disarm_execution_budget
+
+        coord = getattr(self, "_coordinator", None)
+        store = getattr(self, "_local_db", None)
+        if coord is not None and getattr(coord, "disarm_protocol", None) == 0:
+            self._disarm_tail = None
+            logger.warning("disarm_protocol_unavailable: using v1.0 execution behavior")
+            return
+        saved = store.load_disarm_state(self._run_id) if store is not None else {}
+        self._disarm_seq = int(saved.get("seq", 0))
+        self._disarm_progress_seq = int(saved.get("progress_seq", 0))
+        self._disarm_only = disarm_only
+        self._disarm_tail = {
+            "deadline": time.monotonic() + min(DISARM_QUEUE_SECONDS + sum(
+                disarm_execution_budget(s)[0] for s in steps if s.get("enabled") is not False
+            ), DISARM_JOB_MAX_SECONDS),
+            "queue_remaining": float(DISARM_QUEUE_SECONDS), "step_deadlines": {},
+        }
+        if saved:
+            if coord is not None and saved.get("evidence"):
+                coord.publish_disarm_evidence(self._run_id, saved["evidence"])
+                coord._tick()
+            if coord is None or not coord.guard_for_job(self._run_id):
+                self._disarm_tail["deadline"] = time.monotonic()
+                return
+        self._refresh_disarm_guard()
+
+    def _refresh_disarm_guard(self) -> None:
+        coord = getattr(self, "_coordinator", None)
+        tail = getattr(self, "_disarm_tail", None)
+        if coord is None or tail is None:
+            return
+        guard = coord.guard_for_job(self._run_id)
+        if not guard:
+            return
+        received = guard.pop("local_received_at", time.monotonic())
+        elapsed = time.monotonic() - received
+        remaining = max(0, guard["job_deadline"] - guard["last_server_at"] - elapsed)
+        tail["deadline"] = min(tail["deadline"], time.monotonic() + remaining)
+        if "queue_started_monotonic" not in tail:
+            tail["queue_remaining"] = min(tail["queue_remaining"], guard["queue_remaining"])
+        if guard.get("reason") == "clock_regressed":
+            tail["deadline"] = time.monotonic()
+        for key, deadline in guard.get("step_deadlines", {}).items():
+            converted = time.monotonic() + max(0, deadline - guard["last_server_at"] - elapsed)
+            tail["step_deadlines"][key] = min(tail["step_deadlines"].get(key, converted), converted)
+
+    def _publish_disarm_phase(self, step: dict, phase: str, *, progress_seq: Optional[int] = None) -> None:
+        coord = getattr(self, "_coordinator", None)
+        if coord is None or getattr(self, "_disarm_tail", None) is None:
+            return
+        if progress_seq is not None:
+            self._disarm_progress_seq += 1
+        self._disarm_seq += 1
+        script = script_name_from_step(step)
+        version = step_version_of(step)
+        sha = None
+        registry = getattr(self, "_script_registry", None)
+        if registry is not None:
+            try:
+                sha = registry.resolve(script, version).package_sha256
+            except Exception:
+                pass
+        evidence = {
+            "protocol": 1, "phase": phase, "step_id": str(step.get("step_id") or script),
+            "seq": self._disarm_seq, "progress_seq": self._disarm_progress_seq,
+            "script_name": script, "script_version": version, "package_sha256": sha,
+            "fencing_token": getattr(self, "_fencing_token", ""),
+            "disarm_only": getattr(self, "_disarm_only", False),
+        }
+        store = getattr(self, "_local_db", None)
+        if store is not None:
+            store.save_disarm_state(self._run_id, {"seq": self._disarm_seq,
+                "progress_seq": self._disarm_progress_seq, "evidence": evidence})
+        coord.publish_disarm_evidence(self._run_id, evidence)
 
     def _execute_teardown_best_effort(
         self,
@@ -3057,6 +3212,7 @@ class PipelineEngine:
             )
         else:
             steps = list(teardown_def or [])
+        self._begin_disarm_tail(steps, disarm_only=disarm_only)
 
         # Seed not_executed for every footprint family; successful/failed steps
         # overwrite. Lease-lost short-circuit marks all as not_executed.
@@ -3119,6 +3275,9 @@ class PipelineEngine:
                         )
         finally:
             self._active_phase = None
+            coord = getattr(self, "_coordinator", None)
+            if coord is not None:
+                coord.publish_disarm_evidence(self._run_id, None)
 
         if failed_steps > 0:
             logger.warning(

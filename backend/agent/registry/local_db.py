@@ -357,6 +357,24 @@ class LocalDB:
                 "ALTER TABLE active_job_registry "
                 "ADD COLUMN device_serial TEXT"
             )
+        if "disarm_state" not in columns:
+            self._conn.execute("ALTER TABLE active_job_registry ADD COLUMN disarm_state TEXT")
+
+    def load_disarm_state(self, job_id: int) -> dict:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT disarm_state FROM active_job_registry WHERE job_id = ?", (job_id,),
+            ).fetchone()
+            return json.loads(row[0]) if row and row[0] else {}
+
+    def save_disarm_state(self, job_id: int, fields: dict) -> None:
+        with self._lock, self._conn:
+            state = self.load_disarm_state(job_id)
+            state.update(fields)
+            self._conn.execute(
+                "UPDATE active_job_registry SET disarm_state = ? WHERE job_id = ?",
+                (json.dumps(state), job_id),
+            )
 
     def _backfill_step_trace_tokens(self) -> None:
         self._conn.execute(
@@ -1318,9 +1336,11 @@ class LocalDB:
         with self._lock:
             with self._conn:
                 self._conn.execute(
-                    "INSERT OR REPLACE INTO active_job_registry "
+                    "INSERT INTO active_job_registry "
                     "(job_id, device_id, device_serial, fencing_token, claimed_at) "
-                    "VALUES (?, ?, ?, ?, ?)",
+                    "VALUES (?, ?, ?, ?, ?) ON CONFLICT(job_id) DO UPDATE SET "
+                    "device_id=excluded.device_id, device_serial=excluded.device_serial, "
+                    "fencing_token=excluded.fencing_token",
                     (
                         job_id,
                         device_id,
