@@ -127,6 +127,8 @@ export default function DevicesPage() {
         retired_at: device.retired_at ?? null,
         is_stale: device.is_stale ?? false,
         retire_suggested: device.retire_suggested ?? false,
+        // ADR-0061 D1.3 / #3723 U6：归还状态随行透传（展开行展示）。
+        return_state: device.return_state ?? null,
       };
     });
   }, [devices, hostMap]);
@@ -526,6 +528,7 @@ export default function DevicesPage() {
           selectedIds={selectedDeviceIds}
           onSelectionChange={setSelectedDeviceIds}
           onFilteredDevicesChange={handleFilteredDevicesChange}
+          isAdmin={isAdmin}
         />
       </div>
 

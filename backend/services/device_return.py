@@ -323,6 +323,24 @@ def _open_debts_sync(db: Session, device_id: int) -> list[DeviceReturnDebt]:
     )
 
 
+def open_debts_for_device_sync(db: Session, device_id: int) -> list[DeviceReturnDebt]:
+    """Read-only: open debt rows in creation order (ADR-0061 D5.9 / #3723 U6).
+
+    The UI needs a stable oldest-first list; tie-break on id so rows created in
+    the same transaction still have a deterministic order.
+    """
+    return list(
+        db.execute(
+            select(DeviceReturnDebt)
+            .where(
+                DeviceReturnDebt.device_id == device_id,
+                DeviceReturnDebt.state == DEBT_STATE_OPEN,
+            )
+            .order_by(DeviceReturnDebt.created_at.asc(), DeviceReturnDebt.id.asc())
+        ).scalars().all()
+    )
+
+
 def _active_lease_sync(db: Session, device_id: int) -> DeviceLease | None:
     return (
         db.execute(

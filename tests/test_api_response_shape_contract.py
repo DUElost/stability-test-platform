@@ -689,6 +689,13 @@ _MODEL_PAIRS: tuple[tuple[str, str, str, str], ...] = (
         "frontend/src/utils/api/types.ts",
         "DeviceReturnOverrideResult",
     ),
+    # #3723 U6：设备未关闭欠账条目（只读列表；evidence 刻意不入模型）。
+    (
+        "backend/api/schemas/device.py",
+        "DeviceReturnDebtOut",
+        "frontend/src/utils/api/types.ts",
+        "DeviceReturnDebtItem",
+    ),
     # #2187 opt-in scripts.py：目录行与使用统计双双 MATCH（TS 命名不同源
     # ——ScriptEntry/ScriptUsage 是消费侧原名，键集与后端模型逐名一致）。
     (

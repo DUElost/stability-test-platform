@@ -101,6 +101,17 @@ class DeviceRetireBatchOut(BaseModel):
 
 
 
+class DeviceReturnDebtOut(ORMBaseModel):
+    """ADR-0061 D5.9 / #3723 U6：设备未关闭欠账条目（只读，不含 evidence）。"""
+
+    id: int
+    family: str
+    source_kind: str
+    source_job_id: Optional[int] = None
+    cause: str
+    created_at: datetime
+
+
 class DeviceReturnOverrideIn(BaseModel):
     """ADR-0061 D5.7：人工放行——原因类别 + 证据引用必填。"""
 
