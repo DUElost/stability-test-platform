@@ -3,18 +3,18 @@
 Status: implemented
 Class: feature
 
-按 [#3723](https://github.com/DUElost/stability-test-platform/issues/3723) **v1.7.1** §3.0.2 / §3.6 / §3.6.1–§3.6.5 / §4 U5
+按 [#3723](https://github.com/DUElost/stability-test-platform/issues/3723) **v1.7.10** §3.0.2 / §3.6 / §3.6.1–§3.6.7 / §4 U5
 与 ADR-0061 Accepted v1.1（含 D2.5）实施 [#3730](https://github.com/DUElost/stability-test-platform/issues/3730)。
 方案 A 旧包处置见 [#3751](https://github.com/DUElost/stability-test-platform/issues/3751#issuecomment-6234224273)。
-Draft PR 待 Planner 确认与独立复核；合入不等于生效（发包/scan/热更新/重指受 §5 整批闸门）。
+第 2 轮代码预审已通过（评论 6307749356）；1.0.8 真机及严格 B 补测已完成。补测亮度差异已恢复，按派单先回规划者（评论 6312504223）；最终独立复核尚未签署，PR 保持 draft。合入不等于生效（发包/scan/热更新/重指受 §5 整批闸门）。
 
 
-## v1.7.1 返修（2026-10-19）
+## 历史记录：v1.7.1 返修（2026-10-19）
 
 - 追加 `powercycle_disarm@1.0.4`；`1.0.3` → `retired:true`（树 `c832364b0fb1f1ef5f143835900b3a336d372f4d` / sha `9fd5c9fe…980ae`）。
 - §3.6.2：等待上线进度戳窗口从上一次打戳起算；单次轮询 adb 超时受 15s 窗口约束；替身耗时 14s / 命中超时用例断言相邻戳 ≤15s。
 - §3.6.1.7：删除脚本内置已验证类别清单；正式值一律未验证规则；evidence 增加 `permission_model` 与 `autotesttool_apk_sha256`；任何输入不输出正式 `confirmed` / `readback_failed`。
-- ONBOARDED / 模板 pin → 1.0.4；方案 A 恢复清单含 1.0.0–1.0.3；真机三类仍 pending（adb 空）。
+- ONBOARDED / 模板 pin → 1.0.4；方案 A 恢复清单含 1.0.0–1.0.3；该次历史提交尚无独立真机资源；现行真机结果见 Verification，NX2 转 #3761。
 
 ## Decision
 
@@ -24,11 +24,11 @@ Draft PR 待 Planner 确认与独立复核；合入不等于生效（发包/scan
    的 `@1.1.0` 判 collect；缺版本、无法解析与未登记的数字版本（1.1.1、2.0.0 等）一律
    `unknown_legacy_disarm` 并记 `unknown_legacy_version`；收取失败不得覆盖已完成 disarm。
 3. Plan 保存入口 §3.6.5：三入口 422 `ONBOARDED_TEARDOWN_INVALID` + 四种 reason。
-4. 旧条目 1.0.0/1.0.1/1.0.2 → `retired: true`（不删、不改 SHA）；
+4. 旧条目 1.0.0–1.0.7 → `retired: true`（不删、不改 SHA）；
    `check_script_packages.py --publish-restored`（方案 A，仅临时站点目录验证）。
 5. `ONBOARDED.disarm_min_version=1.0.8`；模板 pin
    `[powercycle_disarm 1.0.8 @660s, powercycle_finish 1.1.0 @420s]`；
-   `verified_device_classes=[]`（真机 pending；只验 MLD_LX2、MLD_LX3，NX2 转 #3761）。
+   `verified_device_classes=[]`（本单只交 MLD_LX2、MLD_LX3 的真机事实，可信组合登记由 U8 承接；NX2 转 #3761）。
 6. `powercycle_finish@1.1.0` **保持原包**。不改 U8 reaper/guard/类别政策；不 Ready/merge/publish/scan。
 
 ## Alternatives
@@ -44,15 +44,20 @@ Draft PR 待 Planner 确认与独立复核；合入不等于生效（发包/scan
 - 临时站点目录对 1.0.0/1.0.1/1.0.2 真实 `--publish-restored`：写入 / 同字节跳过 / 异字节拒绝。
 - 树对象可达并 SHA 与 manifest 一致。
 - §3.6.5 / §4.1 真入口三入口反例与正向对照；Engine→runner 角色对照；15s 轮询进度。
-- 真机：MLD_LX2/LX3/NX2 **仍 pending**（`adb devices` 空）；空验证表。
+- 第 2 轮代码预审通过，绑定 `04b2bd07895a0aa4f0311fb4e503123f7c00d1c4`；本次仅文档补证，不改变脚本、manifest、模板、包与测试。
+- 1.0.8 真机：V552AA 的 MLD_LX2（H01，尾号 6490、6521）、MLD_LX3（H02，0034、0104）完成当前方案要求的判例证据；A 按 §3.6.6 第 8 条由 J 覆盖。I 非 root 每类 4 次，全部原始 clear；J 的 root/non-root 各 1 台为 not_installed 且零写入；K 拒读后不整写，原 mode/内容恢复。实际 APK/权限模型与次数见[完整报告](2026-10-21-b6-u5-realdevice-108.md)。root 下服务运行中的 disarm 未覆盖，不外推。
+- B 原 0104 样本为 online=false 的离线分支，不计入。2026-10-21 17:18（+08）补测第 1 次先确认离线再重新在线，probe 自身 online=true、显式 boot_completed=""、原始 readback_failed、正式 failed，无 kind、无身份取证、无执行阶段 PROGRESS，10 项严格判据通过；与 LX2 两台及 LX3 0034 构成每类 2 台有效 B。
+- 补测初次收尾亮度 61→28，RESULT.json 如实记录恢复比对失败；随后恢复为 61 并核对开机完成、prefs/应用/设置/进程/服务/adb server 与实验前一致，临时目录已删除。按“其它偏差先回规划者”已回告评论 6312504223，未直接交终签。
+- 主实验与 D/F/H 补证没有逐次占用日志；旧日志只有收尾 64 条，不声称有可核验数据库 statement 日志。本次 B 与恢复逐次日志 167 条，ACTIVE 全为 0；规划者对原窗口无租约的独立查询见评论 6310794779。
+- 原事件和初次错误辅助判定均保留；cases.py、experiment.py、j_cases.py 的留存版本在相关运行后有改动，select_j.py 实际未完成，不能以这些文件证明历史执行版本。B 新 harness 运行前/后摘要一致。证据目录 `/home/debian13/b6-u5-realdevice-108-20261021-04b2bd078/`，补测在 `B-retest/`。
 
 ## Revisit
 
-- 真机资源到位后按 D2.5 补三类验证并追加版本登记。
-- U3 合入后基于最新 main 再集成并重跑入口验收。
+- 按已回告的亮度恢复差异先回规划者；最终验收仍由原独立复核工作面签署。本次不登记可信组合，不追加脚本版本；U8 消费事实，NX2 见 #3761。
+- U3/U6 的集成已在 `04b2bd078` 的代码预审与同 head CI 中核对；文档提交的新 HEAD 仍核对六项 required 与 informational，不沿用旧 SHA 代签。
 - 激活按 #3723 §5；不得因本单元单独发包/scan/热更新/重指。
 
-## v1.7.4 / 1.0.5（阶段一）
+## 历史记录：v1.7.4 / 1.0.5（阶段一）
 
 - `_wait_device_online`：轮询间隔 10s；get-state 2s + getprop 3s；迭代上界 timeout//10+2
 - 上线后每次 adb 结束打 PROGRESS（含超时与 push_prefs_xml 直接子进程）
@@ -61,7 +66,7 @@ Draft PR 待 Planner 确认与独立复核；合入不等于生效（发包/scan
 - 追加 `powercycle_disarm@1.0.5`；1.0.4 `retired:true`；finish@1.1.0 未改
 
 
-## v1.7.6 / 1.0.6（2026-10-20）
+## 历史记录：v1.7.6 / 1.0.6（2026-10-20）
 
 Diagnosis D1/D2（PR #3747 comment 6268508491）确认：AutoTestTool 收到
 `POWER_CYCLE_STOP` 后在进程存活期间把 `auto_resume` 改回 true；1.0.5 先写
@@ -82,11 +87,10 @@ Diagnosis D1/D2（PR #3747 comment 6268508491）确认：AutoTestTool 收到
 - 新增 `test_powercycle_disarm_v176_3730.py`：STOP 回写替身、顺序回退必红、
   四种读取分类、未安装零写入、absent 最小 prefs、完整 disarm 打戳。
 
-真机 A–H + I/J/K 待规划者确认 1.0.6 包 SHA 后执行；1.0.5 的 12 台 E–H 与
-D1/D2 仅作对照，不代签 1.0.6。
+该历史阶段尚未执行 1.0.6 的最终真机；1.0.5 的 12 台 E–H 与 D1/D2 只作对照。现行最终包为 1.0.8，证据见 Verification。
 
 
-## v1.7.7 / 1.0.7（2026-10-20）
+## 历史记录：v1.7.7 / 1.0.7（2026-10-20）
 
 规划者核验 1.0.6 后指出两处读取规则与两项测试缺口（PR #3747，2026-10-20；
 见 #3723 v1.7.7 §3.6.6 第 2 条与第 7 条 e、f）：
@@ -103,11 +107,10 @@ D1/D2 仅作对照，不代签 1.0.6。
 - 追加 `powercycle_disarm@1.0.7`；1.0.6 `retired:true`（SHA 不变）；
   ONBOARDED、模板 pin、API/Worker 测试同步 1.0.7；setup 与 finish@1.1.0 未改。
 
-真机 A–H + I/J/K 待规划者确认 1.0.7 包 SHA 后执行；只做 MLD_LX2、MLD_LX3，
-MLD_NX2 转 #3761。1.0.5/1.0.6 的真机与诊断结果仅作对照。
+该历史阶段在规划者确认 1.0.7 前未开始真机；后续改为 1.0.8 并仅验 MLD_LX2、MLD_LX3，MLD_NX2 转 #3761。旧包结果只作对照，现行证据见 Verification。
 
 
-## v1.7.8 / 1.0.8（2026-10-20）
+## 历史记录：v1.7.8 / 1.0.8（2026-10-20）
 
 U5 独立复核第 1 轮（PR #3747 comment 6291379603）判定 **需修改**；规划者回应确认
 F1、F2 属清单内实施遗漏，F3 为真机材料欠项，F4 非阻塞。按 #3723 v1.7.8 §3.6.6
@@ -127,10 +130,10 @@ F1、F2 属清单内实施遗漏，F3 为真机材料欠项，F4 非阻塞。按
   1.1.1/2.0.0 被执行且记 `unknown_legacy_version`，并含回退「≥1.1 即收取」的变异自证。
 - 追加 `powercycle_disarm@1.0.8`；1.0.7 `retired:true`（SHA 不变）；ONBOARDED
   最低版本、模板 pin、API/Worker 测试同步 1.0.8；setup 与 finish@1.1.0 未改。
-- 真机阶段二暂停；1.0.7 上如已跑真机只作对照，最终证据绑定 1.0.8 包 SHA。
+- 当时处于代码预审前，尚未开始最终包真机；1.0.7 结果只作对照。现行最终证据已绑定 1.0.8 包 SHA，见 Verification。
 
 
-## v1.7.10 / 欠账转换后的完成重放（2026-10-21，§3.6.7）
+## 历史记录：v1.7.10 / 欠账转换后的完成重放（2026-10-21，§3.6.7）
 
 独立复核第 1 轮判定「需修改」，规划者把 backend 全量的 1 个失败分流为 U3×U5
 叠加出的集成缺口，本轮只做 §3.6.7，**不改脚本包**（1.0.8 的包 SHA
@@ -156,4 +159,4 @@ F1、F2 属清单内实施遗漏，F3 为真机材料欠项，F4 非阻塞。按
 - **变异自证**：撤回第 1 条 → 上述回归与 U2 用例共 3 failed；撤回第 2 条（清理）→
   U2 用例 1 failed（IntegrityError）；恢复后 15 passed。
 
-真机阶段二仍暂停；本轮不产出真机证据。
+该历史代码提交不产出真机证据；第 2 轮预审通过后已完成 1.0.8 真机，见 Verification。
