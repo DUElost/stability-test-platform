@@ -1,5 +1,10 @@
 # -*- coding: utf-8 -*-
-"""PowerCycle 停止 + 结果收取（teardown 阶段，issue #462 P0b；G15 对齐 §3.2）。
+"""PowerCycle 结果收取（teardown 阶段，issue #462 P0b；G15 对齐 §3.2）。
+
+v1.1.0（#3730 / #3723 §3.6）：**只做结果收取**——不再写 prefs、不再停服务。
+解除改由 ``powercycle_disarm`` 1.0.0 承担。墙钟预算按
+``collect_attempts × collect_retry_wait_seconds + 60``（不再使用独立的
+长时 ``wait_device_online_seconds`` 门闸；重启窗口由收取重试覆盖）。
 
 v1.0.8（#3463 §9 G1-pc-2，2026-09-27）：prefs 读路径 kind 区分收口（F1「六族内
 所有 prefs 读路径」，#3471 复核 B3/B4 退回项）：
@@ -38,13 +43,10 @@ v1.0.5（#2834 同形收口）：回收本次自建的临时结果目录。v1.0.
 移植自 stability_PowerCycle-Test/scripts/stop.ps1 + lib.ps1（Stop-PowerCycleTask，
 AutoTestTool 后端）。PC pc-watchdog / MSSV 收尾不移植（G15 D3/D4）。
 
-流程：
-0. **等待设备系统就绪（v1.0.1 发现⑦ + v1.0.2 发现⑪）**：PowerCycle 设备每
-   ~75s 重启一次，teardown 撞上重启窗口会 adb device not found → 结果收集
-   失败（验收 0/4）。收取前置 = get-state==device **且 sys.boot_completed==1**
-   （v1.0.2：boot 早期 adbd 在线但 /data 未挂载，run-as stat 失败——
-   实测 abort 后 teardown 在此时段写 prefs 失败）。最长 wait_device_online_seconds。
-1. 停任务：prefs auto_resume=false+running=false → POWER_CYCLE_STOP 优雅停止 → force-stop 兜底
+流程（v1.1.0）：
+0. **等待设备系统就绪**（每次收取尝试前）：get-state==device 且
+   sys.boot_completed==1；单次等待 ``collect_retry_wait_seconds``。
+1. （解除已迁至 powercycle_disarm——本脚本不再停任务、不写 prefs）
 2. 拉取 powercycle_result.txt（主路径 /sdcard/Android/data/.../files/PowerCycle/，旧路径兜底）
    ——**v1.0.4（#830）**：stop→pull 之间撞设备重启窗口时，等设备重新就绪后重拉
    （最多 collect_attempts 次，单次等待 collect_retry_wait_seconds 秒）；旧行为
@@ -59,10 +61,8 @@ AutoTestTool 后端）。PC pc-watchdog / MSSV 收尾不移植（G15 D3/D4）。
 STP_STEP_PARAMS:
 {
     "project": "legacy",
-    "force_stop": true,                // 优雅停止失败时强制杀（stop.bat -Force 语义）
-    "wait_device_online_seconds": 600, // 收取前置：等待设备上线的最大秒数（默认 600）
-    "collect_attempts": 3,             // v1.0.4（#830）：收取阶段最多尝试次数（含首次）
-    "collect_retry_wait_seconds": 120  // v1.0.4（#830）：每次重试前等设备就绪的最大秒数
+    "collect_attempts": 3,             // 收取阶段最多尝试次数（含首次）
+    "collect_retry_wait_seconds": 120  // 每次尝试前等设备就绪的最大秒数
 }
 
 输出 (stdout): {"success": true/false, "metrics": {...}, "detail_uri": "..."}
@@ -91,7 +91,6 @@ from _lib import (
     parse_size_from_ls,
     result_paths,
     results_dir,
-    stop_task,
 )
 
 
@@ -211,17 +210,16 @@ def _pull_result_file() -> Path:
 
 
 def _collect_with_retry(wait_s: int, attempts: int) -> Path:
-    """stop 后收取，撞设备重启窗口时等设备回来重拉（v1.0.4，#830）。
+    """收取结果；撞设备重启窗口时等设备回来重拉（v1.0.4，#830；v1.1.0 调整）。
 
-    PowerCycle 设备每 ~75s 重启一次：stop→pull 之间的重启会让 adb 暂时
-    不可用。旧行为首次失败即 raise → teardown 失败，重跑 setup 的 uninstall
-    连结果文件一起清掉（数据丢失）。此处每次失败后等设备重新就绪
-    （get-state==device 且 boot_completed==1）再试，最多 attempts 次。
+    v1.1.0：每次尝试（含首次）前先等设备就绪，等待预算与
+    ``collect_attempts × collect_retry_wait_seconds`` 墙钟登记一致；
+    不再依赖已拆出的解除步骤的上线等待。
     """
     last_exc: RuntimeError | None = None
     tried = 0
     for _ in range(attempts):
-        if tried and not _wait_device_online(wait_s):
+        if not _wait_device_online(wait_s):
             break
         tried += 1
         try:
@@ -235,10 +233,6 @@ def _collect_with_retry(wait_s: int, attempts: int) -> Path:
 
 def _run(cfg: dict) -> dict:
     project = str(param_or_env(cfg, "project", "STP_POWER_CYCLE_PROJECT", "legacy"))
-    force = str(param_or_env(cfg, "force_stop", "STP_POWER_CYCLE_FORCE_STOP", "true")).lower() == "true"
-    wait_online = int(str(param_or_env(
-        cfg, "wait_device_online_seconds", "STP_POWER_CYCLE_WAIT_ONLINE_SECONDS", _DEFAULT_WAIT_ONLINE,
-    )) or _DEFAULT_WAIT_ONLINE)
     collect_attempts = max(1, int(str(param_or_env(
         cfg, "collect_attempts", "STP_POWER_CYCLE_COLLECT_ATTEMPTS", _DEFAULT_COLLECT_ATTEMPTS,
     )) or _DEFAULT_COLLECT_ATTEMPTS))
@@ -248,15 +242,7 @@ def _run(cfg: dict) -> dict:
     )) or _DEFAULT_COLLECT_RETRY_WAIT)
 
     serial = device_serial()
-    if not _wait_device_online(wait_online):
-        raise RuntimeError(
-            f"设备 {serial} 在 {wait_online}s 内未上线（持续重启/离线），无法收取结果——"
-            f"请提高 wait_device_online_seconds 或核对设备状态"
-        )
-
-    stop_task(force=force)
-    time.sleep(2)   # 等结果文件收尾（服务停止时 flush）
-
+    # v1.1.0：解除已拆至 powercycle_disarm；此处不再 stop_task / 写 prefs。
     local_file = _collect_with_retry(collect_wait, collect_attempts)
     parsed = parse_powercycle_result(local_file.read_bytes())
     run_id = f"powercycle_{time.strftime('%Y%m%d_%H%M%S')}_{serial}"

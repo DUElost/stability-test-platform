@@ -54,6 +54,8 @@ from .contracts.device_return import (
     EXECUTING_DISARM,
     LEASE_LOST_REASON,
     ONBOARDED,
+    REASON_UNKNOWN_LEGACY_VERSION,
+    STEP_ROLE_COLLECT,
     default_not_executed_for_families,
     family_for_disarm_script,
     is_disarm_script,
@@ -62,6 +64,8 @@ from .contracts.device_return import (
     note_footprint_started,
     script_name_from_step,
     select_disarm_steps,
+    step_teardown_role,
+    step_version_of,
 )
 
 
@@ -1699,11 +1703,13 @@ class PipelineEngine:
             self._disarm_results = {}
 
         script_name = script_name_from_step(step)
+        step_ver = step_version_of(step)
         disarm_step = (
             phase == "teardown"
             and is_disarm_script(
                 script_name,
                 footprint_families=footprint,
+                version=step_ver,
                 onboarded=ONBOARDED,
             )
         )
@@ -2163,6 +2169,7 @@ class PipelineEngine:
                         and is_disarm_script(
                             name or "",
                             footprint_families=self._footprint_families,
+                            version=version,
                             onboarded=ONBOARDED,
                         )
                     )
@@ -2936,7 +2943,14 @@ class PipelineEngine:
     ) -> None:
         """Accumulate one family's disarm_results entry from a step outcome."""
         script = script_name_from_step(step)
-        family = family_for_disarm_script(script, onboarded=ONBOARDED)
+        ver = step_version_of(step)
+        role = step_teardown_role(script, ver, onboarded=ONBOARDED)
+        # 新 finish@1.1.0 只收取：不得覆盖已完成的 disarm（#3723 §3.0.2）。
+        if role == STEP_ROLE_COLLECT:
+            return
+        family = family_for_disarm_script(
+            script, version=ver, onboarded=ONBOARDED,
+        )
         if family is None:
             return
         prior = None
@@ -2999,6 +3013,8 @@ class PipelineEngine:
             reason = "step_disabled" if (
                 error_message and "disabled" in str(error_message)
             ) else "skipped"
+        elif role == "unknown_legacy_disarm":
+            reason = REASON_UNKNOWN_LEGACY_VERSION
         summary = ""
         if isinstance(readback, str):
             summary = readback
@@ -3092,6 +3108,7 @@ class PipelineEngine:
                     if is_disarm_script(
                         script,
                         footprint_families=self._footprint_families,
+                        version=step_version_of(step),
                         onboarded=ONBOARDED,
                     ):
                         self._record_disarm_for_step(

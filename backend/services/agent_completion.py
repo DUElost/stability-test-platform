@@ -292,6 +292,24 @@ async def complete_agent_job(
             )
             .order_by(DeviceLease.id.desc())
         )).scalars().first()
+        if historical_lease is None:
+            # #3723 §3.6.7 第 1 条（v1.7.10）：JOB 租约被 U3 原地转换成欠账
+            # 租约后，历史 JOB 租约行不再存在（job_id 已清空），原令牌无从核对。
+            # 此时改以「已接受终态载荷的摘要」识别**只读重放**：摘要一致 → 返回
+            # 200，不改任何事实、不记 stale_job_completion_rejected；摘要不一致 →
+            # 沿用现行规则（先迟到 confirmed，不满足再 409）。摘要为空（历史 job
+            # 未留摘要）时同样按现行规则处理，不放宽旧令牌约束。
+            accepted_digest = job.terminal_payload_digest
+            if accepted_digest and secrets.compare_digest(
+                accepted_digest, payload_digest,
+            ):
+                current_status = job.status
+                await db.rollback()
+                return {
+                    "job_id": job_id,
+                    "status": current_status,
+                    "idempotent": True,
+                }
         if (
             historical_lease is None
             or historical_lease.fencing_token != payload.fencing_token
