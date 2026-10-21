@@ -6,7 +6,7 @@ Class: feature
 按 [#3723](https://github.com/DUElost/stability-test-platform/issues/3723) **v1.7.10** §3.0.2 / §3.6 / §3.6.1–§3.6.7 / §4 U5
 与 ADR-0061 Accepted v1.1（含 D2.5）实施 [#3730](https://github.com/DUElost/stability-test-platform/issues/3730)。
 方案 A 旧包处置见 [#3751](https://github.com/DUElost/stability-test-platform/issues/3751#issuecomment-6234224273)。
-第 2 轮代码预审已通过（评论 6307749356）；1.0.8 真机及严格 B 补测已完成。补测亮度差异已恢复，按派单先回规划者（评论 6312504223）；最终独立复核尚未签署，PR 保持 draft。合入不等于生效（发包/scan/热更新/重指受 §5 整批闸门）。
+第 2 轮代码预审已通过（评论 6307749356）；第 3 轮最终验收只剩 F5：旧 K 缺少原始恢复对照。按规划者评论 6315113631，现已完成四台主样本 K 重跑，逐台原始记录均满足四项判据；B 亮度恢复说明已获该评论接受。交原独立复核工作面第 4 轮终签，PR 保持 draft。合入不等于生效（发包/scan/热更新/重指受 §5 整批闸门）。
 
 
 ## 历史记录：v1.7.1 返修（2026-10-19）
@@ -45,15 +45,16 @@ Class: feature
 - 树对象可达并 SHA 与 manifest 一致。
 - §3.6.5 / §4.1 真入口三入口反例与正向对照；Engine→runner 角色对照；15s 轮询进度。
 - 第 2 轮代码预审通过，绑定 `04b2bd07895a0aa4f0311fb4e503123f7c00d1c4`；本次仅文档补证，不改变脚本、manifest、模板、包与测试。
-- 1.0.8 真机：V552AA 的 MLD_LX2（H01，尾号 6490、6521）、MLD_LX3（H02，0034、0104）完成当前方案要求的判例证据；A 按 §3.6.6 第 8 条由 J 覆盖。I 非 root 每类 4 次，全部原始 clear；J 的 root/non-root 各 1 台为 not_installed 且零写入；K 拒读后不整写，原 mode/内容恢复。实际 APK/权限模型与次数见[完整报告](2026-10-21-b6-u5-realdevice-108.md)。root 下服务运行中的 disarm 未覆盖，不外推。
+- 1.0.8 真机：V552AA 的 MLD_LX2（H01，尾号 6490、6521）、MLD_LX3（H02，0034、0104）完成当前方案要求的判例证据；A 按 §3.6.6 第 8 条由 J 覆盖。I 非 root 每类 4 次，全部原始 clear；J 的 root/non-root 各 1 台为 not_installed 且零写入；旧 K 只保留拒读输出作对照；恢复与不整写以本次 K 重跑原始记录为准，见下条。实际 APK/权限模型与次数见[完整报告](2026-10-21-b6-u5-realdevice-108.md)。root 下服务运行中的 disarm 未覆盖，不外推。
+- K 重跑（2026-10-21 19:59:53–20:00:58，+08）：指定四台均在 chmod 000 / unroot 后得到 probe 与 disarm 原始 readback_failed、kind=denied，disarm 正式 failed。root 回读仍为 mode 0（即 000），owner、SHA、inode 不变；恢复 chmod rc=0，mode/owner/SHA 与初值一致，adbd uid 分别恢复 0、0、2000、0。逐台 mode/owner/SHA 与命令 rc 表见完整报告；原始命令、rc、stdout、stderr、UTC 见 K-retest/events.jsonl。四台全部满足规划者四项判据，无其它偏差。
 - B 原 0104 样本为 online=false 的离线分支，不计入。2026-10-21 17:18（+08）补测第 1 次先确认离线再重新在线，probe 自身 online=true、显式 boot_completed=""、原始 readback_failed、正式 failed，无 kind、无身份取证、无执行阶段 PROGRESS，10 项严格判据通过；与 LX2 两台及 LX3 0034 构成每类 2 台有效 B。
-- 补测初次收尾亮度 61→28，RESULT.json 如实记录恢复比对失败；随后恢复为 61 并核对开机完成、prefs/应用/设置/进程/服务/adb server 与实验前一致，临时目录已删除。按“其它偏差先回规划者”已回告评论 6312504223，未直接交终签。
-- 主实验与 D/F/H 补证没有逐次占用日志；旧日志只有收尾 64 条，不声称有可核验数据库 statement 日志。本次 B 与恢复逐次日志 167 条，ACTIVE 全为 0；规划者对原窗口无租约的独立查询见评论 6310794779。
-- 原事件和初次错误辅助判定均保留；cases.py、experiment.py、j_cases.py 的留存版本在相关运行后有改动，select_j.py 实际未完成，不能以这些文件证明历史执行版本。B 新 harness 运行前/后摘要一致。证据目录 `/home/debian13/b6-u5-realdevice-108-20261021-04b2bd078/`，补测在 `B-retest/`。
+- 补测初次收尾亮度 61→28，RESULT.json 如实记录恢复比对失败；随后恢复为 61 并核对开机完成、prefs/应用/设置/进程/服务/adb server 与实验前一致，临时目录已删除。当时按“其它偏差先回规划者”回告评论 6312504223；规划者评论 6315113631 已接受并确认 B 有效，不再作为终签待决项。
+- 主实验与 D/F/H 补证没有逐次占用日志；旧日志只有收尾 64 条，不声称有可核验数据库 statement 日志。本次 B 与恢复逐次日志 167 条，K 重跑逐次日志 180 条（176 次设备命令与 4 次连接前检查），ACTIVE 全为 0；规划者对原窗口无租约的独立查询见评论 6310794779。
+- 原事件和初次错误辅助判定均保留；cases.py、experiment.py、j_cases.py 的留存版本在相关运行后有改动，select_j.py 实际未完成，不能以这些文件证明历史执行版本。B 与 K 新 harness 运行前/后摘要一致。K 的 run_K.py / transport.py SHA 分别为 947297d1a427ae43a05309272f3a6e6d97fbe6e51ec177d99735a45bedbd7879 / 061ea6b857478187002ecafc2d7c2e9382db8cffa8434d54f1198f4cf4a54f2b；原始事件写入时掩码，辅助控制台日志结束后脱敏。K 后 prefs/adbd、服务/设置与 adb server 均与初值一致，四个 host 临时目录已删除。证据目录 `/home/debian13/b6-u5-realdevice-108-20261021-04b2bd078/`，补测分别在 `B-retest/`、`K-retest/`。原事实表明确限定为历史统计；K 本次新增每类 non-root probe denied 2 次、disarm failed 2 次，APK SHA 与包 SHA 均再验一致。
 
 ## Revisit
 
-- 按已回告的亮度恢复差异先回规划者；最终验收仍由原独立复核工作面签署。本次不登记可信组合，不追加脚本版本；U8 消费事实，NX2 见 #3761。
+- 按规划者评论 6315113631，K 四台全部满足判据且无其它偏差，新 HEAD 六项 required 与 informational 全绿后直接交原独立复核工作面第 4 轮；最终验收仍由该工作面签署，通过后 Owner 转 Ready。本次不登记可信组合，不追加脚本版本；U8 消费事实，NX2 见 #3761。
 - U3/U6 的集成已在 `04b2bd078` 的代码预审与同 head CI 中核对；文档提交的新 HEAD 仍核对六项 required 与 informational，不沿用旧 SHA 代签。
 - 激活按 #3723 §5；不得因本单元单独发包/scan/热更新/重指。
 
