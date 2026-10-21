@@ -28,12 +28,13 @@ from backend.api.schemas.device import (
     DeviceRetireBatchResult,
     DeviceRetireIn,
     DeviceUnretireIn,
+    DeviceReturnDebtOut,
     DeviceReturnOverrideIn,
     DeviceReturnOverrideOut,
 )
 from backend.api.routes.auth import get_current_active_user, require_admin, User
 from backend.services.device_lease_emergency_release import release_terminal_job_lease
-from backend.services.device_return import apply_override_sync
+from backend.services.device_return import apply_override_sync, open_debts_for_device_sync
 from backend.core.metrics import record_device_return_override
 from backend.services.device_lifecycle import not_stale_condition
 from backend.services.device_retirement import (
@@ -530,6 +531,32 @@ def get_device(
     out = DeviceOut.model_validate(device)
     _fill_project_key(device, out, _model_to_project_map(db))
     return out
+
+
+@router.get("/{device_id}/return-debts", response_model=ApiResponse[List[DeviceReturnDebtOut]])
+def list_device_return_debts_endpoint(
+    device_id: int,
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
+    # ADR-0061 D5.9 / #3723 U6: open debt rows, oldest first, no evidence.
+    if db.get(Device, device_id) is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "DEVICE_NOT_FOUND", "message": "设备不存在"},
+        )
+    rows = open_debts_for_device_sync(db, device_id)
+    return ok([
+        DeviceReturnDebtOut(
+            id=row.id,
+            family=row.family,
+            source_kind=row.source_kind,
+            source_job_id=row.source_job_id,
+            cause=row.cause,
+            created_at=row.created_at,
+        )
+        for row in rows
+    ])
 
 
 @router.put("/{device_id}/tags", response_model=DeviceOut)

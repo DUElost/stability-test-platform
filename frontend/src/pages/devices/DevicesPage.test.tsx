@@ -13,6 +13,8 @@ const mockCreateDevice = vi.fn();
 const mockBulkSwipeTrail = vi.fn();
 const mockRetireBatch = vi.fn();
 const mockUnretireDevice = vi.fn();
+const mockReturnDebts = vi.fn();
+const mockReturnOverride = vi.fn();
 const mockUseAuthSession = vi.fn(() => ({ data: { role: 'admin' } }));
 
 vi.mock('@/utils/api', async (importOriginal) => {
@@ -41,6 +43,8 @@ vi.mock('@/utils/api', async (importOriginal) => {
         bulkSwipeTrail: (...args: unknown[]) => mockBulkSwipeTrail(...args),
         retireBatch: (...args: unknown[]) => mockRetireBatch(...args),
         unretire: (...args: unknown[]) => mockUnretireDevice(...args),
+        returnDebts: (...args: unknown[]) => mockReturnDebts(...args),
+        returnOverride: (...args: unknown[]) => mockReturnOverride(...args),
       },
     },
   };
@@ -143,6 +147,14 @@ describe('DevicesPage', () => {
       skipped: 0,
       results: [],
     });
+    mockReturnDebts.mockResolvedValue([]);
+    mockReturnOverride.mockResolvedValue({
+      device_id: 1,
+      families: ['power-cycle'],
+      closed_count: 1,
+      debt_lease_released: true,
+      open_debt_count: 0,
+    });
   });
 
   it('resolves host name when device host_id is a string', async () => {
@@ -181,6 +193,50 @@ describe('DevicesPage', () => {
       expect(screen.getByRole('columnheader', { name: '存储' })).toBeInTheDocument();
       expect(screen.getByText('剩 28.0 GiB')).toBeInTheDocument();
     });
+  });
+
+  it('expanded row shows the device return status and open debt entries', async () => {
+    mockFetchAllDevicePages.mockResolvedValue({
+      items: [
+        {
+          id: 1,
+          serial: 'TEST-SERIAL',
+          model: 'TestModel',
+          host_id: '198-51-100-123',
+          status: 'ONLINE',
+          tags: [],
+          last_seen: '2026-08-05T18:00:00+08:00',
+          return_state: {
+            'power-cycle': {
+              state: 'debt',
+              source: 'job',
+              updated_at: '2026-10-19T02:00:00Z',
+            },
+          },
+        },
+      ],
+      total: 1,
+    });
+    mockReturnDebts.mockResolvedValue([
+      {
+        id: 11,
+        family: 'power-cycle',
+        source_kind: 'job',
+        source_job_id: 9527,
+        cause: 'not_executed',
+        created_at: '2026-10-19T02:00:00Z',
+      },
+    ]);
+    const DevicesPage = (await import('./DevicesPage')).default;
+    render(<DevicesPage />, { wrapper: createWrapper() });
+
+    await waitFor(() => expect(screen.getByText('TEST-SERIAL')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('TEST-SERIAL'));
+
+    expect(await screen.findByTestId('device-return-summary-1')).toHaveTextContent('欠账');
+    expect(screen.getByTestId('device-return-family-1-power-cycle')).toHaveTextContent('来源：job');
+    expect(await screen.findByTestId('device-return-debt-11')).toHaveTextContent('来源：job #9527');
+    expect(screen.getByTestId('device-return-override-1')).toBeInTheDocument();
   });
 
   it('admin can bulk-assign selected devices to a project', async () => {

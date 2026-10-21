@@ -345,6 +345,7 @@ def build_plan_run_devices(
             job_exec_status=exec_status,
             adb_state=dev.adb_state if dev else None,
             adb_connected=dev.adb_connected if dev else None,
+            disarm_results=j.disarm_results,
             capabilities={
                 "manual_retry": manual_retry_allowed,
                 "manual_exit": j.status == JobStatus.RUNNING.value,

@@ -1,7 +1,28 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ExpandableDeviceTable } from './ExpandableDeviceTable';
 import { BULK_BAR_SPACER_CLASS } from '@/components/ui/bulk-action-bar';
+
+// #3723 U6：展开行现在含归还面板，按需拉 return-debts；组件测试不触网。
+vi.mock('@/utils/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/utils/api')>();
+  return {
+    ...actual,
+    api: {
+      ...actual.api,
+      devices: {
+        ...actual.api.devices,
+        returnDebts: vi.fn().mockResolvedValue([]),
+      },
+    },
+  };
+});
+
+function renderWithQuery(ui: React.ReactElement) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+}
 
 const devices = [
   {
@@ -238,7 +259,7 @@ describe('ExpandableDeviceTable', () => {
       disk_total: 128 * 1024 ** 3,
       disk_used: 100 * 1024 ** 3,
     }));
-    render(<ExpandableDeviceTable devices={withDisk} />);
+    renderWithQuery(<ExpandableDeviceTable devices={withDisk} />);
     fireEvent.click(screen.getByText('SERIAL-1'));
 
     expect(screen.getByText('存储空间')).toBeInTheDocument();

@@ -89,6 +89,31 @@ describe('DispatchCockpit', () => {
     expect(screen.queryByText(fingerprint)).not.toBeInTheDocument();
   });
 
+  it('shows the device_return_debt preview warning with serial and the required action', () => {
+    renderCockpit({
+      preview: {
+        plan_id: 7,
+        plan_name: 'Smoke Plan',
+        device_ids: [3],
+        device_count: 1,
+        job_count: 1,
+        total_steps: 1,
+        lifecycle: { init: [], teardown: [] },
+        confirmation_fingerprint: fingerprint,
+        warnings: [{
+          device_id: 3,
+          serial: 'SER-DEBT-3',
+          host_id: 'h1',
+          code: 'device_return_debt',
+          message: '设备有未关闭的归还欠账——不可派发，直至清偿或人工放行（ADR-0061 D5）',
+        }],
+      },
+    });
+    const warning = screen.getByTestId('dispatch-warning-device_return_debt-3');
+    expect(warning).toHaveTextContent('SER-DEBT-3');
+    expect(warning).toHaveTextContent('需清偿或人工放行后才能派发');
+  });
+
   it('shows the confirmation-changed prompt without a frozen preview', () => {
     renderCockpit({ confirmationStale: true, preview: null });
     expect(screen.getByTestId('plan-confirmation-changed')).toHaveTextContent(

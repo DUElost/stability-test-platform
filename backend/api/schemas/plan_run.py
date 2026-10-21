@@ -345,6 +345,8 @@ class DeviceMatrixItem(BaseModel):
     # （current_step 来自巡检心跳，按 patrol 段查表）；查不到 → None
     current_script_name: Optional[str] = None
     current_script_version: Optional[str] = None
+    # ADR-0061 D4.4 / #3723 U6：按专项解除结果（六值 + 证据），运行详情抽屉展示。
+    disarm_results: Optional[dict] = None
 
 
 class PlanRunDevicesOut(BaseModel):

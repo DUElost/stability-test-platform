@@ -33,6 +33,8 @@ import { ENTITY_STATUS_COLORS } from '@/design-system/colors';
 import { ALERT_BOX, FORM, resourceUsageBgClass, resourceUsageTextClass, STAT, TEXT } from '@/design-system/tokens';
 import { formatBytes, formatDateTimeFull } from '@/utils/format';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
+import { DeviceReturnPanel } from './DeviceReturnPanel';
+import type { ReturnStateEntry } from './deviceReturn';
 
 export type DeviceStatus = 'idle' | 'testing' | 'offline' | 'error';
 
@@ -92,10 +94,14 @@ export interface DeviceTableData {
   is_stale?: boolean;
   /** ADR-0057 E4：陈旧超过 30 天的退役建议（只提示，不动作） */
   retire_suggested?: boolean;
+  /** ADR-0061 D1.3 / #3723 U6：按专项归还状态（null/缺省 = 未初始化）。 */
+  return_state?: Record<string, ReturnStateEntry> | null;
 }
 
 interface ExpandableDeviceTableProps {
   devices: DeviceTableData[];
+  /** ADR-0061 D5.7 / #3723 U6：人工放行入口只对管理员显示。 */
+  isAdmin?: boolean;
   /**
    * 服务端报告的设备总数（`GET /devices` 的 `total`）。用于「全部设备」卡显示真实
    * 总数，并在 `devices` 少于它时提示列表不完整（#3131）。
@@ -119,6 +125,7 @@ export function ExpandableDeviceTable({
   selectedIds,
   onSelectionChange,
   onFilteredDevicesChange,
+  isAdmin = false,
 }: ExpandableDeviceTableProps) {
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
   const [statusFilter, setStatusFilter] = useState<string>('all');
@@ -713,6 +720,13 @@ export function ExpandableDeviceTable({
                   {isExpanded && (
                     <TableRow className="bg-muted/40 hover:bg-muted/40">
                       <TableCell colSpan={selectable ? 12 : 11} className="p-4">
+                        <div className="mb-3">
+                          <DeviceReturnPanel
+                            deviceId={device.id}
+                            returnState={device.return_state}
+                            isAdmin={isAdmin}
+                          />
+                        </div>
                         <div className="grid grid-cols-1 md:grid-cols-6 gap-4">
                           {/* Device Info */}
                           <div className="bg-card rounded-lg border border-border p-3">
