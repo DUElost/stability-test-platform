@@ -387,6 +387,7 @@ async def test_reconciler_and_acquire_lease_lock_order(db_session):
 async def test_recovery_and_discharge_lock_order(db_session, monkeypatch):
     device, job, lease, host = _seed_terminal(db_session)
     did, jid, lid = device.id, job.id, lease.id
+    # #3723 §3.8: supply exact test evidence; keep transaction/source assertions.
     trusted = trust_test_probe(db_session, monkeypatch, did)
     original_token = lease.fencing_token
 
@@ -470,6 +471,7 @@ async def test_completion_unknown_and_acquire_lock_order(db_session, monkeypatch
     lease.expires_at = now + timedelta(hours=1)
     db_session.commit()
     did, jid, lid = device.id, job.id, lease.id
+    # #3723 §3.8: supply exact test evidence; keep transaction/source assertions.
     trusted = trust_test_probe(db_session, monkeypatch, did, jid)
     token = lease.fencing_token
 

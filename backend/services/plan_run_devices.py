@@ -180,15 +180,18 @@ def running_heartbeat_deadline(
     liveness signal never arrived are anchored at dispatch time so they still
     age out after one full window.
     """
+    if db is not None:
+        j = db.execute(select(JobInstance).where(JobInstance.id == j.id)
+                       .execution_options(populate_existing=True)).scalars().one()
     if j.status != JobStatus.RUNNING.value:
         return None
     if db is not None and getattr(j, "disarm_guard", None) is not None:
-        fresh = db.execute(select(JobInstance).where(JobInstance.id == j.id)
-                           .execution_options(populate_existing=True)).scalars().one()
-        protected_until = job_guard_deadline(db, fresh, now or datetime.now(timezone.utc))
+        fresh = j
+        checked_at = max(now or datetime.now(timezone.utc), datetime.now(timezone.utc))
+        protected_until = job_guard_deadline(db, fresh, checked_at)
         if protected_until is not None:
             return protected_until
-        return datetime.fromtimestamp(disarm_guard_expiry(fresh.disarm_guard), timezone.utc)
+        return min(checked_at, datetime.fromtimestamp(disarm_guard_expiry(fresh.disarm_guard), timezone.utc))
     graded_timeout = running_heartbeat_timeout_seconds(
         j, patrol_stall_multiplier=PATROL_STALL_MULTIPLIER,
     )

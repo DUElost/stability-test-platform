@@ -17,11 +17,13 @@ Debt leases do **not** auto-expire: protection is ``lease_type=MAINTENANCE`` +
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 from sqlalchemy.orm.attributes import flag_modified
 from backend.models.host import Host
 from backend.models.plan_run import PlanRun
 from backend.models.audit import AuditLog
+from backend.services.audit_writer import record_audit, record_audit_async
 from backend.core.job_timeout_config import HOST_HEARTBEAT_TIMEOUT_SECONDS, running_heartbeat_timeout_seconds, abort_reap_clock
 from backend.agent.contracts.device_return import (
     disarm_guard_deadline, freeze_disarm_guard, receive_disarm_evidence, select_disarm_steps,
@@ -981,7 +983,8 @@ def apply_discharge_sync(
         policy = evaluate_probe_entry(device, family, entry, token_valid=True)
         decision = probe_entry_response(family, entry, policy, entry_point="discharge")
         if decision["status_code"] == 422:
-            audit_unverified_probe(db, resource_id=device_id, family=family, entry=entry, policy=policy)
+            audit_unverified_probe(db, resource_id=device_id, family=family, entry=entry, policy=policy, entry_point="discharge",
+                                   report_identity=hashlib.sha256(fencing_token.encode()).hexdigest())
             rejected_families.append(decision)
             continue
         if policy["trusted"]:
@@ -1228,9 +1231,10 @@ async def try_apply_late_confirmed(
         if not decision["ignore"] and policy["trusted"] and policy["result"] == DISARM_RESULT_CONFIRMED:
             verified.append(family)
         else:
-            await db.run_sync(lambda sync_db, family=family, policy=policy: audit_unverified_probe(
-                sync_db, resource_id=job_id, family=family, entry=results[family], policy=policy, resource_type="job_instance",
-            ))
+            await audit_unverified_probe_async(
+                db, resource_id=job_id, family=family, entry=results[family], policy=policy,
+                entry_point="late", resource_type="job_instance",
+            )
     if not verified:
         return {"ok": True, "closed_count": 0, "debt_lease_released": False,
                 "open_debt_count": len(open_rows)}
@@ -1691,17 +1695,65 @@ def evaluate_probe_entry(
     )
 
 
-def audit_unverified_probe(db: Session, *, resource_id: int, family: str, entry: Mapping, policy: Mapping, resource_type: str = "device") -> None:
-    """Independent diagnostic audit survives a 422 business rollback."""
+def _probe_audit_details(family: str, entry: Mapping, policy: Mapping, *, entry_point: str,
+                         replacement_result: str | None, report_identity: str | None = None) -> dict:
+    reports = policy.get("report_ref") or [c.get("report_ref") for c in policy.get("expected", []) if c.get("report_ref")]
+    details = {"entry_point": entry_point, "family": family, "reported_result": entry.get("result"),
+               "replacement_result": replacement_result,
+               "reason": policy.get("reason") or "raw_result_mismatch", "report_ref": reports,
+               "raw": dict(entry), "expected": policy.get("expected"), "observed": policy.get("observed")}
+    details["report_identity"] = report_identity
+    details["report_digest"] = hashlib.sha256(json.dumps(details, sort_keys=True, default=str).encode()).hexdigest()
+    return details
 
+
+def audit_unverified_probe(db: Session, *, resource_id: int, family: str, entry: Mapping, policy: Mapping,
+                           entry_point: str, replacement_result: str | None = None,
+                           resource_type: str = "device", report_identity: str | None = None) -> None:
+    """v1.7.12: one diagnostic row per item; same read-only replay adds none.
+
+    Use the existing audit writer's synchronous equivalent for sync services.
+    Independent transaction survives the caller's business rollback on 422.
+    Callers serialize on the existing job/device lock before this operation.
+    """
+    details = _probe_audit_details(family, entry, policy, entry_point=entry_point, replacement_result=replacement_result, report_identity=report_identity)
     with Session(bind=db.get_bind()) as diagnostic:
-        diagnostic.add(AuditLog(
-            action="unverified_probe_result", resource_type=resource_type, resource_id=str(resource_id),
-            username="agent", details={"family": family, "raw": dict(entry), **dict(policy)},
-        ))
-        diagnostic.commit()
-    # Diagnostic counter wiring is pending Planner scope clarification:
-    # stp_disarm_result_total is reserved for the six formal outcomes.
+        duplicate = diagnostic.execute(select(AuditLog.id).where(
+            AuditLog.action == "unverified_probe_result", AuditLog.resource_type == resource_type,
+            AuditLog.resource_id == str(resource_id),
+            AuditLog.details["report_digest"].as_string() == details["report_digest"],
+        )).first()
+        if not duplicate:
+            record_audit(diagnostic, action="unverified_probe_result", resource_type=resource_type,
+                         resource_id=resource_id, username="agent", details=details, strict=True)
+            diagnostic.commit()
+
+
+async def audit_unverified_probe_async(db: AsyncSession, *, resource_id: int, family: str, entry: Mapping,
+                                       policy: Mapping, entry_point: str, resource_type: str = "device") -> None:
+    """Async entry uses record_audit_async; same audit/count and replay key."""
+    details = _probe_audit_details(family, entry, policy, entry_point=entry_point, replacement_result=None)
+    async with AsyncSession(bind=db.bind) as diagnostic:
+        duplicate = (await diagnostic.execute(select(AuditLog.id).where(
+            AuditLog.action == "unverified_probe_result", AuditLog.resource_type == resource_type,
+            AuditLog.resource_id == str(resource_id),
+            AuditLog.details["report_digest"].as_string() == details["report_digest"],
+        ))).first()
+        if not duplicate:
+            await record_audit_async(diagnostic, action="unverified_probe_result", resource_type=resource_type,
+                                     resource_id=resource_id, username="agent", details=details)
+            await diagnostic.commit()
+
+
+def check_init_probe_result(db: Session, device: Device, family: str, entry: Mapping, *, token_valid: bool) -> dict:
+    """Shared init behavior only; U4 supplies the real token-protected caller."""
+    if not token_valid:
+        return {"status_code": 409, "code": "DEBT_TOKEN_INVALID"}
+    policy = evaluate_probe_entry(device, family, entry, token_valid=token_valid)
+    decision = probe_entry_response(family, entry, policy, entry_point="init_check")
+    if decision["status_code"] == 422:
+        audit_unverified_probe(db, resource_id=device.id, family=family, entry=entry, policy=policy, entry_point="init_check")
+    return decision
 
 
 def verify_job_results(
@@ -1721,8 +1773,10 @@ def verify_job_results(
         else:
             policy = evaluate_probe_entry(device, family, current, token_valid=token_valid, job=job)
             if probe_entry_response(family, current, policy, entry_point="complete")["use_trace"]:
-                audit_unverified_probe(db, resource_id=job.id, family=family, entry=current, policy=policy, resource_type="job_instance")
-                current = dict(derived.get(family) or {"result": DISARM_RESULT_NOT_EXECUTED})
+                replacement = dict(derived.get(family) or {"result": DISARM_RESULT_NOT_EXECUTED})
+                audit_unverified_probe(db, resource_id=job.id, family=family, entry=current, policy=policy,
+                                       entry_point="complete", replacement_result=replacement["result"], resource_type="job_instance")
+                current = replacement
             elif policy["trusted"]:
                 current["result"] = policy["result"]
             # Non-privileged values carry evidence but do not close a debt.

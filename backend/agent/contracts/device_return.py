@@ -149,8 +149,25 @@ ONBOARDED: dict[str, Any] = {
         "finish_min_version": "1.1.0",
         # 探针模式（脚本参数 mode）
         "probe_modes": ("probe", "disarm"),
-        # 已验证设备类别（device.platform + device.model）；空=尚未真机验证
-        "verified_device_classes": [],
+        # #3723 v1.7.12 / #3730 6331107188: exact verified combinations.
+        "verified_device_classes": [
+            {
+                "platform": "MTK", "model": model, "permission_model": permission,
+                "autotesttool_apk_sha256": apk,
+                "script_name": "powercycle_disarm", "script_version": "1.0.8",
+                "package_sha256": "98cc16f82fa6c56fe24f37151958f4ad3efd2f5983b1bba36f9340d95cd4a557",
+                "report_ref": [
+                    "https://github.com/DUElost/stability-test-platform/pull/3747#issuecomment-6312583571",
+                    "docs/notes/feature/2026-10-21-b6-u5-realdevice-108.md",
+                    "https://github.com/DUElost/stability-test-platform/issues/3730#issuecomment-6320738260",
+                ],
+            }
+            for model, apk in (
+                ("MLD_LX2", "f275e1f233e3ac7485469406b3e35a2cf58be0fec0d7e9d60184f180db8a2929"),
+                ("MLD_LX3", "582964aff036cb8785248cd3a149cbf73f13f88bddc51a80c8605b458399e977"),
+            )
+            for permission in ("root", "non-root")
+        ],
         # 解除预算秒数（默认参数下的墙钟下限，便于运维阅读）
         "disarm_budget_seconds": 660,
         "finish_budget_seconds": 420,

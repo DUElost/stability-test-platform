@@ -1751,6 +1751,7 @@ class PipelineEngine:
         if tail is not None and disarm_step:
             self._publish_disarm_phase(step, "queue")
         wall = _resolve_step_wall_clock(step) if phase == "teardown" else None
+        legacy_wait_deadline = time.monotonic() + wall if wall is not None else None
         wait_deadline = (
             (time.monotonic() + wall) if (phase == "teardown" and wall is not None) else None
         )
@@ -1766,7 +1767,8 @@ class PipelineEngine:
             while True:
                 if tail is not None:
                     self._refresh_disarm_guard()
-                    wait_deadline = min(wait_deadline, tail["deadline"])
+                    tail = self._disarm_tail
+                    wait_deadline = min(wait_deadline, tail["deadline"]) if tail is not None else legacy_wait_deadline
                     if disarm_step:
                         self._publish_disarm_phase(step, "queue")
                 try:
@@ -2003,6 +2005,9 @@ class PipelineEngine:
             tail = self._disarm_tail
             key = str(step.get("step_id") or script_name_from_step(step))
             self._refresh_disarm_guard()
+            if self._disarm_tail is None:
+                tail = None
+        if phase == "teardown" and getattr(self, "_disarm_tail", None) is not None:
             budget, _ = disarm_execution_budget(step)
             deadlines = tail.setdefault("step_deadlines", {})
             deadlines.setdefault(key, min(time.monotonic() + budget, tail["deadline"]))
@@ -2188,7 +2193,8 @@ class PipelineEngine:
             remaining = self._current_disarm_deadline(step) - time.monotonic()
             if remaining <= 0:
                 return StepResult(success=False, exit_code=124, error_message="disarm_budget_exhausted")
-            timeout_seconds = remaining
+            if self._disarm_tail is not None:
+                timeout_seconds = remaining
         stall_seconds = _resolve_step_stall_seconds(step)
         # 2026-08-31：运行日志唯一副本（SSD logs/runs/{job_id}/）——
         # 脚本 stdout/stderr 全量落盘（含 PROGRESS），与 ctx.log_dir 对齐。
@@ -3154,6 +3160,9 @@ class PipelineEngine:
                     **saved["evidence"], "fencing_token": self._fencing_token,
                 })
                 coord._tick()
+                self._refresh_disarm_guard()
+                if self._disarm_tail is None:
+                    return
             if coord is None or not coord.guard_for_job(self._run_id):
                 self._disarm_tail["deadline"] = time.monotonic()
                 return
@@ -3163,6 +3172,11 @@ class PipelineEngine:
         coord = getattr(self, "_coordinator", None)
         tail = getattr(self, "_disarm_tail", None)
         if coord is None or tail is None:
+            return
+        if getattr(coord, "disarm_protocol", None) == 0:
+            self._disarm_tail = None
+            coord.publish_disarm_evidence(self._run_id, None)
+            logger.warning("disarm_protocol_unavailable: using v1.0 execution behavior")
             return
         guard = coord.guard_for_job(self._run_id)
         if not isinstance(guard, dict) or not guard:
@@ -3214,6 +3228,8 @@ class PipelineEngine:
         self._refresh_disarm_guard()
         key = str(step.get("step_id") or script_name_from_step(step))
         tail = self._disarm_tail
+        if tail is None:  # old controller discovered during the running step
+            return float("inf")
         return min(tail["deadline"], tail["step_deadlines"].get(key, tail["deadline"]))
 
     def _execute_teardown_best_effort(

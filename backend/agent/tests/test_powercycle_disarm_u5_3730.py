@@ -270,8 +270,11 @@ class TestOnboardedContract:
         assert "powercycle_disarm" in spec["min_wall_clock_seconds"]
         assert "powercycle_finish" in spec["min_wall_clock_seconds"]
         assert FAMILY_STEPS["power-cycle"]["disarm_onboarded"] == ("powercycle_disarm",)
-        # 真机 pending → 不得登记已验证类别
-        assert spec["verified_device_classes"] == []
+        # #3723 §3.8.1 / v1.7.12: Planner confirmed four exact combinations.
+        assert len(spec["verified_device_classes"]) == 4
+        assert {(c["platform"], c["model"], c["permission_model"]) for c in spec["verified_device_classes"]} == {
+            ("MTK", model, permission) for model in ("MLD_LX2", "MLD_LX3") for permission in ("root", "non-root")}
+        assert all(c["script_version"] == "1.0.8" and len(c["report_ref"]) == 3 for c in spec["verified_device_classes"])
 
     def test_min_wall_clock_formulas(self):
         from backend.agent.contracts.device_return import ONBOARDED

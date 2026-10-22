@@ -158,6 +158,7 @@ def test_existing_open_debt_cannot_be_overwritten_as_unverified(db_session):
 
 def test_real_late_complete_closes_same_source_without_flipping_job(client, db_session, monkeypatch):
     device, job, lease, _ = _seed(db_session)
+    # #3723 §3.8: supply exact test evidence; keep transaction/source assertions.
     trusted = trust_test_probe(db_session, monkeypatch, device.id, job.id)
     job.status = "FAILED"
     token = lease.fencing_token

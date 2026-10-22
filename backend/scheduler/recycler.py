@@ -165,6 +165,8 @@ def _final_disarm_grace_blocks_write(db, job, now: datetime) -> bool:
     if fresh is None or fresh.status != JobStatus.RUNNING.value:
         return True
     job = fresh
+    # Collection time can precede a concurrently committed stage receipt.
+    now = max(now, datetime.now(timezone.utc))
     if getattr(job, "disarm_guard", None) is not None:
         return job_guard_deadline(db, job, now) is not None
     return _disarm_grace_blocks_recycle(

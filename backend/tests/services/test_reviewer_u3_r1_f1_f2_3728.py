@@ -54,6 +54,7 @@ def test_real_sync_routes_close_last_debt_with_runtime_session(
     client, db_session, admin_headers, monkeypatch, entry
 ):
     device_id, job_id, lease_id, token = _create_debt(db_session)
+    # #3723 §3.8: supply exact test evidence; keep transaction/source assertions.
     trusted = trust_test_probe(db_session, monkeypatch, device_id)
     monkeypatch.setitem(fastapi_app.dependency_overrides, get_db, _runtime_sync_dependency)
     if entry == "override":
@@ -87,6 +88,7 @@ def test_real_sync_routes_close_last_debt_with_runtime_session(
         }
         assert opened == 0, facts
         assert lease.status == "RELEASED", facts
+        # #3723 §3.8: only trusted confirmed discharges; override stays unverified.
         assert device.return_state["power-cycle"]["state"] == ("unverified" if entry == "override" else "returned"), facts
         assert response.json()["data"]["open_debt_count"] == 0, facts
 

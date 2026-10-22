@@ -177,6 +177,7 @@ def test_replay_different_payload_after_debt_conversion_still_409(client, db_ses
 def test_late_confirmed_still_closes_same_source_after_change(client, db_session, monkeypatch):
     """迟到 confirmed 现行回归保持通过：同源令牌仍能关掉欠账。"""
     job, lease, token, device_id = _seed_job(db_session)
+    # #3723 §3.8: supply exact test evidence; keep transaction/source assertions.
     trusted = trust_test_probe(db_session, monkeypatch, device_id, job.id)
     first = client.post(f"/api/v1/agent/jobs/{job.id}/complete", json=_payload(token))
     assert first.status_code == 200, first.text

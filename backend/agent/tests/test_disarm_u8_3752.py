@@ -151,6 +151,7 @@ def test_coordinator_60s_configuration_still_delivers_every_30s(monkeypatch):
     monkeypatch.setattr(module.requests, "post", post)
     coordinator._loop()
     assert len(received) == 4
+    assert received[0] <= 30
     assert all(b-a <= 30 for a, b in zip(received, received[1:], strict=False))
 
 
@@ -384,3 +385,97 @@ def test_old_controller_uses_v10_without_inventing_queue_protection(monkeypatch)
     engine._execute_teardown_best_effort([{"step_id": "finish", "action": "script:sleep_finish", "timeout_seconds": 660}])
     assert engine._disarm_tail is None
     assert coordinator.register_job(1).disarm_evidence is None
+
+
+from backend.agent.tests.disarm_real_combinations_3752 import COMBINATIONS, CHANGES, aggregate_script_output
+
+
+@pytest.mark.parametrize("model,permission", COMBINATIONS)
+@pytest.mark.parametrize("changed", CHANGES)
+def test_registered_real_combinations_recompute_actual_script_output(monkeypatch, model, permission, changed):
+    reported, _ = aggregate_script_output(monkeypatch, model, permission, changed)
+    assert reported["result"] == ("confirmed" if changed is None else "executed_unverified")
+
+
+def test_old_controller_discovered_during_tail_reverts_to_v10(monkeypatch, caplog):
+    from types import SimpleNamespace
+    from backend.agent.tests.test_device_return_u1_3726 import _bare_engine
+    engine = _bare_engine()
+    view = SimpleNamespace(disarm_evidence={"phase": "queue"})
+    coord = SimpleNamespace(disarm_protocol=None, guard_for_job=lambda _: None,
+                            register_job=lambda _: view,
+                            publish_disarm_evidence=lambda _, e: setattr(view, "disarm_evidence", e))
+    engine._coordinator = coord
+    engine._begin_disarm_tail([STEP], disarm_only=True)
+    assert engine._disarm_tail is not None
+    coord.disarm_protocol = 0
+    engine._refresh_disarm_guard()
+    assert engine._disarm_tail is None
+    assert view.disarm_evidence is None
+    assert "disarm_protocol_unavailable" in caplog.text
+
+
+def test_registry_contains_exactly_four_planner_confirmed_combinations():
+    from backend.agent.contracts.device_return import ONBOARDED
+    from backend.agent.tests.disarm_real_combinations_3752 import APK, PACKAGE
+    combos = ONBOARDED["power-cycle"]["verified_device_classes"]
+    assert len(combos) == 4
+    assert {(c["model"], c["permission_model"]) for c in combos} == set(COMBINATIONS)
+    for combo in combos:
+        assert combo["platform"] == "MTK"
+        assert combo["autotesttool_apk_sha256"] == APK[combo["model"]]
+        assert combo["package_sha256"] == PACKAGE
+        assert combo["script_name"] == "powercycle_disarm" and combo["script_version"] == "1.0.8"
+        assert len(combo["report_ref"]) == 3
+        assert "6312583571" in combo["report_ref"][0]
+        assert combo["report_ref"][1].endswith("2026-10-21-b6-u5-realdevice-108.md")
+        assert "6320738260" in combo["report_ref"][2]
+
+
+@pytest.mark.parametrize("wall", [None, 0, -1, True, "660"])
+def test_invalid_legacy_wall_is_fixed_300(wall):
+    step = {**STEP, "timeout_seconds": wall}
+    g = freeze_disarm_guard([step], now=10, abort_at=0, fencing_token="t", agent_instance_id="i")
+    assert g["job_deadline"] == 7500
+    assert g["step_budgets"]["disarm"]["seconds"] == 300
+    assert g["step_budgets"]["disarm"]["reason"] == "legacy_missing_wall_clock"
+
+
+def test_job_cap_and_each_step_retry_deadline_remain_absolute():
+    steps = [{**STEP, "step_id": str(n), "timeout_seconds": 50000} for n in range(2)]
+    g = freeze_disarm_guard(steps, now=0, abort_at=0, fencing_token="t", agent_instance_id="i")
+    assert g["job_deadline"] == 86400
+    first = {**evidence(1, "execute", 1), "step_id": "0"}
+    g = receive_disarm_evidence(g, first, now=50000, via_coordinator=True)
+    assert g["step_deadlines"]["0"] == 86400
+    g = receive_disarm_evidence(g, {**first, "seq": 2, "progress_seq": 2, "timestamp": 10**20}, now=86399, via_coordinator=True)
+    assert g["step_deadlines"]["0"] == 86400
+    assert disarm_guard_deadline(g, now=86400, owner_valid=True, execution_heartbeat_at=86400) is None
+    for seq in (2, 1, -1):
+        replay = receive_disarm_evidence(g, {**first, "seq": seq}, now=86401, via_coordinator=True)
+        assert replay["step_deadlines"] == g["step_deadlines"]
+        assert replay["job_deadline"] == g["job_deadline"]
+
+
+def test_exhausted_local_step_never_runs_another_attempt(monkeypatch):
+    from backend.agent.tests.test_device_return_u1_3726 import _bare_engine
+    from backend.agent import pipeline_engine as module
+    engine = _bare_engine()
+    engine._coordinator = None
+    monkeypatch.setattr(module.time, "monotonic", lambda: 100)
+    engine._disarm_tail = {"deadline": 200, "step_deadlines": {"disarm": 99}}
+    monkeypatch.setattr(engine, "_run_script_action", lambda *a: pytest.fail("exhausted step executed"))
+    assert engine._run_step_with_retry("teardown", STEP, disarm_step=True) is False
+    assert engine._disarm_results["power-cycle"]["result"] == "incomplete"
+
+
+def test_restarted_tail_can_negotiate_old_controller(monkeypatch):
+    from types import SimpleNamespace
+    from backend.agent.tests.test_device_return_u1_3726 import _bare_engine
+    engine = _bare_engine()
+    coord = SimpleNamespace(disarm_protocol=None, guard_for_job=lambda _: None, publish_disarm_evidence=lambda *a: None)
+    coord._tick = lambda: setattr(coord, "disarm_protocol", 0)
+    engine._coordinator = coord
+    engine._local_db = SimpleNamespace(load_disarm_state=lambda _: {"seq": 7, "evidence": {"phase": "queue"}})
+    engine._begin_disarm_tail([STEP], disarm_only=True)
+    assert engine._disarm_tail is None

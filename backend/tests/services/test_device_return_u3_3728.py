@@ -168,6 +168,7 @@ class TestDeviceReturnU3:
         db_session.commit()
         assert outcome.open_debt_count == 2
         lease = db_session.get(DeviceLease, lease.id)
+        # #3723 §3.8: trusted confirmed replaces old executed_unverified input.
         trusted = trust_test_probe(db_session, monkeypatch, device.id)
         result = apply_discharge_sync(
             db_session,
@@ -306,3 +307,26 @@ class TestDeviceReturnU3:
         db_session.refresh(device)
         assert device.return_state is not None
         assert device.return_state["power-cycle"]["state"] == "unverified"
+
+
+@pytest.mark.parametrize("claimed", ["executed_unverified", "confirmed"])
+def test_unverified_discharge_no_longer_closes_debt(db_session, claimed):
+    """#3723 §3.8 / v1.7.12: counterexample to the replaced U3 semantics.
+
+    The old implementation closed on executed_unverified or evidence-free
+    confirmed. Neither is a trusted confirmed; both leave the debt and token.
+    """
+    device, job, lease, _ = _seed(db_session)
+    handle_job_lease_release_sync(db_session, device_id=device.id, job_id=job.id, job=job)
+    db_session.commit()
+    token = lease.fencing_token
+    result = apply_discharge_sync(db_session, device_id=device.id, fencing_token=token,
+                                  family_results={"power-cycle": {"result": claimed}})
+    db_session.commit()
+    assert result["ok"] is True
+    assert result["discharged_families"] == []
+    assert result["open_debt_count"] == 1
+    assert result["debt_lease_released"] is False
+    assert db_session.query(DeviceReturnDebt).filter_by(device_id=device.id, state="open").count() == 1
+    assert db_session.get(DeviceLease, lease.id).fencing_token == token
+    assert db_session.get(Device, device.id).return_state["power-cycle"]["state"] == "debt"

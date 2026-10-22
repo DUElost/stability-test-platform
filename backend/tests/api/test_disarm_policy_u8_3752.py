@@ -1,5 +1,5 @@
 """D2.5 /complete and discharge real API matrix (test-only combinations)."""
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -170,3 +170,116 @@ def test_discharge_wrong_token_precedes_probe_validation(client, seed, combinati
     assert response.status_code == 409
     with SessionLocal() as db:
         assert db.query(AuditLog).filter_by(action="unverified_probe_result").count() == 0
+
+
+from backend.agent.tests.disarm_real_combinations_3752 import COMBINATIONS, CHANGES, aggregate_script_output
+
+
+@pytest.mark.parametrize("model,permission", COMBINATIONS)
+@pytest.mark.parametrize("changed", CHANGES)
+def test_real_combinations_script_engine_complete_persistence(client, seed, monkeypatch, model, permission, changed):
+    """§3.8.5: script (stub I/O) → real Engine → API → PG, both sides checked."""
+    monkeypatch.setattr(agent_completion.PlanAggregator, "on_job_terminal", AsyncMock())
+    monkeypatch.setattr(agent_completion, "broadcast_run_job_update", AsyncMock())
+    reported, facts = aggregate_script_output(monkeypatch, model, permission, changed)
+    assert reported["result"] == ("confirmed" if changed is None else "executed_unverified")
+    with SessionLocal() as db:
+        device = db.get(Device, seed["device_id"])
+        device.platform, device.model = facts
+        db.add(StepTrace(job_id=seed["job_id"], step_id="setup", stage="init", event_type="COMPLETED", status="COMPLETED", exit_code=0, original_ts=datetime.now(timezone.utc)))
+        db.add(StepTrace(job_id=seed["job_id"], step_id="disarm", stage="teardown", event_type="COMPLETED", status="COMPLETED", exit_code=0, original_ts=datetime.now(timezone.utc)))
+        db.commit()
+    # Independently challenge control-plane validation with the original claimed
+    # confirmed, rather than letting the Agent's downgrade hide a server defect.
+    payload = {"update": {"status": "FINISHED"}, "fencing_token": "u8-test-token",
+               "disarm_results": {"power-cycle": {**reported, "result": "confirmed"}}}
+    response = client.post(f'/api/v1/agent/jobs/{seed["job_id"]}/complete', json=payload)
+    assert response.status_code == 200, response.text
+    with SessionLocal() as db:
+        assert db.get(JobInstance, seed["job_id"]).disarm_results["power-cycle"]["result"] == (
+            "confirmed" if changed is None else "executed_unverified")
+
+
+@pytest.mark.parametrize("entry_point", ["complete", "late", "discharge", "init_check"])
+def test_rejected_entry_audit_has_one_row_with_explicit_replacement_and_replay_is_readonly(client, seed, combination, entry_point):
+    """v1.7.12 count = one audit row per rejected/replaced specialty entry."""
+    item = result_entry(combination, "wrong_apk")
+    if entry_point in ("complete", "late"):
+        payload = {"update": {"status": "FINISHED"}, "fencing_token": "u8-test-token", "disarm_results": {"power-cycle": item}}
+        if entry_point == "late":
+            initial = {**payload, "disarm_results": {"power-cycle": {"result": "incomplete", "step_id": "disarm"}}}
+            assert client.post(f'/api/v1/agent/jobs/{seed["job_id"]}/complete', json=initial).status_code == 200
+        def report():
+            return client.post(f'/api/v1/agent/jobs/{seed["job_id"]}/complete', json=payload)
+        assert report().status_code == 200
+        assert report().status_code == 200
+        resource_id = seed["job_id"]
+    elif entry_point == "discharge":
+        with SessionLocal() as db:
+            lease = db.query(DeviceLease).filter_by(device_id=seed["device_id"]).one()
+            lease.lease_type, lease.job_id = "MAINTENANCE", None
+            lease.reason, lease.holder = DEBT_LEASE_REASON, DEBT_LEASE_HOLDER
+            db.commit()
+        payload = {"fencing_token": "u8-test-token", "family_results": {"power-cycle": item}}
+        for _ in range(2):
+            assert client.post(f'/api/v1/agent/devices/{seed["device_id"]}/return-discharge', json=payload).status_code == 422
+        resource_id = seed["device_id"]
+    else:
+        # U8 delivers the shared init service behavior; U4 owns the real route.
+        from backend.services.device_return import check_init_probe_result
+        for _ in range(2):
+            with SessionLocal() as db:
+                decision = check_init_probe_result(db, db.get(Device, seed["device_id"]), "power-cycle", item, token_valid=True)
+                assert decision["status_code"] == 422
+        resource_id = seed["device_id"]
+    with SessionLocal() as db:
+        rows = db.query(AuditLog).filter_by(action="unverified_probe_result", resource_id=str(resource_id)).all()
+        assert len(rows) == 1
+        details = rows[0].details
+        assert details["entry_point"] == entry_point
+        assert details["family"] == "power-cycle"
+        assert details["reported_result"] == "confirmed"
+        assert details["replacement_result"] == ("executed_unverified" if entry_point == "complete" else None)
+        assert details["reason"]
+        assert details["report_ref"]
+
+
+def test_distinct_discharge_lease_reports_count_separately(client, seed, combination, db_session):
+    item = result_entry(combination, "wrong_apk")
+    for token in ("first-test-token", "second-test-token"):
+        with SessionLocal() as db:
+            lease = db.query(DeviceLease).filter_by(device_id=seed["device_id"]).one()
+            lease.lease_type, lease.job_id = "MAINTENANCE", None
+            lease.reason, lease.holder, lease.fencing_token = DEBT_LEASE_REASON, DEBT_LEASE_HOLDER, token
+            db.commit()
+        # The test dependency reuses a Session across requests; production
+        # opens one per request. Expire its cached lease after the other txn.
+        db_session.expire_all()
+        response = client.post(f'/api/v1/agent/devices/{seed["device_id"]}/return-discharge', json={
+            "fencing_token": token, "family_results": {"power-cycle": item}})
+        assert response.status_code == 422
+    with SessionLocal() as db:
+        assert db.query(AuditLog).filter_by(action="unverified_probe_result", resource_id=str(seed["device_id"])).count() == 2
+
+
+@pytest.mark.parametrize("case,expected", [(124, "incomplete"), (125, "incomplete"), ("late_started", "executed_unverified"), ("no_start", "not_executed")])
+def test_legacy_trace_complete_without_result_payload_persists_obligation(client, seed, combination, case, expected):
+    now = datetime.now(timezone.utc)
+    with SessionLocal() as db:
+        db.query(StepTrace).filter_by(job_id=seed["job_id"], stage="teardown").delete()
+        if case != "no_start":
+            db.add(StepTrace(job_id=seed["job_id"], step_id="disarm", stage="teardown", status="COMPLETED",
+                             event_type="COMPLETED", exit_code=case if isinstance(case, int) else 0, original_ts=now))
+        if case == "late_started":
+            # Received later, occurred earlier: never erase real completion.
+            db.add(StepTrace(job_id=seed["job_id"], step_id="disarm", stage="teardown", status="STARTED",
+                             event_type="STARTED", original_ts=now-timedelta(seconds=1)))
+        db.commit()
+    response = client.post(f'/api/v1/agent/jobs/{seed["job_id"]}/complete', json={
+        "update": {"status": "FINISHED"}, "fencing_token": "u8-test-token"})
+    assert response.status_code == 200, response.text
+    with SessionLocal() as db:
+        job = db.get(JobInstance, seed["job_id"])
+        assert job.status == "COMPLETED"
+        assert job.disarm_results["power-cycle"]["result"] == expected
+        assert bool(db.query(DeviceReturnDebt).filter_by(device_id=seed["device_id"], state="open").all()) == (expected != "executed_unverified")

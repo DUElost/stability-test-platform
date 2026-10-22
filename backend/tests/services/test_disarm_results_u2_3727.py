@@ -180,6 +180,7 @@ def test_later_failed_overrides_earlier_completed():
 
 
 def test_only_started_is_incomplete():
+    # #3723 §3.0.6: STARTED proves an interrupted attempt, not not_executed.
     now = datetime.now(timezone.utc)
     traces = [
         SimpleNamespace(
@@ -189,3 +190,13 @@ def test_only_started_is_incomplete():
     ]
     got = derive_disarm_results_from_traces(PIPELINE, traces)
     assert got["power-cycle"]["result"] == "incomplete", got
+
+
+@pytest.mark.parametrize("code", [124, 125])
+def test_reserved_platform_trace_is_incomplete_with_reason(code):
+    """#3723 §3.0.6: legacy reserved codes precede COMPLETED and FAILED."""
+    traces = [SimpleNamespace(stage="init", step_id="pc_setup", status="COMPLETED", exit_code=0),
+              SimpleNamespace(stage="teardown", step_id="pc_finish", status="COMPLETED", exit_code=code)]
+    got = derive_disarm_results_from_traces(PIPELINE, traces)
+    assert got["power-cycle"]["result"] == "incomplete"
+    assert got["power-cycle"]["reason"] == "legacy_reserved_exit"

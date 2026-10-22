@@ -558,6 +558,18 @@ async def _abort_reaper_recheck_job(
     )).scalars().first()
     if job is None or job.status != JobStatus.RUNNING.value:
         return False, None
+    # Candidate time/context may predate a committed phase or exit update.
+    now = max(now, datetime.now(timezone.utc))
+    context = (await db.execute(select(PlanRun.run_context).where(PlanRun.id == job.plan_run_id))).scalar_one_or_none()
+    current_abort, _ = _abort_reap_clock_pure(context, job.id, job.host_id)
+    if current_abort is None:
+        return False, None
+    if job.disarm_guard is not None:
+        # A repeated exit cannot move a negotiated tail's earliest anchor.
+        current_abort = min(current_abort, datetime.fromtimestamp(job.disarm_guard["t0"], timezone.utc))
+    if (now - current_abort).total_seconds() <= _ABORT_REAPER_GRACE_SECONDS:
+        return False, None
+    abort_at = current_abort
     # #3723 §3.0 第 5 条：EXECUTING_DISARM + 进度新鲜 → 续期至 abort_at+timeout
     guarded = (
         await db.run_sync(lambda sync_db: job_guard_deadline(sync_db, job, now)) is not None
