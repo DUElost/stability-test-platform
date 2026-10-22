@@ -249,18 +249,39 @@ def test_phase_evidence_cannot_invent_ownership_or_waiting_protection(client, se
                 cleanup.commit()
 
 
-def test_projection_rereads_guard_and_terminal_from_independent_commit(client, seed):
-    from backend.services.device_return import job_guard_deadline
+def test_projection_uses_request_snapshot_without_rereading_job(client, seed):
+    """v1.7.13: projection uses request data; final writes alone reread jobs."""
     with SessionLocal() as reader:
-        stale = reader.get(JobInstance, seed["job_id"])
-        assert stale.disarm_guard is None
+        snapshot = reader.get(JobInstance, seed["job_id"])
+        assert snapshot.disarm_guard is None
+        before = running_heartbeat_deadline(snapshot)
         assert heartbeat(client, seed).status_code == 200
-        deadline = running_heartbeat_deadline(stale, db=reader)
-        assert deadline == job_guard_deadline(reader, stale, datetime.now(timezone.utc))
+        assert running_heartbeat_deadline(snapshot, db=reader) == before
+        assert snapshot.disarm_guard is None
+        # A later request reads its own snapshot, including a terminal status.
         with SessionLocal() as writer:
             writer.get(JobInstance, seed["job_id"]).status = "COMPLETED"
             writer.commit()
-        assert running_heartbeat_deadline(stale, db=reader) is None
+        reader.refresh(snapshot)
+        assert running_heartbeat_deadline(snapshot, db=reader) is None
+
+
+def test_projection_clock_regression_never_changes_guard(client, seed):
+    from copy import deepcopy
+    assert heartbeat(client, seed).status_code == 200
+    with SessionLocal() as writer:
+        job = writer.get(JobInstance, seed["job_id"])
+        job.disarm_guard = {**job.disarm_guard, "last_server_at": datetime.now(timezone.utc).timestamp()+120}
+        writer.commit()
+    with SessionLocal() as reader:
+        job = reader.get(JobInstance, seed["job_id"])
+        before = deepcopy(job.disarm_guard)
+        assert running_heartbeat_deadline(job, db=reader) <= datetime.now(timezone.utc)
+        assert job.disarm_guard == before
+        assert not reader.dirty
+        reader.commit()
+    with SessionLocal() as verify:
+        assert verify.get(JobInstance, seed["job_id"]).disarm_guard == before
 
 
 def test_eleven_jobs_same_host_queue_6600_then_execute_under_one_permit(client, seed, monkeypatch):

@@ -1836,12 +1836,9 @@ class PipelineEngine:
                     if disarm_step:
                         self._record_disarm_for_step(step, started=False, incomplete=True)
                     return False
-                if disarm_step:
-                    self._publish_disarm_phase(step, "execute")
-            if phase == "teardown" and disarm_step and (
-                getattr(self, "_lease_lost_for_disarm", False) if tail is not None
-                else self._teardown_lease_lost()
-            ):
+            # v1.7.13: the single-shot lease check precedes execute evidence.
+            # M2 forbids waiting for phase acknowledgement, not this check.
+            if phase == "teardown" and disarm_step and self._teardown_lease_lost():
                 self._last_step_error = f"not_executed:{LEASE_LOST_REASON}"
                 self._record_disarm_for_step(
                     step,
@@ -1849,6 +1846,8 @@ class PipelineEngine:
                     lease_lost=True,
                 )
                 return False
+            if tail is not None and disarm_step:
+                self._publish_disarm_phase(step, "execute")
 
             exec_state = EXECUTING_DISARM if disarm_step else "EXECUTING_STEP"
             self._update_execution_state(exec_state)
@@ -2973,10 +2972,6 @@ class PipelineEngine:
         """
         if getattr(self, "_lease_lost_for_disarm", False):
             return True
-        if getattr(self, "_disarm_tail", None) is not None:
-            # M2: the current worker's confirmed-loss flag is fed by the
-            # renewer/recovery paths; do not block permit→spawn on an HTTP ACK.
-            return False
         api_url = getattr(self, "_api_url", None)
         run_id = getattr(self, "_run_id", None)
         if not api_url or not run_id:
@@ -3267,7 +3262,12 @@ class PipelineEngine:
                 self._footprint_families,
             )
 
-        if self._footprint_families and self._teardown_lease_lost():
+        # In bounded tails each step probes once after acquiring its permit.
+        # Do not add another timeout before the first step (v1.7.13).
+        if self._footprint_families and (
+            getattr(self, "_lease_lost_for_disarm", False)
+            if getattr(self, "_disarm_tail", None) is not None else self._teardown_lease_lost()
+        ):
             self._disarm_results = default_not_executed_for_families(
                 self._footprint_families,
                 reason=LEASE_LOST_REASON,

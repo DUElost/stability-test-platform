@@ -283,3 +283,48 @@ def test_legacy_trace_complete_without_result_payload_persists_obligation(client
         assert job.status == "COMPLETED"
         assert job.disarm_results["power-cycle"]["result"] == expected
         assert bool(db.query(DeviceReturnDebt).filter_by(device_id=seed["device_id"], state="open").all()) == (expected != "executed_unverified")
+
+
+def test_devices_endpoint_query_count_is_constant_for_unguarded_jobs(client, seed, auth_headers, db_session):
+    """v1.7.13 / ADR-0026 P2-3: real GET, SELECT count independent of job count."""
+    from sqlalchemy import event
+    engine = db_session.get_bind()
+    url = f'/api/v1/plan-runs/{seed["plan_run_id"]}/devices'
+    def measure(expected_total):
+        queries = []
+        def before(conn, cursor, statement, parameters, context, executemany):
+            queries.append(statement)
+        db_session.expire_all()
+        event.listen(engine, "before_cursor_execute", before)
+        try:
+            response = client.get(url, headers=auth_headers)
+        finally:
+            event.remove(engine, "before_cursor_execute", before)
+        assert response.status_code == 200, response.text
+        assert response.json()["data"]["total"] == expected_total
+        return len(queries)
+    # Warm authentication and request-local caches before measuring.
+    assert client.get(url, headers=auth_headers).status_code == 200
+    baseline = measure(1)
+    added_jobs, added_devices = [], []
+    try:
+        with SessionLocal() as db:
+            for i in range(20):
+                device = Device(serial=f'u8-query-{seed["host_id"]}-{i}', host_id=seed["host_id"], status="ONLINE")
+                db.add(device)
+                db.flush()
+                job = JobInstance(plan_id=seed["plan_id"], plan_run_id=seed["plan_run_id"], device_id=device.id,
+                                  host_id=seed["host_id"], status="RUNNING" if i%2 else "COMPLETED",
+                                  pipeline_def={"lifecycle": {}}, started_at=datetime.now(timezone.utc))
+                db.add(job)
+                db.flush()
+                added_jobs.append(job.id)
+                added_devices.append(device.id)
+            db.commit()
+        assert measure(21) == baseline
+    finally:
+        db_session.rollback()
+        with SessionLocal() as cleanup:
+            cleanup.query(JobInstance).filter(JobInstance.id.in_(added_jobs)).delete(synchronize_session=False)
+            cleanup.query(Device).filter(Device.id.in_(added_devices)).delete(synchronize_session=False)
+            cleanup.commit()

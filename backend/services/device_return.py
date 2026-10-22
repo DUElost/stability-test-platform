@@ -1601,7 +1601,7 @@ def guard_owner_valid(db: Session, job: JobInstance, now: datetime, guard: Mappi
                 and 0 <= stamp - _u8_timestamp(row.last_heartbeat) < HOST_HEARTBEAT_TIMEOUT_SECONDS)
 
 
-def job_guard_deadline(db: Session, job: JobInstance, now: datetime) -> datetime | None:
+def job_guard_deadline(db: Session, job: JobInstance, now: datetime, *, read_only: bool = False) -> datetime | None:
 
     if job.status != "RUNNING":
         return None
@@ -1609,7 +1609,8 @@ def job_guard_deadline(db: Session, job: JobInstance, now: datetime) -> datetime
     if not isinstance(guard, Mapping):
         return None
     if now.timestamp() < guard.get("last_server_at", now.timestamp()):
-        job.disarm_guard = {**guard, "reason": "clock_regressed"}
+        if not read_only:
+            job.disarm_guard = {**guard, "reason": "clock_regressed"}
         return None
     stamp = disarm_guard_deadline(
         guard, now=now.timestamp(), owner_valid=guard_owner_valid(db, job, now, guard),

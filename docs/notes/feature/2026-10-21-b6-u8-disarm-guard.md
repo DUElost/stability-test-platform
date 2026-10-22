@@ -5,18 +5,27 @@ Class: feature
 
 ## Decision
 
-Refs #3752; Refs #3723 v1.7.12; ADR-0061 Accepted v1.1.
+Refs #3752; Refs #3723 v1.7.13; ADR-0061 Accepted v1.1.
 Original base: `7f4159244f128965325c4964480209729bf5fa2a`.
 Resumed from remote `afa85f48f7e3cc2d068ab6d6589b7553d789dbc7`, preserving
-Cursor Agent's `033fb566d` and both main merges. PR #3767 stays draft.
+Cursor Agent's `033fb566d` and both main merges. This continuation starts at
+`57abadf5bc0468787528d1037e10237c38b61185`, retaining the audit guard fixes.
+PR #3767 stays draft.
 
 Implement the approved queue/execution guard, platform interruption precedence,
 and shared probe trust policy. The nullable JSONB guard is separate from the test
 conclusion. LocalDB persists sequences and server deadlines. Permit acquisition
-does not wait for a control-plane acknowledgement. Coordinator delivery is capped
+does not wait for phase acknowledgement. Per v1.7.13, each disarm step first
+performs U1's single-shot extend_lock check (5-second timeout, no retry). A 409
+records not_executed / lease_lost and publishes no execute evidence. An unreachable
+control plane delays startup by at most that one check. The tail does not add a
+second probe before the first step. Coordinator delivery is capped
 at 30 seconds while any job reports a disarm phase; lease renewal alone cannot
 establish phase freshness. Reaper, the three recycler final writes and the read
-projection use committed facts. Final recycler checks use the post-lock clock
+projection use the same cutoff policy. The three final recycler writes and reaper
+reread committed facts. Per v1.7.13, the projection uses the request's already-read
+job snapshot; only RUNNING jobs with a guard need ownership queries. The projection
+cannot mutate the guard, including on a clock regression. Final recycler checks use the post-lock clock
 rather than mistaking collection time for a server clock regression.
 
 The Planner resolved the scope return in #3723/6331130472: diagnostic counts use
@@ -24,7 +33,14 @@ existing audit rows, not metrics.py. Each rejected/replaced specialty records a
 fixed action, entry point, reported/replacement value, reason and report references.
 The existing audit writer has async and sync adapters for the respective callers.
 Independent diagnostic transactions survive business rejection; identical read-only
-replays add no row. Discharge reports under distinct lease identities remain distinct.
+replays add no row. v1.7.13 endorses the BUSINESS_ACTIONS_ALLOWLIST registration of
+unverified_probe_result with 90-day retention, like device_return_override: these
+are diagnostic evidence, not account or credential security events. It also endorses
+this action's single _GENERIC_ACTIONS registration: complete/late anchor job_instance
+and discharge/init anchor device, with matching resource_id. These are different
+entities rather than aliases for the same entity. Read filters expand historical
+resource-type aliases; writers use canonical device/job_instance literals. The
+content of Cursor's separate audit-guard Note is consolidated here. Discharge reports under distinct lease identities remain distinct.
 
 Register exactly the four MTK / MLD_LX2 or MLD_LX3 / root or non-root combinations
 approved in #3730/6331107188. Each carries its APK, script/version, frozen package
@@ -40,7 +56,10 @@ policy and init service behavior only.
 The implementation uses existing states and the coordinator channel. A script's
 self-reported verified flag cannot authorize confirmed. The earlier diagnostic
 Prometheus option was rejected by the Planner; no metrics change is needed.
-No budget, business state, environment setting or stage-B switch is added.
+A uniform device resource type would mismatch the job ids used by complete/late;
+the approved per-entry entity anchors preserve that relationship. The single action
+keeps aggregation consistent across all four entries. No further guard exemptions
+are introduced. No budget, business state, environment setting or stage-B switch is added.
 
 ## Verification
 
@@ -52,6 +71,13 @@ new runtime tests are stubs. No #3739 dangerous mutation is selected.
 
 Iteration evidence before the final-HEAD run:
 
+- v1.7.13 counterexamples before repair: 4 Agent failures and 3 projection/API
+  failures (exit 1). Agent/U1 after repair: 139 passed (exit 0); API/phase after
+  repair: 96 passed (exit 0). The real devices endpoint returns 21 rows with the
+  same query count as one row, including RUNNING and completed jobs without guards.
+  The unreachable
+  case uses a finite virtual 5-second advance, not a real timeout or host signal.
+  Precommit check:quick for v1.7.13: 16 gates passed (exit 0).
 - Original priority counterexamples: 18 failed (exit 1), then 18 passed (exit 0).
 - Resumption registration/compatibility counterexamples: 5 failed, 24 passed
   (exit 1); four-entry audit counterexamples: 4 failed (exit 1).
@@ -79,11 +105,17 @@ Safe withdrawal command:
 env -i PATH="$PATH" PYTHONPATH=. ./scripts/project_python.sh backend/tests/disarm_withdrawals_3752.py
 ```
 
-The 34-point finite list in that helper restores source bytes in `finally`, then reruns the
+The finite list in that helper restores source bytes in `finally`, then reruns the
 same selected tests. Each accepted withdrawal requires pytest exit 1 with a failed
 test; each restoration requires exit 0. It never selects cancel/process-group tests.
-All 34 withdrawals exited 1 and all 34 restored runs exited 0; the runner exited 0.
-Source hashes matched after restoration. Logs and exact child commands are under `/tmp/b6-u8-withdrawals/`; final matrix
+The previous 34-point matrix exited 0: every withdrawal exited 1 and every restored
+run exited 0; source hashes matched after restoration. v1.7.13 replaces the old
+projection-reread mutation with request-snapshot/query-count/read-only mutations,
+and adds lease-probe, execute-evidence ordering and single-timeout mutations.
+The full 39-point matrix rerun for this continuation exited 0: all 39 withdrawals
+exited 1, all 39 restored runs exited 0, and all restored source hashes matched.
+Final-HEAD command and CI results are reported on PR #3767. Logs and exact child commands for v1.7.13 are under
+`/tmp/b6-u8-withdrawals-v1713/`; final matrix
 results and the single final-HEAD command/exit record are reported on PR #3767.
 
 Existing-test changes (no test removed, lock/source assertions retained):

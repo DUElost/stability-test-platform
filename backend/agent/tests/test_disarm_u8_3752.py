@@ -340,17 +340,17 @@ def test_permit_starts_without_control_plane_ack_and_terminal_is_durable(monkeyp
         calls.append("http")
         raise requests.ConnectionError("test-only unreachable")
     monkeypatch.setattr(api_client, "_post_with_retry", unavailable)
-    # Any synchronous lease/permit acknowledgement would fail this assertion.
+    # v1.7.13 retains one bounded lease probe; no phase acknowledgement.
     monkeypatch.setattr(requests, "post", unavailable)
     def action(ctx, step):
-        assert not calls
+        assert calls == ["http"]
         calls.append("disarm")
         return StepResult(success=True, exit_code=0)
     monkeypatch.setattr(engine, "_run_script_action", action)
     result = engine._execute_teardown_best_effort([{"step_id": "finish", "action": "script:sleep_finish", "timeout_seconds": 660}])
     api_client.complete_job("http://unreachable-test-only", 1,
         {"status": "FINISHED", "disarm_results": result.metadata["disarm_results"]}, "test-token", local_db=store)
-    assert calls == ["disarm", "http"]
+    assert calls == ["http", "disarm", "http"]
     assert store.get_pending_terminals()[0]["payload"]["disarm_results"]["sleep"]["result"] == "executed_unverified"
     store.close()
 
@@ -479,3 +479,86 @@ def test_restarted_tail_can_negotiate_old_controller(monkeypatch):
     engine._local_db = SimpleNamespace(load_disarm_state=lambda _: {"seq": 7, "evidence": {"phase": "queue"}})
     engine._begin_disarm_tail([STEP], disarm_only=True)
     assert engine._disarm_tail is None
+
+
+@pytest.mark.parametrize("statuses", [[409], [200, 409], [200, 200]])
+def test_tail_checks_lease_once_before_each_disarm_and_before_execute_evidence(monkeypatch, statuses):
+    """#3723 v1.7.13: permit ownership is not proof of device lease ownership."""
+    from types import SimpleNamespace
+    from backend.agent import pipeline_engine as module
+    from backend.agent.coordinator import HostRunCoordinator
+    from backend.agent.operation_scheduler import OperationScheduler
+    coord = HostRunCoordinator("http://test-only", "test-host", "test-instance")
+    coord.disarm_protocol = 1
+    events, started = [], []
+    monkeypatch.setattr(coord, "publish_disarm_evidence", lambda _, e: events.append(("phase", e["phase"], e["step_id"])) if e else None)
+    engine = module.PipelineEngine(SimpleNamespace(adb_path="stub"), "test-only", 1, nfs_root="",
+        api_url="http://test-only", fencing_token="test-token", coordinator=coord,
+        operation_scheduler=OperationScheduler(max_concurrent=1), device_id=1)
+    engine._footprint_families = {"sleep", "mtbf"} if len(statuses)==2 else {"sleep"}
+    monkeypatch.setattr(engine, "_report_step_trace_mq", lambda *a, **k: None)
+    replies = iter(statuses)
+    def post(url, **kwargs):
+        assert url.endswith("/extend_lock")
+        assert kwargs["timeout"] == 5
+        reply = next(replies)  # finite: an extra probe is a test failure
+        events.append(("probe", reply))
+        return SimpleNamespace(status_code=reply)
+    monkeypatch.setattr(module.requests, "post", post)
+    def action(ctx, step):
+        started.append(step["step_id"])
+        events.append(("spawn", step["step_id"]))
+        return module.StepResult(success=True, exit_code=0)
+    monkeypatch.setattr(engine, "_run_script_action", action)
+    steps = [{"step_id": family, "action": f"script:{family}_finish", "timeout_seconds": 660}
+             for family in ("sleep", "mtbf")[:len(statuses)]]
+    result = engine._execute_teardown_best_effort(steps)
+    assert [e[1] for e in events if e[0]=="probe"] == statuses
+    probe_positions = [i for i, event in enumerate(events) if event[0] == "probe"]
+    for index, (family, status) in enumerate(zip(("sleep", "mtbf"), statuses, strict=False)):
+        executed = ("phase", "execute", family)
+        entry = result.metadata["disarm_results"][family]
+        if status == 409:
+            assert family not in started
+            assert executed not in events
+            assert entry["result"] == "not_executed"
+            assert entry["reason"] == "lease_lost"
+        else:
+            assert family in started
+            assert events.count(executed) == 1
+            assert probe_positions[index] < events.index(executed) < events.index(("spawn", family))
+            assert entry["result"] == "executed_unverified"
+
+
+def test_tail_unreachable_control_plane_starts_after_one_five_second_probe(monkeypatch):
+    from types import SimpleNamespace
+    import requests
+    from backend.agent import pipeline_engine as module
+    from backend.agent.coordinator import HostRunCoordinator
+    from backend.agent.operation_scheduler import OperationScheduler
+    clock, probes, phases = [0.0], [], []
+    coord = HostRunCoordinator("http://test-only", "test-host", "test-instance")
+    coord.disarm_protocol = 1
+    monkeypatch.setattr(coord, "publish_disarm_evidence", lambda _, e: phases.append((e["phase"], clock[0])) if e else None)
+    monkeypatch.setattr(coord, "_tick", lambda: pytest.fail("must not wait for stage acknowledgement"))
+    engine = module.PipelineEngine(SimpleNamespace(adb_path="stub"), "test-only", 1, nfs_root="",
+        api_url="http://test-only", fencing_token="test-token", coordinator=coord,
+        operation_scheduler=OperationScheduler(max_concurrent=1), device_id=1)
+    engine._footprint_families = {"sleep"}
+    monkeypatch.setattr(engine, "_report_step_trace_mq", lambda *a, **k: None)
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+    def timeout(url, **kwargs):
+        assert url.endswith("/extend_lock") and kwargs["timeout"] == 5
+        probes.append(kwargs["timeout"])
+        clock[0] += kwargs["timeout"]
+        raise requests.Timeout("test-only five-second timeout")
+    monkeypatch.setattr(module.requests, "post", timeout)
+    def action(ctx, step):
+        assert clock[0] == 5
+        assert probes == [5]
+        assert phases[-1] == ("execute", 5)
+        return module.StepResult(success=True, exit_code=0)
+    monkeypatch.setattr(engine, "_run_script_action", action)
+    result = engine._execute_teardown_best_effort([{"step_id": "finish", "action": "script:sleep_finish", "timeout_seconds": 660}])
+    assert probes == [5]
+    assert result.metadata["disarm_results"]["sleep"]["result"] == "executed_unverified"

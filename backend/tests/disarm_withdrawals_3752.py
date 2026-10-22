@@ -54,7 +54,7 @@ CASES = [
     ("discharge_trust", SERVICE, replace('if policy["trusted"] and result == DISARM_RESULT_CONFIRMED:', 'if result in (DISARM_RESULT_CONFIRMED, DISARM_RESULT_EXECUTED_UNVERIFIED):', after='def apply_discharge_sync'), 'backend/tests/services/test_device_return_u3_3728.py', 'unverified_discharge_no_longer'),
     ("late_trust", SERVICE, replace('not decision["ignore"] and policy["trusted"] and policy["result"] == DISARM_RESULT_CONFIRMED', 'True', after='async def try_apply_late_confirmed'), API, 'late_confirmation_only'),
     ("audit_complete", SERVICE, replace('if not duplicate:', 'if False:', after='def audit_unverified_probe('), API, 'audit_has and complete'),
-    ("audit_replay", SERVICE, replace('if not duplicate:', 'if True:', after='def audit_unverified_probe('), API, 'audit_has and discharge'),
+    ("audit_replay", SERVICE, replace('if not duplicate:\n                record_audit(diagnostic, action="unverified_probe_result", resource_type="device",', 'if True:\n                record_audit(diagnostic, action="unverified_probe_result", resource_type="device",', after='def audit_unverified_probe('), API, 'audit_has and discharge'),
     ("audit_late", SERVICE, replace('if not duplicate:', 'if False:', after='async def audit_unverified_probe_async'), API, 'audit_has and late'),
     ("init_policy", SERVICE, replace('if decision["status_code"] == 422:', 'if False:', after='def check_init_probe_result'), API, 'audit_has and init_check'),
     ("recycler_running_guard", RECYCLER, unguarded, PHASE, 'stale_candidate and running'),
@@ -67,14 +67,19 @@ CASES = [
     ("audit_report_identity", SERVICE, replace('report_identity=hashlib.sha256(fencing_token.encode()).hexdigest()', 'report_identity=None'), API, 'distinct_discharge'),
     ("restart_old_controller", ENGINE, replace('                self._refresh_disarm_guard()\n                if self._disarm_tail is None:\n                    return', '                pass'), AGENT, 'restarted_tail'),
     ("projection_owner_failure", 'backend/services/plan_run_devices.py', replace('return min(checked_at, datetime.fromtimestamp(disarm_guard_expiry(fresh.disarm_guard), timezone.utc))', 'return datetime.fromtimestamp(disarm_guard_expiry(fresh.disarm_guard), timezone.utc)'), PHASE, 'projection_does_not'),
-    ("projection_reread", 'backend/services/plan_run_devices.py', replace('if db is not None:', 'if False:', after='def running_heartbeat_deadline'), PHASE, 'projection_rereads'),
+    ("projection_snapshot", 'backend/services/plan_run_devices.py', replace('    if j.status != JobStatus.RUNNING.value:', '    if db is not None:\n        j = db.query(JobInstance).filter(JobInstance.id == j.id).populate_existing().one()\n    if j.status != JobStatus.RUNNING.value:', after='def running_heartbeat_deadline'), PHASE, 'projection_uses_request'),
+    ("projection_no_n_plus_one", 'backend/services/plan_run_devices.py', replace('    if j.status != JobStatus.RUNNING.value:', '    if db is not None:\n        j = db.query(JobInstance).filter(JobInstance.id == j.id).populate_existing().one()\n    if j.status != JobStatus.RUNNING.value:', after='def running_heartbeat_deadline'), API, 'query_count_is_constant'),
+    ("projection_read_only", 'backend/services/plan_run_devices.py', replace('checked_at, read_only=True', 'checked_at, read_only=False'), PHASE, 'projection_clock_regression'),
+    ("tail_lease_probe", ENGINE, replace('        api_url = getattr(self, "_api_url", None)', '        if getattr(self, "_disarm_tail", None) is not None:\n            return False\n        api_url = getattr(self, "_api_url", None)', after='def _teardown_lease_lost'), AGENT, 'tail_checks_lease or tail_unreachable'),
+    ("tail_evidence_order", ENGINE, replace('            if phase == "teardown" and disarm_step and self._teardown_lease_lost():', '            if tail is not None and disarm_step:\n                self._publish_disarm_phase(step, "execute")\n            if phase == "teardown" and disarm_step and self._teardown_lease_lost():'), AGENT, 'tail_checks_lease'),
+    ("tail_single_probe", ENGINE, replace('            getattr(self, "_lease_lost_for_disarm", False)\n            if getattr(self, "_disarm_tail", None) is not None else self._teardown_lease_lost()', '            self._teardown_lease_lost()', after='def _execute_teardown_best_effort'), AGENT, 'tail_unreachable'),
     ("legacy_reserved_trace", 'backend/services/disarm_derive.py', replace('if code in PLATFORM_INTERRUPTED_EXIT_CODES:', 'if False:'), 'backend/tests/services/test_disarm_results_u2_3727.py', 'reserved'),
     ("started_incomplete", 'backend/services/disarm_derive.py', replace('terminal = {**event, "result": DISARM_RESULT_INCOMPLETE}', 'terminal = None'), 'backend/tests/services/test_disarm_results_u2_3727.py', 'only_started'),
 ]
 
 
 def main():
-    logdir = Path('/tmp/b6-u8-withdrawals')
+    logdir = Path('/tmp/b6-u8-withdrawals-v1713')
     logdir.mkdir(exist_ok=True)
     summary = []
     env = {'PATH': os.pathsep.join(os.get_exec_path()), 'PYTHONPATH': '.', 'TESTING': '1', 'JWT_SECRET_KEY': 'b6-isolated-test-only'}
