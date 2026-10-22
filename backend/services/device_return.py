@@ -22,6 +22,7 @@ from pathlib import Path
 from sqlalchemy.orm.attributes import flag_modified
 from backend.models.host import Host
 from backend.models.plan_run import PlanRun
+from backend.core.audit import expand_resource_type_filter
 from backend.models.audit import AuditLog
 from backend.services.audit_writer import record_audit, record_audit_async
 from backend.core.job_timeout_config import HOST_HEARTBEAT_TIMEOUT_SECONDS, running_heartbeat_timeout_seconds, abort_reap_clock
@@ -1717,16 +1718,31 @@ def audit_unverified_probe(db: Session, *, resource_id: int, family: str, entry:
     Callers serialize on the existing job/device lock before this operation.
     """
     details = _probe_audit_details(family, entry, policy, entry_point=entry_point, replacement_result=replacement_result, report_identity=report_identity)
+    # #2778/#2879：写侧 resource_type 必须是规范字面量；#2872：读侧筛选用 expand。
+    # discharge/init → device；complete/late → job_instance（与 resource_id 对齐）。
     with Session(bind=db.get_bind()) as diagnostic:
-        duplicate = diagnostic.execute(select(AuditLog.id).where(
-            AuditLog.action == "unverified_probe_result", AuditLog.resource_type == resource_type,
-            AuditLog.resource_id == str(resource_id),
-            AuditLog.details["report_digest"].as_string() == details["report_digest"],
-        )).first()
-        if not duplicate:
-            record_audit(diagnostic, action="unverified_probe_result", resource_type=resource_type,
-                         resource_id=resource_id, username="agent", details=details, strict=True)
-            diagnostic.commit()
+        if resource_type == "job_instance":
+            duplicate = diagnostic.execute(select(AuditLog.id).where(
+                AuditLog.action == "unverified_probe_result",
+                AuditLog.resource_type.in_(expand_resource_type_filter("job_instance")),
+                AuditLog.resource_id == str(resource_id),
+                AuditLog.details["report_digest"].as_string() == details["report_digest"],
+            )).first()
+            if not duplicate:
+                record_audit(diagnostic, action="unverified_probe_result", resource_type="job_instance",
+                             resource_id=resource_id, username="agent", details=details, strict=True)
+                diagnostic.commit()
+        else:
+            duplicate = diagnostic.execute(select(AuditLog.id).where(
+                AuditLog.action == "unverified_probe_result",
+                AuditLog.resource_type.in_(expand_resource_type_filter("device")),
+                AuditLog.resource_id == str(resource_id),
+                AuditLog.details["report_digest"].as_string() == details["report_digest"],
+            )).first()
+            if not duplicate:
+                record_audit(diagnostic, action="unverified_probe_result", resource_type="device",
+                             resource_id=resource_id, username="agent", details=details, strict=True)
+                diagnostic.commit()
 
 
 async def audit_unverified_probe_async(db: AsyncSession, *, resource_id: int, family: str, entry: Mapping,
@@ -1734,15 +1750,28 @@ async def audit_unverified_probe_async(db: AsyncSession, *, resource_id: int, fa
     """Async entry uses record_audit_async; same audit/count and replay key."""
     details = _probe_audit_details(family, entry, policy, entry_point=entry_point, replacement_result=None)
     async with AsyncSession(bind=db.bind) as diagnostic:
-        duplicate = (await diagnostic.execute(select(AuditLog.id).where(
-            AuditLog.action == "unverified_probe_result", AuditLog.resource_type == resource_type,
-            AuditLog.resource_id == str(resource_id),
-            AuditLog.details["report_digest"].as_string() == details["report_digest"],
-        ))).first()
-        if not duplicate:
-            await record_audit_async(diagnostic, action="unverified_probe_result", resource_type=resource_type,
-                                     resource_id=resource_id, username="agent", details=details)
-            await diagnostic.commit()
+        if resource_type == "job_instance":
+            duplicate = (await diagnostic.execute(select(AuditLog.id).where(
+                AuditLog.action == "unverified_probe_result",
+                AuditLog.resource_type.in_(expand_resource_type_filter("job_instance")),
+                AuditLog.resource_id == str(resource_id),
+                AuditLog.details["report_digest"].as_string() == details["report_digest"],
+            ))).first()
+            if not duplicate:
+                await record_audit_async(diagnostic, action="unverified_probe_result", resource_type="job_instance",
+                                         resource_id=resource_id, username="agent", details=details)
+                await diagnostic.commit()
+        else:
+            duplicate = (await diagnostic.execute(select(AuditLog.id).where(
+                AuditLog.action == "unverified_probe_result",
+                AuditLog.resource_type.in_(expand_resource_type_filter("device")),
+                AuditLog.resource_id == str(resource_id),
+                AuditLog.details["report_digest"].as_string() == details["report_digest"],
+            ))).first()
+            if not duplicate:
+                await record_audit_async(diagnostic, action="unverified_probe_result", resource_type="device",
+                                         resource_id=resource_id, username="agent", details=details)
+                await diagnostic.commit()
 
 
 def check_init_probe_result(db: Session, device: Device, family: str, entry: Mapping, *, token_valid: bool) -> dict:
