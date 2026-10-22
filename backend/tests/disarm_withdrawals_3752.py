@@ -35,6 +35,26 @@ def unguarded(source):
     return source[:start] + '    return False\n\n' + source[end:]
 
 
+def bare_guard_anchor(source):
+    return replace('    if job.execution_state in ("EXECUTING_STEP", EXECUTING_DISARM):',
+        '    if isinstance(getattr(job, "disarm_guard", None), dict):\n'
+        '        from backend.agent.contracts.device_return import disarm_guard_expiry\n'
+        '        heartbeat = _aware_dt(job.last_execution_heartbeat_at)\n'
+        '        expires = disarm_guard_expiry(job.disarm_guard, execution_heartbeat_deadline=(\n'
+        '            heartbeat.timestamp() + graded_timeout if heartbeat is not None else None))\n'
+        '        return datetime.fromtimestamp(expires, timezone.utc), 0\n'
+        '    if job.execution_state in ("EXECUTING_STEP", EXECUTING_DISARM):',
+        after='def _running_liveness_anchor')(source)
+
+
+def bare_projection_expiry(source):
+    return replace('        if protected_until is not None:\n            return protected_until\n',
+        '        if protected_until is not None:\n            return protected_until\n'
+        '        from backend.agent.contracts.device_return import disarm_guard_expiry\n'
+        '        return min(checked_at, datetime.fromtimestamp(disarm_guard_expiry(fresh.disarm_guard), timezone.utc))\n',
+        after='def running_heartbeat_deadline')(source)
+
+
 CASES = [
     ("platform_priority", CONTRACT, replace('if started and exit_code in PLATFORM_INTERRUPTED_EXIT_CODES:', 'if False:', after='def map_step_outcome_to_disarm_result'), AGENT, 'platform_interruption'),
     ("exact_category_policy", CONTRACT, replace('match is None:', 'False:', after='def probe_result_policy'), AGENT, 'forged_formal or caller_facts'),
@@ -66,7 +86,7 @@ CASES = [
     ("ownership_reread", SERVICE, replace('owner_valid=guard_owner_valid(db, job, now, guard)', 'owner_valid=True'), PHASE, 'invalid_guard'),
     ("audit_report_identity", SERVICE, replace('report_identity=hashlib.sha256(fencing_token.encode()).hexdigest()', 'report_identity=None'), API, 'distinct_discharge'),
     ("restart_old_controller", ENGINE, replace('                self._refresh_disarm_guard()\n                if self._disarm_tail is None:\n                    return', '                pass'), AGENT, 'restarted_tail'),
-    ("projection_owner_failure", 'backend/services/plan_run_devices.py', replace('return min(checked_at, datetime.fromtimestamp(disarm_guard_expiry(fresh.disarm_guard), timezone.utc))', 'return datetime.fromtimestamp(disarm_guard_expiry(fresh.disarm_guard), timezone.utc)'), PHASE, 'projection_does_not'),
+    ("projection_owner_failure", 'backend/services/plan_run_devices.py', bare_projection_expiry, PHASE, 'ordinary_rule_after and projection'),
     ("projection_snapshot", 'backend/services/plan_run_devices.py', replace('    if j.status != JobStatus.RUNNING.value:', '    if db is not None:\n        j = db.query(JobInstance).filter(JobInstance.id == j.id).populate_existing().one()\n    if j.status != JobStatus.RUNNING.value:', after='def running_heartbeat_deadline'), PHASE, 'projection_uses_request'),
     ("projection_no_n_plus_one", 'backend/services/plan_run_devices.py', replace('    if j.status != JobStatus.RUNNING.value:', '    if db is not None:\n        j = db.query(JobInstance).filter(JobInstance.id == j.id).populate_existing().one()\n    if j.status != JobStatus.RUNNING.value:', after='def running_heartbeat_deadline'), API, 'query_count_is_constant'),
     ("projection_read_only", 'backend/services/plan_run_devices.py', replace('checked_at, read_only=True', 'checked_at, read_only=False'), PHASE, 'projection_clock_regression'),
@@ -75,11 +95,18 @@ CASES = [
     ("tail_single_probe", ENGINE, replace('            getattr(self, "_lease_lost_for_disarm", False)\n            if getattr(self, "_disarm_tail", None) is not None else self._teardown_lease_lost()', '            self._teardown_lease_lost()', after='def _execute_teardown_best_effort'), AGENT, 'tail_unreachable'),
     ("legacy_reserved_trace", 'backend/services/disarm_derive.py', replace('if code in PLATFORM_INTERRUPTED_EXIT_CODES:', 'if False:'), 'backend/tests/services/test_disarm_results_u2_3727.py', 'reserved'),
     ("started_incomplete", 'backend/services/disarm_derive.py', replace('terminal = {**event, "result": DISARM_RESULT_INCOMPLETE}', 'terminal = None'), 'backend/tests/services/test_disarm_results_u2_3727.py', 'only_started'),
+    ("pump_unsequenced_agent", ENGINE, replace('if on_progress_seq is not None:', 'if seq is not None and on_progress_seq is not None:'), AGENT, 'frozen_progress'),
+    ("pump_unsequenced_pg", ENGINE, replace('if on_progress_seq is not None:', 'if seq is not None and on_progress_seq is not None:'), PHASE, 'frozen_progress'),
+    ("engine_unsequenced_agent", ENGINE, replace('lambda _seq: self._publish_disarm_phase(step, "execute", progress=True)', 'lambda _seq: self._publish_disarm_phase(step, "execute", progress=_seq is not None)'), AGENT, 'frozen_progress'),
+    ("engine_unsequenced_pg", ENGINE, replace('lambda _seq: self._publish_disarm_phase(step, "execute", progress=True)', 'lambda _seq: self._publish_disarm_phase(step, "execute", progress=_seq is not None)'), PHASE, 'frozen_progress'),
+    ("pump_duplicate_seq", ENGINE, replace('if seq is None or last_seq is None or seq > last_seq:', 'if True:'), AGENT, 'frozen_progress'),
+    ("recycler_ordinary_anchor", RECYCLER, bare_guard_anchor, PHASE, 'ordinary_rule_after and recycler'),
+    ("recycler_ordinary_cas", RECYCLER, replace('                if job.execution_state in ("EXECUTING_STEP", EXECUTING_DISARM):', '                if job.disarm_guard is not None:\n                    pass\n                elif job.execution_state in ("EXECUTING_STEP", EXECUTING_DISARM):', after='coord_deadline: datetime | None = None'), PHASE, 'cas_rechecks_new'),
 ]
 
 
 def main():
-    logdir = Path('/tmp/b6-u8-withdrawals-v1713')
+    logdir = Path('/tmp/b6-u8-withdrawals-v1714')
     logdir.mkdir(exist_ok=True)
     summary = []
     env = {'PATH': os.pathsep.join(os.get_exec_path()), 'PYTHONPATH': '.', 'TESTING': '1', 'JWT_SECRET_KEY': 'b6-isolated-test-only'}

@@ -5,11 +5,12 @@ Class: feature
 
 ## Decision
 
-Refs #3752; Refs #3723 v1.7.13; ADR-0061 Accepted v1.1.
+Refs #3752; Refs #3723 v1.7.14; ADR-0061 Accepted v1.1.
 Original base: `7f4159244f128965325c4964480209729bf5fa2a`.
 Resumed from remote `afa85f48f7e3cc2d068ab6d6589b7553d789dbc7`, preserving
-Cursor Agent's `033fb566d` and both main merges. This continuation starts at
+Cursor Agent's `033fb566d` and both main merges. The v1.7.13 continuation started at
 `57abadf5bc0468787528d1037e10237c38b61185`, retaining the audit guard fixes.
+The review-round-1 repair starts at `f9c4f47eb6b54d995c882d3791a498c48024b1d9`.
 PR #3767 stays draft.
 
 Implement the approved queue/execution guard, platform interruption precedence,
@@ -51,6 +52,17 @@ control plane discovered before, during, or while restoring a tail causes capabi
 warning and v1.0 fallback. U4 owns the actual init endpoint; U8 supplies shared
 policy and init service behavior only.
 
+v1.7.14 addresses review round 1 F1/F2 (comment 6337576799), as confirmed by
+the Planner in comment 6338801039. The pump now sends execution progress for
+every PROGRESS that refreshes its stall clock: strictly increasing seq values,
+or every legacy event without seq. Engine counts accepted events independently
+of the script's seq format. The frozen 1.0.8 package remains unchanged.
+
+After the locked guard policy declines protection, the running anchor, CAS and
+projection use the ordinary liveness rules. Bare guard expiry is no longer used
+by production consumers; its pure helper remains available. Independent committed
+coordinator renewal between the timeout verdict and CAS prevents a stale write.
+
 ## Alternatives
 
 The implementation uses existing states and the coordinator channel. A script's
@@ -62,6 +74,31 @@ keeps aggregation consistent across all four entries. No further guard exemption
 are introduced. No budget, business state, environment setting or stage-B switch is added.
 
 ## Verification
+
+v1.7.14 pre-repair counterexamples: Agent 2 failed / 1 passed (exit 1), PG
+16 failed / 24 passed (exit 1). After repair: Agent/U1/pump 186 passed and
+PG/API/recycler 176 passed (both exit 0). New tests rebuild the unchanged tree
+into the deterministic 1.0.8 package, require its registered SHA256, and load
+`_lib.py` from that archive. Real seq and adb_calls stamps flow through the real
+Engine/pump, then through coordinator heartbeat to isolated PG every ten virtual
+seconds; reaper and full recycler retain RUNNING at 61 and 71 seconds.
+
+Current test changes:
+
+- `backend/agent/tests/disarm_progress_3752.py`: frozen-package fixture and real
+  Engine/pump harness; only process I/O is replaced, with no device calls/signals.
+- `test_disarm_u8_3752.py`: wait-seq, adb_calls and mixed progress counterexamples;
+  duplicate/backward seq cannot advance execution evidence.
+- `test_disarm_phase_u8_3752.py`: separate full-recycler and projection contrasts
+  for boot/token/lease invalidation and execute without progress, paired with
+  no-guard jobs and fresh/stale ordinary signals. Valid fresh guards still
+  protect. A separate transaction renews the coordinator before the real CAS.
+  Per §3.0.5 v1.7.14, the former expired-queue/fresh-coordinator test now asserts
+  ordinary-clock fallback: fresh keeps RUNNING; stale becomes UNKNOWN. Both
+  cases remain tested, rather than asserting expiry alone forces recycling.
+- `disarm_withdrawals_3752.py`: add separate pump and Engine non-seq withdrawals
+  on both Agent and PG paths, duplicate-seq acceptance, ordinary anchor/CAS, and
+  replace the old projection-expiry withdrawal with ordinary-rule equivalence.
 
 All pytest commands use the project Python and memory runner. Agent commands use
 `env -i PATH="$PATH" PYTHONPATH=.`. Backend commands additionally set only
@@ -112,9 +149,12 @@ The previous 34-point matrix exited 0: every withdrawal exited 1 and every resto
 run exited 0; source hashes matched after restoration. v1.7.13 replaces the old
 projection-reread mutation with request-snapshot/query-count/read-only mutations,
 and adds lease-probe, execute-evidence ordering and single-timeout mutations.
-The full 39-point matrix rerun for this continuation exited 0: all 39 withdrawals
+The v1.7.13 full 39-point matrix exited 0: all 39 withdrawals
 exited 1, all 39 restored runs exited 0, and all restored source hashes matched.
-Final-HEAD command and CI results are reported on PR #3767. Logs and exact child commands for v1.7.13 are under
+The v1.7.14 full 46-point matrix also exited 0: every withdrawal exited 1,
+every restored run exited 0, and restored source hashes matched. Its exact
+commands and results are under `/tmp/b6-u8-withdrawals-v1714/`.
+Final-HEAD command and CI results are reported on PR #3767. Historical logs for v1.7.13 are under
 `/tmp/b6-u8-withdrawals-v1713/`; final matrix
 results and the single final-HEAD command/exit record are reported on PR #3767.
 
@@ -157,6 +197,11 @@ pr-migrate-empty-db; also obtain pr-backend-tests-informational on the same HEAD
 CI on the earlier remote HEAD does not validate this change's final HEAD.
 
 ## Revisit
+
+Round 1 N1 (manifest loading) and N2 (overlapping coordinator ticks/cache rollback)
+are nonblocking and are not changed in this round, per the Planner. This Note
+does not claim the entire tick is serialized or fully thread safe. After Planner
+verification, the original review work surface performs round 2 on the new HEAD.
 
 Planner verification and independent review remain required. Keep PR #3767 draft.
 U4 must reuse the shared init policy and verify its real token-protected entry.

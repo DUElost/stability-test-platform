@@ -2,6 +2,19 @@
 
 import pytest
 
+from backend.agent.tests.disarm_progress_3752 import frozen_progress_lines, real_progress_engine
+
+
+@pytest.mark.parametrize("mode,count", [("wait", 3), ("adb", 7), ("mixed", 10)])
+def test_frozen_progress_pump_advances_engine_evidence_only_for_accepted_progress(monkeypatch, tmp_path, mode, count):
+    lines = frozen_progress_lines(tmp_path)
+    run, published = real_progress_engine(monkeypatch, tmp_path)
+    # seq 1, duplicate 1, seq 2, seven real adb_calls, duplicate 2, seq 3.
+    if mode != "mixed":
+        lines = [line for line in lines if ('"seq"' in line) == (mode == "wait")]
+    assert run(lines)["progress_seq"] == count
+    assert [item["progress_seq"] for item in published] == list(range(count + 1))
+
 from backend.agent.contracts.device_return import map_step_outcome_to_disarm_result
 
 

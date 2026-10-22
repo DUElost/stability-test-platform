@@ -18,6 +18,126 @@ from backend.services.device_return import manifest_package_sha
 from backend.services.plan_run_devices import running_heartbeat_deadline
 from backend.tests.scheduler.test_recycler import _seed_running_job, _cleanup_seed
 
+
+@pytest.mark.parametrize("consumer", ["reaper", "recycler"])
+def test_frozen_progress_via_coordinator_protects_beyond_61_seconds(client, seed, monkeypatch, tmp_path, consumer):
+    from backend.agent.tests.disarm_progress_3752 import frozen_progress_lines, real_progress_engine
+    from backend.services import agent_coordinator_heartbeat as service
+    origin = datetime.now(timezone.utc)
+    clock = [origin]
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return clock[0]
+
+    monkeypatch.setattr(service, "datetime", Clock)
+    monkeypatch.setattr(recycler, "datetime", Clock)
+    monkeypatch.setattr(recycler, "_fill_deferred_post_completions", lambda *_: 0)
+    monkeypatch.setattr(recycler, "_prune_steptrace_artifacts", lambda *_: None)
+    lines = frozen_progress_lines(tmp_path)
+    run, _ = real_progress_engine(monkeypatch, tmp_path)
+    # Real wait seq first, followed by real frozen-lib adb_calls every ten seconds.
+    for seconds, line in zip(range(0, 71, 10), [lines[0], *lines[3:10]], strict=True):
+        clock[0] = origin + timedelta(seconds=seconds)
+        with SessionLocal() as writer:
+            writer.get(Host, seed["host_id"]).last_heartbeat = clock[0]
+            writer.commit()
+        event = run([line])
+        assert heartbeat(client, seed, seq=event["seq"], phase="execute", progress=event["progress_seq"]).status_code == 200
+        if seconds >= 60:
+            clock[0] += timedelta(seconds=1)
+            if consumer == "reaper":
+                assert run_reaper(seed, clock[0]) is False
+            else:
+                recycler.recycle_once()
+            with SessionLocal() as reader:
+                assert reader.get(JobInstance, seed["job_id"]).status == "RUNNING"
+
+
+@pytest.mark.parametrize("with_guard", [False, True])
+@pytest.mark.parametrize("ordinary_fresh", [False, True])
+@pytest.mark.parametrize("broken", ["boot", "token", "lease", "no_progress"])
+@pytest.mark.parametrize("entry", ["recycler", "projection"])
+def test_full_recycler_and_projection_use_ordinary_rule_after_guard_rejection(client, seed, monkeypatch, broken, ordinary_fresh, with_guard, entry):
+    from types import SimpleNamespace
+    from backend.models.plan_run import PlanRunHost
+    from backend.services.device_return import job_guard_deadline
+    from backend.tests.scheduler.test_recycler import _seed_fresh_coordinator_heartbeat
+    now = datetime.now(timezone.utc)
+    assert heartbeat(client, seed, phase="execute" if broken == "no_progress" else "queue").status_code == 200
+    ordinary_at = now if ordinary_fresh else now - timedelta(hours=2)
+    _seed_fresh_coordinator_heartbeat(seed, at=ordinary_at)
+    with SessionLocal() as writer:
+        job = writer.get(JobInstance, seed["job_id"])
+        job.last_execution_heartbeat_at = None if broken == "no_progress" and not ordinary_fresh else ordinary_at
+        if broken == "boot":
+            writer.get(Host, seed["host_id"]).boot_id = "changed-boot"
+        elif broken == "token":
+            writer.query(DeviceLease).filter_by(job_id=job.id).update({"fencing_token": "changed-token"})
+        elif broken == "lease":
+            writer.query(DeviceLease).filter_by(job_id=job.id).update({"expires_at": now - timedelta(seconds=1)})
+        if not with_guard:
+            job.disarm_guard = None
+        writer.commit()
+    with SessionLocal() as reader:
+        job = reader.get(JobInstance, seed["job_id"])
+        assert job_guard_deadline(reader, job, now) is None
+        if entry == "projection":
+            plain = SimpleNamespace(**{column.key: getattr(job, column.key) for column in JobInstance.__table__.columns})
+            plain.disarm_guard = None
+            coord = {seed["host_id"]: reader.query(PlanRunHost).filter_by(plan_run_id=seed["plan_run_id"]).one().coordinator_heartbeat_at}
+            assert running_heartbeat_deadline(job, coord, db=reader, now=now) == running_heartbeat_deadline(plain, coord, now=now)
+            return
+    monkeypatch.setattr(recycler, "_fill_deferred_post_completions", lambda *_: 0)
+    monkeypatch.setattr(recycler, "_prune_steptrace_artifacts", lambda *_: None)
+    recycler.recycle_once()
+    with SessionLocal() as reader:
+        assert reader.get(JobInstance, seed["job_id"]).status == ("RUNNING" if ordinary_fresh else "UNKNOWN")
+
+
+@pytest.mark.parametrize("phase", ["queue", "execute"])
+def test_full_recycler_still_protects_valid_fresh_guard(client, seed, monkeypatch, phase):
+    assert heartbeat(client, seed, phase=phase, progress=1 if phase == "execute" else 0).status_code == 200
+    with SessionLocal() as reader:
+        assert running_heartbeat_deadline(reader.get(JobInstance, seed["job_id"]), db=reader) > datetime.now(timezone.utc)
+    monkeypatch.setattr(recycler, "_fill_deferred_post_completions", lambda *_: 0)
+    monkeypatch.setattr(recycler, "_prune_steptrace_artifacts", lambda *_: None)
+    recycler.recycle_once()
+    with SessionLocal() as reader:
+        assert reader.get(JobInstance, seed["job_id"]).status == "RUNNING"
+
+
+@pytest.mark.parametrize("with_guard", [False, True])
+def test_recycler_cas_rechecks_new_coordinator_commit_after_guard_rejection(client, seed, monkeypatch, with_guard):
+    from backend.models.plan_run import PlanRunHost
+    from backend.tests.scheduler.test_recycler import _seed_fresh_coordinator_heartbeat
+    now = datetime.now(timezone.utc)
+    assert heartbeat(client, seed).status_code == 200
+    _seed_fresh_coordinator_heartbeat(seed, at=now - timedelta(hours=2))
+    with SessionLocal() as writer:
+        writer.get(Host, seed["host_id"]).boot_id = "changed-boot"
+        if not with_guard:
+            writer.get(JobInstance, seed["job_id"]).disarm_guard = None
+        writer.commit()
+    original = recycler._mark_running_timeout
+    commits = []
+
+    def mark(db, job, at, reason, **kwargs):
+        with SessionLocal() as writer:
+            writer.query(PlanRunHost).filter_by(plan_run_id=seed["plan_run_id"]).update({"coordinator_heartbeat_at": now})
+            writer.commit()
+            commits.append(True)
+        return original(db, job, at, reason, **kwargs)
+
+    monkeypatch.setattr(recycler, "_mark_running_timeout", mark)
+    monkeypatch.setattr(recycler, "_fill_deferred_post_completions", lambda *_: 0)
+    monkeypatch.setattr(recycler, "_prune_steptrace_artifacts", lambda *_: None)
+    recycler.recycle_once()
+    assert commits == [True]
+    with SessionLocal() as reader:
+        assert reader.get(JobInstance, seed["job_id"]).status == "RUNNING"
+
 PIPE = {"lifecycle": {"init": [{"step_id": "setup", "action": "script:powercycle_setup"}],
         "teardown": [{"step_id": "disarm", "action": "script:powercycle_disarm", "version": "1.0.8", "timeout_seconds": 660}]}}
 
@@ -143,10 +263,12 @@ def run_reaper(seed, now):
     return asyncio.run(run())
 
 
-def test_expired_queue_is_selected_and_recycled_despite_fresh_generic_coordinator(client, seed, monkeypatch):
+@pytest.mark.parametrize("ordinary_fresh", [False, True])
+def test_expired_queue_uses_ordinary_coordinator_rule(client, seed, monkeypatch, ordinary_fresh):
+    # §3.0.5 v1.7.14: rejected guards fall through to the ordinary clock.
     from backend.tests.scheduler.test_recycler import _seed_fresh_coordinator_heartbeat
     now = datetime.now(timezone.utc)
-    _seed_fresh_coordinator_heartbeat(seed, at=now)
+    _seed_fresh_coordinator_heartbeat(seed, at=now if ordinary_fresh else now-timedelta(hours=2))
     assert heartbeat(client, seed).status_code == 200
     with SessionLocal() as writer:
         job = writer.get(JobInstance, seed["job_id"])
@@ -156,7 +278,7 @@ def test_expired_queue_is_selected_and_recycled_despite_fresh_generic_coordinato
     monkeypatch.setattr(recycler, "_prune_steptrace_artifacts", lambda *_: None)
     recycler.recycle_once()
     with SessionLocal() as verify:
-        assert verify.get(JobInstance, seed["job_id"]).status == "UNKNOWN"
+        assert verify.get(JobInstance, seed["job_id"]).status == ("RUNNING" if ordinary_fresh else "UNKNOWN")
 
 
 @pytest.mark.parametrize("entry", ["running", "patrol", "trace"])

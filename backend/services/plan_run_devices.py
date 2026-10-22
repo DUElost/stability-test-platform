@@ -10,7 +10,6 @@
 from __future__ import annotations
 
 from backend.services.device_return import job_guard_deadline
-from backend.agent.contracts.device_return import disarm_guard_expiry
 
 import os
 from datetime import datetime, timedelta, timezone
@@ -188,7 +187,6 @@ def running_heartbeat_deadline(
         protected_until = job_guard_deadline(db, fresh, checked_at, read_only=True)
         if protected_until is not None:
             return protected_until
-        return min(checked_at, datetime.fromtimestamp(disarm_guard_expiry(fresh.disarm_guard), timezone.utc))
     graded_timeout = running_heartbeat_timeout_seconds(
         j, patrol_stall_multiplier=PATROL_STALL_MULTIPLIER,
     )

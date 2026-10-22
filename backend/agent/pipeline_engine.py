@@ -174,7 +174,8 @@ def _resolve_step_wall_clock(step: Dict[str, Any]) -> Optional[float]:
 # 进度戳前缀（#115 阶段 2 协议）。脚本在长耗时操作期间自愿往 **stderr** 打
 #     PROGRESS {"seq": N, ...}
 # stdout 不能用 —— 它整份要过 json.loads，是既有结果契约。
-# seq 单调递增是唯一判据；语义字段仅供人读诊断。重复打同一句话时 seq 不涨，
+# 带 seq 的戳必须严格递增；不带 seq 的旧戳每条计入（#3723 v1.7.14）。
+# 语义字段仅供人读诊断。重复打同一句话时 seq 不涨，
 # 会被判停滞 —— 这是对的：那证明的是"进程还活着"，不是"还在推进"。
 _PROGRESS_PREFIX = "PROGRESS "
 
@@ -524,7 +525,7 @@ def _pump_process(
     wall_clock: Optional[float],
     stall_seconds: Optional[float],
     on_progress: Optional[Callable[[], None]] = None,
-    on_progress_seq: Optional[Callable[[int], None]] = None,
+    on_progress_seq: Optional[Callable[[Optional[int]], None]] = None,
     absolute_deadline: Optional[Callable[[], float]] = None,
     log_paths: Optional[Tuple[str, str]] = None,
     terminate_grace_seconds: float = 2.0,
@@ -590,16 +591,16 @@ def _pump_process(
             # 只有 PROGRESS 行刷停滞钟 —— 普通输出不算"推进"。
             # 否则活锁(fastboot 无限重试、adb install 卡 90% 反复重连
             # 打印日志)会因持续输出而永远不被判停滞,停滞钟就形同虚设。
-            # #804：仅 seq 单调递增才刷新（上文契约「seq 单调递增是唯一判据」）——
+            # #804：带 seq 的戳仅单调递增才刷新——
             # 重复/回退的 seq 证明的是"进程还活着"，不是"还在推进"；
-            # 无 seq 字段的旧戳按阶段 1 行为兼容（仅刷新）。
+            # 无 seq 的旧戳每条刷新；执行阶段证据使用同一判据。
             seq = _parse_progress_seq(stripped)
             last_seq = state.get("last_progress_seq")
             if seq is None or last_seq is None or seq > last_seq:
                 if seq is not None:
                     state["last_progress_seq"] = seq
                 state["last_progress"] = now()
-                if seq is not None and on_progress_seq is not None:
+                if on_progress_seq is not None:
                     on_progress_seq(seq)
             if on_progress is not None:
                 try:
@@ -2247,7 +2248,7 @@ class PipelineEngine:
                     # 解除步骤改报 EXECUTING_DISARM（#3723 §3.2.6 / §3.0.5）。
                     on_progress=lambda: self._update_execution_state(_progress_state),
                     on_progress_seq=(
-                        lambda seq: self._publish_disarm_phase(step, "execute", progress_seq=seq)
+                        lambda _seq: self._publish_disarm_phase(step, "execute", progress=True)
                     ) if _progress_state == EXECUTING_DISARM else None,
                     absolute_deadline=(lambda: self._current_disarm_deadline(step))
                     if ctx.phase == "teardown" and getattr(self, "_disarm_tail", None) is not None else None,
@@ -3190,11 +3191,11 @@ class PipelineEngine:
             converted = time.monotonic() + max(0, deadline - guard["last_server_at"] - elapsed)
             tail["step_deadlines"][key] = min(tail["step_deadlines"].get(key, converted), converted)
 
-    def _publish_disarm_phase(self, step: dict, phase: str, *, progress_seq: Optional[int] = None) -> None:
+    def _publish_disarm_phase(self, step: dict, phase: str, *, progress: bool = False) -> None:
         coord = getattr(self, "_coordinator", None)
         if coord is None or getattr(self, "_disarm_tail", None) is None:
             return
-        if progress_seq is not None:
+        if progress:
             self._disarm_progress_seq += 1
         self._disarm_seq += 1
         script = script_name_from_step(step)

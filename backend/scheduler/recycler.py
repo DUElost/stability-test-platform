@@ -14,7 +14,6 @@ Entry point: ``recycle_once()`` is invoked by APScheduler IntervalTrigger
 """
 
 from backend.services.device_return import job_guard_deadline
-from backend.agent.contracts.device_return import disarm_guard_expiry
 import json
 import logging
 import os
@@ -196,12 +195,6 @@ def _running_liveness_anchor(job, coord_hb: dict) -> tuple["datetime | None", in
         job,
         patrol_stall_multiplier=PATROL_STALL_MULTIPLIER,
     )
-    if isinstance(getattr(job, "disarm_guard", None), dict):
-        heartbeat = _aware_dt(getattr(job, "last_execution_heartbeat_at", None))
-        expires = disarm_guard_expiry(job.disarm_guard, execution_heartbeat_deadline=(
-            heartbeat.timestamp() + graded_timeout if heartbeat is not None else None))
-        return datetime.fromtimestamp(expires, timezone.utc), 0
-
     if job.execution_state in ("EXECUTING_STEP", EXECUTING_DISARM):
         exec_hb = _aware_dt(job.last_execution_heartbeat_at)
         if exec_hb is not None:
@@ -1353,9 +1346,7 @@ def recycle_once() -> None:
                 coord_deadline: datetime | None = None
                 exec_deadline: datetime | None = None
                 require_unreported = False
-                if job.disarm_guard is not None:
-                    pass  # the locked guard policy is the write predicate
-                elif job.execution_state in ("EXECUTING_STEP", EXECUTING_DISARM):
+                if job.execution_state in ("EXECUTING_STEP", EXECUTING_DISARM):
                     exec_deadline = job_deadline
                 elif job.execution_state in _WAITING_EXECUTION_STATES:
                     coord_deadline = job_deadline
