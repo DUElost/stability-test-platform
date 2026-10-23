@@ -224,7 +224,7 @@ def test_probe_device_survives_slow_getvar(mod, monkeypatch):
 
     mode, dev, fb = mod.probe_device("SERIAL", {"adb_probe_seconds": 1}, mod.Progress(), [])
     assert mode == "fastboot" and fb is fb_fake
-    getvars = [t for c, t in zip(fb_fake.calls, fb_fake.timeouts) if c[:1] == ["getvar"]]
+    getvars = [t for c, t in zip(fb_fake.calls, fb_fake.timeouts, strict=True) if c[:1] == ["getvar"]]
     assert len(getvars) == 2, "one slow probe must be retried, not fatal"
     assert all(t > 10 for t in getvars), "readiness probe must budget above slow-host latency"
 

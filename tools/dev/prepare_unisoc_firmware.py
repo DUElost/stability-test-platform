@@ -26,7 +26,6 @@ import hashlib
 import json
 import os
 import struct
-import sys
 import time
 import xml.etree.ElementTree as ET
 
