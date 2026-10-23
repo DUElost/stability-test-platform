@@ -65,6 +65,25 @@ class FakeFlakyCmd(FakeCmd):
         return super().run(argv, timeout=timeout, check=check)
 
 
+def _patch_advancing_clock(monkeypatch, mod, *, start: float = 1_000_000.0):
+    """Replace mod.time.sleep/time so sleep advances a fake clock (no wall wait).
+
+    同构自 `test_clear_recents_v106.py`（#3202 守卫：sleep 换 no-op 却不推进时钟
+    = 等待环靠真墙钟判 deadline 的忙等形态）。
+    """
+    state = {"now": start}
+
+    def fake_time() -> float:
+        return state["now"]
+
+    def fake_sleep(seconds: float) -> None:
+        state["now"] += float(seconds)
+
+    monkeypatch.setattr(mod.time, "time", fake_time)
+    monkeypatch.setattr(mod.time, "sleep", fake_sleep)
+    return state
+
+
 def _write(path: Path, content: bytes = b"x"):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(content)
@@ -203,7 +222,7 @@ def test_probe_device_falls_back_to_fastboot(mod, monkeypatch):
     fb_fake = FakeCmd(lambda argv: "current-slot: a")
     monkeypatch.setattr(mod, "adb", lambda serial, progress, log: adb_fake)
     monkeypatch.setattr(mod, "fastboot", lambda serial, progress, log: fb_fake)
-    monkeypatch.setattr(mod.time, "sleep", lambda seconds: None)
+    _patch_advancing_clock(monkeypatch, mod)
 
     mode, dev, fb = mod.probe_device("SERIAL", {"adb_probe_seconds": 1}, mod.Progress(), [])
     assert mode == "fastboot" and dev is None and fb is fb_fake
@@ -220,7 +239,7 @@ def test_probe_device_survives_slow_getvar(mod, monkeypatch):
     fb_fake = FakeFlakyCmd(lambda argv: "current-slot: a", fail_first=1)
     monkeypatch.setattr(mod, "adb", lambda serial, progress, log: adb_fake)
     monkeypatch.setattr(mod, "fastboot", lambda serial, progress, log: fb_fake)
-    monkeypatch.setattr(mod.time, "sleep", lambda seconds: None)
+    _patch_advancing_clock(monkeypatch, mod)
 
     mode, dev, fb = mod.probe_device("SERIAL", {"adb_probe_seconds": 1}, mod.Progress(), [])
     assert mode == "fastboot" and fb is fb_fake
@@ -232,7 +251,7 @@ def test_probe_device_survives_slow_getvar(mod, monkeypatch):
 def test_wait_fastboot_survives_getvar_timeout(mod, monkeypatch):
     fb_fake = FakeFlakyCmd(lambda argv: "current-slot: a", fail_first=2)
     monkeypatch.setattr(mod, "fastboot", lambda serial, progress, log: fb_fake)
-    monkeypatch.setattr(mod.time, "sleep", lambda seconds: None)
+    _patch_advancing_clock(monkeypatch, mod)
 
     fb = mod.wait_fastboot("SERIAL", mod.Progress(), [], 90)
     assert fb is fb_fake
