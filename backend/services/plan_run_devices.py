@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+from backend.services.device_return import job_guard_deadline
+
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -164,6 +166,7 @@ COORDINATOR_HEARTBEAT_TIMEOUT_SECONDS = int(
 def running_heartbeat_deadline(
     j: JobInstance,
     coord_heartbeat_by_host: Optional[dict[str, datetime]] = None,
+    *, db: Optional[Session] = None, now: Optional[datetime] = None,
 ) -> Optional[datetime]:
     """Projected stuck deadline for a RUNNING job — aligned with
     ``recycler._running_liveness_anchor`` (#993 / ADR-0026 §3).
@@ -178,6 +181,12 @@ def running_heartbeat_deadline(
     """
     if j.status != JobStatus.RUNNING.value:
         return None
+    if db is not None and getattr(j, "disarm_guard", None) is not None:
+        fresh = j
+        checked_at = max(now or datetime.now(timezone.utc), datetime.now(timezone.utc))
+        protected_until = job_guard_deadline(db, fresh, checked_at, read_only=True)
+        if protected_until is not None:
+            return protected_until
     graded_timeout = running_heartbeat_timeout_seconds(
         j, patrol_stall_multiplier=PATROL_STALL_MULTIPLIER,
     )
@@ -298,7 +307,7 @@ def build_plan_run_devices(
         cur_stage = current_stage_for_job(j)
         pending_deadline = pending_claim_deadline(j)
         heartbeat_deadline = running_heartbeat_deadline(
-            j, coord_heartbeat_by_host,
+            j, coord_heartbeat_by_host, db=db, now=now,
         )
         busy_reason, busy_lease_job_id = derive_busy_reason(dev, host_st, lease_job_id)
         link = derive_device_link_status(dev, host_st)
@@ -345,6 +354,7 @@ def build_plan_run_devices(
             job_exec_status=exec_status,
             adb_state=dev.adb_state if dev else None,
             adb_connected=dev.adb_connected if dev else None,
+            disarm_results=j.disarm_results,
             capabilities={
                 "manual_retry": manual_retry_allowed,
                 "manual_exit": j.status == JobStatus.RUNNING.value,

@@ -124,6 +124,29 @@ export function DispatchCockpit({
           </div>
         ) : null}
 
+        {preview?.warnings?.length ? (
+          <div
+            data-testid="dispatch-preview-warnings"
+            className={cn(ALERT_BOX.warning, 'rounded-lg px-3 py-2 text-sm')}
+          >
+            <div className="font-semibold">派发前提醒</div>
+            <ul className="mt-1 space-y-1 text-xs">
+              {preview.warnings.map((warning) => (
+                <li
+                  key={warning.code + '-' + warning.device_id}
+                  data-testid={'dispatch-warning-' + warning.code + '-' + warning.device_id}
+                >
+                  <span className="font-mono font-semibold">{warning.serial}</span>
+                  {' · '}
+                  {warning.code === 'device_return_debt'
+                    ? '归还欠账：需清偿或人工放行后才能派发'
+                    : warning.message}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+
         {preview?.confirmation_fingerprint ? (
           <div
             data-testid="dispatch-fingerprint-ready"

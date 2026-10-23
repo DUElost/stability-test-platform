@@ -47,6 +47,7 @@ PINNED_SCRIPTS: dict[str, str] = {
     "script:monkey_setup": "monkey_setup",
     "script:monkey_teardown": "monkey_teardown",
     "script:powercycle_check": "powercycle_check",
+    "script:powercycle_disarm": "powercycle_disarm",
     "script:powercycle_finish": "powercycle_finish",
     "script:powercycle_setup": "powercycle_setup",
     "script:sleep_check": "sleep_check",

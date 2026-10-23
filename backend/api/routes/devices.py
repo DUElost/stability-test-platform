@@ -28,9 +28,14 @@ from backend.api.schemas.device import (
     DeviceRetireBatchResult,
     DeviceRetireIn,
     DeviceUnretireIn,
+    DeviceReturnDebtOut,
+    DeviceReturnOverrideIn,
+    DeviceReturnOverrideOut,
 )
 from backend.api.routes.auth import get_current_active_user, require_admin, User
 from backend.services.device_lease_emergency_release import release_terminal_job_lease
+from backend.services.device_return import apply_override_sync, open_debts_for_device_sync
+from backend.core.metrics import record_device_return_override
 from backend.services.device_lifecycle import not_stale_condition
 from backend.services.device_retirement import (
     retire_device,
@@ -528,6 +533,32 @@ def get_device(
     return out
 
 
+@router.get("/{device_id}/return-debts", response_model=ApiResponse[List[DeviceReturnDebtOut]])
+def list_device_return_debts_endpoint(
+    device_id: int,
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
+    # ADR-0061 D5.9 / #3723 U6: open debt rows, oldest first, no evidence.
+    if db.get(Device, device_id) is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "DEVICE_NOT_FOUND", "message": "设备不存在"},
+        )
+    rows = open_debts_for_device_sync(db, device_id)
+    return ok([
+        DeviceReturnDebtOut(
+            id=row.id,
+            family=row.family,
+            source_kind=row.source_kind,
+            source_job_id=row.source_job_id,
+            cause=row.cause,
+            created_at=row.created_at,
+        )
+        for row in rows
+    ])
+
+
 @router.put("/{device_id}/tags", response_model=DeviceOut)
 def update_device_tags(
     device_id: int,
@@ -592,6 +623,59 @@ def release_device_lease_endpoint(
         status=released.status,
     ))
 
+
+
+
+@router.post(
+    "/{device_id}/return-override",
+    response_model=ApiResponse[DeviceReturnOverrideOut],
+)
+def return_override_endpoint(
+    device_id: int,
+    payload: DeviceReturnOverrideIn,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """ADR-0061 D5.7 / #3723 U3：人工放行未关闭欠账（admin）。记 unverified/override。"""
+    result = apply_override_sync(
+        db,
+        device_id=device_id,
+        families=payload.families,
+        reason_category=payload.reason_category,
+        evidence_ref=payload.evidence_ref,
+    )
+    if not result.get("ok"):
+        raise HTTPException(
+            status_code=404,
+            detail={"code": result.get("code", "DEVICE_NOT_FOUND"), "message": "设备不存在"},
+        )
+    record_audit(
+        db,
+        action="device_return_override",
+        resource_type="device",
+        resource_id=device_id,
+        details={
+            "families": result["families"],
+            "reason_category": payload.reason_category,
+            "evidence_ref": payload.evidence_ref,
+            "closed_count": result["closed_count"],
+            "debt_lease_released": result["debt_lease_released"],
+        },
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+        strict=True,
+    )
+    record_device_return_override()
+    db.commit()
+    return ok(DeviceReturnOverrideOut(
+        device_id=device_id,
+        families=result["families"],
+        closed_count=result["closed_count"],
+        debt_lease_released=result["debt_lease_released"],
+        open_debt_count=result["open_debt_count"],
+    ))
 
 @router.post("/{device_id}/retire", response_model=DeviceOut)
 def retire_device_endpoint(

@@ -100,6 +100,65 @@ class DeviceRetireBatchOut(BaseModel):
     failed: int = 0
 
 
+
+class DeviceReturnDebtOut(ORMBaseModel):
+    """ADR-0061 D5.9 / #3723 U6：设备未关闭欠账条目（只读，不含 evidence）。"""
+
+    id: int
+    family: str
+    source_kind: str
+    source_job_id: Optional[int] = None
+    cause: str
+    created_at: datetime
+
+
+class DeviceReturnOverrideIn(BaseModel):
+    """ADR-0061 D5.7：人工放行——原因类别 + 证据引用必填。"""
+
+    families: Optional[List[str]] = None  # None / empty = all families
+    reason_category: str = Field(min_length=1)
+    evidence_ref: str = Field(min_length=1)
+
+    @field_validator("reason_category", "evidence_ref")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("must not be blank")
+        return stripped
+
+
+class DeviceReturnOverrideOut(BaseModel):
+    device_id: int
+    families: List[str]
+    closed_count: int
+    debt_lease_released: bool
+    open_debt_count: int
+
+
+class AgentReturnDischargeIn(BaseModel):
+    """ADR-0061 D5.5：Agent 清偿回报（携带欠账租约令牌）。"""
+
+    fencing_token: str = Field(min_length=1)
+    family_results: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+
+    @field_validator("fencing_token")
+    @classmethod
+    def _token_not_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("fencing_token must not be blank")
+        return stripped
+
+
+class AgentReturnDischargeOut(BaseModel):
+    device_id: int
+    discharged_families: List[str] = Field(default_factory=list)
+    debt_lease_released: bool = False
+    open_debt_count: int = 0
+    fencing_token: Optional[str] = None
+
+
 class DeviceOut(ORMBaseModel):
     id: int
     serial: str
@@ -138,6 +197,8 @@ class DeviceOut(ORMBaseModel):
     # #2962 A/D6：陈旧度与退役建议是**现算派生**（不落库），供列表隐藏/徽标/建议。
     is_stale: bool = False
     retire_suggested: bool = False
+    # ADR-0061 D1.3 / #3723 U3：按专项归还状态（可空=未初始化）。
+    return_state: Optional[Dict[str, Any]] = None
 
     @model_validator(mode='after')
     def _mark_serial_suspect(self):

@@ -338,3 +338,58 @@ describe('DeviceDetailDrawer 时间口径（#2420）', () => {
     expect(valueOf('脚本')).toContain('—');
   });
 });
+
+describe('DeviceDetailDrawer — 解除结果（ADR-0061 D1.2 / U6）', () => {
+  it('shows 无解除记录 for null and empty disarm_results', () => {
+    const { unmount } = render_(
+      <DeviceDetailDrawer device={makeDevice({ disarm_results: null })} {...handlers} />,
+    );
+    expect(screen.getByTestId('device-drawer-disarm-empty')).toHaveTextContent('无解除记录');
+    unmount();
+    render_(
+      <DeviceDetailDrawer device={makeDevice({ disarm_results: {} })} {...handlers} />,
+    );
+    expect(screen.getByTestId('device-drawer-disarm-empty')).toHaveTextContent('无解除记录');
+  });
+
+  it('maps all six machine values and shows the reason', () => {
+    render_(
+      <DeviceDetailDrawer
+        device={makeDevice({
+          disarm_results: {
+            'power-cycle': { result: 'confirmed', reason: 'readback clean' },
+            sleep: { result: 'executed_unverified' },
+            mtbf: { result: 'failed', reason: 'stop returned 1' },
+            gpu: { result: 'readback_failed', reason: 'permission denied' },
+            monkey: { result: 'not_executed', reason: 'lease_lost' },
+            leftovers: { result: 'incomplete' },
+          },
+        })}
+        {...handlers}
+      />,
+    );
+    const block = screen.getByTestId('device-drawer-disarm-results');
+    expect(block).toHaveTextContent('开关机');
+    expect(block).toHaveTextContent('已确认');
+    expect(block).toHaveTextContent('已执行未验证');
+    expect(block).toHaveTextContent('失败');
+    expect(block).toHaveTextContent('回读失败');
+    expect(block).toHaveTextContent('未执行');
+    expect(block).toHaveTextContent('未完成');
+    expect(screen.getByTestId('device-drawer-disarm-power-cycle')).toHaveTextContent(
+      '原因：readback clean',
+    );
+    expect(screen.getByTestId('device-drawer-disarm-monkey')).toHaveTextContent('原因：lease_lost');
+    expect(screen.getByTestId('device-drawer-disarm-leftovers')).toHaveTextContent('leftovers');
+  });
+
+  it('renders unknown result values verbatim without crashing', () => {
+    render_(
+      <DeviceDetailDrawer
+        device={makeDevice({ disarm_results: { 'power-cycle': { result: 'future_value' } } })}
+        {...handlers}
+      />,
+    );
+    expect(screen.getByTestId('device-drawer-disarm-power-cycle')).toHaveTextContent('future_value');
+  });
+});

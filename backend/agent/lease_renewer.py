@@ -249,6 +249,8 @@ class LeaseRenewer:
                 for item in leases:
                     jv = self._coordinator.register_job(item["job_id"])
                     snap = jv.snapshot()
+                    if snap.get("disarm_evidence"):
+                        item["disarm_evidence"] = snap["disarm_evidence"]
                     if snap.get("execution_state"):
                         item["execution_state"] = snap["execution_state"]
                         item["progress_marker"] = {}

@@ -13,6 +13,7 @@ Entry point: ``recycle_once()`` is invoked by APScheduler IntervalTrigger
 (see ``app_scheduler.py``).
 """
 
+from backend.services.device_return import job_guard_deadline
 import json
 import logging
 import os
@@ -37,10 +38,10 @@ from backend.core.metrics import (
     task_run_total,
     post_completion_cutoff_jobs,
 )
-from backend.models.enums import JobStatus, LeaseType
+from backend.models.enums import JobStatus
 from backend.models.job import JobInstance, StepTrace
 from backend.models.plan_run import PlanRun
-from backend.services.lease_manager import release_lease_sync
+from backend.services.device_return import handle_job_lease_release_sync
 from backend.services.post_completion import get_post_completion_persist_failure_count
 
 from backend.core.settings.scheduler import get_scheduler_settings
@@ -157,6 +158,16 @@ def _final_disarm_grace_blocks_write(db, job, now: datetime) -> bool:
     同时使用当前 job 行状态/进度与数据库最新已提交的 PlanRun.run_context；
     陈旧候选在预取后、写入前转为受保护解除时必须放弃写入（v1.5 §3.3.2 A/E）。
     """
+    fresh = db.execute(select(JobInstance).where(
+        JobInstance.id == job.id,
+    ).with_for_update().execution_options(populate_existing=True)).scalars().first()
+    if fresh is None or fresh.status != JobStatus.RUNNING.value:
+        return True
+    job = fresh
+    # Collection time can precede a concurrently committed stage receipt.
+    now = max(now, datetime.now(timezone.utc))
+    if getattr(job, "disarm_guard", None) is not None:
+        return job_guard_deadline(db, job, now) is not None
     return _disarm_grace_blocks_recycle(
         job,
         _latest_committed_run_context(db, getattr(job, "plan_run_id", None)),
@@ -184,7 +195,6 @@ def _running_liveness_anchor(job, coord_hb: dict) -> tuple["datetime | None", in
         job,
         patrol_stall_multiplier=PATROL_STALL_MULTIPLIER,
     )
-
     if job.execution_state in ("EXECUTING_STEP", EXECUTING_DISARM):
         exec_hb = _aware_dt(job.last_execution_heartbeat_at)
         if exec_hb is not None:
@@ -478,9 +488,8 @@ def _mark_pending_timeout(
     job = db.get(JobInstance, job.id)
     if job is None:
         return False
-    # Phase 6d: release_lease_sync is now a single UPDATE — no projection,
-    # no LeaseProjectionError fallback needed.
-    release_lease_sync(db, job.device_id, job.id, LeaseType.JOB)
+    # ADR-0061 D5 / #3723 U3：PENDING 超时亦经统一欠账入口（通常无足迹 → 直接释放）。
+    handle_job_lease_release_sync(db, device_id=job.device_id, job_id=job.id, job=job)
 
     if not defer_aggregation:
         try:
@@ -725,6 +734,8 @@ def _mark_patrol_stall(
     显式 CAS 而非 ``JobStateMachine.transition``: 状态机已认可 RUNNING→UNKNOWN 合法;
     CAS 把「读 stale heartbeat → 决策 → 写 UPDATE」三步压成单条 SQL,在 DB 行级别消除竞态。
     """
+    if _final_disarm_grace_blocks_write(db, job, now):
+        return False
     cutoff = now - timedelta(seconds=interval_seconds * PATROL_STALL_MULTIPLIER)
     heartbeat_guard = (
         JobInstance.last_patrol_heartbeat_at.is_(None)
@@ -1250,6 +1261,9 @@ def recycle_once() -> None:
     )
     _known_states = _WAITING_EXECUTION_STATES | {"EXECUTING_STEP", EXECUTING_DISARM}
     stale_clock_filter = or_(
+        # Phase evidence has its own fixed freshness and frozen deadlines.
+        # Overselect guards here; the locked final policy rejects fresh ones.
+        JobInstance.disarm_guard.is_not(None),
         # nothing ever reported → one full executor window from dispatch
         and_(
             or_(

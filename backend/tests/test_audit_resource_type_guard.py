@@ -32,8 +32,11 @@ _RECORD_FUNCS = {"record_audit", "record_audit_async"}
 _CALL_SITES_BASELINE = 117
 
 #: 通用动词：同一 action 在不同实体上出现是正常形态（create host / create script ...）。
+#: `unverified_probe_result`（#3752 U8）按入口锚不同实体（device ↔ job_instance），
+#: 与 resource_id 对齐；不是同一实体的词表分裂（#2778 要拦的形态）。
 _GENERIC_ACTIONS = frozenset({
     "create", "update", "delete", "deactivate", "export", "import",
+    "unverified_probe_result",
 })
 
 

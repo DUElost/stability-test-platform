@@ -13,6 +13,23 @@ from backend.scheduler.device_lease_reconciler import _disarm_grace_defers_reap
 from backend.services.agent_completion import derive_disarm_results_from_traces
 from backend.tests.scheduler.test_recycler import _seed_running_job,_cleanup_seed,_seed_fresh_coordinator_heartbeat
 
+
+def _cleanup_seed_with_debt_leases(seed: dict) -> None:
+    """#3723 §3.6.7 第 2 条（v1.7.10，U5）：按设备删除租约后再走共用清理。
+
+    U3 把 JOB 租约**原地**转换成欠账租约时清空了 job_id，共用清理按 job_id
+    删租约会漏掉这一行，随后删 device 触发 device_leases_device_id_fkey
+    外键错误。这里只改清理顺序，不动断言。
+    """
+    from backend.models.device_lease import DeviceLease
+    db=SessionLocal()
+    try:
+        db.query(DeviceLease).filter(DeviceLease.device_id==seed['device_id']).delete()
+        db.commit()
+    finally:
+        db.close()
+    _cleanup_seed(seed)
+
 @pytest.fixture(autouse=True)
 def _safety_fuse(monkeypatch):
     def forbidden(*a,**k):raise AssertionError('Reviewer U2 probe must never send host signals')
@@ -92,7 +109,7 @@ def test_actual_complete_persists_results_and_replay_counts_once(client,db_sessi
             from backend.services.plan_run_catalog import _job_out
             assert _job_out(row,[]).disarm_results['power-cycle']['result']==expected
         assert seen==[('power-cycle',expected)],seen
-    finally:_cleanup_seed(seed)
+    finally:_cleanup_seed_with_debt_leases(seed)
 
 
 def test_fresh_progress_protects_even_with_stale_execution_heartbeat(db_session, monkeypatch):

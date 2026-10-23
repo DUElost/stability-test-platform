@@ -62,6 +62,8 @@ export const deviceKeys = {
   /** 任意筛选态的设备列表（前缀）——写后失效用；用 list() 的无参形态会因对象深比较
    *  与筛选态键不匹配而失效为空（#823）。 */
   allLists: () => ['devices'] as const,
+  /** ADR-0061 D5.9 / #3723 U6：设备未关闭欠账条目（展开行按需拉）。 */
+  returnDebts: (deviceId: number) => ['devices', deviceId, 'return-debts'] as const,
   /** 全量设备（fetchAllDevices 分页拉全）— PlanExecutePage 等需要完整设备视图的页面用。
    *
    *  #2068：**必须挂在 `['devices']` 前缀下**——React Query 的失效是按元素逐段前缀

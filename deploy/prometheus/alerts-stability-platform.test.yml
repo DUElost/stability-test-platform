@@ -1415,3 +1415,66 @@ tests:
       - eval_time: 26h
         alertname: StabilityDisarmNotExecutedOrIncomplete
         exp_alerts: []
+
+  # #3723 U3 / ADR-0061 D7.2：欠账 open > 50
+  - interval: 1m
+    input_series:
+      - series: 'stp_device_return_debt_open{family="power-cycle"}'
+        values: '51x10'
+      - series: 'stp_device_return_debt_oldest_seconds'
+        values: '100x10'
+      - series: 'stp_device_return_override_total'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: StabilityDeviceReturnDebtOpenHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Open device-return debts exceed 50
+              description: "未关闭归还欠账条目总数超过 50（ADR-0061 D7.2 / #3723 §3.0 第 7 条）。查 device_return_debt 与清偿/人工放行路径。"
+      - eval_time: 5m
+        alertname: StabilityDeviceReturnDebtOldestHigh
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: StabilityDeviceReturnOverrideHigh
+        exp_alerts: []
+
+  # #3723 U3：最老欠账 > 86400s
+  - interval: 1h
+    input_series:
+      - series: 'stp_device_return_debt_open{family="power-cycle"}'
+        values: '1x30'
+      - series: 'stp_device_return_debt_oldest_seconds'
+        values: '90000x30'
+      - series: 'stp_device_return_override_total'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 2h
+        alertname: StabilityDeviceReturnDebtOldestHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Oldest open device-return debt older than 24h
+              description: "最老未关闭归还欠账存续超过 86400 秒（ADR-0061 D7.2 / #3723 §3.0 第 7 条）。设备可能长期不可达或专项未接入，需现场恢复或人工放行。"
+
+  # #3723 U3：24h 人工放行 > 10
+  - interval: 1h
+    input_series:
+      - series: 'stp_device_return_debt_open{family="power-cycle"}'
+        values: '0x30'
+      - series: 'stp_device_return_debt_oldest_seconds'
+        values: '0x30'
+      - series: 'stp_device_return_override_total'
+        values: '0+1x30'
+    alert_rule_test:
+      - eval_time: 26h
+        alertname: StabilityDeviceReturnOverrideHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Device-return overrides exceeded 10 in 24h
+              description: "过去 24 小时人工放行次数超过 10（ADR-0061 D7.2 / #3723 §3.0 第 7 条）。探针或自动清偿可能失效。"

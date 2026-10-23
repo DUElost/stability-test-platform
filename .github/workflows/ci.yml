@@ -516,6 +516,7 @@ jobs:
               --ignore=tests/test_script_seed_governance.py \
               --ignore=tests/test_diag_readonly_role_pg.py \
               --ignore=tests/test_seed_default_params_face_3289.py \
+              --ignore=tests/test_disarm_guard_migration_3752.py \
               -p no:cacheprovider \
               >"$PARALLEL_DIR/repo.log" 2>&1
             echo $? >"$PARALLEL_DIR/repo.rc"
@@ -647,6 +648,7 @@ jobs:
             backend/tests/scheduler/test_reconciler_drain_lock_order_2635.py \
             backend/tests/scheduler/test_reconciler_stale_unknown_lock_order_2787.py \
             backend/tests/scheduler/test_retention_lock_order_2022.py \
+            backend/tests/services/test_device_return_lock_order_3728.py \
             backend/tests/api/test_metrics_lock_wait_gauges.py
 
       # 后端静态守卫（2026-09-26 PR 审计后续，owner 裁决「只跑静态守卫」）。

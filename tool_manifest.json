@@ -1787,6 +1787,83 @@
         }
       ]
     },
+    "powercycle_disarm": {
+      "kind": "script",
+      "versions": [
+        {
+          "artifact": "packages/powercycle_disarm/1.0.0.tar.gz",
+          "package_sha256": "d51f38397e01374d888e422a574387bb1b7c2f5fc626a815671972e53b37f5f9",
+          "python": null,
+          "retired": true,
+          "script": "powercycle_disarm.py",
+          "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/powercycle_disarm/1.0.1.tar.gz",
+          "package_sha256": "4fc50d485272d8107e98d778b7fe0c7ce7af7572b54203e23653e708e319b064",
+          "python": null,
+          "retired": true,
+          "script": "powercycle_disarm.py",
+          "version": "1.0.1"
+        },
+        {
+          "artifact": "packages/powercycle_disarm/1.0.2.tar.gz",
+          "package_sha256": "9c9453ba59fb556e217af319be4212e50766917b6bf95015a2441871f492a9d1",
+          "python": null,
+          "retired": true,
+          "script": "powercycle_disarm.py",
+          "version": "1.0.2"
+        },
+        {
+          "artifact": "packages/powercycle_disarm/1.0.3.tar.gz",
+          "package_sha256": "9fd5c9fe548c55d45e1131389d4dded69492aaea530c41e66b6af9c57cc980ae",
+          "python": null,
+          "retired": true,
+          "script": "powercycle_disarm.py",
+          "version": "1.0.3"
+        },
+        {
+          "artifact": "packages/powercycle_disarm/1.0.4.tar.gz",
+          "package_sha256": "bef7325ecebb19a0120f9bb87714fa59ff8f4b3fc21c338e60d5674d78a527ab",
+          "python": null,
+          "retired": true,
+          "script": "powercycle_disarm.py",
+          "version": "1.0.4"
+        },
+        {
+          "artifact": "packages/powercycle_disarm/1.0.5.tar.gz",
+          "package_sha256": "da439091022be38c2a227d551c0a8cda0ea80f3c5f7d9b29bcaea442fbe1a423",
+          "python": null,
+          "retired": true,
+          "script": "powercycle_disarm.py",
+          "version": "1.0.5"
+        },
+        {
+          "artifact": "packages/powercycle_disarm/1.0.6.tar.gz",
+          "package_sha256": "74568ff56fdfd41224bff54db190c20a41a3ee76603075698a248e4beddcf476",
+          "python": null,
+          "retired": true,
+          "script": "powercycle_disarm.py",
+          "version": "1.0.6"
+        },
+        {
+          "artifact": "packages/powercycle_disarm/1.0.7.tar.gz",
+          "package_sha256": "87a1cbf65266c7ae0fb80a36b07dcee27a32d287eb60f1b9ed3874564ba764d9",
+          "python": null,
+          "retired": true,
+          "script": "powercycle_disarm.py",
+          "version": "1.0.7"
+        },
+        {
+          "artifact": "packages/powercycle_disarm/1.0.8.tar.gz",
+          "package_sha256": "98cc16f82fa6c56fe24f37151958f4ad3efd2f5983b1bba36f9340d95cd4a557",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_disarm.py",
+          "version": "1.0.8"
+        }
+      ]
+    },
     "powercycle_finish": {
       "kind": "script",
       "versions": [
@@ -1861,6 +1938,14 @@
           "retired": false,
           "script": "powercycle_finish.py",
           "version": "1.0.8"
+        },
+        {
+          "artifact": "packages/powercycle_finish/1.1.0.tar.gz",
+          "package_sha256": "76d9883df880d2156f016db6bc8adcf902f978ae87690331181b07c897ec1aff",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_finish.py",
+          "version": "1.1.0"
         }
       ]
     },

@@ -122,7 +122,7 @@ class TestSixValueMapping:
         assert reached == set(DISARM_RESULTS)
 
     def test_onboarded_empty_in_u1(self):
-        assert ONBOARDED == {}
+        assert "power-cycle" in ONBOARDED  # U5 追加；U1 仍拥有 FAMILY_STEPS/机器值
         assert "power-cycle" in FAMILY_STEPS
 
 
@@ -177,7 +177,7 @@ class TestConcurrentTeardownPermit:
                     "teardown",
                     {
                         "step_id": "td",
-                        "action": "script:powercycle_finish",
+                        "action": "script:powercycle_disarm",
                         "timeout_seconds": 5,
                     },
                 )
@@ -193,7 +193,7 @@ class TestConcurrentTeardownPermit:
                 "teardown",
                 {
                     "step_id": "td",
-                    "action": "script:powercycle_finish",
+                    "action": "script:powercycle_disarm",
                     "version": "1.0.0",
                     "timeout_seconds": 5,
                 },
@@ -228,7 +228,7 @@ class TestCancelDoesNotKillTeardown:
         proc = MagicMock()
         proc.poll.return_value = None
         engine._active_process = proc
-        engine._active_script_path = "powercycle_finish.py"
+        engine._active_script_path = "powercycle_disarm.py"
 
         terminated = []
 
@@ -411,7 +411,7 @@ class TestManualExitRunsDisarm:
                 "teardown": [
                     {
                         "step_id": "finish",
-                        "action": "script:powercycle_finish",
+                        "action": "script:powercycle_disarm",
                         "version": "1.0.0",
                     }
                 ],
@@ -643,7 +643,7 @@ class TestSchedulerShutdownIncomplete:
                 "teardown",
                 {
                     "step_id": "td",
-                    "action": "script:powercycle_finish",
+                    "action": "script:powercycle_disarm",
                     "version": "1.0.0",
                     "timeout_seconds": 30,
                 },
@@ -746,7 +746,7 @@ class TestFootprintHelpers:
     def test_select_disarm_for_manual_exit(self):
         steps = select_disarm_steps(
             [
-                {"action": "script:powercycle_finish", "step_id": "a"},
+                {"action": "script:powercycle_disarm", "step_id": "a"},
                 {"action": "script:unrelated_collect", "step_id": "b"},
             ],
             ["power-cycle"],
@@ -799,7 +799,7 @@ class TestGracefulShutdownIncompleteOutboxDurability:
         engine._execute_step = slow_step
         step = {
             "step_id": "finish",
-            "action": "script:powercycle_finish",
+            "action": "script:powercycle_disarm",
             "timeout_seconds": 600,
         }
 
@@ -1054,7 +1054,7 @@ class TestReviewR1PermitCancelledRequeue:
                     [
                         {
                             "step_id": "finish",
-                            "action": "script:powercycle_finish",
+                            "action": "script:powercycle_disarm",
                             "timeout_seconds": 5,
                         }
                     ]
@@ -1095,7 +1095,7 @@ class TestReviewR1PermitCancelledRequeue:
         engine._canceled = True
         step = {
             "step_id": "finish",
-            "action": "script:powercycle_finish",
+            "action": "script:powercycle_disarm",
             "timeout_seconds": 1,
         }
         box: dict = {}
@@ -1133,7 +1133,7 @@ class TestReviewR1PermitCancelledRequeue:
             "teardown",
             {
                 "step_id": "finish",
-                "action": "script:powercycle_finish",
+                "action": "script:powercycle_disarm",
                 "timeout_seconds": 5,
             },
         )
@@ -1156,7 +1156,7 @@ class TestReviewR2SkippedNotExecuted:
             [
                 {
                     "step_id": "finish",
-                    "action": "script:powercycle_finish",
+                    "action": "script:powercycle_disarm",
                     "enabled": False,
                     "timeout_seconds": 5,
                 }
@@ -1182,7 +1182,7 @@ class TestReviewR2SkippedNotExecuted:
             "teardown",
             {
                 "step_id": "finish",
-                "action": "script:powercycle_finish",
+                "action": "script:powercycle_disarm",
                 "enabled": False,
                 "timeout_seconds": 5,
             },
@@ -1202,7 +1202,7 @@ class TestReviewR2SkippedNotExecuted:
             "teardown",
             {
                 "step_id": "pf",
-                "action": "script:powercycle_finish",
+                "action": "script:powercycle_disarm",
                 "enabled": False,
                 "timeout_seconds": 5,
             },
@@ -1298,7 +1298,7 @@ class TestReviewR4LeaseLostBlocksRetry:
                 "teardown",
                 {
                     "step_id": "finish",
-                    "action": "script:powercycle_finish",
+                    "action": "script:powercycle_disarm",
                     "retry": 1,
                     "timeout_seconds": 5,
                 },
@@ -1322,7 +1322,7 @@ class TestReviewR4LeaseLostBlocksRetry:
             "teardown",
             {
                 "step_id": "finish",
-                "action": "script:powercycle_finish",
+                "action": "script:powercycle_disarm",
                 "retry": 1,
             },
             disarm_step=True,
@@ -1397,7 +1397,7 @@ class TestReviewR4LeaseLostBlocksRetry:
                 "teardown",
                 {
                     "step_id": "finish",
-                    "action": "script:powercycle_finish",
+                    "action": "script:powercycle_disarm",
                     "retry": 1,
                 },
                 disarm_step=True,
@@ -1439,7 +1439,7 @@ class TestReviewF1Verify409RemembersLeaseLost:
                 [
                     {
                         "step_id": "finish",
-                        "action": "script:powercycle_finish",
+                        "action": "script:powercycle_disarm",
                         "timeout_seconds": 5,
                     }
                 ]
@@ -1474,12 +1474,12 @@ class TestReviewF2SameFamilySkipPreservesExecution:
         )
         active = {
             "step_id": "real-finish",
-            "action": "script:powercycle_finish",
+            "action": "script:powercycle_disarm",
             "timeout_seconds": 5,
         }
         skipped = {
             "step_id": "disabled-finish",
-            "action": "script:powercycle_finish",
+            "action": "script:powercycle_disarm",
             "timeout_seconds": 5,
             "enabled": False,
         }

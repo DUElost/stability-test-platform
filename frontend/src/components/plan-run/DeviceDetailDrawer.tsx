@@ -23,13 +23,18 @@ import {
 import { ALERT_BOX, DRAWER, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 import { api } from '@/utils/api';
-import type { DeviceMatrixItem, DeviceUiStatus } from '@/utils/api/types';
+import type {
+  DeviceMatrixItem,
+  DeviceUiStatus,
+  DisarmResultEntry,
+} from '@/utils/api/types';
 import { formatScriptIdentity } from './scriptIdentity';
 import { formatDateTimeShort } from '@/utils/format';
 import {
   DEVICE_LINK_STATUS,
   isDeviceLinkReachable,
 } from '@/components/plan-run/deviceLinkStatus';
+import { disarmResultLabel, familyLabel } from '@/components/device/deviceReturn';
 
 interface Props {
   device: DeviceMatrixItem | null;
@@ -247,6 +252,8 @@ export default function DeviceDetailDrawer({
             ]}
           />
 
+          <DisarmResultsBlock results={device.disarm_results} />
+
           {device.log_signal_count > 0 && (
             <div className={cn('mt-4 rounded-lg border-l-4 border-warning px-3 py-2 text-xs', ALERT_BOX.warning)}>
               <div className="font-semibold">检测到 {device.log_signal_count} 条 Watcher 异常</div>
@@ -358,6 +365,48 @@ export default function DeviceDetailDrawer({
         </AlertDialogContent>
       </AlertDialog>
     </>
+  );
+}
+
+/**
+ * ADR-0061 D4.4 / #3723 U6：按专项展示本 job 的解除结果。
+ *
+ * 空/缺省 = 「无解除记录」（激活前或该 job 未建立足迹），不得报错；
+ * 未知机器值原样显示，避免新枚举让整块消失。
+ */
+function DisarmResultsBlock({ results }: { results?: Record<string, DisarmResultEntry> | null }) {
+  const entries = Object.entries(results ?? {});
+  return (
+    <div className="mt-4" data-testid="device-drawer-disarm-results">
+      <div className={cn('mb-1 text-xs font-semibold', TEXT.body)}>解除结果</div>
+      {entries.length === 0 ? (
+        <p className={cn('text-xs', TEXT.subtitle)} data-testid="device-drawer-disarm-empty">
+          无解除记录
+        </p>
+      ) : (
+        <ul className="space-y-1">
+          {entries.map(([family, entry]) => (
+            <li
+              key={family}
+              className="rounded border px-2 py-1 text-xs"
+              data-testid={'device-drawer-disarm-' + family}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-medium text-foreground">{familyLabel(family)}</span>
+                <span className="font-mono text-foreground">
+                  {entry?.result == null ? '—' : disarmResultLabel(String(entry.result))}
+                </span>
+              </div>
+              {entry?.reason ? (
+                <p className={cn('mt-0.5 whitespace-pre-wrap break-words', TEXT.subtitle)}>
+                  原因：{entry.reason}
+                </p>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 

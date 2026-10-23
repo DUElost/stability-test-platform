@@ -23,6 +23,7 @@ from backend.models.enums import JobStatus, LeaseStatus, LeaseType
 from backend.models.job import JobInstance
 from backend.services.errors import BatchTooLarge
 from backend.agent.contracts.device_return import EXECUTING_DISARM
+from backend.services.device_return import accept_job_disarm_evidence
 
 _DEVICE_LOCK_LEASE_SECONDS = int(os.getenv("DEVICE_LOCK_LEASE_SECONDS", "600"))
 
@@ -69,6 +70,7 @@ class _ExtendBatchItemIn(BaseModel):
     # "last_progress_at": "..."}), so it is typed as an open dict, not a string.
     execution_state: Optional[str] = None
     progress_marker: Optional[Dict[str, Any]] = None
+    disarm_evidence: Optional[Dict[str, Any]] = None
 
 
 class _ExtendBatchIn(BaseModel):
@@ -308,7 +310,7 @@ async def extend_agent_leases_batch(
             for jid in renewed_ids:
                 marker = getattr(item_by_job.get(jid), "progress_marker", None)
                 ts = _parse_progress_ts((marker or {}).get("last_progress_at"))
-                if ts is not None:
+                if ts is not None and getattr(item_by_job.get(jid), "disarm_evidence", None) is None:
                     progress_rows.append({"b_id": jid, "b_progress": ts})
             if progress_rows:
                 # Core-table executemany (the ORM-entity form would engage
@@ -323,6 +325,16 @@ async def extend_agent_leases_batch(
                     .values(last_progress_at=bindparam("b_progress")),
                     progress_rows,
                 )
+            for jid in sorted(renewed_ids):
+                evidence = getattr(item_by_job[jid], "disarm_evidence", None)
+                if evidence is not None:
+                    job = (await db.execute(select(JobInstance).where(
+                        JobInstance.id == jid,
+                    ).execution_options(populate_existing=True))).scalars().one()
+                    await db.run_sync(lambda sync_db, job=job, evidence=evidence: accept_job_disarm_evidence(
+                        sync_db, job, evidence, host_id=payload.host_id,
+                        agent_instance_id=payload.agent_instance_id, now=now, via_coordinator=False,
+                    ))
     await db.commit()
 
     results: List[_ExtendBatchItemOut] = []
