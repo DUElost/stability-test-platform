@@ -865,7 +865,7 @@ def disarm_guard_deadline(
 def probe_entry_response(family: str, entry: Mapping[str, Any], policy: Mapping[str, Any], *, entry_point: str) -> dict[str, Any]:
     """Shared four-entry refusal contract, including U4's future init wiring."""
     privileged = entry.get("result") in (DISARM_RESULT_CONFIRMED, DISARM_RESULT_READBACK_FAILED)
-    if (policy.get("trusted") and (not privileged or policy.get("result") == entry.get("result"))) or (not privileged and entry_point != "init_check"):
+    if (policy.get("trusted") and (not privileged or policy.get("result") == entry.get("result"))) or not privileged:
         return {"status_code": 200, "use_trace": False, "ignore": False}
     diagnostic = {"code": "UNVERIFIED_PROBE_RESULT", "family": family,
                   "reason": policy.get("reason") or "raw_result_mismatch", "expected": policy.get("expected"),
