@@ -125,7 +125,7 @@ def test_install_script_package_list_matches_preflight():
     match = re.search(r"for pkg in ([^;]+); do", text)
     assert match, "install_agent.sh 未找到包循环"
     packages = match.group(1).split()
-    expected = list(pf._DEFAULT_PACKAGES) + list(pf._V6_PACKAGES)
+    expected = list(pf._DEFAULT_PACKAGES) + list(pf._V6_PACKAGES) + list(pf._UNISOC_PACKAGES)
     assert packages == expected, (
         "install 链包集合必须与 flash_preflight 的 V5+V6 包集合同源："
         f"{packages} vs {expected}"
@@ -178,7 +178,8 @@ def test_update_playbook_covers_dialout_rule_packages():
     pf = _load_preflight()
     text = UPDATE_PLAYBOOK.read_text(encoding="utf-8")
     assert re.search(r"groups: dialout", text)
-    assert "(agent_flash_prereq_packages + agent_flash_prereq_packages_v6) | join(' ')" in text
+    assert ("(agent_flash_prereq_packages + agent_flash_prereq_packages_v6"
+                " + agent_flash_prereq_packages_unisoc) | join(' ')") in text
 
     rule_tasks = [
         t for t in tasks
@@ -240,6 +241,9 @@ def test_group_vars_package_list_matches_preflight():
     assert data["agent_flash_prereq_packages_v6"] == list(pf._V6_PACKAGES), (
         "V6 代际包集合必须与 flash_preflight._V6_PACKAGES 逐项一致"
     )
+    assert data["agent_flash_prereq_packages_unisoc"] == list(pf._UNISOC_PACKAGES), (
+        "展锐包集合必须与 flash_preflight._UNISOC_PACKAGES 逐项一致（刷机前置并轨）"
+    )
     assert data["agent_ensure_flash_prereqs"] is False, "默认必须关闭（opt-in）"
 
 
@@ -260,7 +264,8 @@ def test_ensure_flash_prereqs_playbook_matches_preflight_udev():
     }
     text = ENSURE_PLAYBOOK.read_text(encoding="utf-8")
     assert "groups: dialout" in text
-    assert "(agent_flash_prereq_packages + agent_flash_prereq_packages_v6) | join(' ')" in text
+    assert ("(agent_flash_prereq_packages + agent_flash_prereq_packages_v6"
+                " + agent_flash_prereq_packages_unisoc) | join(' ')") in text
     assert "stp-agent-priv restart" in text
 
 

@@ -113,4 +113,10 @@ agent_flash_prereq_packages_v6:
   - libkeyutils1
   - libkrb5-3
 
+# 展锐（Unisoc）fastboot 刷机面（与 flash_preflight._UNISOC_PACKAGES 同源）。
+# 2026-10-21 .76/.77 批量前手工 apt 补装的正式化——run 1030 型「host 缺
+# fastboot」失败从此归位到刷机前置按钮/热更新 opt-in 通道。
+agent_flash_prereq_packages_unisoc:
+  - fastboot
+
 # 进程日志轮转（#2205）变量已移至 group_vars/all.yml（#2218：两面共享）。

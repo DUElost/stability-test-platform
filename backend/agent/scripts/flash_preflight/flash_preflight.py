@@ -147,6 +147,13 @@ _V6_PACKAGE_HINTS = {
 #: 注：Qt5 本体在工具包内 `lib/`，不是系统前置。
 _V6_PACKAGES = tuple(sorted(set(_V6_PACKAGE_HINTS.values())))
 
+#: 展锐（Unisoc）刷机前置包集：fastboot 二进制（Debian `fastboot` 包，含
+#: android-libsparse）。MTK 的运行库面与本集无关，本集是 fleet 混编下
+#: 「刷机前置」按钮/install 链要装的展锐面——包集事实源在此，由
+#: tests/test_flash_provisioning_prereqs_2133.py 与 group_vars、playbook、
+#: install_agent.sh 三源对拍。运行期展锐判据在 flash_preflight_unisoc 族。
+_UNISOC_PACKAGES = ("fastboot",)
+
 
 def _progress_stamp(seq: int, **fields) -> str:
     payload = {"seq": seq, "step": "flash_preflight", **fields}

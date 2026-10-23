@@ -1,0 +1,51 @@
+{
+  "version": 2,
+  "description": "Unisoc/SPRD full firmware switch: check device, flash every partition from the NFS PAC artifact, wipe userdata/metadata/misc, then skip OOBE and verify the unit is usable. OOBE is skipped because a freshly wiped unit left at the setup wizard powers itself off after a while.",
+  "lifecycle": {
+    "timeout_seconds": 3600,
+    "init": [
+      {
+        "step_id": "flash_preflight_unisoc",
+        "action": "script:flash_preflight_unisoc",
+        "version": "1.0.0",
+        "timeout_seconds": 180,
+        "retry": 1,
+        "params": {
+          "family": "A57"
+        }
+      },
+      {
+        "step_id": "check_device",
+        "action": "script:check_device",
+        "version": "1.0.2",
+        "timeout_seconds": 180,
+        "retry": 1,
+        "params": {}
+      },
+      {
+        "step_id": "flash_firmware_unisoc",
+        "action": "script:flash_firmware_unisoc",
+        "version": "1.0.6",
+        "timeout_seconds": 3600,
+        "retry": 0,
+        "params": {
+          "wipe": true,
+          "verify_version": true,
+          "verify_wait_seconds": 420,
+          "flash_spl": "auto"
+        }
+      },
+      {
+        "step_id": "oobe_skip",
+        "action": "script:oobe_skip",
+        "version": "1.1.2",
+        "timeout_seconds": 900,
+        "retry": 0,
+        "params": {
+          "wait_for_device_seconds": 600
+        }
+      }
+    ],
+    "teardown": []
+  }
+}
