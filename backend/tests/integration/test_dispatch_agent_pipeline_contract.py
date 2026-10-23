@@ -19,7 +19,7 @@ from unittest.mock import patch
 import pytest
 
 from backend.agent.operation_scheduler import OperationScheduler
-from backend.agent.pipeline_engine import PipelineEngine
+from backend.agent.pipeline_engine import PipelineEngine, StepResult
 from backend.models.enums import HostStatus
 from backend.models.host import Device, Host
 from backend.models.job import JobInstance
@@ -158,6 +158,9 @@ def test_dispatcher_pipeline_def_is_executable_by_agent_pipeline_engine(
         script_registry=_FakeScriptRegistry("check_device.py", package_sha),
         operation_scheduler=OperationScheduler(),
     )
+    # #3723 §3.1 v1.7.12: this dispatcher contract starts after U4 precheck.
+    # U4's frozen-package tests separately prove the real init prerequisite.
+    monkeypatch.setattr(engine, "_check_init_returns", lambda: StepResult(success=True))
 
     result = engine.execute(pipeline_def)
 

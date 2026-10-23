@@ -26,7 +26,21 @@ os.environ.setdefault("JWT_SECRET_KEY", AGENT_TEST_JWT_SECRET_KEY)
 import pytest  # noqa: E402
 
 from backend.agent.operation_scheduler import OperationScheduler  # noqa: E402
-from backend.agent.pipeline_engine import PipelineEngine  # noqa: E402
+from backend.agent.pipeline_engine import PipelineEngine, StepResult  # noqa: E402
+
+
+@pytest.fixture
+def real_return_checks():
+    """U4 cases supply the frozen package/device-I/O prerequisite explicitly."""
+
+
+@pytest.fixture(autouse=True)
+def _legacy_init_return_precondition(monkeypatch, request):
+    # #3723 §3.1 v1.7.12: evidence fixture only; old assertions stay intact.
+    # Legacy Engine tests describe the work *after* successful residue checks.
+    # U4's frozen-package fixtures request real_return_checks and run the hook.
+    if "real_return_checks" not in request.fixturenames:
+        monkeypatch.setattr(PipelineEngine, "_check_init_returns", lambda self: StepResult(success=True))
 
 
 @pytest.fixture(autouse=True)

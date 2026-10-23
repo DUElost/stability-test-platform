@@ -12,13 +12,40 @@ from sqlalchemy.orm import Session
 from backend.api.response import ApiResponse, ok
 from backend.api.routes.auth import verify_agent_secret as _verify_agent
 from backend.api.schemas.device import (
+    AgentInitReturnCheckIn,
+    AgentInitReturnCheckOut,
     AgentReturnDischargeIn,
     AgentReturnDischargeOut,
 )
 from backend.core.database import get_db
-from backend.services.device_return import apply_discharge_sync
+from backend.services.device_return import apply_discharge_sync, apply_init_check_sync
 
 router = APIRouter(prefix="/api/v1/agent", tags=["agent"])
+
+
+@router.post("/jobs/{job_id}/return-check", response_model=ApiResponse[AgentInitReturnCheckOut])
+def agent_init_return_check(
+    job_id: int,
+    payload: AgentInitReturnCheckIn,
+    db: Session = Depends(get_db),
+    _=Depends(_verify_agent),
+):
+    """#3723 §3.5: update init facts before the job establishes any footprint."""
+    result = apply_init_check_sync(db, job_id=job_id, fencing_token=payload.fencing_token,
+                                   family_results=payload.family_results)
+    if not result.get("ok"):
+        db.rollback()
+        raise HTTPException(status_code=409, detail={
+            "code": result.get("code", "INIT_CHECK_REJECTED"), "message": "init 检查租约无效",
+        })
+    db.commit()
+    if result.get("rejected_families"):
+        raise HTTPException(status_code=422, detail={
+            "code": "UNVERIFIED_PROBE_RESULT", "message": "部分专项的探针组合未经验证",
+            "violations": result["rejected_families"], "accepted_families": result["accepted_families"],
+        })
+    return ok(AgentInitReturnCheckOut(job_id=job_id, accepted_families=result["accepted_families"],
+                                     open_debt_count=result["open_debt_count"]))
 
 
 @router.post(

@@ -12,7 +12,9 @@ from typing import Any, Callable, Optional, Set
 
 from .artifact_uploader import ArtifactUploader
 from .heartbeat_thread import HeartbeatThread
+from .device_return import INIT_CHECK_CAPABILITY_KEY, ReturnDebtConsumer
 from .log_archiver import collect_archive_heartbeat_metrics
+from .pipeline_engine import PipelineEngine
 from .recovery_executor import trigger_recovery_sync_on_device_reconnect
 from .scan_runner import ScanRunner
 
@@ -73,7 +75,26 @@ def build_heartbeat_thread(
         active_jobs_lock, active_job_ids, active_device_ids
     )
 
+    def _get_scheduler():
+        # The existing late-bound concurrency_snapshot is a bound method of
+        # the host-global scheduler (host_control_plane.py). Never create a
+        # second scheduler; the consumer refuses work until this owner exists.
+        return getattr(getattr(heartbeat, "_get_operation_stats", None), "__self__", None)
+
+    def _device_active(device_id: int) -> bool:
+        with active_jobs_lock:
+            if device_id in active_device_ids:
+                return True
+        # Crash recovery can still own a device before its worker is rebound.
+        return any(row.get("device_id") == device_id for row in local_db.get_active_jobs())
+
+    local_db.set_state(INIT_CHECK_CAPABILITY_KEY, "0")
+    debt_consumer = ReturnDebtConsumer(api_url=api_url, adb_path=adb_path,
+        script_registry=script_registry, local_db=local_db,
+        get_scheduler=_get_scheduler, is_active=_device_active, engine_factory=PipelineEngine)
+
     def _on_devices_reconnected(serials: Any) -> bool:
+        debt_consumer.reconnected(serials)
         execute = recovery_actions_slot.value
         if execute is None:
             return False
@@ -89,7 +110,7 @@ def build_heartbeat_thread(
             )
         )
 
-    return HeartbeatThread(
+    heartbeat = HeartbeatThread(
         api_url=api_url,
         host_id=host_id,
         adb_path=adb_path,
@@ -126,4 +147,6 @@ def build_heartbeat_thread(
         on_devices_reconnected=_on_devices_reconnected,
         # ADR-0026 P2-2: apply server log_rate_limit hint to SocketIO batcher
         on_log_rate_limit=mq_producer.set_log_rate_limit,
+        on_return_state=debt_consumer.receive,
     )
+    return heartbeat

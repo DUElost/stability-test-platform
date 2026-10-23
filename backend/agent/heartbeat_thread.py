@@ -65,6 +65,7 @@ class HeartbeatThread:
         get_archive_metrics: Optional[Callable[[], Optional[Dict[str, Any]]]] = None,
         on_devices_reconnected: Optional[Callable[[List[str]], None]] = None,
         on_log_rate_limit: Optional[Callable[[Optional[int]], None]] = None,
+        on_return_state: Optional[Callable[[Optional[dict], List[dict]], None]] = None,
     ):
         self._api_url = api_url
         self._host_id = host_id
@@ -92,6 +93,7 @@ class HeartbeatThread:
         self._get_archive_metrics = get_archive_metrics
         self._on_devices_reconnected = on_devices_reconnected
         self._on_log_rate_limit = on_log_rate_limit
+        self._on_return_state = on_return_state
         # Late-bound by main after OperationScheduler is constructed.
         self._get_operation_stats: Optional[Callable[[], Optional[Dict[str, Any]]]] = None
         self._stop_event = threading.Event()
@@ -819,6 +821,12 @@ class HeartbeatThread:
                     self._sio_client, "set_log_rate_limit"
                 ):
                     self._sio_client.set_log_rate_limit(limit)
+
+        if self._on_return_state is not None:
+            try:
+                self._on_return_state(response, devices_list)
+            except Exception:
+                logger.exception("return_state_callback_failed")
 
         if response and self._pending_reconnected_serials and self._on_devices_reconnected:
             serials = list(self._pending_reconnected_serials)

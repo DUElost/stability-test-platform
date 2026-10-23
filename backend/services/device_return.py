@@ -58,6 +58,7 @@ from backend.agent.contracts.device_return import (
     FAMILY_STEPS,
     ONBOARDED,
     RETURN_SOURCE_DISCHARGE,
+    RETURN_SOURCE_INIT_CHECK,
     RETURN_SOURCE_JOB,
     RETURN_SOURCE_OVERRIDE,
     RETURN_SOURCE_STOCK,
@@ -1775,14 +1776,75 @@ async def audit_unverified_probe_async(db: AsyncSession, *, resource_id: int, fa
                 await diagnostic.commit()
 
 
-def check_init_probe_result(db: Session, device: Device, family: str, entry: Mapping, *, token_valid: bool) -> dict:
+def apply_init_check_sync(
+    db: Session, *, job_id: int, fencing_token: str,
+    family_results: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    """I5: Job → Device → Lease; init never writes terminal job results."""
+    job = db.execute(select(JobInstance).where(JobInstance.id == job_id).with_for_update()
+                     .execution_options(populate_existing=True)).scalars().first()
+    if job is None or job.status != "RUNNING":
+        return {"ok": False, "code": "JOB_TOKEN_INVALID"}
+    device = _lock_device_sync(db, job.device_id)
+    if device is None:
+        return {"ok": False, "code": "JOB_TOKEN_INVALID"}
+    lease = db.execute(select(DeviceLease).where(
+        DeviceLease.device_id == device.id, DeviceLease.status == LeaseStatus.ACTIVE.value,
+    ).with_for_update().execution_options(populate_existing=True)).scalars().first()
+    now = _now()
+    if (lease is None or lease.lease_type != LeaseType.JOB.value or lease.job_id != job.id
+            or lease.fencing_token != fencing_token or lease.host_id != job.host_id
+            or device.host_id != job.host_id or lease.expires_at <= now or device.retired_at is not None):
+        return {"ok": False, "code": "JOB_TOKEN_INVALID"}
+    accepted: list[str] = []
+    rejected: list[dict] = []
+    changed = False
+    identity = f"init-job:{job.id}:" + hashlib.sha256(fencing_token.encode()).hexdigest()
+    for family, entry in family_results.items():
+        decision = check_init_probe_result(db, device, family, entry, token_valid=True, report_identity=identity)
+        if decision["status_code"] == 422:
+            rejected.append(decision)
+            continue
+        result = str(entry["result"])
+        if result in _DEBT_CAUSES:
+            replayed_debt = db.execute(select(DeviceReturnDebt.id).where(
+                DeviceReturnDebt.device_id == device.id, DeviceReturnDebt.family == family,
+                DeviceReturnDebt.source_kind == _SOURCE_KIND_JOB, DeviceReturnDebt.source_job_id == job.id,
+                DeviceReturnDebt.source_fencing_token == fencing_token, DeviceReturnDebt.state == DEBT_STATE_CLOSED,
+                DeviceReturnDebt.cause == "init_check:" + result, DeviceReturnDebt.evidence == dict(entry),
+            )).scalars().first()
+            if replayed_debt is not None:
+                accepted.append(family)
+                continue
+        state = map_disarm_result_to_family_state(result, onboarded=_family_onboarded(family))
+        changed = True
+        _set_family_return_state(device, family, state=state, source=RETURN_SOURCE_INIT_CHECK,
+                                 now=now, extra={"job_id": job.id, "disarm_result": result})
+        if result == DISARM_RESULT_CONFIRMED:
+            _close_family_debts_sync(db, device_id=device.id, families=[family],
+                                     closed_reason=DEBT_CLOSE_DISCHARGED, now=now)
+        elif state == FAMILY_RETURN_DEBT:
+            _upsert_open_debt_sync(db, device_id=device.id, family=family,
+                source_kind=_SOURCE_KIND_JOB, source_job_id=job.id, source_fencing_token=fencing_token,
+                cause="init_check:" + result, evidence=entry, now=now)
+        accepted.append(family)
+    if changed:
+        db.flush()
+        _recompute_return_state_from_open_debts(device, _open_debts_sync(db, device.id), now=now)
+    return {"ok": True, "accepted_families": accepted, "rejected_families": rejected,
+            "open_debt_count": len(_open_debts_sync(db, device.id))}
+
+
+def check_init_probe_result(db: Session, device: Device, family: str, entry: Mapping, *,
+                            token_valid: bool, report_identity: str | None = None) -> dict:
     """Shared init behavior only; U4 supplies the real token-protected caller."""
     if not token_valid:
         return {"status_code": 409, "code": "DEBT_TOKEN_INVALID"}
     policy = evaluate_probe_entry(device, family, entry, token_valid=token_valid)
     decision = probe_entry_response(family, entry, policy, entry_point="init_check")
     if decision["status_code"] == 422:
-        audit_unverified_probe(db, resource_id=device.id, family=family, entry=entry, policy=policy, entry_point="init_check")
+        audit_unverified_probe(db, resource_id=device.id, family=family, entry=entry, policy=policy,
+                               entry_point="init_check", report_identity=report_identity)
     return decision
 
 

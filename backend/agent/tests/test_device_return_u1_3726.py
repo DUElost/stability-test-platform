@@ -81,6 +81,9 @@ def _bare_engine(**kwargs):
     engine._nfs_root = ""
     engine._make_mq_logger = lambda *a, **k: MagicMock()
     engine._report_step_trace_mq = MagicMock()
+    # #3723 §3.1 v1.7.12: these U1/U8 helpers start after the new U4 precheck.
+    # U4 tests use real Engine construction and the frozen registration instead.
+    engine._check_init_returns = lambda: StepResult(success=True)
     return engine
 
 

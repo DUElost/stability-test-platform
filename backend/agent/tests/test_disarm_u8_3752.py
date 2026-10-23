@@ -184,6 +184,8 @@ def interrupted_engine_payload(monkeypatch, tmp_path, kind, family="sleep"):
     engine = module.PipelineEngine(SimpleNamespace(adb_path="stub-adb"), "test-serial", 1,
         log_dir=str(tmp_path), script_registry=registry, nfs_root="", operation_scheduler=OperationScheduler(max_concurrent=1), device_id=1)
     monkeypatch.setattr(engine, "_verify_device_lease", lambda: None)
+    # #3723 §3.1 v1.7.12: U8 exercises its own tail after a clean U4 precheck.
+    monkeypatch.setattr(engine, "_check_init_returns", lambda: module.StepResult(success=True))
     original_action = engine._run_script_action
     monkeypatch.setattr(engine, "_run_script_action", lambda ctx, step:
         module.StepResult(success=True, exit_code=0) if ctx.phase == "init" else original_action(ctx, step))

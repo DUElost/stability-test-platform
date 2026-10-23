@@ -167,6 +167,7 @@ def _post_with_retry(
     context: str,
     timeout: int = 10,
     attempts: Optional[int] = None,
+    definitive_statuses: tuple[int, ...] = (),
 ) -> None:
     """POST（带线程内指数退避重试）。
 
@@ -187,10 +188,11 @@ def _post_with_retry(
         except requests.HTTPError as exc:
             # 409 Conflict is a definitive rejection (invalid fencing_token,
             # state transition conflict).  Don't retry — let the outbox handle it.
-            if exc.response is not None and exc.response.status_code == 409:
+            if exc.response is not None and (exc.response.status_code == 409
+                                             or exc.response.status_code in definitive_statuses):
                 logger.warning(
                     "agent_post_conflict",
-                    extra={"context": context, "status": 409, "detail": str(exc)},
+                    extra={"context": context, "status": exc.response.status_code, "detail": str(exc)},
                 )
                 raise
             last_error = exc
@@ -232,6 +234,20 @@ def _post_with_retry(
             time.sleep(delay)
     if last_error:
         raise last_error
+
+
+def report_init_return_check(api_url: str, job_id: int, fencing_token: str,
+                             family_results: Dict[str, Any]) -> None:
+    _post_with_retry(f"{api_url}/api/v1/agent/jobs/{job_id}/return-check",
+        {"fencing_token": fencing_token, "family_results": family_results},
+        context=f"init_return_check:{job_id}", definitive_statuses=(422,))
+
+
+def report_return_discharge(api_url: str, device_id: int, fencing_token: str,
+                             family_results: Dict[str, Any]) -> None:
+    _post_with_retry(f"{api_url}/api/v1/agent/devices/{device_id}/return-discharge",
+        {"fencing_token": fencing_token, "family_results": family_results},
+        context=f"return_discharge:{device_id}", definitive_statuses=(422,))
 
 
 def update_job(api_url: str, job_id: int, payload: Dict[str, Any]) -> None:
