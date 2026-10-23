@@ -1,5 +1,8 @@
 # B6-U4：init 非特权结果接收与终态接线前检
 
+Status: implemented
+Class: feature
+
 ## Decision
 
 Refs #3729，Refs #3723。实施依据为 #3723 当前正文 v1.7.16，以及规划者对
