@@ -18,7 +18,7 @@ Class: feature
      同一行，按行读要等进程结束；改 `os.read` 后按缓冲区最后一个 k/N 打 PROGRESS
      戳，12.75 GiB 的 super 不再触发步骤级 stall。
   - **慢枚举容错**（1.0.4）：`getvar current-slot` 就绪探测从 10s 提到 30s 且
-    **非致命**——172.21.15.75 实测首次应答要 11–22s（12+ 设备共用 USB hub），
+    **非致命**——172.21.x.x 实测首次应答要 11–22s（12+ 设备共用 USB hub），
     旧实现把「枚举慢」变成抛异常穿透 `wait_fastboot`/`probe_device` 的等待窗口，
     run 1043/1044/1045 与 host 侧 CLI 恢复都在刷写开始前中断、设备滞留 fastboot
     （#3758 真机证据）。超时现在只算「还没就绪」，预算交给外层等待窗口
@@ -78,7 +78,7 @@ Class: feature
 
 ## Verification
 
-- 真机（ZTE P615F03 / ums9230，serial 6R0A57SSAE7000348）：B17 → B19 两次完整刷写
+- 真机（ZTE P615F03 / ums9230，serial 6R0A57SS****0348）：B17 → B19 两次完整刷写
   （本地产物 / NFS 指针路由各一次），24 分区、擦除、首启、回读全绿；
   `verifiedbootstate=green`、`user_setup_complete=0`、`persist` 与刷前逐字节一致。
   时间：本地 493 s、NFS 605 s（super 12.75 GiB 占大头）。
@@ -96,7 +96,7 @@ Class: feature
   `test_pipeline_template_script_pins_2865`（7 例）与 `check_script_packages`
   / `check_tool_manifest --base origin/main` 全绿。
 
-### 真机 Plan 运行（2026-10-19，host 172.21.15.75，device 6R0A57SSAE7000295）
+### 真机 Plan 运行（2026-10-19，host 172.21.x.x，device 6R0A57SS****0295）
 
 | run | 结果 | 证据 / 处置 |
 |---|---|---|
