@@ -7,6 +7,8 @@ job-level step-role helpers (§3.0.2 / §3.6.2), and Plan save-shape checks (§3
 
 from __future__ import annotations
 
+from copy import deepcopy
+
 from typing import Any, Iterable, Mapping, MutableMapping, Optional
 
 # ── §3.0 第 1 条：机器值 ─────────────────────────────────────────────────────
@@ -67,6 +69,14 @@ DEBT_CLOSE_REASONS: tuple[str, ...] = (
 # ── §3.0 第 5 条：解除期间执行状态 ───────────────────────────────────────────
 
 EXECUTING_DISARM = "EXECUTING_DISARM"
+
+DISARM_GUARD_PROTOCOL = 1
+DISARM_QUEUE_SECONDS = 7200
+DISARM_JOB_MAX_SECONDS = 86400
+DISARM_EVIDENCE_FRESH_SECONDS = 60
+DISARM_COORDINATOR_MAX_SECONDS = 30
+DISARM_LOCAL_EVIDENCE_SECONDS = 15
+PLATFORM_INTERRUPTED_EXIT_CODES = frozenset((124, 125, 143, -15, 137, -9))
 
 # Conflict reason when lease is already gone (§3.0 第 4 条 / D3 第 7 条)
 LEASE_LOST_REASON = "lease_lost"
@@ -139,8 +149,25 @@ ONBOARDED: dict[str, Any] = {
         "finish_min_version": "1.1.0",
         # 探针模式（脚本参数 mode）
         "probe_modes": ("probe", "disarm"),
-        # 已验证设备类别（device.platform + device.model）；空=尚未真机验证
-        "verified_device_classes": [],
+        # #3723 v1.7.12 / #3730 6331107188: exact verified combinations.
+        "verified_device_classes": [
+            {
+                "platform": "MTK", "model": model, "permission_model": permission,
+                "autotesttool_apk_sha256": apk,
+                "script_name": "powercycle_disarm", "script_version": "1.0.8",
+                "package_sha256": "98cc16f82fa6c56fe24f37151958f4ad3efd2f5983b1bba36f9340d95cd4a557",
+                "report_ref": [
+                    "https://github.com/DUElost/stability-test-platform/pull/3747#issuecomment-6312583571",
+                    "docs/notes/feature/2026-10-21-b6-u5-realdevice-108.md",
+                    "https://github.com/DUElost/stability-test-platform/issues/3730#issuecomment-6320738260",
+                ],
+            }
+            for model, apk in (
+                ("MLD_LX2", "f275e1f233e3ac7485469406b3e35a2cf58be0fec0d7e9d60184f180db8a2929"),
+                ("MLD_LX3", "582964aff036cb8785248cd3a149cbf73f13f88bddc51a80c8605b458399e977"),
+            )
+            for permission in ("root", "non-root")
+        ],
         # 解除预算秒数（默认参数下的墙钟下限，便于运维阅读）
         "disarm_budget_seconds": 660,
         "finish_budget_seconds": 420,
@@ -581,12 +608,16 @@ def map_step_outcome_to_disarm_result(
     禁止把原始 readback_failed 提升为正式 readback_failed（成功路径 →
     executed_unverified；失败路径 → failed）。``None``/``True`` 保持原 U1 语义。
     """
+    if started and exit_code in PLATFORM_INTERRUPTED_EXIT_CODES:
+        return DISARM_RESULT_INCOMPLETE
     if lease_lost:
         return DISARM_RESULT_NOT_EXECUTED
     if incomplete:
         return DISARM_RESULT_INCOMPLETE
     if skipped or not started:
         return DISARM_RESULT_NOT_EXECUTED
+    if success is False and structured_result in (DISARM_RESULT_CONFIRMED, DISARM_RESULT_EXECUTED_UNVERIFIED):
+        return DISARM_RESULT_FAILED
     if structured_result in DISARM_RESULTS:
         return structured_result
     if readback == "readback_failed":
@@ -620,3 +651,244 @@ def default_not_executed_for_families(
             reason=reason,
         )
     return out
+
+
+def probe_result_policy(
+    family: str,
+    entry: Mapping[str, Any],
+    *,
+    platform: str | None,
+    model: str | None,
+    script_name: str,
+    script_version: str,
+    package_sha256: str | None,
+    token_valid: bool,
+    onboarded: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """D2.5 pure policy; identities come from callers' authoritative facts.
+
+    The script's formal value/verified flag never authorizes an upgrade. U4
+    uses this same policy for init and discharge. No real combinations may be
+    registered before the Planner confirms #3723 §3.6.8.
+    """
+    registry = ONBOARDED if onboarded is None else onboarded
+    evidence = entry.get("evidence")
+    evidence = evidence if isinstance(evidence, Mapping) else {}
+    observed = {
+        "platform": platform,
+        "model": model,
+        "permission_model": evidence.get("permission_model"),
+        "autotesttool_apk_sha256": evidence.get("autotesttool_apk_sha256"),
+        "script_name": script_name,
+        "script_version": script_version,
+        "package_sha256": package_sha256,
+    }
+    combinations = (registry.get(family) or {}).get("verified_device_classes") or []
+    expected = [dict(c) for c in combinations if isinstance(c, Mapping)]
+    match = next((c for c in expected if c.get("report_ref")
+                  and all(observed[k] and observed[k] == c.get(k) for k in observed)), None)
+    reason = ""
+    if not token_valid:
+        reason = "token_invalid"
+    elif observed["permission_model"] not in ("root", "non-root"):
+        reason = "permission_unknown"
+    elif not all(observed.values()):
+        reason = "identity_missing"
+    elif evidence.get("package_sha256") != package_sha256:
+        reason = "package_mismatch"
+    elif evidence.get("script_name") != script_name or evidence.get("script_version") != script_version:
+        reason = "script_mismatch"
+    elif match is None:
+        reason = "combination_unverified"
+    elif str(evidence.get("boot_completed")) != "1":
+        reason = "boot_incomplete"
+    raw = evidence.get("readback")
+    mode = evidence.get("mode")
+    successful = evidence.get("success") is True
+    kind = evidence.get("kind")
+    verified = not reason
+    if mode == "probe":
+        result = (DISARM_RESULT_CONFIRMED if verified and raw == "clear" and kind == "ok"
+                  else DISARM_RESULT_FAILED)
+    elif mode == "disarm":
+        if verified and successful and raw == "clear" and kind == "ok":
+            result = DISARM_RESULT_CONFIRMED
+        elif successful and raw in ("clear", "absent", "not_installed"):
+            result = DISARM_RESULT_EXECUTED_UNVERIFIED
+        else:
+            # 1.0.8 readback failure does not prove completed disarm (§3.8.3).
+            result = DISARM_RESULT_FAILED
+    else:
+        result = DISARM_RESULT_EXECUTED_UNVERIFIED if successful else DISARM_RESULT_FAILED
+        reason = reason or "mode_missing"
+        verified = False
+    code = entry.get("exit_code")
+    if code in PLATFORM_INTERRUPTED_EXIT_CODES:
+        result = DISARM_RESULT_INCOMPLETE
+    return {
+        "result": result,
+        "trusted": verified,
+        "reason": reason,
+        "expected": expected,
+        "observed": observed,
+        "report_ref": match.get("report_ref") if match else None,
+    }
+
+
+def disarm_execution_budget(step: Mapping[str, Any]) -> tuple[int, str | None]:
+    raw = step.get("timeout_seconds")
+    if type(raw) is int and raw > 0:
+        return raw, None
+    return 300, "legacy_missing_wall_clock"
+
+
+def freeze_disarm_guard(
+    steps: list[Mapping[str, Any]], *, now: float, abort_at: float | None,
+    fencing_token: str, agent_instance_id: str,
+) -> dict[str, Any]:
+    """Freeze Q/E/job ceilings once; caller supplies selected enabled teardown."""
+    budgets = {}
+    for step in steps:
+        if step.get("enabled") is False:
+            continue
+        key = str(step.get("step_id") or script_name_from_step(step))
+        budget, reason = disarm_execution_budget(step)
+        budgets[key] = {
+            "seconds": budget, "reason": reason,
+            "script_name": script_name_from_step(step),
+            "script_version": step_version_of(step),
+            "package_sha256": step.get("package_sha256"),
+        }
+    t0 = min(now, abort_at) if abort_at is not None else now
+    return {
+        "protocol": DISARM_GUARD_PROTOCOL,
+        "t0": t0,
+        "job_deadline": t0 + min(DISARM_QUEUE_SECONDS + sum(s["seconds"] for s in budgets.values()), DISARM_JOB_MAX_SECONDS),
+        "queue_remaining": float(DISARM_QUEUE_SECONDS),
+        "step_budgets": budgets, "step_deadlines": {},
+        "step_started_at": {}, "first_server_at": now,
+        "seq": -1, "progress_seq": -1,
+        "fencing_token": fencing_token, "agent_instance_id": agent_instance_id,
+        "last_server_at": now,
+    }
+
+
+def receive_disarm_evidence(
+    guard: Mapping[str, Any], evidence: Mapping[str, Any], *, now: float,
+    via_coordinator: bool,
+) -> dict[str, Any]:
+    """Advance only strictly increasing sequences at server receipt time."""
+
+    out = deepcopy(dict(guard))
+    if now < out["last_server_at"]:
+        out["reason"] = "clock_regressed"
+        return out
+    out["last_server_at"] = now
+    if out.get("reason") == "clock_regressed":
+        return out
+    seq = evidence.get("seq")
+    if type(seq) is not int or seq <= out["seq"]:
+        # A sequence first seen via extend-batch may subsequently arrive on
+        # the mandatory coordinator channel. Replays on either channel do
+        # not refresh any previously accepted evidence.
+        if via_coordinator and seq == out["seq"] and seq > out.get("coordinator_seq", -1):
+            out.update(coordinator_seen_at=now, coordinator_seq=seq)
+        return out
+    phase = evidence.get("phase")
+    key = evidence.get("step_id")
+    step = out["step_budgets"].get(key)
+    if phase not in ("queue", "execute") or step is None:
+        return out
+    if any(evidence.get(k) != step.get(k) for k in ("script_name", "script_version", "package_sha256")):
+        return out
+    # Consumed queue time is charged on *every* transition, including retries.
+    if out.get("phase") == "queue":
+        elapsed = max(0, now - out["queue_accounted_at"])
+        out["queue_remaining"] = max(0, out["queue_remaining"] - elapsed)
+    if key != out.get("step_id"):
+        out.pop("progress_seen_at", None)
+    out.update(seq=seq, phase=phase, step_id=key)
+    if via_coordinator:
+        out["coordinator_seen_at"] = now
+        out["coordinator_seq"] = seq
+    if phase == "queue":
+        out["queue_accounted_at"] = now
+        out["queue_deadline"] = min(now + out["queue_remaining"], out["job_deadline"])
+        out["queue_seen_at"] = now
+    else:
+        deadlines = out["step_deadlines"]
+        deadlines.setdefault(key, min(now + step["seconds"], out["job_deadline"]))
+        out.setdefault("step_started_at", {}).setdefault(key, now)
+        progress = evidence.get("progress_seq")
+        if type(progress) is int and progress > 0 and progress > out["progress_seq"]:
+            out["progress_seq"] = progress
+            out["progress_seen_at"] = now
+    return out
+
+
+def disarm_guard_deadline(
+    guard: Mapping[str, Any] | None, *, now: float, owner_valid: bool,
+    execution_heartbeat_at: float | None,
+    execution_heartbeat_timeout_seconds: int = 60,
+) -> float | None:
+    """One protection rule for reaper/recycler/projection; no DB or clocks."""
+    if not guard or not owner_valid or guard.get("reason") == "clock_regressed":
+        return None
+    if now < guard.get("last_server_at", now):
+        return None
+    coord = guard.get("coordinator_seen_at")
+    if coord is None or not 0 <= now - coord < DISARM_EVIDENCE_FRESH_SECONDS:
+        return None
+    deadline = guard["job_deadline"]
+    key = guard.get("step_id")
+    # A retry of an executed step can never reset or evade its frozen E.
+    step_deadline = guard.get("step_deadlines", {}).get(key)
+    if step_deadline is not None:
+        deadline = min(deadline, step_deadline)
+    if guard.get("phase") == "queue":
+        seen = guard.get("queue_seen_at")
+        deadline = min(deadline, guard.get("queue_deadline", deadline))
+    elif guard.get("phase") == "execute":
+        seen = guard.get("progress_seen_at")
+        if execution_heartbeat_at is None:
+            return None
+        deadline = min(deadline, execution_heartbeat_at + execution_heartbeat_timeout_seconds)
+    else:
+        return None
+    if seen is None:
+        return None
+    deadline = min(deadline, seen + DISARM_EVIDENCE_FRESH_SECONDS,
+                   coord + DISARM_EVIDENCE_FRESH_SECONDS)
+    return deadline if now < deadline else None
+
+
+def probe_entry_response(family: str, entry: Mapping[str, Any], policy: Mapping[str, Any], *, entry_point: str) -> dict[str, Any]:
+    """Shared four-entry refusal contract, including U4's future init wiring."""
+    privileged = entry.get("result") in (DISARM_RESULT_CONFIRMED, DISARM_RESULT_READBACK_FAILED)
+    if (policy.get("trusted") and (not privileged or policy.get("result") == entry.get("result"))) or (not privileged and entry_point != "init_check"):
+        return {"status_code": 200, "use_trace": False, "ignore": False}
+    diagnostic = {"code": "UNVERIFIED_PROBE_RESULT", "family": family,
+                  "reason": policy.get("reason") or "raw_result_mismatch", "expected": policy.get("expected"),
+                  "observed": policy.get("observed"), "report_ref": policy.get("report_ref")}
+    return {**diagnostic, "status_code": 422 if entry_point in ("discharge", "init_check") else 200,
+            "use_trace": entry_point == "complete", "ignore": entry_point == "late"}
+
+
+def disarm_guard_expiry(guard: Mapping[str, Any], *, execution_heartbeat_deadline: float | None = None) -> float:
+    """Absolute next applicable phase limit, also used by candidate selection."""
+    deadline = guard["job_deadline"]
+    key = guard.get("step_id")
+    deadline = min(deadline, guard.get("step_deadlines", {}).get(key, deadline))
+    phase = guard.get("phase")
+    if phase == "queue":
+        deadline = min(deadline, guard.get("queue_deadline", deadline),
+                       guard.get("queue_seen_at", guard["last_server_at"]) + DISARM_EVIDENCE_FRESH_SECONDS)
+    elif phase == "execute":
+        started = guard.get("step_started_at", {}).get(key, guard["t0"])
+        deadline = min(deadline, guard.get("progress_seen_at", started) + DISARM_EVIDENCE_FRESH_SECONDS)
+        if execution_heartbeat_deadline is not None:
+            deadline = min(deadline, execution_heartbeat_deadline)
+    deadline = min(deadline, guard.get("coordinator_seen_at", guard.get("first_server_at", guard["t0"])) + DISARM_EVIDENCE_FRESH_SECONDS)
+    if guard.get("reason") == "clock_regressed":
+        return guard["t0"]
+    return deadline

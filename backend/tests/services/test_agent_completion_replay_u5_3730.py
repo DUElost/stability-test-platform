@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+from backend.tests.disarm_probe_evidence import trust_test_probe
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -173,16 +174,18 @@ def test_replay_different_payload_after_debt_conversion_still_409(client, db_ses
     assert other.json()["detail"]["code"] == "STALE_COMPLETION_TOKEN", other.text
 
 
-def test_late_confirmed_still_closes_same_source_after_change(client, db_session):
+def test_late_confirmed_still_closes_same_source_after_change(client, db_session, monkeypatch):
     """迟到 confirmed 现行回归保持通过：同源令牌仍能关掉欠账。"""
     job, lease, token, device_id = _seed_job(db_session)
+    # #3723 §3.8: supply exact test evidence; keep transaction/source assertions.
+    trusted = trust_test_probe(db_session, monkeypatch, device_id, job.id)
     first = client.post(f"/api/v1/agent/jobs/{job.id}/complete", json=_payload(token))
     assert first.status_code == 200, first.text
     assert _debt_rows(device_id) == [("power-cycle", "open", job.id)], _debt_rows(device_id)
 
     late = client.post(
         f"/api/v1/agent/jobs/{job.id}/complete",
-        json=_payload(token, result="confirmed"),
+        json={**_payload(token, result="confirmed"), "disarm_results": {"power-cycle": trusted}},
     )
     assert late.status_code == 200, late.text
     assert late.json()["data"].get("late_confirmed"), late.text

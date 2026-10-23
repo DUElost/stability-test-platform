@@ -25,6 +25,8 @@ IntervalTrigger (see ``app_scheduler.py``).
 
 from __future__ import annotations
 
+from backend.services.device_return import job_guard_deadline
+
 import asyncio
 import logging
 import time
@@ -556,8 +558,25 @@ async def _abort_reaper_recheck_job(
     )).scalars().first()
     if job is None or job.status != JobStatus.RUNNING.value:
         return False, None
+    # Candidate time/context may predate a committed phase or exit update.
+    now = max(now, datetime.now(timezone.utc))
+    context = (await db.execute(select(PlanRun.run_context).where(PlanRun.id == job.plan_run_id))).scalar_one_or_none()
+    current_abort, _ = _abort_reap_clock_pure(context, job.id, job.host_id)
+    if current_abort is None:
+        return False, None
+    if job.disarm_guard is not None:
+        # A repeated exit cannot move a negotiated tail's earliest anchor.
+        current_abort = min(current_abort, datetime.fromtimestamp(job.disarm_guard["t0"], timezone.utc))
+    if (now - current_abort).total_seconds() <= _ABORT_REAPER_GRACE_SECONDS:
+        return False, None
+    abort_at = current_abort
     # #3723 §3.0 第 5 条：EXECUTING_DISARM + 进度新鲜 → 续期至 abort_at+timeout
-    if abort_at is not None and _disarm_grace_defers_reap(job, abort_at, now):
+    guarded = (
+        await db.run_sync(lambda sync_db: job_guard_deadline(sync_db, job, now)) is not None
+        if job.disarm_guard is not None else
+        abort_at is not None and _disarm_grace_defers_reap(job, abort_at, now)
+    )
+    if guarded:
         logger.info(
             "abort_reaper_defer_disarm job=%d execution_state=%s last_progress_at=%s",
             job.id, job.execution_state, job.last_progress_at,

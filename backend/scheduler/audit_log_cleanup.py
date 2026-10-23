@@ -146,6 +146,7 @@ BUSINESS_ACTIONS_ALLOWLIST: frozenset[str] = frozenset({
     "unarchive_project",
     "unretire_device",  # #2962 解除设备退役；与 unretire_host 同族
     "unretire_host",
+    "unverified_probe_result",  # #3752 U8 / #3723 v1.7.12 不可信 probe 诊断；与 device_return_override 同族，90d
     "update",
     "update_project",
     "update_tags",

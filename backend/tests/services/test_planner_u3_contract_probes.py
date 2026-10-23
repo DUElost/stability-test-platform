@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from backend.tests.disarm_probe_evidence import trust_test_probe
 from datetime import datetime, timezone
 
 from backend.models.device_lease import DeviceLease
@@ -155,8 +156,10 @@ def test_existing_open_debt_cannot_be_overwritten_as_unverified(db_session):
     assert device.return_state["power-cycle"]["state"] == "debt", device.return_state
 
 
-def test_real_late_complete_closes_same_source_without_flipping_job(client, db_session):
+def test_real_late_complete_closes_same_source_without_flipping_job(client, db_session, monkeypatch):
     device, job, lease, _ = _seed(db_session)
+    # #3723 §3.8: supply exact test evidence; keep transaction/source assertions.
+    trusted = trust_test_probe(db_session, monkeypatch, device.id, job.id)
     job.status = "FAILED"
     token = lease.fencing_token
     db_session.commit()
@@ -169,7 +172,7 @@ def test_real_late_complete_closes_same_source_without_flipping_job(client, db_s
         json={
             "update": {"status": "FAILED"},
             "fencing_token": token,
-            "disarm_results": {"power-cycle": {"result": "confirmed"}},
+            "disarm_results": {"power-cycle": trusted},
         },
     )
     assert response.status_code == 200, response.text

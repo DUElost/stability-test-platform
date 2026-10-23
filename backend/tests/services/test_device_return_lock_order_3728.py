@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import os
 from concurrent.futures import ThreadPoolExecutor
+from backend.tests.disarm_probe_evidence import trust_test_probe
 from datetime import datetime, timedelta, timezone
 from threading import Event, current_thread
 from uuid import uuid4
@@ -221,7 +222,7 @@ async def _read_job_and_lease(job_id: int, lease_id: int):
         return job.status, lease.status, lease.lease_type, lease.reason, lease.fencing_token
 
 
-def _run_discharge(device_id: int, fencing_token: str) -> dict:
+def _run_discharge(device_id: int, fencing_token: str, trusted: dict) -> dict:
     with SessionLocal() as db:
         _set_timeouts(db)
         try:
@@ -229,7 +230,7 @@ def _run_discharge(device_id: int, fencing_token: str) -> dict:
                 db,
                 device_id=device_id,
                 fencing_token=fencing_token,
-                family_results={"power-cycle": {"result": "confirmed"}},
+                family_results={"power-cycle": trusted},
             )
             db.commit()
             return result
@@ -383,9 +384,11 @@ async def test_reconciler_and_acquire_lease_lock_order(db_session):
 
 
 @pytest.mark.asyncio(loop_scope="module")
-async def test_recovery_and_discharge_lock_order(db_session):
+async def test_recovery_and_discharge_lock_order(db_session, monkeypatch):
     device, job, lease, host = _seed_terminal(db_session)
     did, jid, lid = device.id, job.id, lease.id
+    # #3723 §3.8: supply exact test evidence; keep transaction/source assertions.
+    trusted = trust_test_probe(db_session, monkeypatch, did)
     original_token = lease.fencing_token
 
     await async_engine.dispose()
@@ -443,7 +446,7 @@ async def test_recovery_and_discharge_lock_order(db_session):
         f"转欠账应推进代次并换发 token：{original_token!r} → {debt_token!r}"
     )
 
-    discharge = await asyncio.to_thread(_run_discharge, did, debt_token)
+    discharge = await asyncio.to_thread(_run_discharge, did, debt_token, trusted)
     assert discharge["ok"] is True, discharge
     assert discharge["discharged_families"] == ["power-cycle"], discharge
     assert discharge["debt_lease_released"] is True, discharge
@@ -458,7 +461,7 @@ async def test_recovery_and_discharge_lock_order(db_session):
 
 
 @pytest.mark.asyncio(loop_scope="module")
-async def test_completion_unknown_and_acquire_lock_order(db_session):
+async def test_completion_unknown_and_acquire_lock_order(db_session, monkeypatch):
     device, job, lease, _host = _seed_running(db_session, unknown=True)
     # _seed_* 的 _NOW 是模块导入时刻；全量套件里本文件可能在数十分钟后才执行。
     # UNKNOWN→RUNNING 的恢复宽限只有 300s，必须按测试执行时刻重锚 ended_at，
@@ -468,6 +471,8 @@ async def test_completion_unknown_and_acquire_lock_order(db_session):
     lease.expires_at = now + timedelta(hours=1)
     db_session.commit()
     did, jid, lid = device.id, job.id, lease.id
+    # #3723 §3.8: supply exact test evidence; keep transaction/source assertions.
+    trusted = trust_test_probe(db_session, monkeypatch, did, jid)
     token = lease.fencing_token
 
     await async_engine.dispose()
@@ -489,7 +494,7 @@ async def test_completion_unknown_and_acquire_lock_order(db_session):
                 payload = _RunCompleteIn(
                     update={"status": "FINISHED", "exit_code": 0},
                     fencing_token=token,
-                    disarm_results={"power-cycle": {"result": "confirmed"}},
+                    disarm_results={"power-cycle": trusted},
                 )
                 return await complete_agent_job(db_entry, jid, payload)
             finally:

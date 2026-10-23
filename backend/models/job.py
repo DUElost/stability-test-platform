@@ -38,6 +38,7 @@ class JobInstance(Base):
     log_signal_count   = Column(Integer, nullable=False, default=0, server_default="0")
     # ADR-0061 D4 / #3723 U2：按专项持久化解除结果（六值）；不写 status_reason
     disarm_results     = Column(JSONB, nullable=True)
+    disarm_guard       = Column(JSONB, nullable=True)
 
     # ── ADR-0022: patrol heartbeat aggregation ──
     # 取代每周期 per-step step_trace 的写入；patrol 成功 step 不再写 trace,

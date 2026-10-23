@@ -14,11 +14,13 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from typing import Any, Dict, List, Optional
 
 import requests
 
 from .settings import get_heartbeat_settings
+from .contracts.device_return import DISARM_COORDINATOR_MAX_SECONDS
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +136,8 @@ class JobExecutionView:
         self._lock = threading.Lock()
         self.execution_state: Optional[str] = None
         self.last_progress_at: Optional[str] = None  # ISO8601 UTC
+        self.disarm_evidence: Optional[dict] = None
+        self.disarm_guard: Optional[dict] = None
 
     def update(
         self, state: Optional[str] = None, progress_ts: Optional[str] = None
@@ -149,6 +153,7 @@ class JobExecutionView:
             return {
                 "execution_state": self.execution_state,
                 "last_progress_at": self.last_progress_at,
+                **({"disarm_evidence": dict(self.disarm_evidence)} if self.disarm_evidence else {}),
             }
 
 
@@ -186,6 +191,8 @@ class HostRunCoordinator:
         self._scheduler: Any = None  # set via set_scheduler()
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
+        self._wake_event = threading.Event()
+        self.disarm_protocol: Optional[int] = None
 
     def reload_from_settings(self) -> None:
         """#2086：`reload_config` 的实例级 re-apply（协调域）。
@@ -262,6 +269,7 @@ class HostRunCoordinator:
 
     def stop(self) -> None:
         self._stop_event.set()
+        self._wake_event.set()
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=5)
 
@@ -450,11 +458,38 @@ class HostRunCoordinator:
         logger.info("coordinator_cancelled_job job=%d device=%d", job_id, device_id)
 
     def _loop(self) -> None:
-        while not self._stop_event.wait(self._interval):
+        next_tick = time.monotonic() + self._interval
+        while not self._stop_event.is_set():
+            with self._lock:
+                disarming = any(j.disarm_evidence for j in self._job_views.values())
+            interval = min(self._interval, DISARM_COORDINATOR_MAX_SECONDS) if disarming else self._interval
+            wait = min(interval, max(0, next_tick - time.monotonic()))
+            self._wake_event.wait(wait)
+            self._wake_event.clear()
+            if self._stop_event.is_set():
+                break
+            started = time.monotonic()
             try:
                 self._tick()
             except Exception:
                 logger.debug("coordinator_tick_error", exc_info=True)
+            with self._lock:
+                disarming = any(j.disarm_evidence for j in self._job_views.values())
+            interval = min(self._interval, DISARM_COORDINATOR_MAX_SECONDS) if disarming else self._interval
+            next_tick = started + interval
+
+    def publish_disarm_evidence(self, job_id: int, evidence: Optional[dict]) -> None:
+        view = self.register_job(job_id)
+        with view._lock:
+            entered = view.disarm_evidence is None and evidence is not None
+            view.disarm_evidence = dict(evidence) if evidence else None
+        if entered:
+            self._wake_event.set()
+
+    def guard_for_job(self, job_id: int) -> Optional[dict]:
+        view = self.register_job(job_id)
+        with view._lock:
+            return dict(view.disarm_guard) if view.disarm_guard else None
 
     def _tick(self) -> None:
         headers = {"X-Agent-Secret": self._agent_secret} if self._agent_secret else {}
@@ -493,6 +528,15 @@ class HostRunCoordinator:
             )
             resp.raise_for_status()
             data = resp.json().get("data", {})
+            self.disarm_protocol = int(data.get("disarm_protocol") or 0)
+            if not self.disarm_protocol:
+                logger.warning("disarm_protocol_unavailable: control plane uses v1.0")
+            for key, guard in (data.get("disarm_guards") or {}).items():
+                view = self.register_job(int(key))
+                with view._lock:
+                    view.disarm_guard = {**guard, "local_received_at": time.monotonic()}
+                if self._local_db is not None:
+                    self._local_db.save_disarm_state(int(key), {"guard": guard})
             if data.get("agent_instance_stale"):
                 self._fence_stale_agent_instance()
                 return
