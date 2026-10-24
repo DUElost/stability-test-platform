@@ -11,7 +11,7 @@
 > [`production-diagnostics.md`](./production-diagnostics.md)。
 
 本文的「设备 id」指 `device.id`（整数主键），不是设备序列号 `device.serial`。
-命令中的 `$STP_API_BASE` 表示执行者已确认的控制面根 URL；`$AUTH` 的取法见
+执行者必须在控制面宿主上运行本文的 curl 命令。`$AUTH` 的取法见
 [`honor-flash-runbook.md`](./honor-flash-runbook.md)「鉴权（运维 curl 模式）」。
 
 ## 1. B6 激活前
@@ -84,7 +84,7 @@
 12. 以管理员身份调用释放接口。`$AUTH` 的取法见 [`honor-flash-runbook.md`](./honor-flash-runbook.md)「鉴权（运维 curl 模式）」。把 `<设备 id>`、`<租约 id>` 换成第 4 步记下的值：
 
     ```bash
-    curl -sS -X POST "$STP_API_BASE/api/v1/devices/<设备 id>/leases/<租约 id>/release" \
+    curl -sS -X POST "http://127.0.0.1:8000/api/v1/devices/<设备 id>/leases/<租约 id>/release" \
       -H "$AUTH" -H "Content-Type: application/json" \
       -d '{"reason":"<原因>"}'
     ```
@@ -177,11 +177,11 @@ JOB 租约仍经同一路径请求，但控制面在终态事务的统一入口�
 > 警告：下一步只请求处理路径指定的 JOB 租约。执行者不得把 HTTP 200 当作设备已归还；
 > `data.status=MAINTENANCE` 表示设备仍由 ACTIVE 欠账租约占用。
 
-10. 以管理员身份请求释放，`reason` 填本次非空处置原因：
+10. 在控制面宿主上以管理员身份请求释放，`reason` 填本次非空处置原因：
 
     ```bash
     curl -sS -w '\nHTTP %{http_code}\n' -X POST \
-      "$STP_API_BASE/api/v1/devices/<设备 id>/leases/<租约 id>/release" \
+      "http://127.0.0.1:8000/api/v1/devices/<设备 id>/leases/<租约 id>/release" \
       -H "$AUTH" -H 'Content-Type: application/json' -d '{"reason":"<原因>"}'
     ```
 

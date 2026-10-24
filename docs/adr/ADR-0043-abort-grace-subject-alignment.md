@@ -1,10 +1,6 @@
 # ADR-0043：中止宽限的请求主体同构（Abort Grace Subject Alignment）
 
 - 状态：**Accepted** v1.1（实施已落地：2026-09-15，[PR #2165](https://github.com/DUElost/stability-test-platform/pull/2165)）
-
-> **后续修订（自 B6 激活起生效）**：[ADR-0061](./ADR-0061-device-return-contract.md) D3 第 8 条
-> 将解除宽限改为排队/执行分别取证且有整 job 绝对上限；D3 第 5 条与 D5 第 2、3 条修订终态回收后果为统一判定释放或转换欠账。
-> UNKNOWN 阶段继续保留 JOB 租约；原决策正文保留，相关行为以该修订为准。
 - 版本记录：v1.0 定稿（2026-09-15，owner 裁决三项全采纳，裁决记录 §9；由 [#2050](https://github.com/DUElost/stability-test-platform/issues/2050) 触发，[#1928](https://github.com/DUElost/stability-test-platform/issues/1928) 删除孤儿结构时指路要求「按 host 独立 grace 须先立 ADR」）；**v1.0 实施落地**（2026-09-15，[#2154](https://github.com/DUElost/stability-test-platform/issues/2154) / [PR #2165](https://github.com/DUElost/stability-test-platform/pull/2165)）：§5 切片 ①–④ 全部落地、D1/D2/D3/D4/D6 均有测试钉子（映射见 §8.1）；**v1.1（2026-09-15，owner 追加裁决 §9-4）**：D3 的覆盖判据由初版文字「该 host 时钟仍在窗口内」裁决为「该 host **存在** host 级时钟」（存在即覆盖），追认 PR #2165 的实现口径，D3 正文据此改写；沿革与理由见 §10
 - 优先级：P1
 - 目标里程碑：M7
@@ -12,6 +8,10 @@
 - 决策者：平台研发组（owner 裁决，2026-09-15）
 - 标签：abort, 租约, 超时兜底, 共享状态, #2050, #1928, #1880, #2154
 - 关联：[ADR-0021](./ADR-0021-script-content-alignment-gate.md)（维护窗口/升级门禁，host 级 abort 的调用方）、[ADR-0026](./ADR-0026-plan-execution-scaling.md)（规模化执行，reaper 归属面）、[ADR-0019](./ADR-0019-android-device-lease-and-capacity-scheduling.md)（设备租约 TTL/grace，**不同对象**，本 ADR 不裁决）、[ADR-0027](./ADR-0027-control-plane-horizontal-scaling.md)（多实例下 reaper 归属，本 ADR 不引入跨实例协调）
+
+> **后续修订（自 B6 激活起生效）**：[ADR-0061](./ADR-0061-device-return-contract.md) D3 第 8 条
+> 将解除宽限改为排队/执行分别取证且有整 job 绝对上限；D3 第 5 条与 D5 第 2、3 条修订终态回收后果为统一判定释放或转换欠账。
+> UNKNOWN 阶段继续保留 JOB 租约；原决策正文保留，相关行为以该修订为准。
 
 ## 1. 背景
 

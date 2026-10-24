@@ -148,15 +148,36 @@ curl -s -X POST -H "Authorization: Bearer $TOK" -H 'Origin: http://127.0.0.1' \
    未留存响应时，将「欠账下发是否送达」记为未验证，并交 Agent host 维护者补证。
    该字段未下发时 Agent 不动作；下发入口为 `backend/api/routes/heartbeat.py::_process_heartbeat_with_db`，
    条目由 `backend/services/device_return.py::open_debts_for_host_sync` 组装。
-3. 在目标 Agent host 查询清偿诊断日志：
+3. 在目标 Agent host 用设备 id 查询清偿异常日志：
 
    ```bash
-   journalctl -u stability-test-agent.service --since '30 min ago' --no-pager \
-     | rg 'return_debt_execution_failed|return[-_]discharge|package_unavailable'
+   grep -E 'return_debt_execution_failed device_id=<设备 id>([^0-9]|$)' \
+     /opt/stability-test-agent/logs/agent_error.log /opt/stability-test-agent/logs/agent.log
+   ```
+
+   `return_debt_execution_failed` 带设备 id，日志位置由 `backend/agent/stability-test-agent.service` 的 StandardOutput/StandardError 指定。
+   `agent_post_(retry|failed|conflict)` 的日志行不含目标设备，只作请求异常的旁证：
+
+   ```bash
+   grep -E 'agent_post_(retry|failed|conflict)' \
+     /opt/stability-test-agent/logs/agent_error.log /opt/stability-test-agent/logs/agent.log
    ```
 
    Agent 的 `ReturnDebtConsumer._execute` 只在设备在线、无本 Agent 活跃 job 且取得 OperationScheduler permit 后执行；
-   无匹配日志不证明已执行，设备在线状态与在途 job 见平台设备页、PlanRun 设备矩阵。
+   设备在线状态与在途 job 见平台设备页、PlanRun 设备矩阵。
+   清偿成功不写日志；本次是否成功以控制面该专项的 `source=discharge` 与所涉条目的 `state=closed`、`closed_reason=discharged` 为准，
+   对照专项 updated_at 与条目 closed_at 判断是否属于本次处理。只读查法如下：
+
+   ```sql
+   SELECT d.id, d.return_state -> 'power-cycle' ->> 'source' AS source,
+          d.return_state -> 'power-cycle' ->> 'updated_at' AS return_updated_at,
+          debt.id AS debt_id, debt.state, debt.closed_reason, debt.closed_at
+   FROM device d
+   LEFT JOIN device_return_debt debt ON debt.device_id = d.id AND debt.family = 'power-cycle'
+   WHERE d.id = <设备 id>
+   ORDER BY debt.created_at DESC, debt.id DESC
+   LIMIT 20;
+   ```
 4. 对照最近一次清偿回报的正式值与 HTTP 返回码判断下一次触发：
    - failed/incomplete/not_executed 或回报未送达：至少间隔 30 分钟后重试。
    - executed_unverified 或 422：不自动重试，等待下次重连或欠账 token 变化。
@@ -200,12 +221,12 @@ curl -s -X POST -H "Authorization: Bearer $TOK" -H 'Origin: http://127.0.0.1' \
 
 1. 用 §5.1 第 3 步确定本次放行的专项与证据引用。
 2. 如果没有本次写授权、原因类别或证据引用，停止本流程。
-3. 以管理员身份调用人工放行接口；`$STP_API_BASE` 为已确认的控制面根 URL，`$AUTH` 按
+3. 在控制面宿主上以管理员身份调用人工放行接口；`$AUTH` 按
    [`honor-flash-runbook.md`](./honor-flash-runbook.md)「鉴权（运维 curl 模式）」取得：
 
    ```bash
    curl -sS -w '\nHTTP %{http_code}\n' -X POST \
-     "$STP_API_BASE/api/v1/devices/<设备 id>/return-override" \
+     "http://127.0.0.1:8000/api/v1/devices/<设备 id>/return-override" \
      -H "$AUTH" -H 'Content-Type: application/json' \
      -d '{"families":["power-cycle"],"reason_category":"manual_verified","evidence_ref":"<证据引用>"}'
    ```
@@ -226,8 +247,19 @@ curl -s -X POST -H "Authorization: Bearer $TOK" -H 'Origin: http://127.0.0.1' \
    ```
 
    预期：details 含 families、reason_category、evidence_ref、closed_count、debt_lease_released。
-6. 在下一次已获授权的 job 事件流中读取 `init.return_check.power-cycle`。
-   预期：至多一条 STARTED、恰一条终态 trace；confirmed/executed_unverified 为 COMPLETED，其余为 FAILED，子执行保存在终态 metadata/output。
+6. 对下一次已获授权的 job，读取 `GET /api/v1/runs/{job_id}/steps` 响应中 `name=return_check.power-cycle` 的最新状态。
+   预期：`status=COMPLETED` 表示 init 检查通过，`FAILED` 表示失败，其余状态表示尚未确认通过。
+   该接口由 `backend/api/routes/runs.py::list_run_steps` 按 step_id 返回最新状态；也可以按只读连接方式查询该 job 的 step_trace：
+
+   ```sql
+   SELECT step_id, stage, event_type, status, original_ts, error_message
+   FROM step_trace
+   WHERE job_id = <job id> AND stage = 'init' AND step_id = 'return_check.power-cycle'
+   ORDER BY original_ts DESC, id DESC
+   LIMIT 1;
+   ```
+
+   预期：有记录时返回该检查的最新状态；无记录时没有本次检查状态的证据。
    init 检查失败时计划 teardown 为 SKIPPED；patrol 断点恢复不重跑检查但照常 teardown。
 
 Agent 在计划建立足迹前先 probe，不能可信确认无足迹时先 disarm；检查结果只走

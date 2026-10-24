@@ -1,10 +1,6 @@
 # ADR-0057：设备退役语义（Device Retirement Semantics）
 
 - 状态：**Accepted** v1.1（2026-09-26 owner 授权 Claude 裁决：E1–E5 全部采起草取向，见 §7；2026-09-27 **实施完成**：#2962 B 期落地四列 + API + D4 八面收口 + 陈旧度 A 期同批交付，见 §8）
-
-> **后续修订（自 B6 激活起生效）**：[ADR-0061](./ADR-0061-device-return-contract.md) D5 第 8 条
-> 修订本 ADR D2：只有欠账租约且无活跃 job/其它 ACTIVE 租约时，退役事务释放欠账租约，条目保持未关闭；
-> 取消退役且仍有条目时同一事务重建欠账租约。原决策正文保留，相关行为以该修订为准。
 - 优先级：P2
 - 目标里程碑：M7
 - 日期：2026-09-26
@@ -15,6 +11,10 @@
   [ADR-0038](./ADR-0038-host-retirement-semantics.md)（主机退役；其 D7 明确「不做设备退役，独立议题，需求出现时单独提案」——本 ADR 即该提案）、
   [ADR-0055](./ADR-0055-schedule-device-selector.md)（`selector` 健康门）、#106（device 容量口径）、#3159（主机空置意图）
 - 版本记录：v1.1（2026-09-27）#2962 实施完成——迁移 `b2c3d4e5f6a7`（device 四列）、`device_retirement` 服务、retire/unretire/batch API、心跳单次告警、D4 八面收口、陈旧度（A 期）；v1.0（2026-09-26）**裁决**：E1–E5 全部采起草取向，转 Accepted，见 §7；v0.1（2026-09-26）首次起草，Proposed
+
+> **后续修订（自 B6 激活起生效）**：[ADR-0061](./ADR-0061-device-return-contract.md) D5 第 8 条
+> 修订本 ADR D2：只有欠账租约且无活跃 job/其它 ACTIVE 租约时，退役事务释放欠账租约，条目保持未关闭；
+> 取消退役且仍有条目时同一事务重建欠账租约。原决策正文保留，相关行为以该修订为准。
 
 ## 1. 背景
 

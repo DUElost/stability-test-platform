@@ -288,7 +288,8 @@ init/清偿包身份来自回报的脚本名、版本经 manifest 派生。缺�
 
 欠账条目 `device_return_debt` 的 `source_kind` 只有 `job` 与 `stock`（阶段 B 初始化），与专项状态 source 的五种取值不同。
 init 失败建立的条目仍来源于本 job。条目为 `open/closed`，关闭原因 `discharged/overridden`，关闭后保留原因与时间。
-同设备、专项、来源 job 至多一个未关闭条目。
+部分唯一索引 `uq_device_return_debt_open_source` 在 `state='open'` 时约束
+`(device_id, family, source_kind, COALESCE(source_job_id, 0))` 唯一，与数据模型 §2 的索引一致。
 
 控制面必须使终态处理、初始化、清偿、放行与退役在设备行锁下串行；涉及 job 的锁序为 Job → Device → Lease。
 未退役设备有未关闭条目时，控制面必须保留恰一条 ACTIVE 租约；全部条目共用一条 `MAINTENANCE` 欠账租约

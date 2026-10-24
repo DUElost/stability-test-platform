@@ -17,6 +17,22 @@ Class: process
 
 范围为上述九份文档及本 Note。没有修改代码、冻结包、测试、生产配置或共享启动契约。
 
+### 2026-10-24 规划者核对返修
+
+按 [规划者核对](https://github.com/DUElost/stability-test-platform/pull/3788#issuecomment-6383779648) 的四项要求继续原分支。
+起始 PR HEAD 与远端分支均为 `e859bdeeaa69f84ca3197f9892c2eebef41a4c30`，origin/main 仍为上述 U4 合入 SHA；
+恢复原 Execution `b6-u7-3732-docs`，保留原十文件 scope。
+
+1. 开关机手册改为 grep -E 读取安装目录的两个日志文件，异常按设备 id 匹配；agent_post 消息只作旁证。
+   清偿成功不写日志，成功判据改读控制面专项 source=discharge 与条目 closed_reason=discharged，并核对处理时刻。
+2. init 检查查法改用 runs steps 接口的最新状态或 step_trace 只读查询；移除手册中的 trace 条数要求。
+3. 紧急释放激活前命令恢复原回环地址，两个激活后写入口沿用回环地址；删去 SOP 中的 STP_API_BASE 定义。
+   本次派单已澄清「不得出现主机地址」指内网主机地址，回环地址属于既有手册写法。
+4. 执行协议唯一性补齐 source_kind 与 COALESCE，与数据模型和部分唯一索引逐项一致。
+5. 同步处理非阻塞项：ADR-0043 与 ADR-0057 的修订说明移动到完整元数据列表之后，文字未改。
+
+本轮只改两份 SOP、执行协议、上述两份 ADR 与本 Note，不改数据模型、代码、测试或冻结包。
+
 ## Alternatives
 
 - 合入后立即按 B6 描述生产：不采用；#3723 §3.7 v1.7.19 明确区分合入与激活。
@@ -25,7 +41,12 @@ Class: process
 - 重写四份历史 ADR 的决策：不采用；本轮只加 ADR-0061 的后续修订说明。
 - 本轮补激活/回退命令或调整代码：不采用；前者等待 Owner 批准，方案与代码冲突时按「退回：U7」处理。
 
+返修放弃首轮的 journald/rg 与事件流查法：打包 unit 将输出追加到文件，现有日志格式不输出 api_client 的 context，
+清偿成功无日志；PlanRun 事件流只收失败 trace，无法作为 init 通过的读取位置。没有为补查法新增日志或 API。
+
 ## Verification
+
+以下首轮记录绑定 `e859bdeea`；其中日志查法、事件流查法与命令变量的结论由本轮返修记录更正。
 
 - `git fetch origin main`：exit 0；基线与 U4 合入 SHA 相同。
 - `./scripts/project_python.sh tools/dev/ai_work.py status --risk`：exit 0，开工时在窗 0；GitHub 开放 PR 查询为空。
@@ -36,6 +57,42 @@ Class: process
 - B6 代码入口对账：main 的 25 个文件、89 个函数/类符号均存在；curl 路径、响应字段、返回码与 journalctl unit 已按 main 路由/schema/service 核对。一次性提取脚本初版误把历史引用和迁移 id 当作函数，收窄到新增 B6 代码入口后 exit 0。
 - 文档链接核对：10 个文件、70 个相对链接及其锚点通过，exit 0；实际 diff 只有指定十份 Markdown，新增内容无主机地址字面量或完整设备序列号。
 - `git diff --check`：exit 0（初稿头部行尾空白已修正）。本轮没有运行完整 Agent/backend/root 测试套件；required CI：pending，以最终 PR head 的结果为准。
+
+### 2026-10-24 返修验证
+
+- main 代码对账：打包 unit 的 StandardOutput/StandardError；`backend/agent/main.py` 的日志格式；
+  `ReturnDebtConsumer._drain` 的带设备 id 异常；`api_client._post_with_retry` 的 agent_post 日志；
+  `backend/api/routes/runs.py::list_run_steps`；`device_return_debt` 的部分唯一索引。
+- `env -i PATH="$PATH" HOME="$HOME" TESTING=1 ./scripts/project_python.sh -`（内联 SQL 验证）：exit 0；
+  两份 SOP 的全部 13 段 SELECT（紧急释放 6、开关机 7）在新建 testcontainers PostgreSQL 16 的只读事务中执行成功，
+  `SHOW transaction_read_only` 为 on，容器已停止；未连接生产库。
+- `env -i PATH="$PATH" HOME="$HOME" ./scripts/project_python.sh -`（内联静态核对）：exit 0；
+  grep -E 用合成日志验证设备 1 不误匹配设备 10，agent_post 三种消息只作旁证；`bash -n` 核对 3 段激活后命令语法。
+  激活前释放命令与 main 逐字相同，开关机原过渡正文 5039 bytes 保留，ADR 修订说明文字未改、已移动到元数据之后。
+- 文档链接与代码入口内联核对：exit 0；10 个文件、70 个相对链接及锚点通过，`list_run_steps` 在 main 存在；
+  本轮 diff 正好为上述六份 Markdown。`git diff --check`：exit 0。
+- `env -i PATH="$PATH" HOME="$HOME" ./scripts/project_python.sh scripts/run_gates.py check:quick`：exit 0，16 gates 通过；
+  schema-at-head 因未配置 DATABASE_URL 明确跳过，不代表数据库迁移验收。
+- 新 HEAD 的 required CI 与信息性检查：pending；前一 HEAD 的成功不转移到本轮。
+
+### 本轮改动句子的 ADR-0059 自查
+
+以下条款编号均指 ADR-0059；后文 93 项是首轮历史清单，本节替代其中被返修的对应项。
+
+1. 「在目标 Agent host 用设备 id 查询清偿异常日志」：D2 第 1、2 条；D3 第 5 条；D4 第 1、4、6 条。
+   grep -E 的设备 id 后加数字边界，避免把设备 1 与设备 10 的异常混同。
+2. 「agent_post_(retry|failed|conflict) 的日志行不含目标设备，只作请求异常的旁证」：D2 第 2、4 条。
+   「清偿成功不写日志；本次是否成功以控制面该专项的 source=discharge 与所涉条目的 state=closed、closed_reason=discharged 为准」：
+   D2 第 2、4 条；D4 第 6 条。两句为代码行为与证据来源的描述，附只读 SQL 查法。
+3. 「对下一次已获授权的 job，读取 GET /api/v1/runs/{job_id}/steps 响应中 name=return_check.power-cycle 的最新状态」：
+   D2 第 2、4 条；D3 第 5 条；D4 第 1、2、4、6 条。通过/失败/尚未确认有明确预期；替代查询只读且只取最新状态。
+4. 「执行者必须在控制面宿主上运行本文的 curl 命令」：D2 第 1、2 条；D3 第 1 条。
+   「在控制面宿主上以管理员身份请求释放，reason 填本次非空处置原因」与
+   「在控制面宿主上以管理员身份调用人工放行接口」：分别按 D3 第 5 条、D4 第 1、4、5、6 条自查；
+   操作前的授权警告与操作后的预期保留，激活前命令逐字恢复。
+5. 「部分唯一索引 uq_device_return_debt_open_source 在 state='open' 时约束
+   (device_id, family, source_kind, COALESCE(source_job_id, 0)) 唯一」：D2 第 4 条，描述既有机器约束，不新增规则。
+6. 两份 ADR 只移动已有修订说明：原文与原决策不改，按 D1 的增量范围自查，没有新增规则句。
 
 ### 写作约定 §5 自查
 
@@ -158,6 +215,8 @@ Class: process
 运维 README 的新增索引与模型字段说明为行为/结构事实，不增加操作规则；涉及机器枚举的原样写法按 D2 第 4 条处理。
 
 ## Revisit
+
+返修完成后继续保持 Draft，等待规划者按新完整 HEAD 核对；Owner 控制 Ready。SOP 中的命令与 SQL 没有在生产执行。
 
 #3723 当前正文、ADR 或代码入口变化时，重绑基线并核对本轮文档；若方案与代码不符，先在 #3723 退回 U7。
 Owner 批准激活步骤后，由第二 PR 交付清单；激活并发布生效证据后，再按清单删除过渡内容与激活前分支。
