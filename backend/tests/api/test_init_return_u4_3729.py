@@ -1,4 +1,4 @@
-"""#3723 v1.7.15–17: real init-check API and terminal separation, isolated PG."""
+"""#3723 v1.7.15–18: real init-check API, trace and terminal separation, PG."""
 from datetime import datetime, timezone
 from copy import deepcopy
 
@@ -10,6 +10,8 @@ from backend.models.device_lease import DeviceLease
 from backend.models.device_return_debt import DeviceReturnDebt
 from backend.models.host import Device
 from backend.models.job import JobInstance, StepTrace
+from backend.models.plan_run import PlanRun
+from backend.services.plan_run_event_feed import build_plan_run_events
 from backend.tests.api.test_disarm_policy_u8_3752 import (
     combination, result_entry, seed, signals_are_forbidden,  # noqa: F401
 )
@@ -85,6 +87,8 @@ def test_partial_init_rejection_commits_legal_family_and_downgrade_is_accepted(c
     with SessionLocal() as db:
         states = db.get(Device, seed["device_id"]).return_state
         assert states["power-cycle"]["state"] == "unverified" and "sleep" not in states
+        # Planner F3: the fixture was already unverified with source=stock.
+        assert states["power-cycle"]["source"] == "init_check"
     assert report(client, seed, {"power-cycle": item}).status_code == 422
     assert report(client, seed, {"power-cycle": {**item, "result": "executed_unverified"}}).status_code == 200
 
@@ -167,6 +171,40 @@ def test_distinct_init_lease_reports_have_distinct_diagnostic_identity(client, s
     assert report(client, seed, {"power-cycle": item}, token="next-init-test-token").status_code == 422
     with SessionLocal() as db:
         assert db.query(AuditLog).filter_by(action="unverified_probe_result").count() == 2
+
+
+@pytest.mark.parametrize("kind,trusted,modes", [
+    ("clear", True, ["probe"]),
+    ("footprint", True, ["probe", "disarm"]),
+    ("absent", True, ["probe", "disarm"]),
+    ("clear", False, ["probe", "disarm"]),
+    ("not_installed", True, ["probe", "disarm"]),
+])
+def test_init_trace_aggregation_has_no_failed_step_events(seed, monkeypatch, tmp_path, kind, trusted, modes):
+    """F4: frozen output → real Engine trace → PG → real PlanRun event feed."""
+    from backend.agent.tests.return_frozen_3729 import FrozenReturnDevice
+
+    device_io = FrozenReturnDevice(monkeypatch, tmp_path, kind=kind, trusted=trusted, supported=False)
+    try:
+        assert device_io.execute().success and device_io.modes == modes
+        traces = [call.kwargs for call in device_io.mq.send_step_trace.call_args_list]
+        assert [(t["event_type"], t["status"]) for t in traces] == [
+            ("STARTED", "RUNNING"), ("COMPLETED", "COMPLETED")]
+        with SessionLocal() as db:
+            db.query(StepTrace).filter_by(job_id=seed["job_id"]).delete()
+            for trace in traces:
+                db.add(StepTrace(job_id=seed["job_id"], step_id=trace["step_id"], stage=trace["stage"],
+                    event_type=trace["event_type"], status=trace["status"], output=trace.get("output"),
+                    error_message=trace.get("error_message"), exit_code=trace.get("exit_code"),
+                    step_metadata=trace.get("metadata"), trace_event_id=trace["trace_event_id"],
+                    original_ts=datetime.now(timezone.utc)))
+            db.commit()
+            feed = build_plan_run_events(db, db.get(PlanRun, seed["plan_run_id"]))
+            assert [(e.title, e.severity) for e in feed.events if e.category == "step"] == []
+            stored = db.query(StepTrace).filter_by(job_id=seed["job_id"], event_type="COMPLETED").one()
+            assert [e["mode"] for e in stored.step_metadata["executions"]] == modes
+    finally:
+        device_io.close()
 
 
 @pytest.mark.parametrize("trusted,own_footprint,expected", [(True, False, "returned"),

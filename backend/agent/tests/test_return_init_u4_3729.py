@@ -46,8 +46,16 @@ def test_frozen_init_paths_and_terminal_separation(device_factory, kind, trusted
     assert not result.metadata.get("disarm_results")
     traces = [c.kwargs for c in device.mq.send_step_trace.call_args_list]
     assert traces and all(t["stage"] == "init" and t["step_id"] == "return_check.power-cycle" for t in traces)
+    # #3723 §3.5 v1.7.18.7: child exit 1 must not become a job step failure.
+    terminal_event = "COMPLETED" if success else "FAILED"
+    assert [(t["event_type"], t["status"]) for t in traces] == [
+        ("STARTED", "RUNNING"), (terminal_event, terminal_event)]
+    executions = traces[-1]["metadata"]["executions"]
+    assert [item["mode"] for item in executions] == modes
+    assert executions[0]["entry"]["exit_code"] == 1  # real frozen probe exit
+    assert all(item["entry"]["evidence"]["package_sha256"] == PACKAGE for item in executions)
     ids = [t["trace_event_id"] for t in traces]
-    assert len(ids) == len(set(ids)), "probe, disarm and final result must survive trace dedup"
+    assert len(ids) == len(set(ids)), "the logical check must survive trace dedup"
     if kind == "not_installed":
         assert device.writes == []
     if kind == "denied":
@@ -70,6 +78,9 @@ def test_package_unavailable_fails_without_reporting(device_factory):
     result = device.execute()
     assert not result.success and "package_unavailable" in result.error_message
     assert device.reports == [] and device.modes == []
+    traces = [call.kwargs for call in device.mq.send_step_trace.call_args_list]
+    assert [t["event_type"] for t in traces] == ["STARTED", "FAILED"]
+    assert traces[-1]["metadata"]["executions"] == []
 
 
 @pytest.mark.parametrize("kind,missing", [("denied", False), ("clear", True)])
@@ -111,6 +122,11 @@ def test_init_report_outage_uses_bounded_retry_then_fails(device_factory):
     assert not result.success and "init_check_unreported" in result.error_message
     assert len(device.reports) == 3 and device.clock == 3
     assert not result.metadata.get("disarm_results")
+    traces = [call.kwargs for call in device.mq.send_step_trace.call_args_list]
+    assert [t["event_type"] for t in traces] == ["STARTED", "FAILED"]
+    assert [e["mode"] for e in traces[-1]["metadata"]["executions"]] == ["probe"]
+    assert traces[-1]["output"] is None  # no delivered final result; raw entry stays in metadata
+    assert traces[-1]["error_message"] == "init_check_unreported"
 
 
 def test_initial_lease_loss_prevents_all_device_actions(device_factory):
@@ -172,3 +188,70 @@ def test_init_precedes_footprint_and_own_teardown_cannot_be_overwritten(device_f
     terminal = result.metadata["disarm_results"]["power-cycle"]
     assert terminal["step_id"] == "own_disarm" and terminal["result"] == "failed"
     assert len(device.reports) == 1 and device.modes == ["probe", "disarm"]
+
+
+def test_footprinted_job_skipped_own_disarm_is_not_masked_by_init(device_factory):
+    """Planner F1: only the init accumulator isolation prevents this leak."""
+    device = device_factory()
+    engine = device.engine()
+    original = engine._resolve_action
+
+    def resolve(action, step):
+        if action == "script:powercycle_setup":
+            return lambda ctx: StepResult(success=True)
+        return original(action, step)
+    engine._resolve_action = resolve
+    result = engine.execute({"lifecycle": {
+        "init": [{"step_id": "own_setup", "action": "script:powercycle_setup"}],
+        "teardown": [{"step_id": "own_disarm", "action": "script:powercycle_disarm",
+                      "version": "1.0.8", "timeout_seconds": 660, "enabled": False}],
+    }})
+    assert result.success and engine._footprint_families == {"power-cycle"}
+    assert device.reports[0]["family_results"]["power-cycle"]["result"] == "confirmed"
+    assert device.modes == ["probe"]
+    terminal = result.metadata["disarm_results"]["power-cycle"]
+    assert terminal["result"] == "not_executed", terminal
+    assert terminal["step_id"] == "own_disarm" and terminal["reason"] == "step_disabled"
+    traces = [c.kwargs for c in device.mq.send_step_trace.call_args_list]
+    assert any(t["step_id"] == "own_disarm" and t["status"] == "SKIPPED" for t in traces)
+
+
+def test_checkpoint_resume_skips_precheck_but_keeps_teardown(device_factory):
+    """Planner F2 / v1.7.18.8: resume carries the prior successful init."""
+    device = device_factory()
+    engine = device.engine()
+    engine.set_patrol_cycle_resume({"cycle": 5, "failure_streak": 2})
+    engine._canceled = True  # finite: exit patrol before its first cycle/sleep
+    engine._footprint_families.add("power-cycle")  # footprint from before recovery
+    calls = []
+
+    def check():
+        calls.append("check")
+        return StepResult(success=False, error_message="precheck must not run on resume")
+
+    def teardown(definition, disarm_only=False):
+        calls.append("teardown")
+        assert definition[0]["step_id"] == "own_disarm"
+        return StepResult(success=True, metadata={"teardown_status": "SUCCESS"})
+    engine._check_init_returns = check
+    engine._execute_teardown_best_effort = teardown
+    result = engine.execute({"lifecycle": {
+        "init": [{"step_id": "own_setup", "action": "script:powercycle_setup"}],
+        "patrol": {"interval_seconds": 1, "steps": [
+            {"step_id": "patrol", "action": "script:check_device", "version": "1.0.0"}]},
+        "teardown": [{"step_id": "own_disarm", "action": "script:powercycle_disarm", "version": "1.0.8"}],
+    }})
+    assert calls == ["teardown"], result.metadata
+    assert result.metadata["teardown_status"] == "SUCCESS"
+    assert device.modes == [] and device.reports == []
+
+
+def test_aggregate_trace_keeps_both_child_local_logs(device_factory, tmp_path):
+    device = device_factory(kind="footprint")
+    engine = device.engine()
+    engine._log_dir = str(tmp_path / "step-logs")
+    result = engine.execute({"lifecycle": {"init": [], "teardown": []}})
+    assert result.success and device.modes == ["probe", "disarm"]
+    outputs = (tmp_path / "step-logs/init_powercycle_disarm.out.log").read_text().splitlines()
+    assert [json.loads(line)["success"] for line in outputs] == [False, True]
+    assert "PROGRESS" in (tmp_path / "step-logs/init_powercycle_disarm.err.log").read_text()

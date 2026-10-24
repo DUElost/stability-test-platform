@@ -28,8 +28,7 @@ def registered_step(family: str, mode: str) -> dict:
     spec = ONBOARDED[family]
     return {"step_id": "return_check." + family, "action": "script:" + spec["disarm_script"],
             "version": spec["disarm_min_version"], "timeout_seconds": spec["disarm_budget_seconds"],
-            "params": {"mode": mode}, "_return_check": True,
-            "_return_check_trace_offset": 0 if mode == "probe" else 1}
+            "params": {"mode": mode}, "_return_check": True}
 
 
 def execute_registered(engine: Any, family: str, mode: str, *, with_permit: bool = True) -> dict:
@@ -49,7 +48,7 @@ def execute_registered(engine: Any, family: str, mode: str, *, with_permit: bool
         engine._run_step_with_permit("init", step)
         outcome = engine._last_step_result
     else:
-        outcome = engine._execute_step("init", step, retry_attempt=step["_return_check_trace_offset"])
+        outcome = engine._execute_step("init", step)
     if outcome is not None and "script package unavailable:" in (outcome.error_message or ""):
         raise PackageUnavailable("package_unavailable")
     if outcome is None:
@@ -84,43 +83,57 @@ def execute_registered(engine: Any, family: str, mode: str, *, with_permit: bool
 
 def run_init_checks(engine: Any, result_type: Callable):
     for family in ONBOARDED:
+        step_id = "return_check." + family
+        executions = []
+        entry = None
+        success = False
+        error_message = None
+        exit_code = None
+        trace_output = None
+        engine._report_step_trace_mq(step_id, "init", "STARTED", "RUNNING")
         try:
-            entry = execute_registered(engine, family, "probe")
-            if entry["result"] not in {"confirmed", "incomplete", "not_executed"}:
-                entry = execute_registered(engine, family, "disarm")
-        except PackageUnavailable:
-            engine._report_step_trace_mq("return_check." + family, "init", "FAILED", "FAILED",
-                                         error_message="package_unavailable")
-            return result_type(success=False, exit_code=2, error_message="package_unavailable")
-        entry["source"] = "init_check"
-        local_db = getattr(engine, "_local_db", None)
-        supported = local_db is not None and local_db.get_state(INIT_CHECK_CAPABILITY_KEY) == "1"
-        if supported and engine._api_url:
             try:
+                entry = execute_registered(engine, family, "probe")
+                executions.append({"mode": "probe", "entry": dict(entry)})
+                if entry["result"] not in {"confirmed", "incomplete", "not_executed"}:
+                    entry = execute_registered(engine, family, "disarm")
+                    executions.append({"mode": "disarm", "entry": dict(entry)})
+            except PackageUnavailable:
+                error_message, exit_code = "package_unavailable", 2
+                return result_type(success=False, exit_code=2, error_message="package_unavailable")
+            entry["source"] = "init_check"
+            local_db = getattr(engine, "_local_db", None)
+            supported = local_db is not None and local_db.get_state(INIT_CHECK_CAPABILITY_KEY) == "1"
+            if supported and engine._api_url:
                 try:
-                    report_init_return_check(engine._api_url, engine._run_id, engine._fencing_token, {family: entry})
-                except requests.HTTPError as exc:
-                    payload = exc.response.json() if exc.response is not None else {}
-                    details = payload.get("detail", {}) if isinstance(payload, dict) else {}
-                    violations = details.get("violations", []) if isinstance(details, dict) else []
-                    rejected = exc.response is not None and exc.response.status_code == 422 and any(
-                        v.get("family") == family for v in violations)
-                    if entry["result"] != "confirmed" or not rejected:
-                        raise
-                    entry = {**entry, "result": "executed_unverified", "reason": "init_check_unverified_by_server"}
-                    report_init_return_check(engine._api_url, engine._run_id, engine._fencing_token, {family: entry})
-            except (requests.RequestException, ValueError) as exc:
-                if isinstance(exc, requests.HTTPError) and exc.response is not None and exc.response.status_code == 409:
-                    engine.mark_lease_lost_for_disarm()
-                engine._report_step_trace_mq("return_check." + family, "init", "FAILED", "FAILED",
-                                             error_message="init_check_unreported")
-                return result_type(success=False, exit_code=1, error_message="init_check_unreported")
-        success = entry["result"] in _CONTINUE_RESULTS
-        engine._report_step_trace_mq("return_check." + family, "init", "COMPLETED" if success else "FAILED",
-            "COMPLETED" if success else "FAILED", output=json.dumps(entry),
-            exit_code=0 if success else entry.get("exit_code"), retry_attempt=2)
-        if not success:
-            return result_type(success=False, exit_code=1, error_message="init_return_check:" + entry["result"])
+                    try:
+                        report_init_return_check(engine._api_url, engine._run_id, engine._fencing_token, {family: entry})
+                    except requests.HTTPError as exc:
+                        payload = exc.response.json() if exc.response is not None else {}
+                        details = payload.get("detail", {}) if isinstance(payload, dict) else {}
+                        violations = details.get("violations", []) if isinstance(details, dict) else []
+                        rejected = exc.response is not None and exc.response.status_code == 422 and any(
+                            v.get("family") == family for v in violations)
+                        if entry["result"] != "confirmed" or not rejected:
+                            raise
+                        entry = {**entry, "result": "executed_unverified", "reason": "init_check_unverified_by_server"}
+                        report_init_return_check(engine._api_url, engine._run_id, engine._fencing_token, {family: entry})
+                except (requests.RequestException, ValueError) as exc:
+                    if isinstance(exc, requests.HTTPError) and exc.response is not None and exc.response.status_code == 409:
+                        engine.mark_lease_lost_for_disarm()
+                    error_message, exit_code = "init_check_unreported", 1
+                    return result_type(success=False, exit_code=1, error_message="init_check_unreported")
+            trace_output = json.dumps(entry)
+            success = entry["result"] in _CONTINUE_RESULTS
+            exit_code = 0 if success else entry.get("exit_code")
+            if not success:
+                error_message = "init_return_check:" + entry["result"]
+                return result_type(success=False, exit_code=1, error_message=error_message)
+        finally:
+            terminal = "COMPLETED" if success else "FAILED"
+            engine._report_step_trace_mq(step_id, "init", terminal, terminal,
+                output=trace_output, error_message=error_message,
+                exit_code=exit_code, metadata={"executions": executions})
     return result_type(success=True)
 
 

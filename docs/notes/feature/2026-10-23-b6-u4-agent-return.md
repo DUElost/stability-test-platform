@@ -5,15 +5,18 @@ Class: feature
 
 ## Decision
 
-Refs #3729，Refs #3723。按批次正文 v1.7.17 实现 U4，延续原 Execution B6-U4、分支 feat/3729-agent-return 与 draft PR #3773。
-依据包含 ADR-0061 Accepted v1.1、v1.7.16 对第一次退回（6367520373）的入口政策裁定，以及 v1.7.17 对第二次退回（6367963867）的结果分离裁定。此次没有修改普通完成入口。
+Refs #3729，Refs #3723。按批次正文 v1.7.18 实现 U4，延续原 Execution B6-U4、分支 feat/3729-agent-return 与 draft PR #3773。
+依据包含 ADR-0061 Accepted v1.1、v1.7.16 的入口政策裁定、v1.7.17 的结果分离裁定，以及规划者核对 6380841471 后发布的 v1.7.18 trace 聚合与断点恢复条款。普通完成入口保持原实现。
 
 每个 job 进入 init、任何计划步骤开始之前，执行 ONBOARDED 登记的 powercycle_disarm@1.0.8 probe；不能可信确认无足迹时执行同版本 disarm。
 正式结果复用 Engine 的 U8 汇总与共享政策。confirmed 或 executed_unverified 才继续；其它正式值以 init 失败结束。包不可用时以 package_unavailable 失败，不上报结果。
-precheck 失败时没有计划步骤开始，不启动该 job 的计划 teardown；若计划 init 已开始，后续 teardown 沿用原执行链与 U8 有界保护。
+precheck 失败时没有计划步骤开始，不启动该 job 的计划 teardown，teardown_status 为 SKIPPED；若计划 init 已开始，后续 teardown 沿用原执行链与 U8 有界保护。
+patrol 断点恢复沿用已有的 init 成功前置，不重跑 init 检查，照常执行 teardown；本轮只为原判断补反例测试。
 
 init 结果只经 POST /api/v1/agent/jobs/{job_id}/return-check 上报，并以 init 阶段的 return_check.<family> trace 留痕。
-probe、disarm、最终回报使用合成步骤的不同尝试序号，避免既有 trace_event_id 去重丢失证据。
+每个专项上报一条 STARTED，并在 finally 中上报一条终态；confirmed、executed_unverified 为 COMPLETED，失败为 FAILED。
+probe 与 disarm 子执行不各自上报 trace。正常形成结论时，终态 output 保留最终正式条目；包或回报不可用时记录错误。metadata.executions 按执行顺序保留各模式与其条目，含 probe 的真实退出码 1。
+本地 stdout/stderr 与步骤日志沿用原落盘链；合成步骤不再使用子执行尝试序号区分 trace。
 汇总临时容器与 job 的解除结果分开；终态 disarm_results 只取本 job 的足迹专项。
 控制面应用函数按 Job → Device → Lease 加锁，欠账读写均在 Device 锁内。
 令牌先于政策核对；合法结果写 source=init_check；confirmed 关闭专项全部 open 条目；失败创建 source_kind=job/source_job_id=当前 job 的条目，cause 含 init_check 与正式值。
@@ -31,6 +34,8 @@ executed_unverified 与专项 422 不周期重试，重连或令牌变化可以�
 
 - 结果核验复用 _record_disarm_for_step 与 U8 共享契约，未复制可信组合或核验规则。v1.7.16 唯一共享政策修改是让 init 的非特权正式值与清偿一样通过。
 - 按 v1.7.17 分离 init 回报与终态载荷，保留 /complete 原处理。对不能确认无足迹的 probe 先解除；未安装应用的设备仍执行登记 disarm，结果最多为未验证。
+- 按 v1.7.18 在真实 Engine 中抑制 init 检查子执行的 trace，由 init 检查边界聚合正式结果。普通步骤、patrol trace、日志与有界保护沿用原处理。
+- F1–F3 仅增强测试：已建立足迹但自身解除 SKIPPED、patrol 断点恢复的 teardown、部分 422 中合法专项的已提交来源；对应产品判断均未修改。N1–N3 不进入本轮。
 - 清偿复用心跳现有晚绑定 concurrency_snapshot 所属的 OperationScheduler，不另建调度器。现有 start_host_control_plane 将该回调绑定到 host 全局实例；绑定未完成或类型不符时不执行。真实绑定测试验证同一实例、活跃集合与 LocalDB 恢复占用。
 - Engine 在调用 init 检查时提供 StepResult 构造器，心跳接线层为清偿提供 PipelineEngine 构造器；清偿模块不反向导入 Engine，避免新增循环依赖与函数内导入。
 - 既有 U1/U8 Engine 测试只补“已完成新 precheck”的证据前置，原断言保留；新 U4 测试显式请求 real_return_checks，运行真实注册包、脚本、Engine 与 pump。
@@ -45,10 +50,12 @@ executed_unverified 与专项 422 不周期重试，重连或令牌变化可以�
 - v1.7.16 政策反例：原实现 5 failed、3 passed；修正与 U8 API 回归 69 passed；撤回判断再次 5 failed、3 passed，子 pytest 退出 1，驱动退出 0并恢复原字节。
 - 新 init API 缺失时 12 项反例全部失败（退出 1），接线后通过。
 - 关闭后的失败重放、不同租约诊断身份两项：修正前 2 failed，修正后通过。
-- Agent 新功能 35 passed，退出 0：真实 heartbeat tick/重连钩子、冻结包 Engine、真实 runner 载荷隔离、先回报再建立足迹、旧控制面、失租、平台中断、422 降级、有界重试、失败前置不启动计划 teardown，以及清偿触发/permit/活跃/拒绝矩阵。
-- 后端定向 91 passed，退出 0：新 API、三组 I5、原政策反例及 U8 四入口。包含冻结脚本 → Engine/runner → 真实 init API → PG → 真实 complete API；非开关机 job 的 returned/unverified 保持，开关机 job 自身 teardown 失败独立建账。
+- v1.7.18 修正前：Agent trace 反例 8 failed、17 passed，退出 1；真实 Engine trace 写隔离 PG 后，真实 build_plan_run_events 的 5 个通过路径均产生 step 失败事件，5 failed、1 passed，退出 1。
+- 本轮 Agent 定向 38 passed，退出 0：真实 heartbeat tick/重连钩子、冻结包 Engine、真实 runner 载荷隔离、先回报再建立足迹、旧控制面、失租、平台中断、422 降级、有界重试、失败前置不启动计划 teardown、断点恢复及清偿矩阵。新增精确 trace 数量与状态、子执行证据、两次本地日志保留、自身解除 SKIPPED 不被 init confirmed 遮盖的断言。
+- 本轮后端定向 96 passed，退出 0：新 API、三组 I5、原政策反例及 U8 四入口。包含冻结脚本 → Engine/runner → 真实 init API → PG → 真实 complete API，以及真实 trace → PG → 真实 PlanRun 事件流的 5 个成功路径。部分 422 明确断言合法专项 source=init_check，区分预置的 stock 状态与提交结果。
 - I5：A 会话分别持 Job、Device、Lease；B 执行真实 HTTP 并进入 PG 锁等待；C 会话用 FOR UPDATE NOWAIT 探测已持锁前缀，释放 A 后请求完成。全程有界条件等待。
-- 有限撤回工具：./scripts/project_python.sh -m backend.tests.return_withdrawals_3729 --run --output-dir <证据目录>。覆盖 30 个修复点，并运行旧 HEAD d4008e013 的真实 Engine 基线反例。基线 cancel、终止、pump 与 U8 guard 函数先核对 AST 同一性，不撤回信号安全或有界保护。每个子测试以真实行为失败证明反例，finally 恢复全部源码原字节，无主动 pytest.fail。
+- 有限撤回工具：./scripts/project_python.sh -m backend.tests.return_withdrawals_3729 --run --output-dir <证据目录>。原 30 组追加四个单项：仅移除 init 汇总隔离容器、仅把断点恢复前置改为 False、仅把 422 前的提交改为显式回滚、仅恢复子执行 trace；四项分别变红。连同旧 HEAD d4008e013 的真实 Engine 基线共 35 组，全部子 pytest 退出 1，驱动退出 0，恢复原字节=true。
+  基线 cancel、终止、pump 与 U8 guard 函数先核对 AST 同一性，不撤回信号安全或有界保护。每个子测试以真实行为失败证明反例，无主动 pytest.fail。
 
 完整测试根与门禁命令（最终退出状态与完整 HEAD 在 PR 正文回告）：
 
@@ -59,7 +66,7 @@ env -i PATH="$PATH" PYTHONPATH=. TESTING=1 JWT_SECRET_KEY=b6-isolated-test-only 
 env -i PATH="$PATH" PYTHONPATH=. ./scripts/project_python.sh scripts/run_gates.py check:quick
 ```
 
-上一轮 d4008e013 的三根与 check:quick 均已退出 0，作为旧提交证据保留。本轮最终代码单独重跑；六项 required CI 与 informational 只按最终远端 HEAD 的终态回告。运行中、跳过、未运行均不算通过。
+上一轮 2fd3df5ac 的三根与 check:quick 均已退出 0，作为旧提交证据保留。本轮最终代码单独重跑；六项 required CI 与 informational 只按最终远端 HEAD 的终态回告。运行中、跳过、未运行均不算通过。
 
 ## Revisit
 

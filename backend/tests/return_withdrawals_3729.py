@@ -25,6 +25,7 @@ DEBT = "backend/agent/tests/test_return_debts_u4_3729.py"
 API = "backend/tests/api/test_init_return_u4_3729.py"
 LOCK = "backend/tests/api/test_init_return_i5_u4_3729.py"
 POLICY = "backend/agent/contracts/device_return.py"
+ROUTE = "backend/api/routes/agent_device_return.py"
 APP = "def apply_init_check_sync("
 BASELINE = "d4008e01373a2989d8d2d8b5a881393f5ee640c8"
 
@@ -55,6 +56,19 @@ CASES = [
         change(AGENT, 'engine._disarm_results = terminal_results', 'engine._disarm_results.update(terminal_results)'),
         change(ENGINE, 'disarm_results = {family: entry for family, entry in (getattr(self, "_disarm_results", {}) or {}).items()\n                          if family in self._footprint_families}', 'disarm_results = dict(getattr(self, "_disarm_results", {}) or {})'),
     ], API, "frozen_engine_init_api_and_complete"),
+    Case("init_accumulator_isolation_single", [
+        change(AGENT, 'engine._disarm_results = {}', 'pass'),
+    ], INIT, "footprinted_job_skipped_own_disarm"),
+    Case("checkpoint_teardown_single", [
+        change(ENGINE, 'return_checks_passed = skip_init', 'return_checks_passed = False'),
+    ], INIT, "checkpoint_resume_skips_precheck_but_keeps_teardown"),
+    Case("init_partial_commit_single", [change(ROUTE,
+        'db.commit()\n    if result.get("rejected_families"):',
+        'if result.get("rejected_families"):\n        db.rollback()\n    else:\n        db.commit()\n    if result.get("rejected_families"):',
+        'def agent_init_return_check(')], API, "partial_init_rejection"),
+    Case("init_trace_aggregation_single", [
+        change(ENGINE, 'trace_step = not (phase == "init" and step.get("_return_check"))', 'trace_step = True'),
+    ], API, "init_trace_aggregation"),
     Case("init_policy_nonprivileged", [change(POLICY, 'or not privileged:\n', 'or (not privileged and entry_point != "init_check"):\n')], API, "untrusted_nonprivileged"),
     Case("init_token", [change(SERVICE, 'lease.fencing_token != fencing_token', 'False', APP)], API, "token_rejection"),
     Case("init_shared_policy", [change(SERVICE, 'decision = check_init_probe_result(db, device, family, entry, token_valid=True, report_identity=identity)', 'decision = {"status_code": 200}', APP)], API, "untrusted_privileged"),

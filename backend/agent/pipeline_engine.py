@@ -1910,7 +1910,7 @@ class PipelineEngine:
             result = self._execute_step(
                 phase,
                 step,
-                retry_attempt=attempt + step.get("_return_check_trace_offset", 0),
+                retry_attempt=attempt,
                 suppress_success_trace=suppress_success_trace,
                 disarm_step=disarm_step,
             )
@@ -1998,10 +1998,14 @@ class PipelineEngine:
 
         success-path), the STARTED + COMPLETED traces are skipped to avoid
 
-        per-cycle volume blow-up.  Failure / SKIPPED traces are always written.
+        per-cycle volume blow-up. Failure / SKIPPED traces are retained for
+        ordinary steps; synthetic init checks are aggregated by their caller.
 
         """
         step_id = step.get("step_id", "unknown")
+        # #3723 v1.7.18.7: init checks report one aggregate trace outside
+        # their probe/disarm executions. Keep action logging unchanged.
+        trace_step = not (phase == "init" and step.get("_return_check"))
         action = step.get("action", "")
         params = step.get("params", {})
         timeout = step.get("timeout_seconds", step.get("timeout", 300))
@@ -2024,19 +2028,20 @@ class PipelineEngine:
 
         if step.get("enabled") is False:
             result = StepResult(success=True, skipped=True, skip_reason="step disabled")
-            # Always trace SKIPPED — meaningful signal even in patrol.
+            # Ordinary SKIPPED steps remain meaningful even in patrol.
             # R3: disabled never establishes footprint (checked before STARTED).
-            self._report_step_trace_mq(
-                step_id,
-                phase,
-                "COMPLETED",
-                "SKIPPED",
-                output=result.skip_reason,
-                retry_attempt=retry_attempt,
-            )
+            if trace_step:
+                self._report_step_trace_mq(
+                    step_id,
+                    phase,
+                    "COMPLETED",
+                    "SKIPPED",
+                    output=result.skip_reason,
+                    retry_attempt=retry_attempt,
+                )
             return result
 
-        if not suppress_success_trace:
+        if trace_step and not suppress_success_trace:
             self._report_step_trace_mq(
                 step_id, phase, "STARTED", "RUNNING",
                 retry_attempt=retry_attempt,
@@ -2086,13 +2091,13 @@ class PipelineEngine:
             "COMPLETED" if result.success else "FAILED"
         )
 
-        # ADR-0022: skip COMPLETED trace for patrol-success path; FAILED always traces.
+        # ADR-0022 patrol suppression is separate from init-check aggregation.
         skip_completion_trace = (
             suppress_success_trace
             and result.success
             and not result.skipped  # SKIPPED still traces (rare, meaningful)
         )
-        if not skip_completion_trace:
+        if trace_step and not skip_completion_trace:
             self._report_step_trace_mq(
                 step_id,
                 phase,
