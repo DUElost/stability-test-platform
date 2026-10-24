@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import model_validator, BaseModel, Field, field_validator
 
+from backend.agent.contracts.device_return import DISARM_RESULTS, FAMILY_STEPS
 from backend.api.schemas.base import ORMBaseModel
 from backend.core.device_lifecycle import is_retire_suggested, is_stale
 
@@ -157,6 +158,24 @@ class AgentReturnDischargeOut(BaseModel):
     debt_lease_released: bool = False
     open_debt_count: int = 0
     fencing_token: Optional[str] = None
+
+
+class AgentInitReturnCheckIn(AgentReturnDischargeIn):
+    """Job-token protected init evidence; separate from terminal disarm_results."""
+
+    @field_validator("family_results")
+    @classmethod
+    def _known_results(cls, value: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        if not value or any(f not in FAMILY_STEPS or e.get("result") not in DISARM_RESULTS
+                            for f, e in value.items()):
+            raise ValueError("family_results must contain known families and formal results")
+        return value
+
+
+class AgentInitReturnCheckOut(BaseModel):
+    job_id: int
+    accepted_families: List[str] = Field(default_factory=list)
+    open_debt_count: int = 0
 
 
 class DeviceOut(ORMBaseModel):

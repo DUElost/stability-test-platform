@@ -696,4 +696,5 @@ def _process_heartbeat_with_db(
         },
         "heartbeat_interval_seconds": suggested_interval,
         "return_debts": return_debts,
+        "return_init_check_available": True,
     }, ws_device_updates

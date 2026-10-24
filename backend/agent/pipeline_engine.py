@@ -11,6 +11,7 @@ init -> patrol loop -> teardown.
 
 from .device_discovery import discover_devices
 from .device_platform import detect_device_platform
+from .device_return import run_init_checks
 from .contracts.device_return import (
     disarm_execution_budget, probe_result_policy, PLATFORM_INTERRUPTED_EXIT_CODES,
     DISARM_QUEUE_SECONDS, DISARM_JOB_MAX_SECONDS,
@@ -1847,6 +1848,9 @@ class PipelineEngine:
                     lease_lost=True,
                 )
                 return False
+            if phase == "init" and step.get("_return_check") and self._teardown_lease_lost():
+                self._last_step_error = "not_executed:lease_lost"
+                return False
             if tail is not None and disarm_step:
                 self._publish_disarm_phase(step, "execute")
 
@@ -1994,10 +1998,14 @@ class PipelineEngine:
 
         success-path), the STARTED + COMPLETED traces are skipped to avoid
 
-        per-cycle volume blow-up.  Failure / SKIPPED traces are always written.
+        per-cycle volume blow-up. Failure / SKIPPED traces are retained for
+        ordinary steps; synthetic init checks are aggregated by their caller.
 
         """
         step_id = step.get("step_id", "unknown")
+        # #3723 v1.7.18.7: init checks report one aggregate trace outside
+        # their probe/disarm executions. Keep action logging unchanged.
+        trace_step = not (phase == "init" and step.get("_return_check"))
         action = step.get("action", "")
         params = step.get("params", {})
         timeout = step.get("timeout_seconds", step.get("timeout", 300))
@@ -2020,19 +2028,20 @@ class PipelineEngine:
 
         if step.get("enabled") is False:
             result = StepResult(success=True, skipped=True, skip_reason="step disabled")
-            # Always trace SKIPPED — meaningful signal even in patrol.
+            # Ordinary SKIPPED steps remain meaningful even in patrol.
             # R3: disabled never establishes footprint (checked before STARTED).
-            self._report_step_trace_mq(
-                step_id,
-                phase,
-                "COMPLETED",
-                "SKIPPED",
-                output=result.skip_reason,
-                retry_attempt=retry_attempt,
-            )
+            if trace_step:
+                self._report_step_trace_mq(
+                    step_id,
+                    phase,
+                    "COMPLETED",
+                    "SKIPPED",
+                    output=result.skip_reason,
+                    retry_attempt=retry_attempt,
+                )
             return result
 
-        if not suppress_success_trace:
+        if trace_step and not suppress_success_trace:
             self._report_step_trace_mq(
                 step_id, phase, "STARTED", "RUNNING",
                 retry_attempt=retry_attempt,
@@ -2082,13 +2091,13 @@ class PipelineEngine:
             "COMPLETED" if result.success else "FAILED"
         )
 
-        # ADR-0022: skip COMPLETED trace for patrol-success path; FAILED always traces.
+        # ADR-0022 patrol suppression is separate from init-check aggregation.
         skip_completion_trace = (
             suppress_success_trace
             and result.success
             and not result.skipped  # SKIPPED still traces (rare, meaningful)
         )
-        if not skip_completion_trace:
+        if trace_step and not skip_completion_trace:
             self._report_step_trace_mq(
                 step_id,
                 phase,
@@ -2105,6 +2114,7 @@ class PipelineEngine:
         if result.metrics:
             self._shared[step_id] = result.metrics
 
+        self._last_step_result = result
         return result
 
     def _resolve_action(self, action: str, step: dict) -> Optional[Callable]:
@@ -2429,6 +2439,7 @@ class PipelineEngine:
         if self._patrol_cycle_resume and self._patrol_cycle_checkpoint is not None:
             patrol_resume = self._patrol_cycle_checkpoint
             skip_init = True
+        return_checks_passed = skip_init
 
         # R07-F08 (#1010): a checkpoint resume must not grant a fresh cruise
         # budget. When the persisted checkpoint carries the cruise time already
@@ -2457,7 +2468,10 @@ class PipelineEngine:
                 self._report_job_status_mq("INIT_RUNNING")
                 logger.info("[Lifecycle] run=%d — executing init", self._run_id)
 
-                init_result = self._run_lifecycle_steps("init", init_def)
+                init_result = self._check_init_returns()
+                return_checks_passed = init_result.success
+                if init_result.success:
+                    init_result = self._run_lifecycle_steps("init", init_def)
             if not init_result.success:
                 # Distinguish lock_lost (abort) from genuine init failure
                 if init_result.error_message in ("device_lease_lost", "job_aborted"):
@@ -2531,7 +2545,11 @@ class PipelineEngine:
                 "TEARDOWN_RUNNING",
                 reason=f"termination_reason={termination_reason}",
             )
-            if termination_reason == "manual_exit":
+            if not return_checks_passed:
+                # No Plan step has started. The precheck owns its attempted
+                # disarm; starting this job's teardown would be a new action.
+                teardown_result = StepResult(success=True, metadata={"teardown_status": "SKIPPED"})
+            elif termination_reason == "manual_exit":
                 logger.info(
                     "[Lifecycle] run=%d — manual_exit: executing disarm "
                     "(ADR-0061 D3.4; was ADR-0022 BO4 skip)",
@@ -2589,7 +2607,8 @@ class PipelineEngine:
                 "teardown_status", "UNKNOWN"
             )
         # Always attach disarm_results for footprint families (#3723 §3.2.5).
-        disarm_results = dict(getattr(self, "_disarm_results", {}) or {})
+        disarm_results = {family: entry for family, entry in (getattr(self, "_disarm_results", {}) or {}).items()
+                          if family in self._footprint_families}
         if not disarm_results and self._footprint_families:
             disarm_results = default_not_executed_for_families(self._footprint_families)
         if disarm_results:
@@ -2607,6 +2626,9 @@ class PipelineEngine:
     # ADR-0022: Patrol loop with heartbeat aggregation + backoff +
     #           manual_action observation
     # ==================================================================
+
+    def _check_init_returns(self) -> StepResult:
+        return run_init_checks(self, StepResult)
 
     def _run_patrol_loop(
         self,
