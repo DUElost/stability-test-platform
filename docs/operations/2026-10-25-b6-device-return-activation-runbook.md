@@ -50,7 +50,7 @@ psql "$B6_RO_DATABASE_URL" -X -v ON_ERROR_STOP=1 \
 cd "$B6_REPO"
 git fetch origin main
 B6_ACTIVATION_SHA=$(git rev-parse origin/main)
-B6_U7_MERGE_SHA=$(gh pr view '<本清单PR号>' --repo DUElost/stability-test-platform --json mergeCommit --jq '.mergeCommit.oid')
+B6_U7_MERGE_SHA=$(gh pr view 3790 --repo DUElost/stability-test-platform --json mergeCommit --jq '.mergeCommit.oid')
 git merge-base --is-ancestor "$B6_U7_MERGE_SHA" "$B6_ACTIVATION_SHA"
 printf '%s\n' "$B6_ACTIVATION_SHA" > "$B6_EVIDENCE_DIR/activation-sha.txt"
 gh workflow run ci.yml --ref main --repo DUElost/stability-test-platform
