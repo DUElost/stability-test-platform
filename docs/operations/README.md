@@ -17,6 +17,7 @@
 | [`site-handover-and-navigation.md`](./site-handover-and-navigation.md) | 独立站点导航入口 /site/、交接证据 handover.json（MS-01…MS-13 的 P1 映射）与签字清单 |
 | [`device-lease-emergency-release.md`](./device-lease-emergency-release.md) | ACTIVE 设备租约紧急释放与回查，分 B6 激活前/后流程；自 B6 激活起，欠账 MAINTENANCE 租约返回 409，转清偿或人工放行 |
 | [`2026-09-24-capacity-p0-rollout-runbook.md`](./2026-09-24-capacity-p0-rollout-runbook.md) | **容量 P0 同窗上线手册**（未执行）：控制面 unit 预算门禁/start-limit、Prometheus 平台副本同步、Agent #3242 分发、真机复跑观测（#2959 / #3244 门槛） |
+| [`2026-10-25-b6-device-return-activation-runbook.md`](./2026-10-25-b6-device-return-activation-runbook.md) | **B6 设备归还激活清单（未执行）**：18 步、四个 Owner 确认点、发包/恢复发布、能力核验、初始化/清偿、分层验收与文档收尾 |
 
 ---
 
