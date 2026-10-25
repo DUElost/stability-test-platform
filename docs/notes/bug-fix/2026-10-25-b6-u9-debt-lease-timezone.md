@@ -5,7 +5,7 @@ Class: bug-fix
 
 ## Decision
 
-按 [#3723 v1.7.22 §3.9](https://github.com/DUElost/stability-test-platform/issues/3723)
+按 [#3723 v1.7.23 §3.9](https://github.com/DUElost/stability-test-platform/issues/3723)
 与 [#3793](https://github.com/DUElost/stability-test-platform/issues/3793) 实施。
 基线为 `origin/main@64f5754955d21bd755094bdb7ab2d5fb4fbb00f8`。
 
@@ -18,7 +18,12 @@ Class: bug-fix
 `9999-01-01 00:00:00+00` 的值归一化，不读行进 Python，不按状态或类型过滤。
 重复执行幂等；`downgrade()` 为空操作，保留可解码的数据。
 
-其余改动为 `backend/tests/` 下两个回归文件与本 Note。
+其余改动为 `backend/tests/` 下两个回归文件、根迁移测试与本 Note。
+根 `tests/test_disarm_guard_migration_3752.py` 按
+[v1.7.23 规划者裁定](https://github.com/DUElost/stability-test-platform/issues/3723#issuecomment-6397273534)
+删去固定 head 的断言及闲置导入，往返目标改为
+`upgrade u8b6d3752a01 → downgrade u3b6c7d8e9f0 → upgrade head`。
+列存在性、nullable 与 JSONB 断言保持不变；该测试继续验证 U8 迁移本身。
 心跳、欠账查询与人工放行入口保留原有查询形状；产品代码没有时区配置或新增环境变量，
 `backend/agent/` 没有改动。PR 保持 Draft，独立复核、Ready 与部署由后续工作面处理。
 
@@ -79,10 +84,54 @@ env -i PATH="$PATH" PYTHONPATH=. ./scripts/project_python.sh scripts/run_pytest.
 
 ### 回归、门禁与 CI
 
-- 匹配范围的既有回归：pending。
-- 根 `tests/`：pending。
-- `check:quick`：pending。
-- 当前 PR HEAD 的六项 required CI：pending，不能用本地结果代签。
+v1.7.22 的根套件发现 U8 固定 head 与 U9 新 revision 冲突，曾按 §7
+退回并中止全量运行（退出状态 2，已运行部分为 1 failed、1443 passed）。
+v1.7.23 将该根测试纳入范围，原 `B6-U9` Execution 已恢复；原有 scope 全部保留。
+
+本轮实现提交为 `7d779e3a85daef72cbf82458feed958436c6cba0`。
+按修订后的方案独立运行根迁移测试：
+
+```bash
+env -i PATH="$PATH" PYTHONPATH=. ./scripts/project_python.sh scripts/run_pytest.py tests/test_disarm_guard_migration_3752.py -q --tb=short
+```
+
+结果：**1 passed**，退出状态 0，真实 testcontainers PG 验证三步往返。
+
+U9 a/b/c 与空库迁移使用前文同一命令在新实现上重跑，
+结果为 **12 passed**，退出状态 0；旧常量的六项失败输出仍保留在前文。
+
+既有回归重跑命令：
+
+```bash
+env -i PATH="$PATH" PYTHONPATH=. ./scripts/project_python.sh scripts/run_pytest.py backend/tests/services/test_device_return_u3_3728.py backend/tests/services/test_init_device_return_cli_3728.py backend/tests/services/test_device_return_lock_order_3728.py backend/tests/services/test_reviewer_u3_r1_f1_f2_3728.py backend/tests/api/test_disarm_policy_u8_3752.py backend/tests/api/test_device_return_debts_u6_3731.py backend/tests/api/test_device_retirement_api_2962.py backend/tests/api/test_heartbeat.py -q --tb=short
+```
+
+结果：**137 passed**，退出状态 0。
+
+完整根套件重跑命令：
+
+```bash
+env -i PATH="$PATH" PYTHONPATH=. ./scripts/project_python.sh scripts/run_pytest.py tests/ -q --tb=short
+```
+
+结果：**2420 passed, 18 skipped**，退出状态 0；包括真实 promtool 场景层。
+本轮没有中止或跳过根迁移测试，该用例既单独通过，也在完整根套件中通过。
+
+快速门禁重跑命令：
+
+```bash
+env -i PATH="$PATH" PYTHONPATH=. XDG_RUNTIME_DIR="/run/user/$(id -u)" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus" systemd-run --user --scope -p MemoryMax=6G -p MemorySwapMax=0 -- ./scripts/project_python.sh scripts/run_gates.py check:quick
+```
+
+结果：**16 gates 完成**，退出状态 0。
+`schema-at-head` 因没有数据库配置明确跳过；空库迁移由前述 testcontainers 用例独立验证，
+未为消除跳过而读取生产配置。结果回填只修改本 Note，产品与测试源码保持该实现提交的内容。
+
+- 精确文本对照确认根测试仅有裁定的两处修改，其余断言不变。
+- `backend/agent/` 相对 main 为零 diff；`git diff --check` 与该根文件 Ruff 检查通过。
+- Registry `drift --strict` 返回 1，仅提示其它三条历史 Execution 的 stale-cache advisory；
+  当前 U9 无 scope drift，未修改其它 Execution。
+- 当前 PR HEAD 的六项 required CI 结果以 GitHub checks 为准，本地结果不代签 CI。
 
 ## Revisit
 
