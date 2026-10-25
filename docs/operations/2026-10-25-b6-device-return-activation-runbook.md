@@ -28,14 +28,16 @@ mkdir -p "$B6_EVIDENCE_DIR"
 ```
 
 `AUTH` 按 SOP §0 在发布根取得。`B6_RO_DATABASE_URL` 按 [production-diagnostics](./production-diagnostics.md) 的只读身份配置。
-各 SQL 代码块均用下面的只读连接入口粘贴执行；其中 `b6_window_at` 只在确认点 1 之后使用，`b6_resumed_at` 在第 16 步之后使用：
+各 SQL 代码块均用下面的只读连接入口粘贴执行；其中 `b6_window_at` 只在确认点 1 之后使用，`b6_resumed_at` 在第 16 步之后使用，`b6_catalog_version` 与 `b6_canary_host_id` 在第 10 步赋值后使用：
 
 ```bash
 psql "$B6_RO_DATABASE_URL" -X -v ON_ERROR_STOP=1 \
-  -v b6_window_at="${B6_WINDOW_AT:-}" -v b6_resumed_at="${B6_RESUMED_AT:-}"
+  -v b6_window_at="${B6_WINDOW_AT:-}" -v b6_resumed_at="${B6_RESUMED_AT:-}" \
+  -v b6_catalog_version="${B6_CATALOG_VERSION:-}" -v b6_canary_host_id="${B6_CANARY_HOST_ID:-}"
 ```
 
 每个 SQL 代码块含 `BEGIN READ ONLY` 与 `ROLLBACK`。生产 CLI 的 dry-run 另用 SOP §0 导出的站点运行环境，按现有逐设备事务执行。初始化执行者不得把只读诊断凭据传给 apply。
+核验者更新上述 shell 变量后必须重新启动此 psql 入口，以传入新值；旧 psql 会话不会随 shell 变量更新。
 执行者必须逐段执行命令。执行者遇到任一非预期的非零状态时必须停在当步。执行者不得在前一段失败后继续粘贴下一段。
 证据目录保存命令、时间、HTTP 状态、结果摘要与 Owner 确认引用；执行者不得把 token、连接串、完整设备序列号或 SSH 凭据写进证据摘要。
 
@@ -113,12 +115,16 @@ WHERE status IN ('PENDING','RUNNING','UNKNOWN') ORDER BY host_id, id;
 SELECT id, status, last_heartbeat FROM host
 WHERE retired_at IS NULL AND status <> 'ONLINE' ORDER BY id;
 SELECT id, plan_id, enabled, next_run_at FROM task_schedules WHERE enabled IS TRUE ORDER BY id;
+SELECT count(*) AS old_disarm_references FROM plan_step
+WHERE script_name='powercycle_disarm' AND script_version IN
+ ('1.0.0','1.0.1','1.0.2','1.0.3','1.0.4','1.0.5','1.0.6','1.0.7');
 ROLLBACK;
 ```
 
-预期：形成最新清单，API 与 SQL 的启用 schedule id 对齐；离线主机单列，历史数量不是当前事实。
+预期：形成最新清单，API 与 SQL 的启用 schedule id 对齐；离线主机单列，历史数量不是当前事实。old_disarm_references=0；第 8 步仍复查。
 审计预期：GET/SELECT 不新增业务审计；以上相同查询只读复查。
 **停止：** HTTP/分页读取失败、清单不完整或 API 与 SQL id 不一致，先报告 Owner。核验者不得把隐藏/不可访问的 schedule 算作已停用。
+如果 old_disarm_references 不为 0，核验者必须停在本步并在确认点 1 之前交 Owner 裁决（#3723 §3.6.3 第 2 条）。
 
 ### 4. Owner 确认点 1：开始窗口，关闭 schedule
 
@@ -198,7 +204,8 @@ ROLLBACK;
 ### 8. 发包、八个旧版本恢复发布、scan
 
 **执行者：发包执行者。** 恢复发布依赖 git 树对象，因此命令从已冻结激活 SHA 的 git 检出运行；包写入站点包源。
-`B6_PACKAGES_ROOT` 取 SOP §0 导出站点环境的 `STP_AEE_NFS_ROOT/packages`，执行者必须核对它与控制面实际包源一致。
+先按 SOP §0 导出站点环境。`B6_PACKAGES_ROOT` 优先取 `STP_PACKAGES_ROOT`，未设置时回落到 `STP_AEE_NFS_ROOT/packages`；顺序与 scan 的 `default_packages_root()` 相同。
+发包执行者必须在发布根打印 `default_packages_root()`。发包执行者必须将输出与选定目录比较。只有两个路径相同，发包执行者才可以继续发包。
 
 ```sql
 BEGIN READ ONLY;
@@ -211,9 +218,19 @@ ROLLBACK;
 预期：0。以下 manifest 校验从已测检出读取，不改登记与冻结包：
 
 ```bash
+B6_PACKAGES_ROOT="${STP_PACKAGES_ROOT:-${STP_AEE_NFS_ROOT:?按SOP导出站点环境}/packages}"
+cd "$B6_RELEASE"
+B6_SCAN_PACKAGES_ROOT=$(venv/bin/python - <<'PY'
+from backend.services.script_catalog import default_packages_root
+root=default_packages_root()
+assert root is not None, 'packages root undefined'
+print(root)
+PY
+)
+printf 'publish packages root: %s\nscan packages root: %s\n' "$B6_PACKAGES_ROOT" "$B6_SCAN_PACKAGES_ROOT"
+test "$B6_PACKAGES_ROOT" = "$B6_SCAN_PACKAGES_ROOT"
 cd "$B6_REPO"
 test "$(git rev-parse HEAD)" = "$B6_ACTIVATION_SHA"
-B6_PACKAGES_ROOT="${STP_AEE_NFS_ROOT:?按SOP导出站点环境}/packages"
 ./scripts/project_python.sh - <<'PY'
 import json
 from pathlib import Path
@@ -246,11 +263,11 @@ curl --fail-with-body -sS -H "$AUTH" 'http://127.0.0.1:8000/api/v1/scripts?is_ac
     any(.[]; .name=="powercycle_finish" and .version=="1.1.0")'
 ```
 
-预期：正常发包成功写入或同字节跳过；八次 restored 均 `[OK] publish-restored`，新版本 SHA 与 manifest 相同。
+预期：打印的两个包源路径相同、test exit=0；正常发包成功写入或同字节跳过；八次 restored 均 `[OK] publish-restored`，新版本 SHA 与 manifest 相同。
 scan HTTP 200、conflicts/package_conflicts 为空；八个旧版本 inactive；package_missing 仅剩 #3661 明确登记的存量，且没有 powercycle_disarm/powercycle_finish。
 `--publish` 会核对每族最新包并派生 manifest 副本，不是按版本过滤的命令；执行者必须记录实际新落位清单。
 审计预期：本地发包不写 audit_logs，保留工具回执；scan 写一条 `action=scan, resource_type=script`，附录 A 只读回查其计数摘要。
-**停止：** 旧引用不为零、树对象不可达、SHA/retired 状态不符、工具退出非零、scan 非 200、任何 conflict 或超出 #3661 的缺包。
+**停止：** 旧引用不为零、包源未配置或两个路径不同、树对象不可达、SHA/retired 状态不符、工具退出非零、scan 非 200、任何 conflict 或超出 #3661 的缺包。
 执行者不得用 force_rebaseline 消除冲突。执行者不得改写旧包或 manifest。
 
 ### 9. 同步告警副本，再换前端
@@ -305,8 +322,22 @@ PY
 )
 printf '%s\n' "$B6_CATALOG_VERSION" > "$B6_EVIDENCE_DIR/catalog-version.txt"
 curl --fail-with-body -sS -H "$AUTH" "http://127.0.0.1:8000/api/v1/hosts/$B6_CANARY_HOST_ID" \
-  | jq -e --arg v "$B6_CATALOG_VERSION" '.status=="ONLINE" and .agent_code_sync_status=="matched" and .script_catalog_version==$v'
+  | jq -e '.status=="ONLINE" and .agent_code_sync_status=="matched"'
 ```
+
+上述 hosts API 不返回 script_catalog_version。重开 §0 的 psql 入口，传入本步的 `B6_CATALOG_VERSION` 与 `B6_CANARY_HOST_ID`，只读核对目录列：
+
+```sql
+BEGIN READ ONLY;
+SELECT id, status, script_catalog_version FROM host
+WHERE id=:'b6_canary_host_id' AND retired_at IS NULL AND status='ONLINE';
+SELECT id, status, script_catalog_version FROM host
+WHERE id=:'b6_canary_host_id' AND retired_at IS NULL AND status='ONLINE'
+  AND script_catalog_version IS DISTINCT FROM :'b6_catalog_version';
+ROLLBACK;
+```
+
+预期：第一条恰好 1 行，证明 canary 存在、未退役且 ONLINE；第二条 0 行，证明目录版本相同。NULL 也属于版本不符。
 
 主机侧核验使用既有 SSH 访问配置。核验者不得在文档中填主机地址或凭据。以下小程序仅只读包与 Agent 本地状态；不调用 LocalDB.initialize、不运行探针、不拉包：
 
@@ -359,8 +390,8 @@ presence refresh 写 host_script_presence 账本及 host.script_packages_mode，
 ```bash
 curl --fail-with-body -sS -H "$AUTH" 'http://127.0.0.1:8000/api/v1/hosts?limit=200' \
   > "$B6_EVIDENCE_DIR/hosts-after.json"
-jq -e --arg v "$B6_CATALOG_VERSION" '.total<=200 and all(.items[] | select(.status=="ONLINE");
-  .agent_code_sync_status=="matched" and .script_catalog_version==$v)' "$B6_EVIDENCE_DIR/hosts-after.json"
+jq -e '.total<=200 and all(.items[] | select(.status=="ONLINE");
+  .agent_code_sync_status=="matched")' "$B6_EVIDENCE_DIR/hosts-after.json"
 jq -r '.items[] | select(.status=="ONLINE") | .id' "$B6_EVIDENCE_DIR/hosts-after.json" \
   | sort > "$B6_EVIDENCE_DIR/online-host-ids.txt"
 cut -f1 "$B6_EVIDENCE_DIR/online-hosts-ssh.tsv" | sort > "$B6_EVIDENCE_DIR/ssh-host-ids.txt"
@@ -371,7 +402,18 @@ while IFS=$'\t' read -r B6_HOST_ID B6_SSH_TARGET; do
 done < "$B6_EVIDENCE_DIR/online-hosts-ssh.tsv"
 ```
 
-预期：SUMMARY fail=0，全部 ONLINE 在用主机 matched、目录版本一致、逐台包 SHA 一致且有成功回执。
+用 §0 的 psql 入口传入 `B6_CATALOG_VERSION`，只读查询目录版本不同的在用 ONLINE 主机：
+
+```sql
+BEGIN READ ONLY;
+SELECT id, status, script_catalog_version FROM host
+WHERE retired_at IS NULL AND status='ONLINE'
+  AND script_catalog_version IS DISTINCT FROM :'b6_catalog_version'
+ORDER BY id;
+ROLLBACK;
+```
+
+预期：SUMMARY fail=0，API 中全部 ONLINE 在用主机 matched；上述 SQL 为 0 行；逐台包 SHA 一致且有成功回执。
 核验者必须逐项核对 TSV 覆盖与结果文件。核验者不得以循环退出或已有旧文件代替逐台成功。
 离线主机按第 3 步列入补更清单；其重新上线后执行本步。核验者不得宣称旧 Agent 已具备 B6 能力。
 审计预期：批量 direct 路径写 hot_update_result，按 details.entry、host_id、ok/converged 回查；具体请求路径另可能写 hot_update。
@@ -557,13 +599,26 @@ done
 ### 17. L0/L1 只读核验，Owner 确认点 4 后做 L2，最后 L3
 
 **执行者：核验者；L2 由 Owner 指定执行者与独立设备。** L0 重读 SOP 的运行 bundle/前端入口与第 7 步 schema，均绑定本次激活 SHA。
-对 B6 主机目录与同步状态执行以下 GET；站点/各主机包 SHA 用第 10、11 步的完整只读命令复核，目录当前值用第 10 步的只读计算重取：
+先用第 10 步的只读计算重取 `B6_CATALOG_VERSION`，再用以下 GET 读取同步状态；站点/各主机包 SHA 用第 10、11 步的完整只读命令复核：
 
 ```bash
 curl --fail-with-body -sS -H "$AUTH" 'http://127.0.0.1:8000/api/v1/hosts?limit=200' \
-  | jq -e --arg v "$B6_CATALOG_VERSION" '.total<=200 and
-    all(.items[] | select(.status=="ONLINE"); .agent_code_sync_status=="matched" and .script_catalog_version==$v)'
+  | jq -e '.total<=200 and
+    all(.items[] | select(.status=="ONLINE"); .agent_code_sync_status=="matched")'
 ```
+
+重开 §0 的 psql 入口，传入重取的 `B6_CATALOG_VERSION`，只读核对目录版本：
+
+```sql
+BEGIN READ ONLY;
+SELECT id, status, script_catalog_version FROM host
+WHERE retired_at IS NULL AND status='ONLINE'
+  AND script_catalog_version IS DISTINCT FROM :'b6_catalog_version'
+ORDER BY id;
+ROLLBACK;
+```
+
+预期：GET 的 matched 断言成功，SQL 为 0 行；任何未退役 ONLINE 主机的 NULL 或不同版本都使本步停止。
 
 L1 查询第 16 步之后首批真实 job 的 init 检查。核验者不得额外派发来伪造只读证据：
 

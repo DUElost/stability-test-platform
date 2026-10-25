@@ -31,6 +31,25 @@ Class: process
 本轮只编写与验证文档。没有读取生产凭据、连接生产库、调用生产接口、部署、发包、scan、热更新、重指、初始化或操作设备。
 清单状态为「未执行」；PR 保持 Draft，规划者核对后由 Owner 转 Ready。
 
+### 2026-10-25 规划者核对返修
+
+按 [PR #3790 的规划者核对](https://github.com/DUElost/stability-test-platform/pull/3790#issuecomment-6393206957)
+处理三项必改。起始远端与 PR HEAD 为 `a51b56fd32769e1d57dd4671f649f8fef133e2da`，
+当前 main 为 `552f26a997b944819cf7c239f075c437461356e4`。
+从本地 `9b15283b1` fast-forward 到远端，保留 `ccf518af9f67bf27478a673889ad3f72dbdb4cdf` 与
+`a51b56fd32769e1d57dd4671f649f8fef133e2da` 两个 Update branch 合并提交，未覆盖他人提交。
+恢复原 Execution `b6-u7-3732-activation-docs`，三文件 scope 不变。
+
+1. 第 10、11、17 步：删除 hosts API 对 script_catalog_version 的读取，改用 host 表只读 SQL。
+   首轮把 ORM 列当作 HostOut 响应字段；HostOut 没有此字段，原 jq 会误停。
+   psql 入口补目录版本与 canary id 参数；canary 先证明存在、未退役且 ONLINE，再核对版本差异为 0 行。
+   全 ONLINE 闸门使用 IS DISTINCT FROM，NULL 也报差异；agent_code_sync_status 仍用 API。
+2. 第 8 步：包源优先 STP_PACKAGES_ROOT，回落 STP_AEE_NFS_ROOT/packages；在发布根用站点 env
+   打印 default_packages_root()，与发布目录相同后才继续。没有执行实际导入站点环境或发包命令。
+3. 第 3 步：增加八个旧版本的零引用查询；不为 0 时，确认点 1 之前停下交 Owner 裁决；第 8 步复查保留。
+
+本轮 diff 只改清单与本 Note；README 保留原登记。本轮没有处理第 15 步的非阻塞建议，没有改 18 步顺序、四个确认点或任何代码/测试。
+
 ## Alternatives
 
 - 在第 10 步提前重指或先建临时 Plan 来预热：不采用；违反批准顺序。裁定已提供不依赖重指的四项核验。
@@ -39,6 +58,8 @@ Class: process
   内联汇总复用 main 的分页与逐设备 dry-run 入口，按专项、状态、平台、型号聚合，不输出 summary 中的 serial。
 - 把初始化/清偿成功编成新审计事件，或用清偿成功日志判定：不采用；现有实现没有这些事件/日志，改查 stock/discharge 状态、条目与租约事实。
 - 控制面指回旧 rev 或把释放全部欠账作为恢复流程：不采用；前者不能识别新 migration，后者需要另行 Owner 授权。
+
+本轮不为目录版本补 API 字段：规划者已指定 SQL 查法，现有 host 列足够；改 HostOut 或测试会超出本轮范围。
 
 ## Verification
 
@@ -150,6 +171,45 @@ Class: process
 - `git diff --check`（staged 与 unstaged）：exit 0。实际 diff 只含上述三份 Markdown；没有代码、冻结包、测试或生产配置变更。
 - 最终 HEAD 的 required CI：pending；激活 SHA 的完整测试、窗口操作与 L0–L3：pending，留待本清单合入后另行授权执行。
 
+### 2026-10-25 返修核对与验证
+
+- `git fetch origin main docs/b6-u7-activation-runbook`、`git merge --ff-only origin/docs/b6-u7-activation-runbook`：exit 0；
+  以上两个 Update branch 提交均已保留，main 与 PR 完整 HEAD 如本轮 Decision 所列。
+- `./scripts/project_python.sh tools/dev/ai_work.py status --risk` 与 `resume --id b6-u7-3732-activation-docs`：exit 0；保留原三文件 scope。
+- main 代码复核：`backend/api/schemas/host.py::HostOut` 无 script_catalog_version、有 agent_code_sync_status；
+  `backend/models/host.py::Host` 有 script_catalog_version、retired_at、status；
+  `backend/services/script_catalog.py::default_packages_root` 优先 STP_PACKAGES_ROOT，回落 STP_AEE_NFS_ROOT/packages。
+  相邻既有测试为 `backend/tests/api/test_heartbeat.py` 的目录版本上报/过时判断与 `backend/tests/api/test_scripts.py` 的包源未配置分支；仅阅读，未改测试。
+- `env -i PATH="$PATH" HOME="$HOME" TESTING=1 ./scripts/project_python.sh -`（内联隔离/离线验证）：exit 0。
+  20 段 bash -n、5 段 Python AST、24 个 jq 过滤器编译通过；从 main 抽取 default_packages_root 的纯函数，
+  在 5 组合成环境中核对优先路径、仅优先路径、空值回落、未设回落与未配置拒绝。没有导入发布根或站点 env。
+  使用实际 HostOut.model_fields 与合成 HostOut 响应核对三步的 jq：matched 通过、drift 拒绝；目录列只从 Host 表读取。
+  11 段 SQL、21 条 SELECT 全部在新建 testcontainers PostgreSQL 16（512 MiB 上限）的 READ ONLY 事务中执行通过，
+  SHOW transaction_read_only=on，全部 rollback；仅在该隔离库准备 fixture，容器已停止。
+  合成数据另验证 NULL/版本不同会报差异、离线/退役不入 ONLINE 闸门、canary 不存在/离线/退役时第一条查询为 0 行，
+  全匹配时差异为 0 行；旧版本引用数为 0/非 0 两个分支均核对，禁用步骤的旧引用也会被计入。
+  本轮不沿用首轮文件/符号存在即字段可读的判断；没有运行任何清单生产步骤。
+- `env -i PATH="$PATH" HOME="$HOME" ./scripts/project_python.sh scripts/run_gates.py check:quick`：exit 0，16 gates 通过；
+  schema-at-head 因未配置 DATABASE_URL 明确 WARN/跳过。日志：本机会话产物 `r2-activation-check-quick.log`。
+- `git diff --check`（staged/unstaged）：exit 0；本轮 diff 只有清单与本 Note，PR 对 main 仍只有原三份 Markdown。
+- 项目 Python 内联链接/范围核验：exit 0；两份改动文档的 7 个相对链接及锚点通过，只有回环地址。
+  对起始 PR HEAD 逐节比较，只有第 3/8/10/11/17 步与共享 psql 入口改变，回退节和附录不变。
+  此核验脚本初版误将第 2 步标题当作二级回退节边界而失败（Python exit 1）；改为锚定二级标题后通过，没有因此改清单。
+- 新 HEAD 的 required CI：pending；清单中的全部生产步骤仍未执行。
+
+### 本轮改动句子的 ADR-0059 自查
+
+以下对应本轮新写/改动的句子；第 3、4 项替代首轮第 23 项的包源规则写法，其余未触碰规则不迁移。
+
+1. 「核验者更新上述 shell 变量后必须重新启动此 psql 入口」：D2.2、D3.1；明确 psql 会话与 shell 变量不同，入口列出参数，D4.6。
+2. 「如果 old_disarm_references 不为 0，核验者必须停在本步并在确认点 1 之前交 Owner 裁决」：D3.1、D4.2；零引用查法与 count=0 预期同处，D4.6。
+3. 「发包执行者必须在发布根打印 default_packages_root()」「发包执行者必须将输出与选定目录比较」：两句各一个动作，D3.1、D4.1、D4.6。
+4. 「只有两个路径相同，发包执行者才可以继续发包」：D3.1、D4.2；条件在前，打印/test 的预期与停止条件明确，D4.5–6。
+5. 第 10 步「重开 §0 的 psql 入口」与两条 SELECT：D3.5、D4.1、D4.4–6；先证明 canary 行存在且在用/ONLINE，再要求版本差异为 0 行。
+6. 第 11 步「只读查询目录版本不同的在用 ONLINE 主机」与第 17 步同项核对：D2.2、D3.5、D4.6；退役、离线与 NULL 的处理有明确 SQL 和预期。
+7. 第 17 步「先用第 10 步的只读计算重取 B6_CATALOG_VERSION，再用以下 GET 读取同步状态」：D3.5、D4.2、D4.6；值重取在 SQL 参数传入前，GET 只读 HostOut 已有字段。
+8. 改动中的 host、HostOut、ONLINE、IS DISTINCT FROM 与环境变量沿用机器标识：D2.1–2、D2.4；没有新增术语表，D2.3、D2.5；清单「最后更新」为本轮同日 2026-10-25。
+
 ### ADR-0059 写作约定自查
 
 以下只列本次新写的规则句与步骤；编号均指 ADR-0059。README 新行是「未执行」索引描述，没有新增规则或术语表。
@@ -222,3 +282,5 @@ Class: process
 规划者核对清单后，由 Owner 决定 Ready 与维护窗口。激活 SHA 的完整测试、四次确认、生产结果与 L0–L3 都是后续执行证据，本 PR 不代签。
 如果 main 的命令、响应、八版本表或批准步骤变化，重新绑定代码与权威正文；存在方案/代码冲突时先在 #3723「退回：U7」，不扩到代码或测试。
 激活生效并贴证据后另开文档收尾 PR；本清单的「未执行」状态只由真实执行记录更新。
+
+规划者第 15 步的非阻塞建议（一轮清偿的只读完成判据与串行/预算说明）本轮未处理，仍为 pending。
