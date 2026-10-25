@@ -83,8 +83,9 @@ logger = logging.getLogger(__name__)
 DEBT_LEASE_REASON = "归还欠账"
 DEBT_LEASE_HOLDER = "platform"
 DEBT_LEASE_AGENT_INSTANCE_ID = "platform"
-# Schema filler only — release decisions never read this for debt leases.
-_DEBT_LEASE_EXPIRES_AT = datetime(9999, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
+# Decodable in every session timezone from UTC-12 to UTC+14. Schema filler only:
+# debt-lease identification and release decisions never read this field.
+_DEBT_LEASE_EXPIRES_AT = datetime(9999, 1, 1, tzinfo=timezone.utc)
 
 _SOURCE_KIND_JOB = "job"
 _SOURCE_KIND_STOCK = "stock"
