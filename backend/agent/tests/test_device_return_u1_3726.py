@@ -772,6 +772,7 @@ class TestGracefulShutdownIncompleteOutboxDurability:
         db_path = tmp_path / "isolated-agent.db"
         db = LocalDB()
         db.initialize(str(db_path))
+        db.save_active_job(42, 1, "lease-token-42")
         scheduler = OperationScheduler(max_concurrent=1)
         engine = _bare_engine(scheduler=scheduler, run_id=42, device_id=1)
         engine._footprint_families = {"power-cycle"}
@@ -780,8 +781,8 @@ class TestGracefulShutdownIncompleteOutboxDurability:
             active_jobs_lock=threading.RLock(),
             active_job_ids={42},
             active_device_ids={1},
-            active_job_tokens={42: "test-token"},
-            running_worker_tokens={42: "test-token"},
+            active_job_tokens={42: "worker-42-u1"},
+            running_worker_tokens={42: "worker-42-u1"},
             watcher_globally_enabled=False,
             watcher_plan_default=False,
             lock_register=MagicMock(),
@@ -789,7 +790,7 @@ class TestGracefulShutdownIncompleteOutboxDurability:
             device_id_register=MagicMock(),
             device_id_deregister=MagicMock(),
         )
-        state.attach_runner(42, "test-token", engine)
+        state.attach_runner(42, "worker-42-u1", engine)
 
         started = threading.Event()
         release = threading.Event()
@@ -816,7 +817,7 @@ class TestGracefulShutdownIncompleteOutboxDurability:
                     "exit_code": 0,
                     "disarm_results": result.metadata["disarm_results"],
                 },
-                fencing_token="test-token",
+                fencing_token="lease-token-42",
                 local_db=db,
             )
 
@@ -940,12 +941,15 @@ class TestGracefulShutdownIncompleteOutboxDurability:
         engine = _bare_engine(run_id=7)
         engine._footprint_families = {"power-cycle"}
         engine._disarm_results = {}
-        runner.active_runners = {7: ("tok-7", engine)}
-        runner.active_job_tokens = {7: "tok-7"}
+        runner.active_runners = {7: ("worker-7-u1", engine)}
+        runner.active_job_tokens = {7: "worker-7-u1"}
         runner.request_abort.side_effect = lambda jid: None
 
         order: list[str] = []
         local_db = MagicMock()
+        local_db.get_active_jobs.return_value = [
+            {"job_id": 7, "fencing_token": "lease-token-7"},
+        ]
 
         def enqueue(job_id, payload):
             order.append("persist")
