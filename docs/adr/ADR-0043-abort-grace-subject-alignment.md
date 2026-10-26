@@ -9,7 +9,7 @@
 - 标签：abort, 租约, 超时兜底, 共享状态, #2050, #1928, #1880, #2154
 - 关联：[ADR-0021](./ADR-0021-script-content-alignment-gate.md)（维护窗口/升级门禁，host 级 abort 的调用方）、[ADR-0026](./ADR-0026-plan-execution-scaling.md)（规模化执行，reaper 归属面）、[ADR-0019](./ADR-0019-android-device-lease-and-capacity-scheduling.md)（设备租约 TTL/grace，**不同对象**，本 ADR 不裁决）、[ADR-0027](./ADR-0027-control-plane-horizontal-scaling.md)（多实例下 reaper 归属，本 ADR 不引入跨实例协调）
 
-> **后续修订（自 B6 激活起生效）**：[ADR-0061](./ADR-0061-device-return-contract.md) D3 第 8 条
+> **后续修订（B6 已于 2026-10-25 激活）**：[ADR-0061](./ADR-0061-device-return-contract.md) D3 第 8 条
 > 将解除宽限改为排队/执行分别取证且有整 job 绝对上限；D3 第 5 条与 D5 第 2、3 条修订终态回收后果为统一判定释放或转换欠账。
 > UNKNOWN 阶段继续保留 JOB 租约；原决策正文保留，相关行为以该修订为准。
 

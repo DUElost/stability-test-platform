@@ -15,9 +15,9 @@
 | [`center-storage-hardlink-dedup.md`](./center-storage-hardlink-dedup.md) | 中心存储 devices/ 跨 run 硬链接去重（过渡措施，按需；磁盘水位告警提示时执行） |
 | [`installation.md`](./installation.md) | **独立站点安装**：`deploy/preflight.sh` → `install.sh` → `agent/install.sh` → verify → handover 全流程、inventory 契约与常见 Fix 对照 |
 | [`site-handover-and-navigation.md`](./site-handover-and-navigation.md) | 独立站点导航入口 /site/、交接证据 handover.json（MS-01…MS-13 的 P1 映射）与签字清单 |
-| [`device-lease-emergency-release.md`](./device-lease-emergency-release.md) | ACTIVE 设备租约紧急释放与回查，分 B6 激活前/后流程；自 B6 激活起，欠账 MAINTENANCE 租约返回 409，转清偿或人工放行 |
+| [`device-lease-emergency-release.md`](./device-lease-emergency-release.md) | ACTIVE 设备租约紧急释放与回查；欠账 MAINTENANCE 租约返回 409，转清偿或人工放行 |
 | [`2026-09-24-capacity-p0-rollout-runbook.md`](./2026-09-24-capacity-p0-rollout-runbook.md) | **容量 P0 同窗上线手册**（未执行）：控制面 unit 预算门禁/start-limit、Prometheus 平台副本同步、Agent #3242 分发、真机复跑观测（#2959 / #3244 门槛） |
-| [`2026-10-25-b6-device-return-activation-runbook.md`](./2026-10-25-b6-device-return-activation-runbook.md) | **B6 设备归还激活清单（未执行）**：18 步、四个 Owner 确认点、发包/恢复发布、能力核验、初始化/清偿、分层验收与文档收尾 |
+| [`2026-10-25-b6-device-return-activation-runbook.md`](./2026-10-25-b6-device-return-activation-runbook.md) | **B6 设备归还激活清单（已执行：2026-10-25 至 10-26）**：[生效证据](https://github.com/DUElost/stability-test-platform/issues/3723#issuecomment-6412678344)；18 步、四个 Owner 确认点、发包/恢复发布、能力核验、初始化/清偿、分层验收与文档收尾 |
 
 ---
 
@@ -30,8 +30,8 @@
 | [`device-log-event-recovery.md`](./device-log-event-recovery.md) | 无 DLE 行的存量事件目录补录与重提取 |
 | [`host-device-visibility-triage.md`](./host-device-visibility-triage.md) | 设备从 adb 消失 / 页面上「在线 vs USB」差值的四层判别（内核 · adb server · adbd · USB 功能集），含只读命令与 2026-09-14 实证 |
 | [`honor-flash-runbook.md`](./honor-flash-runbook.md) | Honor 刷机：固件上架（manifest/latest.json）、MLD 刷机 Plan、单台验证与放量 |
-| [`powercycle-chain-disarm-runbook.md`](./powercycle-chain-disarm-runbook.md) | 开关机专项：激活前解除核验、一台一 run 与交付前拦截原样保留，过渡出口为 ADR-0061 阶段 B 生效；自 B6 激活起按 §5 排查归还证据、清偿与人工放行 |
-| [`07-execution-protocol.md` §9](../design/07-execution-protocol.md#9-b6-执行与设备归还自-b6-激活起生效) | 自 B6 激活起生效的执行与归还协议：disarm_results、有界保护、统一核验、欠账生命周期、init 检查及版本交错兼容 |
+| [`powercycle-chain-disarm-runbook.md`](./powercycle-chain-disarm-runbook.md) | 开关机专项设备归还排障：按 §1 读取归还证据、排查清偿与组合核验，执行人工放行及后续 init 检查 |
+| [`07-execution-protocol.md` §9](../design/07-execution-protocol.md#9-b6-执行与设备归还) | 执行与设备归还协议：disarm_results、有界保护、统一核验、欠账生命周期、init 检查及版本交错兼容 |
 | [`linux-agent-ansible-runbook.md`](../linux-agent-ansible-runbook.md) | Ansible 批量 |
 | [`wsl-linux-agent-setup.md`](../wsl-linux-agent-setup.md) | WSL 联调 |
 | [`tools/ansible/README.md`](../../tools/ansible/README.md) | Playbook 说明 |

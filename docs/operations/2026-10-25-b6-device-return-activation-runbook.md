@@ -1,6 +1,8 @@
 # B6 设备归还激活清单
 
-> **状态：未执行。最后更新：2026-10-25。** 本文是 U7 第二个 PR 的执行清单，不是激活记录。
+> **执行状态：已执行（2026-10-25 至 2026-10-26）。最后更新：2026-10-26。**
+> 生效证据见 [#3723 评论 6412678344](https://github.com/DUElost/stability-test-platform/issues/3723#issuecomment-6412678344)。
+> 下文保留窗口执行清单，执行结果以生效证据为准。
 > 依据：[#3723 当前正文](https://github.com/DUElost/stability-test-platform/issues/3723) v1.7.21 §3.6.3、§3.7、§5，
 > [Owner 批准的草案 v0.1](https://github.com/DUElost/stability-test-platform/issues/3723#issuecomment-6385265226)，
 > 以及[第 10、11 步的规划者裁定](https://github.com/DUElost/stability-test-platform/issues/3723#issuecomment-6387873600)。
@@ -547,7 +549,7 @@ ROLLBACK;
 预期：CLI exit=0、failed/conflict_exhausted=0；第一条查询 0 行，欠账租约 holder=platform、reason=归还欠账。
 apply 后自动清偿可能立即关闭部分条目；只核对仍有 open 条目的设备。核验者不得把正常释放误判为少租约。
 审计预期：初始化没有专门 init 审计行；device.return_state 的 stock 来源、stock 条目、创建时间与 CLI 回执是事实证据。
-人工放行另按[开关机手册 §5.3](./powercycle-chain-disarm-runbook.md#53-人工放行与后续-init自-b6-激活起生效)调用既有接口，预期 device_return_override 审计、unverified/override 与关闭原因 overridden。
+人工放行另按[开关机手册 §1.3](./powercycle-chain-disarm-runbook.md#13-人工放行与后续-init)调用既有接口，预期 device_return_override 审计、unverified/override 与关闭原因 overridden。
 **停止：** 未确认、CLI 非零、任何未退役欠账设备租约数不为 1、载体标志不符或放行证据不满足口径。
 
 ### 15. 等待一轮清偿并统计剩余欠账
@@ -701,4 +703,4 @@ ROLLBACK;
 ```
 
 执行者不得为没有专门审计行的步骤补写假审计。核验者必须按事实来源回查：发包看 SHA/文件与工具回执，toggle 看状态和 HTTP 回执，初始化看 stock 状态/条目/租约，清偿看 discharge 与 discharged，部署看 manifest/unit/health。
-业务语义与入口索引见[执行协议 §9](../design/07-execution-protocol.md#9-b6-执行与设备归还自-b6-激活起生效)。
+业务语义与入口索引见[执行协议 §9](../design/07-execution-protocol.md#9-b6-执行与设备归还)。
