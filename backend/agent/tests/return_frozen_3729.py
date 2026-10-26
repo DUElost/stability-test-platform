@@ -26,6 +26,9 @@ ROOT = Path(__file__).resolve().parents[3]
 
 class FrozenReturnDevice:
     def __init__(self, monkeypatch, tmp_path, *, kind="clear", trusted=True, supported=True):
+        # This B6 fixture supplies only the frozen power-cycle package/device.
+        # B7 covers both registered families in its separate init checks.
+        monkeypatch.delitem(ONBOARDED, "gpu", raising=False)
         self.kind, self.trusted = kind, trusted
         self.alive = kind == "footprint"
         self.writes: list[str] = []

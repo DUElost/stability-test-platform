@@ -14,7 +14,7 @@ from .device_platform import detect_device_platform
 from .device_return import run_init_checks
 from .contracts.device_return import (
     disarm_execution_budget, probe_result_policy, PLATFORM_INTERRUPTED_EXIT_CODES,
-    DISARM_QUEUE_SECONDS, DISARM_JOB_MAX_SECONDS,
+    DISARM_QUEUE_SECONDS, DISARM_JOB_MAX_SECONDS, PROBE_READBACK_VALUES,
 )
 import codecs
 
@@ -3122,6 +3122,8 @@ class PipelineEngine:
                     package_sha256=package_sha, token_valid=not self._lease_lost_for_disarm)
                 value = policy["result"] if parsed.get("evidence") else (
                     DISARM_RESULT_EXECUTED_UNVERIFIED if success is True else DISARM_RESULT_FAILED)
+                if "readback" in parsed and parsed["readback"] not in PROBE_READBACK_VALUES:
+                    value = DISARM_RESULT_FAILED
         reason = ""
         if lease_lost:
             reason = LEASE_LOST_REASON

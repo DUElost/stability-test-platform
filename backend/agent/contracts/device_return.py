@@ -1,8 +1,7 @@
 """Device-return contract shared by Agent and control plane (ADR-0061 / #3723).
 
-U1 owns machine values, FAMILY_STEPS, footprint helpers, lease-lost conflict
-handling, and EXECUTING_DISARM. U5 (#3730) appends power-cycle ONBOARDED,
-job-level step-role helpers (§3.0.2 / §3.6.2), and Plan save-shape checks (§3.6.5).
+Machine values, family registrations, version roles and probe policy live here.
+Power-cycle follows #3723; GPU onboarding follows #3809 §3.1 (B7 U1).
 """
 
 from __future__ import annotations
@@ -104,7 +103,7 @@ FAMILY_STEPS: dict[str, dict[str, tuple[str, ...]]] = {
     "gpu": {
         "footprint": ("gpu_setup",),
         "disarm": ("gpu_finish",),
-        "disarm_onboarded": ("gpu_finish",),
+        "disarm_onboarded": ("gpu_disarm",),
     },
     "monkey": {
         "footprint": ("monkey_setup", "monkey_launch", "monkey_test"),
@@ -113,7 +112,7 @@ FAMILY_STEPS: dict[str, dict[str, tuple[str, ...]]] = {
     },
 }
 
-# §3.0 第 2 / 6 条 / U5：已接入专项契约（本批仅 power-cycle）。
+# 已接入专项契约（#3723 / #3809 §3.1）。
 # verified_device_classes 仅在本共享契约登记（U8 可信组合政策）；探针包不得内置副本
 # （#3723 v1.7.1 §3.6.1.7）。真机未验证前保持空。
 
@@ -131,6 +130,26 @@ def _pc_finish_min_wall(params: Mapping[str, Any] | None) -> int:
     attempts = max(1, int(p.get("collect_attempts", 3) or 3))
     retry_wait = int(p.get("collect_retry_wait_seconds", 120) or 120)
     return attempts * retry_wait + 60
+
+
+def _gpu_disarm_min_wall(params: Mapping[str, Any] | None) -> int:
+    """Offline wait plus 600s for bounded identity/stop/restore/readback I/O.
+
+    The execution allowance covers twenty 30s calls; U2 must fit its final
+    script's worst-case work within this registered wall clock (#3809 §3.2.5).
+    """
+    p = params or {}
+    wait = max(0, int(p.get("wait_device_online_seconds", 600) or 600))
+    return wait + 600
+
+
+# Tool identity is family-specific; combination values remain evidence-owned.
+# GPU uses the host test APK identity already reported by gpu_setup.
+PROBE_TOOL_IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
+    "power-cycle": ("autotesttool_apk_sha256",),
+    "gpu": ("apk_sha256",),
+}
+PROBE_READBACK_VALUES = ("clear", "footprint", "absent", "not_installed", "readback_failed")
 
 
 ONBOARDED: dict[str, Any] = {
@@ -176,6 +195,23 @@ ONBOARDED: dict[str, Any] = {
             "powercycle_disarm": _pc_disarm_min_wall,
             "powercycle_finish": _pc_finish_min_wall,
         },
+    },
+    "gpu": {
+        "footprints": (
+            "process:gpu_stress_loop.sh, TestStressGpu / AndroidJUnitRunner",
+            "file:/sdcard/Auto/gpu_stress_loop.sh",
+            "setting:global airplane_mode_on=0",
+            "setting:wifi enabled",
+        ),
+        "disarm_script": "gpu_disarm",
+        "disarm_min_version": "1.0.0",
+        "finish_script": "gpu_finish",
+        "finish_min_version": "1.1.0",
+        "probe_modes": ("probe", "disarm"),
+        # U2 real-device evidence must be accepted before adding combinations.
+        "verified_device_classes": [],
+        "disarm_budget_seconds": _gpu_disarm_min_wall(None),
+        "min_wall_clock_seconds": {"gpu_disarm": _gpu_disarm_min_wall},
     },
 }
 
@@ -294,7 +330,10 @@ def step_version_of(step: Mapping[str, Any]) -> str:
 #: finish 版本中已登记为「只收取」的集合（#3723 §3.0.2 v1.7.8）。
 #: 数字上「大于等于 1.1」不等于 manifest 已知——未登记的数字版本一律按
 #: 承担解除处理并记 unknown_legacy_version。新增只收取版本时在此登记。
-FINISH_COLLECT_ONLY_VERSIONS = frozenset({"1.1.0"})
+FINISH_COLLECT_ONLY_VERSIONS: dict[str, frozenset[str]] = {
+    "powercycle_finish": frozenset({"1.1.0"}),
+    "gpu_finish": frozenset({"1.1.0"}),
+}
 
 
 def _finish_major_minor(version: str) -> tuple[int, int] | None:
@@ -318,7 +357,7 @@ def step_teardown_role(
     - ``collect``: registered collect-only finish version (currently 1.1.0)
     - ``unknown_legacy_disarm``: missing/unparsable/unregistered numeric finish
       version — conservative disarm
-    - ``None``: not a power-cycle teardown script we classify
+    - ``None``: not a registered family teardown script
 
     ``package_sha`` is accepted for shared-call signature parity (U8 freezes it);
     role does not currently branch on SHA — identity is (name, version) in manifest.
@@ -329,24 +368,22 @@ def step_teardown_role(
     _ = onboarded  # API parity with shared callers; role table is version-driven
     ver = (version or "").strip()
 
-    if script_name == "powercycle_disarm":
-        if not ver or not version_key(ver):
-            return STEP_ROLE_UNKNOWN_LEGACY_DISARM
-        return STEP_ROLE_DISARM
-
-    if script_name == "powercycle_finish":
+    if script_name in FINISH_COLLECT_ONLY_VERSIONS:
         if not ver or not version_key(ver):
             return STEP_ROLE_UNKNOWN_LEGACY_DISARM
         # v1.7.8（复核第 1 轮 F2）：只有显式登记为只收取的版本才判 collect；
         # 能解析成数字不等于 manifest 已知（1.1.1、2.0.0 从未登记）。
-        if ver in FINISH_COLLECT_ONLY_VERSIONS:
+        if ver in FINISH_COLLECT_ONLY_VERSIONS[script_name]:
             return STEP_ROLE_COLLECT
         if _finish_major_minor(ver) == (1, 0):
             return STEP_ROLE_DISARM
         return STEP_ROLE_UNKNOWN_LEGACY_DISARM
 
-    # Non-power-cycle: fall back to FAMILY_STEPS registry lists (no version split).
+    # Dedicated disarm scripts need a parseable version; historical combined
+    # teardown scripts for families not yet onboarded keep their old role.
     for _family, spec in FAMILY_STEPS.items():
+        if script_name in spec["disarm_onboarded"] and script_name not in spec["disarm"]:
+            return STEP_ROLE_DISARM if version_key(ver) else STEP_ROLE_UNKNOWN_LEGACY_DISARM
         if script_name in spec["disarm"] or script_name in spec["disarm_onboarded"]:
             return STEP_ROLE_DISARM
     return None
@@ -366,7 +403,7 @@ def is_disarm_script(
 ) -> bool:
     """True when the script is a disarm obligation for a footprint family.
 
-    Version-aware for power-cycle (#3723 §3.0.2): finish@1.1.0 is collect-only
+    Version-aware for onboarded families: finish@1.1.0 is collect-only
     and must not count as disarm; finish@1.0.x and unknown still do.
     """
     if not script_name:
@@ -678,11 +715,12 @@ def probe_result_policy(
         "platform": platform,
         "model": model,
         "permission_model": evidence.get("permission_model"),
-        "autotesttool_apk_sha256": evidence.get("autotesttool_apk_sha256"),
         "script_name": script_name,
         "script_version": script_version,
         "package_sha256": package_sha256,
     }
+    identity_fields = PROBE_TOOL_IDENTITY_FIELDS.get(family, ())
+    observed.update({key: evidence.get(key) for key in identity_fields})
     combinations = (registry.get(family) or {}).get("verified_device_classes") or []
     expected = [dict(c) for c in combinations if isinstance(c, Mapping)]
     match = next((c for c in expected if c.get("report_ref")
@@ -692,7 +730,7 @@ def probe_result_policy(
         reason = "token_invalid"
     elif observed["permission_model"] not in ("root", "non-root"):
         reason = "permission_unknown"
-    elif not all(observed.values()):
+    elif not identity_fields or not all(observed.values()):
         reason = "identity_missing"
     elif evidence.get("package_sha256") != package_sha256:
         reason = "package_mismatch"
@@ -707,7 +745,9 @@ def probe_result_policy(
     successful = evidence.get("success") is True
     kind = evidence.get("kind")
     verified = not reason
-    if mode == "probe":
+    if raw not in PROBE_READBACK_VALUES:
+        result = DISARM_RESULT_FAILED
+    elif mode == "probe":
         result = (DISARM_RESULT_CONFIRMED if verified and raw == "clear" and kind == "ok"
                   else DISARM_RESULT_FAILED)
     elif mode == "disarm":
