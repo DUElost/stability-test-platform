@@ -93,6 +93,10 @@
         AGENT_NFS_ROOT: "{{ agent_nfs_root | default('', true) }}"
         AGENT_LOCAL_AEE_ROOT: "{{ agent_local_aee_root | default('', true) }}"
 
+    - name: Apply the shared host journal baseline (#3804)
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../roles/agent_deploy/tasks/journald.yml"
+      tags: [journald]
+
     # ── 中心存储挂载（#2181）─────────────────────────────────────────────
     # 安装脚本已建好挂载点，这里把站点导出的子树挂上并持久化。挂载失败只降级为
     # 提示——Agent 用本地落点仍可运行，S5 的存储断言会如实报 FAIL，不在这里掩盖。

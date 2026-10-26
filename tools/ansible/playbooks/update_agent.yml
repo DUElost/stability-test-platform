@@ -169,6 +169,10 @@
       ansible.builtin.include_tasks: "{{ playbook_dir }}/../roles/agent_deploy/tasks/logrotate.yml"
       tags: ["logrotate"]
 
+    - name: Apply the shared host journal baseline (#3804)
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../roles/agent_deploy/tasks/journald.yml"
+      tags: [journald]
+
     - name: Capture installed requirements.txt sha before sync
       become: true
       ansible.builtin.command: "sha256sum {{ agent_install_dir }}/agent/requirements.txt"
