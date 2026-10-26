@@ -234,7 +234,7 @@ Agent 必须按 job 冻结的实际步骤版本选择解除义务：旧 `powercy
 代码入口：`backend/agent/pipeline_engine.py` 的 `PipelineEngine.cancel`、`_run_step_with_permit`、`_teardown_lease_lost`、
 `_begin_disarm_tail`、`_publish_disarm_phase`、`_execute_teardown_best_effort`，同文件的 `_pump_process`；
 `backend/agent/recovery_executor.py` 的 `_cleanup_after_job_exit`；
-`backend/agent/graceful_shutdown.py` 的 `graceful_shutdown`、`_persist_incomplete_disarm_to_outbox`；
+`backend/agent/graceful_shutdown.py` 的 `shutdown_agent_runtime`、`_persist_incomplete_disarm_to_outbox`；
 `backend/agent/contracts/device_return.py` 的 `select_disarm_steps`、`freeze_disarm_guard`、`receive_disarm_evidence`、`disarm_guard_deadline`；
 `backend/agent/coordinator.py` 的 `HostRunCoordinator._loop`、`_tick`；
 `backend/agent/registry/local_db.py` 的 `LocalDB.load_disarm_state`、`save_disarm_state`；

@@ -53,7 +53,7 @@ Execution 为 `b6-u7-post-activation-3732`，关联 issue 为 #3732，test impac
 - `backend/agent/graceful_shutdown.py::_persist_incomplete_disarm_to_outbox`：
   先取 `local_db.get_active_jobs()` 返回的租约令牌，缺失时取 `lease_renewer.get_fencing_token(job_id)`；
   不使用 worker token 或 `active_job_tokens`，均无有效令牌时记录 `shutdown_incomplete_outbox_skip_no_token` 并跳过。
-  `graceful_shutdown` 保持 20 秒等待窗口，outbox drain、重试与死信规则未改。
+  `shutdown_agent_runtime` 保持 20 秒等待窗口，outbox drain、重试与死信规则未改。
 - `backend/services/device_return.py::_DEBT_LEASE_EXPIRES_AT` 为
   `datetime(9999, 1, 1, tzinfo=timezone.utc)`；新建及原地转换都使用此常量。
   `u9b6d3793a01_normalize_debt_lease_expiry.py` 将更晚值归一到同一 UTC 时刻，无状态或租约类型过滤。
@@ -76,6 +76,13 @@ Execution 为 `b6-u7-post-activation-3732`，关联 issue 为 #3732，test impac
   schema-at-head 明确 WARN/skip，此跳过不算数据库核验。存量 SyntaxWarning 原样保留。
 - `git diff --check`：rc=0。
 - CI 以本 PR 最终完整 HEAD 的 required checks 回执为准，交付回告另列；本地成功不代签 CI。
+
+第 1 轮复核 R1 返修：依据[权威复核评论](https://github.com/DUElost/stability-test-platform/pull/3803#issuecomment-6415108811)，
+将执行协议 §9.2 的停机函数索引与本 Note 的同名引用改为实际入口 `shutdown_agent_runtime`。
+本轮仅修改上述两个文档文件，原 Execution 与完整 scope 保留，运行时代码未改。
+`./scripts/project_python.sh -` 的离线 AST 事实核对：rc=0；源码存在 `shutdown_agent_runtime` 与
+`_persist_incomplete_disarm_to_outbox`，不存在旧的同名模块函数；文档中的两个函数索引均能解析。
+返修后的 `check:quick`、文档静态核对与 `git diff --check` 已按上方命令复跑，均 rc=0。
 
 ADR-0059 自查（仅本次新写或改动的句子）：
 
