@@ -1,0 +1,120 @@
+---
+# Shared host journal baseline. No Agent update, forced rotation, or vacuum.
+# Explicit tags are required on included tasks (same rule as logrotate.yml).
+- name: Read root filesystem capacity for the journal budget
+  tags: [journald]
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - "import os; s=os.statvfs('/'); print(s.f_blocks*s.f_frsize)"
+  register: journald_root_capacity
+  changed_when: false
+  check_mode: false
+
+- name: Select the host journal budget
+  tags: [journald]
+  ansible.builtin.set_fact:
+    journald_budget: >-
+      {{ journald_capacity_profiles[
+           'small' if (journald_root_capacity.stdout | int) < 68719476736
+           else 'standard' if (journald_root_capacity.stdout | int) < 274877906944
+           else 'large'] }}
+
+- name: Resolve explicit journal budget overrides
+  tags: [journald]
+  ansible.builtin.set_fact:
+    journald_max_use: "{{ journald_system_max_use | default(journald_budget.system_max_use, true) }}"
+    journald_keep_free: "{{ journald_system_keep_free | default(journald_budget.system_keep_free, true) }}"
+
+- name: Validate the journal budget before writing configuration
+  tags: [journald]
+  ansible.builtin.assert:
+    that:
+      - (journald_root_capacity.stdout | int) > 0
+      - journald_max_use is match('^[1-9][0-9]*[KMGT]$')
+      - journald_keep_free is match('^[1-9][0-9]*[KMGT]$')
+    fail_msg: "Journal budgets must be positive sizes with K/M/G/T units."
+
+- name: Capture the protected service process before journal configuration
+  tags: [journald]
+  ansible.builtin.command:
+    argv: [systemctl, show, "{{ journald_guard_service }}", --property=MainPID, --value]
+  register: journald_guard_before
+  changed_when: false
+  check_mode: false
+
+- name: Inspect the journal configuration directory
+  tags: [journald]
+  ansible.builtin.stat:
+    path: /etc/systemd/journald.conf.d
+  register: journald_directory_before
+
+- name: Ensure the journal configuration directory exists
+  tags: [journald]
+  become: true
+  ansible.builtin.file:
+    path: /etc/systemd/journald.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Write the host journal budget
+  tags: [journald]
+  become: true
+  # check mode cannot copy into a directory that it only simulated creating.
+  when: not ansible_check_mode or journald_directory_before.stat.exists
+  ansible.builtin.copy:
+    dest: /etc/systemd/journald.conf.d/60-stp-limits.conf
+    owner: root
+    group: root
+    mode: "0644"
+    backup: true
+    content: |
+      # Managed by STP Ansible (#3804).
+      [Journal]
+      SystemMaxUse={{ journald_max_use }}
+      SystemKeepFree={{ journald_keep_free }}
+  register: journald_budget_file
+
+- name: Show the intended journal budget
+  tags: [journald]
+  ansible.builtin.debug:
+    msg: "SystemMaxUse={{ journald_max_use }} SystemKeepFree={{ journald_keep_free }}"
+
+- name: Verify that no later drop-in overrides the journal budget
+  tags: [journald]
+  when: not ansible_check_mode
+  ansible.builtin.command:
+    argv: [systemd-analyze, cat-config, systemd/journald.conf]
+  register: journald_effective_config
+  changed_when: false
+  failed_when: >-
+    journald_effective_config.rc != 0 or
+    (journald_effective_config.stdout | regex_findall('(?m)^\s*SystemMaxUse\s*=\s*(\S+)\s*$') | last | default('')) != journald_max_use or
+    (journald_effective_config.stdout | regex_findall('(?m)^\s*SystemKeepFree\s*=\s*(\S+)\s*$') | last | default('')) != journald_keep_free
+
+- name: Activate changed journal configuration with one atomic service restart
+  tags: [journald]
+  become: true
+  when: not ansible_check_mode and journald_budget_file.changed | default(false)
+  ansible.builtin.systemd:
+    name: systemd-journald
+    state: restarted
+
+- name: Verify that the journal daemon is running
+  tags: [journald]
+  when: not ansible_check_mode
+  ansible.builtin.command:
+    argv: [systemctl, is-active, systemd-journald]
+  changed_when: false
+
+- name: Verify that the protected service process was preserved
+  tags: [journald]
+  when: not ansible_check_mode
+  ansible.builtin.command:
+    argv: [systemctl, show, "{{ journald_guard_service }}", --property=MainPID, --value]
+  register: journald_guard_after
+  changed_when: false
+  failed_when: journald_guard_after.rc != 0 or journald_guard_after.stdout != journald_guard_before.stdout

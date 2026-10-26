@@ -34,6 +34,7 @@
 - `tools/ansible/playbooks/update_agent.yml`：热更新
 - `tools/ansible/playbooks/service_agent.yml`：服务管理
 - `tools/ansible/playbooks/check_agent.yml`：状态检查
+- `tools/ansible/playbooks/configure_agents.yml`：主机配置，包括 journald 限额和 Agent 文件日志轮转
 - `tools/ansible/roles/agent_deploy/defaults/main.yml`：服务动作白名单等默认值
 
 建议先定义仓库根路径：
@@ -270,6 +271,42 @@ cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook p
 ```bash
 cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/check_agent.yml --limit 203.0.113.36
 ```
+
+### 主机 journald 容量基线（#3804）
+
+本基线控制主机默认 journal 的保留容量。Agent 文件日志继续由现有 logrotate 管理。
+`configure_agents.yml`、`install_agent.yml` 和 `update_agent.yml` 引用同一个共享 task；通过平台或 Ansible 接入的新主机同时配置该基线。
+
+默认预算按根分区总容量选择：小于 64 GiB 为 `SystemMaxUse=1G`、`SystemKeepFree=5G`；64 GiB 至小于 256 GiB 为 `2G`、`10G`；256 GiB 及以上为 `4G`、`20G`。
+`SystemKeepFree` 只约束 journald 的空间使用，不能代替其它数据的保留策略或整盘水位告警。
+执行者可以用 `journald_system_max_use` 与 `journald_system_keep_free` 声明角色预算。控制面执行者必须单独核定控制面预算。
+
+> 警告：较低限额生效后，journald 可以自然删除最旧的归档 journal。执行者必须先确认本次授权覆盖日志保留预算。执行者不得把系统 journal 限额当作删除业务证据的授权。
+
+按顺序执行以下步骤：
+
+1. 核对配置面清单与当前非退役主机的集合。执行者必须把不在 `agent_config` 中的在用 Agent 主机补入本次私有清单，并逐台记录离线或连接失败。
+2. 在清单上先运行只读预演：
+
+   ```bash
+   cd "$REPO_ROOT/tools/ansible"
+   ANSIBLE_CONFIG=./ansible.cfg ansible-playbook -i "$STP_FLEET_INVENTORY" \
+     playbooks/configure_agents.yml -e @group_vars/all.yml \
+     --tags journald --limit "$STP_CANARY" --check --diff
+   ```
+
+   预期：根分区容量与目标预算可见；没有配置写入或服务重启。
+3. 对同一台主机执行上条命令并移除 `--check --diff`。
+   预期：`60-stp-limits.conf` 落位、有效配置与预算一致、journald 为 active；Agent 的 MainPID 不变。
+4. 对同一台主机重跑第 3 步。
+   预期：配置任务 `changed=0`，journald 不因本次操作重启。
+5. 移除 `--limit "$STP_CANARY"` 后分批执行第 3 步的命令。
+   预期：当前清单全部有逐台结果；任一失败使后续批次停止。
+6. 在每台主机运行 `systemd-analyze cat-config systemd/journald.conf`、`systemctl is-active systemd-journald` 与 `systemctl show stability-test-agent -p MainPID`，复核有效预算、journal 服务态与操作前 Agent 进程记录。
+   预期：预算匹配、服务 active、Agent 进程保留；离线、失败与未核验分别列出。
+
+回退时，执行者必须恢复该文件的 Ansible 备份；原本不存在该文件时，执行者必须只删除 `60-stp-limits.conf`。
+随后执行者必须用一次 `systemctl restart systemd-journald` 激活回退配置，再核验服务状态。执行者不得拆成 stop 与 start；这会切断服务的日志流连接。已经自然淘汰的旧 journal 无法通过配置回退恢复。
 
 ### 单机重启服务
 

@@ -24,3 +24,11 @@ agent_install_dir: "/opt/stability-test-agent"
 # tags 影响（task 内另有 default 兜底）。
 agent_logrotate_size: "200M"
 agent_logrotate_rotate: 7
+
+# Host-wide journal budgets, selected by root filesystem capacity (#3804).
+# A role-specific override can set journald_system_max_use / journald_system_keep_free.
+journald_capacity_profiles:
+  small: {system_max_use: "1G", system_keep_free: "5G"}
+  standard: {system_max_use: "2G", system_keep_free: "10G"}
+  large: {system_max_use: "4G", system_keep_free: "20G"}
+journald_guard_service: "{{ agent_service_name | default('stability-test-agent') }}"

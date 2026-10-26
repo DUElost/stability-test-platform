@@ -17,6 +17,10 @@
 
   tasks:
     # ── 配置类 task（共享文件：与 update_agent.yml 单一维护点）──────────────
+    - name: Apply the shared host journal baseline (#3804)
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../roles/agent_deploy/tasks/journald.yml"
+      tags: [journald]
+
     - name: Apply agent log rotation config (#2205)
       ansible.builtin.include_tasks: "{{ playbook_dir }}/../roles/agent_deploy/tasks/logrotate.yml"
       tags: ["logrotate"]
