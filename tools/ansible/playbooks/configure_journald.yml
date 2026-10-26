@@ -1,0 +1,12 @@
+---
+# Explicit host group and role budgets support control-plane hosts too.
+- name: Configure host journal budgets
+  hosts: "{{ journald_hosts | default('agent_config') }}"
+  gather_facts: false
+  serial: "20%"
+  max_fail_percentage: 0
+  any_errors_fatal: true
+  tasks:
+    - name: Apply the shared host journal baseline (#3804)
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../roles/agent_deploy/tasks/journald.yml"
+      tags: [journald]

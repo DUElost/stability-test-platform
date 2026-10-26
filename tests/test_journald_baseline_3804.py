@@ -10,7 +10,7 @@ TASKS = ANSIBLE / "roles/agent_deploy/tasks/journald.yml"
 
 
 def test_all_agent_entrypoints_use_the_same_journal_baseline():
-    for name in ("configure_agents.yml", "install_agent.yml", "update_agent.yml"):
+    for name in ("configure_agents.yml", "install_agent.yml", "update_agent.yml", "configure_journald.yml"):
         plays = yaml.safe_load((ANSIBLE / "playbooks" / name).read_text())
         included = [
             task

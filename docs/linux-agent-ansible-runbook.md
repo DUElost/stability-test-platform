@@ -35,6 +35,7 @@
 - `tools/ansible/playbooks/service_agent.yml`：服务管理
 - `tools/ansible/playbooks/check_agent.yml`：状态检查
 - `tools/ansible/playbooks/configure_agents.yml`：主机配置，包括 journald 限额和 Agent 文件日志轮转
+- `tools/ansible/playbooks/configure_journald.yml`：独立主机 journal 配置，支持显式目标组与角色预算
 - `tools/ansible/roles/agent_deploy/defaults/main.yml`：服务动作白名单等默认值
 
 建议先定义仓库根路径：
@@ -307,6 +308,18 @@ cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook p
 
 回退时，执行者必须恢复该文件的 Ansible 备份；原本不存在该文件时，执行者必须只删除 `60-stp-limits.conf`。
 随后执行者必须用一次 `systemctl restart systemd-journald` 激活回退配置，再核验服务状态。执行者不得拆成 stop 与 start；这会切断服务的日志流连接。已经自然淘汰的旧 journal 无法通过配置回退恢复。
+
+控制面执行者可以通过独立 playbook 使用相同的共享 task。以下为已核定 `4G / 10G` 预算的本机示例；执行者必须先在该命令后追加 `--check --diff` 完成预演，再移除预演参数执行：
+
+```bash
+ANSIBLE_CONFIG=./ansible.cfg ansible-playbook -i localhost, -c local \
+  playbooks/configure_journald.yml -e @group_vars/all.yml \
+  -e journald_hosts=localhost -e ansible_become=true \
+  -e journald_guard_service=stability-backend \
+  -e journald_system_max_use=4G -e journald_system_keep_free=10G
+```
+
+预期：控制面 journal 使用独立预算，`stability-backend` 的 MainPID 保留；`curl --fail http://127.0.0.1:8000/health` 返回成功。执行者必须按本机实际控制面服务名核验。执行者不得沿用 Agent 服务名。
 
 ### 单机重启服务
 
