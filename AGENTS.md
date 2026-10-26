@@ -62,7 +62,7 @@
 | 生产只读诊断 | [`production-diagnostics.md`](docs/operations/production-diagnostics.md) |
 | Harness 适配与本地配置 | [`harness-adapters.md`](docs/development/ai/harness-adapters.md) |
 | 批次交付：分流、实施、复核、激活（ADR-0058） | [`repository-workflow.md`](docs/development/repository-workflow.md)「批次交付流程」 |
-| 批次规划 / 独立复核做法 | [`batch-planning.md`](docs/development/ai/batch-planning.md)、[`batch-review.md`](docs/development/ai/batch-review.md) |
+| 批次规划 / 独立复核做法 | [`batch-planning.md`](docs/development/ai/batch-planning.md)、[`batch-review.md`](docs/development/ai/batch-review.md)、[`role-cards.md`](docs/development/ai/role-cards.md) |
 | 执行状态机与 Agent 终态协议 | [`07-execution-protocol.md`](docs/design/07-execution-protocol.md) |
 | 存储角色与路径 | [`2026-storage-roles-and-aliases.md`](docs/design/2026-storage-roles-and-aliases.md) |
 | 环境变量清单 | [`environment-variables.md`](docs/development/environment-variables.md) |
