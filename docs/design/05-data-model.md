@@ -70,15 +70,15 @@
 | `device_id`, `host_id` | 扇出目标 |
 | `status` | PENDING / RUNNING / COMPLETED / FAILED / ABORTED / **UNKNOWN**（围栏恢复态：心跳断/abort 未 ACK 时由 recycler 判入，持 ACTIVE 租约的 job 才可进入；合法转出仅 `UNKNOWN → RUNNING`（recovery 补报必先复活）与 `UNKNOWN → FAILED`（宽限期超时）——`state_machine.py` VALID_TRANSITIONS，#3001） |
 | `pipeline_def` | 完整 lifecycle JSON |
-| `disarm_results` | nullable JSONB；自 B6 激活起生效：本 job 建立过足迹的专项解除结果，六值与证据见执行协议 §9.1；init 检查通过独立入口上报，不混入本列 |
-| `disarm_guard` | nullable JSONB；自 B6 激活起生效：归还尾段协议、T0、Q 余量、各步骤冻结预算/截止、阶段、序号与所有权锚点；不作为 Job 测试结论 |
+| `disarm_results` | nullable JSONB；本 job 建立过足迹的专项解除结果，六值与证据见执行协议 §9.1；init 检查通过独立入口上报，不混入本列 |
+| `disarm_guard` | nullable JSONB；归还尾段协议、T0、Q 余量、各步骤冻结预算/截止、阶段、序号与所有权锚点；不作为 Job 测试结论 |
 
 上述 B6 列对应迁移 `c3d4e5f6a7b8`（disarm_results）与 `u8b6d3752a01`（disarm_guard）。
 代码入口：`backend/models/job.py::JobInstance`；写入分别由
 `backend/services/agent_completion.py::apply_disarm_results` 与
 `backend/services/device_return.py::accept_job_disarm_evidence` 承担。
 依据：[ADR-0061](../adr/ADR-0061-device-return-contract.md) D4、D3 第 8 条；
-协议见 [`07-execution-protocol.md` §9](./07-execution-protocol.md#9-b6-执行与设备归还自-b6-激活起生效)。
+协议见 [`07-execution-protocol.md` §9](./07-execution-protocol.md#9-b6-执行与设备归还)。
 
 ### StepTrace
 
@@ -102,7 +102,7 @@
 | `host` | 字符串 PK `host-101`；`status`、心跳、`extra` JSON |
 | `device` | `serial` 唯一；`host_id`；`model` 与可空的 ADB `product`；电量/温度；`lease_generation` |
 
-自 B6 激活起生效：`device.return_state` 为 nullable JSONB，按专项键存 `state`、`source`、`updated_at` 与相应 job/解除结果。
+`device.return_state` 为 nullable JSONB，按专项键存 `state`、`source`、`updated_at` 与相应 job/解除结果。
 专项 state 为 `returned/debt/unverified`，source 为 `job/init_check/discharge/override/stock`。
 设备聚合顺序为 debt＞unverified＞returned，缺已登记专项记录也为 unverified；空值在界面表示「未初始化」，不证明设备已归还。
 代码入口：`backend/models/host.py::Device`；`backend/services/device_return.py::_set_family_return_state`、`device_aggregate_return_state`。
@@ -115,7 +115,7 @@
 | `status` | ACTIVE / RELEASED / … |
 | `fencing_token` | 防旧 Agent 写 |
 
-自 B6 激活起生效：ACTIVE 的 `MAINTENANCE` 租约是归还欠账载体，holder=`platform`、reason=`归还欠账`，
+ACTIVE 的 `MAINTENANCE` 租约是归还欠账载体，holder=`platform`、reason=`归还欠账`，
 设备全部未关闭条目共用一条。JOB 在统一释放入口原地转换为 MAINTENANCE 时，id 不变，job_id 清空并推进设备租约代次。
 欠账租约无自动到期；`expires_at` 的远期值只填充非空列，不作为回收依据。
 原有每设备唯一 ACTIVE 索引 `uq_device_leases_active_per_device` 继续约束占用。
@@ -125,9 +125,9 @@
 `_convert_active_job_to_debt_lease_sync`、`_acquire_debt_lease_sync`、`release_debt_lease_for_retirement_sync`、`restore_debt_lease_on_unretire_sync`。
 依据：ADR-0061 D5 第 2–4、8、10、11 条。
 
-### device_return_debt（自 B6 激活起生效）
+### device_return_debt
 
-本表及下列行为自 B6 激活起生效；迁移 `u3b6c7d8e9f0`，ORM 为 `backend/models/device_return_debt.py::DeviceReturnDebt`。
+本表对应迁移 `u3b6c7d8e9f0`，ORM 为 `backend/models/device_return_debt.py::DeviceReturnDebt`。
 
 | 字段 | 类型与含义 |
 |---|---|
@@ -220,7 +220,7 @@ JobInstance 1──* JobArtifact
 JobInstance 1──* JobLogSignal
 Host 1──* Device
 Device 1──* device_leases
-Device 1──* device_return_debt（自 B6 激活起生效）
+Device 1──* device_return_debt
 ```
 
 ---

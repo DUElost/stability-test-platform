@@ -1,13 +1,13 @@
 # 执行协议契约（Execution Protocol）
 
-> **最后更新**：2026-10-24（B6 执行与设备归还协议，生效时点见 §9）
+> **最后更新**：2026-10-26（B6 激活后的执行与设备归还协议）
 > **关联**：主链路概览见 [`01-execution-pipeline.md`](./01-execution-pipeline.md)；实现见近期 migration `c8d9e0f1a2b3`、preflight `backend/scripts/migration/preflight_execution_protocol.py`；abort 时钟主体见 [`ADR-0043`](../adr/ADR-0043-abort-grace-subject-alignment.md)。
 
 本文记录 **PlanRun / Job / Agent** 的硬契约：状态机边界、abort、claim 门禁、snapshot 派发与 schema 约束。产品叙述级流程仍以 `01` 为准。
 
-> **B6 生效边界**：B6 代码合入 main 不代表生产已激活。[#3723](https://github.com/DUElost/stability-test-platform/issues/3723)
-> §5 的激活证据发布前，运维执行者必须沿用本文标明的激活前分支。§9 的每项 B6 行为均自 B6 激活起生效；
-> 依据为 [ADR-0061 Accepted v1.1](../adr/ADR-0061-device-return-contract.md) 与 #3723 当前正文 v1.7.19。
+> **生效记录**：B6 已于 2026-10-25 激活，[生效证据](https://github.com/DUElost/stability-test-platform/issues/3723#issuecomment-6412678344)
+> 汇总激活、U9/U10 前滚修复与 L0–L3 验收。规则依据为 [ADR-0061 Accepted v1.1](../adr/ADR-0061-device-return-contract.md)
+> 与 [#3723](https://github.com/DUElost/stability-test-platform/issues/3723) 当前正文。
 
 ---
 
@@ -26,7 +26,7 @@
 
 - **终态写入唯一入口**：`POST /api/v1/agent/jobs/{id}/complete`。`/status` 与 heartbeat **只接受 RUNNING**；试图上报终态 → `TERMINAL_STATUS_REQUIRES_COMPLETE`。
 - **UNKNOWN**：围栏恢复态。Agent 对晚到完成必须先续约/恢复为 RUNNING（token 匹配）再 complete；或 grace 到期 → FAILED。
-  B6 激活前随后释放租约；自 B6 激活起，控制面必须经 §9.5 的统一入口决定释放或转换为欠账租约（ADR-0061 D3 第 5 条）。
+  控制面必须经 §9.5 的统一入口决定释放或转换为欠账租约（ADR-0061 D3 第 5 条）。
 - **`terminal_payload_digest`**：同 payload 幂等；冲突 → 409 `TERMINAL_PAYLOAD_CONFLICT`。
 - **`trace_event_id`**：step_trace 幂等键（含 retry/cycle）；取代旧 `(job_id, step_id, event_type)` 唯一约束。
 
@@ -64,8 +64,8 @@
 
 - Job 终态由 lifecycle `termination_reason` 决定（`completed` / `timeout` → COMPLETED；
   `abort` / `manual_exit` → ABORTED；其余 → FAILED，见 `pipeline_engine`），teardown
-  步骤的成功与否不改变 Job 终态；B6 激活前 teardown 结论只进 `teardown_status` metadata，
-  自 B6 激活起另存 §9.1 的 `disarm_results`（ADR-0061 D4）；
+  步骤的成功与否不改变 Job 终态；teardown 结论写入 `teardown_status` metadata，
+  解除结果另存 §9.1 的 `disarm_results`（ADR-0061 D4）；
 - 测试脚本自判的结论（`final_status=FAIL`、`failed_rounds>0`、设备侧 INCOMPLETE 等）
   不参与该聚合，落在 metrics / `test_case_result` 结果层呈现；
 - 因此 **「PlanRun 绿」≠「测试通过」**——判定测试结果须消费结果层字段；INCOMPLETE
@@ -85,14 +85,13 @@
    host 级 abort **不写 run 级 `at`**，只维护 `abort_requested` 的名单语义，计时落在
    `abort_requested_hosts[host_id].at`，且**首次写入、后续不重置**（D2）。随后按 **host**
    分发 SocketIO `command=abort`（只带本机 `requested_job_ids`）。
-3. B6 激活前：Agent 杀进程树 → `/complete` status=ABORTED → 释租约 → 聚合。
-   自 B6 激活起：Agent 必须保留解除的执行机会（§9.2），再经 `/complete` 回报 ABORTED 与解除结果。
+3. Agent 必须保留解除的执行机会（§9.2），再经 `/complete` 回报 ABORTED 与解除结果。
    控制面必须在同一终态事务内经统一入口处理租约（§9.5），随后聚合（ADR-0061 D3 第 1–5 条）。
 4. ACK 超时（`ABORT_REAPER_GRACE_SECONDS`）→ Job **UNKNOWN**（lease **不释放**）→ 再走 UNKNOWN grace → FAILED。
    reaper **按主体取时钟**：两把钟并存时取更早者（D1/D3），`abort_requested_hosts` 缺失的
    历史 run 退化为只看 run 级 `at`（D4，绝不变成无人回收）；回收主体差异落在 `status_reason`
    ——host 主体为 `abort_ack_timeout_host`、run 主体为 `abort_ack_timeout`（D6）。
-   自 B6 激活起，有效解除阶段的有界保护先于本步超时回收判定，保护失效后仍按现行规则回收（§9.2；ADR-0061 D3 第 8 条）。
+   有效解除阶段的有界保护先于本步超时回收判定，保护失效后仍按现行规则回收（§9.2；ADR-0061 D3 第 8 条）。
 
 禁止：在 Agent ACK 前释放 ACTIVE lease（避免设备被重新调度而旧进程仍存活）；
 禁止 host 级 abort 写或重置 run 级 `at` —— 那正是 ADR-0043 删掉的「N×GRACE + 最后写入者赢」行为。
@@ -146,8 +145,8 @@ Watcher policy 取自 **PlanRun.plan_snapshot**，不再读 live `Plan.watcher_p
 
 ## 7. Agent 运行时要点
 
-- `PipelineEngine.cancel`：B6 激活前杀进程组（含 abort / fencing）；自 B6 激活起，普通取消保留正在执行的 teardown，
-  确认失租时 Agent 不得继续解除（§9.2；ADR-0061 D3 第 3、7 条）。
+- `PipelineEngine.cancel`：Agent 处理普通取消时必须保留正在执行的 teardown。
+  Agent 确认失租时不得继续解除（§9.2；ADR-0061 D3 第 3、7 条）。
 - step_trace：`trace_event_id` = hash(run, fencing, stage, step, event, retry, cycle)。
 - pipeline 校验异常须仍能 `/complete` FAILED，避免无终态 ACK。
 - 热更新 tarball 含 `stp_schemas/pipeline_schema.json`。
@@ -166,12 +165,12 @@ Watcher policy 取自 **PlanRun.plan_snapshot**，不再读 live `Plan.watcher_p
 
 ---
 
-## 9. B6 执行与设备归还（自 B6 激活起生效）
+## 9. B6 执行与设备归还
 
-本节全部行为自 B6 激活起生效。激活前的开关机人工处置与出口仍见
+开关机专项的设备归还排障见
 [`powercycle-chain-disarm-runbook.md`](../operations/powercycle-chain-disarm-runbook.md)。
 
-### 9.1 终态载荷与足迹（自 B6 激活起生效）
+### 9.1 终态载荷与足迹
 
 Agent 必须在 `POST /api/v1/agent/jobs/{job_id}/complete` 的可选字段 `disarm_results` 中，
 按专项回报本 job 在 init 中开始执行建立足迹步骤的专项。条目键为专项，`result` 为下列六值之一，
@@ -196,11 +195,16 @@ Agent 不得把 `return_check.<family>` 的 init 检查条目放入终态 `disar
 `backend/services/agent_completion.py` 的 `complete_agent_job`、`apply_disarm_results`。
 依据：ADR-0061 D1 第 2、5 条、D4；#3723 §3.5 v1.7.17。
 
-### 9.2 解除执行与有界保护（自 B6 激活起生效）
+### 9.2 解除执行与有界保护
 
 Agent 必须在建立足迹后的每条结束路径上尝试解除，包括自然到点、abort、manual_exit、init/patrol 失败、
 barrier 超时与优雅停机。Agent 处理 manual_exit 时可以跳过结果收取。Agent 不得因此跳过解除。
 Agent 不得因普通取消、重复 abort、`ABORT_LOCAL` 或设备重连而丢弃排队的解除或终止执行中的解除。
+
+优雅停机等待已开始的解除最多 20 秒；超时的解除以 `incomplete`、原因 `shutdown_disarm_window_elapsed` 写入本地 outbox。
+Agent 写入停机 outbox 时必须先取 LocalDB `active_job_registry` 中该 job 的租约令牌，缺失时再取 `lease_renewer.get_fencing_token(job_id)`。
+Agent 不得把 worker token 或 `active_job_tokens` 的值作为 fencing token。
+两个来源都没有有效令牌时，Agent 必须记录 `shutdown_incomplete_outbox_skip_no_token` 并跳过该 job 的 outbox 写入。
 
 Agent 必须按 job 冻结的实际步骤版本选择解除义务：旧 `powercycle_finish@1.0.x` 仍承担解除，
 `powercycle_finish@1.1.0` 只收取，`powercycle_disarm` 承担解除。版本不明时 Agent 必须保守保留完整 teardown，
@@ -230,6 +234,7 @@ Agent 必须按 job 冻结的实际步骤版本选择解除义务：旧 `powercy
 代码入口：`backend/agent/pipeline_engine.py` 的 `PipelineEngine.cancel`、`_run_step_with_permit`、`_teardown_lease_lost`、
 `_begin_disarm_tail`、`_publish_disarm_phase`、`_execute_teardown_best_effort`，同文件的 `_pump_process`；
 `backend/agent/recovery_executor.py` 的 `_cleanup_after_job_exit`；
+`backend/agent/graceful_shutdown.py` 的 `shutdown_agent_runtime`、`_persist_incomplete_disarm_to_outbox`；
 `backend/agent/contracts/device_return.py` 的 `select_disarm_steps`、`freeze_disarm_guard`、`receive_disarm_evidence`、`disarm_guard_deadline`；
 `backend/agent/coordinator.py` 的 `HostRunCoordinator._loop`、`_tick`；
 `backend/agent/registry/local_db.py` 的 `LocalDB.load_disarm_state`、`save_disarm_state`；
@@ -237,9 +242,9 @@ Agent 必须按 job 冻结的实际步骤版本选择解除义务：旧 `powercy
 `backend/scheduler/device_lease_reconciler.py` 的 `_reconcile_aborted_running_jobs`；
 `backend/scheduler/recycler.py` 的 `recycle_once`、`_final_disarm_grace_blocks_write`；
 `backend/services/plan_run_devices.py` 的 `running_heartbeat_deadline`。
-依据：ADR-0061 D2 第 9 条、D3 第 1–4、7、8 条；#3723 §3.0 第 5 条（含 v1.7.13、v1.7.14）。
+依据：ADR-0061 D2 第 9 条、D3 第 1–4、7、8 条；#3723 §3.0 第 5 条（含 v1.7.13、v1.7.14）、§3.10（U10，#3795）。
 
-### 9.3 平台终止与兼容推导（自 B6 激活起生效）
+### 9.3 平台终止与兼容推导
 
 Agent 与控制面必须先识别平台墙钟/停滞终止（124/125）及信号中断（143/-15/137/-9），
 将已开始的解除记为 `incomplete`，优先于成功 JSON、回读与普通失败。历史 trace 只有 124/125 时按平台保留码处理，
@@ -256,7 +261,7 @@ STARTED 无终态取 `incomplete`，真实 COMPLETED 最多取 `executed_unverif
 `backend/services/device_return.py` 的 `_supplement_incomplete_for_footprints`、`map_disarm_result_to_family_state`。
 依据：ADR-0061 D1 第 6、9 条、D4 第 2 条、D8 第 4 条；#3723 §3.0 第 6 条。
 
-### 9.4 四入口的统一核验（自 B6 激活起生效）
+### 9.4 四入口的统一核验
 
 Agent 汇总与控制面必须使用共享 `probe_result_policy`，按平台、型号、权限模型、APK SHA、脚本版本与包 SHA
 精确匹配附真机报告的登记组合，并核对 `boot_completed=1`。平台/型号来自设备事实；job 包身份来自冻结 pipeline 与 manifest，
@@ -279,7 +284,7 @@ init/清偿包身份来自回报的脚本名、版本经 manifest 派生。缺�
 `backend/api/routes/agent_device_return.py` 的 `agent_return_discharge`、`agent_init_return_check`。
 依据：ADR-0061 D2 第 5、7、8 条；#3723 §3.8（含 v1.7.11、v1.7.12、v1.7.16）。
 
-### 9.5 欠账生命周期（自 B6 激活起生效）
+### 9.5 欠账生命周期
 
 专项归还状态为 `returned/debt/unverified`；来源为 `job/init_check/discharge/override/stock`。
 已接入专项的 failed、readback_failed、not_executed、incomplete 均为欠账；未接入专项的 failed 暂记未验证。
@@ -294,6 +299,8 @@ init 失败建立的条目仍来源于本 job。条目为 `open/closed`，关闭
 控制面必须使终态处理、初始化、清偿、放行与退役在设备行锁下串行；涉及 job 的锁序为 Job → Device → Lease。
 未退役设备有未关闭条目时，控制面必须保留恰一条 ACTIVE 租约；全部条目共用一条 `MAINTENANCE` 欠账租约
 （holder=`platform`、reason=`归还欠账`），无自动到期回收。正在运行的其它占用继续持有原租约，释放时统一处理。
+欠账租约的 `expires_at` 固定为 `datetime(9999, 1, 1, tzinfo=timezone.utc)`，只填充非空列，不作为回收依据。
+该值在 UTC-12 至 UTC+14 的会话时区中都能解码，避免本地时间越过 Python 的年份上界（U9，#3793）。
 控制面必须在终态同一事务内经 `handle_job_lease_release` 或 `handle_job_lease_release_sync` 原地转换 JOB 租约并推进代次，
 使旧 token 失效；没有欠账时才释放。reconciler 与紧急释放不得释放欠账租约。
 
@@ -323,9 +330,9 @@ init 失败建立的条目仍来源于本 job。条目为 `open/closed`，关闭
   已被占用设备只写条目、不中断占用，释放时转换。重复执行保持幂等。
   入口：`backend/scripts/init_device_return.py::main`、`_process_one_device`，
   `backend/services/device_return.py::init_device_return_sync`；依据：ADR-0061 D1 第 7 条、D5 第 11 条。
-  本文不提供初始化或回退执行步骤，具体激活清单等待 Owner 批准后由 U7 第二个 PR 交付（#3723 §5）。
+  初始化与回退的窗口执行记录见[激活清单](../operations/2026-10-25-b6-device-return-activation-runbook.md)，生效结果见本文开头的证据链接。
 
-### 9.6 U4 init 残留检查（自 B6 激活起生效）
+### 9.6 U4 init 残留检查
 
 本批只有 power-cycle 在 `ONBOARDED` 接入。Agent 必须在普通 job 任何建立足迹的计划步骤前，
 用登记脚本及最低版本（`powercycle_disarm@1.0.8`）运行 probe。可信 `clear` 不再解除；其余未能可信确认无足迹的读数或组合，
@@ -351,7 +358,7 @@ patrol 断点恢复时不重跑 init 检查，仍执行 teardown。该检查与�
 `backend/services/device_return.py` 的 `apply_init_check_sync`、`check_init_probe_result`。
 依据：ADR-0061 D1 第 5 条、D5 第 10 条、D6 第 1 条；#3723 §3.5 v1.7.15–v1.7.18。
 
-### 9.7 U4 自动清偿（自 B6 激活起生效）
+### 9.7 U4 自动清偿
 
 host 心跳的可选 `return_debts` 按设备携带 `device_id/serial/fencing_token/families`，只下发未退役且有欠账租约的条目。
 Agent 未收到该字段时不动作；本批只执行已接入专项。设备重连、欠账 token 首次出现触发清偿；
@@ -371,7 +378,7 @@ Agent 使用同一登记脚本最低版本的 disarm，经
 `backend/agent/api_client.py::report_return_discharge`；`backend/api/routes/agent_device_return.py::agent_return_discharge`。
 依据：ADR-0061 D5 第 5 条；#3723 §3.0 第 8 条、§3.5 v1.7.15 第 3 条。
 
-### 9.8 版本交错兼容（自 B6 激活起生效）
+### 9.8 版本交错兼容
 
 控制面面对没有解除阶段证据的旧 Agent，沿用 v1.0 执行期续期，不伪造 queue 保护；已协商 guard 失效后不回落到更宽松的旧宽限。
 Agent 发现旧控制面不支持阶段协议时沿用 v1.0 执行行为，记录 `disarm_protocol_unavailable`，不重建新保护。

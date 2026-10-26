@@ -1,7 +1,7 @@
 # ADR-0022 — Patrol 心跳化 + 失败退避 + 手动干预
 - 状态：Accepted
 
-> **后续修订（自 B6 激活起生效）**：[ADR-0061](./ADR-0061-device-return-contract.md) D3 第 4 条
+> **后续修订（B6 已于 2026-10-25 激活）**：[ADR-0061](./ADR-0061-device-return-contract.md) D3 第 4 条
 > 修订本 ADR D7 BO4：manual_exit 只跳过结果收取，不跳过解除；原决策正文保留，该行为以修订为准。
 
 | Date       | 2026-05-08                              |
