@@ -46,10 +46,10 @@ env -i PATH="$PATH" PYTHONPATH=. ./scripts/project_python.sh scripts/run_pytest.
 退出码 **1**，实际失败输出：
 
 ```text
-FAILED ...::test_shutdown_uses_lease_fencing_token[registry-first]
-AssertionError: assert 'worker-42-shutdown-test' == 'registry-lease-token'
-FAILED ...::test_shutdown_uses_lease_fencing_token[renewer-fallback]
-AssertionError: assert 'worker-42-shutdown-test' == 'cached-lease-token'
+FAILED backend/agent/tests/test_shutdown_fencing_u10_3795.py::test_shutdown_uses_lease_fencing_token[registry-first]
+E       AssertionError: assert 'worker-42-shutdown-test' == 'registry-lease-token'
+FAILED backend/agent/tests/test_shutdown_fencing_u10_3795.py::test_shutdown_uses_lease_fencing_token[renewer-fallback]
+E       AssertionError: assert 'worker-42-shutdown-test' == 'cached-lease-token'
 2 failed, 1 deselected in 0.18s
 ```
 
@@ -90,7 +90,45 @@ RUNNING 与 UNKNOWN；UNKNOWN 的 ACTIVE JOB 租约已过期 5 秒，job 进入 
 首次后端命令因夹具 mock 目标误指函数内导入而在 setup 阶段报 4 errors，退出码 1；
 改为 patch `backend.core.task_queue.get_queue` 后，同一命令重跑得到上述 4 passed。
 
-根 `tests/`、既有后端回归、`check:quick` 与当前 PR HEAD 的 CI：pending。
+既有后端回归与 U10 验收共同运行，仍由 testcontainers 提供隔离 PG：
+
+```bash
+env -i PATH="$PATH" PYTHONPATH=. ./scripts/project_python.sh scripts/run_pytest.py \
+  backend/tests/api/test_shutdown_outbox_complete_3795.py \
+  backend/tests/api/test_disarm_policy_u8_3752.py \
+  backend/tests/services/test_device_return_u3_3728.py \
+  backend/tests/services/test_disarm_results_u2_3727.py \
+  backend/tests/api/test_agent_api_fencing_contract.py -q
+```
+
+结果：**104 passed in 27.03s，退出码 0**。
+
+```bash
+env -i PATH="$PATH" PYTHONPATH=. ./scripts/project_python.sh scripts/run_pytest.py tests/ -q
+```
+
+结果：**2420 passed、18 skipped in 633.85s，退出码 0**。
+
+`check:quick` 在同样的 6 GiB / swap=0 scope 中运行：
+
+```bash
+u10_uid=$(id -u)
+XDG_RUNTIME_DIR="/run/user/$u10_uid" \
+DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$u10_uid/bus" \
+  systemd-run --user --scope -p MemoryMax=6G -p MemorySwapMax=0 -- \
+  env -i PATH="$PATH" PYTHONPATH=. ./scripts/project_python.sh scripts/run_gates.py check:quick
+```
+
+结果：**16 gates 通过，退出码 0**。`schema-at-head` 因未配置 `DATABASE_URL` 明确跳过，
+没有加载生产配置。首次直接启动 systemd scope 因缺少用户 bus 路由而退出 1，
+profile 未执行；补入项目 runner 同样使用的两项路由变量后得到上述结果。
+
+Ruff 定向检查与 `git diff --check` 均退出 0。`ai_work.py drift --strict` 退出 1，
+提示的是其他四个已合入单元的 stale-cache；U10 六个声明路径与实际 diff 一致，
+没有修改其他 Execution。该 advisory 不替代或改变 required CI。
+
+六项 required CI 以 [PR #3799 当前 HEAD 的检查](https://github.com/DUElost/stability-test-platform/pull/3799/checks)
+为准，最终 HEAD、命令退出状态与 CI 结果在交付回告中绑定。
 
 ## Revisit
 
