@@ -151,6 +151,11 @@ class LeaseRenewer:
             else:
                 self._device_ids.pop(job_id, None)  # 防 job_id 异常复用时残留旧 device_id
 
+    def get_fencing_token(self, job_id: int) -> Optional[str]:
+        """Read the job's lease token without changing worker ownership."""
+        with self._jobs_lock:
+            return self._fencing_tokens.get(job_id)
+
     def clear_fencing_token(self, job_id: int) -> Optional[int]:
         """Remove fencing_token and device_id for a job. Returns the device_id if any.
 

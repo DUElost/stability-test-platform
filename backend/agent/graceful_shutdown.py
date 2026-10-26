@@ -80,26 +80,19 @@ def _await_started_disarm(
 
 def _iter_leftover_runners(
     job_runner_state: Any,
-) -> list[tuple[int, str, Any]]:
+) -> list[tuple[int, Any]]:
     """Snapshot ``active_runners`` entries still present after the disarm window."""
     try:
         active = dict(getattr(job_runner_state, "active_runners", None) or {})
     except Exception:
         logger.exception("shutdown_incomplete_outbox_inspect_failed")
         return []
-    out: list[tuple[int, str, Any]] = []
+    out: list[tuple[int, Any]] = []
     for job_id, entry in active.items():
-        worker_token = ""
         runner: Any = entry
         if isinstance(entry, tuple) and len(entry) >= 2:
-            worker_token = str(entry[0] or "")
             runner = entry[1]
-        tokens = getattr(job_runner_state, "active_job_tokens", None) or {}
-        try:
-            fencing = str(tokens.get(job_id) or worker_token or "")
-        except Exception:
-            fencing = worker_token
-        out.append((int(job_id), fencing, runner))
+        out.append((int(job_id), runner))
     return out
 
 
@@ -131,6 +124,7 @@ def _disarm_results_for_shutdown_incomplete(runner: Any) -> dict[str, dict]:
 def _persist_incomplete_disarm_to_outbox(
     job_runner_state: Optional[Any],
     local_db: Any,
+    lease_renewer: Optional[Any] = None,
 ) -> int:
     """Write ``incomplete`` terminal facts for leftover jobs before LocalDB close.
 
@@ -144,12 +138,30 @@ def _persist_incomplete_disarm_to_outbox(
     enqueue = getattr(local_db, "enqueue_terminal", None)
     if not callable(enqueue):
         return 0
+    leftovers = _iter_leftover_runners(job_runner_state)
+    if not leftovers:
+        return 0
+    # Worker tokens identify local runners, not server leases (#3795).
+    # Prefer the durable claim registry; use the renewer's lease cache only
+    # when that job has no persisted lease token. Both are live before stop().
+    try:
+        lease_tokens = {
+            int(entry["job_id"]): entry.get("fencing_token")
+            for entry in local_db.get_active_jobs()
+        }
+    except Exception:
+        logger.exception("shutdown_incomplete_outbox_registry_read_failed")
+        lease_tokens = {}
     persisted = 0
-    for job_id, fencing_token, runner in _iter_leftover_runners(job_runner_state):
+    for job_id, runner in leftovers:
         disarm_results = _disarm_results_for_shutdown_incomplete(runner)
         if not disarm_results:
             continue
-        if not fencing_token:
+        fencing_token = lease_tokens.get(job_id)
+        if not isinstance(fencing_token, str) or not fencing_token:
+            get_token = getattr(lease_renewer, "get_fencing_token", None)
+            fencing_token = get_token(job_id) if callable(get_token) else None
+        if not isinstance(fencing_token, str) or not fencing_token:
             logger.warning(
                 "shutdown_incomplete_outbox_skip_no_token job=%d", job_id,
             )
@@ -228,7 +240,9 @@ def shutdown_agent_runtime(
     # LocalDB first drops late complete_job enqueue (TerminalReportLostError
     # with empty outbox). Persist here so drain has something durable.
     try:
-        n = _persist_incomplete_disarm_to_outbox(job_runner_state, local_db)
+        n = _persist_incomplete_disarm_to_outbox(
+            job_runner_state, local_db, lease_renewer=lease_renewer,
+        )
         if n:
             logger.info("shutdown_incomplete_outbox_persisted count=%d", n)
     except Exception:
