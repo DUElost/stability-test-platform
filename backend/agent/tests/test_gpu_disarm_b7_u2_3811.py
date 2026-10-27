@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+import requests
 
 from backend.agent import pipeline_engine as engine_module
 from backend.agent.contracts.device_return import ONBOARDED
@@ -319,5 +320,28 @@ def test_real_engine_interrupt_runs_only_disarm(engine, reason, monkeypatch):
 
     monkeypatch.setattr(engine, "_run_patrol_loop", patrol)
     result = engine.execute(pipeline)
+    assert launched == ["gpu_setup", "gpu_disarm"]
+    assert result.metadata["disarm_results"]["gpu"]["result"] == "executed_unverified"
+
+
+def test_real_patrol_lease_auth_abort_runs_only_disarm(engine, monkeypatch):
+    runner, pipeline, launched = engine
+    runner._api_url = "http://b7-u2-test.invalid"
+    statuses = iter([200, 401])
+    observed = []
+
+    def post(url, **kwargs):
+        assert url == "http://b7-u2-test.invalid/api/v1/agent/jobs/1/extend_lock"
+        status = next(statuses)  # Entry succeeds; real patrol re-verification fails.
+        observed.append(status)
+        return SimpleNamespace(status_code=status, raise_for_status=lambda: None)
+
+    monkeypatch.setattr(requests, "post", post)
+    result = runner.execute(pipeline)
+    assert observed == [200, 401]
+    assert result.metadata["termination_reason"] == "abort"
+    assert "lock_verify_auth_failed" in result.error_message
+    assert runner._canceled is False
+    assert runner._is_aborted is None
     assert launched == ["gpu_setup", "gpu_disarm"]
     assert result.metadata["disarm_results"]["gpu"]["result"] == "executed_unverified"
