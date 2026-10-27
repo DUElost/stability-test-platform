@@ -33,6 +33,7 @@ from backend.models.project import Specialty, TestProject
 from backend.models.suite import TestSuite
 from backend.models.script import Script as ScriptModel
 from backend.services.script_progress_capability import script_supports_progress
+from backend.services.script_params import merge_effective_params
 from backend.services.plan_dispatcher_core import apply_step_timing_fields
 from backend.services.plan_wifi import (
     require_active_wifi_pool,
@@ -316,7 +317,7 @@ def _min_wall_clock_for_step(
     """Return ONBOARDED min_wall_clock_seconds for script, or None if unregistered.
 
     U5 将在 ONBOARDED[family]["min_wall_clock_seconds"][script] 登记 callable/int。
-    ``params`` 必须是 default_params 与步骤 params 合并后的有效参数（#3723 §3.3.1）。
+    ``params`` 必须按 schema.default → default_params → step.params 合并（与派发同源）。
     """
     registry = _load_onboarded_registry() if onboarded is None else onboarded
     if not script_name or not isinstance(registry, dict):
@@ -348,14 +349,14 @@ def _load_script_default_params(
     db: Session,
     steps: list[PlanStepIn],
 ) -> dict[tuple[str, str], dict]:
-    """Batch-load Script.default_params for wall-clock budget merge (#3723 §3.3.1)."""
+    """Load schema/default_params with dispatch's precedence for wall-clock checks."""
 
     keys = {(s.script_name, s.script_version) for s in steps}
     if not keys:
         return {}
     rows = db.execute(
         select(
-            ScriptModel.name, ScriptModel.version, ScriptModel.default_params,
+            ScriptModel.name, ScriptModel.version, ScriptModel.param_schema, ScriptModel.default_params,
         ).where(
             ScriptModel.is_active.is_(True),
             ScriptModel.name.in_({k[0] for k in keys}),
@@ -366,8 +367,7 @@ def _load_script_default_params(
         key = (r.name, r.version)
         if key not in keys:
             continue
-        raw = r.default_params
-        out[key] = dict(raw) if isinstance(raw, dict) else {}
+        out[key] = merge_effective_params(r.param_schema, r.default_params)
     return out
 
 
@@ -375,11 +375,10 @@ def _effective_step_params(
     step: PlanStepIn,
     script_defaults: dict[tuple[str, str], dict],
 ) -> dict:
-    """Merge Script.default_params with step.params (step overrides; dispatcher-aligned)."""
-    merged = dict(script_defaults.get((step.script_name, step.script_version), {}))
-    if step.params:
-        merged.update(dict(step.params))
-    return merged
+    """Apply step overrides to the schema + script defaults used by dispatch."""
+    return merge_effective_params(
+        None, script_defaults.get((step.script_name, step.script_version)), step.params,
+    )
 
 
 def _validate_onboarded_wall_clock(

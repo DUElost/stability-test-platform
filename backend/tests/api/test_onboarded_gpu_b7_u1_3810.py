@@ -7,10 +7,12 @@ import pytest
 
 from backend.agent.contracts.device_return import ONBOARDED
 from backend.core.job_timeout_config import DISARM_SCRIPT_NAMES
-from backend.models.plan import Plan
+from backend.models.plan import Plan, PlanStep
 from backend.models.project import Specialty, TestProject as Project
 from backend.models.script import Script
 from backend.services import device_return
+from backend.services.plan_dispatcher_core import build_lifecycle_from_snapshot, build_plan_snapshot
+from backend.services.plan_dispatcher_sync import _fetch_script_metadata
 
 
 @pytest.fixture
@@ -109,3 +111,58 @@ def test_control_plane_uses_gpu_identity_and_test_combination(monkeypatch):
     monkeypatch.setitem(ONBOARDED, "gpu", {**ONBOARDED["gpu"], "verified_device_classes": [combination]})
     policy = device_return.evaluate_probe_entry(device, "gpu", entry, token_valid=True, job=job)
     assert policy["result"] == "confirmed"
+
+
+@pytest.mark.parametrize("entry_point", ["create", "update", "append-chain-tail"])
+@pytest.mark.parametrize("defaults,params,wait,below", [
+    ({}, {}, 900, 1200),
+    ({"wait_device_online_seconds": 600}, {}, 600, 1199),
+    ({"wait_device_online_seconds": 600}, {"wait_device_online_seconds": 300}, 300, 899),
+], ids=["schema-default", "script-default-overrides", "step-overrides"])
+def test_gpu_schema_defaults_save_and_dispatch_budget(
+    client, auth_headers, db_session, gpu_plan, entry_point, defaults, params, wait, below,
+):
+    """F1: each real save endpoint uses the same effective params as dispatch."""
+    script = db_session.query(Script).filter_by(name="gpu_disarm", version="1.0.0").one()
+    script.param_schema = {"wait_device_online_seconds": {"type": "integer", "default": 900}}
+    script.default_params = defaults
+    db_session.commit()
+    minimum = wait + 600
+    valid = deepcopy(gpu_plan)
+    valid["steps"][1].update(timeout_seconds=minimum, params=params)
+    payload = deepcopy(valid)
+    url = "/api/v1/plans"
+    method = client.post
+    if entry_point != "create":
+        created = client.post(url, headers=auth_headers, json=valid)
+        assert created.status_code == 201, created.text
+        original = created.json()["data"]
+        url += "/" + str(original["id"])
+        if entry_point == "update":
+            method = client.put
+            payload = {"steps": payload["steps"], "expected_updated_at": original["updated_at"]}
+        else:
+            url += "/append-chain-tail"
+            payload["name"] += "-tail"
+    payload["steps"][1]["timeout_seconds"] = below
+    before = db_session.query(Plan).count()
+    rejected = method(url, headers=auth_headers, json=payload)
+    assert rejected.status_code == 422, rejected.text
+    detail = rejected.json()["detail"]
+    assert detail["code"] == "WALL_CLOCK_BELOW_ONBOARDED_BUDGET"
+    assert detail["violations"] == [{"step_key": "disarm", "script_name": "gpu_disarm",
+        "timeout_seconds": below, "min_wall_clock_seconds": minimum}]
+    db_session.rollback()  # discard the failed update's uncommitted timestamps
+    assert db_session.query(Plan).count() == before
+
+    payload["steps"][1]["timeout_seconds"] = minimum
+    saved = method(url, headers=auth_headers, json=payload)
+    assert saved.status_code == (200 if entry_point == "update" else 201), saved.text
+    plan_id = saved.json()["data"]["id"]
+    plan = db_session.get(Plan, plan_id)
+    steps = db_session.query(PlanStep).filter_by(plan_id=plan_id).all()
+    snapshot = build_plan_snapshot(plan, steps, _fetch_script_metadata(db_session, steps))
+    lifecycle = build_lifecycle_from_snapshot(snapshot)
+    disarm = next(s for s in lifecycle["teardown"] if s["step_id"] == "disarm")
+    assert disarm["params"]["wait_device_online_seconds"] == wait
+    assert disarm["timeout_seconds"] == ONBOARDED["gpu"]["min_wall_clock_seconds"]["gpu_disarm"](disarm["params"])
