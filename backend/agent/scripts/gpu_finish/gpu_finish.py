@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
-"""GPU 停止 + 结果收取（teardown 阶段，issue #462 P0c；G15 对齐 §3.3）。
+"""GPU 结果收取（teardown 阶段，#3809 U2）。
+
+v1.1.0：解除与收取拆分。停进程、删除循环脚本和恢复网络设置全部由
+gpu_disarm 负责；本入口只拉日志、解析、写摘要，并回收本次本机临时目录。
+以下 v1.0.x 记录描述历史行为。
 
 v1.0.8（#3175，2026-09-27）：`_lib.py` 的 ``adb()`` 原用 ``subprocess.run(text=True)``
 严格 UTF-8 解码，设备侧一个非 UTF-8 字节就抛 ``UnicodeDecodeError``（非 ``OSError``，
@@ -40,20 +44,9 @@ v1.0.4（#894）：结果落盘后删除设备端循环脚本 /sdcard/Auto/gpu_s
 移植自 stability_GPU-Test/stop.bat（force-stop 4 包 + pkill instrument；bat 注释：
 压测跑在 Antutu 进程内，只停框架）。
 
-流程：
-1. 停任务：force-stop 4 包 + pkill 循环脚本/instrument
-2. 拉取 /sdcard/Auto/test_log.txt（instrument stdout + 平台标记行原文）
-3. 解析（parse_gpu_log）→ 摘要 metrics（标记行为准；instrument 输出原文备查）
-4. 摘要 JSON 写 {STP_AEE_NFS_ROOT}/gpu/{project}/results/{run_id}.json
-   （run_id = 收尾时刻 gpu_YYYYmmdd_HHMMSS_<serial>，v1.0.2 加设备维度防并行碰撞）
-5. stdout JSON 只带摘要（step_trace 64KiB 截断约束同 MTBF）
-6. 删除设备端循环脚本并回读验证（v1.0.4；test_log.txt 保留）
-
-STP_STEP_PARAMS:
-{
-    "project": "legacy",
-    "cleanup": true    (default true；删设备端循环脚本 + 回读验证)
-}
+流程：拉取 /sdcard/Auto/test_log.txt → 解析标记行 → 写结果摘要。
+设备端日志和 APK 保留；本入口不执行设备端写入或解除。
+STP_STEP_PARAMS: {"project": "legacy"}
 
 输出 (stdout): {"success": true/false, "metrics": {...}, "detail_uri": "..."}
 metrics: {run_id, rounds_done, expected_rounds, failed_rounds, end_rc, final_status, log_bytes}
@@ -70,7 +63,6 @@ import time
 from pathlib import Path
 
 from _lib import (
-    _DEVICE_SCRIPT,
     _RESULT_LOG,
     adb,
     device_serial,
@@ -80,7 +72,6 @@ from _lib import (
     parse_gpu_log,
     result_log_bytes,
     results_dir,
-    stop_stress,
 )
 
 
@@ -174,42 +165,8 @@ def _pull_result_log() -> Path:
     return local
 
 
-def _cleanup_device_script() -> None:
-    """删除设备端循环脚本并回读验证（三态：删除成功 / 残留 / 探测不可用）。
-
-    只删平台自产循环脚本；test_log.txt 保留（原始日志未进中心存储，
-    删除即丢证——链式衔接的残留风险来自脚本，不是日志文件）。
-
-    v1.0.5（#2146）：改用 ``adb()`` 取 rc——探测不可用（离线/超时/重启窗口）
-    必须 raise，不能把「读不到」当成「干净」（v1.0.4 的静默假绿）。
-    """
-    rc, _out, err = adb("shell", f"rm -f {_DEVICE_SCRIPT}", timeout=30)
-    if rc != 0:
-        raise RuntimeError(
-            f"设备端脚本清理命令失败：rm -f {_DEVICE_SCRIPT} rc={rc} {err.strip()[:120]}"
-        )
-
-    rc, out, err = adb(
-        "shell", f"[ -e {_DEVICE_SCRIPT} ] && echo REMAINS || echo CLEAN", timeout=30
-    )
-    if rc != 0:
-        raise RuntimeError(
-            f"清理验证不可用：rc={rc}，无法确认 {_DEVICE_SCRIPT} 是否已删除"
-            f"（{err.strip()[:120]}）"
-        )
-    if "REMAINS" in out:
-        raise RuntimeError(f"设备端脚本清理失败：{_DEVICE_SCRIPT} 仍存在（#894）")
-    if "CLEAN" not in out:
-        raise RuntimeError(
-            f"清理验证输出异常：{out.strip()[:80]!r}（无法确认已删除）"
-        )
-
-
 def _run(cfg: dict) -> dict:
     project = str(param_or_env(cfg, "project", "STP_GPU_PROJECT", "legacy"))
-
-    stop_stress()
-    time.sleep(2)   # 等 instrument 退出、log 收尾
 
     local_file = _pull_result_log()
     parsed = parse_gpu_log(local_file.read_text(encoding="utf-8", errors="replace"))
@@ -241,11 +198,6 @@ def _run(cfg: dict) -> dict:
         json.dumps({"run_id": run_id, "metrics": metrics, "rounds": parsed["rounds"]}, ensure_ascii=False),
         encoding="utf-8",
     )
-
-    # v1.0.4：结果（NFS 摘要）落盘后再清设备端循环脚本——清理失败不丢本次结果
-    if cfg.get("cleanup", True):
-        _cleanup_device_script()
-        metrics["cleanup_verified"] = True
 
     return {"metrics": metrics, "detail_uri": str(detail_file)}
 

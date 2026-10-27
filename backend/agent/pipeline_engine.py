@@ -3314,6 +3314,18 @@ class PipelineEngine:
 
         try:
             for step in steps:
+                # B7 U2 (#3809 §4.3): interruption keeps GPU disarm, skips its
+                # registered collect-only finish. Recheck after each disarm so
+                # an abort arriving during disarm cannot start collection.
+                # Other families retain their existing B6 behavior.
+                if (
+                    script_name_from_step(step) == ONBOARDED.get("gpu", {}).get("finish_script")
+                    and step_teardown_role(
+                        script_name_from_step(step), step_version_of(step), onboarded=ONBOARDED,
+                    ) == STEP_ROLE_COLLECT
+                    and (self._canceled or (self._is_aborted is not None and self._is_aborted()))
+                ):
+                    continue
                 total_steps += 1
                 step_id = step.get("step_id", "unknown")
                 try:
