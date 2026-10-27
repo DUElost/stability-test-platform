@@ -46,9 +46,20 @@
     },
     "teardown": [
       {
+        "step_id": "gpu_disarm",
+        "action": "script:gpu_disarm",
+        "version": "1.0.0",
+        "timeout_seconds": 1200,
+        "retry": 1,
+        "params": {
+          "mode": "disarm",
+          "wait_device_online_seconds": 600
+        }
+      },
+      {
         "step_id": "gpu_finish",
         "action": "script:gpu_finish",
-        "version": "1.0.8",
+        "version": "1.1.0",
         "timeout_seconds": 600,
         "retry": 1,
         "params": {}

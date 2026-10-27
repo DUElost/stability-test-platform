@@ -808,6 +808,19 @@
         }
       ]
     },
+    "gpu_disarm": {
+      "kind": "script",
+      "versions": [
+        {
+          "artifact": "packages/gpu_disarm/1.0.0.tar.gz",
+          "package_sha256": "c464779d695402473bf5afb173bc743d68eac307a680c46bfec2ebbf4299ead7",
+          "python": null,
+          "retired": false,
+          "script": "gpu_disarm.py",
+          "version": "1.0.0"
+        }
+      ]
+    },
     "gpu_finish": {
       "kind": "script",
       "versions": [
@@ -882,6 +895,14 @@
           "retired": false,
           "script": "gpu_finish.py",
           "version": "1.0.8"
+        },
+        {
+          "artifact": "packages/gpu_finish/1.1.0.tar.gz",
+          "package_sha256": "3056b659c802df8ebf2c47fe76c3c82af0a578f8e5dee1e4c92cec802fd7d88e",
+          "python": null,
+          "retired": false,
+          "script": "gpu_finish.py",
+          "version": "1.1.0"
         }
       ]
     },

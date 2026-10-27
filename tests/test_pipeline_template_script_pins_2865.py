@@ -39,6 +39,7 @@ PINNED_SCRIPTS: dict[str, str] = {
     "script:flash_preflight_unisoc": "flash_preflight_unisoc",
     "script:oobe_skip": "oobe_skip",
     "script:gpu_check": "gpu_check",
+    "script:gpu_disarm": "gpu_disarm",
     "script:gpu_finish": "gpu_finish",
     "script:gpu_setup": "gpu_setup",
     "script:monkey_check": "monkey_check",

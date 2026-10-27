@@ -2563,6 +2563,14 @@ class PipelineEngine:
                     "[Lifecycle] run=%d — executing teardown (reason: %s)",
                     self._run_id, termination_reason,
                 )
+                if termination_reason == "abort":
+                    # Lease-auth failure also aborts without setting cancel
+                    # flags. Honor the lifecycle outcome for GPU collection;
+                    # preserve all other families' existing teardown behavior.
+                    teardown_def = [
+                        step for step in teardown_def
+                        if not self._is_gpu_collection_step(step)
+                    ]
                 teardown_result = self._execute_teardown_best_effort(teardown_def)
 
         # ── Unified exit: terminal MQ + artifact + StepResult ──
@@ -3252,6 +3260,14 @@ class PipelineEngine:
             return float("inf")
         return min(tail["deadline"], tail["step_deadlines"].get(key, tail["deadline"]))
 
+    @staticmethod
+    def _is_gpu_collection_step(step: dict) -> bool:
+        name = script_name_from_step(step)
+        return (
+            name == ONBOARDED.get("gpu", {}).get("finish_script")
+            and step_teardown_role(name, step_version_of(step), onboarded=ONBOARDED) == STEP_ROLE_COLLECT
+        )
+
     def _execute_teardown_best_effort(
         self,
         teardown_def: List[dict],
@@ -3314,6 +3330,15 @@ class PipelineEngine:
 
         try:
             for step in steps:
+                # B7 U2 (#3809 §4.3): interruption keeps GPU disarm, skips its
+                # registered collect-only finish. Recheck after each disarm so
+                # an abort arriving during disarm cannot start collection.
+                # Other families retain their existing B6 behavior.
+                if (
+                    self._is_gpu_collection_step(step)
+                    and (self._canceled or (self._is_aborted is not None and self._is_aborted()))
+                ):
+                    continue
                 total_steps += 1
                 step_id = step.get("step_id", "unknown")
                 try:

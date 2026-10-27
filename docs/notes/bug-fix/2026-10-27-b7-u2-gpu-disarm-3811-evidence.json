@@ -1,0 +1,3446 @@
+{
+  "package_sha256": "c464779d695402473bf5afb173bc743d68eac307a680c46bfec2ebbf4299ead7",
+  "lease_checks": 500,
+  "events": [
+    {
+      "model": "MLD_LX2",
+      "serial_suffix": "6418",
+      "case": "non-root:baseline",
+      "mode": "disarm",
+      "exit_code": 0,
+      "output": {
+        "mode": "disarm",
+        "readback": "clear",
+        "success": true,
+        "disarm_result": "executed_unverified",
+        "readback_summary": "mode=disarm; readback=clear",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "non-root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MLD-LX2",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": false,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "disarm",
+          "readback": "clear",
+          "success": true
+        }
+      },
+      "host_alias": "H1"
+    },
+    {
+      "model": "MLD_LX2",
+      "serial_suffix": "6418",
+      "case": "non-root:running-before-disarm",
+      "mode": "probe",
+      "exit_code": 1,
+      "output": {
+        "mode": "probe",
+        "readback": "footprint",
+        "success": false,
+        "disarm_result": "failed",
+        "readback_summary": "mode=probe; readback=footprint",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "non-root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MLD-LX2",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": true,
+              "rc": 0
+            },
+            "instrument": {
+              "value": true,
+              "rc": 0
+            },
+            "file": {
+              "value": true,
+              "rc": 0
+            },
+            "airplane": {
+              "value": true,
+              "rc": 0
+            },
+            "wifi": {
+              "value": false,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "probe",
+          "readback": "footprint",
+          "success": false
+        }
+      },
+      "host_alias": "H1"
+    },
+    {
+      "model": "MLD_LX2",
+      "serial_suffix": "6418",
+      "case": "non-root:running-disarm",
+      "mode": "disarm",
+      "exit_code": 0,
+      "output": {
+        "mode": "disarm",
+        "readback": "clear",
+        "success": true,
+        "disarm_result": "executed_unverified",
+        "readback_summary": "mode=disarm; readback=clear",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "non-root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MLD-LX2",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": false,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "disarm",
+          "readback": "clear",
+          "success": true
+        }
+      },
+      "host_alias": "H1"
+    },
+    {
+      "model": "MLD_LX2",
+      "serial_suffix": "6418",
+      "case": "non-root:after-disarm-probe",
+      "mode": "probe",
+      "exit_code": 1,
+      "output": {
+        "mode": "probe",
+        "readback": "clear",
+        "success": false,
+        "disarm_result": "failed",
+        "readback_summary": "mode=probe; readback=clear",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "non-root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MLD-LX2",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": false,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "probe",
+          "readback": "clear",
+          "success": false
+        }
+      },
+      "host_alias": "H1"
+    },
+    {
+      "model": "MLD_LX2",
+      "serial_suffix": "6418",
+      "case": "non-root:file-only-residue",
+      "mode": "probe",
+      "exit_code": 1,
+      "output": {
+        "mode": "probe",
+        "readback": "footprint",
+        "success": false,
+        "disarm_result": "failed",
+        "readback_summary": "mode=probe; readback=footprint",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "non-root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MLD-LX2",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": true,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "probe",
+          "readback": "footprint",
+          "success": false
+        }
+      },
+      "host_alias": "H1"
+    },
+    {
+      "model": "MLD_LX2",
+      "serial_suffix": "6418",
+      "case": "non-root:file-only-clear",
+      "mode": "disarm",
+      "exit_code": 0,
+      "output": {
+        "mode": "disarm",
+        "readback": "clear",
+        "success": true,
+        "disarm_result": "executed_unverified",
+        "readback_summary": "mode=disarm; readback=clear",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "non-root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MLD-LX2",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": false,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "disarm",
+          "readback": "clear",
+          "success": true
+        }
+      },
+      "host_alias": "H1"
+    },
+    {
+      "model": "MLD_LX2",
+      "serial_suffix": "6418",
+      "case": "non-root:offline",
+      "mode": "probe",
+      "exit_code": 1,
+      "output": {
+        "mode": "probe",
+        "readback": "readback_failed",
+        "success": false,
+        "disarm_result": "failed",
+        "readback_summary": "mode=probe; readback=readback_failed",
+        "evidence": {
+          "kind": "readback_failed",
+          "boot_completed": null,
+          "permission_model": "unknown",
+          "apk_sha256": null,
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "mode": "probe",
+          "readback": "readback_failed",
+          "success": false
+        }
+      },
+      "host_alias": "H1"
+    },
+    {
+      "model": "MLD_LX2",
+      "serial_suffix": "6418",
+      "case": "non-root:boot-not-completed",
+      "mode": "probe",
+      "exit_code": 1,
+      "output": {
+        "mode": "probe",
+        "readback": "readback_failed",
+        "success": false,
+        "disarm_result": "failed",
+        "readback_summary": "mode=probe; readback=readback_failed",
+        "evidence": {
+          "kind": "readback_failed",
+          "boot_completed": "",
+          "permission_model": "unknown",
+          "apk_sha256": null,
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "mode": "probe",
+          "readback": "readback_failed",
+          "success": false
+        }
+      },
+      "host_alias": "H1"
+    },
+    {
+      "model": "MLD_LX2",
+      "serial_suffix": "6418",
+      "case": "non-root:post-reboot-clear",
+      "mode": "disarm",
+      "exit_code": 0,
+      "output": {
+        "mode": "disarm",
+        "readback": "clear",
+        "success": true,
+        "disarm_result": "executed_unverified",
+        "readback_summary": "mode=disarm; readback=clear",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "non-root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MLD-LX2",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": false,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "disarm",
+          "readback": "clear",
+          "success": true
+        }
+      },
+      "host_alias": "H1"
+    },
+    {
+      "model": "MLD_LX2",
+      "serial_suffix": "6418",
+      "case": "root:baseline",
+      "mode": "disarm",
+      "exit_code": 0,
+      "output": {
+        "mode": "disarm",
+        "readback": "clear",
+        "success": true,
+        "disarm_result": "executed_unverified",
+        "readback_summary": "mode=disarm; readback=clear",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MLD-LX2",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": false,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "disarm",
+          "readback": "clear",
+          "success": true
+        }
+      },
+      "host_alias": "H1"
+    },
+    {
+      "model": "MLD_LX2",
+      "serial_suffix": "6418",
+      "case": "root:running-before-disarm",
+      "mode": "probe",
+      "exit_code": 1,
+      "output": {
+        "mode": "probe",
+        "readback": "footprint",
+        "success": false,
+        "disarm_result": "failed",
+        "readback_summary": "mode=probe; readback=footprint",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MLD-LX2",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": true,
+              "rc": 0
+            },
+            "instrument": {
+              "value": true,
+              "rc": 0
+            },
+            "file": {
+              "value": true,
+              "rc": 0
+            },
+            "airplane": {
+              "value": true,
+              "rc": 0
+            },
+            "wifi": {
+              "value": false,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "probe",
+          "readback": "footprint",
+          "success": false
+        }
+      },
+      "host_alias": "H1"
+    },
+    {
+      "model": "MLD_LX2",
+      "serial_suffix": "6418",
+      "case": "root:running-disarm",
+      "mode": "disarm",
+      "exit_code": 0,
+      "output": {
+        "mode": "disarm",
+        "readback": "clear",
+        "success": true,
+        "disarm_result": "executed_unverified",
+        "readback_summary": "mode=disarm; readback=clear",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MLD-LX2",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": false,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "disarm",
+          "readback": "clear",
+          "success": true
+        }
+      },
+      "host_alias": "H1"
+    },
+    {
+      "model": "MLD_LX2",
+      "serial_suffix": "6418",
+      "case": "root:after-disarm-probe",
+      "mode": "probe",
+      "exit_code": 1,
+      "output": {
+        "mode": "probe",
+        "readback": "clear",
+        "success": false,
+        "disarm_result": "failed",
+        "readback_summary": "mode=probe; readback=clear",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MLD-LX2",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": false,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "probe",
+          "readback": "clear",
+          "success": false
+        }
+      },
+      "host_alias": "H1"
+    },
+    {
+      "model": "MLD_LX2",
+      "serial_suffix": "6418",
+      "case": "root:file-only-residue",
+      "mode": "probe",
+      "exit_code": 1,
+      "output": {
+        "mode": "probe",
+        "readback": "footprint",
+        "success": false,
+        "disarm_result": "failed",
+        "readback_summary": "mode=probe; readback=footprint",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MLD-LX2",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": true,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "probe",
+          "readback": "footprint",
+          "success": false
+        }
+      },
+      "host_alias": "H1"
+    },
+    {
+      "model": "MLD_LX2",
+      "serial_suffix": "6418",
+      "case": "root:file-only-clear",
+      "mode": "disarm",
+      "exit_code": 0,
+      "output": {
+        "mode": "disarm",
+        "readback": "clear",
+        "success": true,
+        "disarm_result": "executed_unverified",
+        "readback_summary": "mode=disarm; readback=clear",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MLD-LX2",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": false,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "disarm",
+          "readback": "clear",
+          "success": true
+        }
+      },
+      "host_alias": "H1"
+    },
+    {
+      "model": "MLD_LX2",
+      "serial_suffix": "6418",
+      "case": "root:offline",
+      "mode": "probe",
+      "exit_code": 1,
+      "output": {
+        "mode": "probe",
+        "readback": "readback_failed",
+        "success": false,
+        "disarm_result": "failed",
+        "readback_summary": "mode=probe; readback=readback_failed",
+        "evidence": {
+          "kind": "readback_failed",
+          "boot_completed": null,
+          "permission_model": "unknown",
+          "apk_sha256": null,
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "mode": "probe",
+          "readback": "readback_failed",
+          "success": false
+        }
+      },
+      "host_alias": "H1"
+    },
+    {
+      "model": "MLD_LX2",
+      "serial_suffix": "6418",
+      "case": "root:boot-not-completed",
+      "mode": "probe",
+      "exit_code": 1,
+      "output": {
+        "mode": "probe",
+        "readback": "readback_failed",
+        "success": false,
+        "disarm_result": "failed",
+        "readback_summary": "mode=probe; readback=readback_failed",
+        "evidence": {
+          "kind": "readback_failed",
+          "boot_completed": "",
+          "permission_model": "unknown",
+          "apk_sha256": null,
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "mode": "probe",
+          "readback": "readback_failed",
+          "success": false
+        }
+      },
+      "host_alias": "H1"
+    },
+    {
+      "model": "MLD_LX2",
+      "serial_suffix": "6418",
+      "case": "root:post-reboot-clear",
+      "mode": "disarm",
+      "exit_code": 0,
+      "output": {
+        "mode": "disarm",
+        "readback": "clear",
+        "success": true,
+        "disarm_result": "executed_unverified",
+        "readback_summary": "mode=disarm; readback=clear",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MLD-LX2",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": false,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "disarm",
+          "readback": "clear",
+          "success": true
+        }
+      },
+      "host_alias": "H1"
+    },
+    {
+      "model": "MLD_LX2",
+      "serial_suffix": "6418",
+      "case": "final-cleanup",
+      "mode": "disarm",
+      "exit_code": 0,
+      "output": {
+        "mode": "disarm",
+        "readback": "clear",
+        "success": true,
+        "disarm_result": "executed_unverified",
+        "readback_summary": "mode=disarm; readback=clear",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MLD-LX2",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": false,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "disarm",
+          "readback": "clear",
+          "success": true
+        }
+      },
+      "host_alias": "H1"
+    },
+    {
+      "model": "MLD_LX2",
+      "serial_suffix": "0305",
+      "case": "non-root:tool-not-installed",
+      "mode": "disarm",
+      "exit_code": 0,
+      "output": {
+        "mode": "disarm",
+        "readback": "clear",
+        "success": true,
+        "disarm_result": "executed_unverified",
+        "readback_summary": "mode=disarm; readback=clear",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "non-root",
+          "apk_sha256": null,
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MLD-LX2",
+          "tool_installed": false,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": false,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "disarm",
+          "readback": "clear",
+          "success": true
+        }
+      },
+      "host_alias": "H2"
+    },
+    {
+      "model": "MLD_LX2",
+      "serial_suffix": "0305",
+      "case": "root:tool-not-installed",
+      "mode": "disarm",
+      "exit_code": 0,
+      "output": {
+        "mode": "disarm",
+        "readback": "clear",
+        "success": true,
+        "disarm_result": "executed_unverified",
+        "readback_summary": "mode=disarm; readback=clear",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "root",
+          "apk_sha256": null,
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MLD-LX2",
+          "tool_installed": false,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": false,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "disarm",
+          "readback": "clear",
+          "success": true
+        }
+      },
+      "host_alias": "H2"
+    },
+    {
+      "model": "MLD_LX2",
+      "serial_suffix": "0305",
+      "case": "final-cleanup",
+      "mode": "disarm",
+      "exit_code": 0,
+      "output": {
+        "mode": "disarm",
+        "readback": "clear",
+        "success": true,
+        "disarm_result": "executed_unverified",
+        "readback_summary": "mode=disarm; readback=clear",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "root",
+          "apk_sha256": null,
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MLD-LX2",
+          "tool_installed": false,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": false,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "disarm",
+          "readback": "clear",
+          "success": true
+        }
+      },
+      "host_alias": "H2"
+    },
+    {
+      "model": "MLD_LX3",
+      "serial_suffix": "0085",
+      "case": "non-root:baseline",
+      "mode": "disarm",
+      "exit_code": 0,
+      "output": {
+        "mode": "disarm",
+        "readback": "clear",
+        "success": true,
+        "disarm_result": "executed_unverified",
+        "readback_summary": "mode=disarm; readback=clear",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "non-root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MLD-LX3",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": false,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "disarm",
+          "readback": "clear",
+          "success": true
+        }
+      },
+      "host_alias": "H3"
+    },
+    {
+      "model": "MLD_LX3",
+      "serial_suffix": "0085",
+      "case": "non-root:running-before-disarm",
+      "mode": "probe",
+      "exit_code": 1,
+      "output": {
+        "mode": "probe",
+        "readback": "footprint",
+        "success": false,
+        "disarm_result": "failed",
+        "readback_summary": "mode=probe; readback=footprint",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "non-root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MLD-LX3",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": true,
+              "rc": 0
+            },
+            "instrument": {
+              "value": true,
+              "rc": 0
+            },
+            "file": {
+              "value": true,
+              "rc": 0
+            },
+            "airplane": {
+              "value": true,
+              "rc": 0
+            },
+            "wifi": {
+              "value": false,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "probe",
+          "readback": "footprint",
+          "success": false
+        }
+      },
+      "host_alias": "H3"
+    },
+    {
+      "model": "MLD_LX3",
+      "serial_suffix": "0085",
+      "case": "non-root:running-disarm",
+      "mode": "disarm",
+      "exit_code": 0,
+      "output": {
+        "mode": "disarm",
+        "readback": "clear",
+        "success": true,
+        "disarm_result": "executed_unverified",
+        "readback_summary": "mode=disarm; readback=clear",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "non-root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MLD-LX3",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": false,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "disarm",
+          "readback": "clear",
+          "success": true
+        }
+      },
+      "host_alias": "H3"
+    },
+    {
+      "model": "MLD_LX3",
+      "serial_suffix": "0085",
+      "case": "non-root:after-disarm-probe",
+      "mode": "probe",
+      "exit_code": 1,
+      "output": {
+        "mode": "probe",
+        "readback": "clear",
+        "success": false,
+        "disarm_result": "failed",
+        "readback_summary": "mode=probe; readback=clear",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "non-root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MLD-LX3",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": false,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "probe",
+          "readback": "clear",
+          "success": false
+        }
+      },
+      "host_alias": "H3"
+    },
+    {
+      "model": "MLD_LX3",
+      "serial_suffix": "0085",
+      "case": "non-root:file-only-residue",
+      "mode": "probe",
+      "exit_code": 1,
+      "output": {
+        "mode": "probe",
+        "readback": "footprint",
+        "success": false,
+        "disarm_result": "failed",
+        "readback_summary": "mode=probe; readback=footprint",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "non-root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MLD-LX3",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": true,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "probe",
+          "readback": "footprint",
+          "success": false
+        }
+      },
+      "host_alias": "H3"
+    },
+    {
+      "model": "MLD_LX3",
+      "serial_suffix": "0085",
+      "case": "non-root:file-only-clear",
+      "mode": "disarm",
+      "exit_code": 0,
+      "output": {
+        "mode": "disarm",
+        "readback": "clear",
+        "success": true,
+        "disarm_result": "executed_unverified",
+        "readback_summary": "mode=disarm; readback=clear",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "non-root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MLD-LX3",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": false,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "disarm",
+          "readback": "clear",
+          "success": true
+        }
+      },
+      "host_alias": "H3"
+    },
+    {
+      "model": "MLD_LX3",
+      "serial_suffix": "0085",
+      "case": "non-root:offline",
+      "mode": "probe",
+      "exit_code": 1,
+      "output": {
+        "mode": "probe",
+        "readback": "readback_failed",
+        "success": false,
+        "disarm_result": "failed",
+        "readback_summary": "mode=probe; readback=readback_failed",
+        "evidence": {
+          "kind": "readback_failed",
+          "boot_completed": null,
+          "permission_model": "unknown",
+          "apk_sha256": null,
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "mode": "probe",
+          "readback": "readback_failed",
+          "success": false
+        }
+      },
+      "host_alias": "H3"
+    },
+    {
+      "model": "MLD_LX3",
+      "serial_suffix": "0085",
+      "case": "non-root:boot-not-completed",
+      "mode": "probe",
+      "exit_code": 1,
+      "output": {
+        "mode": "probe",
+        "readback": "readback_failed",
+        "success": false,
+        "disarm_result": "failed",
+        "readback_summary": "mode=probe; readback=readback_failed",
+        "evidence": {
+          "kind": "readback_failed",
+          "boot_completed": "",
+          "permission_model": "unknown",
+          "apk_sha256": null,
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "mode": "probe",
+          "readback": "readback_failed",
+          "success": false
+        }
+      },
+      "host_alias": "H3"
+    },
+    {
+      "model": "MLD_LX3",
+      "serial_suffix": "0085",
+      "case": "non-root:post-reboot-clear",
+      "mode": "disarm",
+      "exit_code": 0,
+      "output": {
+        "mode": "disarm",
+        "readback": "clear",
+        "success": true,
+        "disarm_result": "executed_unverified",
+        "readback_summary": "mode=disarm; readback=clear",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "non-root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MLD-LX3",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": false,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "disarm",
+          "readback": "clear",
+          "success": true
+        }
+      },
+      "host_alias": "H3"
+    },
+    {
+      "model": "MLD_LX3",
+      "serial_suffix": "0085",
+      "case": "root:baseline",
+      "mode": "disarm",
+      "exit_code": 0,
+      "output": {
+        "mode": "disarm",
+        "readback": "clear",
+        "success": true,
+        "disarm_result": "executed_unverified",
+        "readback_summary": "mode=disarm; readback=clear",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MLD-LX3",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": false,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "disarm",
+          "readback": "clear",
+          "success": true
+        }
+      },
+      "host_alias": "H3"
+    },
+    {
+      "model": "MLD_LX3",
+      "serial_suffix": "0085",
+      "case": "root:running-before-disarm",
+      "mode": "probe",
+      "exit_code": 1,
+      "output": {
+        "mode": "probe",
+        "readback": "footprint",
+        "success": false,
+        "disarm_result": "failed",
+        "readback_summary": "mode=probe; readback=footprint",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MLD-LX3",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": true,
+              "rc": 0
+            },
+            "instrument": {
+              "value": true,
+              "rc": 0
+            },
+            "file": {
+              "value": true,
+              "rc": 0
+            },
+            "airplane": {
+              "value": true,
+              "rc": 0
+            },
+            "wifi": {
+              "value": false,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "probe",
+          "readback": "footprint",
+          "success": false
+        }
+      },
+      "host_alias": "H3"
+    },
+    {
+      "model": "MLD_LX3",
+      "serial_suffix": "0085",
+      "case": "root:running-disarm",
+      "mode": "disarm",
+      "exit_code": 0,
+      "output": {
+        "mode": "disarm",
+        "readback": "clear",
+        "success": true,
+        "disarm_result": "executed_unverified",
+        "readback_summary": "mode=disarm; readback=clear",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MLD-LX3",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": false,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "disarm",
+          "readback": "clear",
+          "success": true
+        }
+      },
+      "host_alias": "H3"
+    },
+    {
+      "model": "MLD_LX3",
+      "serial_suffix": "0085",
+      "case": "root:after-disarm-probe",
+      "mode": "probe",
+      "exit_code": 1,
+      "output": {
+        "mode": "probe",
+        "readback": "clear",
+        "success": false,
+        "disarm_result": "failed",
+        "readback_summary": "mode=probe; readback=clear",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MLD-LX3",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": false,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "probe",
+          "readback": "clear",
+          "success": false
+        }
+      },
+      "host_alias": "H3"
+    },
+    {
+      "model": "MLD_LX3",
+      "serial_suffix": "0085",
+      "case": "root:file-only-residue",
+      "mode": "probe",
+      "exit_code": 1,
+      "output": {
+        "mode": "probe",
+        "readback": "footprint",
+        "success": false,
+        "disarm_result": "failed",
+        "readback_summary": "mode=probe; readback=footprint",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MLD-LX3",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": true,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "probe",
+          "readback": "footprint",
+          "success": false
+        }
+      },
+      "host_alias": "H3"
+    },
+    {
+      "model": "MLD_LX3",
+      "serial_suffix": "0085",
+      "case": "root:file-only-clear",
+      "mode": "disarm",
+      "exit_code": 0,
+      "output": {
+        "mode": "disarm",
+        "readback": "clear",
+        "success": true,
+        "disarm_result": "executed_unverified",
+        "readback_summary": "mode=disarm; readback=clear",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MLD-LX3",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": false,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "disarm",
+          "readback": "clear",
+          "success": true
+        }
+      },
+      "host_alias": "H3"
+    },
+    {
+      "model": "MLD_LX3",
+      "serial_suffix": "0085",
+      "case": "root:offline",
+      "mode": "probe",
+      "exit_code": 1,
+      "output": {
+        "mode": "probe",
+        "readback": "readback_failed",
+        "success": false,
+        "disarm_result": "failed",
+        "readback_summary": "mode=probe; readback=readback_failed",
+        "evidence": {
+          "kind": "readback_failed",
+          "boot_completed": null,
+          "permission_model": "unknown",
+          "apk_sha256": null,
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "mode": "probe",
+          "readback": "readback_failed",
+          "success": false
+        }
+      },
+      "host_alias": "H3"
+    },
+    {
+      "model": "MLD_LX3",
+      "serial_suffix": "0085",
+      "case": "root:boot-not-completed",
+      "mode": "probe",
+      "exit_code": 1,
+      "output": {
+        "mode": "probe",
+        "readback": "readback_failed",
+        "success": false,
+        "disarm_result": "failed",
+        "readback_summary": "mode=probe; readback=readback_failed",
+        "evidence": {
+          "kind": "readback_failed",
+          "boot_completed": "",
+          "permission_model": "unknown",
+          "apk_sha256": null,
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "mode": "probe",
+          "readback": "readback_failed",
+          "success": false
+        }
+      },
+      "host_alias": "H3"
+    },
+    {
+      "model": "MLD_LX3",
+      "serial_suffix": "0085",
+      "case": "root:post-reboot-clear",
+      "mode": "disarm",
+      "exit_code": 0,
+      "output": {
+        "mode": "disarm",
+        "readback": "clear",
+        "success": true,
+        "disarm_result": "executed_unverified",
+        "readback_summary": "mode=disarm; readback=clear",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MLD-LX3",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": false,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "disarm",
+          "readback": "clear",
+          "success": true
+        }
+      },
+      "host_alias": "H3"
+    },
+    {
+      "model": "MLD_LX3",
+      "serial_suffix": "0085",
+      "case": "final-cleanup",
+      "mode": "disarm",
+      "exit_code": 0,
+      "output": {
+        "mode": "disarm",
+        "readback": "clear",
+        "success": true,
+        "disarm_result": "executed_unverified",
+        "readback_summary": "mode=disarm; readback=clear",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MLD-LX3",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": false,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "disarm",
+          "readback": "clear",
+          "success": true
+        }
+      },
+      "host_alias": "H3"
+    },
+    {
+      "model": "MLD_LX3",
+      "serial_suffix": "0105",
+      "case": "non-root:tool-not-installed",
+      "mode": "disarm",
+      "exit_code": 0,
+      "output": {
+        "mode": "disarm",
+        "readback": "clear",
+        "success": true,
+        "disarm_result": "executed_unverified",
+        "readback_summary": "mode=disarm; readback=clear",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "non-root",
+          "apk_sha256": null,
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MLD-LX3",
+          "tool_installed": false,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": false,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "disarm",
+          "readback": "clear",
+          "success": true
+        }
+      },
+      "host_alias": "H4"
+    },
+    {
+      "model": "MLD_LX3",
+      "serial_suffix": "0105",
+      "case": "root:tool-not-installed",
+      "mode": "disarm",
+      "exit_code": 0,
+      "output": {
+        "mode": "disarm",
+        "readback": "clear",
+        "success": true,
+        "disarm_result": "executed_unverified",
+        "readback_summary": "mode=disarm; readback=clear",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "root",
+          "apk_sha256": null,
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MLD-LX3",
+          "tool_installed": false,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": false,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "disarm",
+          "readback": "clear",
+          "success": true
+        }
+      },
+      "host_alias": "H4"
+    },
+    {
+      "model": "MLD_LX3",
+      "serial_suffix": "0105",
+      "case": "final-cleanup",
+      "mode": "disarm",
+      "exit_code": 0,
+      "output": {
+        "mode": "disarm",
+        "readback": "clear",
+        "success": true,
+        "disarm_result": "executed_unverified",
+        "readback_summary": "mode=disarm; readback=clear",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "root",
+          "apk_sha256": null,
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MLD-LX3",
+          "tool_installed": false,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": false,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "disarm",
+          "readback": "clear",
+          "success": true
+        }
+      },
+      "host_alias": "H4"
+    },
+    {
+      "model": "MOD_LX3",
+      "serial_suffix": "0071",
+      "case": "non-root:baseline",
+      "mode": "disarm",
+      "exit_code": 0,
+      "output": {
+        "mode": "disarm",
+        "readback": "clear",
+        "success": true,
+        "disarm_result": "executed_unverified",
+        "readback_summary": "mode=disarm; readback=clear",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "non-root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MOD-LX3",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": false,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "disarm",
+          "readback": "clear",
+          "success": true
+        }
+      },
+      "host_alias": "H5"
+    },
+    {
+      "model": "MOD_LX3",
+      "serial_suffix": "0071",
+      "case": "non-root:running-before-disarm",
+      "mode": "probe",
+      "exit_code": 1,
+      "output": {
+        "mode": "probe",
+        "readback": "footprint",
+        "success": false,
+        "disarm_result": "failed",
+        "readback_summary": "mode=probe; readback=footprint",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "non-root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MOD-LX3",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": true,
+              "rc": 0
+            },
+            "instrument": {
+              "value": true,
+              "rc": 0
+            },
+            "file": {
+              "value": true,
+              "rc": 0
+            },
+            "airplane": {
+              "value": true,
+              "rc": 0
+            },
+            "wifi": {
+              "value": false,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "probe",
+          "readback": "footprint",
+          "success": false
+        }
+      },
+      "host_alias": "H5"
+    },
+    {
+      "model": "MOD_LX3",
+      "serial_suffix": "0071",
+      "case": "non-root:running-disarm",
+      "mode": "disarm",
+      "exit_code": 0,
+      "output": {
+        "mode": "disarm",
+        "readback": "clear",
+        "success": true,
+        "disarm_result": "executed_unverified",
+        "readback_summary": "mode=disarm; readback=clear",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "non-root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MOD-LX3",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": false,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "disarm",
+          "readback": "clear",
+          "success": true
+        }
+      },
+      "host_alias": "H5"
+    },
+    {
+      "model": "MOD_LX3",
+      "serial_suffix": "0071",
+      "case": "non-root:after-disarm-probe",
+      "mode": "probe",
+      "exit_code": 1,
+      "output": {
+        "mode": "probe",
+        "readback": "clear",
+        "success": false,
+        "disarm_result": "failed",
+        "readback_summary": "mode=probe; readback=clear",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "non-root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MOD-LX3",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": false,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "probe",
+          "readback": "clear",
+          "success": false
+        }
+      },
+      "host_alias": "H5"
+    },
+    {
+      "model": "MOD_LX3",
+      "serial_suffix": "0071",
+      "case": "non-root:file-only-residue",
+      "mode": "probe",
+      "exit_code": 1,
+      "output": {
+        "mode": "probe",
+        "readback": "footprint",
+        "success": false,
+        "disarm_result": "failed",
+        "readback_summary": "mode=probe; readback=footprint",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "non-root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MOD-LX3",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": true,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "probe",
+          "readback": "footprint",
+          "success": false
+        }
+      },
+      "host_alias": "H5"
+    },
+    {
+      "model": "MOD_LX3",
+      "serial_suffix": "0071",
+      "case": "non-root:file-only-clear",
+      "mode": "disarm",
+      "exit_code": 0,
+      "output": {
+        "mode": "disarm",
+        "readback": "clear",
+        "success": true,
+        "disarm_result": "executed_unverified",
+        "readback_summary": "mode=disarm; readback=clear",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "non-root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MOD-LX3",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": false,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "disarm",
+          "readback": "clear",
+          "success": true
+        }
+      },
+      "host_alias": "H5"
+    },
+    {
+      "model": "MOD_LX3",
+      "serial_suffix": "0071",
+      "case": "non-root:offline",
+      "mode": "probe",
+      "exit_code": 1,
+      "output": {
+        "mode": "probe",
+        "readback": "readback_failed",
+        "success": false,
+        "disarm_result": "failed",
+        "readback_summary": "mode=probe; readback=readback_failed",
+        "evidence": {
+          "kind": "readback_failed",
+          "boot_completed": null,
+          "permission_model": "unknown",
+          "apk_sha256": null,
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "mode": "probe",
+          "readback": "readback_failed",
+          "success": false
+        }
+      },
+      "host_alias": "H5"
+    },
+    {
+      "model": "MOD_LX3",
+      "serial_suffix": "0071",
+      "case": "non-root:boot-not-completed",
+      "mode": "probe",
+      "exit_code": 1,
+      "output": {
+        "mode": "probe",
+        "readback": "readback_failed",
+        "success": false,
+        "disarm_result": "failed",
+        "readback_summary": "mode=probe; readback=readback_failed",
+        "evidence": {
+          "kind": "readback_failed",
+          "boot_completed": "",
+          "permission_model": "unknown",
+          "apk_sha256": null,
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "mode": "probe",
+          "readback": "readback_failed",
+          "success": false
+        }
+      },
+      "host_alias": "H5"
+    },
+    {
+      "model": "MOD_LX3",
+      "serial_suffix": "0071",
+      "case": "non-root:post-reboot-clear",
+      "mode": "disarm",
+      "exit_code": 0,
+      "output": {
+        "mode": "disarm",
+        "readback": "clear",
+        "success": true,
+        "disarm_result": "executed_unverified",
+        "readback_summary": "mode=disarm; readback=clear",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "non-root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MOD-LX3",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": false,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "disarm",
+          "readback": "clear",
+          "success": true
+        }
+      },
+      "host_alias": "H5"
+    },
+    {
+      "model": "MOD_LX3",
+      "serial_suffix": "0071",
+      "case": "root:baseline",
+      "mode": "disarm",
+      "exit_code": 0,
+      "output": {
+        "mode": "disarm",
+        "readback": "clear",
+        "success": true,
+        "disarm_result": "executed_unverified",
+        "readback_summary": "mode=disarm; readback=clear",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MOD-LX3",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": false,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "disarm",
+          "readback": "clear",
+          "success": true
+        }
+      },
+      "host_alias": "H5"
+    },
+    {
+      "model": "MOD_LX3",
+      "serial_suffix": "0071",
+      "case": "root:running-before-disarm",
+      "mode": "probe",
+      "exit_code": 1,
+      "output": {
+        "mode": "probe",
+        "readback": "footprint",
+        "success": false,
+        "disarm_result": "failed",
+        "readback_summary": "mode=probe; readback=footprint",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MOD-LX3",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": true,
+              "rc": 0
+            },
+            "instrument": {
+              "value": true,
+              "rc": 0
+            },
+            "file": {
+              "value": true,
+              "rc": 0
+            },
+            "airplane": {
+              "value": true,
+              "rc": 0
+            },
+            "wifi": {
+              "value": false,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "probe",
+          "readback": "footprint",
+          "success": false
+        }
+      },
+      "host_alias": "H5"
+    },
+    {
+      "model": "MOD_LX3",
+      "serial_suffix": "0071",
+      "case": "root:running-disarm",
+      "mode": "disarm",
+      "exit_code": 0,
+      "output": {
+        "mode": "disarm",
+        "readback": "clear",
+        "success": true,
+        "disarm_result": "executed_unverified",
+        "readback_summary": "mode=disarm; readback=clear",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MOD-LX3",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": false,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "disarm",
+          "readback": "clear",
+          "success": true
+        }
+      },
+      "host_alias": "H5"
+    },
+    {
+      "model": "MOD_LX3",
+      "serial_suffix": "0071",
+      "case": "root:after-disarm-probe",
+      "mode": "probe",
+      "exit_code": 1,
+      "output": {
+        "mode": "probe",
+        "readback": "clear",
+        "success": false,
+        "disarm_result": "failed",
+        "readback_summary": "mode=probe; readback=clear",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MOD-LX3",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": false,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "probe",
+          "readback": "clear",
+          "success": false
+        }
+      },
+      "host_alias": "H5"
+    },
+    {
+      "model": "MOD_LX3",
+      "serial_suffix": "0071",
+      "case": "root:file-only-residue",
+      "mode": "probe",
+      "exit_code": 1,
+      "output": {
+        "mode": "probe",
+        "readback": "footprint",
+        "success": false,
+        "disarm_result": "failed",
+        "readback_summary": "mode=probe; readback=footprint",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MOD-LX3",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": true,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "probe",
+          "readback": "footprint",
+          "success": false
+        }
+      },
+      "host_alias": "H5"
+    },
+    {
+      "model": "MOD_LX3",
+      "serial_suffix": "0071",
+      "case": "root:file-only-clear",
+      "mode": "disarm",
+      "exit_code": 0,
+      "output": {
+        "mode": "disarm",
+        "readback": "clear",
+        "success": true,
+        "disarm_result": "executed_unverified",
+        "readback_summary": "mode=disarm; readback=clear",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MOD-LX3",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": false,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "disarm",
+          "readback": "clear",
+          "success": true
+        }
+      },
+      "host_alias": "H5"
+    },
+    {
+      "model": "MOD_LX3",
+      "serial_suffix": "0071",
+      "case": "root:offline",
+      "mode": "probe",
+      "exit_code": 1,
+      "output": {
+        "mode": "probe",
+        "readback": "readback_failed",
+        "success": false,
+        "disarm_result": "failed",
+        "readback_summary": "mode=probe; readback=readback_failed",
+        "evidence": {
+          "kind": "readback_failed",
+          "boot_completed": null,
+          "permission_model": "unknown",
+          "apk_sha256": null,
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "mode": "probe",
+          "readback": "readback_failed",
+          "success": false
+        }
+      },
+      "host_alias": "H5"
+    },
+    {
+      "model": "MOD_LX3",
+      "serial_suffix": "0071",
+      "case": "root:boot-not-completed",
+      "mode": "probe",
+      "exit_code": 1,
+      "output": {
+        "mode": "probe",
+        "readback": "readback_failed",
+        "success": false,
+        "disarm_result": "failed",
+        "readback_summary": "mode=probe; readback=readback_failed",
+        "evidence": {
+          "kind": "readback_failed",
+          "boot_completed": "",
+          "permission_model": "unknown",
+          "apk_sha256": null,
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "mode": "probe",
+          "readback": "readback_failed",
+          "success": false
+        }
+      },
+      "host_alias": "H5"
+    },
+    {
+      "model": "MOD_LX3",
+      "serial_suffix": "0071",
+      "case": "root:post-reboot-clear",
+      "mode": "disarm",
+      "exit_code": 0,
+      "output": {
+        "mode": "disarm",
+        "readback": "clear",
+        "success": true,
+        "disarm_result": "executed_unverified",
+        "readback_summary": "mode=disarm; readback=clear",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MOD-LX3",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": false,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "disarm",
+          "readback": "clear",
+          "success": true
+        }
+      },
+      "host_alias": "H5"
+    },
+    {
+      "model": "MOD_LX3",
+      "serial_suffix": "0071",
+      "case": "final-cleanup",
+      "mode": "disarm",
+      "exit_code": 0,
+      "output": {
+        "mode": "disarm",
+        "readback": "clear",
+        "success": true,
+        "disarm_result": "executed_unverified",
+        "readback_summary": "mode=disarm; readback=clear",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "root",
+          "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MOD-LX3",
+          "tool_installed": true,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": false,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "disarm",
+          "readback": "clear",
+          "success": true
+        }
+      },
+      "host_alias": "H5"
+    },
+    {
+      "model": "MOD_LX3",
+      "serial_suffix": "0189",
+      "case": "non-root:tool-not-installed",
+      "mode": "disarm",
+      "exit_code": 0,
+      "output": {
+        "mode": "disarm",
+        "readback": "clear",
+        "success": true,
+        "disarm_result": "executed_unverified",
+        "readback_summary": "mode=disarm; readback=clear",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "non-root",
+          "apk_sha256": null,
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MOD-LX3",
+          "tool_installed": false,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": false,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "disarm",
+          "readback": "clear",
+          "success": true
+        }
+      },
+      "host_alias": "H6"
+    },
+    {
+      "model": "MOD_LX3",
+      "serial_suffix": "0189",
+      "case": "root:tool-not-installed",
+      "mode": "disarm",
+      "exit_code": 0,
+      "output": {
+        "mode": "disarm",
+        "readback": "clear",
+        "success": true,
+        "disarm_result": "executed_unverified",
+        "readback_summary": "mode=disarm; readback=clear",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "root",
+          "apk_sha256": null,
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MOD-LX3",
+          "tool_installed": false,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": false,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "disarm",
+          "readback": "clear",
+          "success": true
+        }
+      },
+      "host_alias": "H6"
+    },
+    {
+      "model": "MOD_LX3",
+      "serial_suffix": "0189",
+      "case": "final-cleanup",
+      "mode": "disarm",
+      "exit_code": 0,
+      "output": {
+        "mode": "disarm",
+        "readback": "clear",
+        "success": true,
+        "disarm_result": "executed_unverified",
+        "readback_summary": "mode=disarm; readback=clear",
+        "evidence": {
+          "kind": "ok",
+          "boot_completed": "1",
+          "permission_model": "root",
+          "apk_sha256": null,
+          "script_name": "gpu_disarm",
+          "script_version": "1.0.0",
+          "package_sha256": null,
+          "platform": "MTK",
+          "model": "MOD-LX3",
+          "tool_installed": false,
+          "action_errors": [],
+          "states": {
+            "loop": {
+              "value": false,
+              "rc": 1
+            },
+            "instrument": {
+              "value": false,
+              "rc": 1
+            },
+            "file": {
+              "value": false,
+              "rc": 0
+            },
+            "airplane": {
+              "value": false,
+              "rc": 0
+            },
+            "wifi": {
+              "value": true,
+              "rc": 0
+            }
+          },
+          "failed_reads": [],
+          "mode": "disarm",
+          "readback": "clear",
+          "success": true
+        }
+      },
+      "host_alias": "H6"
+    },
+    {
+      "complete": true,
+      "classes": 6,
+      "package_sha256": "c464779d695402473bf5afb173bc743d68eac307a680c46bfec2ebbf4299ead7",
+      "lease_checks": 500
+    }
+  ],
+  "postflight": [
+    {
+      "model": "MLD_LX2",
+      "serial_suffix": "6418",
+      "host_alias": "H1",
+      "facts": {
+        "uid": {
+          "rc": 0,
+          "out": "2000"
+        },
+        "loop": {
+          "rc": 1,
+          "out": ""
+        },
+        "instrument": {
+          "rc": 1,
+          "out": ""
+        },
+        "file": {
+          "rc": 0,
+          "out": "ABSENT"
+        },
+        "airplane": {
+          "rc": 0,
+          "out": "0"
+        },
+        "wifi": {
+          "rc": 0,
+          "out": "enabled"
+        }
+      },
+      "temporary_directory_absent": true
+    },
+    {
+      "model": "MLD_LX2",
+      "serial_suffix": "0305",
+      "host_alias": "H2",
+      "facts": {
+        "uid": {
+          "rc": 0,
+          "out": "2000"
+        },
+        "loop": {
+          "rc": 1,
+          "out": ""
+        },
+        "instrument": {
+          "rc": 1,
+          "out": ""
+        },
+        "file": {
+          "rc": 0,
+          "out": "ABSENT"
+        },
+        "airplane": {
+          "rc": 0,
+          "out": "0"
+        },
+        "wifi": {
+          "rc": 0,
+          "out": "enabled"
+        }
+      },
+      "temporary_directory_absent": true
+    },
+    {
+      "model": "MLD_LX3",
+      "serial_suffix": "0085",
+      "host_alias": "H3",
+      "facts": {
+        "uid": {
+          "rc": 0,
+          "out": "2000"
+        },
+        "loop": {
+          "rc": 1,
+          "out": ""
+        },
+        "instrument": {
+          "rc": 1,
+          "out": ""
+        },
+        "file": {
+          "rc": 0,
+          "out": "ABSENT"
+        },
+        "airplane": {
+          "rc": 0,
+          "out": "0"
+        },
+        "wifi": {
+          "rc": 0,
+          "out": "enabled"
+        }
+      },
+      "temporary_directory_absent": true
+    },
+    {
+      "model": "MLD_LX3",
+      "serial_suffix": "0105",
+      "host_alias": "H4",
+      "facts": {
+        "uid": {
+          "rc": 0,
+          "out": "0"
+        },
+        "loop": {
+          "rc": 1,
+          "out": ""
+        },
+        "instrument": {
+          "rc": 1,
+          "out": ""
+        },
+        "file": {
+          "rc": 0,
+          "out": "ABSENT"
+        },
+        "airplane": {
+          "rc": 0,
+          "out": "0"
+        },
+        "wifi": {
+          "rc": 0,
+          "out": "enabled"
+        }
+      },
+      "temporary_directory_absent": true
+    },
+    {
+      "model": "MOD_LX3",
+      "serial_suffix": "0071",
+      "host_alias": "H5",
+      "facts": {
+        "uid": {
+          "rc": 0,
+          "out": "2000"
+        },
+        "loop": {
+          "rc": 1,
+          "out": ""
+        },
+        "instrument": {
+          "rc": 1,
+          "out": ""
+        },
+        "file": {
+          "rc": 0,
+          "out": "ABSENT"
+        },
+        "airplane": {
+          "rc": 0,
+          "out": "0"
+        },
+        "wifi": {
+          "rc": 0,
+          "out": "enabled"
+        }
+      },
+      "temporary_directory_absent": true
+    },
+    {
+      "model": "MOD_LX3",
+      "serial_suffix": "0189",
+      "host_alias": "H6",
+      "facts": {
+        "uid": {
+          "rc": 0,
+          "out": "0"
+        },
+        "loop": {
+          "rc": 1,
+          "out": ""
+        },
+        "instrument": {
+          "rc": 1,
+          "out": ""
+        },
+        "file": {
+          "rc": 0,
+          "out": "ABSENT"
+        },
+        "airplane": {
+          "rc": 0,
+          "out": "0"
+        },
+        "wifi": {
+          "rc": 0,
+          "out": "enabled"
+        }
+      },
+      "temporary_directory_absent": true
+    }
+  ]
+}
