@@ -4,8 +4,10 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from fastapi import HTTPException
 
 from backend.agent.contracts.device_return import ONBOARDED
+from backend.api.routes.plans import PlanStepIn, _validate_onboarded_wall_clock
 from backend.core.job_timeout_config import DISARM_SCRIPT_NAMES
 from backend.models.plan import Plan, PlanStep
 from backend.models.project import Specialty, TestProject as Project
@@ -166,3 +168,109 @@ def test_gpu_schema_defaults_save_and_dispatch_budget(
     disarm = next(s for s in lifecycle["teardown"] if s["step_id"] == "disarm")
     assert disarm["params"]["wait_device_online_seconds"] == wait
     assert disarm["timeout_seconds"] == ONBOARDED["gpu"]["min_wall_clock_seconds"]["gpu_disarm"](disarm["params"])
+
+
+@pytest.mark.parametrize("entry_point", ["create", "update", "append-chain-tail"])
+@pytest.mark.parametrize("schema_default", ["not-an-integer", {"invalid": 900}])
+def test_gpu_invalid_schema_default_cannot_bypass_wall_clock(
+    client, auth_headers, admin_headers, db_session, gpu_plan, entry_point, schema_default,
+):
+    """F2: Script API accepts these defaults; Plan must reject an unknown budget."""
+    script = db_session.query(Script).filter_by(name="gpu_disarm", version="1.0.0").one()
+    script.default_params = {}
+    db_session.commit()
+    payload = deepcopy(gpu_plan)
+    url = "/api/v1/plans"
+    method = client.post
+    original_id = None
+    if entry_point != "create":
+        created = client.post(url, headers=auth_headers, json=gpu_plan)
+        assert created.status_code == 201, created.text
+        original = created.json()["data"]
+        original_id = original["id"]
+        url += "/" + str(original_id)
+        if entry_point == "update":
+            method = client.put
+            payload = {"steps": payload["steps"], "expected_updated_at": original["updated_at"]}
+        else:
+            url += "/append-chain-tail"
+            payload["name"] += "-tail"
+
+    updated = client.put(f"/api/v1/scripts/{script.id}", headers=admin_headers, json={
+        "param_schema": {"wait_device_online_seconds": {
+            "type": "integer", "default": schema_default,
+        }},
+    })
+    assert updated.status_code == 200, updated.text
+    payload["steps"][1]["timeout_seconds"] = 1
+    before_plans = db_session.query(Plan).count()
+    before_steps = db_session.query(PlanStep).count()
+    rejected = method(url, headers=auth_headers, json=payload)
+    assert rejected.status_code == 422, rejected.text
+    detail = rejected.json()["detail"]
+    assert detail["code"] == "INVALID_STEP_PARAMS"
+    assert detail["problems"][0]["step_key"] == "disarm"
+    db_session.rollback()
+    assert db_session.query(Plan).count() == before_plans
+    assert db_session.query(PlanStep).count() == before_steps
+    if original_id is not None:
+        disarm = db_session.query(PlanStep).filter_by(plan_id=original_id, step_key="disarm").one()
+        assert disarm.timeout_seconds == 1200
+
+
+@pytest.mark.parametrize("entry_point", ["create", "update", "append-chain-tail"])
+@pytest.mark.parametrize("defaults,params,minimum", [
+    ({"wait_device_online_seconds": 600}, {}, 1200),
+    ({}, {"wait_device_online_seconds": 300}, 900),
+], ids=["script-default-overrides-invalid-schema", "step-overrides-invalid-schema"])
+def test_gpu_invalid_schema_default_can_be_overridden(
+    client, auth_headers, admin_headers, db_session, gpu_plan, entry_point, defaults, params, minimum,
+):
+    """Only effective params matter: valid higher-precedence values remain usable."""
+    script = db_session.query(Script).filter_by(name="gpu_disarm", version="1.0.0").one()
+    script.default_params = defaults
+    db_session.commit()
+    payload = deepcopy(gpu_plan)
+    payload["steps"][1].update(timeout_seconds=minimum, params=params)
+    url = "/api/v1/plans"
+    method = client.post
+    if entry_point != "create":
+        created = client.post(url, headers=auth_headers, json=payload)
+        assert created.status_code == 201, created.text
+        original = created.json()["data"]
+        url += "/" + str(original["id"])
+        if entry_point == "update":
+            method = client.put
+            payload = {"steps": payload["steps"], "expected_updated_at": original["updated_at"]}
+        else:
+            url += "/append-chain-tail"
+            payload["name"] += "-tail"
+    updated = client.put(f"/api/v1/scripts/{script.id}", headers=admin_headers, json={
+        "param_schema": {"wait_device_online_seconds": {
+            "type": "integer", "default": "not-an-integer",
+        }},
+    })
+    assert updated.status_code == 200, updated.text
+    saved = method(url, headers=auth_headers, json=payload)
+    assert saved.status_code == (200 if entry_point == "update" else 201), saved.text
+    plan_id = saved.json()["data"]["id"]
+    plan = db_session.get(Plan, plan_id)
+    steps = db_session.query(PlanStep).filter_by(plan_id=plan_id).all()
+    lifecycle = build_lifecycle_from_snapshot(
+        build_plan_snapshot(plan, steps, _fetch_script_metadata(db_session, steps)),
+    )
+    disarm = next(s for s in lifecycle["teardown"] if s["step_id"] == "disarm")
+    assert ONBOARDED["gpu"]["min_wall_clock_seconds"]["gpu_disarm"](disarm["params"]) == minimum
+    assert disarm["timeout_seconds"] == minimum
+
+
+@pytest.mark.parametrize("budget", [None, "not-a-budget", float("inf")])
+def test_registered_budget_conversion_failure_rejected(budget):
+    """A registered callable's unusable result must not mean unregistered."""
+    step = PlanStepIn(step_key="disarm", script_name="gpu_disarm", script_version="1.0.0",
+        stage="teardown", sort_order=0, timeout_seconds=1)
+    registry = {"gpu": {"min_wall_clock_seconds": {"gpu_disarm": lambda _: budget}}}
+    with pytest.raises(HTTPException) as raised:
+        _validate_onboarded_wall_clock([step], onboarded=registry)
+    assert raised.value.status_code == 422
+    assert raised.value.detail["code"] == "INVALID_STEP_PARAMS"

@@ -318,6 +318,7 @@ def _min_wall_clock_for_step(
 
     U5 将在 ONBOARDED[family]["min_wall_clock_seconds"][script] 登记 callable/int。
     ``params`` 必须按 schema.default → default_params → step.params 合并（与派发同源）。
+    已登记预算计算失败必须抛出异常，不能与未登记的 None 混同。
     """
     registry = _load_onboarded_registry() if onboarded is None else onboarded
     if not script_name or not isinstance(registry, dict):
@@ -328,20 +329,11 @@ def _min_wall_clock_for_step(
         by_script = spec.get("min_wall_clock_seconds")
         if not isinstance(by_script, dict):
             continue
-        entry = by_script.get(script_name)
-        if entry is None:
+        if script_name not in by_script:
             continue
-        if callable(entry):
-            try:
-                value = entry(params or {})
-            except Exception:
-                return None
-        else:
-            value = entry
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return None
+        entry = by_script[script_name]
+        value = entry(params or {}) if callable(entry) else entry
+        return int(value)
     return None
 
 
@@ -405,9 +397,24 @@ def _validate_onboarded_wall_clock(
         if step.enabled is False:
             continue
         effective = _effective_step_params(step, defaults)
-        minimum = _min_wall_clock_for_step(
-            step.script_name, effective, onboarded=onboarded,
-        )
+        try:
+            minimum = _min_wall_clock_for_step(
+                step.script_name, effective, onboarded=onboarded,
+            )
+        except Exception:
+            # F2: invalid effective defaults cannot turn a registered step into
+            # an unregistered one. Reuse the existing parameter-error response.
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "INVALID_STEP_PARAMS",
+                    "message": "步骤有效参数无法计算已登记的墙钟预算",
+                    "problems": [{
+                        "step_key": step.step_key,
+                        "problem": "有效参数无法计算已登记的墙钟预算",
+                    }],
+                },
+            ) from None
         if minimum is None:
             continue
         received = step.timeout_seconds

@@ -10,6 +10,8 @@ Refs #3809，Refs #3810。依据 [B7 方案 v1.2](https://github.com/DUElost/sta
 首次实现基线为 `origin/main@ed21b906d35000012210d20584ffc8c27699aafd`。
 F1 返工基线为复核绑定的 `f95d62ca9bf2e80d72ec86f4dba93f2166bcdbff`；权威发现见
 [第 1 轮复核评论](https://github.com/DUElost/stability-test-platform/pull/3815#issuecomment-6431517588)。
+F2 返工基线为 `e673ebd2c1d94471e3852e168649d88c6bda8f87`；权威发现见
+[第 2 轮复核评论](https://github.com/DUElost/stability-test-platform/pull/3815#issuecomment-6432349132)。
 
 `ONBOARDED["gpu"]` 登记循环脚本与 instrument 进程、平台自产循环脚本文件、飞行模式与
 Wi-Fi 四项足迹，解除为 `gpu_disarm@1.0.0`，只收取最低版本为 `gpu_finish@1.1.0`。
@@ -32,7 +34,7 @@ GPU 解除墙钟通过 callable 计算：`max(0, wait_device_online_seconds) + 6
 
 调用点复查：控制面 `evaluate_probe_entry` 已调用共享政策；Plan 的创建、更新与追加链尾已读取
 同一 `ONBOARDED` 对象；Agent `run_init_checks` 与 `registered_step` 已按登记专项运行；
-`DISARM_SCRIPT_NAMES` 已取历史与接入解除名称的并集。除下述 F1 保存期墙钟修正外，消费端复用
+`DISARM_SCRIPT_NAMES` 已取历史与接入解除名称的并集。除下述 F1 / F2 保存期墙钟修正外，消费端复用
 原实现，无新增入口、状态、表、env 或迁移。其他 job 占用检查继续由原 `ReturnDebtConsumer`
 和租约路径承担。
 
@@ -42,6 +44,13 @@ Plan 三入口的墙钟加载现在同时读取 param_schema 与 default_params�
 计算有效参数，再交原登记 callable。没有改变预算公式或派发语义。测试行中 schema 等待 900 秒、
 其余参数为空时，1200 秒墙钟返回 422 / 下限 1500；1500 秒保存成功，实际保存数据构造的快照
 与 lifecycle 仍得到等待 900、墙钟 1500。
+
+F2：F1 合并 schema 默认值后，异常默认值可经 Script 更新接口进入有效参数，原预算 helper
+吞掉计算异常并返回 None，三个 Plan 入口据此跳过登记预算。现在 None 只代表未登记；登记项的
+callable 或整数转换异常向上传递，由保存校验以既有 `INVALID_STEP_PARAMS` 结构返回 422，
+定位到 step_key。没有伪造无法计算的下限，也不把异常参数值写入响应。能计算但墙钟不足仍返回
+原 `WALL_CLOCK_BELOW_ONBOARDED_BUDGET` 及完整 violations。合法脚本默认 / 步骤覆盖异常 schema
+默认时仍按有效参数计算；F1 合法值的三层优先级、预算公式与未登记 / 禁用步骤规则保持不变。
 
 ## Alternatives
 
@@ -53,6 +62,8 @@ Plan 三入口的墙钟加载现在同时读取 param_schema 与 default_params�
   default_params，也没有以测试组合替代生产验证。
 - F1 直接复用派发使用的参数合并函数，没有在保存校验中另写 schema 默认值规则；
   原三个端点和 `_validate_onboarded_wall_clock` 签名保持不变。
+- F2 在预算计算边界拒绝无法验证的有效参数，沿用参数错误的 422 响应；没有扩大为 Script 接口的
+  全局 schema 默认值治理，也没有用固定预算或默认等待替换不可计算的登记预算。
 
 ## Verification
 
@@ -99,7 +110,7 @@ env -i PATH="$PATH" PYTHONPATH=. ./scripts/project_python.sh scripts/run_gates.p
   已按实际六个路径收窄 scope，`status --risk` 没有文件重叠或 declaration-drift，不改他人记录。
 - 首轮六项 required CI 已在 c001718f… 上通过；当前检查结果以 PR 最新 HEAD 的服务器终态为准。
 
-F1 本轮验证（f95d62ca… 基线上新增反例，随后运行修复实现）：
+F1 历史验证（绑定 e673ebd2…；f95d62ca… 基线上新增反例，随后运行修复实现）：
 
 - 新增矩阵：创建 / 更新 / 追加链尾 × schema 默认、脚本默认覆盖、步骤覆盖，共 9 项。
   修复前 3 failed、6 passed，退出 1；三个 schema 默认例均错误接受 1200 秒墙钟。
@@ -132,6 +143,44 @@ XDG_RUNTIME_DIR="/run/user/$(id -u)" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/us
 XDG_RUNTIME_DIR="/run/user/$(id -u)" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus" systemd-run --user --scope -p MemoryMax=3G -p MemorySwapMax=0 -- env -i PATH="$PATH" PYTHONPATH=. ./scripts/project_python.sh scripts/run_gates.py check:quick
 ```
 
+F2 本轮验证（e673ebd2… 基线上新增反例，随后运行修复实现）：
+
+- 新增 15 项：真实 Script 更新接口接受两种异常默认值后，创建 / 更新 / 追加链尾各自拒绝 1 秒
+  墙钟，共 6 项；三个入口的合法脚本 / 步骤覆盖及保存后快照一致性共 6 项；登记 callable 返回
+  None、非数字或无穷大后的转换失败共 3 项。修复前 9 failed、6 passed，退出 1；失败包含三个入口
+  错误返回 201 / 200 / 201，以及吞掉无效预算 / 抛出未处理 OverflowError 的路径。
+- 修复后定向 95 passed，退出 0，包含全部新增项、F1 九项及原 GPU / 开关机墙钟与参数回归。
+  拒绝后检查 Plan / PlanStep 数量与原解除墙钟不变；所有 Script 数据及更新均在 testcontainers PG。
+- 本轮脚本包 38 族等价、manifest 44 族 / 266 版本 append-only，退出 0。
+- 变更 Python 源码通过 3.11 语法解析与 ruff；开关机 FAMILY_STEPS、ONBOARDED 子树及两项墙钟
+  函数 AST 与当前 origin/main 相同。`git diff --check` 通过。
+- 本轮根 tests 全量：2424 passed、18 skipped，退出 0（3 GiB 硬顶，11 分 2 秒）。
+- 本轮 Agent 全量：2913 passed，退出 0（3 GiB 硬顶，1 分 46 秒）。
+- 本轮 check:quick：16 gates 通过，退出 0（3 GiB 硬顶）；schema-at-head 因未配置数据库明确
+  跳过，不计为迁移验证。
+- 本轮 backend 首次全量在既有 `test_r523_backflow_meets_all_acceptance_lines` 完成后，下一用例的
+  清表等待被未结束的事务阻塞。仅查询本次 testcontainer PG：PID 370 的 TRUNCATE 等待 PID 683
+  持有的 device_return_debt 读取锁，后者 idle in transaction。停止本次运行，最终退出 143，无完整
+  pytest 汇总；停止容器后产生的连接错误不作为 F2 验证结果。没有改测试断言或相关生产实现。
+  相同代码在新 testcontainer 原样重跑全量，额外启用堆栈超时输出与耗时摘要；最终结果与当前
+  required CI 在 PR 正文按完整 HEAD 补记。
+- 本轮 `ai_work.py drift --strict` 退出 1，仍只有已在 main 的 #3804 记录的 stale-cache advisory；
+  本单元七个路径无重叠或 declaration-drift。
+
+F2 红例命令：
+
+```sh
+env -i PATH="$PATH" PYTHONPATH=. TESTING=1 JWT_SECRET_KEY=b7-f2-isolated-test-only ./scripts/project_python.sh scripts/run_pytest.py backend/tests/api/test_onboarded_gpu_b7_u1_3810.py -k 'invalid_schema_default or budget_conversion_failure' -q --tb=short
+```
+
+F2 定向命令使用上方七个测试文件，测试密钥为 `b7-f2-isolated-test-only`；全量与门禁沿用上方六条
+命令，将同一测试密钥替换为 `b7-f2-isolated-test-only`。未设置业务数据库地址。
+后端全量重跑命令（不改变覆盖范围或断言）：
+
+```sh
+env -i PATH="$PATH" PYTHONPATH=. TESTING=1 JWT_SECRET_KEY=b7-f2-isolated-test-only ./scripts/project_python.sh scripts/run_pytest.py backend/tests/ -q --tb=short -o faulthandler_timeout=120 --durations=5
+```
+
 ## Revisit
 
 PR 保持 Draft，交规划者与独立复核者核对。生效仍依 #3809 §5 的整批闸门：U1 / U2 复核与最终
@@ -141,4 +190,4 @@ Agent 加载新登记后，每个 job 的 init 都检查 GPU；U2 包未发布�
 
 GPU 可信组合登记留待 U2 最终包的真机证据经规划者核对；U2 同时复核身份字段与最坏墙钟。
 600 秒执行余量仍为设计估算，U2 最终包尚未交付，不能作为已做真机验证的结论。
-F1 处理后绑定新的完整 HEAD 再请独立复核，实施者不转 Ready。
+F2 处理后绑定新的完整 HEAD 再请独立复核，实施者不转 Ready。
