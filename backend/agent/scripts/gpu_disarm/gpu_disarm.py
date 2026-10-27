@@ -6,15 +6,14 @@ STP_STEP_PARAMS: mode=probe/disarm, wait_device_online_seconds=600.
 No device log is read, collected or removed; no APK is uninstalled.
 
 After the bounded online wait, at most 6 identity calls (5*10+30s),
-10 mutation calls (10*15s), 3 snapshots (3*5*10s) and 4s settling
-are possible: <=384s, within U1's registered 600s execution allowance.
+9 mutation calls (9*15s), 3 snapshots (3*5*10s) and 4s settling
+are possible: <=369s, within U1's registered 600s execution allowance.
 The Engine owns trusted-combination promotion and authoritative package identity.
 """
 from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import re
 import shlex
 import subprocess
@@ -170,18 +169,17 @@ def _snapshot() -> tuple[str, dict]:
 
 def _disarm() -> list[dict]:
     # Stop the launcher first so force-stopped packages cannot be restarted.
-    commands = [(f"pkill -f '{_LOOP_PATTERN}'", True)]
-    commands += [(f"am force-stop {pkg}", False) for pkg in _STOP_PACKAGES]
-    commands += [(f"pkill -f '{_INSTRUMENT_PATTERN}'", True),
-                 (f"rm -f {_DEVICE_SCRIPT}", False),
-                 ("settings put global airplane_mode_on 0", False),
-                 ("am broadcast -a android.intent.action.AIRPLANE_MODE --ez state false", False),
-                 ("svc wifi enable", False)]
+    commands = [(f"pkill -f '{_LOOP_PATTERN}'", True, "execution")]
+    commands += [(f"am force-stop {pkg}", False, "execution") for pkg in _STOP_PACKAGES]
+    commands += [(f"pkill -f '{_INSTRUMENT_PATTERN}'", True, "execution"),
+                 (f"rm -f {_DEVICE_SCRIPT}", False, "execution"),
+                 ("cmd connectivity airplane-mode disable", False, "setting"),
+                 ("cmd wifi set-wifi-enabled enabled", False, "setting")]
     failures = []
-    for command, no_match_ok in commands:
+    for command, no_match_ok, footprint in commands:
         rc, _, err = adb("shell", command, timeout=15)
         if rc != 0 and not (no_match_ok and rc == 1 and not err.strip()):
-            failures.append({"command": command, "rc": rc})
+            failures.append({"command": command, "rc": rc, "footprint": footprint})
     return failures
 
 
@@ -194,14 +192,11 @@ def _result(mode: str, readback: str, evidence: dict, *, action_completed: bool 
 
 
 def _base_evidence() -> dict:
-    # Package identity is diagnostic here; Engine/control plane supply authority.
-    try:
-        package_sha = Path(__file__).with_name(".stp-verified").read_text().strip()
-    except OSError:
-        package_sha = None
+    # As in B6, authoritative package identity is supplied by the Engine from
+    # ScriptEntry. Standalone acceptance binds the archive SHA externally.
     return {"kind": "readback_failed", "boot_completed": None,
             "permission_model": "unknown", "apk_sha256": None,
-            "script_name": "gpu_disarm", "script_version": "1.0.0", "package_sha256": package_sha}
+            "script_name": "gpu_disarm", "script_version": "1.0.0", "package_sha256": None}
 
 
 def _run(cfg: dict) -> dict:
@@ -227,7 +222,10 @@ def _run(cfg: dict) -> dict:
         if readback != "footprint":
             break
     evidence["kind"] = "readback_failed" if readback == "readback_failed" else "ok"
-    return _result(mode, readback, evidence, action_completed=mode == "disarm" and not errors)
+    # v1.3: execution action errors remain fatal. Setting action errors are
+    # diagnostic; all five factual readbacks must still show clear.
+    action_completed = mode == "disarm" and not any(e["footprint"] == "execution" for e in errors)
+    return _result(mode, readback, evidence, action_completed=action_completed)
 
 
 def main() -> None:

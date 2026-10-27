@@ -61,9 +61,7 @@ _ADVANCING_CLOCK_DEBT: dict[str, str] = {
     "test_sleep_scripts.py::TestFinish.test_run_writes_detail_json": "37 passed/0.08s/峰值0.03GiB",
     "test_sleep_scripts.py::TestFinishV101RunId.test_run_id_has_serial": "37 passed/0.08s/峰值0.03GiB",
     "test_sleep_scripts.py::TestInstallApkV103.test_transient_failure_recovers": "37 passed/0.08s/峰值0.03GiB",
-    "test_teardown_cleanup_894.py::_prep_gf": "13 passed/0.05s/峰值0.03GiB",
     "test_teardown_cleanup_894.py::_prep_mt": "13 passed/0.05s/峰值0.03GiB",
-    "test_teardown_cleanup_894.py::test_gf_v105_run_marks_verified_and_writes_detail": "13 passed/0.05s/峰值0.03GiB",
     "test_teardown_rc_guards.py::_prep_mt": "8 passed/0.04s/峰值0.03GiB",
     "test_teardown_rc_guards.py::_prep_sa": "8 passed/0.04s/峰值0.03GiB",
 }

@@ -25,7 +25,7 @@ TEMPLATE = ROOT / "backend/schemas/pipeline_templates/gpu.json"
 # boundary. Unknown commands fail; the device never receives a real adb call.
 FAKE_ADB = r'''
 import json, os, pathlib, sys, time
-p = pathlib.Path(os.environ["B7_FAKE_DEVICE"])
+p = pathlib.Path(__file__).with_name("device.json")
 s = json.loads(p.read_text())
 a = sys.argv[3:]
 cmd = " ".join(a)
@@ -72,18 +72,32 @@ if c.startswith("[ -e "): done(out="REMAINS\n" if s["file"] else "CLEAN\n")
 if c.startswith("pkill "):
     key = "loop" if "[g]pu_stress_loop" in c else "instrument"
     if s.get("stuck") != key: s[key] = False
+    if s.get("mutation_failure") == key: done(255, err="Operation not permitted")
     done()
-if c.startswith("am force-stop "): done()
+if c.startswith("am force-stop "):
+    if s.get("mutation_failure") == "force_stop": done(255, err="Operation not permitted")
+    done()
 if c.startswith("rm -f "):
     assert c.endswith("/sdcard/Auto/gpu_stress_loop.sh"), c
     if s.get("stuck") != "file": s["file"] = False
+    if s.get("mutation_failure") == "file": done(255, err="Permission denied")
     done()
 if c == "settings put global airplane_mode_on 0":
     if s.get("stuck") != "airplane": s["airplane"] = False
+    if s.get("mutation_failure") == "airplane": done(255, err="Permission denied")
     done()
 if c.startswith("am broadcast "): done()
+if c == "cmd connectivity airplane-mode disable":
+    if s.get("stuck") != "airplane": s["airplane"] = False
+    if s.get("mutation_failure") == "airplane": done(255, err="Permission denied")
+    done()
+if c == "cmd wifi set-wifi-enabled enabled":
+    if s.get("stuck") != "wifi": s["wifi"] = True
+    if s.get("mutation_failure") == "wifi": done(255, err="Permission denied")
+    done()
 if c == "svc wifi enable":
     if s.get("stuck") != "wifi": s["wifi"] = True
+    if s.get("mutation_failure") == "wifi": done(255, err="Permission denied")
     done()
 done(2, err="unexpected fake adb command: "+cmd)
 '''
@@ -95,7 +109,6 @@ def device(tmp_path, monkeypatch):
     adb = tmp_path / "adb"
     adb.write_text(f"#!{sys.executable}\n" + FAKE_ADB)
     adb.chmod(0o755)
-    monkeypatch.setenv("B7_FAKE_DEVICE", str(path))
     monkeypatch.setenv("STP_ADB_PATH", str(adb))
     monkeypatch.setenv("STP_DEVICE_SERIAL", "b7-test-only")
     monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path / "nfs"))
@@ -181,6 +194,36 @@ def test_observed_android_wifi_spelling_is_readable(device):
     assert out["readback"] == "clear"
 
 
+@pytest.mark.parametrize("field", ["airplane", "wifi"])
+def test_setting_command_failure_with_restored_readback_matches_success(device, field):
+    _, expected = run_script(device)
+    device.configure(mutation_failure=field)
+    result, actual = run_script(device)
+    assert result.returncode == 0
+    assert actual["readback"] == expected["readback"] == "clear"
+    assert actual["disarm_result"] == expected["disarm_result"] == "executed_unverified"
+    assert actual["success"] is expected["success"] is True
+    assert actual["evidence"]["action_errors"]
+
+
+@pytest.mark.parametrize("field", ["loop", "instrument", "force_stop", "file"])
+def test_execution_action_failure_cannot_pass_even_when_readback_is_clear(device, field):
+    device.configure(loop=False, instrument=False, file=False, airplane=False,
+                     wifi=True, mutation_failure=field)
+    result, out = run_script(device)
+    assert result.returncode == 1
+    assert out["readback"] == "clear"
+    assert out["disarm_result"] == "failed" and out["success"] is False
+
+
+@pytest.mark.parametrize("field", ["airplane", "wifi"])
+def test_setting_command_failure_with_unrestored_readback_stays_footprint(device, field):
+    device.configure(stuck=field, mutation_failure=field)
+    _, out = run_script(device)
+    assert out["readback"] == "footprint"
+    assert out["disarm_result"] == "failed" and out["success"] is False
+
+
 @pytest.mark.parametrize("root,installed", [(False, True), (True, False), (False, False)])
 def test_nonroot_and_missing_tool_still_require_all_four_readbacks(device, root, installed):
     device.configure(root=root, installed=installed)
@@ -256,6 +299,9 @@ def test_real_engine_collection_failure_cannot_change_disarm(engine, device, tim
     assert "gpu_disarm" in launched and "gpu_finish" in launched
     assert result.metadata["disarm_results"]["gpu"]["result"] == "executed_unverified"
     assert result.metadata["disarm_results"]["gpu"]["evidence"]["readback"] == "clear"
+    manifest = json.loads((ROOT / "tool_manifest.json").read_text())
+    registered = manifest["tools"]["gpu_disarm"]["versions"][-1]
+    assert result.metadata["disarm_results"]["gpu"]["evidence"]["package_sha256"] == registered["package_sha256"]
     assert result.metadata["teardown_status"] == "DEGRADED"
     traces = engine._report_step_trace_mq.call_args_list
     finish = [c for c in traces if c.args[0] == "gpu_finish" and c.args[2] == "FAILED"]
