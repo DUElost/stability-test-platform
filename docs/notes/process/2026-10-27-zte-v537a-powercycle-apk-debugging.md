@@ -25,7 +25,7 @@ Class: process
 
 ## Verification
 
-1. **单机连续重启验证（以 `<serial>` 为例）**：
+1. **单机连续重启验证（以 `6R0A57EU****0012` 为例）**：
    - 检查 `dumpsys package com.tinno.autotesttool` 确认 `android.permission.REBOOT: granted=true`；
    - 检查 `getprop persist.sys.stc` 返回 `true`；
    - 检查本地测试日志 `/sdcard/Android/data/com.tinno.autotesttool/files/PowerCycle/powercycle_result.txt`，确认开机后无外部干预下自动推进：
