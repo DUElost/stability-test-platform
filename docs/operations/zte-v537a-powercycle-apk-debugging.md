@@ -1,8 +1,10 @@
-# 中兴 V537A 项目测试 APK 调试与开关机专项排障手册
+# 中兴 V537A 项目自动化测试专项排障与适配手册
 
-> **项目与机型**：中兴 V537A（展锐芯片平台 / Mifavor & MyOS 系统）  
-> **适用范围**：开关机专项（`power-cycle`）、休眠唤醒等依赖开机自动恢复（`BOOT_COMPLETED` 广播）及系统特权 API（如 `PowerManager.reboot()`）的自动化测试 APK（如 `com.tinno.autotesttool`）。  
-> **典型故障现象**：设备进入测试界面后倒计时冻结（如固定显示 `Next重启时间 14:41`，当前时间已远超）、无法重启，或者首轮重启开机后停滞、无法自动进入下一轮测试。
+> **项目与机型**：中兴 V537A / A57（展锐芯片平台 / Mifavor & MyOS 系统，型号 Z2581/Z2582）
+> **适用范围**：开关机专项（`power-cycle`）、GPU 专项（`gpu` / Antutu）、Monkey 专项、休眠唤醒专项等长循环自动化测试。
+> **典型故障现象**：
+> 1. 开关机专项：倒计时冻结（如固定显示 `Next重启时间 14:41`）、无法重启，或者首轮重启开机后停滞、无法自动进入下一轮测试；
+> 2. GPU 专项：密集摆放机位上频繁出现 "Empty tag"（空白标签）弹窗，安兔兔 3D 渲染丢焦中断，抛出 `java.lang.AssertionError: antutu app start test | restart`。
 
 ---
 
@@ -156,7 +158,7 @@ def fix_device(host: str, serial: str):
     # 1. 写入 CTS 全局放行属性
     cmd_stc = f"adb -s {serial} shell setprop persist.sys.stc true"
     subprocess.run(["ssh", f"android@{host}", cmd_stc], timeout=20)
-    
+
     # 2. 顺序拉起 Activity 与 Service
     cmd_launch = (
         f"adb -s {serial} shell am start -n com.tinno.autotesttool/com.mediatek.schpwronoff.powercycle.PowerCycleActivity; "
@@ -171,7 +173,85 @@ def fix_device(host: str, serial: str):
 
 ---
 
-## 5. 平台代码与长效防御建议
+## 5. GPU 专项“Empty tag”高频弹窗与焦点抢占排障及自愈 SOP
+
+### 5.1 核心根因与机理分析
+
+- **故障现象**：在机架设备密集摆放的节点（如 15.68、15.69、15.75 等）上，设备在执行 GPU 专项（Plan 116，安兔兔 Lite 3D 压测）期间频繁弹出 "Empty tag"（空白标签）弹窗，导致安兔兔 3D 渲染画面丢失前台焦点中断运行，测试框架抛出 `java.lang.AssertionError: antutu app start test | restart`。
+- **机理分析**：
+  1. **NFC 密集射频互感**：中兴 V537A（A57）出厂默认开启 NFC 硬件轮询。在机房测试机架上，相邻样机背面紧密贴合或靠近金属支架，各机 NFC 天线持续感应到邻机的射频场或无 NDEF 数据的空载信号；
+  2. **系统 Tag 应用抢占顶层焦点**：Android 系统的 NFC 服务检测到射频载波后，自动调起内置应用 `com.android.apps.tag/.TagViewer`（展示为 "Empty tag" / 空白标签 Activity）；
+  3. **安兔兔 3D 渲染挂起**：`TagViewer` 抢占顶层窗口焦点（`mCurrentFocus=com.android.apps.tag/.TagViewer`），将正在前台进行 3D 渲染的安兔兔主活动 `com.antutu.benchmark.full.lite/com.android.module.graphics.marooned.UnityPlayerActivity` 压入后台；Android 系统根据前台调度机制暂停后台 3D 渲染，测试框架因无法在顶层窗口找到安兔兔的启动/重试控件而判定失败。
+
+### 5.2 标准排障与恢复 SOP
+
+> 警告：执行者在执行批量禁用前，必须确认当前测试不需要使用 NFC 功能。操作者不得在设备正常交互测试中使用全局强杀命令打断非目标应用。
+
+按顺序执行以下步骤：
+
+#### 步骤 1：检查前台窗口焦点与 NFC 状态
+在 Agent host 上执行：
+```bash
+adb -s <serial> shell dumpsys window | grep -E "mCurrentFocus|mFocusedApp"
+adb -s <serial> shell dumpsys nfc | grep -E "mState|mEnableReader"
+```
+预期：
+1. 异常设备显示 `mCurrentFocus=Window{... com.android.apps.tag/com.android.apps.tag.TagViewer}`；
+2. NFC 服务处于开启状态（`mState=on` 或 `mEnableReader=true`）。
+
+#### 步骤 2：持久化关闭底层 NFC 硬件与轮询
+在 Agent host 上执行：
+```bash
+adb -s <serial> shell cmd nfc disable-nfc persist
+adb -s <serial> shell svc nfc disable
+```
+预期：NFC 控制器断开，`persist` 参数将状态固化至系统配置，跨重启保持关闭。
+
+#### 步骤 3：持久化禁用系统 Tag 应用并关闭弹窗
+在 Agent host 上执行：
+```bash
+adb -s <serial> shell pm disable-user --user 0 com.android.apps.tag
+adb -s <serial> shell am force-stop com.android.apps.tag
+```
+预期：系统返回 `Package com.android.apps.tag new state: disabled-user`，`TagViewer` 弹窗立即关闭。
+
+#### 步骤 4：验证顶层焦点恢复与安兔兔 3D 渲染推进
+在 Agent host 上执行：
+```bash
+adb -s <serial> shell dumpsys window | grep -E "mCurrentFocus"
+```
+预期：顶层窗口焦点恢复为安兔兔 3D 压测活动：
+`mCurrentFocus=Window{... com.antutu.benchmark.full.lite/com.android.module.graphics.marooned.UnityPlayerActivity}`
+且 `/sdcard/Auto/test_log.txt` 中下一轮测试能够完整执行并输出 `OK (1 test)`。
+
+### 5.3 集群多主机并发治理脚本
+
+在控制面宿主上运行以下并发脚本，对指定节点所有 A57 设备执行自愈治理：
+
+```python
+#!/usr/bin/env python3
+"""
+针对中兴 A57 集群 NFC Empty Tag 焦点抢占批量自愈脚本
+"""
+import subprocess
+from concurrent.futures import ThreadPoolExecutor
+
+def fix_host_devices(host_ip: str, serials: list[str]):
+    cmd = f"""
+    for s in {' '.join(serials)}; do
+        (
+            timeout 5 adb -s $s shell "cmd nfc disable-nfc persist; svc nfc disable; pm disable-user --user 0 com.android.apps.tag; am force-stop com.android.apps.tag" >/dev/null 2>&1
+        ) &
+    done
+    wait
+    """
+    res = subprocess.run(["ssh", "-o", "ConnectTimeout=5", f"android@{host_ip}", cmd], capture_output=True, text=True, timeout=30)
+    return host_ip, "Success" if res.returncode == 0 else "Failed"
+```
+
+---
+
+## 6. 平台代码与长效防御建议
 
 1. **`powercycle_setup.py` 初始化加固**：
    - 增加设备机型识别：针对中兴机型（`ro.product.brand=ZTE` 或 `ro.product.manufacturer=ZTE`），在安装 APK 后必须自动执行 `setprop persist.sys.stc true`；
@@ -179,3 +259,5 @@ def fix_device(host: str, serial: str):
 2. **`powercycle_check.py` 巡检死锁兜底**：
    - 读取设备本地 `/sdcard/Android/data/com.tinno.autotesttool/files/PowerCycle/powercycle_result.txt`，如果包含 `reboot failed` 关键字，立即判定为执行异常；
    - 检测到设备 `uptime` 增长超过设定阈值且轮次未推进时，增加自愈唤醒尝试（重发保活广播或拉起 Activity）。
+3. **`gpu_setup.py` / `prepare_device()` 初始化加固**：
+   - 在 `prepare_device()` 中增加 NFC 与 Tag 抑制：执行 `cmd nfc disable-nfc persist`、`svc nfc disable` 与 `pm disable-user --user 0 com.android.apps.tag`，防止机架密集摆放设备的射频互感引发 Empty tag 焦点抢占。
