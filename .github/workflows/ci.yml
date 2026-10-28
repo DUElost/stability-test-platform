@@ -87,7 +87,7 @@ jobs:
       # 见 docs/notes/testing/2026-08-29-coverage-measure-only.md Revisit）。
       # 测试集合不变——核验目的是回归，不是覆盖率数字。
       - name: Run backend tests
-        run: PYTHONUNBUFFERED=1 python -m pytest backend/tests/ -v
+        run: PYTHONUNBUFFERED=1 python -m pytest backend/tests/ -v -p scripts.ci.pytest_progress
       # #2151：告警**场景层**（promtool：阈值 / `for:` 时间窗 / 注解逐字匹配）此前在
       # CI 恒 skip——runner 无 promtool，「改了告警语义而场景文件没跟」只在装了 promtool
       # 的机器被拦。#2030 为此补了恒跑的结构层，但结构层不覆盖这一类漂移。
@@ -205,7 +205,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: echo "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
       - name: Run backend tests
-        run: PYTHONUNBUFFERED=1 python -m pytest backend/tests/ -v
+        run: PYTHONUNBUFFERED=1 python -m pytest backend/tests/ -v -p scripts.ci.pytest_progress
       # 超时/取消时本 job 已被 90min 掐断，走不到这里——所以「无结论」这一形态由 job
       # 的 cancelled 结论本身表达，不靠这里补一条假的绿。此步只负责在正常跑完时
       # 把实际墙钟落成可统计字段。
