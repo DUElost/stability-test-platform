@@ -5,7 +5,7 @@ Class: process
 
 ## Decision
 
-针对中兴 V537A / A57（展锐芯片平台 / MyOS 系统，型号 Z2581/Z2582）四专项 7 天循环测试运行期间，12 节点机群（尤其是 172.21.15.68、172.21.15.69、172.21.15.75 等密集摆放节点）在执行 GPU 专项（Plan 116，安兔兔 Lite 3D 压测）时频繁出现 "Empty tag" 弹窗导致压测中断的问题，进行了全链路逆向分析与实机取证排障，并在权威运维手册中留档闭环：
+针对中兴 V537A / A57（展锐芯片平台 / MyOS 系统，型号 Z2581/Z2582）四专项 7 天循环测试运行期间，12 节点机群（尤其是 `172.21.x.x` 末段 `.68`/`.69`/`.75` 等密集摆放节点）在执行 GPU 专项（Plan 116，安兔兔 Lite 3D 压测）时频繁出现 "Empty tag" 弹窗导致压测中断的问题，进行了全链路逆向分析与实机取证排障，并在权威运维手册中留档闭环：
 
 1. **根因定位**：
    - 确认 "Empty tag" 弹窗由 Android 系统原生 NFC 标签解析应用 `com.android.apps.tag/.TagViewer` 弹出；
@@ -33,7 +33,7 @@ Class: process
 
 ## Verification
 
-1. **单机焦点与测试日志回验（以 `172.21.15.75` 设备 `6R0A77LADE9000014` 为例）**：
+1. **单机焦点与测试日志回验（以 `172.21.x.x` 末段 `.75`、设备 `6R0A77LA****0014` 为例）**：
    - 修复前：`mCurrentFocus=Window{... com.android.apps.tag/.TagViewer}`，测试日志显示 `FAILURES!!! Tests run: 1, Failures: 1, AssertionError: antutu app start test`；
    - 修复后：`mCurrentFocus=Window{... com.antutu.benchmark.full.lite/com.android.module.graphics.marooned.UnityPlayerActivity}`；
    - 本地日志 `/sdcard/Auto/test_log.txt` 验证单轮完整跑满 943 秒，输出 `OK (1 test)`。
