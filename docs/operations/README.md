@@ -32,7 +32,7 @@
 | [`host-device-visibility-triage.md`](./host-device-visibility-triage.md) | 设备从 adb 消失 / 页面上「在线 vs USB」差值的四层判别（内核 · adb server · adbd · USB 功能集），含只读命令与 2026-09-14 实证 |
 | [`honor-flash-runbook.md`](./honor-flash-runbook.md) | Honor 刷机：固件上架（manifest/latest.json）、MLD 刷机 Plan、单台验证与放量 |
 | [`powercycle-chain-disarm-runbook.md`](./powercycle-chain-disarm-runbook.md) | 开关机专项设备归还排障：按 §1 读取归还证据、排查清偿与组合核验，执行人工放行及后续 init 检查 |
-| [`zte-v537a-powercycle-apk-debugging.md`](./zte-v537a-powercycle-apk-debugging.md) | 中兴 V537A 项目测试 APK 调试与开关机专项排障手册（ROM 平台签名对齐、ZTE MyOS 自启动拦截与 CTS 直通通道） |
+| [`zte-v537a-powercycle-apk-debugging.md`](./zte-v537a-powercycle-apk-debugging.md) | 中兴 V537A 项目自动化测试专项排障与适配手册（ROM 平台签名对齐、ZTE MyOS 自启动拦截、NFC Empty tag 焦点抢占排障及自愈 SOP） |
 | [`07-execution-protocol.md` §9](../design/07-execution-protocol.md#9-b6-执行与设备归还) | 执行与设备归还协议：disarm_results、有界保护、统一核验、欠账生命周期、init 检查及版本交错兼容 |
 | [`linux-agent-ansible-runbook.md`](../linux-agent-ansible-runbook.md) | Ansible 批量 |
 | [`wsl-linux-agent-setup.md`](../wsl-linux-agent-setup.md) | WSL 联调 |
@@ -179,5 +179,5 @@ python -m backend.scripts.migration.preflight_execution_protocol
 | [`incident-2026-07-28-host-9-126-hard-hang-and-bios-upgrade.md`](./incident-2026-07-28-host-9-126-hard-hang-and-bios-upgrade.md) | 198.51.100.126 硬挂根因、watchdog/EEE/BIOS/Agent restart 加固、其余 19 台 host BIOS 汇总 |
 | [`incident-2026-07-29-host-8-87-xhci-death-and-adb-outage.md`](./incident-2026-07-29-host-8-87-xhci-death-and-adb-outage.md) | 192.0.2.87 xHCI 主控死亡致 USB/ADB 全空 7 天：根因、unbind/rebind 恢复、与 #160 区分 |
 | [`incident-2026-07-31-script-sha-drift-dispatch-outage.md`](./incident-2026-07-31-script-sha-drift-dispatch-outage.md) | 脚本版本 sha 漂移致全平台派发中断：根因、`force_rebaseline` 逃生阀、ADR-0020 CI 门禁 |
-| [`zte-v537a-powercycle-apk-debugging.md`](./zte-v537a-powercycle-apk-debugging.md) | 中兴 V537A 项目开关机专项 APK 假死与跨轮次无法自启根因复盘及批量自愈 SOP |
+| [`zte-v537a-powercycle-apk-debugging.md`](./zte-v537a-powercycle-apk-debugging.md) | 中兴 V537A 项目专项排障与批量自愈手册（开关机自启、NFC Empty tag 焦点抢占排障及自愈 SOP） |
 
