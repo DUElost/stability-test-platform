@@ -208,8 +208,23 @@ ONBOARDED: dict[str, Any] = {
         "finish_script": "gpu_finish",
         "finish_min_version": "1.1.0",
         "probe_modes": ("probe", "disarm"),
-        # U2 real-device evidence must be accepted before adding combinations.
-        "verified_device_classes": [],
+        # #3809 v1.5 §3.3: Planner accepted U2's final-package evidence.
+        "verified_device_classes": [
+            {
+                "platform": "MTK", "model": model, "permission_model": permission,
+                "apk_sha256": "47a059398943e8dc0943269c99a30264f70c7175ae943a69c48ec733ea84e8c5",
+                "script_name": "gpu_disarm", "script_version": "1.0.0",
+                "package_sha256": "c464779d695402473bf5afb173bc743d68eac307a680c46bfec2ebbf4299ead7",
+                "report_ref": [
+                    "https://github.com/DUElost/stability-test-platform/issues/3811#issuecomment-6441554440",
+                    "docs/notes/bug-fix/2026-10-27-b7-u2-gpu-disarm-3811-evidence.json",
+                    "docs/notes/bug-fix/2026-10-27-b7-u2-gpu-disarm-3811.md",
+                    "https://github.com/DUElost/stability-test-platform/issues/3809",
+                ],
+            }
+            for model in ("MLD_LX2", "MLD_LX3", "MOD_LX3")
+            for permission in ("root", "non-root")
+        ],
         "disarm_budget_seconds": _gpu_disarm_min_wall(None),
         "min_wall_clock_seconds": {"gpu_disarm": _gpu_disarm_min_wall},
     },

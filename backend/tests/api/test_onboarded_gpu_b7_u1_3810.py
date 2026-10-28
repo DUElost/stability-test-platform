@@ -107,6 +107,8 @@ def test_control_plane_uses_gpu_identity_and_test_combination(monkeypatch):
     job = SimpleNamespace(pipeline_def={"lifecycle": {"teardown": [
         {"step_id": "disarm", "action": "script:gpu_disarm", "version": "1.0.0"}]}})
     monkeypatch.setattr(device_return, "manifest_package_sha", lambda *_: "b" * 64)
+    # Preserve U1's pre-registration scenario after U3 adds approved classes.
+    monkeypatch.setitem(ONBOARDED, "gpu", {**ONBOARDED["gpu"], "verified_device_classes": []})
     assert ONBOARDED["gpu"]["verified_device_classes"] == []
     policy = device_return.evaluate_probe_entry(device, "gpu", entry, token_valid=True, job=job)
     assert policy["result"] == "executed_unverified"

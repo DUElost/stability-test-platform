@@ -18,6 +18,7 @@
 | [`device-lease-emergency-release.md`](./device-lease-emergency-release.md) | ACTIVE 设备租约紧急释放与回查；欠账 MAINTENANCE 租约返回 409，转清偿或人工放行 |
 | [`2026-09-24-capacity-p0-rollout-runbook.md`](./2026-09-24-capacity-p0-rollout-runbook.md) | **容量 P0 同窗上线手册**（未执行）：控制面 unit 预算门禁/start-limit、Prometheus 平台副本同步、Agent #3242 分发、真机复跑观测（#2959 / #3244 门槛） |
 | [`2026-10-25-b6-device-return-activation-runbook.md`](./2026-10-25-b6-device-return-activation-runbook.md) | **B6 设备归还激活清单（已执行：2026-10-25 至 10-26）**：[生效证据](https://github.com/DUElost/stability-test-platform/issues/3723#issuecomment-6412678344)；18 步、四个 Owner 确认点、发包/恢复发布、能力核验、初始化/清偿、分层验收与文档收尾 |
+| [`2026-10-27-b7-gpu-activation-runbook.md`](./2026-10-27-b7-gpu-activation-runbook.md) | **B7 GPU 激活清单（未执行）**：#3809 v1.5 第 0–6 步、只读残留盘点、部署/发包/机队闸门、Owner 待确认计划与预算、L0–L3、GPU 旧文档集中勘误 |
 
 ---
 
