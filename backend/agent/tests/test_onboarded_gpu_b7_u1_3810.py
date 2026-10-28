@@ -55,6 +55,9 @@ def test_powercycle_four_combinations_keep_identity_and_decisions(index):
 
 def test_gpu_registration_is_unverified_until_test_combination_is_injected(monkeypatch):
     spec = contract.ONBOARDED["gpu"]
+    # Preserve U1's pre-registration scenario after U3 adds approved classes.
+    spec = {**spec, "verified_device_classes": []}
+    monkeypatch.setitem(contract.ONBOARDED, "gpu", spec)
     assert spec["verified_device_classes"] == []
     assert contract.FAMILY_STEPS["gpu"]["disarm"] == ("gpu_finish",)
     assert contract.FAMILY_STEPS["gpu"]["disarm_onboarded"] == ("gpu_disarm",)
