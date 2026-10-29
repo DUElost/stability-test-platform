@@ -5,27 +5,31 @@ Class: bug-fix
 
 ## Decision
 
-`backend/agent/scan_runner.py` 的 `_SCAN_SUBPROCESS_TIMEOUT` 由 600s 调到 1800s，
-同时作用于主扫描（`start_log_scan.py`）与 `-dedup_org` 二次去重子进程。
+一次完整 scan 链上有三层固定时限，全部按「小输入」时代设定；run 1124 的
+host `172-21-15-xx` 证明它们挡不住 15 分钟级的大输入扫描：
 
-依据是一次生产实测：run 1124 的 host `172-21-15-xx` 扫描输入 156M AEE、
-813 个 dbg、staging 73G；第二轮扫描到 595s 时工具日志仍停在「已完成解压
-733/813（90.16%）」，随后被 600s 硬超时杀掉。同 run 其他 host 输入 1.1M–38M，
-均在 600s 内完成。结果是该 host 的 MTK `_org.xls` 从未产出，13 台设备整体
-缺席最终去重报告。
+| 层 | 旧值 | 新值 | 位置 |
+|---|---|---|---|
+| Agent 扫描子进程 | 600s | 1800s | `backend/agent/scan_runner.py` `_SCAN_SUBPROCESS_TIMEOUT` |
+| 控制面 scan_task 的 SAQ 超时 | 900s | 2400s | `backend/services/dedup_scan.py` `_SCAN_TASK_SAQ_TIMEOUT` |
+| 控制面 scan 轮询预算 | 300s（默认） | 1800s（站点 env） | `STP_SCAN_POLL_MAX_WAIT` |
 
-1800s 是 3 倍余量：足够覆盖当前最大输入，又保留超时兜底——扫描真挂死时
-仍会释放 host 扫描槽，不会无限等待。
+依据：该 host 输入 156M AEE、813 个 dbg、staging 73G；第二轮工具日志在
+595s 时仍停在「已完成解压 733/813（90.16%）」，随后被 600s 杀掉。同 run
+其他 host 输入 1.1M–38M，均在 600s 内完成。
+
+三层必须一起放宽：只改 Agent 超时，scan_task 仍会在 900s 被杀或 300s
+轮询结束后不再登记迟到产物；只改控制面，Agent 子进程仍会被 600s 杀掉。
+1800s/2400s 均保留兜底，不引入无限等待。
 
 ## Alternatives
 
-- **只调大到 900s**：按第二轮的进度线性外推可能刚好够，但第一轮（monkey
-  仍在跑时）600s 才进入解析阶段，900s 余量不足；留 1800s 避免下一台大输入
-  再次踩线。
+- **只改 Agent 常量**：scan_task 900s 仍会先杀掉任务，或 300s 轮询结束后
+  不再登记迟到产物——大输入 host 的 `_org.xls` 照样进不了报告。
+- **只调大 Agent 到 900s**：按第二轮线性外推可能刚好够，但第一轮（monkey
+  仍在跑时）600s 才进入解析阶段，余量不足。
 - **做成环境变量**：可运维性更好，但要接 `agent_env_sync`、环境变量登记表
   与示例文件，改动面远大于问题本身；当前只有「太短」一个事实，先改常量。
-- **按 host 单独放宽**：需要新的 per-host 配置面与下发通道，且下次换一台
-  大输入 host 仍会复现，不如统一调大。
 - **不设超时**：挂死的扫描会永久占住 `_host_scan_semaphore`，后续 scan
   排队停摆，不可接受。
 
@@ -33,8 +37,9 @@ Class: bug-fix
 
 - `backend/agent/tests/test_scan_runner.py`（含 `test_run_local_scan_timeout`）
   与 `test_unisoc_scan_runner.py`；
-- 部署后在 run 1124 上重跑 final scan，期望 `units=5/5`、host `172-21-15-xx`
-  产出 MTK `_org.xls`；
+- `backend/tests/tasks/test_saq_scan_pipeline.py`；
+- 部署站点 `STP_SCAN_POLL_MAX_WAIT=1800` 后，在 run 1124 上重跑 final scan，
+  期望 `units=5/5`、host `172-21-15-xx` 产出 MTK `_org.xls`；
 - 手动 merge 后核对报告覆盖 69 台设备（修复前第一轮只有 8 台，全部属于 `.60`）。
 
 ## Revisit
