@@ -45,7 +45,11 @@ except ImportError:  # Agent install layout
 
 logger = logging.getLogger(__name__)
 
-_SCAN_SUBPROCESS_TIMEOUT = 600
+# 单次 scan/dedup_org 子进程上限。600s 只够小输入：run 1124 的
+# 172-21-15-83（156M AEE 输入、813 个 dbg、73G staging）第二轮在 595s
+# 仍停在解压 90%，被 600s 连杀两轮，MTK 报告整机缺失（#3834）。
+# 1800s 给大输入留 3 倍余量；超时仍是兜底，避免挂死永久占住 host 扫描槽。
+_SCAN_SUBPROCESS_TIMEOUT = 1800
 
 # #1078：staging 根目录名（`.stp-scan/pr{plan_run_id}-<mkdtemp随机>`）。
 _STAGING_PARENT_NAME = ".stp-scan"
