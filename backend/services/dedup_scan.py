@@ -36,6 +36,11 @@ logger = logging.getLogger(__name__)
 ARTIFACT_TYPE_SCAN = "scan_result_xls"
 ARTIFACT_TYPE_MERGE = "merge_result_xls"
 
+# scan_task 的 SAQ 超时。scan_task 要覆盖一整轮轮询预算
+# （STP_SCAN_POLL_MAX_WAIT，目标值 1800s）再加 agent 扫描/上传的调度余量；
+# 旧值 900s 会在 15 分钟级的大输入扫描完成前杀掉任务，产物永不登记（#3834）。
+_SCAN_TASK_SAQ_TIMEOUT = 2400
+
 
 def _read_backend_scan_tool_env() -> Tuple[str, str]:
     """控制面专用 scan 工具键（#295 / #518）。
@@ -1404,7 +1409,7 @@ async def enqueue_dedup_terminal_async(
                     "allow_retired": allow_retired,
                 },
                 key=key,
-                timeout=900,
+                timeout=_SCAN_TASK_SAQ_TIMEOUT,
                 retries=2,
                 retry_delay=10.0,
                 retry_backoff=True,
@@ -1436,7 +1441,7 @@ def enqueue_dedup_terminal_sync(
         enqueue_sync(
             "scan_task",
             key=f"scan:{plan_run_id}{suffix}",
-            timeout=900,
+            timeout=_SCAN_TASK_SAQ_TIMEOUT,
             retries=2,
             plan_run_id=plan_run_id,
             is_final=is_final,

@@ -577,6 +577,17 @@ async def test_scan_task_chains_on_partial_coverage_with_warning(monkeypatch, ca
 # ---------------------------------------------------------------------------
 
 
+def test_scan_task_saq_timeout_covers_large_scan_budget():
+    """scan_task 的 SAQ 超时必须覆盖目标轮询预算（#3834）。
+
+    站点把 `STP_SCAN_POLL_MAX_WAIT` 调到 1800s 时，SAQ 超时若仍停在旧
+    900s，任务会在扫描完成前被杀，迟到产物永不登记。给 600s 调度余量。
+    """
+    from backend.services import dedup_scan
+
+    assert dedup_scan._SCAN_TASK_SAQ_TIMEOUT >= 1800 + 600
+
+
 def test_scan_task_merge_job_timeout_covers_poll_budget():
     """merge_task SAQ timeout must cover the dual-platform chain (#1085).
 
