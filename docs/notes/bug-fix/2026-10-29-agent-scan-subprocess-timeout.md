@@ -8,7 +8,7 @@ Class: bug-fix
 `backend/agent/scan_runner.py` 的 `_SCAN_SUBPROCESS_TIMEOUT` 由 600s 调到 1800s，
 同时作用于主扫描（`start_log_scan.py`）与 `-dedup_org` 二次去重子进程。
 
-依据是一次生产实测：run 1124 的 host `172-21-15-83` 扫描输入 156M AEE、
+依据是一次生产实测：run 1124 的 host `172-21-15-xx` 扫描输入 156M AEE、
 813 个 dbg、staging 73G；第二轮扫描到 595s 时工具日志仍停在「已完成解压
 733/813（90.16%）」，随后被 600s 硬超时杀掉。同 run 其他 host 输入 1.1M–38M，
 均在 600s 内完成。结果是该 host 的 MTK `_org.xls` 从未产出，13 台设备整体
@@ -33,7 +33,7 @@ Class: bug-fix
 
 - `backend/agent/tests/test_scan_runner.py`（含 `test_run_local_scan_timeout`）
   与 `test_unisoc_scan_runner.py`；
-- 部署后在 run 1124 上重跑 final scan，期望 `units=5/5`、host `172-21-15-83`
+- 部署后在 run 1124 上重跑 final scan，期望 `units=5/5`、host `172-21-15-xx`
   产出 MTK `_org.xls`；
 - 手动 merge 后核对报告覆盖 69 台设备（修复前第一轮只有 8 台，全部属于 `.60`）。
 
