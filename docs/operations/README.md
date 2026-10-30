@@ -181,3 +181,10 @@ python -m backend.scripts.migration.preflight_execution_protocol
 | [`incident-2026-07-31-script-sha-drift-dispatch-outage.md`](./incident-2026-07-31-script-sha-drift-dispatch-outage.md) | 脚本版本 sha 漂移致全平台派发中断：根因、`force_rebaseline` 逃生阀、ADR-0020 CI 门禁 |
 | [`zte-v537a-powercycle-apk-debugging.md`](./zte-v537a-powercycle-apk-debugging.md) | 中兴 V537A 项目专项排障与批量自愈手册（开关机自启、NFC Empty tag 焦点抢占排障及自愈 SOP） |
 
+---
+
+## 10. 专项收尾与 Jira 交接
+
+| 文档 | 用途 |
+|------|------|
+| [`2026-10-30-monkey-aee-jira-handoff-reference.md`](./2026-10-30-monkey-aee-jira-handoff-reference.md) | 专项结束后从归档扫描、控制面 merge、事件映射、证据导出到 Jira 第一阶段的实战参考；含三机型落地记录、计数口径、已知缺口与机制建设建议 |

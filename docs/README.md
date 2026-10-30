@@ -1,6 +1,6 @@
 # 稳定性测试平台 — 文档中心
 
-> **最后更新**：2026-10-09  
+> **最后更新**：2026-10-30
 > 本目录为项目**权威文档**入口。冲突时以**代码与测试**为准，并回写此处。  
 > 根目录 [`README.md`](../README.md) 只保留产品概述与快速入口；细则在本树子文档。
 
@@ -31,6 +31,7 @@
 | 装一个新站点（独立站点：preflight→install→agent→verify→handover） | [`operations/installation.md`](./operations/installation.md) |
 | 查生产控制面只读诊断边界 | [`operations/production-diagnostics.md`](./operations/production-diagnostics.md) |
 | 查新建专项 / 适配新项目怎么做 | [`operations/new-specialty-onboarding-runbook.md`](./operations/new-specialty-onboarding-runbook.md) |
+| 查专项结束后如何把 AEE 证据与表单交给 Jira | [`operations/2026-10-30-monkey-aee-jira-handoff-reference.md`](./operations/2026-10-30-monkey-aee-jira-handoff-reference.md) |
 | 做站点交接与 P1 验收证据 | [`operations/site-handover-and-navigation.md`](./operations/site-handover-and-navigation.md) |
 | 查产品范围 | [`prd/00-platform-overview.md`](./prd/00-platform-overview.md) |
 | 查架构决策 | [`adr/README.md`](./adr/README.md) |
