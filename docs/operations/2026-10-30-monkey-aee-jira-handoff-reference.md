@@ -196,8 +196,9 @@ python generate_tinno_jira_upload_list.py \
 
 - 三份表单均可被第一阶段完整解析，无缺列、无跳过；版本前缀分别解析为
   `PFDFAA`、`PFDFAA`、`PAANX`。
-- 标题模板不含 `CausedBy`，同包名 + 异常类型会产生同标题多行。第二阶段依赖 Jira
-  历史匹配；执行者必须在 dry-run 中核对“将新建”的数量，不能按表单行数预估新建数。
+- 标题模板不含 `CausedBy`，只带包名、异常类型与 `Total Number`；同包名、同异常类型且同
+  Count 的行会产生完全相同的标题（本次 14 / 3 / 4 组）。第二阶段依赖 Jira 历史匹配；
+  执行者必须在 dry-run 中核对“将新建”的数量，不能按表单行数预估新建数。
 - 本次运行的 `Module` / `Components` 为 `System Stability`、`Assignee` 为 `xulin`、
   `Severity` 为 `B`、`Priority` 为 `Medium`，均为配置表缺失时的默认值，不是生产配置
   的结果。
