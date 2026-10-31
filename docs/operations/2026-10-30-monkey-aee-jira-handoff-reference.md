@@ -6,7 +6,7 @@
 > 存储角色以 [`2026-storage-roles-and-aliases.md`](../design/2026-storage-roles-and-aliases.md) 为准。
 > **范围**：专项（Monkey 等长稳）结束后，从归档扫描产物到 Jira 第一阶段输入、dry-run、
 > 正式提交与回归的闭合。本文记录 2026-10-30 对 NX2 / NX3 / NX3Carrier 三个机型的实际做法、
-> 计数口径、缺口与建设建议；Jira 第一阶段已离线验证，第二阶段 Jira dry-run 与提交尚未执行。
+> 计数口径、缺口与建设建议；Jira 提单尚未接入 STP 平台，将在平台完善后接入。
 
 ## 1. 目的
 
@@ -51,7 +51,7 @@ PlanRun 终态
 | 3 行→事件映射 | merge 报告 + `device_log_event` | 把每行的 `Path` 落到真实事件目录 | 事件目录清单 + 缺失清单 | 每行至少一个目录，缺失可解释 |
 | 4 证据导出 | 事件目录 | 按 build 目录层级复制到共享根 | `<product>_<build>_<日期>_MonkeyAEEinfo/` | 文件数与字节数一致 |
 | 5 表单与计数 | 共享目录 | 厂商工具生成表单；回填真实计数 | `Result_None_None_MonkeyAEE_SH_*.xls` | 行数、Count、DeviceCount、备份 |
-| 6 Jira 提交 | 三份表单 | 第一阶段输入 → dry-run → 正式提交 → 回归 | 上传模板、Jira 单据与回归记录 | 第一阶段已离线验证；第二阶段待执行 |
+| 6 Jira 提交 | 三份表单 | 第一阶段输入 → dry-run → 正式提交 → 回归 | 上传模板、Jira 单据与回归记录 | 未接入；待平台完善后接入 |
 
 ## 4. 执行要点
 
@@ -151,9 +151,9 @@ PlanRun 终态
 > 也不是 Web 界面的「异常总数」。执行者不得把原始 `Count` 直接当异常总数使用；
 > 执行者必须在交付前写明本次采用的口径。
 
-### 4.7 阶段 6：Jira 第一阶段与提交（第二阶段待执行）
+### 4.7 阶段 6：Jira 第一阶段与提交（未接入）
 
-以下步骤是建议范式。2026-10-31 已完成第一阶段离线生成与数据校验（见 §4.7.1）；第二阶段的 Jira `--dry-run` 因本机缺少 Tinno 凭据与厂商配置表，尚未执行。
+本轮未在 STP 控制面执行 Jira 第一阶段或第二阶段；三份表单是平台与 Jira 工具的交接边界。以下步骤是后续接入的建议范式，不代表当前已具备的运行能力。
 
 1. 把三份表单作为
    [Tinno_Jira_Tool_20260520](https://github.com/DUElost/automation-toolkit/tree/main/python-tools/stability_Jira-Automation/Tinno_Jira_Tool_20260520)
@@ -166,60 +166,6 @@ PlanRun 终态
 5. 执行问题回归，把回归结果回写到同一问题台账。
    预期：提交与回归可追溯到 run、表单行、事件目录。
 
-
-#### 4.7.1 2026-10-31 离线 dry-run 记录
-
-执行环境：控制面 Linux；工具为 `Tinno_Jira_Tool_20260520` 的公开仓库副本；使用临时
-Python 环境安装 `pandas` / `openpyxl` / `xlrd`。输入为 §5 的三份最终表单。
-
-| 项 | NX2 | NX3 | NX3Carrier |
-|---|---:|---:|---:|
-| 表单行数 | 77 | 12 | 27 |
-| 第一阶段生成行数 | 77 | 12 | 27 |
-| 跳过行数 | 0 | 0 | 0 |
-| Project | PFDFAA | PFDFAA | PAANX |
-| Issue Type | Bug | Bug | Bug |
-| 同标题组 / 多余行 | 14 / 27 | 3 / 4 | 4 / 6 |
-
-同标题组按 `Summary` 完全相同统计；多余行 = 各组行数减 1 之和。
-
-第一阶段命令（对每份表单各执行一次）：
-
-```bash
-python generate_tinno_jira_upload_list.py \
-  --add-main-excel <最终表单.xls> \
-  --set-output <JIRA_Upload_List_Tinno.xlsx> \
-  --set-test-case "Monkey专项"
-```
-
-结论：
-
-- 三份表单均可被第一阶段完整解析，无缺列、无跳过；版本前缀分别解析为
-  `PFDFAA`、`PFDFAA`、`PAANX`。
-- 标题模板不含 `CausedBy`，只带包名、异常类型与 `Total Number`；同包名、同异常类型且同
-  Count 的行会产生完全相同的标题（本次 14 / 3 / 4 组）。第二阶段依赖 Jira 历史匹配；
-  执行者必须在 dry-run 中核对“将新建”的数量，不能按表单行数预估新建数。
-- 本次运行的 `Module` / `Components` 为 `System Stability`、`Assignee` 为 `xulin`、
-  `Severity` 为 `B`、`Priority` 为 `Medium`，均为配置表缺失时的默认值，不是生产配置
-  的结果。
-- 源表 `Detail` 中的 `异常包名：['... v16022 ...']` 会被原样带入 `Environment`；
-  执行者必须在真实提交前清洗源表，或在第一阶段归一化。
-
-未执行：第二阶段 `create_tinno_jira_batch_from_excel.py --create-only --dry-run`。
-原因是本机没有 Tinno Jira 的 Cookie / P12，也没有厂商配置表
-（`包名与模块&经办人对应表_tinno.xls`、`问题等级定级表.xls`、`稳定性专项汇总.xlsx`）。
-执行者在具备这些材料的工具机上运行，并把“将新建 / 已存在 / 失败”清单回填本节。
-
-命令模板：
-
-```bash
-python create_tinno_jira_batch_from_excel.py \
-  --add-excel-file <JIRA_Upload_List_Tinno.xlsx> \
-  --create-only --dry-run
-```
-
-认证参数按工具 readme 提供；本文不记录凭据。
-
 ## 5. 三机型实战记录
 
 三份最终表单均位于中心存储共享根，目录层级为 `<product>_<build>_<日期>_MonkeyAEEinfo`。
@@ -231,7 +177,7 @@ python create_tinno_jira_batch_from_excel.py \
 | NX3Carrier | `MLD-NX3Carrier_16_261020V38_1023_MonkeyAEEinfo/Result_None_None_MonkeyAEE_SH_20261030_164913.xls` | 1094、1097、1125 | 23 台 / 2 host | 377 / 117（当前 27 行） |
 
 > 注：NX3Carrier 的 `164913` 在 16:49 生成 39 行（Count 399 / DeviceCount 137），
-> 17:08 更新为 27 行（377 / 117）；保留行的计数未变，dry-run 使用 27 行版本。
+> 17:08 更新为 27 行（377 / 117）；保留行的计数未变。
 
 关键事实：
 
@@ -269,8 +215,9 @@ python create_tinno_jira_batch_from_excel.py \
     先改名再复制。
 11. **磁盘与保留冲突**：单个 monkey run 的原始事件可达 200G 级；保留清理实际停用，
     「只删 raw、保留报告」没有平台入口。
-12. **Jira 第二阶段未验证**：第一阶段离线生成已通过；第二阶段 Jira dry-run、真实提交、
-    回归均未执行，提交幂等、结果未知时的对账、问题指纹与 key 的映射都没有落地。
+12. **Jira 提单未接入**：第一阶段、dry-run、真实提交、回归均未在 STP 控制面执行；
+    提交幂等、结果未知时的对账、问题指纹与 key 的映射都没有落地；后续在 STP 平台
+    完善后接入。
 13. **厂商工具是黑盒**：同一目录重复生成是否稳定、退出码与失败语义都未验证。
 14. **无监控告警**：导出中断、目录半份、表单未生成、回填失败都不会自动报警。
 

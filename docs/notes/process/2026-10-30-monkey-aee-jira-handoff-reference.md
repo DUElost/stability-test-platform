@@ -8,7 +8,7 @@ Class: process
 新增 `docs/operations/2026-10-30-monkey-aee-jira-handoff-reference.md`，记录 2026-10-30
 对 NX2 / NX3 / NX3Carrier 三个机型的实际交接流程：归档扫描完整性、FAILED run 的手动
 merge、报告行到事件目录的映射、证据导出到中心存储、表单生成与计数回填，以及 Jira
-第一阶段、离线 dry-run 记录与第二阶段入口。
+提交流程的交接边界与后续接入要求。
 
 该文档是经验参考与建设输入，不是契约：日志链语义仍由
 `docs/design/2026-log-chain-global-semantics.md` 与
@@ -18,7 +18,7 @@ merge、报告行到事件目录的映射、证据导出到中心存储、表单
 文档明确记录了三类事实：三份最终表单的来源 run 与计数（NX2 77 条 / 2151 / 339；
 NX3 12 条 / 17 / 15；NX3Carrier 当前 27 条 / 377 / 117，39 条 / 399 / 137 为 16:49 版本）；
 Count 的唯一事件口径；以及本轮未覆盖的缺口（仅 dblog、手工脚本、无 manifest、无校验
-账本、第二阶段 Jira dry-run 未执行等）。
+账本、Jira 提单未接入等）。
 
 ## Alternatives
 
@@ -33,17 +33,14 @@ Count 的唯一事件口径；以及本轮未覆盖的缺口（仅 dblog、手�
 - 文档中的三份表单、来源 run、目录规模、Count/DeviceCount 与 2026-10-30 实测一致
   （共享根目录、dedup 产物、表单回填结果三方交叉核对）；
 - 新增入链在 `docs/README.md` 与 `docs/operations/README.md` 中可解析；
-- 2026-10-31 用 `Tinno_Jira_Tool_20260520` 对三份表单执行第一阶段离线生成：
-  77 / 12 / 27 行，0 跳过，Project 分别为 PFDFAA / PFDFAA / PAANX；同标题组 14 / 3 / 4，
-  已在文档 §4.7.1 记录；
-- 第二阶段 `--dry-run` 未执行：本机没有 Tinno Jira 的 Cookie / P12 与厂商配置表，
-  命令模板已写入文档；
+- 本轮未在 STP 控制面执行 Jira 第一阶段或第二阶段；文档只记录交接边界与后续接入
+  条件，不声明 dry-run 已通过；
 - 本地运行 `scripts/run_gates.py check:quick`，结果见 PR 描述。
 
 ## Revisit
 
 - 控制面导出 API 与 manifest 落地后，把第 4 节的手工步骤替换为 API 调用，本文降级为
   历史参考；
-- 第二阶段 Jira dry-run、真实提交与回归跑通后，补齐第 6 阶段的证据与失败处理；
+- STP 接入 Jira 提单后，补齐第一阶段、dry-run、真实提交与回归的证据和失败处理；
 - 若唯一事件计数口径进入 ADR 或契约，本文只保留口径链接，不重复定义。
 
