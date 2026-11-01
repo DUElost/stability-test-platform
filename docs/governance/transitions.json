@@ -11,9 +11,9 @@
     },
     {
       "id": "unisoc-env-path-keys",
-      "what": "STP_UNISOC_{LOG_SCAN,SCAN_RESULT}_{PYTHON,SCRIPT} 四路径键保留为包面回退（展锐两族已 --python-absent 入包、fleet 已推包引用键）。2026-11-01 续期至 2026-12-31：四键仍在 AGENT_PATH_ENV_KEYS 与 unisoc_scan_runner env 回退读取面，删键下发（§6/RETIRED_ENV_KEYS）未落地，出口 ADR-0042#D3 未闭合",
+      "what": "STP_UNISOC_{LOG_SCAN,SCAN_RESULT}_{PYTHON,SCRIPT} 四路径键保留为包面回退（展锐两族已 --python-absent 入包、fleet 已推包引用键）。2026-11-01 短续期至 2026-11-23：四键仍在 AGENT_PATH_ENV_KEYS 与 unisoc_scan_runner env 回退读取面，删键下发（§6/RETIRED_ENV_KEYS）未落地，出口 ADR-0042#D3 未闭合",
       "exit": "adr:ADR-0042#D3",
-      "due": "2026-12-31",
+      "due": "2026-11-23",
       "status": "active"
     },
     {
@@ -26,9 +26,9 @@
     },
     {
       "id": "dedup-scan-env-fallback-window",
-      "what": "scan_runner/UnisocScanRunner 的「包面失败→env 路径」C3 回退窗口（#3075：回退保留一个版本窗口）。2026-11-01 续期至 2026-12-31：tool_cache/unisoc_scan_runner 仍保留 C3 失败回退；#3075 仍 OPEN，ADR-0051 记「legacy 路径键/回退退出未完」，窗口尚未撤",
+      "what": "scan_runner/UnisocScanRunner 的「包面失败→env 路径」C3 回退窗口（#3075：回退保留一个版本窗口）。2026-11-01 短续期至 2026-11-23：tool_cache/unisoc_scan_runner 仍保留 C3 失败回退；#3075 仍 OPEN，ADR-0051 记「legacy 路径键/回退退出未完」，窗口尚未撤",
       "exit": "issue:#3075",
-      "due": "2026-12-31",
+      "due": "2026-11-23",
       "status": "active"
     },
     {
