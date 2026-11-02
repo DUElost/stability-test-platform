@@ -988,3 +988,48 @@ async def test_unassigned_path_accepted_when_row_has_no_path(monkeypatch, tmp_pa
             assert db.get(DeviceLogEvent, UUID(client_id)).remote_path == unassigned
     finally:
         _cleanup(seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_dle_occurrence_key_is_stored_only_when_explicitly_carried(monkeypatch, tmp_path):
+    """ADR-0062 G1：occurrence_key 随 payload 上报；补丁不带时保留已有值。
+
+    控制面不得自行计算或清空发生身份——这与 #1052（plan_run_id）和 #3829
+    （size_bytes）的「只在显式携带时更新」同口径。
+    """
+    nfs = tmp_path / "nfs"
+    nfs.mkdir()
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(nfs))
+    seed = _seed_host_job()
+    key_one = "1" * 64
+    key_two = "2" * 64
+    try:
+        r = await _ingest_one(_ev(seed))
+        event_id = r.data["event_ids"][0]
+        with SessionLocal() as db:
+            assert db.get(DeviceLogEvent, UUID(event_id)).occurrence_key is None
+
+        # 显式携带 → 写入
+        await _ingest_one(_ev(
+            seed, id=event_id, state=EventState.UPLOAD_PENDING.value,
+            occurrence_key=key_one,
+        ))
+        with SessionLocal() as db:
+            assert db.get(DeviceLogEvent, UUID(event_id)).occurrence_key == key_one
+
+        # 状态补丁不带 → 不清空
+        await _ingest_one(_ev(
+            seed, id=event_id, state=EventState.UPLOADING.value,
+        ))
+        with SessionLocal() as db:
+            assert db.get(DeviceLogEvent, UUID(event_id)).occurrence_key == key_one
+
+        # 再次显式携带 → 更新
+        await _ingest_one(_ev(
+            seed, id=event_id, state=EventState.UPLOAD_FAILED.value,
+            occurrence_key=key_two,
+        ))
+        with SessionLocal() as db:
+            assert db.get(DeviceLogEvent, UUID(event_id)).occurrence_key == key_two
+    finally:
+        _cleanup(seed)

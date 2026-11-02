@@ -35,6 +35,10 @@ class DeviceLogEvent(Base):
     remote_path = Column(String(1024), nullable=True)
     size_bytes = Column(BigInteger, nullable=True)
     checksum = Column(String(64), nullable=True)
+    # ADR-0062 §3 第 2 条 / B8 G1：发生身份（Agent 用 contracts.occurrence_key
+    # 计算并随 payload 上报）。NULL = 身份不可证明，按 ADR-0053 D7 规则 4
+    # fail-open；不回填存量行。
+    occurrence_key = Column(String(64), nullable=True)
     plan_run_id = Column(
         Integer,
         ForeignKey("plan_run.id", ondelete="SET NULL"),
@@ -79,4 +83,5 @@ class DeviceLogEvent(Base):
         Index("idx_device_log_event_serial_detected", "serial", "detected_at"),
         Index("idx_device_log_event_state_updated", "state", "updated_at"),
         Index("idx_device_log_event_job_signal_seq", "job_id", "signal_seq_no"),
+        Index("idx_device_log_event_occurrence_key", "occurrence_key"),
     )

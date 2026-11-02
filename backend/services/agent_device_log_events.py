@@ -102,6 +102,9 @@ class DeviceLogEventIn(BaseModel):
     remote_path: Optional[str] = None
     size_bytes: Optional[int] = None
     checksum: Optional[str] = None
+    # ADR-0062 §3 第 2 条：Agent 用 contracts.occurrence_key 计算后上报；
+    # 控制面只存储，不从路径或报表反推。NULL = 身份不可证明（fail-open）。
+    occurrence_key: Optional[str] = None
     plan_run_id: Optional[int] = None
     host_id: str
     job_id: Optional[int] = None
@@ -237,6 +240,7 @@ async def ingest_agent_device_log_events(
                     ),
                     size_bytes=ev.size_bytes,
                     checksum=ev.checksum,
+                    occurrence_key=ev.occurrence_key,
                     plan_run_id=ev.plan_run_id,
                     host_id=ev.host_id,
                     job_id=ev.job_id,
@@ -345,6 +349,10 @@ async def ingest_agent_device_log_events(
                     # 把 LOCAL 登记的值清成 NULL，事件与 run 的字节台账随之丢失。
                     if ev.size_bytes is not None:
                         row.size_bytes = ev.size_bytes
+                    # ADR-0062 G1：occurrence_key 同样只在 payload 显式携带时
+                    # 更新——状态补丁不重算身份，迟到补丁不得清空已有 key。
+                    if ev.occurrence_key is not None:
+                        row.occurrence_key = ev.occurrence_key
                     # #1052：plan_run_id 只在 payload 显式携带时更新——此前
                     # 无条件赋值会被「不带 plan_run_id 的迟到 patch」清空归属，
                     # extract 作用域随之丢锚。
@@ -382,6 +390,7 @@ async def ingest_agent_device_log_events(
                 ),
                 size_bytes=ev.size_bytes,
                 checksum=ev.checksum,
+                occurrence_key=ev.occurrence_key,
                 plan_run_id=ev.plan_run_id,
                 host_id=ev.host_id,
                 job_id=ev.job_id,
