@@ -149,7 +149,7 @@ groups:
             {{ $labels.mountpoint }} 剩余已不足一半，且按近 6 小时的趋势外推 72 小时后为负。
             中心存储的增长主要来自 devices/（事件目录，baseline 跨 run 重复）与 jira/（提取副本），
             先用 backend/scripts/measure_center_storage.py 只读分族量化。
-            devices/ 的跨 run 重复可按需改硬链接回收，不删证据（步骤见 docs/operations/center-storage-hardlink-dedup.md）。处置见 #3233。
+            硬链接止血已退役；旧日志只读保留，清理需按 ADR-0062 D12 第 2 条由 Owner 逐个 run 确认归档或删除。处置见 #3233。
       - alert: StabilityHostFilesystemLowSpace
         expr: >-
           node_filesystem_avail_bytes{fstype=~"ext4|xfs|btrfs"}
@@ -162,7 +162,7 @@ groups:
           description: >-
             {{ $labels.mountpoint }} 剩余不足 20%。中心存储写满后 artifact promote、日志归档与提取都会
             失败，测试证据随之丢失。先看趋势告警是否同时在响；
-            中心存储可先把 devices/ 的跨 run 重复改硬链接，不删证据（步骤见 docs/operations/center-storage-hardlink-dedup.md）。处置见 #3233。
+            硬链接止血已退役；旧日志只读保留，清理需按 ADR-0062 D12 第 2 条由 Owner 逐个 run 确认归档或删除。处置见 #3233。
       - alert: StabilityHostFilesystemCritical
         expr: >-
           node_filesystem_avail_bytes{fstype=~"ext4|xfs|btrfs"}
@@ -174,5 +174,46 @@ groups:
           summary: "{{ $labels.mountpoint }} 剩余空间不足 10%"
           description: >-
             {{ $labels.mountpoint }} 剩余不足 10%，已接近写满。立即腾出空间：
-            先把 devices/ 的跨 run 重复改硬链接，不删证据（步骤见 docs/operations/center-storage-hardlink-dedup.md）；再删可再生的提取副本
-            （需逐目录确认 devices/ 仍有完整源），不可再生的证据不得删除。处置见 #3233。
+            硬链接止血已退役；旧日志只读保留，清理需按 ADR-0062 D12 第 2 条由 Owner 逐个 run 确认归档或删除，
+            不可再生的证据不得删除。处置见 #3233。
+
+  # ---- 15.4 日志根绝对水位（B8 G0-c，收 #3860）----------------------------------------------
+  # 切盘后 /mnt/stp-log 是 CIFS 挂载，且 15.4 是 13T 共享盘（2026-11-02 已用约 80%）：
+  # host-storage 三条既匹配不到 cifs，也不能用百分比表达「还剩几个 run」。
+  # 规则常量（二进制 GiB，1 GiB = 1024^3 B；Owner 2026-11-02 确认，见 #3860 评论）：
+  #   WARNING_AVAIL_GIB  = 800 GiB ≈ 8 个 run
+  #   CRITICAL_AVAIL_GIB = 300 GiB ≈ 3 个 run
+  # 单 run 按约 100 GiB 估。调阈值只改下面两条 expr 里的乘积；不要写成 `800e9`
+  # （十进制会把这档实际抬高约 7.4%）。
+  #
+  # node-exporter 侧无需放开（#3860 判据 4 实测）：发行版 node-exporter 1.9.0 的默认
+  # `--collector.filesystem.fs-types-exclude` 不含 cifs；本仓 node-exporter.default 的
+  # `mount-points-exclude=^/(dev|proc|sys|run|var/lib/.+)($|/)` 也不含 /mnt。
+  - name: host-log-storage
+    rules:
+      - alert: StabilityHostLogRootLowSpace
+        expr: >-
+          node_filesystem_avail_bytes{mountpoint="/mnt/stp-log",fstype="cifs"}
+            < 800 * 1024 * 1024 * 1024
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.mountpoint }} 日志根剩余不足 800 GiB（约 8 个 run）"
+          description: >-
+            {{ $labels.mountpoint }} 可用 {{ $value | humanize1024 }}B，低于绝对阈值 800 GiB。
+            15.4 是 13T 共享盘，按百分比判定没有意义，故按绝对可用字节（约 8 个 run，
+            单 run 按 100 GiB 估）。先确认在跑的 run 与预计写入量；容量处置见 #3800。
+      - alert: StabilityHostLogRootCritical
+        expr: >-
+          node_filesystem_avail_bytes{mountpoint="/mnt/stp-log",fstype="cifs"}
+            < 300 * 1024 * 1024 * 1024
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.mountpoint }} 日志根剩余不足 300 GiB（约 3 个 run）"
+          description: >-
+            {{ $labels.mountpoint }} 可用 {{ $value | humanize1024 }}B，低于绝对阈值 300 GiB（约 3 个 run）。
+            按安全停止处理：暂停派发，由 Owner 逐个 run 确认归档或删除（ADR-0062 D12 第 2 条）。
+            容量处置见 #3800。
