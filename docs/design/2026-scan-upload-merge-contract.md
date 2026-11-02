@@ -4,7 +4,9 @@
 [`06-realtime-and-background.md`](./06-realtime-and-background.md) §9，存储角色见
 [`2026-storage-roles-and-aliases.md`](./2026-storage-roles-and-aliases.md)。
 
-## ADR-0053 已接受的存储演进边界
+## ADR-0053 已接受的存储演进边界（已被 ADR-0062 取代）
+
+> 2026-11-02：[ADR-0062](../adr/ADR-0062-device-log-dedup-before-upload.md) Accepted 并取代 ADR-0053，本节下文的内容/引用模型不再实施。对「先去重」分区，触发、上传选择、代表证据与交付登记按 ADR-0062 执行；「现行」分区继续按本文执行契约。
 
 [ADR-0053 v0.2](../adr/ADR-0053-center-storage-event-dedup.md) 于 2026-09-25 Accepted，
 Phase A–D 尚未实施。以下执行契约继续描述当前实现；切换时以该 ADR 的内容/引用模型为目标：

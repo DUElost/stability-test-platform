@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """中心存储 ``devices/`` 跨 run 字节相同文件改硬链接（过渡止血，按需运行）。
 
-**过渡项** ``center-storage-interim-dedup``（``docs/governance/transitions.json``），出口 ADR-0053
-Phase B：scan / merge / extract / 下载 / 回收切到对象解析边界后，本脚本随该过渡项一并删除。
+**过渡项** ``center-storage-interim-dedup``（``docs/governance/transitions.json``），出口 ADR-0062
+§9 阶段三：「先去重」链路退出新旧并存后，本脚本随该过渡项一并删除（ADR-0053 已于 2026-11-02 被 ADR-0062 取代）。
 
 **何时跑**：按需。host-storage 磁盘水位告警（``StabilityHostFilesystemFillingUp`` / ``LowSpace`` /
 ``Critical``）的描述指向本工具；步骤见 ``docs/operations/center-storage-hardlink-dedup.md``。

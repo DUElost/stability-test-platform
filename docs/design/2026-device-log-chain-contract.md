@@ -98,6 +98,7 @@ Agent HDD ≥95% ──► HddSpill ──► EventUploader(force=True) ──�
 
 2026-09-25：ADR-0053 v0.2 Accepted 后，存储层定义权转交内容对象与引用模型；
 Phase A–D 尚未实施，本文后续现态物理路径不是新模型已经落地的证明。
+2026-11-02：ADR-0062 Accepted 并取代 ADR-0053，存储层定义权改归 ADR-0062（上送前按问题选代表）；B8 尚未实施。
 
 与 #2546 X2 一致：**四层都对**，不是竞争 owner。本 Contract 只做 **chain map /
 路由入口**，不是第五层内容权威。
@@ -106,7 +107,7 @@ Phase A–D 尚未实施，本文后续现态物理路径不是新模型已经�
 |--------|----------|-------------------|----------|
 | realtime signal | 异常事件**流** | ADR-0018 → `log-signal-stream` | Watcher → `job_log_signal` |
 | event lifecycle | 事件在哪、什么状态 | ADR-0028 → `dle-record` | DLE 台账 |
-| physical storage | 内容身份 / 引用 / 发布与回收 | ADR-0053 → `center-storage-model` | 目标模型已接受、待实施；三阶段归档与 HDD 职责仍见 ADR-0025 |
+| physical storage | 上送选择 / 代表证据 / 交付登记与留存 | ADR-0062 → `center-storage-model` | 目标模型已接受、待实施（取代 ADR-0053）；「现行」分区的三阶段归档与 HDD 职责仍见 ADR-0025 |
 | platform / merge 行为 | 并列流水线、禁止混工具、分区 | ADR-0032 → `dedup-pipeline-behavior` | MTK/UNISOC 分叉与 merge 分区 |
 | scan/upload/merge **执行契约** | SAQ、完备性、跨进程 I/O | [`2026-scan-upload-merge-contract.md`](./2026-scan-upload-merge-contract.md) → `R-merge-consumes-log` 等 | 层 B 后半段 |
 | **chain map（本文）** | 端到端怎么串、坐标与 namespace | Living Contract（路由） | 全图 |

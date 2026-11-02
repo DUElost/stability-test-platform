@@ -24,6 +24,8 @@ ADR-0028 初版（2026-08-09）选择了**翻转存储模型**——所有事件
 
 ## 设计基调（方案 A）
 
+> **存储演进裁决更新（2026-11-02）**：[ADR-0062](./ADR-0062-device-log-dedup-before-upload.md) Accepted 并取代 ADR-0053，下面 2026-09-25 一段所述 manifest/blob 与引用 GC 模型不再实施。DLE 唯一权威、FAILED 上送与 HddSpill 保留；「先去重」分区的上传选择与 FAILED 后的 merge 处理按 ADR-0062 D8、D15 执行。
+>
 > **存储演进裁决（2026-09-25）**：[ADR-0053 v0.2](./ADR-0053-center-storage-event-dedup.md) 已 Accepted，
 > 实施尚未开始。DLE 继续是独立观察事实的唯一权威，目标由 DLE 引用不可变 manifest/blob，
 > 不再靠每 run 独占目录表达内容所有权。本文以下路径与状态图描述迁移前模型；

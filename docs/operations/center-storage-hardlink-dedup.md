@@ -1,8 +1,8 @@
 # 中心存储 devices/ 跨 run 硬链接去重（过渡措施，按需执行）
 
-- **状态**：过渡措施，已登记为 `center-storage-interim-dedup`（[`transitions.json`](../governance/transitions.json)），出口是 [ADR-0053](../adr/ADR-0053-center-storage-event-dedup.md) Phase B。届时本手册、脚本与告警描述里的指引一并删除
+- **状态**：过渡措施，已登记为 `center-storage-interim-dedup`（[`transitions.json`](../governance/transitions.json)），出口是 [ADR-0062](../adr/ADR-0062-device-log-dedup-before-upload.md) §9 阶段三（2026-11-02 起；原出口 ADR-0053 Phase B 随 ADR-0053 被取代而改指）。届时本手册、脚本与告警描述里的指引一并删除
 - **工具**：[`backend/scripts/center_storage_hardlink_dedup.py`](../../backend/scripts/center_storage_hardlink_dedup.py)
-- **跟踪**：#3308（ADR-0053 实施跟踪，历次执行结果回填处）、#3233（中心存储容量）
+- **跟踪**：#3800（B8 批次载体，2026-11-02 起的执行结果回填处）、#3308（已关闭，此前的历次执行结果）、#3233（中心存储容量）
 
 ## 什么时候跑
 
