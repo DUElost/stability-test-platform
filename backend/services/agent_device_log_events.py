@@ -340,7 +340,11 @@ async def ingest_agent_device_log_events(
                     else:
                         row.remote_path = incoming_path
                     row.checksum = ev.checksum
-                    row.size_bytes = ev.size_bytes
+                    # #3829：size_bytes 只在 payload 显式携带时更新——REMOTE /
+                    # PRUNED / UPLOAD_FAILED 等状态补丁不带字节数，无条件赋值会
+                    # 把 LOCAL 登记的值清成 NULL，事件与 run 的字节台账随之丢失。
+                    if ev.size_bytes is not None:
+                        row.size_bytes = ev.size_bytes
                     # #1052：plan_run_id 只在 payload 显式携带时更新——此前
                     # 无条件赋值会被「不带 plan_run_id 的迟到 patch」清空归属，
                     # extract 作用域随之丢锚。
