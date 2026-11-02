@@ -31,7 +31,7 @@ from backend.models.schedule import TaskSchedule, schedule_timestamp
 # 中心存储族清单的单一来源（#2188）：purge 桶与只读测量必须同源，否则新增一族
 # 会「被清但不被测量」（E-2 看不见）或反之。模块顶层导入——函数体内 import 受
 # tools/dev/check_inner_imports.py 棘轮约束（基线只许下调）。
-from backend.storage_families import JOBS_FAMILY, RUN_FAMILIES
+from backend.storage_families import JOBS_FAMILY, RUN_FAMILIES, storage_root_for_family
 from backend.core.settings.scheduler import get_scheduler_settings
 
 
@@ -257,7 +257,7 @@ def purge_run_storage_dirs(run_ids: list, jobs_by_run: dict | None = None) -> se
     返回删除失败的 run_id 集合（调用方应从本批 DB 删除中剔除，下轮重试
     文件清理——先文件后行的顺序保证失败可自愈）。
 
-    覆盖两类桶（同根、不同分桶维度）：
+    覆盖两类桶（根归属由 storage_families 决定，不同分桶维度）：
 
     - ``RUN_FAMILIES``（当前 ``devices|dedup|jira|_meta``）``/{run_id}/`` —— 按 **run**
       分桶，由 ``run_ids`` 展开；清单是 ``backend/storage_families.py`` 的单一来源；
@@ -266,23 +266,32 @@ def purge_run_storage_dirs(run_ids: list, jobs_by_run: dict | None = None) -> se
       （``{run_id: [job_id, ...]}``）展开。job 目录失败按**所属 run** 归因，
       与 run 目录失败同语义（该 run 整批推迟，行与文件都留在原地等下轮）。
     """
-    from backend.core.storage_root import resolve_shared_storage_root
+    from backend.core.storage_root import (
+        resolve_control_plane_storage_root,
+        resolve_shared_storage_root,
+    )
 
     root = resolve_shared_storage_root()
-    if not root:
+    control_root = resolve_control_plane_storage_root()
+    if not root and not control_root:
         logger.warning("nfs_retention_skipped_root_unset")
         return set()
 
-    base = Path(root)
-    resolved_base = base.resolve()
     failed: set = set()
     removed = 0
     jobs_by_run = jobs_by_run or {}
 
-    def _purge(target: Path, run_id: int) -> None:
+    def _purge(family: str, key: int, run_id: int) -> None:
         nonlocal removed
+        family_root = storage_root_for_family(
+            family, log_root=root, control_plane_root=control_root,
+        )
+        if not family_root:
+            return
+        base = Path(family_root)
+        target = base / family / str(int(key))
         try:
-            if not _within_shared_root(target, resolved_base):
+            if not _within_shared_root(target, base.resolve()):
                 raise ValueError(f"path escapes shared storage root: {target}")
             if target.is_dir():
                 shutil.rmtree(target)
@@ -299,12 +308,12 @@ def purge_run_storage_dirs(run_ids: list, jobs_by_run: dict | None = None) -> se
         # family missing here is residue no retention pass can ever reach (E-2).
         # The list is single-sourced (see backend/storage_families.py).
         for sub in RUN_FAMILIES:
-            _purge(base / sub / str(int(run_id)), run_id)
+            _purge(sub, run_id, run_id)
         # #2031：jobs/{job_id}/ 的唯一索引是 StepTrace/JobArtifact 行，而它们在
         # 同一批里被删（保留期 3 天 << artifact 清理器 30 天）——不在这里清掉即
         # 永不可回溯的孤儿目录，随 job 数线性累积。
         for job_id in jobs_by_run.get(run_id, ()):
-            _purge(base / JOBS_FAMILY / str(int(job_id)), run_id)
+            _purge(JOBS_FAMILY, job_id, run_id)
     if removed:
         logger.info("nfs_retention_purged dirs=%d failed_runs=%d", removed, len(failed))
     return failed

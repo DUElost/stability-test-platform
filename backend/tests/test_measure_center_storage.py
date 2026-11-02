@@ -16,6 +16,25 @@ def _write(path, size: int) -> None:
     path.write_bytes(b"x" * size)
 
 
+def test_g0a_cli_measures_jobs_at_control_root_not_log_or_legacy(tmp_path, monkeypatch, capsys):
+    log = tmp_path / "log"
+    control = tmp_path / "control"
+    old = tmp_path / "old"
+    _write(log / "devices/42/new", 3)
+    _write(log / "jobs/7/wrong", 100)
+    _write(control / "jobs/7/right", 5)
+    _write(old / "devices/42/old", 200)
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(log))
+    monkeypatch.setenv("STP_CONTROL_PLANE_STORAGE_ROOT", str(control))
+    monkeypatch.setenv("STP_LEGACY_LOG_STORAGE_ROOT", str(old))
+    assert mcs.main(["--json"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["families"]["jobs"]["bytes"] == 5
+    assert report["families"]["devices"]["bytes"] == 3
+    assert report["job_dir_count"] == 1
+    assert report["job_dir_bytes"] == 5
+
+
 def test_walk_usage_counts_bytes_files_and_dirs(tmp_path):
     _write(tmp_path / "a.bin", 10)
     _write(tmp_path / "sub" / "b.bin", 5)

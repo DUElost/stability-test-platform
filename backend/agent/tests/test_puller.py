@@ -859,3 +859,30 @@ class TestNfsQuota:
         remaining = [p for p in nfs_root.rglob("f1")] if nfs_root.exists() else []
         assert remaining == [], "超配额目录必须删除，不驻留"
         assert p._quota_exceeded is True
+
+
+def test_g0a_puller_writes_jobs_only_to_control_root(tmp_path, monkeypatch):
+    from backend.agent.aee.paths import resolve_control_plane_storage_root
+
+    log = tmp_path / "log"
+    control = tmp_path / "control"
+    old = tmp_path / "old"
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(log))
+    monkeypatch.setenv("STP_CONTROL_PLANE_STORAGE_ROOT", str(control))
+    monkeypatch.setenv("STP_LEGACY_LOG_STORAGE_ROOT", str(old))
+    coll = _Collector()
+    puller = LogPuller(
+        adb=_FakeAdb(), nfs_base_dir=resolve_control_plane_storage_root(),
+        job_id=42, host_id="HOST", serial="SX", on_pull_done=coll,
+    )
+    puller.start()
+    try:
+        puller.submit(_evt())
+        assert coll.wait_for(1)
+    finally:
+        puller.stop(drain=True, timeout=2)
+    actual = Path(coll.calls[0][1]["artifact_uri"])
+    assert actual.is_relative_to(control / "jobs/42")
+    assert actual.is_file()
+    assert not log.exists()
+    assert not old.exists()

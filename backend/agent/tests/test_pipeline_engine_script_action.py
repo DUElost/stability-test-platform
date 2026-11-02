@@ -57,6 +57,35 @@ def _write_script(path, source: str) -> str:
     return str(path)
 
 
+def test_g0a_script_process_receives_control_root_and_parent_keeps_log_root(monkeypatch, tmp_path):
+    import os
+
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path / "log"))
+    monkeypatch.setenv("STP_CONTROL_PLANE_STORAGE_ROOT", str(tmp_path / "control"))
+    monkeypatch.setenv("STP_LEGACY_LOG_STORAGE_ROOT", str(tmp_path / "old"))
+    monkeypatch.setenv("STP_NFS_ROOT", "/stale/process/alias")
+    script = _write_script(tmp_path / "roots.py", '''
+import json, os
+print(json.dumps({"metrics": {"script_root": os.environ["STP_NFS_ROOT"],
+                              "legacy_script_key": os.environ["STP_AEE_NFS_ROOT"]}}))
+''')
+    engine = PipelineEngine(
+        adb=SimpleNamespace(adb_path="adb"), serial="SERIAL001", run_id=42,
+        script_registry=FakeScriptRegistry(script),
+    )
+    assert engine._nfs_root == str(tmp_path / "control")
+    result = engine._execute_step("init", {
+        "step_id": "roots", "action": "script:roots", "version": "1.0.0",
+        "params": {}, "timeout_seconds": 5,
+    })
+    assert result.success
+    assert engine._shared["roots"] == {
+        "script_root": str(tmp_path / "control"),
+        "legacy_script_key": str(tmp_path / "control"),
+    }
+    assert os.environ["STP_AEE_NFS_ROOT"] == str(tmp_path / "log")
+
+
 def test_pipeline_engine_executes_python_script_action(tmp_path):
     script = _write_script(
         tmp_path / "echo_params.py",

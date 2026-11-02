@@ -62,7 +62,7 @@ def build_device_log_event_download_response(
         # must_exist=False: DLE trees are directories; resolve_local_artifact_path
         # with must_exist=True requires is_file().
         resolved = resolve_device_event_remote_path(
-            raw, plan_run_id=plan_run_id, must_exist=False,
+            raw, plan_run_id=plan_run_id, must_exist=False, allow_legacy=True,
         )
     except ArtifactPathError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

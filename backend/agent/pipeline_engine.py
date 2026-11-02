@@ -1135,10 +1135,10 @@ class PipelineEngine:
             self._nfs_root = nfs_root
         else:
             try:
-                from .aee.paths import resolve_shared_storage_root
+                from .aee.paths import resolve_control_plane_storage_root
             except ImportError:
-                from agent.aee.paths import resolve_shared_storage_root
-            self._nfs_root = resolve_shared_storage_root()
+                from agent.aee.paths import resolve_control_plane_storage_root
+            self._nfs_root = resolve_control_plane_storage_root()
         self._is_aborted = is_aborted
         self._fencing_token = fencing_token or ""  # ADR-0019 Phase 2b
         self._patrol_heartbeat = patrol_heartbeat_uploader  # ADR-0022
@@ -2172,6 +2172,11 @@ class PipelineEngine:
             "STP_JOB_ID": str(ctx.job_id),
             "STP_SHARED_METRICS": json.dumps(self._shared, ensure_ascii=False),
         })
+        # Published MTBF/Sleep/PowerCycle/GPU scripts use this historical name
+        # for distribution/config/results. Only the child sees the control root;
+        # Agent upload/spill/scan keep STP_AEE_NFS_ROOT as the log root.
+        if (os.getenv("STP_CONTROL_PLANE_STORAGE_ROOT") or "").strip():
+            env["STP_AEE_NFS_ROOT"] = os.environ["STP_CONTROL_PLANE_STORAGE_ROOT"].strip()
         if self._local_db is not None:
             db_path = getattr(self._local_db, "_db_path", None)
             if db_path:

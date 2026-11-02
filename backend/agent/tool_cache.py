@@ -219,7 +219,9 @@ def _packages_root(env: Mapping[str, str]) -> Optional[Path]:
     raw = (env.get("STP_PACKAGES_ROOT") or "").strip()
     if raw:
         return Path(raw)
-    aee_nfs = (env.get("STP_AEE_NFS_ROOT") or "").strip()
+    aee_nfs = (env.get("STP_CONTROL_PLANE_STORAGE_ROOT") or "").strip() or (
+        env.get("STP_AEE_NFS_ROOT") or ""
+    ).strip()
     if aee_nfs:
         return Path(aee_nfs) / "packages"
     return None
