@@ -108,3 +108,24 @@ async def test_g0a_upload_registration_accepts_current_control_job_path(monkeypa
         await ingest_agent_artifact(db, 1, _payload(storage_uri=str(tmp_path / "control/jobs/1/log.bin")))
     assert exc.value.status == 404  # path accepted; the fake job is absent
     db.get.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_g0a_upload_registration_rejects_symlink_to_old_log_family(monkeypatch, tmp_path):
+    control = tmp_path / "control"
+    log = tmp_path / "log"
+    old_file = control / "devices/42/event/log.bin"
+    old_file.parent.mkdir(parents=True)
+    old_file.write_text("old evidence")
+    (control / "jobs").mkdir()
+    (control / "jobs/1").symlink_to(old_file.parent, target_is_directory=True)
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(log))
+    monkeypatch.setenv("STP_CONTROL_PLANE_STORAGE_ROOT", str(control))
+    monkeypatch.setenv("STP_LEGACY_LOG_STORAGE_ROOT", str(control))
+    db = AsyncMock()
+    db.get.return_value = None
+    with pytest.raises(ServiceError) as exc:
+        await ingest_agent_artifact(db, 1, _payload(storage_uri=str(control / "jobs/1/log.bin")))
+    assert exc.value.status == 400
+    db.get.assert_not_called()
+    assert old_file.read_text() == "old evidence"

@@ -114,6 +114,10 @@ B8 G0-a 的脚本子进程兼容：已发布的 MTBF、Sleep、PowerCycle、GPU 
 将这个历史键映射到控制面根；Agent 主进程的日志上传、scan、spill 保持使用日志根。
 控制面根未设置时，派生 env 逐键不变。G0-a 合入不执行切盘；G0-b 由 Owner 设置两个新键。
 
+下载与读取接受当前根和只读旧根。JobArtifact 登记显式按 `storage_families.py` 的 jobs 族
+选择当前控制面根；DLE 回执（含 unassigned 回落）只接受当前日志根。仅配置只读旧根
+不能启用写入或登记；旧根与控制面根同路径时，旧日志族仍不得登记为 JobArtifact。
+
 ## 2. Job / 租约超时（`backend/core/job_timeout_config.py`）
 
 | 变量 | 生产默认 | 说明 |

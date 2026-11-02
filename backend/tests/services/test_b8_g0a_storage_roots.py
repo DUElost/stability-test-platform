@@ -17,6 +17,8 @@ from backend.core.artifact_paths import (
 from backend.core.storage_root import resolve_control_plane_storage_root
 from backend.scheduler.cron_scheduler import purge_run_storage_dirs, purge_unassigned_event_dirs
 from backend.services.device_log_event_download import build_device_log_event_download_response
+from backend.services.agent_device_log_events import _validated_remote_path
+from backend.services.errors import ServiceError
 from backend.services.job_artifact_download import _artifact_download_target
 from backend.services.script_catalog import default_packages_root
 from backend.services.suite_binding import global_disk_path, runtask_disk_path
@@ -101,3 +103,52 @@ def test_only_legacy_root_does_not_enable_any_writer(roots, monkeypatch):
     assert resolve_device_event_remote_path(str(sentinel), plan_run_id=42, allow_legacy=True) == sentinel
     with pytest.raises(ArtifactPathOutsideRootError):
         resolve_device_event_remote_path(str(sentinel), plan_run_id=42)
+
+
+@pytest.mark.parametrize("layout", ["legacy_only", "separate", "legacy_is_control"])
+@pytest.mark.parametrize("unassigned", [False, True])
+def test_dle_receipt_rejects_old_root_including_unassigned_fallback(
+    roots, monkeypatch, layout, unassigned,
+):
+    if layout == "legacy_only":
+        monkeypatch.delenv("STP_AEE_NFS_ROOT")
+        monkeypatch.delenv("STP_CONTROL_PLANE_STORAGE_ROOT")
+    if layout == "legacy_is_control":
+        monkeypatch.setenv("STP_LEGACY_LOG_STORAGE_ROOT", str(roots.control))
+    old = roots.control if layout == "legacy_is_control" else roots.old
+    event_id = str(uuid4())
+    relative = f"unassigned/{event_id}" if unassigned else f"42/{event_id}"
+    old_file = _write(old / "devices" / relative / "log.bin")
+    assert resolve_device_event_remote_path(
+        str(old_file), event_id=event_id,
+        plan_run_id=None if unassigned else 42, allow_legacy=True,
+    ) == old_file
+    with pytest.raises(ServiceError) as exc:
+        _validated_remote_path(
+            str(old_file), plan_run_id=42, event_id=event_id, unassigned_fallback=True,
+        )
+    assert exc.value.status == 400
+
+
+@pytest.mark.parametrize("unassigned", [False, True])
+def test_dle_receipt_accepts_current_log_root(roots, unassigned):
+    event_id = str(uuid4())
+    relative = f"unassigned/{event_id}" if unassigned else f"42/{event_id}"
+    path = roots.log / "devices" / relative / "log.bin"
+    assert _validated_remote_path(
+        str(path), plan_run_id=42, event_id=event_id, unassigned_fallback=True,
+    ) == str(path)
+
+
+@pytest.mark.parametrize("family", RUN_FAMILIES)
+def test_read_paths_keep_old_root_while_job_registration_excludes_it(roots, family):
+    old_file = _write(roots.old / family / "42/log.txt")
+    assert _artifact_download_target(str(old_file)) == {"kind": "local", "path": str(old_file)}
+    with pytest.raises(ArtifactPathOutsideRootError):
+        resolve_local_artifact_path(str(old_file), writable_family=JOBS_FAMILY)
+
+
+def test_job_registration_keeps_existing_non_family_layout_at_current_root(roots):
+    # Existing watcher registrations can include a site-relative prefix.
+    path = roots.control / "site/jobs/7/log.bin"
+    assert resolve_local_artifact_path(str(path), writable_family=JOBS_FAMILY) == path
