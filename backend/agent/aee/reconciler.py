@@ -69,6 +69,7 @@ from .emit_intent import (
 )
 from .paths import PathOutsideRootError, get_aee_local_root, resolve_path_under_aee_local
 from ..contracts.aee_metadata import resolve_device_log_event_type
+from ..contracts.occurrence_key import compute_occurrence_key
 from .processor import ProcessConfig, process_device_logs
 from ..contracts.aee_state_migration import WATCHER_AEE_STATE_PREFIX
 from .timestamp import parse_timestamp, to_utc
@@ -860,6 +861,13 @@ class AeeDbHistoryReconciler:
             exhausted = bool(payload.get("exhausted"))
             detected_at = datetime.now(timezone.utc)
             aee_ts_utc = to_utc(parse_timestamp(aee_ts))
+            occurrence_key = compute_occurrence_key(
+                platform=self._platform,
+                serial=self._serial,
+                db_path=db_path,
+                aee_ts=aee_ts,
+                raw_event_type=raw_event_type,
+            )
 
             extra: Dict[str, Any] = {
                 "schema_version": 2,
@@ -893,6 +901,7 @@ class AeeDbHistoryReconciler:
                 aee_ts_utc=aee_ts_utc,
                 seq_no=seq_no,
                 event_id=str(uuid4()),
+                occurrence_key=occurrence_key,
             )
             if dle_payload and self._device_log_client is not None:
                 self._device_log_client.post_event_payload(dle_payload)
@@ -1281,6 +1290,15 @@ class AeeDbHistoryReconciler:
         if self._device_log_client is None:
             return None
         event_type = resolve_device_log_event_type(event_type, event_subtype)
+        parsed = dict(payload.get("parsed") or {})
+        # ADR-0062 §3 第 2 条：发生身份只由设备侧事实原文计算，随 DLE 上报。
+        occurrence_key = compute_occurrence_key(
+            platform=self._platform,
+            serial=self._serial,
+            db_path=str(parsed.get("db_path") or ""),
+            aee_ts=str(parsed.get("timestamp") or ""),
+            raw_event_type=str(parsed.get("raw_event_type") or ""),
+        )
         output_subdir = payload.get("output_subdir")
         if not output_subdir:
             return self._build_pull_failed_payload(
@@ -1290,6 +1308,7 @@ class AeeDbHistoryReconciler:
                 aee_ts_utc=aee_ts_utc,
                 seq_no=seq_no,
                 event_id=event_id,
+                occurrence_key=occurrence_key,
             )
         try:
             if self._local_root is not None:
@@ -1310,6 +1329,7 @@ class AeeDbHistoryReconciler:
                 aee_ts_utc=aee_ts_utc,
                 seq_no=seq_no,
                 event_id=event_id,
+                occurrence_key=occurrence_key,
             )
         if not local_path.is_dir():
             return self._build_pull_failed_payload(
@@ -1319,6 +1339,7 @@ class AeeDbHistoryReconciler:
                 aee_ts_utc=aee_ts_utc,
                 seq_no=seq_no,
                 event_id=event_id,
+                occurrence_key=occurrence_key,
             )
 
         subtype = event_subtype
@@ -1340,7 +1361,7 @@ class AeeDbHistoryReconciler:
             event_type,
             paths=(str(local_path),),
         )
-        return self._device_log_client.build_local_event_payload(
+        dle_payload = self._device_log_client.build_local_event_payload(
             serial=self._serial,
             platform=self._platform,
             event_type=meta_event_type,
@@ -1354,6 +1375,9 @@ class AeeDbHistoryReconciler:
             size_bytes=self._device_log_client.dir_size_bytes(local_path),
             event_id=event_id,
         )
+        if dle_payload and occurrence_key:
+            dle_payload["occurrence_key"] = occurrence_key
+        return dle_payload
 
     def _build_pull_failed_payload(
         self,
@@ -1365,10 +1389,11 @@ class AeeDbHistoryReconciler:
         aee_ts_utc: Optional[datetime],
         event_id: str,
         local_path: str = "",
+        occurrence_key: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         if self._device_log_client is None:
             return None
-        return self._device_log_client.build_pull_failed_payload(
+        payload = self._device_log_client.build_pull_failed_payload(
             serial=self._serial,
             platform=self._platform,
             event_type=event_type,
@@ -1381,6 +1406,9 @@ class AeeDbHistoryReconciler:
             local_path=local_path,
             event_id=event_id,
         )
+        if payload and occurrence_key:
+            payload["occurrence_key"] = occurrence_key
+        return payload
 
     def _notify_self_shutdown(self) -> None:
         """#806：自关闭后通知外部（JobSession → watcher 复位 emit 抑制位）。

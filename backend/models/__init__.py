@@ -5,6 +5,16 @@ from backend.models.device_lease import DeviceLease
 from backend.models.device_return_debt import DeviceReturnDebt
 from backend.models.device_log_event import DeviceLogEvent
 from backend.models.host import Device, Host
+from backend.models.issue_fact import (
+    DeliveryVersion,
+    IssueOccurrence,
+    IssueOccurrenceEvent,
+    IssueSignature,
+    PartitionMode,
+    RepresentativeSelection,
+    ScanRound,
+    SpillLedger,
+)
 from backend.models.job import JobArtifact, JobInstance, StepTrace
 from backend.models.jira_run import JiraRun
 from backend.models.plan import Plan, PlanStep
@@ -44,10 +54,14 @@ __all__ = [
     "DeviceLease",
     "DeviceReturnDebt",
     "DeviceLogEvent",
+    "DeliveryVersion",
     "EventState",
     "EventType",
     "Host",
     "HostStatus",
+    "IssueOccurrence",
+    "IssueOccurrenceEvent",
+    "IssueSignature",
     "JobArtifact",
     "JobInstance",
     "JobStatus",
@@ -58,6 +72,7 @@ __all__ = [
     "NotificationLog",
     "NotificationSeverity",
     "NotificationSource",
+    "PartitionMode",
     "Plan",
     "PlanMigrationAudit",
     "PlanRun",
@@ -67,12 +82,15 @@ __all__ = [
     "PlanRunStatus",
     "PlanRunTargetDevice",
     "PlanStep",
+    "RepresentativeSelection",
     "ResourceAllocation",
     "ResourcePool",
     "RevokedRefreshToken",
+    "ScanRound",
     "HostScriptPresence",
     "Script",
     "Specialty",
+    "SpillLedger",
     "StepTrace",
     "TaskSchedule",
     "TestProject",

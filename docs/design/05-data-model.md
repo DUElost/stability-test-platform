@@ -189,6 +189,31 @@ ACTIVE 的 `MAINTENANCE` 租约是归还欠账载体，holder=`platform`、reaso
 | `notification_delivery` | **投递事实层**（#1167 P4 / ADR-0036 D6）：每行 = 一次「通知 × 通道」投递，`unique(notification_log_id, channel)`；状态词表 `requested`→`dispatched`→`accepted`/`retrying`→`failed`（向前兼容，未来加 `delivered` 不改契约）。**本表为权威**：P4 起幂等判定读本表，无本表行的历史日志才回落 `notification_logs.context.channel_delivery` JSONB |
 | `plan_run_artifact` | PlanRun 级 dedup xls 等（Sprint 4 扩展） |
 
+### 设备日志事实底座（ADR-0062，ADR-0056 D2）
+
+B8 G1 新增八张单数事实表，并给 `device_log_event` 增加可空 `occurrence_key`
+（迁移 `b8g1c4a7d2e9`）。事实行只追加、不改写；对 `plan_run`、`job_instance`、
+`device_log_event` 只存引用 id，不建级联外键，运行行被保留策略删除后事实行仍完整
+（ADR-0056 D1）。读写唯一入口是 `backend/services/issue_fact_store.py`；后续单元
+不得直接写表。
+
+| 表 | 用途与关键字段 | 约束 |
+|----|----------------|------|
+| `issue_signature` | 问题签名：`signature_raw`、`normalized_key`、`platform`、`event_type`、`issue_keys`、`first_seen_at`、`last_seen_at` | 唯一约束 `(platform, event_type, normalized_key)` |
+| `issue_occurrence` | 一次发生：`signature_id`、`occurrence_key`、`serial`、`build_version`、`project_key`、`specialty_key`、`risk_level`、`observed_at`、`first_seen_source`、`first_seen_plan_run_id`、`first_seen_round_id` | `occurrence_key` 唯一（I1）；为空表示身份不可证明，按 fail-open 逐行保留 |
+| `issue_occurrence_event` | 发生 ↔ DLE 观察映射：`occurrence_id`、`dle_id`、`signature_id` | 唯一约束 `(occurrence_id, dle_id, signature_id)` |
+| `partition_mode` | 实际 PlanRun × 平台的运行模式：`plan_run_id`、`platform`、`mode`、`written_at` | 唯一约束 `(plan_run_id, platform)`；写入后不得改写（D13 第 2 条） |
+| `scan_round` | 轮次：`round_no`、`kind`（周期轮 / 最后一轮 / 补充轮）、`expected_set`、`input_cutoff_at`、`status`、`closed_at` | 唯一约束 `(plan_run_id, platform, round_no)` |
+| `representative_selection` | 分区 × 问题的代表：`dle_id`、`selection_status`、`evidence_status`、`selected_at` | 唯一约束 `(plan_run_id, platform, signature_id)`；进入「已选」后 `dle_id` 不得改写（D7 第 6 条） |
+| `delivery_version` | 交付物版本：`software_versions`、`round_ids`、`effective_coverage`、`issue_ids`、`event_ids`、`stats_snapshot_version`、`pending_items`、`gaps`、`primary_folders` | 唯一约束 `(plan_run_id, platform, version_no)` |
+| `spill_ledger` | 溢出台账：`plan_run_id`、`platform`、`dle_id`、`size_bytes`、`spilled_at` | `dle_id` 唯一 |
+
+`device_log_event.occurrence_key` 由 Agent 在 reconciler 中用
+`backend/agent/contracts/occurrence_key.py` 计算，随 DLE payload 上报。控制面必须只在
+payload 显式携带时写入，不得从目录名、报表文件名或 xls 文本反推。存量行保持为空；
+控制面不得回填。出现次数与机器数是查询结果（分别按 `occurrence_key` 与 `serial`
+去重），控制面不得把它们落成可累加的计数列（I1）。
+
 ---
 
 ## 6. Agent 本地（SQLite）

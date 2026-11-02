@@ -949,3 +949,60 @@ def test_sweep_keeps_baseline_tombstone_until_runtime_finalizes(tmp_path):
     save_processed_lines(store, _processed_key(), {_LINE})   # runtime 已 finalize
     rec._sweep_emit_intents()
     assert _LINE not in _intents(store, prefix=_BASELINE_PREFIX)
+
+
+# ----------------------------------------------------------------------
+# ADR-0062 G1：发生身份随 DLE payload 上报
+# ----------------------------------------------------------------------
+
+def _expected_occurrence_key() -> str:
+    from backend.agent.contracts.occurrence_key import compute_occurrence_key
+
+    return compute_occurrence_key(
+        platform="MTK",
+        serial=_SERIAL,
+        db_path="/data/aee_exp/db.01",
+        aee_ts="2026-05-28 10:00:00.000",
+        raw_event_type="Java (JE)",
+    )
+
+
+def test_local_dle_payload_carries_occurrence_key(tmp_path):
+    """reconciler 在组装 LOCAL payload 时计算并附带 occurrence_key。
+
+    意图簿里持久化的 payload 也带同一个 key——崩溃重放不会换身份。
+    """
+    store = _MemStore()
+    emitter = _FakeEmitter(store=store)
+    emitter.processed_key = _processed_key()
+    client = _FakeDeviceLogClient()
+    rec = _make_reconciler(tmp_path, emitter=emitter, store=store, client=client)
+
+    subdir = tmp_path / "aee_exp" / "db.01"
+    subdir.mkdir(parents=True)
+    payload = _payload(subdir)
+
+    rec._handle_new_entry(payload)
+
+    expected = _expected_occurrence_key()
+    assert expected is not None
+    assert client.posts[0]["occurrence_key"] == expected
+    assert _intents(store)[_LINE]["dle_payload"]["occurrence_key"] == expected
+
+
+def test_pull_failed_dle_payload_carries_occurrence_key(tmp_path):
+    """pull/verify 失败时同样以设备侧事实计算发生身份。"""
+    store = _MemStore()
+    emitter = _FakeEmitter(store=store)
+    client = _FakeDeviceLogClient()
+    rec = _make_reconciler(tmp_path, emitter=emitter, store=store, client=client)
+
+    subdir = tmp_path / "aee_exp" / "db.01"
+    subdir.mkdir(parents=True)
+    payload = _payload(subdir)
+    payload["error"] = "adb pull failed"
+    payload["exhausted"] = True
+
+    rec._handle_pull_failed(payload)
+
+    assert client.posts[0]["occurrence_key"] == _expected_occurrence_key()
