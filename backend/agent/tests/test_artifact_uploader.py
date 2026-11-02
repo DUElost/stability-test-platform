@@ -498,3 +498,53 @@ def test_start_before_configure_raises():
     u = ArtifactUploader.instance()
     with pytest.raises(RuntimeError, match="not configured"):
         u.start()
+
+
+def test_g0a_bootstrap_routes_jobs_to_control_and_events_to_log(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from backend.agent import bootstrap_subsystems as bs
+
+    control = tmp_path / "control"
+    log = tmp_path / "log"
+    old = tmp_path / "old"
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(log))
+    monkeypatch.setenv("STP_CONTROL_PLANE_STORAGE_ROOT", str(control))
+    monkeypatch.setenv("STP_LEGACY_LOG_STORAGE_ROOT", str(old))
+    monkeypatch.setattr(bs, "get_aee_local_root", lambda: tmp_path / "local")
+    monkeypatch.setattr(bs, "watcher_subsystem_enabled", lambda: True)
+    components = {}
+    for name in ("LogArchiver", "ScanRunner", "UnisocScanRunner", "UploadManager",
+                 "EventUploader", "LocalDiskMonitor", "LogWatcherManager", "OutboxDrainer",
+                 "ArtifactUploader"):
+        instance = MagicMock()
+        instance.configure.return_value = instance
+        instance.reconcile_on_startup.return_value = 0
+        components[name] = instance
+        monkeypatch.setattr(bs, name, SimpleNamespace(instance=lambda obj=instance: obj))
+    bs.start_disk_and_watcher_subsystems(
+        local_db=MagicMock(), api_url="http://fake-api", agent_secret="test",
+        host_id="h", agent_instance_id="a", adb=MagicMock(), adb_path="adb", sio_client=MagicMock(),
+    )
+    assert components["LogWatcherManager"].configure.call_args.kwargs["nfs_base_dir"] == str(control)
+    uploader_args = components["ArtifactUploader"].configure.call_args.kwargs
+    assert uploader_args["aee_shared_root"] == str(control)
+    assert components["EventUploader"].configure.call_args.kwargs["nfs_root"] == str(log)
+    assert components["LocalDiskMonitor"].configure.call_args.kwargs["cifs_root"] == str(log)
+
+    # Use exactly the bootstrap-selected root for an actual LOCAL -> jobs/ write.
+    session = _FakeSession()
+    uploader = ArtifactUploader.instance()
+    uploader.configure(**uploader_args, session=session)
+    uploader.start()
+    src = tmp_path / "local.txt"
+    src.write_text("job log")
+    try:
+        _submit(uploader, job_id=7, storage_uri=str(src))
+        assert _wait_for(lambda: len(session.posts) == 1)
+    finally:
+        uploader.stop(drain=True, timeout=2)
+    assert (control / "jobs/7/local.txt").read_text() == "job log"
+    assert not log.exists()
+    assert not old.exists()

@@ -38,6 +38,16 @@ JOBS_FAMILY: str = "jobs"
 #: 全部顶层族 = run 族 + job 族。测量/巡检的「族总量」口径用它，不要按 ``len(RUN_FAMILIES)+1`` 猜。
 ALL_FAMILIES: tuple[str, ...] = RUN_FAMILIES + (JOBS_FAMILY,)
 
+#: 族到根的唯一归属表（B8 G0-a）。evidence/ 在 G6 登记时归入日志根。
+FAMILY_STORAGE_ROOTS: Mapping[str, str] = MappingProxyType(
+    {**dict.fromkeys(RUN_FAMILIES, "log"), JOBS_FAMILY: "control_plane"}
+)
+
+
+def storage_root_for_family(family: str, *, log_root: str, control_plane_root: str) -> str:
+    """选择已解析的根；旧日志根不在写入/清理的候选中。未知族直接拒绝。"""
+    return {"log": log_root, "control_plane": control_plane_root}[FAMILY_STORAGE_ROOTS[family]]
+
 #: 承载 merge 报表的两族（E-1b 口径：同一份 ``merge/**`` 在 ``dedup/`` 与 ``jira/`` 各存
 #: 一份，见提案 §1.1 事实 2）。这与 :data:`RUN_FAMILIES` 是**不同概念**——它是「同一份产物
 #: 的双落点」，不是「run 生命周期下的全部族」；同样只此一份，读侧不得自带 ``("dedup", "jira")``。

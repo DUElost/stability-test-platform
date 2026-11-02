@@ -22,6 +22,7 @@ from backend.core.artifact_paths import (
 from backend.models.job import JobArtifact, JobInstance
 from backend.services.agent_log_signals import require_job_bound_upload_lease
 from backend.services.errors import BadRequest, Conflict, NotFound
+from backend.storage_families import JOBS_FAMILY
 
 logger = logging.getLogger(__name__)
 
@@ -73,13 +74,15 @@ async def ingest_agent_artifact(
     if not payload.storage_uri:
         raise BadRequest("storage_uri is required")
     try:
-        resolve_local_artifact_path(payload.storage_uri, must_exist=False)
+        resolve_local_artifact_path(
+            payload.storage_uri, must_exist=False, writable_family=JOBS_FAMILY,
+        )
     except ArtifactPathError as exc:
         raise BadRequest({
             "code": "INVALID_ARTIFACT_PATH",
             "message": (
                 "artifact path is invalid or outside the allowed root "
-                f"(STP_AEE_NFS_ROOT): {exc}"
+                f"(current {JOBS_FAMILY} storage root): {exc}"
             ),
         }) from exc
 

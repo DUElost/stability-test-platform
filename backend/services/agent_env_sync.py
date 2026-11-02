@@ -51,6 +51,7 @@ PROTECTED_ENV_KEYS: frozenset[str] = frozenset(
 # agent belong here.
 _FLEET_ENV_KEYS: tuple[str, ...] = (
     "STP_AEE_NFS_ROOT",
+    "STP_CONTROL_PLANE_STORAGE_ROOT",
     "STP_DEDUP_SCAN_TAG",
     "STP_DEDUP_AUTO_SCAN",
     "LOG_LEVEL",
@@ -108,6 +109,7 @@ AGENT_PATH_ENV_KEYS: frozenset[str] = frozenset(
     {
         "STP_AEE_LOCAL_ROOT",
         "STP_AEE_NFS_ROOT",
+        "STP_CONTROL_PLANE_STORAGE_ROOT",
         "STP_DEDUP_SCAN_PYTHON",
         "STP_DEDUP_SCAN_SCRIPT",
         "STP_UNISOC_LOG_SCAN_PYTHON",
@@ -169,11 +171,12 @@ def _fleet_env_overrides_from_control_plane() -> dict[str, str]:
 
     # ``STP_NFS_ROOT`` is a *script-only* alias (#289 decision B): the pinned
     # scripts under backend/agent/scripts/ read that name, so hot-update mirrors
-    # the 中心存储 mount into it — never the control plane's own STP_NFS_ROOT.
-    # Runtime code resolves storage exclusively via STP_AEE_NFS_ROOT.
-    aee_nfs_root = os.getenv("STP_AEE_NFS_ROOT", "").strip()
-    if aee_nfs_root:
-        overrides.setdefault("STP_NFS_ROOT", aee_nfs_root)
+    # the 控制面根 into it — never the control plane's own STP_NFS_ROOT.
+    control_root = (os.getenv("STP_CONTROL_PLANE_STORAGE_ROOT") or "").strip() or (
+        os.getenv("STP_AEE_NFS_ROOT") or ""
+    ).strip()
+    if control_root:
+        overrides.setdefault("STP_NFS_ROOT", control_root)
 
     return overrides
 

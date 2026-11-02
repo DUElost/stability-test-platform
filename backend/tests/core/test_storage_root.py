@@ -23,6 +23,8 @@ def _clear_share_env(monkeypatch):
         "STP_WATCHER_NFS_BASE_DIR",
         "STP_AEE_CIFS_ROOT",
         "STP_NFS_ROOT",
+        "STP_CONTROL_PLANE_STORAGE_ROOT",
+        "STP_LEGACY_LOG_STORAGE_ROOT",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -263,3 +265,19 @@ def test_resolve_extract_event_src_rejects_nested_relative_symlink(tmp_path):
     assert resolve_extract_event_src(
         "ev1", nfs_root=str(nfs), plan_run_id=42,
     ) is None
+
+
+@pytest.mark.parametrize("value,expected", [(None, "/log"), ("", "/log"), ("  ", "/log"), (" /control ", "/control")])
+def test_g0a_control_root_matches_agent_and_never_falls_back_to_legacy(monkeypatch, value, expected):
+    from backend.core.storage_root import resolve_control_plane_storage_root as core_control
+    from backend.agent.aee.paths import resolve_control_plane_storage_root as agent_control
+
+    _clear_share_env(monkeypatch)
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", "/log")
+    monkeypatch.setenv("STP_LEGACY_LOG_STORAGE_ROOT", "/old")
+    if value is not None:
+        monkeypatch.setenv("STP_CONTROL_PLANE_STORAGE_ROOT", value)
+    assert core_control() == agent_control() == expected
+    monkeypatch.delenv("STP_AEE_NFS_ROOT")
+    monkeypatch.delenv("STP_CONTROL_PLANE_STORAGE_ROOT", raising=False)
+    assert core_control() == agent_control() == ""

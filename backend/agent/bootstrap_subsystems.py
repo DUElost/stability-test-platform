@@ -13,7 +13,11 @@ import logging
 import os
 from typing import Any, Optional
 
-from .aee.paths import get_aee_local_root, resolve_shared_storage_root
+from .aee.paths import (
+    get_aee_local_root,
+    resolve_control_plane_storage_root,
+    resolve_shared_storage_root,
+)
 from .artifact_uploader import ArtifactUploader
 from .config import BASE_DIR
 from .event_uploader import EventUploader
@@ -93,7 +97,7 @@ def start_disk_and_watcher_subsystems(
     log_signal_drainer: Optional[OutboxDrainer] = None
     if watcher_subsystem_enabled():
         # 5B1 + D1：LogPuller 中心存储根（空串 = 禁用 puller，仅记元数据）
-        nfs_base_dir = resolve_shared_storage_root()
+        nfs_base_dir = resolve_control_plane_storage_root()
         LogWatcherManager.instance().configure(
             adb=adb,
             adb_path=adb_path,  # InotifydSource.Popen 需要 adb 二进制路径
@@ -120,8 +124,8 @@ def start_disk_and_watcher_subsystems(
             host_id=str(host_id),
             agent_instance_id=agent_instance_id,
             # #97: 登记前 promote 到共享根（控制面只认共享路径）。
-            # 仅 STP_AEE_NFS_ROOT（及弃用别名）才启用；未配置则 LOCAL 直发。
-            aee_shared_root=resolve_shared_storage_root(),
+            # 控制面根未配置时回落日志根；两者均未配置则 LOCAL 直发。
+            aee_shared_root=resolve_control_plane_storage_root(),
         )
         ArtifactUploader.instance().start()
         logger.info(
