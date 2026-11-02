@@ -272,7 +272,7 @@ ownership 索引（`2026-semantic-ownership.md`）**X2**：日志域四层权威
 | **DLE 台账** | 事件在哪、什么状态 | ADR-0028「唯一权威记录」→ `dle-record` | §3.1 / §3.6 |
 | **log_signal 流** | 异常事件权威流 | ADR-0018 → `log-signal-stream` | §3.1 |
 | **dedup 行为与分区** | 并列流水线、禁止混工具 | ADR-0032 D1 → `dedup-pipeline-behavior` | §2–§3、§4 |
-| **中心存储 / 内容引用** | 内容身份、引用、发布与回收 | ADR-0053 D1–D6 → `center-storage-model` | 目标已接受、待实施；§3.4–§3.6 为当前链路，三阶段职责仍见 ADR-0025 D4 |
+| **中心存储模型** | 上送选择、代表证据、交付登记与留存 | ADR-0062 §5 → `center-storage-model`（2026-11-02 取代 ADR-0053） | 目标已接受、待实施；§3.4–§3.6 为当前链路，三阶段职责仍见 ADR-0025 D4 |
 | **merge 执行位置** | 控制面实例绑定 | ADR-0027 第 7 条 → `R-merge-locus` | §3.5 |
 | **merge 消费关系** | merge 消费谁的产物 | scan-upload-merge 契约 → `R-merge-consumes-log` | §3.5 |
 | **工具宿主分层** | Tier1/2/3 | ADR-0033 D1 → `R-tool-hosted-by-tier` | 采集=Tier2；merge=Tier1 |

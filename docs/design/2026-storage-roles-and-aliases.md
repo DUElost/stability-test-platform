@@ -30,7 +30,9 @@
 
 ---
 
-### 1.1 中心存储内部角色（ADR-0053 已裁决，待实施）
+### 1.1 中心存储内部角色（ADR-0053 已被 ADR-0062 取代，待实施）
+
+> 2026-11-02：[ADR-0062](../adr/ADR-0062-device-log-dedup-before-upload.md) Accepted 并取代 ADR-0053。目标改为上送前按问题选代表，中心按主文件夹 / SN / 事件目录存放代表证据（ADR-0062 D9 第 6 条）；下文的 blob、manifest 与引用 GC 模型不再实施，保留为历史记录。提单工作区不硬链接证据的原则由 ADR-0062 D10 第 2 条承接。
 
 [ADR-0053 v0.2](../adr/ADR-0053-center-storage-event-dedup.md) 于 2026-09-25 Accepted：
 中心存储内部区分不可变文件 blob、版本化事件 manifest 和可再生的 scan/extract/Jira 工作区；
