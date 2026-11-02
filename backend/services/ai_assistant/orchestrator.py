@@ -671,7 +671,7 @@ def _run_service_tool(
 
         packages_root = default_packages_root()
         if packages_root is None:
-            raise RuntimeError("STP_PACKAGES_ROOT / STP_AEE_NFS_ROOT 未配置（scripts scan 503 同源约束）")
+            raise RuntimeError("STP_PACKAGES_ROOT / STP_CONTROL_PLANE_STORAGE_ROOT / STP_AEE_NFS_ROOT 未配置（scripts scan 503 同源约束）")
         db = SessionLocal()
         try:
             result = sync_scripts_from_manifest(

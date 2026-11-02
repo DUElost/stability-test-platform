@@ -58,6 +58,7 @@ from backend.storage_families import (
     MERGE_REPORT_FAMILIES,
     NON_KEY_ENTRIES,
     RUN_FAMILIES,
+    storage_root_for_family,
 )
 
 #: 拒绝扫描的根（防手滑把整盘/整机当中心存储）。
@@ -149,16 +150,20 @@ def _run_dirs(family_root: Path, *, skip: Iterable[str] = ()) -> dict[str, Path]
     return out
 
 
-def collect_family_usage(center_root: Path) -> dict[str, Usage]:
+def collect_family_usage(center_root: Path, *, control_plane_root: Optional[Path] = None) -> dict[str, Usage]:
     """全部顶层族各自的顶层用量（不递归到 run/job 内部分解）。
 
     族清单用 :data:`~backend.core.storage_families.ALL_FAMILIES`：run 族与 job 族都要有
     总量，否则新家族（如 ``_meta``）在报告里结构性不可见——那正是 #2188 记的漏桶形态。
     """
     return {
-        family: walk_usage(center_root / family)
+        family: walk_usage(family_root / family)
         for family in ALL_FAMILIES
-        if (center_root / family).is_dir()
+        for family_root in [Path(storage_root_for_family(
+            family, log_root=str(center_root),
+            control_plane_root=str(control_plane_root or center_root),
+        ))]
+        if (family_root / family).is_dir()
     }
 
 
@@ -183,13 +188,16 @@ def collect_run_usage(center_root: Path) -> dict[str, dict[str, Usage]]:
     return by_family
 
 
-def collect_job_usage(center_root: Path) -> dict[str, Usage]:
+def collect_job_usage(center_root: Path, *, control_plane_root: Optional[Path] = None) -> dict[str, Usage]:
     """``jobs/`` 族按 **job** 主键的分解（``{job_id: Usage}``）。
 
     与 run 分解分开的理由只有一个：主键不同。混在一起时 ``run_counts`` 与
     ``top_runs_by_bytes`` 会把 job 目录报成 run（#2188 复核发现）。
     """
-    root = center_root / JOBS_FAMILY
+    root = Path(storage_root_for_family(
+        JOBS_FAMILY, log_root=str(center_root),
+        control_plane_root=str(control_plane_root or center_root),
+    )) / JOBS_FAMILY
     if not root.is_dir():
         return {}
     return {
@@ -297,6 +305,7 @@ def collect_baseline(
     center_root: Path,
     *,
     merge_result_root: Optional[Path] = None,
+    control_plane_root: Optional[Path] = None,
     top: int = 10,
 ) -> dict:
     """汇总全部可只读获得的基线指标。"""
@@ -306,11 +315,11 @@ def collect_baseline(
         for run_id, usage in runs.items():
             ranked.append((f"{family}/{run_id}", usage.bytes))
     ranked.sort(key=lambda item: item[1], reverse=True)
-    job_dirs = collect_job_usage(center_root)
+    job_dirs = collect_job_usage(center_root, control_plane_root=control_plane_root)
     return {
         "center_root": str(center_root),
         "families": {
-            name: asdict(usage) for name, usage in collect_family_usage(center_root).items()
+            name: asdict(usage) for name, usage in collect_family_usage(center_root, control_plane_root=control_plane_root).items()
         },
         "run_counts": {family: len(runs) for family, runs in by_family.items()},
         # jobs/{job_id} 不是 run：单列一条轴，避免与 run_counts 混读（#2188）。
@@ -396,6 +405,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="中心存储根（默认取 STP_AEE_NFS_ROOT；危险根会被拒绝）",
     )
     parser.add_argument(
+        "--control-plane-root",
+        default=os.environ.get("STP_CONTROL_PLANE_STORAGE_ROOT", ""),
+        help="控制面根（默认取 STP_CONTROL_PLANE_STORAGE_ROOT，未设回落 --center-root）",
+    )
+    parser.add_argument(
         "--merge-result-root",
         default="",
         help="控制面本地 merge_result/（默认从 STP_BACKEND_DEDUP_SCAN_SCRIPT 推导）",
@@ -409,12 +423,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         center_root = resolve_center_root(args.center_root)
+        control_root = resolve_center_root(args.control_plane_root) if args.control_plane_root.strip() else center_root
     except UnsafeRootError as exc:
         print(f"refusing to run: {exc}", file=sys.stderr)
         return 2
 
     merge_root = Path(args.merge_result_root).expanduser() if args.merge_result_root.strip() else derive_merge_result_root()
-    report = collect_baseline(center_root, merge_result_root=merge_root, top=args.top)
+    report = collect_baseline(
+        center_root, control_plane_root=control_root, merge_result_root=merge_root, top=args.top,
+    )
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
     else:

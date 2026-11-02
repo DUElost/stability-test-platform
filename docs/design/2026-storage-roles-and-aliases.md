@@ -1,6 +1,6 @@
 # 存储与部署角色：统一语义（别称对照）
 
-- **状态**：Living（2026-09-25：同步 ADR-0053 的对象/引用/工作区边界；部署快照未复测）
+- **状态**：Living（2026-11-02：同步 B8 G0-a 拆根契约；G0-b 尚未执行，本 PR 未复测部署）
 - **目的**：角色、别称、env、IP 一一对应；冲突时以本文 + 代码为准
 - **关联**：ADR-0025、[方案 C 存储](./2026-plan-c-storage-and-access.md)、[#205](https://github.com/DUElost/stability-test-platform/issues/205)（健康页双目标，切盘前冻结）
 
@@ -15,18 +15,20 @@
 | 1 | **设备** | Android 被测机 |
 | 2 | **Agent host** | 跑 Agent 的 Linux 机（约 20 台） |
 | 3 | **控制面** | FastAPI / Dashboard / SAQ，生产 **永远** `192.0.2.202` |
-| 4 | **中心存储（CIFS / NFS）** | 日志分享盘：`devices/` `dedup/` `jira/` `jobs/` `mtbf/` `tools/`（外部工具，ADR-0033）`_meta/`（#2188 D 步写侧登记分片） |
+| 4 | **中心存储（CIFS / NFS）** | 日志分享盘：`devices/`、`dedup/`、`jira/`、`_meta/`，以及 G6 登记的 `evidence/`；分发内容与 `jobs/` 属于控制面根 |
 | 5 | **PG** | 业务库（元数据，不是日志文件） |
 | 6 | **Redis** | 仅 SAQ broker（+ 可选 SocketIO adapter） |
 | 7 | **扫描工具** | `start_log_scan.py`（Agent scan + 控制面 merge） |
 | 8 | **JIRA** | 下游消费者；STP 只往中心存储 `jira/` 放路径 |
 | 9 | **监控** | Prometheus + 控制面健康页等 |
 
-**CIFS = NFS = 中心存储（角色 4）**。不是控制面，不是健康页，不是两台机器。口头、文档、键名里的 NFS/CIFS 都指这一台分享。
+**CIFS = NFS = 中心存储（角色 4）**。不是控制面，不是健康页，不是两台机器。`STP_AEE_NFS_ROOT` 指日志分享；历史脚本键 `STP_NFS_ROOT` 镜像控制面根，键名不表示挂载协议（B8 G0-a）。
 
 **文件服务器 / File Server** = 控制面 admin **共享存储健康页**（`/storage`），不是一台机器、不是角色 4。
 
-带 NFS/CIFS 的**存储类 env**都应指向角色 4。主键 **`STP_AEE_NFS_ROOT`**（唯一；#289 后弃用别名已删除）。控制面脚本根必须设 **`STP_SCRIPT_ROOT`**，不得再用 `STP_NFS_ROOT/scripts`。
+日志根主键是 **`STP_AEE_NFS_ROOT`**（#289 的 CIFS/WATCHER 弃用别名仍已删除）。
+控制面根是 **`STP_CONTROL_PLANE_STORAGE_ROOT`**，未设置时回落到日志根。
+控制面必须显式设置脚本扫描根 **`STP_SCRIPT_ROOT`**。控制面不得用 `STP_NFS_ROOT/scripts` 代替脚本扫描根。
 
 ---
 
@@ -44,25 +46,19 @@ Phase A–D 尚未实施；对象根的具体布局随实施定义。本文 `dev
 
 ## 2. 当前部署 vs 目标
 
-```text
-当前（过渡，流程调通）
-  控制面 8.202  ──同机──  中心存储（CIFS/NFS）//192.0.2.202/jxtinno/sonic_tinno
-  Agent ×20     ──mount──┘
+依据 [#3800 切盘方案 v1.2](https://github.com/DUElost/stability-test-platform/issues/3800#issuecomment-6572427631)
+的 2026-11-02 规划快照：当前日志、分发内容与 Job 日志同在 `/mnt/stp-aee`。
+G0-a 只实现解析与配置，下面的目标布局由 G0-b 在 Owner 在场时切换。
 
-目标
-  控制面 8.202          （不迁）
-  中心存储（CIFS/NFS）  //198.51.100.4/... 或 //192.0.2.4/...
-  Agent ×20 + 控制面    ──mount 新 UNC──┘
-```
+| 根 | 切盘后位置 | 内容 | env |
+|---|---|---|---|
+| 日志根 | 15.4 新挂载点（方案示例 `/mnt/stp-log`） | `devices/`、`dedup/`、`jira/`、`_meta/`、B8 的 `evidence/` | `STP_AEE_NFS_ROOT` |
+| 控制面根 | 控制面本机原地 `/mnt/stp-aee`，Agent 继续挂载现有 NFS | 固件、脚本包、工具、`apk-repo/`、`resources/`、`sleep/`、`power-cycle/`、`gpu/`、`mtbf/`、`jobs/` | `STP_CONTROL_PLANE_STORAGE_ROOT` |
+| 只读旧日志根 | 原地 `/mnt/stp-aee` | 已结束 run 的 `devices/`、`dedup/`、`jira/`、`_meta/` | `STP_LEGACY_LOG_STORAGE_ROOT` |
 
-| IP / 外号 | 现在 | 切盘后 |
-|-----------|------|--------|
-| **8.202** | 控制面；CIFS **碰巧同机** | **只**控制面 |
-| **15.4** | ADR / 方案 C 里中心存储的**角色外号 / 目标盘**（上一代已用过），**不是** STP 此刻挂载 | 候选 CIFS 机 |
-| **9.4** | 预计独立日志盘 | 候选 CIFS 机 |
-| Agent `9.x` | Agent host | 仍是 Agent；**不要**和「CIFS 迁 9.4」混称 |
-
-ADR-0025 / 方案 C 正文里大量「15.4」= **中心存储这个角色**，不是「生产 UNC 主机现在就是 15.4」。
+旧日志不迁移。只读旧日志根只扩充下载校验范围，写入、上传目标、retention 都不选择它。
+族的根归属以 `backend/storage_families.py` 为唯一来源，消费方不得自带归属清单。
+G6 登记 `evidence/` 时沿用日志根。
 
 ---
 
@@ -76,7 +72,7 @@ ADR-0025 / 方案 C 正文里大量「15.4」= **中心存储这个角色**，�
 | **共享根（挂载点）** | 本机路径 | `/mnt/nfs/aee_events`、`/home/android/aee-nfs` | `STP_AEE_NFS_ROOT` |
 
 20 台 Agent + 控制面的挂载路径字符串可以不同，必须指向**同一个 UNC**。  
-切盘 = 改 UNC 主机 + remount；挂载点路径能不改就不改。
+G0-b 按切盘方案创建日志新挂载点；控制面根与旧日志保持原地。
 
 ---
 
@@ -130,13 +126,15 @@ ADR-0025 / 方案 C 正文里大量「15.4」= **中心存储这个角色**，�
 | 中心存储 | **CIFS**、**NFS**、中心日志服务器、L2、归档盘、sonic_tinno、`jxtinno` | 控制面、健康页 |
 | 15.4 / 15.4 CIFS | 角色外号 / ADR 目标态 | 「现网 UNC 已在 15.4」 |
 | `STP_AEE_NFS_ROOT` | 共享根主键（键名带 NFS，指向的就是中心存储挂载点） | `STP_FILE_SERVER_ADDRESS` |
-| `STP_NFS_ROOT` | Agent 上 hot-update 镜像 `STP_AEE_NFS_ROOT`（旧脚本 env）。控制面本机值不下发；脚本扫描用 `STP_SCRIPT_ROOT` | 独立脚本盘 |
+| `STP_NFS_ROOT` | Agent 上 hot-update 与 PipelineEngine 镜像控制面根（旧脚本 env）；控制面根未设置时回落日志根。控制面本机同名值不下发；脚本扫描用 `STP_SCRIPT_ROOT` | 独立脚本盘 |
 | `STP_AGENT_NFS_ROOT` | **已停用**（不再映射） | 第三块盘 |
 
-子目录（角色 4 的内容，不是角色）：`devices/`、`dedup/`、`jira/{plan_run_id}/`、`jobs/{job_id}/`、
+日志根子目录（角色 4 的内容，不是角色）：`devices/`、`dedup/`、`jira/{plan_run_id}/`、
 `_meta/{plan_run_id}/{host_id}.json`（#2188 D 步写侧登记分片：Agent 写、控制面读，与 run 同生命周期，
 由 run 级 retention 一并清；设计见
-[2026-09-17-2188-dstep-manifest-design](../notes/architecture/2026-09-17-2188-dstep-manifest-design.md)）、
+[2026-09-17-2188-dstep-manifest-design](../notes/architecture/2026-09-17-2188-dstep-manifest-design.md)）。
+
+控制面根子目录包括 `jobs/{job_id}/`、
 `mtbf/{project}/`（MTBF 清单/全局参数 + `results/{run_dir}__job{job_id}__{serial}.json`（`mtbf_finish` v1.5.0+ 稳定身份，缺维度省略对应段）；
 控制面写配置、Agent 写 `results/`，见 [P0 设计 §4.4](../design/2026-08-mtbf-p0-runner-design.md)）、`tools/`（外部工具，ADR-0033）：
 **现态**为 `tools/{name}/` 下的版本化源码目录，由 Agent 经路径 env 配置调用（展锐三工具族，
@@ -192,7 +190,7 @@ legacy 例外，见 ADR-0033 v1.2 §5.4）；**终态（已触发、待实现）
 | 15.4 | 现网 CIFS | 中心存储**外号/目标** |
 | 9.4 | Agent 网段 | CIFS **候选机** |
 | NFS / CIFS | 两种协议、两台机器 | **都是中心存储（同一角色、同一台分享）** |
-| `STP_NFS_ROOT` | 独立脚本盘 | 应 = 中心存储挂载；CP 拿它拼 `/scripts` 是误用 |
+| `STP_NFS_ROOT` | 独立脚本盘 | 镜像控制面根（未设置时回落日志根）；CP 拿它拼 `/scripts` 是误用 |
 | 文件服务器 | 中心存储 | 健康页 |
 | `STP_FILE_SERVER_ADDRESS` | CIFS 根 | 健康页控制面 IP |
 | `STP_DEDUP_SCAN_*` | 全球唯一路径 | 控制面 merge 一套 + Agent scan 一套 |
@@ -209,7 +207,9 @@ legacy 例外，见 ADR-0033 v1.2 §5.4）；**终态（已触发、待实现）
 | `STP_AEE_LOCAL_ROOT` | Agent HDD | 本机路径 |
 | `STP_AEE_NFS_ROOT` | **中心存储** 挂载点（主键） | 本机路径；控制面与 Agent 指向同一 UNC |
 | `STP_AEE_CIFS_ROOT` / `STP_WATCHER_NFS_BASE_DIR` | 已删除（#289）——只认 `STP_AEE_NFS_ROOT` | 同盘路径或留空 |
-| `STP_NFS_ROOT` | Agent 脚本 env 镜像中心存储挂载；CP 本机值不下发 | 本机路径 |
+| `STP_NFS_ROOT` | Agent 脚本 env 镜像控制面根；CP 本机同名值不下发 | 本机路径 |
+| `STP_CONTROL_PLANE_STORAGE_ROOT` | 控制面根；未设置时回落 `STP_AEE_NFS_ROOT` | 本机路径，控制面与 Agent 同值 |
+| `STP_LEGACY_LOG_STORAGE_ROOT` | 只读旧日志根；未设置不增加下载候选 | 本机路径，写入与清理不使用 |
 | `STP_DEDUP_SCAN_PYTHON` / `_SCRIPT` | 扫描工具（本角色路径） | 控制面 = merge；Agent = scan |
 | `STP_AGENT_DEDUP_SCAN_*` | 控制面持有的 **Agent 侧**扫描工具路径 | hot-update 源键 |
 | `STP_AEE_SHARE_ADDRESS` / `_UNC` | **尚未落地**；#205 切盘时给健康页 B 栏 | CIFS 机 IP / UNC |
@@ -242,6 +242,7 @@ PRUNE_LOCAL 可用余量；后者是 Linux 系统盘。两处数据分别来自�
 
 | 日期 | 变更 |
 |------|------|
+| 2026-11-02 | B8 G0-a：日志根与控制面根分离；旧日志只读下载；`STP_NFS_ROOT` 镜像控制面根。合入不等于 G0-b 切盘 |
 | 2026-09-25 | 同步 ADR-0053 v0.2 Accepted：内容对象、观察引用、派生工作区职责分离；实施尚未开始 |
 | 2026-08-09 | 初版：九角色 + CIFS=中心存储 + 健康页≠CIFS + 8.202 过渡 / 15.4·9.4 目标 + #205 |
 | 2026-09-16 | §4.4 补 Agent 侧挂载的两个语义（#2321）：**IPv6 源保留方括号**（`urlsplit().hostname` 会剥掉 → 冒号歧义，挂载必失败且与「网络不通」不可区分）；**hard mount 语义记录在案**（维持 hard 的理由 + 复议触发），此前仓库无任何权衡记录 |

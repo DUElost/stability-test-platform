@@ -16,7 +16,7 @@ _AEE_LOCAL_ROOT_DEFAULT = "/mnt/hdd/aee_events"
 
 
 def resolve_shared_storage_root() -> str:
-    """中心存储本机挂载点（NFS = CIFS = 同一台分享）。未配置返回空串。
+    """日志根本机挂载点。未配置返回空串。
 
     唯一主键 ``STP_AEE_NFS_ROOT``（#289：CIFS/WATCHER 弃用别名回落已删除，
     未设主键即视为未配置）。不回落到 ``STP_NFS_ROOT`` 或 HDD。
@@ -33,6 +33,11 @@ def get_aee_nfs_root() -> Path:
     if not raw:
         raise RuntimeError("STP_AEE_NFS_ROOT is not set")
     return Path(raw)
+
+
+def resolve_control_plane_storage_root() -> str:
+    """Agent 分发内容与 Job 日志根；语义与控制面同名解析器一致。"""
+    return (os.getenv("STP_CONTROL_PLANE_STORAGE_ROOT") or "").strip() or resolve_shared_storage_root()
 
 
 def _default_ssd_fallback_root() -> Path:
@@ -289,11 +294,11 @@ def get_or_create_run_date_stamp(
     return stamp
 
 
-# ── 15.4 共享根路径约定（#172 统一入口）────────────────────────────────────
+# ── 共享根路径约定（#172 统一入口）────────────────────────────────────
 #
 # 对象族分两类，避免继续用"哪段代码写哪里"的方式散落：
-#   - JobArtifact 文件（watcher puller 默认落点 + LOCAL promote）→ jobs/{job_id}/
-#   - AEE 事件目录（EventUploader / DLE；含 HddSpill enqueue）→
+#   - JobArtifact（watcher puller 默认落点 + LOCAL promote）→ 控制面根 jobs/{job_id}/
+#   - AEE 事件目录（EventUploader / DLE；含 HddSpill enqueue）→ 日志根
 #     devices/{plan_run_id}/{event_id}/ 或 devices/unassigned/{event_id}/
 # 控制面 download 与 dedup extract 分别消费这两族；任何一端改布局都必须改这里。
 

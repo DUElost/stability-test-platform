@@ -74,3 +74,58 @@ class TestIngestGuards:
             with pytest.raises(ServiceError) as exc:
                 await ingest_agent_artifact(db, 99, _payload())
         assert exc.value.status == 404
+
+
+@pytest.mark.parametrize("layout", ["legacy_only", "separate", "legacy_is_control"])
+@pytest.mark.asyncio
+async def test_g0a_upload_registration_rejects_legacy_log_paths(monkeypatch, tmp_path, layout):
+    old = tmp_path / "old"
+    monkeypatch.setenv("STP_LEGACY_LOG_STORAGE_ROOT", str(old))
+    monkeypatch.delenv("STP_AEE_NFS_ROOT", raising=False)
+    monkeypatch.delenv("STP_CONTROL_PLANE_STORAGE_ROOT", raising=False)
+    if layout != "legacy_only":
+        monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path / "log"))
+        monkeypatch.setenv("STP_CONTROL_PLANE_STORAGE_ROOT", str(
+            old if layout == "legacy_is_control" else tmp_path / "control"
+        ))
+    db = AsyncMock()
+    db.get.return_value = None
+    with pytest.raises(ServiceError) as exc:
+        await ingest_agent_artifact(db, 1, _payload(storage_uri=str(old / "devices/42/event/log.bin")))
+    assert exc.value.status == 400
+    assert "INVALID_ARTIFACT_PATH" in str(exc.value.detail)
+    db.get.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_g0a_upload_registration_accepts_current_control_job_path(monkeypatch, tmp_path):
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path / "log"))
+    monkeypatch.setenv("STP_CONTROL_PLANE_STORAGE_ROOT", str(tmp_path / "control"))
+    monkeypatch.setenv("STP_LEGACY_LOG_STORAGE_ROOT", str(tmp_path / "old"))
+    db = AsyncMock()
+    db.get.return_value = None
+    with pytest.raises(ServiceError) as exc:
+        await ingest_agent_artifact(db, 1, _payload(storage_uri=str(tmp_path / "control/jobs/1/log.bin")))
+    assert exc.value.status == 404  # path accepted; the fake job is absent
+    db.get.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_g0a_upload_registration_rejects_symlink_to_old_log_family(monkeypatch, tmp_path):
+    control = tmp_path / "control"
+    log = tmp_path / "log"
+    old_file = control / "devices/42/event/log.bin"
+    old_file.parent.mkdir(parents=True)
+    old_file.write_text("old evidence")
+    (control / "jobs").mkdir()
+    (control / "jobs/1").symlink_to(old_file.parent, target_is_directory=True)
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(log))
+    monkeypatch.setenv("STP_CONTROL_PLANE_STORAGE_ROOT", str(control))
+    monkeypatch.setenv("STP_LEGACY_LOG_STORAGE_ROOT", str(control))
+    db = AsyncMock()
+    db.get.return_value = None
+    with pytest.raises(ServiceError) as exc:
+        await ingest_agent_artifact(db, 1, _payload(storage_uri=str(control / "jobs/1/log.bin")))
+    assert exc.value.status == 400
+    db.get.assert_not_called()
+    assert old_file.read_text() == "old evidence"

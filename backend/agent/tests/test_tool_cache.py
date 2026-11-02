@@ -321,3 +321,12 @@ class TestEntryFieldContainment3169:
         # 包里真有这个名字的文件（POSIX 上反斜杠是合法文件名字符）——否则「不存在」会让用例碰巧通过
         env = self._prepare(tmp_path, extra_files={"sub\\start_log_scan.py": b"x"}, script="sub\\start_log_scan.py")
         assert resolve_packaged_scan_tool(env) is None
+def test_g0a_package_source_uses_control_root_and_honors_explicit_override(tmp_path):
+    from backend.agent.tool_cache import _packages_root
+
+    env = {"STP_AEE_NFS_ROOT": str(tmp_path / "log"),
+           "STP_CONTROL_PLANE_STORAGE_ROOT": str(tmp_path / "control"),
+           "STP_LEGACY_LOG_STORAGE_ROOT": str(tmp_path / "old")}
+    assert _packages_root(env) == tmp_path / "control" / "packages"
+    env["STP_PACKAGES_ROOT"] = str(tmp_path / "packages")
+    assert _packages_root(env) == tmp_path / "packages"
