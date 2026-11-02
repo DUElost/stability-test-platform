@@ -2,8 +2,9 @@
 
 v1.2.0（2026-11-02）：支持 split APK 集。`apk_paths`（显式列表）或 `apk_dir`
 （目录内 `*.apk`，`base.apk` 优先）走 `adb install-multiple -r`；单 `apk_path`
-仍走原 `adb install -r`。给出 `pkg_name` + `required_version` 时，安装后回读
-`versionName` 并与目标精确比较，不一致即失败（此前只做安装前 skip 判定）。
+仍走原 `adb install -r`。新增 opt-in `verify_after_install`：为 true 且给出
+`pkg_name` + `required_version` 时，安装后回读 `versionName` 并与目标精确比较，
+不一致即失败（默认关闭，保持既有调用方行为）。
 
 v1.0.2（#816）：已装版本判定改 `versionName=` 字段级精确比较——子串匹配下
 required=1.0.1 会命中已装的 1.0.10，误判 skipped 导致所需 apk 永不安装。
@@ -17,7 +18,8 @@ Environment:
     STP_NFS_ROOT        (prepended to relative apk paths)
     STP_STEP_PARAMS     (required, JSON:
                          {apk_path?, apk_paths?, apk_dir?, pkg_name?,
-                          required_version?, reinstall?, timeout_seconds?})
+                          required_version?, verify_after_install?,
+                          reinstall?, timeout_seconds?})
 
 Output (stdout):
     {"success": true/false, "skipped": bool, "error_message": "...",
@@ -60,9 +62,8 @@ def _resolve_apk_paths(args: dict) -> list[str]:
     else:
         raise ValueError("No apk_path/apk_paths/apk_dir specified")
 
-    missing = [p for p in paths if not os.path.isfile(p)]
-    if missing:
-        raise ValueError("APK not found: " + ", ".join(missing))
+    # 显式路径不预检存在性：保持 v1.1.0 行为，由 adb install 报出具体错误；
+    # apk_dir 走 glob，天然只返回存在的文件。
     return paths
 
 
@@ -88,35 +89,43 @@ def main() -> None:
     serial = device_serial()
     args = params()
 
+    pkg_name = args.get("pkg_name", "")
+    required_version = args.get("required_version", "")
+    verify_after_install = bool(args.get("verify_after_install", False))
+    reinstall = args.get("reinstall", True)
+
+    installed_version = ""
+    if pkg_name and required_version:
+        installed_version = _installed_version(serial, pkg_name)
+        # #816：字段级精确比较；skip 语义只认 ==。skip 判定先于路径解析，
+        # 保持旧版本「已同版本时即使 apk 不存在也不报错」的行为。
+        if installed_version == required_version:
+            skip_metrics = {"pkg_name": pkg_name, "installed_version": installed_version}
+            for key in ("apk_path", "apk_paths", "apk_dir"):
+                if args.get(key):
+                    skip_metrics[key] = args[key]
+            output_result(
+                True,
+                skipped=True,
+                skip_reason=f"{pkg_name}=={required_version} already installed",
+                metrics=skip_metrics,
+            )
+            return
+
     try:
         apk_paths = _resolve_apk_paths(args)
     except ValueError as exc:
         output_result(False, error_message=str(exc))
         return
 
-    pkg_name = args.get("pkg_name", "")
-    required_version = args.get("required_version", "")
-    reinstall = args.get("reinstall", True)
     timeout = int(args.get("timeout_seconds") or 300)
     install_mode = "multiple" if len(apk_paths) > 1 else "single"
     base_metrics = {
         "apk_paths": apk_paths,
         "install_mode": install_mode,
         "pkg_name": pkg_name,
+        "verify_after_install": verify_after_install,
     }
-
-    installed_version = ""
-    if pkg_name and required_version:
-        installed_version = _installed_version(serial, pkg_name)
-        # #816：字段级精确比较；skip 语义只认 ==。
-        if installed_version == required_version:
-            output_result(
-                True,
-                skipped=True,
-                skip_reason=f"{pkg_name}=={required_version} already installed",
-                metrics={**base_metrics, "installed_version": installed_version},
-            )
-            return
 
     try:
         flags = ["-r"] if reinstall else []
@@ -138,7 +147,7 @@ def main() -> None:
             )
             return
 
-        if pkg_name and required_version:
+        if verify_after_install and pkg_name and required_version:
             installed_version = _installed_version(serial, pkg_name)
             if installed_version != required_version:
                 output_result(
@@ -159,7 +168,7 @@ def main() -> None:
             True,
             metrics={
                 **base_metrics,
-                "installed_version": installed_version or None,
+                "installed_version": installed_version if verify_after_install else None,
                 "output": output[:500],
             },
         )

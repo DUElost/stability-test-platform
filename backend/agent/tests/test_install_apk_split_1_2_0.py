@@ -87,6 +87,7 @@ def test_split_install_uses_install_multiple(monkeypatch, tmp_path, capsys):
             "apk_paths": [str(base), str(split)],
             "pkg_name": "com.android.chrome",
             "required_version": "2.0.0",
+            "verify_after_install": True,
         },
     )
 
@@ -111,7 +112,12 @@ def test_apk_dir_expands_and_base_first(monkeypatch, tmp_path, capsys):
     _run(
         script,
         monkeypatch,
-        {"apk_dir": str(tmp_path), "pkg_name": "com.android.chrome", "required_version": "2.0.0"},
+        {
+            "apk_dir": str(tmp_path),
+            "pkg_name": "com.android.chrome",
+            "required_version": "2.0.0",
+            "verify_after_install": True,
+        },
     )
 
     cmd = [c for c in calls if "install-multiple" in c][0]
@@ -158,7 +164,16 @@ def test_post_install_version_mismatch_fails(monkeypatch, tmp_path, capsys):
     apk.write_bytes(b"x")
     _fake_adb(script, monkeypatch, before="1.0.0", after="1.0.0")
 
-    _run(script, monkeypatch, {"apk_path": str(apk), "pkg_name": "com.example", "required_version": "2.0.0"})
+    _run(
+        script,
+        monkeypatch,
+        {
+            "apk_path": str(apk),
+            "pkg_name": "com.example",
+            "required_version": "2.0.0",
+            "verify_after_install": True,
+        },
+    )
 
     payload = _out(capsys)
     assert payload["success"] is False
@@ -166,12 +181,12 @@ def test_post_install_version_mismatch_fails(monkeypatch, tmp_path, capsys):
     assert payload["metrics"]["installed_version"] == "1.0.0"
 
 
-def test_missing_apk_fails_fast(monkeypatch, tmp_path, capsys):
+def test_missing_apk_dir_fails_fast(monkeypatch, tmp_path, capsys):
     script = _load()
     _fake_adb(script, monkeypatch, before="1.0.0", after="1.0.0")
 
-    _run(script, monkeypatch, {"apk_path": str(tmp_path / "missing.apk")})
+    _run(script, monkeypatch, {"apk_dir": str(tmp_path / "missing")})
 
     payload = _out(capsys)
     assert payload["success"] is False
-    assert "APK not found" in payload["error_message"]
+    assert "apk_dir is not a directory" in payload["error_message"]

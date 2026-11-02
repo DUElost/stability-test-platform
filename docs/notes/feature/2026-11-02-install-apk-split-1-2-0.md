@@ -9,10 +9,14 @@ Class: feature
 
 - `apk_paths`（显式列表）或 `apk_dir`（目录内 `*.apk`，`base.apk` 优先）时，
   走 `adb install-multiple -r`；
-- 给出 `pkg_name` + `required_version` 时，安装后回读 `dumpsys package` 的
-  `versionName` 并与目标精确比较，不一致即失败；
+- 新增 opt-in `verify_after_install`：为 true 且给出 `pkg_name` + `required_version` 时，
+  安装后回读 `dumpsys package` 的 `versionName` 并与目标精确比较，不一致即失败；
+  默认关闭，保持旧调用方行为；
 - 未指定新参数时仍走 `adb install -r <apk_path>`，`apk_install:<basename>`
   的 PROGRESS phase 保持不变；
+- skip 判定（已装版本 == required_version）仍在路径解析之前，保持 v1.1.0
+  “已同版本时 apk 不存在也不报错”的行为；显式 `apk_path`/`apk_paths` 不预检存在性，
+  由 adb 报具体错误，`apk_dir` 只返回实际存在的文件；
 - 默认 `timeout_seconds` 由 120 调整为 300（大 APK/split 安装留余量，调用方仍可覆盖）。
 
 影响文件：`backend/agent/scripts/install_apk/install_apk.py`、新增
@@ -34,8 +38,12 @@ Class: feature
 
 ## Verification
 
-- `./scripts/project_python.sh scripts/run_pytest.py backend/agent/tests/test_install_apk_split_1_2_0.py backend/agent/tests/test_script_progress_stamps_1690_batch2.py -q`
-  → 28 passed（split 命令构造、base 优先、单 APK 回归、skip、装后不一致、缺文件）。
+- `./scripts/project_python.sh scripts/run_pytest.py backend/agent/tests/test_install_apk_split_1_2_0.py backend/agent/tests/test_device_script_misc_fixes.py backend/agent/tests/test_script_progress_stamps_1690_batch2.py -q`
+  → 41 passed（split 命令构造、base 优先、单 APK 回归、skip、装后不一致、缺目录）。
+- 完整 `backend/agent/tests/` → 3004 passed / 1 failed；唯一失败是
+  `test_flash_preflight_v102.py::test_dialout_absent_and_no_rule_fails`，该用例依赖本机
+  dialout 组状态，CI 的干净环境通过（本次 PR 首轮 CI 的 2 个失败仅为旧 install_apk 用例，
+  已由“skip 先于路径解析 + verify_after_install opt-in”修复）。
 - `python tools/dev/check_script_packages.py --register install_apk 1.2.0` +
   `python tools/dev/check_script_packages.py` → 39 个族树与 manifest 最新登记等价。
 - 发布后需在单台 NX2 上 canary：`adb install-multiple` 安装 Chrome 156

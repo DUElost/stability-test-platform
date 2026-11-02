@@ -1076,7 +1076,7 @@
         },
         {
           "artifact": "packages/install_apk/1.2.0.tar.gz",
-          "package_sha256": "0a2cef43d8b7ec95bfb33d423729e215916c9c8c2d80435e22508a21abad14cd",
+          "package_sha256": "ea4ea54735ae2225230d9e6196454449538671a90c1958b3c9293416e1c71536",
           "python": null,
           "retired": false,
           "script": "install_apk.py",
