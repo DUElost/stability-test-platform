@@ -8,6 +8,11 @@ import stat
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
+from backend.core.storage_root import (
+    resolve_legacy_log_storage_root,
+    resolve_shared_storage_root,
+)
+
 _WINDOWS_DRIVE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
 _SAFE_PATH_COMPONENT_RE = re.compile(r"^[^/\\\0]+$")
 _DIR_OPEN_FLAGS = (
@@ -43,12 +48,22 @@ def get_stp_nfs_root() -> Path:
 
 
 def get_local_artifact_roots() -> tuple[Path, ...]:
-    from backend.core.storage_root import resolve_shared_storage_root
+    """Read/download allowlist; never use this list to select a write target."""
+    from backend.core.storage_root import (
+        resolve_control_plane_storage_root,
+        resolve_legacy_log_storage_root,
+        resolve_shared_storage_root,
+    )
 
-    raw = resolve_shared_storage_root()
-    if not raw:
-        return ()
-    return (Path(raw).resolve(strict=False),)
+    return tuple(dict.fromkeys(
+        Path(raw).resolve(strict=False)
+        for raw in (
+            resolve_shared_storage_root(),
+            resolve_control_plane_storage_root(),
+            resolve_legacy_log_storage_root(),
+        )
+        if raw
+    ))
 
 
 def coerce_local_artifact_path(storage_uri: str) -> Path:
@@ -80,11 +95,23 @@ def resolve_device_event_remote_path(
     plan_run_id: int | None = None,
     event_id: str | None = None,
     must_exist: bool = False,
+    allow_legacy: bool = False,
 ) -> Path:
-    """Validate a DeviceLogEvent ``remote_path`` under ``devices/`` scope."""
+    """Validate a DLE path; only downloads opt into the read-only legacy root."""
     resolved_path = resolve_local_artifact_path(storage_uri, must_exist=must_exist)
-    devices_root = (get_stp_nfs_root() / "devices").resolve(strict=False)
-    if not resolved_path.is_relative_to(devices_root):
+    roots = [resolve_shared_storage_root()]
+    if allow_legacy:
+        roots.append(resolve_legacy_log_storage_root())
+    devices_root = None
+    for raw in roots:
+        if not raw:
+            continue
+        storage_root = Path(raw).resolve(strict=False)
+        scope = (storage_root / "devices").resolve(strict=False)
+        if scope.is_relative_to(storage_root) and resolved_path.is_relative_to(scope):
+            devices_root = scope
+            break
+    if devices_root is None:
         raise ArtifactPathOutsideRootError(
             "device log remote path must stay under devices/: "
             f"{resolved_path}"

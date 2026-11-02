@@ -30,6 +30,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
+from backend.core.storage_root import resolve_control_plane_storage_root
 from backend.agent.contracts.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
 from backend.models.plan import PlanStep
 from backend.models.script import Script
@@ -260,7 +261,7 @@ def default_packages_root() -> Optional[Path]:
     raw = (os.getenv("STP_PACKAGES_ROOT") or "").strip()
     if raw:
         return Path(raw)
-    nfs = (os.getenv("STP_AEE_NFS_ROOT") or "").strip()
+    nfs = resolve_control_plane_storage_root()
     return Path(nfs) / "packages" if nfs else None
 
 
@@ -276,7 +277,7 @@ def sync_scripts_from_manifest(
     doc = load_manifest(manifest_path if manifest_path is not None else _DEFAULT_MANIFEST_PATH)
     pk_root = Path(packages_root) if packages_root else default_packages_root()
     if pk_root is None:
-        raise FileNotFoundError("packages root not configured (STP_PACKAGES_ROOT / STP_AEE_NFS_ROOT)")
+        raise FileNotFoundError("packages root not configured (STP_PACKAGES_ROOT / STP_CONTROL_PLANE_STORAGE_ROOT / STP_AEE_NFS_ROOT)")
     result = ScriptScanResult()
     now = datetime.now(timezone.utc)
     existing_rows = db.query(Script).all()

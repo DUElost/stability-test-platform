@@ -25,7 +25,7 @@ from typing import Any, Optional
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
-from backend.core.storage_root import resolve_shared_storage_root
+from backend.core.storage_root import resolve_control_plane_storage_root
 from backend.models.host import Device
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun, PlanRunTargetDevice
@@ -108,7 +108,7 @@ def resolve_export_dir(suite: TestSuite) -> str:
 def runtask_disk_path(suite: TestSuite) -> Path:
     """套件在中心存储消费路径上的 runtask.xml（门禁第 2/4 步的对象）。"""
     return (
-        Path(resolve_shared_storage_root()) / "mtbf"
+        Path(resolve_control_plane_storage_root()) / "mtbf"
         / resolve_export_dir(suite) / _RUNTASK_NAME
     )
 
@@ -116,7 +116,7 @@ def runtask_disk_path(suite: TestSuite) -> Path:
 def global_disk_path(suite: TestSuite) -> Path:
     """套件在中心存储消费路径上的 Global 文件（#973，与 runtask 同等校验）。"""
     return (
-        Path(resolve_shared_storage_root()) / "mtbf"
+        Path(resolve_control_plane_storage_root()) / "mtbf"
         / resolve_export_dir(suite) / _GLOBAL_NAME
     )
 
@@ -219,7 +219,7 @@ def collect_suite_gate_error(db: Session, pr: PlanRun) -> Optional[dict[str, Any
     # 2) 已导出：两基线列非空 且 磁盘文件存在
     disk_path: Optional[Path] = None
     global_path: Optional[Path] = None
-    root = resolve_shared_storage_root()
+    root = resolve_control_plane_storage_root()
     if root:
         disk_path = runtask_disk_path(suite)
         global_path = global_disk_path(suite)

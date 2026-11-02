@@ -36,7 +36,7 @@ from backend.api.schemas.suite import (
 )
 from backend.services.audit_writer import record_audit
 from backend.core.database import get_db
-from backend.core.storage_root import resolve_shared_storage_root
+from backend.core.storage_root import resolve_control_plane_storage_root
 from backend.models.project import TestProject
 from backend.models.suite import TestCase, TestSuite
 from backend.services.mtbf_suite import (
@@ -593,11 +593,11 @@ def export_to_tool_dir(
     # #402 在途守卫：绑定本套件的 ACTIVE Run 硬阻断（托管模式中途换清单无正当理由）。
     _reject_if_bound_runs(db, suite, _SUITE_RUNS_ACTIVE_EXPORT)
 
-    root = resolve_shared_storage_root()
+    root = resolve_control_plane_storage_root()
     if not root:
         raise HTTPException(
             status_code=503,
-            detail={"code": "STORAGE_ROOT_UNSET", "message": "STP_AEE_NFS_ROOT is not configured"},
+            detail={"code": "STORAGE_ROOT_UNSET", "message": "STP_CONTROL_PLANE_STORAGE_ROOT / STP_AEE_NFS_ROOT is not configured"},
         )
     try:
         # #968：写盘前复核目录契约（存量数据可能绕过 schema 校验）

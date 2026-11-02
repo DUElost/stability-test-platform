@@ -13,6 +13,41 @@ from backend.services.agent_env_sync import (
 )
 
 
+@pytest.mark.parametrize("control_value", [None, "", "  "])
+def test_g0a_unset_control_root_preserves_every_derived_env_key(monkeypatch, control_value):
+    for key in (*_FLEET_ENV_KEYS, *_AGENT_SCOPED_ENV_KEYS):
+        monkeypatch.delenv(key, raising=False)
+    if control_value is not None:
+        monkeypatch.setenv("STP_CONTROL_PLANE_STORAGE_ROOT", control_value)
+    monkeypatch.setenv("STP_LEGACY_LOG_STORAGE_ROOT", "/read-only-old")
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", " /mnt/shared ")
+    monkeypatch.setenv("LOG_LEVEL", " DEBUG ")
+    monkeypatch.setenv("STP_AGENT_SCRIPT_PACKAGES", " strict ")
+    monkeypatch.setenv("STP_NFS_ROOT", "/ignored-control-plane-local-value")
+    assert hot_update_env_overrides("/opt/agent") == {
+        **_install_dir_env_overrides("/opt/agent"),
+        "STP_AEE_NFS_ROOT": "/mnt/shared",
+        "STP_NFS_ROOT": "/mnt/shared",
+        "LOG_LEVEL": "DEBUG",
+        "STP_SCRIPT_PACKAGES": "strict",
+    }
+
+
+def test_g0a_split_roots_sync_script_alias_and_verify_new_paths(monkeypatch):
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", "/log")
+    monkeypatch.setenv("STP_CONTROL_PLANE_STORAGE_ROOT", " /control ")
+    monkeypatch.setenv("STP_LEGACY_LOG_STORAGE_ROOT", "/old")
+    env = hot_update_env_overrides()
+    assert {key: env[key] for key in (
+        "STP_AEE_NFS_ROOT", "STP_NFS_ROOT", "STP_CONTROL_PLANE_STORAGE_ROOT",
+    )} == {
+        "STP_AEE_NFS_ROOT": "/log", "STP_NFS_ROOT": "/control",
+        "STP_CONTROL_PLANE_STORAGE_ROOT": "/control",
+    }
+    assert "STP_CONTROL_PLANE_STORAGE_ROOT" in agent_path_keys_to_verify(env)
+    assert "STP_LEGACY_LOG_STORAGE_ROOT" not in env
+
+
 def test_hot_update_env_overrides_uses_install_layout_paths():
     overrides = hot_update_env_overrides("/opt/stability-test-agent")
     assert overrides["AGENT_INSTALL_DIR"] == "/opt/stability-test-agent"

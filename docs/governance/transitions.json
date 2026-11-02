@@ -56,10 +56,11 @@
     },
     {
       "id": "center-storage-interim-dedup",
-      "what": "ADR-0053 Phase B 之前的中心存储止血：对已结束超过 24h 的 run，在 devices/ 内把逐文件 SHA-256 相同的文件改为硬链接（路径不变；backend/scripts/center_storage_hardlink_dedup.py，按需运行，由 host-storage 磁盘水位告警提示，步骤见 docs/operations/center-storage-hardlink-dedup.md），可再生提取副本（本 run 的 devices/ 仍有完整源）按需清理。与 ADR-0053 D2「不能仅靠约定保护共享 inode」存在张力：只处理已结束 run；上送为复制→校验→REMOTE，写完不再修改。2026-09-25 首次执行：删除 A 类提取副本 134 GB；L0 全量 109 个 run 释放 389.1 GB（#3308）。Phase B 落地时脚本、手册与告警描述中的指引一并删除。2026-11-02 ADR-0053 被 ADR-0062 取代，出口改指 ADR-0062 §9 阶段三（「先去重」链路退出新旧并存）；止血范围与做法不变",
-      "exit": "adr:ADR-0062#9. 迁移与激活",
+      "what": "中心存储 devices/ 跨 run 硬链接止血已由 B8 G0-a 退役；旧日志只读，新日志根为 CIFS，不再适用硬链接。历史执行证据见 #3308",
+      "exit": "issue:#3800",
       "due": "2026-12-31",
-      "status": "active"
+      "status": "done",
+      "evidence": "2026-11-02 B8 G0-a：移除硬链接、临时链接清理和 DB 查询实现，原命令入口始终拒绝（exit 2）；操作文档改为退役说明。本记录只证明代码办结，不表示 G0-b 已切盘"
     },
     {
       "id": "host-resources-layer",

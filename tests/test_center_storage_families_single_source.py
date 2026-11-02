@@ -89,6 +89,17 @@ def test_jobs_family_is_job_keyed_and_not_a_run_family() -> None:
     assert mcs.RUN_FAMILIES == sf.RUN_FAMILIES  # 读侧的 run 分解面 = 正本 run 族
 
 
+def test_g0a_every_family_has_one_root_and_unknown_families_fail() -> None:
+    import pytest
+
+    assert set(sf.FAMILY_STORAGE_ROOTS) == set(sf.ALL_FAMILIES)
+    for family in sf.ALL_FAMILIES:
+        root = sf.storage_root_for_family(family, log_root="/log", control_plane_root="/control")
+        assert root == ("/control" if family == sf.JOBS_FAMILY else "/log")
+    with pytest.raises(KeyError):
+        sf.storage_root_for_family("unregistered", log_root="/log", control_plane_root="/control")
+
+
 def test_non_key_entries_only_name_real_families() -> None:
     assert set(sf.NON_KEY_ENTRIES) <= set(sf.ALL_FAMILIES)
     assert sf.NON_KEY_ENTRIES["devices"] == frozenset({"unassigned"})
