@@ -995,7 +995,8 @@ async def test_dle_occurrence_key_is_stored_only_when_explicitly_carried(monkeyp
     """ADR-0062 G1：occurrence_key 随 payload 上报；补丁不带时保留已有值。
 
     控制面不得自行计算或清空发生身份——这与 #1052（plan_run_id）和 #3829
-    （size_bytes）的「只在显式携带时更新」同口径。
+    （size_bytes）的「只在显式携带时更新」同口径。Non-null → 另一个非空 key
+    是 identity mutation，必须拒绝并保留原值；NULL → key 与同值重放继续接受。
     """
     nfs = tmp_path / "nfs"
     nfs.mkdir()
@@ -1009,7 +1010,7 @@ async def test_dle_occurrence_key_is_stored_only_when_explicitly_carried(monkeyp
         with SessionLocal() as db:
             assert db.get(DeviceLogEvent, UUID(event_id)).occurrence_key is None
 
-        # 显式携带 → 写入
+        # 显式携带 → 写入（NULL → 已证明 key）
         await _ingest_one(_ev(
             seed, id=event_id, state=EventState.UPLOAD_PENDING.value,
             occurrence_key=key_one,
@@ -1024,12 +1025,23 @@ async def test_dle_occurrence_key_is_stored_only_when_explicitly_carried(monkeyp
         with SessionLocal() as db:
             assert db.get(DeviceLogEvent, UUID(event_id)).occurrence_key == key_one
 
-        # 再次显式携带 → 更新
+        # 同值重放 → 幂等接受
         await _ingest_one(_ev(
             seed, id=event_id, state=EventState.UPLOAD_FAILED.value,
-            occurrence_key=key_two,
+            occurrence_key=key_one,
         ))
         with SessionLocal() as db:
-            assert db.get(DeviceLogEvent, UUID(event_id)).occurrence_key == key_two
+            assert db.get(DeviceLogEvent, UUID(event_id)).occurrence_key == key_one
+
+        # 非空 → 另一个非空 → 拒绝，旧 key 保留（否则同一观察会被计成两次发生）
+        with pytest.raises(ServiceError) as ei:
+            await _ingest_one(_ev(
+                seed, id=event_id, state=EventState.UPLOADING.value,
+                occurrence_key=key_two,
+            ))
+        assert ei.value.status == 403
+        assert "occurrence_key mismatch" in str(ei.value.detail)
+        with SessionLocal() as db:
+            assert db.get(DeviceLogEvent, UUID(event_id)).occurrence_key == key_one
     finally:
         _cleanup(seed)

@@ -281,6 +281,20 @@ async def ingest_agent_device_log_events(
                         f"device_log_event plan_run_id mismatch: "
                         f"{ev.plan_run_id} != {row.plan_run_id}"
                     )
+                # ADR-0062 G1：已有非空 occurrence_key 是已证明的发生身份，
+                # 换成另一个非空值是 identity mutation，会改变去重等价类并
+                # 破坏 I1。必须在任何状态/路径写入之前拒绝并保留原值；
+                # NULL → key（补证）与同值重放仍然接受。迟到补丁不携带 key
+                # 时不做任何检查，既有 key 保留。
+                if (
+                    ev.occurrence_key is not None
+                    and row.occurrence_key is not None
+                    and row.occurrence_key != ev.occurrence_key
+                ):
+                    raise Forbidden(
+                        "device_log_event occurrence_key mismatch: "
+                        f"{ev.occurrence_key!r} != {row.occurrence_key!r}",
+                    )
                 if (
                     row.state in _EXTRACTABLE_STATES
                     and ev.state not in _EXTRACTABLE_STATES
@@ -349,8 +363,10 @@ async def ingest_agent_device_log_events(
                     # 把 LOCAL 登记的值清成 NULL，事件与 run 的字节台账随之丢失。
                     if ev.size_bytes is not None:
                         row.size_bytes = ev.size_bytes
-                    # ADR-0062 G1：occurrence_key 同样只在 payload 显式携带时
+                    # ADR-0062 G1：occurrence_key 只在 payload 显式携带时
                     # 更新——状态补丁不重算身份，迟到补丁不得清空已有 key。
+                    # 非空 → 另一个非空已在进入状态分支前按 identity mutation
+                    # 拒绝；此处只剩 NULL → key 与同值写入。
                     if ev.occurrence_key is not None:
                         row.occurrence_key = ev.occurrence_key
                     # #1052：plan_run_id 只在 payload 显式携带时更新——此前
