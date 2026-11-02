@@ -1073,6 +1073,14 @@
           "retired": false,
           "script": "install_apk.py",
           "version": "1.1.0"
+        },
+        {
+          "artifact": "packages/install_apk/1.2.0.tar.gz",
+          "package_sha256": "0a2cef43d8b7ec95bfb33d423729e215916c9c8c2d80435e22508a21abad14cd",
+          "python": null,
+          "retired": false,
+          "script": "install_apk.py",
+          "version": "1.2.0"
         }
       ]
     },

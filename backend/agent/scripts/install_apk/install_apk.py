@@ -1,4 +1,9 @@
-"""Install an APK on the device via adb install.
+"""Install an APK (or a split APK set) on the device via adb.
+
+v1.2.0（2026-11-02）：支持 split APK 集。`apk_paths`（显式列表）或 `apk_dir`
+（目录内 `*.apk`，`base.apk` 优先）走 `adb install-multiple -r`；单 `apk_path`
+仍走原 `adb install -r`。给出 `pkg_name` + `required_version` 时，安装后回读
+`versionName` 并与目标精确比较，不一致即失败（此前只做安装前 skip 判定）。
 
 v1.0.2（#816）：已装版本判定改 `versionName=` 字段级精确比较——子串匹配下
 required=1.0.1 会命中已装的 1.0.10，误判 skipped 导致所需 apk 永不安装。
@@ -9,13 +14,17 @@ v1.1.0（#1690）：adb install 段接入 PROGRESS 心跳——停滞钟只认 P
 Environment:
     STP_DEVICE_SERIAL   (required)
     STP_ADB_PATH        (default: adb)
-    STP_NFS_ROOT        (prepended to relative apk_path)
-    STP_STEP_PARAMS     (required, JSON: {apk_path, pkg_name?, required_version?, reinstall?, timeout_seconds?})
+    STP_NFS_ROOT        (prepended to relative apk paths)
+    STP_STEP_PARAMS     (required, JSON:
+                         {apk_path?, apk_paths?, apk_dir?, pkg_name?,
+                          required_version?, reinstall?, timeout_seconds?})
 
 Output (stdout):
-    {"success": true/false, "skipped": bool, "error_message": "...", "metrics": {"apk_path": "..."}}
+    {"success": true/false, "skipped": bool, "error_message": "...",
+     "metrics": {"apk_paths": [...], "install_mode": "single|multiple", ...}}
 """
 
+import glob
 import os
 import subprocess
 from _adb import adb_path, device_serial, output_result, params, progress_heartbeat
@@ -30,61 +39,134 @@ def _resolve_path(path: str) -> str:
     return path
 
 
+def _resolve_apk_paths(args: dict) -> list[str]:
+    """返回要安装的 APK 路径列表；参数缺失/文件不存在抛 ValueError。"""
+    raw_paths = args.get("apk_paths")
+    if raw_paths:
+        if not isinstance(raw_paths, list) or not all(isinstance(p, str) and p for p in raw_paths):
+            raise ValueError("apk_paths must be a non-empty list of paths")
+        paths = [_resolve_path(p) for p in raw_paths]
+    elif args.get("apk_dir"):
+        directory = _resolve_path(str(args["apk_dir"]))
+        if not os.path.isdir(directory):
+            raise ValueError(f"apk_dir is not a directory: {directory}")
+        paths = sorted(glob.glob(os.path.join(directory, "*.apk")))
+        if not paths:
+            raise ValueError(f"no .apk files found in apk_dir: {directory}")
+        # base 优先，便于人工按命令回放；install-multiple 本身不要求顺序。
+        paths.sort(key=lambda p: (os.path.basename(p) != "base.apk", os.path.basename(p)))
+    elif args.get("apk_path"):
+        paths = [_resolve_path(str(args["apk_path"]))]
+    else:
+        raise ValueError("No apk_path/apk_paths/apk_dir specified")
+
+    missing = [p for p in paths if not os.path.isfile(p)]
+    if missing:
+        raise ValueError("APK not found: " + ", ".join(missing))
+    return paths
+
+
+def _installed_version(serial: str, pkg_name: str) -> str:
+    """读已装 versionName；读不到返回空串（不阻断，交由安装/回读判定）。"""
+    try:
+        result = subprocess.run(
+            [adb_path(), "-s", serial, "shell", f"dumpsys package {pkg_name} | grep versionName"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except Exception:
+        return ""
+    for raw in (result.stdout or "").splitlines():
+        line = raw.strip()
+        if line.startswith("versionName="):
+            return line.split("=", 1)[1].strip()
+    return ""
+
+
 def main() -> None:
     serial = device_serial()
     args = params()
 
-    apk_path = _resolve_path(args.get("apk_path", ""))
-    if not apk_path:
-        output_result(False, error_message="No apk_path specified")
+    try:
+        apk_paths = _resolve_apk_paths(args)
+    except ValueError as exc:
+        output_result(False, error_message=str(exc))
         return
 
     pkg_name = args.get("pkg_name", "")
     required_version = args.get("required_version", "")
     reinstall = args.get("reinstall", True)
-    timeout = args.get("timeout_seconds", 120)
+    timeout = int(args.get("timeout_seconds") or 300)
+    install_mode = "multiple" if len(apk_paths) > 1 else "single"
+    base_metrics = {
+        "apk_paths": apk_paths,
+        "install_mode": install_mode,
+        "pkg_name": pkg_name,
+    }
 
+    installed_version = ""
     if pkg_name and required_version:
-        try:
-            result = subprocess.run(
-                [adb_path(), "-s", serial, "shell", f"dumpsys package {pkg_name} | grep versionName"],
-                capture_output=True, text=True, timeout=10,
+        installed_version = _installed_version(serial, pkg_name)
+        # #816：字段级精确比较；skip 语义只认 ==。
+        if installed_version == required_version:
+            output_result(
+                True,
+                skipped=True,
+                skip_reason=f"{pkg_name}=={required_version} already installed",
+                metrics={**base_metrics, "installed_version": installed_version},
             )
-            # #816：字段级精确比较——子串匹配下 required=1.0.1 会命中已装的
-            # 1.0.10，误判"已安装"（skip_reason 本是 == 语义）→ 所需 apk 永不安装。
-            installed_version = ""
-            for raw in (result.stdout or "").splitlines():
-                line = raw.strip()
-                if line.startswith("versionName="):
-                    installed_version = line.split("=", 1)[1].strip()
-                    break
-            if installed_version == required_version:
-                output_result(
-                    True,
-                    skipped=True,
-                    skip_reason=f"{pkg_name}=={required_version} already installed",
-                    metrics={"apk_path": apk_path, "pkg_name": pkg_name},
-                )
-                return
-        except Exception:
-            pass
+            return
 
     try:
         flags = ["-r"] if reinstall else []
-        cmd = [adb_path(), "-s", serial, "install"] + flags + [apk_path]
-        with progress_heartbeat(f"apk_install:{os.path.basename(apk_path)}"):
+        adb_subcommand = "install-multiple" if install_mode == "multiple" else "install"
+        cmd = [adb_path(), "-s", serial, adb_subcommand] + flags + apk_paths
+        if install_mode == "multiple":
+            phase = f"apk_install_multiple:{len(apk_paths)}"
+        else:
+            phase = f"apk_install:{os.path.basename(apk_paths[0])}"
+        with progress_heartbeat(phase):
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         output = (result.stdout or "").strip()
 
         if result.returncode != 0 or "Failure" in output:
-            output_result(False, error_message=f"APK install failed: {output}")
+            output_result(
+                False,
+                error_message=f"APK install failed: {output}",
+                metrics={**base_metrics, "output": output[:500]},
+            )
             return
 
-        output_result(True, metrics={"apk_path": apk_path, "output": output[:500]})
+        if pkg_name and required_version:
+            installed_version = _installed_version(serial, pkg_name)
+            if installed_version != required_version:
+                output_result(
+                    False,
+                    error_message=(
+                        "post-install version mismatch: "
+                        f"expected {required_version}, got {installed_version or '<empty>'}"
+                    ),
+                    metrics={
+                        **base_metrics,
+                        "installed_version": installed_version,
+                        "output": output[:500],
+                    },
+                )
+                return
+
+        output_result(
+            True,
+            metrics={
+                **base_metrics,
+                "installed_version": installed_version or None,
+                "output": output[:500],
+            },
+        )
     except subprocess.TimeoutExpired:
-        output_result(False, error_message=f"APK install timed out after {timeout}s")
+        output_result(False, error_message=f"APK install timed out after {timeout}s", metrics=base_metrics)
     except Exception as exc:
-        output_result(False, error_message=f"APK install failed: {exc}")
+        output_result(False, error_message=f"APK install failed: {exc}", metrics=base_metrics)
 
 
 if __name__ == "__main__":
