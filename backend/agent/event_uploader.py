@@ -449,9 +449,10 @@ class EventUploader:
                     "— trusting existing remote copy",
                     job.event_id, dst,
                 )
+                remote_checksum, remote_size = self._dir_sha256_and_size(dst)
                 self._patch_state(
                     job, state="REMOTE", remote_path=str(dst),
-                    checksum=self._dir_sha256(dst),
+                    checksum=remote_checksum, size_bytes=remote_size,
                 )
             else:
                 logger.warning(
@@ -463,7 +464,7 @@ class EventUploader:
 
         if dst.exists():
             remote_path = str(dst)
-            dst_checksum = self._dir_sha256(dst)
+            dst_checksum, dst_size_bytes = self._dir_sha256_and_size(dst)
             src_checksum = self._dir_sha256(src)
             if dst_checksum != src_checksum:
                 logger.warning(
@@ -473,7 +474,8 @@ class EventUploader:
                 shutil.rmtree(dst, ignore_errors=True)
             else:
                 if self._patch_state(
-                    job, state="REMOTE", remote_path=remote_path, checksum=dst_checksum,
+                    job, state="REMOTE", remote_path=remote_path,
+                    checksum=dst_checksum, size_bytes=dst_size_bytes,
                 ):
                     # #1083: 只有中心确认持久化 remote_path/checksum 后才允许 prune
                     # —— 否则删本地唯一副本后中心仍未登记，extract 不可见。
@@ -489,7 +491,7 @@ class EventUploader:
         self._patch_state(job, state="UPLOADING")
         try:
             UploadManager._copytree_safe(str(src), str(dst))
-            dst_checksum = self._dir_sha256(dst)
+            dst_checksum, dst_size_bytes = self._dir_sha256_and_size(dst)
             src_checksum = self._dir_sha256(src)
             if dst_checksum != src_checksum:
                 # #1083: 自读回哈希不构成完整性证据——源/副本不一致时丢弃坏副本
@@ -503,7 +505,8 @@ class EventUploader:
                 raise OSError(f"copy verification failed: {src} != {dst}")
             logger.info("event_uploader_ok event_id=%s dest=%s", job.event_id, dst)
             if self._patch_state(
-                job, state="REMOTE", remote_path=str(dst), checksum=dst_checksum,
+                job, state="REMOTE", remote_path=str(dst),
+                checksum=dst_checksum, size_bytes=dst_size_bytes,
             ):
                 self._maybe_prune_local(job, remote_path=str(dst))
             else:
@@ -532,6 +535,7 @@ class EventUploader:
         state: str,
         remote_path: Optional[str] = None,
         checksum: Optional[str] = None,
+        size_bytes: Optional[int] = None,
     ) -> bool:
         """把事件状态 patch 回中心；返回中心是否确认（2xx）。
 
@@ -548,6 +552,9 @@ class EventUploader:
             "local_path": job.local_path,
             "remote_path": remote_path,
             "checksum": checksum,
+            # #3829: REMOTE 带中心侧实测字节；其余补丁为 None，服务端只在
+            # 显式携带时更新，不会清掉 LOCAL 登记的值。
+            "size_bytes": size_bytes,
             "plan_run_id": job.plan_run_id,
             "host_id": job.host_id,
             "job_id": job.job_id,
@@ -759,15 +766,26 @@ class EventUploader:
                 logger.exception("event_uploader_retry_scan_error")
 
     @staticmethod
-    def _dir_sha256(root: Path) -> str:
+    def _dir_sha256_and_size(root: Path) -> tuple[str, int]:
+        """目录 sha256 与字节总量，单次遍历同时取得（#3829）。
+
+        REMOTE 补丁要报中心侧实际字节，但不能再走一遍目录——这里把计数
+        并进 ``_dir_sha256`` 原有的 rglob + 读文件循环。
+        """
         h = hashlib.sha256()
+        size = 0
         for path in sorted(root.rglob("*")):
             if path.is_file():
                 h.update(str(path.relative_to(root)).encode())
                 with open(path, "rb") as f:
                     for chunk in iter(lambda: f.read(65536), b""):
                         h.update(chunk)
-        return h.hexdigest()
+                        size += len(chunk)
+        return h.hexdigest(), size
+
+    @staticmethod
+    def _dir_sha256(root: Path) -> str:
+        return EventUploader._dir_sha256_and_size(root)[0]
 
 
 __all__ = ["EventUploader"]

@@ -184,6 +184,8 @@ def test_missing_local_patches_remote_when_remote_present(tmp_path, monkeypatch)
     payload = posted[-1]["events"][0]
     assert payload["state"] == "REMOTE"
     assert payload["remote_path"] == str(dst)
+    # #3829：本地已删时也只能以中心侧目录统计字节。
+    assert payload["size_bytes"] == len(b"x")
 
 
 def test_prune_after_upload_flag_forces_prune(tmp_path, monkeypatch):
@@ -249,10 +251,13 @@ def test_upload_one_marks_remote(tmp_path, monkeypatch):
         assert (
             nfs / "devices" / "99" / "00000000-0000-0000-0000-000000000001" / src.name
         ).is_dir()
-        assert posted[-1]["events"][0]["state"] == "REMOTE"
-        assert posted[-1]["events"][0]["remote_path"].endswith(
+        payload = posted[-1]["events"][0]
+        assert payload["state"] == "REMOTE"
+        assert payload["remote_path"].endswith(
             "/devices/99/00000000-0000-0000-0000-000000000001/event_dir"
         )
+        # #3829：REMOTE 补丁带中心侧实际字节，供服务端建立字节台账。
+        assert payload["size_bytes"] == len(b"hello")
     finally:
         for p in patches:
             p.stop()
@@ -500,6 +505,7 @@ def test_existing_remote_ack_failure_keeps_local(tmp_path, monkeypatch):
         up._upload_one(job)
     assert src.is_dir()
     assert dst.is_dir()
+    assert posted[-1]["events"][0]["size_bytes"] == len(b"hello")
     states = [p["events"][0]["state"] for p in posted]
     assert states == ["REMOTE"]
     assert "PRUNED" not in states

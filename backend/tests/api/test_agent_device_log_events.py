@@ -213,6 +213,139 @@ async def test_device_log_events_create_and_update(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio(loop_scope="module")
+async def test_remote_patch_without_size_bytes_keeps_registered_size(monkeypatch, tmp_path):
+    """#3829：不带 size_bytes 的状态补丁不得清空 LOCAL 登记的字节数。"""
+    nfs = tmp_path / "nfs"
+    nfs.mkdir()
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(nfs))
+    seed = _seed_host_job()
+    client_id = str(uuid4())
+    local_path = "/mnt/hdd/aee_events/dev/ke_size"
+    try:
+        create_ev = DeviceLogEventIn(
+            id=client_id,
+            serial=seed["serial"],
+            platform="MTK",
+            event_type="KE",
+            detected_at=datetime.now(timezone.utc).isoformat(),
+            state=EventState.LOCAL.value,
+            local_path=local_path,
+            size_bytes=4096,
+            host_id=seed["host_id"],
+            job_id=seed["job_id"],
+            plan_run_id=seed["plan_run_id"],
+        )
+        async with AsyncSessionLocal() as db:
+            await ingest_device_log_events(
+                DeviceLogEventBatchIn(events=[create_ev]), db=db, _=None,
+            )
+
+        update_ev = DeviceLogEventIn(
+            id=client_id,
+            serial=seed["serial"],
+            platform="MTK",
+            event_type="KE",
+            detected_at=create_ev.detected_at,
+            state=EventState.REMOTE.value,
+            local_path=local_path,
+            remote_path=str(
+                nfs / "devices" / str(seed["plan_run_id"]) / client_id / "ke_size"
+            ),
+            checksum="c" * 64,
+            host_id=seed["host_id"],
+            job_id=seed["job_id"],
+            plan_run_id=seed["plan_run_id"],
+        )
+        async with AsyncSessionLocal() as db:
+            await ingest_device_log_events(
+                DeviceLogEventBatchIn(events=[update_ev]), db=db, _=None,
+            )
+
+        with SessionLocal() as db:
+            row = db.get(DeviceLogEvent, UUID(client_id))
+            assert row.state == EventState.REMOTE.value
+            assert row.size_bytes == 4096, "不带 size_bytes 的补丁清空了 LOCAL 登记值"
+    finally:
+        _cleanup(seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_remote_patch_with_size_bytes_updates_ledger(monkeypatch, tmp_path):
+    """#3829：补丁显式携带 size_bytes 时按新值更新。"""
+    nfs = tmp_path / "nfs"
+    nfs.mkdir()
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(nfs))
+    seed = _seed_host_job()
+    client_id = str(uuid4())
+    local_path = "/mnt/hdd/aee_events/dev/ke_size_2"
+    try:
+        create_ev = DeviceLogEventIn(
+            id=client_id,
+            serial=seed["serial"],
+            platform="MTK",
+            event_type="KE",
+            detected_at=datetime.now(timezone.utc).isoformat(),
+            state=EventState.LOCAL.value,
+            local_path=local_path,
+            size_bytes=4096,
+            host_id=seed["host_id"],
+            job_id=seed["job_id"],
+            plan_run_id=seed["plan_run_id"],
+        )
+        async with AsyncSessionLocal() as db:
+            await ingest_device_log_events(
+                DeviceLogEventBatchIn(events=[create_ev]), db=db, _=None,
+            )
+
+        # 先走一个不带字节的在途补丁：旧实现会在这里清成 NULL。
+        uploading_ev = DeviceLogEventIn(
+            id=client_id,
+            serial=seed["serial"],
+            platform="MTK",
+            event_type="KE",
+            detected_at=create_ev.detected_at,
+            state=EventState.UPLOADING.value,
+            local_path=local_path,
+            host_id=seed["host_id"],
+            job_id=seed["job_id"],
+            plan_run_id=seed["plan_run_id"],
+        )
+        async with AsyncSessionLocal() as db:
+            await ingest_device_log_events(
+                DeviceLogEventBatchIn(events=[uploading_ev]), db=db, _=None,
+            )
+        with SessionLocal() as db:
+            assert db.get(DeviceLogEvent, UUID(client_id)).size_bytes == 4096
+
+        update_ev = DeviceLogEventIn(
+            id=client_id,
+            serial=seed["serial"],
+            platform="MTK",
+            event_type="KE",
+            detected_at=create_ev.detected_at,
+            state=EventState.REMOTE.value,
+            local_path=local_path,
+            remote_path=str(
+                nfs / "devices" / str(seed["plan_run_id"]) / client_id / "ke_size_2"
+            ),
+            size_bytes=8192,
+            checksum="d" * 64,
+            host_id=seed["host_id"],
+            job_id=seed["job_id"],
+            plan_run_id=seed["plan_run_id"],
+        )
+        async with AsyncSessionLocal() as db:
+            await ingest_device_log_events(
+                DeviceLogEventBatchIn(events=[update_ev]), db=db, _=None,
+            )
+
+        with SessionLocal() as db:
+            assert db.get(DeviceLogEvent, UUID(client_id)).size_bytes == 8192
+    finally:
+        _cleanup(seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
 async def test_device_log_event_links_when_signal_arrives_later():
     """#214: DLE ingest before job_log_signal; reverse-link on late signal."""
     from backend.services.device_log_event import link_signals_to_device_log_events
