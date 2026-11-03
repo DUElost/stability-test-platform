@@ -8,9 +8,18 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Any, Iterable, Sequence
+
+try:
+    import xlrd
+except ImportError:
+    xlrd = None
+
+from .device_log_event_client import DeviceLogEventClient
+from ..contracts.occurrence_key import compute_occurrence_key
 
 logger = logging.getLogger(__name__)
 
@@ -144,3 +153,158 @@ def path_has_serial(path: str, serials: Iterable[str]) -> bool:
         return False
     parts = {p for p in path.replace("\\", "/").split("/") if p}
     return any(serial in parts for serial in serials if serial)
+
+
+def metadata_occurrence_key(metadata: Any, *, platform: str, serial: str) -> str | None:
+    """Only collector-provided device originals can prove a watcher/scan identity."""
+    def original(name: str) -> str:
+        value = getattr(metadata, name, None)
+        return value if isinstance(value, str) else ""
+
+    return compute_occurrence_key(
+        platform=platform, serial=serial, db_path=original("db_path"),
+        aee_ts=original("device_timestamp_raw"), raw_event_type=original("raw_event_type"),
+    )
+
+
+def load_scan_events(host_id: str, plan_run_id: int) -> list[dict]:
+    """Read authoritative observations, including sources already spilled off HDD."""
+    client = DeviceLogEventClient.from_env(
+        api_url=os.getenv("API_URL", "http://127.0.0.1:8000"), agent_secret=os.getenv("AGENT_SECRET", ""),
+        host_id=host_id,
+    )
+    if client is None:
+        return []
+    return [ev for ev in client.list_events(state="", limit=None)
+            if ev.get("plan_run_id") == plan_run_id and ev.get("host_id") == host_id]
+
+
+def scan_sources(hdd: Path, scan_root: Path, events: Sequence[dict]) -> list[dict]:
+    sources = []
+    for ev in events:
+        if not ev.get("local_path"):
+            continue
+        local = Path(ev["local_path"])
+        try:
+            rel = local.resolve().relative_to(hdd.resolve())
+        except (OSError, ValueError):
+            continue
+        staged = scan_root / rel
+        if not staged.is_dir():
+            continue
+        sources.append({**ev, "source": "local", "scan_path": str(staged)})
+    return sources
+
+
+def stage_spill_inputs(
+    hdd: Path, scan_root: Path, nfs_root: Path, plan_run_id: int,
+    serials: Sequence[str], spill_inputs: Sequence[dict], events: Sequence[dict],
+) -> list[dict]:
+    """Materialize verified copies without replacing a simultaneous local source.
+
+    The DLE supplies the original local layout and serial; the payload supplies
+    its verified remote location and occurrence key. Neither is inferred from xls.
+    """
+    by_id = {str(ev["id"]): ev for ev in events}
+    sources = []
+    temporary_bytes = 0
+    for item in spill_inputs:
+        dle_id = str(item["dle_id"])
+        if not is_safe_path_token(dle_id):
+            raise ValueError("unsafe spill dle_id")
+        ev = by_id.get(dle_id)
+        if ev is None or ev.get("serial") not in serials or ev.get("platform") != "MTK":
+            raise ValueError(f"spill observation unavailable or outside partition: {dle_id}")
+        remote = Path(item["remote_path"])
+        expected = nfs_root.resolve() / "devices" / str(plan_run_id) / dle_id
+        if not remote.resolve().is_relative_to(expected) or not remote.is_dir():
+            raise ValueError(f"spill copy outside partition or missing: {dle_id}")
+        if str(remote) != ev.get("remote_path"):
+            raise ValueError(f"spill location differs from DLE: {dle_id}")
+        if item.get("occurrence_key") != ev.get("occurrence_key"):
+            raise ValueError(f"spill identity differs from DLE: {dle_id}")
+        rel = Path(ev["local_path"]).resolve().relative_to(hdd.resolve())
+        if len(rel.parts) < 3 or rel.parts[1] != ev["serial"]:
+            raise ValueError(f"spill local layout unavailable: {dle_id}")
+        dest = scan_root / "spill_inputs" / dle_id / rel
+        _hardlink_tree(remote, dest)
+        temporary_bytes += sum(p.stat().st_size for p in dest.rglob("*") if p.is_file())
+        sources.append({**ev, "source": "spill", "scan_path": str(dest)})
+    logger.info("scan_spill_staging events=%d temporary_bytes=%d root=%s",
+                len(sources), temporary_bytes, scan_root)
+    return sources
+
+
+def report_mapping(
+    xls_path: str, *, serials: Sequence[str], sources: Sequence[dict],
+    scan_root: str, plan_run_id: int, host_id: str, platform: str,
+    fact_round_id: int | None = None, require_serial_evidence: bool = False,
+) -> dict:
+    """Validate every data row and map only exact, unambiguous source paths.
+
+    Row numbers are one-based spreadsheet positions (the header is row 1).
+    An unmapped row retains its original Path and explicit null identity fields.
+    """
+    if xlrd is None:
+        raise RuntimeError("scan report validation requires Agent dependency xlrd==2.0.2")
+    source_roots = [
+        (src, Path(src["scan_path"]).resolve(),
+         Path(src["local_path"]).resolve() if src["source"] == "local" else None)
+        for src in sources
+    ]
+    root = Path(scan_root).resolve()
+    allowed_serials = set(serials)
+    book = xlrd.open_workbook(xls_path, on_demand=True)
+    rows = []
+    try:
+        for sheet in book.sheets():
+            if not sheet.nrows:
+                continue
+            columns = {str(sheet.cell_value(0, c)).strip().lower(): c
+                       for c in range(sheet.ncols)}
+            if "path" not in columns:
+                raise ValueError("scan report lacks Path column")
+            for index in range(1, sheet.nrows):
+                raw = str(sheet.cell_value(index, columns["path"]))
+                path = Path(raw.replace("\\", "/")).resolve()
+                matches = [src for src, staged, local in source_roots
+                           if path.is_relative_to(staged) or (local is not None and path.is_relative_to(local))]
+                # Multiple observations at one path cannot be guessed apart.
+                match = matches[0] if len(matches) == 1 else None
+                row_serials = set()
+                if match:
+                    row_serials.add(match["serial"])
+                for name in ("serial", "device_id"):
+                    if name in columns:
+                        value = str(sheet.cell_value(index, columns[name])).strip()
+                        if value:
+                            row_serials.add(value)
+                if "detail" in columns:
+                    detail = str(sheet.cell_value(index, columns["detail"]))
+                    row_serials.update(re.findall(r"Device_id:\s*([^\s,;]+)", detail))
+                try:
+                    rel = path.relative_to(root)
+                    parts = rel.parts[2:] if rel.parts[:1] == ("spill_inputs",) else rel.parts
+                    if len(parts) >= 3:
+                        row_serials.add(parts[1])
+                except ValueError:
+                    # External paths are not eligible for identity inference.
+                    pass
+                if not row_serials or not row_serials.issubset(allowed_serials):
+                    raise ValueError(f"scan report serial outside run or unprovable at row {index + 1}")
+                rows.append({
+                    "sheet": sheet.name, "row": index + 1, "path": raw,
+                    "dle_id": str(match["id"]) if match else None,
+                    "occurrence_key": match.get("occurrence_key") if match else None,
+                    "source": match["source"] if match else None,
+                    "mapped": match is not None,
+                })
+        if require_serial_evidence and not rows:
+            raise ValueError("timed-out report has no run serial evidence")
+    finally:
+        book.release_resources()
+    result = {"schema_version": 1, "plan_run_id": plan_run_id, "host_id": host_id,
+              "platform": platform, "rows": rows}
+    if fact_round_id is not None:
+        result["fact_round_id"] = fact_round_id
+    return result

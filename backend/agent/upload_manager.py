@@ -21,6 +21,8 @@ from fnmatch import fnmatch
 from pathlib import Path
 from typing import Optional
 
+from .contracts.round_report_layout import round_manifest_path, round_report_dir
+
 try:
     from backend.agent.aee.paths import resolve_shared_storage_root
 except ImportError:  # Agent install layout (no ``backend.`` package)
@@ -88,6 +90,8 @@ class UploadManager:
         org_xls_path: str,
         *,
         platform_subdir: str = "",
+        fact_round_id: int | None = None,
+        mapping: dict | None = None,
     ) -> Optional[str]:
         """Copy _org.xls → {nfs_root}/dedup/{plan_run_id}/[{platform}/]{host_id}_{filename}.
 
@@ -112,11 +116,21 @@ class UploadManager:
         dest_dir = Path(self._nfs_root) / "dedup" / str(plan_run_id)
         if platform_subdir:
             dest_dir = dest_dir / platform_subdir
+        if fact_round_id is not None:
+            dest_dir = round_report_dir(
+                self._nfs_root, plan_run_id, fact_round_id, platform_subdir,
+            )
         dest_path = dest_dir / f"{host_id}_{filename}"
+        mapping_path = None
 
         try:
             dest_dir.mkdir(parents=True, exist_ok=True)
             shutil.copy2(str(src), str(dest_path))
+            if mapping is not None:
+                mapping_path = dest_path.with_name(dest_path.name + ".mapping.json")
+                tmp = mapping_path.with_name(mapping_path.name + ".tmp")
+                tmp.write_text(json.dumps(mapping, ensure_ascii=False, indent=2), encoding="utf-8")
+                os.replace(tmp, mapping_path)
         except Exception:
             logger.exception(
                 "upload_scan_report_failed plan_run=%d host=%s src=%s dest=%s",
@@ -135,7 +149,11 @@ class UploadManager:
         # 由 worker 落可观测失败（专用日志标记 + 心跳计数器）；下轮 scan_now
         # 整段幂等重试（copy 覆盖写、分片幂等重写）。
         try:
-            self._record_shard_entry(plan_run_id, host_id, dest_path, platform_subdir)
+            self._record_shard_entry(
+                plan_run_id, host_id, dest_path, platform_subdir,
+                fact_round_id=fact_round_id, mapping_path=mapping_path,
+                empty_receipt=mapping is not None and not mapping["rows"],
+            )
         except Exception as exc:
             raise ShardRegistrationError(
                 f"shard register failed plan_run={plan_run_id} host={host_id} "
@@ -149,6 +167,8 @@ class UploadManager:
 
     def _record_shard_entry(
         self, plan_run_id: int, host_id: str, dest_path: Path, platform_subdir: str,
+        *, fact_round_id: int | None = None, mapping_path: Path | None = None,
+        empty_receipt: bool = False,
     ) -> None:
         """写侧登记（#2188 设计稿 §2）：分片写入是上送动作的完成标志。
 
@@ -168,6 +188,22 @@ class UploadManager:
             ),
         }
         shard = self._shard_path(self._nfs_root, plan_run_id, host_id)
+        if fact_round_id is not None:
+            entry["fact_round_id"] = fact_round_id
+            if empty_receipt:
+                entry["empty_receipt"] = True
+            shard = round_manifest_path(self._nfs_root, plan_run_id, fact_round_id, host_id)
+        companion = None
+        if mapping_path is not None:
+            companion_key = f"{platform_subdir}/{mapping_path.name}" if platform_subdir else mapping_path.name
+            entry["companion_file_key"] = companion_key
+            companion = {
+                "file_key": companion_key, "platform": platform_subdir or "",
+                "size_bytes": mapping_path.stat().st_size, "registerable": False,
+                "artifact_type": "scan_occurrence_mapping",
+            }
+            if fact_round_id is not None:
+                companion["fact_round_id"] = fact_round_id
         shard.parent.mkdir(parents=True, exist_ok=True)
 
         artifacts: dict = {}
@@ -184,6 +220,8 @@ class UploadManager:
                     if isinstance(a, dict) and "file_key" in a
                 }
         artifacts[entry["file_key"]] = entry
+        if companion is not None:
+            artifacts[companion["file_key"]] = companion
 
         payload = {
             "schema_version": _META_SCHEMA_VERSION,

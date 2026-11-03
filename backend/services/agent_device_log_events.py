@@ -31,6 +31,7 @@ from backend.services.device_log_event import (
     resolve_initial_upload_state,
 )
 from backend.services.errors import BadRequest, Conflict, Forbidden, NotFound
+from backend.services.issue_fact_store import record_spill_ledger_entry
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +106,7 @@ class DeviceLogEventIn(BaseModel):
     # ADR-0062 §3 第 2 条：Agent 用 contracts.occurrence_key 计算后上报；
     # 控制面只存储，不从路径或报表反推。NULL = 身份不可证明（fail-open）。
     occurrence_key: Optional[str] = None
+    hdd_spill: bool = False
     plan_run_id: Optional[int] = None
     host_id: str
     job_id: Optional[int] = None
@@ -418,6 +420,17 @@ async def ingest_agent_device_log_events(
             await db.flush()
             event_id = row.id
 
+        if ev.hdd_spill and ev.state == EventState.REMOTE.value:
+            if ev.size_bytes is None or ev.size_bytes < 0 or not row.remote_path:
+                raise BadRequest("verified spill requires remote_path and nonnegative size_bytes")
+            if row.plan_run_id is not None:
+                await db.run_sync(
+                    record_spill_ledger_entry, plan_run_id=row.plan_run_id, platform=row.platform,
+                    dle_id=row.id, size_bytes=ev.size_bytes, spilled_at=now,
+                )
+            else:
+                logger.warning("spill_ledger_unassigned dle_id=%s", row.id)
+
         if ev.link_signal_seq_no is not None:
             row.signal_seq_no = ev.link_signal_seq_no
 
@@ -472,6 +485,7 @@ async def list_agent_device_log_events(
                 "plan_run_id": r.plan_run_id,
                 "job_id": r.job_id,
                 "host_id": r.host_id,
+                "occurrence_key": r.occurrence_key,
             }
             for r in rows
         ],

@@ -36,6 +36,45 @@ def test_enabled_by_default(monkeypatch):
     assert EventUploader.is_enabled() is True
 
 
+def test_spill_marker_only_on_remote_patch_and_carries_verified_bytes(tmp_path):
+    up = EventUploader.instance()
+    up.configure(api_url="http://test", agent_secret="test", host_id="h1", nfs_root=str(tmp_path))
+    assert up.enqueue_local_event(event={"id": "spill", "local_path": str(tmp_path / "event"),
+                                         "hdd_spill": True}, force=True, prune_after_upload=True)
+    job = up._queue.get_nowait()
+    with patch("backend.agent.event_uploader.requests.post") as post:
+        post.return_value.status_code = 200
+        up._patch_state(job, state="UPLOADING")
+        assert "hdd_spill" not in post.call_args.kwargs["json"]["events"][0]
+        up._patch_state(job, state="REMOTE", remote_path="/nfs/event", checksum="verified", size_bytes=321)
+        payload = post.call_args.kwargs["json"]["events"][0]
+        assert payload["hdd_spill"] is True
+        assert payload["size_bytes"] == 321
+        job.hdd_spill = False
+        up._patch_state(job, state="REMOTE", remote_path="/nfs/event", checksum="verified", size_bytes=321)
+        assert "hdd_spill" not in post.call_args.kwargs["json"]["events"][0]
+
+
+def test_spill_intent_survives_recovery_and_restart(tmp_path, monkeypatch):
+    state = {}
+    def durable(event_id, value=None):
+        if value is not None:
+            state[event_id] = value
+        return state.get(event_id, False)
+    monkeypatch.setattr("backend.agent.event_uploader._durable_spill_flag", durable)
+    up = EventUploader()
+    up.configure(api_url="http://test", agent_secret="test", host_id="h1", nfs_root=str(tmp_path))
+    event = {"id": "spill-retry", "local_path": str(tmp_path / "event")}
+    up.enqueue_local_event(event={**event, "hdd_spill": True}, force=True, prune_after_upload=True)
+    first = up._queue.get_nowait()
+    assert first.hdd_spill
+    restarted = EventUploader()
+    restarted.configure(api_url="http://test", agent_secret="test", host_id="h1", nfs_root=str(tmp_path))
+    assert restarted.enqueue_local_event(event=event, force=True)
+    recovered = restarted._queue.get_nowait()
+    assert recovered.hdd_spill and recovered.prune_after_upload
+
+
 def test_configure_without_shared_root_degrades_to_noop(monkeypatch):
     """#2845：无共享存储根时 configure 不得抛错打断调用方（bootstrap / reload_config）。
 

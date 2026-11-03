@@ -272,7 +272,7 @@ class HddSpillMonitor:
             # 不依赖默认关闭的 STP_EVENT_UPLOADER_PRUNE_LOCAL 灰度开关 ——
             # 否则磁盘水位持续高于阈值、压力阀失效。
             if EventUploader.instance().enqueue_local_event(
-                event=candidate, force=True, prune_after_upload=True,
+                event={**candidate, "hdd_spill": True}, force=True, prune_after_upload=True,
             ):
                 if event_id:
                     self._spill_enqueued_ids.add(event_id)

@@ -210,18 +210,26 @@ def build_control_handler(
             else:
                 logger.warning("control_archive_now_skipped: archiver not configured")
         elif command == "scan_now":
+            if (
+                "fact_round_id" in payload
+                and (type(payload["fact_round_id"]) is not int or payload["fact_round_id"] <= 0)
+            ) or ("spill_inputs" in payload and not isinstance(payload["spill_inputs"], list)):
+                logger.warning("control_scan_now_invalid_round_payload")
+                return {"ok": False, "error": "invalid scan round payload"}
             plan_run_id = payload.get("plan_run_id")
             is_final = bool(payload.get("is_final", False))
             if not plan_run_id:
                 logger.warning("control_scan_now_missing_plan_run_id")
                 return {"ok": False, "error": "missing plan_run_id"}
 
+            round_args = {key: payload[key] for key in ("fact_round_id", "spill_inputs") if key in payload}
             ScanRunner.enqueue_scan_now(
                 int(plan_run_id),
                 host_id,
                 is_final=is_final,
                 device_serials=payload.get("device_serials") or [],
                 run_date_stamps=payload.get("run_date_stamps") or [],
+                **round_args,
             )
             logger.info(
                 "control_scan_now_triggered plan_run=%d final=%s serials=%s stamps=%s",

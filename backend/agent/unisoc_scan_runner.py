@@ -10,6 +10,9 @@ import subprocess
 from pathlib import Path
 from typing import List, Optional, Sequence
 
+from .aee.scan_scope import load_scan_events, report_mapping
+from .device_platform import detect_device_platform
+
 try:
     from backend.agent.scan_runner import ScanRunner, _SCAN_SUBPROCESS_TIMEOUT
 except ImportError:
@@ -88,11 +91,21 @@ class UnisocScanRunner:
         is_final: bool,
         device_serials: Sequence[str] = (),
         run_date_stamps: Sequence[str] = (),
+        fact_round_id: int | None = None,
+        spill_inputs: Sequence[dict] = (),
     ) -> None:
-        del is_final
+        del is_final, spill_inputs  # B8 spill re-entry is MTK only.
         if not self.is_configured():
             return
-        scan_root = ScanRunner.instance()._prepare_scan_root(
+        if device_serials:
+            device_serials = tuple(s for s in device_serials
+                                   if detect_device_platform(os.getenv("ADB_PATH", "adb"), s) == "UNISOC")
+            if not device_serials:
+                logger.info("unisoc_scan_skip_no_unisoc_devices plan_run=%d", plan_run_id)
+                return
+        mtk_runner = ScanRunner.instance()
+        mtk_runner._scan_events = load_scan_events(host_id, plan_run_id)
+        scan_root = mtk_runner._prepare_scan_root(
             plan_run_id, device_serials, run_date_stamps,
         )
         if scan_root is None:
@@ -115,7 +128,15 @@ class UnisocScanRunner:
         uploader = UploadManager.instance()
         if not uploader.is_configured():
             return
-        uploader.upload_scan_report(plan_run_id, host_id, org_xls, platform_subdir="unisoc")
+        mapping = report_mapping(
+            org_xls, serials=device_serials, sources=getattr(mtk_runner, "_scan_sources", []),
+            scan_root=scan_root, plan_run_id=plan_run_id, host_id=host_id, platform="unisoc",
+            fact_round_id=fact_round_id, require_serial_evidence=self._last_scan_timed_out,
+        )
+        uploader.upload_scan_report(
+            plan_run_id, host_id, org_xls, platform_subdir="unisoc", fact_round_id=fact_round_id,
+            mapping=mapping,
+        )
         if self._last_scan_timed_out:
             # #805-5：超时终止后的原始 Result_*.xls 可能是半成品，跳过二次上送，
             # 只保留经 scan_result 处理且通过完整性校验的 org 文件。
@@ -134,8 +155,13 @@ class UnisocScanRunner:
         ]
         if dedup_candidates:
             dedup_xls = max(dedup_candidates, key=lambda p: p.stat().st_mtime)
+            report_mapping(
+                str(dedup_xls), serials=device_serials, sources=getattr(mtk_runner, "_scan_sources", []),
+                scan_root=scan_root, plan_run_id=plan_run_id, host_id=host_id, platform="unisoc",
+                fact_round_id=fact_round_id,
+            )
             uploader.upload_scan_report(
-                plan_run_id, host_id, str(dedup_xls), platform_subdir="unisoc",
+                plan_run_id, host_id, str(dedup_xls), platform_subdir="unisoc", fact_round_id=fact_round_id,
             )
 
     _DEFAULT_POLL_SECONDS = 60
