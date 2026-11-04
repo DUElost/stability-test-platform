@@ -3,6 +3,9 @@ from __future__ import annotations
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from tools.dev.source_anchor import SourceGuard
 from tools.site_config.ops import CommandResult
@@ -246,12 +249,35 @@ def test_resource_floor_names_the_observed_numbers(monkeypatch):
     assert "1 cores" in check["message"]
 
 
-def test_report_status_is_fail_only_for_actual_failures(monkeypatch):
+@pytest.fixture
+def healthy_host_resources(monkeypatch):
+    # FakeOps 不接管宿主资源；汇总状态测试须显式固定，不能依赖 runner 当时的余量。
+    monkeypatch.setattr("tools.site_config.preflight.os.cpu_count", lambda: 4)
+    monkeypatch.setattr("tools.site_config.preflight._memory_mib", lambda: 8192)
+    monkeypatch.setattr("tools.site_config.preflight.shutil.disk_usage", lambda _path: SimpleNamespace(
+        total=128 * 1024**3, used=64 * 1024**3, free=64 * 1024**3,
+    ))
+
+
+def test_report_status_is_fail_only_for_actual_failures(monkeypatch, healthy_host_resources):
     # 端口项读的是真实内核表：测试机（生产控制面）上 80/8000 在用，必须打桩
     monkeypatch.setattr("tools.site_config.preflight._listening_ports", set)
-    assert run_preflight(ops=healthy_ops())["status"] == "PASS"
+    healthy = run_preflight(ops=healthy_ops())
+    assert healthy["status"] == "PASS", healthy["checks"]
     failing = healthy_ops(responses={"timedatectl": (0, "no\n")})
-    assert run_preflight(ops=failing)["status"] == "FAIL"
+    report = run_preflight(ops=failing)
+    assert report["status"] == "FAIL"
+    assert [c["check_id"] for c in report["checks"] if c["status"] == "FAIL"] == ["preflight.time"]
+
+
+def test_report_status_preserves_real_low_disk_failure(monkeypatch, healthy_host_resources):
+    monkeypatch.setattr("tools.site_config.preflight._listening_ports", set)
+    monkeypatch.setattr("tools.site_config.preflight.shutil.disk_usage", lambda _path: SimpleNamespace(
+        total=128 * 1024**3, used=109 * 1024**3, free=19 * 1024**3,
+    ))
+    report = run_preflight(ops=healthy_ops())
+    assert report["status"] == "FAIL"
+    assert [c["check_id"] for c in report["checks"] if c["status"] == "FAIL"] == ["preflight.resources"]
 
 
 def test_checks_are_check_instances_with_remediation():

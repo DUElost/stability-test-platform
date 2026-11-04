@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from backend.core.settings.base import DomainSettings
 
@@ -70,6 +70,10 @@ class SchedulerSettings(DomainSettings):
     # 一天扫一次 expired jti 即可（refresh 黑名单只随主动登出增长；见原注释）
     revoked_token_cleanup_interval_seconds: int = 24 * 3600
     auto_archive_poll_interval_seconds: int = 120
+    # B8 G2：独立于 Plan 的现行归档周期；影子动作默认关闭。
+    stp_scan_round_shadow_enabled: bool = False
+    stp_scan_round_interval_seconds: int = Field(default=21600, gt=0)
+    stp_scan_round_report_wait_seconds: int = Field(default=7200, gt=0)
     stp_admission_pump_interval_seconds: int = 5
     stp_counter_reconcile_interval_seconds: int = 300
     stp_signal_link_reconcile_interval_seconds: int = 300
@@ -133,6 +137,15 @@ class SchedulerSettings(DomainSettings):
     audit_log_retention_batch_size: int = Field(default=5000, ge=1)
     # sweep 周期；0 = 显式停用（app_scheduler 不注册该作业——事故取证期冻结裁剪）。
     audit_log_retention_interval_seconds: int = Field(default=3600, ge=0)
+
+    @model_validator(mode="after")
+    def validate_scan_round_wait(self) -> SchedulerSettings:
+        if self.stp_scan_round_report_wait_seconds >= self.stp_scan_round_interval_seconds:
+            raise ValueError(
+                "STP_SCAN_ROUND_REPORT_WAIT_SECONDS must be shorter than "
+                "STP_SCAN_ROUND_INTERVAL_SECONDS",
+            )
+        return self
 
 
 @lru_cache(maxsize=1)

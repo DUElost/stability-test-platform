@@ -12,6 +12,22 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 
+@pytest.mark.asyncio
+async def test_shadow_scan_task_only_dispatches_scan_now(monkeypatch):
+    from backend.tasks import saq_tasks
+
+    payload = {"plan_run_id": 42, "fact_round_id": 7, "spill_inputs": []}
+    control = AsyncMock(return_value=True)
+    monkeypatch.setattr("backend.realtime.socketio_server.call_agent_control", control)
+    monkeypatch.setattr("backend.services.shadow_scan_rounds.prepare_shadow_scan", lambda *_args: [("host", payload)])
+    monkeypatch.setattr(saq_tasks, "_query_hosts_for_scan", MagicMock(side_effect=AssertionError("current path entered")))
+    queue = MagicMock(side_effect=AssertionError("shadow chained current task"))
+    monkeypatch.setattr("backend.core.task_queue.get_queue", queue)
+    await saq_tasks.scan_task({}, plan_run_id=42, fact_round_id=7)
+    control.assert_awaited_once_with("host", "scan_now", payload=payload)
+    queue.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # P1-1: scan_task multi-host poll
 # ---------------------------------------------------------------------------

@@ -21,6 +21,81 @@ from backend.models.plan_run import PlanRun
 from backend.services import issue_fact_store as store
 
 
+def test_closed_round_rejects_coverage_rewrite(db_session):
+    run = _plan_run(db_session)
+    row = store.record_scan_round(
+        db_session, plan_run_id=run.id, platform="mtk", round_no=1,
+        kind=store.SCAN_ROUND_KIND_FINAL,
+        expected_set=[{"host_id": "a", "platform": "mtk"}],
+        input_cutoff_at=datetime.now(timezone.utc),
+    )
+    coverage = [{"host_id": "a", "platform": "mtk", "coverage": "MISSING"}]
+    store.record_scan_round_coverage(db_session, round_id=row.id, coverage=coverage)
+    store.set_scan_round_status(db_session, round_id=row.id, status=store.SCAN_ROUND_STATUS_CLOSED)
+    with pytest.raises(store.ImmutableIssueFactError, match="coverage is closed"):
+        store.record_scan_round_coverage(db_session, round_id=row.id, coverage=[{
+            "host_id": "a", "platform": "mtk", "coverage": "RECEIVED",
+        }])
+    assert row.expected_set == coverage
+
+
+def test_round_reads_hold_postgres_row_locks(db_session):
+    from sqlalchemy.orm import Session
+    from sqlalchemy.exc import OperationalError
+    from sqlalchemy import text
+
+    run = _plan_run(db_session)
+    row = store.record_scan_round(
+        db_session, plan_run_id=run.id, platform="mtk", round_no=1,
+        kind=store.SCAN_ROUND_KIND_FINAL, expected_set=[],
+        input_cutoff_at=datetime.now(timezone.utc),
+    )
+    db_session.commit()
+    for read in [
+        lambda: store.get_scan_round(db_session, round_id=row.id),
+        lambda: store.list_scan_rounds(db_session, plan_run_id=run.id, platform="mtk"),
+    ]:
+        read()
+        with Session(db_session.get_bind()) as contender:
+            contender.execute(text("SET LOCAL lock_timeout = '50ms'"))
+            with pytest.raises(OperationalError, match="lock timeout"):
+                store.get_scan_round(contender, round_id=row.id)
+        db_session.rollback()
+
+
+def test_spill_inputs_are_checked_and_partition_host_scoped(db_session, sample_host):
+    from backend.models.device_log_event import DeviceLogEvent
+
+    run = _plan_run(db_session)
+    another = _plan_run(db_session)
+    entries = []
+    for index, (platform, state, remote, ledger_run) in enumerate([
+        ("MTK", "REMOTE", "/center/devices/event", run.id),
+        ("UNISOC", "REMOTE", "/center/devices/unisoc", run.id),
+        ("MTK", "LOCAL", None, run.id),
+        ("MTK", "PRUNED", "/center/devices/pruned", run.id),
+        ("MTK", "REMOTE", "/center/devices/another", another.id),
+        ("MTK", "PRUNED", None, run.id),
+        ("MTK", "PRUNED", "", run.id),
+        ("MTK", "PRUNED", "/center/devices/pruned-other-run", another.id),
+        ("MTK", "PRUNED", "/center/devices/pruned-without-ledger", None),
+    ]):
+        event = DeviceLogEvent(
+            serial=f"spill-{index}", platform=platform, event_type="JE", state=state,
+            local_path=f"/local/{index}", remote_path=remote, host_id=sample_host.id,
+            plan_run_id=run.id, detected_at=datetime.now(timezone.utc), occurrence_key="a" * 64,
+        )
+        db_session.add(event)
+        db_session.flush()
+        if ledger_run is not None:
+            store.record_spill_ledger_entry(db_session, plan_run_id=ledger_run, platform=platform, dle_id=event.id, size_bytes=10, spilled_at=datetime.now(timezone.utc))
+        entries.append(event)
+    assert store.list_partition_spill_inputs(db_session, plan_run_id=run.id, platform="mtk", host_id=sample_host.id) == [{
+        "dle_id": str(event.id), "remote_path": event.remote_path, "occurrence_key": "a" * 64,
+    } for event in [entries[0], entries[3]]]
+    assert store.list_partition_spill_inputs(db_session, plan_run_id=run.id, platform="mtk", host_id="other-host") == []
+
+
 def _plan_run(db) -> PlanRun:
     plan = Plan(name=f"plan-fact-{uuid4().hex[:8]}", created_by="pytest")
     db.add(plan)

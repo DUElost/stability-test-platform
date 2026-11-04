@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 
 from backend.core.dedup_platform import DEDUP_PLATFORMS
 from backend.core.task_queue import get_queue
+from backend.services import shadow_scan_rounds
 from saq import Job as SaqJob
 
 logger = logging.getLogger(__name__)
@@ -438,6 +439,7 @@ def _query_hosts_for_scan(
 async def scan_task(
     ctx: dict, *, plan_run_id: int, is_final: bool = False,
     allow_retired: bool = False,
+    fact_round_id: int | None = None,
 ) -> None:
     """ADR-0025 Sprint 4: 归档-2 向各 ONLINE agent 下发 scan_now → 轮询 NFS → 注册 DB → enqueue upload_task → enqueue merge_task。
 
@@ -448,6 +450,13 @@ async def scan_task(
        success; events via EventUploader/DLE)
     """
     from backend.realtime.socketio_server import call_agent_control
+
+    if fact_round_id is not None:
+        payloads = await asyncio_to_thread(shadow_scan_rounds.prepare_shadow_scan, plan_run_id, fact_round_id)
+        for host_id, payload in payloads:
+            if not await call_agent_control(host_id, "scan_now", payload=payload):
+                logger.warning("shadow_scan_no_ack round=%d host=%s", fact_round_id, host_id)
+        return
 
     logger.info("saq_scan_start plan_run=%d final=%s", plan_run_id, is_final)
 

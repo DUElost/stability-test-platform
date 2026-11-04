@@ -27,6 +27,9 @@ from backend.core.settings.scheduler import (
 
 # 迁移前默认值（逐一对齐；改动这些值等于改运维默认，必须走 Settings 模块）
 _PRE_MIGRATION_DEFAULTS = {
+    "stp_scan_round_shadow_enabled": False,
+    "stp_scan_round_interval_seconds": 21600,
+    "stp_scan_round_report_wait_seconds": 7200,
     "run_recycle_interval_seconds": 30,
     "session_watchdog_interval_seconds": 15,
     "reconciler_interval_seconds": 15,
@@ -59,6 +62,24 @@ _PRE_MIGRATION_DEFAULTS = {
     "max_admission_requeue_attempts": 3,
     "admission_requeue_backoff_seconds": 60,
 }
+
+
+@pytest.mark.parametrize("wait", [21600, 21601, 0, -1])
+def test_shadow_round_wait_must_be_positive_and_shorter_than_period(monkeypatch, wait):
+    monkeypatch.setenv("STP_SCAN_ROUND_REPORT_WAIT_SECONDS", str(wait))
+    monkeypatch.setenv("STP_SCAN_ROUND_INTERVAL_SECONDS", "21600")
+    with pytest.raises(ValidationError):
+        SchedulerSettings()
+
+
+def test_shadow_round_period_is_independent_and_configurable(monkeypatch):
+    monkeypatch.setenv("STP_SCAN_ROUND_INTERVAL_SECONDS", "600")
+    monkeypatch.setenv("STP_SCAN_ROUND_REPORT_WAIT_SECONDS", "200")
+    monkeypatch.setenv("STP_SCAN_ROUND_SHADOW_ENABLED", "1")
+    settings = SchedulerSettings()
+    assert settings.stp_scan_round_shadow_enabled is True
+    assert settings.stp_scan_round_interval_seconds == 600
+    assert settings.stp_scan_round_report_wait_seconds == 200
 
 
 @pytest.fixture(autouse=True)
