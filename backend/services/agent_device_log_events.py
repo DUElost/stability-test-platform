@@ -454,9 +454,14 @@ async def list_agent_device_log_events(
     host_id: str,
     state: Optional[str] = None,
     limit: Optional[int] = None,
+    plan_run_id: Optional[int] = None,
 ) -> dict:
-    """Agent 重启恢复：按 host + 可选 state 拉取待处理事件（``detected_at`` 升序）。"""
+    """按 host 与可选 run/state 拉取事件（``detected_at`` 升序）。"""
     stmt = select(DeviceLogEvent).where(DeviceLogEvent.host_id == host_id)
+    if plan_run_id is not None:
+        if plan_run_id < 1:
+            raise BadRequest("plan_run_id must be >= 1")
+        stmt = stmt.where(DeviceLogEvent.plan_run_id == plan_run_id)
     if state:
         states = [s.strip() for s in state.split(",") if s.strip()]
         invalid = [s for s in states if s not in _VALID_EVENT_STATES]

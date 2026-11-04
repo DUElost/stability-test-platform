@@ -302,12 +302,13 @@ async def list_device_log_events(
     host_id: str,
     state: Optional[str] = None,
     limit: Optional[int] = None,
+    plan_run_id: Optional[int] = None,
     db: AsyncSession = Depends(get_async_db),
     _=Depends(_verify_agent),
 ):
-    """Agent 重启恢复：按 host + 可选 state 拉取待处理事件（``detected_at`` 升序）。"""
+    """按 host 与可选 run/state 拉取事件（``detected_at`` 升序）。"""
     return ok(await list_agent_device_log_events(
-        db, host_id=host_id, state=state, limit=limit,
+        db, host_id=host_id, state=state, limit=limit, plan_run_id=plan_run_id,
     ))
 
 

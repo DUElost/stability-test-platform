@@ -18,7 +18,7 @@ try:
 except ImportError:
     xlrd = None
 
-from .device_log_event_client import DeviceLogEventClient
+from .device_log_event_client import DeviceLogEventClient, DeviceLogEventListError
 from ..contracts.occurrence_key import compute_occurrence_key
 
 logger = logging.getLogger(__name__)
@@ -167,16 +167,20 @@ def metadata_occurrence_key(metadata: Any, *, platform: str, serial: str) -> str
     )
 
 
-def load_scan_events(host_id: str, plan_run_id: int) -> list[dict]:
-    """Read authoritative observations, including sources already spilled off HDD."""
+def load_scan_events(host_id: str, plan_run_id: int) -> list[dict] | None:
+    """Read only this host/run; None denotes unavailable, [] denotes a valid empty result."""
     client = DeviceLogEventClient.from_env(
         api_url=os.getenv("API_URL", "http://127.0.0.1:8000"), agent_secret=os.getenv("AGENT_SECRET", ""),
         host_id=host_id,
     )
-    if client is None:
-        return []
-    return [ev for ev in client.list_events(state="", limit=None)
-            if ev.get("plan_run_id") == plan_run_id and ev.get("host_id") == host_id]
+    try:
+        if client is None:
+            raise DeviceLogEventListError("client not configured")
+        events = client.list_events(state="", limit=None, plan_run_id=plan_run_id, raise_on_error=True)
+    except DeviceLogEventListError as exc:
+        logger.warning("scan_mapping_events_unavailable host=%s plan_run=%d reason=%s", host_id, plan_run_id, exc)
+        return None
+    return [ev for ev in events if ev.get("plan_run_id") == plan_run_id and ev.get("host_id") == host_id]
 
 
 def scan_sources(hdd: Path, scan_root: Path, events: Sequence[dict]) -> list[dict]:
@@ -239,6 +243,7 @@ def report_mapping(
     xls_path: str, *, serials: Sequence[str], sources: Sequence[dict],
     scan_root: str, plan_run_id: int, host_id: str, platform: str,
     fact_round_id: int | None = None, require_serial_evidence: bool = False,
+    events_unavailable: bool = False,
 ) -> dict:
     """Validate every data row and map only exact, unambiguous source paths.
 
@@ -307,4 +312,6 @@ def report_mapping(
               "platform": platform, "rows": rows}
     if fact_round_id is not None:
         result["fact_round_id"] = fact_round_id
+    if events_unavailable:
+        result["events_unavailable"] = True
     return result

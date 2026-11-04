@@ -14,6 +14,10 @@ import requests
 
 logger = logging.getLogger(__name__)
 
+
+class DeviceLogEventListError(RuntimeError):
+    """The caller requested an explicit distinction between failed and empty queries."""
+
 # 与 log_signal/step_trace outbox 对齐（watcher/emitter._MAX_ATTEMPTS=10）：
 # 持续失败的 create 意图达阈值转死信，避免队首饿死（#1204）。
 _MAX_REGISTER_ATTEMPTS = 10
@@ -358,11 +362,16 @@ class DeviceLogEventClient:
             logger.exception("device_log_event_patch_error event_id=%s", event_id)
             return False
 
-    def list_events(self, *, state: str, limit: int | None = 1) -> List[Dict[str, Any]]:
+    def list_events(
+        self, *, state: str, limit: int | None = 1,
+        plan_run_id: int | None = None, raise_on_error: bool = False,
+    ) -> List[Dict[str, Any]]:
         try:
             params: Dict[str, Any] = {"host_id": self.host_id, "state": state}
             if limit is not None:
                 params["limit"] = limit
+            if plan_run_id is not None:
+                params["plan_run_id"] = plan_run_id
             resp = requests.get(
                 f"{self.api_url}/api/v1/agent/device-log-events",
                 params=params,
@@ -370,9 +379,20 @@ class DeviceLogEventClient:
                 timeout=self.timeout,
             )
             if resp.status_code >= 400:
+                if raise_on_error:
+                    raise DeviceLogEventListError(f"HTTP {resp.status_code}")
                 return []
-            return list(resp.json().get("data", {}).get("events") or [])
-        except Exception:
+            events = resp.json().get("data", {}).get("events")
+            if raise_on_error and (
+                not isinstance(events, list) or any(not isinstance(ev, dict) for ev in events)
+            ):
+                raise DeviceLogEventListError("invalid list response")
+            return list(events or [])
+        except DeviceLogEventListError:
+            raise
+        except Exception as exc:
+            if raise_on_error:
+                raise DeviceLogEventListError(type(exc).__name__) from exc
             logger.exception("device_log_event_list_error state=%s", state)
             return []
 

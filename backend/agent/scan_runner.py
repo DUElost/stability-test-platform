@@ -359,7 +359,8 @@ class ScanRunner:
         if not self.is_configured():
             logger.warning("control_scan_now_skip_runner_not_configured")
             return
-        self._scan_events = load_scan_events(host_id, plan_run_id)
+        events = load_scan_events(host_id, plan_run_id)
+        self._scan_events = events or []
         round_args = {}
         if fact_round_id is not None:
             round_args = {"spill_inputs": spill_inputs}
@@ -388,6 +389,7 @@ class ScanRunner:
                 org_xls, serials=device_serials, sources=getattr(self, "_scan_sources", []),
                 scan_root=getattr(self, "_last_scan_root", None) or self._hdd_root,
                 plan_run_id=plan_run_id, host_id=host_id, platform="mtk", fact_round_id=fact_round_id,
+                events_unavailable=events is None,
             )
             dedup_xls = self.run_dedup_org(org_xls, plan_run_id, host_id)
             uploader.upload_scan_report(

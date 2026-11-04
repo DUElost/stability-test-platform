@@ -747,6 +747,40 @@ async def _ingest_one(ev: DeviceLogEventIn):
 
 
 @pytest.mark.asyncio(loop_scope="module")
+async def test_list_filters_by_host_and_run_before_limit_and_preserves_legacy_call():
+    seed, other = _seed_host_job(), _seed_host_job()
+    extra_run_id = None
+    try:
+        with SessionLocal() as db:
+            extra = PlanRun(plan_id=seed["plan_id"], status="RUNNING", plan_snapshot={},
+                            run_type="MANUAL", triggered_by="pytest")
+            db.add(extra)
+            db.commit()
+            extra_run_id = extra.id
+        # The older row must not consume the limit of a query for the target run.
+        await _ingest_one(_ev(seed, plan_run_id=extra_run_id, job_id=None, detected_at="2026-01-01T00:00:00Z"))
+        target = await _ingest_one(_ev(seed, detected_at="2026-01-02T00:00:00Z"))
+        await _ingest_one(_ev(other, plan_run_id=seed["plan_run_id"], job_id=None))
+        async with AsyncSessionLocal() as db:
+            filtered = await list_device_log_events(host_id=seed["host_id"], plan_run_id=seed["plan_run_id"],
+                                                    state="LOCAL", limit=1, db=db, _=None)
+        assert filtered.data["total"] == 1
+        assert filtered.data["events"][0]["id"] == target.data["event_ids"][0]
+        async with AsyncSessionLocal() as db:
+            legacy = await list_device_log_events(host_id=seed["host_id"], db=db, _=None)
+        assert legacy.data["total"] == 2
+        assert {ev["plan_run_id"] for ev in legacy.data["events"]} == {seed["plan_run_id"], extra_run_id}
+    finally:
+        with SessionLocal() as db:
+            db.query(DeviceLogEvent).filter(DeviceLogEvent.host_id.in_([seed["host_id"], other["host_id"]])).delete()
+            if extra_run_id is not None:
+                db.query(PlanRun).filter(PlanRun.id == extra_run_id).delete()
+            db.commit()
+        _cleanup(other)
+        _cleanup(seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
 async def test_verified_spill_receipt_records_bytes_once_and_exposes_key(monkeypatch, tmp_path):
     from sqlalchemy import select
     from backend.models.issue_fact import SpillLedger

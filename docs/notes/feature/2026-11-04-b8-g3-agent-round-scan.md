@@ -10,7 +10,8 @@ Class: feature
 [6610503613](https://github.com/DUElost/stability-test-platform/issues/3800#issuecomment-6610503613)、
 [6610775684](https://github.com/DUElost/stability-test-platform/issues/3800#issuecomment-6610775684)、
 [6610795662](https://github.com/DUElost/stability-test-platform/issues/3800#issuecomment-6610795662)、
-[6610809324](https://github.com/DUElost/stability-test-platform/issues/3800#issuecomment-6610809324) 实施。
+[6610809324](https://github.com/DUElost/stability-test-platform/issues/3800#issuecomment-6610809324)、
+[6619941312](https://github.com/DUElost/stability-test-platform/issues/3800#issuecomment-6619941312) 实施。
 
 Agent 入口校验并透传 `fact_round_id`、`spill_inputs`，排队合并键改为
 `(plan_run_id, fact_round_id)`。载荷不带新键时保持原调用参数及日志；报表仍写入原目录，
@@ -24,12 +25,16 @@ HddSpill 的 REMOTE 补丁增加 `hdd_spill=true`；控制面经 G1 的
 `record_spill_ledger_entry` 在同一事务中登记实测 `size_bytes`。普通上传不登记溢出台账。
 溢出意图通过既有 Agent 状态库保留，重启恢复与重试仍带溢出标记；REMOTE 回执成功后清除标记。
 Agent 专用 DLE 列表同时返回已持久化的 `occurrence_key`，供本轮映射读取。
+列表接口增加可选 `plan_run_id`，扫描端按 host 与 run 在 SQL 中过滤后读取；未传参数的调用
+保留原行为。扫描查询明确区分失败与成功空列表，失败记录 `scan_mapping_events_unavailable`。
 
 伴随文件名为 `{host}_{org文件名}.mapping.json`。JSON 包含 `schema_version=1`、
 `plan_run_id`、`host_id`、`platform`、可选的 `fact_round_id` 及 `rows`。
 每项包含 `sheet`、`row`（从 1 起，表头为第 1 行）、`path`（Path 原文）、
 `dle_id`、`occurrence_key`、`source`（local / spill）和 `mapped`。
 不能唯一对应到 DLE 的行，其身份与来源为 null、`mapped=false`。
+事件查询失败时，顶层额外记录 `events_unavailable=true`，现行、影子与展锐的有效报表继续上送；
+成功的空列表不设置该标志，避免把没有对应观察与查询故障混为一类。
 报表条目用 `companion_file_key` 指向映射；映射在同一清单登记，`registerable=false`，
 类型为 `scan_occurrence_mapping`。xls 字节不改动。
 有效零行影子报表的条目额外带 `empty_receipt=true`，与 G2 的显式空回执判据对接；
@@ -69,6 +74,9 @@ watcher 使用 G1 的唯一身份契约；当前缺少原文时沿用 fail-open�
   import 棘轮、未跟踪载荷检查与 Excel 台账登记修复后，相关三文件复跑 17 passed；
   最终完整根测试结果随 PR 记录。
 - 最新受影响 Agent 子集 102 passed；映射函数调整后单文件再跑 18 passed。
+
+规划者核对 6619941312 后新增服务端按 run 过滤、limit 前过滤、参数缺省兼容、HTTP 错误、
+超时及无效响应反例；同时验证故障日志、映射标志和报表继续上传。该轮实际命令与最终结果随 PR 更新。
 
 经 Owner 在本会话同意最小三文件 scope 后，`backend/agent/requirements.txt` 登记 `xlrd==2.0.2`，
 `tests/test_excel_dependency_inventory.py` 登记 `scan_scope.py` 的读取点，

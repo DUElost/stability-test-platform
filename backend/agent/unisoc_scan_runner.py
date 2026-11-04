@@ -104,7 +104,8 @@ class UnisocScanRunner:
                 logger.info("unisoc_scan_skip_no_unisoc_devices plan_run=%d", plan_run_id)
                 return
         mtk_runner = ScanRunner.instance()
-        mtk_runner._scan_events = load_scan_events(host_id, plan_run_id)
+        events = load_scan_events(host_id, plan_run_id)
+        mtk_runner._scan_events = events or []
         scan_root = mtk_runner._prepare_scan_root(
             plan_run_id, device_serials, run_date_stamps,
         )
@@ -132,6 +133,7 @@ class UnisocScanRunner:
             org_xls, serials=device_serials, sources=getattr(mtk_runner, "_scan_sources", []),
             scan_root=scan_root, plan_run_id=plan_run_id, host_id=host_id, platform="unisoc",
             fact_round_id=fact_round_id, require_serial_evidence=self._last_scan_timed_out,
+            events_unavailable=events is None,
         )
         uploader.upload_scan_report(
             plan_run_id, host_id, org_xls, platform_subdir="unisoc", fact_round_id=fact_round_id,

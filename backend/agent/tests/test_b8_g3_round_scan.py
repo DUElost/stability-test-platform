@@ -10,8 +10,10 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+import requests
 import xlwt
 
+from backend.agent.aee import scan_scope
 from backend.agent.aee.scan_scope import report_mapping, stage_spill_inputs
 from backend.agent.contracts.occurrence_key import compute_occurrence_key
 from backend.agent.contracts.round_report_layout import round_manifest_path, round_report_dir
@@ -171,6 +173,57 @@ def test_shadow_cannot_change_legacy_files_or_manifest(campaign):
     assert all(a["fact_round_id"] == 8 for a in shadow["artifacts"])
     assert sum(a["registerable"] for a in shadow["artifacts"]) == 1
     assert "fact_round_id" not in json.loads(legacy_manifest.read_text())["artifacts"][0]
+
+
+@pytest.mark.parametrize("fact_round_id", [None, 7])
+@pytest.mark.parametrize("failure", [None, "timeout", "http"])
+def test_query_failure_is_visible_in_uploaded_mapping(campaign, monkeypatch, caplog, fact_round_id, failure):
+    runner, hdd, nfs, event, ev = campaign
+    monkeypatch.setenv("API_URL", "http://test")
+    monkeypatch.setenv("AGENT_SECRET", "test")
+    monkeypatch.setattr("backend.agent.scan_runner.load_scan_events", scan_scope.load_scan_events)
+    response = MagicMock(status_code=503 if failure == "http" else 200)
+    response.json.return_value = {"data": {"events": []}}
+    get = MagicMock(return_value=response)
+    if failure == "timeout":
+        get.side_effect = requests.Timeout()
+    monkeypatch.setattr("backend.agent.aee.device_log_event_client.requests.get", get)
+    caplog.set_level(logging.WARNING)
+    runner.run_scan_and_upload(42, "host-1", is_final=False, device_serials=["SER-A"], fact_round_id=fact_round_id)
+    directory = (round_report_dir(nfs, 42, fact_round_id, "mtk") if fact_round_id is not None
+                 else nfs / "dedup/42/mtk")
+    report = directory / "host-1_Result_test_org.xls"
+    assert report.is_file()
+    mapping = json.loads(Path(str(report) + ".mapping.json").read_text())
+    assert mapping.get("events_unavailable", False) is (failure is not None)
+    assert mapping["rows"][0]["mapped"] is False
+    assert ("scan_mapping_events_unavailable" in caplog.text) is (failure is not None)
+    assert get.call_args.kwargs["params"] == {"host_id": "host-1", "state": "", "plan_run_id": 42}
+
+
+@pytest.mark.parametrize("fact_round_id", [None, 7])
+def test_unisoc_query_failure_is_visible_without_suppressing_report(campaign, monkeypatch, caplog, fact_round_id):
+    mtk, hdd, nfs, event, ev = campaign
+    runner = UnisocScanRunner.instance()
+    runner._configured = True
+    monkeypatch.setenv("API_URL", "http://test")
+    monkeypatch.setenv("AGENT_SECRET", "test")
+    monkeypatch.setattr("backend.agent.unisoc_scan_runner.detect_device_platform", lambda *args: "UNISOC")
+    monkeypatch.setattr("backend.agent.aee.device_log_event_client.requests.get", MagicMock(side_effect=requests.Timeout()))
+    monkeypatch.setattr(runner, "_run_log_scan_gt", lambda *args: True)
+    def scanned(root, *args, **kwargs):
+        report = Path(root) / "Result_test_org.xls"
+        write_report(report, sorted(Path(root).rglob("main.dbg")))
+        return str(report)
+    monkeypatch.setattr(runner, "run_scan_result", scanned)
+    caplog.set_level(logging.WARNING)
+    runner.run_scan_and_upload(42, "host-1", is_final=False, device_serials=["SER-A"], fact_round_id=fact_round_id)
+    directory = (round_report_dir(nfs, 42, fact_round_id, "unisoc") if fact_round_id is not None
+                 else nfs / "dedup/42/unisoc")
+    report = directory / "host-1_Result_test_org.xls"
+    assert report.is_file()
+    assert json.loads(Path(str(report) + ".mapping.json").read_text())["events_unavailable"] is True
+    assert "scan_mapping_events_unavailable" in caplog.text
 
 
 def test_queue_coalesces_only_within_the_same_fact_round(monkeypatch):
