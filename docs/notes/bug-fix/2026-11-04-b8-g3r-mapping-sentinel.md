@@ -71,7 +71,6 @@ backend/agent/aee/scan_scope.py:299
 from __future__ import annotations
 
 import argparse
-import re
 import shutil
 import sys
 import tempfile
