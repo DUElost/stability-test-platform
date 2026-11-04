@@ -166,7 +166,7 @@
 | `dle-record` | concept | 设备日志事件终态台账 | `docs/adr/ADR-0028-device-log-event-and-continuous-upload.md :: 唯一权威记录` | 改唯一记录主张 |
 | `log-signal-stream` | concept | 异常事件权威流 | `docs/adr/ADR-0018-infrastructure-layer-framework-adoption.md :: \`log_signal\` 是异常事件权威流` | 旁路上报 |
 | `dedup-pipeline-behavior` | concept | 并列 dedup/merge 行为与分区 | `docs/adr/ADR-0032-unisoc-mtk-parallel-dedup-pipelines.md :: ### D1：两条并列流水线，禁止交叉混用` | 混流水线 |
-| `center-storage-model` | concept | 中心存储上送选择、问题 / 发生 / 代表身份、交付登记与留存回收边界（2026-11-02 由 ADR-0053 改归 ADR-0062） | `docs/adr/ADR-0062-device-log-dedup-before-upload.md :: ## 5. 决策（按流转环节 S1–S11）` | 修改上送选择、代表证据或留存边界；B8 阶段二切换上传后同步现态契约 |
+| `center-storage-model` | concept | 中心存储上送选择、问题 / 发生 / 代表身份、交付登记与留存回收边界（2026-11-02 由 ADR-0053 改归 ADR-0062；2026-11-04 v1.1：问题归并规则归扫描工具，平台只读工具输出） | `docs/adr/ADR-0062-device-log-dedup-before-upload.md :: ## 5. 决策（按流转环节 S1–S11）` | 修改上送选择、代表证据或留存边界；B8 阶段二切换上传后同步现态契约 |
 | `log-chain-map` | concept | 日志域全链**地图/路由入口**（Ownership Authority only；**非**第五内容权威） | `docs/design/2026-device-log-chain-contract.md :: ## 3. 阶段 owner 表（四层 + 后半段）` | 把 Contract 升格为内容宪法；与四层 ADR 抢定义权 |
 | `R-merge-locus` | relation | `Merge ─executed_at→ 控制面实例` | `docs/adr/ADR-0027-control-plane-horizontal-scaling.md :: 7. **merge（\`run_merge_sync\`）为实例绑定操作**` | B1/B2/多实例互斥 |
 | `R-merge-consumes-log` | relation | `Merge ─consumes→ scan/日志产物` | `docs/design/2026-scan-upload-merge-contract.md :: ## 控制面 merge` | 改输入集 |
