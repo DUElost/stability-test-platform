@@ -65,7 +65,7 @@
 1. 18:08 构建 `e48e6a43-20261104` bundle；venv 按 `requirements.lock` 安装，78/78 依赖版本一致；`import backend.main` OK。
 2. 18:16 落位双版本工具目录；控制面 3.13 与 15.33 的 3.10 均实测可导入 xlrd/xlwt/PyMySQL，并可运行 `-h`。
 3. 18:19 切换站点 env（四个工具键 + 影子 0/21600/7200），切换 `current` 到 `e48e6a43-20261104`，重启后端；18:19:46 起 `/health` 200、schema 在 head、影子 False、`supports_merge_files_list=True`。
-4. 18:20 对 15.101 执行 `POST /hosts/172-21-15-101/hot-update?force=true`：`ok=true`、code `e48e6a43`、digest `bd3da535…`、`deps_refreshed=true`、env 键全部同步、无缺失路径；Agent venv `xlrd 2.0.2`；心跳 18:20:56、matched、23 个 ADB 设备、HEALTHY。
+4. 18:20 对 15.101 执行 `POST /hosts/172-21-x-x/hot-update?force=true`（主机标识已脱敏）：`ok=true`、code `e48e6a43`、digest `bd3da535…`、`deps_refreshed=true`、env 键全部同步、无缺失路径；Agent venv `xlrd 2.0.2`；心跳 18:20:56、matched、23 个 ADB 设备、HEALTHY。
 5. 18:21 对 Run 1127（plan 115，15.101/15.102 两台，终态 FAILED，3324 条 DLE）触发 `POST /plan-runs/1127/dedup/scan`。
 6. 18:21–18:24 15.101 用新工具扫描；18:24:08 org 生成成功（1 条 fresh），随后 G3 映射失败：
 
@@ -73,14 +73,14 @@
    ValueError: scan report serial outside run or unprovable at row 2
    ```
 
-   该行携带 `ADDYNX6616000055`（15.101 当前设备），不在 Run 1127 的 40 台 `AYCGNX…` 设备集内。G3 契约要求报表 serial 必须是本 run 设备集子集，整轮拒绝，未上传、未登记任何产物。
+   该行携带 `ADDYNX66****0055`（串号已脱敏，15.101 当前设备），不在 Run 1127 的 40 台 `AYCGNX…` 设备集内。G3 契约要求报表 serial 必须是本 run 设备集子集，整轮拒绝，未上传、未登记任何产物。
 7. 18:25 按计划 §7 回退：恢复 `env.backend` 备份、`current` 指回 `eeab11d8-20261103`、重启后端；18:25:53 起 `/health` 200、schema `b8g1c4a7d2e9`。
 8. 18:26 对 15.101 回退热更新：code `eeab11d8`、digest `1067e716…`、env 旧路径、Agent venv xlrd 2.0.2；心跳 18:26:45、matched、23 个 ADB 设备、HEALTHY。
 9. 回退重启使 SAQ 扫描任务在 18:26 重放；15.101 的扫描被重启打断，15.102 的旧工具扫描仍在运行。截至 18:33 未产生 artifact；Run 1127 的扫描验证据此标为 pending。
 
 ## 5. 金丝雀失败归因
 
-- 直接原因：Run 1127 的旧报表/日志中存在 `ADDYNX6616000055` 设备行；该串号不属于 Run 1127 的 40 台设备。15.101 的 `scan_now` 载荷只包含 `AYCGNX…`。
+- 直接原因：Run 1127 的旧报表/日志中存在 `ADDYNX66****0055`（已脱敏）设备行；该串号不属于 Run 1127 的 40 台设备。15.101 的 `scan_now` 载荷只包含 `AYCGNX…`。
 - G3 行为符合契约（#3720 验收项）：`report_mapping` 对每一行做 serial 子集校验，发现越界即整轮失败，避免把跨 run/跨设备行上传。
 - 该 run 为 2026-10-27 的终态旧 run，设备与日志已漂移。越界行来自 run 设备目录内日志的 `Device_id`/`DeviceId` 字段（`ADDYNX…`），不是新工具 merge 输出的问题；离线 merge 已证明与基线逐字节一致，早先的 MLD-LX3 34 是导出内 fixture，不是本次输出。
 - 因此问题是：工具 mode 0 未按 run 的 serial 过滤日志内的他设备行；G3 硬失败是正确行为。短期换设备集与日志一致的清洁 run；长期由工具端增加 serial 过滤（`-device_list` 覆盖 mode 0 或新增 `-serial_filter`），G3 硬校验保留。G3 不应把越界行静默标 unmapped 继续，否则 org/xls 仍会混入他设备行。

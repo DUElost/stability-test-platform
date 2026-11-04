@@ -13,6 +13,7 @@ v1.1 按用户本轮预检选择“双版本 venv + 生产 pkglist”，取代�
 上游导出与 release.json 保持原样，部署副本单列配置覆盖与运行环境身份。
 包模式检查是此方案的适用条件，工具包登记与迁移作为退出 env 过渡入口的终态。
 计划区分工具成员关系文件与 G3 发生映射，记录当前上传接入缺口及 G4/G5、#3875 的激活边界。
+PR #3880 的 lint 修订仅将部署报告的完整主机标识和设备串号脱敏，保留越界归属、金丝雀失败与回退结论。
 没有修改批次规格、ADR、发布物、生产配置或业务事实。
 
 ## Alternatives
@@ -39,6 +40,12 @@ v1.1 按用户本轮预检选择“双版本 venv + 生产 pkglist”，取代�
 v1.1 的 17 台环境差异、406/5149 行配置差异、同批输入 14/34 个问题及 15.33
 逐字节一致结果均来自用户预检反馈，作者没有独立复跑；没有将这些结果扩大为全机队通过。
 v1.1 再次运行相同 `check:quick` 命令：16 gates 完成、退出码 0，schema-at-head 仍因未配置数据库而跳过；相对链接 3 个通过。
+
+PR #3880 的 lint 失败可由 `tools/dev/check-internal-ip-leak.py` 在修改前复现：
+部署报告命中一处完整主机标识和两处设备串号。该检查属于 CI lint，未包含在 `check:quick` 中；
+本轮另行运行资产脱敏门禁，不修改门禁规则或白名单。
+修订后 `./scripts/project_python.sh tools/dev/check-internal-ip-leak.py --check` 通过（4069 个文件）；
+相同 `check:quick` 命令再次通过 16 gates，schema-at-head 仍明确跳过；`git diff --check` 通过。
 
 ## Revisit
 
