@@ -213,7 +213,10 @@ def build_control_handler(
             if (
                 "fact_round_id" in payload
                 and (type(payload["fact_round_id"]) is not int or payload["fact_round_id"] <= 0)
-            ) or ("spill_inputs" in payload and not isinstance(payload["spill_inputs"], list)):
+            ) or (
+                "spill_inputs" in payload
+                and ("fact_round_id" not in payload or not isinstance(payload["spill_inputs"], list))
+            ):
                 logger.warning("control_scan_now_invalid_round_payload")
                 return {"ok": False, "error": "invalid scan round payload"}
             plan_run_id = payload.get("plan_run_id")

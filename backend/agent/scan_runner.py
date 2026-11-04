@@ -362,8 +362,13 @@ class ScanRunner:
         events = load_scan_events(host_id, plan_run_id)
         self._scan_events = events or []
         round_args = {}
+        spill_unstaged = []
         if fact_round_id is not None:
-            round_args = {"spill_inputs": spill_inputs}
+            # Staging needs the DLE's serial and original local layout. A failed
+            # query must not suppress the report from the remaining local inputs.
+            round_args = {"spill_inputs": spill_inputs if events is not None else ()}
+            if events is None:
+                spill_unstaged = [str(item["dle_id"]) for item in spill_inputs]
         org_xls = self.run_local_scan(
             plan_run_id=plan_run_id,
             host_id=host_id,
@@ -391,6 +396,8 @@ class ScanRunner:
                 plan_run_id=plan_run_id, host_id=host_id, platform="mtk", fact_round_id=fact_round_id,
                 events_unavailable=events is None,
             )
+            if spill_unstaged:
+                mapping["spill_unstaged"] = spill_unstaged
             dedup_xls = self.run_dedup_org(org_xls, plan_run_id, host_id)
             uploader.upload_scan_report(
                 plan_run_id, host_id, org_xls, platform_subdir="mtk",

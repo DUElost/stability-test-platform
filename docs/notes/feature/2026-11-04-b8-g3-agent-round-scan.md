@@ -11,12 +11,16 @@ Class: feature
 [6610775684](https://github.com/DUElost/stability-test-platform/issues/3800#issuecomment-6610775684)、
 [6610795662](https://github.com/DUElost/stability-test-platform/issues/3800#issuecomment-6610795662)、
 [6610809324](https://github.com/DUElost/stability-test-platform/issues/3800#issuecomment-6610809324)、
-[6619941312](https://github.com/DUElost/stability-test-platform/issues/3800#issuecomment-6619941312) 实施。
+[6619941312](https://github.com/DUElost/stability-test-platform/issues/3800#issuecomment-6619941312)、
+[6621513644](https://github.com/DUElost/stability-test-platform/issues/3800#issuecomment-6621513644) 实施。
 
 Agent 入口校验并透传 `fact_round_id`、`spill_inputs`，排队合并键改为
 `(plan_run_id, fact_round_id)`。载荷不带新键时保持原调用参数及日志；报表仍写入原目录，
 清单条目不增加轮次字段。影子报表和映射写入 `dedup/{run}/_rounds/{id}/{platform}/`，
 清单写入 `_meta/{run}/_rounds/{id}/{host}.json`。两端共用 `round_report_layout.py`。
+该模块由 G2 合入 main，G3 rebase 后直接沿用 main 版本，PR 不再包含重复文件。
+入口收到 `spill_inputs` 却没有 `fact_round_id` 时拒绝请求并记录
+`control_scan_now_invalid_round_payload`，包括空列表；不进入现行扫描队列。
 
 `scan_scope` 从 DLE 的明确路径建立观察映射，将载荷中的溢出副本回接到 staging，
 通过既有 `_link_or_copy_file` 跨文件系统复制回落。本地与溢出输入分开放置，身份沿用
@@ -35,6 +39,9 @@ Agent 专用 DLE 列表同时返回已持久化的 `occurrence_key`，供本轮�
 不能唯一对应到 DLE 的行，其身份与来源为 null、`mapped=false`。
 事件查询失败时，顶层额外记录 `events_unavailable=true`，现行、影子与展锐的有效报表继续上送；
 成功的空列表不设置该标志，避免把没有对应观察与查询故障混为一类。
+当前溢出载荷只有 DLE ID、中心路径与发生键，暂存还需要 DLE 提供 serial 和原始本地目录布局。
+因此查询失败时跳过这部分暂存，继续扫描本地输入并上传有效报表；顶层 `spill_unstaged`
+按载荷顺序列出全部未暂存的 `dle_id`，没有未暂存项时省略。查询成功时仍按原校验暂存溢出副本。
 报表条目用 `companion_file_key` 指向映射；映射在同一清单登记，`registerable=false`，
 类型为 `scan_occurrence_mapping`。xls 字节不改动。
 有效零行影子报表的条目额外带 `empty_receipt=true`，与 G2 的显式空回执判据对接；
@@ -51,6 +58,8 @@ watcher 的 PULL_FAILED 与当前 MTK LOCAL 兜底路径保持空 key，记录
 未通过改扫描工具参数或 xls 结构携带身份，避免改变工具契约。
 未使用发现时间或 inotify 路径替代设备历史原文。collector 将来能提供原文时，
 watcher 使用 G1 的唯一身份契约；当前缺少原文时沿用 fail-open。
+未在 DLE 查询故障时猜测溢出副本的 serial 或目录布局；按规划者裁定明确记录未暂存项，
+保留有效本地报表的上传路径。
 
 ## Verification
 
@@ -77,6 +86,11 @@ watcher 使用 G1 的唯一身份契约；当前缺少原文时沿用 fail-open�
 
 规划者核对 6619941312 后新增服务端按 run 过滤、limit 前过滤、参数缺省兼容、HTTP 错误、
 超时及无效响应反例；同时验证故障日志、映射标志和报表继续上传。该轮实际命令与最终结果随 PR 更新。
+
+针对[独立复核两项问题](https://github.com/DUElost/stability-test-platform/pull/3873#issuecomment-6621372528)
+新增四个反例：查询超时或 HTTP 错误且溢出输入非空时仍上传报表、逐条列出未暂存 ID；
+空或非空 spill-only 请求均拒绝入队。四例在修复前全部失败，修复后受影响三文件 81 passed。
+健康查询仍暂存溢出输入，且不出现 `spill_unstaged`；本轮全套检查结果见 PR。
 
 经 Owner 在本会话同意最小三文件 scope 后，`backend/agent/requirements.txt` 登记 `xlrd==2.0.2`，
 `tests/test_excel_dependency_inventory.py` 登记 `scan_scope.py` 的读取点，

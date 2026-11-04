@@ -98,6 +98,20 @@ def test_bad_round_payload_is_rejected_without_legacy_fallback(fields, caplog):
     assert "control_scan_now_invalid_round_payload" in caplog.text
 
 
+@pytest.mark.parametrize("spill_inputs", [
+    [],
+    [{"dle_id": "one", "remote_path": "/nfs/devices/7/one/event", "occurrence_key": "key"}],
+])
+def test_spill_inputs_without_fact_round_id_is_rejected(spill_inputs, caplog):
+    handle, _ = _handler()
+    caplog.set_level(logging.WARNING)
+    with patch("backend.agent.control_handler.ScanRunner.enqueue_scan_now") as enq:
+        ack = handle({"command": "scan_now", "payload": {"plan_run_id": 7, "spill_inputs": spill_inputs}})
+    assert ack == {"ok": False, "error": "invalid scan round payload"}
+    enq.assert_not_called()
+    assert "control_scan_now_invalid_round_payload" in caplog.text
+
+
 def test_reload_config_reapplies_runtime():
     handle, deps = _handler()
     with (

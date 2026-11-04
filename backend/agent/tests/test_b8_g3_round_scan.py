@@ -93,6 +93,7 @@ def test_spill_before_first_scan_remains_input_and_preserves_identity(campaign, 
     assert {r["occurrence_key"] for r in mapping["rows"]} == {ev["occurrence_key"]}
     assert {r["source"] for r in mapping["rows"]} == ({"local", "spill"} if keep_local else {"spill"})
     assert all(r["dle_id"] == "dle-1" for r in mapping["rows"])
+    assert "spill_unstaged" not in mapping
     assert "temporary_bytes=26" in caplog.text
     assert not list((hdd / ".stp-scan").iterdir())
     assert Path(ev["remote_path"]).is_dir()
@@ -199,6 +200,39 @@ def test_query_failure_is_visible_in_uploaded_mapping(campaign, monkeypatch, cap
     assert mapping["rows"][0]["mapped"] is False
     assert ("scan_mapping_events_unavailable" in caplog.text) is (failure is not None)
     assert get.call_args.kwargs["params"] == {"host_id": "host-1", "state": "", "plan_run_id": 42}
+
+
+@pytest.mark.parametrize("failure", ["timeout", "http"])
+def test_query_failure_with_spill_uploads_report_and_lists_unstaged_inputs(campaign, monkeypatch, caplog, failure):
+    runner, hdd, nfs, event, ev = campaign
+    monkeypatch.setenv("API_URL", "http://test")
+    monkeypatch.setenv("AGENT_SECRET", "test")
+    monkeypatch.setattr("backend.agent.scan_runner.load_scan_events", scan_scope.load_scan_events)
+    get = MagicMock(return_value=MagicMock(status_code=503))
+    if failure == "timeout":
+        get.side_effect = requests.Timeout()
+    monkeypatch.setattr("backend.agent.aee.device_log_event_client.requests.get", get)
+    spill_inputs = [
+        {"dle_id": ev["id"], "remote_path": ev["remote_path"], "occurrence_key": ev["occurrence_key"]},
+        {"dle_id": "dle-2", "remote_path": str(nfs / "devices/42/dle-2/event"), "occurrence_key": "other"},
+    ]
+    stage = MagicMock(wraps=stage_spill_inputs)
+    monkeypatch.setattr("backend.agent.scan_runner.stage_spill_inputs", stage)
+    caplog.set_level(logging.WARNING)
+    runner.run_scan_and_upload(42, "host-1", is_final=False, device_serials=["SER-A"],
+                               fact_round_id=7, spill_inputs=spill_inputs)
+
+    report = round_report_dir(nfs, 42, 7, "mtk") / "host-1_Result_test_org.xls"
+    assert report.is_file()
+    mapping = json.loads(Path(str(report) + ".mapping.json").read_text())
+    assert mapping["events_unavailable"] is True
+    assert mapping["spill_unstaged"] == ["dle-1", "dle-2"]
+    assert len(mapping["rows"]) == 1
+    assert mapping["rows"][0]["mapped"] is False
+    stage.assert_not_called()  # Serial and original local layout require the DLE list.
+    assert "scan_mapping_events_unavailable" in caplog.text
+    assert Path(ev["remote_path"]).is_dir()
+    assert not list((hdd / ".stp-scan").iterdir())
 
 
 @pytest.mark.parametrize("fact_round_id", [None, 7])
