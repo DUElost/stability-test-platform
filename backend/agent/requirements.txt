@@ -23,3 +23,6 @@ pydantic-settings>=2.15.0,<3.0
 # Scan-Result-GT declares python=null, so its .xls exporter runs in this venv.
 # A system python3-xlwt installation is not visible to the Agent interpreter.
 xlwt==1.3.0
+
+# B8 G3 validates existing .xls rows before upload; the report format is unchanged.
+xlrd==2.0.2

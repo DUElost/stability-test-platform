@@ -66,14 +66,14 @@ watcher 使用 G1 的唯一身份契约；当前缺少原文时沿用 fail-open�
 - `scripts/run_pytest.py backend/tests/api/test_agent_device_log_events.py backend/tests/services/test_agent_device_log_events.py -q`：
   testcontainers PostgreSQL，25 passed。
 - `scripts/run_pytest.py tests/ -q`：首轮 2426 passed / 18 skipped / 4 failed。
-  两项 import 棘轮与未跟踪载荷检查修复后，相关两文件复跑 15 passed；
-  剩余 Excel 使用面台账守卫仍失败，等待三文件 scope 批准。
+  import 棘轮、未跟踪载荷检查与 Excel 台账登记修复后，相关三文件复跑 17 passed；
+  最终完整根测试结果随 PR 记录。
 - 最新受影响 Agent 子集 102 passed；映射函数调整后单文件再跑 18 passed。
 
-交付前置（pending）：`backend/agent/requirements.txt` 登记 `xlrd==2.0.2`，
+经 Owner 在本会话同意最小三文件 scope 后，`backend/agent/requirements.txt` 登记 `xlrd==2.0.2`，
 `tests/test_excel_dependency_inventory.py` 登记 `scan_scope.py` 的读取点，
 `docs/notes/process/2026-09-20-dependency-convergence-739.md` 补充既定 xls 格式的使用理由。
-这三处超出原 scope，已向 Owner 申请；未获准前未修改。当前开发环境已有 xlrd 2.0.2，
+三处登记与本次读取点同步交付。当前开发环境已有 xlrd 2.0.2，
 干净 Agent 需要同步此依赖；缺库时拒绝未经校验的报表，不降级上传，也不阻止 Agent 导入。
 
 ## Revisit
