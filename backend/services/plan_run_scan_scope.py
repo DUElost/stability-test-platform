@@ -88,6 +88,24 @@ def load_plan_run_scan_scope(db: Session, plan_run_id: int) -> tuple[list[str], 
     return serials, stamps
 
 
+def load_plan_run_platform_serials(db: Session, plan_run_id: int, platform: str) -> list[str]:
+    """影子分区的串号子集；现行 scan_now 继续使用全 run 集合。"""
+    jobs = db.execute(
+        select(Device.serial, Device.platform)
+        .join(JobInstance, JobInstance.device_id == Device.id)
+        .where(JobInstance.plan_run_id == plan_run_id)
+    ).all()
+    targets = db.execute(
+        select(Device.serial, Device.platform)
+        .join(PlanRunTargetDevice, PlanRunTargetDevice.device_id == Device.id)
+        .where(PlanRunTargetDevice.plan_run_id == plan_run_id)
+    ).all()
+    return [s for s in _dedupe(
+        serial for serial, device_platform in (*jobs, *targets)
+        if dedup_platform_for_device_platform(device_platform) == platform
+    ) if _is_safe_serial(s)]
+
+
 def load_plan_run_scan_host_ids(db: Session, plan_run_id: int) -> list[str]:
     """Hosts that execute this PlanRun: jobs + prepare snapshot.
 
@@ -216,6 +234,8 @@ def build_scan_now_payload(
     host_id: str,  # noqa: ARG001 — Agent receiver; serials are PlanRun-wide
     *,
     is_final: bool = False,
+    fact_round_id: int | None = None,
+    spill_inputs: list[dict] | None = None,
 ) -> dict:
     """Same PlanRun-wide serial/stamp lists for every host.
 
@@ -223,12 +243,22 @@ def build_scan_now_payload(
     shrink the device list. Each Agent searches only its local HDD.
     """
     serials, stamps = load_plan_run_scan_scope(db, plan_run_id)
-    return {
+    payload = {
         "plan_run_id": plan_run_id,
         "is_final": is_final,
         "device_serials": serials,
         "run_date_stamps": stamps,
     }
+    # v1.9：仅影子调用显式传入；现行调用的键、顺序和值保持不变。
+    if fact_round_id is not None:
+        if type(fact_round_id) is not int or fact_round_id <= 0:
+            raise ValueError("fact_round_id must be a positive int")
+        payload["device_serials"] = load_plan_run_platform_serials(db, plan_run_id, "mtk")
+        payload["fact_round_id"] = fact_round_id
+        payload["spill_inputs"] = list(spill_inputs or [])
+    elif spill_inputs is not None:
+        raise ValueError("spill_inputs requires fact_round_id")
+    return payload
 
 
 def xls_row_matches_serials(

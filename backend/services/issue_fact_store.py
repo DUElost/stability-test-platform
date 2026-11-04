@@ -31,6 +31,7 @@ from backend.models.issue_fact import (
     ScanRound,
     SpillLedger,
 )
+from backend.models.device_log_event import DeviceLogEvent
 
 
 # 运行模式（ADR-0062 D13）。
@@ -325,6 +326,65 @@ def set_scan_round_status(
         row.closed_at = closed_at or row.closed_at or _utcnow()
     db.flush()
     return row
+
+
+def get_scan_round(db: Session, *, round_id: int) -> Optional[ScanRound]:
+    """G2 轮次推进读取必须持行锁；调用方先锁 PlanRun，再读轮次。"""
+    return db.execute(
+        select(ScanRound).where(ScanRound.id == round_id).with_for_update()
+        .execution_options(populate_existing=True),
+    ).scalar_one_or_none()
+
+
+def list_scan_rounds(
+    db: Session, *, plan_run_id: int, platform: str,
+) -> list[ScanRound]:
+    """按轮次号加锁读取分区；首轮创建由调用方的 PlanRun 行锁串行化。"""
+    return list(db.execute(
+        select(ScanRound).where(
+            ScanRound.plan_run_id == plan_run_id,
+            ScanRound.platform == platform,
+        ).order_by(ScanRound.round_no).with_for_update().execution_options(populate_existing=True),
+    ).scalars())
+
+
+def record_scan_round_coverage(
+    db: Session, *, round_id: int, coverage: Sequence[Dict[str, Any]],
+) -> ScanRound:
+    """只在开轮时更新既有期望项的覆盖；关闭后必须拒绝写入。"""
+    row = get_scan_round(db, round_id=round_id)
+    if row is None:
+        raise IssueFactError(f"scan_round {round_id} not found")
+    if row.status == SCAN_ROUND_STATUS_CLOSED:
+        raise ImmutableIssueFactError(f"scan_round {round_id} coverage is closed")
+    incoming = [(u["host_id"], u["platform"], u.get("expected", True)) for u in coverage]
+    original = [(u["host_id"], u["platform"], u.get("expected", True)) for u in row.expected_set]
+    if incoming != original:
+        raise ImmutableIssueFactError("scan_round expected identities are immutable")
+    for unit in coverage:
+        _require_one_of(unit["coverage"], frozenset({"RECEIVED", "EMPTY", "MISSING", "LATE"}), "coverage")
+    row.expected_set = [dict(unit) for unit in coverage]
+    db.flush()
+    return row
+
+
+def list_partition_spill_inputs(
+    db: Session, *, plan_run_id: int, platform: str, host_id: str,
+) -> list[Dict[str, Any]]:
+    """仅返回本分区、本 host 台账中仍在中心的已校验事件。"""
+    rows = db.execute(
+        select(DeviceLogEvent).join(SpillLedger, SpillLedger.dle_id == DeviceLogEvent.id).where(
+            SpillLedger.plan_run_id == plan_run_id,
+            func.lower(SpillLedger.platform) == platform.lower(),
+            DeviceLogEvent.plan_run_id == plan_run_id,
+            func.lower(DeviceLogEvent.platform) == platform.lower(),
+            DeviceLogEvent.host_id == host_id,
+            DeviceLogEvent.state.in_(["REMOTE", "ARCHIVED"]),
+            DeviceLogEvent.remote_path.isnot(None),
+            DeviceLogEvent.remote_path != "",
+        ).order_by(SpillLedger.id),
+    ).scalars()
+    return [{"dle_id": str(row.id), "remote_path": row.remote_path, "occurrence_key": row.occurrence_key} for row in rows]
 
 
 def record_representative_selection(

@@ -1,7 +1,11 @@
 """PlanRun scan_now payload is scoped to this run's devices."""
 
 from datetime import datetime, timezone
+import json
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
+
+import pytest
 
 from backend.agent.aee.paths import shanghai_mmdd
 from backend.models.enums import HostStatus, JobStatus
@@ -15,6 +19,44 @@ from backend.services.plan_run_scan_scope import (
     run_date_stamp_from_started_at,
     xls_row_matches_serials,
 )
+
+
+def test_only_shadow_payload_adds_fact_keys():
+    with patch("backend.services.plan_run_scan_scope.load_plan_run_scan_scope", return_value=(["sn"], ["1104"])), \
+         patch("backend.services.plan_run_scan_scope.load_plan_run_platform_serials", return_value=["sn"]):
+        current = build_scan_now_payload(None, 8, "host", is_final=True)
+        assert json.dumps(current) == json.dumps({
+            "plan_run_id": 8, "is_final": True,
+            "device_serials": ["sn"], "run_date_stamps": ["1104"],
+        })
+        spill = [{"dle_id": "event", "remote_path": "/center/devices/8/event", "occurrence_key": "a" * 64}]
+        shadow = build_scan_now_payload(None, 8, "host", is_final=True, fact_round_id=12, spill_inputs=spill)
+        assert shadow == {**current, "fact_round_id": 12, "spill_inputs": spill}
+        assert build_scan_now_payload(None, 8, "host", fact_round_id=13)["spill_inputs"] == []
+        with pytest.raises(ValueError):
+            build_scan_now_payload(None, 8, "host", spill_inputs=[])
+
+
+def test_shadow_serials_are_mtk_partition_only_while_current_keeps_mixed_run(
+    db_session, sample_plan_run, sample_plan, sample_device, sample_host,
+):
+    sample_device.platform = "MTK"
+    unisoc = Device(serial="sprd-shadow-excluded", host_id=sample_host.id, status="ONLINE", platform="UNISOC")
+    db_session.add(unisoc)
+    db_session.flush()
+    for device in [sample_device, unisoc]:
+        db_session.add(JobInstance(
+            plan_run_id=sample_plan_run.id, plan_id=sample_plan.id,
+            device_id=device.id, host_id=sample_host.id, status=JobStatus.COMPLETED.value,
+            pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+            started_at=datetime.now(timezone.utc),
+        ))
+    db_session.commit()
+    current = build_scan_now_payload(db_session, sample_plan_run.id, sample_host.id)
+    shadow = build_scan_now_payload(db_session, sample_plan_run.id, sample_host.id, fact_round_id=7)
+    assert set(current["device_serials"]) == {sample_device.serial, unisoc.serial}
+    assert shadow["device_serials"] == [sample_device.serial]
+    assert set(current) == {"plan_run_id", "is_final", "device_serials", "run_date_stamps"}
 
 
 def test_run_date_stamp_uses_shanghai_mmdd():
