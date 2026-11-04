@@ -75,6 +75,10 @@ def test_spill_inputs_are_checked_and_partition_host_scoped(db_session, sample_h
         ("MTK", "LOCAL", None, run.id),
         ("MTK", "PRUNED", "/center/devices/pruned", run.id),
         ("MTK", "REMOTE", "/center/devices/another", another.id),
+        ("MTK", "PRUNED", None, run.id),
+        ("MTK", "PRUNED", "", run.id),
+        ("MTK", "PRUNED", "/center/devices/pruned-other-run", another.id),
+        ("MTK", "PRUNED", "/center/devices/pruned-without-ledger", None),
     ]):
         event = DeviceLogEvent(
             serial=f"spill-{index}", platform=platform, event_type="JE", state=state,
@@ -83,11 +87,12 @@ def test_spill_inputs_are_checked_and_partition_host_scoped(db_session, sample_h
         )
         db_session.add(event)
         db_session.flush()
-        store.record_spill_ledger_entry(db_session, plan_run_id=ledger_run, platform=platform, dle_id=event.id, size_bytes=10, spilled_at=datetime.now(timezone.utc))
+        if ledger_run is not None:
+            store.record_spill_ledger_entry(db_session, plan_run_id=ledger_run, platform=platform, dle_id=event.id, size_bytes=10, spilled_at=datetime.now(timezone.utc))
         entries.append(event)
     assert store.list_partition_spill_inputs(db_session, plan_run_id=run.id, platform="mtk", host_id=sample_host.id) == [{
-        "dle_id": str(entries[0].id), "remote_path": entries[0].remote_path, "occurrence_key": "a" * 64,
-    }]
+        "dle_id": str(event.id), "remote_path": event.remote_path, "occurrence_key": "a" * 64,
+    } for event in [entries[0], entries[3]]]
     assert store.list_partition_spill_inputs(db_session, plan_run_id=run.id, platform="mtk", host_id="other-host") == []
 
 

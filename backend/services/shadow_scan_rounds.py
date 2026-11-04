@@ -19,6 +19,7 @@ from backend.core.task_queue import enqueue_sync
 from backend.models.enums import PlanRunStatus
 from backend.models.plan_run import PlanRun
 from backend.services import issue_fact_store as facts
+from backend.services.dedup_scan import _SCAN_TASK_SAQ_TIMEOUT
 from backend.services.plan_run_scan_scope import (
     build_scan_now_payload,
     iter_plan_run_scan_hosts,
@@ -43,6 +44,15 @@ _TERMINAL = {
     PlanRunStatus.FAILED.value,
 }
 _PLATFORM = "mtk"
+
+
+def _dispatch_due(unit, now):
+    if not unit.get("expected", True) or unit["coverage"] in _COVERED:
+        return False
+    last_sent = unit.get("last_dispatched_at")
+    return last_sent is None or now >= datetime.fromisoformat(last_sent) + timedelta(
+        seconds=_SCAN_TASK_SAQ_TIMEOUT
+    )
 
 
 def _locked_run(db, plan_run_id):
@@ -104,7 +114,7 @@ def _late_inputs(rounds, root):
 
 
 def _new_round(db, run_id, rounds, units, kind, now, wait, *, carried=()):
-    coverage = [{**u, "coverage": COVERAGE_MISSING} for u in units]
+    coverage = [{"host_id": u["host_id"], "platform": u["platform"], "coverage": COVERAGE_MISSING} for u in units]
     by_host = {u["host_id"]: u for u in coverage}
     for report in carried:
         host = report["host_id"]
@@ -142,6 +152,9 @@ def _advance_run(db, run_id, root, now, settings):
     if run is None:
         return []
     rounds = facts.list_scan_rounds(db, plan_run_id=run_id, platform=_PLATFORM)
+    # 候选收集后可能已进入终态；未在 RUNNING 时建立影子轮的分区不启动。
+    if run.status != PlanRunStatus.RUNNING.value and not rounds:
+        return []
     units = _expected_units(db, run_id)
     if not units and not rounds:
         return []
@@ -212,6 +225,7 @@ def _advance_run(db, run_id, root, now, settings):
         (r.id, r.kind != facts.SCAN_ROUND_KIND_PERIODIC)
         for r in rounds
         if r.status != facts.SCAN_ROUND_STATUS_CLOSED
+        and any(_dispatch_due(unit, now) for unit in r.expected_set)
     ]
 
 
@@ -226,14 +240,8 @@ def sweep_shadow_scan_rounds(*, now=None):
         return
     now = now or datetime.now(timezone.utc)
     with SessionLocal() as db:
-        run_ids = list(
-            db.execute(
-                select(PlanRun.id)
-                .where(PlanRun.status.in_([PlanRunStatus.RUNNING.value, *_TERMINAL]))
-                .order_by(PlanRun.id)
-            ).scalars()
-        )
-    for run_id in run_ids:
+        run_ids = facts.list_shadow_scan_run_ids(db, platform=_PLATFORM)
+    for run_id in sorted(run_ids):
         try:
             with SessionLocal() as db:
                 pending = _advance_run(db, run_id, root, now, settings)
@@ -244,7 +252,7 @@ def sweep_shadow_scan_rounds(*, now=None):
                 enqueue_sync(
                     "scan_task",
                     key=f"scan:shadow:{run_id}:{round_id}:{tick}",
-                    timeout=2400,
+                    timeout=_SCAN_TASK_SAQ_TIMEOUT,
                     retries=2,
                     required=True,
                     plan_run_id=run_id,
@@ -278,15 +286,17 @@ def prepare_shadow_scan(plan_run_id, fact_round_id):
         facts.record_partition_mode(
             db, plan_run_id=plan_run_id, platform=_PLATFORM, mode=facts.PARTITION_MODE_CURRENT
         )
-        _refresh_round(db, row, root, datetime.now(timezone.utc))
+        now = datetime.now(timezone.utc)
+        _refresh_round(db, row, root, now)
         if row.status == facts.SCAN_ROUND_STATUS_CLOSED:
             db.commit()
             return []
         targets = {
             u["host_id"]
             for u in row.expected_set
-            if u.get("expected", True) and u["coverage"] not in _COVERED
+            if _dispatch_due(u, now)
         }
+        coverage = [dict(unit) for unit in row.expected_set]
         payloads = []
         for host, status, retired in iter_plan_run_scan_hosts(db, plan_run_id):
             if host in targets and status == "ONLINE" and not retired:
@@ -303,8 +313,15 @@ def prepare_shadow_scan(plan_run_id, fact_round_id):
                 )
                 if payload["device_serials"]:
                     payloads.append((host, payload))
+                    for unit in coverage:
+                        if unit["host_id"] == host:
+                            unit["last_dispatched_at"] = now.isoformat()
                 else:
                     logger.warning("shadow_scan_no_partition_serials round=%d host=%s", row.id, host)
+        if payloads:
+            # 行锁内先保留下发时间，再由 scan_task 发出命令；并行任务不能重复下发。
+            # 提交后若执行中断，超过现行 scan_task 超时后恢复。
+            facts.record_scan_round_coverage(db, round_id=row.id, coverage=coverage)
         facts.set_scan_round_status(db, round_id=row.id, status=facts.SCAN_ROUND_STATUS_RUNNING)
         db.commit()
         return payloads

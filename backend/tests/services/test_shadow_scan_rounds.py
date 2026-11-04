@@ -220,6 +220,10 @@ def _rows(factory, run_id):
         return facts.list_scan_rounds(db, plan_run_id=run_id, platform="mtk")
 
 
+def _delivery_rounds(factory, run_id):
+    return [r for r in _rows(factory, run_id) if r.kind != facts.SCAN_ROUND_KIND_PERIODIC]
+
+
 def _receipt(root, run_id, round_id, host, *, empty=True):
     entry = {"fact_round_id": round_id, "platform": "mtk", "empty_receipt": empty}
     if not empty:
@@ -242,6 +246,121 @@ def _receipt(root, run_id, round_id, host, *, empty=True):
     )
 
 
+def _observe_running_run(shadow_env):
+    factory, run_id, root, queued, _settings = shadow_env
+    now = datetime.now(timezone.utc)
+    shadow.sweep_shadow_scan_rounds(now=now)
+    periodic = _rows(factory, run_id)[0]
+    for unit in periodic.expected_set:
+        _receipt(root, run_id, periodic.id, unit["host_id"])
+    shadow.sweep_shadow_scan_rounds(now=now + timedelta(seconds=1))
+    assert _rows(factory, run_id)[0].status == facts.SCAN_ROUND_STATUS_CLOSED
+    queued.reset_mock()
+
+
+@pytest.mark.parametrize("status", ["SUCCESS", "PARTIAL_SUCCESS", "FAILED"])
+def test_first_shadow_sweep_skips_unobserved_terminal_runs(shadow_env, monkeypatch, status):
+    factory, run_id, _root, queued, _settings = shadow_env
+    with factory() as db:
+        db.get(shadow.PlanRun, run_id).status = status
+        db.commit()
+    advance = Mock(wraps=shadow._advance_run)
+    monkeypatch.setattr(shadow, "_advance_run", advance)
+    shadow.sweep_shadow_scan_rounds()
+    assert _rows(factory, run_id) == []
+    with factory() as db:
+        assert facts.get_partition_mode(db, plan_run_id=run_id, platform="mtk") is None
+    queued.assert_not_called()
+    advance.assert_not_called()
+
+
+def test_run_ending_before_first_locked_observation_is_skipped(shadow_env, monkeypatch):
+    factory, run_id, _root, queued, _settings = shadow_env
+    locked_run = shadow._locked_run
+
+    def end_before_observation(db, candidate_id):
+        row = locked_run(db, candidate_id)
+        row.status = "SUCCESS"
+        db.flush()
+        return row
+
+    monkeypatch.setattr(shadow, "_locked_run", end_before_observation)
+    shadow.sweep_shadow_scan_rounds()
+    assert _rows(factory, run_id) == []
+    with factory() as db:
+        assert facts.get_partition_mode(db, plan_run_id=run_id, platform="mtk") is None
+    queued.assert_not_called()
+
+
+def test_another_platforms_round_does_not_admit_unobserved_mtk_terminal(shadow_env):
+    factory, run_id, _root, queued, _settings = shadow_env
+    with factory() as db:
+        db.get(shadow.PlanRun, run_id).status = "SUCCESS"
+        facts.record_scan_round(
+            db, plan_run_id=run_id, platform="unisoc", round_no=1,
+            kind=facts.SCAN_ROUND_KIND_PERIODIC, expected_set=[],
+            input_cutoff_at=datetime.now(timezone.utc) + timedelta(hours=2),
+        )
+        db.commit()
+    shadow.sweep_shadow_scan_rounds()
+    assert _rows(factory, run_id) == []
+    with factory() as db:
+        assert facts.get_partition_mode(db, plan_run_id=run_id, platform="mtk") is None
+    queued.assert_not_called()
+
+
+def _single_host_round(shadow_env, monkeypatch):
+    factory, run_id, _root, _queued, _settings = shadow_env
+    monkeypatch.setattr(shadow, "_expected_units", lambda *_args: [{"host_id": "host-a", "platform": "mtk"}])
+    monkeypatch.setattr(shadow, "iter_plan_run_scan_hosts", lambda *_args: [("host-a", "ONLINE", False)])
+    monkeypatch.setattr(shadow, "build_scan_now_payload", lambda _db, run_id, _host, **kwargs: {
+        "plan_run_id": run_id, "device_serials": ["mtk-serial"], **kwargs,
+    })
+    now = datetime.now(timezone.utc)
+    shadow.sweep_shadow_scan_rounds(now=now)
+    return _rows(factory, run_id)[0], now
+
+
+def test_same_round_host_is_dispatched_once_until_scan_timeout(shadow_env, monkeypatch):
+    factory, run_id, root, _queued, _settings = shadow_env
+    row, now = _single_host_round(shadow_env, monkeypatch)
+    clock = Mock(wraps=datetime)
+    clock.now.return_value = now
+    monkeypatch.setattr(shadow, "datetime", clock)
+    assert len(shadow.prepare_shadow_scan(run_id, row.id)) == 1
+    clock.now.return_value = now + timedelta(seconds=120)
+    assert shadow.prepare_shadow_scan(run_id, row.id) == []
+    clock.now.return_value = now + timedelta(seconds=dedup_scan._SCAN_TASK_SAQ_TIMEOUT + 1)
+    assert len(shadow.prepare_shadow_scan(run_id, row.id)) == 1
+    assert _rows(factory, run_id)[0].expected_set[0]["last_dispatched_at"] == clock.now.return_value.isoformat()
+    _receipt(root, run_id, row.id, "host-a")
+    clock.now.return_value = now + timedelta(seconds=2 * dedup_scan._SCAN_TASK_SAQ_TIMEOUT + 2)
+    assert shadow.prepare_shadow_scan(run_id, row.id) == []
+
+
+def test_inflight_round_is_not_enqueued_at_every_check(shadow_env, monkeypatch):
+    _factory, run_id, _root, queued, _settings = shadow_env
+    row, now = _single_host_round(shadow_env, monkeypatch)
+    assert len(shadow.prepare_shadow_scan(run_id, row.id)) == 1
+    queued.reset_mock()
+    shadow.sweep_shadow_scan_rounds(now=now + timedelta(seconds=120))
+    queued.assert_not_called()
+    shadow.sweep_shadow_scan_rounds(now=now + timedelta(seconds=dedup_scan._SCAN_TASK_SAQ_TIMEOUT + 1))
+    queued.assert_called_once()
+    assert queued.call_args.kwargs["fact_round_id"] == row.id
+
+
+def test_parallel_tasks_reserve_one_dispatch_per_round_host(shadow_env, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+
+    _factory, run_id, _root, _queued, _settings = shadow_env
+    row, _now = _single_host_round(shadow_env, monkeypatch)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(shadow.prepare_shadow_scan, run_id, row.id) for _ in range(2)]
+        payloads = [future.result(timeout=10) for future in futures]
+    assert sum(len(batch) for batch in payloads) == 1
+
+
 def test_periodic_round_uses_independent_period_and_records_mode(shadow_env):
     factory, run_id, _root, queued, settings = shadow_env
     now = datetime.now(timezone.utc)
@@ -262,6 +381,7 @@ def test_periodic_round_uses_independent_period_and_records_mode(shadow_env):
 
 def test_final_round_persists_after_queue_failure_and_requeues_each_check(shadow_env):
     factory, run_id, _root, queued, _settings = shadow_env
+    _observe_running_run(shadow_env)
     with factory() as db:
         run = db.get(shadow.PlanRun, run_id)
         run.status = "FAILED"
@@ -269,33 +389,35 @@ def test_final_round_persists_after_queue_failure_and_requeues_each_check(shadow
     queued.side_effect = RuntimeError("queue unavailable")
     now = datetime.now(timezone.utc)
     shadow.sweep_shadow_scan_rounds(now=now)
-    row = _rows(factory, run_id)[0]
+    row = _delivery_rounds(factory, run_id)[0]
     assert row.kind == facts.SCAN_ROUND_KIND_FINAL
     assert row.status == facts.SCAN_ROUND_STATUS_PENDING
+    assert all("last_dispatched_at" not in unit for unit in row.expected_set)
     queued.side_effect = None
     shadow.sweep_shadow_scan_rounds(now=now + timedelta(seconds=120))
-    assert [r.id for r in _rows(factory, run_id)] == [row.id]
+    assert [r.id for r in _delivery_rounds(factory, run_id)] == [row.id]
     assert queued.call_count == 2
     assert queued.call_args.kwargs["fact_round_id"] == row.id
 
 
 def test_final_partial_close_then_late_report_goes_to_persisted_supplement(shadow_env):
     factory, run_id, root, queued, _settings = shadow_env
+    _observe_running_run(shadow_env)
     with factory() as db:
         db.get(shadow.PlanRun, run_id).status = "SUCCESS"
         db.commit()
     now = datetime.now(timezone.utc)
     shadow.sweep_shadow_scan_rounds(now=now)
-    final = _rows(factory, run_id)[0]
+    final = _delivery_rounds(factory, run_id)[0]
     _receipt(root, run_id, final.id, "host-a")
     shadow.sweep_shadow_scan_rounds(now=now + timedelta(minutes=1))
     shadow.sweep_shadow_scan_rounds(now=final.input_cutoff_at)
-    final = _rows(factory, run_id)[0]
+    final = _delivery_rounds(factory, run_id)[0]
     assert final.status == "CLOSED"
     assert [u["coverage"] for u in final.expected_set] == ["EMPTY", "MISSING"]
     _receipt(root, run_id, final.id, "offline", empty=False)
     shadow.sweep_shadow_scan_rounds(now=final.input_cutoff_at + timedelta(seconds=120))
-    final_again, supplement = _rows(factory, run_id)
+    final_again, supplement = _delivery_rounds(factory, run_id)
     assert final_again.expected_set == final.expected_set
     assert supplement.kind == facts.SCAN_ROUND_KIND_SUPPLEMENT
     assert [u["host_id"] for u in supplement.expected_set if u.get("expected", True)] == ["offline"]
@@ -304,7 +426,7 @@ def test_final_partial_close_then_late_report_goes_to_persisted_supplement(shado
     assert supplement.status == "CLOSED"
     assert round_report_dir(str(root), run_id, final.id, "mtk").is_dir()
     shadow.sweep_shadow_scan_rounds(now=final.input_cutoff_at + timedelta(seconds=240))
-    assert len(_rows(factory, run_id)) == 2
+    assert len(_delivery_rounds(factory, run_id)) == 2
 
 
 def test_disabled_shadow_has_no_database_or_queue_actions(monkeypatch):
@@ -320,6 +442,7 @@ def test_concurrent_sweeps_create_only_one_final_round(shadow_env):
     from concurrent.futures import ThreadPoolExecutor
 
     factory, run_id, _root, _queued, _settings = shadow_env
+    _observe_running_run(shadow_env)
     with factory() as db:
         db.get(shadow.PlanRun, run_id).status = "SUCCESS"
         db.commit()
@@ -328,7 +451,7 @@ def test_concurrent_sweeps_create_only_one_final_round(shadow_env):
         futures = [pool.submit(shadow.sweep_shadow_scan_rounds, now=now) for _ in range(2)]
         for future in futures:
             future.result(timeout=10)
-    rows = _rows(factory, run_id)
+    rows = _delivery_rounds(factory, run_id)
     assert len(rows) == 1
     assert rows[0].kind == "FINAL"
 
@@ -339,12 +462,13 @@ def test_supplement_retries_and_never_claims_another_closed_round_as_its_own(
     factory, run_id, root, queued, _settings = shadow_env
     units = [{"host_id": h, "platform": "mtk"} for h in ["host-a", "host-b", "host-c"]]
     monkeypatch.setattr(shadow, "_expected_units", lambda *_args: units)
+    _observe_running_run(shadow_env)
     with factory() as db:
         db.get(shadow.PlanRun, run_id).status = "PARTIAL_SUCCESS"
         db.commit()
     now = datetime.now(timezone.utc)
     shadow.sweep_shadow_scan_rounds(now=now)
-    final = _rows(factory, run_id)[0]
+    final = _delivery_rounds(factory, run_id)[0]
     _receipt(root, run_id, final.id, "host-a")
     shadow.sweep_shadow_scan_rounds(now=now + timedelta(seconds=120))
     shadow.sweep_shadow_scan_rounds(now=final.input_cutoff_at)
@@ -352,20 +476,20 @@ def test_supplement_retries_and_never_claims_another_closed_round_as_its_own(
     queued.side_effect = RuntimeError("queue unavailable")
     later = final.input_cutoff_at + timedelta(seconds=120)
     shadow.sweep_shadow_scan_rounds(now=later)
-    final_again, supplement = _rows(factory, run_id)
+    final_again, supplement = _delivery_rounds(factory, run_id)
     assert supplement.status == "PENDING"
     assert [u["coverage"] for u in supplement.expected_set] == ["EMPTY", "MISSING"]
     _receipt(root, run_id, final.id, "host-c", empty=False)
     queued.side_effect = None
     shadow.sweep_shadow_scan_rounds(now=later + timedelta(seconds=120))
     assert queued.call_args.kwargs["fact_round_id"] == supplement.id
-    current = _rows(factory, run_id)[1]
+    current = _delivery_rounds(factory, run_id)[1]
     assert current.expected_set[1]["coverage"] == "MISSING"
     assert all("reports" not in u for u in final_again.expected_set if u["host_id"] != "host-a")
     # 在补充轮截止前到达旧轮命名空间，仍不能冒充当前轮；关闭后另开补充轮。
     shadow.sweep_shadow_scan_rounds(now=current.input_cutoff_at)
     shadow.sweep_shadow_scan_rounds(now=current.input_cutoff_at + timedelta(seconds=120))
-    rows = _rows(factory, run_id)
+    rows = _delivery_rounds(factory, run_id)
     assert len(rows) == 3
     assert rows[2].expected_set[0]["host_id"] == "host-c"
     assert rows[2].expected_set[0]["reports"][0]["fact_round_id"] == final.id

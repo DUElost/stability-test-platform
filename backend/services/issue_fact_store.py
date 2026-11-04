@@ -18,7 +18,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Sequence
 
-from sqlalchemy import String, cast, distinct, func, select
+from sqlalchemy import String, cast, distinct, func, or_, select
 from sqlalchemy.orm import Session
 
 from backend.models.issue_fact import (
@@ -32,6 +32,7 @@ from backend.models.issue_fact import (
     SpillLedger,
 )
 from backend.models.device_log_event import DeviceLogEvent
+from backend.models.plan_run import PlanRun
 
 
 # 运行模式（ADR-0062 D13）。
@@ -348,6 +349,23 @@ def list_scan_rounds(
     ).scalars())
 
 
+def list_shadow_scan_run_ids(db: Session, *, platform: str) -> list[int]:
+    """6619768806：发现 RUNNING 与已观察分区的终态 run，不追溯历史。
+
+    EXISTS 只作候选发现；推进前仍按 PlanRun → scan_round 加锁复核。
+    """
+    observed = select(ScanRound.id).where(
+        ScanRound.plan_run_id == PlanRun.id,
+        ScanRound.platform == platform,
+    ).exists()
+    return list(db.execute(
+        select(PlanRun.id).where(or_(
+            PlanRun.status == "RUNNING",
+            (PlanRun.status.in_(["SUCCESS", "PARTIAL_SUCCESS", "FAILED"]) & observed),
+        )).order_by(PlanRun.id),
+    ).scalars())
+
+
 def record_scan_round_coverage(
     db: Session, *, round_id: int, coverage: Sequence[Dict[str, Any]],
 ) -> ScanRound:
@@ -379,7 +397,7 @@ def list_partition_spill_inputs(
             DeviceLogEvent.plan_run_id == plan_run_id,
             func.lower(DeviceLogEvent.platform) == platform.lower(),
             DeviceLogEvent.host_id == host_id,
-            DeviceLogEvent.state.in_(["REMOTE", "ARCHIVED"]),
+            DeviceLogEvent.state.in_(["REMOTE", "ARCHIVED", "PRUNED"]),
             DeviceLogEvent.remote_path.isnot(None),
             DeviceLogEvent.remote_path != "",
         ).order_by(SpillLedger.id),
