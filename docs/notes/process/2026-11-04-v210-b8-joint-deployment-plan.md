@@ -13,7 +13,7 @@ v1.1 按用户本轮预检选择“双版本 venv + 生产 pkglist”，取代�
 上游导出与 release.json 保持原样，部署副本单列配置覆盖与运行环境身份。
 包模式检查是此方案的适用条件，工具包登记与迁移作为退出 env 过渡入口的终态。
 计划区分工具成员关系文件与 G3 发生映射，记录当前上传接入缺口及 G4/G5、#3875 的激活边界。
-PR #3880 的 lint 修订仅将部署报告的完整主机标识和设备串号脱敏，保留越界归属、金丝雀失败与回退结论。
+PR #3880 的 CI 修订将部署报告的完整主机标识和设备串号脱敏，并将 members 校验写成明确的 org 数据行映射记录；保留原始验证数量、越界归属、金丝雀失败与回退结论。
 没有修改批次规格、ADR、发布物、生产配置或业务事实。
 
 ## Alternatives
@@ -46,6 +46,13 @@ PR #3880 的 lint 失败可由 `tools/dev/check-internal-ip-leak.py` 在修改�
 本轮另行运行资产脱敏门禁，不修改门禁规则或白名单。
 修订后 `./scripts/project_python.sh tools/dev/check-internal-ip-leak.py --check` 通过（4069 个文件）；
 相同 `check:quick` 命令再次通过 16 gates，schema-at-head 仍明确跳过；`git diff --check` 通过。
+
+同一旧 head 的 `pr-agent-tests` 中，Agent 测试为 3064 passed；根测试将报告的
+“8/8 全覆盖”识别为告警覆盖率陈述，导致 `tests/test_alert_count_claims_are_live.py`
+失败。本地通过内存保护 runner 复现后，将该句改为“本次 fixture 的 8 条 org 数据行均有对应的成员映射”，
+不改变告警守卫或测试规则。
+实际命令为 `env -i PATH="$PATH" PYTHONPATH=. ./scripts/project_python.sh scripts/run_pytest.py tests/test_alert_count_claims_are_live.py -q`：
+修改前 1 failed / 7 passed，修改后 8 passed；runner 核实 6 GiB / swap=0 内存边界。
 
 ## Revisit
 

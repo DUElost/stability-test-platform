@@ -49,7 +49,7 @@
 - 工具自带测试：`84 passed, 1 skipped`（用 Python 3.13 + xlrd/xlwt/PyMySQL）。
 - CLI：`-h` 含 `-merge_files_list`、`-match_issues`、`-dedup_org`、`-inc`；`-match_issues` 成功匹配 I1 / 新组 n1，非法输入 exit 2。
 - `-dedup_org`：旧/新工具在同一 `_org.xls` 上的 xls 输出字节一致；新工具额外生成 `*_members.json`。
-- members 校验：schema `stp.scan_membership` 1.0；org 行 8/8 全覆盖；`path` 与 `aeeexp` 表 Path 原文一致；org 报表 sha256 一致；`meta.tool.git_commit=9a1fdab…`、`git_dirty=false`。
+- members 校验：schema `stp.scan_membership` 1.0；本次 fixture 的 8 条 org 数据行均有对应的成员映射；`path` 与 `aeeexp` 表 Path 原文一致；org 报表 sha256 一致；`meta.tool.git_commit=9a1fdab…`、`git_dirty=false`。
 - Run 1193 离线对照（12 个 MTK org 文件、161 条原始记录、生产 pkglist；两侧均在干净临时目录运行）：
   - 旧工具：14 个问题（MLD-NX2-16-261027V56），7 JE + 6 ANR + 1 other；`Result_MergeFiles.xls` sha256 `a06be9b2…`，Count 合计 143。
   - 新工具（含 `tools/`，新 3.13 venv）：14 个问题（MLD-NX2-16-261027V56），`Result_MergeFiles.xls` sha256 `a06be9b2…`，Count 合计 143，与旧工具**逐字节一致**。
