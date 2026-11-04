@@ -1,10 +1,10 @@
 # Start-Log-Scan v2.1.0 与 B8 G2/G3 联合部署计划
 
-> 状态：待执行的部署计划 v1.0；本文不代表生产部署授权或验收通过。
+> 状态：待执行的部署计划 v1.1；本文不代表生产部署授权或验收通过。
 > 最后更新：2026-11-04（Asia/Shanghai）。
 > 范围：扫描工具 v2.1.0、控制面 G2、Agent G3；B8 当前上传模式保持 CURRENT。
 
-本次建议在同一维护窗口内完成工具换版与 G2/G3 部署，顺序为：备料与离线兼容验证 → 控制面切换（影子关闭）→ 单台 Agent 金丝雀 → 机队滚动更新 → 现行链路验收。影子运行另设激活门禁。本次结束时，`STP_SCAN_ROUND_SHADOW_ENABLED=0`。
+本次建议在同一维护窗口内完成工具换版与 G2/G3 部署，顺序为：备料与离线兼容验证 → 控制面切换（影子关闭）→ Python 3.10/3.13 各一台 Agent 金丝雀 → 机队滚动更新 → 现行链路验收。影子运行另设激活门禁。本次结束时，`STP_SCAN_ROUND_SHADOW_ENABLED=0`。
 
 ## 1. 基线与本次交付边界
 
@@ -32,14 +32,24 @@ STP_AGENT_DEDUP_SCAN_SCRIPT=/mnt/stp-aee/tools/Start-Log-Scan/start_log_scan.py
 STP_AGENT_PIP_INDEX_URL=https://pypi.org/simple
 ```
 
-本次建议采用最小换版方案：从 tag 导出源码，落到新的独立版本目录，只切换两个 `_SCRIPT`，沿用现行解释器并通过 §3 的两侧验证后放行。建议落点如下；执行者必须先核对目录不存在，再冻结实际路径：
+本次选择“**双版本 venv + 生产 pkglist**”，取代 v1.0 的仅切 `_SCRIPT` 方案。用户本轮预检反馈如下，属于外部提供的执行证据，本计划作者尚未独立复跑：
+
+- 17 台 Ubuntu 22.04 主机使用 Python 3.10，而共享工具 venv 只有 3.13 site-packages，工具解释器无法导入 xlrd。
+- 新导出的 `config/pkglist.txt` 为 406 行，生产配置为 5149 行；同一批 Run 1193 输入的结果从生产基线的 14 个问题变成 34 个，且混入错误项目。
+- 15.33 已验证 Python 3.10 可运行 v2.1.0；使用生产 pkglist 的离线 merge 与现行结果逐字节一致。这是单机/指定输入的证据，不代表 17 台均已通过。
+
+发布者必须在新版本目录准备 3.13/3.10 两套匹配的运行依赖，并冻结对应解释器入口；执行者必须同时切换控制面和 Agent 源键的 `_PYTHON` 与 `_SCRIPT`。共享入口必须在两类主机上分别验证实际 Python 版本、模块加载位置与可运行性；仅存在两个 site-packages 目录不算通过。建议脚本落点如下；执行者必须先核对目录不存在，再冻结实际路径与解释器路径：
 
 ```text
 控制面：/home/debian13/start-log-scan-releases/2.1.0/start_log_scan.py
 Agent： /mnt/stp-aee/tools/Start-Log-Scan-releases/2.1.0/start_log_scan.py
 ```
 
-发布者不得覆盖旧工具目录或已发布包。发布者必须保留新目录中的 `release.json`，并逐项验证 `files_sha256`、version、tag、git_commit 与 `git_dirty=false`。解释器环境的 Python、xlrd、xlwt、pymysql 版本另外记录；`release.json` 的源码哈希不证明依赖环境一致。
+发布者必须在未发布的部署副本中仅用已冻结的生产 `config/pkglist.txt` 替换同名配置，不引入其他配置覆盖。部署者必须冻结生产配置的来源、5149 行快照的 SHA-256 与生效副本 SHA-256；行数仅用于辅助辨认，哈希才是本次配置身份。
+
+发布者不得覆盖旧工具目录或已发布包。发布者必须原样保留上游 tag 导出的源码与 `release.json`，先逐项验证 `files_sha256`、version、tag、git_commit 与 `git_dirty=false`，再制作独立的部署副本。部署副本中的生产 pkglist 覆盖与两套运行环境必须另列部署清单，记录上游 release 哈希、覆盖前后 pkglist 哈希、Python 与依赖版本及部署物料摘要。发布者不得改写上游 `release.json` 来掩盖配置差异，也不得把部署副本整体宣称为未改动的 tag 导出；除已登记的 pkglist 覆盖外，受管源码哈希必须一致。
+
+发布者必须预先验证“旧工具代码 + 生产 pkglist + 对应 Python 版本运行环境”的回退组合。旧共享 venv 已知在 3.10 主机导入失败，执行者不得把恢复该路径视为这 17 台主机的有效回退；如果复用新双版本运行环境承载旧代码，发布者必须先完成同一离线对照。
 
 这是沿用现行 env 入口的过渡部署，终态出口是由工具发布单元完成不可变包登记与显式版本引用，再退出 env 回退。该迁移不与本次换版混做。当前 main 的 `Start-Log-Scan` manifest 只有 `2026.09.22`，没有 `2.1.0`；执行者不得直接填写尚未登记的包引用。
 
@@ -63,14 +73,14 @@ Agent： /mnt/stp-aee/tools/Start-Log-Scan-releases/2.1.0/start_log_scan.py
 
 1. 读取生产 manifest 的 `source.revision`、`readlink -f /home/debian13/stp-releases/current` 和 `/health`，记录窗口基线。
 2. 读取最新 #3800 正文与补充、相关开放 PR 和独立复核结论，列出 `BASE..TARGET` 内全部批次。标题带 `[批次 B8]` 也计入；不得只依赖旧 SOP 的 `startswith("批次 B")` 过滤器。
-3. 冻结 `TARGET`、工具 tag/commit、两个新工具路径、旧路径、Agent 期望 code digest 和回退 bundle。
+3. 冻结 `TARGET`、工具 tag/commit、两侧新旧 `_PYTHON`/`_SCRIPT` 路径、双版本依赖、生产 pkglist 哈希、Agent 期望 code digest 和回退 bundle。
 4. 若目标新增其他批次、迁移或未满足的 `DO-NOT-SWITCH.txt` 条件，停止本次放行并交 Owner 裁定。
 5. 通过主机分页 API 读取全部未退役 Agent 的状态，再用 `GET /api/v1/hosts/{id}` 的 `active_job_count` 选择空闲金丝雀。记录 fleet 分母、离线项、忙碌项与版本分布。不得把历史的 77 台当成本次固定分母；不得用列表接口恒空的 `active_jobs` 判断忙闲。
 6. 逐台检查实际工具解析路径、包引用、Python 与依赖；在控制面和 Agent 上核对 `/mnt/stp-log` 挂载及可用空间。挂载探针写入与回读按 G0-b 已批准流程执行。
 7. 从干净、位于目标 tag 的工具检出生成发布导出：在工具目录运行 `python release/make_release.py --tag start-log-scan/v2.1.0 --out <新的备料根>`。使用工具文档指定且已核验的解释器。
    预期：生成 `<备料根>/2.1.0/release.json`；源码 commit 为 `9a1fdab479b68519edb7ad1728704a2b54f05893`，逐文件哈希一致。
-8. 在隔离临时目录，使用新工具及两侧实际解释器运行 `-h`、`-match_issues` 合成请求、`-dedup_org` 和 `-merge_files_list` 固定夹具。核对 `-merge_files_list` 确实存在；核对匹配入口的成功、非法输入及元数据。临时文件不得放进生产报表目录。
-9. 对生产同版本基线和 v2.1.0 使用相同输入、参数、配置、白名单与解析依赖做对照。Run 1193 仅使用既有报表的临时副本做离线对照；历史记录的 11 个问题、33 次发生只有在输入范围相同时才是期望值。记录输入清单与哈希、组成员、问题数、次数、机器数和 xls 差异。
+8. 在隔离临时目录，分别使用新工具的 3.10/3.13 实际解释器和冻结的生产 pkglist，运行 `-h`、`-match_issues` 合成请求、`-dedup_org` 和 `-merge_files_list` 固定夹具。核对 `-merge_files_list` 确实存在；核对匹配入口的成功、非法输入及元数据。临时文件不得放进生产报表目录。
+9. 对生产同版本基线和 v2.1.0 使用相同输入、参数、生产 pkglist、其他配置、白名单与解析依赖做对照。Run 1193 仅使用既有报表的临时副本做离线对照；本轮预检指定输入的基准为 14 个问题，验收必须保留同一输入清单、配置哈希和逐字节一致的 merge 产物证据。执行者不得直接套用历史的 11 个问题、33 次发生；34 个问题或混入错误项目均不通过。记录组成员、次数、机器数和 xls 差异。
 10. 检查新工具生成的 `*_members.json`：schema `stp.scan_membership` 1.0、全部 org 行覆盖、报表哈希及工具 commit 正确。与 G3 对接时核对 `sheet=aeeexp`、`mapping.row == org_row + 1`、Path 原文一致。该项是工具输出验证，不代表文件已送达控制面。
 11. 因控制面 MTK/Unisoc merge 共用 `StartLogScanMergeEngine`，对两种既有报表各运行一次离线 merge 兼容验证。B8 的目标范围仍只覆盖 MTK。
 12. 按 [control-plane-deploy SOP §0.5 阶段 A](../../.claude/skills/control-plane-deploy/SKILL.md)完成部署源守卫、站点配置下的就绪检查、目标 bundle 与 lock 依赖校验。执行者不得在业务库运行测试；执行者必须通过部署态只读探针检查数据库状态。
@@ -87,10 +97,10 @@ Agent： /mnt/stp-aee/tools/Start-Log-Scan-releases/2.1.0/start_log_scan.py
 
 按顺序执行以下步骤：
 
-1. 将已核验的 v2.1.0 导出落到两个全新版本目录。
-   预期：两侧 `release.json` 的源码身份和受管文件哈希一致；旧目录保持原样。
-2. 将站点的两个 `_SCRIPT` 切到冻结的新路径，并显式写入影子开关 `0`。
-   预期：变更仅涉及本次冻结键；Agent 源键使用 Agent 可见的中心存储路径。
+1. 将已核验的 v2.1.0 部署副本与两套匹配的运行环境落到两个全新版本目录。
+   预期：两侧源码身份、生产 pkglist 哈希与部署清单一致；仅有已登记的配置覆盖，旧目录保持原样。
+2. 将站点两侧的 `_PYTHON` 与 `_SCRIPT` 成对切到冻结的新路径，并显式写入影子开关 `0`。
+   预期：变更仅涉及本次冻结键；Agent 源键使用 Agent 可见的中心存储路径，实际解释器按主机 Python 版本加载匹配的依赖。
 3. 按部署 SOP 切换到 `TARGET` bundle 并重启 `stability-backend`。
    预期：服务 `active`，30 秒内 `/health` 成功，schema 精确位于目标 head，版本与预期一致；影子仍关闭。控制面重启也清除旧的 merge 能力探测缓存。
 4. 若后端未达到预期，停止并执行 §7 回退。
@@ -99,19 +109,21 @@ Agent： /mnt/stp-aee/tools/Start-Log-Scan-releases/2.1.0/start_log_scan.py
 
 上述固定基线没有脚本版本变化，本次不触发 `/api/v1/scripts/scan` 或脚本发包。执行者不得把“脚本目录登记 scan”与“设备日志 `scan_now`”混用。若窗口目标发生变化，执行者必须重新按 diff 判定。
 
-### 4.2 单台 Agent 金丝雀
+### 4.2 两类 Python 主机的 Agent 金丝雀
 
-按顺序执行以下步骤：
+每类 Python 版本各选择一台主机，分别按顺序执行以下步骤；任一类失败均不得进入机队更新：
 
 1. 用主机详情确认金丝雀 `ONLINE` 且 `active_job_count=0`，经既有 `POST /api/v1/hosts/{id}/hot-update` 入口更新代码与 env；env 强制下发按部署 SOP 执行。
    预期：响应顶层 `ok=true`；代码包含 G3；实际工具脚本解析到 v2.1.0。
 2. 在主机实际 Agent 安装根运行 `venv/bin/python -c 'import xlrd; print(xlrd.__version__)'`。
    预期：退出码 0，输出 `2.0.2`。工具解释器与 Agent venv 是两项检查，不能互相代替。
-3. 等待更新后的新心跳，用主机详情检查 `ONLINE/matched`、设备数及 outbox/扫描分片失败计数；必要时用同一份 `artifact_digest.py` 在主机侧重算 code digest。
+3. 用冻结的实际工具 `_PYTHON` 运行 `-c 'import sys,xlrd,xlwt,pymysql; print(sys.version); print(xlrd.__file__); print(xlwt.__file__); print(pymysql.__file__)'`。
+   预期：退出码 0，Python 版本与该主机对应，模块从匹配版本的 site-packages 加载。
+4. 等待更新后的新心跳，用主机详情检查 `ONLINE/matched`、设备数及 outbox/扫描分片失败计数；必要时用同一份 `artifact_digest.py` 在主机侧重算 code digest。
    预期：心跳晚于更新完成时间；code digest 对应本次 G3；仅 revision 字符串或徽标不作为文件到位证据。
-4. 对 Owner 指定的 MTK 金丝雀 PlanRun 运行一轮现行扫描，不带 `fact_round_id` 或 `spill_inputs`。
+5. 对 Owner 指定的 MTK 金丝雀 PlanRun 运行一轮现行扫描，不带 `fact_round_id` 或 `spill_inputs`。
    预期：org 报表、逐行 `.mapping.json`、清单登记、现行上传以及适用的 merge/extract 完成；文件位于现行命名空间，异串校验没有造成正常报表缺失。
-5. 若现行扫描或依赖验证失败，停止机队更新并执行 §7 回退。
+6. 若现行扫描或依赖验证失败，停止机队更新并执行 §7 回退。
 
 ### 4.3 机队滚动更新与观察
 
@@ -119,8 +131,8 @@ Agent： /mnt/stp-aee/tools/Start-Log-Scan-releases/2.1.0/start_log_scan.py
 
 1. 从当前发布根按部署 SOP 运行 `batch_hot_update --direct --force`，默认跳过忙碌主机。
    预期：已尝试主机 `fail=0`；逐台结果保留，忙碌与离线项标为 pending。
-2. 对每台更新完成的 Agent 重复实际 `xlrd==2.0.2` 导入、工具路径/release 哈希、code digest、新鲜心跳与挂载核验。
-   预期：全部检查均可关联到具体 host 和本次更新时间。
+2. 对每台更新完成的 Agent 重复实际 `xlrd==2.0.2` 导入、工具解释器与依赖导入、源码/生产 pkglist/部署物料哈希、code digest、新鲜心跳与挂载核验。
+   预期：全部检查均可关联到具体 host 和本次更新时间；17 台 Ubuntu 22.04/Python 3.10 逐台通过，不以 15.33 单机结果替代。
 3. 若任何一台依赖安装失败、工具回退或报表异常，停止后续放量与新派发，按安全停止处理；执行者不得带着半态宣布完成。
 4. 等忙碌主机自然空闲后重跑同一更新命令，补齐所有 pending 项。
    预期：冻结的 fleet 分母全部完成；执行者不得使用 `abort_running_jobs` 或 `--include-active` 强行跨过忙闲门禁。
@@ -133,7 +145,7 @@ Agent： /mnt/stp-aee/tools/Start-Log-Scan-releases/2.1.0/start_log_scan.py
 
 本次验收按 [L0–L3 方法](../development/ai/methods/batch-activation-acceptance.md)记录，尚未实际运行的项目一律标为 pending：
 
-- **L0 身份与配置**：控制面/Agent 的代码身份、工具 `release.json` 与源码哈希、实际解释器依赖、站点键、日志根和影子关闭状态。
+- **L0 身份与配置**：控制面/Agent 的代码身份、上游工具 `release.json` 与源码哈希、部署清单、生产 pkglist 哈希、3.10/3.13 实际解释器与依赖、站点键、日志根和影子关闭状态。
 - **L1 运行事实**：当前主机分母全量更新；心跳新鲜；现行报表和 G3 映射落盘、分片登记成功；上传/merge/extract 与本轮输入对应。纯 MTK run 的报表集合没有混入其他设备或错误的 Unisoc 报表。
 - **L2 金丝雀行为**：一次已授权的现行 MTK PlanRun；至少包含一个已有本地事件的前置状态。按同一台机器、同一次错误核对 DLE、xls 行和映射，保留原始证据；不得跨机器或发生拼接证据。
 - **L3 反例证据**：引用当前实现提交的 CI 与独立复核记录，覆盖异串拒绝、非法轮次不降级、空回执/缺失/迟到区别、查询故障降级、溢出与本地同身份、关闭开关兼容。生产环境不注入这些破坏性反例。
@@ -159,7 +171,7 @@ G4 接入单元必须补齐成员关系文件的上传、登记及与报表哈�
 
 - 任一 Agent 缺 xlrd、安装失败、工具回退、版本未知，或更新后不再正常上送现行报表。
 - 任一日志根挂载/探针失败；15.4 可用空间触发健康页水位；写入结果未知或疑似丢失证据。
-- 新旧工具对照出现无法解释的差异，或 `-merge_files_list`、成员关系契约验证失败。
+- 新旧工具对照出现无法解释的差异，或 `-merge_files_list`、成员关系契约验证失败；实际 pkglist 与冻结生产哈希不符，或出现已知的 14 → 34 个问题/错误项目回归。
 - 影子文件进入现行清单、现行上传集合、merge 或 extract；出现错误轮次或跨 run/host 的输入。
 - 控制面健康或 schema 检查失败，或目标包含未放行的迁移/批次。
 
@@ -173,8 +185,8 @@ G4 接入单元必须补齐成员关系文件的上传、登记及与报表哈�
 
 1. 若影子曾开启，恢复 `STP_SCAN_ROUND_SHADOW_ENABLED=0` 并按 SOP 重启控制面。
    预期：停止新影子调度；对已下发工作逐项记录排空或中断结果，迟到产物保持独立命名空间。
-2. 将控制面与 Agent 源键的 `_SCRIPT` 恢复为 §2 记录的旧路径，并重启后端加载配置。
-   预期：控制面解析旧工具；旧源码、解释器与回退所需配置仍在位。
+2. 将控制面与 Agent 源键的 `_PYTHON`/`_SCRIPT` 成对恢复为 §2 预先验证的回退组合，并重启后端加载配置。
+   预期：解析旧工具代码与生产 pkglist，3.10/3.13 主机各自可导入依赖并通过离线对照；不机械恢复已知失效的旧共享 venv，两个入口共同核验。
 3. 若需要回退代码，先比较目标与旧 bundle 的迁移集合，再按 SOP 恢复旧 `current`。
    预期：固定的 `eeab11d8..6b0590a` 没有新增迁移时可使用已准备的旧 bundle；若窗口目标另含新迁移，执行者必须停止该回退动作，由 Owner 裁定兼容方案，不能只重指 symlink。
 4. 从实际选定的回退发布根对已更新 Agent 滚动执行 env 强制下发；需要回退 G3 时同时下发旧代码。
@@ -190,11 +202,11 @@ G4 接入单元必须补齐成员关系文件的上传、登记及与报表哈�
 
 部署执行者必须报告：
 
-- 时间窗、BASE/TARGET、bundle 路径、工具 tag/commit/release 哈希及实际解析路径。
+- 时间窗、BASE/TARGET、bundle 路径、工具 tag/commit/release 哈希、部署清单、生产 pkglist 来源与哈希及两侧实际 `_PYTHON`/`_SCRIPT` 路径。
 - 配置键变更摘要、schema 结论、前端换包或不换包的结果。
 - 金丝雀对象与本轮产物；每台 Agent 的更新、xlrd 导入、工具身份、心跳和挂载结果；汇总必须有明确分母。
 - `batch_hot_update` 的 SUMMARY、失败/忙碌/离线项、补齐结果和实际观察窗口。
 - L0–L3 的证据链接、停止/回退情况、所有 pending 项。
 - 分别写出“代码部署”“工具换版”“G2/G3 现行兼容验收”“影子激活”“完整 B8 阶段一对拍”的状态。
 
-**本稿编写结束时**：已核对远端 issue/PR/补充裁定、main 的代码与测试入口、生产 manifest 及指定非敏感配置键。尚未构建本次 bundle 或工具导出，尚未逐台检查 Agent，尚未运行 v2.1.0 对照、金丝雀或任何生产切换；这些执行验收全部为 pending。没有因 G2/G3 issue 已关闭而推定其已部署。
+**v1.0 编写基线**：作者已核对远端 issue/PR/补充裁定、main 的代码与测试入口、生产 manifest 及指定非敏感配置键；当时未构建本次物料或执行生产切换。**v1.1 修订输入**：用户提供了双 Python 环境、pkglist 差异及 15.33 离线对照结果，本次据此选择方案 1；作者尚未独立复跑，也未部署。全机队核验、两类金丝雀、生产切换和最终验收仍为 pending。没有因 G2/G3 issue 已关闭而推定其已部署。
