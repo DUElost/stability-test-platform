@@ -10,7 +10,7 @@
 |---|---|
 | 代码部署（G2/G3） | **已执行，已回退**；生产 `current` 回到 `eeab11d8-20261103` |
 | 工具换版 v2.1.0 | **已落位并切换，已回退**；新目录保留，生产 env 指回旧工具 |
-| G2/G3 现行兼容验收 | **未通过**：离线 merge 硬门禁失败（14 → 48，混入 MLD-LX3）；金丝雀扫描在 G3 映射校验处失败 |
+| G2/G3 现行兼容验收 | **离线 merge 通过（14 个问题、xls 逐字节一致）；金丝雀扫描在 G3 映射校验处失败** |
 | 影子激活 | **未开始**；开关关闭 |
 | 完整 B8 阶段一对拍 | **未开始** |
 | 机队滚动更新 | **未执行**；仅金丝雀 15.101 更新后回退 |
@@ -41,7 +41,7 @@
 - fleet：77 台未退役、全部 ONLINE；预检时 65 台空闲、12 台有活跃作业；全部 `agent_code_sync_status=matched`、revision `eeab11d8`。
 - 逐台工具探测：77/77 无 `STP_DEDUP_SCAN_PACKAGE_REF`；Agent `.env` 均指向 `/mnt/stp-aee/tools/Start-Log-Scan`；`/mnt/stp-log` 均挂载，控制面可用 2.5 TB。
 - **阻断发现 1**：17 台 Ubuntu 22.04 主机（Python 3.10）的共享工具 venv 只有 `lib/python3.13/site-packages`，无法导入 xlrd；其余 60 台 Python 3.13 正常。
-- **阻断发现 2**：新导出 `config/pkglist.txt` 为 406 行，生产为 5149 行；直接用新配置会让同一批 Run 1193 报表的 merge 结果从 14 个问题（仅 MLD-NX2）变为 48 个（MLD-LX3 34 + MLD-NX2 14）。按 Owner 裁决采用双版本 venv + 生产 pkglist 覆盖。
+- **配置差异**：新导出 `config/pkglist.txt` 为 406 行，生产为 5149 行；按 Owner 裁决采用双版本 venv + 生产 pkglist 覆盖。**更正**：早先“14 → 48（MLD-LX3 34）”是误读了导出内自带的测试 fixture `merge_result/2026_05_24_14_26_45/statistics.txt`（工具仓库跟踪文件，内容就是 MLD-LX3 34）；干净临时目录下新工具的实际输出与基线逐字节一致，见 §3.2。
 
 ### 3.2 工具导出与离线验证
 
@@ -50,13 +50,15 @@
 - CLI：`-h` 含 `-merge_files_list`、`-match_issues`、`-dedup_org`、`-inc`；`-match_issues` 成功匹配 I1 / 新组 n1，非法输入 exit 2。
 - `-dedup_org`：旧/新工具在同一 `_org.xls` 上的 xls 输出字节一致；新工具额外生成 `*_members.json`。
 - members 校验：schema `stp.scan_membership` 1.0；org 行 8/8 全覆盖；`path` 与 `aeeexp` 表 Path 原文一致；org 报表 sha256 一致；`meta.tool.git_commit=9a1fdab…`、`git_dirty=false`。
-- Run 1193 离线对照（12 个 MTK org 文件、161 条原始记录、生产 pkglist）：
-  - 旧工具：14 个问题（MLD-NX2-16-261027V56），7 JE + 6 ANR + 1 other。
-  - 新工具（含 `tools/`）：48 个问题（MLD-LX3 34 + MLD-NX2 14），并含 SWT/HANG/fatal JE 等类别。
-  - 新工具去掉 `tools/` 的临时副本：14 个问题，与旧工具逐字节一致。差异来自新工具分析面（`BaseScan.py`/分析模块）在 `tools/` 可用时解析更多 JBT/SWT 行，不是 pkglist 配置。
-  - 单轮 Run 1193（6 个 org、33 条）旧工具：11 个问题，与计划所述历史记录一致。
+- Run 1193 离线对照（12 个 MTK org 文件、161 条原始记录、生产 pkglist；两侧均在干净临时目录运行）：
+  - 旧工具：14 个问题（MLD-NX2-16-261027V56），7 JE + 6 ANR + 1 other；`Result_MergeFiles.xls` sha256 `a06be9b2…`，Count 合计 143。
+  - 新工具（含 `tools/`，新 3.13 venv）：14 个问题（MLD-NX2-16-261027V56），`Result_MergeFiles.xls` sha256 `a06be9b2…`，Count 合计 143，与旧工具**逐字节一致**。
+  - 新工具（旧 3.13 venv）：同样 14 个问题、sha256 `a06be9b2…`。
+  - 新工具去掉 `tools/` 的临时副本：同样 14 个问题、sha256 `a06be9b2…`。
+  - **更正**：早先看到的“48（MLD-LX3 34 + MLD-NX2 14）”来自 `merge_result/*/statistics.txt` 通配同时匹配了导出内跟踪的测试 fixture `merge_result/2026_05_24_14_26_45/statistics.txt`（内容为 MLD-LX3 34）。该 fixture 不是本次运行输出；新工具实际运行写入新的时间戳目录，stats 为 14/MLD-NX2。
+  - 单轮 Run 1193（6 个 org、33 条）：旧工具 11 个问题、`Result_MergeFiles.xls` sha256 `d0138956…`；新工具同为 11 个问题、同一 sha256，与计划所述历史记录一致。
   - Unisoc 10 个 org、46 条：旧/新工具输出逐字节一致（7 个问题）。
-- 结论：工具源码/CLI/成员文件通过；**离线 merge 门禁未通过**。计划已由并行会话修订为 v1.1（commit `0d2a0db82`），§3 第 9 条把“同一输入清单、配置哈希、逐字节一致的 merge 产物”设为硬门禁，并明确“34 个问题或混入错误项目均不通过”。本次新工具含 `tools/` 的输出为 48（MLD-LX3 34 + MLD-NX2 14），属于混入错误项目，故按 v1.1 判 **FAIL**。这不是金丝雀 run 选择问题，而是工具侧分析/合并兼容性阻断；仅换清洁 run 不能修复该门禁。
+- 结论：工具源码/CLI/成员文件通过；**离线 merge 门禁通过**（同一输入、生产 pkglist、相同解释器版本，xls 逐字节一致，14 个问题）。早先的“34/48 混项目”是 fixture glob 误读，不构成工具阻断。
 
 ## 4. 执行时间线
 
@@ -80,8 +82,8 @@
 
 - 直接原因：Run 1127 的旧报表/日志中存在 `ADDYNX6616000055` 设备行；该串号不属于 Run 1127 的 40 台设备。15.101 的 `scan_now` 载荷只包含 `AYCGNX…`。
 - G3 行为符合契约（#3720 验收项）：`report_mapping` 对每一行做 serial 子集校验，发现越界即整轮失败，避免把跨 run/跨设备行上传。
-- 该 run 为 2026-10-27 的终态旧 run，设备与日志已漂移；不是新代码引入的越界，但新工具的分析面比旧工具更容易把同目录内的其它设备行带进 org，离线 merge 的 MLD-LX3 34 行是同一类信号。
-- 因此问题不只是“换一个 run”，还需要确认新工具在“同目录混有其它设备日志”时是否应过滤越界行，或 G3 是否应把越界行标为 unmapped 而不是整轮失败。这是 B8 工具/G3 契约层面的待裁决项。
+- 该 run 为 2026-10-27 的终态旧 run，设备与日志已漂移。越界行来自 run 设备目录内日志的 `Device_id`/`DeviceId` 字段（`ADDYNX…`），不是新工具 merge 输出的问题；离线 merge 已证明与基线逐字节一致，早先的 MLD-LX3 34 是导出内 fixture，不是本次输出。
+- 因此问题是：工具 mode 0 未按 run 的 serial 过滤日志内的他设备行；G3 硬失败是正确行为。短期换设备集与日志一致的清洁 run；长期由工具端增加 serial 过滤（`-device_list` 覆盖 mode 0 或新增 `-serial_filter`），G3 硬校验保留。G3 不应把越界行静默标 unmapped 继续，否则 org/xls 仍会混入他设备行。
 
 ## 6. 回退结果
 
@@ -111,7 +113,6 @@
 3. 影子激活未开始。
 4. 完整 B8 阶段一对拍（问题数、发生映射、代表齐全率、应上传字节）。
 5. 15.102 旧工具扫描在 18:33 仍运行，Run 1127 的 current-chain 验证 pending。
-6. 新工具 MTK merge 输出相较旧工具新增 MLD-LX3/ SWT/HANG 类别（48 vs 14），需 Owner 判定是否接受。
 
 ## 9. 越界行处理裁决建议（Owner 已选“先裁决再重试”）
 
@@ -123,8 +124,8 @@
 2. G3 当前在映射阶段整轮失败，是安全停止而不是缺陷；它阻止了跨设备行进入上传。
 3. 短期重试应使用设备集与日志一致的清洁 run；不改代码、不改契约即可复用当前 v2.1.0 物料。
 4. 长期修复归工具端：工具在 mode 0 也应接受 run 的设备串号过滤（新增 `-serial_filter`，或让 `-device_list` 覆盖 mode 0），由 Agent 传入 run 的 serials；G3 硬校验保留为纵深防御。该工具变更需要新的工具版本/tag，不与本次 v2.1.0 混做。
-5. MTK merge 的 48 vs 14：多出的 34 行是 MLD-LX3 设备行，属于越界行；工具端 serial 过滤落地后会消失。若过滤后仍有 in-run 的 SWT/HANG/fatal JE 新类别，Owner 需单独裁决是否接受这些新类别（本次未裁）。
-6. **计划 v1.1 的离线 merge 门禁仍是独立阻断**：§3 第 9 条要求同一输入清单、配置哈希与逐字节一致的 merge 产物；本次新工具对 Run 1193 的输出为 48/混项目，按 v1.1 判 FAIL。仅等 15.93 的清洁 run 不能修复该门禁；恢复前必须完成工具端 serial 过滤/分析兼容修复，或由 Owner 明确修订 v1.1 的该条验收。否则即使 canary 扫描通过，放行包仍不满足 §3。
+5. 离线 merge 已重新复核：新工具（生产 pkglist、tools/、新/旧 3.13 venv）输出 14 个问题、`Result_MergeFiles.xls` sha256 `a06be9b2…`，与旧工具逐字节一致；计划 v1.1 §3 第 9 条的 merge 门禁**已通过**。早先的 48/34 是 `merge_result/*` glob 同时匹配导出内测试 fixture `merge_result/2026_05_24_14_26_45/statistics.txt` 造成的误读，不是工具输出。
+6. 因此恢复的唯一硬阻断是越界行：需要设备集与日志一致的清洁 run，或工具端 serial 过滤版本。merge 侧不需要额外修复。
 
 **短期重试选项与 Owner 选择**：
 
