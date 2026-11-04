@@ -130,8 +130,7 @@ def _inspect(report: Path) -> tuple[str, set[str]]:
 
 
 def _host_tag(name: str) -> str:
-    match = re.match(r"^172-21-\d+-(\d+)_", name)
-    return f".{match.group(1)}" if match else "?"
+    return f".{name.split('_', 1)[0].rsplit('-', 1)[-1]}"
 
 
 def main() -> int:
