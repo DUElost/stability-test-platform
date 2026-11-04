@@ -20,8 +20,15 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+import xlwt
 
 from backend.agent.scan_runner import ScanRunner
+
+
+def _write_empty_report(path):
+    book = xlwt.Workbook()
+    book.add_sheet("events").write(0, 0, "Path")
+    book.save(str(path))
 
 
 @pytest.fixture(autouse=True)
@@ -233,6 +240,8 @@ def test_execute_job_skips_mtk_runs_unisoc_when_mtk_missing(monkeypatch):
         is_final = False
         device_serials = ()
         run_date_stamps = ()
+        fact_round_id = None
+        spill_inputs = ()
 
     monkeypatch.setattr(
         ScanRunner.instance(),
@@ -565,8 +574,7 @@ class TestReclaimScanStaging:
         with patch(
             "backend.agent.scan_runner.subprocess.run",
             side_effect=lambda argv, **_k: (
-                (_ := Path(argv[argv.index("-d") + 1]) / "Result_shanghai_org.xls")
-                .write_text("fake"),
+                _write_empty_report(Path(argv[argv.index("-d") + 1]) / "Result_shanghai_org.xls"),
                 _completed(stdout="done"),
             )[1],
         ):
@@ -603,8 +611,7 @@ class TestReclaimScanStaging:
         with patch(
             "backend.agent.scan_runner.subprocess.run",
             side_effect=lambda argv, **_k: (
-                (_ := Path(argv[argv.index("-d") + 1]) / "Result_shanghai_org.xls")
-                .write_text("fake"),
+                _write_empty_report(Path(argv[argv.index("-d") + 1]) / "Result_shanghai_org.xls"),
                 _completed(stdout="done"),
             )[1],
         ):

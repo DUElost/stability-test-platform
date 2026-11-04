@@ -22,6 +22,7 @@ Class: process
 |---|---|
 | `backend/services/dedup_scan.py:1176-1201`（`_rewrite_merge_report_paths_to_center`） | `.xls` **读 + 写回**：xlrd 打开 `Result_MergeFiles*.xls`，xlwt 重建同 sheet 并把 `Path` 列改写为中心可达路径（其余列原值保留；本就是「重建」，不保格式/公式） |
 | `backend/services/dedup_extract.py:84-92` | `.xls` **读**：抽取链读 merge 报告 |
+| `backend/agent/aee/scan_scope.py`（2026-11-04，B8 G3） | 上传前只读既有 org 报表，校验 serial 并生成逐行伴随映射；#3800 / ADR-0062 D12 第 3 条规定 xls 格式不变，因此使用 xlrd 2.0.2，不启动格式迁移 |
 | `backend/agent/install_selfcheck.py`（2026-10-09 补登记） | 在实际 Agent 解释器中导入 xlwt 并初始化 Workbook，提前检查既有 Scan-Result-GT `.xls` 导出依赖；不新增产物格式或业务导出入口 |
 | `backend/agent/requirements.txt`（2026-10-09 补登记） | `xlwt==1.3.0`；包面 Scan-Result-GT 的 `python=null` 使用 Agent venv，系统包不能替代该解释器的依赖 |
 | `backend/requirements.txt:48-49` | `xlrd>=2.0.2,<3.0` + `xlwt==1.3.0`（均为直接依赖） |
@@ -37,6 +38,9 @@ Class: process
 将既有 Toolkit 导出依赖纳入安装契约和使用面台账。自检必须验证当前 `.xls` 写侧，不能以
 openpyxl 初始化替代；本次不启动格式迁移。阶段 3 退役 xlwt 时，同步移除 Agent requirements
 和 Workbook 自检；若此前工具通过新版本提供独立解释器，则按实际调用边界先行移除 Agent 耦合。
+
+2026-11-04 补记：B8 G3 在 Agent requirements 中登记 `xlrd==2.0.2`，用于既定 xls
+的读取校验与伴随映射，不新增 xls 产物或改写格式。阶段 3 退出 xls 时同步移除该读取点与依赖。
 
 **风险与现状边界**：`xlwt` 自 2017 年起无维护（1.3.0）；`.xls` 写回是重建式、列宽/公式
 本就不保；迁移到 `.xlsx` 会改变下载文件名与消费脚本的参数（`--add-main-excel` 的路径后缀）。

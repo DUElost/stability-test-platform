@@ -747,6 +747,98 @@ async def _ingest_one(ev: DeviceLogEventIn):
 
 
 @pytest.mark.asyncio(loop_scope="module")
+async def test_list_filters_by_host_and_run_before_limit_and_preserves_legacy_call():
+    seed, other = _seed_host_job(), _seed_host_job()
+    extra_run_id = None
+    try:
+        with SessionLocal() as db:
+            extra = PlanRun(plan_id=seed["plan_id"], status="RUNNING", plan_snapshot={},
+                            run_type="MANUAL", triggered_by="pytest")
+            db.add(extra)
+            db.commit()
+            extra_run_id = extra.id
+        # The older row must not consume the limit of a query for the target run.
+        await _ingest_one(_ev(seed, plan_run_id=extra_run_id, job_id=None, detected_at="2026-01-01T00:00:00Z"))
+        target = await _ingest_one(_ev(seed, detected_at="2026-01-02T00:00:00Z"))
+        await _ingest_one(_ev(other, plan_run_id=seed["plan_run_id"], job_id=None))
+        async with AsyncSessionLocal() as db:
+            filtered = await list_device_log_events(host_id=seed["host_id"], plan_run_id=seed["plan_run_id"],
+                                                    state="LOCAL", limit=1, db=db, _=None)
+        assert filtered.data["total"] == 1
+        assert filtered.data["events"][0]["id"] == target.data["event_ids"][0]
+        async with AsyncSessionLocal() as db:
+            legacy = await list_device_log_events(host_id=seed["host_id"], db=db, _=None)
+        assert legacy.data["total"] == 2
+        assert {ev["plan_run_id"] for ev in legacy.data["events"]} == {seed["plan_run_id"], extra_run_id}
+    finally:
+        with SessionLocal() as db:
+            db.query(DeviceLogEvent).filter(DeviceLogEvent.host_id.in_([seed["host_id"], other["host_id"]])).delete()
+            if extra_run_id is not None:
+                db.query(PlanRun).filter(PlanRun.id == extra_run_id).delete()
+            db.commit()
+        _cleanup(other)
+        _cleanup(seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_verified_spill_receipt_records_bytes_once_and_exposes_key(monkeypatch, tmp_path):
+    from sqlalchemy import select
+    from backend.models.issue_fact import SpillLedger
+
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
+    seed = _seed_host_job()
+    try:
+        initial = await _ingest_one(_ev(seed, occurrence_key="a" * 64))
+        event_id = initial.data["event_ids"][0]
+        remote = str(tmp_path / "devices" / str(seed["plan_run_id"]) / event_id / "event")
+        await _ingest_one(_ev(seed, id=event_id, state="UPLOADING"))
+        receipt = _ev(seed, id=event_id, state="REMOTE", remote_path=remote,
+                       hdd_spill=True, checksum="verified", size_bytes=1234)
+        await _ingest_one(receipt)
+        await _ingest_one(receipt)
+        with SessionLocal() as db:
+            rows = db.execute(select(SpillLedger).where(SpillLedger.dle_id == UUID(event_id))).scalars().all()
+            assert len(rows) == 1
+            assert rows[0].size_bytes == 1234
+            assert rows[0].plan_run_id == seed["plan_run_id"]
+        async with AsyncSessionLocal() as db:
+            listed = await list_device_log_events(host_id=seed["host_id"], state=None, limit=None, db=db, _=None)
+        assert listed.data["events"][0]["occurrence_key"] == "a" * 64
+        # A normal REMOTE receipt has no spill ledger side effect.
+        ordinary = await _ingest_one(_ev(seed))
+        ordinary_id = ordinary.data["event_ids"][0]
+        await _ingest_one(_ev(seed, id=ordinary_id, state="UPLOADING"))
+        await _ingest_one(_ev(seed, id=ordinary_id, state="REMOTE", size_bytes=3,
+                               remote_path=str(tmp_path / "devices" / str(seed["plan_run_id"]) / ordinary_id / "event")))
+        with SessionLocal() as db:
+            assert db.execute(select(SpillLedger).where(SpillLedger.dle_id == UUID(ordinary_id))).scalars().first() is None
+    finally:
+        with SessionLocal() as db:
+            db.query(SpillLedger).filter(SpillLedger.plan_run_id == seed["plan_run_id"]).delete()
+            db.commit()
+        _cleanup(seed)
+
+
+@pytest.mark.parametrize("size", [None, -1])
+@pytest.mark.asyncio(loop_scope="module")
+async def test_spill_receipt_without_valid_bytes_is_rejected(monkeypatch, tmp_path, size):
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
+    seed = _seed_host_job()
+    try:
+        created = await _ingest_one(_ev(seed))
+        event_id = created.data["event_ids"][0]
+        await _ingest_one(_ev(seed, id=event_id, state="UPLOADING"))
+        with pytest.raises(ServiceError) as exc:
+            await _ingest_one(_ev(seed, id=event_id, state="REMOTE", hdd_spill=True, size_bytes=size,
+                                   remote_path=str(tmp_path / "devices" / str(seed["plan_run_id"]) / event_id / "event")))
+        assert exc.value.status == 400
+        with SessionLocal() as db:
+            assert db.get(DeviceLogEvent, UUID(event_id)).state == "UPLOADING"
+    finally:
+        _cleanup(seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
 async def test_dle_rejects_job_plan_run_mismatch(monkeypatch, tmp_path):
     """host/job/plan_run 错误组合：job 的 plan_run 与 payload 不一致 → 400。"""
     monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path / "nfs"))

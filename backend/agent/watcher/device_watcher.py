@@ -42,6 +42,7 @@ from .exceptions import WatcherStartError
 from .policy   import WatcherPolicy
 from .puller   import LogPuller, PullerStats
 from .sources  import InotifydSource, ProbeResult, WatcherCapability, WatcherEvent
+from ..aee.scan_scope import metadata_occurrence_key
 
 logger = logging.getLogger(__name__)
 
@@ -687,6 +688,7 @@ class DeviceLogWatcher:
         if not artifact_uri:
             if seq_no is None:
                 return
+            logger.info("occurrence_key_unprovable path_category=pull_failed serial=%s", self._serial)
             event_id = client.create_pull_failed_event(
                 serial=self._serial,
                 platform=platform,
@@ -718,11 +720,13 @@ class DeviceLogWatcher:
         from ..contracts.aee_metadata import resolve_device_log_event_type
         collector = get_collector_for_platform(platform)
         parsed_type = None
+        occurrence_key = None
         if collector is not None:
             try:
                 meta = collector.parse_metadata(local_path)
                 parsed_type = meta.event_type
                 subtype = meta.event_subtype
+                occurrence_key = metadata_occurrence_key(meta, platform=platform, serial=self._serial)
             except Exception:
                 logger.debug(
                     "device_log_watcher_collector_metadata_fallback serial=%s",
@@ -736,7 +740,9 @@ class DeviceLogWatcher:
             paths=(str(local_path),),
         )
 
-        event_id = client.create_local_event(
+        if occurrence_key is None:
+            logger.info("occurrence_key_unprovable path_category=local serial=%s", self._serial)
+        event_args = dict(
             serial=self._serial,
             platform=platform,
             event_type=meta_event_type,
@@ -749,6 +755,12 @@ class DeviceLogWatcher:
             link_signal_seq_no=seq_no,
             size_bytes=client.dir_size_bytes(local_path),
         )
+        if occurrence_key is None:
+            event_id = client.create_local_event(**event_args)
+        else:
+            payload = client.build_local_event_payload(**event_args)
+            payload["occurrence_key"] = occurrence_key
+            event_id = client.post_event_payload(payload)
         if not event_id:
             logger.info(
                 "device_log_watcher_device_log_event_fallback_signal_only serial=%s job=%d",

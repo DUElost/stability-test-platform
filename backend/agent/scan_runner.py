@@ -24,6 +24,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Sequence
 
+from .aee.paths import get_aee_nfs_root
+from .aee.scan_scope import load_scan_events, report_mapping, scan_sources, stage_spill_inputs
+from .contracts.round_report_layout import round_report_dir
+from .device_platform import detect_device_platform
+
 try:
     from backend.agent.aee.paths import get_aee_local_root
 except ImportError:
@@ -90,6 +95,8 @@ class _ScanJob:
     is_final: bool
     device_serials: tuple[str, ...] = ()
     run_date_stamps: tuple[str, ...] = ()
+    fact_round_id: int | None = None
+    spill_inputs: tuple[dict, ...] = ()
 
 
 class ScanRunner:
@@ -102,7 +109,7 @@ class ScanRunner:
     _host_scan_semaphore = threading.Semaphore(1)
     _queue_lock = threading.Lock()
     _worker_lock = threading.Lock()
-    _pending: OrderedDict[int, _ScanJob] = OrderedDict()
+    _pending: OrderedDict[tuple[int, int | None], _ScanJob] = OrderedDict()
     _worker_started = False
     # #739 面② / #2188 D 步：分片登记失败计数（进程级累计，重启清零）——
     # 「文件已落 dedup/、清单未写 _meta」的半交付此前只混在 scan_queue_job_failed
@@ -157,8 +164,12 @@ class ScanRunner:
         is_final: bool,
         device_serials: Sequence[str] | None = None,
         run_date_stamps: Sequence[str] | None = None,
+        fact_round_id: int | None = None,
+        spill_inputs: Sequence[dict] | None = None,
     ) -> None:
-        """Queue scan_now; coalesce duplicate plan_run_id entries (keep latest)."""
+        """Coalesce within one (run, fact round); legacy and shadow never replace each other."""
+        if fact_round_id is not None:
+            round_report_dir(".", plan_run_id, fact_round_id, "mtk")
         try:
             from backend.agent.aee.scan_scope import normalize_str_list
         except ImportError:
@@ -169,16 +180,19 @@ class ScanRunner:
             is_final=is_final,
             device_serials=tuple(normalize_str_list(device_serials)),
             run_date_stamps=tuple(normalize_str_list(run_date_stamps)),
+            fact_round_id=fact_round_id,
+            spill_inputs=tuple(dict(item) for item in (spill_inputs or ())) if fact_round_id is not None else (),
         )
+        key = (plan_run_id, fact_round_id)
         with cls._queue_lock:
-            if plan_run_id in cls._pending:
-                cls._pending[plan_run_id] = job
+            if key in cls._pending:
+                cls._pending[key] = job
                 logger.info(
                     "control_scan_now_coalesced plan_run=%d final=%s queue_depth=%d",
                     plan_run_id, is_final, len(cls._pending),
                 )
             else:
-                cls._pending[plan_run_id] = job
+                cls._pending[key] = job
                 logger.info(
                     "control_scan_now_queued plan_run=%d final=%s queue_depth=%d",
                     plan_run_id, is_final, len(cls._pending),
@@ -243,7 +257,7 @@ class ScanRunner:
                     # P2-2b / #1071：启动窗口内 scan_now 入队等待 configure；
                     # 仅当 MTK 与 UNISOC 都未配置时才 defer，避免「只配 UNISOC」饿死。
                     with cls._queue_lock:
-                        cls._pending[job.plan_run_id] = job
+                        cls._pending[(job.plan_run_id, job.fact_round_id)] = job
                     logger.warning(
                         "scan_queue_defer_not_configured plan_run=%d host=%s",
                         job.plan_run_id, job.host_id,
@@ -287,6 +301,9 @@ class ScanRunner:
         cls._host_scan_semaphore.acquire(blocking=True)
         try:
             runner = cls.instance()
+            round_args = {}
+            if job.fact_round_id is not None:
+                round_args = {"fact_round_id": job.fact_round_id, "spill_inputs": job.spill_inputs}
             if runner.is_configured():
                 runner.run_scan_and_upload(
                     job.plan_run_id,
@@ -294,6 +311,7 @@ class ScanRunner:
                     is_final=job.is_final,
                     device_serials=job.device_serials,
                     run_date_stamps=job.run_date_stamps,
+                    **round_args,
                 )
             else:
                 logger.info(
@@ -305,17 +323,23 @@ class ScanRunner:
             except ImportError:
                 from agent.unisoc_scan_runner import UnisocScanRunner
             unisoc = UnisocScanRunner.instance()
-            if unisoc.is_configured():
+            unisoc_serials = tuple(
+                serial for serial in job.device_serials
+                if detect_device_platform(os.getenv("ADB_PATH", "adb"), serial) == "UNISOC"
+            ) if unisoc.is_configured() else ()
+            if unisoc.is_configured() and (not job.device_serials or unisoc_serials):
                 unisoc.run_scan_and_upload(
                     job.plan_run_id,
                     job.host_id,
                     is_final=job.is_final,
-                    device_serials=job.device_serials,
+                    device_serials=unisoc_serials,
                     run_date_stamps=job.run_date_stamps,
+                    **round_args,
                 )
             else:
                 logger.info(
-                    "control_scan_now_skip_unisoc_not_configured plan_run=%d",
+                    "control_scan_now_skip_unisoc_no_devices plan_run=%d" if unisoc.is_configured()
+                    else "control_scan_now_skip_unisoc_not_configured plan_run=%d",
                     job.plan_run_id,
                 )
         finally:
@@ -329,21 +353,33 @@ class ScanRunner:
         is_final: bool,
         device_serials: Sequence[str] = (),
         run_date_stamps: Sequence[str] = (),
+        fact_round_id: int | None = None,
+        spill_inputs: Sequence[dict] = (),
     ) -> None:
         if not self.is_configured():
             logger.warning("control_scan_now_skip_runner_not_configured")
             return
+        events = load_scan_events(host_id, plan_run_id)
+        self._scan_events = events or []
+        round_args = {}
+        spill_unstaged = []
+        if fact_round_id is not None:
+            # Staging needs the DLE's serial and original local layout. A failed
+            # query must not suppress the report from the remaining local inputs.
+            round_args = {"spill_inputs": spill_inputs if events is not None else ()}
+            if events is None:
+                spill_unstaged = [str(item["dle_id"]) for item in spill_inputs]
         org_xls = self.run_local_scan(
             plan_run_id=plan_run_id,
             host_id=host_id,
             is_final=is_final,
             device_serials=device_serials,
             run_date_stamps=run_date_stamps,
+            **round_args,
         )
         if not org_xls:
             logger.warning("control_scan_now_scan_failed plan_run=%d", plan_run_id)
             return
-        dedup_xls = self.run_dedup_org(org_xls, plan_run_id, host_id)
         try:
             from backend.agent.upload_manager import UploadManager
         except ImportError:
@@ -354,9 +390,28 @@ class ScanRunner:
             reclaim_scan_staging(getattr(self, "_last_scan_root", None))
             return
         try:
-            uploader.upload_scan_report(plan_run_id, host_id, org_xls, platform_subdir="mtk")
+            mapping = report_mapping(
+                org_xls, serials=device_serials, sources=getattr(self, "_scan_sources", []),
+                scan_root=getattr(self, "_last_scan_root", None) or self._hdd_root,
+                plan_run_id=plan_run_id, host_id=host_id, platform="mtk", fact_round_id=fact_round_id,
+                events_unavailable=events is None,
+            )
+            if spill_unstaged:
+                mapping["spill_unstaged"] = spill_unstaged
+            dedup_xls = self.run_dedup_org(org_xls, plan_run_id, host_id)
+            uploader.upload_scan_report(
+                plan_run_id, host_id, org_xls, platform_subdir="mtk",
+                fact_round_id=fact_round_id, mapping=mapping,
+            )
             if dedup_xls:
-                uploader.upload_scan_report(plan_run_id, host_id, dedup_xls, platform_subdir="mtk")
+                report_mapping(
+                    dedup_xls, serials=device_serials, sources=getattr(self, "_scan_sources", []),
+                    scan_root=getattr(self, "_last_scan_root", None) or self._hdd_root,
+                    plan_run_id=plan_run_id, host_id=host_id, platform="mtk", fact_round_id=fact_round_id,
+                )
+                uploader.upload_scan_report(
+                    plan_run_id, host_id, dedup_xls, platform_subdir="mtk", fact_round_id=fact_round_id,
+                )
         finally:
             # #1078/#1277：本轮产物已复制进 dedup/ 目录 —— staging（HDD 事件文件的
             # 硬链接）即可回收，prune 原事件目录后磁盘才能真正释放。upload 抛异常
@@ -435,8 +490,12 @@ class ScanRunner:
         plan_run_id: int,
         device_serials: Sequence[str],
         run_date_stamps: Sequence[str],
+        *, spill_inputs: Sequence[dict] = (),
     ) -> Optional[str]:
-        if not device_serials:
+        if not device_serials and not spill_inputs:
+            self._scan_sources = scan_sources(
+                Path(self._hdd_root), Path(self._hdd_root), getattr(self, "_scan_events", []),
+            )
             return self._hdd_root
         try:
             from backend.agent.aee.scan_scope import build_scoped_scan_root, normalize_str_list
@@ -476,6 +535,12 @@ class ScanRunner:
             try:
                 staging.resolve().relative_to(parent.resolve())
                 build_scoped_scan_root(hdd, staging, serials, stamps)
+                self._scan_sources = scan_sources(hdd, staging, getattr(self, "_scan_events", []))
+                if spill_inputs:
+                    self._scan_sources.extend(stage_spill_inputs(
+                        hdd, staging, get_aee_nfs_root(), plan_run_id, serials,
+                        spill_inputs, getattr(self, "_scan_events", []),
+                    ))
             except (OSError, ValueError):
                 shutil.rmtree(staging, ignore_errors=True)
                 raise
@@ -495,6 +560,7 @@ class ScanRunner:
         is_final: bool = False,
         device_serials: Sequence[str] = (),
         run_date_stamps: Sequence[str] = (),
+        spill_inputs: Sequence[dict] = (),
     ) -> Optional[str]:
         if not self._configured:
             logger.warning(
@@ -503,7 +569,8 @@ class ScanRunner:
             )
             return None
 
-        scan_root = self._prepare_scan_root(plan_run_id, device_serials, run_date_stamps)
+        args = {"spill_inputs": spill_inputs} if spill_inputs else {}
+        scan_root = self._prepare_scan_root(plan_run_id, device_serials, run_date_stamps, **args)
         if scan_root is None:
             logger.warning(
                 "scan_runner_skip_bad_scan_root plan_run=%d host=%s",

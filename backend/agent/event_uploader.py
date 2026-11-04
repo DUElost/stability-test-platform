@@ -20,6 +20,8 @@ from typing import Any, Dict, Optional
 
 import requests
 
+from .aee.state_store import ScriptStateStore
+
 try:
     from backend.agent.aee.paths import (
         PathOutsideRootError,
@@ -53,6 +55,21 @@ _RETRY_FAILED_LIMIT = 200
 
 
 _ATTEMPTS_STATE_PREFIX = "event_upload_attempts:"
+
+
+def _durable_spill_flag(event_id: str, value: bool | None = None) -> bool:
+    if not os.environ.get("STP_AGENT_STATE_DB"):
+        return False
+    try:
+        store = ScriptStateStore()
+        key = f"event_upload_spill:{event_id}"
+        if value is not None:
+            store.set_state(key, "1" if value else "0")
+            return value
+        return store.get_state(key, "0") == "1"
+    except Exception:
+        logger.warning("event_uploader_spill_state_failed event_id=%s", event_id, exc_info=True)
+        return False
 
 
 def _attempts_state_key(event_id: str) -> str:
@@ -150,6 +167,7 @@ class _UploadJob:
     # #382: HddSpill 溢出事件上送成功后必须释放本地磁盘，不受
     # STP_EVENT_UPLOADER_PRUNE_LOCAL（默认 0、按机灰度）约束。
     prune_after_upload: bool = False
+    hdd_spill: bool = False
     # #380: 重试 Timer 已排队（job 会回到队列）期间保留 in-flight 标记，
     # 防止轮询循环在退避窗口内重复入队。
     rescheduled: bool = False
@@ -176,6 +194,7 @@ class EventUploader:
         # （队列中、在传、或退避重试等待中），轮询/重试/溢出三源重入队在此收敛。
         self._active_lock = threading.Lock()
         self._active_ids: set[str] = set()
+        self._spill_ids: set[str] = set()
         # #785: attempt 跨 600s 重入队 / 进程重启保持；内存 + agent_state 双写
         self._attempt_counts: Dict[str, int] = {}
         # #784: 退避重试 Timer 登记，stop() 时 cancel（默认非 daemon 会拖死关停）
@@ -347,6 +366,13 @@ class EventUploader:
             # Plan A: LOCAL 不自动上送；upload_task 标记后经 _recover_pending 入队
             return False
         event_id = str(event["id"])
+        with self._active_lock:
+            was_spill = event_id in self._spill_ids
+        is_spill = bool(event.get("hdd_spill")) or prune_after_upload or was_spill or _durable_spill_flag(event_id)
+        if is_spill:
+            with self._active_lock:
+                self._spill_ids.add(event_id)
+            _durable_spill_flag(event_id, True)
         if "upload_attempts" in event and event.get("upload_attempts") is not None:
             start_attempt = max(0, int(event["upload_attempts"]))
         else:
@@ -362,7 +388,8 @@ class EventUploader:
             host_id=str(event.get("host_id", self._host_id)),
             job_id=event.get("job_id"),
             attempt=start_attempt,
-            prune_after_upload=prune_after_upload,
+            prune_after_upload=prune_after_upload or is_spill,
+            hdd_spill=is_spill,
         )
         with self._active_lock:
             if event_id in self._active_ids:
@@ -559,6 +586,8 @@ class EventUploader:
             "host_id": job.host_id,
             "job_id": job.job_id,
         }
+        if state == "REMOTE" and job.hdd_spill:
+            payload["hdd_spill"] = True
         try:
             resp = requests.post(
                 f"{self._api_url}/api/v1/agent/device-log-events",
@@ -574,6 +603,10 @@ class EventUploader:
                 return False
             if state == "REMOTE":
                 self._clear_attempts(job.event_id)
+                with self._active_lock:
+                    self._spill_ids.discard(job.event_id)
+                if job.hdd_spill:
+                    _durable_spill_flag(job.event_id, False)
             return True
         except Exception:
             logger.exception("event_uploader_patch_error event_id=%s", job.event_id)

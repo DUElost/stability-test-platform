@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from contextlib import ExitStack
 from datetime import datetime, timezone
+import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -138,9 +139,10 @@ def test_inotifyd_only_pull_success_registers_dle_without_enqueue(
     uploader.enqueue_local_event.assert_not_called()
 
 
-def test_inotifyd_only_pull_failed_registers_pull_failed_event(db, monkeypatch):
+def test_inotifyd_only_pull_failed_registers_pull_failed_event(db, monkeypatch, caplog):
     """pull 失败（空 enrichment）：仍落信号 + DLE pull_failed 记录。"""
     stack, (mock_client_cls, _mock_uploader_cls, *_rest) = _patch_env_stack()
+    caplog.set_level(logging.INFO)
     with stack:
         client = MagicMock()
         client.create_pull_failed_event.return_value = "event-2"
@@ -154,6 +156,58 @@ def test_inotifyd_only_pull_failed_registers_pull_failed_event(db, monkeypatch):
     assert kwargs["job_id"] == 77
     assert kwargs["link_signal_seq_no"] is not None
     assert db.count_pending_log_signals() == 1
+    assert kwargs.get("occurrence_key") is None
+    assert "occurrence_key_unprovable path_category=pull_failed" in caplog.text
+
+
+def test_local_watcher_and_scan_use_the_same_collector_originals_or_fail_open(db, tmp_path, monkeypatch, caplog):
+    from backend.agent.aee.collector import get_collector_for_platform
+    from backend.agent.aee.scan_scope import metadata_occurrence_key, scan_sources
+
+    hdd = tmp_path / "hdd"
+    event_dir = hdd / "V1" / "SX" / "event"
+    event_dir.mkdir(parents=True)
+    (event_dir / "__exp_main.txt").write_text("Exception Class: Kernel Exception\n")
+    monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(hdd))
+    collector = get_collector_for_platform("MTK")
+    caplog.set_level(logging.INFO)
+    stack, (mock_cls, _uploader, mock_collector, _platform) = _patch_env_stack()
+    client = MagicMock()
+    client.create_local_event.return_value = "event-local"
+    with stack:
+        mock_cls.from_env.return_value = client
+        mock_collector.return_value = collector
+        _watcher(db)._on_pull_done(_event("AEE"), {"artifact_uri": str(event_dir)})
+    args = client.create_local_event.call_args.kwargs
+    scan_key = metadata_occurrence_key(collector.parse_metadata(event_dir), platform="MTK", serial="SX")
+    assert args.get("occurrence_key") is scan_key is None
+    assert "occurrence_key_unprovable path_category=local" in caplog.text
+    observation = {"id": "event-local", "local_path": str(event_dir), "serial": "SX",
+                   "platform": "MTK", "occurrence_key": args.get("occurrence_key")}
+    assert scan_sources(hdd, hdd, [observation])[0]["occurrence_key"] is None
+
+
+def test_watcher_uses_contract_when_collector_provides_originals(db, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from backend.agent.aee.scan_scope import metadata_occurrence_key
+
+    hdd = tmp_path / "hdd"
+    event_dir = hdd / "V1" / "SX" / "event"
+    event_dir.mkdir(parents=True)
+    monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(hdd))
+    meta = SimpleNamespace(event_type="KE", event_subtype=None, db_path="/data/aee_exp/db.00",
+                           device_timestamp_raw="raw device time", raw_event_type="Kernel Exception")
+    stack, (mock_cls, _uploader, mock_collector, _platform) = _patch_env_stack()
+    client = MagicMock()
+    client.build_local_event_payload.return_value = {"id": "local-one", "local_path": str(event_dir)}
+    with stack:
+        mock_cls.from_env.return_value = client
+        mock_collector.return_value = MagicMock()
+        mock_collector.return_value.parse_metadata.return_value = meta
+        _watcher(db)._on_pull_done(_event("AEE"), {"artifact_uri": str(event_dir)})
+    payload = client.post_event_payload.call_args.args[0]
+    assert payload["occurrence_key"] == metadata_occurrence_key(meta, platform="MTK", serial="SX")
+    assert payload["occurrence_key"] is not None
 
 
 def test_reconciler_active_suppresses_inotifyd_dle_registration(db, tmp_path, monkeypatch):
