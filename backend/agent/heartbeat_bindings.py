@@ -139,6 +139,9 @@ def build_heartbeat_thread(
             "terminal_outbox_dead_letter_total": local_db.count_terminal_dead_letters(),
             # #739 面②/#2188 D 步：分片登记失败（半交付）进程级累计，重启清零。
             "scan_shard_register_failure_total": ScanRunner.shard_register_failure_total(),
+            # #3879：伴随映射拒绝（unprovable/outside_run/missing_path/no_rows）
+            # 进程级累计，重启清零。
+            "scan_report_mapping_rejected_total": ScanRunner.report_mapping_rejected_total(),
             # #3217：crash artifact 投递的提交数与三路丢失（进程级累计，重启清零）。
             **ArtifactUploader.instance().heartbeat_counts(),
         },

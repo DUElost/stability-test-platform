@@ -23,6 +23,34 @@ from ..contracts.occurrence_key import compute_occurrence_key
 
 logger = logging.getLogger(__name__)
 
+# The scanning tool itself treats these as "device id unknown" (v2.1.0
+# ``BaseScan.py:245`` / ``modules/dedup/membership.py:106``). They are
+# sentinels, not serials: evidence normalization must drop them before the
+# run-partition check. Matching is case-insensitive after stripping.
+UNKNOWN_DEVICE_ID_VALUES = frozenset({
+    "none",
+    "undefined",
+    "unknown_device_id",
+    "discard_device_id",
+})
+
+
+class ScanReportMappingError(ValueError):
+    """A scan report rejected by ``report_mapping`` with an operator category."""
+
+    def __init__(self, reason: str, *, row: int | None, detail: str) -> None:
+        self.reason = reason
+        self.row = row
+        super().__init__(detail)
+
+
+def normalize_device_id(value: object) -> str | None:
+    """Return stripped serial evidence, or ``None`` for tool-side sentinels."""
+    text = str(value).strip()
+    if not text or text.lower() in UNKNOWN_DEVICE_ID_VALUES:
+        return None
+    return text
+
 
 def is_safe_path_token(value: str) -> bool:
     """Reject empty / absolute / traversal tokens used as serial or MMDD."""
@@ -268,7 +296,9 @@ def report_mapping(
             columns = {str(sheet.cell_value(0, c)).strip().lower(): c
                        for c in range(sheet.ncols)}
             if "path" not in columns:
-                raise ValueError("scan report lacks Path column")
+                raise ScanReportMappingError(
+                    "missing_path", row=1, detail="scan report lacks Path column",
+                )
             for index in range(1, sheet.nrows):
                 raw = str(sheet.cell_value(index, columns["path"]))
                 path = Path(raw.replace("\\", "/")).resolve()
@@ -281,12 +311,15 @@ def report_mapping(
                     row_serials.add(match["serial"])
                 for name in ("serial", "device_id"):
                     if name in columns:
-                        value = str(sheet.cell_value(index, columns[name])).strip()
+                        value = normalize_device_id(sheet.cell_value(index, columns[name]))
                         if value:
                             row_serials.add(value)
                 if "detail" in columns:
                     detail = str(sheet.cell_value(index, columns["detail"]))
-                    row_serials.update(re.findall(r"Device_id:\s*([^\s,;]+)", detail))
+                    for value in re.findall(r"Device_id:\s*([^\s,;]+)", detail):
+                        value = normalize_device_id(value)
+                        if value:
+                            row_serials.add(value)
                 try:
                     rel = path.relative_to(root)
                     parts = rel.parts[2:] if rel.parts[:1] == ("spill_inputs",) else rel.parts
@@ -295,8 +328,16 @@ def report_mapping(
                 except ValueError:
                     # External paths are not eligible for identity inference.
                     pass
-                if not row_serials or not row_serials.issubset(allowed_serials):
-                    raise ValueError(f"scan report serial outside run or unprovable at row {index + 1}")
+                if not row_serials:
+                    raise ScanReportMappingError(
+                        "unprovable", row=index + 1,
+                        detail=f"scan report serial evidence unprovable at row {index + 1}",
+                    )
+                if not row_serials.issubset(allowed_serials):
+                    raise ScanReportMappingError(
+                        "outside_run", row=index + 1,
+                        detail=f"scan report serial outside run at row {index + 1}",
+                    )
                 rows.append({
                     "sheet": sheet.name, "row": index + 1, "path": raw,
                     "dle_id": str(match["id"]) if match else None,
@@ -305,7 +346,10 @@ def report_mapping(
                     "mapped": match is not None,
                 })
         if require_serial_evidence and not rows:
-            raise ValueError("timed-out report has no run serial evidence")
+            raise ScanReportMappingError(
+                "no_rows", row=0,
+                detail="timed-out report has no run serial evidence",
+            )
     finally:
         book.release_resources()
     result = {"schema_version": 1, "plan_run_id": plan_run_id, "host_id": host_id,

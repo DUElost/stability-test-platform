@@ -25,7 +25,9 @@ from pathlib import Path
 from typing import List, Optional, Sequence
 
 from .aee.paths import get_aee_nfs_root
-from .aee.scan_scope import load_scan_events, report_mapping, scan_sources, stage_spill_inputs
+from .aee.scan_scope import (
+    ScanReportMappingError, load_scan_events, report_mapping, scan_sources, stage_spill_inputs,
+)
 from .contracts.round_report_layout import round_report_dir
 from .device_platform import detect_device_platform
 
@@ -117,6 +119,10 @@ class ScanRunner:
     # 后可按 host 告警。下轮 scan_now 幂等重写自愈，无需 worker 自动重试。
     _shard_register_failures = 0
     _shard_failure_lock = threading.Lock()
+    # #3879：伴随映射拒绝计数（进程级累计，重启清零）。被拒报表不上送，
+    # 此前平台侧只能看到报表缺失；经心跳上报后可按 host 告警。
+    _report_mapping_rejections = 0
+    _report_mapping_lock = threading.Lock()
 
     def __init__(self) -> None:
         self._scan_tool_python: str = ""
@@ -142,6 +148,8 @@ class ScanRunner:
             cls._worker_started = False
         with cls._shard_failure_lock:
             cls._shard_register_failures = 0
+        with cls._report_mapping_lock:
+            cls._report_mapping_rejections = 0
         cls._host_scan_semaphore = threading.Semaphore(1)
 
     @classmethod
@@ -154,6 +162,26 @@ class ScanRunner:
     def _record_shard_failure(cls) -> None:
         with cls._shard_failure_lock:
             cls._shard_register_failures += 1
+
+    @classmethod
+    def report_mapping_rejected_total(cls) -> int:
+        """进程级伴随映射拒绝累计（心跳上报口径，重启清零）。"""
+        with cls._report_mapping_lock:
+            return cls._report_mapping_rejections
+
+    @classmethod
+    def _record_report_mapping_rejection(
+        cls, *, plan_run_id: int, host_id: str, platform: str,
+        error: ScanReportMappingError,
+    ) -> None:
+        with cls._report_mapping_lock:
+            cls._report_mapping_rejections += 1
+        logger.error(
+            "scan_report_mapping_rejected plan_run=%d host=%s platform=%s "
+            "row=%s reason=%s detail=%s",
+            plan_run_id, host_id, platform,
+            error.row if error.row is not None else 0, error.reason, error,
+        )
 
     @classmethod
     def enqueue_scan_now(
@@ -305,14 +333,22 @@ class ScanRunner:
             if job.fact_round_id is not None:
                 round_args = {"fact_round_id": job.fact_round_id, "spill_inputs": job.spill_inputs}
             if runner.is_configured():
-                runner.run_scan_and_upload(
-                    job.plan_run_id,
-                    job.host_id,
-                    is_final=job.is_final,
-                    device_serials=job.device_serials,
-                    run_date_stamps=job.run_date_stamps,
-                    **round_args,
-                )
+                try:
+                    runner.run_scan_and_upload(
+                        job.plan_run_id,
+                        job.host_id,
+                        is_final=job.is_final,
+                        device_serials=job.device_serials,
+                        run_date_stamps=job.run_date_stamps,
+                        **round_args,
+                    )
+                except ScanReportMappingError as error:
+                    # #3879：映射拒绝只废掉本平台报表；同一 job 的 Unisoc
+                    # 扫描仍须执行，不能被 MTK 的拒绝连带跳过。
+                    cls._record_report_mapping_rejection(
+                        plan_run_id=job.plan_run_id, host_id=job.host_id,
+                        platform="mtk", error=error,
+                    )
             else:
                 logger.info(
                     "control_scan_now_skip_mtk_not_configured plan_run=%d",
@@ -328,14 +364,21 @@ class ScanRunner:
                 if detect_device_platform(os.getenv("ADB_PATH", "adb"), serial) == "UNISOC"
             ) if unisoc.is_configured() else ()
             if unisoc.is_configured() and (not job.device_serials or unisoc_serials):
-                unisoc.run_scan_and_upload(
-                    job.plan_run_id,
-                    job.host_id,
-                    is_final=job.is_final,
-                    device_serials=unisoc_serials,
-                    run_date_stamps=job.run_date_stamps,
-                    **round_args,
-                )
+                try:
+                    unisoc.run_scan_and_upload(
+                        job.plan_run_id,
+                        job.host_id,
+                        is_final=job.is_final,
+                        device_serials=unisoc_serials,
+                        run_date_stamps=job.run_date_stamps,
+                        **round_args,
+                    )
+                except ScanReportMappingError as error:
+                    # 反向同理：展锐拒绝不得影响已经完成的 MTK 上传。
+                    cls._record_report_mapping_rejection(
+                        plan_run_id=job.plan_run_id, host_id=job.host_id,
+                        platform="unisoc", error=error,
+                    )
             else:
                 logger.info(
                     "control_scan_now_skip_unisoc_no_devices plan_run=%d" if unisoc.is_configured()

@@ -49,6 +49,9 @@ Agent 专用 DLE 列表同时返回已持久化的 `occurrence_key`，供本轮�
 
 上传前逐行验证 serial 属于本 run 的设备集合。纯 MTK 的 run 跳过展锐 runner；
 展锐超时报告没有本 run 的 serial 证据时拒绝上送。这些校验同时作用于现行和影子路径。
+2026-11-04 G3r 修正：工具的未知设备号哨兵值（none / undefined /
+unknown_device_id / discard_device_id）先归一化再校验；平台间映射失败互不跳过。
+详见 [bug-fix note](../bug-fix/2026-11-04-b8-g3r-mapping-sentinel.md)。
 watcher 的 PULL_FAILED 与当前 MTK LOCAL 兜底路径保持空 key，记录
 `occurrence_key_unprovable path_category=pull_failed|local`；没有增加 db_history 读取。
 
