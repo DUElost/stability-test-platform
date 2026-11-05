@@ -1,6 +1,6 @@
 # Start-Log-Scan v2.1.0 与 B8 G2/G3 联合部署报告（2026-11-04）
 
-> 状态：**v1.14 复测后部分完成（未回退）**。第一次 v1.14 尝试曾回退；随后按 Owner 手动 AEE 复测：控制面/15.101/15.102 已到 4d98d47，机队 68/77 到 TARGET、9 台忙碌旧代码 pending；Run 1213 首扫 V5 通过，终态 V6 因工具 failed-dbg 项目目录名失败；影子关闭，工具 v2.1.0 生效（详见 §12）。
+> 状态：**v1.14 复测后按 Owner 决定回退收口（77/77 BASE）**。第一次 v1.14 尝试曾回退；Owner 手动 AEE 复测的 Run 1213 首扫 V5 通过、终态 V6 因工具 failed-dbg 项目目录名失败；随后按 Owner 决定暂停补齐 9 台、回退 68 台新代码，当前控制面/机队均为 eeab11d8，影子关闭；工具端修复单元与新版本为下一步（详见 §12）。
 > 对应计划：`docs/operations/2026-11-04-v210-b8-g2-g3-joint-deployment-plan.md`（v1.0；v1.14 复测见 §12）。
 > 执行时间：2026-11-04 18:00–18:33；v1.14 复测 2026-11-05 14:00–18:00（Asia/Shanghai）。
 
@@ -201,18 +201,18 @@ _本报告只记录实际执行过的动作；未执行项均标 pending。_
 - 根因：工具 `_get_failed_dbg_device_root_and_id` failed-dbg 兜底把扫描根第一级目录名当 `Device_id`；#3879「不在本单元」第 3 条曾称只见过 8 月 run 122–132，本次复现。修复归工具端：用路径串号目录/`None`/`discard_device_id`，不得写项目目录名；G3 硬校验保留。
 - 1206 的 1463 旧日志 row 2 需按同一口径复核；1127 的 `ADDYNX` 是真实串号/设备身份问题，与 1213 的 folder-name 不同。
 
-### 12.2 当前机队
+### 12.2 回退前机队
 
 - 控制面 `4d98d47`；工具 v2.1.0；影子 0。
 - `batch_hot_update --direct --force`：`SUMMARY ok=67 converged=0 fail=0 skipped=10`。
 - 15.101 被跳过（canary 运行中，但已是 4d98d47）；15.102 已更新 4d98d47；9 台忙碌旧代码 pending：15.56/59/60/83/84/85/86/88/92。
-- 当前 68 台 4d98d47 + 9 台 eeab11d8 = 77；15.101 `scan_report_mapping_rejected_total=1`，15.102=0。
+- 回退前 68 台 4d98d47 + 9 台 eeab11d8 = 77；15.101 `scan_report_mapping_rejected_total=1`，15.102=0。回退后见 §12.6。
 - 17 台 Ubuntu 22.04/Python 3.10 在 batch 中均 `OK deps_refreshed=True`；15.33 工具 venv 3.10 已实测；15.101/15.102 3.13 已实测；其余 3.10 主机的工具 import 逐台复核仍为 pending。
 
 ### 12.3 V5/V6
 
 - **V5**：1213 首扫通过（org/mapping/上传/manifest/merge/extract）。
-- **V6 MTK**：15.101 终态扫描 1 次 `outside_run`（failed-dbg 项目目录名）；15.102 0；68 台新代码中仅 15.101 有该次测试拒绝；9 台旧代码 pending。
+- **V6 MTK**：15.101 终态扫描 1 次 `outside_run`（failed-dbg 项目目录名）；15.102 0；回退前 68 台新代码中仅 15.101 有该次测试拒绝；9 台旧代码 pending。回退后 77/77 BASE，旧代码无该计数器。
 - **V6 Unisoc**：回放 5 次 `outside_run`（1179 1、1189 1、1190 1、1193 2），按 #3884 已知限制单独记录；1213 无 Unisoc 设备，`skip_unisoc_no_devices`。
 - 按用户“MTK 必须为 0”，当前未通过；需工具端 failed-dbg 修复后重跑，或用路径串号/None 输出；G3 硬校验不放松。
 
@@ -224,11 +224,20 @@ _本报告只记录实际执行过的动作；未执行项均标 pending。_
 
 ### 12.5 未完成
 
-1. 工具端 failed-dbg 兜底修复（新工具版本/tag）；15.101 重跑干净扫描，MTK 拒绝 0。
-2. 9 台忙碌主机自然空闲后 `batch_hot_update --direct --force` 补齐；逐台 xlrd/tool/digest/心跳/挂载核验。
-3. V5/V6 全量测量、Unisoc 拒绝清单、部署报告最终收口。
-4. 影子激活未开始。
+1. 工具端 failed-dbg 兜底修复（新工具版本/tag）；1213 失败样本离线回放；再新建单主机 run 在线复验，首扫+终扫 MTK 拒绝 0。
+2. 9 台忙碌主机保持 BASE，等待自然空闲；新工具版本通过后另行安排补齐。
+3. 新工具版本的 1213 离线回放、新单主机 run 首扫+终扫、V5/V6 全量测量。
+4. 影子保持关闭；激活未开始。
+
+### 12.6 按 Owner 决定回退收口（2026-11-05）
+
+- Owner 决定：暂停补齐 9 台、影子保持关闭；按既定 SOP 回退收口；忙碌主机等待自然空闲。
+- 回退：站点 env 恢复 `env.backend.bak-20261105-before-canary2`；`current` 指回 `eeab11d8-20261103`；重启健康 200、schema `b8g1c4a7d2e9`。
+- 旧发布根 `batch_hot_update --direct --force`：`SUMMARY ok=68 converged=0 fail=0 skipped=9`；68 台新代码回退到 `eeab11d8`；9 台忙碌保持 BASE（15.56/59/60/83/84/85/86/88/92）。
+- 机队核验：77/77 `eeab11d8`、77/77 matched；控制面旧工具；影子关闭。
+- 保留：新 bundle `4d98d47-20261105`、两侧 2.1.0 工具目录、Run 1213 的 1105 样本/日志/失败证据；不删除。
+- 当前状态：**未完成部署**；工具端 failed-dbg 修复单元/新版本、1213 离线回放、新单主机 run 首扫+终扫为下一步。
 
 ---
 
-_本报告保留第一次尝试、v1.14 第一次回退与 v1.14 复测三次记录；当前控制面 4d98d47，机队 68/77 TARGET、9 台 busy pending；金丝雀首扫 V5 通过、终态 V6 因工具 failed-dbg 项目目录名失败；未完成最终验收。_
+_本报告保留第一次尝试、v1.14 第一次回退、v1.14 复测与按 Owner 决定的第二次回退；当前控制面 eeab11d8、机队 77/77 BASE、影子关闭；Run 1213 证据保留，工具端 failed-dbg 修复与新版本待办；未完成部署。_
