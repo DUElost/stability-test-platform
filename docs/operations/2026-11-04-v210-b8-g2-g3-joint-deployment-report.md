@@ -143,3 +143,53 @@
 ---
 
 _本报告只记录实际执行过的动作；未执行项均标 pending。_
+
+## 11. v1.14 重试与回退（2026-11-05）
+
+### 11.1 基线与 TARGET
+
+- TARGET：main `4d98d47a310915621a827606549c0cd1fbe76475`；`eeab11d8..4d98d47` 无新增迁移、无脚本族/manifest 变化，前端仅依赖文件。
+- 新 bundle：`/home/debian13/stp-releases/4d98d47-20261105`；agent-code `sha256:ba95121300e4bd7611a881d743789bd846a1906c799b4a3816399b078f135cbb`，control-plane `sha256:b95b1b518bbfc87f04d66ea62ed51a6083f243c1da05efd7599357c047020020`，schema `b8g1c4a7d2e9`。
+- 工具：复用 v2.1.0 双版本 venv + 生产 pkglist 覆盖；release.json 版本/commit/178 文件哈希复核，唯一 overlay 为 `config/pkglist.txt`。
+- 窗口前离线回放（TARGET `report_mapping`）：Run 1179/1189/1190/1193 的 MTK 21 份 org + 21 份 dedup **全部通过**；Unisoc 5 次 `outside_run`（1179 1、1189 1、1190 1、1193 2），按 #3884 已知限制单独记录。
+
+### 11.2 执行
+
+- 控制面切到 `4d98d47`：健康 200、schema 在 head、影子关闭、工具解析新目录、G3r 代码在位。
+- 15.102 与 15.101 依次热更新到 `4d98d47`：`matched`、xlrd 2.0.2、工具路径新目录、心跳正常。
+- 金丝雀：
+  - Run 1205（1507，V33）：init `ensure_root` 失败（`adbd cannot run as root in production builds`），PARTIAL_SUCCESS。
+  - Run 1206（1463，V143）：1105 目录含旧日志，最终扫描 org 第 2 行触发 MTK `outside_run`，拒绝 2 次（15.102 计数器=2），未上传；FAILED。
+  - Run 1207（1396，V143，干净 1105）：monkey 跑满 1h 无 AEE 日志、DLE=0；终态自动扫描无 org；FAILED（abort）。
+  - Run 1210（1396，延长）：继续约 1h 仍无 AEE 日志；abort 后无 org；FAILED。
+- 机队滚动未开始；75 台保持 BASE。
+
+### 11.3 回退
+
+- 站点 env 恢复 `env.backend.bak-20261105-v210-v14`；`current` 指回 `eeab11d8-20261103`；17:02:15 重启，健康 200、schema `b8g1c4a7d2e9`。
+- 15.101/15.102 强制热更新旧代码：`eeab11d8`、digest `1067e716…`、env 旧路径、matched。
+- 机队 77/77 全部 `eeab11d8`；新 bundle、两侧 2.1.0 工具目录、失败 run/日志/证据保留。
+
+### 11.4 V5/V6
+
+- **V5 未通过**：1207/1210 无 org/上传；1206 org 被 MTK 拒绝；1205 未进入扫描。
+- **V6 MTK**：15.102 计数器 2（1206 测试轮两次扫描）；15.101 为 0；回退后旧代码无该计数器，机队 V6 未测量。
+- **V6 Unisoc**：回放的 5 次拒绝按 #3884 单独记录，未与 MTK 混算。
+
+### 11.5 归因
+
+- 主因在**设备/数据/金丝雀设计**：V33 无 root；1463 的 1105 旧日志带真实越界串号；1396 新 monkey run 1h 无 AEE 事件。
+- **平台端无回归**：G3 的 `outside_run` 硬失败与计数器是设计行为；#3879/G3r 的 `None` 哨兵修复有效（MTK 回放 21/21），但不覆盖 1206 的真实越界行。
+- **工具端**：mode 0 不按 run 串号过滤是既有缺口（旧工具同样），不是 v2.1.0 回归；merge 已复核为 14 个问题、xls/org/stats 逐字节一致。
+- **最近修改**：G3/PR #3873 引入强制执行（预期），不是脏数据来源；#3879/G3r 未引入本轮失败。`preview` 未把 Plan 115 的 V143 前置变成机器校验，是平台/计划校验缺口。
+
+### 11.6 未完成项
+
+1. 金丝雀 V5：需要“当前 run 内真实 AEE 事件且串号属于本 run”的设备/计划，或接受更长的 monkey 等待。
+2. 工具端 mode 0 serial 过滤（长期）；1105 旧日志清理/隔离（短期数据卫生）。
+3. 机队滚动、xlrd 逐台核验、V5/V6 全量测量均未开始。
+4. G2/G3 代码与工具 v2.1.0 未在生产生效；影子保持关闭。
+
+---
+
+_本报告保留第一次尝试与 v1.14 重试两次记录；当前生产为 BASE `eeab11d8`，未完成部署。_
