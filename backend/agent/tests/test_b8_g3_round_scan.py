@@ -34,16 +34,24 @@ REPORT_HEADERS = [
 ]
 
 
-def write_report(path, paths, details=None):
-    """Write an aeeexp org with the real 15-column header (including DeviceId)."""
+def write_report(path, paths, details=None, extra=None):
+    """Write an aeeexp org with the real 15-column header (including DeviceId).
+
+    ``extra`` appends synthetic columns after the real header, e.g.
+    ``{"serial": ["none"]}``; the real DeviceId column stays untouched.
+    """
+    extra = extra or {}
+    headers = REPORT_HEADERS + list(extra)
     book = xlwt.Workbook()
     sheet = book.add_sheet("aeeexp")
-    for column, name in enumerate(REPORT_HEADERS):
+    for column, name in enumerate(headers):
         sheet.write(0, column, name)
     for index, value in enumerate(paths, 1):
         sheet.write(index, 1, str(value))
         if details is not None:
             sheet.write(index, 8, details[index - 1])
+        for offset, values in enumerate(extra.values(), len(REPORT_HEADERS)):
+            sheet.write(index, offset, values[index - 1])
     book.save(str(path))
 
 
@@ -156,6 +164,43 @@ def test_unknown_device_id_without_scoped_path_is_unprovable(tmp_path):
     outside.mkdir(parents=True)
     report = root / "Result_x_org.xls"
     write_report(report, [outside / "__"], details=["Device_id: None"])
+    with pytest.raises(ScanReportMappingError) as caught:
+        report_mapping(str(report), serials=["SER-A"], sources=[], scan_root=str(root),
+                       plan_run_id=42, host_id="h", platform="mtk")
+    assert caught.value.reason == "unprovable"
+    assert caught.value.row == 2
+
+
+@pytest.mark.parametrize(
+    ("column", "sentinel"),
+    [("serial", "none"), ("device_id", "UNDEFINED")],
+)
+def test_unknown_device_id_sentinel_in_evidence_column_with_scoped_path_is_accepted(
+    tmp_path, column, sentinel,
+):
+    root = tmp_path / "scan"
+    event = root / "V1_1104_MonkeyAEEinfo" / "SER-A" / "vendor_aee_exp" / "2026_1101_db.00.JE"
+    event.mkdir(parents=True)
+    report = root / "Result_x_org.xls"
+    write_report(report, [event / "__"], extra={column: [sentinel]})
+    mapping = report_mapping(str(report), serials=["SER-A"], sources=[], scan_root=str(root),
+                             plan_run_id=42, host_id="h", platform="mtk")
+    assert [r["row"] for r in mapping["rows"]] == [2]
+
+
+@pytest.mark.parametrize(
+    ("column", "sentinel"),
+    [("serial", "none"), ("device_id", "UNDEFINED")],
+)
+def test_unknown_device_id_sentinel_in_evidence_column_without_scoped_path_is_unprovable(
+    tmp_path, column, sentinel,
+):
+    root = tmp_path / "scan"
+    root.mkdir()
+    outside = tmp_path / "elsewhere" / "SER-A" / "vendor_aee_exp" / "2026_1101_db.00.JE"
+    outside.mkdir(parents=True)
+    report = root / "Result_x_org.xls"
+    write_report(report, [outside / "__"], extra={column: [sentinel]})
     with pytest.raises(ScanReportMappingError) as caught:
         report_mapping(str(report), serials=["SER-A"], sources=[], scan_root=str(root),
                        plan_run_id=42, host_id="h", platform="mtk")

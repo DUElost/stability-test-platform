@@ -50,6 +50,9 @@ backend/agent/aee/scan_scope.py:299
 
 - 哨兵集合所有值及大小写变体（含 `None`、`Discard_Device_Id`）在扫描根内均通过；
 - 同样 `Device_id: None` 但路径在扫描根外、无 DLE 命中时按 `unprovable` 拒绝；
+- `serial` / `device_id` 列入口分别写入 `none` / `UNDEFINED`：路径在扫描根内通过，
+  路径在根外判 `unprovable`。把列值归一化回退为 `str(...).strip()` 时这 4 个用例
+  全部失败（误判 `outside_run`），恢复后通过；
 - 真实越界串号仍按 `outside_run` 拒绝；缺 Path 列与超时无行分别报
   `missing_path` / `no_rows`；
 - MTK 映射被拒后，同一 job 的 Unisoc 照常扫描并上传，计数器加 1 且日志含
@@ -204,7 +207,7 @@ TOTAL failed=0
 测试命令与结果：
 
 - `scripts/run_pytest.py backend/agent/tests/test_b8_g3_round_scan.py` 等 10 个相关
-  Agent 测试文件：122 passed。
+  Agent 测试文件：126 passed。
 - `scripts/run_gates.py check:quick`：见 PR 最终结果。
 
 ## Revisit
