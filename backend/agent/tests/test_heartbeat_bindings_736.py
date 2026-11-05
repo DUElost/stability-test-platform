@@ -59,6 +59,8 @@ def test_build_heartbeat_thread_reconnect_uses_slot():
             recovery_actions_slot=slot,
         )
         kwargs = ht_cls.call_args.kwargs
+        # #3879：伴随映射拒绝计数必须随同一份心跳载荷上报。
+        assert kwargs["get_outbox_counts"]()["scan_report_mapping_rejected_total"] == 0
         # before slot filled → no-op False
         assert kwargs["on_devices_reconnected"](["S"]) is False
         trigger.assert_not_called()

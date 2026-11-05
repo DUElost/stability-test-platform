@@ -14,7 +14,12 @@ import requests
 import xlwt
 
 from backend.agent.aee import scan_scope
-from backend.agent.aee.scan_scope import report_mapping, stage_spill_inputs
+from backend.agent.aee.scan_scope import (
+    UNKNOWN_DEVICE_ID_VALUES,
+    ScanReportMappingError,
+    report_mapping,
+    stage_spill_inputs,
+)
 from backend.agent.contracts.occurrence_key import compute_occurrence_key
 from backend.agent.contracts.round_report_layout import round_manifest_path, round_report_dir
 from backend.agent.scan_runner import ScanRunner, _ScanJob
@@ -22,12 +27,31 @@ from backend.agent.unisoc_scan_runner import UnisocScanRunner
 from backend.agent.upload_manager import UploadManager
 
 
-def write_report(path, paths):
+REPORT_HEADERS = [
+    "Id", "Path", "Version", "ExpTime", "ExpClass", "ExpType ",
+    "CurProcess", "Package", "Detail", "CausedBy", "extraTag", "Count",
+    "Activity", "DeviceId", "Rom_Ram",
+]
+
+
+def write_report(path, paths, details=None, extra=None):
+    """Write an aeeexp org with the real 15-column header (including DeviceId).
+
+    ``extra`` appends synthetic columns after the real header, e.g.
+    ``{"serial": ["none"]}``; the real DeviceId column stays untouched.
+    """
+    extra = extra or {}
+    headers = REPORT_HEADERS + list(extra)
     book = xlwt.Workbook()
-    sheet = book.add_sheet("events")
-    sheet.write(0, 0, "Path")
+    sheet = book.add_sheet("aeeexp")
+    for column, name in enumerate(headers):
+        sheet.write(0, column, name)
     for index, value in enumerate(paths, 1):
-        sheet.write(index, 0, str(value))
+        sheet.write(index, 1, str(value))
+        if details is not None:
+            sheet.write(index, 8, details[index - 1])
+        for offset, values in enumerate(extra.values(), len(REPORT_HEADERS)):
+            sheet.write(index, offset, values[index - 1])
     book.save(str(path))
 
 
@@ -45,7 +69,7 @@ def reset():
 @pytest.fixture
 def campaign(tmp_path, monkeypatch):
     hdd, nfs = tmp_path / "hdd", tmp_path / "nfs"
-    event = hdd / "V1_1104_MonkeyAEEinfo" / "SER-A" / "event"
+    event = hdd / "V1_1104_MonkeyAEEinfo" / "SER-A" / "vendor_aee_exp" / "event"
     event.mkdir(parents=True)
     (event / "main.dbg").write_bytes(b"complete original evidence")
     remote = nfs / "devices" / "42" / "dle-1" / "event"
@@ -101,7 +125,8 @@ def test_spill_before_first_scan_remains_input_and_preserves_identity(campaign, 
 
 def test_mapping_covers_all_rows_without_guessing(tmp_path):
     root = tmp_path / "scan"
-    known, unknown = root / "V1" / "SER-A" / "known", root / "V1" / "SER-A" / "unknown"
+    known = root / "V1" / "SER-A" / "vendor_aee_exp" / "known"
+    unknown = root / "V1" / "SER-A" / "vendor_aee_exp" / "unknown"
     known.mkdir(parents=True)
     unknown.mkdir()
     report = root / "Result_x_org.xls"
@@ -112,8 +137,75 @@ def test_mapping_covers_all_rows_without_guessing(tmp_path):
                              plan_run_id=42, host_id="h", platform="mtk")
     assert [r["row"] for r in mapping["rows"]] == [2, 3]
     assert mapping["rows"][0]["dle_id"] == "one"
-    assert mapping["rows"][1] == {"sheet": "events", "row": 3, "path": str(unknown / "b.dbg"),
+    assert mapping["rows"][1] == {"sheet": "aeeexp", "row": 3, "path": str(unknown / "b.dbg"),
                                     "dle_id": None, "occurrence_key": None, "source": None, "mapped": False}
+
+
+@pytest.mark.parametrize(
+    "sentinel",
+    sorted(UNKNOWN_DEVICE_ID_VALUES) + ["None", "UNDEFINED", "Discard_Device_Id"],
+)
+def test_unknown_device_id_sentinel_with_scoped_path_is_accepted(tmp_path, sentinel):
+    root = tmp_path / "scan"
+    event = root / "V1_1104_MonkeyAEEinfo" / "SER-A" / "vendor_aee_exp" / "2026_1101_db.00.JE"
+    event.mkdir(parents=True)
+    report = root / "Result_x_org.xls"
+    write_report(report, [event / "__"],
+                 details=[f"Device_id: {sentinel}\n解析库版本：recognizeexception 1.0.8"])
+    mapping = report_mapping(str(report), serials=["SER-A"], sources=[], scan_root=str(root),
+                             plan_run_id=42, host_id="h", platform="mtk")
+    assert [r["row"] for r in mapping["rows"]] == [2]
+
+
+def test_unknown_device_id_without_scoped_path_is_unprovable(tmp_path):
+    root = tmp_path / "scan"
+    root.mkdir()
+    outside = tmp_path / "elsewhere" / "SER-A" / "vendor_aee_exp" / "2026_1101_db.00.JE"
+    outside.mkdir(parents=True)
+    report = root / "Result_x_org.xls"
+    write_report(report, [outside / "__"], details=["Device_id: None"])
+    with pytest.raises(ScanReportMappingError) as caught:
+        report_mapping(str(report), serials=["SER-A"], sources=[], scan_root=str(root),
+                       plan_run_id=42, host_id="h", platform="mtk")
+    assert caught.value.reason == "unprovable"
+    assert caught.value.row == 2
+
+
+@pytest.mark.parametrize(
+    ("column", "sentinel"),
+    [("serial", "none"), ("device_id", "UNDEFINED")],
+)
+def test_unknown_device_id_sentinel_in_evidence_column_with_scoped_path_is_accepted(
+    tmp_path, column, sentinel,
+):
+    root = tmp_path / "scan"
+    event = root / "V1_1104_MonkeyAEEinfo" / "SER-A" / "vendor_aee_exp" / "2026_1101_db.00.JE"
+    event.mkdir(parents=True)
+    report = root / "Result_x_org.xls"
+    write_report(report, [event / "__"], extra={column: [sentinel]})
+    mapping = report_mapping(str(report), serials=["SER-A"], sources=[], scan_root=str(root),
+                             plan_run_id=42, host_id="h", platform="mtk")
+    assert [r["row"] for r in mapping["rows"]] == [2]
+
+
+@pytest.mark.parametrize(
+    ("column", "sentinel"),
+    [("serial", "none"), ("device_id", "UNDEFINED")],
+)
+def test_unknown_device_id_sentinel_in_evidence_column_without_scoped_path_is_unprovable(
+    tmp_path, column, sentinel,
+):
+    root = tmp_path / "scan"
+    root.mkdir()
+    outside = tmp_path / "elsewhere" / "SER-A" / "vendor_aee_exp" / "2026_1101_db.00.JE"
+    outside.mkdir(parents=True)
+    report = root / "Result_x_org.xls"
+    write_report(report, [outside / "__"], extra={column: [sentinel]})
+    with pytest.raises(ScanReportMappingError) as caught:
+        report_mapping(str(report), serials=["SER-A"], sources=[], scan_root=str(root),
+                       plan_run_id=42, host_id="h", platform="mtk")
+    assert caught.value.reason == "unprovable"
+    assert caught.value.row == 2
 
 
 def test_missing_xls_reader_refuses_unvalidated_upload(campaign, monkeypatch):
@@ -153,10 +245,80 @@ def test_foreign_serial_is_rejected_before_any_upload(campaign, monkeypatch, fac
         write_report(root / "Result_test_org.xls", [root / "V1" / "FOREIGN" / "bad"])
         return subprocess.CompletedProcess(argv, 0)
     monkeypatch.setattr("backend.agent.scan_runner.subprocess.run", tool)
-    with pytest.raises(ValueError, match="serial outside"):
+    with pytest.raises(ScanReportMappingError, match="serial outside") as caught:
         runner.run_scan_and_upload(42, "host-1", is_final=False, device_serials=["SER-A"], fact_round_id=fact_round_id)
+    assert caught.value.reason == "outside_run"
+    assert caught.value.row == 2
     assert not (nfs / "dedup").exists()
     assert not (nfs / "_meta").exists()
+
+
+def test_report_without_path_column_reports_missing_path(tmp_path):
+    report = tmp_path / "Result_x_org.xls"
+    book = xlwt.Workbook()
+    book.add_sheet("aeeexp").write(0, 0, "Id")
+    book.save(str(report))
+    with pytest.raises(ScanReportMappingError) as caught:
+        report_mapping(str(report), serials=["SER-A"], sources=[], scan_root=str(tmp_path),
+                       plan_run_id=42, host_id="h", platform="mtk")
+    assert caught.value.reason == "missing_path"
+    assert caught.value.row == 1
+
+
+def test_mtk_mapping_rejection_does_not_skip_unisoc_upload(campaign, monkeypatch, caplog):
+    mtk, hdd, nfs, event, ev = campaign
+
+    def tool(argv, **kwargs):
+        root = Path(argv[argv.index("-d") + 1])
+        write_report(root / "Result_test_org.xls", [hdd.parent / "outside" / "a.dbg"],
+                     details=["Device_id: None"])
+        return subprocess.CompletedProcess(argv, 0)
+    monkeypatch.setattr("backend.agent.scan_runner.subprocess.run", tool)
+
+    unisoc = UnisocScanRunner.instance()
+    unisoc._configured = True
+    monkeypatch.setattr("backend.agent.scan_runner.detect_device_platform", lambda *args: "UNISOC")
+    monkeypatch.setattr("backend.agent.unisoc_scan_runner.detect_device_platform", lambda *args: "UNISOC")
+    monkeypatch.setattr("backend.agent.unisoc_scan_runner.load_scan_events", lambda *args: [ev])
+    monkeypatch.setattr(unisoc, "_run_log_scan_gt", lambda *args: True)
+
+    def scanned(root, *args, **kwargs):
+        report = Path(root) / "Result_unisoc_org.xls"
+        write_report(report, sorted(Path(root).rglob("main.dbg")))
+        return str(report)
+    monkeypatch.setattr(unisoc, "run_scan_result", scanned)
+    caplog.set_level(logging.ERROR)
+
+    ScanRunner._execute_job(_ScanJob(42, "host-1", False, ("SER-A",), (), None))
+
+    assert (nfs / "dedup/42/unisoc/host-1_Result_unisoc_org.xls").is_file()
+    assert not (nfs / "dedup/42/mtk").exists()
+    assert ScanRunner.report_mapping_rejected_total() == 1
+    assert "scan_report_mapping_rejected" in caplog.text
+    assert "platform=mtk" in caplog.text
+    assert "reason=unprovable" in caplog.text
+    assert "row=2" in caplog.text
+
+
+def test_unisoc_mapping_rejection_does_not_affect_mtk(monkeypatch, caplog):
+    mtk, unisoc = ScanRunner.instance(), UnisocScanRunner.instance()
+    monkeypatch.setattr(mtk, "is_configured", lambda: True)
+    mtk_run = MagicMock()
+    monkeypatch.setattr(mtk, "run_scan_and_upload", mtk_run)
+    monkeypatch.setattr(unisoc, "is_configured", lambda: True)
+    monkeypatch.setattr(
+        unisoc, "run_scan_and_upload",
+        MagicMock(side_effect=ScanReportMappingError("no_rows", row=0, detail="no rows")),
+    )
+    monkeypatch.setattr("backend.agent.scan_runner.detect_device_platform", lambda *args: "UNISOC")
+    caplog.set_level(logging.ERROR)
+
+    ScanRunner._execute_job(_ScanJob(42, "h", False, ("SER-A",), (), None))
+
+    mtk_run.assert_called_once()
+    assert ScanRunner.report_mapping_rejected_total() == 1
+    assert "scan_report_mapping_rejected" in caplog.text
+    assert "platform=unisoc" in caplog.text
 
 
 def test_shadow_cannot_change_legacy_files_or_manifest(campaign):
@@ -322,6 +484,7 @@ def test_timeout_with_no_serial_evidence_rejects_org_before_upload(tmp_path, mon
     runner._last_scan_timed_out = True
     uploader = UploadManager.instance()
     uploader.configure(nfs_root=str(tmp_path / "nfs"))
-    with pytest.raises(ValueError, match="no run serial evidence"):
+    with pytest.raises(ScanReportMappingError, match="no run serial evidence") as caught:
         runner.run_scan_and_upload(42, "h", is_final=False, device_serials=["SER-A"])
+    assert caught.value.reason == "no_rows"
     assert not (tmp_path / "nfs").exists()
