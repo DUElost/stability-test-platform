@@ -32,6 +32,8 @@ class Host(Base):
     # ADR-0040 D2：远端 current artifact digest（部署流程写入、心跳上报）。
     # 显式列（禁 Host.extra 裸键，ADR-0038 D4 先例）；sha256:<hex> ≤ 71 字符。
     agent_artifact_digest = Column(String(80))
+    # #3875：仅非空 digest 心跳更新；与 last_heartbeat 同事务、同一个 now。
+    agent_artifact_digest_reported_at = Column(DateTime(timezone=True), nullable=True)
     # ADR-0040 P2（#1963）：host-resources 身份（分层扩展的显式列）。
     # ADR-0040 D8 R4：已弃用、不再写入（资源层退役）；保留一个版本窗口后另起迁移删列。
     agent_resources_digest = Column(String(80))

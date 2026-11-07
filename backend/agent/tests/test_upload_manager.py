@@ -33,6 +33,34 @@ def _make_manager(nfs_root: str) -> UploadManager:
     return m
 
 
+def test_shadow_upload_observation_requires_completed_shard(tmp_path, monkeypatch, caplog):
+    import logging
+
+    manager = _make_manager(str(tmp_path / "center"))
+    source = tmp_path / "Result_shadow_org.xls"
+    source.write_bytes(b"report")
+    caplog.set_level(logging.INFO)
+    register = manager._record_shard_entry
+
+    def broken_shard(*_args, **_kwargs):
+        raise OSError("shard unavailable")
+
+    monkeypatch.setattr(manager, "_record_shard_entry", broken_shard)
+    with pytest.raises(ShardRegistrationError):
+        manager.upload_scan_report(42, "host-a", str(source), platform_subdir="mtk", fact_round_id=7)
+    assert manager.shadow_report_uploaded_total() == 0
+    assert "shadow_round_report_uploaded" not in caplog.text
+    monkeypatch.setattr(manager, "_record_shard_entry", register)
+    assert manager.upload_scan_report(42, "host-a", str(source), platform_subdir="mtk", fact_round_id=7)
+    assert manager.shadow_report_uploaded_total() == 1
+    assert "shadow_round_report_uploaded plan_run=42 fact_round_id=7 host=host-a platform=mtk" in caplog.text
+    caplog.clear()
+    # 现行上送不增加影子计数，也没有影子日志。
+    assert manager.upload_scan_report(42, "host-a", str(source), platform_subdir="mtk")
+    assert manager.shadow_report_uploaded_total() == 1
+    assert "shadow_round_report_uploaded" not in caplog.text
+
+
 def test_upload_scan_report_copies_org_xls_to_dedup(tmp_path):
     nfs = tmp_path / "nfs"
     nfs.mkdir()

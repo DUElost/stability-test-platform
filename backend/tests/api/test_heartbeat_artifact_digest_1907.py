@@ -2,11 +2,42 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
+
+from backend.services.shadow_scan_rounds import _shadow_capability_verified
+
 DIGEST = "sha256:" + "b" * 64
 RESOURCES_DIGEST = "sha256:" + "b" * 64
 
 
 class TestHeartbeatArtifactDigest:
+    def test_shadow_guard_rejects_retained_digest_after_empty_heartbeat(self, client, sample_host, db_session):
+        for digest, instance in [(DIGEST, "new-agent"), ("", "old-agent"), (DIGEST, "updated-agent")]:
+            response = client.post("/api/v1/heartbeat", json={
+                "host_id": sample_host.id, "status": "ONLINE", "agent_instance_id": instance,
+                "agent_artifact_digest": digest,
+            })
+            assert response.status_code == 200
+            db_session.refresh(sample_host)
+            assert sample_host.agent_artifact_digest == DIGEST
+            assert _shadow_capability_verified(sample_host, DIGEST) is bool(digest)
+            if digest:
+                assert sample_host.agent_artifact_digest_reported_at == sample_host.last_heartbeat
+            else:
+                assert sample_host.agent_artifact_digest_reported_at < sample_host.last_heartbeat
+
+    def test_shadow_guard_requires_online_and_current_heartbeat(self, sample_host):
+        sample_host.agent_artifact_digest = DIGEST
+        sample_host.agent_artifact_digest_reported_at = sample_host.last_heartbeat
+        assert _shadow_capability_verified(sample_host, DIGEST)
+        sample_host.status = "OFFLINE"
+        assert not _shadow_capability_verified(sample_host, DIGEST)
+        sample_host.status = "ONLINE"
+        sample_host.agent_artifact_digest_reported_at -= timedelta(seconds=1)
+        assert not _shadow_capability_verified(sample_host, DIGEST)
+        sample_host.agent_artifact_digest_reported_at = None
+        assert not _shadow_capability_verified(sample_host, DIGEST)
+
     def test_heartbeat_persists_artifact_digest(self, client, sample_host, db_session):
         response = client.post(
             "/api/v1/heartbeat",
