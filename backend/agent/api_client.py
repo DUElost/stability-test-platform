@@ -92,25 +92,30 @@ _ABORT_STATUSES = frozenset({"ABORTED", "CANCELED", "CANCELLED"})
 
 
 def fetch_pending_jobs(api_url: str, host_id: str, agent_instance_id: str = "",
-                       capacity: int = 2) -> List[Dict[str, Any]]:
+                       capacity: int = 2, vbus_slots: int = 0) -> List[Dict[str, Any]]:
     """Claim pending jobs via POST /agent/jobs/claim (D1: 统一 claim 路径).
 
     Backend 在 claim 响应中注入 device_serial + watcher_policy，供 JobSession 启动使用。
     *capacity* should be the Agent's actual available slots to avoid claiming
     more jobs than the thread pool can execute (orphaned RUNNING jobs).
+    *vbus_slots*（#3892 / ADR-0063 D4 第 5 条）只在本机是 vbus 刷机站时 > 0，
+    此时才写进请求体；为 0 时请求体与旧版逐字一致。
     """
     from . import __version__ as agent_version
 
     agent_secret = _get_agent_secret()
     headers = {"X-Agent-Secret": agent_secret} if agent_secret else {}
+    body: Dict[str, Any] = {
+        "host_id": host_id,
+        "capacity": capacity,
+        "agent_instance_id": agent_instance_id,
+        "agent_version": agent_version,
+    }
+    if vbus_slots > 0:
+        body["vbus_slots"] = vbus_slots
     resp = requests.post(
         f"{api_url}/api/v1/agent/jobs/claim",
-        json={
-            "host_id": host_id,
-            "capacity": capacity,
-            "agent_instance_id": agent_instance_id,
-            "agent_version": agent_version,
-        },
+        json=body,
         headers=headers,
         timeout=10,
     )
