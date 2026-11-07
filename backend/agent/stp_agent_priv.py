@@ -1204,6 +1204,18 @@ def validate_usb_power_serial(serial):
     return serial
 
 
+def validate_usb_power_expect_slot(value):
+    """--expect-slot 校验（纯函数）：`<hub_location>:<port>`，取值口径与映射条目相同。"""
+    if not isinstance(value, str) or value.count(":") != 1:
+        _fail("--expect-slot must be <hub_location>:<port>, got %r" % (value,))
+    location, _, port_text = value.partition(":")
+    if not _USB_PORT_RE.match(location):
+        _fail("--expect-slot has an invalid hub_location %r" % (location,))
+    if not re.match(r"^[0-9]{1,2}\Z", port_text) or not 1 <= int(port_text) <= USB_POWER_MAX_PORT:
+        _fail("--expect-slot port must be an integer within 1..%d" % USB_POWER_MAX_PORT)
+    return location, int(port_text)
+
+
 def validate_usb_power_request(action, delay):
     """动作与延迟校验（纯函数）：delay 只对 cycle 有效，取值 1..30。"""
     if action not in USB_POWER_ACTIONS:
@@ -1306,18 +1318,24 @@ def build_usb_power_argv(location, port, action, delay):
 def cmd_usb_power(args, conf):
     """按 serial 给登记槽位切电（#3892 / ADR-0063 D2 / ADR-0037 D8）。
 
-    面约束：调用方只给 serial / action / delay；槽位只来自 root 属主映射文件；
+    面约束：调用方只给 serial / expect-slot / action / delay；槽位只来自 root 属主映射文件，
+    expect-slot 只用于比对（不一致即 exit 2，不调 uhubctl）；
     Hub 位置必须解析为 ``/sys/devices`` 下同名的真实目录（与 usb-authorized 同判定）；
     uhubctl 本体必须 root 属主且非 group/other 可写；子进程环境清空、60s 超时、
     不经 shell。失败一律 exit 3 + ``STP_USB_POWER_*`` 标记。
     """
     _require_root()
     serial = validate_usb_power_serial(args.serial)
+    expected = validate_usb_power_expect_slot(args.expect_slot)
     action, delay = validate_usb_power_request(args.action, args.delay)
     slots = _load_usb_power_slots()
     if serial not in slots:
         _fail("serial %s has no slot in %s" % (serial, USB_POWER_SLOTS_PATH))
     location, port = slots[serial]
+    if (location, port) != expected:
+        # 在任何切电动作之前拒绝：调用方与 wrapper 读到的映射不同（两次读之间被改写）。
+        _fail("STP_USB_POWER_SLOT_MISMATCH serial=%s expected=%s:%d mapped=%s:%d"
+              % (serial, expected[0], expected[1], location, port))
     resolved = os.path.realpath(os.path.join(USB_SYSFS_BASE, location))
     if not is_kernel_usb_device_path(resolved, location) or not os.path.isdir(resolved):
         _fail("hub_location %s does not resolve to a kernel sysfs USB device (got %s)"
@@ -1384,7 +1402,8 @@ _SUBCOMMAND_CONTRACT = {
     # 的互斥组覆盖，探针形态另有单测）。
     "read-kernel-log": ["--since-epoch", "1555555555"],
     # #3892：USB 切电（D8）。契约 argv 走 cycle + delay 形态（覆盖全部三个参数）。
-    "usb-power": ["--serial", "ABC123", "--action", "cycle", "--delay", "12"],
+    "usb-power": ["--serial", "ABC123", "--expect-slot", "1-1.4:3",
+                  "--action", "cycle", "--delay", "12"],
 }
 
 # #3356：参数级能力标记（capabilities 在子命令行之外逐行输出）。旧 wrapper 只报
@@ -1521,6 +1540,10 @@ def _build_parser():
         allow_abbrev=False,
     )
     p.add_argument("--serial", required=True)
+    # 调用方读到的槽位（`<hub_location>:<port>`）。wrapper 只拿它与自己查表的结果
+    # 比对，不一致即拒绝、不调 uhubctl；切电目标仍只来自映射（复核 #3899 comment
+    # 6708089815：回显核对发生在切电之后，映射被改写时会先切错一次）。
+    p.add_argument("--expect-slot", required=True, dest="expect_slot")
     p.add_argument("--action", required=True, choices=list(USB_POWER_ACTIONS))
     p.add_argument(
         "--delay", type=int, default=None,

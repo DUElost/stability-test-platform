@@ -7,8 +7,10 @@ Class: feature
 
 规格是 [ADR-0063](../../adr/ADR-0063-vbus-cycle-flash-without-adb.md) 的 D1、D2，对应 ADR-0037 v0.7 草案 D8。
 
-- `backend/agent/stp_agent_priv.py` 新增 `usb-power --serial <s> --action {on|off|cycle} [--delay 1..30]`。
+- `backend/agent/stp_agent_priv.py` 新增 `usb-power --serial <s> --expect-slot <loc>:<port> --action {on|off|cycle} [--delay 1..30]`。
   wrapper 按 serial 查 `/etc/stp-agent/usb-power-slots.json` 得到 `(hub_location, port)`；调用方不能指定 Hub 位置或端口。
+  `--expect-slot` 必填，只用于比对：与查表结果不一致时 wrapper 在调用 uhubctl 之前拒绝（exit 2，`STP_USB_POWER_SLOT_MISMATCH`），
+  切电目标仍只来自映射。这样映射在脚本与 wrapper 两次读取之间被改写时，不会先切错一次（复核 #3899 comment 6708089815）。
 - 映射文件整份校验：
   - `schema=1`，每个条目只有 `serial`、`hub_location`、`port` 三个字段；
   - `hub_location` 沿用 `usb-authorized` 的端口名正则，`port` 取 1–16；
@@ -41,6 +43,8 @@ Class: feature
   203 passed，11 skipped，1 failed。失败的是 `test_wrapper_sync_env_emits_control_plane_sentinels`：
   云端环境缺 `sqlalchemy`（`ModuleNotFoundError`），与本改动无关，以 CI 为准。
 - `ruff check` 通过。
+- 加 `--expect-slot` 后：`pytest tests/test_agent_priv_usb_power.py -q` 88 passed，`pytest tests/ -k agent_priv -q` 235 passed、2 skipped；
+  去掉比对后 `test_slot_mismatch_is_rejected_before_any_power_action` 两条变红。
 - 复核 #3900（comment 6706287225）后补：
   - 映射文件顶层只接受 `schema`、`slots` 两个键，`schema` 必须是整数 1（`true`、`1.0` 被拒）；Hub 位置解析结果还必须是目录；
   - 用例单独锁住 uhubctl 属主、映射文件属主、父目录属主、64 KiB 边界（65536 字节接受，65537 拒绝）、

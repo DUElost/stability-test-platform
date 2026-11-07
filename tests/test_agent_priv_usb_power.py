@@ -79,8 +79,8 @@ def host(wrapper, monkeypatch, tmp_path):
                            devices_root=devices_root)
 
 
-def _args(serial=SERIAL, action="cycle", delay=12):
-    return SimpleNamespace(serial=serial, action=action, delay=delay)
+def _args(serial=SERIAL, action="cycle", delay=12, expect_slot="1-1.4:3"):
+    return SimpleNamespace(serial=serial, action=action, delay=delay, expect_slot=expect_slot)
 
 
 def _argv(stub: Path) -> list[str]:
@@ -90,15 +90,20 @@ def _argv(stub: Path) -> list[str]:
 # ── 解析层 ───────────────────────────────────────────────────────────────
 
 
-def test_parser_wires_only_serial_action_delay(wrapper):
+def test_parser_wires_only_serial_expect_slot_action_delay(wrapper):
     parser = wrapper._build_parser()
-    ns = parser.parse_args(["usb-power", "--serial", SERIAL, "--action", "cycle", "--delay", "12"])
-    assert (ns.command, ns.serial, ns.action, ns.delay) == ("usb-power", SERIAL, "cycle", 12)
-    ns = parser.parse_args(["usb-power", "--serial", SERIAL, "--action", "off"])
+    ns = parser.parse_args(["usb-power", "--serial", SERIAL, "--expect-slot", "1-1.4:3",
+                            "--action", "cycle", "--delay", "12"])
+    assert (ns.command, ns.serial, ns.expect_slot, ns.action, ns.delay) == (
+        "usb-power", SERIAL, "1-1.4:3", "cycle", 12)
+    ns = parser.parse_args(["usb-power", "--serial", SERIAL, "--expect-slot", "1-1.4:3",
+                            "--action", "off"])
     assert ns.delay is None
 
 
 @pytest.mark.parametrize("argv", [
+    ["usb-power", "--serial", SERIAL, "--action", "on"],
+    ["usb-power", "--serial", SERIAL, "--exp", "1-1.4:3", "--action", "on"],
     ["usb-power", "--serial", SERIAL],
     ["usb-power", "--action", "on"],
     ["usb-power", "--serial", SERIAL, "--action", "toggle"],
@@ -122,6 +127,19 @@ def test_contract_and_capabilities_include_usb_power(wrapper, capsys):
 
 
 # ── 纯函数校验 ───────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("bad", ["", "1-1.4", "1-1.4:", ":3", "1-1.4:0", "1-1.4:17",
+                                 "1-1.4:3:4", "1-1.4:1-16", "1-1.4:all", "../1:3",
+                                 "1-1.4: 3", None, 3])
+def test_expect_slot_validation_rejects(wrapper, bad):
+    with pytest.raises(wrapper.PrivError):
+        wrapper.validate_usb_power_expect_slot(bad)
+
+
+def test_expect_slot_validation_accepts(wrapper):
+    assert wrapper.validate_usb_power_expect_slot("1-1.4:3") == ("1-1.4", 3)
+    assert wrapper.validate_usb_power_expect_slot("2-1:16") == ("2-1", 16)
 
 
 @pytest.mark.parametrize("bad", ["", "a" * 65, "AB C", "AB/C", "AB\n", "AB;id", "$(id)", None, 1])
@@ -193,6 +211,15 @@ def test_cycle_runs_fixed_argv_with_clean_env(wrapper, host, capsys, monkeypatch
     env = (host.stub.parent / "uhubctl.env").read_text(encoding="utf-8")
     assert "LEAK_ME" not in env
     assert "STP_USB_POWER_OK serial=MTK0001 location=1-1.4 port=3 action=cycle" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("expect_slot", ["1-1.4:4", "1-1.5:3"])
+def test_slot_mismatch_is_rejected_before_any_power_action(wrapper, host, expect_slot):
+    # 复核 #3899 comment 6708089815：调用方读到的槽位与映射不一致时，必须在调 uhubctl
+    # 之前拒绝——不得先切错一次再靠回显发现。
+    with pytest.raises(wrapper.PrivError, match="STP_USB_POWER_SLOT_MISMATCH"):
+        wrapper.cmd_usb_power(_args(expect_slot=expect_slot), None)
+    assert not (host.stub.parent / "uhubctl.argv").exists()
 
 
 def test_unregistered_serial_is_rejected_before_exec(wrapper, host):
@@ -345,7 +372,8 @@ def test_timeout_reports_failure(wrapper, host, monkeypatch, capsys):
 
 def test_main_maps_rejection_to_exit_2(wrapper, host, monkeypatch, capsys):
     monkeypatch.setattr(wrapper, "_load_conf", lambda _p: {})
-    assert wrapper.main(["usb-power", "--serial", "NOTLISTED", "--action", "on"]) == 2
+    assert wrapper.main(["usb-power", "--serial", "NOTLISTED", "--expect-slot", "1-1.4:3",
+                         "--action", "on"]) == 2
     assert "STP_AGENT_PRIV_ERROR" in capsys.readouterr().err
 
 

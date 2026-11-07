@@ -196,10 +196,12 @@ test ! -s /tmp/klog_out || { echo "BAD: partial output delivered"; exit 1; }
 grep -q 'STP_READ_KERNEL_LOG_FAILED' /tmp/klog_err && echo "KERNEL_LOG_FAILURE_MARKED"
 
 echo "== 11) usb-power 切电窄面（#3892 / ADR-0037 D8）=="
-# 参数面只有 serial/action/delay：任意 Hub 位置/端口不可达；容器无映射文件 ⇒ 拒绝（exit 2）
-for bad in "--serial X --action on --location 1-1" "--serial X --action on --port 3" \
-           "--serial X --action cycle --delay 31" "--serial X --action off --delay 3" \
-           "--serial ../x --action on" "--serial X --action on"; do
+# 参数面只有 serial/expect-slot/action/delay（缺 expect-slot 即拒绝）：任意 Hub 位置/端口不可达；容器无映射文件 ⇒ 拒绝（exit 2）
+E="--expect-slot 1-1:1"
+for bad in "--serial X $E --action on --location 1-1" "--serial X $E --action on --port 3" \
+           "--serial X $E --action cycle --delay 31" "--serial X $E --action off --delay 3" \
+           "--serial ../x $E --action on" "--serial X --expect-slot 1-1:17 --action on" \
+           "--serial X --action on" "--serial X $E --action on"; do
   set +e
   /usr/local/sbin/stp-agent-priv usb-power $bad 2>/tmp/usbp_err
   rc=$?
