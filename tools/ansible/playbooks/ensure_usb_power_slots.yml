@@ -1,0 +1,86 @@
+# USB 切电槽位映射与 uhubctl 归位（#3892 / ADR-0063 D1、D6 / ADR-0037 D8）
+#
+# 只对装有可控 USB Hub 的主机运行（-l 限定）。槽位映射来自 inventory 的
+# host_vars `stp_usb_power_slots`，形如：
+#
+#   stp_usb_power_slots:
+#     - {serial: "MTK0001", hub_location: "1-1.4", port: 3}
+#     - {serial: "MTK0002", hub_location: "1-1.4", port: 4}
+#
+# 映射文件写为 root:root 0644（Agent 用户只读）；wrapper `usb-power` 只按它查槽位。
+# wrapper 本体不随热更新下发：本 playbook 只校验已装 wrapper 具备 `usb-power`，
+# 缺失时先跑 update_agent.yml（ADR-0037 §4「运维代价」）。
+#
+# 用法：
+#   ansible-playbook tools/ansible/playbooks/ensure_usb_power_slots.yml -l <host> -K
+---
+- name: Ensure USB power slot mapping on agent host
+  hosts: linux_hosts
+  gather_facts: false
+  become: false
+
+  vars:
+    stp_usb_power_slots_dir: /etc/stp-agent
+    stp_usb_power_slots_path: /etc/stp-agent/usb-power-slots.json
+
+  tasks:
+    - name: Require slot mapping in host_vars (#3892)
+      ansible.builtin.assert:
+        that:
+          - stp_usb_power_slots is defined
+          - stp_usb_power_slots | length > 0
+          - (stp_usb_power_slots | map(attribute='serial') | unique | list | length)
+            == (stp_usb_power_slots | length)
+        fail_msg: >-
+          stp_usb_power_slots must be a non-empty list in host_vars for {{ inventory_hostname }}
+          and each serial must appear once (ADR-0063 D1).
+
+    - name: Ensure uhubctl package (#3892)
+      become: true
+      ansible.builtin.apt:
+        name: uhubctl
+        state: present
+        install_recommends: false
+        update_cache: true
+        cache_valid_time: 86400
+
+    - name: Ensure slot mapping directory is root-owned (#3892)
+      become: true
+      ansible.builtin.file:
+        path: "{{ stp_usb_power_slots_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Write slot mapping file (#3892)
+      become: true
+      ansible.builtin.copy:
+        dest: "{{ stp_usb_power_slots_path }}"
+        content: "{{ {'schema': 1, 'slots': stp_usb_power_slots} | to_nice_json }}\n"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Check wrapper supports usb-power (#3892)
+      become: true
+      ansible.builtin.shell: /usr/local/sbin/stp-agent-priv capabilities | grep -qx usb-power
+      register: stp_usb_power_capability
+      changed_when: false
+      failed_when: false
+
+    - name: List hubs seen by uhubctl (informational)
+      become: true
+      ansible.builtin.command: /usr/sbin/uhubctl
+      register: stp_usb_power_hubs
+      changed_when: false
+      failed_when: false
+
+    - name: Report USB power provisioning result (#3892)
+      ansible.builtin.debug:
+        msg: >-
+          usb power: wrapper_has_usb_power={{ stp_usb_power_capability.rc == 0 }}
+          (run update_agent.yml when false)
+          slots={{ stp_usb_power_slots | length }}
+          uhubctl_rc={{ stp_usb_power_hubs.rc | default('n/a') }}
+          hubs={{ stp_usb_power_hubs.stdout_lines | default([]) | select('match', '^Current status') | list | join(' | ') }}
