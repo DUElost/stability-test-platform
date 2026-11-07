@@ -17,7 +17,10 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from backend.core.device_serial import is_placeholder_serial
 from backend.agent.contracts.pipeline_validator import validate_pipeline_def
-from backend.services.vbus_flash_admission import is_vbus_flash_lifecycle
+from backend.services.vbus_flash_admission import (
+    is_vbus_flash_lifecycle,
+    is_vbus_flash_snapshot,
+)
 from backend.models.device_lease import DeviceLease
 from backend.models.enums import DeviceStatus, HostStatus, JobStatus, LeaseStatus, PlanRunStatus
 from backend.models.host import Device, Host
@@ -663,8 +666,8 @@ def prepare_plan_run(
     )
     plan_snapshot = _build_plan_snapshot(plan, steps, metadata)
     # #3892 / ADR-0063 D4：vbus 刷机计划的目标设备本来就是关机态，device_offline
-    # 不构成排队理由（判定与准入泵、认领同源：is_vbus_flash_lifecycle）。
-    if is_vbus_flash_lifecycle(lifecycle):
+    # 不构成排队理由。与准入泵同样按冻结的 Plan 快照判定（D4 第 1 条；复核 #3901）。
+    if is_vbus_flash_snapshot(plan_snapshot):
         queue_blockers = [e for e in queue_blockers if e["reason"] != "device_offline"]
 
     return _prepare_queued_plan_run(

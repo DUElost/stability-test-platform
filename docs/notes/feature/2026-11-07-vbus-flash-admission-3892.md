@@ -14,7 +14,7 @@ Class: feature
 - `_classify_dispatch_devices_sync` / `_validate_dispatch_devices_sync` 新增参数 `allow_device_offline`。
   它只跳过 `device_offline` 这一级，后面各级（`device_error`、`host_offline`、维护窗、欠账、租约、作业）照常判定。
   有三个调用点：
-  - `prepare_plan_run`：vbus 计划不把 `device_offline` 记为排队理由；
+  - `prepare_plan_run`：vbus 计划不把 `device_offline` 记为排队理由，按刚建好的冻结快照判定（`is_vbus_flash_snapshot`）；
   - `complete_plan_run_dispatch`；
   - 准入泵终检 `admission_pump.admission_transaction`。
 - 认领：
@@ -50,7 +50,7 @@ Class: feature
 - `backend/tests/services/test_vbus_flash_admission_3892.py`（17 条）：判定矩阵；放行只跳过一级（之后 `host_offline` 照报）；
   `device_retired` 仍按致命处理；vbus 计划经 prepare 和准入泵后物化出作业；非 vbus 计划照旧按 `device_offline` 回队；
   `complete_plan_run_dispatch` 对 vbus 计划放行、对非 vbus 计划转 FAILED（把该处放行改成 False 后用例变红）。
-- `backend/tests/services/test_vbus_flash_claim_3892.py`（14 条）：旧 Agent 认领不到；`capacity=0` 时也能认领；
+- `backend/tests/services/test_vbus_flash_claim_3892.py`（16 条）：旧 Agent 认领不到；`capacity=0` 时也能认领；
   不占普通名额；最早作业不是 vbus 的不认领；退役、ACTIVE 租约、unauthorized（ERROR）不放行；同一 host 在跑时不发第二个；
   在线设备上的 vbus 作业只走 vbus 名额、不挤占普通名额、两条也只认领一条，普通路径绕不过「在跑即不发」
   （去掉普通名额的 vbus 过滤后 4 条变红）；
@@ -59,6 +59,8 @@ Class: feature
 - `backend/agent/tests/test_vbus_claim_slots_3892.py`（5 条）：名额跟随映射文件；路径与 wrapper 同源；
   槽位为 0 时也认领；无名额时请求体不变。
 - 变异检查：去掉准入泵的放行、或去掉「在跑即不发」守卫后，对应用例变红。
+- 复核 #3901 第 2 轮（review 5812783034，通过）后：prepare 改按快照判定（改成 False 后 1 条变红）；ERROR 与 unauthorized
+  拆成各自独立的用例（单删任一排除条件都有 1 条变红）。三个目标文件 38 passed。
 - 复核 #3901 后：`pytest backend/tests/services/ -k "claim or admission or dispatcher"` 223 passed。
 - 相邻回归：claim、派发设备校验、准入队列 step2–4、`plan_dispatcher`、`agent_dual_write`、Agent 全量。
   Agent 全量 3079 passed，3 failed；这 3 条在 `origin/main` 同样失败（`test_aee_processor` 两条、进程组回收一条），与本改动无关。

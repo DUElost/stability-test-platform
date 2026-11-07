@@ -170,6 +170,18 @@ async def test_unauthorized_error_device_is_not_released(seeded):
     assert await _claim(host_id, capacity=0, vbus_slots=1) == []
 
 
+@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.parametrize("device_status,adb_state", [
+    ("ERROR", "offline"),          # 只有 status 排除能挡住
+    ("OFFLINE", "unauthorized"),   # 只有 adb_state 排除能挡住
+])
+async def test_error_and_unauthorized_are_each_excluded(seeded, device_status, adb_state):
+    # 复核 #3901 备注 1：两个排除条件各自钉住。
+    host_id, add, _db = seeded
+    add(VBUS, device_status=device_status, adb_state=adb_state)
+    assert await _claim(host_id, capacity=0, vbus_slots=1) == []
+
+
 
 def test_mixed_queue_per_device_is_structurally_impossible(seeded):
     """复核 #3899 所提「同一离线设备较早非 vbus + 较晚 vbus」混合队列：
