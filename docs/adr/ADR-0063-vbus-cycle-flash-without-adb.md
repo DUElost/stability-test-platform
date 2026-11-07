@@ -1,6 +1,6 @@
 # ADR-0063：无 ADB 设备的 USB 切电刷机（`trigger_mode=vbus_cycle`）
 
-- 状态：**Proposed** v0.1（2026-11-07 起草；Owner 已在项目对话中裁定「与 B8 并行实施、第一期不加迁移」，本稿待 Owner 裁定 §8 开放项并经独立复核后转 Accepted）
+- 状态：**Proposed** v0.2（2026-11-07 v0.2：补 F11 与 D4 第 5–6 条，Agent 认领侧也要改，D6 第 1 条随之订正为随 Agent 代码发布；v0.1 2026-11-07 起草；Owner 已在项目对话中裁定「与 B8 并行实施、第一期不加迁移」，本稿待 Owner 裁定 §8 开放项并经独立复核后转 Accepted）
 - 优先级：P1
 - 目标里程碑：M7
 - 日期：2026-11-07
@@ -37,12 +37,15 @@
 | F8 | wrapper `stp-agent-priv` 不随热更新下发，更新需逐台跑 `update_agent.yml`（ADR-0037 §4「运维代价」、§5 第 5 条先例）。 | `tools/ansible/playbooks/update_agent.yml:134-163` |
 | F9 | 脚本按包分发，不进 Agent 代码载荷（ADR-0051 Phase 3）；已发布版本不可原地改。 | `stp_agent_priv.py` `FIXED_EXCLUDES` 的 `scripts/` 项 |
 | F10 | `Device` 表没有机架或槽位字段（R-05）。 | `backend/models/host.py`（`class Device`） |
+| F11 | Agent 的认领槽位 = 在线健康设备数 − 活跃设备数；在线健康设备为 0 时健康闸门也返回 0。槽位 ≤ 0 时 Agent 不调用认领接口，且只保留前 `available_slots` 个作业。设备全部关机的刷机主机因此永远不会认领。 | `backend/agent/capacity_reporter.py:106-109`、`backend/agent/claim_loop.py:51-60` |
 
 ### 1.3 与 B8 的关系
 
 B8（#3800）在途单元 G4（#3877 / PR #3897）、#3875（PR #3896）、#3889 改动的是扫描、上送、影子轮与心跳计数，
-与本 ADR 涉及的文件（刷机脚本树、wrapper、派发与认领准入）没有交集。本 ADR 第一期不加迁移，
-因此不进入 B8 的迁移链排序；脚本走包分发、wrapper 走 Ansible，也不进入 B8 的 Agent 代码滚动。
+与本 ADR 涉及的文件（刷机脚本树、wrapper、派发与认领准入、Agent 认领循环）没有交集。本 ADR 第一期不加迁移，
+因此不进入 B8 的迁移链排序。脚本走包分发、wrapper 走 Ansible；但 Agent 认领循环（F11、D4 第 5 条）是
+Agent 代码，会改变控制面的期望 digest，而 #3875 的影子能力守卫要求主机 digest 与期望值一致，
+所以这部分必须进入 B8 的 Agent 代码滚动（见 D6 第 1 条）。
 
 ## 2. 决策
 
@@ -106,6 +109,10 @@ B8（#3800）在途单元 G4（#3877 / PR #3897）、#3875（PR #3896）、#3889
    `device_return_debt`、`active_lease` 必须照常拒绝。
 3. 被放行的设备必须已有设备行且绑定到某台主机；第一期不得为从未上线的设备自动建行。
 4. 不满足第 1 条的作业，准入与认领行为必须与现行完全一致。
+5. Agent 在本机存在 D1 映射文件时，必须在认领请求中带 `vbus_slots=1`，并且在 `available_slots ≤ 0` 时也调用认领接口；
+   映射文件不存在时，Agent 不得带该字段，行为与现行一致。
+6. 控制面必须把 vbus 刷机作业与普通作业分开计数：普通作业仍受 `capacity` 限制，放行的关机设备上的 vbus 作业
+   每次认领最多返回 `vbus_slots` 个，且不占用 `capacity`。未带 `vbus_slots` 的请求（旧 Agent）不得认领关机设备上的作业。
 
 ### D5 与设备归还契约的关系
 
@@ -114,8 +121,10 @@ B8（#3800）在途单元 G4（#3877 / PR #3897）、#3875（PR #3896）、#3889
 
 ### D6 发布与激活
 
-1. 本 ADR 的三个发布面互相独立：wrapper + 映射文件 + `uhubctl` 包经 Ansible 只下发到装有可控 Hub 的主机；
-   脚本新版本经包发布；准入改动随控制面常规部署。三者都不得与 B8 的 Agent 代码滚动合批。
+1. 本 ADR 有四个发布面：wrapper + 映射文件 + `uhubctl` 包经 Ansible 只下发到装有可控 Hub 的主机；
+   脚本新版本经包发布；准入改动随控制面常规部署；Agent 认领循环（D4 第 5 条）随 Agent 代码发布。
+   前三者不得与 B8 的 Agent 代码滚动合批。Agent 认领循环的改动建议在 G4、#3875、#3889 的联合 Agent 发布
+   截止前合入并随之滚动；理由：它在没有映射文件的主机上不改变行为，单独再滚一次全机队的代价高于合批。
 2. 激活只发生在 Plan 显式选择 `trigger_mode=vbus_cycle` 时；不设全局开关。
 3. 首次真机验收必须在 1 台主机、2 台设备上完成 #3892 验收清单后，才允许在其他主机下发映射文件。
 
@@ -152,9 +161,9 @@ B8（#3800）在途单元 G4（#3877 / PR #3897）、#3875（PR #3896）、#3889
 | U1 | 本 ADR + ADR-0037 v0.7 D8 | Owner 裁定 + 独立复核 |
 | U2 | wrapper `usb-power`、Ansible 下发映射文件与 `uhubctl`、测试 | 必须复核（安全） |
 | U3 | `flash_firmware` 新版本 `trigger_mode=vbus_cycle`、测试 | 必须复核（难回退：物理断电） |
-| U4 | 派发与认领准入放行、测试 | 必须复核 |
+| U4 | 派发与认领准入放行、Agent 认领循环 `vbus_slots`、测试 | 必须复核 |
 
-U2、U3、U4 可以并行实施；激活顺序为 U2 部署 → U3 发布 → U4 部署 → 真机验收。
+U2、U3、U4 可以并行实施；激活顺序为 U2 部署 → U3 发布 → U4 部署（控制面 + 随 B8 的 Agent 滚动）→ 真机验收。
 
 ## 7. Revisit
 
