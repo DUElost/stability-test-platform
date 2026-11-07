@@ -201,10 +201,19 @@ class Harness:
         monkeypatch.setattr(ff, "_vbus_post_flash", self._fake_post_flash)
         self.post_flash_ok = True
         self.echo_slot = {"hub_location": "1-5.1", "port": 3}
+        # wrapper 查表得到的槽位；与脚本传的 --expect-slot 不一致时 wrapper 在切电前拒绝。
+        self.map_slot = {"hub_location": "1-5.1", "port": 3}
+        self.refused: list[str] = []
         self.launch_script: list = ["pass"]
 
-    def _fake_power(self, serial, action):
+    def _fake_power(self, serial, action, slot):
         assert serial == SERIAL
+        if (slot["hub_location"], slot["port"]) != (
+                self.map_slot["hub_location"], self.map_slot["port"]):
+            self.refused.append(action)
+            tail = "STP_AGENT_PRIV_ERROR STP_USB_POWER_SLOT_MISMATCH serial=%s" % serial
+            return {"action": action, "ok": False, "rc": 2, "tail": tail,
+                    "seconds": 0.0, "echo": None, "slot_refused": True}
         self.power.append(action)
         echo = dict(self.echo_slot, serial=serial, action=action)
         return {"action": action, "ok": True, "rc": 0, "tail": "", "seconds": 0.0,
@@ -476,9 +485,10 @@ def test_usb_power_argv(monkeypatch) -> None:
         return subprocess.CompletedProcess(argv, 0, "STP_USB_POWER_OK\n", "")
 
     monkeypatch.setattr(ff.subprocess, "run", _run)
-    assert ff._usb_power(SERIAL, "off")["ok"] is True
+    result = ff._usb_power(SERIAL, "off", {"hub_location": "1-5.1", "port": 3})
+    assert result["ok"] is True and result["slot_refused"] is False
     assert seen[-1] == ["sudo", "-n", ff._PRIV_WRAPPER, "usb-power",
-                        "--serial", SERIAL, "--action", "off"]
+                        "--serial", SERIAL, "--expect-slot", "1-5.1:3", "--action", "off"]
 
 
 # ── 7. 设备必须已关机（USB 层识别开机但无 ADB 的设备）────────────────
@@ -629,6 +639,36 @@ def test_wrapper_slot_echo_mismatch_stops_all_power_actions(tmp_path, monkeypatc
     assert "slot map changed" in payload["error_message"]
     assert h.power == ["off"], "回显不符后不得再切电（含隔离）"
     assert h.launched == []
+
+
+def test_wrapper_refuses_changed_slot_before_any_power_action(tmp_path, monkeypatch,
+                                                              capsys) -> None:
+    # 复核 #3899 comment 6708089815：映射在脚本与 wrapper 两次读取之间被改写时，
+    # wrapper 按 --expect-slot 在切电前拒绝；没有任何口被切，隔离也被同样拒绝。
+    h = Harness(monkeypatch, tmp_path, {})
+    h.map_slot = {"hub_location": "1-5.2", "port": 1}
+    payload = h.run(monkeypatch, capsys)
+    assert payload["success"] is False
+    assert "refused before powering anything" in payload["error_message"]
+    assert h.power == []
+    assert h.refused == ["off", "off"]
+    assert h.launched == []
+    assert payload["metrics"]["vbus"]["isolated"] is False
+
+
+def test_usb_power_passes_expect_slot(monkeypatch) -> None:
+    seen = {}
+
+    def fake_run(argv, **kwargs):
+        seen["argv"] = argv
+        return subprocess.CompletedProcess(
+            argv, 2, "", "STP_AGENT_PRIV_ERROR STP_USB_POWER_SLOT_MISMATCH serial=S1")
+
+    monkeypatch.setattr(ff.subprocess, "run", fake_run)
+    result = ff._usb_power("S1", "off", {"hub_location": "1-5.1", "port": 3})
+    assert seen["argv"][-6:] == ["--serial", "S1", "--expect-slot", "1-5.1:3",
+                                 "--action", "off"]
+    assert result["ok"] is False and result["slot_refused"] is True
 
 
 def test_usb_power_echo_parsing() -> None:

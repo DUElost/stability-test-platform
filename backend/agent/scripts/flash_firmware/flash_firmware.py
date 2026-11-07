@@ -2236,13 +2236,21 @@ def _usb_power_echo(tail: str) -> "dict | None":
             "port": int(m.group(3)), "action": m.group(4)}
 
 
-def _usb_power(serial: str, action: str) -> dict:
-    """经 wrapper 切本 serial 的槽位供电。永不抛异常；返回 {"ok", "rc", "tail", "seconds"}。"""
+_USB_POWER_SLOT_MISMATCH = "STP_USB_POWER_SLOT_MISMATCH"
+
+
+def _usb_power(serial: str, action: str, slot: dict) -> dict:
+    """经 wrapper 切本 serial 的槽位供电。永不抛异常；返回 {"ok", "rc", "tail", "seconds"}。
+
+    `--expect-slot` 带上脚本读到的槽位：wrapper 查表结果与之不一致时在调用 uhubctl
+    之前拒绝（`slot_refused`），映射被改写时不会先切错一次（ADR-0063 D2 第 8 条）。
+    """
     started = time.monotonic()
+    expect = f"{slot['hub_location']}:{slot['port']}"
     try:
         proc = subprocess.run(
             ["sudo", "-n", _PRIV_WRAPPER, "usb-power",
-             "--serial", serial, "--action", action],
+             "--serial", serial, "--expect-slot", expect, "--action", action],
             capture_output=True, text=True, timeout=75,
         )
         ok = proc.returncode == 0
@@ -2252,6 +2260,7 @@ def _usb_power(serial: str, action: str) -> dict:
         ok, rc, tail = False, None, str(exc)[:200]
     return {"action": action, "ok": ok, "rc": rc, "tail": tail,
             "echo": _usb_power_echo(tail) if ok else None,
+            "slot_refused": (not ok) and _USB_POWER_SLOT_MISMATCH in tail,
             "seconds": round(time.monotonic() - started, 2)}
 
 
@@ -2814,7 +2823,9 @@ def main() -> None:
         if vbus and not vbus_keep_power and vbus_report.get("power_actions") \
                 and not vbus_state.get("slot_mismatch"):
             # 一次切电都没做过（如锁内复核发现设备在开机态）就不碰供电。
-            isolate = _usb_power(serial, "off")
+            # 槽位取脚本读到的那一份：映射此后被改写时 wrapper 会拒绝，记为隔离失败，
+            # 而不是去断映射里的新槽位。
+            isolate = _usb_power(serial, "off", vbus_report["slot"])
             vbus_report["power_actions"].append(dict(isolate, phase="isolate"))
             vbus_report["isolated"] = bool(isolate.get("ok"))
         gating["restore"] = _restore_gated({"hidden": hidden_ports},
@@ -2863,20 +2874,28 @@ def main() -> None:
                 # 每次尝试都从断电起算：上一次尝试可能停在 BROM/DA 半程。
                 vbus_state.update({"power_on_at": None, "brom_seen": False,
                                    "attempt": attempt})
-                off = _usb_power(serial, "off")
+                off = _usb_power(serial, "off", vbus_report["slot"])
                 vbus_report["power_actions"].append(
                     dict(off, phase="pre-flash", attempt=attempt))
                 _emit_progress(seq, stage="vbus-off", ok=off["ok"],
                                attempt=attempt)
+                if off.get("slot_refused"):
+                    # wrapper 在切电之前发现映射与脚本读到的不一致：本次没有切任何口。
+                    attempts_report.append({"attempt": attempt,
+                                            "outcome": "vbus-slot-refused"})
+                    final_error = ("vbus-slot-mismatch", (
+                        "wrapper refused before powering anything: the slot map no "
+                        f"longer maps {serial} to {vbus_report['slot']['hub_location']}:"
+                        f"{vbus_report['slot']['port']} ({off['tail']})"))
+                    break
                 if not off["ok"]:
                     attempts_report.append({"attempt": attempt,
                                             "outcome": "vbus-power-off-failed"})
                     final_error = ("vbus-power",
                                    f"usb-power off failed: {off['tail']}")
                     break
-                # 脚本读一次映射、wrapper 再读一次：两次之间映射被改写时，两边
-                # 的槽位会不一致。以 wrapper 回显的实际槽位为准核对，不一致立即
-                # 停手，不再做任何切电（复核 #3899）。
+                # 纵深防御：wrapper 已按 --expect-slot 在切电前比对；回显仍不符说明
+                # wrapper 没有按约定执行，立即停手，不再做任何切电（含隔离）。
                 slot = vbus_report["slot"]
                 echo = off.get("echo") or {}
                 if (echo.get("hub_location"), echo.get("port")) != (
@@ -2988,7 +3007,7 @@ def main() -> None:
                 if vbus:
                     # 工具已进入 USB 扫描：此刻上电，BROM 窗口落在观测里。
                     time.sleep(pre_reboot_wait)
-                    on = _usb_power(serial, "on")
+                    on = _usb_power(serial, "on", vbus_report["slot"])
                     vbus_report["power_actions"].append(
                         dict(on, phase="trigger", attempt=vbus_state["attempt"]))
                     vbus_state["power_on_at"] = time.monotonic()

@@ -24,7 +24,8 @@ Class: feature
   - 刷后回读机型，与声明不一致判失败。
 - 锁内的每次尝试：
   1. 槽位断电，等待 `vbus_off_settle_seconds`（10–30，下限对齐 #3892 的 10–15s 放电要求）；
-     每次断电都核对 wrapper 回显的实际槽位，与脚本读到的不一致就停手，不再切电（包括隔离）；
+     每次切电都带 `--expect-slot <脚本读到的槽位>`：映射被改写时 wrapper 在切电之前拒绝，本次不切任何口；
+     回显核对保留为纵深防御，回显仍与脚本读到的不一致就停手，不再切电（包括隔离）；
   2. 起工具，在 `on_running` 回调里上电，不发 adb reboot；
   3. 门控与 V6 `-p` 用槽位口 `<hub_location>.<port>`，不按 serial 反查；
      端口绑定必须开启：V5 工具、非 Linux 或步骤参数 `require_port_binding=false` 时，取锁前直接拒绝；
@@ -39,7 +40,8 @@ Class: feature
 - 上电后发生任一失败、异常，或收到 SIGTERM/SIGINT/SIGHUP，都在 `_settle_lock` 里先断电隔离，再恢复门控、释放锁。
   - 刷后阶段抛出的异常同样先结算再上抛；
   - 只有全链成功且不抛异常才保持供电；
-  - 一次切电都没做过（锁内复核失败）时不碰供电。
+  - 一次切电都没做过（锁内复核失败）时不碰供电；
+  - 隔离同样带脚本读到的槽位，映射已被改写时 wrapper 拒绝，结果记为隔离失败，不去断映射里的新槽位。
 - 结果带 `vbus` 段：槽位、每次切电动作、阶段实测耗时、是否隔离、OOBE 回读。
   路由失败、跳过与取锁前闸失败的早期结果也带 `trigger_mode`（取锁前闸失败另带槽位与空的切电记录）。
 - 共享函数的两处扩展都带缺省值，旧调用方不受影响：
@@ -75,7 +77,10 @@ Class: feature
 - 复核 #3902（comment 6706267244）后补：
   - 刷后阶段抛异常时断电隔离（`test_post_flash_exception_isolates`；去掉该处结算，用例失败）；
   - vbus 强制端口绑定（`test_vbus_refuses_without_port_binding`、`test_vbus_refuses_when_binding_defaults_off`；去掉该闸，3 个用例失败）。
-- `.venv/bin/python -m pytest backend/agent/tests/ -k flash -q`：292 passed。全部旧版本测试通过。
+- 复核 #3899（comment 6708089815）后补：`_usb_power` 传 `--expect-slot`，wrapper 切电前拒绝时记 `slot_refused`
+  （`test_wrapper_refuses_changed_slot_before_any_power_action`、`test_usb_power_passes_expect_slot`；去掉参数 2 条变红，去掉拒绝分支 1 条变红）。
+  `test_flash_firmware_v140.py`：49 passed。
+- `.venv/bin/python -m pytest backend/agent/tests/ -k flash -q`：294 passed。全部旧版本测试通过。
 - `TEST_DATABASE_URL=…（本地隔离 PG16） .venv/bin/python -m pytest backend/tests/services/test_param_docs_content.py backend/tests/services/test_param_docs_registry.py -q`：132 passed，1 skipped。
 - `python tools/dev/check_script_packages.py --register flash_firmware 1.4.0`：OK，39 个族树与 manifest 等价。
 - `ruff check`：1 条 B023（`do_reboot`），1.3.20 原样存在，本单元未新增。
