@@ -22,20 +22,12 @@ except ImportError:
 from .device_log_event_client import DeviceLogEventClient, DeviceLogEventListError
 from ..contracts.occurrence_key import compute_occurrence_key
 from ..contracts.evidence import event_evidence
+from ..contracts.scan_device_id import (
+    UNKNOWN_DEVICE_ID_VALUES as UNKNOWN_DEVICE_ID_VALUES,
+    normalize_device_id,
+)
 
 logger = logging.getLogger(__name__)
-
-# The scanning tool itself treats these as "device id unknown" (v2.1.0
-# ``BaseScan.py:245`` / ``modules/dedup/membership.py:106``). They are
-# sentinels, not serials: evidence normalization must drop them before the
-# run-partition check. Matching is case-insensitive after stripping.
-UNKNOWN_DEVICE_ID_VALUES = frozenset({
-    "none",
-    "undefined",
-    "unknown_device_id",
-    "discard_device_id",
-})
-
 
 class ScanReportMappingError(ValueError):
     """A scan report rejected by ``report_mapping`` with an operator category."""
@@ -44,14 +36,6 @@ class ScanReportMappingError(ValueError):
         self.reason = reason
         self.row = row
         super().__init__(detail)
-
-
-def normalize_device_id(value: object) -> str | None:
-    """Return stripped serial evidence, or ``None`` for tool-side sentinels."""
-    text = str(value).strip()
-    if not text or text.lower() in UNKNOWN_DEVICE_ID_VALUES:
-        return None
-    return text
 
 
 def is_safe_path_token(value: str) -> bool:

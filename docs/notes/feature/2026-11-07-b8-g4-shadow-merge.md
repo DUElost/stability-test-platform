@@ -8,6 +8,14 @@ Class: feature
 实施范围为 #3877 正文 v2.1，加 #3800 规划者的 v1.19 裁定
 [6704981735](https://github.com/DUElost/stability-test-platform/issues/3800#issuecomment-6704981735)
 及对拍补充 [6705001572](https://github.com/DUElost/stability-test-platform/issues/3800#issuecomment-6705001572)。
+机器数按 [v1.21 / 6705693754](https://github.com/DUElost/stability-test-platform/issues/3800#issuecomment-6705693754)，
+v1.20 已作废。issue_occurrence.serial 取对应 DLE.serial，机器数仍按发生的 serial 去重。
+非哨兵 DeviceId 与 DLE.serial 不一致时，采用 DLE.serial；专用日志的消息体包含 run、round、
+host、DLE、report_device_id、dle_serial，Prometheus 计数器
+stability_shadow_merge_device_id_serial_mismatch_total 和轮次摘要计数各增加 1。
+哨兵集合及归一函数只在 agent/contracts/scan_device_id.py 定义，Agent 和控制面复用；
+issue_fact_store 不依赖 agent/aee/scan_scope.py，也不排除哨兵机器数。
+
 工具格式取 #3877 评论 6704532993 指定的 `start-log-scan/v2.1.1`
 （commit `dc5d9c1fe22273dcfc28e41b285e8fdb3bfb6694`）。
 开工判定按评论 6704562784 只统计 MTK：1231/.13 为 37/37 组，1199 为 71/71 组，
@@ -52,7 +60,11 @@ G4 从持久化 CLOSED、merge 未落定的轮次独立发现重试对象；#387
   优先于先前 fail-open、全组不可映射仍送工具且轮次 OK。修改后通过；另覆盖 member_rows
   顺序、保留首代表签名、fail-open 成员锚点、filtered 与 unmapped 分开记账。
 - “无扫描候选时仍重试 G4”反例修改前 queued=0 而预期为 2，修改后验证持续重试与成功后退出。
-- v1.19 受影响集合（G1/G2/G4/SAQ/读取契约）：91 passed。
+- v1.19 受影响集合 91 passed；v1.21 后同一集合 94 passed。
+- v1.21 三个反例先在旧代码失败：两台 None 设备误计 1（应 2）；同台 None/真实 serial
+  误计 2（应 1）；非哨兵冲突误存报表 serial。修改后均通过，日志消息体和计数器 1 已验证。
+- 共享哨兵移动后的 Agent 相关集 57 passed；Agent 边界、测试导入棘轮、函数内导入棘轮
+  与载荷根守卫 29 passed；AST 核实哨兵集合只在共享 contracts 中定义一次。
 - 本机 Agent 全套历史执行 3086 passed、1 failed；唯一失败是 flash_preflight_v102 的
   test_dialout_absent_and_no_rule_fails，在独立 main@3e605a1 单项复跑同样失败。
   G3/G4 Agent 相关集 51 passed；最终 head 的 pr-agent-tests 以 CI 结果为准。
@@ -75,12 +87,13 @@ v1.19 的两轮真实回放：
 - 两轮累计 14 个问题、70 次发生；32 次跨轮重复不增计数。两轮重跑未再次调用工具，结果不变。
 - 依 Owner 评论 6705001572，只读分类为首轮 1 个 watcher 副本，第二轮 42 个 watcher 副本
   与 14 个 _temp；都不是别的 run 积压，真正缺 DLE 为 0。分类仅用于对拍，不构造身份。
-- 机器数存在一个既有输入口径差异：未知 DeviceId 为字符串 None，工具机器数为 0，
-  依据原规格取 DeviceId 并由 G1 按 serial 去重则为 1；两轮同一问题均如此。PR 披露该观察，
-  未自行修改 G1 机器数定义。
+- v1.21 回放两轮的 device_id_serial_mismatch 都是 0，专用 Prometheus 计数器也是 0。
+  所有非例外问题机器数逐项相等。唯一不相等的问题为 RebootException：每轮工具 0、平台 1，
+  对应含未知 DeviceId 哨兵但 DLE 已证明设备的行，符合 v1.21 的 >= 例外。第二轮 Java (JE)
+  组也有一个哨兵行，但机器数仍为 23=23，不需要差异例外。
 
 早期 CI 曾发现夹具跨根 tests 的导入不稳定和 xlrd 使用面漏登记，已修复并同步 #739 台账。
-根套件历史全套 2439 passed、18 skipped、2 failed；两项失败归位后及相关集复跑 16 passed。
+根套件 v1.19 全套为 2441 passed、18 skipped；v1.21 改动后相关根守卫 29 passed。
 最终提交的测试与 required CI 单独记录，不沿用旧 head 结论。
 
 ## Revisit

@@ -68,6 +68,12 @@ def is_prometheus_available() -> bool:
     return PROMETHEUS_AVAILABLE
 
 
+# B8 G4 v1.21: identifiers remain in the log body, never metric labels.
+shadow_merge_device_id_serial_mismatch_total = Counter(
+    "stability_shadow_merge_device_id_serial_mismatch_total",
+    "Mapped report DeviceId differs from DLE serial; DLE serial is authoritative",
+)
+
 # ============================================================================
 # Hot Update Metrics
 # ============================================================================

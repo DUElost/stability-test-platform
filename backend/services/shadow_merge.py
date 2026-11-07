@@ -9,6 +9,8 @@ import logging
 from uuid import UUID
 
 from backend.agent.contracts.evidence import evidence_complete
+from backend.agent.contracts.scan_device_id import normalize_device_id
+from backend.core.metrics import shadow_merge_device_id_serial_mismatch_total
 from backend.core.database import SessionLocal
 from backend.core.settings.scheduler import get_scheduler_settings
 from backend.services import issue_fact_store as facts
@@ -25,7 +27,7 @@ def _summary():
                 extractor_versions_mixed=False, reports=[], candidates=[],
                 unprovable_anchors=0, unprovable_groups=0, tool_groups=0,
                 mapping_unmapped_rows=0, mapping_unmapped_by_reason={},
-                unfiltered_rows=0)
+                unfiltered_rows=0, device_id_serial_mismatch=0)
 
 
 def _select(db, row, candidates):
@@ -161,12 +163,21 @@ def _ingest(db, row, matcher):
                                             platform=row.platform, host_id=group['host_id'])
             if dle is None or (dle.occurrence_key or None) != (mapping.get('occurrence_key') or None):
                 raise ValueError('mapping identity differs from partition DLE')
+            report_serial = normalize_device_id(mapping['serial'])
+            if report_serial is not None and report_serial != dle.serial:
+                logger.warning(
+                    "shadow_merge_device_id_serial_mismatch plan_run_id=%d fact_round_id=%d "
+                    "host_id=%s dle_id=%s report_device_id=%s dle_serial=%s",
+                    row.plan_run_id, row.id, group['host_id'], dle.id, mapping['serial'], dle.serial,
+                )
+                shadow_merge_device_id_serial_mismatch_total.inc()
+                summary['device_id_serial_mismatch'] += 1
             key = mapping.get('occurrence_key') or None
             occurrence = (facts.find_occurrence_by_key(db, occurrence_key=key) if key else
                           facts.find_occurrence_by_dle(db, dle_id=dle_id))
             if occurrence is None:
                 occurrence = facts.record_issue_occurrence(db, signature_id=signature_id, occurrence_key=key,
-                    serial=mapping['serial'], observed_at=dle.detected_at, first_seen_source=mapping['source'],
+                    serial=dle.serial, observed_at=dle.detected_at, first_seen_source=mapping['source'],
                     first_seen_plan_run_id=row.plan_run_id, first_seen_round_id=row.id)
                 new_occurrences.add(occurrence.id)
             else:

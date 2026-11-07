@@ -445,3 +445,63 @@ def test_merge_retries_even_without_scan_candidates(db_session,sample_host,tmp_p
     queued.reset_mock()
     shadow.sweep_shadow_scan_rounds(now=now+timedelta(seconds=240))
     queued.assert_not_called()
+
+
+def _set_report_device_id(ref, device_id):
+    import hashlib
+    from pathlib import Path
+    import xlrd
+    import xlwt
+    path=Path(ref['storage_uri'])
+    sheet=xlrd.open_workbook(str(path)).sheet_by_name('aeeexp')
+    data=[sheet.row_values(i) for i in range(sheet.nrows)]
+    data[1][13]=device_id
+    book=xlwt.Workbook();out=book.add_sheet('aeeexp')
+    for i,row in enumerate(data):
+        for j,value in enumerate(row):out.write(i,j,value)
+    book.save(str(path))
+    sp=Path(ref['membership_uri']);side=json.loads(sp.read_text())
+    side['meta']['reports']['org_xls']['sha256']=hashlib.sha256(path.read_bytes()).hexdigest()
+    sp.write_text(json.dumps(side))
+
+
+@pytest.mark.parametrize('serials,device_ids,expected', [
+    (['SN-A','SN-B'],['None','None'],2),
+    (['SN-A','SN-A'],['None','SN-A'],1),
+])
+def test_v121_machine_count_uses_dle_serials(db_session,sample_host,tmp_path,serials,device_ids,expected):
+    from pathlib import Path
+    from backend.services.shadow_merge import merge_round
+    one,a_dle=setup_round(db_session,tmp_path,sample_host,key='a'*64)
+    two,b_dle=setup_round(db_session,tmp_path,sample_host,key='b'*64,round_no=2)
+    a_dle.serial,b_dle.serial=serials
+    a=one.expected_set[0]['reports'][0];b=two.expected_set[0]['reports'][0]
+    _set_report_device_id(a,device_ids[0]);_set_report_device_id(b,device_ids[1])
+    renamed=Path(b['storage_uri']).with_name('Result_z_org.xls')
+    Path(b['storage_uri']).rename(renamed);b={**b,'storage_uri':str(renamed)}
+    one.expected_set=[{**one.expected_set[0],'reports':[a,b]}]
+    merge_round(db_session,one.id,matcher=match)
+    assert one.merge_status=='OK'
+    occurrence=db_session.scalars(select(IssueOccurrence)).first()
+    assert facts.count_machines(db_session,signature_id=occurrence.signature_id,plan_run_id=42)==expected
+    assert one.merge_summary['device_id_serial_mismatch']==0
+
+
+def test_v121_foreign_report_id_logs_counts_and_keeps_dle_serial(db_session,sample_host,tmp_path,monkeypatch,caplog):
+    from unittest.mock import Mock
+    from backend.services import shadow_merge
+    one,dle=setup_round(db_session,tmp_path,sample_host,key='a'*64)
+    dle.serial='DLE-SERIAL'
+    _set_report_device_id(one.expected_set[0]['reports'][0],'REPORT-SERIAL')
+    counter=Mock()
+    monkeypatch.setattr(shadow_merge,'shadow_merge_device_id_serial_mismatch_total',counter,raising=False)
+    shadow_merge.merge_round(db_session,one.id,matcher=match)
+    assert one.merge_status=='OK'
+    assert db_session.scalars(select(IssueOccurrence)).one().serial=='DLE-SERIAL'
+    assert one.merge_summary['device_id_serial_mismatch']==1
+    counter.inc.assert_called_once_with()
+    record=next(r for r in caplog.records if 'shadow_merge_device_id_serial_mismatch' in r.getMessage())
+    assert f'fact_round_id={one.id}' in record.getMessage()
+    assert f'dle_id={dle.id}' in record.getMessage()
+    assert 'report_device_id=REPORT-SERIAL' in record.getMessage()
+    assert 'dle_serial=DLE-SERIAL' in record.getMessage()
