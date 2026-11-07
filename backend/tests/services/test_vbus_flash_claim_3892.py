@@ -6,7 +6,9 @@
   且不占 capacity（capacity=0 也能认领）；
 - 关机设备最早作业不是 vbus 刷机时不得被认领（它在等设备上线）；
 - 退役设备、已有 ACTIVE 租约的设备、unauthorized（ERROR）设备不放行；
-- 本 host 已有在跑的 vbus 刷机作业时不再发新的（单主机严格串行）。
+- 本 host 已有在跑的 vbus 刷机作业时不再发新的（单主机严格串行）；
+- 在线设备上的 vbus 作业也只走 vbus 名额：普通名额不认领它、它也不挤占普通名额
+  （复核 #3901 P1-2）。
 """
 
 from __future__ import annotations
@@ -24,7 +26,7 @@ pytestmark = pytest.mark.skipif(
 
 from backend.core.database import AsyncSessionLocal, SessionLocal  # noqa: E402
 from backend.models.device_lease import DeviceLease  # noqa: E402
-from backend.models.enums import HostStatus, JobStatus  # noqa: E402
+from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType  # noqa: E402
 from backend.models.host import Device, Host  # noqa: E402
 from backend.models.job import JobInstance  # noqa: E402
 from backend.models.plan import Plan  # noqa: E402
@@ -189,3 +191,52 @@ def test_mixed_queue_per_device_is_structurally_impossible(seeded):
     with pytest.raises(IntegrityError):
         db.flush()
     db.rollback()
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_normal_path_cannot_bypass_running_vbus_guard(seeded):
+    # 复核 #3901 P1-2 的复现：在线设备 A 有 PENDING vbus，关机设备 B 的 vbus 在跑。
+    host_id, add, _db = seeded
+    add(VBUS, online=True, offset=1)
+    add(VBUS, status=JobStatus.RUNNING.value, offset=0)
+    assert await _claim(host_id, capacity=1, vbus_slots=1) == []
+    assert await _claim(host_id, capacity=1, vbus_slots=0) == []
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_online_vbus_job_uses_vbus_slot_only(seeded):
+    host_id, add, _db = seeded
+    _d, job = add(VBUS, online=True)
+    # 旧 Agent（不带 vbus_slots）认领不到 vbus 作业，无论设备在线与否。
+    assert await _claim(host_id, capacity=1, vbus_slots=0) == []
+    assert await _claim(host_id, capacity=0, vbus_slots=1) == [job]
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_vbus_job_does_not_starve_normal_capacity(seeded):
+    host_id, add, _db = seeded
+    add(VBUS, online=True, offset=0)
+    _d, normal = add(ADB_FLASH, online=True, offset=1)
+    assert await _claim(host_id, capacity=1, vbus_slots=0) == [normal]
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_two_online_vbus_jobs_claim_at_most_one(seeded):
+    host_id, add, _db = seeded
+    _d1, first = add(VBUS, online=True, offset=0)
+    add(VBUS, online=True, offset=1)
+    assert await _claim(host_id, capacity=2, vbus_slots=1) == [first]
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_device_with_active_lease_is_not_released(seeded):
+    # 复核 #3901 建议 2：docstring 所述「ACTIVE 租约不放行」补上用例。
+    host_id, add, db = seeded
+    dev, _job = add(VBUS)
+    now = datetime.now(timezone.utc)
+    db.add(DeviceLease(device_id=dev, host_id=host_id, lease_type=LeaseType.MAINTENANCE.value,
+                       status=LeaseStatus.ACTIVE.value, fencing_token=f"t-{uuid4().hex[:8]}",
+                       lease_generation=1, agent_instance_id="pytest",
+                       acquired_at=now, expires_at=now + timedelta(hours=1)))
+    db.commit()
+    assert await _claim(host_id, capacity=0, vbus_slots=1) == []

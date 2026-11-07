@@ -5,6 +5,7 @@
 - ``allow_device_offline`` 只跳过 device_offline 这一级，其后各级（host_offline 等）照常；
 - prepare：vbus 计划的关机设备不记 device_offline 排队理由；非 vbus 计划照旧排队；
 - 准入泵终检：vbus 计划物化作业；同一设备的非 vbus 计划回队（device_offline）；
+- complete_plan_run_dispatch（precheck 入口）：vbus 计划在关机设备上照常物化，非 vbus 计划转 FAILED；
 - 永久理由（device_retired）不受放行影响。
 """
 
@@ -27,6 +28,7 @@ from backend.services.admission_pump import (
 from backend.services.plan_dispatcher_core import PlanDispatchError
 from backend.services.plan_dispatcher_sync import (
     _classify_dispatch_devices_sync,
+    complete_plan_run_dispatch,
     prepare_plan_run,
 )
 from backend.services.vbus_flash_admission import (
@@ -136,3 +138,27 @@ def test_non_vbus_plan_on_offline_device_still_queues(db_session, vbus_env):
     with pytest.raises(_RetryableAdmission) as exc:
         admission_transaction(db_session, pr.id, attempt)
     assert exc.value.blockers[0]["reason"] == "device_offline"
+
+
+@pytest.mark.parametrize("trigger_mode,expect_jobs", [
+    ("vbus_cycle", True),
+    ("adb_reboot", False),
+])
+def test_complete_dispatch_allows_offline_only_for_vbus(db_session, vbus_env,
+                                                        trigger_mode, expect_jobs):
+    # 复核 #3901 建议 1：complete_plan_run_dispatch 的放行此前没有用例。
+    _host, device, plan = vbus_env
+    pr = prepare_plan_run(plan_id=plan(trigger_mode).id, device_ids=[device.id],
+                          triggered_by="pytest", db=db_session, run_type="MANUAL")
+    pr.status = "RUNNING"
+    pr.run_context = dict(pr.run_context or {}, dispatch_device_ids=[device.id])
+    db_session.commit()
+    complete_plan_run_dispatch(pr.id, db_session)
+    db_session.refresh(pr)
+    jobs = db_session.query(JobInstance).filter(JobInstance.plan_run_id == pr.id).all()
+    if expect_jobs:
+        assert pr.status == "RUNNING"
+        assert len(jobs) == 1
+    else:
+        assert pr.status == "FAILED"
+        assert jobs == []

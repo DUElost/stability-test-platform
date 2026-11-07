@@ -260,21 +260,28 @@ async def claim_jobs_for_host(
             )
         ).subquery("ranked")
 
-        pending_jobs = (await db.execute(
+        head_jobs = (await db.execute(
             select(JobInstance)
             .join(ranked, JobInstance.id == ranked.c.id)
             .where(ranked.c.rn == 1)
             .order_by(JobInstance.created_at)
-            .limit(effective_capacity)
             .with_for_update(of=JobInstance.__table__, skip_locked=True)
         )).scalars().all()
+        # #3892 / ADR-0063 D4 第 5 条：vbus 刷机作业不论设备在线与否只走 6b 的
+        # vbus 名额，普通名额不认领它——否则「本 host 已有在跑 vbus 作业」守卫可被
+        # 普通路径绕过（复核 #3901 P1-2）。先过滤再截断：vbus 作业不得挤占普通名额。
+        # 不带 LIMIT 时锁住的是本 host 空闲设备各自的唯一活跃作业（uq_job_active_per_device），
+        # 行数不超过设备数。
+        pending_jobs = [
+            job for job in head_jobs if not is_vbus_flash_pipeline(job.pipeline_def)
+        ][:effective_capacity]
 
-    # 6b. #3892 / ADR-0063 D4 第 5–6 条：关机设备（被第 4 步健康过滤挡掉）上的
-    #     vbus 刷机作业单独计数——最多 vbus_slots 个，不占 capacity。旧 Agent 不带
-    #     vbus_slots（=0），这一段整体跳过，行为与现行一致。
+    # 6b. #3892 / ADR-0063 D4 第 5–6 条：vbus 刷机作业（含关机设备上的，它们被
+    #     第 4 步健康过滤挡掉）单独计数——最多 vbus_slots 个，不占 capacity。旧 Agent
+    #     不带 vbus_slots（=0），这一段整体跳过，vbus 作业保持 PENDING（D6 第 4 条）。
     if vbus_slots > 0:
         pending_jobs = list(pending_jobs) + await _claimable_vbus_jobs(
-            db, host_id, set(all_device_ids), vbus_slots,
+            db, host_id, vbus_slots,
         )
 
     # 7-8. Claim loop
@@ -318,9 +325,9 @@ async def claim_jobs_for_host(
 
 
 async def _claimable_vbus_jobs(
-    db: AsyncSession, host_id: str, healthy_ids: set[int], vbus_slots: int,
+    db: AsyncSession, host_id: str, vbus_slots: int,
 ) -> List[JobInstance]:
-    """本 host 上被健康过滤挡掉的设备中，最早 PENDING 作业为 vbus 刷机的作业（ADR-0063 D4）。
+    """本 host 上最早 PENDING 作业为 vbus 刷机的作业（ADR-0063 D4），设备在线与否都算。
 
     与第 5–6 步同形：未退役、无 ACTIVE 租约、每台设备取最早 PENDING 作业并
     ``FOR UPDATE SKIP LOCKED``；锁内按 :func:`is_vbus_flash_pipeline` 复核，
@@ -347,18 +354,18 @@ async def _claimable_vbus_jobs(
             func.coalesce(Device.adb_state, "") != "unauthorized",
         )
     )
-    offline_ids = [row[0] for row in device_rows.all() if row[0] not in healthy_ids]
-    if not offline_ids:
+    candidate_ids = [row[0] for row in device_rows.all()]
+    if not candidate_ids:
         return []
     busy_rows = await db.execute(
         select(DeviceLease.device_id).where(
-            DeviceLease.device_id.in_(offline_ids),
+            DeviceLease.device_id.in_(candidate_ids),
             DeviceLease.status == LeaseStatus.ACTIVE.value,
         )
     )
     busy = {row[0] for row in busy_rows.all()}
-    offline_ids = [did for did in offline_ids if did not in busy]
-    if not offline_ids:
+    candidate_ids = [did for did in candidate_ids if did not in busy]
+    if not candidate_ids:
         return []
     rn = func.row_number().over(
         partition_by=JobInstance.device_id,
@@ -368,7 +375,7 @@ async def _claimable_vbus_jobs(
         select(JobInstance.id, rn)
         .join(PlanRun, PlanRun.id == JobInstance.plan_run_id)
         .where(
-            JobInstance.device_id.in_(offline_ids),
+            JobInstance.device_id.in_(candidate_ids),
             JobInstance.status == JobStatus.PENDING.value,
             PlanRun.status == "RUNNING",
         )
