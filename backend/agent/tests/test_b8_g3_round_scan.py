@@ -138,7 +138,7 @@ def test_mapping_covers_all_rows_without_guessing(tmp_path):
     assert [r["row"] for r in mapping["rows"]] == [2, 3]
     assert mapping["rows"][0]["dle_id"] == "one"
     assert mapping["rows"][1] == {"sheet": "aeeexp", "row": 3, "path": str(unknown / "b.dbg"),
-                                    "dle_id": None, "occurrence_key": None, "source": None, "mapped": False}
+                                    "dle_id": None, "occurrence_key": None, "source": None, "mapped": False, "unmapped_reason": "no_source"}
 
 
 @pytest.mark.parametrize(

@@ -18,7 +18,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Sequence
 
-from sqlalchemy import String, cast, distinct, func, or_, select
+from sqlalchemy import String, cast, distinct, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from backend.models.issue_fact import (
@@ -560,7 +560,13 @@ def _occurrence_scope(
 ):
     stmt = stmt.where(IssueOccurrence.signature_id == signature_id)
     if plan_run_id is not None:
-        stmt = stmt.where(IssueOccurrence.first_seen_plan_run_id == plan_run_id)
+        observed_in_run = select(IssueOccurrenceEvent.id).join(
+            DeviceLogEvent, DeviceLogEvent.id == IssueOccurrenceEvent.dle_id,
+        ).where(
+            IssueOccurrenceEvent.occurrence_id == IssueOccurrence.id,
+            DeviceLogEvent.plan_run_id == plan_run_id,
+        ).exists()
+        stmt = stmt.where(or_(IssueOccurrence.first_seen_plan_run_id == plan_run_id, observed_in_run))
     if platform is not None:
         stmt = stmt.join(
             IssueSignature, IssueSignature.id == IssueOccurrence.signature_id,
@@ -608,3 +614,72 @@ def count_machines(
         platform=platform,
     )
     return int(db.execute(stmt).scalar_one())
+
+
+# G4: queries and writes remain behind the G1 service boundary.
+def list_issue_signatures(db: Session, *, platform: str) -> list[dict]:
+    return [{"id": r.id, "signature_raw": r.signature_raw} for r in db.execute(
+        select(IssueSignature).where(func.lower(IssueSignature.platform) == platform.lower())
+        .order_by(IssueSignature.id)
+    ).scalars()]
+
+
+def find_occurrence_by_key(db: Session, *, occurrence_key: str) -> Optional[IssueOccurrence]:
+    return db.execute(select(IssueOccurrence).where(
+        IssueOccurrence.occurrence_key == occurrence_key
+    )).scalar_one_or_none()
+
+
+def find_occurrence_by_dle(db: Session, *, dle_id: Any) -> Optional[IssueOccurrence]:
+    return db.execute(select(IssueOccurrence).join(IssueOccurrenceEvent).where(
+        IssueOccurrenceEvent.dle_id == dle_id
+    ).order_by(IssueOccurrence.id).limit(1)).scalar_one_or_none()
+
+
+def get_partition_event(db: Session, *, dle_id: Any, plan_run_id: int, platform: str, host_id: str):
+    return db.execute(select(DeviceLogEvent).where(
+        DeviceLogEvent.id == dle_id, DeviceLogEvent.plan_run_id == plan_run_id,
+        func.lower(DeviceLogEvent.platform) == platform.lower(), DeviceLogEvent.host_id == host_id,
+    )).scalar_one_or_none()
+
+
+def get_representative_selection(db: Session, *, plan_run_id: int, platform: str, signature_id: int):
+    return db.execute(select(RepresentativeSelection).where(
+        RepresentativeSelection.plan_run_id == plan_run_id,
+        RepresentativeSelection.platform == platform,
+        RepresentativeSelection.signature_id == signature_id,
+    )).scalar_one_or_none()
+
+
+def record_scan_round_merge(db: Session, *, round_id: int, status: str, summary: dict) -> ScanRound:
+    _require_one_of(status, frozenset({'NO_INPUT', 'OK', 'FAILED'}), 'merge_status')
+    row = get_scan_round(db, round_id=round_id)
+    if row is None or row.status != SCAN_ROUND_STATUS_CLOSED:
+        raise IssueFactError('merge requires a closed scan round')
+    if row.merge_status in {'OK', 'NO_INPUT'}:
+        return row
+    row.merge_status, row.merge_summary, row.merged_at = status, summary, _utcnow()
+    db.flush()
+    return row
+
+
+def lock_shadow_merge(db: Session, *, plan_run_id: int):
+    # Cross-run occurrence identity is global. Serialize G4 writers before run/round locks.
+    db.execute(text("SELECT pg_advisory_xact_lock(hashtext('b8-shadow-merge:mtk'))"))
+    return db.execute(select(PlanRun).where(PlanRun.id == plan_run_id).with_for_update()).scalar_one_or_none()
+
+
+def pending_shadow_merge_ids(db: Session, *, plan_run_id: int) -> list[int]:
+    return list(db.execute(select(ScanRound.id).where(
+        ScanRound.plan_run_id == plan_run_id, ScanRound.platform == 'mtk',
+        ScanRound.status == SCAN_ROUND_STATUS_CLOSED,
+        or_(ScanRound.merge_status.is_(None), ScanRound.merge_status == 'FAILED'),
+    ).order_by(ScanRound.round_no)).scalars())
+
+
+def list_partition_merge_candidates(db: Session, *, plan_run_id: int, platform: str) -> list[dict]:
+    summaries = db.execute(select(ScanRound.merge_summary).where(
+        ScanRound.plan_run_id == plan_run_id, ScanRound.platform == platform,
+        ScanRound.merge_status == 'OK',
+    ).order_by(ScanRound.round_no)).scalars()
+    return [candidate for summary in summaries for candidate in (summary or {}).get('candidates', [])]

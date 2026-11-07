@@ -396,7 +396,9 @@ def test_final_round_persists_after_queue_failure_and_requeues_each_check(shadow
     queued.side_effect = None
     shadow.sweep_shadow_scan_rounds(now=now + timedelta(seconds=120))
     assert [r.id for r in _delivery_rounds(factory, run_id)] == [row.id]
-    assert queued.call_count == 2
+    # Closed periodic rounds now enqueue G4 independently of the FINAL scan.
+    assert queued.call_count == 3
+    assert any(call.args[0] == "shadow_merge_task" for call in queued.call_args_list)
     assert queued.call_args.kwargs["fact_round_id"] == row.id
 
 

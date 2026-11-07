@@ -171,6 +171,9 @@ class ScanRound(Base):
     status = Column(String(16), nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
     closed_at = Column(DateTime(timezone=True), nullable=True)
+    merge_status = Column(String(16), nullable=True)
+    merge_summary = Column(JSONB, nullable=True)
+    merged_at = Column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
         UniqueConstraint(
