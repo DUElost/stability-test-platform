@@ -82,6 +82,7 @@
 | `STP_SCAN_ROUND_SHADOW_ENABLED` | B8 G2 影子扫描开关，默认 `0`（关闭）；开启后 Agent 每个扫描周期额外扫描一次，报表仅用于影子轮次与覆盖事实，不进入现行上传、merge 或 extract。由 Owner 决定开启时间 |
 | `STP_SCAN_ROUND_INTERVAL_SECONDS` | 影子扫描周期，默认 `21600` 秒（6 小时），必须大于 0；独立于 `Plan.auto_archive_interval_seconds` |
 | `STP_SCAN_ROUND_REPORT_WAIT_SECONDS` | 影子轮报表等待期，默认 `7200` 秒（2 小时），必须大于 0 且短于扫描周期；全部期望项覆盖时提前关闭 |
+| `STP_SCAN_ROUND_MERGE_MAX_ATTEMPTS` | 影子轮 merge 总尝试上限，默认 `3`，必须大于等于 1；失败后至少等待一个报表等待期，耗尽后进入 `FAILED_FINAL`，仅人工重置可恢复 |
 | `STP_SCAN_POLL_PER_HOST_SECONDS` | 叠加预算：`MAX_WAIT + n_triggered * PER_HOST`（默认 `0`） |
 | `STP_SCAN_POLL_INTERVAL` | 轮询间隔秒（默认 `10`） |
 | `STP_SCAN_POLL_GRACE_SECONDS` | 高进度宽限秒数（默认 `120`；就绪率≥ratio 且缺口≤max_missing 时一次） |
@@ -238,7 +239,7 @@ B8 G0-a 的脚本子进程兼容：已发布的 MTBF、Sleep、PowerCycle、GPU 
 
 <!-- env-inventory:begin（generated：python tools/dev/env_inventory.py --write） -->
 
-共 **277** 个读取名（`backend/**`，不含 `backend/agent/scripts/**`；含 ADR-0042 Settings 字段）：**246** 个已在 `.env*.example` 登记，**31** 个声明为内部（理由见下节）。
+共 **278** 个读取名（`backend/**`，不含 `backend/agent/scripts/**`；含 ADR-0042 Settings 字段）：**247** 个已在 `.env*.example` 登记，**31** 个声明为内部（理由见下节）。
 示例文件是**运维模板**（承载需要运维/机型调整的子集）；本表是**代码侧完整清单**。
 门禁：每个读取名必须「登记进示例」或「内部声明」二选一，二者之外即红。
 
@@ -464,6 +465,7 @@ B8 G0-a 的脚本子进程兼容：已发布的 MTBF、Sleep、PowerCycle、GPU 
 | `STP_RUN_CONSOLE_REPLAY_MAX_LINES` | `-` | ✅ | 运行时 | `backend/services/run_console.py:270` |
 | `STP_RUN_CONSOLE_TERMINAL_RETENTION_SECONDS` | `-` | ✅ | 运行时 | `backend/services/run_console.py:274` |
 | `STP_SCAN_ROUND_INTERVAL_SECONDS` | `21600` | ✅ | 运行时 | `backend/core/settings/scheduler.py:75` |
+| `STP_SCAN_ROUND_MERGE_MAX_ATTEMPTS` | `3` | ✅ | 运行时 | `backend/core/settings/scheduler.py:77` |
 | `STP_SCAN_ROUND_REPORT_WAIT_SECONDS` | `7200` | ✅ | 运行时 | `backend/core/settings/scheduler.py:76` |
 | `STP_SCAN_ROUND_SHADOW_ENABLED` | `False` | ✅ | 运行时 | `backend/core/settings/scheduler.py:74` |
 | `STP_SCHEDULER_LEADER_ELECTION` | `1` | ✅ | 运行时 | `backend/core/leader_election.py:51` |

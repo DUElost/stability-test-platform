@@ -11,6 +11,7 @@ import os
 import re
 import shutil
 from pathlib import Path
+from datetime import datetime
 from typing import Any, Iterable, Sequence
 
 try:
@@ -20,20 +21,13 @@ except ImportError:
 
 from .device_log_event_client import DeviceLogEventClient, DeviceLogEventListError
 from ..contracts.occurrence_key import compute_occurrence_key
+from ..contracts.evidence import event_evidence
+from ..contracts.scan_device_id import (
+    UNKNOWN_DEVICE_ID_VALUES as UNKNOWN_DEVICE_ID_VALUES,
+    normalize_device_id,
+)
 
 logger = logging.getLogger(__name__)
-
-# The scanning tool itself treats these as "device id unknown" (v2.1.0
-# ``BaseScan.py:245`` / ``modules/dedup/membership.py:106``). They are
-# sentinels, not serials: evidence normalization must drop them before the
-# run-partition check. Matching is case-insensitive after stripping.
-UNKNOWN_DEVICE_ID_VALUES = frozenset({
-    "none",
-    "undefined",
-    "unknown_device_id",
-    "discard_device_id",
-})
-
 
 class ScanReportMappingError(ValueError):
     """A scan report rejected by ``report_mapping`` with an operator category."""
@@ -42,14 +36,6 @@ class ScanReportMappingError(ValueError):
         self.reason = reason
         self.row = row
         super().__init__(detail)
-
-
-def normalize_device_id(value: object) -> str | None:
-    """Return stripped serial evidence, or ``None`` for tool-side sentinels."""
-    text = str(value).strip()
-    if not text or text.lower() in UNKNOWN_DEVICE_ID_VALUES:
-        return None
-    return text
 
 
 def is_safe_path_token(value: str) -> bool:
@@ -304,11 +290,26 @@ def report_mapping(
                 path = Path(raw.replace("\\", "/")).resolve()
                 matches = [src for src, staged, local in source_roots
                            if path.is_relative_to(staged) or (local is not None and path.is_relative_to(local))]
-                # Multiple observations at one path cannot be guessed apart.
+                # Only equal, nonempty occurrence keys prove duplicate observations.
                 match = matches[0] if len(matches) == 1 else None
+                duplicate_ids = []
+                duplicate_ambiguous = False
+                if platform.lower() == "mtk" and len(matches) > 1:
+                    keys = {src.get("occurrence_key") for src in matches}
+                    if len(keys) == 1 and all(src.get("occurrence_key") for src in matches):
+                        def observation_order(src):
+                            observed = src["detected_at"]
+                            if isinstance(observed, str):
+                                observed = datetime.fromisoformat(observed)
+                            return observed, str(src["id"])
+                        ordered = sorted(matches, key=observation_order)
+                        match = ordered[0]
+                        duplicate_ids = [str(src["id"]) for src in ordered[1:]]
+                    else:
+                        duplicate_ambiguous = True
                 row_serials = set()
-                if match:
-                    row_serials.add(match["serial"])
+                if len(matches) == 1:
+                    row_serials.add(matches[0]["serial"])
                 for name in ("serial", "device_id"):
                     if name in columns:
                         value = normalize_device_id(sheet.cell_value(index, columns[name]))
@@ -338,7 +339,14 @@ def report_mapping(
                         "outside_run", row=index + 1,
                         detail=f"scan report serial outside run at row {index + 1}",
                     )
-                rows.append({
+                extra = {}
+                if platform.lower() == "mtk":
+                    if match:
+                        extra["evidence"] = event_evidence(match["scan_path"])
+                        extra["duplicate_dle_ids"] = duplicate_ids
+                    else:
+                        extra["unmapped_reason"] = "ambiguous_duplicate" if duplicate_ambiguous else "no_source"
+                rows.append({**extra,
                     "sheet": sheet.name, "row": index + 1, "path": raw,
                     "dle_id": str(match["id"]) if match else None,
                     "occurrence_key": match.get("occurrence_key") if match else None,

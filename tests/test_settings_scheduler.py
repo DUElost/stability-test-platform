@@ -30,6 +30,7 @@ _PRE_MIGRATION_DEFAULTS = {
     "stp_scan_round_shadow_enabled": False,
     "stp_scan_round_interval_seconds": 21600,
     "stp_scan_round_report_wait_seconds": 7200,
+    "stp_scan_round_merge_max_attempts": 3,
     "run_recycle_interval_seconds": 30,
     "session_watchdog_interval_seconds": 15,
     "reconciler_interval_seconds": 15,
@@ -203,3 +204,13 @@ def test_retention_batch_size_has_lower_bound(monkeypatch):
     reset_scheduler_settings_cache()
     assert get_scheduler_settings().plan_run_retention_batch_size == 1
     reset_scheduler_settings_cache()
+
+
+@pytest.mark.parametrize("limit", [1, 5, 0, -1])
+def test_shadow_merge_attempt_limit_is_configurable_and_positive(monkeypatch, limit):
+    monkeypatch.setenv("STP_SCAN_ROUND_MERGE_MAX_ATTEMPTS", str(limit))
+    if limit < 1:
+        with pytest.raises(ValidationError):
+            SchedulerSettings()
+    else:
+        assert SchedulerSettings().stp_scan_round_merge_max_attempts == limit
