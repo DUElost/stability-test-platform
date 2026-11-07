@@ -173,6 +173,8 @@ class ScanRound(Base):
     closed_at = Column(DateTime(timezone=True), nullable=True)
     merge_status = Column(String(16), nullable=True)
     merge_summary = Column(JSONB, nullable=True)
+    merge_attempts = Column(Integer, nullable=False, default=0, server_default="0")
+    merge_next_retry_at = Column(DateTime(timezone=True), nullable=True)
     merged_at = Column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (

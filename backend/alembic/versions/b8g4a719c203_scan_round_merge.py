@@ -17,9 +17,13 @@ def upgrade():
     op.add_column('scan_round', sa.Column('merge_status', sa.String(16), nullable=True))
     op.add_column('scan_round', sa.Column('merge_summary', postgresql.JSONB(), nullable=True))
     op.add_column('scan_round', sa.Column('merged_at', sa.DateTime(timezone=True), nullable=True))
+    op.add_column('scan_round', sa.Column('merge_attempts', sa.Integer(), server_default='0', nullable=False))
+    op.add_column('scan_round', sa.Column('merge_next_retry_at', sa.DateTime(timezone=True), nullable=True))
 
 
 def downgrade():
+    op.drop_column('scan_round', 'merge_next_retry_at')
+    op.drop_column('scan_round', 'merge_attempts')
     op.drop_column('scan_round', 'merged_at')
     op.drop_column('scan_round', 'merge_summary')
     op.drop_column('scan_round', 'merge_status')

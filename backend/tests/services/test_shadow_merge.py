@@ -91,7 +91,7 @@ def test_no_input_aggregate_and_mapping_mismatch(db_session, sample_host, tmp_pa
     assert not db_session.scalars(select(IssueOccurrence)).all()
 
 
-def test_tool_failure_rolls_back_facts_and_can_retry(db_session, sample_host, tmp_path):
+def test_tool_failure_rolls_back_facts_and_can_retry(db_session, sample_host, tmp_path, monkeypatch):
     from backend.services.shadow_merge import merge_round
     one, _ = setup_round(db_session, tmp_path, sample_host)
     def failed(_):
@@ -100,6 +100,9 @@ def test_tool_failure_rolls_back_facts_and_can_retry(db_session, sample_host, tm
     assert one.merge_status == 'FAILED'
     assert not db_session.scalars(select(RepresentativeSelection)).all()
     assert not db_session.scalars(select(IssueOccurrence)).all()
+    from backend.services import shadow_merge
+    retry_at = one.merge_next_retry_at
+    monkeypatch.setattr(shadow_merge, '_utcnow', lambda: retry_at)
     merge_round(db_session, one.id, matcher=match)
     assert one.merge_status == 'OK'
     before = one.merge_summary
@@ -505,3 +508,111 @@ def test_v121_foreign_report_id_logs_counts_and_keeps_dle_serial(db_session,samp
     assert f'dle_id={dle.id}' in record.getMessage()
     assert 'report_device_id=REPORT-SERIAL' in record.getMessage()
     assert 'dle_serial=DLE-SERIAL' in record.getMessage()
+
+
+@pytest.mark.parametrize('limit',[3,2])
+def test_bounded_merge_failures_stop_at_limit(db_session,sample_host,tmp_path,monkeypatch,caplog,limit):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from backend.services import shadow_merge
+    one,_=setup_round(db_session,tmp_path,sample_host,key='a'*64)
+    clock=[datetime.now(timezone.utc)]
+    monkeypatch.setattr(shadow_merge,'_utcnow',lambda:clock[0],raising=False)
+    monkeypatch.setattr(shadow_merge,'get_scheduler_settings',lambda:SimpleNamespace(
+        stp_scan_round_merge_max_attempts=limit,stp_scan_round_report_wait_seconds=10))
+    terminal_counter=Mock()
+    monkeypatch.setattr(shadow_merge,'shadow_merge_failed_final_total',terminal_counter,raising=False)
+    matcher=Mock(side_effect=RuntimeError('deterministic matcher failure'))
+    start=clock[0]
+    for cycle in range(limit+1):
+        clock[0]=start+timedelta(seconds=cycle*10)
+        shadow_merge.merge_round(db_session,one.id,matcher=matcher)
+        # A different SAQ key or an immediate retry must not bypass the wait.
+        clock[0]+=timedelta(seconds=5)
+        shadow_merge.merge_round(db_session,one.id,matcher=matcher)
+    assert matcher.call_count==limit
+    assert one.merge_status=='FAILED_FINAL'
+    assert one.merge_summary['attempts']==limit
+    assert facts.pending_shadow_merge_ids(db_session,plan_run_id=42)==[]
+    assert 42 not in facts.list_pending_shadow_merge_run_ids(db_session)
+    terminal_counter.inc.assert_called_once_with()
+    assert sum('shadow_merge_failed_final ' in r.getMessage() for r in caplog.records)==1
+
+
+def test_bounded_merge_first_failure_second_success(db_session,sample_host,tmp_path,monkeypatch):
+    from types import SimpleNamespace
+    from backend.services import shadow_merge
+    one,_=setup_round(db_session,tmp_path,sample_host,key='a'*64)
+    clock=[datetime.now(timezone.utc)]
+    monkeypatch.setattr(shadow_merge,'_utcnow',lambda:clock[0],raising=False)
+    monkeypatch.setattr(shadow_merge,'get_scheduler_settings',lambda:SimpleNamespace(
+        stp_scan_round_merge_max_attempts=3,stp_scan_round_report_wait_seconds=10))
+    calls=[]
+    def matcher(req):
+        calls.append(clock[0])
+        if len(calls)==1:raise RuntimeError('temporary matcher failure')
+        return match(req)
+    shadow_merge.merge_round(db_session,one.id,matcher=matcher)
+    assert one.merge_status=='FAILED'
+    clock[0]+=timedelta(seconds=10)
+    shadow_merge.merge_round(db_session,one.id,matcher=matcher)
+    assert one.merge_status=='OK'
+    assert one.merge_summary['attempts']==2
+    assert len(calls)==2 and (calls[1]-calls[0]).total_seconds()>=10
+
+
+def test_merge_wait_and_final_survive_sessions_and_only_manual_reset_requeues(
+    db_session, sample_host, tmp_path, monkeypatch,
+):
+    from unittest.mock import Mock
+    from sqlalchemy.orm import sessionmaker
+    from backend.core.settings.scheduler import SchedulerSettings
+    from backend.services import shadow_merge, shadow_scan_rounds as shadow
+    one, _ = setup_round(db_session, tmp_path, sample_host, key='a'*64)
+    round_id = one.id
+    db_session.commit()
+    factory = sessionmaker(bind=db_session.get_bind())
+    clock = [datetime.now(timezone.utc)]
+    settings = SchedulerSettings(stp_scan_round_shadow_enabled=True,
+        stp_scan_round_merge_max_attempts=2, stp_scan_round_report_wait_seconds=10)
+    monkeypatch.setattr(shadow_merge, '_utcnow', lambda: clock[0])
+    for module in [shadow_merge, shadow]:
+        monkeypatch.setattr(module, 'get_scheduler_settings', lambda: settings)
+    monkeypatch.setattr(shadow, 'SessionLocal', factory)
+    monkeypatch.setattr(shadow, 'resolve_shared_storage_root', lambda: str(tmp_path))
+    monkeypatch.setattr(facts, 'list_shadow_scan_run_ids', lambda *_a, **_kw: [])
+    queued = Mock()
+    monkeypatch.setattr(shadow, 'enqueue_sync', queued)
+    matcher = Mock(side_effect=RuntimeError('deterministic failure'))
+    def attempt():
+        with factory() as db:
+            result = shadow_merge.merge_round(db, round_id, matcher=matcher)
+            status, attempts, retry_at = result.merge_status, result.merge_attempts, result.merge_next_retry_at
+            db.commit()
+            return status, attempts, retry_at
+    assert attempt() == ('FAILED', 1, clock[0]+timedelta(seconds=10))
+    clock[0] += timedelta(seconds=9)
+    shadow.sweep_shadow_scan_rounds(now=clock[0])
+    queued.assert_not_called()
+    assert attempt()[1] == 1  # An already-queued task also respects the persisted deadline.
+    clock[0] += timedelta(seconds=1)
+    shadow.sweep_shadow_scan_rounds(now=clock[0])
+    queued.assert_called_once()
+    assert attempt() == ('FAILED_FINAL', 2, None)
+    queued.reset_mock()
+    clock[0] += timedelta(days=1)
+    shadow.sweep_shadow_scan_rounds(now=clock[0])
+    queued.assert_not_called()
+    assert attempt() == ('FAILED_FINAL', 2, None)
+    assert matcher.call_count == 2
+    with factory() as db:
+        # Ordinary result writes cannot reopen the final failure.
+        row = facts.record_scan_round_merge(db, round_id=round_id, status='OK', summary={})
+        assert row.merge_status == 'FAILED_FINAL'
+        facts.reset_failed_final_shadow_merge(db, round_id=round_id)
+        db.commit()
+    shadow.sweep_shadow_scan_rounds(now=clock[0])
+    queued.assert_called_once()
+    with factory() as db:
+        row = shadow_merge.merge_round(db, round_id, matcher=match)
+        assert row.merge_status == 'OK' and row.merge_summary['attempts'] == 1

@@ -68,6 +68,13 @@ def is_prometheus_available() -> bool:
     return PROMETHEUS_AVAILABLE
 
 
+# Count the terminal transition once; run and round identifiers stay in the log body.
+shadow_merge_failed_final_total = Counter(
+    "stability_shadow_merge_failed_final_total",
+    "Shadow merge rounds exhausted their bounded retry budget",
+)
+
+
 # B8 G4 v1.21: identifiers remain in the log body, never metric labels.
 shadow_merge_device_id_serial_mismatch_total = Counter(
     "stability_shadow_merge_device_id_serial_mismatch_total",

@@ -241,12 +241,12 @@ def sweep_shadow_scan_rounds(*, now=None):
     now = now or datetime.now(timezone.utc)
     with SessionLocal() as db:
         run_ids = set(facts.list_shadow_scan_run_ids(db, platform=_PLATFORM))
-        merge_run_ids = facts.list_pending_shadow_merge_run_ids(db)
+        merge_run_ids = facts.list_pending_shadow_merge_run_ids(db, now=now)
     for run_id in sorted(run_ids | set(merge_run_ids)):
         try:
             with SessionLocal() as db:
                 pending = _advance_run(db, run_id, root, now, settings) if run_id in run_ids else []
-                merges = facts.pending_shadow_merge_ids(db, plan_run_id=run_id)
+                merges = facts.pending_shadow_merge_ids(db, plan_run_id=run_id, now=now)
                 db.commit()
             for round_id in merges:
                 tick = int(now.timestamp()) // max(1, settings.auto_archive_poll_interval_seconds)

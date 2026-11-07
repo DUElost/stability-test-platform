@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import logging
@@ -10,7 +10,7 @@ from uuid import UUID
 
 from backend.agent.contracts.evidence import evidence_complete
 from backend.agent.contracts.scan_device_id import normalize_device_id
-from backend.core.metrics import shadow_merge_device_id_serial_mismatch_total
+from backend.core.metrics import shadow_merge_device_id_serial_mismatch_total, shadow_merge_failed_final_total
 from backend.core.database import SessionLocal
 from backend.core.settings.scheduler import get_scheduler_settings
 from backend.services import issue_fact_store as facts
@@ -209,19 +209,46 @@ def _ingest(db, row, matcher):
     return 'OK', summary
 
 
+def _utcnow():
+    return datetime.now(timezone.utc)
+
+
+def _failed_final(db, row, summary, *, attempts, limit, now):
+    row = facts.record_scan_round_merge(db, round_id=row.id, status='FAILED_FINAL',
+        summary={**summary, 'attempts': attempts}, attempts=attempts, now=now)
+    logger.error('shadow_merge_failed_final plan_run_id=%d fact_round_id=%d attempts=%d max_attempts=%d error_type=%s',
+                 row.plan_run_id, row.id, attempts, limit, summary.get('error_type', 'retry_budget_exhausted'))
+    shadow_merge_failed_final_total.inc()
+    return row
+
+
 def merge_round(db, round_id: int, *, matcher=match_issues):
     row = facts.get_scan_round(db, round_id=round_id)
     if row is None or row.platform != 'mtk' or row.status != facts.SCAN_ROUND_STATUS_CLOSED:
         return None
-    if row.merge_status in {'OK', 'NO_INPUT'}:
+    if row.merge_status in {'OK', 'NO_INPUT', 'FAILED_FINAL'}:
         return row
+    settings = get_scheduler_settings()
+    limit = settings.stp_scan_round_merge_max_attempts
+    now = _utcnow()
+    if row.merge_attempts >= limit:
+        return _failed_final(db, row, row.merge_summary or {}, attempts=row.merge_attempts, limit=limit, now=now)
+    if row.merge_next_retry_at is not None and now < row.merge_next_retry_at:
+        return row
+    attempts = row.merge_attempts + 1
     try:
         with db.begin_nested():
             status, summary = _ingest(db, row, matcher)
     except Exception as exc:
-        logger.exception('shadow_merge_failed round=%d', round_id)
+        logger.exception('shadow_merge_failed round=%d attempt=%d', round_id, attempts)
         status, summary = 'FAILED', {**_summary(), 'error_type': type(exc).__name__, 'error': str(exc)[:500]}
-    return facts.record_scan_round_merge(db, round_id=round_id, status=status, summary=summary)
+    finished_at = _utcnow()
+    if status == 'FAILED' and attempts >= limit:
+        return _failed_final(db, row, summary, attempts=attempts, limit=limit, now=finished_at)
+    next_retry_at = (finished_at + timedelta(seconds=settings.stp_scan_round_report_wait_seconds)
+                     if status == 'FAILED' else None)
+    return facts.record_scan_round_merge(db, round_id=round_id, status=status,
+        summary={**summary, 'attempts': attempts}, attempts=attempts, next_retry_at=next_retry_at, now=finished_at)
 
 
 def run_shadow_merge(plan_run_id: int, fact_round_id: int):
