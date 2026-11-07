@@ -6,12 +6,12 @@ from pathlib import Path
 import subprocess
 import sys
 
-from sqlalchemy import create_engine, select, text, update
+from sqlalchemy import MetaData, Table, create_engine, select, text, update
 from sqlalchemy.orm import Session
 from testcontainers.postgres import PostgresContainer
 
 from backend.models.device_lease import DeviceLease
-from backend.models.host import Device, Host
+from backend.models.host import Device
 
 ROOT = Path(__file__).resolve().parents[3]
 PARENT = "u8b6d3752a01"
@@ -51,10 +51,15 @@ def test_empty_upgrade_and_legacy_expiry_roundtrip():
 
         engine = create_engine(url, connect_args={"options": "-c timezone=Pacific/Kiritimati"})
         try:
+            # 旧 revision 的夹具按当时的 schema 插入，不带当前 Host ORM 新增的列。
+            legacy_host = Table("host", MetaData(), autoload_with=engine)
+            host_id = "u9-migration"
             with Session(engine) as db:
-                host = Host(id="u9-migration", hostname="u9-migration", status="ONLINE")
-                db.add(host)
-                db.flush()
+                db.execute(legacy_host.insert().values(
+                    id=host_id, hostname=host_id, status="ONLINE", cpu_quota=2,
+                    watcher_admin_active=True, created_at=datetime.now(timezone.utc),
+                    boot_id="", last_agent_instance_id="",
+                ))
                 cases = [
                     (status, lease_type)
                     for status in ("ACTIVE", "RELEASED")
@@ -62,11 +67,11 @@ def test_empty_upgrade_and_legacy_expiry_roundtrip():
                 ] + [("ACTIVE", "JOB"), ("ACTIVE", "MAINTENANCE")]
                 leases = []
                 for index, (status, lease_type) in enumerate(cases):
-                    device = Device(serial=f"U9-MIGRATION-{index}", host_id=host.id, status="ONLINE")
+                    device = Device(serial=f"U9-MIGRATION-{index}", host_id=host_id, status="ONLINE")
                     db.add(device)
                     db.flush()
                     lease = DeviceLease(
-                        device_id=device.id, host_id=host.id,
+                        device_id=device.id, host_id=host_id,
                         lease_type=lease_type, status=status,
                         fencing_token=f"{device.id}:1", lease_generation=1,
                         agent_instance_id="platform", reason="归还欠账", holder="platform",
