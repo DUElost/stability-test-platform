@@ -144,6 +144,8 @@ class PartitionMode(Base):
     platform = Column(String(16), nullable=False)
     mode = Column(String(16), nullable=False)
     written_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
+    # #3875：影子分区的不可撤销出口；独立于不可变的运行模式。
+    shadow_settled_at = Column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
         UniqueConstraint(
