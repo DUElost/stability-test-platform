@@ -101,7 +101,7 @@ def _report_key(report):
     )
 
 
-def _late_inputs(rounds, root):
+def _late_inputs(rounds, root, *, strict=False):
     consumed = {
         _report_key(r) for row in rounds for u in row.expected_set for r in u.get("reports", [])
     }
@@ -109,7 +109,7 @@ def _late_inputs(rounds, root):
     for row in rounds:
         if row.status != facts.SCAN_ROUND_STATUS_CLOSED:
             continue
-        for report in read_round_reports(root, row.plan_run_id, row.id, row.expected_set, strict=True):
+        for report in read_round_reports(root, row.plan_run_id, row.id, row.expected_set, strict=strict):
             key = _report_key(report)
             if key not in consumed:
                 pending[key] = report
@@ -227,11 +227,23 @@ def _advance_run(db, run_id, root, now, settings):
             elif all(r.closed_at is not None for r in rounds) and now > max(
                 r.closed_at for r in rounds
             ) + timedelta(seconds=settings.stp_scan_round_report_wait_seconds):
-                facts.settle_shadow_partition(
-                    db, plan_run_id=run_id, platform=_PLATFORM, settled_at=now,
-                    report_wait_seconds=settings.stp_scan_round_report_wait_seconds,
-                )
-                logger.info("shadow_scan_partition_settled plan_run=%d platform=%s", run_id, _PLATFORM)
+                # 6704918122：strict 仅用于准备 settled 时确认安静期。
+                # 读失败只推迟 settled，不回滚本次轮次推进；普通迟到输入读取仍告警跳过。
+                try:
+                    quiet = not _late_inputs(rounds, root, strict=True)
+                except (OSError, ValueError):
+                    logger.warning(
+                        "shadow_scan_settle_deferred plan_run=%d fact_round_id=%d "
+                        "platform=%s reason=manifest_unreadable",
+                        run_id, final.id, _PLATFORM, exc_info=True,
+                    )
+                else:
+                    if quiet:
+                        facts.settle_shadow_partition(
+                            db, plan_run_id=run_id, platform=_PLATFORM, settled_at=now,
+                            report_wait_seconds=settings.stp_scan_round_report_wait_seconds,
+                        )
+                        logger.info("shadow_scan_partition_settled plan_run=%d platform=%s", run_id, _PLATFORM)
     if new is not None:
         rounds.append(new)
         _refresh_round(db, new, root, now)
