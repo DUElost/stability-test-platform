@@ -9,14 +9,17 @@ Class: bug-fix
 [影子下发守卫](https://github.com/DUElost/stability-test-platform/issues/3875#issuecomment-6621527518)
 及 [digest 过渡裁定](https://github.com/DUElost/stability-test-platform/issues/3875#issuecomment-6704534279)、
 [当前心跳绑定](https://github.com/DUElost/stability-test-platform/issues/3800#issuecomment-6704562784)、
-[Agent 上送观测](https://github.com/DUElost/stability-test-platform/issues/3875#issuecomment-6704602109)。
+[Agent 上送观测](https://github.com/DUElost/stability-test-platform/issues/3875#issuecomment-6704602109)、
+[strict 边界与同轮恢复](https://github.com/DUElost/stability-test-platform/issues/3800#issuecomment-6704918122)。
 
 一次 additive 迁移给 `partition_mode` 增加可空 `shadow_settled_at`，给 `host` 增加可空
 `agent_artifact_digest_reported_at`，均不回填历史值。
 控制面在持有 PlanRun 行锁时确认：run 已终态、最后一轮存在、全部轮次已关闭、
 距离最后关闭时间超过一个完整报表等待期、且本次读取没有新迟到输入，才写入时间。
 迟到输入仍按 ADR-0062 D5 第 4 条带入补充轮；补充轮的关闭时间重新起算等待期。
-读取清单失败不作无迟到输入处理。
+周期轮、最后一轮及补充轮的迟到输入读取沿用告警、跳过坏清单的行为，继续推进轮次。
+只有准备 settled 时才 strict 复查清单；读取失败只推迟 settled 并记录专用日志，
+不抛出到 sweep，不回滚同一次推进中的其他动作。复查新发现迟到输入时也不 settled。
 
 候选查询过滤 settled；推进及 SAQ 工作线程再次检查 settled，以覆盖并发快照和残留任务。
 已写入的时间不覆写，服务层拒绝为 settled 分区登记新轮。
@@ -29,6 +32,10 @@ Class: bug-fix
 任一条件不满足或 desired 计算失败时，该期望项为 `MISSING`，原因是
 `capability_unverified`，并记录专用日志。原因保存在本轮期望集，可按该原因单独统计 host 数；
 重试不累加业务计数。不硬编码摘要或版本名单，现行 scan_now 不经过能力守卫。
+
+能力未验证的 host 不写 `last_dispatched_at`，在轮次关闭之前，下一个检查周期仍会重新判定。
+host 达标后可以在同一轮恢复下发，清除缺失原因；收到有效报表后覆盖变为 `RECEIVED`。
+轮次关闭后仍沿用不可改覆盖的约束，不重新打开轮次。
 
 摘要列的既有读者（例如漂移显示）仍沿用空报保留旧值的语义。
 每次 Agent 载荷变化都会使尚未同步的主机暂时缺失；这是规划者裁定接受的保守行为。
@@ -50,6 +57,10 @@ Agent 在影子报表文件、映射与清单写入完成之后记录 `shadow_ro
 
 - 控制面测试覆盖 settled 后无清单 I/O、残留候选/任务不重开、未完成条件留在候选、
   迟到输入进入补充轮且重置等待期、坏清单不提前 settled。
+- 坏的已关闭轮清单不阻止周期轮和最后一轮建立、接收及关闭；终态不能 settled，清单恢复后
+  下个检查周期才 settled，严格读取错误不冒泡为 sweep 失败。
+- 能力未验证的 host 在同一轮下一周期达标后恢复下发，记录下发时间、清除原因，收到报表后
+  覆盖变为 `RECEIVED`，不创建替代轮。
 - 能力测试比较真实 desired digest，覆盖缺失、不匹配、匹配、desired 变化、旧 Agent 空报后留存
   摘要被拒绝、在线与同次心跳约束，以及现行命令不经过守卫。
 - 同一反例中，settled 后 Agent 真实上送并记日志、计数，打桩断言控制面不读取任何轮次清单，

@@ -131,6 +131,107 @@ def test_unreadable_manifest_cannot_be_interpreted_as_quiet(shadow_env):
         assert facts.get_partition_mode(db, plan_run_id=run_id, platform="mtk").shadow_settled_at is None
 
 
+def test_unreadable_closed_manifest_allows_rounds_but_defers_settle_until_recovery(shadow_env, caplog, monkeypatch):
+    factory, run_id, root, _queued, settings = shadow_env
+    # 轮次创建时间与 sweep 的受控时间保持一致，避免越过周期后重复建轮。
+    clock = Mock(wraps=datetime)
+    clock.now.return_value = datetime.now(timezone.utc)
+    monkeypatch.setattr("backend.models.issue_fact.datetime", clock)
+
+    def sweep_at(now):
+        clock.now.return_value = now
+        shadow.sweep_shadow_scan_rounds(now=now)
+
+    _observe_running_run(shadow_env)
+    original = _rows(factory, run_id)[0]
+    manifest = round_manifest_path(str(root), run_id, original.id, "host-a")
+    manifest.write_text("{broken")
+    periodic_at = original.created_at + timedelta(seconds=settings.stp_scan_round_interval_seconds)
+
+    # 一份已关闭轮的坏清单不得阻止下一周期轮建立、接收报表和关闭。
+    sweep_at(periodic_at)
+    rounds = _rows(factory, run_id)
+    assert len(rounds) == 2
+    periodic = rounds[-1]
+    assert periodic.kind == "PERIODIC"
+    for unit in periodic.expected_set:
+        _receipt(root, run_id, periodic.id, unit["host_id"])
+    sweep_at(periodic_at + timedelta(seconds=1))
+    assert _rows(factory, run_id)[-1].status == "CLOSED"
+
+    # 同样的坏清单也不得阻止终态的最后一轮建立和关闭。
+    with factory() as db:
+        db.get(shadow.PlanRun, run_id).status = "SUCCESS"
+        db.commit()
+    sweep_at(periodic_at + timedelta(seconds=2))
+    final = _delivery_rounds(factory, run_id)[0]
+    assert final.kind == "FINAL"
+    for unit in final.expected_set:
+        _receipt(root, run_id, final.id, unit["host_id"])
+    sweep_at(periodic_at + timedelta(seconds=3))
+    final = _delivery_rounds(factory, run_id)[0]
+    assert final.status == "CLOSED"
+
+    settle_at = final.closed_at + timedelta(seconds=settings.stp_scan_round_report_wait_seconds + 1)
+    sweep_at(settle_at)
+    with factory() as db:
+        assert run_id in facts.list_shadow_scan_run_ids(db, platform="mtk")
+        assert facts.get_partition_mode(db, plan_run_id=run_id, platform="mtk").shadow_settled_at is None
+    assert "shadow_scan_settle_deferred" in caplog.text
+    assert "shadow_scan_sweep_failed" not in caplog.text
+
+    _receipt(root, run_id, original.id, "host-a")
+    sweep_at(settle_at + timedelta(seconds=120))
+    with factory() as db:
+        assert run_id not in facts.list_shadow_scan_run_ids(db, platform="mtk")
+        assert facts.get_partition_mode(db, plan_run_id=run_id, platform="mtk").shadow_settled_at == settle_at + timedelta(seconds=120)
+
+
+def test_capability_unverified_host_recovers_within_the_same_round(shadow_env, monkeypatch):
+    factory, run_id, root, queued, _settings = shadow_env
+    now = datetime.now(timezone.utc)
+    clock = Mock(wraps=datetime)
+    clock.now.return_value = now
+    monkeypatch.setattr(shadow, "datetime", clock)
+    monkeypatch.setattr(shadow, "_expected_units", lambda *_: [{"host_id": "host-a", "platform": "mtk"}])
+    monkeypatch.setattr(shadow, "iter_plan_run_scan_hosts", lambda *_: [("host-a", "ONLINE", False)])
+    build = Mock(return_value={"device_serials": ["a"]})
+    monkeypatch.setattr(shadow, "build_scan_now_payload", build)
+    with factory() as db:
+        db.add(Host(id="host-a", hostname="recovering-shadow-host", status="ONLINE", last_heartbeat=now))
+        db.commit()
+    shadow.sweep_shadow_scan_rounds(now=now)
+    row = _rows(factory, run_id)[0]
+    assert shadow.prepare_shadow_scan(run_id, row.id) == []
+    unit = _rows(factory, run_id)[0].expected_set[0]
+    assert unit["coverage"] == "MISSING" and unit["reason"] == "capability_unverified"
+    assert "last_dispatched_at" not in unit
+    build.assert_not_called()
+
+    clock.now.return_value = now + timedelta(seconds=120)
+    with factory() as db:
+        host = db.get(Host, "host-a")
+        host.agent_artifact_digest = artifact_digest.compute_desired_artifact_digest()
+        host.last_heartbeat = host.agent_artifact_digest_reported_at = clock.now.return_value
+        db.commit()
+    queued.reset_mock()
+    shadow.sweep_shadow_scan_rounds(now=clock.now.return_value)
+    queued.assert_called_once()
+    assert queued.call_args.kwargs["fact_round_id"] == row.id
+    assert len(shadow.prepare_shadow_scan(run_id, row.id)) == 1
+    unit = _rows(factory, run_id)[0].expected_set[0]
+    assert "reason" not in unit
+    assert unit["last_dispatched_at"] == clock.now.return_value.isoformat()
+    assert build.call_args.kwargs["fact_round_id"] == row.id
+
+    _receipt(root, run_id, row.id, "host-a", empty=False)
+    shadow.sweep_shadow_scan_rounds(now=clock.now.return_value + timedelta(seconds=1))
+    rows = _rows(factory, run_id)
+    assert len(rows) == 1 and rows[0].id == row.id
+    assert rows[0].status == "CLOSED"
+    assert rows[0].expected_set[0]["coverage"] == "RECEIVED"
+
+
 @pytest.mark.parametrize("reported", [None, "", "sha256:" + "a" * 64, "matched"])
 def test_dynamic_digest_guard_marks_unverified_hosts_missing(shadow_env, monkeypatch, caplog, reported):
     factory, run_id, _root, _queued, _settings = shadow_env
