@@ -24,6 +24,8 @@ root 操作收敛为**固定子命令 + 路径/属主/内容校验**：
     usb-authorized   切换 MTK 设备 sysfs authorized（port 正则 + vendor 校验）
     read-kernel-log  只读搬运内核日志（journalctl -k，固定形态 + 两个整数参数，
                     #2957：给 Agent 一条可读内核 USB 日志的最小提权面）
+    usb-power        按 serial 查 root 属主槽位映射，固定 argv 调 uhubctl 切电
+                    （#3892 / ADR-0063 D2 / ADR-0037 D8：调用方不能指定 Hub 或端口）
 
 不变量：
 - 所有写路径固定或经前缀校验，永不接受任意目标路径；
@@ -34,7 +36,8 @@ root 操作收敛为**固定子命令 + 路径/属主/内容校验**：
 
 Python 3.6+（主机系统 python3，不使用第三方依赖）。exit code：0 成功、
 1 selftest 失败、2 拒绝（STP_AGENT_PRIV_ERROR）、3 read-kernel-log 读取失败
-（journalctl 非零退出 / 超时 / 输出截断；stderr 带 ``STP_READ_KERNEL_LOG_*`` 标记）。
+（journalctl 非零退出 / 超时 / 输出截断；stderr 带 ``STP_READ_KERNEL_LOG_*`` 标记）
+或 usb-power 执行失败（uhubctl 非零退出 / 超时；stderr 带 ``STP_USB_POWER_*`` 标记）。
 """
 
 import argparse
@@ -78,6 +81,22 @@ KERNEL_LOG_TIMEOUT_SECONDS = 30
 MAX_KERNEL_LOG_LINES = 5000
 #: 子进程环境：清空后只留这两项（不设 SYSTEMD_PAGER；--no-pager 双保险）。
 KERNEL_LOG_ENV = {"LC_ALL": "C", "PATH": "/usr/bin:/bin"}
+
+# ── usb-power 窄面（#3892 / ADR-0063 D1–D2 / ADR-0037 D8）─────────────────────
+# sudoers 不约束 wrapper 参数（D6），所以切电目标**只能**来自 root 属主的槽位映射：
+# 调用方给 serial，wrapper 查表得到 (hub_location, port)；Agent 用户无法断开
+# 映射之外的任何 Hub 口（例如正在跑测试的邻机）。
+UHUBCTL_BIN = "/usr/sbin/uhubctl"
+USB_POWER_SLOTS_PATH = "/etc/stp-agent/usb-power-slots.json"
+#: 映射文件与 uhubctl 本体必须属于该 uid（测试里 monkeypatch 为当前用户）。
+USB_POWER_TRUSTED_UID = 0
+MAX_USB_POWER_SLOTS_BYTES = 64 * 1024
+USB_POWER_TIMEOUT_SECONDS = 60
+USB_POWER_MAX_PORT = 16
+USB_POWER_MAX_DELAY = 30
+USB_POWER_ACTIONS = ("on", "off", "cycle")
+USB_POWER_ENV = {"LC_ALL": "C", "PATH": "/usr/bin:/bin"}
+_USB_POWER_SERIAL_RE = re.compile(r"^[A-Za-z0-9._:-]{1,64}\Z")
 
 # ── flash 链窄面（ADR-0037 D5 / #2133；#2284 最小权限；#2353 判据改成员资格）──
 # udev 规则：固定路径 + **两个固定形态之一**（与 flash_preflight 最新版本的
@@ -1178,6 +1197,176 @@ def cmd_read_kernel_log(args, conf):
     return 0
 
 
+def validate_usb_power_serial(serial):
+    """usb-power 的 serial 校验（纯函数）：只接受 adb serial 的常见字符集。"""
+    if not isinstance(serial, str) or not _USB_POWER_SERIAL_RE.match(serial):
+        _fail("--serial must match [A-Za-z0-9._:-]{1,64}, got %r" % (serial,))
+    return serial
+
+
+def validate_usb_power_expect_slot(value):
+    """--expect-slot 校验（纯函数）：`<hub_location>:<port>`，取值口径与映射条目相同。"""
+    if not isinstance(value, str) or value.count(":") != 1:
+        _fail("--expect-slot must be <hub_location>:<port>, got %r" % (value,))
+    location, _, port_text = value.partition(":")
+    if not _USB_PORT_RE.match(location):
+        _fail("--expect-slot has an invalid hub_location %r" % (location,))
+    if not re.match(r"^[0-9]{1,2}\Z", port_text) or not 1 <= int(port_text) <= USB_POWER_MAX_PORT:
+        _fail("--expect-slot port must be an integer within 1..%d" % USB_POWER_MAX_PORT)
+    return location, int(port_text)
+
+
+def validate_usb_power_request(action, delay):
+    """动作与延迟校验（纯函数）：delay 只对 cycle 有效，取值 1..30。"""
+    if action not in USB_POWER_ACTIONS:
+        _fail("--action must be one of %s, got %r" % ("/".join(USB_POWER_ACTIONS), action))
+    if delay is None:
+        return action, None
+    if action != "cycle":
+        _fail("--delay is only valid with --action cycle")
+    if isinstance(delay, bool) or not isinstance(delay, int):
+        _fail("--delay must be an integer")
+    if not 1 <= delay <= USB_POWER_MAX_DELAY:
+        _fail("--delay must be within 1..%d, got %d" % (USB_POWER_MAX_DELAY, delay))
+    return action, delay
+
+
+def _require_trusted_file(metadata, what):
+    """属主为可信 uid、普通文件、非 group/other 可写。"""
+    if not stat.S_ISREG(metadata.st_mode):
+        _fail("%s must be a regular file" % what)
+    if metadata.st_uid != USB_POWER_TRUSTED_UID:
+        _fail("%s must be owned by uid %d" % (what, USB_POWER_TRUSTED_UID))
+    if metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        _fail("%s must not be group/other writable" % what)
+
+
+def parse_usb_power_slots(body):
+    """解析槽位映射（纯函数）：返回 {serial: (hub_location, port)}。
+
+    任一条目非法、serial 重复或 (hub_location, port) 重复时整份拒绝
+    （ADR-0063 D1 第 4 条）——宁可全部切电不可用，也不按一份有歧义的表断电。
+    """
+    try:
+        doc = json.loads(body)
+    except ValueError as exc:
+        _fail("usb power slots file is not valid JSON: %s" % exc)
+    if not isinstance(doc, dict) or set(doc) != {"schema", "slots"} \
+            or type(doc.get("schema")) is not int or doc["schema"] != 1:
+        _fail("usb power slots file must be an object with exactly schema=1 and slots")
+    slots = doc.get("slots")
+    if not isinstance(slots, list):
+        _fail("usb power slots file must have a slots list")
+    mapping = {}
+    seen_slots = set()
+    for index, entry in enumerate(slots):
+        if not isinstance(entry, dict) or set(entry) != {"serial", "hub_location", "port"}:
+            _fail("slot #%d must have exactly serial/hub_location/port" % index)
+        serial = entry["serial"]
+        location = entry["hub_location"]
+        port = entry["port"]
+        if not isinstance(serial, str) or not _USB_POWER_SERIAL_RE.match(serial):
+            _fail("slot #%d has an invalid serial" % index)
+        if not isinstance(location, str) or not _USB_PORT_RE.match(location):
+            _fail("slot #%d has an invalid hub_location" % index)
+        if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= USB_POWER_MAX_PORT:
+            _fail("slot #%d port must be an integer within 1..%d" % (index, USB_POWER_MAX_PORT))
+        if serial in mapping:
+            _fail("serial %s appears more than once in usb power slots file" % serial)
+        if (location, port) in seen_slots:
+            _fail("slot %s port %d appears more than once in usb power slots file" % (location, port))
+        mapping[serial] = (location, port)
+        seen_slots.add((location, port))
+    return mapping
+
+
+def _load_usb_power_slots():
+    """读 root 属主映射文件：父目录与文件都必须可信，文件以 O_NOFOLLOW 打开。"""
+    directory = os.path.dirname(USB_POWER_SLOTS_PATH)
+    try:
+        dir_meta = os.lstat(directory)
+    except OSError as exc:
+        _fail("cannot stat usb power slots dir %s: %s" % (directory, exc))
+    if not stat.S_ISDIR(dir_meta.st_mode):
+        _fail("usb power slots dir must be a real directory")
+    if dir_meta.st_uid != USB_POWER_TRUSTED_UID or dir_meta.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        _fail("usb power slots dir must be owned by uid %d and not group/other writable"
+              % USB_POWER_TRUSTED_UID)
+    try:
+        descriptor = os.open(USB_POWER_SLOTS_PATH, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError as exc:
+        _fail("cannot open usb power slots file %s: %s" % (USB_POWER_SLOTS_PATH, exc))
+    with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+        metadata = os.fstat(handle.fileno())
+        _require_trusted_file(metadata, "usb power slots file")
+        if metadata.st_size > MAX_USB_POWER_SLOTS_BYTES:
+            _fail("usb power slots file too large")
+        body = handle.read(MAX_USB_POWER_SLOTS_BYTES + 1)
+    if len(body.encode("utf-8")) > MAX_USB_POWER_SLOTS_BYTES:
+        _fail("usb power slots file too large")
+    return parse_usb_power_slots(body)
+
+
+def build_usb_power_argv(location, port, action, delay):
+    """固定 argv（纯函数，单测锁定白名单面）：uhubctl -l -p -a [-d]。"""
+    argv = [UHUBCTL_BIN, "-l", location, "-p", str(port), "-a", action]
+    if delay is not None:
+        argv += ["-d", str(delay)]
+    return argv
+
+
+def cmd_usb_power(args, conf):
+    """按 serial 给登记槽位切电（#3892 / ADR-0063 D2 / ADR-0037 D8）。
+
+    面约束：调用方只给 serial / expect-slot / action / delay；槽位只来自 root 属主映射文件，
+    expect-slot 只用于比对（不一致即 exit 2，不调 uhubctl）；
+    Hub 位置必须解析为 ``/sys/devices`` 下同名的真实目录（与 usb-authorized 同判定）；
+    uhubctl 本体必须 root 属主且非 group/other 可写；子进程环境清空、60s 超时、
+    不经 shell。失败一律 exit 3 + ``STP_USB_POWER_*`` 标记。
+    """
+    _require_root()
+    serial = validate_usb_power_serial(args.serial)
+    expected = validate_usb_power_expect_slot(args.expect_slot)
+    action, delay = validate_usb_power_request(args.action, args.delay)
+    slots = _load_usb_power_slots()
+    if serial not in slots:
+        _fail("serial %s has no slot in %s" % (serial, USB_POWER_SLOTS_PATH))
+    location, port = slots[serial]
+    if (location, port) != expected:
+        # 在任何切电动作之前拒绝：调用方与 wrapper 读到的映射不同（两次读之间被改写）。
+        _fail("STP_USB_POWER_SLOT_MISMATCH serial=%s expected=%s:%d mapped=%s:%d"
+              % (serial, expected[0], expected[1], location, port))
+    resolved = os.path.realpath(os.path.join(USB_SYSFS_BASE, location))
+    if not is_kernel_usb_device_path(resolved, location) or not os.path.isdir(resolved):
+        _fail("hub_location %s does not resolve to a kernel sysfs USB device (got %s)"
+              % (location, resolved))
+    try:
+        binary_meta = os.lstat(UHUBCTL_BIN)
+    except OSError as exc:
+        _fail("cannot stat %s: %s" % (UHUBCTL_BIN, exc))
+    _require_trusted_file(binary_meta, UHUBCTL_BIN)
+    argv = build_usb_power_argv(location, port, action, delay)
+    try:
+        proc = subprocess.run(
+            argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env=dict(USB_POWER_ENV), close_fds=True,
+            timeout=USB_POWER_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        print("STP_USB_POWER_TIMEOUT seconds=%d" % USB_POWER_TIMEOUT_SECONDS, file=sys.stderr)
+        return 3
+    except OSError as exc:
+        print("STP_USB_POWER_FAILED cannot exec %s: %s" % (UHUBCTL_BIN, exc), file=sys.stderr)
+        return 3
+    if proc.returncode != 0:
+        tail = proc.stderr.decode("utf-8", "replace").strip()[-400:]
+        print("STP_USB_POWER_FAILED rc=%d %s" % (proc.returncode, tail), file=sys.stderr)
+        return 3
+    print("STP_USB_POWER_OK serial=%s location=%s port=%d action=%s"
+          % (serial, location, port, action))
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -1212,6 +1401,9 @@ _SUBCOMMAND_CONTRACT = {
     # #2957：只读内核日志（D7）。契约 argv 走 --since-epoch 形态（--boot 由解析层
     # 的互斥组覆盖，探针形态另有单测）。
     "read-kernel-log": ["--since-epoch", "1555555555"],
+    # #3892：USB 切电（D8）。契约 argv 走 cycle + delay 形态（覆盖全部四个参数）。
+    "usb-power": ["--serial", "ABC123", "--expect-slot", "1-1.4:3",
+                  "--action", "cycle", "--delay", "12"],
 }
 
 # #3356：参数级能力标记（capabilities 在子命令行之外逐行输出）。旧 wrapper 只报
@@ -1339,6 +1531,24 @@ def _build_parser():
         default=None,
         help="limit output to the last N lines (1..%d)" % MAX_KERNEL_LOG_LINES,
     )
+
+    # ADR-0037 D8 / ADR-0063 D2（#3892）：USB 切电窄面。只接受 serial，槽位查 root
+    # 属主映射；allow_abbrev=False 理由同 read-kernel-log。
+    p = sub.add_parser(
+        "usb-power",
+        help="power a registered USB hub slot on/off by device serial (ADR-0037 D8)",
+        allow_abbrev=False,
+    )
+    p.add_argument("--serial", required=True)
+    # 调用方读到的槽位（`<hub_location>:<port>`）。wrapper 只拿它与自己查表的结果
+    # 比对，不一致即拒绝、不调 uhubctl；切电目标仍只来自映射（复核 #3899 comment
+    # 6708089815：回显核对发生在切电之后，映射被改写时会先切错一次）。
+    p.add_argument("--expect-slot", required=True, dest="expect_slot")
+    p.add_argument("--action", required=True, choices=list(USB_POWER_ACTIONS))
+    p.add_argument(
+        "--delay", type=int, default=None,
+        help="off time for cycle, 1..%d seconds" % USB_POWER_MAX_DELAY,
+    )
     return parser
 
 
@@ -1375,6 +1585,7 @@ def main(argv=None):
         "ensure-udev-rule": cmd_ensure_udev_rule,
         "usb-authorized": cmd_usb_authorized,
         "read-kernel-log": cmd_read_kernel_log,
+        "usb-power": cmd_usb_power,
     }
     try:
         return handlers[args.command](args, conf)
