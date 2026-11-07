@@ -1,6 +1,6 @@
 # ADR-0063：无 ADB 设备的 USB 切电刷机（`trigger_mode=vbus_cycle`）
 
-- 状态：**Proposed** v0.3（2026-11-07 v0.3：Owner 答复 §8 三项，见 §8；新增 §8 第 4 项待裁；v0.2：补 F11 与 D4 第 5–6 条，Agent 认领侧也要改，D6 第 1 条随之订正为随 Agent 代码发布；v0.1 2026-11-07 起草；Owner 已在项目对话中裁定「与 B8 并行实施、第一期不加迁移」，本稿待 Owner 裁定 §8 第 4 项并经独立复核后转 Accepted）
+- 状态：**Proposed** v0.4（2026-11-07 v0.4：Owner 裁定 §8 第 4 项（unauthorized 排除）与「设备必须已关机」前提，新增 D3 第 11–12 条，订正 D3 第 6 条键序；新增 §8 第 5 项待裁；v0.3：Owner 答复 §8 三项，见 §8；新增 §8 第 4 项待裁；v0.2：补 F11 与 D4 第 5–6 条，Agent 认领侧也要改，D6 第 1 条随之订正为随 Agent 代码发布；v0.1 2026-11-07 起草；Owner 已在项目对话中裁定「与 B8 并行实施、第一期不加迁移」，本稿待 Owner 答复 §8 第 5 项并经独立复核后转 Accepted）
 - 优先级：P1
 - 目标里程碑：M7
 - 日期：2026-11-07
@@ -91,14 +91,26 @@ Agent 代码，会改变控制面的期望 digest，而 #3875 的影子能力守
    `usb-power on` → 捕获与写包 → 等待开机与 ADB → 跳过 OOBE → 版本核验 → 释放主机锁。
 4. 门控目标口必须取自槽位（sysfs 名 `<hub_location>.<port>`），不得在 `vbus_cycle` 下按 serial 反查。
 5. 主机锁必须覆盖第 3 条从「取锁」到「版本核验」的全部阶段；锁外不得开启任何槽位的供电。
-6. 跳过 OOBE 必须在本脚本内完成（唤醒 224 → 解锁 82 → force-stop setupwizard → HOME 3，与现行
-   `oobe_skip` 同序）；脚本不得 import 其他脚本包的代码。
+6. 跳过 OOBE 必须在本脚本内完成，配方与现行 `oobe_skip` 1.1.x 相同：写 `user_setup_complete` 与
+   `device_provisioned` 两个标志 → force-stop setupwizard → 唤醒 224 → 解锁 82 → HOME 3，以两个标志回读为 1
+   作为判据（v0.3 写成「224 → 82 → force-stop → 3」，与 `oobe_skip` 实际顺序不符，v0.4 订正）；
+   脚本不得 import 其他脚本包的代码。
 7. 各阶段必须有独立硬超时，缺省值：BROM 捕获 120s、写包沿用现行工具超时、开机到 ADB 300s、OOBE 60s、版本核验 60s。
 8. 开启供电之后的任一阶段失败或超时，脚本必须在 `finally` 中对本槽位执行 `usb-power off`，再释放锁；
    SIGTERM / SIGINT / SIGHUP 处理器必须走同一收尾路径。
 9. 脚本在取锁之前必须确认 wrapper `capabilities` 含 `usb-power` 且本机有 D1 映射文件、目标 serial 在其中；
    任一不满足时必须直接失败，并且不得执行任何切电动作。
 10. 结果 JSON 必须带 `trigger_mode` 与 `vbus` 段（槽位、各阶段耗时、隔离是否执行）。
+11. 设备必须已关机（Owner 2026-11-07）：开机态的手机断电再上电不经过 BROM，工具检测不到刷机口。脚本在取锁之前
+    必须按下列规则满足或拒绝这一前提，拒绝时不得执行任何切电动作：
+    - ADB 为 `device` 态时，脚本必须先 `adb reboot -p`，等设备从 adb 和槽位口上都消失
+      （`vbus_poweroff_timeout_seconds`，缺省 60），超时即失败；
+    - ADB 为 `unauthorized` 时，脚本必须直接失败：关机与重启都无法用命令做到（与 D4 第 2 条 `device_error` 照常拒绝同口径）；
+    - 其它 ADB 状态（`offline`、不可见等）进切电流程；
+    - 槽位口 `<hub_location>.<port>` 上已有不在可刷态（`0e8d` 且 PID ∈ `0003/2000/2001/3000/2026`）的 USB 枚举时，
+      脚本必须判为开机态并失败；这一条识别「开机但没开 ADB」的设备。取锁后第一次切电前必须再复核一次。
+12. 设备关机时读不到 `ro.product.model`。未给 `firmware_dir` 时，步骤必须用参数 `model` 声明机型，路由其余判据不变；
+    刷后必须回读机型，与声明不一致判失败。
 
 ### D4 派发与认领准入：只为 vbus 刷机步骤放行 `device_offline`
 
@@ -182,9 +194,13 @@ U2、U3、U4 可以并行实施；激活顺序为 U2 部署 → U3 发布 → U4
 3. 待刷设备在平台都已有设备行（平台另有 lsusb 方式确认物理在线，但 ADB 不一定在线）。D4 第 3 条成立。
    注：lsusb 只计物理连接数，不建设备行，也不改设备状态；关机设备的状态仍按 F1 变为 `OFFLINE`。
 
+4. ADB 为 `unauthorized` 的设备（控制面置 `ERROR`，派发按 `device_error` 拒绝）不放行，且以后也不加入：
+   平台无法用 adb 让它关机或重启，新旧刷机方式都不可行。
+   凡能用命令或编程手段满足「已关机」前提的设备（`device` 态先 `adb reboot -p`；`offline` 等已关机且 lsusb 可识别的设备）
+   都可以进入 vbus 刷机计划，见 D3 第 11 条。
+
 待裁：
 
-4. ADB 处于 `unauthorized` 等非 `device` 态时，控制面把设备置为 `ERROR`（`heartbeat.py` 设备状态分支），派发按
-   `device_error` 拒绝，D4 不放行。User 版本设备若 ADB 可见但未授权，就会落在这里。本稿提案：第一期不放行，
-   只覆盖 ADB 完全不可见（`OFFLINE`）的设备；如果现场确有该形态，再把 `device_error` 中 `adb_state=unauthorized`
-   的子集加入放行。
+5. 已关机、lsusb 可识别的设备在槽位口上的 VID:PID。D3 第 11 条目前只放行 BROM/Preloader 态，其它枚举一律判为开机态；
+   §1.1 记过关机充电态呈现为 `0e8d:201c`，而 201c 也是 MLD 机型的正常 ADB 态，两者在 USB 层无法区分。
+   Owner 给出现场 lsusb 原文后，实施者以新脚本版本补放行集合；在此之前这类设备会被拒绝（保守失败，不切电）。
