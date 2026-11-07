@@ -204,6 +204,8 @@ class Harness:
         # wrapper 查表得到的槽位；与脚本传的 --expect-slot 不一致时 wrapper 在切电前拒绝。
         self.map_slot = {"hub_location": "1-5.1", "port": 3}
         self.refused: list[str] = []
+        # {(action, 第几次该动作): 回显槽位}：模拟 wrapper 回显另一个槽位。
+        self.echo_overrides: dict = {}
         self.launch_script: list = ["pass"]
 
     def _fake_power(self, serial, action, slot):
@@ -215,7 +217,9 @@ class Harness:
             return {"action": action, "ok": False, "rc": 2, "tail": tail,
                     "seconds": 0.0, "echo": None, "slot_refused": True}
         self.power.append(action)
-        echo = dict(self.echo_slot, serial=serial, action=action)
+        nth = self.power.count(action)
+        echo = dict(self.echo_overrides.get((action, nth), self.echo_slot),
+                    serial=serial, action=action)
         return {"action": action, "ok": True, "rc": 0, "tail": "", "seconds": 0.0,
                 "echo": echo}
 
@@ -228,6 +232,10 @@ class Harness:
         self.launched.append(cmd)
         self.launch_kwargs.append(k)
         k["on_running"]()
+        poll = k.get("poll_check")
+        verdict = poll() if poll is not None else None
+        if verdict:
+            raise ff.FlashToolAborted(verdict[1], verdict[0])
         step = self.launch_script.pop(0) if self.launch_script else "pass"
         if step == "brom-timeout":
             raise ff.FlashToolAborted("no BROM capture", "brom-timeout")
@@ -669,6 +677,63 @@ def test_usb_power_passes_expect_slot(monkeypatch) -> None:
     assert seen["argv"][-6:] == ["--serial", "S1", "--expect-slot", "1-5.1:3",
                                  "--action", "off"]
     assert result["ok"] is False and result["slot_refused"] is True
+
+
+def test_power_on_echo_mismatch_kills_tool_and_stops(tmp_path, monkeypatch, capsys) -> None:
+    # 复核 #3902 B3：上电的回显指向另一个槽位时，杀工具、不重试、不再切电（含隔离）。
+    h = Harness(monkeypatch, tmp_path, {})
+    h.echo_overrides[("on", 1)] = {"hub_location": "1-5.2", "port": 1}
+    payload = h.run(monkeypatch, capsys)
+    assert payload["success"] is False
+    assert "wrapper powered on slot" in payload["error_message"]
+    assert h.power == ["off", "on"]
+    assert len(h.launched) == 1
+
+
+def test_power_on_failure_stops_without_retry(tmp_path, monkeypatch, capsys) -> None:
+    h = Harness(monkeypatch, tmp_path, {})
+    orig = h._fake_power
+
+    def failing_on(serial, action, slot):
+        if action == "on":
+            h.power.append("on")
+            return {"action": "on", "ok": False, "rc": 3, "tail": "STP_USB_POWER_FAILED rc=1",
+                    "seconds": 0.0, "echo": None, "slot_refused": False}
+        return orig(serial, action, slot)
+
+    monkeypatch.setattr(ff, "_usb_power", failing_on)
+    payload = h.run(monkeypatch, capsys)
+    assert payload["success"] is False
+    assert "usb-power on failed" in payload["error_message"]
+    assert h.power == ["off", "on", "off"]
+    assert len(h.launched) == 1
+
+
+def test_isolation_echo_mismatch_is_not_reported_isolated(tmp_path, monkeypatch,
+                                                          capsys) -> None:
+    h = Harness(monkeypatch, tmp_path, {})
+    h.post_flash_ok = False
+    h.echo_overrides[("off", 2)] = {"hub_location": "1-5.2", "port": 1}
+    payload = h.run(monkeypatch, capsys)
+    assert payload["success"] is False
+    assert h.power == ["off", "on", "off"]
+    vbus = payload["metrics"]["vbus"]
+    assert vbus["isolated"] is False
+    assert vbus["isolate_echo_mismatch"] is True
+
+
+def test_vbus_refuses_non_v6_native_even_if_binding_true(tmp_path, monkeypatch,
+                                                         capsys) -> None:
+    # 复核 #3902 B2：显式 require_port_binding=true 也不能绕过「V6 + Linux」。V5 与非 Linux
+    # 走同一个判据 v6_native（generation == V6 and _is_linux()）；V5 在本 harness 里会先停在
+    # 工具目录检查，所以这里用非 Linux 覆盖 v6_native=False。
+    h = Harness(monkeypatch, tmp_path, {"require_port_binding": True})
+    monkeypatch.setattr(ff, "_is_linux", lambda: False)
+    payload = h.run(monkeypatch, capsys)
+    assert payload["success"] is False
+    assert "requires port binding" in payload["error_message"], payload
+    assert "linux=False" in payload["error_message"]
+    assert h.power == [] and h.launched == []
 
 
 def test_usb_power_echo_parsing() -> None:

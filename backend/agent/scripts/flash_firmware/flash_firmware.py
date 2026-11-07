@@ -2227,6 +2227,13 @@ _USB_POWER_OK_RE = re.compile(
     r"STP_USB_POWER_OK serial=(\S+) location=(\S+) port=(\d+) action=(\S+)")
 
 
+def _usb_power_echo_matches(result: dict, slot: dict) -> bool:
+    """wrapper 成功时回显的槽位是否就是脚本读到的那一个（ADR-0063 D3 第 13 条第 2 款）。"""
+    echo = result.get("echo") or {}
+    return (echo.get("hub_location"), echo.get("port")) == (
+        slot["hub_location"], slot["port"])
+
+
 def _usb_power_echo(tail: str) -> "dict | None":
     """解析 wrapper 成功行回显的本次实际槽位；取不到返回 None。"""
     m = _USB_POWER_OK_RE.search(tail or "")
@@ -2429,7 +2436,8 @@ def main() -> None:
         vbus_cfg, vbus_error = _vbus_params(args)
         if vbus_error is not None:
             _output(False, error_message=vbus_error,
-                    metrics={"trigger_mode": trigger_mode})
+                    metrics={"trigger_mode": trigger_mode,
+                             "vbus": {"power_actions": [], "isolated": False}})
             return
 
     # ── v1.2.0：固件目标解析（显式 firmware_dir / 指纹路由）────────
@@ -2650,13 +2658,15 @@ def main() -> None:
         # （不按 serial 反查——关机设备在 sysfs 里本就没有 serial）。任一不满足
         # 直接失败，且此前没有任何切电动作。
         slot, slot_error = _load_vbus_slot(serial)
-        if slot_error is None and not require_binding:
+        if slot_error is None and not (require_binding and v6_native):
             # D3 第 4 条：工具必须用 V6 `-p` 绑定槽位口，绑错口逐行止损也挂在这上面。
             # 关掉绑定（V5，或计划传 require_port_binding=false）等于让工具扫全部
             # MTK 口，回到 run 921 的缺口（复核 #3902 comment 6706267244 B2）。
             slot_error = (
                 "vbus_cycle requires port binding (V6 tool on Linux with "
-                "require_port_binding=true); refusing to power-cycle without -p")
+                f"require_port_binding=true; got generation={generation}, "
+                f"linux={_is_linux()}, require_port_binding={require_binding}); "
+                "refusing to power-cycle without -p")
         pre_state = _adb_device_state(serial, adb_path)
         identity.update({"checked": True, "port_source": "vbus_slot",
                          "adb_state": pre_state})
@@ -2709,7 +2719,8 @@ def main() -> None:
                              "env_precheck": env_precheck,
                              "identity": identity,
                              "trigger_mode": trigger_mode,
-                             "vbus": {"slot": slot, "power_actions": []},
+                             "vbus": {"slot": slot, "power_actions": [],
+                                      "stages": {}, "isolated": False},
                              "tool_generation": generation,
                              "duration_seconds":
                                  round(time.time() - started_at, 2)})
@@ -2827,7 +2838,13 @@ def main() -> None:
             # 而不是去断映射里的新槽位。
             isolate = _usb_power(serial, "off", vbus_report["slot"])
             vbus_report["power_actions"].append(dict(isolate, phase="isolate"))
-            vbus_report["isolated"] = bool(isolate.get("ok"))
+            echo_ok = bool(isolate.get("ok")) and _usb_power_echo_matches(
+                isolate, vbus_report["slot"])
+            if isolate.get("ok") and not echo_ok:
+                # 回显的是另一个槽位：本设备没有被隔离（复核 #3902 B3）。
+                vbus_state["slot_mismatch"] = True
+                vbus_report["isolate_echo_mismatch"] = True
+            vbus_report["isolated"] = echo_ok
         gating["restore"] = _restore_gated({"hidden": hidden_ports},
                                             _SYSFS_USB_BASE)
         _clear_gated_state()
@@ -2873,7 +2890,7 @@ def main() -> None:
             if vbus:
                 # 每次尝试都从断电起算：上一次尝试可能停在 BROM/DA 半程。
                 vbus_state.update({"power_on_at": None, "brom_seen": False,
-                                   "attempt": attempt})
+                                   "attempt": attempt, "abort": None})
                 off = _usb_power(serial, "off", vbus_report["slot"])
                 vbus_report["power_actions"].append(
                     dict(off, phase="pre-flash", attempt=attempt))
@@ -2898,8 +2915,7 @@ def main() -> None:
                 # wrapper 没有按约定执行，立即停手，不再做任何切电（含隔离）。
                 slot = vbus_report["slot"]
                 echo = off.get("echo") or {}
-                if (echo.get("hub_location"), echo.get("port")) != (
-                        slot["hub_location"], slot["port"]):
+                if not _usb_power_echo_matches(off, slot):
                     vbus_state["slot_mismatch"] = True
                     attempts_report.append({"attempt": attempt,
                                             "outcome": "vbus-slot-mismatch",
@@ -2989,6 +3005,8 @@ def main() -> None:
                     return None
 
                 def _vbus_brom_deadline() -> "tuple[str, str] | None":
+                    if vbus_state.get("abort"):
+                        return vbus_state["abort"]
                     on_at = vbus_state["power_on_at"]
                     if on_at is None or vbus_state["brom_seen"]:
                         return None
@@ -3012,6 +3030,20 @@ def main() -> None:
                         dict(on, phase="trigger", attempt=vbus_state["attempt"]))
                     vbus_state["power_on_at"] = time.monotonic()
                     _emit_progress(seq, stage="vbus-on", ok=on["ok"])
+                    # 上电失败或回显另一个槽位：不能让工具继续等，下一秒的 poll_check
+                    # 杀工具并终止尝试环（复核 #3902 B3）。
+                    if on["ok"] and not _usb_power_echo_matches(on, vbus_report["slot"]):
+                        vbus_state["slot_mismatch"] = True
+                        vbus_state["abort"] = ("slot-mismatch", (
+                            f"wrapper powered on slot {on.get('echo')} but the script "
+                            f"resolved {vbus_report['slot']['hub_location']}:"
+                            f"{vbus_report['slot']['port']}; stopped without further "
+                            "power actions"))
+                    elif not on["ok"]:
+                        vbus_state["abort"] = ("vbus-power", (
+                            "wrapper refused before powering anything: slot map changed"
+                            if on.get("slot_refused")
+                            else f"usb-power on failed: {on['tail']}"))
                     return
                 if not do_reboot:
                     return
@@ -3049,6 +3081,13 @@ def main() -> None:
                     attempts_report.append(attempt_record)
                     final_error = ("brom-timeout", exc.reason)
                     continue
+                if exc.kind in ("slot-mismatch", "vbus-power"):
+                    # 上电那一步出错：重试只会再切一次电，立即终止尝试环。
+                    attempt_record.update({"outcome": f"vbus-{exc.kind}",
+                                           "reason": exc.reason})
+                    attempts_report.append(attempt_record)
+                    final_error = (exc.kind, exc.reason)
+                    break
                 # 止损成功：记 attempt 后**立即终止尝试环**——重试只会让工具
                 # 再去找一个非目标口。门控与锁由统一结算路径恢复。
                 attempt_record.update({"outcome": "aborted-port-mismatch",
