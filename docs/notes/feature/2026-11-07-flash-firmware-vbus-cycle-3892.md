@@ -17,7 +17,7 @@ Class: feature
      - adb `device` 态的设备，前置 `adb reboot -p`，等它从 adb 和槽位口上都消失；
      - 只有 `unauthorized` 直接拒绝：adb 关机与重启都做不到；
      - `offline`、`unknown` 等其它状态进切电流程，是否已关机交给下一条的 USB 判定；
-     - 槽位口上已有非可刷态的 USB 枚举，判为开机态，直接拒绝。这一条识别「开机但没开 ADB」的设备。
+     - 槽位口上已有除可刷态与关机态（`0e8d:2046`，Owner 现场 lsusb）之外的 USB 枚举，判为开机态，直接拒绝。这一条识别「开机但没开 ADB」的设备。
 - 机型：关机设备读不到 `ro.product.model`。没有 `firmware_dir` 时，必须用步骤参数 `model` 声明机型。
   - 路由的其余判据不变：族表、`latest.json`、manifest `models`；
   - 刷后回读机型，与声明不一致判失败。
@@ -49,7 +49,7 @@ Class: feature
 ## Verification
 
 以下命令都在本工作树运行。
-- `.venv/bin/python -m pytest backend/agent/tests/test_flash_firmware_v140.py -q`：39 passed。覆盖：
+- `.venv/bin/python -m pytest backend/agent/tests/test_flash_firmware_v140.py -q`：40 passed。覆盖：
   - 参数闭集与越界；
   - 映射整份拒绝；
   - `poll_check` 杀树；
@@ -75,5 +75,5 @@ Class: feature
 - 真机验收时确认两点：
   - 槽位映射的 `hub_location` 必须是 USB 2.0 侧的位置，否则门控口与工具 `-p` 对不上；
   - `adb reboot -p` 后的关机充电态在槽位口上是否不枚举。
-- 已关机但 lsusb 可见的设备的 VID:PID 待 Owner 提供。目前的放行集合只有 BROM/preloader 态（`_BROM_GATE_PIDS`），其它枚举一律判为开机态，补到放行集合需要登记新版本。
+- 关机态放行集合目前只有 `0e8d:2046`（Owner 2026-11-07 现场 lsusb，MLD-LX3）。开机但没开 ADB、同样呈现 2046 的设备在 USB 层无法区分，会在 BROM 捕获超时后失败并断电隔离。其它机型的关机态 PID 不同时，补到放行集合需要登记新版本。
 - 第二期槽位入库时，脚本的映射读取改为平台下发，仍以 wrapper 侧校验为信任边界。

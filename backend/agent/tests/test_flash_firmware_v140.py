@@ -454,6 +454,9 @@ def test_port_occupant_classification(tmp_path) -> None:
     assert ff._vbus_port_powered_on("1-5.1.3", str(tmp_path)) is None
     _mk_port(tmp_path, "1-5.1.3", "0e8d", "2000")
     assert ff._vbus_port_powered_on("1-5.1.3", str(tmp_path)) is None, "BROM 态放行"
+    _mk_port(tmp_path, "1-5.1.3", "0e8d", "2046")
+    assert ff._vbus_port_powered_on("1-5.1.3", str(tmp_path)) is None, \
+        "关机态 2046 放行（Owner 2026-11-07 现场 lsusb：关机 MLD-LX3 = 0e8d:2046）"
     _mk_port(tmp_path, "1-5.1.3", "0e8d", "201c")
     assert ff._vbus_port_powered_on("1-5.1.3", str(tmp_path)) == "0e8d:201c"
     _mk_port(tmp_path, "1-5.1.4", "18d1", "4ee7")
@@ -463,7 +466,7 @@ def test_port_occupant_classification(tmp_path) -> None:
 def test_powered_on_device_without_adb_is_refused(tmp_path, monkeypatch, capsys) -> None:
     h = Harness(monkeypatch, tmp_path, {})
     base = tmp_path / "sysfs"
-    _mk_port(base, "1-5.1.3", "0e8d", "2046")
+    _mk_port(base, "1-5.1.3", "0e8d", "201c")
     monkeypatch.setattr(ff, "_SYSFS_USB_BASE", str(base))
     payload = h.run(monkeypatch, capsys)
     assert payload["success"] is False
@@ -537,6 +540,14 @@ def test_adb_power_off_waits_for_adb_and_port(tmp_path, monkeypatch) -> None:
 def test_non_unauthorized_states_proceed_to_power_cycle(tmp_path, monkeypatch, capsys,
                                                         state) -> None:
     h = Harness(monkeypatch, tmp_path, {}, adb_state=state)
+    payload = h.run(monkeypatch, capsys)
+    assert payload["success"] is True, payload
+    assert h.power == ["off", "on"]
+
+
+def test_powered_off_2046_device_proceeds(tmp_path, monkeypatch, capsys) -> None:
+    h = Harness(monkeypatch, tmp_path, {})
+    _mk_port(tmp_path / "sysfs", "1-5.1.3", "0e8d", "2046")
     payload = h.run(monkeypatch, capsys)
     assert payload["success"] is True, payload
     assert h.power == ["off", "on"]

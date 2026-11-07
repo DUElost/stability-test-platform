@@ -5,7 +5,8 @@ v1.4.0（#3892 / ADR-0063 D3）：新增 `trigger_mode`，缺省 `adb_reboot` �
 设备用：经可控 USB Hub 单口切 VBUS，让设备上电最初几秒的 BROM 窗口落进工具扫描。
   - 取锁前三道闸，任一不过直接失败且不做任何切电动作：本机映射
     `/etc/stp-agent/usb-power-slots.json` 里有本 serial 的槽位；wrapper
-    `capabilities` 含 `usb-power`；设备已关机——槽位口上没有非可刷态的 USB 枚举
+    `capabilities` 含 `usb-power`；设备已关机——槽位口上没有除可刷态与关机态
+    （`0e8d:2046`，Owner 现场 lsusb）之外的 USB 枚举
     （开机态断电再上电不经过 BROM，工具抓不到刷机口；开机但没开 ADB 的设备只能
     在 USB 层识别）。锁内切电前再复核一次。
   - 前置关机：adb `device` 态的设备先 `adb reboot -p`，等它从 adb 与槽位口上都
@@ -2046,6 +2047,10 @@ _VBUS_SLOTS_PATH = "/etc/stp-agent/usb-power-slots.json"
 _VBUS_MAX_PORT = 16
 _VBUS_SETTLE_RANGE = (5, 30)
 _VBUS_STAGE_TIMEOUT_MAX = 3600
+#: 关机（插着 USB）态的 MTK PID。Owner 2026-11-07 现场 lsusb：关机的 MLD-LX3 在
+#: 槽位口上呈现 `0e8d:2046`，`adb devices` 为空。与 `_BROM_GATE_PIDS` 合起来就是
+#: 「可以切电」的 USB 形态；其它枚举一律按开机态拒绝。
+_VBUS_POWERED_OFF_PIDS = {"2046"}
 _SUW_PACKAGE = "com.google.android.setupwizard"
 
 
@@ -2152,13 +2157,15 @@ def _vbus_port_powered_on(gate_port: str, base: str = _SYSFS_USB_BASE) -> "str |
 
     Owner 2026-11-07：VBUS 方案的前提是设备已关机。开机态的手机断电再上电不会
     经过 BROM，工具抓不到刷机口；而开机但没开 ADB 的设备在 adb 那边看不见，只能
-    在 USB 层识别。已在 BROM/preloader 可刷态（`_BROM_GATE_PIDS`）的 MTK 口放行。
+    在 USB 层识别。已在 BROM/preloader 可刷态（`_BROM_GATE_PIDS`）或关机态
+    （`_VBUS_POWERED_OFF_PIDS`，现场实测 2046）的 MTK 口放行。
     """
     vid = _sysfs_read(os.path.join(base, gate_port, "idVendor"))
     if vid is None:
         return None
     pid = _sysfs_read(os.path.join(base, gate_port, "idProduct")) or "?"
-    if vid.lower() == _MTK_VENDOR_ID and pid.lower() in _BROM_GATE_PIDS:
+    if vid.lower() == _MTK_VENDOR_ID and (
+            pid.lower() in _BROM_GATE_PIDS or pid.lower() in _VBUS_POWERED_OFF_PIDS):
         return None
     return f"{vid}:{pid}"
 
