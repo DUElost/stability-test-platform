@@ -41,6 +41,14 @@ Class: feature
   203 passed，11 skipped，1 failed。失败的是 `test_wrapper_sync_env_emits_control_plane_sentinels`：
   云端环境缺 `sqlalchemy`（`ModuleNotFoundError`），与本改动无关，以 CI 为准。
 - `ruff check` 通过。
+- 复核 #3900（comment 6706287225）后补：
+  - 映射文件顶层只接受 `schema`、`slots` 两个键，`schema` 必须是整数 1（`true`、`1.0` 被拒）；Hub 位置解析结果还必须是目录；
+  - 用例单独锁住 uhubctl 属主、映射文件属主、父目录属主、64 KiB 边界（65536 字节接受，65537 拒绝）、
+    `timeout=60` 与环境精确键集、非 root 拒绝；
+  - 变异检查：分别去掉 uhubctl 校验、文件属主、目录属主、`timeout=`、`_require_root()`、两处大小检查，各有用例变红；
+  - smoke 第 11 段对每个坏参数断言 `rc -eq 2`；
+  - `pytest tests/test_agent_priv_usb_power.py -q`：70 passed；`pytest tests/ -k agent_priv -q`：217 passed，2 skipped。
+- playbook 的 capabilities 检查保持只报告不阻断：映射文件可以先于 wrapper 下发，使用侧（ADR-0063 D3 第 9 条）在取锁前 fail-closed。
 - 真机 uhubctl 切电：pending，需要现场 Hub（ADR-0063 §8 第 1 项）。
 
 ## Revisit

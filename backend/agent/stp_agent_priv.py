@@ -1239,8 +1239,9 @@ def parse_usb_power_slots(body):
         doc = json.loads(body)
     except ValueError as exc:
         _fail("usb power slots file is not valid JSON: %s" % exc)
-    if not isinstance(doc, dict) or doc.get("schema") != 1:
-        _fail("usb power slots file must be an object with schema=1")
+    if not isinstance(doc, dict) or set(doc) != {"schema", "slots"} \
+            or type(doc.get("schema")) is not int or doc["schema"] != 1:
+        _fail("usb power slots file must be an object with exactly schema=1 and slots")
     slots = doc.get("slots")
     if not isinstance(slots, list):
         _fail("usb power slots file must have a slots list")
@@ -1318,7 +1319,7 @@ def cmd_usb_power(args, conf):
         _fail("serial %s has no slot in %s" % (serial, USB_POWER_SLOTS_PATH))
     location, port = slots[serial]
     resolved = os.path.realpath(os.path.join(USB_SYSFS_BASE, location))
-    if not is_kernel_usb_device_path(resolved, location):
+    if not is_kernel_usb_device_path(resolved, location) or not os.path.isdir(resolved):
         _fail("hub_location %s does not resolve to a kernel sysfs USB device (got %s)"
               % (location, resolved))
     try:

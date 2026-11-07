@@ -200,9 +200,11 @@ echo "== 11) usb-power 切电窄面（#3892 / ADR-0037 D8）=="
 for bad in "--serial X --action on --location 1-1" "--serial X --action on --port 3" \
            "--serial X --action cycle --delay 31" "--serial X --action off --delay 3" \
            "--serial ../x --action on" "--serial X --action on"; do
-  if /usr/local/sbin/stp-agent-priv usb-power $bad 2>/tmp/usbp_err; then
-    echo "BAD: accepted usb-power $bad"; exit 1
-  fi
+  set +e
+  /usr/local/sbin/stp-agent-priv usb-power $bad 2>/tmp/usbp_err
+  rc=$?
+  set -e
+  test "$rc" -eq 2 || { echo "BAD: usb-power $bad expected exit 2, got $rc"; exit 1; }
 done
 grep -q 'STP_AGENT_PRIV_ERROR' /tmp/usbp_err && echo "USB_POWER_REFUSED"
 
