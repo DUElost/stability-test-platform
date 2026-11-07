@@ -1,6 +1,6 @@
 # ADR-0063：无 ADB 设备的 USB 切电刷机（`trigger_mode=vbus_cycle`）
 
-- 状态：**Proposed** v0.6（2026-11-07 v0.6：按独立复核（PR #3899 comment 6706217246）收口 D1/D2/D3/D4/D6 与写作约定，D2 新增第 8 条残余面待 Owner 裁定（§8 第 6 项），§6 拆分 U2 激活步骤；v0.5：Owner 提供关机态 lsusb（`0e8d:2046`），§8 第 5 项转已裁，D3 第 11 条放行集合补 2046；v0.4：Owner 裁定 §8 第 4 项（unauthorized 排除）与「设备必须已关机」前提，新增 D3 第 11–12 条，订正 D3 第 6 条键序；新增 §8 第 5 项待裁；v0.3：Owner 答复 §8 三项，见 §8；新增 §8 第 4 项待裁；v0.2：补 F11 与 D4 第 5–6 条，Agent 认领侧也要改，D6 第 1 条随之订正为随 Agent 代码发布；v0.1 2026-11-07 起草；Owner 已在项目对话中裁定「与 B8 并行实施、第一期不加迁移」，本稿待 Owner 裁定 §8 第 6 项并经定向复核后转 Accepted）
+- 状态：**Proposed** v0.7（2026-11-07 v0.7：按 U2–U4 独立复核订正 D3 第 4、6、8 条与 D4 第 6 条——vbus 必须开启 V6 端口绑定，OOBE 只取跳过部分，刷后异常同样隔离，vbus 作业不论设备在线与否只走 vbus 名额；v0.6：按独立复核（PR #3899 comment 6706217246）收口 D1/D2/D3/D4/D6 与写作约定，D2 新增第 8 条残余面待 Owner 裁定（§8 第 6 项），§6 拆分 U2 激活步骤；v0.5：Owner 提供关机态 lsusb（`0e8d:2046`），§8 第 5 项转已裁，D3 第 11 条放行集合补 2046；v0.4：Owner 裁定 §8 第 4 项（unauthorized 排除）与「设备必须已关机」前提，新增 D3 第 11–12 条，订正 D3 第 6 条键序；新增 §8 第 5 项待裁；v0.3：Owner 答复 §8 三项，见 §8；新增 §8 第 4 项待裁；v0.2：补 F11 与 D4 第 5–6 条，Agent 认领侧也要改，D6 第 1 条随之订正为随 Agent 代码发布；v0.1 2026-11-07 起草；Owner 已在项目对话中裁定「与 B8 并行实施、第一期不加迁移」，本稿待 Owner 裁定 §8 第 6 项并经定向复核后转 Accepted）
 - 优先级：P1
 - 目标里程碑：M7
 - 日期：2026-11-07
@@ -103,13 +103,18 @@ Agent 代码，会改变控制面的期望 digest，而 #3875 的影子能力守
    `vbus_off_settle_seconds`（缺省 12，取值 10–30，下限对齐 #3892 的 10–15s 放电要求）→ 启动刷机工具进入 USB 扫描 → 工具就绪回调中
    `usb-power on` → 捕获与写包 → 等待开机与 ADB → 跳过 OOBE → 版本核验 → 释放主机锁。
 4. 门控目标口必须取自槽位（sysfs 名 `<hub_location>.<port>`），不得在 `vbus_cycle` 下按 serial 反查。
+   `vbus_cycle` 必须开启端口绑定（V6 工具带 `-p <槽位口>`，并逐行核对工具回显的绑定口）；工具为 V5、主机不是 Linux，
+   或步骤参数 `require_port_binding=false` 时，脚本必须在取锁前失败（复核 #3902：关掉绑定等于让工具扫全部 MTK 口）。
 5. 主机锁必须覆盖第 3 条从「取锁」到「版本核验」的全部阶段；锁外不得开启任何槽位的供电。
-6. 跳过 OOBE 必须在本脚本内完成，配方与现行 `oobe_skip` 1.1.x 相同：写 `user_setup_complete` 与
+6. 跳过 OOBE 必须在本脚本内完成，配方取现行 `oobe_skip` 1.1.x 的跳过部分：写 `user_setup_complete` 与
    `device_provisioned` 两个标志 → force-stop setupwizard → 唤醒 224 → 解锁 82 → HOME 3，以两个标志回读为 1
    作为判据（v0.3 写成「224 → 82 → force-stop → 3」，与 `oobe_skip` 实际顺序不符，v0.4 订正）；
+   单条 adb 命令的超时不得超过本阶段剩余预算。`oobe_skip` 的 `adb root` 与 `system_locales` 不属于跳过 OOBE，
+   脚本不得在锁内执行；需要时由 Plan 在后续步骤用 `ensure_root` / `oobe_skip` 完成（与 §8 第 2 项「`ensure_root` 不进锁」同口径）。
    脚本不得 import 其他脚本包的代码。
 7. 脚本必须为各阶段设置独立硬超时，缺省值：BROM 捕获 120s、写包沿用现行工具超时、开机到 ADB 300s、OOBE 60s、版本核验 60s。
-8. 开启供电之后的任一阶段失败或超时，脚本必须在 `finally` 中对本槽位执行 `usb-power off`，再释放锁；
+8. 开启供电之后的任一阶段失败、超时或抛出异常，脚本必须对本槽位执行 `usb-power off`，再释放锁；只有全链成功且没有抛出异常时，
+   脚本才可以保持供电；
    SIGTERM / SIGINT / SIGHUP 处理器必须走同一收尾路径。`usb-power off` 本身失败时，脚本仍必须释放锁，并在结果 JSON
    标记隔离失败。SIGKILL 不可捕获，门控由下一任脚本按现有 gate-state 机制恢复；槽位供电状态由下一任 vbus 刷机的首次断电覆盖。
 9. 脚本在取锁之前必须确认 wrapper `capabilities` 含 `usb-power` 且本机有 D1 映射文件、目标 serial 在其中；
@@ -154,6 +159,10 @@ Agent 代码，会改变控制面的期望 digest，而 #3875 的影子能力守
    关机设备上只有最早一条 PENDING 作业是 vbus 刷机作业时才可认领；`uq_job_active_per_device` 保证一台设备同时只有
    一条 PENDING/RUNNING 作业，所以不存在「较早非 vbus + 较晚 vbus」的混合队列。本 host 已有 RUNNING 的 vbus 作业时，
    控制面不得再返回新的 vbus 作业。
+   vbus 刷机作业不论设备是否在线，都只得经 vbus 名额认领：控制面必须先从普通候选中滤掉 vbus 刷机作业，再按 `capacity` 截断，
+   使 vbus 作业既不被普通名额认领、也不挤占普通名额（复核 #3901：否则普通路径可绕过上一句的守卫）。vbus 名额的候选是本 host
+   上未退役、非 `ERROR`、非 `unauthorized`、无 ACTIVE 租约的设备，在线与关机设备都在内。未带 `vbus_slots` 的请求
+   （旧 Agent）认领不到任何 vbus 作业，作业保持 PENDING（D6 第 4 条）。
 
 ### D5 与设备归还契约的关系
 
