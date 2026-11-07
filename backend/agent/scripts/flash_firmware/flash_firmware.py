@@ -9,9 +9,12 @@ v1.4.0（#3892 / ADR-0063 D3）：新增 `trigger_mode`，缺省 `adb_reboot` �
     （`0e8d:2046`，Owner 现场 lsusb）之外的 USB 枚举
     （开机态断电再上电不经过 BROM，工具抓不到刷机口；开机但没开 ADB 的设备只能
     在 USB 层识别）。锁内切电前再复核一次。
-  - 前置关机：adb `device` 态的设备先 `adb reboot -p`，等它从 adb 与槽位口上都
-    消失（`vbus_poweroff_timeout_seconds`）；只有 unauthorized（adb 关机与重启
-    都做不到）直接拒绝，offline 等其它状态进切电流程（Owner 2026-11-07 裁定）。
+  - 前置关机：adb `device` 态的设备，取锁前先核对它确实在映射槽位口上；取锁后、
+    第一次切电前 `adb reboot -p`，等它从 adb 消失且槽位口回到可刷态或关机态
+    （`vbus_poweroff_timeout_seconds`）。只有 unauthorized（adb 关机与重启都做
+    不到）直接拒绝，offline 等其它状态进切电流程（Owner 2026-11-07 裁定）。
+  - 每次断电都核对 wrapper 回显的实际槽位：与脚本读到的不一致（映射在两次读之间
+    被改写）即停手，不再做任何切电。
   - 机型：关机读不到 `ro.product.model`，无 `firmware_dir` 时必须由步骤参数
     `model` 声明；路由其余判据不变，刷后回读核对，声明错判失败。
   - 锁内每次尝试：断电 → 等 `vbus_off_settle_seconds` → 起工具 → 就绪回调里上电
@@ -168,7 +171,7 @@ STP_STEP_PARAMS schema:
                           其余取值 fail-fast)
     model                   : str  (optional; 仅 vbus_cycle 且无 firmware_dir 时
                           必填：声明机型，代替 adb 读 ro.product.model)
-    vbus_off_settle_seconds : int  (optional, default 12, 5..30; 断电后等待)
+    vbus_off_settle_seconds : int  (optional, default 12, 10..30; 断电后等待)
     vbus_poweroff_timeout_seconds : int (optional, default 60; adb 在线设备前置
                           `adb reboot -p` 后等它关机的上限)
     vbus_brom_timeout_seconds   : int (optional, default 120; 上电后 BROM 捕获上限)
@@ -2045,7 +2048,7 @@ TRIGGER_VBUS_CYCLE = "vbus_cycle"
 _TRIGGER_MODES = (TRIGGER_ADB_REBOOT, TRIGGER_VBUS_CYCLE)
 _VBUS_SLOTS_PATH = "/etc/stp-agent/usb-power-slots.json"
 _VBUS_MAX_PORT = 16
-_VBUS_SETTLE_RANGE = (5, 30)
+_VBUS_SETTLE_RANGE = (10, 30)
 _VBUS_STAGE_TIMEOUT_MAX = 3600
 #: 关机（插着 USB）态的 MTK PID。Owner 2026-11-07 现场 lsusb：关机的 MLD-LX3 在
 #: 槽位口上呈现 `0e8d:2046`，`adb devices` 为空。与 `_BROM_GATE_PIDS` 合起来就是
@@ -2173,10 +2176,11 @@ def _vbus_port_powered_on(gate_port: str, base: str = _SYSFS_USB_BASE) -> "str |
 def _vbus_adb_power_off(serial: str, adb_path: str, gate_port: str, timeout: int,
                        base: str = _SYSFS_USB_BASE,
                        poll_interval: float = 3.0) -> dict:
-    """前置关机：ADB 可控（device 态）的设备先 `adb reboot -p`，等它从 adb 与槽位口上都消失。
+    """前置关机：ADB 可控（device 态）的设备 `adb reboot -p`，等它从 adb 消失且槽位口
+    不再呈现开机态（可刷态与关机态 2046 都算已关机）。调用方必须持有主机锁。
 
     Owner 2026-11-07：「设备已关机」这个前提可以由前置动作满足，但只限能用命令
-    达成的设备；unauthorized / offline 这类命令不可达的不在此列（调用方直接拒绝）。
+    达成的设备；unauthorized 这类命令不可达的不在此列（调用方直接拒绝）。
     返回 {"ok", "rc", "seconds", "last_state", "occupant"}，永不抛异常。
     """
     started = time.monotonic()
@@ -2218,6 +2222,19 @@ def _priv_has_usb_power() -> bool:
     return "usb-power" in (proc.stdout or "").split()
 
 
+_USB_POWER_OK_RE = re.compile(
+    r"STP_USB_POWER_OK serial=(\S+) location=(\S+) port=(\d+) action=(\S+)")
+
+
+def _usb_power_echo(tail: str) -> "dict | None":
+    """解析 wrapper 成功行回显的本次实际槽位；取不到返回 None。"""
+    m = _USB_POWER_OK_RE.search(tail or "")
+    if not m:
+        return None
+    return {"serial": m.group(1), "hub_location": m.group(2),
+            "port": int(m.group(3)), "action": m.group(4)}
+
+
 def _usb_power(serial: str, action: str) -> dict:
     """经 wrapper 切本 serial 的槽位供电。永不抛异常；返回 {"ok", "rc", "tail", "seconds"}。"""
     started = time.monotonic()
@@ -2233,6 +2250,7 @@ def _usb_power(serial: str, action: str) -> dict:
     except (OSError, subprocess.TimeoutExpired) as exc:
         ok, rc, tail = False, None, str(exc)[:200]
     return {"action": action, "ok": ok, "rc": rc, "tail": tail,
+            "echo": _usb_power_echo(tail) if ok else None,
             "seconds": round(time.monotonic() - started, 2)}
 
 
@@ -2620,20 +2638,19 @@ def main() -> None:
             slot_error = (
                 "stp-agent-priv lacks the usb-power capability (wrapper not "
                 "updated on this host?); refusing vbus_cycle")
-        poweroff: "dict | None" = None
-        if slot_error is None and pre_state == "device":
-            # VBUS 切电关不掉一台带电池且已开机的手机：上电不会经过 BROM，工具
-            # 抓不到刷机口。ADB 可控的设备先用命令关机（前置满足「已关机」）。
-            poweroff = _vbus_adb_power_off(
-                serial, adb_path, slot["gate_port"],
-                vbus_cfg["poweroff_timeout_seconds"], _SYSFS_USB_BASE)
-            identity["adb_poweroff"] = poweroff
-            if not poweroff.get("ok"):
+        # 取锁前只做只读探测；`adb reboot -p` 是改变设备状态的动作，挪到锁内
+        # 第一次切电之前（ADR-0063 D3 第 5、11 条；复核 #3899 comment 6706217246）。
+        needs_adb_poweroff = slot_error is None and pre_state == "device"
+        if needs_adb_poweroff:
+            # 映射写错时先关的会是另一台：device 态读得到 serial，先核对它确实
+            # 在映射槽位上。
+            actual_port = _port_for_serial(serial, _SYSFS_USB_BASE)
+            identity["port_by_serial"] = actual_port
+            if actual_port != slot["gate_port"]:
                 slot_error = (
-                    f"device {serial} did not power off via adb within "
-                    f"{vbus_cfg['poweroff_timeout_seconds']}s "
-                    f"(last state {poweroff.get('last_state')}, "
-                    f"port occupant {poweroff.get('occupant')})")
+                    f"device {serial} is on USB port {actual_port!r}, not on its "
+                    f"mapped slot port {slot['gate_port']!r}; fix "
+                    "usb-power-slots.json before vbus_cycle")
         elif slot_error is None and pre_state == "unauthorized":
             # unauthorized：adb 看得见却不能下命令，既关不了机也重启不了，新旧刷机
             # 方式都不可行。平台派发处同样判 device_error 拒绝（ADR-0063 §8 第 4 条，
@@ -2643,7 +2660,7 @@ def main() -> None:
                 f"device {serial} is visible to adb but not controllable "
                 f"(state {pre_state}); it can neither be powered off nor "
                 "rebooted by command — refusing vbus_cycle")
-        if slot_error is None:
+        if slot_error is None and not needs_adb_poweroff:
             occupant = _vbus_port_powered_on(slot["gate_port"], _SYSFS_USB_BASE)
             identity["port_occupant"] = occupant
             if occupant:
@@ -2768,13 +2785,16 @@ def main() -> None:
     # v1.4.0：vbus 成功收尾前置 True；其余任何路径（失败 / 异常 / 信号）在交出锁
     # 之前都要把本槽位断电（ADR-0063 D3 第 8 条：隔离一台状态不明的设备）。
     vbus_keep_power = False
+    # 必须先于 _settle_lock 的任何调用点（含信号处理器）定义。
+    vbus_state: dict = {"power_on_at": None, "brom_seen": False}
 
     def _settle_lock() -> None:
         nonlocal lock_settled
         if lock_settled:
             return
         lock_settled = True
-        if vbus and not vbus_keep_power and vbus_report.get("power_actions"):
+        if vbus and not vbus_keep_power and vbus_report.get("power_actions") \
+                and not vbus_state.get("slot_mismatch"):
             # 一次切电都没做过（如锁内复核发现设备在开机态）就不碰供电。
             isolate = _usb_power(serial, "off")
             vbus_report["power_actions"].append(dict(isolate, phase="isolate"))
@@ -2792,10 +2812,24 @@ def main() -> None:
 
     _install_termination_cleanup(_settle_on_signal)
 
-    vbus_state: dict = {"power_on_at": None, "brom_seen": False}
-
     try:
         for attempt in range(1, max_attempts + 1):
+            if vbus and attempt == 1 and needs_adb_poweroff:
+                poweroff = _vbus_adb_power_off(
+                    serial, adb_path, target_port,
+                    vbus_cfg["poweroff_timeout_seconds"], _SYSFS_USB_BASE)
+                identity["adb_poweroff"] = poweroff
+                vbus_report["stages"]["adb_poweroff_seconds"] = poweroff.get("seconds")
+                _emit_progress(seq, stage="vbus-adb-poweroff", ok=bool(poweroff.get("ok")))
+                if not poweroff.get("ok"):
+                    attempts_report.append({"attempt": attempt,
+                                            "outcome": "vbus-adb-poweroff-failed"})
+                    final_error = ("vbus-adb-poweroff", (
+                        f"device {serial} did not power off via adb within "
+                        f"{vbus_cfg['poweroff_timeout_seconds']}s "
+                        f"(last state {poweroff.get('last_state')}, "
+                        f"port occupant {poweroff.get('occupant')})"))
+                    break
             if vbus and attempt == 1:
                 # 等锁期间设备可能被人开机：切电前在锁内复核一次。
                 occupant = _vbus_port_powered_on(target_port, _SYSFS_USB_BASE)
@@ -2821,6 +2855,23 @@ def main() -> None:
                                             "outcome": "vbus-power-off-failed"})
                     final_error = ("vbus-power",
                                    f"usb-power off failed: {off['tail']}")
+                    break
+                # 脚本读一次映射、wrapper 再读一次：两次之间映射被改写时，两边
+                # 的槽位会不一致。以 wrapper 回显的实际槽位为准核对，不一致立即
+                # 停手，不再做任何切电（复核 #3899）。
+                slot = vbus_report["slot"]
+                echo = off.get("echo") or {}
+                if (echo.get("hub_location"), echo.get("port")) != (
+                        slot["hub_location"], slot["port"]):
+                    vbus_state["slot_mismatch"] = True
+                    attempts_report.append({"attempt": attempt,
+                                            "outcome": "vbus-slot-mismatch",
+                                            "echo": echo or None})
+                    final_error = ("vbus-slot-mismatch", (
+                        f"wrapper powered off slot {echo or '(no echo)'} but the "
+                        f"script resolved {slot['hub_location']}:{slot['port']}; "
+                        "slot map changed underneath — stopped without further "
+                        "power actions"))
                     break
                 time.sleep(vbus_cfg["off_settle_seconds"])
                 vbus_report["stages"]["off_settle_seconds"] = \

@@ -62,9 +62,9 @@ def test_vbus_params_defaults_and_bounds() -> None:
                       "brom_timeout_seconds": 120,
                       "boot_timeout_seconds": 300, "oobe_timeout_seconds": 60,
                       "verify_timeout_seconds": 60}
-    for bad in (4, 31, "x", True):
+    for bad in (9, 31, "x", True):
         assert ff._vbus_params({"vbus_off_settle_seconds": bad})[1]
-    assert ff._vbus_params({"vbus_off_settle_seconds": "5"})[0]["off_settle_seconds"] == 5
+    assert ff._vbus_params({"vbus_off_settle_seconds": "10"})[0]["off_settle_seconds"] == 10
     assert ff._vbus_params({"vbus_boot_timeout_seconds": 0})[1]
 
 
@@ -200,12 +200,15 @@ class Harness:
         monkeypatch.setattr(ff.time, "sleep", lambda s: None)
         monkeypatch.setattr(ff, "_vbus_post_flash", self._fake_post_flash)
         self.post_flash_ok = True
+        self.echo_slot = {"hub_location": "1-5.1", "port": 3}
         self.launch_script: list = ["pass"]
 
     def _fake_power(self, serial, action):
         assert serial == SERIAL
         self.power.append(action)
-        return {"action": action, "ok": True, "rc": 0, "tail": "", "seconds": 0.0}
+        echo = dict(self.echo_slot, serial=serial, action=action)
+        return {"action": action, "ok": True, "rc": 0, "tail": "", "seconds": 0.0,
+                "echo": echo}
 
     def _fake_post_flash(self, route, serial, adb_path, cfg, report, *a):
         if self.post_flash_ok:
@@ -502,9 +505,22 @@ def test_adb_online_device_is_powered_off_first(tmp_path, monkeypatch, capsys) -
         return {"ok": True, "last_state": "no-device", "occupant": None}
 
     monkeypatch.setattr(ff, "_vbus_adb_power_off", _poweroff)
+    monkeypatch.setattr(ff, "_port_for_serial", lambda serial, base=None: "1-5.1.3")
+    # 开机态的口上是 201c：取锁前不得据此拒绝（关机在锁内做）。
+    _mk_port(tmp_path / "sysfs", "1-5.1.3", "0e8d", "201c")
+    order: list = []
+    lock = ff._acquire_host_lock
+    monkeypatch.setattr(ff, "_acquire_host_lock",
+                        lambda *a, **k: (order.append("lock"), lock(*a, **k))[1])
+    inner = _poweroff
+    monkeypatch.setattr(ff, "_vbus_adb_power_off",
+                        lambda *a, **k: (order.append("adb-poweroff"),
+                                         (__import__("shutil").rmtree(tmp_path / "sysfs" / "1-5.1.3")),
+                                         inner(*a, **k))[2])
     payload = h.run(monkeypatch, capsys)
     assert payload["success"] is True, payload
     assert calls == [(SERIAL, "1-5.1.3", 60)]
+    assert order == ["lock", "adb-poweroff"], "adb reboot -p 必须在取锁之后"
     assert payload["metrics"]["identity"]["adb_poweroff"]["ok"] is True
     assert h.power == ["off", "on"]
 
@@ -515,10 +531,11 @@ def test_adb_poweroff_timeout_refuses_without_power(tmp_path, monkeypatch, capsy
     monkeypatch.setattr(ff, "_vbus_adb_power_off",
                         lambda *a, **k: {"ok": False, "last_state": "device",
                                          "occupant": "0e8d:201c"})
+    monkeypatch.setattr(ff, "_port_for_serial", lambda serial, base=None: "1-5.1.3")
     payload = h.run(monkeypatch, capsys)
     assert payload["success"] is False
     assert "did not power off via adb within 5s" in payload["error_message"]
-    assert h.power == [] and h.locked == []
+    assert h.locked == [True] and h.power == [], "关机失败时不做任何切电"
 
 
 def test_adb_power_off_waits_for_adb_and_port(tmp_path, monkeypatch) -> None:
@@ -551,3 +568,33 @@ def test_powered_off_2046_device_proceeds(tmp_path, monkeypatch, capsys) -> None
     payload = h.run(monkeypatch, capsys)
     assert payload["success"] is True, payload
     assert h.power == ["off", "on"]
+
+
+def test_adb_online_device_on_wrong_port_is_refused_before_lock(tmp_path, monkeypatch,
+                                                                capsys) -> None:
+    h = Harness(monkeypatch, tmp_path, {}, adb_state="device")
+    monkeypatch.setattr(ff, "_port_for_serial", lambda serial, base=None: "1-7")
+    monkeypatch.setattr(ff, "_vbus_adb_power_off",
+                        lambda *a, **k: pytest.fail("映射槽位不符时不得先关机"))
+    payload = h.run(monkeypatch, capsys)
+    assert payload["success"] is False
+    assert "not on its mapped slot port" in payload["error_message"]
+    assert h.locked == [] and h.power == []
+
+
+def test_wrapper_slot_echo_mismatch_stops_all_power_actions(tmp_path, monkeypatch,
+                                                            capsys) -> None:
+    h = Harness(monkeypatch, tmp_path, {})
+    h.echo_slot = {"hub_location": "1-5.2", "port": 1}
+    payload = h.run(monkeypatch, capsys)
+    assert payload["success"] is False
+    assert "slot map changed" in payload["error_message"]
+    assert h.power == ["off"], "回显不符后不得再切电（含隔离）"
+    assert h.launched == []
+
+
+def test_usb_power_echo_parsing() -> None:
+    echo = ff._usb_power_echo(
+        "STP_USB_POWER_OK serial=S1 location=1-5.1 port=3 action=off")
+    assert echo == {"serial": "S1", "hub_location": "1-5.1", "port": 3, "action": "off"}
+    assert ff._usb_power_echo("garbage") is None

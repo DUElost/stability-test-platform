@@ -10,11 +10,12 @@ Class: feature
 - 新步骤参数 `trigger_mode ∈ {adb_reboot, vbus_cycle}`，缺省 `adb_reboot`。
   - 缺省路径与 1.3.20 逐项一致，只在结果 metrics 多一个 `trigger_mode` 键；
   - 其余取值 fail-fast。
-- 取锁前的闸。任一不过就失败，且不做任何切电动作：
+- 取锁前的闸，只做只读探测。任一不过就失败，且不做任何切电动作：
   1. 本机 `/etc/stp-agent/usb-power-slots.json` 有本 serial 的槽位，整份校验口径与 wrapper 相同。
   2. wrapper `capabilities` 含 `usb-power`。
   3. 设备已关机。按 Owner 2026-11-07 的三条答复：
-     - adb `device` 态的设备，前置 `adb reboot -p`，等它从 adb 和槽位口上都消失；
+     - adb `device` 态的设备，先按 serial 反查它所在的 USB 口，必须等于映射槽位口（映射写错时不得先关掉别的设备）；
+       `adb reboot -p` 在取锁后、第一次切电前执行，等它从 adb 消失、槽位口回到可刷态或关机态；
      - 只有 `unauthorized` 直接拒绝：adb 关机与重启都做不到；
      - `offline`、`unknown` 等其它状态进切电流程，是否已关机交给下一条的 USB 判定；
      - 槽位口上已有除可刷态与关机态（`0e8d:2046`，Owner 现场 lsusb）之外的 USB 枚举，判为开机态，直接拒绝。这一条识别「开机但没开 ADB」的设备。
@@ -22,7 +23,8 @@ Class: feature
   - 路由的其余判据不变：族表、`latest.json`、manifest `models`；
   - 刷后回读机型，与声明不一致判失败。
 - 锁内的每次尝试：
-  1. 槽位断电，等待 `vbus_off_settle_seconds`；
+  1. 槽位断电，等待 `vbus_off_settle_seconds`（10–30，下限对齐 #3892 的 10–15s 放电要求）；
+     每次断电都核对 wrapper 回显的实际槽位，与脚本读到的不一致就停手，不再切电（包括隔离）；
   2. 起工具，在 `on_running` 回调里上电，不发 adb reboot；
   3. 门控与 V6 `-p` 用槽位口 `<hub_location>.<port>`，不按 serial 反查；
   4. 上电后 `vbus_brom_timeout_seconds` 内没捕获到 BROM，就杀工具，下一次尝试重新切电；
@@ -49,7 +51,7 @@ Class: feature
 ## Verification
 
 以下命令都在本工作树运行。
-- `.venv/bin/python -m pytest backend/agent/tests/test_flash_firmware_v140.py -q`：40 passed。覆盖：
+- `.venv/bin/python -m pytest backend/agent/tests/test_flash_firmware_v140.py -q`：43 passed。覆盖：
   - 参数闭集与越界；
   - 映射整份拒绝；
   - `poll_check` 杀树；
@@ -63,7 +65,9 @@ Class: feature
   - OOBE 配方；
   - 前置关机。
 - 变异检查：分别去掉结算断电、adb 可见拒绝、BROM 超时重试分支，新测试各有 4、3、1 个失败。
-- `.venv/bin/python -m pytest backend/agent/tests/ -k flash -q`：283 passed。全部旧版本测试通过。
+- 复核 #3899（comment 6706217246）后补：adb 关机移入锁内（测试断言调用顺序为「取锁 → 关机」）、device 态端口核对、
+  wrapper 回显槽位核对、`vbus_state` 定义提前到 `_settle_lock` 之前（信号路径不再可能 NameError）。
+- `.venv/bin/python -m pytest backend/agent/tests/ -k flash -q`：288 passed。全部旧版本测试通过。
 - `TEST_DATABASE_URL=…（本地隔离 PG16） .venv/bin/python -m pytest backend/tests/services/test_param_docs_content.py backend/tests/services/test_param_docs_registry.py -q`：132 passed，1 skipped。
 - `python tools/dev/check_script_packages.py --register flash_firmware 1.4.0`：OK，39 个族树与 manifest 等价。
 - `ruff check`：1 条 B023（`do_reboot`），1.3.20 原样存在，本单元未新增。
