@@ -5,7 +5,7 @@
 - 带 vbus_slots=1 时，关机设备上最早 PENDING 作业是 vbus 刷机的才会被认领，
   且不占 capacity（capacity=0 也能认领）；
 - 关机设备最早作业不是 vbus 刷机时不得被认领（它在等设备上线）；
-- 退役设备、已有 ACTIVE 租约的设备不放行；
+- 退役设备、已有 ACTIVE 租约的设备、unauthorized（ERROR）设备不放行；
 - 本 host 已有在跑的 vbus 刷机作业时不再发新的（单主机严格串行）。
 """
 
@@ -60,12 +60,14 @@ def seeded():
     created["plans"].append(plan.id)
     created["runs"].append(run.id)
 
-    def add(pipeline, *, online=False, retired=False, status=JobStatus.PENDING.value, offset=0):
+    def add(pipeline, *, online=False, retired=False, status=JobStatus.PENDING.value, offset=0,
+            device_status=None, adb_state=None):
         n = len(created["devices"])
         device = Device(
             serial=f"VBUS-{suffix}-{n}", host_id=host_id, tags=[], created_at=now,
-            status="ONLINE" if online else "OFFLINE",
-            adb_connected=online, adb_state="device" if online else "offline",
+            status=device_status or ("ONLINE" if online else "OFFLINE"),
+            adb_connected=online,
+            adb_state=adb_state or ("device" if online else "offline"),
             retired_at=now if retired else None,
         )
         db.add(device)
@@ -157,3 +159,33 @@ async def test_at_most_vbus_slots_jobs_and_none_while_one_runs(seeded):
     # first 已在跑：单主机严格串行，second 不得被认领。
     assert await _claim(host_id, capacity=0, vbus_slots=1) == []
     assert second
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_unauthorized_error_device_is_not_released(seeded):
+    host_id, add, _db = seeded
+    add(VBUS, device_status="ERROR", adb_state="unauthorized")
+    assert await _claim(host_id, capacity=0, vbus_slots=1) == []
+
+
+
+def test_mixed_queue_per_device_is_structurally_impossible(seeded):
+    """复核 #3899 所提「同一离线设备较早非 vbus + 较晚 vbus」混合队列：
+    ``uq_job_active_per_device`` 保证一台设备同时只有一条 PENDING/RUNNING 作业，
+    该形态在库里建不出来；非 vbus 作业占着设备时的行为由
+    ``test_offline_device_with_non_vbus_head_job_is_not_claimed`` 覆盖。"""
+    from sqlalchemy.exc import IntegrityError
+
+    host_id, add, db = seeded
+    dev, early = add(ADB_FLASH)
+    first = db.get(JobInstance, early)
+    run2 = PlanRun(plan_id=first.plan_id, status="RUNNING",
+                   plan_snapshot={"plan_id": first.plan_id},
+                   run_type="MANUAL", triggered_by="pytest")
+    db.add(run2)
+    db.flush()
+    db.add(JobInstance(plan_run_id=run2.id, plan_id=first.plan_id, device_id=dev,
+                       host_id=host_id, status=JobStatus.PENDING.value, pipeline_def=VBUS))
+    with pytest.raises(IntegrityError):
+        db.flush()
+    db.rollback()

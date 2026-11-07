@@ -19,7 +19,8 @@ Class: feature
   - 准入泵终检 `admission_pump.admission_transaction`。
 - 认领：
   - `ClaimRequest.vbus_slots` 取 0–1，缺省 0；
-  - `vbus_slots > 0` 时，第 4 步健康过滤挡掉的本 host 设备中，未退役、无 ACTIVE 租约、且最早 PENDING 作业是
+  - `vbus_slots > 0` 时，第 4 步健康过滤挡掉的本 host 设备中，未退役、非 ERROR 且 `adb_state` 不是 `unauthorized`
+    （复核 #3899 指出：健康过滤之外 unauthorized 设备原本会成为候选；ADR-0063 §8 第 4 项裁定排除）、无 ACTIVE 租约、且最早 PENDING 作业是
     vbus 刷机的，另行认领。这部分最多 `vbus_slots` 个，不占 `capacity`。锁内复核判定，并使用 `FOR UPDATE SKIP LOCKED`；
   - 本 host 已有 RUNNING 的 vbus 作业时，不再发新的 vbus 作业（单主机严格串行），避免后续作业在脚本主机锁上空耗步骤超时。
 - Agent（新增 `backend/agent/usb_power_slots.py`）：
@@ -42,8 +43,10 @@ Class: feature
 
 - `backend/tests/services/test_vbus_flash_admission_3892.py`（15 条）：判定矩阵；放行只跳过一级（之后 `host_offline` 照报）；
   `device_retired` 仍按致命处理；vbus 计划经 prepare 和准入泵后物化出作业；非 vbus 计划照旧按 `device_offline` 回队。
-- `backend/tests/services/test_vbus_flash_claim_3892.py`（7 条）：旧 Agent 认领不到；`capacity=0` 时也能认领；
-  不占普通名额；最早作业不是 vbus 的不认领；退役不放行；同一 host 在跑时不发第二个。
+- `backend/tests/services/test_vbus_flash_claim_3892.py`（9 条）：旧 Agent 认领不到；`capacity=0` 时也能认领；
+  不占普通名额；最早作业不是 vbus 的不认领；退役不放行；unauthorized（ERROR）不放行；同一 host 在跑时不发第二个；
+  「同一设备较早非 vbus + 较晚 vbus」混合队列被 `uq_job_active_per_device` 结构性排除（断言插入失败）。
+  变异：去掉 ERROR / unauthorized 过滤后 2 条变红。
 - `backend/agent/tests/test_vbus_claim_slots_3892.py`（6 条）：名额跟随映射文件；路径与 wrapper 同源；
   槽位为 0 时也认领；无名额时请求体不变。
 - 变异检查：去掉准入泵的放行、或去掉「在跑即不发」守卫后，对应用例变红。
@@ -53,5 +56,4 @@ Class: feature
 
 ## Revisit
 
-- ADR-0063 §8 第 4 项（`adb_state=unauthorized` → `device_error`）如果裁定放行，在本模块的判定之外再加子集分支。
 - 第二期槽位入库后，Agent 的 vbus 名额改由控制面按主机能力判定，不再看本地文件。

@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.metrics import claim_lease_failed_total
 from backend.models.device_lease import DeviceLease
-from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType
+from backend.models.enums import DeviceStatus, HostStatus, JobStatus, LeaseStatus, LeaseType
 from backend.models.host import Device, Host
 from backend.models.job import JobInstance
 from backend.models.plan_run import PlanRun, PlanRunHost
@@ -340,6 +340,11 @@ async def _claimable_vbus_jobs(
         select(Device.id).where(
             Device.host_id == host_id,
             Device.retired_at.is_(None),
+            # ADR-0063 D4 第 2 条 / §8 第 4 条：只豁免离线，不豁免 device_error。
+            # unauthorized 设备被心跳置为 ERROR，adb 关机与重启都做不到——健康
+            # 过滤之外它仍不得成为 vbus 候选（复核 #3899 comment 6706217246）。
+            Device.status != DeviceStatus.ERROR.value,
+            func.coalesce(Device.adb_state, "") != "unauthorized",
         )
     )
     offline_ids = [row[0] for row in device_rows.all() if row[0] not in healthy_ids]
