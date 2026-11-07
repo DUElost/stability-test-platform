@@ -1401,7 +1401,7 @@ _SUBCOMMAND_CONTRACT = {
     # #2957：只读内核日志（D7）。契约 argv 走 --since-epoch 形态（--boot 由解析层
     # 的互斥组覆盖，探针形态另有单测）。
     "read-kernel-log": ["--since-epoch", "1555555555"],
-    # #3892：USB 切电（D8）。契约 argv 走 cycle + delay 形态（覆盖全部三个参数）。
+    # #3892：USB 切电（D8）。契约 argv 走 cycle + delay 形态（覆盖全部四个参数）。
     "usb-power": ["--serial", "ABC123", "--expect-slot", "1-1.4:3",
                   "--action", "cycle", "--delay", "12"],
 }
