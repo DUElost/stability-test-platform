@@ -12,6 +12,7 @@ from typing import Any, Callable
 
 from .active_job_bindings import ActiveJobOccupancy
 from .api_client import fetch_pending_jobs
+from .usb_power_slots import vbus_claim_slots
 from .job_runner import _arrive_patrol_barrier_preengine
 from .recovery_executor import _make_local_worker_token, _rollback_failed_claim
 
@@ -49,16 +50,22 @@ def process_claim_tick(
     # jobs — the OperationScheduler independently limits script
     # execution concurrency. All admitted devices can be RUNNING.
     available_slots = heartbeat_thread.effective_slots
+    # #3892 / ADR-0063 D4 第 5 条：vbus 刷机站的设备常态关机，effective_slots
+    # 恒为 0；映射文件存在时另申请 vbus 名额（控制面单独计数，不占 capacity）。
+    vbus_slots = vbus_claim_slots()
 
-    logger.info("main_loop_tick active=%d slots=%d", active_count, available_slots)
+    logger.info("main_loop_tick active=%d slots=%d vbus_slots=%d",
+                active_count, available_slots, vbus_slots)
 
-    if available_slots <= 0:
+    if available_slots <= 0 and vbus_slots <= 0:
         return
 
+    normal_slots = max(available_slots, 0)
     jobs = fetch_pending_jobs(
-        api_url, host_id, agent_instance_id, capacity=available_slots
+        api_url, host_id, agent_instance_id, capacity=normal_slots,
+        vbus_slots=vbus_slots,
     )
-    jobs = jobs[:available_slots]
+    jobs = jobs[:normal_slots + vbus_slots]
 
     if jobs:
         logger.info(
