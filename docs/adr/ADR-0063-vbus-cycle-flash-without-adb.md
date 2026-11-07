@@ -1,14 +1,15 @@
 # ADR-0063：无 ADB 设备的 USB 切电刷机（`trigger_mode=vbus_cycle`）
 
-- 状态：**Proposed** v0.2（2026-11-07 v0.2：补 F11 与 D4 第 5–6 条，Agent 认领侧也要改，D6 第 1 条随之订正为随 Agent 代码发布；v0.1 2026-11-07 起草；Owner 已在项目对话中裁定「与 B8 并行实施、第一期不加迁移」，本稿待 Owner 裁定 §8 开放项并经独立复核后转 Accepted）
+- 状态：**Proposed** v0.3（2026-11-07 v0.3：Owner 答复 §8 三项，见 §8；新增 §8 第 4 项待裁；v0.2：补 F11 与 D4 第 5–6 条，Agent 认领侧也要改，D6 第 1 条随之订正为随 Agent 代码发布；v0.1 2026-11-07 起草；Owner 已在项目对话中裁定「与 B8 并行实施、第一期不加迁移」，本稿待 Owner 裁定 §8 第 4 项并经独立复核后转 Accepted）
 - 优先级：P1
 - 目标里程碑：M7
 - 日期：2026-11-07
 - 决策者：Owner
 - 标签：刷机, 提权, USB Hub, 派发准入, Agent 主机
+- 归属域：semantic-ownership flash-tool
 - 关联：[#3892](https://github.com/DUElost/stability-test-platform/issues/3892)（需求载体）；
   [风险台账 R-05](../notes/architecture/2026-09-03-platform-risk-register.md)；
-  [ADR-0037](./ADR-0037-agent-host-privilege-boundary.md)（本稿 D2 修订其白名单，对应 v0.7 草案 D8）；
+  [ADR-0037](./ADR-0037-agent-host-privilege-boundary.md)（本稿 D2 修订其白名单，对应其待裁草案 D8）；
   [ADR-0051](./ADR-0051-release-unit-and-content-addressing.md)（脚本按新版本发布）；
   [ADR-0058](./ADR-0058-planned-batch-execution.md)（本需求命中 D7「协调激活 + 安全」强判据，按批次交付）；
   [ADR-0061](./ADR-0061-device-return-contract.md)（失败后的设备归还与欠账）；
@@ -63,7 +64,7 @@ Agent 代码，会改变控制面的期望 digest，而 #3875 的影子能力守
 4. 同一 `serial` 只能出现一次；同一 `(hub_location, port)` 只能出现一次。wrapper 读到违反任一条的文件时必须拒绝全部切电请求。
 5. 第一期不得新增数据库迁移。槽位入库（R-05 的 rack/slot 字段）留作第二期，另立单元。
 
-### D2 提权窄面：`usb-power` 子命令（修订 ADR-0037，对应其 v0.7 D8）
+### D2 提权窄面：`usb-power` 子命令（修订 ADR-0037，对应其待裁草案 D8）
 
 1. wrapper 新增子命令：
 
@@ -135,7 +136,7 @@ Agent 代码，会改变控制面的期望 digest，而 #3875 的影子能力守
   参数空间收窄到映射里登记的槽位。
 - **槽位写进 `Device` 表**：推迟到第二期。要加迁移，必须排在 B8 迁移链（PR #3896、#3897）之后，拖慢交付。
 - **OOBE 与自检作为后续 Pipeline 步骤**：否决用于锁内阶段。锁不能跨步骤（F6），#3892 要求锁覆盖到主界面确认。
-  `check_device` / `ensure_root` 是否也进锁见 §8 第 2 项。
+  `check_device` / `ensure_root` 不进锁（§8 第 2 项已裁）。
 - **新建独立脚本族 `flash_firmware_vbus`**：否决。门控、进度戳、工具驱动与重试逻辑必须复用；跨族不能 import，复制会让两份刷机实现漂移。
 - **派发侧加全局开关**：否决。激活面已经由 Plan 参数显式表达，再加开关只多一处配置漂移。
 
@@ -158,7 +159,7 @@ Agent 代码，会改变控制面的期望 digest，而 #3875 的影子能力守
 
 | 单元 | 内容 | 复核 |
 |---|---|---|
-| U1 | 本 ADR + ADR-0037 v0.7 D8 | Owner 裁定 + 独立复核 |
+| U1 | 本 ADR + ADR-0037 待裁草案 D8 | Owner 裁定 + 独立复核 |
 | U2 | wrapper `usb-power`、Ansible 下发映射文件与 `uhubctl`、测试 | 必须复核（安全） |
 | U3 | `flash_firmware` 新版本 `trigger_mode=vbus_cycle`、测试 | 必须复核（难回退：物理断电） |
 | U4 | 派发与认领准入放行、Agent 认领循环 `vbus_slots`、测试 | 必须复核 |
@@ -170,9 +171,20 @@ U2、U3、U4 可以并行实施；激活顺序为 U2 部署 → U3 发布 → U4
 1. 第二期槽位入库（R-05）落地后，D1 映射文件改为由控制面下发或由数据库生成；届时重审 D2 的查表来源。
 2. 若出现「从未上线的新设备也要 vbus 刷机」的需求，重审 D4 第 3 条。
 
-## 8. 待 Owner 裁定
+## 8. Owner 裁定与待裁项
 
-1. 现场 Hub 型号，以及是否已用 `uhubctl` 实测逐口断电（不是整组联动）。没有逐口切电能力时 D3 无法验收。
-2. `check_device` / `ensure_root` 是否进锁。本稿提案：锁内只做到 OOBE 跳过与版本核验；`check_device` / `ensure_root`
-   作为同一 Plan 的后续步骤在锁外执行。理由：锁的作用是避免两台设备同时上电与二次 BROM 干扰，设备落到主界面后这一风险已经消失。
-3. 待刷设备是否都已在平台有设备行（D4 第 3 条）。
+已裁（2026-11-07，Owner 在项目对话中答复）：
+
+1. Hub：16 口 USB Hub，芯片 Realtek RTS5411（USB 3.2 节点 `0bda:0411`，USB 2.1 节点 `0bda:5411`）。
+   Owner 已用 `uhubctl` 实测可以单独给一个口断电。D3 的真机验收以该 Hub 为准。
+2. `check_device` / `ensure_root` 不进锁：设备落到 OOBE 之前，这两步没有意义。锁内只做到 OOBE 跳过与版本核验；
+   这两步作为同一 Plan 的后续步骤在锁外执行。
+3. 待刷设备在平台都已有设备行（平台另有 lsusb 方式确认物理在线，但 ADB 不一定在线）。D4 第 3 条成立。
+   注：lsusb 只计物理连接数，不建设备行，也不改设备状态；关机设备的状态仍按 F1 变为 `OFFLINE`。
+
+待裁：
+
+4. ADB 处于 `unauthorized` 等非 `device` 态时，控制面把设备置为 `ERROR`（`heartbeat.py` 设备状态分支），派发按
+   `device_error` 拒绝，D4 不放行。User 版本设备若 ADB 可见但未授权，就会落在这里。本稿提案：第一期不放行，
+   只覆盖 ADB 完全不可见（`OFFLINE`）的设备；如果现场确有该形态，再把 `device_error` 中 `adb_state=unauthorized`
+   的子集加入放行。
