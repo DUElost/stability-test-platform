@@ -410,6 +410,110 @@
       "version_range": {
         "min_inclusive": "1.3.20"
       }
+    },
+    {
+      "path": [
+        "trigger_mode"
+      ],
+      "label": "刷机触发方式",
+      "meaning": "选择怎样让设备进入 BROM 被刷机工具捕获：adb_reboot（缺省）在工具就绪后发 adb reboot，与 1.3.20 一致；vbus_cycle 用于已关机、没有 ADB 的设备，经主机上的可控 USB Hub 对该设备的槽位先断电、在工具就绪后上电。",
+      "unit": "字符串（adb_reboot 或 vbus_cycle）",
+      "cautions": "去空白并转小写后，其它取值直接失败。vbus_cycle 要求本机 /etc/stp-agent/usb-power-slots.json 登记了该 serial 的槽位、stp-agent-priv 支持 usb-power，且设备已关机：adb device 态的设备会先被 adb reboot -p 关机，unauthorized / offline 等命令不可达的状态直接失败，槽位口上有非可刷态 USB 枚举也直接失败；这些检查不过时在取锁前失败，不做任何切电。vbus_cycle 必须开启 verify_version 且固件有目标版本。上电后任何失败都会给该槽位断电隔离。",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "1.4.0"
+      }
+    },
+    {
+      "path": [
+        "model"
+      ],
+      "label": "声明机型",
+      "meaning": "vbus_cycle 且未给 firmware_dir 时，用本值代替 adb 读出的 ro.product.model 做机型路由（族表、latest.json、manifest models 判据不变）。",
+      "unit": "机型名（ro.product.model）",
+      "cautions": "只在 vbus_cycle 下读取，此时缺省会直接失败；刷后会回读 ro.product.model 核对，与声明不一致判失败（此时固件已写入）。adb_reboot 下忽略本值。",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "1.4.0"
+      }
+    },
+    {
+      "path": [
+        "vbus_off_settle_seconds"
+      ],
+      "label": "断电等待时长",
+      "meaning": "vbus_cycle 每次尝试中，槽位断电后、启动刷机工具前的等待时间，让设备彻底掉电。",
+      "unit": "秒（5–30，缺省 12）",
+      "cautions": "越界或非整数直接失败，不夹逼。只在 vbus_cycle 生效。",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "1.4.0"
+      }
+    },
+    {
+      "path": [
+        "vbus_poweroff_timeout_seconds"
+      ],
+      "label": "前置关机等待上限",
+      "meaning": "vbus_cycle 下设备 adb 处于 device 态时，脚本在取锁前发 adb reboot -p 让它关机，并等待它从 adb 和槽位 USB 口上都消失；本值是这段等待的上限。",
+      "unit": "秒（1–3600，缺省 60）",
+      "cautions": "超时直接失败，不做任何切电。只在 vbus_cycle 且设备 adb 在线时生效；unauthorized / offline 设备不会尝试关机。",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "1.4.0"
+      }
+    },
+    {
+      "path": [
+        "vbus_brom_timeout_seconds"
+      ],
+      "label": "BROM 捕获上限",
+      "meaning": "vbus_cycle 上电后等待工具捕获 BROM 的上限；超时即终止工具，下一次尝试重新断电再上电（计入 max_attempts）。",
+      "unit": "秒（1–3600，缺省 120）",
+      "cautions": "捕获判据是工具输出 BROM 连接字样或进度百分比。只在 vbus_cycle 生效。",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "1.4.0"
+      }
+    },
+    {
+      "path": [
+        "vbus_boot_timeout_seconds"
+      ],
+      "label": "刷后开机到 ADB 上限",
+      "meaning": "vbus_cycle 写包成功后，等待设备回到 adb device 且 sys.boot_completed=1 的上限，超时判失败并断电隔离。",
+      "unit": "秒（1–3600，缺省 300）",
+      "cautions": "只在 vbus_cycle 生效；adb_reboot 下沿用 verify_wait_seconds。",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "1.4.0"
+      }
+    },
+    {
+      "path": [
+        "vbus_oobe_timeout_seconds"
+      ],
+      "label": "跳过 OOBE 上限",
+      "meaning": "vbus_cycle 在锁内跳过开机向导（写两个 provisioning 标志、停掉 setupwizard、按键 224/82/3）并回读标志位的上限，未收敛判失败。",
+      "unit": "秒（1–3600，缺省 60）",
+      "cautions": "只在 vbus_cycle 生效；与 oobe_skip 脚本同配方，不读取 oobe_skip 的参数。",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "1.4.0"
+      }
+    },
+    {
+      "path": [
+        "vbus_verify_timeout_seconds"
+      ],
+      "label": "刷后版本核验上限",
+      "meaning": "vbus_cycle 跳过 OOBE 后回读版本并与 manifest 比对的等待上限。",
+      "unit": "秒（1–3600，缺省 60）",
+      "cautions": "只在 vbus_cycle 生效；不一致或超时判失败并断电隔离。",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "1.4.0"
+      }
     }
   ]
 }
