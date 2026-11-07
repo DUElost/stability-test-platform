@@ -3,6 +3,8 @@ import json
 from datetime import datetime, timezone, timedelta
 from uuid import uuid4
 
+import pytest
+
 from sqlalchemy import select
 from backend.services import issue_fact_store as facts
 from backend.models.device_log_event import DeviceLogEvent
@@ -242,7 +244,8 @@ def test_same_new_group_uses_sorted_first_identity_and_records_versions(db_sessi
     assert one.merge_summary['issues']==1
 
 
-def test_filtered_rows_do_not_enter_match_or_occurrences(db_session,sample_host,tmp_path):
+@pytest.mark.parametrize("mapped", [False, True])
+def test_filtered_rows_do_not_enter_match_or_occurrences(db_session,sample_host,tmp_path,mapped):
     from pathlib import Path
     from backend.services.shadow_merge import merge_round
     one,_=setup_round(db_session,tmp_path,sample_host,key='a'*64)
@@ -250,7 +253,195 @@ def test_filtered_rows_do_not_enter_match_or_occurrences(db_session,sample_host,
     side=Path(ref['membership_uri']);data=json.loads(side.read_text())
     data['rows'][0].update(branch='filtered',group=None,filter_reason='not_in_pkglist')
     data['groups']=[];side.write_text(json.dumps(data))
+    mp=Path(ref['mapping_uri']);mapping=json.loads(mp.read_text())
+    mapping['rows'][0]['mapped']=mapped;mp.write_text(json.dumps(mapping))
     merge_round(db_session,one.id,matcher=lambda _: (_ for _ in ()).throw(AssertionError('filtered sent to tool')))
     assert one.merge_status=='OK'
     assert one.merge_summary['filtered_by_reason']=={'not_in_pkglist':1}
+    assert one.merge_summary['mapping_unmapped_rows']==int(not mapped)
+    assert one.merge_summary['unmapped_rows']==0
+    assert one.merge_summary['unfiltered_rows']==0
     assert not db_session.scalars(select(IssueOccurrence)).all()
+
+
+def _append_mapped_member(ref, dle, key):
+    import hashlib
+    from pathlib import Path
+    import xlrd
+    import xlwt
+    path=Path(ref['storage_uri'])
+    old=xlrd.open_workbook(str(path)).sheet_by_name('aeeexp')
+    values=[old.row_values(i) for i in range(old.nrows)]
+    member=list(values[1]);member[0]=1;member[1]='/event/member2.dbg'
+    book=xlwt.Workbook();sheet=book.add_sheet('aeeexp')
+    for i,row in enumerate([*values,member]):
+        for j,value in enumerate(row): sheet.write(i,j,value)
+    book.save(str(path))
+    mp=Path(ref['mapping_uri']);mapping=json.loads(mp.read_text())
+    mapping['rows'][0].update(mapped=False,dle_id=None,occurrence_key=None,source=None,unmapped_reason='no_source')
+    mapping['rows'].append({'sheet':'aeeexp','row':3,'path':member[1],'mapped':True,
+        'dle_id':str(dle.id),'occurrence_key':key,'source':'local','evidence':{}})
+    mp.write_text(json.dumps(mapping))
+    sp=Path(ref['membership_uri']);side=json.loads(sp.read_text())
+    side['meta']['reports']['org_xls']['sha256']=hashlib.sha256(path.read_bytes()).hexdigest()
+    side['rows'].append({'org_row':2,'path':member[1],'branch':'similarity','group':'g1'})
+    side['groups'][0]['member_rows']=[1,2]
+    sp.write_text(json.dumps(side))
+
+
+def test_v119_unmapped_representative_anchors_mapped_member(db_session,sample_host,tmp_path):
+    import hashlib
+    from backend.models.issue_fact import IssueSignature
+    from backend.services.shadow_merge import merge_round
+    one,dle=setup_round(db_session,tmp_path,sample_host,key='a'*64)
+    ref=one.expected_set[0]['reports'][0]
+    _append_mapped_member(ref,dle,'a'*64)
+    requests=[]
+    def observed(req):
+        requests.append(req)
+        return match(req)
+    merge_round(db_session,one.id,matcher=observed)
+    assert one.merge_status=='OK'
+    signature=db_session.scalars(select(IssueSignature)).one()
+    assert signature.normalized_key==hashlib.sha256(('mtk|similarity|'+'a'*64).encode()).hexdigest()
+    assert len(requests[0]['rows'])==1
+    assert requests[0]['rows'][0]['path']=='/event/db.dbg'
+    assert one.merge_summary['unmapped_by_reason']=={'no_source':1}
+    assert facts.count_occurrences(db_session,signature_id=signature.id,plan_run_id=42)==1
+
+
+def test_v119_keyed_member_in_later_representative_beats_fail_open(db_session,sample_host,tmp_path):
+    import hashlib
+    from pathlib import Path
+    from backend.models.issue_fact import IssueSignature
+    from backend.services.shadow_merge import merge_round
+    one,_=setup_round(db_session,tmp_path,sample_host,key=None)
+    two,_=setup_round(db_session,tmp_path,sample_host,key='b'*64,round_no=2)
+    a=one.expected_set[0]['reports'][0];b=two.expected_set[0]['reports'][0]
+    new=Path(b['storage_uri']).with_name('Result_z_org.xls')
+    Path(b['storage_uri']).rename(new);b={**b,'storage_uri':str(new)}
+    one.expected_set=[{**one.expected_set[0],'reports':[b,a]}]
+    merge_round(db_session,one.id,matcher=match)
+    assert one.merge_status=='OK'
+    signature=db_session.scalars(select(IssueSignature)).one()
+    assert signature.normalized_key==hashlib.sha256(('mtk|similarity|'+'b'*64).encode()).hexdigest()
+    assert one.merge_summary['unprovable_anchors']==0
+    assert one.merge_summary['new_occurrences']==2
+
+
+def test_v119_unprovable_group_is_counted_and_still_matches_tool(db_session,sample_host,tmp_path):
+    from pathlib import Path
+    from backend.models.issue_fact import IssueSignature
+    from backend.services.shadow_merge import merge_round
+    one,_=setup_round(db_session,tmp_path,sample_host,key='a'*64)
+    ref=one.expected_set[0]['reports'][0]
+    mp=Path(ref['mapping_uri']);mapping=json.loads(mp.read_text())
+    mapping['rows'][0].update(mapped=False,dle_id=None,occurrence_key=None,source=None,unmapped_reason='no_source')
+    mp.write_text(json.dumps(mapping))
+    called=[]
+    def observed(req):
+        called.append(req)
+        return match(req)
+    merge_round(db_session,one.id,matcher=observed)
+    assert one.merge_status=='OK'
+    assert len(called)==1 and len(called[0]['rows'])==1
+    assert not db_session.scalars(select(IssueSignature)).all()
+    assert not db_session.scalars(select(IssueOccurrence)).all()
+    assert one.merge_summary['unprovable_groups']==1
+    assert one.merge_summary['unmapped_by_reason']=={'unprovable_group':1}
+
+
+def test_v119_member_rows_order_is_the_anchor_order(db_session,sample_host,tmp_path):
+    import hashlib
+    from pathlib import Path
+    from backend.models.issue_fact import IssueSignature
+    from backend.services.shadow_merge import merge_round
+    one,first=setup_round(db_session,tmp_path,sample_host,key='a'*64)
+    _,second=setup_round(db_session,tmp_path,sample_host,key='b'*64,round_no=2)
+    ref=one.expected_set[0]['reports'][0]
+    _append_mapped_member(ref,second,'b'*64)
+    mp=Path(ref['mapping_uri']);mapping=json.loads(mp.read_text())
+    mapping['rows'][0].update(mapped=True,dle_id=str(first.id),occurrence_key='a'*64,source='local')
+    mp.write_text(json.dumps(mapping))
+    sp=Path(ref['membership_uri']);side=json.loads(sp.read_text())
+    side['groups'][0]['member_rows']=[2,1]
+    sp.write_text(json.dumps(side))
+    merge_round(db_session,one.id,matcher=match)
+    assert one.merge_status=='OK'
+    sig=db_session.scalars(select(IssueSignature)).one()
+    assert sig.normalized_key==hashlib.sha256(('mtk|similarity|'+'b'*64).encode()).hexdigest()
+    assert one.merge_summary['new_occurrences']==2
+
+
+def test_v119_earlier_unmapped_group_keeps_signature_with_later_anchor(db_session,sample_host,tmp_path):
+    import hashlib
+    from pathlib import Path
+    from backend.models.issue_fact import IssueSignature
+    from backend.services.shadow_merge import merge_round
+    one,_=setup_round(db_session,tmp_path,sample_host,key=None)
+    two,_=setup_round(db_session,tmp_path,sample_host,key='b'*64,round_no=2)
+    a=one.expected_set[0]['reports'][0];b=two.expected_set[0]['reports'][0]
+    mp=Path(a['mapping_uri']);mapping=json.loads(mp.read_text())
+    mapping['rows'][0].update(mapped=False,dle_id=None,occurrence_key=None,source=None,unmapped_reason='no_source')
+    mp.write_text(json.dumps(mapping))
+    sp=Path(a['membership_uri']);side=json.loads(sp.read_text())
+    side['groups'][0]['representative_signature']['caused_by']='first signature raw'
+    sp.write_text(json.dumps(side))
+    renamed=Path(b['storage_uri']).with_name('Result_z_org.xls')
+    Path(b['storage_uri']).rename(renamed);b={**b,'storage_uri':str(renamed)}
+    one.expected_set=[{**one.expected_set[0],'reports':[b,a]}]
+    merge_round(db_session,one.id,matcher=match)
+    assert one.merge_status=='OK'
+    sig=db_session.scalars(select(IssueSignature)).one()
+    assert sig.normalized_key==hashlib.sha256(('mtk|similarity|'+'b'*64).encode()).hexdigest()
+    assert json.loads(sig.signature_raw)['caused_by']=='first signature raw'
+    assert one.merge_summary['unprovable_groups']==0
+    assert one.merge_summary['unmapped_by_reason']=={'no_source':1}
+    assert one.merge_summary['new_occurrences']==1
+
+
+def test_v119_unmapped_representative_can_use_fail_open_member(db_session,sample_host,tmp_path):
+    import hashlib
+    from backend.models.issue_fact import IssueSignature
+    from backend.services.shadow_merge import merge_round
+    one,dle=setup_round(db_session,tmp_path,sample_host,key=None)
+    _append_mapped_member(one.expected_set[0]['reports'][0],dle,None)
+    merge_round(db_session,one.id,matcher=match)
+    assert one.merge_status=='OK'
+    signature=db_session.scalars(select(IssueSignature)).one()
+    assert signature.normalized_key==hashlib.sha256(f'mtk|similarity|unprovable|{dle.id}'.encode()).hexdigest()
+    assert one.merge_summary['unprovable_anchors']==1
+    assert one.merge_summary['unmapped_by_reason']=={'no_source':1}
+    assert one.merge_summary['new_occurrences']==1
+
+
+def test_merge_retries_even_without_scan_candidates(db_session,sample_host,tmp_path,monkeypatch):
+    from datetime import timedelta
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from sqlalchemy.orm import sessionmaker
+    from backend.services import shadow_scan_rounds as shadow
+    one,_=setup_round(db_session,tmp_path,sample_host,key='a'*64)
+    facts.record_scan_round_merge(db_session,round_id=one.id,status='FAILED',summary={})
+    round_id=one.id;db_session.commit()
+    factory=sessionmaker(bind=db_session.get_bind())
+    monkeypatch.setattr(shadow,'SessionLocal',factory)
+    monkeypatch.setattr(shadow,'get_scheduler_settings',lambda: SimpleNamespace(
+        stp_scan_round_shadow_enabled=True,auto_archive_poll_interval_seconds=120))
+    monkeypatch.setattr(shadow,'resolve_shared_storage_root',lambda: str(tmp_path))
+    # #3875's settled partition is no longer a scan candidate; G4 must still retry.
+    monkeypatch.setattr(facts,'list_shadow_scan_run_ids',lambda *_a,**_kw: [])
+    monkeypatch.setattr(shadow,'_advance_run',lambda *_a,**_kw: (_ for _ in ()).throw(AssertionError('settled run advanced')))
+    queued=Mock();monkeypatch.setattr(shadow,'enqueue_sync',queued)
+    now=datetime.now(timezone.utc)
+    shadow.sweep_shadow_scan_rounds(now=now)
+    shadow.sweep_shadow_scan_rounds(now=now+timedelta(seconds=120))
+    assert queued.call_count==2
+    assert all(c.args[0]=='shadow_merge_task' and c.kwargs['fact_round_id']==round_id for c in queued.call_args_list)
+    assert queued.call_args_list[0].kwargs['key']!=queued.call_args_list[1].kwargs['key']
+    with factory() as db:
+        facts.record_scan_round_merge(db,round_id=round_id,status='OK',summary={})
+        db.commit()
+    queued.reset_mock()
+    shadow.sweep_shadow_scan_rounds(now=now+timedelta(seconds=240))
+    queued.assert_not_called()

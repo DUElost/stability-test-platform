@@ -22,7 +22,10 @@ def _summary():
                 unmapped_by_reason={}, mapping_mismatched_reports=0,
                 degraded_coverage=0, degraded_by_reason={}, filtered_by_reason={},
                 issue_signature_disagreement=0, unprovable_representatives=0,
-                extractor_versions_mixed=False, reports=[], candidates=[])
+                extractor_versions_mixed=False, reports=[], candidates=[],
+                unprovable_anchors=0, unprovable_groups=0, tool_groups=0,
+                mapping_unmapped_rows=0, mapping_unmapped_by_reason={},
+                unfiltered_rows=0)
 
 
 def _select(db, row, candidates):
@@ -81,15 +84,17 @@ def _ingest(db, row, matcher):
             if report['members'][n]['branch'] == 'filtered':
                 filtered[report['members'][n]['filter_reason']] += 1
             if not mapping.get('mapped'):
-                unmapped[mapping.get('unmapped_reason', 'no_source')] += 1
+                reason = mapping.get('unmapped_reason', 'no_source')
+                summary['mapping_unmapped_rows'] += 1
+                summary['mapping_unmapped_by_reason'][reason] = summary['mapping_unmapped_by_reason'].get(reason, 0) + 1
         for g in report['groups']:
             g['rule'] = meta.get('rule', {})
             g['mapping'] = [report['rows'][n - 1] for n in g['member_rows']]
             g['representative_mapping'] = report['rows'][g['org_row'] - 1]
-            # A group with no mapped observations contributes coverage, not facts.
-            if any(m.get('mapped') for m in g['mapping']):
-                groups.append(g)
-                report_by_ref[g['ref']] = g
+            # Tool inputs remain the original representatives, even without DLE identity.
+            groups.append(g)
+            report_by_ref[g['ref']] = g
+            summary['unfiltered_rows'] += len(g['mapping'])
     summary.update(degraded_by_reason=dict(degraded),
                    filtered_by_reason=dict(filtered), unmapped_by_reason=dict(unmapped),
                    unmapped_rows=sum(unmapped.values()), extractor_versions_mixed=len(versions) > 1)
@@ -98,29 +103,56 @@ def _ingest(db, row, matcher):
     existing = facts.list_issue_signatures(db, platform=row.platform)
     request = build_request(existing, groups)
     matches = validate_match(matcher(request), request) if groups else {}
-    new_signatures, issues = {}, set()
+    # Resolve each tool bucket over all its representatives before choosing an anchor.
+    # A later keyed member has priority over an earlier fail-open member (v1.19).
+    buckets, bucket_by_ref = {}, {}
+    for result_row in request['rows']:
+        ref = result_row['ref']
+        decision = matches[ref]
+        hit = decision['matched_issue_id']
+        identity = ('existing', hit) if hit is not None else ('new', decision['new_group'])
+        bucket = buckets.setdefault(identity, {'groups': [], 'signature_id': None})
+        bucket['groups'].append(report_by_ref[ref])
+        bucket_by_ref[ref] = bucket
+    summary['tool_groups'] = len(buckets)
+    summary['unprovable_representatives'] = sum(
+        not g['representative_mapping'].get('occurrence_key') for g in groups
+    )
+    for (kind, tool_id), bucket in buckets.items():
+        mapped = [m for g in bucket['groups'] for m in g['mapping'] if m.get('mapped')]
+        anchor = next((m for m in mapped if m.get('occurrence_key')), mapped[0] if mapped else None)
+        if anchor is None:
+            summary['unprovable_groups'] += 1
+        else:
+            summary['unprovable_anchors'] += not bool(anchor.get('occurrence_key'))
+        for group in bucket['groups']:
+            for mapping in group['mapping']:
+                if not mapping.get('mapped'):
+                    reason = 'unprovable_group' if anchor is None else mapping.get('unmapped_reason', 'no_source')
+                    unmapped[reason] += 1
+        if anchor is None:
+            continue
+        if kind == 'existing':
+            bucket['signature_id'] = int(tool_id)
+        else:
+            # Only identity comes from the anchor; signature/branch remain the first representative's.
+            representative = bucket['groups'][0]
+            identity = anchor.get('occurrence_key') or f"unprovable|{anchor['dle_id']}"
+            key = hashlib.sha256(f"{row.platform}|{representative['branch']}|{identity}".encode()).hexdigest()
+            signature = facts.record_issue_signature(db, platform=row.platform,
+                event_type=representative['signature']['exp_class'], normalized_key=key,
+                signature_raw=json.dumps({**representative['signature'], 'rule': representative['rule']}, ensure_ascii=False),
+                seen_at=row.closed_at)
+            bucket['signature_id'] = signature.id
+    summary['unmapped_by_reason'] = dict(unmapped)
+    summary['unmapped_rows'] = sum(unmapped.values())
+    issues = set()
+    # Keep first-observation ownership in the original input order after resolving anchors.
     for r in request['rows']:
         group = report_by_ref[r['ref']]
-        decision = matches[r['ref']]
-        representative = group['representative_mapping']
-        if not representative.get('occurrence_key'):
-            summary['unprovable_representatives'] += 1
-        signature_id = decision['matched_issue_id']
-        if signature_id is not None:
-            signature_id = int(signature_id)
-        else:
-            new_group = decision['new_group']
-            if new_group not in new_signatures:
-                if not representative.get('mapped'):
-                    raise ValueError('new group representative is unmapped; occurrence identity unprovable')
-                identity = representative.get('occurrence_key') or f"unprovable|{representative['dle_id']}"
-                key = hashlib.sha256(f"{row.platform}|{group['branch']}|{identity}".encode()).hexdigest()
-                sig = facts.record_issue_signature(db, platform=row.platform,
-                    event_type=group['signature']['exp_class'], normalized_key=key,
-                    signature_raw=json.dumps({**group['signature'], 'rule': group['rule']}, ensure_ascii=False),
-                    seen_at=row.closed_at)
-                new_signatures[new_group] = sig.id
-            signature_id = new_signatures[new_group]
+        signature_id = bucket_by_ref[r['ref']]['signature_id']
+        if signature_id is None:
+            continue
         for mapping in group['mapping']:
             if not mapping.get('mapped'):
                 continue

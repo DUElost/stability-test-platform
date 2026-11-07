@@ -695,3 +695,12 @@ def list_partition_merge_candidates(db: Session, *, plan_run_id: int, platform: 
         ScanRound.merge_status == 'OK',
     ).order_by(ScanRound.round_no)).scalars()
     return [candidate for summary in summaries for candidate in (summary or {}).get('candidates', [])]
+
+
+
+def list_pending_shadow_merge_run_ids(db: Session) -> list[int]:
+    """G4 retries remain discoverable after #3875 removes settled scan candidates."""
+    return list(db.execute(select(ScanRound.plan_run_id).where(
+        ScanRound.platform == 'mtk', ScanRound.status == SCAN_ROUND_STATUS_CLOSED,
+        or_(ScanRound.merge_status.is_(None), ScanRound.merge_status == 'FAILED'),
+    ).distinct().order_by(ScanRound.plan_run_id)).scalars())
