@@ -7,7 +7,7 @@ from sqlalchemy import select
 from backend.services import issue_fact_store as facts
 from backend.models.device_log_event import DeviceLogEvent
 from backend.models.issue_fact import IssueOccurrence, IssueOccurrenceEvent, RepresentativeSelection
-from tests.test_b8_g4_contract import fixture_report
+from backend.tests.fixtures.scan_membership import fixture_report
 
 
 def setup_round(db, tmp_path, sample_host, *, key=None, round_no=1, dle=None, complete=True, kind='PERIODIC'):
@@ -207,3 +207,42 @@ def test_same_occurrence_observed_in_another_run_is_counted_there(db_session,sam
     facts.link_occurrence_event(db_session,occurrence_id=occurrence.id,dle_id=repeat.id,signature_id=occurrence.signature_id)
     assert facts.count_occurrences(db_session,signature_id=occurrence.signature_id,plan_run_id=another.id)==1
     assert facts.count_machines(db_session,signature_id=occurrence.signature_id,plan_run_id=another.id)==1
+
+
+def test_same_new_group_uses_sorted_first_identity_and_records_versions(db_session,sample_host,tmp_path):
+    import hashlib
+    from pathlib import Path
+    from backend.models.issue_fact import IssueSignature
+    from backend.services.shadow_merge import merge_round
+    one,_=setup_round(db_session,tmp_path,sample_host,key='a'*64)
+    two,_=setup_round(db_session,tmp_path,sample_host,key='b'*64,round_no=2)
+    a=one.expected_set[0]['reports'][0]
+    b=two.expected_set[0]['reports'][0]
+    renamed=Path(b['storage_uri']).with_name('Result_z_org.xls')
+    Path(b['storage_uri']).rename(renamed);b={**b,'storage_uri':str(renamed)}
+    for ref,version in [(a,'2.1.1'),(b,'2.1.2')]:
+        side=Path(ref['membership_uri']);data=json.loads(side.read_text())
+        data['meta'].update(tool={'version':version},rule={'id':'mtk-aee-dedup','version':'1'},parsers={'recognizeexception':'1'})
+        side.write_text(json.dumps(data))
+    one.expected_set=[{**one.expected_set[0],'reports':[b,a]}]
+    merge_round(db_session,one.id,matcher=match)
+    assert one.merge_status=='OK'
+    assert one.merge_summary['extractor_versions_mixed'] is True
+    sig=db_session.scalars(select(IssueSignature)).one()
+    assert sig.normalized_key==hashlib.sha256(('mtk|similarity|'+'a'*64).encode()).hexdigest()
+    assert facts.count_occurrences(db_session,signature_id=sig.id,plan_run_id=42)==2
+    assert one.merge_summary['issues']==1
+
+
+def test_filtered_rows_do_not_enter_match_or_occurrences(db_session,sample_host,tmp_path):
+    from pathlib import Path
+    from backend.services.shadow_merge import merge_round
+    one,_=setup_round(db_session,tmp_path,sample_host,key='a'*64)
+    ref=one.expected_set[0]['reports'][0]
+    side=Path(ref['membership_uri']);data=json.loads(side.read_text())
+    data['rows'][0].update(branch='filtered',group=None,filter_reason='not_in_pkglist')
+    data['groups']=[];side.write_text(json.dumps(data))
+    merge_round(db_session,one.id,matcher=lambda _: (_ for _ in ()).throw(AssertionError('filtered sent to tool')))
+    assert one.merge_status=='OK'
+    assert one.merge_summary['filtered_by_reason']=={'not_in_pkglist':1}
+    assert not db_session.scalars(select(IssueOccurrence)).all()

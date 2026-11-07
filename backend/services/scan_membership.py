@@ -79,7 +79,7 @@ def read_report(ref: dict) -> dict:
                            'org_row': rep, 'path': by_number[rep]['path'],
                            'branch': by_number[rep]['branch'],
                            'host_id': ref['host_id'], 'filename': report.name,
-                           'ref': f"{ref['host_id']}:{report.name}:{rep}"})
+                           'ref': f"{ref['storage_uri']}:{rep}"})
         if covered != {n for n, m in by_number.items() if m['branch'] != 'filtered'}:
             return result
         return {**result, 'status': 'OK', 'reason': None, 'groups': groups,

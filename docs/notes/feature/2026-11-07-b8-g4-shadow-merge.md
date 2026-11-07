@@ -41,7 +41,7 @@ G4 用事务级 advisory lock 串行化 MTK 写入，再按 PlanRun → scan_rou
 
 - main 基线 `3e605a1` 上先新增四种 sidecar 降级、匹配顺序、fail-open 跨轮、
   已选不改选，共 7 项反例。实施前全部因缺少 G4 入口失败；首次实施后 7 项通过。
-- `env -u TEST_DATABASE_URL ./scripts/project_python.sh scripts/run_pytest.py backend/tests/services/test_shadow_merge.py backend/tests/services/test_shadow_scan_rounds.py backend/tests/test_issue_fact_store.py tests/test_b8_g4_contract.py -q --tb=short`：增加 SAQ 现行链回归后 81 项通过，最终结果见 PR。
+- `env -u TEST_DATABASE_URL ./scripts/project_python.sh scripts/run_pytest.py backend/tests/services/test_shadow_merge.py backend/tests/services/test_shadow_scan_rounds.py backend/tests/test_issue_fact_store.py tests/test_b8_g4_contract.py -q --tb=short`：增加 SAQ 现行链与版本/分组回归后 83 项通过，最终结果见 PR。
 - `env -i PATH="$PATH" PYTHONPATH=. .venv/bin/python scripts/run_pytest.py backend/agent/tests/ -q --tb=short`：3086 passed，1 failed。
   唯一失败为 `test_flash_preflight_v102.py::test_dialout_absent_and_no_rule_fails`；
   在独立 main@3e605a1 worktree 用同一 clean env 单独复跑，也失败。
@@ -61,6 +61,10 @@ G4 用事务级 advisory lock 串行化 MTK 写入，再按 PlanRun → scan_rou
   14 个问题、143 个未过滤成员行。不同输入集合不可混称同一验收基线。
   原目录无伴随映射。完整 G3 → G4 入库/次数/机器数对照尚需离线 DLE 身份快照，
   未从报表 Path 推断身份，未连生产库，未对终态 run 触发扫描，未写原目录。
+
+CI 首轮发现控制面测试引用根 tests 的不稳定导入，以及新增 xlrd 读取点未登记；
+夹具已移到 backend.tests.fixtures，并按 #739 守卫更新依赖使用面与规划，未放宽守卫。
+单独收集/运行 G4 控制面测试 12 项通过。
 
 ## Revisit
 
