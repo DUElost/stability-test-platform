@@ -9,8 +9,8 @@ v1.4.0（#3892 / ADR-0063 D3）：新增 `trigger_mode`，缺省 `adb_reboot` �
     （开机态断电再上电不经过 BROM，工具抓不到刷机口；开机但没开 ADB 的设备只能
     在 USB 层识别）。锁内切电前再复核一次。
   - 前置关机：adb `device` 态的设备先 `adb reboot -p`，等它从 adb 与槽位口上都
-    消失（`vbus_poweroff_timeout_seconds`）；unauthorized / offline 等命令不可达
-    的状态直接拒绝（Owner 2026-11-07 裁定）。
+    消失（`vbus_poweroff_timeout_seconds`）；只有 unauthorized（adb 关机与重启
+    都做不到）直接拒绝，offline 等其它状态进切电流程（Owner 2026-11-07 裁定）。
   - 机型：关机读不到 `ro.product.model`，无 `firmware_dir` 时必须由步骤参数
     `model` 声明；路由其余判据不变，刷后回读核对，声明错判失败。
   - 锁内每次尝试：断电 → 等 `vbus_off_settle_seconds` → 起工具 → 就绪回调里上电
@@ -2627,10 +2627,11 @@ def main() -> None:
                     f"{vbus_cfg['poweroff_timeout_seconds']}s "
                     f"(last state {poweroff.get('last_state')}, "
                     f"port occupant {poweroff.get('occupant')})")
-        elif slot_error is None and pre_state != "no-device":
-            # unauthorized / offline / unknown：adb 看得见却不能下命令，既关不了机
-            # 也重启不了，新旧刷机方式都不可行。平台派发处同样判 device_error 拒绝
-            # （ADR-0063 §8 第 4 条，Owner 2026-11-07 裁定）。
+        elif slot_error is None and pre_state == "unauthorized":
+            # unauthorized：adb 看得见却不能下命令，既关不了机也重启不了，新旧刷机
+            # 方式都不可行。平台派发处同样判 device_error 拒绝（ADR-0063 §8 第 4 条，
+            # Owner 2026-11-07 裁定）。offline / unknown / no-device 等其它状态进切电
+            # 流程，「是否已关机」由下面的槽位口 USB 枚举判定。
             slot_error = (
                 f"device {serial} is visible to adb but not controllable "
                 f"(state {pre_state}); it can neither be powered off nor "

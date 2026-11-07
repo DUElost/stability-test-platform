@@ -538,7 +538,7 @@
         },
         {
           "artifact": "packages/flash_firmware/1.4.0.tar.gz",
-          "package_sha256": "fd008b2ff851836aae62a88104e037dd94789936433aacd533f9bb86eb3f92ba",
+          "package_sha256": "9d2a819993dbe03fdee18f2cb8e1c69ef4d845afffca5753d40afe9794314195",
           "python": null,
           "retired": false,
           "script": "flash_firmware.py",

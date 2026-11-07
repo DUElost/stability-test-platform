@@ -235,8 +235,6 @@ class Harness:
     ({"slots": "absent"}, "slot map not found"),
     ({"capability": False}, "lacks the usb-power capability"),
     ({"adb_state": "unauthorized"}, "not controllable (state unauthorized)"),
-    ({"adb_state": "offline"}, "not controllable (state offline)"),
-    ({"adb_state": "unknown"}, "not controllable (state unknown)"),
 ])
 def test_prelock_gates_fail_without_power_actions(tmp_path, monkeypatch, capsys,
                                                   kwargs, needle) -> None:
@@ -533,3 +531,12 @@ def test_adb_power_off_waits_for_adb_and_port(tmp_path, monkeypatch) -> None:
     report = ff._vbus_adb_power_off(SERIAL, "adb", "1-5.1.3", 60)
     assert report["ok"] is True
     assert argv == [["adb", "-s", SERIAL, "reboot", "-p"]]
+
+
+@pytest.mark.parametrize("state", ["offline", "unknown", "no-device"])
+def test_non_unauthorized_states_proceed_to_power_cycle(tmp_path, monkeypatch, capsys,
+                                                        state) -> None:
+    h = Harness(monkeypatch, tmp_path, {}, adb_state=state)
+    payload = h.run(monkeypatch, capsys)
+    assert payload["success"] is True, payload
+    assert h.power == ["off", "on"]
