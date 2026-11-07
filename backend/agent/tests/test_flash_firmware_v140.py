@@ -317,6 +317,44 @@ def test_post_flash_failure_isolates(tmp_path, monkeypatch, capsys) -> None:
     assert payload["metrics"]["vbus"]["isolated"] is True
 
 
+def test_post_flash_exception_isolates(tmp_path, monkeypatch, capsys) -> None:
+    # 复核 #3902 B1：刷后阶段抛异常（而不是返回失败）同样要先断电再交出锁。
+    h = Harness(monkeypatch, tmp_path, {})
+
+    def _boom(*a, **k):
+        raise RuntimeError("adb exploded")
+
+    monkeypatch.setattr(ff, "_vbus_post_flash", _boom)
+    with pytest.raises(RuntimeError, match="adb exploded"):
+        h.run(monkeypatch, capsys)
+    assert h.power == ["off", "on", "off"]
+
+
+@pytest.mark.parametrize("params", [
+    {"require_port_binding": False},
+    {"require_port_binding": "false"},
+])
+def test_vbus_refuses_without_port_binding(tmp_path, monkeypatch, capsys,
+                                           params) -> None:
+    # 复核 #3902 B2：vbus 下不得关掉 V6 -p 绑定（绑错口止损也随之消失）。
+    h = Harness(monkeypatch, tmp_path, params)
+    payload = h.run(monkeypatch, capsys)
+    assert payload["success"] is False
+    assert "requires port binding" in payload["error_message"]
+    assert h.power == []
+    assert h.launch_kwargs == []
+
+
+def test_vbus_refuses_when_binding_defaults_off(tmp_path, monkeypatch, capsys) -> None:
+    # 绑定缺省只在 V6 + Linux 打开；缺省为关时（V5 或非 Linux）vbus 同样拒绝。
+    h = Harness(monkeypatch, tmp_path, {})
+    monkeypatch.setattr(ff, "_is_linux", lambda: False)
+    payload = h.run(monkeypatch, capsys)
+    assert payload["success"] is False
+    assert "requires port binding" in payload["error_message"], payload
+    assert h.power == []
+
+
 def test_signal_path_isolates_once(tmp_path, monkeypatch, capsys) -> None:
     h = Harness(monkeypatch, tmp_path, {})
     h.launch_script = ["signal"]

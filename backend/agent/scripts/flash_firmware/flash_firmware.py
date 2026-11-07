@@ -167,7 +167,8 @@ STP_STEP_PARAMS schema:
                           "full"=沿用历史全量集合（v5 默认，含 201c）；
                           env STP_FLASH_GATE_PID_SCOPE)
     trigger_mode            : str  (optional, default "adb_reboot"; v1.4.0。
-                          "vbus_cycle" = 关机设备经 usb-power 切电触发 BROM；
+                          "vbus_cycle" = 关机设备经 usb-power 切电触发 BROM，
+                          要求 require_port_binding=true（V6 + Linux）；
                           其余取值 fail-fast)
     model                   : str  (optional; 仅 vbus_cycle 且无 firmware_dir 时
                           必填：声明机型，代替 adb 读 ro.product.model)
@@ -2287,6 +2288,11 @@ def _adb_shell_rc(serial: str, adb_path: str, shell_args: "list[str]",
     return proc.returncode, ((proc.stdout or "") + (proc.stderr or "")).strip()[-160:]
 
 
+def _budget(deadline: float, cap: int = 15) -> int:
+    """单条 adb 命令的超时：不超过 cap，也不超过 deadline 剩余（至少 1s）。"""
+    return max(1, min(cap, int(deadline - time.monotonic())))
+
+
 def _vbus_skip_oobe(serial: str, adb_path: str, timeout: int,
                     poll_interval: float = 5.0) -> dict:
     """锁内跳过 OOBE（ADR-0063 D3 第 6 条）。与 oobe_skip 1.1.x 同配方、同判据：
@@ -2313,11 +2319,13 @@ def _vbus_skip_oobe(serial: str, adb_path: str, timeout: int,
     )
     while True:
         report["rounds"] += 1
+        # 单条命令的超时取剩余预算，`oobe_timeout_seconds` 才是整段硬上限。
         for cmd in writes + clear:
-            _adb_shell_rc(serial, adb_path, list(cmd))
+            _adb_shell_rc(serial, adb_path, list(cmd), timeout=_budget(deadline))
         values: dict = {}
         for name, cmd in reads:
-            rc, tail = _adb_shell_rc(serial, adb_path, list(cmd))
+            rc, tail = _adb_shell_rc(serial, adb_path, list(cmd),
+                                     timeout=_budget(deadline))
             lines = tail.splitlines()
             values[name] = lines[-1].strip() if rc == 0 and lines else None
         report["values"] = values
@@ -2431,7 +2439,8 @@ def main() -> None:
     else:
         route, route_error = _resolve_route(args)
     if route_error is not None or route is None:
-        _output(False, error_message=route_error or "route resolution failed")
+        _output(False, error_message=route_error or "route resolution failed",
+                **({"metrics": {"trigger_mode": trigger_mode}} if vbus else {}))
         return
 
     skip_if_current = _as_bool(
@@ -2468,6 +2477,7 @@ def main() -> None:
             "route": route,
             "version_check": version_check,
             "duration_seconds": round(time.time() - started_at, 2),
+            **({"trigger_mode": trigger_mode} if vbus else {}),
         })
         return
 
@@ -2631,6 +2641,13 @@ def main() -> None:
         # （不按 serial 反查——关机设备在 sysfs 里本就没有 serial）。任一不满足
         # 直接失败，且此前没有任何切电动作。
         slot, slot_error = _load_vbus_slot(serial)
+        if slot_error is None and not require_binding:
+            # D3 第 4 条：工具必须用 V6 `-p` 绑定槽位口，绑错口逐行止损也挂在这上面。
+            # 关掉绑定（V5，或计划传 require_port_binding=false）等于让工具扫全部
+            # MTK 口，回到 run 921 的缺口（复核 #3902 comment 6706267244 B2）。
+            slot_error = (
+                "vbus_cycle requires port binding (V6 tool on Linux with "
+                "require_port_binding=true); refusing to power-cycle without -p")
         pre_state = _adb_device_state(serial, adb_path)
         identity.update({"checked": True, "port_source": "vbus_slot",
                          "adb_state": pre_state})
@@ -2683,6 +2700,7 @@ def main() -> None:
                              "env_precheck": env_precheck,
                              "identity": identity,
                              "trigger_mode": trigger_mode,
+                             "vbus": {"slot": slot, "power_actions": []},
                              "tool_generation": generation,
                              "duration_seconds":
                                  round(time.time() - started_at, 2)})
@@ -2873,9 +2891,10 @@ def main() -> None:
                         "slot map changed underneath — stopped without further "
                         "power actions"))
                     break
+                settle_started = time.monotonic()
                 time.sleep(vbus_cfg["off_settle_seconds"])
-                vbus_report["stages"]["off_settle_seconds"] = \
-                    vbus_cfg["off_settle_seconds"]
+                vbus_report["stages"]["off_settle_seconds"] = round(
+                    time.monotonic() - settle_started, 1)
             if attempt > 1:
                 _emit_progress(seq, stage="retry", attempt=attempt,
                                total=max_attempts)
@@ -3103,10 +3122,19 @@ def main() -> None:
         # ── v1.4.0：vbus 刷后阶段（锁内，各自独立硬超时，ADR-0063 D3 第 3、7 条）
         # 开机到 ADB → boot 稳定（沿用 v1.3.7 首刷二次重启守卫）→ 跳过 OOBE →
         # 版本核验 → 机型回读。任一不过即失败，结算时断电隔离。
-        reenumerated, verify_ok, verify_report, boot_stable_report = \
-            _vbus_post_flash(route, serial, adb_path, vbus_cfg, vbus_report,
-                             boot_stabilize_seconds, boot_stabilize_max_wait, seq)
-        vbus_keep_power = verify_ok and verdict_ok and final_rc == 0
+        # 上电之后抛出的任何异常都必须先断电隔离再交出锁（D3 第 8 条；复核 #3902
+        # comment 6706267244 B1）：vbus_keep_power 只在整条收尾不抛异常后才置 True。
+        try:
+            reenumerated, verify_ok, verify_report, boot_stable_report = \
+                _vbus_post_flash(route, serial, adb_path, vbus_cfg, vbus_report,
+                                 boot_stabilize_seconds, boot_stabilize_max_wait,
+                                 seq)
+            vbus_success = verify_ok and verdict_ok and final_rc == 0
+            _emit_progress(seq, stage="done")
+        except Exception:
+            _settle_lock()
+            raise
+        vbus_keep_power = vbus_success
     else:
         # flash_tool 退出后：等设备重新枚举（最长 60s），期间打戳。
         # 设备没回来**不判失败**——flash 成功但枚举慢是常态，记录字段供诊断。
@@ -3145,9 +3173,9 @@ def main() -> None:
         # 失败路径不等待：设备状态已知异常，立即结算（v1.3.4 兜底语义）。
         # boot 稳定超时（ok=False）不判失败——卡死设备不会重启,无窗口可撞。
 
-    # done 戳必须落在 boot 稳定等待**之后**：在此之前设备还可能再重启一次，
-    # 称 done 名不副实，会让按 stage 解析终态的下游误判。
-    _emit_progress(seq, stage="done")
+        # done 戳必须落在 boot 稳定等待**之后**：在此之前设备还可能再重启一次，
+        # 称 done 名不副实，会让按 stage 解析终态的下游误判。
+        _emit_progress(seq, stage="done")
 
     # v1.3.8：门控保持计数并入 gating（诊断：重枚举逃逸被压制的轮次）
     gating["regate_count"] = regate_count
