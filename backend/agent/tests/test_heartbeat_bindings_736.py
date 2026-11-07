@@ -61,6 +61,9 @@ def test_build_heartbeat_thread_reconnect_uses_slot():
         kwargs = ht_cls.call_args.kwargs
         # #3879：伴随映射拒绝计数必须随同一份心跳载荷上报。
         assert kwargs["get_outbox_counts"]()["scan_report_mapping_rejected_total"] == 0
+        with patch("backend.agent.heartbeat_bindings.UploadManager.instance") as uploader:
+            uploader.return_value.shadow_report_uploaded_total.return_value = 13
+            assert kwargs["get_outbox_counts"]()["shadow_round_report_uploaded_total"] == 13
         # before slot filled → no-op False
         assert kwargs["on_devices_reconnected"](["S"]) is False
         trigger.assert_not_called()

@@ -55,6 +55,13 @@ class UploadManager:
     def __init__(self) -> None:
         self._nfs_root: str = ""
         self._configured: bool = False
+        self._shadow_report_uploads = 0
+        self._shadow_report_lock = threading.Lock()
+
+    def shadow_report_uploaded_total(self) -> int:
+        """影子报表上送完成数，进程级累计，随心跳上报，重启清零。"""
+        with self._shadow_report_lock:
+            return self._shadow_report_uploads
 
     @classmethod
     def instance(cls) -> "UploadManager":
@@ -165,6 +172,17 @@ class UploadManager:
                 f"shard register failed plan_run={plan_run_id} host={host_id} "
                 f"dest={dest_path}"
             ) from exc
+        if fact_round_id is not None:
+            # #3875 过渡观测：不读取 settled，不新增双向载荷字段；事后比较
+            # uploaded_at 与控制面的 shadow_settled_at，不能用它充当接收回执。
+            uploaded_at = datetime.now(timezone.utc).isoformat()
+            with self._shadow_report_lock:
+                self._shadow_report_uploads += 1
+            logger.info(
+                "shadow_round_report_uploaded plan_run=%d fact_round_id=%d host=%s "
+                "platform=%s report=%s uploaded_at=%s",
+                plan_run_id, fact_round_id, host_id, platform_subdir, dest_path.name, uploaded_at,
+            )
         return str(dest_path)
 
     @staticmethod

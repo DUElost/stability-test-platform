@@ -284,13 +284,21 @@ def sweep_shadow_scan_rounds(*, now=None):
             logger.exception("shadow_scan_sweep_failed plan_run=%d", run_id)
 
 
-def _shadow_capability_verified(reported_digest, desired_digest):
+def _shadow_capability_verified(host, desired_digest):
     # 过渡（#3875 / 6704534279）：只信与控制面运行时载荷完全一致的 Agent。
     # 终态由另单实现心跳显式能力与协议升版；不在此维护版本/digest 清单。
-    return resolve_agent_code_sync_status(
-        agent_artifact_digest=reported_digest,
-        desired_artifact_digest=desired_digest,
-    ) == "matched"
+    # 6704562784：旧摘要不是当前心跳的证明，必须同时核对上报时间与在线状态。
+    return bool(
+        host is not None
+        and host.status == "ONLINE"
+        and host.agent_artifact_digest_reported_at is not None
+        and host.last_heartbeat is not None
+        and host.agent_artifact_digest_reported_at >= host.last_heartbeat
+        and resolve_agent_code_sync_status(
+            agent_artifact_digest=host.agent_artifact_digest,
+            desired_artifact_digest=desired_digest,
+        ) == "matched"
+    )
 
 
 def prepare_shadow_scan(plan_run_id, fact_round_id):
@@ -330,22 +338,27 @@ def prepare_shadow_scan(plan_run_id, fact_round_id):
             if _dispatch_due(u, now)
         }
         coverage = [dict(unit) for unit in row.expected_set]
-        digests = dict(db.execute(select(Host.id, Host.agent_artifact_digest).where(
+        host_states = {host.id: host for host in db.execute(select(
+            Host.id, Host.status, Host.agent_artifact_digest,
+            Host.agent_artifact_digest_reported_at, Host.last_heartbeat,
+        ).where(
             Host.id.in_(targets),
-        )).all())
+        )).all()}
         try:
             desired_digest = compute_desired_artifact_digest(kind=ARTIFACT_KIND_CODE)
         except OSError:
-            logger.exception("shadow_scan_desired_digest_unavailable round=%d", row.id)
+            logger.exception("shadow_scan_desired_digest_unavailable plan_run=%d fact_round_id=%d platform=%s",
+                plan_run_id, row.id, _PLATFORM)
             desired_digest = ""
         payloads = []
         for host, status, retired in iter_plan_run_scan_hosts(db, plan_run_id):
             if host not in targets:
                 continue
             unit = next(u for u in coverage if u["host_id"] == host)
-            if not _shadow_capability_verified(digests.get(host), desired_digest):
+            if not _shadow_capability_verified(host_states.get(host), desired_digest):
                 unit.update(coverage=COVERAGE_MISSING, reason="capability_unverified")
-                logger.warning("shadow_scan_capability_unverified round=%d host=%s", row.id, host)
+                logger.warning("shadow_scan_capability_unverified plan_run=%d fact_round_id=%d host=%s platform=%s",
+                    plan_run_id, row.id, host, _PLATFORM)
                 continue
             unit.pop("reason", None)
             if status == "ONLINE" and not retired:

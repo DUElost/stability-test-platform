@@ -1,6 +1,7 @@
 """#3875 的 settled、动态能力守卫与现行链路反例。"""
 
 from datetime import datetime, timedelta, timezone
+import logging
 from unittest.mock import Mock, AsyncMock, MagicMock, patch
 
 import pytest
@@ -30,7 +31,8 @@ def _closed_final(env):
     return _delivery_rounds(factory, run_id)[0]
 
 
-def test_settled_exits_candidates_and_all_entry_points_do_no_manifest_io(shadow_env, monkeypatch):
+def test_settled_exits_candidates_and_all_entry_points_do_no_manifest_io(shadow_env, monkeypatch, caplog):
+    from backend.agent import upload_manager
     factory, run_id, root, queued, settings = shadow_env
     final = _closed_final(shadow_env)
     settled_at = final.closed_at + timedelta(seconds=settings.stp_scan_round_report_wait_seconds + 1)
@@ -39,9 +41,23 @@ def test_settled_exits_candidates_and_all_entry_points_do_no_manifest_io(shadow_
         assert run_id not in facts.list_shadow_scan_run_ids(db, platform="mtk")
         assert facts.get_partition_mode(db, plan_run_id=run_id, platform="mtk").shadow_settled_at == settled_at
     # settled 后再落入旧轮命名空间：包括 stale candidate 与 stale SAQ 任务也不能重开。
-    _receipt(root, run_id, final.id, "host-a", empty=False)
     no_io = Mock(side_effect=AssertionError("settled partition manifest I/O"))
     monkeypatch.setattr(shadow, "read_round_reports", no_io)
+    uploader = upload_manager.UploadManager()
+    uploader.configure(nfs_root=str(root))
+    source = root / "Result_after_settled_org.xls"
+    source.write_bytes(b"late report")
+    uploaded_at = settled_at + timedelta(seconds=1)
+    clock = Mock(wraps=datetime)
+    clock.now.return_value = uploaded_at
+    monkeypatch.setattr(upload_manager, "datetime", clock)
+    caplog.set_level(logging.INFO)
+    assert uploader.upload_scan_report(run_id, "host-a", str(source),
+        platform_subdir="mtk", fact_round_id=final.id)
+    assert uploader.shadow_report_uploaded_total() == 1
+    assert f"shadow_round_report_uploaded plan_run={run_id} fact_round_id={final.id} host=host-a" in caplog.text
+    assert f"uploaded_at={uploaded_at.isoformat()}" in caplog.text
+    assert "platform=mtk report=host-a_Result_after_settled_org.xls" in caplog.text
     queued.reset_mock()
     shadow.sweep_shadow_scan_rounds(now=settled_at + timedelta(days=1))
     with factory() as db:
@@ -121,8 +137,10 @@ def test_dynamic_digest_guard_marks_unverified_hosts_missing(shadow_env, monkeyp
     # 计算真实当前载荷摘要；不在实现中维护版本或摘要名单。
     desired = artifact_digest.compute_desired_artifact_digest(kind=artifact_digest.ARTIFACT_KIND_CODE)
     actual = desired if reported == "matched" else reported
+    heartbeat_at = datetime.now(timezone.utc)
     with factory() as db:
-        db.add(Host(id="host-a", hostname="shadow-capability-a", status="ONLINE", agent_artifact_digest=actual))
+        db.add(Host(id="host-a", hostname="shadow-capability-a", status="ONLINE", agent_artifact_digest=actual,
+            agent_artifact_digest_reported_at=heartbeat_at, last_heartbeat=heartbeat_at))
         db.commit()
     monkeypatch.setattr(shadow, "iter_plan_run_scan_hosts", lambda *_: [("host-a", "ONLINE", False)])
     build = Mock(return_value={"device_serials": ["a"], "fact_round_id": 1})
@@ -159,6 +177,32 @@ def test_shadow_disabled_does_not_compute_digest_or_read_storage(monkeypatch):
     shadow.sweep_shadow_scan_rounds()
     assert shadow.prepare_shadow_scan(42, 1) == []
     no_io.assert_not_called()
+
+
+def test_old_agent_empty_heartbeat_cannot_dispatch_with_retained_new_digest(
+    shadow_env, sample_host, client, monkeypatch,
+):
+    factory, run_id, _root, _queued, _settings = shadow_env
+    desired = artifact_digest.compute_desired_artifact_digest()
+    monkeypatch.setattr(shadow, "_expected_units", lambda *_: [{"host_id": sample_host.id, "platform": "mtk"}])
+    monkeypatch.setattr(shadow, "iter_plan_run_scan_hosts", lambda *_: [(sample_host.id, "ONLINE", False)])
+    build = Mock(return_value={"device_serials": ["a"]})
+    monkeypatch.setattr(shadow, "build_scan_now_payload", build)
+    response = client.post("/api/v1/heartbeat", json={
+        "host_id": sample_host.id, "status": "ONLINE", "agent_artifact_digest": desired,
+    })
+    assert response.status_code == 200
+    shadow.sweep_shadow_scan_rounds()
+    row = _rows(factory, run_id)[0]
+    # 新 Agent 留下摘要后，旧 Agent 用同一 host 上线，空报不能沿用旧证明。
+    response = client.post("/api/v1/heartbeat", json={
+        "host_id": sample_host.id, "status": "ONLINE", "agent_instance_id": "old-agent",
+        "agent_artifact_digest": "",
+    })
+    assert response.status_code == 200
+    assert shadow.prepare_shadow_scan(run_id, row.id) == []
+    build.assert_not_called()
+    assert _rows(factory, run_id)[0].expected_set[0]["reason"] == "capability_unverified"
 
 
 @pytest.mark.asyncio

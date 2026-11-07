@@ -15,7 +15,9 @@ depends_on = None
 
 def upgrade() -> None:
     op.add_column("partition_mode", sa.Column("shadow_settled_at", sa.DateTime(timezone=True), nullable=True))
+    op.add_column("host", sa.Column("agent_artifact_digest_reported_at", sa.DateTime(timezone=True), nullable=True))
 
 
 def downgrade() -> None:
+    op.drop_column("host", "agent_artifact_digest_reported_at")
     op.drop_column("partition_mode", "shadow_settled_at")
