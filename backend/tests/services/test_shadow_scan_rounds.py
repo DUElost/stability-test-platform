@@ -313,6 +313,7 @@ def _single_host_round(shadow_env, monkeypatch):
     factory, run_id, _root, _queued, _settings = shadow_env
     monkeypatch.setattr(shadow, "_expected_units", lambda *_args: [{"host_id": "host-a", "platform": "mtk"}])
     monkeypatch.setattr(shadow, "iter_plan_run_scan_hosts", lambda *_args: [("host-a", "ONLINE", False)])
+    monkeypatch.setattr(shadow, "_shadow_capability_verified", lambda *_args: True)
     monkeypatch.setattr(shadow, "build_scan_now_payload", lambda _db, run_id, _host, **kwargs: {
         "plan_run_id": run_id, "device_serials": ["mtk-serial"], **kwargs,
     })

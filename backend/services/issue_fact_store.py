@@ -15,7 +15,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Sequence
 
 from sqlalchemy import String, and_, cast, distinct, func, or_, select, text
@@ -284,6 +284,10 @@ def record_scan_round(
     _require_one_of(kind, _SCAN_ROUND_KINDS, "kind")
     _require_one_of(status, _SCAN_ROUND_STATUSES, "status")
 
+    partition = get_partition_mode(db, plan_run_id=plan_run_id, platform=platform)
+    if partition is not None and partition.shadow_settled_at is not None:
+        raise ImmutableIssueFactError("shadow partition is settled")
+
     existing = db.execute(
         select(ScanRound).where(
             ScanRound.plan_run_id == plan_run_id,
@@ -358,12 +362,43 @@ def list_shadow_scan_run_ids(db: Session, *, platform: str) -> list[int]:
         ScanRound.plan_run_id == PlanRun.id,
         ScanRound.platform == platform,
     ).exists()
+    settled = select(PartitionMode.id).where(
+        PartitionMode.plan_run_id == PlanRun.id,
+        PartitionMode.platform == platform,
+        PartitionMode.shadow_settled_at.isnot(None),
+    ).exists()
     return list(db.execute(
-        select(PlanRun.id).where(or_(
+        select(PlanRun.id).where(~settled, or_(
             PlanRun.status == "RUNNING",
             (PlanRun.status.in_(["SUCCESS", "PARTIAL_SUCCESS", "FAILED"]) & observed),
         )).order_by(PlanRun.id),
     ).scalars())
+
+
+def settle_shadow_partition(
+    db: Session, *, plan_run_id: int, platform: str,
+    settled_at: datetime, report_wait_seconds: int,
+) -> PartitionMode:
+    """调用方先锁 PlanRun 并确认无新迟到输入；只写一次 settled 时间。"""
+    run = db.execute(select(PlanRun).where(
+        PlanRun.id == plan_run_id,
+    ).with_for_update()).scalar_one()
+    partition = get_partition_mode(db, plan_run_id=plan_run_id, platform=platform)
+    if partition is None:
+        raise IssueFactError("shadow partition not found")
+    if partition.shadow_settled_at is not None:
+        return partition
+    rounds = list_scan_rounds(db, plan_run_id=plan_run_id, platform=platform)
+    if (
+        run.status not in {"SUCCESS", "PARTIAL_SUCCESS", "FAILED"}
+        or not any(r.kind == SCAN_ROUND_KIND_FINAL for r in rounds)
+        or any(r.status != SCAN_ROUND_STATUS_CLOSED or r.closed_at is None for r in rounds)
+        or settled_at <= max(r.closed_at for r in rounds) + timedelta(seconds=report_wait_seconds)
+    ):
+        raise IssueFactError("shadow partition is not ready to settle")
+    partition.shadow_settled_at = settled_at
+    db.flush()
+    return partition
 
 
 def record_scan_round_coverage(
