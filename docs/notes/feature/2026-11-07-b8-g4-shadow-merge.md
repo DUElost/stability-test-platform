@@ -24,7 +24,8 @@ MTK 映射增加证据、重复 DLE 和 unmapped 原因，不改变 #3720 拒绝
 失败回滚本次事实和选择，记录 FAILED；检查周期重入队。OK/NO_INPUT 重跑不变。
 G4 用事务级 advisory lock 串行化 MTK 写入，再按 PlanRun → scan_round 加锁，
 避免不同 run 同时写同一全局发生身份。次数与机器数仍由 G1 查询；
-发生在另一个 run 再次被观察时，通过 DLE 关联也计入该 run，保留首见事实。
+发生在另一个 run 再次被观察时，通过 DLE 关联也计入该 run，保留首见事实；
+OK 轮的候选快照保留该关联，DLE 被保留策略删除后仍可计数。
 
 ## Alternatives
 
@@ -59,18 +60,32 @@ G4 用事务级 advisory lock 串行化 MTK 写入，再按 PlanRun → scan_rou
   G3 空来源回放与读取层 12/12 通过格式/行号/Path/sha256 对接（不宣称身份映射成功）。
   `-match_issues` 对首批 6 份给出 11 个问题、33 个未过滤成员行；全部 12 份给出
   14 个问题、143 个未过滤成员行。不同输入集合不可混称同一验收基线。
-  原目录无伴随映射。完整 G3 → G4 入库/次数/机器数对照尚需离线 DLE 身份快照，
-  未从报表 Path 推断身份，未连生产库，未对终态 run 触发扫描，未写原目录。
+  经 Owner 与 #3877 评论 6704816971、6704830391 授权，已用 stp_ro 只读导出
+  72 条 DLE 身份（全部非空 key）到本机隔离目录，文件不提交。TARGET 4d98d47 与
+  main 的 scan_scope.py 无差异，回放使用该逻辑加本单判据 11，source 不按 isdir 过滤。
+  首批 32/33 mapped；第二批 72/128 mapped（其中 2 行 filtered，未过滤 mapped 为 70）。
+  两批 mapped 合计 104 行、72 个不同 key，不能把含 filtered 的值当作入库次数。
+  第一批 .59 的 g4 组：代表 org_row=7 无 DLE/key，成员 org_row=8 有可映射身份；
+  第二批还有 7 个同类组。当前判据要求按代表身份生成新组 normalized_key，却没有
+  代表的 key 或 dle_id，不能执行。隔离库两轮都 FAILED 并回滚，问题/发生累计均为 0。
+  已在 #3800 评论 6704916400 第二次退回，完整验收未通过，停止编码。
+  未从报表 Path 推断身份，未对生产写入或测试，未对终态 run 触发扫描，未写原目录。
 
 CI 首轮发现控制面测试引用根 tests 的不稳定导入，以及新增 xlrd 读取点未登记；
 夹具已移到 backend.tests.fixtures，并按 #739 守卫更新依赖使用面与规划，未放宽守卫。
 单独收集/运行 G4 控制面测试 12 项通过。
+根 tests/ 首次全套为 2439 passed、18 skipped、2 failed；失败是 xlrd 台账与
+测试执行时 Agent 新文件尚未跟踪。补齐台账并提交文件后，两项及相关测试 16 passed。
+跨 run / DLE 删除后计数守恒与 G1/G4 集合：23 passed。
+本机 Agent 的单项基线失败不代表 CI 失败；required CI 按最终 PR head 单独报告。
 
 ## Revisit
 
-本 PR 保持 draft；完整 Run 1193 入库对照与 required CI 未完成前不交付复核结论。
+本 PR 保持 draft；第二次退回见
+[#3800 评论 6704916400](https://github.com/DUElost/stability-test-platform/issues/3800#issuecomment-6704916400)。
+恢复实施依赖规划者裁定“新组代表 unmapped、组内成员 mapped”的稳定问题身份，以及
+首批 no_source 行与 33 次验收基线的关系。完整对照未通过，不交付复核结论。
 Agent 部署与 #3889 的修复合并在同一次 Agent 发布，本单不部署、不激活。
 #3875 的并行 PR #3896 修改相邻服务与调度代码并新增迁移；两者串行集成时，
 后合入者需要对齐迁移父版本并复跑迁移/受影响测试，不创建额外 merge revision。
-若新组代表未映射却有可映射成员，当前合并明确失败而不猜测问题身份；
-出现此类真实输入时应交规划者处理代表身份规则缺口。
+该真实输入已经触发停止，不自行改取成员、Path 或行号生成问题身份。

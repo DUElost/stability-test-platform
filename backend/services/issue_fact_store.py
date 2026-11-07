@@ -566,7 +566,19 @@ def _occurrence_scope(
             IssueOccurrenceEvent.occurrence_id == IssueOccurrence.id,
             DeviceLogEvent.plan_run_id == plan_run_id,
         ).exists()
-        stmt = stmt.where(or_(IssueOccurrence.first_seen_plan_run_id == plan_run_id, observed_in_run))
+        # The G4 candidate snapshot survives DLE/PlanRun retention, just like facts.
+        persisted_in_run = select(ScanRound.id).where(
+            ScanRound.plan_run_id == plan_run_id,
+            ScanRound.merge_status == "OK",
+            ScanRound.merge_summary["candidates"].contains(func.jsonb_build_array(
+                func.jsonb_build_object("occurrence_id", IssueOccurrence.id),
+            )),
+        ).exists()
+        stmt = stmt.where(or_(
+            IssueOccurrence.first_seen_plan_run_id == plan_run_id,
+            observed_in_run,
+            persisted_in_run,
+        ))
     if platform is not None:
         stmt = stmt.join(
             IssueSignature, IssueSignature.id == IssueOccurrence.signature_id,

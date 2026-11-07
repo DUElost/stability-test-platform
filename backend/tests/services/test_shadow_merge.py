@@ -207,6 +207,14 @@ def test_same_occurrence_observed_in_another_run_is_counted_there(db_session,sam
     facts.link_occurrence_event(db_session,occurrence_id=occurrence.id,dle_id=repeat.id,signature_id=occurrence.signature_id)
     assert facts.count_occurrences(db_session,signature_id=occurrence.signature_id,plan_run_id=another.id)==1
     assert facts.count_machines(db_session,signature_id=occurrence.signature_id,plan_run_id=another.id)==1
+    saved=facts.record_scan_round(db_session,plan_run_id=another.id,platform='mtk',round_no=1,
+        kind='FINAL',input_cutoff_at=datetime.now(timezone.utc),expected_set=[])
+    facts.set_scan_round_status(db_session,round_id=saved.id,status='CLOSED')
+    facts.record_scan_round_merge(db_session,round_id=saved.id,status='OK',
+        summary={'candidates':[{'occurrence_id':occurrence.id}]})
+    db_session.delete(repeat);db_session.flush()
+    assert facts.count_occurrences(db_session,signature_id=occurrence.signature_id,plan_run_id=another.id)==1
+    assert facts.count_machines(db_session,signature_id=occurrence.signature_id,plan_run_id=another.id)==1
 
 
 def test_same_new_group_uses_sorted_first_identity_and_records_versions(db_session,sample_host,tmp_path):
