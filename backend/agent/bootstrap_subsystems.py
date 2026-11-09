@@ -61,8 +61,11 @@ def start_disk_and_watcher_subsystems(
         grace_seconds=disk_settings.stp_log_archive_grace_seconds,
     ).start()
     logger.info("log_archiver=started")
-    ScanRunner.instance().configure()
-    UnisocScanRunner.instance().configure()
+    # #3889：把已解析的 hdd_root 显式传入，使同一次启动采集根与扫描根同源、
+    # 只解析一次；否则 ScanRunner.configure() 会再走一次自身的解析器，在
+    # 安装布局下可能得到不同的根。
+    ScanRunner.instance().configure(hdd_root=hdd_root)
+    UnisocScanRunner.instance().configure(hdd_root=hdd_root)
     UploadManager.instance().configure()
     # #2845：EventUploader 的上送目的地是 {cifs_root}/devices/…，无共享存储根时
     # 既无处落盘、configure 又会去求 get_aee_nfs_root() 抛 RuntimeError 打断整个
