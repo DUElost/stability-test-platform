@@ -17,6 +17,10 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from backend.core.device_serial import is_placeholder_serial
 from backend.agent.contracts.pipeline_validator import validate_pipeline_def
+from backend.services.vbus_flash_admission import (
+    is_vbus_flash_lifecycle,
+    is_vbus_flash_snapshot,
+)
 from backend.models.device_lease import DeviceLease
 from backend.models.enums import DeviceStatus, HostStatus, JobStatus, LeaseStatus, PlanRunStatus
 from backend.models.host import Device, Host
@@ -83,7 +87,7 @@ _FATAL_DISPATCH_REASONS = ("not_found", "no_host", "host_retired", "device_retir
 
 
 def _classify_dispatch_devices_sync(
-    db: Session, device_ids: list[int]
+    db: Session, device_ids: list[int], *, allow_device_offline: bool = False,
 ) -> tuple[list[dict], dict[int, str]]:
     """Shared device-availability scan for both dispatch modes.
 
@@ -99,6 +103,10 @@ def _classify_dispatch_devices_sync(
     Callers decide policy: legacy ``_validate_dispatch_devices_sync`` rejects
     on ANY entry; the V2 admission-queue path rejects only
     ``_FATAL_DISPATCH_REASONS`` and queues the rest.
+    
+    ``allow_device_offline``（#3892 / ADR-0063 D4）：仅 vbus 刷机作业传 True——
+    跳过 ``device_offline`` 这一级，继续判定其后的各级（device_error /
+    host_offline / host_maintenance / debt / lease / job），其它理由不受影响。
     """
     rows = db.execute(
         select(
@@ -194,7 +202,7 @@ def _classify_dispatch_devices_sync(
                 "host_id": snap.host_id,
             })
             continue
-        if snap.device_status == DeviceStatus.OFFLINE.value:
+        if snap.device_status == DeviceStatus.OFFLINE.value and not allow_device_offline:
             unavailable.append({
                 "id": did, "reason": "device_offline",
                 "device_status": snap.device_status,
@@ -248,7 +256,7 @@ def _classify_dispatch_devices_sync(
 
 
 def _validate_dispatch_devices_sync(
-    db: Session, device_ids: list[int]
+    db: Session, device_ids: list[int], *, allow_device_offline: bool = False,
 ) -> None:
     """Strict device availability check for LEGACY dispatch (flag=0).
 
@@ -265,7 +273,9 @@ def _validate_dispatch_devices_sync(
     if not device_ids:
         raise PlanDispatchError("device_ids must not be empty")
 
-    unavailable, _ = _classify_dispatch_devices_sync(db, device_ids)
+    unavailable, _ = _classify_dispatch_devices_sync(
+        db, device_ids, allow_device_offline=allow_device_offline,
+    )
     if unavailable:
         raise PlanDispatchError(
             f"Dispatch rejected: {len(unavailable)} device(s) unavailable",
@@ -655,6 +665,10 @@ def prepare_plan_run(
         plan, list(steps), metadata, confirmation_fingerprint,
     )
     plan_snapshot = _build_plan_snapshot(plan, steps, metadata)
+    # #3892 / ADR-0063 D4：vbus 刷机计划的目标设备本来就是关机态，device_offline
+    # 不构成排队理由。与准入泵同样按冻结的 Plan 快照判定（D4 第 1 条；复核 #3901）。
+    if is_vbus_flash_snapshot(plan_snapshot):
+        queue_blockers = [e for e in queue_blockers if e["reason"] != "device_offline"]
 
     return _prepare_queued_plan_run(
         db=db,
@@ -953,7 +967,9 @@ def complete_plan_run_dispatch(
     # #8 TOCTOU 兜底:prepare→complete 之间设备可能下线/被占用。此时 PlanRun 行已存在
     # 且前端正在观测,不能 raise;转 FAILED 终态 + 审计,与 ADR-0023 C1 同处理路径。
     try:
-        _validate_dispatch_devices_sync(db, device_ids)
+        _validate_dispatch_devices_sync(
+            db, device_ids, allow_device_offline=is_vbus_flash_lifecycle(lifecycle),
+        )
     except PlanDispatchError as exc:
         from backend.services.audit_writer import record_audit
         unavailable = exc.unavailable_devices or []
