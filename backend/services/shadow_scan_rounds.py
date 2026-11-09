@@ -240,12 +240,19 @@ def sweep_shadow_scan_rounds(*, now=None):
         return
     now = now or datetime.now(timezone.utc)
     with SessionLocal() as db:
-        run_ids = facts.list_shadow_scan_run_ids(db, platform=_PLATFORM)
-    for run_id in sorted(run_ids):
+        run_ids = set(facts.list_shadow_scan_run_ids(db, platform=_PLATFORM))
+        merge_run_ids = facts.list_pending_shadow_merge_run_ids(db, now=now)
+    for run_id in sorted(run_ids | set(merge_run_ids)):
         try:
             with SessionLocal() as db:
-                pending = _advance_run(db, run_id, root, now, settings)
+                pending = _advance_run(db, run_id, root, now, settings) if run_id in run_ids else []
+                merges = facts.pending_shadow_merge_ids(db, plan_run_id=run_id, now=now)
                 db.commit()
+            for round_id in merges:
+                tick = int(now.timestamp()) // max(1, settings.auto_archive_poll_interval_seconds)
+                enqueue_sync("shadow_merge_task", key=f"merge:shadow:{run_id}:{round_id}:{tick}",
+                             timeout=_SCAN_TASK_SAQ_TIMEOUT, retries=2, required=True,
+                             plan_run_id=run_id, fact_round_id=round_id)
             for round_id, is_final in pending:
                 # 每个检查周期独立尝试，已完成 SAQ key 的 TTL 不阻塞未关闭轮重试。
                 tick = int(now.timestamp()) // max(1, settings.auto_archive_poll_interval_seconds)
@@ -433,5 +440,16 @@ def read_round_reports(
             path = base / relative
             if path.parent.resolve() != report_dir.resolve() or not path.is_file():
                 continue
-            reports.append({**receipt, "empty_receipt": False, "storage_uri": str(path)})
+            companions = {}
+            for field, output in [("companion_file_key", "mapping_uri"), ("membership_file_key", "membership_uri")]:
+                value = entry.get(field)
+                companions[output] = None
+                if isinstance(value, str):
+                    rel = Path(value)
+                    if not rel.is_absolute() and ".." not in rel.parts:
+                        companion_base = report_dir.parents[2] if rel.parts[:1] == ("_rounds",) else report_dir.parent
+                        candidate = companion_base / rel
+                        if candidate.resolve().parent == report_dir.resolve() and candidate.is_file():
+                            companions[output] = str(candidate)
+            reports.append({**receipt, "empty_receipt": False, "storage_uri": str(path), **companions})
     return reports
