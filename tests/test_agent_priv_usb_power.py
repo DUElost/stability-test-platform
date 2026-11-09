@@ -211,8 +211,10 @@ def test_cycle_runs_fixed_argv_with_clean_env(wrapper, host, capsys, monkeypatch
     monkeypatch.setenv("LEAK_ME", "1")
     assert wrapper.cmd_usb_power(_args(), None) == 0
     assert _argv(host.stub) == ["-l", "1-1.4", "-p", "3", "-a", "cycle", "-d", "12"]
-    env = (host.stub.parent / "uhubctl.env").read_text(encoding="utf-8")
-    assert "LEAK_ME" not in env
+    env_lines = (host.stub.parent / "uhubctl.env").read_text(encoding="utf-8").splitlines()
+    env_keys = {line.split("=", 1)[0] for line in env_lines if "=" in line}
+    # 环境只留 LC_ALL/PATH；其余只允许 sh 自身补的变量（LEAK_ME 等调用方变量不得透传）
+    assert {"LC_ALL", "PATH"} <= env_keys <= {"LC_ALL", "PATH", "PWD", "SHLVL", "_", "OLDPWD"}
     assert "STP_USB_POWER_OK serial=MTK0001 location=1-1.4 port=3 action=cycle" in capsys.readouterr().out
 
 
