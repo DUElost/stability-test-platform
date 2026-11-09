@@ -12,7 +12,7 @@ Class: feature
   - 其余取值 fail-fast。
 - 取锁前的闸，只做只读探测。任一不过就失败，且不做任何切电动作：
   1. 本机 `/etc/stp-agent/usb-power-slots.json` 有本 serial 的槽位，整份校验口径与 wrapper 相同。
-  2. wrapper `capabilities` 含 `usb-power`。
+  2. wrapper `capabilities` 同时含 `usb-power` 与参数级标记 `usb-power/expect-slot`（只报 `usb-power` 的旧 wrapper 未实现 `--expect-slot`，取锁前拒绝）。
   3. 设备已关机。按 Owner 2026-11-07 的三条答复：
      - adb `device` 态的设备，先按 serial 反查它所在的 USB 口，必须等于映射槽位口（映射写错时不得先关掉别的设备）；
        `adb reboot -p` 在取锁后、第一次切电前执行，等它从 adb 消失、槽位口回到可刷态或关机态；

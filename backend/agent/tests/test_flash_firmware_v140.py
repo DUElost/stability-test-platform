@@ -251,6 +251,23 @@ class Harness:
         return json.loads(capsys.readouterr().out.strip().splitlines()[-1])
 
 
+@pytest.mark.parametrize("stdout,rc,expected", [
+    ("usb-power\nusb-power/expect-slot\n", 0, True),
+    # 旧 wrapper：有 usb-power 子命令但未实现 --expect-slot（复核 #3899 P2-1）
+    ("usb-power\nsync-env/retired-keys\n", 0, False),
+    ("usb-power/expect-slot\n", 0, False),
+    ("", 0, False),
+    ("usb-power\nusb-power/expect-slot\n", 1, False),
+])
+def test_priv_capability_requires_expect_slot_marker(monkeypatch, stdout, rc,
+                                                     expected) -> None:
+    def fake_run(argv, **kw):
+        assert argv[-1] == "capabilities"
+        return subprocess.CompletedProcess(argv, rc, stdout=stdout, stderr="")
+    monkeypatch.setattr(ff.subprocess, "run", fake_run)
+    assert ff._priv_has_usb_power() is expected
+
+
 @pytest.mark.parametrize("kwargs,needle", [
     ({"slots": "absent"}, "slot map not found"),
     ({"capability": False}, "lacks the usb-power capability"),

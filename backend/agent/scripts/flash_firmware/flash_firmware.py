@@ -2210,7 +2210,12 @@ def _vbus_adb_power_off(serial: str, adb_path: str, gate_port: str, timeout: int
 
 
 def _priv_has_usb_power() -> bool:
-    """wrapper `capabilities` 是否列出 usb-power（旧 wrapper / 无免密 sudo → False）。"""
+    """wrapper `capabilities` 是否同时列出 usb-power 与 usb-power/expect-slot。
+
+    旧 wrapper / 无免密 sudo → False。只报 `usb-power` 的 wrapper 未实现
+    `--expect-slot`，锁内第一次切电才会被 argparse 拒绝；参数级标记让脚本在
+    取锁前 fail-closed（ADR-0063 D3 第 9 条；复核 #3899 comment 6731346242 P2-1）。
+    """
     try:
         proc = subprocess.run(
             ["sudo", "-n", _PRIV_WRAPPER, "capabilities"],
@@ -2220,7 +2225,8 @@ def _priv_has_usb_power() -> bool:
         return False
     if proc.returncode != 0:
         return False
-    return "usb-power" in (proc.stdout or "").split()
+    tokens = set((proc.stdout or "").split())
+    return {"usb-power", "usb-power/expect-slot"} <= tokens
 
 
 _USB_POWER_OK_RE = re.compile(
@@ -2672,8 +2678,9 @@ def main() -> None:
                          "adb_state": pre_state})
         if slot_error is None and not _priv_has_usb_power():
             slot_error = (
-                "stp-agent-priv lacks the usb-power capability (wrapper not "
-                "updated on this host?); refusing vbus_cycle")
+                "stp-agent-priv lacks the usb-power capability or its "
+                "usb-power/expect-slot marker (wrapper not updated on this "
+                "host?); refusing vbus_cycle")
         # 取锁前只做只读探测；`adb reboot -p` 是改变设备状态的动作，挪到锁内
         # 第一次切电之前（ADR-0063 D3 第 5、11 条；复核 #3899 comment 6706217246）。
         needs_adb_poweroff = slot_error is None and pre_state == "device"
