@@ -137,6 +137,7 @@ def test_mapping_covers_all_rows_without_guessing(tmp_path):
                              plan_run_id=42, host_id="h", platform="mtk")
     assert [r["row"] for r in mapping["rows"]] == [2, 3]
     assert mapping["rows"][0]["dle_id"] == "one"
+    assert {"evidence", "duplicate_dle_ids"}.isdisjoint(mapping["rows"][0])
     assert mapping["rows"][1] == {"sheet": "aeeexp", "row": 3, "path": str(unknown / "b.dbg"),
                                     "dle_id": None, "occurrence_key": None, "source": None, "mapped": False}
 

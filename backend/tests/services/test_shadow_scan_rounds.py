@@ -313,6 +313,7 @@ def _single_host_round(shadow_env, monkeypatch):
     factory, run_id, _root, _queued, _settings = shadow_env
     monkeypatch.setattr(shadow, "_expected_units", lambda *_args: [{"host_id": "host-a", "platform": "mtk"}])
     monkeypatch.setattr(shadow, "iter_plan_run_scan_hosts", lambda *_args: [("host-a", "ONLINE", False)])
+    monkeypatch.setattr(shadow, "_shadow_capability_verified", lambda *_args: True)
     monkeypatch.setattr(shadow, "build_scan_now_payload", lambda _db, run_id, _host, **kwargs: {
         "plan_run_id": run_id, "device_serials": ["mtk-serial"], **kwargs,
     })
@@ -396,7 +397,9 @@ def test_final_round_persists_after_queue_failure_and_requeues_each_check(shadow
     queued.side_effect = None
     shadow.sweep_shadow_scan_rounds(now=now + timedelta(seconds=120))
     assert [r.id for r in _delivery_rounds(factory, run_id)] == [row.id]
-    assert queued.call_count == 2
+    # Closed periodic rounds now enqueue G4 independently of the FINAL scan.
+    assert queued.call_count == 3
+    assert any(call.args[0] == "shadow_merge_task" for call in queued.call_args_list)
     assert queued.call_args.kwargs["fact_round_id"] == row.id
 
 

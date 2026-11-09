@@ -59,6 +59,7 @@ from backend.services.plan_dispatcher_sync import (
     materialize_serial_rejected_jobs,
 )
 from backend.services.state_machine import PlanRunStateMachine
+from backend.services.vbus_flash_admission import is_vbus_flash_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -711,7 +712,10 @@ def admission_transaction(db: Session, run_id: int, attempt_id: str) -> bool:
     host_extra_by_id = _lock_admission_resources(db, host_ids, device_ids)
 
     # Final re-verification of EVERY target device (all-or-nothing admission).
-    unavailable, device_host_map = _classify_dispatch_devices_sync(db, device_ids)
+    # #3892 / ADR-0063 D4：vbus 刷机计划只放行 device_offline（判定同源）。
+    unavailable, device_host_map = _classify_dispatch_devices_sync(
+        db, device_ids, allow_device_offline=is_vbus_flash_snapshot(pr.plan_snapshot),
+    )
     fatal = [e for e in unavailable if e["reason"] in _FATAL_DISPATCH_REASONS]
     if fatal:
         db.rollback()

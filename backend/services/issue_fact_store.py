@@ -15,10 +15,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Sequence
 
-from sqlalchemy import String, cast, distinct, func, or_, select
+from sqlalchemy import String, and_, cast, distinct, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from backend.models.issue_fact import (
@@ -284,6 +284,10 @@ def record_scan_round(
     _require_one_of(kind, _SCAN_ROUND_KINDS, "kind")
     _require_one_of(status, _SCAN_ROUND_STATUSES, "status")
 
+    partition = get_partition_mode(db, plan_run_id=plan_run_id, platform=platform)
+    if partition is not None and partition.shadow_settled_at is not None:
+        raise ImmutableIssueFactError("shadow partition is settled")
+
     existing = db.execute(
         select(ScanRound).where(
             ScanRound.plan_run_id == plan_run_id,
@@ -358,12 +362,43 @@ def list_shadow_scan_run_ids(db: Session, *, platform: str) -> list[int]:
         ScanRound.plan_run_id == PlanRun.id,
         ScanRound.platform == platform,
     ).exists()
+    settled = select(PartitionMode.id).where(
+        PartitionMode.plan_run_id == PlanRun.id,
+        PartitionMode.platform == platform,
+        PartitionMode.shadow_settled_at.isnot(None),
+    ).exists()
     return list(db.execute(
-        select(PlanRun.id).where(or_(
+        select(PlanRun.id).where(~settled, or_(
             PlanRun.status == "RUNNING",
             (PlanRun.status.in_(["SUCCESS", "PARTIAL_SUCCESS", "FAILED"]) & observed),
         )).order_by(PlanRun.id),
     ).scalars())
+
+
+def settle_shadow_partition(
+    db: Session, *, plan_run_id: int, platform: str,
+    settled_at: datetime, report_wait_seconds: int,
+) -> PartitionMode:
+    """调用方先锁 PlanRun 并确认无新迟到输入；只写一次 settled 时间。"""
+    run = db.execute(select(PlanRun).where(
+        PlanRun.id == plan_run_id,
+    ).with_for_update()).scalar_one()
+    partition = get_partition_mode(db, plan_run_id=plan_run_id, platform=platform)
+    if partition is None:
+        raise IssueFactError("shadow partition not found")
+    if partition.shadow_settled_at is not None:
+        return partition
+    rounds = list_scan_rounds(db, plan_run_id=plan_run_id, platform=platform)
+    if (
+        run.status not in {"SUCCESS", "PARTIAL_SUCCESS", "FAILED"}
+        or not any(r.kind == SCAN_ROUND_KIND_FINAL for r in rounds)
+        or any(r.status != SCAN_ROUND_STATUS_CLOSED or r.closed_at is None for r in rounds)
+        or settled_at <= max(r.closed_at for r in rounds) + timedelta(seconds=report_wait_seconds)
+    ):
+        raise IssueFactError("shadow partition is not ready to settle")
+    partition.shadow_settled_at = settled_at
+    db.flush()
+    return partition
 
 
 def record_scan_round_coverage(
@@ -560,7 +595,25 @@ def _occurrence_scope(
 ):
     stmt = stmt.where(IssueOccurrence.signature_id == signature_id)
     if plan_run_id is not None:
-        stmt = stmt.where(IssueOccurrence.first_seen_plan_run_id == plan_run_id)
+        observed_in_run = select(IssueOccurrenceEvent.id).join(
+            DeviceLogEvent, DeviceLogEvent.id == IssueOccurrenceEvent.dle_id,
+        ).where(
+            IssueOccurrenceEvent.occurrence_id == IssueOccurrence.id,
+            DeviceLogEvent.plan_run_id == plan_run_id,
+        ).exists()
+        # The G4 candidate snapshot survives DLE/PlanRun retention, just like facts.
+        persisted_in_run = select(ScanRound.id).where(
+            ScanRound.plan_run_id == plan_run_id,
+            ScanRound.merge_status == "OK",
+            ScanRound.merge_summary["candidates"].contains(func.jsonb_build_array(
+                func.jsonb_build_object("occurrence_id", IssueOccurrence.id),
+            )),
+        ).exists()
+        stmt = stmt.where(or_(
+            IssueOccurrence.first_seen_plan_run_id == plan_run_id,
+            observed_in_run,
+            persisted_in_run,
+        ))
     if platform is not None:
         stmt = stmt.join(
             IssueSignature, IssueSignature.id == IssueOccurrence.signature_id,
@@ -608,3 +661,106 @@ def count_machines(
         platform=platform,
     )
     return int(db.execute(stmt).scalar_one())
+
+
+# G4: queries and writes remain behind the G1 service boundary.
+def list_issue_signatures(db: Session, *, platform: str) -> list[dict]:
+    return [{"id": r.id, "signature_raw": r.signature_raw} for r in db.execute(
+        select(IssueSignature).where(func.lower(IssueSignature.platform) == platform.lower())
+        .order_by(IssueSignature.id)
+    ).scalars()]
+
+
+def find_occurrence_by_key(db: Session, *, occurrence_key: str) -> Optional[IssueOccurrence]:
+    return db.execute(select(IssueOccurrence).where(
+        IssueOccurrence.occurrence_key == occurrence_key
+    )).scalar_one_or_none()
+
+
+def find_occurrence_by_dle(db: Session, *, dle_id: Any) -> Optional[IssueOccurrence]:
+    return db.execute(select(IssueOccurrence).join(IssueOccurrenceEvent).where(
+        IssueOccurrenceEvent.dle_id == dle_id
+    ).order_by(IssueOccurrence.id).limit(1)).scalar_one_or_none()
+
+
+def get_partition_event(db: Session, *, dle_id: Any, plan_run_id: int, platform: str, host_id: str):
+    return db.execute(select(DeviceLogEvent).where(
+        DeviceLogEvent.id == dle_id, DeviceLogEvent.plan_run_id == plan_run_id,
+        func.lower(DeviceLogEvent.platform) == platform.lower(), DeviceLogEvent.host_id == host_id,
+    )).scalar_one_or_none()
+
+
+def get_representative_selection(db: Session, *, plan_run_id: int, platform: str, signature_id: int):
+    return db.execute(select(RepresentativeSelection).where(
+        RepresentativeSelection.plan_run_id == plan_run_id,
+        RepresentativeSelection.platform == platform,
+        RepresentativeSelection.signature_id == signature_id,
+    )).scalar_one_or_none()
+
+
+def record_scan_round_merge(
+    db: Session, *, round_id: int, status: str, summary: dict,
+    attempts: Optional[int] = None, next_retry_at: Optional[datetime] = None,
+    now: Optional[datetime] = None,
+) -> ScanRound:
+    _require_one_of(status, frozenset({'NO_INPUT', 'OK', 'FAILED', 'FAILED_FINAL'}), 'merge_status')
+    row = get_scan_round(db, round_id=round_id)
+    if row is None or row.status != SCAN_ROUND_STATUS_CLOSED:
+        raise IssueFactError('merge requires a closed scan round')
+    if row.merge_status in {'OK', 'NO_INPUT', 'FAILED_FINAL'}:
+        return row
+    row.merge_status, row.merge_summary, row.merged_at = status, summary, now or _utcnow()
+    if attempts is not None:
+        row.merge_attempts = attempts
+    row.merge_next_retry_at = next_retry_at if status == 'FAILED' else None
+    db.flush()
+    return row
+
+
+def reset_failed_final_shadow_merge(db: Session, *, round_id: int) -> ScanRound:
+    """Explicit operator-only reset; scheduler and workers never call this entry point."""
+    row = get_scan_round(db, round_id=round_id)
+    if row is None or row.merge_status != 'FAILED_FINAL':
+        raise IssueFactError('manual merge reset requires FAILED_FINAL')
+    row.merge_status = row.merge_summary = row.merged_at = row.merge_next_retry_at = None
+    row.merge_attempts = 0
+    db.flush()
+    return row
+
+
+def lock_shadow_merge(db: Session, *, plan_run_id: int):
+    # Cross-run occurrence identity is global. Serialize G4 writers before run/round locks.
+    db.execute(text("SELECT pg_advisory_xact_lock(hashtext('b8-shadow-merge:mtk'))"))
+    return db.execute(select(PlanRun).where(PlanRun.id == plan_run_id).with_for_update()).scalar_one_or_none()
+
+
+def _pending_shadow_merge(now: datetime):
+    return or_(ScanRound.merge_status.is_(None), and_(
+        ScanRound.merge_status == 'FAILED',
+        or_(ScanRound.merge_next_retry_at.is_(None), ScanRound.merge_next_retry_at <= now),
+    ))
+
+
+def pending_shadow_merge_ids(db: Session, *, plan_run_id: int, now: Optional[datetime] = None) -> list[int]:
+    return list(db.execute(select(ScanRound.id).where(
+        ScanRound.plan_run_id == plan_run_id, ScanRound.platform == 'mtk',
+        ScanRound.status == SCAN_ROUND_STATUS_CLOSED,
+        _pending_shadow_merge(now or _utcnow()),
+    ).order_by(ScanRound.round_no)).scalars())
+
+
+def list_partition_merge_candidates(db: Session, *, plan_run_id: int, platform: str) -> list[dict]:
+    summaries = db.execute(select(ScanRound.merge_summary).where(
+        ScanRound.plan_run_id == plan_run_id, ScanRound.platform == platform,
+        ScanRound.merge_status == 'OK',
+    ).order_by(ScanRound.round_no)).scalars()
+    return [candidate for summary in summaries for candidate in (summary or {}).get('candidates', [])]
+
+
+
+def list_pending_shadow_merge_run_ids(db: Session, *, now: Optional[datetime] = None) -> list[int]:
+    """G4 retries remain discoverable after #3875 removes settled scan candidates."""
+    return list(db.execute(select(ScanRound.plan_run_id).where(
+        ScanRound.platform == 'mtk', ScanRound.status == SCAN_ROUND_STATUS_CLOSED,
+        _pending_shadow_merge(now or _utcnow()),
+    ).distinct().order_by(ScanRound.plan_run_id)).scalars())

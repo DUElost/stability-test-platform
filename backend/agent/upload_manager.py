@@ -55,6 +55,13 @@ class UploadManager:
     def __init__(self) -> None:
         self._nfs_root: str = ""
         self._configured: bool = False
+        self._shadow_report_uploads = 0
+        self._shadow_report_lock = threading.Lock()
+
+    def shadow_report_uploaded_total(self) -> int:
+        """影子报表上送完成数，进程级累计，随心跳上报，重启清零。"""
+        with self._shadow_report_lock:
+            return self._shadow_report_uploads
 
     @classmethod
     def instance(cls) -> "UploadManager":
@@ -122,10 +129,16 @@ class UploadManager:
             )
         dest_path = dest_dir / f"{host_id}_{filename}"
         mapping_path = None
+        membership_path = None
 
         try:
             dest_dir.mkdir(parents=True, exist_ok=True)
             shutil.copy2(str(src), str(dest_path))
+            if fact_round_id is not None and platform_subdir == "mtk" and src.name.endswith("_org.xls"):
+                sidecar = src.with_name(src.name[:-len("_org.xls")] + "_members.json")
+                if sidecar.is_file():
+                    membership_path = dest_dir / f"{host_id}_{sidecar.name}"
+                    shutil.copy2(sidecar, membership_path)
             if mapping is not None:
                 mapping_path = dest_path.with_name(dest_path.name + ".mapping.json")
                 tmp = mapping_path.with_name(mapping_path.name + ".tmp")
@@ -151,7 +164,7 @@ class UploadManager:
         try:
             self._record_shard_entry(
                 plan_run_id, host_id, dest_path, platform_subdir,
-                fact_round_id=fact_round_id, mapping_path=mapping_path,
+                fact_round_id=fact_round_id, mapping_path=mapping_path, membership_path=membership_path,
                 empty_receipt=mapping is not None and not mapping["rows"],
             )
         except Exception as exc:
@@ -159,6 +172,17 @@ class UploadManager:
                 f"shard register failed plan_run={plan_run_id} host={host_id} "
                 f"dest={dest_path}"
             ) from exc
+        if fact_round_id is not None:
+            # #3875 过渡观测：不读取 settled，不新增双向载荷字段；事后比较
+            # uploaded_at 与控制面的 shadow_settled_at，不能用它充当接收回执。
+            uploaded_at = datetime.now(timezone.utc).isoformat()
+            with self._shadow_report_lock:
+                self._shadow_report_uploads += 1
+            logger.info(
+                "shadow_round_report_uploaded plan_run=%d fact_round_id=%d host=%s "
+                "platform=%s report=%s uploaded_at=%s",
+                plan_run_id, fact_round_id, host_id, platform_subdir, dest_path.name, uploaded_at,
+            )
         return str(dest_path)
 
     @staticmethod
@@ -168,7 +192,7 @@ class UploadManager:
     def _record_shard_entry(
         self, plan_run_id: int, host_id: str, dest_path: Path, platform_subdir: str,
         *, fact_round_id: int | None = None, mapping_path: Path | None = None,
-        empty_receipt: bool = False,
+        empty_receipt: bool = False, membership_path: Path | None = None,
     ) -> None:
         """写侧登记（#2188 设计稿 §2）：分片写入是上送动作的完成标志。
 
@@ -204,6 +228,15 @@ class UploadManager:
             }
             if fact_round_id is not None:
                 companion["fact_round_id"] = fact_round_id
+        membership = None
+        if fact_round_id is not None and dest_path.name.endswith("_org.xls") and platform_subdir == "mtk":
+            entry["membership_file_key"] = None
+            if membership_path is not None:
+                key = f"{platform_subdir}/{membership_path.name}"
+                entry["membership_file_key"] = key
+                membership = {"file_key": key, "platform": platform_subdir,
+                              "fact_round_id": fact_round_id, "registerable": False,
+                              "artifact_type": "scan_membership", "size_bytes": membership_path.stat().st_size}
         shard.parent.mkdir(parents=True, exist_ok=True)
 
         artifacts: dict = {}
@@ -222,6 +255,9 @@ class UploadManager:
         artifacts[entry["file_key"]] = entry
         if companion is not None:
             artifacts[companion["file_key"]] = companion
+
+        if membership is not None:
+            artifacts[membership["file_key"]] = membership
 
         payload = {
             "schema_version": _META_SCHEMA_VERSION,

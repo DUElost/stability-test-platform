@@ -11,13 +11,13 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.metrics import claim_lease_failed_total
 from backend.models.device_lease import DeviceLease
-from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType
+from backend.models.enums import DeviceStatus, HostStatus, JobStatus, LeaseStatus, LeaseType
 from backend.models.host import Device, Host
 from backend.models.job import JobInstance
 from backend.models.plan_run import PlanRun, PlanRunHost
@@ -29,6 +29,7 @@ from backend.services.plan_dispatcher_core import (
     extract_dispatch_host_watcher_admin_states,
 )
 from backend.services.state_machine import InvalidTransitionError, JobStateMachine
+from backend.services.vbus_flash_admission import is_vbus_flash_pipeline
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,8 @@ class ClaimRequest(BaseModel):
     capacity: int = 10
     agent_instance_id: str = ""   # ADR-0019 Phase 3a
     agent_version: str = ""
+    # #3892 / ADR-0063 D4 第 5–6 条：vbus 刷机站额外申请的名额；旧 Agent 不带 = 0。
+    vbus_slots: int = Field(default=0, ge=0, le=1)
 
 
 class JobOut(BaseModel):
@@ -145,6 +148,7 @@ async def claim_jobs_for_host(
     host_id: str,
     capacity: int = 10,
     agent_instance_id: str = "",
+    vbus_slots: int = 0,
 ) -> tuple[List[JobInstance], Dict[int, str]]:
     """Shared claim logic for ``claim_jobs`` (POST).
 
@@ -217,6 +221,7 @@ async def claim_jobs_for_host(
     )
     all_device_ids = [row[0] for row in device_ids_result.all()]
 
+
     # 5. Pre-filter: exclude devices with ANY ACTIVE lease (Phase 4b blocking lease).
     #    Expired (grace-held) ACTIVE leases also block the device —
     #    only Reconciler can release them.
@@ -255,14 +260,29 @@ async def claim_jobs_for_host(
             )
         ).subquery("ranked")
 
-        pending_jobs = (await db.execute(
+        head_jobs = (await db.execute(
             select(JobInstance)
             .join(ranked, JobInstance.id == ranked.c.id)
             .where(ranked.c.rn == 1)
             .order_by(JobInstance.created_at)
-            .limit(effective_capacity)
             .with_for_update(of=JobInstance.__table__, skip_locked=True)
         )).scalars().all()
+        # #3892 / ADR-0063 D4 第 5 条：vbus 刷机作业不论设备在线与否只走 6b 的
+        # vbus 名额，普通名额不认领它——否则「本 host 已有在跑 vbus 作业」守卫可被
+        # 普通路径绕过（复核 #3901 P1-2）。先过滤再截断：vbus 作业不得挤占普通名额。
+        # 不带 LIMIT 时锁住的是本 host 空闲设备各自的唯一活跃作业（uq_job_active_per_device），
+        # 行数不超过设备数。
+        pending_jobs = [
+            job for job in head_jobs if not is_vbus_flash_pipeline(job.pipeline_def)
+        ][:effective_capacity]
+
+    # 6b. #3892 / ADR-0063 D4 第 5–6 条：vbus 刷机作业（含关机设备上的，它们被
+    #     第 4 步健康过滤挡掉）单独计数——最多 vbus_slots 个，不占 capacity。旧 Agent
+    #     不带 vbus_slots（=0），这一段整体跳过，vbus 作业保持 PENDING（D6 第 4 条）。
+    if vbus_slots > 0:
+        pending_jobs = list(pending_jobs) + await _claimable_vbus_jobs(
+            db, host_id, vbus_slots,
+        )
 
     # 7-8. Claim loop
     for job in pending_jobs:
@@ -304,6 +324,72 @@ async def claim_jobs_for_host(
     return claimed, fencing_token_map
 
 
+async def _claimable_vbus_jobs(
+    db: AsyncSession, host_id: str, vbus_slots: int,
+) -> List[JobInstance]:
+    """本 host 上最早 PENDING 作业为 vbus 刷机的作业（ADR-0063 D4），设备在线与否都算。
+
+    与第 5–6 步同形：未退役、无 ACTIVE 租约、每台设备取最早 PENDING 作业并
+    ``FOR UPDATE SKIP LOCKED``；锁内按 :func:`is_vbus_flash_pipeline` 复核，
+    最早作业不是 vbus 刷机的设备不得被认领（它在等设备上线）。
+    """
+    # 单主机严格串行（#3892）：本 host 已有在跑的 vbus 刷机作业时不再发新的——
+    # 否则后续作业只会在脚本的主机锁上排队，空耗步骤超时。
+    running = await db.execute(
+        select(JobInstance.pipeline_def).where(
+            JobInstance.host_id == host_id,
+            JobInstance.status == JobStatus.RUNNING.value,
+        )
+    )
+    if any(is_vbus_flash_pipeline(row[0]) for row in running.all()):
+        return []
+    device_rows = await db.execute(
+        select(Device.id).where(
+            Device.host_id == host_id,
+            Device.retired_at.is_(None),
+            # ADR-0063 D4 第 2 条 / §8 第 4 条：只豁免离线，不豁免 device_error。
+            # unauthorized 设备被心跳置为 ERROR，adb 关机与重启都做不到——健康
+            # 过滤之外它仍不得成为 vbus 候选（复核 #3899 comment 6706217246）。
+            Device.status != DeviceStatus.ERROR.value,
+            func.coalesce(Device.adb_state, "") != "unauthorized",
+        )
+    )
+    candidate_ids = [row[0] for row in device_rows.all()]
+    if not candidate_ids:
+        return []
+    busy_rows = await db.execute(
+        select(DeviceLease.device_id).where(
+            DeviceLease.device_id.in_(candidate_ids),
+            DeviceLease.status == LeaseStatus.ACTIVE.value,
+        )
+    )
+    busy = {row[0] for row in busy_rows.all()}
+    candidate_ids = [did for did in candidate_ids if did not in busy]
+    if not candidate_ids:
+        return []
+    rn = func.row_number().over(
+        partition_by=JobInstance.device_id,
+        order_by=(JobInstance.created_at, JobInstance.id),
+    ).label("rn")
+    ranked = (
+        select(JobInstance.id, rn)
+        .join(PlanRun, PlanRun.id == JobInstance.plan_run_id)
+        .where(
+            JobInstance.device_id.in_(candidate_ids),
+            JobInstance.status == JobStatus.PENDING.value,
+            PlanRun.status == "RUNNING",
+        )
+    ).subquery("vbus_ranked")
+    candidates = (await db.execute(
+        select(JobInstance)
+        .join(ranked, JobInstance.id == ranked.c.id)
+        .where(ranked.c.rn == 1)
+        .order_by(JobInstance.created_at, JobInstance.id)
+        .with_for_update(of=JobInstance.__table__, skip_locked=True)
+    )).scalars().all()
+    return [job for job in candidates if is_vbus_flash_pipeline(job.pipeline_def)][:vbus_slots]
+
+
 async def claim_agent_jobs(
     db: AsyncSession,
     payload: ClaimRequest,
@@ -331,6 +417,7 @@ async def claim_agent_jobs(
 
     claimed, fencing_token_map = await claim_jobs_for_host(
         db, payload.host_id, payload.capacity, payload.agent_instance_id,
+        vbus_slots=payload.vbus_slots,
     )
 
     if not claimed:
