@@ -26,7 +26,7 @@ Class: feature
   1. 槽位断电，等待 `vbus_off_settle_seconds`（10–30，下限对齐 #3892 的 10–15s 放电要求）；
      每次切电都带 `--expect-slot <脚本读到的槽位>`：映射被改写时 wrapper 在切电之前拒绝，本次不切任何口；
      回显核对保留为纵深防御，断电、上电、隔离三处都核对：回显仍与脚本读到的不一致就停手，不再切电（包括隔离）；
-     上电回显不符或上电失败时，下一秒的 `poll_check` 杀工具并终止尝试环，不重试；隔离回显不符时 `isolated=false`；
+     上电回显不符或上电失败时，工具仍在运行就由下一秒的 `poll_check` 杀工具；工具先于第一次 `poll_check` 退出时，由工具返回后的补查处理（复核 B4）。两条路径都终止尝试环、不重试，也不按工具输出判成功；隔离回显不符时 `isolated=false`；
   2. 起工具，在 `on_running` 回调里上电，不发 adb reboot；
   3. 门控与 V6 `-p` 用槽位口 `<hub_location>.<port>`，不按 serial 反查；
      端口绑定必须开启：判据是 `require_port_binding and v6_native`（V6 且 Linux），V5 工具、非 Linux
@@ -86,6 +86,7 @@ Class: feature
   - B2：`test_vbus_refuses_non_v6_native_even_if_binding_true`（判据退回只看布尔值时变红）；
   - B3：`test_power_on_echo_mismatch_kills_tool_and_stops`、`test_power_on_failure_stops_without_retry`、
     `test_isolation_echo_mismatch_is_not_reported_isolated`（分别去掉上电回显、隔离回显、poll_check 中止，各有用例变红）。
+    B4：`test_power_on_fault_stops_even_if_tool_exits_before_poll`（上电回显不符 / 上电失败 × 工具输出成功 / 失败，共 4 例；去掉工具返回后的补查，4 例全部变红）。
   `test_flash_firmware_v140.py`：53 passed。
 - `.venv/bin/python -m pytest backend/agent/tests/ -k flash -q`：298 passed。全部旧版本测试通过。
 - `TEST_DATABASE_URL=…（本地隔离 PG16） .venv/bin/python -m pytest backend/tests/services/test_param_docs_content.py backend/tests/services/test_param_docs_registry.py -q`：132 passed，1 skipped。

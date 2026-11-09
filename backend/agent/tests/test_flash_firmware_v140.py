@@ -207,6 +207,8 @@ class Harness:
         # {(action, 第几次该动作): 回显槽位}：模拟 wrapper 回显另一个槽位。
         self.echo_overrides: dict = {}
         self.launch_script: list = ["pass"]
+        # 复核 #3902 B4：True 时模拟工具在第一次 poll_check 之前就退出。
+        self.skip_poll = False
 
     def _fake_power(self, serial, action, slot):
         assert serial == SERIAL
@@ -232,11 +234,13 @@ class Harness:
         self.launched.append(cmd)
         self.launch_kwargs.append(k)
         k["on_running"]()
-        poll = k.get("poll_check")
+        poll = None if self.skip_poll else k.get("poll_check")
         verdict = poll() if poll is not None else None
         if verdict:
             raise ff.FlashToolAborted(verdict[1], verdict[0])
         step = self.launch_script.pop(0) if self.launch_script else "pass"
+        if step == "fail":
+            return "flash failed: no verdict\n", 1
         if step == "brom-timeout":
             raise ff.FlashToolAborted("no BROM capture", "brom-timeout")
         if step == "port-mismatch":
@@ -723,6 +727,38 @@ def test_power_on_failure_stops_without_retry(tmp_path, monkeypatch, capsys) -> 
     assert payload["success"] is False
     assert "usb-power on failed" in payload["error_message"]
     assert h.power == ["off", "on", "off"]
+    assert len(h.launched) == 1
+
+
+@pytest.mark.parametrize("fault", ["echo-mismatch", "on-failed"])
+@pytest.mark.parametrize("tool_result", ["pass", "fail"])
+def test_power_on_fault_stops_even_if_tool_exits_before_poll(
+        tmp_path, monkeypatch, capsys, fault, tool_result) -> None:
+    # 复核 #3902 B4：工具在第一次 poll_check 前退出，上电那一步的 abort 仍须终止
+    # 尝试环——不得按工具输出判成功，也不得重试。
+    h = Harness(monkeypatch, tmp_path, {})
+    h.skip_poll = True
+    h.launch_script = [tool_result, tool_result]
+    if fault == "echo-mismatch":
+        h.echo_overrides[("on", 1)] = {"hub_location": "1-5.2", "port": 1}
+        needle, expected_power = "wrapper powered on slot", ["off", "on"]
+    else:
+        orig = h._fake_power
+
+        def failing_on(serial, action, slot):
+            if action == "on":
+                h.power.append("on")
+                return {"action": "on", "ok": False, "rc": 3,
+                        "tail": "STP_USB_POWER_FAILED rc=1", "seconds": 0.0,
+                        "echo": None, "slot_refused": False}
+            return orig(serial, action, slot)
+
+        monkeypatch.setattr(ff, "_usb_power", failing_on)
+        needle, expected_power = "usb-power on failed", ["off", "on", "off"]
+    payload = h.run(monkeypatch, capsys)
+    assert payload["success"] is False
+    assert needle in payload["error_message"]
+    assert h.power == expected_power
     assert len(h.launched) == 1
 
 

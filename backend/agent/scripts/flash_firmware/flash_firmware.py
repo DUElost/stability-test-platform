@@ -3038,7 +3038,8 @@ def main() -> None:
                     vbus_state["power_on_at"] = time.monotonic()
                     _emit_progress(seq, stage="vbus-on", ok=on["ok"])
                     # 上电失败或回显另一个槽位：不能让工具继续等，下一秒的 poll_check
-                    # 杀工具并终止尝试环（复核 #3902 B3）。
+                    # 杀工具并终止尝试环（复核 #3902 B3）；工具先于 poll_check 退出时
+                    # 由工具返回后的补查终止（B4）。
                     if on["ok"] and not _usb_power_echo_matches(on, vbus_report["slot"]):
                         vbus_state["slot_mismatch"] = True
                         vbus_state["abort"] = ("slot-mismatch", (
@@ -3080,6 +3081,12 @@ def main() -> None:
                     on_running=_fire_reboot_when_tool_ready,
                     **run_kwargs,
                 )
+                # 工具在第一次 poll_check 之前就退出时，上电那一步写下的 abort
+                # 没被消费：返回后补查一次，按同一分支终止尝试环，不按输出判定
+                # 成败、也不重试（ADR-0063 D3 第 13 条第 2 款；复核 #3902 B4）。
+                if vbus and vbus_state.get("abort"):
+                    kind, reason = vbus_state["abort"]
+                    raise FlashToolAborted(reason, kind=kind)
             except FlashToolAborted as exc:
                 if exc.kind == "brom-timeout":
                     # 没抓到 BROM：工具已被杀，下一次尝试重新断电再上电。
