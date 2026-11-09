@@ -1013,8 +1013,14 @@ async def extract_task(ctx: dict, *, plan_run_id: int) -> None:
 
 
 from backend.services.ai_assistant.orchestrator import ai_assistant_turn_task
+from backend.services.shadow_merge import run_shadow_merge
+
+async def shadow_merge_task(ctx: dict, *, plan_run_id: int, fact_round_id: int):
+    await asyncio.to_thread(run_shadow_merge, plan_run_id, fact_round_id)
+
 
 SAQ_FUNCTIONS = [
+    shadow_merge_task,
     post_completion_task,
     aggregate_plan_run_task,
     send_notification_task,
