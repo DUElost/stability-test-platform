@@ -10,7 +10,8 @@ Class: bug-fix
 及 [digest 过渡裁定](https://github.com/DUElost/stability-test-platform/issues/3875#issuecomment-6704534279)、
 [当前心跳绑定](https://github.com/DUElost/stability-test-platform/issues/3800#issuecomment-6704562784)、
 [Agent 上送观测](https://github.com/DUElost/stability-test-platform/issues/3875#issuecomment-6704602109)、
-[strict 边界与同轮恢复](https://github.com/DUElost/stability-test-platform/issues/3800#issuecomment-6704918122)。
+[strict 边界与同轮恢复](https://github.com/DUElost/stability-test-platform/issues/3800#issuecomment-6704918122)、
+[v1.23 发送连接能力](https://github.com/DUElost/stability-test-platform/issues/3800#issuecomment-6731254627)。
 
 一次 additive 迁移给 `partition_mode` 增加可空 `shadow_settled_at`，给 `host` 增加可空
 `agent_artifact_digest_reported_at`，均不回填历史值。
@@ -25,17 +26,20 @@ Class: bug-fix
 已写入的时间不覆写，服务层拒绝为 settled 分区登记新轮。
 运行模式字段与现行 scan/upload/merge/extract 的行为保持独立，影子开关为 0 时不执行新路径。
 
-能力判断是**过渡**做法：复用 `compute_desired_artifact_digest(kind=ARTIFACT_KIND_CODE)`
-与 `resolve_agent_code_sync_status`，只向在线、摘要与控制面运行时载荷一致、且摘要上报时间
-不早于最近心跳的 host 下发。摘要时间仅在非空 digest 心跳中更新，使用写入
-`last_heartbeat` 的同一个 `now` 与同一事务；空 digest 保留旧摘要，但时间无法通过守卫。
+摘要匹配用于预约前的**过渡预筛**。它复用 `compute_desired_artifact_digest(kind=ARTIFACT_KIND_CODE)`
+与 `resolve_agent_code_sync_status`，只给在线、摘要与控制面运行时载荷一致、且摘要上报时间
+不早于最近心跳的 host 预约。摘要时间仅在非空 digest 心跳中更新，使用写入
+`last_heartbeat` 的同一个 `now` 与同一事务。空 digest 保留旧摘要，预筛根据时间拒绝。
 任一条件不满足或 desired 计算失败时，该期望项为 `MISSING`，原因是
 `capability_unverified`，并记录专用日志。原因保存在本轮期望集，可按该原因单独统计 host 数；
 重试不累加业务计数。不硬编码摘要或版本名单，现行 scan_now 不经过能力守卫。
 
-能力未验证的 host 不写 `last_dispatched_at`，在轮次关闭之前，下一个检查周期仍会重新判定。
-host 达标后可以在同一轮恢复下发，清除缺失原因；收到有效报表后覆盖变为 `RECEIVED`。
-轮次关闭后仍沿用不可改覆盖的约束，不重新打开轮次。
+Agent 在 Socket.IO 握手声明 `capabilities: ["scan_round_v1"]`。最终发送资格取决于
+目标本地 SID 的声明。发送使用同一个 SID，并绕过 Redis 适配器。Agent 断开时清除该 SID 的声明。
+缺少本地 SID 或声明时，控制面在轮次锁内写入 `MISSING / capability_unverified`，
+清除该次预约，并记录 `shadow_scan_capability_unverified_at_send`。
+预筛失败不写预约。发送被拒绝后只清除与本次匹配的预约，保留已关闭轮次和并发更新。
+host 达标后可以在同一轮恢复下发，清除缺失原因。收到有效报表后覆盖变为 `RECEIVED`。
 
 摘要列的既有读者（例如漂移显示）仍沿用空报保留旧值的语义。
 每次 Agent 载荷变化都会使尚未同步的主机暂时缺失；这是规划者裁定接受的保守行为。
@@ -43,7 +47,7 @@ host 达标后可以在同一轮恢复下发，清除缺失原因；收到有效
 Agent 在影子报表文件、映射与清单写入完成之后记录 `shadow_round_report_uploaded` 日志，
 正文包含 plan_run、fact_round_id、host、platform、报表文件名与 UTC 上送完成时间；
 同时累加 `shadow_round_report_uploaded_total`，复用现有心跳 extra 计数器通道，进程重启清零。
-失败的上送不计数，现行报表不计入该计数器。Agent 不读取 settled，也不新增双向载荷字段。
+失败的上送不计数，现行报表不计入该计数器。Agent 不读取 settled，上送和心跳沿用现有载荷。
 这是**过渡观测**，并非控制面接收回执；分析时比较上送完成时间与 settled 时间，单列后到达报表。
 
 ## Alternatives
@@ -51,6 +55,7 @@ Agent 在影子报表文件、映射与清单写入完成之后记录 `shadow_ro
 - 协议版本门槛：G3 前后版本均为 `2.0.0`，无法区分。
 - 仓库提交号比较：现有 revision 是溯源文本，部署布局也不保证有 Git 历史。
 - digest 固定名单：随发布失效，且违反本单裁定。
+- 发送前重读心跳：新连接可以在首次心跳之前接管 host，此时数据库摘要仍属于上一连接。
 - 每个检查周期继续扫描 settled 分区：保留 CIFS 开销，违背退出候选判据。
 
 ## Verification
@@ -63,6 +68,9 @@ Agent 在影子报表文件、映射与清单写入完成之后记录 `shadow_ro
   覆盖变为 `RECEIVED`，不创建替代轮。
 - 能力测试比较真实 desired digest，覆盖缺失、不匹配、匹配、desired 变化、旧 Agent 空报后留存
   摘要被拒绝、在线与同次心跳约束，以及现行命令不经过守卫。
+- v1.23 测试覆盖读到摘要快照后接管连接、等待另一台 ACK 时接管连接、旧 Agent 先连后发心跳、
+  有能力的 Agent 重连后同轮恢复，以及无本地 SID 时影子拒绝、现行仍可通过 room 发送。
+- Agent 测试验证连接握手声明 `scan_round_v1`。
 - 同一反例中，settled 后 Agent 真实上送并记日志、计数，打桩断言控制面不读取任何轮次清单，
   不重开分区；Agent 测试另覆盖失败不计数、现行报表不计数及心跳接线。
 - 临时 PostgreSQL 17 回放迁移链，验证存量行初始为空、可写 settled 时间、降级保留存量行。
@@ -72,8 +80,5 @@ Agent 在影子报表文件、映射与清单写入完成之后记录 `shadow_ro
 
 ## Revisit
 
-终态出口由规划者另立单元：Agent 在心跳显式上报能力并提升协议版本，随后替换本单的 digest
-过渡守卫，保持能力与当前实例/当前心跳的绑定；本单不新增 Agent 顶层上报字段。
-
 若需要控制面实时感知报表到达，由规划者另立接收回执单元，不恢复对 settled 分区的轮询。
-Agent 改动与 G4、#3889 按规划者的联合发布裁定一起滚动；本 PR 不部署、不激活影子开关。
+Agent 改动与 G4、#3889 按 v1.23 一起滚动。机队全部声明能力后，按批次人工门禁决定影子激活。

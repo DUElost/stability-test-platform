@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -47,6 +48,13 @@ _TERMINAL = {
     PlanRunStatus.FAILED.value,
 }
 _PLATFORM = "mtk"
+
+
+@dataclass(frozen=True)
+class ShadowScanDispatch:
+    host_id: str
+    payload: dict
+    reserved_at: str
 
 
 def _dispatch_due(unit, now):
@@ -297,8 +305,8 @@ def sweep_shadow_scan_rounds(*, now=None):
 
 
 def _shadow_capability_verified(host, desired_digest):
-    # 过渡（#3875 / 6704534279）：只信与控制面运行时载荷完全一致的 Agent。
-    # 终态由另单实现心跳显式能力与协议升版；不在此维护版本/digest 清单。
+    # 过渡预筛（#3875 / v1.23）：仅给当前摘要一致的 host 预约。
+    # 实际下发由 Socket.IO 握手能力按目标 SID 判定。
     # 6704562784：旧摘要不是当前心跳的证明，必须同时核对上报时间与在线状态。
     return bool(
         host is not None
@@ -313,7 +321,7 @@ def _shadow_capability_verified(host, desired_digest):
     )
 
 
-def prepare_shadow_scan(plan_run_id, fact_round_id):
+def prepare_shadow_scan(plan_run_id, fact_round_id) -> list[ShadowScanDispatch]:
     """工作线程短事务：先锁 run 与 round，再生成仅影子调用的载荷。"""
     if not get_scheduler_settings().stp_scan_round_shadow_enabled:
         return []
@@ -362,7 +370,7 @@ def prepare_shadow_scan(plan_run_id, fact_round_id):
             logger.exception("shadow_scan_desired_digest_unavailable plan_run=%d fact_round_id=%d platform=%s",
                 plan_run_id, row.id, _PLATFORM)
             desired_digest = ""
-        payloads = []
+        dispatches = []
         for host, status, retired in iter_plan_run_scan_hosts(db, plan_run_id):
             if host not in targets:
                 continue
@@ -386,10 +394,9 @@ def prepare_shadow_scan(plan_run_id, fact_round_id):
                     spill_inputs=spill,
                 )
                 if payload["device_serials"]:
-                    payloads.append((host, payload))
-                    for unit in coverage:
-                        if unit["host_id"] == host:
-                            unit["last_dispatched_at"] = now.isoformat()
+                    reserved_at = now.isoformat()
+                    unit["last_dispatched_at"] = reserved_at
+                    dispatches.append(ShadowScanDispatch(host, payload, reserved_at))
                 else:
                     logger.warning("shadow_scan_no_partition_serials round=%d host=%s", row.id, host)
         if coverage != row.expected_set:
@@ -398,7 +405,38 @@ def prepare_shadow_scan(plan_run_id, fact_round_id):
             facts.record_scan_round_coverage(db, round_id=row.id, coverage=coverage)
         facts.set_scan_round_status(db, round_id=row.id, status=facts.SCAN_ROUND_STATUS_RUNNING)
         db.commit()
-        return payloads
+        return dispatches
+
+
+def reject_shadow_scan_dispatch(plan_run_id, fact_round_id, dispatch: ShadowScanDispatch) -> None:
+    """Release this attempt after the send guard rejects its connection."""
+    logger.warning(
+        "shadow_scan_capability_unverified_at_send plan_run=%d fact_round_id=%d host=%s platform=%s",
+        plan_run_id, fact_round_id, dispatch.host_id, _PLATFORM,
+    )
+    with SessionLocal() as db:
+        if _locked_run(db, plan_run_id) is None:
+            return
+        row = facts.get_scan_round(db, round_id=fact_round_id)
+        if (
+            row is None
+            or row.plan_run_id != plan_run_id
+            or row.platform != _PLATFORM
+            or row.status == facts.SCAN_ROUND_STATUS_CLOSED
+        ):
+            return
+        coverage = [dict(unit) for unit in row.expected_set]
+        for unit in coverage:
+            if (
+                unit["host_id"] == dispatch.host_id
+                and unit.get("last_dispatched_at") == dispatch.reserved_at
+                and unit["coverage"] not in _COVERED
+            ):
+                unit.update(coverage=COVERAGE_MISSING, reason="capability_unverified")
+                unit.pop("last_dispatched_at")
+                facts.record_scan_round_coverage(db, round_id=row.id, coverage=coverage)
+                db.commit()
+                return
 
 
 def classify_round_coverage(
