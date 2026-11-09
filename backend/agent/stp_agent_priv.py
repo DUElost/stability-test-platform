@@ -1211,7 +1211,7 @@ def validate_usb_power_expect_slot(value):
     location, _, port_text = value.partition(":")
     if not _USB_PORT_RE.match(location):
         _fail("--expect-slot has an invalid hub_location %r" % (location,))
-    if not re.match(r"^[0-9]{1,2}\Z", port_text) or not 1 <= int(port_text) <= USB_POWER_MAX_PORT:
+    if not re.match(r"^[1-9][0-9]?\Z", port_text) or not 1 <= int(port_text) <= USB_POWER_MAX_PORT:
         _fail("--expect-slot port must be an integer within 1..%d" % USB_POWER_MAX_PORT)
     return location, int(port_text)
 

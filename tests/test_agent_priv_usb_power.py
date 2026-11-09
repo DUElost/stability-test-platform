@@ -132,7 +132,7 @@ def test_contract_and_capabilities_include_usb_power(wrapper, capsys):
 # ── 纯函数校验 ───────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("bad", ["", "1-1.4", "1-1.4:", ":3", "1-1.4:0", "1-1.4:17",
+@pytest.mark.parametrize("bad", ["", "1-1.4", "1-1.4:", ":3", "1-1.4:0", "1-1.4:03", "1-1.4:00", "1-1.4:17",
                                  "1-1.4:3:4", "1-1.4:1-16", "1-1.4:all", "../1:3",
                                  "1-1.4: 3", None, 3])
 def test_expect_slot_validation_rejects(wrapper, bad):
@@ -397,6 +397,10 @@ def test_provisioning_playbook_writes_the_path_and_shape_the_wrapper_reads(wrapp
     assert "'schema': 1" in write["content"]
     folder = tasks["Ensure slot mapping directory is root-owned (#3892)"]["ansible.builtin.file"]
     assert (folder["owner"], folder["mode"]) == ("root", "0755")
+    # 能力检查对「旧 wrapper 只报 usb-power」有判别力（只报告不阻断）
+    cap = tasks["Check wrapper supports usb-power with --expect-slot (#3892)"]
+    assert "grep -qx usb-power/expect-slot" in cap["ansible.builtin.shell"]
+    assert cap["failed_when"] is False
     # 渲染形态与 wrapper 解析器一致：Ansible 的 to_nice_json 等价于 json.dumps。
     rendered = json.dumps({"schema": 1, "slots": [
         {"serial": SERIAL, "hub_location": "1-1.4", "port": 3}]}, indent=4)

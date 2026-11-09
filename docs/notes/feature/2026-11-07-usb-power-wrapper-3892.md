@@ -43,7 +43,7 @@ Class: feature
   203 passed，11 skipped，1 failed。失败的是 `test_wrapper_sync_env_emits_control_plane_sentinels`：
   云端环境缺 `sqlalchemy`（`ModuleNotFoundError`），与本改动无关，以 CI 为准。
 - `ruff check` 通过。
-- 加 `--expect-slot` 后：`pytest tests/test_agent_priv_usb_power.py -q` 88 passed，`pytest tests/ -k agent_priv -q` 235 passed、2 skipped；
+- 加 `--expect-slot` 后：`pytest tests/test_agent_priv_usb_power.py -q` 88 passed，`pytest tests/ -k agent_priv -q` 235 passed、2 skipped；增量复核非阻断项后（拒绝前导零端口、playbook 能力检查同时核对 `usb-power/expect-slot`）为 90 passed、237 passed、2 skipped；
   去掉比对后 `test_slot_mismatch_is_rejected_before_any_power_action` 两条变红。
 - 复核 #3900（comment 6706287225）后补：
   - 映射文件顶层只接受 `schema`、`slots` 两个键，`schema` 必须是整数 1（`true`、`1.0` 被拒）；Hub 位置解析结果还必须是目录；
