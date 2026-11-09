@@ -48,6 +48,27 @@ _V6_MANIFEST = {
 # ── 1. 参数 ──────────────────────────────────────────────────────────
 
 
+def _patch_advancing_clock(monkeypatch, mod, *, start: float = 1_000_000.0):
+    """sleep 推进假时钟（time / monotonic 同步），不做墙钟等待。
+
+    同构自 `test_flash_firmware_unisoc.py`（#3202 守卫：sleep 换 no-op 却不推进时钟
+    = 等待环靠真墙钟判 deadline 的忙等形态）。本脚本的等待环用 `time.monotonic`，
+    所以两者一起替换。
+    """
+    state = {"now": start}
+
+    def fake_now() -> float:
+        return state["now"]
+
+    def fake_sleep(seconds: float) -> None:
+        state["now"] += float(seconds)
+
+    monkeypatch.setattr(mod.time, "time", fake_now)
+    monkeypatch.setattr(mod.time, "monotonic", fake_now)
+    monkeypatch.setattr(mod.time, "sleep", fake_sleep)
+    return state
+
+
 def test_trigger_mode_closed_set() -> None:
     assert ff._resolve_trigger_mode({}) == ("adb_reboot", None)
     assert ff._resolve_trigger_mode({"trigger_mode": " VBUS_CYCLE "}) == ("vbus_cycle", None)
@@ -197,7 +218,7 @@ class Harness:
         monkeypatch.setattr(ff, "_port_for_serial", _no_reverse_lookup)
         monkeypatch.setattr(ff, "_resolve_target_identity", _no_reverse_lookup)
         monkeypatch.setattr(ff, "_usb_power", self._fake_power)
-        monkeypatch.setattr(ff.time, "sleep", lambda s: None)
+        _patch_advancing_clock(monkeypatch, ff)
         monkeypatch.setattr(ff, "_vbus_post_flash", self._fake_post_flash)
         self.post_flash_ok = True
         self.echo_slot = {"hub_location": "1-5.1", "port": 3}
@@ -501,9 +522,7 @@ def test_oobe_skip_sequence_and_verdict(monkeypatch) -> None:
 
 def test_oobe_skip_times_out(monkeypatch) -> None:
     monkeypatch.setattr(ff, "_adb_shell_rc", lambda *a, **k: (0, "0\n"))
-    monkeypatch.setattr(ff.time, "sleep", lambda s: None)
-    clock = iter(range(0, 1000, 10))
-    monkeypatch.setattr(ff.time, "monotonic", lambda: next(clock))
+    _patch_advancing_clock(monkeypatch, ff)
     report = ff._vbus_skip_oobe(SERIAL, "adb", 60)
     assert report["ok"] is False and "not set within 60s" in report["error"]
 
@@ -626,7 +645,7 @@ def test_adb_power_off_waits_for_adb_and_port(tmp_path, monkeypatch) -> None:
                                         subprocess.CompletedProcess(a, 0, "", ""))[1])
     monkeypatch.setattr(ff, "_adb_device_state", lambda s, p: next(states))
     monkeypatch.setattr(ff, "_vbus_port_powered_on", lambda port, base=None: next(occupants))
-    monkeypatch.setattr(ff.time, "sleep", lambda s: None)
+    _patch_advancing_clock(monkeypatch, ff)
     report = ff._vbus_adb_power_off(SERIAL, "adb", "1-5.1.3", 60)
     assert report["ok"] is True
     assert argv == [["adb", "-s", SERIAL, "reboot", "-p"]]
