@@ -147,3 +147,37 @@ def test_dev_bootstrap_from_empty_database_produces_seeded_schema():
                 assert conn.exec_driver_sql("select count(*) from specialty").scalar() == specialty
         finally:
             engine.dispose()
+
+
+def test_shadow_settled_migration_preserves_existing_partition():
+    from sqlalchemy import inspect, text
+
+    revision = "b83875a11c02"
+    with PostgresContainer("postgres:17") as postgres:
+        url = _normalize_database_url(postgres.get_connection_url())
+        env = {**os.environ, "DATABASE_URL": url}
+        first_upgrade = _alembic(env, "upgrade", revision)
+        assert first_upgrade.returncode == 0, first_upgrade.stderr
+        engine = create_engine(url)
+        try:
+            with engine.connect() as db:
+                assert db.scalar(text("SELECT version_num FROM alembic_version")) == revision
+            downgraded = _alembic(env, "downgrade", "-1")
+            assert downgraded.returncode == 0, downgraded.stderr
+            assert "shadow_settled_at" not in {c["name"] for c in inspect(engine).get_columns("partition_mode")}
+            assert "agent_artifact_digest_reported_at" not in {c["name"] for c in inspect(engine).get_columns("host")}
+            assert "merge_status" in {c["name"] for c in inspect(engine).get_columns("scan_round")}
+            with engine.begin() as db:
+                assert db.scalar(text("SELECT version_num FROM alembic_version")) == "b8g4a719c203"
+                db.execute(text("INSERT INTO partition_mode(plan_run_id, platform, mode, written_at) "
+                    "VALUES (3875, 'mtk', 'CURRENT', now())"))
+            reupgraded = _alembic(env, "upgrade", revision)
+            assert reupgraded.returncode == 0, reupgraded.stderr
+            assert "agent_artifact_digest_reported_at" in {c["name"] for c in inspect(engine).get_columns("host")}
+            with engine.begin() as db:
+                assert db.scalar(text("SELECT version_num FROM alembic_version")) == revision
+                assert db.scalar(text("SELECT mode FROM partition_mode WHERE plan_run_id=3875")) == "CURRENT"
+                assert db.execute(text("SELECT shadow_settled_at FROM partition_mode WHERE plan_run_id=3875")).scalar_one() is None
+                db.execute(text("UPDATE partition_mode SET shadow_settled_at=now() WHERE plan_run_id=3875"))
+        finally:
+            engine.dispose()

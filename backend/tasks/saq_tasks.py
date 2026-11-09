@@ -449,13 +449,18 @@ async def scan_task(
     4. enqueue upload_task then merge_task (merge_task chains extract_task on
        success; events via EventUploader/DLE)
     """
-    from backend.realtime.socketio_server import call_agent_control
+    from backend.realtime.socketio_server import call_agent_control, call_shadow_scan_control
 
     if fact_round_id is not None:
-        payloads = await asyncio_to_thread(shadow_scan_rounds.prepare_shadow_scan, plan_run_id, fact_round_id)
-        for host_id, payload in payloads:
-            if not await call_agent_control(host_id, "scan_now", payload=payload):
-                logger.warning("shadow_scan_no_ack round=%d host=%s", fact_round_id, host_id)
+        dispatches = await asyncio_to_thread(shadow_scan_rounds.prepare_shadow_scan, plan_run_id, fact_round_id)
+        for dispatch in dispatches:
+            acked = await call_shadow_scan_control(dispatch.host_id, payload=dispatch.payload)
+            if acked is None:
+                await asyncio_to_thread(
+                    shadow_scan_rounds.reject_shadow_scan_dispatch, plan_run_id, fact_round_id, dispatch,
+                )
+            elif not acked:
+                logger.warning("shadow_scan_no_ack round=%d host=%s", fact_round_id, dispatch.host_id)
         return
 
     logger.info("saq_scan_start plan_run=%d final=%s", plan_run_id, is_final)
