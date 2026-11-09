@@ -13,9 +13,11 @@
 #
 # 用法：
 #   ansible-playbook tools/ansible/playbooks/ensure_usb_power_slots.yml -l <host> -K
+# 目标主机不在 linux_hosts 组时（如 agent_candidates），用 -e usb_power_hosts=<组或主机> 指定
+# （同 set_timezone.yml 的 tz_hosts 先例；2026-11-09 #3892 真机验收发现 .81 不在 linux_hosts）。
 ---
 - name: Ensure USB power slot mapping on agent host
-  hosts: linux_hosts
+  hosts: "{{ usb_power_hosts | default('linux_hosts') }}"
   gather_facts: false
   become: false
 
