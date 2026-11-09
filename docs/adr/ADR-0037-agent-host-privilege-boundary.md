@@ -1,7 +1,8 @@
 # ADR-0037：Agent 主机提权边界（Privilege Boundary Wrapper）
 
 - 状态：**Accepted（v0.6）**
-- 版本记录：v0.7 草案（2026-11-07：§2 拟新增 D8——USB 切电子命令 `usb-power`，按 serial 查 root 属主映射文件后调用固定 argv 的 `uhubctl`；随 [ADR-0063](./ADR-0063-vbus-cycle-flash-without-adb.md) 一并裁定，#3892；裁定前 D8 不生效）；v0.6（2026-09-26：§2 新增 D7——内核日志只读子命令 `read-kernel-log`（#2957：Agent 侧内核 USB 判据的提权读面，两个整数参数 + 固定 argv + 输出上限/超时/截断非零退出），§4 强控制与测试清单同步）；v0.5（2026-09-16：§2 D2 事实勘误——`selftest` 只证 wrapper **自洽**，不证它具备热更新脚本将要调用的子命令；脚本头改为「selftest + 能力集合比对」双前置判据，wrapper 新增 `capabilities` 子命令，#2319）；v0.1（2026-09-11 初版，R14-F04 #1250 触发）；v0.2（2026-09-15：§1.2 事实勘误、§2 新增 D5、§4 偏差记录、§5 退役前置修订，#2133）；v0.3（2026-09-15：§5 Revisit #1 执行完毕——legacy 分支与哨兵删除、失败模式改 fail-closed、§4 回滚路径更新，#2180）；v0.4（2026-09-15：**转 Accepted**——R02 安全联审一稿已交付（#2206 / PR #2209，结论「建议接受、无阻断项」）；采纳 S1/O1/O2：§2 新增 D6 边界承担声明、D3 补信任边界措辞、§4 不变量补既有强控制与测试清单、§5 ③ 记评审交付与 S2/S3/O4 处置）
+- 待裁修订：§2 拟新增 D8（2026-11-07，#3892）——USB 切电子命令 `usb-power`，按 serial 查 root 属主映射文件后调用固定 argv 的 `uhubctl`；随 [ADR-0063](./ADR-0063-vbus-cycle-flash-without-adb.md) 一并裁定，裁定前 D8 不生效，裁定时本 ADR 升版。
+- 版本记录：v0.6（2026-09-26：§2 新增 D7——内核日志只读子命令 `read-kernel-log`（#2957：Agent 侧内核 USB 判据的提权读面，两个整数参数 + 固定 argv + 输出上限/超时/截断非零退出），§4 强控制与测试清单同步）；v0.5（2026-09-16：§2 D2 事实勘误——`selftest` 只证 wrapper **自洽**，不证它具备热更新脚本将要调用的子命令；脚本头改为「selftest + 能力集合比对」双前置判据，wrapper 新增 `capabilities` 子命令，#2319）；v0.1（2026-09-11 初版，R14-F04 #1250 触发）；v0.2（2026-09-15：§1.2 事实勘误、§2 新增 D5、§4 偏差记录、§5 退役前置修订，#2133）；v0.3（2026-09-15：§5 Revisit #1 执行完毕——legacy 分支与哨兵删除、失败模式改 fail-closed、§4 回滚路径更新，#2180）；v0.4（2026-09-15：**转 Accepted**——R02 安全联审一稿已交付（#2206 / PR #2209，结论「建议接受、无阻断项」）；采纳 S1/O1/O2：§2 新增 D6 边界承担声明、D3 补信任边界措辞、§4 不变量补既有强控制与测试清单、§5 ③ 记评审交付与 S2/S3/O4 处置）
 - 优先级：P1
 - 目标里程碑：M7
 - 日期：2026-09-11（v0.2 / v0.3 修订 2026-09-15；v0.4 修订 2026-09-15；v0.5 勘误 2026-09-16；v0.6 增补 2026-09-26）
@@ -136,11 +137,11 @@
   从结构上消除；代价是「进程启动前 1 小时以外的死亡」不再进 L1 latch，该形态由
   结果层 `usb_tree_empty`（#2902 + #2967 账实合取）承接。
 
-- **D8 USB 切电通道（v0.7 草案，#3892；随 ADR-0063 裁定后生效）**：wrapper 拟新增子命令
-  `usb-power --serial <serial> --action {on|off|cycle} [--delay <int>]`。规格以
+- **D8 USB 切电通道（待裁草案，#3892；随 ADR-0063 裁定后生效）**：wrapper 拟新增子命令
+  `usb-power --serial <serial> --expect-slot <hub_location>:<port> --action {on|off|cycle} [--delay <int>]`。规格以
   [ADR-0063](./ADR-0063-vbus-cycle-flash-without-adb.md) D1、D2 为准：槽位只从 root 属主的
-  `/etc/stp-agent/usb-power-slots.json` 按 serial 查得，调用方不能指定 Hub 位置或端口；固定 argv 调用
-  `/usr/sbin/uhubctl`，不经 shell，环境清空，60s 超时。sudoers 行不变（D6）。本条转为生效时，
+  `/etc/stp-agent/usb-power-slots.json` 按 serial 查得，wrapper 不得接受用来指定切电目标的 Hub 位置或端口参数（`--expect-slot` 只用于切电前比对，不一致即拒绝）；固定 argv 调用
+  `/usr/sbin/uhubctl`，不经 shell，环境清空，60s 超时，成功时回显实际槽位。安装链不得新增或修改 sudoers 行（D6）。本条转为生效时，
   §4 不变量第 2、3 条必须同批补上该子命令的强控制与测试文件。
 
 ## 3. 备选与否决
