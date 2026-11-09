@@ -75,8 +75,9 @@ def test_start_disk_subsystems_skips_watcher_when_disabled():
     assert result is None
     archiver.configure.assert_called_once()
     archiver.start.assert_called_once()
-    scan.return_value.configure.assert_called_once_with()
-    uscan.return_value.configure.assert_called_once_with()
+    # #3889：bootstrap 把已解析的 hdd_root 显式传给两个 scan runner，避免各自再解析一次。
+    scan.return_value.configure.assert_called_once_with(hdd_root="/tmp/hdd")
+    uscan.return_value.configure.assert_called_once_with(hdd_root="/tmp/hdd")
     upload.return_value.configure.assert_called_once_with()
     # #2845：根由 bootstrap 解析后显式传入，不靠组件内部再读一次 env
     assert event_uploader.configure.call_args.kwargs["nfs_root"] == "/tmp/cifs"

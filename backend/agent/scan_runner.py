@@ -24,21 +24,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Sequence
 
-from .aee.paths import get_aee_nfs_root
+from .aee.paths import get_aee_local_root, get_aee_nfs_root
 from .aee.scan_scope import (
     ScanReportMappingError, load_scan_events, report_mapping, scan_sources, stage_spill_inputs,
 )
 from .contracts.round_report_layout import round_report_dir
 from .device_platform import detect_device_platform
-
-try:
-    from backend.agent.aee.paths import get_aee_local_root
-except ImportError:
-    def get_aee_local_root() -> "Path":
-        raw = (os.getenv("STP_AEE_LOCAL_ROOT") or "").strip()
-        if raw:
-            return Path(raw)
-        return Path("/mnt/hdd/aee_events")
 
 try:
     from backend.agent.upload_manager import ShardRegistrationError
