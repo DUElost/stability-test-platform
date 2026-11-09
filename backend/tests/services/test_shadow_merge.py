@@ -81,7 +81,9 @@ def test_no_input_aggregate_and_mapping_mismatch(db_session, sample_host, tmp_pa
     assert merge_round(db_session, one.id, matcher=lambda _: (_ for _ in ()).throw(AssertionError())).merge_status == 'NO_INPUT'
     two, _ = setup_round(db_session, tmp_path, sample_host, round_no=2)
     Path(two.expected_set[0]['reports'][0]['mapping_uri']).write_text('{"rows":[]}')
-    assert merge_round(db_session, two.id, matcher=match).merge_summary['mapping_mismatched_reports'] == 1
+    summary = merge_round(db_session, two.id, matcher=match).merge_summary
+    assert summary['mapping_mismatched_reports'] == 1
+    assert summary['degraded_coverage'] == 0
     three, _ = setup_round(db_session, tmp_path, sample_host, round_no=3)
     ref = three.expected_set[0]['reports'][0]
     aggregate = Path(ref['storage_uri']).with_name('Result_org_dedup_org_123.xls')
@@ -89,6 +91,60 @@ def test_no_input_aggregate_and_mapping_mismatch(db_session, sample_host, tmp_pa
     three.expected_set = [{**three.expected_set[0], 'reports': [{**ref, 'storage_uri': str(aggregate)}]}]
     assert merge_round(db_session, three.id, matcher=lambda _: (_ for _ in ()).throw(AssertionError())).merge_status == 'OK'
     assert not db_session.scalars(select(IssueOccurrence)).all()
+
+
+@pytest.mark.parametrize(('field', 'bad_value'), [('sheet', 'different'), ('row', 123), ('path', '/other')])
+def test_mapping_join_mismatch_degrades_coverage(db_session, sample_host, tmp_path, field, bad_value):
+    from pathlib import Path
+    from unittest.mock import Mock
+    from backend.services.shadow_merge import merge_round
+
+    row, _ = setup_round(db_session, tmp_path, sample_host)
+    path = Path(row.expected_set[0]['reports'][0]['mapping_uri'])
+    mapping = json.loads(path.read_text())
+    mapping['rows'][0][field] = bad_value
+    path.write_text(json.dumps(mapping))
+
+    matcher = Mock(side_effect=match)
+    merged = merge_round(db_session, row.id, matcher=matcher)
+    assert merged.merge_status == 'OK'
+    assert merged.merge_summary['mapping_mismatched_reports'] == 1
+    assert merged.merge_summary['degraded_coverage'] == 1
+    assert merged.merge_summary['degraded_by_reason'] == {'mapping_mismatch': 1}
+    assert merged.merge_summary['new_occurrences'] == 0
+    matcher.assert_not_called()
+
+
+@pytest.mark.parametrize(('meta', 'versions'), [
+    (['foreign meta shape'], {'tool': None, 'rule': None, 'parsers': None}),
+    (
+        {'tool': {'version': '2.1.1', 'release': ['foreign']},
+         'rule': {'id': 'mtk-aee-dedup', 'version': ['foreign']},
+         'parsers': {'recognizeexception': '1', 'foreign': ['unknown']}, 'run': ['foreign']},
+        {'tool': {'version': '2.1.1'}, 'rule': {'id': 'mtk-aee-dedup'}, 'parsers': {'recognizeexception': '1'}},
+    ),
+])
+def test_unsupported_sidecar_keeps_only_safe_versions(db_session, sample_host, tmp_path, meta, versions):
+    from pathlib import Path
+    from unittest.mock import Mock
+    from backend.services.shadow_merge import merge_round
+
+    row, _ = setup_round(db_session, tmp_path, sample_host)
+    ref = row.expected_set[0]['reports'][0]
+    path = Path(ref['membership_uri'])
+    sidecar = json.loads(path.read_text())
+    sidecar.update(schema_version='2.0', meta=meta)
+    path.write_text(json.dumps(sidecar))
+
+    matcher = Mock(side_effect=match)
+    merged = merge_round(db_session, row.id, matcher=matcher)
+    assert merged.merge_status == 'OK'
+    assert merged.merge_next_retry_at is None
+    assert merged.merge_summary['degraded_coverage'] == 1
+    assert merged.merge_summary['degraded_by_reason'] == {'sidecar_unusable': 1}
+    assert merged.merge_summary['reports'] == [{'storage_uri': ref['storage_uri'], **versions}]
+    assert merged.merge_summary['new_occurrences'] == 0
+    matcher.assert_not_called()
 
 
 def test_tool_failure_rolls_back_facts_and_can_retry(db_session, sample_host, tmp_path, monkeypatch):

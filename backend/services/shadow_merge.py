@@ -63,8 +63,11 @@ def _ingest(db, row, matcher):
         report = read_report(ref)
         if report['status'] == 'AGGREGATE':
             continue
-        if report['events_unavailable'] or report['spill_unstaged'] or report['status'] == 'DEGRADED':
+        is_degraded = report['status'] == 'DEGRADED' or report['reason'] == 'mapping_mismatch'
+        if report['events_unavailable'] or report['spill_unstaged'] or is_degraded:
             summary['degraded_coverage'] += 1
+        if is_degraded:
+            degraded[report['reason']] += 1
         if report['events_unavailable']:
             degraded['events_unavailable'] += 1
         if report['spill_unstaged']:
@@ -79,8 +82,7 @@ def _ingest(db, row, matcher):
         if report['status'] == 'INVALID_MAPPING':
             summary['mapping_mismatched_reports'] += 1
             continue
-        if report['status'] == 'DEGRADED':
-            degraded[report['reason']] += 1
+        if is_degraded:
             continue
         for n, mapping in enumerate(report['rows'], 1):
             if report['members'][n]['branch'] == 'filtered':

@@ -48,9 +48,15 @@ G4 用事务级 advisory lock 串行化 MTK 写入，再按 PlanRun → scan_rou
 
 G4 从持久化 CLOSED、merge 未落定的轮次独立发现重试对象；#3875 将 settled 分区移出
 扫描候选后，G4 仍能重试，不重新推进该分区的扫描。影子开关关闭时入口不读库、不入队。
-只新增 scan_round 五列的一次迁移。Agent 只在影子轮上送 sidecar；MTK 映射增加同目录
-证据、重复 DLE 列表及 unmapped 原因，保留 #3720 拒绝判定。证据函数跳过符号链接，
+只新增 scan_round 五列的一次迁移。Agent 只在影子轮上送 sidecar。MTK 影子轮映射处理同 key
+重复 DLE，并写入同目录证据、重复 DLE 列表及 unmapped 原因。证据函数跳过符号链接，
 只查一个事件目录内的非空 dbg、mobilelog、已完成 bugreport zip，支持 correlated 布局。
+
+有 sidecar 且 mapping 的 sheet、row 或 path 对接失败时，同一报表同时计入
+`mapping_mismatched_reports` 和 `degraded_coverage`，原因是 `mapping_mismatch`。
+mapping 行数不符单独计入 `mapping_mismatched_reports`。降级 sidecar 的摘要只保留类型符合
+契约的工具、规则和解析器版本。报表降级时轮次可以正常完成为 OK。
+[复核裁定 6731915893](https://github.com/DUElost/stability-test-platform/issues/3800#issuecomment-6731915893)
 
 ## Alternatives
 
@@ -85,7 +91,14 @@ G4 从持久化 CLOSED、merge 未落定的轮次独立发现重试对象；#387
 - 本次受影响服务、G1、调度配置和读取契约集合 81 passed；SAQ 任务与 G3/G4 Agent 相关集 86 passed。
 - 修改后的同一个迁移在隔离空 Postgres 16 完成 upgrade head → downgrade -1 → upgrade head，
   五列存在/撤销/恢复、merge_attempts 非空默认 0 均核对。若集成 #3896 改父版本则重新验证。
-- 固定时钟和输入的 UploadManager 离线对照：现行报表、映射、分片 SHA-256 与 main 逐字节相同。
+- 早期的上传对照传入预制 mapping，未覆盖映射生成。用复核的固定时钟、XLS 和 DLE，
+  经真实 ScanRunner、report_mapping 和 UploadManager 重跑。现行分片的 mapping companion
+  恢复为 575 字节，XLS、mapping 和分片记录与 main 的复核基线逐字节相同。
+- 在 4af13fb14 复现了三种 mapping 键错配漏记降级，以及 sidecar 主版本 2.0 的数组 meta
+  使轮次 FAILED。修复后键错配各记一次 `mapping_mismatch`。数组 meta 只产生
+  `sidecar_unusable` 降级，轮次为 OK，无待重试时间。复核回放还验证了 1.99 的扩展字段兼容性。
+- 本轮相关套件及复核用例共 171 项通过。补充的现行映射字段断言单项通过，
+  `check:quick` 的 16 项门禁通过。
 - 本次 check:quick 16 gates passed；环境变量清单与 Ruff 通过。
 
 Run 1193 的 12 份 org.xls 只读副本保留在本机隔离目录。按 #3877 评论 6704816971、

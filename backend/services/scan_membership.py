@@ -14,10 +14,29 @@ import tempfile
 import xlrd
 
 
+def _version_summary(meta: object) -> dict:
+    """Keep only recognized version fields when a sidecar is unusable."""
+    if not isinstance(meta, dict):
+        return {}
+    summary = {}
+    for section, fields in (('tool', ('version',)), ('rule', ('id', 'version'))):
+        values = meta.get(section)
+        if isinstance(values, dict):
+            version = {key: values[key] for key in fields if isinstance(values.get(key), str)}
+            if version:
+                summary[section] = version
+    parsers = meta.get('parsers')
+    if isinstance(parsers, dict):
+        summary['parsers'] = {key: value for key, value in parsers.items()
+                              if isinstance(value, str) or value is None}
+    return summary
+
+
 def read_report(ref: dict) -> dict:
-    result = {'status': 'INVALID_MAPPING', 'reason': 'mapping_mismatch', 'groups': [],
+    result = {'status': 'INVALID_MAPPING', 'reason': None, 'groups': [],
               'rows': [], 'meta': {}, 'events_unavailable': False, 'spill_unstaged': []}
     report = Path(ref['storage_uri'])
+    membership_uri = ref.get('membership_uri')
     if not report.name.endswith('_org.xls'):
         return {**result, 'status': 'AGGREGATE'}
     try:
@@ -33,21 +52,25 @@ def read_report(ref: dict) -> dict:
         rows = mapping['rows']
         result.update(events_unavailable=mapping.get('events_unavailable', False),
                       spill_unstaged=mapping.get('spill_unstaged', []))
-        if len(rows) != len(paths) or any(
-            r['sheet'] != 'aeeexp' or r['row'] != i + 2 or r['path'] != paths[i]
+        if len(rows) != len(paths):
+            return result
+        if any(
+            r.get('sheet') != 'aeeexp' or r.get('row') != i + 2 or r.get('path') != paths[i]
             for i, r in enumerate(rows)
         ):
+            if membership_uri and Path(membership_uri).is_file():
+                result['reason'] = 'mapping_mismatch'
             return result
         result['rows'] = [{**r, 'serial': serials[i]} for i, r in enumerate(rows)]
     except (OSError, ValueError, KeyError, TypeError, IndexError, AttributeError, xlrd.XLRDError):
         return result
     result.update(status='DEGRADED', reason='sidecar_missing')
-    if not ref.get('membership_uri') or not Path(ref['membership_uri']).is_file():
+    if not membership_uri or not Path(membership_uri).is_file():
         return result
     result['reason'] = 'sidecar_unusable'
     try:
-        data = json.loads(Path(ref['membership_uri']).read_text(encoding='utf-8'))
-        result['meta'] = data.get('meta', {})
+        data = json.loads(Path(membership_uri).read_text(encoding='utf-8'))
+        result['meta'] = _version_summary(data.get('meta'))
         if data['schema'] != 'stp.scan_membership' or str(data['schema_version']).split('.')[0] != '1':
             return result
         if data['meta']['reports']['org_xls']['sha256'] != hashlib.sha256(report.read_bytes()).hexdigest():

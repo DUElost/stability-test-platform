@@ -19,7 +19,8 @@ def write_report(path, raw):
 
 
 @pytest.mark.parametrize('keys,expected', [(['k','k'], True), (['k','x'], False), (['k',None], False)])
-def test_duplicate_dle_mapping(tmp_path, keys, expected):
+@pytest.mark.parametrize('fact_round_id', [None, 7])
+def test_duplicate_dle_mapping(tmp_path, keys, expected, fact_round_id):
     root = tmp_path/'scan'
     event = root/'V1'/'SER1'/'aee_exp'/'db'
     event.mkdir(parents=True)
@@ -30,9 +31,11 @@ def test_duplicate_dle_mapping(tmp_path, keys, expected):
                     occurrence_key=k, detected_at=datetime(2026,1,1,tzinfo=timezone.utc).isoformat())
                for i,k in zip(['b','a'],keys,strict=True)]
     row = report_mapping(str(report), serials=['SER1'], sources=sources, scan_root=str(root),
-                         plan_run_id=1,host_id='h',platform='mtk')['rows'][0]
-    assert row['mapped'] is expected
-    if expected:
+                         plan_run_id=1, host_id='h', platform='mtk', fact_round_id=fact_round_id)['rows'][0]
+    assert row['mapped'] is (expected and fact_round_id is not None)
+    if fact_round_id is None:
+        assert 'unmapped_reason' not in row
+    elif expected:
         assert row['dle_id']=='a' and row['duplicate_dle_ids']==['b']
         assert row['evidence']=={'dblog':True,'mobilelog':False,'bugreport':False}
     else:

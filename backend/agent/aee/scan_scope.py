@@ -273,6 +273,7 @@ def report_mapping(
     ]
     root = Path(scan_root).resolve()
     allowed_serials = set(serials)
+    shadow_mtk = fact_round_id is not None and platform.lower() == "mtk"
     book = xlrd.open_workbook(xls_path, on_demand=True)
     rows = []
     try:
@@ -294,7 +295,7 @@ def report_mapping(
                 match = matches[0] if len(matches) == 1 else None
                 duplicate_ids = []
                 duplicate_ambiguous = False
-                if platform.lower() == "mtk" and len(matches) > 1:
+                if shadow_mtk and len(matches) > 1:
                     keys = {src.get("occurrence_key") for src in matches}
                     if len(keys) == 1 and all(src.get("occurrence_key") for src in matches):
                         def observation_order(src):
@@ -340,7 +341,7 @@ def report_mapping(
                         detail=f"scan report serial outside run at row {index + 1}",
                     )
                 extra = {}
-                if platform.lower() == "mtk":
+                if shadow_mtk:
                     if match:
                         extra["evidence"] = event_evidence(match["scan_path"])
                         extra["duplicate_dle_ids"] = duplicate_ids
