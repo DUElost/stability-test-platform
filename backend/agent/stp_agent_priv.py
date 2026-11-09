@@ -1409,7 +1409,9 @@ _SUBCOMMAND_CONTRACT = {
 # #3356：参数级能力标记（capabilities 在子命令行之外逐行输出）。旧 wrapper 只报
 # 子命令名，控制面远端脚本据此对**缺少新参数面**的 wrapper 在任何写动作之前
 # fail-closed（子命令级判据对「同名的 sync-env 缺新 flag」没有判别力）。
-_EXTRA_CAPABILITIES = ("sync-env/retired-keys",)
+# #3892：`usb-power/expect-slot` 标记 usb-power 实现了 `--expect-slot` 比对；
+# flash_firmware 1.4.0 在取锁前要求此标记（ADR-0063 D3 第 9 条）。
+_EXTRA_CAPABILITIES = ("sync-env/retired-keys", "usb-power/expect-slot")
 
 
 def _registered_subcommands(parser) -> list:

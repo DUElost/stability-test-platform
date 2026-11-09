@@ -123,7 +123,10 @@ def test_contract_and_capabilities_include_usb_power(wrapper, capsys):
     assert wrapper._validate_parser_contract(wrapper._build_parser()) == []
     assert "usb-power" in wrapper._SUBCOMMAND_CONTRACT
     wrapper.cmd_capabilities(None, None)
-    assert "usb-power" in capsys.readouterr().out.splitlines()
+    lines = capsys.readouterr().out.splitlines()
+    assert "usb-power" in lines
+    # ADR-0063 D2 第 6 条：参数级标记，脚本取锁前据此拒绝未实现 --expect-slot 的旧 wrapper
+    assert "usb-power/expect-slot" in lines
 
 
 # ── 纯函数校验 ───────────────────────────────────────────────────────────

@@ -18,7 +18,7 @@ Class: feature
 - 文件、父目录、`/usr/sbin/uhubctl` 都必须 root 属主，且不得 group/other 可写。文件以 `O_NOFOLLOW` 打开，大小上限 64 KiB。
 - Hub 位置必须解析到 `/sys/devices` 下的同名真实目录，判定沿用 `is_kernel_usb_device_path`。
 - argv 固定为 `uhubctl -l -p -a [-d]`，不经 shell；环境只留 `LC_ALL` 和 `PATH`；超时 60s。
-- 执行失败和超时都 exit 3，并带 `STP_USB_POWER_*` 标记；参数被拒 exit 2。`capabilities` 与 selftest 契约表都已加入 `usb-power`。
+- 执行失败和超时都 exit 3，并带 `STP_USB_POWER_*` 标记；参数被拒 exit 2。`capabilities` 与 selftest 契约表都已加入 `usb-power`；`capabilities` 另报参数级标记 `usb-power/expect-slot`，供脚本在取锁前识别未实现 `--expect-slot` 的旧 wrapper。
 - 新增 `tools/ansible/playbooks/ensure_usb_power_slots.yml`：
   - 从 host_vars `stp_usb_power_slots` 写映射文件（root:root 0644），并安装 `uhubctl`；
   - 校验已装的 wrapper 具备 `usb-power`。wrapper 本体仍由 `update_agent.yml` 下发。
