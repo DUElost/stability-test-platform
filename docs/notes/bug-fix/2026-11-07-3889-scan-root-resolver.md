@@ -75,7 +75,9 @@ no-regression 守卫通过：
 - bootstrap 一次解析、ScanRunner 与 `LocalDiskMonitor` 拿到同一 `hdd_root`、
   `UnisocScanRunner.configure` 同样收到；
 - 静态守卫：`backend/agent` 生产代码（不含 tests）仅 `aee/paths.py` 定义
-  `get_aee_local_root`，且 `scan_runner.py` 用相对导入、无本地 `def`。
+  `get_aee_local_root`；`scan_runner.py` 侧否定断言经
+  `SourceGuard.of_module(...).anchored("from .aee.paths import get_aee_local_root")
+  .assert_absent("def get_aee_local_root")`（#2639），避免锚点漂移时恒真。
 
 复核者回退变异（把实现改回旧行为）可让 3 条回归测试再次失败；`docs/notes/` 不在
 ADR-0059 写作约定适用范围。no-regression 守卫另有隔离变异自证：把
@@ -99,6 +101,9 @@ ADR-0059 写作约定适用范围。no-regression 守卫另有隔离变异自证
   消除测试专用环境变量；`env_inventory.py --check` 复跑 `[OK]`（277 个读取名）。
 - Python 3.7 / 3.8 兼容性以 CI 为准（本单新增代码仅用标准库 `subprocess`/`json`/
   `unittest.mock`/`re`，`from __future__ import annotations` 维持旧解释器兼容）。
+- CI 修复（`pr-agent-tests` run 42519812106）：静态否定断言改为 `SourceGuard` 后，
+  `tests/test_source_scan_anchor_ratchet.py` + `backend/agent/tests/test_scan_root_resolver_3889.py`
+  **14 passed**；未改生产代码、未下调棘轮基线。
 
 ## Revisit
 

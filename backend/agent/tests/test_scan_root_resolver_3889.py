@@ -198,10 +198,15 @@ def test_only_one_get_aee_local_root_definition_in_agent_sources():
     assert hits[0][0] == "backend/agent/aee/paths.py", (
         "唯一的 get_aee_local_root 必须位于 aee/paths.py，实际：" + repr(hits)
     )
-    scan_runner_src = (AGENT_DIR / "scan_runner.py").read_text(encoding="utf-8")
-    assert "def get_aee_local_root" not in scan_runner_src, (
-        "scan_runner.py 不得再重写 get_aee_local_root，只能从 .aee.paths 导入"
+
+    # 正锚点：scan_runner 仍委托正式解析器；否定：不得回潮本地重写（#2639 SourceGuard）
+    import backend.agent.scan_runner as scan_runner
+    from tools.dev.source_anchor import SourceGuard
+
+    guard = SourceGuard.of_module(scan_runner).anchored(
+        "from .aee.paths import get_aee_local_root",
     )
-    assert "from .aee.paths import get_aee_local_root" in scan_runner_src, (
-        "scan_runner.py 必须用相对导入委托正式解析器"
+    guard.assert_absent(
+        "def get_aee_local_root",
+        why="#3889 scan_runner 不得再重写 get_aee_local_root，只能从 .aee.paths 导入",
     )
