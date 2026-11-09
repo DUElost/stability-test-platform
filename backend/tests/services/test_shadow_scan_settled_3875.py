@@ -71,7 +71,8 @@ def test_settled_exits_candidates_and_all_entry_points_do_no_manifest_io(shadow_
     assert shadow.prepare_shadow_scan(run_id, final.id) == []
     assert len(_delivery_rounds(factory, run_id)) == 1
     no_io.assert_not_called()
-    queued.assert_not_called()
+    # G4 独立调度已关闭轮的 merge，settled 退出的是扫描候选。
+    assert all(job.args == ("shadow_merge_task",) for job in queued.call_args_list)
 
 
 @pytest.mark.parametrize("condition", ["no_final", "open_final", "wait", "open_supplement"])

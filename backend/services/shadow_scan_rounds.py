@@ -409,7 +409,7 @@ def prepare_shadow_scan(plan_run_id, fact_round_id) -> list[ShadowScanDispatch]:
 
 
 def reject_shadow_scan_dispatch(plan_run_id, fact_round_id, dispatch: ShadowScanDispatch) -> None:
-    """Release this attempt after the send guard rejects its connection."""
+    """Record the rejection for this reservation and preserve its retry deadline."""
     logger.warning(
         "shadow_scan_capability_unverified_at_send plan_run=%d fact_round_id=%d host=%s platform=%s",
         plan_run_id, fact_round_id, dispatch.host_id, _PLATFORM,
@@ -433,7 +433,6 @@ def reject_shadow_scan_dispatch(plan_run_id, fact_round_id, dispatch: ShadowScan
                 and unit["coverage"] not in _COVERED
             ):
                 unit.update(coverage=COVERAGE_MISSING, reason="capability_unverified")
-                unit.pop("last_dispatched_at")
                 facts.record_scan_round_coverage(db, round_id=row.id, coverage=coverage)
                 db.commit()
                 return

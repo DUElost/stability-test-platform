@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from sqlalchemy import event
 
 from backend.models.host import Host
 from backend.realtime import agent_sid_registry, socketio_redis, socketio_server
@@ -62,7 +63,7 @@ def _assert_unverified(factory, run_id, host_id):
     unit = next(unit for unit in row.expected_set if unit["host_id"] == host_id)
     assert unit["coverage"] == "MISSING"
     assert unit["reason"] == "capability_unverified"
-    assert "last_dispatched_at" not in unit
+    assert unit.get("last_dispatched_at")
 
 
 @pytest.mark.asyncio
@@ -175,7 +176,7 @@ async def test_capable_reconnect_dispatches_again_within_same_round(
 
     await namespace.on_disconnect("sid-old")
     await _connect(namespace, host_id, "sid-new", capable=True)
-    clock.now.return_value = now + timedelta(seconds=120)
+    clock.now.return_value = now + timedelta(seconds=shadow._SCAN_TASK_SAQ_TIMEOUT)
     queued.reset_mock()
     shadow.sweep_shadow_scan_rounds(now=clock.now.return_value)
     queued.assert_called_once()
@@ -219,3 +220,69 @@ async def test_shadow_requires_local_sid_but_current_scan_can_use_room(
         "control", {"command": "scan_now", "payload": payload},
         namespace="/agent", timeout=3.0, room=f"agent:{host_id}",
     )
+
+
+@pytest.mark.asyncio
+async def test_missing_local_sid_backs_off_writes_and_retries_after_capable_reconnect(
+    shadow_env, shadow_socket, sample_host, client, monkeypatch,
+):
+    factory, run_id, _, queued, settings = shadow_env
+    namespace, send = shadow_socket
+    host_id = sample_host.id
+    _scan_scope(monkeypatch, host_id)
+    desired = artifact_digest.compute_desired_artifact_digest()
+    _heartbeat(client, host_id, desired, "remote-agent")
+    now = datetime.now(timezone.utc)
+    clock = Mock(wraps=datetime)
+    clock.now.return_value = now
+    monkeypatch.setattr(shadow, "datetime", clock)
+    timeout = shadow._SCAN_TASK_SAQ_TIMEOUT
+    poll = settings.auto_archive_poll_interval_seconds
+    shadow.sweep_shadow_scan_rounds(now=now)
+    row, = _rows(factory, run_id)
+    updates = []
+
+    def count_coverage_updates(conn, cursor, statement, parameters, context, executemany):
+        if statement.startswith("UPDATE scan_round SET ") and "expected_set" in statement.partition(" WHERE ")[0]:
+            updates.append(statement)
+
+    engine = factory.kw["bind"]
+    event.listen(engine, "before_cursor_execute", count_coverage_updates)
+    try:
+        await saq_tasks.scan_task({}, plan_run_id=run_id, fact_round_id=row.id)
+        for elapsed in range(poll, timeout, poll):
+            clock.now.return_value = now + timedelta(seconds=elapsed)
+            queued.reset_mock()
+            shadow.sweep_shadow_scan_rounds(now=clock.now.return_value)
+            if queued.called:
+                queued.assert_called_once()
+                assert queued.call_args.args == ("scan_task",)
+                assert queued.call_args.kwargs["fact_round_id"] == row.id
+                await saq_tasks.scan_task({}, plan_run_id=run_id, fact_round_id=row.id)
+        assert len(updates) <= 2
+        send.assert_not_awaited()
+        blocked, = _rows(factory, run_id)
+        assert blocked.expected_set[0]["coverage"] == "MISSING"
+        assert blocked.expected_set[0]["reason"] == "capability_unverified"
+        assert blocked.expected_set[0]["last_dispatched_at"] == now.isoformat()
+
+        await _connect(namespace, host_id, "sid-local", capable=True)
+        clock.now.return_value = now + timedelta(seconds=timeout - 1)
+        queued.reset_mock()
+        shadow.sweep_shadow_scan_rounds(now=clock.now.return_value)
+        queued.assert_not_called()
+        assert len(updates) <= 2
+    finally:
+        event.remove(engine, "before_cursor_execute", count_coverage_updates)
+
+    clock.now.return_value = now + timedelta(seconds=timeout)
+    shadow.sweep_shadow_scan_rounds(now=clock.now.return_value)
+    queued.assert_called_once()
+    assert queued.call_args.kwargs["fact_round_id"] == row.id
+    await saq_tasks.scan_task({}, plan_run_id=run_id, fact_round_id=row.id)
+    send.assert_awaited_once()
+    assert send.await_args.kwargs["to"] == "sid-local"
+    retried, = _rows(factory, run_id)
+    assert retried.id == row.id
+    assert "reason" not in retried.expected_set[0]
+    assert retried.expected_set[0]["last_dispatched_at"] == clock.now.return_value.isoformat()

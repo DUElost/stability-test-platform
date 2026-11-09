@@ -220,7 +220,11 @@ class AgentNamespace(socketio.AsyncNamespace):
             else frozenset()
         )
         async with self._lock:
-            self._host_to_sid[str(host_id)] = sid
+            host_key = str(host_id)
+            previous_sid = self._host_to_sid.get(host_key)
+            if previous_sid is not None and previous_sid != sid:
+                self._sid_capabilities.pop(previous_sid, None)
+            self._host_to_sid[host_key] = sid
             self._sid_capabilities[sid] = declared
 
         await self.enter_room(sid, f"agent:{host_id}")

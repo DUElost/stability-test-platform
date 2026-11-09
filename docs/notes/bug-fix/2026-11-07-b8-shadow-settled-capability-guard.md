@@ -36,10 +36,12 @@ Class: bug-fix
 
 Agent 在 Socket.IO 握手声明 `capabilities: ["scan_round_v1"]`。最终发送资格取决于
 目标本地 SID 的声明。发送使用同一个 SID，并绕过 Redis 适配器。Agent 断开时清除该 SID 的声明。
-缺少本地 SID 或声明时，控制面在轮次锁内写入 `MISSING / capability_unverified`，
-清除该次预约，并记录 `shadow_scan_capability_unverified_at_send`。
-预筛失败不写预约。发送被拒绝后只清除与本次匹配的预约，保留已关闭轮次和并发更新。
-host 达标后可以在同一轮恢复下发，清除缺失原因。收到有效报表后覆盖变为 `RECEIVED`。
+新 SID 接管 host 时，控制面在更新 host 映射的同一把锁内删除旧 SID 的声明。
+按 [v1.23 分诊更正](https://github.com/DUElost/stability-test-platform/issues/3800#issuecomment-6736794195)，
+缺少本地 SID 或声明时，控制面在轮次锁内将匹配的预约记为 `MISSING / capability_unverified`，
+保留 `last_dispatched_at` 并记录 `shadow_scan_capability_unverified_at_send`。本次预约按 ACK 超时口径退避，
+旧拒绝只影响与其时间匹配的预约。带声明重连后，host 在下一次退避到期时恢复同轮下发并清除 reason。
+预筛失败仍在预约之前判定。收到有效报表后覆盖变为 `RECEIVED`。
 
 摘要列的既有读者（例如漂移显示）仍沿用空报保留旧值的语义。
 每次 Agent 载荷变化都会使尚未同步的主机暂时缺失；这是规划者裁定接受的保守行为。
@@ -70,10 +72,13 @@ Agent 在影子报表文件、映射与清单写入完成之后记录 `shadow_ro
   摘要被拒绝、在线与同次心跳约束，以及现行命令不经过守卫。
 - v1.23 测试覆盖读到摘要快照后接管连接、等待另一台 ACK 时接管连接、旧 Agent 先连后发心跳、
   有能力的 Agent 重连后同轮恢复，以及无本地 SID 时影子拒绝、现行仍可通过 room 发送。
+- 分诊回归验证 B 接管后 A 的能力条目立即删除。无本地 SID 的一个退避窗口内，实际
+  `expected_set` UPDATE 至多两次，带声明重连在下一个退避点恢复同轮下发。
 - Agent 测试验证连接握手声明 `scan_round_v1`。
 - 同一反例中，settled 后 Agent 真实上送并记日志、计数，打桩断言控制面不读取任何轮次清单，
   不重开分区；Agent 测试另覆盖失败不计数、现行报表不计数及心跳接线。
-- 临时 PostgreSQL 17 回放迁移链，验证存量行初始为空、可写 settled 时间、降级保留存量行。
+- 临时 PostgreSQL 17 从空库升级，`downgrade -1` 停在 G4 `b8g4a719c203` 并保留 G4 列。
+  重新升级后验证存量分区及其模式保留，settled 时间初始为空并可写入。
 - U9 历史迁移往返测试按反射得到的旧 `host` schema 建立夹具，避免在降级后的表中插入当前
   ORM 的新增列；保留原有租约到期边界与幂等验证。本单不为此改动历史迁移或增加迁移。
 - 已执行的命令与结果在 PR 中记录；未完成的项目明确标 pending。
@@ -81,4 +86,6 @@ Agent 在影子报表文件、映射与清单写入完成之后记录 `shadow_ro
 ## Revisit
 
 若需要控制面实时感知报表到达，由规划者另立接收回执单元，不恢复对 settled 分区的轮询。
+当前 SAQ worker 与 Socket.IO 同进程。将 worker 拆到独立进程时，本地 SID 检查会把影子发送
+判为 `MISSING / capability_unverified`，影子轮需要另行接入发送连接所在进程。
 Agent 改动与 G4、#3889 按 v1.23 一起滚动。机队全部声明能力后，按批次人工门禁决定影子激活。

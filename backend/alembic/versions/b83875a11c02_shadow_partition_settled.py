@@ -1,14 +1,14 @@
 """#3875: persist the irreversible shadow partition exit.
 
 Revision ID: b83875a11c02
-Revises: b8g1c4a7d2e9
+Revises: b8g4a719c203
 """
 
 from alembic import op
 import sqlalchemy as sa
 
 revision = "b83875a11c02"
-down_revision = "b8g1c4a7d2e9"
+down_revision = "b8g4a719c203"
 branch_labels = None
 depends_on = None
 
