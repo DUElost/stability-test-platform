@@ -1,5 +1,33 @@
 """Flash firmware via SP Flash Tool (MTK platform).
 
+v1.4.0（#3892 / ADR-0063 D3）：新增 `trigger_mode`，缺省 `adb_reboot` 与 1.3.20 逐项
+一致（结果 metrics 多一个 `trigger_mode` 键）。`vbus_cycle` 给**关机、没有 ADB** 的
+设备用：经可控 USB Hub 单口切 VBUS，让设备上电最初几秒的 BROM 窗口落进工具扫描。
+  - 取锁前三道闸，任一不过直接失败且不做任何切电动作：本机映射
+    `/etc/stp-agent/usb-power-slots.json` 里有本 serial 的槽位；wrapper
+    `capabilities` 含 `usb-power`；设备已关机——槽位口上没有除可刷态与关机态
+    （`0e8d:2046`，Owner 现场 lsusb）之外的 USB 枚举
+    （开机态断电再上电不经过 BROM，工具抓不到刷机口；开机但没开 ADB 的设备只能
+    在 USB 层识别）。锁内切电前再复核一次。
+  - 前置关机：adb `device` 态的设备，取锁前先核对它确实在映射槽位口上；取锁后、
+    第一次切电前 `adb reboot -p`，等它从 adb 消失且槽位口回到可刷态或关机态
+    （`vbus_poweroff_timeout_seconds`）。只有 unauthorized（adb 关机与重启都做
+    不到）直接拒绝，offline 等其它状态进切电流程（Owner 2026-11-07 裁定）。
+  - 每次断电都核对 wrapper 回显的实际槽位：与脚本读到的不一致（映射在两次读之间
+    被改写）即停手，不再做任何切电。
+  - 机型：关机读不到 `ro.product.model`，无 `firmware_dir` 时必须由步骤参数
+    `model` 声明；路由其余判据不变，刷后回读核对，声明错判失败。
+  - 锁内每次尝试：断电 → 等 `vbus_off_settle_seconds` → 起工具 → 就绪回调里上电
+    （不发 adb reboot）。门控与 V6 `-p` 目标口取自槽位 `<hub_location>.<port>`，
+    不按 serial 反查。上电后 `vbus_brom_timeout_seconds` 内没捕获到 BROM → 杀工具、
+    下一次尝试重新切电；绑错口仍立即终止不重试。
+  - 刷后锁内：开机到 ADB（boot_completed=1）→ boot 稳定 → 跳过 OOBE（与
+    oobe_skip 同配方，脚本内实现）→ 版本核验，各阶段独立硬超时；
+    `verify_version=false` 或无目标版本时拒绝 vbus。
+  - 上电后任一失败、异常或 SIGTERM/SIGINT/SIGHUP，都在交出锁前对本槽位断电
+    隔离；只有全链成功才保持供电。结果带 `vbus` 段（槽位、切电记录、阶段耗时、
+    是否隔离）。
+
 ⚠ v1.3.20（#3688 / run 921 事故）：**V6 刷机必须先确定"操作的是哪个物理 USB 口"**。
 三处收紧，全部只在 `tool_generation=v6` 且 Linux 上默认生效，**V5 分支零变化**：
   1. 目标身份 fail-closed：按 serial 反查 sysfs 端口查不到、且 adb 状态不是
@@ -138,6 +166,20 @@ STP_STEP_PARAMS schema:
     gate_pid_scope          : str  (optional; "brom"=只压制可刷态口（v6 默认），
                           "full"=沿用历史全量集合（v5 默认，含 201c）；
                           env STP_FLASH_GATE_PID_SCOPE)
+    trigger_mode            : str  (optional, default "adb_reboot"; v1.4.0。
+                          "vbus_cycle" = 关机设备经 usb-power 切电触发 BROM，
+                          要求 require_port_binding=true（V6 + Linux）；
+                          其余取值 fail-fast)
+    model                   : str  (optional; 仅 vbus_cycle 且无 firmware_dir 时
+                          必填：声明机型，代替 adb 读 ro.product.model)
+    vbus_off_settle_seconds : int  (optional, default 12, 10..30; 断电后等待)
+    vbus_poweroff_timeout_seconds : int (optional, default 60; adb 在线设备前置
+                          `adb reboot -p` 后等它关机的上限)
+    vbus_brom_timeout_seconds   : int (optional, default 120; 上电后 BROM 捕获上限)
+    vbus_boot_timeout_seconds   : int (optional, default 300; 刷后开机到 ADB 上限)
+    vbus_oobe_timeout_seconds   : int (optional, default 60; 跳过 OOBE 上限)
+    vbus_verify_timeout_seconds : int (optional, default 60; 版本核验上限)
+                          （以上 vbus_* 越界直接拒绝，不夹逼；只在 vbus_cycle 生效）
     flash_port              : str  (optional; env STP_FLASH_PORT。运维显式指定
                           sysfs 目标口（如 `1-8` / `1-5.2.3`），用于设备已卡在
                           BROM/preloader、sysfs 读不到 serial 的救砖路径。
@@ -383,9 +425,12 @@ class FlashToolAborted(RuntimeError):
     再去抢一次别人的手机。
     """
 
-    def __init__(self, reason: str) -> None:
+    def __init__(self, reason: str, kind: str = "port-mismatch") -> None:
         super().__init__(reason)
         self.reason = reason
+        # v1.4.0（#3892）：vbus_cycle 的 BROM 捕获超时也走「杀树上抛」，但它
+        # 可以重试（再切一次电）；port-mismatch 仍然立即终止尝试环。
+        self.kind = kind
 
 
 def _parse_bound_port(line: str) -> "str | None":
@@ -922,6 +967,7 @@ def _run_flash_tool_with_progress(
     on_percent: "callable",
     on_running: "callable | None" = None,
     abort_check: "callable | None" = None,
+    poll_check: "callable | None" = None,
 ) -> "tuple[str, int]":
     """Popen + 双 reader 线程跑 flash_tool，逐行喂给阶段/进度解析。
 
@@ -939,6 +985,11 @@ def _run_flash_tool_with_progress(
     几秒，等进程退出后再看 stdout 判失败，DA 已经发进邻机了（run 921 实况）。
     回调必须无副作用且快；判据自身异常一律按「不中止」处理——解析缺陷不得放大
     成刷机中断。
+
+    poll_check（v1.4.0 / #3892）：轮询环每秒调用一次，返回 ``(kind, reason)``
+    就杀树并以 ``FlashToolAborted(reason, kind)`` 上抛。用途是「工具一行都不
+    打时也要能判 BROM 捕获超时」——abort_check 只在有输出时才被调用。缺省
+    None，此前各版本的调用方行为不变。
     """
     proc = subprocess.Popen(
         cmd,
@@ -1076,6 +1127,15 @@ def _run_flash_tool_with_progress(
                         "拒绝进入下一次尝试，避免与未死实例并发抢刷"
                     )
                 raise subprocess.TimeoutExpired([str(cmd)], timeout)
+            if poll_check is not None and "reason" not in aborted:
+                try:
+                    verdict = poll_check()
+                except Exception:
+                    verdict = None
+                if verdict:
+                    aborted["kind"], aborted["reason"] = verdict
+                    _stop_tree()
+                    break
             time.sleep(1)
         proc.wait(timeout=10)
     finally:
@@ -1084,7 +1144,8 @@ def _run_flash_tool_with_progress(
     if "reason" in aborted:
         # 工具已被杀掉，绝不能按「正常退出」往下判 verdict：绑错口的实例可能
         # 已经收到 DA，而 stdout 里未必有 FAIL 字样。
-        raise FlashToolAborted(aborted["reason"])
+        raise FlashToolAborted(aborted["reason"],
+                               aborted.get("kind", "port-mismatch"))
     return "".join(collected), proc.returncode
 
 
@@ -1707,14 +1768,21 @@ def _wait_model_ready(
 
 def _resolve_by_fingerprint(
     args: dict, serial: str, adb_path: str,
+    model_override: "str | None" = None,
 ) -> "tuple[dict | None, str | None]":
-    ready_wait = args.get("model_ready_wait_seconds")
-    try:
-        ready_wait = int(ready_wait) if ready_wait is not None else 90
-    except (TypeError, ValueError):
-        ready_wait = 90
-    model = (_adb_getprop("ro.product.model", adb_path, serial)
-             or _wait_model_ready(serial, adb_path, ready_wait))
+    # v1.4.0（#3892）：vbus_cycle 的目标机关机、读不到 adb，机型由步骤参数
+    # `model` 声明（model_override）；其余路由判据（族表 / latest.json / manifest
+    # models 白名单 / 版本目录一致）与指纹路由逐项相同。缺省 None 时行为不变。
+    if model_override:
+        model = model_override
+    else:
+        ready_wait = args.get("model_ready_wait_seconds")
+        try:
+            ready_wait = int(ready_wait) if ready_wait is not None else 90
+        except (TypeError, ValueError):
+            ready_wait = 90
+        model = (_adb_getprop("ro.product.model", adb_path, serial)
+                 or _wait_model_ready(serial, adb_path, ready_wait))
     if not model:
         return None, (
             "fingerprint routing failed: cannot read ro.product.model via adb "
@@ -1799,7 +1867,7 @@ def _resolve_by_fingerprint(
         flash_xml_file = None
 
     route = {
-        "decided_by": "fingerprint",
+        "decided_by": "declared_model" if model_override else "fingerprint",
         "model": model,
         "family": family,
         "version": manifest_version,
@@ -1969,15 +2037,433 @@ def _wait_boot_stable(
     return report
 
 
+# ── v1.4.0（#3892 / ADR-0063 D3）：vbus_cycle 触发 ─────────────────────
+#
+# 目标机关机、没有 ADB 时，脚本无法 `adb reboot` 把它送进 BROM。可控 USB Hub
+# 能单口切 VBUS：断电 → 起工具扫描 → 上电，设备上电最初几秒的 BROM 窗口就落在
+# 工具的观测里。切电只经 stp-agent-priv 的 `usb-power` 窄面（ADR-0037 待裁 D8），
+# 槽位只从 root 属主的主机本地映射文件读（ADR-0063 D1）——脚本不接受步骤参数
+# 里的 hub 位置或端口号，调用方无从指定任意一个口去断电。
+TRIGGER_ADB_REBOOT = "adb_reboot"
+TRIGGER_VBUS_CYCLE = "vbus_cycle"
+_TRIGGER_MODES = (TRIGGER_ADB_REBOOT, TRIGGER_VBUS_CYCLE)
+_VBUS_SLOTS_PATH = "/etc/stp-agent/usb-power-slots.json"
+_VBUS_MAX_PORT = 16
+_VBUS_SETTLE_RANGE = (10, 30)
+_VBUS_STAGE_TIMEOUT_MAX = 3600
+#: 关机（插着 USB）态的 MTK PID。Owner 2026-11-07 现场 lsusb：关机的 MLD-LX3 在
+#: 槽位口上呈现 `0e8d:2046`，`adb devices` 为空。与 `_BROM_GATE_PIDS` 合起来就是
+#: 「可以切电」的 USB 形态；其它枚举一律按开机态拒绝。
+_VBUS_POWERED_OFF_PIDS = {"2046"}
+_SUW_PACKAGE = "com.google.android.setupwizard"
+
+
+def _resolve_trigger_mode(args: dict) -> "tuple[str | None, str | None]":
+    """`trigger_mode` 闭集：缺省 adb_reboot；未知取值 fail-fast，不回落。"""
+    raw = str(args.get("trigger_mode") or "").strip().lower()
+    if not raw:
+        return TRIGGER_ADB_REBOOT, None
+    if raw not in _TRIGGER_MODES:
+        return None, (
+            f"unknown trigger_mode {raw!r}; expected one of {list(_TRIGGER_MODES)}")
+    return raw, None
+
+
+def _vbus_int_param(key: str, value, default: int,
+                    lo: int, hi: int) -> "tuple[int | None, str | None]":
+    if value is None or value == "":
+        return default, None
+    if isinstance(value, bool):
+        return None, f"{key} must be an integer in [{lo}, {hi}], got {value!r}"
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None, f"{key} must be an integer in [{lo}, {hi}], got {value!r}"
+    if not lo <= parsed <= hi:
+        return None, f"{key} must be an integer in [{lo}, {hi}], got {parsed}"
+    return parsed, None
+
+
+def _vbus_params(args: dict) -> "tuple[dict | None, str | None]":
+    """vbus_cycle 参数：越界直接拒绝（不夹逼——夹逼会把手滑写成"能跑"）。
+
+    各阶段硬超时缺省值见 ADR-0063 D3 第 7 条；写包阶段沿用 timeout_seconds。
+    键逐个字面读取：参数说明登记表的源码抽取只认 ``args.get("<键>")`` 形态。
+    """
+    hi = _VBUS_STAGE_TIMEOUT_MAX
+    specs = (
+        ("vbus_off_settle_seconds", args.get("vbus_off_settle_seconds"), 12,
+         *_VBUS_SETTLE_RANGE),
+        ("vbus_poweroff_timeout_seconds", args.get("vbus_poweroff_timeout_seconds"),
+         60, 1, hi),
+        ("vbus_brom_timeout_seconds", args.get("vbus_brom_timeout_seconds"), 120, 1, hi),
+        ("vbus_boot_timeout_seconds", args.get("vbus_boot_timeout_seconds"), 300, 1, hi),
+        ("vbus_oobe_timeout_seconds", args.get("vbus_oobe_timeout_seconds"), 60, 1, hi),
+        ("vbus_verify_timeout_seconds", args.get("vbus_verify_timeout_seconds"), 60, 1, hi),
+    )
+    params: dict = {}
+    for key, value, default, lo, top in specs:
+        parsed, err = _vbus_int_param(key, value, default, lo, top)
+        if err:
+            return None, err
+        params[key[len("vbus_"):]] = parsed
+    return params, None
+
+
+def _load_vbus_slot(serial: str, path: str = _VBUS_SLOTS_PATH) -> "tuple[dict | None, str | None]":
+    """只读查本机槽位映射。判据与 wrapper 同口径：整份文件有一处不合法就拒绝。
+
+    这里不做属主校验——真正的信任边界在 wrapper（它按 root 属主重读同一文件）；
+    脚本读它只为两件事：取锁前确认「这台能切电」，以及取门控目标口。
+    """
+    if not serial:
+        return None, "vbus_cycle requires STP_DEVICE_SERIAL"
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            body = json.load(handle)
+    except FileNotFoundError:
+        return None, f"usb power slot map not found: {path}（本机未登记可切电槽位）"
+    except (OSError, ValueError) as exc:
+        return None, f"usb power slot map unreadable: {path}: {exc}"
+    if not isinstance(body, dict) or body.get("schema") != 1 \
+            or not isinstance(body.get("slots"), list):
+        return None, f"usb power slot map schema invalid: {path}"
+    seen_serials: set = set()
+    seen_slots: set = set()
+    found: "dict | None" = None
+    for row in body["slots"]:
+        if not isinstance(row, dict):
+            return None, f"usb power slot map row invalid: {row!r}"
+        row_serial = row.get("serial")
+        location = row.get("hub_location")
+        port = row.get("port")
+        if not isinstance(row_serial, str) or not row_serial \
+                or not isinstance(location, str) or not _PORT_PATH_RE.match(location) \
+                or isinstance(port, bool) or not isinstance(port, int) \
+                or not 1 <= port <= _VBUS_MAX_PORT:
+            return None, f"usb power slot map row invalid: {row!r}"
+        if row_serial in seen_serials or (location, port) in seen_slots:
+            return None, (
+                f"usb power slot map has duplicate serial or slot: {row!r}；"
+                "整份映射拒绝使用")
+        seen_serials.add(row_serial)
+        seen_slots.add((location, port))
+        if row_serial == serial:
+            found = {"hub_location": location, "port": port,
+                     "gate_port": f"{location}.{port}"}
+    if found is None:
+        return None, f"serial {serial} has no usb power slot in {path}"
+    return found, None
+
+
+def _vbus_port_powered_on(gate_port: str, base: str = _SYSFS_USB_BASE) -> "str | None":
+    """槽位口上已有 USB 枚举且不在可刷态 → 返回描述（= 设备在开机态）；否则 None。
+
+    Owner 2026-11-07：VBUS 方案的前提是设备已关机。开机态的手机断电再上电不会
+    经过 BROM，工具抓不到刷机口；而开机但没开 ADB 的设备在 adb 那边看不见，只能
+    在 USB 层识别。已在 BROM/preloader 可刷态（`_BROM_GATE_PIDS`）或关机态
+    （`_VBUS_POWERED_OFF_PIDS`，现场实测 2046）的 MTK 口放行。
+    """
+    vid = _sysfs_read(os.path.join(base, gate_port, "idVendor"))
+    if vid is None:
+        return None
+    pid = _sysfs_read(os.path.join(base, gate_port, "idProduct")) or "?"
+    if vid.lower() == _MTK_VENDOR_ID and (
+            pid.lower() in _BROM_GATE_PIDS or pid.lower() in _VBUS_POWERED_OFF_PIDS):
+        return None
+    return f"{vid}:{pid}"
+
+
+def _vbus_adb_power_off(serial: str, adb_path: str, gate_port: str, timeout: int,
+                       base: str = _SYSFS_USB_BASE,
+                       poll_interval: float = 3.0) -> dict:
+    """前置关机：ADB 可控（device 态）的设备 `adb reboot -p`，等它从 adb 消失且槽位口
+    不再呈现开机态（可刷态与关机态 2046 都算已关机）。调用方必须持有主机锁。
+
+    Owner 2026-11-07：「设备已关机」这个前提可以由前置动作满足，但只限能用命令
+    达成的设备；unauthorized 这类命令不可达的不在此列（调用方直接拒绝）。
+    返回 {"ok", "rc", "seconds", "last_state", "occupant"}，永不抛异常。
+    """
+    started = time.monotonic()
+    report: dict = {"attempted": True}
+    try:
+        proc = subprocess.run([adb_path, "-s", serial, "reboot", "-p"],
+                              capture_output=True, text=True, timeout=30)
+        report["rc"] = proc.returncode
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        report["rc"] = None
+        report["error"] = str(exc)[:160]
+    deadline = started + timeout
+    while True:
+        state = _adb_device_state(serial, adb_path)
+        occupant = _vbus_port_powered_on(gate_port, base)
+        report.update({"last_state": state, "occupant": occupant})
+        if state == "no-device" and occupant is None:
+            report["ok"] = True
+            break
+        if time.monotonic() >= deadline:
+            report["ok"] = False
+            break
+        time.sleep(poll_interval)
+    report["seconds"] = round(time.monotonic() - started, 1)
+    return report
+
+
+def _priv_has_usb_power() -> bool:
+    """wrapper `capabilities` 是否同时列出 usb-power 与 usb-power/expect-slot。
+
+    旧 wrapper / 无免密 sudo → False。只报 `usb-power` 的 wrapper 未实现
+    `--expect-slot`，锁内第一次切电才会被 argparse 拒绝；参数级标记让脚本在
+    取锁前 fail-closed（ADR-0063 D3 第 9 条；复核 #3899 comment 6731346242 P2-1）。
+    """
+    try:
+        proc = subprocess.run(
+            ["sudo", "-n", _PRIV_WRAPPER, "capabilities"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if proc.returncode != 0:
+        return False
+    tokens = set((proc.stdout or "").split())
+    return {"usb-power", "usb-power/expect-slot"} <= tokens
+
+
+_USB_POWER_OK_RE = re.compile(
+    r"STP_USB_POWER_OK serial=(\S+) location=(\S+) port=(\d+) action=(\S+)")
+
+
+def _usb_power_echo_matches(result: dict, slot: dict) -> bool:
+    """wrapper 成功时回显的槽位是否就是脚本读到的那一个（ADR-0063 D3 第 13 条第 2 款）。"""
+    echo = result.get("echo") or {}
+    return (echo.get("hub_location"), echo.get("port")) == (
+        slot["hub_location"], slot["port"])
+
+
+def _usb_power_echo(tail: str) -> "dict | None":
+    """解析 wrapper 成功行回显的本次实际槽位；取不到返回 None。"""
+    m = _USB_POWER_OK_RE.search(tail or "")
+    if not m:
+        return None
+    return {"serial": m.group(1), "hub_location": m.group(2),
+            "port": int(m.group(3)), "action": m.group(4)}
+
+
+_USB_POWER_SLOT_MISMATCH = "STP_USB_POWER_SLOT_MISMATCH"
+
+
+def _usb_power(serial: str, action: str, slot: dict) -> dict:
+    """经 wrapper 切本 serial 的槽位供电。永不抛异常；返回 {"ok", "rc", "tail", "seconds"}。
+
+    `--expect-slot` 带上脚本读到的槽位：wrapper 查表结果与之不一致时在调用 uhubctl
+    之前拒绝（`slot_refused`），映射被改写时不会先切错一次（ADR-0063 D2 第 8 条）。
+    """
+    started = time.monotonic()
+    expect = f"{slot['hub_location']}:{slot['port']}"
+    try:
+        proc = subprocess.run(
+            ["sudo", "-n", _PRIV_WRAPPER, "usb-power",
+             "--serial", serial, "--expect-slot", expect, "--action", action],
+            capture_output=True, text=True, timeout=75,
+        )
+        ok = proc.returncode == 0
+        tail = ((proc.stdout or "") + (proc.stderr or "")).strip()[-200:]
+        rc: "int | None" = proc.returncode
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        ok, rc, tail = False, None, str(exc)[:200]
+    return {"action": action, "ok": ok, "rc": rc, "tail": tail,
+            "echo": _usb_power_echo(tail) if ok else None,
+            "slot_refused": (not ok) and _USB_POWER_SLOT_MISMATCH in tail,
+            "seconds": round(time.monotonic() - started, 2)}
+
+
+def _wait_boot_to_adb(serial: str, adb_path: str, timeout: int,
+                      on_tick: "callable | None" = None,
+                      poll_interval: float = 5.0) -> "tuple[bool, str]":
+    """等设备回到 adb `device` 且 sys.boot_completed=1（OOBE 只在开机完成后才有意义）。"""
+    deadline = time.monotonic() + timeout
+    last_state = "unknown"
+    while True:
+        last_state = _adb_device_state(serial, adb_path)
+        if last_state == "device" \
+                and _adb_getprop(_BOOT_COMPLETED_PROP, adb_path, serial) == "1":
+            return True, "device"
+        if time.monotonic() >= deadline:
+            return False, last_state
+        if on_tick is not None:
+            try:
+                on_tick()
+            except Exception:
+                pass
+        time.sleep(poll_interval)
+
+
+def _adb_shell_rc(serial: str, adb_path: str, shell_args: "list[str]",
+                  timeout: int = 15) -> "tuple[int, str]":
+    try:
+        proc = subprocess.run(
+            [adb_path, "-s", serial, "shell", *shell_args],
+            capture_output=True, text=True, timeout=timeout,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+        return -1, str(exc)[:160]
+    return proc.returncode, ((proc.stdout or "") + (proc.stderr or "")).strip()[-160:]
+
+
+def _budget(deadline: float, cap: int = 15) -> int:
+    """单条 adb 命令的超时：不超过 cap，也不超过 deadline 剩余（至少 1s）。"""
+    return max(1, min(cap, int(deadline - time.monotonic())))
+
+
+def _vbus_skip_oobe(serial: str, adb_path: str, timeout: int,
+                    poll_interval: float = 5.0) -> dict:
+    """锁内跳过 OOBE（ADR-0063 D3 第 6 条）。与 oobe_skip 1.1.x 同配方、同判据：
+
+    写两个 provisioning 标志 → force-stop setupwizard → 唤醒 224 → 解锁 82 →
+    HOME 3；权威判据是两个标志回读为 1。预算内未收敛 → ok=False（调用方判失败）。
+    不 import oobe_skip 包：脚本包之间不得互相依赖（ADR-0051）。
+    """
+    deadline = time.monotonic() + timeout
+    report: dict = {"timeout_seconds": timeout, "rounds": 0}
+    writes = (
+        ["settings", "put", "secure", "user_setup_complete", "1"],
+        ["settings", "put", "global", "device_provisioned", "1"],
+    )
+    reads = (
+        ("user_setup_complete", ["settings", "get", "secure", "user_setup_complete"]),
+        ("device_provisioned", ["settings", "get", "global", "device_provisioned"]),
+    )
+    clear = (
+        ["am", "force-stop", _SUW_PACKAGE],
+        ["input", "keyevent", "224"],
+        ["input", "keyevent", "82"],
+        ["input", "keyevent", "3"],
+    )
+    while True:
+        report["rounds"] += 1
+        # 单条命令的超时取剩余预算，`oobe_timeout_seconds` 才是整段硬上限。
+        for cmd in writes + clear:
+            _adb_shell_rc(serial, adb_path, list(cmd), timeout=_budget(deadline))
+        values: dict = {}
+        for name, cmd in reads:
+            rc, tail = _adb_shell_rc(serial, adb_path, list(cmd),
+                                     timeout=_budget(deadline))
+            lines = tail.splitlines()
+            values[name] = lines[-1].strip() if rc == 0 and lines else None
+        report["values"] = values
+        if all(v == "1" for v in values.values()):
+            report["ok"] = True
+            return report
+        if time.monotonic() + poll_interval >= deadline:
+            report["ok"] = False
+            report["error"] = f"OOBE flags not set within {timeout}s: {values}"
+            return report
+        time.sleep(poll_interval)
+
+
+def _vbus_post_flash(
+    route: dict, serial: str, adb_path: str, cfg: dict, report: dict,
+    boot_stabilize_seconds: int, boot_stabilize_max_wait: int, seq: "list[int]",
+) -> "tuple[bool, bool, dict, dict]":
+    """vbus 刷后阶段，返回 (reenumerated, ok, verify_report, boot_stable_report)。
+
+    每个阶段有自己的硬超时；任一不过 → ok=False，verify_report["error"] 写明阶段。
+    不在这里断电：断电属于锁结算（成功与否只在一处决定，信号路径同口径）。
+    """
+    stages = report.setdefault("stages", {})
+    verify_report: dict = {"stage": None}
+    boot_stable_report: dict = {"skipped_reason": "not reached"}
+
+    started = time.monotonic()
+    booted, last_state = _wait_boot_to_adb(
+        serial, adb_path, cfg["boot_timeout_seconds"],
+        on_tick=lambda: _emit_progress(seq, stage="vbus-boot-wait"))
+    stages["boot_to_adb_seconds"] = round(time.monotonic() - started, 1)
+    _emit_progress(seq, stage="vbus-boot", ok=booted)
+    if not booted:
+        verify_report.update({"stage": "boot_to_adb", "error": (
+            f"device did not boot to adb within {cfg['boot_timeout_seconds']}s "
+            f"after flash (last state {last_state})")})
+        return False, False, verify_report, boot_stable_report
+
+    # v1.3.7 首刷二次重启守卫：OOBE 前先等拓扑稳定，避免初始化重启打断跳过。
+    boot_stable_report = _wait_boot_stable(
+        serial=serial, adb_path=adb_path,
+        stable_seconds=boot_stabilize_seconds,
+        max_wait=boot_stabilize_max_wait,
+        on_tick=lambda: _emit_progress(seq, stage="boot-stabilize"),
+    )
+
+    started = time.monotonic()
+    oobe = _vbus_skip_oobe(serial, adb_path, cfg["oobe_timeout_seconds"])
+    stages["oobe_seconds"] = round(time.monotonic() - started, 1)
+    report["oobe"] = oobe
+    _emit_progress(seq, stage="vbus-oobe", ok=bool(oobe.get("ok")))
+    if not oobe.get("ok"):
+        verify_report.update({"stage": "oobe", "error": oobe.get("error")})
+        return True, False, verify_report, boot_stable_report
+
+    started = time.monotonic()
+    ok, version_report = _verify_after_flash(
+        route, serial, adb_path, cfg["verify_timeout_seconds"],
+        on_tick=lambda: _emit_progress(seq, stage="verify-wait"),
+    )
+    stages["verify_seconds"] = round(time.monotonic() - started, 1)
+    verify_report.update(version_report)
+    if ok and route.get("decided_by") == "declared_model":
+        # 机型是声明的、不是读出来的：刷后必须回读核对，声明错就判失败。
+        actual_model = _adb_getprop("ro.product.model", adb_path, serial)
+        verify_report["model"] = {"declared": route.get("model"),
+                                  "actual": actual_model}
+        if actual_model != route.get("model"):
+            ok = False
+            verify_report["error"] = (
+                f"declared model {route.get('model')!r} != device model "
+                f"{actual_model!r} after flash")
+    if not ok:
+        verify_report["stage"] = "verify"
+    _emit_progress(seq, stage="verify", ok=ok)
+    return True, ok, verify_report, boot_stable_report
+
+
 def main() -> None:
     args = _step_params()
     serial = os.environ.get("STP_DEVICE_SERIAL", "")
     adb_path = os.environ.get("STP_ADB_PATH", "adb")
 
+    # ── v1.4.0（#3892）：触发方式。缺省 adb_reboot，与 1.3.20 逐项一致 ────
+    trigger_mode, trigger_error = _resolve_trigger_mode(args)
+    if trigger_error is not None:
+        _output(False, error_message=trigger_error)
+        return
+    vbus = trigger_mode == TRIGGER_VBUS_CYCLE
+    vbus_cfg: dict = {}
+    if vbus:
+        vbus_cfg, vbus_error = _vbus_params(args)
+        if vbus_error is not None:
+            _output(False, error_message=vbus_error,
+                    metrics={"trigger_mode": trigger_mode,
+                             "vbus": {"power_actions": [], "isolated": False}})
+            return
+
     # ── v1.2.0：固件目标解析（显式 firmware_dir / 指纹路由）────────
-    route, route_error = _resolve_route(args)
+    if vbus and not str(args.get("firmware_dir") or "").strip():
+        # 关机设备读不到 ro.product.model：机型必须由步骤参数声明，路由其余
+        # 判据（族表 / latest.json / manifest models）不变；刷后再回读核对。
+        declared_model = str(args.get("model") or "").strip()
+        if not declared_model:
+            _output(False, error_message=(
+                "vbus_cycle requires firmware_dir or model: the target is "
+                "powered off, so its model cannot be read via adb"),
+                metrics={"trigger_mode": trigger_mode})
+            return
+        route, route_error = _resolve_by_fingerprint(
+            args, serial, adb_path, model_override=declared_model)
+    else:
+        route, route_error = _resolve_route(args)
     if route_error is not None or route is None:
-        _output(False, error_message=route_error or "route resolution failed")
+        _output(False, error_message=route_error or "route resolution failed",
+                **({"metrics": {"trigger_mode": trigger_mode}} if vbus else {}))
         return
 
     skip_if_current = _as_bool(
@@ -1988,6 +2474,14 @@ def main() -> None:
         _param_or_env(args, "verify_version", "STP_FLASH_VERIFY_VERSION", ""),
         default=True,
     )
+    if vbus and (not verify_version or not route.get("version")):
+        # ADR-0063 D3 第 3 条：版本核验是 vbus 单台流程的收尾判据——没有它，
+        # 「上电后刷进去的是不是这台」就没有任何回读证据。
+        _output(False, error_message=(
+            "vbus_cycle requires verify_version=true and a target version "
+            "(manifest.json version)"),
+            metrics={"trigger_mode": trigger_mode, "route": route})
+        return
 
     started_at = time.time()
     # seq 必须先于锁等待定义：锁被占用时第一次 tick 就要打戳，
@@ -2006,6 +2500,7 @@ def main() -> None:
             "route": route,
             "version_check": version_check,
             "duration_seconds": round(time.time() - started_at, 2),
+            **({"trigger_mode": trigger_mode} if vbus else {}),
         })
         return
 
@@ -2163,7 +2658,81 @@ def main() -> None:
         "explicit_port": explicit_port or None,
     }
     identity_port: "str | None" = None
-    if require_binding or require_adb_ready:
+    vbus_report: dict = {}
+    if vbus:
+        # ADR-0063 D3 第 4、9 条：取锁前确认能切电，且门控目标口只取自槽位
+        # （不按 serial 反查——关机设备在 sysfs 里本就没有 serial）。任一不满足
+        # 直接失败，且此前没有任何切电动作。
+        slot, slot_error = _load_vbus_slot(serial)
+        if slot_error is None and not (require_binding and v6_native):
+            # D3 第 4 条：工具必须用 V6 `-p` 绑定槽位口，绑错口逐行止损也挂在这上面。
+            # 关掉绑定（V5，或计划传 require_port_binding=false）等于让工具扫全部
+            # MTK 口，回到 run 921 的缺口（复核 #3902 comment 6706267244 B2）。
+            slot_error = (
+                "vbus_cycle requires port binding (V6 tool on Linux with "
+                f"require_port_binding=true; got generation={generation}, "
+                f"linux={_is_linux()}, require_port_binding={require_binding}); "
+                "refusing to power-cycle without -p")
+        pre_state = _adb_device_state(serial, adb_path)
+        identity.update({"checked": True, "port_source": "vbus_slot",
+                         "adb_state": pre_state})
+        if slot_error is None and not _priv_has_usb_power():
+            slot_error = (
+                "stp-agent-priv lacks the usb-power capability or its "
+                "usb-power/expect-slot marker (wrapper not updated on this "
+                "host?); refusing vbus_cycle")
+        # 取锁前只做只读探测；`adb reboot -p` 是改变设备状态的动作，挪到锁内
+        # 第一次切电之前（ADR-0063 D3 第 5、11 条；复核 #3899 comment 6706217246）。
+        needs_adb_poweroff = slot_error is None and pre_state == "device"
+        if needs_adb_poweroff:
+            # 映射写错时先关的会是另一台：device 态读得到 serial，先核对它确实
+            # 在映射槽位上。
+            actual_port = _port_for_serial(serial, _SYSFS_USB_BASE)
+            identity["port_by_serial"] = actual_port
+            if actual_port != slot["gate_port"]:
+                slot_error = (
+                    f"device {serial} is on USB port {actual_port!r}, not on its "
+                    f"mapped slot port {slot['gate_port']!r}; fix "
+                    "usb-power-slots.json before vbus_cycle")
+        elif slot_error is None and pre_state == "unauthorized":
+            # unauthorized：adb 看得见却不能下命令，既关不了机也重启不了，新旧刷机
+            # 方式都不可行。平台派发处同样判 device_error 拒绝（ADR-0063 §8 第 4 条，
+            # Owner 2026-11-07 裁定）。offline / unknown / no-device 等其它状态进切电
+            # 流程，「是否已关机」由下面的槽位口 USB 枚举判定。
+            slot_error = (
+                f"device {serial} is visible to adb but not controllable "
+                f"(state {pre_state}); it can neither be powered off nor "
+                "rebooted by command — refusing vbus_cycle")
+        if slot_error is None and not needs_adb_poweroff:
+            occupant = _vbus_port_powered_on(slot["gate_port"], _SYSFS_USB_BASE)
+            identity["port_occupant"] = occupant
+            if occupant:
+                slot_error = (
+                    f"slot port {slot['gate_port']} already has a USB device "
+                    f"({occupant}): the device looks powered on; vbus_cycle "
+                    "requires it to be powered off")
+        if slot_error is None:
+            identity_port = slot["gate_port"]
+            identity["port"] = identity_port
+            vbus_report = {"slot": slot, "power_actions": [],
+                           "stages": {}, "isolated": False}
+        else:
+            identity["error"] = slot_error
+        _emit_progress(seq, stage="target-identity",
+                       result=json.dumps(identity, ensure_ascii=False))
+        if identity.get("error"):
+            _output(False, error_message=identity["error"],
+                    metrics={"route": route, "version_check": version_check,
+                             "env_precheck": env_precheck,
+                             "identity": identity,
+                             "trigger_mode": trigger_mode,
+                             "vbus": {"slot": slot, "power_actions": [],
+                                      "stages": {}, "isolated": False},
+                             "tool_generation": generation,
+                             "duration_seconds":
+                                 round(time.time() - started_at, 2)})
+            return
+    elif require_binding or require_adb_ready:
         if explicit_port and not _PORT_PATH_RE.match(explicit_port):
             identity["error"] = (
                 f"flash_port 形态非法：{explicit_port!r}；必须是 sysfs 端口名"
@@ -2258,12 +2827,31 @@ def main() -> None:
     # re-enumerate 与 verify（自己的手机稳定后——adb 已回归或确认卡死——
     # 才交出锁）；失败与异常路径立即结算，保持原兜底语义。
     lock_settled = False
+    # v1.4.0：vbus 成功收尾前置 True；其余任何路径（失败 / 异常 / 信号）在交出锁
+    # 之前都要把本槽位断电（ADR-0063 D3 第 8 条：隔离一台状态不明的设备）。
+    vbus_keep_power = False
+    # 必须先于 _settle_lock 的任何调用点（含信号处理器）定义。
+    vbus_state: dict = {"power_on_at": None, "brom_seen": False}
 
     def _settle_lock() -> None:
         nonlocal lock_settled
         if lock_settled:
             return
         lock_settled = True
+        if vbus and not vbus_keep_power and vbus_report.get("power_actions") \
+                and not vbus_state.get("slot_mismatch"):
+            # 一次切电都没做过（如锁内复核发现设备在开机态）就不碰供电。
+            # 槽位取脚本读到的那一份：映射此后被改写时 wrapper 会拒绝，记为隔离失败，
+            # 而不是去断映射里的新槽位。
+            isolate = _usb_power(serial, "off", vbus_report["slot"])
+            vbus_report["power_actions"].append(dict(isolate, phase="isolate"))
+            echo_ok = bool(isolate.get("ok")) and _usb_power_echo_matches(
+                isolate, vbus_report["slot"])
+            if isolate.get("ok") and not echo_ok:
+                # 回显的是另一个槽位：本设备没有被隔离（复核 #3902 B3）。
+                vbus_state["slot_mismatch"] = True
+                vbus_report["isolate_echo_mismatch"] = True
+            vbus_report["isolated"] = echo_ok
         gating["restore"] = _restore_gated({"hidden": hidden_ports},
                                             _SYSFS_USB_BASE)
         _clear_gated_state()
@@ -2279,6 +2867,76 @@ def main() -> None:
 
     try:
         for attempt in range(1, max_attempts + 1):
+            if vbus and attempt == 1 and needs_adb_poweroff:
+                poweroff = _vbus_adb_power_off(
+                    serial, adb_path, target_port,
+                    vbus_cfg["poweroff_timeout_seconds"], _SYSFS_USB_BASE)
+                identity["adb_poweroff"] = poweroff
+                vbus_report["stages"]["adb_poweroff_seconds"] = poweroff.get("seconds")
+                _emit_progress(seq, stage="vbus-adb-poweroff", ok=bool(poweroff.get("ok")))
+                if not poweroff.get("ok"):
+                    attempts_report.append({"attempt": attempt,
+                                            "outcome": "vbus-adb-poweroff-failed"})
+                    final_error = ("vbus-adb-poweroff", (
+                        f"device {serial} did not power off via adb within "
+                        f"{vbus_cfg['poweroff_timeout_seconds']}s "
+                        f"(last state {poweroff.get('last_state')}, "
+                        f"port occupant {poweroff.get('occupant')})"))
+                    break
+            if vbus and attempt == 1:
+                # 等锁期间设备可能被人开机：切电前在锁内复核一次。
+                occupant = _vbus_port_powered_on(target_port, _SYSFS_USB_BASE)
+                if occupant:
+                    attempts_report.append({"attempt": attempt,
+                                            "outcome": "vbus-device-powered-on",
+                                            "occupant": occupant})
+                    final_error = ("vbus-powered-on", (
+                        f"slot port {target_port} has a USB device ({occupant}) "
+                        "at flash time; device must be powered off"))
+                    break
+            if vbus:
+                # 每次尝试都从断电起算：上一次尝试可能停在 BROM/DA 半程。
+                vbus_state.update({"power_on_at": None, "brom_seen": False,
+                                   "attempt": attempt, "abort": None})
+                off = _usb_power(serial, "off", vbus_report["slot"])
+                vbus_report["power_actions"].append(
+                    dict(off, phase="pre-flash", attempt=attempt))
+                _emit_progress(seq, stage="vbus-off", ok=off["ok"],
+                               attempt=attempt)
+                if off.get("slot_refused"):
+                    # wrapper 在切电之前发现映射与脚本读到的不一致：本次没有切任何口。
+                    attempts_report.append({"attempt": attempt,
+                                            "outcome": "vbus-slot-refused"})
+                    final_error = ("vbus-slot-mismatch", (
+                        "wrapper refused before powering anything: the slot map no "
+                        f"longer maps {serial} to {vbus_report['slot']['hub_location']}:"
+                        f"{vbus_report['slot']['port']} ({off['tail']})"))
+                    break
+                if not off["ok"]:
+                    attempts_report.append({"attempt": attempt,
+                                            "outcome": "vbus-power-off-failed"})
+                    final_error = ("vbus-power",
+                                   f"usb-power off failed: {off['tail']}")
+                    break
+                # 纵深防御：wrapper 已按 --expect-slot 在切电前比对；回显仍不符说明
+                # wrapper 没有按约定执行，立即停手，不再做任何切电（含隔离）。
+                slot = vbus_report["slot"]
+                echo = off.get("echo") or {}
+                if not _usb_power_echo_matches(off, slot):
+                    vbus_state["slot_mismatch"] = True
+                    attempts_report.append({"attempt": attempt,
+                                            "outcome": "vbus-slot-mismatch",
+                                            "echo": echo or None})
+                    final_error = ("vbus-slot-mismatch", (
+                        f"wrapper powered off slot {echo or '(no echo)'} but the "
+                        f"script resolved {slot['hub_location']}:{slot['port']}; "
+                        "slot map changed underneath — stopped without further "
+                        "power actions"))
+                    break
+                settle_started = time.monotonic()
+                time.sleep(vbus_cfg["off_settle_seconds"])
+                vbus_report["stages"]["off_settle_seconds"] = round(
+                    time.monotonic() - settle_started, 1)
             if attempt > 1:
                 _emit_progress(seq, stage="retry", attempt=attempt,
                                total=max_attempts)
@@ -2345,10 +3003,56 @@ def main() -> None:
             run_kwargs: dict = {}
             if require_binding:
                 run_kwargs["abort_check"] = _abort_on_wrong_port
+            if vbus:
+                def _vbus_line_check(line: str) -> "str | None":
+                    if _output_caught_brom(line) or re.search(r"\d{1,3}%", line):
+                        vbus_state["brom_seen"] = True
+                    if require_binding:
+                        return _abort_on_wrong_port(line)
+                    return None
+
+                def _vbus_brom_deadline() -> "tuple[str, str] | None":
+                    if vbus_state.get("abort"):
+                        return vbus_state["abort"]
+                    on_at = vbus_state["power_on_at"]
+                    if on_at is None or vbus_state["brom_seen"]:
+                        return None
+                    if time.monotonic() - on_at < vbus_cfg["brom_timeout_seconds"]:
+                        return None
+                    return ("brom-timeout",
+                            f"no BROM capture within "
+                            f"{vbus_cfg['brom_timeout_seconds']}s after power-on")
+
+                run_kwargs["abort_check"] = _vbus_line_check
+                run_kwargs["poll_check"] = _vbus_brom_deadline
 
             def _fire_reboot_when_tool_ready() -> None:
                 nonlocal pre_reboot
                 _regate()  # v1.3.8：reboot 前再压制一轮（堵重枚举逃逸）
+                if vbus:
+                    # 工具已进入 USB 扫描：此刻上电，BROM 窗口落在观测里。
+                    time.sleep(pre_reboot_wait)
+                    on = _usb_power(serial, "on", vbus_report["slot"])
+                    vbus_report["power_actions"].append(
+                        dict(on, phase="trigger", attempt=vbus_state["attempt"]))
+                    vbus_state["power_on_at"] = time.monotonic()
+                    _emit_progress(seq, stage="vbus-on", ok=on["ok"])
+                    # 上电失败或回显另一个槽位：不能让工具继续等，下一秒的 poll_check
+                    # 杀工具并终止尝试环（复核 #3902 B3）；工具先于 poll_check 退出时
+                    # 由工具返回后的补查终止（B4）。
+                    if on["ok"] and not _usb_power_echo_matches(on, vbus_report["slot"]):
+                        vbus_state["slot_mismatch"] = True
+                        vbus_state["abort"] = ("slot-mismatch", (
+                            f"wrapper powered on slot {on.get('echo')} but the script "
+                            f"resolved {vbus_report['slot']['hub_location']}:"
+                            f"{vbus_report['slot']['port']}; stopped without further "
+                            "power actions"))
+                    elif not on["ok"]:
+                        vbus_state["abort"] = ("vbus-power", (
+                            "wrapper refused before powering anything: slot map changed"
+                            if on.get("slot_refused")
+                            else f"usb-power on failed: {on['tail']}"))
+                    return
                 if not do_reboot:
                     return
                 time.sleep(pre_reboot_wait)  # 给工具进入扫描的提前量
@@ -2377,7 +3081,27 @@ def main() -> None:
                     on_running=_fire_reboot_when_tool_ready,
                     **run_kwargs,
                 )
+                # 工具在第一次 poll_check 之前就退出时，上电那一步写下的 abort
+                # 没被消费：返回后补查一次，按同一分支终止尝试环，不按输出判定
+                # 成败、也不重试（ADR-0063 D3 第 13 条第 2 款；复核 #3902 B4）。
+                if vbus and vbus_state.get("abort"):
+                    kind, reason = vbus_state["abort"]
+                    raise FlashToolAborted(reason, kind=kind)
             except FlashToolAborted as exc:
+                if exc.kind == "brom-timeout":
+                    # 没抓到 BROM：工具已被杀，下一次尝试重新断电再上电。
+                    attempt_record.update({"outcome": "brom-timeout",
+                                           "reason": exc.reason})
+                    attempts_report.append(attempt_record)
+                    final_error = ("brom-timeout", exc.reason)
+                    continue
+                if exc.kind in ("slot-mismatch", "vbus-power"):
+                    # 上电那一步出错：重试只会再切一次电，立即终止尝试环。
+                    attempt_record.update({"outcome": f"vbus-{exc.kind}",
+                                           "reason": exc.reason})
+                    attempts_report.append(attempt_record)
+                    final_error = (exc.kind, exc.reason)
+                    break
                 # 止损成功：记 attempt 后**立即终止尝试环**——重试只会让工具
                 # 再去找一个非目标口。门控与锁由统一结算路径恢复。
                 attempt_record.update({"outcome": "aborted-port-mismatch",
@@ -2418,6 +3142,9 @@ def main() -> None:
                 "verdict": v_evidence,
             })
             attempts_report.append(attempt_record)
+            if vbus and vbus_state["power_on_at"] is not None:
+                attempt_record["seconds_since_power_on"] = round(
+                    time.monotonic() - vbus_state["power_on_at"], 1)
             final_output, final_rc = output, flash_rc
             verdict_ok, verdict_evidence = v_ok, v_evidence
             final_error = None if v_ok else ("verdict", v_evidence)
@@ -2432,7 +3159,11 @@ def main() -> None:
         kind, detail = final_error
         _settle_lock()
         # v1.3.14（#1591）：失败后尝试恢复设备态（避免停在 BROM → USB 死态）
-        recovery = _attempt_device_recovery(serial, adb_path)
+        # v1.4.0：vbus 已在结算里断电隔离，adb reboot 对断电设备没有意义。
+        if vbus:
+            recovery = {"skipped_reason": "vbus_cycle: slot powered off for isolation"}
+        else:
+            recovery = _attempt_device_recovery(serial, adb_path)
         _output(False,
                 error_message=(
                     f"flash failed after {len(attempts_report)} attempt(s): "
@@ -2453,50 +3184,70 @@ def main() -> None:
                          "recovery": recovery,
                          "pre_reboot": pre_reboot,
                          "stdout_tail": final_output[-1500:],
+                         "trigger_mode": trigger_mode,
+                         **({"vbus": vbus_report} if vbus else {}),
                          "duration_seconds":
                              round(time.time() - started_at, 2)})
         return
 
-    # flash_tool 退出后：等设备重新枚举（最长 60s），期间打戳。
-    # 设备没回来**不判失败**——flash 成功但枚举慢是常态，记录字段供诊断。
-    reenumerated = _wait_device_back(
-        serial=serial,
-        adb_path=adb_path,
-        timeout=60,
-        on_tick=lambda: _emit_progress(seq, stage="re-enumerate"),
-    )
-
-    # ── v1.2.0：刷后版本核验（verify 开启时不一致/等不到设备 → 失败）──
-    if verify_version:
-        verify_ok, verify_report = _verify_after_flash(
-            route, serial, adb_path, verify_wait,
-            on_tick=lambda: _emit_progress(seq, stage="verify-wait"),
-        )
-        _emit_progress(seq, stage="verify", ok=verify_ok)
+    if vbus:
+        # ── v1.4.0：vbus 刷后阶段（锁内，各自独立硬超时，ADR-0063 D3 第 3、7 条）
+        # 开机到 ADB → boot 稳定（沿用 v1.3.7 首刷二次重启守卫）→ 跳过 OOBE →
+        # 版本核验 → 机型回读。任一不过即失败，结算时断电隔离。
+        # 上电之后抛出的任何异常都必须先断电隔离再交出锁（D3 第 8 条；复核 #3902
+        # comment 6706267244 B1）：vbus_keep_power 只在整条收尾不抛异常后才置 True。
+        try:
+            reenumerated, verify_ok, verify_report, boot_stable_report = \
+                _vbus_post_flash(route, serial, adb_path, vbus_cfg, vbus_report,
+                                 boot_stabilize_seconds, boot_stabilize_max_wait,
+                                 seq)
+            vbus_success = verify_ok and verdict_ok and final_rc == 0
+            _emit_progress(seq, stage="done")
+        except Exception:
+            _settle_lock()
+            raise
+        vbus_keep_power = vbus_success
     else:
-        verify_ok, verify_report = True, {"skipped_reason": "verify_version disabled"}
-
-    # ── v1.3.7：锁内 boot 稳定等待 ────────────────────────────────────
-    # 实证（2026-08-30 run 258，.68 串行 14 台）：verify 通过（adb 回归 +
-    # 版本一致）≠ 设备完成首次开机——HONOR 首刷后 boot 完成后会再重启一次
-    # （初始化），重启窗口期以 BROM/preloader 可捕获态暴露（新 USB 实例
-    # authorized=1，门控失效），下一任持锁者的工具扫描把新固件刷进上一台。
-    # v1.3.4 持锁穿过 verify 只覆盖 verify 期间；这里把「锁内稳定」延伸
-    # 到 boot_completed=1 且 USB 拓扑稳定（设备不再重启）才交出锁。
-    boot_stable_report: dict = {"skipped_reason": "not reached"}
-    if verify_ok:
-        boot_stable_report = _wait_boot_stable(
-            serial=serial, adb_path=adb_path,
-            stable_seconds=boot_stabilize_seconds,
-            max_wait=boot_stabilize_max_wait,
-            on_tick=lambda: _emit_progress(seq, stage="boot-stabilize"),
+        # flash_tool 退出后：等设备重新枚举（最长 60s），期间打戳。
+        # 设备没回来**不判失败**——flash 成功但枚举慢是常态，记录字段供诊断。
+        reenumerated = _wait_device_back(
+            serial=serial,
+            adb_path=adb_path,
+            timeout=60,
+            on_tick=lambda: _emit_progress(seq, stage="re-enumerate"),
         )
-    # 失败路径不等待：设备状态已知异常，立即结算（v1.3.4 兜底语义）。
-    # boot 稳定超时（ok=False）不判失败——卡死设备不会重启,无窗口可撞。
 
-    # done 戳必须落在 boot 稳定等待**之后**：在此之前设备还可能再重启一次，
-    # 称 done 名不副实，会让按 stage 解析终态的下游误判。
-    _emit_progress(seq, stage="done")
+        # ── v1.2.0：刷后版本核验（verify 开启时不一致/等不到设备 → 失败）──
+        if verify_version:
+            verify_ok, verify_report = _verify_after_flash(
+                route, serial, adb_path, verify_wait,
+                on_tick=lambda: _emit_progress(seq, stage="verify-wait"),
+            )
+            _emit_progress(seq, stage="verify", ok=verify_ok)
+        else:
+            verify_ok, verify_report = True, {"skipped_reason": "verify_version disabled"}
+
+        # ── v1.3.7：锁内 boot 稳定等待 ────────────────────────────────────
+        # 实证（2026-08-30 run 258，.68 串行 14 台）：verify 通过（adb 回归 +
+        # 版本一致）≠ 设备完成首次开机——HONOR 首刷后 boot 完成后会再重启一次
+        # （初始化），重启窗口期以 BROM/preloader 可捕获态暴露（新 USB 实例
+        # authorized=1，门控失效），下一任持锁者的工具扫描把新固件刷进上一台。
+        # v1.3.4 持锁穿过 verify 只覆盖 verify 期间；这里把「锁内稳定」延伸
+        # 到 boot_completed=1 且 USB 拓扑稳定（设备不再重启）才交出锁。
+        boot_stable_report: dict = {"skipped_reason": "not reached"}
+        if verify_ok:
+            boot_stable_report = _wait_boot_stable(
+                serial=serial, adb_path=adb_path,
+                stable_seconds=boot_stabilize_seconds,
+                max_wait=boot_stabilize_max_wait,
+                on_tick=lambda: _emit_progress(seq, stage="boot-stabilize"),
+            )
+        # 失败路径不等待：设备状态已知异常，立即结算（v1.3.4 兜底语义）。
+        # boot 稳定超时（ok=False）不判失败——卡死设备不会重启,无窗口可撞。
+
+        # done 戳必须落在 boot 稳定等待**之后**：在此之前设备还可能再重启一次，
+        # 称 done 名不副实，会让按 stage 解析终态的下游误判。
+        _emit_progress(seq, stage="done")
 
     # v1.3.8：门控保持计数并入 gating（诊断：重枚举逃逸被压制的轮次）
     gating["regate_count"] = regate_count
@@ -2539,7 +3290,11 @@ def main() -> None:
         "attempt_count": len(attempts_report),
         # ── v1.3.7 ──
         "boot_stable": boot_stable_report,
+        # ── v1.4.0 ──
+        "trigger_mode": trigger_mode,
     }
+    if vbus:
+        metrics["vbus"] = vbus_report
 
     if final_rc != 0:
         _output(False,
