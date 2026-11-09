@@ -79,8 +79,8 @@ def host(wrapper, monkeypatch, tmp_path):
                            devices_root=devices_root)
 
 
-def _args(serial=SERIAL, action="cycle", delay=12):
-    return SimpleNamespace(serial=serial, action=action, delay=delay)
+def _args(serial=SERIAL, action="cycle", delay=12, expect_slot="1-1.4:3"):
+    return SimpleNamespace(serial=serial, action=action, delay=delay, expect_slot=expect_slot)
 
 
 def _argv(stub: Path) -> list[str]:
@@ -90,15 +90,20 @@ def _argv(stub: Path) -> list[str]:
 # ── 解析层 ───────────────────────────────────────────────────────────────
 
 
-def test_parser_wires_only_serial_action_delay(wrapper):
+def test_parser_wires_only_serial_expect_slot_action_delay(wrapper):
     parser = wrapper._build_parser()
-    ns = parser.parse_args(["usb-power", "--serial", SERIAL, "--action", "cycle", "--delay", "12"])
-    assert (ns.command, ns.serial, ns.action, ns.delay) == ("usb-power", SERIAL, "cycle", 12)
-    ns = parser.parse_args(["usb-power", "--serial", SERIAL, "--action", "off"])
+    ns = parser.parse_args(["usb-power", "--serial", SERIAL, "--expect-slot", "1-1.4:3",
+                            "--action", "cycle", "--delay", "12"])
+    assert (ns.command, ns.serial, ns.expect_slot, ns.action, ns.delay) == (
+        "usb-power", SERIAL, "1-1.4:3", "cycle", 12)
+    ns = parser.parse_args(["usb-power", "--serial", SERIAL, "--expect-slot", "1-1.4:3",
+                            "--action", "off"])
     assert ns.delay is None
 
 
 @pytest.mark.parametrize("argv", [
+    ["usb-power", "--serial", SERIAL, "--action", "on"],
+    ["usb-power", "--serial", SERIAL, "--exp", "1-1.4:3", "--action", "on"],
     ["usb-power", "--serial", SERIAL],
     ["usb-power", "--action", "on"],
     ["usb-power", "--serial", SERIAL, "--action", "toggle"],
@@ -118,10 +123,26 @@ def test_contract_and_capabilities_include_usb_power(wrapper, capsys):
     assert wrapper._validate_parser_contract(wrapper._build_parser()) == []
     assert "usb-power" in wrapper._SUBCOMMAND_CONTRACT
     wrapper.cmd_capabilities(None, None)
-    assert "usb-power" in capsys.readouterr().out.splitlines()
+    lines = capsys.readouterr().out.splitlines()
+    assert "usb-power" in lines
+    # ADR-0063 D2 第 6 条：参数级标记，脚本取锁前据此拒绝未实现 --expect-slot 的旧 wrapper
+    assert "usb-power/expect-slot" in lines
 
 
 # ── 纯函数校验 ───────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("bad", ["", "1-1.4", "1-1.4:", ":3", "1-1.4:0", "1-1.4:03", "1-1.4:00", "1-1.4:17",
+                                 "1-1.4:3:4", "1-1.4:1-16", "1-1.4:all", "../1:3",
+                                 "1-1.4: 3", None, 3])
+def test_expect_slot_validation_rejects(wrapper, bad):
+    with pytest.raises(wrapper.PrivError):
+        wrapper.validate_usb_power_expect_slot(bad)
+
+
+def test_expect_slot_validation_accepts(wrapper):
+    assert wrapper.validate_usb_power_expect_slot("1-1.4:3") == ("1-1.4", 3)
+    assert wrapper.validate_usb_power_expect_slot("2-1:16") == ("2-1", 16)
 
 
 @pytest.mark.parametrize("bad", ["", "a" * 65, "AB C", "AB/C", "AB\n", "AB;id", "$(id)", None, 1])
@@ -148,6 +169,9 @@ def test_request_validation_accepts(wrapper, action, delay):
 @pytest.mark.parametrize("doc", [
     [],
     {"schema": 2, "slots": []},
+    {"schema": True, "slots": []},
+    {"schema": 1.0, "slots": []},
+    {"schema": 1, "slots": [], "extra": 1},
     {"schema": 1},
     {"schema": 1, "slots": {}},
     {"schema": 1, "slots": [{"serial": SERIAL, "hub_location": "1-1.4"}]},
@@ -192,6 +216,15 @@ def test_cycle_runs_fixed_argv_with_clean_env(wrapper, host, capsys, monkeypatch
     assert "STP_USB_POWER_OK serial=MTK0001 location=1-1.4 port=3 action=cycle" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("expect_slot", ["1-1.4:4", "1-1.5:3"])
+def test_slot_mismatch_is_rejected_before_any_power_action(wrapper, host, expect_slot):
+    # 复核 #3899 comment 6708089815：调用方读到的槽位与映射不一致时，必须在调 uhubctl
+    # 之前拒绝——不得先切错一次再靠回显发现。
+    with pytest.raises(wrapper.PrivError, match="STP_USB_POWER_SLOT_MISMATCH"):
+        wrapper.cmd_usb_power(_args(expect_slot=expect_slot), None)
+    assert not (host.stub.parent / "uhubctl.argv").exists()
+
+
 def test_unregistered_serial_is_rejected_before_exec(wrapper, host):
     with pytest.raises(wrapper.PrivError, match="no slot"):
         wrapper.cmd_usb_power(_args(serial="NOTLISTED"), None)
@@ -233,6 +266,88 @@ def test_writable_uhubctl_is_rejected(wrapper, host):
     assert not (host.stub.parent / "uhubctl.argv").exists()
 
 
+def test_untrusted_uhubctl_owner_is_rejected(wrapper, host, monkeypatch):
+    # 复核 #3900：只锁 uhubctl 属主这一半（映射文件与父目录的属主检查被绕开）。
+    monkeypatch.setattr(wrapper, "_load_usb_power_slots", lambda: {SERIAL: ("1-1.4", 3)})
+    monkeypatch.setattr(wrapper, "USB_POWER_TRUSTED_UID", os.getuid() + 1)
+    with pytest.raises(wrapper.PrivError, match="owned by uid"):
+        wrapper.cmd_usb_power(_args(), None)
+    assert not (host.stub.parent / "uhubctl.argv").exists()
+
+
+def test_untrusted_slots_file_owner_is_rejected(wrapper, host, monkeypatch):
+    # 父目录属主可信、只有映射文件属主不符：fstat 返回改过 uid 的元数据。
+    real_fstat = os.fstat
+
+    def fake_fstat(fd):
+        meta = real_fstat(fd)
+        fields = list(meta)
+        fields[4] = meta.st_uid + 1  # st_uid
+        return os.stat_result(fields)
+
+    monkeypatch.setattr(wrapper.os, "fstat", fake_fstat)
+    with pytest.raises(wrapper.PrivError, match="slots file must be owned by uid"):
+        wrapper.cmd_usb_power(_args(), None)
+
+
+def test_untrusted_slots_dir_owner_is_rejected(wrapper, host, monkeypatch):
+    real_lstat = os.lstat
+    conf_dir = str(host.conf_dir)
+
+    def fake_lstat(path, *a, **k):
+        meta = real_lstat(path, *a, **k)
+        if str(path) != conf_dir:
+            return meta
+        fields = list(meta)
+        fields[4] = meta.st_uid + 1
+        return os.stat_result(fields)
+
+    monkeypatch.setattr(wrapper.os, "lstat", fake_lstat)
+    with pytest.raises(wrapper.PrivError, match="slots dir must be owned by uid"):
+        wrapper.cmd_usb_power(_args(), None)
+
+
+def test_slots_file_size_limit(wrapper, host):
+    body = json.dumps(_slots_doc((SERIAL, "1-1.4", 3)))
+    limit = wrapper.MAX_USB_POWER_SLOTS_BYTES
+    host.slots.write_text(body + " " * (limit - len(body)), encoding="utf-8")
+    assert wrapper.cmd_usb_power(_args(), None) == 0
+    host.slots.write_text(body + " " * (limit - len(body) + 1), encoding="utf-8")
+    with pytest.raises(wrapper.PrivError, match="too large"):
+        wrapper.cmd_usb_power(_args(), None)
+
+
+def test_subprocess_gets_timeout_and_exact_env(wrapper, host, monkeypatch):
+    seen = {}
+
+    def fake_run(argv, **kwargs):
+        seen.update(kwargs, argv=argv)
+        return subprocess.CompletedProcess(argv, 0, b"", b"")
+
+    monkeypatch.setattr(wrapper.subprocess, "run", fake_run)
+    assert wrapper.cmd_usb_power(_args(), None) == 0
+    assert seen["timeout"] == 60
+    assert seen["env"] == {"LC_ALL": "C", "PATH": "/usr/bin:/bin"}
+    assert "shell" not in seen or seen["shell"] is False
+
+
+def test_non_root_is_rejected(monkeypatch):
+    spec = importlib.util.spec_from_file_location("stp_agent_priv_usb_power_nonroot", WRAPPER)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(module.os, "geteuid", lambda: 1000)
+    with pytest.raises(module.PrivError, match="must run as root"):
+        module.cmd_usb_power(_args(), None)
+
+
+def test_hub_location_must_be_a_directory(wrapper, host, monkeypatch):
+    monkeypatch.setattr(wrapper, "is_kernel_usb_device_path", lambda *_a: True)
+    (host.bus / "1-1.4").unlink()
+    (host.bus / "1-1.4").write_text("", encoding="utf-8")
+    with pytest.raises(wrapper.PrivError, match="kernel sysfs"):
+        wrapper.cmd_usb_power(_args(), None)
+
+
 def test_hub_location_must_resolve_into_kernel_device_tree(wrapper, host, tmp_path):
     (host.bus / "1-1.4").unlink()
     fake = tmp_path / "fake" / "1-1.4"
@@ -260,7 +375,8 @@ def test_timeout_reports_failure(wrapper, host, monkeypatch, capsys):
 
 def test_main_maps_rejection_to_exit_2(wrapper, host, monkeypatch, capsys):
     monkeypatch.setattr(wrapper, "_load_conf", lambda _p: {})
-    assert wrapper.main(["usb-power", "--serial", "NOTLISTED", "--action", "on"]) == 2
+    assert wrapper.main(["usb-power", "--serial", "NOTLISTED", "--expect-slot", "1-1.4:3",
+                         "--action", "on"]) == 2
     assert "STP_AGENT_PRIV_ERROR" in capsys.readouterr().err
 
 
@@ -281,6 +397,10 @@ def test_provisioning_playbook_writes_the_path_and_shape_the_wrapper_reads(wrapp
     assert "'schema': 1" in write["content"]
     folder = tasks["Ensure slot mapping directory is root-owned (#3892)"]["ansible.builtin.file"]
     assert (folder["owner"], folder["mode"]) == ("root", "0755")
+    # 能力检查对「旧 wrapper 只报 usb-power」有判别力（只报告不阻断）
+    cap = tasks["Check wrapper supports usb-power with --expect-slot (#3892)"]
+    assert "grep -qx usb-power/expect-slot" in cap["ansible.builtin.shell"]
+    assert cap["failed_when"] is False
     # 渲染形态与 wrapper 解析器一致：Ansible 的 to_nice_json 等价于 json.dumps。
     rendered = json.dumps({"schema": 1, "slots": [
         {"serial": SERIAL, "hub_location": "1-1.4", "port": 3}]}, indent=4)
