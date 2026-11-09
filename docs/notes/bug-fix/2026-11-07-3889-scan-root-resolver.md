@@ -25,6 +25,11 @@ Class: bug-fix
   二次解析。
 - 不改 `aee/paths.py` 解析链与默认值，不改 `.env.example` 与 `install_agent.sh`。
 
+按 [#3800 规划者分诊 6731915893](https://github.com/DUElost/stability-test-platform/issues/3800#issuecomment-6731915893)，
+有效的显式根（存在、可写、非 tmpfs）继续优先使用，行为与 main 一致。显式根不可用时，
+扫描根与采集根统一走 `aee/paths.py` 的解析链，在 SSD 回退目录可写时一起回退到该目录。
+这是本单要实现的行为。
+
 停止条件核查（评论 6706036828）：除 `scan_runner.py` 外，安装布局下没有任何模块
 解析出不同的 AEE 本地根。所有 `get_aee_local_root` 消费方（`bootstrap_subsystems`、
 `event_uploader`、`job_session`、`system_monitor`、`aee/processor`、`aee/reconciler`、
@@ -60,10 +65,12 @@ no-regression 守卫通过：
 - 部署布局回归测试（子进程模拟 `sys.path` 仅含顶层 `agent` 包、`backend` 置 `None`，
   `STP_AEE_LOCAL_ROOT` 为空、SSD 回退目录可写）：失败证据
   `scan_root=/mnt/hdd/aee_events`，而 `canonical=<SSD 回退目录>`，与 #3889 现场一致。
-- `bootstrap_subsystems` 测试：`Expected configure(hdd_root=...)` / `Actual configure()`。
+- `bootstrap_subsystems` 测试以 `LocalDiskMonitor` 为采集侧对照。main 上扫描器的调用是
+  `configure()`，测试期望它收到与 `LocalDiskMonitor` 相同的 `hdd_root`。
 - 静态守卫：命中两处 `def get_aee_local_root`（`aee/paths.py:95`、
   `scan_runner.py:37`）。
-- `STP_AEE_LOCAL_ROOT` 有值时行为与 main 一致（no-regression 守卫）：修复前后均通过。
+- `STP_AEE_LOCAL_ROOT` 指向有效显式根（存在、可写、非 tmpfs）时，行为与 main 一致。
+  该守卫在修复前后均通过。
 
 应用修复后：`test_scan_root_resolver_3889.py` 与既有
 `test_bootstrap_subsystems_736.py`（其 `configure()` 断言按新签名更新为
@@ -71,7 +78,7 @@ no-regression 守卫通过：
 
 - 安装布局 + 空 `STP_AEE_LOCAL_ROOT` + 可写 SSD 回退 → 扫描根 == 采集根 == SSD 目录，
   且 `scan_runner.get_aee_local_root is aee.paths.get_aee_local_root`；
-- `STP_AEE_LOCAL_ROOT` 有值（覆盖 15.101 类配置）→ 扫描根 == 配置根、优于 SSD 回退；
+- `STP_AEE_LOCAL_ROOT` 指向有效显式根（覆盖 15.101 类配置）→ 扫描根 == 配置根、优于 SSD 回退；
 - bootstrap 一次解析、ScanRunner 与 `LocalDiskMonitor` 拿到同一 `hdd_root`、
   `UnisocScanRunner.configure` 同样收到；
 - 静态守卫：`backend/agent` 生产代码（不含 tests）仅 `aee/paths.py` 定义
@@ -99,8 +106,7 @@ ADR-0059 写作约定适用范围。no-regression 守卫另有隔离变异自证
   `layering`、`inner-imports`、`tool-manifest`、`transitions` 等静态门禁）。
   首轮曾因探针里的自造 env 读取触发 `env-inventory`，已改为把控制行注入探针源码，
   消除测试专用环境变量；`env_inventory.py --check` 复跑 `[OK]`（277 个读取名）。
-- Python 3.7 / 3.8 兼容性以 CI 为准（本单新增代码仅用标准库 `subprocess`/`json`/
-  `unittest.mock`/`re`，`from __future__ import annotations` 维持旧解释器兼容）。
+- 原 Python 3.7 / 3.8 兼容要求作废。Agent venv 要求 Python ≥ 3.10，CI 的 Agent 测试运行在 Python 3.11。
 - CI 修复（`pr-agent-tests` run 42519812106）：静态否定断言改为 `SourceGuard` 后，
   `tests/test_source_scan_anchor_ratchet.py` + `backend/agent/tests/test_scan_root_resolver_3889.py`
   **14 passed**；未改生产代码、未下调棘轮基线。
