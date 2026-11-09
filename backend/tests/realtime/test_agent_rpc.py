@@ -74,11 +74,35 @@ async def test_agent_namespace_drops_sid_on_disconnect(patched_namespace, monkey
     monkeypatch.setenv("AGENT_SECRET", "socket-secret-123456")
 
     await patched_namespace.on_connect(
-        "sid-A", environ={}, auth={"agent_secret": "socket-secret-123456", "host_id": "host-101"}
+        "sid-A", environ={}, auth={
+            "agent_secret": "socket-secret-123456",
+            "host_id": "host-101",
+            "capabilities": ["scan_round_v1"],
+        },
     )
+    assert patched_namespace.get_capabilities("sid-A") == {"scan_round_v1"}
     await patched_namespace.on_disconnect("sid-A")
     assert patched_namespace.get_sid("host-101") is None
     assert patched_namespace.connected_host_ids() == []
+    assert not patched_namespace.get_capabilities("sid-A")
+
+
+@pytest.mark.asyncio
+async def test_agent_namespace_replacement_drops_old_sid_capabilities(patched_namespace, monkeypatch):
+    monkeypatch.setenv("TESTING", "0")
+    monkeypatch.setenv("AGENT_SECRET", "socket-secret-123456")
+    auth = {
+        "agent_secret": "socket-secret-123456",
+        "host_id": "host-101",
+        "capabilities": ["scan_round_v1"],
+    }
+    await patched_namespace.on_connect("sid-A", environ={}, auth=auth)
+    assert patched_namespace.get_capabilities("sid-A") == {"scan_round_v1"}
+
+    await patched_namespace.on_connect("sid-B", environ={}, auth=auth)
+    assert patched_namespace.get_sid("host-101") == "sid-B"
+    assert patched_namespace.get_capabilities("sid-B") == {"scan_round_v1"}
+    assert "sid-A" not in patched_namespace._sid_capabilities
 
 
 @pytest.mark.asyncio

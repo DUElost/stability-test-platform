@@ -17,6 +17,7 @@ from .log_archiver import collect_archive_heartbeat_metrics
 from .pipeline_engine import PipelineEngine
 from .recovery_executor import trigger_recovery_sync_on_device_reconnect
 from .scan_runner import ScanRunner
+from .upload_manager import UploadManager
 
 try:
     from .version_info import read_artifact_digest
@@ -142,6 +143,8 @@ def build_heartbeat_thread(
             # #3879：伴随映射拒绝（unprovable/outside_run/missing_path/no_rows）
             # 进程级累计，重启清零。
             "scan_report_mapping_rejected_total": ScanRunner.report_mapping_rejected_total(),
+            # #3875：影子报表上送完成，进程级累计，重启清零；不判断 settled。
+            "shadow_round_report_uploaded_total": UploadManager.instance().shadow_report_uploaded_total(),
             # #3217：crash artifact 投递的提交数与三路丢失（进程级累计，重启清零）。
             **ArtifactUploader.instance().heartbeat_counts(),
         },

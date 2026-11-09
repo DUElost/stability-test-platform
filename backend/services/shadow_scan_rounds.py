@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -18,7 +19,10 @@ from backend.core.storage_root import resolve_shared_storage_root
 from backend.core.task_queue import enqueue_sync
 from backend.models.enums import PlanRunStatus
 from backend.models.plan_run import PlanRun
+from backend.models.host import Host
 from backend.services import issue_fact_store as facts
+from backend.services.artifact_digest import ARTIFACT_KIND_CODE, compute_desired_artifact_digest
+from backend.services.agent_version_info import resolve_agent_code_sync_status
 from backend.services.dedup_scan import _SCAN_TASK_SAQ_TIMEOUT
 from backend.services.plan_run_scan_scope import (
     build_scan_now_payload,
@@ -44,6 +48,13 @@ _TERMINAL = {
     PlanRunStatus.FAILED.value,
 }
 _PLATFORM = "mtk"
+
+
+@dataclass(frozen=True)
+class ShadowScanDispatch:
+    host_id: str
+    payload: dict
+    reserved_at: str
 
 
 def _dispatch_due(unit, now):
@@ -98,7 +109,7 @@ def _report_key(report):
     )
 
 
-def _late_inputs(rounds, root):
+def _late_inputs(rounds, root, *, strict=False):
     consumed = {
         _report_key(r) for row in rounds for u in row.expected_set for r in u.get("reports", [])
     }
@@ -106,7 +117,7 @@ def _late_inputs(rounds, root):
     for row in rounds:
         if row.status != facts.SCAN_ROUND_STATUS_CLOSED:
             continue
-        for report in read_round_reports(root, row.plan_run_id, row.id, row.expected_set):
+        for report in read_round_reports(root, row.plan_run_id, row.id, row.expected_set, strict=strict):
             key = _report_key(report)
             if key not in consumed:
                 pending[key] = report
@@ -150,6 +161,9 @@ def _new_round(db, run_id, rounds, units, kind, now, wait, *, carried=()):
 def _advance_run(db, run_id, root, now, settings):
     run = _locked_run(db, run_id)
     if run is None:
+        return []
+    partition = facts.get_partition_mode(db, plan_run_id=run_id, platform=_PLATFORM)
+    if partition is not None and partition.shadow_settled_at is not None:
         return []
     rounds = facts.list_scan_rounds(db, plan_run_id=run_id, platform=_PLATFORM)
     # 候选收集后可能已进入终态；未在 RUNNING 时建立影子轮的分区不启动。
@@ -218,6 +232,26 @@ def _advance_run(db, run_id, root, now, settings):
                     settings.stp_scan_round_report_wait_seconds,
                     carried=late,
                 )
+            elif all(r.closed_at is not None for r in rounds) and now > max(
+                r.closed_at for r in rounds
+            ) + timedelta(seconds=settings.stp_scan_round_report_wait_seconds):
+                # 6704918122：strict 仅用于准备 settled 时确认安静期。
+                # 读失败只推迟 settled，不回滚本次轮次推进；普通迟到输入读取仍告警跳过。
+                try:
+                    quiet = not _late_inputs(rounds, root, strict=True)
+                except (OSError, ValueError):
+                    logger.warning(
+                        "shadow_scan_settle_deferred plan_run=%d fact_round_id=%d "
+                        "platform=%s reason=manifest_unreadable",
+                        run_id, final.id, _PLATFORM, exc_info=True,
+                    )
+                else:
+                    if quiet:
+                        facts.settle_shadow_partition(
+                            db, plan_run_id=run_id, platform=_PLATFORM, settled_at=now,
+                            report_wait_seconds=settings.stp_scan_round_report_wait_seconds,
+                        )
+                        logger.info("shadow_scan_partition_settled plan_run=%d platform=%s", run_id, _PLATFORM)
     if new is not None:
         rounds.append(new)
         _refresh_round(db, new, root, now)
@@ -270,7 +304,24 @@ def sweep_shadow_scan_rounds(*, now=None):
             logger.exception("shadow_scan_sweep_failed plan_run=%d", run_id)
 
 
-def prepare_shadow_scan(plan_run_id, fact_round_id):
+def _shadow_capability_verified(host, desired_digest):
+    # 过渡预筛（#3875 / v1.23）：仅给当前摘要一致的 host 预约。
+    # 实际下发由 Socket.IO 握手能力按目标 SID 判定。
+    # 6704562784：旧摘要不是当前心跳的证明，必须同时核对上报时间与在线状态。
+    return bool(
+        host is not None
+        and host.status == "ONLINE"
+        and host.agent_artifact_digest_reported_at is not None
+        and host.last_heartbeat is not None
+        and host.agent_artifact_digest_reported_at >= host.last_heartbeat
+        and resolve_agent_code_sync_status(
+            agent_artifact_digest=host.agent_artifact_digest,
+            desired_artifact_digest=desired_digest,
+        ) == "matched"
+    )
+
+
+def prepare_shadow_scan(plan_run_id, fact_round_id) -> list[ShadowScanDispatch]:
     """工作线程短事务：先锁 run 与 round，再生成仅影子调用的载荷。"""
     if not get_scheduler_settings().stp_scan_round_shadow_enabled:
         return []
@@ -281,6 +332,9 @@ def prepare_shadow_scan(plan_run_id, fact_round_id):
         return []
     with SessionLocal() as db:
         if _locked_run(db, plan_run_id) is None:
+            return []
+        partition = facts.get_partition_mode(db, plan_run_id=plan_run_id, platform=_PLATFORM)
+        if partition is not None and partition.shadow_settled_at is not None:
             return []
         row = facts.get_scan_round(db, round_id=fact_round_id)
         if (
@@ -304,9 +358,30 @@ def prepare_shadow_scan(plan_run_id, fact_round_id):
             if _dispatch_due(u, now)
         }
         coverage = [dict(unit) for unit in row.expected_set]
-        payloads = []
+        host_states = {host.id: host for host in db.execute(select(
+            Host.id, Host.status, Host.agent_artifact_digest,
+            Host.agent_artifact_digest_reported_at, Host.last_heartbeat,
+        ).where(
+            Host.id.in_(targets),
+        )).all()}
+        try:
+            desired_digest = compute_desired_artifact_digest(kind=ARTIFACT_KIND_CODE)
+        except OSError:
+            logger.exception("shadow_scan_desired_digest_unavailable plan_run=%d fact_round_id=%d platform=%s",
+                plan_run_id, row.id, _PLATFORM)
+            desired_digest = ""
+        dispatches = []
         for host, status, retired in iter_plan_run_scan_hosts(db, plan_run_id):
-            if host in targets and status == "ONLINE" and not retired:
+            if host not in targets:
+                continue
+            unit = next(u for u in coverage if u["host_id"] == host)
+            if not _shadow_capability_verified(host_states.get(host), desired_digest):
+                unit.update(coverage=COVERAGE_MISSING, reason="capability_unverified")
+                logger.warning("shadow_scan_capability_unverified plan_run=%d fact_round_id=%d host=%s platform=%s",
+                    plan_run_id, row.id, host, _PLATFORM)
+                continue
+            unit.pop("reason", None)
+            if status == "ONLINE" and not retired:
                 spill = facts.list_partition_spill_inputs(
                     db, plan_run_id=plan_run_id, platform=_PLATFORM, host_id=host
                 )
@@ -319,19 +394,48 @@ def prepare_shadow_scan(plan_run_id, fact_round_id):
                     spill_inputs=spill,
                 )
                 if payload["device_serials"]:
-                    payloads.append((host, payload))
-                    for unit in coverage:
-                        if unit["host_id"] == host:
-                            unit["last_dispatched_at"] = now.isoformat()
+                    reserved_at = now.isoformat()
+                    unit["last_dispatched_at"] = reserved_at
+                    dispatches.append(ShadowScanDispatch(host, payload, reserved_at))
                 else:
                     logger.warning("shadow_scan_no_partition_serials round=%d host=%s", row.id, host)
-        if payloads:
+        if coverage != row.expected_set:
             # 行锁内先保留下发时间，再由 scan_task 发出命令；并行任务不能重复下发。
             # 提交后若执行中断，超过现行 scan_task 超时后恢复。
             facts.record_scan_round_coverage(db, round_id=row.id, coverage=coverage)
         facts.set_scan_round_status(db, round_id=row.id, status=facts.SCAN_ROUND_STATUS_RUNNING)
         db.commit()
-        return payloads
+        return dispatches
+
+
+def reject_shadow_scan_dispatch(plan_run_id, fact_round_id, dispatch: ShadowScanDispatch) -> None:
+    """Record the rejection for this reservation and preserve its retry deadline."""
+    logger.warning(
+        "shadow_scan_capability_unverified_at_send plan_run=%d fact_round_id=%d host=%s platform=%s",
+        plan_run_id, fact_round_id, dispatch.host_id, _PLATFORM,
+    )
+    with SessionLocal() as db:
+        if _locked_run(db, plan_run_id) is None:
+            return
+        row = facts.get_scan_round(db, round_id=fact_round_id)
+        if (
+            row is None
+            or row.plan_run_id != plan_run_id
+            or row.platform != _PLATFORM
+            or row.status == facts.SCAN_ROUND_STATUS_CLOSED
+        ):
+            return
+        coverage = [dict(unit) for unit in row.expected_set]
+        for unit in coverage:
+            if (
+                unit["host_id"] == dispatch.host_id
+                and unit.get("last_dispatched_at") == dispatch.reserved_at
+                and unit["coverage"] not in _COVERED
+            ):
+                unit.update(coverage=COVERAGE_MISSING, reason="capability_unverified")
+                facts.record_scan_round_coverage(db, round_id=row.id, coverage=coverage)
+                db.commit()
+                return
 
 
 def classify_round_coverage(
@@ -384,6 +488,7 @@ def read_round_reports(
     plan_run_id: int,
     fact_round_id: int,
     expected_set: list[dict],
+    *, strict: bool = False,
 ) -> list[dict]:
     """仅接受本轮命名空间、绑定相同 run/host/platform/轮次的分片条目。
 
@@ -399,6 +504,9 @@ def read_round_reports(
         except FileNotFoundError:
             continue
         except (OSError, ValueError):
+            if strict:
+                # 清单不可读不能当作「没有新迟到输入」而提前 settled。
+                raise
             logger.warning(
                 "shadow_scan_manifest_unreadable round=%d host=%s", fact_round_id, host_id
             )
