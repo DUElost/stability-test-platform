@@ -209,6 +209,7 @@ class Harness:
         self.launch_script: list = ["pass"]
         # 复核 #3902 B4：True 时模拟工具在第一次 poll_check 之前就退出。
         self.skip_poll = False
+        self.poll_verdicts: list = []
 
     def _fake_power(self, serial, action, slot):
         assert serial == SERIAL
@@ -236,6 +237,7 @@ class Harness:
         k["on_running"]()
         poll = None if self.skip_poll else k.get("poll_check")
         verdict = poll() if poll is not None else None
+        self.poll_verdicts.append(verdict)
         if verdict:
             raise ff.FlashToolAborted(verdict[1], verdict[0])
         step = self.launch_script.pop(0) if self.launch_script else "pass"
@@ -709,6 +711,8 @@ def test_power_on_echo_mismatch_kills_tool_and_stops(tmp_path, monkeypatch, caps
     assert "wrapper powered on slot" in payload["error_message"]
     assert h.power == ["off", "on"]
     assert len(h.launched) == 1
+    # 工具仍在运行时由 poll_check 杀树（与 B4 的返回后补查分开断言）
+    assert h.poll_verdicts[0][0] == "slot-mismatch"
 
 
 def test_power_on_failure_stops_without_retry(tmp_path, monkeypatch, capsys) -> None:
@@ -728,6 +732,7 @@ def test_power_on_failure_stops_without_retry(tmp_path, monkeypatch, capsys) -> 
     assert "usb-power on failed" in payload["error_message"]
     assert h.power == ["off", "on", "off"]
     assert len(h.launched) == 1
+    assert h.poll_verdicts[0][0] == "vbus-power"
 
 
 @pytest.mark.parametrize("fault", ["echo-mismatch", "on-failed"])

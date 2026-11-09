@@ -418,7 +418,7 @@
       "label": "刷机触发方式",
       "meaning": "选择怎样让设备进入 BROM 被刷机工具捕获：adb_reboot（缺省）在工具就绪后发 adb reboot，与 1.3.20 一致；vbus_cycle 用于已关机、没有 ADB 的设备，经主机上的可控 USB Hub 对该设备的槽位先断电、在工具就绪后上电。",
       "unit": "字符串（adb_reboot 或 vbus_cycle）",
-      "cautions": "去空白并转小写后，其它取值直接失败。vbus_cycle 要求本机 /etc/stp-agent/usb-power-slots.json 登记了该 serial 的槽位、stp-agent-priv 支持 usb-power，且设备已关机：adb device 态的设备先核对它在映射槽位口上，取锁后、第一次切电前被 adb reboot -p 关机，unauthorized（adb 关机与重启都做不到）直接失败，offline 等其它状态进切电流程，槽位口上有除 BROM/preloader 可刷态与关机态（0e8d:2046）之外的 USB 枚举也直接失败；这些检查不过时失败，不做任何切电。每次切电都把脚本读到的槽位交给 wrapper 比对，映射被改写时 wrapper 在切电之前拒绝；wrapper 回显的槽位仍与脚本读到的不一致时即停手。vbus_cycle 必须开启 verify_version 且固件有目标版本，并且必须开启端口绑定（V6 工具在 Linux 上缺省开启；V5 或 require_port_binding=false 直接失败）。上电后任何失败或异常都会给该槽位断电隔离。",
+      "cautions": "去空白并转小写后，其它取值直接失败。vbus_cycle 要求本机 /etc/stp-agent/usb-power-slots.json 登记了该 serial 的槽位、stp-agent-priv 的 capabilities 同时报 usb-power 与 usb-power/expect-slot（只报 usb-power 的旧 wrapper 直接失败），且设备已关机：adb device 态的设备先核对它在映射槽位口上，取锁后、第一次切电前被 adb reboot -p 关机，unauthorized（adb 关机与重启都做不到）直接失败，offline 等其它状态进切电流程，槽位口上有除 BROM/preloader 可刷态与关机态（0e8d:2046）之外的 USB 枚举也直接失败；这些检查不过时失败，不做任何切电。每次切电都把脚本读到的槽位交给 wrapper 比对，映射被改写时 wrapper 在切电之前拒绝；wrapper 回显的槽位仍与脚本读到的不一致时即停手。vbus_cycle 必须开启 verify_version 且固件有目标版本，并且必须开启端口绑定（V6 工具在 Linux 上缺省开启；V5 或 require_port_binding=false 直接失败）。上电后任何失败或异常都会给该槽位断电隔离。",
       "sensitive": false,
       "version_range": {
         "min_inclusive": "1.4.0"
