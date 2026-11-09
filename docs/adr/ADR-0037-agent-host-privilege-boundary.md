@@ -138,10 +138,10 @@
   结果层 `usb_tree_empty`（#2902 + #2967 账实合取）承接。
 
 - **D8 USB 切电通道（待裁草案，#3892；随 ADR-0063 裁定后生效）**：wrapper 拟新增子命令
-  `usb-power --serial <serial> --action {on|off|cycle} [--delay <int>]`。规格以
+  `usb-power --serial <serial> --expect-slot <hub_location>:<port> --action {on|off|cycle} [--delay <int>]`。规格以
   [ADR-0063](./ADR-0063-vbus-cycle-flash-without-adb.md) D1、D2 为准：槽位只从 root 属主的
-  `/etc/stp-agent/usb-power-slots.json` 按 serial 查得，调用方不能指定 Hub 位置或端口；固定 argv 调用
-  `/usr/sbin/uhubctl`，不经 shell，环境清空，60s 超时。sudoers 行不变（D6）。本条转为生效时，
+  `/etc/stp-agent/usb-power-slots.json` 按 serial 查得，wrapper 不得接受用来指定切电目标的 Hub 位置或端口参数（`--expect-slot` 只用于切电前比对，不一致即拒绝）；固定 argv 调用
+  `/usr/sbin/uhubctl`，不经 shell，环境清空，60s 超时，成功时回显实际槽位。安装链不得新增或修改 sudoers 行（D6）。本条转为生效时，
   §4 不变量第 2、3 条必须同批补上该子命令的强控制与测试文件。
 
 ## 3. 备选与否决

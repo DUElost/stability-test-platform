@@ -1,6 +1,6 @@
 # ADR-0063：无 ADB 设备的 USB 切电刷机（`trigger_mode=vbus_cycle`）
 
-- 状态：**Proposed** v0.3（2026-11-07 v0.3：Owner 答复 §8 三项，见 §8；新增 §8 第 4 项待裁；v0.2：补 F11 与 D4 第 5–6 条，Agent 认领侧也要改，D6 第 1 条随之订正为随 Agent 代码发布；v0.1 2026-11-07 起草；Owner 已在项目对话中裁定「与 B8 并行实施、第一期不加迁移」，本稿待 Owner 裁定 §8 第 4 项并经独立复核后转 Accepted）
+- 状态：**Proposed** v0.10（2026-11-09 v0.10：按 #3899 定向复核（comment 6731346242）P2 订正 D2 第 6 条与 D3 第 9 条（参数级能力标记 `usb-power/expect-slot`）、D3 第 4 条与第 11 条的措辞、D6 第 1 条的执行主体，§5.2 补旧 wrapper 反例；v0.9：按 #3899 定向复核（comment 6708089815）新增 `--expect-slot` 切电前比对（D2 第 1、8 条，D3 第 13 条），消解 D3 第 8 与第 13 条的冲突，补写作约定与 §5 验收清单；v0.8：Owner 裁定 §8 第 6 项选甲，D2 第 9 条的残余面第一期接受，§8 无待裁项；v0.7：按 U2–U4 独立复核订正 D3 第 4、6、8 条与 D4 第 6 条——vbus 必须开启 V6 端口绑定，OOBE 只取跳过部分，刷后异常同样隔离，vbus 作业不论设备在线与否只走 vbus 名额；v0.6：按独立复核（PR #3899 comment 6706217246）收口 D1/D2/D3/D4/D6 与写作约定，D2 新增第 8 条残余面待 Owner 裁定（§8 第 6 项），§6 拆分 U2 激活步骤；v0.5：Owner 提供关机态 lsusb（`0e8d:2046`），§8 第 5 项转已裁，D3 第 11 条放行集合补 2046；v0.4：Owner 裁定 §8 第 4 项（unauthorized 排除）与「设备必须已关机」前提，新增 D3 第 11–12 条，订正 D3 第 6 条键序；新增 §8 第 5 项待裁；v0.3：Owner 答复 §8 三项，见 §8；新增 §8 第 4 项待裁；v0.2：补 F11 与 D4 第 5–6 条，Agent 认领侧也要改，D6 第 1 条随之订正为随 Agent 代码发布；v0.1 2026-11-07 起草；Owner 已在项目对话中裁定「与 B8 并行实施、第一期不加迁移」，本稿待定向复核通过后转 Accepted）
 - 优先级：P1
 - 目标里程碑：M7
 - 日期：2026-11-07
@@ -20,9 +20,10 @@
 ### 1.1 需求
 
 现行 `flash_firmware` 依赖设备开机且 ADB 在线：刷前用 `adb reboot` 让设备流经 BROM/Preloader 窗口。
-设备关机、处于关机充电态（`0e8d:201c`）、User 版本关闭调试或系统假死时，ADB 不可用，现场只能人工插拔。
+设备关机（插着 USB 时呈现 `0e8d:2046`，§8 第 5 项）、User 版本关闭调试或系统假死时，ADB 不可用，现场只能人工插拔。
 #3892 要求用可逐口切电的 USB Hub（`uhubctl`）代替人工插拔，并把「切电 → 刷写 → 开机 → 跳过 OOBE →
 版本核验」做成单台闭环，单主机严格串行。
+`0e8d:201c` 是 MLD-LX2/LX3/NX2 开机后的正常 ADB 态（也是 HONOR DA 态），不是关机态；槽位口出现 201c 即按开机态处理（D3 第 11 条）。
 
 ### 1.2 现行代码事实
 
@@ -47,21 +48,25 @@ B8（#3800）在途单元 G4（#3877 / PR #3897）、#3875（PR #3896）、#3889
 因此不进入 B8 的迁移链排序。脚本走包分发、wrapper 走 Ansible；但 Agent 认领循环（F11、D4 第 5 条）是
 Agent 代码，会改变控制面的期望 digest，而 #3875 的影子能力守卫要求主机 digest 与期望值一致，
 所以这部分必须进入 B8 的 Agent 代码滚动（见 D6 第 1 条）。
+其余三个发布面（wrapper、脚本包、控制面准入）都不在 Agent 代码载荷内，不改变期望 digest。
 
 ## 2. 决策
 
 ### D1 槽位映射：主机本地、root 属主的单一来源
 
 1. 每台装有可控 Hub 的主机必须有一份映射文件 `/etc/stp-agent/usb-power-slots.json`，属主 `root:root`，
-   权限 `0644`，内容为 serial 到槽位的映射：
+   权限 `0644`；父目录 `/etc/stp-agent` 必须为 `root:root 0755`，不得 group/other 可写（防同目录 rename 替换；
+   Agent 进程要读这份文件，目录必须可搜索）。内容为 serial 到槽位的映射：
 
    ```json
    {"schema": 1, "slots": [{"serial": "<adb serial>", "hub_location": "1-1.4", "port": 3}]}
    ```
 
-2. 映射文件只能由 Ansible（inventory `host_vars`）写入；Agent 用户不得有写权限。
+2. 映射文件必须只由 Ansible（inventory `host_vars`）写入；其他主体不得写入，Agent 用户不得有写权限。
 3. wrapper（D2）与刷机脚本（D3）都必须只从这份文件读取槽位；脚本不得接受步骤参数里的 `hub_location` 或 `port`。
-4. 同一 `serial` 只能出现一次；同一 `(hub_location, port)` 只能出现一次。wrapper 读到违反任一条的文件时必须拒绝全部切电请求。
+4. 映射文件中 `serial` 必须唯一，`(hub_location, port)` 必须唯一；`schema` 必须为 1，每条只含 `serial`、`hub_location`、`port`
+   三个字段，`hub_location` 必须匹配 `usb-authorized` 的端口名正则，`port` 必须是 1–16 的整数。wrapper 读到违反任一条的文件时
+   必须拒绝全部切电请求（`uhubctl -p` 接受端口列表与范围，未校验的 `port` 可以一次切断整个 Hub）。
 5. 第一期不得新增数据库迁移。槽位入库（R-05 的 rack/slot 字段）留作第二期，另立单元。
 
 ### D2 提权窄面：`usb-power` 子命令（修订 ADR-0037，对应其待裁草案 D8）
@@ -69,65 +74,121 @@ Agent 代码，会改变控制面的期望 digest，而 #3875 的影子能力守
 1. wrapper 新增子命令：
 
    ```
-   stp-agent-priv usb-power --serial <serial> --action {on|off|cycle} [--delay <int>]
+   stp-agent-priv usb-power --serial <serial> --expect-slot <hub_location>:<port> --action {on|off|cycle} [--delay <int>]
    ```
 
-2. wrapper 必须按 `--serial` 在 D1 映射文件中查槽位；查不到时必须以非零退出拒绝。调用方不能指定任意 Hub 或端口。
-3. `--serial` 必须匹配 `^[A-Za-z0-9._:-]{1,64}\Z`；`--delay` 只对 `cycle` 有效，取值 1–30；`allow_abbrev=False`。
+2. wrapper 必须按 `--serial` 在 D1 映射文件中查槽位；查不到时必须以非零退出拒绝。wrapper 不得接受用来指定切电目标的
+   Hub 位置或端口参数；`--expect-slot` 只用于第 8 条的比对，切电目标必须只取自映射。
+3. wrapper 必须要求 `--serial` 匹配 `^[A-Za-z0-9._:-]{1,64}\Z`；必须要求 `--expect-slot` 存在，且其 `hub_location`
+   匹配 D1 第 4 条的正则、`port` 为整数 1–16；必须只在 `--action cycle` 时接受 `--delay`，取值 1–30，越界即拒绝；
+   parser 必须设 `allow_abbrev=False`。
 4. wrapper 必须用固定 argv 调用 `/usr/sbin/uhubctl -l <hub_location> -p <port> -a <action> [-d <delay>]`，
    不经 shell；子进程环境只留 `LC_ALL=C` 与 `PATH=/usr/bin:/bin`，超时 60s。
-5. wrapper 必须在调用前校验 `/usr/sbin/uhubctl` 是 root 属主、非 group/other 可写的普通文件，
-   并校验 `hub_location` 在 `/sys/bus/usb/devices/` 下解析为 `/sys/devices` 内同名的真实目录（沿用 `usb-authorized` 的判定）。
-6. `capabilities` 输出必须包含 `usb-power`；ADR-0037 §4 不变量第 2、3 条的强控制与测试清单必须同批补上本子命令。
-7. sudoers 行不变（ADR-0037 D6：仍是 wrapper 单命令）。
+5. wrapper 必须在调用前校验：
+   - `/usr/sbin/uhubctl` 是 root 属主、非 group/other 可写的普通文件；
+   - 映射文件以 `O_NOFOLLOW` 打开，`fstat` 为普通文件、root 属主、非 group/other 可写、不超过 64 KiB；父目录同样为 root 属主且非 group/other 可写；
+   - `hub_location` 在 `/sys/bus/usb/devices/` 下解析为 `/sys/devices` 内同名的真实目录（沿用 `usb-authorized` 的判定）。
+6. `capabilities` 输出必须包含 `usb-power` 与参数级标记 `usb-power/expect-slot`（后者表示本子命令实现了第 1 条的 `--expect-slot` 比对）；ADR-0037 §4 不变量第 2、3 条的强控制与测试清单必须同批补上本子命令。
+7. 安装链不得新增或修改 sudoers 行（ADR-0037 D6：仍是 wrapper 单命令）。
+8. wrapper 必须在调用 `uhubctl` 之前比对查表得到的槽位与 `--expect-slot`；不一致时必须以 exit 2 拒绝，stderr 带
+   `STP_USB_POWER_SLOT_MISMATCH`，且不得执行任何切电（映射在调用方与 wrapper 两次读取之间被改写时，不会先切错一次）。
+   wrapper 成功时必须在 stdout 回显本次实际使用的 `serial`、`hub_location`、`port` 与 `action`，供调用方做纵深核对（D3 第 13 条）。
+9. 信任边界的残余面：wrapper 不校验主机锁、作业或租约，Agent 用户可以对映射里任一已登记 serial 直接切电，
+   包括同主机上另一台正在跑测试的设备。本边界只保证「不能指定任意 Hub 或端口」，不保证「只能操作当前作业的设备」。
+   Owner 2026-11-07 裁定第一期接受这一残余面（§8 第 6 项，甲）；第二期槽位入库时，规划者必须重新评估作业绑定。
 
 ### D3 刷机脚本：`flash_firmware` 新版本增加 `trigger_mode`
 
 1. 实施者必须以 `flash_firmware` 的新版本落地（ADR-0051；不得原地改已发布版本），新增步骤参数
    `trigger_mode ∈ {"adb_reboot", "vbus_cycle"}`，缺省为 `adb_reboot`。
 2. `trigger_mode` 缺省时，新版本的行为必须与上一版本逐项一致；现有版本测试必须全部通过。
-3. `vbus_cycle` 的单台流程按顺序为：取主机锁 → 读 D1 槽位 → `usb-power off` → 等待
-   `vbus_off_settle_seconds`（缺省 12，取值 5–30）→ 启动刷机工具进入 USB 扫描 → 工具就绪回调中
+3. `vbus_cycle` 的单台流程按顺序为：取主机锁 →（ADB `device` 态时 `adb reboot -p`，见第 11 条）→ `usb-power off` → 等待
+   `vbus_off_settle_seconds`（缺省 12，取值 10–30，下限对齐 #3892 的 10–15s 放电要求）→ 启动刷机工具进入 USB 扫描 → 工具就绪回调中
    `usb-power on` → 捕获与写包 → 等待开机与 ADB → 跳过 OOBE → 版本核验 → 释放主机锁。
 4. 门控目标口必须取自槽位（sysfs 名 `<hub_location>.<port>`），不得在 `vbus_cycle` 下按 serial 反查。
+   `vbus_cycle` 必须开启端口绑定（V6 工具带 `-p <槽位口>`，并逐行核对工具回显的绑定口）。工具为 V5 或主机不是 Linux 时，
+   即使步骤参数 `require_port_binding=true`，脚本也必须在取锁前失败；`require_port_binding=false` 时，脚本同样必须在取锁前失败（复核 #3902：关掉绑定等于让工具扫全部 MTK 口）。
 5. 主机锁必须覆盖第 3 条从「取锁」到「版本核验」的全部阶段；锁外不得开启任何槽位的供电。
-6. 跳过 OOBE 必须在本脚本内完成（唤醒 224 → 解锁 82 → force-stop setupwizard → HOME 3，与现行
-   `oobe_skip` 同序）；脚本不得 import 其他脚本包的代码。
-7. 各阶段必须有独立硬超时，缺省值：BROM 捕获 120s、写包沿用现行工具超时、开机到 ADB 300s、OOBE 60s、版本核验 60s。
-8. 开启供电之后的任一阶段失败或超时，脚本必须在 `finally` 中对本槽位执行 `usb-power off`，再释放锁；
-   SIGTERM / SIGINT / SIGHUP 处理器必须走同一收尾路径。
-9. 脚本在取锁之前必须确认 wrapper `capabilities` 含 `usb-power` 且本机有 D1 映射文件、目标 serial 在其中；
+6. 跳过 OOBE 必须在本脚本内完成，配方取现行 `oobe_skip` 1.1.x 的跳过部分：写 `user_setup_complete` 与
+   `device_provisioned` 两个标志 → force-stop setupwizard → 唤醒 224 → 解锁 82 → HOME 3，以两个标志回读为 1
+   作为判据（v0.3 写成「224 → 82 → force-stop → 3」，与 `oobe_skip` 实际顺序不符，v0.4 订正）；
+   单条 adb 命令的超时不得超过本阶段剩余预算。`oobe_skip` 的 `adb root` 与 `system_locales` 不属于跳过 OOBE，
+   脚本不得在锁内执行；需要时由 Plan 在后续步骤用 `ensure_root` / `oobe_skip` 完成（与 §8 第 2 项「`ensure_root` 不进锁」同口径）。
+   脚本不得 import 其他脚本包的代码。
+7. 脚本必须为各阶段设置独立硬超时，缺省值：BROM 捕获 120s、写包沿用现行工具超时、开机到 ADB 300s、OOBE 60s、版本核验 60s。
+8. 开启供电之后的任一阶段失败、超时或抛出异常，脚本必须对本槽位执行 `usb-power off`，再释放锁；只有全链成功且没有抛出异常时，
+   脚本才可以保持供电。第 13 条第 2 款的情形是唯一例外：脚本不得再做隔离断电。隔离断电同样必须带脚本读到的槽位，
+   wrapper 因映射已改写而拒绝时，脚本必须把结果记为隔离失败；
+   SIGTERM / SIGINT / SIGHUP 处理器必须走同一收尾路径。`usb-power off` 本身失败时，脚本仍必须释放锁，并在结果 JSON
+   标记隔离失败。SIGKILL 不可捕获，门控由下一任脚本按现有 gate-state 机制恢复；槽位供电状态由下一任 vbus 刷机的首次断电覆盖。
+9. 脚本在取锁之前必须确认 wrapper `capabilities` 同时含 `usb-power` 与 `usb-power/expect-slot`（只报 `usb-power` 的旧 wrapper 未实现 `--expect-slot`），且本机有 D1 映射文件、目标 serial 在其中；
    任一不满足时必须直接失败，并且不得执行任何切电动作。
 10. 结果 JSON 必须带 `trigger_mode` 与 `vbus` 段（槽位、各阶段耗时、隔离是否执行）。
+11. 设备必须已关机（Owner 2026-11-07）：开机态的手机断电再上电不经过 BROM，工具检测不到刷机口。脚本必须按下列规则
+    满足或拒绝这一前提，拒绝时不得执行任何切电动作。取锁之前脚本必须只做只读探测（ADB 状态、槽位口枚举、wrapper 能力、映射）；既有的孤儿门控恢复（上一任脚本被 SIGKILL 后把残留的 `authorized=0` 恢复为 1，见第 8 条）是唯一例外，它不切电，但可能改变被上一任门控端口的 `authorized`（本 job 的槽位口恰是上一任的非目标口时，该口的 USB 授权状态会变）；锁内第一次切电前的复核覆盖这一变化：
+    - ADB 为 `device` 态时，脚本必须在取锁前按 serial 反查 sysfs，确认设备就在映射槽位口上，不符即失败；
+      然后在取锁后、第一次 `usb-power off` 之前执行 `adb reboot -p`，等设备从 adb 消失、且槽位口不再呈现开机态
+      （可刷态与关机态 `0e8d:2046` 都算已关机；`vbus_poweroff_timeout_seconds`，缺省 60），超时即失败；
+    - ADB 为 `unauthorized` 时，脚本必须直接失败：关机与重启都无法用命令做到（与 D4 第 2 条 `device_error` 照常拒绝同口径）；
+    - 其它 ADB 状态（`offline`、不可见等）进切电流程；
+    - 槽位口 `<hub_location>.<port>` 上已有不在可刷态（`0e8d` 且 PID ∈ `_BROM_GATE_PIDS` = `0003/2000/2001/3000/2026`，
+      不含 `201c`）、也不在关机态（`0e8d:2046`，§8 第 5 项）的 USB 枚举时，脚本必须判为开机态并失败；这一条识别
+      「开机但没开 ADB」的设备。取锁后第一次切电前必须再复核一次。
+12. `trigger_mode=vbus_cycle` 且未给 `firmware_dir` 时，设备读不到 `ro.product.model`，步骤必须用参数 `model` 声明机型；
+    脚本必须在切电前按族表与固件 manifest 的 `models` 校验声明值，刷后必须回读机型，与声明不一致判失败。
+    `adb_reboot` 路径不读本参数，指纹路由不变。
+13. 槽位一致性按两款执行：
+    - 第 1 款：脚本每次调用 `usb-power` 都必须带 `--expect-slot <脚本读到的 hub_location>:<port>`。wrapper 以
+      `STP_USB_POWER_SLOT_MISMATCH` 拒绝（D2 第 8 条，此时没有任何口被切）时，脚本必须立即失败；第 8 条的隔离断电照常尝试，
+      映射仍不一致时 wrapper 会再次拒绝，结果记为隔离失败。
+    - 第 2 款：断电、上电、隔离三处，wrapper 回显的槽位仍与脚本读到的不一致（说明 wrapper 没有按 D2 第 8 条比对）时，
+      脚本必须立即失败，并且不得再执行任何切电动作，包括第 8 条的隔离断电；上电回显不符或上电失败时，脚本必须杀掉刷机工具
+      并终止尝试，不得重试；隔离回显不符时，脚本必须把结果记为隔离失败。
 
 ### D4 派发与认领准入：只为 vbus 刷机步骤放行 `device_offline`
 
 1. 派发准入（F2）与 Agent 认领（F3）对同一判据放行：作业 `pipeline_def.lifecycle.init` 的第一个步骤是
-   `script:flash_firmware` 且其参数 `trigger_mode == "vbus_cycle"`（派发侧按 Plan 快照判定，认领侧按作业的
-   `pipeline_def` 判定，两处必须用同一个判定函数）。
+   `script:flash_firmware` 且其参数 `trigger_mode == "vbus_cycle"`。两处必须用同一个判定函数。派发侧有三个调用点，
+   必须都接入，且都按冻结的 Plan 快照判定（判定参数不得有放行缺省值）：
+   - `prepare_plan_run`（排队理由）；
+   - 准入泵终检 `admission_pump.admission_transaction`（用 `pr.plan_snapshot`）；
+   - legacy `complete_plan_run_dispatch` → `_validate_dispatch_devices_sync`。
+   认领侧按作业的 `pipeline_def` 判定。
 2. 放行只豁免 `device_offline` 与认领侧的 ADB 状态过滤；`not_found`、`no_host`、`host_retired`、
    `device_retired`、`serial_conflict`、`device_error`、`host_offline`、`host_maintenance`、
-   `device_return_debt`、`active_lease` 必须照常拒绝。
-3. 被放行的设备必须已有设备行且绑定到某台主机；第一期不得为从未上线的设备自动建行。
-4. 不满足第 1 条的作业，准入与认领行为必须与现行完全一致。
+   `device_return_debt`、`active_lease` 必须照常拒绝。认领侧的 ADB 过滤原本顺带挡住了 `ERROR`（unauthorized）设备，
+   豁免它之后，控制面必须在 vbus 候选查询中显式排除 `status=ERROR` 与 `adb_state=unauthorized`。
+3. 被放行的设备必须已有设备行且绑定到某台主机；第一期控制面不得为从未上线的设备自动建行。
+4. 不满足第 1 条的作业，控制面的准入与认领行为必须与现行完全一致。
 5. Agent 在本机存在 D1 映射文件时，必须在认领请求中带 `vbus_slots=1`，并且在 `available_slots ≤ 0` 时也调用认领接口；
    映射文件不存在时，Agent 不得带该字段，行为与现行一致。
-6. 控制面必须把 vbus 刷机作业与普通作业分开计数：普通作业仍受 `capacity` 限制，放行的关机设备上的 vbus 作业
-   每次认领最多返回 `vbus_slots` 个，且不占用 `capacity`。未带 `vbus_slots` 的请求（旧 Agent）不得认领关机设备上的作业。
+6. 控制面必须把 vbus 刷机作业与普通作业分开计数：普通作业仍受 `capacity` 限制；放行的关机设备上的 vbus 作业
+   每次认领最多返回 `vbus_slots` 个，不占用 `capacity`。`vbus_slots` 是独立的 host 级并发上限，取值 0–1，缺省 0；
+   vbus 候选查询在 `capacity=0` 时也必须执行。未带 `vbus_slots` 的请求（旧 Agent）不得认领关机设备上的作业。
+   关机设备上只有最早一条 PENDING 作业是 vbus 刷机作业时，控制面才可以认领它；`uq_job_active_per_device` 保证一台设备同时只有
+   一条 PENDING/RUNNING 作业，所以不存在「较早非 vbus + 较晚 vbus」的混合队列。本 host 已有 RUNNING 的 vbus 作业时，
+   控制面不得再返回新的 vbus 作业。
+   vbus 刷机作业不论设备是否在线，控制面都必须只经 vbus 名额认领：控制面必须先从普通候选中滤掉 vbus 刷机作业，再按 `capacity` 截断，
+   使 vbus 作业既不被普通名额认领、也不挤占普通名额（复核 #3901：否则普通路径可绕过上一句的守卫）。vbus 名额的候选是本 host
+   上未退役、非 `ERROR`、非 `unauthorized`、无 ACTIVE 租约的设备，在线与关机设备都在内。未带 `vbus_slots` 的请求
+   （旧 Agent）认领不到任何 vbus 作业，作业保持 PENDING（D6 第 4 条）。
 
 ### D5 与设备归还契约的关系
 
 1. `vbus_cycle` 失败后槽位处于断电态，设备不会回到在线；这一结果按 ADR-0061 进入欠账，本 ADR 不新增例外。
-2. 有欠账的设备不能再被 vbus 刷机派发（D4 第 2 条照常拒绝 `device_return_debt`）；需要人工清偿或放行。
+2. 有欠账的设备不得再被 vbus 刷机派发（D4 第 2 条照常拒绝 `device_return_debt`）。清偿或放行必须由 Owner 或管理员按 ADR-0061 执行。
 
 ### D6 发布与激活
 
 1. 本 ADR 有四个发布面：wrapper + 映射文件 + `uhubctl` 包经 Ansible 只下发到装有可控 Hub 的主机；
    脚本新版本经包发布；准入改动随控制面常规部署；Agent 认领循环（D4 第 5 条）随 Agent 代码发布。
-   前三者不得与 B8 的 Agent 代码滚动合批。Agent 认领循环的改动建议在 G4、#3875、#3889 的联合 Agent 发布
-   截止前合入并随之滚动；理由：它在没有映射文件的主机上不改变行为，单独再滚一次全机队的代价高于合批。
+   前三者不改变 Agent 期望 digest，实施者不得把前三者与 B8 的 Agent 代码滚动合批。Agent 认领循环的改动必须随一次联合 Agent 发布
+   滚动（首选 G4、#3875、#3889 那一次；赶不上截止就顺延到下一次），不得单独部署。理由：它改变期望 digest，
+   #3875 守卫要求全机队 digest 一致；它在没有映射文件的主机上不改变行为。U4 部署前，实施者必须核对控制面
+   `compute_desired_artifact_digest` 与该次联合发布一致；影子开关保持关闭，直到全机队 digest 匹配。
 2. 激活只发生在 Plan 显式选择 `trigger_mode=vbus_cycle` 时；不设全局开关。
-3. 首次真机验收必须在 1 台主机、2 台设备上完成 #3892 验收清单后，才允许在其他主机下发映射文件。
+3. 首次真机验收必须在 1 台主机、2 台设备上完成 #3892 验收清单；只有验收通过后，实施者才可以在其他主机下发映射文件。
+4. 实施者必须只把 vbus Plan 派到已具备映射文件与新 Agent 的主机；旧 Agent 不带 `vbus_slots`，作业会一直 PENDING。
 
 ## 3. 备选与否决
 
@@ -150,9 +211,24 @@ Agent 代码，会改变控制面的期望 digest，而 #3875 的影子能力守
 
 沿用 #3892 验收清单，并补充：
 
-1. wrapper：未登记 serial、重复登记、`--delay` 超限、缩写参数、非 root 属主的 `uhubctl` 均被拒绝（单测）。
-2. 脚本：`trigger_mode` 缺省时与上一版本逐项一致（现有测试全绿）；`vbus_cycle` 各阶段超时都会触发 `finally` 断电（单测）。
-3. 准入：只有满足 D4 第 1 条的作业放行 `device_offline`；其他拒绝理由不受影响（单测，覆盖派发与认领两处）。
+1. wrapper（单测）：
+   - 未登记 serial、`--delay` 超限或用于非 `cycle`、缩写参数、缺 `--expect-slot` 或其取值非法，均被拒绝；
+   - `--expect-slot` 与映射不一致时，在调用 `uhubctl` 之前拒绝；
+   - 映射文件：symlink、group/other 可写、非 root 属主、超过 64 KiB、父目录可写或非 root 属主、`schema`/字段/`port` 1–16 非法、
+     serial 或槽位重复，均整份拒绝；
+   - `uhubctl` 非 root 属主或 group/other 可写时拒绝；`hub_location` 不在内核 sysfs 树内时拒绝；
+   - 固定 argv、环境只留 `LC_ALL`/`PATH`、超时 60s、非 root 拒绝；成功时回显实际槽位。
+2. 脚本（单测）：
+   - `trigger_mode` 缺省时与上一版本逐项一致（现有测试全绿）；
+   - 取锁前各闸失败时零切电：映射、`capabilities`（含旧 wrapper 只报 `usb-power`、缺 `usb-power/expect-slot` 的反例）、V6 端口绑定、`unauthorized`、`device` 态端口身份、槽位口开机态
+     （`0e8d:2046` 放行、`201c` 拒绝）、未声明 `model`、`verify_version` 关闭；
+   - `device` 态的 `adb reboot -p` 在取锁之后执行；
+   - 上电后各阶段失败、超时、抛出异常与收到信号，都在释放锁前断电隔离；成功时保持供电；
+   - wrapper 以槽位不一致拒绝时不切任何口；回显不一致时不再切电。
+3. 准入（单测，覆盖派发与认领两处）：
+   - 只有满足 D4 第 1 条的作业放行 `device_offline`，三个派发调用点都覆盖；其他拒绝理由不受影响；
+   - 认领：`ERROR`/`unauthorized`、退役、ACTIVE 租约不放行；`capacity=0` 时 vbus 名额照常认领；旧 Agent 认领不到 vbus 作业；
+     在线设备上的 vbus 作业只走 vbus 名额；本 host 已有在跑的 vbus 作业时不再返回新的。
 4. 真机：1 台主机、2 台关机设备，串行完成全链路；注入卡开机，确认断电隔离后第 2 台照常完成。
 
 ## 6. 实施单元（按 ADR-0058 批次）
@@ -160,11 +236,17 @@ Agent 代码，会改变控制面的期望 digest，而 #3875 的影子能力守
 | 单元 | 内容 | 复核 |
 |---|---|---|
 | U1 | 本 ADR + ADR-0037 待裁草案 D8 | Owner 裁定 + 独立复核 |
-| U2 | wrapper `usb-power`、Ansible 下发映射文件与 `uhubctl`、测试 | 必须复核（安全） |
+| U2 | wrapper `usb-power`、Ansible 下发映射文件与 `uhubctl`、测试（激活拆为 U2a / U2b / U2c，见下） | 必须复核（安全） |
 | U3 | `flash_firmware` 新版本 `trigger_mode=vbus_cycle`、测试 | 必须复核（难回退：物理断电） |
 | U4 | 派发与认领准入放行、Agent 认领循环 `vbus_slots`、测试 | 必须复核 |
 
-U2、U3、U4 可以并行实施；激活顺序为 U2 部署 → U3 发布 → U4 部署（控制面 + 随 B8 的 Agent 滚动）→ 真机验收。
+U2、U3、U4 可以并行实施。激活顺序：
+1. U2a：wrapper 与 `uhubctl` 下发到装有可控 Hub 的主机（`update_agent.yml` + `ensure_usb_power_slots.yml` 的安装部分）；
+2. U2b：映射文件只下发到验收主机；
+3. U3 发布；
+4. U4 部署（控制面 + 随联合 Agent 发布滚动，D6 第 1 条）；
+5. 真机验收（D6 第 3 条）；
+6. U2c：验收通过后，其余主机下发映射文件。
 
 ## 7. Revisit
 
@@ -182,9 +264,22 @@ U2、U3、U4 可以并行实施；激活顺序为 U2 部署 → U3 发布 → U4
 3. 待刷设备在平台都已有设备行（平台另有 lsusb 方式确认物理在线，但 ADB 不一定在线）。D4 第 3 条成立。
    注：lsusb 只计物理连接数，不建设备行，也不改设备状态；关机设备的状态仍按 F1 变为 `OFFLINE`。
 
-待裁：
+4. ADB 为 `unauthorized` 的设备（控制面置 `ERROR`，派发按 `device_error` 拒绝）不放行，且以后也不加入：
+   平台无法用 adb 让它关机或重启，新旧刷机方式都不可行。
+   凡能用命令或编程手段满足「已关机」前提的设备（`device` 态先 `adb reboot -p`；`offline` 等已关机且 lsusb 可识别的设备）
+   都可以进入 vbus 刷机计划，见 D3 第 11 条。
 
-4. ADB 处于 `unauthorized` 等非 `device` 态时，控制面把设备置为 `ERROR`（`heartbeat.py` 设备状态分支），派发按
-   `device_error` 拒绝，D4 不放行。User 版本设备若 ADB 可见但未授权，就会落在这里。本稿提案：第一期不放行，
-   只覆盖 ADB 完全不可见（`OFFLINE`）的设备；如果现场确有该形态，再把 `device_error` 中 `adb_state=unauthorized`
-   的子集加入放行。
+5. 已关机、lsusb 可识别的设备在槽位口上呈现 `0e8d:2046`（Owner 2026-11-07 现场 lsusb：MLD-LX3 关机 18 台全为
+   `0e8d:2046 MediaTek Inc. MLD-LX3`，`adb devices` 为空）。D3 第 11 条据此放行 2046。
+   开机但没开 ADB、同样呈现 2046 的设备在 USB 层无法与关机态区分，这类设备会在 BROM 捕获超时后失败并断电隔离（D3 第 8 条）。
+   其它机型的关机态 PID 若不同，以新脚本版本补放行集合。
+
+已裁（续）：
+
+6. D2 第 9 条的残余面：Agent 用户可对任一已登记 serial 直接切电，wrapper 不校验主机锁、作业或租约。
+   **已裁（Owner 2026-11-07）：甲**，第一期接受，记为残余风险。备选：
+   - 甲：第一期接受，写入残余风险。同一 Agent 用户现在已能经 `usb-authorized` 隐藏任一 MTK 口、经 adb 重启任一设备，
+     风险等级相同；第二期槽位入库时再评估作业绑定。
+   - 乙：wrapper 校验调用时刻持有主机刷机锁（`/tmp/stp-flash-firmware.lock` 的 flock 持有者为调用方进程树）。
+     只证明「有刷机在进行」，不证明是本 serial 的作业。
+   - 丙：控制面签发一次性 token（作业 id + serial + 有效期），wrapper 校验。需要新的控制面接口与密钥管理，超出第一期。
