@@ -56,3 +56,21 @@ def test_agent_socketio_connect_forces_websocket_transport(monkeypatch):
         "Agent 必须 websocket-only：polling 需会话亲和，与无 sticky 契约冲突（#1121）"
     )
     assert rec.connect_kwargs.get("namespaces") == ["/agent"]
+
+
+def test_agent_socketio_handshake_declares_shadow_scan_capability(monkeypatch):
+    monkeypatch.setattr(
+        "backend.agent.socketio_client._sio_lib",
+        SimpleNamespace(Client=_RecordingClient),
+    )
+    monkeypatch.setattr("backend.agent.socketio_client._HAS_SOCKETIO", True)
+
+    client = AgentSocketIOClient(
+        api_url="http://127.0.0.1:8000", host_id="host-1", agent_secret="s"
+    )
+    assert client.connect() is True
+    assert _RecordingClient.last.connect_kwargs["auth"] == {
+        "agent_secret": "s",
+        "host_id": "host-1",
+        "capabilities": ["scan_round_v1"],
+    }

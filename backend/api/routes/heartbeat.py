@@ -269,6 +269,7 @@ def _process_heartbeat_with_db(
     # 空值不覆盖——digest 缺失（未部署新协议/文件损坏）不应抹掉已知状态。
     if payload.agent_artifact_digest:
         host.agent_artifact_digest = payload.agent_artifact_digest
+        host.agent_artifact_digest_reported_at = now
     # ADR-0040 D8 R4：host-resources 层退役——旧 Agent 仍可能上报 agent_resources_digest
     # （载荷照收以免 422），但控制面**不再写** host.agent_resources_digest（列保留一个版本窗口）。
 

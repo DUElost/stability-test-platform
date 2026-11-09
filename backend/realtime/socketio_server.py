@@ -176,11 +176,16 @@ class AgentNamespace(socketio.AsyncNamespace):
     def __init__(self, namespace: str):
         super().__init__(namespace)
         self._host_to_sid: dict[str, str] = {}
+        self._sid_capabilities: dict[str, frozenset[str]] = {}
         self._lock = asyncio.Lock()
 
     def get_sid(self, host_id: str) -> Optional[str]:
         """Return the SocketIO sid for a connected agent, or None."""
         return self._host_to_sid.get(str(host_id))
+
+    def get_capabilities(self, sid: str) -> frozenset[str]:
+        """Return only the capabilities declared by this connection."""
+        return self._sid_capabilities.get(sid, frozenset())
 
     def connected_host_ids(self) -> list[str]:
         """Return host_ids with an active connection (testing helper)."""
@@ -208,8 +213,19 @@ class AgentNamespace(socketio.AsyncNamespace):
         async with self.session(sid) as session:
             session["host_id"] = host_id
 
+        capabilities = auth.get("capabilities")
+        declared = (
+            frozenset(capabilities)
+            if isinstance(capabilities, list) and all(isinstance(cap, str) for cap in capabilities)
+            else frozenset()
+        )
         async with self._lock:
-            self._host_to_sid[str(host_id)] = sid
+            host_key = str(host_id)
+            previous_sid = self._host_to_sid.get(host_key)
+            if previous_sid is not None and previous_sid != sid:
+                self._sid_capabilities.pop(previous_sid, None)
+            self._host_to_sid[host_key] = sid
+            self._sid_capabilities[sid] = declared
 
         await self.enter_room(sid, f"agent:{host_id}")
         from backend.realtime.agent_sid_registry import register_agent_owner
@@ -221,11 +237,11 @@ class AgentNamespace(socketio.AsyncNamespace):
     async def on_disconnect(self, sid: str):
         async with self.session(sid) as session:
             host_id = session.get("host_id")
+        async with self._lock:
+            self._sid_capabilities.pop(sid, None)
+            if host_id and self._host_to_sid.get(str(host_id)) == sid:
+                self._host_to_sid.pop(str(host_id), None)
         if host_id:
-            async with self._lock:
-                tracked_sid = self._host_to_sid.get(str(host_id))
-                if tracked_sid == sid:
-                    self._host_to_sid.pop(str(host_id), None)
             from backend.realtime.agent_sid_registry import unregister_agent_owner
 
             await unregister_agent_owner(str(host_id), sid)
@@ -860,6 +876,26 @@ async def call_agent_control(
             return False
         call_kwargs["room"] = f"agent:{host_id}"
 
+    return await _send_agent_control(host_id, command, payload, **call_kwargs)
+
+
+async def call_shadow_scan_control(host_id: str, *, payload: dict) -> bool | None:
+    """Return None for an unverified connection, otherwise the usual ACK result."""
+    ns = _agent_ns
+    if ns is None:
+        return None
+    sid = ns.get_sid(host_id)
+    if not sid or "scan_round_v1" not in ns.get_capabilities(sid):
+        return None
+    # Send to the verified SID even if the host reconnects during the send.
+    return await _send_agent_control(
+        host_id, "scan_now", payload, to=sid, namespace="/agent", timeout=3.0, ignore_queue=True,
+    )
+
+
+async def _send_agent_control(
+    host_id: str, command: str, payload: Optional[Dict[str, Any]], **call_kwargs: Any,
+) -> bool:
     sio = get_sio()
     try:
         ack = await sio.call(

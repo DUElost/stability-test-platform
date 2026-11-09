@@ -74,6 +74,7 @@ class SchedulerSettings(DomainSettings):
     stp_scan_round_shadow_enabled: bool = False
     stp_scan_round_interval_seconds: int = Field(default=21600, gt=0)
     stp_scan_round_report_wait_seconds: int = Field(default=7200, gt=0)
+    stp_scan_round_merge_max_attempts: int = Field(default=3, ge=1)
     stp_admission_pump_interval_seconds: int = 5
     stp_counter_reconcile_interval_seconds: int = 300
     stp_signal_link_reconcile_interval_seconds: int = 300

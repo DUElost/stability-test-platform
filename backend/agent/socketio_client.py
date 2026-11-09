@@ -185,6 +185,7 @@ class AgentSocketIOClient:
                 auth={
                     "agent_secret": self._agent_secret,
                     "host_id": str(self._host_id),
+                    "capabilities": ["scan_round_v1"],
                 },
                 # #1121：websocket-only——见 _build_url；WS 不可用时立即失败
                 # （可观测），不再静默降级为依赖 sticky 的 polling。
