@@ -82,15 +82,19 @@ def reclaim_scan_staging(scan_root: "str | Path | None") -> None:
         logger.warning("scan_staging_reclaim_failed root=%s", scan_root, exc_info=True)
 
 
-def _fresh_zero_result_evidence(scan_root: Path, scan_start: float) -> list[tuple[str, int]]:
-    """Machine-readable result counts written by this run, if any.
+def _fresh_zero_result_evidence(
+    scan_root: Path, scan_start: float,
+) -> tuple[list[tuple[str, int]], list[str]]:
+    """Return (result counts, vetoes) from fresh structured files.
 
     Tool v2.1.1 writes ``Result_*_members.json`` (``rows == []``) and
     ``Result_*_summary.json`` (``counts.aee_result_*_count == 0``) even when it
-    produces no ``_org.xls``.  Only structured fields from fresh files count:
-    logs, stdout and "no xls" are deliberately not evidence.
+    produces no ``_org.xls``. Only result-count fields may prove an empty scan:
+    ``dbg_count`` is not a result count and only vetoes the proof when it is
+    int > 0 (review 6766083327). Logs, stdout and "no xls" are never evidence.
     """
     evidence: list[tuple[str, int]] = []
+    vetoes: list[str] = []
     for path in sorted(scan_root.glob("*_members.json")):
         try:
             fresh = path.stat().st_mtime >= scan_start - 1
@@ -116,12 +120,12 @@ def _fresh_zero_result_evidence(scan_root: Path, scan_start: float) -> list[tupl
             value = counts.get(field)
             if type(value) is int:
                 evidence.append((path.name, value))
-        # A dbg present but zero parsed rows is a tool/extract failure shape, not
-        # proof that the host had nothing to scan (review 6762517329).
+        # dbg present but zero parsed rows is a tool/extract failure shape, not
+        # proof that the host had nothing to scan. It vetoes, never proves.
         dbg_count = counts.get("dbg_count")
-        if type(dbg_count) is int:
-            evidence.append((f"{path.name}#dbg_count", dbg_count))
-    return evidence
+        if type(dbg_count) is int and dbg_count > 0:
+            vetoes.append(f"{path.name}#dbg_count:{dbg_count}")
+    return evidence, vetoes
 
 
 @dataclass(frozen=True)
@@ -730,11 +734,15 @@ class ScanRunner:
                         empty_result_proof_blocked,
                     )
                 else:
-                    evidence = (
+                    evidence, vetoes = (
                         _fresh_zero_result_evidence(search_root, scan_start)
-                        if fact_round_id is not None else []
+                        if fact_round_id is not None else ([], [])
                     )
-                    if evidence and all(count == 0 for _, count in evidence):
+                    if (
+                        evidence
+                        and all(count == 0 for _, count in evidence)
+                        and not vetoes
+                    ):
                         self._last_empty_result_proof = True
                         logger.info(
                             "scan_runner_empty_result_proven plan_run=%d host=%s "
@@ -744,11 +752,15 @@ class ScanRunner:
                         )
                         return None
                     if fact_round_id is not None:
+                        detail = ";".join(
+                            f"{name}:{count}" for name, count in evidence
+                        ) or "none"
+                        if vetoes:
+                            detail += ";veto=" + ",".join(vetoes)
                         logger.warning(
                             "scan_runner_empty_result_unproven plan_run=%d host=%s "
                             "fact_round=%d scan_root=%s evidence=%s",
-                            plan_run_id, host_id, fact_round_id, scan_root,
-                            ";".join(f"{name}:{count}" for name, count in evidence) or "none",
+                            plan_run_id, host_id, fact_round_id, scan_root, detail,
                         )
                 logger.warning(
                     "scan_runner_no_fresh_org_xls plan_run=%d host=%s scan_root=%s total_candidates=%d",

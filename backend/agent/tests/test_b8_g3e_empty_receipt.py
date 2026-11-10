@@ -221,6 +221,39 @@ def test_shadow_zero_result_without_valid_proof_stays_missing(shadow, monkeypatc
     _assert_staging_reclaimed(hdd)
 
 
+def test_shadow_zero_result_with_only_dbg_count_is_not_proof(shadow, monkeypatch, caplog):
+    runner, hdd, nfs = shadow
+
+    def write(root):
+        name = "Result_x_None_MonkeyAEE_SH_20261110_120000"
+        (root / f"{name}_summary.json").write_text(
+            json.dumps({
+                "tool": "stability_Start-Log-Scan",
+                "counts": {"dbg_count": 0},
+            }),
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr("backend.agent.scan_runner.subprocess.run", _tool(write))
+    caplog.set_level(logging.WARNING)
+    runner.run_scan_and_upload(42, "host-1", is_final=False, device_serials=["SER-A"], fact_round_id=7)
+
+    assert not round_manifest_path(nfs, 42, 7, "host-1").exists()
+    expected = [{"host_id": "host-1", "platform": "mtk"}]
+    assert read_round_reports(nfs, 42, 7, expected) == []
+    now = datetime.now(timezone.utc)
+    coverage = classify_round_coverage(
+        [dict(item) for item in expected],
+        [],
+        observed_at=now,
+        input_cutoff_at=now + timedelta(minutes=5),
+    )
+    assert coverage[0]["coverage"] == "MISSING"
+    assert "scan_runner_empty_result_unproven" in caplog.text
+    assert "shadow_round_empty_receipt_registered" not in caplog.text
+    _assert_staging_reclaimed(hdd)
+
+
 def test_shadow_zero_result_with_unstaged_spill_input_is_unproven(shadow, monkeypatch, caplog):
     runner, hdd, nfs = shadow
     monkeypatch.setattr("backend.agent.scan_runner.load_scan_events", lambda *args: None)

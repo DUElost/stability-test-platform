@@ -26,14 +26,17 @@ Agent 在 `round_manifest_path(nfs_root, plan_run_id, fact_round_id, host_id)`
 
 证明只取扫描根下 **本次运行 fresh** 的结构化文件（mtime ≥ 扫描开始时间 - 1s）：
 
-- `Result_*_members.json`：`schema == "stp.scan_membership"` 且 `rows == []`；
+- `Result_*_members.json`：`schema == "stp.scan_membership"` 且
+  `rows == []`（`rows` 是一个结果条数字段）；
 - `Result_*_summary.json`：`counts.aee_result_org_count` /
-  `counts.aee_result_final_count` 为 int 且为 0；`counts.dbg_count` 若为 int
-  也必须为 0（缺失按没有该字段处理）。`dbg_count > 0` 表示有 dbg 但未产出
-  解析行，属于提取/工具失败形态，不得记成 `EMPTY`（评审 6762517329）。
+  `counts.aee_result_final_count` 为 int 且为 0。
 
-两类文件都存在时要求所有计数都为 0；任一计数 > 0 即不算证明。日志、stdout、
-“没有 org.xls”都不作为证据。证明在 staging 回收之前读取。
+判定为证明必须同时满足：至少有一个结果条数字段（members `rows`，或 summary
+的 `aee_result_org_count` / `aee_result_final_count`）；这些字段全部为 0；
+没有任何否决（`dbg_count` 为 int 且 > 0、`spill_unstaged`）。`dbg_count`
+只作否决，本身不计入证明——仅凭 `dbg_count=0` 不构成 0 结果证明
+（评审 6766083327）。日志、stdout、“没有 org.xls”都不作为证据。证明在
+staging 回收之前读取。
 
 存在未暂存的溢出输入（`events is None` 且 `spill_inputs` 非空，即
 `spill_unstaged` 非空）时，即使本地有 0 结果证明也不登记：本地 0 结果不覆盖
@@ -106,13 +109,13 @@ start_log_scan.py -m 0 -d <scanroot> -side shanghai
 - 实测：上述 v2.1.1 隔离运行，rc=0、无 org.xls、members rows=[]、summary
   aee_result_*_count=0（证据见 Decision）。
 - 反例先行：第一轮新测试在 `origin/main d3458b9` 上 9 failed / 6 passed；
-  第一轮实现后 15 passed。评审退回后新增 `dbg_count=1` 与
-  `spill_unstaged` 两条反例，当前 17 passed。
+  第一轮实现后 15 passed。评审退回后新增 `dbg_count=1`、`spill_unstaged`、
+  仅 `dbg_count=0` 三条反例，当前 18 passed。
 - 控制面真实读取：`test_shadow_zero_result_with_v211_proof_registers_empty_receipt`
   用 `read_round_reports` + `classify_round_coverage` 断言覆盖为 `EMPTY`；
-  无证明/旧证明/条数 >0/`dbg_count > 0` 时断言 `MISSING`；
-  `test_shadow_zero_result_with_unstaged_spill_input_is_unproven` 断言
-  `spill_unstaged` 时覆盖为 `MISSING`。
+  无证明/旧证明/条数 >0/`dbg_count > 0`/仅 `dbg_count=0` 时断言
+  `MISSING`；`test_shadow_zero_result_with_unstaged_spill_input_is_unproven`
+  断言 `spill_unstaged` 时覆盖为 `MISSING`。
 - 相关既有测试：
   `backend/agent/tests/test_b8_g3_round_scan.py`、`test_scan_runner.py`、
   `test_upload_manager.py`、`test_scan_runner_shard_failure_visibility.py`、
@@ -131,7 +134,9 @@ start_log_scan.py -m 0 -d <scanroot> -side shanghai
   - 去掉 `dbg_count` 检查 → `test_shadow_zero_result_without_valid_proof_stays_missing[dbg_count]`
     变红（清单被写出、覆盖变 `EMPTY`）；
   - 去掉 `spill_unstaged` 阻断 → `test_shadow_zero_result_with_unstaged_spill_input_is_unproven`
-    变红（清单被写出）。
+    变红（清单被写出）；
+  - 把 `dbg_count` 重新当作证据 → `test_shadow_zero_result_with_only_dbg_count_is_not_proof`
+    变红（仅 `dbg_count=0` 被登记成 `EMPTY`）。
 
 ## Revisit
 
