@@ -35,6 +35,7 @@ from backend.models.script import Script as ScriptModel
 from backend.services.script_progress_capability import script_supports_progress
 from backend.services.script_params import merge_effective_params
 from backend.services.plan_dispatcher_core import apply_step_timing_fields
+from backend.services.vbus_flash_admission import is_vbus_flash_plan_steps
 from backend.services.plan_wifi import (
     require_active_wifi_pool,
     require_wifi_pool_matches_plan,
@@ -215,6 +216,9 @@ class PlanOut(BaseModel):
     created_at: datetime
     updated_at: datetime
     steps: List[PlanStepOut] = []
+    # ADR-0063 D7 / #3918：首个启用的 init 步骤是 vbus 刷机（与 D4 同一判定函数）。派发页据此放开关机设备的勾选；
+    # 准入仍以冻结快照为准。
+    is_vbus_flash: bool = False
 
 
 class DraftParameterProjectionIn(BaseModel):
@@ -830,6 +834,7 @@ def _plan_out(plan: Plan, steps: list) -> PlanOut:
         created_at=plan.created_at,
         updated_at=plan.updated_at,
         steps=[PlanStepOut.model_validate(s) for s in steps],
+        is_vbus_flash=is_vbus_flash_plan_steps(steps),
     )
 
 

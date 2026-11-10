@@ -26,6 +26,7 @@ import {
   compareNodeEntries,
   buildCapacityPlan,
   buildDeviceReadinessRows,
+  markVbusSelectable,
   evaluateCapacityOverflow,
   summarizeDeviceReadiness,
   type ReadinessDevice,
@@ -366,7 +367,12 @@ export default function PlanExecutePage() {
     staleTime: 15_000,
   });
 
-  const allDevices = useMemo(() => devicesResp ?? [], [devicesResp]);
+  // ADR-0063 D7 第 6 条：选中 vbus 刷机计划时，OFFLINE 且槽位报告关机态的设备可以勾选。
+  const vbusFlashPlan = Boolean(selectedPlan?.is_vbus_flash);
+  const allDevices = useMemo(
+    () => markVbusSelectable(devicesResp ?? [], vbusFlashPlan),
+    [devicesResp, vbusFlashPlan],
+  );
 
   const schedulableDeviceIds = useMemo(
     () => new Set(allDevices.filter(isSchedulable).map((d: DeviceSummary) => d.id)),

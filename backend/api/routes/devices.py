@@ -3,7 +3,7 @@ import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import cast, func, or_, select
+from sqlalchemy import cast, func, or_, select, tuple_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.dialects.postgresql import JSONB as PG_JSONB
 from sqlalchemy.orm import Session
@@ -37,6 +37,7 @@ from backend.services.device_lease_emergency_release import release_terminal_job
 from backend.services.device_return import apply_override_sync, open_debts_for_device_sync
 from backend.core.metrics import record_device_return_override
 from backend.services.device_lifecycle import not_stale_condition
+from backend.services.vbus_usb_presence import powered_off_slot_keys, usb_presence_for
 from backend.services.device_retirement import (
     retire_device,
     retire_devices_batch,
@@ -446,7 +447,13 @@ def list_devices(
     # 陈旧是现算的派生事实（device_lifecycle），不做任何写回；容量/链选/指标
     # 各面共用同一判据函数，避免各拼谓词。
     if not include_stale:
-        query = query.filter(not_stale_condition())
+        stale_filter = not_stale_condition()
+        # ADR-0063 D7 / #3918：在线 vbus 主机报告为关机态（0e8d:2046）的映射设备在物理上就在槽位上，
+        # 关机多久都不算陈旧；否则关机超过 7 天的设备在派发页里永远选不到。
+        powered_off = powered_off_slot_keys(db.query(Host).filter(Host.retired_at.is_(None)).all())
+        if powered_off:
+            stale_filter = or_(stale_filter, tuple_(Device.host_id, Device.serial).in_(sorted(powered_off)))
+        query = query.filter(stale_filter)
 
     # ADR-0029 P0：未归属筛选——与 project_key 互斥（「某项目里未归属」无意义）；
     # 参数组合错误优先于 key 存在性校验
@@ -510,6 +517,7 @@ def list_devices(
     for d in devices:
         out = DeviceOut.model_validate(d)
         _fill_project_key(d, out, model_to_project)
+        out.usb_presence = usb_presence_for(d.host, d.serial)
         items.append(out)
     # 兼容旧接口：未显式传分页参数时返回数组
     if "skip" not in request.query_params and "limit" not in request.query_params:
@@ -530,6 +538,7 @@ def get_device(
         db.commit()
     out = DeviceOut.model_validate(device)
     _fill_project_key(device, out, _model_to_project_map(db))
+    out.usb_presence = usb_presence_for(device.host, device.serial)
     return out
 
 
@@ -591,6 +600,7 @@ def update_device_tags(
 def _device_out(device: Device, db: Session) -> DeviceOut:
     out = DeviceOut.model_validate(device)
     _fill_project_key(device, out, _model_to_project_map(db))
+    out.usb_presence = usb_presence_for(device.host, device.serial)
     return out
 
 

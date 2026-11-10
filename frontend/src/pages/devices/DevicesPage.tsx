@@ -129,6 +129,8 @@ export default function DevicesPage() {
         retire_suggested: device.retire_suggested ?? false,
         // ADR-0061 D1.3 / #3723 U6：归还状态随行透传（展开行展示）。
         return_state: device.return_state ?? null,
+        // ADR-0063 D7 / #3918：vbus 槽位 USB 在位（无映射的主机为 null）。
+        usb_presence: device.usb_presence ?? null,
       };
     });
   }, [devices, hostMap]);
