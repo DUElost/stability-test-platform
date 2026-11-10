@@ -2,6 +2,7 @@
 """#3918 / ADR-0063 D7：vbus 槽位 USB 在位观测（Agent 上报 + 共享分类）。"""
 
 import json
+import os
 
 import pytest
 
@@ -206,3 +207,38 @@ def test_reader_constants_match_wrapper():
     assert _slots_mod._MAX_FILE_BYTES == _priv.MAX_USB_POWER_SLOTS_BYTES
     assert _slots_mod._SERIAL_RE.pattern == _priv._USB_POWER_SERIAL_RE.pattern
     assert _slots_mod._HUB_LOCATION_RE.pattern == _priv._USB_PORT_RE.pattern
+
+
+# ── 复核 #3919 第 2 轮：文件上限按原始字节，CRLF 边界与 wrapper 实际加载函数一致 ──────
+
+def _crlf_body(total_bytes):
+    head = json.dumps({"schema": 1, "slots": [_slot("A")]}).encode("utf-8") + b"\r\n"
+    return head + b" " * (total_bytes - len(head))
+
+
+@pytest.mark.parametrize("size,accepted", [(64 * 1024, True), (64 * 1024 + 1, False)])
+def test_crlf_size_boundary_matches_wrapper_loader(tmp_path, monkeypatch, size, accepted):
+    body = _crlf_body(size)
+    assert body.count(b"\r\n") == 1 and len(body) == size
+    path = tmp_path / "usb-power-slots.json"
+    path.write_bytes(body)
+
+    got = read_usb_power_presence(str(path), str(tmp_path / "sys"))
+    assert (got is not None) is accepted
+
+    if os.geteuid() != _priv.USB_POWER_TRUSTED_UID:
+        pytest.skip("wrapper loader requires files owned by the trusted uid")
+    os.chmod(tmp_path, 0o755)
+    os.chmod(path, 0o644)
+    monkeypatch.setattr(_priv, "USB_POWER_SLOTS_PATH", str(path))
+    try:
+        wrapper_ok = bool(_priv._load_usb_power_slots())
+    except _priv.PrivError:
+        wrapper_ok = False
+    assert wrapper_ok is accepted
+
+
+def test_invalid_utf8_reports_nothing(tmp_path):
+    path = tmp_path / "usb-power-slots.json"
+    path.write_bytes(b'{"schema": 1, "slots": []}\xff')
+    assert read_usb_power_presence(str(path), str(tmp_path)) is None

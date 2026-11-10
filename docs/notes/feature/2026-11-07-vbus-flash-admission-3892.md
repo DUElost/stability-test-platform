@@ -123,6 +123,8 @@ Class: feature
   复核 #3919 第 1 轮后读取器改为与 wrapper `parse_usb_power_slots` 同一套 D1 约束（去掉 64 条上限，加 64 KiB 文件上限），增至 41 条：
   复核给的 8 种 wrapper 拒绝样例（同口两 serial、重复 serial、端口 17、`schema: true`、条目多余字段、空白 serial 等）整份不上报；
   5 个 hub 共 65 槽全部上报；超 64 KiB 不上报；12 种输入与 wrapper 解析器差分一致；常量与 wrapper 同值。在第 1 轮提交上 23 条失败。
+  复核 #3919 第 2 轮后改按原始字节判上限（文本模式会把 CRLF 折成 LF），增至 44 条：含 CRLF 的 65,536 / 65,537 字节文件
+  与 wrapper 真实加载函数 `_load_usb_power_slots` 同接受同拒绝；非法 UTF-8 不上报。在第 2 轮提交上 1 条失败。
 
 ## Revisit
 

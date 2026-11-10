@@ -81,15 +81,22 @@ def _parse_slot_entries(body: str) -> Optional[List[Tuple[str, str, int]]]:
 
 
 def _read_slot_entries(path: str) -> Optional[List[Tuple[str, str, int]]]:
+    # 按原始字节判断上限（与 wrapper 的 st_size 检查同口径）：文本模式会把 CRLF 折成 LF，
+    # 折后再计数会放过 wrapper 拒绝的文件（复核 #3919 第 2 轮）。
     try:
-        with open(path, encoding="utf-8") as fh:
-            body = fh.read(_MAX_FILE_BYTES + 1)
+        with open(path, "rb") as fh:
+            raw = fh.read(_MAX_FILE_BYTES + 1)
     except FileNotFoundError:
         return None
-    except (OSError, ValueError) as exc:
+    except OSError as exc:
         logger.warning("usb_power_slots_unreadable path=%s err=%s", path, exc)
         return None
-    entries = None if len(body.encode("utf-8")) > _MAX_FILE_BYTES else _parse_slot_entries(body)
+    entries = None
+    if len(raw) <= _MAX_FILE_BYTES:
+        try:
+            entries = _parse_slot_entries(raw.decode("utf-8"))
+        except UnicodeDecodeError:
+            entries = None
     if entries is None:
         logger.warning("usb_power_slots_malformed path=%s", path)
     return entries
