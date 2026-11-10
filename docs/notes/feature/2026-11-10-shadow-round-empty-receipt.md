@@ -47,7 +47,12 @@ rc=0 但没有有效证明。最后一种情况新增可检索 warning
 涉及文件：`backend/agent/scan_runner.py`、`backend/agent/upload_manager.py`、
 `backend/agent/tests/test_b8_g3e_empty_receipt.py`。另因移除 scan_runner
 函数体内的 UploadManager 导入，按棘轮纪律把
-`tools/dev/check_inner_imports.py` 的 `_BASELINE` 610 → 608。
+`tools/dev/check_inner_imports.py` 的 `_BASELINE` 610 → 608；并在
+`tests/test_agent_test_import_ratchet.py` 登记本测试文件对
+`backend.services.shadow_scan_rounds` 的 1 个控制面 import 例外——验收 1
+要求用真实 `read_round_reports`/`classify_round_coverage` 读回 Agent 写的
+清单，整例迁移到 `backend/tests/` 会混用 agent/控制面 fixture，且该验收需在
+`pr-agent-tests` 内运行。
 
 ### 工具 0 结果的实测产物（v2.1.1 / dc5d9c1）
 
