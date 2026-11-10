@@ -13,9 +13,10 @@ from backend.services.vbus_flash_admission import is_vbus_flash_plan_steps
 _NOW = datetime.now(timezone.utc)
 
 
-def _host(db, host_id, *, slots=None, status="ONLINE"):
+def _host(db, host_id, *, slots=None, status="ONLINE", heartbeat=None):
     extra = {"capacity": {"effective_slots": 0, **({"usb_power_slots": slots} if slots is not None else {})}}
-    db.add(Host(id=host_id, hostname=host_id, status=status, last_heartbeat=_NOW, created_at=_NOW, extra=extra))
+    db.add(Host(id=host_id, hostname=host_id, status=status, last_heartbeat=heartbeat or _NOW,
+                created_at=_NOW, extra=extra))
     db.commit()
 
 
@@ -64,6 +65,42 @@ def test_powered_off_mapped_device_is_not_hidden_as_stale(client, db_session, ad
     default = set(_by_serial(client.get("/api/v1/devices", headers=admin_headers)))
     assert "VB-OLD-OFF" in default
     assert {"VB-OLD-ON", "VB-OLD-UNMAPPED", "VB-OLD-DOWNHOST"}.isdisjoint(default)
+
+
+def test_expired_heartbeat_host_is_not_live(client, db_session, admin_headers):
+    # 复核 #3921 第 1 轮 P2：状态仍是 ONLINE、心跳已过期两小时的主机不算在线——
+    # 徽标 host_online=false，陈旧豁免也不放出它的设备。
+    stale_hb = datetime.now(timezone.utc) - timedelta(hours=2)
+    _host(db_session, "vb-h5", heartbeat=stale_hb,
+          slots={"VB-EXP-OLD": ["1-5.2:1", "0e8d:2046"], "VB-EXP-NEW": ["1-5.2:2", "0e8d:2046"]})
+    _device(db_session, "VB-EXP-OLD", "vb-h5", days_ago=30)
+    new = _device(db_session, "VB-EXP-NEW", "vb-h5")
+
+    resp = client.get("/api/v1/devices", headers=admin_headers)
+    default = _by_serial(resp)
+    assert "VB-EXP-OLD" not in default
+    assert default["VB-EXP-NEW"]["usb_presence"]["host_online"] is False
+    one = client.get(f"/api/v1/devices/{new.id}", headers=admin_headers).json()
+    assert one["usb_presence"]["host_online"] is False
+    paged = client.get("/api/v1/devices", params={"skip": 0, "limit": 50}, headers=admin_headers).json()
+    assert "VB-EXP-OLD" not in {d["serial"] for d in paged["items"]}
+    assert paged["total"] == len(paged["items"])
+
+
+def test_host_is_live_threshold():
+    from backend.core.job_timeout_config import HOST_HEARTBEAT_TIMEOUT_SECONDS
+    from backend.services.vbus_usb_presence import host_is_live
+
+    now = datetime(2026, 11, 10, 12, 0, tzinfo=timezone.utc)
+    fresh = SimpleNamespace(status="ONLINE", last_heartbeat=now - timedelta(seconds=HOST_HEARTBEAT_TIMEOUT_SECONDS))
+    expired = SimpleNamespace(status="ONLINE",
+                              last_heartbeat=now - timedelta(seconds=HOST_HEARTBEAT_TIMEOUT_SECONDS + 1))
+    naive = SimpleNamespace(status="ONLINE", last_heartbeat=(now - timedelta(seconds=5)).replace(tzinfo=None))
+    assert host_is_live(fresh, now) is True
+    assert host_is_live(expired, now) is False
+    assert host_is_live(naive, now) is True
+    assert host_is_live(SimpleNamespace(status="ONLINE", last_heartbeat=None), now) is False
+    assert host_is_live(SimpleNamespace(status="OFFLINE", last_heartbeat=now), now) is False
 
 
 def _step(stage, sort_order, script_name, params=None, enabled=True):

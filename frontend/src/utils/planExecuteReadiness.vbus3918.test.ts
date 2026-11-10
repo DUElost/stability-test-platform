@@ -64,3 +64,18 @@ describe('vbus powered-off candidates', () => {
     expect(isSchedulable(d)).toBe(true);
   });
 });
+
+// 复核 #3921 第 1 轮 P2：欠账设备即使在线主机报告关机态，也不得成为 vbus 候选（D4 第 2 条）。
+describe('vbus candidates exclude return debt', () => {
+  it('any family in debt blocks selection; returned / unverified do not', () => {
+    const debt = off(10, { return_state: { app_cleanup: { state: 'debt' }, wifi: { state: 'returned' } } });
+    expect(isVbusPoweredOffCandidate(debt)).toBe(false);
+    const [marked] = markVbusSelectable([debt], true);
+    expect(marked.vbus_selectable).toBeUndefined();
+    expect(isSchedulable(marked)).toBe(false);
+
+    const clean = off(11, { return_state: { app_cleanup: { state: 'returned' }, wifi: { state: 'unverified' } } });
+    expect(isVbusPoweredOffCandidate(clean)).toBe(true);
+    expect(isVbusPoweredOffCandidate(off(12, { return_state: null }))).toBe(true);
+  });
+});

@@ -18,6 +18,8 @@ export interface ReadinessDevice {
   is_stale?: boolean;
   /** ADR-0063 D7 / #3918：vbus 槽位 USB 在位 */
   usb_presence?: { state: string; host_online?: boolean } | null;
+  /** ADR-0061：按专项的归还状态；任一专项为 `debt` 即有欠账（D4 第 2 条：欠账设备不放行） */
+  return_state?: Record<string, { state?: string } | null | undefined> | null;
   /**
    * ADR-0063 D7 第 6 条：只在选中 vbus 刷机计划时由派发页标记——OFFLINE 且槽位报告关机态的设备
    * 可以勾选。后端 `run/preview` 与 D4 准入仍是最终依据。
@@ -25,10 +27,19 @@ export interface ReadinessDevice {
   vbus_selectable?: boolean;
 }
 
-/** ADR-0063 D7 第 6 条：OFFLINE、在役、在线主机报告槽位为关机态（0e8d:2046）。 */
+function hasReturnDebt(device: ReadinessDevice): boolean {
+  return Object.values(device.return_state ?? {}).some(entry => entry?.state === 'debt');
+}
+
+/**
+ * ADR-0063 D7 第 6 条：OFFLINE、在役、无欠账、在线主机报告槽位为关机态（0e8d:2046）。
+ * 所有选机入口（表格、矩阵、筛选、批量、草稿恢复）都经 `isSchedulable` 用这一个判定；
+ * 欠账拦截放在这里，避免某个入口漏掉（复核 #3921 第 1 轮 P2）。
+ */
 export function isVbusPoweredOffCandidate(device: ReadinessDevice): boolean {
   return device.status === 'OFFLINE'
     && !device.retired_at
+    && !hasReturnDebt(device)
     && device.usb_presence?.state === 'powered_off'
     && device.usb_presence?.host_online === true;
 }

@@ -133,6 +133,9 @@ Class: feature
 - 2026-11-10 #3918 U5b：`backend/tests/api/test_vbus_usb_presence_3918.py` 10 条（serial 匹配、四态、无映射与他机为 null、
   详情接口、陈旧豁免只对在线主机的关机态生效、Plan 步骤判定与派发形态一致、`_plan_out` 透传）；前端
   `planExecuteReadiness.vbus3918.test.ts` 5 条与 `ExpandableDeviceTable.test.tsx` 徽标 1 条；相关 vitest 258 + 16 passed，`tsc --noEmit` 通过。
+  复核 #3921 第 1 轮后：新增 `host_is_live`（ONLINE 且心跳未超过 `HOST_HEARTBEAT_TIMEOUT_SECONDS`），徽标 `host_online` 与陈旧豁免共用；
+  后端增至 12 条（状态 ONLINE、心跳过期两小时的主机：徽标为 false、列表与分页都不放出 30 天未见设备；阈值边界与 naive 时间），
+  换回旧实现 2 条失败。vbus 候选判定加欠账拦截（任一专项 `debt`），前端专项增至 6 条。
 
 ## Revisit
 
