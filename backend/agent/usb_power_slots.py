@@ -34,39 +34,64 @@ def vbus_claim_slots(path: str = USB_POWER_SLOTS_PATH) -> int:
 # 关机态 0e8d:2046 在 lsusb 里没有 serial，只有映射文件能把 USB 口对到设备行。
 # Agent 每次心跳按映射读一次 sysfs（agent 用户可读，不需要 root，不调用 wrapper），
 # 上报 ``{serial: [slot, vid_pid|None]}``。纯观测：不参与 capacity、健康闸门或认领。
-# 映射文件的权威校验在 wrapper（``stp_agent_priv.parse_usb_power_slots``）；这里只做
-# 宽松读取，任何格式问题都按「不上报」处理，不影响心跳。
+# 映射文件的权威校验在 wrapper（``stp_agent_priv.parse_usb_power_slots``）。这里按同一套
+# D1 数据约束整份判定（复核 #3919 第 1 轮）：wrapper 拒绝的映射，这里同样不上报，否则会
+# 把两个 serial 对到同一物理口、在页面上误判关机态；wrapper 接受的映射，这里也必须逐条
+# 上报（不另设主机级条数上限，只有与 wrapper 相同的 64 KiB 文件上限）。任何问题都按
+# 「不上报」处理，不影响心跳；权限与属主检查仍只在 wrapper。两者一致性由差分测试锁定。
 
 _SYSFS_USB_DEVICES = "/sys/bus/usb/devices"
+# 与 stp_agent_priv 的 _USB_PORT_RE / _USB_POWER_SERIAL_RE / USB_POWER_MAX_PORT /
+# MAX_USB_POWER_SLOTS_BYTES 同值（测试锁定）。
 _HUB_LOCATION_RE = re.compile(r"^[0-9]+-[0-9]+(?:\.[0-9]+)*\Z")
+_SERIAL_RE = re.compile(r"^[A-Za-z0-9._:-]{1,64}\Z")
+_MAX_PORT = 16
+_MAX_FILE_BYTES = 64 * 1024
 _HEX4_RE = re.compile(r"^[0-9a-f]{4}\Z")
-_MAX_SLOTS = 64
+
+
+def _parse_slot_entries(body: str) -> Optional[List[Tuple[str, str, int]]]:
+    """按 ADR-0063 D1 第 4 条解析；任一条目非法或 serial / 槽位重复时返回 None（整份拒绝）。"""
+    try:
+        doc = json.loads(body)
+    except ValueError:
+        return None
+    if (not isinstance(doc, dict) or set(doc) != {"schema", "slots"}
+            or type(doc["schema"]) is not int or doc["schema"] != 1
+            or not isinstance(doc["slots"], list)):
+        return None
+    entries: List[Tuple[str, str, int]] = []
+    serials = set()
+    slots = set()
+    for entry in doc["slots"]:
+        if not isinstance(entry, dict) or set(entry) != {"serial", "hub_location", "port"}:
+            return None
+        serial, location, port = entry["serial"], entry["hub_location"], entry["port"]
+        if (not isinstance(serial, str) or not _SERIAL_RE.match(serial)
+                or not isinstance(location, str) or not _HUB_LOCATION_RE.match(location)
+                or isinstance(port, bool) or not isinstance(port, int)
+                or not 1 <= port <= _MAX_PORT):
+            return None
+        if serial in serials or (location, port) in slots:
+            return None
+        serials.add(serial)
+        slots.add((location, port))
+        entries.append((serial, location, port))
+    return entries
 
 
 def _read_slot_entries(path: str) -> Optional[List[Tuple[str, str, int]]]:
     try:
         with open(path, encoding="utf-8") as fh:
-            doc = json.load(fh)
+            body = fh.read(_MAX_FILE_BYTES + 1)
     except FileNotFoundError:
         return None
     except (OSError, ValueError) as exc:
         logger.warning("usb_power_slots_unreadable path=%s err=%s", path, exc)
         return None
-    slots = doc.get("slots") if isinstance(doc, dict) and doc.get("schema") == 1 else None
-    if not isinstance(slots, list) or len(slots) > _MAX_SLOTS:
+    entries = None if len(body.encode("utf-8")) > _MAX_FILE_BYTES else _parse_slot_entries(body)
+    if entries is None:
         logger.warning("usb_power_slots_malformed path=%s", path)
-        return None
-    entries = []
-    for entry in slots:
-        serial = entry.get("serial") if isinstance(entry, dict) else None
-        location = entry.get("hub_location") if isinstance(entry, dict) else None
-        port = entry.get("port") if isinstance(entry, dict) else None
-        if (not isinstance(serial, str) or not serial
-                or not isinstance(location, str) or not _HUB_LOCATION_RE.match(location)
-                or isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 99):
-            logger.warning("usb_power_slots_malformed path=%s", path)
-            return None
-        entries.append((serial, location, port))
     return entries
 
 
