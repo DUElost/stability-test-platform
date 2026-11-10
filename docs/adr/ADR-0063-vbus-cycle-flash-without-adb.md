@@ -215,7 +215,8 @@ Agent 代码，会改变控制面的期望 digest，而 #3875 的影子能力守
 4. 在位分类只用共享契约 `backend/agent/contracts/usb_presence.py` 的一个函数：`0e8d:2046` 为关机（`powered_off`），
    `0e8d:201c` 为开机 ADB 态（`adb_mode`），其他非空值为 `other`，空为 `absent`。控制面与前端不得另写判据。
 5. 控制面在设备列表上按 serial 给出该设备的在位状态，并给出 Plan 是否满足 D4 第 1 条（同一判定函数）。没有上报的主机，字段为空。
-   在位数据只存在主机心跳 `host.extra` 中，不新增表，不进 Redis。
+   在位数据只存在主机心跳 `host.extra` 中，不新增表，不进 Redis。设备列表默认隐藏陈旧设备（ADR-0057），但在线主机报告为
+   `powered_off` 的映射设备不得按陈旧隐藏：它在物理上就在槽位上，关机多久都不影响 vbus 刷机。
 6. 派发页只在 Plan 满足 D4 第 1 条时，允许勾选 `OFFLINE` 且在位状态为 `powered_off` 的设备；其他 `OFFLINE` 设备仍不可选。
    派发页的放开不替代后端准入，`run/preview` 与 D4 的拒绝理由照常生效。
 7. 第 1、2 条改变 Agent 代码输入集，实施者必须让它随一次全机队 Agent 发布（D6 第 1 条）；第 5、6 条只改控制面，
