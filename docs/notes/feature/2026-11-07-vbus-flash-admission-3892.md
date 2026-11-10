@@ -49,6 +49,11 @@ Class: feature
   Agent 部分必须随控制面同批，在 B8 的联合 Agent 发布（G4 / #3875 / #3889）截止前合入；赶不上就顺延到下一次全队滚动，
   不得在切窗后单独合入（ADR-0063 D6 第 1 条；#3875 digest 守卫会把对不上的主机记为 `capability_unverified`）。
 
+- 2026-11-10 `flash_firmware@1.4.1`（15.93 单主机多台试点）：机型族路由表补 `MLD_NX3` / `MLD-NX3` → `MLD`。
+  vbus 刷机的机型只来自步骤参数 `model`，未列机型在 1.4.0 上 fail-fast（no firmware family route），NX3 无法派发。
+  只改路由表与抬头注释，其余逻辑与 1.4.0 一致；已按 ADR-0051 登记新版本，1.4.0 条目不动。
+  工具代际（v5 / v6）仍由版本目录 `manifest.json` 的 `tool_generation` 决定，路由不改变代际判定。
+
 ## Alternatives
 
 - 只改控制面准入：不可行。设备全部关机的主机上 `effective_slots` 恒为 0，Agent 不会调用认领（ADR-0063 F11）。
@@ -94,6 +99,9 @@ Class: feature
   相邻回归：`test_return_init_u4_3729`、`test_lifecycle_engine`、`test_return_debts_u4_3729`、import 边界（`tests/test_agent_import_boundary.py`）、
   控制面 vbus 准入与认领两个文件均通过；Agent 全量 3169 passed、3 failed，这 3 条在 `origin/main` 同样失败（同上）。
   遗漏原因：ADR-0063 起草时只核对了派发与认领两道准入，没有核对每个 job 在 init 之前都会跑的 ADR-0061 残留检查。
+
+- 2026-11-10 1.4.1：`backend/agent/tests/test_flash_firmware_v141.py` 2 条（NX3 两种写法路由到 MLD；既有 10 个键不变）；
+  与 `test_flash_firmware_v1319.py` 合计 34 passed。`check_script_packages`：族树与最新登记等价。
 
 ## Revisit
 

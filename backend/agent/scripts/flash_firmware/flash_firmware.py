@@ -1,5 +1,9 @@
 """Flash firmware via SP Flash Tool (MTK platform).
 
+v1.4.1（#3892 推广，15.93 试点）：机型族路由表补 `MLD_NX3` / `MLD-NX3` → `MLD`
+（535 平台第二个机型，与 NX2 同族、同 V6 代际；代际仍以版本目录 manifest 为准）。
+其余逻辑与 1.4.0 逐字一致。
+
 v1.4.0（#3892 / ADR-0063 D3）：新增 `trigger_mode`，缺省 `adb_reboot` 与 1.3.20 逐项
 一致（结果 metrics 多一个 `trigger_mode` 键）。`vbus_cycle` 给**关机、没有 ADB** 的
 设备用：经可控 USB Hub 单口切 VBUS，让设备上电最初几秒的 BROM 窗口落进工具扫描。
@@ -899,6 +903,10 @@ _MODEL_FAMILY_ROUTES = {
     # 版本靠 latest.json 的 per-model 映射分流（v1.3.6 能力）。
     "MLD_NX2": "MLD",
     "MLD-NX2": "MLD",
+    # v1.4.1（#3892 推广）：535 平台第二个机型。vbus 刷机的机型取自步骤参数 `model`
+    # （设备关机读不到 getprop），未列机型 fail-fast。
+    "MLD_NX3": "MLD",
+    "MLD-NX3": "MLD",
     "ELA_LX2": "ELA",
     "ELA_LX3": "ELA",
     # 真机实测（2026-08-25 .66 回归）：getprop 返回连字符拼写；
