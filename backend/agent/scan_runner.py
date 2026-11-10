@@ -12,6 +12,7 @@ PlanRun 的设备集合**（可跨多 host）；本 Agent 只在本地 HDD 上�
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
@@ -32,9 +33,9 @@ from .contracts.round_report_layout import round_report_dir
 from .device_platform import detect_device_platform
 
 try:
-    from backend.agent.upload_manager import ShardRegistrationError
+    from backend.agent.upload_manager import ShardRegistrationError, UploadManager
 except ImportError:  # Agent install layout (no ``backend.`` package)
-    from agent.upload_manager import ShardRegistrationError
+    from agent.upload_manager import ShardRegistrationError, UploadManager
 
 try:
     from backend.agent.tool_cache import resolve_packaged_scan_tool
@@ -81,6 +82,52 @@ def reclaim_scan_staging(scan_root: "str | Path | None") -> None:
         logger.warning("scan_staging_reclaim_failed root=%s", scan_root, exc_info=True)
 
 
+def _fresh_zero_result_evidence(
+    scan_root: Path, scan_start: float,
+) -> tuple[list[tuple[str, int]], list[str]]:
+    """Return (result counts, vetoes) from fresh structured files.
+
+    Tool v2.1.1 writes ``Result_*_members.json`` (``rows == []``) and
+    ``Result_*_summary.json`` (``counts.aee_result_*_count == 0``) even when it
+    produces no ``_org.xls``. Only result-count fields may prove an empty scan:
+    ``dbg_count`` is not a result count and only vetoes the proof when it is
+    int > 0 (review 6766083327). Logs, stdout and "no xls" are never evidence.
+    """
+    evidence: list[tuple[str, int]] = []
+    vetoes: list[str] = []
+    for path in sorted(scan_root.glob("*_members.json")):
+        try:
+            fresh = path.stat().st_mtime >= scan_start - 1
+            data = json.loads(path.read_text(encoding="utf-8")) if fresh else None
+        except (OSError, ValueError):
+            continue
+        if (
+            isinstance(data, dict)
+            and data.get("schema") == "stp.scan_membership"
+            and isinstance(data.get("rows"), list)
+        ):
+            evidence.append((path.name, len(data["rows"])))
+    for path in sorted(scan_root.glob("*_summary.json")):
+        try:
+            fresh = path.stat().st_mtime >= scan_start - 1
+            data = json.loads(path.read_text(encoding="utf-8")) if fresh else None
+        except (OSError, ValueError):
+            continue
+        counts = data.get("counts") if isinstance(data, dict) else None
+        if not isinstance(counts, dict):
+            continue
+        for field in ("aee_result_org_count", "aee_result_final_count"):
+            value = counts.get(field)
+            if type(value) is int:
+                evidence.append((path.name, value))
+        # dbg present but zero parsed rows is a tool/extract failure shape, not
+        # proof that the host had nothing to scan. It vetoes, never proves.
+        dbg_count = counts.get("dbg_count")
+        if type(dbg_count) is int and dbg_count > 0:
+            vetoes.append(f"{path.name}#dbg_count:{dbg_count}")
+    return evidence, vetoes
+
+
 @dataclass(frozen=True)
 class _ScanJob:
     plan_run_id: int
@@ -121,6 +168,9 @@ class ScanRunner:
         self._hdd_root: str = ""
         self._side: str = "shanghai"
         self._configured: bool = False
+        # 上一轮 run_local_scan 是否发现了本轮工具产出的 0 结果机器可读证明。
+        # 只供 run_scan_and_upload 在影子轮登记空回执；现行扫描不消费。
+        self._last_empty_result_proof: bool = False
 
     @classmethod
     def instance(cls) -> "ScanRunner":
@@ -409,15 +459,18 @@ class ScanRunner:
             is_final=is_final,
             device_serials=device_serials,
             run_date_stamps=run_date_stamps,
+            fact_round_id=fact_round_id,
+            empty_result_proof_blocked=(
+                "spill_unstaged" if fact_round_id is not None and spill_unstaged else None
+            ),
             **round_args,
         )
         if not org_xls:
+            if fact_round_id is not None and self._last_empty_result_proof:
+                self._register_empty_receipt(plan_run_id, host_id, fact_round_id)
+                return
             logger.warning("control_scan_now_scan_failed plan_run=%d", plan_run_id)
             return
-        try:
-            from backend.agent.upload_manager import UploadManager
-        except ImportError:
-            from agent.upload_manager import UploadManager
         uploader = UploadManager.instance()
         if not uploader.is_configured():
             logger.warning("control_scan_now_skip_uploader_not_configured")
@@ -452,6 +505,22 @@ class ScanRunner:
             # 也必须回收，否则占盘到该 plan_run 下一轮 scan 的 prepare 才释放。
             reclaim_scan_staging(getattr(self, "_last_scan_root", None))
         logger.info("control_scan_now_done plan_run=%d host=%s", plan_run_id, host_id)
+
+    def _register_empty_receipt(
+        self, plan_run_id: int, host_id: str, fact_round_id: int,
+    ) -> None:
+        """登记影子轮 0 结果空回执；登记失败按分片失败语义上抛。"""
+        uploader = UploadManager.instance()
+        if not uploader.is_configured():
+            logger.warning(
+                "shadow_round_empty_receipt_skip_uploader_not_configured "
+                "plan_run=%d host=%s fact_round=%d",
+                plan_run_id, host_id, fact_round_id,
+            )
+            return
+        uploader.register_empty_receipt(
+            plan_run_id, host_id, fact_round_id=fact_round_id,
+        )
 
     @classmethod
     def try_begin_host_scan(cls) -> bool:
@@ -595,7 +664,10 @@ class ScanRunner:
         device_serials: Sequence[str] = (),
         run_date_stamps: Sequence[str] = (),
         spill_inputs: Sequence[dict] = (),
+        fact_round_id: int | None = None,
+        empty_result_proof_blocked: str | None = None,
     ) -> Optional[str]:
+        self._last_empty_result_proof = False
         if not self._configured:
             logger.warning(
                 "scan_runner_skip_not_configured plan_run=%d host=%s",
@@ -651,6 +723,45 @@ class ScanRunner:
                 if c.stat().st_mtime >= scan_start - 1
             ]
             if not fresh:
+                if empty_result_proof_blocked:
+                    # Unstaged spill inputs mean the local 0-result proof does
+                    # not cover the whole host; leave coverage MISSING so the
+                    # round can be retried (review 6762617060).
+                    logger.warning(
+                        "scan_runner_empty_result_unproven plan_run=%d host=%s "
+                        "fact_round=%d scan_root=%s evidence=%s",
+                        plan_run_id, host_id, fact_round_id, scan_root,
+                        empty_result_proof_blocked,
+                    )
+                else:
+                    evidence, vetoes = (
+                        _fresh_zero_result_evidence(search_root, scan_start)
+                        if fact_round_id is not None else ([], [])
+                    )
+                    if (
+                        evidence
+                        and all(count == 0 for _, count in evidence)
+                        and not vetoes
+                    ):
+                        self._last_empty_result_proof = True
+                        logger.info(
+                            "scan_runner_empty_result_proven plan_run=%d host=%s "
+                            "fact_round=%d scan_root=%s evidence=%s",
+                            plan_run_id, host_id, fact_round_id, scan_root,
+                            ";".join(f"{name}:{count}" for name, count in evidence),
+                        )
+                        return None
+                    if fact_round_id is not None:
+                        detail = ";".join(
+                            f"{name}:{count}" for name, count in evidence
+                        ) or "none"
+                        if vetoes:
+                            detail += ";veto=" + ",".join(vetoes)
+                        logger.warning(
+                            "scan_runner_empty_result_unproven plan_run=%d host=%s "
+                            "fact_round=%d scan_root=%s evidence=%s",
+                            plan_run_id, host_id, fact_round_id, scan_root, detail,
+                        )
                 logger.warning(
                     "scan_runner_no_fresh_org_xls plan_run=%d host=%s scan_root=%s total_candidates=%d",
                     plan_run_id, host_id, scan_root, len(all_candidates),
