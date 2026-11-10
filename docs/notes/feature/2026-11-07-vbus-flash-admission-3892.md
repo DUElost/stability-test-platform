@@ -54,6 +54,12 @@ Class: feature
   任何格式问题都不上报，心跳照常；权威校验仍在 wrapper。只有带映射文件的主机多出这个键（16 台约 700 字节），其余主机心跳不变。
   改了 Agent 代码输入集，期望 digest 会变，必须随全机队 Agent 发布。
 
+- 2026-11-10 #3918 U5b（ADR-0063 D7 第 5、6 条）：`DeviceOut.usb_presence` 从所属主机 `host.extra.capacity.usb_power_slots`
+  按 serial 现算（`backend/services/vbus_usb_presence.py`），不落库；`PlanOut.is_vbus_flash` 用 `is_vbus_flash_plan_steps`
+  （已启用 init 步骤排序后交给 D4 同一判定函数，只读步骤自身 params）。设备列表的陈旧隐藏豁免在线主机报告为关机态的映射设备。
+  前端：设备页在「状态」格加 USB 徽标（没有新增列，表宽不变）；派发页在 vbus 计划下用 `markVbusSelectable` 给关机候选打
+  `vbus_selectable`，`isSchedulable` 与就绪度据此放行，其余调用点不改。unauthorized 在 vbus 计划下仍阻断。
+
 ## Alternatives
 
 - 只改控制面准入：不可行。设备全部关机的主机上 `effective_slots` 恒为 0，Agent 不会调用认领（ADR-0063 F11）。
@@ -102,6 +108,10 @@ Class: feature
 
 - 2026-11-10 #3918 U5a：`backend/agent/tests/test_usb_power_presence_3918.py` 18 条（分类 6 条、逐口读取、无映射、
   5 种格式错误、sysfs 值非法、capacity 键只在有映射时出现且不改槽位、心跳 tick 透传 / 读取抛异常不影响心跳）。
+
+- 2026-11-10 #3918 U5b：`backend/tests/api/test_vbus_usb_presence_3918.py` 10 条（serial 匹配、四态、无映射与他机为 null、
+  详情接口、陈旧豁免只对在线主机的关机态生效、Plan 步骤判定与派发形态一致、`_plan_out` 透传）；前端
+  `planExecuteReadiness.vbus3918.test.ts` 5 条与 `ExpandableDeviceTable.test.tsx` 徽标 1 条；相关 vitest 258 + 16 passed，`tsc --noEmit` 通过。
 
 ## Revisit
 
