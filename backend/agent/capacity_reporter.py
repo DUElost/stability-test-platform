@@ -48,6 +48,7 @@ def compute_capacity(
     usb_fault_reasons: Optional[Sequence[str]] = None,
     usb_kernel_log_channel: Optional[str] = None,
     single_instance_degraded: bool = False,
+    usb_power_slots: Optional[dict] = None,
 ) -> dict:
     """返回 {"capacity": {...}, "health": {...}}。
 
@@ -123,6 +124,10 @@ def compute_capacity(
         # usb_root_hub_count **不上报**：它只是 `usb_tree_empty` 判据的输入（空树基线），
         # 页面不需要；上报会让心跳 payload 增幅越过 issue 的 <100B 验收线（实测 121B）。
     }
+    # #3918 / ADR-0063 D7：vbus 槽位 USB 在位，纯观测。只有存在槽位映射文件的主机上报，
+    # 其余主机不带这个键（心跳 payload 不变）。
+    if usb_power_slots is not None:
+        capacity["usb_power_slots"] = usb_power_slots
 
     return {"capacity": capacity, "health": health}
 

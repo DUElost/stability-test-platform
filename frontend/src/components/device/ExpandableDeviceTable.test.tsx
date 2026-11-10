@@ -41,6 +41,31 @@ const devices = [
 ];
 
 describe('ExpandableDeviceTable', () => {
+  it('shows the vbus slot USB presence badge only for mapped devices (#3918)', () => {
+    render(
+      <ExpandableDeviceTable
+        devices={[
+          {
+            ...devices[0],
+            id: 11,
+            serial: 'VB-OFF',
+            status: 'offline' as const,
+            usb_presence: {
+              slot: '1-5.2:1', vid_pid: '0e8d:2046', state: 'powered_off',
+              reported_at: '2026-11-10T07:00:00Z', host_online: false,
+            },
+          },
+          { ...devices[0], id: 12, serial: 'NO-MAP' },
+        ]}
+      />,
+    );
+    const badge = screen.getByTestId('device-usb-presence-11');
+    expect(badge).toHaveTextContent('USB 关机');
+    expect(badge.getAttribute('title')).toContain('槽位 1-5.2:1');
+    expect(badge.getAttribute('title')).toContain('主机离线');
+    expect(screen.queryByTestId('device-usb-presence-12')).toBeNull();
+  });
+
   it('renders a named search textbox', () => {
     render(<ExpandableDeviceTable devices={devices} />);
     expect(screen.getByRole('textbox', { name: '搜索设备' })).toHaveAttribute('name', 'device-search');
