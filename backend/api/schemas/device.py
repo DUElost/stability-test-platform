@@ -218,6 +218,9 @@ class DeviceOut(ORMBaseModel):
     retire_suggested: bool = False
     # ADR-0061 D1.3 / #3723 U3：按专项归还状态（可空=未初始化）。
     return_state: Optional[Dict[str, Any]] = None
+    # ADR-0063 D7 / #3918：vbus 槽位 USB 在位（现算派生，不落库）。只有主机上报了槽位映射、
+    # 且本设备在映射里时才有值：{slot, vid_pid, state, reported_at, host_online}。
+    usb_presence: Optional[Dict[str, Any]] = None
 
     @model_validator(mode='after')
     def _mark_serial_suspect(self):

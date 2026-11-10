@@ -1,4 +1,5 @@
 import { deviceProductText } from '@/utils/deviceProduct';
+import type { DeviceUsbPresence } from '@/utils/api/types';
 import { useState, useMemo, useEffect, useRef, Fragment } from 'react';
 import { cn } from '@/lib/utils';
 import { BulkBarSpacer } from '@/components/ui/bulk-action-bar';
@@ -96,6 +97,23 @@ export interface DeviceTableData {
   retire_suggested?: boolean;
   /** ADR-0061 D1.3 / #3723 U6：按专项归还状态（null/缺省 = 未初始化）。 */
   return_state?: Record<string, ReturnStateEntry> | null;
+  /** ADR-0063 D7 / #3918：vbus 槽位 USB 在位（null = 主机无槽位映射或未上报）。 */
+  usb_presence?: DeviceUsbPresence | null;
+}
+
+const USB_PRESENCE_LABEL: Record<DeviceUsbPresence['state'], { text: string; className: string; hint: string }> = {
+  powered_off: { text: 'USB 关机', className: 'bg-info/15 text-info', hint: '槽位口为关机态（0e8d:2046），可走 USB 切电刷机' },
+  adb_mode: { text: 'USB 开机', className: 'bg-success/15 text-success', hint: '槽位口为开机 ADB 态（0e8d:201c）' },
+  other: { text: 'USB 其他', className: 'bg-warning/20 text-warning', hint: '槽位口有枚举，但不是已知的关机或开机态' },
+  absent: { text: 'USB 空口', className: 'bg-destructive/15 text-destructive', hint: '槽位口下没有 USB 设备：检查连线或 Hub 供电' },
+};
+
+function usbPresenceTitle(presence: DeviceUsbPresence): string {
+  const label = USB_PRESENCE_LABEL[presence.state];
+  const parts = [label.hint, `槽位 ${presence.slot}`, `VID:PID ${presence.vid_pid ?? '无'}`];
+  if (presence.reported_at) parts.push(`上报于 ${presence.reported_at}`);
+  if (!presence.host_online) parts.push('主机离线：数据可能已过期');
+  return parts.join(' · ');
 }
 
 interface ExpandableDeviceTableProps {
@@ -591,6 +609,20 @@ export function ExpandableDeviceTable({
                             title={`已退役${device.retired_at ? `（${device.retired_at.slice(0, 10)}）` : ''}`}
                           >
                             已退役
+                          </span>
+                        )}
+                        {/* ADR-0063 D7 / #3918：vbus 槽位 USB 在位（与 adb 状态并列；只有带槽位映射的主机才有） */}
+                        {device.usb_presence && (
+                          <span
+                            data-testid={`device-usb-presence-${device.id}`}
+                            className={cn(
+                              'shrink-0 rounded-full px-1.5 py-0.5 text-[11px]',
+                              USB_PRESENCE_LABEL[device.usb_presence.state]?.className ?? 'bg-muted text-muted-foreground',
+                              !device.usb_presence.host_online && 'opacity-60',
+                            )}
+                            title={usbPresenceTitle(device.usb_presence)}
+                          >
+                            {USB_PRESENCE_LABEL[device.usb_presence.state]?.text ?? 'USB ?'}
                           </span>
                         )}
                         {/* #2962 A：陈旧度派生徽标；退役建议（E4）只提示不动作 */}

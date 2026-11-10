@@ -14,6 +14,7 @@ from . import device_discovery
 from .heartbeat import send_heartbeat
 from .heartbeat_timing import HeartbeatTiming
 from .kernel_usb_faults import KernelUsbWatch
+from .usb_power_slots import read_usb_power_presence
 from .settings import get_heartbeat_settings
 from .startup_guards import single_instance_guard_degraded
 
@@ -736,6 +737,13 @@ class HeartbeatThread:
             logger.debug("kernel_usb_channel_state_failed: %s", exc)
             usb_kernel_log_channel = None
 
+        # #3918 / ADR-0063 D7：vbus 槽位 USB 在位（纯观测；无映射文件时为 None，不上报）
+        try:
+            usb_power_slots = read_usb_power_presence()
+        except Exception as exc:
+            logger.debug("usb_power_presence_failed: %s", exc)
+            usb_power_slots = None
+
         cap_result = compute_capacity(
             active_job_count=active_count,
             active_device_count=active_device_count,
@@ -752,6 +760,7 @@ class HeartbeatThread:
             usb_kernel_log_channel=usb_kernel_log_channel,
             # #3092：启动期常量——守卫降级时让「第二个实例可能静默叠加」随心跳可见
             single_instance_degraded=single_instance_guard_degraded(),
+            usb_power_slots=usb_power_slots,
         )
 
         with self._capacity_lock:
