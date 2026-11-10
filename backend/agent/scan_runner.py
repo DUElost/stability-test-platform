@@ -116,6 +116,11 @@ def _fresh_zero_result_evidence(scan_root: Path, scan_start: float) -> list[tupl
             value = counts.get(field)
             if type(value) is int:
                 evidence.append((path.name, value))
+        # A dbg present but zero parsed rows is a tool/extract failure shape, not
+        # proof that the host had nothing to scan (review 6762517329).
+        dbg_count = counts.get("dbg_count")
+        if type(dbg_count) is int:
+            evidence.append((f"{path.name}#dbg_count", dbg_count))
     return evidence
 
 
@@ -451,6 +456,9 @@ class ScanRunner:
             device_serials=device_serials,
             run_date_stamps=run_date_stamps,
             fact_round_id=fact_round_id,
+            empty_result_proof_blocked=(
+                "spill_unstaged" if fact_round_id is not None and spill_unstaged else None
+            ),
             **round_args,
         )
         if not org_xls:
@@ -653,6 +661,7 @@ class ScanRunner:
         run_date_stamps: Sequence[str] = (),
         spill_inputs: Sequence[dict] = (),
         fact_round_id: int | None = None,
+        empty_result_proof_blocked: str | None = None,
     ) -> Optional[str]:
         self._last_empty_result_proof = False
         if not self._configured:
@@ -710,26 +719,37 @@ class ScanRunner:
                 if c.stat().st_mtime >= scan_start - 1
             ]
             if not fresh:
-                evidence = (
-                    _fresh_zero_result_evidence(search_root, scan_start)
-                    if fact_round_id is not None else []
-                )
-                if evidence and all(count == 0 for _, count in evidence):
-                    self._last_empty_result_proof = True
-                    logger.info(
-                        "scan_runner_empty_result_proven plan_run=%d host=%s "
-                        "fact_round=%d scan_root=%s evidence=%s",
-                        plan_run_id, host_id, fact_round_id, scan_root,
-                        ";".join(f"{name}:{count}" for name, count in evidence),
-                    )
-                    return None
-                if fact_round_id is not None:
+                if empty_result_proof_blocked:
+                    # Unstaged spill inputs mean the local 0-result proof does
+                    # not cover the whole host; leave coverage MISSING so the
+                    # round can be retried (review 6762617060).
                     logger.warning(
                         "scan_runner_empty_result_unproven plan_run=%d host=%s "
                         "fact_round=%d scan_root=%s evidence=%s",
                         plan_run_id, host_id, fact_round_id, scan_root,
-                        ";".join(f"{name}:{count}" for name, count in evidence) or "none",
+                        empty_result_proof_blocked,
                     )
+                else:
+                    evidence = (
+                        _fresh_zero_result_evidence(search_root, scan_start)
+                        if fact_round_id is not None else []
+                    )
+                    if evidence and all(count == 0 for _, count in evidence):
+                        self._last_empty_result_proof = True
+                        logger.info(
+                            "scan_runner_empty_result_proven plan_run=%d host=%s "
+                            "fact_round=%d scan_root=%s evidence=%s",
+                            plan_run_id, host_id, fact_round_id, scan_root,
+                            ";".join(f"{name}:{count}" for name, count in evidence),
+                        )
+                        return None
+                    if fact_round_id is not None:
+                        logger.warning(
+                            "scan_runner_empty_result_unproven plan_run=%d host=%s "
+                            "fact_round=%d scan_root=%s evidence=%s",
+                            plan_run_id, host_id, fact_round_id, scan_root,
+                            ";".join(f"{name}:{count}" for name, count in evidence) or "none",
+                        )
                 logger.warning(
                     "scan_runner_no_fresh_org_xls plan_run=%d host=%s scan_root=%s total_candidates=%d",
                     plan_run_id, host_id, scan_root, len(all_candidates),

@@ -63,7 +63,14 @@ def shadow(tmp_path, monkeypatch):
     return runner, hdd, nfs
 
 
-def _write_proof(root: Path, *, rows: int = 0, count: int = 0, name: str = "Result_x_None_MonkeyAEE_SH_20261110_120000"):
+def _write_proof(
+    root: Path,
+    *,
+    rows: int = 0,
+    count: int = 0,
+    dbg_count: int = 0,
+    name: str = "Result_x_None_MonkeyAEE_SH_20261110_120000",
+):
     members = {
         "schema": "stp.scan_membership",
         "schema_version": "1.0",
@@ -85,7 +92,7 @@ def _write_proof(root: Path, *, rows: int = 0, count: int = 0, name: str = "Resu
         "counts": {
             "aee_result_org_count": count,
             "aee_result_final_count": count,
-            "dbg_count": 0,
+            "dbg_count": dbg_count,
         },
         "generated_files": {
             "members_json": str(root / f"{name}_members.json"),
@@ -176,7 +183,7 @@ def test_shadow_zero_result_accepts_members_or_summary_proof(shadow, monkeypatch
     _assert_staging_reclaimed(hdd)
 
 
-@pytest.mark.parametrize("case", ["none", "stale", "nonzero"])
+@pytest.mark.parametrize("case", ["none", "stale", "nonzero", "dbg_count"])
 def test_shadow_zero_result_without_valid_proof_stays_missing(shadow, monkeypatch, caplog, case):
     runner, hdd, nfs = shadow
 
@@ -188,6 +195,9 @@ def test_shadow_zero_result_without_valid_proof_stays_missing(shadow, monkeypatc
             old = time.time() - 60
             for path in root.glob("Result_*"):
                 os.utime(path, (old, old))
+            return
+        if case == "dbg_count":
+            _write_proof(root, dbg_count=1)
             return
         _write_proof(root, rows=1, count=1)
 
@@ -207,6 +217,36 @@ def test_shadow_zero_result_without_valid_proof_stays_missing(shadow, monkeypatc
     )
     assert coverage[0]["coverage"] == "MISSING"
     assert "scan_runner_empty_result_unproven" in caplog.text
+    assert "shadow_round_empty_receipt_registered" not in caplog.text
+    _assert_staging_reclaimed(hdd)
+
+
+def test_shadow_zero_result_with_unstaged_spill_input_is_unproven(shadow, monkeypatch, caplog):
+    runner, hdd, nfs = shadow
+    monkeypatch.setattr("backend.agent.scan_runner.load_scan_events", lambda *args: None)
+    monkeypatch.setattr("backend.agent.scan_runner.subprocess.run", _tool(_write_proof))
+    caplog.set_level(logging.WARNING)
+
+    spill_inputs = [{"dle_id": "dle-1", "remote_path": "/missing", "occurrence_key": "k"}]
+    runner.run_scan_and_upload(
+        42, "host-1", is_final=True, device_serials=["SER-A"],
+        fact_round_id=7, spill_inputs=spill_inputs,
+    )
+
+    assert not round_manifest_path(nfs, 42, 7, "host-1").exists()
+    expected = [{"host_id": "host-1", "platform": "mtk"}]
+    assert read_round_reports(nfs, 42, 7, expected) == []
+    now = datetime.now(timezone.utc)
+    coverage = classify_round_coverage(
+        [dict(item) for item in expected],
+        [],
+        observed_at=now,
+        input_cutoff_at=now + timedelta(minutes=5),
+    )
+    assert coverage[0]["coverage"] == "MISSING"
+    assert "scan_runner_empty_result_unproven" in caplog.text
+    assert "evidence=spill_unstaged" in caplog.text
+    assert "scan_runner_empty_result_proven" not in caplog.text
     assert "shadow_round_empty_receipt_registered" not in caplog.text
     _assert_staging_reclaimed(hdd)
 

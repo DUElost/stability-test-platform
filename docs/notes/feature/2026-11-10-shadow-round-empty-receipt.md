@@ -28,15 +28,22 @@ Agent 在 `round_manifest_path(nfs_root, plan_run_id, fact_round_id, host_id)`
 
 - `Result_*_members.json`：`schema == "stp.scan_membership"` 且 `rows == []`；
 - `Result_*_summary.json`：`counts.aee_result_org_count` /
-  `counts.aee_result_final_count` 为 int 且为 0。
+  `counts.aee_result_final_count` 为 int 且为 0；`counts.dbg_count` 若为 int
+  也必须为 0（缺失按没有该字段处理）。`dbg_count > 0` 表示有 dbg 但未产出
+  解析行，属于提取/工具失败形态，不得记成 `EMPTY`（评审 6762517329）。
 
 两类文件都存在时要求所有计数都为 0；任一计数 > 0 即不算证明。日志、stdout、
 “没有 org.xls”都不作为证据。证明在 staging 回收之前读取。
 
+存在未暂存的溢出输入（`events is None` 且 `spill_inputs` 非空，即
+`spill_unstaged` 非空）时，即使本地有 0 结果证明也不登记：本地 0 结果不覆盖
+整台主机。此时记 warning `scan_runner_empty_result_unproven`，evidence 为
+`spill_unstaged`，覆盖保持 `MISSING`，交给后续重发补齐（评审 6762617060）。
+
 不登记并保持 `MISSING` 的路径：工具 rc≠0、超时/抛异常、扫描根准备失败、
-rc=0 但没有有效证明。最后一种情况新增可检索 warning
-`scan_runner_empty_result_unproven`；证明被接受时记录
-`scan_runner_empty_result_proven`。
+rc=0 但没有有效证明、`spill_unstaged` 非空。无有效证明或
+`spill_unstaged` 非空时新增可检索 warning `scan_runner_empty_result_unproven`；
+证明被接受时记录 `scan_runner_empty_result_proven`。
 
 空回执登记成功后沿用现有影子观测：日志
 `shadow_round_empty_receipt_registered`（与报表的
@@ -77,6 +84,12 @@ start_log_scan.py -m 0 -d <scanroot> -side shanghai
   `counts.dbg_count=0`，`generated_files` 只有 members_json / summary_json，
   没有 org_excel。
 
+这两个文件位于 **扫描根顶层**：工具 v2.1.1 源码
+`modules/mode/ScanAeeTne.py` 的 `__generate_result` 以
+`result_dir = self._scan_root_dir` 写出 members/summary，因此实现保留扫描根
+顶层的 `scan_root.glob("*_members.json")` / `scan_root.glob("*_summary.json")`，
+不递归查找（评审 6762617060 放宽原第 2 项；子目录递归与对应用例不再要求）。
+
 ## Alternatives
 
 - **工具侧在 0 结果时写只有表头的 org.xls**：需要改外部工具并重新发版；实测
@@ -92,11 +105,14 @@ start_log_scan.py -m 0 -d <scanroot> -side shanghai
 
 - 实测：上述 v2.1.1 隔离运行，rc=0、无 org.xls、members rows=[]、summary
   aee_result_*_count=0（证据见 Decision）。
-- 反例先行：新测试在 `origin/main d3458b9` 上 9 failed / 6 passed；
-  实现后 15 passed。
+- 反例先行：第一轮新测试在 `origin/main d3458b9` 上 9 failed / 6 passed；
+  第一轮实现后 15 passed。评审退回后新增 `dbg_count=1` 与
+  `spill_unstaged` 两条反例，当前 17 passed。
 - 控制面真实读取：`test_shadow_zero_result_with_v211_proof_registers_empty_receipt`
   用 `read_round_reports` + `classify_round_coverage` 断言覆盖为 `EMPTY`；
-  无证明/旧证明/条数 >0 时断言 `MISSING`。
+  无证明/旧证明/条数 >0/`dbg_count > 0` 时断言 `MISSING`；
+  `test_shadow_zero_result_with_unstaged_spill_input_is_unproven` 断言
+  `spill_unstaged` 时覆盖为 `MISSING`。
 - 相关既有测试：
   `backend/agent/tests/test_b8_g3_round_scan.py`、`test_scan_runner.py`、
   `test_upload_manager.py`、`test_scan_runner_shard_failure_visibility.py`、
@@ -111,7 +127,11 @@ start_log_scan.py -m 0 -d <scanroot> -side shanghai
     `test_shadow_zero_result_without_valid_proof_stays_missing` 三个参数全红；
   - 去掉 `fact_round_id` 判断 → 现行扫描用例
     `test_legacy_zero_result_with_proof_keeps_current_scan_untouched` 变红
-    （`round_manifest_path` 拒绝 None）。
+    （`round_manifest_path` 拒绝 None）；
+  - 去掉 `dbg_count` 检查 → `test_shadow_zero_result_without_valid_proof_stays_missing[dbg_count]`
+    变红（清单被写出、覆盖变 `EMPTY`）；
+  - 去掉 `spill_unstaged` 阻断 → `test_shadow_zero_result_with_unstaged_spill_input_is_unproven`
+    变红（清单被写出）。
 
 ## Revisit
 
