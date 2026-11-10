@@ -8,7 +8,10 @@ v1.4.1（#3892 推广，15.93 试点）：
     门控只压制可刷态口（与 V6 相同）。依据 2026-11-10 15.93 实测（#3892 comment
     6764214206）：V5 `-p` 在 Linux 上按 sysfs 口名过滤（P1/P3 不绑错口），绑定目标口后
     完整刷机成功（P2）；2026-08 的「打开层不动作」与当时的 ttyACM 权限问题一并消失。
-  - 非 vbus 路径（`adb_reboot`）V5 命令行与 1.4.0 逐字一致，不带 `-p`。
+  - 非 vbus 路径（`adb_reboot`）V5 命令行与 1.4.0 逐字一致，不带 `-p`，也不核对 V5 回显。
+  - 复核 #3917 第 1 轮：V5 vbus 回显的 tty 解析不出口时立即止损；工具退出前从未回显
+    目标口时判失败（`port-unverified`，不重试，断电隔离）；vbus 门控口径强制 brom，
+    参数、环境变量和未知取值都不能改成 full。
 
 v1.4.0（#3892 / ADR-0063 D3）：新增 `trigger_mode`，缺省 `adb_reboot` 与 1.3.20 逐项
 一致（结果 metrics 多一个 `trigger_mode` 键）。`vbus_cycle` 给**关机、没有 ADB** 的
@@ -466,8 +469,11 @@ class FlashToolAborted(RuntimeError):
         self.kind = kind
 
 
-def _parse_bound_port(line: str) -> "str | None":
-    """从 V6 回显取「工具实际绑到的物理 USB 口」；取不到返回 None。
+def _parse_bound_port(line: str, *, v5_echo: bool = False) -> "str | None":
+    """从工具回显取「工具实际绑到的物理 USB 口」；取不到返回 None。
+
+    `v5_echo=True` 时才认 V5 的 `com portName is: /dev/ttyACMn`（只有 vbus 分支
+    传入，复核 #3917 B3：非 vbus 的 V5 不继承这条回显规则）。
 
     实测形态（Linux，run 921 与本机探针一致）::
 
@@ -478,19 +484,31 @@ def _parse_bound_port(line: str) -> "str | None":
     """
     m = _SYMBOLIC_LINK_RE.search(line)
     if not m:
-        v5 = _V5_PORTNAME_RE.search(line)
+        v5 = _V5_PORTNAME_RE.search(line) if v5_echo else None
         return _tty_usb_port(v5.group(1)) if v5 else None
     tail = m.group(1).rstrip(".").split("@")[-1]
     return tail if _PORT_PATH_RE.match(tail) else None
 
 
-def _port_mismatch_reason(line: str, target_port: str, serial: str) -> "str | None":
+def _port_mismatch_reason(line: str, target_port: str, serial: str,
+                          *, v5_echo: bool = False) -> "str | None":
     """工具这一行输出是否声明"我绑到了非目标口"。是 → 返回止损理由。
 
-    只认工具自己的 `symbolic_link` 回显：`-p` 是否真生效、拓扑口名与 sysfs 是否
-    一致，都不能靠假设。取不到端口形态（Windows 形态、别的行）一律 None。
+    只认工具自己的绑定回显（V6 `symbolic_link`；`v5_echo` 时加上 V5 `com portName`）：
+    `-p` 是否真生效、拓扑口名与 sysfs 是否一致，都不能靠假设。取不到端口形态
+    （Windows 形态、别的行）一律 None。
+
+    v1.4.1（复核 #3917 B1）：`v5_echo` 时，V5 回显了 tty 节点却解析不出 sysfs 口
+    （节点已消失、链接形态异常），按「无法核对」止损——不能把它当成普通日志放过。
     """
-    bound = _parse_bound_port(line)
+    if v5_echo and not _SYMBOLIC_LINK_RE.search(line):
+        v5 = _V5_PORTNAME_RE.search(line)
+        if v5 and _tty_usb_port(v5.group(1)) is None:
+            return (
+                f"tool opened /dev/{v5.group(1)} but its USB port cannot be resolved "
+                f"(target port {target_port!r}, serial={serial}): 无法核对绑定口，"
+                "已终止工具，未继续下发")
+    bound = _parse_bound_port(line, v5_echo=v5_echo)
     if bound is not None and target_port and bound != target_port:
         return (
             f"tool bound USB port {bound!r} != target port {target_port!r} "
@@ -2671,6 +2689,10 @@ def main() -> None:
     gate_pid_scope = str(
         args.get("gate_pid_scope") or os.environ.get("STP_FLASH_GATE_PID_SCOPE") or ""
     ).strip().lower() or ("brom" if binding_native else "full")
+    if vbus and gate_pid_scope != "brom":
+        # v1.4.1（复核 #3917 B2）：vbus 只按 brom 口径门控，参数、环境变量和拼错的
+        # 值都不能把它改成 full——full 会压制邻机的 201c 正常态（run 921 机制）。
+        gate_pid_scope = "brom"
     explicit_port = str(
         args.get("flash_port") or os.environ.get("STP_FLASH_PORT") or ""
     ).strip()
@@ -2881,7 +2903,7 @@ def main() -> None:
     # 之前都要把本槽位断电（ADR-0063 D3 第 8 条：隔离一台状态不明的设备）。
     vbus_keep_power = False
     # 必须先于 _settle_lock 的任何调用点（含信号处理器）定义。
-    vbus_state: dict = {"power_on_at": None, "brom_seen": False}
+    vbus_state: dict = {"power_on_at": None, "brom_seen": False, "bound_ok": False}
 
     def _settle_lock() -> None:
         nonlocal lock_settled
@@ -2947,6 +2969,7 @@ def main() -> None:
             if vbus:
                 # 每次尝试都从断电起算：上一次尝试可能停在 BROM/DA 半程。
                 vbus_state.update({"power_on_at": None, "brom_seen": False,
+                                   "bound_ok": False,
                                    "attempt": attempt, "abort": None})
                 off = _usb_power(serial, "off", vbus_report["slot"])
                 vbus_report["power_actions"].append(
@@ -3057,9 +3080,14 @@ def main() -> None:
                 def _vbus_line_check(line: str) -> "str | None":
                     if _output_caught_brom(line) or re.search(r"\d{1,3}%", line):
                         vbus_state["brom_seen"] = True
-                    if require_binding:
-                        return _abort_on_wrong_port(line)
-                    return None
+                    if not require_binding:
+                        return None
+                    # v1.4.1：vbus 分支才认 V5 的 com portName 回显（复核 #3917 B3）。
+                    bound = _parse_bound_port(line, v5_echo=True)
+                    if bound is not None and bound == target_port:
+                        vbus_state["bound_ok"] = True
+                    return _port_mismatch_reason(line, target_port, serial,
+                                                 v5_echo=True)
 
                 def _vbus_brom_deadline() -> "tuple[str, str] | None":
                     if vbus_state.get("abort"):
@@ -3178,6 +3206,21 @@ def main() -> None:
                 attempts_report.append(
                     {"attempt": attempt, "outcome": "launch-failed"})
                 final_error = ("launch", f"flash_tool launch failed: {exc}")
+                break
+
+            if (vbus and require_binding and generation != GENERATION_V6
+                    and not vbus_state["bound_ok"]):
+                # v1.4.1（复核 #3917 B1）：V5 vbus 工具退出时始终没有回显过本槽位口，
+                # 就无法证明写的是目标机。按止损处理：不判成功、不重试，结算时断电隔离。
+                reason = (
+                    f"V5 tool exited without a verifiable bound-port echo for target "
+                    f"port {target_port!r} (serial={serial}); result not trusted")
+                attempt_record.update({"outcome": "aborted-port-unverified",
+                                       "exit_code": flash_rc, "reason": reason})
+                attempts_report.append(attempt_record)
+                aborted_report = {"attempt": attempt, "reason": reason}
+                final_output, final_rc = output, flash_rc
+                final_error = ("port-unverified", reason)
                 break
 
             v_ok, v_evidence = _scan_output_for_verdict(output, "")

@@ -108,6 +108,10 @@ Class: feature
   与 `test_flash_firmware_v1319.py` 合计 34 passed。`check_script_packages`：族树与最新登记等价。
   V5 vbus 追加后 `test_flash_firmware_v141.py` 共 7 条（V5 `-p` 只经 `v5_port`、tty 解析、V5 回显核对、vbus V5 带槽位口与
   `brom` 门控、关绑定仍拒绝）；`-k flash_firmware` 全部 254 passed。
+  复核 #3917 第 1 轮后增至 16 条：V5 回显 tty 解析不出口即止损；非 vbus 不认 V5 回显；vbus V5 缺少可信绑定（从未回显、
+  tty 解析不出、回显邻机口）三种都判失败、不重试、断电隔离；`gate_pid_scope` 取 full（参数 / 环境变量）与拼错值时，
+  vbus 初始门控与重试门控仍为 brom（V5 三种、V6 环境变量一种）。变异：去掉「从未回显即失败」1 条变红；去掉 brom 强制
+  4 条变红；去掉「解析不出即止损」2 条变红；V5 回显规则不限 vbus 1 条变红。`-k flash` 共 329 passed。
 
 ## Revisit
 
