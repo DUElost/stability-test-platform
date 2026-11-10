@@ -49,6 +49,14 @@ Class: feature
   Agent 部分必须随控制面同批，在 B8 的联合 Agent 发布（G4 / #3875 / #3889）截止前合入；赶不上就顺延到下一次全队滚动，
   不得在切窗后单独合入（ADR-0063 D6 第 1 条；#3875 digest 守卫会把对不上的主机记为 `capability_unverified`）。
 
+- 2026-11-10 `flash_firmware@1.4.1`（15.93 单主机多台试点）：机型族路由表补 `MLD_NX3` / `MLD-NX3` → `MLD`。
+  vbus 刷机的机型只来自步骤参数 `model`，未列机型在 1.4.0 上 fail-fast（no firmware family route），NX3 无法派发。
+  只改路由表与抬头注释，其余逻辑与 1.4.0 一致；已按 ADR-0051 登记新版本，1.4.0 条目不动。
+  工具代际（v5 / v6）仍由版本目录 `manifest.json` 的 `tool_generation` 决定，路由不改变代际判定。
+  同一版本（未发布前追加）还放开 vbus 的 V5：552 机型只能用 flashtool（Owner 2026-11-10），15.93 实测 V5 `-p` 在 Linux 上按
+  sysfs 口名过滤并能完成刷机（#3892 comment 6764214206）。V5 在 vbus 下带 `-p <槽位口>`，绑定与 `brom` 门控缺省开启；
+  V5 回显 `com portName is: /dev/ttyACMn` 经 `/sys/class/tty` 解析成 sysfs 口后接进既有的逐行核对。非 vbus 的 V5 命令行不变
+  （`_build_flash_argv` 只认显式的 `v5_port`，原有「V5 不长出 -p」测试照常通过）。ADR-0063 升 v1.1 订正 D3 第 4 条。
 - 2026-11-10 #3918 U5a（ADR-0063 v1.2 D7）：Agent 按映射逐口读 sysfs `idVendor`/`idProduct`，上报 `capacity.usb_power_slots`
   （`{serial: [slot, vid_pid|null]}`）；分类函数放共享契约 `contracts/usb_presence.py`，供控制面与前端共用。映射宽松读取，
   任何格式问题都不上报，心跳照常；权威校验仍在 wrapper。只有带映射文件的主机多出这个键（16 台约 700 字节），其余主机心跳不变。
@@ -106,6 +114,16 @@ Class: feature
   控制面 vbus 准入与认领两个文件均通过；Agent 全量 3169 passed、3 failed，这 3 条在 `origin/main` 同样失败（同上）。
   遗漏原因：ADR-0063 起草时只核对了派发与认领两道准入，没有核对每个 job 在 init 之前都会跑的 ADR-0061 残留检查。
 
+- 2026-11-10 1.4.1：`backend/agent/tests/test_flash_firmware_v141.py` 2 条（NX3 两种写法路由到 MLD；既有 10 个键不变）；
+  与 `test_flash_firmware_v1319.py` 合计 34 passed。`check_script_packages`：族树与最新登记等价。
+  V5 vbus 追加后 `test_flash_firmware_v141.py` 共 7 条（V5 `-p` 只经 `v5_port`、tty 解析、V5 回显核对、vbus V5 带槽位口与
+  `brom` 门控、关绑定仍拒绝）；`-k flash_firmware` 全部 254 passed。
+  复核 #3917 第 1 轮后增至 16 条：V5 回显 tty 解析不出口即止损；非 vbus 不认 V5 回显；vbus V5 缺少可信绑定（从未回显、
+  tty 解析不出、回显邻机口）三种都判失败、不重试、断电隔离；`gate_pid_scope` 取 full（参数 / 环境变量）与拼错值时，
+  vbus 初始门控与重试门控仍为 brom（V5 三种、V6 环境变量一种）。变异：去掉「从未回显即失败」1 条变红；去掉 brom 强制
+  4 条变红；去掉「解析不出即止损」2 条变红；V5 回显规则不限 vbus 1 条变红。`-k flash` 共 329 passed。
+  复核 #3917 第 2 轮（B1-R2）后增至 20 条：每行回显的首次 tty 查询分别返回邻口、None、邻口，之后恢复为槽位口，三种都必须
+  立即按错口止损、不重试、断电隔离，且每行只查一次 tty；三条在 `685848d` 上全部失败。遗漏原因：上一轮用例只用固定 tty 映射。
 - 2026-11-10 #3918 U5a：`backend/agent/tests/test_usb_power_presence_3918.py` 18 条（分类 6 条、逐口读取、无映射、
   5 种格式错误、sysfs 值非法、capacity 键只在有映射时出现且不改槽位、心跳 tick 透传 / 读取抛异常不影响心跳）。
 
