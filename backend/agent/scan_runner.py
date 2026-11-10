@@ -453,6 +453,14 @@ class ScanRunner:
             round_args = {"spill_inputs": spill_inputs if events is not None else ()}
             if events is None:
                 spill_unstaged = [str(item["dle_id"]) for item in spill_inputs]
+        proof_blocked = None
+        if fact_round_id is not None:
+            if spill_unstaged:
+                proof_blocked = "spill_unstaged"
+            elif events:
+                # DLE events exist for this host/run but the tool found zero
+                # rows; do not claim the host is empty (review 6766165762).
+                proof_blocked = "events_present"
         org_xls = self.run_local_scan(
             plan_run_id=plan_run_id,
             host_id=host_id,
@@ -460,9 +468,7 @@ class ScanRunner:
             device_serials=device_serials,
             run_date_stamps=run_date_stamps,
             fact_round_id=fact_round_id,
-            empty_result_proof_blocked=(
-                "spill_unstaged" if fact_round_id is not None and spill_unstaged else None
-            ),
+            empty_result_proof_blocked=proof_blocked,
             **round_args,
         )
         if not org_xls:
@@ -724,9 +730,10 @@ class ScanRunner:
             ]
             if not fresh:
                 if empty_result_proof_blocked:
-                    # Unstaged spill inputs mean the local 0-result proof does
-                    # not cover the whole host; leave coverage MISSING so the
-                    # round can be retried (review 6762617060).
+                    # A veto (unstaged spill inputs, or DLE events already
+                    # present) means the local 0-result proof does not cover
+                    # the host; leave coverage MISSING for a retry
+                    # (reviews 6762617060 / 6766165762).
                     logger.warning(
                         "scan_runner_empty_result_unproven plan_run=%d host=%s "
                         "fact_round=%d scan_root=%s evidence=%s",
