@@ -16,6 +16,38 @@ export interface ReadinessDevice {
   retired_at?: string | null;
   /** #2962 A：陈旧设备（OFFLINE 且 7 天未见）默认不进新目标 */
   is_stale?: boolean;
+  /** ADR-0063 D7 / #3918：vbus 槽位 USB 在位 */
+  usb_presence?: { state: string; host_online?: boolean } | null;
+  /** ADR-0061：按专项的归还状态；任一专项为 `debt` 即有欠账（D4 第 2 条：欠账设备不放行） */
+  return_state?: Record<string, { state?: string } | null | undefined> | null;
+  /**
+   * ADR-0063 D7 第 6 条：只在选中 vbus 刷机计划时由派发页标记——OFFLINE 且槽位报告关机态的设备
+   * 可以勾选。后端 `run/preview` 与 D4 准入仍是最终依据。
+   */
+  vbus_selectable?: boolean;
+}
+
+function hasReturnDebt(device: ReadinessDevice): boolean {
+  return Object.values(device.return_state ?? {}).some(entry => entry?.state === 'debt');
+}
+
+/**
+ * ADR-0063 D7 第 6 条：OFFLINE、在役、无欠账、在线主机报告槽位为关机态（0e8d:2046）。
+ * 所有选机入口（表格、矩阵、筛选、批量、草稿恢复）都经 `isSchedulable` 用这一个判定；
+ * 欠账拦截放在这里，避免某个入口漏掉（复核 #3921 第 1 轮 P2）。
+ */
+export function isVbusPoweredOffCandidate(device: ReadinessDevice): boolean {
+  return device.status === 'OFFLINE'
+    && !device.retired_at
+    && !hasReturnDebt(device)
+    && device.usb_presence?.state === 'powered_off'
+    && device.usb_presence?.host_online === true;
+}
+
+/** 选中 vbus 刷机计划时给关机候选打 `vbus_selectable`；其余情况原样返回（同一引用）。 */
+export function markVbusSelectable<T extends ReadinessDevice>(devices: T[], vbusFlash: boolean): T[] {
+  if (!vbusFlash) return devices;
+  return devices.map(device => (isVbusPoweredOffCandidate(device) ? { ...device, vbus_selectable: true } : device));
 }
 
 export interface ReadinessHost {
@@ -181,14 +213,19 @@ export function buildDeviceReadinessRows(
     const host = device.host_id != null ? hostMap.get(String(device.host_id)) : undefined;
     // #786：后端 DeviceOut 全仓零产出 `schedulable`，原「后端权威准入」分支恒走 status
     // 兜底；改为直接以 status 判定，不再假装存在后端准入决策。
-    if (device.status !== 'ONLINE') reasons.push('设备不可调度');
+    // ADR-0063 D7 第 6 条：vbus 刷机计划下的关机候选——离线 / ADB / 陈旧是预期状态，不算阻断。
+    const vbusPoweredOff = device.vbus_selectable === true;
+    if (device.status !== 'ONLINE' && !vbusPoweredOff) reasons.push('设备不可调度');
     // ADR-0057 D4 第 4 面（#2962 B）：退役是人工确认的终态——与主机退役同口径，
     // 明确提示「已退役」而不是混进「设备不可调度」。
     if (device.retired_at) reasons.push('设备已退役');
     // #2962 A：陈旧（OFFLINE 且 7 天未见）只提示，不改变既有可调度判定
     // （陈旧本身已由 status 挡下；这里让运维看到「为什么这台不该再选」）。
-    else if (device.is_stale) reasons.push('设备陈旧（>7 天未见）');
-    if (device.adb_connected === false || ['offline', 'unknown', 'unauthorized'].includes(device.adb_state ?? '')) reasons.push(`ADB ${device.adb_state || '离线'}`);
+    else if (device.is_stale && !vbusPoweredOff) reasons.push('设备陈旧（>7 天未见）');
+    if (device.adb_state === 'unauthorized'
+      || (!vbusPoweredOff && (device.adb_connected === false || ['offline', 'unknown'].includes(device.adb_state ?? '')))) {
+      reasons.push(`ADB ${device.adb_state || '离线'}`);
+    }
     if (host?.retired_at) reasons.push('节点已退役');
     else if (host && host.status !== 'ONLINE') reasons.push('节点离线');
     return { device, host, reasons, ready: reasons.length === 0 };

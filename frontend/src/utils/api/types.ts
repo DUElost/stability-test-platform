@@ -261,6 +261,23 @@ export interface Device {
     updated_at?: string;
     [key: string]: unknown;
   }> | null;
+  /** ADR-0063 D7 / #3918：vbus 槽位 USB 在位（只有带槽位映射的主机上报；null = 无映射/未上报） */
+  usb_presence?: DeviceUsbPresence | null;
+}
+
+/** ADR-0063 D7：分类与后端共享契约 `backend/agent/contracts/usb_presence.py` 一致。 */
+export type DeviceUsbPresenceState = 'powered_off' | 'adb_mode' | 'other' | 'absent';
+
+export interface DeviceUsbPresence {
+  /** `<hub_location>:<port>` */
+  slot: string;
+  /** sysfs `idVendor:idProduct`；口下没有设备时为 null */
+  vid_pid: string | null;
+  state: DeviceUsbPresenceState;
+  /** 主机最近一次心跳时间 */
+  reported_at: string | null;
+  /** 主机当前在线；false 时在位数据可能过期 */
+  host_online: boolean;
 }
 
 /** ADR-0057 D2（#2962 B）：批量退役逐台结果。 */
@@ -1457,6 +1474,8 @@ export interface Plan {
   created_at: string;
   updated_at: string;
   steps: PlanStep[];
+  /** ADR-0063 D7 / #3918：首个启用的 init 步骤是 vbus 刷机（与 D4 同一判定）。派发页据此放开关机设备的勾选。 */
+  is_vbus_flash?: boolean;
 }
 
 export interface PlanCreate {
