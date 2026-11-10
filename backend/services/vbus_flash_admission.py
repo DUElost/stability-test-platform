@@ -6,34 +6,26 @@
 本来就是要在设备没有 ADB 时用 USB 切电把它拉进 BROM。
 
 派发侧（Plan 快照）与认领侧（作业 ``pipeline_def``）都经 :func:`is_vbus_flash_lifecycle`
-判定，避免两处判据漂移。其它拒绝理由（退役、欠账、租约、主机离线等）不受影响。
+判定，避免两处判据漂移。判据本体在 ``backend/agent/contracts/vbus_flash.py``，
+Agent host 的 init 残留检查推迟（D5 第 3 条）也用它。
+其它拒绝理由（退役、欠账、租约、主机离线等）不受影响。
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+from backend.agent.contracts.vbus_flash import is_vbus_flash_lifecycle
 from backend.services.plan_dispatcher_core import (
     PlanDispatchError,
     build_lifecycle_from_snapshot,
 )
 
-VBUS_FLASH_ACTION = "script:flash_firmware"
-VBUS_TRIGGER_MODE = "vbus_cycle"
-
-
-def is_vbus_flash_lifecycle(lifecycle: Any) -> bool:
-    """``lifecycle.init[0]`` 是否为 ``trigger_mode=vbus_cycle`` 的 flash_firmware 步骤。"""
-    if not isinstance(lifecycle, dict):
-        return False
-    init = lifecycle.get("init")
-    if not isinstance(init, list) or not init:
-        return False
-    first = init[0]
-    if not isinstance(first, dict) or first.get("action") != VBUS_FLASH_ACTION:
-        return False
-    params = first.get("params")
-    return isinstance(params, dict) and params.get("trigger_mode") == VBUS_TRIGGER_MODE
+__all__ = [
+    "is_vbus_flash_lifecycle",
+    "is_vbus_flash_pipeline",
+    "is_vbus_flash_snapshot",
+]
 
 
 def is_vbus_flash_pipeline(pipeline_def: Any) -> bool:
