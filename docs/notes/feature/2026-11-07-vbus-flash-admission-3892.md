@@ -25,6 +25,9 @@ Class: feature
     （复核 #3899 指出：健康过滤之外 unauthorized 设备原本会成为候选；ADR-0063 §8 第 4 项裁定排除）、无 ACTIVE 租约、且最早 PENDING 作业是
     vbus 刷机的设备，另行认领。这部分最多 `vbus_slots` 个，不占 `capacity`。锁内复核判定，并使用 `FOR UPDATE SKIP LOCKED`；
   - 本 host 已有 RUNNING 的 vbus 作业时，不再发新的 vbus 作业（单主机严格串行），避免后续作业在脚本主机锁上空耗步骤超时；
+    2026-11-10 订正：只计仍在刷机的作业，`execution_state` 为 `WAITING_BARRIER` / `PATROL_SLEEP` 的不算
+    （阶段 B 真机验收 PlanRun 1242：A 刷完停在 INIT→PATROL barrier 等 B，守卫把 A 算作在跑，B 永远认领不到，
+    两边等到 barrier 超时）。子状态为空（刚认领、首个心跳未到）仍算在跑；
   - 旧 Agent（不带 `vbus_slots`）认领不到任何 vbus 作业，作业保持 PENDING（ADR-0063 D6 第 4 条）。
 - Agent（新增 `backend/agent/usb_power_slots.py`）：
   - 存在 `/etc/stp-agent/usb-power-slots.json` 时 `vbus_slots=1`，此时即使 `effective_slots ≤ 0` 也照样调用认领，`capacity` 传 0；
@@ -65,6 +68,11 @@ Class: feature
 - 相邻回归：claim、派发设备校验、准入队列 step2–4、`plan_dispatcher`、`agent_dual_write`、Agent 全量。
   Agent 全量 3079 passed，3 failed；这 3 条在 `origin/main` 同样失败（`test_aee_processor` 两条、进程组回收一条），与本改动无关。
 - ruff、import-linter（5 kept）、`check_inner_imports`（610 ≤ 610）、`check_god_files_ceiling` 均通过。
+
+- 2026-11-10 barrier 死锁订正：新增 `test_vbus_job_past_flash_does_not_block_next_device`（WAITING_BARRIER / PATROL_SLEEP）
+  与 `test_vbus_job_still_flashing_blocks_next_device`（空 / EXECUTING_STEP / WAITING_EXECUTION_SLOT）；
+  claim 文件 21 passed。变异：去掉子状态过滤，2 条变红；把 EXECUTING_STEP 也当空闲，1 条变红。
+  遗漏原因：单测只按 Job.status 构造 RUNNING，没有覆盖多步 Plan 在 barrier 等待时仍为 RUNNING 的形态。
 
 ## Revisit
 

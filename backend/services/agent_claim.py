@@ -324,6 +324,10 @@ async def claim_jobs_for_host(
     return claimed, fencing_token_map
 
 
+# 不占用主机刷机的运行子状态：作业仍是 RUNNING，但已离开刷机步骤（#3892）。
+_VBUS_IDLE_EXECUTION_STATES = ("WAITING_BARRIER", "PATROL_SLEEP")
+
+
 async def _claimable_vbus_jobs(
     db: AsyncSession, host_id: str, vbus_slots: int,
 ) -> List[JobInstance]:
@@ -335,10 +339,16 @@ async def _claimable_vbus_jobs(
     """
     # 单主机严格串行（#3892）：本 host 已有在跑的 vbus 刷机作业时不再发新的——
     # 否则后续作业只会在脚本的主机锁上排队，空耗步骤超时。
+    # 已停在 INIT→PATROL barrier 或 patrol 间隔里的作业不再刷机，不算「在跑」：
+    # barrier 在等同 PlanRun 的下一台设备到达，把它算进来会让两边互相等到
+    # barrier 超时（阶段 B 真机验收 PlanRun 1242 的死锁）。execution_state 为空
+    # （刚认领、首个心跳未到）仍算在跑。
     running = await db.execute(
         select(JobInstance.pipeline_def).where(
             JobInstance.host_id == host_id,
             JobInstance.status == JobStatus.RUNNING.value,
+            func.coalesce(JobInstance.execution_state, "").notin_(
+                _VBUS_IDLE_EXECUTION_STATES),
         )
     )
     if any(is_vbus_flash_pipeline(row[0]) for row in running.all()):

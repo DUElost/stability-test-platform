@@ -63,7 +63,7 @@ def seeded():
     created["runs"].append(run.id)
 
     def add(pipeline, *, online=False, retired=False, status=JobStatus.PENDING.value, offset=0,
-            device_status=None, adb_state=None):
+            device_status=None, adb_state=None, execution_state=None):
         n = len(created["devices"])
         device = Device(
             serial=f"VBUS-{suffix}-{n}", host_id=host_id, tags=[], created_at=now,
@@ -79,6 +79,7 @@ def seeded():
             status=status, pipeline_def=pipeline,
             created_at=now + timedelta(seconds=offset), updated_at=now,
             started_at=now if status == JobStatus.RUNNING.value else None,
+            execution_state=execution_state,
         )
         db.add(job)
         db.flush()
@@ -161,6 +162,29 @@ async def test_at_most_vbus_slots_jobs_and_none_while_one_runs(seeded):
     # first 已在跑：单主机严格串行，second 不得被认领。
     assert await _claim(host_id, capacity=0, vbus_slots=1) == []
     assert second
+
+
+@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.parametrize("idle_state", ["WAITING_BARRIER", "PATROL_SLEEP"])
+async def test_vbus_job_past_flash_does_not_block_next_device(seeded, idle_state):
+    # 阶段 B 真机验收 PlanRun 1242：A 刷完停在 INIT→PATROL barrier 等 B，
+    # 守卫若把 A 算作在跑，B 永远认领不到，两边等到 barrier 超时。
+    host_id, add, _db = seeded
+    add(VBUS, online=True, status=JobStatus.RUNNING.value, offset=0,
+        execution_state=idle_state)
+    _d, second = add(VBUS, offset=1)
+    assert await _claim(host_id, capacity=0, vbus_slots=1) == [second]
+
+
+@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.parametrize("busy_state", [None, "EXECUTING_STEP", "WAITING_EXECUTION_SLOT"])
+async def test_vbus_job_still_flashing_blocks_next_device(seeded, busy_state):
+    # 刚认领（首个心跳未到）或仍在执行步骤的 vbus 作业照旧阻挡：单主机严格串行不变。
+    host_id, add, _db = seeded
+    add(VBUS, online=True, status=JobStatus.RUNNING.value, offset=0,
+        execution_state=busy_state)
+    add(VBUS, offset=1)
+    assert await _claim(host_id, capacity=0, vbus_slots=1) == []
 
 
 @pytest.mark.asyncio(loop_scope="module")

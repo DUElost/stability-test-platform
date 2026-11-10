@@ -1,6 +1,6 @@
 # ADR-0063：无 ADB 设备的 USB 切电刷机（`trigger_mode=vbus_cycle`）
 
-- 状态：**Proposed** v0.10（2026-11-09 v0.10：按 #3899 定向复核（comment 6731346242）P2 订正 D2 第 6 条与 D3 第 9 条（参数级能力标记 `usb-power/expect-slot`）、D3 第 4 条与第 11 条的措辞、D6 第 1 条的执行主体，§5.2 补旧 wrapper 反例；v0.9：按 #3899 定向复核（comment 6708089815）新增 `--expect-slot` 切电前比对（D2 第 1、8 条，D3 第 13 条），消解 D3 第 8 与第 13 条的冲突，补写作约定与 §5 验收清单；v0.8：Owner 裁定 §8 第 6 项选甲，D2 第 9 条的残余面第一期接受，§8 无待裁项；v0.7：按 U2–U4 独立复核订正 D3 第 4、6、8 条与 D4 第 6 条——vbus 必须开启 V6 端口绑定，OOBE 只取跳过部分，刷后异常同样隔离，vbus 作业不论设备在线与否只走 vbus 名额；v0.6：按独立复核（PR #3899 comment 6706217246）收口 D1/D2/D3/D4/D6 与写作约定，D2 新增第 8 条残余面待 Owner 裁定（§8 第 6 项），§6 拆分 U2 激活步骤；v0.5：Owner 提供关机态 lsusb（`0e8d:2046`），§8 第 5 项转已裁，D3 第 11 条放行集合补 2046；v0.4：Owner 裁定 §8 第 4 项（unauthorized 排除）与「设备必须已关机」前提，新增 D3 第 11–12 条，订正 D3 第 6 条键序；新增 §8 第 5 项待裁；v0.3：Owner 答复 §8 三项，见 §8；新增 §8 第 4 项待裁；v0.2：补 F11 与 D4 第 5–6 条，Agent 认领侧也要改，D6 第 1 条随之订正为随 Agent 代码发布；v0.1 2026-11-07 起草；Owner 已在项目对话中裁定「与 B8 并行实施、第一期不加迁移」，本稿待定向复核通过后转 Accepted）
+- 状态：**Proposed** v0.11（2026-11-10 v0.11：阶段 B 真机验收（PlanRun 1242）发现 D4 第 6 条的串行守卫把停在 INIT→PATROL barrier 的作业算作在跑，两台设备互相等待；订正为只计仍在刷机的作业（`execution_state` 非 `WAITING_BARRIER`/`PATROL_SLEEP`），§5.3 同步；v0.10：按 #3899 定向复核（comment 6731346242）P2 订正 D2 第 6 条与 D3 第 9 条（参数级能力标记 `usb-power/expect-slot`）、D3 第 4 条与第 11 条的措辞、D6 第 1 条的执行主体，§5.2 补旧 wrapper 反例；v0.9：按 #3899 定向复核（comment 6708089815）新增 `--expect-slot` 切电前比对（D2 第 1、8 条，D3 第 13 条），消解 D3 第 8 与第 13 条的冲突，补写作约定与 §5 验收清单；v0.8：Owner 裁定 §8 第 6 项选甲，D2 第 9 条的残余面第一期接受，§8 无待裁项；v0.7：按 U2–U4 独立复核订正 D3 第 4、6、8 条与 D4 第 6 条——vbus 必须开启 V6 端口绑定，OOBE 只取跳过部分，刷后异常同样隔离，vbus 作业不论设备在线与否只走 vbus 名额；v0.6：按独立复核（PR #3899 comment 6706217246）收口 D1/D2/D3/D4/D6 与写作约定，D2 新增第 8 条残余面待 Owner 裁定（§8 第 6 项），§6 拆分 U2 激活步骤；v0.5：Owner 提供关机态 lsusb（`0e8d:2046`），§8 第 5 项转已裁，D3 第 11 条放行集合补 2046；v0.4：Owner 裁定 §8 第 4 项（unauthorized 排除）与「设备必须已关机」前提，新增 D3 第 11–12 条，订正 D3 第 6 条键序；新增 §8 第 5 项待裁；v0.3：Owner 答复 §8 三项，见 §8；新增 §8 第 4 项待裁；v0.2：补 F11 与 D4 第 5–6 条，Agent 认领侧也要改，D6 第 1 条随之订正为随 Agent 代码发布；v0.1 2026-11-07 起草；Owner 已在项目对话中裁定「与 B8 并行实施、第一期不加迁移」，本稿待定向复核通过后转 Accepted）
 - 优先级：P1
 - 目标里程碑：M7
 - 日期：2026-11-07
@@ -166,8 +166,10 @@ Agent 代码，会改变控制面的期望 digest，而 #3875 的影子能力守
    每次认领最多返回 `vbus_slots` 个，不占用 `capacity`。`vbus_slots` 是独立的 host 级并发上限，取值 0–1，缺省 0；
    vbus 候选查询在 `capacity=0` 时也必须执行。未带 `vbus_slots` 的请求（旧 Agent）不得认领关机设备上的作业。
    关机设备上只有最早一条 PENDING 作业是 vbus 刷机作业时，控制面才可以认领它；`uq_job_active_per_device` 保证一台设备同时只有
-   一条 PENDING/RUNNING 作业，所以不存在「较早非 vbus + 较晚 vbus」的混合队列。本 host 已有 RUNNING 的 vbus 作业时，
-   控制面不得再返回新的 vbus 作业。
+   一条 PENDING/RUNNING 作业，所以不存在「较早非 vbus + 较晚 vbus」的混合队列。本 host 已有仍在刷机的 vbus 作业时，
+   控制面不得再返回新的 vbus 作业。「仍在刷机」指作业为 RUNNING，且运行子状态 `execution_state` 不是 `WAITING_BARRIER`
+   或 `PATROL_SLEEP`；子状态为空（刚认领、首个心跳未到）也算仍在刷机。停在 INIT→PATROL barrier 的作业在等同 PlanRun 的
+   下一台设备到达，控制面不得把它算作仍在刷机（阶段 B 真机验收 PlanRun 1242：算进来会让两台互相等到 barrier 超时）。
    vbus 刷机作业不论设备是否在线，控制面都必须只经 vbus 名额认领：控制面必须先从普通候选中滤掉 vbus 刷机作业，再按 `capacity` 截断，
    使 vbus 作业既不被普通名额认领、也不挤占普通名额（复核 #3901：否则普通路径可绕过上一句的守卫）。vbus 名额的候选是本 host
    上未退役、非 `ERROR`、非 `unauthorized`、无 ACTIVE 租约的设备，在线与关机设备都在内。未带 `vbus_slots` 的请求
@@ -228,7 +230,8 @@ Agent 代码，会改变控制面的期望 digest，而 #3875 的影子能力守
 3. 准入（单测，覆盖派发与认领两处）：
    - 只有满足 D4 第 1 条的作业放行 `device_offline`，三个派发调用点都覆盖；其他拒绝理由不受影响；
    - 认领：`ERROR`/`unauthorized`、退役、ACTIVE 租约不放行；`capacity=0` 时 vbus 名额照常认领；旧 Agent 认领不到 vbus 作业；
-     在线设备上的 vbus 作业只走 vbus 名额；本 host 已有在跑的 vbus 作业时不再返回新的。
+     在线设备上的 vbus 作业只走 vbus 名额；本 host 已有仍在刷机的 vbus 作业时不再返回新的；
+     停在 `WAITING_BARRIER` / `PATROL_SLEEP` 的 vbus 作业不阻挡同 PlanRun 的下一台。
 4. 真机：1 台主机、2 台关机设备，串行完成全链路；注入卡开机，确认断电隔离后第 2 台照常完成。
 
 ## 6. 实施单元（按 ADR-0058 批次）
