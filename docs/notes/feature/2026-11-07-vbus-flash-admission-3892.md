@@ -37,7 +37,9 @@ Class: feature
     第一个步骤（vbus 刷机）成功之后、其余 init 步骤之前。阶段 B 真机验收 PlanRun 1242：设备 B 派发时已关机，adb 探针
     等满 600s 后 `init_return_check:failed` 并记成欠账，永远到不了刷机步骤。判据移到共享契约
     `backend/agent/contracts/vbus_flash.py`，控制面 `vbus_flash_admission` 改为引用，两侧不再各写一份。
-    刷机失败时不做检查、照常跑本 job 的 teardown；推迟的检查失败时不跑本 job 的 teardown，与先查后刷的作业一致。
+    刷机已启动且失败时不做检查、照常跑本 job 的 teardown；推迟的检查失败时不跑本 job 的 teardown，与先查后刷的作业一致。
+    复核 #3915 第 1 轮订正：「刷机已启动」按 `_execute_step` 的 STARTED 边界计数（`_init_steps_started`），启动前丢租约
+    不跑 teardown（P1）；检查期间 teardown 门保持关闭，检查抛异常时同样不跑（P2）。
     本项改了 Agent 代码输入集，期望 digest 会变，必须随一次 Agent 发布滚动。
 - 依赖 U2（wrapper 常量）：本 PR 叠在 U2 分支上。
 - 发布依赖：本单元改了 Agent 代码输入集（`api_client.py`、`claim_loop.py`、`usb_power_slots.py`），合入后期望 digest 会变。
@@ -79,8 +81,10 @@ Class: feature
   与 `test_vbus_job_still_flashing_blocks_next_device`（空 / EXECUTING_STEP / WAITING_EXECUTION_SLOT）；
   claim 文件 21 passed。变异：去掉子状态过滤，2 条变红；把 EXECUTING_STEP 也当空闲，1 条变红。
   遗漏原因：单测只按 Job.status 构造 RUNNING，没有覆盖多步 Plan 在 barrier 等待时仍为 RUNNING 的形态。
-- 2026-11-10 init 残留检查推迟：`backend/agent/tests/test_vbus_init_check_order_3892.py`（11 条）钉住判据矩阵、
+- 2026-11-10 init 残留检查推迟：`backend/agent/tests/test_vbus_init_check_order_3892.py` 钉住判据矩阵、
   两条路径的执行顺序与 teardown 归属。变异：取消推迟，3 条变红；刷机失败时不认领 teardown，1 条变红。
+  复核 #3915 第 1 轮后增至 15 条：启动前丢租约（mock 与真实 `_execute_step` 各一条）、检查抛 `sqlite3.OperationalError`、
+  真实步骤路径的「已启动」计数接线；teardown 为非空。变异：恢复「刷机后无条件开门」，3 条变红；去掉 STARTED 计数，1 条变红。
   相邻回归：`test_return_init_u4_3729`、`test_lifecycle_engine`、`test_return_debts_u4_3729`、import 边界（`tests/test_agent_import_boundary.py`）、
   控制面 vbus 准入与认领两个文件均通过；Agent 全量 3169 passed、3 failed，这 3 条在 `origin/main` 同样失败（同上）。
   遗漏原因：ADR-0063 起草时只核对了派发与认领两道准入，没有核对每个 job 在 init 之前都会跑的 ADR-0061 残留检查。

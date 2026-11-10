@@ -2051,6 +2051,8 @@ class PipelineEngine:
         # R3: footprint at STARTED boundary after permit + enabled check.
         if phase == "init":
             note_footprint_started(self._footprint_families, step)
+            # ADR-0063 D5 第 3 条：vbus 作业按刷机步骤是否实际启动决定 teardown 归属。
+            self._init_steps_started = getattr(self, "_init_steps_started", 0) + 1
 
         log_file = None
         if self._log_dir:
@@ -2478,15 +2480,18 @@ class PipelineEngine:
                     # ADR-0063 D5 第 3 条：vbus 刷机作业的设备常态关机，探针（adb）
                     # 在刷机前必然拿不到结果。残留检查推迟到第一个步骤（vbus 刷机）
                     # 成功之后、其余 init 步骤之前；刷机不建立任何专项足迹。
+                    self._init_steps_started = 0
                     init_result = self._run_lifecycle_steps("init", init_def[:1])
-                    # 刷机步骤已开始，teardown 归本 job（与先查后刷的路径一致）；
-                    # 推迟的检查若失败，下面改回 False，由检查自己承担已尝试的解除。
-                    return_checks_passed = True
                     if init_result.success:
+                        # 检查期间 teardown 门保持关闭：检查返回失败或抛出异常时，
+                        # 由检查自己承担已尝试的解除（与先查后刷的路径一致）。
                         init_result = self._check_init_returns()
                         return_checks_passed = init_result.success
                         if init_result.success:
                             init_result = self._run_lifecycle_steps("init", init_def[1:])
+                    else:
+                        # 刷机步骤实际启动过才由本 job 承担 teardown；启动前丢租约时没有本 job 的动作。
+                        return_checks_passed = self._init_steps_started > 0
                 else:
                     init_result = self._check_init_returns()
                     return_checks_passed = init_result.success

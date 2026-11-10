@@ -184,17 +184,20 @@ Agent 代码，会改变控制面的期望 digest，而 #3875 的影子能力守
    对满足 D4 第 1 条的作业，Agent host 必须先执行 `lifecycle.init` 的第一个步骤（vbus 刷机），该步骤成功后再做残留检查，
    检查通过后才执行其余 init 步骤。刷机步骤不建立任何专项足迹，ADR-0061 D6 第 1 条「建立本 job 足迹之前先确认」的要求不变；
    刷后设备已开机，探针能给出真实回读。判据与控制面共用 `backend/agent/contracts/vbus_flash.py`。
-   - 刷机步骤失败时，Agent host 不做残留检查，本 job 照常执行自己的 teardown（刷机步骤已开始，与先查后刷的作业一致）。
-   - 推迟的残留检查失败时，Agent host 必须以 init 失败结束本 job，且不执行本 job 的 teardown（与先查后刷的作业一致）。
-   - 不满足 D4 第 1 条的作业，残留检查的时机必须与现行一致。
+   - 刷机步骤已启动且返回失败时，Agent host 不得执行残留检查，并且必须执行本 job 的 teardown（与先查后刷的作业一致）。
+   - 刷机步骤启动前租约已丢失时，Agent host 不得执行本 job 的 teardown（本 job 没有任何动作；复核 #3915 P1）。
+   - 推迟的残留检查返回失败或抛出异常时，Agent host 必须以 init 失败结束本 job，且不得执行本 job 的 teardown
+     （与先查后刷的作业一致；复核 #3915 P2）。
+   - 对不满足 D4 第 1 条的作业，Agent host 必须保持现行的残留检查时机。
 
 ### D6 发布与激活
 
-1. 本 ADR 有四个发布面：wrapper + 映射文件 + `uhubctl` 包经 Ansible 只下发到装有可控 Hub 的主机；
+1. 本 ADR 有五个发布面：wrapper + 映射文件 + `uhubctl` 包经 Ansible 只下发到装有可控 Hub 的主机；
    脚本新版本经包发布；准入改动随控制面常规部署；Agent 认领循环（D4 第 5 条）随 Agent 代码发布。
-   D5 第 3 条（init 残留检查推迟）同样随 Agent 代码发布。
-   前三者不改变 Agent 期望 digest，实施者不得把前三者与 B8 的 Agent 代码滚动合批。Agent 认领循环的改动必须随一次联合 Agent 发布
-   滚动（首选 G4、#3875、#3889 那一次；赶不上截止就顺延到下一次），不得单独部署。理由：它改变期望 digest，
+   D5 第 3 条（init 残留检查推迟）是第五个发布面，实施者必须让它随 Agent 代码发布。
+   前三者不改变 Agent 期望 digest，实施者不得把前三者与 B8 的 Agent 代码滚动合批。Agent 认领循环与 D5 第 3 条的改动，
+   实施者都必须随一次联合 Agent 发布滚动（认领循环首选 G4、#3875、#3889 那一次；赶不上截止就顺延到下一次），并且不得单独部署 Agent。
+   D5 第 3 条的改动必须同时发布控制面与全机队 Agent。理由：它们改变期望 digest，
    #3875 守卫要求全机队 digest 一致；它在没有映射文件的主机上不改变行为。U4 部署前，实施者必须核对控制面
    `compute_desired_artifact_digest` 与该次联合发布一致；影子开关保持关闭，直到全机队 digest 匹配。
 2. 激活只发生在 Plan 显式选择 `trigger_mode=vbus_cycle` 时；不设全局开关。
@@ -242,7 +245,8 @@ Agent 代码，会改变控制面的期望 digest，而 #3875 的影子能力守
      在线设备上的 vbus 作业只走 vbus 名额；本 host 已有仍在刷机的 vbus 作业时不再返回新的；
      停在 `WAITING_BARRIER` / `PATROL_SLEEP` 的 vbus 作业不阻挡同 PlanRun 的下一台。
    - Agent（单测）：vbus 刷机作业的执行顺序是「刷机 → 残留检查 → 其余 init 步骤」；非 vbus 作业仍先做残留检查；
-     刷机失败时不做残留检查且执行本 job 的 teardown；推迟的残留检查失败时不执行本 job 的 teardown（D5 第 3 条）。
+     刷机已启动且失败时不做残留检查且执行本 job 的 teardown；刷机启动前丢租约、推迟的残留检查失败或抛出异常时，
+     不执行本 job 的 teardown（D5 第 3 条）。
 4. 真机：1 台主机、2 台关机设备，串行完成全链路；注入卡开机，确认断电隔离后第 2 台照常完成。
 
 ## 6. 实施单元（按 ADR-0058 批次）

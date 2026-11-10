@@ -31,18 +31,27 @@ def _engine():
     return engine
 
 
-def _run(init, *, check_ok=True, failing_step=None):
+_TEARDOWN = [{"step_id": "teardown_step", "action": "script:check_device", "version": "1.0.0",
+              "params": {}, "timeout_seconds": 5}]
+
+
+def _run(init, *, check_ok=True, check_raises=None, failing_step=None, lease_lost_before=None):
     engine = _engine()
     calls = []
     teardown = []
 
     def check():
         calls.append("return_check")
+        if check_raises is not None:
+            raise check_raises
         return StepResult(success=check_ok, error_message=None if check_ok else "init_return_check:failed")
 
     def steps(phase, defs):
         for step in defs:
+            if step["step_id"] == lease_lost_before:
+                return StepResult(success=False, error_message="device_lease_lost")
             calls.append(step["step_id"])
+            engine._init_steps_started = getattr(engine, "_init_steps_started", 0) + 1
             if step["step_id"] == failing_step:
                 return StepResult(success=False, error_message="step failed")
         return StepResult(success=True)
@@ -54,8 +63,12 @@ def _run(init, *, check_ok=True, failing_step=None):
     engine._check_init_returns = check
     engine._run_lifecycle_steps = steps
     engine._execute_teardown_best_effort = run_teardown
-    pipeline_def = {"lifecycle": {"timeout_seconds": 1, "init": init, "teardown": []}}
+    pipeline_def = {"lifecycle": {"timeout_seconds": 1, "init": init, "teardown": _TEARDOWN}}
     with patch("backend.agent.pipeline_engine.time.sleep", return_value=None):
+        if check_raises is not None:
+            with pytest.raises(type(check_raises)):
+                engine._execute_lifecycle(pipeline_def)
+            return None, calls, teardown
         result = engine._execute_lifecycle(pipeline_def)
     return result, calls, teardown
 
@@ -104,4 +117,56 @@ def test_vbus_flash_failure_skips_check_but_runs_teardown():
 def test_non_vbus_check_failure_still_skips_teardown():
     result, calls, teardown = _run([_CHECK], check_ok=False)
     assert calls == ["return_check"]
+    assert teardown == []
+
+
+def test_vbus_lease_lost_before_flash_starts_skips_teardown():
+    # 复核 #3915 P1：刷机步骤尚未启动就丢租约时，本 job 没有任何动作，不得跑 teardown。
+    result, calls, teardown = _run([_FLASH, _CHECK], lease_lost_before="flash")
+    assert calls == []
+    assert result.metadata["termination_reason"] == "abort"
+    assert teardown == []
+
+
+def test_vbus_deferred_check_exception_skips_teardown():
+    # 复核 #3915 P2：推迟的检查抛出异常时，teardown 门必须保持关闭。
+    import sqlite3
+    _, calls, teardown = _run([_FLASH, _CHECK], check_raises=sqlite3.OperationalError("locked"))
+    assert calls == ["flash", "return_check"]
+    assert teardown == []
+
+
+def _real_step_engine(action_result, *, is_aborted=lambda: False):
+    """真实 _run_lifecycle_steps/_execute_step；只替换脚本执行体，钉住「已启动」计数的接线。"""
+    engine = _engine()
+    engine._is_aborted = is_aborted
+    teardown = []
+    engine._check_init_returns = lambda: StepResult(success=True)
+    engine._resolve_action = lambda action, step: (lambda ctx: action_result)
+
+    def run_teardown(defs, **kwargs):
+        teardown.append(defs)
+        return StepResult(success=True, metadata={"teardown_status": "SUCCESS"})
+
+    engine._execute_teardown_best_effort = run_teardown
+    return engine, teardown
+
+
+def test_real_step_path_counts_started_flash_and_runs_teardown():
+    engine, teardown = _real_step_engine(StepResult(success=False, exit_code=1, error_message="flash failed"))
+    pipeline_def = {"lifecycle": {"timeout_seconds": 1, "init": [{**_FLASH, "retry": 0}], "teardown": _TEARDOWN}}
+    with patch("backend.agent.pipeline_engine.time.sleep", return_value=None):
+        result = engine._execute_lifecycle(pipeline_def)
+    assert result.metadata["termination_reason"] == "init_failure"
+    assert engine._init_steps_started >= 1
+    assert teardown, "a started flash step owns this job's teardown"
+
+
+def test_real_step_path_lease_lost_before_start_skips_teardown():
+    engine, teardown = _real_step_engine(StepResult(success=True), is_aborted=lambda: True)
+    pipeline_def = {"lifecycle": {"timeout_seconds": 1, "init": [_FLASH, _CHECK], "teardown": _TEARDOWN}}
+    with patch("backend.agent.pipeline_engine.time.sleep", return_value=None):
+        result = engine._execute_lifecycle(pipeline_def)
+    assert result.metadata["termination_reason"] == "abort"
+    assert engine._init_steps_started == 0
     assert teardown == []
