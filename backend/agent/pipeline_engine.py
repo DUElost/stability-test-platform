@@ -12,6 +12,7 @@ init -> patrol loop -> teardown.
 from .device_discovery import discover_devices
 from .device_platform import detect_device_platform
 from .device_return import run_init_checks
+from .contracts.vbus_flash import is_vbus_flash_init
 from .contracts.device_return import (
     disarm_execution_budget, probe_result_policy, PLATFORM_INTERRUPTED_EXIT_CODES,
     DISARM_QUEUE_SECONDS, DISARM_JOB_MAX_SECONDS, PROBE_READBACK_VALUES,
@@ -2473,10 +2474,24 @@ class PipelineEngine:
                 self._report_job_status_mq("INIT_RUNNING")
                 logger.info("[Lifecycle] run=%d — executing init", self._run_id)
 
-                init_result = self._check_init_returns()
-                return_checks_passed = init_result.success
-                if init_result.success:
-                    init_result = self._run_lifecycle_steps("init", init_def)
+                if is_vbus_flash_init(init_def):
+                    # ADR-0063 D5 第 3 条：vbus 刷机作业的设备常态关机，探针（adb）
+                    # 在刷机前必然拿不到结果。残留检查推迟到第一个步骤（vbus 刷机）
+                    # 成功之后、其余 init 步骤之前；刷机不建立任何专项足迹。
+                    init_result = self._run_lifecycle_steps("init", init_def[:1])
+                    # 刷机步骤已开始，teardown 归本 job（与先查后刷的路径一致）；
+                    # 推迟的检查若失败，下面改回 False，由检查自己承担已尝试的解除。
+                    return_checks_passed = True
+                    if init_result.success:
+                        init_result = self._check_init_returns()
+                        return_checks_passed = init_result.success
+                        if init_result.success:
+                            init_result = self._run_lifecycle_steps("init", init_def[1:])
+                else:
+                    init_result = self._check_init_returns()
+                    return_checks_passed = init_result.success
+                    if init_result.success:
+                        init_result = self._run_lifecycle_steps("init", init_def)
             if not init_result.success:
                 # Distinguish lock_lost (abort) from genuine init failure
                 if init_result.error_message in ("device_lease_lost", "job_aborted"):
@@ -2551,8 +2566,9 @@ class PipelineEngine:
                 reason=f"termination_reason={termination_reason}",
             )
             if not return_checks_passed:
-                # No Plan step has started. The precheck owns its attempted
-                # disarm; starting this job's teardown would be a new action.
+                # The init return check failed (or, for a vbus flash job, the
+                # deferred check failed after the flash). The precheck owns its
+                # attempted disarm; starting this job's teardown would be a new action.
                 teardown_result = StepResult(success=True, metadata={"teardown_status": "SKIPPED"})
             elif termination_reason == "manual_exit":
                 logger.info(
