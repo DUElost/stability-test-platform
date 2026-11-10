@@ -49,6 +49,11 @@ Class: feature
   Agent 部分必须随控制面同批，在 B8 的联合 Agent 发布（G4 / #3875 / #3889）截止前合入；赶不上就顺延到下一次全队滚动，
   不得在切窗后单独合入（ADR-0063 D6 第 1 条；#3875 digest 守卫会把对不上的主机记为 `capability_unverified`）。
 
+- 2026-11-10 #3918 U5a（ADR-0063 v1.1 D7）：Agent 按映射逐口读 sysfs `idVendor`/`idProduct`，上报 `capacity.usb_power_slots`
+  （`{serial: [slot, vid_pid|null]}`）；分类函数放共享契约 `contracts/usb_presence.py`，供控制面与前端共用。映射宽松读取，
+  任何格式问题都不上报，心跳照常；权威校验仍在 wrapper。只有带映射文件的主机多出这个键（16 台约 700 字节），其余主机心跳不变。
+  改了 Agent 代码输入集，期望 digest 会变，必须随全机队 Agent 发布。
+
 ## Alternatives
 
 - 只改控制面准入：不可行。设备全部关机的主机上 `effective_slots` 恒为 0，Agent 不会调用认领（ADR-0063 F11）。
@@ -94,6 +99,9 @@ Class: feature
   相邻回归：`test_return_init_u4_3729`、`test_lifecycle_engine`、`test_return_debts_u4_3729`、import 边界（`tests/test_agent_import_boundary.py`）、
   控制面 vbus 准入与认领两个文件均通过；Agent 全量 3169 passed、3 failed，这 3 条在 `origin/main` 同样失败（同上）。
   遗漏原因：ADR-0063 起草时只核对了派发与认领两道准入，没有核对每个 job 在 init 之前都会跑的 ADR-0061 残留检查。
+
+- 2026-11-10 #3918 U5a：`backend/agent/tests/test_usb_power_presence_3918.py` 18 条（分类 6 条、逐口读取、无映射、
+  5 种格式错误、sysfs 值非法、capacity 键只在有映射时出现且不改槽位、心跳 tick 透传 / 读取抛异常不影响心跳）。
 
 ## Revisit
 
