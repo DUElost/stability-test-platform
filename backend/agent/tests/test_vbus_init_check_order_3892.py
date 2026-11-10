@@ -170,3 +170,45 @@ def test_real_step_path_lease_lost_before_start_skips_teardown():
     assert result.metadata["termination_reason"] == "abort"
     assert engine._init_steps_started == 0
     assert teardown == []
+
+
+@pytest.mark.parametrize("loss", ["lock_lost", "canceled"])
+def test_lease_lost_after_permit_handoff_blocks_flash_and_teardown(loss):
+    # 复核 #3915 第 2 轮 P1：许可交接之后、STARTED 之前已知丢租约或已取消时，不得启动刷机，
+    # 终态保持 abort，本 job 不承担 teardown。
+    uploader = MagicMock()
+    uploader.send.return_value = {"manual_action": None}
+    mq = MagicMock()
+    mq.connected = True
+    lost = {"v": False}
+    engine = PipelineEngine(adb=MagicMock(), serial="S", run_id=1, log_dir="/tmp/test_logs",
+                            mq_producer=mq, api_url=None, is_aborted=lambda: lost["v"],
+                            patrol_heartbeat_uploader=uploader, device_id=7)
+    engine._verify_device_lease = lambda: None
+    engine._archive_logs = lambda: None
+    engine._check_init_returns = lambda: StepResult(success=True)
+    flashed = []
+    engine._resolve_action = lambda action, step: (lambda ctx: flashed.append(step["step_id"]) or StepResult(success=False))
+    teardown = []
+    engine._execute_teardown_best_effort = lambda defs, **kw: teardown.append(defs) or StepResult(
+        success=True, metadata={"teardown_status": "SUCCESS"})
+
+    scheduler = engine._scheduler
+    real_acquire = scheduler.acquire
+
+    def acquire_then_lose(*args, **kwargs):
+        permit = real_acquire(*args, **kwargs)
+        if loss == "lock_lost":
+            lost["v"] = True
+        else:
+            engine._canceled = True
+        return permit
+
+    scheduler.acquire = acquire_then_lose
+    pipeline_def = {"lifecycle": {"timeout_seconds": 1, "init": [_FLASH, _CHECK], "teardown": _TEARDOWN}}
+    with patch("backend.agent.pipeline_engine.time.sleep", return_value=None):
+        result = engine._execute_lifecycle(pipeline_def)
+    assert flashed == []
+    assert engine._init_steps_started == 0
+    assert teardown == []
+    assert result.metadata["termination_reason"] == "abort"

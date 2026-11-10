@@ -1852,6 +1852,11 @@ class PipelineEngine:
             if phase == "init" and step.get("_return_check") and self._teardown_lease_lost():
                 self._last_step_error = "not_executed:lease_lost"
                 return False
+            # ADR-0063 D5 第 3 条（复核 #3915 P1）：vbus 刷机在 STARTED 前不再有租约检查；
+            # 许可交接后已知丢租约或已取消时不得启动刷机（计数保持 0，本 job 不承担 teardown）。
+            if phase == "init" and is_vbus_flash_init([step]) and (self._is_lock_lost() or self._canceled):
+                self._last_step_error = "not_executed:lease_lost"
+                return False
             if tail is not None and disarm_step:
                 self._publish_disarm_phase(step, "execute")
 

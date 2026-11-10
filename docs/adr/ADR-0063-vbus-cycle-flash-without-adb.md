@@ -185,7 +185,8 @@ Agent 代码，会改变控制面的期望 digest，而 #3875 的影子能力守
    检查通过后才执行其余 init 步骤。刷机步骤不建立任何专项足迹，ADR-0061 D6 第 1 条「建立本 job 足迹之前先确认」的要求不变；
    刷后设备已开机，探针能给出真实回读。判据与控制面共用 `backend/agent/contracts/vbus_flash.py`。
    - 刷机步骤已启动且返回失败时，Agent host 不得执行残留检查，并且必须执行本 job 的 teardown（与先查后刷的作业一致）。
-   - 刷机步骤启动前租约已丢失时，Agent host 不得执行本 job 的 teardown（本 job 没有任何动作；复核 #3915 P1）。
+   - 刷机步骤启动前（含执行许可交接之后、进入 STARTED 之前）已知租约丢失或作业已取消时，Agent host 不得启动刷机，
+     必须以 abort 结束本 job，且不得执行本 job 的 teardown（本 job 没有任何动作；复核 #3915 P1）。
    - 推迟的残留检查返回失败或抛出异常时，Agent host 必须以 init 失败结束本 job，且不得执行本 job 的 teardown
      （与先查后刷的作业一致；复核 #3915 P2）。
    - 对不满足 D4 第 1 条的作业，Agent host 必须保持现行的残留检查时机。
@@ -197,7 +198,7 @@ Agent 代码，会改变控制面的期望 digest，而 #3875 的影子能力守
    D5 第 3 条（init 残留检查推迟）是第五个发布面，实施者必须让它随 Agent 代码发布。
    前三者不改变 Agent 期望 digest，实施者不得把前三者与 B8 的 Agent 代码滚动合批。Agent 认领循环与 D5 第 3 条的改动，
    实施者都必须随一次联合 Agent 发布滚动（认领循环首选 G4、#3875、#3889 那一次；赶不上截止就顺延到下一次），并且不得单独部署 Agent。
-   D5 第 3 条的改动必须同时发布控制面与全机队 Agent。理由：它们改变期望 digest，
+   对 D5 第 3 条的改动，实施者必须同批发布控制面与全机队 Agent。理由：它们改变期望 digest，
    #3875 守卫要求全机队 digest 一致；它在没有映射文件的主机上不改变行为。U4 部署前，实施者必须核对控制面
    `compute_desired_artifact_digest` 与该次联合发布一致；影子开关保持关闭，直到全机队 digest 匹配。
 2. 激活只发生在 Plan 显式选择 `trigger_mode=vbus_cycle` 时；不设全局开关。
