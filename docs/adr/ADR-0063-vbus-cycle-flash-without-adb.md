@@ -1,6 +1,6 @@
 # ADR-0063：无 ADB 设备的 USB 切电刷机（`trigger_mode=vbus_cycle`）
 
-- 状态：**Proposed** v0.12（2026-11-10 v0.12：阶段 B 真机验收（PlanRun 1242）发现派发时已关机的设备过不了 ADR-0061 D6 第 1 条的 init 残留检查（adb 探针），刷机前必然失败并记成欠账；Owner 裁定选甲，新增 D5 第 3 条（vbus 刷机作业的残留检查推迟到第一个步骤成功之后），D6 第 1 条增补其发布面，§5 第 3 项同步；v0.11：阶段 B 真机验收（PlanRun 1242）发现 D4 第 6 条的串行守卫把停在 INIT→PATROL barrier 的作业算作在跑，两台设备互相等待；订正为只计仍在刷机的作业（`execution_state` 非 `WAITING_BARRIER`/`PATROL_SLEEP`），§5.3 同步；v0.10：按 #3899 定向复核（comment 6731346242）P2 订正 D2 第 6 条与 D3 第 9 条（参数级能力标记 `usb-power/expect-slot`）、D3 第 4 条与第 11 条的措辞、D6 第 1 条的执行主体，§5.2 补旧 wrapper 反例；v0.9：按 #3899 定向复核（comment 6708089815）新增 `--expect-slot` 切电前比对（D2 第 1、8 条，D3 第 13 条），消解 D3 第 8 与第 13 条的冲突，补写作约定与 §5 验收清单；v0.8：Owner 裁定 §8 第 6 项选甲，D2 第 9 条的残余面第一期接受，§8 无待裁项；v0.7：按 U2–U4 独立复核订正 D3 第 4、6、8 条与 D4 第 6 条——vbus 必须开启 V6 端口绑定，OOBE 只取跳过部分，刷后异常同样隔离，vbus 作业不论设备在线与否只走 vbus 名额；v0.6：按独立复核（PR #3899 comment 6706217246）收口 D1/D2/D3/D4/D6 与写作约定，D2 新增第 8 条残余面待 Owner 裁定（§8 第 6 项），§6 拆分 U2 激活步骤；v0.5：Owner 提供关机态 lsusb（`0e8d:2046`），§8 第 5 项转已裁，D3 第 11 条放行集合补 2046；v0.4：Owner 裁定 §8 第 4 项（unauthorized 排除）与「设备必须已关机」前提，新增 D3 第 11–12 条，订正 D3 第 6 条键序；新增 §8 第 5 项待裁；v0.3：Owner 答复 §8 三项，见 §8；新增 §8 第 4 项待裁；v0.2：补 F11 与 D4 第 5–6 条，Agent 认领侧也要改，D6 第 1 条随之订正为随 Agent 代码发布；v0.1 2026-11-07 起草；Owner 已在项目对话中裁定「与 B8 并行实施、第一期不加迁移」，本稿待定向复核通过后转 Accepted）
+- 状态：**Accepted** v1.0（2026-11-10 v1.0：阶段 B 真机验收通过（PlanRun 1245，#3892 comment 6759014489），Owner 裁定转 Accepted（§8 第 7 项）；ADR-0037 D8 同批生效（ADR-0037 v0.7）；本版决策无改动；v0.12：阶段 B 真机验收（PlanRun 1242）发现派发时已关机的设备过不了 ADR-0061 D6 第 1 条的 init 残留检查（adb 探针），刷机前必然失败并记成欠账；Owner 裁定选甲，新增 D5 第 3 条（vbus 刷机作业的残留检查推迟到第一个步骤成功之后），D6 第 1 条增补其发布面，§5 第 3 项同步；v0.11：阶段 B 真机验收（PlanRun 1242）发现 D4 第 6 条的串行守卫把停在 INIT→PATROL barrier 的作业算作在跑，两台设备互相等待；订正为只计仍在刷机的作业（`execution_state` 非 `WAITING_BARRIER`/`PATROL_SLEEP`），§5.3 同步；v0.10：按 #3899 定向复核（comment 6731346242）P2 订正 D2 第 6 条与 D3 第 9 条（参数级能力标记 `usb-power/expect-slot`）、D3 第 4 条与第 11 条的措辞、D6 第 1 条的执行主体，§5.2 补旧 wrapper 反例；v0.9：按 #3899 定向复核（comment 6708089815）新增 `--expect-slot` 切电前比对（D2 第 1、8 条，D3 第 13 条），消解 D3 第 8 与第 13 条的冲突，补写作约定与 §5 验收清单；v0.8：Owner 裁定 §8 第 6 项选甲，D2 第 9 条的残余面第一期接受，§8 无待裁项；v0.7：按 U2–U4 独立复核订正 D3 第 4、6、8 条与 D4 第 6 条——vbus 必须开启 V6 端口绑定，OOBE 只取跳过部分，刷后异常同样隔离，vbus 作业不论设备在线与否只走 vbus 名额；v0.6：按独立复核（PR #3899 comment 6706217246）收口 D1/D2/D3/D4/D6 与写作约定，D2 新增第 8 条残余面待 Owner 裁定（§8 第 6 项），§6 拆分 U2 激活步骤；v0.5：Owner 提供关机态 lsusb（`0e8d:2046`），§8 第 5 项转已裁，D3 第 11 条放行集合补 2046；v0.4：Owner 裁定 §8 第 4 项（unauthorized 排除）与「设备必须已关机」前提，新增 D3 第 11–12 条，订正 D3 第 6 条键序；新增 §8 第 5 项待裁；v0.3：Owner 答复 §8 三项，见 §8；新增 §8 第 4 项待裁；v0.2：补 F11 与 D4 第 5–6 条，Agent 认领侧也要改，D6 第 1 条随之订正为随 Agent 代码发布；v0.1 2026-11-07 起草；Owner 已在项目对话中裁定「与 B8 并行实施、第一期不加迁移」，本稿待定向复核通过后转 Accepted）
 - 优先级：P1
 - 目标里程碑：M7
 - 日期：2026-11-07
@@ -9,7 +9,7 @@
 - 归属域：semantic-ownership flash-tool
 - 关联：[#3892](https://github.com/DUElost/stability-test-platform/issues/3892)（需求载体）；
   [风险台账 R-05](../notes/architecture/2026-09-03-platform-risk-register.md)；
-  [ADR-0037](./ADR-0037-agent-host-privilege-boundary.md)（本稿 D2 修订其白名单，对应其待裁草案 D8）；
+  [ADR-0037](./ADR-0037-agent-host-privilege-boundary.md)（本稿 D2 修订其白名单，对应其 D8，ADR-0037 v0.7 生效）；
   [ADR-0051](./ADR-0051-release-unit-and-content-addressing.md)（脚本按新版本发布）；
   [ADR-0058](./ADR-0058-planned-batch-execution.md)（本需求命中 D7「协调激活 + 安全」强判据，按批次交付）；
   [ADR-0061](./ADR-0061-device-return-contract.md)（失败后的设备归还与欠账）；
@@ -69,7 +69,7 @@ Agent 代码，会改变控制面的期望 digest，而 #3875 的影子能力守
    必须拒绝全部切电请求（`uhubctl -p` 接受端口列表与范围，未校验的 `port` 可以一次切断整个 Hub）。
 5. 第一期不得新增数据库迁移。槽位入库（R-05 的 rack/slot 字段）留作第二期，另立单元。
 
-### D2 提权窄面：`usb-power` 子命令（修订 ADR-0037，对应其待裁草案 D8）
+### D2 提权窄面：`usb-power` 子命令（修订 ADR-0037，对应其 D8）
 
 1. wrapper 新增子命令：
 
@@ -229,7 +229,7 @@ Agent 代码，会改变控制面的期望 digest，而 #3875 的影子能力守
 1. wrapper（单测）：
    - 未登记 serial、`--delay` 超限或用于非 `cycle`、缩写参数、缺 `--expect-slot` 或其取值非法，均被拒绝；
    - `--expect-slot` 与映射不一致时，在调用 `uhubctl` 之前拒绝；
-   - 映射文件：symlink、group/other 可写、非 root 属主、超过 64 KiB、父目录可写或非 root 属主、`schema`/字段/`port` 1–16 非法、
+   - 映射文件：symlink、group/other 可写、非 root 属主、超过 64 KiB、父目录 group/other 可写或非 root 属主、`schema`/字段/`port` 1–16 非法、
      serial 或槽位重复，均整份拒绝；
    - `uhubctl` 非 root 属主或 group/other 可写时拒绝；`hub_location` 不在内核 sysfs 树内时拒绝；
    - 固定 argv、环境只留 `LC_ALL`/`PATH`、超时 60s、非 root 拒绝；成功时回显实际槽位。
@@ -254,7 +254,7 @@ Agent 代码，会改变控制面的期望 digest，而 #3875 的影子能力守
 
 | 单元 | 内容 | 复核 |
 |---|---|---|
-| U1 | 本 ADR + ADR-0037 待裁草案 D8 | Owner 裁定 + 独立复核 |
+| U1 | 本 ADR + ADR-0037 D8 | Owner 裁定 + 独立复核 |
 | U2 | wrapper `usb-power`、Ansible 下发映射文件与 `uhubctl`、测试（激活拆为 U2a / U2b / U2c，见下） | 必须复核（安全） |
 | U3 | `flash_firmware` 新版本 `trigger_mode=vbus_cycle`、测试 | 必须复核（难回退：物理断电） |
 | U4 | 派发与认领准入放行、Agent 认领循环 `vbus_slots`、测试 | 必须复核 |
@@ -302,3 +302,10 @@ U2、U3、U4 可以并行实施。激活顺序：
    - 乙：wrapper 校验调用时刻持有主机刷机锁（`/tmp/stp-flash-firmware.lock` 的 flock 持有者为调用方进程树）。
      只证明「有刷机在进行」，不证明是本 serial 的作业。
    - 丙：控制面签发一次性 token（作业 id + serial + 有效期），wrapper 校验。需要新的控制面接口与密钥管理，超出第一期。
+
+已裁（2026-11-10）：
+
+7. 转 Accepted：阶段 A（15.81，#3892 comment 6737590366）与阶段 B（15.94，PlanRun 1245，#3892 comment 6759014489）
+   真机验收通过。阶段 B 实证了两条准入路径（派发时在线由脚本在锁内关机、派发前已关机直接放行 `device_offline`）、
+   D4 第 6 条的 barrier 订正（A 进入 `WAITING_BARRIER` 后 3 秒 B 被认领）与 D5 第 3 条的检查顺序（刷机后才做残留检查）。
+   15.94 的映射文件与 wrapper 作为第一期 vbus 主机长期保留（D6 第 3 条）；其余主机下发映射文件（§6 U2c）按需另行安排。

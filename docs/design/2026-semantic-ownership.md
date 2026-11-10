@@ -171,7 +171,7 @@
 | `R-merge-locus` | relation | `Merge ─executed_at→ 控制面实例` | `docs/adr/ADR-0027-control-plane-horizontal-scaling.md :: 7. **merge（\`run_merge_sync\`）为实例绑定操作**` | B1/B2/多实例互斥 |
 | `R-merge-consumes-log` | relation | `Merge ─consumes→ scan/日志产物` | `docs/design/2026-scan-upload-merge-contract.md :: ## 控制面 merge` | 改输入集 |
 | `R-tool-hosted-by-tier` | relation | `工具实现 ─hosted_by→ Tier` | `docs/adr/ADR-0033-tool-kit-ecosystem-integration.md :: ### D1：确立严格的三层工具宿主分类与生命周期隔离` | 新宿主层 |
-| `flash-tool` | concept | 刷机工具族（0033 D1 已补登记） | `docs/adr/ADR-0033-tool-kit-ecosystem-integration.md :: 刷机补登记（v1.3 / #2546）`；提权 `docs/adr/ADR-0037-agent-host-privilege-boundary.md :: D5 flash 链运行时提权收敛` | 新刷机二进制入仓；再改 Tier |
+| `flash-tool` | concept | 刷机工具族（0033 D1 已补登记） | `docs/adr/ADR-0033-tool-kit-ecosystem-integration.md :: 刷机补登记（v1.3 / #2546）`；提权 `docs/adr/ADR-0037-agent-host-privilege-boundary.md :: D5 flash 链运行时提权收敛`；USB 切电刷机（v1.0 / #3892）`docs/adr/ADR-0063-vbus-cycle-flash-without-adb.md :: ## 2. 决策` | 新刷机二进制入仓；再改 Tier |
 | `jira-post-completion` | concept | 后处理/Jira **平台核心闭环**（深嵌） | `docs/adr/ADR-0012-post-completion-pipeline-jira-automation.md :: 第 1 层（✅ 已实现）` | 第 2–3 层；客户方言回渗主干 |
 | `session-cookie-csrf` | concept | Web 会话 / CSRF / refresh 吊销 | `docs/adr/ADR-0024-browser-session-security-hardening.md :: ## 决策` | 改 Secure/SameSite 边界 |
 | `host-privilege-wrapper` | concept | Agent 主机单一提权入口 | `docs/adr/ADR-0037-agent-host-privilege-boundary.md :: ## 2. 决策` | 宽 sudoers 回流 |
@@ -309,3 +309,4 @@
 | 2026-10-17 | ADR-0061 v1.1（claude，Owner 授权规划者裁决 #3751）：D3 第 8 条替换为解除的有界保护，新增 D1 第 9 条、D2 第 7–9 条、D8 第 8 条；`device-return` 行锚点（`## 3. 决策`）与分工不变，仅登记版本变化 |
 | 2026-11-10 | ADR-0063 v0.11（claude，Proposed，归属域 `flash-tool`）：D4 第 6 条串行守卫订正为只计仍在刷机的作业（阶段 B 真机验收 PlanRun 1242 发现与 INIT→PATROL barrier 死锁）；`flash-tool` 行锚点不变，ADR-0063 转 Accepted 时再按 §7 补锚 |
 | 2026-11-10 | ADR-0063 v0.12 与 ADR-0061 v1.2（claude，Owner 裁定选甲）：ADR-0063 新增 D5 第 3 条、ADR-0061 D6 第 1 条增补——vbus 刷机作业的 init 残留检查推迟到刷机成功之后；`flash-tool` 与 `device-return` 行锚点与分工不变，仅登记版本变化 |
+| 2026-11-10 | ADR-0063 v1.0 转 Accepted 与 ADR-0037 v0.7（claude，Owner 裁定；阶段 B 真机验收 PlanRun 1245 通过）：`flash-tool` 行按 §7 补 ADR-0063 `## 2. 决策` 锚；ADR-0037 D8 `usb-power` 生效，`flash-tool` 提权锚不变 |
