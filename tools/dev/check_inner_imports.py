@@ -75,7 +75,9 @@ SCAN_DIRS = (ROOT / "backend", ROOT / "tools", ROOT / "scripts")
 #: 非循环依赖掩体）；合并 main(#3447) 后对 `_prev_window_zero_output` 内已回顶层的
 #: `select`/`PlanRun` 再消 2 处 → **626 → 610**；clean-env 契约
 #: （tests/test_plan_run_abort_import_contract.py）同位全绿。
-_BASELINE = 610
+#: 2026-11-10 #3920 B8 G3e：scan_runner 复用模块级 UploadManager 导入（-2）
+#: → **610 → 608**。
+_BASELINE = 608
 
 # ADR-0051 Phase 3：版本目录已退役，脚本族树（backend/agent/scripts/<name>/）按包发布、
 # 属独立审计面，整棵排除（此前只排除 v<version>/ 冻结目录）。

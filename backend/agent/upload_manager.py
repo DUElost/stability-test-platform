@@ -59,7 +59,7 @@ class UploadManager:
         self._shadow_report_lock = threading.Lock()
 
     def shadow_report_uploaded_total(self) -> int:
-        """影子报表上送完成数，进程级累计，随心跳上报，重启清零。"""
+        """影子报表/空回执上送完成数，进程级累计，随心跳上报，重启清零。"""
         with self._shadow_report_lock:
             return self._shadow_report_uploads
 
@@ -217,7 +217,7 @@ class UploadManager:
             if empty_receipt:
                 entry["empty_receipt"] = True
             shard = round_manifest_path(self._nfs_root, plan_run_id, fact_round_id, host_id)
-        companion = None
+        entries = [(entry["file_key"], entry)]
         if mapping_path is not None:
             companion_key = f"{platform_subdir}/{mapping_path.name}" if platform_subdir else mapping_path.name
             entry["companion_file_key"] = companion_key
@@ -228,7 +228,7 @@ class UploadManager:
             }
             if fact_round_id is not None:
                 companion["fact_round_id"] = fact_round_id
-        membership = None
+            entries.append((companion["file_key"], companion))
         if fact_round_id is not None and dest_path.name.endswith("_org.xls") and platform_subdir == "mtk":
             entry["membership_file_key"] = None
             if membership_path is not None:
@@ -237,8 +237,51 @@ class UploadManager:
                 membership = {"file_key": key, "platform": platform_subdir,
                               "fact_round_id": fact_round_id, "registerable": False,
                               "artifact_type": "scan_membership", "size_bytes": membership_path.stat().st_size}
-        shard.parent.mkdir(parents=True, exist_ok=True)
+                entries.append((membership["file_key"], membership))
+        self._write_shard_entries(plan_run_id, host_id, shard, entries)
 
+    def register_empty_receipt(
+        self, plan_run_id: int, host_id: str, *, fact_round_id: int,
+    ) -> None:
+        """登记影子轮 0 结果空回执（无报表文件可指向）。
+
+        条目刻意不带 `file_key`：没有文件可指，且 `registerable: false` 让所有
+        报表读取面都不会把它当成产物。登记失败与分片登记同语义，抛
+        ShardRegistrationError。
+        """
+        if not self._configured:
+            raise ShardRegistrationError(
+                f"empty receipt register skipped: uploader not configured "
+                f"plan_run={plan_run_id} host={host_id} round={fact_round_id}"
+            )
+        entry = {
+            "platform": "mtk",
+            "registerable": False,
+            "fact_round_id": fact_round_id,
+            "empty_receipt": True,
+        }
+        key = f"empty_receipt:mtk:{fact_round_id}"
+        try:
+            shard = round_manifest_path(self._nfs_root, plan_run_id, fact_round_id, host_id)
+            self._write_shard_entries(plan_run_id, host_id, shard, [(key, entry)])
+        except Exception as exc:
+            raise ShardRegistrationError(
+                f"empty receipt register failed plan_run={plan_run_id} "
+                f"host={host_id} round={fact_round_id}"
+            ) from exc
+        with self._shadow_report_lock:
+            self._shadow_report_uploads += 1
+        logger.info(
+            "shadow_round_empty_receipt_registered plan_run=%d fact_round_id=%d host=%s "
+            "platform=mtk shard=%s",
+            plan_run_id, fact_round_id, host_id, shard,
+        )
+
+    def _write_shard_entries(
+        self, plan_run_id: int, host_id: str, shard: Path,
+        entries: list[tuple[str, dict]],
+    ) -> None:
+        shard.parent.mkdir(parents=True, exist_ok=True)
         artifacts: dict = {}
         if shard.is_file():
             try:
@@ -247,24 +290,27 @@ class UploadManager:
                 existing = None
             # 仅沿用同版本分片；版本不符 = 他版写侧产物，整片重建（schema_version 是演进锚点）
             if isinstance(existing, dict) and existing.get("schema_version") == _META_SCHEMA_VERSION:
-                artifacts = {
-                    a["file_key"]: a
-                    for a in existing.get("artifacts", [])
-                    if isinstance(a, dict) and "file_key" in a
-                }
-        artifacts[entry["file_key"]] = entry
-        if companion is not None:
-            artifacts[companion["file_key"]] = companion
-
-        if membership is not None:
-            artifacts[membership["file_key"]] = membership
+                for artifact in existing.get("artifacts", []):
+                    if not isinstance(artifact, dict):
+                        continue
+                    key = artifact.get("file_key")
+                    if not isinstance(key, str):
+                        if artifact.get("empty_receipt") is not True:
+                            continue
+                        key = (
+                            f"empty_receipt:{artifact.get('platform', '')}:"
+                            f"{artifact.get('fact_round_id', '')}"
+                        )
+                    artifacts[key] = artifact
+        for key, entry in entries:
+            artifacts[key] = entry
 
         payload = {
             "schema_version": _META_SCHEMA_VERSION,
             "host_id": host_id,
             "plan_run_id": int(plan_run_id),
             "updated_at": datetime.now(timezone.utc).isoformat(),
-            "artifacts": sorted(artifacts.values(), key=lambda a: a["file_key"]),
+            "artifacts": [artifacts[key] for key in sorted(artifacts)],
         }
         tmp = shard.with_name(shard.name + ".tmp")
         tmp.write_text(

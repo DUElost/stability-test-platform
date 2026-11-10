@@ -46,7 +46,14 @@ AGENT_TESTS_DIR = REPO_ROOT / "backend" / "agent" / "tests"
 
 #: 存量清单：文件名 → (允许的跨包 import 模块数, 说明)。**已清零**（#739 面① 两批收敛完成）；
 #: 现在只允许为空——新增越界必须先迁移/解耦，确有例外才登记并写明理由。
-_CONTROL_PLANE_IMPORTS: dict[str, tuple[int, str]] = {}
+_CONTROL_PLANE_IMPORTS: dict[str, tuple[int, str]] = {
+    "test_b8_g3e_empty_receipt.py": (
+        1,
+        "B8 G3e 验收 1 要求用真实 read_round_reports/classify_round_coverage "
+        "读回 Agent 写的轮次清单；整例迁移到 backend/tests/ 会混用 agent/控制面 "
+        "fixture，且该验收需在 pr-agent-tests 内运行。",
+    ),
+}
 
 
 def control_plane_imports(source: str) -> set[str]:
