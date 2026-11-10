@@ -284,6 +284,37 @@ def test_shadow_zero_result_with_unstaged_spill_input_is_unproven(shadow, monkey
     _assert_staging_reclaimed(hdd)
 
 
+def test_shadow_zero_result_with_events_present_is_unproven(shadow, monkeypatch, caplog):
+    runner, hdd, nfs = shadow
+    monkeypatch.setattr(
+        "backend.agent.scan_runner.load_scan_events",
+        lambda *args: [{"id": "dle-1"}],
+    )
+    monkeypatch.setattr("backend.agent.scan_runner.subprocess.run", _tool(_write_proof))
+    caplog.set_level(logging.WARNING)
+
+    runner.run_scan_and_upload(
+        42, "host-1", is_final=False, device_serials=["SER-A"], fact_round_id=7,
+    )
+
+    assert not round_manifest_path(nfs, 42, 7, "host-1").exists()
+    expected = [{"host_id": "host-1", "platform": "mtk"}]
+    assert read_round_reports(nfs, 42, 7, expected) == []
+    now = datetime.now(timezone.utc)
+    coverage = classify_round_coverage(
+        [dict(item) for item in expected],
+        [],
+        observed_at=now,
+        input_cutoff_at=now + timedelta(minutes=5),
+    )
+    assert coverage[0]["coverage"] == "MISSING"
+    assert "scan_runner_empty_result_unproven" in caplog.text
+    assert "evidence=events_present" in caplog.text
+    assert "scan_runner_empty_result_proven" not in caplog.text
+    assert "shadow_round_empty_receipt_registered" not in caplog.text
+    _assert_staging_reclaimed(hdd)
+
+
 @pytest.mark.parametrize("failure", ["rc", "timeout", "exception"])
 def test_shadow_tool_failure_never_registers_empty_receipt(shadow, monkeypatch, caplog, failure):
     runner, hdd, nfs = shadow

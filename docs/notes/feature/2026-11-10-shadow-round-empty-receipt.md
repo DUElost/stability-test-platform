@@ -33,7 +33,7 @@ Agent 在 `round_manifest_path(nfs_root, plan_run_id, fact_round_id, host_id)`
 
 判定为证明必须同时满足：至少有一个结果条数字段（members `rows`，或 summary
 的 `aee_result_org_count` / `aee_result_final_count`）；这些字段全部为 0；
-没有任何否决（`dbg_count` 为 int 且 > 0、`spill_unstaged`）。`dbg_count`
+没有任何否决（`dbg_count` 为 int 且 > 0、`spill_unstaged`、`events_present`）。`dbg_count`
 只作否决，本身不计入证明——仅凭 `dbg_count=0` 不构成 0 结果证明
 （评审 6766083327）。日志、stdout、“没有 org.xls”都不作为证据。证明在
 staging 回收之前读取。
@@ -43,9 +43,15 @@ staging 回收之前读取。
 整台主机。此时记 warning `scan_runner_empty_result_unproven`，evidence 为
 `spill_unstaged`，覆盖保持 `MISSING`，交给后续重发补齐（评审 6762617060）。
 
+`load_scan_events` 返回非 None 且非空（本 host 本 run 已有 DLE 事件）而工具结果为
+0 时，同样不登记空回执：这说明事件存在但工具没有产出任何行，不能声称主机为空。
+此时记 warning `scan_runner_empty_result_unproven`，evidence 为 `events_present`，
+覆盖保持 `MISSING`，交给后续重发（评审 6766165762）。`events is None` 的情况
+不受本项影响，仍由 `spill_unstaged` 否决处理；没有 spill 时按现有证明规则判定。
+
 不登记并保持 `MISSING` 的路径：工具 rc≠0、超时/抛异常、扫描根准备失败、
-rc=0 但没有有效证明、`spill_unstaged` 非空。无有效证明或
-`spill_unstaged` 非空时新增可检索 warning `scan_runner_empty_result_unproven`；
+rc=0 但没有有效证明、`spill_unstaged` 非空、`events_present`。无有效证明或
+存在否决时新增可检索 warning `scan_runner_empty_result_unproven`；
 证明被接受时记录 `scan_runner_empty_result_proven`。
 
 空回执登记成功后沿用现有影子观测：日志
@@ -110,17 +116,18 @@ start_log_scan.py -m 0 -d <scanroot> -side shanghai
   aee_result_*_count=0（证据见 Decision）。
 - 反例先行：第一轮新测试在 `origin/main d3458b9` 上 9 failed / 6 passed；
   第一轮实现后 15 passed。评审退回后新增 `dbg_count=1`、`spill_unstaged`、
-  仅 `dbg_count=0` 三条反例，当前 18 passed。
+  仅 `dbg_count=0` 三条反例；G3e-2 再新增 `events_present` 反例，当前
+  19 passed。
 - 控制面真实读取：`test_shadow_zero_result_with_v211_proof_registers_empty_receipt`
   用 `read_round_reports` + `classify_round_coverage` 断言覆盖为 `EMPTY`；
   无证明/旧证明/条数 >0/`dbg_count > 0`/仅 `dbg_count=0` 时断言
   `MISSING`；`test_shadow_zero_result_with_unstaged_spill_input_is_unproven`
-  断言 `spill_unstaged` 时覆盖为 `MISSING`。
-- 相关既有测试：
-  `backend/agent/tests/test_b8_g3_round_scan.py`、`test_scan_runner.py`、
-  `test_upload_manager.py`、`test_scan_runner_shard_failure_visibility.py`、
-  `test_heartbeat_bindings_736.py` 共 106 passed。
-- Agent 全量：3196 passed，1 failed 为
+  断言 `spill_unstaged` 时覆盖为 `MISSING`；
+  `test_shadow_zero_result_with_events_present_is_unproven` 断言
+  `events_present` 时覆盖为 `MISSING`。
+- 本轮相关测试（新文件 + `test_b8_g3_round_scan.py` + `test_scan_runner.py` +
+  `test_upload_manager.py` + 两项棘轮）：116 passed。
+- Agent 全量：3220 passed，1 failed 为
   `test_flash_preflight_v102.py::test_dialout_absent_and_no_rule_fails`；
   已在同 revision 的干净 `origin/main` 工作树复现（本机用户处于 dialout 组），
   与本变更无关。
@@ -136,7 +143,9 @@ start_log_scan.py -m 0 -d <scanroot> -side shanghai
   - 去掉 `spill_unstaged` 阻断 → `test_shadow_zero_result_with_unstaged_spill_input_is_unproven`
     变红（清单被写出）；
   - 把 `dbg_count` 重新当作证据 → `test_shadow_zero_result_with_only_dbg_count_is_not_proof`
-    变红（仅 `dbg_count=0` 被登记成 `EMPTY`）。
+    变红（仅 `dbg_count=0` 被登记成 `EMPTY`）；
+  - 去掉 `events_present` 否决 → `test_shadow_zero_result_with_events_present_is_unproven`
+    变红（清单被写出）。
 
 ## Revisit
 
