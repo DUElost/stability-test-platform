@@ -212,3 +212,47 @@ def test_lease_lost_after_permit_handoff_blocks_flash_and_teardown(loss):
     assert engine._init_steps_started == 0
     assert teardown == []
     assert result.metadata["termination_reason"] == "abort"
+
+
+@pytest.mark.parametrize("loss", ["lock_lost", "canceled"])
+def test_lease_lost_during_executing_state_update_blocks_started(loss):
+    # 复核 #3915 第 3 轮 P1：许可交接后、协调器写入 EXECUTING_STEP 时才确认丢租约，
+    # 刷机也不得发出 STARTED 或启动；终态 abort，teardown 不执行。
+    uploader = MagicMock()
+    uploader.send.return_value = {"manual_action": None}
+    mq = MagicMock()
+    mq.connected = True
+    lost = {"v": False}
+    engine = PipelineEngine(adb=MagicMock(), serial="S", run_id=1, log_dir="/tmp/test_logs",
+                            mq_producer=mq, api_url=None, is_aborted=lambda: lost["v"],
+                            patrol_heartbeat_uploader=uploader, device_id=7)
+    engine._verify_device_lease = lambda: None
+    engine._archive_logs = lambda: None
+    engine._check_init_returns = lambda: StepResult(success=True)
+    flashed = []
+    engine._resolve_action = lambda action, step: (lambda ctx: flashed.append(step["step_id"]) or StepResult(success=False))
+    teardown = []
+    engine._execute_teardown_best_effort = lambda defs, **kw: teardown.append(defs) or StepResult(
+        success=True, metadata={"teardown_status": "SKIPPED"})
+    real_update = engine._update_execution_state
+
+    def update_then_lose(state, *args, **kwargs):
+        real_update(state, *args, **kwargs)
+        if state == "EXECUTING_STEP":
+            if loss == "lock_lost":
+                lost["v"] = True
+            else:
+                engine._canceled = True
+
+    engine._update_execution_state = update_then_lose
+    pipeline_def = {"lifecycle": {"timeout_seconds": 1, "init": [_FLASH, _CHECK], "teardown": _TEARDOWN}}
+    with patch("backend.agent.pipeline_engine.time.sleep", return_value=None):
+        result = engine._execute_lifecycle(pipeline_def)
+    started = [c.kwargs for c in mq.send_step_trace.call_args_list
+               if c.kwargs.get("step_id") == "flash" and c.kwargs.get("event_type") == "STARTED"]
+    assert started == []
+    assert flashed == []
+    assert engine._init_steps_started == 0
+    assert teardown == []
+    assert result.metadata["termination_reason"] == "abort"
+    assert result.metadata["teardown_status"] == "SKIPPED"
