@@ -1,5 +1,16 @@
 """Flash firmware via SP Flash Tool (MTK platform).
 
+v1.4.2（#3892，15.93 LX3 金丝雀 PlanRun 1255 / Job 206578）：
+  - 根因：V5 工具的 stdout 接 PIPE 时块缓冲，`com portName is: /dev/ttyACM0` 到达时
+    `/sys/class/tty/ttyACM0` 已经消失，1.4.1 按「解析不出口」止损，固件未写入。
+  - V5 vbus（带槽位口）经 coreutils `stdbuf -oL -eL` 启动工具，回显按行到达
+    （现场实测：回显 6.22s 到达，节点 8.89s 才消失）。找不到 `stdbuf` 时在取锁、
+    切电之前失败。
+  - 每次尝试起一个约 0.1s 间隔的采样线程，记录上电之后见过的 ttyACM 节点 → sysfs 口。
+    回显的口取实时解析与历史的并集：恰好一个口才用；没有 = 无法解析；多于一个 =
+    有歧义，两者都止损。每行仍只查一次实时 sysfs；1.4.1 的失败闭合语义不变。
+  - V6、非 vbus 的 V5 命令行与 1.4.1 逐字一致。
+
 v1.4.1（#3892 推广，15.93 试点）：
   - 机型族路由表补 `MLD_NX3` / `MLD-NX3` → `MLD`（535 平台第二个机型，与 NX2 同族、
     同 V6 代际；代际仍以版本目录 manifest 为准）；
@@ -456,6 +467,91 @@ def _tty_usb_port(tty_name: str, base: str = _SYS_CLASS_TTY) -> "str | None":
     return port
 
 
+def _list_acm_ttys(base: str = _SYS_CLASS_TTY) -> "list[str]":
+    """`/sys/class/tty` 下当前存在的 ttyACM 节点名；目录读不到返回空表。"""
+    try:
+        return [n for n in os.listdir(base) if n.startswith("ttyACM")]
+    except OSError:
+        return []
+
+
+class _TtyPortHistory:
+    """v1.4.2（#3892 PlanRun 1255）：后台按固定间隔记录 ttyACM 节点 → sysfs 口。
+
+    V5 工具的 `com portName is: /dev/ttyACMn` 回显可能晚于节点消失才到（PIPE 下块缓冲；
+    即使改行缓冲，节点也只存在几秒）。只查实时 sysfs 时，这一行会被判成「解析不出口」。
+    这里把本次尝试上电之后见过的「节点名 → 口」都记下来，核对回显时与实时结果合并：
+    合并后恰好一个口才算解析成功；一个都没有、或同名节点在窗口内挂过不同的口，
+    都按无法核对止损（失败闭合不变）。
+
+    `reset()` 在上电前调用：上电之前本设备不可能有 tty，此前同名节点属于别的设备。
+    采样线程查到一半时被 reset，用代次丢弃这次结果，不把旧口带进新窗口。
+    """
+
+    def __init__(self, base: str = _SYS_CLASS_TTY, interval: float = 0.1) -> None:
+        self._base = base
+        self._interval = interval
+        self._seen: "dict[str, set[str]]" = {}
+        self._gen = 0
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread: "threading.Thread | None" = None
+
+    def sample(self) -> None:
+        with self._lock:
+            gen = self._gen
+        found = []
+        for name in _list_acm_ttys(self._base):
+            port = _tty_usb_port(name, self._base)
+            if port:
+                found.append((name, port))
+        with self._lock:
+            if gen != self._gen:
+                return
+            for name, port in found:
+                self._seen.setdefault(name, set()).add(port)
+
+    def reset(self) -> None:
+        with self._lock:
+            self._gen += 1
+            self._seen = {}
+
+    def ports(self, name: str) -> "frozenset[str]":
+        with self._lock:
+            return frozenset(self._seen.get(name, ()))
+
+    def snapshot(self) -> "dict[str, list[str]]":
+        with self._lock:
+            return {k: sorted(v) for k, v in sorted(self._seen.items())}
+
+    def start(self) -> None:
+        def _loop() -> None:
+            while not self._stop.is_set():
+                try:
+                    self.sample()
+                except Exception:
+                    pass
+                self._stop.wait(self._interval)
+
+        self._thread = threading.Thread(target=_loop, name="tty-port-history",
+                                        daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=2)
+
+
+def _line_buffered_argv(argv: list, stdbuf: str) -> list:
+    """v1.4.2：用 coreutils `stdbuf` 让 V5 工具的 stdout/stderr 按行刷出。
+
+    PIPE 下 V5 工具块缓冲，`com portName` 回显在节点消失之后才到（PlanRun 1255：
+    节点 6.22s 出现、8.89s 消失，块缓冲时回显晚于消失）。`stdbuf -oL` 实测回显在 6.22s 到达。
+    """
+    return [stdbuf, "-oL", "-eL", *argv]
+
+
 class FlashToolAborted(RuntimeError):
     """脚本判定工具正在操作非目标设备，主动杀进程后上抛（#3688）。
 
@@ -507,23 +603,38 @@ def _port_mismatch_reason(line: str, target_port: str, serial: str,
 
 
 def _check_bound_echo(line: str, target_port: str, serial: str,
-                      *, v5_echo: bool = False) -> "tuple[str | None, str | None]":
+                      *, v5_echo: bool = False,
+                      tty_history: "_TtyPortHistory | None" = None,
+                      ) -> "tuple[str | None, str | None]":
     """一行工具输出 → (绑定口, 止损理由)。每行只查一次 sysfs。
 
     复核 #3917 第 2 轮 B1-R2：同一行若分几次解析 tty，sysfs 在两次查询之间变化时，
     「判错口」与「记已验证」会用到不同结果，首次查到的错口可能被后一次覆盖。
     这里只解析一次，可解析、错口、已验证三项判断都用同一个结果。
+
+    v1.4.2：`tty_history` 给出时，实时结果与本次尝试见过的「节点 → 口」合并成一个
+    候选集合：恰好一个口才用它；空集合 = 无法解析；多于一个口 = 有歧义，都止损。
     """
     if v5_echo and not _SYMBOLIC_LINK_RE.search(line):
         v5 = _V5_PORTNAME_RE.search(line)
         if v5 is None:
             return None, None
-        bound = _tty_usb_port(v5.group(1))
-        if bound is None:
+        name = v5.group(1)
+        candidates = set(tty_history.ports(name)) if tty_history is not None else set()
+        live = _tty_usb_port(name)
+        if live is not None:
+            candidates.add(live)
+        if not candidates:
             return None, (
-                f"tool opened /dev/{v5.group(1)} but its USB port cannot be resolved "
+                f"tool opened /dev/{name} but its USB port cannot be resolved "
                 f"(target port {target_port!r}, serial={serial}): 无法核对绑定口，"
                 "已终止工具，未继续下发")
+        if len(candidates) > 1:
+            return None, (
+                f"tool opened /dev/{name} but that node was seen on several USB ports "
+                f"{sorted(candidates)} during this attempt (target port {target_port!r}, "
+                f"serial={serial}): 绑定口有歧义，已终止工具，未继续下发")
+        (bound,) = candidates
     else:
         bound = _parse_bound_port(line)
     if bound is not None and target_port and bound != target_port:
@@ -2746,6 +2857,7 @@ def main() -> None:
     }
     identity_port: "str | None" = None
     vbus_report: dict = {}
+    v5_stdbuf: "str | None" = None
     if vbus:
         # ADR-0063 D3 第 4、9 条：取锁前确认能切电，且门控目标口只取自槽位
         # （不按 serial 反查——关机设备在 sysfs 里本就没有 serial）。任一不满足
@@ -2761,6 +2873,15 @@ def main() -> None:
                 f"require_port_binding=true; got generation={generation}, "
                 f"linux={_is_linux()}, require_port_binding={require_binding}); "
                 "refusing to power-cycle without -p")
+        if slot_error is None and generation != GENERATION_V6:
+            # v1.4.2（PlanRun 1255）：V5 的绑定口回显必须按行到达，节点还在时才核得上。
+            # 找不到 stdbuf 就在切电之前失败，不带着块缓冲去刷。
+            v5_stdbuf = _shutil_which("stdbuf")
+            if v5_stdbuf is None:
+                slot_error = (
+                    "V5 vbus_cycle needs coreutils `stdbuf` on PATH to line-buffer the "
+                    "tool's bound-port echo; not found — refusing vbus_cycle")
+            identity["v5_stdbuf"] = v5_stdbuf
         pre_state = _adb_device_state(serial, adb_path)
         identity.update({"checked": True, "port_source": "vbus_slot",
                          "adb_state": pre_state})
@@ -2900,6 +3021,10 @@ def main() -> None:
         port=bound_port,
         v5_port=bound_port if vbus else None,
     )
+    # v1.4.2：V5 vbus 带槽位口时，工具经 stdbuf 按行输出，并在每次尝试里记录 tty 历史。
+    v5_vbus_echo = bool(vbus and bound_port and generation != GENERATION_V6)
+    if v5_vbus_echo and v5_stdbuf:
+        cmd = _line_buffered_argv(cmd, v5_stdbuf)
 
     attempts_report: list = []
     aborted_report: "dict | None" = None
@@ -3085,6 +3210,10 @@ def main() -> None:
                     _persist_gated_ports(hidden_ports)
                 regate_count += 1
 
+            tty_history = _TtyPortHistory() if v5_vbus_echo else None
+            # 闭包经 vbus_state 取本次尝试的历史（不直接捕获循环变量）。
+            vbus_state["tty_history"] = tty_history
+
             def _abort_on_wrong_port(line: str) -> "str | None":
                 # 第二道闸（`-p` 之外的独立判据）：逐行核工具回显的绑定口。
                 # 只在 require_binding 时才接进工具循环——V5 不经过这条新路径。
@@ -3102,7 +3231,8 @@ def main() -> None:
                     # v1.4.1：vbus 分支才认 V5 的 com portName 回显（复核 #3917 B3）；
                     # 每行只解析一次，判错口与记已验证用同一结果（复核 #3917 B1-R2）。
                     bound, reason = _check_bound_echo(line, target_port, serial,
-                                                      v5_echo=True)
+                                                      v5_echo=True,
+                                                      tty_history=vbus_state.get("tty_history"))
                     if reason:
                         return reason
                     if bound is not None and bound == target_port:
@@ -3130,6 +3260,10 @@ def main() -> None:
                 if vbus:
                     # 工具已进入 USB 扫描：此刻上电，BROM 窗口落在观测里。
                     time.sleep(pre_reboot_wait)
+                    history = vbus_state.get("tty_history")
+                    if history is not None:
+                        # 上电之前本设备没有 tty：此前见过的同名节点属于别的设备。
+                        history.reset()
                     on = _usb_power(serial, "on", vbus_report["slot"])
                     vbus_report["power_actions"].append(
                         dict(on, phase="trigger", attempt=vbus_state["attempt"]))
@@ -3165,6 +3299,8 @@ def main() -> None:
                     _emit_progress(seq, stage="reboot", target=reboot_target)
 
             attempt_record: dict = {"attempt": attempt}
+            if tty_history is not None:
+                tty_history.start()
             try:
                 output, flash_rc = _run_flash_tool_with_progress(
                     cmd,
@@ -3227,6 +3363,10 @@ def main() -> None:
                     {"attempt": attempt, "outcome": "launch-failed"})
                 final_error = ("launch", f"flash_tool launch failed: {exc}")
                 break
+            finally:
+                if tty_history is not None:
+                    tty_history.stop()
+                    attempt_record["tty_history"] = tty_history.snapshot()
 
             if (vbus and require_binding and generation != GENERATION_V6
                     and not vbus_state["bound_ok"]):

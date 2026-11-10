@@ -551,6 +551,14 @@
           "retired": false,
           "script": "flash_firmware.py",
           "version": "1.4.1"
+        },
+        {
+          "artifact": "packages/flash_firmware/1.4.2.tar.gz",
+          "package_sha256": "722eb1587cceaef26fe7a066eb5a647c81dd54d7cad272c0df96da9716b782bd",
+          "python": null,
+          "retired": false,
+          "script": "flash_firmware.py",
+          "version": "1.4.2"
         }
       ]
     },

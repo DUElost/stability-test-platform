@@ -67,6 +67,11 @@ Class: feature
   （已启用 init 步骤排序后交给 D4 同一判定函数，只读步骤自身 params）。设备列表的陈旧隐藏豁免在线主机报告为关机态的映射设备。
   前端：设备页在「状态」格加 USB 徽标（没有新增列，表宽不变）；派发页在 vbus 计划下用 `markVbusSelectable` 给关机候选打
   `vbus_selectable`，`isSchedulable` 与就绪度据此放行，其余调用点不改。unauthorized 在 vbus 计划下仍阻断。
+- 2026-11-10 `flash_firmware` 1.4.2（ADR-0063 v1.3 D3 第 4 条，Owner 在决策卡上选方案 1）：15.93 LX3 金丝雀 PlanRun 1255 中，
+  V5 工具接管道时块缓冲，`com portName is: /dev/ttyACM0` 到达时节点已消失，1.4.1 按「解析不出口」止损，未写入固件。
+  1.4.2 让 V5 vbus 经 `stdbuf -oL -eL` 启动工具（现场实测回显 6.22s 到达，节点 8.89s 消失），取锁前找不到 `stdbuf` 即失败；
+  每次尝试起采样线程（约 0.1s）记录 ttyACM 节点 → sysfs 口，上电前清空。`_check_bound_echo` 把实时结果与记录合并，恰好一个口
+  才可以用，没有或多于一个都止损。每行仍只查一次实时 sysfs。V6 与非 vbus 的 V5 命令行不变。尝试记录多一个 `tty_history` 键，便于现场核对。
 
 ## Alternatives
 
@@ -74,6 +79,9 @@ Class: feature
 - Agent 把 vbus 作业算进 `capacity`：会让健康闸门（所有 ADB 都不可用 → 0）失去意义，也会让普通作业借这个名额被认领。
 - 认领侧按设备 `lsusb` 物理在线判定：lsusb 只计数，不对应设备行，没有可用的判据。
 - 派发侧加全局开关：ADR-0063 §3 已否决。
+- 1.4.2 只做行缓冲、不记历史：节点只存在约 2.7s，工具一旦换用自己的缓冲或输出变慢就会再次失败，记录历史是低成本的兜底。
+- 1.4.2 用 PTY 代替 `stdbuf`：要改动现有 reader 线程与退出判定，改动面更大；`stdbuf` 已在现场实测可用。
+- 站点临时包装工具目录（Owner 方案 2）：绕过包发布，Plan 显式指向站点目录，难以审计；Owner 选了产品修复。
 
 ## Verification
 
@@ -138,6 +146,11 @@ Class: feature
   复核 #3921 第 1 轮后：新增 `host_is_live`（ONLINE 且心跳未超过 `HOST_HEARTBEAT_TIMEOUT_SECONDS`），徽标 `host_online` 与陈旧豁免共用；
   后端增至 12 条（状态 ONLINE、心跳过期两小时的主机：徽标为 false、列表与分页都不放出 30 天未见设备；阈值边界与 naive 时间），
   换回旧实现 2 条失败。vbus 候选判定加欠账拦截（任一专项 `debt`），前端专项增至 6 条。
+
+- 2026-11-10 `flash_firmware` 1.4.2：`backend/agent/tests/test_flash_firmware_v142.py` 14 条（实时与历史合并 6 种：节点消失只剩目标口通过、
+  无口、邻口、同名两个口、实时邻口而历史目标口；采样器记住已消失的节点、reset 清空、跨 reset 的采样丢弃、线程采样；端到端：回显晚于节点消失
+  仍通过、上电前邻口记录不计入、回显晚到且是邻口则止损不重试并隔离、缺 `stdbuf` 时零切电零取锁、V6 命令行不变）。v1.4.1 测试的 V5 假件
+  固定 `stdbuf` 路径与空 tty 列表，命令行断言改为 `stdbuf -oL -eL` 前缀。`-k flash` 共 347 passed。
 
 ## Revisit
 
