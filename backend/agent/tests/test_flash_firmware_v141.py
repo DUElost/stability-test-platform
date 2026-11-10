@@ -217,3 +217,67 @@ def test_vbus_v6_scope_override_also_forced(tmp_path, monkeypatch, capsys):
     payload = h.run(monkeypatch, capsys)
     assert payload["success"] is True, payload
     assert payload["metrics"]["identity"]["gate_pid_scope"] == "brom"
+
+
+# ── 复核 #3917 第 2 轮 B1-R2：sysfs 在同一行的多次查询之间变化 ──────────────────
+
+def _feed_with_tty_sequence(h, monkeypatch, lines, answers):
+    """第 i 行回显的**首次** tty 查询返回 answers[i]，之后的查询都返回槽位口
+    （模拟链接在同一行的几次查询之间恢复到目标口）。"""
+    pending = []
+    calls = []
+
+    def _tty(name, base=None):
+        calls.append(name)
+        return pending.pop() if pending else _SLOT_PORT
+
+    monkeypatch.setattr(v140.ff, "_tty_usb_port", _tty)
+    inner = h.launch
+
+    def launch(cmd, *a, **k):
+        check = k.get("abort_check")
+        k["on_running"]()
+        k = dict(k, on_running=lambda: None)
+        for line, first in zip(lines, answers, strict=True):
+            pending[:] = [first]
+            reason = check(line)
+            if reason:
+                h.launched.append(cmd)
+                h.launch_kwargs.append(k)
+                raise v140.ff.FlashToolAborted(reason)
+        return inner(cmd, *a, **k)
+
+    h.launch = launch
+    return calls
+
+
+@pytest.mark.parametrize("lines,answers,needle", [
+    # 唯一一条回显：首查是邻口，之后链接变成目标口 → 立即按错口止损
+    ([_V5_BOUND_LINE], ["1-5.1.4"], "!= target port"),
+    # 先有正确回显，第二条首查解析不出，之后恢复 → 立即止损，不得成功
+    ([_V5_BOUND_LINE, _V5_BOUND_LINE], [_SLOT_PORT, None], "cannot be resolved"),
+    # 先有正确回显，第二条首查是邻口，之后恢复 → 立即止损，不得成功
+    ([_V5_BOUND_LINE, _V5_BOUND_LINE], [_SLOT_PORT, "1-5.1.4"], "!= target port"),
+])
+def test_vbus_v5_each_echo_line_resolved_once(tmp_path, monkeypatch, capsys,
+                                              lines, answers, needle):
+    h = _v5_harness(monkeypatch, tmp_path, {"max_attempts": 3})
+    calls = _feed_with_tty_sequence(h, monkeypatch, lines, answers)
+    payload = h.run(monkeypatch, capsys)
+    assert payload["success"] is False, payload
+    assert needle in payload["error_message"]
+    assert payload["metrics"]["attempts"][-1]["outcome"] == "aborted-port-mismatch"
+    assert len(h.launched) == 1, "不得重试"
+    assert h.power == ["off", "on", "off"], "结算时断电隔离"
+    assert len(calls) == len(lines), "每行只解析一次 tty"
+
+
+def test_check_bound_echo_single_lookup(monkeypatch):
+    ff = _load()
+    calls = []
+    monkeypatch.setattr(ff, "_tty_usb_port",
+                        lambda name, base=None: calls.append(name) or "1-5.1.4")
+    bound, reason = ff._check_bound_echo(_V5_BOUND_LINE, _SLOT_PORT, "S", v5_echo=True)
+    assert bound == "1-5.1.4" and "!= target port" in reason
+    assert calls == ["ttyACM0"]
+    assert ff._check_bound_echo("BROM connected", _SLOT_PORT, "S", v5_echo=True) == (None, None)

@@ -12,6 +12,8 @@ v1.4.1（#3892 推广，15.93 试点）：
   - 复核 #3917 第 1 轮：V5 vbus 回显的 tty 解析不出口时立即止损；工具退出前从未回显
     目标口时判失败（`port-unverified`，不重试，断电隔离）；vbus 门控口径强制 brom，
     参数、环境变量和未知取值都不能改成 full。
+  - 复核 #3917 第 2 轮：每行回显只解析一次 tty（`_check_bound_echo`），sysfs 在查询之间
+    变化时，判错口与记已验证不会用到不同结果。
 
 v1.4.0（#3892 / ADR-0063 D3）：新增 `trigger_mode`，缺省 `adb_reboot` 与 1.3.20 逐项
 一致（结果 metrics 多一个 `trigger_mode` 键）。`vbus_cycle` 给**关机、没有 ADB** 的
@@ -501,19 +503,34 @@ def _port_mismatch_reason(line: str, target_port: str, serial: str,
     v1.4.1（复核 #3917 B1）：`v5_echo` 时，V5 回显了 tty 节点却解析不出 sysfs 口
     （节点已消失、链接形态异常），按「无法核对」止损——不能把它当成普通日志放过。
     """
+    return _check_bound_echo(line, target_port, serial, v5_echo=v5_echo)[1]
+
+
+def _check_bound_echo(line: str, target_port: str, serial: str,
+                      *, v5_echo: bool = False) -> "tuple[str | None, str | None]":
+    """一行工具输出 → (绑定口, 止损理由)。每行只查一次 sysfs。
+
+    复核 #3917 第 2 轮 B1-R2：同一行若分几次解析 tty，sysfs 在两次查询之间变化时，
+    「判错口」与「记已验证」会用到不同结果，首次查到的错口可能被后一次覆盖。
+    这里只解析一次，可解析、错口、已验证三项判断都用同一个结果。
+    """
     if v5_echo and not _SYMBOLIC_LINK_RE.search(line):
         v5 = _V5_PORTNAME_RE.search(line)
-        if v5 and _tty_usb_port(v5.group(1)) is None:
-            return (
+        if v5 is None:
+            return None, None
+        bound = _tty_usb_port(v5.group(1))
+        if bound is None:
+            return None, (
                 f"tool opened /dev/{v5.group(1)} but its USB port cannot be resolved "
                 f"(target port {target_port!r}, serial={serial}): 无法核对绑定口，"
                 "已终止工具，未继续下发")
-    bound = _parse_bound_port(line, v5_echo=v5_echo)
+    else:
+        bound = _parse_bound_port(line)
     if bound is not None and target_port and bound != target_port:
-        return (
+        return bound, (
             f"tool bound USB port {bound!r} != target port {target_port!r} "
             f"(serial={serial}): 已终止工具，未继续下发")
-    return None
+    return bound, None
 
 
 def _resolve_target_identity(
@@ -3082,12 +3099,15 @@ def main() -> None:
                         vbus_state["brom_seen"] = True
                     if not require_binding:
                         return None
-                    # v1.4.1：vbus 分支才认 V5 的 com portName 回显（复核 #3917 B3）。
-                    bound = _parse_bound_port(line, v5_echo=True)
+                    # v1.4.1：vbus 分支才认 V5 的 com portName 回显（复核 #3917 B3）；
+                    # 每行只解析一次，判错口与记已验证用同一结果（复核 #3917 B1-R2）。
+                    bound, reason = _check_bound_echo(line, target_port, serial,
+                                                      v5_echo=True)
+                    if reason:
+                        return reason
                     if bound is not None and bound == target_port:
                         vbus_state["bound_ok"] = True
-                    return _port_mismatch_reason(line, target_port, serial,
-                                                 v5_echo=True)
+                    return None
 
                 def _vbus_brom_deadline() -> "tuple[str, str] | None":
                     if vbus_state.get("abort"):
