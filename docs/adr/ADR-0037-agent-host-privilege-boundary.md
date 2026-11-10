@@ -168,7 +168,7 @@
      与系统关键目录不得互相包含、`read-kernel-log` 的窗口/行数取值校验（互斥必选 +
      整数范围 + `allow_abbrev=False`）与子进程三收口（环境清空 / 30s 超时 / 8 MiB 上限，
      超限即非零退出、不部分投递）、`usb-power` 的映射文件整份校验（非 symlink、root 属主、非 group/other 可写、
-     ≤ 64 KiB、父目录 root 属主且不可写、schema / 字段 / `port` 1–16 合法、serial 与槽位无重复）、按 serial 查槽位且不接受
+     ≤ 64 KiB、父目录为 root 属主的真实目录且 group/other 不可写、schema / 字段 / `port` 1–16 合法、serial 与槽位无重复）、按 serial 查槽位且不接受
      指定切电目标的位置或端口参数、`--expect-slot` 在调用 `uhubctl` 之前比对（不一致即拒绝）、`--delay` 只用于 `cycle` 且有上限、
      `allow_abbrev=False`、`uhubctl` 为固定路径且 root 属主非 group/other 可写、`hub_location` 必须在内核 sysfs 树内，
      以及子进程收口（固定 argv / 环境只留 `LC_ALL` 与 `PATH` / 60s 超时 / 非 root 拒绝 / 成功回显实际槽位）（v0.7 / D8）；

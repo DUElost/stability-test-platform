@@ -229,7 +229,7 @@ Agent 代码，会改变控制面的期望 digest，而 #3875 的影子能力守
 1. wrapper（单测）：
    - 未登记 serial、`--delay` 超限或用于非 `cycle`、缩写参数、缺 `--expect-slot` 或其取值非法，均被拒绝；
    - `--expect-slot` 与映射不一致时，在调用 `uhubctl` 之前拒绝；
-   - 映射文件：symlink、group/other 可写、非 root 属主、超过 64 KiB、父目录可写或非 root 属主、`schema`/字段/`port` 1–16 非法、
+   - 映射文件：symlink、group/other 可写、非 root 属主、超过 64 KiB、父目录 group/other 可写或非 root 属主、`schema`/字段/`port` 1–16 非法、
      serial 或槽位重复，均整份拒绝；
    - `uhubctl` 非 root 属主或 group/other 可写时拒绝；`hub_location` 不在内核 sysfs 树内时拒绝；
    - 固定 argv、环境只留 `LC_ALL`/`PATH`、超时 60s、非 root 拒绝；成功时回显实际槽位。
