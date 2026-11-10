@@ -1,8 +1,14 @@
 """Flash firmware via SP Flash Tool (MTK platform).
 
-v1.4.1（#3892 推广，15.93 试点）：机型族路由表补 `MLD_NX3` / `MLD-NX3` → `MLD`
-（535 平台第二个机型，与 NX2 同族、同 V6 代际；代际仍以版本目录 manifest 为准）。
-其余逻辑与 1.4.0 逐字一致。
+v1.4.1（#3892 推广，15.93 试点）：
+  - 机型族路由表补 `MLD_NX3` / `MLD-NX3` → `MLD`（535 平台第二个机型，与 NX2 同族、
+    同 V6 代际；代际仍以版本目录 manifest 为准）；
+  - vbus_cycle 也允许 V5（552 机型只能用 flashtool）：V5 同样带 `-p <槽位口>`，
+    回显 `com portName is: /dev/ttyACMn` 经 `/sys/class/tty` 解析成 sysfs 口后逐行核对，
+    门控只压制可刷态口（与 V6 相同）。依据 2026-11-10 15.93 实测（#3892 comment
+    6764214206）：V5 `-p` 在 Linux 上按 sysfs 口名过滤（P1/P3 不绑错口），绑定目标口后
+    完整刷机成功（P2）；2026-08 的「打开层不动作」与当时的 ttyACM 权限问题一并消失。
+  - 非 vbus 路径（`adb_reboot`）V5 命令行与 1.4.0 逐字一致，不带 `-p`。
 
 v1.4.0（#3892 / ADR-0063 D3）：新增 `trigger_mode`，缺省 `adb_reboot` 与 1.3.20 逐项
 一致（结果 metrics 多一个 `trigger_mode` 键）。`vbus_cycle` 给**关机、没有 ADB** 的
@@ -420,6 +426,29 @@ _BROM_GATE_PIDS = _BROM_STAGE_PIDS | {"2026"}
 # `1-5.2.3`），与 symbolic_link 回显的末段同形态。
 _PORT_PATH_RE = re.compile(r"^\d+-(?:\d+\.)*\d+$")
 _SYMBOLIC_LINK_RE = re.compile(r"symbolic_link:\s*(\S+)")
+# v1.4.1（#3892）：V5 不回显 symbolic_link，只回显它打开的 tty 节点（15.93 P2 实测
+# `com portName is: /dev/ttyACM0`）；经 `/sys/class/tty/<name>` 解析成 sysfs 口再核对。
+_V5_PORTNAME_RE = re.compile(r"com portName is:\s*/dev/(ttyACM\d+)")
+_SYS_CLASS_TTY = "/sys/class/tty"
+
+
+def _tty_usb_port(tty_name: str, base: str = _SYS_CLASS_TTY) -> "str | None":
+    """`ttyACM0` → 它所在的 sysfs USB 口（如 `1-13.2.4`）；解析不到返回 None。
+
+    `/sys/class/tty/ttyACM0` 指向 `.../1-13/1-13.2/1-13.2.4/1-13.2.4:1.0/tty/ttyACM0`，
+    取接口目录（含 `:`）之前最后一个形如端口名的路径段。
+    """
+    try:
+        real = os.path.realpath(os.path.join(base, tty_name))
+    except (OSError, ValueError):
+        return None
+    port = None
+    for part in real.split(os.sep):
+        if ":" in part:
+            break
+        if _PORT_PATH_RE.match(part):
+            port = part
+    return port
 
 
 class FlashToolAborted(RuntimeError):
@@ -449,7 +478,8 @@ def _parse_bound_port(line: str) -> "str | None":
     """
     m = _SYMBOLIC_LINK_RE.search(line)
     if not m:
-        return None
+        v5 = _V5_PORTNAME_RE.search(line)
+        return _tty_usb_port(v5.group(1)) if v5 else None
     tail = m.group(1).rstrip(".").split("@")[-1]
     return tail if _PORT_PATH_RE.match(tail) else None
 
@@ -1299,6 +1329,7 @@ def _build_flash_argv(
     scatter_file: "str | None" = None,
     flash_xml_file: "str | None" = None,
     port: "str | None" = None,
+    v5_port: "str | None" = None,
 ) -> list:
     """按代际拼命令行（v1.3.19）。
 
@@ -1317,6 +1348,9 @@ def _build_flash_argv(
       - 不给 `-p` 时回显 `com port clue: COM://.`（空线索）→ 全盘扫描；run 921
         就是这样抓到了被自家门控推进 preloader 的邻机。
     V5 一侧不得带 `-p`：`flash_tool` 的端口参数形态不同，552 零变化是红线。
+
+    v1.4.1（#3892）：只有 vbus_cycle 才给 V5 传 `v5_port`，形态同 V6（sysfs 口名，15.93 P0
+    `-h` 原文与 P2 实测）。`port` 对 V5 仍然忽略，非 vbus 路径的 V5 命令行逐字不变。
     """
     if generation == GENERATION_V6:
         if not flash_xml_file:
@@ -1327,7 +1361,10 @@ def _build_flash_argv(
         return argv
     if not da_file or not scatter_file:
         raise ValueError("da_file and scatter_file are required for tool_generation v5")
-    return [exe, "-c", command, "-d", da_file, "-s", scatter_file, "-b", boot_mode]
+    argv = [exe, "-c", command, "-d", da_file, "-s", scatter_file, "-b", boot_mode]
+    if v5_port:
+        argv += ["-p", v5_port]
+    return argv
 
 
 def _output_caught_brom(output: str) -> bool:
@@ -2618,10 +2655,13 @@ def main() -> None:
     # 0e8d:2000 preloader —— 工具于是绑了 1-8 并下发 DA（checksum mismatch 而止）。
     # 结论：三处都必须 fail-closed，而不是"让工具自己挑一个"。
     v6_native = generation == GENERATION_V6 and _is_linux()
+    # v1.4.1（#3892）：vbus_cycle 下 V5 也带 `-p`（15.93 实测），绑定缺省按「Linux 上的
+    # vbus」打开；非 vbus 的 V5 缺省仍为关，行为与 1.4.0 一致。
+    binding_native = v6_native or (vbus and _is_linux())
     require_binding = _as_bool(
         _param_or_env(args, "require_port_binding",
                       "STP_FLASH_REQUIRE_PORT_BINDING", ""),
-        default=v6_native,
+        default=binding_native,
     )
     require_adb_ready = _as_bool(
         _param_or_env(args, "require_adb_ready",
@@ -2630,7 +2670,7 @@ def main() -> None:
     )
     gate_pid_scope = str(
         args.get("gate_pid_scope") or os.environ.get("STP_FLASH_GATE_PID_SCOPE") or ""
-    ).strip().lower() or ("brom" if v6_native else "full")
+    ).strip().lower() or ("brom" if binding_native else "full")
     explicit_port = str(
         args.get("flash_port") or os.environ.get("STP_FLASH_PORT") or ""
     ).strip()
@@ -2672,12 +2712,13 @@ def main() -> None:
         # （不按 serial 反查——关机设备在 sysfs 里本就没有 serial）。任一不满足
         # 直接失败，且此前没有任何切电动作。
         slot, slot_error = _load_vbus_slot(serial)
-        if slot_error is None and not (require_binding and v6_native):
-            # D3 第 4 条：工具必须用 V6 `-p` 绑定槽位口，绑错口逐行止损也挂在这上面。
-            # 关掉绑定（V5，或计划传 require_port_binding=false）等于让工具扫全部
-            # MTK 口，回到 run 921 的缺口（复核 #3902 comment 6706267244 B2）。
+        if slot_error is None and not (require_binding and _is_linux()):
+            # D3 第 4 条：工具必须用 `-p` 绑定槽位口，绑错口逐行止损也挂在这上面。
+            # 关掉绑定（计划传 require_port_binding=false）或不在 Linux 上，等于让工具扫
+            # 全部 MTK 口，回到 run 921 的缺口（复核 #3902 comment 6706267244 B2）。
+            # v1.4.1：V5 与 V6 一样带 `-p`（ADR-0063 v1.1 D3 第 4 条）。
             slot_error = (
-                "vbus_cycle requires port binding (V6 tool on Linux with "
+                "vbus_cycle requires port binding (tool on Linux with "
                 f"require_port_binding=true; got generation={generation}, "
                 f"linux={_is_linux()}, require_port_binding={require_binding}); "
                 "refusing to power-cycle without -p")
@@ -2818,6 +2859,7 @@ def main() -> None:
         flash_tool_exe, generation, command, boot_mode,
         da_file=da_file, scatter_file=scatter_file, flash_xml_file=flash_xml_file,
         port=bound_port,
+        v5_port=bound_port if vbus else None,
     )
 
     attempts_report: list = []

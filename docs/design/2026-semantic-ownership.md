@@ -310,3 +310,4 @@
 | 2026-11-10 | ADR-0063 v0.11（claude，Proposed，归属域 `flash-tool`）：D4 第 6 条串行守卫订正为只计仍在刷机的作业（阶段 B 真机验收 PlanRun 1242 发现与 INIT→PATROL barrier 死锁）；`flash-tool` 行锚点不变，ADR-0063 转 Accepted 时再按 §7 补锚 |
 | 2026-11-10 | ADR-0063 v0.12 与 ADR-0061 v1.2（claude，Owner 裁定选甲）：ADR-0063 新增 D5 第 3 条、ADR-0061 D6 第 1 条增补——vbus 刷机作业的 init 残留检查推迟到刷机成功之后；`flash-tool` 与 `device-return` 行锚点与分工不变，仅登记版本变化 |
 | 2026-11-10 | ADR-0063 v1.0 转 Accepted 与 ADR-0037 v0.7（claude，Owner 裁定；阶段 B 真机验收 PlanRun 1245 通过）：`flash-tool` 行按 §7 补 ADR-0063 `## 2. 决策` 锚；ADR-0037 D8 `usb-power` 生效，`flash-tool` 提权锚不变 |
+| 2026-11-10 | ADR-0063 v1.1（claude，15.93 实测 V5 `-p` 可用）：D3 第 4 条订正为 V5 与 V6 都带 `-p` 并核对回显绑定口；`flash-tool` 行锚点与分工不变，仅登记版本变化 |

@@ -53,6 +53,10 @@ Class: feature
   vbus 刷机的机型只来自步骤参数 `model`，未列机型在 1.4.0 上 fail-fast（no firmware family route），NX3 无法派发。
   只改路由表与抬头注释，其余逻辑与 1.4.0 一致；已按 ADR-0051 登记新版本，1.4.0 条目不动。
   工具代际（v5 / v6）仍由版本目录 `manifest.json` 的 `tool_generation` 决定，路由不改变代际判定。
+  同一版本（未发布前追加）还放开 vbus 的 V5：552 机型只能用 flashtool（Owner 2026-11-10），15.93 实测 V5 `-p` 在 Linux 上按
+  sysfs 口名过滤并能完成刷机（#3892 comment 6764214206）。V5 在 vbus 下带 `-p <槽位口>`，绑定与 `brom` 门控缺省开启；
+  V5 回显 `com portName is: /dev/ttyACMn` 经 `/sys/class/tty` 解析成 sysfs 口后接进既有的逐行核对。非 vbus 的 V5 命令行不变
+  （`_build_flash_argv` 只认显式的 `v5_port`，原有「V5 不长出 -p」测试照常通过）。ADR-0063 升 v1.1 订正 D3 第 4 条。
 
 ## Alternatives
 
@@ -102,6 +106,8 @@ Class: feature
 
 - 2026-11-10 1.4.1：`backend/agent/tests/test_flash_firmware_v141.py` 2 条（NX3 两种写法路由到 MLD；既有 10 个键不变）；
   与 `test_flash_firmware_v1319.py` 合计 34 passed。`check_script_packages`：族树与最新登记等价。
+  V5 vbus 追加后 `test_flash_firmware_v141.py` 共 7 条（V5 `-p` 只经 `v5_port`、tty 解析、V5 回显核对、vbus V5 带槽位口与
+  `brom` 门控、关绑定仍拒绝）；`-k flash_firmware` 全部 254 passed。
 
 ## Revisit
 
