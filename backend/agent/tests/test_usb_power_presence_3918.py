@@ -125,3 +125,84 @@ def test_heartbeat_tick_passes_presence_to_capacity(monkeypatch, presence, raise
                              host_info={}, poll_interval=60, get_active_job_count=lambda: 0)
     thread._tick()
     assert cap_kwargs["usb_power_slots"] == presence
+
+
+# ── 复核 #3919 第 1 轮：观测读取器与 wrapper 的 D1 数据约束一致 ─────────────────
+
+from backend.agent import stp_agent_priv as _priv  # noqa: E402
+from backend.agent import usb_power_slots as _slots_mod  # noqa: E402
+
+
+def _slot(serial, loc="1-5.2", port=1):
+    return {"serial": serial, "hub_location": loc, "port": port}
+
+
+_REVIEW_REJECTED = {
+    # 两个 serial 写到同一物理口（Ansible 入口只查 serial 唯一）
+    "same_port": {"schema": 1, "slots": [_slot("A"), _slot("B")]},
+    "dup_serial": {"schema": 1, "slots": [_slot("A", port=1), _slot("A", port=2)]},
+    "port_17": {"schema": 1, "slots": [_slot("A", port=17)]},
+    "schema_true": {"schema": True, "slots": [_slot("A")]},
+    "extra_field": {"schema": 1, "slots": [dict(_slot("A"), note="x")]},
+    "blank_serial": {"schema": 1, "slots": [_slot(" ")]},
+    "extra_top_key": {"schema": 1, "slots": [], "x": 1},
+    "serial_too_long": {"schema": 1, "slots": [_slot("A" * 65)]},
+}
+
+
+def _hubs_65():
+    slots = [_slot(f"S{h}{p:02d}", loc=f"1-5.{h}", port=p) for h in range(1, 5) for p in range(1, 17)]
+    slots.append(_slot("S501", loc="1-5.5", port=1))
+    return {"schema": 1, "slots": slots}
+
+
+_ACCEPTED = {
+    "empty": {"schema": 1, "slots": []},
+    "two": {"schema": 1, "slots": [_slot("A", port=1), _slot("B", port=2)]},
+    "port_16": {"schema": 1, "slots": [_slot("A", port=16)]},
+    "hubs_65": _hubs_65(),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_REVIEW_REJECTED))
+def test_mapping_rejected_by_wrapper_reports_nothing(tmp_path, name):
+    sysfs = tmp_path / "sys"
+    _usb_dev(sysfs, "1-5.2.1", "0e8d", "2046")
+    path = tmp_path / "usb-power-slots.json"
+    path.write_text(json.dumps(_REVIEW_REJECTED[name]), encoding="utf-8")
+    assert read_usb_power_presence(str(path), str(sysfs)) is None
+
+
+def test_65_slots_across_hubs_all_reported(tmp_path):
+    path = tmp_path / "usb-power-slots.json"
+    path.write_text(json.dumps(_hubs_65()), encoding="utf-8")
+    got = read_usb_power_presence(str(path), str(tmp_path / "sys"))
+    assert got is not None and len(got) == 65
+    assert got["S501"] == ["1-5.5:1", None]
+
+
+def test_oversized_file_reports_nothing(tmp_path):
+    doc = {"schema": 1, "slots": [_slot("A")]}
+    body = json.dumps(doc) + " " * (64 * 1024)
+    path = tmp_path / "usb-power-slots.json"
+    path.write_text(body, encoding="utf-8")
+    assert read_usb_power_presence(str(path), str(tmp_path)) is None
+
+
+@pytest.mark.parametrize("name,doc", sorted({**_REVIEW_REJECTED, **_ACCEPTED}.items()))
+def test_reader_agrees_with_wrapper_parser(name, doc):
+    body = json.dumps(doc)
+    try:
+        wrapper = {s: list(v) for s, v in _priv.parse_usb_power_slots(body).items()}
+    except _priv.PrivError:
+        wrapper = None
+    entries = _slots_mod._parse_slot_entries(body)
+    reader = None if entries is None else {s: [loc, port] for s, loc, port in entries}
+    assert reader == wrapper
+
+
+def test_reader_constants_match_wrapper():
+    assert _slots_mod._MAX_PORT == _priv.USB_POWER_MAX_PORT
+    assert _slots_mod._MAX_FILE_BYTES == _priv.MAX_USB_POWER_SLOTS_BYTES
+    assert _slots_mod._SERIAL_RE.pattern == _priv._USB_POWER_SERIAL_RE.pattern
+    assert _slots_mod._HUB_LOCATION_RE.pattern == _priv._USB_PORT_RE.pattern

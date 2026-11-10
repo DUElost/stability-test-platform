@@ -120,6 +120,9 @@ Class: feature
   立即按错口止损、不重试、断电隔离，且每行只查一次 tty；三条在 `685848d` 上全部失败。遗漏原因：上一轮用例只用固定 tty 映射。
 - 2026-11-10 #3918 U5a：`backend/agent/tests/test_usb_power_presence_3918.py` 18 条（分类 6 条、逐口读取、无映射、
   5 种格式错误、sysfs 值非法、capacity 键只在有映射时出现且不改槽位、心跳 tick 透传 / 读取抛异常不影响心跳）。
+  复核 #3919 第 1 轮后读取器改为与 wrapper `parse_usb_power_slots` 同一套 D1 约束（去掉 64 条上限，加 64 KiB 文件上限），增至 41 条：
+  复核给的 8 种 wrapper 拒绝样例（同口两 serial、重复 serial、端口 17、`schema: true`、条目多余字段、空白 serial 等）整份不上报；
+  5 个 hub 共 65 槽全部上报；超 64 KiB 不上报；12 种输入与 wrapper 解析器差分一致；常量与 wrapper 同值。在第 1 轮提交上 23 条失败。
 
 ## Revisit
 
