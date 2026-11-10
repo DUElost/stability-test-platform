@@ -49,7 +49,7 @@ Class: feature
   Agent 部分必须随控制面同批，在 B8 的联合 Agent 发布（G4 / #3875 / #3889）截止前合入；赶不上就顺延到下一次全队滚动，
   不得在切窗后单独合入（ADR-0063 D6 第 1 条；#3875 digest 守卫会把对不上的主机记为 `capability_unverified`）。
 
-- 2026-11-10 #3918 U5a（ADR-0063 v1.1 D7）：Agent 按映射逐口读 sysfs `idVendor`/`idProduct`，上报 `capacity.usb_power_slots`
+- 2026-11-10 #3918 U5a（ADR-0063 v1.2 D7）：Agent 按映射逐口读 sysfs `idVendor`/`idProduct`，上报 `capacity.usb_power_slots`
   （`{serial: [slot, vid_pid|null]}`）；分类函数放共享契约 `contracts/usb_presence.py`，供控制面与前端共用。映射宽松读取，
   任何格式问题都不上报，心跳照常；权威校验仍在 wrapper。只有带映射文件的主机多出这个键（16 台约 700 字节），其余主机心跳不变。
   改了 Agent 代码输入集，期望 digest 会变，必须随全机队 Agent 发布。
