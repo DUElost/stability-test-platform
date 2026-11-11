@@ -65,7 +65,7 @@ class TestRegateThrottle:
 
         calls: list = []
 
-        def fake_gate(target_port, base=ff._SYSFS_USB_BASE):
+        def fake_gate(target_port, base=ff._SYSFS_USB_BASE, **_kw):
             calls.append(fake_time.monotonic())
             # 每次返回一个新 hidden 口（模拟重枚举逃逸的新设备）
             return {"hidden": [f"1-7.{len(calls)}.x"], "errors": {},

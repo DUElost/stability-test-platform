@@ -868,7 +868,22 @@ def test_v5_line_with_v6_link_shape_fails_closed(monkeypatch):
     hist = ff._TtyPortHistory(base="/nonexistent")
     line = f"symbolic_link: COM:///dev/ttyACM0@/dev/ttyACM0@{_SLOT}"
     _b, reason = ff._check_bound_echo(line, _SLOT, "S", v5_echo=True, tty_history=hist)
-    assert reason and "unparseable tty reference" in reason
+    assert reason and "V6 symbolic_link echo in V5 output" in reason
+
+
+@pytest.mark.parametrize("link", [f"COM:///dev/ttyUSB0@/dev/ttyUSB0@{_SLOT}", _SLOT,
+                                  f"x@{_SLOT}"])
+def test_v5_symbolic_link_aborts_regardless_of_content(monkeypatch, link):
+    # 第 7 轮反例：V5 先收到正确回显，再收到带目标口的 symbolic_link（链接内用 /dev/ttyUSB0），
+    # 旧实现报成功。V5 出现 symbolic_link 即止损，不看链接内容。
+    monkeypatch.setattr(ff, "_tty_usb_port", lambda name, base=None: _SLOT)
+    hist = ff._TtyPortHistory(base="/nonexistent")
+    _b, ok = ff._check_bound_echo("com portName is: /dev/ttyACM0", _SLOT, "S",
+                                  v5_echo=True, tty_history=hist)
+    assert ok is None
+    _b, reason = ff._check_bound_echo(f"symbolic_link: {link}", _SLOT, "S",
+                                      v5_echo=True, tty_history=hist)
+    assert reason and "V6 symbolic_link echo in V5 output" in reason
 
 
 @pytest.mark.parametrize("words", [("com", "portName", "is")])
@@ -1020,7 +1035,7 @@ def test_signal_timeout_clips_to_remaining_budget(monkeypatch):
     monkeypatch.setitem(ff._SIG_STATE, "deadline", time.monotonic() + 2.0)
     assert 1.5 < ff._signal_timeout(75) <= 2.0
     monkeypatch.setitem(ff._SIG_STATE, "deadline", time.monotonic() - 5)
-    assert ff._signal_timeout(75) == 0.1
+    assert ff._signal_timeout(75) == 0.05
 
 
 @pytest.mark.parametrize("fn", ["_usb_power", "_set_authorized"])
@@ -1053,10 +1068,104 @@ def test_signal_path_takes_no_locks(start, end):
         guard.assert_absent(needle, why="ADR-0063 v1.3 D3.4 信号路径不得取锁或同步原语（#3924 第 6 轮）")
 
 
-def test_orphan_state_kept_when_drain_incomplete(tmp_path, monkeypatch):
+# ── 复核 #3924 第 7 轮（退回规划者后）：先落盘、恢复前提、信号路径保留记录、预算耗尽 ─────
+
+def test_state_file_kept_on_signal_path(tmp_path, monkeypatch):
     state = tmp_path / "gated.json"
     state.write_text('{"hidden": ["1-9"]}')
-    monkeypatch.setitem(ff._SIG_STATE, "drain_incomplete", True)
+    monkeypatch.setitem(ff._SIG_STATE, "settling", True)
     assert ff._clear_gated_state_after_restore(str(state)) is False and state.exists()
-    monkeypatch.setitem(ff._SIG_STATE, "drain_incomplete", False)
+    monkeypatch.setitem(ff._SIG_STATE, "settling", False)
     assert ff._clear_gated_state_after_restore(str(state)) is True and not state.exists()
+
+
+def test_state_file_kept_when_reader_op_in_flight(tmp_path, monkeypatch):
+    state = tmp_path / "gated.json"
+    state.write_text('{"hidden": ["1-9"]}')
+    monkeypatch.setitem(ff._SIG_STATE, "settling", False)
+    monkeypatch.setitem(ff._INFLIGHT, -12345, 1)  # 假的非主线程在途计数
+    assert ff._clear_gated_state_after_restore(str(state)) is False and state.exists()
+
+
+def test_gate_persists_candidates_before_any_write(tmp_path, monkeypatch):
+    # 第 7 轮反例：主线程写完 authorized=0、还没记入恢复记录时收到 SIGTERM，锁释放后口仍为 0、
+    # 状态文件不存在。改为写 0 之前先把候选口落盘。
+    state = tmp_path / "gated.json"
+    monkeypatch.setattr(ff, "_is_linux", lambda: True)
+    monkeypatch.setattr(ff, "_list_mtk_ports", lambda base=None: {
+        "1-9": {"pid": "2000"}, "1-8": {"pid": "0003"}, _SLOT: {"pid": "2000"}})
+    seen = []
+
+    def fake_set(port, value, base=None):
+        assert state.exists(), "写 authorized=0 之前必须先落盘"
+        seen.append((sorted(ff.json.loads(state.read_text())["hidden"]), port, value))
+        return True, "direct"
+
+    monkeypatch.setattr(ff, "_set_authorized", fake_set)
+    report = ff._gate_other_mtk(_SLOT, base=str(tmp_path),
+                                before_write=lambda names: ff._persist_gated_ports(
+                                    names, path=str(state)))
+    assert report["persisted_before_write"] is True
+    assert [s[0] for s in seen] == [["1-8", "1-9"], ["1-8", "1-9"]]
+
+
+def test_settle_restores_intent_union_and_orphan_restore_runs_after_lock():
+    from tools.dev.source_anchor import SourceGuard
+    guard = SourceGuard.of_module(ff).anchored("def _settle_restore() -> None:")
+    guard.assert_present("list(dict.fromkeys(hidden_ports + gate_intent))",
+                         why="结算按恢复记录（含已写未登记的口）恢复")
+    text = guard.text
+    main = text[text.index("def main("):]
+    lock = main.index("lock_fd = _acquire_host_lock(")
+    quiesce = main.index("if not _await_gate_wrappers_quiescent():")
+    restore = main.index("orphan_gates = _restore_orphaned_gates()")
+    assert lock < quiesce < restore, "孤儿恢复必须在持锁且 wrapper 静止之后"
+
+
+def _fake_proc(root, pid, *, state="S", argv=()):
+    d = root / str(pid)
+    d.mkdir(parents=True)
+    (d / "stat").write_bytes(f"{pid} (x) {state} 1 1 1".encode())
+    (d / "cmdline").write_bytes(b"\0".join(a.encode() for a in argv) + b"\0")
+
+
+@pytest.mark.parametrize("argv,state,alive", [
+    (("sudo", "-n", ff._PRIV_WRAPPER, "usb-power", "--action", "off"), "S", True),
+    ((ff._PRIV_WRAPPER, "usb-authorized", "--port", "1-9"), "R", True),
+    ((ff._PRIV_WRAPPER, "usb-power"), "Z", False),
+    ((ff._PRIV_WRAPPER, "adb-restart"), "S", False),
+    (("/usr/bin/uhubctl", "-a", "off"), "S", False),
+])
+def test_host_gate_wrapper_detection(tmp_path, argv, state, alive):
+    _fake_proc(tmp_path, 4242, state=state, argv=argv)
+    assert ff._host_gate_wrappers_alive(str(tmp_path)) is alive
+
+
+def test_quiescence_waits_then_fails_closed(tmp_path):
+    # 第 7 轮反例时序：下次启动先恢复并删记录，随后旧 authorized=0 落地。改为持锁后先等 wrapper 结束。
+    import threading
+    import time
+    _fake_proc(tmp_path, 4242, argv=(ff._PRIV_WRAPPER, "usb-authorized"))
+    assert ff._await_gate_wrappers_quiescent(0.3, str(tmp_path), poll=0.05) is False
+    t = threading.Timer(0.2, lambda: (tmp_path / "4242" / "stat").write_bytes(b"4242 (x) Z 1"))
+    t.start()
+    started = time.monotonic()
+    assert ff._await_gate_wrappers_quiescent(3, str(tmp_path), poll=0.05) is True
+    assert time.monotonic() - started >= 0.15
+
+
+def test_budget_exhausted_refuses_every_privileged_call(tmp_path, monkeypatch):
+    # 第 7 轮反例：预算用完后 `_signal_timeout` 仍返回 0.1 秒、恢复循环继续发起调用，7.20 秒才释放锁。
+    import time
+    calls = []
+    monkeypatch.setattr(ff.subprocess, "run", lambda *a, **k: calls.append(a) or None)
+    monkeypatch.setitem(ff._SIG_STATE, "settling", True)
+    monkeypatch.setitem(ff._SIG_STATE, "deadline", time.monotonic() + 0.2)
+    started = time.monotonic()
+    report = ff._restore_gated({"hidden": ["1-7", "1-8", "1-9"]}, base=str(tmp_path))
+    power = ff._usb_power("S", "off", {"hub_location": "1-5", "port": 1})
+    assert time.monotonic() - started < 0.1 and not calls
+    assert set(report["errors"]) == {"1-7", "1-8", "1-9"}
+    assert all("signal-budget-exhausted" in v for v in report["errors"].values())
+    assert "budget exhausted" in power["tail"]
+    assert (tmp_path / "1-7").exists() is False  # 连直写都不再做

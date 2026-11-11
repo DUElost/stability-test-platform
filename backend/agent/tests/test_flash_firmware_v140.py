@@ -215,7 +215,7 @@ class Harness:
         monkeypatch.setattr(ff, "_persist_gated_ports",
                             lambda ports, *a, **k: persist(ports, *a, **{**k, "path": gate_state}))
         monkeypatch.setattr(ff, "_gate_other_mtk",
-                            lambda port, base=None, hold_pids=None:
+                            lambda port, base=None, hold_pids=None, before_write=None:
                             {"hidden": [], "errors": {}, "target_port": port})
         monkeypatch.setattr(ff, "_install_termination_cleanup",
                             lambda settle: setattr(self, "settle", settle))
