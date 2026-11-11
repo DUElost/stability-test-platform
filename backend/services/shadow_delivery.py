@@ -76,6 +76,7 @@ class DeliverySnapshot:
     plan_run_id: int
     platform: str
     round_ids: tuple[int, ...]
+    basis_merged_at: tuple[tuple[int, Optional[datetime]], ...]
     effective_coverage: tuple[dict, ...]
     issue_ids: tuple[int, ...]
     event_ids: tuple[str, ...]
@@ -258,6 +259,7 @@ def build_delivery_snapshot(
         plan_run_id=plan_run_id,
         platform=platform,
         round_ids=tuple(row.id for row in basis),
+        basis_merged_at=tuple((row.id, row.merged_at) for row in basis),
         effective_coverage=tuple(coverage),
         issue_ids=issue_ids,
         event_ids=event_ids,
@@ -390,7 +392,11 @@ def register_delivery_version(
     root: Optional[str] = None,
     now: Optional[datetime] = None,
 ):
-    """登记新版本；内容与最新版本相同时不写库、不写文件。
+    """登记新版本；registered_at = max(实时时间, 依据轮次最大 merged_at)。
+
+    内容与最新版本相同且没有「已纳入轮次重新 merge」信号时，不写库、不写
+    文件；该信号成立时强制写新版本。now 仅用于测试注入实时时间，生产入口
+    不使用 sweep 起点时间。
 
     写入顺序固定为「导出文件先落盘，再插入登记行」：库失败只会留下可被
     下次覆盖的孤儿文件，不会出现有登记、无文件或哈希不一致。调用方负责
@@ -411,7 +417,24 @@ def register_delivery_version(
     latest = facts.get_latest_delivery_version(
         db, plan_run_id=plan_run_id, platform=platform,
     )
-    if latest is not None and _version_signature(latest) == _snapshot_signature(snapshot):
+    real_now = now or _utcnow()
+    merged_times = [
+        merged_at for _, merged_at in snapshot.basis_merged_at if merged_at is not None
+    ]
+    registered_at = max([real_now, *merged_times])
+    forced = False
+    if latest is not None:
+        included = {int(value) for value in (latest.round_ids or [])}
+        forced = any(
+            round_id in included and merged_at is not None
+            and merged_at > latest.registered_at
+            for round_id, merged_at in snapshot.basis_merged_at
+        )
+    if (
+        latest is not None
+        and not forced
+        and _version_signature(latest) == _snapshot_signature(snapshot)
+    ):
         return latest
 
     version_no = (latest.version_no + 1) if latest is not None else 1
@@ -419,8 +442,7 @@ def register_delivery_version(
     if not storage_root:
         raise facts.IssueFactError("shared storage root is not configured")
     path = delivery_export_path(storage_root, plan_run_id, platform, version_no)
-    generated_at = now or _utcnow()
-    data = _encode_export(_render_export(snapshot, version_no, generated_at))
+    data = _encode_export(_render_export(snapshot, version_no, registered_at))
     digest = _write_export(path, data)
 
     row = facts.record_delivery_version(
@@ -437,7 +459,7 @@ def register_delivery_version(
         pending_items=list(snapshot.pending_items),
         gaps=[dict(gap) for gap in snapshot.gaps],
         primary_folders=list(snapshot.primary_folders),
-        registered_at=generated_at,
+        registered_at=registered_at,
     )
     if row.version_no != version_no or row.stats_snapshot_version != digest:
         raise facts.IssueFactError(
@@ -451,9 +473,11 @@ def try_register_delivery_version(
     plan_run_id: int,
     *,
     platform: str = PLATFORM_MTK,
-    now: Optional[datetime] = None,
 ) -> Optional[int]:
-    """合并任务与 sweep 的入口：失败只留专用日志，不向调用方抛出。"""
+    """合并任务与 sweep 的入口：失败只留专用日志，不向调用方抛出。
+
+    registered_at 由 register_delivery_version 现算，不使用 sweep 的起点时间。
+    """
     if platform.lower() != PLATFORM_MTK:
         return None
     if not get_scheduler_settings().stp_scan_round_shadow_enabled:
@@ -461,7 +485,7 @@ def try_register_delivery_version(
     try:
         with SessionLocal() as db:
             row = register_delivery_version(
-                db, plan_run_id=plan_run_id, platform=platform, now=now,
+                db, plan_run_id=plan_run_id, platform=platform,
             )
             db.commit()
             return row.version_no if row is not None else None

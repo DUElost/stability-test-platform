@@ -104,6 +104,20 @@ def _register(db, tmp_path, *, run_id=42, platform="mtk", now=None):
         db, plan_run_id=run_id, platform=platform, root=str(tmp_path), now=now)
 
 
+def _patch_sweep_env(monkeypatch, tmp_path, factory, settings, module):
+    from backend.services import shadow_scan_rounds as shadow
+    monkeypatch.setattr(shadow, "SessionLocal", factory)
+    monkeypatch.setattr(shadow, "get_scheduler_settings", lambda: settings)
+    monkeypatch.setattr(shadow, "resolve_shared_storage_root", lambda: str(tmp_path))
+    monkeypatch.setattr(shadow, "enqueue_sync", Mock())
+    monkeypatch.setattr(facts, "list_shadow_scan_run_ids", lambda *_a, **_kw: [])
+    monkeypatch.setattr(shadow, "_advance_run",
+                        lambda *_a, **_kw: (_ for _ in ()).throw(AssertionError("advanced")))
+    monkeypatch.setattr(module, "SessionLocal", factory)
+    monkeypatch.setattr(module, "get_scheduler_settings", lambda: settings)
+    monkeypatch.setattr(module, "resolve_shared_storage_root", lambda: str(tmp_path))
+
+
 def test_final_merge_registers_v1_export_and_scope_only(db_session, sample_host, tmp_path):
     _plan_run(db_session)
     final = _round(db_session, 42, 1, "FINAL",
@@ -541,25 +555,40 @@ def test_registration_failure_retries_on_next_sweep(
         assert facts.list_shadow_delivery_due_run_ids(db, platform="mtk") == []
     assert final.merge_status == "OK"
 
-def test_due_list_uses_round_ids_not_registration_time(db_session, sample_host, tmp_path):
+def test_registration_uses_max_merged_at_for_sweep_race(db_session, sample_host, tmp_path):
     _plan_run(db_session)
     final = _round(db_session, 42, 1, "FINAL", [_unit(sample_host.id, "EMPTY")])
     db_session.commit()
-    registered_at = datetime.now(timezone.utc)
-    version = _register(db_session, tmp_path, now=registered_at)
+    sweep_started = datetime.now(timezone.utc)
+    merged_at = sweep_started + timedelta(minutes=5)
+    final.merged_at = merged_at
+    db_session.commit()
+
+    # merge 在 sweep 起点之后、登记之前提交：registered_at 必须取 merged_at。
+    version = _register(db_session, tmp_path, now=sweep_started)
+    db_session.commit()
+    assert version.round_ids == [final.id]
+    assert version.registered_at == merged_at
+    assert facts.list_shadow_delivery_due_run_ids(db_session, platform="mtk") == []
+
+
+def test_due_list_includes_new_terminal_round_not_in_latest(db_session, sample_host, tmp_path):
+    _plan_run(db_session)
+    final = _round(db_session, 42, 1, "FINAL", [_unit(sample_host.id, "EMPTY")])
+    db_session.commit()
+    version = _register(db_session, tmp_path)
     db_session.commit()
     assert version.round_ids == [final.id]
 
-    # 人为让终态轮次晚于登记时间；内容未变，按时间判据会再次入选。
-    final.merged_at = registered_at + timedelta(minutes=5)
-    db_session.commit()
-    assert facts.list_shadow_delivery_due_run_ids(db_session, platform="mtk") == []
-
-    # 只有出现一个不在最新版本 round_ids 里的终态轮次，才重新入选。
     supplement = _round(db_session, 42, 2, "SUPPLEMENT", [_unit(sample_host.id, "EMPTY")])
     db_session.commit()
     assert supplement.id not in version.round_ids
     assert facts.list_shadow_delivery_due_run_ids(db_session, platform="mtk") == [42]
+
+    v2 = _register(db_session, tmp_path)
+    db_session.commit()
+    assert v2.version_no == 2
+    assert facts.list_shadow_delivery_due_run_ids(db_session, platform="mtk") == []
 
 
 def test_due_list_excludes_non_current_and_unfinished_final(db_session, sample_host):
@@ -575,4 +604,94 @@ def test_due_list_excludes_non_current_and_unfinished_final(db_session, sample_h
     _round(db_session, 44, 2, "SUPPLEMENT", [_unit(sample_host.id, "EMPTY")])
     db_session.commit()
 
+    assert facts.list_shadow_delivery_due_run_ids(db_session, platform="mtk") == []
+
+def test_remerge_after_reset_registers_v2_when_merge_path_failed(
+    db_session, sample_host, tmp_path, monkeypatch, caplog,
+):
+    from backend.services import shadow_scan_rounds as shadow
+    _plan_run(db_session)
+    final = _round(db_session, 42, 1, "FINAL", [_unit(sample_host.id, "EMPTY")],
+                   merge="FAILED_FINAL")
+    db_session.commit()
+    v1 = _register(db_session, tmp_path)
+    db_session.commit()
+    assert v1.version_no == 1
+
+    facts.reset_failed_final_shadow_merge(db_session, round_id=final.id)
+    db_session.commit()
+    facts.record_scan_round_merge(db_session, round_id=final.id, status="OK", summary={})
+    db_session.commit()
+    final.merged_at = v1.registered_at + timedelta(seconds=5)
+    db_session.commit()
+
+    factory = sessionmaker(bind=db_session.get_bind())
+    settings = SchedulerSettings(stp_scan_round_shadow_enabled=True)
+    module = _delivery()
+    _patch_sweep_env(monkeypatch, tmp_path, factory, settings, module)
+    original = module.register_delivery_version
+    monkeypatch.setattr(module, "register_delivery_version",
+                        Mock(side_effect=RuntimeError("merge path registration failure")))
+
+    # merge 路径的登记失败，但轮次已重新 merge，补偿清单必须仍能发现。
+    assert module.try_register_delivery_version(42) is None
+    with factory() as db:
+        assert [row.version_no for row in _versions(db)] == [1]
+        assert facts.list_shadow_delivery_due_run_ids(db, platform="mtk") == [42]
+    assert any("shadow_delivery_register_failed" in record.getMessage()
+               for record in caplog.records)
+
+    monkeypatch.setattr(module, "register_delivery_version", original)
+    shadow.sweep_shadow_scan_rounds(now=v1.registered_at)
+    with factory() as db:
+        versions = _versions(db)
+        assert [row.version_no for row in versions] == [1, 2]
+        assert versions[1].registered_at >= final.merged_at
+        assert facts.list_shadow_delivery_due_run_ids(db, platform="mtk") == []
+    shadow.sweep_shadow_scan_rounds(now=v1.registered_at)
+    with factory() as db:
+        assert [row.version_no for row in _versions(db)] == [1, 2]
+
+
+def test_remerge_with_identical_content_still_registers_v2(
+    db_session, sample_host, tmp_path,
+):
+    _plan_run(db_session)
+    final = _round(db_session, 42, 1, "FINAL", [_unit(sample_host.id, "EMPTY")],
+                   merge="FAILED_FINAL")
+    db_session.commit()
+    v1 = _register(db_session, tmp_path)
+    db_session.commit()
+    before = (
+        v1.round_ids, v1.effective_coverage, v1.issue_ids, v1.event_ids,
+        v1.software_versions, v1.gaps,
+    )
+
+    facts.reset_failed_final_shadow_merge(db_session, round_id=final.id)
+    db_session.commit()
+    facts.record_scan_round_merge(db_session, round_id=final.id, status="OK", summary={})
+    db_session.commit()
+    final.merged_at = v1.registered_at + timedelta(seconds=5)
+    db_session.commit()
+
+    v2 = _register(db_session, tmp_path)
+    db_session.commit()
+    assert v2.version_no == 2
+    assert (
+        v2.round_ids, v2.effective_coverage, v2.issue_ids, v2.event_ids,
+        v2.software_versions, v2.gaps,
+    ) == before
+    assert v2.stats_snapshot_version != v1.stats_snapshot_version
+    assert v2.registered_at >= final.merged_at
+    assert facts.list_shadow_delivery_due_run_ids(db_session, platform="mtk") == []
+
+
+def test_due_list_excludes_deleted_plan_run(db_session, sample_host):
+    _plan_run(db_session, 45)
+    _round(db_session, 45, 1, "FINAL", [_unit(sample_host.id, "EMPTY")])
+    db_session.commit()
+    assert facts.list_shadow_delivery_due_run_ids(db_session, platform="mtk") == [45]
+
+    db_session.delete(db_session.get(PlanRun, 45))
+    db_session.commit()
     assert facts.list_shadow_delivery_due_run_ids(db_session, platform="mtk") == []

@@ -17,11 +17,13 @@ OK / NO_INPUT / FAILED / FAILED_FINAL。本单元不新增迁移。
 二者共用同一实现：
 - 主路径：影子 merge 任务在 merge_round 返回终态（OK / NO_INPUT / FAILED_FINAL）后，
   且轮次为 FINAL 或 SUPPLEMENT 时，直接调用 try_register_delivery_version。
-- 补偿路径：sweep_shadow_scan_rounds 每个检查周期按轮次 id 查询「存在已终态
-  FINAL/SUPPLEMENT、且其 id 不在最新交付版本 round_ids 里」的 CURRENT 分区；
-  非 CURRENT、FINAL 未关闭或 merge 未终态的分区在 SQL 中直接排除。不比较登记
-  时间，因此登记去重路径不会逐周期重复入选；首次登记缺失、登记失败或之后又有
-  轮次终态时才会再次进入。
+- 补偿路径：sweep_shadow_scan_rounds 每个检查周期查询满足以下任一条件的 CURRENT
+  分区：(a) 存在已终态 FINAL/SUPPLEMENT、且其 id 不在最新交付版本 round_ids 里；
+  (b) 最新版本已纳入的轮次中，有轮次的 merged_at 严格晚于 latest.registered_at。
+  同时排除非 CURRENT、FINAL 未关闭/merge 未终态、以及 PlanRun 已不存在的分区。
+  登记时 registered_at = max(登记实时时间, 依据轮次最大 merged_at)，不使用
+  sweep 起点时间；条件 (b) 成立时跳过内容去重，强制写新版本。因此登记后两条
+  判据都不再成立，清单收敛。
   try_register 的失败只记 shadow_delivery_register_failed 并返回 None，不向
   merge 任务或 sweep 抛出；下一次检查周期由补偿查询重试。
 
@@ -42,7 +44,8 @@ _meta/{plan_run_id}/_delivery/{platform}/v{version_no}.json。backend/agent/
 行」：库失败或事务未提交只会留下可被下次覆盖的孤儿文件，不会出现有登记无文件；
 stats_snapshot_version 直接取写入字节的 sha256，rename 保证文件内容与哈希同源。
 PlanRun 行锁串行化同一分区的登记，版本号按最新版本 +1 分配；内容比较排除
-registered_at，相等时不写库也不写文件，旧版本与其导出文件保持不变。
+registered_at，相等且没有「已纳入轮次重新 merge」时（条件 b）不写库也不写文件；
+条件 (b) 成立时即使内容相同也写新版本，旧版本与其导出文件保持不变。
 
 交付状态由纯函数 evaluate_delivery_status 按 D9 第 5 条顺序判定：最后一轮未关闭、
 最近一次 merge 失败或无输入、有效覆盖为空、代表重试中分别返回未就绪；发布状态
@@ -79,10 +82,10 @@ effective_coverage 的薄适配入口，供 G6/G7 使用。交付状态不持久
 testcontainers PostgreSQL 16。
 
 - 反例先行：实现前在 origin/main（80c9be3c6）上先写 20 项验收用例，全部因
-  backend.services.shadow_delivery 不存在失败（20 failed）；实现后通过。最终 25 项
-  在 origin/main 的独立 worktree 上复跑仍全部报错（25 errors，模块不存在），在实现
-  分支 backend/tests/services/test_shadow_delivery.py 为 25 passed；新增 5 项是终态
-  失败登记、下周期重试与两条补偿清单回归。
+  backend.services.shadow_delivery 不存在失败（20 failed）；实现后通过。最终 29 项
+  在 origin/main 的独立 worktree 上复跑仍全部报错（29 errors，模块不存在），在实现
+  分支 backend/tests/services/test_shadow_delivery.py 为 29 passed；新增 4 项是
+  重新 merge 补偿、内容不变强制新版本、PlanRun 删除排除与 sweep 竞态。
 - 验收 1–10 对应覆盖：FINAL OK + RECEIVED/EMPTY 登记 v1 且 scope_only；重复触发
   不新增版本；补充轮补 host 后 v2 且 v1 不变；全 MISSING 返回未就绪（覆盖为空）；
   NO_INPUT / FAILED_FINAL / FAILED 返回未就绪；INCOMPLETE 进入 gaps；发布状态
@@ -100,12 +103,14 @@ testcontainers PostgreSQL 16。
      从 NOT_READY 变红为 READY_WITH_GAPS；恢复后绿。
   3) 有效覆盖只取 FINAL 轮，补充轮测试断言 [True, True] 变红为 [True, False]；
      恢复后绿。
-- 补偿清单定向反例：把 list_shadow_delivery_due_run_ids 恢复成
-  merged_at >= registered_at 的时间判据后，两条新测试同时变红：
-  1) 版本登记后人为把 merged_at 调到 registered_at 之后，旧判据返回 [42]，
-     新判据返回 []；
-  2) DEDUP_FIRST 分区与「FINAL 未终态、补充轮已终态」分区，旧判据返回 [43, 44]，
-     新判据返回 []。恢复按轮次 id 的判据后两条通过。
+- 本轮补偿清单定向反例（每次改后清 __pycache__，恢复后再清）：
+  1) 去掉条件 (b)（remerged）：重新 merge 且 merge 路径登记失败的竞态测试变红，
+     下一次 sweep 没有登记 v2；
+  2) 去掉 registered_at 的 max(merged_at)：sweep 竞态测试的 registered_at 不再
+     等于 merged_at，且分区仍留在清单里；
+  3) 去掉 forced 跳过内容去重：重新 merge 后内容相同的测试只返回 v1，未登记 v2；
+  4) 去掉 PlanRun EXISTS：删除 PlanRun 的测试再次入选 [45]。
+  恢复后四条均绿；上一轮的 DEDUP_FIRST、未纳入轮次与新增轮次测试继续通过。
 - Agent 载荷等值：git diff origin/main...HEAD -- backend/agent/ 为空；
   collect_artifact_entries('backend/agent') + digest_entries 在 origin/main
   80c9be3c6 与 HEAD 均为
@@ -114,7 +119,7 @@ testcontainers PostgreSQL 16。
   sha256:61f1a02bf53e6062dd7ce03fafc1fd3e65f08b09353dd10a1d92efa57ba5e36e。
 - 相关回归：test_shadow_delivery / test_shadow_merge / test_shadow_scan_rounds /
   test_issue_fact_store / test_shadow_scan_send_3875 / test_shadow_scan_settled_3875
-  共 110 passed。
+  共 114 passed。
 - 静态门禁：scripts/run_gates.py check:quick 16 gates 全绿（含 Ruff、环境变量清单、
   控制面 import 边界、函数内 import 棘轮、tool-manifest、transitions）。
 - 未运行：完整 backend/tests 与 CI required checks；以 PR 的 required checks 为准。

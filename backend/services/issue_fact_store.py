@@ -854,6 +854,7 @@ def list_shadow_delivery_due_run_ids(db: Session, *, platform: str) -> list[int]
     latest = select(
         DeliveryVersion.plan_run_id.label("run_id"),
         DeliveryVersion.round_ids.label("round_ids"),
+        DeliveryVersion.registered_at.label("registered_at"),
     ).where(
         func.lower(DeliveryVersion.platform) == platform.lower(),
     ).distinct(DeliveryVersion.plan_run_id).order_by(
@@ -873,6 +874,19 @@ def list_shadow_delivery_due_run_ids(db: Session, *, platform: str) -> list[int]
         func.lower(PartitionMode.platform) == platform.lower(),
         PartitionMode.mode != PARTITION_MODE_CURRENT,
     ).exists()
+    remerged_round = aliased(ScanRound)
+    remerged = select(remerged_round.id).where(
+        remerged_round.plan_run_id == latest.c.run_id,
+        func.lower(remerged_round.platform) == platform.lower(),
+        latest.c.round_ids.contains(func.jsonb_build_array(remerged_round.id)),
+        remerged_round.status == SCAN_ROUND_STATUS_CLOSED,
+        remerged_round.merge_status.in_(["OK", "NO_INPUT", "FAILED_FINAL"]),
+        remerged_round.merged_at.isnot(None),
+        remerged_round.merged_at > latest.c.registered_at,
+    ).exists()
+    plan_run_exists = select(PlanRun.id).where(
+        PlanRun.id == ScanRound.plan_run_id,
+    ).exists()
     return list(db.execute(
         select(ScanRound.plan_run_id).select_from(ScanRound).outerjoin(
             latest, latest.c.run_id == ScanRound.plan_run_id,
@@ -883,9 +897,11 @@ def list_shadow_delivery_due_run_ids(db: Session, *, platform: str) -> list[int]
             ScanRound.merge_status.in_(["OK", "NO_INPUT", "FAILED_FINAL"]),
             final_terminal,
             ~non_current,
+            plan_run_exists,
             or_(
                 latest.c.run_id.is_(None),
                 ~latest.c.round_ids.contains(func.jsonb_build_array(ScanRound.id)),
+                remerged,
             ),
         ).distinct().order_by(ScanRound.plan_run_id)
     ).scalars())

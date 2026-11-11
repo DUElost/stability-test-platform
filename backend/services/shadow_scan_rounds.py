@@ -304,7 +304,7 @@ def sweep_shadow_scan_rounds(*, now=None):
                 )
             if run_id in delivery_run_ids:
                 shadow_delivery.try_register_delivery_version(
-                    run_id, platform=_PLATFORM, now=now,
+                    run_id, platform=_PLATFORM,
                 )
         except Exception:
             logger.exception("shadow_scan_sweep_failed plan_run=%d", run_id)
