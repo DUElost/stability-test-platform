@@ -20,16 +20,10 @@ v1.4.2（#3892，15.93 LX3 金丝雀 PlanRun 1255 / Job 206578）：
     只置布尔量，不碰任何同步原语（信号处理器可能打断持有 Event 内部锁的主线程）。
   - 复核 #3924 第 4 轮：vbus 下每一处绑定标记都严格解析并逐一核对（标记数 ≠ 严格回显数、
     带端口字样的行里有替换字符，均止损）；结算按步骤记完成，信号中途重入时接着做完。
-  - 复核 #3924 第 5 轮（P2 完整日志）：标记只认 `portName is` / `symbolic_link`，与严格解析
-    同为不区分大小写；V5 行内每一处 `/dev/ttyACM` 引用须为完整节点名并解析到槽位口；
-    wrapper 供电、authorized 写入与结算是信号临界区，信号延后到最外层退出再投递。
-  - 复核 #3924 第 6 轮退回规划者后重设计：tty 引用白名单（`/dev/ttyACM<数字>` 后只能是
-    行尾、空白或 `)`）；V5/V6 标记计数与严格解析同为不区分大小写；信号处理器不延后、不取锁，
-    置位后有界排空在途特权操作（≤3 秒，整体 ≤7 秒 < Agent 8 秒宽限），排空未完时保留门控状态
-    文件交给孤儿恢复（已知限制，Owner 裁定）。第 5 轮的信号临界区已移除。
-  - 复核 #3924 第 7 轮退回规划者：门控写 0 之前先落盘（结算按并集恢复）；信号路径不删
-    状态文件；孤儿恢复移到持锁之后并先等本机切电 / authorized wrapper 结束（≤80 秒，超时
-    不刷）；信号预算剩余 <0.5 秒时拒绝一切特权操作；V5 出现 symbolic_link 即止损。
+  - 复核 #3924 第 5–8 轮的回显判据（V5 只认 `com portName is`；行内 `/dev/ttyACM` 白名单
+    `/dev/ttyACM<数字>` 后只能是行尾、空白或 `)`；标记计数与严格解析同为不区分大小写；V5
+    出现 symbolic_link 即止损）。同期提出的在途特权操作与门控恢复机制按 Owner 2026-11-11
+    裁定拆出另做，本版恢复行为与第 4 轮（结算按步骤、停采样不取锁）一致。
   - V6、非 vbus 的 V5 命令行与 1.4.1 逐字一致。
 
 v1.4.1（#3892 推广，15.93 试点）：
@@ -921,7 +915,7 @@ def _priv_wrapper_usable() -> bool:
         try:
             proc = subprocess.run(
                 ["sudo", "-n", _PRIV_WRAPPER, "usb-authorized", "--help"],
-                capture_output=True, timeout=_signal_timeout(10),
+                capture_output=True, timeout=10,
             )
             _priv_wrapper_cache[0] = proc.returncode == 0
         except (OSError, subprocess.TimeoutExpired):
@@ -938,32 +932,26 @@ def _set_authorized(port: str, value: str, base: str = _SYSFS_USB_BASE) -> "tupl
     """
     path = os.path.join(base, port, "authorized")
     try:
-        with _Privileged():
-            try:
-                with open(path, "w") as handle:
-                    handle.write(value)
-                return True, "direct"
-            except (OSError, ValueError):
-                pass
-            if not _priv_wrapper_usable():
-                return False, "no-priv-face"
-            try:
-                proc = subprocess.run(
-                    ["sudo", "-n", _PRIV_WRAPPER, "usb-authorized",
-                     "--port", port, "--value", value],
-                    capture_output=True, timeout=_signal_timeout(10),
-                )
-                return proc.returncode == 0, "wrapper"
-            except (OSError, subprocess.TimeoutExpired):
-                return False, "wrapper-failed"
-    except _SettlingRefused as exc:
-        return False, ("signal-budget-exhausted" if exc.args == ("budget",)
-                       else "signal-settling")
+        with open(path, "w") as handle:
+            handle.write(value)
+        return True, "direct"
+    except (OSError, ValueError):
+        pass
+    if not _priv_wrapper_usable():
+        return False, "no-priv-face"
+    try:
+        proc = subprocess.run(
+            ["sudo", "-n", _PRIV_WRAPPER, "usb-authorized",
+             "--port", port, "--value", value],
+            capture_output=True, timeout=10,
+        )
+        return proc.returncode == 0, "wrapper"
+    except (OSError, subprocess.TimeoutExpired):
+        return False, "wrapper-failed"
 
 
 def _gate_other_mtk(target_port: "str | None", base: str = _SYSFS_USB_BASE,
-                    hold_pids: "set[str] | None" = None,
-                    before_write: "callable | None" = None) -> dict:
+                    hold_pids: "set[str] | None" = None) -> dict:
     """隐藏除 target_port 外所有刷机态 MTK 口。返回报告（永不 raise）。
 
     hold_pids: 覆盖被隐藏的 pid 集合。v1.3.9 门控保持传 _BROM_STAGE_PIDS
@@ -990,10 +978,6 @@ def _gate_other_mtk(target_port: "str | None", base: str = _SYSFS_USB_BASE,
         report["skipped_reason"] = "no other flash-stage MTK devices visible"
         return report
 
-    # v1.4.2（ADR-0063 v1.3 D3 第 4 条「门控先落盘」，复核 #3924 第 7 轮）：写 authorized=0
-    # 之前先把候选口记入恢复记录；记录多出未写成的口无害（恢复时写 1）。
-    if before_write is not None:
-        report["persisted_before_write"] = bool(before_write(sorted(others)))
     # 直写能成（root 跑 agent）就不必探测 sudo；探测留给首次失败后。
     for name in sorted(others):
         ok, how = _set_authorized(name, "0", base)
@@ -1025,8 +1009,8 @@ def _restore_gated(gated: "dict | None", base: str = _SYSFS_USB_BASE) -> dict:
 
 def _persist_gated_ports(
     hidden: list, path: str = _GATE_STATE_PATH,
-) -> bool:
-    """#1591：把当前隐藏口落到磁盘，供 SIGKILL 后孤儿恢复。返回是否写成。"""
+) -> None:
+    """#1591：把当前隐藏口落到磁盘，供 SIGKILL 后孤儿恢复。"""
     try:
         payload = json.dumps(
             {"hidden": list(hidden), "pid": os.getpid()},
@@ -1037,8 +1021,7 @@ def _persist_gated_ports(
             handle.write(payload)
         os.replace(tmp, path)
     except OSError:
-        return False
-    return True
+        pass
 
 
 def _clear_gated_state(path: str = _GATE_STATE_PATH) -> None:
@@ -1751,172 +1734,6 @@ def _acquire_host_lock(on_wait_tick: "callable | None" = None):
     return lock_fd
 
 
-# v1.4.2（ADR-0063 v1.3 D3 第 4 条「信号打断停止流程」，复核 #3924 第 6 轮退回规划者后重设计）：
-# 处理器不取任何锁、不延后信号。它先置位 settling，再在有界时间内等在途特权操作做完，然后结算：
-#   - 非主线程（reader 回调里的重新门控、上电）的特权操作进出时只改本线程在 `_INFLIGHT` 里的计数；
-#     进入时先登记、再看 settling，置位之后新的特权操作一律拒绝（GIL 下登记与置位顺序可见）；
-#   - 主线程被处理器打断时自己不会再继续执行，它的在途 wrapper 子进程按 /proc 里本进程的
-#     wrapper 子进程是否存活来等；
-#   - 排空最多 `_SIGNAL_DRAIN_SECONDS`；从首个信号起整个结算受 `_SIGNAL_SETTLE_BUDGET` 约束，
-#     信号路径里所有特权子进程的超时都截到剩余预算内，保证落在 Agent 的强杀宽限
-#     （pipeline_engine `_script_terminate_grace_seconds("flash_firmware")` = 8 秒）之内；
-#   - 排空超时（已知限制，Owner 2026-11-11 裁定）：结算照做，但保留门控状态文件，
-#     由下次启动的孤儿门控恢复（#1591）兜底；槽位供电由下次 vbus 作业重新断电上电。
-_SIGNAL_SETTLE_BUDGET = 7.0
-_SIGNAL_DRAIN_SECONDS = 3.0
-_SIG_STATE: dict = {"settling": False, "deadline": None, "drain_until": None,
-                    "drain_incomplete": False}
-_INFLIGHT: dict = {}
-_PROC_ROOT = "/proc"
-
-
-class _SettlingRefused(Exception):
-    """信号结算已开始，非主线程不得再发起特权操作；或信号结算预算已用完。"""
-
-
-# 剩余预算低于此值时，信号结算不再发起任何特权操作（复核 #3924 第 7 轮）。
-_SIGNAL_MIN_CALL_SECONDS = 0.5
-
-
-def _signal_budget_exhausted() -> bool:
-    deadline = _SIG_STATE["deadline"]
-    return deadline is not None and deadline - time.monotonic() < _SIGNAL_MIN_CALL_SECONDS
-
-
-class _Privileged:
-    """在途特权操作登记（见 `_SIG_STATE`）。只改本线程的计数，不取锁。"""
-
-    def __enter__(self) -> "_Privileged":
-        self._main = threading.current_thread() is threading.main_thread()
-        if _signal_budget_exhausted():
-            self._main = True  # 未登记，退出时不撤回
-            raise _SettlingRefused("budget")
-        if not self._main:
-            self._tid = threading.get_ident()
-            _INFLIGHT[self._tid] = _INFLIGHT.get(self._tid, 0) + 1  # 先登记
-            if _SIG_STATE["settling"]:                              # 再看置位
-                _INFLIGHT[self._tid] -= 1
-                raise _SettlingRefused()
-        return self
-
-    def __exit__(self, *exc) -> bool:
-        if not self._main:
-            _INFLIGHT[self._tid] -= 1
-        return False
-
-
-def _signal_timeout(default: float) -> float:
-    """信号结算期间把特权子进程的超时截到剩余预算内；平时原样返回。"""
-    deadline = _SIG_STATE["deadline"]
-    if deadline is None:
-        return default
-    return max(0.05, min(default, deadline - time.monotonic()))
-
-
-def _wrapper_children_alive(proc_root: "str | None" = None) -> bool:
-    """本进程是否还有存活（非僵尸）的 wrapper 子进程。只用 os 级调用，不取锁。"""
-    root = proc_root or _PROC_ROOT
-    me = os.getpid()
-    marker = _PRIV_WRAPPER.encode()
-    try:
-        entries = os.listdir(root)
-    except OSError:
-        return False
-    for entry in entries:
-        if not entry.isdigit():
-            continue
-        try:
-            fd = os.open(os.path.join(root, entry, "stat"), os.O_RDONLY)
-            try:
-                stat = os.read(fd, 4096)
-            finally:
-                os.close(fd)
-            fields = stat.rsplit(b")", 1)[-1].split()
-            if len(fields) < 2 or int(fields[1]) != me or fields[0] == b"Z":
-                continue
-            fd = os.open(os.path.join(root, entry, "cmdline"), os.O_RDONLY)
-            try:
-                cmdline = os.read(fd, 65536)
-            finally:
-                os.close(fd)
-        except (OSError, ValueError):
-            continue
-        if marker in cmdline:
-            return True
-    return False
-
-
-_WRAPPER_GATE_SUBCOMMANDS = (b"usb-power", b"usb-authorized")
-# wrapper 内 uhubctl 超时 60 秒（stp_agent_priv.USB_POWER_TIMEOUT_SECONDS），本脚本对 wrapper 的
-# 调用超时 75 秒；静止等待取 80 秒。
-_WRAPPER_QUIESCE_SECONDS = 80.0
-
-
-def _host_gate_wrappers_alive(proc_root: "str | None" = None) -> bool:
-    """本机是否还有存活（非僵尸）的切电 / 写 authorized wrapper 进程（不论父进程）。"""
-    root = proc_root or _PROC_ROOT
-    marker = _PRIV_WRAPPER.encode()
-    try:
-        entries = os.listdir(root)
-    except OSError:
-        return False
-    for entry in entries:
-        if not entry.isdigit() or int(entry) == os.getpid():
-            continue
-        try:
-            with open(os.path.join(root, entry, "stat"), "rb") as handle:
-                fields = handle.read().rsplit(b")", 1)[-1].split()
-            if not fields or fields[0] == b"Z":
-                continue
-            with open(os.path.join(root, entry, "cmdline"), "rb") as handle:
-                argv = handle.read().split(b"\0")
-        except OSError:
-            continue
-        if any(marker in a for a in argv) and any(a in _WRAPPER_GATE_SUBCOMMANDS for a in argv):
-            return True
-    return False
-
-
-def _await_gate_wrappers_quiescent(timeout: float = _WRAPPER_QUIESCE_SECONDS,
-                                   proc_root: "str | None" = None,
-                                   poll: float = 0.5) -> bool:
-    """ADR-0063 v1.3 D3 第 4 条「恢复前提」：持锁之后、孤儿恢复之前，等上一任的 wrapper 结束。"""
-    deadline = time.monotonic() + timeout
-    while _host_gate_wrappers_alive(proc_root):
-        if time.monotonic() >= deadline:
-            return False
-        time.sleep(poll)
-    return True
-
-
-def _drain_inflight(until: float, proc_root: "str | None" = None) -> bool:
-    """等非主线程的在途特权操作与 wrapper 子进程结束，最迟到 `until`；返回是否排空。"""
-    main = threading.main_thread().ident
-    while True:
-        try:
-            busy = any(n > 0 for tid, n in list(_INFLIGHT.items()) if tid != main)
-        except RuntimeError:
-            busy = True
-        if not busy and not _wrapper_children_alive(proc_root):
-            return True
-        if time.monotonic() >= until:
-            return False
-        time.sleep(0.05)
-
-
-def _clear_gated_state_after_restore(path: "str | None" = None) -> bool:
-    """恢复门控之后清掉状态文件；返回是否已清。
-
-    ADR-0063 v1.3 D3 第 4 条（复核 #3924 第 7 轮）：信号结算一律保留状态文件——排空只是尽力
-    而为，迟到的门控写入由下次启动在持锁且 wrapper 静止之后的孤儿恢复撤销（#1591）。
-    正常结算只在此刻没有在途特权操作时才清。
-    """
-    if _SIG_STATE["settling"] or not _drain_inflight(time.monotonic()):
-        return False
-    _clear_gated_state(path or _GATE_STATE_PATH)
-    return True
-
-
 def _install_termination_cleanup(settle: "callable") -> None:
     """#1025：注册 SIGTERM/SIGINT/SIGHUP —— 被取消也要先恢复门控再死。
 
@@ -1929,14 +1746,6 @@ def _install_termination_cleanup(settle: "callable") -> None:
                  命名空间不变（ADR-0033 §D2：信号死亡视为工具缺陷，语义不改）。
     """
     def _on_signal(signum, _frame) -> None:
-        # v1.4.2：不取锁、不延后。先置位，再有界排空在途特权操作，然后结算（见 `_SIG_STATE`）。
-        _SIG_STATE["settling"] = True
-        if _SIG_STATE["deadline"] is None:
-            now = time.monotonic()
-            _SIG_STATE["deadline"] = now + _SIGNAL_SETTLE_BUDGET
-            _SIG_STATE["drain_until"] = now + _SIGNAL_DRAIN_SECONDS
-        if not _drain_inflight(_SIG_STATE["drain_until"]):
-            _SIG_STATE["drain_incomplete"] = True
         try:
             settle(int(signum))
         except Exception:
@@ -2810,19 +2619,14 @@ def _usb_power(serial: str, action: str, slot: dict) -> dict:
     started = time.monotonic()
     expect = f"{slot['hub_location']}:{slot['port']}"
     try:
-        with _Privileged():
-            proc = subprocess.run(
-                ["sudo", "-n", _PRIV_WRAPPER, "usb-power",
-                 "--serial", serial, "--expect-slot", expect, "--action", action],
-                capture_output=True, text=True, timeout=_signal_timeout(75),
-            )
+        proc = subprocess.run(
+            ["sudo", "-n", _PRIV_WRAPPER, "usb-power",
+             "--serial", serial, "--expect-slot", expect, "--action", action],
+            capture_output=True, text=True, timeout=75,
+        )
         ok = proc.returncode == 0
         tail = ((proc.stdout or "") + (proc.stderr or "")).strip()[-200:]
         rc: "int | None" = proc.returncode
-    except _SettlingRefused as exc:
-        ok, rc, tail = False, None, ("refused: signal settle budget exhausted"
-                                     if exc.args == ("budget",)
-                                     else "refused: signal settle in progress")
     except (OSError, subprocess.TimeoutExpired) as exc:
         ok, rc, tail = False, None, str(exc)[:200]
     return {"action": action, "ok": ok, "rc": rc, "tail": tail,
@@ -3331,6 +3135,14 @@ def main() -> None:
                                  round(time.time() - started_at, 2)})
             return
 
+    # #1591：上次 abort/SIGKILL 可能打断 settle——先恢复孤儿门控再抢锁
+    orphan_gates = _restore_orphaned_gates()
+    if orphan_gates.get("restored") or orphan_gates.get("errors"):
+        _emit_progress(
+            seq, stage="orphan-gate-restore",
+            result=json.dumps(orphan_gates, ensure_ascii=False),
+        )
+
     try:
         lock_fd = _acquire_host_lock(
             on_wait_tick=lambda waited: _emit_progress(
@@ -3343,24 +3155,6 @@ def main() -> None:
         return
     lock_acquired_at = time.time()
 
-    # #1591：上次 abort/SIGKILL 可能打断 settle——恢复孤儿门控。v1.4.2（ADR-0063 v1.3 D3 第 4 条
-    # 「恢复前提」，复核 #3924 第 7 轮）：必须在持锁之后（上一任进程已退出，不会再有进程内写入），
-    # 并等本机的切电 / authorized wrapper 全部结束（上一任遗留的 wrapper 不随父进程退出）；
-    # 等不到就不刷，不碰任何设备。旧顺序在抢锁之前恢复，会撤掉正在持锁刷机的作业的门控。
-    if not _await_gate_wrappers_quiescent():
-        _release_host_lock(lock_fd)
-        _output(False, error_message=(
-            "上一任的 USB 切电 / authorized wrapper 在 "
-            f"{int(_WRAPPER_QUIESCE_SECONDS)} 秒内仍未结束：不恢复孤儿门控、不刷机"),
-            metrics={"route": route, "version_check": version_check})
-        return
-    orphan_gates = _restore_orphaned_gates()
-    if orphan_gates.get("restored") or orphan_gates.get("errors"):
-        _emit_progress(
-            seq, stage="orphan-gate-restore",
-            result=json.dumps(orphan_gates, ensure_ascii=False),
-        )
-
     # ── v1.3.0：门控（必须在 adb reboot 之前反查目标口——BROM 态无 serial）
     # v1.3.20：目标口优先取身份判定结果；判定已跑过（V6）时不再二次反查，
     # 避免"判定用一个口、门控用另一个口"的两条真相。
@@ -3369,18 +3163,9 @@ def main() -> None:
         # 显式传 base：默认参数在定义时绑定，不传就吃不到运行期的基址
         target_port = _port_for_serial(serial, _SYSFS_USB_BASE)
     initial_gate_pids = _BROM_GATE_PIDS if gate_pid_scope == "brom" else None
-    # v1.4.2（复核 #3924 第 7 轮）：恢复记录 = 曾准备写 0 的口（先落盘再写）；结算按它恢复。
-    gate_intent: list = []
-
-    def _intend_gate(names: list) -> bool:
-        for name in names:
-            if name not in gate_intent:
-                gate_intent.append(name)
-        return _persist_gated_ports(gate_intent)
-
     if gate_other_mtk:
         gating = _gate_other_mtk(target_port, base=_SYSFS_USB_BASE,
-                                 hold_pids=initial_gate_pids, before_write=_intend_gate)
+                                 hold_pids=initial_gate_pids)
     else:
         gating = {"hidden": [], "errors": {},
                   "skipped_reason": "disabled by params",
@@ -3391,6 +3176,8 @@ def main() -> None:
          "target_port": gating.get("target_port")},
         ensure_ascii=False))
     hidden_ports: list = list(gating.get("hidden", []))
+    if hidden_ports:
+        _persist_gated_ports(hidden_ports)
 
     # require_binding ⇒ 目标口非空：这一点在**抢锁之前**的身份判定里已经是硬
     # 判据（判不出即 fail-closed），这里不再重复检查——在锁内 return 会漏结算。
@@ -3443,7 +3230,7 @@ def main() -> None:
     def _settle_stop_sampler() -> None:
         ctx = vbus_state.get("ctx")
         if ctx is not None and ctx.get("tty_history") is not None:
-            ctx["tty_history"].stop(timeout=_signal_timeout(2.0))
+            ctx["tty_history"].stop()
 
     def _settle_isolate() -> None:
         if vbus and not vbus_keep_power and vbus_report.get("power_actions") \
@@ -3462,10 +3249,8 @@ def main() -> None:
             vbus_report["isolated"] = echo_ok
 
     def _settle_restore() -> None:
-        gating["restore"] = _restore_gated(
-            {"hidden": list(dict.fromkeys(hidden_ports + gate_intent))}, _SYSFS_USB_BASE)
-        if not _clear_gated_state_after_restore():
-            gating["restore"]["orphan_state_kept"] = True
+        gating["restore"] = _restore_gated({"hidden": hidden_ports}, _SYSFS_USB_BASE)
+        _clear_gated_state()
 
     def _settle_release() -> None:
         settle_done.add("release")  # 先置位：释放锁不重入
@@ -3477,8 +3262,7 @@ def main() -> None:
         if "release" in settle_done:
             return
         lock_settled = True
-        # 复核 #3924 第 4 项：先停采样、冻结记录，再动供电与锁。信号落在结算中途时，处理器
-        # 先排空在途特权操作，再从未完成的一步接着做（第 6 轮）。
+        # 复核 #3924 第 4 项：先停采样、冻结记录，再动供电与锁。
         _settle_step("stop-sampler", _settle_stop_sampler)
         _settle_step("isolate", _settle_isolate)
         _settle_step("restore", _settle_restore)
@@ -3573,11 +3357,12 @@ def main() -> None:
                 # v1.3.20：口径与初始门控一致——V6 不得在这里把邻机的正常 adb 态
                 # (201c) 再压制一遍，那正是 run 921 制造出错刷目标的机制。
                 regate = _gate_other_mtk(target_port, base=_SYSFS_USB_BASE,
-                                         hold_pids=initial_gate_pids,
-                                         before_write=_intend_gate)
+                                         hold_pids=initial_gate_pids)
                 for name in regate.get("hidden", []):
                     if name not in hidden_ports:
                         hidden_ports.append(name)
+                if hidden_ports:
+                    _persist_gated_ports(hidden_ports)
 
             # v1.3.3 时序：工具先启动进入 USB 扫描，on_running 回调里再发
             # adb reboot——BROM 窗口只存在于上电最初几秒，观测者必须就位在先
@@ -3612,11 +3397,12 @@ def main() -> None:
                 # 态设备周期 toggle 会制造 udev 风暴,干扰工具捕获目标的
                 # 3 秒 BROM 窗口（run 261 实证:120s S_TIMEOUT）。
                 regate = _gate_other_mtk(target_port, base=_SYSFS_USB_BASE,
-                                         hold_pids=_BROM_STAGE_PIDS,
-                                         before_write=_intend_gate)
+                                         hold_pids=_BROM_STAGE_PIDS)
                 for name in regate.get("hidden", []):
                     if name not in hidden_ports:
                         hidden_ports.append(name)
+                if hidden_ports:
+                    _persist_gated_ports(hidden_ports)
                 regate_count += 1
 
             tty_history = _TtyPortHistory() if v5_vbus_echo else None

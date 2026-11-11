@@ -113,7 +113,7 @@ def _wire_happy_path(monkeypatch, fw_ver: Path) -> None:
     monkeypatch.setattr(ff, "_port_for_serial",
                         lambda serial, base=ff._SYSFS_USB_BASE: "1-7.3.3")
     monkeypatch.setattr(ff, "_gate_other_mtk",
-                        lambda target_port, base=None, hold_pids=None, before_write=None:
+                        lambda target_port, base=None, hold_pids=None:
                         {"hidden": ["1-5.2.4"], "errors": {},
                          "skipped_reason": None, "target_port": target_port})
     monkeypatch.setattr(ff, "_restore_gated",

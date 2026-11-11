@@ -151,7 +151,7 @@ def test_vbus_v5_carries_slot_port_and_brom_gate(tmp_path, monkeypatch, capsys):
     _feed_tool_lines(h, monkeypatch, [_V5_BOUND_LINE], {"ttyACM0": _SLOT_PORT})
     gate_calls = []
     monkeypatch.setattr(v140.ff, "_gate_other_mtk",
-                        lambda port, base=None, hold_pids=None, before_write=None:
+                        lambda port, base=None, hold_pids=None:
                         gate_calls.append(hold_pids) or {"hidden": [], "errors": {}, "target_port": port})
     payload = h.run(monkeypatch, capsys)
     assert payload["success"] is True, payload
@@ -207,7 +207,7 @@ def test_vbus_forces_brom_gate_scope(tmp_path, monkeypatch, capsys, params, env)
     h.launch_script = ["fail", "pass"]
     gate_calls = []
     monkeypatch.setattr(v140.ff, "_gate_other_mtk",
-                        lambda port, base=None, hold_pids=None, before_write=None:
+                        lambda port, base=None, hold_pids=None:
                         gate_calls.append(hold_pids) or {"hidden": [], "errors": {}, "target_port": port})
     payload = h.run(monkeypatch, capsys)
     assert payload["success"] is True, payload

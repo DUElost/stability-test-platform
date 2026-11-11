@@ -106,6 +106,12 @@ Class: feature
   信号路径不删状态文件；孤儿恢复从抢锁之前移到持锁之后，并先等本机 `usb-power` / `usb-authorized` wrapper 全部结束（≤80 秒，超时不刷）；
   剩余预算 <0.5 秒时 `_Privileged` 拒绝一切特权操作；V5 出现 `symbolic_link` 即止损。旧顺序（抢锁之前恢复孤儿门控）还会撤掉正在持锁
   刷机的另一作业的门控，一并修正。
+  复核 #3924 第 8 轮第四次退回规划者（正常结算后 reader 迟到写 0、wrapper 退出后 `uhubctl` 孙进程仍在跑、落盘失败仍写 0、
+  恢复失败仍删记录、预算只查入口）。规划者判断：在途特权操作与门控恢复的时序是 1.4.1 起就有的问题（#1025、#1591），不是 1.4.2 的回归，
+  继续在本 PR 内补判据会持续推迟 V5 回显修复，且关键前提（`/proc` 挂载、`uhubctl` 进程树）需要现场验证。Owner 2026-11-11 在决策卡上选拆分：
+  `flash_firmware.py` 以第 4 轮 `cef0db0` 为底，只移植第 5–8 轮的回显解析改动（`portName is` 标记、tty 引用白名单、标记同源、V5 遇
+  `symbolic_link` 止损）；信号临界区、在途排空、先落盘、持锁后恢复、预算全部撤回，对应测试删除，旧版本测试的 `before_write` 替身改回。
+  ADR-0063 D3 第 4 条改为「范围说明」，反例与设计问题记入 #3933。
 
 ## Alternatives
 
@@ -204,6 +210,8 @@ Class: feature
   第 7 轮后为 106 条，新增 V5 `symbolic_link` 3 例、先落盘、信号与在途时保留记录、恢复顺序、wrapper 识别 5 例、静止等待、预算耗尽。
   9 种变异（V5 放行 `symbolic_link`、不先落盘、信号路径删记录、正常结算忽略在途、预算耗尽不拒绝、僵尸计为存活、不分子命令、
   恢复不含意图记录、不等 wrapper 静止）各至少 1 条变红。旧版本测试里 `_gate_other_mtk` 的替身补了 `before_write` 形参。
+  第 8 轮拆分后：`git diff cef0db0` 只剩文件头说明与回显解析区域（正则与 `_check_bound_echo` / `_check_vbus_bind_line`）；
+  `test_flash_firmware_v142.py` 81 条通过（第 1–4 轮全部用例 + 第 5–7 轮回显用例），`-k flash` 414 passed。
 
 ## Revisit
 

@@ -203,7 +203,7 @@ def _fw_dir(tmp_path: Path) -> Path:
 def _wire_happy_path(monkeypatch, fw_ver: Path, *, boot_stable_ok: bool):
     events: list = []
 
-    def fake_gate(target_port, base=ff._SYSFS_USB_BASE, hold_pids=None, before_write=None):
+    def fake_gate(target_port, base=ff._SYSFS_USB_BASE, hold_pids=None):
         return {"hidden": ["1-5.2.4"], "errors": {},
                 "skipped_reason": None, "target_port": target_port}
 
