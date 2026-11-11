@@ -12,7 +12,9 @@ G5 相关文件未变化。正文「判据前检」逐项核对一致：delivery
 影子 merge 在 backend/services/shadow_merge.py；scan_round.merge_status 为
 OK / NO_INPUT / FAILED / FAILED_FINAL。本单元不新增迁移。
 
-只登记 MTK 影子分区。登记触发有两条路径，二者共用同一实现：
+只登记 MTK 的影子分区。分区模式必须是 CURRENT（没有模式记录的存量分区按现行
+解释）；DEDUP_FIRST 分区不登记。影子开关关闭时入口不读库。登记触发有两条路径，
+二者共用同一实现：
 - 主路径：影子 merge 任务在 merge_round 返回终态（OK / NO_INPUT / FAILED_FINAL）后，
   且轮次为 FINAL 或 SUPPLEMENT 时，直接调用 try_register_delivery_version。
 - 补偿路径：sweep_shadow_scan_rounds 每个检查周期查询「已有终态 FINAL/SUPPLEMENT、
@@ -80,7 +82,8 @@ testcontainers PostgreSQL 16。
   NO_INPUT / FAILED_FINAL / FAILED 返回未就绪；INCOMPLETE 进入 gaps；发布状态
   VERIFIED/RETRYING/FAILED 矩阵；导出文件存在且 sha256 等于 stats_snapshot_version，
   写文件失败无登记、写库失败只有孤儿文件且重试后哈希一致；开关关闭、PERIODIC、
-  非 MTK 均不登记；plan_run_artifact、DLE 状态、dedup/{run} 文件前后不变。
+  非 MTK、partition_mode=DEDUP_FIRST 均不登记；plan_run_artifact、DLE 状态、
+  dedup/{run} 文件前后不变。
   触发器另覆盖：merge 终态触发真实登记、登记抛错不影响 merge 且留专用日志、
   sweep 补偿只登记一次且连续两个周期不重复写、NO_INPUT/FAILED_FINAL 仍登记但判定未就绪、
   首周期登记失败后下一周期由补偿查询重试成功。

@@ -354,6 +354,14 @@ def test_switch_off_periodic_and_non_mtk_do_not_register(
     assert _versions(db_session) == []
     assert periodic.merge_status == "OK"
 
+    _plan_run(db_session, 43)
+    facts.record_partition_mode(
+        db_session, plan_run_id=43, platform="mtk", mode=facts.PARTITION_MODE_DEDUP_FIRST,
+    )
+    _round(db_session, 43, 1, "FINAL", [_unit(sample_host.id, "RECEIVED")])
+    assert _register(db_session, tmp_path, run_id=43) is None
+    assert _versions(db_session, 43) == []
+
 
 def test_current_chain_artifacts_are_untouched(db_session, sample_host, tmp_path):
     _plan_run(db_session)

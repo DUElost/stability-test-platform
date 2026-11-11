@@ -186,6 +186,10 @@ def build_delivery_snapshot(
     """
     if platform.lower() != PLATFORM_MTK:
         return None
+    partition = facts.get_partition_mode(db, plan_run_id=plan_run_id, platform=platform)
+    if partition is not None and partition.mode != facts.PARTITION_MODE_CURRENT:
+        # 影子阶段只登记现行分区；没有模式记录的存量分区按现行解释。
+        return None
     rounds = facts.list_scan_rounds(db, plan_run_id=plan_run_id, platform=platform)
     final = next(
         (row for row in rounds if row.kind == facts.SCAN_ROUND_KIND_FINAL), None,
