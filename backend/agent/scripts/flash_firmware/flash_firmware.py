@@ -12,6 +12,9 @@ v1.4.2（#3892，15.93 LX3 金丝雀 PlanRun 1255 / Job 206578）：
   - 复核 #3924 第 1 轮：每行先查实时再取历史快照；wrapper 上电返回之后才开窗；每轮一个
     上下文，上一轮遗留 reader 的回调不再写状态；工具退出后先停采样、冻结记录，再按本轮
     回显重算（只计回显到达前开始的采样），采样线程没停下即判不可信；信号结算同样先停采样。
+  - 复核 #3924 第 2 轮：reader 线程在 join 宽限后仍存活（可能有回显没核对完）即判不可信；
+    reset 放回调用 wrapper 之前，调用期间的采样保留（通电可能早于返回）；`stop()` 不取
+    记录锁（信号自锁）、只等待一次；采样线程起不来按启动失败处理，结算照常完成。
   - V6、非 vbus 的 V5 命令行与 1.4.1 逐字一致。
 
 v1.4.1（#3892 推广，15.93 试点）：
@@ -487,10 +490,14 @@ class _TtyPortHistory:
     实时结果合并：合并后恰好一个口才算解析成功；一个都没有、或同名节点挂过不同的口，
     都按无法核对止损（失败闭合不变）。
 
-    - `reset()` 在 wrapper 上电**返回之后**调用（复核 #3924 第 3 项）：上电完成之前本设备
-      不可能枚举出 tty，此前采到的同名节点属于别的设备。采样跨过 reset 时用代次丢弃。
+    - `reset()` 在调用 wrapper 上电**之前**调用：此前本设备没有供电，采到的同名节点属于别的
+      设备。采样跨过 reset 时用代次丢弃。wrapper 调用期间的采样全部保留：通电可能早于
+      wrapper 返回，目标口的记录不能丢（复核 #3924 第 2 轮第 3 项）；调用期间若有邻口用了
+      同名节点，工具此时已在扫描，该节点确实可能被打开，按歧义止损（失败闭合，见 ADR-0063
+      D3 第 4 条 v1.3）。
     - `stop()` 之后记录冻结（`_closed`），仍未退出的采样线程写不进来；返回线程是否已停止，
-      调用方据此失败闭合（复核 #3924 第 4 项）。
+      调用方据此失败闭合。`stop()` 不取记录锁（信号处理可能打断持锁的主线程，复核 #3924
+      第 2 轮第 4 项），重复调用直接返回首次结果，不再等待。
     """
 
     def __init__(self, base: str = _SYS_CLASS_TTY, interval: float = 0.1) -> None:
@@ -499,6 +506,7 @@ class _TtyPortHistory:
         self._seen: "dict[str, list[tuple[float, str]]]" = {}
         self._gen = 0
         self._closed = False
+        self._stopped: "bool | None" = None
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: "threading.Thread | None" = None
@@ -544,30 +552,39 @@ class _TtyPortHistory:
                     pass
                 self._stop.wait(self._interval)
 
-        self._thread = threading.Thread(target=_loop, name="tty-port-history",
-                                        daemon=True)
-        self._thread.start()
+        thread = threading.Thread(target=_loop, name="tty-port-history", daemon=True)
+        thread.start()  # 抛出时 _thread 保持 None，stop() 不会 join 未启动的线程
+        self._thread = thread
 
     def stop(self, timeout: float = 2.0) -> bool:
-        """停止采样并冻结记录；返回采样线程是否已退出。可重复调用。"""
+        """停止采样并冻结记录；返回采样线程是否已退出。可重复调用，只等待一次。"""
+        if self._stopped is not None:
+            return self._stopped
         self._stop.set()
         thread = self._thread
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=timeout)
-        with self._lock:
-            self._closed = True
-        return thread is None or not thread.is_alive()
+        # 不取 self._lock：信号处理器可能在主线程持锁时运行，取锁即自锁。
+        # 赋值之后采样线程不再写入；join 已返回的线程，其最后一次写入早于这里。
+        self._closed = True
+        self._stopped = thread is None or not thread.is_alive()
+        return self._stopped
 
 
 def _final_v5_binding_reason(echoes: list, history: "_TtyPortHistory",
                              sampler_stopped: bool, target_port: str,
-                             serial: str) -> "str | None":
+                             serial: str, readers_stuck: bool = False) -> "str | None":
     """工具退出、采样线程停止之后，对 V5 vbus 绑定做最终判定；不可信则返回理由。
 
     复核 #3924 第 1 项：逐行核对时的历史快照可能漏掉正在写入的采样，且回调可能来自
     上一轮遗留的 reader。最终判定只用本轮记下的回显，并在记录冻结之后重算：每条回显的
     「实时结果 ∪ 回显到达前开始的采样」必须恰好等于目标口。
     """
+    if readers_stuck:
+        # 复核 #3924 第 2 轮第 1 项：reader 没在宽限内退出，可能有回显还没核对完（或还没读到）。
+        return (f"tool output readers did not finish before the verdict (target port "
+                f"{target_port!r}, serial={serial}); some echoes may be unchecked, "
+                "result not trusted")
     if not sampler_stopped:
         return (f"tty sampler did not stop before settling (target port {target_port!r}, "
                 f"serial={serial}); binding evidence incomplete, result not trusted")
@@ -1199,8 +1216,13 @@ def _run_flash_tool_with_progress(
     on_running: "callable | None" = None,
     abort_check: "callable | None" = None,
     poll_check: "callable | None" = None,
+    readers_status: "dict | None" = None,
 ) -> "tuple[str, int]":
     """Popen + 双 reader 线程跑 flash_tool，逐行喂给阶段/进度解析。
+
+    readers_status（v1.4.2，复核 #3924 第 2 轮第 1 项）：给出时，返回或上抛之前写入
+    ``readers_status["stuck"]``——reader 线程在 join 宽限后是否仍存活。仍存活说明还有输出
+    没有经过 abort_check，调用方不得据此判成功。缺省 None，此前各调用方行为不变。
 
     不能用 subprocess.run(capture_output)：flash_tool 可能运行几十分钟，
     期间必须持续打戳让停滞判据满意；readline 阻塞问题用 reader 线程解决
@@ -1372,6 +1394,8 @@ def _run_flash_tool_with_progress(
     finally:
         for th in threads:
             th.join(timeout=2)
+        if readers_status is not None:
+            readers_status["stuck"] = any(th.is_alive() for th in threads)
     if "reason" in aborted:
         # 工具已被杀掉，绝不能按「正常退出」往下判 verdict：绑错口的实例可能
         # 已经收到 DA，而 stdout 里未必有 FAIL 字样。
@@ -3263,7 +3287,7 @@ def main() -> None:
             tty_history = _TtyPortHistory() if v5_vbus_echo else None
             # 复核 #3924 第 1 项：每轮一个上下文。回调以缺省参数绑定本轮上下文，上一轮遗留的
             # reader 回调发现上下文已换就不再写任何状态；最终判定只读本轮记下的回显。
-            attempt_ctx: dict = {"tty_history": tty_history, "echoes": []}
+            attempt_ctx: dict = {"tty_history": tty_history, "echoes": [], "readers": {}}
             vbus_state["ctx"] = attempt_ctx
 
             def _abort_on_wrong_port(line: str) -> "str | None":
@@ -3318,12 +3342,12 @@ def main() -> None:
                 if vbus:
                     # 工具已进入 USB 扫描：此刻上电，BROM 窗口落在观测里。
                     time.sleep(pre_reboot_wait)
-                    on = _usb_power(serial, "on", vbus_report["slot"])
                     history = (vbus_state.get("ctx") or {}).get("tty_history")
                     if history is not None:
-                        # 复核 #3924 第 3 项：wrapper 上电返回之后才开窗。此前本设备没有
-                        # tty，采到的同名节点属于别的设备；跨过 reset 的采样按代次丢弃。
+                        # 调用 wrapper 之前开窗：此前本设备没有供电，采到的同名节点属于别的
+                        # 设备。调用期间的采样保留（通电可能早于返回，复核 #3924 第 2 轮第 3 项）。
                         history.reset()
+                    on = _usb_power(serial, "on", vbus_report["slot"])
                     vbus_report["power_actions"].append(
                         dict(on, phase="trigger", attempt=vbus_state["attempt"]))
                     vbus_state["power_on_at"] = time.monotonic()
@@ -3359,8 +3383,11 @@ def main() -> None:
 
             attempt_record: dict = {"attempt": attempt}
             if tty_history is not None:
-                tty_history.start()
+                run_kwargs["readers_status"] = attempt_ctx["readers"]
             try:
+                if tty_history is not None:
+                    # 放进 try：线程起不来按启动失败处理，finally 照常停采样（复核 #3924 第 2 轮第 4 项）。
+                    tty_history.start()
                 output, flash_rc = _run_flash_tool_with_progress(
                     cmd,
                     cwd=os.path.dirname(flash_tool_exe),
@@ -3434,7 +3461,8 @@ def main() -> None:
                 # v1.4.2（复核 #3924 第 1、4 项）：采样停止、记录冻结之后按本轮回显重算。
                 unverified = (_final_v5_binding_reason(
                     attempt_ctx["echoes"], tty_history,
-                    bool(attempt_record.get("tty_sampler_stopped")), target_port, serial)
+                    bool(attempt_record.get("tty_sampler_stopped")), target_port, serial,
+                    readers_stuck=attempt_ctx["readers"].get("stuck", False))
                     if tty_history is not None else
                     f"V5 tool exited without a verifiable bound-port echo for target "
                     f"port {target_port!r} (serial={serial}); result not trusted")

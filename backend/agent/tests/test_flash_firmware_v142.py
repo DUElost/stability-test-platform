@@ -263,21 +263,16 @@ def test_stale_reader_from_previous_attempt_cannot_verify(tmp_path, monkeypatch,
     assert outcomes == ["timeout", "aborted-port-unverified"]
 
 
-def test_neighbor_sampled_before_power_on_returns_is_discarded(tmp_path, monkeypatch, capsys):
-    # 第 3 项反例：wrapper 通电过程中（reset 原位置之后）采到邻口，随即消失。
-    h = v141._v5_harness(monkeypatch, tmp_path)
-    made = _capture_histories(monkeypatch)
-    _late_echo_tool(h, monkeypatch, made, seen_port=_SLOT)
+def _sample_during_power_on(h, monkeypatch, made, port):
+    """wrapper 调用期间（通电之后、返回之前）采到 ttyACM0 → port，随即消失。"""
     power = h._fake_power
-    present = {"ttyACM0": _NEIGHBOR}
 
     def _power(serial, action, slot):
         out = power(serial, action, slot)
         if action == "on" and made:
-            # wrapper 返回之前（reset 的旧位置之后）采到邻口，随即消失。
             saved = (ff._list_acm_ttys, ff._tty_usb_port)
-            ff._list_acm_ttys = lambda base=None: list(present)
-            ff._tty_usb_port = lambda name, base=None: present.get(name)
+            ff._list_acm_ttys = lambda base=None: ["ttyACM0"]
+            ff._tty_usb_port = lambda name, base=None: port
             try:
                 made[-1].sample()
             finally:
@@ -285,9 +280,29 @@ def test_neighbor_sampled_before_power_on_returns_is_discarded(tmp_path, monkeyp
         return out
 
     monkeypatch.setattr(ff, "_usb_power", _power)
+
+
+def test_target_sampled_before_wrapper_returns_is_kept(tmp_path, monkeypatch, capsys):
+    # 第 2 轮第 3 项反例：通电后、wrapper 返回前目标口节点出现并被采到随即消失，之后再没采到。
+    h = v141._v5_harness(monkeypatch, tmp_path)
+    made = _capture_histories(monkeypatch)
+    _late_echo_tool(h, monkeypatch, made, seen_port=None)
+    _sample_during_power_on(h, monkeypatch, made, _SLOT)
     payload = h.run(monkeypatch, capsys)
     assert payload["success"] is True, payload
     assert payload["metrics"]["attempts"][-1]["tty_history"] == {"ttyACM0": [_SLOT]}
+
+
+def test_neighbor_sampled_during_wrapper_call_is_ambiguous(tmp_path, monkeypatch, capsys):
+    # 调用期间邻口用了同名节点：工具已在扫描，节点确实可能被打开，按歧义止损（失败闭合）。
+    h = v141._v5_harness(monkeypatch, tmp_path, {"max_attempts": 3})
+    made = _capture_histories(monkeypatch)
+    _late_echo_tool(h, monkeypatch, made, seen_port=_SLOT)
+    _sample_during_power_on(h, monkeypatch, made, _NEIGHBOR)
+    payload = h.run(monkeypatch, capsys)
+    assert payload["success"] is False
+    assert "several USB ports" in payload["error_message"]
+    assert len(h.launched) == 1 and h.power == ["off", "on", "off"]
 
 
 def test_stop_reports_blocked_sampler_and_freezes_history(monkeypatch):
@@ -310,7 +325,7 @@ def test_stop_reports_blocked_sampler_and_freezes_history(monkeypatch):
     gate.set()
     hist._thread.join(5)
     assert hist.ports("ttyACM0") == frozenset()
-    assert hist.stop() is True
+    assert hist.stop() is False, "重复调用返回首次结果"
 
 
 def test_sampler_not_stopped_fails_closed(tmp_path, monkeypatch, capsys):
@@ -341,3 +356,152 @@ def test_signal_settle_stops_sampler_before_isolating(tmp_path, monkeypatch, cap
     h.launch_script = ["signal"]
     h.run(monkeypatch, capsys)
     assert seen and seen[0] is True, "隔离断电前采样已停止并冻结"
+
+
+# ── 复核 #3924 第 2 轮 ──────────────────────────────────────────────────────
+
+def test_runner_reports_stuck_reader(tmp_path):
+    # 第 1 项：回显核对卡住超过 join 宽限，工具已退出；runner 必须报告 reader 未结束。
+    import sys
+    import threading
+    release = threading.Event()
+
+    def _check(line):
+        if "ttyACM1" in line:
+            release.wait(10)
+        return None
+
+    script = ("import sys\nprint('com portName is: /dev/ttyACM0')\n"
+              "print('com portName is: /dev/ttyACM1')\nprint('All command exec done!')\n"
+              "sys.stdout.flush()\n")
+    status: dict = {}
+    try:
+        out, rc = ff._run_flash_tool_with_progress(
+            [sys.executable, "-c", script], cwd=str(tmp_path), env=None, timeout=30,
+            on_stage=lambda tok: None, on_percent=lambda pct: None,
+            abort_check=_check, readers_status=status)
+    finally:
+        release.set()
+    assert rc == 0
+    assert status == {"stuck": True}
+
+
+def test_runner_reports_readers_done(tmp_path):
+    import sys
+    status: dict = {}
+    ff._run_flash_tool_with_progress(
+        [sys.executable, "-c", "print('x')"], cwd=str(tmp_path), env=None, timeout=30,
+        on_stage=lambda tok: None, on_percent=lambda pct: None, readers_status=status)
+    assert status == {"stuck": False}
+
+
+def test_stuck_readers_fail_closed(tmp_path, monkeypatch, capsys):
+    # 第 1 项反例：第一条回显已通过，第二条（历史有邻口）卡在核对里，工具成功退出。
+    h = v141._v5_harness(monkeypatch, tmp_path, {"max_attempts": 3})
+    made = _capture_histories(monkeypatch)
+    _late_echo_tool(h, monkeypatch, made, seen_port=_SLOT)
+    inner = h.launch
+
+    def launch(cmd, *a, **k):
+        out = inner(cmd, *a, **k)
+        k["readers_status"]["stuck"] = True
+        return out
+
+    h.launch = launch
+    payload = h.run(monkeypatch, capsys)
+    assert payload["success"] is False, payload
+    assert "readers did not finish" in payload["error_message"]
+    assert payload["metrics"]["attempts"][-1]["outcome"] == "aborted-port-unverified"
+    assert len(h.launched) == 1 and h.power == ["off", "on", "off"]
+
+
+def test_stop_does_not_take_history_lock():
+    # 第 4 项：信号处理器在主线程持记录锁时调用 stop()，不得自锁。
+    import threading
+    hist = ff._TtyPortHistory(base="/nonexistent")
+    done = []
+
+    def _holder():
+        with hist._lock:
+            done.append(hist.stop(timeout=0.05))
+
+    t = threading.Thread(target=_holder, daemon=True)
+    t.start()
+    t.join(3)
+    assert done == [True] and hist._closed
+
+
+def test_stop_waits_only_once(monkeypatch):
+    # 第 4 项：超时路径与结算各调用一次 stop()，只等待一次。
+    import threading
+    import time as _t
+    gate = threading.Event()
+    monkeypatch.setattr(ff, "_list_acm_ttys", lambda base=None: gate.wait(5) and [])
+    hist = ff._TtyPortHistory(base="/nonexistent", interval=0.01)
+    hist.start()
+    try:
+        assert hist.stop(timeout=0.2) is False
+        started = _t.perf_counter()
+        assert hist.stop(timeout=2.0) is False
+        assert _t.perf_counter() - started < 0.1
+    finally:
+        gate.set()
+
+
+def test_sampler_thread_start_failure_still_settles(tmp_path, monkeypatch, capsys):
+    # 第 4 项：采样线程起不来按启动失败处理，结算（隔离、恢复门控、释放锁）照常完成。
+    import threading
+    h = v141._v5_harness(monkeypatch, tmp_path, {"max_attempts": 3})
+    _capture_histories(monkeypatch)
+    monkeypatch.setattr(ff._TtyPortHistory, "start",
+                        lambda self: (_ for _ in ()).throw(RuntimeError("can't start new thread")))
+    released = []
+    monkeypatch.setattr(ff, "_release_host_lock", lambda fd: released.append(True))
+    payload = h.run(monkeypatch, capsys)
+    assert payload["success"] is False
+    assert payload["metrics"]["attempts"][-1]["outcome"] == "launch-failed"
+    assert h.launched == [] and released == [True]
+    assert h.power == ["off", "off"], "未上电，结算照常断电隔离"
+    assert threading.active_count() >= 1
+
+
+def test_unstarted_sampler_stop_is_safe(monkeypatch):
+    import threading
+    orig = threading.Thread.start
+
+    def _boom(self):
+        if self.name == "tty-port-history":
+            raise RuntimeError("can't start new thread")
+        return orig(self)
+
+    monkeypatch.setattr(threading.Thread, "start", _boom)
+    hist = ff._TtyPortHistory(base="/nonexistent")
+    with pytest.raises(RuntimeError):
+        hist.start()
+    assert hist.stop() is True
+
+
+def test_stale_reader_cannot_mark_brom_seen(tmp_path, monkeypatch, capsys):
+    # 遗留 reader 的回调不得改本轮状态：否则会压掉本轮的 BROM 捕获超时。
+    import subprocess
+    h = v141._v5_harness(monkeypatch, tmp_path, {"max_attempts": 2})
+    _capture_histories(monkeypatch)
+    checks = []
+    verdicts = []
+
+    def launch(cmd, *a, **k):
+        h.launched.append(cmd)
+        k["on_running"]()
+        checks.append(k["abort_check"])
+        if len(checks) == 1:
+            raise subprocess.TimeoutExpired(cmd, 1)
+        checks[0]("BROM connected")  # 上一轮遗留的回调
+        ff.time.sleep(10_000)
+        verdict = k["poll_check"]()
+        verdicts.append(verdict)
+        raise ff.FlashToolAborted(verdict[1], verdict[0])
+
+    h.launch = launch
+    payload = h.run(monkeypatch, capsys)
+    assert verdicts and verdicts[0][0] == "brom-timeout"
+    assert payload["success"] is False

@@ -206,6 +206,14 @@ class Harness:
         monkeypatch.setattr(ff, "_acquire_host_lock",
                             lambda *a, **k: (self.locked.append(True), None)[1])
         monkeypatch.setattr(ff, "_release_host_lock", lambda fd: None)
+        # 复核 #3924 第 2 轮附注：结算会删门控状态文件，测试不得碰真实 /tmp 路径。
+        gate_state = str(tmp_path / "gated.json")
+        monkeypatch.setattr(ff, "_GATE_STATE_PATH", gate_state)
+        clear = ff._clear_gated_state
+        monkeypatch.setattr(ff, "_clear_gated_state", lambda path=gate_state: clear(path))
+        persist = ff._persist_gated_ports
+        monkeypatch.setattr(ff, "_persist_gated_ports",
+                            lambda ports, *a, **k: persist(ports, *a, **{**k, "path": gate_state}))
         monkeypatch.setattr(ff, "_gate_other_mtk",
                             lambda port, base=None, hold_pids=None:
                             {"hidden": [], "errors": {}, "target_port": port})
