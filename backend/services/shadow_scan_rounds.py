@@ -21,6 +21,7 @@ from backend.models.enums import PlanRunStatus
 from backend.models.plan_run import PlanRun
 from backend.models.host import Host
 from backend.services import issue_fact_store as facts
+from backend.services import shadow_delivery
 from backend.services.artifact_digest import ARTIFACT_KIND_CODE, compute_desired_artifact_digest
 from backend.services.agent_version_info import resolve_agent_code_sync_status
 from backend.services.dedup_scan import _SCAN_TASK_SAQ_TIMEOUT
@@ -276,7 +277,8 @@ def sweep_shadow_scan_rounds(*, now=None):
     with SessionLocal() as db:
         run_ids = set(facts.list_shadow_scan_run_ids(db, platform=_PLATFORM))
         merge_run_ids = facts.list_pending_shadow_merge_run_ids(db, now=now)
-    for run_id in sorted(run_ids | set(merge_run_ids)):
+        delivery_run_ids = set(facts.list_shadow_delivery_due_run_ids(db, platform=_PLATFORM))
+    for run_id in sorted(run_ids | set(merge_run_ids) | delivery_run_ids):
         try:
             with SessionLocal() as db:
                 pending = _advance_run(db, run_id, root, now, settings) if run_id in run_ids else []
@@ -299,6 +301,10 @@ def sweep_shadow_scan_rounds(*, now=None):
                     plan_run_id=run_id,
                     fact_round_id=round_id,
                     is_final=is_final,
+                )
+            if run_id in delivery_run_ids:
+                shadow_delivery.try_register_delivery_version(
+                    run_id, platform=_PLATFORM, now=now,
                 )
         except Exception:
             logger.exception("shadow_scan_sweep_failed plan_run=%d", run_id)

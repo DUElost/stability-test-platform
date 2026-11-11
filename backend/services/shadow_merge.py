@@ -14,6 +14,7 @@ from backend.core.metrics import shadow_merge_device_id_serial_mismatch_total, s
 from backend.core.database import SessionLocal
 from backend.core.settings.scheduler import get_scheduler_settings
 from backend.services import issue_fact_store as facts
+from backend.services import shadow_delivery
 from backend.services.scan_membership import build_request, match_issues, read_report, validate_match
 
 logger = logging.getLogger(__name__)
@@ -261,5 +262,16 @@ def run_shadow_merge(plan_run_id: int, fact_round_id: int):
             return
         row = facts.get_scan_round(db, round_id=fact_round_id)
         if row is not None and row.plan_run_id == plan_run_id:
-            merge_round(db, fact_round_id)
+            merged = merge_round(db, fact_round_id)
+            delivery_platform = None
+            if (
+                merged is not None
+                and merged.kind in {facts.SCAN_ROUND_KIND_FINAL, facts.SCAN_ROUND_KIND_SUPPLEMENT}
+                and merged.merge_status in {'OK', 'NO_INPUT', 'FAILED_FINAL'}
+            ):
+                delivery_platform = merged.platform
             db.commit()
+            if delivery_platform is not None:
+                shadow_delivery.try_register_delivery_version(
+                    plan_run_id, platform=delivery_platform,
+                )
