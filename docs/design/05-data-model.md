@@ -203,9 +203,9 @@ B8 G1 新增八张单数事实表，并给 `device_log_event` 增加可空 `occu
 | `issue_occurrence` | 一次发生：`signature_id`、`occurrence_key`、`serial`、`build_version`、`project_key`、`specialty_key`、`risk_level`、`observed_at`、`first_seen_source`、`first_seen_plan_run_id`、`first_seen_round_id` | `occurrence_key` 唯一（I1）；为空表示身份不可证明，按 fail-open 逐行保留 |
 | `issue_occurrence_event` | 发生 ↔ DLE 观察映射：`occurrence_id`、`dle_id`、`signature_id` | 唯一约束 `(occurrence_id, dle_id, signature_id)` |
 | `partition_mode` | 实际 PlanRun × 平台的运行模式：`plan_run_id`、`platform`、`mode`、`written_at` | 唯一约束 `(plan_run_id, platform)`；写入后不得改写（D13 第 2 条） |
-| `scan_round` | 轮次：`round_no`、`kind`（周期轮 / 最后一轮 / 补充轮）、`expected_set`、`input_cutoff_at`、`status`、`closed_at` | 唯一约束 `(plan_run_id, platform, round_no)` |
+| `scan_round` | 轮次：`round_no`、`kind`（周期轮 / 最后一轮 / 补充轮）、`expected_set`、`input_cutoff_at`、`status`、`closed_at`、`merge_generation`（进入终态一次加 1，reset 不减） | 唯一约束 `(plan_run_id, platform, round_no)` |
 | `representative_selection` | 分区 × 问题的代表：`dle_id`、`selection_status`、`evidence_status`、`selected_at` | 唯一约束 `(plan_run_id, platform, signature_id)`；进入「已选」后 `dle_id` 不得改写（D7 第 6 条） |
-| `delivery_version` | 交付物版本：`software_versions`、`round_ids`、`effective_coverage`、`issue_ids`、`event_ids`、`stats_snapshot_version`、`pending_items`、`gaps`、`primary_folders` | 唯一约束 `(plan_run_id, platform, version_no)` |
+| `delivery_version` | 交付物版本：`software_versions`、`round_ids`、`basis_rounds`（`[{round_id, merge_generation}]`）、`effective_coverage`、`issue_ids`、`event_ids`、`stats_snapshot_version`、`pending_items`、`gaps`、`primary_folders` | 唯一约束 `(plan_run_id, platform, version_no)` |
 | `spill_ledger` | 溢出台账：`plan_run_id`、`platform`、`dle_id`、`size_bytes`、`spilled_at` | `dle_id` 唯一 |
 
 `device_log_event.occurrence_key` 由 Agent 在 reconciler 中用

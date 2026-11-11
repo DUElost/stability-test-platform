@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from backend.core.database import SessionLocal
 from backend.core.settings.scheduler import get_scheduler_settings
@@ -21,6 +21,7 @@ from backend.models.enums import PlanRunStatus
 from backend.models.plan_run import PlanRun
 from backend.models.host import Host
 from backend.services import issue_fact_store as facts
+from backend.services import shadow_delivery
 from backend.services.artifact_digest import ARTIFACT_KIND_CODE, compute_desired_artifact_digest
 from backend.services.agent_version_info import resolve_agent_code_sync_status
 from backend.services.dedup_scan import _SCAN_TASK_SAQ_TIMEOUT
@@ -48,6 +49,10 @@ _TERMINAL = {
     PlanRunStatus.FAILED.value,
 }
 _PLATFORM = "mtk"
+# 补偿发现只做增量重试，最长等锁 2s：远小于 auto_archive_poll_interval_seconds
+# 默认 120s，delivery_version 上的强锁最多迟滞本轮现行归档 2s；超时按发现失败
+# 处理，下一周期再试。
+_DELIVERY_DISCOVERY_LOCK_TIMEOUT_MS = 2000
 
 
 @dataclass(frozen=True)
@@ -276,7 +281,24 @@ def sweep_shadow_scan_rounds(*, now=None):
     with SessionLocal() as db:
         run_ids = set(facts.list_shadow_scan_run_ids(db, platform=_PLATFORM))
         merge_run_ids = facts.list_pending_shadow_merge_run_ids(db, now=now)
-    for run_id in sorted(run_ids | set(merge_run_ids)):
+    delivery_run_ids: set[int] = set()
+    try:
+        with SessionLocal() as db:
+            db.execute(
+                text("SELECT set_config('lock_timeout', :value, true)"),
+                {"value": f"{_DELIVERY_DISCOVERY_LOCK_TIMEOUT_MS}ms"},
+            )
+            discovered_run_ids = set(
+                facts.list_shadow_delivery_due_run_ids(db, platform=_PLATFORM)
+            )
+    except Exception:
+        # 补偿发现是增量重试：设置、SELECT、会话退出/回滚任一阶段失败都只跳过
+        # 本轮补偿，不拖累本轮的影子 scan/merge 入队与随后的现行归档；候选
+        # 只在会话正常退出后转正，失败时已取得的结果不得被消费。
+        logger.exception("shadow_delivery_discovery_failed platform=%s", _PLATFORM)
+    else:
+        delivery_run_ids = discovered_run_ids
+    for run_id in sorted(run_ids | set(merge_run_ids) | delivery_run_ids):
         try:
             with SessionLocal() as db:
                 pending = _advance_run(db, run_id, root, now, settings) if run_id in run_ids else []
@@ -299,6 +321,10 @@ def sweep_shadow_scan_rounds(*, now=None):
                     plan_run_id=run_id,
                     fact_round_id=round_id,
                     is_final=is_final,
+                )
+            if run_id in delivery_run_ids:
+                shadow_delivery.try_register_delivery_version(
+                    run_id, platform=_PLATFORM,
                 )
         except Exception:
             logger.exception("shadow_scan_sweep_failed plan_run=%d", run_id)
