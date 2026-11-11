@@ -23,6 +23,10 @@ v1.4.2（#3892，15.93 LX3 金丝雀 PlanRun 1255 / Job 206578）：
   - 复核 #3924 第 5 轮（P2 完整日志）：标记只认 `portName is` / `symbolic_link`，与严格解析
     同为不区分大小写；V5 行内每一处 `/dev/ttyACM` 引用须为完整节点名并解析到槽位口；
     wrapper 供电、authorized 写入与结算是信号临界区，信号延后到最外层退出再投递。
+  - 复核 #3924 第 6 轮退回规划者后重设计：tty 引用白名单（`/dev/ttyACM<数字>` 后只能是
+    行尾、空白或 `)`）；V5/V6 标记计数与严格解析同为不区分大小写；信号处理器不延后、不取锁，
+    置位后有界排空在途特权操作（≤3 秒，整体 ≤7 秒 < Agent 8 秒宽限），排空未完时保留门控状态
+    文件交给孤儿恢复（已知限制，Owner 裁定）。第 5 轮的信号临界区已移除。
   - V6、非 vbus 的 V5 命令行与 1.4.1 逐字一致。
 
 v1.4.1（#3892 推广，15.93 试点）：
@@ -456,6 +460,9 @@ _BROM_GATE_PIDS = _BROM_STAGE_PIDS | {"2026"}
 # `1-5.2.3`），与 symbolic_link 回显的末段同形态。
 _PORT_PATH_RE = re.compile(r"^\d+-(?:\d+\.)*\d+$")
 _SYMBOLIC_LINK_RE = re.compile(r"symbolic_link:\s*(\S+)")
+# v1.4.2（ADR-0063 v1.3 D3 第 4 条「标记与解析同源」，复核 #3924 第 6 轮）：vbus 下标记计数与
+# 严格解析使用同一组标志（均不区分大小写），V5 与 V6 都如此。非 vbus 路径仍用上面的旧正则。
+_SYMBOLIC_LINK_STRICT_RE = re.compile(r"symbolic_link:\s*(\S+)", re.IGNORECASE)
 # v1.4.1（#3892）：V5 不回显 symbolic_link，只回显它打开的 tty 节点（15.93 P2 实测
 # `com portName is: /dev/ttyACM0`）；经 `/sys/class/tty/<name>` 解析成 sysfs 口再核对。
 _V5_PORTNAME_RE = re.compile(r"com portName is:\s*/dev/(ttyACM\d+)")
@@ -467,9 +474,12 @@ _V5_PORTNAME_STRICT_RE = re.compile(r"com\s+portName\s+is:\s*/dev/(ttyACM\d+)(?=
                                     re.IGNORECASE)
 _BIND_MARKER_RE = re.compile(r"portName\s+is\b|symbolic_link", re.IGNORECASE)
 _BIND_HINT_RE = re.compile(r"port|tty|acm|link", re.IGNORECASE)
-# 行内任何 `/dev/ttyACM…` 引用：名字取到分隔符为止，必须整段是 ttyACM<数字>。
-_DEV_TTYACM_REF_RE = re.compile(r"/dev/(ttyACM[^\s()\[\]{},;:@'\"<>]*)", re.IGNORECASE)
-_TTYACM_NAME_RE = re.compile(r"ttyACM\d+", re.IGNORECASE)
+# v1.4.2（ADR-0063 v1.3 D3 第 4 条「tty 引用白名单」，复核 #3924 第 6 轮）：V5 行内每一处
+# `/dev/ttyACM`（不区分大小写）都必须恰好是 `/dev/ttyACM<数字>`，数字之后只能是行尾、空白或 `)`。
+# 形态取自 P2 日志与 PlanRun 1255 日志；其他任何字符（`;` `@` `,` `:` `-` 字母……）都按无法核对
+# 止损，不再按「分隔符黑名单」截取名字。
+_DEV_TTYACM_OPEN_RE = re.compile(r"/dev/ttyacm", re.IGNORECASE)
+_DEV_TTYACM_REF_RE = re.compile(r"/dev/(ttyACM\d+)(?=$|\s|\))", re.IGNORECASE)
 _SYS_CLASS_TTY = "/sys/class/tty"
 
 
@@ -720,9 +730,9 @@ def _check_vbus_bind_line(line: str, target_port: str, serial: str,
 
     - 带端口 / tty 字样的行里出现解码替换字符：无法核对，止损；
     - 绑定标记（`portName is`、`symbolic_link`）的个数必须等于严格解析出的回显个数；
-    - V5（`tty_history` 给出时）：行内每一处 `/dev/ttyACM…` 引用都要核对——名字必须整段是
-      `ttyACM<数字>`（`/dev/ttyACM0-neighbor` 止损，复核 #3924 第 5 轮），每个名字查一次实时
-      sysfs 再取历史快照，合并后恰好一个口且等于目标口；
+    - V5（`tty_history` 给出时）：行内每一处 `/dev/ttyACM` 都必须恰好是 `/dev/ttyACM<数字>`，
+      其后只能是行尾、空白或 `)`（白名单，复核 #3924 第 6 轮）；每个名字查一次实时 sysfs 再取
+      历史快照，合并后恰好一个口且等于目标口；
     - 每一处都核对：任一处解析不出、有歧义或不等于目标口都止损。
     绑定口只在本行有严格绑定回显时返回；其余引用只核对、不计为已验证回显。
     """
@@ -734,7 +744,7 @@ def _check_vbus_bind_line(line: str, target_port: str, serial: str,
         return None, _stop(f"undecodable bytes in a port/tty line {line.strip()[:120]!r}: "
                            "无法核对绑定口")
     markers = len(_BIND_MARKER_RE.findall(line))
-    links = _SYMBOLIC_LINK_RE.findall(line)
+    links = _SYMBOLIC_LINK_STRICT_RE.findall(line)
     echo_names = _V5_PORTNAME_STRICT_RE.findall(line)
     if len(links) + len(echo_names) != markers:
         return None, _stop(f"unparseable bind echo {line.strip()[:120]!r}: 无法核对绑定口")
@@ -745,12 +755,17 @@ def _check_vbus_bind_line(line: str, target_port: str, serial: str,
             return None, _stop(f"unparseable symbolic_link {link!r}: 无法核对绑定口")
         ports.append(tail)
     # V5：行内所有 ttyACM 引用（含绑定回显本身）逐一核对。V6 不按 tty 核对（只认 symbolic_link）。
-    refs = _DEV_TTYACM_REF_RE.findall(line) if tty_history is not None else []
-    if tty_history is None and echo_names:
+    if tty_history is not None:
+        refs = []
+        for opened in _DEV_TTYACM_OPEN_RE.finditer(line):
+            ref = _DEV_TTYACM_REF_RE.match(line, opened.start())
+            if ref is None:
+                frag = line[opened.start():opened.start() + 40].strip()
+                return None, _stop(f"unparseable tty reference {frag!r}: 无法核对绑定口")
+            refs.append(ref.group(1))
+    else:
         refs = list(echo_names)
     for name in refs:
-        if not _TTYACM_NAME_RE.fullmatch(name):
-            return None, _stop(f"unparseable tty reference /dev/{name}: 无法核对绑定口")
         live = _tty_usb_port(name)
         if observed is not None and name in echo_names:
             observed.append((name, live))
@@ -899,7 +914,7 @@ def _priv_wrapper_usable() -> bool:
         try:
             proc = subprocess.run(
                 ["sudo", "-n", _PRIV_WRAPPER, "usb-authorized", "--help"],
-                capture_output=True, timeout=10,
+                capture_output=True, timeout=_signal_timeout(10),
             )
             _priv_wrapper_cache[0] = proc.returncode == 0
         except (OSError, subprocess.TimeoutExpired):
@@ -915,24 +930,27 @@ def _set_authorized(port: str, value: str, base: str = _SYSFS_USB_BASE) -> "tupl
     idVendor 校验在 wrapper 内强制）；不再存在任意命令面。
     """
     path = os.path.join(base, port, "authorized")
-    with _SignalCritical():
-        try:
-            with open(path, "w") as handle:
-                handle.write(value)
-            return True, "direct"
-        except (OSError, ValueError):
-            pass
-        if not _priv_wrapper_usable():
-            return False, "no-priv-face"
-        try:
-            proc = subprocess.run(
-                ["sudo", "-n", _PRIV_WRAPPER, "usb-authorized",
-                 "--port", port, "--value", value],
-                capture_output=True, timeout=10,
-            )
-            return proc.returncode == 0, "wrapper"
-        except (OSError, subprocess.TimeoutExpired):
-            return False, "wrapper-failed"
+    try:
+        with _Privileged():
+            try:
+                with open(path, "w") as handle:
+                    handle.write(value)
+                return True, "direct"
+            except (OSError, ValueError):
+                pass
+            if not _priv_wrapper_usable():
+                return False, "no-priv-face"
+            try:
+                proc = subprocess.run(
+                    ["sudo", "-n", _PRIV_WRAPPER, "usb-authorized",
+                     "--port", port, "--value", value],
+                    capture_output=True, timeout=_signal_timeout(10),
+                )
+                return proc.returncode == 0, "wrapper"
+            except (OSError, subprocess.TimeoutExpired):
+                return False, "wrapper-failed"
+    except _SettlingRefused:
+        return False, "signal-settling"
 
 
 def _gate_other_mtk(target_port: "str | None", base: str = _SYSFS_USB_BASE,
@@ -1719,35 +1737,114 @@ def _acquire_host_lock(on_wait_tick: "callable | None" = None):
     return lock_fd
 
 
-# v1.4.2（ADR-0063 v1.3 D3 第 4 条「信号打断停止流程」，复核 #3924 第 5 轮）：特权操作
-# （wrapper 切电、写 authorized）与结算本身是「信号临界区」。信号落在临界区内时，处理器
-# 只登记信号、不做任何动作；最外层临界区退出时把信号重新投递给本进程，处理器再结算并
-# 终止。这样在途的 wrapper 子进程一定先完成，结算的动作排在它之后，锁释放之后不会再有
-# 迟到的 off / authorized=1 生效。处理器只读写下面这个字典，不取任何锁。
-_SIGNAL_CRIT: dict = {"depth": 0, "pending": None}
-_SIGNAL_CRIT_LOCK = threading.Lock()
+# v1.4.2（ADR-0063 v1.3 D3 第 4 条「信号打断停止流程」，复核 #3924 第 6 轮退回规划者后重设计）：
+# 处理器不取任何锁、不延后信号。它先置位 settling，再在有界时间内等在途特权操作做完，然后结算：
+#   - 非主线程（reader 回调里的重新门控、上电）的特权操作进出时只改本线程在 `_INFLIGHT` 里的计数；
+#     进入时先登记、再看 settling，置位之后新的特权操作一律拒绝（GIL 下登记与置位顺序可见）；
+#   - 主线程被处理器打断时自己不会再继续执行，它的在途 wrapper 子进程按 /proc 里本进程的
+#     wrapper 子进程是否存活来等；
+#   - 排空最多 `_SIGNAL_DRAIN_SECONDS`；从首个信号起整个结算受 `_SIGNAL_SETTLE_BUDGET` 约束，
+#     信号路径里所有特权子进程的超时都截到剩余预算内，保证落在 Agent 的强杀宽限
+#     （pipeline_engine `_script_terminate_grace_seconds("flash_firmware")` = 8 秒）之内；
+#   - 排空超时（已知限制，Owner 2026-11-11 裁定）：结算照做，但保留门控状态文件，
+#     由下次启动的孤儿门控恢复（#1591）兜底；槽位供电由下次 vbus 作业重新断电上电。
+_SIGNAL_SETTLE_BUDGET = 7.0
+_SIGNAL_DRAIN_SECONDS = 3.0
+_SIG_STATE: dict = {"settling": False, "deadline": None, "drain_until": None,
+                    "drain_incomplete": False}
+_INFLIGHT: dict = {}
+_PROC_ROOT = "/proc"
 
 
-class _SignalCritical:
-    """信号临界区（可嵌套、可跨线程计数）。见 `_SIGNAL_CRIT`。"""
+class _SettlingRefused(Exception):
+    """信号结算已开始，非主线程不得再发起特权操作。"""
 
-    def __enter__(self) -> "_SignalCritical":
-        with _SIGNAL_CRIT_LOCK:
-            _SIGNAL_CRIT["depth"] += 1
+
+class _Privileged:
+    """在途特权操作登记（见 `_SIG_STATE`）。只改本线程的计数，不取锁。"""
+
+    def __enter__(self) -> "_Privileged":
+        self._main = threading.current_thread() is threading.main_thread()
+        if not self._main:
+            self._tid = threading.get_ident()
+            _INFLIGHT[self._tid] = _INFLIGHT.get(self._tid, 0) + 1  # 先登记
+            if _SIG_STATE["settling"]:                              # 再看置位
+                _INFLIGHT[self._tid] -= 1
+                raise _SettlingRefused()
         return self
 
     def __exit__(self, *exc) -> bool:
-        with _SIGNAL_CRIT_LOCK:
-            _SIGNAL_CRIT["depth"] -= 1
-            depth = _SIGNAL_CRIT["depth"]
-        pending = _SIGNAL_CRIT["pending"]
-        if depth == 0 and pending is not None:
-            _SIGNAL_CRIT["pending"] = None
-            try:
-                os.kill(os.getpid(), pending)  # 主线程的处理器接着结算并终止
-            except Exception:
-                pass
+        if not self._main:
+            _INFLIGHT[self._tid] -= 1
         return False
+
+
+def _signal_timeout(default: float) -> float:
+    """信号结算期间把特权子进程的超时截到剩余预算内；平时原样返回。"""
+    deadline = _SIG_STATE["deadline"]
+    if deadline is None:
+        return default
+    return max(0.1, min(default, deadline - time.monotonic()))
+
+
+def _wrapper_children_alive(proc_root: "str | None" = None) -> bool:
+    """本进程是否还有存活（非僵尸）的 wrapper 子进程。只用 os 级调用，不取锁。"""
+    root = proc_root or _PROC_ROOT
+    me = os.getpid()
+    marker = _PRIV_WRAPPER.encode()
+    try:
+        entries = os.listdir(root)
+    except OSError:
+        return False
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        try:
+            fd = os.open(os.path.join(root, entry, "stat"), os.O_RDONLY)
+            try:
+                stat = os.read(fd, 4096)
+            finally:
+                os.close(fd)
+            fields = stat.rsplit(b")", 1)[-1].split()
+            if len(fields) < 2 or int(fields[1]) != me or fields[0] == b"Z":
+                continue
+            fd = os.open(os.path.join(root, entry, "cmdline"), os.O_RDONLY)
+            try:
+                cmdline = os.read(fd, 65536)
+            finally:
+                os.close(fd)
+        except (OSError, ValueError):
+            continue
+        if marker in cmdline:
+            return True
+    return False
+
+
+def _drain_inflight(until: float, proc_root: "str | None" = None) -> bool:
+    """等非主线程的在途特权操作与 wrapper 子进程结束，最迟到 `until`；返回是否排空。"""
+    main = threading.main_thread().ident
+    while True:
+        try:
+            busy = any(n > 0 for tid, n in list(_INFLIGHT.items()) if tid != main)
+        except RuntimeError:
+            busy = True
+        if not busy and not _wrapper_children_alive(proc_root):
+            return True
+        if time.monotonic() >= until:
+            return False
+        time.sleep(0.05)
+
+
+def _clear_gated_state_after_restore(path: "str | None" = None) -> bool:
+    """恢复门控之后清掉状态文件；信号排空未完成时保留它，返回是否已清。
+
+    已知限制（ADR-0063 v1.3 D3 第 4 条，Owner 2026-11-11 裁定）：在途操作没排空时可能还有
+    迟到的门控写入，保留状态文件交给下次启动的孤儿门控恢复（#1591）。
+    """
+    if _SIG_STATE["drain_incomplete"]:
+        return False
+    _clear_gated_state(path or _GATE_STATE_PATH)
+    return True
 
 
 def _install_termination_cleanup(settle: "callable") -> None:
@@ -1762,10 +1859,14 @@ def _install_termination_cleanup(settle: "callable") -> None:
                  命名空间不变（ADR-0033 §D2：信号死亡视为工具缺陷，语义不改）。
     """
     def _on_signal(signum, _frame) -> None:
-        if _SIGNAL_CRIT["depth"] > 0:
-            # 在途特权操作或结算未完成：只登记，临界区退出时重新投递（v1.4.2）。
-            _SIGNAL_CRIT["pending"] = int(signum)
-            return
+        # v1.4.2：不取锁、不延后。先置位，再有界排空在途特权操作，然后结算（见 `_SIG_STATE`）。
+        _SIG_STATE["settling"] = True
+        if _SIG_STATE["deadline"] is None:
+            now = time.monotonic()
+            _SIG_STATE["deadline"] = now + _SIGNAL_SETTLE_BUDGET
+            _SIG_STATE["drain_until"] = now + _SIGNAL_DRAIN_SECONDS
+        if not _drain_inflight(_SIG_STATE["drain_until"]):
+            _SIG_STATE["drain_incomplete"] = True
         try:
             settle(int(signum))
         except Exception:
@@ -2639,15 +2740,17 @@ def _usb_power(serial: str, action: str, slot: dict) -> dict:
     started = time.monotonic()
     expect = f"{slot['hub_location']}:{slot['port']}"
     try:
-        with _SignalCritical():
+        with _Privileged():
             proc = subprocess.run(
                 ["sudo", "-n", _PRIV_WRAPPER, "usb-power",
                  "--serial", serial, "--expect-slot", expect, "--action", action],
-                capture_output=True, text=True, timeout=75,
+                capture_output=True, text=True, timeout=_signal_timeout(75),
             )
         ok = proc.returncode == 0
         tail = ((proc.stdout or "") + (proc.stderr or "")).strip()[-200:]
         rc: "int | None" = proc.returncode
+    except _SettlingRefused:
+        ok, rc, tail = False, None, "refused: signal settle in progress"
     except (OSError, subprocess.TimeoutExpired) as exc:
         ok, rc, tail = False, None, str(exc)[:200]
     return {"action": action, "ok": ok, "rc": rc, "tail": tail,
@@ -3251,7 +3354,7 @@ def main() -> None:
     def _settle_stop_sampler() -> None:
         ctx = vbus_state.get("ctx")
         if ctx is not None and ctx.get("tty_history") is not None:
-            ctx["tty_history"].stop()
+            ctx["tty_history"].stop(timeout=_signal_timeout(2.0))
 
     def _settle_isolate() -> None:
         if vbus and not vbus_keep_power and vbus_report.get("power_actions") \
@@ -3271,7 +3374,8 @@ def main() -> None:
 
     def _settle_restore() -> None:
         gating["restore"] = _restore_gated({"hidden": hidden_ports}, _SYSFS_USB_BASE)
-        _clear_gated_state()
+        if not _clear_gated_state_after_restore():
+            gating["restore"]["orphan_state_kept"] = True
 
     def _settle_release() -> None:
         settle_done.add("release")  # 先置位：释放锁不重入
@@ -3283,13 +3387,12 @@ def main() -> None:
         if "release" in settle_done:
             return
         lock_settled = True
-        # 复核 #3924 第 4 项：先停采样、冻结记录，再动供电与锁。整个结算是信号临界区
-        # （第 5 轮）：信号落在结算中途时等结算做完再终止，不重入。
-        with _SignalCritical():
-            _settle_step("stop-sampler", _settle_stop_sampler)
-            _settle_step("isolate", _settle_isolate)
-            _settle_step("restore", _settle_restore)
-            _settle_step("release", _settle_release)
+        # 复核 #3924 第 4 项：先停采样、冻结记录，再动供电与锁。信号落在结算中途时，处理器
+        # 先排空在途特权操作，再从未完成的一步接着做（第 6 轮）。
+        _settle_step("stop-sampler", _settle_stop_sampler)
+        _settle_step("isolate", _settle_isolate)
+        _settle_step("restore", _settle_restore)
+        _settle_step("release", _settle_release)
 
     def _settle_on_signal(signum: int) -> None:
         # #1025：取消/超时路径唯一会经过的清理点——先结算再死

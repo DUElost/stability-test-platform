@@ -812,59 +812,243 @@ def test_marker_and_strict_parse_share_case_rule(monkeypatch):
     assert reason is None and bound == _SLOT and len(observed) == 1
 
 
-def _signal_script(tmp_path, body):
+# ── 复核 #3924 第 6 轮（退回规划者后）：tty 引用白名单、标记同源、无锁信号结算 ─────────────
+
+@pytest.mark.parametrize("sep", [";", "@", ",", ":", "-", "x", "/", "."])
+def test_tty_reference_whitelist_rejects_any_other_terminator(monkeypatch, sep):
+    # 第 6 轮反例：先回显目标口，再出现 `path name(/dev/ttyACM0;neighbor)`。完整名字映射到邻口，
+    # 旧解析器在 `;` 处截断只查了 ttyACM0。白名单下数字之后只能是行尾、空白或 `)`。
+    ports = {"ttyACM0": _SLOT, f"ttyACM0{sep}neighbor": _NEIGHBOR}
+    monkeypatch.setattr(ff, "_tty_usb_port", lambda name, base=None: ports.get(name))
+    hist = ff._TtyPortHistory(base="/nonexistent")
+    for line in (f"USB port is obtained. path name(/dev/ttyACM0{sep}neighbor), "
+                 "port name(/dev/ttyACM0)",
+                 f"com portName is: /dev/ttyACM0 path name(/dev/ttyACM0{sep}neighbor)"):
+        bound, reason = ff._check_bound_echo(line, _SLOT, "S", v5_echo=True, tty_history=hist)
+        assert reason and "unparseable tty reference" in reason, (line, reason)
+
+
+@pytest.mark.parametrize("line", [
+    "com portName is: /dev/ttyACM0",
+    "com portName is: /dev/ttyACM0\r",
+    "USB port is obtained. path name(/dev/ttyACM0), port name(/dev/ttyACM0)",
+    "USB port detected: /dev/ttyACM0 ok",
+    "usb port detected: /DEV/TTYACM0",
+])
+def test_tty_reference_whitelist_accepts_known_shapes(monkeypatch, line):
+    monkeypatch.setattr(ff, "_tty_usb_port", lambda name, base=None:
+                        _SLOT if name.lower() == "ttyacm0" else None)
+    hist = ff._TtyPortHistory(base="/nonexistent")
+    bound, reason = ff._check_bound_echo(line, _SLOT, "S", v5_echo=True, tty_history=hist)
+    assert reason is None, (line, reason)
+
+
+def _case_variants(word):
+    return sorted({word, word.lower(), word.upper(), word.title(), word.swapcase()})
+
+
+@pytest.mark.parametrize("marker", _case_variants("symbolic_link"))
+def test_symbolic_link_marker_and_parse_share_case_rule(monkeypatch, marker):
+    # 第 6 轮反例：`SYMBOLIC_LINK:` 被计为标记，严格解析却区分大小写，合法目标口被拒（V6）。
+    monkeypatch.setattr(ff, "_tty_usb_port", lambda name, base=None: _SLOT)
+    hist = None
+    line = f"{marker}: COM:///dev/ttyACM0@/dev/ttyACM0@{_SLOT}"
+    bound, reason = ff._check_bound_echo(line, _SLOT, "S", v5_echo=True, tty_history=hist)
+    assert reason is None and bound == _SLOT, (line, reason)
+    bad = f"{marker}: COM:///dev/ttyACM1@/dev/ttyACM1@{_NEIGHBOR}"
+    monkeypatch.setattr(ff, "_tty_usb_port", lambda name, base=None:
+                        _NEIGHBOR if name == "ttyACM1" else _SLOT)
+    _b, reason = ff._check_bound_echo(bad, _SLOT, "S", v5_echo=True, tty_history=hist)
+    assert reason and "!= target port" in reason, (bad, reason)
+
+
+def test_v5_line_with_v6_link_shape_fails_closed(monkeypatch):
+    # V5 不回显 symbolic_link；若出现，`/dev/ttyACM0@…` 不在白名单形态内，按无法核对止损。
+    monkeypatch.setattr(ff, "_tty_usb_port", lambda name, base=None: _SLOT)
+    hist = ff._TtyPortHistory(base="/nonexistent")
+    line = f"symbolic_link: COM:///dev/ttyACM0@/dev/ttyACM0@{_SLOT}"
+    _b, reason = ff._check_bound_echo(line, _SLOT, "S", v5_echo=True, tty_history=hist)
+    assert reason and "unparseable tty reference" in reason
+
+
+@pytest.mark.parametrize("words", [("com", "portName", "is")])
+def test_portname_marker_and_parse_share_case_rule(monkeypatch, words):
+    monkeypatch.setattr(ff, "_tty_usb_port", lambda name, base=None: _SLOT)
+    hist = ff._TtyPortHistory(base="/nonexistent")
+    for a in _case_variants(words[0]):
+        for b in _case_variants(words[1]):
+            for c in _case_variants(words[2]):
+                line = f"{a} {b} {c}: /dev/ttyACM0"
+                observed: list = []
+                bound, reason = ff._check_bound_echo(line, _SLOT, "S", v5_echo=True,
+                                                     tty_history=hist, observed=observed)
+                assert reason is None and bound == _SLOT and observed, (line, reason)
+
+
+_FAKE_WRAPPER = r"""#!/bin/sh
+trap '' TERM
+sleep "$1"
+echo "$2" >> "$3"
+"""
+
+
+def _signal_child(tmp_path, body, *, drain=None):
+    wrapper = tmp_path / "stp-agent-priv"
+    wrapper.write_text(_FAKE_WRAPPER)
+    wrapper.chmod(0o755)
+    order = tmp_path / "order.txt"
+    drain_line = f"ff._SIGNAL_DRAIN_SECONDS = {drain}\n" if drain is not None else ""
     return f"""
-import importlib.util, os, signal, subprocess, sys, threading
+import importlib.util, os, signal, subprocess, sys, threading, time
 spec = importlib.util.spec_from_file_location("ffsig", {str(v141._SCRIPT)!r})
 ff = importlib.util.module_from_spec(spec); spec.loader.exec_module(ff)
-order = open({str(tmp_path / 'order.txt')!r}, "a", buffering=1)
+ff._PRIV_WRAPPER = {str(wrapper)!r}
+{drain_line}ORDER = {str(order)!r}
+order = open(ORDER, "a", buffering=1)
+T0 = time.monotonic()
 def settle(signum):
-    order.write("settle\\n")
+    open(ORDER + ".t", "w").write("%.3f" % (time.monotonic() - T0))
+    order.write("settle drain_incomplete=%s\\n" % ff._SIG_STATE["drain_incomplete"])
 ff._install_termination_cleanup(settle)
-def wrapper_call():
-    with ff._SignalCritical():
-        subprocess.run(["sh", "-c", "sleep 0.5; echo wrapper >> {tmp_path / 'order.txt'}"])
+def wrapper_call(seconds, tag):
+    subprocess.run([ff._PRIV_WRAPPER, str(seconds), tag, ORDER])
 {body}
 order.write("not-terminated\\n")
 """
 
 
-@pytest.mark.parametrize("body", [
-    # 主线程在途 wrapper 调用期间收到信号
-    "with ff._SignalCritical():\n"
-    "    os.kill(os.getpid(), signal.SIGTERM)\n"
-    "    subprocess.run(['sh', '-c', 'sleep 0.5; echo wrapper >> ' + "
-    "order.name])\n",
-    # reader 线程在途 wrapper 调用期间，主线程收到信号
-    "t = threading.Thread(target=wrapper_call); t.start()\n"
-    "import time; time.sleep(0.1)\n"
-    "os.kill(os.getpid(), signal.SIGTERM)\n"
-    "t.join(5)\n"
-    "threading.Event().wait(3)\n",
-])
-def test_signal_waits_for_inflight_privileged_call(tmp_path, body):
-    # 第 5 轮反例：信号落在在途 wrapper 调用期间，结算必须排在该调用完成之后，进程仍以信号终止。
+def _run_signal_child(tmp_path, body, **kw):
     import subprocess
     import sys
-    out = subprocess.run([sys.executable, "-c", _signal_script(tmp_path, body)],
-                         capture_output=True, text=True, timeout=30, cwd=str(tmp_path))
-    order = (tmp_path / "order.txt").read_text().split()
-    assert order == ["wrapper", "settle"], (order, out.stderr[-500:])
+    # 不接管道：顽固的 wrapper 孙进程会一直占着管道，run 要等它退出。
+    err = tmp_path / "stderr.txt"
+    with open(err, "w") as handle:
+        out = subprocess.run([sys.executable, "-c", _signal_child(tmp_path, body, **kw)],
+                             stdout=subprocess.DEVNULL, stderr=handle, timeout=60,
+                             cwd=str(tmp_path))
+    out.stderr = err.read_text()
+    order = (tmp_path / "order.txt").read_text().splitlines()
+    return out, order
+
+
+def test_signal_waits_for_main_thread_inflight_wrapper(tmp_path):
+    # 主线程在途 wrapper 调用期间收到 SIGTERM：处理器等 wrapper 子进程结束再结算。
+    body = ("threading.Timer(0.3, os.kill, (os.getpid(), signal.SIGTERM)).start()\n"
+            "wrapper_call(1, 'wrapper')\n")
+    out, order = _run_signal_child(tmp_path, body)
+    assert order == ["wrapper", "settle drain_incomplete=False"], (order, out.stderr[-500:])
     assert out.returncode == -15
 
 
-def test_signal_outside_critical_settles_immediately(tmp_path):
+def test_signal_waits_for_reader_thread_privileged_op(tmp_path):
+    # reader 线程在途特权操作（登记在 _INFLIGHT）期间主线程收到信号：先等它做完再结算。
+    body = ("def reader():\n"
+            "    with ff._Privileged():\n"
+            "        time.sleep(0.8)\n"
+            "        order.write('reader-write\\n')\n"
+            "t = threading.Thread(target=reader); t.start()\n"
+            "time.sleep(0.2)\n"
+            "os.kill(os.getpid(), signal.SIGTERM)\n"
+            "time.sleep(5)\n")
+    out, order = _run_signal_child(tmp_path, body)
+    assert order == ["reader-write", "settle drain_incomplete=False"], (order, out.stderr[-500:])
+    assert out.returncode == -15
+
+
+def test_reader_privileged_op_refused_after_settling_starts(tmp_path):
+    # 置位之后非主线程不得再发起特权操作（上电、写 authorized）。
+    body = ("ff._SIG_STATE['settling'] = True\n"
+            "res = {}\n"
+            "def reader():\n"
+            "    res['auth'] = ff._set_authorized('1-9', '0', base=%r)\n"
+            "    res['power'] = ff._usb_power('S', 'on', {'hub_location': '1-5', 'port': 1})\n"
+            "t = threading.Thread(target=reader); t.start(); t.join(5)\n"
+            "order.write('%%s|%%s\\n' %% (res['auth'], res['power']['tail']))\n"
+            "ff._SIG_STATE['settling'] = False\n" % str(tmp_path))
+    out, order = _run_signal_child(tmp_path, body)
+    assert order[0] == "(False, 'signal-settling')|refused: signal settle in progress", (
+        order, out.stderr[-500:])
+
+
+def test_signal_drain_is_bounded_and_keeps_orphan_state(tmp_path):
+    # wrapper 收到 SIGTERM 后仍继续跑 10 秒：排空最多 _SIGNAL_DRAIN_SECONDS，然后照常结算，
+    # 并标记排空未完成（结算保留门控状态文件，交给下次启动的孤儿恢复）。
+    body = ("threading.Timer(0.3, os.kill, (os.getpid(), signal.SIGTERM)).start()\n"
+            "wrapper_call(10, 'late-wrapper')\n")
+    out, order = _run_signal_child(tmp_path, body)
+    assert order[0] == "settle drain_incomplete=True", (order, out.stderr[-500:])
+    assert out.returncode == -15
+    settled_at = float((tmp_path / "order.txt.t").read_text())
+    assert ff._SIGNAL_DRAIN_SECONDS <= settled_at - 0.3 < ff._SIGNAL_DRAIN_SECONDS + 1.0
+
+
+def test_agent_terminate_with_stubborn_wrapper_still_settles(tmp_path):
+    # 第 6 轮反例：用 Agent 实际的终止函数和隔离进程组，wrapper 收到 SIGTERM 后继续跑 10 秒。
+    # 旧实现等 wrapper 结束才结算，8 秒时被 SIGKILL，结算未执行。
     import subprocess
     import sys
-    body = "os.kill(os.getpid(), signal.SIGTERM)\nthreading.Event().wait(3)\n"
-    out = subprocess.run([sys.executable, "-c", _signal_script(tmp_path, body)],
-                         capture_output=True, text=True, timeout=30, cwd=str(tmp_path))
-    assert (tmp_path / "order.txt").read_text().split() == ["settle"]
-    assert out.returncode == -15
+    import time
+    from backend.agent import pipeline_engine as pe
+    body = ("order.write('ready\\n')\n"
+            "wrapper_call(10, 'late-wrapper')\n")
+    proc = subprocess.Popen([sys.executable, "-c", _signal_child(tmp_path, body)],
+                            cwd=str(tmp_path), start_new_session=True,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    order_path = tmp_path / "order.txt"
+    deadline = time.monotonic() + 20
+    while not (order_path.exists() and "ready" in order_path.read_text()):
+        assert time.monotonic() < deadline
+        time.sleep(0.05)
+    time.sleep(0.3)
+    grace = pe._script_terminate_grace_seconds("flash_firmware")
+    pe._terminate_process_tree(proc, grace_seconds=grace)
+    order = order_path.read_text().splitlines()
+    assert "settle drain_incomplete=True" in order, (order, proc.stderr.read()[-500:])
+    assert proc.returncode == -15
+
+
+def test_signal_budget_fits_agent_grace():
+    from backend.agent import pipeline_engine as pe
+    grace = pe._script_terminate_grace_seconds("flash_firmware")
+    assert ff._SIGNAL_DRAIN_SECONDS < ff._SIGNAL_SETTLE_BUDGET <= grace - 1.0
+
+
+def test_signal_timeout_clips_to_remaining_budget(monkeypatch):
+    import time
+    monkeypatch.setitem(ff._SIG_STATE, "deadline", None)
+    assert ff._signal_timeout(75) == 75
+    monkeypatch.setitem(ff._SIG_STATE, "deadline", time.monotonic() + 2.0)
+    assert 1.5 < ff._signal_timeout(75) <= 2.0
+    monkeypatch.setitem(ff._SIG_STATE, "deadline", time.monotonic() - 5)
+    assert ff._signal_timeout(75) == 0.1
 
 
 @pytest.mark.parametrize("fn", ["_usb_power", "_set_authorized"])
-def test_privileged_calls_are_signal_critical(fn):
-    # 第 5 轮：在途 wrapper 断电 / authorized 写入必须在信号临界区内，结算排在它们之后。
+def test_privileged_calls_register_and_clip_timeouts(fn):
     import inspect
-    assert "with _SignalCritical():" in inspect.getsource(getattr(ff, fn))
+    src = inspect.getsource(getattr(ff, fn))
+    assert "with _Privileged():" in src and "_signal_timeout(" in src
+
+
+@pytest.mark.parametrize("fn", ["_drain_inflight", "_wrapper_children_alive",
+                                "_signal_timeout", "_install_termination_cleanup"])
+def test_signal_path_takes_no_locks(fn):
+    # 第 6 轮反例：处理器在主线程持 _SIGNAL_CRIT_LOCK 时重取同一把锁而自锁。信号路径不得
+    # 出现任何锁或同步原语。
+    import inspect
+    src = inspect.getsource(getattr(ff, fn))
+    for needle in ("Lock", "acquire", "Event", "Condition", "Semaphore", "with _"):
+        assert needle not in src, (fn, needle)
+    text = Path(v141._SCRIPT).read_text(encoding="utf-8")
+    cls = text[text.index("class _Privileged:"):text.index("def _signal_timeout(")]
+    for needle in ("Lock", "acquire", "Event", "Condition", "Semaphore"):
+        assert needle not in cls, needle
+
+
+def test_orphan_state_kept_when_drain_incomplete(tmp_path, monkeypatch):
+    state = tmp_path / "gated.json"
+    state.write_text('{"hidden": ["1-9"]}')
+    monkeypatch.setitem(ff._SIG_STATE, "drain_incomplete", True)
+    assert ff._clear_gated_state_after_restore(str(state)) is False and state.exists()
+    monkeypatch.setitem(ff._SIG_STATE, "drain_incomplete", False)
+    assert ff._clear_gated_state_after_restore(str(state)) is True and not state.exists()
