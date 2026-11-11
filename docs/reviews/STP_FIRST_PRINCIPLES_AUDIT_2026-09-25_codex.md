@@ -451,3 +451,131 @@ owner 明确「允许部署和人工验证，只要求链路自动连续」。�
 内 4 条 CHAIN run 被人工中止，之后 563 等轮次自动续跑，且无超 6 小时卡死或
 TooManyConnectionsError。按本节定义，#107 的七日验收成立，issue 已关闭；该结论仅适用于
 现有机队的自动续跑能力，不等同于 #105/#106 的 150/3750 容量验收。
+
+## 13. 第四轮复核（2026-11-11，基线 `80c9be3c6`）
+
+> 本节接续第三轮（2026-10-24，[#3230 现势回写评论](https://github.com/DUElost/stability-test-platform/issues/3230)）
+> 「按 §10 约定续写 §13 落盘」的建议：§13.1 转录第三轮要点（来源以评论为准，不改写原评论），
+> §13.2–§13.7 为第四轮增量。**不新增平行文档，处置台账仍统一归 #3230。**
+>
+> 方法：四路并行代码取证（控制面容量 / Agent 承载 / 证据与数据 / 工具生态与复利）+ 主会话对
+> 关键锚点逐行独立抽验 + GitHub 台账与 CI 现态只读。未触生产、未读凭据、未跑负载与真机。
+>
+> 基线：`origin/main@80c9be3c6`（本地 fetch；远端 fetch 因网络波动失败，远端可能已前进）。
+> 与取证中间基线 `ad430a9f0` 仅差依赖更新（#3925/#3926），结论不受影响；本节 file:line 均以
+> `80c9be3c6` 为准。77 host / 1035 device 为第三轮 Prometheus 只读实读（10-24），本轮未复核生产。
+>
+> 独立性：本轮产出方为 Qoder Desktop 会话，与第三轮不同会话；四路取证属同一会话的并行子代理，
+> **不互计多源独立佐证**。关键结论（读端点写库、IP 分桶、整批准入、V5 门控、心跳超时、adb 盲点、
+> CI 红灯）均由主会话独立抽验到行。
+
+### 13.1 第三轮（2026-10-24）要点转录
+
+来源：#3230 第三轮现势回写评论（基线 `a83391542`，读码 + gh + Prometheus 9091 只读）。
+
+| # | 要点 | 载体/去向 |
+|---|---|---|
+| N1 | 容量验收与实际增长脱钩：48→77 host / 876→1035 device 无阶梯验收；#105/#106/#3219 自 09-26/09-29 零更新 | #105 评论留痕；建议增长期救火数据作 B1 免费基线、#105 入 ADR-0058 批次排期 |
+| N2 | 存续组合：#3233 离机备份/RPO·RTO/演练 × retention 停用 × #3327 无增长告警 | #3233 评论留痕；77→150 翻倍前收口 |
+| N3+N4 | 刷机族整族复制 + `pipeline_engine` 按族名特判首例 | #3779（第 3 厂商接入前冻结特判） |
+| N5 | jar/powershell 宿主能力矩阵无载体；#3075 停滞 | #3075 评论留痕 |
+| N6 | （正面）`core/dedup_platform.py` 数据表形态是异构吸收正确样本 | 记录在案，无需载体 |
+
+### 13.2 过期结论订正（主稿旧句 → 现态）
+
+| 主稿原结论 | 现态（本轮核到代码） | 证据 |
+|---|---|---|
+| A03：每个终态锁同一父 Run 并更新计数 | **ADR-0052 已落地且部署验收关闭（#3370，09-27）**：终态事务只插 pending 标记，按 Run 批量聚合、单聚合者、300s 对账 sweep；父行锁由「每终态一次」变「每批一次」 | [`job_terminalization.py:153`](../../backend/services/job_terminalization.py)；[`plan_run_finalization.py:398`](../../backend/services/plan_run_finalization.py)；`scheduler/counter_reconciler.py:192` |
+| G14：DB 无界增长零序列零告警 | **半闭**：300s 采样行数/死元组/表体积/autovacuum 已落（#3416）+ Grafana 面板；**告警规则仍零** | [`db_growth_metrics.py:28`](../../backend/services/db_growth_metrics.py)；#3327 仍 OPEN |
+| G12：fleet 更新无一键回滚 | **Ansible 面已修**：serial 20% + max_fail 0 + 三快照 rescue 自动回滚；控制面热更新路径仍无回滚、unit 仍无 WatchdogSec、TimeoutStopSec=30 截断形状仍在（#3324 剩余半边） | [`update_agent.yml:4`](../../tools/ansible/playbooks/update_agent.yml)、`:639`；`services/host_updater.py`；`agent/stability-test-agent.service:20` |
+| A07：「无 JUnit 解析」（§6 语境） | **订正**：GPU 族已有 `am instrument AndroidJUnitRunner` + `FAILURES!!!` 文本计数（含假成功对策）；缺的是**通用载体 runner**，不是插桩能力从零 | `agent/scripts/gpu_setup/_lib.py:556`；`agent/scripts/gpu_finish/_lib.py:451` |
+| #3219：整轮心跳预算无测量 | **测量已补、预算仍可超**：p99 分桶指标已落但无设备数分档；25 台最坏单台 45s × 4 波 ≈ 180s ≫ 22s 间隔 | `agent/contracts/heartbeat_timing.py:22`；`services/heartbeat_timing_metrics.py:68`；`agent/device_discovery.py:710,724,834` |
+| #3094：门禁可 env 静默 SKIP | env 开关已删 + 防回潮测试钉住；**真实 entrypoint 验证仍未触发**（6 个 kind=tool 族全是 legacy 外部二进制），缺口转移至 #3075——「关闭」是转移非闭合 | `tests/test_adr0033_d0_d2_gates.py:98`；`scripts/run_gates.py:135` 注释明示触发器 |
+
+### 13.3 仍成立缺口重验（逐条到行）
+
+**容量面**
+
+- **G1/#3231 整批准入持锁**：[`admission_pump.py:666`](../../backend/services/admission_pump.py) 仍单事务 FOR UPDATE 锁 Run + 全部 PlanRunHost + Host + 目标 Device 后整批物化 Job，与心跳写同一批行集；无分批/让锁。3750 设备持锁窗未实测。
+- **G11/#3325 读端点写库**：[`devices.py:511`](../../backend/api/routes/devices.py) GET 列表仍逐设备状态校正后 commit，`device.host` 懒加载单页至多 1200 次 SELECT；[`results.py:230`](../../backend/api/routes/results.py) summary 仍无时间界 GROUP BY。
+- **G5/#3518 同相突发**：限流仍纯 IP 分桶（[`limiter.py:173`](../../backend/api/middleware/limiter.py)，Agent 桶 2000/min/IP——150 host 共用出口时每 host ≈13 req/min，仅 heartbeat 豁免）；WS 重连无 jitter（`agent/socketio_client.py:222`）、claim tick 固定相位（`agent/agent_loop.py:78`）、续租 wait 同相（`agent/lease_renewer.py:110`）。outbox 退避已修半边维持。
+- **G15/#3328 merge 单车道**：全局单 flock 全程持锁（[`dedup_scan.py:895`](../../backend/services/dedup_scan.py)），影子新链同样全局 advisory lock 且仅 mtk（`services/issue_fact_store.py:731`）。E-4 wall time 未测。
+
+**证据与数据面**
+
+- **G8/#3316 中心完整率零实现**：产物表无 checksum（`models/plan_run_artifact.py:29`），partial 仅告警日志后照常 merge（`tasks/saq_tasks.py:597`），结果层无 partial/unknown；11-05 评论以 Run 1196 人工差集误判实证。**证据缺失仍可能被统计层默认为无故障。**
+- **G4 数据资产未激活**：ADR-0053 已被 ADR-0062 Superseded；B8 事实链 8 张无级联事实表已迁移（`models/issue_fact.py`），但写路径为影子链且开关默认关（`core/settings/scheduler.py:74`），唯 spill_ledger 走现网；删除前无「事实已写」前置；`case_result` CASCADE 仍在（`models/case_result.py:23`）。生产 retention=36500 停用清理为既有记录，本轮未复核。
+- **A05/#3233 存续三件套**：备份仍本机 pg_dump + 7 天轮转无离机（`scripts/pg_backup.sh:26`）；无 RPO/RTO 文档与演练记录；Alertmanager 生效 receiver 仍 127.0.0.1 占位、真实通道全注释（`deploy/prometheus/alertmanager.yml:58`）——平台整机故障时告警发不出。磁盘水位告警已落（#3272）维持。
+- **Jira 链无幂等键**：响应丢失后无「先对账再重试」，重跑可重复提单；当前闸门是 dry-run + 人工复核（`api/routes/dedup.py:277`）。§6 的接入验收要求仍未满足。
+
+### 13.4 本轮新增发现（N7–N12，编号续第三轮）
+
+**N7｜CI 主干确定性红灯，A01 同形态复发。** 11-10 夜间 backstop 与 main CI 双红：
+`test_vbus_usb_presence_3918.py` 两例失败（#3918 刚合入的 USB presence 测试），重跑仍红，
+[#3928](https://github.com/DUElost/stability-test-platform/issues/3928) 已自动立单归类确定性缺陷。
+#3247 关闭后 **#3317 的三条防复发守卫（S1/S2/S3）仍零实现**——复发本身即守卫缺位的代价实证。
+与 A01 的区别：本轮失败是真实断言失败而非判据空过，但「红灯不阻断合入、守卫未落即复发」的形态相同。
+
+**N8｜心跳单拍脆弱 + 慢指标同相（代码事实，未实测发生率）。** Agent 心跳 HTTP timeout=5s 且失败
+不重试（[`heartbeat.py:89`](../../backend/agent/heartbeat.py)），25 台 payload 一次超时即整拍设备
+事实丢失；控制面 60s 离线宽限（`api/routes/heartbeat.py:142`）可兜底，但与慢拍叠加会穿。慢指标
+due 窗口按首采同拍建立（`agent/heartbeat_thread.py:305`）→ 25 台每 1800s 同相长拍，与 N9、
+#3219 的整轮预算缺口叠加放大空窗。
+
+**N9｜adb 全灭健康盲点（#3323 的未覆盖面）。** `adb_dead = online==0 and total>0`
+（[`capacity_reporter.py:203`](../../backend/agent/capacity_reporter.py)）：枚举 10s 超时返空集
+（`agent/device_discovery.py:376`，无防抖）时 total=0 → adb_dead=False，健康面仍 HEALTHY 无
+reason，而 slots 已归零停认领——**故障在健康面不可见、在认领面已生效**，两面不一致。60s 宽限
+只推迟设备翻离线，不补健康判据。
+
+**N10｜执行通道共享，无舱壁（代码形状，未实测）。** `backend/main.py` 无 `set_default_executor`：
+心跳（`api/routes/heartbeat.py:194`）、准入 Phase B（`admission_pump.py:971`）、聚合 drain 共用
+asyncio 默认线程池且同吃 sync 池 40 槽。ADR-0047 治了连接数预算，未治执行通道隔离——终态波
+与心跳争同一线程池时 p99 互相抬升。是否构成瓶颈须先测（B1 阶梯观测项），不预先改架构。
+
+**N11｜交接模板承诺与部署能力漂移。** `docs/operations/site-handover-and-navigation.md:51`
+备份模板列「每日全量 + WAL 归档」，仓库 deploy/scripts 零 WAL 配置、备份无离机（A05）。该段是
+「按站点填写」的模板而非现网事实断言，但模板承诺与可交付能力不一致会误导新站点验收——
+建议 #3233 收口时把模板承诺逐项对照实际能力。
+
+**N12｜ADR 状态节 ↔ transitions 漂移实证（#3519 要抓的形态）。** ADR-0051 落地状态节
+（`docs/adr/ADR-0051-release-unit-and-content-addressing.md:9`）仍写「第 4 片 c（host-resources
+通道）未完」，而 `docs/governance/transitions.json` 的 `host-resources-layer` 已 done
+（2026-09-26 R1–R4 全落地，证据含 #3437/#3441/#3442/#3443）。台账漂移守卫 #3519 零实现期间，
+此类漂移在权威文档层真实发生。
+
+### 13.5 载体建议汇总（待 owner 裁决，本轮未立单、未改台账）
+
+沿用「一单一判据、不造第二事实源」：优先并入既有单，新立仅一处。
+
+| 发现 | 建议载体 | 判据/动作 |
+|---|---|---|
+| N7 CI 红灯 | **#3928**（已自动立单）+ **#3317** | #3928 修红；建议把 #3317 守卫两件套（守卫 + 反例自证）列为 #3928 关闭的伴随验收，否则同形态三度复发 |
+| N8 心跳单拍脆弱 | 并入 **#3219** | 增补判据：单拍超时/失败率、慢拍同相窗口、25 台分档 p99 与新鲜度同批实测 |
+| N9 adb 全灭盲点 | 并入 **#3323** | 判据扩展：total=0 且历史非零的健康判定 + 空集防抖，告警面与认领面一致 |
+| N10 执行通道共享 | **建议新立单**（capacity/observability） | 先测后裁：B1 阶梯记录终态波与心跳 p99 相关性，再决定是否 executor/池隔离；挂 ADR-0047 观察面，不预先改架构 |
+| N11 WAL 模板漂移 | 并入 **#3233** | 模板承诺逐项对照实际备份能力；WAL/离机取舍随 RPO/RTO 裁决 |
+| N12 ADR↔transitions 漂移 | 并入 **#3519** | 作为守卫落地后的反例自证样本；ADR-0051 状态节回填随守卫 PR 或单独 docs 修复 |
+| （前置决策）**#3690 V5 门控** | 既有单，**owner 裁决** | 25 台/host 密度提升的物理前提：V5 初始门控默认 `full` 压制集含 `201c`（`flash_firmware.py:418,2708`，实测为 MLD 正常 adb 态），刷一台可摘同 host 至多 24 台在测邻机；V6/vbus 侧已修（#3698），V5 半边悬置近月 |
+
+### 13.6 处置顺序建议（沿 §7 三阶段，按本轮现态校准）
+
+1. **恢复可信基线**：#3928 修红 + #3317 守卫落地（复发已实证）；**#3690 V5 半边裁决**（密度前提）。
+2. **存续闭环（77→150 翻倍前）**：#3233 离机备份 + RPO/RTO + 一次异机演练 + 真实告警通道；#3327 增长告警补规则（序列已有）。
+3. **容量因果证据**：#105 B1 合成 150 host 入批次排期（技术侧可排期、不依赖采购），回填增长期救火数据作免费基线；#3231 准入锁窗、#3219（含 N8/N9）25 台分档实测；N10 作为 B1 观测项先测后裁。
+4. **证据闭环**：#3316 中心完整率 + partial/unknown 语义；B8 事实链影子转正式写、删除前置「事实已写」——让规模产生长期可靠性资产而非仅日志。
+5. **工具生态试点**：通用 JUnit 插桩适配器 + 客户刷机工具（显式资源锚）各一，同 PR 接通真实 entrypoint 门禁（#3075）；#3779 冻结族名特判于第 3 厂商接入前。
+
+复利度量沿用 §7 四指标；本轮 N7 即「同族缺陷复发率」的一个数据点。
+
+### 13.7 验证与边界
+
+已执行：四路并行取证（基线 blob 读取）；主会话独立抽验关键锚点到行（devices 读写、limiter、
+admission、池值、flash 门控、heartbeat 超时、capacity 盲点、GPU 插桩、Ansible 回滚、flock、
+transitions/ADR 漂移、CI 失败摘要）；GitHub issue/PR/CI 现态只读；本稿与 DOC-MAP 改动链接解析检查。
+
+未执行：负载测试、真机验证、生产生效核对、异机恢复、全量测试套。**本节是静态复核 + 台账现态，
+不是容量验收**；未到目标档时只认证已测档位，不外推 150/3750。
+
+复审触发：#3928 转绿、#3690 裁决落锤、B1/B2 阶梯取得结果、retention 策略变化、N10 实测数据
+产出、新专项改变负载包络时，仅重审受影响结论。
