@@ -70,9 +70,11 @@ effective_coverage 的薄适配入口，供 G6/G7 使用。交付状态不持久
 测试经项目内存保护 runner（cgroup memory.max=6 GiB、swap=0），控制面用
 testcontainers PostgreSQL 16。
 
-- 反例先行：在 origin/main（80c9be3c6）上先提交 23 项 G5 用例，全部因
-  backend.services.shadow_delivery 不存在失败（23 failed）；实现后
-  backend/tests/services/test_shadow_delivery.py 23 passed。
+- 反例先行：实现前在 origin/main（80c9be3c6）上先写 20 项验收用例，全部因
+  backend.services.shadow_delivery 不存在失败（20 failed）；实现后通过。最终 23 项
+  在 origin/main 的独立 worktree 上复跑仍全部报错（23 errors，模块不存在），在实现
+  分支 backend/tests/services/test_shadow_delivery.py 为 23 passed；新增 3 项是终态
+  失败登记与下周期重试。
 - 验收 1–10 对应覆盖：FINAL OK + RECEIVED/EMPTY 登记 v1 且 scope_only；重复触发
   不新增版本；补充轮补 host 后 v2 且 v1 不变；全 MISSING 返回未就绪（覆盖为空）；
   NO_INPUT / FAILED_FINAL / FAILED 返回未就绪；INCOMPLETE 进入 gaps；发布状态
