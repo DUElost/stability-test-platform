@@ -20,6 +20,9 @@ v1.4.2（#3892，15.93 LX3 金丝雀 PlanRun 1255 / Job 206578）：
     只置布尔量，不碰任何同步原语（信号处理器可能打断持有 Event 内部锁的主线程）。
   - 复核 #3924 第 4 轮：vbus 下每一处绑定标记都严格解析并逐一核对（标记数 ≠ 严格回显数、
     带端口字样的行里有替换字符，均止损）；结算按步骤记完成，信号中途重入时接着做完。
+  - 复核 #3924 第 5 轮（P2 完整日志）：标记只认 `portName is` / `symbolic_link`，与严格解析
+    同为不区分大小写；V5 行内每一处 `/dev/ttyACM` 引用须为完整节点名并解析到槽位口；
+    wrapper 供电、authorized 写入与结算是信号临界区，信号延后到最外层退出再投递。
   - V6、非 vbus 的 V5 命令行与 1.4.1 逐字一致。
 
 v1.4.1（#3892 推广，15.93 试点）：
@@ -458,9 +461,15 @@ _SYMBOLIC_LINK_RE = re.compile(r"symbolic_link:\s*(\S+)")
 _V5_PORTNAME_RE = re.compile(r"com portName is:\s*/dev/(ttyACM\d+)")
 # v1.4.2（ADR-0063 v1.3 D3 第 4 条「回显逐次核对」，复核 #3924 第 4 轮）：vbus 下一行里的
 # 每一处绑定标记都必须严格解析。节点名后面紧跟字母数字或替换字符（解码失败）不算严格匹配。
-_V5_PORTNAME_STRICT_RE = re.compile(r"com portName is:\s*/dev/(ttyACM\d+)(?![\w\ufffd])")
-_BIND_MARKER_RE = re.compile(r"port\s*name|symbolic_link", re.IGNORECASE)
+# 标记与严格解析同一大小写口径（均不区分），`portName is` 才是绑定标记——P2 日志第 120 行
+# 的 `port name(/dev/ttyACM0)` 是普通信息（复核 #3924 第 5 轮）。节点名必须以空白或行尾结束。
+_V5_PORTNAME_STRICT_RE = re.compile(r"com\s+portName\s+is:\s*/dev/(ttyACM\d+)(?=\s|$)",
+                                    re.IGNORECASE)
+_BIND_MARKER_RE = re.compile(r"portName\s+is\b|symbolic_link", re.IGNORECASE)
 _BIND_HINT_RE = re.compile(r"port|tty|acm|link", re.IGNORECASE)
+# 行内任何 `/dev/ttyACM…` 引用：名字取到分隔符为止，必须整段是 ttyACM<数字>。
+_DEV_TTYACM_REF_RE = re.compile(r"/dev/(ttyACM[^\s()\[\]{},;:@'\"<>]*)", re.IGNORECASE)
+_TTYACM_NAME_RE = re.compile(r"ttyACM\d+", re.IGNORECASE)
 _SYS_CLASS_TTY = "/sys/class/tty"
 
 
@@ -707,14 +716,15 @@ def _check_bound_echo(line: str, target_port: str, serial: str,
 def _check_vbus_bind_line(line: str, target_port: str, serial: str,
                           tty_history: "_TtyPortHistory | None",
                           observed: "list | None") -> "tuple[str | None, str | None]":
-    """vbus 下的一行输出：每一处绑定标记都必须严格解析且等于目标口（ADR-0063 v1.3 D3 第 4 条）。
+    """vbus 下的一行输出（ADR-0063 v1.3 D3 第 4 条「回显逐次核对」）。返回 (绑定口, 止损理由)。
 
-    - 行内出现解码替换字符，且带端口 / tty 字样：无法核对，止损；
-    - 绑定标记（`portName` / `symbolic_link`）的个数必须等于严格解析出的回显个数，
-      有一处解析不了就止损（复核 #3924 第 4 轮：节点名里夹非法字节时整条被跳过）；
-    - 每一处都要核对（第 4 轮：同一行先目标口、再邻口时只核对了第一处），任一处
-      解析不出、有歧义或不等于目标口都止损；
-    - V5 节点名每处查一次实时 sysfs，再取历史快照，两者合并恰好一个口才可用。
+    - 带端口 / tty 字样的行里出现解码替换字符：无法核对，止损；
+    - 绑定标记（`portName is`、`symbolic_link`）的个数必须等于严格解析出的回显个数；
+    - V5（`tty_history` 给出时）：行内每一处 `/dev/ttyACM…` 引用都要核对——名字必须整段是
+      `ttyACM<数字>`（`/dev/ttyACM0-neighbor` 止损，复核 #3924 第 5 轮），每个名字查一次实时
+      sysfs 再取历史快照，合并后恰好一个口且等于目标口；
+    - 每一处都核对：任一处解析不出、有歧义或不等于目标口都止损。
+    绑定口只在本行有严格绑定回显时返回；其余引用只核对、不计为已验证回显。
     """
     def _stop(why: str) -> str:
         return (f"{why} (target port {target_port!r}, serial={serial}): "
@@ -724,11 +734,9 @@ def _check_vbus_bind_line(line: str, target_port: str, serial: str,
         return None, _stop(f"undecodable bytes in a port/tty line {line.strip()[:120]!r}: "
                            "无法核对绑定口")
     markers = len(_BIND_MARKER_RE.findall(line))
-    if markers == 0:
-        return None, None
     links = _SYMBOLIC_LINK_RE.findall(line)
-    names = _V5_PORTNAME_STRICT_RE.findall(line)
-    if len(links) + len(names) != markers:
+    echo_names = _V5_PORTNAME_STRICT_RE.findall(line)
+    if len(links) + len(echo_names) != markers:
         return None, _stop(f"unparseable bind echo {line.strip()[:120]!r}: 无法核对绑定口")
     ports: list = []
     for link in links:
@@ -736,9 +744,15 @@ def _check_vbus_bind_line(line: str, target_port: str, serial: str,
         if not _PORT_PATH_RE.match(tail):
             return None, _stop(f"unparseable symbolic_link {link!r}: 无法核对绑定口")
         ports.append(tail)
-    for name in names:
+    # V5：行内所有 ttyACM 引用（含绑定回显本身）逐一核对。V6 不按 tty 核对（只认 symbolic_link）。
+    refs = _DEV_TTYACM_REF_RE.findall(line) if tty_history is not None else []
+    if tty_history is None and echo_names:
+        refs = list(echo_names)
+    for name in refs:
+        if not _TTYACM_NAME_RE.fullmatch(name):
+            return None, _stop(f"unparseable tty reference /dev/{name}: 无法核对绑定口")
         live = _tty_usb_port(name)
-        if observed is not None:
+        if observed is not None and name in echo_names:
             observed.append((name, live))
         candidates = set(tty_history.ports(name)) if tty_history is not None else set()
         if live is not None:
@@ -753,6 +767,8 @@ def _check_vbus_bind_line(line: str, target_port: str, serial: str,
     for port in ports:
         if target_port and port != target_port:
             return port, _stop(f"tool bound USB port {port!r} != target port {target_port!r}")
+    if not links and not echo_names:
+        return None, None
     return (ports[0] if ports else None), None
 
 
@@ -899,23 +915,24 @@ def _set_authorized(port: str, value: str, base: str = _SYSFS_USB_BASE) -> "tupl
     idVendor 校验在 wrapper 内强制）；不再存在任意命令面。
     """
     path = os.path.join(base, port, "authorized")
-    try:
-        with open(path, "w") as handle:
-            handle.write(value)
-        return True, "direct"
-    except (OSError, ValueError):
-        pass
-    if not _priv_wrapper_usable():
-        return False, "no-priv-face"
-    try:
-        proc = subprocess.run(
-            ["sudo", "-n", _PRIV_WRAPPER, "usb-authorized",
-             "--port", port, "--value", value],
-            capture_output=True, timeout=10,
-        )
-        return proc.returncode == 0, "wrapper"
-    except (OSError, subprocess.TimeoutExpired):
-        return False, "wrapper-failed"
+    with _SignalCritical():
+        try:
+            with open(path, "w") as handle:
+                handle.write(value)
+            return True, "direct"
+        except (OSError, ValueError):
+            pass
+        if not _priv_wrapper_usable():
+            return False, "no-priv-face"
+        try:
+            proc = subprocess.run(
+                ["sudo", "-n", _PRIV_WRAPPER, "usb-authorized",
+                 "--port", port, "--value", value],
+                capture_output=True, timeout=10,
+            )
+            return proc.returncode == 0, "wrapper"
+        except (OSError, subprocess.TimeoutExpired):
+            return False, "wrapper-failed"
 
 
 def _gate_other_mtk(target_port: "str | None", base: str = _SYSFS_USB_BASE,
@@ -1702,6 +1719,37 @@ def _acquire_host_lock(on_wait_tick: "callable | None" = None):
     return lock_fd
 
 
+# v1.4.2（ADR-0063 v1.3 D3 第 4 条「信号打断停止流程」，复核 #3924 第 5 轮）：特权操作
+# （wrapper 切电、写 authorized）与结算本身是「信号临界区」。信号落在临界区内时，处理器
+# 只登记信号、不做任何动作；最外层临界区退出时把信号重新投递给本进程，处理器再结算并
+# 终止。这样在途的 wrapper 子进程一定先完成，结算的动作排在它之后，锁释放之后不会再有
+# 迟到的 off / authorized=1 生效。处理器只读写下面这个字典，不取任何锁。
+_SIGNAL_CRIT: dict = {"depth": 0, "pending": None}
+_SIGNAL_CRIT_LOCK = threading.Lock()
+
+
+class _SignalCritical:
+    """信号临界区（可嵌套、可跨线程计数）。见 `_SIGNAL_CRIT`。"""
+
+    def __enter__(self) -> "_SignalCritical":
+        with _SIGNAL_CRIT_LOCK:
+            _SIGNAL_CRIT["depth"] += 1
+        return self
+
+    def __exit__(self, *exc) -> bool:
+        with _SIGNAL_CRIT_LOCK:
+            _SIGNAL_CRIT["depth"] -= 1
+            depth = _SIGNAL_CRIT["depth"]
+        pending = _SIGNAL_CRIT["pending"]
+        if depth == 0 and pending is not None:
+            _SIGNAL_CRIT["pending"] = None
+            try:
+                os.kill(os.getpid(), pending)  # 主线程的处理器接着结算并终止
+            except Exception:
+                pass
+        return False
+
+
 def _install_termination_cleanup(settle: "callable") -> None:
     """#1025：注册 SIGTERM/SIGINT/SIGHUP —— 被取消也要先恢复门控再死。
 
@@ -1714,6 +1762,10 @@ def _install_termination_cleanup(settle: "callable") -> None:
                  命名空间不变（ADR-0033 §D2：信号死亡视为工具缺陷，语义不改）。
     """
     def _on_signal(signum, _frame) -> None:
+        if _SIGNAL_CRIT["depth"] > 0:
+            # 在途特权操作或结算未完成：只登记，临界区退出时重新投递（v1.4.2）。
+            _SIGNAL_CRIT["pending"] = int(signum)
+            return
         try:
             settle(int(signum))
         except Exception:
@@ -2587,11 +2639,12 @@ def _usb_power(serial: str, action: str, slot: dict) -> dict:
     started = time.monotonic()
     expect = f"{slot['hub_location']}:{slot['port']}"
     try:
-        proc = subprocess.run(
-            ["sudo", "-n", _PRIV_WRAPPER, "usb-power",
-             "--serial", serial, "--expect-slot", expect, "--action", action],
-            capture_output=True, text=True, timeout=75,
-        )
+        with _SignalCritical():
+            proc = subprocess.run(
+                ["sudo", "-n", _PRIV_WRAPPER, "usb-power",
+                 "--serial", serial, "--expect-slot", expect, "--action", action],
+                capture_output=True, text=True, timeout=75,
+            )
         ok = proc.returncode == 0
         tail = ((proc.stdout or "") + (proc.stderr or "")).strip()[-200:]
         rc: "int | None" = proc.returncode
@@ -3230,11 +3283,13 @@ def main() -> None:
         if "release" in settle_done:
             return
         lock_settled = True
-        # 复核 #3924 第 4 项：先停采样、冻结记录，再动供电与锁。
-        _settle_step("stop-sampler", _settle_stop_sampler)
-        _settle_step("isolate", _settle_isolate)
-        _settle_step("restore", _settle_restore)
-        _settle_step("release", _settle_release)
+        # 复核 #3924 第 4 项：先停采样、冻结记录，再动供电与锁。整个结算是信号临界区
+        # （第 5 轮）：信号落在结算中途时等结算做完再终止，不重入。
+        with _SignalCritical():
+            _settle_step("stop-sampler", _settle_stop_sampler)
+            _settle_step("isolate", _settle_isolate)
+            _settle_step("restore", _settle_restore)
+            _settle_step("release", _settle_release)
 
     def _settle_on_signal(signum: int) -> None:
         # #1025：取消/超时路径唯一会经过的清理点——先结算再死

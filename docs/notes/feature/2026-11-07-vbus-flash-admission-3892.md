@@ -88,6 +88,11 @@ Class: feature
   隔离未执行。规划者再次修订 D3 第 4 条（「回显逐次核对」与「结算按步骤完成」），不再逐个补反例：vbus 下改由 `_check_vbus_bind_line` 统计
   一行里所有绑定标记，要求与严格解析出的回显个数相等并逐一核对；带端口 / tty 字样的行里出现替换字符即止损；`_settle_lock` 拆成
   停采样、隔离、恢复门控、释放锁四步，各自记完成，重入从未完成的一步继续。
+  复核 #3924 第 5 轮用 P2 完整日志确认第 4 轮的标记 `port\s*name` 误杀 V5 的 `path name(/dev/ttyACM0), port name(/dev/ttyACM0)` 行；
+  另有 `/dev/ttyACM0-neighbor` 只核前缀、标记与严格解析大小写规则不一致、信号重入时在途 wrapper 断电或 `authorized=1` 越过锁释放三处。
+  规划者订正 D3 第 4 条：标记只认 `portName is` 与 `symbolic_link`，两侧都不区分大小写；V5 下行内每一处 `/dev/ttyACM` 引用都必须是完整节点名并解析到槽位口。
+  新增「信号临界区」：`_usb_power` 的 wrapper 调用、`_set_authorized` 与 `_settle_lock` 包在 `_SignalCritical` 内，信号落在其中时处理器只记下、
+  最外层退出时用 `os.kill` 重新投递，再执行结算。这样跨线程也成立（reader 线程里的重新门控）。
 
 ## Alternatives
 
@@ -178,6 +183,8 @@ Class: feature
   `stop` 调 `Event.set`、吞掉读取异常）各至少 1 条变红。`-k flash` 372 passed。
   第 4 轮后增至 50 条，新增 11 条（逐次核对 6 例、非绑定行 3 例、同一行两处目标回显、结算中途收到信号）；7 条在 `a00de3c` 上失败。
   5 种变异（旧结算闸门、不比对标记数、不查替换字符、只核第一处、节点名不严格）各至少 1 条变红。`-k flash` 383 passed。
+  第 5 轮后增至 65 条，新增 15 条（P2 真实日志夹具回放 4 条、tty 引用 5 例、大小写 1 例、真实子进程信号延后 3 条、特权调用在临界区 2 条）。
+  7 种变异（旧 `port\s*name` 标记、引用只取数字前缀、不核行内引用、不延后信号、严格解析区分大小写、`authorized` 写入或 wrapper 调用不在临界区）各至少 1 条变红。
 
 ## Revisit
 

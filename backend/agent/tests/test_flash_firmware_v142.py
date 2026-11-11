@@ -4,6 +4,8 @@ V5 工具的 `com portName` 回显在 PIPE 块缓冲下晚于 tty 节点消失�
 `stdbuf -oL -eL` 启动 V5 vbus 工具，并在每次尝试里记录上电后见过的「节点 → 口」，
 回显的口取实时与历史的并集：恰好一个口才用，没有或多于一个都止损。
 """
+from pathlib import Path
+
 import pytest
 
 from backend.agent.tests import test_flash_firmware_v140 as v140
@@ -736,3 +738,133 @@ def test_signal_during_settle_completes_remaining_steps(tmp_path, monkeypatch, c
         ff.main()
     assert h.power == ["off", "on", "off"], "信号处理器里的结算完成了隔离"
     assert released == [True] and restored == [True], "门控恢复与释放锁各一次"
+
+
+# ── 复核 #3924 第 5 轮：P2 真实日志回放、tty 引用逐一核对、信号临界区 ───────────────
+
+_P2_LOG = (Path(__file__).resolve().parent / "fixtures" / "flash_firmware"
+           / "v5_p2_success_20261110.log")
+_P2_PORT = "1-13.2.4"
+
+
+def _p2_lines():
+    return _P2_LOG.read_text(encoding="utf-8").splitlines(keepends=True)
+
+
+@pytest.mark.parametrize("live", [_P2_PORT, None])
+def test_p2_success_log_replays_clean(monkeypatch, live):
+    # 15.93 P2 成功刷机的完整控制台日志（#3892 comment 6785495512）逐行回放，不得误杀。
+    # live=None：节点已消失，只靠历史记录核对（PlanRun 1255 的情形）。
+    hist = ff._TtyPortHistory(base="/nonexistent")
+    hist._seen["ttyACM0"] = [(0.0, _P2_PORT)]
+    monkeypatch.setattr(ff, "_tty_usb_port", lambda name, base=None: live)
+    bound = []
+    for line in _p2_lines():
+        observed: list = []
+        b, reason = ff._check_bound_echo(line, _P2_PORT, "S", v5_echo=True,
+                                         tty_history=hist, observed=observed)
+        assert reason is None, (line, reason)
+        if observed:
+            bound.append(b)
+    assert bound == [_P2_PORT], "只有第 130 行的 com portName 计为绑定回显"
+
+
+def test_p2_log_on_neighbor_port_aborts(monkeypatch):
+    hist = ff._TtyPortHistory(base="/nonexistent")
+    hist._seen["ttyACM0"] = [(0.0, "1-13.2.3")]
+    monkeypatch.setattr(ff, "_tty_usb_port", lambda name, base=None: None)
+    reasons = [ff._check_bound_echo(line, _P2_PORT, "S", v5_echo=True, tty_history=hist)[1]
+               for line in _p2_lines()]
+    hits = [r for r in reasons if r]
+    assert hits and "!= target port" in hits[0]
+
+
+def test_p2_log_end_to_end(tmp_path, monkeypatch, capsys):
+    h = v141._v5_harness(monkeypatch, tmp_path)
+    made = _capture_histories(monkeypatch)
+    _late_echo_tool(h, monkeypatch, made, seen_port=_SLOT, lines=tuple(_p2_lines()))
+    payload = h.run(monkeypatch, capsys)
+    # 槽位口不同，但回放里 ttyACM0 在本用例映射到槽位口：只验证日志形态不被误杀
+    assert payload["success"] is True, payload
+
+
+@pytest.mark.parametrize("line,needle", [
+    ("com portName is: /dev/ttyACM0-neighbor", "unparseable"),
+    ("USB port is obtained. path name(/dev/ttyACM0-x), port name(/dev/ttyACM0)", "unparseable tty"),
+    ("USB port is obtained. path name(/dev/ttyACM1), port name(/dev/ttyACM1)", "!= target port"),
+    ("USB port detected: /dev/ttyACM1", "!= target port"),
+    ("PORTNAME IS /dev/ttyACM0", "unparseable bind echo"),
+])
+def test_tty_references_checked(monkeypatch, line, needle):
+    ports = {"ttyACM0": _SLOT, "ttyACM1": _NEIGHBOR, "ttyACM0-neighbor": _NEIGHBOR}
+    monkeypatch.setattr(ff, "_tty_usb_port", lambda name, base=None: ports.get(name))
+    hist = ff._TtyPortHistory(base="/nonexistent")
+    bound, reason = ff._check_bound_echo(line, _SLOT, "S", v5_echo=True, tty_history=hist)
+    assert reason and needle in reason, (line, reason)
+
+
+def test_marker_and_strict_parse_share_case_rule(monkeypatch):
+    monkeypatch.setattr(ff, "_tty_usb_port", lambda name, base=None: _SLOT)
+    hist = ff._TtyPortHistory(base="/nonexistent")
+    observed: list = []
+    bound, reason = ff._check_bound_echo("COM PORTNAME IS: /dev/ttyACM0", _SLOT, "S",
+                                         v5_echo=True, tty_history=hist, observed=observed)
+    assert reason is None and bound == _SLOT and len(observed) == 1
+
+
+def _signal_script(tmp_path, body):
+    return f"""
+import importlib.util, os, signal, subprocess, sys, threading
+spec = importlib.util.spec_from_file_location("ffsig", {str(v141._SCRIPT)!r})
+ff = importlib.util.module_from_spec(spec); spec.loader.exec_module(ff)
+order = open({str(tmp_path / 'order.txt')!r}, "a", buffering=1)
+def settle(signum):
+    order.write("settle\\n")
+ff._install_termination_cleanup(settle)
+def wrapper_call():
+    with ff._SignalCritical():
+        subprocess.run(["sh", "-c", "sleep 0.5; echo wrapper >> {tmp_path / 'order.txt'}"])
+{body}
+order.write("not-terminated\\n")
+"""
+
+
+@pytest.mark.parametrize("body", [
+    # 主线程在途 wrapper 调用期间收到信号
+    "with ff._SignalCritical():\n"
+    "    os.kill(os.getpid(), signal.SIGTERM)\n"
+    "    subprocess.run(['sh', '-c', 'sleep 0.5; echo wrapper >> ' + "
+    "order.name])\n",
+    # reader 线程在途 wrapper 调用期间，主线程收到信号
+    "t = threading.Thread(target=wrapper_call); t.start()\n"
+    "import time; time.sleep(0.1)\n"
+    "os.kill(os.getpid(), signal.SIGTERM)\n"
+    "t.join(5)\n"
+    "threading.Event().wait(3)\n",
+])
+def test_signal_waits_for_inflight_privileged_call(tmp_path, body):
+    # 第 5 轮反例：信号落在在途 wrapper 调用期间，结算必须排在该调用完成之后，进程仍以信号终止。
+    import subprocess
+    import sys
+    out = subprocess.run([sys.executable, "-c", _signal_script(tmp_path, body)],
+                         capture_output=True, text=True, timeout=30, cwd=str(tmp_path))
+    order = (tmp_path / "order.txt").read_text().split()
+    assert order == ["wrapper", "settle"], (order, out.stderr[-500:])
+    assert out.returncode == -15
+
+
+def test_signal_outside_critical_settles_immediately(tmp_path):
+    import subprocess
+    import sys
+    body = "os.kill(os.getpid(), signal.SIGTERM)\nthreading.Event().wait(3)\n"
+    out = subprocess.run([sys.executable, "-c", _signal_script(tmp_path, body)],
+                         capture_output=True, text=True, timeout=30, cwd=str(tmp_path))
+    assert (tmp_path / "order.txt").read_text().split() == ["settle"]
+    assert out.returncode == -15
+
+
+@pytest.mark.parametrize("fn", ["_usb_power", "_set_authorized"])
+def test_privileged_calls_are_signal_critical(fn):
+    # 第 5 轮：在途 wrapper 断电 / authorized 写入必须在信号临界区内，结算排在它们之后。
+    import inspect
+    assert "with _SignalCritical():" in inspect.getsource(getattr(ff, fn))
