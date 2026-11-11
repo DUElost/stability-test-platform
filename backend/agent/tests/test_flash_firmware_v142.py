@@ -348,7 +348,7 @@ def test_signal_settle_stops_sampler_before_isolating(tmp_path, monkeypatch, cap
     power = h._fake_power
 
     def _power(serial, action, slot):
-        if action == "off" and made and made[-1]._stop.is_set():
+        if action == "off" and made and made[-1]._halt:
             seen.append(made[-1]._closed)
         return power(serial, action, slot)
 
@@ -383,7 +383,7 @@ def test_runner_reports_stuck_reader(tmp_path):
     finally:
         release.set()
     assert rc == 0
-    assert status == {"stuck": True}
+    assert status["stuck"] is True and status["eof"] is False
 
 
 def test_runner_reports_readers_done(tmp_path):
@@ -392,7 +392,7 @@ def test_runner_reports_readers_done(tmp_path):
     ff._run_flash_tool_with_progress(
         [sys.executable, "-c", "print('x')"], cwd=str(tmp_path), env=None, timeout=30,
         on_stage=lambda tok: None, on_percent=lambda pct: None, readers_status=status)
-    assert status == {"stuck": False}
+    assert status == {"stuck": False, "eof": True, "errors": []}
 
 
 def test_stuck_readers_fail_closed(tmp_path, monkeypatch, capsys):
@@ -410,7 +410,7 @@ def test_stuck_readers_fail_closed(tmp_path, monkeypatch, capsys):
     h.launch = launch
     payload = h.run(monkeypatch, capsys)
     assert payload["success"] is False, payload
-    assert "readers did not finish" in payload["error_message"]
+    assert "not fully checked" in payload["error_message"]
     assert payload["metrics"]["attempts"][-1]["outcome"] == "aborted-port-unverified"
     assert len(h.launched) == 1 and h.power == ["off", "on", "off"]
 
@@ -505,3 +505,158 @@ def test_stale_reader_cannot_mark_brom_seen(tmp_path, monkeypatch, capsys):
     payload = h.run(monkeypatch, capsys)
     assert verdicts and verdicts[0][0] == "brom-timeout"
     assert payload["success"] is False
+
+
+# ── 复核 #3924 第 3 轮（ADR-0063 v1.3 D3 第 4 条「输出完整消费」与信号结算）──────────
+
+def _run_child(tmp_path, script, check, status):
+    import sys
+    return ff._run_flash_tool_with_progress(
+        [sys.executable, "-c", script], cwd=str(tmp_path), env=None, timeout=30,
+        on_stage=lambda tok: None, on_percent=lambda pct: None,
+        abort_check=check, readers_status=status)
+
+
+def test_invalid_bytes_do_not_stop_reading(tmp_path):
+    # 第 3 轮反例一：stderr 先出非法字节，之后的回显仍必须逐行核对。
+    script = ("import sys\nsys.stdout.write('com portName is: /dev/ttyACM0\\nAll command exec done!\\n')\n"
+              "sys.stdout.flush()\nsys.stderr.buffer.write(b'\\xff\\ncom portName is: /dev/ttyACM1\\n')\n"
+              "sys.stderr.flush()\n")
+    seen = []
+    status: dict = {}
+    _run_child(tmp_path, script, lambda line: seen.append(line.strip()) and None, status)
+    assert "com portName is: /dev/ttyACM1" in seen
+    assert status == {"stuck": False, "eof": True, "errors": []}
+
+
+def test_check_exception_is_recorded(tmp_path):
+    # 第 3 轮反例二：核对回调抛异常，不中止，但必须记为未完成核对。
+    def _check(line):
+        if "ttyACM1" in line:
+            raise RuntimeError("boom")
+        return None
+
+    script = "print('com portName is: /dev/ttyACM0')\nprint('com portName is: /dev/ttyACM1')\n"
+    status: dict = {}
+    _run_child(tmp_path, script, _check, status)
+    assert status["eof"] is True and status["stuck"] is False
+    assert status["errors"] and "boom" in status["errors"][0]
+
+
+def test_runner_without_status_keeps_strict_decoding(tmp_path, monkeypatch):
+    # 非 vbus 调用方（不传 readers_status）解码方式不变。
+    import subprocess
+    seen = {}
+    real = subprocess.Popen
+
+    def _popen(*a, **k):
+        seen.update(k)
+        return real(*a, **k)
+
+    monkeypatch.setattr(ff.subprocess, "Popen", _popen)
+    import sys
+    ff._run_flash_tool_with_progress([sys.executable, "-c", "print(1)"], cwd=str(tmp_path),
+                                     env=None, timeout=30, on_stage=lambda t: None,
+                                     on_percent=lambda p: None)
+    assert "errors" not in seen
+
+
+@pytest.mark.parametrize("readers,needle", [
+    ({"stuck": False, "eof": False, "errors": []}, "eof=False"),
+    ({"stuck": False, "eof": True, "errors": ["abort_check: RuntimeError: boom"]}, "boom"),
+    ({"stuck": False, "eof": True, "errors": ["read: OSError: x"]}, "OSError"),
+])
+def test_incomplete_consumption_fails_closed(tmp_path, monkeypatch, capsys, readers, needle):
+    h = v141._v5_harness(monkeypatch, tmp_path, {"max_attempts": 3})
+    made = _capture_histories(monkeypatch)
+    _late_echo_tool(h, monkeypatch, made, seen_port=_SLOT)
+    inner = h.launch
+
+    def launch(cmd, *a, **k):
+        out = inner(cmd, *a, **k)
+        k["readers_status"].update(readers)
+        return out
+
+    h.launch = launch
+    payload = h.run(monkeypatch, capsys)
+    assert payload["success"] is False, payload
+    assert "not fully checked" in payload["error_message"] and needle in payload["error_message"]
+    assert payload["metrics"]["attempts"][-1]["outcome"] == "aborted-port-unverified"
+    assert len(h.launched) == 1 and h.power == ["off", "on", "off"]
+
+
+def test_stop_touches_no_sync_primitive():
+    # 第 3 轮第 4 项：主线程持有采样器的任何同步原语时，stop() 都必须返回。
+    import threading
+    hist = ff._TtyPortHistory(base="/nonexistent")
+    done = []
+
+    def _holder():
+        with hist._lock, hist._tick._cond:
+            done.append(hist.stop(timeout=0.05))
+
+    t = threading.Thread(target=_holder, daemon=True)
+    t.start()
+    t.join(3)
+    assert done == [True]
+
+
+def test_signal_during_sampler_sync_settles(tmp_path):
+    # 第 3 轮第 4 项反例：隔离子进程里，主线程持有采样器同步原语时收到 SIGTERM，
+    # 处理器里的 stop() 与后续结算必须在限定时间内完成。
+    import subprocess
+    import sys
+    script = f"""
+import importlib.util, os, signal, sys, threading
+spec = importlib.util.spec_from_file_location("ffsig", {str(v141._SCRIPT)!r})
+ff = importlib.util.module_from_spec(spec); spec.loader.exec_module(ff)
+ff._list_acm_ttys = lambda base=None: []
+hist = ff._TtyPortHistory(base="/nonexistent", interval=0.01)
+hist.start()
+def _h(signum, frame):
+    ok = hist.stop(timeout=1.0)
+    print("settled", ok, flush=True)
+    os._exit(0)
+signal.signal(signal.SIGTERM, _h)
+with hist._lock, hist._tick._cond:
+    os.kill(os.getpid(), signal.SIGTERM)
+    threading.Event().wait(5)
+print("not settled", flush=True)
+"""
+    out = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
+                         timeout=20, cwd=str(tmp_path))
+    assert out.stdout.strip().startswith("settled"), (out.stdout, out.stderr)
+
+
+def test_read_error_is_recorded_and_not_eof(tmp_path, monkeypatch):
+    class _Stream:
+        def __init__(self, lines, exc=None):
+            self._lines, self._exc = list(lines), exc
+
+        def __iter__(self):
+            yield from self._lines
+            if self._exc:
+                raise self._exc
+
+        def close(self):
+            pass
+
+    class _Proc:
+        pid = 0
+        returncode = 0
+        stdout = _Stream(["com portName is: /dev/ttyACM0\n"], OSError("EIO"))
+        stderr = _Stream([])
+
+        def poll(self):
+            return 0
+
+        def wait(self, timeout=None):
+            return 0
+
+    monkeypatch.setattr(ff.subprocess, "Popen", lambda *a, **k: _Proc())
+    status: dict = {}
+    ff._run_flash_tool_with_progress(["x"], cwd=str(tmp_path), env=None, timeout=30,
+                                     on_stage=lambda t: None, on_percent=lambda p: None,
+                                     abort_check=lambda line: None, readers_status=status)
+    assert status["eof"] is False and status["stuck"] is False
+    assert status["errors"] and "EIO" in status["errors"][0]

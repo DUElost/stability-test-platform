@@ -15,6 +15,9 @@ v1.4.2（#3892，15.93 LX3 金丝雀 PlanRun 1255 / Job 206578）：
   - 复核 #3924 第 2 轮：reader 线程在 join 宽限后仍存活（可能有回显没核对完）即判不可信；
     reset 放回调用 wrapper 之前，调用期间的采样保留（通电可能早于返回）；`stop()` 不取
     记录锁（信号自锁）、只等待一次；采样线程起不来按启动失败处理，结算照常完成。
+  - 复核 #3924 第 3 轮退回规划者，按 ADR-0063 v1.3 D3 第 4 条补写的判据实现：输出完整消费
+    （替换解码；两个 reader 都读到 EOF、无读取异常、无核对回调异常，否则不可信）；停止采样
+    只置布尔量，不碰任何同步原语（信号处理器可能打断持有 Event 内部锁的主线程）。
   - V6、非 vbus 的 V5 命令行与 1.4.1 逐字一致。
 
 v1.4.1（#3892 推广，15.93 试点）：
@@ -508,7 +511,11 @@ class _TtyPortHistory:
         self._closed = False
         self._stopped: "bool | None" = None
         self._lock = threading.Lock()
-        self._stop = threading.Event()
+        # 停止用普通布尔量：信号处理器里的 stop() 不能碰任何同步原语（含 Event 内部锁），
+        # 被打断的主线程可能正持有它（复核 #3924 第 3 轮第 4 项）。_tick 只由采样线程等待，
+        # 没有任何人 set，主线程从不触碰。
+        self._halt = False
+        self._tick = threading.Event()
         self._thread: "threading.Thread | None" = None
 
     def sample(self) -> None:
@@ -545,12 +552,12 @@ class _TtyPortHistory:
 
     def start(self) -> None:
         def _loop() -> None:
-            while not self._stop.is_set():
+            while not self._halt:
                 try:
                     self.sample()
                 except Exception:
                     pass
-                self._stop.wait(self._interval)
+                self._tick.wait(self._interval)
 
         thread = threading.Thread(target=_loop, name="tty-port-history", daemon=True)
         thread.start()  # 抛出时 _thread 保持 None，stop() 不会 join 未启动的线程
@@ -560,7 +567,7 @@ class _TtyPortHistory:
         """停止采样并冻结记录；返回采样线程是否已退出。可重复调用，只等待一次。"""
         if self._stopped is not None:
             return self._stopped
-        self._stop.set()
+        self._halt = True  # 不调用 Event.set()：见 __init__
         thread = self._thread
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=timeout)
@@ -573,18 +580,21 @@ class _TtyPortHistory:
 
 def _final_v5_binding_reason(echoes: list, history: "_TtyPortHistory",
                              sampler_stopped: bool, target_port: str,
-                             serial: str, readers_stuck: bool = False) -> "str | None":
+                             serial: str, readers: "dict | None" = None) -> "str | None":
     """工具退出、采样线程停止之后，对 V5 vbus 绑定做最终判定；不可信则返回理由。
 
     复核 #3924 第 1 项：逐行核对时的历史快照可能漏掉正在写入的采样，且回调可能来自
     上一轮遗留的 reader。最终判定只用本轮记下的回显，并在记录冻结之后重算：每条回显的
     「实时结果 ∪ 回显到达前开始的采样」必须恰好等于目标口。
     """
-    if readers_stuck:
-        # 复核 #3924 第 2 轮第 1 项：reader 没在宽限内退出，可能有回显还没核对完（或还没读到）。
-        return (f"tool output readers did not finish before the verdict (target port "
-                f"{target_port!r}, serial={serial}); some echoes may be unchecked, "
-                "result not trusted")
+    readers = readers or {}
+    if readers.get("stuck") or readers.get("eof") is False or readers.get("errors"):
+        # ADR-0063 v1.3 D3 第 4 条「输出完整消费」：reader 未在宽限内结束、没读到 EOF、
+        # 读取或核对抛过异常，都说明可能有回显没有完成核对（复核 #3924 第 2、3 轮第 1 项）。
+        return (f"tool output was not fully checked before the verdict (stuck="
+                f"{bool(readers.get('stuck'))}, eof={readers.get('eof')}, errors="
+                f"{readers.get('errors') or []}; target port {target_port!r}, "
+                f"serial={serial}); result not trusted")
     if not sampler_stopped:
         return (f"tty sampler did not stop before settling (target port {target_port!r}, "
                 f"serial={serial}); binding evidence incomplete, result not trusted")
@@ -1220,9 +1230,11 @@ def _run_flash_tool_with_progress(
 ) -> "tuple[str, int]":
     """Popen + 双 reader 线程跑 flash_tool，逐行喂给阶段/进度解析。
 
-    readers_status（v1.4.2，复核 #3924 第 2 轮第 1 项）：给出时，返回或上抛之前写入
-    ``readers_status["stuck"]``——reader 线程在 join 宽限后是否仍存活。仍存活说明还有输出
-    没有经过 abort_check，调用方不得据此判成功。缺省 None，此前各调用方行为不变。
+    readers_status（v1.4.2，ADR-0063 v1.3 D3 第 4 条「输出完整消费」）：给出时，输出按
+    ``errors="replace"`` 解码（非法字节不中断读取），返回或上抛之前写入：
+    ``stuck``——join 宽限后仍有 reader 存活；``eof``——两个 reader 都读到 EOF 正常结束；
+    ``errors``——读取异常与 abort_check 异常的记录。stuck、非 eof 或有 errors 时，说明有输出
+    没有完成核对，调用方不得据此判成功。缺省 None，此前各调用方行为（含解码方式）不变。
 
     不能用 subprocess.run(capture_output)：flash_tool 可能运行几十分钟，
     期间必须持续打戳让停滞判据满意；readline 阻塞问题用 reader 线程解决
@@ -1244,6 +1256,7 @@ def _run_flash_tool_with_progress(
     打时也要能判 BROM 捕获超时」——abort_check 只在有输出时才被调用。缺省
     None，此前各版本的调用方行为不变。
     """
+    popen_kwargs: dict = {"errors": "replace"} if readers_status is not None else {}
     proc = subprocess.Popen(
         cmd,
         cwd=cwd,
@@ -1252,6 +1265,7 @@ def _run_flash_tool_with_progress(
         stderr=subprocess.PIPE,
         text=True,
         start_new_session=True,
+        **popen_kwargs,
     )
     if on_running is not None:
         try:
@@ -1295,6 +1309,9 @@ def _run_flash_tool_with_progress(
             except subprocess.TimeoutExpired:
                 pass
 
+    reader_eof: list = []
+    reader_errors: list = []
+
     def _reader(stream) -> None:
         try:
             for line in stream:
@@ -1302,7 +1319,9 @@ def _run_flash_tool_with_progress(
                 if abort_check is not None and "reason" not in aborted:
                     try:
                         reason = abort_check(line)
-                    except Exception:
+                    except Exception as exc:
+                        # 不中止（解析缺陷不放大成刷机中断），但这一行没有完成核对。
+                        reader_errors.append(f"abort_check: {type(exc).__name__}: {exc}")
                         reason = None
                     if reason:
                         aborted["reason"] = str(reason)
@@ -1327,8 +1346,13 @@ def _run_flash_tool_with_progress(
                         on_percent(int(m.group(1)))
                     except Exception:
                         pass
-        except (ValueError, OSError):
-            pass
+            else:
+                reader_eof.append(True)  # for 循环自然结束 = 读到 EOF
+        except (ValueError, OSError) as exc:
+            reader_errors.append(f"read: {type(exc).__name__}: {exc}")
+        except BaseException as exc:
+            reader_errors.append(f"read: {type(exc).__name__}: {exc}")
+            raise
         finally:
             try:
                 stream.close()
@@ -1396,6 +1420,8 @@ def _run_flash_tool_with_progress(
             th.join(timeout=2)
         if readers_status is not None:
             readers_status["stuck"] = any(th.is_alive() for th in threads)
+            readers_status["eof"] = len(reader_eof) == len(threads)
+            readers_status["errors"] = list(reader_errors)
     if "reason" in aborted:
         # 工具已被杀掉，绝不能按「正常退出」往下判 verdict：绑错口的实例可能
         # 已经收到 DA，而 stdout 里未必有 FAIL 字样。
@@ -3462,7 +3488,7 @@ def main() -> None:
                 unverified = (_final_v5_binding_reason(
                     attempt_ctx["echoes"], tty_history,
                     bool(attempt_record.get("tty_sampler_stopped")), target_port, serial,
-                    readers_stuck=attempt_ctx["readers"].get("stuck", False))
+                    readers=attempt_ctx["readers"])
                     if tty_history is not None else
                     f"V5 tool exited without a verifiable bound-port echo for target "
                     f"port {target_port!r} (serial={serial}); result not trusted")
