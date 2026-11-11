@@ -19,7 +19,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Sequence
 
 from sqlalchemy import String, and_, cast, distinct, func, or_, select, text
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from backend.models.issue_fact import (
     DeliveryVersion,
@@ -52,6 +52,7 @@ _SCAN_ROUND_KINDS = frozenset({
 SCAN_ROUND_STATUS_PENDING = "PENDING"
 SCAN_ROUND_STATUS_RUNNING = "RUNNING"
 SCAN_ROUND_STATUS_CLOSED = "CLOSED"
+SCAN_ROUND_MERGE_TERMINAL = frozenset({"OK", "NO_INPUT", "FAILED_FINAL"})
 _SCAN_ROUND_STATUSES = frozenset({
     SCAN_ROUND_STATUS_PENDING,
     SCAN_ROUND_STATUS_RUNNING,
@@ -518,6 +519,7 @@ def record_delivery_version(
     version_no: int,
     software_versions: Optional[Sequence[Any]] = None,
     round_ids: Optional[Sequence[Any]] = None,
+    basis_rounds: Optional[Sequence[Any]] = None,
     effective_coverage: Optional[Sequence[Any]] = None,
     issue_ids: Optional[Sequence[Any]] = None,
     event_ids: Optional[Sequence[Any]] = None,
@@ -544,6 +546,7 @@ def record_delivery_version(
         version_no=version_no,
         software_versions=list(software_versions or []),
         round_ids=list(round_ids or []),
+        basis_rounds=list(basis_rounds or []),
         effective_coverage=list(effective_coverage or []),
         issue_ids=list(issue_ids or []),
         event_ids=list(event_ids or []),
@@ -707,9 +710,12 @@ def record_scan_round_merge(
     row = get_scan_round(db, round_id=round_id)
     if row is None or row.status != SCAN_ROUND_STATUS_CLOSED:
         raise IssueFactError('merge requires a closed scan round')
-    if row.merge_status in {'OK', 'NO_INPUT', 'FAILED_FINAL'}:
+    if row.merge_status in SCAN_ROUND_MERGE_TERMINAL:
         return row
     row.merge_status, row.merge_summary, row.merged_at = status, summary, now or _utcnow()
+    if status in SCAN_ROUND_MERGE_TERMINAL:
+        # 只增不减：同一轮每进入一次终态加 1，与墙钟无关。
+        row.merge_generation = (row.merge_generation or 0) + 1
     if attempts is not None:
         row.merge_attempts = attempts
     row.merge_next_retry_at = next_retry_at if status == 'FAILED' else None
@@ -718,7 +724,10 @@ def record_scan_round_merge(
 
 
 def reset_failed_final_shadow_merge(db: Session, *, round_id: int) -> ScanRound:
-    """Explicit operator-only reset; scheduler and workers never call this entry point."""
+    """Explicit operator-only reset; scheduler and workers never call this entry point.
+
+    merge_generation 不清零、不递减；重新进入终态时由 record_scan_round_merge 加 1。
+    """
     row = get_scan_round(db, round_id=round_id)
     if row is None or row.merge_status != 'FAILED_FINAL':
         raise IssueFactError('manual merge reset requires FAILED_FINAL')
@@ -764,3 +773,135 @@ def list_pending_shadow_merge_run_ids(db: Session, *, now: Optional[datetime] = 
         ScanRound.platform == 'mtk', ScanRound.status == SCAN_ROUND_STATUS_CLOSED,
         _pending_shadow_merge(now or _utcnow()),
     ).distinct().order_by(ScanRound.plan_run_id)).scalars())
+
+# G5: delivery versions read the same facts through this service boundary.
+def get_latest_delivery_version(
+    db: Session, *, plan_run_id: int, platform: str,
+) -> Optional[DeliveryVersion]:
+    return db.execute(
+        select(DeliveryVersion).where(
+            DeliveryVersion.plan_run_id == plan_run_id,
+            func.lower(DeliveryVersion.platform) == platform.lower(),
+        ).order_by(DeliveryVersion.version_no.desc()).limit(1)
+    ).scalar_one_or_none()
+
+
+def list_partition_delivery_issues(
+    db: Session, *, plan_run_id: int, platform: str,
+) -> list[Dict[str, Any]]:
+    """本分区（实际 PlanRun × 平台）的收录问题及发生统计（D9 第 2 条）。
+
+    代表选择由 G4 写入；次数与机器数按 G1 的 count_occurrences /
+    count_machines 口径（按发生 / 按 serial 去重），软件版本取本分区的
+    发生记录。统计导出与交付物版本共用本函数，避免两处口径漂移。
+    """
+    selections = list(db.execute(
+        select(RepresentativeSelection).where(
+            RepresentativeSelection.plan_run_id == plan_run_id,
+            func.lower(RepresentativeSelection.platform) == platform.lower(),
+        ).order_by(RepresentativeSelection.signature_id)
+    ).scalars())
+    issues: list[Dict[str, Any]] = []
+    for selection in selections:
+        signature = db.get(IssueSignature, selection.signature_id)
+        occurrences = list(db.execute(_occurrence_scope(
+            select(IssueOccurrence),
+            signature_id=selection.signature_id,
+            plan_run_id=plan_run_id,
+            platform=platform,
+        )).scalars().unique())
+        issues.append({
+            "signature_id": selection.signature_id,
+            "signature_raw": signature.signature_raw if signature is not None else None,
+            "normalized_key": signature.normalized_key if signature is not None else None,
+            "event_type": signature.event_type if signature is not None else None,
+            "selection_status": selection.selection_status,
+            "evidence_status": selection.evidence_status,
+            "representative_dle_id": str(selection.dle_id) if selection.dle_id else None,
+            "occurrences": count_occurrences(
+                db, signature_id=selection.signature_id,
+                plan_run_id=plan_run_id, platform=platform,
+            ),
+            "machines": count_machines(
+                db, signature_id=selection.signature_id,
+                plan_run_id=plan_run_id, platform=platform,
+            ),
+            "build_versions": sorted({
+                occurrence.build_version for occurrence in occurrences
+                if occurrence.build_version
+            }),
+        })
+    return issues
+
+
+def list_partition_delivery_event_ids(
+    db: Session, *, plan_run_id: int, platform: str, signature_ids: Sequence[int],
+) -> list[str]:
+    """收录问题在本分区关联的全部 DLE（含同一事件的重复观察映射）。"""
+    ids = [int(value) for value in signature_ids]
+    if not ids:
+        return []
+    rows = db.execute(
+        select(distinct(IssueOccurrenceEvent.dle_id)).join(
+            DeviceLogEvent, DeviceLogEvent.id == IssueOccurrenceEvent.dle_id,
+        ).where(
+            IssueOccurrenceEvent.signature_id.in_(ids),
+            DeviceLogEvent.plan_run_id == plan_run_id,
+            func.lower(DeviceLogEvent.platform) == platform.lower(),
+        )
+    ).scalars()
+    return sorted({str(row) for row in rows})
+
+
+def list_shadow_delivery_due_run_ids(db: Session, *, platform: str) -> list[int]:
+    """补偿发现：依据轮次的 (id, merge 代次) 尚未进入最新交付版本的 CURRENT 分区。
+
+    代次单调、与墙钟无关；新轮次或同一轮重新进入终态都会改变 (id, 代次)。
+    非 CURRENT、FINAL 未关闭或 merge 未终态、PlanRun 已不存在的分区直接排除。
+    """
+    latest = select(
+        DeliveryVersion.plan_run_id.label("run_id"),
+        DeliveryVersion.basis_rounds.label("basis_rounds"),
+    ).where(
+        func.lower(DeliveryVersion.platform) == platform.lower(),
+    ).distinct(DeliveryVersion.plan_run_id).order_by(
+        DeliveryVersion.plan_run_id,
+        DeliveryVersion.version_no.desc(),
+    ).subquery()
+    final_round = aliased(ScanRound)
+    final_terminal = select(final_round.id).where(
+        final_round.plan_run_id == ScanRound.plan_run_id,
+        func.lower(final_round.platform) == platform.lower(),
+        final_round.kind == SCAN_ROUND_KIND_FINAL,
+        final_round.status == SCAN_ROUND_STATUS_CLOSED,
+        final_round.merge_status.in_(["OK", "NO_INPUT", "FAILED_FINAL"]),
+    ).exists()
+    non_current = select(PartitionMode.id).where(
+        PartitionMode.plan_run_id == ScanRound.plan_run_id,
+        func.lower(PartitionMode.platform) == platform.lower(),
+        PartitionMode.mode != PARTITION_MODE_CURRENT,
+    ).exists()
+    plan_run_exists = select(PlanRun.id).where(
+        PlanRun.id == ScanRound.plan_run_id,
+    ).exists()
+    basis = func.jsonb_build_array(func.jsonb_build_object(
+        "round_id", ScanRound.id,
+        "merge_generation", ScanRound.merge_generation,
+    ))
+    return list(db.execute(
+        select(ScanRound.plan_run_id).select_from(ScanRound).outerjoin(
+            latest, latest.c.run_id == ScanRound.plan_run_id,
+        ).where(
+            func.lower(ScanRound.platform) == platform.lower(),
+            ScanRound.kind.in_([SCAN_ROUND_KIND_FINAL, SCAN_ROUND_KIND_SUPPLEMENT]),
+            ScanRound.status == SCAN_ROUND_STATUS_CLOSED,
+            ScanRound.merge_status.in_(["OK", "NO_INPUT", "FAILED_FINAL"]),
+            final_terminal,
+            ~non_current,
+            plan_run_exists,
+            or_(
+                latest.c.run_id.is_(None),
+                ~latest.c.basis_rounds.contains(basis),
+            ),
+        ).distinct().order_by(ScanRound.plan_run_id)
+    ).scalars())
