@@ -13,6 +13,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import select, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
 from backend.core.settings.scheduler import SchedulerSettings
@@ -770,6 +771,89 @@ def test_delivery_discovery_lock_timeout_keeps_pending_merge_enqueued(
             {"round_id": final.id, "merge_generation": 1},
             {"round_id": supplement.id, "merge_generation": 1},
         ]
+        assert facts.list_shadow_delivery_due_run_ids(db, platform="mtk") == []
+
+
+def _one_shot_exit_failure_factory(real_factory):
+    """第二次取会话时，SELECT 成功后让退出回滚失败（模拟连接被终止）。"""
+    state = {"calls": 0, "exit_failures": 0}
+
+    class _ExitFailingSession:
+        def __init__(self, session):
+            self._session = session
+
+        def __enter__(self):
+            self._session.__enter__()
+            return self._session
+
+        def __exit__(self, exc_type, exc, tb):
+            self._session.close()
+            if exc_type is None:
+                state["exit_failures"] += 1
+                raise OperationalError(
+                    "ROLLBACK", {},
+                    RuntimeError("server closed the connection unexpectedly"),
+                )
+            return None
+
+    def factory():
+        state["calls"] += 1
+        session = real_factory()
+        if state["calls"] == 2:
+            return _ExitFailingSession(session)
+        return session
+
+    return factory, state
+
+
+def test_delivery_discovery_session_exit_failure_defers_registration(
+    db_session, sample_host, tmp_path, monkeypatch, caplog,
+):
+    from backend.services import shadow_scan_rounds as shadow
+    _plan_run(db_session)
+    final = _round(db_session, 42, 1, "FINAL", [_unit(sample_host.id, "EMPTY")])
+    db_session.commit()
+    v1 = _register(db_session, tmp_path)
+    db_session.commit()
+    assert v1.version_no == 1
+
+    # 新补充轮已终态 → 补偿清单应发现 42；另一补充轮未 merge → 本轮仍要入队。
+    supplement = _round(db_session, 42, 2, "SUPPLEMENT", [_unit(sample_host.id, "EMPTY")])
+    pending = _round(db_session, 42, 3, "SUPPLEMENT", [_unit(sample_host.id, "EMPTY")],
+                     merge=None)
+    db_session.commit()
+
+    real_factory = sessionmaker(bind=db_session.get_bind())
+    factory, state = _one_shot_exit_failure_factory(real_factory)
+    settings = SchedulerSettings(stp_scan_round_shadow_enabled=True)
+    module = _delivery()
+    _patch_sweep_env(monkeypatch, tmp_path, factory, settings, module)
+
+    with real_factory() as db:
+        assert facts.list_shadow_delivery_due_run_ids(db, platform="mtk") == [42]
+
+    # 复核反例：补偿 SELECT 已返回候选，会话退出回滚时连接断开。
+    shadow.sweep_shadow_scan_rounds(now=v1.registered_at)
+    assert state["exit_failures"] == 1
+    assert any("shadow_delivery_discovery_failed" in record.getMessage()
+               for record in caplog.records)
+    assert any(
+        call.args and call.args[0] == "shadow_merge_task"
+        and call.kwargs.get("plan_run_id") == 42
+        and call.kwargs.get("fact_round_id") == pending.id
+        for call in shadow.enqueue_sync.call_args_list
+    )
+    with real_factory() as db:
+        # 当轮不得消费已获得的候选；清单保留该 run 供下周期重试。
+        assert [row.version_no for row in _versions(db)] == [1]
+        assert facts.list_shadow_delivery_due_run_ids(db, platform="mtk") == [42]
+
+    # 下一周期发现正常：补登记 v2，清单收敛。
+    shadow.sweep_shadow_scan_rounds(now=v1.registered_at)
+    with real_factory() as db:
+        versions = _versions(db)
+        assert [row.version_no for row in versions] == [1, 2]
+        assert versions[1].round_ids == [final.id, supplement.id]
         assert facts.list_shadow_delivery_due_run_ids(db, platform="mtk") == []
 
 

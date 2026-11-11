@@ -288,13 +288,16 @@ def sweep_shadow_scan_rounds(*, now=None):
                 text("SELECT set_config('lock_timeout', :value, true)"),
                 {"value": f"{_DELIVERY_DISCOVERY_LOCK_TIMEOUT_MS}ms"},
             )
-            delivery_run_ids = set(
+            discovered_run_ids = set(
                 facts.list_shadow_delivery_due_run_ids(db, platform=_PLATFORM)
             )
     except Exception:
-        # 补偿发现是增量重试：失败只跳过本轮补偿，不拖累本轮的影子 scan/merge
-        # 入队与随后的现行归档；下一周期重新发现。
+        # 补偿发现是增量重试：设置、SELECT、会话退出/回滚任一阶段失败都只跳过
+        # 本轮补偿，不拖累本轮的影子 scan/merge 入队与随后的现行归档；候选
+        # 只在会话正常退出后转正，失败时已取得的结果不得被消费。
         logger.exception("shadow_delivery_discovery_failed platform=%s", _PLATFORM)
+    else:
+        delivery_run_ids = discovered_run_ids
     for run_id in sorted(run_ids | set(merge_run_ids) | delivery_run_ids):
         try:
             with SessionLocal() as db:

@@ -5,7 +5,8 @@ Class: feature
 
 ## Decision
 
-实施范围为 #3929 正文，以及 ADR-0062 v1.1 D9 第 1–5、8、10 条与 #3800 v1.25 §3。
+实施范围为 #3929 正文，以及 ADR-0062 v1.1 D9 第 1–5、8、10 条与 #3800 v1.29 §3。
+第 5 轮返修依据 #3800 与规划者分诊 6793082299（B1 残留：发现会话退出失败仍消费候选）。
 分支从 origin/main 80c9be3c6 起；issue 前检基线 ad430a9 之后只有 Dependabot 合入，
 G5 相关文件未变化。正文「判据前检」逐项核对一致：delivery_version 已由 G1 落表且
 无交付状态列；representative_selection.evidence_status 只是 COMPLETE/INCOMPLETE；
@@ -27,9 +28,10 @@ b8g5c0a1b2c3：scan_round.merge_generation 与 delivery_version.basis_rounds，
   try_register 的失败只记 shadow_delivery_register_failed 并返回 None，不向
   merge 任务或 sweep 抛出；下一次检查周期由补偿查询重试。补偿发现本身单独使用
   一个会话，并以会话级 lock_timeout=2000ms 执行（auto_archive_poll_interval_seconds
-  默认 120s，2s 最多迟滞当轮现行归档 2s）；发现失败只记
+  默认 120s；2000ms 是单次锁等待上限）；发现失败只记
   shadow_delivery_discovery_failed、跳过当轮补偿，不中断当轮影子 scan/merge 入队，
-  下一周期重新发现。
+  下一周期重新发现。候选项只在发现会话正常退出后转正：set_config、SELECT、会话
+  退出/回滚任一阶段失败，当轮都不登记交付版本，已取得的候选不消费。
 
 登记内容按 D9 第 2 条：round_ids 为 FINAL 加「已关闭且 merge 已终态」的补充轮；
 basis_rounds 记录这些轮的 (round_id, merge_generation)，按 round_id 升序，并纳入
@@ -150,9 +152,14 @@ testcontainers PostgreSQL 16。
   冒出），恢复后绿。
 - 第 3 轮 B2 变异：sweep 不消费补偿清单（从候选并集去掉 delivery_run_ids）时，
   重写后的 12b 用例红（只写 v1）；恢复后绿。
+- 第 5 轮新增 B1 残留回归 test_delivery_discovery_session_exit_failure_defers_registration：
+  补偿 SELECT 已返回候选后，让发现会话在退出回滚阶段抛 OperationalError；断言当轮
+  无登记、候选仍含该 run、当轮影子 merge 仍入队；下一周期补登记 v2 且清单收敛。
+  先红后绿：旧实现当轮写出 v2（断言 [1, 2] == [1] 失败），修复后 1 passed；变异
+  「退出失败也把候选转正」（else → finally）时红，恢复后绿。
 - 相关回归：test_shadow_delivery / test_shadow_merge / test_shadow_scan_rounds /
   test_issue_fact_store / test_shadow_scan_send_3875 / test_shadow_scan_settled_3875 /
-  test_delivery_generation_migration 共 117 passed（含迁移往返与新增 B1 用例）。
+  test_delivery_generation_migration 共 118 passed（含迁移往返与两条 B1 用例）。
 - 静态门禁：scripts/run_gates.py check:quick 16 gates 全绿（含 Ruff、环境变量清单、
   控制面 import 边界、函数内 import 棘轮、tool-manifest、transitions）。
 - 未运行：完整 backend/tests 与 CI required checks；以 PR 的 required checks 为准。
@@ -166,7 +173,7 @@ testcontainers PostgreSQL 16。
   形式是否直接使用 reason 代码。
 - 补偿查询会长期保留已终态分区；当前每次只比较 basis_rounds，不写库。若阶段一
   规模扩大，评估是否需要在 G7 增加「最近一次尝试时间」类持久字段，避免长期读取。
-- 补偿发现的 2000ms 锁等待常量按 auto_archive_poll_interval_seconds 默认 120s
+- 补偿发现的 2000ms 单次锁等待上限按 auto_archive_poll_interval_seconds 默认 120s
   取值；若后续调整该调度周期或 sweep 改为异步，重新评估该取值。
 - 本单元把「依据轮次」限定为 FINAL 加已终态补充轮。若 G6/G7 期间出现多个补充轮
   并行待 merge 的现场，需要复核 D9 第 2 条「已关闭的补充轮」是否要求包含未终态轮次；
