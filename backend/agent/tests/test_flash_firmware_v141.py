@@ -57,6 +57,11 @@ def _v5_harness(monkeypatch, tmp_path, params=None):
     exe.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     exe.chmod(0o755)
     monkeypatch.setenv("STP_FLASH_TOOL_DIR", str(tool))
+    # v1.4.2：V5 vbus 经 stdbuf 启动、后台采样 tty；假件固定两者，不依赖宿主环境。
+    which = v140.ff._shutil_which
+    monkeypatch.setattr(v140.ff, "_shutil_which",
+                        lambda cmd: "/usr/bin/stdbuf" if cmd == "stdbuf" else which(cmd))
+    monkeypatch.setattr(v140.ff, "_list_acm_ttys", lambda base=None: [])
     monkeypatch.setenv("STP_STEP_PARAMS", json.dumps(
         {"firmware_dir": str(fw), "trigger_mode": "vbus_cycle", **(params or {})}))
     return h
@@ -151,7 +156,8 @@ def test_vbus_v5_carries_slot_port_and_brom_gate(tmp_path, monkeypatch, capsys):
     payload = h.run(monkeypatch, capsys)
     assert payload["success"] is True, payload
     cmd = h.launched[-1]
-    assert cmd[0].endswith("flash_tool")
+    assert cmd[:3] == ["/usr/bin/stdbuf", "-oL", "-eL"], "v1.4.2：V5 vbus 按行缓冲"
+    assert cmd[3].endswith("flash_tool")
     assert cmd[-2:] == ["-p", "1-5.1.3"]
     assert h.power == ["off", "on"]
     assert gate_calls and gate_calls[0] == v140.ff._BROM_GATE_PIDS, "V5 vbus 门控只压可刷态口"

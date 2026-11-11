@@ -312,3 +312,4 @@
 | 2026-11-10 | ADR-0063 v1.0 转 Accepted 与 ADR-0037 v0.7（claude，Owner 裁定；阶段 B 真机验收 PlanRun 1245 通过）：`flash-tool` 行按 §7 补 ADR-0063 `## 2. 决策` 锚；ADR-0037 D8 `usb-power` 生效，`flash-tool` 提权锚不变 |
 | 2026-11-10 | ADR-0063 v1.1（claude，15.93 实测 V5 `-p` 可用）：D3 第 4 条订正为 V5 与 V6 都带 `-p` 并核对回显绑定口；`flash-tool` 行锚点与分工不变，仅登记版本变化 |
 | 2026-11-10 | ADR-0063 v1.2（claude，Owner 选甲，#3918）：新增 D7 槽位 USB 在位观测与派发页选择关机设备；`flash-tool` 行锚点与分工不变，仅登记版本变化 |
+| 2026-11-10 | ADR-0063 v1.3（claude，Owner 选方案 1，PlanRun 1255）：D3 第 4 条补写 V5 行缓冲启动与 tty → 口历史核对（`flash_firmware` 1.4.2）；`flash-tool` 行锚点与分工不变，仅登记版本变化 |

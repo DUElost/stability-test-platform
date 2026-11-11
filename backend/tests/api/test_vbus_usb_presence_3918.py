@@ -10,19 +10,25 @@ from backend.agent.contracts.vbus_flash import is_vbus_flash_lifecycle
 from backend.models.host import Device, Host
 from backend.services.vbus_flash_admission import is_vbus_flash_plan_steps
 
-_NOW = datetime.now(timezone.utc)
+
+
+def _now():
+    # 取调用时刻：模块导入时取一次，整套后端测试跑 20 多分钟后心跳早已过期，host_is_live 判离线。
+    return datetime.now(timezone.utc)
 
 
 def _host(db, host_id, *, slots=None, status="ONLINE", heartbeat=None):
     extra = {"capacity": {"effective_slots": 0, **({"usb_power_slots": slots} if slots is not None else {})}}
-    db.add(Host(id=host_id, hostname=host_id, status=status, last_heartbeat=heartbeat or _NOW,
-                created_at=_NOW, extra=extra))
+    now = _now()
+    db.add(Host(id=host_id, hostname=host_id, status=status, last_heartbeat=heartbeat or now,
+                created_at=now, extra=extra))
     db.commit()
 
 
 def _device(db, serial, host_id, *, status="OFFLINE", days_ago=0):
-    d = Device(serial=serial, host_id=host_id, status=status, tags=[], created_at=_NOW,
-               last_seen=_NOW - timedelta(days=days_ago))
+    now = _now()
+    d = Device(serial=serial, host_id=host_id, status=status, tags=[], created_at=now,
+               last_seen=now - timedelta(days=days_ago))
     db.add(d)
     db.commit()
     return d
@@ -134,7 +140,7 @@ def test_plan_out_carries_is_vbus_flash():
                            barrier_timeout_seconds=None, barrier_max_wait_seconds=None,
                            auto_archive_interval_seconds=None, next_plan_id=None, watcher_policy=None,
                            project=None, specialty=None, suite=None, created_by=None,
-                           created_at=_NOW, updated_at=_NOW)
+                           created_at=_now(), updated_at=_now())
 
     def step(params):
         return SimpleNamespace(id=1, step_key="flash", script_name="flash_firmware", script_version="1.4.1",
