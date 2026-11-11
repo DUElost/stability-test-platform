@@ -743,7 +743,7 @@ def test_signal_during_settle_completes_remaining_steps(tmp_path, monkeypatch, c
 # ── 复核 #3924 第 5 轮：P2 真实日志回放、tty 引用逐一核对、信号临界区 ───────────────
 
 _P2_LOG = (Path(__file__).resolve().parent / "fixtures" / "flash_firmware"
-           / "v5_p2_success_20261110.log")
+           / "v5_p2_success_20261110.txt")
 _P2_PORT = "1-13.2.4"
 
 
