@@ -1,0 +1,351 @@
+sysname:Linux
+ nodename:android
+ release:6.12.73+deb13-amd64
+ version:#1 SMP PREEMPT_DYNAMIC Debian 6.12.73-1 (2026-02-17)
+ machine:x86_64
+ 
+  domainame:(none)
+ cur_kernel_version = 6.12.73+deb13
+Begin
+MediaTek SP Flash Tool v5.2444.00
+Build Time: Nov  4 2024 13:48:33
+Init config from input arguments
+Clear all Commands!!
+Download Command::Create
+DownloadCommand::Execute
+General settings creat command
+General Command exec
+General Command ::LoadDA
+General Command ::LoadScatterFile
+General Command ::LoadRoms
+rom list is empty, auto load all roms
+rom list:Index(0), Enable(1),Path:/mnt/stp-aee/firmware/MLD/V552AA-HONOR-LX2-16-261010V143/preloader_V552AA.bin
+rom list:Index(6), Enable(1),Path:/mnt/stp-aee/firmware/MLD/V552AA-HONOR-LX2-16-261010V143/vbmeta.img
+rom list:Index(7), Enable(1),Path:/mnt/stp-aee/firmware/MLD/V552AA-HONOR-LX2-16-261010V143/vbmeta_system.img
+rom list:Index(8), Enable(1),Path:/mnt/stp-aee/firmware/MLD/V552AA-HONOR-LX2-16-261010V143/vbmeta_vendor.img
+rom list:Index(20), Enable(1),Path:/mnt/stp-aee/firmware/MLD/V552AA-HONOR-LX2-16-261010V143/modem.img
+rom list:Index(21), Enable(1),Path:/mnt/stp-aee/firmware/MLD/V552AA-HONOR-LX2-16-261010V143/spmfw.img
+rom list:Index(22), Enable(1),Path:/mnt/stp-aee/firmware/MLD/V552AA-HONOR-LX2-16-261010V143/scp.img
+rom list:Index(23), Enable(1),Path:/mnt/stp-aee/firmware/MLD/V552AA-HONOR-LX2-16-261010V143/sspm.img
+rom list:Index(24), Enable(1),Path:/mnt/stp-aee/firmware/MLD/V552AA-HONOR-LX2-16-261010V143/gz.img
+rom list:Index(25), Enable(1),Path:/mnt/stp-aee/firmware/MLD/V552AA-HONOR-LX2-16-261010V143/lk.img
+rom list:Index(26), Enable(1),Path:/mnt/stp-aee/firmware/MLD/V552AA-HONOR-LX2-16-261010V143/boot.img
+rom list:Index(27), Enable(1),Path:/mnt/stp-aee/firmware/MLD/V552AA-HONOR-LX2-16-261010V143/vendor_boot.img
+rom list:Index(28), Enable(1),Path:/mnt/stp-aee/firmware/MLD/V552AA-HONOR-LX2-16-261010V143/init_boot.img
+rom list:Index(29), Enable(1),Path:/mnt/stp-aee/firmware/MLD/V552AA-HONOR-LX2-16-261010V143/dtbo.img
+rom list:Index(30), Enable(1),Path:/mnt/stp-aee/firmware/MLD/V552AA-HONOR-LX2-16-261010V143/tee.img
+rom list:Index(33), Enable(1),Path:/mnt/stp-aee/firmware/MLD/V552AA-HONOR-LX2-16-261010V143/efuse.img
+rom list:Index(36), Enable(1),Path:/mnt/stp-aee/firmware/MLD/V552AA-HONOR-LX2-16-261010V143/logo.bin
+rom list:Index(48), Enable(1),Path:/mnt/stp-aee/firmware/MLD/V552AA-HONOR-LX2-16-261010V143/super.img
+rom list:Index(49), Enable(1),Path:/mnt/stp-aee/firmware/MLD/V552AA-HONOR-LX2-16-261010V143/userdata.img
+General Command ::LoadAuthFile
+General Command ::LoadCertFile
+General command exec done!
+Connection create done!
+Command (0)::Execute
+Connecting to BROM...
+Scanning USB port...
+Preconnect com port: 1-13.2.4
+
+Search usb, timeout set as 120000 ms
+Searching user specified com port 1-13.2.4
+remove@/devices/pci0000:00/0000:00:14.0/usb1/1-13/1-13.2/1-13.2.4/1-13.2.4:1.0/sound/card2/controlC2
+
+source usb_path: remove@/devices/pci0000:00/0000:00:14.0/usb1/1-13/1-13.2/1-13.2.4/1-13.2.4:1.0/sound/card2/controlC2, search usb com port: 1-13.2.4
+remove@/devices/pci0000:00/0000:00:14.0/usb1/1-13/1-13.2/1-13.2.4/1-13.2.4:1.0/sound/card2/seq-midi-2-0
+
+source usb_path: remove@/devices/pci0000:00/0000:00:14.0/usb1/1-13/1-13.2/1-13.2.4/1-13.2.4:1.0/sound/card2/seq-midi-2-0, search usb com port: 1-13.2.4
+remove@/devices/pci0000:00/0000:00:14.0/usb1/1-13/1-13.2/1-13.2.4/1-13.2.4:1.0/sound/card2/midi2
+
+source usb_path: remove@/devices/pci0000:00/0000:00:14.0/usb1/1-13/1-13.2/1-13.2.4/1-13.2.4:1.0/sound/card2/midi2, search usb com port: 1-13.2.4
+remove@/devices/pci0000:00/0000:00:14.0/usb1/1-13/1-13.2/1-13.2.4/1-13.2.4:1.0/sound/card2/dmmidi2
+
+source usb_path: remove@/devices/pci0000:00/0000:00:14.0/usb1/1-13/1-13.2/1-13.2.4/1-13.2.4:1.0/sound/card2/dmmidi2, search usb com port: 1-13.2.4
+remove@/devices/pci0000:00/0000:00:14.0/usb1/1-13/1-13.2/1-13.2.4/1-13.2.4:1.0/sound/card2/midiC2D0
+
+source usb_path: remove@/devices/pci0000:00/0000:00:14.0/usb1/1-13/1-13.2/1-13.2.4/1-13.2.4:1.0/sound/card2/midiC2D0, search usb com port: 1-13.2.4
+remove@/devices/pci0000:00/0000:00:14.0/usb1/1-13/1-13.2/1-13.2.4/1-13.2.4:1.0/sound/card2
+
+source usb_path: remove@/devices/pci0000:00/0000:00:14.0/usb1/1-13/1-13.2/1-13.2.4/1-13.2.4:1.0/sound/card2, search usb com port: 1-13.2.4
+unbind@/devices/pci0000:00/0000:00:14.0/usb1/1-13/1-13.2/1-13.2.4/1-13.2.4:1.0
+
+source usb_path: unbind@/devices/pci0000:00/0000:00:14.0/usb1/1-13/1-13.2/1-13.2.4/1-13.2.4:1.0, search usb com port: 1-13.2.4
+remove@/devices/pci0000:00/0000:00:14.0/usb1/1-13/1-13.2/1-13.2.4/1-13.2.4:1.0
+
+source usb_path: remove@/devices/pci0000:00/0000:00:14.0/usb1/1-13/1-13.2/1-13.2.4/1-13.2.4:1.0, search usb com port: 1-13.2.4
+unbind@/devices/pci0000:00/0000:00:14.0/usb1/1-13/1-13.2/1-13.2.4/1-13.2.4:1.1
+
+source usb_path: unbind@/devices/pci0000:00/0000:00:14.0/usb1/1-13/1-13.2/1-13.2.4/1-13.2.4:1.1, search usb com port: 1-13.2.4
+remove@/devices/pci0000:00/0000:00:14.0/usb1/1-13/1-13.2/1-13.2.4/1-13.2.4:1.1
+
+source usb_path: remove@/devices/pci0000:00/0000:00:14.0/usb1/1-13/1-13.2/1-13.2.4/1-13.2.4:1.1, search usb com port: 1-13.2.4
+unbind@/devices/pci0000:00/0000:00:14.0/usb1/1-13/1-13.2/1-13.2.4
+
+source usb_path: unbind@/devices/pci0000:00/0000:00:14.0/usb1/1-13/1-13.2/1-13.2.4, search usb com port: 1-13.2.4
+skip: unbind@/devices/pci0000:00/0000:00:14.0/usb1/1-13/1-13.2/1-13.2.4
+
+remove@/devices/pci0000:00/0000:00:14.0/usb1/1-13/1-13.2/1-13.2.4
+
+source usb_path: remove@/devices/pci0000:00/0000:00:14.0/usb1/1-13/1-13.2/1-13.2.4, search usb com port: 1-13.2.4
+skip: remove@/devices/pci0000:00/0000:00:14.0/usb1/1-13/1-13.2/1-13.2.4
+
+add@/devices/pci0000:00/0000:00:14.0/usb1/1-13/1-13.2/1-13.2.4
+
+source usb_path: add@/devices/pci0000:00/0000:00:14.0/usb1/1-13/1-13.2/1-13.2.4, search usb com port: 1-13.2.4
+skip: add@/devices/pci0000:00/0000:00:14.0/usb1/1-13/1-13.2/1-13.2.4
+
+add@/devices/pci0000:00/0000:00:14.0/usb1/1-13/1-13.2/1-13.2.4/1-13.2.4:1.1
+
+source usb_path: add@/devices/pci0000:00/0000:00:14.0/usb1/1-13/1-13.2/1-13.2.4/1-13.2.4:1.1, search usb com port: 1-13.2.4
+add@/devices/pci0000:00/0000:00:14.0/usb1/1-13/1-13.2/1-13.2.4/1-13.2.4:1.0
+
+source usb_path: add@/devices/pci0000:00/0000:00:14.0/usb1/1-13/1-13.2/1-13.2.4/1-13.2.4:1.0, search usb com port: 1-13.2.4
+bind@/devices/pci0000:00/0000:00:14.0/usb1/1-13/1-13.2/1-13.2.4/1-13.2.4:1.1
+
+source usb_path: bind@/devices/pci0000:00/0000:00:14.0/usb1/1-13/1-13.2/1-13.2.4/1-13.2.4:1.1, search usb com port: 1-13.2.4
+add@/devices/pci0000:00/0000:00:14.0/usb1/1-13/1-13.2/1-13.2.4/1-13.2.4:1.0/tty/ttyACM0
+
+source usb_path: add@/devices/pci0000:00/0000:00:14.0/usb1/1-13/1-13.2/1-13.2.4/1-13.2.4:1.0/tty/ttyACM0, search usb com port: 1-13.2.4
+vid is 0e8d
+
+device vid = 0e8d
+
+pid is 2000
+
+device pid = 2000
+
+com portName is: /dev/ttyACM0
+
+Total wait time = -1794303639.000000
+USB port is obtained. path name(/dev/ttyACM0), port name(/dev/ttyACM0)
+USB port detected: /dev/ttyACM0
+BROM connected
+Downloading & Connecting to DA...
+connect DA end stage: 2, enable DRAM in 1st DA: 0
+Download DA now...
+50% of DA has been sent.
+60% of DA has been sent.
+100% of DA has been sent.
+DA SLA enabled status: Disabled.
+Warning: DA SLA Disabled, skip it!
+DA Connected
+Check Storage Life Cycle: S_DONE(0)
+executing DADownloadAll...
+Stage: 
+[0] WRITE TO PARTITION [ preloader ]
+
+Downloading bootloader...
+100% of bootloader has been sent (329.09K of 329.09K)
+Downloading bootloader...
+Stage: 
+[6] WRITE TO PARTITION [ vbmeta_a ]
+
+Downloading images...
+100% of image data has been sent (8.00K of 8.00K)
+Stage: 
+[7] WRITE TO PARTITION [ vbmeta_system_a ]
+
+Downloading images...
+Stage: 
+[8] WRITE TO PARTITION [ vbmeta_vendor_a ]
+
+Downloading images...
+Stage: 
+[20] WRITE TO PARTITION [ modem_a ]
+
+Downloading images...
+20% of image data has been sent (10.00M of 47.93M)
+50% of image data has been sent (24.00M of 47.93M)
+70% of image data has been sent (34.00M of 47.93M)
+100% of image data has been sent (47.93M of 47.93M)
+Stage: 
+[21] WRITE TO PARTITION [ spmfw_a ]
+
+Downloading images...
+Stage: 
+[22] WRITE TO PARTITION [ scp_a ]
+
+Downloading images...
+Stage: 
+[23] WRITE TO PARTITION [ sspm_a ]
+
+Downloading images...
+Stage: 
+[24] WRITE TO PARTITION [ gz_a ]
+
+Downloading images...
+Stage: 
+[25] WRITE TO PARTITION [ lk_a ]
+
+Downloading images...
+Stage: 
+[26] WRITE TO PARTITION [ boot_a ]
+
+Downloading images...
+21% of image data has been sent (14.00M of 64.00M)
+28% of image data has been sent (18.00M of 64.00M)
+56% of image data has been sent (36.00M of 64.00M)
+84% of image data has been sent (54.00M of 64.00M)
+Stage: 
+[27] WRITE TO PARTITION [ vendor_boot_a ]
+
+Downloading images...
+21% of image data has been sent (14.00M of 64.00M)
+28% of image data has been sent (18.00M of 64.00M)
+56% of image data has been sent (36.00M of 64.00M)
+84% of image data has been sent (54.00M of 64.00M)
+Stage: 
+[28] WRITE TO PARTITION [ init_boot_a ]
+
+Downloading images...
+50% of image data has been sent (4.00M of 8.00M)
+100% of image data has been sent (8.00M of 8.00M)
+Stage: 
+[29] WRITE TO PARTITION [ dtbo_a ]
+
+Downloading images...
+50% of image data has been sent (4.00M of 8.00M)
+100% of image data has been sent (8.00M of 8.00M)
+Stage: 
+[30] WRITE TO PARTITION [ tee_a ]
+
+Downloading images...
+Stage: 
+[33] WRITE TO PARTITION [ efuse ]
+
+Downloading images...
+Stage: 
+[36] WRITE TO PARTITION [ logo ]
+
+Downloading images...
+Stage: 
+[48] WRITE TO PARTITION [ super ]
+
+Downloading images...
+Downloading images...
+Downloading images...
+Downloading images...
+Downloading images...
+Downloading images...
+Downloading images...
+Downloading images...
+Downloading images...
+Downloading images...
+Downloading images...
+Downloading images...
+Downloading images...
+Downloading images...
+Downloading images...
+Downloading images...
+Downloading images...
+1% of image data has been sent (34.00M of 3.31G)
+2% of image data has been sent (68.00M of 3.31G)
+3% of image data has been sent (102.00M of 3.31G)
+4% of image data has been sent (136.00M of 3.31G)
+5% of image data has been sent (170.00M of 3.31G)
+6% of image data has been sent (204.00M of 3.31G)
+7% of image data has been sent (238.00M of 3.31G)
+8% of image data has been sent (272.00M of 3.31G)
+9% of image data has been sent (306.00M of 3.31G)
+10% of image data has been sent (340.00M of 3.31G)
+11% of image data has been sent (374.00M of 3.31G)
+12% of image data has been sent (408.00M of 3.31G)
+13% of image data has been sent (442.00M of 3.31G)
+14% of image data has been sent (476.00M of 3.31G)
+15% of image data has been sent (510.00M of 3.31G)
+16% of image data has been sent (544.00M of 3.31G)
+17% of image data has been sent (578.00M of 3.31G)
+18% of image data has been sent (612.00M of 3.31G)
+19% of image data has been sent (646.00M of 3.31G)
+20% of image data has been sent (680.00M of 3.31G)
+21% of image data has been sent (714.00M of 3.31G)
+22% of image data has been sent (748.00M of 3.31G)
+23% of image data has been sent (782.00M of 3.31G)
+24% of image data has been sent (816.00M of 3.31G)
+25% of image data has been sent (850.00M of 3.31G)
+26% of image data has been sent (884.00M of 3.31G)
+27% of image data has been sent (918.00M of 3.31G)
+28% of image data has been sent (952.00M of 3.31G)
+29% of image data has been sent (986.00M of 3.31G)
+30% of image data has been sent (0.99G of 3.31G)
+31% of image data has been sent (1.02G of 3.31G)
+32% of image data has been sent (1.06G of 3.31G)
+33% of image data has been sent (1.09G of 3.31G)
+34% of image data has been sent (1.12G of 3.31G)
+35% of image data has been sent (1.16G of 3.31G)
+36% of image data has been sent (1.19G of 3.31G)
+37% of image data has been sent (1.22G of 3.31G)
+38% of image data has been sent (1.26G of 3.31G)
+39% of image data has been sent (1.29G of 3.31G)
+40% of image data has been sent (1.32G of 3.31G)
+41% of image data has been sent (1.36G of 3.31G)
+42% of image data has been sent (1.39G of 3.31G)
+43% of image data has been sent (1.42G of 3.31G)
+44% of image data has been sent (1.46G of 3.31G)
+45% of image data has been sent (1.49G of 3.31G)
+46% of image data has been sent (1.52G of 3.31G)
+47% of image data has been sent (1.56G of 3.31G)
+48% of image data has been sent (1.59G of 3.31G)
+49% of image data has been sent (1.62G of 3.31G)
+50% of image data has been sent (1.66G of 3.31G)
+51% of image data has been sent (1.69G of 3.31G)
+52% of image data has been sent (1.72G of 3.31G)
+53% of image data has been sent (1.75G of 3.31G)
+54% of image data has been sent (1.79G of 3.31G)
+55% of image data has been sent (1.82G of 3.31G)
+56% of image data has been sent (1.85G of 3.31G)
+57% of image data has been sent (1.89G of 3.31G)
+58% of image data has been sent (1.92G of 3.31G)
+59% of image data has been sent (1.95G of 3.31G)
+60% of image data has been sent (1.99G of 3.31G)
+61% of image data has been sent (2.02G of 3.31G)
+62% of image data has been sent (2.05G of 3.31G)
+63% of image data has been sent (2.09G of 3.31G)
+64% of image data has been sent (2.12G of 3.31G)
+65% of image data has been sent (2.15G of 3.31G)
+66% of image data has been sent (2.19G of 3.31G)
+67% of image data has been sent (2.22G of 3.31G)
+68% of image data has been sent (2.25G of 3.31G)
+69% of image data has been sent (2.29G of 3.31G)
+70% of image data has been sent (2.32G of 3.31G)
+71% of image data has been sent (2.35G of 3.31G)
+72% of image data has been sent (2.39G of 3.31G)
+73% of image data has been sent (2.42G of 3.31G)
+74% of image data has been sent (2.45G of 3.31G)
+75% of image data has been sent (2.49G of 3.31G)
+76% of image data has been sent (2.52G of 3.31G)
+77% of image data has been sent (2.55G of 3.31G)
+78% of image data has been sent (2.58G of 3.31G)
+79% of image data has been sent (2.62G of 3.31G)
+80% of image data has been sent (2.65G of 3.31G)
+81% of image data has been sent (2.68G of 3.31G)
+82% of image data has been sent (2.72G of 3.31G)
+83% of image data has been sent (2.75G of 3.31G)
+84% of image data has been sent (2.78G of 3.31G)
+85% of image data has been sent (2.82G of 3.31G)
+86% of image data has been sent (2.85G of 3.31G)
+87% of image data has been sent (2.88G of 3.31G)
+88% of image data has been sent (2.92G of 3.31G)
+89% of image data has been sent (2.95G of 3.31G)
+90% of image data has been sent (2.98G of 3.31G)
+91% of image data has been sent (3.02G of 3.31G)
+92% of image data has been sent (3.05G of 3.31G)
+93% of image data has been sent (3.08G of 3.31G)
+94% of image data has been sent (3.12G of 3.31G)
+95% of image data has been sent (3.15G of 3.31G)
+96% of image data has been sent (3.18G of 3.31G)
+97% of image data has been sent (3.22G of 3.31G)
+98% of image data has been sent (3.25G of 3.31G)
+99% of image data has been sent (3.28G of 3.31G)
+100% of image data has been sent (3.31G of 3.31G)
+Stage: 
+[49] WRITE TO PARTITION [ userdata ]
+
+Downloading images...
+download speed: 26.37MB/s.
+Download Succeeded.
+Command (1)::Execute
+FlashTool_EnableWatchDogTimeout Succeeded.
+All command exec done!
+Disconnect!
+EXIT:0
