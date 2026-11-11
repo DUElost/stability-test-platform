@@ -1,5 +1,13 @@
 """Flash firmware via SP Flash Tool (MTK platform).
 
+v1.4.3（#3892，15.93 LX3 金丝雀 PlanRun 1265 / Job 206967）：
+  - 根因：`_tty_usb_port` 用「路径段含 `:`」判断 USB 接口边界。真实 x86 sysfs 路径在
+    USB 端口之前有 `pci0000:00` / `0000:00:14.0` 两个含冒号的 PCI 段，循环在第一个就
+    break，tty 永远解析不出口。1.4.1 的实时核对与 1.4.2 的采样历史因此都为空，工具回显
+    到达后按「cannot be resolved」止损（现场：tty 在 `1-13.2.2:1.0`，15:13:56 仍在）。
+  - 只把 `<端口>:<配置>.<接口>` 形态的段当作接口边界，PCI 段直接跳过；解析规则与
+    `symbolic_link` 尾段一致。新增 `test_flash_firmware_v143.py` 覆盖带 PCI 前缀的真实路径。
+
 v1.4.2（#3892，15.93 LX3 金丝雀 PlanRun 1255 / Job 206578）：
   - 根因：V5 工具的 stdout 接 PIPE 时块缓冲，`com portName is: /dev/ttyACM0` 到达时
     `/sys/class/tty/ttyACM0` 已经消失，1.4.1 按「解析不出口」止损，固件未写入。
@@ -456,6 +464,9 @@ _BROM_GATE_PIDS = _BROM_STAGE_PIDS | {"2026"}
 # V6 `-p/--com_port` 在 Linux 上就是 sysfs 端口名（`1-8` / `1-10` / hub 嵌套
 # `1-5.2.3`），与 symbolic_link 回显的末段同形态。
 _PORT_PATH_RE = re.compile(r"^\d+-(?:\d+\.)*\d+$")
+# USB 接口目录：`<端口>:<配置>.<接口>`（如 `1-13.2.4:1.0`）。不能用「含冒号」判断：
+# x86 的 sysfs 路径在 USB 端口之前还有 PCI 段 `pci0000:00` / `0000:00:14.0`（v1.4.3）。
+_USB_INTERFACE_RE = re.compile(r"^\d+-(?:\d+\.)*\d+:\d+\.\d+$")
 _SYMBOLIC_LINK_RE = re.compile(r"symbolic_link:\s*(\S+)")
 # v1.4.2（ADR-0063 v1.3 D3 第 4 条「标记与解析同源」，复核 #3924 第 6 轮）：vbus 下标记计数与
 # 严格解析使用同一组标志（均不区分大小写），V5 与 V6 都如此。非 vbus 路径仍用上面的旧正则。
@@ -483,8 +494,9 @@ _SYS_CLASS_TTY = "/sys/class/tty"
 def _tty_usb_port(tty_name: str, base: str = _SYS_CLASS_TTY) -> "str | None":
     """`ttyACM0` → 它所在的 sysfs USB 口（如 `1-13.2.4`）；解析不到返回 None。
 
-    `/sys/class/tty/ttyACM0` 指向 `.../1-13/1-13.2/1-13.2.4/1-13.2.4:1.0/tty/ttyACM0`，
-    取接口目录（含 `:`）之前最后一个形如端口名的路径段。
+    `/sys/class/tty/ttyACM0` 指向
+    `.../pci0000:00/0000:00:14.0/usb1/1-13/1-13.2/1-13.2.4/1-13.2.4:1.0/tty/ttyACM0`，
+    取 USB 接口目录之前最后一个形如端口名的路径段；PCI 段里的冒号不参与判断（v1.4.3）。
     """
     try:
         real = os.path.realpath(os.path.join(base, tty_name))
@@ -492,7 +504,7 @@ def _tty_usb_port(tty_name: str, base: str = _SYS_CLASS_TTY) -> "str | None":
         return None
     port = None
     for part in real.split(os.sep):
-        if ":" in part:
+        if _USB_INTERFACE_RE.match(part):
             break
         if _PORT_PATH_RE.match(part):
             port = part
