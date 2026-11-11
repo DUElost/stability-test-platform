@@ -1030,19 +1030,27 @@ def test_privileged_calls_register_and_clip_timeouts(fn):
     assert "with _Privileged():" in src and "_signal_timeout(" in src
 
 
-@pytest.mark.parametrize("fn", ["_drain_inflight", "_wrapper_children_alive",
-                                "_signal_timeout", "_install_termination_cleanup"])
-def test_signal_path_takes_no_locks(fn):
+_SIGNAL_PATH_SPANS = [
+    # (起点锚点, 终点锚点)：信号路径上的每段源码
+    ("class _Privileged:", "def _signal_timeout("),
+    ("def _signal_timeout(", "def _wrapper_children_alive("),
+    ("def _wrapper_children_alive(", "def _drain_inflight("),
+    ("def _drain_inflight(", "def _clear_gated_state_after_restore("),
+    ("def _install_termination_cleanup(", "def _release_host_lock("),
+]
+
+
+@pytest.mark.parametrize("start,end", _SIGNAL_PATH_SPANS)
+def test_signal_path_takes_no_locks(start, end):
     # 第 6 轮反例：处理器在主线程持 _SIGNAL_CRIT_LOCK 时重取同一把锁而自锁。信号路径不得
     # 出现任何锁或同步原语。
-    import inspect
-    src = inspect.getsource(getattr(ff, fn))
-    for needle in ("Lock", "acquire", "Event", "Condition", "Semaphore", "with _"):
-        assert needle not in src, (fn, needle)
-    text = Path(v141._SCRIPT).read_text(encoding="utf-8")
-    cls = text[text.index("class _Privileged:"):text.index("def _signal_timeout(")]
-    for needle in ("Lock", "acquire", "Event", "Condition", "Semaphore"):
-        assert needle not in cls, needle
+    from tools.dev.source_anchor import SourceGuard
+    whole = SourceGuard.of_module(ff).anchored(start, expect=1).anchored(end, expect=1)
+    text = whole.text
+    span = text[text.index(start):text.index(end)]
+    guard = SourceGuard(span, origin=f"{v141._SCRIPT}:{start}").anchored(start)
+    for needle in ("Lock", "acquire(", "Event", "Condition", "Semaphore", "_SignalCritical"):
+        guard.assert_absent(needle, why="ADR-0063 v1.3 D3.4 信号路径不得取锁或同步原语（#3924 第 6 轮）")
 
 
 def test_orphan_state_kept_when_drain_incomplete(tmp_path, monkeypatch):
