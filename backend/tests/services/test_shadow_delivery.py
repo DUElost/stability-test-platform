@@ -12,7 +12,7 @@ from unittest.mock import Mock
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import sessionmaker
 
 from backend.core.settings.scheduler import SchedulerSettings
@@ -662,8 +662,9 @@ def test_remerge_after_reset_registers_v2_on_clock_rollback_with_content_change(
 
 
 def test_remerge_with_identical_content_registers_v2_on_clock_rollback(
-    db_session, sample_host, tmp_path,
+    db_session, sample_host, tmp_path, monkeypatch,
 ):
+    from backend.services import shadow_scan_rounds as shadow
     _plan_run(db_session)
     final = _round(db_session, 42, 1, "FINAL", [_unit(sample_host.id, "EMPTY")],
                    merge="FAILED_FINAL")
@@ -683,17 +684,93 @@ def test_remerge_with_identical_content_registers_v2_on_clock_rollback(
     final.merged_at = v1.registered_at - timedelta(seconds=5)  # 墙钟回拨
     db_session.commit()
 
-    v2 = _register(db_session, tmp_path)
+    factory = sessionmaker(bind=db_session.get_bind())
+    settings = SchedulerSettings(stp_scan_round_shadow_enabled=True)
+    module = _delivery()
+    _patch_sweep_env(monkeypatch, tmp_path, factory, settings, module)
+
+    # 内容不变、登记无故障：下一次真实 sweep 由补偿清单发现并写 v2。
+    with factory() as db:
+        assert facts.list_shadow_delivery_due_run_ids(db, platform="mtk") == [42]
+    shadow.sweep_shadow_scan_rounds(now=v1.registered_at)
+
+    with factory() as db:
+        versions = _versions(db)
+        assert [row.version_no for row in versions] == [1, 2]
+        v2 = versions[1]
+        assert (
+            v2.round_ids, v2.effective_coverage, v2.issue_ids, v2.event_ids,
+            v2.software_versions, v2.gaps,
+        ) == before
+        assert versions[0].basis_rounds == [{"round_id": final.id, "merge_generation": 1}]
+        assert v2.basis_rounds == [{"round_id": final.id, "merge_generation": 2}]
+        assert v2.stats_snapshot_version != versions[0].stats_snapshot_version
+        assert facts.list_shadow_delivery_due_run_ids(db, platform="mtk") == []
+
+    # 登记后不再入选，后续 sweep 不产生 v3。
+    shadow.sweep_shadow_scan_rounds(now=v1.registered_at)
+    with factory() as db:
+        assert [row.version_no for row in _versions(db)] == [1, 2]
+
+
+def test_delivery_discovery_lock_timeout_keeps_pending_merge_enqueued(
+    db_session, sample_host, tmp_path, monkeypatch, caplog,
+):
+    from backend.services import shadow_scan_rounds as shadow
+    _plan_run(db_session)
+    final = _round(db_session, 42, 1, "FINAL", [_unit(sample_host.id, "EMPTY")])
     db_session.commit()
-    assert v2.version_no == 2
-    assert (
-        v2.round_ids, v2.effective_coverage, v2.issue_ids, v2.event_ids,
-        v2.software_versions, v2.gaps,
-    ) == before
+    v1 = _register(db_session, tmp_path)
+    db_session.commit()
+    assert v1.version_no == 1
     assert v1.basis_rounds == [{"round_id": final.id, "merge_generation": 1}]
-    assert v2.basis_rounds == [{"round_id": final.id, "merge_generation": 2}]
-    assert v2.stats_snapshot_version != v1.stats_snapshot_version
-    assert facts.list_shadow_delivery_due_run_ids(db_session, platform="mtk") == []
+
+    # 新补充轮已终态 → 补偿清单应发现 42；另一补充轮未 merge → 本轮仍要入队。
+    supplement = _round(db_session, 42, 2, "SUPPLEMENT", [_unit(sample_host.id, "EMPTY")])
+    pending = _round(db_session, 42, 3, "SUPPLEMENT", [_unit(sample_host.id, "EMPTY")],
+                     merge=None)
+    db_session.commit()
+
+    factory = sessionmaker(bind=db_session.get_bind())
+    settings = SchedulerSettings(stp_scan_round_shadow_enabled=True)
+    module = _delivery()
+    _patch_sweep_env(monkeypatch, tmp_path, factory, settings, module)
+    monkeypatch.setattr(shadow, "_DELIVERY_DISCOVERY_LOCK_TIMEOUT_MS", 100)
+    with factory() as db:
+        assert facts.list_shadow_delivery_due_run_ids(db, platform="mtk") == [42]
+
+    # 复核反例：delivery_version 上持有 ACCESS EXCLUSIVE，补偿发现只能等到
+    # lock_timeout 失败；失败不得吞掉本轮的影子 merge 入队。
+    blocker = db_session.get_bind().connect()
+    try:
+        blocker.execute(text("LOCK TABLE delivery_version IN ACCESS EXCLUSIVE MODE"))
+        shadow.sweep_shadow_scan_rounds(now=v1.registered_at)
+    finally:
+        blocker.rollback()
+        blocker.close()
+
+    assert any("shadow_delivery_discovery_failed" in record.getMessage()
+               for record in caplog.records)
+    assert any(
+        call.args and call.args[0] == "shadow_merge_task"
+        and call.kwargs.get("plan_run_id") == 42
+        and call.kwargs.get("fact_round_id") == pending.id
+        for call in shadow.enqueue_sync.call_args_list
+    )
+    with factory() as db:
+        assert [row.version_no for row in _versions(db)] == [1]
+
+    # 下一周期锁已释放：补偿重试成功，v2 覆盖新增补充轮，之后不再入选。
+    shadow.sweep_shadow_scan_rounds(now=v1.registered_at)
+    with factory() as db:
+        versions = _versions(db)
+        assert [row.version_no for row in versions] == [1, 2]
+        assert versions[1].round_ids == [final.id, supplement.id]
+        assert versions[1].basis_rounds == [
+            {"round_id": final.id, "merge_generation": 1},
+            {"round_id": supplement.id, "merge_generation": 1},
+        ]
+        assert facts.list_shadow_delivery_due_run_ids(db, platform="mtk") == []
 
 
 def test_merge_generation_is_monotonic_and_reset_does_not_decrease(

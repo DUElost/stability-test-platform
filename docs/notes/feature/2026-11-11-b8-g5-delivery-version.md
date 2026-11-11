@@ -25,7 +25,11 @@ b8g5c0a1b2c3：scan_round.merge_generation 与 delivery_version.basis_rounds，
   FINAL 未关闭/merge 未终态、PlanRun 已不存在的分区。代次单调、与墙钟无关：
   新轮次或同一轮重新进入终态都会改变 (id, 代次)，登记后清单收敛。
   try_register 的失败只记 shadow_delivery_register_failed 并返回 None，不向
-  merge 任务或 sweep 抛出；下一次检查周期由补偿查询重试。
+  merge 任务或 sweep 抛出；下一次检查周期由补偿查询重试。补偿发现本身单独使用
+  一个会话，并以会话级 lock_timeout=2000ms 执行（auto_archive_poll_interval_seconds
+  默认 120s，2s 最多迟滞当轮现行归档 2s）；发现失败只记
+  shadow_delivery_discovery_failed、跳过当轮补偿，不中断当轮影子 scan/merge 入队，
+  下一周期重新发现。
 
 登记内容按 D9 第 2 条：round_ids 为 FINAL 加「已关闭且 merge 已终态」的补充轮；
 basis_rounds 记录这些轮的 (round_id, merge_generation)，按 round_id 升序，并纳入
@@ -113,9 +117,13 @@ testcontainers PostgreSQL 16。
      从 NOT_READY 变红为 READY_WITH_GAPS；恢复后绿。
   3) 有效覆盖只取 FINAL 轮，补充轮测试断言 [True, True] 变红为 [True, False]；
      恢复后绿。
-- 墙钟回拨：重新 merge 的 merged_at 早于 v1.registered_at。内容变化且首次登记
-  失败、内容不变且登记无故障两种情况下，下一次 sweep 均写 v2（basis_rounds 代次
-  1→2），之后不再入选。
+- 墙钟回拨 12a（内容变化 + 首次登记失败）：merge 路径登记注入失败，补偿清单
+  发现该 run，下一周期真实 sweep 写 v2。
+- 墙钟回拨 12b（内容不变 + 登记无故障）：第 3 轮复核指出旧用例直接调用 _register，
+  未覆盖补偿路径。用例已改为先断言补偿清单包含该 run，再调用真实
+  sweep_shadow_scan_rounds 写 v2；v2 的 round_ids、覆盖、问题、事件、软件版本与
+  gaps 与 v1 相同，仅 basis_rounds 代次 1→2 与登记时间/哈希变化；之后不再入选，
+  后续 sweep 不产生 v3。
 - 代次单调：FAILED→OK 加 1；已是终态重复写入不变；FAILED_FINAL 后 reset 不减，
   重新 OK 再加 1。
 - 本轮定向变异（每次改后清 __pycache__，恢复后再清）：
@@ -135,9 +143,16 @@ testcontainers PostgreSQL 16。
   sha256:61256050146487c5571cacd85ae7ac7bb235f0694207773d7766ca11dc1e50dd。
   修复前（路径函数在契约模块）为
   sha256:61f1a02bf53e6062dd7ce03fafc1fd3e65f08b09353dd10a1d92efa57ba5e36e。
+- 第 3 轮返修新增 B1 回归 test_delivery_discovery_lock_timeout_keeps_pending_merge_enqueued：
+  对 delivery_version 持 ACCESS EXCLUSIVE，并把补偿发现会话的 lock_timeout 常量
+  调为 100ms；断言当轮待处理影子 merge 仍入队、未写 v2，锁释放后的下一周期补偿
+  写 v2 且清单收敛。变异「去掉补偿发现的异常边界」时该用例红（LockNotAvailable
+  冒出），恢复后绿。
+- 第 3 轮 B2 变异：sweep 不消费补偿清单（从候选并集去掉 delivery_run_ids）时，
+  重写后的 12b 用例红（只写 v1）；恢复后绿。
 - 相关回归：test_shadow_delivery / test_shadow_merge / test_shadow_scan_rounds /
-  test_issue_fact_store / test_shadow_scan_send_3875 / test_shadow_scan_settled_3875
-  共 116 passed（含迁移往返用例）。
+  test_issue_fact_store / test_shadow_scan_send_3875 / test_shadow_scan_settled_3875 /
+  test_delivery_generation_migration 共 117 passed（含迁移往返与新增 B1 用例）。
 - 静态门禁：scripts/run_gates.py check:quick 16 gates 全绿（含 Ruff、环境变量清单、
   控制面 import 边界、函数内 import 棘轮、tool-manifest、transitions）。
 - 未运行：完整 backend/tests 与 CI required checks；以 PR 的 required checks 为准。
@@ -151,6 +166,8 @@ testcontainers PostgreSQL 16。
   形式是否直接使用 reason 代码。
 - 补偿查询会长期保留已终态分区；当前每次只比较 basis_rounds，不写库。若阶段一
   规模扩大，评估是否需要在 G7 增加「最近一次尝试时间」类持久字段，避免长期读取。
+- 补偿发现的 2000ms 锁等待常量按 auto_archive_poll_interval_seconds 默认 120s
+  取值；若后续调整该调度周期或 sweep 改为异步，重新评估该取值。
 - 本单元把「依据轮次」限定为 FINAL 加已终态补充轮。若 G6/G7 期间出现多个补充轮
   并行待 merge 的现场，需要复核 D9 第 2 条「已关闭的补充轮」是否要求包含未终态轮次；
   当前选择是不登记半成品。
