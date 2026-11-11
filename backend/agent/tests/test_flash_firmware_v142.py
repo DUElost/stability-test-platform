@@ -660,3 +660,79 @@ def test_read_error_is_recorded_and_not_eof(tmp_path, monkeypatch):
                                      abort_check=lambda line: None, readers_status=status)
     assert status["eof"] is False and status["stuck"] is False
     assert status["errors"] and "EIO" in status["errors"][0]
+
+
+# ── 复核 #3924 第 4 轮（ADR-0063 v1.3 D3 第 4 条「回显逐次核对」与步骤化结算）──────────
+
+@pytest.mark.parametrize("raw,needle", [
+    # 节点名里夹非法字节：替换解码后不得整条跳过
+    (b"com portName is: /dev/ttyACM\xff1", "undecodable"),
+    (b"com portName is: /dev/tty\xffACM1", "undecodable"),
+    # 节点名后紧跟字母：不是严格回显
+    (b"com portName is: /dev/ttyACM1x", "unparseable bind echo"),
+    # 标记在、但回显形态不对
+    (b"com portName is: COM7", "unparseable bind echo"),
+    # 同一行先目标口、再邻口：每一处都要核对
+    (b"com portName is: /dev/ttyACM0 com portName is: /dev/ttyACM1", "!= target port"),
+    (b"symbolic_link: COM:///dev/ttyACM0@/dev/ttyACM0@1-5.1.3 "
+     b"symbolic_link: COM:///dev/ttyACM1@/dev/ttyACM1@1-5.1.4", "!= target port"),
+])
+def test_every_bind_marker_is_checked(monkeypatch, raw, needle):
+    ports = {"ttyACM0": _SLOT, "ttyACM1": _NEIGHBOR}
+    monkeypatch.setattr(ff, "_tty_usb_port", lambda name, base=None: ports.get(name))
+    line = raw.decode("utf-8", errors="replace")
+    bound, reason = ff._check_bound_echo(line, _SLOT, "S", v5_echo=True)
+    assert reason and needle in reason, (line, bound, reason)
+
+
+@pytest.mark.parametrize("line", [
+    "BROM connected",
+    "progress 45%",
+    "�� garbled banner",  # 替换字符但没有端口 / tty 字样
+])
+def test_non_bind_lines_pass(monkeypatch, line):
+    monkeypatch.setattr(ff, "_tty_usb_port", lambda name, base=None: _SLOT)
+    assert ff._check_bound_echo(line, _SLOT, "S", v5_echo=True) == (None, None)
+
+
+def test_multiple_target_echoes_all_recorded(tmp_path, monkeypatch, capsys):
+    h = v141._v5_harness(monkeypatch, tmp_path)
+    made = _capture_histories(monkeypatch)
+    _late_echo_tool(h, monkeypatch, made, seen_port=_SLOT,
+                    lines=(_ECHO + " " + _ECHO, "All command exec done!"))
+    payload = h.run(monkeypatch, capsys)
+    assert payload["success"] is True, payload
+
+
+def test_signal_during_settle_completes_remaining_steps(tmp_path, monkeypatch, capsys):
+    # 第 4 轮反例：正常失败结算已开始、在停采样这一步收到信号；处理器里的结算必须把
+    # 隔离、门控恢复与释放锁做完。
+    h = v141._v5_harness(monkeypatch, tmp_path, {"max_attempts": 1})
+    v141._feed_tool_lines(h, monkeypatch, ["BROM connected"], {})
+    released, restored = [], []
+    monkeypatch.setattr(ff, "_release_host_lock", lambda fd: released.append(True))
+    restore = ff._restore_gated
+    monkeypatch.setattr(ff, "_restore_gated",
+                        lambda *a, **k: restored.append(True) or restore(*a, **k))
+    calls = []
+
+    class _Interrupting(ff._TtyPortHistory):
+        def start(self):
+            pass
+
+        def stop(self, timeout=2.0):
+            calls.append(1)
+            if len(calls) == 2:  # 第 1 次在尝试收尾，第 2 次在结算
+                h.settle(15)
+                raise _ProcessDied  # 真实处理器结算后 self-signal 终止进程，外层结算不再继续
+            return super().stop(timeout)
+
+    class _ProcessDied(BaseException):
+        pass
+
+    monkeypatch.setattr(ff, "_TtyPortHistory", _Interrupting)
+    monkeypatch.setattr(ff, "_run_flash_tool_with_progress", h.launch)
+    with pytest.raises(_ProcessDied):
+        ff.main()
+    assert h.power == ["off", "on", "off"], "信号处理器里的结算完成了隔离"
+    assert released == [True] and restored == [True], "门控恢复与释放锁各一次"

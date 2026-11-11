@@ -18,6 +18,8 @@ v1.4.2（#3892，15.93 LX3 金丝雀 PlanRun 1255 / Job 206578）：
   - 复核 #3924 第 3 轮退回规划者，按 ADR-0063 v1.3 D3 第 4 条补写的判据实现：输出完整消费
     （替换解码；两个 reader 都读到 EOF、无读取异常、无核对回调异常，否则不可信）；停止采样
     只置布尔量，不碰任何同步原语（信号处理器可能打断持有 Event 内部锁的主线程）。
+  - 复核 #3924 第 4 轮：vbus 下每一处绑定标记都严格解析并逐一核对（标记数 ≠ 严格回显数、
+    带端口字样的行里有替换字符，均止损）；结算按步骤记完成，信号中途重入时接着做完。
   - V6、非 vbus 的 V5 命令行与 1.4.1 逐字一致。
 
 v1.4.1（#3892 推广，15.93 试点）：
@@ -454,6 +456,11 @@ _SYMBOLIC_LINK_RE = re.compile(r"symbolic_link:\s*(\S+)")
 # v1.4.1（#3892）：V5 不回显 symbolic_link，只回显它打开的 tty 节点（15.93 P2 实测
 # `com portName is: /dev/ttyACM0`）；经 `/sys/class/tty/<name>` 解析成 sysfs 口再核对。
 _V5_PORTNAME_RE = re.compile(r"com portName is:\s*/dev/(ttyACM\d+)")
+# v1.4.2（ADR-0063 v1.3 D3 第 4 条「回显逐次核对」，复核 #3924 第 4 轮）：vbus 下一行里的
+# 每一处绑定标记都必须严格解析。节点名后面紧跟字母数字或替换字符（解码失败）不算严格匹配。
+_V5_PORTNAME_STRICT_RE = re.compile(r"com portName is:\s*/dev/(ttyACM\d+)(?![\w\ufffd])")
+_BIND_MARKER_RE = re.compile(r"port\s*name|symbolic_link", re.IGNORECASE)
+_BIND_HINT_RE = re.compile(r"port|tty|acm|link", re.IGNORECASE)
 _SYS_CLASS_TTY = "/sys/class/tty"
 
 
@@ -687,11 +694,49 @@ def _check_bound_echo(line: str, target_port: str, serial: str,
     先查实时、后取历史快照（复核 #3924 第 1 项）：实时查询期间写入的采样也计入候选。
     `observed` 给出时追加 `(节点名, 实时结果)`，供工具退出后的最终判定重算。
     """
-    if v5_echo and not _SYMBOLIC_LINK_RE.search(line):
-        v5 = _V5_PORTNAME_RE.search(line)
-        if v5 is None:
-            return None, None
-        name = v5.group(1)
+    if v5_echo:
+        return _check_vbus_bind_line(line, target_port, serial, tty_history, observed)
+    bound = _parse_bound_port(line)
+    if bound is not None and target_port and bound != target_port:
+        return bound, (
+            f"tool bound USB port {bound!r} != target port {target_port!r} "
+            f"(serial={serial}): 已终止工具，未继续下发")
+    return bound, None
+
+
+def _check_vbus_bind_line(line: str, target_port: str, serial: str,
+                          tty_history: "_TtyPortHistory | None",
+                          observed: "list | None") -> "tuple[str | None, str | None]":
+    """vbus 下的一行输出：每一处绑定标记都必须严格解析且等于目标口（ADR-0063 v1.3 D3 第 4 条）。
+
+    - 行内出现解码替换字符，且带端口 / tty 字样：无法核对，止损；
+    - 绑定标记（`portName` / `symbolic_link`）的个数必须等于严格解析出的回显个数，
+      有一处解析不了就止损（复核 #3924 第 4 轮：节点名里夹非法字节时整条被跳过）；
+    - 每一处都要核对（第 4 轮：同一行先目标口、再邻口时只核对了第一处），任一处
+      解析不出、有歧义或不等于目标口都止损；
+    - V5 节点名每处查一次实时 sysfs，再取历史快照，两者合并恰好一个口才可用。
+    """
+    def _stop(why: str) -> str:
+        return (f"{why} (target port {target_port!r}, serial={serial}): "
+                "已终止工具，未继续下发")
+
+    if "\ufffd" in line and _BIND_HINT_RE.search(line):
+        return None, _stop(f"undecodable bytes in a port/tty line {line.strip()[:120]!r}: "
+                           "无法核对绑定口")
+    markers = len(_BIND_MARKER_RE.findall(line))
+    if markers == 0:
+        return None, None
+    links = _SYMBOLIC_LINK_RE.findall(line)
+    names = _V5_PORTNAME_STRICT_RE.findall(line)
+    if len(links) + len(names) != markers:
+        return None, _stop(f"unparseable bind echo {line.strip()[:120]!r}: 无法核对绑定口")
+    ports: list = []
+    for link in links:
+        tail = link.rstrip(".").split("@")[-1]
+        if not _PORT_PATH_RE.match(tail):
+            return None, _stop(f"unparseable symbolic_link {link!r}: 无法核对绑定口")
+        ports.append(tail)
+    for name in names:
         live = _tty_usb_port(name)
         if observed is not None:
             observed.append((name, live))
@@ -699,23 +744,16 @@ def _check_bound_echo(line: str, target_port: str, serial: str,
         if live is not None:
             candidates.add(live)
         if not candidates:
-            return None, (
-                f"tool opened /dev/{name} but its USB port cannot be resolved "
-                f"(target port {target_port!r}, serial={serial}): 无法核对绑定口，"
-                "已终止工具，未继续下发")
+            return None, _stop(f"tool opened /dev/{name} but its USB port cannot be resolved: "
+                               "无法核对绑定口")
         if len(candidates) > 1:
-            return None, (
-                f"tool opened /dev/{name} but that node was seen on several USB ports "
-                f"{sorted(candidates)} during this attempt (target port {target_port!r}, "
-                f"serial={serial}): 绑定口有歧义，已终止工具，未继续下发")
-        (bound,) = candidates
-    else:
-        bound = _parse_bound_port(line)
-    if bound is not None and target_port and bound != target_port:
-        return bound, (
-            f"tool bound USB port {bound!r} != target port {target_port!r} "
-            f"(serial={serial}): 已终止工具，未继续下发")
-    return bound, None
+            return None, _stop(f"tool opened /dev/{name} but that node was seen on several USB "
+                               f"ports {sorted(candidates)} during this attempt: 绑定口有歧义")
+        ports.extend(candidates)
+    for port in ports:
+        if target_port and port != target_port:
+            return port, _stop(f"tool bound USB port {port!r} != target port {target_port!r}")
+    return (ports[0] if ports else None), None
 
 
 def _resolve_target_identity(
@@ -1671,7 +1709,7 @@ def _install_termination_cleanup(settle: "callable") -> None:
          Agent 取消与超时走的是向进程组发 SIGTERM→SIGKILL：没有处理器时进程
          直接死在结算之外，被门控的邻机 MTK 口永久滞留 authorized=0
          （authorized 只对当前 USB 实例生效，重枚举也不回来）。
-    How to apply: settle 必须幂等（_settle_lock 有 lock_settled 闸门）；清理后
+    How to apply: settle 必须幂等（v1.4.2 起按步骤记完成，重入从未完成的步骤接着做）；清理后
                  还原默认动作并 self-signal —— 仍以 WIFSIGNALED 收场，退出码
                  命名空间不变（ADR-0033 §D2：信号死亡视为工具缺陷，语义不改）。
     """
@@ -3144,15 +3182,25 @@ def main() -> None:
     # 必须先于 _settle_lock 的任何调用点（含信号处理器）定义。
     vbus_state: dict = {"power_on_at": None, "brom_seen": False, "ctx": None}
 
-    def _settle_lock() -> None:
-        nonlocal lock_settled
-        if lock_settled:
+    # v1.4.2（ADR-0063 v1.3 D3 第 4 条「信号打断停止流程」，复核 #3924 第 4 轮）：结算按步骤
+    # 记完成。信号在任一步中途到达时，处理器里重入的结算从未完成的那一步接着做完，而不是
+    # 因为「已开始结算」直接返回（旧闸门 lock_settled 在第一步之前就置位，信号处理器随后
+    # 终止进程，隔离与释放锁都没有执行）。步骤本身都可重复执行：重复断电、重复恢复门控无害；
+    # 释放锁只做一次（标记在调用之前置位）。
+    settle_done: set = set()
+
+    def _settle_step(name: str, fn: "callable") -> None:
+        if name in settle_done:
             return
-        lock_settled = True
+        fn()
+        settle_done.add(name)
+
+    def _settle_stop_sampler() -> None:
         ctx = vbus_state.get("ctx")
         if ctx is not None and ctx.get("tty_history") is not None:
-            # 复核 #3924 第 4 项：信号结算也先停采样、冻结记录，再动供电与锁。
             ctx["tty_history"].stop()
+
+    def _settle_isolate() -> None:
         if vbus and not vbus_keep_power and vbus_report.get("power_actions") \
                 and not vbus_state.get("slot_mismatch"):
             # 一次切电都没做过（如锁内复核发现设备在开机态）就不碰供电。
@@ -3167,11 +3215,26 @@ def main() -> None:
                 vbus_state["slot_mismatch"] = True
                 vbus_report["isolate_echo_mismatch"] = True
             vbus_report["isolated"] = echo_ok
-        gating["restore"] = _restore_gated({"hidden": hidden_ports},
-                                            _SYSFS_USB_BASE)
+
+    def _settle_restore() -> None:
+        gating["restore"] = _restore_gated({"hidden": hidden_ports}, _SYSFS_USB_BASE)
         _clear_gated_state()
+
+    def _settle_release() -> None:
+        settle_done.add("release")  # 先置位：释放锁不重入
         _release_host_lock(lock_fd)
         _emit_progress(seq, stage="lock-released")
+
+    def _settle_lock() -> None:
+        nonlocal lock_settled
+        if "release" in settle_done:
+            return
+        lock_settled = True
+        # 复核 #3924 第 4 项：先停采样、冻结记录，再动供电与锁。
+        _settle_step("stop-sampler", _settle_stop_sampler)
+        _settle_step("isolate", _settle_isolate)
+        _settle_step("restore", _settle_restore)
+        _settle_step("release", _settle_release)
 
     def _settle_on_signal(signum: int) -> None:
         # #1025：取消/超时路径唯一会经过的清理点——先结算再死
@@ -3342,9 +3405,9 @@ def main() -> None:
                                                       observed=observed)
                     if reason:
                         return reason
-                    if observed and bound == target_port:
-                        name, live = observed[0]
-                        ctx["echoes"].append((name, echo_at, live))
+                    if bound == target_port:
+                        for name, live in observed:
+                            ctx["echoes"].append((name, echo_at, live))
                     return None
 
                 def _vbus_brom_deadline() -> "tuple[str, str] | None":
