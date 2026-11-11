@@ -70,9 +70,9 @@ effective_coverage 的薄适配入口，供 G6/G7 使用。交付状态不持久
 测试经项目内存保护 runner（cgroup memory.max=6 GiB、swap=0），控制面用
 testcontainers PostgreSQL 16。
 
-- 反例先行：在 origin/main（80c9be3c6）上先提交 20 项 G5 用例，全部因
-  backend.services.shadow_delivery 不存在失败（20 failed）；实现后
-  backend/tests/services/test_shadow_delivery.py 20 passed。
+- 反例先行：在 origin/main（80c9be3c6）上先提交 23 项 G5 用例，全部因
+  backend.services.shadow_delivery 不存在失败（23 failed）；实现后
+  backend/tests/services/test_shadow_delivery.py 23 passed。
 - 验收 1–10 对应覆盖：FINAL OK + RECEIVED/EMPTY 登记 v1 且 scope_only；重复触发
   不新增版本；补充轮补 host 后 v2 且 v1 不变；全 MISSING 返回未就绪（覆盖为空）；
   NO_INPUT / FAILED_FINAL / FAILED 返回未就绪；INCOMPLETE 进入 gaps；发布状态
@@ -80,7 +80,8 @@ testcontainers PostgreSQL 16。
   写文件失败无登记、写库失败只有孤儿文件且重试后哈希一致；开关关闭、PERIODIC、
   非 MTK 均不登记；plan_run_artifact、DLE 状态、dedup/{run} 文件前后不变。
   触发器另覆盖：merge 终态触发真实登记、登记抛错不影响 merge 且留专用日志、
-  sweep 补偿只登记一次且连续两个周期不重复写。
+  sweep 补偿只登记一次且连续两个周期不重复写、NO_INPUT/FAILED_FINAL 仍登记但判定未就绪、
+  首周期登记失败后下一周期由补偿查询重试成功。
 - 变异自证三项（每次改后清 __pycache__，恢复后再清）：
   1) 去掉「内容不变不登记」，test_repeat_registration_is_idempotent 变红
      （v1 后又登记 v2）；恢复后绿。
@@ -90,7 +91,7 @@ testcontainers PostgreSQL 16。
      恢复后绿。
 - 相关回归：test_shadow_delivery / test_shadow_merge / test_shadow_scan_rounds /
   test_issue_fact_store / test_shadow_scan_send_3875 / test_shadow_scan_settled_3875
-  共 105 passed。
+  共 108 passed。
 - 静态门禁：scripts/run_gates.py check:quick 16 gates 全绿（含 Ruff、环境变量清单、
   控制面 import 边界、函数内 import 棘轮、tool-manifest、transitions）。
 - 未运行：完整 backend/tests 与 CI required checks；以 PR 的 required checks 为准。

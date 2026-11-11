@@ -462,3 +462,73 @@ def test_sweep_compensates_once_and_does_not_repeat_write(
         assert [row.version_no for row in _versions(db)] == [1]
     queued.assert_not_called()
     assert final.merge_status == "OK"
+
+@pytest.mark.parametrize(("merge_status", "reason"), [
+    ("NO_INPUT", "latest_merge_no_input"),
+    ("FAILED_FINAL", "latest_merge_failed"),
+])
+def test_terminal_failure_still_registers_and_is_not_ready(
+    db_session, sample_host, tmp_path, merge_status, reason,
+):
+    _plan_run(db_session)
+    _round(db_session, 42, 1, "FINAL", [_unit(sample_host.id, "MISSING")], merge=merge_status)
+    db_session.commit()
+
+    row = _register(db_session, tmp_path)
+    db_session.commit()
+    assert row.version_no == 1
+    decision = _delivery().evaluate_version_status(
+        row,
+        rounds=[{"round_no": 1, "kind": "FINAL", "status": "CLOSED",
+                 "merge_status": merge_status}],
+        representatives=[],
+        publish_status={},
+    )
+    assert decision.status == "NOT_READY"
+    assert decision.reason == reason
+
+
+def test_registration_failure_retries_on_next_sweep(
+    db_session, sample_host, tmp_path, monkeypatch, caplog,
+):
+    from backend.services import shadow_scan_rounds as shadow
+    _plan_run(db_session)
+    final = _round(db_session, 42, 1, "FINAL", [_unit(sample_host.id, "EMPTY")])
+    db_session.commit()
+    factory = sessionmaker(bind=db_session.get_bind())
+    settings = SchedulerSettings(stp_scan_round_shadow_enabled=True)
+    module = _delivery()
+    now = datetime.now(timezone.utc)
+    monkeypatch.setattr(shadow, "SessionLocal", factory)
+    monkeypatch.setattr(shadow, "get_scheduler_settings", lambda: settings)
+    monkeypatch.setattr(shadow, "resolve_shared_storage_root", lambda: str(tmp_path))
+    monkeypatch.setattr(facts, "list_shadow_scan_run_ids", lambda *_a, **_kw: [])
+    monkeypatch.setattr(shadow, "_advance_run",
+                        lambda *_a, **_kw: (_ for _ in ()).throw(AssertionError("advanced")))
+    monkeypatch.setattr(shadow, "enqueue_sync", Mock())
+    monkeypatch.setattr(module, "SessionLocal", factory)
+    monkeypatch.setattr(module, "get_scheduler_settings", lambda: settings)
+    monkeypatch.setattr(module, "resolve_shared_storage_root", lambda: str(tmp_path))
+    real_register = module.register_delivery_version
+    calls = []
+
+    def flaky_register(*args, **kwargs):
+        if not calls:
+            calls.append(1)
+            raise RuntimeError("transient registration failure")
+        return real_register(*args, **kwargs)
+
+    monkeypatch.setattr(module, "register_delivery_version", flaky_register)
+
+    shadow.sweep_shadow_scan_rounds(now=now)
+    with factory() as db:
+        assert _versions(db) == []
+        assert facts.list_shadow_delivery_due_run_ids(db, platform="mtk") == [42]
+    assert any("shadow_delivery_register_failed" in record.getMessage()
+               for record in caplog.records)
+
+    shadow.sweep_shadow_scan_rounds(now=now + timedelta(seconds=120))
+    with factory() as db:
+        assert [row.version_no for row in _versions(db)] == [1]
+        assert facts.list_shadow_delivery_due_run_ids(db, platform="mtk") == []
+    assert final.merge_status == "OK"
