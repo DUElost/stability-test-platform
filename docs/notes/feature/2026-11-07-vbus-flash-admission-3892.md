@@ -212,6 +212,8 @@ Class: feature
   恢复不含意图记录、不等 wrapper 静止）各至少 1 条变红。旧版本测试里 `_gate_other_mtk` 的替身补了 `before_write` 形参。
   第 8 轮拆分后：`git diff cef0db0` 只剩文件头说明与回显解析区域（正则与 `_check_bound_echo` / `_check_vbus_bind_line`）；
   `test_flash_firmware_v142.py` 81 条通过（第 1–4 轮全部用例 + 第 5–7 轮回显用例），`-k flash` 414 passed。
+  第 9 轮：节点名归一为 `ttyACM<数字>`、同一行同一节点只解析一次、回显按标记计数；新增 7 条（大写路径 × 两种节点状态 × 两种写法、
+  同行重复引用 3 例），白名单通过用例的替身改为只认内核写法。3 种变异（不归一、不去重、按引用计回显）各至少 1 条变红；88 条通过。
 
 ## Revisit
 

@@ -836,8 +836,9 @@ def test_tty_reference_whitelist_rejects_any_other_terminator(monkeypatch, sep):
     "usb port detected: /DEV/TTYACM0",
 ])
 def test_tty_reference_whitelist_accepts_known_shapes(monkeypatch, line):
+    # 替身只认内核写法 `ttyACM0`（复核 #3924 第 9 轮：旧替身转小写掩盖了大写路径查不到的问题）
     monkeypatch.setattr(ff, "_tty_usb_port", lambda name, base=None:
-                        _SLOT if name.lower() == "ttyacm0" else None)
+                        _SLOT if name == "ttyACM0" else None)
     hist = ff._TtyPortHistory(base="/nonexistent")
     bound, reason = ff._check_bound_echo(line, _SLOT, "S", v5_echo=True, tty_history=hist)
     assert reason is None, (line, reason)
@@ -898,3 +899,45 @@ def test_portname_marker_and_parse_share_case_rule(monkeypatch, words):
                 bound, reason = ff._check_bound_echo(line, _SLOT, "S", v5_echo=True,
                                                      tty_history=hist, observed=observed)
                 assert reason is None and bound == _SLOT and observed, (line, reason)
+
+
+# ── 复核 #3924 第 9 轮：节点名归一、同一行单次解析 ─────────────────────────────────
+
+@pytest.mark.parametrize("live", [_SLOT, None])
+@pytest.mark.parametrize("line", ["COM PORTNAME IS: /DEV/TTYACM0",
+                                  "com portName is: /dev/TTYacm0"])
+def test_uppercase_path_resolves_kernel_node(monkeypatch, live, line):
+    # 临时 sysfs 只有标准节点 ttyACM0：节点仍在、节点已消失只剩历史，两种都要能核对。
+    queried = []
+    monkeypatch.setattr(ff, "_tty_usb_port", lambda name, base=None:
+                        queried.append(name) or (live if name == "ttyACM0" else None))
+    hist = ff._TtyPortHistory(base="/nonexistent")
+    hist._seen["ttyACM0"] = [(0.0, _SLOT)]
+    observed: list = []
+    bound, reason = ff._check_bound_echo(line, _SLOT, "S", v5_echo=True,
+                                         tty_history=hist, observed=observed)
+    assert reason is None and bound == _SLOT, (line, reason)
+    assert queried == ["ttyACM0"] and observed == [("ttyACM0", live)]
+
+
+@pytest.mark.parametrize("line,echoes", [
+    ("com portName is: /dev/ttyACM0 path name(/dev/ttyACM0)", 1),
+    ("com portName is: /dev/ttyACM0 path name(/DEV/TTYACM0), port name(/dev/ttyACM0)", 1),
+    ("com portName is: /dev/ttyACM0 com portName is: /dev/ttyACM0", 2),
+])
+def test_same_node_resolved_once_per_line(monkeypatch, line, echoes):
+    # 同一行重复引用同一节点：实时 sysfs 与历史各查一次；回显按标记位置计数，普通引用不计。
+    live_calls, hist_calls = [], []
+    monkeypatch.setattr(ff, "_tty_usb_port", lambda name, base=None:
+                        live_calls.append(name) or _SLOT)
+    hist = ff._TtyPortHistory(base="/nonexistent")
+    orig = hist.ports
+    monkeypatch.setattr(hist, "ports", lambda name, until=None:
+                        hist_calls.append(name) or orig(name, until))
+    observed: list = []
+    bound, reason = ff._check_bound_echo(line, _SLOT, "S", v5_echo=True,
+                                         tty_history=hist, observed=observed)
+    assert reason is None and bound == _SLOT, reason
+    assert live_calls == ["ttyACM0"] and hist_calls == ["ttyACM0"]
+    assert observed == [("ttyACM0", _SLOT)] * echoes
+

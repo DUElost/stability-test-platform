@@ -22,7 +22,7 @@ v1.4.2（#3892，15.93 LX3 金丝雀 PlanRun 1255 / Job 206578）：
     带端口字样的行里有替换字符，均止损）；结算按步骤记完成，信号中途重入时接着做完。
   - 复核 #3924 第 5–8 轮的回显判据（V5 只认 `com portName is`；行内 `/dev/ttyACM` 白名单
     `/dev/ttyACM<数字>` 后只能是行尾、空白或 `)`；标记计数与严格解析同为不区分大小写；V5
-    出现 symbolic_link 即止损）。同期提出的在途特权操作与门控恢复机制按 Owner 2026-11-11
+    出现 symbolic_link 即止损；节点名归一为 `ttyACM<数字>`，同一行同一节点只解析一次）。同期提出的在途特权操作与门控恢复机制按 Owner 2026-11-11
     裁定拆出另做，本版恢复行为与第 4 轮（结算按步骤、停采样不取锁）一致。
   - V6、非 vbus 的 V5 命令行与 1.4.1 逐字一致。
 
@@ -756,6 +756,12 @@ def _check_vbus_bind_line(line: str, target_port: str, serial: str,
             return None, _stop(f"unparseable symbolic_link {link!r}: 无法核对绑定口")
         ports.append(tail)
     # V5：行内所有 ttyACM 引用（含绑定回显本身）逐一核对。V6 不按 tty 核对（只认 symbolic_link）。
+    # 节点名归一为内核写法 `ttyACM<数字>`（复核 #3924 第 9 轮：`/DEV/TTYACM0` 原样查询会查不到）；
+    # 同一行里同一节点只查一次实时、取一次历史（单次解析），回显按标记所在位置逐个计数。
+    def _canon(name: str) -> str:
+        return "ttyACM" + name[len("ttyACM"):]
+
+    echo_names = [_canon(n) for n in echo_names]
     if tty_history is not None:
         refs = []
         for opened in _DEV_TTYACM_OPEN_RE.finditer(line):
@@ -763,13 +769,12 @@ def _check_vbus_bind_line(line: str, target_port: str, serial: str,
             if ref is None:
                 frag = line[opened.start():opened.start() + 40].strip()
                 return None, _stop(f"unparseable tty reference {frag!r}: 无法核对绑定口")
-            refs.append(ref.group(1))
+            refs.append(_canon(ref.group(1)))
     else:
         refs = list(echo_names)
-    for name in refs:
+    resolved: dict = {}
+    for name in dict.fromkeys(refs):
         live = _tty_usb_port(name)
-        if observed is not None and name in echo_names:
-            observed.append((name, live))
         candidates = set(tty_history.ports(name)) if tty_history is not None else set()
         if live is not None:
             candidates.add(live)
@@ -779,7 +784,11 @@ def _check_vbus_bind_line(line: str, target_port: str, serial: str,
         if len(candidates) > 1:
             return None, _stop(f"tool opened /dev/{name} but that node was seen on several USB "
                                f"ports {sorted(candidates)} during this attempt: 绑定口有歧义")
+        resolved[name] = live
         ports.extend(candidates)
+    if observed is not None:
+        for name in echo_names:
+            observed.append((name, resolved[name]))
     for port in ports:
         if target_port and port != target_port:
             return port, _stop(f"tool bound USB port {port!r} != target port {target_port!r}")
