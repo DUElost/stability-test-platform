@@ -19,7 +19,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Sequence
 
 from sqlalchemy import String, and_, cast, distinct, func, or_, select, text
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from backend.models.issue_fact import (
     DeliveryVersion,
@@ -845,32 +845,47 @@ def list_partition_delivery_event_ids(
 
 
 def list_shadow_delivery_due_run_ids(db: Session, *, platform: str) -> list[int]:
-    """补偿发现：有终态最后一轮/补充轮、且晚于最近交付物版本的分区。
+    """补偿发现：有终态 FINAL/补充轮尚未进入最新交付版本的 CURRENT 分区。
 
-    登记成功后的 registered_at 不早于触发它的 merged_at，因此正常分区
-    不会每个检查周期重复进入本清单；登记失败（无版本）或之后又有轮次
-    进入终态时才会再次出现。
+    按轮次 id 判断，不比较时间：最新版本已包含的终态轮次不再入选，去重
+    路径不会逐周期重复。非 CURRENT 分区、FINAL 未关闭或其 merge 未终态的
+    分区在这里直接排除，避免快照必然返回 None 的分区永远留在清单里。
     """
     latest = select(
         DeliveryVersion.plan_run_id.label("run_id"),
-        func.max(DeliveryVersion.registered_at).label("registered_at"),
+        DeliveryVersion.round_ids.label("round_ids"),
     ).where(
         func.lower(DeliveryVersion.platform) == platform.lower(),
-    ).group_by(DeliveryVersion.plan_run_id).subquery()
-    terminal = select(
-        ScanRound.plan_run_id.label("run_id"),
-        func.max(func.coalesce(ScanRound.merged_at, ScanRound.closed_at)).label("merged_at"),
-    ).where(
-        func.lower(ScanRound.platform) == platform.lower(),
-        ScanRound.kind.in_([SCAN_ROUND_KIND_FINAL, SCAN_ROUND_KIND_SUPPLEMENT]),
-        ScanRound.status == SCAN_ROUND_STATUS_CLOSED,
-        ScanRound.merge_status.in_(["OK", "NO_INPUT", "FAILED_FINAL"]),
-    ).group_by(ScanRound.plan_run_id).subquery()
+    ).distinct(DeliveryVersion.plan_run_id).order_by(
+        DeliveryVersion.plan_run_id,
+        DeliveryVersion.version_no.desc(),
+    ).subquery()
+    final_round = aliased(ScanRound)
+    final_terminal = select(final_round.id).where(
+        final_round.plan_run_id == ScanRound.plan_run_id,
+        func.lower(final_round.platform) == platform.lower(),
+        final_round.kind == SCAN_ROUND_KIND_FINAL,
+        final_round.status == SCAN_ROUND_STATUS_CLOSED,
+        final_round.merge_status.in_(["OK", "NO_INPUT", "FAILED_FINAL"]),
+    ).exists()
+    non_current = select(PartitionMode.id).where(
+        PartitionMode.plan_run_id == ScanRound.plan_run_id,
+        func.lower(PartitionMode.platform) == platform.lower(),
+        PartitionMode.mode != PARTITION_MODE_CURRENT,
+    ).exists()
     return list(db.execute(
-        select(terminal.c.run_id).outerjoin(
-            latest, latest.c.run_id == terminal.c.run_id,
-        ).where(or_(
-            latest.c.registered_at.is_(None),
-            terminal.c.merged_at >= latest.c.registered_at,
-        )).order_by(terminal.c.run_id)
+        select(ScanRound.plan_run_id).select_from(ScanRound).outerjoin(
+            latest, latest.c.run_id == ScanRound.plan_run_id,
+        ).where(
+            func.lower(ScanRound.platform) == platform.lower(),
+            ScanRound.kind.in_([SCAN_ROUND_KIND_FINAL, SCAN_ROUND_KIND_SUPPLEMENT]),
+            ScanRound.status == SCAN_ROUND_STATUS_CLOSED,
+            ScanRound.merge_status.in_(["OK", "NO_INPUT", "FAILED_FINAL"]),
+            final_terminal,
+            ~non_current,
+            or_(
+                latest.c.run_id.is_(None),
+                ~latest.c.round_ids.contains(func.jsonb_build_array(ScanRound.id)),
+            ),
+        ).distinct().order_by(ScanRound.plan_run_id)
     ).scalars())

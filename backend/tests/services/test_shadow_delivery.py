@@ -540,3 +540,39 @@ def test_registration_failure_retries_on_next_sweep(
         assert [row.version_no for row in _versions(db)] == [1]
         assert facts.list_shadow_delivery_due_run_ids(db, platform="mtk") == []
     assert final.merge_status == "OK"
+
+def test_due_list_uses_round_ids_not_registration_time(db_session, sample_host, tmp_path):
+    _plan_run(db_session)
+    final = _round(db_session, 42, 1, "FINAL", [_unit(sample_host.id, "EMPTY")])
+    db_session.commit()
+    registered_at = datetime.now(timezone.utc)
+    version = _register(db_session, tmp_path, now=registered_at)
+    db_session.commit()
+    assert version.round_ids == [final.id]
+
+    # 人为让终态轮次晚于登记时间；内容未变，按时间判据会再次入选。
+    final.merged_at = registered_at + timedelta(minutes=5)
+    db_session.commit()
+    assert facts.list_shadow_delivery_due_run_ids(db_session, platform="mtk") == []
+
+    # 只有出现一个不在最新版本 round_ids 里的终态轮次，才重新入选。
+    supplement = _round(db_session, 42, 2, "SUPPLEMENT", [_unit(sample_host.id, "EMPTY")])
+    db_session.commit()
+    assert supplement.id not in version.round_ids
+    assert facts.list_shadow_delivery_due_run_ids(db_session, platform="mtk") == [42]
+
+
+def test_due_list_excludes_non_current_and_unfinished_final(db_session, sample_host):
+    _plan_run(db_session, 43)
+    facts.record_partition_mode(
+        db_session, plan_run_id=43, platform="mtk", mode=facts.PARTITION_MODE_DEDUP_FIRST,
+    )
+    _round(db_session, 43, 1, "FINAL", [_unit(sample_host.id, "EMPTY")])
+
+    # FINAL 尚未终态，即使补充轮已终态也不入选。
+    _plan_run(db_session, 44)
+    _round(db_session, 44, 1, "FINAL", [_unit(sample_host.id, "EMPTY")], merge=None)
+    _round(db_session, 44, 2, "SUPPLEMENT", [_unit(sample_host.id, "EMPTY")])
+    db_session.commit()
+
+    assert facts.list_shadow_delivery_due_run_ids(db_session, platform="mtk") == []

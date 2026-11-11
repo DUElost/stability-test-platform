@@ -23,7 +23,7 @@ from typing import Any, Mapping, Optional, Sequence
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from backend.agent.contracts.round_report_layout import delivery_export_path
+from backend.agent.contracts.round_report_layout import _component, _round_id
 from backend.core.database import SessionLocal
 from backend.core.settings.scheduler import get_scheduler_settings
 from backend.core.storage_root import resolve_shared_storage_root
@@ -88,6 +88,22 @@ class DeliverySnapshot:
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def delivery_export_path(
+    nfs_root: str, plan_run_id: int, platform: str, version_no: int,
+) -> Path:
+    """B8 G5 交付物统计导出：``_meta/{run}/_delivery/{platform}/v{n}.json``。
+
+    路径段复用共享 _meta 契约的现有校验函数；本函数留在控制面，避免改动
+    backend/agent/ 的 Agent 代码载荷。
+    """
+    if type(version_no) is not int or version_no <= 0:
+        raise ValueError("version_no must be a positive int")
+    return (
+        Path(nfs_root) / "_meta" / _round_id(plan_run_id) / "_delivery"
+        / _component(platform) / f"v{version_no}.json"
+    )
 
 
 def _coverage_gaps(units: Sequence[Mapping[str, Any]]) -> list[dict]:
