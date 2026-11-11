@@ -200,3 +200,144 @@ def test_vbus_v6_command_line_unchanged(tmp_path, monkeypatch, capsys):
     assert payload["success"] is True, payload
     assert h.launched[-1][0].endswith("SPFlashToolV6")
     assert "tty_history" not in payload["metrics"]["attempts"][-1]
+
+
+# ── 复核 #3924 第 1 轮：第 1、3、4 项的反例 ─────────────────────────────────
+
+def test_live_lookup_precedes_history_snapshot(monkeypatch):
+    # 第 1 项反例一：实时查询期间采样记入邻口、节点随即消失。先查实时后取快照，邻口必须计入。
+    hist = ff._TtyPortHistory(base="/nonexistent")
+    hist._seen["ttyACM0"] = [(0.0, _SLOT)]
+
+    def _live(name, base=None):
+        hist._seen["ttyACM0"].append((0.0, _NEIGHBOR))
+        return None
+
+    monkeypatch.setattr(ff, "_tty_usb_port", _live)
+    bound, reason = ff._check_bound_echo(_ECHO, _SLOT, "S", v5_echo=True, tty_history=hist)
+    assert bound is None and "several USB ports" in reason
+
+
+def test_final_check_counts_sample_landing_after_line_check(tmp_path, monkeypatch, capsys):
+    # 第 1 项：逐行核对之后才写入、但在回显之前开始的采样，最终判定必须计入。
+    h = v141._v5_harness(monkeypatch, tmp_path, {"max_attempts": 3})
+    made = _capture_histories(monkeypatch)
+    _late_echo_tool(h, monkeypatch, made, seen_port=_SLOT)
+    inner = h.launch
+
+    def launch(cmd, *a, **k):
+        out = inner(cmd, *a, **k)
+        t, _ = made[-1]._seen["ttyACM0"][0]
+        made[-1]._seen["ttyACM0"].append((t, _NEIGHBOR))  # 迟到的在途采样
+        return out
+
+    h.launch = launch
+    payload = h.run(monkeypatch, capsys)
+    assert payload["success"] is False, payload
+    assert payload["metrics"]["attempts"][-1]["outcome"] == "aborted-port-unverified"
+    assert "not exactly target port" in payload["error_message"]
+    assert len(h.launched) == 1 and h.power == ["off", "on", "off"]
+
+
+def test_stale_reader_from_previous_attempt_cannot_verify(tmp_path, monkeypatch, capsys):
+    # 第 1 项反例二：第 1 轮超时，遗留 reader 在第 2 轮才回调目标口回显；第 2 轮没有任何回显。
+    import subprocess
+    h = v141._v5_harness(monkeypatch, tmp_path, {"max_attempts": 2})
+    _capture_histories(monkeypatch)
+    monkeypatch.setattr(ff, "_tty_usb_port", lambda name, base=None: _SLOT)
+    checks = []
+
+    def launch(cmd, *a, **k):
+        h.launched.append(cmd)
+        k["on_running"]()
+        checks.append(k["abort_check"])
+        if len(checks) == 1:
+            raise subprocess.TimeoutExpired(cmd, 1)
+        assert checks[0](_ECHO) is None  # 旧回调：不得写入第 2 轮
+        return v140._PASS_OUTPUT, 0
+
+    h.launch = launch
+    payload = h.run(monkeypatch, capsys)
+    assert payload["success"] is False, payload
+    outcomes = [a["outcome"] for a in payload["metrics"]["attempts"]]
+    assert outcomes == ["timeout", "aborted-port-unverified"]
+
+
+def test_neighbor_sampled_before_power_on_returns_is_discarded(tmp_path, monkeypatch, capsys):
+    # 第 3 项反例：wrapper 通电过程中（reset 原位置之后）采到邻口，随即消失。
+    h = v141._v5_harness(monkeypatch, tmp_path)
+    made = _capture_histories(monkeypatch)
+    _late_echo_tool(h, monkeypatch, made, seen_port=_SLOT)
+    power = h._fake_power
+    present = {"ttyACM0": _NEIGHBOR}
+
+    def _power(serial, action, slot):
+        out = power(serial, action, slot)
+        if action == "on" and made:
+            # wrapper 返回之前（reset 的旧位置之后）采到邻口，随即消失。
+            saved = (ff._list_acm_ttys, ff._tty_usb_port)
+            ff._list_acm_ttys = lambda base=None: list(present)
+            ff._tty_usb_port = lambda name, base=None: present.get(name)
+            try:
+                made[-1].sample()
+            finally:
+                ff._list_acm_ttys, ff._tty_usb_port = saved
+        return out
+
+    monkeypatch.setattr(ff, "_usb_power", _power)
+    payload = h.run(monkeypatch, capsys)
+    assert payload["success"] is True, payload
+    assert payload["metrics"]["attempts"][-1]["tty_history"] == {"ttyACM0": [_SLOT]}
+
+
+def test_stop_reports_blocked_sampler_and_freezes_history(monkeypatch):
+    # 第 4 项：采样阻塞在目录读取时，stop 返回 False；之后线程放行也写不进记录。
+    import threading
+    gate = threading.Event()
+    entered = threading.Event()
+
+    def _blocked(base=None):
+        entered.set()
+        gate.wait(5)
+        return ["ttyACM0"]
+
+    monkeypatch.setattr(ff, "_list_acm_ttys", _blocked)
+    monkeypatch.setattr(ff, "_tty_usb_port", lambda name, base=None: _NEIGHBOR)
+    hist = ff._TtyPortHistory(base="/nonexistent", interval=0.01)
+    hist.start()
+    assert entered.wait(5)
+    assert hist.stop(timeout=0.05) is False
+    gate.set()
+    hist._thread.join(5)
+    assert hist.ports("ttyACM0") == frozenset()
+    assert hist.stop() is True
+
+
+def test_sampler_not_stopped_fails_closed(tmp_path, monkeypatch, capsys):
+    h = v141._v5_harness(monkeypatch, tmp_path, {"max_attempts": 3})
+    made = _capture_histories(monkeypatch)
+    _late_echo_tool(h, monkeypatch, made, seen_port=_SLOT)
+    monkeypatch.setattr(ff._TtyPortHistory, "stop", lambda self, timeout=2.0: False)
+    payload = h.run(monkeypatch, capsys)
+    assert payload["success"] is False, payload
+    assert "tty sampler did not stop" in payload["error_message"]
+    assert len(h.launched) == 1 and h.power == ["off", "on", "off"]
+
+
+def test_signal_settle_stops_sampler_before_isolating(tmp_path, monkeypatch, capsys):
+    # 第 4 项：信号结算先停采样、冻结记录，再断电与释放锁。
+    h = v141._v5_harness(monkeypatch, tmp_path)
+    made = _capture_histories(monkeypatch)
+    v141._feed_tool_lines(h, monkeypatch, [_ECHO], {"ttyACM0": _SLOT})
+    seen = []
+    power = h._fake_power
+
+    def _power(serial, action, slot):
+        if action == "off" and made and made[-1]._stop.is_set():
+            seen.append(made[-1]._closed)
+        return power(serial, action, slot)
+
+    monkeypatch.setattr(ff, "_usb_power", _power)
+    h.launch_script = ["signal"]
+    h.run(monkeypatch, capsys)
+    assert seen and seen[0] is True, "隔离断电前采样已停止并冻结"

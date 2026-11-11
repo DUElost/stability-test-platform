@@ -9,6 +9,9 @@ v1.4.2（#3892，15.93 LX3 金丝雀 PlanRun 1255 / Job 206578）：
   - 每次尝试起一个约 0.1s 间隔的采样线程，记录上电之后见过的 ttyACM 节点 → sysfs 口。
     回显的口取实时解析与历史的并集：恰好一个口才用；没有 = 无法解析；多于一个 =
     有歧义，两者都止损。每行仍只查一次实时 sysfs；1.4.1 的失败闭合语义不变。
+  - 复核 #3924 第 1 轮：每行先查实时再取历史快照；wrapper 上电返回之后才开窗；每轮一个
+    上下文，上一轮遗留 reader 的回调不再写状态；工具退出后先停采样、冻结记录，再按本轮
+    回显重算（只计回显到达前开始的采样），采样线程没停下即判不可信；信号结算同样先停采样。
   - V6、非 vbus 的 V5 命令行与 1.4.1 逐字一致。
 
 v1.4.1（#3892 推广，15.93 试点）：
@@ -480,49 +483,57 @@ class _TtyPortHistory:
 
     V5 工具的 `com portName is: /dev/ttyACMn` 回显可能晚于节点消失才到（PIPE 下块缓冲；
     即使改行缓冲，节点也只存在几秒）。只查实时 sysfs 时，这一行会被判成「解析不出口」。
-    这里把本次尝试上电之后见过的「节点名 → 口」都记下来，核对回显时与实时结果合并：
-    合并后恰好一个口才算解析成功；一个都没有、或同名节点在窗口内挂过不同的口，
+    这里记下本次尝试上电之后见过的「节点名 → 口」，每条记录带采样开始时刻，核对回显时与
+    实时结果合并：合并后恰好一个口才算解析成功；一个都没有、或同名节点挂过不同的口，
     都按无法核对止损（失败闭合不变）。
 
-    `reset()` 在上电前调用：上电之前本设备不可能有 tty，此前同名节点属于别的设备。
-    采样线程查到一半时被 reset，用代次丢弃这次结果，不把旧口带进新窗口。
+    - `reset()` 在 wrapper 上电**返回之后**调用（复核 #3924 第 3 项）：上电完成之前本设备
+      不可能枚举出 tty，此前采到的同名节点属于别的设备。采样跨过 reset 时用代次丢弃。
+    - `stop()` 之后记录冻结（`_closed`），仍未退出的采样线程写不进来；返回线程是否已停止，
+      调用方据此失败闭合（复核 #3924 第 4 项）。
     """
 
     def __init__(self, base: str = _SYS_CLASS_TTY, interval: float = 0.1) -> None:
         self._base = base
         self._interval = interval
-        self._seen: "dict[str, set[str]]" = {}
+        self._seen: "dict[str, list[tuple[float, str]]]" = {}
         self._gen = 0
+        self._closed = False
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: "threading.Thread | None" = None
 
     def sample(self) -> None:
         with self._lock:
+            if self._closed:
+                return
             gen = self._gen
+        started = time.monotonic()
         found = []
         for name in _list_acm_ttys(self._base):
             port = _tty_usb_port(name, self._base)
             if port:
                 found.append((name, port))
         with self._lock:
-            if gen != self._gen:
+            if gen != self._gen or self._closed:
                 return
             for name, port in found:
-                self._seen.setdefault(name, set()).add(port)
+                self._seen.setdefault(name, []).append((started, port))
 
     def reset(self) -> None:
         with self._lock:
             self._gen += 1
             self._seen = {}
 
-    def ports(self, name: str) -> "frozenset[str]":
+    def ports(self, name: str, until: "float | None" = None) -> "frozenset[str]":
+        """该节点名记录过的口；`until` 给出时只取采样开始时刻不晚于它的记录。"""
         with self._lock:
-            return frozenset(self._seen.get(name, ()))
+            return frozenset(port for t, port in self._seen.get(name, ())
+                             if until is None or t <= until)
 
     def snapshot(self) -> "dict[str, list[str]]":
         with self._lock:
-            return {k: sorted(v) for k, v in sorted(self._seen.items())}
+            return {k: sorted({p for _, p in v}) for k, v in sorted(self._seen.items())}
 
     def start(self) -> None:
         def _loop() -> None:
@@ -537,10 +548,41 @@ class _TtyPortHistory:
                                         daemon=True)
         self._thread.start()
 
-    def stop(self) -> None:
+    def stop(self, timeout: float = 2.0) -> bool:
+        """停止采样并冻结记录；返回采样线程是否已退出。可重复调用。"""
         self._stop.set()
-        if self._thread is not None:
-            self._thread.join(timeout=2)
+        thread = self._thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=timeout)
+        with self._lock:
+            self._closed = True
+        return thread is None or not thread.is_alive()
+
+
+def _final_v5_binding_reason(echoes: list, history: "_TtyPortHistory",
+                             sampler_stopped: bool, target_port: str,
+                             serial: str) -> "str | None":
+    """工具退出、采样线程停止之后，对 V5 vbus 绑定做最终判定；不可信则返回理由。
+
+    复核 #3924 第 1 项：逐行核对时的历史快照可能漏掉正在写入的采样，且回调可能来自
+    上一轮遗留的 reader。最终判定只用本轮记下的回显，并在记录冻结之后重算：每条回显的
+    「实时结果 ∪ 回显到达前开始的采样」必须恰好等于目标口。
+    """
+    if not sampler_stopped:
+        return (f"tty sampler did not stop before settling (target port {target_port!r}, "
+                f"serial={serial}); binding evidence incomplete, result not trusted")
+    if not echoes:
+        return (f"V5 tool exited without a verifiable bound-port echo for target "
+                f"port {target_port!r} (serial={serial}); result not trusted")
+    for name, echo_at, live in echoes:
+        ports = set(history.ports(name, until=echo_at))
+        if live is not None:
+            ports.add(live)
+        if ports != {target_port}:
+            return (f"V5 echo /dev/{name} resolves to {sorted(ports)} once all samples up to "
+                    f"the echo are counted, not exactly target port {target_port!r} "
+                    f"(serial={serial}); result not trusted")
+    return None
 
 
 def _line_buffered_argv(argv: list, stdbuf: str) -> list:
@@ -605,6 +647,7 @@ def _port_mismatch_reason(line: str, target_port: str, serial: str,
 def _check_bound_echo(line: str, target_port: str, serial: str,
                       *, v5_echo: bool = False,
                       tty_history: "_TtyPortHistory | None" = None,
+                      observed: "list | None" = None,
                       ) -> "tuple[str | None, str | None]":
     """一行工具输出 → (绑定口, 止损理由)。每行只查一次 sysfs。
 
@@ -614,14 +657,18 @@ def _check_bound_echo(line: str, target_port: str, serial: str,
 
     v1.4.2：`tty_history` 给出时，实时结果与本次尝试见过的「节点 → 口」合并成一个
     候选集合：恰好一个口才用它；空集合 = 无法解析；多于一个口 = 有歧义，都止损。
+    先查实时、后取历史快照（复核 #3924 第 1 项）：实时查询期间写入的采样也计入候选。
+    `observed` 给出时追加 `(节点名, 实时结果)`，供工具退出后的最终判定重算。
     """
     if v5_echo and not _SYMBOLIC_LINK_RE.search(line):
         v5 = _V5_PORTNAME_RE.search(line)
         if v5 is None:
             return None, None
         name = v5.group(1)
-        candidates = set(tty_history.ports(name)) if tty_history is not None else set()
         live = _tty_usb_port(name)
+        if observed is not None:
+            observed.append((name, live))
+        candidates = set(tty_history.ports(name)) if tty_history is not None else set()
         if live is not None:
             candidates.add(live)
         if not candidates:
@@ -3045,13 +3092,17 @@ def main() -> None:
     # 之前都要把本槽位断电（ADR-0063 D3 第 8 条：隔离一台状态不明的设备）。
     vbus_keep_power = False
     # 必须先于 _settle_lock 的任何调用点（含信号处理器）定义。
-    vbus_state: dict = {"power_on_at": None, "brom_seen": False, "bound_ok": False}
+    vbus_state: dict = {"power_on_at": None, "brom_seen": False, "ctx": None}
 
     def _settle_lock() -> None:
         nonlocal lock_settled
         if lock_settled:
             return
         lock_settled = True
+        ctx = vbus_state.get("ctx")
+        if ctx is not None and ctx.get("tty_history") is not None:
+            # 复核 #3924 第 4 项：信号结算也先停采样、冻结记录，再动供电与锁。
+            ctx["tty_history"].stop()
         if vbus and not vbus_keep_power and vbus_report.get("power_actions") \
                 and not vbus_state.get("slot_mismatch"):
             # 一次切电都没做过（如锁内复核发现设备在开机态）就不碰供电。
@@ -3111,7 +3162,6 @@ def main() -> None:
             if vbus:
                 # 每次尝试都从断电起算：上一次尝试可能停在 BROM/DA 半程。
                 vbus_state.update({"power_on_at": None, "brom_seen": False,
-                                   "bound_ok": False,
                                    "attempt": attempt, "abort": None})
                 off = _usb_power(serial, "off", vbus_report["slot"])
                 vbus_report["power_actions"].append(
@@ -3211,8 +3261,10 @@ def main() -> None:
                 regate_count += 1
 
             tty_history = _TtyPortHistory() if v5_vbus_echo else None
-            # 闭包经 vbus_state 取本次尝试的历史（不直接捕获循环变量）。
-            vbus_state["tty_history"] = tty_history
+            # 复核 #3924 第 1 项：每轮一个上下文。回调以缺省参数绑定本轮上下文，上一轮遗留的
+            # reader 回调发现上下文已换就不再写任何状态；最终判定只读本轮记下的回显。
+            attempt_ctx: dict = {"tty_history": tty_history, "echoes": []}
+            vbus_state["ctx"] = attempt_ctx
 
             def _abort_on_wrong_port(line: str) -> "str | None":
                 # 第二道闸（`-p` 之外的独立判据）：逐行核工具回显的绑定口。
@@ -3223,20 +3275,26 @@ def main() -> None:
             if require_binding:
                 run_kwargs["abort_check"] = _abort_on_wrong_port
             if vbus:
-                def _vbus_line_check(line: str) -> "str | None":
+                def _vbus_line_check(line: str, ctx: dict = attempt_ctx) -> "str | None":
+                    if vbus_state.get("ctx") is not ctx:
+                        return None  # 上一轮遗留的 reader：不改本轮任何状态
+                    echo_at = time.monotonic()
                     if _output_caught_brom(line) or re.search(r"\d{1,3}%", line):
                         vbus_state["brom_seen"] = True
                     if not require_binding:
                         return None
                     # v1.4.1：vbus 分支才认 V5 的 com portName 回显（复核 #3917 B3）；
                     # 每行只解析一次，判错口与记已验证用同一结果（复核 #3917 B1-R2）。
+                    observed: list = []
                     bound, reason = _check_bound_echo(line, target_port, serial,
                                                       v5_echo=True,
-                                                      tty_history=vbus_state.get("tty_history"))
+                                                      tty_history=ctx["tty_history"],
+                                                      observed=observed)
                     if reason:
                         return reason
-                    if bound is not None and bound == target_port:
-                        vbus_state["bound_ok"] = True
+                    if observed and bound == target_port:
+                        name, live = observed[0]
+                        ctx["echoes"].append((name, echo_at, live))
                     return None
 
                 def _vbus_brom_deadline() -> "tuple[str, str] | None":
@@ -3260,11 +3318,12 @@ def main() -> None:
                 if vbus:
                     # 工具已进入 USB 扫描：此刻上电，BROM 窗口落在观测里。
                     time.sleep(pre_reboot_wait)
-                    history = vbus_state.get("tty_history")
-                    if history is not None:
-                        # 上电之前本设备没有 tty：此前见过的同名节点属于别的设备。
-                        history.reset()
                     on = _usb_power(serial, "on", vbus_report["slot"])
+                    history = (vbus_state.get("ctx") or {}).get("tty_history")
+                    if history is not None:
+                        # 复核 #3924 第 3 项：wrapper 上电返回之后才开窗。此前本设备没有
+                        # tty，采到的同名节点属于别的设备；跨过 reset 的采样按代次丢弃。
+                        history.reset()
                     vbus_report["power_actions"].append(
                         dict(on, phase="trigger", attempt=vbus_state["attempt"]))
                     vbus_state["power_on_at"] = time.monotonic()
@@ -3365,16 +3424,22 @@ def main() -> None:
                 break
             finally:
                 if tty_history is not None:
-                    tty_history.stop()
+                    attempt_record["tty_sampler_stopped"] = tty_history.stop()
                     attempt_record["tty_history"] = tty_history.snapshot()
 
-            if (vbus and require_binding and generation != GENERATION_V6
-                    and not vbus_state["bound_ok"]):
+            unverified = None
+            if vbus and require_binding and generation != GENERATION_V6:
                 # v1.4.1（复核 #3917 B1）：V5 vbus 工具退出时始终没有回显过本槽位口，
                 # 就无法证明写的是目标机。按止损处理：不判成功、不重试，结算时断电隔离。
-                reason = (
+                # v1.4.2（复核 #3924 第 1、4 项）：采样停止、记录冻结之后按本轮回显重算。
+                unverified = (_final_v5_binding_reason(
+                    attempt_ctx["echoes"], tty_history,
+                    bool(attempt_record.get("tty_sampler_stopped")), target_port, serial)
+                    if tty_history is not None else
                     f"V5 tool exited without a verifiable bound-port echo for target "
                     f"port {target_port!r} (serial={serial}); result not trusted")
+            if unverified:
+                reason = unverified
                 attempt_record.update({"outcome": "aborted-port-unverified",
                                        "exit_code": flash_rc, "reason": reason})
                 attempts_report.append(attempt_record)
