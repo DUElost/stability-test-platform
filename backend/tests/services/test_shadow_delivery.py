@@ -130,6 +130,7 @@ def test_final_merge_registers_v1_export_and_scope_only(db_session, sample_host,
 
     assert row is not None and row.version_no == 1
     assert row.round_ids == [final.id]
+    assert row.basis_rounds == [{"round_id": final.id, "merge_generation": 1}]
     assert row.effective_coverage == [
         {"host_id": sample_host.id, "platform": "mtk", "covered": True, "round_ids": [final.id]},
         {"host_id": "102", "platform": "mtk", "covered": True, "round_ids": [final.id]},
@@ -555,20 +556,22 @@ def test_registration_failure_retries_on_next_sweep(
         assert facts.list_shadow_delivery_due_run_ids(db, platform="mtk") == []
     assert final.merge_status == "OK"
 
-def test_registration_uses_max_merged_at_for_sweep_race(db_session, sample_host, tmp_path):
+def test_merge_later_than_sweep_start_uses_generation_not_clock(
+    db_session, sample_host, tmp_path,
+):
     _plan_run(db_session)
     final = _round(db_session, 42, 1, "FINAL", [_unit(sample_host.id, "EMPTY")])
     db_session.commit()
     sweep_started = datetime.now(timezone.utc)
-    merged_at = sweep_started + timedelta(minutes=5)
-    final.merged_at = merged_at
+    final.merged_at = sweep_started + timedelta(minutes=5)
     db_session.commit()
 
-    # merge 在 sweep 起点之后、登记之前提交：registered_at 必须取 merged_at。
+    # merge 在 sweep 起点之后提交：登记只记实时时间，是否重复由代次决定。
     version = _register(db_session, tmp_path, now=sweep_started)
     db_session.commit()
     assert version.round_ids == [final.id]
-    assert version.registered_at == merged_at
+    assert version.registered_at == sweep_started
+    assert version.basis_rounds == [{"round_id": final.id, "merge_generation": 1}]
     assert facts.list_shadow_delivery_due_run_ids(db_session, platform="mtk") == []
 
 
@@ -606,7 +609,7 @@ def test_due_list_excludes_non_current_and_unfinished_final(db_session, sample_h
 
     assert facts.list_shadow_delivery_due_run_ids(db_session, platform="mtk") == []
 
-def test_remerge_after_reset_registers_v2_when_merge_path_failed(
+def test_remerge_after_reset_registers_v2_on_clock_rollback_with_content_change(
     db_session, sample_host, tmp_path, monkeypatch, caplog,
 ):
     from backend.services import shadow_scan_rounds as shadow
@@ -617,12 +620,16 @@ def test_remerge_after_reset_registers_v2_when_merge_path_failed(
     v1 = _register(db_session, tmp_path)
     db_session.commit()
     assert v1.version_no == 1
+    assert v1.basis_rounds == [{"round_id": final.id, "merge_generation": 1}]
+    assert v1.issue_ids == []
 
+    signature, _ = _issue(db_session, 42, sample_host.id)  # 内容变化
+    db_session.commit()
     facts.reset_failed_final_shadow_merge(db_session, round_id=final.id)
     db_session.commit()
     facts.record_scan_round_merge(db_session, round_id=final.id, status="OK", summary={})
     db_session.commit()
-    final.merged_at = v1.registered_at + timedelta(seconds=5)
+    final.merged_at = v1.registered_at - timedelta(seconds=5)  # 墙钟回拨
     db_session.commit()
 
     factory = sessionmaker(bind=db_session.get_bind())
@@ -633,7 +640,7 @@ def test_remerge_after_reset_registers_v2_when_merge_path_failed(
     monkeypatch.setattr(module, "register_delivery_version",
                         Mock(side_effect=RuntimeError("merge path registration failure")))
 
-    # merge 路径的登记失败，但轮次已重新 merge，补偿清单必须仍能发现。
+    # merge 路径的登记失败，但轮次代次已加 1，补偿清单必须仍能发现。
     assert module.try_register_delivery_version(42) is None
     with factory() as db:
         assert [row.version_no for row in _versions(db)] == [1]
@@ -646,14 +653,15 @@ def test_remerge_after_reset_registers_v2_when_merge_path_failed(
     with factory() as db:
         versions = _versions(db)
         assert [row.version_no for row in versions] == [1, 2]
-        assert versions[1].registered_at >= final.merged_at
+        assert versions[1].basis_rounds == [{"round_id": final.id, "merge_generation": 2}]
+        assert versions[1].issue_ids == [signature.id]
         assert facts.list_shadow_delivery_due_run_ids(db, platform="mtk") == []
     shadow.sweep_shadow_scan_rounds(now=v1.registered_at)
     with factory() as db:
         assert [row.version_no for row in _versions(db)] == [1, 2]
 
 
-def test_remerge_with_identical_content_still_registers_v2(
+def test_remerge_with_identical_content_registers_v2_on_clock_rollback(
     db_session, sample_host, tmp_path,
 ):
     _plan_run(db_session)
@@ -662,6 +670,7 @@ def test_remerge_with_identical_content_still_registers_v2(
     db_session.commit()
     v1 = _register(db_session, tmp_path)
     db_session.commit()
+    assert v1.basis_rounds == [{"round_id": final.id, "merge_generation": 1}]
     before = (
         v1.round_ids, v1.effective_coverage, v1.issue_ids, v1.event_ids,
         v1.software_versions, v1.gaps,
@@ -671,7 +680,7 @@ def test_remerge_with_identical_content_still_registers_v2(
     db_session.commit()
     facts.record_scan_round_merge(db_session, round_id=final.id, status="OK", summary={})
     db_session.commit()
-    final.merged_at = v1.registered_at + timedelta(seconds=5)
+    final.merged_at = v1.registered_at - timedelta(seconds=5)  # 墙钟回拨
     db_session.commit()
 
     v2 = _register(db_session, tmp_path)
@@ -681,9 +690,47 @@ def test_remerge_with_identical_content_still_registers_v2(
         v2.round_ids, v2.effective_coverage, v2.issue_ids, v2.event_ids,
         v2.software_versions, v2.gaps,
     ) == before
+    assert v1.basis_rounds == [{"round_id": final.id, "merge_generation": 1}]
+    assert v2.basis_rounds == [{"round_id": final.id, "merge_generation": 2}]
     assert v2.stats_snapshot_version != v1.stats_snapshot_version
-    assert v2.registered_at >= final.merged_at
     assert facts.list_shadow_delivery_due_run_ids(db_session, platform="mtk") == []
+
+
+def test_merge_generation_is_monotonic_and_reset_does_not_decrease(
+    db_session, sample_host,
+):
+    _plan_run(db_session)
+    retry = _round(db_session, 42, 1, "FINAL", [_unit(sample_host.id, "EMPTY")],
+                   merge="FAILED")
+    db_session.commit()
+    assert retry.merge_generation == 0
+
+    facts.record_scan_round_merge(db_session, round_id=retry.id, status="OK", summary={})
+    db_session.commit()
+    db_session.refresh(retry)
+    assert retry.merge_generation == 1
+
+    # 已是终态时重复写入直接返回，不加代次。
+    facts.record_scan_round_merge(db_session, round_id=retry.id, status="OK", summary={})
+    db_session.commit()
+    db_session.refresh(retry)
+    assert retry.merge_generation == 1
+
+    failed_final = _round(db_session, 42, 2, "SUPPLEMENT",
+                          [_unit(sample_host.id, "EMPTY")], merge="FAILED_FINAL")
+    db_session.commit()
+    assert failed_final.merge_generation == 1
+    facts.reset_failed_final_shadow_merge(db_session, round_id=failed_final.id)
+    db_session.commit()
+    db_session.refresh(failed_final)
+    assert failed_final.merge_generation == 1
+
+    facts.record_scan_round_merge(
+        db_session, round_id=failed_final.id, status="OK", summary={},
+    )
+    db_session.commit()
+    db_session.refresh(failed_final)
+    assert failed_final.merge_generation == 2
 
 
 def test_due_list_excludes_deleted_plan_run(db_session, sample_host):

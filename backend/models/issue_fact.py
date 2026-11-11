@@ -178,6 +178,8 @@ class ScanRound(Base):
     merge_attempts = Column(Integer, nullable=False, default=0, server_default="0")
     merge_next_retry_at = Column(DateTime(timezone=True), nullable=True)
     merged_at = Column(DateTime(timezone=True), nullable=True)
+    # 进入终态一次加 1；reset 不清零（#3929 补偿判据，与墙钟无关）。
+    merge_generation = Column(Integer, nullable=False, default=0, server_default="0")
 
     __table_args__ = (
         UniqueConstraint(
@@ -235,6 +237,8 @@ class DeliveryVersion(Base):
     version_no = Column(Integer, nullable=False)
     software_versions = Column(JSONB, nullable=False, default=list)
     round_ids = Column(JSONB, nullable=False, default=list)
+    # [{"round_id": int, "merge_generation": int}, ...]，按 round_id 升序。
+    basis_rounds = Column(JSONB, nullable=False, default=list, server_default="[]")
     effective_coverage = Column(JSONB, nullable=False, default=list)
     issue_ids = Column(JSONB, nullable=False, default=list)
     event_ids = Column(JSONB, nullable=False, default=list)

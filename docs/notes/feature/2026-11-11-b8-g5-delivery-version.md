@@ -10,25 +10,26 @@ Class: feature
 G5 相关文件未变化。正文「判据前检」逐项核对一致：delivery_version 已由 G1 落表且
 无交付状态列；representative_selection.evidence_status 只是 COMPLETE/INCOMPLETE；
 影子 merge 在 backend/services/shadow_merge.py；scan_round.merge_status 为
-OK / NO_INPUT / FAILED / FAILED_FINAL。本单元不新增迁移。
+OK / NO_INPUT / FAILED / FAILED_FINAL。本单元新增一次加列迁移
+b8g5c0a1b2c3：scan_round.merge_generation 与 delivery_version.basis_rounds，
+只加列、不回填，可回退。
 
 只登记 MTK 的影子分区。分区模式必须是 CURRENT（没有模式记录的存量分区按现行
 解释）；DEDUP_FIRST 分区不登记。影子开关关闭时入口不读库。登记触发有两条路径，
 二者共用同一实现：
 - 主路径：影子 merge 任务在 merge_round 返回终态（OK / NO_INPUT / FAILED_FINAL）后，
   且轮次为 FINAL 或 SUPPLEMENT 时，直接调用 try_register_delivery_version。
-- 补偿路径：sweep_shadow_scan_rounds 每个检查周期查询满足以下任一条件的 CURRENT
-  分区：(a) 存在已终态 FINAL/SUPPLEMENT、且其 id 不在最新交付版本 round_ids 里；
-  (b) 最新版本已纳入的轮次中，有轮次的 merged_at 严格晚于 latest.registered_at。
-  同时排除非 CURRENT、FINAL 未关闭/merge 未终态、以及 PlanRun 已不存在的分区。
-  登记时 registered_at = max(登记实时时间, 依据轮次最大 merged_at)，不使用
-  sweep 起点时间；条件 (b) 成立时跳过内容去重，强制写新版本。因此登记后两条
-  判据都不再成立，清单收敛。
+- 补偿路径：sweep_shadow_scan_rounds 每个检查周期查询「存在依据轮次（已关闭、
+  merge 已终态、FINAL 或补充轮），其 (round_id, merge_generation) 不在最新版本
+  basis_rounds 里」的 CURRENT 分区；没有版本的分区也入选。同时排除非 CURRENT、
+  FINAL 未关闭/merge 未终态、PlanRun 已不存在的分区。代次单调、与墙钟无关：
+  新轮次或同一轮重新进入终态都会改变 (id, 代次)，登记后清单收敛。
   try_register 的失败只记 shadow_delivery_register_failed 并返回 None，不向
   merge 任务或 sweep 抛出；下一次检查周期由补偿查询重试。
 
 登记内容按 D9 第 2 条：round_ids 为 FINAL 加「已关闭且 merge 已终态」的补充轮；
-effective_coverage 对 FINAL 期望集中的每个 (host, platform)，检查依据轮次中是否
+basis_rounds 记录这些轮的 (round_id, merge_generation)，按 round_id 升序，并纳入
+内容签名；round_ids 保留不变。effective_coverage 对 FINAL 期望集中的每个 (host, platform)，检查依据轮次中是否
 有 RECEIVED 或 EMPTY，并记录覆盖它的轮次 id；不改写各轮 expected_set。issue_ids
 取本分区 representative_selection 的问题；event_ids 取这些问题在本分区 DLE 上的
 全部发生关联；software_versions 取发生 build_version 去重，为空时记 ["unknown"]。
@@ -44,8 +45,14 @@ _meta/{plan_run_id}/_delivery/{platform}/v{version_no}.json。backend/agent/
 行」：库失败或事务未提交只会留下可被下次覆盖的孤儿文件，不会出现有登记无文件；
 stats_snapshot_version 直接取写入字节的 sha256，rename 保证文件内容与哈希同源。
 PlanRun 行锁串行化同一分区的登记，版本号按最新版本 +1 分配；内容比较排除
-registered_at，相等且没有「已纳入轮次重新 merge」时（条件 b）不写库也不写文件；
-条件 (b) 成立时即使内容相同也写新版本，旧版本与其导出文件保持不变。
+registered_at，相等时不写库也不写文件。basis_rounds 的代次已纳入签名，重新
+merge 后签名必定不同，因此即使内容相同也会写新版本；旧版本与其导出文件保持不变。
+registered_at 为登记实时时间，仅作记录，不参与任何判断。
+
+迁移 b8g5c0a1b2c3 只加两列、不回填：scan_round.merge_generation（int，非空，
+server_default 0）与 delivery_version.basis_rounds（JSONB，非空，
+server_default '[]'）。存量轮次代次为 0，第一次登记按 0 记录；G5 尚未部署，没有
+存量版本行。G5 发布因此是控制面部署 + 迁移，按 control-plane-deploy SOP 先备份 DB。
 
 交付状态由纯函数 evaluate_delivery_status 按 D9 第 5 条顺序判定：最后一轮未关闭、
 最近一次 merge 失败或无输入、有效覆盖为空、代表重试中分别返回未就绪；发布状态
@@ -74,6 +81,9 @@ effective_coverage 的薄适配入口，供 G6/G7 使用。交付状态不持久
   复用契约层现有校验函数，同时保持 backend/agent/ 零 diff。
 - 把 delivery_export_path 加在 backend/agent/contracts：会把 Agent 代码载荷
   digest 从 main 的 61256050… 改为 61f1a02b…，导致 77 台机队 drift；未采用。
+- 用 merged_at 与 registered_at 比较判断重新 merge：依赖墙钟单调，回拨时会漏登记；
+  改为单调 merge_generation + basis_rounds，未采用时间判据。
+- 保留 forced 分支或 registered_at 取 max(merged_at)：代次入签名后可删，未采用。
 - 用时间戳或随机数做版本号：唯一键与「旧版本保留」要求连续版本号；未采用。
 
 ## Verification
@@ -82,10 +92,10 @@ effective_coverage 的薄适配入口，供 G6/G7 使用。交付状态不持久
 testcontainers PostgreSQL 16。
 
 - 反例先行：实现前在 origin/main（80c9be3c6）上先写 20 项验收用例，全部因
-  backend.services.shadow_delivery 不存在失败（20 failed）；实现后通过。最终 29 项
-  在 origin/main 的独立 worktree 上复跑仍全部报错（29 errors，模块不存在），在实现
-  分支 backend/tests/services/test_shadow_delivery.py 为 29 passed；新增 4 项是
-  重新 merge 补偿、内容不变强制新版本、PlanRun 删除排除与 sweep 竞态。
+  backend.services.shadow_delivery 不存在失败（20 failed）；实现后通过。最终 30 项
+  在 origin/main 的独立 worktree 上复跑仍全部报错（30 errors，模块不存在），在实现
+  分支 backend/tests/services/test_shadow_delivery.py 为 30 passed；本轮覆盖墙钟
+  回拨两种、代次单调、重新 merge 竞态与 PlanRun 删除。
 - 验收 1–10 对应覆盖：FINAL OK + RECEIVED/EMPTY 登记 v1 且 scope_only；重复触发
   不新增版本；补充轮补 host 后 v2 且 v1 不变；全 MISSING 返回未就绪（覆盖为空）；
   NO_INPUT / FAILED_FINAL / FAILED 返回未就绪；INCOMPLETE 进入 gaps；发布状态
@@ -103,14 +113,22 @@ testcontainers PostgreSQL 16。
      从 NOT_READY 变红为 READY_WITH_GAPS；恢复后绿。
   3) 有效覆盖只取 FINAL 轮，补充轮测试断言 [True, True] 变红为 [True, False]；
      恢复后绿。
-- 本轮补偿清单定向反例（每次改后清 __pycache__，恢复后再清）：
-  1) 去掉条件 (b)（remerged）：重新 merge 且 merge 路径登记失败的竞态测试变红，
-     下一次 sweep 没有登记 v2；
-  2) 去掉 registered_at 的 max(merged_at)：sweep 竞态测试的 registered_at 不再
-     等于 merged_at，且分区仍留在清单里；
-  3) 去掉 forced 跳过内容去重：重新 merge 后内容相同的测试只返回 v1，未登记 v2；
-  4) 去掉 PlanRun EXISTS：删除 PlanRun 的测试再次入选 [45]。
-  恢复后四条均绿；上一轮的 DEDUP_FIRST、未纳入轮次与新增轮次测试继续通过。
+- 墙钟回拨：重新 merge 的 merged_at 早于 v1.registered_at。内容变化且首次登记
+  失败、内容不变且登记无故障两种情况下，下一次 sweep 均写 v2（basis_rounds 代次
+  1→2），之后不再入选。
+- 代次单调：FAILED→OK 加 1；已是终态重复写入不变；FAILED_FINAL 后 reset 不减，
+  重新 OK 再加 1。
+- 本轮定向变异（每次改后清 __pycache__，恢复后再清）：
+  1) 补偿条件去掉 merge_generation（只比 round_id）：墙钟回拨且首次登记失败的
+     测试变红；
+  2) 两份内容签名都去掉 basis_rounds：墙钟回拨且内容不变的测试只返回 v1，变红；
+  3) record_scan_round_merge 不加代次：代次单调测试变红；
+  4) 迁移 downgrade 不删列：迁移往返测试变红。
+  恢复后四条均绿；DEDUP_FIRST、未纳入轮次、PlanRun 删除、merge 晚于 sweep 起点
+  测试继续通过。
+- 迁移往返：隔离 PostgreSQL 16 上 upgrade head → downgrade b83875a11c02 →
+  upgrade head 通过；tools/dev/check_pr_migrate.py（空库迁移 + schema 比对 + seed
+  身份）通过。
 - Agent 载荷等值：git diff origin/main...HEAD -- backend/agent/ 为空；
   collect_artifact_entries('backend/agent') + digest_entries 在 origin/main
   80c9be3c6 与 HEAD 均为
@@ -119,7 +137,7 @@ testcontainers PostgreSQL 16。
   sha256:61f1a02bf53e6062dd7ce03fafc1fd3e65f08b09353dd10a1d92efa57ba5e36e。
 - 相关回归：test_shadow_delivery / test_shadow_merge / test_shadow_scan_rounds /
   test_issue_fact_store / test_shadow_scan_send_3875 / test_shadow_scan_settled_3875
-  共 114 passed。
+  共 116 passed（含迁移往返用例）。
 - 静态门禁：scripts/run_gates.py check:quick 16 gates 全绿（含 Ruff、环境变量清单、
   控制面 import 边界、函数内 import 棘轮、tool-manifest、transitions）。
 - 未运行：完整 backend/tests 与 CI required checks；以 PR 的 required checks 为准。
@@ -131,11 +149,14 @@ testcontainers PostgreSQL 16。
   ARCHIVED 转换（D9 第 6–7、9 条），本单元没有触碰。
 - G7 的 API、下载与前端展示需要读取版本与导出文件；届时确认对外理由字段的展示
   形式是否直接使用 reason 代码。
-- 补偿查询会长期保留已终态分区；当前每次只是比较内容，不写库。若阶段一规模扩大，
-  评估是否需要在 G7 增加「最近一次尝试时间」类持久字段，避免长期读取。
+- 补偿查询会长期保留已终态分区；当前每次只比较 basis_rounds，不写库。若阶段一
+  规模扩大，评估是否需要在 G7 增加「最近一次尝试时间」类持久字段，避免长期读取。
 - 本单元把「依据轮次」限定为 FINAL 加已终态补充轮。若 G6/G7 期间出现多个补充轮
   并行待 merge 的现场，需要复核 D9 第 2 条「已关闭的补充轮」是否要求包含未终态轮次；
   当前选择是不登记半成品。
 - 导出文件与登记行跨文件系统、跨 NFS 的持久性依赖 tmp+rename 与目录 fsync；部署时
   沿用现有 _meta 日志根，不新增存储族。
-- PR 保持 Draft，交独立复核，由 Owner 转 ready；不启用 auto-merge。本单不部署、不激活。
+- 第 2 项（run 级回收删除 _meta 导出文件但保留登记行）按 #3800 6786461443 登记到
+  ADR-0062 D11 留存回收单元，本 PR 不处理；启用 retention 前必须先完成该项。
+- G5 发布需按 control-plane-deploy SOP 先备份 DB 再执行迁移 b8g5c0a1b2c3；本单
+  不部署、不激活。PR 保持 Draft，交独立复核，由 Owner 转 ready；不启用 auto-merge。

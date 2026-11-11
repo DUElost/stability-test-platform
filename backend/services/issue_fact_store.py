@@ -52,6 +52,7 @@ _SCAN_ROUND_KINDS = frozenset({
 SCAN_ROUND_STATUS_PENDING = "PENDING"
 SCAN_ROUND_STATUS_RUNNING = "RUNNING"
 SCAN_ROUND_STATUS_CLOSED = "CLOSED"
+SCAN_ROUND_MERGE_TERMINAL = frozenset({"OK", "NO_INPUT", "FAILED_FINAL"})
 _SCAN_ROUND_STATUSES = frozenset({
     SCAN_ROUND_STATUS_PENDING,
     SCAN_ROUND_STATUS_RUNNING,
@@ -518,6 +519,7 @@ def record_delivery_version(
     version_no: int,
     software_versions: Optional[Sequence[Any]] = None,
     round_ids: Optional[Sequence[Any]] = None,
+    basis_rounds: Optional[Sequence[Any]] = None,
     effective_coverage: Optional[Sequence[Any]] = None,
     issue_ids: Optional[Sequence[Any]] = None,
     event_ids: Optional[Sequence[Any]] = None,
@@ -544,6 +546,7 @@ def record_delivery_version(
         version_no=version_no,
         software_versions=list(software_versions or []),
         round_ids=list(round_ids or []),
+        basis_rounds=list(basis_rounds or []),
         effective_coverage=list(effective_coverage or []),
         issue_ids=list(issue_ids or []),
         event_ids=list(event_ids or []),
@@ -707,9 +710,12 @@ def record_scan_round_merge(
     row = get_scan_round(db, round_id=round_id)
     if row is None or row.status != SCAN_ROUND_STATUS_CLOSED:
         raise IssueFactError('merge requires a closed scan round')
-    if row.merge_status in {'OK', 'NO_INPUT', 'FAILED_FINAL'}:
+    if row.merge_status in SCAN_ROUND_MERGE_TERMINAL:
         return row
     row.merge_status, row.merge_summary, row.merged_at = status, summary, now or _utcnow()
+    if status in SCAN_ROUND_MERGE_TERMINAL:
+        # 只增不减：同一轮每进入一次终态加 1，与墙钟无关。
+        row.merge_generation = (row.merge_generation or 0) + 1
     if attempts is not None:
         row.merge_attempts = attempts
     row.merge_next_retry_at = next_retry_at if status == 'FAILED' else None
@@ -718,7 +724,10 @@ def record_scan_round_merge(
 
 
 def reset_failed_final_shadow_merge(db: Session, *, round_id: int) -> ScanRound:
-    """Explicit operator-only reset; scheduler and workers never call this entry point."""
+    """Explicit operator-only reset; scheduler and workers never call this entry point.
+
+    merge_generation 不清零、不递减；重新进入终态时由 record_scan_round_merge 加 1。
+    """
     row = get_scan_round(db, round_id=round_id)
     if row is None or row.merge_status != 'FAILED_FINAL':
         raise IssueFactError('manual merge reset requires FAILED_FINAL')
@@ -845,16 +854,14 @@ def list_partition_delivery_event_ids(
 
 
 def list_shadow_delivery_due_run_ids(db: Session, *, platform: str) -> list[int]:
-    """补偿发现：有终态 FINAL/补充轮尚未进入最新交付版本的 CURRENT 分区。
+    """补偿发现：依据轮次的 (id, merge 代次) 尚未进入最新交付版本的 CURRENT 分区。
 
-    按轮次 id 判断，不比较时间：最新版本已包含的终态轮次不再入选，去重
-    路径不会逐周期重复。非 CURRENT 分区、FINAL 未关闭或其 merge 未终态的
-    分区在这里直接排除，避免快照必然返回 None 的分区永远留在清单里。
+    代次单调、与墙钟无关；新轮次或同一轮重新进入终态都会改变 (id, 代次)。
+    非 CURRENT、FINAL 未关闭或 merge 未终态、PlanRun 已不存在的分区直接排除。
     """
     latest = select(
         DeliveryVersion.plan_run_id.label("run_id"),
-        DeliveryVersion.round_ids.label("round_ids"),
-        DeliveryVersion.registered_at.label("registered_at"),
+        DeliveryVersion.basis_rounds.label("basis_rounds"),
     ).where(
         func.lower(DeliveryVersion.platform) == platform.lower(),
     ).distinct(DeliveryVersion.plan_run_id).order_by(
@@ -874,19 +881,13 @@ def list_shadow_delivery_due_run_ids(db: Session, *, platform: str) -> list[int]
         func.lower(PartitionMode.platform) == platform.lower(),
         PartitionMode.mode != PARTITION_MODE_CURRENT,
     ).exists()
-    remerged_round = aliased(ScanRound)
-    remerged = select(remerged_round.id).where(
-        remerged_round.plan_run_id == latest.c.run_id,
-        func.lower(remerged_round.platform) == platform.lower(),
-        latest.c.round_ids.contains(func.jsonb_build_array(remerged_round.id)),
-        remerged_round.status == SCAN_ROUND_STATUS_CLOSED,
-        remerged_round.merge_status.in_(["OK", "NO_INPUT", "FAILED_FINAL"]),
-        remerged_round.merged_at.isnot(None),
-        remerged_round.merged_at > latest.c.registered_at,
-    ).exists()
     plan_run_exists = select(PlanRun.id).where(
         PlanRun.id == ScanRound.plan_run_id,
     ).exists()
+    basis = func.jsonb_build_array(func.jsonb_build_object(
+        "round_id", ScanRound.id,
+        "merge_generation", ScanRound.merge_generation,
+    ))
     return list(db.execute(
         select(ScanRound.plan_run_id).select_from(ScanRound).outerjoin(
             latest, latest.c.run_id == ScanRound.plan_run_id,
@@ -900,8 +901,7 @@ def list_shadow_delivery_due_run_ids(db: Session, *, platform: str) -> list[int]
             plan_run_exists,
             or_(
                 latest.c.run_id.is_(None),
-                ~latest.c.round_ids.contains(func.jsonb_build_array(ScanRound.id)),
-                remerged,
+                ~latest.c.basis_rounds.contains(basis),
             ),
         ).distinct().order_by(ScanRound.plan_run_id)
     ).scalars())

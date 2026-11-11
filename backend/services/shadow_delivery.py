@@ -76,7 +76,7 @@ class DeliverySnapshot:
     plan_run_id: int
     platform: str
     round_ids: tuple[int, ...]
-    basis_merged_at: tuple[tuple[int, Optional[datetime]], ...]
+    basis_rounds: tuple[dict, ...]
     effective_coverage: tuple[dict, ...]
     issue_ids: tuple[int, ...]
     event_ids: tuple[str, ...]
@@ -259,7 +259,10 @@ def build_delivery_snapshot(
         plan_run_id=plan_run_id,
         platform=platform,
         round_ids=tuple(row.id for row in basis),
-        basis_merged_at=tuple((row.id, row.merged_at) for row in basis),
+        basis_rounds=tuple(
+            {"round_id": row.id, "merge_generation": row.merge_generation}
+            for row in sorted(basis, key=lambda item: item.id)
+        ),
         effective_coverage=tuple(coverage),
         issue_ids=issue_ids,
         event_ids=event_ids,
@@ -289,9 +292,21 @@ def _canonical_gaps(gaps: Sequence[Mapping[str, Any]]) -> list[dict]:
     return sorted(values, key=lambda gap: json.dumps(gap, sort_keys=True, ensure_ascii=False))
 
 
+def _canonical_basis_rounds(value: Sequence[Mapping[str, Any]]) -> list[dict]:
+    rounds = [
+        {
+            "round_id": int(item["round_id"]),
+            "merge_generation": int(item["merge_generation"]),
+        }
+        for item in value
+    ]
+    return sorted(rounds, key=lambda item: item["round_id"])
+
+
 def _snapshot_signature(snapshot: DeliverySnapshot) -> dict:
     return {
         "round_ids": list(snapshot.round_ids),
+        "basis_rounds": _canonical_basis_rounds(snapshot.basis_rounds),
         "effective_coverage": _canonical_coverage(snapshot.effective_coverage),
         "issue_ids": sorted(snapshot.issue_ids),
         "event_ids": sorted(snapshot.event_ids),
@@ -305,6 +320,7 @@ def _snapshot_signature(snapshot: DeliverySnapshot) -> dict:
 def _version_signature(row) -> dict:
     return {
         "round_ids": list(row.round_ids or []),
+        "basis_rounds": _canonical_basis_rounds(row.basis_rounds or []),
         "effective_coverage": _canonical_coverage(row.effective_coverage or []),
         "issue_ids": sorted(int(value) for value in (row.issue_ids or [])),
         "event_ids": sorted(str(value) for value in (row.event_ids or [])),
@@ -325,6 +341,7 @@ def _render_export(snapshot: DeliverySnapshot, version_no: int, generated_at: da
         "generated_at": generated_at.isoformat(),
         "software_versions": list(snapshot.software_versions),
         "round_ids": list(snapshot.round_ids),
+        "basis_rounds": [dict(item) for item in snapshot.basis_rounds],
         "effective_coverage": [dict(unit) for unit in snapshot.effective_coverage],
         "gaps": [dict(gap) for gap in snapshot.gaps],
         "pending_items": list(snapshot.pending_items),
@@ -392,11 +409,11 @@ def register_delivery_version(
     root: Optional[str] = None,
     now: Optional[datetime] = None,
 ):
-    """登记新版本；registered_at = max(实时时间, 依据轮次最大 merged_at)。
+    """登记新版本；registered_at 为登记实时时间，仅作记录。
 
-    内容与最新版本相同且没有「已纳入轮次重新 merge」信号时，不写库、不写
-    文件；该信号成立时强制写新版本。now 仅用于测试注入实时时间，生产入口
-    不使用 sweep 起点时间。
+    内容签名包含 basis_rounds 的 (round_id, merge_generation)；同一轮重新
+    进入终态时代次变化，签名必定不同，因此会写新版本，不需要时间先后或
+    forced 分支。now 仅用于测试注入实时时间。
 
     写入顺序固定为「导出文件先落盘，再插入登记行」：库失败只会留下可被
     下次覆盖的孤儿文件，不会出现有登记、无文件或哈希不一致。调用方负责
@@ -417,24 +434,8 @@ def register_delivery_version(
     latest = facts.get_latest_delivery_version(
         db, plan_run_id=plan_run_id, platform=platform,
     )
-    real_now = now or _utcnow()
-    merged_times = [
-        merged_at for _, merged_at in snapshot.basis_merged_at if merged_at is not None
-    ]
-    registered_at = max([real_now, *merged_times])
-    forced = False
-    if latest is not None:
-        included = {int(value) for value in (latest.round_ids or [])}
-        forced = any(
-            round_id in included and merged_at is not None
-            and merged_at > latest.registered_at
-            for round_id, merged_at in snapshot.basis_merged_at
-        )
-    if (
-        latest is not None
-        and not forced
-        and _version_signature(latest) == _snapshot_signature(snapshot)
-    ):
+    registered_at = now or _utcnow()
+    if latest is not None and _version_signature(latest) == _snapshot_signature(snapshot):
         return latest
 
     version_no = (latest.version_no + 1) if latest is not None else 1
@@ -452,6 +453,7 @@ def register_delivery_version(
         version_no=version_no,
         software_versions=list(snapshot.software_versions),
         round_ids=list(snapshot.round_ids),
+        basis_rounds=[dict(item) for item in snapshot.basis_rounds],
         effective_coverage=[dict(unit) for unit in snapshot.effective_coverage],
         issue_ids=list(snapshot.issue_ids),
         event_ids=list(snapshot.event_ids),
