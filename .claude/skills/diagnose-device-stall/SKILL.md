@@ -45,6 +45,10 @@ description: 设备离线 / PlanRun 卡死（界面上称「任务」卡死）�
     `docs/operations/incident-2026-07-29-host-8-87-xhci-death-and-adb-outage.md` §2、§3.1。
     预期：`lsusb` 能看到 Hub 树与手机，而不只是 root hub。2026-09-20 两台主机验证：控制器死亡
     不会自愈，rebind 可以重复使用。
+    如果 bind 后 `dmesg` 报 `probe with driver xhci_hcd failed with error -110`、
+    `/sys/bus/pci/devices/0000:00:14.0/enable` 为 `0`、`/sys/bus/pci/drivers/xhci_hcd/`
+    下无该 BDF 链接，主控在 probe 阶段未初始化，rebind 无效；执行者不得重复 rescan，必须按
+    第 9 步确认主机空闲后执行 `sudo reboot`（判据与 2026-11-12 `.88` 实例见 8.87 复盘 §6.1）。
 
 > 警告：下一步重启 adb server，会打断在途 adb 会话。L2 判据不成立时重启没有效果
 > （2026-09-14 对照实验与 2026-09-20 机群实测）。
