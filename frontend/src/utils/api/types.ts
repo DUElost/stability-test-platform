@@ -297,6 +297,12 @@ export interface DeviceRetireBatchResponse {
   failed: number;
 }
 
+/** #3892：设备改绑请求体（目标主机 + 原因；响应为 Device）。 */
+export interface DeviceRebindRequest {
+  host_id: string;
+  reason: string;
+}
+
 /** `POST /devices/bulk-swipe-trail` — 批量开关滑动留痕。 */
 export interface BulkSwipeTrailResultItem {
   device_id: number;
