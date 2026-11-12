@@ -559,6 +559,12 @@ def run_merge_sync(
             merge_window_floor = ended_at
         else:
             merge_window_floor = anchor
+        logger.info(
+            "merge_window plan_run=%d anchor=%s floor=%s",
+            plan_run_id,
+            anchor.isoformat() if anchor is not None else None,
+            merge_window_floor.isoformat() if merge_window_floor is not None else None,
+        )
 
     org_files = _load_org_files_for_merge(
         plan_run_id,

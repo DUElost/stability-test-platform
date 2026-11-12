@@ -13,8 +13,9 @@ Class: bug-fix
 手动合并（`POST /plan-runs/{id}/dedup/merge`）传 `include_late_hosts=True`：
 输入窗口下界 = min(最新轮开始时刻, `plan_run.ended_at`)；窗口内某主机在最新轮
 没有报表时，回退到更早轮次的最新一份，并在 `merge_org_files_late_hosts` 日志中
-显式列出主机。无轮次下界时仍拒绝（#1077：不合并全部历史）；run 仍在运行
-（`ended_at` 为空）时窗口不扩大，保持单轮行为。
+显式列出主机；`merge_window` 日志给出本次解析的 anchor 与 floor。无轮次下界时
+仍拒绝（#1077：不合并全部历史）；run 仍在运行（`ended_at` 为空）时窗口不扩大，
+保持单轮行为。
 
 Run 1256 的映射：中止后 11:01 自动终扫与 11:03 手动扫描两轮都晚于终态时刻，
 窗口覆盖两轮。.15.83 在最新轮的两份报表只取一份（消除重复 18 行）；
