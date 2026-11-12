@@ -16,7 +16,7 @@
 | 层 | 典型观察 | 只读判据 | 处置 |
 |---|---|---|---|
 | **L0 意图 / 作业层（先问这层）** | `USB n` 与在线数一起归零、`lsusb` 只剩 root hub，**但该 host 近一段时间没有 job** | **平台侧读不到判据**——`device` 只有 `ONLINE/OFFLINE/BUSY/ERROR`，没有 retired/archived/空置位 ⇒ 只能问人、看作业与搬迁记录 | 先确认是不是**有意**清空/关机/搬迁（#3065 现网实例）；确认后**不要**继续按 L1–L4 定成因。解除只能来自账侧或规则豁免（#2962 设备意图位、#3068 paging 取舍） |
-| **L1 内核 / USB 子系统** | `lsusb`/sysfs 里手机整体变少或为空，`USB n` 同时掉 | `sudo dmesg -T` 出现 `xHCI host not responding` / `HC died; cleaning up` / `error -71(-110)` | xHCI driver unbind/rebind 或 reboot；完整判据见 [8.87 事故复盘](./incident-2026-07-29-host-8-87-xhci-death-and-adb-outage.md)。主控救回后单个 Hub 的 SuperSpeed 分支仍反复枚举失败时按 §5 处置 |
+| **L1 内核 / USB 子系统** | `lsusb`/sysfs 里手机整体变少或为空，`USB n` 同时掉 | `sudo dmesg -T` 出现 `xHCI host not responding` / `HC died; cleaning up` / `error -71(-110)` | xHCI driver unbind/rebind 或 reboot；完整判据见 [8.87 事故复盘](./incident-2026-07-29-host-8-87-xhci-death-and-adb-outage.md)。bind 后 probe 报 `-110`、`enable` 为 0 且驱动目录无 BDF 链接时主控未初始化，rebind 无效，直接 reboot（§6.1）。主控救回后单个 Hub 的 SuperSpeed 分支仍反复枚举失败时按 §5 处置 |
 | **L2 主机 adb server** | 设备在 USB 上**有 ADB 接口**，`adb devices` 却少或为空 | 「ADB 接口设备集合 ⊋ adb 列表集合」（§2 probe）；`pgrep -af 'fork-server server'` 出现多实例 / 非 5037 端口 / 非 Agent 属主 | 多 server（#160）由 Agent 自检并可选自愈；**单 server 卡死**才用 `adb kill-server && adb start-server`（打断在途 adb 会话，须先确认无在跑任务） |
 | **L3 设备 adbd / 授权** | `adb devices` 能列出该设备，但 state 是 `offline` / `unauthorized` | 两侧集合相等（无 L2 漏项），且存在非 `device` 行 | `adb reconnect offline`、重插、设备侧确认授权或重启；属**设备侧**，server 重启无效 |
 | **L4 设备 USB 功能集** | `USB n > 0` 而在线为 0 或明显偏低 | sysfs 接口里**没有** `ff:42`；`.../1.0/interface` 返回 `MIDI function`（`0e8d:2046`） | 只能设备侧人工：屏幕上把 USB 配置切回 MTP/文件传输并开启 USB 调试；adb 侧一切操作无效（平台侧自 #3046 起给 reason `adb_interfaces_missing`，见 §3） |

@@ -141,6 +141,21 @@ sudo reboot
 
 unbind 期间 SSH（网卡）不受影响；仅 USB 子设备短暂离线。
 
+> **rebind 无效判据（2026-11-12 `.88` 实例）**：以下三条同时成立时，主控在 probe 阶段
+> 就没有初始化，rebind 路径不可能生效：
+>
+> 1. bind 或 remove + rescan 后，`sudo dmesg -T` 出现
+>    `xhci_hcd 0000:00:14.0: can't setup: -110` 或
+>    `probe with driver xhci_hcd failed with error -110`；
+> 2. `/sys/bus/pci/devices/0000:00:14.0/enable` 为 `0`（内核未完成设备使能）；
+> 3. `/sys/bus/pci/drivers/xhci_hcd/` 下没有 `0000:00:14.0` 链接（BDF 未绑定驱动）。
+>
+> 判据成立时，执行者不得继续更换 bind 写法或重复 rescan，必须在确认主机空闲后执行
+> `sudo reboot`（空闲判据见
+> [`diagnose-device-stall`](../../.agents/skills/diagnose-device-stall/SKILL.md) 第 9 步）。
+> 暖重启即可恢复：`.88` 的 remove + rescan 返回 `sh: 1: echo: echo: I/O error`，reboot
+> 后 13 台 MLD-NX3 在纯 USB2 口上全部回树（usb=13、ADB 接口=13、HEALTHY）。
+
 ### 6.2 误杀 ADB server
 
 ```bash
