@@ -61,7 +61,7 @@ backend/agent/scripts/powercycle_check/_lib.py、powercycle_check.py；
 - 新增用例钉住：chcon 目标取 data 目录 context、chcon 失败/回读不一致/未知
   SELinux 状态/context 读不到均 raise、非 enforcing 跳过、push_prefs_xml 调用对齐；
   current_count=0 且 mtime 停滞 → 2 个 grace 周期后判死；result_bytes=0 仍不累计。
-- 真机金丝雀（AT7QNX6B05000093，主机 172.21.9.128）：
+- 真机金丝雀（AT7QNX6B05000093，主机 .128）：
   用更新后的 powercycle_setup 1.2.10 全新 uninstall 后重跑，输出
   success=true / service_started=true / current_count=0；prefs 文件与
   shared_prefs 目录 context 均为 u:object_r:app_data_file:s0:c512,c768。
