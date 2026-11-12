@@ -101,8 +101,14 @@ Owner 2026-11-12 选「乙：收窄端点 + 静默期」，本单元按规划者
   （写 host_id、status 不变、审计单条含 from/to/reason）；设备/目标主机不存在 404；
   设备退役 / 目标主机退役 / 活跃 Job / ACTIVE 租约 409（各自 code）；幂等同归属无审计；
   **同归属带 B 退役 / PENDING Job / ACTIVE 租约重放三次均 409（各自 code）**；
-  **目标主机并发退役（第二 session 真实 `retire_host`）→ 409 HOST_RETIRED、归属仍 A、
-  零审计**；**audit_logs 临时缺失 → 500、host_id 回滚、零审计**；静默期 a/b/c/d
+  **B1 两 Session 在线交错**：退役线程执行真实 `retire_host`，取到 host 行锁、写入
+  `retired_at` 后在 audit 处暂停未提交；改绑线程先 `session.get(host)` 预热身份映射，
+  再执行真实 `rebind_device`；改绑到达 host `FOR UPDATE`（真实现）或
+  `device.host_id` `UPDATE`（M1 无锁路径）时释放退役提交。真实现 **409 HOST_RETIRED、
+  归属仍 A、零审计**；M1（`db.get` + 去 `db.refresh` + 去锁内复检）→ **1 failed /
+  exit 1**（改绑成功写 B）。编排全用 `threading.Event` + SQLAlchemy
+  `before_cursor_execute`，无裸 sleep；真实现连跑 5 次全绿，M1a 连跑 3 次全红。
+  **audit_logs 临时缺失 → 500、host_id 回滚、零审计**；静默期 a/b/c/d
   （在线 409、刚关机 409、持续关机 200 + 旧主机仅槽位心跳不改回、边界/naive 单测）。
 - 相邻回归：`backend/tests/api/{test_device_rebind,test_devices,
   test_device_retirement_api_2962,test_devices_bulk_swipe_trail}.py`

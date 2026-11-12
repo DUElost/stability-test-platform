@@ -13,13 +13,14 @@
 """
 from __future__ import annotations
 
+import threading
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import event, select, text
 from starlette.testclient import TestClient
 
-from backend.core.database import SessionLocal, get_db
+from backend.core.database import SessionLocal, engine as app_engine, get_db
 from backend.core.job_timeout_config import HOST_HEARTBEAT_TIMEOUT_SECONDS
 from backend.main import fastapi_app
 from backend.models.audit import AuditLog
@@ -28,7 +29,7 @@ from backend.models.host import Device, Host
 from backend.models.job import JobInstance
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
-from backend.services import device_rebind
+from backend.services import device_rebind, host_retirement
 from backend.services.errors import Conflict
 
 _NOW = datetime.now(timezone.utc)
@@ -244,34 +245,122 @@ class TestRebindApi:
         assert [row.action for row in _audit_rows(db_session, device.id)] == ["rebind_device"]
 
     def test_target_host_retirement_between_check_and_write_rejected(
-        self, client, db_session, admin_headers, monkeypatch,
+        self, db_session, monkeypatch,
     ):
-        """B1：目标主机在 Host 检查与 _assert_idle 之后、写入之前被真实退役。
+        """B1：退役事务持目标主机行锁未提交，横跨改绑的主机读取。
 
-        第二 session 执行生产同款 retire_host 并提交；改绑必须在锁内复检时
-        看到 retired_at，返回 409 且不写 host_id、不落审计。
+        两个独立 Session 在线交错：
+        1. 退役线程执行生产同款 retire_host，取到 host 行锁、写入 retired_at
+           后在 record_audit 处暂停（尚未 commit）；
+        2. 改绑线程先 session.get(host) 预热身份映射（读到退役前旧值），再执行
+           生产同款 rebind_device；
+        3. 改绑侧到达目标主机 FOR UPDATE（真实现）或改绑结束（M1 无锁路径）
+           时释放退役提交。
+
+        真实现：_locked_host(FOR UPDATE) 等退役提交后拿锁，db.refresh 复检
+        retired_at → 409 HOST_RETIRED，归属仍 A、审计 0 条。
+        M1（无锁 db.get / 去锁内 refresh）：改绑读到未退役旧值并在退役提交前
+        写入 host_id=B，本用例的 409/归属/零审计断言必须 FAIL。
         """
-        from backend.services.host_retirement import retire_host
-
         device = _device(db_session, "RB-HOST-RACE")
         _host(db_session, "rb-h2")
-        original = device_rebind._assert_idle
+        device_id = device.id
+        db_session.rollback()
 
-        def retire_before_write(session, device_id):
-            original(session, device_id)
-            with SessionLocal() as other:
-                retire_host(
-                    other, host_id="rb-h2", reason="并发退役",
-                    actor_id=None, actor_username="review",
+        retire_holds_lock = threading.Event()
+        release_retire = threading.Event()
+        rebind_host_read = threading.Event()
+        results: dict[str, object] = {}
+
+        real_record_audit = host_retirement.record_audit
+
+        def paused_record_audit(*args, **kwargs):
+            entry = real_record_audit(*args, **kwargs)
+            # 此时 host 行锁与 retired_at 都在未提交事务里；暂停到改绑侧
+            # 真正开始读取目标主机后再放行 commit。
+            retire_holds_lock.set()
+            if not release_retire.wait(timeout=10):
+                raise RuntimeError("retirement was not released")
+            return entry
+
+        def on_execute(conn, cursor, statement, parameters, context, executemany):
+            # 只观察改绑线程的 host FOR UPDATE；退役线程自己的同款语句不算。
+            if threading.current_thread().name != "rebind-thread":
+                return
+            lowered = statement.lower()
+            host_locked = "for update" in lowered and (
+                "from host" in lowered or 'from "host"' in lowered
+            )
+            # M1 无锁路径在 _locked_host 之后才写 device.host_id；UPDATE 后的
+            # 外键检查仍会被退役事务的 host 行锁挡住，因此在此处放行退役，
+            # 让「先按旧值写 B、后提交退役」的时序暴露出来。
+            device_write = "update device" in lowered and "host_id" in lowered
+            if host_locked or device_write:
+                rebind_host_read.set()
+
+        def run_retire():
+            session = SessionLocal()
+            try:
+                host_retirement.retire_host(
+                    session, host_id="rb-h2", reason="并发退役",
+                    actor_id=None, actor_username="test",
                 )
+            except Exception as exc:  # noqa: BLE001 - 失败带回主线程
+                results["retire_error"] = exc
+            finally:
+                session.close()
 
-        monkeypatch.setattr(device_rebind, "_assert_idle", retire_before_write)
-        resp = _rebind(client, device.id, "rb-h2", admin_headers)
-        assert resp.status_code == 409, resp.text
-        assert resp.json()["detail"]["code"] == "HOST_RETIRED"
+        def run_rebind():
+            session = SessionLocal()
+            try:
+                # 预热身份映射：读到退役前的旧 Host。M1 去掉 db.refresh 时，
+                # 后续 _locked_host 会把这个旧对象直接交给复检。
+                session.get(Host, "rb-h2")
+                rebound = device_rebind.rebind_device(
+                    session, device_id=device_id, target_host_id="rb-h2",
+                    reason="交错改绑", actor_id=None, actor_username="test",
+                )
+                results["rebound_host"] = rebound.host_id
+            except Conflict as exc:
+                results["rebind_error"] = exc
+            except Exception as exc:  # noqa: BLE001 - 失败带回主线程
+                results["rebind_unexpected"] = exc
+            finally:
+                session.close()
+                # M1 无锁路径不会触发 host FOR UPDATE 事件；改绑结束即视作
+                # 已越过主机读取，允许退役提交以暴露「先写 B 后退休」。
+                rebind_host_read.set()
+
+        monkeypatch.setattr(host_retirement, "record_audit", paused_record_audit)
+        event.listen(app_engine, "before_cursor_execute", on_execute)
+        retire_thread = threading.Thread(
+            target=run_retire, name="retire-thread", daemon=True,
+        )
+        rebind_thread = threading.Thread(
+            target=run_rebind, name="rebind-thread", daemon=True,
+        )
+        try:
+            retire_thread.start()
+            assert retire_holds_lock.wait(timeout=10), "退役事务未持锁"
+            rebind_thread.start()
+            assert rebind_host_read.wait(timeout=10), "改绑未到达主机读取/结束"
+        finally:
+            release_retire.set()
+            retire_thread.join(timeout=10)
+            rebind_thread.join(timeout=10)
+            event.remove(app_engine, "before_cursor_execute", on_execute)
+
+        assert not retire_thread.is_alive(), "退役线程未退出"
+        assert not rebind_thread.is_alive(), "改绑线程未退出"
+        assert "retire_error" not in results, results
+        assert "rebind_unexpected" not in results, results
+        error = results.get("rebind_error")
+        assert error is not None, f"M1/无锁实现会成功改绑: {results}"
+        assert isinstance(error, Conflict)
+        assert error.detail["code"] == "HOST_RETIRED"
         db_session.expire_all()
-        assert db_session.get(Device, device.id).host_id == "rb-h1"
-        assert _audit_rows(db_session, device.id) == []
+        assert db_session.get(Device, device_id).host_id == "rb-h1"
+        assert _audit_rows(db_session, device_id) == []
 
     def test_audit_write_failure_rolls_back_host_change(
         self, client, db_session, engine, admin_headers,
