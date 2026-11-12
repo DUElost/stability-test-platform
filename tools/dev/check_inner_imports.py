@@ -77,7 +77,9 @@ SCAN_DIRS = (ROOT / "backend", ROOT / "tools", ROOT / "scripts")
 #: （tests/test_plan_run_abort_import_contract.py）同位全绿。
 #: 2026-11-10 #3920 B8 G3e：scan_runner 复用模块级 UploadManager 导入（-2）
 #: → **610 → 608**。
-_BASELINE = 608
+#: 2026-11-12 #3935 r2：`dedup_scan.run_merge_sync` 的 PlanRun 函数内导入随锚点
+#: 解析回顶层（models 纯定义，无环）→ **608 → 607**。
+_BASELINE = 607
 
 # ADR-0051 Phase 3：版本目录已退役，脚本族树（backend/agent/scripts/<name>/）按包发布、
 # 属独立审计面，整棵排除（此前只排除 v<version>/ 冻结目录）。

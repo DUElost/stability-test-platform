@@ -29,6 +29,7 @@ from backend.core.dedup_platform import (
     artifact_uri_matches_platform,
     scan_artifact_uri_platform,
 )
+from backend.models.plan_run import PlanRun
 from backend.models.plan_run_artifact import PlanRunArtifact
 from backend.services.dedup import (
     get_control_plane_merge_engine,
@@ -529,7 +530,6 @@ def run_merge_sync(
     from backend.core.database import SessionLocal
     from backend.core.storage_root import resolve_shared_storage_root
     from backend.models.enums import PlanRunStatus
-    from backend.models.plan_run import PlanRun
 
     db = SessionLocal()
     try:
@@ -551,19 +551,23 @@ def run_merge_sync(
         metrics.merge_skip_tool_not_configured_total.inc()
         return ""
 
+    # 扩窗只在「终态 + 有 ended_at + 锚点可解析」时成立；其余形态沿用 #1077
+    # 的单轮选择（#3935 r2：RUNNING 即便残留 ended_at 也不得混轮）。
+    anchor = _round_started_at(scan_round_id)
+    widen_window = (
+        include_late_hosts
+        and _manual_window_allowed(run)
+        and anchor is not None
+    )
     merge_window_floor = round_started_at
-    if include_late_hosts:
-        anchor = _as_utc(round_started_at) or _round_started_at(scan_round_id)
-        ended_at = _as_utc(run.ended_at) if run is not None else None
-        if anchor is not None and ended_at is not None and ended_at < anchor:
-            merge_window_floor = ended_at
-        else:
-            merge_window_floor = anchor
+    if widen_window:
+        ended_at = _as_utc(run.ended_at)
+        merge_window_floor = min(anchor, ended_at)
         logger.info(
             "merge_window plan_run=%d anchor=%s floor=%s",
             plan_run_id,
-            anchor.isoformat() if anchor is not None else None,
-            merge_window_floor.isoformat() if merge_window_floor is not None else None,
+            anchor.isoformat(),
+            merge_window_floor.isoformat(),
         )
 
     org_files = _load_org_files_for_merge(
@@ -571,7 +575,7 @@ def run_merge_sync(
         scan_round_id=scan_round_id,
         round_started_at=merge_window_floor,
         platform=platform,
-        include_late_hosts=include_late_hosts,
+        include_late_hosts=widen_window,
     )
     if not org_files:
         logger.warning("merge_skip_no_org_files plan_run=%d platform=%s", plan_run_id, platform)
@@ -817,14 +821,18 @@ def _load_org_files_for_merge(
     主机可能登记多份报表（重复扫描/重复上传），按创建时间取最新一份，避免合并结果
     重复计数（#3935）。
 
-    ``include_late_hosts=True``（手动合并，#697/#1077）：以 ``round_started_at`` 为
-    输入窗口下界，窗口内每个（host, 平台）取最新一份；主机在最新轮没有报表时，用窗口
-    内更早轮次的那一份，并在日志里显式记为迟到输入。窗口下界由调用方按 run 终态时刻
+    ``include_late_hosts=True``（手动合并意图）：仅当 ``scan_round_id`` 可解析为
+    轮次开始时刻时进入窗口模式——以 ``round_started_at`` 为下界，窗口内每个
+    （host, 平台）取最新一份；最新轮缺报表的主机回退到窗口内更早轮次的那一份并
+    记日志。非 ISO 标记仍按同 ID 精确匹配（#1077），其它不可解析标记不进入窗口
+    候选；无法解析锚点时退回单轮行为、不扩窗。窗口下界由调用方按 run 终态时刻
     给出，**不**退回无约束历史。
     """
     from backend.core.database import SessionLocal
 
-    floor = _as_utc(round_started_at) or _round_started_at(scan_round_id)
+    anchor = _round_started_at(scan_round_id)
+    window_mode = include_late_hosts and anchor is not None
+    floor = _as_utc(round_started_at) or anchor
     if floor is None:
         if scan_round_id:
             logger.warning(
@@ -850,7 +858,7 @@ def _load_org_files_for_merge(
             PlanRunArtifact.plan_run_id == plan_run_id,
             PlanRunArtifact.artifact_type == ARTIFACT_TYPE_SCAN,
         )
-        if not include_late_hosts:
+        if not window_mode:
             if scan_round_id:
                 stmt = stmt.where(
                     or_(
@@ -867,7 +875,6 @@ def _load_org_files_for_merge(
     finally:
         db.close()
 
-    anchor = _round_started_at(scan_round_id) or floor
     best: dict[tuple[str, str], tuple[tuple, str, str]] = {}
     unstamped: list[str] = []
     for row_id, host_id, uri, row_round, created_at in rows:
@@ -877,12 +884,14 @@ def _load_org_files_for_merge(
             continue
         created = _as_utc(created_at) or datetime.min.replace(tzinfo=timezone.utc)
         round_start = _round_started_at(row_round)
-        if include_late_hosts:
-            # 窗口下界之外的历史轮次不进入候选：扫描轮开始时刻才代表归属。
-            if round_start is not None:
-                if round_start < floor:
+        if window_mode:
+            # 窗口只认可解析轮次：锚点必为 ISO；其它非 ISO 标记只能同 ID 命中。
+            if row_round is None:
+                if created < floor:
                     continue
-            elif created < floor:
+            elif row_round != scan_round_id and (
+                round_start is None or round_start < floor
+            ):
                 continue
         if host_id is None:
             # 无主机身份的 legacy 行无法去重，保持全部纳入。
@@ -895,7 +904,7 @@ def _load_org_files_for_merge(
             best[key] = (rank, uri, row_round or "")
 
     paths = [uri for _rank, uri, _round in best.values()] + unstamped
-    if include_late_hosts:
+    if window_mode:
         late: list[str] = []
         for (host, _platform), (_rank, _uri, row_round) in best.items():
             round_start = _round_started_at(row_round)
@@ -1428,6 +1437,9 @@ def _register_merge_artifacts(db: Session, plan_run_id: int, merge_dir: Path) ->
 _DEDUP_AUTO_ENV = "STP_DEDUP_AUTO_SCAN"
 _DEDUP_AUTO_STATUSES = {"SUCCESS", "PARTIAL_SUCCESS", "FAILED"}
 
+#: PlanRun 终态集合（手动合并扩窗的必要条件之一，#3935 r2）。
+_TERMINAL_PLAN_RUN_STATUSES = frozenset({"SUCCESS", "PARTIAL_SUCCESS", "FAILED"})
+
 
 def should_trigger_dedup(run_status: str) -> bool:
     """ADR-0028 方案 A：SUCCESS/PARTIAL_SUCCESS/FAILED 均触发 scan→upload。
@@ -1440,14 +1452,37 @@ def should_trigger_dedup(run_status: str) -> bool:
     return run_status in _DEDUP_AUTO_STATUSES
 
 
+def _manual_window_allowed(run) -> bool:
+    """手动合并扩窗的必要条件：终态 run 且已有 ``ended_at``（#3935 r2）。"""
+    return (
+        run is not None
+        and run.ended_at is not None
+        and str(run.status) in _TERMINAL_PLAN_RUN_STATUSES
+    )
+
+
+def _latest_stamped_by_registration(rows):
+    """#1077 兼容锚点：按登记时间取最后一条打标行。"""
+    return max(
+        rows,
+        key=lambda r: (
+            r.created_at is not None,
+            _as_utc(r.created_at) or datetime.min.replace(tzinfo=timezone.utc),
+        ),
+    )
+
+
 def resolve_manual_merge_round(
     plan_run_id: int,
 ) -> tuple[str | None, datetime | None]:
-    """#1077: derive a round filter for manual merge — never unconstrained history.
+    """派生手动合并的轮次锚点；绝不返回无约束历史（#1077）。
 
-    Prefer the latest non-null ``scan_round_id`` among scan artifacts. If none
-    are stamped (legacy), use ``min(created_at)`` of registered scan rows as
-    ``round_started_at`` so ``_load_org_files_for_merge`` still has a floor.
+    终态 run 且有 ``ended_at``：在**可解析**的轮次标记里按轮次开始时间取最新一条，
+    避免旧轮晚登记被误判为最新轮（#3935 r2）。没有任何可解析标记时退回 #1077 的
+    登记顺序选择，由调用方保持单轮语义。
+
+    非终态或缺 ``ended_at``：沿用 #1077 的登记顺序选择（单轮）。无打标行（legacy）
+    时以 ``min(created_at)`` 作为 ``round_started_at`` 兼容下界。
     """
     from backend.core.database import SessionLocal
 
@@ -1461,23 +1496,30 @@ def resolve_manual_merge_round(
         ).scalars().all()
         if not rows:
             return None, None
+        run = db.get(PlanRun, plan_run_id)
         stamped = [r for r in rows if r.scan_round_id]
         if stamped:
-            latest = max(
-                stamped,
-                key=lambda r: (r.created_at is not None, r.created_at or datetime.min),
+            latest = _latest_stamped_by_registration(stamped)
+            if _manual_window_allowed(run):
+                parseable = [
+                    (r, _round_started_at(r.scan_round_id)) for r in stamped
+                ]
+                parseable = [(r, t) for r, t in parseable if t is not None]
+                if parseable:
+                    latest = max(
+                        parseable,
+                        key=lambda item: (
+                            item[1],
+                            _as_utc(item[0].created_at)
+                            or datetime.min.replace(tzinfo=timezone.utc),
+                            item[0].id or 0,
+                        ),
+                    )[0]
+            floor = _round_started_at(latest.scan_round_id) or _as_utc(
+                latest.created_at
             )
-            floor = latest.created_at
-            try:
-                floor = datetime.fromisoformat(
-                    str(latest.scan_round_id).replace("Z", "+00:00"),
-                )
-            except ValueError:
-                # Non-ISO round ids still work via exact scan_round_id match;
-                # created_at is only a legacy floor for unstamped siblings.
-                pass
             return str(latest.scan_round_id), floor
-        times = [r.created_at for r in rows if r.created_at is not None]
+        times = [_as_utc(r.created_at) for r in rows if r.created_at is not None]
         if not times:
             return None, None
         return None, min(times)

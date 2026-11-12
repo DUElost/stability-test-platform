@@ -1523,7 +1523,7 @@ def test_load_org_files_for_merge_dedupes_per_host_and_platform(
 def test_run_merge_sync_manual_window_starts_at_run_end(
     db_session, sample_plan_run, monkeypatch,
 ):
-    """手动合并把窗口下界交给 loader：终态 run 用 ended_at，运行中 run 用最新轮。"""
+    """扩窗只在终态 + ended_at；RUNNING 即便残留 ended_at 也保持单轮（#3935 r2）。"""
     from datetime import datetime, timezone
 
     round_id = "2026-11-11T03:03:07+00:00"
@@ -1539,15 +1539,30 @@ def test_run_merge_sync_manual_window_starts_at_run_end(
     tool = {"python": "python", "script": "/tmp/start_log_scan.py"}
 
     with patch.object(ds, "resolve_scan_tool", return_value=tool):
+        # RUNNING 且无 ended_at：单轮，窗口下界 = 锚点开始时刻。
         assert ds.run_merge_sync(
             sample_plan_run.id, scan_round_id=round_id,
             round_started_at=started, include_late_hosts=True,
             allow_failed=True,
         ) == ""
         assert captured["round_started_at"] == started
+        assert captured["include_late_hosts"] is False
 
+        # RUNNING 但存量 ended_at 非空：仍不扩窗（B2 回归）。
         captured.clear()
         sample_plan_run.ended_at = ended
+        db_session.commit()
+        assert ds.run_merge_sync(
+            sample_plan_run.id, scan_round_id=round_id,
+            round_started_at=started, include_late_hosts=True,
+            allow_failed=True,
+        ) == ""
+        assert captured["round_started_at"] == started
+        assert captured["include_late_hosts"] is False
+
+        # 终态 + ended_at：窗口下界取较早者，允许回退。
+        captured.clear()
+        sample_plan_run.status = "FAILED"
         db_session.commit()
         assert ds.run_merge_sync(
             sample_plan_run.id, scan_round_id=round_id,
