@@ -163,6 +163,11 @@ cat /sys/bus/usb/devices/<dev>:1.0/interface      # "MIDI function" = MIDI-only
 平台侧 `usb_link_degraded`（§3）只说明窗口内有 `-71/-110` 或 cable-suspect 计数超阈，
 不区分「主控级」与「单分支级」；分支级判据必须靠上面三条人工取证。
 
+`-110` 计数本身也不能当判据：多数主机的 `-71/-110` 来自单个设备的
+`Failed to suspend device`（autosuspend 失败），设备仍在树上、`lsusb` 不丢。执行者看到
+`usb_link_degraded` 时先确认是否伴随**同一个 `2-x` 端口反复 `new SuperSpeed USB device`**；
+没有这个形状的主机不得按本节处置。
+
 ### 5.2 处置步骤
 
 1. 执行者确认 `lsusb -t` 里所有下游设备都挂在 USB2 树下、Bus 002 无设备——SuperSpeed
@@ -177,8 +182,8 @@ cat /sys/bus/usb/devices/<dev>:1.0/interface      # "MIDI function" = MIDI-only
    失败或 `-71`。
 5. 执行者核对平台信号：下一次心跳 `capacity.usb_device_count` 恢复；`usb_link_degraded`
    在 1 小时统计窗滑过后回落。
-6. 执行者排期更换该 Hub。USB2 旁路是过渡处置，不是修复——执行者不得在未更换 Hub 的
-   情况下继续叠加级联层级。
+6. 执行者排期更换该 Hub。USB2 旁路是过渡处置，不是修复；这类 Hub 是单一整机，内部级联
+   结构不可拆分或改造，执行者只能选「换上行口」或「整只更换」。
 
 ### 5.3 2026-11-12 `.102` 实例
 
@@ -193,6 +198,12 @@ cat /sys/bus/usb/devices/<dev>:1.0/interface      # "MIDI function" = MIDI-only
 
 该分支劣化有长期前兆：这台主机死亡前两周每日 `-71/-110` 达 400~3700 行（阈值来源见
 `backend/agent/contracts/kernel_usb_faults.py` 注释）。
+
+2026-11-12 舰队核对：另外三台报 `usb_link_degraded` 的主机（`.42`、`.60`、`.75`）的
+`-71/-110` 全部来自单个设备的 `Failed to suspend device`，`lsusb` 设备数正常、24 小时内
+零 `USB disconnect`，因此不属本节形态、不做处置。`.54` 属同形：`2-5` 持续
+`device descriptor read/8, error -110`（24 小时 12,313 次重新枚举），USB2 侧
+`1-5` 与其内部五个 `0bda:5411` 分级正常，Bus 002 只有 root hub。
 
 ## 6. 相关
 
