@@ -254,8 +254,8 @@ class TestRebindApi:
            后在 record_audit 处暂停（尚未 commit）；
         2. 改绑线程先 session.get(host) 预热身份映射（读到退役前旧值），再执行
            生产同款 rebind_device；
-        3. 改绑侧到达目标主机 FOR UPDATE（真实现）或改绑结束（M1 无锁路径）
-           时释放退役提交。
+        3. 改绑侧到达目标主机 FOR UPDATE（真实现）或开始写 device.host_id
+           （M1 无锁路径）时释放退役提交；线程结束事件作兜底。
 
         真实现：_locked_host(FOR UPDATE) 等退役提交后拿锁，db.refresh 复检
         retired_at → 409 HOST_RETIRED，归属仍 A、审计 0 条。
@@ -327,8 +327,8 @@ class TestRebindApi:
                 results["rebind_unexpected"] = exc
             finally:
                 session.close()
-                # M1 无锁路径不会触发 host FOR UPDATE 事件；改绑结束即视作
-                # 已越过主机读取，允许退役提交以暴露「先写 B 后退休」。
+                # 兜底：前述事件都未触发时，改绑结束也放行退役提交，
+                # 避免主线程空等；M1 成功路径会在断言处暴露。
                 rebind_host_read.set()
 
         monkeypatch.setattr(host_retirement, "record_audit", paused_record_audit)

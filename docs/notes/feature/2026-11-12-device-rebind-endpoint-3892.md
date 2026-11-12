@@ -124,6 +124,10 @@ Owner 2026-11-12 选「乙：收窄端点 + 静默期」，本单元按规划者
 - 全量 `backend/tests/api/`：**1646 passed**。历史上 `test_ai_assistant_endpoints.py::
   TestConfigEndpoints::test_connection_test_refuses_fast` 的 `InvalidURL` 本轮未复现；
   该节点在干净基线 `origin/main` 上单跑 **1 passed**，与本改动无关。
+- R2 复跑变异（每次恢复后全文 `git diff --exit-code HEAD` 通过）：M1a（主机锁改
+  `db.get` + 去 `db.refresh` + 去锁内复检）→ B1 用例 **1 failed / exit 1**；
+  M2 → 3 failed；M3 → 1 failed；M4a → 2 failed；M4b → 1 failed。锁序静态守卫 +
+  #3017 留存守卫：**31 passed**。
 - **Agent digest 相等**：`tools/ansible/compute_deploy_digest.py --source-dir
   backend/agent --schema-file backend/schemas/pipeline_schema.json` 在 HEAD 与
   `origin/main` 基线（`git archive` 展开）各算一次，均为
