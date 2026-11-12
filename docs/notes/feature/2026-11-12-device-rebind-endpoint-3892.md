@@ -19,7 +19,8 @@ Class: feature
     测试，也不把租约从一台主机抽走。
   只改 `host_id`，**不改写 `status`**（心跳所有）、不删历史行。幂等：目标即当前归属时
   原样返回、不重复审计。审计 fail-closed（`record_audit(strict=True)`，action=`rebind_device`，
-  details 含 `serial`/`from_host_id`/`to_host_id`/`reason`）。
+  details 含 `serial`/`from_host_id`/`to_host_id`/`reason`）；action 登记在
+  `BUSINESS_ACTIONS_ALLOWLIST`（90d，与 `retire_device` 同族，ADR-0049 D2）。
 - 路由 `POST /api/v1/devices/{device_id}/rebind`（`require_admin`，
   `response_model=ApiResponse[DeviceOut]`，返回 `ok(_device_out(device, db))`）。
 - Schema `DeviceRebindIn{host_id, reason}`（均 `min_length=1` + 去空白校验）。
