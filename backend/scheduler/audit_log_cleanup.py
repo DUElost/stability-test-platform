@@ -133,6 +133,7 @@ BUSINESS_ACTIONS_ALLOWLIST: frozenset[str] = frozenset({
     "plan_run_scan_trigger",
     "plan_updated",
     "promote_seed_project",
+    "rebind_device",  # #3892 管理员改绑设备 host_id；与 retire_device 同族，90d
     "remove_project_model",
     "rename_project",
     "retire_device",  # #2962 设备退役；与 retire_host 同族
