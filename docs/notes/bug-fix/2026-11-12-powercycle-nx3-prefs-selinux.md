@@ -34,8 +34,13 @@ Class: bug-fix
   标签是 app_data_file:s0:c512,c768；后续 adb push 覆盖已有文件时保留原标签。
   NX3 是首装/重装后的新文件，才踩中 push 的默认标签。
 
+同批更新 backend/schemas/pipeline_templates/powercycle.json：powercycle_setup
+pin 1.2.9 → 1.2.10、powercycle_check pin 1.0.10 → 1.0.11（#2865：合入新版本
+必须同批钉模板）。
+
 涉及：backend/agent/scripts/powercycle_setup/_lib.py、powercycle_setup.py、
-backend/agent/scripts/powercycle_check/_lib.py、powercycle_check.py；
+backend/agent/scripts/powercycle_check/_lib.py、powercycle_check.py、
+backend/schemas/pipeline_templates/powercycle.json；
 版本 powercycle_setup 1.2.10、powercycle_check 1.0.11。
 
 ## Alternatives
@@ -58,6 +63,8 @@ backend/agent/scripts/powercycle_check/_lib.py、powercycle_check.py；
   backend/agent/tests/test_powercycle_prefs_3463_g1pc.py
   backend/agent/tests/test_powercycle_prefs_read_paths_3463_g1pc2.py -q
   → 114 passed。
+- 模板 pin：./scripts/project_python.sh scripts/run_pytest.py
+  tests/test_pipeline_template_script_pins_2865.py -q → 7 passed。
 - 新增用例钉住：chcon 目标取 data 目录 context、chcon 失败/回读不一致/未知
   SELinux 状态/context 读不到均 raise、非 enforcing 跳过、push_prefs_xml 调用对齐；
   current_count=0 且 mtime 停滞 → 2 个 grace 周期后判死；result_bytes=0 仍不累计。
