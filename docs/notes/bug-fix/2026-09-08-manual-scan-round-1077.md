@@ -17,8 +17,9 @@ upload/merge 后继链；响应仍返回 ONLINE host 预览，并带 `enqueued: 
 涉及：`backend/api/routes/dedup.py`、`backend/services/dedup_scan.py`；
 测试见 `test_dedup_scan_endpoints.py`、`test_dedup_scan_merge.py`。
 
-后续修订（#3935）：手动合并的输入范围改为「run 终态时刻起的轮次窗口，
-每个主机每平台取最新一份」，仍保留无轮次拒绝。见
+后续修订（#3935；r2 按复核 B1–B3 收紧）：手动合并仅在「终态 + ended_at +
+可解析轮次锚点」时使用终态窗口，每个主机每平台取最新一份；其余形态保持本单的
+单轮选择，无轮次仍拒绝。见
 [手动合并的输入范围](./2026-11-12-manual-merge-round-coverage-3935.md)。
 
 ## Alternatives
