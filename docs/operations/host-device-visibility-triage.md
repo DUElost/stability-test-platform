@@ -205,6 +205,12 @@ cat /sys/bus/usb/devices/<dev>:1.0/interface      # "MIDI function" = MIDI-only
 `device descriptor read/8, error -110`（24 小时 12,313 次重新枚举），USB2 侧
 `1-5` 与其内部五个 `0bda:5411` 分级正常，Bus 002 只有 root hub。
 
+2026-11-12 11:41 `.54` 按本节处置完成：上行改插纯 USB2 口（Bus 001 端口 9）后，
+`2-5` 事件归零，`1-9` 及内部 `1-9.1..4` 与 13 台设备恢复，连续 3 分钟零重枚举，
+平台 `usb_device_count` 从切换瞬态的 0 回到 13。该机设备为 TECNO
+（`0e8d:2008` / `0e8d:20ff`），只暴露 MTP 接口、无 `ff:42`，`adb devices` 为空属
+§1 L4 设备侧，与本次旁路无关。
+
 ## 6. 相关
 
 - 列的设计与口径：[`notes/feature/2026-09-11-hosts-usb-device-count.md`](../notes/feature/2026-09-11-hosts-usb-device-count.md)
