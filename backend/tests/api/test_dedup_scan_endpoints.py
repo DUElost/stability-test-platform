@@ -352,6 +352,8 @@ class TestMergeEndpoint:
         kwargs = merge_all.call_args.kwargs
         assert kwargs["scan_round_id"] == round_id
         assert kwargs["round_started_at"] is not None
+        # #3935：手动合并允许在终态窗口内补入最新轮缺报表的主机。
+        assert kwargs["include_late_hosts"] is True
 
     def test_merge_env_unset_returns_503(self, client, auth_headers, monkeypatch, sample_plan_run, db_session):
         from backend.models.plan_run_artifact import PlanRunArtifact

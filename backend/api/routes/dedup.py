@@ -641,9 +641,11 @@ async def trigger_merge(
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_active_user),
 ):
-    """手动触发集中合并（按平台；带轮次过滤，#1077）。
+    """手动触发集中合并（按平台；带轮次窗口，#1077）。
 
     #697 / ADR-0028 D2：FAILED 终态允许手动 merge（自动链仍 skip）。
+    #3935：窗口下界取 run 终态时刻，窗口内每台主机取最新一份；最新轮缺报表的
+    主机回退到更早轮次并在 merge 日志中显式记为迟到输入。
     """
     from backend.models.plan_run_artifact import PlanRunArtifact
     from sqlalchemy import select
@@ -680,6 +682,7 @@ async def trigger_merge(
         run_id,
         scan_round_id=scan_round_id,
         round_started_at=round_started_at,
+        include_late_hosts=True,
         allow_failed=True,
     )
     if result != "ok":

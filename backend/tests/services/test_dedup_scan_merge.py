@@ -1367,3 +1367,192 @@ def test_merge_artifact_register_backfills_null_size(
     db_session.expire_all()
     rows = _merge_xls_row(db_session, sample_plan_run.id, str(xls))
     assert [r.size_bytes for r in rows] == [40]
+
+
+def _add_merge_artifact(db_session, run_id, *, host, name, round_id, created_at):
+    from backend.models.plan_run_artifact import PlanRunArtifact
+
+    uri = f"/center/dedup/{run_id}/scan/mtk/{name}"
+    db_session.add(PlanRunArtifact(
+        plan_run_id=run_id,
+        host_id=host,
+        storage_uri=uri,
+        artifact_type=ds.ARTIFACT_TYPE_SCAN,
+        size_bytes=1,
+        scan_round_id=round_id,
+        created_at=created_at,
+    ))
+    return uri
+
+
+def test_load_org_files_for_merge_dedupes_same_host_within_round(
+    db_session, sample_plan_run,
+):
+    """#3935 反例①：选中轮内同一主机多份报表只取最新一份（不再重复计数）。"""
+    from datetime import datetime, timedelta
+
+    round_id = "2026-11-11T03:03:07.007712+00:00"
+    started = datetime.fromisoformat(round_id)
+    run_id = sample_plan_run.id
+    older = _add_merge_artifact(
+        db_session, run_id, host="15.83", name="15.83_Result_1_org.xls",
+        round_id=round_id, created_at=started + timedelta(seconds=1),
+    )
+    newer = _add_merge_artifact(
+        db_session, run_id, host="15.83", name="15.83_Result_2_org.xls",
+        round_id=round_id, created_at=started + timedelta(seconds=2),
+    )
+    db_session.commit()
+
+    paths = ds._load_org_files_for_merge(
+        run_id, scan_round_id=round_id, round_started_at=started, platform="mtk",
+    )
+    assert paths == [newer], paths
+    assert older not in paths
+
+
+def test_load_org_files_for_merge_covers_late_hosts_without_unbounding_history(
+    db_session, sample_plan_run,
+):
+    """#3935 反例②：最新轮只登记部分主机时，窗口内旧轮主机仍进入 merge 输入。
+
+    窗口下界 = run 终态时刻（1256：中止后 11:01/11:03 两轮都晚于终态）；
+    同一主机跨轮只取最新一份，每台主机每平台一份。
+    """
+    from datetime import datetime, timedelta, timezone
+
+    run_id = sample_plan_run.id
+    ended = datetime(2026, 11, 11, 3, 0, tzinfo=timezone.utc)
+    sample_plan_run.status = "FAILED"
+    sample_plan_run.ended_at = ended
+    old_round = "2026-11-11T03:01:30.767403+00:00"
+    new_round = "2026-11-11T03:03:07.007712+00:00"
+    old_at = datetime.fromisoformat(old_round)
+    new_at = datetime.fromisoformat(new_round)
+    a_old = _add_merge_artifact(
+        db_session, run_id, host="15.84", name="15.84_Result_old_org.xls",
+        round_id=old_round, created_at=old_at + timedelta(seconds=1),
+    )
+    c_old = _add_merge_artifact(
+        db_session, run_id, host="9.126", name="9.126_Result_old_org.xls",
+        round_id=old_round, created_at=old_at + timedelta(seconds=1),
+    )
+    a_new = _add_merge_artifact(
+        db_session, run_id, host="15.84", name="15.84_Result_new_org.xls",
+        round_id=new_round, created_at=new_at + timedelta(seconds=1),
+    )
+    b_new = _add_merge_artifact(
+        db_session, run_id, host="15.86", name="15.86_Result_new_org.xls",
+        round_id=new_round, created_at=new_at + timedelta(seconds=1),
+    )
+    db_session.commit()
+
+    strict = ds._load_org_files_for_merge(
+        run_id, scan_round_id=new_round, round_started_at=new_at, platform="mtk",
+    )
+    assert sorted(strict) == sorted([a_new, b_new])
+
+    # 无终态时刻（run 仍在跑）时窗口不扩大：仍是单轮行为（#1077）。
+    anchor_only = ds._load_org_files_for_merge(
+        run_id, scan_round_id=new_round, round_started_at=new_at, platform="mtk",
+        include_late_hosts=True,
+    )
+    assert sorted(anchor_only) == sorted([a_new, b_new])
+
+    # 终态窗口：旧轮只有 9.126 的报表 → 补进来；15.84 用最新轮那份。
+    window = ds._load_org_files_for_merge(
+        run_id, scan_round_id=new_round, round_started_at=ended, platform="mtk",
+        include_late_hosts=True,
+    )
+    assert sorted(window) == sorted([a_new, b_new, c_old])
+    assert a_old not in window
+
+
+def test_load_org_files_for_merge_refuses_unbounded_history_with_late_hosts(
+    db_session, sample_plan_run,
+):
+    """#1077 不放松：即使允许迟到主机，没有轮次下界仍拒绝合并全部历史。"""
+    from datetime import datetime, timezone
+
+    _add_merge_artifact(
+        db_session, sample_plan_run.id, host="15.84", name="15.84_Result_org.xls",
+        round_id="2026-11-11T03:01:30+00:00",
+        created_at=datetime(2026, 11, 11, 3, 1, tzinfo=timezone.utc),
+    )
+    db_session.commit()
+
+    assert ds._load_org_files_for_merge(
+        sample_plan_run.id, include_late_hosts=True,
+    ) == []
+
+
+def test_load_org_files_for_merge_dedupes_per_host_and_platform(
+    db_session, sample_plan_run,
+):
+    """同一主机的 MTK/UNISOC 报表是两份输入，去重键必须带平台。"""
+    from datetime import datetime, timedelta
+
+    from backend.models.plan_run_artifact import PlanRunArtifact
+
+    run_id = sample_plan_run.id
+    round_id = "2026-11-11T03:03:07+00:00"
+    started = datetime.fromisoformat(round_id)
+    mtk_old = _add_merge_artifact(
+        db_session, run_id, host="host-a", name="host-a_Result_1_org.xls",
+        round_id=round_id, created_at=started + timedelta(seconds=1),
+    )
+    mtk_new = _add_merge_artifact(
+        db_session, run_id, host="host-a", name="host-a_Result_2_org.xls",
+        round_id=round_id, created_at=started + timedelta(seconds=2),
+    )
+    unisoc = f"/center/dedup/{run_id}/scan/unisoc/host-a_Result_1_org.xls"
+    db_session.add(PlanRunArtifact(
+        plan_run_id=run_id, host_id="host-a", storage_uri=unisoc,
+        artifact_type=ds.ARTIFACT_TYPE_SCAN, size_bytes=1,
+        scan_round_id=round_id, created_at=started + timedelta(seconds=1),
+    ))
+    db_session.commit()
+
+    paths = ds._load_org_files_for_merge(
+        run_id, scan_round_id=round_id, round_started_at=started,
+    )
+    assert sorted(paths) == sorted([mtk_new, unisoc])
+    assert mtk_old not in paths
+
+
+def test_run_merge_sync_manual_window_starts_at_run_end(
+    db_session, sample_plan_run, monkeypatch,
+):
+    """手动合并把窗口下界交给 loader：终态 run 用 ended_at，运行中 run 用最新轮。"""
+    from datetime import datetime, timezone
+
+    round_id = "2026-11-11T03:03:07+00:00"
+    started = datetime.fromisoformat(round_id)
+    ended = datetime(2026, 11, 11, 3, 0, tzinfo=timezone.utc)
+    captured = {}
+
+    def _fake_loader(_run_id, **kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(ds, "_load_org_files_for_merge", _fake_loader)
+    tool = {"python": "python", "script": "/tmp/start_log_scan.py"}
+
+    with patch.object(ds, "resolve_scan_tool", return_value=tool):
+        assert ds.run_merge_sync(
+            sample_plan_run.id, scan_round_id=round_id,
+            round_started_at=started, include_late_hosts=True,
+            allow_failed=True,
+        ) == ""
+        assert captured["round_started_at"] == started
+
+        captured.clear()
+        sample_plan_run.ended_at = ended
+        db_session.commit()
+        assert ds.run_merge_sync(
+            sample_plan_run.id, scan_round_id=round_id,
+            round_started_at=started, include_late_hosts=True,
+            allow_failed=True,
+        ) == ""
+        assert captured["round_started_at"] == ended
+        assert captured["include_late_hosts"] is True
