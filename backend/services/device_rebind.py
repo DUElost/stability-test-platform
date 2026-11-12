@@ -8,41 +8,114 @@
 
 语义（与退役家族同惯例）：
 
-- 行锁 device（`FOR UPDATE`）+ 锁内复检，闭合「复检→写入」窗口；
-- 前置：设备**在役**、目标主机**存在且在役**、设备**无活跃 Job / 无 ACTIVE 租约**
-  （不顺带中止在跑测试，也不把租约从一台主机抽走）；
+- 行锁 device（`FOR UPDATE`）+ 锁内复检；目标主机再取行锁（复用
+  `host_retirement._locked_host`）并在锁内复检 `retired_at`，与写入同事务——
+  锁序 device→host，单锁非循环；
+- 前置：设备**在役**、设备**ADB 缺席且静默满一个心跳超时**、目标主机**存在且
+  在役**、设备**无活跃 Job / 无 ACTIVE 租约**（不顺带中止在跑测试，也不把租约
+  从一台主机抽走）；同归属的幂等早返回在全部前置之后；
 - 只改 `host_id`，**不改写 `status`**（心跳所有）、不删历史行；
-- 幂等：目标即当前归属时原样返回、不重复审计；
 - 事件真源是 `audit_logs`——审计 fail-closed（`record_audit(strict=True)`）。
+
+静默期（#3892 R1 B4，规划者裁决「乙」）：`last_seen` 只在 serial 进入心跳的
+ADB 枚举时更新；`adb_connected` 是最近一次枚举的连接标志。改绑只在无当前/
+近期 ADB 观测时放行——否则改绑前已生成、改绑后到达的旧主机 ADB 报文会把归属
+改回（复核 PR #3944 的 B4 反例）。
 """
 
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from backend.core.job_timeout_config import HOST_HEARTBEAT_TIMEOUT_SECONDS
 from backend.models.device_lease import DeviceLease
 from backend.models.host import Device, Host
 from backend.models.job import JobInstance
 from backend.services.audit_writer import record_audit
 from backend.services.errors import Conflict, NotFound
+from backend.services.host_retirement import _locked_host
 from backend.services.host_upgrade_gate import ACTIVE_JOB_STATUSES
 
 logger = logging.getLogger(__name__)
 
 _ACTIVE_LEASE = "ACTIVE"
 
+#: 改绑静默期：复用主机心跳超时（生产 300s），不新增旋钮。设备必须在最近一次
+#: ADB 观测之后静默满这个时长才允许人工改绑，避免在途的旧主机 ADB 报文在改绑后
+#: 把归属改回（#3892 R1 B4）。
+_QUIET_PERIOD = timedelta(seconds=HOST_HEARTBEAT_TIMEOUT_SECONDS)
+
+
+def _utcnow() -> datetime:
+    """当前 UTC 时间（测试用 monkeypatch 固定，便于验证静默期边界）。"""
+    return datetime.now(timezone.utc)
+
+
+def _as_utc(value: datetime) -> datetime:
+    """把 `last_seen` 归一为 aware UTC；naive 值按 UTC 解释（PG 驱动偶见）。"""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
 
 def _locked_device(db: Session, device_id: int) -> Device:
     device = (
-        db.execute(select(Device).where(Device.id == device_id).with_for_update())
+        db.execute(
+            select(Device)
+            .where(Device.id == device_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
     ).scalars().first()
     if device is None:
         raise NotFound({"code": "DEVICE_NOT_FOUND", "message": "设备不存在"})
     return device
+
+
+def _assert_quiet(device: Device, *, now: Optional[datetime] = None) -> None:
+    """B4 前置：ADB 缺席且静默满 QUIET_PERIOD，否则 409 DEVICE_NOT_QUIET。
+
+    `last_seen` 只在 serial 进入心跳的 ADB 枚举时更新（heartbeat.py），仅有
+    USB 槽位在位观测的心跳不会更新它；`adb_connected` 是最近一次枚举的连接
+    标志。两者任一显示「当前/近期有 ADB 观测」就不允许改绑。
+    """
+    current = now or _utcnow()
+    quiet_seconds = int(_QUIET_PERIOD.total_seconds())
+    if device.adb_connected is True:
+        raise Conflict({
+            "code": "DEVICE_NOT_QUIET",
+            "message": (
+                f"设备不满足改绑静默期：须 ADB 缺席且静默 \u2265{quiet_seconds}s"
+                "（避免迟到心跳把归属改回）"
+            ),
+        })
+    if device.last_seen is not None and _as_utc(device.last_seen) >= current - _QUIET_PERIOD:
+        raise Conflict({
+            "code": "DEVICE_NOT_QUIET",
+            "message": (
+                f"设备不满足改绑静默期：须 ADB 缺席且静默 \u2265{quiet_seconds}s"
+                "（避免迟到心跳把归属改回）"
+            ),
+        })
+
+
+def _assert_target_host_available(db: Session, target_host_id: str) -> None:
+    """目标主机快速前置：存在且在役（最终以 _locked_host 锁内复检为准）。"""
+    row = db.execute(
+        select(Host.id, Host.retired_at).where(Host.id == target_host_id)
+    ).first()
+    if row is None:
+        raise NotFound({"code": "HOST_NOT_FOUND", "message": "目标主机不存在"})
+    if row.retired_at is not None:
+        raise Conflict({
+            "code": "HOST_RETIRED",
+            "message": "目标主机已退役，请先 unretire 再改绑",
+        })
 
 
 def _assert_idle(db: Session, device_id: int) -> None:
@@ -94,19 +167,29 @@ def rebind_device(
             "message": "设备已退役，请先 unretire 再改绑",
         })
 
-    if device.host_id == target_host_id:
-        return device  # 幂等：目标即当前归属，原样返回、不重复审计
+    _assert_quiet(device)
+    _assert_target_host_available(db, target_host_id)
+    _assert_idle(db, device_id)
 
-    host = db.get(Host, target_host_id)
-    if host is None:
-        raise NotFound({"code": "HOST_NOT_FOUND", "message": "目标主机不存在"})
+    # B2：幂等早返回必须在全部前置之后——同归属带阻断项要返回对应 409，
+    # 不能因为「目标即当前归属」跳过检查。
+    if device.host_id == target_host_id:
+        return device
+
+    # B1：目标主机行锁 + 锁内复检。锁与写入同事务；退役事务（_locked_host）
+    # 要么先提交（本处读到 retired_at → 409），要么在本事务提交后才拿到锁。
+    try:
+        host = _locked_host(db, target_host_id)
+    except NotFound:
+        raise NotFound({"code": "HOST_NOT_FOUND", "message": "目标主机不存在"}) from None
+    # 同一 Session 可能已加载过该 Host（快速前置/测试夹具）：锁内重读，避免
+    # 身份映射把复检做成旧值。
+    db.refresh(host)
     if host.retired_at is not None:
         raise Conflict({
             "code": "HOST_RETIRED",
             "message": "目标主机已退役，请先 unretire 再改绑",
         })
-
-    _assert_idle(db, device_id)
 
     from_host_id = device.host_id
     device.host_id = target_host_id
