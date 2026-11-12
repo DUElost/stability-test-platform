@@ -389,8 +389,103 @@ def repair_prefs_ownership() -> None:
         adb_shell(f"rm -f {_PREFS_DIR}/{_PREFS_FILE}", timeout=30)
 
 
+def _selinux_enforcing() -> bool | None:
+    """设备 SELinux 状态：True=enforcing / False=permissive|disabled / None=未知。"""
+    status = adb_shell("getenforce", timeout=15).strip().lower()
+    if status == "enforcing":
+        return True
+    if status in ("permissive", "disabled"):
+        return False
+    return None
+
+
+def _app_data_dir_context() -> str | None:
+    """应用 data 目录的 SELinux context（由 installd 按包 seinfo 打好）。
+
+    返回形如 u:object_r:app_data_file:s0:c512,c768；读不到返回 None。
+    用 data 目录而不是 shared_prefs 目录：后者可能由旧路径的 mkdir -p
+    以 root 创建，context 本身就不对。
+    """
+    data_dir = _PREFS_DIR.rsplit("/", 1)[0]
+    rc, out, err = adb("shell", f"ls -Zd {data_dir}", timeout=15)
+    if rc != 0:
+        return None
+    fields = (out or "").strip().split()
+    if not fields or not fields[0].startswith("u:object_r:"):
+        return None
+    return fields[0]
+
+
+def _align_prefs_selinux_context() -> None:
+    """把 shared_prefs 目录与 prefs 文件的 context 对齐到应用 data 目录。
+
+    为什么必须对齐：adb push 新建文件时按安装器域打标签（NX3 实测落到
+    app_data_file:s0:c203,c256,c512,c768），而 Tinno platform 签名 APK 以
+    platform_app:s0:c512,c768 运行，MLS category 不匹配 ⇒ 应用读 prefs 得到
+    EACCES（logcat: SharedPreferencesImpl: Cannot read ... EACCES）。此时
+    setup 的 dumpsys 探测仍能看到短暂的 ServiceRecord，但应用读不到
+    running=true；重启后 BootCompletedReceiver 走
+    "not running, skip boot resume"，循环停在 cycle 1。
+
+    V552AA 历史设备未暴露该问题：prefs 文件已由应用自己创建/重写，标签正确，
+    后续 adb push 覆盖内容时保留原标签。新建文件（NX3 首装、uninstall 后重装）
+    才会踩中，所以必须显式对齐，不能依赖 push 的默认标签。
+
+    非 enforcing 或读不到 data 目录 context 时不改（普通 untrusted app 的
+    app_data_file 标签通常已匹配；enforcing 且无法判定时保持原状并由上层
+    步骤的重试语义承接）。chcon 后回读校验，失败即 raise——不把「prefs 可能读不到」
+    当成功。
+    """
+    if not is_root():
+        return
+    enforcing = _selinux_enforcing()
+    if enforcing is None:
+        raise RuntimeError(
+            "无法判定 SELinux 状态（getenforce 输出为空/未知），"
+            "不把 prefs 可读性当已知"
+        )
+    if not enforcing:
+        return
+    ctx = _app_data_dir_context()
+    if not ctx:
+        raise RuntimeError(
+            f"无法读取应用 data 目录 SELinux context: "
+            f"{_PREFS_DIR.rsplit('/', 1)[0]}"
+        )
+    rc, out, err = adb(
+        "shell",
+        f"chcon {ctx} {_PREFS_DIR} {_PREFS_DIR}/{_PREFS_FILE}",
+        timeout=30,
+    )
+    if rc != 0:
+        raise RuntimeError(
+            f"prefs SELinux context 修正失败: rc={rc} ctx={ctx} "
+            f"out={((err or out or '').strip()[:200])!r}"
+        )
+    rc, out, err = adb(
+        "shell",
+        f"ls -Zd {_PREFS_DIR} {_PREFS_DIR}/{_PREFS_FILE}",
+        timeout=15,
+    )
+    if rc != 0:
+        raise RuntimeError(
+            f"prefs SELinux context 回读失败: rc={rc} ctx={ctx} "
+            f"out={((err or out or '').strip()[:200])!r}"
+        )
+    observed = [
+        line.split()[0]
+        for line in (out or "").splitlines()
+        if line.strip()
+    ]
+    if len(observed) < 2 or any(item != ctx for item in observed[:2]):
+        raise RuntimeError(
+            f"prefs SELinux context 未对齐: expected={ctx} observed={observed} "
+            f"out={((err or out or '').strip()[:200])!r}"
+        )
+
+
 def push_prefs_xml(content: str) -> None:
-    """写 prefs：root → push + chown uid:uid + chmod 660；无 root → run-as 重定向兜底。"""
+    """写 prefs：root → push + chown uid:uid + chmod 660 + SELinux 对齐；无 root → run-as 重定向兜底。"""
     if is_root():
         uid = get_app_uid()
         adb_shell(f"mkdir -p {_PREFS_DIR}", timeout=30)
@@ -402,6 +497,7 @@ def push_prefs_xml(content: str) -> None:
         finally:
             Path(tmp_path).unlink(missing_ok=True)
         adb_shell(f"chown {uid}:{uid} {_PREFS_DIR}/{_PREFS_FILE} && chmod 660 {_PREFS_DIR}/{_PREFS_FILE}", timeout=30)
+        _align_prefs_selinux_context()
         return
     cmd = [adb_path(), "-s", device_serial(), "shell", f"run-as {_PKG} sh -c 'cat > shared_prefs/{_PREFS_FILE}'"]
     result = subprocess.run(cmd, input=content.encode("utf-8"), capture_output=True, timeout=60)

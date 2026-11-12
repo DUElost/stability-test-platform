@@ -1,6 +1,13 @@
 # -*- coding: utf-8 -*-
 """PowerCycle 部署 + 启动（init 阶段，issue #462 P0b；G15 对齐 §3.2）。
 
+v1.2.10（NX3 开关机专项，2026-11-12）：prefs SELinux context 对齐（_lib
+push_prefs_xml）——adb push 新建 prefs 文件按安装器域打标签，Tinno
+platform 签名 APK 以 platform_app 域运行时 MLS category 不匹配，应用读
+prefs 得 EACCES；表现为 setup 探测到 ServiceRecord 但应用读不到 running=true，
+重启后 BootCompletedReceiver 跳过续跑。修复后按应用 data 目录 context 对
+shared_prefs 目录与 prefs 文件执行 chcon 并回读校验。
+
 v1.2.9（#3601 G1a，2026-10-03）：APK 默认资源根改取既有 Agent 代码根 authority
 （``config.AGENT_DIR/resources/power-cycle``，开发态
 ``backend/agent/resources/power-cycle``、部署态 ``<install>/agent/resources/power-cycle``），

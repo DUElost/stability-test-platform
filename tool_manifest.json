@@ -1845,6 +1845,14 @@
           "retired": false,
           "script": "powercycle_check.py",
           "version": "1.0.10"
+        },
+        {
+          "artifact": "packages/powercycle_check/1.0.11.tar.gz",
+          "package_sha256": "2c167e71c6bced15a0b53657d826273fc78e992b55556db29356b42df49f85ff",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_check.py",
+          "version": "1.0.11"
         }
       ]
     },
@@ -2124,6 +2132,14 @@
           "retired": false,
           "script": "powercycle_setup.py",
           "version": "1.2.9"
+        },
+        {
+          "artifact": "packages/powercycle_setup/1.2.10.tar.gz",
+          "package_sha256": "3974e1956eb8b732de6429b43a1cfa58f79b4c5f49ab63eaafbd6e881173611f",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_setup.py",
+          "version": "1.2.10"
         }
       ]
     },

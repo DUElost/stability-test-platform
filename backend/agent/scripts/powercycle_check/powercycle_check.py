@@ -1,6 +1,15 @@
 # -*- coding: utf-8 -*-
 """PowerCycle 轮询（patrol 阶段，issue #462 P0b；G15 对齐 §3.2）。
 
+v1.0.11（NX3 开关机专项，2026-11-12）：
+- 判死不再豁免 cycles_done==0：NX3 应用读不到 prefs 时 current_count 恒 0，
+  结果文件只有旧行、服务已死，旧逻辑每轮清零 dead_streak ⇒ 永远 PATROL_SLEEP。
+  文件有内容且 mtime 停滞时按 grace 判死；首轮基线仍由 result_bytes==0 /
+  not was_online 兜住。
+- push_prefs_xml（_lib）按应用 data 目录 context 对齐 shared_prefs
+  目录与 prefs 文件的 SELinux 标签，避免巡检收取窗口 resume 时重新写入
+  不可读的 prefs。
+
 v1.0.10（#3463 §9 G1-pc-2，2026-09-27）：prefs 读路径 kind 区分收口（F1「六族内
 所有 prefs 读路径」，#3471 复核 B1/B3 退回项）。**收取窗口步骤语义不变**（§9.1
 裁定：失败记 `collect_error`、下周期重试、补偿 resume、`success` 仍为 true）：
@@ -382,7 +391,13 @@ def _run(cfg: dict) -> dict:
     #   - 文件停滞（mtime 不变）→ 累计——真死永久停滞判死；偶发启动失败
     #     会在下轮 reboot 后文件增长时清零（最终验收实测的自愈场景）
     mtime = _result_mtime()
-    if alive or cycles_done == 0 or result_bytes == 0 or not was_online:
+    # v1.0.11：cycles_done==0 不再作为「不判死」的豁免。NX3 假健康取证：
+    # 应用读不到 prefs（SELinux category 不匹配）时 current_count 恒为 0，
+    # 结果文件只有旧的 "cycle 1/..." 行；服务已死但 cycles_done==0 让
+    # dead_streak 每轮清零，PATROL_SLEEP 永远不会升级成失败。首轮基线由
+    # mtime==0 / result_bytes==0 / not was_online 三个条件兜住；文件已有内容
+    # 且 mtime 停滞时，无论 current_count 是否为 0 都应计入死亡周期。
+    if alive or result_bytes == 0 or not was_online:
         state["dead_streak"] = 0
     elif mtime > 0 and mtime == state.get("last_mtime"):
         state["dead_streak"] = int(state.get("dead_streak", 0)) + 1
