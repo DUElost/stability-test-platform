@@ -16,7 +16,7 @@
 | 层 | 典型观察 | 只读判据 | 处置 |
 |---|---|---|---|
 | **L0 意图 / 作业层（先问这层）** | `USB n` 与在线数一起归零、`lsusb` 只剩 root hub，**但该 host 近一段时间没有 job** | **平台侧读不到判据**——`device` 只有 `ONLINE/OFFLINE/BUSY/ERROR`，没有 retired/archived/空置位 ⇒ 只能问人、看作业与搬迁记录 | 先确认是不是**有意**清空/关机/搬迁（#3065 现网实例）；确认后**不要**继续按 L1–L4 定成因。解除只能来自账侧或规则豁免（#2962 设备意图位、#3068 paging 取舍） |
-| **L1 内核 / USB 子系统** | `lsusb`/sysfs 里手机整体变少或为空，`USB n` 同时掉 | `sudo dmesg -T` 出现 `xHCI host not responding` / `HC died; cleaning up` / `error -71(-110)` | xHCI driver unbind/rebind 或 reboot；完整判据见 [8.87 事故复盘](./incident-2026-07-29-host-8-87-xhci-death-and-adb-outage.md) |
+| **L1 内核 / USB 子系统** | `lsusb`/sysfs 里手机整体变少或为空，`USB n` 同时掉 | `sudo dmesg -T` 出现 `xHCI host not responding` / `HC died; cleaning up` / `error -71(-110)` | xHCI driver unbind/rebind 或 reboot；完整判据见 [8.87 事故复盘](./incident-2026-07-29-host-8-87-xhci-death-and-adb-outage.md)。主控救回后单个 Hub 的 SuperSpeed 分支仍反复枚举失败时按 §5 处置 |
 | **L2 主机 adb server** | 设备在 USB 上**有 ADB 接口**，`adb devices` 却少或为空 | 「ADB 接口设备集合 ⊋ adb 列表集合」（§2 probe）；`pgrep -af 'fork-server server'` 出现多实例 / 非 5037 端口 / 非 Agent 属主 | 多 server（#160）由 Agent 自检并可选自愈；**单 server 卡死**才用 `adb kill-server && adb start-server`（打断在途 adb 会话，须先确认无在跑任务） |
 | **L3 设备 adbd / 授权** | `adb devices` 能列出该设备，但 state 是 `offline` / `unauthorized` | 两侧集合相等（无 L2 漏项），且存在非 `device` 行 | `adb reconnect offline`、重插、设备侧确认授权或重启；属**设备侧**，server 重启无效 |
 | **L4 设备 USB 功能集** | `USB n > 0` 而在线为 0 或明显偏低 | sysfs 接口里**没有** `ff:42`；`.../1.0/interface` 返回 `MIDI function`（`0e8d:2046`） | 只能设备侧人工：屏幕上把 USB 配置切回 MTP/文件传输并开启 USB 调试；adb 侧一切操作无效（平台侧自 #3046 起给 reason `adb_interfaces_missing`，见 §3） |
@@ -25,7 +25,10 @@ PID/接口名是 MLD-LX3 等 MediaTek 机型 2026-09-14 实测口径：`0e8d:201
 `ff:42` 且 iInterface=`ADB Interface`（adb 可见，正常态）；`0e8d:2046` 暴露
 `01:01`（`MIDI function`）+`01:03`，**没有 ADB 接口，任何 adb server 都看不到**。
 注意 `backend/agent/scripts/flash_firmware/*` 注释把 2046 称作「普通态手机」——那里的
-含义是「非刷机态」，不代表有 ADB 接口。
+含义是「非刷机态」，不代表有 ADB 接口。**关机态设备同样以 `0e8d:2046` 出现在 `lsusb`
+里**：此时没有 ADB 接口是预期，`adb_interfaces_missing` 不构成 L4 待办。执行者必须先按
+L0 确认这批设备是否处于关机/空置，再决定是否要人到设备侧操作（2026-11-12 `.102`
+现网实例，见 §5）。
 
 > **为什么 L0 排在 L1 前面（2026-09-22 现网教训，#3065）**：同一条「整机 USB 看不见」的
 > 观察，这天先被读成「控制器故障」（xHCI rebind 被执行，事后确认不必要），再被读成「机柜侧共享
@@ -135,7 +138,63 @@ cat /sys/bus/usb/devices/<dev>:1.0/interface      # "MIDI function" = MIDI-only
   tick 自动拉回。
   结论：**重启 adb server 不是通用恢复手段**，仅在 L2 判据成立时才是。
 
-## 5. 相关
+## 5. L1 恢复后：单个 Hub 的 USB3 分支失效与 USB2 上行旁路
+
+> 警告：USB2 上行旁路是**绕过**故障的 SuperSpeed 分支，不是修复。代价是该 Hub 下设备
+> 永久失去 USB3 带宽。执行者只在「下游设备本来就以 USB2 高速枚举」的机柜（刷机 / 测试
+> 站）上采用本处置。
+
+主控 rebind 救回整树后，仍可能有单个 Hub 的 USB3 分支没有恢复。两者是不同故障面：
+主控死亡时整棵树消失；分支失效时 USB2 伴生树（`1-x`）与下游设备正常，只有 SuperSpeed
+树（`2-x`）反复枚举失败。
+
+### 5.1 只读判据
+
+同时满足以下三条时按本节处置：
+
+1. `sudo dmesg -T` 里**同一个 `Bus.Port`**（如 `2-5`）反复出现
+   `new SuperSpeed USB device number=...`，随后 `USB disconnect`、
+   `Cannot enable. Maybe the USB cable is bad?`、`device descriptor read/64, error -32`
+   或 `config failed, error -22`；
+2. `uhubctl` 里该 SuperSpeed Hub 的端口状态含 `oc`（过流），或该 Hub 从 `uhubctl`
+   列表中消失而内核仍在重试；其 USB2 伴生 Hub（如 `1-5`）与下游设备持续枚举；
+3. `lsusb -t` 的 Bus 002（SuperSpeed root hub）下没有其他可用 hub 子树。
+
+平台侧 `usb_link_degraded`（§3）只说明窗口内有 `-71/-110` 或 cable-suspect 计数超阈，
+不区分「主控级」与「单分支级」；分支级判据必须靠上面三条人工取证。
+
+### 5.2 处置步骤
+
+1. 执行者确认 `lsusb -t` 里所有下游设备都挂在 USB2 树下、Bus 002 无设备——SuperSpeed
+   分支失效后，这些设备本来也只能以 USB2 高速枚举。
+2. 执行者确认该 Hub 有独立电源。USB2 端口供电预算 500 mA、USB3 为 900 mA，多级级联
+   Hub 在 USB2 下更容易触碰过流。
+3. 执行者把 Hub 上行线从 USB3 口（蓝色 / SS）改插**纯 USB2 口**（黑色），或改用
+   USB2-only 上行线。执行者不得改插同一主机的另一个 USB3 口——过流 / 链路错误随 Hub
+   侧 SS PHY 走，换口不改变故障面。
+4. 执行者验证切换结果：`lsusb -t` 中 Bus 002 下无 hub 子树；`1-5` 及其下游 `1-5.x`
+   全部重新枚举；`lsusb` 设备总数与切换前一致；60 秒内 `dmesg -T` 无新的 `2-5` 枚举
+   失败或 `-71`。
+5. 执行者核对平台信号：下一次心跳 `capacity.usb_device_count` 恢复；`usb_link_degraded`
+   在 1 小时统计窗滑过后回落。
+6. 执行者排期更换该 Hub。USB2 旁路是过渡处置，不是修复——执行者不得在未更换 Hub 的
+   情况下继续叠加级联层级。
+
+### 5.3 2026-11-12 `.102` 实例
+
+2026-11-10 16:37 该主机 xHCI 主控死亡（`HC died; cleaning up`），11-12 rebind 后整树
+恢复。此后 `2-5`（`0bda:0411` USB3.2 Hub）持续出现 `uhubctl` 过流标记
+（`fffffffc ... oc`）与反复枚举重试，最终从 `uhubctl` 消失而内核仍在重试；USB2 伴生
+`1-5`（`0bda:5411`）与 15 台关机态 `0e8d:2046` 始终稳定。
+
+改插纯 USB2 口后：Bus 002 无 hub 子树；15 台设备 50 秒内无断开、无 `-71`；平台
+`usb_device_count` 从切换瞬态的 5 回到 15；`health.reasons` 只剩
+`adb_interfaces_missing`——这是关机态的预期结果（§1 L4 后的说明），不需要设备侧操作。
+
+该分支劣化有长期前兆：这台主机死亡前两周每日 `-71/-110` 达 400~3700 行（阈值来源见
+`backend/agent/contracts/kernel_usb_faults.py` 注释）。
+
+## 6. 相关
 
 - 列的设计与口径：[`notes/feature/2026-09-11-hosts-usb-device-count.md`](../notes/feature/2026-09-11-hosts-usb-device-count.md)
 - 只读诊断边界与凭据来源：[`production-diagnostics.md`](./production-diagnostics.md)
