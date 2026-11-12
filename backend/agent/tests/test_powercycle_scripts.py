@@ -448,6 +448,29 @@ class TestV106MtimeGrace:
         r1 = check_mod_v106._run({"dead_grace_cycles": 2})
         assert r1["success"] is True   # 首轮基线
 
+    def test_zero_cycles_stalled_detects_dead(self, check_mod_v106, monkeypatch, tmp_path):
+        """v1.0.11：current_count 恒 0 的服务死亡不能再被 PATROL_SLEEP 掩盖。
+
+        NX3 假健康取证：应用读不到 prefs（SELinux category 不匹配），
+        current_count 一直是 0，结果文件只有旧的 cycle 1 行且 mtime 停滞。
+        旧逻辑的 cycles_done==0 豁免让 dead_streak 每轮清零，永远不告警。
+        """
+        self._patch(check_mod_v106, monkeypatch, tmp_path, prefs=(0, 100), mtime=1000)
+        assert check_mod_v106._run({"dead_grace_cycles": 2})["success"] is True   # 基线
+        assert check_mod_v106._run({"dead_grace_cycles": 2})["success"] is True   # 停滞 1
+        r3 = check_mod_v106._run({"dead_grace_cycles": 2})                        # 停滞 2
+        assert r3["success"] is False
+        assert "连续 2 个周期" in r3["error_message"]
+
+    def test_zero_cycles_without_result_file_not_dead(self, check_mod_v106, monkeypatch, tmp_path):
+        """v1.0.11：boot 早期结果文件未就绪（bytes=0）仍不累计，保住原豁免语义。"""
+        self._patch(
+            check_mod_v106, monkeypatch, tmp_path, prefs=(0, 100),
+            mtime=1000, result_bytes=0,
+        )
+        for _ in range(4):
+            assert check_mod_v106._run({"dead_grace_cycles": 2})["success"] is True
+
 
 class TestCheck:
     def _patch_device_io(self, mod, monkeypatch, tmp_path, online=True, alive=True, prefs=(3, 100),
