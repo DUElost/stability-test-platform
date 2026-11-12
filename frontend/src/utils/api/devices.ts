@@ -9,6 +9,7 @@ import type {
   DeviceReturnOverrideRequest,
   DeviceReturnOverrideResult,
   DeviceRetireBatchResponse,
+  DeviceRebindRequest,
   PaginatedResponse,
 } from './types';
 
@@ -71,6 +72,11 @@ export const devices = {
     apiClient.post<Device>(`/devices/${id}/retire`, { retire_reason: retireReason }).then(r => r.data),
   unretire: (id: number, retireReason: string) =>
     apiClient.post<Device>(`/devices/${id}/unretire`, { retire_reason: retireReason }).then(r => r.data),
+  /** #3892：设备改绑（admin + 审计；409=前置不满足，404=设备/主机不存在）。 */
+  rebind: (id: number, body: DeviceRebindRequest) =>
+    unwrapApiResponse(
+      apiClient.post<ApiResponseEnvelope<Device>>(`/devices/${id}/rebind`, body),
+    ),
   /** E3：批量退役（逐台独立事务，逐台结果）；清单由陈旧度视图导出后人工确认。 */
   retireBatch: (deviceIds: number[], retireReason: string) =>
     unwrapApiResponse(

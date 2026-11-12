@@ -77,6 +77,21 @@ class DeviceUnretireIn(BaseModel):
     retire_reason: str = Field(min_length=1)
 
 
+class DeviceRebindIn(BaseModel):
+    """#3892：设备改绑请求体——目标主机 + 原因必填（审计 from/to/reason）。"""
+
+    host_id: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+
+    @field_validator("host_id", "reason")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("must not be blank")
+        return stripped
+
+
 class DeviceRetireBatchIn(BaseModel):
     """ADR-0057 D2/E3：批量退役请求体（逐台独立事务，任一台失败不影响其他台）。"""
 

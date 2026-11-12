@@ -28,6 +28,7 @@ from backend.api.schemas.device import (
     DeviceRetireBatchResult,
     DeviceRetireIn,
     DeviceUnretireIn,
+    DeviceRebindIn,
     DeviceReturnDebtOut,
     DeviceReturnOverrideIn,
     DeviceReturnOverrideOut,
@@ -43,6 +44,7 @@ from backend.services.device_retirement import (
     retire_devices_batch,
     unretire_device,
 )
+from backend.services.device_rebind import rebind_device
 from backend.services.device_swipe_trail import bulk_set_swipe_trail
 
 # 与 backend/api/routes/projects.py 的库存口径一致（ADR-0029 v2.5）：
@@ -734,6 +736,33 @@ def unretire_device_endpoint(
         request=request,
     )
     return _device_out(device, db)
+
+
+@router.post("/{device_id}/rebind", response_model=ApiResponse[DeviceOut])
+def rebind_device_endpoint(
+    device_id: int,
+    payload: DeviceRebindIn,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """#3892：设备改绑（admin + 审计；幂等）。
+
+    把设备账面 `host_id` 改到目标主机——补齐 powered_off 设备无法靠心跳改绑的
+    人工路径（vbus 断电刷机「先改绑再刷」的前置）。前置：设备在役、目标主机
+    存在且在役、设备无活跃 Job / 无 ACTIVE 租约，否则 409/404。只改 `host_id`，
+    不改写 `status`（心跳所有）。目标即当前归属时原样返回（不重复审计）。
+    """
+    device = rebind_device(
+        db,
+        device_id=device_id,
+        target_host_id=payload.host_id,
+        reason=payload.reason,
+        actor_id=current_user.id,
+        actor_username=current_user.username,
+        request=request,
+    )
+    return ok(_device_out(device, db))
 
 
 @router.post("/retire", response_model=ApiResponse[DeviceRetireBatchOut])
