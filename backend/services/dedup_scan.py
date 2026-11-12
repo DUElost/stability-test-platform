@@ -24,7 +24,11 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from backend.core import metrics
-from backend.core.dedup_platform import DEDUP_PLATFORMS, artifact_uri_matches_platform
+from backend.core.dedup_platform import (
+    DEDUP_PLATFORMS,
+    artifact_uri_matches_platform,
+    scan_artifact_uri_platform,
+)
 from backend.models.plan_run_artifact import PlanRunArtifact
 from backend.services.dedup import (
     get_control_plane_merge_engine,
@@ -504,6 +508,7 @@ def run_merge_sync(
     scan_round_id: str | None = None,
     round_started_at: datetime | None = None,
     platform: str | None = None,
+    include_late_hosts: bool = False,
     allow_failed: bool = False,
 ) -> str:
     """同步执行 merge（-merge_files_list；工具不支持即配置错误，#291）。
@@ -516,6 +521,10 @@ def run_merge_sync(
     - ``""``：工具/产物不足等真失败
 
     ``allow_failed=True``：手动 API（#697）对 FAILED 仍执行 merge。
+
+    ``include_late_hosts=True``（手动合并）：输入窗口下界取 run 终态时刻与最新轮的
+    较早者；窗口内为「最新轮缺报表」的主机回退到更早轮次的最新一份（#3935），
+    每台主机只取一份。自动链保持默认 False——迟到报表属于下一轮（ADR-0062 D5）。
     """
     from backend.core.database import SessionLocal
     from backend.core.storage_root import resolve_shared_storage_root
@@ -542,11 +551,27 @@ def run_merge_sync(
         metrics.merge_skip_tool_not_configured_total.inc()
         return ""
 
+    merge_window_floor = round_started_at
+    if include_late_hosts:
+        anchor = _as_utc(round_started_at) or _round_started_at(scan_round_id)
+        ended_at = _as_utc(run.ended_at) if run is not None else None
+        if anchor is not None and ended_at is not None and ended_at < anchor:
+            merge_window_floor = ended_at
+        else:
+            merge_window_floor = anchor
+        logger.info(
+            "merge_window plan_run=%d anchor=%s floor=%s",
+            plan_run_id,
+            anchor.isoformat() if anchor is not None else None,
+            merge_window_floor.isoformat() if merge_window_floor is not None else None,
+        )
+
     org_files = _load_org_files_for_merge(
         plan_run_id,
         scan_round_id=scan_round_id,
-        round_started_at=round_started_at,
+        round_started_at=merge_window_floor,
         platform=platform,
+        include_late_hosts=include_late_hosts,
     )
     if not org_files:
         logger.warning("merge_skip_no_org_files plan_run=%d platform=%s", plan_run_id, platform)
@@ -704,6 +729,7 @@ def run_merge_all_platforms_sync(
     *,
     scan_round_id: str | None = None,
     round_started_at: datetime | None = None,
+    include_late_hosts: bool = False,
     allow_failed: bool = False,
 ) -> str:
     """各平台 merge；返回 ``ok`` / ``skipped_failed`` / ``""``。
@@ -718,6 +744,9 @@ def run_merge_all_platforms_sync(
     逐平台结果写入 ``run_context.merge_platforms``（见
     :func:`_record_merge_platforms`）：多平台路由「哪个平台这一轮出了报表、哪个
     没有输入」此前只能靠查中心目录反推，ADR-0032 B1 的分平台语义缺一个可查落点。
+
+    ``include_late_hosts`` 原样传给 :func:`run_merge_sync`：仅手动合并为 True，
+    自动链保持按轮次严格过滤。
     """
     any_ok = False
     saw_skip_failed = False
@@ -729,6 +758,7 @@ def run_merge_all_platforms_sync(
             scan_round_id=scan_round_id,
             round_started_at=round_started_at,
             platform=platform,
+            include_late_hosts=include_late_hosts,
             allow_failed=allow_failed,
         )
         if result == "ok":
@@ -753,56 +783,130 @@ def run_merge_all_platforms_sync(
     return ""
 
 
+def _as_utc(value: datetime | None) -> datetime | None:
+    """统一为 UTC aware；数据库历史行/测试夹具可能给 naive 值。"""
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _round_started_at(scan_round_id: str | None) -> datetime | None:
+    """``scan_round_id`` 是轮次开始时刻的 ISO 串（``scan_task`` 生成）；坏值返回 None。"""
+    if not scan_round_id:
+        return None
+    try:
+        return _as_utc(datetime.fromisoformat(str(scan_round_id).replace("Z", "+00:00")))
+    except ValueError:
+        return None
+
+
 def _load_org_files_for_merge(
     plan_run_id: int,
     *,
     scan_round_id: str | None = None,
     round_started_at: datetime | None = None,
     platform: str | None = None,
+    include_late_hosts: bool = False,
 ) -> list[str]:
+    """按轮次窗口取 merge 输入，每个（host, 平台）只保留最新一份。
+
+    默认（``include_late_hosts=False``，自动链）：只取 ``scan_round_id`` 指定的一轮。
+    迟到报表属于下一轮或补充轮，不得并入本轮（ADR-0062 D5 第 4 条）。同一轮内同一
+    主机可能登记多份报表（重复扫描/重复上传），按创建时间取最新一份，避免合并结果
+    重复计数（#3935）。
+
+    ``include_late_hosts=True``（手动合并，#697/#1077）：以 ``round_started_at`` 为
+    输入窗口下界，窗口内每个（host, 平台）取最新一份；主机在最新轮没有报表时，用窗口
+    内更早轮次的那一份，并在日志里显式记为迟到输入。窗口下界由调用方按 run 终态时刻
+    给出，**不**退回无约束历史。
+    """
     from backend.core.database import SessionLocal
 
-    db = SessionLocal()
-    try:
-        stmt = select(PlanRunArtifact.storage_uri).where(
-            PlanRunArtifact.plan_run_id == plan_run_id,
-            PlanRunArtifact.artifact_type == ARTIFACT_TYPE_SCAN,
-        )
+    floor = _as_utc(round_started_at) or _round_started_at(scan_round_id)
+    if floor is None:
         if scan_round_id:
-            legacy_floor = round_started_at
-            if legacy_floor is None:
-                try:
-                    legacy_floor = datetime.fromisoformat(scan_round_id.replace("Z", "+00:00"))
-                except ValueError:
-                    logger.warning(
-                        "merge_org_files_invalid_scan_round_id plan_run=%d id=%s",
-                        plan_run_id, scan_round_id,
-                    )
-                    return []
-            stmt = stmt.where(
-                or_(
-                    PlanRunArtifact.scan_round_id == scan_round_id,
-                    and_(
-                        PlanRunArtifact.scan_round_id.is_(None),
-                        PlanRunArtifact.created_at >= legacy_floor,
-                    ),
-                )
+            logger.warning(
+                "merge_org_files_invalid_scan_round_id plan_run=%d id=%s",
+                plan_run_id, scan_round_id,
             )
-        elif round_started_at is not None:
-            stmt = stmt.where(PlanRunArtifact.created_at >= round_started_at)
         else:
             logger.warning(
                 "merge_org_files_no_round_filter plan_run=%d — refusing to load all history",
                 plan_run_id,
             )
-            return []
+        return []
+
+    db = SessionLocal()
+    try:
+        stmt = select(
+            PlanRunArtifact.id,
+            PlanRunArtifact.host_id,
+            PlanRunArtifact.storage_uri,
+            PlanRunArtifact.scan_round_id,
+            PlanRunArtifact.created_at,
+        ).where(
+            PlanRunArtifact.plan_run_id == plan_run_id,
+            PlanRunArtifact.artifact_type == ARTIFACT_TYPE_SCAN,
+        )
+        if not include_late_hosts:
+            if scan_round_id:
+                stmt = stmt.where(
+                    or_(
+                        PlanRunArtifact.scan_round_id == scan_round_id,
+                        and_(
+                            PlanRunArtifact.scan_round_id.is_(None),
+                            PlanRunArtifact.created_at >= floor,
+                        ),
+                    )
+                )
+            else:
+                stmt = stmt.where(PlanRunArtifact.created_at >= floor)
         rows = db.execute(stmt).all()
-        paths = [r[0] for r in rows if "_org.xls" in r[0]]
-        if platform:
-            paths = [p for p in paths if artifact_uri_matches_platform(p, platform)]
-        return paths
     finally:
         db.close()
+
+    anchor = _round_started_at(scan_round_id) or floor
+    best: dict[tuple[str, str], tuple[tuple, str, str]] = {}
+    unstamped: list[str] = []
+    for row_id, host_id, uri, row_round, created_at in rows:
+        if "_org.xls" not in uri:
+            continue
+        if platform and not artifact_uri_matches_platform(uri, platform):
+            continue
+        created = _as_utc(created_at) or datetime.min.replace(tzinfo=timezone.utc)
+        round_start = _round_started_at(row_round)
+        if include_late_hosts:
+            # 窗口下界之外的历史轮次不进入候选：扫描轮开始时刻才代表归属。
+            if round_start is not None:
+                if round_start < floor:
+                    continue
+            elif created < floor:
+                continue
+        if host_id is None:
+            # 无主机身份的 legacy 行无法去重，保持全部纳入。
+            unstamped.append(uri)
+            continue
+        key = (str(host_id), scan_artifact_uri_platform(uri))
+        rank = (round_start or created, created, row_id)
+        previous = best.get(key)
+        if previous is None or rank > previous[0]:
+            best[key] = (rank, uri, row_round or "")
+
+    paths = [uri for _rank, uri, _round in best.values()] + unstamped
+    if include_late_hosts:
+        late: list[str] = []
+        for (host, _platform), (_rank, _uri, row_round) in best.items():
+            round_start = _round_started_at(row_round)
+            if round_start is not None and round_start < anchor:
+                late.append(str(host))
+        if late:
+            logger.info(
+                "merge_org_files_late_hosts plan_run=%d anchor=%s hosts=%s",
+                plan_run_id, anchor.isoformat(), ",".join(sorted(late)),
+            )
+    return paths
 
 
 def scan_tool_supports_merge_files_list(tool: Dict[str, str]) -> bool:
