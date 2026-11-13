@@ -36,8 +36,11 @@ CHUNK_RAW, CHUNK_FILL, CHUNK_DONT_CARE, CHUNK_CRC32 = 0xCAC1, 0xCAC2, 0xCAC3, 0x
 
 # PAC file IDs that carry device-unique data: a version switch must NOT touch
 # them, otherwise IMEI / RF calibration are gone ("format all" behaviour).
+# The NR ids are the Qogir N5 (ums9632) equivalents of the LTE ids: NV_NR ->
+# nr_downloadnv_a, Modem_NR_DELTANV -> nr_deltanv_a, NV_CALI_NR -> calinv.
 PRESERVE_IDS = {
     "ProdNV", "Persist", "NV_LTE", "Modem_LTE_DELTANV", "NV_CALI_LTE",
+    "NV_NR", "Modem_NR_DELTANV", "NV_CALI_NR",
     "UserData",
 }
 
