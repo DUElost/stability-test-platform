@@ -53,6 +53,12 @@ _RECOVER_POLL_INTERVAL = 30.0
 # #380: 轮询 GET 加 limit，防止大 backlog 时每周期全量拉取。
 _RECOVER_POLL_LIMIT = 200
 _RETRY_FAILED_LIMIT = 200
+# B8 G6：恢复循环的查询用途（服务端在截取窗口前排除不可走旧链的事件）。
+_RECOVERY_PURPOSE = "recovery"
+# 按事件 ID 恢复已持久化溢出意图的上限（与恢复窗同量级）。
+_SPILL_INTENT_LIMIT = 200
+# 已离开恢复态的事件：残留的溢出意图可以清除。
+_TERMINAL_UPLOAD_STATES = frozenset({"REMOTE", "ARCHIVED", "PRUNED", "PULL_FAILED"})
 
 
 _ATTEMPTS_STATE_PREFIX = "event_upload_attempts:"
@@ -86,6 +92,29 @@ def _durable_spill_flag(event_id: str, value: bool | None = None) -> bool:
     except Exception:
         logger.warning("event_uploader_spill_state_failed event_id=%s", event_id, exc_info=True)
         return False
+
+
+def _durable_spill_event_ids(limit: int = _SPILL_INTENT_LIMIT) -> list[str]:
+    """重启后读出仍有效的溢出意图 event_id（有界）。
+
+    HddSpill 在 force 入队时就把意图写进 agent_state；首次溢出失败（回执
+    未成功、尚无 SpillLedger）时，这是唯一能证明"该事件应走溢出通道"的
+    持久记录。
+    """
+    try:
+        store = _state_store()
+        if store is None:
+            return []
+        entries = store.list_states("event_upload_spill:", limit=limit, value="1")
+    except Exception:
+        logger.warning("event_uploader_spill_intent_list_failed", exc_info=True)
+        return []
+    event_ids: list[str] = []
+    for key, _value in entries:
+        _prefix, _, event_id = key.partition(":")
+        if event_id:
+            event_ids.append(event_id)
+    return event_ids
 
 
 def _attempts_state_key(event_id: str) -> str:
@@ -700,6 +729,76 @@ class EventUploader:
                 job.event_id,
             )
 
+    def _recover_spill_intents(self, states: str) -> None:
+        """按事件 ID 有界恢复已持久化的溢出意图（优先于窗口查询）。
+
+        HddSpill 在 force 入队时就写入 agent_state 的 event_upload_spill:
+        意图；首次溢出失败（回执未成功、尚无 SpillLedger）时它是唯一来源。
+        按 ID 精确取回不受恢复窗饱和影响；只处理本循环负责的状态，已耗尽
+        预算的 UPLOAD_FAILED 不重入队（沿用持久 attempts）。
+        """
+        intent_ids = _durable_spill_event_ids()
+        if not intent_ids:
+            return
+        try:
+            resp = requests.get(
+                f"{self._api_url}/api/v1/agent/device-log-events",
+                params={
+                    "host_id": self._host_id,
+                    "ids": ",".join(intent_ids),
+                    "limit": len(intent_ids),
+                },
+                headers={"X-Agent-Secret": self._agent_secret},
+                timeout=15.0,
+            )
+        except Exception:
+            logger.exception("event_uploader_spill_intent_query_error")
+            return
+        if resp.status_code >= 400:
+            logger.warning(
+                "event_uploader_spill_intent_query_failed status=%s",
+                resp.status_code,
+            )
+            return
+
+        events = {
+            str(item.get("id")): item
+            for item in resp.json().get("data", {}).get("events", [])
+        }
+        wanted = {value.strip() for value in states.split(",") if value.strip()}
+        for event_id in intent_ids:
+            item = events.get(event_id)
+            if item is None:
+                # 响应成功且事件已不在本 host：意图是残留，清除避免无限累积。
+                _durable_spill_flag(event_id, False)
+                continue
+            item_state = str(item.get("state") or "")
+            if item_state not in wanted:
+                if item_state in _TERMINAL_UPLOAD_STATES:
+                    _durable_spill_flag(event_id, False)
+                continue
+            attempts = self._load_attempts(event_id)
+            if item_state == "UPLOAD_FAILED" and attempts >= _MAX_RETRIES:
+                logger.info(
+                    "event_uploader_retry_exhausted_skip event_id=%s attempts=%d",
+                    event_id, attempts,
+                )
+                continue
+            self.enqueue_local_event(event={
+                "id": event_id,
+                "local_path": item["local_path"],
+                "host_id": item.get("host_id", self._host_id),
+                "serial": item.get("serial", ""),
+                "platform": item.get("platform", "UNKNOWN"),
+                "event_type": item.get("event_type", "UNKNOWN"),
+                "detected_at": item.get("detected_at", ""),
+                "plan_run_id": item.get("plan_run_id"),
+                "job_id": item.get("job_id"),
+                "upload_attempts": attempts,
+                "dedup_first": bool(item.get("dedup_first")),
+                "hdd_spill": True,
+            }, force=True)
+
     def _recover_pending(self) -> None:
         """30s 快速轮询：把「等待首次上送」的事件入队（#380）。
 
@@ -713,12 +812,15 @@ class EventUploader:
                 continue
             try:
                 _states = _recover_states()
+                # 优先按事件 ID 恢复已持久化的溢出意图：它不受窗口饱和影响。
+                self._recover_spill_intents(_states)
                 resp = requests.get(
                     f"{self._api_url}/api/v1/agent/device-log-events",
                     params={
                         "host_id": self._host_id,
                         "state": _states,
                         "limit": _RECOVER_POLL_LIMIT,
+                        "purpose": _RECOVERY_PURPOSE,
                     },
                     headers={"X-Agent-Secret": self._agent_secret},
                     timeout=15.0,
@@ -738,6 +840,7 @@ class EventUploader:
                         "plan_run_id": item.get("plan_run_id"),
                         "job_id": item.get("job_id"),
                         "dedup_first": bool(item.get("dedup_first")),
+                        "hdd_spill": bool(item.get("hdd_spill")),
                     }, force=True)
                 # #1042: 同轮补建 create 失败留下的注册意图（幂等 POST）。
                 self._drain_dle_register_intents()
@@ -776,12 +879,16 @@ class EventUploader:
             if not self._configured:
                 continue
             try:
+                states = "UPLOAD_FAILED,UPLOADING"
+                # 优先按事件 ID 恢复：首次溢出失败（尚无台账）只有这条路可见。
+                self._recover_spill_intents(states)
                 resp = requests.get(
                     f"{self._api_url}/api/v1/agent/device-log-events",
                     params={
                         "host_id": self._host_id,
-                        "state": "UPLOAD_FAILED,UPLOADING",
+                        "state": states,
                         "limit": _RETRY_FAILED_LIMIT,
+                        "purpose": _RECOVERY_PURPOSE,
                     },
                     headers={"X-Agent-Secret": self._agent_secret},
                     timeout=15.0,
@@ -812,6 +919,7 @@ class EventUploader:
                         "job_id": item.get("job_id"),
                         "upload_attempts": attempts,
                         "dedup_first": bool(item.get("dedup_first")),
+                        "hdd_spill": bool(item.get("hdd_spill")),
                     }, force=True)
             except Exception:
                 logger.exception("event_uploader_retry_scan_error")

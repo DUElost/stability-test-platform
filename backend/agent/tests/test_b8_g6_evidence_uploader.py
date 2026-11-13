@@ -271,3 +271,75 @@ def test_spill_intent_uses_main_agent_state_db_when_env_unset(tmp_path, monkeypa
     (tmp_path / "missing").mkdir()
     assert event_uploader_module._durable_spill_flag("other") is False
     assert not (tmp_path / "missing" / "agent_state.db").exists()
+
+
+def test_durable_spill_event_ids_are_bounded_and_skip_cleared(tmp_path, monkeypatch):
+    _state_db(tmp_path, monkeypatch)
+    ids = [str(uuid4()) for _ in range(3)]
+    for event_id in ids:
+        assert event_uploader_module._durable_spill_flag(event_id, True)
+    cleared = str(uuid4())
+    assert event_uploader_module._durable_spill_flag(cleared, True)
+    assert event_uploader_module._durable_spill_flag(cleared, False) is False
+
+    assert set(event_uploader_module._durable_spill_event_ids()) == set(ids)
+    assert len(event_uploader_module._durable_spill_event_ids(limit=2)) == 2
+
+
+def test_spill_intent_recovery_by_id_respects_budget_and_identity(
+    tmp_path, monkeypatch,
+):
+    """按 ID 恢复：已耗尽预算的事件不从零开始，普通事件不受影响。"""
+    from backend.agent.event_uploader import EventUploader
+
+    _state_db(tmp_path, monkeypatch)
+    up = EventUploader()
+    up.configure(
+        api_url="http://cp", agent_secret="s", host_id="101",
+        nfs_root=str(tmp_path / "nfs"),
+    )
+    up._stop_evt.clear()
+
+    exhausted = str(uuid4())
+    resumable = str(uuid4())
+    assert event_uploader_module._durable_spill_flag(exhausted, True)
+    assert event_uploader_module._durable_spill_flag(resumable, True)
+    event_uploader_module._durable_set_attempts(exhausted, event_uploader_module._MAX_RETRIES)
+    event_uploader_module._durable_set_attempts(resumable, 2)
+
+    requested = {}
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        requested.update(params)
+        return _Response({"events": [
+            {
+                "id": exhausted, "state": "UPLOAD_FAILED",
+                "local_path": "/data/aee/exhausted", "serial": SERIAL,
+                "platform": "MTK", "event_type": "JE",
+                "detected_at": "2026-11-01T00:00:00+00:00",
+                "plan_run_id": 42, "host_id": "101", "dedup_first": True,
+                "hdd_spill": False,
+            },
+            {
+                "id": resumable, "state": "UPLOAD_FAILED",
+                "local_path": "/data/aee/resumable", "serial": SERIAL,
+                "platform": "MTK", "event_type": "JE",
+                "detected_at": "2026-11-01T00:00:01+00:00",
+                "plan_run_id": 42, "host_id": "101", "dedup_first": True,
+                "hdd_spill": False,
+            },
+        ]})
+
+    monkeypatch.setattr(event_uploader_module.requests, "get", fake_get)
+    up._recover_spill_intents("UPLOAD_FAILED,UPLOADING")
+
+    # 按事件 ID 精确取回，且不带 purpose（无台账的首次失败必须可见）
+    assert set(requested["ids"].split(",")) == {exhausted, resumable}
+    assert "purpose" not in requested
+    jobs = []
+    while not up._queue.empty():
+        jobs.append(up._queue.get_nowait())
+    assert [job.event_id for job in jobs] == [resumable]
+    assert jobs[0].attempt == 2
+    assert jobs[0].hdd_spill is True
+    assert up._load_attempts(exhausted) == event_uploader_module._MAX_RETRIES

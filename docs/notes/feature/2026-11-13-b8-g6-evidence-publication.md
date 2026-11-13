@@ -73,6 +73,30 @@ evidence_publication 以 (实际 PlanRun, 平台, 代表 DLE) 为唯一身份，
   同组覆盖无溢出意图的 DEDUP_FIRST 事件被入队拒绝，以及 CURRENT/无模式/展锐不标
   dedup_first。
 
+### 第 2 轮复核返修（评论 6849949320）
+
+- 根因：R1 把判别从 SQL 层移到入队层后，被拒的 DEDUP_FIRST 非溢出事件既不
+  上送也不转出 UPLOAD_FAILED/UPLOADING；它们占满 LIMIT 200 的恢复窗（按
+  detected_at 升序），detected_at 更晚的溢出事件永不返回，首次溢出失败在积压
+  下不可恢复（违约 F1「首次溢出失败后可重试」、#3957 边界 1、ADR-0062 D2 #3 / I2）。
+  这是永久饥饿，不是窗口抖动。
+- 按用途分域（服务端）：GET /device-log-events 新增 purpose 与 ids。默认用途
+  保持如实返回（HddSpill 候选 D2 #3、scan_scope 输入 I2 不变）；purpose=recovery
+  在 limit 之前排除「DEDUP_FIRST 且无 SpillLedger」的事件——正是入队守卫会拒绝、
+  且状态不会自行转出的集合。响应逐条增加 hdd_spill，恢复循环可据此直接判定。
+- 按事件 ID 恢复（Agent）：溢出意图在 force 入队时已写入 agent_state
+  （event_upload_spill:）。两个恢复循环每轮先取有界意图集合（≤200），按 ids
+  精确查询并优先入队；首次溢出失败（尚无台账）只有这条路可见。只处理本循环
+  负责的状态；UPLOAD_FAILED 且持久 attempts ≥ 5 仍跳过；REMOTE/ARCHIVED/
+  PRUNED/PULL_FAILED 或查询不到的残留意图清除。入队守卫与 _MAX_RETRIES=5 不变。
+- SpillLedger 仍只在 VERIFIED REMOTE 回执成功后登记；回执失败保留源文件。
+- 探针（A/B 同探针，真实 _retry_failed_loop + 真实服务端查询，仅 HTTP 传输为
+  进程内桥接）：200 条 DEDUP_FIRST 无溢出意图填充 + 第 201 条仍有预算的溢出
+  事件（attempts=4），有台账与无台账两种。基线 6f621823 → 2 failed（跨两轮
+  饥饿，普通事件 0 jobs）；返修后 → 2 passed（溢出事件实际入队、attempt=4、
+  普通事件不入队）。变异验证：去掉服务端 recovery 过滤 → 有台账用例 RED；
+  去掉按 ID 恢复 → 无台账用例 RED。
+
 ## Alternatives
 
 - **把证据目的路径写回 DLE.remote_path**：否决。溢出补扫与留存以该字段定位
@@ -113,9 +137,15 @@ evidence_publication 以 (实际 PlanRun, 平台, 代表 DLE) 为唯一身份，
 - R1 探针：在 8e0c2647 的临时 worktree 跑
   test_hddspill_local_candidates_visible_in_dedup_first 与
   test_first_failed_spill_retry_visible_without_ledger → 2 failed（返回集为空）；
-  同一文件在返修后 6 passed（含完整恢复链）。定向套件 356 passed；全量 Agent 套件
-  3380 passed / 2 skipped / 1 既有 ambient 失败（test_dialout_absent_and_no_rule_fails，
-  已在 origin/main 复现，与本次改动无关；CI pr-agent-tests 绿）。
+  同一文件在返修后 6 passed（含完整恢复链）。
+- R2 探针：真实 _retry_failed_loop（两轮）+ 真实 list_agent_device_log_events
+  桥接，200 填充 + 第 201 条溢出（attempts=4）：6f621823 → 2 failed；
+  本 HEAD → 2 passed。变异：去 recovery 过滤 / 去按 ID 恢复各 1 RED。
+- 定向套件 369 passed（含 R1 的 LOCAL 候选、扫描输入、失败后重启与补扫读回，
+  CURRENT/无模式/展锐回归，G6 服务/契约/Agent/G4/G5/G1/G2/retention/measure/
+  Agent control+shutdown/导入棘轮）。全量 Agent 套件 3382 passed / 2 skipped /
+  1 既有 ambient 失败（test_dialout_absent_and_no_rule_fails，已在 origin/main
+  复现，与本次改动无关；CI pr-agent-tests 绿）。
 - 门禁：python scripts/run_gates.py check:quick（16 gates 全绿）；
   tools/dev/check_pr_migrate.py（空库 alembic upgrade head + schema 比对 + seed 身份，
   [OK]）；PYTHONPATH=. .venv/bin/lint-imports --no-cache（5 contracts kept）。

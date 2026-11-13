@@ -15,7 +15,7 @@ from typing import List, Optional
 from uuid import UUID
 
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.artifact_paths import (
@@ -31,13 +31,19 @@ from backend.services.device_log_event import (
     resolve_initial_upload_state,
 )
 from backend.services.errors import BadRequest, Conflict, Forbidden, NotFound
-from backend.models.issue_fact import PartitionMode
+from backend.models.issue_fact import PartitionMode, SpillLedger
 from backend.services.issue_fact_store import record_spill_ledger_entry
 
 logger = logging.getLogger(__name__)
 
 
 _VALID_EVENT_STATES = {s.value for s in EventState}
+
+# GET /device-log-events 的调用用途（B8 G6 第 2 轮返修）。
+# recovery 在窗口截取前排除不可走旧链的事件；默认 None 保持如实返回。
+_LIST_PURPOSE_RECOVERY = "recovery"
+# 按事件 ID 恢复的上限：与恢复循环窗口同量级，避免单次请求无界。
+_LIST_IDS_LIMIT = 200
 
 # #1174: 中心 remote_path/checksum 已权威的行（extract 只认这三态，见
 # backend/services/device_log_event._REMOTE_STATES）——任何落后补丁（旧 LOCAL
@@ -456,19 +462,64 @@ async def list_agent_device_log_events(
     state: Optional[str] = None,
     limit: Optional[int] = None,
     plan_run_id: Optional[int] = None,
+    ids: Optional[str] = None,
+    purpose: Optional[str] = None,
 ) -> dict:
-    """按 host 与可选 run/state 拉取事件（``detected_at`` 升序）。"""
+    """按 host 与可选 run/state/ids 拉取事件（detected_at 升序）。
+
+    三种调用用途共用本函数，差异只在 purpose / ids：
+
+    - HddSpill 候选与 scan_scope（默认 purpose=None）：如实返回本
+      host/run 的全部 DLE（D2 第 3 条 / I2；扫描输入需要完整集合）。
+    - 普通恢复循环（purpose="recovery"）：在**截取窗口之前**排除不
+      可走旧链的事件——DEDUP_FIRST 分区且没有 SpillLedger 的事件由入队守卫
+      拒绝、状态也不会自行转出，若留在窗口内会永久占满 LIMIT，让排在
+      后面的溢出事件不可见（第 2 轮复核 F1）。可按旧链处理的事件（非
+      DEDUP_FIRST，或带溢出台账的 DEDUP_FIRST）语义不变。
+    - 按事件 ID 恢复（ids）：Agent 用已持久化的溢出意图精确取回事件，
+      有界且不受窗口饱和影响；首次溢出失败（尚无台账）也走这一路，因此
+      这里不做 DEDUP_FIRST 过滤。
+
+    响应逐条带 dedup_first 与 hdd_spill，供调用方判定用途。
+    """
     stmt = select(DeviceLogEvent).where(DeviceLogEvent.host_id == host_id)
     if plan_run_id is not None:
         if plan_run_id < 1:
             raise BadRequest("plan_run_id must be >= 1")
         stmt = stmt.where(DeviceLogEvent.plan_run_id == plan_run_id)
+
+    event_ids: List[UUID] = []
+    if ids:
+        raw_ids = [value.strip() for value in ids.split(",") if value.strip()]
+        if len(raw_ids) > _LIST_IDS_LIMIT:
+            raise BadRequest(f"too many ids: {len(raw_ids)} > {_LIST_IDS_LIMIT}")
+        try:
+            event_ids = [UUID(value) for value in raw_ids]
+        except ValueError as exc:
+            raise BadRequest(f"invalid event id: {exc}") from exc
+        if event_ids:
+            stmt = stmt.where(DeviceLogEvent.id.in_(event_ids))
+
     if state:
         states = [s.strip() for s in state.split(",") if s.strip()]
         invalid = [s for s in states if s not in _VALID_EVENT_STATES]
         if invalid:
             raise BadRequest(f"invalid state filter: {invalid}")
         stmt = stmt.where(DeviceLogEvent.state.in_(states))
+
+    if purpose is not None and purpose != _LIST_PURPOSE_RECOVERY:
+        raise BadRequest(f"invalid list purpose: {purpose!r}")
+    if purpose == _LIST_PURPOSE_RECOVERY:
+        # 必须在 limit 之前：被拒事件不转态，留在窗口内会永久饥饿后续事件。
+        dedup_first = select(PartitionMode.id).where(
+            PartitionMode.plan_run_id == DeviceLogEvent.plan_run_id,
+            func.lower(PartitionMode.platform) == func.lower(DeviceLogEvent.platform),
+            PartitionMode.mode == "DEDUP_FIRST",
+        ).exists()
+        has_spill = select(SpillLedger.id).where(
+            SpillLedger.dle_id == DeviceLogEvent.id,
+        ).exists()
+        stmt = stmt.where(or_(~dedup_first, has_spill))
 
     stmt = stmt.order_by(DeviceLogEvent.detected_at.asc())
     if limit is not None:
@@ -478,11 +529,6 @@ async def list_agent_device_log_events(
 
     rows = (await db.execute(stmt)).scalars().all()
 
-    # B8 G6（ADR-0062 D8 第 6 条）：共享查询必须对所有调用方如实返回事件——
-    # HddSpill 需要发现 DEDUP_FIRST 的 LOCAL 候选（D2 第 3 条 / I2），
-    # scan_scope 需要本 host/run 的全部 DLE 输入。是否允许经旧入口上送由
-    # Agent 的 EventUploader 入队处按 dedup_first 判定，不能在这一层按 state
-    # 一刀切（那会把溢出恢复与扫描输入一起切掉）。
     run_ids = {r.plan_run_id for r in rows if r.plan_run_id is not None}
     dedup_partitions: set[tuple[int, str]] = set()
     if run_ids:
@@ -498,6 +544,15 @@ async def list_agent_device_log_events(
         dedup_partitions = {
             (int(run_id), str(platform)) for run_id, platform in partitions
         }
+
+    spilled_ids: set[UUID] = set()
+    if rows:
+        spilled = await db.execute(
+            select(SpillLedger.dle_id).where(
+                SpillLedger.dle_id.in_([r.id for r in rows]),
+            )
+        )
+        spilled_ids = {row for row in spilled.scalars()}
 
     return {
         "events": [
@@ -519,6 +574,7 @@ async def list_agent_device_log_events(
                     and (int(r.plan_run_id), str(r.platform or "").lower())
                     in dedup_partitions
                 ),
+                "hdd_spill": r.id in spilled_ids,
             }
             for r in rows
         ],

@@ -365,6 +365,7 @@ class DeviceLogEventClient:
     def list_events(
         self, *, state: str, limit: int | None = 1,
         plan_run_id: int | None = None, raise_on_error: bool = False,
+        event_ids: List[str] | None = None, purpose: str | None = None,
     ) -> List[Dict[str, Any]]:
         try:
             params: Dict[str, Any] = {"host_id": self.host_id, "state": state}
@@ -372,6 +373,10 @@ class DeviceLogEventClient:
                 params["limit"] = limit
             if plan_run_id is not None:
                 params["plan_run_id"] = plan_run_id
+            if event_ids:
+                params["ids"] = ",".join(str(value) for value in event_ids)
+            if purpose is not None:
+                params["purpose"] = purpose
             resp = requests.get(
                 f"{self.api_url}/api/v1/agent/device-log-events",
                 params=params,
