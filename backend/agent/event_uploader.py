@@ -20,6 +20,7 @@ from typing import Any, Dict, Optional
 import requests
 
 from .aee.state_store import ScriptStateStore
+from .config import BASE_DIR
 from .contracts.evidence_layout import dir_sha256_and_size as _contract_dir_sha256_and_size
 
 try:
@@ -57,11 +58,26 @@ _RETRY_FAILED_LIMIT = 200
 _ATTEMPTS_STATE_PREFIX = "event_upload_attempts:"
 
 
+def _state_store() -> Optional[ScriptStateStore]:
+    """Agent 状态库：env 优先，未配置时回落安装布局的 agent_state.db。
+
+    主 Agent 进程由 ``local_runtime.initialize_local_stores`` 在 ``BASE_DIR`` 下
+    建库；只有库已存在时才回落，避免在开发/测试目录凭空创建文件。
+    """
+    path = os.environ.get("STP_AGENT_STATE_DB", "")
+    if not path:
+        candidate = BASE_DIR / "agent_state.db"
+        if not candidate.is_file():
+            return None
+        path = str(candidate)
+    return ScriptStateStore(db_path=path)
+
+
 def _durable_spill_flag(event_id: str, value: bool | None = None) -> bool:
-    if not os.environ.get("STP_AGENT_STATE_DB"):
-        return False
     try:
-        store = ScriptStateStore()
+        store = _state_store()
+        if store is None:
+            return False
         key = f"event_upload_spill:{event_id}"
         if value is not None:
             store.set_state(key, "1" if value else "0")
@@ -81,16 +97,11 @@ def _durable_get_attempts(event_id: str) -> Optional[int]:
 
     Missing STP_AGENT_STATE_DB / LocalDB → None（调用方回退内存）。
     """
-    if not os.environ.get("STP_AGENT_STATE_DB", ""):
-        # #739 面②：未配置状态库是 docstring 已声明的**预期路径**，显式返回，
-        # 不走异常——否则「未配置」与「真读失败」在日志里不可分。
-        return None
     try:
-        try:
-            from backend.agent.aee.state_store import ScriptStateStore
-        except ImportError:
-            from agent.aee.state_store import ScriptStateStore
-        raw = ScriptStateStore().get_state(_attempts_state_key(event_id), "")
+        store = _state_store()
+        if store is None:
+            return None
+        raw = store.get_state(_attempts_state_key(event_id), "")
         if raw.strip() == "":
             return None
         return max(0, int(raw))
@@ -106,11 +117,10 @@ def _durable_get_attempts(event_id: str) -> Optional[int]:
 
 def _durable_set_attempts(event_id: str, attempts: int) -> None:
     try:
-        try:
-            from backend.agent.aee.state_store import ScriptStateStore
-        except ImportError:
-            from agent.aee.state_store import ScriptStateStore
-        ScriptStateStore().set_state(_attempts_state_key(event_id), str(int(attempts)))
+        store = _state_store()
+        if store is None:
+            return
+        store.set_state(_attempts_state_key(event_id), str(int(attempts)))
     except Exception:
         logger.debug(
             "event_uploader_attempts_persist_failed event_id=%s", event_id, exc_info=True,
@@ -369,6 +379,12 @@ class EventUploader:
         with self._active_lock:
             was_spill = event_id in self._spill_ids
         is_spill = bool(event.get("hdd_spill")) or prune_after_upload or was_spill or _durable_spill_flag(event_id)
+        if bool(event.get("dedup_first")) and not is_spill:
+            # B8 G6（ADR-0062 D8 第 6 条）：DEDUP_FIRST 分区的普通事件只经
+            # S8 代表通道上送；旧恢复循环可以看见它们（HddSpill/scan 共用
+            # 同一查询），但入队处必须拒绝，避免恢复查询变成旧上传入口。
+            logger.info("event_uploader_dedup_first_rejected event_id=%s", event_id)
+            return False
         if is_spill:
             with self._active_lock:
                 self._spill_ids.add(event_id)
@@ -721,6 +737,7 @@ class EventUploader:
                         "detected_at": item.get("detected_at", ""),
                         "plan_run_id": item.get("plan_run_id"),
                         "job_id": item.get("job_id"),
+                        "dedup_first": bool(item.get("dedup_first")),
                     }, force=True)
                 # #1042: 同轮补建 create 失败留下的注册意图（幂等 POST）。
                 self._drain_dle_register_intents()
@@ -794,6 +811,7 @@ class EventUploader:
                         "plan_run_id": item.get("plan_run_id"),
                         "job_id": item.get("job_id"),
                         "upload_attempts": attempts,
+                        "dedup_first": bool(item.get("dedup_first")),
                     }, force=True)
             except Exception:
                 logger.exception("event_uploader_retry_scan_error")

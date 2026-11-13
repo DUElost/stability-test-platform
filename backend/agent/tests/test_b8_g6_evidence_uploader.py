@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
+from backend.agent import event_uploader as event_uploader_module
 from backend.agent import evidence_uploader as module
 from backend.agent.contracts.evidence_layout import dir_sha256_and_size
 from backend.agent.evidence_uploader import EvidenceUploader
@@ -150,3 +153,121 @@ def test_durable_attempts_survive_restart(env, monkeypatch):
     uploader._upload(_task(event, attempts=0))
     assert calls[-1]["state"] == "FAILED"
     assert calls[-1]["attempts"] == 5
+
+
+
+def _configure(uploader, log_root):
+    uploader.configure(
+        api_url="http://cp", agent_secret="s", host_id="101",
+        nfs_root=str(log_root), force=True,
+    )
+    return uploader
+
+
+def _state_db(tmp_path, monkeypatch):
+    path = tmp_path / "agent_state.db"
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS agent_state (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    monkeypatch.setenv("STP_AGENT_STATE_DB", str(path))
+    return path
+
+
+def test_dedup_first_without_spill_intent_is_rejected_before_queue(
+    env, monkeypatch,
+):
+    from backend.agent.event_uploader import EventUploader
+
+    uploader = _configure(EventUploader(), env[2])
+    monkeypatch.setattr(event_uploader_module, "_durable_spill_flag", lambda *_a, **_k: False)
+    event = {
+        "id": str(uuid4()), "local_path": str(env[1] / "event"),
+        "plan_run_id": 42, "serial": SERIAL, "platform": "MTK",
+        "event_type": "JE", "detected_at": "2026-11-13T00:00:00+00:00",
+        "host_id": "101", "dedup_first": True,
+    }
+    assert uploader.enqueue_local_event(event=event, force=True) is False
+    assert uploader._queue.empty()
+    assert str(event["id"]) not in uploader._active_ids
+
+
+def test_dedup_first_spill_intent_is_allowed_and_keeps_attempt_budget(env):
+    from backend.agent.event_uploader import EventUploader
+
+    uploader = _configure(EventUploader(), env[2])
+    event = {
+        "id": str(uuid4()), "local_path": str(env[1] / "event"),
+        "plan_run_id": 42, "serial": SERIAL, "platform": "MTK",
+        "event_type": "JE", "detected_at": "2026-11-13T00:00:00+00:00",
+        "host_id": "101", "dedup_first": True, "hdd_spill": True,
+        "upload_attempts": 4,
+    }
+    assert uploader.enqueue_local_event(event=event, force=True) is True
+    job = uploader._queue.get_nowait()
+    assert job.attempt == 4
+    assert job.hdd_spill is True
+    assert job.prune_after_upload is True
+
+
+def test_durable_spill_intent_survives_restart(tmp_path, monkeypatch):
+    from backend.agent.event_uploader import EventUploader
+
+    local_root = tmp_path / "local"
+    log_root = tmp_path / "log"
+    local_root.mkdir()
+    log_root.mkdir()
+    monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(local_root))
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(log_root))
+    monkeypatch.delenv("STP_DEVICE_LOG_EVENT_ENABLED", raising=False)
+    _state_db(tmp_path, monkeypatch)
+    event_id = str(uuid4())
+
+    first = _configure(EventUploader(), log_root)
+    assert first.enqueue_local_event(event={
+        "id": event_id, "local_path": str(local_root / "event"),
+        "plan_run_id": 42, "serial": SERIAL, "platform": "MTK",
+        "event_type": "JE", "detected_at": "2026-11-13T00:00:00+00:00",
+        "host_id": "101", "dedup_first": True, "hdd_spill": True,
+    }, force=True) is True
+    first._queue.get_nowait()  # 首传失败前进程退出；只保留持久意图
+
+    restarted = _configure(EventUploader(), log_root)
+    assert restarted.enqueue_local_event(event={
+        "id": event_id, "local_path": str(local_root / "event"),
+        "plan_run_id": 42, "serial": SERIAL, "platform": "MTK",
+        "event_type": "JE", "detected_at": "2026-11-13T00:00:00+00:00",
+        "host_id": "101", "dedup_first": True,
+    }, force=True) is True
+    job = restarted._queue.get_nowait()
+    assert job.hdd_spill is True
+    assert job.prune_after_upload is True
+
+
+
+def test_spill_intent_uses_main_agent_state_db_when_env_unset(tmp_path, monkeypatch):
+    from backend.agent import event_uploader as event_uploader_module
+
+    monkeypatch.delenv("STP_AGENT_STATE_DB", raising=False)
+    state_db = tmp_path / "agent_state.db"
+    conn = sqlite3.connect(state_db)
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS agent_state (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    monkeypatch.setattr(event_uploader_module, "BASE_DIR", tmp_path)
+    event_id = str(uuid4())
+    assert event_uploader_module._durable_spill_flag(event_id, True) is True
+    assert event_uploader_module._durable_spill_flag(event_id) is True
+    # 未创建库时不得凭空生成文件
+    monkeypatch.setattr(event_uploader_module, "BASE_DIR", tmp_path / "missing")
+    (tmp_path / "missing").mkdir()
+    assert event_uploader_module._durable_spill_flag("other") is False
+    assert not (tmp_path / "missing" / "agent_state.db").exists()

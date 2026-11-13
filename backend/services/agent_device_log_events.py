@@ -15,7 +15,7 @@ from typing import List, Optional
 from uuid import UUID
 
 from pydantic import BaseModel
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.artifact_paths import (
@@ -31,7 +31,7 @@ from backend.services.device_log_event import (
     resolve_initial_upload_state,
 )
 from backend.services.errors import BadRequest, Conflict, Forbidden, NotFound
-from backend.models.issue_fact import PartitionMode, SpillLedger
+from backend.models.issue_fact import PartitionMode
 from backend.services.issue_fact_store import record_spill_ledger_entry
 
 logger = logging.getLogger(__name__)
@@ -470,19 +470,6 @@ async def list_agent_device_log_events(
             raise BadRequest(f"invalid state filter: {invalid}")
         stmt = stmt.where(DeviceLogEvent.state.in_(states))
 
-    # B8 G6（ADR-0062 D8 第 6 条）：DEDUP_FIRST 分区只经 S8 代表通道上送。
-    # Agent 的普通恢复循环（UPLOAD_PENDING / UPLOAD_FAILED / UPLOADING）不得
-    # 把未选事件经旧入口带上来；HddSpill 溢出事件（台账内）按 D2 继续重试。
-    dedup_first = select(PartitionMode.id).where(
-        PartitionMode.plan_run_id == DeviceLogEvent.plan_run_id,
-        func.lower(PartitionMode.platform) == func.lower(DeviceLogEvent.platform),
-        PartitionMode.mode == "DEDUP_FIRST",
-    ).exists()
-    spilled = select(SpillLedger.id).where(
-        SpillLedger.dle_id == DeviceLogEvent.id,
-    ).exists()
-    stmt = stmt.where(or_(~dedup_first, spilled))
-
     stmt = stmt.order_by(DeviceLogEvent.detected_at.asc())
     if limit is not None:
         if limit < 1:
@@ -490,6 +477,28 @@ async def list_agent_device_log_events(
         stmt = stmt.limit(limit)
 
     rows = (await db.execute(stmt)).scalars().all()
+
+    # B8 G6（ADR-0062 D8 第 6 条）：共享查询必须对所有调用方如实返回事件——
+    # HddSpill 需要发现 DEDUP_FIRST 的 LOCAL 候选（D2 第 3 条 / I2），
+    # scan_scope 需要本 host/run 的全部 DLE 输入。是否允许经旧入口上送由
+    # Agent 的 EventUploader 入队处按 dedup_first 判定，不能在这一层按 state
+    # 一刀切（那会把溢出恢复与扫描输入一起切掉）。
+    run_ids = {r.plan_run_id for r in rows if r.plan_run_id is not None}
+    dedup_partitions: set[tuple[int, str]] = set()
+    if run_ids:
+        partitions = await db.execute(
+            select(
+                PartitionMode.plan_run_id,
+                func.lower(PartitionMode.platform),
+            ).where(
+                PartitionMode.plan_run_id.in_(run_ids),
+                PartitionMode.mode == "DEDUP_FIRST",
+            )
+        )
+        dedup_partitions = {
+            (int(run_id), str(platform)) for run_id, platform in partitions
+        }
+
     return {
         "events": [
             {
@@ -505,6 +514,11 @@ async def list_agent_device_log_events(
                 "job_id": r.job_id,
                 "host_id": r.host_id,
                 "occurrence_key": r.occurrence_key,
+                "dedup_first": (
+                    r.plan_run_id is not None
+                    and (int(r.plan_run_id), str(r.platform or "").lower())
+                    in dedup_partitions
+                ),
             }
             for r in rows
         ],

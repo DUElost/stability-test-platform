@@ -51,6 +51,28 @@ evidence_publication 以 (实际 PlanRun, 平台, 代表 DLE) 为唯一身份，
 - **可见性**：阶段二激活闸门未打开时不存在 DEDUP_FIRST 模式记录，本单元全部
   路径不介入生产；新表迁移是 additive。阶段一影子分区继续按 CURRENT 解释。
 
+
+### 第 1 轮复核返修（F1 / 评论 6842934772）
+
+- 根因：list_agent_device_log_events 对所有 state 无条件过滤 DEDUP_FIRST，且只放行
+  SpillLedger 行；SpillLedger 仅在 VERIFIED REMOTE 回执时落库，所以 HddSpill 的
+  LOCAL 候选、scan_scope 的 state="" 输入、首次溢出失败（尚无台账）的
+  UPLOAD_FAILED/UPLOADING 全被隐藏，I2 的溢出回接不可达。
+- 修复：共享查询不再按 state 过滤，逐条返回 dedup_first；是否允许经旧入口上送由
+  EventUploader.enqueue_local_event 在入队处判定——DEDUP_FIRST 且无溢出意图
+  （hdd_spill / prune_after_upload / 持久 event_upload_spill:）直接拒绝。HddSpill
+  的 force 入队仍允许；scan_scope 只读，不受影响。
+- 持久意图：event_uploader._state_store() 在 STP_AGENT_STATE_DB 未设置时回落到主
+  Agent 的 BASE_DIR/agent_state.db（仅当文件已存在），使 event_upload_spill: 与
+  event_upload_attempts: 在 Agent 重启后仍可读；SpillLedger 仍只在 REMOTE 校验回执
+  成功时登记，回执前保留源文件；_MAX_RETRIES=5 不变，恢复沿用已持久 attempts。
+- 探针：在 8e0c2647 复现两条 F1 失败探针（state=LOCAL 与 UPLOAD_FAILED,UPLOADING
+  返回空集），返修后转绿；完整链 test_spill_recovery_full_chain_candidate_to_rescan
+  覆盖真实候选查询 → force 入队 → 首传失败（REMOTE 500，源保留、无台账）→ 重启恢复
+  → REMOTE 回执 → 真实 ingest 登记 SpillLedger → list_partition_spill_inputs 读回。
+  同组覆盖无溢出意图的 DEDUP_FIRST 事件被入队拒绝，以及 CURRENT/无模式/展锐不标
+  dedup_first。
+
 ## Alternatives
 
 - **把证据目的路径写回 DLE.remote_path**：否决。溢出补扫与留存以该字段定位
@@ -77,15 +99,23 @@ evidence_publication 以 (实际 PlanRun, 平台, 代表 DLE) 为唯一身份，
   DLE/路径拒绝、登记失败不归档、SPILL 复制保留 remote_path、SPILL 冲突拒绝覆盖、
   SPILL 源缺失五次终态、空/全缺回执矩阵、Agent 待办过滤、路由鉴权映射）。
 - Agent：backend/agent/tests/test_b8_g6_evidence_uploader.py（复制+校验+VERIFIED、
-  ACK 丢失收敛、落点冲突不覆盖、源缺失五次失败、错误 SN 拒绝、持久尝试跨重启）。
-- 旧入口：backend/tests/tasks/test_b8_g6_upload_mark.py（MTK DEDUP_FIRST 不标记、
-  同 run 展锐仍标记）；backend/tests/api/test_agent_device_log_events.py 新增
-  DEDUP_FIRST 未选事件不出现在恢复列表、溢出事件仍出现。
+  ACK 丢失收敛、落点冲突不覆盖、源缺失五次失败、错误 SN 拒绝、持久尝试跨重启、
+  DEDUP_FIRST 无溢出意图入队拒绝、溢出意图保留尝试预算、持久意图跨重启）。
+- 旧入口与共享查询：backend/tests/tasks/test_b8_g6_upload_mark.py（MTK DEDUP_FIRST
+  不标记、同 run 展锐仍标记）；backend/tests/api/test_b8_g6_dedup_first_query_visibility.py
+  （HddSpill LOCAL 候选、无台账 UPLOAD_FAILED/UPLOADING、scan state="" 输入可见；
+  CURRENT/无模式/展锐不标 dedup_first；完整溢出恢复链候选→force→失败→重启→回执→补扫）。
 - 回归：test_shadow_delivery.py（32 passed）、test_shadow_merge.py（32 passed）、
   test_issue_fact_store.py、test_shadow_scan_rounds.py、test_retention_cleanup.py、
   test_measure_center_storage.py、test_saq_scan_pipeline.py、test_agent_device_log_events.py
-  （22 passed）、Agent 导入边界与测试导入棘轮（14 passed）、Agent control/shutdown
+  （21 passed）、Agent 导入边界与测试导入棘轮（14 passed）、Agent control/shutdown
   套件（28 passed）。
+- R1 探针：在 8e0c2647 的临时 worktree 跑
+  test_hddspill_local_candidates_visible_in_dedup_first 与
+  test_first_failed_spill_retry_visible_without_ledger → 2 failed（返回集为空）；
+  同一文件在返修后 6 passed（含完整恢复链）。定向套件 356 passed；全量 Agent 套件
+  3380 passed / 2 skipped / 1 既有 ambient 失败（test_dialout_absent_and_no_rule_fails，
+  已在 origin/main 复现，与本次改动无关；CI pr-agent-tests 绿）。
 - 门禁：python scripts/run_gates.py check:quick（16 gates 全绿）；
   tools/dev/check_pr_migrate.py（空库 alembic upgrade head + schema 比对 + seed 身份，
   [OK]）；PYTHONPATH=. .venv/bin/lint-imports --no-cache（5 contracts kept）。
