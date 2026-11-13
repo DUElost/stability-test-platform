@@ -20,6 +20,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
@@ -255,6 +256,63 @@ class DeliveryVersion(Base):
             "version_no",
             name="uq_delivery_version_run_platform_version",
         ),
+    )
+
+
+class EvidencePublication(Base):
+    """S8 代表证据发布记录（ADR-0062 D8/D9，B8 G6）。
+
+    唯一身份是 ``(实际 PlanRun, 平台, 代表 DLE)``；一个 DLE 被多个问题选为
+    代表时复用同一条记录。记录来源类型与创建时的源定位、固定目的相对路径、
+    命名规则版本、重试状态、已校验哈希与字节数。
+
+    与 G1 的不可变事实行不同，本表是**可变的运行台账**：重试状态、尝试次数与
+    校验结果随 S8 推进更新。
+    目的相对路径对非 FAILED 行唯一（部分唯一索引）：不同身份的落点冲突不得
+    覆盖，冲突行以 FAILED 落库并保留诊断用的目的路径。
+    """
+
+    __tablename__ = "evidence_publication"
+
+    id = Column(Integer, primary_key=True)
+    plan_run_id = Column(Integer, nullable=False)
+    platform = Column(String(16), nullable=False)
+    dle_id = Column(UUID(as_uuid=True), nullable=False)
+    # 链根（PlanRun.root_plan_run_id 缺省为自身）：证据主文件夹的物理父目录。
+    root_plan_run_id = Column(Integer, nullable=False)
+    # LOCAL（Agent 本地原件）或 SPILL（中心已校验的溢出副本）。
+    source_kind = Column(String(8), nullable=False)
+    source_path = Column(String(1024), nullable=True)
+    collection_folder = Column(String(255), nullable=True)
+    naming_rule_version = Column(String(64), nullable=True)
+    destination_rel_path = Column(String(1024), nullable=True)
+    state = Column(String(16), nullable=False, default="PENDING")
+    attempts = Column(Integer, nullable=False, default=0, server_default="0")
+    last_attempt_at = Column(DateTime(timezone=True), nullable=True)
+    next_attempt_at = Column(DateTime(timezone=True), nullable=True)
+    verified_at = Column(DateTime(timezone=True), nullable=True)
+    checksum = Column(String(64), nullable=True)
+    size_bytes = Column(BigInteger, nullable=True)
+    failure_reason = Column(String(64), nullable=True)
+    executor_host_id = Column(String(64), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
+    updated_at = Column(
+        DateTime(timezone=True), nullable=False, default=_utcnow, onupdate=_utcnow,
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "plan_run_id", "platform", "dle_id",
+            name="uq_evidence_publication_run_platform_dle",
+        ),
+        Index(
+            "uq_evidence_publication_destination",
+            "destination_rel_path",
+            unique=True,
+            postgresql_where=text("state <> 'FAILED'"),
+        ),
+        Index("idx_evidence_publication_host_state", "executor_host_id", "state"),
+        Index("idx_evidence_publication_run_state", "plan_run_id", "platform", "state"),
     )
 
 

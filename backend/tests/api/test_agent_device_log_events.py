@@ -24,6 +24,7 @@ from backend.services.agent_device_log_events import (
     _ALLOWED_TRANSITIONS,
     _EXTRACTABLE_STATES,
     DeviceLogEventIn,
+    list_agent_device_log_events,
 )
 from backend.core.database import AsyncSessionLocal, SessionLocal
 from backend.models.device_log_event import DeviceLogEvent
@@ -1136,4 +1137,60 @@ async def test_dle_occurrence_key_is_stored_only_when_explicitly_carried(monkeyp
         with SessionLocal() as db:
             assert db.get(DeviceLogEvent, UUID(event_id)).occurrence_key == key_one
     finally:
+        _cleanup(seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_list_excludes_dedup_first_unselected_but_keeps_spill():
+    """B8 G6：旧恢复循环不得上送 DEDUP_FIRST 未选事件，HddSpill 继续可重试。"""
+    from backend.models.issue_fact import PartitionMode, SpillLedger
+
+    seed = _seed_host_job()
+    try:
+        now = datetime.now(timezone.utc)
+        db = SessionLocal()
+        try:
+            db.add(PartitionMode(
+                plan_run_id=seed["plan_run_id"], platform="mtk", mode="DEDUP_FIRST",
+            ))
+            normal = DeviceLogEvent(
+                id=uuid4(), serial=seed["serial"], platform="MTK", event_type="JE",
+                state="UPLOAD_PENDING", local_path="/mnt/hdd/aee_events/dev/je_1",
+                host_id=seed["host_id"], plan_run_id=seed["plan_run_id"],
+                detected_at=now,
+            )
+            spilled = DeviceLogEvent(
+                id=uuid4(), serial=seed["serial"], platform="MTK", event_type="JE",
+                state="UPLOAD_FAILED", local_path="/mnt/hdd/aee_events/dev/je_2",
+                host_id=seed["host_id"], plan_run_id=seed["plan_run_id"],
+                detected_at=now,
+            )
+            db.add_all([normal, spilled])
+            db.flush()
+            spilled_id, normal_id = spilled.id, normal.id
+            db.add(SpillLedger(
+                plan_run_id=seed["plan_run_id"], platform="mtk",
+                dle_id=spilled.id, size_bytes=1, spilled_at=now,
+            ))
+            db.commit()
+        finally:
+            db.close()
+
+        async with AsyncSessionLocal() as adb:
+            response = await list_agent_device_log_events(
+                adb, host_id=seed["host_id"], state="UPLOAD_PENDING,UPLOAD_FAILED",
+            )
+        ids = {event["id"] for event in response["events"]}
+        assert str(spilled_id) in ids
+        assert str(normal_id) not in ids
+    finally:
+        db = SessionLocal()
+        try:
+            db.query(SpillLedger).filter(SpillLedger.plan_run_id == seed["plan_run_id"]).delete()
+            db.query(PartitionMode).filter(
+                PartitionMode.plan_run_id == seed["plan_run_id"],
+            ).delete()
+            db.commit()
+        finally:
+            db.close()
         _cleanup(seed)

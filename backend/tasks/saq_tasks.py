@@ -694,11 +694,20 @@ async def upload_task(ctx: dict, *, plan_run_id: int, scan_round_id: str | None 
                 params = {"p%d" % i: p for i, p in enumerate(patterns)}
                 state_list = ", ".join(f"'{s}'" for s in _MARKABLE_EVENT_STATES)
 
+                # B8 G6（ADR-0062 D8 第 6 条）：DEDUP_FIRST 分区只上送 S7 选中的
+                # 代表，旧入口不得把未选事件标成 UPLOAD_PENDING。展锐与无模式
+                # 记录的分区继续走现行标记；HddSpill 走 EventUploader force 通道，
+                # 不经过本标记。
                 result = db.execute(
                     sa_text(
                         f"UPDATE device_log_event SET state = 'UPLOAD_PENDING', "
                         f"updated_at = now() "
-                        f"WHERE state IN ({state_list}) AND plan_run_id = :pid AND ({clauses})"
+                        f"WHERE state IN ({state_list}) AND plan_run_id = :pid AND ({clauses}) "
+                        f"AND NOT EXISTS ("
+                        f"SELECT 1 FROM partition_mode pm "
+                        f"WHERE pm.plan_run_id = device_log_event.plan_run_id "
+                        f"AND lower(pm.platform) = lower(device_log_event.platform) "
+                        f"AND pm.mode = 'DEDUP_FIRST')"
                     ),
                     {"pid": plan_run_id, **params},
                 )
@@ -1018,14 +1027,21 @@ async def extract_task(ctx: dict, *, plan_run_id: int) -> None:
 
 
 from backend.services.ai_assistant.orchestrator import ai_assistant_turn_task
+from backend.services.evidence_publication import copy_spill_publication
 from backend.services.shadow_merge import run_shadow_merge
 
 async def shadow_merge_task(ctx: dict, *, plan_run_id: int, fact_round_id: int):
     await asyncio.to_thread(run_shadow_merge, plan_run_id, fact_round_id)
 
 
+async def evidence_copy_task(ctx: dict, *, publication_id: int):
+    """B8 G6：中心侧复制 HddSpill 代表证据（与 Agent 上送同一终态判据）。"""
+    await asyncio.to_thread(copy_spill_publication, publication_id)
+
+
 SAQ_FUNCTIONS = [
     shadow_merge_task,
+    evidence_copy_task,
     post_completion_task,
     aggregate_plan_run_task,
     send_notification_task,

@@ -15,7 +15,7 @@ from typing import List, Optional
 from uuid import UUID
 
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.artifact_paths import (
@@ -31,6 +31,7 @@ from backend.services.device_log_event import (
     resolve_initial_upload_state,
 )
 from backend.services.errors import BadRequest, Conflict, Forbidden, NotFound
+from backend.models.issue_fact import PartitionMode, SpillLedger
 from backend.services.issue_fact_store import record_spill_ledger_entry
 
 logger = logging.getLogger(__name__)
@@ -468,6 +469,19 @@ async def list_agent_device_log_events(
         if invalid:
             raise BadRequest(f"invalid state filter: {invalid}")
         stmt = stmt.where(DeviceLogEvent.state.in_(states))
+
+    # B8 G6（ADR-0062 D8 第 6 条）：DEDUP_FIRST 分区只经 S8 代表通道上送。
+    # Agent 的普通恢复循环（UPLOAD_PENDING / UPLOAD_FAILED / UPLOADING）不得
+    # 把未选事件经旧入口带上来；HddSpill 溢出事件（台账内）按 D2 继续重试。
+    dedup_first = select(PartitionMode.id).where(
+        PartitionMode.plan_run_id == DeviceLogEvent.plan_run_id,
+        func.lower(PartitionMode.platform) == func.lower(DeviceLogEvent.platform),
+        PartitionMode.mode == "DEDUP_FIRST",
+    ).exists()
+    spilled = select(SpillLedger.id).where(
+        SpillLedger.dle_id == DeviceLogEvent.id,
+    ).exists()
+    stmt = stmt.where(or_(~dedup_first, spilled))
 
     stmt = stmt.order_by(DeviceLogEvent.detected_at.asc())
     if limit is not None:

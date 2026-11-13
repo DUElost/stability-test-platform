@@ -23,6 +23,10 @@ from typing import Any, Mapping, Optional, Sequence
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from backend.agent.contracts.evidence_layout import (
+    EvidenceLayoutError,
+    parse_evidence_rel_path,
+)
 from backend.agent.contracts.round_report_layout import _component, _round_id
 from backend.core.database import SessionLocal
 from backend.core.settings.scheduler import get_scheduler_settings
@@ -194,18 +198,64 @@ def evaluate_delivery_status(
     return DeliveryDecision(DELIVERY_STATUS_READY, REASON_ALL_CHECKS_PASSED)
 
 
+def _publication_view(
+    publications: Sequence[Any], issues: Sequence[Mapping[str, Any]],
+) -> tuple[dict[int, str], tuple[dict, ...], tuple[str, ...]]:
+    """把 S8 发布台账折叠成交付判定需要的三件（D9 第 2、5 条）。
+
+    没有发布记录的代表按「重试中」处理：登记尚未完成不等于终态失败，
+    不得包装成就绪，也不得记成缺口（D9 第 3 条）。
+    """
+    by_dle = {str(row.dle_id): row for row in publications}
+    status: dict[int, str] = {}
+    pending: list[dict] = []
+    folders: set[str] = set()
+    for issue in issues:
+        if issue.get("selection_status") != facts.SELECTION_SELECTED:
+            continue
+        signature_id = int(issue["signature_id"])
+        dle_id = issue.get("representative_dle_id")
+        row = by_dle.get(str(dle_id)) if dle_id else None
+        if row is None:
+            status[signature_id] = PUBLISH_RETRYING
+            pending.append({
+                "signature_id": signature_id, "dle_id": dle_id,
+                "publication_id": None, "state": "RETRYING",
+            })
+            continue
+        if row.state == facts.PUBLICATION_STATE_VERIFIED:
+            status[signature_id] = PUBLISH_VERIFIED
+            try:
+                folders.add(parse_evidence_rel_path(row.destination_rel_path)[1])
+            except EvidenceLayoutError:
+                logger.warning(
+                    "delivery_publication_path_invalid publication=%s", row.id,
+                )
+        elif row.state == facts.PUBLICATION_STATE_FAILED:
+            status[signature_id] = PUBLISH_FAILED
+        else:
+            status[signature_id] = PUBLISH_RETRYING
+            pending.append({
+                "signature_id": signature_id, "dle_id": dle_id,
+                "publication_id": row.id, "state": "RETRYING",
+            })
+    return status, tuple(pending), tuple(sorted(folders))
+
+
 def build_delivery_snapshot(
     db: Session, *, plan_run_id: int, platform: str,
 ) -> Optional[DeliverySnapshot]:
     """按当前事实计算交付物版本内容；没有终态最后一轮时返回 None。
 
-    调用方必须已持有 PlanRun 行锁（facts.list_scan_rounds 会锁轮次行）。
+    CURRENT 分区保持阶段一影子语义（不接触 S8 回执，判定为 scope_only）；
+    DEDUP_FIRST 分区使用真实发布台账。没有模式记录的存量分区按 CURRENT
+    解释。调用方必须已持有 PlanRun 行锁（facts.list_scan_rounds 会锁轮次行）。
     """
     if platform.lower() != PLATFORM_MTK:
         return None
     partition = facts.get_partition_mode(db, plan_run_id=plan_run_id, platform=platform)
-    if partition is not None and partition.mode != facts.PARTITION_MODE_CURRENT:
-        # 影子阶段只登记现行分区；没有模式记录的存量分区按现行解释。
+    mode = partition.mode if partition is not None else facts.PARTITION_MODE_CURRENT
+    if mode not in {facts.PARTITION_MODE_CURRENT, facts.PARTITION_MODE_DEDUP_FIRST}:
         return None
     rounds = facts.list_scan_rounds(db, plan_run_id=plan_run_id, platform=platform)
     final = next(
@@ -254,7 +304,17 @@ def build_delivery_snapshot(
     software_versions = tuple(sorted({
         version for issue in issues for version in issue["build_versions"]
     })) or ("unknown",)
-    gaps = _coverage_gaps(coverage) + _representative_gaps(issues, None)
+    publish_status: Optional[dict[int, str]] = None
+    pending_items: tuple = ()
+    primary_folders: tuple = ()
+    if mode == facts.PARTITION_MODE_DEDUP_FIRST:
+        publish_status, pending_items, primary_folders = _publication_view(
+            facts.list_partition_evidence_publications(
+                db, plan_run_id=plan_run_id, platform=platform,
+            ),
+            issues,
+        )
+    gaps = _coverage_gaps(coverage) + _representative_gaps(issues, publish_status)
     return DeliverySnapshot(
         plan_run_id=plan_run_id,
         platform=platform,
@@ -267,9 +327,9 @@ def build_delivery_snapshot(
         issue_ids=issue_ids,
         event_ids=event_ids,
         software_versions=software_versions,
-        pending_items=(),
+        pending_items=pending_items,
         gaps=tuple(gaps),
-        primary_folders=(),
+        primary_folders=primary_folders,
         issues=tuple(issues),
     )
 

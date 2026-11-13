@@ -8,7 +8,6 @@ UPLOAD_PENDING 事件（控制面 upload_task 按 scan xls 引用标记）经 30
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import os
 import queue
@@ -21,6 +20,7 @@ from typing import Any, Dict, Optional
 import requests
 
 from .aee.state_store import ScriptStateStore
+from .contracts.evidence_layout import dir_sha256_and_size as _contract_dir_sha256_and_size
 
 try:
     from backend.agent.aee.paths import (
@@ -802,19 +802,11 @@ class EventUploader:
     def _dir_sha256_and_size(root: Path) -> tuple[str, int]:
         """目录 sha256 与字节总量，单次遍历同时取得（#3829）。
 
-        REMOTE 补丁要报中心侧实际字节，但不能再走一遍目录——这里把计数
-        并进 ``_dir_sha256`` 原有的 rglob + 读文件循环。
+        REMOTE 补丁要报中心侧实际字节。算法与 B8 G6 证据区共用
+        ``contracts.evidence_layout.dir_sha256_and_size``——上传自校验与
+        控制面回执复核必须得到同一个哈希。
         """
-        h = hashlib.sha256()
-        size = 0
-        for path in sorted(root.rglob("*")):
-            if path.is_file():
-                h.update(str(path.relative_to(root)).encode())
-                with open(path, "rb") as f:
-                    for chunk in iter(lambda: f.read(65536), b""):
-                        h.update(chunk)
-                        size += len(chunk)
-        return h.hexdigest(), size
+        return _contract_dir_sha256_and_size(root)
 
     @staticmethod
     def _dir_sha256(root: Path) -> str:
