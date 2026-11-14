@@ -167,6 +167,7 @@ interface ExpandableDeviceTableProps {
   onClearProjectFilter?: () => void;
   extraToolbarControls?: ReactNode;
   extraHeaderRight?: ReactNode;
+  onClearQuickView?: () => void;
   onResetAllFilters?: () => void;
   onNavigateToHost?: (hostName: string) => void;
 }
@@ -207,6 +208,7 @@ export function ExpandableDeviceTable({
   onClearProjectFilter,
   extraToolbarControls,
   extraHeaderRight,
+  onClearQuickView,
   onResetAllFilters,
   onNavigateToHost,
 }: ExpandableDeviceTableProps) {
@@ -531,22 +533,6 @@ export function ExpandableDeviceTable({
       {(() => {
         // 只为「更多筛选」内部专属且未在顶层直接展示的条件渲染 Chip，避免与搜索框 / 下拉 / 快捷视图重复
         const hiddenChips: ActiveFilterChip[] = [];
-        if (productFilter !== 'all') {
-          hiddenChips.push({
-            key: 'product',
-            label: 'product',
-            value: productFilter,
-            onRemove: () => setProductFilter('all'),
-          });
-        }
-        if (versionFilter !== 'all') {
-          hiddenChips.push({
-            key: 'version',
-            label: '版本',
-            value: versionFilter,
-            onRemove: () => setVersionFilter('all'),
-          });
-        }
         if (includeStale && onIncludeStaleChange) {
           hiddenChips.push({
             key: 'stale',
@@ -564,12 +550,8 @@ export function ExpandableDeviceTable({
           });
         }
 
-        // 只统计仅存在于「更多筛选」内的条件，避免与顶层「仅看有标签」快捷视图双重亮起
-        const moreActiveCount =
-          (productFilter !== 'all' ? 1 : 0) +
-          (versionFilter !== 'all' ? 1 : 0) +
-          (includeStale ? 1 : 0) +
-          (includeRetired ? 1 : 0);
+        // 只统计仅存在于「更多筛选」内的条件（陈旧 / 退役）
+        const moreActiveCount = (includeStale ? 1 : 0) + (includeRetired ? 1 : 0);
 
         const hasAnyActiveFilter =
           statusFilter !== 'all' ||
@@ -609,6 +591,10 @@ export function ExpandableDeviceTable({
             active: statusFilter === 'all' && !taggedOnly,
             tone: 'default',
             onClick: () => {
+              if (onClearQuickView) {
+                onClearQuickView();
+                return;
+              }
               setStatusFilter('all');
               setTaggedOnly(false);
             },
@@ -649,7 +635,7 @@ export function ExpandableDeviceTable({
                 onChange={setSearchQuery}
                 placeholder="搜索序列号 / 型号 / product / 版本 / 主机 / 标签..."
                 ariaLabel="搜索设备"
-                className="flex-1 sm:max-w-md"
+                className="flex-1 min-w-[200px] sm:max-w-xs"
               />
               {extraToolbarControls}
               <SearchableSelect
@@ -660,7 +646,7 @@ export function ExpandableDeviceTable({
                 searchPlaceholder="输入主机名搜索..."
                 icon={<Server />}
                 ariaLabel="按所属主机筛选"
-                className="w-full sm:w-44"
+                className="w-full sm:w-36"
                 testId="device-host-filter"
               />
               <SearchableSelect
@@ -671,34 +657,30 @@ export function ExpandableDeviceTable({
                 searchPlaceholder="输入型号搜索..."
                 icon={<Smartphone />}
                 ariaLabel="按型号筛选"
-                className="w-full sm:w-40"
+                className="w-full sm:w-36"
                 testId="device-model-filter"
               />
+              <SearchableSelect
+                value={productFilter}
+                onChange={setProductFilter}
+                options={productOptions.map((p) => ({ value: p, label: p }))}
+                allLabel="全部 product"
+                searchPlaceholder="输入 product 搜索..."
+                ariaLabel="按 product 筛选"
+                className="w-full sm:w-36"
+                testId="device-product-filter"
+              />
+              <SearchableSelect
+                value={versionFilter}
+                onChange={setVersionFilter}
+                options={versionOptions.map((v) => ({ value: v, label: v }))}
+                allLabel="全部版本"
+                searchPlaceholder="输入版本号搜索..."
+                ariaLabel="按版本筛选"
+                className="w-full sm:w-36"
+                testId="device-version-filter"
+              />
               <MoreFiltersPopover activeCount={moreActiveCount} testId="devices-more-filters">
-                <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-foreground">Product</label>
-                  <SearchableSelect
-                    value={productFilter}
-                    onChange={setProductFilter}
-                    options={productOptions.map((p) => ({ value: p, label: p }))}
-                    allLabel="全部 product"
-                    searchPlaceholder="输入 product 搜索..."
-                    ariaLabel="按 product 筛选"
-                    className="w-full"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-foreground">系统版本</label>
-                  <SearchableSelect
-                    value={versionFilter}
-                    onChange={setVersionFilter}
-                    options={versionOptions.map((v) => ({ value: v, label: v }))}
-                    allLabel="全部版本"
-                    searchPlaceholder="输入版本号搜索..."
-                    ariaLabel="按版本筛选"
-                    className="w-full"
-                  />
-                </div>
                 {onIncludeStaleChange && (
                   <label className="flex cursor-pointer items-center justify-between rounded-lg border border-border px-3 py-2 text-xs hover:bg-muted/30">
                     <span>显示陈旧设备</span>

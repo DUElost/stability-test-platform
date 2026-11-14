@@ -145,6 +145,7 @@ interface ExpandableHostTableProps {
   showRetired?: boolean;
   onShowRetiredChange?: (value: boolean) => void;
   onResetAllFilters?: () => void;
+  onClearQuickView?: () => void;
   onNavigateToDevices?: (hostId: string | number) => void;
   onFilteredHostsChange?: (hosts: HostTableData[]) => void;
   extraHeaderRight?: ReactNode;
@@ -316,6 +317,7 @@ export function ExpandableHostTable({
   showRetired,
   onShowRetiredChange,
   onResetAllFilters,
+  onClearQuickView,
   onNavigateToDevices,
   onFilteredHostsChange,
   extraHeaderRight,
@@ -754,6 +756,10 @@ export function ExpandableHostTable({
               active: isAllQuickView,
               tone: 'default',
               onClick: () => {
+                if (onClearQuickView) {
+                  onClearQuickView();
+                  return;
+                }
                 setStatusFilter('all');
                 setHealthFilter('all');
                 setSyncFilter('all');

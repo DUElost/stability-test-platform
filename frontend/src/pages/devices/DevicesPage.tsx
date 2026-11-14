@@ -561,6 +561,7 @@ export default function DevicesPage() {
           }
           taggedOnly={taggedOnly}
           onTaggedOnlyChange={(val) => updateParams({ tagged: val }, { resetPage: true })}
+          onClearQuickView={() => updateParams({ status: undefined, tagged: undefined }, { resetPage: true })}
           currentPage={currentPage}
           onPageChange={(page) => updateParams({ page: page <= 1 ? undefined : page })}
           includeStale={includeStale}

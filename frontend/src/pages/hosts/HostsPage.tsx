@@ -925,6 +925,7 @@ export default function HostsPage() {
         onSyncFilterChange={(val) => updateParams({ sync: val === 'all' ? undefined : val })}
         showRetired={showRetired}
         onShowRetiredChange={setShowRetired}
+        onClearQuickView={() => updateParams({ status: undefined, health: undefined, sync: undefined })}
         onResetAllFilters={() => clearParams(['status', 'q', 'health', 'sync', 'retired'])}
         onNavigateToDevices={(hostId) => navigate(`/devices?host=${hostId}`)}
         onHotUpdate={isAdmin ? handleHotUpdate : undefined}
