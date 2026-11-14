@@ -251,8 +251,9 @@ def prepare_local_cache(fw_dir: str, cache_dir: str, progress: Progress) -> Tupl
             raise RuntimeError(f"required firmware file missing: {src}")
         dst = os.path.join(local_fw, rel)
         if not os.path.isfile(dst) or os.path.getsize(dst) != os.path.getsize(src):
-            shutil.copyfile(src, dst + ".tmp")
-            os.rename(dst + ".tmp", dst)
+            tmp_file = f"{dst}.tmp.{os.getpid()}"
+            shutil.copyfile(src, tmp_file)
+            os.rename(tmp_file, dst)
             copied += 1
 
     for rel in RAW_FW_FILES:
@@ -261,8 +262,9 @@ def prepare_local_cache(fw_dir: str, cache_dir: str, progress: Progress) -> Tupl
             raise RuntimeError(f"required raw firmware file missing: {src}")
         dst = os.path.join(local_raw, rel)
         if not os.path.isfile(dst) or os.path.getsize(dst) != os.path.getsize(src):
-            shutil.copyfile(src, dst + ".tmp")
-            os.rename(dst + ".tmp", dst)
+            tmp_file = f"{dst}.tmp.{os.getpid()}"
+            shutil.copyfile(src, tmp_file)
+            os.rename(tmp_file, dst)
             copied += 1
 
     sparse_super = os.path.join(fw_dir, "super.img")
@@ -282,7 +284,7 @@ def prepare_local_cache(fw_dir: str, cache_dir: str, progress: Progress) -> Tupl
             else src_super
         )
         progress.stamp(stage="cache-trim-super", target_mb=round(trimmed_size / (1024 * 1024), 1))
-        tmp_target = cached_super + ".tmp"
+        tmp_target = f"{cached_super}.tmp.{os.getpid()}"
         remaining = trimmed_size
         buf_sz = 16 * 1024 * 1024
         with open(copy_src, "rb") as fin, open(tmp_target, "wb") as fout:
@@ -484,12 +486,11 @@ def run(args: dict, serial: str, progress: Progress, log: list) -> dict:
             }
         }
 
-    local_fw, cached_super = prepare_local_cache(fw_dir, cache_dir, progress)
-    cmd = build_spd_dump_args(spd_dump_bin, local_fw, cached_super)
-
     lock_timeout = int(args.get("lock_timeout_seconds", 7200))
     lock_fd = acquire_host_lock(progress, timeout_seconds=lock_timeout)
     try:
+        local_fw, cached_super = prepare_local_cache(fw_dir, cache_dir, progress)
+        cmd = build_spd_dump_args(spd_dump_bin, local_fw, cached_super)
         flash_seconds = run_spd_dump(cmd, adb_bin, serial, progress, log)
     finally:
         try:

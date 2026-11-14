@@ -139,3 +139,33 @@ def test_main_missing_serial_outputs_contract_json() -> None:
     data = json.loads(proc.stdout.strip())
     assert data["success"] is False
     assert "STP_DEVICE_SERIAL" in data["error_message"]
+
+
+def test_run_acquires_host_lock_before_preparing_local_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    mod = _load_module()
+    order: list[str] = []
+
+    monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: "/usr/local/bin/spd_dump")
+    monkeypatch.setattr(mod, "resolve_firmware_images_dir", lambda *_a: str(tmp_path))
+    monkeypatch.setattr(mod, "getprop", lambda *_a: "userdebug")
+
+    lock_file = tmp_path / "host.lock"
+
+    def fake_acquire(progress, timeout_seconds=7200):
+        order.append("acquire_host_lock")
+        return os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666)
+
+    def fake_prepare(fw_dir, cache_dir, progress):
+        order.append("prepare_local_cache")
+        return str(tmp_path), str(tmp_path / "super.img")
+
+    monkeypatch.setattr(mod, "acquire_host_lock", fake_acquire)
+    monkeypatch.setattr(mod, "prepare_local_cache", fake_prepare)
+    monkeypatch.setattr(mod, "build_spd_dump_args", lambda *_a: ["spd_dump"])
+    monkeypatch.setattr(mod, "run_spd_dump", lambda *_a: 1.0)
+    monkeypatch.setattr(mod, "wait_boot_completed", lambda *_a: 1.0)
+
+    res = mod.run({"verify_root": False}, "SN1", mod.Progress(), [])
+    assert res["metrics"]["duration_seconds"] >= 0
+    assert order == ["acquire_host_lock", "prepare_local_cache"]
