@@ -1156,6 +1156,10 @@ class PipelineEngine:
         self._footprint_families: set[str] = set()
         self._disarm_results: dict[str, dict] = {}
         self._lease_lost_for_disarm: bool = False
+        # #3972: execute_registered() reads this on outcome=None (debt/worker
+        # Engine may never enter _execute_step_with_retry). Initialize with the
+        # same default the retry loop resets to (line ~1892).
+        self._last_step_error: str = ""
         self._patrol_cycle_index = 0
         self._step_trace_uploader = step_trace_uploader  # #483
 
