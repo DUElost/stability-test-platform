@@ -545,21 +545,21 @@ export function ExpandableDeviceTable({
               ></TableHead>
               <TableHead
                 className={cn(
-                  'sticky z-30 min-w-[220px] max-w-[260px] bg-muted font-medium shadow-[2px_0_4px_-2px_rgba(0,0,0,0.08)]',
+                  'sticky z-30 min-w-[180px] max-w-[230px] bg-muted font-medium shadow-[2px_0_4px_-2px_rgba(0,0,0,0.08)]',
                   selectable ? 'left-20' : 'left-10',
                 )}
               >
                 设备
               </TableHead>
-              <TableHead className="min-w-[100px] font-medium">版本</TableHead>
-              <TableHead className="min-w-[96px] font-medium">状态</TableHead>
-              <TableHead className="min-w-[110px] font-medium">电量</TableHead>
-              <TableHead className="min-w-[80px] font-medium">温度</TableHead>
-              {hasDiskData && <TableHead className="min-w-[130px] font-medium">存储</TableHead>}
-              {hasNetworkData && <TableHead className="min-w-[100px] font-medium">网络</TableHead>}
-              <TableHead className="min-w-[120px] font-medium">标签</TableHead>
-              <TableHead className="min-w-[140px] font-medium">所属主机</TableHead>
-              <TableHead className="min-w-[160px] font-medium text-right">最后活跃</TableHead>
+              <TableHead className="min-w-[80px] font-medium">版本</TableHead>
+              <TableHead className="min-w-[132px] font-medium">状态</TableHead>
+              <TableHead className="min-w-[96px] font-medium">电量</TableHead>
+              <TableHead className="min-w-[68px] font-medium">温度</TableHead>
+              {hasDiskData && <TableHead className="min-w-[116px] font-medium">存储</TableHead>}
+              {hasNetworkData && <TableHead className="min-w-[72px] font-medium">网络</TableHead>}
+              <TableHead className="min-w-[100px] font-medium">标签</TableHead>
+              <TableHead className="min-w-[108px] font-medium">所属主机</TableHead>
+              <TableHead className="min-w-[136px] font-medium text-right">最后活跃</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -606,7 +606,7 @@ export function ExpandableDeviceTable({
                     </TableCell>
                     <TableCell
                       className={cn(
-                        'sticky z-10 min-w-[220px] max-w-[260px] bg-card px-3 py-1.5 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.08)]',
+                        'sticky z-10 min-w-[180px] max-w-[230px] bg-card px-3 py-1.5 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.08)]',
                         selectable ? 'left-20' : 'left-10',
                       )}
                     >
@@ -657,14 +657,14 @@ export function ExpandableDeviceTable({
                       {device.build_display_id || '-'}
                     </TableCell>
                     <TableCell className="px-3 py-1.5">
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex flex-wrap items-center gap-1">
                         <StatusBadge kind="device-ui" status={device.status} size="sm" />
                         {/* ADR-0057 D4 第 4 面（#2962 B）：退役是人工确认的终态，
                             与 status 正交（心跳不改写 status），必须独立可见。 */}
                         {device.retired_at && (
                           <span
                             data-testid={`device-retired-badge-${device.id}`}
-                            className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground"
+                            className="shrink-0 whitespace-nowrap rounded-full bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground"
                             title={`已退役${device.retired_at ? `（${device.retired_at.slice(0, 10)}）` : ''}`}
                           >
                             已退役
@@ -675,7 +675,7 @@ export function ExpandableDeviceTable({
                           <span
                             data-testid={`device-usb-presence-${device.id}`}
                             className={cn(
-                              'shrink-0 rounded-full px-1.5 py-0.5 text-[11px]',
+                              'shrink-0 whitespace-nowrap rounded-full px-1.5 py-0.5 text-[11px]',
                               USB_PRESENCE_LABEL[device.usb_presence.state]?.className ?? 'bg-muted text-muted-foreground',
                               !device.usb_presence.host_online && 'opacity-60',
                             )}
@@ -688,7 +688,7 @@ export function ExpandableDeviceTable({
                         {!device.retired_at && device.is_stale && (
                           <span
                             data-testid={`device-stale-badge-${device.id}`}
-                            className="shrink-0 rounded-full bg-warning/20 px-1.5 py-0.5 text-[11px] text-warning"
+                            className="shrink-0 whitespace-nowrap rounded-full bg-warning/20 px-1.5 py-0.5 text-[11px] text-warning"
                             title="陈旧：OFFLINE 且超过 7 天未上报，已从默认列表/容量中隐藏"
                           >
                             陈旧
@@ -697,7 +697,7 @@ export function ExpandableDeviceTable({
                         {!device.retired_at && device.retire_suggested && (
                           <span
                             data-testid={`device-retire-suggested-${device.id}`}
-                            className="shrink-0 rounded-full bg-destructive/15 px-1.5 py-0.5 text-[11px] text-destructive"
+                            className="shrink-0 whitespace-nowrap rounded-full bg-destructive/15 px-1.5 py-0.5 text-[11px] text-destructive"
                             title="超过 30 天未上报：建议人工确认后退役（只提示，不动作）"
                           >
                             建议退役
@@ -707,10 +707,10 @@ export function ExpandableDeviceTable({
                     </TableCell>
                     <TableCell className="px-3 py-1.5">
                       {device.battery_level != null ? (
-                        <div className="flex items-center gap-2" title="最近一次上报电量">
+                        <div className="flex items-center gap-1.5" title="最近一次上报电量">
                           <Progress
                             value={device.battery_level}
-                            className="h-2 w-14"
+                            className="h-2 w-10"
                             indicatorClassName={resourceUsageBgClass(100 - device.battery_level)}
                           />
                           <span className={cn(
@@ -740,12 +740,12 @@ export function ExpandableDeviceTable({
                       <TableCell className="px-3 py-1.5">
                         {disk ? (
                           <div
-                            className="flex items-center gap-2"
+                            className="flex items-center gap-1.5"
                             title={`已用 ${formatBytes(disk.used)} / 共 ${formatBytes(disk.total)}（最近一次 df /data 上报）`}
                           >
                             <Progress
                               value={disk.pct}
-                              className="h-2 w-14"
+                              className="h-2 w-10"
                               indicatorClassName={resourceUsageBgClass(disk.pct)}
                             />
                             <span className={cn('font-mono text-xs whitespace-nowrap', resourceUsageTextClass(disk.pct))}>
@@ -776,7 +776,7 @@ export function ExpandableDeviceTable({
                     )}
                     <TableCell className="px-3 py-1.5">
                       {device.tags?.length ? (
-                        <div className="flex max-w-[220px] items-center gap-1" title={device.tags.join(', ')}>
+                        <div className="flex max-w-[160px] items-center gap-1" title={device.tags.join(', ')}>
                           {device.tags.slice(0, 2).map((tag) => (
                             <span
                               key={tag}
@@ -796,7 +796,7 @@ export function ExpandableDeviceTable({
                         <span className="text-muted-foreground/40">—</span>
                       )}
                     </TableCell>
-                    <TableCell className="px-3 py-1.5 text-muted-foreground text-sm">
+                    <TableCell className="max-w-[140px] truncate px-3 py-1.5 text-sm text-muted-foreground" title={device.host_name || undefined}>
                       {device.host_name || '-'}
                     </TableCell>
                     <TableCell className="px-3 py-1.5 text-right text-xs text-muted-foreground whitespace-nowrap">
