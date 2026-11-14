@@ -400,11 +400,13 @@ export function ExpandableDeviceTable({
         >
           <div className="flex items-start justify-between gap-2">
             <p className={STAT.label}>测试中</p>
-            <div className={cn(STAT.iconWell, STAT.iconWellPrimary)}>
-              <Zap className={ENTITY_STATUS_COLORS.device.testing} />
+            <div className={cn(STAT.iconWell, stats.testing > 0 ? STAT.iconWellPrimary : STAT.iconWellMuted)}>
+              <Zap className={stats.testing > 0 ? ENTITY_STATUS_COLORS.device.testing : 'text-muted-foreground'} />
             </div>
           </div>
-          <div className={cn(STAT.value, 'text-2xl', ENTITY_STATUS_COLORS.device.testing)}>{stats.testing}</div>
+          <div className={cn(STAT.value, 'text-2xl', stats.testing > 0 ? ENTITY_STATUS_COLORS.device.testing : 'text-muted-foreground')}>
+            {stats.testing}
+          </div>
         </button>
         <button
           type="button"
@@ -436,11 +438,13 @@ export function ExpandableDeviceTable({
         >
           <div className="flex items-start justify-between gap-2">
             <p className={STAT.label}>错误</p>
-            <div className={cn(STAT.iconWell, STAT.iconWellDestructive)}>
-              <AlertTriangle className={ENTITY_STATUS_COLORS.device.error} />
+            <div className={cn(STAT.iconWell, stats.error > 0 ? STAT.iconWellDestructive : STAT.iconWellMuted)}>
+              <AlertTriangle className={stats.error > 0 ? ENTITY_STATUS_COLORS.device.error : 'text-muted-foreground'} />
             </div>
           </div>
-          <div className={cn(STAT.value, 'text-2xl', ENTITY_STATUS_COLORS.device.error)}>{stats.error}</div>
+          <div className={cn(STAT.value, 'text-2xl', stats.error > 0 ? ENTITY_STATUS_COLORS.device.error : 'text-muted-foreground')}>
+            {stats.error}
+          </div>
         </button>
       </div>
 
@@ -638,7 +642,7 @@ export function ExpandableDeviceTable({
                           </span>
                         ) : (
                           <span
-                            className="shrink-0 rounded-full bg-warning/20 px-1.5 py-0.5 font-mono text-[11px] text-warning"
+                            className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground"
                             title="型号未映射：在 /projects 添加型号成员"
                           >
                             未映射
@@ -772,11 +776,12 @@ export function ExpandableDeviceTable({
                     )}
                     <TableCell className="px-3 py-1.5">
                       {device.tags?.length ? (
-                        <div className="flex max-w-[180px] items-center gap-1" title={device.tags.join(', ')}>
+                        <div className="flex max-w-[220px] items-center gap-1" title={device.tags.join(', ')}>
                           {device.tags.slice(0, 2).map((tag) => (
                             <span
                               key={tag}
-                              className="max-w-[72px] truncate rounded-full bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground"
+                              title={tag}
+                              className="max-w-[140px] truncate rounded-full bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground"
                             >
                               {tag}
                             </span>
@@ -812,7 +817,7 @@ export function ExpandableDeviceTable({
                             isAdmin={isAdmin}
                           />
                         </div>
-                        <div className="grid grid-cols-1 md:grid-cols-6 gap-4">
+                        <div className="grid grid-cols-1 items-start gap-4 md:grid-cols-3 xl:grid-cols-6">
                           {/* Device Info */}
                           <div className="bg-card rounded-lg border border-border p-3">
                             <div className="flex items-center gap-2 mb-2">
