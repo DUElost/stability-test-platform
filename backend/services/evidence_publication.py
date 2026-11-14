@@ -535,6 +535,43 @@ def _destination_present(dest: Path) -> Optional[tuple[str, int]]:
     return dir_sha256_and_size(dest)
 
 
+def _publish_if_owner(
+    *,
+    publication_id: int,
+    attempt: int,
+    claim_token: str,
+    temp: Path,
+    dest: Path,
+) -> str:
+    """在认领行锁内发布正式目录；接管与发布互斥。
+
+    返回 published / existing / stale。stale 表示认领已被接管，调用方不得
+    再创建/覆盖正式目录、更新台账或触发交付刷新。存在性检查与 rename 都在
+    FOR UPDATE 行锁内完成，覆盖「校验完成到 rename」的窗口。
+    """
+    with SessionLocal() as db:
+        row = facts.get_evidence_publication(db, publication_id=publication_id, for_update=True)
+        if (
+            row is None
+            or int(row.attempts or 0) != int(attempt)
+            or str(row.copy_claim_token or "") != str(claim_token)
+            or row.state not in {
+                facts.PUBLICATION_STATE_PENDING, facts.PUBLICATION_STATE_RETRYING,
+            }
+        ):
+            db.rollback()
+            return "stale"
+        if os.path.lexists(dest):
+            db.rollback()
+            return "existing"
+        os.rename(temp, dest)
+        db.commit()
+    logger.info(
+        "evidence_copy_published publication=%d attempt=%d", publication_id, attempt,
+    )
+    return "published"
+
+
 def copy_spill_publication(publication_id: int) -> None:
     """中心侧复制一条 SPILL 代表的已校验溢出副本（D8 第 2 条）。
 
@@ -617,7 +654,13 @@ def copy_spill_publication(publication_id: int) -> None:
             temp_checksum, temp_size = dir_sha256_and_size(temp)
             if (src_checksum, src_size) != (temp_checksum, temp_size):
                 raise EvidenceLayoutError("copy verification failed")
-            if os.path.lexists(dest):
+            status = _publish_if_owner(
+                publication_id=publication_id, attempt=attempts,
+                claim_token=claim_token, temp=temp, dest=dest,
+            )
+            if status == "stale":
+                return
+            if status == "existing":
                 existing = _destination_present(dest)
                 if existing == (src_checksum, src_size):
                     if _finish_copy_verified(publication_id, src_checksum, src_size, attempt=attempts, claim_token=claim_token):
@@ -625,7 +668,6 @@ def copy_spill_publication(publication_id: int) -> None:
                     return
                 _finish_copy_failure(publication_id, _REASON_DESTINATION_CONFLICT, terminal=True, attempt=attempts, claim_token=claim_token)
                 return
-            os.rename(temp, dest)
         finally:
             if temp.exists():
                 shutil.rmtree(temp, ignore_errors=True)

@@ -177,6 +177,29 @@ evidence_publication 以 (实际 PlanRun, 平台, 代表 DLE) 为唯一身份，
   返修后同一组 6 passed。Agent 缺失/哈希不符/symlink 三个终态探针与 801 条意图
   翻页探针均通过；R4 迟到结果与跨重启预算、R3 路由与 201 条恢复保持通过。
 
+
+
+### 第 6 轮复核返修（正式落盘与复制接管竞态，反例基线 13aec349f）
+
+- **问题**：R5 的认领校验发生在 `_finish_copy_verified`，而正式目录 rename 在其之前。
+  租约到期后新任务可先接管并完成（例如目标缺失 → FAILED/5），旧任务随后仍把
+  自己的临时目录 rename 成正式目录：台账已是 FAILED / 已被接管，但正式目录被
+  失去认领的任务创建；目标已存在时也存在覆盖窗口。
+- **修复**：新增 `_publish_if_owner`。正式目录的存在性检查与 `os.rename` 都在
+  `SELECT ... FOR UPDATE` 行锁内完成，并在锁内同时核对 attempts、`copy_claim_token`
+  与状态；接管同样需要该行锁换令牌，因此「校验完成 → rename」与接管互斥。
+  返回 `stale` 时任务直接退出，不创建/覆盖正式目录、不更新台账、不刷新交付；
+  `existing` 时由 `_finish_copy_verified` 在锁内收敛；`published` 后照常登记。
+- **两种顺序**：
+  1. 接管先完成（目标缺失 → FAILED/5）：旧任务恢复后 `_publish_if_owner` 得到
+     `stale`，正式目录不存在；基线会由旧任务 rename 创建正式目录。
+  2. 正式目录先落盘、台账提交前中断：旧任务已 rename 并停在
+     `_finish_copy_verified`；租约到期后的新任务核验既有目标，登记
+     VERIFIED/attempts=5 且刷新一次，不重新拷贝；旧任务的迟到登记因令牌不匹配
+     被忽略。
+- 保留：目标冲突拒绝覆盖、源与 `DLE.remote_path` 保留、Agent 回执恢复、R3/R4
+  的迟到结果与预算恢复判据。
+
 ## Alternatives
 
 - **把证据目的路径写回 DLE.remote_path**：否决。溢出补扫与留存以该字段定位
@@ -273,6 +296,20 @@ evidence_publication 以 (实际 PlanRun, 平台, 代表 DLE) 为唯一身份，
   issue_fact_store、artifact/evidence layout、upload mark、G4、storage families、
   Agent 导入边界）；check:quick 16 gates（CI 同口径 PR base）；check_pr_migrate
   [OK]（基线 5 项未变，新增列由同一未合入 migration 提供）；lint-imports 5 kept。
+
+
+- R6 反例与返修（13aec349f → 本 HEAD，同一组探针）：
+  - `test_lost_claim_cannot_create_formal_directory_after_takeover`：基线
+    FAILED（`失去认领的旧任务创建了正式目录`）→ 返修 PASS；断言 FAILED/5、
+    正式目录不存在、刷新 0、源与 remote_path 保留。
+  - `test_published_destination_before_ledger_is_recovered_without_recopy`：
+    基线 PASS（R5 已支持），返修 PASS；断言 VERIFIED/5、刷新恰 1 次、
+    目标未变、恢复路径未调用复制。
+- R6 回归：G6 Agent 21 passed、G6 服务 31 passed、R5 API 2 passed；定向套件
+  209 passed（含 R3 路由/201 条、801 条意图、R4 迟到结果/跨重启预算、shadow、
+  scan_scope、issue_fact_store、artifact/evidence layout、upload mark、G4、
+  storage families、Agent 导入边界）；check:quick 16 gates（CI 同口径 PR base）；
+  lint-imports 5 kept。迁移未变（R5 的 copy_claim_token 列）。
 
 
 ## Revisit

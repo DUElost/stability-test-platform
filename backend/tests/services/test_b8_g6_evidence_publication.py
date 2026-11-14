@@ -1016,3 +1016,142 @@ def test_planner_audit_landed_fifth_copy_is_taken_over_once_without_recopy(
     assert stored.attempts == 5
     assert ep.dir_sha256_and_size(destination) == ep.dir_sha256_and_size(source)
     assert len(refreshes) == 1, "旧第 5 次任务与恢复接管合计只能刷新一次"
+
+def _seed_publish_race_case(db_session, sample_host, store, *, attempts=4):
+    _plan_run(db_session)
+    _dedup_first(db_session)
+    source = store / "devices" / "42" / str(uuid4()) / EVENT
+    source.mkdir(parents=True)
+    (source / "main.dbg").write_bytes(b"old")
+    dle = _dle(db_session, sample_host.id, state="PRUNED", remote_path=str(source))
+    facts.record_spill_ledger_entry(
+        db_session, plan_run_id=42, platform="mtk", dle_id=dle.id,
+        size_bytes=3, spilled_at=datetime.now(timezone.utc),
+    )
+    _selected(db_session, dle)
+    ep.ensure_partition_publications(db_session, plan_run_id=42, platform="mtk")
+    row = _publication(db_session)[0]
+    row.attempts = attempts
+    row.next_attempt_at = None
+    publication_id = row.id
+    rel_path = row.destination_rel_path
+    dle_id = dle.id
+    source_path = str(source)
+    db_session.commit()
+    return publication_id, source, store / rel_path, source_path, dle_id
+
+
+def test_lost_claim_cannot_create_formal_directory_after_takeover(
+    db_session, sample_host, store, monkeypatch,
+):
+    """接管先完成（目标缺失 → FAILED/5）后，旧任务不得再落盘正式目录。"""
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event, current_thread
+
+    publication_id, source, destination, source_path, dle_id = _seed_publish_race_case(
+        db_session, sample_host, store, attempts=4,
+    )
+    clock = [datetime.now(timezone.utc)]
+    monkeypatch.setattr(ep, "_utcnow", lambda: clock[0])
+    old_copied = Event()
+    allow_old = Event()
+    main_thread = current_thread()
+    real_copy = ep.copytree_no_symlinks
+    refreshes = []
+
+    def copy_tree(src, temp, **kwargs):
+        result = real_copy(src, temp, **kwargs)
+        if current_thread() is not main_thread:
+            old_copied.set()
+            assert allow_old.wait(8)
+        return result
+
+    def run_old_copy():
+        ep.copy_spill_publication(publication_id)
+
+    monkeypatch.setattr(ep, "copytree_no_symlinks", copy_tree)
+    monkeypatch.setattr(
+        ep, "refresh_delivery_and_archive",
+        lambda *args, **kwargs: refreshes.append((args, kwargs)),
+    )
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        old = pool.submit(run_old_copy)
+        try:
+            assert old_copied.wait(8)
+            clock[0] += timedelta(seconds=ep._COPY_LEASE_SECONDS + 1)
+            ep.copy_spill_publication(publication_id)
+        finally:
+            allow_old.set()
+        old.result(timeout=8)
+
+    db_session.expire_all()
+    stored = facts.get_evidence_publication(db_session, publication_id=publication_id)
+    assert stored.state == facts.PUBLICATION_STATE_FAILED
+    assert stored.attempts == 5
+    assert stored.failure_reason == ep._REASON_COPY_FAILED
+    assert not destination.exists(), "失去认领的旧任务创建了正式目录"
+    assert refreshes == []
+    assert source.is_dir()
+    dle = facts.get_device_log_event(db_session, dle_id=dle_id)
+    assert dle.remote_path == source_path
+
+
+def test_published_destination_before_ledger_is_recovered_without_recopy(
+    db_session, sample_host, store, monkeypatch,
+):
+    """正式目录先落盘、台账提交前中断：新任务核验既有目标并登记 VERIFIED/5。"""
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event, current_thread
+
+    publication_id, source, destination, source_path, dle_id = _seed_publish_race_case(
+        db_session, sample_host, store, attempts=4,
+    )
+    clock = [datetime.now(timezone.utc)]
+    monkeypatch.setattr(ep, "_utcnow", lambda: clock[0])
+    old_paused = Event()
+    allow_old = Event()
+    main_thread = current_thread()
+    real_finish = ep._finish_copy_verified
+    refreshes = []
+
+    def finish_verified(*args, **kwargs):
+        if current_thread() is not main_thread:
+            old_paused.set()
+            assert allow_old.wait(8)
+        return real_finish(*args, **kwargs)
+
+    def run_old_copy():
+        ep.copy_spill_publication(publication_id)
+
+    monkeypatch.setattr(ep, "_finish_copy_verified", finish_verified)
+    monkeypatch.setattr(
+        ep, "refresh_delivery_and_archive",
+        lambda *args, **kwargs: refreshes.append((args, kwargs)),
+    )
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        old = pool.submit(run_old_copy)
+        try:
+            assert old_paused.wait(8)
+            assert destination.is_dir(), "旧任务应在暂停前完成正式目录发布"
+            clock[0] += timedelta(seconds=ep._COPY_LEASE_SECONDS + 1)
+            monkeypatch.setattr(
+                ep, "copytree_no_symlinks",
+                lambda *args, **kwargs: (_ for _ in ()).throw(
+                    AssertionError("recovery must not recopy"),
+                ),
+            )
+            ep.copy_spill_publication(publication_id)
+        finally:
+            allow_old.set()
+        old.result(timeout=8)
+
+    db_session.expire_all()
+    stored = facts.get_evidence_publication(db_session, publication_id=publication_id)
+    assert stored.state == facts.PUBLICATION_STATE_VERIFIED
+    assert stored.attempts == 5
+    assert stored.checksum == ep.dir_sha256_and_size(source)[0]
+    assert (destination / "main.dbg").read_bytes() == b"old"
+    assert len(refreshes) == 1
+    assert source.is_dir()
+    dle = facts.get_device_log_event(db_session, dle_id=dle_id)
+    assert dle.remote_path == source_path
