@@ -519,7 +519,7 @@ export function ExpandableDeviceTable({
       <div ref={tableContainerRef} className="rounded-xl border border-border bg-card">
         <Table>
           <TableHeader>
-            <TableRow className="sticky top-0 z-20 bg-muted hover:bg-muted">
+            <TableRow className="sticky top-0 z-20 bg-muted/95 hover:bg-muted/95">
               {selectable && (
                 <TableHead className="sticky left-0 z-30 w-10 min-w-[40px] bg-muted px-3 py-2">
                   <input
