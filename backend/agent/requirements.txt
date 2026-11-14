@@ -18,7 +18,8 @@ python-socketio[client]>=5.17.0,<6.0
 jsonschema>=4.26.0,<5.0
 
 # 分域 Settings（ADR-0042 P1 试点：租约续期域；仅读 os.environ，env_file=None）
-pydantic-settings>=2.16.0,<3.0
+# pydantic-settings>=2.16.0 requires Python >=3.11; Ubuntu 22.04 agents run Python 3.10.
+pydantic-settings>=2.15.0,<2.16.0
 
 # Scan-Result-GT declares python=null, so its .xls exporter runs in this venv.
 # A system python3-xlwt installation is not visible to the Agent interpreter.

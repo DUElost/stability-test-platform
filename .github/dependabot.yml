@@ -90,6 +90,9 @@ updates:
       - dependency-name: "xlrd"
         versions: [">=3.0"]
         update-types: ["version-update:semver-major"]
+      # pydantic-settings>=2.16.0 dropped Python 3.10 (Ubuntu 22.04 agents)
+      - dependency-name: "pydantic-settings"
+        versions: [">=2.16.0"]
     groups:
       python-deps:
         patterns:
