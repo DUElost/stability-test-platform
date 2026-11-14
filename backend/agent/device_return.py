@@ -53,7 +53,7 @@ def execute_registered(engine: Any, family: str, mode: str, *, with_permit: bool
         raise PackageUnavailable("package_unavailable")
     if outcome is None:
         entry = make_disarm_result(result="not_executed", step_id=step["step_id"],
-                                   reason=engine._last_step_error or "execution_not_started")
+                                   reason=getattr(engine, "_last_step_error", "") or "execution_not_started")
         entry["evidence"] = {"script_name": ONBOARDED[family]["disarm_script"],
             "script_version": step["version"], "package_sha256": registration.package_sha256}
         return entry
