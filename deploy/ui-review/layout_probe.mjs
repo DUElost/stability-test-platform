@@ -163,15 +163,14 @@ async function main() {
     const report = { baseUrl, checks };
     console.log(JSON.stringify(report, null, 2));
 
-    // Hard gate on 1920x1080 desktop layout invariants
+    // Hard gate on both 1920x1080 and 1440x900 desktop layout invariants
     const hasFailures = report.checks.some(
       (c) =>
-        c.viewport.width === 1920 &&
-        (c.docOverflow > 1 ||
-          c.tableOverflows.length > 0 ||
-          c.iconIssuesCount > 0 ||
-          c.badgeIssuesCount > 0 ||
-          c.wrappedButtonsCount > 0),
+        c.docOverflow > 1 ||
+        c.tableOverflows.length > 0 ||
+        c.iconIssuesCount > 0 ||
+        c.badgeIssuesCount > 0 ||
+        c.wrappedButtonsCount > 0,
     );
     if (hasFailures) {
       process.exitCode = 1;
