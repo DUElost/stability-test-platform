@@ -104,3 +104,41 @@ def test_build_plan_marks_device_unique_entries_preserve(tmp_path, tool):
         assert by_id[fid]["partitions"] == [blocks[fid][0]], fid
     assert "preserve" not in by_id["BOOT"]
     assert by_id["BOOT"]["partitions"] == ["boot_a"]
+
+
+def test_parse_scheme_and_build_plan_capture_fdl_base_and_erases(tmp_path, tool):
+    xml = tmp_path / "P525AAN.xml"
+    xml.write_text(
+        "<BMAConfig><SchemeList><Scheme name='P525AAN'>"
+        "<File><ID>FDL</ID><Type>FDL</Type><Block><Base>0x65000800</Base><Size>0x0</Size></Block></File>"
+        "<File><ID>FDL2</ID><Type>NAND_FDL</Type><Block><Base>0x9EFFFE00</Base><Size>0x0</Size></Block></File>"
+        "<File><ID>EraseSPL</ID><Type>EraseFlash2</Type><Block id='splloader'><Base>0x0</Base></Block></File>"
+        "<File><ID>EraseMisc</ID><Type>EraseFlash2</Type><Block id='misc'><Base>0x0</Base></Block></File>"
+        "<File><ID>EraseMetadata</ID><Type>EraseFlash2</Type><Block id='metadata'/></File>"
+        "<File><ID>BOOT</ID><Type>CODE2</Type><Block id='boot_a'/></File>"
+        "</Scheme></SchemeList></BMAConfig>",
+        encoding="utf-8",
+    )
+    images = tmp_path / "images"
+    images.mkdir()
+    for fname in ("fdl1-sign.bin", "lk-fdl2-sign.bin", "boot.img"):
+        (images / fname).write_bytes(b"\x01\x02\x03\x04")
+
+    scheme = tool.parse_scheme(str(xml))
+    assert scheme["FDL"]["base"] == "0x65000800"
+    assert scheme["FDL2"]["base"] == "0x9EFFFE00"
+    assert "base" not in scheme["EraseMisc"]  # 0x0 ignored
+
+    pac = {
+        "entries": [
+            {"id": "FDL", "file": "fdl1-sign.bin", "size": 4, "type": 1},
+            {"id": "FDL2", "file": "lk-fdl2-sign.bin", "size": 4, "type": 1},
+            {"id": "BOOT", "file": "boot.img", "size": 4, "type": 1},
+        ]
+    }
+    plan = tool.build_plan(pac, str(images), scheme)
+    assert plan["fdl"] == {
+        "fdl1": {"file": "fdl1-sign.bin", "base": "0x65000800"},
+        "fdl2": {"file": "lk-fdl2-sign.bin", "base": "0x9EFFFE00"},
+    }
+    assert plan["erases"] == ["splloader", "misc", "metadata"]

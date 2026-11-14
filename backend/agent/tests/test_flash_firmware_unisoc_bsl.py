@@ -169,3 +169,129 @@ def test_run_acquires_host_lock_before_preparing_local_cache(tmp_path: Path, mon
     res = mod.run({"verify_root": False}, "SN1", mod.Progress(), [])
     assert res["metrics"]["duration_seconds"] >= 0
     assert order == ["acquire_host_lock", "prepare_local_cache"]
+
+
+def test_is_protected_partition_blocks_lte_and_nr_nv() -> None:
+    mod = _load_module()
+    for protected in (
+        "prodnv",
+        "calinv",
+        "miscdata",
+        "persist",
+        "splloader",
+        "nr_factorynv",
+        "nr_runtimenv1",
+        "nr_downloadnv_a",
+        "nr_deltanv_a",
+        "l_fixnv1_a",
+        "l_fixnv2_a",
+        "l_fixnv1_b",
+        "l_runtimenv1",
+        "l_runtimenv2",
+        "l_deltanv_a",
+        "l_deltanv_b",
+    ):
+        assert mod.is_protected_partition(protected) is True, protected
+
+    for writable in ("boot_a", "userdata", "super", "logo", "fbootlogo", "uboot_log", "metadata"):
+        assert mod.is_protected_partition(writable) is False, writable
+
+
+def test_build_spd_dump_args_reads_p525aa_plan_json(tmp_path: Path) -> None:
+    mod = _load_module()
+    fw_dir = tmp_path / "P525AA" / "v36" / "images"
+    fw_dir.mkdir(parents=True)
+    plan = {
+        "fdl": {
+            "fdl1": {"file": "fdl1-sign.bin", "base": "0x65000800"},
+            "fdl2": {"file": "lk-fdl2-sign.bin", "base": "0x9EFFFE00"},
+        },
+        "erases": ["splloader", "uboot_log", "l_runtimenv1", "misc", "sysdumpdb", "metadata"],
+        "entries": [
+            {"id": "FDL", "file": "fdl1-sign.bin", "sparse": False, "partitions": [], "flush_type": "FDL"},
+            {"id": "FDL2", "file": "lk-fdl2-sign.bin", "sparse": False, "partitions": [], "flush_type": "NAND_FDL"},
+            {"id": "SPLLoaderUFS", "file": "u-boot-spl-16k-ufs-sign.bin", "sparse": False, "partitions": ["splloader"], "flush_type": "UBOOT_LOADER2"},
+            {"id": "NV_LTE", "file": "lte_nv.bin", "sparse": False, "partitions": ["l_fixnv1_a"], "flush_type": "NV_COMM_SLOT", "preserve": True},
+            {"id": "Modem_LTE_DELTANV", "file": "lte_deltanv.bin", "sparse": False, "partitions": ["l_deltanv_a"], "flush_type": "CODE2", "preserve": True},
+            {"id": "ProdNV", "file": "prodnv.img", "sparse": False, "partitions": ["prodnv"], "flush_type": "CODE2", "preserve": True},
+            {"id": "Persist", "file": "persist.img", "sparse": False, "partitions": ["persist"], "flush_type": "YAFFS_IMG2", "preserve": True},
+            {"id": "PhaseCheck", "file": "miscdata.bin", "sparse": False, "partitions": ["miscdata"], "flush_type": "CODE2"},
+            {"id": "Super", "file": "super.img", "sparse": True, "raw": "raw/super.img", "partitions": ["super"], "flush_type": "YAFFS_IMG2"},
+            {"id": "Cache", "file": "cache.img", "sparse": True, "raw": "raw/cache.img", "partitions": ["cache"], "flush_type": "YAFFS_IMG2"},
+            {"id": "BlackBox", "file": "blackbox.img", "sparse": True, "raw": "raw/blackbox.img", "partitions": ["blackbox"], "flush_type": "YAFFS_IMG2"},
+            {"id": "UserData", "file": "userdata.img", "sparse": False, "partitions": ["userdata"], "flush_type": "YAFFS_IMG2", "preserve": True},
+            {"id": "UBOOTLoader", "file": "lk-sign.bin", "sparse": False, "partitions": ["uboot_a"], "flush_type": "UBOOT_LOADER2"},
+            {"id": "BootLogo", "file": "logo.bin", "sparse": False, "partitions": ["logo"], "flush_type": "CODE2"},
+            {"id": "Fastboot_Logo", "file": "unisoc_HD_720_1600.bmp", "sparse": False, "partitions": ["fbootlogo"], "flush_type": "CODE2"},
+            {"id": "BOOT", "file": "boot.img", "sparse": False, "partitions": ["boot_a"], "flush_type": "CODE2"},
+        ],
+    }
+    (fw_dir / "plan.json").write_text(json.dumps(plan), encoding="utf-8")
+
+    super_trimmed = tmp_path / "super_trimmed.img"
+    cmd = mod.build_spd_dump_args("/usr/local/bin/spd_dump", str(fw_dir), str(super_trimmed))
+
+    assert "0x65000800" in cmd
+    assert "0x9EFFFE00" in cmd
+    assert str(fw_dir / "lk-fdl2-sign.bin") in cmd
+    assert str(fw_dir / "unisoc_HD_720_1600.bmp") in cmd
+
+    erased = [cmd[i + 1] for i, tok in enumerate(cmd) if tok == "erase_part"]
+    assert erased == ["uboot_log", "misc", "sysdumpdb", "metadata"]
+
+    written = [(cmd[i + 1], cmd[i + 2]) for i, tok in enumerate(cmd) if tok == "write_part"]
+    written_parts = [p for p, _ in written]
+    assert written_parts[0] == "userdata"
+    assert written_parts[-3:] == ["cache", "blackbox", "super"]
+    assert ("logo", str(fw_dir / "logo.bin")) in written
+    assert ("fbootlogo", str(fw_dir / "unisoc_HD_720_1600.bmp")) in written
+    assert ("uboot_a", str(fw_dir / "lk-sign.bin")) in written
+    assert ("super", str(super_trimmed)) in written
+
+    for protected in ("splloader", "l_fixnv1_a", "l_runtimenv1", "l_deltanv_a", "prodnv", "persist", "miscdata"):
+        assert protected not in written_parts
+
+
+def test_prepare_local_cache_isolates_distinct_firmware_dirs(tmp_path: Path) -> None:
+    mod = _load_module()
+    cache_root = tmp_path / "ssd_cache"
+
+    def _make_fw(name: str, fdl2_name: str, fdl2_bytes: bytes, boot_bytes: bytes, sparse_blocks: int) -> Path:
+        fw = tmp_path / name / "images"
+        (fw / "raw").mkdir(parents=True)
+        (fw / "fdl1-sign.bin").write_bytes(b"fdl1")
+        (fw / fdl2_name).write_bytes(fdl2_bytes)
+        (fw / "userdata.img").write_bytes(b"\x00" * 4096)
+        (fw / "boot.img").write_bytes(boot_bytes)
+        sparse_super = fw / "super.img"
+        _make_sparse_image(sparse_super, [(0xCAC2, sparse_blocks, b"\x11\x11\x11\x11"), (0xCAC3, 5000, b"")])
+        raw_super = fw / "raw" / "super.img"
+        with open(raw_super, "wb") as fh:
+            fh.write(b"S" * (sparse_blocks * 4096))
+            fh.truncate(20 * 1024 * 1024)
+        plan = {
+            "fdl": {
+                "fdl1": {"file": "fdl1-sign.bin", "base": "0x65000800"},
+                "fdl2": {"file": fdl2_name, "base": "0x9EFFFE00"},
+            },
+            "erases": ["misc", "metadata"],
+            "entries": [
+                {"id": "UserData", "file": "userdata.img", "sparse": False, "partitions": ["userdata"], "flush_type": "YAFFS_IMG2", "preserve": True},
+                {"id": "BOOT", "file": "boot.img", "sparse": False, "partitions": ["boot_a"], "flush_type": "CODE2"},
+                {"id": "Super", "file": "super.img", "sparse": True, "raw": "raw/super.img", "partitions": ["super"], "flush_type": "YAFFS_IMG2"},
+            ],
+        }
+        (fw / "plan.json").write_text(json.dumps(plan), encoding="utf-8")
+        return fw
+
+    fw_a = _make_fw("P532AA_v119", "edk2-fdl2-sign.bin", b"A" * 16, b"BOOT_A", 100)
+    fw_b = _make_fw("P525AA_v36", "lk-fdl2-sign.bin", b"B" * 24, b"BOOT_B_DIFF", 200)
+
+    local_a, super_a = mod.prepare_local_cache(str(fw_a), str(cache_root), mod.Progress())
+    local_b, super_b = mod.prepare_local_cache(str(fw_b), str(cache_root), mod.Progress())
+
+    assert local_a != local_b
+    assert Path(super_a).parent != Path(super_b).parent
+    assert (Path(local_a) / "boot.img").read_bytes() == b"BOOT_A"
+    assert (Path(local_b) / "boot.img").read_bytes() == b"BOOT_B_DIFF"
+    assert (Path(local_b) / "lk-fdl2-sign.bin").read_bytes() == b"B" * 24
