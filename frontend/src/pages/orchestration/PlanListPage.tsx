@@ -147,7 +147,7 @@ export default function PlanListPage() {
   }, [filtered]);
 
   return (
-    <PageContainer width="content" className={LAYOUT.pageGap}>
+    <PageContainer width="wide" className={LAYOUT.pageGap}>
       <PageHeader
         title="Plan 编排"
         subtitle="基于 Plan-Step 模型管理测试编排，支持链接式 Plan 链"

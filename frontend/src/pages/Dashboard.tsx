@@ -154,7 +154,7 @@ export default function Dashboard() {
   }
 
   return (
-    <PageContainer className={LAYOUT.pageGap}>
+    <PageContainer width="wide" className={LAYOUT.pageGap}>
       <PageHeader title="仪表盘" subtitle="系统运行状态总览" />
 
       <div className={`flex justify-end items-center text-xs ${TEXT.caption}`}>
@@ -282,41 +282,43 @@ export default function Dashboard() {
               <ActivityChart data={activityData?.points ?? []} />
             )}
           </Card>
-          <div>
-            {failedTrendError ? (
-              <Card className="p-4">
-                <CardHeader className="px-0 pt-0 pb-3">
-                  <CardTitle className="flex items-center gap-2 text-sm font-medium">
-                    <TrendingUp size={14} className={CHART_SECTION.icon} />
-                    失败设备数趋势 (30d)
-                  </CardTitle>
-                </CardHeader>
-                <InlineError message="失败设备数趋势加载失败" onRetry={() => void refetchFailedTrend()} />
-              </Card>
-            ) : (
-              <PlanRunFailedDeviceTrendChart
-                data={failedTrendData?.points ?? []}
-                isLoading={failedTrendLoading}
-              />
-            )}
-          </div>
-          <div>
-            {passRateTrendError ? (
-              <Card className="p-4">
-                <CardHeader className="px-0 pt-0 pb-3">
-                  <CardTitle className="flex items-center gap-2 text-sm font-medium">
-                    <TrendingUp size={14} className={CHART_SECTION.icon} />
-                    运行通过率趋势 (30d)
-                  </CardTitle>
-                </CardHeader>
-                <InlineError message="运行通过率趋势加载失败" onRetry={() => void refetchPassRateTrend()} />
-              </Card>
-            ) : (
-              <PlanRunPassRateTrendChart
-                data={passRateTrendData?.points ?? []}
-                isLoading={passRateTrendLoading}
-              />
-            )}
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <div>
+              {failedTrendError ? (
+                <Card className="p-4">
+                  <CardHeader className="px-0 pt-0 pb-3">
+                    <CardTitle className="flex items-center gap-2 text-sm font-medium">
+                      <TrendingUp size={14} className={CHART_SECTION.icon} />
+                      失败设备数趋势 (30d)
+                    </CardTitle>
+                  </CardHeader>
+                  <InlineError message="失败设备数趋势加载失败" onRetry={() => void refetchFailedTrend()} />
+                </Card>
+              ) : (
+                <PlanRunFailedDeviceTrendChart
+                  data={failedTrendData?.points ?? []}
+                  isLoading={failedTrendLoading}
+                />
+              )}
+            </div>
+            <div>
+              {passRateTrendError ? (
+                <Card className="p-4">
+                  <CardHeader className="px-0 pt-0 pb-3">
+                    <CardTitle className="flex items-center gap-2 text-sm font-medium">
+                      <TrendingUp size={14} className={CHART_SECTION.icon} />
+                      运行通过率趋势 (30d)
+                    </CardTitle>
+                  </CardHeader>
+                  <InlineError message="运行通过率趋势加载失败" onRetry={() => void refetchPassRateTrend()} />
+                </Card>
+              ) : (
+                <PlanRunPassRateTrendChart
+                  data={passRateTrendData?.points ?? []}
+                  isLoading={passRateTrendLoading}
+                />
+              )}
+            </div>
           </div>
         </div>
 
