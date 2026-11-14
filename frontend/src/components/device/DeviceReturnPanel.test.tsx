@@ -78,7 +78,7 @@ describe('DeviceReturnPanel', () => {
     mockReturnDebts.mockResolvedValue([]);
     render(wrapper(<DeviceReturnPanel deviceId={8} returnState={null} isAdmin={false} />));
     expect(screen.getByTestId('device-return-summary-8')).toHaveTextContent('未初始化');
-    expect(screen.getByTestId('device-return-empty-8')).toHaveTextContent('不推断为已归还');
+    expect(screen.getByTestId('device-return-empty-8')).toHaveTextContent('暂不判定为已归还');
     expect(await screen.findByTestId('device-return-debts-empty-8')).toHaveTextContent('无未关闭条目');
   });
 

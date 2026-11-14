@@ -27,7 +27,9 @@ import {
   CheckCircle2,
   Zap,
   Search,
+  X,
   Tag,
+  Pencil,
   HardDrive,
 } from 'lucide-react';
 import { ENTITY_STATUS_COLORS } from '@/design-system/colors';
@@ -120,6 +122,8 @@ interface ExpandableDeviceTableProps {
   devices: DeviceTableData[];
   /** ADR-0061 D5.7 / #3723 U6：人工放行入口只对管理员显示。 */
   isAdmin?: boolean;
+  /** 单台设备行内编辑标签回调（传入时在详情卡显示编辑入口）。 */
+  onEditDeviceTags?: (device: DeviceTableData) => void;
   /**
    * 服务端报告的设备总数（`GET /devices` 的 `total`）。用于「全部设备」卡显示真实
    * 总数，并在 `devices` 少于它时提示列表不完整（#3131）。
@@ -144,6 +148,7 @@ export function ExpandableDeviceTable({
   onSelectionChange,
   onFilteredDevicesChange,
   isAdmin = false,
+  onEditDeviceTags,
 }: ExpandableDeviceTableProps) {
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
   const [statusFilter, setStatusFilter] = useState<string>('all');
@@ -154,12 +159,13 @@ export function ExpandableDeviceTable({
   const [searchQuery, setSearchQuery] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const selectPageRef = useRef<HTMLInputElement>(null);
+  const tableContainerRef = useRef<HTMLDivElement>(null);
   const pageSize = 50;
   const selectable = !!onSelectionChange;
 
-  // 网络/标签/存储列：全空时不渲染（B7——生产 515 台无 latency/tags，白占 ~15% 宽）
+  // 网络/存储列：全空时不渲染（B7——生产 515 台无 latency，白占 ~15% 宽）；
+  // 标签列恒显示（#3962 #6），避免打标签后表头列集突变。
   const hasNetworkData = devices.some((d) => d.network_latency != null);
-  const hasTagData = devices.some((d) => (d.tags?.length ?? 0) > 0);
   const hasDiskData = devices.some((d) => diskSummary(d) != null);
 
   // 防抖搜索，减少不必要的过滤计算
@@ -318,6 +324,13 @@ export function ExpandableDeviceTable({
     error: devices.filter(d => d.status === 'error').length,
   }), [devices, totalCount]);
 
+  const handlePageChange = (updater: (prev: number) => number) => {
+    setCurrentPage(updater);
+    const scrollEl = tableContainerRef.current?.querySelector('[data-slot="table-scroll-container"]');
+    if (scrollEl) scrollEl.scrollTop = 0;
+    tableContainerRef.current?.scrollIntoView?.({ block: 'start' });
+  };
+
   return (
     <div className="space-y-4">
       {/* #3131：列表不完整时必须说出来——下方状态统计与搜索/筛选都只作用于已加载
@@ -339,6 +352,8 @@ export function ExpandableDeviceTable({
       {/* Summary Stats — 稀疏数字筛选卡 */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
         <button
+          type="button"
+          aria-pressed={statusFilter === 'all'}
           onClick={() => setStatusFilter('all')}
           className={cn(
             'bg-card rounded-lg border p-3 flex flex-col gap-2 text-left transition-colors',
@@ -354,7 +369,9 @@ export function ExpandableDeviceTable({
           <div className={cn(STAT.value, 'text-2xl')}>{stats.total}</div>
         </button>
         <button
-          onClick={() => setStatusFilter('idle')}
+          type="button"
+          aria-pressed={statusFilter === 'idle'}
+          onClick={() => setStatusFilter((prev) => (prev === 'idle' ? 'all' : 'idle'))}
           className={cn(
             'bg-card rounded-lg border p-3 flex flex-col gap-2 text-left transition-colors',
             statusFilter === 'idle'
@@ -371,7 +388,9 @@ export function ExpandableDeviceTable({
           <div className={cn(STAT.value, 'text-2xl', ENTITY_STATUS_COLORS.device.idle)}>{stats.idle}</div>
         </button>
         <button
-          onClick={() => setStatusFilter('testing')}
+          type="button"
+          aria-pressed={statusFilter === 'testing'}
+          onClick={() => setStatusFilter((prev) => (prev === 'testing' ? 'all' : 'testing'))}
           className={cn(
             'bg-card rounded-lg border p-3 flex flex-col gap-2 text-left transition-colors',
             statusFilter === 'testing'
@@ -388,7 +407,9 @@ export function ExpandableDeviceTable({
           <div className={cn(STAT.value, 'text-2xl', ENTITY_STATUS_COLORS.device.testing)}>{stats.testing}</div>
         </button>
         <button
-          onClick={() => setStatusFilter('offline')}
+          type="button"
+          aria-pressed={statusFilter === 'offline'}
+          onClick={() => setStatusFilter((prev) => (prev === 'offline' ? 'all' : 'offline'))}
           className={cn(
             'bg-card rounded-lg border p-3 flex flex-col gap-2 text-left transition-colors',
             statusFilter === 'offline' ? 'border-foreground/40 bg-muted/30' : 'border-border hover:bg-muted/20',
@@ -403,7 +424,9 @@ export function ExpandableDeviceTable({
           <div className={cn(STAT.value, 'text-2xl text-muted-foreground')}>{stats.offline}</div>
         </button>
         <button
-          onClick={() => setStatusFilter('error')}
+          type="button"
+          aria-pressed={statusFilter === 'error'}
+          onClick={() => setStatusFilter((prev) => (prev === 'error' ? 'all' : 'error'))}
           className={cn(
             'bg-card rounded-lg border p-3 flex flex-col gap-2 text-left transition-colors',
             statusFilter === 'error'
@@ -433,8 +456,18 @@ export function ExpandableDeviceTable({
             placeholder="搜索设备序列号/型号/product/版本/主机/标签..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className={cn('w-full pl-9 h-9', FORM.inputSm)}
+            className={cn('w-full pl-9 pr-8 h-9', FORM.inputSm)}
           />
+          {searchQuery && (
+            <button
+              type="button"
+              aria-label="清空搜索"
+              onClick={() => setSearchQuery('')}
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
         </div>
         <select
           value={modelFilter}
@@ -483,12 +516,12 @@ export function ExpandableDeviceTable({
       </div>
 
       {/* Table */}
-      <div className="rounded-xl border border-border bg-card">
-        <Table className="min-w-[1420px]">
+      <div ref={tableContainerRef} className="rounded-xl border border-border bg-card">
+        <Table>
           <TableHeader>
-            <TableRow className="sticky top-0 z-10 bg-muted/95 hover:bg-muted/95">
+            <TableRow className="sticky top-0 z-20 bg-muted/95 hover:bg-muted/95">
               {selectable && (
-                <TableHead className="w-10 px-3 py-2">
+                <TableHead className="sticky left-0 z-30 w-10 min-w-[40px] bg-muted px-3 py-2">
                   <input
                     ref={selectPageRef}
                     type="checkbox"
@@ -500,17 +533,29 @@ export function ExpandableDeviceTable({
                   />
                 </TableHead>
               )}
-              <TableHead className="w-10"></TableHead>
-              <TableHead className="min-w-[260px] font-medium">设备</TableHead>
-              <TableHead className="min-w-[180px] font-medium">版本</TableHead>
-              <TableHead className="min-w-[100px] font-medium">状态</TableHead>
-              <TableHead className="min-w-[120px] font-medium">电量</TableHead>
-              <TableHead className="min-w-[90px] font-medium">温度</TableHead>
-              {hasDiskData && <TableHead className="min-w-[140px] font-medium">存储</TableHead>}
-              {hasNetworkData && <TableHead className="min-w-[110px] font-medium">网络</TableHead>}
-              {hasTagData && <TableHead className="min-w-[160px] font-medium">标签</TableHead>}
-              <TableHead className="min-w-[180px] font-medium">所属主机</TableHead>
-              <TableHead className="min-w-[180px] font-medium text-right">最后活跃</TableHead>
+              <TableHead
+                className={cn(
+                  'sticky z-30 w-10 min-w-[40px] bg-muted',
+                  selectable ? 'left-10' : 'left-0',
+                )}
+              ></TableHead>
+              <TableHead
+                className={cn(
+                  'sticky z-30 min-w-[220px] max-w-[260px] bg-muted font-medium shadow-[2px_0_4px_-2px_rgba(0,0,0,0.08)]',
+                  selectable ? 'left-20' : 'left-10',
+                )}
+              >
+                设备
+              </TableHead>
+              <TableHead className="min-w-[100px] font-medium">版本</TableHead>
+              <TableHead className="min-w-[96px] font-medium">状态</TableHead>
+              <TableHead className="min-w-[110px] font-medium">电量</TableHead>
+              <TableHead className="min-w-[80px] font-medium">温度</TableHead>
+              {hasDiskData && <TableHead className="min-w-[130px] font-medium">存储</TableHead>}
+              {hasNetworkData && <TableHead className="min-w-[100px] font-medium">网络</TableHead>}
+              <TableHead className="min-w-[120px] font-medium">标签</TableHead>
+              <TableHead className="min-w-[140px] font-medium">所属主机</TableHead>
+              <TableHead className="min-w-[160px] font-medium text-right">最后活跃</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -531,7 +576,7 @@ export function ExpandableDeviceTable({
                     onClick={() => toggleRow(device.id)}
                   >
                     {selectable && (
-                      <TableCell className="px-3 py-1.5">
+                      <TableCell className="sticky left-0 z-10 w-10 min-w-[40px] bg-card px-3 py-1.5">
                         <input
                           type="checkbox"
                           checked={selectedIds?.has(device.id) ?? false}
@@ -542,7 +587,12 @@ export function ExpandableDeviceTable({
                         />
                       </TableCell>
                     )}
-                    <TableCell className="px-3 py-1.5">
+                    <TableCell
+                      className={cn(
+                        'sticky z-10 w-10 min-w-[40px] bg-card px-3 py-1.5',
+                        selectable ? 'left-10' : 'left-0',
+                      )}
+                    >
                       <ChevronDown
                         className={cn(
                           'w-4 h-4 text-muted-foreground transition-transform',
@@ -550,7 +600,12 @@ export function ExpandableDeviceTable({
                         )}
                       />
                     </TableCell>
-                    <TableCell className="max-w-[260px] px-3 py-1.5">
+                    <TableCell
+                      className={cn(
+                        'sticky z-10 min-w-[220px] max-w-[260px] bg-card px-3 py-1.5 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.08)]',
+                        selectable ? 'left-20' : 'left-10',
+                      )}
+                    >
                       <div className="truncate font-mono text-sm text-foreground" title={device.serial}>
                         {device.serial}
                       </div>
@@ -715,7 +770,6 @@ export function ExpandableDeviceTable({
                         )}
                       </TableCell>
                     )}
-                    {hasTagData && (
                     <TableCell className="px-3 py-1.5">
                       {device.tags?.length ? (
                         <div className="flex max-w-[180px] items-center gap-1" title={device.tags.join(', ')}>
@@ -737,7 +791,6 @@ export function ExpandableDeviceTable({
                         <span className="text-muted-foreground/40">—</span>
                       )}
                     </TableCell>
-                    )}
                     <TableCell className="px-3 py-1.5 text-muted-foreground text-sm">
                       {device.host_name || '-'}
                     </TableCell>
@@ -789,13 +842,31 @@ export function ExpandableDeviceTable({
                                   {device.build_display_id || '—'}
                                 </span>
                               </div>
-                              <div className="flex justify-between gap-2">
+                              <div className="flex items-center justify-between gap-2">
                                 <span className="flex items-center gap-1 text-muted-foreground">
                                   <Tag className="h-3 w-3" />标签
                                 </span>
-                                <span className="max-w-[65%] truncate text-right text-foreground" title={device.tags?.join(', ') || undefined}>
-                                  {device.tags?.length ? device.tags.join(', ') : '—'}
-                                </span>
+                                {onEditDeviceTags ? (
+                                  <button
+                                    type="button"
+                                    data-testid={`device-detail-edit-tags-${device.id}`}
+                                    onClick={() => onEditDeviceTags(device)}
+                                    className="inline-flex max-w-[65%] items-center gap-1 truncate rounded px-1 py-0.5 text-right text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                    title={device.tags?.length ? `编辑标签：${device.tags.join(', ')}` : '点击添加标签'}
+                                  >
+                                    <span className={cn('truncate', !device.tags?.length && 'text-muted-foreground')}>
+                                      {device.tags?.length ? device.tags.join(', ') : '点击添加标签'}
+                                    </span>
+                                    <Pencil className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                  </button>
+                                ) : (
+                                  <span
+                                    className="max-w-[65%] truncate text-right text-foreground"
+                                    title={device.tags?.join(', ') || undefined}
+                                  >
+                                    {device.tags?.length ? device.tags.join(', ') : '—'}
+                                  </span>
+                                )}
                               </div>
                             </div>
                           </div>
@@ -870,7 +941,7 @@ export function ExpandableDeviceTable({
                                 </div>
                               </div>
                             ) : (
-                              <div className="text-xs text-muted-foreground/40">未上报（等待 df /data 采样）</div>
+                              <div className="text-xs text-muted-foreground/60">未上报（等待设备容量采样）</div>
                             )}
                           </div>
 
@@ -921,7 +992,7 @@ export function ExpandableDeviceTable({
             </div>
             <div className="flex items-center gap-2">
               <button
-                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                onClick={() => handlePageChange((p) => Math.max(1, p - 1))}
                 disabled={safeCurrentPage === 1}
                 aria-label="上一页"
                 className="p-1.5 rounded-md border border-border hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 disabled:cursor-not-allowed"
@@ -932,7 +1003,7 @@ export function ExpandableDeviceTable({
                 {safeCurrentPage} / {totalPages}
               </span>
               <button
-                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                onClick={() => handlePageChange((p) => Math.min(totalPages, p + 1))}
                 disabled={safeCurrentPage === totalPages}
                 aria-label="下一页"
                 className="p-1.5 rounded-md border border-border hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 disabled:cursor-not-allowed"
