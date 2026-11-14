@@ -873,32 +873,36 @@ export default function HostsPage() {
 
   return (
     <PageContainer width="wide">
-      <PageHeader title="主机集群" subtitle="管理和监控测试执行节点" />
-
-      <div className="flex items-center justify-end gap-2 py-2">
-        {!opPanelOpen && hostOps.length > 0 && (
-          <Button
-            variant="outline"
-            data-testid="host-op-panel-reopen"
-            onClick={() => setOpPanelOpen(true)}
-          >
-            {hostOps.some((o) => o.kind === 'flash_prereqs')
-              ? '刷机前置进度'
-              : hotUpdatePanelOps
-                ? '热更新进度'
-                : '安装进度'}
-            {installPending || hotUpdateOpPending
-              ? ` (${hostOps.filter((o) => o.status === 'pending' || o.status === 'running').length} 进行中)`
-              : ` (${hostOps.filter((o) => o.status === 'success').length} 成功 / ${hostOps.filter((o) => o.status === 'failed').length} 失败${hostOps.some((o) => o.status === 'canceled') ? ` / ${hostOps.filter((o) => o.status === 'canceled').length} 已取消` : ''}${hostOps.some((o) => o.status === 'skipped') ? ` / ${hostOps.filter((o) => o.status === 'skipped').length} 跳过` : ''})`}
-          </Button>
-        )}
-        {isAdmin && (
-          <Button onClick={() => setIsModalOpen(true)}>
-            <Plus className="w-4 h-4" />
-            添加主机
-          </Button>
-        )}
-      </div>
+      <PageHeader
+        title="主机集群"
+        subtitle="管理和监控测试执行节点"
+        action={
+          <div className="flex items-center gap-2">
+            {!opPanelOpen && hostOps.length > 0 && (
+              <Button
+                variant="outline"
+                data-testid="host-op-panel-reopen"
+                onClick={() => setOpPanelOpen(true)}
+              >
+                {hostOps.some((o) => o.kind === 'flash_prereqs')
+                  ? '刷机前置进度'
+                  : hotUpdatePanelOps
+                    ? '热更新进度'
+                    : '安装进度'}
+                {installPending || hotUpdateOpPending
+                  ? ` (${hostOps.filter((o) => o.status === 'pending' || o.status === 'running').length} 进行中)`
+                  : ` (${hostOps.filter((o) => o.status === 'success').length} 成功 / ${hostOps.filter((o) => o.status === 'failed').length} 失败${hostOps.some((o) => o.status === 'canceled') ? ` / ${hostOps.filter((o) => o.status === 'canceled').length} 已取消` : ''}${hostOps.some((o) => o.status === 'skipped') ? ` / ${hostOps.filter((o) => o.status === 'skipped').length} 跳过` : ''})`}
+              </Button>
+            )}
+            {isAdmin && (
+              <Button onClick={() => setIsModalOpen(true)}>
+                <Plus className="w-4 h-4" />
+                添加主机
+              </Button>
+            )}
+          </div>
+        }
+      />
 
       {/* Host Table —— tableData 为空的分支在 :567 已提前 return，此处无需再判 */}
       <ExpandableHostTable

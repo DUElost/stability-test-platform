@@ -4,10 +4,11 @@ import { useState, useMemo, useEffect, useRef, Fragment, type ReactNode } from '
 import { cn } from '@/lib/utils';
 import { BulkBarSpacer } from '@/components/ui/bulk-action-bar';
 import {
-  FilterChips,
   FilterSearchInput,
+  FilterWorkbench,
   MoreFiltersPopover,
   type ActiveFilterChip,
+  type QuickViewOption,
 } from '@/components/ui/filter-bar';
 import { SearchableSelect } from '@/components/ui/searchable-select';
 import {
@@ -26,6 +27,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Smartphone,
+  Server,
   Battery,
   Thermometer,
   Wifi,
@@ -639,9 +641,47 @@ export function ExpandableDeviceTable({
           onIncludeRetiredChange?.(false);
         };
 
+        const taggedCount = devices.filter((d) => d.tags && d.tags.length > 0).length;
+        const quickViews: QuickViewOption[] = [
+          {
+            key: 'all',
+            label: '全部视角',
+            count: stats.total,
+            active: statusFilter === 'all' && !taggedOnly,
+            tone: 'default',
+            onClick: () => {
+              setStatusFilter('all');
+              setTaggedOnly(false);
+            },
+          },
+          {
+            key: 'tagged',
+            label: '仅看有标签',
+            count: taggedCount,
+            active: taggedOnly,
+            tone: 'primary',
+            onClick: () => setTaggedOnly(!taggedOnly),
+          },
+          {
+            key: 'issue',
+            label: '需关注(离线/异常)',
+            count: stats.offline + stats.error,
+            active: statusFilter === 'offline' || statusFilter === 'error',
+            tone: 'warning',
+            onClick: () =>
+              setStatusFilter(statusFilter === 'offline' ? 'all' : 'offline'),
+          },
+        ];
+
         return (
-          <div className="space-y-2">
-            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+          <FilterWorkbench
+            quickViews={quickViews}
+            chips={activeChips}
+            onResetAll={handleResetAll}
+            matchSummary={`匹配 ${filteredDevices.length} / ${devices.length} 台设备`}
+            chipsTestId="devices-filter-chips"
+          >
+            <div className="flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:items-center">
               <FilterSearchInput
                 id="device-search"
                 value={searchQuery}
@@ -657,6 +697,7 @@ export function ExpandableDeviceTable({
                 options={hostOptions}
                 allLabel="全部主机"
                 searchPlaceholder="输入主机名搜索..."
+                icon={<Server />}
                 ariaLabel="按所属主机筛选"
                 className="w-full sm:w-44"
                 testId="device-host-filter"
@@ -667,6 +708,7 @@ export function ExpandableDeviceTable({
                 options={modelOptions.map((m) => ({ value: m, label: m }))}
                 allLabel="全部型号"
                 searchPlaceholder="输入型号搜索..."
+                icon={<Smartphone />}
                 ariaLabel="按型号筛选"
                 className="w-full sm:w-40"
                 testId="device-model-filter"
@@ -696,7 +738,7 @@ export function ExpandableDeviceTable({
                     className="w-full"
                   />
                 </div>
-                <label className="flex cursor-pointer items-center justify-between rounded-md border border-border px-2.5 py-2 text-xs">
+                <label className="flex cursor-pointer items-center justify-between rounded-lg border border-border px-3 py-2 text-xs hover:bg-muted/30">
                   <span>仅显示有标签设备</span>
                   <input
                     type="checkbox"
@@ -706,7 +748,7 @@ export function ExpandableDeviceTable({
                   />
                 </label>
                 {onIncludeStaleChange && (
-                  <label className="flex cursor-pointer items-center justify-between rounded-md border border-border px-2.5 py-2 text-xs">
+                  <label className="flex cursor-pointer items-center justify-between rounded-lg border border-border px-3 py-2 text-xs hover:bg-muted/30">
                     <span>显示陈旧设备</span>
                     <input
                       type="checkbox"
@@ -718,7 +760,7 @@ export function ExpandableDeviceTable({
                   </label>
                 )}
                 {onIncludeRetiredChange && (
-                  <label className="flex cursor-pointer items-center justify-between rounded-md border border-border px-2.5 py-2 text-xs">
+                  <label className="flex cursor-pointer items-center justify-between rounded-lg border border-border px-3 py-2 text-xs hover:bg-muted/30">
                     <span>显示已退役设备</span>
                     <input
                       type="checkbox"
@@ -731,13 +773,7 @@ export function ExpandableDeviceTable({
                 )}
               </MoreFiltersPopover>
             </div>
-            <FilterChips
-              chips={activeChips}
-              onResetAll={handleResetAll}
-              matchSummary={`匹配 ${filteredDevices.length} / ${devices.length} 台设备`}
-              testId="devices-filter-chips"
-            />
-          </div>
+          </FilterWorkbench>
         );
       })()}
 

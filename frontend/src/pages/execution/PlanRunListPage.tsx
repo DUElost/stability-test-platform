@@ -5,11 +5,12 @@ import { Button } from '@/components/ui/button';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { StateTabs } from '@/components/ui/state-tabs';
 import {
-  FilterChips,
   FilterSearchInput,
+  FilterWorkbench,
   MoreFiltersPopover,
   type ActiveFilterChip,
 } from '@/components/ui/filter-bar';
+import { SearchableSelect } from '@/components/ui/searchable-select';
 import {
   Table,
   TableBody,
@@ -275,85 +276,85 @@ export default function PlanRunListPage() {
         </div>
       )}
 
-      {/* 统一筛选栏：无论是否有数据都固定在原位，不随空态跳动 */}
-      <div className="space-y-2">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <StateTabs
-            items={STATUS_TABS.map((t) => ({
-              key: t.key,
-              label: t.label,
-              testId: `plan-run-status-${t.key}`,
-            }))}
-            activeKey={statusFilter}
-            onChange={(key) =>
-              updateParams({ status: key === 'all' ? undefined : key }, { resetPage: true })
-            }
-            ariaLabel="按状态筛选"
-            testId="plan-run-status-tabs"
-            className="min-w-0 flex-1"
-          />
-          <div className="flex flex-wrap items-center gap-2 shrink-0">
-            {projectFilter}
-            <select
-              value={timeRange}
-              onChange={(e) =>
-                updateParams(
-                  { range: e.target.value === 'all' ? undefined : e.target.value },
-                  { resetPage: true },
-                )
+      {/* 统一筛选工作台：无论是否有数据都固定在原位，不随空态跳动 */}
+      <FilterWorkbench
+        chips={activeChips}
+        onResetAll={() => clearParams(['status', 'project', 'q', 'range', 'runType'])}
+        matchSummary={!isLoading && !isError ? `共 ${total} 条执行记录` : undefined}
+        chipsTestId="plan-run-filter-chips"
+      >
+        <div className="space-y-3">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <StateTabs
+              items={STATUS_TABS.map((t) => ({
+                key: t.key,
+                label: t.label,
+                testId: `plan-run-status-${t.key}`,
+              }))}
+              activeKey={statusFilter}
+              onChange={(key) =>
+                updateParams({ status: key === 'all' ? undefined : key }, { resetPage: true })
               }
-              aria-label="按时间范围筛选"
-              data-testid="plan-run-time-filter"
-              className={cn(FORM.select, 'h-9 w-32')}
-            >
-              <option value="all">全部时间</option>
-              <option value="today">今天</option>
-              <option value="7d">近 7 天</option>
-              <option value="30d">近 30 天</option>
-            </select>
-            <FilterSearchInput
-              id="plan-run-search"
-              value={search}
-              onChange={(val) => updateParams({ q: val || undefined }, { resetPage: true })}
-              placeholder="搜索 ID / Plan / 触发者..."
-              ariaLabel="搜索执行记录"
-              testId="plan-run-search"
-              className="w-full sm:w-56"
+              ariaLabel="按状态筛选"
+              testId="plan-run-status-tabs"
+              className="min-w-0 flex-1"
             />
-            <MoreFiltersPopover
-              activeCount={runType !== 'all' ? 1 : 0}
-              testId="plan-run-more-filters"
-            >
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium text-foreground">执行类型 (run_type)</label>
-                <select
-                  value={runType}
-                  onChange={(e) =>
-                    updateParams(
-                      { runType: e.target.value === 'all' ? undefined : e.target.value },
-                      { resetPage: true },
-                    )
-                  }
-                  aria-label="按执行类型筛选"
-                  className={cn(FORM.select, 'h-8 w-full text-xs')}
-                >
-                  <option value="all">全部类型</option>
-                  <option value="MANUAL">手动触发 (MANUAL)</option>
-                  <option value="SCHEDULE">定时调度 (SCHEDULE)</option>
-                  <option value="CHAIN">链路触发 (CHAIN)</option>
-                </select>
-              </div>
-            </MoreFiltersPopover>
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              {projectFilter}
+              <SearchableSelect
+                value={timeRange}
+                onChange={(val) =>
+                  updateParams({ range: val === 'all' ? undefined : val }, { resetPage: true })
+                }
+                options={[
+                  { value: 'today', label: '今天' },
+                  { value: '7d', label: '近 7 天' },
+                  { value: '30d', label: '近 30 天' },
+                ]}
+                allLabel="全部时间"
+                searchable={false}
+                icon={<Clock />}
+                ariaLabel="按时间范围筛选"
+                className="w-36"
+                testId="plan-run-time-filter"
+              />
+              <FilterSearchInput
+                id="plan-run-search"
+                value={search}
+                onChange={(val) => updateParams({ q: val || undefined }, { resetPage: true })}
+                placeholder="搜索 ID / Plan / 触发者..."
+                ariaLabel="搜索执行记录"
+                testId="plan-run-search"
+                className="w-full sm:w-56"
+              />
+              <MoreFiltersPopover
+                activeCount={runType !== 'all' ? 1 : 0}
+                testId="plan-run-more-filters"
+              >
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-foreground">执行类型 (run_type)</label>
+                  <select
+                    value={runType}
+                    onChange={(e) =>
+                      updateParams(
+                        { runType: e.target.value === 'all' ? undefined : e.target.value },
+                        { resetPage: true },
+                      )
+                    }
+                    aria-label="按执行类型筛选"
+                    className={cn(FORM.select, 'h-8 w-full text-xs')}
+                  >
+                    <option value="all">全部类型</option>
+                    <option value="MANUAL">手动触发 (MANUAL)</option>
+                    <option value="SCHEDULE">定时调度 (SCHEDULE)</option>
+                    <option value="CHAIN">链路触发 (CHAIN)</option>
+                  </select>
+                </div>
+              </MoreFiltersPopover>
+            </div>
           </div>
         </div>
-
-        <FilterChips
-          chips={activeChips}
-          onResetAll={() => clearParams(['status', 'project', 'q', 'range', 'runType'])}
-          matchSummary={!isLoading && !isError ? `共 ${total} 条执行记录` : undefined}
-          testId="plan-run-filter-chips"
-        />
-      </div>
+      </FilterWorkbench>
 
       {isLoading ? (
         <PageSkeleton>

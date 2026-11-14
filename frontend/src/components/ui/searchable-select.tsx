@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { Check, ChevronDown, Search, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -15,13 +15,15 @@ interface SearchableSelectProps {
   allValue?: string;
   allLabel?: string;
   searchPlaceholder?: string;
+  searchable?: boolean;
+  icon?: ReactNode;
   ariaLabel?: string;
   className?: string;
   testId?: string;
 }
 
 /**
- * 可搜索单选下拉（替代长列表原生 <select>），支持输入过滤、清空与键盘 Esc 关闭。
+ * 统一质感单选下拉：支持图标前缀、输入过滤（长列表）、一键清除与 Esc 关闭。
  */
 export function SearchableSelect({
   value,
@@ -30,6 +32,8 @@ export function SearchableSelect({
   allValue = 'all',
   allLabel = '全部',
   searchPlaceholder = '输入关键字过滤...',
+  searchable = true,
+  icon,
   ariaLabel,
   className,
   testId,
@@ -77,11 +81,11 @@ export function SearchableSelect({
   }, [open]);
 
   useEffect(() => {
-    if (open) {
+    if (open && searchable) {
       setQuery('');
       requestAnimationFrame(() => inputRef.current?.focus());
     }
-  }, [open]);
+  }, [open, searchable]);
 
   return (
     <div ref={containerRef} className={cn('relative inline-block', className)}>
@@ -94,14 +98,21 @@ export function SearchableSelect({
         data-testid={testId}
         onClick={() => setOpen((prev) => !prev)}
         className={cn(
-          'flex h-9 w-full items-center justify-between gap-1.5 rounded-md border bg-background px-2.5 text-sm transition-colors',
-          'hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+          'flex h-9 w-full items-center justify-between gap-1.5 rounded-lg border px-2.5 text-xs sm:text-sm transition-all',
+          'hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25',
           isFiltered
-            ? 'border-primary/50 bg-primary/5 text-foreground font-medium'
-            : 'border-input text-foreground',
+            ? 'border-primary/40 bg-primary/5 text-primary font-medium'
+            : 'border-input bg-background text-foreground',
         )}
       >
-        <span className="truncate text-left">{displayLabel}</span>
+        <span className="flex min-w-0 items-center gap-1.5">
+          {icon && (
+            <span className={cn('shrink-0 [&_svg]:h-3.5 [&_svg]:w-3.5', isFiltered ? 'text-primary' : 'text-muted-foreground')}>
+              {icon}
+            </span>
+          )}
+          <span className="truncate text-left">{displayLabel}</span>
+        </span>
         <span className="flex shrink-0 items-center gap-0.5 text-muted-foreground">
           {isFiltered && (
             <span
@@ -113,41 +124,43 @@ export function SearchableSelect({
                 onChange(allValue);
                 setOpen(false);
               }}
-              className="rounded p-0.5 hover:bg-muted hover:text-foreground"
+              className="rounded p-0.5 text-primary/70 hover:bg-primary/10 hover:text-primary"
             >
               <X className="h-3.5 w-3.5" />
             </span>
           )}
-          <ChevronDown className="h-3.5 w-3.5 opacity-70" />
+          <ChevronDown className={cn('h-3.5 w-3.5 opacity-70 transition-transform', open && 'rotate-180')} />
         </span>
       </button>
 
       {open && (
         <div
           role="listbox"
-          className="absolute left-0 z-50 mt-1.5 w-64 min-w-full rounded-lg border border-border bg-popover p-1.5 text-popover-foreground shadow-lg"
+          className="absolute left-0 z-50 mt-1.5 w-64 min-w-full rounded-xl border border-border bg-popover p-1.5 text-popover-foreground shadow-lg ring-1 ring-black/5"
         >
-          <div className="relative mb-1.5">
-            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-            <input
-              ref={inputRef}
-              type="text"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder={searchPlaceholder}
-              className="h-8 w-full rounded-md border border-input bg-background pl-8 pr-7 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
-            />
-            {query && (
-              <button
-                type="button"
-                aria-label="清空选项搜索"
-                onClick={() => setQuery('')}
-                className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground"
-              >
-                <X className="h-3 w-3" />
-              </button>
-            )}
-          </div>
+          {searchable && (
+            <div className="relative mb-1.5">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+              <input
+                ref={inputRef}
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder={searchPlaceholder}
+                className="h-8 w-full rounded-lg border border-input bg-muted/30 pl-8 pr-7 text-xs focus:bg-background focus:outline-none focus:ring-2 focus:ring-primary/20"
+              />
+              {query && (
+                <button
+                  type="button"
+                  aria-label="清空选项搜索"
+                  onClick={() => setQuery('')}
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              )}
+            </div>
+          )}
 
           <div className="max-h-60 overflow-y-auto space-y-0.5">
             {!query.trim() && (
@@ -160,9 +173,9 @@ export function SearchableSelect({
                   setOpen(false);
                 }}
                 className={cn(
-                  'flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-xs transition-colors',
+                  'flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-left text-xs transition-colors',
                   value === allValue
-                    ? 'bg-accent font-medium text-accent-foreground'
+                    ? 'bg-primary/10 font-medium text-primary'
                     : 'hover:bg-muted/60 text-foreground',
                 )}
               >
@@ -189,16 +202,16 @@ export function SearchableSelect({
                       setOpen(false);
                     }}
                     className={cn(
-                      'flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors',
+                      'flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs transition-colors',
                       selected
-                        ? 'bg-accent font-medium text-accent-foreground'
+                        ? 'bg-primary/10 font-medium text-primary'
                         : 'hover:bg-muted/60 text-foreground',
                     )}
                   >
                     <span className="truncate">{opt.label}</span>
                     <span className="flex shrink-0 items-center gap-1.5">
                       {opt.count != null && (
-                        <span className="text-[11px] tabular-nums text-muted-foreground">
+                        <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] tabular-nums text-muted-foreground">
                           {opt.count}
                         </span>
                       )}

@@ -502,19 +502,21 @@ export default function DevicesPage() {
       width="wide"
       className={selectedDeviceIds.size > 0 ? 'pb-28' : undefined}
     >
-      <PageHeader title="物理设备" subtitle="管理和监控测试设备 · 点击设备行展开详情，勾选后可批量处理" />
-
-      <div className="flex flex-wrap items-center justify-end gap-2 py-1">
-        <Button
-          data-testid="device-add-button"
-          disabled={!isAdmin}
-          title={!isAdmin ? '需要管理员权限' : undefined}
-          onClick={() => setIsModalOpen(true)}
-        >
-          <Plus className="w-4 h-4" />
-          添加设备
-        </Button>
-      </div>
+      <PageHeader
+        title="物理设备"
+        subtitle="管理和监控测试设备 · 点击设备行展开详情，勾选后可批量处理"
+        action={
+          <Button
+            data-testid="device-add-button"
+            disabled={!isAdmin}
+            title={!isAdmin ? '需要管理员权限' : undefined}
+            onClick={() => setIsModalOpen(true)}
+          >
+            <Plus className="w-4 h-4" />
+            添加设备
+          </Button>
+        }
+      />
 
       {/* Device Table */}
       <div>

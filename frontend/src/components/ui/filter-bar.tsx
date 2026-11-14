@@ -10,6 +10,141 @@ export interface ActiveFilterChip {
   onRemove: () => void;
 }
 
+export interface QuickViewOption {
+  key: string;
+  label: string;
+  count?: number;
+  active: boolean;
+  tone?: 'default' | 'warning' | 'danger' | 'success' | 'primary';
+  onClick: () => void;
+}
+
+interface FilterWorkbenchProps {
+  quickViews?: QuickViewOption[];
+  headerRight?: ReactNode;
+  children: ReactNode;
+  chips: ActiveFilterChip[];
+  onResetAll: () => void;
+  matchSummary?: string;
+  chipsTestId?: string;
+}
+
+const QUICK_VIEW_ACTIVE_TONE: Record<NonNullable<QuickViewOption['tone']>, string> = {
+  default: 'bg-background text-foreground shadow-xs border-border/80',
+  primary: 'bg-primary/10 text-primary border-primary/30 shadow-xs',
+  success: 'bg-success/10 text-success border-success/30 shadow-xs',
+  warning: 'bg-warning/15 text-warning border-warning/30 shadow-xs',
+  danger: 'bg-destructive/10 text-destructive border-destructive/30 shadow-xs',
+};
+
+/**
+ * 统一筛选工作台容器：
+ * - 顶部：快捷视图分段条 + 命中统计
+ * - 中部：主筛选控件行（搜索 + 维度下拉 + 更多筛选）
+ * - 底部：仅在有生效筛选时展开的语义 Chip 条与一键重置
+ */
+export function FilterWorkbench({
+  quickViews,
+  headerRight,
+  children,
+  chips,
+  onResetAll,
+  matchSummary,
+  chipsTestId,
+}: FilterWorkbenchProps) {
+  return (
+    <div className="rounded-xl border border-border/90 bg-card shadow-xs">
+      {(quickViews && quickViews.length > 0) || headerRight || matchSummary ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 px-3.5 py-2.5">
+          {quickViews && quickViews.length > 0 ? (
+            <div role="tablist" aria-label="快捷视图" className="inline-flex flex-wrap items-center gap-1 rounded-lg bg-muted/60 p-1">
+              {quickViews.map((qv) => (
+                <button
+                  key={qv.key}
+                  type="button"
+                  role="tab"
+                  aria-selected={qv.active}
+                  onClick={qv.onClick}
+                  className={cn(
+                    'inline-flex items-center gap-1.5 rounded-md border border-transparent px-2.5 py-1 text-xs font-medium transition-all',
+                    qv.active
+                      ? QUICK_VIEW_ACTIVE_TONE[qv.tone ?? 'default']
+                      : 'text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  <span>{qv.label}</span>
+                  {qv.count != null && (
+                    <span
+                      className={cn(
+                        'rounded px-1.5 py-0.2 text-[11px] tabular-nums',
+                        qv.active ? 'bg-background/80 text-current' : 'bg-background/60 text-muted-foreground',
+                      )}
+                    >
+                      {qv.count}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div />
+          )}
+
+          <div className="flex items-center gap-2.5">
+            {headerRight}
+            {matchSummary && (
+              <span className="inline-flex items-center rounded-full bg-muted/70 px-2.5 py-1 text-xs font-medium tabular-nums text-muted-foreground">
+                {matchSummary}
+              </span>
+            )}
+          </div>
+        </div>
+      ) : null}
+
+      <div className="p-3.5">{children}</div>
+
+      {chips.length > 0 && (
+        <div
+          data-testid={chipsTestId}
+          className="flex flex-wrap items-center justify-between gap-2 rounded-b-xl border-t border-border/60 bg-primary/[0.025] px-3.5 py-2 text-xs"
+        >
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="mr-0.5 text-[11px] font-medium text-muted-foreground">
+              当前条件:
+            </span>
+            {chips.map((chip) => (
+              <span
+                key={chip.key}
+                className="inline-flex items-center gap-1 rounded-full border border-primary/25 bg-primary/10 px-2.5 py-0.5 text-xs text-primary"
+              >
+                <span className="opacity-75">{chip.label}:</span>
+                <span className="font-medium">{chip.value}</span>
+                <button
+                  type="button"
+                  aria-label={`移除${chip.label}筛选`}
+                  onClick={chip.onRemove}
+                  className="ml-0.5 rounded-full p-0.5 text-primary/70 hover:bg-primary/15 hover:text-primary"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            ))}
+          </div>
+
+          <button
+            type="button"
+            onClick={onResetAll}
+            className="inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <RotateCcw className="h-3 w-3" />
+            重置全部
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface FilterSearchInputProps {
   id?: string;
   value: string;
@@ -70,7 +205,10 @@ export function FilterSearchInput({
         placeholder={placeholder}
         aria-label={ariaLabel}
         data-testid={testId}
-        className={cn('h-9 w-full pl-9 pr-8', FORM.inputSm)}
+        className={cn(
+          'h-9 w-full rounded-lg bg-muted/30 pl-9 pr-8 transition-colors focus:bg-background',
+          FORM.inputSm,
+        )}
       />
       {value ? (
         <button
@@ -83,7 +221,7 @@ export function FilterSearchInput({
         </button>
       ) : (
         enableSlashShortcut && (
-          <kbd className="pointer-events-none absolute right-2.5 top-1/2 hidden -translate-y-1/2 rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground sm:inline-block">
+          <kbd className="pointer-events-none absolute right-2.5 top-1/2 hidden -translate-y-1/2 rounded border border-border bg-background px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground sm:inline-block">
             /
           </kbd>
         )
@@ -139,10 +277,10 @@ export function MoreFiltersPopover({
         data-testid={testId}
         onClick={() => setOpen((prev) => !prev)}
         className={cn(
-          'inline-flex h-9 items-center gap-1.5 rounded-md border px-3 text-sm transition-colors',
-          'hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+          'inline-flex h-9 items-center gap-1.5 rounded-lg border px-3 text-xs sm:text-sm transition-all',
+          'hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25',
           activeCount > 0
-            ? 'border-primary/50 bg-primary/5 font-medium text-foreground'
+            ? 'border-primary/40 bg-primary/5 font-medium text-primary'
             : 'border-input bg-background text-muted-foreground hover:text-foreground',
         )}
       >
@@ -158,79 +296,16 @@ export function MoreFiltersPopover({
       {open && (
         <div
           className={cn(
-            'absolute z-40 mt-1.5 w-80 rounded-lg border border-border bg-popover p-3.5 text-popover-foreground shadow-lg',
+            'absolute z-40 mt-1.5 w-80 rounded-xl border border-border bg-popover p-4 text-popover-foreground shadow-lg ring-1 ring-black/5',
             align === 'right' ? 'right-0' : 'left-0',
           )}
         >
+          <div className="mb-2.5 flex items-center justify-between border-b border-border/60 pb-2">
+            <span className="text-xs font-semibold text-foreground">高级筛选条件</span>
+            <span className="text-[11px] text-muted-foreground">Esc 关闭</span>
+          </div>
           <div className="space-y-3">{children}</div>
         </div>
-      )}
-    </div>
-  );
-}
-
-interface FilterChipsProps {
-  chips: ActiveFilterChip[];
-  onResetAll: () => void;
-  matchSummary?: string;
-  testId?: string;
-}
-
-/**
- * 已生效筛选条件条：展示可单独移除的 Chip + 一键清空全部 + 当前命中计数。
- */
-export function FilterChips({
-  chips,
-  onResetAll,
-  matchSummary,
-  testId,
-}: FilterChipsProps) {
-  if (chips.length === 0 && !matchSummary) return null;
-
-  return (
-    <div
-      data-testid={testId}
-      className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/70 bg-muted/20 px-3 py-2 text-xs"
-    >
-      <div className="flex flex-wrap items-center gap-1.5">
-        {chips.length === 0 ? (
-          <span className="text-muted-foreground">当前显示全部数据</span>
-        ) : (
-          <>
-            <span className="mr-1 text-muted-foreground">已选筛选:</span>
-            {chips.map((chip) => (
-              <span
-                key={chip.key}
-                className="inline-flex items-center gap-1 rounded-md border border-border bg-background px-2 py-0.5 text-xs text-foreground"
-              >
-                <span className="text-muted-foreground">{chip.label}:</span>
-                <span className="font-medium">{chip.value}</span>
-                <button
-                  type="button"
-                  aria-label={`移除${chip.label}筛选`}
-                  onClick={chip.onRemove}
-                  className="ml-0.5 rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </span>
-            ))}
-            <button
-              type="button"
-              onClick={onResetAll}
-              className="ml-1 inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium text-primary hover:bg-primary/10"
-            >
-              <RotateCcw className="h-3 w-3" />
-              清空全部
-            </button>
-          </>
-        )}
-      </div>
-
-      {matchSummary && (
-        <span className="shrink-0 tabular-nums text-muted-foreground">
-          {matchSummary}
-        </span>
       )}
     </div>
   );

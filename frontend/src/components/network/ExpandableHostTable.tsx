@@ -20,13 +20,15 @@ import {
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { StatusBadge } from '@/components/ui/status-badge';
 import {
-  FilterChips,
   FilterSearchInput,
+  FilterWorkbench,
   MoreFiltersPopover,
   type ActiveFilterChip,
+  type QuickViewOption,
 } from '@/components/ui/filter-bar';
+import { SearchableSelect } from '@/components/ui/searchable-select';
 import { FORM, resourceUsageBgClass, resourceUsageTextClass, STAT } from '@/design-system/tokens';
-import { ChevronDown, Server, Cpu, HardDrive, MemoryStick, Clock, Activity, AlertTriangle, CheckCircle2, MoreHorizontal, Pencil, Trash2, CircleSlash, RotateCcw, ClipboardCheck, RefreshCw } from 'lucide-react';
+import { ChevronDown, Server, Cpu, HardDrive, MemoryStick, Clock, Activity, AlertTriangle, CheckCircle2, MoreHorizontal, Pencil, Trash2, CircleSlash, RotateCcw, ClipboardCheck, RefreshCw, ShieldAlert } from 'lucide-react';
 import { formatBytesFromGb, formatDateTimeFull, formatDurationSeconds, formatLocalTime, parseIsoToDate } from '@/utils/format';
 import type {
   HostScriptPresence,
@@ -762,98 +764,119 @@ export function ExpandableHostTable({
           </div>
         )}
 
-        {/* 统一筛选条：搜索 + 运维快捷视图 + 健康度 + 更多筛选 */}
-        <div className="space-y-2">
-          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
-            <FilterSearchInput
-              id="host-search"
-              value={searchQuery}
-              onChange={setSearchQuery}
-              placeholder="搜索主机名 / IP / Agent 版本（按 / 快速聚焦）..."
-              ariaLabel="搜索主机"
-              testId="host-search-input"
-              className="flex-1 sm:max-w-sm"
-            />
-            <div className="flex flex-wrap items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => setSyncFilter(syncFilter === 'drift' ? 'all' : 'drift')}
-                className={cn(
-                  'inline-flex h-9 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition-colors',
-                  syncFilter === 'drift'
-                    ? 'border-warning bg-warning/10 text-warning'
-                    : 'border-border bg-background text-muted-foreground hover:bg-muted/40 hover:text-foreground',
-                )}
-              >
-                <span>待热更新</span>
-                <span className="rounded bg-muted px-1 py-0.5 text-[11px] tabular-nums">
-                  {stats.agentDrift}
-                </span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setSyncFilter(syncFilter === 'mount_error' ? 'all' : 'mount_error')}
-                className={cn(
-                  'inline-flex h-9 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition-colors',
-                  syncFilter === 'mount_error'
-                    ? 'border-destructive bg-destructive/10 text-destructive'
-                    : 'border-border bg-background text-muted-foreground hover:bg-muted/40 hover:text-foreground',
-                )}
-              >
-                <span>挂载异常</span>
-                <span className="rounded bg-muted px-1 py-0.5 text-[11px] tabular-nums">
-                  {stats.mountErrorCount}
-                </span>
-              </button>
-              <select
-                value={healthFilter}
-                onChange={(e) => setHealthFilter(e.target.value as typeof healthFilter)}
-                aria-label="按健康状态筛选"
-                data-testid="host-health-filter"
-                className={cn(FORM.select, 'h-9 w-36')}
-              >
-                <option value="all">全部健康度</option>
-                <option value="HEALTHY">正常</option>
-                <option value="DEGRADED">降级</option>
-                <option value="UNSCHEDULABLE">禁调</option>
-              </select>
-              <MoreFiltersPopover activeCount={moreActiveCount} testId="hosts-more-filters">
-                <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-foreground">Agent 代码同步</label>
-                  <select
-                    value={syncFilter}
-                    onChange={(e) => setSyncFilter(e.target.value as typeof syncFilter)}
-                    aria-label="按代码同步状态筛选"
-                    className={cn(FORM.select, 'h-8 w-full text-xs')}
-                  >
-                    <option value="all">全部同步状态</option>
-                    <option value="drift">待热更新 (drift)</option>
-                    <option value="matched">已对齐 (matched)</option>
-                    <option value="mount_error">存储挂载异常</option>
-                  </select>
-                </div>
-                {onShowRetiredChange && (
-                  <label className="flex cursor-pointer items-center justify-between rounded-md border border-border px-2.5 py-2 text-xs">
-                    <span>显示已退役主机</span>
-                    <input
-                      type="checkbox"
-                      checked={Boolean(showRetired)}
-                      onChange={(e) => onShowRetiredChange(e.target.checked)}
-                      data-testid="hosts-show-retired"
-                      className="rounded"
-                    />
-                  </label>
-                )}
-              </MoreFiltersPopover>
-            </div>
-          </div>
-          <FilterChips
-            chips={activeChips}
-            onResetAll={handleResetAll}
-            matchSummary={`显示 ${filteredHosts.length} / ${hosts.length} 台主机`}
-            testId="hosts-filter-chips"
-          />
-        </div>
+        {/* 统一筛选工作台：快捷视图分段条 + 搜索 + 健康度 + 更多筛选 + Chips */}
+        {(() => {
+          const isAllQuickView =
+            statusFilter === 'all' && healthFilter === 'all' && syncFilter === 'all';
+          const quickViews: QuickViewOption[] = [
+            {
+              key: 'all',
+              label: '全部主机',
+              count: hosts.length,
+              active: isAllQuickView,
+              tone: 'default',
+              onClick: () => {
+                setStatusFilter('all');
+                setHealthFilter('all');
+                setSyncFilter('all');
+              },
+            },
+            {
+              key: 'drift',
+              label: '待热更新',
+              count: stats.agentDrift,
+              active: syncFilter === 'drift',
+              tone: 'warning',
+              onClick: () => setSyncFilter(syncFilter === 'drift' ? 'all' : 'drift'),
+            },
+            {
+              key: 'unhealthy',
+              label: '健康异常',
+              count: stats.unhealthyCount,
+              active: healthFilter === 'DEGRADED' || healthFilter === 'UNSCHEDULABLE',
+              tone: 'warning',
+              onClick: () =>
+                setHealthFilter(
+                  healthFilter === 'DEGRADED' || healthFilter === 'UNSCHEDULABLE'
+                    ? 'all'
+                    : 'DEGRADED',
+                ),
+            },
+            {
+              key: 'mount_error',
+              label: '挂载异常',
+              count: stats.mountErrorCount,
+              active: syncFilter === 'mount_error',
+              tone: 'danger',
+              onClick: () => setSyncFilter(syncFilter === 'mount_error' ? 'all' : 'mount_error'),
+            },
+          ];
+
+          return (
+            <FilterWorkbench
+              quickViews={quickViews}
+              chips={activeChips}
+              onResetAll={handleResetAll}
+              matchSummary={`显示 ${filteredHosts.length} / ${hosts.length} 台主机`}
+              chipsTestId="hosts-filter-chips"
+            >
+              <div className="flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:items-center">
+                <FilterSearchInput
+                  id="host-search"
+                  value={searchQuery}
+                  onChange={setSearchQuery}
+                  placeholder="搜索主机名 / IP / Agent 版本..."
+                  ariaLabel="搜索主机"
+                  testId="host-search-input"
+                  className="flex-1 sm:max-w-md"
+                />
+                <SearchableSelect
+                  value={healthFilter}
+                  onChange={(v) => setHealthFilter(v as typeof healthFilter)}
+                  options={[
+                    { value: 'HEALTHY', label: '正常' },
+                    { value: 'DEGRADED', label: '降级' },
+                    { value: 'UNSCHEDULABLE', label: '禁调' },
+                  ]}
+                  allLabel="全部健康度"
+                  searchable={false}
+                  icon={<ShieldAlert />}
+                  ariaLabel="按健康状态筛选"
+                  className="w-full sm:w-40"
+                  testId="host-health-filter"
+                />
+                <MoreFiltersPopover activeCount={moreActiveCount} testId="hosts-more-filters">
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-medium text-foreground">Agent 代码同步</label>
+                    <select
+                      value={syncFilter}
+                      onChange={(e) => setSyncFilter(e.target.value as typeof syncFilter)}
+                      aria-label="按代码同步状态筛选"
+                      className={cn(FORM.select, 'h-8 w-full text-xs')}
+                    >
+                      <option value="all">全部同步状态</option>
+                      <option value="drift">待热更新 (drift)</option>
+                      <option value="matched">已对齐 (matched)</option>
+                      <option value="mount_error">存储挂载异常</option>
+                    </select>
+                  </div>
+                  {onShowRetiredChange && (
+                    <label className="flex cursor-pointer items-center justify-between rounded-lg border border-border px-3 py-2 text-xs hover:bg-muted/30">
+                      <span>显示已退役主机</span>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(showRetired)}
+                        onChange={(e) => onShowRetiredChange(e.target.checked)}
+                        data-testid="hosts-show-retired"
+                        className="rounded"
+                      />
+                    </label>
+                  )}
+                </MoreFiltersPopover>
+              </div>
+            </FilterWorkbench>
+          );
+        })()}
 
         {/* Table */}
         <div className="rounded-xl border border-border bg-card">
