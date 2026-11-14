@@ -1,9 +1,11 @@
 import { useCallback, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Smartphone } from 'lucide-react';
 import { useToast } from '@/hooks/useToast';
 import { useAuthSession } from '@/hooks/useAuthSession';
 import { useFleetDeviceUpdates } from '@/hooks/useFleetDeviceUpdates';
+import { useUrlFilterParams } from '@/hooks/useUrlFilterState';
 import { ExpandableDeviceTable, type DeviceTableData, type DeviceStatus } from '@/components/device/ExpandableDeviceTable';
 import DeviceBulkActionBar from '@/components/device/DeviceBulkActionBar';
 import { AddDeviceModal } from './components/AddDeviceModal';
@@ -37,13 +39,27 @@ export default function DevicesPage() {
   const [isTagDialogOpen, setIsTagDialogOpen] = useState(false);
   const [singleTagDevice, setSingleTagDevice] = useState<DeviceTableData | null>(null);
   const [isAssignDialogOpen, setIsAssignDialogOpen] = useState(false);
-  // ADR-0029：页面级项目筛选（无全局选择器/跨页跟随，D8 挂起）。
-  // 筛选走后端 ?project_key=——未知 key 后端 404，前端按错误态渲染。
-  // ADR-0029 P0：「未归属」哨兵值切 ?unassigned=true（与 project_key 互斥）。
-  const [projectKey, setProjectKey] = useState<string | undefined>(undefined);
-  // #2962 A / ADR-0057 D4：默认隐藏陈旧与退役设备（服务端口径），显式开关才显示。
-  const [includeStale, setIncludeStale] = useState(false);
-  const [includeRetired, setIncludeRetired] = useState(false);
+  const navigate = useNavigate();
+  const { getString, getBool, getPositiveInt, updateParams, clearParams } = useUrlFilterParams();
+
+  // ADR-0029 + URL 持久化：筛选条件同步到 URL SearchParams，刷新/返回不丢失
+  const projectKey = getString('project') || undefined;
+  const setProjectKey = (next: string | undefined) =>
+    updateParams({ project: next }, { resetPage: true });
+  const includeStale = getBool('stale');
+  const setIncludeStale = (next: boolean) =>
+    updateParams({ stale: next }, { resetPage: true });
+  const includeRetired = getBool('retired');
+  const setIncludeRetired = (next: boolean) =>
+    updateParams({ retired: next }, { resetPage: true });
+  const statusFilter = getString('status', 'all');
+  const hostFilter = getString('host', 'all');
+  const modelFilter = getString('model', 'all');
+  const productFilter = getString('product', 'all');
+  const versionFilter = getString('version', 'all');
+  const searchQuery = getString('q', '');
+  const taggedOnly = getBool('tagged');
+  const currentPage = getPositiveInt('page', 1);
   const [retireDialog, setRetireDialog] = useState<{ open: boolean; mode: DeviceRetireMode }>(
     { open: false, mode: 'retire' },
   );
@@ -488,45 +504,16 @@ export default function DevicesPage() {
     >
       <PageHeader title="物理设备" subtitle="管理和监控测试设备 · 点击设备行展开详情，勾选后可批量处理" />
 
-      <div className="flex flex-wrap items-center justify-end gap-2 py-2">
-        <div className="flex flex-wrap items-center gap-2">
-          {/* #2962 A / ADR-0057 D4：默认隐藏陈旧与退役设备（服务端口径），
-              这里给出显式查看开关——隐藏是默认，不是不可见。 */}
-          <Button
-            variant={includeStale ? 'default' : 'outline'}
-            size="sm"
-            data-testid="device-toggle-stale"
-            aria-pressed={includeStale}
-            onClick={() => setIncludeStale((value) => !value)}
-          >
-            {includeStale ? '隐藏陈旧设备' : '显示陈旧设备'}
-          </Button>
-          <Button
-            variant={includeRetired ? 'default' : 'outline'}
-            size="sm"
-            data-testid="device-toggle-retired"
-            aria-pressed={includeRetired}
-            onClick={() => setIncludeRetired((value) => !value)}
-          >
-            {includeRetired ? '隐藏已退役' : '显示已退役'}
-          </Button>
-          <ProjectFilterSelect
-            value={projectKey}
-            onChange={setProjectKey}
-            className="w-52"
-            testId="device-project-filter"
-            showUnassigned
-          />
-          <Button
-            data-testid="device-add-button"
-            disabled={!isAdmin}
-            title={!isAdmin ? '需要管理员权限' : undefined}
-            onClick={() => setIsModalOpen(true)}
-          >
-            <Plus className="w-4 h-4" />
-            添加设备
-          </Button>
-        </div>
+      <div className="flex flex-wrap items-center justify-end gap-2 py-1">
+        <Button
+          data-testid="device-add-button"
+          disabled={!isAdmin}
+          title={!isAdmin ? '需要管理员权限' : undefined}
+          onClick={() => setIsModalOpen(true)}
+        >
+          <Plus className="w-4 h-4" />
+          添加设备
+        </Button>
       </div>
 
       {/* Device Table */}
@@ -539,6 +526,68 @@ export default function DevicesPage() {
           onFilteredDevicesChange={handleFilteredDevicesChange}
           isAdmin={isAdmin}
           onEditDeviceTags={isAdmin ? (device) => setSingleTagDevice(device) : undefined}
+          statusFilter={statusFilter}
+          onStatusFilterChange={(val) =>
+            updateParams({ status: val === 'all' ? undefined : val }, { resetPage: true })
+          }
+          hostFilter={hostFilter}
+          onHostFilterChange={(val) =>
+            updateParams({ host: val === 'all' ? undefined : val }, { resetPage: true })
+          }
+          modelFilter={modelFilter}
+          onModelFilterChange={(val) =>
+            updateParams({ model: val === 'all' ? undefined : val }, { resetPage: true })
+          }
+          productFilter={productFilter}
+          onProductFilterChange={(val) =>
+            updateParams({ product: val === 'all' ? undefined : val }, { resetPage: true })
+          }
+          versionFilter={versionFilter}
+          onVersionFilterChange={(val) =>
+            updateParams({ version: val === 'all' ? undefined : val }, { resetPage: true })
+          }
+          searchQuery={searchQuery}
+          onSearchQueryChange={(val) =>
+            updateParams({ q: val || undefined }, { resetPage: true })
+          }
+          taggedOnly={taggedOnly}
+          onTaggedOnlyChange={(val) => updateParams({ tagged: val }, { resetPage: true })}
+          currentPage={currentPage}
+          onPageChange={(page) => updateParams({ page: page <= 1 ? undefined : page })}
+          includeStale={includeStale}
+          onIncludeStaleChange={setIncludeStale}
+          includeRetired={includeRetired}
+          onIncludeRetiredChange={setIncludeRetired}
+          projectChipLabel={
+            projectKey === UNASSIGNED_FILTER_VALUE ? '未归属项目' : projectKey
+          }
+          onClearProjectFilter={() => setProjectKey(undefined)}
+          extraToolbarControls={
+            <ProjectFilterSelect
+              value={projectKey}
+              onChange={setProjectKey}
+              className="w-full sm:w-44"
+              testId="device-project-filter"
+              showUnassigned
+            />
+          }
+          onResetAllFilters={() =>
+            clearParams([
+              'project',
+              'stale',
+              'retired',
+              'status',
+              'host',
+              'model',
+              'product',
+              'version',
+              'q',
+              'tagged',
+            ])
+          }
+          onNavigateToHost={(hostName) =>
+            navigate(`/hosts?q=${encodeURIComponent(hostName)}`)
+          }
         />
       </div>
 

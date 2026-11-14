@@ -181,9 +181,8 @@ describe('ExpandableDeviceTable', () => {
       />,
     );
 
-    fireEvent.change(screen.getByRole('combobox', { name: '按所属主机筛选' }), {
-      target: { value: '10' },
-    });
+    fireEvent.click(screen.getByRole('combobox', { name: '按所属主机筛选' }));
+    fireEvent.click(screen.getByRole('option', { name: /198\.51\.100\.116/ }));
     await waitFor(() => {
       const latest = onFilteredDevicesChange.mock.calls[
         onFilteredDevicesChange.mock.calls.length - 1
@@ -191,9 +190,8 @@ describe('ExpandableDeviceTable', () => {
       expect(latest.map((d) => d.id)).toEqual([2, 3]);
     });
 
-    fireEvent.change(screen.getByRole('combobox', { name: '按设备筛选' }), {
-      target: { value: 'Model A' },
-    });
+    fireEvent.click(screen.getByRole('combobox', { name: '按型号筛选' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Model A' }));
     await waitFor(() => {
       const latest = onFilteredDevicesChange.mock.calls[
         onFilteredDevicesChange.mock.calls.length - 1
@@ -201,9 +199,9 @@ describe('ExpandableDeviceTable', () => {
       expect(latest.map((d) => d.id)).toEqual([3]);
     });
 
-    fireEvent.change(screen.getByRole('combobox', { name: '按版本筛选' }), {
-      target: { value: 'build-b' },
-    });
+    fireEvent.click(screen.getByTestId('devices-more-filters'));
+    fireEvent.click(screen.getByRole('combobox', { name: '按版本筛选' }));
+    fireEvent.click(screen.getByRole('option', { name: 'build-b' }));
     await waitFor(() => {
       const latest = onFilteredDevicesChange.mock.calls[
         onFilteredDevicesChange.mock.calls.length - 1
@@ -345,10 +343,13 @@ it('distinguishes NX3Carrier by product and filters same-model devices', async (
   render(<ExpandableDeviceTable devices={nxDevices} />);
   expect(screen.getByText('Product: NX3Carrier · sys_mssi_64_cn_armv82')).toBeInTheDocument();
   expect(screen.getByText('Product: 未上报')).toBeInTheDocument();
-  fireEvent.change(screen.getByRole('combobox', { name: '按 product 筛选' }), { target: { value: 'sys_mssi_64_cn_armv82' } });
+  fireEvent.click(screen.getByTestId('devices-more-filters'));
+  fireEvent.click(screen.getByRole('combobox', { name: '按 product 筛选' }));
+  fireEvent.click(screen.getByRole('option', { name: 'sys_mssi_64_cn_armv82' }));
   expect(screen.getByText('CARRIER-A')).toBeInTheDocument();
   expect(screen.queryByText('NX3-A')).not.toBeInTheDocument();
-  fireEvent.change(screen.getByRole('combobox', { name: '按 product 筛选' }), { target: { value: 'all' } });
+  fireEvent.click(screen.getByRole('combobox', { name: '按 product 筛选' }));
+  fireEvent.click(screen.getByRole('option', { name: '全部 product' }));
   fireEvent.change(screen.getByRole('textbox', { name: '搜索设备' }), { target: { value: 'NX3Carrier' } });
   await waitFor(() => expect(screen.queryByText('NX3-A')).not.toBeInTheDocument());
   expect(screen.getByText('CARRIER-A')).toBeInTheDocument();

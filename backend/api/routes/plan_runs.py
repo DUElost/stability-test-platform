@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime
 from typing import NoReturn, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -119,6 +120,8 @@ def list_plan_runs(
     ),
     project_key: Optional[str] = Query(None, description="ADR-0029: filter by project key"),
     q: Optional[str] = Query(None, description="搜索 Run ID / Plan 名 / 触发者"),
+    run_type: Optional[str] = Query(None, description="按执行类型过滤"),
+    started_after: Optional[datetime] = Query(None, description="按开始时间下限过滤（ISO 8601）"),
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
@@ -131,6 +134,8 @@ def list_plan_runs(
         statuses=status,
         project_key=project_key,
         q=q,
+        run_type=run_type,
+        started_after=started_after,
     ))
 
 

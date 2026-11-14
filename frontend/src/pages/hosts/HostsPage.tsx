@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Server } from 'lucide-react';
+import { useUrlFilterParams } from '@/hooks/useUrlFilterState';
 import { useToast } from '@/hooks/useToast';
 import { useConfirm } from '@/hooks/useConfirm';
 import { useAuthSession } from '@/hooks/useAuthSession';
@@ -51,10 +53,28 @@ export default function HostsPage() {
   const isAdmin = sessionQ.data?.role === 'admin';
   const canManageWatcherAdminState = isAdmin;
 
-  // ADR-0038 D5：「显示已退役」开关——默认走共享缓存键（三页同口径：不含退役），
-  // 打开时走独立键（避免把含退役的列表写进三页共享缓存），前缀同为 ['hosts']，
-  // 既有 invalidateQueries({queryKey: ['hosts']}) 仍同时覆盖两者。
-  const [showRetired, setShowRetired] = useState(false);
+  const navigate = useNavigate();
+  const { getString, getBool, updateParams, clearParams } = useUrlFilterParams();
+
+  // ADR-0038 D5：「显示已退役」开关——同步到 URL 参数 retired=1
+  const showRetired = getBool('retired');
+  const setShowRetired = (next: boolean) => updateParams({ retired: next });
+  const rawStatus = getString('status', 'all');
+  const statusFilter: 'all' | HostTableData['status'] =
+    rawStatus === 'ONLINE' || rawStatus === 'OFFLINE' || rawStatus === 'DEGRADED'
+      ? rawStatus
+      : 'all';
+  const searchQuery = getString('q', '');
+  const rawHealth = getString('health', 'all');
+  const healthFilter: 'all' | 'HEALTHY' | 'DEGRADED' | 'UNSCHEDULABLE' =
+    rawHealth === 'HEALTHY' || rawHealth === 'DEGRADED' || rawHealth === 'UNSCHEDULABLE'
+      ? rawHealth
+      : 'all';
+  const rawSync = getString('sync', 'all');
+  const syncFilter: 'all' | 'drift' | 'matched' | 'mount_error' =
+    rawSync === 'drift' || rawSync === 'matched' || rawSync === 'mount_error'
+      ? rawSync
+      : 'all';
   const { data: hostsData, isLoading, error } = useQuery({
     queryKey: showRetired ? hostKeys.retiredList() : hostKeys.list(),
     // #3152：全量列表按服务端 total 翻页——单次 `list(0,200)` 在第 201 台起会让主机
@@ -872,7 +892,6 @@ export default function HostsPage() {
               : ` (${hostOps.filter((o) => o.status === 'success').length} 成功 / ${hostOps.filter((o) => o.status === 'failed').length} 失败${hostOps.some((o) => o.status === 'canceled') ? ` / ${hostOps.filter((o) => o.status === 'canceled').length} 已取消` : ''}${hostOps.some((o) => o.status === 'skipped') ? ` / ${hostOps.filter((o) => o.status === 'skipped').length} 跳过` : ''})`}
           </Button>
         )}
-        {retiredToggle}
         {isAdmin && (
           <Button onClick={() => setIsModalOpen(true)}>
             <Plus className="w-4 h-4" />
@@ -884,6 +903,18 @@ export default function HostsPage() {
       {/* Host Table —— tableData 为空的分支在 :567 已提前 return，此处无需再判 */}
       <ExpandableHostTable
         hosts={tableData}
+        statusFilter={statusFilter}
+        onStatusFilterChange={(val) => updateParams({ status: val === 'all' ? undefined : val })}
+        searchQuery={searchQuery}
+        onSearchQueryChange={(val) => updateParams({ q: val || undefined })}
+        healthFilter={healthFilter}
+        onHealthFilterChange={(val) => updateParams({ health: val === 'all' ? undefined : val })}
+        syncFilter={syncFilter}
+        onSyncFilterChange={(val) => updateParams({ sync: val === 'all' ? undefined : val })}
+        showRetired={showRetired}
+        onShowRetiredChange={setShowRetired}
+        onResetAllFilters={() => clearParams(['status', 'q', 'health', 'sync', 'retired'])}
+        onNavigateToDevices={(hostId) => navigate(`/devices?host=${hostId}`)}
         onHotUpdate={isAdmin ? handleHotUpdate : undefined}
         isHotUpdating={(hostId: string | number) =>
           isHostOpBusy(hostId, 'hot_update') ||

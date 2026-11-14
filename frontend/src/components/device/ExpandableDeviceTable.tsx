@@ -1,8 +1,15 @@
 import { deviceProductText } from '@/utils/deviceProduct';
 import type { DeviceUsbPresence } from '@/utils/api/types';
-import { useState, useMemo, useEffect, useRef, Fragment } from 'react';
+import { useState, useMemo, useEffect, useRef, Fragment, type ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 import { BulkBarSpacer } from '@/components/ui/bulk-action-bar';
+import {
+  FilterChips,
+  FilterSearchInput,
+  MoreFiltersPopover,
+  type ActiveFilterChip,
+} from '@/components/ui/filter-bar';
+import { SearchableSelect } from '@/components/ui/searchable-select';
 import {
   Table,
   TableBody,
@@ -26,14 +33,12 @@ import {
   AlertTriangle,
   CheckCircle2,
   Zap,
-  Search,
-  X,
   Tag,
   Pencil,
   HardDrive,
 } from 'lucide-react';
 import { ENTITY_STATUS_COLORS } from '@/design-system/colors';
-import { ALERT_BOX, FORM, resourceUsageBgClass, resourceUsageTextClass, STAT, TEXT } from '@/design-system/tokens';
+import { ALERT_BOX, resourceUsageBgClass, resourceUsageTextClass, STAT } from '@/design-system/tokens';
 import { formatBytes, formatDateTimeFull } from '@/utils/format';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { DeviceReturnPanel } from './DeviceReturnPanel';
@@ -135,6 +140,32 @@ interface ExpandableDeviceTableProps {
   selectedIds?: Set<number>;
   onSelectionChange?: (ids: Set<number>) => void;
   onFilteredDevicesChange?: (devices: DeviceTableData[]) => void;
+  /** 可选受控筛选状态（由 DevicesPage 同步到 URL）。 */
+  statusFilter?: string;
+  onStatusFilterChange?: (value: string) => void;
+  modelFilter?: string;
+  onModelFilterChange?: (value: string) => void;
+  productFilter?: string;
+  onProductFilterChange?: (value: string) => void;
+  versionFilter?: string;
+  onVersionFilterChange?: (value: string) => void;
+  hostFilter?: string;
+  onHostFilterChange?: (value: string) => void;
+  searchQuery?: string;
+  onSearchQueryChange?: (value: string) => void;
+  taggedOnly?: boolean;
+  onTaggedOnlyChange?: (value: boolean) => void;
+  currentPage?: number;
+  onPageChange?: (page: number) => void;
+  includeStale?: boolean;
+  onIncludeStaleChange?: (value: boolean) => void;
+  includeRetired?: boolean;
+  onIncludeRetiredChange?: (value: boolean) => void;
+  projectChipLabel?: string;
+  onClearProjectFilter?: () => void;
+  extraToolbarControls?: ReactNode;
+  onResetAllFilters?: () => void;
+  onNavigateToHost?: (hostName: string) => void;
 }
 
 function hostFilterKey(device: DeviceTableData): string {
@@ -149,15 +180,58 @@ export function ExpandableDeviceTable({
   onFilteredDevicesChange,
   isAdmin = false,
   onEditDeviceTags,
+  statusFilter: controlledStatusFilter,
+  onStatusFilterChange,
+  modelFilter: controlledModelFilter,
+  onModelFilterChange,
+  productFilter: controlledProductFilter,
+  onProductFilterChange,
+  versionFilter: controlledVersionFilter,
+  onVersionFilterChange,
+  hostFilter: controlledHostFilter,
+  onHostFilterChange,
+  searchQuery: controlledSearchQuery,
+  onSearchQueryChange,
+  taggedOnly: controlledTaggedOnly,
+  onTaggedOnlyChange,
+  currentPage: controlledCurrentPage,
+  onPageChange,
+  includeStale,
+  onIncludeStaleChange,
+  includeRetired,
+  onIncludeRetiredChange,
+  projectChipLabel,
+  onClearProjectFilter,
+  extraToolbarControls,
+  onResetAllFilters,
+  onNavigateToHost,
 }: ExpandableDeviceTableProps) {
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
-  const [statusFilter, setStatusFilter] = useState<string>('all');
-  const [modelFilter, setModelFilter] = useState('all');
-  const [productFilter, setProductFilter] = useState('all');
-  const [versionFilter, setVersionFilter] = useState('all');
-  const [hostFilter, setHostFilter] = useState('all');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [currentPage, setCurrentPage] = useState(1);
+  const [localStatusFilter, setLocalStatusFilter] = useState<string>('all');
+  const [localModelFilter, setLocalModelFilter] = useState('all');
+  const [localProductFilter, setLocalProductFilter] = useState('all');
+  const [localVersionFilter, setLocalVersionFilter] = useState('all');
+  const [localHostFilter, setLocalHostFilter] = useState('all');
+  const [localSearchQuery, setLocalSearchQuery] = useState('');
+  const [localTaggedOnly, setLocalTaggedOnly] = useState(false);
+  const [localCurrentPage, setLocalCurrentPage] = useState(1);
+
+  const statusFilter = controlledStatusFilter ?? localStatusFilter;
+  const setStatusFilter = onStatusFilterChange ?? setLocalStatusFilter;
+  const modelFilter = controlledModelFilter ?? localModelFilter;
+  const setModelFilter = onModelFilterChange ?? setLocalModelFilter;
+  const productFilter = controlledProductFilter ?? localProductFilter;
+  const setProductFilter = onProductFilterChange ?? setLocalProductFilter;
+  const versionFilter = controlledVersionFilter ?? localVersionFilter;
+  const setVersionFilter = onVersionFilterChange ?? setLocalVersionFilter;
+  const hostFilter = controlledHostFilter ?? localHostFilter;
+  const setHostFilter = onHostFilterChange ?? setLocalHostFilter;
+  const searchQuery = controlledSearchQuery ?? localSearchQuery;
+  const setSearchQuery = onSearchQueryChange ?? setLocalSearchQuery;
+  const taggedOnly = controlledTaggedOnly ?? localTaggedOnly;
+  const setTaggedOnly = onTaggedOnlyChange ?? setLocalTaggedOnly;
+  const currentPage = controlledCurrentPage ?? localCurrentPage;
+  const setCurrentPage = onPageChange ?? setLocalCurrentPage;
   const selectPageRef = useRef<HTMLInputElement>(null);
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const pageSize = 50;
@@ -250,6 +324,7 @@ export function ExpandableDeviceTable({
       if (modelFilter !== 'all' && device.model !== modelFilter) return false;
       if (productFilter !== 'all' && device.product !== productFilter) return false;
       if (versionFilter !== 'all' && device.build_display_id !== versionFilter) return false;
+      if (taggedOnly && (!device.tags || device.tags.length === 0)) return false;
       if (debouncedSearch) {
         const query = debouncedSearch.toLowerCase();
         return (
@@ -263,10 +338,10 @@ export function ExpandableDeviceTable({
       }
       return true;
     });
-  }, [devices, statusFilter, hostFilter, modelFilter, productFilter, versionFilter, debouncedSearch]);
+  }, [devices, statusFilter, hostFilter, modelFilter, productFilter, versionFilter, taggedOnly, debouncedSearch]);
 
   // Reset to page 1 when filter or search changes
-  const pageResetKey = JSON.stringify([statusFilter, hostFilter, modelFilter, productFilter, versionFilter, debouncedSearch]);
+  const pageResetKey = JSON.stringify([statusFilter, hostFilter, modelFilter, productFilter, versionFilter, taggedOnly, debouncedSearch]);
   const [prevPageResetKey, setPrevPageResetKey] = useState(pageResetKey);
   if (prevPageResetKey !== pageResetKey) {
     setPrevPageResetKey(pageResetKey);
@@ -325,7 +400,7 @@ export function ExpandableDeviceTable({
   }), [devices, totalCount]);
 
   const handlePageChange = (updater: (prev: number) => number) => {
-    setCurrentPage(updater);
+    setCurrentPage(updater(safeCurrentPage));
     const scrollEl = tableContainerRef.current?.querySelector('[data-slot="table-scroll-container"]');
     if (scrollEl) scrollEl.scrollTop = 0;
     tableContainerRef.current?.scrollIntoView?.({ block: 'start' });
@@ -371,7 +446,7 @@ export function ExpandableDeviceTable({
         <button
           type="button"
           aria-pressed={statusFilter === 'idle'}
-          onClick={() => setStatusFilter((prev) => (prev === 'idle' ? 'all' : 'idle'))}
+          onClick={() => setStatusFilter(statusFilter === 'idle' ? 'all' : 'idle')}
           className={cn(
             'bg-card rounded-lg border p-3 flex flex-col gap-2 text-left transition-colors',
             statusFilter === 'idle'
@@ -390,7 +465,7 @@ export function ExpandableDeviceTable({
         <button
           type="button"
           aria-pressed={statusFilter === 'testing'}
-          onClick={() => setStatusFilter((prev) => (prev === 'testing' ? 'all' : 'testing'))}
+          onClick={() => setStatusFilter(statusFilter === 'testing' ? 'all' : 'testing')}
           className={cn(
             'bg-card rounded-lg border p-3 flex flex-col gap-2 text-left transition-colors',
             statusFilter === 'testing'
@@ -411,7 +486,7 @@ export function ExpandableDeviceTable({
         <button
           type="button"
           aria-pressed={statusFilter === 'offline'}
-          onClick={() => setStatusFilter((prev) => (prev === 'offline' ? 'all' : 'offline'))}
+          onClick={() => setStatusFilter(statusFilter === 'offline' ? 'all' : 'offline')}
           className={cn(
             'bg-card rounded-lg border p-3 flex flex-col gap-2 text-left transition-colors',
             statusFilter === 'offline' ? 'border-foreground/40 bg-muted/30' : 'border-border hover:bg-muted/20',
@@ -428,7 +503,7 @@ export function ExpandableDeviceTable({
         <button
           type="button"
           aria-pressed={statusFilter === 'error'}
-          onClick={() => setStatusFilter((prev) => (prev === 'error' ? 'all' : 'error'))}
+          onClick={() => setStatusFilter(statusFilter === 'error' ? 'all' : 'error')}
           className={cn(
             'bg-card rounded-lg border p-3 flex flex-col gap-2 text-left transition-colors',
             statusFilter === 'error'
@@ -448,76 +523,223 @@ export function ExpandableDeviceTable({
         </button>
       </div>
 
-      {/* Search + dropdown filters */}
-      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
-        <div className="relative min-w-0 flex-1 sm:max-w-md">
-          <Search className={cn('absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none', TEXT.subtitle)} />
-          <input
-            id="device-search"
-            name="device-search"
-            aria-label="搜索设备"
-            type="text"
-            placeholder="搜索设备序列号/型号/product/版本/主机/标签..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className={cn('w-full pl-9 pr-8 h-9', FORM.inputSm)}
-          />
-          {searchQuery && (
-            <button
-              type="button"
-              aria-label="清空搜索"
-              onClick={() => setSearchQuery('')}
-              className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
-          )}
-        </div>
-        <select
-          value={modelFilter}
-          onChange={(e) => setModelFilter(e.target.value)}
-          className={cn(FORM.select, 'h-9 w-full sm:w-40')}
-          aria-label="按设备筛选"
-        >
-          <option value="all">全部设备</option>
-          {modelOptions.map((model) => (
-            <option key={model} value={model}>{model}</option>
-          ))}
-        </select>
-        <select
-          value={productFilter}
-          onChange={(e) => setProductFilter(e.target.value)}
-          className={cn(FORM.select, 'h-9 w-full sm:w-56')}
-          aria-label="按 product 筛选"
-        >
-          <option value="all">全部 product</option>
-          {productOptions.map((product) => (
-            <option key={product} value={product}>{product}</option>
-          ))}
-        </select>
-        <select
-          value={versionFilter}
-          onChange={(e) => setVersionFilter(e.target.value)}
-          className={cn(FORM.select, 'h-9 w-full sm:w-48')}
-          aria-label="按版本筛选"
-        >
-          <option value="all">全部版本</option>
-          {versionOptions.map((version) => (
-            <option key={version} value={version}>{version}</option>
-          ))}
-        </select>
-        <select
-          value={hostFilter}
-          onChange={(e) => setHostFilter(e.target.value)}
-          className={cn(FORM.select, 'h-9 w-full sm:w-48')}
-          aria-label="按所属主机筛选"
-        >
-          <option value="all">全部主机</option>
-          {hostOptions.map((host) => (
-            <option key={host.value} value={host.value}>{host.label}</option>
-          ))}
-        </select>
-      </div>
+      {/* 统一筛选条：搜索 + 项目 + 主机(可搜) + 型号(可搜) + 更多筛选 + Chips */}
+      {(() => {
+        const statusLabelMap: Record<string, string> = {
+          idle: '空闲',
+          testing: '测试中',
+          offline: '离线',
+          error: '错误',
+        };
+        const selectedHostLabel =
+          hostOptions.find((h) => h.value === hostFilter)?.label ?? hostFilter;
+        const activeChips: ActiveFilterChip[] = [];
+        if (projectChipLabel && onClearProjectFilter) {
+          activeChips.push({
+            key: 'project',
+            label: '项目',
+            value: projectChipLabel,
+            onRemove: onClearProjectFilter,
+          });
+        }
+        if (statusFilter !== 'all') {
+          activeChips.push({
+            key: 'status',
+            label: '状态',
+            value: statusLabelMap[statusFilter] ?? statusFilter,
+            onRemove: () => setStatusFilter('all'),
+          });
+        }
+        if (hostFilter !== 'all') {
+          activeChips.push({
+            key: 'host',
+            label: '主机',
+            value: selectedHostLabel,
+            onRemove: () => setHostFilter('all'),
+          });
+        }
+        if (modelFilter !== 'all') {
+          activeChips.push({
+            key: 'model',
+            label: '型号',
+            value: modelFilter,
+            onRemove: () => setModelFilter('all'),
+          });
+        }
+        if (productFilter !== 'all') {
+          activeChips.push({
+            key: 'product',
+            label: 'product',
+            value: productFilter,
+            onRemove: () => setProductFilter('all'),
+          });
+        }
+        if (versionFilter !== 'all') {
+          activeChips.push({
+            key: 'version',
+            label: '版本',
+            value: versionFilter,
+            onRemove: () => setVersionFilter('all'),
+          });
+        }
+        if (taggedOnly) {
+          activeChips.push({
+            key: 'tagged',
+            label: '标签',
+            value: '仅看有标签',
+            onRemove: () => setTaggedOnly(false),
+          });
+        }
+        if (includeStale && onIncludeStaleChange) {
+          activeChips.push({
+            key: 'stale',
+            label: '范围',
+            value: '含陈旧设备',
+            onRemove: () => onIncludeStaleChange(false),
+          });
+        }
+        if (includeRetired && onIncludeRetiredChange) {
+          activeChips.push({
+            key: 'retired',
+            label: '范围',
+            value: '含已退役',
+            onRemove: () => onIncludeRetiredChange(false),
+          });
+        }
+        if (searchQuery.trim()) {
+          activeChips.push({
+            key: 'q',
+            label: '搜索',
+            value: searchQuery.trim(),
+            onRemove: () => setSearchQuery(''),
+          });
+        }
+
+        const moreActiveCount =
+          (productFilter !== 'all' ? 1 : 0) +
+          (versionFilter !== 'all' ? 1 : 0) +
+          (taggedOnly ? 1 : 0) +
+          (includeStale ? 1 : 0) +
+          (includeRetired ? 1 : 0);
+
+        const handleResetAll = () => {
+          if (onResetAllFilters) {
+            onResetAllFilters();
+            return;
+          }
+          setStatusFilter('all');
+          setHostFilter('all');
+          setModelFilter('all');
+          setProductFilter('all');
+          setVersionFilter('all');
+          setTaggedOnly(false);
+          setSearchQuery('');
+          onClearProjectFilter?.();
+          onIncludeStaleChange?.(false);
+          onIncludeRetiredChange?.(false);
+        };
+
+        return (
+          <div className="space-y-2">
+            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+              <FilterSearchInput
+                id="device-search"
+                value={searchQuery}
+                onChange={setSearchQuery}
+                placeholder="搜索序列号 / 型号 / product / 版本 / 主机 / 标签..."
+                ariaLabel="搜索设备"
+                className="flex-1 sm:max-w-md"
+              />
+              {extraToolbarControls}
+              <SearchableSelect
+                value={hostFilter}
+                onChange={setHostFilter}
+                options={hostOptions}
+                allLabel="全部主机"
+                searchPlaceholder="输入主机名搜索..."
+                ariaLabel="按所属主机筛选"
+                className="w-full sm:w-44"
+                testId="device-host-filter"
+              />
+              <SearchableSelect
+                value={modelFilter}
+                onChange={setModelFilter}
+                options={modelOptions.map((m) => ({ value: m, label: m }))}
+                allLabel="全部型号"
+                searchPlaceholder="输入型号搜索..."
+                ariaLabel="按型号筛选"
+                className="w-full sm:w-40"
+                testId="device-model-filter"
+              />
+              <MoreFiltersPopover activeCount={moreActiveCount} testId="devices-more-filters">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-foreground">Product</label>
+                  <SearchableSelect
+                    value={productFilter}
+                    onChange={setProductFilter}
+                    options={productOptions.map((p) => ({ value: p, label: p }))}
+                    allLabel="全部 product"
+                    searchPlaceholder="输入 product 搜索..."
+                    ariaLabel="按 product 筛选"
+                    className="w-full"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-foreground">系统版本</label>
+                  <SearchableSelect
+                    value={versionFilter}
+                    onChange={setVersionFilter}
+                    options={versionOptions.map((v) => ({ value: v, label: v }))}
+                    allLabel="全部版本"
+                    searchPlaceholder="输入版本号搜索..."
+                    ariaLabel="按版本筛选"
+                    className="w-full"
+                  />
+                </div>
+                <label className="flex cursor-pointer items-center justify-between rounded-md border border-border px-2.5 py-2 text-xs">
+                  <span>仅显示有标签设备</span>
+                  <input
+                    type="checkbox"
+                    checked={taggedOnly}
+                    onChange={(e) => setTaggedOnly(e.target.checked)}
+                    className="rounded"
+                  />
+                </label>
+                {onIncludeStaleChange && (
+                  <label className="flex cursor-pointer items-center justify-between rounded-md border border-border px-2.5 py-2 text-xs">
+                    <span>显示陈旧设备</span>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(includeStale)}
+                      onChange={(e) => onIncludeStaleChange(e.target.checked)}
+                      data-testid="device-toggle-stale"
+                      className="rounded"
+                    />
+                  </label>
+                )}
+                {onIncludeRetiredChange && (
+                  <label className="flex cursor-pointer items-center justify-between rounded-md border border-border px-2.5 py-2 text-xs">
+                    <span>显示已退役设备</span>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(includeRetired)}
+                      onChange={(e) => onIncludeRetiredChange(e.target.checked)}
+                      data-testid="device-toggle-retired"
+                      className="rounded"
+                    />
+                  </label>
+                )}
+              </MoreFiltersPopover>
+            </div>
+            <FilterChips
+              chips={activeChips}
+              onResetAll={handleResetAll}
+              matchSummary={`匹配 ${filteredDevices.length} / ${devices.length} 台设备`}
+              testId="devices-filter-chips"
+            />
+          </div>
+        );
+      })()}
 
       {/* Table */}
       <div ref={tableContainerRef} className="rounded-xl border border-border bg-card">
@@ -797,7 +1019,21 @@ export function ExpandableDeviceTable({
                       )}
                     </TableCell>
                     <TableCell className="max-w-[140px] truncate px-3 py-1.5 text-sm text-muted-foreground" title={device.host_name || undefined}>
-                      {device.host_name || '-'}
+                      {device.host_name && onNavigateToHost ? (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onNavigateToHost(device.host_name!);
+                          }}
+                          className="truncate text-left text-primary hover:underline"
+                          title={`跳转到主机页查看 ${device.host_name}`}
+                        >
+                          {device.host_name}
+                        </button>
+                      ) : (
+                        device.host_name || '-'
+                      )}
                     </TableCell>
                     <TableCell className="px-3 py-1.5 text-right text-xs text-muted-foreground whitespace-nowrap">
                       {device.last_seen
