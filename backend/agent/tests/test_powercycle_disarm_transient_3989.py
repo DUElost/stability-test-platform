@@ -42,6 +42,17 @@ def disarm_pair():
     return _load_disarm_modules("unit")
 
 
+def _patch_advancing_clock(monkeypatch, mod, start: float = 1000.0) -> None:
+    now = [start]
+    monkeypatch.setattr(mod.time, "time", lambda: now[0])
+    monkeypatch.setattr(mod.time, "monotonic", lambda: now[0])
+
+    def _sleep(sec: float) -> None:
+        now[0] += float(sec)
+
+    monkeypatch.setattr(mod.time, "sleep", _sleep)
+
+
 class TestAutotesttoolInstalledAndReadPrefsRetry:
     @pytest.mark.parametrize(
         ("out", "err"),
@@ -149,7 +160,7 @@ class TestAutotesttoolInstalledAndReadPrefsRetry:
         monkeypatch.setattr(mod, "_detect_platform", lambda: "MTK")
         monkeypatch.setattr(mod, "_device_identity_evidence", lambda: {"permission_model": "root"})
         monkeypatch.setattr(mod, "is_root", lambda: True)
-        monkeypatch.setattr(mod.time, "sleep", lambda _s: None)
+        _patch_advancing_clock(monkeypatch, mod)
         monkeypatch.setattr(mod, "progress_stamp", lambda _p: None)
         monkeypatch.setattr(
             mod,
@@ -258,16 +269,16 @@ class TestDeviceReturnTransientRetryAndLogging:
         assert res2.success is False
         assert transient_calls == ["probe", "disarm", "disarm"]
 
-    def _make_consumer(self, scheduler=None):
+    def _make_consumer(self, scheduler=None, is_active=None):
         now = 100.0
         sched = scheduler if scheduler is not None else OperationScheduler(max_concurrent=1)
         consumer = device_return.ReturnDebtConsumer(
             api_url="http://control-plane.invalid",
             adb_path="adb",
             script_registry=SimpleNamespace(),
-            local_db=SimpleNamespace(),
+            local_db=SimpleNamespace(set_state=lambda *_a, **_kw: None),
             get_scheduler=lambda: sched,
-            is_active=lambda _did: False,
+            is_active=is_active if is_active is not None else (lambda _did: False),
             engine_factory=lambda *args, **kwargs: SimpleNamespace(),
             clock=lambda: now,
             launch=lambda _fn: None,
@@ -366,3 +377,73 @@ class TestDeviceReturnTransientRetryAndLogging:
             consumer_net._execute(debt_net, ["power-cycle"])
         assert "return_debt_report_deferred" in caplog.text
         assert debt_net.attempts["power-cycle"] == (100.0, "unreported")
+
+    @pytest.mark.parametrize(
+        ("scenario", "expected_log"),
+        [
+            ("withdrawn", "return_debt_retry_aborted_stale"),
+            ("token_rotated", "return_debt_retry_aborted_stale"),
+            ("family_removed", "return_debt_retry_aborted_stale"),
+            ("became_active", "return_debt_retry_aborted_active"),
+        ],
+    )
+    def test_debt_execute_aborts_retry_when_debt_or_device_state_changes(
+        self, monkeypatch, caplog, scenario, expected_log
+    ):
+        active = False
+        consumer, debt, _sched = self._make_consumer(is_active=lambda _did: active)
+        calls: list[str] = []
+        discharges: list[dict] = []
+
+        devices = [{"serial": "DEV-7", "adb_connected": True}]
+
+        def fake_exec(_engine, _family, mode, **_kwargs):
+            nonlocal active
+            calls.append(mode)
+            if scenario == "withdrawn":
+                consumer.receive({"return_debts": []}, devices)
+            elif scenario == "token_rotated":
+                consumer.receive(
+                    {
+                        "return_debts": [
+                            {
+                                "device_id": 7,
+                                "serial": "DEV-7",
+                                "fencing_token": "tok-new",
+                                "families": ["power-cycle"],
+                            }
+                        ]
+                    },
+                    devices,
+                )
+            elif scenario == "family_removed":
+                consumer.receive(
+                    {
+                        "return_debts": [
+                            {
+                                "device_id": 7,
+                                "serial": "DEV-7",
+                                "fencing_token": "tok-7",
+                                "families": [],
+                            }
+                        ]
+                    },
+                    devices,
+                )
+            elif scenario == "became_active":
+                active = True
+            return {"result": "failed", "evidence": {"readback": "readback_failed", "kind": "transient"}}
+
+        monkeypatch.setattr(device_return, "execute_registered", fake_exec)
+        monkeypatch.setattr(
+            device_return,
+            "report_return_discharge",
+            lambda _url, _did, _tok, payload: discharges.append(payload),
+        )
+
+        with caplog.at_level(logging.INFO, logger=device_return.logger.name):
+            consumer._execute(debt, ["power-cycle"])
+
+        assert calls == ["disarm"]
+        assert discharges == []
+        assert expected_log in caplog.text

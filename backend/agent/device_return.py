@@ -292,6 +292,19 @@ class ReturnDebtConsumer:
                 try:
                     entry = execute_registered(engine, family, "disarm", with_permit=False)
                     if _is_transient_readback_failure(entry):
+                        if self.is_active(debt.device_id):
+                            logger.info(
+                                "return_debt_retry_aborted_active device_id=%s family=%s",
+                                debt.device_id, family,
+                            )
+                            return
+                        with self._lock:
+                            if self._debts.get(debt.device_id) is not debt or family not in debt.families:
+                                logger.info(
+                                    "return_debt_retry_aborted_stale device_id=%s family=%s",
+                                    debt.device_id, family,
+                                )
+                                return
                         logger.warning(
                             "return_debt_transient_retry device_id=%s family=%s",
                             debt.device_id, family,
