@@ -59,6 +59,20 @@ manifest 清单**，补齐刷前版本比对（同版本跳过）与刷后版本
 存在则用于补缺 da/scatter 与提供比对版本，不存在则维持 v1.1.0 手工三参数
 行为（完全向后兼容）。
 
+**路由模式选型约束（2026-11-13 实证补充）**：fingerprint 路由隐含要求
+`目录名 == params.version == manifest.version` 三元同串——适用于
+「设备 incremental 即目录名」的包。userroot 构建变体的设备
+`ro.build.version.incremental` 带 `user-` 段（如
+`P535AA-HONOR-NX2-16-user-261110V94`）而目录名沿用包名口径不含该段，
+三元一致不可满足：params.version 取包名口径则刷后 verify mismatch
+（run 1339/1340），取 incremental 口径则目录不存在（run 1342/1343 整批
+fail-fast，无烧写副作用）。此类包（含 NX3Carrier 的 fingerprint 形
+manifest）必须改用显式 `firmware_dir` 路由：`decided_by=params` 免
+目录名一致校验，刷后比对按 manifest.version 执行；目录名、manifest、
+params 三者解耦后各取其真实口径。运维上架口径见
+[runbook §1](../operations/honor-flash-runbook.md)（userroot 包
+incremental 陷阱条目）。
+
 ## 3. 脚本行为
 
 ```
