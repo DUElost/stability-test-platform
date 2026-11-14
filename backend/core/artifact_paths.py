@@ -13,7 +13,17 @@ from backend.core.storage_root import (
     resolve_legacy_log_storage_root,
     resolve_shared_storage_root,
 )
-from backend.storage_families import FAMILY_STORAGE_ROOTS, storage_root_for_family
+from backend.agent.contracts.evidence_layout import (
+    EVIDENCE_ROOT,
+    EvidenceLayoutError,
+    assert_no_symlinks,
+    parse_evidence_rel_path,
+)
+from backend.storage_families import (
+    EVIDENCE_FAMILY,
+    FAMILY_STORAGE_ROOTS,
+    storage_root_for_family,
+)
 
 _WINDOWS_DRIVE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
 _SAFE_PATH_COMPONENT_RE = re.compile(r"^[^/\\\0]+$")
@@ -165,6 +175,77 @@ def resolve_device_event_remote_path(
                 f"device log remote path must stay under {scope}: {resolved_path}"
             )
     return resolved_path
+
+
+def evidence_area_root() -> Path:
+    """证据区根：日志根下的顶层 ``evidence/``（B8 G6，D9 第 6 条）。"""
+    raw = storage_root_for_family(
+        EVIDENCE_FAMILY,
+        log_root=resolve_shared_storage_root(),
+        control_plane_root=resolve_control_plane_storage_root(),
+    )
+    if not raw:
+        raise ArtifactPathError("STP_AEE_NFS_ROOT is not configured")
+    return Path(raw).resolve(strict=False) / EVIDENCE_ROOT
+
+
+def resolve_evidence_event_path(
+    rel_path: str,
+    *,
+    root_plan_run_id: int | None = None,
+    serial: str | None = None,
+    event_dir: str | None = None,
+    must_exist: bool = False,
+) -> Path:
+    """校验并解析证据区相对路径（``evidence/<主文件夹>/<SN>/<事件目录>``）。
+
+    接收端用它验证回执里的完整相对路径：当前链根、SN、事件目录三段必须与
+    发布记录逐字一致；路径分量不得是 symlink，目的目录本身还要求整棵树
+    无 symlink（``must_exist=True``）。越根、绝对路径、``..``、反斜杠都在
+    契约层拒绝。
+    """
+    try:
+        parts = parse_evidence_rel_path(
+            rel_path,
+            root_plan_run_id=root_plan_run_id,
+            serial=serial,
+            event_dir=event_dir,
+        )
+    except EvidenceLayoutError as exc:
+        raise ArtifactPathOutsideRootError(str(exc)) from exc
+
+    raw_root = storage_root_for_family(
+        EVIDENCE_FAMILY,
+        log_root=resolve_shared_storage_root(),
+        control_plane_root=resolve_control_plane_storage_root(),
+    )
+    if not raw_root:
+        raise ArtifactPathError("STP_AEE_NFS_ROOT is not configured")
+    storage_root = Path(raw_root).resolve(strict=False)
+    area = storage_root / EVIDENCE_ROOT
+    if area.is_symlink():
+        raise ArtifactPathOutsideRootError(f"symlink not allowed: {area}")
+
+    current = storage_root
+    missing = False
+    for part in (EVIDENCE_ROOT, *parts[1:]):
+        current = current / part
+        if os.path.lexists(current) and current.is_symlink():
+            raise ArtifactPathOutsideRootError(f"symlink not allowed: {current}")
+        if not os.path.exists(current):
+            missing = True
+            break
+    dest = area.joinpath(*parts[1:])
+    if must_exist and (missing or not dest.is_dir()):
+        raise ArtifactPathNotFoundError(f"evidence path not found: {rel_path}")
+    if must_exist:
+        try:
+            assert_no_symlinks(dest)
+        except EvidenceLayoutError as exc:
+            raise ArtifactPathOutsideRootError(str(exc)) from exc
+        if not dest.resolve(strict=False).is_relative_to(area.resolve(strict=False)):
+            raise ArtifactPathOutsideRootError(f"evidence path escaped root: {rel_path}")
+    return dest
 
 
 def _reject_path_traversal(raw: str) -> None:

@@ -7,6 +7,7 @@ from backend.models.device_log_event import DeviceLogEvent
 from backend.models.host import Device, Host
 from backend.models.issue_fact import (
     DeliveryVersion,
+    EvidencePublication,
     IssueOccurrence,
     IssueOccurrenceEvent,
     IssueSignature,
@@ -55,6 +56,7 @@ __all__ = [
     "DeviceReturnDebt",
     "DeviceLogEvent",
     "DeliveryVersion",
+    "EvidencePublication",
     "EventState",
     "EventType",
     "Host",

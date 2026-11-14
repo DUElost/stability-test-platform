@@ -13,6 +13,7 @@ from backend.agent.contracts.scan_device_id import normalize_device_id
 from backend.core.metrics import shadow_merge_device_id_serial_mismatch_total, shadow_merge_failed_final_total
 from backend.core.database import SessionLocal
 from backend.core.settings.scheduler import get_scheduler_settings
+from backend.services import evidence_publication
 from backend.services import issue_fact_store as facts
 from backend.services import shadow_delivery
 from backend.services.scan_membership import build_request, match_issues, read_report, validate_match
@@ -270,6 +271,11 @@ def run_shadow_merge(plan_run_id: int, fact_round_id: int):
                 and merged.merge_status in {'OK', 'NO_INPUT', 'FAILED_FINAL'}
             ):
                 delivery_platform = merged.platform
+            if merged is not None and merged.merge_status == 'OK':
+                # 选择与发布记录同事务提交：崩溃不会留下「已选但无发布记录」。
+                evidence_publication.ensure_partition_publications(
+                    db, plan_run_id=plan_run_id, platform=merged.platform,
+                )
             db.commit()
             if delivery_platform is not None:
                 shadow_delivery.try_register_delivery_version(

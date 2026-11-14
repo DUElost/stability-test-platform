@@ -21,6 +21,7 @@ from .aee.paths import (
 from .artifact_uploader import ArtifactUploader
 from .config import BASE_DIR
 from .event_uploader import EventUploader
+from .evidence_uploader import EvidenceUploader
 from .local_disk_monitor import LocalDiskMonitor
 from .log_archiver import LogArchiver
 from .scan_runner import ScanRunner
@@ -78,6 +79,15 @@ def start_disk_and_watcher_subsystems(
             nfs_root=cifs_root,
         )
         EventUploader.instance().start()
+        # B8 G6：代表证据上送与 EventUploader 共用同一控制面凭据与日志根，
+        # 但目的路径/回执端点独立；无共享根时同样不启用。
+        EvidenceUploader.instance().configure(
+            api_url=api_url,
+            agent_secret=agent_secret,
+            host_id=str(host_id),
+            nfs_root=cifs_root,
+        )
+        EvidenceUploader.instance().start()
         logger.info("event_uploader=started cifs=%s", cifs_root)
     else:
         logger.info("event_uploader_skipped cifs_root_empty")

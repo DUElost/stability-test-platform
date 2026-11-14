@@ -303,13 +303,15 @@ async def list_device_log_events(
     state: Optional[str] = None,
     limit: Optional[int] = None,
     plan_run_id: Optional[int] = None,
+    ids: Optional[str] = None,
+    purpose: Optional[str] = None,
     db: AsyncSession = Depends(get_async_db),
     _=Depends(_verify_agent),
 ):
-    """按 host 与可选 run/state 拉取事件（``detected_at`` 升序）。"""
+    """按 host 与可选 run/state/ids/purpose 拉取事件；purpose/ids 须透传服务层。"""
     return ok(await list_agent_device_log_events(
         db, host_id=host_id, state=state, limit=limit, plan_run_id=plan_run_id,
-    ))
+        ids=ids, purpose=purpose))
 
 
 # ── Artifact ingestion（ADR-0018 5B2）────────────────────────────────────────

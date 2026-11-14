@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session, aliased
 
 from backend.models.issue_fact import (
     DeliveryVersion,
+    EvidencePublication,
     IssueOccurrence,
     IssueOccurrenceEvent,
     IssueSignature,
@@ -905,3 +906,260 @@ def list_shadow_delivery_due_run_ids(db: Session, *, platform: str) -> list[int]
             ),
         ).distinct().order_by(ScanRound.plan_run_id)
     ).scalars())
+
+
+# ---------------------------------------------------------------------------
+# B8 G6：S8 代表证据发布台账（ADR-0062 D8/D9）
+# ---------------------------------------------------------------------------
+
+PUBLICATION_STATE_PENDING = "PENDING"
+PUBLICATION_STATE_RETRYING = "RETRYING"
+PUBLICATION_STATE_VERIFIED = "VERIFIED"
+PUBLICATION_STATE_FAILED = "FAILED"
+_PUBLICATION_STATES = frozenset({
+    PUBLICATION_STATE_PENDING,
+    PUBLICATION_STATE_RETRYING,
+    PUBLICATION_STATE_VERIFIED,
+    PUBLICATION_STATE_FAILED,
+})
+_PUBLICATION_ACTIVE_STATES = frozenset({
+    PUBLICATION_STATE_PENDING,
+    PUBLICATION_STATE_RETRYING,
+})
+PUBLICATION_SOURCE_LOCAL = "LOCAL"
+PUBLICATION_SOURCE_SPILL = "SPILL"
+_PUBLICATION_SOURCES = frozenset({
+    PUBLICATION_SOURCE_LOCAL,
+    PUBLICATION_SOURCE_SPILL,
+})
+
+
+def record_evidence_publication(
+    db: Session,
+    *,
+    plan_run_id: int,
+    platform: str,
+    dle_id: Any,
+    root_plan_run_id: int,
+    source_kind: str,
+    source_path: Optional[str],
+    collection_folder: Optional[str],
+    naming_rule_version: Optional[str],
+    destination_rel_path: Optional[str],
+    executor_host_id: Optional[str] = None,
+    state: str = PUBLICATION_STATE_PENDING,
+    failure_reason: Optional[str] = None,
+) -> EvidencePublication:
+    """按 (plan_run_id, platform, dle_id) 幂等登记发布记录。
+
+    身份一旦存在即返回原记录：同一 DLE 被多个问题选为代表时复用一条记录，
+    不得因重放改写来源或目的路径。状态只允许从 PENDING/FAILED 起步；后续
+    变化走 update_evidence_publication_state。
+    """
+    _require_one_of(source_kind, _PUBLICATION_SOURCES, "source_kind")
+    if state not in {PUBLICATION_STATE_PENDING, PUBLICATION_STATE_FAILED}:
+        raise ValueError(f"publication initial state invalid: {state!r}")
+    if state == PUBLICATION_STATE_FAILED and not failure_reason:
+        raise ValueError("publication FAILED requires failure_reason")
+    if state != PUBLICATION_STATE_FAILED and not destination_rel_path:
+        raise ValueError("active publication requires destination_rel_path")
+
+    existing = db.execute(
+        select(EvidencePublication).where(
+            EvidencePublication.plan_run_id == plan_run_id,
+            EvidencePublication.platform == platform,
+            EvidencePublication.dle_id == dle_id,
+        )
+    ).scalars().first()
+    if existing is not None:
+        return existing
+
+    row = EvidencePublication(
+        plan_run_id=plan_run_id,
+        platform=platform,
+        dle_id=dle_id,
+        root_plan_run_id=root_plan_run_id,
+        source_kind=source_kind,
+        source_path=source_path,
+        collection_folder=collection_folder,
+        naming_rule_version=naming_rule_version,
+        destination_rel_path=destination_rel_path,
+        state=state,
+        failure_reason=failure_reason,
+        executor_host_id=executor_host_id,
+    )
+    if state == PUBLICATION_STATE_FAILED:
+        row.last_attempt_at = _utcnow()
+    db.add(row)
+    db.flush()
+    return row
+
+
+def get_evidence_publication(
+    db: Session, *, publication_id: int, for_update: bool = False,
+) -> Optional[EvidencePublication]:
+    stmt = select(EvidencePublication).where(EvidencePublication.id == publication_id)
+    if for_update:
+        stmt = stmt.with_for_update().execution_options(populate_existing=True)
+    return db.execute(stmt).scalar_one_or_none()
+
+
+def get_evidence_publication_for_dle(
+    db: Session, *, plan_run_id: int, platform: str, dle_id: Any,
+) -> Optional[EvidencePublication]:
+    return db.execute(select(EvidencePublication).where(
+        EvidencePublication.plan_run_id == plan_run_id,
+        EvidencePublication.platform == platform,
+        EvidencePublication.dle_id == dle_id,
+    )).scalar_one_or_none()
+
+
+def list_partition_evidence_publications(
+    db: Session, *, plan_run_id: int, platform: str,
+) -> list[EvidencePublication]:
+    return list(db.execute(
+        select(EvidencePublication).where(
+            EvidencePublication.plan_run_id == plan_run_id,
+            func.lower(EvidencePublication.platform) == platform.lower(),
+        ).order_by(EvidencePublication.id)
+    ).scalars())
+
+
+def list_agent_evidence_publications(
+    db: Session, *, host_id: str, limit: int = 50,
+) -> list[EvidencePublication]:
+    """Agent 拉取本机待办：LOCAL 源、仍在传输/重试中的记录。"""
+    return list(db.execute(
+        select(EvidencePublication).where(
+            EvidencePublication.executor_host_id == host_id,
+            EvidencePublication.source_kind == PUBLICATION_SOURCE_LOCAL,
+            EvidencePublication.state.in_(sorted(_PUBLICATION_ACTIVE_STATES)),
+        ).order_by(EvidencePublication.id).limit(limit)
+    ).scalars())
+
+
+def list_due_spill_publication_ids(
+    db: Session, *, now: datetime, limit: int = 20,
+) -> list[int]:
+    """中心复制待办：SPILL 源、活动状态、到达重试时间。"""
+    return list(db.execute(
+        select(EvidencePublication.id).where(
+            EvidencePublication.source_kind == PUBLICATION_SOURCE_SPILL,
+            EvidencePublication.state.in_(sorted(_PUBLICATION_ACTIVE_STATES)),
+            or_(
+                EvidencePublication.next_attempt_at.is_(None),
+                EvidencePublication.next_attempt_at <= now,
+            ),
+        ).order_by(EvidencePublication.id).limit(limit)
+    ).scalars())
+
+
+def list_evidence_publication_delivery_due_run_ids(
+    db: Session, *, platform: str,
+) -> list[int]:
+    """回执已终态但最新交付版本尚未反映的分区（登记失败/重启补偿）。"""
+    latest = select(func.max(DeliveryVersion.registered_at)).where(
+        DeliveryVersion.plan_run_id == EvidencePublication.plan_run_id,
+        func.lower(DeliveryVersion.platform) == func.lower(EvidencePublication.platform),
+    ).correlate(EvidencePublication).scalar_subquery()
+    return list(db.execute(
+        select(EvidencePublication.plan_run_id).where(
+            func.lower(EvidencePublication.platform) == platform.lower(),
+            EvidencePublication.state.in_([
+                PUBLICATION_STATE_VERIFIED, PUBLICATION_STATE_FAILED,
+            ]),
+            or_(latest.is_(None), EvidencePublication.updated_at > latest),
+        ).distinct().order_by(EvidencePublication.plan_run_id)
+    ).scalars())
+
+
+def list_evidence_publication_archive_due_run_ids(
+    db: Session, *, platform: str,
+) -> list[int]:
+    """已校验但代表 DLE 尚未归档的分区（登记成功后补归档）。"""
+    return list(db.execute(
+        select(EvidencePublication.plan_run_id).join(
+            DeviceLogEvent, DeviceLogEvent.id == EvidencePublication.dle_id,
+        ).where(
+            func.lower(EvidencePublication.platform) == platform.lower(),
+            EvidencePublication.state == PUBLICATION_STATE_VERIFIED,
+            DeviceLogEvent.state.in_(["LOCAL", "REMOTE"]),
+        ).distinct().order_by(EvidencePublication.plan_run_id)
+    ).scalars())
+
+
+def list_partition_selections(
+    db: Session, *, plan_run_id: int, platform: str,
+) -> list[RepresentativeSelection]:
+    return list(db.execute(
+        select(RepresentativeSelection).where(
+            RepresentativeSelection.plan_run_id == plan_run_id,
+            func.lower(RepresentativeSelection.platform) == platform.lower(),
+        ).order_by(RepresentativeSelection.signature_id)
+    ).scalars())
+
+
+def list_selections_for_dle(
+    db: Session, *, plan_run_id: int, platform: str, dle_id: Any,
+) -> list[RepresentativeSelection]:
+    """复用同一代表的全部问题（多个问题共享一条发布记录）。"""
+    return list(db.execute(
+        select(RepresentativeSelection).where(
+            RepresentativeSelection.plan_run_id == plan_run_id,
+            func.lower(RepresentativeSelection.platform) == platform.lower(),
+            RepresentativeSelection.dle_id == dle_id,
+            RepresentativeSelection.selection_status == SELECTION_SELECTED,
+        ).order_by(RepresentativeSelection.signature_id)
+    ).scalars())
+
+
+def get_device_log_event(db: Session, *, dle_id: Any) -> Optional[DeviceLogEvent]:
+    return db.get(DeviceLogEvent, dle_id)
+
+
+def update_evidence_publication_state(
+    db: Session,
+    *,
+    row: EvidencePublication,
+    state: str,
+    attempts: Optional[int] = None,
+    checksum: Optional[str] = None,
+    size_bytes: Optional[int] = None,
+    failure_reason: Optional[str] = None,
+    next_attempt_at: Optional[datetime] = None,
+    now: Optional[datetime] = None,
+) -> EvidencePublication:
+    """推进发布状态；VERIFIED / FAILED 是终态，重复同态幂等。
+
+    尝试次数只增不减（重启不清零）；FAILED 必须带原因；VERIFIED 必须带
+    已复核的哈希与字节数。调用方负责行锁与事务。
+    """
+    _require_one_of(state, _PUBLICATION_STATES, "state")
+    stamp = now or _utcnow()
+    if row.state in {PUBLICATION_STATE_VERIFIED, PUBLICATION_STATE_FAILED}:
+        if state != row.state:
+            raise ImmutableIssueFactError(
+                f"evidence_publication is terminal: {row.state} -> {state}",
+            )
+        if state == PUBLICATION_STATE_VERIFIED and checksum and row.checksum != checksum:
+            raise ImmutableIssueFactError("verified checksum is immutable")
+        return row
+
+    if state == PUBLICATION_STATE_FAILED and not failure_reason:
+        raise ValueError("publication FAILED requires failure_reason")
+    if state == PUBLICATION_STATE_VERIFIED and (not checksum or size_bytes is None):
+        raise ValueError("publication VERIFIED requires checksum and size_bytes")
+
+    row.state = state
+    if attempts is not None:
+        row.attempts = max(int(row.attempts or 0), max(0, int(attempts)))
+    row.last_attempt_at = stamp
+    row.updated_at = stamp
+    row.failure_reason = failure_reason if state == PUBLICATION_STATE_FAILED else None
+    row.next_attempt_at = next_attempt_at if state == PUBLICATION_STATE_RETRYING else None
+    if state == PUBLICATION_STATE_VERIFIED:
+        row.checksum = checksum
+        row.size_bytes = int(size_bytes)
+        row.verified_at = stamp
+    db.flush()
+    return row
