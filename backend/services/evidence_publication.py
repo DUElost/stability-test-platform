@@ -452,10 +452,18 @@ def _copy_stamp(row: EvidencePublication) -> int:
     return row.attempts
 
 
-def _finish_copy_failure(publication_id: int, reason: str, *, terminal: bool) -> None:
+def _finish_copy_failure(
+    publication_id: int, reason: str, *, terminal: bool, attempt: int,
+) -> None:
     with SessionLocal() as db:
         row = facts.get_evidence_publication(db, publication_id=publication_id, for_update=True)
-        if row is None or row.state not in {
+        if row is None or int(row.attempts or 0) != int(attempt):
+            logger.info(
+                "evidence_copy_stale_failure_ignored publication=%d attempt=%d current=%s",
+                publication_id, attempt, None if row is None else row.attempts,
+            )
+            return
+        if row.state not in {
             facts.PUBLICATION_STATE_PENDING, facts.PUBLICATION_STATE_RETRYING,
         }:
             return
@@ -478,10 +486,16 @@ def _finish_copy_failure(publication_id: int, reason: str, *, terminal: bool) ->
     )
 
 
-def _finish_copy_verified(publication_id: int, checksum: str, size_bytes: int) -> bool:
+def _finish_copy_verified(
+    publication_id: int, checksum: str, size_bytes: int, *, attempt: int,
+) -> bool:
     with SessionLocal() as db:
         row = facts.get_evidence_publication(db, publication_id=publication_id, for_update=True)
-        if row is None:
+        if row is None or int(row.attempts or 0) != int(attempt):
+            logger.info(
+                "evidence_copy_stale_success_ignored publication=%d attempt=%d current=%s",
+                publication_id, attempt, None if row is None else row.attempts,
+            )
             return False
         if row.state == facts.PUBLICATION_STATE_VERIFIED:
             return True
@@ -555,7 +569,7 @@ def copy_spill_publication(publication_id: int) -> None:
         event_dir = Path(local_path).name
         storage_root = resolve_shared_storage_root()
         if not storage_root:
-            _finish_copy_failure(publication_id, _REASON_SOURCE_UNAVAILABLE, terminal=False)
+            _finish_copy_failure(publication_id, _REASON_SOURCE_UNAVAILABLE, terminal=False, attempt=attempts)
             return
         src = resolve_device_event_remote_path(
             source_path, plan_run_id=plan_run_id, must_exist=False,
@@ -569,17 +583,17 @@ def copy_spill_publication(publication_id: int) -> None:
             event_dir=event_dir,
         )
         if Path(src).name != event_dir:
-            _finish_copy_failure(publication_id, _REASON_SOURCE_MISMATCH, terminal=True)
+            _finish_copy_failure(publication_id, _REASON_SOURCE_MISMATCH, terminal=True, attempt=attempts)
             return
         assert_no_symlinks(src)
         existing = _destination_present(dest)
         if existing is not None:
             src_checksum, src_size = dir_sha256_and_size(src)
             if existing == (src_checksum, src_size):
-                if _finish_copy_verified(publication_id, src_checksum, src_size):
+                if _finish_copy_verified(publication_id, src_checksum, src_size, attempt=attempts):
                     refresh_delivery_and_archive(plan_run_id, PLATFORM_MTK)
                 return
-            _finish_copy_failure(publication_id, _REASON_DESTINATION_CONFLICT, terminal=True)
+            _finish_copy_failure(publication_id, _REASON_DESTINATION_CONFLICT, terminal=True, attempt=attempts)
             return
 
         ensure_dir_under_root(storage_root, list(Path(rel_path).parts[:-1]))
@@ -593,25 +607,25 @@ def copy_spill_publication(publication_id: int) -> None:
             if os.path.lexists(dest):
                 existing = _destination_present(dest)
                 if existing == (src_checksum, src_size):
-                    if _finish_copy_verified(publication_id, src_checksum, src_size):
+                    if _finish_copy_verified(publication_id, src_checksum, src_size, attempt=attempts):
                         refresh_delivery_and_archive(plan_run_id, PLATFORM_MTK)
                     return
-                _finish_copy_failure(publication_id, _REASON_DESTINATION_CONFLICT, terminal=True)
+                _finish_copy_failure(publication_id, _REASON_DESTINATION_CONFLICT, terminal=True, attempt=attempts)
                 return
             os.rename(temp, dest)
         finally:
             if temp.exists():
                 shutil.rmtree(temp, ignore_errors=True)
     except EvidenceLayoutError as exc:
-        _finish_copy_failure(publication_id, _REASON_COPY_FAILED, terminal=False)
+        _finish_copy_failure(publication_id, _REASON_COPY_FAILED, terminal=False, attempt=attempts)
         logger.warning("evidence_copy_invalid publication=%d err=%s", publication_id, exc)
         return
     except (ArtifactPathError, OSError):
-        _finish_copy_failure(publication_id, _REASON_COPY_FAILED, terminal=False)
+        _finish_copy_failure(publication_id, _REASON_COPY_FAILED, terminal=False, attempt=attempts)
         logger.exception("evidence_copy_error publication=%d", publication_id)
         return
 
-    if _finish_copy_verified(publication_id, src_checksum, src_size):
+    if _finish_copy_verified(publication_id, src_checksum, src_size, attempt=attempts):
         refresh_delivery_and_archive(plan_run_id, PLATFORM_MTK)
 
 

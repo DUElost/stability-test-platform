@@ -127,6 +127,29 @@ evidence_publication 以 (实际 PlanRun, 平台, 代表 DLE) 为唯一身份，
   `requests.get` 桥接到同一 ASGITransport，按 ID 恢复查询也走真实路由。
   参数化 4 例（有台账/首次失败无台账 × 已耗尽/当前循环无法处理）。
 
+
+### 第 4 轮复核返修（中心复制归属 / Agent 重试持久化）
+
+- **中心复制的迟到结果服从当前尝试**：copy_spill_publication 用认领时递增的
+  attempts 作栅栏令牌，成功（_finish_copy_verified）与失败（_finish_copy_failure）
+  两条完成路径都在 row 锁内先核对 row.attempts 与本次认领值；不相等即返回，
+  不改状态、尝试次数、失败原因或哈希，也不触发交付刷新。五次上限、源保留、
+  落点冲突拒绝覆盖均不变。反例（955c112e，隔离 PG16 + 临时文件系统 + 可控时钟）：
+  第 4 次认领暂停 → 租约过期 → 第 5 次认领完成拷贝 → 释放第 4 次迟到失败，
+  基线得到 FAILED / attempts=5 / copy_failed；返修后 VERIFIED / attempts=5，
+  源与目的哈希一致且源仍在。迟到成功同样被拒：基线会在已 VERIFIED 上再返回
+  True 触发第二次交付刷新（探针断言 refresh 次数=1 失败），返修后只由第 5 次
+  认领登记并刷新一次。
+- **Agent 尝试计数跨重启保留**：EvidenceUploader 的持久计数改用
+  event_uploader._state_store()——显式 STP_AGENT_STATE_DB 优先，未设置时回落到
+  主 Agent 的 BASE_DIR/agent_state.db（仅当库已存在）；读取仍取
+  max(内存, 持久, 服务端) 防止较旧的服务端计数降低已消耗预算；回执 POST 前
+  先持久化本次 attempts，503 导致回执未落库时预算不丢。验收（真实临时 SQLite +
+  真实 EvidenceUploader，仅在 HTTP 边界注入落库前 503，服务端 attempts 恒 0）：
+  连续四次失败后重建 uploader，下一次必须 FAILED / attempts=5。基线 955c112e
+  的默认库组退回 RETRYING / attempts=1，显式路径组通过；返修后两组均通过。
+  另测预算已耗尽（持久 attempts=5）时不再复制，直接 FAILED / retry_exhausted。
+
 ## Alternatives
 
 - **把证据目的路径写回 DLE.remote_path**：否决。溢出补扫与留存以该字段定位
@@ -186,6 +209,23 @@ evidence_publication 以 (实际 PlanRun, 平台, 代表 DLE) 为唯一身份，
   [OK]）；PYTHONPATH=. .venv/bin/lint-imports --no-cache（5 contracts kept）。
 - #3831 陈旧记录核对：注册表里 fix/scan-report-project-version 的 worktree 与分支
   均不存在，git diff 为空（零实际改动）；本单元未改 scan_runner.py 或其测试。
+
+- R4 反例与返修（955c112e → 本 HEAD，同一探针）：
+  - `test_planner_audit_expired_copy_failure_does_not_poison_next_success`：
+    基线 FAILED / attempts=5 / copy_failed → 返修 VERIFIED / attempts=5，源与目的
+    哈希一致且源仍在。
+  - `test_planner_audit_expired_copy_success_cannot_register_for_next_attempt`：
+    基线 RED（迟到成功返回 True，交付刷新被触发两次）→ 返修 GREEN（仅一次）。
+  - `test_planner_audit_failure_budget_survives_restart_when_receipt_never_commits`
+    （explicit / main-agent-default）：基线 1 failed + 1 passed（默认库 RETRYING /
+    attempts=1）→ 返修 2 passed（均 FAILED / attempts=5）。
+  - `test_exhausted_budget_does_not_copy_again`：持久 attempts=5 时不复制，直接
+    FAILED / retry_exhausted。
+- R4 回归：G6 两个主测试文件 42 passed；定向套件（R3 路由/意图窗口、shadow
+  delivery/merge、scan_scope、issue_fact_store、artifact/evidence layout、upload
+  mark、G4 映射、storage families、Agent 导入边界）197 passed；check:quick 16 gates
+  全绿。
+
 
 ## Revisit
 

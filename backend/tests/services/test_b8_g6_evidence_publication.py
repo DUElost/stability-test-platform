@@ -684,3 +684,141 @@ def test_device_version_change_does_not_move_destination(db_session, sample_host
     # 目的路径使用 DLE.local_path 里采集时固化的 V78 目录，不读当前设备版本。
     assert row.destination_rel_path == f"evidence/42_{FOLDER}/{SERIAL}/{EVENT}"
     assert "V80-REFLASHED" not in row.destination_rel_path
+
+
+def test_planner_audit_expired_copy_failure_does_not_poison_next_success(
+    db_session, sample_host, store, monkeypatch,
+):
+    from concurrent.futures import ThreadPoolExecutor
+    from datetime import timedelta
+    from threading import Event, current_thread
+
+    _plan_run(db_session)
+    _dedup_first(db_session)
+    source = store / "devices" / "42" / str(uuid4()) / EVENT
+    source.mkdir(parents=True)
+    (source / "main.dbg").write_bytes(b"spill")
+    dle = _dle(db_session, sample_host.id, state="PRUNED", remote_path=str(source))
+    now = datetime.now(timezone.utc)
+    facts.record_spill_ledger_entry(
+        db_session, plan_run_id=42, platform="mtk", dle_id=dle.id,
+        size_bytes=5, spilled_at=now,
+    )
+    _selected(db_session, dle)
+    ep.ensure_partition_publications(db_session, plan_run_id=42, platform="mtk")
+    row = _publication(db_session)[0]
+    row.attempts = 3
+    publication_id = row.id
+    destination = store / row.destination_rel_path
+    db_session.commit()
+
+    clock = [now]
+    monkeypatch.setattr(ep, "_utcnow", lambda: clock[0])
+    stale_copy_entered = Event()
+    allow_stale_failure = Event()
+    stale_copy_finished = Event()
+    main_thread = current_thread()
+    real_copy = ep.copytree_no_symlinks
+    real_finish_verified = ep._finish_copy_verified
+
+    def copy_tree(*args, **kwargs):
+        if current_thread() is not main_thread:
+            stale_copy_entered.set()
+            assert allow_stale_failure.wait(8)
+            raise OSError("injected interruption after the old lease expired")
+        return real_copy(*args, **kwargs)
+
+    def finish_verified(*args, **kwargs):
+        assert (destination / "main.dbg").read_bytes() == b"spill"
+        allow_stale_failure.set()
+        assert stale_copy_finished.wait(8)
+        return real_finish_verified(*args, **kwargs)
+
+    def run_stale_copy():
+        try:
+            ep.copy_spill_publication(publication_id)
+        finally:
+            stale_copy_finished.set()
+
+    monkeypatch.setattr(ep, "copytree_no_symlinks", copy_tree)
+    monkeypatch.setattr(ep, "_finish_copy_verified", finish_verified)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        stale = pool.submit(run_stale_copy)
+        try:
+            assert stale_copy_entered.wait(8)
+            clock[0] += timedelta(seconds=ep._COPY_LEASE_SECONDS + 1)
+            ep.copy_spill_publication(publication_id)
+        finally:
+            allow_stale_failure.set()
+        stale.result(timeout=8)
+
+    db_session.expire_all()
+    stored = facts.get_evidence_publication(db_session, publication_id=publication_id)
+    assert stored.attempts == 5
+    assert ep.dir_sha256_and_size(destination) == ep.dir_sha256_and_size(source)
+    assert stored.state == facts.PUBLICATION_STATE_VERIFIED, (
+        stored.state, stored.attempts, stored.failure_reason,
+    )
+
+def test_planner_audit_expired_copy_success_cannot_register_for_next_attempt(
+    db_session, sample_host, store, monkeypatch,
+):
+    from concurrent.futures import ThreadPoolExecutor
+    from datetime import timedelta
+    from threading import Event, current_thread
+
+    _plan_run(db_session)
+    _dedup_first(db_session)
+    source = store / "devices" / "42" / str(uuid4()) / EVENT
+    source.mkdir(parents=True)
+    (source / "main.dbg").write_bytes(b"spill")
+    dle = _dle(db_session, sample_host.id, state="PRUNED", remote_path=str(source))
+    now = datetime.now(timezone.utc)
+    facts.record_spill_ledger_entry(
+        db_session, plan_run_id=42, platform="mtk", dle_id=dle.id,
+        size_bytes=5, spilled_at=now,
+    )
+    _selected(db_session, dle)
+    ep.ensure_partition_publications(db_session, plan_run_id=42, platform="mtk")
+    row = _publication(db_session)[0]
+    row.attempts = 3
+    publication_id = row.id
+    db_session.commit()
+
+    clock = [now]
+    monkeypatch.setattr(ep, "_utcnow", lambda: clock[0])
+    stale_ready = Event()
+    allow_stale_success = Event()
+    main_thread = current_thread()
+    real_finish_verified = ep._finish_copy_verified
+    refreshes = []
+
+    def finish_verified(*args, **kwargs):
+        if current_thread() is not main_thread:
+            stale_ready.set()
+            assert allow_stale_success.wait(8)
+        return real_finish_verified(*args, **kwargs)
+
+    def run_stale_copy():
+        ep.copy_spill_publication(publication_id)
+
+    monkeypatch.setattr(ep, "_finish_copy_verified", finish_verified)
+    monkeypatch.setattr(
+        ep, "refresh_delivery_and_archive",
+        lambda *args, **kwargs: refreshes.append((args, kwargs)),
+    )
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        stale = pool.submit(run_stale_copy)
+        try:
+            assert stale_ready.wait(8)
+            clock[0] += timedelta(seconds=ep._COPY_LEASE_SECONDS + 1)
+            ep.copy_spill_publication(publication_id)
+        finally:
+            allow_stale_success.set()
+        stale.result(timeout=8)
+
+    db_session.expire_all()
+    stored = facts.get_evidence_publication(db_session, publication_id=publication_id)
+    assert stored.state == facts.PUBLICATION_STATE_VERIFIED
+    assert stored.attempts == 5
+    assert len(refreshes) == 1, "stale success must not trigger another delivery refresh"

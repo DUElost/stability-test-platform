@@ -411,3 +411,50 @@ def test_spill_cursor_roundtrip_and_paging_helpers(tmp_path, monkeypatch):
     event_uploader_module._write_spill_cursor(states, "")
     assert event_uploader_module._read_spill_cursor(states) == ""
     assert len(event_uploader_module._durable_spill_event_ids()) == 5
+
+
+@pytest.mark.parametrize("explicit_state_db", [True, False], ids=["explicit", "main-agent-default"])
+def test_planner_audit_failure_budget_survives_restart_when_receipt_never_commits(
+    env, monkeypatch, tmp_path, explicit_state_db,
+):
+    uploader, local_root, log_root = env
+    state_db_path = _state_db(tmp_path, monkeypatch)
+    monkeypatch.setattr(event_uploader_module, "BASE_DIR", tmp_path)
+    if not explicit_state_db:
+        monkeypatch.delenv("STP_AGENT_STATE_DB")
+    assert state_db_path.is_file()
+    assert event_uploader_module._state_store() is not None
+    calls = []
+
+    def reject_before_commit(url, json, headers, timeout):
+        calls.append(json)
+        return type("Unavailable", (), {"status_code": 503, "text": "injected unavailable"})()
+
+    monkeypatch.setattr(module.requests, "post", reject_before_commit)
+    missing_event = local_root / FOLDER / SERIAL / "aee_exp" / EVENT
+    for _ in range(4):
+        uploader._upload(_task(missing_event, attempts=0))
+    assert [receipt["attempts"] for receipt in calls] == [1, 2, 3, 4]
+    restarted = _configure(EvidenceUploader(), log_root)
+    restarted._upload(_task(missing_event, attempts=0))
+    assert (calls[-1]["state"], calls[-1]["attempts"]) == ("FAILED", 5)
+
+
+def test_exhausted_budget_does_not_copy_again(env, monkeypatch, tmp_path):
+    uploader, local_root, log_root = env
+    _state_db(tmp_path, monkeypatch)
+    event = _event_dir(local_root)
+    calls = []
+
+    def reject_before_commit(url, json, headers, timeout):
+        calls.append(json)
+        return type("Unavailable", (), {"status_code": 503, "text": "injected unavailable"})()
+
+    monkeypatch.setattr(module.requests, "post", reject_before_commit)
+    module._durable_set(7, 5)
+    uploader._upload(_task(event, attempts=0))
+
+    assert calls[-1]["state"] == "FAILED"
+    assert calls[-1]["attempts"] == 5
+    assert calls[-1]["reason"] == "retry_exhausted"
+    assert not (log_root / "evidence").exists()

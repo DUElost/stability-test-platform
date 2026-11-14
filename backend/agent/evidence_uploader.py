@@ -21,7 +21,7 @@ from typing import Dict, Optional
 
 import requests
 
-from .aee.state_store import ScriptStateStore
+from .event_uploader import _state_store as _agent_state_store
 
 try:
     from .aee.paths import (
@@ -69,10 +69,11 @@ def _attempts_key(publication_id: int) -> str:
 
 
 def _durable_get(publication_id: int) -> Optional[int]:
-    if not os.environ.get("STP_AGENT_STATE_DB", ""):
-        return None
     try:
-        raw = ScriptStateStore().get_state(_attempts_key(publication_id), "")
+        store = _agent_state_store()
+        if store is None:
+            return None
+        raw = store.get_state(_attempts_key(publication_id), "")
     except Exception:
         logger.warning(
             "evidence_attempts_state_read_failed publication=%d", publication_id,
@@ -88,10 +89,11 @@ def _durable_get(publication_id: int) -> Optional[int]:
 
 
 def _durable_set(publication_id: int, attempts: int) -> None:
-    if not os.environ.get("STP_AGENT_STATE_DB", ""):
-        return
     try:
-        ScriptStateStore().set_state(_attempts_key(publication_id), str(int(attempts)))
+        store = _agent_state_store()
+        if store is None:
+            return
+        store.set_state(_attempts_key(publication_id), str(int(attempts)))
     except Exception:
         logger.debug(
             "evidence_attempts_state_write_failed publication=%d", publication_id,
@@ -358,6 +360,8 @@ class EvidenceUploader:
         reason: Optional[str],
     ) -> bool:
         publication_id = int(task["publication_id"])
+        # 回执可能在落库前失败：先持久化已消耗次数，重启后仍按同一发布记录继续。
+        self._store_attempts(publication_id, attempts)
         payload = {
             "host_id": self._host_id,
             "dle_id": str(task["dle_id"]),
