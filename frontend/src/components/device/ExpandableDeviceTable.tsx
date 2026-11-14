@@ -1018,7 +1018,7 @@ export function ExpandableDeviceTable({
                         <span className="text-muted-foreground/40">—</span>
                       )}
                     </TableCell>
-                    <TableCell className="max-w-[140px] truncate px-3 py-1.5 text-sm text-muted-foreground" title={device.host_name || undefined}>
+                    <TableCell className="max-w-[120px] truncate px-2.5 py-1.5 text-sm text-muted-foreground" title={device.host_name || undefined}>
                       {device.host_name && onNavigateToHost ? (
                         <button
                           type="button"
@@ -1026,7 +1026,7 @@ export function ExpandableDeviceTable({
                             e.stopPropagation();
                             onNavigateToHost(device.host_name!);
                           }}
-                          className="truncate text-left text-primary hover:underline"
+                          className="block max-w-full truncate text-left text-primary hover:underline"
                           title={`跳转到主机页查看 ${device.host_name}`}
                         >
                           {device.host_name}
