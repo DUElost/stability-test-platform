@@ -444,20 +444,25 @@ def record_agent_receipt(
     }
 
 
-def _copy_stamp(row: EvidencePublication) -> int:
+def _copy_stamp(row: EvidencePublication) -> tuple[int, str]:
     now = _utcnow()
     row.last_attempt_at = now
     row.attempts = int(row.attempts or 0) + 1
     row.next_attempt_at = now + timedelta(seconds=_COPY_LEASE_SECONDS)
-    return row.attempts
+    row.copy_claim_token = uuid.uuid4().hex
+    return int(row.attempts), str(row.copy_claim_token)
 
 
 def _finish_copy_failure(
-    publication_id: int, reason: str, *, terminal: bool, attempt: int,
+    publication_id: int, reason: str, *, terminal: bool, attempt: int, claim_token: str,
 ) -> None:
     with SessionLocal() as db:
         row = facts.get_evidence_publication(db, publication_id=publication_id, for_update=True)
-        if row is None or int(row.attempts or 0) != int(attempt):
+        if (
+            row is None
+            or int(row.attempts or 0) != int(attempt)
+            or str(row.copy_claim_token or "") != str(claim_token)
+        ):
             logger.info(
                 "evidence_copy_stale_failure_ignored publication=%d attempt=%d current=%s",
                 publication_id, attempt, None if row is None else row.attempts,
@@ -487,11 +492,15 @@ def _finish_copy_failure(
 
 
 def _finish_copy_verified(
-    publication_id: int, checksum: str, size_bytes: int, *, attempt: int,
+    publication_id: int, checksum: str, size_bytes: int, *, attempt: int, claim_token: str,
 ) -> bool:
     with SessionLocal() as db:
         row = facts.get_evidence_publication(db, publication_id=publication_id, for_update=True)
-        if row is None or int(row.attempts or 0) != int(attempt):
+        if (
+            row is None
+            or int(row.attempts or 0) != int(attempt)
+            or str(row.copy_claim_token or "") != str(claim_token)
+        ):
             logger.info(
                 "evidence_copy_stale_success_ignored publication=%d attempt=%d current=%s",
                 publication_id, attempt, None if row is None else row.attempts,
@@ -544,15 +553,15 @@ def copy_spill_publication(publication_id: int) -> None:
             return
         if row.next_attempt_at is not None and row.next_attempt_at > _utcnow():
             return
-        _copy_stamp(row)
         attempts = int(row.attempts or 0)
-        if attempts > MAX_ATTEMPTS:
-            facts.update_evidence_publication_state(
-                db, row=row, state=facts.PUBLICATION_STATE_FAILED,
-                attempts=attempts, failure_reason="retry_exhausted",
-            )
-            db.commit()
-            return
+        recovery_only = attempts >= MAX_ATTEMPTS
+        if recovery_only:
+            # 预算已耗尽：接管记录只做既有目标核验，绝不再复制或覆盖目标。
+            claim_token = uuid.uuid4().hex
+            row.copy_claim_token = claim_token
+            row.next_attempt_at = _utcnow() + timedelta(seconds=_COPY_LEASE_SECONDS)
+        else:
+            attempts, claim_token = _copy_stamp(row)
         db.commit()
         plan_run_id = row.plan_run_id
         source_path = row.source_path or ""
@@ -569,7 +578,7 @@ def copy_spill_publication(publication_id: int) -> None:
         event_dir = Path(local_path).name
         storage_root = resolve_shared_storage_root()
         if not storage_root:
-            _finish_copy_failure(publication_id, _REASON_SOURCE_UNAVAILABLE, terminal=False, attempt=attempts)
+            _finish_copy_failure(publication_id, _REASON_SOURCE_UNAVAILABLE, terminal=False, attempt=attempts, claim_token=claim_token)
             return
         src = resolve_device_event_remote_path(
             source_path, plan_run_id=plan_run_id, must_exist=False,
@@ -583,17 +592,21 @@ def copy_spill_publication(publication_id: int) -> None:
             event_dir=event_dir,
         )
         if Path(src).name != event_dir:
-            _finish_copy_failure(publication_id, _REASON_SOURCE_MISMATCH, terminal=True, attempt=attempts)
+            _finish_copy_failure(publication_id, _REASON_SOURCE_MISMATCH, terminal=True, attempt=attempts, claim_token=claim_token)
             return
         assert_no_symlinks(src)
         existing = _destination_present(dest)
         if existing is not None:
             src_checksum, src_size = dir_sha256_and_size(src)
             if existing == (src_checksum, src_size):
-                if _finish_copy_verified(publication_id, src_checksum, src_size, attempt=attempts):
+                if _finish_copy_verified(publication_id, src_checksum, src_size, attempt=attempts, claim_token=claim_token):
                     refresh_delivery_and_archive(plan_run_id, PLATFORM_MTK)
                 return
-            _finish_copy_failure(publication_id, _REASON_DESTINATION_CONFLICT, terminal=True, attempt=attempts)
+            _finish_copy_failure(publication_id, _REASON_DESTINATION_CONFLICT, terminal=True, attempt=attempts, claim_token=claim_token)
+            return
+
+        if recovery_only:
+            _finish_copy_failure(publication_id, _REASON_COPY_FAILED, terminal=True, attempt=attempts, claim_token=claim_token)
             return
 
         ensure_dir_under_root(storage_root, list(Path(rel_path).parts[:-1]))
@@ -607,25 +620,25 @@ def copy_spill_publication(publication_id: int) -> None:
             if os.path.lexists(dest):
                 existing = _destination_present(dest)
                 if existing == (src_checksum, src_size):
-                    if _finish_copy_verified(publication_id, src_checksum, src_size, attempt=attempts):
+                    if _finish_copy_verified(publication_id, src_checksum, src_size, attempt=attempts, claim_token=claim_token):
                         refresh_delivery_and_archive(plan_run_id, PLATFORM_MTK)
                     return
-                _finish_copy_failure(publication_id, _REASON_DESTINATION_CONFLICT, terminal=True, attempt=attempts)
+                _finish_copy_failure(publication_id, _REASON_DESTINATION_CONFLICT, terminal=True, attempt=attempts, claim_token=claim_token)
                 return
             os.rename(temp, dest)
         finally:
             if temp.exists():
                 shutil.rmtree(temp, ignore_errors=True)
     except EvidenceLayoutError as exc:
-        _finish_copy_failure(publication_id, _REASON_COPY_FAILED, terminal=False, attempt=attempts)
+        _finish_copy_failure(publication_id, _REASON_COPY_FAILED, terminal=False, attempt=attempts, claim_token=claim_token)
         logger.warning("evidence_copy_invalid publication=%d err=%s", publication_id, exc)
         return
     except (ArtifactPathError, OSError):
-        _finish_copy_failure(publication_id, _REASON_COPY_FAILED, terminal=False, attempt=attempts)
+        _finish_copy_failure(publication_id, _REASON_COPY_FAILED, terminal=False, attempt=attempts, claim_token=claim_token)
         logger.exception("evidence_copy_error publication=%d", publication_id)
         return
 
-    if _finish_copy_verified(publication_id, src_checksum, src_size, attempt=attempts):
+    if _finish_copy_verified(publication_id, src_checksum, src_size, attempt=attempts, claim_token=claim_token):
         refresh_delivery_and_archive(plan_run_id, PLATFORM_MTK)
 
 

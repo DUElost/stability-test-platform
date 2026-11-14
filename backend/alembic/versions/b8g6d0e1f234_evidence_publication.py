@@ -43,6 +43,7 @@ def upgrade() -> None:
         ),
         sa.Column("last_attempt_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("next_attempt_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("copy_claim_token", sa.String(length=64), nullable=True),
         sa.Column("verified_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("checksum", sa.String(length=64), nullable=True),
         sa.Column("size_bytes", sa.BigInteger(), nullable=True),

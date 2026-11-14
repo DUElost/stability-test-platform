@@ -290,6 +290,9 @@ class EvidencePublication(Base):
     attempts = Column(Integer, nullable=False, default=0, server_default="0")
     last_attempt_at = Column(DateTime(timezone=True), nullable=True)
     next_attempt_at = Column(DateTime(timezone=True), nullable=True)
+    # 认领令牌：每次认领（含预算耗尽后的恢复接管）换新值；完成路径必须逐字匹配，
+    # 防止租约过期后的旧任务修改已被接管的记录（B8 G6 第 5 轮）。
+    copy_claim_token = Column(String(64), nullable=True)
     verified_at = Column(DateTime(timezone=True), nullable=True)
     checksum = Column(String(64), nullable=True)
     size_bytes = Column(BigInteger, nullable=True)

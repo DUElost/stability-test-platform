@@ -150,6 +150,33 @@ evidence_publication 以 (实际 PlanRun, 平台, 代表 DLE) 为唯一身份，
   的默认库组退回 RETRYING / attempts=1，显式路径组通过；返修后两组均通过。
   另测预算已耗尽（持久 attempts=5）时不再复制，直接 FAILED / retry_exhausted。
 
+
+
+### 第 5 轮复核返修（两条恢复路径，反例基线 19e51f925）
+
+- **Agent 回执恢复**：第 5 次复制成功、VERIFIED 回执在落库前收到 503 时，重启后
+  的 uploader 不再直接把预算耗尽判成 FAILED。`_recover_exhausted` 先校验同一
+  发布身份的既有目标：路径逐段检查（含 symlink 分量）、目标树无 symlink、本地源
+  与目标目录哈希一致，才重发 VERIFIED/attempts=5，由真实回执路由落库。目标缺失、
+  哈希不符、路径含 symlink 或本地源不可读时一律 FAILED/attempts=5；任何预算
+  耗尽场景都不调用复制，不发起第 6 次复制，也不覆盖目标。默认状态库
+  （BASE_DIR/agent_state.db）与显式 STP_AGENT_STATE_DB 两组走同一路径。
+- **中心复制结果恢复**：第 5 次复制已落盘、VERIFIED 提交前中断时，租约到期后的
+  恢复不再用 `_copy_stamp` 把 attempts 加到 6 后报 retry_exhausted。预算在进入
+  时已耗尽（attempts=5）则进入 recovery-only：只核验既有目标；匹配时登记
+  VERIFIED/attempts=5 并刷新交付一次，缺失/不匹配时按 copy_failed /
+  destination_conflict 收敛为 FAILED/attempts=5；三种场景都不复制、不覆盖目标、
+  不改 DLE.remote_path。
+- **同尝试次数的接管隔离**：恢复接管不再只依赖 attempts（恢复前后都是 5），新增
+  `evidence_publication.copy_claim_token`。每次认领或恢复接管生成新令牌，成功与
+  失败完成路径在行锁内同时核对 attempts 与令牌；旧第 5 次任务的迟到成功/失败
+  因令牌不匹配被忽略，不能登记、改原因或再次触发交付刷新。迁移仍为 additive。
+- **探针**（固定基线 `19e51f925`）：中心三场景（目标匹配/缺失/不匹配）与同尝试
+  接管探针 4 failed（基线 attempts=6、FAILED/retry_exhausted）；Agent 真实路由
+  探针 explicit / main-agent-default 2 failed（基线 FAILED，未重发 VERIFIED）；
+  返修后同一组 6 passed。Agent 缺失/哈希不符/symlink 三个终态探针与 801 条意图
+  翻页探针均通过；R4 迟到结果与跨重启预算、R3 路由与 201 条恢复保持通过。
+
 ## Alternatives
 
 - **把证据目的路径写回 DLE.remote_path**：否决。溢出补扫与留存以该字段定位
@@ -225,6 +252,27 @@ evidence_publication 以 (实际 PlanRun, 平台, 代表 DLE) 为唯一身份，
   delivery/merge、scan_scope、issue_fact_store、artifact/evidence layout、upload
   mark、G4 映射、storage families、Agent 导入边界）197 passed；check:quick 16 gates
   全绿。
+
+
+- R5 反例与返修（19e51f925 → 本 HEAD，同一组探针）：
+  - 中心：`test_planner_audit_exhausted_copy_verifies_landed_destination_once`、
+    `...missing_destination_fails_without_recopy`、
+    `...mismatched_destination_fails_without_overwrite`、
+    `test_planner_audit_landed_fifth_copy_is_taken_over_once_without_recopy`
+    基线 4 failed（attempts=6 / retry_exhausted）→ 返修 4 passed；匹配场景断言
+    交付刷新恰 1 次、源与目标哈希一致、DLE.remote_path 未变。
+  - Agent：`backend/tests/api/test_b8_g6_r5_agent_receipt_recovery.py` 的 explicit 与
+    main-agent-default 两组，基线 2 failed（回执路由落库为 FAILED）→ 返修 2 passed
+    （VERIFIED / attempts=5，目标未变、未复制）。
+  - Agent 终态探针 `test_exhausted_budget_recovery_never_reports_verified_or_copies`
+    （missing / hash-mismatch / symlink）：修复前后均不得上报 VERIFIED，且不复制。
+  - `test_spill_intent_window_801_reaches_tail_on_second_round`：801 条意图第一轮
+    读 4×200，第二轮读第 801 条，keyset 游标续接。
+- R5 回归：G6 Agent 21 passed、G6 服务 29 passed、R5 API 2 passed；定向套件
+  207 passed（含 R3 路由/201 条、R4 迟到结果/跨重启预算、shadow、scan_scope、
+  issue_fact_store、artifact/evidence layout、upload mark、G4、storage families、
+  Agent 导入边界）；check:quick 16 gates（CI 同口径 PR base）；check_pr_migrate
+  [OK]（基线 5 项未变，新增列由同一未合入 migration 提供）；lint-imports 5 kept。
 
 
 ## Revisit

@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -822,3 +822,197 @@ def test_planner_audit_expired_copy_success_cannot_register_for_next_attempt(
     assert stored.state == facts.PUBLICATION_STATE_VERIFIED
     assert stored.attempts == 5
     assert len(refreshes) == 1, "stale success must not trigger another delivery refresh"
+
+def _seed_copy_recovery_case(db_session, sample_host, store):
+    _plan_run(db_session)
+    _dedup_first(db_session)
+    source = store / "devices" / "42" / str(uuid4()) / EVENT
+    source.mkdir(parents=True)
+    (source / "main.dbg").write_bytes(b"spill")
+    dle = _dle(db_session, sample_host.id, state="PRUNED", remote_path=str(source))
+    facts.record_spill_ledger_entry(
+        db_session, plan_run_id=42, platform="mtk", dle_id=dle.id,
+        size_bytes=5, spilled_at=datetime.now(timezone.utc),
+    )
+    _selected(db_session, dle)
+    ep.ensure_partition_publications(db_session, plan_run_id=42, platform="mtk")
+    row = _publication(db_session)[0]
+    row.state = facts.PUBLICATION_STATE_RETRYING
+    row.attempts = 5
+    row.next_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    publication_id = row.id
+    rel_path = row.destination_rel_path
+    source_path = str(source)
+    dle_id = dle.id
+    db_session.commit()
+    return publication_id, source, store / rel_path, source_path, dle_id
+
+
+def test_planner_audit_exhausted_copy_verifies_landed_destination_once(
+    db_session, sample_host, store, monkeypatch,
+):
+    """第 5 次已落盘、VERIFIED 提交前中断：租约到期后只核验既有目标。"""
+    publication_id, source, destination, source_path, dle_id = _seed_copy_recovery_case(
+        db_session, sample_host, store,
+    )
+    destination.mkdir(parents=True)
+    (destination / "main.dbg").write_bytes(b"spill")
+    refreshes = []
+    monkeypatch.setattr(
+        ep, "refresh_delivery_and_archive",
+        lambda *args, **kwargs: refreshes.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        ep, "copytree_no_symlinks",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not copy")),
+    )
+
+    ep.copy_spill_publication(publication_id)
+
+    db_session.expire_all()
+    stored = facts.get_evidence_publication(db_session, publication_id=publication_id)
+    assert stored.state == facts.PUBLICATION_STATE_VERIFIED
+    assert stored.attempts == 5
+    assert stored.checksum == ep.dir_sha256_and_size(source)[0]
+    assert len(refreshes) == 1
+    dle = facts.get_device_log_event(db_session, dle_id=dle_id)
+    assert dle.remote_path == source_path
+    assert (destination / "main.dbg").read_bytes() == b"spill"
+
+
+def test_planner_audit_exhausted_copy_missing_destination_fails_without_recopy(
+    db_session, sample_host, store, monkeypatch,
+):
+    publication_id, source, destination, source_path, dle_id = _seed_copy_recovery_case(
+        db_session, sample_host, store,
+    )
+    refreshes = []
+    monkeypatch.setattr(
+        ep, "refresh_delivery_and_archive",
+        lambda *args, **kwargs: refreshes.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        ep, "copytree_no_symlinks",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not copy")),
+    )
+
+    ep.copy_spill_publication(publication_id)
+
+    db_session.expire_all()
+    stored = facts.get_evidence_publication(db_session, publication_id=publication_id)
+    assert stored.state == facts.PUBLICATION_STATE_FAILED
+    assert stored.attempts == 5
+    assert stored.failure_reason == ep._REASON_COPY_FAILED
+    assert not destination.exists()
+    assert refreshes == []
+    dle = facts.get_device_log_event(db_session, dle_id=dle_id)
+    assert dle.remote_path == source_path
+
+
+def test_planner_audit_exhausted_copy_mismatched_destination_fails_without_overwrite(
+    db_session, sample_host, store, monkeypatch,
+):
+    publication_id, source, destination, source_path, dle_id = _seed_copy_recovery_case(
+        db_session, sample_host, store,
+    )
+    destination.mkdir(parents=True)
+    (destination / "main.dbg").write_bytes(b"other")
+    refreshes = []
+    monkeypatch.setattr(
+        ep, "refresh_delivery_and_archive",
+        lambda *args, **kwargs: refreshes.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        ep, "copytree_no_symlinks",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not copy")),
+    )
+
+    ep.copy_spill_publication(publication_id)
+
+    db_session.expire_all()
+    stored = facts.get_evidence_publication(db_session, publication_id=publication_id)
+    assert stored.state == facts.PUBLICATION_STATE_FAILED
+    assert stored.attempts == 5
+    assert stored.failure_reason == ep._REASON_DESTINATION_CONFLICT
+    assert (destination / "main.dbg").read_bytes() == b"other"
+    assert refreshes == []
+    dle = facts.get_device_log_event(db_session, dle_id=dle_id)
+    assert dle.remote_path == source_path
+
+    # 旧第 5 次任务的迟到失败同样不能改写已被接管记录的原因。
+    ep._finish_copy_failure(
+        publication_id, ep._REASON_COPY_FAILED, terminal=True,
+        attempt=5, claim_token="old-5th-claim",
+    )
+    db_session.expire_all()
+    assert facts.get_evidence_publication(
+        db_session, publication_id=publication_id,
+    ).failure_reason == ep._REASON_DESTINATION_CONFLICT
+
+def test_planner_audit_landed_fifth_copy_is_taken_over_once_without_recopy(
+    db_session, sample_host, store, monkeypatch,
+):
+    """旧第 5 次任务已落盘但未登记；恢复接管后只登记一次，旧迟到成功不得再刷新。"""
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event, current_thread
+
+    _plan_run(db_session)
+    _dedup_first(db_session)
+    source = store / "devices" / "42" / str(uuid4()) / EVENT
+    source.mkdir(parents=True)
+    (source / "main.dbg").write_bytes(b"spill")
+    dle = _dle(db_session, sample_host.id, state="PRUNED", remote_path=str(source))
+    facts.record_spill_ledger_entry(
+        db_session, plan_run_id=42, platform="mtk", dle_id=dle.id,
+        size_bytes=5, spilled_at=datetime.now(timezone.utc),
+    )
+    _selected(db_session, dle)
+    ep.ensure_partition_publications(db_session, plan_run_id=42, platform="mtk")
+    row = _publication(db_session)[0]
+    row.attempts = 4
+    publication_id = row.id
+    destination = store / row.destination_rel_path
+    db_session.commit()
+
+    clock = [datetime.now(timezone.utc)]
+    monkeypatch.setattr(ep, "_utcnow", lambda: clock[0])
+    old_paused = Event()
+    allow_old = Event()
+    old_finished = Event()
+    main_thread = current_thread()
+    real_finish = ep._finish_copy_verified
+    refreshes = []
+
+    def finish_verified(*args, **kwargs):
+        if current_thread() is not main_thread:
+            old_paused.set()
+            assert allow_old.wait(8)
+        return real_finish(*args, **kwargs)
+
+    def run_old_copy():
+        try:
+            ep.copy_spill_publication(publication_id)
+        finally:
+            old_finished.set()
+
+    monkeypatch.setattr(ep, "_finish_copy_verified", finish_verified)
+    monkeypatch.setattr(
+        ep, "refresh_delivery_and_archive",
+        lambda *args, **kwargs: refreshes.append((args, kwargs)),
+    )
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        old = pool.submit(run_old_copy)
+        try:
+            assert old_paused.wait(8)
+            clock[0] += timedelta(seconds=ep._COPY_LEASE_SECONDS + 1)
+            ep.copy_spill_publication(publication_id)
+        finally:
+            allow_old.set()
+        old.result(timeout=8)
+
+    db_session.expire_all()
+    stored = facts.get_evidence_publication(db_session, publication_id=publication_id)
+    assert stored.state == facts.PUBLICATION_STATE_VERIFIED
+    assert stored.attempts == 5
+    assert ep.dir_sha256_and_size(destination) == ep.dir_sha256_and_size(source)
+    assert len(refreshes) == 1, "旧第 5 次任务与恢复接管合计只能刷新一次"

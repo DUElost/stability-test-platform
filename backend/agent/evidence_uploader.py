@@ -31,6 +31,7 @@ try:
     )
     from .contracts.evidence_layout import (
         EvidenceLayoutError,
+        assert_no_symlinks,
         copytree_no_symlinks,
         dir_sha256_and_size,
         parse_evidence_rel_path,
@@ -43,6 +44,7 @@ except ImportError:  # pragma: no cover - 兼容脚本式导入
     )
     from agent.contracts.evidence_layout import (
         EvidenceLayoutError,
+        assert_no_symlinks,
         copytree_no_symlinks,
         dir_sha256_and_size,
         parse_evidence_rel_path,
@@ -283,9 +285,7 @@ class EvidenceUploader:
         publication_id = int(task["publication_id"])
         attempts = self._load_attempts(publication_id, task.get("attempts") or 0)
         if attempts >= _MAX_ATTEMPTS:
-            self._report_failure(
-                task, reason="retry_exhausted", terminal=True, attempts=attempts,
-            )
+            self._recover_exhausted(task, attempts)
             return
         try:
             src = resolve_path_under_aee_local(str(task["local_path"]))
@@ -324,6 +324,74 @@ class EvidenceUploader:
             checksum=checksum,
             size_bytes=size,
             attempts=max(attempts + 1, 1),
+            reason=None,
+        )
+
+    def _existing_destination(self, rel_path: str) -> Path:
+        """只读定位既有目的目录；任一父分量缺失或是 symlink 都拒绝。"""
+        root = Path(self._nfs_root)
+        if root.is_symlink() or not root.is_dir():
+            raise EvidenceLayoutError(f"evidence root is not a plain directory: {root}")
+        current = root
+        for part in Path(rel_path).parts:
+            current = current / part
+            if current.is_symlink():
+                raise EvidenceLayoutError(f"symlink not allowed: {current}")
+            if not current.exists():
+                raise FileNotFoundError(str(current))
+            if not current.is_dir():
+                raise EvidenceLayoutError(f"not a directory: {current}")
+        return current
+
+    def _recover_exhausted(self, task: dict, attempts: int) -> None:
+        """预算耗尽后的恢复：只核验同一发布身份的既有目标，绝不复制或覆盖。
+
+        第五次复制可能已经落盘而 VERIFIED 回执在落库前失败（例如 503）。
+        重启后先比对本地源与既有目标的目录哈希；一致才重发 VERIFIED/attempts=5，
+        由真实回执路由落库。目标缺失、哈希不符、路径含 symlink 或本地源不可读时
+        一律按终态失败收敛，不发起第六次复制。
+        """
+        try:
+            src = resolve_path_under_aee_local(str(task["local_path"]))
+        except PathOutsideRootError:
+            self._report_failure(
+                task, reason="source_mismatch", terminal=True, attempts=attempts,
+            )
+            return
+        if src.is_symlink() or not src.is_dir():
+            self._report_failure(task, reason="source_missing", terminal=True, attempts=attempts)
+            return
+        if src.name != str(task.get("event_dir") or ""):
+            self._report_failure(task, reason="source_mismatch", terminal=True, attempts=attempts)
+            return
+        try:
+            parse_evidence_rel_path(
+                str(task["destination_rel_path"]),
+                root_plan_run_id=int(task["root_plan_run_id"]),
+                serial=str(task["serial"]),
+                event_dir=str(task["event_dir"]),
+            )
+            assert_no_symlinks(src)
+            dest = self._existing_destination(str(task["destination_rel_path"]))
+            assert_no_symlinks(dest)
+            src_checksum, src_size = dir_sha256_and_size(src)
+            dest_checksum, dest_size = dir_sha256_and_size(dest)
+            if (src_checksum, src_size) != (dest_checksum, dest_size):
+                raise EvidenceLayoutError("destination hash mismatch")
+        except FileNotFoundError:
+            self._report_failure(task, reason="copy_failed", terminal=True, attempts=attempts)
+            return
+        except (EvidenceLayoutError, KeyError, ValueError, OSError):
+            self._report_failure(
+                task, reason="destination_conflict", terminal=True, attempts=attempts,
+            )
+            return
+        self._post(
+            task,
+            state="VERIFIED",
+            checksum=src_checksum,
+            size_bytes=src_size,
+            attempts=attempts,
             reason=None,
         )
 

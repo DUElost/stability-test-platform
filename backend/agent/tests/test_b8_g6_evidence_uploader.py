@@ -456,5 +456,72 @@ def test_exhausted_budget_does_not_copy_again(env, monkeypatch, tmp_path):
 
     assert calls[-1]["state"] == "FAILED"
     assert calls[-1]["attempts"] == 5
-    assert calls[-1]["reason"] == "retry_exhausted"
+    assert calls[-1]["reason"] == "copy_failed"
     assert not (log_root / "evidence").exists()
+
+@pytest.mark.parametrize("case", ["missing", "hash-mismatch", "symlink"])
+def test_exhausted_budget_recovery_never_reports_verified_or_copies(
+    env, monkeypatch, tmp_path, case,
+):
+    uploader, local_root, log_root = env
+    _state_db(tmp_path, monkeypatch)
+    event = _event_dir(local_root)
+    destination = log_root / f"evidence/42_{FOLDER}/{SERIAL}/{EVENT}"
+    if case == "hash-mismatch":
+        destination.mkdir(parents=True)
+        (destination / "main.dbg").write_bytes(b"other")
+    elif case == "symlink":
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        (log_root / "evidence").symlink_to(elsewhere, target_is_directory=True)
+    calls = []
+
+    def reject_before_commit(url, json, headers, timeout):
+        calls.append(json)
+        return type("Unavailable", (), {"status_code": 503, "text": "injected unavailable"})()
+
+    monkeypatch.setattr(module.requests, "post", reject_before_commit)
+    monkeypatch.setattr(
+        module, "copytree_no_symlinks",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not copy")),
+    )
+    module._durable_set(7, 5)
+    uploader._upload(_task(event, attempts=0))
+
+    assert calls, "must report the terminal failure"
+    assert all(receipt["state"] != "VERIFIED" for receipt in calls)
+    assert calls[-1]["state"] == "FAILED"
+    assert calls[-1]["attempts"] == 5
+    if case == "missing":
+        assert not destination.exists()
+    elif case == "hash-mismatch":
+        assert (destination / "main.dbg").read_bytes() == b"other"
+
+def test_spill_intent_window_801_reaches_tail_on_second_round(env, monkeypatch, tmp_path):
+    """801 条意图：一轮 4 页（800）后游标续接，第二轮取到第 801 条。"""
+    from backend.agent.event_uploader import EventUploader
+
+    _state_db(tmp_path, monkeypatch)
+    conn = sqlite3.connect(tmp_path / "agent_state.db")
+    try:
+        for index in range(801):
+            conn.execute(
+                "INSERT OR REPLACE INTO agent_state (key, value) VALUES (?, ?)",
+                (f"event_upload_spill:{index:04d}", "1"),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    uploader = _configure(EventUploader(), env[2])
+    pages: list[int] = []
+
+    def fake_page(intent_ids, wanted):
+        pages.append(len(intent_ids))
+        return len(pages) == 5
+
+    monkeypatch.setattr(uploader, "_recover_spill_intent_page", fake_page)
+    uploader._recover_spill_intents("UPLOAD_FAILED,UPLOADING")
+    assert pages == [200, 200, 200, 200]
+    uploader._recover_spill_intents("UPLOAD_FAILED,UPLOADING")
+    assert pages == [200, 200, 200, 200, 1]
