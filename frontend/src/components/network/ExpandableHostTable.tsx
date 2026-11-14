@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, Fragment } from 'react';
+import { useEffect, useMemo, useRef, useState, Fragment, type ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 import { BulkBarSpacer } from '@/components/ui/bulk-action-bar';
 import { Progress } from '@/components/ui/progress';
@@ -146,6 +146,8 @@ interface ExpandableHostTableProps {
   onShowRetiredChange?: (value: boolean) => void;
   onResetAllFilters?: () => void;
   onNavigateToDevices?: (hostId: string | number) => void;
+  onFilteredHostsChange?: (hosts: HostTableData[]) => void;
+  extraHeaderRight?: ReactNode;
 }
 
 function getResourceColor(percentage: number): string {
@@ -315,6 +317,8 @@ export function ExpandableHostTable({
   onShowRetiredChange,
   onResetAllFilters,
   onNavigateToDevices,
+  onFilteredHostsChange,
+  extraHeaderRight,
 }: ExpandableHostTableProps) {
   const [expandedRows, setExpandedRows] = useState<Set<string | number>>(new Set());
   const [localStatusFilter, setLocalStatusFilter] = useState<'all' | HostTableData['status']>('all');
@@ -414,6 +418,10 @@ export function ExpandableHostTable({
   }, [hosts, statusFilter, healthFilter, syncFilter, searchQuery]);
 
   const filteredIds = useMemo(() => filteredHosts.map((host) => host.id), [filteredHosts]);
+
+  useEffect(() => {
+    onFilteredHostsChange?.(filteredHosts);
+  }, [filteredHosts, onFilteredHostsChange]);
   const selectedFilteredCount = filteredIds.filter((id) => selectedIds?.has(id)).length;
   const allFilteredSelected = filteredIds.length > 0 && selectedFilteredCount === filteredIds.length;
   const someFilteredSelected = selectedFilteredCount > 0 && !allFilteredSelected;
@@ -477,41 +485,15 @@ export function ExpandableHostTable({
     };
   }, [hosts]);
 
-  const activeChips = useMemo<ActiveFilterChip[]>(() => {
+  // 只为「更多筛选」内部专属且未在顶层直接展示的条件渲染 Chip，避免与搜索框 / 下拉 / 快捷视图重复
+  const hiddenChips = useMemo<ActiveFilterChip[]>(() => {
     const chips: ActiveFilterChip[] = [];
-    if (statusFilter !== 'all') {
-      const labelMap = { ONLINE: '在线', DEGRADED: '告警', OFFLINE: '离线' };
-      chips.push({
-        key: 'status',
-        label: '状态',
-        value: labelMap[statusFilter],
-        onRemove: () => setStatusFilter('all'),
-      });
-    }
-    if (healthFilter !== 'all') {
-      const healthMap = { HEALTHY: '正常', DEGRADED: '降级', UNSCHEDULABLE: '禁调' };
-      chips.push({
-        key: 'health',
-        label: '健康度',
-        value: healthMap[healthFilter],
-        onRemove: () => setHealthFilter('all'),
-      });
-    }
-    if (syncFilter !== 'all') {
-      const syncMap = { drift: '待热更新', matched: '已对齐', mount_error: '挂载异常' };
+    if (syncFilter === 'matched') {
       chips.push({
         key: 'sync',
-        label: '运维维度',
-        value: syncMap[syncFilter],
+        label: 'Agent 同步',
+        value: '已对齐',
         onRemove: () => setSyncFilter('all'),
-      });
-    }
-    if (searchQuery.trim()) {
-      chips.push({
-        key: 'q',
-        label: '搜索',
-        value: searchQuery.trim(),
-        onRemove: () => setSearchQuery(''),
       });
     }
     if (showRetired && onShowRetiredChange) {
@@ -523,18 +505,7 @@ export function ExpandableHostTable({
       });
     }
     return chips;
-  }, [
-    statusFilter,
-    healthFilter,
-    syncFilter,
-    searchQuery,
-    showRetired,
-    onShowRetiredChange,
-    setStatusFilter,
-    setHealthFilter,
-    setSyncFilter,
-    setSearchQuery,
-  ]);
+  }, [syncFilter, showRetired, onShowRetiredChange, setSyncFilter]);
 
   const handleResetAll = () => {
     if (onResetAllFilters) {
@@ -548,7 +519,14 @@ export function ExpandableHostTable({
     onShowRetiredChange?.(false);
   };
 
-  const moreActiveCount = (syncFilter !== 'all' ? 1 : 0) + (showRetired ? 1 : 0);
+  // 只统计仅存在于「更多筛选」内的条件，避免与顶层快捷视图（待热更新 / 挂载异常）双重亮起
+  const moreActiveCount = (syncFilter === 'matched' ? 1 : 0) + (showRetired ? 1 : 0);
+  const hasAnyActiveFilter =
+    statusFilter !== 'all' ||
+    healthFilter !== 'all' ||
+    syncFilter !== 'all' ||
+    Boolean(searchQuery.trim()) ||
+    Boolean(showRetired);
 
   // #2958：缺口语义 = missing + mismatch（与告警口径一致）；unknown 不计缺口。
   const presenceCounts = scriptPresenceSummary?.counts;
@@ -815,7 +793,9 @@ export function ExpandableHostTable({
           return (
             <FilterWorkbench
               quickViews={quickViews}
-              chips={activeChips}
+              headerRight={extraHeaderRight}
+              hiddenChips={hiddenChips}
+              hasAnyActiveFilter={hasAnyActiveFilter}
               onResetAll={handleResetAll}
               matchSummary={`显示 ${filteredHosts.length} / ${hosts.length} 台主机`}
               chipsTestId="hosts-filter-chips"

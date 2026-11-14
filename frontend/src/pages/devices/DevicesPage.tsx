@@ -205,6 +205,12 @@ export default function DevicesPage() {
 
   const handleFilteredDevicesChange = useCallback((nextDevices: DeviceTableData[]) => {
     setFilteredDevices(nextDevices);
+    const nextIds = new Set(nextDevices.map((device) => device.id));
+    setSelectedDeviceIds((previous) => {
+      if (previous.size === 0) return previous;
+      const next = new Set(Array.from(previous).filter((id) => nextIds.has(id)));
+      return next.size === previous.size ? previous : next;
+    });
   }, []);
 
   const tagUpdateMutation = useMutation({
@@ -505,17 +511,6 @@ export default function DevicesPage() {
       <PageHeader
         title="物理设备"
         subtitle="管理和监控测试设备 · 点击设备行展开详情，勾选后可批量处理"
-        action={
-          <Button
-            data-testid="device-add-button"
-            disabled={!isAdmin}
-            title={!isAdmin ? '需要管理员权限' : undefined}
-            onClick={() => setIsModalOpen(true)}
-          >
-            <Plus className="w-4 h-4" />
-            添加设备
-          </Button>
-        }
       />
 
       {/* Device Table */}
@@ -526,6 +521,18 @@ export default function DevicesPage() {
           selectedIds={selectedDeviceIds}
           onSelectionChange={setSelectedDeviceIds}
           onFilteredDevicesChange={handleFilteredDevicesChange}
+          extraHeaderRight={
+            <Button
+              size="sm"
+              data-testid="device-add-button"
+              disabled={!isAdmin}
+              title={!isAdmin ? '需要管理员权限' : undefined}
+              onClick={() => setIsModalOpen(true)}
+            >
+              <Plus className="w-4 h-4" />
+              添加设备
+            </Button>
+          }
           isAdmin={isAdmin}
           onEditDeviceTags={isAdmin ? (device) => setSingleTagDevice(device) : undefined}
           statusFilter={statusFilter}

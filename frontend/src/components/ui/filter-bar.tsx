@@ -21,9 +21,12 @@ export interface QuickViewOption {
 
 interface FilterWorkbenchProps {
   quickViews?: QuickViewOption[];
+  headerLeft?: ReactNode;
   headerRight?: ReactNode;
   children: ReactNode;
-  chips: ActiveFilterChip[];
+  /** 仅展示收纳在「更多筛选」中的隐藏条件，避免与外露控件重复显示。 */
+  hiddenChips?: ActiveFilterChip[];
+  hasAnyActiveFilter?: boolean;
   onResetAll: () => void;
   matchSummary?: string;
   chipsTestId?: string;
@@ -39,106 +42,119 @@ const QUICK_VIEW_ACTIVE_TONE: Record<NonNullable<QuickViewOption['tone']>, strin
 
 /**
  * 统一筛选工作台容器：
- * - 顶部：快捷视图分段条 + 命中统计
- * - 中部：主筛选控件行（搜索 + 维度下拉 + 更多筛选）
- * - 底部：仅在有生效筛选时展开的语义 Chip 条与一键重置
+ * - 顶部：快捷视图分段条（或自定义 headerLeft） + 命中统计 + 页级主动作（headerRight）
+ * - 中部：主筛选控件行（搜索 + 维度下拉 + 更多筛选 + 重置按钮）
+ * - 底部：仅在「更多筛选」有隐藏条件生效时展开，避免与外露控件重复显示
  */
 export function FilterWorkbench({
   quickViews,
+  headerLeft,
   headerRight,
   children,
-  chips,
+  hiddenChips = [],
+  hasAnyActiveFilter = false,
   onResetAll,
   matchSummary,
   chipsTestId,
 }: FilterWorkbenchProps) {
+  const hasTopRow = Boolean(
+    (quickViews && quickViews.length > 0) || headerLeft || headerRight || matchSummary,
+  );
+
   return (
     <div className="rounded-xl border border-border/90 bg-card shadow-xs">
-      {(quickViews && quickViews.length > 0) || headerRight || matchSummary ? (
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 px-3.5 py-2.5">
-          {quickViews && quickViews.length > 0 ? (
-            <div role="tablist" aria-label="快捷视图" className="inline-flex flex-wrap items-center gap-1 rounded-lg bg-muted/60 p-1">
-              {quickViews.map((qv) => (
-                <button
-                  key={qv.key}
-                  type="button"
-                  role="tab"
-                  aria-selected={qv.active}
-                  onClick={qv.onClick}
-                  className={cn(
-                    'inline-flex items-center gap-1.5 rounded-md border border-transparent px-2.5 py-1 text-xs font-medium transition-all',
-                    qv.active
-                      ? QUICK_VIEW_ACTIVE_TONE[qv.tone ?? 'default']
-                      : 'text-muted-foreground hover:text-foreground',
-                  )}
-                >
-                  <span>{qv.label}</span>
-                  {qv.count != null && (
-                    <span
-                      className={cn(
-                        'rounded px-1.5 py-0.2 text-[11px] tabular-nums',
-                        qv.active ? 'bg-background/80 text-current' : 'bg-background/60 text-muted-foreground',
-                      )}
-                    >
-                      {qv.count}
-                    </span>
-                  )}
-                </button>
-              ))}
-            </div>
-          ) : (
-            <div />
-          )}
+      {hasTopRow && (
+        <div className="flex flex-wrap items-center justify-between gap-2.5 border-b border-border/60 px-3.5 py-2.5">
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+            {quickViews && quickViews.length > 0 ? (
+              <div
+                role="tablist"
+                aria-label="快捷视图"
+                className="inline-flex flex-wrap items-center gap-1 rounded-lg bg-muted/60 p-1"
+              >
+                {quickViews.map((qv) => (
+                  <button
+                    key={qv.key}
+                    type="button"
+                    role="tab"
+                    aria-selected={qv.active}
+                    onClick={qv.onClick}
+                    className={cn(
+                      'inline-flex items-center gap-1.5 rounded-md border border-transparent px-2.5 py-1 text-xs font-medium transition-all',
+                      qv.active
+                        ? QUICK_VIEW_ACTIVE_TONE[qv.tone ?? 'default']
+                        : 'text-muted-foreground hover:text-foreground',
+                    )}
+                  >
+                    <span>{qv.label}</span>
+                    {qv.count != null && (
+                      <span
+                        className={cn(
+                          'rounded px-1.5 py-0.2 text-[11px] tabular-nums',
+                          qv.active
+                            ? 'bg-background/80 text-current'
+                            : 'bg-background/60 text-muted-foreground',
+                        )}
+                      >
+                        {qv.count}
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              headerLeft
+            )}
+          </div>
 
-          <div className="flex items-center gap-2.5">
-            {headerRight}
+          <div className="flex shrink-0 items-center gap-2.5">
             {matchSummary && (
               <span className="inline-flex items-center rounded-full bg-muted/70 px-2.5 py-1 text-xs font-medium tabular-nums text-muted-foreground">
                 {matchSummary}
               </span>
             )}
+            {hasAnyActiveFilter && (
+              <button
+                type="button"
+                onClick={onResetAll}
+                className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                <RotateCcw className="h-3 w-3" />
+                重置筛选
+              </button>
+            )}
+            {headerRight}
           </div>
         </div>
-      ) : null}
+      )}
 
       <div className="p-3.5">{children}</div>
 
-      {chips.length > 0 && (
+      {hiddenChips.length > 0 && (
         <div
           data-testid={chipsTestId}
-          className="flex flex-wrap items-center justify-between gap-2 rounded-b-xl border-t border-border/60 bg-primary/[0.025] px-3.5 py-2 text-xs"
+          className="flex flex-wrap items-center gap-1.5 rounded-b-xl border-t border-border/60 bg-muted/20 px-3.5 py-2 text-xs"
         >
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="mr-0.5 text-[11px] font-medium text-muted-foreground">
-              当前条件:
-            </span>
-            {chips.map((chip) => (
-              <span
-                key={chip.key}
-                className="inline-flex items-center gap-1 rounded-full border border-primary/25 bg-primary/10 px-2.5 py-0.5 text-xs text-primary"
+          <span className="mr-0.5 text-[11px] font-medium text-muted-foreground">
+            高级筛选:
+          </span>
+          {hiddenChips.map((chip) => (
+            <span
+              key={chip.key}
+              className="inline-flex items-center gap-1 rounded-full border border-primary/25 bg-primary/10 px-2.5 py-0.5 text-xs text-primary"
+            >
+              <span className="opacity-75">{chip.label}:</span>
+              <span className="font-medium">{chip.value}</span>
+              <button
+                type="button"
+                aria-label={`移除${chip.label}筛选`}
+                onClick={chip.onRemove}
+                className="ml-0.5 rounded-full p-0.5 text-primary/70 hover:bg-primary/15 hover:text-primary"
               >
-                <span className="opacity-75">{chip.label}:</span>
-                <span className="font-medium">{chip.value}</span>
-                <button
-                  type="button"
-                  aria-label={`移除${chip.label}筛选`}
-                  onClick={chip.onRemove}
-                  className="ml-0.5 rounded-full p-0.5 text-primary/70 hover:bg-primary/15 hover:text-primary"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </span>
-            ))}
-          </div>
-
-          <button
-            type="button"
-            onClick={onResetAll}
-            className="inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          >
-            <RotateCcw className="h-3 w-3" />
-            重置全部
-          </button>
+                <X className="h-3 w-3" />
+              </button>
+            </span>
+          ))}
         </div>
       )}
     </div>

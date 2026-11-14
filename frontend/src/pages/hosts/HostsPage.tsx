@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Server } from 'lucide-react';
@@ -98,12 +98,6 @@ export default function HostsPage() {
       ? null
       : coerceHostList(retiredPeekQ.data).length > 0;
 
-  // #2958 第五道闸：脚本在位 fleet 汇总（逐台矩阵在展开行内按需拉，不进本页查询）。
-  const scriptPresenceQ = useQuery({
-    queryKey: scriptPresenceKeys.summary(),
-    queryFn: () => api.scriptPresence.summary(),
-    refetchInterval: 60000,
-  });
   const loadHostScriptPresence = (hostId: string | number) =>
     api.scriptPresence.host(hostId);
   const refreshHostScriptPresence = async (hostId: string | number) => {
@@ -112,17 +106,29 @@ export default function HostsPage() {
     return result;
   };
 
+  const [filteredHostIds, setFilteredHostIds] = useState<Set<string> | null>(null);
+  const handleFilteredHostsChange = useCallback((nextHosts: HostTableData[]) => {
+    const nextIds = new Set(nextHosts.map((host) => String(host.id)));
+    setFilteredHostIds(nextIds);
+    setSelectedHostIds((previous) => {
+      if (previous.size === 0) return previous;
+      const next = new Set(Array.from(previous).filter((id) => nextIds.has(String(id))));
+      return next.size === previous.size ? previous : next;
+    });
+  }, []);
+
   const liveHostIds = useMemo(
     () => new Set(hosts.map((host) => String(host.id))),
     [hosts],
   );
   const visibleSelectedHostIds = useMemo(() => {
     if (selectedHostIds.size === 0) return selectedHostIds;
+    const activeScopeIds = filteredHostIds ?? liveHostIds;
     const next = new Set(
-      Array.from(selectedHostIds).filter((id) => liveHostIds.has(String(id))),
+      Array.from(selectedHostIds).filter((id) => activeScopeIds.has(String(id))),
     );
     return next.size === selectedHostIds.size ? selectedHostIds : next;
-  }, [selectedHostIds, liveHostIds]);
+  }, [selectedHostIds, filteredHostIds, liveHostIds]);
 
   const createMutation = useMutation({
     mutationFn: (data: Parameters<typeof api.hosts.create>[0]) => api.hosts.create(data),
@@ -871,37 +877,39 @@ export default function HostsPage() {
     );
   }
 
+  const hostHeaderActions = (
+    <div className="flex items-center gap-2">
+      {!opPanelOpen && hostOps.length > 0 && (
+        <Button
+          variant="outline"
+          size="sm"
+          data-testid="host-op-panel-reopen"
+          onClick={() => setOpPanelOpen(true)}
+        >
+          {hostOps.some((o) => o.kind === 'flash_prereqs')
+            ? '刷机前置进度'
+            : hotUpdatePanelOps
+              ? '热更新进度'
+              : '安装进度'}
+          {installPending || hotUpdateOpPending
+            ? ` (${hostOps.filter((o) => o.status === 'pending' || o.status === 'running').length} 进行中)`
+            : ` (${hostOps.filter((o) => o.status === 'success').length} 成功 / ${hostOps.filter((o) => o.status === 'failed').length} 失败${hostOps.some((o) => o.status === 'canceled') ? ` / ${hostOps.filter((o) => o.status === 'canceled').length} 已取消` : ''}${hostOps.some((o) => o.status === 'skipped') ? ` / ${hostOps.filter((o) => o.status === 'skipped').length} 跳过` : ''})`}
+        </Button>
+      )}
+      {isAdmin && (
+        <Button size="sm" onClick={() => setIsModalOpen(true)}>
+          <Plus className="w-4 h-4" />
+          添加主机
+        </Button>
+      )}
+    </div>
+  );
+
   return (
     <PageContainer width="wide">
       <PageHeader
         title="主机集群"
         subtitle="管理和监控测试执行节点"
-        action={
-          <div className="flex items-center gap-2">
-            {!opPanelOpen && hostOps.length > 0 && (
-              <Button
-                variant="outline"
-                data-testid="host-op-panel-reopen"
-                onClick={() => setOpPanelOpen(true)}
-              >
-                {hostOps.some((o) => o.kind === 'flash_prereqs')
-                  ? '刷机前置进度'
-                  : hotUpdatePanelOps
-                    ? '热更新进度'
-                    : '安装进度'}
-                {installPending || hotUpdateOpPending
-                  ? ` (${hostOps.filter((o) => o.status === 'pending' || o.status === 'running').length} 进行中)`
-                  : ` (${hostOps.filter((o) => o.status === 'success').length} 成功 / ${hostOps.filter((o) => o.status === 'failed').length} 失败${hostOps.some((o) => o.status === 'canceled') ? ` / ${hostOps.filter((o) => o.status === 'canceled').length} 已取消` : ''}${hostOps.some((o) => o.status === 'skipped') ? ` / ${hostOps.filter((o) => o.status === 'skipped').length} 跳过` : ''})`}
-              </Button>
-            )}
-            {isAdmin && (
-              <Button onClick={() => setIsModalOpen(true)}>
-                <Plus className="w-4 h-4" />
-                添加主机
-              </Button>
-            )}
-          </div>
-        }
       />
 
       {/* Host Table —— tableData 为空的分支在 :567 已提前 return，此处无需再判 */}
@@ -945,9 +953,8 @@ export default function HostsPage() {
         isAdmin={isAdmin}
         selectedIds={visibleSelectedHostIds}
         onSelectionChange={setSelectedHostIds}
-        scriptPresenceSummary={scriptPresenceQ.data ?? null}
-        scriptPresenceSummaryError={scriptPresenceQ.isError}
-        onRetryScriptPresenceSummary={() => void scriptPresenceQ.refetch()}
+        onFilteredHostsChange={handleFilteredHostsChange}
+        extraHeaderRight={hostHeaderActions}
         onLoadHostScriptPresence={loadHostScriptPresence}
         onRefreshHostScriptPresence={refreshHostScriptPresence}
       />

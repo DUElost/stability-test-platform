@@ -166,6 +166,7 @@ interface ExpandableDeviceTableProps {
   projectChipLabel?: string;
   onClearProjectFilter?: () => void;
   extraToolbarControls?: ReactNode;
+  extraHeaderRight?: ReactNode;
   onResetAllFilters?: () => void;
   onNavigateToHost?: (hostName: string) => void;
 }
@@ -205,6 +206,7 @@ export function ExpandableDeviceTable({
   projectChipLabel,
   onClearProjectFilter,
   extraToolbarControls,
+  extraHeaderRight,
   onResetAllFilters,
   onNavigateToHost,
 }: ExpandableDeviceTableProps) {
@@ -527,49 +529,10 @@ export function ExpandableDeviceTable({
 
       {/* 统一筛选条：搜索 + 项目 + 主机(可搜) + 型号(可搜) + 更多筛选 + Chips */}
       {(() => {
-        const statusLabelMap: Record<string, string> = {
-          idle: '空闲',
-          testing: '测试中',
-          offline: '离线',
-          error: '错误',
-        };
-        const selectedHostLabel =
-          hostOptions.find((h) => h.value === hostFilter)?.label ?? hostFilter;
-        const activeChips: ActiveFilterChip[] = [];
-        if (projectChipLabel && onClearProjectFilter) {
-          activeChips.push({
-            key: 'project',
-            label: '项目',
-            value: projectChipLabel,
-            onRemove: onClearProjectFilter,
-          });
-        }
-        if (statusFilter !== 'all') {
-          activeChips.push({
-            key: 'status',
-            label: '状态',
-            value: statusLabelMap[statusFilter] ?? statusFilter,
-            onRemove: () => setStatusFilter('all'),
-          });
-        }
-        if (hostFilter !== 'all') {
-          activeChips.push({
-            key: 'host',
-            label: '主机',
-            value: selectedHostLabel,
-            onRemove: () => setHostFilter('all'),
-          });
-        }
-        if (modelFilter !== 'all') {
-          activeChips.push({
-            key: 'model',
-            label: '型号',
-            value: modelFilter,
-            onRemove: () => setModelFilter('all'),
-          });
-        }
+        // 只为「更多筛选」内部专属且未在顶层直接展示的条件渲染 Chip，避免与搜索框 / 下拉 / 快捷视图重复
+        const hiddenChips: ActiveFilterChip[] = [];
         if (productFilter !== 'all') {
-          activeChips.push({
+          hiddenChips.push({
             key: 'product',
             label: 'product',
             value: productFilter,
@@ -577,23 +540,15 @@ export function ExpandableDeviceTable({
           });
         }
         if (versionFilter !== 'all') {
-          activeChips.push({
+          hiddenChips.push({
             key: 'version',
             label: '版本',
             value: versionFilter,
             onRemove: () => setVersionFilter('all'),
           });
         }
-        if (taggedOnly) {
-          activeChips.push({
-            key: 'tagged',
-            label: '标签',
-            value: '仅看有标签',
-            onRemove: () => setTaggedOnly(false),
-          });
-        }
         if (includeStale && onIncludeStaleChange) {
-          activeChips.push({
+          hiddenChips.push({
             key: 'stale',
             label: '范围',
             value: '含陈旧设备',
@@ -601,28 +556,32 @@ export function ExpandableDeviceTable({
           });
         }
         if (includeRetired && onIncludeRetiredChange) {
-          activeChips.push({
+          hiddenChips.push({
             key: 'retired',
             label: '范围',
             value: '含已退役',
             onRemove: () => onIncludeRetiredChange(false),
           });
         }
-        if (searchQuery.trim()) {
-          activeChips.push({
-            key: 'q',
-            label: '搜索',
-            value: searchQuery.trim(),
-            onRemove: () => setSearchQuery(''),
-          });
-        }
 
+        // 只统计仅存在于「更多筛选」内的条件，避免与顶层「仅看有标签」快捷视图双重亮起
         const moreActiveCount =
           (productFilter !== 'all' ? 1 : 0) +
           (versionFilter !== 'all' ? 1 : 0) +
-          (taggedOnly ? 1 : 0) +
           (includeStale ? 1 : 0) +
           (includeRetired ? 1 : 0);
+
+        const hasAnyActiveFilter =
+          statusFilter !== 'all' ||
+          hostFilter !== 'all' ||
+          modelFilter !== 'all' ||
+          productFilter !== 'all' ||
+          versionFilter !== 'all' ||
+          taggedOnly ||
+          Boolean(searchQuery.trim()) ||
+          Boolean(projectChipLabel) ||
+          Boolean(includeStale) ||
+          Boolean(includeRetired);
 
         const handleResetAll = () => {
           if (onResetAllFilters) {
@@ -676,7 +635,9 @@ export function ExpandableDeviceTable({
         return (
           <FilterWorkbench
             quickViews={quickViews}
-            chips={activeChips}
+            headerRight={extraHeaderRight}
+            hiddenChips={hiddenChips}
+            hasAnyActiveFilter={hasAnyActiveFilter}
             onResetAll={handleResetAll}
             matchSummary={`匹配 ${filteredDevices.length} / ${devices.length} 台设备`}
             chipsTestId="devices-filter-chips"
@@ -738,15 +699,6 @@ export function ExpandableDeviceTable({
                     className="w-full"
                   />
                 </div>
-                <label className="flex cursor-pointer items-center justify-between rounded-lg border border-border px-3 py-2 text-xs hover:bg-muted/30">
-                  <span>仅显示有标签设备</span>
-                  <input
-                    type="checkbox"
-                    checked={taggedOnly}
-                    onChange={(e) => setTaggedOnly(e.target.checked)}
-                    className="rounded"
-                  />
-                </label>
                 {onIncludeStaleChange && (
                   <label className="flex cursor-pointer items-center justify-between rounded-lg border border-border px-3 py-2 text-xs hover:bg-muted/30">
                     <span>显示陈旧设备</span>
