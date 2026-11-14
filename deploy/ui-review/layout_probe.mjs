@@ -17,13 +17,39 @@ const baseUrl = (process.env.STP_UI_REVIEW_URL || 'http://stp-ui-review.localhos
 const credsPath =
   process.env.STP_UI_REVIEW_CREDS ||
   path.join(os.homedir(), '.local/state/stp-ui-review/stack/credentials.json');
+const screenshotDir = process.env.STP_UI_REVIEW_SCREENSHOT_DIR || '';
 
 const credentials = JSON.parse(fs.readFileSync(credsPath, 'utf8'));
 
-async function inspectPage(page, routePath, waitText) {
+const SITE_ROUTES = [
+  { path: '/', waitText: '仪表盘' },
+  { path: '/projects', waitText: '项目登记簿' },
+  { path: '/projects/UI-REVIEW-LONG-PROJECT-2026', waitText: 'UI-Review' },
+  { path: '/orchestration/plans', waitText: 'Plan 编排' },
+  { path: '/execution/plan-execute', waitText: '执行测试计划' },
+  { path: '/execution/plan-runs', waitText: 'Plan 执行记录' },
+  { path: '/execution/plan-runs/1', waitText: '#1' },
+  { path: '/results', waitText: '测试结果' },
+  { path: '/issue-tracker', waitText: '问题追踪' },
+  { path: '/hosts', waitText: '主机集群' },
+  { path: '/devices', waitText: 'USB 开机' },
+  { path: '/script-management', waitText: '脚本库' },
+  { path: '/test-suites', waitText: '用例套件' },
+  { path: '/storage', waitText: '文件服务器' },
+  { path: '/wifi', waitText: 'WiFi 资源池' },
+  { path: '/schedules', waitText: '定时任务' },
+];
+
+async function inspectPage(page, routePath, waitText, vpLabel) {
   await page.goto(`${baseUrl}${routePath}`, { waitUntil: 'networkidle' });
   await page.getByText(waitText).first().waitFor({ timeout: 10000 });
   await page.evaluate(() => document.fonts.ready);
+
+  if (screenshotDir) {
+    fs.mkdirSync(screenshotDir, { recursive: true });
+    const safeName = routePath === '/' ? 'dashboard' : routePath.slice(1).replace(/\//g, '_');
+    await page.screenshot({ path: path.join(screenshotDir, `${vpLabel}_${safeName}.png`) });
+  }
 
   return page.evaluate((currentRoute) => {
     const docOverflow = document.documentElement.scrollWidth - document.documentElement.clientWidth;
@@ -71,6 +97,21 @@ async function inspectPage(page, routePath, waitText) {
       }
     }
 
+    const wrappedButtons = [];
+    for (const btn of document.querySelectorAll('button, [role="tab"]')) {
+      const rect = btn.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) continue;
+      const text = (btn.innerText || '').trim();
+      if (!text || text.length > 20) continue;
+      if (rect.width < 180 && rect.height > 44 && !btn.closest('.recharts-wrapper')) {
+        wrappedButtons.push({
+          text: text.replace(/\s+/g, ' '),
+          width: Math.round(rect.width),
+          height: Math.round(rect.height),
+        });
+      }
+    }
+
     return {
       route: currentRoute,
       viewport: { width: window.innerWidth, height: window.innerHeight },
@@ -80,6 +121,8 @@ async function inspectPage(page, routePath, waitText) {
       iconIssuesSample: iconIssues.slice(0, 5),
       badgeIssuesCount: badgeIssues.length,
       badgeIssuesSample: badgeIssues.slice(0, 5),
+      wrappedButtonsCount: wrappedButtons.length,
+      wrappedButtonsSample: wrappedButtons.slice(0, 5),
     };
   }, routePath);
 }
@@ -88,11 +131,17 @@ async function main() {
   const browser = await chromium.launch({
     executablePath: chromiumPath,
     headless: true,
-    args: ['--no-sandbox'],
+    args: ['--no-sandbox', '--no-proxy-server'],
   });
 
   try {
-    const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+    const viewports = [
+      { width: 1920, height: 1080 },
+      { width: 1440, height: 900 },
+    ];
+    const checks = [];
+
+    const context = await browser.newContext({ viewport: viewports[0] });
     const page = await context.newPage();
     page.setDefaultTimeout(10000);
 
@@ -102,18 +151,27 @@ async function main() {
     await page.getByRole('button', { name: '登录', exact: true }).click();
     await page.getByRole('heading', { name: '物理设备', exact: true }).waitFor();
 
-    const devicesReport = await inspectPage(page, '/devices', 'USB 开机');
-    const hostsReport = await inspectPage(page, '/hosts', '主机集群');
+    for (const vp of viewports) {
+      await page.setViewportSize(vp);
+      const vpLabel = `${vp.width}x${vp.height}`;
+      for (const route of SITE_ROUTES) {
+        checks.push(await inspectPage(page, route.path, route.waitText, vpLabel));
+      }
+    }
+    await context.close();
 
-    const report = { baseUrl, checks: [devicesReport, hostsReport] };
+    const report = { baseUrl, checks };
     console.log(JSON.stringify(report, null, 2));
 
+    // Hard gate on 1920x1080 desktop layout invariants
     const hasFailures = report.checks.some(
       (c) =>
-        c.docOverflow > 1 ||
-        c.tableOverflows.length > 0 ||
-        c.iconIssuesCount > 0 ||
-        c.badgeIssuesCount > 0,
+        c.viewport.width === 1920 &&
+        (c.docOverflow > 1 ||
+          c.tableOverflows.length > 0 ||
+          c.iconIssuesCount > 0 ||
+          c.badgeIssuesCount > 0 ||
+          c.wrappedButtonsCount > 0),
     );
     if (hasFailures) {
       process.exitCode = 1;
