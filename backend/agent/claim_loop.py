@@ -43,7 +43,21 @@ def process_claim_tick(
 ) -> None:
     """ADR-0026 Step 5b claim tick (free healthy device capacity)."""
     with occupancy.lock:
-        active_count = len(occupancy.job_ids)
+        active_job_ids = set(occupancy.job_ids)
+        active_count = len(active_job_ids)
+
+    # Also include persisted local_db active jobs so an in-flight recovery item
+    # is never reported as missing during claim split-brain reconciliation.
+    get_active = getattr(local_db, "get_active_jobs", None)
+    if callable(get_active):
+        try:
+            persisted = get_active()
+            if isinstance(persisted, (list, tuple, set)):
+                for row in persisted:
+                    if isinstance(row, dict) and row.get("job_id") is not None:
+                        active_job_ids.add(int(row["job_id"]))
+        except Exception:
+            logger.debug("claim_tick_local_db_active_jobs_read_failed", exc_info=True)
 
     # ADR-0026 Step 5b: claim capacity = free healthy devices only.
     # MAX_CONCURRENT_TASKS no longer restricts concurrent RUNNING
@@ -64,6 +78,7 @@ def process_claim_tick(
     jobs = fetch_pending_jobs(
         api_url, host_id, agent_instance_id, capacity=normal_slots,
         vbus_slots=vbus_slots,
+        active_job_ids=sorted(active_job_ids),
     )
     jobs = jobs[:normal_slots + vbus_slots]
 
