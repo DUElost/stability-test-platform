@@ -82,7 +82,12 @@ PINNED_SCRIPTS: dict[str, str] = {
 #: powercycle_setup 1.2.8、sleep_setup 1.0.5），删除条件是阶段 A 清账后由 G1b
 #: 追 pin 并同 PR 删除。10-10 G1b（#3603）按该条件追到 1.2.4 / 1.2.9 / 1.0.6
 #: 并移除三项。清单回到空。
-EXCEPTIONS: dict[str, tuple[str, str]] = {}
+EXCEPTIONS: dict[str, tuple[str, str]] = {
+    "script:powercycle_disarm": (
+        "1.0.8",
+        "PR #3994（#3989 Part A）已登记 powercycle_disarm@1.0.9，待控制面站点 --publish 与真机复测刷新 report_ref 后（#3989 阶段激活）追平 powercycle.json pin 至 1.0.9 并移除本豁免",
+    ),
+}
 
 
 def _exception_lag_reason(version: str, reason: str, head: str) -> str | None:

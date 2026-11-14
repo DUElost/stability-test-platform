@@ -300,11 +300,11 @@ def autotesttool_installed(timeout: int = 15) -> bool | None:
     """AutoTestTool 是否已安装（§3.6.6 第 2 条）：true / false / null。
 
     - rc=0 且至少一行以 package: 开头 → true；
-    - rc=1 且无 package: 行 → false；
-    - 其它（rc=0 但无 package 行、rc 其它、超时）→ null。
+    - rc=1 且 stdout/stderr 均无输出（package 不存在）→ false；
+    - 其它（rc=0 但无 package 行、rc=1 但带 ADB/系统服务错误文本、rc 其它、超时）→ null。
 
-    pm path 的 rc 必须与输出一起看；仅看输出会把 rc=1 的瞬态失败误判成
-    未安装。本函数只读，不写设备。
+    pm path 的 rc 必须与输出一起看；仅看输出或仅看 rc=1 会把 ADB offline /
+    package service 瞬态失败误判成未安装。本函数只读，不写设备。
     """
     rc, out, _err = adb("shell", f"pm path {_PKG}", timeout=max(1, int(timeout)))
     has_package = any(
@@ -312,7 +312,7 @@ def autotesttool_installed(timeout: int = 15) -> bool | None:
     )
     if rc == 0 and has_package:
         return True
-    if rc == 1 and not has_package:
+    if rc == 1 and not has_package and not (out or "").strip() and not (_err or "").strip():
         return False
     return None
 
