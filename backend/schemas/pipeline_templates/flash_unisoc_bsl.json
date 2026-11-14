@@ -1,0 +1,41 @@
+{
+  "version": 2,
+  "description": "Unisoc/SPRD BSL (spd_dump) full firmware switch using Scheme 2 silent direct boot: check device, flash partitions with trimmed super.img and 4KB userdata.img over autodloader, verify userdebug/root, then skip OOBE.",
+  "lifecycle": {
+    "timeout_seconds": 7200,
+    "init": [
+      {
+        "step_id": "check_device",
+        "action": "script:check_device",
+        "version": "1.0.2",
+        "timeout_seconds": 180,
+        "retry": 1,
+        "params": {}
+      },
+      {
+        "step_id": "flash_firmware_unisoc_bsl",
+        "action": "script:flash_firmware_unisoc_bsl",
+        "version": "1.0.0",
+        "timeout_seconds": 7200,
+        "retry": 0,
+        "params": {
+          "verify_build_type": "userdebug",
+          "verify_root": true,
+          "verify_wait_seconds": 300,
+          "lock_timeout_seconds": 7200
+        }
+      },
+      {
+        "step_id": "oobe_skip",
+        "action": "script:oobe_skip",
+        "version": "1.1.2",
+        "timeout_seconds": 900,
+        "retry": 0,
+        "params": {
+          "wait_for_device_seconds": 600
+        }
+      }
+    ],
+    "teardown": []
+  }
+}
