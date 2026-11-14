@@ -33,6 +33,7 @@ from backend.models.schedule import TaskSchedule, schedule_timestamp
 # tools/dev/check_inner_imports.py 棘轮约束（基线只许下调）。
 from backend.storage_families import JOBS_FAMILY, RUN_FAMILIES, storage_root_for_family
 from backend.core.settings.scheduler import get_scheduler_settings
+from backend.services.evidence_publication import sweep_evidence_publications
 from backend.services.shadow_scan_rounds import sweep_shadow_scan_rounds
 
 
@@ -1044,6 +1045,10 @@ def auto_archive_sweep() -> None:
             sweep_shadow_scan_rounds()
         except Exception:
             logger.exception("shadow_scan_sweep_failed")
+        try:
+            sweep_evidence_publications()
+        except Exception:
+            logger.exception("evidence_publication_sweep_failed")
 
     from backend.models.enums import PlanRunStatus
     from backend.models.plan import Plan

@@ -13,7 +13,9 @@
 报成了 run，与「应已清理 run 清单」对账时会产出既非漏删也非干净的第三种读数。
 
 **新增一族时只改这里**：run 主键的产物族进 :data:`RUN_FAMILIES`，job 主键的进
-:data:`JOBS_FAMILY`。两者的分桶维度不同，混进同一份清单会让「按 run 对账」的读数失真。
+:data:`JOBS_FAMILY`，按整条链留存的进 :data:`CHAIN_FAMILIES`（B8 G6 的 ``evidence/``）。
+三者的分桶维度不同：混进同一份清单会让「按 run 对账」的读数失真，链族还会被
+按 run 清理器误删。
 判别力由 ``tests/test_center_storage_families_single_source.py`` 守（消费方不得再自带字面量清单）。
 
 **为什么在 ``backend/`` 包根而不是 ``backend/core/``**：``backend/core/__init__.py`` 会
@@ -35,12 +37,25 @@ RUN_FAMILIES: tuple[str, ...] = ("devices", "dedup", "jira", "_meta")
 #: 因此它**不进** :data:`RUN_FAMILIES`——按 run 分解时它是假 run。
 JOBS_FAMILY: str = "jobs"
 
-#: 全部顶层族 = run 族 + job 族。测量/巡检的「族总量」口径用它，不要按 ``len(RUN_FAMILIES)+1`` 猜。
-ALL_FAMILIES: tuple[str, ...] = RUN_FAMILIES + (JOBS_FAMILY,)
+#: 链主键族：``{root}/evidence/<主PlanRun>_<采集目录>/<SN>/<事件目录>/``。
+#: B8 G6（ADR-0062 D9 第 6 条、D11）：证据区按整条链留存，**不得**进入按 run
+#: 清理的 :data:`RUN_FAMILIES`；清理前须单独取得 Owner 确认（D11 表格）。
+EVIDENCE_FAMILY: str = "evidence"
 
-#: 族到根的唯一归属表（B8 G0-a）。evidence/ 在 G6 登记时归入日志根。
+#: 全部链主键族。与 RUN_FAMILIES / JOBS_FAMILY 并列，仅用于登记与测量口径。
+CHAIN_FAMILIES: tuple[str, ...] = (EVIDENCE_FAMILY,)
+
+#: 全部顶层族 = run 族 + job 族 + 链族。测量/巡检的「族总量」口径用它，
+#: 不要按 ``len(RUN_FAMILIES)+1`` 猜。
+ALL_FAMILIES: tuple[str, ...] = RUN_FAMILIES + (JOBS_FAMILY,) + CHAIN_FAMILIES
+
+#: 族到根的唯一归属表（B8 G0-a）。evidence/ 归日志根（G6），与 devices/、jira/ 并列。
 FAMILY_STORAGE_ROOTS: Mapping[str, str] = MappingProxyType(
-    {**dict.fromkeys(RUN_FAMILIES, "log"), JOBS_FAMILY: "control_plane"}
+    {
+        **dict.fromkeys(RUN_FAMILIES, "log"),
+        JOBS_FAMILY: "control_plane",
+        EVIDENCE_FAMILY: "log",
+    }
 )
 
 

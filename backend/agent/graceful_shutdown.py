@@ -23,6 +23,7 @@ from .contracts.device_return import (
     make_disarm_result,
 )
 from .event_uploader import EventUploader
+from .evidence_uploader import EvidenceUploader
 from .local_disk_monitor import LocalDiskMonitor
 from .log_archiver import LogArchiver
 
@@ -278,6 +279,10 @@ def shutdown_agent_runtime(
         EventUploader.instance().stop(timeout=5.0)
     except Exception:
         logger.exception("shutdown_event_uploader_stop_failed")
+    try:
+        EvidenceUploader.instance().stop(timeout=5.0)
+    except Exception:
+        logger.exception("shutdown_evidence_uploader_stop_failed")
     # log_signal_outbox drainer + ArtifactUploader（仅 watcher 子系统启用时）
     if log_signal_drainer is not None:
         try:
