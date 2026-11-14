@@ -158,7 +158,7 @@ def unsparse(src: str, dst: str) -> None:
 
 
 def parse_scheme(xml_path: str) -> dict:
-    """PAC file id -> list of target block (partition) ids, from the PAC config XML."""
+    """PAC file id -> partition ids, flash type, and optional load base from PAC config XML."""
     tree = ET.parse(xml_path)
     mapping = {}
     for f in tree.iter("File"):
@@ -167,12 +167,17 @@ def parse_scheme(xml_path: str) -> dict:
             continue
         blocks = [b.get("id") for b in f.iter("Block") if b.get("id")]
         ftype = (f.findtext("Type") or "").strip()
-        mapping[fid] = {"partitions": blocks, "type": ftype}
+        base = (f.findtext("Block/Base") or "").strip()
+        entry = {"partitions": blocks, "type": ftype}
+        if base and base.lower() != "0x0":
+            entry["base"] = base
+        mapping[fid] = entry
     return mapping
 
 
 def build_plan(pac: dict, images_dir: str, scheme: dict) -> dict:
     plan = []
+    fdl = {}
     for e in pac["entries"]:
         fid, fname, size = e["id"], e["file"], e["size"]
         if not fname or not size:
@@ -181,6 +186,7 @@ def build_plan(pac: dict, images_dir: str, scheme: dict) -> dict:
         if not os.path.isfile(path):
             continue
         info = scheme.get(fid) or {}
+        ftype = info.get("type") or ""
         parts = list(info.get("partitions") or [])
         item = {
             "id": fid,
@@ -188,7 +194,7 @@ def build_plan(pac: dict, images_dir: str, scheme: dict) -> dict:
             "size": size,
             "sparse": is_sparse(path),
             "partitions": parts,
-            "flush_type": info.get("type") or "",
+            "flush_type": ftype,
         }
         if fid in PRESERVE_IDS:
             item["preserve"] = True
@@ -199,7 +205,34 @@ def build_plan(pac: dict, images_dir: str, scheme: dict) -> dict:
             item["raw_size"] = os.path.getsize(os.path.join(images_dir, item["raw"])) \
                 if os.path.isfile(os.path.join(images_dir, item["raw"])) else 0
         plan.append(item)
-    return {"entries": plan}
+
+        if ftype == "FDL" or fid == "FDL":
+            fdl_info = {"file": fname}
+            if info.get("base"):
+                fdl_info["base"] = info["base"]
+            fdl["fdl1"] = fdl_info
+        elif ftype == "NAND_FDL" or fid == "FDL2":
+            fdl_info = {"file": fname}
+            if info.get("base"):
+                fdl_info["base"] = info["base"]
+            fdl["fdl2"] = fdl_info
+
+    erases = []
+    seen_erases = set()
+    for info in scheme.values():
+        if info.get("type") != "EraseFlash2":
+            continue
+        for part in info.get("partitions") or []:
+            if part and part not in seen_erases:
+                erases.append(part)
+                seen_erases.add(part)
+
+    result = {"entries": plan}
+    if fdl:
+        result["fdl"] = fdl
+    if erases:
+        result["erases"] = erases
+    return result
 
 
 def main() -> None:

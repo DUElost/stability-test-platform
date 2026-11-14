@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
 """Flash one Unisoc (SPRD) device via BSL/FDL2 (spd_dump) using Scheme 2 silent direct boot.
 
-Implements the validated P532AA Scheme 2 flow inside the STP agent script contract:
+Implements Scheme 2 flashing inside the STP agent script contract:
 1. Resolve firmware images directory (explicit firmware_dir or family/version under NFS root).
-2. Pre-warm local SSD cache (/var/tmp/stp_flash/fw_cache) and dynamically trim
-   trailing CHUNK_DONT_CARE blocks from super.img to stay well under the ~300s BSL watchdog.
-3. Acquire host-wide serialization lock (/tmp/stp-flash-firmware.lock, shared with
+2. Read images/plan.json (FDL load bases, EraseFlash2 list, writable partitions),
+   falling back to legacy P532AA defaults when plan.json omits those fields.
+3. Pre-warm an isolated per-firmware SSD cache (<cache_dir>/<fw_label>_<hash>/fw_cache)
+   and dynamically trim trailing CHUNK_DONT_CARE blocks from super.img.
+4. Acquire host-wide serialization lock (/tmp/stp-flash-firmware.lock, shared with
    flash_firmware and flash_firmware_unisoc), emitting stage=lock-wait PROGRESS stamps
    every 5s so queued devices are not killed by step stall detection.
-4. Switch device to BSL mode via `adb reboot autodloader` and execute `spd_dump`:
-   - FDL1 @ 0x65008000 + EDK2 FDL2 @ 0xBDFFFE00 (keep_charge=1, blk_size=0x8000)
-   - Erase metadata, sysdumpdb, misc, sd_klog, uboot_log (clears crash marks & BCB)
+5. Switch device to BSL mode via `adb reboot autodloader` and execute `spd_dump`:
+   - Load FDL1 & FDL2 at the PAC scheme addresses (keep_charge=1, blk_size=0x8000)
+   - Erase safe Scheme 2 log/BCB partitions (metadata, sysdumpdb, misc, uboot_log, optional sd_klog)
    - Write 4KB userdata.img (triggers silent Android Vold format on first boot)
-   - Flash all A-slot & common partitions + trimmed super.img, never touching NV/calibration
+   - Flash writable partitions + trimmed super.img, strictly protecting NV/calibration & splloader
    - Issue reset
-5. Observe direct cold boot to sys.boot_completed == "1" and verify build/root.
+6. Observe direct cold boot to sys.boot_completed == "1" and verify build/root.
 
 STP agent script contract:
     env  STP_DEVICE_SERIAL          target serial (required)
@@ -31,6 +33,7 @@ STP agent script contract:
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -39,13 +42,17 @@ import struct
 import subprocess
 import sys
 import time
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 _PROGRESS_PREFIX = "PROGRESS "
 _HOST_LOCK_PATH = "/tmp/stp-flash-firmware.lock"
 _DEFAULT_CACHE_DIR = "/var/tmp/stp_flash"
 _DEFAULT_NFS_ROOT = "/mnt/stp-aee"
-_EXPECTED_SUPER_SIZE = 6291456000  # 1536000 * 4096
+
+_LEGACY_FDL1_FILE = "fdl1-sign.bin"
+_LEGACY_FDL1_BASE = "0x65008000"
+_LEGACY_FDL2_FILE = "edk2-fdl2-sign.bin"
+_LEGACY_FDL2_BASE = "0xBDFFFE00"
 
 ERASE_PARTITIONS: Tuple[str, ...] = (
     "metadata",
@@ -64,35 +71,52 @@ PROTECTED_NV_PARTITIONS = frozenset({
     "nr_factorynv",
     "nr_runtimenv1",
     "nr_runtimenv2",
+    "l_fixnv1",
+    "l_fixnv2",
+    "l_runtimenv1",
+    "l_runtimenv2",
 })
 
-SMALL_FW_FILES: Tuple[str, ...] = (
-    "fdl1-sign.bin",
-    "edk2-fdl2-sign.bin",
-    "userdata.img",
-    "edk2-sign.bin",
-    "sml-sign.bin",
-    "tos-sign.bin",
-    "teecfg-sign.bin",
-    "SC9600_QogirN5_PS_modem.bin",
-    "SC9600_QogirN5_PHY_modem.bin",
-    "ums9632_n5_adsp.bin",
-    "QogirN5_CH.bin",
-    "QogirN5_SP.bin",
-    "logo.bin",
-    "boot.img",
-    "init_boot.img",
-    "vendor_boot.img",
-    "dtbo.img",
-    "vbmeta_system.img",
-    "vbmeta_system_ext.img",
-    "vbmeta_vendor.img",
-    "vbmeta_product.img",
-    "vbmeta_odm.img",
-    "vbmeta-sign.img",
+_PROTECTED_NV_PREFIXES: Tuple[str, ...] = (
+    "nr_downloadnv_",
+    "nr_deltanv_",
+    "nr_fixnv",
+    "nr_runtimenv",
+    "l_fixnv",
+    "l_runtimenv",
+    "l_deltanv",
 )
 
-RAW_FW_FILES: Tuple[str, ...] = ("cache.img", "blackbox.img")
+# Legacy P532AA partition layout used only when images/plan.json is absent.
+_LEGACY_PARTS_TO_FLASH: Tuple[Tuple[str, str], ...] = (
+    ("uboot_a", "edk2-sign.bin"),
+    ("sml_a", "sml-sign.bin"),
+    ("trustos_a", "tos-sign.bin"),
+    ("teecfg_a", "teecfg-sign.bin"),
+    ("nr_modem_a", "SC9600_QogirN5_PS_modem.bin"),
+    ("nr_phy_a", "SC9600_QogirN5_PHY_modem.bin"),
+    ("l_agdsp_a", "ums9632_n5_adsp.bin"),
+    ("ch_sys_a", "QogirN5_CH.bin"),
+    ("pm_sys_a", "QogirN5_SP.bin"),
+    ("logo_a", "logo.bin"),
+    ("fbootlogo_a", "logo.bin"),
+    ("boot_a", "boot.img"),
+    ("init_boot_a", "init_boot.img"),
+    ("vendor_boot_a", "vendor_boot.img"),
+    ("dtbo_a", "dtbo.img"),
+    ("vbmeta_system_a", "vbmeta_system.img"),
+    ("vbmeta_system_ext_a", "vbmeta_system_ext.img"),
+    ("vbmeta_vendor_a", "vbmeta_vendor.img"),
+    ("vbmeta_product_a", "vbmeta_product.img"),
+    ("vbmeta_odm_a", "vbmeta_odm.img"),
+    ("vbmeta_a", "vbmeta-sign.img"),
+    ("cache", os.path.join("raw", "cache.img")),
+    ("blackbox", os.path.join("raw", "blackbox.img")),
+)
+
+_TAIL_PARTITIONS = frozenset({"cache", "blackbox"})
+_SKIP_PLAN_IDS = frozenset({"FDL", "FDL2"})
+_SKIP_PLAN_TYPES = frozenset({"FDL", "NAND_FDL", "EraseFlash2"})
 
 _LOAD_PART_RE = re.compile(r"load_partition:\s*([^,\s]+)")
 
@@ -136,9 +160,105 @@ def _output(success: bool, **kwargs) -> None:
 def is_protected_partition(part: str) -> bool:
     return (
         part in PROTECTED_NV_PARTITIONS
-        or part.startswith("nr_downloadnv_")
-        or part.startswith("nr_deltanv_")
+        or part.startswith(_PROTECTED_NV_PREFIXES)
     )
+
+
+def resolve_firmware_cache_root(fw_dir: str, cache_dir: str) -> str:
+    """Return an isolated SSD cache subdirectory per firmware path to avoid cross-model collisions."""
+    norm = os.path.normpath(os.path.abspath(fw_dir))
+    label_src = os.path.basename(os.path.dirname(norm)) if os.path.basename(norm) == "images" else os.path.basename(norm)
+    safe_label = re.sub(r"[^A-Za-z0-9._-]+", "_", label_src).strip("._-") or "fw"
+    digest = hashlib.sha256(norm.encode("utf-8")).hexdigest()[:8]
+    return os.path.join(cache_dir, f"{safe_label[:48]}_{digest}")
+
+
+def _load_flash_spec(fw_dir: str) -> Dict[str, object]:
+    """Load FDL, erase, and write-partition specification from images/plan.json, falling back to P532AA defaults."""
+    plan_path = os.path.join(fw_dir, "plan.json")
+    if not os.path.isfile(plan_path):
+        return {
+            "has_plan": False,
+            "fdl1": (_LEGACY_FDL1_FILE, _LEGACY_FDL1_BASE),
+            "fdl2": (_LEGACY_FDL2_FILE, _LEGACY_FDL2_BASE),
+            "erases": list(ERASE_PARTITIONS),
+            "userdata_rel": "userdata.img",
+            "rel_parts": list(_LEGACY_PARTS_TO_FLASH),
+            "has_super": True,
+        }
+
+    with open(plan_path, "r", encoding="utf-8") as fh:
+        plan = json.load(fh)
+    entries = plan.get("entries") if isinstance(plan.get("entries"), list) else []
+    by_id = {str(e.get("id") or ""): e for e in entries if isinstance(e, dict)}
+
+    fdl_cfg = plan.get("fdl") if isinstance(plan.get("fdl"), dict) else {}
+    fdl1_cfg = fdl_cfg.get("fdl1") if isinstance(fdl_cfg.get("fdl1"), dict) else {}
+    fdl2_cfg = fdl_cfg.get("fdl2") if isinstance(fdl_cfg.get("fdl2"), dict) else {}
+    fdl1_file = str(fdl1_cfg.get("file") or (by_id.get("FDL") or {}).get("file") or _LEGACY_FDL1_FILE).strip()
+    fdl1_base = str(fdl1_cfg.get("base") or _LEGACY_FDL1_BASE).strip()
+    fdl2_file = str(fdl2_cfg.get("file") or (by_id.get("FDL2") or {}).get("file") or _LEGACY_FDL2_FILE).strip()
+    fdl2_base = str(fdl2_cfg.get("base") or _LEGACY_FDL2_BASE).strip()
+
+    raw_erases = plan.get("erases")
+    if isinstance(raw_erases, list):
+        erases = [
+            str(p).strip()
+            for p in raw_erases
+            if str(p).strip() and not is_protected_partition(str(p).strip())
+        ]
+    else:
+        erases = list(ERASE_PARTITIONS)
+
+    userdata_rel = ""
+    head_parts: List[Tuple[str, str]] = []
+    tail_parts: List[Tuple[str, str]] = []
+    seen_parts = set()
+    has_super = False
+
+    for item in entries:
+        if not isinstance(item, dict):
+            continue
+        fid = str(item.get("id") or "").strip()
+        ftype = str(item.get("flush_type") or "").strip()
+        if fid in _SKIP_PLAN_IDS or ftype in _SKIP_PLAN_TYPES:
+            continue
+        fname = str(item.get("file") or "").strip()
+        if not fname:
+            continue
+        rel_path = str(item.get("raw") or "").strip() if (item.get("sparse") and item.get("raw")) else fname
+        parts = [str(p).strip() for p in (item.get("partitions") or []) if str(p).strip()]
+        if not parts:
+            continue
+        preserve = bool(item.get("preserve"))
+
+        for part in parts:
+            if part == "userdata" or fid == "UserData":
+                if not userdata_rel:
+                    userdata_rel = rel_path
+                continue
+            if preserve or is_protected_partition(part):
+                continue
+            if part == "super":
+                has_super = True
+                continue
+            if part in seen_parts:
+                continue
+            seen_parts.add(part)
+            if part in _TAIL_PARTITIONS:
+                tail_parts.append((part, rel_path))
+            else:
+                head_parts.append((part, rel_path))
+
+    return {
+        "has_plan": True,
+        "fdl1": (fdl1_file, fdl1_base),
+        "fdl2": (fdl2_file, fdl2_base),
+        "erases": erases,
+        "userdata_rel": userdata_rel or "userdata.img",
+        "rel_parts": head_parts + tail_parts,
+        "has_super": has_super,
+    }
 
 
 def resolve_adb() -> str:
@@ -236,36 +356,49 @@ def get_sparse_trimmed_size(sparse_path: str) -> Optional[int]:
     return ((raw_bytes + align - 1) // align) * align
 
 
+def _copy_if_changed(src: str, dst: str) -> bool:
+    if os.path.isfile(dst) and os.path.getsize(dst) == os.path.getsize(src):
+        return False
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    tmp_file = f"{dst}.tmp.{os.getpid()}"
+    shutil.copyfile(src, tmp_file)
+    os.rename(tmp_file, dst)
+    return True
+
+
 def prepare_local_cache(fw_dir: str, cache_dir: str, progress: Progress) -> Tuple[str, str]:
-    """Cache firmware files and trimmed super.img on local SSD to avoid NFS stalls."""
-    progress.stamp(stage="cache-prepare", cache_dir=cache_dir)
-    os.makedirs(cache_dir, exist_ok=True)
-    local_fw = os.path.join(cache_dir, "fw_cache")
-    local_raw = os.path.join(local_fw, "raw")
-    os.makedirs(local_raw, exist_ok=True)
+    """Cache firmware files and trimmed super.img in an isolated SSD directory to avoid NFS stalls and cross-model collisions."""
+    spec = _load_flash_spec(fw_dir)
+    fw_cache_root = resolve_firmware_cache_root(fw_dir, cache_dir)
+    progress.stamp(stage="cache-prepare", cache_dir=fw_cache_root)
+    local_fw = os.path.join(fw_cache_root, "fw_cache")
+    os.makedirs(local_fw, exist_ok=True)
 
     copied = 0
-    for rel in SMALL_FW_FILES:
+    plan_src = os.path.join(fw_dir, "plan.json")
+    if os.path.isfile(plan_src) and _copy_if_changed(plan_src, os.path.join(local_fw, "plan.json")):
+        copied += 1
+
+    fdl1_rel, _ = spec["fdl1"]  # type: ignore[misc]
+    fdl2_rel, _ = spec["fdl2"]  # type: ignore[misc]
+    userdata_rel = str(spec["userdata_rel"])
+    rel_files = [fdl1_rel, fdl2_rel, userdata_rel] + [
+        rel for _, rel in spec["rel_parts"]  # type: ignore[attr-defined]
+    ]
+    seen_rel = set()
+    for rel in rel_files:
+        if not rel or rel in seen_rel:
+            continue
+        seen_rel.add(rel)
         src = os.path.join(fw_dir, rel)
         if not os.path.isfile(src):
             raise RuntimeError(f"required firmware file missing: {src}")
-        dst = os.path.join(local_fw, rel)
-        if not os.path.isfile(dst) or os.path.getsize(dst) != os.path.getsize(src):
-            tmp_file = f"{dst}.tmp.{os.getpid()}"
-            shutil.copyfile(src, tmp_file)
-            os.rename(tmp_file, dst)
+        if _copy_if_changed(src, os.path.join(local_fw, rel)):
             copied += 1
 
-    for rel in RAW_FW_FILES:
-        src = os.path.join(fw_dir, "raw", rel)
-        if not os.path.isfile(src):
-            raise RuntimeError(f"required raw firmware file missing: {src}")
-        dst = os.path.join(local_raw, rel)
-        if not os.path.isfile(dst) or os.path.getsize(dst) != os.path.getsize(src):
-            tmp_file = f"{dst}.tmp.{os.getpid()}"
-            shutil.copyfile(src, tmp_file)
-            os.rename(tmp_file, dst)
-            copied += 1
+    if not spec["has_super"]:
+        progress.stamp(stage="cache-ready", copied_files=copied, super_mb=0.0)
+        return local_fw, ""
 
     sparse_super = os.path.join(fw_dir, "super.img")
     raw_super = os.path.join(fw_dir, "raw", "super.img")
@@ -273,21 +406,16 @@ def prepare_local_cache(fw_dir: str, cache_dir: str, progress: Progress) -> Tupl
     if not os.path.isfile(src_super):
         raise RuntimeError(f"super.img not found under {fw_dir}")
 
-    trimmed_size = get_sparse_trimmed_size(sparse_super) or _EXPECTED_SUPER_SIZE
-    cached_super = os.path.join(cache_dir, f"super_trimmed_{trimmed_size}.img")
+    trimmed_size = get_sparse_trimmed_size(sparse_super) or os.path.getsize(src_super)
+    trimmed_size = min(trimmed_size, os.path.getsize(src_super))
+    cached_super = os.path.join(fw_cache_root, f"super_trimmed_{trimmed_size}.img")
 
     if not (os.path.isfile(cached_super) and os.path.getsize(cached_super) == trimmed_size):
-        existing_raw_cache = os.path.join(cache_dir, "super.img")
-        copy_src = (
-            existing_raw_cache
-            if (os.path.isfile(existing_raw_cache) and os.path.getsize(existing_raw_cache) == _EXPECTED_SUPER_SIZE)
-            else src_super
-        )
         progress.stamp(stage="cache-trim-super", target_mb=round(trimmed_size / (1024 * 1024), 1))
         tmp_target = f"{cached_super}.tmp.{os.getpid()}"
         remaining = trimmed_size
         buf_sz = 16 * 1024 * 1024
-        with open(copy_src, "rb") as fin, open(tmp_target, "wb") as fout:
+        with open(src_super, "rb") as fin, open(tmp_target, "wb") as fout:
             while remaining > 0:
                 chunk = fin.read(min(buf_sz, remaining))
                 if not chunk:
@@ -328,40 +456,23 @@ def acquire_host_lock(progress: Progress, timeout_seconds: int = 7200, lock_path
 
 
 def build_spd_dump_args(spd_dump_bin: str, fw_dir: str, super_path: str) -> List[str]:
-    """Build Scheme 2 spd_dump command line, asserting no protected NV partitions are touched."""
-    fdl1 = os.path.join(fw_dir, "fdl1-sign.bin")
-    fdl2 = os.path.join(fw_dir, "edk2-fdl2-sign.bin")
-    raw_dir = os.path.join(fw_dir, "raw")
-    userdata = os.path.join(fw_dir, "userdata.img")
+    """Build Scheme 2 spd_dump command line from plan.json (or legacy P532AA defaults), asserting no protected NV partitions are touched."""
+    spec = _load_flash_spec(fw_dir)
+    fdl1_rel, fdl1_base = spec["fdl1"]  # type: ignore[misc]
+    fdl2_rel, fdl2_base = spec["fdl2"]  # type: ignore[misc]
+    erases: List[str] = list(spec["erases"])  # type: ignore[arg-type]
+    fdl1 = os.path.join(fw_dir, fdl1_rel)
+    fdl2 = os.path.join(fw_dir, fdl2_rel)
+    userdata = os.path.join(fw_dir, str(spec["userdata_rel"]))
 
     parts_to_flash: List[Tuple[str, str]] = [
-        ("uboot_a", os.path.join(fw_dir, "edk2-sign.bin")),
-        ("sml_a", os.path.join(fw_dir, "sml-sign.bin")),
-        ("trustos_a", os.path.join(fw_dir, "tos-sign.bin")),
-        ("teecfg_a", os.path.join(fw_dir, "teecfg-sign.bin")),
-        ("nr_modem_a", os.path.join(fw_dir, "SC9600_QogirN5_PS_modem.bin")),
-        ("nr_phy_a", os.path.join(fw_dir, "SC9600_QogirN5_PHY_modem.bin")),
-        ("l_agdsp_a", os.path.join(fw_dir, "ums9632_n5_adsp.bin")),
-        ("ch_sys_a", os.path.join(fw_dir, "QogirN5_CH.bin")),
-        ("pm_sys_a", os.path.join(fw_dir, "QogirN5_SP.bin")),
-        ("logo_a", os.path.join(fw_dir, "logo.bin")),
-        ("fbootlogo_a", os.path.join(fw_dir, "logo.bin")),
-        ("boot_a", os.path.join(fw_dir, "boot.img")),
-        ("init_boot_a", os.path.join(fw_dir, "init_boot.img")),
-        ("vendor_boot_a", os.path.join(fw_dir, "vendor_boot.img")),
-        ("dtbo_a", os.path.join(fw_dir, "dtbo.img")),
-        ("vbmeta_system_a", os.path.join(fw_dir, "vbmeta_system.img")),
-        ("vbmeta_system_ext_a", os.path.join(fw_dir, "vbmeta_system_ext.img")),
-        ("vbmeta_vendor_a", os.path.join(fw_dir, "vbmeta_vendor.img")),
-        ("vbmeta_product_a", os.path.join(fw_dir, "vbmeta_product.img")),
-        ("vbmeta_odm_a", os.path.join(fw_dir, "vbmeta_odm.img")),
-        ("vbmeta_a", os.path.join(fw_dir, "vbmeta-sign.img")),
-        ("cache", os.path.join(raw_dir, "cache.img")),
-        ("blackbox", os.path.join(raw_dir, "blackbox.img")),
-        ("super", super_path),
+        (part, os.path.join(fw_dir, rel))
+        for part, rel in spec["rel_parts"]  # type: ignore[attr-defined]
     ]
+    if spec["has_super"]:
+        parts_to_flash.append(("super", super_path))
 
-    for part in ERASE_PARTITIONS:
+    for part in erases:
         if is_protected_partition(part):
             raise RuntimeError(f"refusing to erase protected NV partition: {part}")
     for part, _ in parts_to_flash:
@@ -373,14 +484,14 @@ def build_spd_dump_args(spd_dump_bin: str, fw_dir: str, super_path: str) -> List
         "--verbose", "1",
         "--wait", "60",
         "keep_charge", "1",
-        "fdl", fdl1, "0x65008000",
-        "fdl", fdl2, "0xBDFFFE00",
+        "fdl", fdl1, fdl1_base,
+        "fdl", fdl2, fdl2_base,
         "disable_transcode",
         "timeout", "15000",
         "blk_size", "0x8000",
         "keep_charge", "1",
     ]
-    for part in ERASE_PARTITIONS:
+    for part in erases:
         cmd.extend(["erase_part", part])
     cmd.extend(["write_part", "userdata", userdata])
     for part, img_path in parts_to_flash:
