@@ -27,10 +27,6 @@ from backend.models.plan_run_artifact import PlanRunArtifact
 from backend.services import issue_fact_store as facts
 from backend.services import shadow_delivery
 
-PLATFORM_MTK = "mtk"
-DEDUP_FIRST_PLATFORMS = frozenset({PLATFORM_MTK})
-
-
 def normalize_platform(value: Any) -> str:
     return str(value or "").strip().lower()
 
