@@ -33,7 +33,9 @@ from backend.models.schedule import TaskSchedule, schedule_timestamp
 # tools/dev/check_inner_imports.py 棘轮约束（基线只许下调）。
 from backend.storage_families import JOBS_FAMILY, RUN_FAMILIES, storage_root_for_family
 from backend.core.settings.scheduler import get_scheduler_settings
+from backend.services import issue_fact_store as facts
 from backend.services.evidence_publication import sweep_evidence_publications
+from backend.services.partition_scope import archive_complete
 from backend.services.shadow_scan_rounds import sweep_shadow_scan_rounds
 
 
@@ -282,6 +284,7 @@ def purge_run_storage_dirs(run_ids: list, jobs_by_run: dict | None = None) -> se
     failed: set = set()
     removed = 0
     jobs_by_run = jobs_by_run or {}
+
 
     def _purge(family: str, key: int, run_id: int) -> None:
         nonlocal removed
@@ -834,6 +837,25 @@ def run_retention_cleanup() -> None:
                 record_retention_txn(time.perf_counter() - lock_t0)
                 return
 
+            # B8 G7 / D11 / I4：仍被需要的材料（代表重试中、轮次未关闭）不得随
+            # run 保留期一起回收；所属 run 整批推迟（行与文件都留到下轮）。
+            protected_run_ids = facts.list_material_protected_run_ids(
+                db, run_ids=safe_run_ids,
+            )
+            if protected_run_ids:
+                safe_run_ids = [
+                    run_id for run_id in safe_run_ids
+                    if run_id not in protected_run_ids
+                ]
+                keep.update(protected_run_ids)
+                logger.info(
+                    "retention_cleanup deferred: material_protected=%d",
+                    len(protected_run_ids),
+                )
+                if not safe_run_ids:
+                    record_retention_txn(time.perf_counter() - lock_t0)
+                    return
+
             # #798/#2031: 删行前收集 job 清单（含 run 归属）——既供提交后的
             # console.log 清理，也供 NFS ``jobs/{job_id}/`` 回收（按 run 归因，
             # 该 run 的文件清理失败时整批推迟）。
@@ -1001,23 +1023,13 @@ def run_retention_cleanup() -> None:
 
 
 def _terminal_archive_complete(db, plan_run_id: int) -> bool:
-    """True when merge artifact exists and extract stage was recorded (#1110)."""
-    from backend.models.plan_run import PlanRun
-    from backend.models.plan_run_artifact import PlanRunArtifact
+    """归档完成判据（D16，B8 G7）：按分区判断，两类分区独立。
 
-    merge_count = db.execute(
-        select(func.count()).select_from(PlanRunArtifact).where(
-            PlanRunArtifact.plan_run_id == plan_run_id,
-            PlanRunArtifact.artifact_type == "merge_result_xls",
-        )
-    ).scalar_one()
-    if merge_count == 0:
-        return False
-    run = db.get(PlanRun, plan_run_id)
-    if run is None:
-        return False
-    extract = (run.run_context or {}).get("extract")
-    return isinstance(extract, dict)
+    - 现行分区（含无模式存量）：merge 产物存在且已记录 extract（#1110，原判据）；
+    - 先去重分区：交付状态为「就绪」或「就绪但有缺口」；不要求 extract 产物，
+      代表仍在重试时保持未就绪。
+    """
+    return archive_complete(db, plan_run_id)
 
 
 def auto_archive_sweep() -> None:
@@ -1116,13 +1128,10 @@ def auto_archive_sweep() -> None:
                     .all()
                 )
                 for run in candidates:
-                    scan_count = db.execute(
-                        select(func.count()).select_from(PlanRunArtifact).where(
-                            PlanRunArtifact.plan_run_id == run.id,
-                            PlanRunArtifact.artifact_type == "scan_result_xls",
-                        )
-                    ).scalar_one()
-                    if scan_count > 0 and _terminal_archive_complete(db, run.id):
+                    # 分区判据内部已按模式区分：现行分区仍要求 merge 产物（scan 的
+                    # 必然结果），先去重分区只认交付状态，不要求 scan 产物或 extract
+                    # （G7 / D16）。
+                    if _terminal_archive_complete(db, run.id):
                         continue
                     enqueue_dedup_terminal_sync(run.id, is_final=True)
                     triggered += 1

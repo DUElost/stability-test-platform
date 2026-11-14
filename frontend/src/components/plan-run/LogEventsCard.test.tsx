@@ -66,6 +66,24 @@ describe('LogEventsCard (#529)', () => {
     expect(mocks.getLogEvents).not.toHaveBeenCalled();
   });
 
+  it('B8 G7: 已校验代表证据即使 PRUNED 也显示下载', async () => {
+    mocks.getLogEvents.mockResolvedValue({
+      plan_run_id: 104,
+      data_authority: 'device_log_event',
+      total: 1,
+      items: [
+        event({
+          id: 'ev-pruned', state: 'PRUNED', remote_path: null,
+          delivery_evidence: true,
+        }),
+      ],
+      platforms: ['MTK'],
+    });
+    renderCard(104, true);
+
+    expect(await screen.findByTestId('log-event-download-ev-pruned')).toBeInTheDocument();
+  });
+
   it('终态时拉取 DLE 并渲染 remote_path 优先的路径', async () => {
     mocks.getLogEvents.mockResolvedValue(realPayload);
     renderCard(103, true);

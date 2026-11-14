@@ -266,9 +266,22 @@ def get_partition_mode(
     return db.execute(
         select(PartitionMode).where(
             PartitionMode.plan_run_id == plan_run_id,
-            PartitionMode.platform == platform,
+            func.lower(PartitionMode.platform) == platform.lower(),
         )
     ).scalars().first()
+
+
+def list_partition_modes(db: Session, *, plan_run_id: int) -> list[PartitionMode]:
+    """列出某 PlanRun 已登记的**全部分区模式**（B8 G7 消费方只读入口）。
+
+    没有记录的分区不在此列：调用方按 D13 第 2 条把它们解释为「现行」，
+    不得据开关当前值反推历史分区的模式。
+    """
+    return list(db.execute(
+        select(PartitionMode)
+        .where(PartitionMode.plan_run_id == plan_run_id)
+        .order_by(PartitionMode.platform)
+    ).scalars())
 
 
 def record_scan_round(
@@ -341,6 +354,18 @@ def get_scan_round(db: Session, *, round_id: int) -> Optional[ScanRound]:
         select(ScanRound).where(ScanRound.id == round_id).with_for_update()
         .execution_options(populate_existing=True),
     ).scalar_one_or_none()
+
+
+def list_scan_rounds_for_read(
+    db: Session, *, plan_run_id: int, platform: str,
+) -> list[ScanRound]:
+    """只读同形查询（无行锁）：状态 API / 能力目录不得因读而锁轮次行。"""
+    return list(db.execute(
+        select(ScanRound).where(
+            ScanRound.plan_run_id == plan_run_id,
+            ScanRound.platform == platform,
+        ).order_by(ScanRound.round_no)
+    ).scalars())
 
 
 def list_scan_rounds(
@@ -590,6 +615,29 @@ def record_spill_ledger_entry(
     return row
 
 
+def _run_occurrence_clause(plan_run_id: int):
+    """「这次发生属于本 PlanRun」的三条来源（首见 / DLE 观察 / 候选快照）。"""
+    observed_in_run = select(IssueOccurrenceEvent.id).join(
+        DeviceLogEvent, DeviceLogEvent.id == IssueOccurrenceEvent.dle_id,
+    ).where(
+        IssueOccurrenceEvent.occurrence_id == IssueOccurrence.id,
+        DeviceLogEvent.plan_run_id == plan_run_id,
+    ).exists()
+    # The G4 candidate snapshot survives DLE/PlanRun retention, just like facts.
+    persisted_in_run = select(ScanRound.id).where(
+        ScanRound.plan_run_id == plan_run_id,
+        ScanRound.merge_status == "OK",
+        ScanRound.merge_summary["candidates"].contains(func.jsonb_build_array(
+            func.jsonb_build_object("occurrence_id", IssueOccurrence.id),
+        )),
+    ).exists()
+    return or_(
+        IssueOccurrence.first_seen_plan_run_id == plan_run_id,
+        observed_in_run,
+        persisted_in_run,
+    )
+
+
 def _occurrence_scope(
     stmt,
     *,
@@ -599,29 +647,27 @@ def _occurrence_scope(
 ):
     stmt = stmt.where(IssueOccurrence.signature_id == signature_id)
     if plan_run_id is not None:
-        observed_in_run = select(IssueOccurrenceEvent.id).join(
-            DeviceLogEvent, DeviceLogEvent.id == IssueOccurrenceEvent.dle_id,
-        ).where(
-            IssueOccurrenceEvent.occurrence_id == IssueOccurrence.id,
-            DeviceLogEvent.plan_run_id == plan_run_id,
-        ).exists()
-        # The G4 candidate snapshot survives DLE/PlanRun retention, just like facts.
-        persisted_in_run = select(ScanRound.id).where(
-            ScanRound.plan_run_id == plan_run_id,
-            ScanRound.merge_status == "OK",
-            ScanRound.merge_summary["candidates"].contains(func.jsonb_build_array(
-                func.jsonb_build_object("occurrence_id", IssueOccurrence.id),
-            )),
-        ).exists()
-        stmt = stmt.where(or_(
-            IssueOccurrence.first_seen_plan_run_id == plan_run_id,
-            observed_in_run,
-            persisted_in_run,
-        ))
+        stmt = stmt.where(_run_occurrence_clause(plan_run_id))
     if platform is not None:
         stmt = stmt.join(
             IssueSignature, IssueSignature.id == IssueOccurrence.signature_id,
-        ).where(IssueSignature.platform == platform)
+        ).where(func.lower(IssueSignature.platform) == platform.lower())
+    return stmt
+
+
+def _partition_occurrence_scope(stmt, *, plan_run_id: int, platform: str):
+    """本分区（实际 PlanRun × 平台）的**全部**发生，不论是否已选为代表。
+
+    统计口径按问题汇总（D9 第 2 条 / #3886）：发生数用 occurrence_key 去重，
+    设备数用 serial 去重；未选中的发生同样计入，路径变化与 HddSpill 不改变
+    同一发生的身份。
+    """
+    stmt = stmt.select_from(IssueOccurrence).join(
+        IssueSignature, IssueSignature.id == IssueOccurrence.signature_id,
+    ).where(
+        func.lower(IssueSignature.platform) == platform.lower(),
+        _run_occurrence_clause(plan_run_id),
+    )
     return stmt
 
 
@@ -661,6 +707,34 @@ def count_machines(
     stmt = _occurrence_scope(
         select(func.count(distinct(IssueOccurrence.serial))),
         signature_id=signature_id,
+        plan_run_id=plan_run_id,
+        platform=platform,
+    )
+    return int(db.execute(stmt).scalar_one())
+
+
+def _occurrence_identity():
+    """发生身份：occurrence_key；未证实（fail-open）的行按行计。"""
+    return func.coalesce(
+        IssueOccurrence.occurrence_key,
+        func.concat("unproven:", cast(IssueOccurrence.id, String)),
+    )
+
+
+def count_partition_occurrences(db: Session, *, plan_run_id: int, platform: str) -> int:
+    """本分区全部发生数（含未被选为代表的发生，#3886 口径）。"""
+    stmt = _partition_occurrence_scope(
+        select(func.count(distinct(_occurrence_identity()))),
+        plan_run_id=plan_run_id,
+        platform=platform,
+    )
+    return int(db.execute(stmt).scalar_one())
+
+
+def count_partition_machines(db: Session, *, plan_run_id: int, platform: str) -> int:
+    """本分区全部发生涉及的设备数（serial 去重）。"""
+    stmt = _partition_occurrence_scope(
+        select(func.count(distinct(IssueOccurrence.serial))),
         plan_run_id=plan_run_id,
         platform=platform,
     )
@@ -1004,12 +1078,52 @@ def get_evidence_publication(
     return db.execute(stmt).scalar_one_or_none()
 
 
+def list_material_protected_run_ids(
+    db: Session, *, run_ids: Sequence[int],
+) -> set[int]:
+    """I4 保护：仍被需要的材料的所属 run（B8 G7 retention 用）。
+
+    判据（D11 表格 / D2 第 3 条）：
+
+    - 代表发布仍在 PENDING / RETRYING —— 源材料（Agent 本地原件或中心溢出副本）
+      在重试收口前不得回收；
+    - 分区的 FINAL / SUPPLEMENT 轮尚未关闭 —— 补充轮所需材料同样受保护。
+
+    返回的 run 整批推迟回收（与文件清理失败同语义：行与文件都留下，下轮重试）。
+    已 VERIFIED / FAILED 的发布不再占用保护位；失败代表是缺口，不是"仍需使用"。
+    """
+    ids = [int(value) for value in run_ids]
+    if not ids:
+        return set()
+    protected: set[int] = set()
+    publication_runs = db.execute(
+        select(distinct(EvidencePublication.plan_run_id)).where(
+            EvidencePublication.plan_run_id.in_(ids),
+            EvidencePublication.state.in_(
+                (PUBLICATION_STATE_PENDING, PUBLICATION_STATE_RETRYING),
+            ),
+        )
+    ).scalars()
+    protected.update(int(value) for value in publication_runs)
+    open_round_runs = db.execute(
+        select(distinct(ScanRound.plan_run_id)).where(
+            ScanRound.plan_run_id.in_(ids),
+            ScanRound.kind.in_(
+                (SCAN_ROUND_KIND_FINAL, SCAN_ROUND_KIND_SUPPLEMENT),
+            ),
+            ScanRound.status != SCAN_ROUND_STATUS_CLOSED,
+        )
+    ).scalars()
+    protected.update(int(value) for value in open_round_runs)
+    return protected
+
+
 def get_evidence_publication_for_dle(
     db: Session, *, plan_run_id: int, platform: str, dle_id: Any,
 ) -> Optional[EvidencePublication]:
     return db.execute(select(EvidencePublication).where(
         EvidencePublication.plan_run_id == plan_run_id,
-        EvidencePublication.platform == platform,
+        func.lower(EvidencePublication.platform) == platform.lower(),
         EvidencePublication.dle_id == dle_id,
     )).scalar_one_or_none()
 
@@ -1086,6 +1200,23 @@ def list_evidence_publication_archive_due_run_ids(
             DeviceLogEvent.state.in_(["LOCAL", "REMOTE"]),
         ).distinct().order_by(EvidencePublication.plan_run_id)
     ).scalars())
+
+
+def list_verified_publication_dle_ids(
+    db: Session, *, plan_run_id: int, dle_ids: Sequence[Any],
+) -> set[str]:
+    """给定 DLE 中已校验发布的 id 集合（批量，供事件列表标可下载）。"""
+    ids = [value for value in dle_ids if value]
+    if not ids:
+        return set()
+    rows = db.execute(
+        select(EvidencePublication.dle_id).where(
+            EvidencePublication.plan_run_id == plan_run_id,
+            EvidencePublication.state == PUBLICATION_STATE_VERIFIED,
+            EvidencePublication.dle_id.in_(ids),
+        )
+    ).scalars()
+    return {str(value) for value in rows}
 
 
 def list_partition_selections(

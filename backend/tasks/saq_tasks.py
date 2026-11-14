@@ -885,7 +885,7 @@ async def merge_task(
     round_started_at: str | None = None,
 ) -> None:
     """ADR-0025 Sprint 4: 归档-2 集中合并（-merge_files 各 agent _org.xls）。"""
-    from backend.services.dedup_scan import run_merge_all_platforms_sync
+    from backend.services.dedup_scan import run_merge_for_partitions_sync
 
     round_dt = None
     if round_started_at:
@@ -903,7 +903,7 @@ async def merge_task(
         # coroutine 后线程会继续跑完，重试必须等它结束而不是叠上去。
         result = await _run_sync_exclusive(
             f"merge:{plan_run_id}",
-            run_merge_all_platforms_sync,
+            run_merge_for_partitions_sync,
             plan_run_id,
             scan_round_id=scan_round_id,
             round_started_at=round_dt,

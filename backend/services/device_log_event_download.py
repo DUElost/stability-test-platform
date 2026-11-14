@@ -16,8 +16,10 @@ from sqlalchemy.orm import Session
 from backend.core.artifact_paths import (
     ArtifactPathError,
     resolve_device_event_remote_path,
+    resolve_evidence_event_path,
 )
 from backend.models.device_log_event import DeviceLogEvent
+from backend.services import issue_fact_store as facts
 from backend.services.artifact_zip import build_directory_zip_response
 
 # States that still have on-disk content under central storage.
@@ -39,6 +41,32 @@ def build_device_log_event_download_response(
     event = db.get(DeviceLogEvent, eid)
     if event is None or event.plan_run_id != plan_run_id:
         raise HTTPException(status_code=404, detail="log event not found for this plan run")
+
+    # B8 G7 / D16：先去重分区的代表证据以 G6 已校验发布记录为准（D9 第 6–7 条）。
+    # 注册表是唯一索引；不得按主文件夹推断归属。DLE.remote_path 仍供溢出补扫，
+    # 只在没有已校验发布记录时使用。
+    publication = facts.get_evidence_publication_for_dle(
+        db, plan_run_id=plan_run_id, platform=event.platform, dle_id=eid,
+    )
+    if (
+        publication is not None
+        and publication.state == facts.PUBLICATION_STATE_VERIFIED
+        and publication.destination_rel_path
+    ):
+        try:
+            resolved = resolve_evidence_event_path(
+                publication.destination_rel_path,
+                root_plan_run_id=publication.root_plan_run_id,
+                serial=event.serial,
+                must_exist=True,
+            )
+        except ArtifactPathError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if resolved.is_dir():
+            return build_directory_zip_response(
+                resolved, download_name=f"dle-{event.id}",
+            )
+        raise HTTPException(status_code=404, detail="evidence path is not a directory")
 
     if event.state == "PRUNED":
         raise HTTPException(

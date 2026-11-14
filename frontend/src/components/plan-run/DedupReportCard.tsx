@@ -12,6 +12,7 @@ import { PANEL, TEXT, TOOL_BTN } from '@/design-system';
 import { cn } from '@/lib/utils';
 import type {
   DedupArtifact,
+  DedupPartition,
   DedupScanArchive,
   RunContextExtractSummary,
   RunContextMergePlatforms,
@@ -261,6 +262,59 @@ function buildStages(args: {
   return stages;
 }
 
+/** 分区交付状态 → 人话（未知代码原样露出，不静默吞掉）。 */
+const DELIVERY_STATUS_LABEL: Record<string, string> = {
+  READY: '就绪',
+  READY_WITH_GAPS: '就绪但有缺口',
+  NOT_READY: '未就绪',
+  SCOPE_ONLY: '仅范围（未接回执）',
+};
+
+function deliveryLabel(status: string): string {
+  return DELIVERY_STATUS_LABEL[status] ?? status;
+}
+
+/** 分区行（B8 G7）：模式、覆盖、交付与缺口；现行分区只给观察口径。 */
+function PartitionRow({ partition }: { partition: DedupPartition }) {
+  const delivery = partition.delivery;
+  return (
+    <div
+      className="flex flex-wrap items-center gap-x-2 text-[11px]"
+      data-testid={`partition-${partition.platform}`}
+    >
+      <span className={cn('w-12 shrink-0 font-mono uppercase', TEXT.subtitle)}>
+        {partition.platform}
+      </span>
+      <span className={delivery ? 'text-warning' : 'text-muted-foreground/70'}>
+        {delivery ? '先去重' : '现行'}
+      </span>
+      {delivery ? (
+        <>
+          <span data-testid={`partition-${partition.platform}-delivery`}>
+            {deliveryLabel(delivery.status)}
+          </span>
+          <span>{'覆盖 ' + delivery.coverage.covered + '/' + delivery.coverage.expected}</span>
+          <span title="发生数按 issue_occurrence 去重">{'发生 ' + delivery.occurrences}</span>
+          <span>{'设备 ' + delivery.machines}</span>
+          <span title="已校验 / 已选代表">{'代表 ' + delivery.representatives.published + '/' + delivery.representatives.selected}</span>
+          {delivery.representatives.pending > 0 && (
+            <span className="text-warning">{'重试中 ' + delivery.representatives.pending}</span>
+          )}
+          {delivery.gaps.length > 0 && (
+            <span className="text-destructive" data-testid={`partition-${partition.platform}-gaps`}>
+              {'缺口 ' + delivery.gaps.length}
+            </span>
+          )}
+        </>
+      ) : (
+        <span>
+          {'观察 ' + (partition.observed_events ?? '—') + ' 条 / 设备 ' + (partition.machines ?? '—')}
+        </span>
+      )}
+    </div>
+  );
+}
+
 export default function DedupReportCard({
   runId, uploadSummary, extractSummary, mergePlatforms,
 }: Props) {
@@ -316,6 +370,10 @@ export default function DedupReportCard({
   });
 
   const artifacts: DedupArtifact[] = statusQ.data?.artifacts ?? [];
+  // B8 G7：分区视图。无分区记录（存量运行）时保持既有 extract 能力。
+  const partitions: DedupPartition[] = statusQ.data?.partitions ?? [];
+  const canExtract =
+    partitions.length === 0 || partitions.some((p) => p.capabilities?.extract);
   // #2186：缺口清单（有界，后端已截断）+ 总数；总数缺失时回落既有 `missing` 计数。
   const { items: missingItems, total: missingTotal } = readMissingItems(extractSummary);
   const missingCount = missingTotal ?? extractSummary?.missing ?? missingItems.length;
@@ -377,10 +435,14 @@ export default function DedupReportCard({
           <button
             type="button"
             onClick={() => extractMut.mutate()}
-            disabled={extractMut.isPending}
+            disabled={extractMut.isPending || !canExtract}
             className={TOOL_BTN}
             data-testid="dedup-extract-btn"
-            title="按去重结果提取事件日志到提单目录"
+            title={
+              canExtract
+                ? '按去重结果提取事件日志到提单目录'
+                : '本次运行只有先去重分区：交付物按登记下载，不再执行 extract'
+            }
           >
             {extractMut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <FileDown className="h-3 w-3" />}
             提取
@@ -396,6 +458,14 @@ export default function DedupReportCard({
         ) : (
           <>
             {/* #2185：四个阶段在一处读完；状态缺失时明说缺什么，不静默消失。 */}
+            {partitions.length > 0 && (
+              <div className="space-y-1" data-testid="partition-status">
+                {partitions.map((partition) => (
+                  <PartitionRow key={partition.platform} partition={partition} />
+                ))}
+              </div>
+            )}
+
             <div className="space-y-1" data-testid="archive-pipeline">
               {stages.map((s) => (
                 <div

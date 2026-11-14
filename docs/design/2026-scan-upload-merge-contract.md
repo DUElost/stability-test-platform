@@ -149,6 +149,12 @@ extract 归档链**无平台分支**。实现层残余差异（不构成状态�
 「merge 产物表头契约」）。`REMOTE` 停留语义两平台同规：run 无 `merge_result_xls`
 即事实终态，不算卡住。
 
+**B8 分区例外（ADR-0062 D13 第 4 条 / D16，G7）**：run 存在分区模式记录时，
+extract 只消费「现行」分区——「先去重」分区的 DLE 与 merge 报表不进入输入，只有
+「先去重」分区时路由返回 409，混合运行仍提取现行侧。归档完成判据同样按分区：
+「先去重」分区以交付状态 `READY` / `READY_WITH_GAPS` 为完成（不要求 merge 产物或
+extract），现行分区沿用上面两条前置判据。没有模式记录的存量运行保持 run 级语义。
+
 **判据为什么不能写成「`REMOTE` 即终态」**（生产反例，2026-09-16 只读核对）：
 run 400（SUCCESS）**有** `merge_result_xls`、`jira/400/` 在，其 2 行 UNIVIEW 正常
 `ARCHIVED`；同批 run 401/410/411/412（均 FAILED）**无**产物的行停在 `REMOTE`。
@@ -203,6 +209,8 @@ unlinked_fixable、not_yet_archived。链接故障只看
 | extract | `{root}/jira/{run_id}/` |
 | 上传清单分片 | `{root}/_meta/{run_id}/{host_id}.json`（#2188 D 步；scan 侧聚合后注册产物，与 run 同生命周期） |
 | 证据区（B8 G6） | `{root}/evidence/{主PlanRun编号}_{采集时目录名}/{SN}/{事件目录名}/`（ADR-0062 D9 第 6 条；按链留存，不进 `RUN_FAMILIES`） |
+| 交付统计导出（B8 G7） | `{root}/_meta/{run_id}/_delivery/{platform}/v{n}.json`（D9 第 8 条；下载按 `delivery_version` 登记定位） |
+| 代表证据下载（B8 G7） | 按 `evidence_publication.destination_rel_path`，仅 `VERIFIED`；`DLE.remote_path` 只留作溢出补扫 |
 
 本表的族清单正本是 `backend/storage_families.py`（`RUN_FAMILIES` / `JOBS_FAMILY` /
 `CHAIN_FAMILIES`）——retention purge 桶与 `measure_center_storage.py` 的 E-1/E-2 测量族

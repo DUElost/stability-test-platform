@@ -43,6 +43,10 @@ VERIFIED: dict[str, tuple[str, str]] = {
         ("POST /api/v1/plan-runs/{run_id}/dedup/scan", "scan"),
     "dedup.py|no merge result available, run merge first":
         ("POST /api/v1/plan-runs/{run_id}/dedup/merge", "merge"),
+    # B8 G7：只有先去重分区时 extract 拒绝，出路是交付物下载（D9 第 8 条）。
+    "dedup.py|run has no CURRENT partition; dedup-first partitions use GET":
+        ("GET /api/v1/plan-runs/{run_id}/delivery/{platform}/versions/{version_no}/download",
+         "delivery"),
     "devices.py|archived project is read-only; unarchive to modify":
         ("POST /api/v1/projects/{project_key}/unarchive", "unarchive"),
     "hosts.py|主机有 {…} 个活跃 Job，请先 abort 再删除":

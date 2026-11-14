@@ -54,6 +54,7 @@ from typing import Iterable, Optional
 # ——那里 eager 建 engine，会破坏本脚本「不查库、缺省 env 也能跑」的职责边界。
 from backend.storage_families import (
     ALL_FAMILIES,
+    CHAIN_FAMILIES,
     JOBS_FAMILY,
     MERGE_REPORT_FAMILIES,
     NON_KEY_ENTRIES,
@@ -210,6 +211,40 @@ def _merge_subdir_usage(run_path: Path) -> Usage:
     return walk_usage(run_path / MERGE_SUBDIR)
 
 
+def collect_chain_usage(
+    center_root: Path, *, control_plane_root: Optional[Path] = None, top: int = 5,
+) -> dict[str, dict]:
+    """链主键族（evidence/）的容量可见性：文件夹数、总字节与最大若干条。
+
+    G7 / D11：链族按整条链留存，不进 run 分解（不能被按 run 清理器误删），
+    所以它的容量必须单独可见——只报一个总字节无法判断哪条链在增长。
+    """
+    out: dict[str, dict] = {}
+    for family in CHAIN_FAMILIES:
+        root = Path(storage_root_for_family(
+            family, log_root=str(center_root),
+            control_plane_root=str(control_plane_root or center_root),
+        )) / family
+        if not root.is_dir():
+            continue
+        folders = _run_dirs(root)
+        usage = [walk_usage(path) for path in folders.values()]
+        ranked = sorted(
+            ((name, item.bytes) for name, item in
+             zip(folders.keys(), usage, strict=False)),
+            key=lambda row: row[1], reverse=True,
+        )
+        out[family] = {
+            "folders": len(folders),
+            "bytes": sum(item.bytes for item in usage),
+            "files": sum(item.files for item in usage),
+            "top_folders": [
+                {"name": name, "bytes": size} for name, size in ranked[: max(0, top)]
+            ],
+        }
+    return out
+
+
 def collect_duplication(
     by_family: dict[str, dict[str, Usage]],
 ) -> dict[str, dict[str, int | float | list[str]]]:
@@ -326,6 +361,10 @@ def collect_baseline(
         "job_dir_count": len(job_dirs),
         "job_dir_bytes": sum(u.bytes for u in job_dirs.values()),
         "duplication": collect_duplication(by_family),
+        # B8 G7：链族容量（按链，不按 run）；与 families 的总量口径互相印证。
+        "chain_family_usage": collect_chain_usage(
+            center_root, control_plane_root=control_plane_root, top=top,
+        ),
         "merge_subdir_usage": collect_merge_subdir_usage(center_root),
         "local_merge_result": collect_local_merge_result(merge_result_root),
         "top_runs_by_bytes": [
@@ -369,6 +408,14 @@ def format_report(report: dict) -> str:
             f"  {family}/{{{MERGE_SUBDIR}}}: {_human_bytes(usage['merge_bytes'])} "
             f"files={usage['merge_files']} runs={usage['runs_with_merge']}"
         )
+    for family, usage in report.get("chain_family_usage", {}).items():
+        lines.append(f"-- {family}/ (chain-keyed, never purged per run) --")
+        lines.append(
+            f"  folders={usage['folders']} bytes={_human_bytes(int(usage['bytes']))} "
+            f"files={usage['files']}"
+        )
+        for row in usage.get("top_folders", []):
+            lines.append(f"  {_human_bytes(int(row['bytes'])):>10}  {row['name']}")
     local = report["local_merge_result"]
     if local is not None:
         lines.append("-- E-3 local merge_result --")

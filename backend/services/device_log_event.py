@@ -106,7 +106,38 @@ def count_remote_events(
     return int(db.execute(stmt).scalar() or 0)
 
 
-def summarize_upload_states(db: Session, plan_run_id: int) -> dict[str, int]:
+def _upload_states_by_platform(db: Session, plan_run_id: int) -> dict[str, dict]:
+    """按 DLE.platform 拆分上送进度（B8 G7，D16 上传汇总按分区）。
+
+    键与顶层汇总同口径（pending = PENDING+UPLOADING+FAILED；remote =
+    REMOTE+ARCHIVED+PRUNED），避免页面两处各算一套。
+    """
+    rows = db.execute(
+        select(
+            DeviceLogEvent.platform,
+            DeviceLogEvent.state,
+            func.count(DeviceLogEvent.id),
+        ).where(
+            DeviceLogEvent.plan_run_id == plan_run_id,
+        ).group_by(DeviceLogEvent.platform, DeviceLogEvent.state)
+    ).all()
+    out: dict[str, dict] = {}
+    for platform, state, count in rows:
+        key = str(platform or "").strip().lower()
+        if not key:
+            continue
+        bucket = out.setdefault(key, {"total": 0, "local": 0, "pending": 0, "remote": 0})
+        bucket["total"] += int(count)
+        if state == EventState.LOCAL.value:
+            bucket["local"] += int(count)
+        elif state in {"UPLOAD_PENDING", "UPLOADING", "UPLOAD_FAILED"}:
+            bucket["pending"] += int(count)
+        elif state in _REMOTE_STATES:
+            bucket["remote"] += int(count)
+    return out
+
+
+def summarize_upload_states(db: Session, plan_run_id: int) -> dict[str, object]:
     """按 state 分组统计 plan_run 的事件上送进度（→ run_context.upload_summary）。
 
     与 count_pending_upload_events / count_remote_events 同源：
@@ -128,6 +159,9 @@ def summarize_upload_states(db: Session, plan_run_id: int) -> dict[str, int]:
             continue
         total += n
     return {
+        # G7：按平台拆分（模式见状态 API 的分区视图）。先去重分区的「local」
+        # 含未被选为代表的观察，不代表缺口；口径与顶层键同源。
+        "by_platform": _upload_states_by_platform(db, plan_run_id),
         "total": total,
         "detected": by_state[EventState.DETECTED],
         "pull_failed": by_state[EventState.PULL_FAILED],
@@ -151,14 +185,25 @@ def summarize_upload_states(db: Session, plan_run_id: int) -> dict[str, int]:
     }
 
 
-def list_remote_paths_for_extract(db: Session, plan_run_id: int) -> list[str]:
-    rows = db.execute(
-        select(DeviceLogEvent.remote_path).where(
-            DeviceLogEvent.plan_run_id == plan_run_id,
-            DeviceLogEvent.state.in_(_REMOTE_STATES),
-            DeviceLogEvent.remote_path.isnot(None),
-        )
-    ).scalars().all()
+def list_remote_paths_for_extract(
+    db: Session, plan_run_id: int, *, platforms: Sequence[str] | None = None,
+) -> list[str]:
+    """extract 输入（ADR-0028 / D13 第 4 条）。
+
+    platforms 给定时只取这些平台：混合 PlanRun 的 extract 只消费「现行」
+    分区，不得把「先去重」分区的 DLE 纳入输入。None 保留旧行为（全平台）。
+    """
+    stmt = select(DeviceLogEvent.remote_path).where(
+        DeviceLogEvent.plan_run_id == plan_run_id,
+        DeviceLogEvent.state.in_(_REMOTE_STATES),
+        DeviceLogEvent.remote_path.isnot(None),
+    )
+    if platforms is not None:
+        normalized = [str(value).lower() for value in platforms if value]
+        if not normalized:
+            return []
+        stmt = stmt.where(func.lower(DeviceLogEvent.platform).in_(normalized))
+    rows = db.execute(stmt).scalars().all()
     return [str(p) for p in rows if p]
 
 
@@ -239,7 +284,9 @@ def is_unassigned_remote_path(raw: Optional[str]) -> bool:
     return bool(raw) and "/devices/unassigned/" in str(raw)
 
 
-def adopt_unassigned_event_dirs(db: Session, plan_run_id: int) -> int:
+def adopt_unassigned_event_dirs(
+    db: Session, plan_run_id: int, *, platforms: Sequence[str] | None = None,
+) -> int:
     """#2316（方案 C）：把本 run 已归属、且 ``remote_path`` 仍在
     ``devices/unassigned/{event_id}/`` 的事件目录**搬进**
     ``devices/{plan_run_id}/{event_id}/``，此后由 run 级 purge 统一回收。
@@ -266,17 +313,20 @@ def adopt_unassigned_event_dirs(db: Session, plan_run_id: int) -> int:
         logger.warning("adopt_unassigned_skipped_root_unset plan_run=%d", plan_run_id)
         return 0
 
-    rows = db.execute(
-        select(DeviceLogEvent.id, DeviceLogEvent.remote_path)
-        .where(
-            DeviceLogEvent.plan_run_id == plan_run_id,
-            DeviceLogEvent.state.in_(_REMOTE_STATES),
-            DeviceLogEvent.remote_path.like("%/devices/unassigned/%"),
-        )
-        # 锁序（#2974）：循环体逐行 `update(DeviceLogEvent)` 取行锁，锁持有到 `db.commit()`
-        # 为止 ⇒ 取锁顺序 = 本结果集顺序，必须与对侧一致的全序（id 升序）。
-        .order_by(DeviceLogEvent.id)
-    ).all()
+    stmt = select(DeviceLogEvent.id, DeviceLogEvent.remote_path).where(
+        DeviceLogEvent.plan_run_id == plan_run_id,
+        DeviceLogEvent.state.in_(_REMOTE_STATES),
+        DeviceLogEvent.remote_path.like("%/devices/unassigned/%"),
+    )
+    if platforms is not None:
+        normalized = [str(value).lower() for value in platforms if value]
+        if not normalized:
+            return 0
+        # 「先去重」分区的溢出副本仍是 I4 保护源，extract 不得搬动或改写它。
+        stmt = stmt.where(func.lower(DeviceLogEvent.platform).in_(normalized))
+    # 锁序（#2974）：循环体逐行 `update(DeviceLogEvent)` 取行锁，锁持有到 `db.commit()`
+    # 为止 ⇒ 取锁顺序 = 本结果集顺序，必须与对侧一致的全序（id 升序）。
+    rows = db.execute(stmt.order_by(DeviceLogEvent.id)).all()
     if not rows:
         return 0
 

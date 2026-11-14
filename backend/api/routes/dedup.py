@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -49,9 +50,22 @@ from backend.services.jira_vendor import (
     load_vendor_tool_env,
     resolve_vendor_tool,
 )
+from backend.services import issue_fact_store as facts
+from backend.services.artifact_zip import build_directory_zip_response
+from backend.services.dedup_scan import (
+    resolve_manual_merge_round,
+    resolve_scan_tool,
+    run_manual_merge_sync,
+)
+from backend.services.delivery_download import (
+    DeliveryDownloadError,
+    resolve_delivery_export,
+    resolve_evidence_directory,
+)
 from backend.services.device_log_event_download import (
     build_device_log_event_download_response,
 )
+from backend.services.partition_scope import partition_rows, partition_views
 from backend.services.plan_run_artifact_download import (
     build_plan_run_artifact_download_response,
 )
@@ -434,6 +448,45 @@ def download_plan_run_log_event(
     )
 
 
+@scan_router.get("/{run_id}/delivery/{platform}/versions/{version_no}/download")
+def download_delivery_export(
+    run_id: int,
+    platform: str,
+    version_no: int,
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_active_user),
+):
+    """下载交付物统计导出（B8 G7，D9 第 8 条）：_meta/.../_delivery/{platform}/vN.json。"""
+    try:
+        path = resolve_delivery_export(
+            db, plan_run_id=run_id, platform=platform, version_no=version_no,
+        )
+    except DeliveryDownloadError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    return FileResponse(
+        path=str(path),
+        filename=f"delivery-{run_id}-{platform.lower()}-v{version_no}.json",
+        media_type="application/json",
+    )
+
+
+@scan_router.get("/{run_id}/delivery/evidence/{publication_id}/download")
+def download_delivery_evidence(
+    run_id: int,
+    publication_id: int,
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_active_user),
+):
+    """下载已校验代表证据（B8 G7，D9 第 6–7 条）：只按发布记录定位。"""
+    try:
+        path = resolve_evidence_directory(
+            db, plan_run_id=run_id, publication_id=publication_id,
+        )
+    except DeliveryDownloadError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    return build_directory_zip_response(path, download_name=f"evidence-{publication_id}")
+
+
 @scan_router.post("/{run_id}/dedup/scan", response_model=ApiResponse[DedupScanTriggerOut])
 async def trigger_scan(
     run_id: int,
@@ -632,6 +685,7 @@ def get_scan_status(
         ],
         archive=archive,
         scan_failed=scan_failed,
+        partitions=partition_views(db, run_id),
     ))
 
 
@@ -648,51 +702,62 @@ async def trigger_merge(
     主机回退到更早轮次并在 merge 日志中显式记为迟到输入。
     """
     from backend.models.plan_run_artifact import PlanRunArtifact
-    from sqlalchemy import select
 
-    scan_rows = db.execute(
-        select(PlanRunArtifact).where(
-            PlanRunArtifact.plan_run_id == run_id,
-            PlanRunArtifact.artifact_type == "scan_result_xls",
-        )
-    ).scalars().all()
-    if not scan_rows:
-        raise HTTPException(status_code=409, detail="no scan result available, run scan first")
+    # G7 / D16：手动 merge 按分区模式分流。现行分区沿用既有扫描产物前置；
+    # 纯先去重分区没有 scan 产物，改为对已关闭轮次做幂等影子合并。
+    partitions = partition_rows(db, run_id)
+    current = [row["platform"] for row in partitions
+               if row["mode"] == facts.PARTITION_MODE_CURRENT]
+    if current or not partitions:
+        scan_rows = db.execute(
+            select(PlanRunArtifact).where(
+                PlanRunArtifact.plan_run_id == run_id,
+                PlanRunArtifact.artifact_type == "scan_result_xls",
+            )
+        ).scalars().all()
+        if not scan_rows:
+            raise HTTPException(
+                status_code=409, detail="no scan result available, run scan first",
+            )
 
-    from backend.services.dedup_scan import (
-        resolve_manual_merge_round,
-        resolve_scan_tool,
-        run_merge_all_platforms_sync,
-    )
-
-    tool = resolve_scan_tool()
-    if tool is None:
-        raise HTTPException(status_code=503, detail="scan tool not configured")
-
-    scan_round_id, round_started_at = resolve_manual_merge_round(run_id)
-    if scan_round_id is None and round_started_at is None:
-        raise HTTPException(
-            status_code=409,
-            detail="no merge round available (scan artifacts lack timestamps)",
-        )
+    scan_round_id = None
+    round_started_at = None
+    if current or not partitions:
+        tool = resolve_scan_tool()
+        if tool is None:
+            raise HTTPException(status_code=503, detail="scan tool not configured")
+        scan_round_id, round_started_at = resolve_manual_merge_round(run_id)
+        if scan_round_id is None and round_started_at is None:
+            raise HTTPException(
+                status_code=409,
+                detail="no merge round available (scan artifacts lack timestamps)",
+            )
 
     import asyncio
-    result = await asyncio.to_thread(
-        run_merge_all_platforms_sync,
+    outcome = await asyncio.to_thread(
+        run_manual_merge_sync,
         run_id,
         scan_round_id=scan_round_id,
         round_started_at=round_started_at,
-        include_late_hosts=True,
-        allow_failed=True,
     )
+    result = outcome.get("result")
+    if result == "no_round":
+        raise HTTPException(
+            status_code=409,
+            detail="no closed FINAL/SUPPLEMENT round for a deduplicating partition yet",
+        )
     if result != "ok":
         raise HTTPException(status_code=500, detail="merge failed (no _org.xls?)")
+    shadow_round_id = outcome.get("scan_round_id")
+    shadow_started_at = outcome.get("round_started_at")
     return ok(DedupMergeTriggerOut(
         status="ok",
         plan_run_id=run_id,
-        scan_round_id=scan_round_id,
+        scan_round_id=shadow_round_id or scan_round_id,
         round_started_at=(
-            round_started_at.isoformat() if round_started_at is not None else None
+            shadow_started_at.isoformat()
+            if shadow_started_at is not None
+            else (round_started_at.isoformat() if round_started_at is not None else None)
         ),
     ))
 
@@ -712,6 +777,17 @@ def trigger_extract(
     from backend.services.dedup_extract import run_extract_sync
 
     extracted = run_extract_sync(run_id)
+    if extracted == -3:
+        # ADR-0062 D13 第 4 条：只有「先去重」分区时才拒绝；先去重分区的交付
+        # 走 D9 交付物下载，不再走 extract。
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "run has no CURRENT partition; dedup-first partitions use "
+                "GET /api/v1/plan-runs/{run_id}/delivery/{platform}/versions/"
+                "{version_no}/download"
+            ),
+        )
     if extracted == -1:
         raise HTTPException(status_code=409, detail="no merge result available, run merge first")
 
